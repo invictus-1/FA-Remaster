@@ -172,6 +172,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     debris.mapWidth = static_cast<float>(map.width);
     debris.mapHeight = static_cast<float>(map.height);
     // the map's own decals: albedo ones (pictures over the ground's colour) and normal ones (its sculpting)
+    decals.hotMetal = false;  // (hot metal: the map's own scorches are no fresh marks; Begin sets it again)
     if (options.mapDecals != "off") {
       int laid = 0;
       for (const MapDecal& d : map.decals) {
@@ -537,6 +538,11 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   CpuTimes::Part("light, sky, weather set");
   particles.remastered = ribbons.remastered = decals.remastered = effectsLook == EffectsLook::Remastered;
   decals.battleScars = battleScars;
+  // hot metal (hot_metal.h): this frame's, the modern look's only; the marks laid from now on glow while fresh
+  hotOn_ = hotMetal && look == Look::Modern;
+  decals.hotMetal = hotOn_;
+  decals.heat = &heat;
+  if (hotOn_ && !sidePicture) heat.Begin(clock);
   particles.quality = effectsQuality;
   camera = cam;
   time_ = time;
@@ -916,6 +922,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     ApplyPropEvent(propEvents_.front());
     propEvents_.pop_front();
   }
+  if (hotOn_ || hotBefore_) UpdateHotProps();  // (hot metal: the wrecks that have cooled go back into their groups)
   // (only the squares near what the camera sees: a square counts when it, widened by the largest
   // prop's reach and by room for a shadow thrown into the picture from outside it, is in view)
   propCellsSeen = propsAdded = 0;
@@ -937,13 +944,27 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
           for (uint32_t i : cell.ofMap) meshes.AddToGroup(cell.group, props_[i].model, props_[i].world);
           for (uint32_t id : cell.made) {
             auto made = madeProps_.find(id);
-            if (made != madeProps_.end() && made->second.model) meshes.AddToGroup(cell.group, made->second.model, made->second.world);
+            // (a hot wreck is held out while it glows: added on its own with its heat, below)
+            if (made != madeProps_.end() && made->second.model && !made->second.hot) meshes.AddToGroup(cell.group, made->second.model, made->second.world);
           }
           cell.changed = false;
         }
         meshes.ListGroup(cell.group);
         propsAdded += static_cast<int>(cell.ofMap.size() + cell.made.size());
       }
+  }
+  // hot metal: the wrecks held out of their groups while they glow, each with its heat (hot_metal.h, HotMetal::Tint)
+  for (uint32_t id : hotProps_) {
+    auto made = madeProps_.find(id);
+    if (made == madeProps_.end() || !made->second.model) continue;
+    const PlacedProp& p = made->second;
+    Vec3 centre;
+    float radius;
+    Sphere(p.model, p.world, &centre, &radius);
+    const float age = static_cast<float>(clock_ - p.born), seconds = heat.WreckSeconds(radius);
+    heatTint_ = HotMetal::Tint(age, seconds);
+    meshes.Add(p.model, p.world, {1, 1, 1}, 1, nullptr, &heatTint_);
+    if (!sidePicture) heat.Glowing(id, centre, radius, age, seconds, true);
   }
   // the world beyond the map's edge has the map's trees and rocks too: each stands again in the
   // mirrored copies of the map the ground out there is made of, turned as its mirror image is
@@ -1224,8 +1245,18 @@ void World::ApplyPropEvent(const FramePropEvent& e) {
     ListProp(&props_[static_cast<size_t>(e.mapIndex)], static_cast<uint32_t>(e.mapIndex), false);
   } else {
     PlacedProp& kept = madeProps_[e.id];
+    // (hot metal: when it appeared, kept through its changes, and whether it is a unit's wreck: the game's
+    // DefaultWreckage with the unit's "_mesh_wreck")
+    const double born = kept.born >= 0 ? kept.born : static_cast<double>(e.tick) * 0.1;
+    const bool hot = kept.hot;
     kept = placed;
+    kept.born = born;
+    kept.hot = hot;
+    std::string low = e.blueprint + "|" + e.mesh;
+    for (char& c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    kept.wreck = low.find("defaultwreckage") != std::string::npos || low.find("_mesh_wreck") != std::string::npos;
     ListProp(&kept, e.id, true);
+    if (hotOn_) HoldHot(e.id, &kept);
   }
   ++propsChanged;
 }
@@ -1251,6 +1282,75 @@ void World::WatchWear(const Frame& frame) {
       particles.Start(kSnowPuffClumps, {p.x, p.y, p.z}, Quat{}, p.w);
       particles.Start(kSnowPuffCloud, {p.x, p.y, p.z}, Quat{}, p.w * 0.6f);
     }
+}
+
+// Hot metal (hot_metal.h): a fresh wreck is held out of its square's group of still scenery while it glows (the group's
+// instances are kept from frame to frame; a hot wreck's heat changes every frame), and added on its own with its heat
+// (Begin); once it has cooled, or hot metal is switched off, it goes back into the group.
+void World::HoldHot(uint32_t id, PlacedProp* prop) {
+  if (!hotOn_ || prop->hot || !prop->wreck || !prop->model || prop->born < 0) return;
+  Vec3 centre;
+  float radius;
+  Sphere(prop->model, prop->world, &centre, &radius);
+  if (clock_ - prop->born >= static_cast<double>(heat.WreckSeconds(radius)) || UnderWater(centre, radius)) return;
+  prop->hot = true;
+  if (prop->cell >= 0) propCells_[static_cast<size_t>(prop->cell)].changed = true;
+  hotProps_.push_back(id);
+}
+
+void World::UpdateHotProps() {
+  if (hotOn_ && !hotBefore_)  // (just switched on: the wrecks of the last minutes that still glow)
+    for (auto& made : madeProps_) HoldHot(made.first, &made.second);
+  if (!hotOn_ && hotBefore_) heat.Off(&particles);
+  for (size_t i = 0; i < hotProps_.size();) {
+    auto made = madeProps_.find(hotProps_[i]);
+    bool keep = false;
+    if (made != madeProps_.end()) {
+      PlacedProp& p = made->second;
+      if (hotOn_ && p.hot && p.model) {
+        Vec3 centre;
+        float radius;
+        Sphere(p.model, p.world, &centre, &radius);
+        keep = clock_ - p.born < static_cast<double>(heat.WreckSeconds(radius)) && !UnderWater(centre, radius);
+      }
+      if (!keep && p.hot) {
+        p.hot = false;
+        if (p.cell >= 0) propCells_[static_cast<size_t>(p.cell)].changed = true;
+      }
+    }
+    if (keep) {
+      ++i;
+    } else {
+      hotProps_[i] = hotProps_.back();
+      hotProps_.pop_back();
+    }
+  }
+  hotBefore_ = hotOn_;
+}
+
+// (a wreck that lies under the water - a ship's on the bottom - is quenched: it does not glow)
+bool World::UnderWater(Vec3 centre, float radius) const {
+  return haveMap_ && map.water.present && centre.y + radius * 0.3f < map.water.elevation;
+}
+
+void World::Sphere(const Model* model, const Mat4& world, Vec3* centre, float* radius) {
+  const Vec3 mid = (model->boundsMin + model->boundsMax) * 0.5f;
+  const Vec4 c = world * Vec4{mid.x, mid.y, mid.z, 1};
+  *centre = {c.x, c.y, c.z};
+  const float scale = std::sqrt(world.m[0][0] * world.m[0][0] + world.m[1][0] * world.m[1][0] + world.m[2][0] * world.m[2][0]);
+  *radius = Length(model->boundsMax - model->boundsMin) * 0.5f * scale;
+}
+
+const Vec3* World::WreckHeat(uint32_t key, const Model* model, const Mat4& at) {
+  if (!hotOn_ || !model || !model->ok) return nullptr;
+  Vec3 centre;
+  float radius;
+  Sphere(model, at, &centre, &radius);
+  const float age = static_cast<float>(clock_ - heat.FirstSeen(key)), seconds = heat.WreckSeconds(radius);
+  if (age >= seconds || UnderWater(centre, radius)) return nullptr;
+  if (!sidePicture) heat.Glowing((uint64_t{1} << 40) | key, centre, radius, age, seconds, true);
+  heatTint_ = HotMetal::Tint(age, seconds);
+  return &heatTint_;
 }
 
 // Whose a shield's mesh is (effect_files.h, MeshFaction)
@@ -1926,6 +2026,13 @@ void World::Render() {
       lights.Add(f.position + Vec3{0, std::min(f.size * 0.5f, 1.5f), 0}, std::clamp(f.size * 4.0f, 2.5f, 10.0f),
                  f.color * (fireLight * flicker * together * byDay * lights.night));
     }
+  }
+  // hot metal (hot_metal.h): the hottest few wrecks' and craters' faint light, the cooling wrecks' thin smoke
+  if (hotOn_ && !sidePicture) {
+    decals.ForEachHot(clock_, [&](Vec3 centre, float across, float age, float seconds, uint32_t id) {
+      heat.Glowing((uint64_t{2} << 40) | id, centre, across * 0.25f, age, seconds, false);
+    });
+    heat.End(&lights, &particles, camera.target, lights.night);
   }
   lights.Build(&view);  // (after everything has said what lights there are; before any pass reads the view)
   // blasts (blasts.h): the waves and the dust under way near what the camera sees; the debris's chunks moved on and listed

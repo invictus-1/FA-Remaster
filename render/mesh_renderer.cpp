@@ -12,6 +12,7 @@
 
 #include "blasts.h"
 #include "effect_files.h"
+#include "hot_metal.h"
 #include "lighting.h"
 #include "ray_scene.h"
 #include "unit_wear.h"
@@ -623,6 +624,15 @@ float4 Shade(VOut i, bool front) {
     // many layers of its own crown, which cost a third of the option for little to see)
     if (kind2.y > 0.5) rayLightsAtMost = 0;
 #endif
+    // hot metal (World::hotMetal, hot_metal.h): a fresh wreck glows where it broke and on its thin parts, cooling; its age
+    // and how long it glows ride in the ghost's tint, marked by -0.25 first (HotMetal::Tint)
+    [branch] if (i.tint.z < 0 && abs(i.tint.x + 0.25) < 0.01) {
+      // (for its thin parts: how sharply the surface turns for the model's size, from the neighbouring pixels, which take
+      // this branch alike: they are of the same triangle)
+      float turn = length(fwidth(vertexNormal)) / max(length(fwidth(i.shape)), 1e-5);
+      emission += HotMetalGlow(-i.tint.y, -i.tint.z, i.shape, turn, kind.w > 0.5, albedo.rgb, spec.r, spec.g, soot) *
+                  (kHotMetalStrength * pow(falling.w > 0 ? falling.w : 1, 0.6));
+    }
     float3 lit = ModernLight(base, metallic, roughness, occlusion, emission, N, i.world, shadow);
     if (kind2.y > 0.5 && leaves.x < 0.5) {  // leaves: some of the light that falls on the far side comes through
       float3 falls = ToLinear(sunColor) * (lightMultiplier * modern.x);
@@ -763,10 +773,10 @@ float2 PS(VOut i) : SV_Target {
 
 bool MeshRenderer::Init(std::string* error) {
   // (units and props take half the lying snow the ground takes: they must still be told apart)
-  std::string source = std::string("#define SURFACE_SNOW 0.5\n") + kViewShaderBlock + RayShaders() + kLightingShaderBlock + kWearShaderBlock + kShader;
+  std::string source = std::string("#define SURFACE_SNOW 0.5\n") + kViewShaderBlock + RayShaders() + kLightingShaderBlock + kWearShaderBlock + HotMetal::ShaderBlock() + kShader;  // (hot metal: hot_metal.h)
   // (the same with the blasts' waves, for what sways while blasts are under way: PrepareBlasts makes them)
   blastSource_ = std::string("#define BLASTS 1\n#define SURFACE_SNOW 0.5\n") + kViewShaderBlock + RayShaders() + kLightingShaderBlock +
-                 kBlastShaderBlock + kWearShaderBlock + kShader;
+                 kBlastShaderBlock + kWearShaderBlock + HotMetal::ShaderBlock() + kShader;
   int kept = 0;
   auto keep = [&](gfx::Pipeline p, const gfx::PipelineDesc& d) { bending_[kept++] = {p, d, {}}; };
   gfx::PipelineDesc pd;

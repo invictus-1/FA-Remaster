@@ -783,6 +783,50 @@ work is not starved of the processor).
    Open: personal shields (their lattice and hits stay as they are); a hit the game's script makes no flash for
    (it skips some when more than ten are live, and spill damage) sends no rings.
 12. **Hot metal**: fresh wrecks and craters glow orange and cool over a minute or two; wrecks smoulder.
+11. **Shields that look like energy**: what is behind a bubble bends, each hit sends ripples across it, its pattern
+   flares, its colour tints the ground under it.
+12. **Hot metal (first version, 2026-10-18; a helper's, for review):** `World::hotMetal` (viewer `--hot-metal`;
+   `render/hot_metal.h/.cpp`; modern look). What a battle leaves is hot for a while, timed by the game's clock from when
+   each thing appeared (a wreck's prop event's beat; a mark's laying; the effects stand's wreck from the frame it is
+   first drawn):
+   - **Wrecks glow where they broke and on their thin parts**, by a black body's colour at each place's temperature
+     (Planck's law through the CIE 1931 observer into linear sRGB, fitted: orange-yellow at 1350 K, orange, red, dull red,
+     gone below about 850 K), in the surface's emission so the bloom takes the hottest. Each part starts at its own
+     temperature and cools at its own pace toward the air's 300 K: the holes from 1350 K, slowest (the inside shows
+     through them); torn rims from 1200 K, twice as fast; thin parts from 1100 K, fastest; the hull here and there
+     from 1000 K for the first seconds. The hottest part glows `HotMetal::WreckSeconds` (55 s for a light tank's size,
+     longer for larger wrecks by the radius to the power 0.35, an experimental about two minutes). Where it broke: on
+     the visuals session's wrecks, read from their textures as her wreck kit paints them (`visuals/tools/wreckkit.py`,
+     burn: a crater's hole near black, rough 0.92 and no metal; its torn rim bare steel, metal 0.85 and rough 0.42;
+     nowhere else is a wreck's surface like either); on the game's own burnt wrecks, craters made up in the model's
+     space the same way (a guess: that model is whole). Thin parts: where the surface turns sharply for the model's
+     size (the normal's change against the place's from pixel to pixel), in short pieces. Embers breathe (a slow drift
+     of a few percent), so a glow never reads as a lamp; the dull red is kept dull (the brightness by the physical
+     luminance to the power 0.65), so it does not read as a team's colour.
+   - **Scorches and craters glow in the middle**: a script's scorch or crater (the battle scars' rule, `IsScar`) laid
+     while it is on: its middle a bed of ember clumps with a few cracks, the hotter the nearer the middle, so the glow
+     draws in as it cools, for `HotMetal::CraterSeconds` (6.5 s for one a unit across, 16 s for four, a minute at most),
+     added over the ground through the air (Decals, its own additive pipeline). Not under water; never the map's own.
+   - **A faint light** from the hottest three near what the camera looks at, in the hottest part's colour, reaching a
+     little past the wreck.
+   - **Wrecks smoulder**: the game's own thin trail (`destruction_damaged_smoke_01`, what a damaged unit trails, its
+     wisps living twice as long so the trail rises clear of the ground it would fade against) from the sixteen hot
+     wrecks nearest what the camera looks at, thinning to a third as it cools, stopped a little before the last dull
+     red. It is the game's particle system, so the lit smoke (item 2) takes it as it takes the rest.
+   How a wreck carries its heat to the model shader: in the instance's ghost tint (`MeshRenderer::Add`'s `tint`), marked
+   by -0.25 first (no ghost's tint, no tank's treads read it so); the game's wrecks are held out of their square's
+   group of still scenery while they glow and go back when cold. Viewer `--wreck-test n[,unit]`: n wrecks laid as a
+   game makes them round where the camera starts, each with its death's scorch, as if just died (`--hot-metal-lights n`,
+   `--hot-metal-smoke r` to try the parts' costs). Cost at 1440p with 40 fresh wrecks in view and their scorches, by
+   the lowest times, the frame against the same scene with it off: +0.07 ms from the game's height (the visuals
+   session's wrecks), +0.10 close up, +0.15 close up with 40 of the game's own wrecks (their made-up craters); the
+   glow on the models about +0.015-0.05 ms, the scorches' +0.02-0.04, the lights and smoke the rest. Off: pictures
+   identical (regression 0 px on both backends; the effects stand's death and scorch rows on SETONS_R 0 px on both);
+   on, Vulkan as Direct3D 12 (mean 0.10 in 255 round a wreck). Open: the game's own wrecks' craters are a guess (no
+   broken parts in that model); the thin parts' measure also finds bevelled edges (kept to short pieces); at night
+   from the game's height a Cybran wreck's last dull red dots are near its army's red lamps in colour (they breathe,
+   lie on a dark wreck with no team colour and go out within a minute); burnt trees do not glow; with the engine's
+   per-beat hits (World::AddCombat) the craters could be put where the killing shots struck.
 13. **Explosions as real volumes, and a nuke worth the name**: big blasts drawn as lit volumes (simulations the
    visuals session makes in Blender, played back through the light in the air); a nuke's flash lighting the map, a
    shock ring through the clouds, a mushroom cloud. After item 2 (it shares the smoke's lighting).
@@ -885,6 +929,7 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `rainSplashes` | specks where rain meets the ground and units' tops | about 0.01 ms (in rain) | a time of day |
 | `leafLight` | the sun's light through leaves, grass blades and plants, glowing toward a low sun | about 0.04 ms | |
 | `energyShields` | shields' bubbles bend what is behind, rings run from each hit, the pattern flares, their light inside | +0.07 to 0.16 ms with ten bubbles under fire | |
+| `hotMetal` | fresh wrecks glow where they broke and cool by a black body's colours, fresh scorches glow, wrecks smoulder | +0.07 ms with 40 fresh wrecks from the game's height, +0.15 close up | |
 | `frameGeneration` | FSR 3 frame generation: a picture made between each two frames, twice the frames shown | 1.1-1.4 ms a frame drawn | anti-aliasing off; the device's second queue |
 | `lens` (with a cinematic camera) | depth of field: a lens's blur, focus eased | 0.36-0.43 ms while on | a cinematic camera (cinecam.h) |
 | `litSmoke` | smoke and dust lit as volumes: the sun through shadows, fires lighting it from within | about 0.02 ms in a fight | |

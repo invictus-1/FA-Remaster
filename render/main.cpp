@@ -141,6 +141,13 @@
 //           fire, or mixed: all four by turns), from all round above the ground, just now; healed: then repaired whole
 // --unit-snow  snow on units (unit_wear.h, World::unitSnow; modern look): each unit's own share of the lying snow, built
 //           up standing still in snowfall, shed by moving, firing, hits, burning and blasts near
+// --hot-metal  fresh wrecks glow where they broke and on their thin parts and cool over a minute or two, fresh scorches
+//           and craters glow in the middle, cooling wrecks smoulder (World::hotMetal, hot_metal.h; modern look);
+//           --wreck-test n[,unit]: n wrecks of that unit (uel0201) laid in a square round where the camera starts, as a
+//           game makes them (DefaultWreckage props with the unit's "_mesh_wreck"), each with its death's scorch, as if
+//           they had all died at the start: to see the cooling and time it (with or without --hot-metal);
+//           --hot-metal-lights n: at most n small lights from hot things (3; 0 none), --hot-metal-smoke r: a cooling
+//           wreck's smoke, r particles a tick at first (5; 0 none)
 // --order-test  order lines as the interface hands them over while Shift is held (order_lines.h): a move chain, a
 //           patrol loop with its moving chevrons and an attack, with their waypoints' icons, round where the camera starts
 // --frame-generation  FSR 3 frame generation (World::frameGeneration; needs --msaa 1 or --fsr3): a picture made
@@ -437,6 +444,11 @@ struct Options {
   bool unitScars = false, unitSnow = false;  // --unit-scars, --unit-snow
   std::string wearTest;                 // --wear-test
   bool hiddenOutlines = true;           // --no-hidden-outlines, --hidden-outlines
+  bool hotMetal = false;                // --hot-metal
+  int wreckTest = 0;                    // --wreck-test
+  int hotLights = -1;                   // --hot-metal-lights (-1: as HotMetal has it)
+  float hotSmoke = -1;                  // --hot-metal-smoke
+  std::string wreckUnit = "uel0201";
   int scarTest = 0;                     // --scar-test
   bool orderTest = false;               // --order-test
   float scarRadius = 40;
@@ -596,6 +608,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--unit-snow") o->unitSnow = true;
     else if (a == "--hidden-outlines") o->hiddenOutlines = true;
     else if (a == "--no-hidden-outlines") o->hiddenOutlines = false;
+    else if (a == "--hot-metal") o->hotMetal = true;
     else if (a == "--order-test") o->orderTest = true;
     else if (a == "--frame-generation") o->frameGeneration = true;
     else if (a == "--capture-between") o->captureBetween = true;
@@ -685,6 +698,13 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--ripple-view") o->rippleView = static_cast<float>(atof(v));
     else if (a == "--energy-shield-health") o->energyShieldHealth = std::clamp(static_cast<float>(atof(v)), 0.0f, 1.0f);
     else if (a == "--energy-test") o->energyTest = std::max(0, atoi(v));
+    else if (a == "--hot-metal-lights") o->hotLights = std::max(0, atoi(v));
+    else if (a == "--hot-metal-smoke") o->hotSmoke = std::max(0.0f, static_cast<float>(atof(v)));
+    else if (a == "--wreck-test") {
+      char unit[32] = "";
+      if (sscanf(v, "%d,%31s", &o->wreckTest, unit) < 1) return false;
+      if (unit[0]) o->wreckUnit = unit;
+    }
     else if (a == "--scar-test") {
       if (sscanf(v, "%d,%f", &o->scarTest, &o->scarRadius) < 1) return false;
     }
@@ -1160,6 +1180,12 @@ int main(int argc, char** argv) {
   world.models.hitShapes = opt.unitScars;  // (units' models keep their triangles for where hits lie: unit_wear.h)
   world.unitSnow = opt.unitSnow;
   world.hiddenOutlines = opt.hiddenOutlines;
+  world.hotMetal = opt.hotMetal;
+  if (opt.hotLights >= 0) world.heat.mostLights = opt.hotLights;
+  if (opt.hotSmoke >= 0) {
+    world.heat.smokeRate = opt.hotSmoke;
+    if (opt.hotSmoke <= 0) world.heat.smokeEmitter.clear();
+  }
   world.frameGeneration = opt.frameGeneration;
   device->captureBetween = opt.captureBetween;
   if (opt.sunSize > 0) world.sunSize = opt.sunSize;
@@ -1704,6 +1730,50 @@ int main(int argc, char** argv) {
       if (healed || half) world.wear.Heal(0x40000000u | static_cast<uint32_t>(n), healed ? 1.0f : 0.2f);
     }
     printf("render: --wear-test: tier %d (%d hits on each of %zu units)%s\n", world.wear.Tier(0x40000000u), hits, placedUnits.size(), healed ? ", repaired whole" : half ? ", a fifth repaired" : "");
+  }
+  if (opt.wreckTest > 0) {  // --wreck-test: wrecks laid round where the camera starts as a game makes them, just made
+    std::string id = opt.wreckUnit;
+    for (char& ch : id) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    const Model* unit = models.Unit(id);
+    if (unit && unit->ok) {
+      // (their death's scorches too, which hot metal takes as laid in a game: set as Begin sets it)
+      world.decals.hotMetal = world.hotMetal && world.look == Look::Modern;
+      world.decals.heat = &world.heat;
+      world.decals.remastered = world.effectsLook == World::EffectsLook::Remastered;
+      uint32_t r = 4242;
+      auto next = [&r]() {
+        r = r * 1664525u + 1013904223u;
+        return static_cast<float>(r >> 8) / 16777216.0f;
+      };
+      const int across = static_cast<int>(std::ceil(std::sqrt(static_cast<float>(opt.wreckTest))));
+      const float size = Length(unit->boundsMax - unit->boundsMin) * unit->scale, step = std::max(2.0f, size * 1.1f);
+      std::vector<FramePropEvent> made;
+      for (int i = 0; i < opt.wreckTest; ++i) {
+        FramePropEvent e;
+        e.kind = FramePropEvent::Create;
+        e.tick = 0;
+        e.id = 0x7f000000u + static_cast<uint32_t>(i);
+        e.blueprint = "/props/DefaultWreckage/DefaultWreckage_prop.bp";
+        e.mesh = "/units/" + id + "/" + id + "_mesh_wreck";
+        const float x = camera.target.x + (static_cast<float>(i % across) - 0.5f * static_cast<float>(across - 1)) * step;
+        const float z = camera.target.z + (static_cast<float>(i / across) - 0.5f * static_cast<float>(across - 1)) * step;
+        const float heading = next() * 6.2831853f;
+        e.position[0] = x;
+        e.position[1] = haveMap ? map.Height(x, z) : 0;
+        e.position[2] = z;
+        e.orientation[1] = std::sin(heading * 0.5f);
+        e.orientation[3] = std::cos(heading * 0.5f);
+        e.scale[0] = e.scale[1] = e.scale[2] = unit->scale;
+        made.push_back(e);
+        char name[32];
+        snprintf(name, sizeof name, "scorch_%03d_albedo", 1 + i % 10);
+        world.decals.Add(name, {x, e.position[1], z}, size * 0.8f, size * 0.8f, next() * 6.2831853f, 400, 0, 300);
+      }
+      world.AddPropEvents(made);
+      printf("render: --wreck-test: %d wrecks of %s laid, %.1f apart, each with its scorch\n", opt.wreckTest, id.c_str(), step);
+    } else {
+      fprintf(stderr, "render: --wreck-test: no unit %s\n", id.c_str());
+    }
   }
   if (opt.orderTest) {  // --order-test: a move chain, a patrol loop and an attack, as the interface hands them over
     const std::string dir = "/textures/ui/common/game/";
@@ -2734,6 +2804,7 @@ int main(int argc, char** argv) {
       if (havePlay) printf("; %d posed, %zu projectiles, %zu beams", meshes.posedInstances, frame.projectiles.size(), frame.beams.size());
       if (meshes.posedInstances) printf("; bones %.2f ms", meshes.prepareMs);
       if (lights.count) printf("; %d lights", lights.count);
+      if (world.hotMetal) printf("; hot metal: %d glowing, %d lit, %d smoking", world.heat.glowing, world.heat.lit, world.heat.smoking);
       printf("; textures %.0f MB", static_cast<double>(world.textures.bytes) / (1 << 20));
       if (haveLive) printf("; scenery: %d changes, %d gone, %d made in the game standing, %d props of %d squares gone through; %zu script entities", world.propsChanged, world.propsGone, world.MadeProps(), world.propsAdded, world.propCellsSeen, frame.entities.size());
       if (haveLive) printf("; %d hits, %d impacts taken (%d, %d shown)", world.hitsTaken, world.impactsTaken, world.hitsShown, world.impactsShown);
