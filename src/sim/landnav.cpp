@@ -975,7 +975,13 @@ void LandNavSetGoalRect(Sim& sim, Unit* u, int x0, int z0, int x1, int z1, bool 
   n.problem = false;
   n.retries = n.replans = 0;
   n.hasDeadEnd = false;
-  n.stuck = 0;
+  // (n.stuck goes on: the path navigator's still-beat count +0x74 is written only by its ctor (0x5ad646) and by
+  // UpdateCurrentPosition (0x5aeb1a / 0x5aeb20); ResetPathState 0x5ad9c0 clears +0x60, +0x64, +0x68 and +0x78
+  // (0x5ada7d..0x5ada86) but not it. So a unit that gave up a walk by the stuck rule and gets a new goal without having
+  // moved gives that one up too at its first TryAdvance that finds nothing. Seen: MP3 6184, army 1's commander
+  // 0x100000 on patrol, boxed in by its own idle tanks: its reclaim walk ends by the stuck rule at 6176 (still since
+  // 6143); the next reclaim walk (6182) ends at 6184 in the original and the reclaim starts from where it stands;
+  // ours had counted from 0 again and kept asking for continuations.)
   n.poke = false;
   n.attackVariant = false;
   // (the target point survives a new goal: seen in the original's navigator lines, a unit re-ordered while its
