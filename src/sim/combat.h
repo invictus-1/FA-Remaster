@@ -315,6 +315,8 @@ struct AnimatorRef {
 void AnimatorsCollect(Sim& sim, Unit* u, std::vector<AnimatorRef>* out);
 void AnimatorStep(Sim& sim, Unit* u, ScriptObject* a);
 void AnimatorsUpdate(Sim& sim, Unit* u);
+// CUnitCommand::GetPosition 0x6e8a30's point without a formation (the target point of a unit target)
+Vec3 CommandPosGun(Sim& sim, const UnitCommand& c);
 void AnimTick(Sim& sim);
 void ReleaseAnimators();
 void RegisterAnimBindings(lua_State* L);

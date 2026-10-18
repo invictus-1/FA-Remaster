@@ -117,6 +117,8 @@ void RetargetPatrolTasks(Sim& sim, UnitCommand& c);
 void RefreshGuardTasks(Sim& sim, UnitCommand& c);
 // CUnitRepairTask's OnEvent 0x5f9d60 for the repair children of a retargeted Guard (self: the unit whose guard did it)
 void GuardRepairChildrenCommandEvent(Sim& sim, UnitCommand& c, Unit* self);
+// CUnitMoveTask::OnEvent 0x618c40 for a guard's state-0 walk, which listens to the Guard order itself
+void GuardWalksCommandEvent(Sim& sim, UnitCommand& c);
 // RemoveCommandFromQueue 0x6edf80: u drops c (the executing head ends its task). False if u did not hold it.
 bool RemoveCommandFromUnit(Sim& sim, Unit* u, UnitCommand& c);
 // What IssueClearCommands (0x6f1950) does to one unit: ClearCommandQueue 0x6ee2d0 and its attacker's Stop

@@ -2413,6 +2413,25 @@ bool WithinWeaponRange(Sim& sim, UnitWeapon* w, const AiTarget& t) {
 
 }  // namespace
 
+// CUnitCommand::GetPosition 0x6e8a30 without a formation (0x6e8a64): GetTargetPosGun 0x5e2a90 of the command's
+// CAiTarget (cmd+0x11c) with the centre flag clear (bl = 0, 0x6e8a6a). For a unit target that is its target point:
+// the bone of the command's AI.TargetBones pick, or (no pick) its collision centre (bone -1); a ground target's point.
+Vec3 CommandPosGun(Sim& sim, const UnitCommand& c) {
+  if (!c.targetId) return c.pos;
+  Entity* e = sim.FindEntity(c.targetId);
+  if (!e) return c.pos;
+  AiTarget a;
+  a.type = 1;
+  a.entityId = c.targetId;
+  if (e->kind == Entity::Kind::Unit) {
+    const CombatBpData& cb = CB(static_cast<Unit*>(e));
+    if (c.targetPoint >= 0 && c.targetPoint < static_cast<int>(cb.targetBones.size()) && e->skeleton)
+      a.aimBone = TargetBoneOf(e, cb.targetBones[static_cast<size_t>(c.targetPoint)]);
+  }
+  const Vec3 p = combat::TargetPos(sim, a, false);
+  return std::isnan(p.x) ? c.pos : p;
+}
+
 // The guard task's enemy (GetBestEnemy 0x612af0): the primary weapon's best enemy among the unit's blips
 // within GuardScanRadius of the unit (score = distance; no angle). The blip cache is read as the weapons
 // last built it (not refreshed here).
