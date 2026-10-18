@@ -308,9 +308,11 @@ void RayScene::Build(const MeshRenderer& meshes) {
     instances_.push_back(s);
     info_.insert(info_.end(), {colour, flags, team, table});
   };
+  // (masks: 0x01 the ground and what stands on it, 0x02 the water; for the small lights' shadows, lighting.h's
+  // RayLightSeen, also 0x08 the ground alone, 0x04 what stands on it and is solid, 0x10 leaves and what else has holes)
   if (ground_) {
     const float identity[12] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
-    add(ground_, identity, identity + 4, identity + 8, 0, 1, 0);
+    add(ground_, identity, identity + 4, identity + 8, 0, 1, 0, 0, 0x09);
     if (water_) add(water_, identity, identity + 4, identity + 8, 0, 2, 0, 0, 0x02);
   }
   bool averaged = false;
@@ -361,7 +363,7 @@ void RayScene::Build(const MeshRenderer& meshes) {
     }
     if (it->second.structure)
       add(it->second.structure, r0, r1, r2, it->second.colour, (scenery ? 4u : 0u) | (it->second.leaves ? 8u : 0u), scenery ? 0u : Pack(color),
-          it->second.table);
+          it->second.table, it->second.leaves ? 0x11 : 0x05);
   });
   if (!newTables_.empty()) {  // the triangles of the levels seen the first time, each level's into its part of the table
     device_->SetPipeline(triangles_);

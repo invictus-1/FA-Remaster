@@ -302,6 +302,9 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   light *= 1 + clamp(dot(rippleTilt, normalize(sunDirection.xz + 1e-5)) * saturate(sunDirection.y * 4) * shadow, -0.45, 0.45);
 #endif
   // lamps and flashes near the water: their light on its body and foam, and their glint on its waves
+#if RAYS
+  rayLightsAtMost = 2;  // (two rays for the small lights' shadows on the water; lighting.h, SmallLightsTraced)
+#endif
   float3 lamps = SmallLights(i.world, N, -toPixel, float3(0.5, 0.5, 0.5), float3(0.04, 0.04, 0.04), 0.0016, 0.1, saturate(dot(N, -toPixel)) + 1e-4);
 
   // what is behind, straight on and bent by the waves; the bending is left out where it would

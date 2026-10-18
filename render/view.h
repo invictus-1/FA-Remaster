@@ -137,6 +137,10 @@ struct ViewConstants {
   // the map (x, y where in it, 0..1; z the height along the light, over the camera's target).
   float smokeShadow[4];
   Mat4 smokeMatrix;
+  // The small lights' shadows by rays (World::rayLightShadows; shaders built with RAYS, lighting.h's
+  // SmallLightsTraced): x 1 = on; y the rays a place casts at most (1..4; more: one for every light, exact);
+  // z a light's own size as a share of its radius (a beam's: w).
+  float rayLights[4];
 };
 
 // The same block, as HLSL source: shaders start with it.
@@ -184,6 +188,7 @@ cbuffer View : register(b0) {
   float4 leaves;          // light through leaves: x 1 = on; y how much
   float4 smokeShadow;     // smoke's shadow (smoke.h): x 1 = surfaces take it; y the least spread; z the strength; w 1 = the map is drawn
   row_major float4x4 smokeMatrix;  // world -> the smoke's shadow map (z: the height along the light)
+  float4 rayLights;       // the small lights' shadows by rays: x 1 = on; y rays a place casts at most; z, w a light's size / radius (a beam's)
 };
 // (every texture read with Sample takes the temporal upscaler's bias: textures with levels - the art's - are
 // read as finely as the screen's size wants; pictures drawn by the renderer have one level and do not change)

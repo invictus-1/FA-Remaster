@@ -68,7 +68,7 @@ struct WorldPicture::Impl {
     if (!world) return;
     if (atmosphere >= 0) world->volumetricFog = world->volumetricClouds = world->skyTables = atmosphere > 0;
     if (softShadows >= 0) world->softShadows = world->contactShadows = softShadows > 0;
-    if (rayTracing >= 0) world->bounceLight = rayTracing > 0;
+    if (rayTracing >= 0) world->bounceLight = world->rayLightShadows = rayTracing > 0;
     world->rayReflections = rayReflections;
     if (weatherEffects >= 0) world->litRain = world->rainSplashes = world->waterDetail = weatherEffects > 0;
     if (groundDetail >= 0) world->groundCover = world->battleScars = world->leafLight = world->deepTracks = world->wildlife = groundDetail > 0;
@@ -164,8 +164,9 @@ float4 PS(float4 at : SV_Position) : SV_Target { return layer.Load(int3(at.xy, 0
   }
   // (in the host's window with no map: no world at all, only the interface shown - the menu's)
   if (m.HostShows() && mapPath.empty()) return true;
-  // (the surfaces' shaders built to trace rays, for reflections, where the device can: World::rayReflections)
-  gRayShaders = m.rayReflections && m.device->RayTracing();
+  // (the surfaces' shaders built to trace rays, for reflections and the small lights' shadows, where the device can:
+  // World::rayReflections, rayLightShadows)
+  gRayShaders = (m.rayReflections || m.rayTracing > 0) && m.device->RayTracing();
   m.world = std::make_unique<World>(m.device.get(), vfs);
   m.world->textures.detail = m.textureDetail;
   m.ApplyBundles();  // (the lighting options, as set before Open)

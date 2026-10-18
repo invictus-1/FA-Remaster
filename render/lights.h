@@ -10,6 +10,14 @@
 // The beams of the lamps nearest to what the camera looks at also cast shadows: each of those has a
 // small shadow map of its own, a picture of the depth of units and scenery as the lamp sees them.
 // (The ground is not in it: a lamp low over the ground would shadow all of it with itself.)
+// With World::rayLightShadows every other light is shadowed by rays instead (lighting.h,
+// SmallLightsTraced).
+//
+// The buffer (Build): a row of four numbers per square of the grid (where its list begins, how
+// long it is), the lists, then four rows per light: its place and radius; its colour and a beam's
+// glow; a beam's way and the cosine of its edge (below -1: a light to all sides); its shadow map's
+// number (-1 none; -2 none, and it rides on the model standing at y, z, w), then the lamps' maps'
+// matrices.
 //
 // Only the modern look uses them. The original game has no such lights: there the "light particle"
 // of an explosion is a glow laid on the ground (decals.h), which the original look keeps.
@@ -37,14 +45,18 @@ class Lights {
   void Begin(double now);
   // A light for this frame. `color` is linear, as bright as the surface it lights fully would be
   // (1, 1, 1: about as the sun lights it).
-  void Add(Vec3 position, float radius, Vec3 color);
+  // `origin` (a unit's lamp): where the model it rides on stands (its origin), which casts no
+  // ray-traced shadow from it (World::rayLightShadows; a lamp set into a hull would be shadowed by
+  // the hull).
+  void Add(Vec3 position, float radius, Vec3 color, const Vec3* origin = nullptr);
   // A beam: light within `coneDegrees` (the whole opening angle) about `direction`, full to seven
   // tenths of the way out from its middle and fading to nothing at its edge, reaching `radius`
   // along the beam; and `glow` of it to all sides within a fifth of the radius, so that the lamp's
   // own surroundings are not left dark.
   // `carrier`: the middle of the bounding sphere of what the lamp rides on, which casts no shadow
-  // in its beam (or a lamp set into a hull would be shadowed by the hull).
-  void AddBeam(Vec3 position, float radius, Vec3 color, Vec3 direction, float coneDegrees, float glow, const Vec3* carrier = nullptr);
+  // in its beam (or a lamp set into a hull would be shadowed by the hull); `origin`, as for Add.
+  void AddBeam(Vec3 position, float radius, Vec3 color, Vec3 direction, float coneDegrees, float glow, const Vec3* carrier = nullptr,
+               const Vec3* origin = nullptr);
   // A light that lives `seconds` from `born` and takes its colour and strength along that time from
   // a ramp texture (the scripts' "light particle": `size` is what the original draws its glow with;
   // the light reaches a few times as far).
@@ -84,6 +96,8 @@ class Lights {
     Vec3 carrier;         // a beam: the middle of what it rides on (hasCarrier), which does not shadow it
     bool hasCarrier = false;
     int shadow = -1;      // a beam: which shadow map is its own this frame, or -1
+    Vec3 origin;          // where the model it rides on stands (hasOrigin): no ray-traced shadow from that
+    bool hasOrigin = false;
   };
   struct FlashLight {
     const std::vector<Vec3>* ramp;  // colour x alpha along its time

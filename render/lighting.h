@@ -166,6 +166,268 @@ float LampShadow(float3 world, float3 N, uint map) {
   return lit * 0.25;
 }
 
+#if RAYS
+// --- The small lights' shadows by rays (World::rayLightShadows; view.h's rayLights; ray_scene.h's scene) ---
+// A place's small lights are those of its square, as SmallLights has them; what stands between it and a light is
+// found by a ray toward that light. So that many lights cost about as much as a few, a place casts at most K rays
+// (rayLights.y, 1..4; grass one, the water two, leaves none: rayLightsAtMost, which their shaders set, as many layers
+// of them lie over each other or the shadows show little there), the lights for them chosen as resampled importance
+// sampling chooses (after ReSTIR DI, Bitterli et al. 2020, "Spatiotemporal reservoir resampling for real-time ray
+// tracing with dynamic direct lighting"; here every light of the square is a candidate, and its share,
+// the brightness of its unshadowed light at the place, is known exactly): the strongest lights that each carry at
+// least 1/K of what is left get a ray of their own; the rest are chosen by K - c evenly spaced picks over the running
+// sum of their shares, from one offset for the place (stratified, so each is chosen at most once, with the chance
+// picks x its share / their sum), and what the ray of a chosen one finds is weighted by 1 / that chance. The light is
+// then the unshadowed light less what the rays find shadowed: where no ray finds a shadow it is the light without
+// rays exactly, and a place with K lights or fewer is shadowed exactly. The offset is the place's own, fixed to the
+// world and the same every frame, and leaves let light through by their mean (RayLightSeen), so a still picture stands
+// still and in a moving one the grain moves with the world (nothing blended over frames, no upscaler needed).
+
+// One light of a square at a place, as SmallLights' loop works it out: its place and radius, colour, fourth row
+// (lights.h: its shadow map's number, or -1; -2 and where the model it rides on stands), the way toward it, how
+// the place faces it, and its fade in two parts: what a shadow takes (all of a light to all sides; a beam within
+// its cone) and what none does (a beam's glow round its lamp). Both 0 where it does not reach.
+struct SmallLight {
+  float4 where;
+  float4 tint;
+  float4 more;
+  float3 l;
+  float nl;
+  float lit;
+  float glow;
+  bool beam;
+};
+SmallLight SmallLightAt(uint light, float3 world, float3 N) {
+  SmallLight L;
+  L.where = lightData[uint(lightGridSize.z) + light * 4];
+  float3 toLight = L.where.xyz - world;
+  float far2 = dot(toLight, toLight) / (L.where.w * L.where.w);
+  L.tint = 0;
+  L.more = float4(-1, 0, 0, 0);
+  L.beam = false;
+  L.l = 0;
+  L.nl = 0;
+  L.lit = 0;
+  L.glow = 0;
+  [branch] if (far2 >= 1) return L;  // (the rest only for a light that reaches)
+  L.tint = lightData[uint(lightGridSize.z) + light * 4 + 1];
+  float4 beam = lightData[uint(lightGridSize.z) + light * 4 + 2];
+  L.more = lightData[uint(lightGridSize.z) + light * 4 + 3];
+  L.beam = beam.w > -1.5;
+  L.l = normalize(toLight);
+  L.nl = saturate(dot(N, L.l));
+  float fade = (1 - far2) * (1 - far2) / (1 + 4 * far2);
+  L.lit = fade;
+  if (L.beam) {
+    float off = sqrt(saturate((1 - dot(-L.l, beam.xyz)) / max(1 - beam.w, 1e-4)));
+    float inside = 1 - smoothstep(0.7, 1.0, off);
+    L.lit = (1 - far2) * (1 - far2) / (1 + 1.5 * far2) * inside;
+    L.glow = fade * L.tint.w * saturate(1 - far2 * 25);
+    L.nl = saturate(dot(N, L.l) + 0.6 * inside);
+  }
+  return L;
+}
+// What a light's ray is chosen by: the brightness of what of its light a shadow can take there (none for a lamp
+// with its own shadow map, which keeps it).
+float SmallLightShare(SmallLight L) { return L.more.x > -0.5 ? 0 : L.lit * L.nl * dot(L.tint.rgb, float3(0.3, 0.6, 0.1)); }
+
+// How wide, in pixels at least, the squares of the world are that a place's picks take their offset from
+// (SmallLightsTraced): one place's offset holds for the square round it.
+static const float kRayLightCell = 1.5;
+// The most rays a place casts, as the surface's shader may lower it (below rayLights.y; set before ModernLight or
+// SmallLights is called; 0: none, the small lights as without rays).
+static uint rayLightsAtMost = 4;
+// How far over the straight way to a light the ground must rise to shadow it (world units): the rays' ground is
+// every fourth height of the drawn one, which a lamp low over the ground would otherwise shadow with itself.
+static const float kRayGroundRise = 0.35;
+// How much of a small light reaches the place p (1 all, 0 none), by rays toward it. First what stands on the ground
+// and is solid (units, scenery: mask 4), by the front of its triangles only (a ray that starts inside the coarser
+// level the rays see of the place's own model is not stopped by it), as opaque (the card's own search, no candidates
+// for the shader), up to the light's own ball (rayLights.z of its radius, a beam's rayLights.w: the wreck a fire burns
+// in does not shadow its flash). A light that rides on a model (a unit's lamp: `more`, its fourth row, says where the
+// model stands) is not shadowed by that model: its ray takes the nearest hit, and where that is the model, goes on
+// past it (three tries). Then, along the way raised by kRayGroundRise at both ends, the ground (mask 8, the front of
+// its triangles) and leaves (mask 16): they let light through as the other rays' chance does, but as that chance's
+// mean (each leaf passed keeps 1 - its coverage), so a canopy's shadow has no grain. The water never shadows.
+float RayLightSeen(float3 p, float3 N, SmallLight L) {
+  float3 o = p + N * 0.04;
+  float3 to = L.where.xyz - o;
+  float far = length(to);
+  float ball = L.where.w * (L.beam ? rayLights.w : rayLights.z);
+  float end = far - ball;
+  if (end <= 0.03) return 1;
+  RayDesc ray;
+  ray.Origin = o;
+  ray.Direction = to / far;
+  ray.TMin = 0.02;
+  ray.TMax = end;
+  [branch] if (L.more.x < -1.5) {  // (a lamp on a model: the nearest hit, and on past the model it rides on)
+    for (uint tries = 0; tries < 3; ++tries) {
+      RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_CULL_BACK_FACING_TRIANGLES> q;
+      q.TraceRayInline(scene, RAY_FLAG_NONE, 0x04, ray);
+      q.Proceed();
+      if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT) break;
+      // (the instance's place: its matrix's translation, the 4 x 3 form's last row; gfx_check.cpp checks it)
+      if (any(abs(q.CommittedObjectToWorld4x3()[3] - L.more.yzw) > 0.01)) return 0;
+      ray.TMin = q.CommittedRayT() + 0.01;
+      if (ray.TMin >= ray.TMax) break;
+    }
+  } else {
+    RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_CULL_BACK_FACING_TRIANGLES | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q;
+    q.TraceRayInline(scene, RAY_FLAG_NONE, 0x04, ray);
+    q.Proceed();
+    if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) return 0;
+  }
+  float3 a = o + float3(0, kRayGroundRise, 0), b = L.where.xyz + float3(0, kRayGroundRise, 0);
+  float along = length(b - a);
+  RayDesc raised;
+  raised.Origin = a;
+  raised.Direction = (b - a) / max(along, 1e-4);
+  raised.TMin = 0;
+  raised.TMax = max(along - ball, 0.0);
+  // (the ground's triangles come to the loop too, to take their fronts alone; a ray meets few of them)
+  RayQuery<RAY_FLAG_FORCE_NON_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> g;
+  g.TraceRayInline(scene, RAY_FLAG_NONE, 0x18, raised);
+  float through = 1;
+  while (g.Proceed()) {
+    float cover = RayInstance(g.CandidateInstanceID()).a;
+    bool take;
+    if (cover < 1.5) {  // leaves
+      through *= 1 - saturate(cover);
+      take = through < 0.02;  // (as good as shut)
+    } else {
+      take = g.CandidateTriangleFrontFace();
+    }
+    if (take) g.CommitNonOpaqueTriangleHit();
+  }
+  return g.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? 0 : through;
+}
+
+// SmallLights with the lights' shadows by rays (above): the `n` lights of the square's list from `first`.
+float3 SmallLightsTraced(float3 world, float3 N, float3 V, float3 diffuseColor, float3 f0, float a2, float k, float nDotV, uint first, uint n) {
+  // the picks' offset: the same every frame for the same place, and fixed to the world, not to the screen, so that when
+  // the camera moves what grain there is moves with the ground and the models and does not crawl over them (an offset
+  // by the pixel did: docs/render-lighting.md). The place's square on the plane its surface faces most, the squares a
+  // power of two of world units wide by the place's distance (at least kRayLightCell pixels on the screen, also where
+  // the surface is seen aslant), its number made into Jimenez's interleaved gradient noise.
+  float4 clip = mul(viewProj, float4(world, 1));
+  float3 an = abs(N);
+  const bool up = an.y >= an.x && an.y >= an.z, side = !up && an.x >= an.z;
+  float2 onPlane = up ? world.xz : side ? world.zy : world.xy;
+  float aslant = max(abs(up ? V.y : side ? V.x : V.z), 0.3);
+  float pixelWide = 2 * max(clip.w, 1e-3) * viewport.w / length(viewProj[1].xyz);  // (a pixel's width in world units there)
+  float2 sq = floor(onPlane / exp2(ceil(log2(kRayLightCell * pixelWide / aslant))));
+  sq -= 1024 * floor(sq / 1024);  // (kept small, for the noise's precision)
+  float offset = frac(52.9829189 * frac(dot(sq, float2(0.06711056, 0.00583715))));
+  const uint most = uint(rayLights.y);
+  const uint K = clamp(most <= 4 ? min(most, rayLightsAtMost) : most, 1u, 4u);
+  const bool everyOne = n <= K;  // (as many lights as rays, or fewer: each its own, nothing to choose)
+  // first the shares: their sum, and the four largest (in order) with their places in the list
+  float total = 0;
+  float4 topW = 0;
+  uint4 topS = 0;
+  [branch] if (most <= 4 && !everyOne) {
+    for (uint s = 0; s < n; ++s) {
+      uint at = first + s;
+      float w = SmallLightShare(SmallLightAt(uint(lightData[at >> 2][at & 3]), world, N));
+      total += w;
+      [branch] if (w > topW.w) {
+        if (w > topW.x) {
+          topW = float4(w, topW.xyz);
+          topS = uint4(s, topS.xyz);
+        } else if (w > topW.y) {
+          topW.yzw = float3(w, topW.yz);
+          topS.yzw = uint3(s, topS.yz);
+        } else if (w > topW.z) {
+          topW.zw = float2(w, topW.z);
+          topS.zw = uint2(s, topS.z);
+        } else {
+          topW.w = w;
+          topS.w = s;
+        }
+      }
+    }
+  }
+  // those that get a ray of their own, and the picks over the rest
+  uint certain = 0;
+  float rest = total;
+  [unroll] for (uint j = 0; j < 4; ++j) {
+    if (j < K && certain == j && topW[j] > 0 && topW[j] * float(K - j) >= rest) {
+      rest -= topW[j];
+      certain = j + 1;
+    }
+  }
+  const float picks = float(K - certain);
+  const float scale = rest > 0 ? picks / rest : 0;  // (a share's chance of a pick, per unit of share)
+  // then the light, as SmallLights has it; what a shadow can take of it summed apart, and the lights chosen kept
+  float3 small = 0, shadowable = 0;
+  float3 c0 = 0, c1 = 0, c2 = 0, c3 = 0;  // (what each chosen light's ray stands for)
+  uint l0 = 0, l1 = 0, l2 = 0, l3 = 0;    // (and which light it is)
+  uint taken = 0;
+  float sum = 0;
+  for (uint s = 0; s < n; ++s) {
+    uint at = first + s;
+    uint light = uint(lightData[at >> 2][at & 3]);
+    SmallLight L = SmallLightAt(light, world, N);
+    if (L.lit + L.glow <= 0) continue;
+    float3 h = normalize(V + L.l);
+    float nh = saturate(dot(N, h));
+    float dl = nh * nh * (a2 - 1) + 1;
+    float3 fl = f0 + (1 - f0) * pow(1 - saturate(dot(V, h)), 5);
+    float visl = 0.25 / ((L.nl * (1 - k) + k) * (nDotV * (1 - k) + k));
+    float3 c = (diffuseColor / 3.14159265 + a2 / (3.14159265 * dl * dl) * visl * fl * modern.w) * L.tint.rgb * (L.nl * 3.14159265);
+    [branch] if (L.more.x > -0.5) {  // a lamp with its own shadow map keeps it
+      small += c * ((L.lit > 0 ? L.lit * LampShadow(world, N, uint(L.more.x)) : 0) + L.glow);
+      continue;
+    }
+    small += c * L.glow;
+    float3 shade = c * L.lit;
+    [branch] if (most > 4) {  // (every light its own ray: exact, for comparing)
+      if (L.lit * L.nl > 0) shade *= RayLightSeen(world, N, L);
+      small += shade;
+      continue;
+    }
+    shadowable += shade;
+    float w = SmallLightShare(L);
+    if (w <= 0) continue;
+    bool chosen = everyOne || (certain > 0 && s == topS.x) || (certain > 1 && s == topS.y) || (certain > 2 && s == topS.z) || (certain > 3 && s == topS.w);
+    float3 stands = shade;
+    if (!chosen && picks > 0) {
+      float before = sum * scale - offset;
+      sum += w;
+      if (ceil(sum * scale - offset) > ceil(before)) {  // (a pick falls within this light's part of the sum)
+        chosen = true;
+        stands = shade / (w * scale);
+      }
+    }
+    if (chosen && taken < 4) {
+      if (taken == 0) {
+        c0 = stands;
+        l0 = light;
+      } else if (taken == 1) {
+        c1 = stands;
+        l1 = light;
+      } else if (taken == 2) {
+        c2 = stands;
+        l2 = light;
+      } else {
+        c3 = stands;
+        l3 = light;
+      }
+      ++taken;
+    }
+  }
+  // the rays: what they find shadowed is taken off
+  float3 shadowed = 0;
+  for (uint t = 0; t < taken; ++t) {
+    uint light = t == 0 ? l0 : t == 1 ? l1 : t == 2 ? l2 : l3;
+    float3 stands = t == 0 ? c0 : t == 1 ? c1 : t == 2 ? c2 : c3;
+    shadowed += stands * (1 - RayLightSeen(world, N, SmallLightAt(light, world, N)));
+  }
+  return small + max(shadowable - shadowed, 0);
+}
+#endif
+
 // The world beyond the map's edge: ground or water there, a shade dimmer just outside (the
 // playable ground ends here) and lost in the distance farther out: it goes over into what the
 // sky's pass shows in that direction, so the land has no rim. On the map: the colour as it is.
@@ -219,6 +481,9 @@ float3 SmallLights(float3 world, float3 N, float3 V, float3 diffuseColor, float3
     [branch] if (all(g >= 0) && all(g < lightGridSize.xy)) {
       float4 square = lightData[uint(g.y) * uint(lightGridSize.x) + uint(g.x)];
       uint first = uint(square.x), n = min(uint(square.y), 48u);
+#if RAYS
+      [branch] if (rayLights.x > 0.5 && rayLightsAtMost > 0) return SmallLightsTraced(world, N, V, diffuseColor, f0, a2, k, nDotV, first, n);  // (shadows by rays)
+#endif
       for (uint s = 0; s < n; ++s) {
         uint at = first + s;
         uint light = uint(lightData[at >> 2][at & 3]);

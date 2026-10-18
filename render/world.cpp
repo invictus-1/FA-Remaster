@@ -509,14 +509,14 @@ void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation,
       // (the unit itself does not shadow its lamps' beams: it is named by the middle of the ball its
       // model lies in, as the mesh renderer counts it)
       const Vec3 middle = position + Rotate(orientation, (model->boundsMin + model->boundsMax) * (0.5f * model->scale));
-      lights.AddBeam(at, light.radius * model->scale, tint * on, along, light.cone, light.glow, &middle);
+      lights.AddBeam(at, light.radius * model->scale, tint * on, along, light.cone, light.glow, &middle, &position);
       // the beam in the air: faint in clear night air, plainer in rain, snow and fog
       const float air = 0.03f + 0.16f * fog + 0.08f * rain + 0.09f * snow;
       const float reach = light.radius * model->scale * 0.75f;
       const float wide = std::tan(std::min(light.cone, 120.0f) * 0.5f * 0.45f * 3.14159265f / 180) * reach;  // (its bright middle only)
       shafts.Add(at, at + along * reach, 0.03f * model->scale, wide, tint * (on * air));
     } else {
-      lights.Add(at, light.radius * model->scale, tint * on);
+      lights.Add(at, light.radius * model->scale, tint * on, &position);  // (the unit does not shadow its own lamps: rays)
     }
   }
   for (size_t i = 0; i < takenCount; ++i) {
@@ -642,6 +642,14 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     c.rayEffects[1] = 1000;
     c.rayEffects[2] = static_cast<float>(map.width);
     c.rayEffects[3] = static_cast<float>(map.height);
+  }
+  // the small lights' shadows by rays (where the shaders were built for it)
+  lightRaysNow_ = rayLightShadows && gRayShaders && look == Look::Modern && haveMap_ && !sidePicture && RaysReady();
+  if (lightRaysNow_) {
+    c.rayLights[0] = 1;
+    c.rayLights[1] = static_cast<float>(std::max(rayLightRays, 1));
+    c.rayLights[2] = rayLightSize;
+    c.rayLights[3] = rayBeamSize;
   }
   // bounce light: its probes placed round the camera's target (their shaders made the first time it is wanted)
   bounceNow_ = false;
@@ -1946,7 +1954,7 @@ void World::Render() {
     CpuTimes::Part("bones posed");
     meshes.Prepare(views);
   }
-  if ((rayView || bounceNow_ || reflectNow_) && RaysReady()) {  // the ray tracing scene, from the models just prepared
+  if ((rayView || bounceNow_ || reflectNow_ || lightRaysNow_) && RaysReady()) {  // the ray tracing scene, from the models just prepared
     Stage("ray tracing scene");
     rays.Build(meshes);
     terrain.GroundColours();  // (made the first time here: it dispatches, so not in a pass)
@@ -2060,7 +2068,7 @@ void World::Render() {
   device_->SetTexture(kCloudShadowSlot, clouds.Shadows());
   device_->SetTexture(kSkyTableSlot, skyTable ? skyDraw.SkyView() : gfx::Texture{});
   if (bounceNow_) bounce.Bind();
-  if (reflectNow_) rays.Bind(terrain.NormalMap(), terrain.GroundColours());  // (for the surfaces that trace)
+  if (reflectNow_ || lightRaysNow_) rays.Bind(terrain.NormalMap(), terrain.GroundColours());  // (for the surfaces that trace)
   lights.Bind();
   if (haveMap_) {
     Stage("ground");

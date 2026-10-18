@@ -380,6 +380,16 @@ class World {
   // mirrored ray meets in place of the sky. Needs gRayShaders (set before the world is made); modern look; off by
   // default.
   bool rayReflections = false;
+  // The small lights' shadows by rays (lighting.h, SmallLightsTraced): explosions' flashes, muzzle flashes, shots and
+  // lamps are shadowed by what stands between (units, scenery, leaves by how much of them is leaf, the hills; not the
+  // water), each place casting at most `rayLightRays` rays (1..4; grass one, the water two, leaves none; more: one
+  // for every light, exact, for comparing), the lights for them chosen by their unshadowed light. The lamps with shadow
+  // maps of their own (the eight nearest) keep them. Needs gRayShaders, as rayReflections (WorldPicture: from the next
+  // map opened); modern look; off by default. `rayLightSize`: a light's own size as a share of its radius (its flash
+  // is not shadowed by what lies inside that ball: the wreck a fire burns in), `rayBeamSize` a lamp's beam's.
+  bool rayLightShadows = false;
+  int rayLightRays = 4;
+  float rayLightSize = 0.2f, rayBeamSize = 0.02f;
   // Rain and snow lit where they fall (weather.h): each drop or flake by the sun through its shadow and by the lamps
   // and their beams through their shadows, sent on mostly forward, so rain shows in a headlight's beam and shines
   // toward a light. Modern look; off by default.
@@ -708,6 +718,7 @@ class World {
   bool blastsNow_ = false, grassBlasts_ = false;  // (blasts' waves or dust under way this frame; their field over the grass)
 
   bool outlinesNow_ = false;  // (hidden outlines this frame)
+  bool lightRaysNow_ = false;  // (the small lights' shadows by rays this frame)
  public:
   EnergyShields energy;  // [energy shields] (last: the other members keep their places)
 };

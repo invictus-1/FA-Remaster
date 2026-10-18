@@ -112,7 +112,9 @@ float4 PS(float4 position : SV_Position) : SV_Target {
 // ray's first hit written (which instance / 16, how far / 16, 1). The lower four rows trace with a mask that
 // leaves out the third instance; the triangle is not opaque, so the shader takes its candidates itself.
 // And what else a hit tells (into `more`): which triangle of its geometry / 4, the instance's matrix's x
-// translation / 8 + 0.5, and a quarter of its [1][1] plus a quarter of its z translation.
+// translation / 8 + 0.5, and a quarter of its [1][1] plus a quarter of its z translation; for the half square (opaque,
+// taken by the card) read from the matrix's 4 x 3 form, as the small lights' shadows by rays read where a model
+// stands (lighting.h's RayLightSeen).
 const char kRays[] = R"hlsl(
 RaytracingAccelerationStructure scene : register(t33);
 RWTexture2D<float4> hits : register(u0);
@@ -133,6 +135,8 @@ RWTexture2D<float4> more : register(u1);
     o = float4(q.CommittedInstanceID() / 16.0, q.CommittedRayT() / 16.0, 1, 1);
     float3x4 w = q.CommittedObjectToWorld3x4();
     m = float4(q.CommittedPrimitiveIndex() / 4.0, w[0][3] / 8 + 0.5, w[1][1] * 0.25 + w[2][3] * 0.25, 1);
+    float4x3 c = q.CommittedObjectToWorld4x3();
+    if (q.CommittedInstanceID() == 7) m.yz = float2(c[3].x / 8 + 0.5, c[1][1] * 0.25 + c[3].z * 0.25);
   }
   hits[id.xy] = o;
   more[id.xy] = m;
