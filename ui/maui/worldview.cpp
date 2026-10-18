@@ -757,6 +757,8 @@ class WorldView : public Control {
   int pictureW_ = 0, pictureH_ = 0;
   uint32_t pictureFrame_ = 0xffffffffu;
   WorldCamera pictureCamera_;
+  // The time-left texts at the order lines' nodes as the scene was last made (OrderLinesForWorld).
+  std::vector<OrderEta> orderEtas_;
 
   // The camera's farthest zoom and its field of view go by the shape of the view that shows it.
   void TakeAspect(Camera* c) {
@@ -850,7 +852,7 @@ class WorldView : public Control {
     // The order lines of every unit whose orders the interface holds while Shift is held, and the
     // marks at their waypoints: the original's command graph (user_units.cpp), the unit under the
     // mouse (selected or not: the session's rollover unit, session+0x4c0) highlighting its own.
-    OrderLinesForWorld(L, hasSim && shiftHeld, rollover, &scene);
+    OrderLinesForWorld(L, hasSim && shiftHeld, rollover, &scene, &orderEtas_);
     lap("(the picture's scene: the order lines)");
     std::string mode, name;
     CommandMode(L, &mode, &name);
@@ -942,6 +944,89 @@ class WorldView : public Control {
     return pixels_ != nullptr;
   }
   bool sceneMade_ = false;  // a scene has been given to the picture (EnsurePicture)
+
+  // The time left at the order lines' nodes while Shift is held (OrderEta; FA exe 0x828610, the last
+  // step of the command graph's drawing 0x829190, after the legs and the marks, by the world view's
+  // RenderCommandGraph 0x86ecd0; where it stands against the life bars, the custom names and the
+  // economy overlay is not read). Each node's text in white (0xffffffff) "Andale Mono" of 10 pixels (the
+  // graph's font, CD3DFont::Create at 0x824918), no shadow (CD3DFont::Render 0x426470 draws each glyph
+  // once). Its pen at round(x + 1) and its baseline at round(y - (descent + 1)), where (x, y) is the
+  // screen point of (place.x + size, place.y, place.z - size) (0x828834: GeomCamera3::Project 0x471080)
+  // and the descent the font's (+0x18: GDI's tmDescent, 0x4255be). The point is the baseline: Render2D
+  // 0x426580 lays the glyphs right (1, 0) and up (0, -1) from it, by their offsets from the baseline
+  // (GetCharInfo 0x425940 draws each glyph with SetTextAlign(TA_BASELINE) and keeps its rows less the
+  // baseline's, 0x426030). A node in the normal state is left out where the camera's level of detail
+  // there (LodAt) is ui_MaxTextLOD or more (0x82870a); none while the option display_eta is off (0x828739
+  // OPTIONS_GetBool 0x8c6bf0: /lua/user/prefs.lua GetOption("display_eta"), asked for each node drawn;
+  // here once a frame).
+  struct DrawnEta {
+    std::string text;
+    float x, y;  // the pen's start and the baseline, in the window's pixels
+    int state;   // OrderEta::state
+  };
+  static constexpr const char* kEtaFont = "Andale Mono";
+  static constexpr int kEtaFontSize = 10;
+  // What DrawOrderEtas draws now (the view's rectangle r): also what moho64ui_OrderEtas reports.
+  void OrderEtasToDraw(lua_State* L, const Rect& r, std::vector<DrawnEta>* out) {
+    out->clear();
+    if (miniMap || orderEtas_.empty()) return;
+    WorldSource* source = UserState::From(L)->config().world;
+    if (!source || !pixels_ || !DisplayEtaOption(L)) return;
+    const FontMetrics m = GetFontMetrics(kEtaFont, kEtaFontSize);
+    const float most = GraphVars().maxTextLod;
+    for (const OrderEta& e : orderEtas_) {
+      if (e.state == 0 && LodAt(e.position) >= most) continue;  // (0x82870a: comiss, jae)
+      const float corner[3] = {e.position[0] + e.size, e.position[1], e.position[2] - e.size};
+      float x = 0, y = 0;
+      if (!source->Project(corner, &x, &y)) continue;
+      out->push_back({e.text, r.x0 + std::nearbyint(x + 1.0f), r.y0 + std::nearbyint(y - (m.descent + 1.0f)), e.state});
+    }
+  }
+  void DrawOrderEtas(lua_State* L, DrawTarget& target, const Rect& r) {
+    std::vector<DrawnEta> etas;
+    OrderEtasToDraw(L, r, &etas);
+    if (etas.empty()) return;
+    target.SetClip(r);
+    for (const DrawnEta& e : etas) DrawString(target, kEtaFont, kEtaFontSize, e.text, e.x, e.y, 0xffffffffu);
+    target.ClearClip();
+  }
+  // The camera's level of detail at a place: the plane +0x294 of the camera (GeomCamera3) taken at the
+  // place, plus its +0x2a0 (0x8286e6). Read at 0x4705ed..0x470b47: GeomCamera3::Init unprojects the
+  // view's middle row at its left and right edges on the near and the far plane (the clip points
+  // (-1, 0, 0), (1, 0, 0), (-1, 0, 1), (1, 0, 1)) and makes from their distances the plane +0x284 that
+  // gives the width of the world the view spans across at a place's depth, in world units; +0x294 is
+  // it times the camera's LOD scale (+0x280: cam_DefaultLOD, 1, when the camera is made, 0x46ff46; 1
+  // here), +0x2a4 it over the view's width in pixels (+0x2bc; so the world units a pixel spans,
+  // which the order lines' widths go by). INFERRED: the steps from those widths to the plane are not
+  // read one by one; for the picture's perspective camera the width at a depth is depth x 2 tan(fovY / 2)
+  // x the view's aspect.
+  float LodAt(const float p[3]) const {
+    const WorldCamera& c = pictureCamera_;
+    const float sh = std::sin(c.heading), ch = std::cos(c.heading), sp = std::sin(c.pitch), cp = std::cos(c.pitch);
+    const float back[3] = {sh * cp, sp, ch * cp};  // (from the focus to the eye, as render::Camera::Axes)
+    const float depth = c.distance + (c.target[0] - p[0]) * back[0] + (c.target[1] - p[1]) * back[1] + (c.target[2] - p[2]) * back[2];
+    const float aspect = pictureH_ > 0 ? static_cast<float>(pictureW_) / static_cast<float>(pictureH_) : 1.0f;
+    const float lodScale = 1.0f;  // (cam_DefaultLOD)
+    return depth * 2.0f * std::tan(c.fovY * 0.5f) * aspect * lodScale;
+  }
+  // The player's option "Show Waypoint ETAs" (display_eta; /lua/options/options.lua's default is on) as
+  // OPTIONS_GetBool (0x8c6bf0) asks it: GetOption's answer as a boolean; a failed call is logged and
+  // counts as off.
+  static bool DisplayEtaOption(lua_State* L) {
+    const int top = lua_gettop(L);
+    bool on = false;
+    lua_getglobal(L, "import");
+    lua_pushstring(L, "/lua/user/prefs.lua");
+    if (lua_pcall(L, 1, 1, 0) == 0 && lua_istable(L, -1)) {
+      lua_pushstring(L, "GetOption");
+      lua_gettable(L, -2);
+      lua_pushstring(L, "display_eta");
+      if (lua_pcall(L, 1, 1, 0) == 0) on = lua_toboolean(L, -1);
+      else Logf(LogLevel::Warning, "Error running '/lua/user/prefs.lua:GetOption': %s", lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
+    }
+    lua_settop(L, top);
+    return on;
+  }
 
   // The names players give their units, under their life bars as the original draws them (FA exe
   // sub_85E0A0, only for units in the life bars' list, never in the minimap; read by a helper,
@@ -1139,6 +1224,7 @@ class WorldView : public Control {
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
     if (!UserState::From(L)->config().world->DrawsToWindow())  // (else the renderer lays the world under the interface)
       target.DrawPixels(pixels_, pictureW_, pictureH_, static_cast<int>(r.x0), static_cast<int>(r.y0));
+    DrawOrderEtas(L, target, r);
     DrawCustomNames(L, target, r);
     DrawEconomyOverlay(L, target, r);
     // The box of a selection being drawn with the mouse: a thin frame from the press to the
@@ -2105,6 +2191,37 @@ int l_MapBorderClear(lua_State* L) {
   UserState::From(L)->mapBorders.clear();
   return 0;
 }
+// moho64ui_OrderEtas() -> the time-left texts the main world view draws now, each {text, x, y, state}
+// (x the pen's start, y the baseline, in the window's pixels; state "normal", "highlight", "selected"):
+// for tests. Its picture is made first, as a drawn frame makes it (a headless run draws no frames).
+int l_OrderEtasForTests(lua_State* L) {
+  lua_newtable(L);
+  WorldView* v = MainView(UserState::From(L)->ui().GetFrame(0));
+  if (!v || !v->EnsurePicture(L)) return 1;
+  Rect r;
+  v->GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
+  std::vector<WorldView::DrawnEta> etas;
+  v->OrderEtasToDraw(L, r, &etas);
+  const char* states[3] = {"normal", "highlight", "selected"};
+  int n = 0;
+  for (const WorldView::DrawnEta& e : etas) {
+    lua_newtable(L);
+    lua_pushstring(L, "text");
+    lua_pushstring(L, e.text.c_str());
+    lua_rawset(L, -3);
+    lua_pushstring(L, "x");
+    lua_pushnumber(L, e.x);
+    lua_rawset(L, -3);
+    lua_pushstring(L, "y");
+    lua_pushnumber(L, e.y);
+    lua_rawset(L, -3);
+    lua_pushstring(L, "state");
+    lua_pushstring(L, states[e.state >= 0 && e.state < 3 ? e.state : 0]);
+    lua_rawset(L, -3);
+    lua_rawseti(L, -2, ++n);
+  }
+  return 1;
+}
 // moho64ui_MapBorders() -> the list as it stands (for tests)
 int l_MapBorders(lua_State* L) {
   lua_newtable(L);
@@ -2387,6 +2504,7 @@ void RegisterWorldViewBindings(lua_State* L) {
   SetGlobal(L, "MapBorderAdd", l_MapBorderAdd);
   SetGlobal(L, "MapBorderClear", l_MapBorderClear);
   lua_register(L, "moho64ui_MapBorders", l_MapBorders);
+  lua_register(L, "moho64ui_OrderEtas", l_OrderEtasForTests);
   lua_register(L, "moho64ui_CameraShake", l_CameraShakeForTests);
   SetGlobal(L, "SetInvertMidMouseButton", l_SetInvertMidMouseButton);
   SetGlobal(L, "GetMouseScreenPos", l_GetMouseScreenPos);

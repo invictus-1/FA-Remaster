@@ -836,6 +836,7 @@ ConVarNow ConVarOf(lua_State* L, const std::string& key) {
   else if (key == "UI_MINWAYPOINTSIZE") set("ui_MinWaypointSize", 'f', GraphVars().minWaypointSize);
   else if (key == "UI_MAXWAYPOINTSIZE") set("ui_MaxWaypointSize", 'f', GraphVars().maxWaypointSize);
   else if (key == "UI_WAYPOINTLINESCALE") set("ui_WaypointLineScale", 'f', GraphVars().waypointLineScale);
+  else if (key == "UI_MAXTEXTLOD") set("ui_MaxTextLOD", 'f', GraphVars().maxTextLod);
   else if (RangeConsoleValue(L, key, &range))
     set(key == "RANGE_RENDERSELECTED" ? "range_RenderSelected" : key == "RANGE_RENDERHIGHLIGHTED" ? "range_RenderHighlighted" : "range_RenderBuild", 'b', range);
   return v;
@@ -962,6 +963,7 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
     if (key == "UI_MINWAYPOINTSIZE") return set(graph.minWaypointSize);
     if (key == "UI_MAXWAYPOINTSIZE") return set(graph.maxWaypointSize);
     if (key == "UI_WAYPOINTLINESCALE") return set(graph.waypointLineScale);
+    if (key == "UI_MAXTEXTLOD") return set(graph.maxTextLod);
   }
   if (Upper(name) == "UI_FORCELIFBARSONENEMY") {  // (FA exe: byte 0x10a644a; a key toggles it, the option sets it)
     size_t a = rest.find_first_not_of(" \t");

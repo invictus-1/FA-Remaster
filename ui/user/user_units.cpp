@@ -80,6 +80,11 @@ struct OrderGraph {
     float tangent[3] = {0, 0, 0};  // +0x28 (0x8275b0)
     float size = 0;                // +0x40
     std::vector<int> in, out;      // its legs (+0x48, +0x60)
+    std::string blueprint;         // a build order's blueprint (the command's +0x20)
+    // When its order will be done, a beat number (+0x44, WorkOutEtas), and whether it is worked out
+    // (the original's test is the value 0).
+    int64_t eta = 0;
+    bool etaDone = false;
   };
   // A leg between two nodes (0x826960): how many units go along it (+0x00), and the queue walked last
   // along it (its byte +0x18: whether that queue's unit is the one under the mouse or shares an order
@@ -151,6 +156,7 @@ struct UnitStore : UserState::Extra {
   // The order lines while Shift is held (the original's command graph; see OrderLinesForWorld).
   OrderGraph graph;
   std::map<std::string, bool> canFly;  // Air.CanFly by blueprint (CanFlyOf)
+  std::map<std::string, float> speeds;  // the speed the order lines' times go by, by blueprint (SpeedOf)
   // The buildings the player's units have been ordered to build and have not begun, as of beat
   // `orderedTick` (worked out once a beat, for the world's picture).
   std::vector<WorldGhost> ordered;
@@ -3366,8 +3372,9 @@ void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<Wor
 // Where the original's order is not this (its legs go by texture, 0x829190): the legs are handed
 // highlighted first, then selected, then the rest (the first leg handed keeps a pixel where legs
 // cross, the original's stencil; the renderer's answer to request 30).
-// Left out: the ETA texts at the nodes (display_eta, ui_MaxTextLOD; 0x828610), the glow pass (only
-// the bloom's mask), the path preview (ui_DrawPathPreview, never on). (Dragging a node: further down.)
+// The time left at each node (the ETA texts, 0x828610): WorkOutEtas, drawn by the world view.
+// Left out: the glow pass (only the bloom's mask), the path preview (ui_DrawPathPreview, never
+// on). (Dragging a node: further down.)
 namespace {
 
 // The kinds of orders the graph never draws (0x82632e: 1 << type against 0x2_d80000ea): Stop, Dive,
@@ -3511,6 +3518,7 @@ void BuildOrderGraph(lua_State* L, Sim& sim, UnitStore& store, OrderGraph& g) {
         node = static_cast<int>(g.nodes.size());
         OrderGraph::Node n;
         n.command = c.id, n.type = c.type;
+        n.blueprint = c.blueprint;
         for (int i = 0; i < 3; ++i) n.sum[i] = at[i];
         n.count = 1;
         g.nodes.push_back(std::move(n));
@@ -3561,6 +3569,165 @@ void BuildOrderGraph(lua_State* L, Sim& sim, UnitStore& store, OrderGraph& g) {
   }
 }
 
+// --- the time left at the graph's nodes: the original's ETA texts ---
+//
+// Read from the FA exe by helpers of the ui chat (2026-10-17, 2026-10-18). Only when the graph has been
+// worked out again (0x828fb0: 0x826740 / 0x826ba0, then the nodes put at their targets) is every node's
+// time worked out (0x8272a0, at 0x8290de), kept in the node (+0x44, 0 in a new node) as the beat its
+// order will be done in; it is drawn as that beat less the session's beat now (session+0x458, which
+// CWldSession::DoBeat sets to each beat's number, 0x8945a3; here the simulation's beat), so between two
+// workings out it counts down. A node:
+//   its +0x44 = now (it is being worked out); latest = now; for each leg into it: the node it comes
+//   from worked out first, latest = max(latest, that node's + the leg's walk, TravelTicks); then
+//   latest += its own work (WorkTicks); +0x44 = latest when that is later than now, else now - 1
+//   (nothing to wait for: no text, 0x828648 draws none below now).
+// So a start node (no leg in, no work) is now - 1, and a first order's time is its walk less a beat. A
+// node met again while it is being worked out (a patrol's loop) gives now. The original goes through
+// the nodes of its list graph+0xd38 (start nodes too) in that list's order; this, through the command
+// nodes in the order the queues were walked (they can differ only round a loop).
+
+// The speed of a unit as the order lines' times take it (0x826d9e): its blueprint's Air.MaxAirspeed
+// (bp+0x370) when Air.CanFly (bp+0x368), else its Physics.MaxSpeed (bp+0x2a0); no buff, no multiplier.
+float SpeedOf(lua_State* L, const UserUnit* u) {
+  UnitStore& store = Store(L);
+  auto it = store.speeds.find(u->view.blueprint);
+  if (it != store.speeds.end()) return it->second;
+  const bool fly = CanFlyOf(L, u);
+  float speed = 0;
+  const int top = lua_gettop(L);
+  PushBlueprint(L, u->view.blueprint);
+  if (lua_istable(L, -1)) {
+    lua_pushstring(L, fly ? "Air" : "Physics");
+    lua_rawget(L, -2);
+    if (lua_istable(L, -1)) {
+      lua_pushstring(L, fly ? "MaxAirspeed" : "MaxSpeed");
+      lua_rawget(L, -2);
+      speed = static_cast<float>(lua_tonumber(L, -1));
+    }
+  }
+  lua_settop(L, top);
+  store.speeds[u->view.blueprint] = speed;
+  return speed;
+}
+
+// The beats the units of the order a leg leads to take along it (0x826c50): the straight distance
+// between its two nodes' places, times 10, over the slowest speed of the order's units (the command's
+// own list, 0x8b43f0; those of speed 0 left out), rounded up (0x826e45). 0 when the order is not one
+// they walk to (the jump table 0x826ee4 by type - 2: Move, FormMove, BuildMobile, Attack, FormAttack,
+// Patrol, FormPatrol, AggressiveMove and FormAggressiveMove walk) or none of its units moves (a
+// factory's rally point).
+int64_t TravelTicks(lua_State* L, UnitStore& store, OrderGraph& g, const OrderGraph::Leg& leg) {
+  const OrderGraph::Node& to = g.nodes[static_cast<size_t>(leg.to)];
+  switch (static_cast<CommandType>(to.type)) {
+    case CommandType::Move:
+    case CommandType::FormMove:
+    case CommandType::BuildMobile:
+    case CommandType::Attack:
+    case CommandType::FormAttack:
+    case CommandType::Patrol:
+    case CommandType::FormPatrol:
+    case CommandType::AggressiveMove:
+    case CommandType::FormAggressiveMove:
+      break;
+    default:
+      return 0;
+  }
+  float a[3], b[3];
+  NodePlace(g.nodes[static_cast<size_t>(leg.from)], a);
+  NodePlace(to, b);
+  const float distance = std::sqrt((b[0] - a[0]) * (b[0] - a[0]) + (b[1] - a[1]) * (b[1] - a[1]) + (b[2] - a[2]) * (b[2] - a[2]));
+  float slowest = std::numeric_limits<float>::max();
+  for (uint32_t id : g.carriers[to.command]) {
+    auto it = store.units.find(id);
+    if (it == store.units.end() || it->second->gone) continue;
+    const float speed = SpeedOf(L, it->second.get());
+    if (speed > 0 && speed < slowest) slowest = speed;
+  }
+  if (!(slowest < std::numeric_limits<float>::max()) || !(slowest > 0)) return 0;
+  return static_cast<int64_t>(std::ceil(distance * 10.0f / slowest));
+}
+
+// The beats a build order's builders still need at its node (0x826f10): only BuildMobile and
+// BuildFactory orders (a BuildFactory has no node: NeverDrawn). Its builders are the order's units in
+// FACTORY or ENGINEER (0x827035); each adds its rate, 1 / the first value of the game's
+// GetConstructEconomyModel(builder, the blueprint's Economy) (0x830e30, lua_call with one result;
+// /lua/game.lua: BuildTime over builder:GetBuildRate(), in seconds; an error is logged "Error
+// estimating work time: %s"); what is left of the building is 1, or less for a builder whose first
+// order this is (0x8b72f0: the first command of its queue) and which works on something (its focus,
+// unit+0x210 as GetFocus, 0x824500): 1 - its health / max health (+0x68 / +0x6c, as GetHealth
+// 0x8c3fa8 and GetMaxHealth read them), the least of them. The beats: what is left times 10 over the
+// rates' sum, cut to a whole number (0x827255, the x87 control word's 0xc00; 0 without a rate).
+int64_t WorkTicks(lua_State* L, UnitStore& store, OrderGraph& g, const OrderGraph::Node& n) {
+  if (n.command == 0xffffffffu) return 0;
+  const auto type = static_cast<CommandType>(n.type);
+  if (type != CommandType::BuildMobile && type != CommandType::BuildFactory) return 0;
+  if (n.blueprint.empty()) return 0;
+  const int top = lua_gettop(L);
+  lua_getglobal(L, "import");
+  lua_pushstring(L, "/lua/game.lua");
+  if (lua_pcall(L, 1, 1, 0) != 0 || !lua_istable(L, -1)) {
+    lua_settop(L, top);
+    return 0;
+  }
+  lua_pushstring(L, "GetConstructEconomyModel");
+  lua_gettable(L, -2);
+  const int model = lua_gettop(L);
+  float left = 1, rate = 0;
+  for (uint32_t id : g.carriers[n.command]) {
+    auto it = store.units.find(id);
+    if (it == store.units.end() || it->second->gone) continue;
+    UserUnit* u = it->second.get();
+    if (!InCategory(L, u, "FACTORY") && !InCategory(L, u, "ENGINEER")) continue;
+    UnitStateView s;
+    if (StateOf(L, u, &s) && s.focus != 0xffffffffu && !s.queue.empty() && s.queue[0].id == n.command) {
+      auto f = store.units.find(s.focus);
+      if (f != store.units.end() && !f->second->gone && f->second->view.maxHealth > 0)
+        left = std::min(left, 1.0f - f->second->view.health / f->second->view.maxHealth);
+    }
+    lua_pushvalue(L, model);
+    PushObject(L, u);
+    PushBlueprint(L, n.blueprint);
+    if (lua_istable(L, -1)) {
+      lua_pushstring(L, "Economy");
+      lua_gettable(L, -2);
+      lua_remove(L, -2);
+    }
+    if (lua_pcall(L, 2, 1, 0) != 0) {
+      Logf(LogLevel::Warning, "Error estimating work time: %s", lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
+      lua_settop(L, model);
+      continue;
+    }
+    const float seconds = static_cast<float>(lua_tonumber(L, -1));
+    lua_settop(L, model);
+    if (seconds > 0) rate += 1.0f / seconds;
+  }
+  lua_settop(L, top);
+  if (!(rate > 0)) return 0;
+  return static_cast<int64_t>(static_cast<double>(left) * 10.0 / static_cast<double>(rate));  // (0xc00: cut toward 0)
+}
+
+void EtaOf(lua_State* L, UnitStore& store, OrderGraph& g, int node, int64_t now) {
+  OrderGraph::Node& n = g.nodes[static_cast<size_t>(node)];
+  if (n.etaDone) return;
+  n.etaDone = true;
+  n.eta = now;
+  int64_t latest = now;
+  for (int li : n.in) {
+    const OrderGraph::Leg& leg = g.legs[static_cast<size_t>(li)];
+    EtaOf(L, store, g, leg.from, now);
+    latest = std::max(latest, g.nodes[static_cast<size_t>(leg.from)].eta + TravelTicks(L, store, g, leg));
+  }
+  latest += WorkTicks(L, store, g, n);
+  n.eta = n.eta < latest ? latest : n.eta - 1;
+}
+
+// Every command node's time (0x8290d8; the start nodes as they are met).
+void WorkOutEtas(lua_State* L, UnitStore& store, OrderGraph& g, int64_t now) {
+  for (OrderGraph::Node& n : g.nodes) n.eta = 0, n.etaDone = false;
+  for (size_t i = 0; i < g.nodes.size(); ++i)
+    if (g.nodes[i].command != 0xffffffffu) EtaOf(L, store, g, static_cast<int>(i), now);
+}
+
 // What the graph gives to draw now, with what the test function reports beside it.
 struct OrderGraphOut {
   struct LegOut {
@@ -3571,9 +3738,14 @@ struct OrderGraphOut {
     WorldOrderMark mark;
     int state = 0, node = -1;
   };
+  struct EtaOut {
+    OrderEta eta;
+    int node = -1;
+  };
   std::vector<std::string> textures;
   std::vector<LegOut> legs;
   std::vector<MarkOut> marks;
+  std::vector<EtaOut> etas;
   WorldOrderSettings settings;
 };
 
@@ -3611,6 +3783,7 @@ OrderGraph& HoldOrderGraph(lua_State* L, bool held) {
   // again, the byte graph+0; what marks it is not read; its nodes follow their targets each frame).
   if (g.builtSync != user->syncCount) {
     BuildOrderGraph(L, *sim, Store(L), g);
+    WorkOutEtas(L, Store(L), g, sim->tick());
     g.builtSync = user->syncCount;
   }
   return g;
@@ -3696,15 +3869,40 @@ void WorkOutOrderGraph(lua_State* L, bool shown, uint32_t rollover, OrderGraphOu
     }
     out->marks.push_back(m);
   }
+  // The time left at each command node (0x828610): the beat its order will be done in less the beat
+  // now, none below 0; whole seconds of it (0x82874d: times 0.1, rounded down) as minutes and seconds.
+  // With it, the node's size times its state's waypoint_scale (the record's +0x34 normal, +0x38
+  // selected, +0x3c highlight): where the text goes.
+  // (Now: the simulation's beat, as when the times were worked out; the scene is not made while a
+  // beat runs on its own thread.)
+  const int64_t now = TheSim(L)->tick();
+  for (size_t i = 0; i < g.nodes.size(); ++i) {
+    const OrderGraph::Node& n = g.nodes[i];
+    if (n.command == 0xffffffffu || n.eta - now < 0) continue;
+    OrderGraphOut::EtaOut e;
+    e.node = static_cast<int>(i);
+    e.eta.ticks = static_cast<int>(n.eta - now);
+    e.eta.state = stateOf(n);
+    NodePlace(n, e.eta.position);
+    e.eta.size = n.size * record(n.type).markScale[slot(e.eta.state)];
+    const int seconds = static_cast<int>(std::floor(static_cast<float>(e.eta.ticks) * 0.1f));
+    char text[48];
+    std::snprintf(text, sizeof text, "ETA: %d.%02d", seconds / 60, seconds % 60);
+    e.eta.text = text;
+    out->etas.push_back(std::move(e));
+  }
 }
 
-// moho64ui_OrderGraph([unit]) -> {shown, legs = {...}, marks = {...}, textures, settings}: the order lines
+// moho64ui_OrderGraph([unit]) -> {shown, legs = {...}, marks = {...}, etas = {...}, textures, settings}: the order lines
 // as the picture is given them now (the host's own function for tests), with `unit` standing for the
 // unit under the mouse (else the one there). Each leg: a, b, ta, tb ({x, y, z}), units, width (its
 // base width), state ("highlight", "selected", "normal"), color ("aarrggbb"), texture (its path, or
 // nil), uvAspect, animRate, from and to (the commands' names; "start" for a start node) and fromId,
-// toId (the commands' ids). Each mark: position, size, state, color, texture, command, id. hovered: the id of
-// the waypoint under the mouse's order (nil: none); dragged: the id of the order whose waypoint is being dragged.
+// toId (the commands' ids). Each mark: position, size, state, color, texture, command, id. Each eta
+// (a node with time left, before the world view's tests of ui_MaxTextLOD and display_eta): position,
+// size (the node's times its state's waypoint scale), state, ticks, text ("ETA: 1.05"), command, id.
+// hovered: the id of the waypoint under the mouse's order (nil: none); dragged: the id of the order
+// whose waypoint is being dragged.
 int l_OrderGraphForTests(lua_State* L) {
   uint32_t rollover = UnitUnderMouse(L);
   if (const UserUnit* u = ToUnit(L, 1)) rollover = u->view.id;
@@ -3782,6 +3980,20 @@ int l_OrderGraphForTests(lua_State* L) {
   }
   field("marks");
   lua_newtable(L);
+  for (size_t i = 0; i < out.etas.size(); ++i) {
+    const OrderGraphOut::EtaOut& e = out.etas[i];
+    lua_newtable(L);
+    vector(e.eta.position), field("position");
+    lua_pushnumber(L, e.eta.size), field("size");
+    lua_pushstring(L, states[e.eta.state]), field("state");
+    lua_pushnumber(L, e.eta.ticks), field("ticks");
+    lua_pushstring(L, e.eta.text.c_str()), field("text");
+    command(e.node), field("command");
+    commandId(e.node), field("id");
+    lua_rawseti(L, -2, static_cast<int>(i) + 1);
+  }
+  field("etas");
+  lua_newtable(L);
   for (size_t i = 0; i < out.textures.size(); ++i) {
     lua_pushstring(L, out.textures[i].c_str());
     lua_rawseti(L, -2, static_cast<int>(i) + 1);
@@ -3798,7 +4010,7 @@ int l_OrderGraphForTests(lua_State* L) {
 }
 }  // namespace
 
-void OrderLinesForWorld(lua_State* L, bool shown, uint32_t rollover, WorldScene* scene) {
+void OrderLinesForWorld(lua_State* L, bool shown, uint32_t rollover, WorldScene* scene, std::vector<OrderEta>* etas) {
   OrderGraphOut out;
   WorkOutOrderGraph(L, shown, rollover, &out);
   scene->orderTextures = std::move(out.textures);
@@ -3809,6 +4021,10 @@ void OrderLinesForWorld(lua_State* L, bool shown, uint32_t rollover, WorldScene*
   scene->orderMarks.reserve(out.marks.size());
   for (const OrderGraphOut::MarkOut& m : out.marks) scene->orderMarks.push_back(m.mark);
   scene->orderSettings = out.settings;
+  if (etas) {
+    etas->clear();
+    for (OrderGraphOut::EtaOut& e : out.etas) etas->push_back(std::move(e.eta));
+  }
 }
 
 // --- a waypoint under the mouse, and dragging it ---

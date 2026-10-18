@@ -439,6 +439,10 @@ struct CommandGraphVars {
   float minWaypointSize = 7;       // ui_MinWaypointSize, pixels (half the mark's side)
   float maxWaypointSize = 100;     // ui_MaxWaypointSize
   float waypointLineScale = 1;     // ui_WaypointLineScale: every leg's width times this
+  // ui_MaxTextLOD (0xf57ccc, "LOD level that timer text dissapears"; the Lua file does not set it): a
+  // node's time-left text in the normal state is not drawn where the camera's level of detail is
+  // this or more (OrderEta)
+  float maxTextLod = 80;
 };
 CommandGraphVars& GraphVars();
 // A unit's custom name (nullptr: none or no such unit), its selection sets as the original writes
@@ -530,12 +534,28 @@ void ExpandCurrentSelection(lua_State* L);
 // not. (The lines of the orders: OrderLinesForWorld.)
 void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<WorldGhost>* ghosts = nullptr, bool queueShown = true,
                        std::vector<WorldGhost>* queued = nullptr);
+// The time left at a node of the order lines while Shift is held: the original's ETA text (FA exe
+// 0x828610, the last step of the command graph's drawing 0x829190, in screen space), worked out by
+// user_units.cpp (WorkOutEtas). Only the nodes of orders with time left (the start nodes never). The
+// world view draws each (WorldView::DrawOrderEtas): white "Andale Mono" of 10 pixels, its pen one pixel
+// right of the point (x + size, y, z - size) (the corner of the node's mark up and right, by the
+// node's size unclamped) and its baseline the font's descent and a pixel above it, both rounded; a
+// node in the normal state only where the camera's level of detail there is below ui_MaxTextLOD; none
+// at all while the player's option display_eta ("Show Waypoint ETAs") is off.
+struct OrderEta {
+  float position[3] = {0, 0, 0};  // the node's place
+  float size = 0;                 // the node's size times its state's waypoint_scale (world units)
+  int state = 0;                  // 0 normal, 1 highlighted, 2 selected (0x8281e0's)
+  int ticks = 0;                  // the time left, in beats (10 a second)
+  std::string text;               // "ETA: %d.%02d", minutes and seconds (0x8287a1): "ETA: 1.05"
+};
 // The order lines and their waypoints' marks while Shift is held (`shown`), as the original's
 // command graph works them out (user_units.cpp: the orders of every unit whose orders the interface
 // holds, from the game's commandgraphparams.lua and commandwaypoint.lua): into the scene's
 // orderTextures, orderLegs (highlighted first, then selected, then the rest), orderMarks and
 // orderSettings; empty lists when not shown. `rollover`: the unit under the mouse (0xffffffff: none).
-void OrderLinesForWorld(lua_State* L, bool shown, uint32_t rollover, WorldScene* scene);
+// `etas` (may be null): the time-left texts at the graph's nodes (OrderEta), for the world view to draw.
+void OrderLinesForWorld(lua_State* L, bool shown, uint32_t rollover, WorldScene* scene, std::vector<OrderEta>* etas = nullptr);
 // The waypoint under the mouse and dragging it, as the original's command graph and its UICommandDragger
 // (user_units.cpp). `screenOf`: where a place of the world is on the screen and how many map units a pixel is
 // there (false: not in view). UpdateHoveredWaypoint works out the waypoint under the mouse at (x, y) while
