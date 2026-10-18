@@ -541,6 +541,7 @@ void MoveTaskWalk(Sim& sim, Unit* u, const Vec3& goal) {
   const NamedFootprint& fp = Footprint(*u->blueprint);
   const int x0 = RoundEven(p.x - fp.sizeX * 0.5f), z0 = RoundEven(p.z - fp.sizeZ * 0.5f);
   TaskMoveToward(sim, u, Vec3{x0 + fp.sizeX * 0.5f, p.y, z0 + fp.sizeZ * 0.5f});
+  u->walkPrepared = true;  // (+0x95)
   const int r[4] = {x0, z0, x0 + fp.sizeX, z0 + fp.sizeZ};
   GroundReserveRect(sim, u, r);
   // and at its end (0x6186a1) Unit::UpdateSpeedThroughStatus 0x6ac940: a patrol with points queued behind it walks
@@ -789,6 +790,8 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
   if (c.moving && c.state == 0) {
     c.moving = false;
     EndWalk(u);
+    // (and the dtor frees the o-grid rect its ctor reserved for a rally-overridden walk, +0x92: 0x618891)
+    if (u->walkPrepared) GroundFreeRect(sim, u);
   }
   // A task without an entity (+0x4c, ReclaimTaskCommandEvent). Every Execute first asks the army's recon
   // (0x61f02e..0x61f087: IArmy vt+0x20 GetReconDB, its vt+0x10 ReconCanDetect 0x5c1850 with LOSNow 8; under water by
@@ -2225,6 +2228,7 @@ int TickRepair(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   if (t.moving && t.state == 0) {
     t.moving = false;
     EndWalk(u);
+    if (u->walkPrepared) GroundFreeRect(sim, u);  // (the dtor's +0x92 free, 0x618891)
   }
   if (t.moving) {  // the move child: the task runs again when it ends
     if (u->motion.hasGoal) return kTaskRunning;
@@ -2922,15 +2926,7 @@ void GuardWalksCommandEvent(Sim& sim, UnitCommand& c) {
     if (!Alive(h) || h->commands.empty() || h->commands.front().get() != &c) continue;
     BuildTask* gt = h->task;
     if (!gt || !gt->gdata || !gt->gdata->childMove || gt->gdata->child) continue;
-    if (!h->motion.bp || !h->motion.bp->mobile() || !h->motion.nav) continue;
-    Vec3 p = c.pos;
-    if (!FormationGoal(sim, c, h, &p)) p = CommandPosGun(sim, c);  // (the target's target point)
-    const NamedFootprint& fp = Fp(h);
-    const int cx = static_cast<int>(std::nearbyint(p.x - fp.sizeX * 0.5f));
-    const int cz = static_cast<int>(std::nearbyint(p.z - fp.sizeZ * 0.5f));
-    const Vec3 goal{cx + fp.sizeX * 0.5f, p.y, cz + fp.sizeZ * 0.5f};
-    h->motion.arrived = h->motion.failed = false;
-    MotionSetGoal(sim, h, std::vector<Vec3>{goal}, h->motion.nav->speedThroughGoal, sim.tick());
+    TaskWalkCommandEvent(sim, c, h);
   }
 }
 
@@ -3496,7 +3492,41 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
 }
 
 bool TaskCanMove(const Unit* u) { return CanMove(u); }
-void TaskMoveToward(Sim& sim, Unit* u, const Vec3& goal) { MoveToward(sim, u, goal); }
+void TaskMoveToward(Sim& sim, Unit* u, const Vec3& goal) {
+  MoveToward(sim, u, goal);
+  u->walkPrepared = false;
+}
+
+// CUnitMoveTask::OnEvent 0x618c40 (read) for a task's walk: the move task links the queue's head command (ctor 0x6180e0:
+// task+0x88 from unit+0x4b4's first command, its listener +0x54 in cmd+0x34), so a SetTarget event of that command
+// (0x6e8820 -> 0x6e94a0) reaches it. With +0x94 clear it hands its navigator the command's position for the unit
+// (CUnitCommand::GetPosition 0x6e8a30: the target's point with the centre flag clear, 0x6e8a6a; the unit's footprint
+// cell there; SNavGoal 0x5a2cb0, SetGoal vt+8; no speed-through change); with +0x95 (the ctor's rally override) that
+// cell's centre goes through PrepareMove first (spacing 0, 0x618d20) and the o-grid reservation moves to the cell found
+// (+0x92: FreeOgridRect 0x6ab760, ReserveOgridRect 0x6ab6f0). The listener wakes nobody (no thread re-link). (Land
+// navigators only: an air walk's SetGoal is not modelled here.)
+void TaskWalkCommandEvent(Sim& sim, UnitCommand& c, Unit* h) {
+  if (!h->motion.bp || !h->motion.bp->mobile() || !h->motion.nav) return;
+  Vec3 p = c.pos;
+  if (!FormationGoal(sim, c, h, &p)) p = CommandPosGun(sim, c);  // (the target's point)
+  const NamedFootprint& fp = Fp(h);
+  int cx = static_cast<int>(std::nearbyint(p.x - fp.sizeX * 0.5f));
+  int cz = static_cast<int>(std::nearbyint(p.z - fp.sizeZ * 0.5f));
+  if (h->walkPrepared) {
+    Vec3 q{cx + fp.sizeX * 0.5f, p.y, cz + fp.sizeZ * 0.5f};
+    const float none[4] = {0, 0, 0, 0};
+    GroundPrepareMove(sim, h, &q, none, 0);
+    cx = static_cast<int>(std::nearbyint(q.x - fp.sizeX * 0.5f));
+    cz = static_cast<int>(std::nearbyint(q.z - fp.sizeZ * 0.5f));
+  }
+  const Vec3 goal{cx + fp.sizeX * 0.5f, p.y, cz + fp.sizeZ * 0.5f};
+  h->motion.arrived = h->motion.failed = false;
+  MotionSetGoal(sim, h, std::vector<Vec3>{goal}, h->motion.nav->speedThroughGoal, sim.tick());
+  if (h->walkPrepared) {
+    const int r[4] = {cx, cz, cx + fp.sizeX, cz + fp.sizeZ};
+    GroundReserveRect(sim, h, r);
+  }
+}
 
 // CUnitReclaimTask's command listener 0x620160 (read). The task listens to the queue's current command (its ctor
 // 0x61eb60, 0x61ec82..0x61ecdb: +0x40 = the queue's first command, its listener linked into cmd+0x34). When that

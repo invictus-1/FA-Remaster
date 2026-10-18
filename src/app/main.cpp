@@ -348,6 +348,7 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
   auto t0 = std::chrono::steady_clock::now();
   if (!sim.LoadRules()) return 1;
   auto t1 = std::chrono::steady_clock::now();
+  sim.collectPrints = o.view;  // the scripts' print lines, as a console host takes them (before Start: its lines too)
   bool ok = sim.Start(session);
   auto t2 = std::chrono::steady_clock::now();
   Logf(LogLevel::Info, "moho64: sim start-up %s", ok ? "ok" : "FAILED");
@@ -463,6 +464,11 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
              b.find("StatsToSend") != std::string::npos ? " and StatsToSend" : "");
       lastSync = std::move(b);
     }
+    // --view: the print lines since the last take, each as the host's console would get it ([] around it, so that
+    // spaces at its ends show)
+    if (o.view)
+      for (const std::string& line : sim.TakePrints())
+        Logf(LogLevel::Info, "view: print tick %u [%s]", sim.tick(), line.c_str());
   };
   // The setup's own Sync (the original's beat 0, made by Start), taken before the first beat as a host does.
   if (ok) {

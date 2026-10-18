@@ -3,6 +3,34 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 41: the simulation's print(...) lines, per beat, for the console — done (f6fec31)
+
+**The original (FA exe, read).**
+- The sim's print (0x74b570) builds its lines with SCR_ConcatArgsAndCall (0x4cd740), the same builder as the user
+  state's print.
+- Sim::Printf (0x7462a0) keeps each line on a list at sim+0xa18.
+- Every Sync, beat 0 included, swaps that list into its packet (0x7480aa).
+- CWldSession::DoBeat hands each line to CON_Printf (0x895260).
+- Nothing is logged.
+
+**For you:**
+- Set `sim->collectPrints = true` before `Start`, beside collectSync and outside the picture's #ifdef.
+- Call `sim_->TakePrints()` after Start (with the setup's TakeSync) and after every beat where you call TakeSync,
+  only between beats.
+- You get every finished console line since the last take, oldest first; the start's lines come in the first take.
+  Nothing touches the sim's Lua state.
+
+**The lines** are built as the exe builds them (sim.h). One difference from your PrintLines: the exe stops an
+argument's text at its first NUL, while lua_strlen keeps the rest.
+
+**The log.** Taken lines are not logged, as in the original. With collectPrints off, print logs as before.
+`moho64 --view` logs them as `view: print tick N [line]`. Test: tests/sim_print.txt.
+
+**Start lines.** FAF's NavGenerator prints three. INFERRED: the original prints them at beat 0, before CreateUI
+makes the console echo, so only a console window that is already open shows them.
+
+**Results:** the 13, MP2 and MP3 stay at their marks, and MP1 too (the full gate on 16 replays passed with it).
+
 ## ui 40: PreGameData no longer comes from Chris's real Game.prefs — done (7e4857e)
 
 **Decided.** CurrentMapDir is Dirname(Options.ScenarioFile) of the session's own scenario info, whether that is a

@@ -1059,6 +1059,12 @@ bool Sim::Start(const ReplayHeader& replay) {
   lua_pushlightuserdata(L, this);
   lua_rawset(L, LUA_REGISTRYINDEX);
   lua_setextra(L, 1, this);
+  // print(...): its lines kept for the host while collectPrints is set (sim.h; KeepPrint below)
+  state_->onPrint = [this](const std::vector<std::string>& args) {
+    if (!collectPrints) return false;
+    KeepPrint(args);
+    return true;
+  };
   threads_ = std::make_unique<ThreadScheduler>(L);
   RegisterSimClasses(L);
   RegisterThreadBindings(L, threads_.get());
@@ -1736,6 +1742,43 @@ void Sim::ApplyFocusArmy() {
 std::vector<std::string> Sim::TakeSync() {
   std::vector<std::string> out;
   out.swap(pendingSync_);
+  return out;
+}
+
+// The lines of one print(...) call (ui REQUESTS 41), as the original's sim print makes them: 0x74b570 calls
+// SCR_ConcatArgsAndCall (0x4cd740) with the separator 9 and the sink 0x74b550, which hands each line to
+// Sim::Printf(sim, "%s", line) (0x7462a0: STR_Va, then a push on sim+0xa18; no log). SCR_ConcatArgsAndCall: the
+// arguments in order (lua_gettop 0x90c590), before each but the first the separator through the character step;
+// an argument for which lua_isstring holds (a string or a number) is read with lua_tostring (0x90ca90), any other
+// through the global tostring (looked up once per call, 0x4d42c0 "tostring"; LuaFunction::Call_Object_Str
+// 0x4d4ba0); each character up to the text's NUL through the character step (0x4cd680, unsigned: movzx); at the
+// end a line that is not empty goes to the sink. The character step (0x4cd680): '\n' gives the line to the sink,
+// empty or not, and clears it (0x4cd688..0x4cd6b7); '\t' appends ((length - 1) & 7) + 1 spaces (0x4cd6c1); 0x20 and
+// up is appended (0x4cd6e1); any other is formatted with 0xe09aec, which is "\t" (09 00), and appended as it is.
+// Here the arguments come as tostring's texts (core_bindings.cpp's print: the text of a string or number is the
+// same; it keeps the Lua calls of today's print), and the lines are built in C++ alone.
+void Sim::KeepPrint(const std::vector<std::string>& args) {
+  std::string line;
+  auto put = [&](unsigned char c) {
+    if (c == '\n') {
+      prints_.push_back(line);
+      line.clear();
+    } else if (c == '\t') {
+      line.append(((line.size() - 1) & 7) + 1, ' ');
+    } else {
+      line.push_back(c >= 0x20 ? static_cast<char>(c) : '\t');
+    }
+  };
+  for (size_t i = 0; i < args.size(); ++i) {
+    if (i > 0) put('\t');
+    for (const char* p = args[i].c_str(); *p; ++p) put(static_cast<unsigned char>(*p));
+  }
+  if (!line.empty()) prints_.push_back(line);
+}
+
+std::vector<std::string> Sim::TakePrints() {
+  std::vector<std::string> out;
+  out.swap(prints_);
   return out;
 }
 
