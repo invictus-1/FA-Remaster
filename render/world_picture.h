@@ -159,7 +159,8 @@ class WorldPicture {
   void SetWeatherEffects(bool on);
   // Ground detail: grass near the camera, pressed flat round units and buildings (World::groundCover); about
   //   +0.05 to 0.2 ms when zoomed in, nothing from afar; and battle scars (World::battleScars): the scorches and
-  //   craters of the fighting stay on the ground, weathering, up to 2000.
+  //   craters of the fighting stay on the ground, weathering, up to 2000; and light through leaves
+  //   (World::leafLight): the sun shines through leaves, grass and plants.
   void SetGroundDetail(bool on);
   // FSR 3 frame generation (World::frameGeneration): a picture made between each two frames and shown between
   // them, evenly apart, so twice the frames are shown, for a little more than half a frame's delay; the icons and

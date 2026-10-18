@@ -126,6 +126,9 @@ struct ViewConstants {
   // Wet shorelines and caustics (World::waterDetail): x 1 = on; y the water's level (world y); z the height of the
   // band over it the waves have wetted; w how strong the bright net on a shallow bed is.
   float shore[4];
+  // Light through leaves (World::leafLight): x 1 = leaves, grass blades and the plants' cards let through the sun's
+  // light that falls on their far side (lighting.h, LeafLight); y how much.
+  float leaves[4];
 };
 
 // The same block, as HLSL source: shaders start with it.
@@ -170,6 +173,7 @@ cbuffer View : register(b0) {
   float4 bounceLayers;    // the probes' heights over the ground
   float4 rayEffects;      // reflections by ray tracing: x 1 = on; y how far a ray looks; z, w the map's size
   float4 shore;           // wet shorelines: x 1 = on; y the water's level; z the wet band's height; w the caustics' strength
+  float4 leaves;          // light through leaves: x 1 = on; y how much
 };
 // (every texture read with Sample takes the temporal upscaler's bias: textures with levels - the art's - are
 // read as finely as the screen's size wants; pictures drawn by the renderer have one level and do not change)
