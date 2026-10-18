@@ -308,7 +308,7 @@ const std::vector<const char*>& ConsoleNames() {
         "remaster_rich_ground", "remaster_snow_tracks", "remaster_stats", "remaster_temporal_upscale", "remaster_tracers", "remaster_upscale",
         "remaster_atmosphere", "remaster_soft_shadows", "remaster_ray_tracing", "remaster_weather_effects",
         "remaster_ground_detail", "remaster_frame_generation", "remaster_water_ripples", "remaster_lens", "remaster_cinecam",
-        "remaster_photo"};
+        "remaster_photo", "remaster_battle_effects", "remaster_energy_shields", "remaster_hidden_outlines"};
     std::sort(all.begin(), all.end(), ConNameLess);
     return all;
   }();
@@ -380,13 +380,14 @@ int l_FlushEvents(lua_State*) { return 0; }
 int l_LooksForTests(lua_State* L) {
   const LookSettings& looks = Looks();
   lua_newtable(L);
-  const char* names[15] = {"remasteredEffects", "tracers", "richGround", "snowTracks", "vulkan", "originalLook", "temporalUpscale",
+  const char* names[18] = {"remasteredEffects", "tracers", "richGround", "snowTracks", "vulkan", "originalLook", "temporalUpscale",
                            "atmosphere", "softShadows", "rayTracing", "weatherEffects", "groundDetail", "frameGeneration",
-                           "waterRipples", "lens"};
-  const bool values[15] = {looks.remasteredEffects, looks.tracers, looks.richGround, looks.snowTracks, looks.vulkan,
+                           "waterRipples", "lens", "battleEffects", "energyShields", "hiddenOutlines"};
+  const bool values[18] = {looks.remasteredEffects, looks.tracers, looks.richGround, looks.snowTracks, looks.vulkan,
                            looks.originalLook, looks.temporalUpscale, looks.atmosphere, looks.softShadows, looks.rayTracing,
-                           looks.weatherEffects, looks.groundDetail, looks.frameGeneration, looks.waterRipples, looks.lens};
-  for (int i = 0; i < 15; ++i) {
+                           looks.weatherEffects, looks.groundDetail, looks.frameGeneration, looks.waterRipples, looks.lens,
+                           looks.battleEffects, looks.energyShields, looks.hiddenOutlines};
+  for (int i = 0; i < 18; ++i) {
     lua_pushstring(L, names[i]);
     lua_pushboolean(L, values[i]);
     lua_rawset(L, -3);
@@ -1049,7 +1050,8 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
     }
     if (key == "REMASTER_ATMOSPHERE" || key == "REMASTER_SOFT_SHADOWS" || key == "REMASTER_RAY_TRACING" ||
         key == "REMASTER_WEATHER_EFFECTS" || key == "REMASTER_GROUND_DETAIL" ||
-        key == "REMASTER_FRAME_GENERATION" || key == "REMASTER_WATER_RIPPLES" || key == "REMASTER_LENS") {  // (the renderer's switches: 0 off, 1 on)
+        key == "REMASTER_FRAME_GENERATION" || key == "REMASTER_WATER_RIPPLES" || key == "REMASTER_LENS" ||
+        key == "REMASTER_BATTLE_EFFECTS" || key == "REMASTER_ENERGY_SHIELDS" || key == "REMASTER_HIDDEN_OUTLINES") {  // (the renderer's switches: 0 off, 1 on)
       bool& on = key == "REMASTER_ATMOSPHERE"         ? looks.atmosphere
                  : key == "REMASTER_SOFT_SHADOWS"     ? looks.softShadows
                  : key == "REMASTER_RAY_TRACING"      ? looks.rayTracing
@@ -1057,6 +1059,9 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
                  : key == "REMASTER_FRAME_GENERATION" ? looks.frameGeneration
                  : key == "REMASTER_WATER_RIPPLES"    ? looks.waterRipples
                  : key == "REMASTER_LENS"             ? looks.lens
+                 : key == "REMASTER_BATTLE_EFFECTS"   ? looks.battleEffects
+                 : key == "REMASTER_ENERGY_SHIELDS"   ? looks.energyShields
+                 : key == "REMASTER_HIDDEN_OUTLINES"  ? looks.hiddenOutlines
                                                       : looks.weatherEffects;
       if (!value.empty()) on = value[0] == '1' || Upper(value).rfind("ON", 0) == 0 || Upper(value).rfind("TRUE", 0) == 0;
       return;

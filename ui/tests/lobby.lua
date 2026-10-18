@@ -59,7 +59,8 @@ for _, key in {'RemasterDayStart', 'RemasterDayLength', 'RemasterWeather', 'Rema
     local default = option and option.values[option.default]
     check("the option " .. key .. " is in the list with a default", default ~= nil, true)
 end
-check("a game has the map's own light unless chosen", options.RemasterDayStart.values[options.RemasterDayStart.default].key, 'map')
+check("a game starts in the morning unless chosen (Chris, 2026-10-18)", options.RemasterDayStart.values[options.RemasterDayStart.default].key, 'morning')
+check("and the map's own light is the first choice", options.RemasterDayStart.values[1].key, 'map')
 check("a day takes twenty minutes unless chosen", options.RemasterDayLength.values[options.RemasterDayLength.default], '20')
 check("the map's edge has no machinery unless chosen (Chris's choice)", options.RemasterMapEdge.values[options.RemasterMapEdge.default].key, 'beyond')
 check("and the original's frame is the other choice", options.RemasterMapEdge.values[2].key, 'frame')
@@ -88,13 +89,16 @@ video.remaster_temporal_upscale.set('remaster_temporal_upscale', 1, false)
 check("on: FSR 3, and the anti-aliasing gives way (one sample a pixel)", tostring(moho64ui_Looks().temporalUpscale) .. " " .. moho64ui_Looks().samplesDrawn, "true 1")
 video.remaster_temporal_upscale.set('remaster_temporal_upscale', 0, false)
 check("off again: the anti-aliasing's samples", moho64ui_Looks().samplesDrawn, moho64ui_Looks().sceneSamples)
--- The lighting upgrade (the renderer's request 31): four switches, each off unless chosen
-for _, key in {'remaster_atmosphere', 'remaster_soft_shadows', 'remaster_ray_tracing', 'remaster_weather_effects',
-               'remaster_ground_detail', 'remaster_frame_generation', 'remaster_water_ripples', 'remaster_lens'} do
-    check("the Video tab has " .. key .. ", off unless chosen", video[key] and video[key].default, 0)
+-- Every remastered look ON unless chosen (Chris, 2026-10-18); Frame Generation off (a speed trade-off)
+for _, key in {'remaster_atmosphere', 'remaster_soft_shadows', 'remaster_weather_effects', 'remaster_ground_detail',
+               'remaster_water_ripples', 'remaster_lens', 'remaster_battle_effects', 'remaster_energy_shields',
+               'remaster_hidden_outlines'} do
+    check("the Video tab has " .. key .. ", on unless chosen", video[key] and video[key].default, 1)
 end
+check("Frame Generation off unless chosen", video.remaster_frame_generation.default, 0)
+check("Ray Tracing on unless chosen, where the card can", video.remaster_ray_tracing.default, moho64ui_RayTracingSupported() == false and 0 or 1)
 -- The Remastered Preset (Chris, 2026-10-17): the new looks set together; Custom (5) by default leaves them
-check("the Video tab has the Remastered Preset, Custom unless chosen", video.remaster_preset and video.remaster_preset.default, 5)
+check("the Video tab has the Remastered Preset, Ultra unless chosen", video.remaster_preset and video.remaster_preset.default, 4)
 do
     local O = import('/lua/options/options.lua')
     local off, high, ultra = O.RemasterPresetValues(0), O.RemasterPresetValues(3), O.RemasterPresetValues(4)
@@ -105,20 +109,29 @@ do
         O.RemasterPresetValues(2).remaster_water_ripples .. " " .. high.remaster_water_ripples .. " " .. ultra.remaster_water_ripples, "0 1 1")
     check("the Cinematic Lens Blur is in no level", off.remaster_lens == nil and high.remaster_lens == nil and ultra.remaster_lens == nil, true)
     check("Custom touches nothing", O.RemasterPresetValues(5), nil)
+    local low, medium = O.RemasterPresetValues(1), O.RemasterPresetValues(2)
+    check("Hidden Unit Outlines from Low, Battle Effects and Energy Shields from Medium, none at Off",
+        off.remaster_hidden_outlines .. low.remaster_hidden_outlines .. low.remaster_battle_effects .. medium.remaster_battle_effects ..
+        medium.remaster_energy_shields .. ultra.remaster_battle_effects, "010111")
 end
-video.remaster_soft_shadows.set('remaster_soft_shadows', 1, false)
-video.remaster_weather_effects.set('remaster_weather_effects', 1, false)
-check("switched on in the menu: Soft Shadows and Weather Effects, nothing else", tostring(moho64ui_Looks().softShadows) .. " " ..
-    tostring(moho64ui_Looks().weatherEffects) .. " " .. tostring(moho64ui_Looks().atmosphere) .. " " .. tostring(moho64ui_Looks().rayTracing),
-    "true true false false")
+check("on at first: the lighting, Water Ripples, the lens, Battle Effects, Energy Shields, Hidden Unit Outlines",
+    tostring(moho64ui_Looks().softShadows and moho64ui_Looks().weatherEffects and moho64ui_Looks().atmosphere and
+             moho64ui_Looks().waterRipples and moho64ui_Looks().lens and moho64ui_Looks().battleEffects and
+             moho64ui_Looks().energyShields and moho64ui_Looks().hiddenOutlines), "true")
 video.remaster_soft_shadows.set('remaster_soft_shadows', 0, false)
 video.remaster_weather_effects.set('remaster_weather_effects', 0, false)
-check("Water Ripples and the Cinematic Lens Blur are off at first", tostring(moho64ui_Looks().waterRipples) .. " " .. tostring(moho64ui_Looks().lens), "false false")
-video.remaster_water_ripples.set('remaster_water_ripples', 1, false)
-video.remaster_lens.set('remaster_lens', 1, false)
-check("switched on in the menu: both", tostring(moho64ui_Looks().waterRipples) .. " " .. tostring(moho64ui_Looks().lens), "true true")
+video.remaster_battle_effects.set('remaster_battle_effects', 0, false)
+check("switched off in the menu: Soft Shadows, Weather Effects, Battle Effects, nothing else", tostring(moho64ui_Looks().softShadows) .. " " ..
+    tostring(moho64ui_Looks().weatherEffects) .. " " .. tostring(moho64ui_Looks().battleEffects) .. " " .. tostring(moho64ui_Looks().atmosphere) ..
+    " " .. tostring(moho64ui_Looks().energyShields), "false false false true true")
+video.remaster_soft_shadows.set('remaster_soft_shadows', 1, false)
+video.remaster_weather_effects.set('remaster_weather_effects', 1, false)
+video.remaster_battle_effects.set('remaster_battle_effects', 1, false)
 video.remaster_water_ripples.set('remaster_water_ripples', 0, false)
 video.remaster_lens.set('remaster_lens', 0, false)
+check("Water Ripples and the lens off in the menu", tostring(moho64ui_Looks().waterRipples) .. " " .. tostring(moho64ui_Looks().lens), "false false")
+video.remaster_water_ripples.set('remaster_water_ripples', 1, false)
+video.remaster_lens.set('remaster_lens', 1, false)
 -- (no picture here says whether the card can ray trace: both states; where it cannot, one, greyed out)
 check("Ray Tracing offers Off and On until the renderer says the card cannot",
     tostring(moho64ui_RayTracingSupported()) .. " " .. table.getn(video.remaster_ray_tracing.custom.states), "nil 2")

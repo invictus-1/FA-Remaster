@@ -360,23 +360,32 @@ struct LookSettings {
   // to keep the menu short), each one WorldPicture call: Atmosphere (light in the air, volumetric clouds, the
   // sky from the atmosphere's tables; needs a time of day), Soft Shadows (with contact shadows), Ray Tracing
   // (bounce light and reflections, the reflections from the next map loaded; only where the card can) and
-  // Weather Effects (lit rain and snow, rain's splashes). Off as at first.
-  bool atmosphere = false, softShadows = false, rayTracing = false, weatherEffects = false;
+  // Weather Effects (lit rain and snow, rain's splashes; each unit's own snow, in the renderer's bundle). ON by
+  // default (Chris, 2026-10-18: every remastered look on at its highest, "if they can't handle it they lower it";
+  // ray tracing only where the card can: the renderer leaves it out elsewhere).
+  bool atmosphere = true, softShadows = true, rayTracing = true, weatherEffects = true;
   // Ground Detail (the renderer's request 33): grass near the camera, pressed flat round units and buildings; later
-  // the remastered ground's decals and battle scars. Off as at first.
-  bool groundDetail = false;
+  // the remastered ground's decals and battle scars; deep tracks and wildlife (the renderer's bundle). ON by default.
+  bool groundDetail = true;
   // Frame Generation (the renderer's request 34; Chris's list of 2026-10-17, item 7): AMD's FSR 3 frame generation,
   // a picture made between each two drawn ones (twice the frames shown, a little more delay). Needs one sample a
-  // pixel, as FSR 3's upscaler: with the Anti-Aliasing on it does nothing (its tooltip says so). Off as at first.
+  // pixel, as FSR 3's upscaler: with the Anti-Aliasing on it does nothing (its tooltip says so). Off: a speed
+  // trade-off, not a look (Chris, 2026-10-18), as the two upscalers.
   bool frameGeneration = false;
   // Water Ripples (the renderer's World::waterRipples, render/ripples.h; Chris's next looks of 2026-10-17): shells
   // landing in the water, ships, hover units and units wading leave rings and wakes that spread and die out. The
-  // Remastered Preset turns it on with Weather Effects (High and Ultra). Off as at first.
-  bool waterRipples = false;
+  // Remastered Preset turns it on with Weather Effects (High and Ultra). ON by default.
+  bool waterRipples = true;
   // Cinematic Lens Blur (World::lens, render/cinecam.h's Lens): a real lens's depth of field, only while the
   // cinematic camera of a replay shows (remaster_cinecam), its blur going as the picture eases back to the game's
-  // camera; focused on the unit it follows, else on what is at the picture's middle. In no preset. Off as at first.
-  bool lens = false;
+  // camera; focused on the unit it follows, else on what is at the picture's middle. In no preset. ON by default (it
+  // acts only while the cinematic camera shows).
+  bool lens = true;
+  // Battle Effects (the renderer's bundle, agreed 2026-10-18): blast waves, dust and debris, smoke and fire lit with
+  // their shadows, heat shimmer, battle scars on units (World's blastWaves .. unitScars). Energy Shields (World::
+  // energyShields): shields that look like energy. Hidden Unit Outlines (WorldPicture::SetHiddenOutlines): units
+  // seen behind trees and cliffs, only what the player may see, none in the Original look. All ON by default.
+  bool battleEffects = true, energyShields = true, hiddenOutlines = true;
   // Whether the graphics card can ray trace (WorldPicture::RayTracingSupported, asked after a picture opened,
   // the menu's or a game's): -1 not known yet, 0 no, 1 yes.
   int rayTracingSupported = -1;

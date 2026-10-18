@@ -17,27 +17,35 @@ end
 -- for the tooltips). Frame Rate, Graphics API, the two upscalers and Frame Generation are choices of
 -- smoothness and screen, not looks: no level touches them. Water Ripples come on with Weather Effects (the
 -- renderer's advice, 2026-10-18); the Cinematic Lens Blur is a replay camera's, in no level.
+-- Hidden Unit Outlines from Low on (readability), Battle Effects and Energy Shields from Medium on (each well under
+-- half a millisecond, the renderer's measure). Chris, 2026-10-18: a player starts with every look on at its
+-- highest, Ultra ("if they can't handle it they lower it").
 local remasterPresets = {
     [0] = { remaster_look = 'original', remaster_effects = 0, remaster_effects_quality = 1, remaster_tracers = 0,
             remaster_rich_ground = 0, remaster_snow_tracks = 0, remaster_soft_shadows = 0,
             remaster_ground_detail = 0, remaster_atmosphere = 0, remaster_weather_effects = 0,
-            remaster_water_ripples = 0, remaster_ray_tracing = 0 },
+            remaster_water_ripples = 0, remaster_ray_tracing = 0, remaster_hidden_outlines = 0,
+            remaster_battle_effects = 0, remaster_energy_shields = 0 },
     [1] = { remaster_look = 'remastered', remaster_effects = 1, remaster_effects_quality = 0.5,
             remaster_tracers = 1, remaster_rich_ground = 1, remaster_snow_tracks = 1, remaster_soft_shadows = 0,
             remaster_ground_detail = 0, remaster_atmosphere = 0, remaster_weather_effects = 0,
-            remaster_water_ripples = 0, remaster_ray_tracing = 0 },
+            remaster_water_ripples = 0, remaster_ray_tracing = 0, remaster_hidden_outlines = 1,
+            remaster_battle_effects = 0, remaster_energy_shields = 0 },
     [2] = { remaster_look = 'remastered', remaster_effects = 1, remaster_effects_quality = 0.75,
             remaster_tracers = 1, remaster_rich_ground = 1, remaster_snow_tracks = 1, remaster_soft_shadows = 1,
             remaster_ground_detail = 1, remaster_atmosphere = 0, remaster_weather_effects = 0,
-            remaster_water_ripples = 0, remaster_ray_tracing = 0 },
+            remaster_water_ripples = 0, remaster_ray_tracing = 0, remaster_hidden_outlines = 1,
+            remaster_battle_effects = 1, remaster_energy_shields = 1 },
     [3] = { remaster_look = 'remastered', remaster_effects = 1, remaster_effects_quality = 1,
             remaster_tracers = 1, remaster_rich_ground = 1, remaster_snow_tracks = 1, remaster_soft_shadows = 1,
             remaster_ground_detail = 1, remaster_atmosphere = 1, remaster_weather_effects = 1,
-            remaster_water_ripples = 1, remaster_ray_tracing = 0 },
+            remaster_water_ripples = 1, remaster_ray_tracing = 0, remaster_hidden_outlines = 1,
+            remaster_battle_effects = 1, remaster_energy_shields = 1 },
     [4] = { remaster_look = 'remastered', remaster_effects = 1, remaster_effects_quality = 1,
             remaster_tracers = 1, remaster_rich_ground = 1, remaster_snow_tracks = 1, remaster_soft_shadows = 1,
             remaster_ground_detail = 1, remaster_atmosphere = 1, remaster_weather_effects = 1,
-            remaster_water_ripples = 1, remaster_ray_tracing = 1 },
+            remaster_water_ripples = 1, remaster_ray_tracing = 1, remaster_hidden_outlines = 1,
+            remaster_battle_effects = 1, remaster_energy_shields = 1 },
 }
 function RemasterPresetValues(level)  -- (also for the tests)
     local values = remasterPresets[level]
@@ -79,7 +87,7 @@ local looks = {
         key = 'remaster_preset',
         tip = "Sets the remastered looks below together, from Off (the original game's look) to Ultra. Each can still be changed after; Custom leaves them as they are.",
         type = 'toggle',
-        default = 5,
+        default = 4,
         update = SetRemasterPreset,
         set = function(key, value, startup) end,
         custom = {
@@ -164,7 +172,7 @@ local looks = {
         key = 'remaster_atmosphere',
         tip = "Light in the air (sun shafts, lamp beams, glowing mist), volumetric clouds and the sky. Needs a Time of Day chosen in the lobby.",
         type = 'toggle',
-        default = 0,
+        default = 1,
         set = Look("remaster_atmosphere"),
         custom = {
             states = {
@@ -179,7 +187,7 @@ local looks = {
         key = 'remaster_soft_shadows',
         tip = "The sun's shadows sharp where they start and soft farther off, and small contact shadows at units' feet.",
         type = 'toggle',
-        default = 0,
+        default = 1,
         set = Look("remaster_soft_shadows"),
         custom = {
             states = {
@@ -215,7 +223,7 @@ local looks = {
         key = 'remaster_weather_effects',
         tip = "Rain and snow lit by lamps, rain's splashes, wet shorelines and caustics in shallow water.",
         type = 'toggle',
-        default = 0,
+        default = 1,
         set = Look("remaster_weather_effects"),
         custom = {
             states = {
@@ -231,7 +239,7 @@ local looks = {
         key = 'remaster_water_ripples',
         tip = "Shells landing in water, ships, hovering units and units wading leave rings and wakes that spread, cross and fade.",
         type = 'toggle',
-        default = 0,
+        default = 1,
         set = Look("remaster_water_ripples"),
         custom = {
             states = {
@@ -247,7 +255,7 @@ local looks = {
         key = 'remaster_ground_detail',
         tip = "Grass and small plants near the camera, sunlight through leaves and grass, and the scorches and craters of battle kept on the ground.",
         type = 'toggle',
-        default = 0,
+        default = 1,
         set = Look("remaster_ground_detail"),
         custom = {
             states = {
@@ -279,7 +287,7 @@ local looks = {
         key = 'remaster_lens',
         tip = "A camera lens's depth of field: what the camera follows sharp, the near and far blurred. Only in the cinematic camera of a replay.",
         type = 'toggle',
-        default = 0,
+        default = 1,
         set = Look("remaster_lens"),
         custom = {
             states = {
@@ -354,8 +362,63 @@ local looks = {
             },
         },
     },
+    {
+        -- the renderer's battle looks as one setting (agreed 2026-10-18): World's blastWaves, blastDust, blastDebris, litSmoke, smokeShadows, heatShimmer, unitScars
+        title = "Battle Effects",
+        key = 'remaster_battle_effects',
+        tip = "Blast waves that press the grass and bend the trees, dust and debris, smoke and fire lit properly with their shadows, heat shimmer, and battle scars on units that survive.",
+        type = 'toggle',
+        default = 1,
+        set = Look("remaster_battle_effects"),
+        custom = {
+            states = {
+                { text = "<LOC _Off>", key = 0 },
+                { text = "<LOC _On>", key = 1 },
+            },
+        },
+    },
+    {
+        -- the renderer's World::energyShields
+        title = "Energy Shields",
+        key = 'remaster_energy_shields',
+        tip = "Shield bubbles that look like energy: what is behind bends as through glass, each hit sends ripples across.",
+        type = 'toggle',
+        default = 1,
+        set = Look("remaster_energy_shields"),
+        custom = {
+            states = {
+                { text = "<LOC _Off>", key = 0 },
+                { text = "<LOC _On>", key = 1 },
+            },
+        },
+    },
+    {
+        -- the renderer's look 15, WorldPicture::SetHiddenOutlines: only what the player may see; none in the Original look
+        title = "Hidden Unit Outlines",
+        key = 'remaster_hidden_outlines',
+        tip = "A faint outline in the army's colour where a unit is hidden behind trees or a hill: your own and allied units, and enemies in sight. Not in the Original look.",
+        type = 'toggle',
+        default = 1,
+        set = Look("remaster_hidden_outlines"),
+        custom = {
+            states = {
+                { text = "<LOC _Off>", key = 0 },
+                { text = "<LOC _On>", key = 1 },
+            },
+        },
+    },
 }
 
+-- Ray Tracing's default (Chris, 2026-10-18: every look on at its highest): On where the card can ray trace; where it
+-- cannot, its one state, Off. Asked when it is read, as its states are (the card is known once a picture opened).
+for _, item in looks do
+    if item.key == 'remaster_ray_tracing' then
+        item.default = nil
+        setmetatable(item, { __index = function(t, k)
+            if k == 'default' then return moho64ui_RayTracingSupported() == false and 0 or 1 end
+        end })
+    end
+end
 for _, item in looks do
     table.insert(options.video.items, item)
 end

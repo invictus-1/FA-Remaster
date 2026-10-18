@@ -420,9 +420,10 @@ void TakeView(Camera* c, const WorldCamera& w) {
   c->anchored = false;
   c->spinRate = c->spinZoomRate = 0;
   for (int i = 0; i < 3; ++i) c->focus[i] = w.target[i];
-  c->heading = NearestAngle(0, w.heading + kPi);  // (the picture's heading is ours less pi: CameraFor)
-  c->turned = true, c->swingBack = false;
-  c->turnedPitch = w.pitch;
+  // The player's usual view over the same place and at the same distance: north up, the pitch by the zoom (Chris,
+  // 2026-10-18: the camera glides back to the normal view; the renderer's Shown eases the picture there).
+  c->heading = kPi;
+  c->turned = false, c->swingBack = false;
   c->zoom = c->targetZoom = ZoomAtDistance(c, w.distance);
 }
 // Before the camera `c` is moved by the player or a script: when the cinematic camera has taken over from it, it is

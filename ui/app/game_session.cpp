@@ -366,7 +366,13 @@ struct GameSession::Picture : WorldSource {
       w->bloom = looks.bloom;
       w->bloomIntensity = looks.bloomIntensity;
       w->waterRipples = looks.waterRipples;  // (Water Ripples: the renderer's World::waterRipples)
+      // (Battle Effects: the renderer's bundle as agreed on 2026-10-18; Energy Shields: its own)
+      w->blastWaves = w->blastDust = w->blastDebris = looks.battleEffects;
+      w->litSmoke = w->smokeShadows = w->heatShimmer = looks.battleEffects;
+      w->unitScars = looks.battleEffects;
+      w->energyShields = looks.energyShields;
     }
+    if (!lookApplied || looks.hiddenOutlines != lookNow.hiddenOutlines) picture.SetHiddenOutlines(looks.hiddenOutlines);
     // The cinematics' switches (UI_NisRenderIcons, ren_SelectBoxes, ren_Oblivion).
     if (!lookApplied || looks.strategicIcons != lookNow.strategicIcons) picture.SetStrategicIcons(looks.strategicIcons);
     ApplyCineMarks();  // (the selection's marks, ren_SelectBoxes, and the life bars and work bars: none while the cinematic camera shows)
