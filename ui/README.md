@@ -362,6 +362,20 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   in the preferences, reloads its AI list (so an AI mod's opponents can be picked) and launches
   the game with those mods (checked 2026-10-17: `ui/tests/mods.lua`, and a launch from the lobby
   with a mod chosen that way: the session has the mod and loads its blueprints).
+- The lobby's smaller dialogs in single-player form, driven as a player drives them (checked
+  2026-10-18: `ui/tests/lobby_small.lua`, 59 checks, `--frames 1100`): the Rules text (a click on
+  the host's label opens "Game Rules", Enter sets the option and the label), the chat line (a line
+  sent shows with the player's name, an unknown command is answered, Up and Down bring back what
+  was sent, 200 characters at most), the presets dialog (a preset saved with the map and options,
+  loaded back), the Load button's saved games' dialog (Delete asks for a file, a name typed and OK
+  gets "Couldn't open savegame"), and the CPU benchmark (the button counts down, the score is
+  kept for the machine and drawn as the purple bar in the player's row). What they needed: an
+  edit field hands `OnNonTextKeyPressed` a key's Windows code (38 for Up, FA exe 0x791ed6; with
+  the engine's own 317 FAF's scripts took the key for a character and typed "Ľ"); a new edit field
+  has the original's font, Courier New 14 (0x78efe0), so the dialog's filename field has a height
+  before its script sets a font; saved games are `.SCFASaveGame` files; `LoadSavedGame`. The
+  benchmark times its loops with `GetSystemTimeSeconds` inside a frame: headless the clock stands
+  still there and it measures 0; in a window the clock is live.
 - The console's output (`user/keymap.cpp`, read from the original 2026-10-17; `ui/tests/console.lua`,
   43 checks): the functions given to `AddConsoleOutputReciever` (the console window's list, the
   echo on the game's screen) hear what the original's CON_Printf (0x41c990) gets, and only that:
@@ -888,8 +902,10 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   and plays one back (`LaunchReplaySession`: `GameSession::LaunchReplay`): the header makes the
   session (`SessionIsReplay` true, the player watches with no army), the stream gives every
   beat's orders, the player's pause and resume pause it for him alone (INFERRED), and the
-  replay stands where it ends. Saved games use the same folders (`savegames`, `.SCFASave`) but
-  are not written yet. Tests: `ui/tests/replay_record.lua` then `ui/tests/replay_play.lua`
+  replay stands where it ends. Saved games use the same folders (`savegames`, `.SCFASaveGame`, a
+  campaign's `.SCFACampaignSave`: FA exe 0x8ca380 / 0x8ca470) but are not written yet; the Load
+  dialog lists them, and `LoadSavedGame` checks a file's header as the original (0x880cc0:
+  `CantOpen`, `InvalidFormat`) but cannot load a game from it yet (`InternalError`). Tests: `ui/tests/replay_record.lua` then `ui/tests/replay_play.lua`
   (a game recorded, kept, opened in the dialog, played back, the commander walking as he did).
   A game played with the engine's script fixes (`Sim::fixes`, docs/deviations.md) marks its
   replay (`RemasterFixes = "on"` in the scenario's Options, unknown to the original) and is

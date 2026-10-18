@@ -10,6 +10,7 @@
 #include "maui/font.h"
 #include "maui/input.h"
 #include "user/bindings.h"
+#include "user/keymap.h"
 #include "user/user_state.h"
 
 namespace moho::ui {
@@ -87,11 +88,15 @@ class Edit : public Control {
 
   // The original's starting values (0x78f040): white text on a shown black background, the
   // selection black on white, input on, no caret until the field has the focus, a caret cycle of
-  // 1.5 seconds between alpha 62 and 255, at most 1024 characters, and frame updates on.
+  // 1.5 seconds between alpha 62 and 255, at most 1024 characters, and frame updates on. And a
+  // font, Courier New at 14 (READ 2026-10-18, the constructor 0x78efe0 at 0x78f134: CD3DFont::Create of
+  // "Courier New" 0xe33358 and 14, given to ApplyFontAndRefreshClip 0x78f620), so a new field has
+  // a height (GetFontHeight) before its script sets a font: the saved games' dialog sizes its
+  // filename field by it before its thread sets Arial (/lua/ui/controls/filepicker.lua).
   Edit() { needsFrameUpdate = true; }
 
-  std::string text, family;
-  int size = 0;
+  std::string text, family = "Courier New";
+  int size = 14;
   int maxChars = 1024;
   int caret = 0;
   int clipOffset = 0, visible = 0;  // the window onto the text: its first character and how many are shown
@@ -379,8 +384,17 @@ class Edit : public Control {
       }
       return;
     }
-    if (key > 300) {  // a key without a character: self:OnNonTextKeyPressed(keyCode, event)
-      lua_pushnumber(L, static_cast<lua_Number>(key));
+    // A key without a character: self:OnNonTextKeyPressed(code, event), the code as Windows has it
+    // (READ 0x791ed6: a key code above 300 goes through wxCharCodeWXToMSW 0x96afc0, our
+    // KeycodeMauiToMSW, before 0x790510 calls the script; the event keeps the original's own code).
+    // So Up arrives as 38, not 317: what FAF's scripts compare with (UIUtil.VK_UP, the lobby's chat
+    // line recalling what was sent, the console's history). A code the table does not know (a
+    // character above 300 typed in another script) comes as it is. (A typed character comes with
+    // its UTF-16 code, READ 0x96cd80: the window's WM_CHAR hands it on as it is. So one the table
+    // knows, as Polish 's' with acute 347, comes as a key's code, F6 117, in the original too, and
+    // FAF's AddUnicodeCharToEditText, which takes codes above 127 for characters, drops it.)
+    if (key > 300) {
+      lua_pushnumber(L, static_cast<lua_Number>(KeycodeMauiToMSW(key)));
       PushEventTable(L, this, e);
       RunScript(L, "OnNonTextKeyPressed", 2, 0);
       return;

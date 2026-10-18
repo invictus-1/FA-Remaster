@@ -1,14 +1,16 @@
 // The player's own files, as the game's scripts see them: replays and saved games ("special
 // files" in the original, FA exe USER_GetSpecialFiles 0x8ca650 and the bindings at 0x844120..
-// 0x846280), and starting a replay (LaunchReplaySession 0x876e50).
+// 0x846280), starting a replay (LaunchReplaySession 0x876e50) and a saved game (LoadSavedGame
+// 0x880cc0).
 //
 // Where they are: in the original, <documents>/My Games/Gas Powered Games/Supreme Commander Forged
-// Alliance/replays/<profile>/<name>.SCFAReplay (savegames/ and .SCFASave for saved games). Here the
+// Alliance/replays/<profile>/<name>.SCFAReplay (savegames/ and .SCFASaveGame for saved games). Here the
 // same layout under the player's folder the host names (UserState::Config::userDir: the folder of
 // the preferences file), so a lab's files stay in the lab.
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <cstring>
 #include <ctime>
 #include <filesystem>
 #include <optional>
@@ -42,11 +44,16 @@ std::string TextOf(const fs::path& p) {
 }
 
 // The folder and the extension of a kind of special file (the original's three: Replay,
-// SaveGame, CampaignSave). The campaign's own extension is not read (its string is made at
-// start-up): a campaign save is refused until the campaign is built.
+// SaveGame, CampaignSave). READ 2026-10-18: an extension is "SCFA" (0xe4ddac, kept at 0xf5b9f8)
+// and the kind's name, made at start-up: USER_GetReplayExt 0x8ca450 "Replay" (0xe164f4),
+// USER_GetSaveGameExt 0x8ca380 "SaveGame" (0xe4e1ac), USER_GetCampaignSaveExt 0x8ca470
+// "CampaignSave" (0xe4e1cc); USER_GetSpecialFiles 0x8ca650 puts a campaign save in the saved
+// games' folder (USER_GetSaveGameDir 0x8ca2d0, "savegames" 0xe4e1a0). (The player's own saves of
+// the original are so named: 1.SCFASaveGame, First expansion.SCFACampaignSave.)
 bool KindOf(const std::string& type, const char** folder, const char** extension) {
   if (type == "Replay") return *folder = "replays", *extension = "SCFAReplay", true;
-  if (type == "SaveGame") return *folder = "savegames", *extension = "SCFASave", true;
+  if (type == "SaveGame") return *folder = "savegames", *extension = "SCFASaveGame", true;
+  if (type == "CampaignSave") return *folder = "savegames", *extension = "SCFACampaignSave", true;
   return false;
 }
 // The kind's folder, with a slash at its end (the scripts add "<profile>/<name>.<ext>" to it);
@@ -243,6 +250,50 @@ int l_LaunchReplaySession(lua_State* L) {
   return 1;
 }
 
+// LoadSavedGame(filename) -> true, or false and why (FA exe 0x880cc0, read 2026-10-18): the game's
+// load dialog (/lua/ui/dialogs/saveload.lua DoLoad) shows the why from its SaveErrors. The
+// original makes a CSavedGame of the file (0x880330): it opens it (_wfopen "rb" of the name made
+// wide), reads its fixed header of 0x2028 bytes in one piece and wants "RGMH" (0x484d4752), the
+// number 1 and at +0x18 the game's GUID (0x10a647c, copied at start-up from 0xf8d68c; the
+// original's own saves carry it, with the header's size 0x2028 at +8); then it reads the archive
+// behind it, whose header's version must be 20 (0x8804fa), and starts the session from it
+// (CreateSinglePlayerSessionInfo 0x8807f0, WLD_BeginSession 0x88d060). A SaveLoadError (0x87fdc0, its text "Save/Load error <code>") gives
+// false and the code: "CantOpen" (not opened), "InvalidFormat" (a short or wrong header),
+// "WrongVersion"; another exception false, "InternalError" and its text; both are logged as
+// "Loading save game "<file>" failed: <text>".
+// Ours stops after the fixed header: the engine cannot restore a simulation from a saved game
+// yet, so a save that passes it gives false, "InternalError" and that reason (OURS, until saved
+// games are built: docs/ui-roadmap.md); the archive's version is not read.
+int l_LoadSavedGame(lua_State* L) {
+  if (lua_gettop(L) != 1)
+    return luaL_error(L, "%s\n  expected %d args, but got %d", "bool LoadSavedGame(filename)", 1, lua_gettop(L));
+  const std::string file = luaL_checkstring(L, 1);
+  const auto failed = [&](const char* code, const char* text) {
+    Logf(LogLevel::Info, "Loading save game \"%s\" failed: %s", file.c_str(), text);
+    lua_pushboolean(L, 0);
+    lua_pushstring(L, code);
+    if (std::strcmp(code, "InternalError") != 0) return 2;
+    lua_pushstring(L, text);
+    return 3;
+  };
+#ifdef _WIN32
+  std::FILE* f = _wfopen(PathOf(file).wstring().c_str(), L"rb");
+#else
+  std::FILE* f = std::fopen(file.c_str(), "rb");
+#endif
+  if (!f) return failed("CantOpen", "Save/Load error CantOpen");
+  std::vector<unsigned char> header(0x2028);
+  const bool whole = std::fread(header.data(), header.size(), 1, f) == 1;
+  std::fclose(f);
+  static const unsigned char kGuid[16] = {0x3a, 0xb4, 0x42, 0xfa, 0x15, 0x1f, 0x70, 0x4f,
+                                          0xb0, 0x8f, 0x3e, 0x7c, 0x02, 0x5b, 0xbc, 0x68};
+  static const unsigned char kMagic[8] = {'R', 'G', 'M', 'H', 1, 0, 0, 0};  // "RGMH", then 1
+  if (!whole || std::memcmp(header.data(), kMagic, sizeof kMagic) != 0 ||
+      std::memcmp(header.data() + 0x18, kGuid, sizeof kGuid) != 0)
+    return failed("InvalidFormat", "Save/Load error InvalidFormat");
+  return failed("InternalError", "this engine cannot load a saved game yet");
+}
+
 }  // namespace
 
 void RegisterSpecialFileBindings(lua_State* L) {
@@ -253,6 +304,7 @@ void RegisterSpecialFileBindings(lua_State* L) {
   SetGlobal(L, "RemoveSpecialFile", l_RemoveSpecialFile);
   SetGlobal(L, "CopyCurrentReplay", l_CopyCurrentReplay);
   SetGlobal(L, "LaunchReplaySession", l_LaunchReplaySession);
+  SetGlobal(L, "LoadSavedGame", l_LoadSavedGame);
 }
 
 }  // namespace moho::ui

@@ -125,11 +125,12 @@ edit:SetMaxChars(1024)
 -- the script's say in keys
 local calls = {}
 edit.OnCharPressed = function(self, code) table.insert(calls, "char" .. code) return code == 113 end  -- swallow "q"
-edit.OnNonTextKeyPressed = function(self, code, event) table.insert(calls, "key" .. code .. event.Type) end
+edit.OnNonTextKeyPressed = function(self, code, event) table.insert(calls, "key" .. code .. event.Type .. event.KeyCode) end
 moho64ui_Type("qa")
 moho64ui_Key(UP)
+-- (the code as Windows has it, 38 for Up, as the original's 0x791ed6 converts it; the event keeps 317)
 check("OnCharPressed can keep a character out; other keys go to OnNonTextKeyPressed(code, event)",
-    edit:GetText() .. " " .. table.concat(calls, " "), "abcdea char113 char97 key317Char")
+    edit:GetText() .. " " .. table.concat(calls, " "), "abcdea char113 char97 key38Char317")
 edit.OnCharPressed = nil
 edit.OnEnterPressed = function(self, text) table.insert(calls, "enter " .. text) return true end
 calls = {}

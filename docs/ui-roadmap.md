@@ -65,7 +65,8 @@ world's picture (renderer) and the stock AI opponents (engine; the mod AI M28 al
 - **P** The mods manager, so that AI mods and other mods can be switched on for the game.
 - The map selection dialog (list, filters, preview, map options), game options, presets. It opens and
   looks like the original; choosing in it needs the list clicks and drop-down lists of stage 1.
-- The lobby's chat line and its smaller dialogs (rules, CPU benchmark, "Load").
+- **Done** (2026-10-18, `ui/tests/lobby_small.lua`): the lobby's chat line and its smaller dialogs
+  (rules, CPU benchmark, presets, "Load"; loading a saved game itself is stage 7's).
 - The changelog dialog only once per version (it follows the preferences).
 
 ## Stage 3: the in-game interface comes up on a running game
