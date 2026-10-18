@@ -37,6 +37,7 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       bounce(device),
       blasts(device),
       debris(device, &textures),
+      outlines(device),
       clouds(device),
       motion(device),
       upscaler(device),
@@ -46,6 +47,7 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       skyDraw(device),
       falling(device),
       grass(device),
+      wildlifeDraw(device),
       sight(device),
       shafts(device),
       tracks(device),
@@ -57,7 +59,8 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       shadows(device),
       smokeMap(device),
       device_(device),
-      vfs_(vfs) {
+      vfs_(vfs),
+      energy(device) {
   particles.rampGlow = [this](const std::string& ramp) { return lights.RampGlow(ramp); };  // (what is hot: lit smoke's fires, heat shimmer)
 }
 
@@ -87,7 +90,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     }
   } batch{device_};
   if (!draw.Init(error) || !meshes.Init(error) || !particles.Init(error) || !ribbons.Init(error) || !decals.Init(error) || !icons.Init(error) ||
-      !ao.Init(error) || !air.Init(error) || !clouds.Init(error) || !motion.Init(error) || !post.Init(error) || !upscaler.Init(error) || !skyDraw.Init(error) || !falling.Init(error) || !sight.Init(error) || !shafts.Init(error) || !tracks.Init(error) || !wakes.Init(error) || !ranges.Init(error) || !placedDraw.Init(error) || !orders.Init(error)) {
+      !ao.Init(error) || !air.Init(error) || !clouds.Init(error) || !motion.Init(error) || !post.Init(error) || !upscaler.Init(error) || !skyDraw.Init(error) || !falling.Init(error) || !sight.Init(error) || !shafts.Init(error) || !tracks.Init(error) || !wakes.Init(error) || !ranges.Init(error) || !placedDraw.Init(error) || !orders.Init(error) || !outlines.Init(error)) {
     *error = "shader: " + *error;
     return false;
   }
@@ -224,6 +227,16 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     for (size_t i = 0; i < props_.size(); ++i) ListProp(&props_[i], static_cast<uint32_t>(i), false);
     textures.DropFetched();
     step("props listed by squares");
+    {  // wildlife (wildlife.h): where the trees stand (each its place and its top over it), for the birds' woods and the fireflies
+      std::vector<Vec4> trees;
+      for (const PlacedProp& p : props_) {
+        if (!p.model || p.model->lods.empty() || p.model->lods[0].sway <= 0) continue;
+        const float scale = std::sqrt(p.world.m[0][1] * p.world.m[0][1] + p.world.m[1][1] * p.world.m[1][1] + p.world.m[2][1] * p.world.m[2][1]);
+        if ((p.model->boundsMax.y - p.model->boundsMin.y) * scale < 1.0f) continue;  // (a tree, not the undergrowth)
+        trees.push_back({p.world.m[0][3], p.world.m[1][3], p.world.m[2][3], p.model->boundsMax.y * scale});
+      }
+      wildlifeDraw.SetMap(&map, trees);
+    }
     // the plants of the map's ground cover, where the visuals track has made them for it (its card atlas and table),
     // and where its trees stand (within the table's radius of each: more ferns and clumps, fewer flowers)
     plantsReady_ = false;
@@ -287,6 +300,9 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     return false;
   }
   step("shaders compiled");
+  // [energy shields] on as the map opens: its shaders made now, not at the first bubble in play (after the batch, so that
+  // where they cannot be made the map still opens, with the plain bubbles)
+  if (energyShields) energy.Prepare();
   fprintf(stderr, "render: opened in steps: %s\n", steps.c_str());
   return true;
 }
@@ -371,6 +387,19 @@ void World::AddBrackets(int kind, Vec3 position, const Quat& orientation, const 
     const Vec3 at = position + Rotate(orientation, {sx * hx, 0, sz * hz});
     decals.AddMark(brackets_[kind][c], at, piece, piece, heading);
   }
+}
+
+void World::MarkOutline(const Model* model, Vec3 position, Vec3 color, bool building, uint32_t id, const StrategicIcons::Kind* kind) {
+  if (!outlinesNow_ || !model || !model->ok) return;
+  // (giving way to its strategic icon as that comes in, by the icons' own rule, StrategicIcons::Add)
+  const float away = Length(position - view.eye);
+  float icon = 0;
+  if (iconsOn && kind && kind->icon >= 0) {
+    const float from = kind->fadeIn * (1 - icons.fadeShare);
+    icon = kind->fadeIn > from ? Clamp((away - from) / (kind->fadeIn - from), 0, 1) : (away >= from ? 1.0f : 0.0f);
+  }
+  const float radius = Length(model->boundsMax - model->boundsMin) * 0.5f * model->scale;
+  meshes.MarkLast(model, outlines.Mark(color, building, id, outlines.Strength(radius, away, camera.fovY, icon)));
 }
 
 void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation, const Pose* pose, const Vec3* armyColor) {
@@ -836,6 +865,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   terrain.tracksMap = deepNow_ ? trackField.Atlas() : tracks.Map();
   terrain.tracksField = deepNow_ ? trackField.Constants() : TrackFieldConstants{};
   meshes.Begin();
+  energy.Begin();  // [energy shields]
   // (icons and bars at the screen's size: the scene's view with the screen's numbers)
   screenView_ = view;
   if (temporalNow_) screenView_.SetMatrix(motion.Now());  // (icons, bars and what is picked: without the jitter)
@@ -848,6 +878,9 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     screenView_.constants.viewport[3] = 1.0f / static_cast<float>(screenHeight_);
   }
   icons.Begin(screenView_);
+  // units seen behind what hides them (hidden_outlines.h): marked as they are listed, this frame's
+  outlinesNow_ = hiddenOutlines && look == Look::Modern && !sidePicture && !photo && !camera.cinematic;  // (cinecam: no outlines on photos or a cinematic camera, as no icons)
+  outlines.Begin(screenWidth_, screenHeight_);
   // the resource deposits' icons, from where their marks on the ground are no longer drawn (cinecam: not for a
   // cinematic camera, which sees far over the ground: they would stand along the horizon)
   if (depositIcons && !camera.cinematic && !decals.Deposits().empty()) {
@@ -1189,6 +1222,29 @@ void World::ApplyPropEvent(const FramePropEvent& e) {
   ++propsChanged;
 }
 
+void World::WatchWear(const Frame& frame) {
+  wear.scars = unitScars;
+  wear.snow = unitSnow;
+  if (unitScars) models.hitShapes = true;  // (models loaded from now on keep their triangles for where hits lie)
+  if (look != Look::Modern || !(unitScars || unitSnow)) return;
+  const bool weather = timeOfDay >= 0;  // (the weather is only there with a time of day)
+  wear.Watch(frame, clock_, weather ? snow : 0.0f, weather ? snowLying : 0.0f, [&](uint32_t blueprint, bool make) -> const Model* {
+    if (!frame.blueprints || blueprint >= frame.blueprints->size() || (*frame.blueprints)[blueprint].empty()) return nullptr;
+    // (the models the units are drawn with, as AddFrame makes them; one made here only for a unit hit before it is drawn)
+    if (!make && (blueprint >= unitModels_.size() || !unitModels_[blueprint].known)) return nullptr;
+    const Model* m = Known(unitModels_, blueprint, frame.blueprints->size(), [&] { return models.Unit((*frame.blueprints)[blueprint]); });
+    return m && m->ok ? m : nullptr;
+  });
+  // where much snow fell off a unit at once: a puff of it (the game's own snowy kick-up)
+  std::vector<Vec4> puffs;
+  wear.TakePuffs(&puffs);
+  for (const Vec4& p : puffs)
+    if (!OutsidePlayable(p.x, p.z)) {
+      particles.Start(kSnowPuffClumps, {p.x, p.y, p.z}, Quat{}, p.w);
+      particles.Start(kSnowPuffCloud, {p.x, p.y, p.z}, Quat{}, p.w * 0.6f);
+    }
+}
+
 // Whose a shield's mesh is (effect_files.h, MeshFaction)
 std::string World::MeshFaction(const std::string& mesh) { return render::MeshFaction(mesh); }
 
@@ -1262,6 +1318,30 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       it = list.empty() ? shieldHits_.erase(it) : std::next(it);
     }
   }
+  if (unitScars || unitSnow) {  // (battle scars and snow on units: what hit whom this beat; unit_wear.h)
+    CpuTimes::Part("units' battle scars and snow watched");
+    // what the simulation says hit a unit or its shield (REQUESTS 36): the marks where and by what; where it says so,
+    // health drops with no hit told make none (reclaim, a script's SetHealth)
+    wear.exactHits = combat_.hitsKept;
+    for (const FrameHit& h : combat_.hits) {
+      if (h.targetKind != 0 && h.targetKind != 1) continue;
+      UnitWear::HitEvent e;
+      e.tick = h.tick;
+      e.unit = h.target;
+      e.at = {h.position[0], h.position[1], h.position[2]};
+      e.way = {h.direction[0], h.direction[1], h.direction[2]};
+      e.radius = h.radius;
+      e.blueprint = h.projectile;
+      e.beam = h.beam;
+      e.weapon = h.weapon;
+      e.damageType = h.damageType;
+      e.amount = h.amount;
+      e.shielded = h.shield;
+      wear.Tell(e);
+    }
+    WatchWear(frame);
+    CpuTimes::Part("units listed");
+  }
   ++frameStamp_;
   rememberedGone.clear();
   dyingDrawn = 0;
@@ -1286,6 +1366,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
         pose.blend = frame.blend;
         meshes.Add(body, Mat4::FromTRS({u.position[0], u.position[1], u.position[2]}, Quat{u.orientation[0], u.orientation[1], u.orientation[2], u.orientation[3]}, body->scale),
                    colorOf(u.Army()), u.fractionComplete, &pose, nullptr, nullptr, u.id + 1);
+        if (const WearLook* w = WearOf(u.id)) meshes.Wear(*w);  // (its scars go down with it)
         ++dyingDrawn;
         // (ripples: a ship going down, a plane coming down into the water)
         water.ripples.AddHull(u.id, {u.position[0], u.position[1], u.position[2]}, Quat{u.orientation[0], u.orientation[1], u.orientation[2], u.orientation[3]},
@@ -1468,6 +1549,11 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       // (and its treads' scroll, where its mesh's treads scroll and its shield's hit does not take the place)
       meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), color, built, asRemembered ? nullptr : &pose, hitAt,
                  model->scrolls && !hitAt ? u.treads : nullptr, u.id + 1);
+      if (const WearLook* w = WearOf(u.id)) meshes.Wear(*w);  // (its battle scars and snow: unit_wear.h)
+      // (its outline where it is hidden, hidden_outlines.h: only what the player may see of it now - his own, an ally's,
+      // an enemy's in sight - and finished; never a building drawn as it was remembered)
+      if (outlinesNow_ && u.Seen() && !asRemembered && fractionComplete >= 1 && !allHidden)
+        MarkOutline(model, position, IconColor(u.Army(), color), building, u.id, u.blueprint < iconKinds_.size() ? iconKinds_[u.blueprint] : nullptr);
       if (u.fractionComplete >= 1 && u.Seen()) AddLamps(model, position, orientation, &pose, &color);
       // ripples where it floats, hovers or wades in the water (what the army sees)
       if (u.Seen() && !asRemembered) water.ripples.AddHull(u.id, position, orientation, model->boundsMin * model->scale, model->boundsMax * model->scale);
@@ -1678,6 +1764,12 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     Mat4 at = Mat4::FromTRS({f.position[0], f.position[1], f.position[2]}, Quat{f.orientation[0], f.orientation[1], f.orientation[2], f.orientation[3]}, model->scale);
     for (int row = 0; row < 3; ++row)
       for (int k = 0; k < 3; ++k) at.m[row][k] *= f.scale[k];
+    // [energy shields] a bubble of energy (energy_shields.h) in place of the plain one; its flashes give it its hits (below)
+    const bool energyHere = energyShields && look == Look::Modern && !f.original && !model->lods.empty();
+    if (energyHere && model->lods[0].shield) {
+      energy.AddBubble(model, at);
+      continue;
+    }
     // (in its own colours where its look has no team colour of its own: the original gives every
     // mesh that is not a unit's opaque white; an adjacency's node was a cube in the army's colour)
     const bool teamed = !model->lods.empty() && model->lods[0].teamMask;
@@ -1688,12 +1780,19 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       const double born = known == impactBorn_.end() ? clock_ : known->second;
       impactBornNext_[f.id] = born;
       meshes.Add(model, at, Vec3{static_cast<float>(clock_ - born), static_cast<float>(std::fmod(born, 100.0)) * -0.01f, 0});
+      // [energy shields] a hit: the flash is made at its bubble's centre, its +z toward where it struck (shield.lua)
+      if (energyHere)
+        energy.AddHit({f.position[0], f.position[1], f.position[2]},
+                      Rotate(Quat{f.orientation[0], f.orientation[1], f.orientation[2], f.orientation[3]}, Vec3{0, 0, 1}), static_cast<float>(clock_ - born));
       continue;
     }
     // (keyed apart from the units: the top bit set)
     meshes.Add(model, at, f.army == 0xff || !teamed ? Vec3{1, 1, 1} : colorOf(f.army), 1, nullptr, nullptr, nullptr, (f.id + 1) | 0x80000000u);
   }
   impactBorn_.swap(impactBornNext_);
+  if (energy.Any())  // [energy shields] how much of each shield is left: its unit's
+    for (const FrameUnit& u : frame.units)
+      if (u.hasShield && !u.dead) energy.AddOwner({u.position[0], u.position[1], u.position[2]}, u.shieldRatio);
   // a weapon's beam without the game's own effect on it: a plain band in a lightened army colour
   for (const FrameBeam& b : frame.beams) {
     if (effects.OnEntity(b.id)) continue;
@@ -1701,6 +1800,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     ribbons.PlainBeam({b.start[0], b.start[1], b.start[2]}, {b.end[0], b.end[1], b.end[2]}, c, 0.25f);
   }
   textures.DropFetched();  // (what was read ahead and not used)
+  if (wildlife && look == Look::Modern) wildlifeDraw.Listen(frame, combat_);  // (the fighting the birds hear: wildlife.h)
   combat_.clear();         // (handed over above to the looks that answer it: AddCombat)
   CpuTimes::Part(nullptr);
 }
@@ -1893,6 +1993,15 @@ void World::Render() {
     Stage("water ripples");
     water.ripples.Update(camera, view.height, terrain.HeightTexture(), terrain.HeightUnit());
   }
+  // wildlife (wildlife.h): the flocks moved on and what is drawn chosen (it dispatches: before the scene's pass)
+  wildlifeNow_ = false;
+  if (wildlife && look == Look::Modern && haveMap_ && !sidePicture) {
+    Stage("wildlife");
+    wildlifeNow_ = wildlifeDraw.Update(view, camera, time_, timeOfDay >= 0 ? skyLight.body.y : 1.0f, rain, snowLying, particles.flashes,
+                                       terrain.HeightTexture(), terrain.HeightUnit(), terrain.GroundColours());
+  } else if (!sidePicture) {
+    wildlifeDraw.Pause();
+  }
   CpuTimes::Part("particles and bands moved");
   particles.Update(clock_, &view);
   ribbons.Update(clock_);
@@ -1904,6 +2013,7 @@ void World::Render() {
       device_->BeginPass(shadows.Pass(i));
       terrain.Draw(shadows.CascadeView(i), true);
       meshes.Draw(shadows.CascadeView(i), environment_, true);
+      if (wildlifeNow_) wildlifeDraw.DrawBirds(shadows.CascadeView(i), true);  // (the birds' shadows)
     }
   }
   // the lamps' shadow maps: units and scenery as each lamp sees them
@@ -1992,6 +2102,10 @@ void World::Render() {
       meshes.Draw(view, environment_);
     }
     draw.Flush(view);
+    if (wildlifeNow_) {  // the birds, with what is solid
+      Stage("wildlife: birds");
+      wildlifeDraw.DrawBirds(view);
+    }
     // ambient occlusion: from the depth of everything solid, laid over it before the water
     Stage("ambient occlusion");
     ao.contactShadows = contactShadows ? 0.8f : 0.0f;
@@ -2049,6 +2163,11 @@ void World::Render() {
     lights.Bind();
   }
   // what is see-through (shields' bubbles, frames of light): over everything solid and the water
+  if (energy.Any()) {  // [energy shields] the bubbles of energy first (energy_shields.h): they bend what is behind them
+    Stage("energy shields");
+    energy.Draw(view, &post);
+    lights.Bind();
+  }
   Stage("see-through (shields)");
   meshes.Draw(view, environment_, false, true);
   if (!placed.empty()) placedDraw.Draw(view, placed, lights.night);
@@ -2056,6 +2175,10 @@ void World::Render() {
   // beams and trails, then particles: over everything solid and the water, by the scene's depth
   wakes.Draw(view);
   if (hide.find("bands") == std::string::npos) ribbons.Draw(view);
+  if (wildlifeNow_) {  // the fireflies, with what glows
+    Stage("wildlife: fireflies");
+    wildlifeDraw.DrawFireflies(view);
+  }
   {
     // lamps' shafts and particles go into the scene's colour alone: they test the scene's depth
     // themselves and fade where they meet something solid
@@ -2128,6 +2251,11 @@ void World::Render() {
     if (temporalNow_ && post.BeginKept())
       sight.DrawBoundary(view, camera, post.Depth(), playable, static_cast<float>(map.width), static_cast<float>(map.height), look == Look::Modern && worldBeyond);
   }
+  if (outlinesNow_ && outlines.marked) {  // units seen behind what hides them (hidden_outlines.h): what of them is hidden
+    Stage("hidden outlines' masks");
+    outlines.SetGround(haveMap_ ? terrain.HeightTexture() : gfx::Texture{}, static_cast<float>(map.width), static_cast<float>(map.height), terrain.HeightUnit());
+    outlines.Masks(&meshes, screenView_, post.Depth(), view.width, view.height, camera.zNear, temporalNow_);
+  }
   Stage("finishing (exposure, bloom)");
   post.shown = !meshes.motion ? gfx::Texture{} : motionView == 5 ? post.Reactive() : motion.Check(motionView, view, post.Color());
   if (rayView && rays.Available() && !post.shown) {  // the ray tracing scene's check view (RaysReady above)
@@ -2176,6 +2304,10 @@ void World::Render() {
     framegenIn_.frameSeconds = frameSeconds_;
     framegenIn_.reset = framegenCut_;
     framegenReady_ = framegenIn_.hudless && framegenIn_.depth && framegenIn_.motion;
+  }
+  if (outlines.drawn && !post.shown) {  // the hidden units' outlines, on the finished picture (after frame generation's kept one)
+    Stage("hidden outlines");
+    outlines.Draw();
   }
   if (!sidePicture && !photo && (!orders.legs.empty() || !orders.marks.empty())) {  // the order lines, over the world, under the icons
     Stage("order lines");

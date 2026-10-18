@@ -1006,6 +1006,12 @@ struct Ent {
   uint32_t beamUnit = 0;
   int beamBone = -1, beamInterval = 1, beamCounter = 0;
   float beamLength = 0, beamRange = 0;
+  // --fx-target: a unit the shots and beams hit (its model's box at rest, world units, its own frame), its health and
+  // whether it is being repaired; a shot's blueprint (for what it hits)
+  bool aimedAt = false, repairing = false;
+  float health = 0, maxHealth = 0;
+  Vec3 boxLo, boxHi;
+  std::string shotBlueprint;
 };
 
 Quat Facing(Vec3 d) {
@@ -1097,6 +1103,77 @@ struct FxEntities::Impl {
   bool armed = false;
   std::vector<Weap> weapons;
   uint32_t manipSeq = 1;
+  std::vector<FxEntities::TargetHit> targetHits;  // (--fx-target: TakeTargetHits)
+  bool anyTarget = false;                         // (--fx-target: one was set; without, nothing is looked for)
+
+  // --fx-target: where the way from a to b first enters a target's box (the share of the way), and which target
+  Ent* TargetOnWay(Vec3 a, Vec3 b, float* share) {
+    Ent* found = nullptr;
+    float best = 1.0001f;
+    for (Ent& t : ents) {
+      if (t.dead || !t.aimedAt) continue;
+      const Quat back = Conjugate(t.turn);
+      const Vec3 la = Rotate(back, a - t.position), d = Rotate(back, b - t.position) - la;
+      const float o[3] = {la.x, la.y, la.z}, v[3] = {d.x, d.y, d.z}, lo[3] = {t.boxLo.x, t.boxLo.y, t.boxLo.z}, hi[3] = {t.boxHi.x, t.boxHi.y, t.boxHi.z};
+      float t0 = 0, t1 = 1;
+      bool miss = false;
+      for (int k = 0; k < 3 && !miss; ++k) {
+        if (std::fabs(v[k]) < 1e-9f) {
+          miss = o[k] < lo[k] || o[k] > hi[k];
+          continue;
+        }
+        float s0 = (lo[k] - o[k]) / v[k], s1 = (hi[k] - o[k]) / v[k];
+        if (s0 > s1) std::swap(s0, s1);
+        t0 = std::max(t0, s0);
+        t1 = std::min(t1, s1);
+        miss = t0 > t1;
+      }
+      if (!miss && t0 < best) {
+        best = t0;
+        found = &t;
+      }
+    }
+    *share = best;
+    return found;
+  }
+  // --fx-target: a hit on it: its health less the hit points (repaired when low), and the hit kept for the world
+  void HitTarget(Ent& t, Vec3 at, Vec3 way, const std::string& blueprint, const std::string& type, float amount) {
+    t.health = std::max(t.health - amount, t.maxHealth * 0.02f);
+    if (t.health < t.maxHealth * 0.3f) t.repairing = true;
+    FxEntities::TargetHit h;
+    h.unit = t.id;
+    h.at = at;
+    h.way = way;
+    h.blueprint = blueprint;
+    h.damageType = type;
+    h.amount = amount;
+    targetHits.push_back(h);
+  }
+  // the damage a script object holds (a shot's DamageData, a beam's DamageTable): its hit points and type
+  float DamageOf(uint32_t id, const char* table, std::string* type) {
+    lua_State* L = state->L();
+    float amount = 0;
+    lua_getglobal(L, "__fxObjects");
+    if (lua_istable(L, -1)) {
+      lua_pushnumber(L, id);
+      lua_gettable(L, -2);
+      if (lua_istable(L, -1)) {
+        lua_getfield(L, -1, table);
+        if (lua_istable(L, -1)) {
+          lua_getfield(L, -1, "DamageAmount");
+          if (lua_isnumber(L, -1)) amount = static_cast<float>(lua_tonumber(L, -1));
+          lua_pop(L, 1);
+          lua_getfield(L, -1, "DamageType");
+          if (lua_isstring(L, -1)) *type = lua_tostring(L, -1);
+          lua_pop(L, 1);
+        }
+        lua_pop(L, 1);
+      }
+      lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+    return amount;
+  }
 
   // What is attached to another's bone goes where that bone is.
   void FollowParents() {
@@ -1652,6 +1729,15 @@ struct FxEntities::Impl {
       prev = d;
       if (d >= reach) break;
     }
+    // (--fx-target: the beam meets a target's box before the ground)
+    float share = 1;
+    if (Ent* t = anyTarget ? TargetOnWay(b->position, b->position + dir * length, &share) : nullptr) {
+      length *= share;
+      type = "Unit";
+      std::string damageType;
+      const float amount = DamageOf(id, "DamageTable", &damageType);
+      HitTarget(*t, b->position + dir * length, dir, "beam", damageType, amount > 0 ? amount : 30.0f);
+    }
     b->beamLength = length;
     lua_State* L = state->L();
     SetSide(b->side);
@@ -1772,6 +1858,7 @@ int SpawnEntity(lua_State* L) {
     e.target = {Num(L, 27), Num(L, 28), Num(L, 29)};
     e.hasTarget = lua_toboolean(L, 30) != 0;
     e.tickFrom = e.position;
+    e.shotBlueprint = bp;
   }
   e.turn = e.align ? Facing(e.direction) : Quat{};
   e.born = m.now;
@@ -2949,6 +3036,44 @@ void FxEntities::Kill(uint32_t unit, float overkill) {
   }
 }
 
+void FxEntities::SetTarget(uint32_t unit, float health) {
+  Impl& m = *impl_;
+  Ent* e = m.Find(unit);
+  if (!m.state || !e || !e->unit) return;
+  e->aimedAt = true;
+  m.anyTarget = true;
+  const Model* model = m.unitModel ? m.unitModel(e->unitId) : nullptr;
+  if (model && model->ok) {
+    e->boxLo = model->boundsMin * model->scale;
+    e->boxHi = model->boundsMax * model->scale;
+  } else {
+    e->boxLo = {-0.5f, 0, -0.5f};
+    e->boxHi = {0.5f, 1, 0.5f};
+  }
+  if (health <= 0) {  // (its blueprint's)
+    lua_State* L = m.state->L();
+    m.state->DoString("function __fxMaxHealth(id) local o = __fxObjects[id] local bp = o and o.GetBlueprint and o:GetBlueprint() "
+                      "return bp and bp.Defense and bp.Defense.MaxHealth or 0 end", "fx stand target");
+    lua_getglobal(L, "__fxMaxHealth");
+    lua_pushnumber(L, unit);
+    if (lua_pcall(L, 1, 1, 0) == 0) {
+      if (lua_isnumber(L, -1)) health = static_cast<float>(lua_tonumber(L, -1));
+    }
+    lua_pop(L, 1);
+  }
+  e->maxHealth = e->health = health > 0 ? health : 1000;
+}
+
+void FxEntities::Heal(uint32_t unit) {
+  if (Ent* e = impl_->Find(unit))
+    if (e->aimedAt) e->repairing = true;
+}
+
+void FxEntities::TakeTargetHits(std::vector<TargetHit>* out) {
+  out->insert(out->end(), impl_->targetHits.begin(), impl_->targetHits.end());
+  impl_->targetHits.clear();
+}
+
 bool FxEntities::Spawn(const std::string& blueprint, Vec3 at, bool original, std::string* error, int side) {
   Impl& m = *impl_;
   if (!m.state) return false;
@@ -3052,6 +3177,36 @@ void FxEntities::Advance(double now) {
         }
       }
       for (uint32_t id : checks) m.BeamCheck(id);
+    }
+    // (--fx-target: a shot whose way since the last tick crossed a target's box meets it there)
+    if (m.anyTarget) {
+      std::vector<uint32_t> met;
+      for (Ent& e : m.ents) {
+        if (e.dead || e.hit || !e.shot) continue;
+        float share = 1;
+        Ent* t = m.TargetOnWay(e.tickFrom, e.position, &share);
+        if (!t) continue;
+        const Vec3 way = e.position - e.tickFrom;
+        e.position = e.tickFrom + way * share;
+        e.hit = true;
+        e.velocity = {};
+        e.ballistic = {};
+        e.acceleration = 0;
+        std::string type;
+        const float amount = m.DamageOf(e.id, "DamageData", &type);
+        m.HitTarget(*t, e.position, Length(way) > 1e-6f ? Normalize(way) : e.direction, e.shotBlueprint, type, amount > 0 ? amount : 50.0f);
+        met.push_back(e.id);
+      }
+      for (Ent& e : m.ents)
+        if (e.shot && e.hit) e.tickFrom = e.position;
+      for (uint32_t id : met)
+        if (Ent* e = m.Find(id)) impact(*e, "Unit");
+      // (and its engineer: three seconds to whole)
+      for (Ent& t : m.ents)
+        if (t.aimedAt && t.repairing && !t.dead) {
+          t.health = std::min(t.maxHealth, t.health + t.maxHealth / 30);
+          if (t.health >= t.maxHealth) t.repairing = false;
+        }
     }
     // what meets the ground or the water (in the dying units' world): a dead aircraft, or what a
     // script made that collides with the surface. (A list of ids first: OnImpact makes more.)
@@ -3263,6 +3418,8 @@ void FxEntities::Advance(double now) {
         u.orientation[3] = e.turn.w;
         u.layer = e.layer == "Air" ? 0x10u : e.layer == "Water" ? 8u : e.layer == "Seabed" ? 2u : 1u;
         u.dead = e.killed;
+        u.health = e.health;  // (a target's: --fx-target; 0 for the others)
+        u.maxHealth = e.maxHealth;
         u.firstBone = u.nextFirstBone = static_cast<uint32_t>(m.frame.bones.size());
         u.boneCount = u.nextBoneCount = static_cast<uint32_t>(b.bones.size());
         m.frame.bones.insert(m.frame.bones.end(), b.bones.begin(), b.bones.end());

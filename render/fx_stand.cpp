@@ -606,6 +606,16 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
         side.unit = entities_->AddUnit(setup_.fire, at, how, &why);
         side.ordered = side.held = false;
         if (!side.unit) fprintf(stderr, "render: --fx-fire: %s\n", why.c_str());
+        side.target = 0;
+        side.healed = false;
+        if (!setup_.target.empty()) {  // --fx-target: what it fires at, standing at the point, facing it
+          const Vec3 to{setup_.to.x + side.shift.x, 0, setup_.to.z + side.shift.z};
+          FxEntities::UnitPlace facing = how;
+          facing.forward = Length(Vec3{at.x - to.x, 0, at.z - to.z}) > 1e-3f ? Normalize(Vec3{at.x - to.x, 0, at.z - to.z}) : Vec3{0, 0, 1};
+          side.target = entities_->AddUnit(setup_.target, to, facing, &why);
+          if (side.target) entities_->SetTarget(side.target, setup_.targetHealth);
+          else fprintf(stderr, "render: --fx-target: %s\n", why.c_str());
+        }
       }
       if (!projectile_.empty()) {
         for (uint32_t t : side.trails) world.ribbons.StopTrail(t);
@@ -749,6 +759,10 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
       if (!fireSaid_) printf("render: --fx-fire: %s\n", said.c_str());
       fireSaid_ = true;
     }
+    if (side.target && setup_.healAt > 0 && !side.healed && now - started_ >= setup_.healAt) {  // --fx-heal-at
+      side.healed = true;
+      entities_->Heal(side.target);
+    }
     const float hold = setup_.holdAt > 0 ? setup_.holdAt : setup_.repeat - 2;
     if (side.ordered && !side.held && hold > setup_.fireAt && now - started_ >= hold) {
       side.held = true;
@@ -765,6 +779,22 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
     events_.clear();
     world.effects.Update(now * 10, entities_->Current());
     world.WatchDeaths(entities_->Current(), {{0.2f, 0.45f, 1.0f}});  // (debris from the units it kills: the colour it draws them in)
+    {  // (battle scars and snow on the stand's units: its target's hits told as they were, then the beat watched)
+      std::vector<FxEntities::TargetHit> hits;
+      entities_->TakeTargetHits(&hits);
+      for (const FxEntities::TargetHit& h : hits) {
+        UnitWear::HitEvent e;
+        e.unit = h.unit;
+        e.at = h.at;
+        e.way = h.way;
+        e.beam = h.blueprint == "beam";
+        e.blueprint = e.beam ? std::string() : h.blueprint;
+        e.damageType = h.damageType;
+        e.amount = h.amount;
+        world.wear.Tell(e);
+      }
+      world.WatchWear(entities_->Current());
+    }
     if (entities_->Current().units.empty()) {
       world.AddFrame(entities_->Current(), {});
     } else {  // (the units the stand draws itself, below: the world draws a game's units with their symbols and bars)
@@ -791,6 +821,8 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
       pose.nowCount = pose.nextCount = b.bones.size();
       world.meshes.Add(model, Mat4::FromTRS(b.position, b.turn, b.scale), {0.2f, 0.45f, 1.0f}, b.built, &pose);
       world.water.ripples.AddHull(b.id, b.position, b.turn, model->boundsMin * b.scale, model->boundsMax * b.scale);  // (ripples where it is in the water)
+      if (!b.wreck)
+        if (const WearLook* w = world.WearOf(b.id)) world.meshes.Wear(*w);  // (its battle scars and snow)
     }
   }
 }

@@ -656,9 +656,26 @@ picture the fallback; helpers build most of them in parallel, the renderer revie
    end of the hand-back (three cascades again); lamp shadows still chosen round the target.
 7. **A latency limiter** (input read as late as the frame allows; our own, vendor-neutral). In work.
 8. **Battle scars on units** (Chris: marks by the weapon that made them, three tiers, kept as trophies when the unit
-   heals, never so many that the unit stops reading). In work.
+   heals, never so many that the unit stops reading). First version done 2026-10-18 (`World::unitScars`, viewer
+   `--unit-scars`, `--wear-test`; `render/unit_wear.h/.cpp`): each unit keeps up to 16 marks in its rest space (they
+   move with its bones), placed where the shot's line meets its parts (a per-bone tree of the model's triangles,
+   kept only while scars are on). Four kinds by the shot's blueprint: kinetic (crater, torn lip, flaked paint, a
+   gouge where it skimmed), energy (a melt pool along the shot's way, heat colours, glowing fresh then cooling),
+   explosive (torn hole, soot in rays, shrapnel pits), fire (rising soot, browned paint, blisters). Three tiers by
+   the damage taken over its life against its most health (6, 11, 16 marks; some grime and chips from tier 2).
+   Repair mends without removing: fresh paint, a weld bead, a plate over a hole, kept as trophies. In a game the
+   marks come from the engine's hits (request 36: which unit, where, from which way, by what; `UnitWear::exactHits`,
+   so a health drop no hit was told for, reclaim or a script's, makes none); from a recording or the stand they are
+   guessed from shots seen to stop and health drops. In an eight-army AI game to tick 6000: 188 marks, 737 heals.
+   Cost with 200 tanks at tier 3, 1440p: about +0.15 ms (tier 1 about +0.05); off, about +0.015 ms (a model's
+   instance is 16 bytes larger: 640 to a draw instead of 768) and the picture identical. The visuals session's damage
+   sheets can replace the drawn marks later (the form proposed: an 8 x 8 atlas pair per kind fresh / mended).
 9. **Snow that comes off units in combat** (it builds while a unit stands in snowfall; moving, firing, hits, fire
-   and blasts shake or melt it off). In work, with 8.
+   and blasts shake or melt it off). First version done 2026-10-18 with 8 (`World::unitSnow`, viewer `--unit-snow`):
+   each unit holds its own share of the lying snow, built up standing still in snowfall at the ground's rate, shed
+   by moving, firing, hits, burning and blasts near (a puff of the game's snowy emitters where much falls at once);
+   glowing parts stay clear; new units start clean; its patches move with the unit. Off: pictures identical
+   (regression 0 px on both backends, also with snow lying and in a storm).
 10. **Real tracks in snow, mud, dirt and sand** (ruts with relief by the ground they are in, filling and fading).
    First version done 2026-10-18 (`World::deepTracks`, viewer `--deep-tracks`, in the Ground Detail setting): item 9
    of "The next pieces" above. About +0.05 ms at the game's height, +0.08 close, with 100 tanks; off, pictures
@@ -668,21 +685,116 @@ Then the renderer offered nine more and Chris answered "100% yes to all of them"
 after seeing it). Queued: they start as the helpers above finish (about eight at a time, so the engine session's
 work is not starved of the processor).
 
-11. **Shields that look like energy**: what is behind a bubble bends, each hit sends ripples across it, its pattern
-   flares, its colour tints the ground under it.
+11. **Shields that look like energy (first version, 2026-10-18; proposed for a "Battle Effects" setting):**
+   `World::energyShields` (viewer `--energy-shields`; `energy_shields.h`). A shield's bubble is drawn by `EnergyShields`
+   in place of the plain see-through shell (whose look it keeps underneath: the faction's tint, brighter at the rim,
+   the dome's pattern drifting at two sizes), in two passes over each dome before the other see-through things:
+   - **What is behind bends:** the picture behind the bubble's near side (`Post::CopyBehind`, the copy the modern
+     water and the heat shimmer read) is taken from a little toward the bubble's middle, most just inside the rim,
+     none face on (the units inside stay where they are) and none at the very edge; a slow shimmer leans it a little.
+     Never what stands in front of the shell. From inside a bubble, its whole shell does it.
+   - **Each hit sends rings across it:** three crests run out over the sphere from where it struck (1.5 radians a
+     second, the same time across a small bubble as a large one), fading as they spread and within 1.9 seconds;
+     up to eight hits a bubble at once (the newest). They light the pattern's lines in the tint made deeper and bend
+     what is behind as they pass. Where a hit comes from: the game's shield script makes a flash at the bubble's
+     centre for each hit, turned toward it (shield.lua, CreateImpactEffect: OrientFromDir, its emitters moved out
+     along +z), so the flash's +z and age are the hit's; nothing new is needed from the engine.
+   - **Its pattern flares:** round where it was just struck (under a second), and all over as the shield weakens
+     (its unit's `FrameUnit::shieldRatio`, matched by standing under the bubble's centre; as the cube of what is
+     lost, so a shield at half shows little and one at a tenth a lot); below two fifths it stutters, dimming now and
+     then. Its glow is halved where the shell is seen face on: that is where the units inside are looked at.
+   - **Its light on what is inside:** the ground and the units inside take its tint (their light and dark kept,
+     their colour moved toward the tint: as a plain light a blue shield turned green grass yellow-green), hardly in
+     the middle (a hundredth of the way) and up to about a fifth just inside the shell, ending at it; overlapping bubbles each
+     add theirs (up to 32 on the screen, the nearest).
+   Not the effects stand's original side (`--fx-compare`'s right half). The flash meshes and their emitters are drawn
+   as before, over it. Off: nothing of it runs (no shaders made); pictures identical (regression 0 px on both
+   backends; the shield stand on the stock Seton's 0 px against the program before it). Its shaders are made when a
+   map opens with it on, else at the first bubble (a one-time pause of about 60 ms).
+   Cost at 1440p with ten bubbles of the four factions, each hit every 0.4 s (`--energy-test 10 --fx-hit-every
+   0.4`), by the lowest times: the stage 0.11 ms (Direct3D 12) / 0.14 (Vulkan) from 85 units out, 0.19 / 0.23 from
+   48 units out with the bubbles filling the screen; the plain bubbles it replaces cost 0.035 / 0.06 of the
+   see-through stage: about +0.07 to +0.16 ms. Vulkan's picture as Direct3D 12's (mean difference 0.48, the same as
+   with it off). Viewer tests: `--fx-shield <unit>` (with `--energy-shield-health h` for the stand's bubble, which
+   has no unit in its frame), `--energy-test n`. Tuning: `EnergyShields::bend`, `light`, `rings` (1 each).
+   Open: personal shields (their lattice and hits stay as they are); a hit the game's script makes no flash for
+   (it skips some when more than ten are live, and spill damage) sends no rings.
 12. **Hot metal**: fresh wrecks and craters glow orange and cool over a minute or two; wrecks smoulder.
 13. **Explosions as real volumes, and a nuke worth the name**: big blasts drawn as lit volumes (simulations the
    visuals session makes in Blender, played back through the light in the air); a nuke's flash lighting the map, a
    shock ring through the clouds, a mushroom cloud. After item 2 (it shares the smoke's lighting).
 14. **Zooming out through the clouds (a trial)**: the strategic zoom rises through the volumetric clouds, which thin
    out so the map stays readable.
-15. **Units seen behind trees and cliffs**: a faint outline in the army's colour where a unit is hidden.
+15. **Units seen behind trees and cliffs (done, first version, 2026-10-18; ON by default):** `World::hiddenOutlines`
+   (`hidden_outlines.h`; viewer `--no-hidden-outlines` / `--hidden-outlines`; `WorldPicture::SetHiddenOutlines`).
    ON by default (Chris via the interface session, 2026-10-17: readability), and only for what the player may
-   see: his own, allied units, enemies in sight, never an enemy in the fog.
+   see: his own, allied units, enemies in sight, never an enemy in the fog. Where such a unit's surface lies behind
+   the scene's depth (leaves, props, a hill, a building), a thin line (1.5 pixels at 1080 lines, the same share of
+   any screen's height) in its strategic icon's colour runs round its hidden part, and a fainter fill lies inside;
+   unlit, laid on the finished picture. Only the hidden part: where the unit shows, nothing; a unit's own parts
+   never hide it (each pixel keeps the nearest unit's surface in a depth of its own, drawn again at the screen's
+   size from the levels the scene drew). Two layers, units that move and buildings: a tank behind a factory is
+   outlined, a factory behind a tank is not; a building behind another building is not either. What of a unit lies
+   in the ground or less than 0.12 over it (a foot on a slope) is buried, not hidden: no line along every foot.
+   Which units: AddFrame's that are seen now (`FrameUnit::Seen`), finished, not wholly hidden by their script, and not
+   a building drawn as it was remembered in the fog. Fades by the unit's size on the screen (gone below 8 pixels
+   across at 1080 lines, whole from 18; a tank on the rebuilt Seton's fades from about 70 world units from the eye)
+   and gives way to its strategic icon as that comes in (130 units for most). The original look has none. Drawn
+   after FSR 1 / FSR 3 at the screen's size by the view without the jitter (crisp, not smeared by the temporal
+   upscaler); against the scene's depth, the farthest of its samples counts (4x MSAA), and where the scene is drawn
+   smaller or shifted (FSR) the farthest of the four scene pixels round the place, so that a unit's own nearer part
+   in a coarse pixel never counts as hiding it; a speck (a hidden pixel with fewer than two of the same unit's hidden
+   pixels round it) is not shown. Frame generation takes the outlines as it takes the icons (drawn after
+   `Post::KeepFinished`: never smeared along the trees, taken from the frame after). Both backends; FXC as DXC.
+   Cost at 1440p, 200 tanks in a forest of the rebuilt Seton's (lowest times; masks + outlines laid): Direct3D 12 with
+   4x MSAA 0.050 + 0.010 ms, Vulkan 0.063 + 0.013 ms, FSR 3 quality 0.047 + 0.010 ms; the processor about 0.04 ms;
+   the first frame makes its three targets (screen-sized: two RGBA8, one D32; 44 MB at 1440p; +7 ms once). Off:
+   pictures identical (regression 0 px on both backends); on, the regression's scenes (nothing hides the
+   commander) are identical too; in the original look nothing changes.
 16. **Dust, spray and contrails**: vehicles raise dust on dry ground, hover units throw spray, high aircraft draw
    contrails. After items 2 and 3 (shared particles and dust).
 17. **Life in the world**: flocks of birds over the forests that scatter when fighting comes near; fireflies at dusk;
-   never mistakable for units.
+   never mistakable for units. **First version 2026-10-18 (a helper):** `World::wildlife` (viewer `--wildlife`;
+   `render/wildlife.h/.cpp`; modern look, a map with trees or shores). Purely for the eye: own random numbers,
+   nothing back to the game, never picked, selected or given an icon.
+   - **Flocks** (`Wildlife::SetMap`, from the map's trees as `World::Open` hands them over: those that sway and stand
+     a unit or more tall): a home in each wood where the trees stand thickest (squares of 32 units, the thickest
+     first, homes at least 56 apart; its roost the few trees round the one nearest the wood's middle), and gulls over
+     water a little off a shore (at most 24, 110 apart). Seton's Clutch Remastered: 92 flocks, about 1,150 birds.
+     Kinds: starlings (18-32, small, quick, black with a sheen), crows (5-10, larger, slow beats and long glides),
+     pigeons (8-16, grey: the ones that read over a dark wood), gulls (5-11, grey above and white below, black
+     tips, gliding). Wingspans 0.32-0.56 world units, two to three times a real bird's, so they read from the
+     game's camera; never under 2.5 pixels across.
+   - **Their day** (on the processor, a few numbers a flock): resting in the roost's crowns (hidden there), now
+     and then aloft over the wood a while (wheeling round a place that moves every 5-11 s), landing again; to roost
+     by the sun's height (crows and pigeons from about 6 degrees, gulls at sunset, starlings just after); by night
+     they rest. The computed sky's `daylight` cannot be used for it: from sunset on the moon keeps it at 0.03-0.05.
+   - **Scattered by fighting** (`Wildlife::Listen` from `World::AddFrame`, and `Hear`): shots first seen (a weapon
+     firing, loudness 0.5) and gone (they met something, 1; where the host's simulation keeps impacts, the engine's
+     impacts instead: 'Air' 0.6, a beam's 0.5, a crash 2.5), beams coming on (0.6 at both ends), hits over an area
+     (1 + radius / 4, at most 6), and the explosions' flashes (`Particles::flashes`, by their size); only what the
+     army the picture is for sees (the frame's `seen`), so that birds never give away a fight in the fog of war (the
+     frame's beams carry no `seen`: taken as the engine hands them over). A noise reaches 40 x the
+     root of its loudness. The flock bursts off, each bird when the noise reaches it (28 units a second), away from
+     it and up, makes for a place 45-70 units away from the fight and wheels there while it goes on, and comes
+     home and settles after 22-38 s of quiet.
+   - **On the card** (`wildlife.cpp`): a compute pass, a group of 32 threads a flock, moves the birds (boids: keep
+     apart from the nearest, fly with them, keep to them; drawn toward where the flock goes, above the ground and
+     the crowns, inside the map); a draw makes each bird nine triangles (body, tail, two wings in two parts that
+     flap or glide, banked into the turn), lit as everything else and through the air; their shadows go into the
+     sun's maps. Fewer as the camera rises (all to 85 units of distance, none from 240).
+   - **Fireflies**: no state. A square round the camera's point (up to 150 units across), three places a cell of 2.5,
+     kept by how much of a wood's edge is there (the woods' own picture, squares of 4 units) and, over open grass,
+     only in patches; each drifts a little over the ground and flashes for about half a second every 2.5-7 s,
+     yellow-green, at least a pixel and a third across (its light spread over it), seen through the haze and the
+     mist, or through the light in the air when `volumetricFog` is on. From about sunset, all from the end of the
+     twilight; fewer in rain, none on lying snow; gone from a camera 160 away.
+   - **Cost** at 1440p on the RTX 4090 (lowest times): the step 0.006-0.009 ms, the birds under 0.001 ms with eight
+     flocks in view, the fireflies 0.007-0.008 ms with the largest square, the birds' shadows about 0.007 ms; the
+     processor about 0.03-0.06 ms. Off: pictures identical (regression 0 px on both backends). Vulkan as Direct3D 12.
+   - **Viewer**: `--wildlife-verbose` (where the flocks are, what the nearest do, each scattering),
+     `--wildlife-noise x,z,at[,every]` (a noise of fighting there, to see a flock scatter), `--bird-scale`,
+     `--firefly-strength`.
 18. **Textures streamed in** (games start sooner, less memory: the RTX 3060 has room): in the optimisation phase,
    talked through with Chris first as agreed.
 19. **Build effects remade**: build beams that light what they touch, sparks, a better build shimmer (the original's
@@ -690,7 +802,8 @@ work is not starved of the processor).
 
 ## The options
 
-Each is off by default and, off, leaves the picture as it was, pixel for pixel. All are the modern look's. A
+Each is off by default (but `hiddenOutlines`, on: Chris's word, item 15) and, off, leaves the picture as it was, pixel
+for pixel. All are the modern look's. A
 host sets them on the world (`WorldPicture::world()`) at any time, except reflections (below). Costs at 1440p
 on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections above:
 
@@ -707,6 +820,7 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `litRain` | rain and snow lit where they fall, sparkling round lamps | about 0.04 ms (in rain) | a time of day |
 | `rainSplashes` | specks where rain meets the ground and units' tops | about 0.01 ms (in rain) | a time of day |
 | `leafLight` | the sun's light through leaves, grass blades and plants, glowing toward a low sun | about 0.04 ms | |
+| `energyShields` | shields' bubbles bend what is behind, rings run from each hit, the pattern flares, their light inside | +0.07 to 0.16 ms with ten bubbles under fire | |
 | `frameGeneration` | FSR 3 frame generation: a picture made between each two frames, twice the frames shown | 1.1-1.4 ms a frame drawn | anti-aliasing off; the device's second queue |
 | `lens` (with a cinematic camera) | depth of field: a lens's blur, focus eased | 0.36-0.43 ms while on | a cinematic camera (cinecam.h) |
 | `litSmoke` | smoke and dust lit as volumes: the sun through shadows, fires lighting it from within | about 0.02 ms in a fight | |
@@ -714,6 +828,8 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `heatShimmer` | the air bends over fires, exhausts and fresh explosions | about 0.04-0.1 ms in a fight | |
 | `blastWaves`, `blastDust`, `blastDebris` | explosions press the grass flat and bend trees in a running ring, kick up dust, throw chunks that lie as rubble | about 0.03-0.09 ms in a fight | |
 | `waterRipples` | the water reacts: shells, ships, hover and wading units leave rings and wakes that spread and fade | about 0.04-0.05 ms near water (24 MB of the card's memory once on) | a map with water |
+| `hiddenOutlines` (ON) | a thin line in the army's colour round a unit's part hidden behind trees, hills or buildings | 0.06-0.08 ms (200 tanks in a forest) | |
+| `wildlife` | flocks of birds over the woods and gulls over the shores, scattered by fighting; fireflies at dusk and by night | about 0.02 ms (proposed for the "Ground Detail" setting) | a map with trees or shores |
 
 Ray tracing means Direct3D 12 with DXR 1.1 or Vulkan with ray queries: never on the Mac (MoltenVK has none);
 where it is missing those options do nothing. `rayReflections` builds the surfaces' shaders with ray
@@ -734,6 +850,11 @@ so there is less clutter). WorldPicture sets each bundle's options together, bef
 | `SetWeatherEffects` | `litRain`, `rainSplashes`, `waterDetail` | about +0.05 ms in rain, +0.04 by water |
 | `SetGroundDetail` | `groundCover`, `battleScars`, `leafLight` | +0.05 to 0.16 ms zoomed in, nothing far out; scars up to +0.56 ms with 2000 in view |
 | `SetFrameGeneration` | `frameGeneration` (a sixth setting, asked of the ui: "Frame Generation") | 1.1-1.4 ms a frame drawn; twice the frames shown |
+| `SetHiddenOutlines` | `hiddenOutlines` (readability, not light: its own setting, ON at first; proposed to the ui as "Hidden Unit Outlines") | 0.06-0.08 ms |
+
+Proposed (2026-10-18, the interface's wish): a seventh setting, "Battle Effects" (`WorldPicture::SetBattleEffects`, not
+made yet), for the looks of the fighting that come next: `energyShields` first (+0.07 to 0.16 ms with ten bubbles under
+fire), the others of items 12 to 19 as they land.
 
 `WorldPicture::RayTracingSupported()` (after any Open, the menu's too) says whether the card has ray tracing,
 to grey "Ray tracing" out where it would do nothing (on the Mac always). Viewer: `--picture <file> --settings

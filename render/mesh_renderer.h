@@ -9,6 +9,7 @@
 #include "gfx.h"
 #include "models.h"
 #include "textures.h"
+#include "unit_wear.h"
 #include "view.h"
 
 namespace render {
@@ -46,6 +47,9 @@ class MeshRenderer {
   // where it struck on the unit at rest (world units, the unit's own frame) and its age (w, 0..1 of the
   // second it shows). Drawn with what is see-through.
   void AddShell(const Model* shell, const Mat4& world, const std::vector<Vec4>& hits);
+  // The battle scars and snow of the model added last (unit_wear.h; World::unitScars, unitSnow): its look this frame,
+  // its marks laid in the bone buffer after the shells' hits (Prepare). Without it a model wears nothing of its own.
+  void Wear(const WearLook& look);
   // Scenery that stands still (trees, rocks), in groups (one square of the map's): the renderer keeps
   // each group from one frame to the next, so a frame only says which groups it lists (ListGroup,
   // after Begin), not where each tree stands and how large it is. A group is filled anew
@@ -78,6 +82,18 @@ class MeshRenderer {
   // (a frame drawn for something else in between: World::sidePicture).
   bool keepLast = false;
   void DrawMotion(const View& view, const Mat4& now, const Mat4& before);
+  // Hidden outlines (hidden_outlines.h): a mark (not 0) on the model just added, when it is `model` (Add left out
+  // nothing); the scene's pass keeps what it draws of the marked models. DrawMarked, after the scene's passes, draws
+  // that again (the same levels) by `view`, with the pipeline set and into the pass under way: those whose mark has
+  // `want` in the bits of `mask`, each with its mark's four bytes (the lowest first, 0..255) in its colour's place.
+  void MarkLast(const Model* model, uint32_t mark) {
+    if (mark && !entries_.empty() && entries_.back().model == model) {
+      entries_.back().mark = mark;
+      ++marks_;
+    }
+  }
+  void DrawMarked(const View& view, uint32_t mask, uint32_t want);
+  size_t MarkedDrawn() const { return markedItems_.size(); }
 
   // Level of detail is chosen by size on screen, not by distance: a model wishes for
   // `trianglesPerPixel` triangles for every pixel of the circle it covers and gets the level nearest
@@ -134,6 +150,8 @@ class MeshRenderer {
     float color[4];                   // team colour, w: fraction complete
     float bones[4];                   // x: where its bones' rows begin in the bone buffer, -1: at rest; yzw: a ghost's tint (0: none),
                                       // or y -1 and z, w its treads' scroll
+    float wear[4];                    // x: where its marks begin in the bone buffer (-1: none), y how many, z its wear over all, w its
+                                      // share of the lying snow (-1: the weather's): Wear, unit_wear.h
   };
   // What a pass tests first, for every model of the list, kept apart from the rest so that going
   // through tens of thousands of them reads little memory.
@@ -156,6 +174,7 @@ class MeshRenderer {
     int rows = -1;  // where its bones' rows begin in rows_ (Prepare)
     uint8_t flags = 0;  // Cull's
     uint32_t key = 0;   // Add's
+    uint32_t mark = 0;  // MarkLast's (hidden outlines)
   };
   Entry MakeEntry(const Model* model, const Mat4& world, Vec3 teamColor, float built, const Vec3* tint, const float* treads = nullptr) const;
   // (rows go to `out`: rowsOut_, or with motion on a copy kept on the processor first)
@@ -228,6 +247,16 @@ class MeshRenderer {
     std::vector<Vec4> hits;
   };
   std::vector<ShellHits> shellHits_;
+  // the units' marks this frame (Wear): which entry, how many, where its rows begin in wearRows_, and where Prepare laid
+  // them in the bone buffer (after the hits; -1: not, no pass sees it)
+  struct WearRows {
+    size_t entry;
+    int count;
+    size_t from;
+    int64_t at;
+  };
+  std::vector<WearRows> wears_;
+  std::vector<Vec4> wearRows_;
   bool prepared_ = false;
 
   // motion: each keyed model's place and bones of the frame before (its bones' rows in lastRows_, from
@@ -248,6 +277,9 @@ class MeshRenderer {
     float bones;
   };
   std::vector<MotionItem> motionItems_;  // what the scene's passes drew of the keyed models
+  std::vector<MotionItem> markedItems_;  // (hidden outlines) what they drew of the marked models
+  int marks_ = 0;                        // (hidden outlines) models marked this frame
+  bool markedSorted_ = false;
   struct LastInstance {
     float row0[4], row1[4], row2[4];
     float bones[4];  // x: where its bones of the frame before begin (-1: at rest); y: 1 = known

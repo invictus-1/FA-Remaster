@@ -125,6 +125,22 @@ class FxEntities {
   // Kills it as the game does: its script's OnKilled(nil, "Normal", overkill). From then on its unit in the frame is
   // dead (FrameUnit::dead), as a game's is while its death plays.
   void Kill(uint32_t unit, float overkill);
+  // A unit the weapons' shots and beams hit (the stand's --fx-target, for battle scars): where they cross its model's box
+  // they meet it ('Unit': its impact effects for a unit), taking the hit points their damage data say from its health
+  // (`health`; 0: its blueprint's Defense.MaxHealth). An engineer stands by: below three tenths of its health it is
+  // repaired to whole in three seconds, so it lives on and its damage over its life grows past its health. The frame
+  // gives its health. Heal: repaired to whole now.
+  void SetTarget(uint32_t unit, float health);
+  void Heal(uint32_t unit);
+  // The hits on targets since the last call, as the world's battle scars take them (unit_wear.h, UnitWear::Tell).
+  struct TargetHit {
+    uint32_t unit = 0;
+    Vec3 at, way;           // world
+    std::string blueprint;  // the shot's (a beam's: its weapon's projectile is none: "beam")
+    std::string damageType;
+    float amount = 0;
+  };
+  void TakeTargetHits(std::vector<TargetHit>* out);
 
   // Ends all that plays: the entities go, their threads stop. What they left (decals, light) runs out.
   void Clear();
@@ -138,7 +154,7 @@ class FxEntities {
   // placed, turned and sized, its bones as the scripts posed them (as a frame's bones are, in world
   // units of its model: a wreck's model has the scale 1, its size is `scale`), in the look of its side.
   struct Body {
-    uint32_t id = 0;   // its entity's (the same while it lives)
+    uint32_t id = 0;   // its entity's (the same while it lives: what the world knows its ripples, battle scars and snow by)
     std::string unit;  // blueprint id
     bool wreck = false, original = false;
     Vec3 position;
