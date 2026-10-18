@@ -34,6 +34,26 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
+## 36. To the ENGINE track: hits, impacts and health per beat, read-only (2026-10-17, not blocking; your offer of the same evening)
+
+**Who asks:** the renderer, for Chris's new looks of 2026-10-17 (docs/render-lighting.md, "The next looks"): battle
+scars on units by the weapon that hit them (8), snow shaken off units that are hit (9), water ripples where shells
+land (4), blast waves and debris (3), shields that ripple where they are hit (11), hot metal (12).
+
+**What** (as you offered: kept per beat like the sounds, `CollectX` / `TakeX`, nothing changed in the simulation):
+1. **Hits:** for each damage a unit takes, the target's entity id, the weapon's blueprint id and the projectile's (or
+   beam's) blueprint path where there is one, the damage type string ('Normal', 'Fire', 'Deathnuke', ...), the amount,
+   the hit's position (world) and the shot's direction (unit vector, from the shooter or the projectile's velocity),
+   and whether a shield took it (then the shield's owner id as the target). The renderer turns the position into the
+   unit's own rest space for its marks (a hit's position is enough; a bone name is not needed).
+2. **Impacts:** each projectile's impact with its impact type as the simulation decides it ('Terrain', 'Water',
+   'Shield', 'Unit', 'Air', 'Prop', 'Underwater'), position and projectile blueprint path, those that hit nothing too.
+3. **Health:** each unit's health fraction when it changes (id, new fraction), for the tiers of wear and healing.
+The smallest form that serves: three plain vectors of structs on the live frame, taken each frame by `LiveSim`
+(`TakeHits`, `TakeImpacts`, `TakeHealth`), in the order they happened. Where an amount or a direction is not known
+at that point, 0 is fine; say which. The renderer's helpers are building against these names now, so the names you
+choose win: tell me if they differ.
+
 ## 35. To the VISUALS track: the ground cover's density table in cover_setonsr.json (2026-10-17, not blocking; DONE the same day: "density" in the JSON, her section 50; follow-up: the map's entry in remap.json names its cover file, "cover")
 
 **Who asks:** the renderer (your section 49: the card atlas for SETONS_R).
