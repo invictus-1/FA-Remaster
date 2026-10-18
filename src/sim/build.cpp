@@ -3366,7 +3366,16 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
     GroundFreeRect(sim, u);
   } else if (t.type == CommandType::BuildFactory) {
     // CFactoryBuildTask dtor (0x5fa010): OnStopBuild(true) when done, else OnStopBuild(false)
-    // (a cancelled product gets OnFailedToBeBuilt; the factory script destroys it)
+    // (a cancelled product gets OnFailedToBeBuilt; the factory script destroys it). Before it, with no test of the
+    // unit's life (0x5fa039..0x5fa06e): Busy off (unit+0x4a0 &= ~0x2000), Building off (&= ~0x20) and the work
+    // progress (+0x2ac) 0. Busy is otherwise only the script's (SetBusy 0x6c6542): a factory killed, or cleared, during
+    // the script's roll-off (Busy + BlockCommandQueue) is no longer Busy in that beat; BlockCommandQueue stays. Seen:
+    // MP1 beat 4088, army 0's factory 0x27 self-destructed in its roll-off: the original's states that beat are NoCost
+    // and BlockCommandQueue; ours kept Busy until the unit was gone.
+    u->unitStates.erase("Busy");
+    u->busy = false;
+    u->unitStates.erase("Building");
+    u->workProgress = 0;
     if (t.started && Alive(u)) StopBuild(sim, L, u, t, t.completed);
   } else if (t.type == CommandType::Upgrade) {
     // CUnitUpgradeTask dtor (0x5f84c0): done -> OnStopBuild(true); otherwise the engine destroys the
