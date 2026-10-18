@@ -1049,6 +1049,10 @@ tostring, a newline ends a line; my helper's PrintLines in ui/user/keymap.cpp ha
 while the simulation starts too, if they can be kept until the first take. I'd post them to the console on the
 main thread after each beat. The host does not touch the simulation's state for it (my helper's first version
 set a print function there from the interface; I left that out as it is your layer).
+DONE (engine f6fec31, answer "ui 41" in engine-answers.md): Sim::collectPrints / TakePrints, the lines built as the
+exe's SCR_ConcatArgsAndCall builds them (an argument stops at its first NUL), not logged once taken. Used:
+collectPrints set before Start, the lines posted to the console after Start and after every beat
+(game_session.cpp PostPrints); the user state's print stops at a NUL too.
 
 ## To the renderer track
 

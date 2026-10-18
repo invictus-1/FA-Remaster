@@ -243,5 +243,18 @@ ForkThread(function()
         local fp = q[1] and q[1].position
         check("at the press point, not where it was let go", fp ~= nil and math.abs(fp[1] - (pair[1] - 10)) < 3 and math.abs(fp[3] - (pair[3] - 10)) < 3, true)
     end
+
+    -- the simulation's print reaches the game's console (Sim::Printf, the beat's lines: ui REQUESTS 41), here
+    -- through the original's ExecLuaInSim (0x8ba5c0; cheats are on in this game)
+    local heard = {}
+    local handle = AddConsoleOutputReciever(function(text) table.insert(heard, text) end)
+    ExecLuaInSim('print', 'the simulation says hello')
+    WaitSeconds(0.5)
+    local found = false
+    for _, text in heard do
+        if text == "the simulation says hello" then found = true end
+    end
+    check("the simulation's print is heard in the console", found, true)
+    RemoveConsoleOutputReciever(handle)
     LOG("TEST done: " .. failed .. " failed")
 end)

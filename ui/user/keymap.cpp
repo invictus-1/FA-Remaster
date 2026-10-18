@@ -660,13 +660,12 @@ std::vector<std::string> PrintLines(lua_State* L) {
     if (i > 1) put('\t');
     std::string text;
     if (lua_isstring(L, i)) {
-      const char* s = lua_tostring(L, i);  // (a number becomes its string in its place)
-      text.assign(s, lua_strlen(L, i));
+      text = lua_tostring(L, i);  // (a number becomes its string in its place; the exe stops at a NUL)
     } else {
       lua_getglobal(L, "tostring");
       lua_pushvalue(L, i);
       lua_call(L, 1, 1);
-      if (const char* s = lua_tostring(L, -1)) text.assign(s, lua_strlen(L, -1));
+      if (const char* s = lua_tostring(L, -1)) text = s;
       lua_pop(L, 1);
     }
     for (char ch : text) put(static_cast<unsigned char>(ch));
@@ -686,9 +685,9 @@ int l_print(lua_State* L) {
 // print(...) in the simulation's state (FA exe 0x74b570: each line to Sim::Printf, 0x7462a0, kept
 // in the simulation (+0xa18) and sent with the beat's sync; the interface's side prints them on
 // the main thread, 0x895260). Here the lines are posted, never heard inside the beat, whichever
-// thread runs it. INFERRED: that the list at +0xa18 is the one the sync carries to 0x895260. Not
-// yet set in the simulation's state (that is the engine's: ui REQUESTS 41 asks for its lines per
-// beat); for now the host's test function moho64ui_SimPrint.
+// thread runs it. INFERRED: that the list at +0xa18 is the one the sync carries to 0x895260. The
+// simulation's own lines come from the engine's Sim::TakePrints after each beat (game_session.cpp
+// PostPrints, ui REQUESTS 41); this is the host's test function moho64ui_SimPrint for the same path.
 int l_SimPrint(lua_State* L) {
   for (const std::string& line : PrintLines(L)) ConsolePost(line);
   return 0;

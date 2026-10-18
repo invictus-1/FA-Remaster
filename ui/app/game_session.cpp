@@ -40,6 +40,7 @@
 
 #include "sim/sim_view.h"
 #include "user/bindings.h"
+#include "user/keymap.h"
 #include "user/user_state.h"
 #include "sound/sound_system.h"
 
@@ -713,6 +714,13 @@ bool GameSession::Relaunch(std::string* why) {
   return true;
 }
 
+// The simulation's print lines of a beat, to the game's console (the original: Sim::Printf 0x7462a0 keeps them,
+// the beat's sync carries them, the interface's side prints each with CON_Printf 0x895260; engine: Sim::TakePrints,
+// ui REQUESTS 41). Posted: they reach the console's receivers on the main thread's next frame.
+static void PostPrints(Sim& sim) {
+  for (const std::string& line : sim.TakePrints()) ConsolePost(line);
+}
+
 // The launch call's part (the original's WLD_SetupSessionInfo + WLD_BeginSession, 0x88cbc0 /
 // 0x88d060): the session is described and its simulation made, nothing loaded yet.
 void GameSession::PrepareSession(const SessionDescription& session, const std::vector<std::string>& uids) {
@@ -747,6 +755,7 @@ void GameSession::BeginLoad() {
     }
     const auto t1 = std::chrono::steady_clock::now();
     sim->collectSync = true;
+    sim->collectPrints = true;  // (the scripts' print, for the game's console: ui REQUESTS 41)
 #ifdef MOHO64UI_WORLD_PICTURE
     sim->collectEffects = wantPicture;  // explosions, shots, smoke: the picture's, asked for before the first beat
     sim->collectProps = wantPicture;    // wreckage, and trees reclaimed, burnt or knocked over (the picture takes the list)
@@ -795,6 +804,7 @@ bool GameSession::FinishLoad(std::string* why) {
   CopyHeights();
   CopyAllies();
   setupSync_ = sim_->TakeSync();
+  PostPrints(*sim_);  // (what the scripts printed while the session started: the original's setup sync)
   pendingSync_.clear();
   if (session.focusArmy >= 0 && session.focusArmy < static_cast<int>(h.armies.size())) commandSource_ = h.armies[session.focusArmy].source;
   modUids_ = uids;
@@ -1174,6 +1184,7 @@ void GameSession::DeliverBeatSync() {
     if (onSync) onSync(sync);
     else pendingSync_.push_back(std::move(sync));
   }
+  PostPrints(*sim_);
 }
 
 // The tick and the picture's copy of it on the beats' thread (the renderer's viewer does the same:
@@ -1364,6 +1375,7 @@ void GameSession::RunFirstBeat() {
     if (onSync) onSync(sync);
     else pendingSync_.push_back(std::move(sync));
   }
+  PostPrints(*sim_);
 }
 
 float GameSession::TerrainHeight(float x, float z) const {

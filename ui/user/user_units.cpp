@@ -2104,6 +2104,20 @@ int l_SimCallback(lua_State* L) {
   return 0;
 }
 
+// ExecLuaInSim(function, arg) (FA exe 0x8ba5c0, "Execute some lua code in the sim"): exactly two arguments, the
+// first a string; with a session (0x10c4f50) the client sends ExecuteLuaInSim (vtable +0x84): the simulation
+// calls its global `function` with `arg` (the stream's message 21, carried out only with cheats on, 0x749a70).
+// The path debugger's scripts use it; so do the tests (the simulation's print reaching the console).
+int l_ExecLuaInSim(lua_State* L) {
+  if (lua_gettop(L) != 2)
+    return luaL_error(L, "%s\n  expected %d args, but got %d", "Execute some lua code in the sim", 2, lua_gettop(L));
+  const std::string name = luaL_checkstring(L, 1);
+  std::string value;
+  if (!lua_isnil(L, 2)) SerializeLua(L, 2, &value);
+  if (TheSim(L)) Writer(L).ExecuteLuaInSim(name, value);
+  return 0;
+}
+
 // A switch on every own unit of a list: the simulation is told by key and value.
 void InfoPair(lua_State* L, int listIdx, const char* key, const std::string& value) {
   std::vector<UserUnit*> list;
@@ -3835,6 +3849,7 @@ void RegisterUserUnitBindings(lua_State* L) {
   SetGlobal(L, "IssueBlueprintCommandToUnit", l_IssueBlueprintCommandToUnit);
   SetGlobal(L, "GetUnitCommandFromCommandCap", l_GetUnitCommandFromCommandCap);
   SetGlobal(L, "SimCallback", l_SimCallback);
+  SetGlobal(L, "ExecLuaInSim", l_ExecLuaInSim);
   SetGlobal(L, "SetPaused", l_SetPaused);
   SetGlobal(L, "GenerateBuildTemplateFromSelection", l_GenerateBuildTemplateFromSelection);
   SetGlobal(L, "GetActiveBuildTemplate", l_GetActiveBuildTemplate);

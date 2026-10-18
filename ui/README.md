@@ -369,8 +369,9 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   the first ((length - 1) & 7) + 1 spaces, the exe's "tab"; a newline in the text ends a line;
   the original logs nothing of it; ours writes each line to its log at debug level), the
   simulation's `print(...)` (0x74b570; the original sends its lines with the beat's sync,
-  0x895260: NOT YET here, asked of the engine as a list per beat, ui REQUESTS 41; the console
-  side is built and tested through `moho64ui_SimPrint`), and the console commands' own lines: `Unknown console
+  0x895260; here the engine keeps them per beat, Sim::TakePrints, ui REQUESTS 41, and the host
+  posts them to the console after each beat and after the session's start), and the console
+  commands' own lines: `Unknown console
   command "x"` for a name the original does not know (one it knows that is not built here is
   only logged), a variable's value (`toggled ren_Bloom is now off` for a bool typed without a
   value, `bool ... is ...` with `show`, `int`/`uint32`/`float`/`string ... == ...` for the
