@@ -1636,6 +1636,17 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
       // task sets its goal (seen: a tank ordered at 68, 70 and 71 takes its first step at 71, not at 74).
       const int second = u->commands.size() > 1 ? static_cast<int>(u->commands[1]->type) : -1;
       bool keep = keepsMove(d.type) && IsAlive(u) && !(second >= 0 && second <= 0x1f && !keepsMove(second));
+      // That table is CUnitMoveTask's. A FormMove dispatched with a formation runs a CUnitFormAndMoveTask instead
+      // (DispatchTask 0x608ef0, type 4 at 0x609335: GetFormation 0x6e8a00, then 0x619a90; without one a plain
+      // NewMoveTask 0x6190a0), whose destructor 0x6194e0 clears Moving (0x619529) and calls the navigator's AbortMove
+      // (unit+0x54c vt+0x10, 0x6195c2) whatever the new command is. Seen: MP2 6437, army 1's 28 units on a FormMove
+      // (formation speed 1.19) get a Move with clear from the stream: the original's brake spline is made in the
+      // message (SetWaypoints(0, 0) hands out its first point), the steering of 6438 hands out the second, so the
+      // motion takes two brake steps at once (0.145) and then 0.026, before the new path's batch; ours kept the old
+      // batch at 0.119 per beat.
+      const bool formTask = !u->commands.empty() && u->headState != kNotStarted &&
+                            u->commands.front()->type == CommandType::FormMove && FormationHas(*u->commands.front(), u);
+      if (formTask) keep = false;
       // the stop comes from the running command's task being torn down (its navigator's AbortMove): a unit with an
       // empty queue has none, so nothing touches its motion (seen in the original: an idle CZAR's target layer
       // stays 0 when its first order arrives; CUnitMotion::Stop 0x6b8460 would have made it Air)
@@ -1662,7 +1673,7 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
       // "a standing unit has priority over a mover". When one Stop reaches two neighbours, the first one torn
       // down puts its record on the neighbour that still moves; the neighbour's own teardown wipes that record
       // and, both standing now, the formation rule decides: one of the two brakes hard, not both.
-      if (moveAsleep) SetMoving(u, false);
+      if (moveAsleep || formTask) SetMoving(u, false);
       if (!keep && hadCommands && !stopped) MotionStop(u);
       if (asleep) sim.ResumeCommandThread(u);
       SetMoving(u, false);
