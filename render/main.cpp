@@ -1937,6 +1937,11 @@ int main(int argc, char** argv) {
         live.TakeGroundChanges(&ground);
         if (!ground.empty() && opt.groundChanges) world.ChangeGround(ground);
       }
+      {  // hits, impacts and health changes, for the looks that answer them
+        FrameCombat combat;
+        live.TakeCombat(&combat);
+        world.AddCombat(std::move(combat));
+      }
       CpuTimes::Part("effects");
       effects.Queue(std::move(effectEvents));
       effects.Update(playTick, frame);
@@ -2136,6 +2141,7 @@ int main(int argc, char** argv) {
       if (lights.count) printf("; %d lights", lights.count);
       printf("; textures %.0f MB", static_cast<double>(world.textures.bytes) / (1 << 20));
       if (haveLive) printf("; scenery: %d changes, %d gone, %d made in the game standing, %d props of %d squares gone through; %zu script entities", world.propsChanged, world.propsGone, world.MadeProps(), world.propsAdded, world.propCellsSeen, frame.entities.size());
+      if (haveLive) printf("; %d hits, %d impacts taken (%d, %d shown)", world.hitsTaken, world.impactsTaken, world.hitsShown, world.impactsShown);
       if (opt.focus > 0) printf("; %d buildings remembered, %zu of them gone", world.RememberedCount(), world.rememberedGone.size());
       if (opt.debug) printf("; %d lamps with shadows", world.lampShadowsDrawn);
       if (haveLive && opt.debug) {  // (where to look for them)

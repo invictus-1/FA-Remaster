@@ -200,6 +200,59 @@ void SimFrames::Beat(const moho::Sim& sim) {
     f.text2 = std::move(v.text2);
     events.push_back(std::move(f));
   }
+  // hits, impacts and health changes (render REQUESTS 36), when the simulation keeps them
+  FrameCombat combat;
+  auto seenAt = [&](const float position[3]) {
+    return focusNow <= 0 || (moho::ReconAt(sim, focusNow, position) & moho::kReconSeenNow) != 0;
+  };
+  if (sim.collectHits)
+    for (moho::HitEvent& v : sim.TakeHits()) {
+      FrameHit h;
+      h.tick = sim.tick();
+      h.target = v.target;
+      h.targetKind = v.targetKind;
+      h.shield = v.shield;
+      h.shieldId = v.shieldId;
+      h.instigator = v.instigator;
+      h.army = v.army;
+      h.weapon = std::move(v.weapon);
+      h.projectile = std::move(v.projectile);
+      h.beam = v.beam;
+      h.damageType = std::move(v.damageType);
+      h.amount = v.amount;
+      std::memcpy(h.position, v.position, sizeof h.position);
+      h.radius = v.radius;
+      std::memcpy(h.direction, v.direction, sizeof h.direction);
+      h.seen = seenAt(v.position);
+      combat.hits.push_back(std::move(h));
+    }
+  if (sim.collectImpacts)
+    for (moho::ImpactEvent& v : sim.TakeImpacts()) {
+      FrameImpact m;
+      m.kind = v.kind == moho::ImpactEvent::Beam ? FrameImpact::Beam : v.kind == moho::ImpactEvent::Crash ? FrameImpact::Crash : FrameImpact::Projectile;
+      m.tick = sim.tick();
+      m.type = std::move(v.type);
+      m.source = v.source;
+      m.army = v.army;
+      m.projectile = std::move(v.projectile);
+      m.weapon = std::move(v.weapon);
+      m.entity = v.entity;
+      std::memcpy(m.position, v.position, sizeof m.position);
+      std::memcpy(m.direction, v.direction, sizeof m.direction);
+      m.speed = v.speed;
+      m.seen = seenAt(v.position);
+      combat.impacts.push_back(std::move(m));
+    }
+  if (sim.collectHealth)
+    for (const moho::HealthEvent& v : sim.TakeHealth()) {
+      FrameHealth h;
+      h.tick = sim.tick();
+      h.entity = v.entity;
+      h.kind = v.kind;
+      h.fraction = v.fraction;
+      h.before = v.before;
+      combat.health.push_back(h);
+    }
   e.poseOf.clear();
   for (uint32_t i = 0; i < e.poses.size(); ++i) e.poseOf.emplace(e.poses[i].id, i);
   e.hiddenOf.clear();
@@ -441,6 +494,29 @@ void SimFrames::Beat(const moho::Sim& sim) {
   for (std::string& n : fresh) names_.push_back(std::move(n));
   for (FrameEffectEvent& f : events) effectEvents_.push_back(std::move(f));
   for (FrameGroundChange& g : ground) groundChanges_.push_back(std::move(g));
+  combatKept_[0] = sim.collectHits;
+  combatKept_[1] = sim.collectImpacts;
+  combatKept_[2] = sim.collectHealth;
+  {  // (a taker far behind loses the oldest hits and impacts; an entity's health changes not taken yet are one)
+    auto keep = [](auto& list, auto& more) {
+      for (auto& x : more) list.push_back(std::move(x));
+      if (list.size() > kMostCombat) list.erase(list.begin(), list.begin() + static_cast<std::ptrdiff_t>(list.size() - kMostCombat));
+    };
+    keep(combat_.hits, combat.hits);
+    keep(combat_.impacts, combat.impacts);
+    for (const FrameHealth& h : combat.health) {
+      auto waiting = healthWaiting_.find(h.entity);
+      if (waiting != healthWaiting_.end()) {
+        FrameHealth& was = combat_.health[waiting->second];
+        was.tick = h.tick;
+        was.kind = h.kind;
+        was.fraction = h.fraction;
+        continue;
+      }
+      healthWaiting_.emplace(h.entity, combat_.health.size());
+      combat_.health.push_back(h);
+    }
+  }
   // (a change of a prop that has one waiting, not yet taken, takes its place: a fallen tree sinks a
   // little every beat, and whoever draws only now and then needs where it is, not where it was)
   for (FramePropEvent& f : propEvents) {
@@ -556,6 +632,16 @@ void SimFrames::TakePropEvents(std::vector<FramePropEvent>* out) {
   out->clear();
   out->swap(propEvents_);
   propWaiting_.clear();
+}
+
+void SimFrames::TakeCombat(FrameCombat* out) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  out->clear();
+  std::swap(*out, combat_);
+  healthWaiting_.clear();
+  out->hitsKept = combatKept_[0];
+  out->impactsKept = combatKept_[1];
+  out->healthKept = combatKept_[2];
 }
 
 void SimFrames::TakeEffectEvents(std::vector<FrameEffectEvent>* out) {

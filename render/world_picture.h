@@ -11,6 +11,9 @@
 // Use, with a simulation `sim` and the game's files mounted in `vfs`:
 //   sim.collectEffects = true;                       before the simulation's first beat
 //   sim.collectProps = true;                         the same, for the scenery's changes (wreckage, trees)
+//   sim.collectHits = sim.collectImpacts = sim.collectHealth = true;
+//                                                    the same, for the looks that answer hits (marks on units,
+//                                                    ripples, blast waves; about 1% of a beat's time)
 //   render::WorldPicture picture;
 //   picture.Open(&vfs, "/maps/SCMP_009/SCMP_009.scmap", &error);
 //   picture.GameStarted(sim);                        once the session has started

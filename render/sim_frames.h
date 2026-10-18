@@ -58,6 +58,11 @@ class SimFrames {
   void TakePropEvents(std::vector<FramePropEvent>* out);
   // How the simulation changed the ground's heights in the beats since the last call, in order.
   void TakeGroundChanges(std::vector<FrameGroundChange>* out);
+  // The hits, impacts and health changes of the beats since the last call (`out` is emptied first). Only those the
+  // simulation kept: it must have `collectHits`, `collectImpacts`, `collectHealth` set (each list on its own). A
+  // taker that falls far behind loses the oldest (at most kMostCombat hits and as many impacts are kept).
+  void TakeCombat(FrameCombat* out);
+  static constexpr size_t kMostCombat = 100000;
   // How the blueprints look, once: the list is handed over and this object's is emptied.
   void TakeLooks(std::vector<BlueprintLook>* out);
   // Each army's colour, by army index from 0; empty until ReadArmies.
@@ -97,6 +102,9 @@ class SimFrames {
   std::vector<FrameGroundChange> groundChanges_;  // not yet taken
   size_t groundSeen_ = 0;  // how many of the map's height changes have been read (the simulation's thread only)
   std::unordered_map<uint32_t, size_t> propWaiting_;  // a prop's change among them: its place in the list
+  FrameCombat combat_;                                 // not yet taken
+  bool combatKept_[3] = {false, false, false};         // the simulation's collectHits, collectImpacts, collectHealth
+  std::unordered_map<uint32_t, size_t> healthWaiting_;  // an entity's place in combat_.health
   std::unordered_map<uint32_t, uint32_t> shellSince_, shellSinceNext_;  // projectiles: the beat each was first seen (the simulation's thread only)
   std::vector<std::string> namesForFrames_;     // the drawing side's copy of names_ (what Frame::blueprints points at)
 };

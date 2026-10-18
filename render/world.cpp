@@ -1030,6 +1030,46 @@ void World::ChangeGround(const std::vector<FrameGroundChange>& changes) {
   for (const Rect& d : dirty) terrain.HeightsChanged(d.x0, d.z0, d.x1, d.z1);
 }
 
+void World::AddCombat(FrameCombat&& combat) {
+  hitsTaken += static_cast<int>(combat.hits.size());
+  impactsTaken += static_cast<int>(combat.impacts.size());
+  FrameCombat& p = combatPending_;
+  p.hitsKept = combat.hitsKept;
+  p.impactsKept = combat.impactsKept;
+  p.healthKept = combat.healthKept;
+  // (a host that never adds frames - a menu's picture - must not let them pile up without end)
+  constexpr size_t kMost = 200000;
+  if (p.hits.size() + combat.hits.size() > kMost || p.impacts.size() + combat.impacts.size() > kMost || p.health.size() + combat.health.size() > kMost) {
+    p.hits.clear();
+    p.impacts.clear();
+    p.health.clear();
+  }
+  for (FrameHit& h : combat.hits) p.hits.push_back(std::move(h));
+  for (FrameImpact& m : combat.impacts) p.impacts.push_back(std::move(m));
+  for (const FrameHealth& h : combat.health) p.health.push_back(h);
+}
+
+// Moves what AddCombat gave whose beat the moment shown has reached into combat_, each list's order kept.
+void World::TakeDueCombat(double shown) {
+  auto take = [shown](auto& from, auto& to) {
+    size_t kept = 0;
+    for (size_t i = 0; i < from.size(); ++i) {
+      if (static_cast<double>(from[i].tick) <= shown + 1e-6) to.push_back(std::move(from[i]));
+      else if (kept != i) from[kept++] = std::move(from[i]);
+      else ++kept;
+    }
+    from.resize(kept);
+  };
+  take(combatPending_.hits, combat_.hits);
+  take(combatPending_.impacts, combat_.impacts);
+  take(combatPending_.health, combat_.health);
+  hitsShown += static_cast<int>(combat_.hits.size());
+  impactsShown += static_cast<int>(combat_.impacts.size());
+  combat_.hitsKept = combatPending_.hitsKept;
+  combat_.impactsKept = combatPending_.impactsKept;
+  combat_.healthKept = combatPending_.healthKept;
+}
+
 void World::AddPropEvents(const std::vector<FramePropEvent>& events) {
   for (const FramePropEvent& e : events) propEvents_.push_back(e);
 }
@@ -1096,6 +1136,7 @@ std::string World::MeshFaction(const std::string& mesh) { return render::MeshFac
 
 void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
   auto colorOf = [&](uint32_t army) { return armyColors.empty() ? Vec3{0.6f, 0.6f, 0.6f} : armyColors[army % armyColors.size()]; };
+  TakeDueCombat(static_cast<double>(frame.tick) + frame.blend);  // (hits, impacts, health whose beat is shown now: combat_)
   CpuTimes::Part("units seen first: their files read ahead");
   {  // (their models' files read on the worker threads, all together; the models are made below)
     std::vector<std::string> fresh;
@@ -1534,6 +1575,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     ribbons.PlainBeam({b.start[0], b.start[1], b.start[2]}, {b.end[0], b.end[1], b.end[2]}, c, 0.25f);
   }
   textures.DropFetched();  // (what was read ahead and not used)
+  combat_.clear();         // (handed over above to the looks that answer it: AddCombat)
   CpuTimes::Part(nullptr);
 }
 

@@ -77,6 +77,8 @@ class LiveSim {
   void TakeEffectEvents(std::vector<FrameEffectEvent>* out);
   void TakePropEvents(std::vector<FramePropEvent>* out) { frames_.TakePropEvents(out); }
   void TakeGroundChanges(std::vector<FrameGroundChange>* out) { frames_.TakeGroundChanges(out); }
+  // The hits, impacts and health changes of the beats computed since the last call (SimFrames::TakeCombat).
+  void TakeCombat(FrameCombat* out) { frames_.TakeCombat(out); }
   // How the blueprints look as the simulation has them, once the game has started; handed over once.
   void TakeLooks(std::vector<BlueprintLook>* out) { frames_.TakeLooks(out); }
   // The army the picture is for (from 1; 0: none, everything shows): see SimFrames::SetFocusArmy.
