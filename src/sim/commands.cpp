@@ -1661,7 +1661,12 @@ void IssueClearCommandsTo(Sim& sim, Unit* u) {
   // place, ours was stopped again one second ahead.
   const bool idle = u->commands.empty();
   const bool stopped = HeadTaskStopsMotion(u);
-  const bool undispatched = u->motion.air && !u->commands.empty() && u->headState == kNotStarted;
+  // A head command not dispatched yet has no task, so nothing is torn down and nothing aborts the move, for a land
+  // unit as for an aircraft: its navigator keeps the goal an earlier task left it. Seen: MP2 5684, army 1's 21 Strikers
+  // on a Move get a formation Move with clear from the stream (the old Move's dtor keeps the move: a Move replaces it,
+  // 0x618998), then FAF's DistributeOrders callback clears them (IssueClearCommands) and re-issues the orders: the
+  // original's tanks drive on and turn onto the new paths; ours made brake splines and lost one or two beats.
+  const bool undispatched = !u->commands.empty() && u->headState == kNotStarted;
   const bool loadMove = u->motion.air && !u->commands.empty() && u->headState == kRunning && TransportLoadMoving(u);
   const bool loadWaits = u->motion.air && !u->commands.empty() && u->headState == kRunning && TransportLoadWaiting(u);
   // Nor is a guard that steers itself (its follow goal handed to the navigator directly, no move task): its dtor
