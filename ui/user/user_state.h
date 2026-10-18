@@ -30,6 +30,7 @@ class WorldSource;
 class BackdropSource;
 struct GamePace;
 struct WorldLine;
+struct WorldScene;
 struct WorldRangeGroup;
 struct WorldMeshView;
 struct WorldDecal;
@@ -46,7 +47,7 @@ class UserState {
     std::vector<std::string> protocols;  // the init file's `protocols` table (the schemes OpenURL may open)
     std::vector<std::string> modUids;   // active mods (their /hook folders apply to this state too)
     std::vector<std::string> gameArgs;  // the game's own command line, as GetCommandLineArg sees it
-    std::string prefsFile;              // our preferences file; empty = preferences live in memory only
+    std::string prefsFile;              // our preferences file (main.cpp: --prefs or the default); empty = memory only
     std::string sessionFile;            // where a launched game's configuration is written; empty = to the log
     // Starts a session from the game configuration table at stack index `config` when the lobby
     // launches a game; false with the reason for the script's LaunchFailed. Unset: nothing starts.
@@ -218,12 +219,28 @@ class UserState {
 // Preferences: GetPreference / SetPreference / SavePreferences (prefs.cpp).
 void RegisterPrefsBindings(lua_State* L);
 void LoadPrefs(lua_State* L, const std::string& file);
+// Take over the original game's profiles once, when our preferences file does not exist yet
+// (Chris's decision, 2026-10-12: take over the player's existing profile once, on first start; read
+// his Game.prefs, never write it): `source` (the original's Game.prefs) is read, never written, and of each
+// profile with a name only Name, options, UserKeyMap, UserDebugKeyMap, UserKeyMapName and
+// UserKeyActions go into this state's preferences, with profile.current. Nothing else of it (no
+// mod lists, window places, lobby choices). Returns how many profiles were taken; 0 with the
+// reason when none (the file cannot be read, does not load, its version.major is not 1, or it has
+// no named profile), the preferences then left as they were.
+int ImportPreferences(lua_State* L, const std::string& source, std::string* why);
 // Write that state's preferences to the host's file (SavePreferences() from the engine's side). The
 // original keeps one store for every state and also writes it when a game is launched
 // (func_DoPreload 0x88bee0, USER_SavePreferences 0x8c91a0) and when the program closes
 // (CScApp::Destroy 0x8d0f20); our states each keep a copy, so the host writes at those moments
 // and when a game's state goes (what it changed would be lost with it).
 void SavePreferencesOf(lua_State* L);
+// The text of the game's own /preferences/Game.prefs (moho::kGamePrefsPath, held in memory: sim/session.h),
+// which FAF's /lua/system/Blueprints.lua reads for PreGameData (LoadPreGameData: CurrentMapDir, whose *.bp files
+// load with the rules; IconReplacements): `PreGameData = { ... }` with CurrentMapDir = `mapDir` (the session's
+// map folder, as the lobby writes it: moho::SessionMapFolder) and the rest of what the lobby left in the
+// preferences of L (nullptr: none). Set before the rules load (the original saves its preferences then:
+// DoPreload 0x88bee0).
+std::string PreGameDataText(lua_State* L, const std::string& mapDir);
 // Time, command line, interface state, front-end data, Random (basics.cpp).
 void RegisterBasicBindings(lua_State* L);
 // A script has asked for the program to end (ExitApplication): the host's loops stop after the
@@ -277,6 +294,7 @@ bool CameraListener(lua_State* L, float eye[3], float focus[3], float right[3], 
 void PostCameraShake(const float at[3], float radius, float maxAtMiddle, float minAtRadius, float seconds);
 // The console's cam_ShakeMult (the game's option "Shake intensity", 0 to 1): how much shake.
 void SetCameraShakeMult(float mult);
+float CameraShakeMult();
 // The camera's wheel and keys as the game's Options menu (Controls tab) sets them through the
 // console, defaults the original's (FA exe; the variables' addresses beside them): cam_ZoomAmount
 // (each wheel notch zooms by 2^-amount; "Zoom Wheel Sensitivity" / 100), ui_KeyboardPanSpeed
@@ -340,6 +358,10 @@ struct LookSettings {
   // Ground Detail (the renderer's request 33): grass near the camera, pressed flat round units and buildings; later
   // the remastered ground's decals and battle scars. Off as at first.
   bool groundDetail = false;
+  // Frame Generation (the renderer's request 34; Chris's list of 2026-10-17, item 7): AMD's FSR 3 frame generation,
+  // a picture made between each two drawn ones (twice the frames shown, a little more delay). Needs one sample a
+  // pixel, as FSR 3's upscaler: with the Anti-Aliasing on it does nothing (its tooltip says so). Off as at first.
+  bool frameGeneration = false;
   // Whether the graphics card can ray trace (WorldPicture::RayTracingSupported, asked after a picture opened,
   // the menu's or a game's): -1 not known yet, 0 no, 1 yes.
   int rayTracingSupported = -1;
@@ -404,6 +426,21 @@ struct CustomNameStyle {
   uint32_t setsColor = 0xff00aa00u;
 };
 CustomNameStyle& CustomNames();
+// The command graph's console variables (the order lines while Shift is held; FA exe objects
+// 0xf5aee0..0xf5af80, their values at 0xf57cc0..0xf57cdc), at the exe's defaults. Each time the graph
+// is made (Shift pressed) the game's /lua/ui/game/commandwaypoint.lua CommandWaypointParams writes
+// over them (0x825150: 32, 35, 2, 1, 7, 100, 1, as the stock file has them); the console sets them
+// too (ui_CurveSegments 40 ...). ui_CommandClickScale stays in LookSettings (commandClickScale).
+struct CommandGraphVars {
+  int curveSegments = 20;          // ui_CurveSegments: the points of a leg's curve, less one
+  float curveSmoothness = 50;      // ui_CurveSmoothness: how far the curve bends, in leg widths
+  float pathSmoothness = 2;        // ui_PathSmoothness (the path preview's; the preview is never on)
+  int maxNodeUnits = 1;            // ui_CommandGraphMaxNodeUnits: the most a leg counts for at a node
+  float minWaypointSize = 7;       // ui_MinWaypointSize, pixels (half the mark's side)
+  float maxWaypointSize = 100;     // ui_MaxWaypointSize
+  float waypointLineScale = 1;     // ui_WaypointLineScale: every leg's width times this
+};
+CommandGraphVars& GraphVars();
 // A unit's custom name (nullptr: none or no such unit), its selection sets as the original writes
 // them ("1 3 ": sorted, each with a space after; "" for none), and whether any unit has a name or a
 // set (user_units.cpp).
@@ -485,24 +522,20 @@ uint32_t HoverOf(lua_State* L, uint32_t picked);
 // of the kinds that are selected join the selection; no walls, no building being upgraded).
 void SelectByCategoryCommand(lua_State* L, const std::string& arguments);
 void ExpandCurrentSelection(lua_State* L);
-// For the world's picture: the selected units' entity ids, and the lines of their orders (from
-// each unit to where its orders take it, coloured by the kind of order).
+// For the world's picture: the selected units' entity ids.
 // `ghosts` (may be null): the buildings the player's units, selected or not, have been ordered to
 // build and have not begun, each where it will stand.
 // `queueShown`: the selected units' orders are to be seen (the original shows them while Shift is
-// held): only then `lines` are given, and `queued` (may be null) gets the sites of the buildings
-// in those orders, begun or not.
-// `waypoints` (may be null): the mark of each of those orders at its place, as the game's own table
-// says (/lua/ui/game/commandgraphparams.lua: a texture and a colour per kind of order); the lines
-// take their colour from the same table.
-struct WorldWaypoint {
-  float position[3] = {0, 0, 0};
-  std::string texture;
-  uint32_t color = 0xffffffffu;  // 0xAARRGGBB
-  float scale = 1;
-};
-void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<WorldLine>* lines, std::vector<WorldGhost>* ghosts = nullptr,
-                       bool queueShown = true, std::vector<WorldGhost>* queued = nullptr, std::vector<WorldWaypoint>* waypoints = nullptr);
+// held): only then `queued` (may be null) gets the sites of the buildings in those orders, begun or
+// not. (The lines of the orders: OrderLinesForWorld.)
+void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<WorldGhost>* ghosts = nullptr, bool queueShown = true,
+                       std::vector<WorldGhost>* queued = nullptr);
+// The order lines and their waypoints' marks while Shift is held (`shown`), as the original's
+// command graph works them out (user_units.cpp: the orders of every unit whose orders the interface
+// holds, from the game's commandgraphparams.lua and commandwaypoint.lua): into the scene's
+// orderTextures, orderLegs (highlighted first, then selected, then the rest), orderMarks and
+// orderSettings; empty lists when not shown. `rollover`: the unit under the mouse (0xffffffff: none).
+void OrderLinesForWorld(lua_State* L, bool shown, uint32_t rollover, WorldScene* scene);
 // A build template: buildings that are placed together, each where it stood beside the first
 // (the original's struct_BuildTemplate: 0x823b40, entries of 44 bytes with place, order and
 // blueprint; to scripts {width, height, {blueprint, order, x, z}, ...}: 0x8472f0).
@@ -540,10 +573,11 @@ void UserUnitIds(lua_State* L, bool selectedOnly, std::vector<uint32_t>* ids);
 bool UserUnitFacts(lua_State* L, uint32_t id, std::string* blueprint, float position[3], int* army);
 // Range rings (range_rings.cpp): SetOverlayFilter / SetOverlayFilters; the console variables
 // range_RenderSelected / range_RenderHighlighted / range_RenderBuild (the name in upper case;
-// false: not one of them); and the rings to draw now, given the unit under the mouse
-// (0xffffffff: none) and the building about to be placed (nullptr: none).
+// false: not one of them) and such a variable's value now; and the rings to draw now, given the
+// unit under the mouse (0xffffffff: none) and the building about to be placed (nullptr: none).
 void RegisterRangeBindings(lua_State* L);
 bool RangeConsoleCommand(lua_State* L, const std::string& upperName, const std::string& value);
+bool RangeConsoleValue(lua_State* L, const std::string& upperName, bool* value);
 void RangeRingsForWorld(lua_State* L, uint32_t hover, const WorldGhost* build, std::vector<WorldRangeGroup>* out);
 // The meshes the game's script places in the world (world_meshes.cpp): InternalCreateWorldMesh
 // and its methods, AddCommandFeedbackBlip; and the list to draw now (hidden ones left out, an

@@ -1031,6 +1031,24 @@ folder, as the lobby writes it (also for --session and replays, which have no lo
 lobby left them. Stock maps change nothing (their folders have no .bp). Question for you: the same for moho64
 (oracle, replays), or a fixed answer there? Asked visuals separately whether SETONS_R's props are meant to be
 sim props (46k of them, ~27k category-less scenery). Detail in my scratchpad: setons_run.txt, r_game.log.
+DONE (engine 7e4857e, answer "ui 40" in engine-answers.md): the shared pieces Vfs::MountMemoryFile /
+SetMemoryFile and sim/session.h kGamePrefsPath, SessionMapFolder (Dirname(Options.ScenarioFile), else the map's
+folder), PreGameDataPrefs; moho64 uses them for sessions and replays (the gate's 15 unchanged). Used: moho64ui mounts
+the in-memory Game.prefs before RunInit and sets it at each launch (ui::PreGameDataText: the front state's
+PreGameData with CurrentMapDir overridden). SETONS_R: 0 props without a blueprint; game.lua 218/219 there.
+
+### 41. The simulation's print(...) lines, as a list per beat (for the console)
+From the interface chat, 2026-10-17. Not blocking. The console now hears what the original's CON_Printf gets
+(read by my helper: the log never reaches it; the user state's print does). The simulation's print in the
+original (FA exe 0x74b570) goes to Sim::Printf (0x7462a0), which keeps the line in the simulation (+0xa18); the
+interface's side prints the beat's lines with CON_Printf (0x895260) (INFERRED: that +0xa18 is the list the sync
+carries there). Ours today: the shared script core's print, which logs. Could the simulation keep its print
+lines per beat when asked, like collectSounds (say `sim->collectPrints = true` and `TakePrints()` after a beat),
+the line built as the original's print builds it (arguments joined by ((len-1)&7)+1 spaces, non-strings through
+tostring, a newline ends a line; my helper's PrintLines in ui/user/keymap.cpp has the details)? Lines printed
+while the simulation starts too, if they can be kept until the first take. I'd post them to the console on the
+main thread after each beat. The host does not touch the simulation's state for it (my helper's first version
+set a print function there from the interface; I left that out as it is your layer).
 
 ## To the renderer track
 
@@ -1892,6 +1910,30 @@ extensions, createSurface(VkInstance) -> VkSurfaceKHR, width, height). Wired: th
 gives SDL_Vulkan_GetInstanceExtensions and SDL_Vulkan_CreateSurface; the session calls it for the menu's and the
 game's picture outside Windows.
 
+### 30. Order lines as the original draws them (the command graph): textured ribbons, moving patrol chevrons
+From the interface chat, 2026-10-17. Not blocking; whenever your queue allows (after the 64-bit port is fine).
+Read from the original by my helper (all numbers and addresses: my scratchpad helper_lines\findings.md). Today I
+hand you flat WorldLines of constant pixel width for the selection only. The original, while Shift is held, draws
+EVERY unit's queue (faint when not selected, bright when selected, brighter under the mouse) as flat textured
+ribbons on the ground. What it needs from your side, per leg (I would compute and hand over the rest):
+1. Width in world units = (baseWidth + 2 * max(w(a), w(b))) * 1, where w(p) = world units per screen pixel at p
+   (GeomCamera3's LOD row / viewport width, cam+0x2a4..0x2b0) and baseWidth = min(sqrt(units on the leg), 10).
+   One unit at w 0.1 gives a 12 px strip (~7 px visible: the texture's band is in its alpha).
+2. Curve: a cubic Hermite from a to b with tangents c*ta, c*tb (I give unit tangents; zero = straight),
+   c = min(0.25*|b-a|, 35*width), 33 points; a FLAT ribbon: side = (T.z, 0, -T.x) not renormalized, points
+   P +- side*width/2, V = 0 on the + side, 1 on the - side.
+3. U = 1 - frac((tick + fraction) * animRate) at a, growing by |dP| * uvAspect / width (patrol: repeats every 5
+   widths, moves 12.5 widths a second; only Patrol, FormPatrol, Ferry and FAF's attack-move animate).
+4. Pixel = texture (U wrap, V clamp, linear) x colour; alpha > 0; SrcAlpha / InvSrcAlpha into RGB; NO depth test
+   (lines show through hills and units, as in the original); the first leg drawn owns each pixel (the original's
+   stencil Ref 1 NotEqual Replace; I'd hand them highlight first, then selected, then normal).
+5. Waypoint icons after the legs: a flat square on the ground at the node, half side clamp(size*scale/w, 7, 100)
+   pixels' worth, u along +X, v along +Z, no depth test.
+No arrowheads (the original has them only in a path preview that is never switched on) and no glow pass.
+Proposed scene fields (only while Shift is held, else empty): orderTextures (paths), orderLegs {a, b, ta, tb,
+baseWidth, color, texture index, uvAspect, animRate}, orderMarks {position, texture index, color, size}. Say if you
+would rather I project the ribbons myself and hand you screen triangles, or if a different form suits your batcher.
+
 ## To the visuals track
 
 ### 1. The rebuilt UEF commander for the stock commander too (UEL0001)
@@ -2053,3 +2095,8 @@ branches) in the sim too. Questions: (1) are all of them meant to be sim props, 
 renderer's scatter instead (sim cost: I will measure a game's beat time with and without and add it here)?
 (2) DIRECTION_2026-10-17 says "zero sim impact, the sim checksum must stay stock" - for the terrain and water
 textures only, or for SETONS_R as a whole (its heights and props already differ from stock)?
+ANSWERED (visuals, 2026-10-17): (1) keep all 46,612 as sim props (measured: +0.1 ms a beat, 0.97-1.01 ->
+1.04-1.15 ms; set-up +0.4 s); the scenery to a renderer scatter goes on the optimisation-phase list with a big
+late battle and memory, both unmeasured. (2) DIRECTION's 'zero sim impact' covers the terrain and water look
+work only; SETONS_R has its own sim data since 2026-10-12 (Chris approved). DONE: the host fix landed with the
+engine's shared piece (engine 40).

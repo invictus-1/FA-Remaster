@@ -799,12 +799,12 @@ class WorldView : public Control {
     // orders, and while a building is being placed its ghost where the mouse points (by the
     // picture before this one), green where it can stand.
     WorldScene scene;
-    // (The selected units' orders show while Shift is held, as in the original: the lines from
-    // order to order, and a green outline round the site of every building among them: green as
-    // in Chris's pictures of the original, whose guide for a site is 0xff00ff00 (0x854e52).)
+    // (The selected units' orders show while Shift is held, as in the original: a green outline
+    // round the site of every building among them: green as in Chris's pictures of the original,
+    // whose guide for a site is 0xff00ff00 (0x854e52).)
+    const bool shiftHeld = KeyIsDown(L, kKeyShift);
     std::vector<WorldGhost> ordered, queued;
-    waypoints_.clear();
-    SelectionForWorld(L, &scene.selection, &scene.lines, &ordered, KeyIsDown(L, kKeyShift), &queued, &waypoints_);
+    SelectionForWorld(L, &scene.selection, &ordered, shiftHeld, &queued);
     lap("(the picture's scene: the selection)");
     if (hasSim && !queued.empty()) {
       for (const WorldGhost& site : queued) SiteOutline(L, sim(), site, 0xff10d010u, &scene.lines);
@@ -815,11 +815,18 @@ class WorldView : public Control {
     // The unit under the mouse gets its mark (by the picture before this one), unless the script
     // has switched highlighting off or the mouse is over something else.
     UiManager& mouse = user->ui();
+    uint32_t rollover = 0xffffffffu;
     if (highlight && pixels_ && Looks().selectTolerance >= 0 && ControlAt(mouse, 0, mouse.mouseX, mouse.mouseY) == this) {
       uint32_t under = source->UnitAt(mouse.mouseX - r.x0, mouse.mouseY - r.y0);
       int kind = under != 0xffffffffu ? HoverKindOf(L, under) : 0;
       if (kind) scene.hover = under, scene.hoverKind = kind;
+      rollover = HoverOf(L, under);
     }
+    // The order lines of every unit whose orders the interface holds while Shift is held, and the
+    // marks at their waypoints: the original's command graph (user_units.cpp), the unit under the
+    // mouse (selected or not: the session's rollover unit, session+0x4c0) highlighting its own.
+    OrderLinesForWorld(L, hasSim && shiftHeld, rollover, &scene);
+    lap("(the picture's scene: the order lines)");
     std::string mode, name;
     CommandMode(L, &mode, &name);
     UiManager& ui = user->ui();
@@ -1107,23 +1114,7 @@ class WorldView : public Control {
       target.FillRect({x1, y0, x1 + 1, y1 + 1}, 0xffffffffu);
       target.ClearClip();
     }
-    // The marks of the selected units' orders, each at its order's place (while the queue shows):
-    // the game's own textures for them, at their own size, over the picture.
-    if (waypoints_.empty()) return;
-    WorldSource* source = UserState::From(L)->config().world;
-    target.SetClip(r);
-    for (const WorldWaypoint& mark : waypoints_) {
-      float x = 0, y = 0;
-      if (!source->Project(mark.position, &x, &y)) continue;
-      const Image& image = LoadTexture(ScriptState::From(L)->vfs(), mark.texture);
-      if (!image.valid()) continue;
-      // (At half the texture's size: so large they are in Chris's picture of the original, 2026-10-13.
-      // INFERRED: the original's rule for their size, and whether it goes with the zoom, is not read.)
-      const float w = static_cast<float>(image.width) * mark.scale * 0.5f, h = static_cast<float>(image.height) * mark.scale * 0.5f;
-      const float left = std::floor(r.x0 + x - w / 2), top = std::floor(r.y0 + y - h / 2);
-      target.DrawImage(image, {0, 0, static_cast<float>(image.width), static_cast<float>(image.height)}, {left, top, left + w, top + h}, mark.color);
-    }
-    target.ClearClip();
+    // (The marks of the orders' waypoints are the picture's now: WorldScene::orderMarks.)
   }
 
   // On a minimap: the outline of the ground the main view shows, its four corners joined (a
@@ -1217,7 +1208,6 @@ class WorldView : public Control {
   // pointer (the original's CameraDragger, FA exe 0x86e060: every move goes to the camera's pan,
   // 0x873bd0, in pixels). The original also hides the pointer and holds it in place meanwhile, so
   // that the drag has no end at the screen's edge; here the pointer moves.
-  std::vector<WorldWaypoint> waypoints_;  // the marks of the orders shown with the picture last made
   bool cameraDrag_ = false, miniDrag_ = false;
   // A selection by box under way: from the press to where the mouse is now (drawn as a frame).
   bool selecting_ = false;
@@ -2117,6 +2107,7 @@ void PostCameraShake(const float at[3], float radius, float maxAtMiddle, float m
   if (seconds > 0) g_pendingShakes.push_back({{at[0], at[1], at[2]}, radius, maxAtMiddle, minAtRadius, seconds});
 }
 void SetCameraShakeMult(float mult) { g_shakeMult = std::max(0.0f, mult); }
+float CameraShakeMult() { return g_shakeMult; }
 LookSettings& Looks() {
   static LookSettings looks;
   return looks;
@@ -2124,6 +2115,10 @@ LookSettings& Looks() {
 CustomNameStyle& CustomNames() {
   static CustomNameStyle style;
   return style;
+}
+CommandGraphVars& GraphVars() {
+  static CommandGraphVars vars;
+  return vars;
 }
 StatsOverlay& Overlay() {
   static StatsOverlay overlay;

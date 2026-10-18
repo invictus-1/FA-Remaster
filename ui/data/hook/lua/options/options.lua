@@ -159,14 +159,30 @@ local looks = {
         },
     },
     {
-        -- the renderer's request 33: grass near the camera, pressed flat round units and buildings (later the
-        -- remastered ground's decals and battle scars too)
+        -- the renderer's request 33: grass near the camera, pressed flat round units and buildings; since render
+        -- 23e9550 also the battle's scorches and craters kept on the ground, weathering (up to 2000)
         title = "Ground Detail",
         key = 'remaster_ground_detail',
-        tip = "Grass near the camera, pressed flat round units and buildings.",
+        tip = "Grass and small plants near the camera, sunlight through leaves and grass, and the scorches and craters of battle kept on the ground.",
         type = 'toggle',
         default = 0,
         set = Look("remaster_ground_detail"),
+        custom = {
+            states = {
+                { text = "<LOC _Off>", key = 0 },
+                { text = "<LOC _On>", key = 1 },
+            },
+        },
+    },
+    {
+        -- the renderer's request 34 (Chris's list of 2026-10-17, item 7): AMD's FSR 3 frame generation; like
+        -- Temporal Upscaling it needs one sample a pixel, so with the Anti-Aliasing on it does nothing
+        title = "Frame Generation",
+        key = 'remaster_frame_generation',
+        tip = "Shows a frame made between each two drawn ones: twice the frames, a little more delay. Best when the game already runs at 60 or more. Needs anti-aliasing off (or Temporal Upscaling on).",
+        type = 'toggle',
+        default = 0,
+        set = Look("remaster_frame_generation"),
         custom = {
             states = {
                 { text = "<LOC _Off>", key = 0 },

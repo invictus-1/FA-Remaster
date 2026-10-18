@@ -59,6 +59,9 @@ class ScriptState {
   // Called for every Register*Blueprint(bp) with the blueprint table at stack index 1.
   std::function<void(lua_State*, const char* kind)> onRegisterBlueprint;
   std::function<void()> onLoaderProgress;
+  // Called by print(...) with the text tostring gave each argument; true = the line is kept (the log gets none of
+  // it). Unset or false: print logs as LOG does. It must not touch the Lua state. (Sim: Sim::collectPrints.)
+  std::function<bool(const std::vector<std::string>& args)> onPrint;
 
  private:
   lua_State* L_ = nullptr;

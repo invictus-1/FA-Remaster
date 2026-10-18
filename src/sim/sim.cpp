@@ -1059,6 +1059,12 @@ bool Sim::Start(const ReplayHeader& replay) {
   lua_pushlightuserdata(L, this);
   lua_rawset(L, LUA_REGISTRYINDEX);
   lua_setextra(L, 1, this);
+  // print(...): its lines kept for the host while collectPrints is set (sim.h; KeepPrint below)
+  state_->onPrint = [this](const std::vector<std::string>& args) {
+    if (!collectPrints) return false;
+    KeepPrint(args);
+    return true;
+  };
   threads_ = std::make_unique<ThreadScheduler>(L);
   RegisterSimClasses(L);
   RegisterThreadBindings(L, threads_.get());
@@ -1357,6 +1363,10 @@ void Sim::CreateMapProps() {
   if (missing) Logf(LogLevel::Debug, "moho64: %d map props have no blueprint", missing);
 }
 
+void Sim::SignalEvent(const ScriptObject* o) {
+  if (threads_) threads_->Signal(o);
+}
+
 void Sim::QueueDestroy(Entity* e) {
   if (e->destroyQueued) return;
   e->destroyQueued = true;
@@ -1419,7 +1429,6 @@ void Sim::ProcessDestroyQueue() {
       Unit* u = static_cast<Unit*>(e);
       ReleaseUnitCombat(*this, u);
       UnitEconomyRelease(u);
-      ReleaseStructure(*this, u);
       RemoveUnitFromLists(u);
     }
     if (e->kind == Entity::Kind::Unit && e->army) e->army->unitCost -= static_cast<Unit*>(e)->capCost;
@@ -1438,6 +1447,10 @@ void Sim::ProcessDestroyQueue() {
     if (e->kind == Entity::Kind::Unit) {
       Unit* u = static_cast<Unit*>(e);
       ForgetUnitCommands(u);
+      // ~Unit's ReleaseOccupyGround 0x6a7ab0 (0x6a6de3) comes after its queue is cleared (0x6a6c66): a failed upgrade's
+      // dtor re-occupies the builder's cells first (sim/build.cpp), and a builder that still counts as occupying ground
+      // then frees them
+      ReleaseStructure(*this, u);
       // ~Unit's army statistics (0x6a6de8): a finished unit of a blueprint with CapCost > 0 leaves "Units_Active" (its
       // blueprint's value - 1, the item - 1 as an int, 0x6a6e13), a construction leaves "Units_BeingBuilt" (its
       // blueprint's value - 1, 0x6a6e84)
@@ -1736,6 +1749,43 @@ std::vector<std::string> Sim::TakeSync() {
   return out;
 }
 
+// The lines of one print(...) call (ui REQUESTS 41), as the original's sim print makes them: 0x74b570 calls
+// SCR_ConcatArgsAndCall (0x4cd740) with the separator 9 and the sink 0x74b550, which hands each line to
+// Sim::Printf(sim, "%s", line) (0x7462a0: STR_Va, then a push on sim+0xa18; no log). SCR_ConcatArgsAndCall: the
+// arguments in order (lua_gettop 0x90c590), before each but the first the separator through the character step;
+// an argument for which lua_isstring holds (a string or a number) is read with lua_tostring (0x90ca90), any other
+// through the global tostring (looked up once per call, 0x4d42c0 "tostring"; LuaFunction::Call_Object_Str
+// 0x4d4ba0); each character up to the text's NUL through the character step (0x4cd680, unsigned: movzx); at the
+// end a line that is not empty goes to the sink. The character step (0x4cd680): '\n' gives the line to the sink,
+// empty or not, and clears it (0x4cd688..0x4cd6b7); '\t' appends ((length - 1) & 7) + 1 spaces (0x4cd6c1); 0x20 and
+// up is appended (0x4cd6e1); any other is formatted with 0xe09aec, which is "\t" (09 00), and appended as it is.
+// Here the arguments come as tostring's texts (core_bindings.cpp's print: the text of a string or number is the
+// same; it keeps the Lua calls of today's print), and the lines are built in C++ alone.
+void Sim::KeepPrint(const std::vector<std::string>& args) {
+  std::string line;
+  auto put = [&](unsigned char c) {
+    if (c == '\n') {
+      prints_.push_back(line);
+      line.clear();
+    } else if (c == '\t') {
+      line.append(((line.size() - 1) & 7) + 1, ' ');
+    } else {
+      line.push_back(c >= 0x20 ? static_cast<char>(c) : '\t');
+    }
+  };
+  for (size_t i = 0; i < args.size(); ++i) {
+    if (i > 0) put('\t');
+    for (const char* p = args[i].c_str(); *p; ++p) put(static_cast<unsigned char>(*p));
+  }
+  if (!line.empty()) prints_.push_back(line);
+}
+
+std::vector<std::string> Sim::TakePrints() {
+  std::vector<std::string> out;
+  out.swap(prints_);
+  return out;
+}
+
 // The setup's own Sync, the original's "beat 0" (ui REQUESTS 33). The sim thread, CSimDriver::ThreadCreateSim
 // 0x73d260, makes the sim (0x73d4a0: FAF 0x129142c -> Sim::Create 0x7433b0; simInit.lua, SetupSession, the armies,
 // BeginSession with the map's OnPopulate and OnStart) and then, before its beat loop and before any command, runs
@@ -1895,13 +1945,20 @@ void Sim::Tick() {
     // beat after its own turn (a Loyalist's death stun) is held for (int)(seconds * 10) of its turns, and its weapons,
     // which run before the entity stage, fire again in the beat after the count reached 0.
     if (u->stunned > 0) --u->stunned;
-    if (!u->beingBuilt) FuelTick(*this, u);  // CUnitMotion::ProcessFuelLevels (attached units too)
     if (u->parentId && u->attachFull) {  // transport cargo: after every unit moved
+      if (!u->beingBuilt) FuelTick(*this, u);  // CUnitMotion::ProcessFuelLevels (attached units too)
       UnitEconomyTick(*this, u);
       continue;
     }
     if (!u->guarders.empty() && !u->guardForm) UpdateGuardFormation(*this, u);  // MotionTick order
     UpdateInfoCache(*this, u);  // formation fields and the speed cap
+    // CUnitMotion::ProcessFuelLevels 0x6b9940 runs inside CUnitMotion::MotionTick (0x6b9e83), which Unit::MotionTick
+    // calls (0x6a908c) after UpdateInfoCache 0x6a9810 (0x6a9069): the unit+0x594 top speed of this beat is taken
+    // before a script's OnRunOutOfFuel / OnGotFuel (0x6b9a31 / 0x6b9cd9) changes the speed multiplier, and shows it
+    // a beat later. Seen: MP3 5356, army 1's interceptor 0x100023 (ura0102) runs dry while landing; FAF's
+    // AirUnit.OnRunOutOfFuel sets SetSpeedMult(0.35); the original's top speed is 15 in that beat, 5.25 from the
+    // next; ours took 5.25 at once.
+    if (!u->beingBuilt) FuelTick(*this, u);
     const Quat prevOri = u->orientation;
     // A parent that no longer exists holds nothing (AttachParentGone): the unit goes back to its own motion on the
     // Air layer, although it still shows state Attached. Seen: a dead aircraft sinking on FAF's sinker projectile;

@@ -3,7 +3,9 @@
 // The original keeps the preferences on the engine side and hands scripts copies: a key is a
 // dotted path ("profile.profiles.1.options"), a value is a number, string, boolean or a table of
 // those. Its file (Game.prefs) is a Lua file of top-level assignments. We keep that form but never
-// read or write the original game's file: ours is the file the host names, or memory only.
+// write the original game's file: ours is the file the host names, or memory only. The original's
+// file is read once, read-only, when ours does not exist yet: its profiles' names, options and key
+// bindings are taken over (ImportPreferences, below).
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -259,7 +261,146 @@ int l_SavePreferences(lua_State* L) {
   return 0;
 }
 
+// Run a preferences file's text as a chunk of top-level assignments with a new table as its
+// environment: true with that table pushed, false with the reason. The chunk can reach nothing
+// else (no globals).
+bool RunPrefsChunk(lua_State* L, const std::string& src, const std::string& chunkName, std::string* why) {
+  const int top = lua_gettop(L);
+  if (luaL_loadbuffer(L, src.data(), src.size(), chunkName.c_str()) != 0) {
+    *why = lua_isstring(L, -1) ? lua_tostring(L, -1) : "?";
+    lua_settop(L, top);
+    return false;
+  }
+  lua_newtable(L);
+  lua_pushstring(L, "_G");  // keys that are not identifiers are written as _G["key"]
+  lua_pushvalue(L, -2);
+  lua_rawset(L, -3);
+  lua_pushvalue(L, -1);
+  lua_setfenv(L, -3);
+  lua_insert(L, -2);  // env, chunk
+  if (lua_pcall(L, 0, 0, 0) != 0) {
+    *why = lua_isstring(L, -1) ? lua_tostring(L, -1) : "?";
+    lua_settop(L, top);
+    return false;
+  }
+  lua_pushstring(L, "_G");
+  lua_pushnil(L);
+  lua_rawset(L, -3);
+  return true;
+}
+
+// What is taken over of each of the original's profiles: its name, its options (the Options
+// dialog's values) and its key bindings. The keys as the game's scripts use them: Name and
+// options (/lua/user/prefs.lua: CreateProfile, GetOption; the original's exe itself looks for
+// "profile.profiles" and each one's "Name", FA exe 0x8c8760, its /profile option), UserKeyMap and
+// UserDebugKeyMap (the bindings the player changed), UserKeyMapName (the preset they start from)
+// and UserKeyActions (actions of his own) (/lua/keymap/keymapper.lua).
+struct ProfileField {
+  const char* key;
+  int type;
+};
+const ProfileField kProfileFields[] = {{"Name", LUA_TSTRING},          {"options", LUA_TTABLE},
+                                       {"UserKeyMap", LUA_TTABLE},     {"UserDebugKeyMap", LUA_TTABLE},
+                                       {"UserKeyMapName", LUA_TSTRING}, {"UserKeyActions", LUA_TTABLE}};
+
 }  // namespace
+
+int ImportPreferences(lua_State* L, const std::string& source, std::string* why) {
+  // (hostfs::ReadFile opens the file for reading only: the original's file stays as it is.)
+  auto src = hostfs::ReadFile(source);
+  if (!src) {
+    *why = "the file cannot be read";
+    return 0;
+  }
+  const int top = lua_gettop(L);
+  if (!RunPrefsChunk(L, *src, "@" + hostfs::DisplayPath(source), why)) return 0;
+  const int env = lua_gettop(L);
+  // The original keeps a file only when its version.major is 1 (FA exe 0x8c8e63, in the loader
+  // 0x8c89d0; another is put aside as ".bad"): one it would not use is not taken over either.
+  lua_pushstring(L, "version");
+  lua_rawget(L, env);
+  bool goodVersion = false;
+  if (lua_istable(L, -1)) {
+    lua_pushstring(L, "major");
+    lua_rawget(L, -2);
+    goodVersion = lua_isnumber(L, -1) && lua_tonumber(L, -1) == 1;
+    lua_pop(L, 1);
+  }
+  lua_pop(L, 1);
+  if (!goodVersion) {
+    *why = "its version.major is not 1 (the original would not load it either)";
+    lua_settop(L, top);
+    return 0;
+  }
+  lua_pushstring(L, "profile");
+  lua_rawget(L, env);
+  const int profile = lua_gettop(L);
+  if (lua_istable(L, profile)) {
+    lua_pushstring(L, "profiles");
+    lua_rawget(L, profile);
+  }
+  if (!lua_istable(L, profile) || !lua_istable(L, -1)) {
+    *why = "it has no profiles";
+    lua_settop(L, top);
+    return 0;
+  }
+  const int profiles = lua_gettop(L);
+  lua_pushstring(L, "current");
+  lua_rawget(L, profile);
+  const int current = lua_isnumber(L, -1) ? static_cast<int>(lua_tonumber(L, -1)) : 0;
+  lua_pop(L, 1);
+  // The profiles in their order, each with the fields above only; one without a name (which the
+  // game's profile dialog could not list) is left out, and `current` follows its profile.
+  lua_newtable(L);
+  const int taken = lua_gettop(L);
+  int count = 0, newCurrent = 0;
+  const int n = luaL_getn(L, profiles);
+  for (int i = 1; i <= n; ++i) {
+    lua_rawgeti(L, profiles, i);
+    const int one = lua_gettop(L);
+    bool named = false;
+    if (lua_istable(L, one)) {
+      lua_pushstring(L, "Name");
+      lua_rawget(L, one);
+      named = lua_type(L, -1) == LUA_TSTRING && lua_strlen(L, -1) > 0;
+      lua_pop(L, 1);
+    }
+    if (named) {
+      lua_newtable(L);
+      for (const ProfileField& f : kProfileFields) {
+        lua_pushstring(L, f.key);
+        lua_rawget(L, one);
+        if (lua_type(L, -1) == f.type) {
+          lua_pushstring(L, f.key);
+          PushCopy(L, -2);
+          lua_rawset(L, -4);
+        }
+        lua_pop(L, 1);
+      }
+      lua_rawseti(L, taken, ++count);
+      if (i == current) newCurrent = count;
+    }
+    lua_settop(L, one - 1);
+  }
+  if (count == 0) {
+    *why = "it has no profile with a name";
+    lua_settop(L, top);
+    return 0;
+  }
+  // Into this state's preferences (empty at a first start): only `profile` is set.
+  PushPrefs(L);
+  lua_pushstring(L, "profile");
+  lua_newtable(L);
+  lua_pushstring(L, "current");
+  lua_pushnumber(L, static_cast<lua_Number>(newCurrent ? newCurrent : 1));
+  lua_rawset(L, -3);
+  lua_pushstring(L, "profiles");
+  lua_pushvalue(L, taken);
+  lua_rawset(L, -3);
+  lua_rawset(L, -3);
+  lua_settop(L, top);
+  return count;
+}
 
 void SavePreferencesOf(lua_State* L) {
   UserState* us = UserState::From(L);
@@ -277,6 +418,36 @@ void SavePreferencesOf(lua_State* L) {
   if (!hostfs::WriteFile(file, out)) Logf(LogLevel::Warning, "moho64ui: cannot write preferences to %s", file.c_str());
 }
 
+std::string PreGameDataText(lua_State* L, const std::string& mapDir) {
+  lua_State* S = L ? L : lua_open();  // (no state: a table of its own is enough)
+  const int top = lua_gettop(S);
+  lua_newtable(S);
+  if (L) {
+    PushPrefs(S);
+    lua_pushstring(S, "PreGameData");
+    lua_rawget(S, -2);
+    if (lua_istable(S, -1)) {
+      lua_pushnil(S);
+      while (lua_next(S, -2)) {
+        lua_pushvalue(S, -2);
+        lua_insert(S, -2);
+        lua_rawset(S, top + 1);
+      }
+    }
+    lua_pop(S, 2);
+  }
+  lua_pushstring(S, "CurrentMapDir");
+  lua_pushstring(S, mapDir.c_str());
+  lua_rawset(S, top + 1);
+  std::string out = "PreGameData = ";
+  WriteValue(S, top + 1, 0, out);
+  out += "\n";
+  lua_settop(S, top);
+  if (!L) lua_close(S);
+  Logf(LogLevel::Debug, "moho64ui: the game's PreGameData: CurrentMapDir %s", mapDir.c_str());
+  return out;
+}
+
 // The file is a chunk of top-level assignments: run it with a new table as its environment, and
 // that table is the preferences. The chunk can reach nothing else (no globals).
 void LoadPrefs(lua_State* L, const std::string& file) {
@@ -286,26 +457,11 @@ void LoadPrefs(lua_State* L, const std::string& file) {
     return;
   }
   int top = lua_gettop(L);
-  if (luaL_loadbuffer(L, src->data(), src->size(), ("@" + file).c_str()) != 0) {
-    Logf(LogLevel::Warning, "moho64ui: preferences not read: %s", lua_tostring(L, -1));
-    lua_settop(L, top);
+  std::string why;
+  if (!RunPrefsChunk(L, *src, "@" + file, &why)) {
+    Logf(LogLevel::Warning, "moho64ui: preferences not read: %s", why.c_str());
     return;
   }
-  lua_newtable(L);
-  lua_pushstring(L, "_G");  // keys that are not identifiers are written as _G["key"]
-  lua_pushvalue(L, -2);
-  lua_rawset(L, -3);
-  lua_pushvalue(L, -1);
-  lua_setfenv(L, -3);
-  lua_insert(L, -2);  // env, chunk
-  if (lua_pcall(L, 0, 0, 0) != 0) {
-    Logf(LogLevel::Warning, "moho64ui: preferences not read: %s", lua_tostring(L, -1));
-    lua_settop(L, top);
-    return;
-  }
-  lua_pushstring(L, "_G");
-  lua_pushnil(L);
-  lua_rawset(L, -3);
   lua_pushstring(L, kPrefsKey);
   lua_insert(L, -2);
   lua_rawset(L, LUA_REGISTRYINDEX);

@@ -33,6 +33,7 @@ namespace combat {
 Vec3 TargetPos(Sim& sim, const AiTarget& t, bool centre);
 bool IsAlly(const Army* a, const Army* b);
 bool TerrainSegmentHit(const TerrainMap* map, Vec3 p0, Vec3 p1, float* dist, Vec3* hit);
+bool WaterPlaneSegmentHit(Vec3 p0, Vec3 p1, float water, float* dist, Vec3* hit);
 }
 
 // The transport tasks' own state (kept with the BuildTask).
@@ -720,15 +721,18 @@ bool LandBallisticTick(Sim& sim, Unit* u) {
   float tHit = -1;
   // CalcMoveBallistic 0x6c0290: the step as a segment (0x4fe130) against the terrain (STIMap::Intersection
   // 0x476f30, the line test the projectiles use); the unit lands ON the point it returns and the step's scale is
-  // the hit distance over the segment's length (0x6c0896). Where the point is under water (0x577bc0 then takes
-  // the water plane) the march below still does it.
+  // the hit distance over the segment's length (0x6c0896). On a map with water a unit that is not amphibious asks
+  // STIMap::SurfaceIntersection 0x577bc0: a terrain point under the water, or none, gives way to the water plane
+  // (combat::WaterPlaneSegmentHit) and nothing else is tried; the march below is left for the other cases.
   bool exact = false;
   Vec3 hitP{};
+  const bool waterPlane = !amph && map && map->hasWater;
   {
     const Vec3 E{P0.x + v2.x, P0.y + v2.y, P0.z + v2.z};
     float d = 0;
     Vec3 h{};
-    if (combat::TerrainSegmentHit(map, P0, E, &d, &h) && (amph || !(map && map->hasWater) || h.y >= water)) {
+    const bool th = combat::TerrainSegmentHit(map, P0, E, &d, &h);
+    if ((th && (!waterPlane || h.y >= water)) || (waterPlane && combat::WaterPlaneSegmentHit(P0, E, water, &d, &h))) {
       const Vec3 hv{(E.x - P0.x) * 0.5f, (E.y - P0.y) * 0.5f, (E.z - P0.z) * 0.5f};
       const float ext = std::sqrt(hv.y * hv.y + hv.z * hv.z + hv.x * hv.x);
       exact = true;
@@ -736,7 +740,7 @@ bool LandBallisticTick(Sim& sim, Unit* u) {
       tHit = d / (ext * 2.0f);
     }
   }
-  const int N = 16;
+  const int N = waterPlane ? 0 : 16;
   for (int i = 1; i <= N && !exact; ++i) {
     float t = static_cast<float>(i) / N;
     float dfy = (P0.y + v2.y * t) - surf(P0.x + v2.x * t, P0.z + v2.z * t);
@@ -773,6 +777,9 @@ bool LandBallisticTick(Sim& sim, Unit* u) {
     }
     if (u->dead) {
       lua_pushstring(L, layer == "Land" ? "Terrain" : "Water");
+      if (sim.collectImpacts)  // (a host's list, render REQUESTS 36; reads only: where it lands, the fall's speed)
+        RecordImpact(sim, 2, u, layer == "Land" ? "Terrain" : "Water", nullptr, P1,
+                     Vec3{v2.x * 10.0f, v2.y * 10.0f, v2.z * 10.0f});
       sim.CallMethod(L, u, "OnImpact", 1);
     } else {
       m.needSnap = true;

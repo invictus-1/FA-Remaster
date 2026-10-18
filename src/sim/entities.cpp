@@ -654,7 +654,11 @@ int l_SetHealth(lua_State* L) {  // SetHealth(instigator, health) = AdjustHealth
   return 0;
 }
 int l_SetMaxHealth(lua_State* L) {  // only the maximum (the original does not clamp the health)
-  E(L)->maxHealth = static_cast<float>(luaL_checknumber(L, 2));
+  Entity* e = E(L);
+  const float beforeMax = e->maxHealth;
+  e->maxHealth = static_cast<float>(luaL_checknumber(L, 2));
+  if (Sim* sim = S(L); sim && sim->collectHealth && e->maxHealth != beforeMax)  // (a host's list; reads only)
+    RecordHealth(*sim, e, e->health, beforeMax);
   return 0;
 }
 int l_AdjustHealth(lua_State* L) {  // AdjustHealth(instigator, delta)
@@ -1166,7 +1170,9 @@ void EntityAdjustHealth(lua_State* L, Entity* e, Entity* /*instigator*/, float a
   float inv = 1.0f / e->maxHealth;
   float qNew = std::floor(inv * h * 4.0f) * 0.25f;
   float qOld = std::floor(inv * e->health * 4.0f) * 0.25f;
+  const float before = e->health;
   e->health = h;
+  if (Sim* sim = S(L); sim && sim->collectHealth) RecordHealth(*sim, e, before, e->maxHealth);  // (a host's list; reads only)
   if (qNew != qOld && e->HasLuaObject()) {
     lua_pushnumber(L, qNew);
     lua_pushnumber(L, qOld);
@@ -1729,6 +1735,7 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
       UnitWeapon* w = wowned.get();
       w->unit = u;
       w->index = static_cast<int>(u->weapons.size()) + 1;
+      w->bpIndex = i;
       w->label = label;
       lua_pushvalue(L, wbp);
       w->bpRef = luaL_ref(L, LUA_REGISTRYINDEX);

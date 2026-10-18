@@ -149,6 +149,8 @@ class GameSession {
   // FinishLoad makes it the running session (its picture opens) or gives the reason it failed.
   // Loading(): from the launch call until FinishLoad (the front end's WorldIsLoading()).
   bool LoadDue() const { return load_ == Load::Due; }
+  // The folder of the map being launched ("/maps/SETONS_R"; empty when no launch is due or loading).
+  std::string LoadingMapFolder() const;
   bool Loading() const { return load_ != Load::None; }
   void BeginLoad();
   bool LoadDone() const;

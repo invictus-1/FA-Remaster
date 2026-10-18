@@ -314,13 +314,19 @@ bool UnitCanBuild(const Unit* u, const BlueprintInfo& bp) {
 }
 
 // A structure enters / leaves the occupancy grid.
-void OccupyStructure(Sim& sim, Unit* u) {
+// Unit::ExecuteOccupyGround 0x6a7770: the footprint's cells at the unit's place go on in the occupancy grid. It leaves
+// the "occupies ground" byte +0x560 alone (no write to it in 0x6a7770): Unit::Unit sets that after its call (0x6a5f71).
+void ExecuteOccupyGround(Sim& sim, Unit* u) {
   if (!u->bpData || !u->bpData->structure || !u->blueprint) return;
-  if (BpInCategory(sim, u->blueprint, "FERRYBEACON")) return;  // Unit::Unit skips ExecuteOccupyGround
   const NamedFootprint& fp = Footprint(*u->blueprint);
   int ox = RoundEven(u->position.x - fp.sizeX * 0.5f), oz = RoundEven(u->position.z - fp.sizeZ * 0.5f);
   sim.navigation().AddStructure(EntityRef(u), ox, oz, ox + fp.sizeX, oz + fp.sizeZ, fp.caps);
   LandNavDirty(sim, ox, oz, ox + fp.sizeX, oz + fp.sizeZ);
+}
+void OccupyStructure(Sim& sim, Unit* u) {
+  if (!u->bpData || !u->bpData->structure || !u->blueprint) return;
+  if (BpInCategory(sim, u->blueprint, "FERRYBEACON")) return;  // Unit::Unit skips ExecuteOccupyGround
+  ExecuteOccupyGround(sim, u);
   u->occupiesGround = true;  // (0x6a5f71)
 }
 void ReleaseStructure(Sim& sim, Unit* u) {
@@ -535,6 +541,7 @@ void MoveTaskWalk(Sim& sim, Unit* u, const Vec3& goal) {
   const NamedFootprint& fp = Footprint(*u->blueprint);
   const int x0 = RoundEven(p.x - fp.sizeX * 0.5f), z0 = RoundEven(p.z - fp.sizeZ * 0.5f);
   TaskMoveToward(sim, u, Vec3{x0 + fp.sizeX * 0.5f, p.y, z0 + fp.sizeZ * 0.5f});
+  u->walkPrepared = true;  // (+0x95)
   const int r[4] = {x0, z0, x0 + fp.sizeX, z0 + fp.sizeZ};
   GroundReserveRect(sim, u, r);
   // and at its end (0x6186a1) Unit::UpdateSpeedThroughStatus 0x6ac940: a patrol with points queued behind it walks
@@ -774,15 +781,17 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
   // engineer walking to a site prop that another took away walks on to its spot in the original.
   if (c.moving && c.state == 1 && u->motion.hasGoal && !u->motion.arrived && !u->motion.failed) return kTaskRunning;
   // A walk under way when the command listener 0x620160 set state 0 and woke the thread: the walk's CUnitMoveTask
-  // (NewMoveTask 0x61f4c0 with no command: it does not listen itself) sits on top of the thread, so it is what the
-  // wake runs; its TaskTick 0x618a70 returns -1 and its dtor 0x618700 clears Moving (0x6187bd) and calls the
-  // navigator's AbortMove (0x618886); then this task runs state 0 in the same pass. Seen: MP1 2040, the player drags
-  // army 0's factory rally point while its engineer 0xb walks to a rock for the rally AggressiveMove; at 2041 the
-  // original's engineer is neither Moving nor Reclaiming (the dragged point is in sight: the task ends), ours walked
-  // on and reclaimed the rock from 2041 to 2043.
+  // (NewMoveTask 0x61f4c0; it links the queue's head command itself, probe mp1_2701, and re-goals on the event) sits
+  // on top of the thread, so it is what the wake runs; its TaskTick 0x618a70 returns -1 and its dtor 0x618700 clears
+  // Moving (0x6187bd) and calls the navigator's AbortMove (0x618886); then this task runs state 0 in the same pass.
+  // Seen: MP1 2040, the player drags army 0's factory rally point while its engineer 0xb walks to a rock for the rally
+  // AggressiveMove; at 2041 the original's engineer is neither Moving nor Reclaiming (the dragged point is in sight:
+  // the task ends), ours walked on and reclaimed the rock from 2041 to 2043.
   if (c.moving && c.state == 0) {
     c.moving = false;
     EndWalk(u);
+    // (and the dtor frees the o-grid rect its ctor reserved for a rally-overridden walk, +0x92: 0x618891)
+    if (u->walkPrepared) GroundFreeRect(sim, u);
   }
   // A task without an entity (+0x4c, ReclaimTaskCommandEvent). Every Execute first asks the army's recon
   // (0x61f02e..0x61f087: IArmy vt+0x20 GetReconDB, its vt+0x10 ReconCanDetect 0x5c1850 with LOSNow 8; under water by
@@ -981,10 +990,16 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
         const float h = tu->maxHealth * m;
         if (h != tu->health) EntityAdjustHealth(L, tu, u, h - tu->health);
       } else {
+        // a prop (0x61ff52..0x61ffbe): Prop::Materialize 0x6fa180 by the step, which moves the fraction only
+        // (clamped to [0, 1]; the step is negative) and gives back the change; the prop's health stays as it is. FAF's
+        // Prop.UpdateReclaimLeft counts health / MaxHealth x fraction, so a tree group partly reclaimed and then split
+        // (TreeGroup.OnDamage -> Breakup -> SplitOnBonesByName) hands its fraction to its trees once, not twice. Seen:
+        // MP1 3218, army 3's engineer 0x20001a reclaims a split tree (pine06_big_s3) in one beat: the original pays
+        // 1.0714 E 0.1071 M, ours paid 0.2009 E 0.0201 M, 0.1875 = 3/16 times less again (inferred: its group had 3
+        // of 16 steps left when it split, and ours had brought the group's health down with its fraction, so the
+        // script's ReclaimLeft was 0.1875 x 0.1875). Its ally army 5 gets half of army 3's overflowing energy.
         f = std::clamp(old - c.reclaimStep * k, 0.0f, 1.0f);
         e->fractionComplete = f;
-        float h = e->maxHealth * f;
-        if (h != e->health) EntityAdjustHealth(L, e, u, h - e->health);
       }
       float taken = old - f;
       u->workProgress = 1.0f - f;
@@ -2209,6 +2224,12 @@ Unit* FactoryOf(Sim& sim, Unit* t) {  // a unit being built inside a factory: th
 
 // TaskTick 0x5f9370. "return 0" (go on in the same dispatch) is the loop; return 1 / 10 wait.
 int TickRepair(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
+  // a walk under way when the command's event set state 0 (GuardRepairChildrenCommandEvent): the woken move task ends
+  if (t.moving && t.state == 0) {
+    t.moving = false;
+    EndWalk(u);
+    if (u->walkPrepared) GroundFreeRect(sim, u);  // (the dtor's +0x92 free, 0x618891)
+  }
   if (t.moving) {  // the move child: the task runs again when it ends
     if (u->motion.hasGoal) return kTaskRunning;
     t.moving = false;
@@ -2848,6 +2869,67 @@ void RefreshGuardTasks(Sim& sim, UnitCommand& c) {
   }
 }
 
+// The same SetTarget event (0x6e8820 -> 0x6e94a0) reaches the repair child of a guard, which listens to the guard's
+// command too (CUnitRepairTask's OnEvent 0x5f9d60, ids_repair_placement.md 2.4: its work target dropped with
+// OnStopBuild(true), target := the command's target unit, noMove = 0, state 0, the thread woken), and that child's walk
+// (a CUnitMoveTask, which links the queue's head command itself: woken, its TaskTick returns -1 and its dtor aborts the
+// move; TickRepair ends it). Seen (probe mp1_2701): MP1 2701, army 7's engineers guard the upgrading mex 0x700005 on
+// one Guard; when the upgrade is done another engineer's guard retargets the command, and 0x700019's repair walk ends
+// at once (CUnitMoveTask::OnEvent 0x618c40, its dtor's AbortMove 0x618886); the repair task runs state 0 on the
+// finished unit and ends, and the guard, with more Guards queued, ends as well (3 -> 2). Ours walked on.
+void GuardRepairChildrenCommandEvent(Sim& sim, UnitCommand& c, Unit* self) {
+  if (c.type != CommandType::Guard) return;
+  lua_State* L = sim.L();
+  std::vector<Unit*> holders(c.units.begin(), c.units.end());
+  std::sort(holders.begin(), holders.end(), [](const Unit* a, const Unit* b) { return a->id < b->id; });
+  for (Unit* h : holders) {
+    if (h == self || !Alive(h) || h->commands.empty() || h->commands.front().get() != &c) continue;
+    BuildTask* gt = h->task;
+    if (!gt || !gt->gdata || !gt->gdata->child || gt->gdata->child->type != CommandType::Repair) continue;
+    BuildTask& ch = *gt->gdata->child;
+    const bool asleep = TaskThreadAsleepOnMove(h, &ch);  // (asked before the event changes the child)
+    if (ch.workId) {
+      if (Unit* w = FindUnitAny(sim, ch.workId)) w->unitStates.erase("NoReclaim");
+      h->workProgress = 0;
+      if (ch.started) StopBuild(sim, L, h, ch, true);
+      ch.workId = 0;
+    }
+    Entity* e = c.targetId ? sim.FindEntity(c.targetId) : nullptr;
+    ch.goalId = e && e->kind == Entity::Kind::Unit ? EntityRef(e) : 0;
+    ch.noMove = false;
+    ch.state = 0;
+    gt->gdata->childFrom = 0;  // (woken: counter 0)
+    // the listener's tail 0x5f9e03..0x5f9e37: the thread's frame count 0 and, when it is suspended (the walking
+    // child's move task suspended it), re-linked at the stage's end, as the reclaim task's listener does
+    // (RetargetPatrolTasks, commands.cpp)
+    if (asleep) sim.ResumeCommandThread(h);
+  }
+}
+
+// The guard's walk next to G (state 0: NewMoveTask 0x6190a0 from TaskTick 0x614549 with no command and +0x94 = 0)
+// is a CUnitMoveTask that links the queue's head command, the Guard order itself (ctor 0x6180e0: task+0x88 from
+// unit+0x4b4's first command, its listener +0x54 in cmd+0x34). The same SetTarget event (0x6e8820 -> 0x6e94a0)
+// therefore reaches it: CUnitMoveTask::OnEvent 0x618c40 (read) with +0x94 and +0x95 clear hands its navigator the
+// command's position for the unit (CUnitCommand::GetPosition 0x6e8a30, the new target's place in the unit's footprint
+// cell, SNavGoal 0x5a2cb0, SetGoal vt+8; no speed-through change), whatever the anchor was. GetPosition asks the target
+// for its point with the centre flag clear (0x6e8a6a): a structure's target bone, not its origin. (Probe mp2_4910:
+// the original's goal for both is the cell (247, 416); the structure's origin gave (247, 418).) Seen: MP2 4909, army 0's
+// engineers 0x93 and 0xa5 walk to their anchors by a structure whose upgrade another guard of the same order hands
+// over; the original's walks turn toward the new unit at once (speed-through 1 from 4910: the new path's first
+// waypoint is not in the goal); ours walked on to the old anchors. (Land navigators only: an air walk's SetGoal is
+// not modelled here.) The listeners are told in the command's listener order; ours goes by unit id (inferred).
+void GuardWalksCommandEvent(Sim& sim, UnitCommand& c) {
+  if (c.type != CommandType::Guard) return;
+  std::vector<Unit*> holders(c.units.begin(), c.units.end());
+  std::sort(holders.begin(), holders.end(), [](const Unit* a, const Unit* b) { return a->id < b->id; });
+  for (Unit* h : holders) {
+    if (!Alive(h) || h->commands.empty() || h->commands.front().get() != &c) continue;
+    BuildTask* gt = h->task;
+    if (!gt || !gt->gdata || !gt->gdata->childMove || gt->gdata->child) continue;
+    TaskWalkCommandEvent(sim, c, h);
+  }
+}
+
 // CUnitGuardTask::TaskTick 0x6141a0
 int TickGuard(Sim& sim, lua_State* L, Unit* U, BuildTask& t) {
   (void)L;
@@ -2911,6 +2993,8 @@ int TickGuard(Sim& sim, lua_State* L, Unit* U, BuildTask& t) {
           // whose upgrade 0x30004d finished; only the first retargets (one draw, from SetCommandTarget 0x6ee4b3), the
           // two after it already hold 0x30004d. Ours retargeted all three (three draws).
           RefreshGuardTasks(sim, *c);
+          GuardRepairChildrenCommandEvent(sim, *c, U);
+          GuardWalksCommandEvent(sim, *c);
         }
   }
   U->unitStates.erase("GuardBusy");
@@ -2930,7 +3014,13 @@ int TickGuard(Sim& sim, lua_State* L, Unit* U, BuildTask& t) {
       Vec3 a = EnsureAnchor(sim, U, g);
       const NamedFootprint& fp = Fp(U);
       int cx = static_cast<int>(std::nearbyint(a.x - fp.sizeX * 0.5f)), cz = static_cast<int>(std::nearbyint(a.z - fp.sizeZ * 0.5f));
-      TaskMoveToward(sim, U, Vec3{cx + fp.sizeX * 0.5f, a.y, cz + fp.sizeZ * 0.5f});
+      // NewMoveTask 0x6190a0 (from TaskTick 0x614549): the navigator's SetGoal (0x6190c9), then the CUnitMoveTask
+      // ctor 0x6180e0, which ends in Unit::UpdateSpeedThroughStatus 0x6ac940 (0x6186a1) on every path. Seen: MP3
+      // 4758, three of army 1's engineers on a Guard with a second Guard queued; the first ends (the builder
+      // context, ShouldAbortGuardForBuilderContext 0x612600) and its dtor's status call, the queue still holding both
+      // Guards, turns speed-through on; the second Guard's walk starts in the same beat and its move task's status
+      // call, the queue now holding one, turns it off again (original 0 at 4758). Ours walked without that call.
+      MoveTaskWalk(sim, U, Vec3{cx + fp.sizeX * 0.5f, a.y, cz + fp.sizeZ * 0.5f});
       U->unitStates.insert("Moving");
       g.childMove = true;
       t.state = 1;
@@ -3300,7 +3390,14 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
         // 0x6a7770 whatever it held: the cells the upgrade's release cleared are the builder's again
         ReleaseStructure(sim, target);
         sim.QueueDestroy(target);
-        if (Alive(u)) OccupyStructure(sim, u);
+        // 0x5f85f2..0x5f85f5: the builder's ExecuteOccupyGround has no life test and leaves its +0x560 as it is. So a
+        // builder on its way out whose +0x560 was cleared (TransferUnit, 0x7470a2) keeps its cells held for good: its
+        // queue is cleared in ~Unit (0x6a6c66) before ReleaseOccupyGround (0x6a6de3), which then does nothing. Seen: MP3
+        // 4036, army 3's units go to army 1; the T1 extractor 0x300008, upgrading into 0x300033, becomes 0x1000a2. The
+        // original's cell (442, 69) stays held, and at 4450 army 1's tank 0x10003a cannot take the straight way to
+        // (442, 68) past it (probe mp3_reach: its corridor test to (442, 68) fails, (443, 68) is taken); ours had freed
+        // the cell with the upgrade's release.
+        ExecuteOccupyGround(sim, u);
       }
       if (t.started && Alive(u)) StopBuild(sim, L, u, t, false);
     }
@@ -3395,7 +3492,42 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
 }
 
 bool TaskCanMove(const Unit* u) { return CanMove(u); }
-void TaskMoveToward(Sim& sim, Unit* u, const Vec3& goal) { MoveToward(sim, u, goal); }
+void TaskMoveToward(Sim& sim, Unit* u, const Vec3& goal) {
+  MoveToward(sim, u, goal);
+  u->walkPrepared = false;
+  u->walkSeq = ++sim.walkSeqNext;
+}
+
+// CUnitMoveTask::OnEvent 0x618c40 (read) for a task's walk: the move task links the queue's head command (ctor 0x6180e0:
+// task+0x88 from unit+0x4b4's first command, its listener +0x54 in cmd+0x34), so a SetTarget event of that command
+// (0x6e8820 -> 0x6e94a0) reaches it. With +0x94 clear it hands its navigator the command's position for the unit
+// (CUnitCommand::GetPosition 0x6e8a30: the target's point with the centre flag clear, 0x6e8a6a; the unit's footprint
+// cell there; SNavGoal 0x5a2cb0, SetGoal vt+8; no speed-through change); with +0x95 (the ctor's rally override) that
+// cell's centre goes through PrepareMove first (spacing 0, 0x618d20) and the o-grid reservation moves to the cell found
+// (+0x92: FreeOgridRect 0x6ab760, ReserveOgridRect 0x6ab6f0). The listener wakes nobody (no thread re-link). (Land
+// navigators only: an air walk's SetGoal is not modelled here.)
+void TaskWalkCommandEvent(Sim& sim, UnitCommand& c, Unit* h) {
+  if (!h->motion.bp || !h->motion.bp->mobile() || !h->motion.nav) return;
+  Vec3 p = c.pos;
+  if (!FormationGoal(sim, c, h, &p)) p = CommandPosGun(sim, c);  // (the target's point)
+  const NamedFootprint& fp = Fp(h);
+  int cx = static_cast<int>(std::nearbyint(p.x - fp.sizeX * 0.5f));
+  int cz = static_cast<int>(std::nearbyint(p.z - fp.sizeZ * 0.5f));
+  if (h->walkPrepared) {
+    Vec3 q{cx + fp.sizeX * 0.5f, p.y, cz + fp.sizeZ * 0.5f};
+    const float none[4] = {0, 0, 0, 0};
+    GroundPrepareMove(sim, h, &q, none, 0);
+    cx = static_cast<int>(std::nearbyint(q.x - fp.sizeX * 0.5f));
+    cz = static_cast<int>(std::nearbyint(q.z - fp.sizeZ * 0.5f));
+  }
+  const Vec3 goal{cx + fp.sizeX * 0.5f, p.y, cz + fp.sizeZ * 0.5f};
+  h->motion.arrived = h->motion.failed = false;
+  MotionSetGoal(sim, h, std::vector<Vec3>{goal}, h->motion.nav->speedThroughGoal, sim.tick());
+  if (h->walkPrepared) {
+    const int r[4] = {cx, cz, cx + fp.sizeX, cz + fp.sizeZ};
+    GroundReserveRect(sim, h, r);
+  }
+}
 
 // CUnitReclaimTask's command listener 0x620160 (read). The task listens to the queue's current command (its ctor
 // 0x61eb60, 0x61ec82..0x61ecdb: +0x40 = the queue's first command, its listener linked into cmd+0x34). When that

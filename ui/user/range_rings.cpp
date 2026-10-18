@@ -319,6 +319,16 @@ bool RangeConsoleCommand(lua_State* L, const std::string& upperName, const std::
   return true;
 }
 
+bool RangeConsoleValue(lua_State* L, const std::string& upperName, bool* value) {
+  const RangeStore& store = Store(L);
+  const bool* flag = upperName == "RANGE_RENDERSELECTED" ? &store.selected
+                     : upperName == "RANGE_RENDERHIGHLIGHTED" ? &store.highlighted
+                     : upperName == "RANGE_RENDERBUILD" ? &store.build : nullptr;
+  if (!flag) return false;
+  *value = *flag;
+  return true;
+}
+
 void RangeRingsForWorld(lua_State* L, uint32_t hover, const WorldGhost* build, std::vector<WorldRangeGroup>* out) {
   UserState* user = UserState::From(L);
   Sim* sim = user->LiveSim("range rings");

@@ -1,6 +1,7 @@
 // Formations: engine-ref/specs/formations.md (CAiFormationInstance 0x5694b0.., CAiFormationDBImpl 0x59c030..,
 // Unit::UpdateInfoCache 0x6a9810).
 #include "sim/formation.h"
+#include "sim/combat.h"
 
 #include <algorithm>
 #include <cmath>
@@ -20,6 +21,7 @@
 #include "sim/motion.h"
 #include "sim/sim.h"
 #include "sim/sim_cache.h"
+#include "sim/slot_sort.h"
 #include "sim/terrain.h"
 #include "sim/units.h"
 #include "sim/vecmath.h"
@@ -232,8 +234,11 @@ void AssignGroup(Formation& F, const std::vector<Unit*>& units, int k) {
     float dx = slots[i].x - slots[0].x, dz = slots[i].z - (slots[0].z + E);
     S[i].key = dx * dx + dz * dz;
   }
-  // 8.4: stable descending sort (the <= 32 insertion-sort path)
-  std::stable_sort(S.begin(), S.end(), [](const SRec& a, const SRec& b) { return a.key > b.key; });
+  // 8.4: the original's sort 0x572350 (sim/slot_sort.h), the larger key first. For up to 32 slots it is stable;
+  // above that equal keys can move. Seen: MP3 4424, a Move for 35 of army 1's units in AttackFormation: two slots of
+  // one key in the stable order gave tanks 0x100073 and 0x100071 each other's slot (the probe mp3_thr: the original's
+  // goals at 4425 are (302, 278) for 0x100071 and (282, 264) for 0x100073), and each drove to the other's cell.
+  slotsort::Sort(S, [](const SRec& a, const SRec& b) { return a.key > b.key; });
   // 8.5: matching
   int order = 1;
   G.speed = kInfF;
@@ -899,9 +904,13 @@ void GenerateFormation(Sim& sim, UnitCommand& c, Unit* u) {
   std::sort(units.begin(), units.end(), [](const Unit* a, const Unit* b) { return a->id < b->id; });
   std::string name = ScriptName(sim.L(), c.formIndex, units);
   if (name.empty()) return;
-  Vec3 pos = c.pos;
-  if (c.targetId)
-    if (Entity* e = sim.FindEntity(c.targetId)) pos = e->position;
+  // CUnitCommand::GenerateFormation 0x6e88d0 centres a new formation on GetTargetPosGun(cmd+0x11c) with the centre
+  // flag clear (bl = 0, 0x6e897f): for an entity target its target POINT (Unit::GetTargetPoint 0x6ab340: the bone of
+  // the order's pick, or the collision centre), for a recon blip its source unit's (ReconBlip::GetTargetPoint 0x5bf5f0
+  // plus the blip's offset +0x27c; taken as zero for a real blip, inferred). Not the unit's origin. Seen: MP2 6047, army 0's four
+  // artillery on one Attack of a radar blip: the original's formation is laid out 0.04 / -0.03 from ours (each
+  // adjusted point, probe mp2_6047), so 0x104's place lands in another cell and its square is one cell off.
+  const Vec3 pos = c.targetId ? CommandPosGun(sim, c) : c.pos;
   auto F = NewFormation(sim, units, name, pos.x, pos.z, c.formQw, c.formQx, c.formQy, c.formQz,
                         static_cast<int>(c.type), c.formScale);
   c.form = F;

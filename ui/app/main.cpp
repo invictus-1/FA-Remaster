@@ -4,13 +4,15 @@
 // and the screen can be logged (--dump-ui) or saved as a picture (--screenshot). With --window the
 // interface runs live in a window, with the mouse.
 //
-//   moho64ui --init <init.lua> [--mods uids.txt] [--prefs <file>] [--stage userinit|setup|frontend]
+//   moho64ui --init <init.lua> [--mods uids.txt] [--prefs <file>] [--import-prefs <file>|none]
+//            [--stage userinit|setup|frontend]
 //            [--size 1920x1080] [--window] [--frames N] [--dump-ui] [--screenshot file.png]
 //            [--lua <file>] [--list-bindings] [--log out.log] [--quiet] [-- <the game's own arguments>]
 #include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <map>
 #include <string>
@@ -50,6 +52,10 @@ struct Options {
   std::string modsFile;
   std::string logFile;
   std::string prefsFile;
+  // --import-prefs <file>: the original game's preferences to take over when ours do not exist
+  // yet (a test's made-up file, or another place of the original's); "none": nothing is taken
+  // over. Unset: the original's own file, for our default file only (see DefaultPrefsFile).
+  std::string importPrefs;
   std::string stage = "frontend";
   std::string luaFile;  // --lua file: a host Lua file run in the user state at the end (debugging)
   std::map<std::string, std::string> folders;  // SHGetFolderPath answers
@@ -138,6 +144,32 @@ int l_SHGetFolderPath(lua_State* L) {
   lua_pushstring(L, v.c_str());
   return 1;
 }
+
+// A path below one of the system's folders (the --folder answers first, as SHGetFolderPath's).
+std::string BelowFolder(const std::string& name, const std::string& below) {
+  auto it = g_opts->folders.find(name);
+  std::string dir = it != g_opts->folders.end() ? it->second : SystemFolder(name);
+  if (!dir.empty() && dir.back() != '/' && dir.back() != '\\') dir += '/';
+  return hostfs::CleanPath(dir + below);
+}
+
+// The original game's preferences file. READ (FA exe): its start-up (CScApp, 0x8cefb3) takes
+// "/prefs <name>" from the command line, else "Game.prefs" (0x8cefd6), and hands it to the
+// preferences' loader 0x8c89d0, which asks SHGetFolderPathW for CSIDL_LOCAL_APPDATA (0x1c, at
+// 0x8c8a3e), appends "\Gas Powered Games" and "\Supreme Commander Forged Alliance" (the company and
+// product names set at 0x8ce10f / 0x8ce13b), making each folder (CreateDirectoryW), then "\" and the
+// name (a plain append, 0x8c8d49: /prefs names a file in that folder). A file that does not load,
+// or whose version.major is not 1 (0x8c8e63), is put aside as ".bad" (the message at 0x8c8f0b;
+// INFERRED: the renaming, 0x8c8700); without a good one, "../Installed.Prefs" (0x8c8f7e).
+// FAF's client starts the same exe without /prefs (READ: its launch line in client.log) and names
+// this same file as its preferencesFile (READ: client.prefs), so FAF's players have it here too.
+std::string OriginalPrefsFile() {
+  return BelowFolder("LOCAL_APPDATA", "Gas Powered Games/Supreme Commander Forged Alliance/Game.prefs");
+}
+
+// Ours when --prefs names none (a live window): in a folder of our own beside the original's, so
+// the original's file is never touched. The player's replays and saved games go beside it.
+std::string DefaultPrefsFile() { return BelowFolder("LOCAL_APPDATA", "FA Remastered/Game.prefs"); }
 
 // Run the init file in its own state and mount what it lists in `path`.
 bool RunInit(const Options& o, Vfs& vfs, std::vector<std::string>& hookDirs, std::vector<std::string>& protocols) {
@@ -236,6 +268,7 @@ int main(int argc, char** argv) {
     } else if (a == "--mods") o.modsFile = next();
     else if (a == "--log") o.logFile = next();
     else if (a == "--prefs") o.prefsFile = next();
+    else if (a == "--import-prefs") o.importPrefs = next();
     else if (a == "--stage") o.stage = next();
     else if (a == "--frames") o.frames = std::atoi(next().c_str());
     else if (a == "--lua") o.luaFile = next();
@@ -287,7 +320,8 @@ int main(int argc, char** argv) {
   if (o.init.empty() || width < 1 || height < 1 ||
       (o.stage != "userinit" && o.stage != "setup" && o.stage != "frontend")) {
     std::fprintf(stderr,
-                 "usage: moho64ui --init <init.lua> [--mods uids.txt] [--prefs file] [--stage userinit|setup|frontend]\n"
+                 "usage: moho64ui --init <init.lua> [--mods uids.txt] [--prefs file] [--import-prefs file|none]\n"
+                 "                [--stage userinit|setup|frontend]\n"
                  "                [--size 1920x1080] [--window] [--frames N] [--dump-ui] [--screenshot file.png]\n"
                  "                [--lua file] [--list-bindings] [--log out.log] [--quiet] [--no-sound] [--fullscreen] [-- game arguments]\n");
     return 2;
@@ -297,6 +331,14 @@ int main(int argc, char** argv) {
   ui::UserState::Config cfg;
   cfg.width = width;
   cfg.height = height;
+  // The game's /preferences/Game.prefs (the init file mounts the original's folder, LOCAL_APPDATA/Gas Powered
+  // Games/Supreme Commander Forged Alliance): one of this program's own, held in memory, is mounted there first,
+  // so it is the one the game's scripts find (the first mount wins) and the original's file is never read. In
+  // the original that file IS the program's preferences file; FAF's Blueprints.lua reads only its PreGameData
+  // from it (CurrentMapDir: the map folder whose own blueprints load with the rules), which the host sets at
+  // each launch (PreGameDataText). The engine's shared piece (sim/session.h kGamePrefsPath; ui REQUESTS 40).
+  if (!vfs.MountMemoryFile(kGamePrefsPath, "PreGameData = {\n}\n"))
+    Logf(LogLevel::Warning, "moho64ui: the game's own %s could not be mounted", kGamePrefsPath);
   if (!RunInit(o, vfs, cfg.hookDirs, cfg.protocols)) return 1;
   for (const std::string& folder : moreMaps) {
     if (!vfs.Mount(folder, "/maps")) Logf(LogLevel::Warning, "moho64ui: --maps %s: no such folder", folder.c_str());
@@ -328,6 +370,24 @@ int main(int argc, char** argv) {
   }
   cfg.gameArgs = o.gameArgs;
   cfg.prefsFile = o.prefsFile;
+  // Our preferences file: the one --prefs names; without it a live window has one of its own
+  // (DefaultPrefsFile), and a run without a window (tests, probes) keeps them in memory only.
+  // When ours does not exist yet, the original game's profiles are taken over once (after the
+  // front end's state is made, below): from --import-prefs, or for our default file from the
+  // original's own (OriginalPrefsFile). The original's file is only ever read.
+  std::string importFrom = o.importPrefs == "none" ? std::string() : o.importPrefs;
+  if (cfg.prefsFile.empty() && windowed) {
+    cfg.prefsFile = DefaultPrefsFile();
+    if (o.importPrefs.empty()) importFrom = OriginalPrefsFile();
+    const std::string dir = cfg.prefsFile.substr(0, cfg.prefsFile.find_last_of('/'));
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::path(std::u8string(dir.begin(), dir.end())), ec);
+  }
+  if (!cfg.prefsFile.empty() && hostfs::DisplayPath(cfg.prefsFile) == hostfs::DisplayPath(OriginalPrefsFile())) {
+    Logf(LogLevel::Warning, "moho64ui: --prefs names the original game's own file: not used (it is never written); preferences in memory only");
+    cfg.prefsFile.clear();
+  }
+  const bool firstStart = cfg.prefsFile.empty() || !hostfs::IsFile(cfg.prefsFile);
   // A recorded game needs its launch table kept too: a game launched from the lobby writes it
   // beside the record unless a place of its own was named.
   if (sessionFile.empty() && !replayOut.empty()) sessionFile = replayOut + ".session.lua";
@@ -387,6 +447,22 @@ int main(int argc, char** argv) {
   // The front end's state. A new one is made when a game is left (the original makes a new state
   // for every change between front end and game, FA exe 0x885de0).
   auto front = std::make_unique<ui::UserState>(&vfs, cfg);
+  // The original game's profiles taken over, once: ours did not exist yet. Written at once, so
+  // ours exists from now on (and every later state reads it); a file that cannot be taken over
+  // leaves a fresh start (the game's profile dialog), and the reason in the log.
+  if (firstStart && !importFrom.empty()) {
+    std::string why;
+    const std::string source = hostfs::DisplayPath(importFrom);
+    if (!hostfs::IsFile(importFrom)) {
+      Logf(LogLevel::Info, "moho64ui: no preferences of the original game to take over (%s)", source.c_str());
+    } else if (const int taken = ui::ImportPreferences(front->L(), importFrom, &why)) {
+      Logf(LogLevel::Info, "moho64ui: preferences: %d profile(s) taken over from %s (names, options, key bindings; that file is left as it is)",
+           taken, source.c_str());
+      ui::SavePreferencesOf(front->L());
+    } else {
+      Logf(LogLevel::Warning, "moho64ui: the original game's preferences were not taken over (%s: %s): a fresh start", source.c_str(), why.c_str());
+    }
+  }
   bool ok = front->Boot();
   // The display mode (the Options menu's "Primary Adapter", DisplayMode). The original fills the
   // menu's list at the start (StartupHelpers::SetupPrimaryAdapterSettings, FA exe 0x8d21e0):
@@ -524,6 +600,7 @@ int main(int argc, char** argv) {
       if (backdrop) backdrop->Stop();  // (nothing else draws a world while one loads)
       cfg.width = shown->ui().width(), cfg.height = shown->ui().height();
       ui::SavePreferencesOf(front->L());  // (DoPreload writes the preferences first: the game's state reads them)
+      vfs.SetMemoryFile(kGamePrefsPath, ui::PreGameDataText(front->L(), session.LoadingMapFolder()));  // (the rules read it)
       if (!front->StartLoadingScreen()) Logf(LogLevel::Warning, "moho64ui: the loading screen did not come up");
       session.BeginLoad();
       loadingDrawn = 0, loadingSince = std::chrono::steady_clock::now();

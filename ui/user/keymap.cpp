@@ -1,14 +1,19 @@
 #include "user/keymap.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
+#include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <map>
+#include <mutex>
 #include <new>
 #include <set>
 #include <string>
+#include <thread>
+#include <type_traits>
 #include <vector>
 
 #include "core/log.h"
@@ -302,7 +307,7 @@ const std::vector<const char*>& ConsoleNames() {
         "remaster_effects", "remaster_effects_quality", "remaster_frame_rate", "remaster_graphics_api", "remaster_look",
         "remaster_rich_ground", "remaster_snow_tracks", "remaster_stats", "remaster_temporal_upscale", "remaster_tracers", "remaster_upscale",
         "remaster_atmosphere", "remaster_soft_shadows", "remaster_ray_tracing", "remaster_weather_effects",
-        "remaster_ground_detail"};
+        "remaster_ground_detail", "remaster_frame_generation"};
     std::sort(all.begin(), all.end(), ConNameLess);
     return all;
   }();
@@ -374,12 +379,12 @@ int l_FlushEvents(lua_State*) { return 0; }
 int l_LooksForTests(lua_State* L) {
   const LookSettings& looks = Looks();
   lua_newtable(L);
-  const char* names[12] = {"remasteredEffects", "tracers", "richGround", "snowTracks", "vulkan", "originalLook", "temporalUpscale",
-                           "atmosphere", "softShadows", "rayTracing", "weatherEffects", "groundDetail"};
-  const bool values[12] = {looks.remasteredEffects, looks.tracers, looks.richGround, looks.snowTracks, looks.vulkan,
+  const char* names[13] = {"remasteredEffects", "tracers", "richGround", "snowTracks", "vulkan", "originalLook", "temporalUpscale",
+                           "atmosphere", "softShadows", "rayTracing", "weatherEffects", "groundDetail", "frameGeneration"};
+  const bool values[13] = {looks.remasteredEffects, looks.tracers, looks.richGround, looks.snowTracks, looks.vulkan,
                            looks.originalLook, looks.temporalUpscale, looks.atmosphere, looks.softShadows, looks.rayTracing,
-                           looks.weatherEffects, looks.groundDetail};
-  for (int i = 0; i < 12; ++i) {
+                           looks.weatherEffects, looks.groundDetail, looks.frameGeneration};
+  for (int i = 0; i < 13; ++i) {
     lua_pushstring(L, names[i]);
     lua_pushboolean(L, values[i]);
     lua_rawset(L, -3);
@@ -613,8 +618,126 @@ int PreferenceNumber(lua_State* L, const char* key, int fallback) {
 }
 }  // namespace
 
+// --- the console's output ---
+//
+// READ (FA exe, 2026-10-17): the console's output handlers are a list (0xf58f44) that only
+// AddConsoleOutputReciever fills (0x41ec88: the scripts' functions, in the order given), and only
+// CON_Printf (0x41c990) calls them: it formats the line, and on the main thread (GetCurrentThreadId
+// against 0x10a635c, kept at the program's start, 0x413aa0) every handler hears it at once; on
+// another thread the line goes to the main thread as an APC (0x413b70, QueueUserAPC) and the
+// handlers hear it there later (0x41c910). The log is not among CON_Printf's callers and has no
+// handler: LOG, WARN, SPEW and the engine's own log lines never reach the console, and the lines
+// it gets are not logged. No prefix, no level, no switch. What calls CON_Printf: the user state's
+// print (below), the lines of the simulation's print that come with a beat's sync (0x895260), and
+// the console's own feedback (the commands below).
+namespace {
+std::mutex g_consoleMutex;
+std::vector<std::string> g_consolePosted;  // other threads' lines, for the main thread's next frame
+std::atomic<std::thread::id> g_consoleThread;  // the main thread (set with the user state's bindings)
+
+// The lines of a print(...) call (FA exe 0x4cd740, each character through 0x4cd680; READ): the
+// arguments one after the other, a string or a number as it is and anything else through the
+// global tostring; before each argument after the first a "tab" of ((the line's length - 1) & 7)
+// + 1 spaces (so the exe; not a tab stop: 1 after "a", 3 after "abc", 8 after nothing); inside the
+// text a newline ends the line (an empty one too), a tab is those spaces, another character below
+// 0x20 becomes a tab character (the exe's format for it, 0xe09aec, is a lone tab). What is left at
+// the end is the last line; nothing is left of an empty print.
+std::vector<std::string> PrintLines(lua_State* L) {
+  std::vector<std::string> lines;
+  std::string line;
+  auto put = [&](unsigned char c) {
+    if (c == '\n') {
+      lines.push_back(line);
+      line.clear();
+    } else if (c == '\t') {
+      line.append(((line.size() - 1) & 7) + 1, ' ');
+    } else {
+      line.push_back(c >= 0x20 ? static_cast<char>(c) : '\t');
+    }
+  };
+  const int n = lua_gettop(L);
+  for (int i = 1; i <= n; ++i) {
+    if (i > 1) put('\t');
+    std::string text;
+    if (lua_isstring(L, i)) {
+      const char* s = lua_tostring(L, i);  // (a number becomes its string in its place)
+      text.assign(s, lua_strlen(L, i));
+    } else {
+      lua_getglobal(L, "tostring");
+      lua_pushvalue(L, i);
+      lua_call(L, 1, 1);
+      if (const char* s = lua_tostring(L, -1)) text.assign(s, lua_strlen(L, -1));
+      lua_pop(L, 1);
+    }
+    for (char ch : text) put(static_cast<unsigned char>(ch));
+  }
+  if (!line.empty()) lines.push_back(line);
+  return lines;
+}
+
+// print(...) in the user state (FA exe 0x4cd8f0: each line to CON_Printf("%s", line), 0x4cd8e0).
+int l_print(lua_State* L) {
+  for (const std::string& line : PrintLines(L)) {
+    Logf(LogLevel::Debug, "print: %s", line.c_str());  // (ours: the original logs none of it)
+    ConsolePrint(L, line);
+  }
+  return 0;
+}
+// print(...) in the simulation's state (FA exe 0x74b570: each line to Sim::Printf, 0x7462a0, kept
+// in the simulation (+0xa18) and sent with the beat's sync; the interface's side prints them on
+// the main thread, 0x895260). Here the lines are posted, never heard inside the beat, whichever
+// thread runs it. INFERRED: that the list at +0xa18 is the one the sync carries to 0x895260. Not
+// yet set in the simulation's state (that is the engine's: ui REQUESTS 41 asks for its lines per
+// beat); for now the host's test function moho64ui_SimPrint.
+int l_SimPrint(lua_State* L) {
+  for (const std::string& line : PrintLines(L)) ConsolePost(line);
+  return 0;
+}
+
+// moho64ui_ConsolePostFromThread(text): a console line printed from another thread, which waits
+// for the main thread's next frame. The host's own function for tests.
+int l_ConsolePostFromThread(lua_State* L) {
+  const std::string text = luaL_checkstring(L, 1);
+  std::thread([L, text] { ConsolePrint(L, text); }).join();  // (ConsolePrint must not touch L there)
+  return 0;
+}
+}  // namespace
+
+void ConsolePost(const std::string& text) {
+  std::lock_guard<std::mutex> lock(g_consoleMutex);
+  g_consolePosted.push_back(text);
+  // (Ours: a bound, in case no frame comes for a long time; the game's console keeps 300.)
+  if (g_consolePosted.size() > 1000) g_consolePosted.erase(g_consolePosted.begin());
+}
+
+void DeliverConsoleLines(lua_State* L) {
+  std::vector<std::string> lines;
+  {
+    std::lock_guard<std::mutex> lock(g_consoleMutex);
+    lines.swap(g_consolePosted);
+  }
+  for (const std::string& line : lines) ConsolePrint(L, line);
+}
+
+void ConsolePrintf(lua_State* L, const char* fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  va_list again;
+  va_copy(again, ap);
+  const int n = std::vsnprintf(nullptr, 0, fmt, ap);
+  va_end(ap);
+  std::string text(n > 0 ? static_cast<size_t>(n) : 0, '\0');
+  if (n > 0) std::vsnprintf(text.data(), text.size() + 1, fmt, again);
+  va_end(again);
+  ConsolePrint(L, text);
+}
+
 void ConsolePrint(lua_State* L, const std::string& text) {
-  static bool printing = false;  // (a receiver that prints is not heard again inside itself)
+  if (std::this_thread::get_id() != g_consoleThread) return ConsolePost(text);
+  // (Ours: a receiver that prints is not heard again inside itself. The original has no such
+  // guard, and its handler calls the function unprotected, 0x420830: a receiver that prints
+  // there recurses until the stack runs out.)
+  static bool printing = false;
   if (printing) return;
   printing = true;
   int top = lua_gettop(L);
@@ -637,7 +760,113 @@ void ConsolePrint(lua_State* L, const std::string& text) {
   printing = false;
 }
 
-void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
+void ConsoleNoSession(lua_State* L) {
+  std::string text = "<LOC _No_session>";
+  const int top = lua_gettop(L);
+  lua_getglobal(L, "LOC");
+  lua_pushstring(L, text.c_str());
+  if (lua_isfunction(L, -2) && lua_pcall(L, 1, 1, 0) == 0 && lua_isstring(L, -1)) text = lua_tostring(L, -1);
+  lua_settop(L, top);
+  ConsolePrint(L, text);
+}
+
+namespace {
+// The words of a command's arguments, split at blanks. (The original's tokenizer, 0x41bff0, also
+// knows quotes, ';' between commands and '#' or '//' comments; not here.)
+std::vector<std::string> Words(const std::string& text) {
+  std::vector<std::string> words;
+  size_t at = 0;
+  while ((at = text.find_first_not_of(" \t", at)) != std::string::npos) {
+    const size_t end = text.find_first_of(" \t", at);
+    words.push_back(text.substr(at, end == std::string::npos ? std::string::npos : end - at));
+    at = end;
+  }
+  return words;
+}
+
+// The original's console variables among the commands built here (their names and kinds as its
+// registry has them: bool, int, uint32, float, string) and their values now.
+struct ConVarNow {
+  const char* name = nullptr;  // the exe's spelling; null: not one of them
+  char kind = 0;               // 'b' bool, 'i' int, 'u' uint32, 'f' float, 's' string
+  double number = 0;
+  std::string text;
+};
+ConVarNow ConVarOf(lua_State* L, const std::string& key) {
+  ConVarNow v;
+  auto set = [&v](const char* name, char kind, double number) { v.name = name, v.kind = kind, v.number = number; };
+  const LookSettings& looks = Looks();
+  const CameraControls& keys = CameraKeys();
+  const CustomNameStyle& names = CustomNames();
+  bool range = false;
+  if (key == "UI_RENDERCUSTOMNAMES") set("ui_RenderCustomNames", 'b', names.on);
+  else if (key == "UI_CUSTOMNAMECOLOR") set("ui_CustomNameColor", 'u', names.color);
+  else if (key == "UI_CUSTOMNAMEFONTSIZE") set("ui_CustomNameFontSize", 'i', names.size);
+  else if (key == "UI_CUTSOMNAMEFONT") set("ui_CutsomNameFont", 's', 0), v.text = names.font;
+  else if (key == "UI_RENDERSELECTIONSETNAMES") set("ui_RenderSelectionSetNames", 'b', names.setsOn);
+  else if (key == "UI_SELECTIONSETNAMESCOLOR") set("ui_SelectionSetNamesColor", 'u', names.setsColor);
+  else if (key == "UI_FORCELIFBARSONENEMY") set("ui_ForceLifbarsOnEnemy", 'b', UserState::From(L)->lifeBarsOnEnemies);
+  else if (key == "UI_RENDERUNITBARS") set("ui_RenderUnitBars", 'b', LifeBarsShown(L));
+  else if (key == "GRAPHICS_FIDELITY") set("graphics_Fidelity", 'i', looks.fidelity);
+  else if (key == "SHADOW_FIDELITY") set("shadow_Fidelity", 'i', looks.shadows);
+  else if (key == "UI_STRATEGICICONSCALE") set("ui_StrategicIconScale", 'f', looks.iconScale);
+  else if (key == "UI_ALWAYSRENDERSTRATEGICICONS") set("ui_AlwaysRenderStrategicIcons", 'b', looks.iconsAlways);
+  else if (key == "UI_NISRENDERICONS") set("ui_NisRenderIcons", 'b', looks.strategicIcons);
+  else if (key == "REN_SELECTBOXES") set("ren_SelectBoxes", 'b', looks.selectionMarks);
+  else if (key == "REN_OBLIVION") set("ren_Oblivion", 'b', !looks.worldShown);  // (true: no world)
+  else if (key == "REN_BLOOM") set("ren_Bloom", 'b', looks.bloom);
+  else if (key == "UI_SELECTTOLERANCE") set("ui_SelectTolerance", 'f', looks.selectTolerance);
+  else if (key == "UI_COMMANDCLICKSCALE") set("ui_CommandClickScale", 'f', looks.commandClickScale);
+  else if (key == "REN_BLOOMBLURKERNELSCALE") set("ren_BloomBlurKernelScale", 'f', looks.bloomIntensity);
+  else if (key == "UI_SELECTANYTHING") set("UI_SelectAnything", 'b', looks.selectAnything);
+  else if (key == "UI_DEBUGALTCLICK") set("ui_DebugAltClick", 'b', looks.debugAltClick);
+  else if (key == "SC_FRAMETIMECLAMP") set("sc_FrameTimeClamp", 'f', Pacing().frameMs);
+  else if (key == "CAM_SHAKEMULT") set("cam_ShakeMult", 'f', CameraShakeMult());
+  else if (key == "CAM_ZOOMAMOUNT") set("cam_ZoomAmount", 'f', keys.zoomAmount);
+  else if (key == "UI_KEYBOARDPANSPEED") set("ui_KeyboardPanSpeed", 'f', keys.panSpeed);
+  else if (key == "UI_KEYBOARDPANACCELERATEMULTIPLIER") set("ui_KeyboardPanAccelerateMultiplier", 'f', keys.panFast);
+  else if (key == "UI_KEYBOARDROTATESPEED") set("ui_KeyboardRotateSpeed", 'f', keys.turnSpeed);
+  else if (key == "UI_KEYBOARDROTATEACCELERATEMULTIPLIER") set("ui_KeyboardRotateAccelerateMultiplier", 'f', keys.turnFast);
+  else if (key == "UI_SCREENEDGESCROLLVIEW") set("ui_ScreenEdgeScrollView", 'b', keys.edgePans);
+  else if (key == "UI_ARROWKEYSSCROLLVIEW") set("ui_ArrowKeysScrollView", 'b', keys.arrowsPan);
+  // (the command graph's: CommandGraphVars)
+  else if (key == "UI_CURVESEGMENTS") set("ui_CurveSegments", 'i', GraphVars().curveSegments);
+  else if (key == "UI_CURVESMOOTHNESS") set("ui_CurveSmoothness", 'f', GraphVars().curveSmoothness);
+  else if (key == "UI_PATHSMOOTHNESS") set("ui_PathSmoothness", 'f', GraphVars().pathSmoothness);
+  else if (key == "UI_COMMANDGRAPHMAXNODEUNITS") set("ui_CommandGraphMaxNodeUnits", 'i', GraphVars().maxNodeUnits);
+  else if (key == "UI_MINWAYPOINTSIZE") set("ui_MinWaypointSize", 'f', GraphVars().minWaypointSize);
+  else if (key == "UI_MAXWAYPOINTSIZE") set("ui_MaxWaypointSize", 'f', GraphVars().maxWaypointSize);
+  else if (key == "UI_WAYPOINTLINESCALE") set("ui_WaypointLineScale", 'f', GraphVars().waypointLineScale);
+  else if (RangeConsoleValue(L, key, &range))
+    set(key == "RANGE_RENDERSELECTED" ? "range_RenderSelected" : key == "RANGE_RENDERHIGHLIGHTED" ? "range_RenderHighlighted" : "range_RenderBuild", 'b', range);
+  return v;
+}
+
+// What a console variable says of itself (FA exe, READ): a bool after it turned over, "toggled %s
+// is now %s" (0x41d4ae), and for `show`, "bool %s is %s" (0x41d5dc), on or off; the others when
+// typed without a value: "int %s == %d" (0x41fa45), "uint32 %s == %u (%x)" (0x7fde36), "float %s
+// == %.4f" (0x41fb8a), "string %s == %s" (0x41e2cc). The name is the registry's spelling. A value
+// that is set says nothing.
+void ReportConVar(lua_State* L, const ConVarNow& v, bool toggled) {
+  const char* onOff = v.number != 0 ? "on" : "off";
+  switch (v.kind) {
+    case 'b':
+      if (toggled) ConsolePrintf(L, "toggled %s is now %s", v.name, onOff);
+      else ConsolePrintf(L, "bool %s is %s", v.name, onOff);
+      break;
+    case 'i': ConsolePrintf(L, "int %s == %d", v.name, static_cast<int>(v.number)); break;
+    case 'u': {
+      const unsigned u = static_cast<unsigned>(v.number);
+      ConsolePrintf(L, "uint32 %s == %u (%x)", v.name, u, u);
+      break;
+    }
+    case 'f': ConsolePrintf(L, "float %s == %.4f", v.name, v.number); break;
+    case 's': ConsolePrintf(L, "string %s == %s", v.name, v.text.c_str()); break;
+    default: break;
+  }
+}
+
+void RunConsoleCommand(lua_State* L, const std::string& text) {
   size_t a = text.find_first_not_of(" \t");
   if (a == std::string::npos) return;
   size_t b = text.find_first_of(" \t", a);
@@ -661,19 +890,24 @@ void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
     if (GameSpeedOf(L) != 0) SetGameSpeedTo(L, 0);
     return;
   }
-  if (Upper(name) == "WLD_GAMESPEED") {
-    if (rest.find_first_not_of(" \t") == std::string::npos) return;
+  if (Upper(name) == "WLD_GAMESPEED") {  // (anything but one value: its usage, 0x88e1cb)
+    if (Words(rest).size() != 1) return ConsolePrint(L, "WLD_GameSpeed <int> - set current game speed");
     int rate = static_cast<int>(std::atof(rest.c_str()));
     SetGameSpeedTo(L, rate > 50 ? 50 : rate < -10 ? -10 : rate);
     return;
   }
   // The numbered groups' commands (FA exe 0x834a80, 0x834c10): the engine only passes the name
-  // on, as a string, to the game's selection script, which keeps the sets.
+  // on, as a string, to the game's selection script, which keeps the sets. Without a session they
+  // print the engine's "no session" line (0x834a98, 0x834c28), without a name their usage
+  // (0x834b35, 0x834cc5; "selections et" is the exe's).
   if (Upper(name) == "UI_MAKESELECTIONSET" || Upper(name) == "UI_APPLYSELECTIONSET") {
+    const bool make = Upper(name) == "UI_MAKESELECTIONSET";
     size_t a = rest.find_first_not_of(" 	"), b = rest.find_last_not_of(" 	");
-    if (a == std::string::npos || !UserState::From(L)->gameInterface) return;
-    CallScript(L, "/lua/ui/game/selection.lua", Upper(name) == "UI_MAKESELECTIONSET" ? "AddCurrentSelectionSet" : "ApplySelectionSet",
-               rest.substr(a, b - a + 1));
+    if (!UserState::From(L)->gameInterface) return ConsoleNoSession(L);
+    if (a == std::string::npos)
+      return ConsolePrint(L, make ? "USAGE: UI_MakeSelectionSet [name] - create a named selection set based on the current selection"
+                                  : "USAGE: UI_ApplySelectionSet [name] - apply a named selections et");
+    CallScript(L, "/lua/ui/game/selection.lua", make ? "AddCurrentSelectionSet" : "ApplySelectionSet", rest.substr(a, b - a + 1));
     return;
   }
   if (RangeConsoleCommand(L, Upper(name), rest)) return;  // range_RenderSelected and its two kin
@@ -712,6 +946,23 @@ void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
       if (!value.empty()) names.setsColor = static_cast<uint32_t>(std::strtoul(value.c_str(), nullptr, value.size() == 8 ? 16 : 0));
       return;
     }
+  }
+  {  // the command graph's (CommandGraphVars; a value left out leaves it)
+    const std::string key = Upper(name);
+    const size_t at = rest.find_first_not_of(" \t");
+    const bool given = at != std::string::npos;
+    const double value = given ? std::atof(rest.c_str() + at) : 0.0;
+    CommandGraphVars& graph = GraphVars();
+    auto set = [&](auto& field) {
+      if (given) field = static_cast<std::remove_reference_t<decltype(field)>>(value);
+    };
+    if (key == "UI_CURVESEGMENTS") return set(graph.curveSegments);
+    if (key == "UI_CURVESMOOTHNESS") return set(graph.curveSmoothness);
+    if (key == "UI_PATHSMOOTHNESS") return set(graph.pathSmoothness);
+    if (key == "UI_COMMANDGRAPHMAXNODEUNITS") return set(graph.maxNodeUnits);
+    if (key == "UI_MINWAYPOINTSIZE") return set(graph.minWaypointSize);
+    if (key == "UI_MAXWAYPOINTSIZE") return set(graph.maxWaypointSize);
+    if (key == "UI_WAYPOINTLINESCALE") return set(graph.waypointLineScale);
   }
   if (Upper(name) == "UI_FORCELIFBARSONENEMY") {  // (FA exe: byte 0x10a644a; a key toggles it, the option sets it)
     size_t a = rest.find_first_not_of(" \t");
@@ -791,12 +1042,14 @@ void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
       return;
     }
     if (key == "REMASTER_ATMOSPHERE" || key == "REMASTER_SOFT_SHADOWS" || key == "REMASTER_RAY_TRACING" ||
-        key == "REMASTER_WEATHER_EFFECTS" || key == "REMASTER_GROUND_DETAIL") {  // (the renderer's switches: 0 off, 1 on)
-      bool& on = key == "REMASTER_ATMOSPHERE"       ? looks.atmosphere
-                 : key == "REMASTER_SOFT_SHADOWS"   ? looks.softShadows
-                 : key == "REMASTER_RAY_TRACING"    ? looks.rayTracing
-                 : key == "REMASTER_GROUND_DETAIL"  ? looks.groundDetail
-                                                    : looks.weatherEffects;
+        key == "REMASTER_WEATHER_EFFECTS" || key == "REMASTER_GROUND_DETAIL" ||
+        key == "REMASTER_FRAME_GENERATION") {  // (the renderer's switches: 0 off, 1 on)
+      bool& on = key == "REMASTER_ATMOSPHERE"         ? looks.atmosphere
+                 : key == "REMASTER_SOFT_SHADOWS"     ? looks.softShadows
+                 : key == "REMASTER_RAY_TRACING"      ? looks.rayTracing
+                 : key == "REMASTER_GROUND_DETAIL"    ? looks.groundDetail
+                 : key == "REMASTER_FRAME_GENERATION" ? looks.frameGeneration
+                                                      : looks.weatherEffects;
       if (!value.empty()) on = value[0] == '1' || Upper(value).rfind("ON", 0) == 0 || Upper(value).rfind("TRUE", 0) == 0;
       return;
     }
@@ -891,8 +1144,9 @@ void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
   }
   if (Upper(name) == "STARTCOMMANDMODE") {  // StartCommandMode <mode> <name>: commandmode.StartCommandMode(mode, {name = name})
     // Only in a game: the keys bound to it are bound in the front end too, where the game's
-    // command-mode script has no business. (Inferred: that the original leaves it out there.)
-    if (!UserState::From(L)->gameInterface) return;
+    // command-mode script has no business. READ (0x8338ca): without a session the original
+    // prints the engine's "no session" line and does nothing else.
+    if (!UserState::From(L)->gameInterface) return ConsoleNoSession(L);
     size_t sp = rest.find_first_of(" \t");
     std::string mode = rest.substr(0, sp);
     size_t at = sp == std::string::npos ? sp : rest.find_first_not_of(" \t", sp);
@@ -914,11 +1168,60 @@ void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
     lua_settop(L, top);
     return;
   }
+  if (Upper(name) == "CON_ECHO") {  // (FA exe 0x41ee10: the words after it, a space between them)
+    const std::vector<std::string> words = Words(rest);
+    if (words.empty()) return;
+    std::string line = words[0];
+    for (size_t i = 1; i < words.size(); ++i) line += " " + words[i];
+    ConsolePrint(L, line);
+    return;
+  }
+  // None of ours. READ (CON_Execute 0x41cc90): a name the original's registry does not have prints
+  // `Unknown console command "<name>"` (0x41d03b), except its one joke (0x41ce4c: "hockey", the
+  // words kept a letter up in the exe, "ipdlfz Hp Ujqt Tfot"). A name the original has and this
+  // host does not build yet is only logged, once: printed, the keys and the scripts' commands
+  // would put lines on the game's screen, through the console's echo, that the original never shows.
+  const auto& names = ConsoleNames();
+  if (!std::binary_search(names.begin(), names.end(), name.c_str(), ConNameLess)) {
+    if (name == "hockey") ConsolePrintf(L, "%s %s   %s %s", "Go", "Tips", "Go", "Sens");
+    else ConsolePrintf(L, "Unknown console command \"%s\"", name.c_str());
+    return;
+  }
   KeyMap& map = Map(L);
   if (map.unbuilt.insert(Upper(name)).second)
     Logf(LogLevel::Debug, "moho64ui: console command not built: %s", name.c_str());
-  // (Nothing is printed to the console for it: the game's scripts and keys run commands all
-  // the time, and a line for each would show on the game's screen through the console echo.)
+}
+}  // namespace
+
+// A console variable's own words around its command (FA exe 0x41d470 for a bool, READ): without a
+// value a bool turns over and says so; `show` says its value; `tog` turns it over silently; `=`
+// takes the next word as a number; on / true, off / false (the case not counting) or a number (0:
+// off) set it. The others without a value say their value; with one they are set as before.
+void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
+  const size_t a = text.find_first_not_of(" \t");
+  if (a == std::string::npos) return;
+  const size_t b = text.find_first_of(" \t", a);
+  const std::string name = text.substr(a, b == std::string::npos ? std::string::npos : b - a);
+  const ConVarNow var = ConVarOf(L, Upper(name));
+  if (!var.name) return RunConsoleCommand(L, text);
+  const std::vector<std::string> args = Words(b == std::string::npos ? std::string() : text.substr(b + 1));
+  if (var.kind != 'b') {
+    if (args.empty()) return ReportConVar(L, var, false);
+    return RunConsoleCommand(L, text);
+  }
+  if (args.empty()) {
+    RunConsoleCommand(L, name);  // (each bool's command turns it over when given no value)
+    return ReportConVar(L, ConVarOf(L, Upper(name)), true);
+  }
+  const std::string word = Upper(args[0]);
+  if (word == "SHOW") return ReportConVar(L, var, false);
+  if (word == "TOG") return RunConsoleCommand(L, name);
+  bool on = false;
+  if (word == "=") on = args.size() > 1 && std::atoi(args[1].c_str()) != 0;
+  else if (word == "ON" || word == "TRUE") on = true;
+  else if (word == "OFF" || word == "FALSE") on = false;
+  else on = std::atoi(args[0].c_str()) != 0;
+  RunConsoleCommand(L, name + (on ? " 1" : " 0"));
 }
 
 bool KeyIsDown(lua_State* L, int mauiCode) {
@@ -928,6 +1231,8 @@ bool KeyIsDown(lua_State* L, int mauiCode) {
 }
 
 void RegisterKeyMapBindings(lua_State* L) {
+  g_consoleThread = std::this_thread::get_id();  // (the user state is made on the main thread)
+  SetGlobal(L, "print", l_print);
   SetGlobal(L, "IN_AddKeyMapTable", l_AddKeyMapTable);
   SetGlobal(L, "IN_RemoveKeyMapTable", l_RemoveKeyMapTable);
   SetGlobal(L, "IN_ClearKeyMap", l_ClearKeyMap);
@@ -951,6 +1256,10 @@ void RegisterKeyMapBindings(lua_State* L) {
     return 1;
   });
   lua_register(L, "moho64ui_LifeBars", l_LifeBars);
+  lua_register(L, "moho64ui_ConsolePostFromThread", l_ConsolePostFromThread);
+  // moho64ui_SimPrint(...): the simulation's print, here (its lines wait for the next frame). The
+  // host's own function for tests.
+  lua_register(L, "moho64ui_SimPrint", l_SimPrint);
 }
 
 }  // namespace moho::ui

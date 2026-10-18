@@ -41,10 +41,31 @@ bool KeyIsDown(lua_State* L, int mauiCode);
 // Run a console command line. Built: UI_Lua <code> (the code runs in this state),
 // StartCommandMode <mode> <name>, UI_RenderUnitBars [true|false], UI_SelectByCategory,
 // UI_ExpandCurrentSelection, UI_MakeSelectionSet / UI_ApplySelectionSet <name>, the game speed's
-// WLD_ commands, the range rings' three variables. Any other command is logged once as not built.
+// WLD_ commands, the range rings' three variables, CON_Echo. Another of the original's commands is
+// logged once as not built; a name the original does not know prints `Unknown console command "x"`.
 void ExecuteConsoleCommand(lua_State* L, const std::string& text);
-// A line of the console's output: every function a script gave AddConsoleOutputReciever hears it.
+
+// The console's output (the original's CON_Printf, FA exe 0x41c990): what it hears is the user
+// state's print(...), the simulation's print(...), and the console commands' own lines (an unknown
+// command, a variable's value, a usage); never the log. Every function a script gave
+// AddConsoleOutputReciever hears each line, on the main thread only: a line from another thread
+// waits for the main thread's next frame (DeliverConsoleLines), as the original hands such a line
+// to its main thread (QueueUserAPC, 0x413b70).
 void ConsolePrint(lua_State* L, const std::string& text);
+void ConsolePrintf(lua_State* L, const char* fmt, ...)
+#if defined(__GNUC__)
+    __attribute__((format(printf, 2, 3)))
+#endif
+    ;
+// The engine's line for a command that needs a game when none runs: Loc("<LOC _No_session>") (FA
+// exe 0x834aa9 and its kin in StartCommandMode, the selection commands; READ), which the game's
+// strings give as "No currently active session". INFERRED: that the engine's Loc (0x8c65b0) gives
+// what the scripts' LOC gives; here the scripts' LOC is asked.
+void ConsoleNoSession(lua_State* L);
+// From any thread, without a Lua state: the line waits for the main thread's next frame.
+void ConsolePost(const std::string& text);
+// On the main thread, once a frame (UserState::Frame): the lines other threads posted.
+void DeliverConsoleLines(lua_State* L);
 // Whether the life bars over units are to be drawn now (UI_RenderUnitBars).
 bool LifeBarsShown(lua_State* L);
 

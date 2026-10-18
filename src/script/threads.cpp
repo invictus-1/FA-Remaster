@@ -1,5 +1,6 @@
 #include "script/threads.h"
 
+#include <algorithm>
 #include <string>
 
 #include "core/log.h"
@@ -170,6 +171,7 @@ void ThreadScheduler::WaitCurrentOn(int ref) {
   if (!current_) return;
   if (current_->waitRef != LUA_NOREF) luaL_unref(L_, LUA_REGISTRYINDEX, current_->waitRef);
   current_->waitRef = ref;
+  current_->waitSeq = ++waitCount_;
   if (!current_->inWaiters) {
     current_->inWaiters = true;
     waiters_.push_back(current_);
@@ -302,6 +304,40 @@ void ThreadScheduler::WakeSignalled() {
       threads_.splice(threads_.end(), threads_, it);
     if (atLast) break;
     it = next;
+  }
+}
+
+// CTaskEvent::EventSetSignaled 0x406d90 (read): when an event is signalled, each thread waiting on it is taken off
+// the stage's waiting list and linked at the END of its run list there and then (0x406dfc..0x406e07), the event's
+// waiters walked from the back ([event+0xc] first), so the thread that began to wait last goes first. The
+// manipulators signal in their MoveManipulator, at their place in their unit's beat (rotator 0x643b75, slider
+// 0x647488, animator 0x63fb45, ...). WakeSignalled, which moves the signalled waiters in the run order's own order
+// at fixed points, put two waiters signalled in one entity stage in the wrong order whenever the run order did
+// not already have them in signal order. Seen: MP3, two Cybran radar dish threads (FAF CRadarUnit DishBehavior:
+// WaitFor(rotator), then `if Random() < chance then WaitTicks(11)`, chances 0.4 / 0.5 / 0.6) are woken in the
+// same beat and draw at 4703; ours ran them in the other order, so they drew each other's numbers. The probe
+// (mp3_rand) shows the original's dish that draws at 4765 drawing again at 4827 (no WaitTicks(11)); ours' dish of
+// 4765 had waited and drew at 4837, and the random stream went apart at 4827.
+void ThreadScheduler::Signal(const ScriptObject* o) {
+  if (!o || waiters_.empty()) return;
+  std::vector<Thread*> hit;
+  for (Thread* w : waiters_) {
+    if (w->dead || w == current_ || w->waitRef == LUA_NOREF) continue;
+    lua_rawgeti(L_, LUA_REGISTRYINDEX, w->waitRef);
+    const ScriptObject* p = GetObject(L_, -1);
+    lua_pop(L_, 1);
+    if (p == o) hit.push_back(w);
+  }
+  if (hit.empty()) return;
+  std::sort(hit.begin(), hit.end(), [](const Thread* a, const Thread* b) { return a->waitSeq > b->waitSeq; });
+  for (Thread* w : hit) {
+    luaL_unref(L_, LUA_REGISTRYINDEX, w->waitRef);
+    w->waitRef = LUA_NOREF;  // (no longer waiting: WakeSignalled and RunTick leave it where it is now)
+    for (auto it = threads_.begin(); it != threads_.end(); ++it)
+      if (&*it == w) {
+        threads_.splice(threads_.end(), threads_, it);
+        break;
+      }
   }
 }
 

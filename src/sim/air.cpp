@@ -35,6 +35,7 @@ namespace moho {
 
 namespace combat {
 bool TerrainSegmentHit(const TerrainMap* map, Vec3 p0, Vec3 p1, float* dist, Vec3* hit);
+bool WaterPlaneSegmentHit(Vec3 p0, Vec3 p1, float water, float* dist, Vec3* hit);
 bool HasTarget(Sim& sim, const AiTarget& t);
 Vec3 TargetPos(Sim& sim, const AiTarget& t, bool centre);
 Vec3 TargetPosBeatStart(Sim& sim, const AiTarget& t);
@@ -462,8 +463,12 @@ void SetMotionState(Sim& sim, Unit* u, int s) {
 
 bool InCategory(Sim& sim, Unit* u, const char* cat) { return BpInCategory(sim, u->blueprint, cat); }
 
-// Unit::UpdateInfoCache: the speed cap (u+0x594)
+// Unit::UpdateInfoCache: the speed cap (u+0x594). The air motion reads the cached value (CalcWingedOrientation
+// 0x6bd873, CalcAirMovementDampingFactor 0x6bcae4, CalcMoveAir 0x6bf0fa / 0x6bf105, ...), as UpdateInfoCache wrote it
+// in this beat's MotionTick before the fuel callbacks (see Sim::Tick, MP3 5356); computed here only before the
+// unit's first MotionTick.
 float MaxSpeed(Unit* u) {
+  if (u->motion.maxSpeedU594 > 0) return u->motion.maxSpeedU594;
   const AirBp& b = *A(u).bp;
   float ms = b.maxAirspeed * u->motion.speedMult / 1.0f;
   if (u->motion.speedCap > 0) ms = u->motion.speedCap;  // UpdateInfoCache: the formation cap
@@ -1766,8 +1771,12 @@ void CalcMoveAir(Sim& sim, Unit* u, Transform& T) {
 // --------------------------------------------------------------------------------------------
 // Falling (CUnitMotion::CalcMoveBallistic 0x6c0290). The step is a segment against the terrain (STIMap::
 // Intersection 0x476f30, combat::TerrainSegmentHit): the unit comes down ON the point it returns and the step's
-// scale is the hit distance over the segment's length (0x6c0896). Where that point is under water the original
-// takes the water plane (0x577bc0); there the fine march below still does it.
+// scale is the hit distance over the segment's length (0x6c0896). On a map with water a unit that is not amphibious
+// asks STIMap::SurfaceIntersection 0x577bc0 (0x6c07fc): a terrain point under the water, or none, gives way to the
+// water plane (combat::WaterPlaneSegmentHit), and nothing else is tried. Seen: MP1 2695, army 2's interceptor
+// 0x200023, shot down, comes down on the water at x 111.887993 in the original; our march put it at 111.888000, and
+// army 1's interceptor 0x10001f, flying its attack run at the wreck, took a direction a last bit off (2696; its
+// position 2846). The fine march below is left for the other cases (amphibious, no water).
 
 void CalcMoveBallistic(Sim& sim, Unit* u, Transform& T, float* scale) {
   AirMotion& a = A(u);
@@ -1791,10 +1800,12 @@ void CalcMoveBallistic(Sim& sim, Unit* u, Transform& T, float* scale) {
   float tHit = 1;
   bool exact = false;
   Vec3 hitP{};
+  const bool waterPlane = !amph && map && map->hasWater;
   {
     float d = 0;
     Vec3 h{};
-    if (combat::TerrainSegmentHit(map, P0, P1, &d, &h) && (amph || !(map && map->hasWater) || h.y >= water)) {
+    const bool th = combat::TerrainSegmentHit(map, P0, P1, &d, &h);
+    if ((th && (!waterPlane || h.y >= water)) || (waterPlane && combat::WaterPlaneSegmentHit(P0, P1, water, &d, &h))) {
       const Vec3 hv{(P1.x - P0.x) * 0.5f, (P1.y - P0.y) * 0.5f, (P1.z - P0.z) * 0.5f};
       const float ext = std::sqrt(hv.y * hv.y + hv.z * hv.z + hv.x * hv.x);
       exact = hit = true;
@@ -1802,7 +1813,7 @@ void CalcMoveBallistic(Sim& sim, Unit* u, Transform& T, float* scale) {
       tHit = d / (ext * 2.0f);
     }
   }
-  const int N = 16;
+  const int N = waterPlane ? 0 : 16;
   float prevDiff = P0.y - (amph || !map || !map->hasWater ? Elevation(map, P0.x, P0.z)
                                                           : std::max(Elevation(map, P0.x, P0.z), water));
   for (int i = 1; i <= N && !hit; ++i) {
@@ -1831,6 +1842,9 @@ void CalcMoveBallistic(Sim& sim, Unit* u, Transform& T, float* scale) {
     if (u->dead) {
       lua_State* L = sim.L();
       lua_pushstring(L, u->layer == "Land" ? "Terrain" : "Water");
+      if (sim.collectImpacts)  // (a host's list, render REQUESTS 36; reads only: where it lands, the fall's speed)
+        RecordImpact(sim, 2, u, u->layer == "Land" ? "Terrain" : "Water", nullptr, P1,
+                             Vec3{v2.x * 10.0f, v2.y * 10.0f, v2.z * 10.0f});
       sim.CallMethod(L, u, "OnImpact", 1);
       SetMotionState(sim, u, 3);
     } else {

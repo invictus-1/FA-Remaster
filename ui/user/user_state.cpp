@@ -203,6 +203,7 @@ void UserState::Frame(double seconds) {
   ui_->Update(state_->L(), static_cast<float>(seconds));
   AdvanceCameras(state_->L(), static_cast<float>(seconds));
   DeliverChat(state_->L());
+  DeliverConsoleLines(state_->L());  // (the console's lines from other threads: user/keymap.cpp)
   threads_->RunTick(frame_);
 }
 

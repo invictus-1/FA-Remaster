@@ -21,8 +21,9 @@ namespace {
 
 Vfs* GetVfs(lua_State* L) { return ScriptState::From(L)->vfs(); }
 
-// Concatenate all arguments with tostring(), as LOG/WARN/SPEW do.
-std::string JoinArgs(lua_State* L) {
+// Concatenate all arguments with tostring(), as LOG/WARN/SPEW do. `pieces`: each argument's text as well (C++
+// copies only: the Lua calls are the same with or without it).
+std::string JoinArgs(lua_State* L, std::vector<std::string>* pieces = nullptr) {
   std::string out;
   int n = lua_gettop(L);
   lua_getglobal(L, "tostring");
@@ -33,6 +34,7 @@ std::string JoinArgs(lua_State* L) {
     const char* s = lua_tostring(L, -1);
     if (i > 1) out += '\t';  // the original separates arguments with tabs, like print
     if (s) out += s;
+    if (pieces) pieces->emplace_back(s ? s : "");
     lua_pop(L, 1);
   }
   lua_pop(L, 1);
@@ -41,6 +43,17 @@ std::string JoinArgs(lua_State* L) {
 
 int l_LOG(lua_State* L) {
   LogWrite(LogLevel::Info, JoinArgs(L));
+  return 0;
+}
+// print(...): the log line LOG writes, unless the state's onPrint keeps the line (the sim state's while its host
+// collects them: Sim::collectPrints, ui REQUESTS 41); then the log gets none of it, as the original's sim print
+// (0x74b570 -> Sim::Printf 0x7462a0, which only keeps the line). The Lua calls are LOG's either way.
+int l_print(lua_State* L) {
+  ScriptState* st = ScriptState::From(L);
+  if (!st || !st->onPrint) return l_LOG(L);
+  std::vector<std::string> pieces;
+  std::string line = JoinArgs(L, &pieces);
+  if (!st->onPrint(pieces)) LogWrite(LogLevel::Info, line);
   return 0;
 }
 int l_WARN(lua_State* L) {
@@ -810,7 +823,7 @@ void RegisterCoreBindings(ScriptState& state) {
   Reg(L, "WARN", l_WARN);
   Reg(L, "SPEW", l_SPEW);
   Reg(L, "_ALERT", l_LOG);
-  Reg(L, "print", l_LOG);
+  Reg(L, "print", l_print);
   Reg(L, "doscript", l_doscript);
   Reg(L, "DiskFindFiles", l_DiskFindFiles);
   Reg(L, "DiskGetFileInfo", l_DiskGetFileInfo);

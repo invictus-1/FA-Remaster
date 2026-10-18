@@ -99,7 +99,76 @@ struct DamageSpec {
   float amount = 0;
   std::string type;
   bool friendly = true, self = false;
+  float radius = 0;  // (for a host's hit list only: DamageArea's radius, DamageRing's outer one)
 };
+
+int KindOf(const Entity* e) {  // HitEvent::targetKind
+  switch (e->kind) {
+    case Entity::Kind::Unit: return 0;
+    case Entity::Kind::Shield: return 1;
+    case Entity::Kind::Prop: return 2;
+    case Entity::Kind::Projectile: return 3;
+    default: return 4;
+  }
+}
+void Put3(float out[3], Vec3 v) {
+  out[0] = v.x;
+  out[1] = v.y;
+  out[2] = v.z;
+}
+Vec3 UnitOrZero(Vec3 v) {
+  const float l = std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+  return l > 0 && std::isfinite(l) ? Vec3{v.x / l, v.y / l, v.z / l} : Vec3{};
+}
+
+// One damage for a host's hit list (render REQUESTS 36). It reads only: the shell or beam the damage is credited to
+// is the one whose OnImpact runs now (Sim::impactShot) when the damage call names it or its launcher as the
+// instigator (FAF's Projectile.OnImpact passes the launcher, or the shell when the launcher is gone; its
+// CollisionBeam.OnImpact the beam's unit), else a shell named as the instigator itself. A death weapon fired from
+// a unit killed by that damage names the dying unit, so it is not credited to the shell.
+void RecordHit(Sim& sim, const DamageSpec& d, const Entity* target, float damage, Vec3 vector) {
+  HitEvent h;
+  h.target = target->id;
+  h.targetKind = KindOf(target);
+  if (target->kind == Entity::Kind::Shield) {
+    h.shield = true;
+    h.shieldId = target->id;
+    // the bubble is attached to its owner (FAF's Shield.OnCreate: AttachBoneTo(-1, spec.Owner, -1))
+    if (const Entity* owner = target->attachParent ? sim.FindEntity(target->attachParent) : nullptr) h.target = owner->id;
+  }
+  const Entity* I = d.instigator;
+  if (I) {
+    h.instigator = I->id;
+    h.army = I->army ? I->army->index : 0;
+  }
+  const Entity* by = nullptr;
+  if (const Entity* shot = sim.impactShot) {
+    const Entity* shooter = shot->kind == Entity::Kind::Projectile ? static_cast<const Projectile*>(shot)->launcher
+                            : static_cast<const CollisionBeam*>(shot)->weapon
+                                ? static_cast<const CollisionBeam*>(shot)->weapon->unit
+                                : nullptr;
+    if (I && (I == shot || I == shooter)) by = shot;
+  }
+  if (!by && I && I->kind == Entity::Kind::Projectile) by = I;
+  Vec3 dir = UnitOrZero(vector);
+  if (by && by->kind == Entity::Kind::Projectile) {
+    const Projectile* p = static_cast<const Projectile*>(by);
+    h.weapon = WeaponBlueprintId(p->weapon);
+    if (p->blueprint) h.projectile = p->blueprint->id;
+    const Vec3 v = UnitOrZero(p->velocity);
+    if (v.x != 0 || v.y != 0 || v.z != 0) dir = v;
+  } else if (by && by->kind == Entity::Kind::Beam) {
+    h.weapon = WeaponBlueprintId(static_cast<const CollisionBeam*>(by)->weapon);
+    h.beam = true;
+    dir = Forward(by->orientation);
+  }
+  h.damageType = d.type;
+  h.amount = damage;
+  Put3(h.position, d.origin);
+  h.radius = d.radius;
+  Put3(h.direction, dir);
+  sim.hitEvents.push_back(std::move(h));
+}
 
 // DoDamagePoint 0x737140
 void DoDamagePoint(Sim& sim, lua_State* L, const DamageSpec& d, Entity* target, float amount, Vec3 vector) {
@@ -147,6 +216,7 @@ void DoDamagePoint(Sim& sim, lua_State* L, const DamageSpec& d, Entity* target, 
     }
   }
   if (damage > 0 && target->HasLuaObject()) {
+    if (sim.collectHits) RecordHit(sim, d, target, damage, vector);  // (a host's list, before what OnDamage does)
     PushObject(L, d.instigator && d.instigator->HasLuaObject() ? d.instigator : nullptr);
     lua_pushnumber(L, damage);
     PushVec(L, vector);
@@ -262,6 +332,7 @@ int l_DamageArea(lua_State* L) {
   d.type = luaL_checkstring(L, 5);
   d.friendly = lua_toboolean(L, 6) != 0;
   d.self = lua_toboolean(L, 7) != 0;
+  d.radius = r;
   if (d.amount == 0) return luaL_error(L, "0 damage specified.");
   if (r == 0) return luaL_error(L, "0 radius specified.");
   DoDamageArea(*S(L), L, d, r, 0, false);
@@ -277,6 +348,7 @@ int l_DamageRing(lua_State* L) {
   d.type = luaL_checkstring(L, 6);
   d.friendly = lua_toboolean(L, 7) != 0;
   d.self = lua_toboolean(L, 8) != 0;
+  d.radius = r1;
   if (d.amount == 0) return luaL_error(L, "0 damage specified.");
   if (r0 == 0) return luaL_error(L, "0 min radius specified.");
   if (r1 == 0) return luaL_error(L, "0 max radius specified.");
@@ -542,8 +614,15 @@ void BeamCheck(Sim& sim, lua_State* L, CollisionBeam* b) {
            target ? static_cast<int>(target->id) : -1, target && target->dead ? " (dead)" : "", D);
   }
   lua_pushstring(L, ImpactTypeName(type));
-  PushObject(L, target && target->HasLuaObject() ? target : nullptr);
+  Entity* const met = target && target->HasLuaObject() ? target : nullptr;
+  PushObject(L, met);
+  // a host's lists (render REQUESTS 36; reads only): the impact, and the beam as what its OnImpact's damage is from
+  if (sim.collectImpacts) RecordImpact(sim, 1, b, ImpactTypeName(type), met, impactPos, dir);
+  const bool credit = sim.collectHits;
+  const Entity* const shotBefore = sim.impactShot;
+  if (credit) sim.impactShot = b;
   sim.CallMethod(L, b, "OnImpact", 2);
+  if (credit) sim.impactShot = shotBefore;
   // 0x673337: the weapon hears whether the beam met its target (ReTargetOnMiss)
   if (!owner->destroyQueued && !owner->combatGone &&
       std::find(owner->weapons.begin(), owner->weapons.end(), w) != owner->weapons.end())
@@ -660,6 +739,67 @@ void BeamTick(Sim& sim, CollisionBeam* b) {
 void BeamsTick(Sim& sim) {
   std::vector<CollisionBeam*> beams = sim.beams;
   for (CollisionBeam* b : beams) BeamTick(sim, b);
+}
+
+// ---- hits, impacts and health for a host (render REQUESTS 36) ------------------------------------------------
+// Kept only while the host asks (Sim::collectHits / collectImpacts / collectHealth). Recording reads the
+// simulation's own values and appends to a list: no script call, no Lua value, no random draw. (Engine objects
+// stay allocated until the Sim ends, Sim::owned_, so a shell's weapon and launcher pointers are safe to read.)
+
+std::string WeaponBlueprintId(const UnitWeapon* w) {
+  // FAF's lua/system/Blueprints.lua (ModBlueprints): w.BlueprintId = bp.BlueprintId .. "-" .. i .. "-" .. label,
+  // label = w.Label or "Unlabelled", i its index in bp.Weapon
+  if (!w || !w->unit || !w->unit->blueprint) return {};
+  return w->unit->blueprint->id + "-" + std::to_string(w->bpIndex) + "-" + (w->label.empty() ? "Unlabelled" : w->label);
+}
+
+void RecordImpact(Sim& sim, int kind, const Entity* source, const char* type, const Entity* met, Vec3 at, Vec3 velocity) {
+  ImpactEvent ev;
+  ev.kind = static_cast<ImpactEvent::Kind>(kind);
+  ev.type = type;
+  ev.source = source->id;
+  ev.army = source->army ? source->army->index : 0;
+  if (kind == ImpactEvent::Projectile) {
+    const Projectile* p = static_cast<const Projectile*>(source);
+    if (p->blueprint) ev.projectile = p->blueprint->id;
+    ev.weapon = WeaponBlueprintId(p->weapon);
+  } else if (kind == ImpactEvent::Beam) {
+    ev.weapon = WeaponBlueprintId(static_cast<const CollisionBeam*>(source)->weapon);
+  } else if (source->blueprint) {
+    ev.projectile = source->blueprint->id;
+  }
+  if (met) ev.entity = met->id;
+  Put3(ev.position, at);
+  Put3(ev.direction, UnitOrZero(velocity));
+  if (kind != ImpactEvent::Beam)
+    ev.speed = std::sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z);
+  sim.impactEvents.push_back(std::move(ev));
+}
+
+void RecordHealth(Sim& sim, const Entity* e, float before, float beforeMax) {
+  HealthEvent ev;
+  ev.entity = e->id;
+  ev.kind = KindOf(e);
+  ev.fraction = e->maxHealth > 0 ? e->health / e->maxHealth : 0.0f;
+  ev.before = beforeMax > 0 ? before / beforeMax : 0.0f;
+  if (ev.fraction == ev.before) return;  // (the fraction did not change: a new maximum while the health is 0)
+  sim.healthEvents.push_back(ev);
+}
+
+std::vector<HitEvent> Sim::TakeHits() const {
+  std::vector<HitEvent> out;
+  out.swap(hitEvents);
+  return out;
+}
+std::vector<ImpactEvent> Sim::TakeImpacts() const {
+  std::vector<ImpactEvent> out;
+  out.swap(impactEvents);
+  return out;
+}
+std::vector<HealthEvent> Sim::TakeHealth() const {
+  std::vector<HealthEvent> out;
+  out.swap(healthEvents);
+  return out;
 }
 
 void RegisterDamageBindings(lua_State* L) {

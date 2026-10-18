@@ -102,6 +102,9 @@ bool TaskCanMove(const Unit* u);
 void TaskMoveToward(Sim& sim, Unit* u, const Vec3& goal);
 // CUnitReclaimTask's command listener 0x620160: the target of the command it listens to changed.
 void ReclaimTaskCommandEvent(Sim& sim, Unit* u, BuildTask& c, const UnitCommand& cmd);
+// CUnitMoveTask::OnEvent 0x618c40 for a task's walk under way (it links the queue's head command): the navigator's goal
+// becomes the command's position for the unit (through PrepareMove when the walk took the rally override)
+void TaskWalkCommandEvent(Sim& sim, UnitCommand& c, Unit* u);
 void TaskStopMoving(Unit* u);
 
 // Factories (factory_handoff.md): the rally queue (Unit::factoryCommands, CAiBuilderImpl+0x24) and

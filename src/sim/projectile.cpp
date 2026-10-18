@@ -696,8 +696,16 @@ void Impact(Sim& sim, Projectile* p) {
   p->hitFraction = -1;
   ++g_impacts;
   lua_pushstring(L, ImpactTypeName(type));
-  PushObject(L, e && !e->destroyQueued && e->HasLuaObject() ? e : nullptr);
+  Entity* const met = e && !e->destroyQueued && e->HasLuaObject() ? e : nullptr;
+  PushObject(L, met);
+  // a host's lists (render REQUESTS 36; reads only): the impact where the shell stands (its hit point), and the
+  // shell as what the damage its OnImpact deals is from
+  if (sim.collectImpacts) RecordImpact(sim, 0, p, ImpactTypeName(type), met, p->position, p->velocity);
+  const bool credit = sim.collectHits;
+  const Entity* const shotBefore = sim.impactShot;
+  if (credit) sim.impactShot = p;
   sim.CallMethod(L, p, "OnImpact", 2);
+  if (credit) sim.impactShot = shotBefore;
   // 0x69e084: after the script, the weapon that fired it hears how the shot went (its acquire task listens:
   // CAiAttackerImpl::TransmitProjectileImpactEvent 0x5d7800 hooked it up when the shell was made)
   if (UnitWeapon* w = p->weapon) {

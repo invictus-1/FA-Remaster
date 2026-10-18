@@ -348,6 +348,7 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
   auto t0 = std::chrono::steady_clock::now();
   if (!sim.LoadRules()) return 1;
   auto t1 = std::chrono::steady_clock::now();
+  sim.collectPrints = o.view;  // the scripts' print lines, as a console host takes them (before Start: its lines too)
   bool ok = sim.Start(session);
   auto t2 = std::chrono::steady_clock::now();
   Logf(LogLevel::Info, "moho64: sim start-up %s", ok ? "ok" : "FAILED");
@@ -369,6 +370,72 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
   sim.collectEffects = o.view;
   sim.collectSounds = o.view;
   sim.collectProps = o.view;
+  // MOHO64_HITS=1 (render REQUESTS 36): keep the hits, impacts and health changes (Sim::collectHits, collectImpacts,
+  // collectHealth) and take them after every beat as a host does; the log gets the counts, the most in one beat, a
+  // few samples and what taking them cost. =2 also logs every event. (--view takes them too.) The game must play
+  // the same with them as without: compare MOHO64_FINGERPRINT / MOHO64_RECORD of a run with and one without.
+  const int hitsLog = getenv("MOHO64_HITS") ? std::atoi(getenv("MOHO64_HITS")) : 0;
+  sim.collectHits = sim.collectImpacts = sim.collectHealth = o.view || hitsLog > 0;
+  struct HitsSeen {
+    size_t n[3] = {0, 0, 0}, most[3] = {0, 0, 0};
+    uint32_t mostTick[3] = {0, 0, 0};
+    size_t shield = 0, credited = 0, beam = 0, miss = 0, crash = 0, beamImpacts = 0;
+    std::map<std::string, size_t> impactTypes, damageTypes;
+    std::vector<std::string> samples;
+    double seconds = 0;
+  } hitsSeen;
+  std::vector<HitEvent> hitList;
+  std::vector<ImpactEvent> impactList;
+  std::vector<HealthEvent> healthList;
+  auto takeHits = [&] {
+    if (!sim.collectHits) return;
+    const auto h0 = std::chrono::steady_clock::now();
+    hitList = sim.TakeHits();
+    impactList = sim.TakeImpacts();
+    healthList = sim.TakeHealth();
+    hitsSeen.seconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - h0).count();
+    const size_t sizes[3] = {hitList.size(), impactList.size(), healthList.size()};
+    for (int k = 0; k < 3; ++k) {
+      hitsSeen.n[k] += sizes[k];
+      if (sizes[k] > hitsSeen.most[k]) {
+        hitsSeen.most[k] = sizes[k];
+        hitsSeen.mostTick[k] = sim.tick();
+      }
+    }
+    char b[480];
+    for (const HitEvent& h : hitList) {
+      hitsSeen.shield += h.shield;
+      hitsSeen.credited += !h.weapon.empty();
+      hitsSeen.beam += h.beam;
+      ++hitsSeen.damageTypes[h.damageType];
+      std::snprintf(b, sizeof b, "tick %u hit %#x (kind %d%s %#x) by %#x army %d weapon '%s' shell '%s'%s: %.2f %s at %.2f %.2f %.2f r %.2f dir %.3f %.3f %.3f",
+                    sim.tick(), h.target, h.targetKind, h.shield ? ", shield" : "", h.shieldId, h.instigator, h.army,
+                    h.weapon.c_str(), h.projectile.c_str(), h.beam ? " beam" : "", h.amount, h.damageType.c_str(),
+                    h.position[0], h.position[1], h.position[2], h.radius, h.direction[0], h.direction[1], h.direction[2]);
+      if (hitsLog >= 2) Logf(LogLevel::Info, "hits: %s", b);
+      if (hitsSeen.samples.size() < 6 || (h.shield && hitsSeen.shield == 1) || (h.beam && hitsSeen.beam == 1))
+        hitsSeen.samples.push_back(b);
+    }
+    for (const ImpactEvent& ev : impactList) {
+      ++hitsSeen.impactTypes[ev.type];
+      hitsSeen.miss += ev.entity == 0xffffffffu;
+      hitsSeen.crash += ev.kind == ImpactEvent::Crash;
+      hitsSeen.beamImpacts += ev.kind == ImpactEvent::Beam;
+      std::snprintf(b, sizeof b, "tick %u impact %s of %s %#x army %d '%s' weapon '%s' on %#x at %.2f %.2f %.2f dir %.3f %.3f %.3f speed %.2f",
+                    sim.tick(), ev.type.c_str(), ev.kind == ImpactEvent::Projectile ? "shell" : ev.kind == ImpactEvent::Beam ? "beam" : "crash",
+                    ev.source, ev.army, ev.projectile.c_str(), ev.weapon.c_str(), ev.entity, ev.position[0], ev.position[1],
+                    ev.position[2], ev.direction[0], ev.direction[1], ev.direction[2], ev.speed);
+      if (hitsLog >= 2) Logf(LogLevel::Info, "hits: %s", b);
+      if (hitsSeen.samples.size() < 12 || (ev.kind == ImpactEvent::Crash && hitsSeen.crash == 1))
+        hitsSeen.samples.push_back(b);
+    }
+    for (const HealthEvent& ev : healthList) {
+      std::snprintf(b, sizeof b, "tick %u health %#x (kind %d) %.4f -> %.4f", sim.tick(), ev.entity, ev.kind, ev.before,
+                    ev.fraction);
+      if (hitsLog >= 2) Logf(LogLevel::Info, "hits: %s", b);
+      if (hitsSeen.samples.size() < 16) hitsSeen.samples.push_back(b);
+    }
+  };
   size_t propCount[3] = {0, 0, 0}, propMapOnes[3] = {0, 0, 0}, entMax = 0, entShieldMax = 0, unitMeshMax = 0;
   std::string propSample[3], entSample[2], unitMeshSample, carrySample, creatorSample;
   size_t carryMax = 0;
@@ -463,6 +530,11 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
              b.find("StatsToSend") != std::string::npos ? " and StatsToSend" : "");
       lastSync = std::move(b);
     }
+    // --view: the print lines since the last take, each as the host's console would get it ([] around it, so that
+    // spaces at its ends show)
+    if (o.view)
+      for (const std::string& line : sim.TakePrints())
+        Logf(LogLevel::Info, "view: print tick %u [%s]", sim.tick(), line.c_str());
   };
   // The setup's own Sync (the original's beat 0, made by Start), taken before the first beat as a host does.
   if (ok) {
@@ -485,6 +557,7 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
     if (sim.Paused()) {
       sim.PausedBeat();
       takeSync();
+      takeHits();
       ++paused;
       if (fingerprint && !fingerprint->Beat(sim, static_cast<uint32_t>(done + paused))) diverged = true;
       if (diverged || (sim.frozen && (stream.AtEnd() || !playStream))) break;
@@ -492,6 +565,7 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
     }
     sim.Tick();
     takeSync();
+    takeHits();
     ++done;
     if (fingerprint && !fingerprint->Beat(sim, static_cast<uint32_t>(done + paused))) {
       diverged = true;
@@ -675,6 +749,18 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
     if (!unitMeshSample.empty()) Logf(LogLevel::Info, "view: %s", unitMeshSample.c_str());
     if (!carrySample.empty()) Logf(LogLevel::Info, "view: %s", carrySample.c_str());
     if (!creatorSample.empty()) Logf(LogLevel::Info, "view: %s", creatorSample.c_str());
+  }
+  if (ok && sim.collectHits) {
+    Logf(LogLevel::Info, "hits: %zu hits (%zu on shields, %zu credited to a weapon, %zu by beams), %zu impacts (%zu met "
+         "nothing, %zu by beams, %zu crashes), %zu health changes; most in one beat: %zu hits (tick %u), %zu impacts "
+         "(tick %u), %zu health (tick %u); taking them took %.4f ms a beat",
+         hitsSeen.n[0], hitsSeen.shield, hitsSeen.credited, hitsSeen.beam, hitsSeen.n[1], hitsSeen.miss,
+         hitsSeen.beamImpacts, hitsSeen.crash, hitsSeen.n[2], hitsSeen.most[0], hitsSeen.mostTick[0], hitsSeen.most[1],
+         hitsSeen.mostTick[1], hitsSeen.most[2], hitsSeen.mostTick[2],
+         done + paused ? hitsSeen.seconds * 1000.0 / (done + paused) : 0.0);
+    for (const auto& [type, n] : hitsSeen.impactTypes) Logf(LogLevel::Info, "hits:   impact '%s' x%zu", type.c_str(), n);
+    for (const auto& [type, n] : hitsSeen.damageTypes) Logf(LogLevel::Info, "hits:   damage '%s' x%zu", type.c_str(), n);
+    for (const std::string& line : hitsSeen.samples) Logf(LogLevel::Info, "hits: %s", line.c_str());
   }
   if (fingerprint && !diverged) fingerprint->End(static_cast<uint32_t>(done + paused));
   for (auto& [what, n] : ordersUnhandled) Logf(LogLevel::Warning, "orders: %s not carried out (x%d)", what.c_str(), n);

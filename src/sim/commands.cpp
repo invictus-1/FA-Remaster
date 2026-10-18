@@ -32,6 +32,7 @@ namespace moho {
 
 namespace combat {
 bool IsEnemy(const Army* a, const Army* b);
+int CallMethodBool(Sim& sim, lua_State* L, ScriptObject* obj, const char* method, int nargs);
 }
 namespace {
 
@@ -145,6 +146,73 @@ void PopHead(Unit* u) {
 }
 
 bool NextIsMove(const Unit* u) { return u->commands.size() > 1 && MoveLike(u->commands[1]->type); }
+
+// IAiCommandDispatchImpl::TaskTick 0x598e80, once DispatchTask made no task for the head order (0x598eea..0x598f67):
+// the order counts as carried out. A count above 1 goes down by one and the order is dispatched again (0x598eee..
+// 0x598f09, on to 0x598f6d); with the repeat switch (unit+0x2a2) a spent BuildFactory order gets its count back
+// (+0xe0 -> +0xe4), goes to the back of the queue (0x6edfc0) and the dispatcher waits a beat (0x598f0b..0x598f3b);
+// otherwise it is removed (0x6ede70 at 0x598f67) and the next one dispatched. The count is the command's own, shared
+// with every unit that holds it. Returns true when the dispatcher goes on in this beat. (TaskTick's own cases for
+// Attack, Patrol and FormPatrol at 0x598f47 are not here: only BuildFactory and Upgrade orders come this way.)
+bool OrderTakenWithoutTask(Unit* u) {
+  std::shared_ptr<UnitCommand> head = u->commands.front();
+  if (head->count > 1) {
+    --head->count;
+    return true;
+  }
+  if (u->repeatQueue && head->type == CommandType::BuildFactory) {
+    head->count = head->maxCount;
+    if (u->commands.size() > 1) {
+      PopHead(u);
+      u->commands.push_back(head);
+      head->units.insert(u);
+    }
+    u->headState = kNotStarted;
+    return false;
+  }
+  PopHead(u);
+  return true;
+}
+
+// a unit blueprint's General.<key> string ("" when it has none)
+std::string GeneralString(Sim& sim, const BlueprintInfo& bp, const char* key) {
+  lua_State* L = sim.L();
+  const int top = lua_gettop(L);
+  std::string r;
+  sim.blueprints().PushTable(L, bp);
+  if (lua_istable(L, -1)) {
+    lua_pushstring(L, "General");
+    lua_rawget(L, -2);
+    if (lua_istable(L, -1)) {
+      lua_pushstring(L, key);
+      lua_rawget(L, -2);
+      if (lua_type(L, -1) == LUA_TSTRING) r = lua_tostring(L, -1);
+    }
+  }
+  lua_settop(L, top);
+  return r;
+}
+
+bool SameIdNoCase(const std::string& a, const std::string& b) {
+  if (a.size() != b.size()) return false;
+  for (size_t i = 0; i < a.size(); ++i)
+    if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i]))) return false;
+  return true;
+}
+
+// DispatchTask's Upgrade case (0x6098bd): no blueprint, no task. When the order's blueprint names a General.SeedUnit
+// (string at bp+0x1d8, its size +0x1ec), that must be the unit's own blueprint (bp+8); otherwise the unit's
+// General.UpgradesTo (bp+0x184) must be the order's blueprint, or the order's General.UpgradesFrom (bp+0x1a0) the
+// unit's. The compares ignore case (0xaa549e). Only then is the upgrade task made (0x5f8b80); else no task.
+// (General sits at RUnitBlueprint+0x17c, 0x5258cf; UpgradesTo +8, UpgradesFrom +0x24, SeedUnit +0x5c, 0x520660..)
+bool UpgradeOrderFits(Sim& sim, const Unit* u, const UnitCommand& c) {
+  const BlueprintInfo* to = sim.blueprints().Find(c.blueprintId);
+  if (!to || !u->blueprint) return false;
+  const std::string seed = GeneralString(sim, *to, "SeedUnit");
+  if (!seed.empty()) return SameIdNoCase(seed, u->blueprint->id);
+  if (SameIdNoCase(GeneralString(sim, *u->blueprint, "UpgradesTo"), to->id)) return true;
+  return SameIdNoCase(GeneralString(sim, *to, "UpgradesFrom"), u->blueprint->id);
+}
 
 }  // namespace
 
@@ -287,6 +355,14 @@ void CheckScriptTarget(lua_State* L, int idx) {
 // the goal cell (from the 4th run on).
 struct PatrolData {
   bool goalIssued = false, atGoal = false, aggressive = false;
+  // task+0x5c: the goal (SNavGoal) the dispatcher worked out when it made the task (CUnitCommand::GetPosition at
+  // 0x6097cb / 0x609809 / 0x60985f, copied by the ctor 0x61aed2) and that only the command's event changes (OnEvent
+  // 0x61c3e0: GetPosition again, 0x61c43c). TaskTick hands this one to the navigator (0x61c3aa) and the arrival test
+  // 0x61b610 reads it (0x61b61c), so it does not follow the command's later state: a formation command whose other
+  // units have left keeps giving the unit its formation cell. Seen: MP2 6057, army 1's 0x100031, the last of six
+  // aircraft on a formation AggressiveMove, ends it at its formation cell's rect (247, 215) +- 15; ours, asking the
+  // command again, took the order's point (only one unit left: 0x6e8a42) and flew on to 6063.
+  Vec3 goal{};
   int ticks = 0;
   PatrolBox box;
   BuildTask* child = nullptr;
@@ -354,7 +430,7 @@ float UnitTopSpeed(const Unit* u) {
 bool AtPatrolGoal(Sim& sim, Unit* u, const PatrolData& p) {
   if (u->commands.empty() || !u->motion.bp) return false;
   const NamedFootprint& f = UnitFootprint(u);  // (0x61b671: Entity::GetFootprint)
-  Vec3 g = TargetPos(sim, *u->commands.front(), u);
+  const Vec3& g = p.goal;  // (task+0x5c, 0x61b61c)
   int gx = static_cast<int>(std::nearbyint(g.x - f.sizeX * 0.5f));
   int gz = static_cast<int>(std::nearbyint(g.z - f.sizeZ * 0.5f));
   int x0 = gx, z0 = gz, x1 = gx + 1, z1 = gz + 1;
@@ -459,9 +535,9 @@ Entity* PatrolReclaimTarget(Sim& sim, Unit* u, PatrolData& p) {
   return best;
 }
 
-void PatrolSetGoal(Sim& sim, Unit* u) {
+void PatrolSetGoal(Sim& sim, Unit* u, const PatrolData& p) {
   if (u->commands.empty()) return;
-  std::vector<Vec3> path{TargetPos(sim, *u->commands.front(), u)};
+  std::vector<Vec3> path{p.goal};  // (task+0x5c, 0x61c3aa)
   u->motion.arrived = u->motion.failed = false;
   MotionSetGoal(sim, u, path, NextIsMove(u), sim.tick());
   // (no "Moving": that is the move task's state; a patrolling unit on its way only has "Patrolling", as seen in
@@ -477,6 +553,7 @@ BuildTask* StartPatrolTask(Sim& sim, Unit* u, const UnitCommand& c) {
   t->order = "Patrol";
   t->pdata = std::make_shared<PatrolData>();
   t->pdata->aggressive = c.type == CommandType::AggressiveMove;
+  t->pdata->goal = TargetPos(sim, c, u);  // (the dispatcher's GetPosition, into the ctor's +0x5c)
   u->unitStates.insert("Patrolling");
   PatrolSearchBox(sim, u, *t->pdata);
   AirSpeedThroughEvent(sim, u);  // the patrol task ctor
@@ -551,7 +628,7 @@ int TickPatrol(Sim& sim, Unit* u, BuildTask& t) {
     return kTaskRunning;
   }
   if (!u->motion.hasGoal || !p.goalIssued) {
-    PatrolSetGoal(sim, u);
+    PatrolSetGoal(sim, u, *t.pdata);
     p.goalIssued = true;
     p.atGoal = false;
   }
@@ -582,25 +659,55 @@ void EndPatrol(Sim& sim, Unit* u, BuildTask& t) {
 // units still on it. The patrol's reclaim child listens to the same command (ReclaimTaskCommandEvent, build.cpp).
 // NOT MODELLED: the attack and repair children's listeners (0x5f4000, 0x5f9d60). (A reclaim child's walk under way
 // ends with the wake: TickPropReclaim.)
+// The reclaim child's listener wakes the thread (0x620238..0x62026d, read): the frame count (+0x14) 0 and, when the
+// thread is suspended (+0x18, set by its walking child's move task: CUnitMoveTask's ctor), re-linked at the stage's
+// end, as the move task's navigator listener 0x618bb0 does (NavEventWakesCommandThread). The move task's own command
+// listener 0x618c40 and the patrol's 0x61c3e0 only re-goal and re-link nothing (read). The command tells its
+// listeners from the oldest linked on (0x6e94cf starts at the list head's +4; a link as in the move task's ctor,
+// 0x6182f6..0x618315, puts a new listener at the head's +0); ours goes by unit id (the same order here).
+// Seen (probe mp1_3150): MP1 beat 3149, army 7's player drags its engineers' AggressiveMove waypoint; at 3150
+// 0x70003d and 0x70004f (reclaiming, awake) run first, then 0x700027, 0x700042 and 0x70004a, whose reclaim walks the
+// event ended, in that order; at 3156 their patrol legs take the free spots by PrepareMove in that thread order.
+// Ours kept 0x700027 first (last re-linked 3041) and the five took each other's cells (MP1 3158).
 void RetargetPatrolTasks(Sim& sim, UnitCommand& c) {
   if (!IsPatrolType(c.type) || c.form) return;
   std::vector<Unit*> holders(c.units.begin(), c.units.end());
   std::sort(holders.begin(), holders.end(), [](const Unit* a, const Unit* b) { return a->id < b->id; });
+  std::vector<Unit*> walkers;  // reclaim children whose walk is under way
   for (Unit* u : holders) {
     if (!IsAlive(u) || u->commands.empty() || u->commands.front().get() != &c) continue;
     if (u->headState != kRunning || !u->task || !u->task->pdata || !u->motion.bp || !u->motion.bp->mobile()) continue;
     PatrolData& p = *u->task->pdata;
+    p.goal = TargetPos(sim, c, u);  // (OnEvent 0x61c3e0 stores it, +0x5c)
     if (p.goalIssued) {
-      const Vec3 goal = TargetPos(sim, c, u);
+      const Vec3 goal = p.goal;
       if (u->motion.bp->motionType == kMotionAir) MotionSetGoal(sim, u, std::vector<Vec3>{goal}, u->motion.passThrough, sim.tick());
       else if (u->motion.nav) LandNavSetGoal(sim, u, goal, u->motion.nav->speedThroughGoal);
     }
     PatrolSearchBox(sim, u, p);
     BuildTask* ch = p.child;
     if (ch && ch->type == CommandType::Reclaim && !ch->pdata && !ch->gdata && !ch->adata) {
+      const bool asleep = TaskThreadAsleepOnMove(u, ch);  // (asked before the event changes the child)
       ReclaimTaskCommandEvent(sim, u, *ch, c);
       p.childFrom = 0;  // (the listener wakes the thread: counter 0)
+      if (asleep) walkers.push_back(u);
     }
+  }
+  // The walk's own listener (linked after the reclaim task's): its navigator takes the command's new position at once.
+  // Seen (probe mp1_3341): MP1 beat 3340, army 7's player drags the AggressiveMove again; the walks of 0x700055 and
+  // 0x70005a (rally overridden: free spots by PrepareMove) get the goals (360, 584) and (362, 584) from 0x618d76 in the
+  // stream, their navigators plan at 3341 before the command stage and the drive-through byte is 0 after 3341; ours
+  // set the goal only in the command stage and the byte followed a beat later.
+  // Both listeners are told in the command's listener order, the oldest linked first (0x6e94cf), which for the walks
+  // is the order they were made in, not the unit ids: their re-links (the reclaim task's) and their PrepareMove spots
+  // (the walk's) follow it. Seen (probe mp1_3632): MP1 beat 3623, army 0's player drags its rally AggressiveMove; the
+  // walks are re-goaled 0x49, 0x3c, 0x42, 0x46, 0x3a, 0x44, the first taking the waypoint's own cell (787, 173), and
+  // the threads run in that order at 3624; ours went by id (0x3a first took (787, 173)), and from 3630 the walks of
+  // 0x3a, 0x44 and 0x49 headed for each other's spots (MP1 3632).
+  std::stable_sort(walkers.begin(), walkers.end(), [](const Unit* a, const Unit* b) { return a->walkSeq < b->walkSeq; });
+  for (Unit* u : walkers) {
+    TaskWalkCommandEvent(sim, c, u);
+    sim.ResumeCommandThread(u);
   }
 }
 
@@ -739,10 +846,51 @@ void StartHead(Sim& sim, Unit* u) {
       PopHead(u);
       continue;
     }
+    if (c.type == CommandType::BuildFactory) {
+      // DispatchTask's BuildFactory case (0x6093bc): no blueprint, or a unit whose script says no to it
+      // (CScriptObject::RunScriptBool 0x60c2c0, "CheckBuildRestriction" with the blueprint's Lua table, 0x6093c4..
+      // 0x609419), gets no task, and TaskTick takes the order as carried out (OrderTakenWithoutTask). Seen: MP3
+      // 4460, army 0's T1 land factory 0x34 has
+      // finished its upgrade into the T2 0x39 (which got its five BuildFactory orders, NotifyUpgrade) and is
+      // destroyed; in that beat its dispatcher goes on with those orders, FAF's CheckBuildRestriction (CanBuild)
+      // refuses the T2 engineers to the T1 factory, and its queue is emptied (probe mp3_site: empty when 0x39's
+      // site test meets it). With no order at its head the old factory then counts as standing on the site
+      // (LocationIsFree, flag 1), and 0x39 waits 50 beats before its first unit.
+      const BlueprintInfo* fbp = sim.blueprints().Find(c.blueprintId);
+      bool allowed = fbp != nullptr;
+      if (allowed) {
+        lua_State* L = sim.L();
+        sim.blueprints().PushTable(L, *fbp);
+        allowed = ::moho::combat::CallMethodBool(sim, L, u, "CheckBuildRestriction", 1) == 1;
+      }
+      if (u->dead) return;
+      if (!allowed) {
+        if (OrderTakenWithoutTask(u)) continue;
+        return;
+      }
+    }
+    if (c.type == CommandType::Upgrade && !UpgradeOrderFits(sim, u, c)) {
+      // (UpgradeOrderFits.) Seen: Economy 3079, a T1 mex (0xf) finishes its upgrade into the T2 0x3b and is
+      // destroyed; NotifyUpgrade has handed 0x3b the next order, the upgrade to T3. In that beat the T1's dispatcher
+      // goes on with its own copy of that order: the T3 does not upgrade from the T1, so no task, and the order is
+      // dropped (only 0x3b starts the T3, 0x4b).
+      if (OrderTakenWithoutTask(u)) continue;
+      return;
+    }
     if (BuildTask* bt = StartBuildTask(sim, u, c)) {
       u->task = bt;
       u->headState = kRunning;
       return;
+    }
+    if (c.type == CommandType::Guard) {
+      // DispatchTask's Guard case (0x609775): an order whose target is none (CAiTarget::HasTarget 0x5e2a10: no live
+      // entity and no place) makes no task and goes the way of Stop (0x6097b8 -> 0x60a490): the attacker's Stop
+      // (0x60a49e), the order is done (dispatcher +0x2c = 1), the motion is left alone. Seen: MP3 4473, six of army
+      // 1's engineers given a Guard with no target left (no entity, no place): the original's queues are empty at
+      // 4474; ours walked them off toward the order's empty place.
+      AttackerStop(sim, u);
+      PopHead(u);
+      continue;
     }
     bool mobile = u->motion.bp && u->motion.bp->mobile();
     if ((MoveLike(c.type) || ApproachLike(c.type)) && mobile) {
@@ -917,22 +1065,14 @@ void ArrivalStep(Sim& sim, Unit* u) {
 
 void CommandStep(Sim& sim, Unit* u) {
   if (!u || u->dead) return;
-  if (u->destroyQueued) {
-    // Entity::Destroy 0x679af0 only flags and queues the entity; its command thread stays in the stage and the queue
-    // lives until ~Unit (Purge, after the beat's drain). A task already running therefore still runs in the beat its
-    // unit was destroyed in (CUnitUpgradeTask::TaskTick 0x5f8890 asks nothing of its unit's end). Nothing new is
-    // started here (not read: the dispatcher's own tests, 0x598f6d..0x598fa7, do not ask for DestroyQueued either).
-    // Seen: Economy 3952, T2 mex 0x3a reclaimed by 0xa (an earlier thread) while upgrading; the original's upgrade
-    // 0x57 still gains its step in that beat (574.4 -> 578.0).
-    if (u->task && u->headState == kRunning && !u->commands.empty()) {
-      BuildTask* task = u->task;
-      if (TickBuildTask(sim, u, *task) != kTaskRunning) {
-        u->task = nullptr;
-        PopHead(u);
-      }
-    }
-    return;
-  }
+  // Entity::Destroy 0x679af0 only flags and queues the entity; its command thread stays in the stage and the queue
+  // lives until ~Unit (Purge, after the beat's drain). A task already running therefore still runs in the beat its
+  // unit was destroyed in (CUnitUpgradeTask::TaskTick 0x5f8890 asks nothing of its unit's end; seen: Economy 3952, T2
+  // mex 0x3a reclaimed by 0xa while upgrading, the original's upgrade 0x57 still gains its step in that beat), and
+  // the dispatcher goes on with the queue: its tests (IAiCommandDispatchImpl::TaskTick 0x598f6d..0x598fb5) are
+  // IsBeingBuilt (+0xa0), IsDead (+0xa1, which a Destroy sets only in the drain, OnDestroy 0x6a8a31), states Attached
+  // and BlockCommandQueue, and an empty queue; nothing asks for the destroy (seen: MP3 4460, sim/commands.cpp's
+  // BuildFactory dispatch).
   if (u->commands.empty()) return;
   int& st = u->headState;
   if (st == kNotStarted) StartHead(sim, u);
@@ -962,7 +1102,7 @@ void CommandStep(Sim& sim, Unit* u) {
           u->commands.push_back(keep);
           keep->units.insert(u);
         }
-        if (IsAlive(u) && !u->commands.empty()) u->headState = kNotStarted;
+        if (!u->dead && !u->commands.empty()) u->headState = kNotStarted;
         break;
       } else if (task->pdata && (task->type == CommandType::Patrol || task->type == CommandType::FormPatrol) &&
                  !u->commands.empty()) {
@@ -977,16 +1117,16 @@ void CommandStep(Sim& sim, Unit* u) {
         // byte between two legs, the new goal the beat after). Seen (MP3 3035): army 0's engineer 0x2, whose repair
         // child failed at 2945, ends its leg at 3035 and keeps Patrolling; ours had a beat without it and set the
         // next goal a beat late.
-        if (u->dispatchResult == 2 && IsAlive(u) && !u->commands.empty()) {
+        if (u->dispatchResult == 2 && !u->dead && !u->commands.empty()) {
           StartHead(sim, u);
           continue;
         }
-        if (IsAlive(u) && !u->commands.empty()) u->headState = kNotStarted;
+        if (!u->dead && !u->commands.empty()) u->headState = kNotStarted;
         break;
       } else {
         PopHead(u);
       }
-      if (!IsAlive(u) || u->commands.empty()) break;
+      if (u->dead || u->commands.empty()) break;
       StartHead(sim, u);
     }
     return;
@@ -998,6 +1138,14 @@ void CommandStep(Sim& sim, Unit* u) {
     PopHead(u);
     u->motion.arrived = u->motion.failed = false;
     SetMoving(u, false);
+    // CUnitFormAndMoveTask's destructor 0x6194e0 (read): after clearing Moving (0x619529) and unlinking its listeners
+    // it calls the navigator's AbortMove (unit+0x54c, vt+0x10 = 0x5a3750, call at 0x6195c2) whatever the navigator is
+    // doing (no command-type table, unlike CUnitMoveTask's 0x618998): a member still rolling toward its own cell when
+    // its group is at goal gets SetSpeedThroughGoal(0) and MakeIdle's SetWaypoints(0, 0), a brake straight along its
+    // hull (CAiPathSpline::Update mode 3). Seen: MP2 4593, army 1's Striker 0x100090 (FormMove ended, 0.27 per beat,
+    // its goal cell three beats ahead) brakes straight to 209.47 255.65 in the original; ours drove on, reached its
+    // cell at 4596, where the navigator's Stop dropped the spline, and coasted to 209.53 255.36.
+    MotionStop(u);
     if (!u->commands.empty()) StartHead(sim, u);
     return;
   }
@@ -1552,7 +1700,12 @@ void IssueClearCommandsTo(Sim& sim, Unit* u) {
   // place, ours was stopped again one second ahead.
   const bool idle = u->commands.empty();
   const bool stopped = HeadTaskStopsMotion(u);
-  const bool undispatched = u->motion.air && !u->commands.empty() && u->headState == kNotStarted;
+  // A head command not dispatched yet has no task, so nothing is torn down and nothing aborts the move, for a land
+  // unit as for an aircraft: its navigator keeps the goal an earlier task left it. Seen: MP2 5684, army 1's 21 Strikers
+  // on a Move get a formation Move with clear from the stream (the old Move's dtor keeps the move: a Move replaces it,
+  // 0x618998), then FAF's DistributeOrders callback clears them (IssueClearCommands) and re-issues the orders: the
+  // original's tanks drive on and turn onto the new paths; ours made brake splines and lost one or two beats.
+  const bool undispatched = !u->commands.empty() && u->headState == kNotStarted;
   const bool loadMove = u->motion.air && !u->commands.empty() && u->headState == kRunning && TransportLoadMoving(u);
   const bool loadWaits = u->motion.air && !u->commands.empty() && u->headState == kRunning && TransportLoadWaiting(u);
   // Nor is a guard that steers itself (its follow goal handed to the navigator directly, no move task): its dtor
