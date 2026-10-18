@@ -35,7 +35,7 @@ cbuffer SkyPicture : register(b1) {
   float4 moonSky;     // the moon's
   float4 sunDisc;     // the sun's disc as seen through the air; w: how much of the night's own faint light there is
   float4 moonPlace;   // toward the moon
-  float4 starAxis;    // what the stars turn about
+  float4 starAxis;    // what the stars turn about; w: 1 = a cinematic camera (cinecam): the cloud layer in more steps
   float4 cloudLight;  // the falling light on the clouds; w: 1 = volumetric clouds (cloudPicture) in place of the layer
 };
 Texture2D cloudPicture : register(t1);  // (clouds.h: rgb their light, a what comes through)
@@ -145,6 +145,26 @@ float3 Stars(float3 d, float cells, float share, float brightest) {
 
 TextureCube mapSky : register(t29);
 
+// The cloud layer's steps up through its thickness along a direction (PS, below): what of the light from behind still
+// comes through, and the light gathered on the way.
+void CloudSteps(float3 d, const int steps, float start, float under, float3 around, float mark, float2 toLight, inout float through,
+                inout float3 gathered) {
+  for (int k = 0; k < steps; ++k) {
+    float high = (k + start) / steps;
+    float2 q = cameraPosition.xz + d.xz * ((under + 45 * high) / (d.y + 0.1));
+    float field = CloudField(q) + (Cloudy(float3(q * 0.03, high * 2 + skyClouds.w * 3)) - 0.47) * 0.14;
+    float thick = saturate((saturate((field - mark) * 5) - high * (0.85 - 0.6 * skyClouds.x)) * 2.5);
+    [branch] if (thick > 0.01) {
+      float fieldToLight = CloudField(q + toLight);
+      float shade = saturate((saturate((fieldToLight - mark) * 5) - (high + 0.25) * (0.85 - 0.6 * skyClouds.x)) * 2.5);
+      float3 color = around * (0.32 + 0.5 * high) + cloudLight.rgb * (exp(-shade * 2.4) * 0.8);
+      float takes = thick * 0.42;
+      gathered += color * (through * takes);
+      through *= 1 - takes;
+    }
+  }
+}
+
 float4 PS(VOut i) : SV_Target {
   float3 d = normalize(i.ray);
   [branch] if (skyZenith.w < 0.5) {
@@ -222,21 +242,12 @@ float4 PS(VOut i) : SV_Target {
     float through = 1;                               // what still comes through from behind
     float3 gathered = 0;
     // (each pixel starts its steps at another height, or the steps would show as sheets)
-    float start = Hash(float3(i.position.xy, 1.3));
-    const int steps = 8;
-    for (int k = 0; k < steps; ++k) {
-      float high = (k + start) / steps;
-      float2 q = cameraPosition.xz + d.xz * ((under + 45 * high) / (d.y + 0.1));
-      float field = CloudField(q) + (Cloudy(float3(q * 0.03, high * 2 + skyClouds.w * 3)) - 0.47) * 0.14;
-      float thick = saturate((saturate((field - mark) * 5) - high * (0.85 - 0.6 * skyClouds.x)) * 2.5);
-      [branch] if (thick > 0.01) {
-        float fieldToLight = CloudField(q + toLight);
-        float shade = saturate((saturate((fieldToLight - mark) * 5) - (high + 0.25) * (0.85 - 0.6 * skyClouds.x)) * 2.5);
-        float3 color = around * (0.32 + 0.5 * high) + cloudLight.rgb * (exp(-shade * 2.4) * 0.8);
-        float takes = thick * 0.42;
-        gathered += color * (through * takes);
-        through *= 1 - takes;
-      }
+    // (cinecam: a cinematic camera, starAxis.w 1, sees the layer from below over much of the picture: twice the
+    // steps, each pixel's start from a pattern that spreads the starts evenly over its neighbours, so no grain shows)
+    [branch] if (starAxis.w > 0.5) {
+      CloudSteps(d, 16, frac(52.9829189 * frac(dot(i.position.xy, float2(0.06711056, 0.00583715)))), under, around, mark, toLight, through, gathered);
+    } else {
+      CloudSteps(d, 8, Hash(float3(i.position.xy, 1.3)), under, around, mark, toLight, through, gathered);
     }
     [branch] if (through < 0.995) {
       float covered = 1 - through;
@@ -899,7 +910,7 @@ void Sky::Draw(const View& view, const Camera& camera, const SkyLight& sky, gfx:
   four(pc.moonSky, sky.moonSky, kMoonHaze);
   four(pc.sunDisc, sky.sunDisc, sky.faint);
   four(pc.moonPlace, sky.moonPlace, 0);
-  four(pc.starAxis, axis, 0);
+  four(pc.starAxis, axis, camera.cinematic ? 1.0f : 0.0f);  // (w: cinecam, the cloud layer seen from below: more steps)
   four(pc.cloudLight, sky.cloudLight, clouds ? 1.0f : 0.0f);
   // (the sky from tables when they were built this frame for a computed sky)
   const bool fromTables = tablesNow_ && view.constants.skyZenith[3] > 0.5f;

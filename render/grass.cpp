@@ -367,12 +367,17 @@ bool GroundCover::Init(std::string* error) {
 
 void GroundCover::Prepare(const View& view, const Camera& camera, const std::vector<float>& discs) {
   prepared_ = false;
-  if (!pipeline_ || !trample_ || !trampled_ || camera.distance > farthest) return;
+  // (a cinematic camera, cinecam.h: by how high the eye is over the ground ahead, and the square ahead of the eye,
+  // from a little behind it to some fifty units on, where a low eye sees the grass)
+  const Vec3 eye = camera.Eye();
+  if (!pipeline_ || !trample_ || !trampled_ || (camera.cinematic ? eye.y - camera.target.y : camera.distance) > farthest) return;
   // a square round what the camera looks at, as wide as it sees near there (no more than about 370 cells a side)
-  const float reach = std::clamp(camera.distance * 0.75f, 8.0f, 28.0f);
+  const float reach = camera.cinematic ? 28.0f : std::clamp(camera.distance * 0.75f, 8.0f, 28.0f);
   const int side = static_cast<int>(std::ceil(2 * reach / cell));
-  area_[0] = std::floor((camera.target.x - reach) / cell) * cell;
-  area_[1] = std::floor((camera.target.z - reach) / cell) * cell;
+  const float middleX = camera.cinematic ? eye.x - std::sin(camera.heading) * reach * 0.7f : camera.target.x;
+  const float middleZ = camera.cinematic ? eye.z - std::cos(camera.heading) * reach * 0.7f : camera.target.z;
+  area_[0] = std::floor((middleX - reach) / cell) * cell;
+  area_[1] = std::floor((middleZ - reach) / cell) * cell;
   area_[2] = cell;
   area_[3] = static_cast<float>(side);
   auto k = std::make_unique<TrampleConstants>();

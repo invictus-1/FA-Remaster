@@ -38,6 +38,7 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       clouds(device),
       motion(device),
       upscaler(device),
+      dof(device),
       fsr3(device),
       framegen(device),
       skyDraw(device),
@@ -355,8 +356,9 @@ void World::AddBrackets(int kind, Vec3 position, const Quat& orientation, const 
 
 void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation, const Pose* pose, const Vec3* armyColor) {
   if (lampsOn_ <= 0 || !model || model->lights.empty()) return;
-  // (only near what the camera looks at: a lamp lights a few units of ground)
-  if (Length(position - camera.target) > camera.distance * 2 + 80) return;
+  // (only near what the camera looks at: a lamp lights a few units of ground; cinecam: a cinematic camera sees far
+  // over the ground from low down, its lamps are those round its eye)
+  if (camera.cinematic ? Length(position - camera.Eye()) > 300 : Length(position - camera.target) > camera.distance * 2 + 80) return;
   // with many units lit, each lights only the first of its lamps (a list has the lamps that matter
   // most first): about 6,000 lights in all, by the number of units of the frame before
   ++lampUnits_;
@@ -496,13 +498,13 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   // screen - icons, bars, the points the interface asks about - at the screen's own)
   screenWidth_ = width;
   screenHeight_ = height;
-  const float share = std::clamp(upscale, 0.25f, 1.0f);
+  const float share = photo ? 1.0f : std::clamp(upscale, 0.25f, 1.0f);  // (cinecam: a photo at its own size)
   const int sceneWidth = share < 0.999f ? std::max(16, static_cast<int>(std::lround(static_cast<float>(width) * share))) : width;
   const int sceneHeight = share < 0.999f ? std::max(16, static_cast<int>(std::lround(static_cast<float>(height) * share))) : height;
   view = View::Make(camera, sceneWidth, sceneHeight, time);
   // the temporal upscaler (FSR 3): its shaders made the first time it is asked for
   temporalNow_ = false;
-  if (temporalUpscale && !sidePicture && gSceneSamples == 1 && motionView <= 0) {
+  if (temporalUpscale && !sidePicture && !photo && gSceneSamples == 1 && motionView <= 0) {
     if (fsr3State_ == 0) {
       std::string error;
       fsr3State_ = fsr3.Init(&error) ? 1 : -1;
@@ -512,7 +514,10 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   }
   // frame generation: its passes made the first time it is asked for, the device asked to call MakeBetween at
   // each frame's end (or no longer); on for this frame where the device draws the window into its own picture
-  if (!sidePicture) {
+  // (cinecam: a photo's frame makes none and keeps none, and leaves the device as it is)
+  if (photo) {
+    framegenNow_ = framegenReady_ = false;
+  } else if (!sidePicture) {
     const bool wanted = frameGeneration && gSceneSamples == 1 && motionView <= 0;
     if (wanted && framegenState_ == 0) {
       std::string error;
@@ -531,19 +536,21 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     framegenNow_ = framegenAsked_ && device_->FrameGenerating() && device_->WindowPicture();
     framegenReady_ = false;
   }
-  if (!sidePicture) {
+  if (!sidePicture && !photo) {
     const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
     frameSeconds_ = lastFrameAt_ > 0 ? static_cast<float>(std::clamp(now - lastFrameAt_, 0.001, 0.25)) : 1 / 60.0f;
     lastFrameAt_ = now;
   }
   // motion: the view without its jitter kept, this frame's and the frame before's; with the temporal
   // upscaler, the view shifted by this frame's jitter
-  const bool moving = (motionOn || motionView > 0 || temporalNow_ || framegenNow_) && gSceneSamples == 1 && !sidePicture;
+  const bool moving = (motionOn || motionView > 0 || temporalNow_ || framegenNow_) && gSceneSamples == 1 && !sidePicture && !photo;
   meshes.motion = moving;
-  meshes.keepLast = sidePicture;
-  if (!sidePicture) {
+  meshes.keepLast = sidePicture || photo;
+  lensSnap_ = photo;
+  if (!sidePicture && !photo) {
     const Vec3 eye = camera.Eye();
     const bool jumped = cameraCut || Length(eye - lastEye_) > 0.3f * std::max(camera.distance, 10.0f);
+    lensSnap_ = jumped;
     temporalCut_ = jumped || !temporalBefore_;
     framegenCut_ = jumped || !framegenBefore_;
     cameraCut = false;
@@ -598,7 +605,10 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       if (!bounceMade_) fprintf(stderr, "render: bounce light cannot be used (%s)\n", why.c_str());
     }
     if (bounceMade_) {
-      bounce.Place(camera.target, camera.distance, [this](float x, float z) { return GroundHeight(x, z); }, &c);
+      // (cinecam: a cinematic camera's probes round a place forty units ahead of its eye, at the finest spacing, where
+      // its target may lie in the air far off)
+      const Vec3 ahead = camera.cinematic ? camera.Eye() + Vec3{-std::sin(camera.heading), 0, -std::cos(camera.heading)} * 40.0f : camera.target;
+      bounce.Place(ahead, camera.cinematic ? 30.0f : camera.distance, [this](float x, float z) { return GroundHeight(x, z); }, &c);
       bounceNow_ = true;
     }
   }
@@ -618,6 +628,10 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     c.beyond[1] = static_cast<float>(map.height);
     c.beyond[2] = 1 / terrain.beyondReach;
     c.beyond[3] = beyondHaze ? 0.78f : -0.78f;  // (negative: no haze but at the far end, lighting.h)
+    // (cinecam) a cinematic camera low over the land sees that world go over into the horizon's own haze, as far land
+    // and sea do, not greyed (view.h, BeyondGrey): from up high the grey sets the map apart; from low down it would lie
+    // as a grey band under the bright horizon
+    if (camera.cinematic) c.skyExtra[3] = 1;
   }
   set(c.sunDirection, sunDirection);
   set(c.sunColor, haveMap_ ? map.lighting.sunColor : Vec3{1, 1, 1});
@@ -735,6 +749,9 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     // whole map seen from high up would be gone)
     c.weather[2] = 0.0035f * fog + 0.0007f * rain + 0.0010f * snow;
     c.weather[3] = 0.55f + 0.3f * fog;
+    // (cinecam) a cinematic camera low over the land sees far toward the horizon: some of the air's haze then, even
+    // in clear weather, so that the distance lies back as it does outdoors
+    if (camera.cinematic) c.weather[2] = std::max(c.weather[2], cinematicHaze);
     // the mist on low ground
     mistNow = mist;
     if (mistNow < 0) {
@@ -796,8 +813,9 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     screenView_.constants.viewport[3] = 1.0f / static_cast<float>(screenHeight_);
   }
   icons.Begin(screenView_);
-  // the resource deposits' icons, from where their marks on the ground are no longer drawn
-  if (depositIcons && !decals.Deposits().empty()) {
+  // the resource deposits' icons, from where their marks on the ground are no longer drawn (cinecam: not for a
+  // cinematic camera, which sees far over the ground: they would stand along the horizon)
+  if (depositIcons && !camera.cinematic && !decals.Deposits().empty()) {
     // (small, as the original has them from all the way up: 8 pixels, measured in Chris's picture
     // of it; 16 while two and a half units of ground at the deposit still take that many)
     if (massIcon_[0] == -2) {
@@ -1680,7 +1698,9 @@ void World::Render() {
       grassMade_ = grass.Init(&why);
       if (!grassMade_) fprintf(stderr, "render: ground cover cannot be drawn (%s)\n", why.c_str());
     }
-    if (grassMade_ && camera.distance <= grass.farthest) {
+    // (cinecam: a cinematic camera by the eye's height over the ground under it, grass.cpp)
+    const Vec3 eye = camera.Eye();
+    if (grassMade_ && (camera.cinematic ? eye.y - GroundHeight(eye.x, eye.z) : camera.distance) <= grass.farthest) {
       std::vector<float> discs;
       meshes.ForEachAdded([&](const Model* model, const float* row0, const float* row1, const float* row2, const float*, bool scenery) {
         if (scenery || !model || discs.size() >= 3 * 1024) return;
@@ -1875,11 +1895,23 @@ void World::Render() {
     lights.Bind();
   }
   Stage("rain, snow");
-  if (view.constants.skyZenith[3] > 0.5f) falling.Draw(view, camera, rain, snow, litRain && look == Look::Modern);
+  // (cinecam) what falls is drawn in a box round what the game's camera looks at, as large as that is far off; a
+  // cinematic camera's target may lie far ahead or in the air: its box is round the eye instead, a little ahead of
+  // it, as large as the eye is high over the ground
+  const Camera fall = [&] {
+    if (!camera.cinematic) return camera;
+    Camera c = camera;
+    const Vec3 eye = camera.Eye();
+    const float ground = haveMap_ ? std::min(GroundHeight(eye.x, eye.z), eye.y) : eye.y;
+    c.distance = std::clamp((eye.y - ground) * 1.5f + 20.0f, 25.0f, 560.0f);
+    c.target = {eye.x - std::sin(camera.heading) * c.distance * 0.3f, ground, eye.z - std::cos(camera.heading) * c.distance * 0.3f};
+    return c;
+  }();
+  if (view.constants.skyZenith[3] > 0.5f) falling.Draw(view, fall, rain, snow, litRain && look == Look::Modern);
   if (rainSplashes && look == Look::Modern && view.constants.skyZenith[3] > 0.5f && rain > 0) {  // (reading the depth)
     post.BeginColorOnly();
     lights.Bind();
-    falling.DrawSplashes(view, camera, rain, post.Depth());
+    falling.DrawSplashes(view, fall, rain, post.Depth());
   }
   Stage("fog of war");
   if (haveMap_ && sight.On() && sightShown) {  // the fog of war: what is not seen, darkened
@@ -1919,8 +1951,17 @@ void World::Render() {
     post.UpscaleTemporal(&fsr3, in, screenWidth_, screenHeight_);
     Stage("finishing at the screen's size (exposure, bloom)");
   }
+  // (cinecam) the lens's depth of field, on the finished light, before the glow and the tone curve (Post::beforeFinish)
+  if (lens.on && lens.strength > 0.001f && !sidePicture && !dof.Failed()) {
+    dof.waterLevel = haveMap_ && map.water.present ? map.water.elevation : -1e9f;
+    post.beforeFinish = [this](gfx::Texture picture, int width, int height, gfx::Texture depth, int depthWidth, int depthHeight) {
+      return dof.Apply(lens, camera, picture, width, height, depth, depthWidth, depthHeight, frameSeconds_, lensSnap_);
+    };
+  } else if (post.beforeFinish) {
+    post.beforeFinish = nullptr;
+  }
   post.Present(view, &upscaler, screenWidth_, screenHeight_);
-  if (framegenNow_ && !sidePicture) {  // frame generation: the finished picture kept before the icons and the interface, and the rest
+  if (framegenNow_ && !sidePicture && !photo) {  // frame generation: the finished picture kept before the icons and the interface, and the rest
     Stage("frame generation: the finished picture kept");
     framegenIn_ = FrameGeneration::Inputs{};
     framegenIn_.hudless = post.KeepFinished(device_->WindowPicture(), device_->Width(), device_->Height());
@@ -1936,13 +1977,14 @@ void World::Render() {
     framegenIn_.reset = framegenCut_;
     framegenReady_ = framegenIn_.hudless && framegenIn_.depth && framegenIn_.motion;
   }
-  if (!sidePicture && (!orders.legs.empty() || !orders.marks.empty())) {  // the order lines, over the world, under the icons
+  if (!sidePicture && !photo && (!orders.legs.empty() || !orders.marks.empty())) {  // the order lines, over the world, under the icons
     Stage("order lines");
     orders.Draw(screenView_, clock_ * 10);
   }
   Stage("icons, bars");
-  icons.showSymbols = iconsOn;
-  icons.Draw();  // on the finished picture, as the original draws them (and the life bars)
+  // (cinecam: no strategic symbols for a cinematic camera: every unit far off toward the horizon would stand there as one)
+  icons.showSymbols = iconsOn && !camera.cinematic;
+  if (!photo) icons.Draw();  // on the finished picture, as the original draws them (and the life bars; cinecam: none on a photo)
   CpuTimes::Part(nullptr);
 }
 

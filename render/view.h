@@ -112,7 +112,8 @@ struct ViewConstants {
   float temporal[4];
   // The sky from tables (sky.h, World::skyTables): x 1 when ComputedSky reads the sky's view table (kSkyTableSlot)
   // in place of the three fitted colours; y how much of it the clouds' grey takes, z that grey's brightness, w
-  // how much of the night's own faint light there is. skyExtra: rgb what lightning adds for a moment.
+  // how much of the night's own faint light there is. skyExtra: rgb what lightning adds for a moment; w 1: a cinematic
+  // camera (cinecam.h), whose far distance goes over into the horizon's haze, not greyed (BeyondGrey).
   float skyTable[4];
   float skyExtra[4];
   // Bounce light (bounce.h): x 1 = every lit surface takes the probes' light in place of the sky's fitted light; y
@@ -168,7 +169,7 @@ cbuffer View : register(b0) {
   float4 softShadows;     // x 1 = soft shadows; y an edge's growth per world unit from the caster; z the search for casters, w the widest edge (world units)
   float4 temporal;        // the temporal upscaler: x the textures' level of detail bias (0 without it)
   float4 skyTable;        // the sky from tables: x 1 = ComputedSky reads its view; y the clouds' grey share, z its brightness; w the night's faint light
-  float4 skyExtra;        // rgb: lightning's light for a moment
+  float4 skyExtra;        // rgb: lightning's light for a moment; w 1: a cinematic camera (cinecam), the far distance not greyed
   float4 bounce;          // bounce light: x 1 = on; y the columns' spacing; z, w the grid's first column across x and z
   float4 bounceLayers;    // the probes' heights over the ground
   float4 rayEffects;      // reflections by ray tracing: x 1 = on; y how far a ray looks; z, w the map's size
@@ -400,6 +401,7 @@ float3 HorizonHaze(float3 d) {
 // What the world beyond the map's edge goes over into far out: the far distance's colour greyed
 // and dimmed (Chris, 2026-10-14: "instead of bright white clouds maybe like its just greyed out").
 float3 BeyondGrey(float3 c) {
+  if (skyExtra.w > 0.5) return c;  // (cinecam: a cinematic camera's far distance is the horizon's own haze, World::Begin)
   return dot(c, float3(0.3, 0.6, 0.1)) * float3(0.50, 0.52, 0.55);
 }
 // What of it reaches a surface that faces that way, from all sides.

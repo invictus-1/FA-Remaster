@@ -545,7 +545,23 @@ picture the fallback; helpers build most of them in parallel, the renderer revie
    and plants near the camera among trees): the ground cover 0.079 -> 0.116 ms, models +0.012, the frame about
    +0.04. On, Vulkan as Direct3D 12 (mean 0.146 against 0.144 with it off). Off: pictures identical (regression 0 px
    on both backends).
-6. **A cinematic camera for replays** (a free camera, depth of field, photo shots). In work.
+6. **A cinematic camera for replays** (a free camera, depth of field, photo shots). First version done 2026-10-18:
+   `render/cinecam.h/.cpp` (`CineCamera`: critically damped springs for place, turn and field of view; holds, flies a
+   `CinePath`, or circles a place; `Start` begins where the game's camera is, `Stop` hands back the same eye and
+   view, `Shown` eases the picture back over half a second), `render/dof.h/.cpp` (depth of field: a thin lens on a
+   full-frame sensor, auto-focus on the screen's middle eased, near and far gathered apart so nothing sharp in front
+   gets a halo; six compute passes on the finished light before the glow and the tone curve, `Post::beforeFinish`;
+   the water's surface taken as what the eye sees there, as the water writes no depth), `World::photo` /
+   `WorldPicture::TakePhoto` (a picture larger than the screen, no interface). What a cinematic camera
+   (`Camera::cinematic`) changes, only while it is on: four sun shadow cascades along the view out to 1000 units,
+   grass ahead of the eye by its height over the ground, the sky's flat cloud layer in 16 steps (grainy from low
+   down in 8), the world beyond the map going over into the horizon's haze instead of greyed, a little haze in
+   clear air (`cinematicHaze`), the rain box round the eye, lamps round the eye out to 300 units, bounce probes
+   ahead of it, no strategic symbols or deposit icons. Viewer: `--cine-cam`, `--cine-path`, `--cine-follow`,
+   `--cine-haze`, `--dof f[,focus]`, `--photo`, keys G and P. Costs at 1440p: the lens 0.36-0.43 ms (MSAA, FSR 3,
+   Vulkan alike); the sky seen from low 0.39 ms against 0.06 (more of it in view). Off: pictures identical
+   (regression 0 px on both backends). The ui's calls: docs/render-answers.md. Open: a small shadow change at the
+   end of the hand-back (three cascades again); lamp shadows still chosen round the target.
 7. **A latency limiter** (input read as late as the frame allows; our own, vendor-neutral). In work.
 8. **Battle scars on units** (Chris: marks by the weapon that made them, three tiers, kept as trophies when the unit
    heals, never so many that the unit stops reading). In work.
@@ -598,6 +614,7 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `rainSplashes` | specks where rain meets the ground and units' tops | about 0.01 ms (in rain) | a time of day |
 | `leafLight` | the sun's light through leaves, grass blades and plants, glowing toward a low sun | about 0.04 ms | |
 | `frameGeneration` | FSR 3 frame generation: a picture made between each two frames, twice the frames shown | 1.1-1.4 ms a frame drawn | anti-aliasing off; the device's second queue |
+| `lens` (with a cinematic camera) | depth of field: a lens's blur, focus eased | 0.36-0.43 ms while on | a cinematic camera (cinecam.h) |
 | `waterRipples` | the water reacts: shells, ships, hover and wading units leave rings and wakes that spread and fade | about 0.04-0.05 ms near water (24 MB of the card's memory once on) | a map with water |
 
 Ray tracing means Direct3D 12 with DXR 1.1 or Vulkan with ray queries: never on the Mac (MoltenVK has none);

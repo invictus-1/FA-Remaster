@@ -412,8 +412,9 @@ void Post::Present(const View& view, Upscaler* upscaler, int screenWidth, int sc
   // (brought up by FSR 3 this frame: its picture at the screen's size is finished, and FSR 1 is not run)
   const bool upscaled = upscaledNow_ && upscaled_ && !shown;
   upscaledNow_ = false;
-  const gfx::Texture picture = upscaled ? upscaled_ : shown ? shown : color_;
+  gfx::Texture picture = upscaled ? upscaled_ : shown ? shown : color_;
   const int pictureWidth = upscaled ? upscaledWidth_ : width_, pictureHeight = upscaled ? upscaledHeight_ : height_;
+  if (beforeFinish && !shown) picture = beforeFinish(picture, pictureWidth, pictureHeight, depth_, width_, height_);  // (cinecam: depth of field)
   SizeFinishing(pictureWidth, pictureHeight);
   // the glow (modern look): smaller and smaller, then laid back over each other into the first
   const bool glowing = view.constants.look > 0.5f && glow > 0 && glowSteps_[0];

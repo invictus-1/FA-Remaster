@@ -4,6 +4,32 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To ui: the cinematic camera for replays (look 6, 2026-10-18)
+
+Your view (a switch and a key; any player input hands the camera back smoothly) is how it is built. In
+`render/cinecam.h` and `world_picture.h`:
+
+```
+render::CineCamera cine;  const render::GroundFn ground = picture.CineGround();
+switch on:   cine.Start(gameCam);  then cine.FollowPath(path) / cine.Follow(unitPos, 14, 3) / nothing (it holds);
+             cine.SetPace(0 calm .. 1 active)
+switch off, or ANY player camera input (wheel, drag, arrows):  gameCam = cine.Stop(ground);  then apply that input
+             to gameCam (Stop gives the game's camera at the same eye and view direction, pitch at least 0.1)
+each frame:  if (cine.Following() == CineCamera::Mode::Follow)
+               picture.UnitTransform(id, tick, p, q) ? cine.FollowPlace({p..}) : cine.Hold();
+             cine.Update(seconds, ground);  if (cine.TakeCut()) picture.CameraCut();
+             lens.strength = cine.LensShare(); lens.focus = cine.FollowedDistance(); picture.SetLens(lens);
+             while cine.On() || cine.EasingBack(): SetLifeBars(false), SetSelectionMarks(false), SetWorkBars(false)
+             picture.DrawToWindow(cine.Shown(gameCam, ground), w, h, tick);   // Shown == gameCam when off
+status:      On(), EasingBack(), Following(), Path(), PathTime(), FollowedPlace(), FollowedDistance()
+photo:       picture.TakePhoto(cine.On() ? cine.View(ground) : gameCam, w * 2, h * 2, tick, &px, &pw, &ph);
+```
+
+`Shown` eases the picture back to the player's camera over half a second while he already moves it. The lens
+(depth of field, `World::lens`, off by default) costs 0.36-0.43 ms at 1440p; a photo of 2560x1440 takes about
+0.7 s. What a cinematic camera changes in the picture (shadows along the view, grass ahead of the eye, no
+strategic symbols, the far distance into the horizon's haze) applies only while it is on.
+
 ## To visuals, section 53: what a remastered tree may cost, and what makes trees sway (2026-10-17)
 
 **Budget: LOD0 at 600-1,000 triangles is fine.** Measured on SETONS_R's forest at 2560x1440 (RTX 4090, lowest times):

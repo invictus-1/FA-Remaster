@@ -32,6 +32,8 @@
 #include "weather.h"
 #include "grass.h"
 #include "camera.h"
+#include "cinecam.h"
+#include "dof.h"
 #include "debug_draw.h"
 #include "decals.h"
 #include "effects.h"
@@ -419,6 +421,18 @@ class World {
   // no motion, no light in the air and no volumetric clouds, and what they keep of the frames before is left
   // for the game's next frame.
   bool sidePicture = false;
+  // (cinecam) A frame drawn for a photo (WorldPicture::TakePhoto, the viewer's --photo): the world as the game's
+  // frame draws it, at the photo's size and the scene's own (no FSR), but without what keeps frames before for the
+  // game's next (the temporal upscaler, motion, frame generation's picture), and with nothing of the interface laid
+  // over it (icons, bars, order lines). What else of the interface is in the world the host takes out itself.
+  bool photo = false;
+  // (cinecam) The cinematic camera's lens (cinecam.h): its depth of field, on the finished light before the glow and
+  // the tone curve (dof.h), in either look. Off at first.
+  Lens lens;
+  DepthOfField dof;
+  // (cinecam) With a cinematic camera (Camera::cinematic) and a time of day: the least haze in the air (the share
+  // of light lost per world unit, as the weather's; 0: none, as for the game's camera), which clear weather has none of.
+  float cinematicHaze = 0.0004f;
   // With it: what is added to the level of detail the textures are read at, beyond log2 of the share drawn
   // (0: the share alone, the textures as fine as at the screen's own size). AMD advises -1 more; measured on
   // Seton's at 1080p from 720p it moves the picture further from today's at the screen's size and flickers
@@ -606,6 +620,7 @@ class World {
   bool plantsReady_ = false;
   gfx::Texture treeMask_, coverA_, coverB_;
   bool reflectNow_ = false;  // (reflections by ray tracing this frame)
+  bool lensSnap_ = false;    // (cinecam: the camera jumped this frame: the lens's focus at once)
 };
 
 }  // namespace render

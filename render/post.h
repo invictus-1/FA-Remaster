@@ -2,6 +2,7 @@
 // the last pass puts that on the window - unchanged for the original look, or mapped from the modern
 // look's open-ended linear light to what a screen can show.
 #pragma once
+#include <functional>
 #include <string>
 
 #include "fsr3.h"
@@ -57,6 +58,12 @@ class Post {
   // window's size), before the icons and the interface are drawn over it; the window's pass begun again for them.
   // The copy (none where it cannot be made), valid until the next call.
   gfx::Texture KeepFinished(gfx::Texture window, int width, int height);
+
+  // (cinecam) A pass over the scene's finished light before the glow and the tone curve (the cinematic camera's
+  // depth of field, dof.h; World::lens): given the picture Present finishes (the screen's size when FSR 3 brought
+  // the scene up, else the scene's), its size, and the scene's depth and its size, it returns the picture to finish
+  // in its place. Empty, as at first: none. Not for a picture shown in place of the scene's (`shown`).
+  std::function<gfx::Texture(gfx::Texture picture, int width, int height, gfx::Texture depth, int depthWidth, int depthHeight)> beforeFinish;
 
   // The modern look's glow round what is brighter than the screen can show (lamps, flashes, the
   // sun on water): how much of it is added; 0: none.

@@ -233,6 +233,25 @@
 // --weather auto  the weather changes by itself, by --seed and the game's clock (or the viewer's, without a
 //           game); --weather-spell <seconds> how long one kind lasts (300), --climate temperate|cold|dry
 // --cam     start the camera there (pitch and heading in degrees; pitch 90 looks straight down)
+// --cine-cam x,y,z,yaw,pitch,fov  the cinematic camera (cinecam.h) in place of the game's: free in the world, its eye
+//           at x, z and y over the ground there, turned yaw degrees from north toward the west, pitch degrees below
+//           the horizon (0 level, negative up), the vertical field of view fov degrees (40 unless given). It flies:
+//           W A S D or the arrows along the ground, Q and E down and up (Shift faster), the right button turns it,
+//           the wheel zooms (the field of view); all eased. Keys and mouse of the game's camera are its then.
+// --cine-path "t:x,y,z,yaw,pitch,fov;t:..."  a scripted flight through those poses (as --cine-cam's, at t seconds
+//           of the run's clock: with --frames, 60 frames a second), smooth through every key
+// --cine-follow distance,height[,pace]  the cinematic camera circles the placed units (or --at) that far from them
+//           along the ground and that high over them, looking at them; pace 0 calm .. 1 active
+//           Key G switches the cinematic camera off (the game's camera goes on from where it was, eased) and on.
+// --cine-haze <n>  with a time of day, the least haze a cinematic camera sees (World::cinematicHaze, 0.0004; 0 none)
+// --dof f[,focus]  the lens's depth of field (World::lens) at aperture f/f, focused at `focus` world units from the
+//           eye, or (0 or not given) auto-focused on what is at the picture's middle, eased; --dof-scale <metres a
+//           world unit stands for> (0.125: smaller blurs more), --dof-seconds <the auto-focus's easing> (0.4), --dof-largest <the widest
+//           blur's radius as a share of the picture's height> (0.02)
+// --photo <file.png>  at the run's end (with --frames) a photo without the interface: --photo-scale <n> times the
+//           window's width and height (2), drawn --photo-sample <n> times larger again and made smaller (0: as the
+//           memory allows), after --photo-settle <n> frames drawn at its size first (8); key P takes one at any
+//           time (photo1.png, photo2.png ... in the lab's folder)
 // --frames N stops after N frames; with --screenshot the last frame is saved (for automatic checks).
 //
 // Mouse: wheel zooms at the pointer, middle button drags the ground, right button turns and tilts.
@@ -256,6 +275,7 @@
 #include "cpu_times.h"
 #include "fx_stand.h"
 #include "camera.h"
+#include "cinecam.h"
 #include "core/hostfs.h"
 #include "remasters.h"
 #include "core/log.h"
@@ -425,6 +445,16 @@ struct Options {
   float detail = 1;    // the models' quality setting (mesh_renderer.h): 1 full, 0.5 for a slower card, huge = finest always
   bool hasCam = false;
   float cam[5] = {};
+  // the cinematic camera (cinecam.h): --cine-cam, --cine-path; the lens: --dof ...; --photo ...
+  bool hasCine = false, hasCineCam = false;
+  float cine[6] = {0, 0, 0, 0, 0, 40};
+  std::string cinePath;
+  float cineFollow[3] = {0, 0, -1};  // --cine-follow distance,height[,pace]
+  float cineHaze = -1;               // --cine-haze
+  float dof = 0, dofFocus = 0, dofScale = -1, dofSeconds = -1, dofLargest = -1;
+  std::string photo;
+  float photoScale = 2;
+  int photoSample = 0, photoSettle = 8;
 };
 
 bool ParseOptions(int argc, char** argv, Options* o) {
@@ -693,7 +723,27 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--cam") {
       if (sscanf(v, "%f,%f,%f,%f,%f", &o->cam[0], &o->cam[1], &o->cam[2], &o->cam[3], &o->cam[4]) != 5) return false;
       o->hasCam = true;
-    } else return false;
+    } else if (a == "--cine-cam") {
+      if (sscanf(v, "%f,%f,%f,%f,%f,%f", &o->cine[0], &o->cine[1], &o->cine[2], &o->cine[3], &o->cine[4], &o->cine[5]) < 5) return false;
+      o->hasCine = o->hasCineCam = true;
+    } else if (a == "--cine-path") {
+      o->cinePath = v;
+      o->hasCine = true;
+    } else if (a == "--cine-follow") {
+      if (sscanf(v, "%f,%f,%f", &o->cineFollow[0], &o->cineFollow[1], &o->cineFollow[2]) < 2) return false;
+      o->hasCine = true;
+    } else if (a == "--cine-haze") {
+      o->cineHaze = static_cast<float>(atof(v));
+    } else if (a == "--dof") {
+      if (sscanf(v, "%f,%f", &o->dof, &o->dofFocus) < 1) return false;
+    } else if (a == "--dof-scale") o->dofScale = static_cast<float>(atof(v));
+    else if (a == "--dof-seconds") o->dofSeconds = static_cast<float>(atof(v));
+    else if (a == "--dof-largest") o->dofLargest = static_cast<float>(atof(v));
+    else if (a == "--photo") o->photo = v;
+    else if (a == "--photo-scale") o->photoScale = std::clamp(static_cast<float>(atof(v)), 0.25f, 8.0f);
+    else if (a == "--photo-sample") o->photoSample = std::clamp(atoi(v), 0, 4);
+    else if (a == "--photo-settle") o->photoSettle = std::clamp(atoi(v), 0, 64);
+    else return false;
   }
   return true;
 }
@@ -1107,6 +1157,15 @@ int main(int argc, char** argv) {
   world.meshes.detail = opt.detail;
   world.icons.scale = opt.iconScale;
   world.ao.strength = opt.ao;
+  if (opt.cineHaze >= 0) world.cinematicHaze = opt.cineHaze;  // --cine-haze
+  if (opt.dof > 0) {  // --dof: the lens's depth of field
+    world.lens.on = true;
+    world.lens.fNumber = opt.dof;
+    world.lens.focus = std::max(opt.dofFocus, 0.0f);
+    if (opt.dofScale > 0) world.lens.unitMetres = opt.dofScale;
+    if (opt.dofSeconds >= 0) world.lens.focusSeconds = opt.dofSeconds;
+    if (opt.dofLargest > 0) world.lens.largestBlur = opt.dofLargest;
+  }
   // the world's parts that the viewer's own switches add to, or whose numbers it prints
   const MapData& map = world.map;
   const bool haveMap = world.HaveMap();
@@ -1322,6 +1381,41 @@ int main(int argc, char** argv) {
     return map.water.present ? std::max(y, map.water.elevation) : y;
   };
   camera.target.y = groundHeight(camera.target.x, camera.target.z) + targetLift;
+  // --cine-cam, --cine-path: the cinematic camera (cinecam.h) in place of the game's, over the ground in the map and
+  // beyond its edge
+  const GroundFn cineGround = MirroredGround(groundHeight, haveMap ? static_cast<float>(map.width) : 0.0f, haveMap ? static_cast<float>(map.height) : 0.0f);
+  CineCamera cine;
+  CinePath cinePath;
+  if (opt.hasCine) {
+    std::string why;
+    if (!opt.cinePath.empty() && !cinePath.Parse(opt.cinePath, cineGround, &why)) {
+      fprintf(stderr, "render: --cine-path: %s\n", why.c_str());
+      return 2;
+    }
+    const float x = opt.cine[0], z = opt.cine[2];
+    cine.Start(camera);
+    cine.Jump(!cinePath.keys.empty() ? cinePath.At(0)
+                                     : CinePose{{x, cineGround(x, z) + opt.cine[1], z}, opt.cine[3] * kPi / 180, opt.cine[4] * kPi / 180, opt.cine[5] * kPi / 180});
+    if (!cinePath.keys.empty()) cine.FollowPath(cinePath, false);
+    if (opt.cineFollow[0] > 0) {  // --cine-follow: round the placed units (or --at)
+      Vec3 middle = opt.hasAt ? Vec3{opt.at[0], 0, opt.at[1]} : camera.target;
+      if (!placedUnits.empty()) {
+        middle = {};
+        for (const PlacedUnit& u : placedUnits) middle += u.position * (1.0f / static_cast<float>(placedUnits.size()));
+      }
+      middle.y = groundHeight(middle.x, middle.z) + 0.5f;
+      if (!opt.hasCineCam && cinePath.keys.empty()) {  // (no place given: it starts on its round, south of them, looking at them)
+        const float away = std::max(opt.cineFollow[0], 0.5f), high = opt.cineFollow[1];
+        cine.Jump(CinePose{{middle.x, middle.y + high, middle.z + away}, 0, std::atan2(high, away), opt.cine[5] * kPi / 180});
+      }
+      cine.Follow(middle, opt.cineFollow[0], opt.cineFollow[1]);
+      if (opt.cineFollow[2] >= 0) cine.SetPace(opt.cineFollow[2]);
+    }
+    // (the game's camera, for key G: where the cinematic one is)
+    camera = CineCamera::GameView(cine.pose, cineGround, 0.1f, 3, maxDistance);
+    printf("render: the cinematic camera at %.1f %.1f %.1f%s\n", cine.pose.eye.x, cine.pose.eye.y, cine.pose.eye.z,
+           cinePath.keys.empty() ? "" : (", on a path of " + std::to_string(cinePath.keys.size()) + " keys").c_str());
+  }
   if (opt.scarTest > 0) {  // --scar-test: the game's scorches laid at random round where the camera starts
     world.decals.battleScars = world.battleScars;
     world.decals.remastered = world.effectsLook == World::EffectsLook::Remastered;
@@ -1428,6 +1522,22 @@ int main(int argc, char** argv) {
 
   std::vector<InputEvent> events;
   std::vector<uint8_t> capture;
+  // --photo: the frames still to draw at the photo's size (its moment held: the clock does not run on), the last
+  // one read back; the size it comes out at and how many times larger it is drawn
+  int photoLeft = 0, photoWidth = 0, photoHeight = 0, photoBy = 1, photoNumber = 0;
+  float photoTime = 0;  // (the moment it shows: the clock of the frame it was asked at)
+  std::string photoPath;
+  bool photoEnds = false, wantPhoto = false;  // (the run ends after it: --photo; key P: a photo now)
+  auto startPhoto = [&](const std::string& path, bool ends) {
+    photoWidth = std::max(16, static_cast<int>(std::lround(static_cast<float>(window->Width()) * opt.photoScale)));
+    photoHeight = std::max(16, static_cast<int>(std::lround(static_cast<float>(window->Height()) * opt.photoScale)));
+    photoBy = opt.photoSample;
+    WorldPicture::PhotoSize(&photoWidth, &photoHeight, &photoBy);
+    device->Resize(photoWidth * photoBy, photoHeight * photoBy);
+    photoLeft = opt.photoSettle + 1;
+    photoPath = path;
+    photoEnds = ends;
+  };
   bool vsync = opt.vsync, wantScreenshot = false;
   int dragX = 0, dragY = 0;
   Vec3 grab;
@@ -1472,6 +1582,7 @@ int main(int argc, char** argv) {
     auto now = std::chrono::steady_clock::now();
     float dt = std::chrono::duration<float>(now - last).count();
     last = now;
+    if (photoLeft > 0) dt = 0;  // (a photo's frames: the moment held)
 
     bool quit = false;
     if (automatic) events.clear();
@@ -1480,6 +1591,11 @@ int main(int argc, char** argv) {
         case InputEvent::KeyDown:
           if (e.key == kKeyEscape) quit = true;
           if (e.key == kKeyF12) wantScreenshot = true;
+          if (e.key == 'G') {  // the cinematic camera off (the game's camera goes on from where it was) or on again
+            if (cine.On()) camera = cine.Stop(cineGround);
+            else cine.Start(camera);
+          }
+          if (e.key == 'P') wantPhoto = true;  // (a photo without the interface, --photo-scale times the window's size)
           if (e.key == 'V') device->SetVsync(vsync = !vsync);
           if (e.key == kKeySpace) paused = !paused;
           if (e.key == kKeyPlus) playSpeed = std::min(playSpeed * 2, 64.0);
@@ -1519,7 +1635,9 @@ int main(int argc, char** argv) {
           if (e.key == 2) grabbing = false;
           break;
         case InputEvent::MouseMove:
-          if (window->MouseDown(1)) {
+          if (cine.On()) {  // (the cinematic camera: the right button turns it, by as much as the view is wide)
+            if (window->MouseDown(1)) cine.Turn(-static_cast<float>(e.x - dragX) * 0.004f * cine.wanted.fovY, static_cast<float>(e.y - dragY) * 0.004f * cine.wanted.fovY);
+          } else if (window->MouseDown(1)) {
             camera.heading -= static_cast<float>(e.x - dragX) * 0.005f;
             camera.pitch = Clamp(camera.pitch + static_cast<float>(e.y - dragY) * 0.005f, 0.1f, kPi / 2);
           } else if (grabbing) {
@@ -1531,6 +1649,10 @@ int main(int argc, char** argv) {
           dragY = e.y;
           break;
         case InputEvent::Wheel: {
+          if (cine.On()) {  // (the cinematic camera: the field of view)
+            cine.Zoom(std::pow(0.9f, e.wheel));
+            break;
+          }
           // zoom at the pointer: the ground point under it stays where it is
           Vec3 before, after;
           bool hit = pick(e.x, e.y, &before);
@@ -1545,7 +1667,19 @@ int main(int argc, char** argv) {
     events.clear();
     if (quit) break;
 
-    if (!automatic) {  // keyboard movement, along the ground in the camera's directions
+    if (!automatic && cine.On()) {  // the cinematic camera flies: along the ground, Q and E down and up, Shift faster
+      Vec3 along{};
+      if (window->KeyDown('W') || window->KeyDown(kKeyUp)) along.z += 1;
+      if (window->KeyDown('S') || window->KeyDown(kKeyDown)) along.z -= 1;
+      if (window->KeyDown('D') || window->KeyDown(kKeyRight)) along.x += 1;
+      if (window->KeyDown('A') || window->KeyDown(kKeyLeft)) along.x -= 1;
+      if (window->KeyDown('E')) along.y += 1;
+      if (window->KeyDown('Q')) along.y -= 1;
+      // (as fast as the eye is high, at least four units a second: a low camera creeps, a high one sweeps)
+      const float high = cine.wanted.eye.y - cineGround(cine.wanted.eye.x, cine.wanted.eye.z);
+      const float speed = std::max(4.0f, high * 1.5f) * (window->KeyDown(kKeyShift) ? 4.0f : 1.0f);
+      cine.Fly(along * (speed * dt));
+    } else if (!automatic) {  // keyboard movement, along the ground in the camera's directions
       Vec3 r, u, b;
       camera.Axes(&r, &u, &b);
       Vec3 forward{-std::sin(camera.heading), 0, -std::cos(camera.heading)};
@@ -1567,10 +1701,10 @@ int main(int argc, char** argv) {
       std::this_thread::sleep_for(std::chrono::milliseconds(20));
       continue;
     }
-    if (window->Width() != device->Width() || window->Height() != device->Height()) device->Resize(window->Width(), window->Height());
+    if (photoLeft == 0 && (window->Width() != device->Width() || window->Height() != device->Height())) device->Resize(window->Width(), window->Height());
 
     // an automatic run counts time in frames, so that its pictures can be compared
-    const float time = automatic ? static_cast<float>(frameCount) / 60.0f : std::chrono::duration<float>(now - start).count();
+    const float time = photoLeft > 0 ? photoTime : automatic ? static_cast<float>(frameCount) / 60.0f : std::chrono::duration<float>(now - start).count();
 
     // the game: how far the simulation is, and the frame to show
     if (haveLive) {
@@ -1811,6 +1945,53 @@ int main(int argc, char** argv) {
         picture.SetSelectionMarks(true);
         printf("render: --picture: icons and selection marks off, then on again: drawn\n");
       }
+      {  // (cinecam) the cinematic camera through the pixel interface: a low view near the camera's target with the lens
+         // on, a photo twice the window's size, and the hand-back to the game's camera, eased
+        const GroundFn ground = picture.CineGround();
+        auto write = [&](const std::string& path, const std::vector<uint32_t>& px, int pw, int ph) {
+          std::vector<uint8_t> b(px.size() * 4, 255);
+          for (size_t i = 0; i < px.size(); ++i) {
+            b[i * 4] = static_cast<uint8_t>(px[i] >> 16);
+            b[i * 4 + 1] = static_cast<uint8_t>(px[i] >> 8);
+            b[i * 4 + 2] = static_cast<uint8_t>(px[i]);
+          }
+          return WritePng(path, b.data(), pw, ph);
+        };
+        const std::string base = opt.picture.substr(0, opt.picture.rfind('.'));
+        CineCamera cineTest;
+        cineTest.Start(camera);
+        const Vec3 at = camera.target;
+        cineTest.Jump(CinePose{{at.x + 14, ground(at.x + 14, at.z + 14) + 2, at.z + 14}, 0.785f, 0.06f, 0.7f});
+        Lens lens;
+        lens.on = true;
+        picture.SetLens(lens);
+        picture.SetSelection({});
+        picture.SetStrategicIcons(false);
+        picture.SetLifeBars(false);
+        picture.Draw(cineTest.View(ground), w, h, playTick + 1);  // (the auto-focus settles over a few frames)
+        const std::vector<uint32_t>& seen = picture.Draw(cineTest.View(ground), w, h, playTick + 1);
+        printf("render: --picture: the cinematic camera: %s\n", write(base + "_cine.png", seen, w, h) ? (base + "_cine.png").c_str() : "could not be written");
+        std::vector<uint32_t> photo;
+        int pw = 0, ph = 0;
+        const auto t0 = std::chrono::steady_clock::now();
+        const bool took = picture.TakePhoto(cineTest.View(ground), w * 2, h * 2, playTick + 1, &photo, &pw, &ph);
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        printf("render: --picture: a photo %dx%d in %.0f ms: %s\n", pw, ph, ms, took && write(base + "_photo.png", photo, pw, ph) ? (base + "_photo.png").c_str() : "FAILED");
+        // handed back: the game's camera from where the cinematic one is, the picture eased to it over half a second
+        const Camera game = cineTest.Stop(ground);
+        int frames = 0;
+        for (; frames < 60 && cineTest.EasingBack(); ++frames) {
+          cineTest.Update(1 / 60.0f, ground);
+          lens.strength = cineTest.LensShare();
+          picture.SetLens(lens);
+          picture.Draw(cineTest.Shown(game, ground), w, h, playTick + 1);
+        }
+        const Camera last = cineTest.Shown(game, ground);
+        printf("render: --picture: handed back in %d frames, the eye %.2f from where the cinematic one was (pitch %.2f -> %.2f)%s\n", frames,
+               Length(game.Eye() - cineTest.pose.eye), cineTest.pose.pitch, game.pitch, !last.cinematic && Length(last.Eye() - game.Eye()) < 1e-3f ? "" : " (NOT the game's camera)");
+        picture.SetLens(Lens{});
+        picture.SetStrategicIcons(true);
+      }
       break;
     }
     const float clear[4] = {0.05f, 0.06f, 0.08f, 1};
@@ -1827,7 +2008,14 @@ int main(int argc, char** argv) {
       Vec3 at;
       if (fxStand && !opt.hasCam && fxStand->Focus(&at)) camera.target = at;
     }
-    world.Begin(camera, device->Width(), device->Height(), time, havePlay ? playTick * 0.1 : static_cast<double>(time));
+    // the cinematic camera: moved on (an automatic run by a 60th of a second a frame, as its clock), and drawn with
+    // while it is on or easing back to the game's
+    cine.Update(photoLeft > 0 ? 0.0f : automatic ? 1 / 60.0f : dt, cineGround);
+    const Camera drawn = cine.Shown(camera, cineGround);
+    if (cine.TakeCut()) world.cameraCut = true;
+    if (opt.hasCine) world.lens.strength = cine.LensShare();  // (the lens's blur goes as the picture eases back)
+    world.photo = photoLeft > 0;  // (--photo: its frames)
+    world.Begin(drawn, device->Width(), device->Height(), time, havePlay ? playTick * 0.1 : static_cast<double>(time));
 
     if (fxStand) {  // the effects test stand
       Vec3 right, up, back;
@@ -2112,15 +2300,41 @@ int main(int argc, char** argv) {
     world.Render();
     const auto renderEnd = std::chrono::steady_clock::now();
 
-    if (!(automatic && liveBusy)) {  // an automatic run counts its frames from where it was asked to look
+    if (!(automatic && liveBusy) && photoLeft == 0) {  // an automatic run counts its frames from where it was asked to look
       if (frameCount == 0) countedFrom = std::chrono::steady_clock::now();
       ++frameCount;
     }
-    const bool lastFrame = opt.frames > 0 && frameCount >= opt.frames;
+    const bool lastFrame = opt.frames > 0 && frameCount >= opt.frames && photoLeft == 0;
     // (--shots <n>: every n-th counted frame is written too, as <screenshot>_0001.png ...: a thing
     // that moves or flickers, looked at over time in one and the same game)
-    const bool series = opt.shots > 0 && automatic && !liveBusy && !opt.screenshot.empty() && !lastFrame && frameCount % opt.shots == 0;
+    const bool series = opt.shots > 0 && automatic && !liveBusy && !opt.screenshot.empty() && !lastFrame && photoLeft == 0 && frameCount % opt.shots == 0;
     const bool shoot = wantScreenshot || series || (lastFrame && !opt.screenshot.empty());
+    if (photoLeft > 0) {  // --photo: its frames, drawn and not shown, the last one read back, made smaller and written
+      device->EndFrame(photoLeft == 1 ? &capture : nullptr, false);
+      CpuTimes::parts.clear();
+      if (--photoLeft > 0) continue;
+      const int drawnWidth = photoWidth * photoBy, n = photoBy * photoBy;
+      if (capture.size() >= static_cast<size_t>(drawnWidth) * static_cast<size_t>(photoHeight * photoBy) * 4) {
+        std::vector<uint8_t> bytes(static_cast<size_t>(photoWidth) * static_cast<size_t>(photoHeight) * 4, 255);
+        for (int y = 0; y < photoHeight; ++y)
+          for (int x = 0; x < photoWidth; ++x)
+            for (int c = 0; c < 3; ++c) {
+              int sum = 0;
+              for (int dy = 0; dy < photoBy; ++dy)
+                for (int dx = 0; dx < photoBy; ++dx)
+                  sum += capture[(static_cast<size_t>(y * photoBy + dy) * static_cast<size_t>(drawnWidth) + static_cast<size_t>(x * photoBy + dx)) * 4 + static_cast<size_t>(c)];
+              bytes[(static_cast<size_t>(y) * static_cast<size_t>(photoWidth) + static_cast<size_t>(x)) * 4 + static_cast<size_t>(c)] = static_cast<uint8_t>((sum + n / 2) / n);
+            }
+        if (WritePng(photoPath, bytes.data(), photoWidth, photoHeight))
+          printf("render: --photo: wrote %s, %dx%d (drawn at %dx%d)\n", photoPath.c_str(), photoWidth, photoHeight, drawnWidth, photoHeight * photoBy);
+        else
+          fprintf(stderr, "render: --photo: cannot write %s\n", photoPath.c_str());
+      } else {
+        fprintf(stderr, "render: --photo: nothing was read back\n");
+      }
+      if (photoEnds) break;
+      continue;
+    }
     device->EndFrame(shoot ? &capture : nullptr);
     if (opt.timings) {  // (every frame, the first ones too: the slowest, part by part)
       const double whole = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - frameStart).count();
@@ -2230,9 +2444,20 @@ int main(int argc, char** argv) {
         for (const auto& p : timing.slowestParts)
           if (p.second >= 1) printf("render: --timings:   %-48s %7.1f\n", p.first, p.second);
       }
+      if (!opt.photo.empty()) {  // --photo: the same moment again at the photo's size, a few frames to settle first
+        startPhoto(opt.photo, true);
+        photoTime = time;
+        continue;
+      }
       break;
     }
 
+    if (wantPhoto) {  // key P: the next frames a photo of this moment
+      wantPhoto = false;
+      startPhoto("photo" + std::to_string(++photoNumber) + ".png", false);
+      photoTime = time;
+      continue;
+    }
     titleTime += dt;
     ++titleFrames;
     if (titleTime >= 0.5) {
