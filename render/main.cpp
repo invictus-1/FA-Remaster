@@ -84,6 +84,15 @@
 // --lit-rain  rain and snow lit where they fall (World::litRain; modern look): by the sun through its shadow and by the
 //           lamps and their beams through their shadows, sent on mostly forward
 // --rain-splashes  rain's splashes (World::rainSplashes; modern look): small crowns where rain meets what faces up
+// --lit-smoke  smoke and dust lit as volumes (World::litSmoke; modern look): by the sun through the shadows of hills,
+//           trees, the clouds and the plume itself, by the small lights (lasting fires become flickering lights
+//           too), darker where thick away from the sun; --smoke-density n how dark the light through a puff gets
+//           (2), --fire-light n how bright the fires' light is (1, 0 none)
+// --smoke-shadows  the smoke's shadow on the ground, the units, the water and in the light in the air
+//           (World::smokeShadows; modern look); --smoke-shadow-strength n (0.75)
+// --heat-shimmer  the air bends what is behind it over fires, exhausts and fresh explosions (World::heatShimmer;
+//           modern look); --heat-bend n the most it bends, in pixels (2)
+// --smoke   all three: --lit-smoke --smoke-shadows --heat-shimmer
 // --terrain-despite-hold  the remastered ground (<remasters>/_terrain/export/moho64) mounted even with its HOLD file
 //           (to look at it before games may); --ground-ultra  its 8k materials in place of the 4k
 // --ground-cover  grass near the camera (World::groundCover; modern look); on a map with the visuals track's plants
@@ -352,6 +361,10 @@ struct Options {
   bool rayReflections = false;          // --ray-reflections
   bool litRain = false;                 // --lit-rain
   bool rainSplashes = false;            // --rain-splashes
+  bool litSmoke = false;                // --lit-smoke
+  bool smokeShadows = false;            // --smoke-shadows
+  bool heatShimmer = false;             // --heat-shimmer
+  float smokeDensity = -1, fireLight = -1, smokeShadowStrength = -1, heatBend = -1;  // (their tuning; -1: as at first)
   bool waterDetail = false;             // --water-detail
   bool waterRipples = false;            // --water-ripples
   float rippleTest = 0, rippleTestRadius = 0.5f, rippleTestStrength = 1;  // --ripple-test
@@ -490,6 +503,10 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--ray-reflections") o->rayReflections = true;
     else if (a == "--lit-rain") o->litRain = true;
     else if (a == "--rain-splashes") o->rainSplashes = true;
+    else if (a == "--lit-smoke") o->litSmoke = true;
+    else if (a == "--smoke-shadows") o->smokeShadows = true;
+    else if (a == "--heat-shimmer") o->heatShimmer = true;
+    else if (a == "--smoke") o->litSmoke = o->smokeShadows = o->heatShimmer = true;
     else if (a == "--water-detail") o->waterDetail = true;
     else if (a == "--water-ripples") o->waterRipples = true;
     else if (a == "--ground-cover") o->groundCover = true;
@@ -557,6 +574,10 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--beam") o->beam.push_back(v);
     else if (a == "--hide") o->hide = v;
     else if (a == "--plant-density") o->plantDensity = static_cast<float>(atof(v));
+    else if (a == "--smoke-density") o->smokeDensity = static_cast<float>(atof(v));
+    else if (a == "--fire-light") o->fireLight = static_cast<float>(atof(v));
+    else if (a == "--smoke-shadow-strength") o->smokeShadowStrength = static_cast<float>(atof(v));
+    else if (a == "--heat-bend") o->heatBend = static_cast<float>(atof(v));
     else if (a == "--plant-tallest") o->plantTallest = static_cast<float>(atof(v));
     else if (a == "--ripple-test") {
       if (sscanf(v, "%f,%f,%f", &o->rippleTest, &o->rippleTestRadius, &o->rippleTestStrength) < 1) return false;
@@ -994,6 +1015,13 @@ int main(int argc, char** argv) {
   world.rayReflections = opt.rayReflections;
   world.litRain = opt.litRain;
   world.rainSplashes = opt.rainSplashes;
+  world.litSmoke = opt.litSmoke;
+  world.smokeShadows = opt.smokeShadows;
+  world.heatShimmer = opt.heatShimmer;
+  if (opt.smokeDensity >= 0) world.particles.smokeDensity = opt.smokeDensity;
+  if (opt.fireLight >= 0) world.fireLight = opt.fireLight;
+  if (opt.smokeShadowStrength >= 0) world.smokeMap.strength = opt.smokeShadowStrength;
+  if (opt.heatBend >= 0) world.particles.heatBend = opt.heatBend;
   world.waterDetail = opt.waterDetail;
   world.waterRipples = opt.waterRipples;
   if (opt.rippleSpeed > 0) world.water.ripples.speed = opt.rippleSpeed;

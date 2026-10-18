@@ -62,10 +62,25 @@ struct EmitterBlueprint {
   // none).
   std::string normalPath;
   gfx::Texture normals;
+  // SixWayTexture (the visuals track's, for smoke baked from a simulation): the flipbook lit from six directions,
+  // in two textures of the same layout (Texture's frames and grid): Texture holds the light maps from the right
+  // (red), the top (green) and behind (blue), and the alpha; SixWayTexture those from the left (red), below (green)
+  // and the front (blue), and in its alpha how hot it glows (0 none .. 1 white hot). Right and top are the frame's
+  // as rendered, behind and front away from the eye and toward it (Unity's six-way layout); the frames are stored
+  // upright, as rendered (the game's own particle textures are drawn turned over: these are turned back). The light
+  // maps are stored as a screen shows colours (gamma 2.2; an sRGB format is read the same), the two alphas as they
+  // are. The smoke's colour is its RampTexture's, all of it (so it can grey with age); SixWayEmission: how bright its
+  // glow is (1). Drawn lit in either look (docs/render-smoke.md: the packing).
+  std::string sixWayPath;
+  gfx::Texture sixWay;
+  float sixWayEmission = 1;
   float refractionScale = 1;
   bool collideGround = false, keepAtLowQuality = false;
   float lightRadius = 0, lightSeconds = 0, lightStrength = 1;
   float largestSize = 0;  // the largest size its size curves give (for the light it throws)
+  // (Particles::HotEmitters, the first time it is asked: -1 not known yet, 1 its glow is a hot colour, and that colour)
+  mutable int warm = -1;
+  mutable Vec3 warmColor;
   int sortOrder = 0;
   float lodCutoff = 0;      // an emitter that hangs on something throws nothing out farther from the camera (0: no limit)
   float longestLife = 1;    // the longest a particle of it can live, in ticks
@@ -131,6 +146,43 @@ class Particles {
   // `soften` world units where they are about to meet something solid.
   void Draw(const View& view, gfx::Texture sceneDepth, float zNear);
   float soften = 0.6f;
+
+  // --- the modern look's lit smoke and heat shimmer (World::litSmoke, smokeShadows, heatShimmer) ---
+  // Lit smoke: Draw lights smoke and dust (what covers what is behind it, not what adds light) as a volume: the
+  // sun through the shadow maps, the clouds' shadow and the smoke's own (smoke.h, when its map is drawn this
+  // frame), the small lights (the lights' buffer bound, lights.h), and its thickness toward the sun read from its
+  // texture. Through pipelines of its own, made the first time (where they cannot be, smoke stays as it was).
+  // `smokeDensity`: how dark the light going through a puff makes it; `smokeSmallLights`: how strongly the small
+  // lights light it.
+  bool litSmoke = false;
+  float smokeDensity = 2.0f, smokeSmallLights = 1.0f;
+  // Before Draw, when the smoke's shadow is drawn first: drops what is over and hands the rest to the card (Draw
+  // does it itself otherwise). Then the smoke as the sun sees it, into the current pass (the smoke's shadow map's,
+  // smoke.h), with the map's view.
+  void Gather();
+  void DrawSmokeShadow(const View& sunView);
+  // What is hot (lit smoke's fires, heat shimmer): the emitters running now whose particles add light in the colour
+  // of something hot and that last (a fire on a damaged unit, an engine's exhaust: not an explosion's burst,
+  // which throws a flash), the `most` nearest to `near`. `rampGlow` gives a ramp texture's colour (the world
+  // sets it: Lights::RampGlow); without it nothing is hot.
+  struct Hot {
+    Vec3 position;
+    float size;      // as large as its particles
+    Vec3 color;      // its glow's, linear
+    uint32_t id;
+    bool moving;     // on something that flies fast (a missile)
+  };
+  void HotEmitters(Vec3 near, size_t most, std::vector<Hot>* out);
+  std::function<Vec3(const std::string&)> rampGlow;
+  // Heat shimmer: `heat` set, a fresh explosion leaves hot air for a moment and a lasting fire or exhaust has it
+  // over it; PrepareHeat (after Draw, out of a pass) says whether any of it is to be drawn this frame, DrawHeat
+  // draws it over the picture as it is (`behind`, one sample a pixel), into the scene's colour. `heatBend`: the
+  // most it bends, in pixels of a picture 1080 high (as many more as the picture is higher); `heatRise`: how fast its
+  // waves rise.
+  bool heat = false;
+  float heatBend = 2.0f, heatRise = 3.0f;
+  bool PrepareHeat(const View& view);
+  void DrawHeat(const View& view, gfx::Texture behind, gfx::Texture sceneDepth, float zNear);
   // The particles that bend what is behind them (the original's blend mode 5: the shimmer over heat,
   // a shock wave's ring): after Draw, into the scene's pass, with the picture as it was just before
   // (one sample a pixel). `Bending()`: are there any, after the last Draw.
@@ -202,6 +254,24 @@ class Particles {
   TextureCache* textures_;
   gfx::Pipeline pipelines_[4];  // alpha, darkening, adding, premultiplied
   gfx::Buffer buffer_;
+  // lit smoke and heat shimmer (made the first time they are wanted)
+  gfx::Pipeline litPipelines_[2];  // alpha, premultiplied
+  gfx::Pipeline shadowPipeline_, heatPipeline_;
+  bool litTried_ = false, litMade_ = false, heatTried_ = false;
+  bool LitReady();
+  bool HeatReady();
+  static bool Smoky(const EmitterBlueprint& bp, bool darkening);
+  bool gathered_ = false;  // Gather has run since the last Update
+  float gatherMs_ = 0;
+  struct Puff {  // a fresh explosion's hot air
+    Vec3 position;
+    double born;
+    float radius;
+  };
+  std::vector<Puff> puffs_;
+  gfx::Buffer heatBuffer_;
+  std::vector<float> heatRows_;
+  int heatCount_ = 0;
   std::unordered_map<std::string, std::unique_ptr<EmitterBlueprint>> blueprints_;
   std::unordered_map<std::string, bool> factionFiles_;  // "<path>|remastered|<faction>" -> has the faction its own file
   std::unordered_map<const EmitterBlueprint*, std::unique_ptr<Set>> sets_;
@@ -211,7 +281,7 @@ class Particles {
   std::vector<float> rows_;
   std::vector<std::pair<size_t, size_t>> spans_;  // per set of order_, from the last Draw: first row, particle count
   bool bending_ = false;
-  void DrawSets(const View& view, bool bending, gfx::Texture behind, gfx::Texture sceneDepth, float zNear);
+  void DrawSets(const View& view, int pass, gfx::Texture behind, gfx::Texture sceneDepth, float zNear);
   uint32_t nextId_ = 1;
   uint32_t seed_ = 0x2545f491u;
   double now_ = 0;

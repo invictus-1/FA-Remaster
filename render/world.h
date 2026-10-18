@@ -53,6 +53,7 @@
 #include "ribbons.h"
 #include "scmap.h"
 #include "shadows.h"
+#include "smoke.h"
 #include "terrain.h"
 #include "textures.h"
 #include "view.h"
@@ -386,6 +387,20 @@ class World {
   // blades and the plants comes through, deeper in colour, and glows toward an eye that looks toward the sun through
   // them (without it leaves let some through, plainly, and grass and plants none). Modern look; off by default.
   bool leafLight = false;
+  // Lit smoke (particles.h, smoke.h; Chris, 2026-10-17): smoke and dust lit as volumes in the modern look: by the sun
+  // through the shadows of what stands in its way (hills, trees, the clouds, the plume itself: dark deep inside a
+  // column, bright on its sunny side), by the small lights (explosions' flashes; and lasting fires, which with it
+  // are small lights too, flickering, in the remastered effects' look: `fireLight` how bright), thinner and brighter
+  // at the edges toward the sun. Off by default.
+  bool litSmoke = false;
+  float fireLight = 1.0f;
+  // Smoke's shadow (smoke.h): the smoke darkens the sun's light on the ground, the units, the water and in the light
+  // in the air under it. Modern look; off by default.
+  bool smokeShadows = false;
+  SmokeShadowMap smokeMap;
+  // Heat shimmer (particles.h): the air bends what is behind it over fires, engines' exhausts and fresh explosions,
+  // a few pixels at most. Modern look; off by default.
+  bool heatShimmer = false;
   Clouds clouds;
   // Soft shadows (lighting.h, SunShadow; the lighting upgrade): the sun's shadows sharper near what casts
   // them and blurred farther off, as a sun that is not a point makes them. Modern look; off by default.
@@ -616,6 +631,8 @@ class World {
   bool raysTried_ = false, raysGround_ = false;  // (RaysReady: its shaders tried; the open map's ground in it)
   bool bounceTried_ = false, bounceMade_ = false, bounceNow_ = false;  // (bounce light: tried, made, on this frame)
   bool grassTried_ = false, grassMade_ = false, grassNow_ = false;  // (ground cover: its shader tried, made, on this frame)
+  bool litSmokeNow_ = false, smokeNow_ = false;  // (lit smoke this frame; the smoke's shadow map drawn this frame)
+  std::vector<Particles::Hot> hot_;  // (lit smoke: the lasting fires, this frame)
   // (the ground cover's plants: the map's cover read; where its trees stand; where the plants grow, Terrain's)
   bool plantsReady_ = false;
   gfx::Texture treeMask_, coverA_, coverB_;

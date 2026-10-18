@@ -63,9 +63,9 @@ float SoftSunShadow(float3 s, int i, float texel, float step) {
   return lit / 16;
 }
 
-// 1 in sunlight, 0 in shadow. `normal` is the surface's (the lookup is moved a little along it, which
-// keeps a lit surface from shadowing itself).
-float SunShadow(float3 world, float3 normal) {
+// 1 in sunlight, 0 in shadow, by the shadow maps alone. `normal` is the surface's (the lookup is moved a little
+// along it, which keeps a lit surface from shadowing itself).
+float SunShadowMaps(float3 world, float3 normal) {
   if (shadowsOn < 0.5) return 1;
   for (int i = 0; i < int(cascadeCount); ++i) {
     float texel = cascadeTexel[i];
@@ -85,6 +85,31 @@ float SunShadow(float3 world, float3 normal) {
   }
   return 1;
 }
+
+// Smoke's shadow (smoke.h; World::litSmoke, smokeShadows): what of the sun's light comes through the smoke on
+// its way to `world`. The map holds, for each line toward the sun, the smoke's optical depth and its first two
+// moments in height; the smoke on that line is taken as spread normally about its mean height, and what of it is
+// higher (nearer the sun) than the place shadows it: the ground under a column takes all of it, a puff on the
+// column's sunny side little, an aircraft above it none. Fades out toward the map's edge. `scale`: what the smoke's
+// optical depth is multiplied by besides (lit smoke takes less of its own shadow: light scattered on and on inside it).
+Texture2D smokeShadowMap : register(t40);
+float SmokeShadowAt(float3 world, float scale) {
+  float3 s = mul(smokeMatrix, float4(world, 1)).xyz;
+  float edge = min(min(s.x, 1 - s.x), min(s.y, 1 - s.y));
+  if (edge <= 0) return 1;
+  float3 m = smokeShadowMap.SampleLevel(samplerLinearClamp, s.xy, 0).rgb;
+  if (m.x < 1e-3) return 1;
+  float mean = m.y / m.x;
+  float spread = sqrt(max(m.z / m.x - mean * mean, 0) + smokeShadow.y * smokeShadow.y);
+  float ahead = 1 / (1 + exp(-1.7 * (mean - s.z) / spread));  // (the normal distribution's share above, nearly)
+  return lerp(1, exp(-m.x * ahead * smokeShadow.z * scale), saturate(edge * 12));
+}
+float SmokeShadow(float3 world) {
+  [branch] if (smokeShadow.x < 0.5) return 1;
+  return SmokeShadowAt(world, 1);
+}
+// The sun's shadow on a place: the shadow maps', and the smoke's where it casts one.
+float SunShadow(float3 world, float3 normal) { return SunShadowMaps(world, normal) * SmokeShadow(world); }
 
 // Which of the sun's shadow maps a place is looked up in (0 the nearest and sharpest; -1: none).
 int SunCascade(float3 world) {

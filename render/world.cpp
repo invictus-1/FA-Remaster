@@ -52,8 +52,11 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       placedDraw(device, &models),
       orders(device, &textures),
       shadows(device),
+      smokeMap(device),
       device_(device),
-      vfs_(vfs) {}
+      vfs_(vfs) {
+  particles.rampGlow = [this](const std::string& ramp) { return lights.RampGlow(ramp); };  // (what is hot: lit smoke's fires, heat shimmer)
+}
 
 World::~World() {
   if (framegenAsked_) device_->SetFrameGeneration({});
@@ -1674,6 +1677,53 @@ void World::Render() {
     const float fade = (1 - age) * (1 - age);
     lights.Add(f.position + Vec3{0, 0.6f, 0}, f.radius, f.color * (1.6f * f.strength * fade * lights.night));
   }
+  // lit smoke (particles.h): what burns on and on (a fire on a damaged unit, a burning wreck) is a small light too,
+  // flickering, so that the smoke over it glows (the remastered effects' look, as the flashes; not a missile's
+  // exhaust, whose shot throws its own)
+  litSmokeNow_ = litSmoke && look == Look::Modern && haveMap_;
+  particles.litSmoke = litSmokeNow_;
+  particles.heat = heatShimmer && look == Look::Modern && haveMap_ && !sidePicture;
+  if (litSmokeNow_ && particles.remastered && fireLight > 0) {
+    particles.HotEmitters(camera.target, 48, &hot_);
+    // the fires of one burning thing are one light: a wreck burns in a dozen places a pace apart, and a light for
+    // each would add up to a glare (gathered within 3 units; a few together a little brighter than one, at most
+    // twice). By day a fire's light is little beside the sun's: a third of it at noon.
+    struct Fire {
+      Vec3 position, color;
+      float size, weight;
+      uint32_t id;
+      int count;
+    };
+    std::vector<Fire> fires;
+    // (the light a flame throws is deeper than the colour its particles show: a texture's hot core is near white, and
+    // their glow taken as the light made the smoke round a fire olive-yellow; mostly a flame's own orange, linear)
+    const Vec3 flame{1.0f, 0.36f, 0.08f};
+    for (const Particles::Hot& h : hot_) {
+      if (h.moving) continue;
+      const float most = std::max({h.color.x, h.color.y, h.color.z, 1e-3f});
+      const Vec3 color = (h.color * (1 / most) * 0.25f + flame * 0.75f) * std::min(most * 3, 1.0f);
+      auto joins = std::find_if(fires.begin(), fires.end(), [&](const Fire& f) { return Length(f.position - h.position) < 3.0f; });
+      if (joins == fires.end()) {
+        fires.push_back({h.position, color, h.size, h.size, h.id, 1});
+        continue;
+      }
+      const float w = joins->weight + h.size;
+      joins->position = (joins->position * joins->weight + h.position * h.size) * (1 / w);
+      joins->color = (joins->color * joins->weight + color * h.size) * (1 / w);
+      joins->size = std::max(joins->size, h.size);
+      joins->weight = w;
+      ++joins->count;
+    }
+    const float daylight = timeOfDay >= 0 && look == Look::Modern ? skyLight.daylight : 1.0f;
+    const float byDay = 1 - 0.65f * daylight;
+    for (const Fire& f : fires) {
+      const float t = static_cast<float>(clock_) * 9.0f + static_cast<float>(f.id % 64) * 1.7f;
+      const float flicker = 0.8f + 0.13f * std::sin(t) + 0.07f * std::sin(t * 2.3f + 1.1f);
+      const float together = std::min(1 + 0.35f * static_cast<float>(f.count - 1), 2.0f);
+      lights.Add(f.position + Vec3{0, std::min(f.size * 0.5f, 1.5f), 0}, std::clamp(f.size * 4.0f, 2.5f, 10.0f),
+                 f.color * (fireLight * flicker * together * byDay * lights.night));
+    }
+  }
   lights.Build(&view);  // (after everything has said what lights there are; before any pass reads the view)
   {  // the bones of posed models, once for all the frame's passes
     std::vector<const View*> views{&view};
@@ -1745,6 +1795,20 @@ void World::Render() {
   for (int i = 0; i < lampShadowsDrawn; ++i) {
     device_->BeginPass(lights.ShadowPass(i));
     meshes.Draw(lights.ShadowView(i), environment_, true);
+  }
+  // smoke's shadow (smoke.h): the smoke as the sun sees it, for the smoke lit as a volume and (smokeShadows) for what
+  // the sun lights under it; before the light in the air and the scene read it
+  Stage("smoke's shadow");
+  smokeNow_ = false;
+  if ((litSmokeNow_ || (smokeShadows && look == Look::Modern && haveMap_)) && !sidePicture && hide.find("particles") == std::string::npos &&
+      smokeMap.Place(camera, Vec3{view.constants.sunDirection[0], view.constants.sunDirection[1], view.constants.sunDirection[2]}, &view,
+                     smokeShadows && look == Look::Modern)) {
+    particles.Gather();
+    device_->SetTexture(kSmokeShadowSlot, {});
+    device_->BeginPass(smokeMap.Pass());
+    particles.DrawSmokeShadow(smokeMap.SunView());
+    device_->SetTexture(kSmokeShadowSlot, smokeMap.Map());
+    smokeNow_ = true;
   }
   // the volumetric clouds: where they are and their shadows, before the light in the air and the scene read them
   Stage("clouds' shadows");
@@ -1884,11 +1948,26 @@ void World::Render() {
     shafts.Draw(view, post.Depth(), camera.zNear);
     Stage("particles");
     if (hide.find("particles") == std::string::npos) {
+      if (litSmokeNow_) {  // (lit smoke reads the lights, the shadow maps, the clouds' and the smoke's shadows)
+        lights.Bind();
+        device_->SetTexture(kShadowMapSlot, shadows.Map());
+        device_->SetTexture(kLampShadowSlot, lights.ShadowMap());
+        device_->SetTexture(kCloudShadowSlot, clouds.Shadows());
+        device_->SetTexture(kSmokeShadowSlot, smokeNow_ ? smokeMap.Map() : gfx::Texture{});
+      }
       particles.Draw(view, post.Depth(), camera.zNear);
       // those that bend what is behind them (the shimmer over heat): with the picture as it is now
       if (particles.Bending() && post.CopyBehind()) {
         post.BeginColorOnly();
         particles.DrawBending(view, post.Behind(), post.Depth(), camera.zNear);
+      }
+      // heat shimmer: the air over what is hot, bending the picture as it is now
+      if (particles.heat && particles.PrepareHeat(view)) {
+        Stage("heat shimmer");
+        if (post.CopyBehind()) {
+          post.BeginColorOnly();
+          particles.DrawHeat(view, post.Behind(), post.Depth(), camera.zNear);
+        }
       }
     }
     post.ContinueScene();

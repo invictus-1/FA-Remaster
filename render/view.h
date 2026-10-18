@@ -29,6 +29,7 @@ inline constexpr int kBounceColumnsSlot = 36; // the ground's height under each 
 inline constexpr int kRaySceneSlot = 33;      // ray tracing (ray_scene.h): the scene's structure
 inline constexpr int kRayInstancesSlot = 37;  // what each of its instances is
 inline constexpr int kRayGroundSlot = 38;     // the ground's normals (39: its colours)
+inline constexpr int kSmokeShadowSlot = 40;   // smoke's shadow (smoke.h): the smoke as the sun sees it, when it is drawn
 inline constexpr int kMaxCascades = 4;
 
 // The two ways of lighting. Everything is drawn in either; the game's files are the same.
@@ -130,6 +131,12 @@ struct ViewConstants {
   // Light through leaves (World::leafLight): x 1 = leaves, grass blades and the plants' cards let through the sun's
   // light that falls on their far side (lighting.h, LeafLight); y how much.
   float leaves[4];
+  // Smoke's shadow (smoke.h, World::litSmoke and smokeShadows): x 1 = what the sun lights takes it (lighting.h's
+  // SunShadow); y the least spread of smoke along the light (in the map's heights); z what its optical depth is
+  // multiplied by; w 1 = the map is drawn this frame (lit smoke reads it for its own shadow). smokeMatrix: world ->
+  // the map (x, y where in it, 0..1; z the height along the light, over the camera's target).
+  float smokeShadow[4];
+  Mat4 smokeMatrix;
 };
 
 // The same block, as HLSL source: shaders start with it.
@@ -175,6 +182,8 @@ cbuffer View : register(b0) {
   float4 rayEffects;      // reflections by ray tracing: x 1 = on; y how far a ray looks; z, w the map's size
   float4 shore;           // wet shorelines: x 1 = on; y the water's level; z the wet band's height; w the caustics' strength
   float4 leaves;          // light through leaves: x 1 = on; y how much
+  float4 smokeShadow;     // smoke's shadow (smoke.h): x 1 = surfaces take it; y the least spread; z the strength; w 1 = the map is drawn
+  row_major float4x4 smokeMatrix;  // world -> the smoke's shadow map (z: the height along the light)
 };
 // (every texture read with Sample takes the temporal upscaler's bias: textures with levels - the art's - are
 // read as finely as the screen's size wants; pictures drawn by the renderer have one level and do not change)
