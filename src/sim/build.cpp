@@ -2818,7 +2818,13 @@ BuildTask* MakeReclaimChild(Sim& sim, Unit* u, Entity* target) {
 
 BuildTask* StartGuardTask(Sim& sim, Unit* u, const UnitCommand& c) {
   if (!c.targetId && !c.hasPos) return nullptr;  // no target: Stop
-  if (c.targetId && !FindUnit(sim, c.targetId) && !c.hasPos) return nullptr;
+  // An entity order whose unit is gone has no target: CAiTarget::HasTarget 0x5e2a10 asks a type-1 target for its live
+  // entity only (a unit: not dead, vt+0x28), never for a place; DispatchTask's Guard case then goes the way of Stop
+  // (0x609775). The place ours keeps beside the entity counts only for a blip-held target (kept as it was). Seen: MP2
+  // 6205, army 1's engineers 0x10006a / 0x10000a reach the end of a Move with a Guard queued behind it on a mass
+  // extractor that has since been destroyed (its id 0x10003f now another unit's): the original's queue is empty at
+  // 6205; ours guarded the extractor's old place.
+  if (c.targetId && !FindUnit(sim, c.targetId) && (!c.hasPos || !c.targetViaBlip)) return nullptr;
   auto t = std::make_unique<BuildTask>();
   t->type = CommandType::Guard;
   t->order = "Guard";

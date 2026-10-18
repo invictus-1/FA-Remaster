@@ -77,12 +77,25 @@ struct Ref {
   }
 };
 
+#if defined(_WIN32)
+// dxcompiler.dll beside the program: the one place it is taken from (not the system's search path), so that
+// whether the shaders are DXC's or Direct3D's own compiler's never depends on what else is on the system.
+std::wstring DxcBeside() {
+  wchar_t path[2 * MAX_PATH];
+  const DWORD n = GetModuleFileNameW(nullptr, path, 2 * MAX_PATH);
+  std::wstring p = n > 0 && n < 2 * MAX_PATH ? std::wstring(path, n) : std::wstring();
+  const size_t slash = p.find_last_of(L"\\/");
+  return (slash == std::wstring::npos ? std::wstring() : p.substr(0, slash + 1)) + L"dxcompiler.dll";
+}
+#endif
+
 // DXC's DxcCreateInstance, the library loaded the first time it is asked for (null: not there).
 CreateInstanceFn DxcCreate() {
   static const CreateInstanceFn create = [] {
     CreateInstanceFn fn = nullptr;
 #if defined(_WIN32)
-    if (HMODULE lib = LoadLibraryA("dxcompiler.dll")) fn = reinterpret_cast<CreateInstanceFn>(reinterpret_cast<void*>(GetProcAddress(lib, "DxcCreateInstance")));
+    if (HMODULE lib = LoadLibraryExW(DxcBeside().c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH))
+      fn = reinterpret_cast<CreateInstanceFn>(reinterpret_cast<void*>(GetProcAddress(lib, "DxcCreateInstance")));
 #elif defined(__APPLE__)
     if (void* lib = dlopen("libdxcompiler.dylib", RTLD_NOW | RTLD_LOCAL)) fn = reinterpret_cast<CreateInstanceFn>(dlsym(lib, "DxcCreateInstance"));
 #else
@@ -418,6 +431,14 @@ void Prewarm(const std::vector<ShaderJob>& jobs, const std::string& cacheDir, bo
 }
 
 }  // namespace
+
+bool DxcPresent() {
+#if defined(_WIN32)
+  return GetFileAttributesW(DxcBeside().c_str()) != INVALID_FILE_ATTRIBUTES;
+#else
+  return true;  // (dlopen's own search decides, at the first shader compiled)
+#endif
+}
 
 bool CompileDxil(const std::string& source, const char* entry, const char* stage, const std::string& cacheDir, std::vector<uint8_t>* out,
                  std::string* error, bool* missing) {

@@ -500,6 +500,30 @@ picture the fallback; helpers build most of them in parallel, the renderer revie
 10. **Real tracks in snow, mud, dirt and sand** (ruts with relief by the ground they are in, filling and fading).
    In work.
 
+Then the renderer offered nine more and Chris answered "100% yes to all of them", 14 as a trial first (he decides
+after seeing it). Queued: they start as the helpers above finish (about eight at a time, so the engine session's
+work is not starved of the processor).
+
+11. **Shields that look like energy**: what is behind a bubble bends, each hit sends ripples across it, its pattern
+   flares, its colour tints the ground under it.
+12. **Hot metal**: fresh wrecks and craters glow orange and cool over a minute or two; wrecks smoulder.
+13. **Explosions as real volumes, and a nuke worth the name**: big blasts drawn as lit volumes (simulations the
+   visuals session makes in Blender, played back through the light in the air); a nuke's flash lighting the map, a
+   shock ring through the clouds, a mushroom cloud. After item 2 (it shares the smoke's lighting).
+14. **Zooming out through the clouds (a trial)**: the strategic zoom rises through the volumetric clouds, which thin
+   out so the map stays readable.
+15. **Units seen behind trees and cliffs**: a faint outline in the army's colour where a unit is hidden.
+   ON by default (Chris via the interface session, 2026-10-17: readability), and only for what the player may
+   see: his own, allied units, enemies in sight, never an enemy in the fog.
+16. **Dust, spray and contrails**: vehicles raise dust on dry ground, hover units throw spray, high aircraft draw
+   contrails. After items 2 and 3 (shared particles and dust).
+17. **Life in the world**: flocks of birds over the forests that scatter when fighting comes near; fireflies at dusk;
+   never mistakable for units.
+18. **Textures streamed in** (games start sooner, less memory: the RTX 3060 has room): in the optimisation phase,
+   talked through with Chris first as agreed.
+19. **Build effects remade**: build beams that light what they touch, sparks, a better build shimmer (the original's
+   kept as an option). After item 2 (shared particles).
+
 ## The options
 
 Each is off by default and, off, leaves the picture as it was, pixel for pixel. All are the modern look's. A

@@ -667,8 +667,24 @@ void CheckCollisions(Sim& sim, Unit* u) {
   std::vector<Entity*> gridUnits;
   auto visit = [&](Unit* e) {
     if (e == u) return;
+    // The sphere query (0x721fb0, mask 0x100): with R above 3 (0xe4f718) a candidate whose bounding box (entity
+    // +0x240 / +0x24c) meets the cube of half side R x 0.707 (0xdff27c) around the centre is taken without the exact
+    // test (0x7220c8..0x72218f, touching counts); every other one goes to its primitive's sphere test (vt+0x20).
+    // The cube reaches past the sphere at its corners: a unit up to 1.22 R away can be a candidate. Seen: MP2 6125,
+    // army 0's 0x95 (R 10.35) re-predicts and takes 0x83, 10.7 away in 3-D, whose box lies inside its cube; the
+    // record it gives 0x83 (due 6128) starts the chain that clears 0xc1's, so 0x12 drives on at 6132. Ours left 0x83
+    // out and 0x12 braked.
     WorldShape s;
-    if (!GetWorldShape(e, &s) || !SphereOverlap(s, u->position, R)) return;
+    if (!GetWorldShape(e, &s)) return;
+    bool inCube = false;
+    if (R > 3.0f) {
+      const float h = R * 0.707f;
+      const Vec3& c = u->position;
+      Vec3 mn, mx;
+      ShapeBounds(s, &mn, &mx);
+      inCube = !(c.x - h > mx.x || mn.x > c.x + h || c.y - h > mx.y || mn.y > c.y + h || c.z - h > mx.z || mn.z > c.z + h);
+    }
+    if (!inCube && !SphereOverlap(s, u->position, R)) return;
     if (UnitIgnores(u, e, 2)) return;
     // e.steering (+0x550): the Unit ctor makes one (AI_CreateSteering 0x5d3c30 at 0x6a5e4e) for every blueprint with
     // a Physics.MotionType (1..8, 0x6a5d9f..0x6a5dab), aircraft included. A landed aircraft is therefore a candidate:

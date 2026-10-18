@@ -4,6 +4,23 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To visuals, section 53: what a remastered tree may cost, and what makes trees sway (2026-10-17)
+
+**Budget: LOD0 at 600-1,000 triangles is fine.** Measured on SETONS_R's forest at 2560x1440 (RTX 4090, lowest times):
+trees and the rest of the scenery 0.51 ms on the card at 14 units up, 0.23 ms at 40; the sun's shadows 0.43-0.45 ms
+(2.4-3.3 million triangles in the shadow maps); the whole frame 1.7-2.1 ms. The processor's share (models tested
+and handed over) follows the number of props, not their triangles. LOD0 is used only for the trees largest on
+screen. A prop without the four-level pixel sizes has its level chosen by triangle count against its size on
+screen, a level stepping down at the geometric mean of its neighbours' counts: keep steps of about 3-4 times
+(e.g. ~800 / 250 / 70 / 14) so LOD0 is not left to the nearest trees with a pop. With cut-out cards the cost is in
+pixels more than triangles: cards trimmed close to the branch's outline, not many large ones over each other.
+
+**Sway** comes from the shader name (LabPBRAlpha or Undulating*: on, for every level; mesh_renderer.cpp's
+vertex shader), by a vertex's height in the model (over the model's top, squared) times the model's height in
+the world; a beat per prop from where it stands, a slow and a quick swing, gusts that run with the wind, more in
+rain and snow; the grass's wind is the same. Nothing in the mesh drives it. To be changed on the renderer's side:
+the trees of a group prop share one beat; each will get its own from its bone (one bone a tree stays).
+
 ## To visuals, sections 49 and 50: the ground cover's patch atlas read (2026-10-17)
 
 Read as you laid it out: remap.json's map entry names its `cover` file; the cells by their keys (`index`, `uv`,
