@@ -3013,7 +3013,13 @@ int TickGuard(Sim& sim, lua_State* L, Unit* U, BuildTask& t) {
       Vec3 a = EnsureAnchor(sim, U, g);
       const NamedFootprint& fp = Fp(U);
       int cx = static_cast<int>(std::nearbyint(a.x - fp.sizeX * 0.5f)), cz = static_cast<int>(std::nearbyint(a.z - fp.sizeZ * 0.5f));
-      TaskMoveToward(sim, U, Vec3{cx + fp.sizeX * 0.5f, a.y, cz + fp.sizeZ * 0.5f});
+      // NewMoveTask 0x6190a0 (from TaskTick 0x614549): the navigator's SetGoal (0x6190c9), then the CUnitMoveTask
+      // ctor 0x6180e0, which ends in Unit::UpdateSpeedThroughStatus 0x6ac940 (0x6186a1) on every path. Seen: MP3
+      // 4758, three of army 1's engineers on a Guard with a second Guard queued; the first ends (the builder
+      // context, ShouldAbortGuardForBuilderContext 0x612600) and its dtor's status call, the queue still holding both
+      // Guards, turns speed-through on; the second Guard's walk starts in the same beat and its move task's status
+      // call, the queue now holding one, turns it off again (original 0 at 4758). Ours walked without that call.
+      MoveTaskWalk(sim, U, Vec3{cx + fp.sizeX * 0.5f, a.y, cz + fp.sizeZ * 0.5f});
       U->unitStates.insert("Moving");
       g.childMove = true;
       t.state = 1;

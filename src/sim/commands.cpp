@@ -32,6 +32,7 @@ namespace moho {
 
 namespace combat {
 bool IsEnemy(const Army* a, const Army* b);
+int CallMethodBool(Sim& sim, lua_State* L, ScriptObject* obj, const char* method, int nargs);
 }
 namespace {
 
@@ -145,6 +146,73 @@ void PopHead(Unit* u) {
 }
 
 bool NextIsMove(const Unit* u) { return u->commands.size() > 1 && MoveLike(u->commands[1]->type); }
+
+// IAiCommandDispatchImpl::TaskTick 0x598e80, once DispatchTask made no task for the head order (0x598eea..0x598f67):
+// the order counts as carried out. A count above 1 goes down by one and the order is dispatched again (0x598eee..
+// 0x598f09, on to 0x598f6d); with the repeat switch (unit+0x2a2) a spent BuildFactory order gets its count back
+// (+0xe0 -> +0xe4), goes to the back of the queue (0x6edfc0) and the dispatcher waits a beat (0x598f0b..0x598f3b);
+// otherwise it is removed (0x6ede70 at 0x598f67) and the next one dispatched. The count is the command's own, shared
+// with every unit that holds it. Returns true when the dispatcher goes on in this beat. (TaskTick's own cases for
+// Attack, Patrol and FormPatrol at 0x598f47 are not here: only BuildFactory and Upgrade orders come this way.)
+bool OrderTakenWithoutTask(Unit* u) {
+  std::shared_ptr<UnitCommand> head = u->commands.front();
+  if (head->count > 1) {
+    --head->count;
+    return true;
+  }
+  if (u->repeatQueue && head->type == CommandType::BuildFactory) {
+    head->count = head->maxCount;
+    if (u->commands.size() > 1) {
+      PopHead(u);
+      u->commands.push_back(head);
+      head->units.insert(u);
+    }
+    u->headState = kNotStarted;
+    return false;
+  }
+  PopHead(u);
+  return true;
+}
+
+// a unit blueprint's General.<key> string ("" when it has none)
+std::string GeneralString(Sim& sim, const BlueprintInfo& bp, const char* key) {
+  lua_State* L = sim.L();
+  const int top = lua_gettop(L);
+  std::string r;
+  sim.blueprints().PushTable(L, bp);
+  if (lua_istable(L, -1)) {
+    lua_pushstring(L, "General");
+    lua_rawget(L, -2);
+    if (lua_istable(L, -1)) {
+      lua_pushstring(L, key);
+      lua_rawget(L, -2);
+      if (lua_type(L, -1) == LUA_TSTRING) r = lua_tostring(L, -1);
+    }
+  }
+  lua_settop(L, top);
+  return r;
+}
+
+bool SameIdNoCase(const std::string& a, const std::string& b) {
+  if (a.size() != b.size()) return false;
+  for (size_t i = 0; i < a.size(); ++i)
+    if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i]))) return false;
+  return true;
+}
+
+// DispatchTask's Upgrade case (0x6098bd): no blueprint, no task. When the order's blueprint names a General.SeedUnit
+// (string at bp+0x1d8, its size +0x1ec), that must be the unit's own blueprint (bp+8); otherwise the unit's
+// General.UpgradesTo (bp+0x184) must be the order's blueprint, or the order's General.UpgradesFrom (bp+0x1a0) the
+// unit's. The compares ignore case (0xaa549e). Only then is the upgrade task made (0x5f8b80); else no task.
+// (General sits at RUnitBlueprint+0x17c, 0x5258cf; UpgradesTo +8, UpgradesFrom +0x24, SeedUnit +0x5c, 0x520660..)
+bool UpgradeOrderFits(Sim& sim, const Unit* u, const UnitCommand& c) {
+  const BlueprintInfo* to = sim.blueprints().Find(c.blueprintId);
+  if (!to || !u->blueprint) return false;
+  const std::string seed = GeneralString(sim, *to, "SeedUnit");
+  if (!seed.empty()) return SameIdNoCase(seed, u->blueprint->id);
+  if (SameIdNoCase(GeneralString(sim, *u->blueprint, "UpgradesTo"), to->id)) return true;
+  return SameIdNoCase(GeneralString(sim, *to, "UpgradesFrom"), u->blueprint->id);
+}
 
 }  // namespace
 
@@ -739,6 +807,37 @@ void StartHead(Sim& sim, Unit* u) {
       PopHead(u);
       continue;
     }
+    if (c.type == CommandType::BuildFactory) {
+      // DispatchTask's BuildFactory case (0x6093bc): no blueprint, or a unit whose script says no to it
+      // (CScriptObject::RunScriptBool 0x60c2c0, "CheckBuildRestriction" with the blueprint's Lua table, 0x6093c4..
+      // 0x609419), gets no task, and TaskTick takes the order as carried out (OrderTakenWithoutTask). Seen: MP3
+      // 4460, army 0's T1 land factory 0x34 has
+      // finished its upgrade into the T2 0x39 (which got its five BuildFactory orders, NotifyUpgrade) and is
+      // destroyed; in that beat its dispatcher goes on with those orders, FAF's CheckBuildRestriction (CanBuild)
+      // refuses the T2 engineers to the T1 factory, and its queue is emptied (probe mp3_site: empty when 0x39's
+      // site test meets it). With no order at its head the old factory then counts as standing on the site
+      // (LocationIsFree, flag 1), and 0x39 waits 50 beats before its first unit.
+      const BlueprintInfo* fbp = sim.blueprints().Find(c.blueprintId);
+      bool allowed = fbp != nullptr;
+      if (allowed) {
+        lua_State* L = sim.L();
+        sim.blueprints().PushTable(L, *fbp);
+        allowed = ::moho::combat::CallMethodBool(sim, L, u, "CheckBuildRestriction", 1) == 1;
+      }
+      if (u->dead) return;
+      if (!allowed) {
+        if (OrderTakenWithoutTask(u)) continue;
+        return;
+      }
+    }
+    if (c.type == CommandType::Upgrade && !UpgradeOrderFits(sim, u, c)) {
+      // (UpgradeOrderFits.) Seen: Economy 3079, a T1 mex (0xf) finishes its upgrade into the T2 0x3b and is
+      // destroyed; NotifyUpgrade has handed 0x3b the next order, the upgrade to T3. In that beat the T1's dispatcher
+      // goes on with its own copy of that order: the T3 does not upgrade from the T1, so no task, and the order is
+      // dropped (only 0x3b starts the T3, 0x4b).
+      if (OrderTakenWithoutTask(u)) continue;
+      return;
+    }
     if (BuildTask* bt = StartBuildTask(sim, u, c)) {
       u->task = bt;
       u->headState = kRunning;
@@ -927,22 +1026,14 @@ void ArrivalStep(Sim& sim, Unit* u) {
 
 void CommandStep(Sim& sim, Unit* u) {
   if (!u || u->dead) return;
-  if (u->destroyQueued) {
-    // Entity::Destroy 0x679af0 only flags and queues the entity; its command thread stays in the stage and the queue
-    // lives until ~Unit (Purge, after the beat's drain). A task already running therefore still runs in the beat its
-    // unit was destroyed in (CUnitUpgradeTask::TaskTick 0x5f8890 asks nothing of its unit's end). Nothing new is
-    // started here (not read: the dispatcher's own tests, 0x598f6d..0x598fa7, do not ask for DestroyQueued either).
-    // Seen: Economy 3952, T2 mex 0x3a reclaimed by 0xa (an earlier thread) while upgrading; the original's upgrade
-    // 0x57 still gains its step in that beat (574.4 -> 578.0).
-    if (u->task && u->headState == kRunning && !u->commands.empty()) {
-      BuildTask* task = u->task;
-      if (TickBuildTask(sim, u, *task) != kTaskRunning) {
-        u->task = nullptr;
-        PopHead(u);
-      }
-    }
-    return;
-  }
+  // Entity::Destroy 0x679af0 only flags and queues the entity; its command thread stays in the stage and the queue
+  // lives until ~Unit (Purge, after the beat's drain). A task already running therefore still runs in the beat its
+  // unit was destroyed in (CUnitUpgradeTask::TaskTick 0x5f8890 asks nothing of its unit's end; seen: Economy 3952, T2
+  // mex 0x3a reclaimed by 0xa while upgrading, the original's upgrade 0x57 still gains its step in that beat), and
+  // the dispatcher goes on with the queue: its tests (IAiCommandDispatchImpl::TaskTick 0x598f6d..0x598fb5) are
+  // IsBeingBuilt (+0xa0), IsDead (+0xa1, which a Destroy sets only in the drain, OnDestroy 0x6a8a31), states Attached
+  // and BlockCommandQueue, and an empty queue; nothing asks for the destroy (seen: MP3 4460, sim/commands.cpp's
+  // BuildFactory dispatch).
   if (u->commands.empty()) return;
   int& st = u->headState;
   if (st == kNotStarted) StartHead(sim, u);
@@ -972,7 +1063,7 @@ void CommandStep(Sim& sim, Unit* u) {
           u->commands.push_back(keep);
           keep->units.insert(u);
         }
-        if (IsAlive(u) && !u->commands.empty()) u->headState = kNotStarted;
+        if (!u->dead && !u->commands.empty()) u->headState = kNotStarted;
         break;
       } else if (task->pdata && (task->type == CommandType::Patrol || task->type == CommandType::FormPatrol) &&
                  !u->commands.empty()) {
@@ -987,16 +1078,16 @@ void CommandStep(Sim& sim, Unit* u) {
         // byte between two legs, the new goal the beat after). Seen (MP3 3035): army 0's engineer 0x2, whose repair
         // child failed at 2945, ends its leg at 3035 and keeps Patrolling; ours had a beat without it and set the
         // next goal a beat late.
-        if (u->dispatchResult == 2 && IsAlive(u) && !u->commands.empty()) {
+        if (u->dispatchResult == 2 && !u->dead && !u->commands.empty()) {
           StartHead(sim, u);
           continue;
         }
-        if (IsAlive(u) && !u->commands.empty()) u->headState = kNotStarted;
+        if (!u->dead && !u->commands.empty()) u->headState = kNotStarted;
         break;
       } else {
         PopHead(u);
       }
-      if (!IsAlive(u) || u->commands.empty()) break;
+      if (u->dead || u->commands.empty()) break;
       StartHead(sim, u);
     }
     return;
