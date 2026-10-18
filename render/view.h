@@ -200,10 +200,14 @@ float2 SkyTableUv(float3 d) {
 }
 float SkyHazeGlow(float mu) {
   const float g = 0.76;
+  mu = clamp(mu, -1, 1);
   return 3.0 / (8.0 * 3.14159265) * ((1 - g * g) * (1 + mu * mu)) / ((2 + g * g) * pow(1 + g * g - 2 * g * mu, 1.5));
 }
 // The air's light from a direction as the table has it (no clouds, no night glow: the sky's pass adds its own).
+// (made unit length here: a mirrored direction from a normal a little longer than 1 gave the haze's glow a cosine
+// above 1 and a power of a negative number, black pixels along the rocks' ridges)
 float3 SkyFromTable(float3 d) {
+  d *= rsqrt(max(dot(d, d), 1e-12));
   float2 uv = SkyTableUv(d);
   return skyViewTable.SampleLevel(samplerLinear, float3(uv, 0.5 / 3), 0).rgb +
          skyViewTable.SampleLevel(samplerLinear, float3(uv, 1.5 / 3), 0).rgb * SkyHazeGlow(dot(d, skyBody.xyz)) +
