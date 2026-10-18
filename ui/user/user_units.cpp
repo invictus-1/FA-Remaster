@@ -2413,8 +2413,11 @@ int l_GetCommandQueue(lua_State* L) {
   // engine's first rally in it.)
   for (const CommandView& c : s.hasFactoryQueue ? s.factoryQueue : s.queue) {
     lua_newtable(L);
+    // "ID": FAF's patch of the original (FA exe 0x8c55aa jumps to 0x129115c: LuaObject::SetInteger("ID", command+4)), a
+    // SIGNED int made a Lua number, a float: an engine-made command's id 0x80000000 | index comes out negative and
+    // rounded to the float's 24 bits, in the original too (read 2026-10-18).
     lua_pushstring(L, "ID");
-    lua_pushnumber(L, static_cast<lua_Number>(c.id));
+    lua_pushnumber(L, static_cast<lua_Number>(static_cast<int32_t>(c.id)));
     lua_rawset(L, -3);
     lua_pushstring(L, "type");
     lua_pushstring(L, CommandName(c.type));
