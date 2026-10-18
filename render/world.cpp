@@ -38,6 +38,7 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       blasts(device),
       debris(device, &textures),
       outlines(device),
+      dust(device),
       clouds(device),
       motion(device),
       upscaler(device),
@@ -62,6 +63,11 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       vfs_(vfs),
       energy(device) {
   particles.rampGlow = [this](const std::string& ramp) { return lights.RampGlow(ramp); };  // (what is hot: lit smoke's fires, heat shimmer)
+  // (movement dust: how each kind of unit moves, from its blueprint)
+  dust.readBlueprint = [this](const std::string& id, BpValue* out) {
+    auto file = textures.ReadFile(models.UnitBlueprintPath(id));
+    return file && ReadBlueprintFile(*file, out);
+  };
 }
 
 World::~World() {
@@ -171,6 +177,10 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     blasts.groundHeight = debris.groundHeight = decals.groundHeight;
     debris.mapWidth = static_cast<float>(map.width);
     debris.mapHeight = static_cast<float>(map.height);
+    // (movement dust: on this map's ground and water; where its ground is dusty worked out the first frame it is on)
+    dust.waterLevel = decals.waterLevel;
+    dust.groundHeight = decals.groundHeight;
+    dust.SetMap(&map, mapPath, [this](const std::string& path) { return textures.ReadFile(path); });
     // the map's own decals: albedo ones (pictures over the ground's colour) and normal ones (its sculpting)
     decals.hotMetal = false;  // (hot metal: the map's own scorches are no fresh marks; Begin sets it again)
     if (options.mapDecals != "off") {
@@ -846,6 +856,13 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       c.skyExtra[2] = bolt.z;
     }
     lightDirection = skyLight.direction;
+  }
+  {  // movement dust (movement_dust.h): on in the modern look, with what the weather has done to the ground and the air
+    dustNow_ = movementDust && look == Look::Modern && haveMap_ && !sidePicture;
+    MovementDust::Weather weatherNow;
+    if (timeOfDay >= 0 && look == Look::Modern)
+      weatherNow = {wet, rain, snow, snowLying, cloudCover, fog, skyLight.daylight, climate == Climate::Cold, climate == Climate::Dry};
+    dust.Begin(clock_, dustNow_, weatherNow, camera.Eye());
   }
   CpuTimes::Part("sun shadows placed");
   if (haveMap_ && shadowsOn) {
@@ -1663,6 +1680,8 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       if (outlinesNow_ && u.Seen() && !asRemembered && fractionComplete >= 1 && !allHidden)
         MarkOutline(model, position, IconColor(u.Army(), color), building, u.id, u.blueprint < iconKinds_.size() ? iconKinds_[u.blueprint] : nullptr);
       if (u.fractionComplete >= 1 && u.Seen()) AddLamps(model, position, orientation, &pose, &color);
+      // (movement dust: what the army sees moving raises dust, spray or contrails)
+      if (dustNow_ && u.Seen() && !asRemembered && fractionComplete >= 1) dust.AddUnit(u.id, blueprint, model, position, orientation);
       // ripples where it floats, hovers or wades in the water (what the army sees)
       if (u.Seen() && !asRemembered) water.ripples.AddHull(u.id, position, orientation, model->boundsMin * model->scale, model->boundsMax * model->scale);
       // a wake, when it goes on the water: by how far it has come since the frame before
@@ -2048,6 +2067,12 @@ void World::Render() {
   }
   meshes.blastConstants = blastsNow_ && blasts.Waves() ? blasts.Constants() : nullptr;
   meshes.blastConstantsSize = meshes.blastConstants ? blasts.ConstantsSize() : 0;
+  if (dustNow_) {  // movement dust (movement_dust.h): what is over let go of, the rest to the card; the ground's colours
+                   // made the first time (it dispatches, so not in a pass)
+    CpuTimes::Part("movement dust listed");
+    dust.Prepare(view);
+    if (dust.DustDrawn() > 0) terrain.GroundColours();
+  }
   if (blastDebris && look == Look::Modern && haveMap_ && !sidePicture) {
     CpuTimes::Part("debris moved");
     debris.rubbleLasts = battleScars ? 0.0f : 120.0f;  // (kept as the scorches are)
@@ -2199,6 +2224,15 @@ void World::Render() {
     // range rings on the land, before anything stands on it (their picture is made from the
     // ground's depth; over the water they are laid after the water)
     Stage("units and scenery");
+    // (movement dust, movement_dust.h: over the scenery and under the units, which are drawn over it: it never hides them)
+    const bool dustUnder = dustNow_ && dust.Under();
+    auto drawDustUnder = [&] {
+      Stage("movement dust: under the units");
+      lights.Bind();
+      dust.DrawUnder(view, post.Depth(), camera.zNear, terrain.HeightTexture(), terrain.HeightUnit(), terrain.GroundColours(), static_cast<float>(map.width),
+                     static_cast<float>(map.height), litSmokeNow_);
+      Stage("units, over the movement dust");
+    };
     if (ranges.Any()) {
       ranges.waterLevel = map.water.present ? map.water.elevation : -1e9f;
       ranges.night = lights.night;
@@ -2210,6 +2244,14 @@ void World::Render() {
       meshes.Draw(view, environment_, false, false, 1);
       post.BeginColorOnly();
       ranges.Lay(view, camera, post.Depth(), false);
+      if (dustUnder) drawDustUnder();
+      post.ContinueScene();
+      lights.Bind();
+      meshes.Draw(view, environment_, false, false, 2);
+    } else if (dustUnder) {  // (movement dust: the scenery, the dust over it, the units over the dust)
+      meshes.Draw(view, environment_, false, false, 1);
+      post.BeginColorOnly();
+      drawDustUnder();
       post.ContinueScene();
       lights.Bind();
       meshes.Draw(view, environment_, false, false, 2);
@@ -2304,6 +2346,12 @@ void World::Render() {
       Stage("blasts' dust");
       blasts.DrawDust(view, post.Depth(), camera.zNear, terrain.HeightTexture(), terrain.HeightUnit(), terrain.GroundColours(),
                       static_cast<float>(map.width), static_cast<float>(map.height));
+    }
+    if (dustNow_ && dust.Above()) {  // movement dust's spray and contrails (movement_dust.h), over the water and the sky
+      Stage("movement dust: spray, contrails");
+      if (litSmokeNow_) lights.Bind();
+      dust.DrawAbove(view, post.Depth(), camera.zNear, terrain.HeightTexture(), terrain.HeightUnit(), terrain.GroundColours(),
+                     static_cast<float>(map.width), static_cast<float>(map.height), litSmokeNow_);
     }
     Stage("particles");
     if (hide.find("particles") == std::string::npos) {

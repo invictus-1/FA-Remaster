@@ -859,7 +859,17 @@ work is not starved of the processor).
    pictures identical (regression 0 px on both backends); on, the regression's scenes (nothing hides the
    commander) are identical too; in the original look nothing changes.
 16. **Dust, spray and contrails**: vehicles raise dust on dry ground, hover units throw spray, high aircraft draw
-   contrails. After items 2 and 3 (shared particles and dust).
+   contrails. After items 2 and 3 (shared particles and dust). First version done 2026-10-18 (`World::movementDust`,
+   viewer `--movement-dust`; `render/movement_dust.h/.cpp`, docs/render-dust.md has the whole of it): puffs behind
+   vehicles by speed and by how dusty the dry ground is (each layer judged by remap.json's "ground" or its name, laid
+   over each other by the map's masks on the processor; none on green grass, rock, wet ground, in rain or where snow
+   lies), coloured from the ground and lit as the blasts' dust (with lit smoke on, the small lights and the smoke's
+   shadow too), drawn under the units so it never hides one; spray round hover units over water and a trail behind fast
+   ones, a faint dust over land; contrails from the fighters' and bombers' contrail bones above 12 units over the
+   ground, widening and breaking up over 3-9 s by how damp and cold the air is, pale and never glowing, thinned where
+   they pass close in front of the fight. At 1440p with 40 vehicles, 10 hover units and 10 high aircraft about 0.07 ms in
+   a game's view, 0.22 ms with all of them close in front of the camera. Off: pictures identical (regression 0 px on
+   both backends).
 17. **Life in the world**: flocks of birds over the forests that scatter when fighting comes near; fireflies at dusk;
    never mistakable for units. **First version 2026-10-18 (a helper):** `World::wildlife` (viewer `--wildlife`;
    `render/wildlife.h/.cpp`; modern look, a map with trees or shores). Purely for the eye: own random numbers,
@@ -939,6 +949,7 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `waterRipples` | the water reacts: shells, ships, hover and wading units leave rings and wakes that spread and fade | about 0.04-0.05 ms near water (24 MB of the card's memory once on) | a map with water |
 | `hiddenOutlines` (ON) | a thin line in the army's colour round a unit's part hidden behind trees, hills or buildings | 0.06-0.08 ms (200 tanks in a forest) | |
 | `wildlife` | flocks of birds over the woods and gulls over the shores, scattered by fighting; fireflies at dusk and by night | about 0.02 ms (proposed for the "Ground Detail" setting) | a map with trees or shores |
+| `movementDust` | vehicles raise dust on dry ground, hover units throw spray, high aircraft draw contrails | about 0.07 ms with 60 units moving, 0.22 close up | |
 
 Ray tracing means Direct3D 12 with DXR 1.1 or Vulkan with ray queries: never on the Mac (MoltenVK has none);
 where it is missing those options do nothing. `rayReflections` builds the surfaces' shaders with ray

@@ -26,6 +26,7 @@
 #include "clouds.h"
 #include "debris.h"
 #include "motion.h"
+#include "movement_dust.h"
 #include "ambient_occlusion.h"
 #include "shafts.h"
 #include "tracks.h"
@@ -483,6 +484,11 @@ class World {
   // `key` its own number, the same every frame (its age counts from the first frame it is asked for). Null when hot
   // metal is off or the wreck has cooled. Between Begin and Render.
   const Vec3* WreckHeat(uint32_t key, const Model* model, const Mat4& world);
+  // (movement dust) Dust, spray and contrails of what moves (movement_dust.h; Chris, 2026-10-17): vehicles raise dust on
+  // dry ground (none on grass, wet ground or in rain), hover units throw spray over water, high aircraft draw contrails.
+  // Modern look; off by default.
+  bool movementDust = false;
+  MovementDust dust;
   Clouds clouds;
   // Soft shadows (lighting.h, SunShadow; the lighting upgrade): the sun's shadows sharper near what casts
   // them and blurred farther off, as a sun that is not a point makes them. Modern look; off by default.
@@ -742,6 +748,7 @@ class World {
 
   bool outlinesNow_ = false;  // (hidden outlines this frame)
   bool lightRaysNow_ = false;  // (the small lights' shadows by rays this frame)
+  bool dustNow_ = false;  // (movement dust: on this frame)
  public:
   EnergyShields energy;  // [energy shields] (last: the other members keep their places)
 };

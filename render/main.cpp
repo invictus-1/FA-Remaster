@@ -55,7 +55,9 @@
 // --turn <bone>  placed units turn that bone (a name such as Turret, or its number) with all that hangs on
 //           it, round and round: to look at a model's moving parts without a game (--bones lists the names)
 // --timings  at the end of the run, what a frame cost on average, stage by stage: the graphics card's
-//           time for each (its own clock) and the processor's for preparing, recording and handing over
+//           time for each (its own clock) and the processor's for preparing, recording and handing over;
+//           --timings-from n: the first n frames not counted (2: what they load; more for what builds up over time,
+//           movement dust)
 // --noicons, --icon-scale <n>  strategic icons: off, or n screen pixels for each of a symbol's (key I switches them)
 // --ao      ambient occlusion in the modern look: 0 off to 1 full (key O switches it)
 // --msaa    anti-aliasing: samples per pixel of the scene, 1 (off), 2, 4 (the default) or 8
@@ -148,6 +150,13 @@
 //           they had all died at the start: to see the cooling and time it (with or without --hot-metal);
 //           --hot-metal-lights n: at most n small lights from hot things (3; 0 none), --hot-metal-smoke r: a cooling
 //           wreck's smoke, r particles a tick at first (5; 0 none)
+// --movement-dust  dust, spray and contrails of what moves (movement_dust.h, World::movementDust; modern look): vehicles
+//           raise dust on dry ground (by speed and the ground: dry sand most, none on grass, wet ground or in rain),
+//           hover units throw spray over water (a faint dust over land), high aircraft draw contrails.
+//           --movement-dust-test <unit>=<n>[,<unit>=<n>...]: that many of each driven round loops near where the camera
+//           looks (within --movement-dust-radius r, 30), aircraft at their Elevation: to see and time them (with or
+//           without --movement-dust, the same units); --movement-dust-over: the dust drawn over everything (as the blasts'
+//           dust) instead of under the units, to compare
 // --order-test  order lines as the interface hands them over while Shift is held (order_lines.h): a move chain, a
 //           patrol loop with its moving chevrons and an attack, with their waypoints' icons, round where the camera starts
 // --frame-generation  FSR 3 frame generation (World::frameGeneration; needs --msaa 1 or --fsr3): a picture made
@@ -391,6 +400,7 @@ struct Options {
   bool richGround = true;               // --plain-ground
   bool worldBeyond = true;              // --map-ends
   bool timings = false;                 // --timings
+  int timingsFrom = 2;                  // --timings-from
   FxStandSetup fx;                      // --fx, --fx-shot and their places
   bool fxAt = false, fxFrom = false, fxTo = false, fxRepeat = false;
   bool remasteredEffects = true;        // --effects-look original|remastered
@@ -434,6 +444,10 @@ struct Options {
   bool blastWaves = false, blastDust = false, debris = false;  // --blasts, --blast-waves, --blast-dust, --debris
   int debrisMost = -1;                  // --debris-most
   int blastTest = 0;                    // --blast-test
+  bool movementDust = false;            // --movement-dust
+  bool movementDustOver = false;        // --movement-dust-over
+  std::string movementDustTest;         // --movement-dust-test
+  float movementDustRadius = 30;        // --movement-dust-radius
   float blastRadius = 40;
   bool deepTracks = false;              // --deep-tracks
   std::vector<std::string> groundKind;  // --ground-kind
@@ -601,6 +615,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--blasts") o->blastWaves = o->blastDust = o->debris = true;
     else if (a == "--blast-waves") o->blastWaves = true;
     else if (a == "--blast-dust") o->blastDust = true;
+    else if (a == "--movement-dust") o->movementDust = true;
+    else if (a == "--movement-dust-over") o->movementDust = true, o->movementDustOver = true;
     else if (a == "--debris") o->debris = true;
     else if (a == "--deep-tracks") o->deepTracks = true;
     else if (a == "--energy-shields") o->energyShields = true;
@@ -678,6 +694,9 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--smoke-shadow-strength") o->smokeShadowStrength = static_cast<float>(atof(v));
     else if (a == "--heat-bend") o->heatBend = static_cast<float>(atof(v));
     else if (a == "--debris-most") o->debrisMost = std::max(0, atoi(v));
+    else if (a == "--movement-dust-test") o->movementDustTest = v;
+    else if (a == "--timings-from") o->timingsFrom = std::max(0, atoi(v));
+    else if (a == "--movement-dust-radius") o->movementDustRadius = std::max(1.0f, static_cast<float>(atof(v)));
     else if (a == "--fx-blast") o->fx.blast = std::max(0.0f, static_cast<float>(atof(v)));
     else if (a == "--blast-test") {
       if (sscanf(v, "%d,%f", &o->blastTest, &o->blastRadius) < 1) return false;
@@ -1172,6 +1191,8 @@ int main(int argc, char** argv) {
   world.blastWaves = opt.blastWaves;
   world.blastDust = opt.blastDust;
   world.blastDebris = opt.debris;
+  world.movementDust = opt.movementDust;
+  world.dust.drawUnder = !opt.movementDustOver;
   if (opt.debrisMost >= 0) world.debris.mostRubble = opt.debrisMost;
   world.deepTracks = opt.deepTracks;
   world.energyShields = opt.energyShields;
@@ -1681,6 +1702,19 @@ int main(int argc, char** argv) {
       if (world.decals.Add(name, at, size, size, next() * 6.2831853f, 400, -1200.0 * next(), 60)) ++laid;  // (laid over the last 20 minutes)
     }
     printf("render: --scar-test: %d scorches laid, %d of them kept as battle scars\n", laid, world.decals.Scars());
+  }
+  // --movement-dust-test: units driven round loops near where the camera looks (moved and handed to the world as a game's
+  // frame, in the frame loop)
+  std::unique_ptr<MovementDustTest> dustTest;
+  if (!opt.movementDustTest.empty()) {
+    dustTest = std::make_unique<MovementDustTest>();
+    std::string why;
+    if (dustTest->Init(opt.movementDustTest, camera.target, opt.movementDustRadius, world.dust.readBlueprint, &why)) {
+      printf("render: --movement-dust-test: %s%s%s\n", dustTest->Describe().c_str(), why.empty() ? "" : "; ", why.c_str());
+    } else {
+      fprintf(stderr, "render: --movement-dust-test: %s\n", why.empty() ? "nothing to drive" : why.c_str());
+      dustTest.reset();
+    }
   }
   // --blast-test: where and when the next blast goes (in the frame loop)
   const Vec3 blastTestAt = camera.target;
@@ -2559,6 +2593,10 @@ int main(int argc, char** argv) {
     }
     effects.shotLight = opt.shotLight >= 0 ? opt.shotLight : ((frameCount / 30) % 2 ? 0.0f : -opt.shotLight);
     if (playing) world.AddFrame(frame, armyColors);
+    if (dustTest)  // --movement-dust-test: its units on their loops
+      world.AddFrame(dustTest->Update(havePlay ? playTick * 0.1 : static_cast<double>(time), [&](float x, float z) { return haveMap ? map.Height(x, z) : 0.0f; },
+                                      haveMap && map.water.present ? map.water.elevation : -1e9f),
+                     armyColors);
     // --find: once the game is where it was asked to be, the camera goes to the first such thing
     // (a shield's flash lasts two seconds and may not be there at that moment: that search goes on,
     // frame after frame, until one shows)
@@ -2754,7 +2792,7 @@ int main(int argc, char** argv) {
         timing.slowestParts.emplace_back("(drawing recorded, all of it)", std::chrono::duration<double, std::milli>(renderEnd - renderStart).count());
       }
     }
-    if (opt.timings && !(automatic && liveBusy) && frameCount > 2) {  // (the first frames load what they need)
+    if (opt.timings && !(automatic && liveBusy) && frameCount > opt.timingsFrom) {  // (the first frames load what they need)
       const auto ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
       const auto frameEnd = std::chrono::steady_clock::now();
       timing.Add("cpu: waiting for a free frame", ms(frameStart, frameBegun));
@@ -2844,6 +2882,9 @@ int main(int argc, char** argv) {
         printf("; effects: %d live of %d started, %d events of kinds not drawn yet, %d bands, %.2f ms; %d decals drawn of %d", effects.live,
                effects.started, effects.notShown, ribbons.drawnBands, effects.cpuMs, decals.drawn, decals.Count());
       if (haveLive) printf("; simulation at tick %u, %.2f ms a tick", live.LastTick(), live.MsPerTick());
+      if (world.movementDust)
+        printf("; movement dust: %d puffs kept, %d of dust and %d of spray drawn, %d contrails of %d pieces", world.dust.Puffs(), world.dust.DustDrawn(),
+               world.dust.SprayDrawn(), world.dust.Trails(), world.dust.Segments());
       if (world.blastWaves || world.blastDust || world.blastDebris)
         printf("; blasts: %d told, %d under way, %d dust puffs; debris: %d chunks thrown, %d flying, %d lying", world.blasts.told, world.blasts.Active(),
                world.blasts.dustPuffs, world.debris.thrown, world.debris.Flying(), world.debris.Lying());
