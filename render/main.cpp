@@ -55,7 +55,9 @@
 // --turn <bone>  placed units turn that bone (a name such as Turret, or its number) with all that hangs on
 //           it, round and round: to look at a model's moving parts without a game (--bones lists the names)
 // --timings  at the end of the run, what a frame cost on average, stage by stage: the graphics card's
-//           time for each (its own clock) and the processor's for preparing, recording and handing over
+//           time for each (its own clock) and the processor's for preparing, recording and handing over;
+//           --timings-from n: the first n frames not counted (2: what they load; more for what builds up over time,
+//           movement dust)
 // --noicons, --icon-scale <n>  strategic icons: off, or n screen pixels for each of a symbol's (key I switches them)
 // --ao      ambient occlusion in the modern look: 0 off to 1 full (key O switches it)
 // --msaa    anti-aliasing: samples per pixel of the scene, 1 (off), 2, 4 (the default) or 8
@@ -96,6 +98,12 @@
 // --heat-shimmer  the air bends what is behind it over fires, exhausts and fresh explosions (World::heatShimmer;
 //           modern look); --heat-bend n the most it bends, in pixels (2)
 // --smoke   all three: --lit-smoke --smoke-shadows --heat-shimmer
+// --volume-explosions  big blasts as lit volumes, and a nuke's flash, shock ring through the clouds, ground glow and
+//           mushroom cloud (volume_blasts.h, World::volumeExplosions; modern look), from the visuals session's files
+//           (<remasters>/_effects/export/moho64/volumes). --volume-test n[,size]: n blasts kept going at random round
+//           where the camera looks, as a flash that large (14) makes them (to see and time them); --volume-most n the
+//           blasts drawn at once (4); --volume-steps n the most steps through one (48); --volume-detail n how much a
+//           finer noise frays their edges (0.45; 0 none)
 // --terrain-despite-hold  the remastered ground (<remasters>/_terrain/export/moho64) mounted even with its HOLD file
 //           (to look at it before games may); --ground-ultra  its 8k materials in place of the 4k
 // --ground-cover  grass near the camera (World::groundCover; modern look); on a map with the visuals track's plants
@@ -141,6 +149,20 @@
 //           fire, or mixed: all four by turns), from all round above the ground, just now; healed: then repaired whole
 // --unit-snow  snow on units (unit_wear.h, World::unitSnow; modern look): each unit's own share of the lying snow, built
 //           up standing still in snowfall, shed by moving, firing, hits, burning and blasts near
+// --hot-metal  fresh wrecks glow where they broke and on their thin parts and cool over a minute or two, fresh scorches
+//           and craters glow in the middle, cooling wrecks smoulder (World::hotMetal, hot_metal.h; modern look);
+//           --wreck-test n[,unit]: n wrecks of that unit (uel0201) laid in a square round where the camera starts, as a
+//           game makes them (DefaultWreckage props with the unit's "_mesh_wreck"), each with its death's scorch, as if
+//           they had all died at the start: to see the cooling and time it (with or without --hot-metal);
+//           --hot-metal-lights n: at most n small lights from hot things (3; 0 none), --hot-metal-smoke r: a cooling
+//           wreck's smoke, r particles a tick at first (5; 0 none)
+// --movement-dust  dust, spray and contrails of what moves (movement_dust.h, World::movementDust; modern look): vehicles
+//           raise dust on dry ground (by speed and the ground: dry sand most, none on grass, wet ground or in rain),
+//           hover units throw spray over water (a faint dust over land), high aircraft draw contrails.
+//           --movement-dust-test <unit>=<n>[,<unit>=<n>...]: that many of each driven round loops near where the camera
+//           looks (within --movement-dust-radius r, 30), aircraft at their Elevation: to see and time them (with or
+//           without --movement-dust, the same units); --movement-dust-over: the dust drawn over everything (as the blasts'
+//           dust) instead of under the units, to compare
 // --order-test  order lines as the interface hands them over while Shift is held (order_lines.h): a move chain, a
 //           patrol loop with its moving chevrons and an attack, with their waypoints' icons, round where the camera starts
 // --frame-generation  FSR 3 frame generation (World::frameGeneration; needs --msaa 1 or --fsr3): a picture made
@@ -384,6 +406,7 @@ struct Options {
   bool richGround = true;               // --plain-ground
   bool worldBeyond = true;              // --map-ends
   bool timings = false;                 // --timings
+  int timingsFrom = 2;                  // --timings-from
   FxStandSetup fx;                      // --fx, --fx-shot and their places
   bool fxAt = false, fxFrom = false, fxTo = false, fxRepeat = false;
   bool remasteredEffects = true;        // --effects-look original|remastered
@@ -411,6 +434,10 @@ struct Options {
   bool litSmoke = false;                // --lit-smoke
   bool smokeShadows = false;            // --smoke-shadows
   bool heatShimmer = false;             // --heat-shimmer
+  bool volumeExplosions = false;        // --volume-explosions
+  float volumeTest = 0, volumeTestSize = 14;  // --volume-test
+  int volumeMost = -1, volumeSteps = -1;      // --volume-most, --volume-steps
+  float volumeDetail = -1;                    // --volume-detail
   float smokeDensity = -1, fireLight = -1, smokeShadowStrength = -1, heatBend = -1;  // (their tuning; -1: as at first)
   bool waterDetail = false;             // --water-detail
   bool waterRipples = false;            // --water-ripples
@@ -427,6 +454,10 @@ struct Options {
   bool blastWaves = false, blastDust = false, debris = false;  // --blasts, --blast-waves, --blast-dust, --debris
   int debrisMost = -1;                  // --debris-most
   int blastTest = 0;                    // --blast-test
+  bool movementDust = false;            // --movement-dust
+  bool movementDustOver = false;        // --movement-dust-over
+  std::string movementDustTest;         // --movement-dust-test
+  float movementDustRadius = 30;        // --movement-dust-radius
   float blastRadius = 40;
   bool deepTracks = false;              // --deep-tracks
   std::vector<std::string> groundKind;  // --ground-kind
@@ -437,6 +468,11 @@ struct Options {
   bool unitScars = false, unitSnow = false;  // --unit-scars, --unit-snow
   std::string wearTest;                 // --wear-test
   bool hiddenOutlines = true;           // --no-hidden-outlines, --hidden-outlines
+  bool hotMetal = false;                // --hot-metal
+  int wreckTest = 0;                    // --wreck-test
+  int hotLights = -1;                   // --hot-metal-lights (-1: as HotMetal has it)
+  float hotSmoke = -1;                  // --hot-metal-smoke
+  std::string wreckUnit = "uel0201";
   int scarTest = 0;                     // --scar-test
   bool orderTest = false;               // --order-test
   float scarRadius = 40;
@@ -579,6 +615,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--smoke-shadows") o->smokeShadows = true;
     else if (a == "--heat-shimmer") o->heatShimmer = true;
     else if (a == "--smoke") o->litSmoke = o->smokeShadows = o->heatShimmer = true;
+    else if (a == "--volume-explosions") o->volumeExplosions = true;
     else if (a == "--water-detail") o->waterDetail = true;
     else if (a == "--water-ripples") o->waterRipples = true;
     else if (a == "--ground-cover") o->groundCover = true;
@@ -589,6 +626,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--blasts") o->blastWaves = o->blastDust = o->debris = true;
     else if (a == "--blast-waves") o->blastWaves = true;
     else if (a == "--blast-dust") o->blastDust = true;
+    else if (a == "--movement-dust") o->movementDust = true;
+    else if (a == "--movement-dust-over") o->movementDust = true, o->movementDustOver = true;
     else if (a == "--debris") o->debris = true;
     else if (a == "--deep-tracks") o->deepTracks = true;
     else if (a == "--energy-shields") o->energyShields = true;
@@ -596,6 +635,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--unit-snow") o->unitSnow = true;
     else if (a == "--hidden-outlines") o->hiddenOutlines = true;
     else if (a == "--no-hidden-outlines") o->hiddenOutlines = false;
+    else if (a == "--hot-metal") o->hotMetal = true;
     else if (a == "--order-test") o->orderTest = true;
     else if (a == "--frame-generation") o->frameGeneration = true;
     else if (a == "--capture-between") o->captureBetween = true;
@@ -665,10 +705,20 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--smoke-shadow-strength") o->smokeShadowStrength = static_cast<float>(atof(v));
     else if (a == "--heat-bend") o->heatBend = static_cast<float>(atof(v));
     else if (a == "--debris-most") o->debrisMost = std::max(0, atoi(v));
+    else if (a == "--movement-dust-test") o->movementDustTest = v;
+    else if (a == "--timings-from") o->timingsFrom = std::max(0, atoi(v));
+    else if (a == "--movement-dust-radius") o->movementDustRadius = std::max(1.0f, static_cast<float>(atof(v)));
     else if (a == "--fx-blast") o->fx.blast = std::max(0.0f, static_cast<float>(atof(v)));
     else if (a == "--blast-test") {
       if (sscanf(v, "%d,%f", &o->blastTest, &o->blastRadius) < 1) return false;
     }
+    else if (a == "--volume-test") {
+      if (sscanf(v, "%f,%f", &o->volumeTest, &o->volumeTestSize) < 1) return false;
+      o->volumeExplosions = true;
+    }
+    else if (a == "--volume-most") o->volumeMost = atoi(v);
+    else if (a == "--volume-steps") o->volumeSteps = atoi(v);
+    else if (a == "--volume-detail") o->volumeDetail = static_cast<float>(atof(v));
     else if (a == "--plant-tallest") o->plantTallest = static_cast<float>(atof(v));
     else if (a == "--wildlife-noise") {
       if (sscanf(v, "%f,%f,%f,%f", &o->wildlifeNoise[0], &o->wildlifeNoise[1], &o->wildlifeNoise[2], &o->wildlifeNoise[3]) < 3) return false;
@@ -685,6 +735,13 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--ripple-view") o->rippleView = static_cast<float>(atof(v));
     else if (a == "--energy-shield-health") o->energyShieldHealth = std::clamp(static_cast<float>(atof(v)), 0.0f, 1.0f);
     else if (a == "--energy-test") o->energyTest = std::max(0, atoi(v));
+    else if (a == "--hot-metal-lights") o->hotLights = std::max(0, atoi(v));
+    else if (a == "--hot-metal-smoke") o->hotSmoke = std::max(0.0f, static_cast<float>(atof(v)));
+    else if (a == "--wreck-test") {
+      char unit[32] = "";
+      if (sscanf(v, "%d,%31s", &o->wreckTest, unit) < 1) return false;
+      if (unit[0]) o->wreckUnit = unit;
+    }
     else if (a == "--scar-test") {
       if (sscanf(v, "%d,%f", &o->scarTest, &o->scarRadius) < 1) return false;
     }
@@ -1131,6 +1188,10 @@ int main(int argc, char** argv) {
   world.litSmoke = opt.litSmoke;
   world.smokeShadows = opt.smokeShadows;
   world.heatShimmer = opt.heatShimmer;
+  world.volumeExplosions = opt.volumeExplosions;
+  if (opt.volumeMost >= 0) world.volumes.most = opt.volumeMost;
+  if (opt.volumeSteps > 0) world.volumes.steps = opt.volumeSteps;
+  if (opt.volumeDetail >= 0) world.volumes.detail = opt.volumeDetail;
   if (opt.smokeDensity >= 0) world.particles.smokeDensity = opt.smokeDensity;
   if (opt.fireLight >= 0) world.fireLight = opt.fireLight;
   if (opt.smokeShadowStrength >= 0) world.smokeMap.strength = opt.smokeShadowStrength;
@@ -1152,6 +1213,8 @@ int main(int argc, char** argv) {
   world.blastWaves = opt.blastWaves;
   world.blastDust = opt.blastDust;
   world.blastDebris = opt.debris;
+  world.movementDust = opt.movementDust;
+  world.dust.drawUnder = !opt.movementDustOver;
   if (opt.debrisMost >= 0) world.debris.mostRubble = opt.debrisMost;
   world.deepTracks = opt.deepTracks;
   world.energyShields = opt.energyShields;
@@ -1160,6 +1223,12 @@ int main(int argc, char** argv) {
   world.models.hitShapes = opt.unitScars;  // (units' models keep their triangles for where hits lie: unit_wear.h)
   world.unitSnow = opt.unitSnow;
   world.hiddenOutlines = opt.hiddenOutlines;
+  world.hotMetal = opt.hotMetal;
+  if (opt.hotLights >= 0) world.heat.mostLights = opt.hotLights;
+  if (opt.hotSmoke >= 0) {
+    world.heat.smokeRate = opt.hotSmoke;
+    if (opt.hotSmoke <= 0) world.heat.smokeEmitter.clear();
+  }
   world.frameGeneration = opt.frameGeneration;
   device->captureBetween = opt.captureBetween;
   if (opt.sunSize > 0) world.sunSize = opt.sunSize;
@@ -1656,6 +1725,19 @@ int main(int argc, char** argv) {
     }
     printf("render: --scar-test: %d scorches laid, %d of them kept as battle scars\n", laid, world.decals.Scars());
   }
+  // --movement-dust-test: units driven round loops near where the camera looks (moved and handed to the world as a game's
+  // frame, in the frame loop)
+  std::unique_ptr<MovementDustTest> dustTest;
+  if (!opt.movementDustTest.empty()) {
+    dustTest = std::make_unique<MovementDustTest>();
+    std::string why;
+    if (dustTest->Init(opt.movementDustTest, camera.target, opt.movementDustRadius, world.dust.readBlueprint, &why)) {
+      printf("render: --movement-dust-test: %s%s%s\n", dustTest->Describe().c_str(), why.empty() ? "" : "; ", why.c_str());
+    } else {
+      fprintf(stderr, "render: --movement-dust-test: %s\n", why.empty() ? "nothing to drive" : why.c_str());
+      dustTest.reset();
+    }
+  }
   // --blast-test: where and when the next blast goes (in the frame loop)
   const Vec3 blastTestAt = camera.target;
   double blastTestNext = 0;
@@ -1704,6 +1786,50 @@ int main(int argc, char** argv) {
       if (healed || half) world.wear.Heal(0x40000000u | static_cast<uint32_t>(n), healed ? 1.0f : 0.2f);
     }
     printf("render: --wear-test: tier %d (%d hits on each of %zu units)%s\n", world.wear.Tier(0x40000000u), hits, placedUnits.size(), healed ? ", repaired whole" : half ? ", a fifth repaired" : "");
+  }
+  if (opt.wreckTest > 0) {  // --wreck-test: wrecks laid round where the camera starts as a game makes them, just made
+    std::string id = opt.wreckUnit;
+    for (char& ch : id) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    const Model* unit = models.Unit(id);
+    if (unit && unit->ok) {
+      // (their death's scorches too, which hot metal takes as laid in a game: set as Begin sets it)
+      world.decals.hotMetal = world.hotMetal && world.look == Look::Modern;
+      world.decals.heat = &world.heat;
+      world.decals.remastered = world.effectsLook == World::EffectsLook::Remastered;
+      uint32_t r = 4242;
+      auto next = [&r]() {
+        r = r * 1664525u + 1013904223u;
+        return static_cast<float>(r >> 8) / 16777216.0f;
+      };
+      const int across = static_cast<int>(std::ceil(std::sqrt(static_cast<float>(opt.wreckTest))));
+      const float size = Length(unit->boundsMax - unit->boundsMin) * unit->scale, step = std::max(2.0f, size * 1.1f);
+      std::vector<FramePropEvent> made;
+      for (int i = 0; i < opt.wreckTest; ++i) {
+        FramePropEvent e;
+        e.kind = FramePropEvent::Create;
+        e.tick = 0;
+        e.id = 0x7f000000u + static_cast<uint32_t>(i);
+        e.blueprint = "/props/DefaultWreckage/DefaultWreckage_prop.bp";
+        e.mesh = "/units/" + id + "/" + id + "_mesh_wreck";
+        const float x = camera.target.x + (static_cast<float>(i % across) - 0.5f * static_cast<float>(across - 1)) * step;
+        const float z = camera.target.z + (static_cast<float>(i / across) - 0.5f * static_cast<float>(across - 1)) * step;
+        const float heading = next() * 6.2831853f;
+        e.position[0] = x;
+        e.position[1] = haveMap ? map.Height(x, z) : 0;
+        e.position[2] = z;
+        e.orientation[1] = std::sin(heading * 0.5f);
+        e.orientation[3] = std::cos(heading * 0.5f);
+        e.scale[0] = e.scale[1] = e.scale[2] = unit->scale;
+        made.push_back(e);
+        char name[32];
+        snprintf(name, sizeof name, "scorch_%03d_albedo", 1 + i % 10);
+        world.decals.Add(name, {x, e.position[1], z}, size * 0.8f, size * 0.8f, next() * 6.2831853f, 400, 0, 300);
+      }
+      world.AddPropEvents(made);
+      printf("render: --wreck-test: %d wrecks of %s laid, %.1f apart, each with its scorch\n", opt.wreckTest, id.c_str(), step);
+    } else {
+      fprintf(stderr, "render: --wreck-test: no unit %s\n", id.c_str());
+    }
   }
   if (opt.orderTest) {  // --order-test: a move chain, a patrol loop and an attack, as the interface hands them over
     const std::string dir = "/textures/ui/common/game/";
@@ -1828,6 +1954,7 @@ int main(int argc, char** argv) {
              f.kind == 0 ? "starlings" : f.kind == 1 ? "crows" : f.kind == 2 ? "pigeons" : "gulls", f.home.x, f.home.z, f.home.y,
              f.state == 0 ? "resting" : f.state == 1 ? "aloft" : f.state == 2 ? "fleeing" : "landing");
   };
+  std::vector<double> volumeTestBorn;  // (--volume-test: when each of its blasts went off last)
   struct {  // --timings: each stage's time added up over the frames, in the order first met
     std::vector<std::pair<std::string, double>> sums;
     int frames = 0;
@@ -2489,6 +2616,10 @@ int main(int argc, char** argv) {
     }
     effects.shotLight = opt.shotLight >= 0 ? opt.shotLight : ((frameCount / 30) % 2 ? 0.0f : -opt.shotLight);
     if (playing) world.AddFrame(frame, armyColors);
+    if (dustTest)  // --movement-dust-test: its units on their loops
+      world.AddFrame(dustTest->Update(havePlay ? playTick * 0.1 : static_cast<double>(time), [&](float x, float z) { return haveMap ? map.Height(x, z) : 0.0f; },
+                                      haveMap && map.water.present ? map.water.elevation : -1e9f),
+                     armyColors);
     // --find: once the game is where it was asked to be, the camera goes to the first such thing
     // (a shield's flash lasts two seconds and may not be there at that moment: that search goes on,
     // frame after frame, until one shows)
@@ -2634,6 +2765,26 @@ int main(int argc, char** argv) {
       }
     }
     if (opt.wildlifeVerbose && frameCount == 1) tellFlocks("at the start");
+    if (opt.volumeTest > 0 && haveMap) {  // --volume-test: n blasts kept going at random round the camera's point, staggered
+      const double clock = havePlay ? playTick * 0.1 : static_cast<double>(time), every = 7.0;
+      const int n = static_cast<int>(opt.volumeTest);
+      volumeTestBorn.resize(static_cast<size_t>(n), -1e9);
+      for (int i = 0; i < n; ++i) {
+        const double offset = every * i / n, born = std::floor((clock - offset) / every) * every + offset;
+        if (born <= volumeTestBorn[static_cast<size_t>(i)] || born > clock) continue;
+        volumeTestBorn[static_cast<size_t>(i)] = born;
+        uint32_t h = static_cast<uint32_t>(born * 10 + 0.5) * 2654435761u + static_cast<uint32_t>(i) * 40503u + 7u;
+        auto next = [&h]() {
+          h ^= h << 13;
+          h ^= h >> 17;
+          h ^= h << 5;
+          return static_cast<float>(h & 0xffffff) / 16777216.0f;
+        };
+        const float reach = std::clamp(camera.distance * 0.35f, 8.0f, 60.0f);
+        const float x = camera.target.x + (next() * 2 - 1) * reach, z = camera.target.z + (next() * 2 - 1) * reach;
+        world.volumes.Offer("", {x, world.GroundHeight(x, z) + 1, z}, opt.volumeTestSize, born, 1.4f);
+      }
+    }
     if (!haveMap) DrawTestScene(draw);
     const auto renderStart = std::chrono::steady_clock::now();
     world.Render();
@@ -2684,7 +2835,7 @@ int main(int argc, char** argv) {
         timing.slowestParts.emplace_back("(drawing recorded, all of it)", std::chrono::duration<double, std::milli>(renderEnd - renderStart).count());
       }
     }
-    if (opt.timings && !(automatic && liveBusy) && frameCount > 2) {  // (the first frames load what they need)
+    if (opt.timings && !(automatic && liveBusy) && frameCount > opt.timingsFrom) {  // (the first frames load what they need)
       const auto ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
       const auto frameEnd = std::chrono::steady_clock::now();
       timing.Add("cpu: waiting for a free frame", ms(frameStart, frameBegun));
@@ -2734,6 +2885,7 @@ int main(int argc, char** argv) {
       if (havePlay) printf("; %d posed, %zu projectiles, %zu beams", meshes.posedInstances, frame.projectiles.size(), frame.beams.size());
       if (meshes.posedInstances) printf("; bones %.2f ms", meshes.prepareMs);
       if (lights.count) printf("; %d lights", lights.count);
+      if (world.hotMetal) printf("; hot metal: %d glowing, %d lit, %d smoking", world.heat.glowing, world.heat.lit, world.heat.smoking);
       printf("; textures %.0f MB", static_cast<double>(world.textures.bytes) / (1 << 20));
       if (haveLive) printf("; scenery: %d changes, %d gone, %d made in the game standing, %d props of %d squares gone through; %zu script entities", world.propsChanged, world.propsGone, world.MadeProps(), world.propsAdded, world.propCellsSeen, frame.entities.size());
       if (haveLive) printf("; %d hits, %d impacts taken (%d, %d shown)", world.hitsTaken, world.impactsTaken, world.hitsShown, world.impactsShown);
@@ -2773,6 +2925,9 @@ int main(int argc, char** argv) {
         printf("; effects: %d live of %d started, %d events of kinds not drawn yet, %d bands, %.2f ms; %d decals drawn of %d", effects.live,
                effects.started, effects.notShown, ribbons.drawnBands, effects.cpuMs, decals.drawn, decals.Count());
       if (haveLive) printf("; simulation at tick %u, %.2f ms a tick", live.LastTick(), live.MsPerTick());
+      if (world.movementDust)
+        printf("; movement dust: %d puffs kept, %d of dust and %d of spray drawn, %d contrails of %d pieces", world.dust.Puffs(), world.dust.DustDrawn(),
+               world.dust.SprayDrawn(), world.dust.Trails(), world.dust.Segments());
       if (world.blastWaves || world.blastDust || world.blastDebris)
         printf("; blasts: %d told, %d under way, %d dust puffs; debris: %d chunks thrown, %d flying, %d lying", world.blasts.told, world.blasts.Active(),
                world.blasts.dustPuffs, world.debris.thrown, world.debris.Flying(), world.debris.Lying());

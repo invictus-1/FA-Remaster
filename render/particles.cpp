@@ -717,6 +717,7 @@ const EmitterBlueprint* Particles::Blueprint(const std::string& path, const std:
   bp->lightRadius = Number(v["LightRadius"], 0);
   bp->lightSeconds = Number(v["LightSeconds"], 0);
   bp->lightStrength = Number(v["LightStrength"], 1);
+  bp->volumeReplaced = Flag(v["VolumeReplaces"], false);
   bp->sortOrder = static_cast<int>(Number(v["SortOrder"], 0));
   bp->lodCutoff = std::max(0.0f, Number(v["LODCutoff"], 0));
   bp->texturePath = v["Texture"].StringOr(std::string());
@@ -749,6 +750,7 @@ uint32_t Particles::Start(const std::string& blueprint, Vec3 position, const Qua
                           const std::string& faction) {
   const EmitterBlueprint* bp = Blueprint(blueprint, faction);
   if (!bp->ok) return 0;
+  if (volumesOn && bp->volumeReplaced) return 0;  // (volume explosions: its volume is drawn in its place)
   std::unique_ptr<Set>& set = sets_[bp];
   if (!set) {
     set = std::make_unique<Set>();

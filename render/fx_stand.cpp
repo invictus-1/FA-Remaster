@@ -819,10 +819,15 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
       Pose pose;
       pose.now = pose.next = b.bones.data();
       pose.nowCount = pose.nextCount = b.bones.size();
-      world.meshes.Add(model, Mat4::FromTRS(b.position, b.turn, b.scale), {0.2f, 0.45f, 1.0f}, b.built, &pose);
+      const Mat4 at = Mat4::FromTRS(b.position, b.turn, b.scale);
+      // (hot metal: a fresh wreck's heat, World::hotMetal; the original side's stays as the game has it)
+      const Vec3* heat = b.wreck && !b.original ? world.WreckHeat(b.id, model, at) : nullptr;
+      world.meshes.Add(model, at, {0.2f, 0.45f, 1.0f}, b.built, &pose, heat);
       world.water.ripples.AddHull(b.id, b.position, b.turn, model->boundsMin * b.scale, model->boundsMax * b.scale);  // (ripples where it is in the water)
       if (!b.wreck)
         if (const WearLook* w = world.WearOf(b.id)) world.meshes.Wear(*w);  // (its battle scars and snow)
+      // (movement dust: what drives, hovers or flies raises its dust, spray or contrails; on the remastered side only)
+      if (!b.wreck && !b.original && b.built >= 1) world.dust.AddUnit(b.id, b.unit, unit, b.position, b.turn);
     }
   }
 }

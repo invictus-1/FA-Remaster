@@ -26,6 +26,7 @@
 #include "clouds.h"
 #include "debris.h"
 #include "motion.h"
+#include "movement_dust.h"
 #include "ambient_occlusion.h"
 #include "shafts.h"
 #include "tracks.h"
@@ -45,6 +46,7 @@
 #include "frame.h"
 #include "frame_generation.h"
 #include "gfx.h"
+#include "hot_metal.h"
 #include "icons.h"
 #include "lights.h"
 #include "linalg.h"
@@ -63,6 +65,7 @@
 #include "textures.h"
 #include "unit_wear.h"
 #include "view.h"
+#include "volume_blasts.h"
 #include "placed.h"
 #include "ranges.h"
 #include "wakes.h"
@@ -473,6 +476,26 @@ class World {
   // original look has none, as the original game had none.
   bool hiddenOutlines = true;
   HiddenOutlines outlines;
+  // Hot metal (hot_metal.h; renderer item 12): fresh wrecks glow where they broke and on their thin parts and cool over
+  // a minute or two, fresh scorches and craters glow in the middle, cooling wrecks smoulder; a faint light from the
+  // hottest few. Timed by the game's clock from when each appeared. Modern look; off by default.
+  bool hotMetal = false;
+  HotMetal heat;
+  // What a wreck the host draws itself (the effects stand's) hands MeshRenderer::Add as its `tint` to show its heat:
+  // `key` its own number, the same every frame (its age counts from the first frame it is asked for). Null when hot
+  // metal is off or the wreck has cooled. Between Begin and Render.
+  const Vec3* WreckHeat(uint32_t key, const Model* model, const Mat4& world);
+  // (movement dust) Dust, spray and contrails of what moves (movement_dust.h; Chris, 2026-10-17): vehicles raise dust on
+  // dry ground (none on grass, wet ground or in rain), hover units throw spray over water, high aircraft draw contrails.
+  // Modern look; off by default.
+  bool movementDust = false;
+  MovementDust dust;
+  // Explosions as real volumes (volume_blasts.h; Chris, 2026-10-17, the next looks' item 13): big blasts drawn as lit
+  // volumes played back from the visuals session's simulations, glowing while hot; a nuke's flash lighting the sky and
+  // the map, its shock ring through the volumetric clouds, the ground's glow under it, its mushroom cloud rising and
+  // lingering. Modern look; off by default.
+  bool volumeExplosions = false;
+  VolumeBlasts volumes;
   Clouds clouds;
   // Soft shadows (lighting.h, SunShadow; the lighting upgrade): the sun's shadows sharper near what casts
   // them and blurred farther off, as a sun that is not a point makes them. Modern look; off by default.
@@ -572,6 +595,10 @@ class World {
     const Model* model;
     Mat4 world;
     int cell = -1;  // which square of the map it is listed in (propCells_); -1: none
+    // (hot metal: when a made one appeared, game seconds, -1: not known; a unit's wreck; held out of its square's group
+    // while it glows, hotProps_)
+    double born = -1;
+    bool wreck = false, hot = false;
   };
   struct Pickable {  // a unit of the frame, for UnitAt and UnitsIn
     uint32_t id;
@@ -608,6 +635,15 @@ class World {
   void ListProp(PlacedProp* prop, uint32_t key, bool made);
   void UnlistProp(PlacedProp* prop, uint32_t key, bool made);
   std::deque<FramePropEvent> propEvents_;  // told, and not yet due
+  // hot metal: on this frame (and the frame before); the made props held out of their groups while they glow; the
+  // tint WreckHeat hands out; the bounding sphere of a placed model
+  bool hotOn_ = false, hotBefore_ = false;
+  std::vector<uint32_t> hotProps_;
+  Vec3 heatTint_;
+  void HoldHot(uint32_t id, PlacedProp* prop);
+  void UpdateHotProps();
+  static void Sphere(const Model* model, const Mat4& world, Vec3* centre, float* radius);
+  bool UnderWater(Vec3 centre, float radius) const;
   // the last hits on each unit's personal shield (at most eight, the newest last): where, on the model at
   // rest (world units), and when
   struct ShieldHit {
@@ -706,6 +742,7 @@ class World {
   bool bounceTried_ = false, bounceMade_ = false, bounceNow_ = false;  // (bounce light: tried, made, on this frame)
   bool grassTried_ = false, grassMade_ = false, grassNow_ = false;  // (ground cover: its shader tried, made, on this frame)
   bool litSmokeNow_ = false, smokeNow_ = false;  // (lit smoke this frame; the smoke's shadow map drawn this frame)
+  bool volumesOn_ = false, volumesDrawn_ = false;  // (volume explosions: on this frame; volumes drawn this frame)
   std::vector<Particles::Hot> hot_;  // (lit smoke: the lasting fires, this frame)
   bool deepTried_ = false, deepNow_ = false;  // (deep tracks: their field tried; on this frame)
   void PressUnit(const FrameUnit& u, const Frame& frame, const std::string& blueprint, const Model* model, Vec3 position, const Quat& orientation);
@@ -719,6 +756,7 @@ class World {
 
   bool outlinesNow_ = false;  // (hidden outlines this frame)
   bool lightRaysNow_ = false;  // (the small lights' shadows by rays this frame)
+  bool dustNow_ = false;  // (movement dust: on this frame)
  public:
   EnergyShields energy;  // [energy shields] (last: the other members keep their places)
 };

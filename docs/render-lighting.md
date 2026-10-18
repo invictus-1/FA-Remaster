@@ -783,9 +783,63 @@ work is not starved of the processor).
    Open: personal shields (their lattice and hits stay as they are); a hit the game's script makes no flash for
    (it skips some when more than ten are live, and spill damage) sends no rings.
 12. **Hot metal**: fresh wrecks and craters glow orange and cool over a minute or two; wrecks smoulder.
+11. **Shields that look like energy**: what is behind a bubble bends, each hit sends ripples across it, its pattern
+   flares, its colour tints the ground under it.
+12. **Hot metal (first version, 2026-10-18; a helper's, for review):** `World::hotMetal` (viewer `--hot-metal`;
+   `render/hot_metal.h/.cpp`; modern look). What a battle leaves is hot for a while, timed by the game's clock from when
+   each thing appeared (a wreck's prop event's beat; a mark's laying; the effects stand's wreck from the frame it is
+   first drawn):
+   - **Wrecks glow where they broke and on their thin parts**, by a black body's colour at each place's temperature
+     (Planck's law through the CIE 1931 observer into linear sRGB, fitted: orange-yellow at 1350 K, orange, red, dull red,
+     gone below about 850 K), in the surface's emission so the bloom takes the hottest. Each part starts at its own
+     temperature and cools at its own pace toward the air's 300 K: the holes from 1350 K, slowest (the inside shows
+     through them); torn rims from 1200 K, twice as fast; thin parts from 1100 K, fastest; the hull here and there
+     from 1000 K for the first seconds. The hottest part glows `HotMetal::WreckSeconds` (55 s for a light tank's size,
+     longer for larger wrecks by the radius to the power 0.35, an experimental about two minutes). Where it broke: on
+     the visuals session's wrecks, read from their textures as her wreck kit paints them (`visuals/tools/wreckkit.py`,
+     burn: a crater's hole near black, rough 0.92 and no metal; its torn rim bare steel, metal 0.85 and rough 0.42;
+     nowhere else is a wreck's surface like either); on the game's own burnt wrecks, craters made up in the model's
+     space the same way (a guess: that model is whole). Thin parts: where the surface turns sharply for the model's
+     size (the normal's change against the place's from pixel to pixel), in short pieces. Embers breathe (a slow drift
+     of a few percent), so a glow never reads as a lamp; the dull red is kept dull (the brightness by the physical
+     luminance to the power 0.65), so it does not read as a team's colour.
+   - **Scorches and craters glow in the middle**: a script's scorch or crater (the battle scars' rule, `IsScar`) laid
+     while it is on: its middle a bed of ember clumps with a few cracks, the hotter the nearer the middle, so the glow
+     draws in as it cools, for `HotMetal::CraterSeconds` (6.5 s for one a unit across, 16 s for four, a minute at most),
+     added over the ground through the air (Decals, its own additive pipeline). Not under water; never the map's own.
+   - **A faint light** from the hottest three near what the camera looks at, in the hottest part's colour, reaching a
+     little past the wreck.
+   - **Wrecks smoulder**: the game's own thin trail (`destruction_damaged_smoke_01`, what a damaged unit trails, its
+     wisps living twice as long so the trail rises clear of the ground it would fade against) from the sixteen hot
+     wrecks nearest what the camera looks at, thinning to a third as it cools, stopped a little before the last dull
+     red. It is the game's particle system, so the lit smoke (item 2) takes it as it takes the rest.
+   How a wreck carries its heat to the model shader: in the instance's ghost tint (`MeshRenderer::Add`'s `tint`), marked
+   by -0.25 first (no ghost's tint, no tank's treads read it so); the game's wrecks are held out of their square's
+   group of still scenery while they glow and go back when cold. Viewer `--wreck-test n[,unit]`: n wrecks laid as a
+   game makes them round where the camera starts, each with its death's scorch, as if just died (`--hot-metal-lights n`,
+   `--hot-metal-smoke r` to try the parts' costs). Cost at 1440p with 40 fresh wrecks in view and their scorches, by
+   the lowest times, the frame against the same scene with it off: +0.07 ms from the game's height (the visuals
+   session's wrecks), +0.10 close up, +0.15 close up with 40 of the game's own wrecks (their made-up craters); the
+   glow on the models about +0.015-0.05 ms, the scorches' +0.02-0.04, the lights and smoke the rest. Off: pictures
+   identical (regression 0 px on both backends; the effects stand's death and scorch rows on SETONS_R 0 px on both);
+   on, Vulkan as Direct3D 12 (mean 0.10 in 255 round a wreck). Open: the game's own wrecks' craters are a guess (no
+   broken parts in that model); the thin parts' measure also finds bevelled edges (kept to short pieces); at night
+   from the game's height a Cybran wreck's last dull red dots are near its army's red lamps in colour (they breathe,
+   lie on a dark wreck with no team colour and go out within a minute); burnt trees do not glow; with the engine's
+   per-beat hits (World::AddCombat) the craters could be put where the killing shots struck.
 13. **Explosions as real volumes, and a nuke worth the name**: big blasts drawn as lit volumes (simulations the
    visuals session makes in Blender, played back through the light in the air); a nuke's flash lighting the map, a
-   shock ring through the clouds, a mushroom cloud. After item 2 (it shares the smoke's lighting).
+   shock ring through the clouds, a mushroom cloud. After item 2 (it shares the smoke's lighting). First version done
+   2026-10-18 (`World::volumeExplosions`, viewer `--volume-explosions`; docs/render-volumes.md has the whole of it and
+   the delivery form asked of the visuals session): the scripts' flashes and the simulation's harm to an area pick the
+   big blasts (at most four drawn) and every nuke; each is a density and temperature volume played back from a flat DDS
+   of slices and frames, marched in a box to the scene's depth, lit by the sun through its own smoke, the shadow maps,
+   the clouds' and the smoke's shadows, by the sky and the small lights, glowing by its temperature as a hot body does
+   and a small light while hot, casting its shadow through the smoke's shadow map. A nuke's flash brightens the sky
+   and everything under it for a moment and lights the clouds from within, its ring pushes and clears the volumetric
+   clouds, the ground glows under it, its mushroom cloud rises and lingers for 90 s. Proven with stand-ins (a
+   noise-advected sphere, a procedural mushroom) until her bakes come. About 0.25-0.4 ms at 1440p with four blasts, up
+   to 0.5-0.6 ms with a nuke's cap over half the screen. Off: pictures identical (regression 0 px on both backends).
 14. **Zooming out through the clouds (a trial)**: the strategic zoom rises through the volumetric clouds, which thin
    out so the map stays readable.
 15. **Units seen behind trees and cliffs (done, first version, 2026-10-18; ON by default):** `World::hiddenOutlines`
@@ -815,7 +869,17 @@ work is not starved of the processor).
    pictures identical (regression 0 px on both backends); on, the regression's scenes (nothing hides the
    commander) are identical too; in the original look nothing changes.
 16. **Dust, spray and contrails**: vehicles raise dust on dry ground, hover units throw spray, high aircraft draw
-   contrails. After items 2 and 3 (shared particles and dust).
+   contrails. After items 2 and 3 (shared particles and dust). First version done 2026-10-18 (`World::movementDust`,
+   viewer `--movement-dust`; `render/movement_dust.h/.cpp`, docs/render-dust.md has the whole of it): puffs behind
+   vehicles by speed and by how dusty the dry ground is (each layer judged by remap.json's "ground" or its name, laid
+   over each other by the map's masks on the processor; none on green grass, rock, wet ground, in rain or where snow
+   lies), coloured from the ground and lit as the blasts' dust (with lit smoke on, the small lights and the smoke's
+   shadow too), drawn under the units so it never hides one; spray round hover units over water and a trail behind fast
+   ones, a faint dust over land; contrails from the fighters' and bombers' contrail bones above 12 units over the
+   ground, widening and breaking up over 3-9 s by how damp and cold the air is, pale and never glowing, thinned where
+   they pass close in front of the fight. At 1440p with 40 vehicles, 10 hover units and 10 high aircraft about 0.07 ms in
+   a game's view, 0.22 ms with all of them close in front of the camera. Off: pictures identical (regression 0 px on
+   both backends).
 17. **Life in the world**: flocks of birds over the forests that scatter when fighting comes near; fireflies at dusk;
    never mistakable for units. **First version 2026-10-18 (a helper):** `World::wildlife` (viewer `--wildlife`;
    `render/wildlife.h/.cpp`; modern look, a map with trees or shores). Purely for the eye: own random numbers,
@@ -885,6 +949,7 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `rainSplashes` | specks where rain meets the ground and units' tops | about 0.01 ms (in rain) | a time of day |
 | `leafLight` | the sun's light through leaves, grass blades and plants, glowing toward a low sun | about 0.04 ms | |
 | `energyShields` | shields' bubbles bend what is behind, rings run from each hit, the pattern flares, their light inside | +0.07 to 0.16 ms with ten bubbles under fire | |
+| `hotMetal` | fresh wrecks glow where they broke and cool by a black body's colours, fresh scorches glow, wrecks smoulder | +0.07 ms with 40 fresh wrecks from the game's height, +0.15 close up | |
 | `frameGeneration` | FSR 3 frame generation: a picture made between each two frames, twice the frames shown | 1.1-1.4 ms a frame drawn | anti-aliasing off; the device's second queue |
 | `lens` (with a cinematic camera) | depth of field: a lens's blur, focus eased | 0.36-0.43 ms while on | a cinematic camera (cinecam.h) |
 | `litSmoke` | smoke and dust lit as volumes: the sun through shadows, fires lighting it from within | about 0.02 ms in a fight | |
@@ -894,6 +959,8 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `waterRipples` | the water reacts: shells, ships, hover and wading units leave rings and wakes that spread and fade | about 0.04-0.05 ms near water (24 MB of the card's memory once on) | a map with water |
 | `hiddenOutlines` (ON) | a thin line in the army's colour round a unit's part hidden behind trees, hills or buildings | 0.06-0.08 ms (200 tanks in a forest) | |
 | `wildlife` | flocks of birds over the woods and gulls over the shores, scattered by fighting; fireflies at dusk and by night | about 0.02 ms (proposed for the "Ground Detail" setting) | a map with trees or shores |
+| `movementDust` | vehicles raise dust on dry ground, hover units throw spray, high aircraft draw contrails | about 0.07 ms with 60 units moving, 0.22 close up | |
+| `volumeExplosions` | big blasts as lit, glowing volumes; a nuke's flash over the map, its ring through the clouds, its mushroom cloud | about 0.25-0.4 ms with four blasts, up to 0.6 ms with a nuke filling half the screen (the files: tens of MB once on) | the visuals session's volume files |
 
 Ray tracing means Direct3D 12 with DXR 1.1 or Vulkan with ray queries: never on the Mac (MoltenVK has none);
 where it is missing those options do nothing. `rayReflections` builds the surfaces' shaders with ray

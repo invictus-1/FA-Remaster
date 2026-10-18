@@ -11,12 +11,15 @@
 // ground with (the light it would take tilted) / (the light it took); and lights (a glow added).
 // The map editor's remaining kinds (glow, water masks) are not drawn.
 #pragma once
+#include <algorithm>
+#include <cmath>
 #include <functional>
 #include <string>
 #include <vector>
 
 #include "camera.h"
 #include "gfx.h"
+#include "hot_metal.h"
 #include "linalg.h"
 #include "textures.h"
 #include "view.h"
@@ -62,6 +65,21 @@ class Decals {
   float scarWeathering = 600, scarFloor = 0.5f;
   int Scars() const { return scars_; }  // (scars there now, the ones fading out included)
   static bool IsScar(const std::string& texture);
+  // Hot metal (World::hotMetal, hot_metal.h; set by the world each frame, with `heat` for its timing): a scorch or a
+  // crater laid while it is on (IsScar) has its middle glowing and cooling, seconds to a minute by its size, from when
+  // it was laid. ForEachHot: those glowing now, f(centre, size across, age, seconds, id).
+  bool hotMetal = false;
+  const HotMetal* heat = nullptr;
+  template <class F>
+  void ForEachHot(double now, F&& f) const {
+    if (!hotMetal || !heat) return;
+    for (const Decal& d : decals_) {
+      if (!d.burn) continue;
+      const float age = static_cast<float>(now - d.born), across = 2 * std::max(std::fabs(d.halfX), std::fabs(d.halfZ));
+      const float seconds = heat->CraterSeconds(across);
+      if (age >= 0 && age < seconds) f(d.centre, across, age, seconds, d.id);
+    }
+  }
   // The picture a script's mark is named by (a path, or a short name looked up in the game's two
   // folders of them); none: not there.
   gfx::Texture Picture(const std::string& texture) { return Resolve(texture, nullptr, nullptr); }
@@ -136,6 +154,7 @@ class Decals {
     bool ours = false;      // the picture is the visuals track's (`remastered`)
     bool scar = false;      // a battle scar (`battleScars`), and when it has faded out (0: it has not begun to)
     double scarGone = 0;
+    bool burn = false;      // a scorch or crater laid with hot metal on (`hotMetal`): its middle glows while fresh
   };
   struct Instance {  // as the shader reads it
     float centre[3], halfHeight;
@@ -157,6 +176,7 @@ class Decals {
   const moho::Vfs* vfs_;
   TextureCache* textures_;
   gfx::Pipeline pipeline_, lights_, normals_;
+  gfx::Pipeline hot_;  // (hot metal: a fresh mark's glow, added, its alpha left alone)
   gfx::Buffer cube_;
   gfx::Texture waterMap_, waterRamp_;
   float mapWidth_ = 0, mapHeight_ = 0;

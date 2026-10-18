@@ -77,6 +77,9 @@ struct EmitterBlueprint {
   float refractionScale = 1;
   bool collideGround = false, keepAtLowQuality = false;
   float lightRadius = 0, lightSeconds = 0, lightStrength = 1;
+  // (volume explosions, volume_blasts.h) VolumeReplaces: what the blast's volume draws in its place (a nuke's fireball and
+  // plume): not thrown out while World::volumeExplosions is on (Particles::volumesOn)
+  bool volumeReplaced = false;
   float largestSize = 0;  // the largest size its size curves give (for the light it throws)
   // (Particles::HotEmitters, the first time it is asked: -1 not known yet, 1 its glow is a hot colour, and that colour)
   mutable int warm = -1;
@@ -101,6 +104,7 @@ class Particles {
   // Emitters started from now on read the remastered effects' files where there are some
   // (effect_files.h); false: always the game's. The world sets it from its effects look.
   bool remastered = true;
+  bool volumesOn = false;  // (volume explosions: emitters whose blueprint says VolumeReplaces are not started)
 
   // Starts an emitter of that blueprint ("/effects/emitters/x_emit.bp") there. Returns its handle;
   // 0 when the blueprint cannot be read (reported once). `startedAt`: when it began, if that was

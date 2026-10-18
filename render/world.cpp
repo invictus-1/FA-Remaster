@@ -38,6 +38,7 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       blasts(device),
       debris(device, &textures),
       outlines(device),
+      dust(device),
       clouds(device),
       motion(device),
       upscaler(device),
@@ -58,10 +59,17 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       orders(device, &textures),
       shadows(device),
       smokeMap(device),
+      volumes(device, vfs, &textures),
       device_(device),
       vfs_(vfs),
       energy(device) {
   particles.rampGlow = [this](const std::string& ramp) { return lights.RampGlow(ramp); };  // (what is hot: lit smoke's fires, heat shimmer)
+  // (movement dust: how each kind of unit moves, from its blueprint)
+  dust.readBlueprint = [this](const std::string& id, BpValue* out) {
+    auto file = textures.ReadFile(models.UnitBlueprintPath(id));
+    return file && ReadBlueprintFile(*file, out);
+  };
+  volumes.rampGlow = [this](const std::string& ramp) { return lights.RampGlow(ramp); };    // (volume explosions: a nuke's flash's hue)
 }
 
 World::~World() {
@@ -130,6 +138,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
       return false;
     }
     haveMap_ = true;
+    volumes.Clear();  // (volume explosions: none of the map before)
     temporalBefore_ = false;  // (the temporal upscaler: nothing of the map before is used)
     raysGround_ = false;  // (the ray tracing scene's ground: made again when it is next wanted)
     tracks.SetMap(static_cast<float>(map.width), static_cast<float>(map.height));
@@ -171,7 +180,12 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     blasts.groundHeight = debris.groundHeight = decals.groundHeight;
     debris.mapWidth = static_cast<float>(map.width);
     debris.mapHeight = static_cast<float>(map.height);
+    // (movement dust: on this map's ground and water; where its ground is dusty worked out the first frame it is on)
+    dust.waterLevel = decals.waterLevel;
+    dust.groundHeight = decals.groundHeight;
+    dust.SetMap(&map, mapPath, [this](const std::string& path) { return textures.ReadFile(path); });
     // the map's own decals: albedo ones (pictures over the ground's colour) and normal ones (its sculpting)
+    decals.hotMetal = false;  // (hot metal: the map's own scorches are no fresh marks; Begin sets it again)
     if (options.mapDecals != "off") {
       int laid = 0;
       for (const MapDecal& d : map.decals) {
@@ -537,6 +551,11 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   CpuTimes::Part("light, sky, weather set");
   particles.remastered = ribbons.remastered = decals.remastered = effectsLook == EffectsLook::Remastered;
   decals.battleScars = battleScars;
+  // hot metal (hot_metal.h): this frame's, the modern look's only; the marks laid from now on glow while fresh
+  hotOn_ = hotMetal && look == Look::Modern;
+  decals.hotMetal = hotOn_;
+  decals.heat = &heat;
+  if (hotOn_ && !sidePicture) heat.Begin(clock);
   particles.quality = effectsQuality;
   camera = cam;
   time_ = time;
@@ -712,6 +731,17 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   lampUnits_ = 0;
   if (moving_.size() > 60000) moving_.clear();  // (entity ids pile up over a long game)
   lampSquares_.clear();
+  // (volume explosions, volume_blasts.h: on in the modern look; while on they hear of every flash a script makes)
+  volumesOn_ = volumeExplosions && look == Look::Modern && haveMap_;
+  particles.volumesOn = volumesOn_;
+  if (volumesOn_ != static_cast<bool>(lights.onFlash)) {
+    if (volumesOn_) {
+      lights.onFlash = [this](const std::string& ramp, Vec3 at, float size, double born, float seconds) { volumes.Offer(ramp, at, size, born, seconds); };
+    } else {
+      lights.onFlash = nullptr;
+      volumes.Clear();
+    }
+  }
   // a time of day: the computed sky's light in place of the map's (modern look)
   Vec3 lightDirection = sunDirection;
   if (timeOfDay >= 0 && look == Look::Modern) {
@@ -793,6 +823,22 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       }
       lights.Add(foot + Vec3{0, 3, 0}, 45, Vec3{0.8f, 0.86f, 1.0f} * (flash * 6 / skyLight.exposure));
     }
+    // (volume explosions) a nuke's flash lights the sky and everything under it for a moment, as lightning does, and
+    // the clouds over it from within (to an eye opened for the night less than lightning: lit as by lightning's measure,
+    // the whole night picture went white)
+    if (volumesOn_ && !sidePicture) {
+      const Vec3 nuke = volumes.SkyFlash(clock) * (1 / std::pow(skyLight.exposure, 0.9f));
+      skyLight.zenith += nuke;
+      skyLight.horizon += nuke * 0.6f;
+      bolt += nuke;
+      Vec3 at, glow;
+      float reach = 0;
+      if (clouds.boltLight.x + clouds.boltLight.y + clouds.boltLight.z <= 0 && volumes.CloudFlash(clock, &at, &reach, &glow)) {
+        clouds.boltAt = Vec3{at.x, std::max(clouds.base, camera.Eye().y + 40) + clouds.thickness * 0.15f, at.z};
+        clouds.boltReach = reach;
+        clouds.boltLight = glow * (1 / skyLight.exposure);
+      }
+    }
     c.falling[0] = rain;
     c.falling[1] = snow;
     c.falling[2] = flash;
@@ -840,6 +886,13 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       c.skyExtra[2] = bolt.z;
     }
     lightDirection = skyLight.direction;
+  }
+  {  // movement dust (movement_dust.h): on in the modern look, with what the weather has done to the ground and the air
+    dustNow_ = movementDust && look == Look::Modern && haveMap_ && !sidePicture;
+    MovementDust::Weather weatherNow;
+    if (timeOfDay >= 0 && look == Look::Modern)
+      weatherNow = {wet, rain, snow, snowLying, cloudCover, fog, skyLight.daylight, climate == Climate::Cold, climate == Climate::Dry};
+    dust.Begin(clock_, dustNow_, weatherNow, camera.Eye());
   }
   CpuTimes::Part("sun shadows placed");
   if (haveMap_ && shadowsOn) {
@@ -916,6 +969,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     ApplyPropEvent(propEvents_.front());
     propEvents_.pop_front();
   }
+  if (hotOn_ || hotBefore_) UpdateHotProps();  // (hot metal: the wrecks that have cooled go back into their groups)
   // (only the squares near what the camera sees: a square counts when it, widened by the largest
   // prop's reach and by room for a shadow thrown into the picture from outside it, is in view)
   propCellsSeen = propsAdded = 0;
@@ -937,13 +991,27 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
           for (uint32_t i : cell.ofMap) meshes.AddToGroup(cell.group, props_[i].model, props_[i].world);
           for (uint32_t id : cell.made) {
             auto made = madeProps_.find(id);
-            if (made != madeProps_.end() && made->second.model) meshes.AddToGroup(cell.group, made->second.model, made->second.world);
+            // (a hot wreck is held out while it glows: added on its own with its heat, below)
+            if (made != madeProps_.end() && made->second.model && !made->second.hot) meshes.AddToGroup(cell.group, made->second.model, made->second.world);
           }
           cell.changed = false;
         }
         meshes.ListGroup(cell.group);
         propsAdded += static_cast<int>(cell.ofMap.size() + cell.made.size());
       }
+  }
+  // hot metal: the wrecks held out of their groups while they glow, each with its heat (hot_metal.h, HotMetal::Tint)
+  for (uint32_t id : hotProps_) {
+    auto made = madeProps_.find(id);
+    if (made == madeProps_.end() || !made->second.model) continue;
+    const PlacedProp& p = made->second;
+    Vec3 centre;
+    float radius;
+    Sphere(p.model, p.world, &centre, &radius);
+    const float age = static_cast<float>(clock_ - p.born), seconds = heat.WreckSeconds(radius);
+    heatTint_ = HotMetal::Tint(age, seconds);
+    meshes.Add(p.model, p.world, {1, 1, 1}, 1, nullptr, &heatTint_);
+    if (!sidePicture) heat.Glowing(id, centre, radius, age, seconds, true);
   }
   // the world beyond the map's edge has the map's trees and rocks too: each stands again in the
   // mirrored copies of the map the ground out there is made of, turned as its mirror image is
@@ -1224,8 +1292,18 @@ void World::ApplyPropEvent(const FramePropEvent& e) {
     ListProp(&props_[static_cast<size_t>(e.mapIndex)], static_cast<uint32_t>(e.mapIndex), false);
   } else {
     PlacedProp& kept = madeProps_[e.id];
+    // (hot metal: when it appeared, kept through its changes, and whether it is a unit's wreck: the game's
+    // DefaultWreckage with the unit's "_mesh_wreck")
+    const double born = kept.born >= 0 ? kept.born : static_cast<double>(e.tick) * 0.1;
+    const bool hot = kept.hot;
     kept = placed;
+    kept.born = born;
+    kept.hot = hot;
+    std::string low = e.blueprint + "|" + e.mesh;
+    for (char& c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    kept.wreck = low.find("defaultwreckage") != std::string::npos || low.find("_mesh_wreck") != std::string::npos;
     ListProp(&kept, e.id, true);
+    if (hotOn_) HoldHot(e.id, &kept);
   }
   ++propsChanged;
 }
@@ -1253,6 +1331,75 @@ void World::WatchWear(const Frame& frame) {
     }
 }
 
+// Hot metal (hot_metal.h): a fresh wreck is held out of its square's group of still scenery while it glows (the group's
+// instances are kept from frame to frame; a hot wreck's heat changes every frame), and added on its own with its heat
+// (Begin); once it has cooled, or hot metal is switched off, it goes back into the group.
+void World::HoldHot(uint32_t id, PlacedProp* prop) {
+  if (!hotOn_ || prop->hot || !prop->wreck || !prop->model || prop->born < 0) return;
+  Vec3 centre;
+  float radius;
+  Sphere(prop->model, prop->world, &centre, &radius);
+  if (clock_ - prop->born >= static_cast<double>(heat.WreckSeconds(radius)) || UnderWater(centre, radius)) return;
+  prop->hot = true;
+  if (prop->cell >= 0) propCells_[static_cast<size_t>(prop->cell)].changed = true;
+  hotProps_.push_back(id);
+}
+
+void World::UpdateHotProps() {
+  if (hotOn_ && !hotBefore_)  // (just switched on: the wrecks of the last minutes that still glow)
+    for (auto& made : madeProps_) HoldHot(made.first, &made.second);
+  if (!hotOn_ && hotBefore_) heat.Off(&particles);
+  for (size_t i = 0; i < hotProps_.size();) {
+    auto made = madeProps_.find(hotProps_[i]);
+    bool keep = false;
+    if (made != madeProps_.end()) {
+      PlacedProp& p = made->second;
+      if (hotOn_ && p.hot && p.model) {
+        Vec3 centre;
+        float radius;
+        Sphere(p.model, p.world, &centre, &radius);
+        keep = clock_ - p.born < static_cast<double>(heat.WreckSeconds(radius)) && !UnderWater(centre, radius);
+      }
+      if (!keep && p.hot) {
+        p.hot = false;
+        if (p.cell >= 0) propCells_[static_cast<size_t>(p.cell)].changed = true;
+      }
+    }
+    if (keep) {
+      ++i;
+    } else {
+      hotProps_[i] = hotProps_.back();
+      hotProps_.pop_back();
+    }
+  }
+  hotBefore_ = hotOn_;
+}
+
+// (a wreck that lies under the water - a ship's on the bottom - is quenched: it does not glow)
+bool World::UnderWater(Vec3 centre, float radius) const {
+  return haveMap_ && map.water.present && centre.y + radius * 0.3f < map.water.elevation;
+}
+
+void World::Sphere(const Model* model, const Mat4& world, Vec3* centre, float* radius) {
+  const Vec3 mid = (model->boundsMin + model->boundsMax) * 0.5f;
+  const Vec4 c = world * Vec4{mid.x, mid.y, mid.z, 1};
+  *centre = {c.x, c.y, c.z};
+  const float scale = std::sqrt(world.m[0][0] * world.m[0][0] + world.m[1][0] * world.m[1][0] + world.m[2][0] * world.m[2][0]);
+  *radius = Length(model->boundsMax - model->boundsMin) * 0.5f * scale;
+}
+
+const Vec3* World::WreckHeat(uint32_t key, const Model* model, const Mat4& at) {
+  if (!hotOn_ || !model || !model->ok) return nullptr;
+  Vec3 centre;
+  float radius;
+  Sphere(model, at, &centre, &radius);
+  const float age = static_cast<float>(clock_ - heat.FirstSeen(key)), seconds = heat.WreckSeconds(radius);
+  if (age >= seconds || UnderWater(centre, radius)) return nullptr;
+  if (!sidePicture) heat.Glowing((uint64_t{1} << 40) | key, centre, radius, age, seconds, true);
+  heatTint_ = HotMetal::Tint(age, seconds);
+  return &heatTint_;
+}
+
 // Whose a shield's mesh is (effect_files.h, MeshFaction)
 std::string World::MeshFaction(const std::string& mesh) { return render::MeshFaction(mesh); }
 
@@ -1273,6 +1420,9 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     if (h.radius > 0 && !h.shield && h.seen && h.damageType != "TreeForce")
       blasts.FromImpact({h.position[0], h.position[1], h.position[2]}, h.radius, h.amount, h.tick * 0.1);
   WatchDeaths(frame, armyColors);  // (the debris of what has died: blastDebris)
+  if (volumesOn_ && combat_.hitsKept)  // (volume explosions: harm to an area is a blast that large)
+    for (const FrameHit& h : combat_.hits)
+      if (h.radius > 0 && h.seen) volumes.OfferArea({h.position[0], h.position[1], h.position[2]}, h.radius, static_cast<double>(h.tick) * 0.1);
   CpuTimes::Part("units seen first: their files read ahead");
   {  // (their models' files read on the worker threads, all together; the models are made below)
     std::vector<std::string> fresh;
@@ -1563,6 +1713,8 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       if (outlinesNow_ && u.Seen() && !asRemembered && fractionComplete >= 1 && !allHidden)
         MarkOutline(model, position, IconColor(u.Army(), color), building, u.id, u.blueprint < iconKinds_.size() ? iconKinds_[u.blueprint] : nullptr);
       if (u.fractionComplete >= 1 && u.Seen()) AddLamps(model, position, orientation, &pose, &color);
+      // (movement dust: what the army sees moving raises dust, spray or contrails)
+      if (dustNow_ && u.Seen() && !asRemembered && fractionComplete >= 1) dust.AddUnit(u.id, blueprint, model, position, orientation);
       // ripples where it floats, hovers or wades in the water (what the army sees)
       if (u.Seen() && !asRemembered) water.ripples.AddHull(u.id, position, orientation, model->boundsMin * model->scale, model->boundsMax * model->scale);
       // a wake, when it goes on the water: by how far it has come since the frame before
@@ -1927,6 +2079,23 @@ void World::Render() {
                  f.color * (fireLight * flicker * together * byDay * lights.night));
     }
   }
+  // hot metal (hot_metal.h): the hottest few wrecks' and craters' faint light, the cooling wrecks' thin smoke
+  if (hotOn_ && !sidePicture) {
+    decals.ForEachHot(clock_, [&](Vec3 centre, float across, float age, float seconds, uint32_t id) {
+      heat.Glowing((uint64_t{2} << 40) | id, centre, across * 0.25f, age, seconds, false);
+    });
+    heat.End(&lights, &particles, camera.target, lights.night);
+  }
+  // (volume explosions) which are drawn this frame, their light while hot, a nuke's flash and the ground's glow under it;
+  // its ring through the clouds
+  volumesDrawn_ = false;
+  clouds.ringsWanted = volumesOn_;
+  clouds.ringStrength = 0;
+  if (volumesOn_ && !sidePicture) {
+    volumesDrawn_ = volumes.Update(clock_, camera, view) && hide.find("particles") == std::string::npos;
+    volumes.AddLights(&lights, lights.night, timeOfDay >= 0 && look == Look::Modern ? skyLight.daylight : 1.0f);
+    volumes.CloudRing(clock_, &clouds.ringX, &clouds.ringZ, &clouds.ringRadius, &clouds.ringWidth, &clouds.ringStrength);
+  }
   lights.Build(&view);  // (after everything has said what lights there are; before any pass reads the view)
   // blasts (blasts.h): the waves and the dust under way near what the camera sees; the debris's chunks moved on and listed
   blastsNow_ = grassBlasts_ = false;
@@ -1941,6 +2110,12 @@ void World::Render() {
   }
   meshes.blastConstants = blastsNow_ && blasts.Waves() ? blasts.Constants() : nullptr;
   meshes.blastConstantsSize = meshes.blastConstants ? blasts.ConstantsSize() : 0;
+  if (dustNow_) {  // movement dust (movement_dust.h): what is over let go of, the rest to the card; the ground's colours
+                   // made the first time (it dispatches, so not in a pass)
+    CpuTimes::Part("movement dust listed");
+    dust.Prepare(view);
+    if (dust.DustDrawn() > 0) terrain.GroundColours();
+  }
   if (blastDebris && look == Look::Modern && haveMap_ && !sidePicture) {
     CpuTimes::Part("debris moved");
     debris.rubbleLasts = battleScars ? 0.0f : 120.0f;  // (kept as the scorches are)
@@ -2030,6 +2205,10 @@ void World::Render() {
     device_->BeginPass(lights.ShadowPass(i));
     meshes.Draw(lights.ShadowView(i), environment_, true);
   }
+  if (volumesDrawn_) {  // (volume explosions) each drawn blast's volume at this moment, before the smoke's shadow takes it
+    Stage("volume blasts filled");
+    volumes.Fill(view);
+  }
   // smoke's shadow (smoke.h): the smoke as the sun sees it, for the smoke lit as a volume and (smokeShadows) for what
   // the sun lights under it; before the light in the air and the scene read it
   Stage("smoke's shadow");
@@ -2041,6 +2220,7 @@ void World::Render() {
     device_->SetTexture(kSmokeShadowSlot, {});
     device_->BeginPass(smokeMap.Pass());
     particles.DrawSmokeShadow(smokeMap.SunView());
+    if (volumesDrawn_) volumes.DrawShadow(smokeMap.SunView());  // (volume explosions)
     device_->SetTexture(kSmokeShadowSlot, smokeMap.Map());
     smokeNow_ = true;
   }
@@ -2052,6 +2232,11 @@ void World::Render() {
   Stage("light in the air");
   if (sidePicture) air.Skip(&view);
   else air.Build(&view, camera, shadows.Map(), lights.ShadowMap(), &lights, volumetricFog && look == Look::Modern && haveMap_, groundMiddle_);
+  if (volumesDrawn_) {  // (volume explosions) the light in each volume, after the shadows it takes, before the scene
+    Stage("volume blasts lit");
+    device_->SetTexture(kEnvironmentSlot, sky_);
+    volumes.Light(view, shadows.Map(), clouds.Shadows(), smokeNow_ ? smokeMap.Map() : gfx::Texture{}, &lights);
+  }
   // the sky from tables (when on): its view from the eye this frame, before the sky's pass and the surfaces read it
   bool skyTable = false;
   if (view.constants.skyTable[0] > 0.5f && view.constants.skyZenith[3] > 0.5f) {
@@ -2092,6 +2277,15 @@ void World::Render() {
     // range rings on the land, before anything stands on it (their picture is made from the
     // ground's depth; over the water they are laid after the water)
     Stage("units and scenery");
+    // (movement dust, movement_dust.h: over the scenery and under the units, which are drawn over it: it never hides them)
+    const bool dustUnder = dustNow_ && dust.Under();
+    auto drawDustUnder = [&] {
+      Stage("movement dust: under the units");
+      lights.Bind();
+      dust.DrawUnder(view, post.Depth(), camera.zNear, terrain.HeightTexture(), terrain.HeightUnit(), terrain.GroundColours(), static_cast<float>(map.width),
+                     static_cast<float>(map.height), litSmokeNow_);
+      Stage("units, over the movement dust");
+    };
     if (ranges.Any()) {
       ranges.waterLevel = map.water.present ? map.water.elevation : -1e9f;
       ranges.night = lights.night;
@@ -2103,6 +2297,14 @@ void World::Render() {
       meshes.Draw(view, environment_, false, false, 1);
       post.BeginColorOnly();
       ranges.Lay(view, camera, post.Depth(), false);
+      if (dustUnder) drawDustUnder();
+      post.ContinueScene();
+      lights.Bind();
+      meshes.Draw(view, environment_, false, false, 2);
+    } else if (dustUnder) {  // (movement dust: the scenery, the dust over it, the units over the dust)
+      meshes.Draw(view, environment_, false, false, 1);
+      post.BeginColorOnly();
+      drawDustUnder();
       post.ContinueScene();
       lights.Bind();
       meshes.Draw(view, environment_, false, false, 2);
@@ -2191,12 +2393,22 @@ void World::Render() {
     // lamps' shafts and particles go into the scene's colour alone: they test the scene's depth
     // themselves and fade where they meet something solid
     post.BeginColorOnly();
+    if (volumesDrawn_) {  // (volume explosions) the volumes, before the particles: a blast's sparks and smoke over them
+      Stage("volume blasts");
+      volumes.Draw(view, post.Depth(), camera.zNear);
+    }
     Stage("lamp shafts");
     shafts.Draw(view, post.Depth(), camera.zNear);
     if (blastsNow_ && blastDust) {  // the blasts' dust, under the game's own fire and smoke
       Stage("blasts' dust");
       blasts.DrawDust(view, post.Depth(), camera.zNear, terrain.HeightTexture(), terrain.HeightUnit(), terrain.GroundColours(),
                       static_cast<float>(map.width), static_cast<float>(map.height));
+    }
+    if (dustNow_ && dust.Above()) {  // movement dust's spray and contrails (movement_dust.h), over the water and the sky
+      Stage("movement dust: spray, contrails");
+      if (litSmokeNow_) lights.Bind();
+      dust.DrawAbove(view, post.Depth(), camera.zNear, terrain.HeightTexture(), terrain.HeightUnit(), terrain.GroundColours(),
+                     static_cast<float>(map.width), static_cast<float>(map.height), litSmokeNow_);
     }
     Stage("particles");
     if (hide.find("particles") == std::string::npos) {

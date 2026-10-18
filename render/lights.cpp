@@ -148,6 +148,7 @@ const std::vector<Vec3>* Lights::Ramp(const std::string& path) {
 
 void Lights::Flash(const std::string& ramp, Vec3 position, float size, double born, float seconds) {
   if (size <= 0 || seconds <= 0) return;
+  if (onFlash) onFlash(ramp, position, size, born, seconds);  // (volume explosions)
   flashes_.push_back({Ramp(ramp), position, size, born, seconds});
 }
 

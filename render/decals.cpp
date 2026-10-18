@@ -78,6 +78,18 @@ float4 PS(VOut i) : SV_Target {
   float depth = DepthAt(int2(i.position.xy));
   if (depth <= 0) discard;  // nothing drawn here
   float3 world = WorldAt(i.position.xy, depth);
+  [branch] if (i.options.z > 5.5) {
+    // hot metal (hot_metal.h): a fresh scorch's or crater's middle glowing on the ground, its light added, through the
+    // air as the ground's own (options: x its age, y how long it glows, w its own number)
+    float3 d = world - i.centre.xyz;
+    if (abs(d.y) > i.centre.w) discard;
+    float2 local = float2(d.x * i.shape.z - d.z * i.shape.w, d.x * i.shape.w + d.z * i.shape.z) / i.shape.xy;
+    if (any(abs(local) > 1)) discard;
+    float4 c = decalTexture.Sample(samplerAniso, local * 0.5 + 0.5);
+    float3 glow = HotGroundGlow(local, c.a, i.options.x, i.options.y, i.options.w) * (kHotMetalStrength * pow(falling.w > 0 ? falling.w : 1, 0.6));
+    if (max(glow.r, glow.g) <= 0) discard;  // (nothing glows there: nothing written)
+    return float4(ThroughAirTo(glow, world) - ThroughAirTo(0, world), 1);
+  }
   // a "Water Albedo" decal: the original raises the ground under it to the water's surface
   // (TDecalsWaterAlbedo). Before the water: only where the ground is above it; after the water: only
   // where the ground is under it, on the surface the line of sight meets.
@@ -163,7 +175,7 @@ float4 PS(VOut i) : SV_Target {
 bool Decals::Init(std::string* error) {
   // (how much of the lying snow a mark takes is the mark's own: see `snowLying`)
   std::string source = std::string(gSceneSamples > 1 ? "#define MSAA 1\n" : "") + "static float markSnow = 1;\n#define SURFACE_SNOW markSnow\n" + kViewShaderBlock +
-                       RayShaders() + kLightingShaderBlock + kShader;  // (RayShaders: the small lights' shadows by rays)
+                       RayShaders() + kLightingShaderBlock + HotMetal::ShaderBlock() + kShader;  // (RayShaders: the small lights' shadows by rays; hot metal: hot_metal.h)
   gfx::PipelineDesc pd;
   pd.name = "decals";
   pd.vertexSource = pd.pixelSource = source;
@@ -188,6 +200,10 @@ bool Decals::Init(std::string* error) {
   pd.alphaWrite = false;
   normals_ = device_->CreatePipeline(pd, error);
   if (!normals_) return false;
+  pd.name = "hot marks on the ground";  // (hot metal: a fresh scorch's glow, added; the picture's alpha left alone)
+  pd.blend = gfx::Blend::Additive;
+  hot_ = device_->CreatePipeline(pd, error);
+  if (!hot_) return false;
   // a cube from -1 to 1, its faces wound counter-clockwise seen from outside
   std::vector<float> v;
   const Vec3 axes[3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
@@ -285,6 +301,7 @@ bool Decals::Add(const std::string& texture, Vec3 centre, float sizeX, float siz
       if (oldest) oldest->scarGone = born + 10;
     }
   }
+  if (hotMetal && IsScar(texture)) decals_.back().burn = true;  // (hot metal: its middle glows while fresh)
   decals_.back().snowAtBirth = settled_ ? snowFallen_ : snowFallen_ - 1;
   decals_.back().id = lastId_ = nextId_++;
   return true;
@@ -387,12 +404,26 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
     // (a light's brightness; a picture's 1 with its own relief; a normal decal's 1 when it is the visuals track's)
     n.glow = d.ramp ? glow : d.normal ? (d.ours ? 1.0f : 0.0f) : d.relief && !d.mark && !d.water ? 1.0f : 0.0f;
     visible_.push_back({d.texture.id, d.ramp.id, d.relief.id, d.water ? 4 : d.mark ? 3 : d.ramp ? 2 : d.normal ? 1 : 0, n});
+    // hot metal: a fresh scorch's or crater's middle glows over it (not under water, where it would only steam)
+    if (d.burn && hotMetal && heat && !overWater && !d.normal && !d.water && !d.mark && !d.ramp && d.centre.y > waterLevel) {
+      const float across = 2 * std::max(std::fabs(d.halfX), std::fabs(d.halfZ));
+      const float age = static_cast<float>(now - d.born), seconds = heat->CraterSeconds(across);
+      if (age < seconds) {
+        Instance h = n;
+        h.alpha = age;
+        h.age = seconds;
+        h.light = 6;
+        h.glow = static_cast<float>(d.id % 97);
+        visible_.push_back({d.texture.id, 0, 0, 5, h});
+      }
+    }
   }
   if (!overWater) marks_.clear();
   if (visible_.empty()) return;
   // pictures first, then lights; by texture; those of one texture keep the order they were made in
+  // (hot metal's glows, kind 5, after the lights and before the marks)
   std::stable_sort(visible_.begin(), visible_.end(), [](const Visible& a, const Visible& b) {
-    if (a.kind != b.kind) return a.kind < b.kind;
+    if (a.kind != b.kind) return (a.kind == 5 ? 2.5f : static_cast<float>(a.kind)) < (b.kind == 5 ? 2.5f : static_cast<float>(b.kind));
     if (a.texture != b.texture) return a.texture < b.texture;
     return a.ramp != b.ramp ? a.ramp < b.ramp : a.relief < b.relief;
   });
@@ -416,7 +447,7 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
     }
     if (bound != kind) {
       bound = kind;
-      device_->SetPipeline(kind == 2 ? lights_ : kind == 1 ? normals_ : pipeline_);  // (marks blend as pictures do)
+      device_->SetPipeline(kind == 5 ? hot_ : kind == 2 ? lights_ : kind == 1 ? normals_ : pipeline_);  // (marks blend as pictures do)
       device_->SetConstants(0, &view.constants, sizeof view.constants);
       device_->SetConstants(1, cameraConstants, sizeof cameraConstants);
       device_->SetTexture(1, sceneDepth);
