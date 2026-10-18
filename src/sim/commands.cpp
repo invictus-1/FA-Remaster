@@ -1429,6 +1429,7 @@ bool RemoveCommandFromUnit(Sim& sim, Unit* u, UnitCommand& c) {
   std::shared_ptr<UnitCommand> keep = q[i];
   if (i == 0) {  // the executing head: its task is interrupted (destructor abort -> AbortMove)
     const bool stopped = HeadTaskStopsMotion(u);  // a pod's task: its dtor's Stop is the last word
+    const bool asleep = ThreadAsleepOnMove(u);    // (asked before the teardown changes the head)
     EndMoveTaskRect(u);
     if (u->engageId) ClearEngagement(sim, u);
     if (u->task) {
@@ -1442,6 +1443,17 @@ bool RemoveCommandFromUnit(Sim& sim, Unit* u, UnitCommand& c) {
     pq.erase(std::remove(pq.begin(), pq.end(), u), pq.end());
     if (!stopped) MotionStop(u);
     SetMoving(u, false);
+    // CUnitCommandQueue::RemoveCommandFromQueue 0x6edef0, index 0: the queue tells its listeners event 3
+    // (0x6edf11..0x6edf1c) before the command goes; IAiCommandDispatchImpl::OnEvent 0x599030 takes events 2 and 3:
+    // the thread's frame count to 0 and, when it is suspended (a move task's ctor), re-linked at the stage's end
+    // (0x599050..0x599083), then the tasks above it are interrupted (0x408d70). A later order's removal (index > 0)
+    // sends event 1 only, which the dispatcher ignores. Seen: MP1 beat 4043, army 5's player takes the Guard off the
+    // heads of three UEF engineers whose guard walks were under way (0x500018, 0x500035, 0x50003c); in the original
+    // their threads then run after army 2's Cybran engineers (last re-linked 3743-3752), so at 4049 the three Cybran
+    // engineers' OnStartBuild forks (cconstructionunit.lua:94) come before the being-built effects of 0x50003c's new
+    // structure 0x50005d (effectutilitiesuef.lua:163): their target-point draws and Lua Random before its
+    // projectiles'. Ours kept 0x50003c where it was linked at 3436 (the random stream went apart at draw 240733).
+    if (asleep) sim.ResumeCommandThread(u);
   } else {
     q.erase(q.begin() + static_cast<long>(i));
     ReleaseCommandImpl(u, c);
