@@ -173,6 +173,12 @@ class WorldPicture {
   // anti-aliasing off (gSceneSamples 1 before Open), as SetTemporalUpscale; with it on, or where the device
   // cannot, nothing changes. Set before or after Open (from the next frame). Off as at first. A player's option.
   void SetFrameGeneration(bool on);
+  // Units seen behind trees, cliffs and buildings (World::hiddenOutlines, hidden_outlines.h): where a unit the player
+  // may see - his own, an ally's, an enemy's in sight, never one in the fog of war - is hidden behind leaves, props, a
+  // hill or a building, a faint thin outline in its strategic icon's colour shows where it is; it gives way to the
+  // strategic icons from afar. ON at first (Chris, 2026-10-17: readability); the modern look's (the original look has
+  // none). A player's option, set before or after Open. Cost at 1440p: docs/render-lighting.md, item 15.
+  void SetHiddenOutlines(bool on);
   // After Open (of any picture, the menu's too): whether this device has ray tracing (Direct3D 12 with DXR 1.1,
   // Vulkan with ray queries; never on the Mac), for greying SetRayTracing out where it would do nothing.
   bool RayTracingSupported() const;

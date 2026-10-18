@@ -82,6 +82,18 @@ class MeshRenderer {
   // (a frame drawn for something else in between: World::sidePicture).
   bool keepLast = false;
   void DrawMotion(const View& view, const Mat4& now, const Mat4& before);
+  // Hidden outlines (hidden_outlines.h): a mark (not 0) on the model just added, when it is `model` (Add left out
+  // nothing); the scene's pass keeps what it draws of the marked models. DrawMarked, after the scene's passes, draws
+  // that again (the same levels) by `view`, with the pipeline set and into the pass under way: those whose mark has
+  // `want` in the bits of `mask`, each with its mark's four bytes (the lowest first, 0..255) in its colour's place.
+  void MarkLast(const Model* model, uint32_t mark) {
+    if (mark && !entries_.empty() && entries_.back().model == model) {
+      entries_.back().mark = mark;
+      ++marks_;
+    }
+  }
+  void DrawMarked(const View& view, uint32_t mask, uint32_t want);
+  size_t MarkedDrawn() const { return markedItems_.size(); }
 
   // Level of detail is chosen by size on screen, not by distance: a model wishes for
   // `trianglesPerPixel` triangles for every pixel of the circle it covers and gets the level nearest
@@ -162,6 +174,7 @@ class MeshRenderer {
     int rows = -1;  // where its bones' rows begin in rows_ (Prepare)
     uint8_t flags = 0;  // Cull's
     uint32_t key = 0;   // Add's
+    uint32_t mark = 0;  // MarkLast's (hidden outlines)
   };
   Entry MakeEntry(const Model* model, const Mat4& world, Vec3 teamColor, float built, const Vec3* tint, const float* treads = nullptr) const;
   // (rows go to `out`: rowsOut_, or with motion on a copy kept on the processor first)
@@ -264,6 +277,9 @@ class MeshRenderer {
     float bones;
   };
   std::vector<MotionItem> motionItems_;  // what the scene's passes drew of the keyed models
+  std::vector<MotionItem> markedItems_;  // (hidden outlines) what they drew of the marked models
+  int marks_ = 0;                        // (hidden outlines) models marked this frame
+  bool markedSorted_ = false;
   struct LastInstance {
     float row0[4], row1[4], row2[4];
     float bones[4];  // x: where its bones of the frame before begin (-1: at rest); y: 1 = known

@@ -37,6 +37,7 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       bounce(device),
       blasts(device),
       debris(device, &textures),
+      outlines(device),
       clouds(device),
       motion(device),
       upscaler(device),
@@ -88,7 +89,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     }
   } batch{device_};
   if (!draw.Init(error) || !meshes.Init(error) || !particles.Init(error) || !ribbons.Init(error) || !decals.Init(error) || !icons.Init(error) ||
-      !ao.Init(error) || !air.Init(error) || !clouds.Init(error) || !motion.Init(error) || !post.Init(error) || !upscaler.Init(error) || !skyDraw.Init(error) || !falling.Init(error) || !sight.Init(error) || !shafts.Init(error) || !tracks.Init(error) || !wakes.Init(error) || !ranges.Init(error) || !placedDraw.Init(error) || !orders.Init(error)) {
+      !ao.Init(error) || !air.Init(error) || !clouds.Init(error) || !motion.Init(error) || !post.Init(error) || !upscaler.Init(error) || !skyDraw.Init(error) || !falling.Init(error) || !sight.Init(error) || !shafts.Init(error) || !tracks.Init(error) || !wakes.Init(error) || !ranges.Init(error) || !placedDraw.Init(error) || !orders.Init(error) || !outlines.Init(error)) {
     *error = "shader: " + *error;
     return false;
   }
@@ -375,6 +376,19 @@ void World::AddBrackets(int kind, Vec3 position, const Quat& orientation, const 
     const Vec3 at = position + Rotate(orientation, {sx * hx, 0, sz * hz});
     decals.AddMark(brackets_[kind][c], at, piece, piece, heading);
   }
+}
+
+void World::MarkOutline(const Model* model, Vec3 position, Vec3 color, bool building, uint32_t id, const StrategicIcons::Kind* kind) {
+  if (!outlinesNow_ || !model || !model->ok) return;
+  // (giving way to its strategic icon as that comes in, by the icons' own rule, StrategicIcons::Add)
+  const float away = Length(position - view.eye);
+  float icon = 0;
+  if (iconsOn && kind && kind->icon >= 0) {
+    const float from = kind->fadeIn * (1 - icons.fadeShare);
+    icon = kind->fadeIn > from ? Clamp((away - from) / (kind->fadeIn - from), 0, 1) : (away >= from ? 1.0f : 0.0f);
+  }
+  const float radius = Length(model->boundsMax - model->boundsMin) * 0.5f * model->scale;
+  meshes.MarkLast(model, outlines.Mark(color, building, id, outlines.Strength(radius, away, camera.fovY, icon)));
 }
 
 void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation, const Pose* pose, const Vec3* armyColor) {
@@ -853,6 +867,9 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     screenView_.constants.viewport[3] = 1.0f / static_cast<float>(screenHeight_);
   }
   icons.Begin(screenView_);
+  // units seen behind what hides them (hidden_outlines.h): marked as they are listed, this frame's
+  outlinesNow_ = hiddenOutlines && look == Look::Modern && !sidePicture && !photo && !camera.cinematic;  // (cinecam: no outlines on photos or a cinematic camera, as no icons)
+  outlines.Begin(screenWidth_, screenHeight_);
   // the resource deposits' icons, from where their marks on the ground are no longer drawn (cinecam: not for a
   // cinematic camera, which sees far over the ground: they would stand along the horizon)
   if (depositIcons && !camera.cinematic && !decals.Deposits().empty()) {
@@ -1522,6 +1539,10 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), color, built, asRemembered ? nullptr : &pose, hitAt,
                  model->scrolls && !hitAt ? u.treads : nullptr, u.id + 1);
       if (const WearLook* w = WearOf(u.id)) meshes.Wear(*w);  // (its battle scars and snow: unit_wear.h)
+      // (its outline where it is hidden, hidden_outlines.h: only what the player may see of it now - his own, an ally's,
+      // an enemy's in sight - and finished; never a building drawn as it was remembered)
+      if (outlinesNow_ && u.Seen() && !asRemembered && fractionComplete >= 1 && !allHidden)
+        MarkOutline(model, position, IconColor(u.Army(), color), building, u.id, u.blueprint < iconKinds_.size() ? iconKinds_[u.blueprint] : nullptr);
       if (u.fractionComplete >= 1 && u.Seen()) AddLamps(model, position, orientation, &pose, &color);
       // ripples where it floats, hovers or wades in the water (what the army sees)
       if (u.Seen() && !asRemembered) water.ripples.AddHull(u.id, position, orientation, model->boundsMin * model->scale, model->boundsMax * model->scale);
@@ -2200,6 +2221,11 @@ void World::Render() {
     if (temporalNow_ && post.BeginKept())
       sight.DrawBoundary(view, camera, post.Depth(), playable, static_cast<float>(map.width), static_cast<float>(map.height), look == Look::Modern && worldBeyond);
   }
+  if (outlinesNow_ && outlines.marked) {  // units seen behind what hides them (hidden_outlines.h): what of them is hidden
+    Stage("hidden outlines' masks");
+    outlines.SetGround(haveMap_ ? terrain.HeightTexture() : gfx::Texture{}, static_cast<float>(map.width), static_cast<float>(map.height), terrain.HeightUnit());
+    outlines.Masks(&meshes, screenView_, post.Depth(), view.width, view.height, camera.zNear, temporalNow_);
+  }
   Stage("finishing (exposure, bloom)");
   post.shown = !meshes.motion ? gfx::Texture{} : motionView == 5 ? post.Reactive() : motion.Check(motionView, view, post.Color());
   if (rayView && rays.Available() && !post.shown) {  // the ray tracing scene's check view (RaysReady above)
@@ -2248,6 +2274,10 @@ void World::Render() {
     framegenIn_.frameSeconds = frameSeconds_;
     framegenIn_.reset = framegenCut_;
     framegenReady_ = framegenIn_.hudless && framegenIn_.depth && framegenIn_.motion;
+  }
+  if (outlines.drawn && !post.shown) {  // the hidden units' outlines, on the finished picture (after frame generation's kept one)
+    Stage("hidden outlines");
+    outlines.Draw();
   }
   if (!sidePicture && !photo && (!orders.legs.empty() || !orders.marks.empty())) {  // the order lines, over the world, under the icons
     Stage("order lines");

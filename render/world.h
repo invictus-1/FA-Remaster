@@ -34,6 +34,7 @@
 #include "sky.h"
 #include "weather.h"
 #include "grass.h"
+#include "hidden_outlines.h"
 #include "camera.h"
 #include "cinecam.h"
 #include "dof.h"
@@ -101,6 +102,11 @@ class World {
   // `armyColor` (as armies' colours are given, screen values): what a unit's own glow (a light of
   // Kind 'hull') is drawn in; without it, in the list's colour.
   void AddLamps(const Model* model, Vec3 position, const Quat& orientation, const Pose* pose = nullptr, const Vec3* armyColor = nullptr);
+  // A unit's outline where it is hidden (hiddenOutlines, hidden_outlines.h), right after its `meshes.Add`. AddFrame
+  // calls it for the game's units the player may see; a host that adds units itself calls it beside `meshes.Add`.
+  // `color`: its strategic icon's; `building`: a structure (it hides the units behind it); `kind`: its strategic
+  // icon (null: none), which the outline gives way to as it comes in with the distance.
+  void MarkOutline(const Model* model, Vec3 position, Vec3 color, bool building, uint32_t id, const StrategicIcons::Kind* kind);
   // The unit under the mouse, marked with brackets of a kind: 1 the player's own or an ally's,
   // 2 an enemy's, 3 anyone else's; 0: none. (A selected unit has its own brackets.)
   uint32_t hover = 0xffffffffu;
@@ -445,6 +451,13 @@ class World {
     wear.snow = unitSnow;
     return look == Look::Modern && (unitScars || unitSnow) ? wear.Look(id, clock_) : nullptr;
   }
+  // Units seen behind trees and cliffs (hidden_outlines.h; docs/render-lighting.md, item 15): where a unit the player
+  // may see (his own, an ally's, an enemy's in sight; never one in the fog of war, nor a building only remembered) is
+  // hidden behind leaves, props, a hill or a building, a faint thin outline in its strategic icon's colour shows
+  // where it is. Modern look; ON by default (Chris via the interface session, 2026-10-17: readability); the
+  // original look has none, as the original game had none.
+  bool hiddenOutlines = true;
+  HiddenOutlines outlines;
   Clouds clouds;
   // Soft shadows (lighting.h, SunShadow; the lighting upgrade): the sun's shadows sharper near what casts
   // them and blurred farther off, as a sun that is not a point makes them. Modern look; off by default.
@@ -687,6 +700,7 @@ class World {
   bool lensSnap_ = false;    // (cinecam: the camera jumped this frame: the lens's focus at once)
   bool blastsNow_ = false, grassBlasts_ = false;  // (blasts' waves or dust under way this frame; their field over the grass)
 
+  bool outlinesNow_ = false;  // (hidden outlines this frame)
  public:
   EnergyShields energy;  // [energy shields] (last: the other members keep their places)
 };

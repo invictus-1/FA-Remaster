@@ -106,6 +106,8 @@
 //           not known has left (0..1, 1: the effects stand's), to see it weakened; --energy-test n: without a game, n
 //           shield generators of the four factions in two rows round where the camera starts, overlapping, each hit
 //           every --fx-hit-every seconds (0.8) from above, their shields at different strengths (to look and to time)
+// --no-hidden-outlines  no outlines of units hidden behind trees, cliffs and buildings (World::hiddenOutlines,
+//           hidden_outlines.h: on unless this is given, in the modern look); --hidden-outlines: on (as at first)
 // --battle-scars  the scorches and craters scripts lay stay, weathering, up to a most (World::battleScars);
 //           --scar-test n[,radius]: n of the game's scorches laid at random round where the camera starts (within
 //           radius, 40), as scripts lay them (a minute's time each), as if over the last twenty minutes: to see
@@ -422,6 +424,7 @@ struct Options {
   int energyTest = 0;                   // --energy-test
   bool unitScars = false, unitSnow = false;  // --unit-scars, --unit-snow
   std::string wearTest;                 // --wear-test
+  bool hiddenOutlines = true;           // --no-hidden-outlines, --hidden-outlines
   int scarTest = 0;                     // --scar-test
   bool orderTest = false;               // --order-test
   float scarRadius = 40;
@@ -568,6 +571,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--energy-shields") o->energyShields = true;
     else if (a == "--unit-scars") o->unitScars = true;
     else if (a == "--unit-snow") o->unitSnow = true;
+    else if (a == "--hidden-outlines") o->hiddenOutlines = true;
+    else if (a == "--no-hidden-outlines") o->hiddenOutlines = false;
     else if (a == "--order-test") o->orderTest = true;
     else if (a == "--frame-generation") o->frameGeneration = true;
     else if (a == "--capture-between") o->captureBetween = true;
@@ -1018,6 +1023,7 @@ int main(int argc, char** argv) {
     picture.SetUpscale(opt.upscale);        // (--fsr)
     picture.SetTemporalUpscale(opt.fsr3);   // (--fsr3)
     picture.SetRayReflections(opt.rayReflections);  // (--ray-reflections)
+    picture.SetHiddenOutlines(opt.hiddenOutlines);  // (--no-hidden-outlines)
     if (opt.timeOfDay >= 0) picture.SetDayAndWeather(opt.timeOfDay, opt.dayLength, opt.weather == "auto");  // (--picture: the hour and the weather through the pixel interface)
     setup.modUids = opt.modUids;
     if (!live.Open(setup, &error)) {
@@ -1117,6 +1123,7 @@ int main(int argc, char** argv) {
   world.unitScars = opt.unitScars;
   world.models.hitShapes = opt.unitScars;  // (units' models keep their triangles for where hits lie: unit_wear.h)
   world.unitSnow = opt.unitSnow;
+  world.hiddenOutlines = opt.hiddenOutlines;
   world.frameGeneration = opt.frameGeneration;
   device->captureBetween = opt.captureBetween;
   if (opt.sunSize > 0) world.sunSize = opt.sunSize;
@@ -1374,6 +1381,7 @@ int main(int argc, char** argv) {
     const StrategicIcons::Kind* icon;
     int turned = -1;               // --turn: the bone it turns
     std::vector<FrameBone> bones;  // this frame's pose
+    bool building = false;         // a structure (its id's third letter b, as the game names them)
   };
   std::vector<PlacedUnit> placedUnits;
   // --animate: one of the game's animations (.sca: per frame every bone's place and turn against
@@ -1420,6 +1428,7 @@ int main(int argc, char** argv) {
       p.y = haveMap ? map.Height(p.x, p.z) : 0;
       if (haveMap && map.water.present) p.y = std::max(p.y, map.water.elevation);
       PlacedUnit placed{model, p, icons.ForBlueprint(models.UnitBlueprintPath(id)), -1, {}};
+      placed.building = id.size() > 2 && (id[2] == 'b' || id[2] == 'B');
       if (opt.listBones && (placedUnits.empty() || placedUnits.back().model != model)) {
         printf("render: %s: %zu bones:", id.c_str(), model->bones.size());
         for (size_t i = 0; i < model->bones.size(); ++i) printf(" %zu %s", i, model->bones[i].name.c_str());
@@ -2375,6 +2384,7 @@ int main(int argc, char** argv) {
       meshes.Add(u.model, Mat4::FromTRS(u.position, Quat{}, u.model->scale), kArmyColors[0], opt.shielded ? 3.0f : opt.built, posed ? &pose : nullptr);
       if (const WearLook* w = world.WearOf(0x40000000u | static_cast<uint32_t>(&u - placedUnits.data()))) meshes.Wear(*w);  // (--wear-test)
       world.AddLamps(u.model, u.position, Quat{}, posed ? &pose : nullptr, &kArmyColors[0]);
+      world.MarkOutline(u.model, u.position, kArmyColors[0], u.building, static_cast<uint32_t>(&u - placedUnits.data()), u.icon);  // (as the player's own)
       icons.Add(u.icon, u.position, kArmyColors[0]);
     }
     if (!drivers.empty()) {  // --tracks-test: round their loops, their treads laid as they go
@@ -2680,6 +2690,7 @@ int main(int argc, char** argv) {
         printf("; wear: %d units known, hits %d told, %d by shots seen to stop, %d by beams, %d by blasts near, %d unseen; %d marks made, %d heals",
                world.wear.known(), world.wear.toldHits, world.wear.shotHits, world.wear.beamHits, world.wear.blastHits, world.wear.unseenHits,
                world.wear.marksMade, world.wear.heals);
+      if (world.outlines.marked) printf("; %d units marked for hidden outlines%s", world.outlines.marked, world.outlines.drawn ? "" : " (none drawn)");
       if (opt.debug) printf("; %d lamps with shadows", world.lampShadowsDrawn);
       if (haveLive && opt.debug) {  // (where to look for them)
         printf("; %d emitter curves set by scripts", effects.curvesSet);

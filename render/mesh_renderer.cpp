@@ -890,6 +890,9 @@ bool MeshRenderer::Init(std::string* error) {
 
 void MeshRenderer::Begin() {
   motionItems_.clear();
+  markedItems_.clear();  // (hidden outlines)
+  marks_ = 0;
+  markedSorted_ = false;
   entries_.clear();
   culls_.clear();
   groupsListed_.clear();
@@ -1243,6 +1246,9 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
   if (motion && !shadowPass && !glass)  // (the keyed models the scene draws, for DrawMotion)
     for (const Item& item : items_)
       if (item.entry->key) motionItems_.push_back({item.lod, item.entry, item.bones});
+  if (marks_ && !shadowPass && !glass)  // (hidden outlines: the marked models the scene draws, for DrawMarked)
+    for (const Item& item : items_)
+      if (item.entry->mark) markedItems_.push_back({item.lod, item.entry, item.bones});
   DrawItems(view, environment, shadowPass, glass);
   CpuTimes::Part(outer);
 }
@@ -1506,6 +1512,35 @@ void MeshRenderer::DrawMotion(const View& view, const Mat4& now, const Mat4& bef
     device_->SetConstants(3, lastBatch_.data(), static_cast<uint32_t>(n * sizeof(LastInstance)));
     device_->DrawIndexed(lod->indexCount, 0, 0, static_cast<uint32_t>(n));
     at += n;
+  }
+}
+
+// Hidden outlines (hidden_outlines.h): the marked models the scene drew, again, as DrawMotion draws the keyed ones.
+void MeshRenderer::DrawMarked(const View& view, uint32_t mask, uint32_t want) {
+  if (markedItems_.empty()) return;
+  if (!markedSorted_) {  // by level, so that each level's instances go together (once a frame)
+    std::stable_sort(markedItems_.begin(), markedItems_.end(), [](const MotionItem& a, const MotionItem& b) { return a.lod < b.lod; });
+    markedSorted_ = true;
+  }
+  device_->SetShaderBuffer(boneBuffer_);
+  device_->SetConstants(0, &view.constants, sizeof view.constants);
+  for (size_t at = 0; at < markedItems_.size();) {
+    const ModelLod* lod = markedItems_[at].lod;
+    size_t n = 0;
+    while (at < markedItems_.size() && markedItems_[at].lod == lod && n < kMaxInstances) {
+      const MotionItem& item = markedItems_[at++];
+      const uint32_t mark = item.entry->mark;
+      if ((mark & mask) != want) continue;
+      batch_[n] = item.entry->instance;
+      batch_[n].bones[0] = item.bones;
+      for (int k = 0; k < 4; ++k) batch_[n].color[k] = static_cast<float>((mark >> (8 * k)) & 0xffu);
+      ++n;
+    }
+    if (!n) continue;
+    device_->SetVertexBuffer(lod->vertices);
+    device_->SetIndexBuffer(lod->indices);
+    device_->SetConstants(2, batch_.data(), static_cast<uint32_t>(n * sizeof(Instance)));
+    device_->DrawIndexed(lod->indexCount, 0, 0, static_cast<uint32_t>(n));
   }
 }
 

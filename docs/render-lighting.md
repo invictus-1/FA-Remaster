@@ -725,9 +725,32 @@ work is not starved of the processor).
    shock ring through the clouds, a mushroom cloud. After item 2 (it shares the smoke's lighting).
 14. **Zooming out through the clouds (a trial)**: the strategic zoom rises through the volumetric clouds, which thin
    out so the map stays readable.
-15. **Units seen behind trees and cliffs**: a faint outline in the army's colour where a unit is hidden.
+15. **Units seen behind trees and cliffs (done, first version, 2026-10-18; ON by default):** `World::hiddenOutlines`
+   (`hidden_outlines.h`; viewer `--no-hidden-outlines` / `--hidden-outlines`; `WorldPicture::SetHiddenOutlines`).
    ON by default (Chris via the interface session, 2026-10-17: readability), and only for what the player may
-   see: his own, allied units, enemies in sight, never an enemy in the fog.
+   see: his own, allied units, enemies in sight, never an enemy in the fog. Where such a unit's surface lies behind
+   the scene's depth (leaves, props, a hill, a building), a thin line (1.5 pixels at 1080 lines, the same share of
+   any screen's height) in its strategic icon's colour runs round its hidden part, and a fainter fill lies inside;
+   unlit, laid on the finished picture. Only the hidden part: where the unit shows, nothing; a unit's own parts
+   never hide it (each pixel keeps the nearest unit's surface in a depth of its own, drawn again at the screen's
+   size from the levels the scene drew). Two layers, units that move and buildings: a tank behind a factory is
+   outlined, a factory behind a tank is not; a building behind another building is not either. What of a unit lies
+   in the ground or less than 0.12 over it (a foot on a slope) is buried, not hidden: no line along every foot.
+   Which units: AddFrame's that are seen now (`FrameUnit::Seen`), finished, not wholly hidden by their script, and not
+   a building drawn as it was remembered in the fog. Fades by the unit's size on the screen (gone below 8 pixels
+   across at 1080 lines, whole from 18; a tank on the rebuilt Seton's fades from about 70 world units from the eye)
+   and gives way to its strategic icon as that comes in (130 units for most). The original look has none. Drawn
+   after FSR 1 / FSR 3 at the screen's size by the view without the jitter (crisp, not smeared by the temporal
+   upscaler); against the scene's depth, the farthest of its samples counts (4x MSAA), and where the scene is drawn
+   smaller or shifted (FSR) the farthest of the four scene pixels round the place, so that a unit's own nearer part
+   in a coarse pixel never counts as hiding it; a speck (a hidden pixel with fewer than two of the same unit's hidden
+   pixels round it) is not shown. Frame generation takes the outlines as it takes the icons (drawn after
+   `Post::KeepFinished`: never smeared along the trees, taken from the frame after). Both backends; FXC as DXC.
+   Cost at 1440p, 200 tanks in a forest of the rebuilt Seton's (lowest times; masks + outlines laid): Direct3D 12 with
+   4x MSAA 0.050 + 0.010 ms, Vulkan 0.063 + 0.013 ms, FSR 3 quality 0.047 + 0.010 ms; the processor about 0.04 ms;
+   the first frame makes its three targets (screen-sized: two RGBA8, one D32; 44 MB at 1440p; +7 ms once). Off:
+   pictures identical (regression 0 px on both backends); on, the regression's scenes (nothing hides the
+   commander) are identical too; in the original look nothing changes.
 16. **Dust, spray and contrails**: vehicles raise dust on dry ground, hover units throw spray, high aircraft draw
    contrails. After items 2 and 3 (shared particles and dust).
 17. **Life in the world**: flocks of birds over the forests that scatter when fighting comes near; fireflies at dusk;
@@ -739,7 +762,8 @@ work is not starved of the processor).
 
 ## The options
 
-Each is off by default and, off, leaves the picture as it was, pixel for pixel. All are the modern look's. A
+Each is off by default (but `hiddenOutlines`, on: Chris's word, item 15) and, off, leaves the picture as it was, pixel
+for pixel. All are the modern look's. A
 host sets them on the world (`WorldPicture::world()`) at any time, except reflections (below). Costs at 1440p
 on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections above:
 
@@ -764,6 +788,7 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `heatShimmer` | the air bends over fires, exhausts and fresh explosions | about 0.04-0.1 ms in a fight | |
 | `blastWaves`, `blastDust`, `blastDebris` | explosions press the grass flat and bend trees in a running ring, kick up dust, throw chunks that lie as rubble | about 0.03-0.09 ms in a fight | |
 | `waterRipples` | the water reacts: shells, ships, hover and wading units leave rings and wakes that spread and fade | about 0.04-0.05 ms near water (24 MB of the card's memory once on) | a map with water |
+| `hiddenOutlines` (ON) | a thin line in the army's colour round a unit's part hidden behind trees, hills or buildings | 0.06-0.08 ms (200 tanks in a forest) | |
 
 Ray tracing means Direct3D 12 with DXR 1.1 or Vulkan with ray queries: never on the Mac (MoltenVK has none);
 where it is missing those options do nothing. `rayReflections` builds the surfaces' shaders with ray
@@ -784,6 +809,7 @@ so there is less clutter). WorldPicture sets each bundle's options together, bef
 | `SetWeatherEffects` | `litRain`, `rainSplashes`, `waterDetail` | about +0.05 ms in rain, +0.04 by water |
 | `SetGroundDetail` | `groundCover`, `battleScars`, `leafLight` | +0.05 to 0.16 ms zoomed in, nothing far out; scars up to +0.56 ms with 2000 in view |
 | `SetFrameGeneration` | `frameGeneration` (a sixth setting, asked of the ui: "Frame Generation") | 1.1-1.4 ms a frame drawn; twice the frames shown |
+| `SetHiddenOutlines` | `hiddenOutlines` (readability, not light: its own setting, ON at first; proposed to the ui as "Hidden Unit Outlines") | 0.06-0.08 ms |
 
 Proposed (2026-10-18, the interface's wish): a seventh setting, "Battle Effects" (`WorldPicture::SetBattleEffects`, not
 made yet), for the looks of the fighting that come next: `energyShields` first (+0.07 to 0.16 ms with ten bubbles under
