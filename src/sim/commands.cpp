@@ -650,6 +650,16 @@ void EndPatrol(Sim& sim, Unit* u, BuildTask& t) {
 // units still on it. The patrol's reclaim child listens to the same command (ReclaimTaskCommandEvent, build.cpp).
 // NOT MODELLED: the attack and repair children's listeners (0x5f4000, 0x5f9d60). (A reclaim child's walk under way
 // ends with the wake: TickPropReclaim.)
+// The reclaim child's listener wakes the thread (0x620238..0x62026d, read): the frame count (+0x14) 0 and, when the
+// thread is suspended (+0x18, set by its walking child's move task: CUnitMoveTask's ctor), re-linked at the stage's
+// end, as the move task's navigator listener 0x618bb0 does (NavEventWakesCommandThread). The move task's own command
+// listener 0x618c40 and the patrol's 0x61c3e0 only re-goal and re-link nothing (read). The command tells its
+// listeners from the oldest linked on (0x6e94cf starts at the list head's +4; a link as in the move task's ctor,
+// 0x6182f6..0x618315, puts a new listener at the head's +0); ours goes by unit id (the same order here).
+// Seen (probe mp1_3150): MP1 beat 3149, army 7's player drags its engineers' AggressiveMove waypoint; at 3150
+// 0x70003d and 0x70004f (reclaiming, awake) run first, then 0x700027, 0x700042 and 0x70004a, whose reclaim walks the
+// event ended, in that order; at 3156 their patrol legs take the free spots by PrepareMove in that thread order.
+// Ours kept 0x700027 first (last re-linked 3041) and the five took each other's cells (MP1 3158).
 void RetargetPatrolTasks(Sim& sim, UnitCommand& c) {
   if (!IsPatrolType(c.type) || c.form) return;
   std::vector<Unit*> holders(c.units.begin(), c.units.end());
@@ -666,8 +676,10 @@ void RetargetPatrolTasks(Sim& sim, UnitCommand& c) {
     PatrolSearchBox(sim, u, p);
     BuildTask* ch = p.child;
     if (ch && ch->type == CommandType::Reclaim && !ch->pdata && !ch->gdata && !ch->adata) {
+      const bool asleep = TaskThreadAsleepOnMove(u, ch);  // (asked before the event changes the child)
       ReclaimTaskCommandEvent(sim, u, *ch, c);
       p.childFrom = 0;  // (the listener wakes the thread: counter 0)
+      if (asleep) sim.ResumeCommandThread(u);
     }
   }
 }
