@@ -81,10 +81,24 @@ Vec3 Right(const Quat& q) {
 Vec3 Up(const Quat& q) {
   return {2 * (q.x * q.y - q.w * q.z), 1 - 2 * (q.x * q.x + q.z * q.z), 2 * (q.y * q.z + q.w * q.x)};
 }
-Vec3 RotY(float a, const Vec3& v) {  // MultQuadVec with (cos a, 0, sin a, 0): a rotation by 2a about +y
-  Quat q;
-  q.w = std::cos(a);
-  q.y = std::sin(a);
+// The four turns ResolvePossibleCollision applies (0x5976f3..0x597713): quaternions (cos a, 0, sin a, 0), each a
+// rotation by 2a about +y, made once by static initialisers (0xbcbbd0, 0xbcbc30, 0xbcbc90, 0xbcbcf0) from the float
+// angles -pi/4, pi/4, -pi/8, pi/8 (0xe4fa28, 0xe4f8b0, 0xe4fa2c, 0xe4f970: 0x3f490fdb / 0x3ec90fdb with their signs)
+// with x87 fcos / fsin (0x5734d0 / 0x5734e0) stored as floats. Ours had worked them out from 0.785398f / 0.392699f,
+// three float steps short of those angles, so its sines and cosines were two steps off. Seen: MP3 3528, army 2's
+// hover engineer 0x200020 side-steps (Generate mode 2); its target's x was one float step from the original's
+// (0x423cf829 / 0x423cf82a), the batch's facings 1e-6 rad apart, and the unit (army 0's 0x70 after a transfer) a
+// float step off from then on, which at 4916 made the navigator of 0x72 see its cell taken.
+struct TurnY {
+  float w, y;
+};
+constexpr TurnY kTurnMinusQuarterPi{0x1.6a09e6p-1f, -0x1.6a09e6p-1f};  // 0x10ae1cc (cos 0x3f3504f3, sin 0xbf3504f3)
+constexpr TurnY kTurnQuarterPi{0x1.6a09e6p-1f, 0x1.6a09e6p-1f};        // 0x10ae278
+constexpr TurnY kTurnMinusEighthPi{0x1.d906bcp-1f, -0x1.87de2cp-2f};   // 0x10ae1dc (cos 0x3f6c835e, sin 0xbec3ef16)
+constexpr TurnY kTurnEighthPi{0x1.d906bcp-1f, 0x1.87de2cp-2f};         // 0x10ae288
+// 0x452d40: the quaternion as a matrix (0x452fd0), then each row times v (v.x m0 + v.y m1 + v.z m2): for (w, 0, y, 0)
+// the terms below, the zero ones dropped
+Vec3 RotY(const TurnY& q, const Vec3& v) {
   Vec3 f{2 * q.w * q.y * v.z + (1 - 2 * q.y * q.y) * v.x, v.y, (1 - 2 * q.y * q.y) * v.z - 2 * q.w * q.y * v.x};
   return f;
 }
@@ -819,9 +833,9 @@ int Resolve(Sim& sim, Unit* Y) {
   } else {
     Vec3 d = Sub(Y->position, X->position);
     float cy = d.z * vXn.x - d.x * vXn.z;
-    float a = cy > 0 ? (sfl ? -0.392699f : -0.785398f) : (sfl ? 0.392699f : 0.785398f);
+    const TurnY& turn = cy > 0 ? (sfl ? kTurnMinusEighthPi : kTurnMinusQuarterPi) : (sfl ? kTurnEighthPi : kTurnQuarterPi);
     B = pY;
-    s = RotY(a, vXn);
+    s = RotY(turn, vXn);
   }
   Vec3 T = Add(B, Scale(s, clr));
   // FindFreeSpot 0x62b200 only gates the side-step: when it finds no room (0x597798) the record stays as it is.
