@@ -40,6 +40,12 @@ struct SpirvShader {
 bool CompileSpirv(const std::string& source, const char* entry, const char* stage, const std::string& cacheDir, SpirvShader* out,
                   std::string* error);
 
+// Whether DXC is there, without loading it: on Windows a dxcompiler.dll beside the program (the only place it is
+// loaded from). Direct3D 12 decides by it, once, which compiler all its shaders come from: CompileDxil takes kept
+// shaders from the cache even where DXC is missing, and a program that switched to Direct3D's own compiler at
+// its first shader not kept would draw with a mix of both, different from run to run as the cache fills.
+bool DxcPresent();
+
 // Compiles `source` at `entry` for `stage` ("vs", "ps" or "cs") into DXIL, shader model 6.0, for Direct3D 12,
 // signed (by DXC itself, or by an older DXC's dxil.dll beside the program). Kept in `cacheDir` as
 // CompileSpirv's. False with the compiler's messages in `error`; `missing` is set when that is because DXC
