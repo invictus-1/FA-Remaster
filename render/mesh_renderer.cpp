@@ -596,8 +596,11 @@ float4 Shade(VOut i, bool front) {
       }
       emission += glow * (falling.w > 0 ? falling.w : 1);
     }
+    // leaves: some of the light that falls on their far side comes through (World::leafLight: deeper in colour and
+    // stronger toward an eye that looks at the sun through them, LeafLight; without it as at first, below)
+    if (kind2.y > 0.5 && leaves.x > 0.5) emission += LeafLight(base, LeafThrough(N, toCamera), i.world, shadow, spec.a);
     float3 lit = ModernLight(base, metallic, roughness, occlusion, emission, N, i.world, shadow);
-    if (kind2.y > 0.5) {  // leaves: some of the light that falls on the far side comes through
+    if (kind2.y > 0.5 && leaves.x < 0.5) {  // leaves: some of the light that falls on the far side comes through
       float3 falls = ToLinear(sunColor) * (lightMultiplier * modern.x);
       lit += base * falls * (saturate(dot(-N, sunDirection)) * shadow * CloudShadow(i.world) * spec.a * 0.6);
     }

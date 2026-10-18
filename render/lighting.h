@@ -228,6 +228,24 @@ float3 SmallLights(float3 world, float3 N, float3 V, float3 diffuseColor, float3
   return small;
 }
 
+// Light through leaves (World::leafLight, the view's leaves; 0 when it is off): a leaf, a grass blade or a plant is
+// thin, so of the sun's light that falls on its far side some comes through to the side the eye sees, deeper in
+// colour (it has passed through the leaf: its colour taken twice over, kept as bright in its strongest channel),
+// and more of it toward an eye that looks toward the sun through it (leaves scatter the light they let through
+// forward). `N`: the way the side the eye sees faces; `thin`: how much it lets through (0..1). What it returns is
+// added as light of its own (ModernLight's `emission`, so the air dims it as the rest).
+float LeafThrough(float3 N, float3 toCamera) {
+  float back = saturate(dot(-N, sunDirection));
+  float forward = pow(saturate(dot(-toCamera, sunDirection)), 8);
+  return back * (1 + 2 * forward);
+}
+float3 LeafLight(float3 albedo, float through, float3 world, float shadow, float thin) {
+  [branch] if (leaves.x < 0.5 || through <= 0) return 0;
+  float3 falls = ToLinear(sunColor) * (lightMultiplier * modern.x);
+  float3 deep = albedo * albedo / max(max(albedo.r, max(albedo.g, albedo.b)), 0.02);
+  return deep * falls * (through * shadow * CloudShadow(world) * thin * leaves.y);
+}
+
 // The modern light on a surface. `albedo` is linear; `occlusion` dims the sky's light (1: open).
 // Returns linear colour, unbounded.
 float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusion, float3 emission, float3 N, float3 world, float shadow) {

@@ -52,6 +52,7 @@ struct VOut {
   float3 normal : TEXCOORD2;
   float up : TEXCOORD3;       // 0 at the foot, 1 at the tip
   float shadow : TEXCOORD4;
+  float through : TEXCOORD5;  // the sun's light through the blade (World::leafLight; lighting.h, LeafThrough)
 };
 
 // (level along the blade: 0 the foot .. 3 the tip; side 0 / 1)
@@ -64,7 +65,7 @@ VOut VS(uint id : SV_VertexID) {
   VOut o;
   o.position = float4(0, 0, -1, 1);  // (no blade: behind the eye)
   o.world = o.colour = o.normal = 0;
-  o.up = o.shadow = 0;
+  o.up = o.shadow = o.through = 0;
   uint blade = id / 15, corner = id % 15;
   uint tuft = blade / 3, k = blade % 3;  // (three blades a cell, from close roots)
   uint side = uint(area.w);
@@ -117,12 +118,16 @@ VOut VS(uint id : SV_VertexID) {
   n.y = sqrt(saturate(1 - dot(n.xz, n.xz)));
   o.normal = normalize(n + float3(face.x, 0, face.y) * 0.3);
   o.shadow = SunShadow(root + float3(0, height * 0.5, 0), n);
+  // the sun's light through it (World::leafLight): the side the eye sees faces it; thinner, more toward the tip
+  float3 toEye = normalize(cameraPosition - p), faceWay = float3(face.x, 0, face.y);
+  o.through = leaves.x > 0.5 ? LeafThrough(dot(faceWay, toEye) < 0 ? -faceWay : faceWay, toEye) * (0.4 + 0.6 * v) : 0;
   return o;
 }
 
 float4 PS(VOut i) : SV_Target {
   float occlusion = lerp(0.65, 1, i.up);  // (darker down among the blades)
-  return float4(ModernLight(i.colour, 0, 0.85, occlusion, 0, normalize(i.normal), i.world, i.shadow), 1);
+  float3 through = LeafLight(i.colour, i.through, i.world, i.shadow, 0.8);
+  return float4(ModernLight(i.colour, 0, 0.85, occlusion, through, normalize(i.normal), i.world, i.shadow), 1);
 }
 )hlsl";
 
@@ -283,7 +288,10 @@ float4 PS(VOut i) : SV_Target {
   float3 card = normalize(i.right * t.x + i.up * t.y + i.toward * sqrt(saturate(1 - dot(t, t))));
   float3 n = normalize(lerp(i.ground, card, 0.5));  // (the card's own normals at half strength: the visuals track's advice)
   float occlusion = lerp(0.7, 1, saturate(i.shade.y));
-  return float4(ModernLight(ToLinear(c.rgb), 0, 0.85, occlusion, 0, n, i.world, i.shade.x), 1);
+  // (the sun's light through its leaves, World::leafLight: by the card's own way, the side the eye sees)
+  float3 albedo = ToLinear(c.rgb);
+  float3 through = LeafLight(albedo, LeafThrough(card, normalize(cameraPosition - i.world)), i.world, i.shade.x, 0.7);
+  return float4(ModernLight(albedo, 0, 0.85, occlusion, through, n, i.world, i.shade.x), 1);
 }
 )hlsl";
 

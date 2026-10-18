@@ -987,10 +987,16 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
         const float h = tu->maxHealth * m;
         if (h != tu->health) EntityAdjustHealth(L, tu, u, h - tu->health);
       } else {
+        // a prop (0x61ff52..0x61ffbe): Prop::Materialize 0x6fa180 by the step, which moves the fraction only
+        // (clamped to [0, 1]; the step is negative) and gives back the change; the prop's health stays as it is. FAF's
+        // Prop.UpdateReclaimLeft counts health / MaxHealth x fraction, so a tree group partly reclaimed and then split
+        // (TreeGroup.OnDamage -> Breakup -> SplitOnBonesByName) hands its fraction to its trees once, not twice. Seen:
+        // MP1 3218, army 3's engineer 0x20001a reclaims a split tree (pine06_big_s3) in one beat: the original pays
+        // 1.0714 E 0.1071 M, ours paid 0.2009 E 0.0201 M, 0.1875 = 3/16 times less again (inferred: its group had 3
+        // of 16 steps left when it split, and ours had brought the group's health down with its fraction, so the
+        // script's ReclaimLeft was 0.1875 x 0.1875). Its ally army 5 gets half of army 3's overflowing energy.
         f = std::clamp(old - c.reclaimStep * k, 0.0f, 1.0f);
         e->fractionComplete = f;
-        float h = e->maxHealth * f;
-        if (h != e->health) EntityAdjustHealth(L, e, u, h - e->health);
       }
       float taken = old - f;
       u->workProgress = 1.0f - f;
@@ -2891,6 +2897,38 @@ void GuardRepairChildrenCommandEvent(Sim& sim, UnitCommand& c, Unit* self) {
   }
 }
 
+// The guard's walk next to G (state 0: NewMoveTask 0x6190a0 from TaskTick 0x614549 with no command and +0x94 = 0)
+// is a CUnitMoveTask that links the queue's head command, the Guard order itself (ctor 0x6180e0: task+0x88 from
+// unit+0x4b4's first command, its listener +0x54 in cmd+0x34). The same SetTarget event (0x6e8820 -> 0x6e94a0)
+// therefore reaches it: CUnitMoveTask::OnEvent 0x618c40 (read) with +0x94 and +0x95 clear hands its navigator the
+// command's position for the unit (CUnitCommand::GetPosition 0x6e8a30, the new target's place in the unit's footprint
+// cell, SNavGoal 0x5a2cb0, SetGoal vt+8; no speed-through change), whatever the anchor was. GetPosition asks the target
+// for its point with the centre flag clear (0x6e8a6a): a structure's target bone, not its origin. (Probe mp2_4910:
+// the original's goal for both is the cell (247, 416); the structure's origin gave (247, 418).) Seen: MP2 4909, army 0's
+// engineers 0x93 and 0xa5 walk to their anchors by a structure whose upgrade another guard of the same order hands
+// over; the original's walks turn toward the new unit at once (speed-through 1 from 4910: the new path's first
+// waypoint is not in the goal); ours walked on to the old anchors. (Land navigators only: an air walk's SetGoal is
+// not modelled here.) The listeners are told in the command's listener order; ours goes by unit id (inferred).
+void GuardWalksCommandEvent(Sim& sim, UnitCommand& c) {
+  if (c.type != CommandType::Guard) return;
+  std::vector<Unit*> holders(c.units.begin(), c.units.end());
+  std::sort(holders.begin(), holders.end(), [](const Unit* a, const Unit* b) { return a->id < b->id; });
+  for (Unit* h : holders) {
+    if (!Alive(h) || h->commands.empty() || h->commands.front().get() != &c) continue;
+    BuildTask* gt = h->task;
+    if (!gt || !gt->gdata || !gt->gdata->childMove || gt->gdata->child) continue;
+    if (!h->motion.bp || !h->motion.bp->mobile() || !h->motion.nav) continue;
+    Vec3 p = c.pos;
+    if (!FormationGoal(sim, c, h, &p)) p = CommandPosGun(sim, c);  // (the target's target point)
+    const NamedFootprint& fp = Fp(h);
+    const int cx = static_cast<int>(std::nearbyint(p.x - fp.sizeX * 0.5f));
+    const int cz = static_cast<int>(std::nearbyint(p.z - fp.sizeZ * 0.5f));
+    const Vec3 goal{cx + fp.sizeX * 0.5f, p.y, cz + fp.sizeZ * 0.5f};
+    h->motion.arrived = h->motion.failed = false;
+    MotionSetGoal(sim, h, std::vector<Vec3>{goal}, h->motion.nav->speedThroughGoal, sim.tick());
+  }
+}
+
 // CUnitGuardTask::TaskTick 0x6141a0
 int TickGuard(Sim& sim, lua_State* L, Unit* U, BuildTask& t) {
   (void)L;
@@ -2955,6 +2993,7 @@ int TickGuard(Sim& sim, lua_State* L, Unit* U, BuildTask& t) {
           // two after it already hold 0x30004d. Ours retargeted all three (three draws).
           RefreshGuardTasks(sim, *c);
           GuardRepairChildrenCommandEvent(sim, *c, U);
+          GuardWalksCommandEvent(sim, *c);
         }
   }
   U->unitStates.erase("GuardBusy");

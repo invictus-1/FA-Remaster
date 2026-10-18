@@ -365,6 +365,10 @@ class World {
   // Battle scars (decals.h, Decals::battleScars): the scorches and craters of the fighting stay on the ground,
   // weathering, up to a most for cost. Off by default (the game's own times).
   bool battleScars = false;
+  // Light through leaves (lighting.h, LeafLight): the sun's light that falls on the far side of leaves, grass
+  // blades and the plants comes through, deeper in colour, and glows toward an eye that looks toward the sun through
+  // them (without it leaves let some through, plainly, and grass and plants none). Modern look; off by default.
+  bool leafLight = false;
   Clouds clouds;
   // Soft shadows (lighting.h, SunShadow; the lighting upgrade): the sun's shadows sharper near what casts
   // them and blurred farther off, as a sun that is not a point makes them. Modern look; off by default.

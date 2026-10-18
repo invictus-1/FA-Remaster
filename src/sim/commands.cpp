@@ -744,6 +744,16 @@ void StartHead(Sim& sim, Unit* u) {
       u->headState = kRunning;
       return;
     }
+    if (c.type == CommandType::Guard) {
+      // DispatchTask's Guard case (0x609775): an order whose target is none (CAiTarget::HasTarget 0x5e2a10: no live
+      // entity and no place) makes no task and goes the way of Stop (0x6097b8 -> 0x60a490): the attacker's Stop
+      // (0x60a49e), the order is done (dispatcher +0x2c = 1), the motion is left alone. Seen: MP3 4473, six of army
+      // 1's engineers given a Guard with no target left (no entity, no place): the original's queues are empty at
+      // 4474; ours walked them off toward the order's empty place.
+      AttackerStop(sim, u);
+      PopHead(u);
+      continue;
+    }
     bool mobile = u->motion.bp && u->motion.bp->mobile();
     if ((MoveLike(c.type) || ApproachLike(c.type)) && mobile) {
       SetMoving(u, true);

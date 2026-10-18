@@ -467,6 +467,39 @@ where it changes the look, off by default, measured like the rest. In the order 
    in view. Off: as the game, pictures identical. Open: craters' relief from the visuals session's batch 2 (the
    same rule covers it); scars under water or on the water are not kept apart (the game lays none there).
 
+## The next looks (Chris, 2026-10-17, evening)
+
+The renderer offered seven, and Chris answered "1-7 100% yes", then added three of his own (unit battle scars,
+real tracks, snow coming off units in combat). Each is an option of the modern look, off by default, today's
+picture the fallback; helpers build most of them in parallel, the renderer reviews and merges.
+
+1. **Shadows from every small light** (ray-traced, light sampling in the spirit of ReSTIR DI: explosions, muzzle
+   flashes and lamps shadowed by units, trees and hills; ray tracing only, never on the Mac). In work.
+2. **Smoke and fire lit properly** (the sun's and the clouds' shadow on smoke, fires and flashes lighting it from
+   within, thickness, smoke's own shadow on the ground, heat shimmer). In work.
+3. **Blast waves and debris** (grass flattened in a running ring, trees bending away, dust; chunks that fly, bounce
+   and settle as rubble). In work.
+4. **Water that reacts** (ripples from shells, ships, hover and wading units that spread and cross). In work.
+5. **Light through leaves (done, first version, 2026-10-17; in the "Ground Detail" setting):** `World::leafLight`
+   (viewer `--leaf-light`; `lighting.h` `LeafThrough`, `LeafLight`, the view's `leaves`). The sun's light that
+   falls on the far side of leaves (the models' leaves), grass blades and the plants' cards comes through, deeper
+   in colour (passed through the leaf: its colour taken twice, kept as bright in its strongest channel) and up to
+   three times stronger toward an eye that looks toward the sun through them; added as the surface's own light, so
+   the air dims it as the rest. Leaves without it keep their plain share as before; grass and plants had none.
+   Seen most with a low sun ahead of the camera (the game's camera looks north and the sun goes round the south,
+   so in play mostly at dawn and dusk from the side, and with a free camera). Cost at 1440p (lowest times, grass
+   and plants near the camera among trees): the ground cover 0.079 -> 0.116 ms, models +0.012, the frame about
+   +0.04. On, Vulkan as Direct3D 12 (mean 0.146 against 0.144 with it off). Off: pictures identical (regression 0 px
+   on both backends).
+6. **A cinematic camera for replays** (a free camera, depth of field, photo shots). In work.
+7. **A latency limiter** (input read as late as the frame allows; our own, vendor-neutral). In work.
+8. **Battle scars on units** (Chris: marks by the weapon that made them, three tiers, kept as trophies when the unit
+   heals, never so many that the unit stops reading). In work.
+9. **Snow that comes off units in combat** (it builds while a unit stands in snowfall; moving, firing, hits, fire
+   and blasts shake or melt it off). In work, with 8.
+10. **Real tracks in snow, mud, dirt and sand** (ruts with relief by the ground they are in, filling and fading).
+   In work.
+
 ## The options
 
 Each is off by default and, off, leaves the picture as it was, pixel for pixel. All are the modern look's. A
@@ -485,6 +518,7 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `rayReflections` | smooth surfaces and the water mirror what is off the screen too | about 0.3 ms | ray tracing; `WorldPicture::SetRayReflections` before the map opens |
 | `litRain` | rain and snow lit where they fall, sparkling round lamps | about 0.04 ms (in rain) | a time of day |
 | `rainSplashes` | specks where rain meets the ground and units' tops | about 0.01 ms (in rain) | a time of day |
+| `leafLight` | the sun's light through leaves, grass blades and plants, glowing toward a low sun | about 0.04 ms | |
 | `frameGeneration` | FSR 3 frame generation: a picture made between each two frames, twice the frames shown | 1.1-1.4 ms a frame drawn | anti-aliasing off; the device's second queue |
 
 Ray tracing means Direct3D 12 with DXR 1.1 or Vulkan with ray queries: never on the Mac (MoltenVK has none);
@@ -504,7 +538,7 @@ so there is less clutter). WorldPicture sets each bundle's options together, bef
 | `SetSoftShadows` | `softShadows`, `contactShadows` | about +0.37 ms |
 | `SetRayTracing` | `bounceLight`, `rayReflections` (reflections from the next map) | about +0.75 ms |
 | `SetWeatherEffects` | `litRain`, `rainSplashes`, `waterDetail` | about +0.05 ms in rain, +0.04 by water |
-| `SetGroundDetail` | `groundCover`, `battleScars` | +0.05 to 0.16 ms zoomed in, nothing far out; scars up to +0.56 ms with 2000 in view |
+| `SetGroundDetail` | `groundCover`, `battleScars`, `leafLight` | +0.05 to 0.16 ms zoomed in, nothing far out; scars up to +0.56 ms with 2000 in view |
 | `SetFrameGeneration` | `frameGeneration` (a sixth setting, asked of the ui: "Frame Generation") | 1.1-1.4 ms a frame drawn; twice the frames shown |
 
 `WorldPicture::RayTracingSupported()` (after any Open, the menu's too) says whether the card has ray tracing,
