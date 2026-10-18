@@ -160,8 +160,9 @@ class WorldPicture {
   //   +0.75 ms, and the shadows' cost by how many small lights are in view (docs/render-lighting.md); only where
   //   RayTracingSupported, elsewhere nothing changes.
   void SetRayTracing(bool on);
-  // Weather effects: rain and snow lit where they fall, rain's splashes, and wet shorelines with stronger caustics
-  //   (World::litRain, rainSplashes, waterDetail); about +0.05 ms while it rains.
+  // Weather effects: rain and snow lit where they fall, rain's splashes, wet shorelines with stronger caustics
+  //   (World::litRain, rainSplashes, waterDetail), and each unit's own snow, shed in combat (World::unitSnow);
+  //   about +0.05 ms while it rains.
   void SetWeatherEffects(bool on);
   // Ground detail: grass near the camera, pressed flat round units and buildings (World::groundCover); about
   //   +0.05 to 0.2 ms when zoomed in, nothing from afar; and battle scars (World::battleScars): the scorches and
