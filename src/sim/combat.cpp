@@ -2377,6 +2377,11 @@ void KillCleanupTick(Sim& sim) {
     u->killCleanup = false;
     DestroyWeapons(sim, u);
     ForgetUnitCommands(u);
+    // ... and its builder is deleted (0x6a8834..0x6a884a: unit+0x554): CAiBuilderImpl's dtor 0x59f9c0 clears the
+    // rally queue first (BuilderClearFactoryCommandQueue 0x59f5a0: RemoveUnit 0x6e8c20 from the back), so a killed
+    // factory's rally orders lose their factory, and an order no unit holds then is deleted at the Sync
+    // (CCommandDb::PublishSyncData 0x6e0f50). (Read; the case seen is the destroy without a kill: sim.cpp, ~Unit.)
+    ClearFactoryCommandQueue(u);
   }
 }
 

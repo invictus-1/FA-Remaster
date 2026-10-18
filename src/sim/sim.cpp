@@ -1447,6 +1447,14 @@ void Sim::ProcessDestroyQueue() {
     if (e->kind == Entity::Kind::Unit) {
       Unit* u = static_cast<Unit*>(e);
       ForgetUnitCommands(u);
+      // ~Unit deletes the builder (0x6a6d29..0x6a6d3f, unit+0x554) when no kill did (Unit::KillCleanup 0x6a8834): its
+      // dtor 0x59f9c0 clears the rally queue (BuilderClearFactoryCommandQueue 0x59f5a0: RemoveUnit 0x6e8c20 from the
+      // back), so the factory lets go of its rally orders, and one no unit holds is deleted at this Sync
+      // (CCommandDb::PublishSyncData 0x6e0f50, after EntityDb::Purge). Seen: MP1, army 7's land factory 0x700013
+      // (xsb0101) set three rally Moves at beats 2071-2075 (0x0700000a, 0x07000000, 0x0700000b) and was destroyed
+      // without a kill at 3826; the player's interface reused the three ids at 3953, 3960 and 3964 (it reuses an id
+      // only after the sync has said its order is gone), while ours still held them on the destroyed factory.
+      ClearFactoryCommandQueue(u);
       // ~Unit's ReleaseOccupyGround 0x6a7ab0 (0x6a6de3) comes after its queue is cleared (0x6a6c66): a failed upgrade's
       // dtor re-occupies the builder's cells first (sim/build.cpp), and a builder that still counts as occupying ground
       // then frees them
