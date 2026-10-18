@@ -973,6 +973,7 @@ struct Ent {
   std::vector<Anim> anims;
   float modelScale = 1;              // the unit's model's (its bones' places times this are world units)
   bool falling = false;              // a dead aircraft on its way down (the engine's ballistic fall)
+  bool killed = false;               // a unit Kill has killed (its frame's unit is dead from then on, as a game's is)
   Vec3 tumble;                       // its turn, radians a second
   float fraction = 1;                // a unit's fraction complete (one being built: from 0)
   uint32_t parent = 0;               // it goes with that entity's bone (AttachBoneTo -2, AttachTo)
@@ -2926,6 +2927,7 @@ void FxEntities::Kill(uint32_t unit, float overkill) {
   Impl& m = *impl_;
   Ent* e = m.Find(unit);
   if (!m.state || !e || !e->unit) return;
+  e->killed = true;
   Echo echo;
   // (a flying aircraft comes down: the engine's ballistic fall, with a tumble from the stand's own seed)
   if (e->layer == "Air") {
@@ -3260,6 +3262,7 @@ void FxEntities::Advance(double now) {
         u.orientation[2] = e.turn.z;
         u.orientation[3] = e.turn.w;
         u.layer = e.layer == "Air" ? 0x10u : e.layer == "Water" ? 8u : e.layer == "Seabed" ? 2u : 1u;
+        u.dead = e.killed;
         u.firstBone = u.nextFirstBone = static_cast<uint32_t>(m.frame.bones.size());
         u.boneCount = u.nextBoneCount = static_cast<uint32_t>(b.bones.size());
         m.frame.bones.insert(m.frame.bones.end(), b.bones.begin(), b.bones.end());

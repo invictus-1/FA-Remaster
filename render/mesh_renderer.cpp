@@ -7,8 +7,10 @@
 #include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <cstring>
 
+#include "blasts.h"
 #include "effect_files.h"
 #include "lighting.h"
 #include "ray_scene.h"
@@ -170,6 +172,10 @@ VOut VS(VIn i, uint instance : SV_InstanceID) {
     float2 foot = float2(n.row0.w, n.row2.w);
     float gust = (0.35 + 0.9 * falling.x + 0.3 * falling.y) * (0.45 + 1.3 * CloudNoise(float3((foot - float2(0.915, 0.403) * (time * 7)) * 0.02, time * 0.07)));
     o.world.xz += float2(0.915, 0.403) * (swing * gust * kind3.x * high * high * size * 0.035);
+#ifdef BLASTS
+    // a blast's wave (blasts.h): bent away from it, the more toward the top, then swaying back
+    o.world.xz += BlastPush(foot, 1) * (kind3.x * high * high * size);
+#endif
   }
   o.position = mul(viewProj, float4(o.world, 1));
   // (a personal shield's shell lies close over its unit, and the unit's details stand out of it here and
@@ -739,6 +745,11 @@ float2 PS(VOut i) : SV_Target {
 bool MeshRenderer::Init(std::string* error) {
   // (units and props take half the lying snow the ground takes: they must still be told apart)
   std::string source = std::string("#define SURFACE_SNOW 0.5\n") + kViewShaderBlock + RayShaders() + kLightingShaderBlock + kShader;
+  // (the same with the blasts' waves, for what sways while blasts are under way: PrepareBlasts makes them)
+  blastSource_ = std::string("#define BLASTS 1\n#define SURFACE_SNOW 0.5\n") + kViewShaderBlock + RayShaders() + kLightingShaderBlock +
+                 kBlastShaderBlock + kShader;
+  int kept = 0;
+  auto keep = [&](gfx::Pipeline p, const gfx::PipelineDesc& d) { bending_[kept++] = {p, d, {}}; };
   gfx::PipelineDesc pd;
   pd.name = "models";
   pd.vertexSource = pd.pixelSource = source;
@@ -754,11 +765,13 @@ bool MeshRenderer::Init(std::string* error) {
   pd.alphaWrite = true;
   pipeline_ = device_->CreatePipeline(pd, error);
   if (!pipeline_) return false;
+  keep(pipeline_, pd);
   pd.name = "models, blended";
   pd.blend = gfx::Blend::Alpha;
   pd.alphaWrite = false;
   blended_ = device_->CreatePipeline(pd, error);
   if (!blended_) return false;
+  keep(blended_, pd);
   pd.name = "models, see-through";
   pd.cull = gfx::Cull::None;  // (a bubble's far side shows through its near side)
   pd.depthWrite = false;
@@ -794,16 +807,19 @@ bool MeshRenderer::Init(std::string* error) {
   pd.alphaWrite = false;
   leaves_ = device_->CreatePipeline(pd, error);
   if (!leaves_) return false;
+  keep(leaves_, pd);
   pd.name = "models, leaves' depth first";
   pd.pixelEntry = "DepthPS";
   pd.colorWrite = false;
   prepassLeaves_ = device_->CreatePipeline(pd, error);
   if (!prepassLeaves_) return false;
+  keep(prepassLeaves_, pd);
   pd.alphaToCoverage = false;
   pd.cull = gfx::Cull::Back;
   pd.name = "models, depth first";
   prepass_ = device_->CreatePipeline(pd, error);
   if (!prepass_) return false;
+  keep(prepass_, pd);
   // after it: the full shading writing no depth (the depth is there already). A pass that writes depth
   // and cuts holes (a leaf's edge) has its depth tested only after its shading, so every leaf behind
   // another would still be shaded; one that writes none can be tested first, and what lies behind is
@@ -815,12 +831,14 @@ bool MeshRenderer::Init(std::string* error) {
   pd.alphaWrite = true;
   laid_ = device_->CreatePipeline(pd, error);
   if (!laid_) return false;
+  keep(laid_, pd);
   pd.name = "models, leaves, depth laid";
   pd.cull = gfx::Cull::None;
   pd.alphaToCoverage = true;
   pd.alphaWrite = false;
   laidLeaves_ = device_->CreatePipeline(pd, error);
   if (!laidLeaves_) return false;
+  keep(laidLeaves_, pd);
   pd.alphaToCoverage = false;
   pd.depthWrite = true;
   pd.colorWrite = true;
@@ -832,6 +850,7 @@ bool MeshRenderer::Init(std::string* error) {
   pd.cull = gfx::Cull::None;  // thin and open meshes cast a shadow from either side
   shadow_ = device_->CreatePipeline(pd, error);
   if (!shadow_) return false;
+  keep(shadow_, pd);
   {  // motion: drawn over the scene's depth (one sample a pixel), testing it a hair nearer, writing none
     const std::string motionSource = std::string(kViewShaderBlock) + kMotionShader;
     gfx::PipelineDesc md;
@@ -1278,6 +1297,8 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
   device_->SetPipeline(shadowPass ? shadow_ : pipeline_);
   device_->SetShaderBuffer(boneBuffer_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
+  const bool blasts = blastConstants && blastConstantsSize && blastsMade_ > 0;  // (the blasts' waves: for what sways)
+  if (blasts) device_->SetConstants(1, blastConstants, blastConstantsSize);
   if (!shadowPass) {
     device_->SetTexture(3, environment ? environment : textures_->GreyCube());
     if (!insectLookup_) {  // (once: the two lookups, or white where the game's files have none)
@@ -1326,11 +1347,16 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
                        : laid ? (lod->leaves ? 9 : 8)
                        : shadowPass ? 0 : glass ? (lod->impact == 1 || lod->shell ? 5 : lod->nuke == 1 ? (lod->rgbOnly ? 11 : 4) : lod->rgbOnly ? 10 : 3)
                        : lod->blend ? 2 : lod->leaves ? 1 : 0;
-    if (wanted != drawing) {
-      device_->SetPipeline(wanted == 11 ? domeRgb_ : wanted == 10 ? glassRgb_ : wanted == 9 ? laidLeaves_ : wanted == 8 ? laid_ : wanted == 7 ? prepassLeaves_ :
-                           wanted == 6 ? prepass_ : wanted == 5 ? adding_ : wanted == 4 ? dome_ : wanted == 3 ? glass_ : wanted == 2 ? blended_ :
-                           wanted == 1 ? leaves_ : shadowPass ? shadow_ : pipeline_);
-      drawing = wanted;
+    const bool bends = blasts && lod->sway > 0;  // (what sways, while blasts' waves are under way: the shaders with them)
+    if (wanted + (bends ? 100 : 0) != drawing) {
+      gfx::Pipeline p = wanted == 11 ? domeRgb_ : wanted == 10 ? glassRgb_ : wanted == 9 ? laidLeaves_ : wanted == 8 ? laid_ : wanted == 7 ? prepassLeaves_ :
+                        wanted == 6 ? prepass_ : wanted == 5 ? adding_ : wanted == 4 ? dome_ : wanted == 3 ? glass_ : wanted == 2 ? blended_ :
+                        wanted == 1 ? leaves_ : shadowPass ? shadow_ : pipeline_;
+      if (bends)
+        for (const Bending& b : bending_)
+          if (b.original.id == p.id && b.bending) p = b.bending;
+      device_->SetPipeline(p);
+      drawing = wanted + (bends ? 100 : 0);
     }
     size_t n = 0;
     while (at + n < items_.size() && items_[at + n].lod == lod && items_[at + n].near == near && n < kMaxInstances) {
@@ -1382,6 +1408,24 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
     at += n;
   }
   }
+}
+
+bool MeshRenderer::PrepareBlasts() {
+  if (blastsMade_) return blastsMade_ > 0;
+  blastsMade_ = -1;
+  for (Bending& b : bending_) {
+    if (!b.original) continue;
+    gfx::PipelineDesc d = b.desc;
+    d.vertexSource = d.pixelSource = blastSource_;
+    std::string error;
+    b.bending = device_->CreatePipeline(d, &error);
+    if (!b.bending) {
+      fprintf(stderr, "render: models cannot bend in blasts' waves (%s)\n", error.c_str());
+      return false;
+    }
+  }
+  blastsMade_ = 1;
+  return true;
 }
 
 void MeshRenderer::DrawMotion(const View& view, const Mat4& now, const Mat4& before) {

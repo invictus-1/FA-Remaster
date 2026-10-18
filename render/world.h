@@ -22,7 +22,9 @@
 #include <vector>
 
 #include "air.h"
+#include "blasts.h"
 #include "clouds.h"
+#include "debris.h"
 #include "motion.h"
 #include "ambient_occlusion.h"
 #include "shafts.h"
@@ -147,6 +149,9 @@ class World {
   void Begin(const Camera& camera, int width, int height, float time, double clock);
   // A game's units (as models, with their strategic icons), projectiles and beams.
   void AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors);
+  // The units of a frame watched for deaths only, for the debris (blastDebris): AddFrame does it for a game's; a host
+  // that draws its units itself (the effects stand) hands its frame here, after Begin.
+  void WatchDeaths(const Frame& frame, const std::vector<Vec3>& armyColors);
   // Whose a shield's mesh is ("uef", "aeon", "cybran", "seraphim"; "" not known).
   static std::string MeshFaction(const std::string& mesh);
   // How the scenery changed (SimFrames::TakePropEvents): each takes hold when the frame begun has
@@ -401,6 +406,14 @@ class World {
   // Heat shimmer (particles.h): the air bends what is behind it over fires, engines' exhausts and fresh explosions,
   // a few pixels at most. Modern look; off by default.
   bool heatShimmer = false;
+  // Blasts (blasts.h, debris.h; Chris, 2026-10-17): what the game's explosions do round them, to be seen only.
+  // `blastWaves`: a ring runs out from each blast over the ground, pressing the grass and plants flat away from it and
+  // bending the trees, which then spring back; `blastDust`: a bigger blast kicks a low ring of dust off the ground;
+  // `blastDebris`: a dying unit throws a handful of small chunks that tumble, bounce and stay as rubble (up to a most,
+  // the oldest sinking away). Modern look; off by default.
+  bool blastWaves = false, blastDust = false, blastDebris = false;
+  Blasts blasts;  // the blasts of the last half minute (blasts.Recent(): for the water's ripples), their waves and dust
+  Debris debris;  // the chunks and the rubble
   Clouds clouds;
   // Soft shadows (lighting.h, SunShadow; the lighting upgrade): the sun's shadows sharper near what casts
   // them and blurred farther off, as a sun that is not a point makes them. Modern look; off by default.
@@ -638,6 +651,7 @@ class World {
   gfx::Texture treeMask_, coverA_, coverB_;
   bool reflectNow_ = false;  // (reflections by ray tracing this frame)
   bool lensSnap_ = false;    // (cinecam: the camera jumped this frame: the lens's focus at once)
+  bool blastsNow_ = false, grassBlasts_ = false;  // (blasts' waves or dust under way this frame; their field over the grass)
 };
 
 }  // namespace render

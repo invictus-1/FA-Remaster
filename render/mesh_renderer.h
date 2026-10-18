@@ -102,6 +102,15 @@ class MeshRenderer {
   // after shading what cuts holes, and it saved nothing. Small models are left out: drawing them twice
   // cost more than it spared.) Viewer --no-prepass: off.
   bool depthPrepass = true;
+  // The blasts' waves (blasts.h, World::blastWaves), set by the world each frame (null: none): what sways in the wind
+  // (trees, the undergrowth) bends away from a blast as its wave passes, and sways back. The constants as the
+  // blasts' block reads them (Blasts::Constants, ConstantsSize), bound at register b1 for every pass. What sways is
+  // then drawn by shaders of their own with the waves in them (made by PrepareBlasts the first time the world wants
+  // them: the same shaders with code added, never run, would not draw quite the same, the compiler reordering what
+  // they share; without the waves everything is drawn by the shaders as they were).
+  const void* blastConstants = nullptr;
+  uint32_t blastConstantsSize = 0;
+  bool PrepareBlasts();  // false: they cannot be made (then nothing bends)
   // Numbers from the last scene (not shadow) pass.
   int drawnInstances = 0;
   int drawnTriangles = 0;
@@ -246,6 +255,15 @@ class MeshRenderer {
   std::vector<LastInstance> lastBatch_;
   std::vector<LastInstance> lastOf_;  // for each of entries_ the camera may see: its place of the frame before (Prepare's)
   gfx::Pipeline motionPipeline_;
+  // the pipelines what sways is drawn with, and the same with the blasts' waves (PrepareBlasts: -1 they cannot be made)
+  struct Bending {
+    gfx::Pipeline original;
+    gfx::PipelineDesc desc;
+    gfx::Pipeline bending;
+  };
+  Bending bending_[8];
+  std::string blastSource_;
+  int blastsMade_ = 0;
 };
 
 }  // namespace render

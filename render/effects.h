@@ -30,6 +30,8 @@
 
 namespace render {
 
+class Blasts;
+
 class Effects {
  public:
   Effects(Particles* particles, Ribbons* ribbons, Decals* decals, Lights* lights, ModelCache* models)
@@ -53,6 +55,8 @@ class Effects {
   int live = 0;        // effects being kept
   // The tracks in lying snow (tracks.h): the prints the game lays under units are pressed into it too.
   void SetTracks(Tracks* tracks) { tracks_ = tracks; }
+  // The blasts' list (blasts.h): told of every flash of light and every scorch or crater a script makes.
+  void SetBlasts(Blasts* blasts) { blasts_ = blasts; }
   int shotLights = 0;  // lights given this frame to shots in flight and to weapons' beams
   float shotLight = 1.0f;  // how strong those are (0: none)
   int started = 0;     // since the beginning
@@ -106,6 +110,7 @@ class Effects {
   Ribbons* ribbons_;
   Decals* decals_;
   Tracks* tracks_ = nullptr;
+  Blasts* blasts_ = nullptr;
   Lights* lights_;
   ModelCache* models_;
   std::deque<FrameEffectEvent> pending_;

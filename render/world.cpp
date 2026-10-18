@@ -35,6 +35,8 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       air(device),
       rays(device),
       bounce(device),
+      blasts(device),
+      debris(device, &textures),
       clouds(device),
       motion(device),
       upscaler(device),
@@ -91,6 +93,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
   step("shaders");
   effects.verbose = options.verbose;
   effects.SetTracks(&tracks);
+  effects.SetBlasts(&blasts);
   if (!options.displayTable.empty()) {
     const int levels = models.LoadDisplayTable(options.displayTable);
     if (levels) printf("render: %d model levels named by the simulation's blueprints (%s)\n", levels, options.displayTable.c_str());
@@ -152,6 +155,13 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     if (map.water.present) decals.SetWater(terrain.WaterMap(), terrain.WaterRamp(), static_cast<float>(map.width), static_cast<float>(map.height));
     decals.waterLevel = map.water.present ? map.water.elevation : -1e9f;
     decals.groundHeight = [this](float x, float z) { return map.Height(Clamp(x, 0, static_cast<float>(map.width)), Clamp(z, 0, static_cast<float>(map.height))); };
+    // (the blasts and the debris: on the ground and the water of this map)
+    blasts.Clear();
+    debris.Clear();
+    blasts.waterLevel = debris.waterLevel = decals.waterLevel;
+    blasts.groundHeight = debris.groundHeight = decals.groundHeight;
+    debris.mapWidth = static_cast<float>(map.width);
+    debris.mapHeight = static_cast<float>(map.height);
     // the map's own decals: albedo ones (pictures over the ground's colour) and normal ones (its sculpting)
     if (options.mapDecals != "off") {
       int laid = 0;
@@ -1160,9 +1170,23 @@ void World::ApplyPropEvent(const FramePropEvent& e) {
 // Whose a shield's mesh is (effect_files.h, MeshFaction)
 std::string World::MeshFaction(const std::string& mesh) { return render::MeshFaction(mesh); }
 
+void World::WatchDeaths(const Frame& frame, const std::vector<Vec3>& armyColors) {
+  // (a frame without units says nothing of deaths: the effects stand hands the world its frame without them, as it
+  // draws them itself, and its units here)
+  if (!blastDebris || look != Look::Modern || !haveMap_ || sidePicture || frame.units.empty()) return;
+  debris.Watch(frame, clock_, [this](const std::string& id) { return models.Unit(id); },
+               [&](uint32_t army) { return armyColors.empty() ? Vec3{0.6f, 0.6f, 0.6f} : armyColors[army % armyColors.size()]; }, &blasts);
+}
+
 void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
   auto colorOf = [&](uint32_t army) { return armyColors.empty() ? Vec3{0.6f, 0.6f, 0.6f} : armyColors[army % armyColors.size()]; };
   TakeDueCombat(static_cast<double>(frame.tick) + frame.blend);  // (hits, impacts, health whose beat is shown now: combat_)
+  // blasts where the game says an area's damage went off (an area's hits, one a target, merge into one blast; the trees'
+  // own push, 'TreeForce', is the same shot's and left out), beside the flashes and scorches the effects tell of
+  for (const FrameHit& h : combat_.hits)
+    if (h.radius > 0 && !h.shield && h.seen && h.damageType != "TreeForce")
+      blasts.FromImpact({h.position[0], h.position[1], h.position[2]}, h.radius, h.amount, h.tick * 0.1);
+  WatchDeaths(frame, armyColors);  // (the debris of what has died: blastDebris)
   CpuTimes::Part("units seen first: their files read ahead");
   {  // (their models' files read on the worker threads, all together; the models are made below)
     std::vector<std::string> fresh;
@@ -1548,6 +1572,17 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       ribbons.PlainBeam(position - velocity * 0.06f, position, {1.0f, 0.95f, 0.78f}, 0.12f);
     }
   }
+  {  // ripples from the blasts new this frame over the water (a ship's death, debris falling in); where the simulation's
+     // impacts make the shells' splashes (below), shell-sized blasts are theirs already and left out
+    std::vector<Blasts::Blast> fresh;
+    blasts.TakeNew(&fresh);
+    if (water.ripples.On())
+      for (const Blasts::Blast& b : fresh) {
+        if (b.splash) water.AddRipple(b.at.x, b.at.z, std::clamp(b.size, 0.2f, 0.8f), 0.5f);
+        else if (b.water && (!combat_.impactsKept || b.size >= 1.5f))
+          water.AddRipple(b.at.x, b.at.z, std::clamp(b.size * 0.5f, 0.4f, 3.0f), std::clamp(b.size * 0.6f, 0.5f, 4.0f));
+      }
+  }
   // ripples from what met the water (seen only): a shell's splash by its size, a torpedo going off below by its depth
   // (none deeper than 4), a crashing aircraft's by its size and speed, a beam's a little one. (The strengths are
   // judged by eye, not measured against anything of the game's.)
@@ -1725,6 +1760,24 @@ void World::Render() {
     }
   }
   lights.Build(&view);  // (after everything has said what lights there are; before any pass reads the view)
+  // blasts (blasts.h): the waves and the dust under way near what the camera sees; the debris's chunks moved on and listed
+  blastsNow_ = grassBlasts_ = false;
+  if (look == Look::Modern && haveMap_ && !sidePicture && (blastWaves || blastDust)) {
+    // (what sways, and the grass, are drawn by shaders of their own while waves are under way; they and the blasts' own
+    // are made the first frame the options are on, not at the first blast: no stall in the middle of a fight)
+    const bool waves = blastWaves && meshes.PrepareBlasts();
+    if (waves && groundCover) grass.PrepareBlasts();
+    blasts.Prepare(clock_, view, camera.target, waves, blastDust);
+    blastsNow_ = blasts.Active() > 0;
+    if (blastsNow_ && blastDust) terrain.GroundColours();  // (made the first time here: it dispatches, so not in a pass)
+  }
+  meshes.blastConstants = blastsNow_ && blasts.Waves() ? blasts.Constants() : nullptr;
+  meshes.blastConstantsSize = meshes.blastConstants ? blasts.ConstantsSize() : 0;
+  if (blastDebris && look == Look::Modern && haveMap_ && !sidePicture) {
+    CpuTimes::Part("debris moved");
+    debris.rubbleLasts = battleScars ? 0.0f : 120.0f;  // (kept as the scorches are)
+    debris.Update(clock_, view.eye, &meshes, &blasts);
+  }
   {  // the bones of posed models, once for all the frame's passes
     std::vector<const View*> views{&view};
     if (shadowed)
@@ -1766,6 +1819,7 @@ void World::Render() {
       if (plantsReady_ && !coverA_) terrain.CoverDensity(treeMask_, &coverA_, &coverB_);
       grass.Prepare(view, camera, discs);
       grassNow_ = true;
+      if (blastsNow_ && blasts.Waves() && grass.PrepareBlasts()) grassBlasts_ = blasts.PrepareField(grass.Area());  // (the blasts' waves over it)
     }
   }
   if (bounceNow_) {  // bounce light: the probes' rays and their blending
@@ -1853,7 +1907,7 @@ void World::Render() {
       Stage("ground cover");
       grass.Draw(view, camera, terrain.HeightTexture(), terrain.HeightUnit(), terrain.GroundColours(), terrain.NormalMap(),
                  static_cast<float>(map.width), static_cast<float>(map.height), map.water.present ? map.water.elevation : -1e9f,
-                 plantsReady_ ? coverA_ : gfx::Texture{}, plantsReady_ ? coverB_ : gfx::Texture{});
+                 plantsReady_ ? coverA_ : gfx::Texture{}, plantsReady_ ? coverB_ : gfx::Texture{}, grassBlasts_ ? blasts.Field() : gfx::Texture{});
     }
     // range rings on the land, before anything stands on it (their picture is made from the
     // ground's depth; over the water they are laid after the water)
@@ -1946,6 +2000,11 @@ void World::Render() {
     post.BeginColorOnly();
     Stage("lamp shafts");
     shafts.Draw(view, post.Depth(), camera.zNear);
+    if (blastsNow_ && blastDust) {  // the blasts' dust, under the game's own fire and smoke
+      Stage("blasts' dust");
+      blasts.DrawDust(view, post.Depth(), camera.zNear, terrain.HeightTexture(), terrain.HeightUnit(), terrain.GroundColours(),
+                      static_cast<float>(map.width), static_cast<float>(map.height));
+    }
     Stage("particles");
     if (hide.find("particles") == std::string::npos) {
       if (litSmokeNow_) {  // (lit smoke reads the lights, the shadow maps, the clouds' and the smoke's shadows)

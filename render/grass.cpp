@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <memory>
 
 #include "lighting.h"
@@ -23,6 +24,9 @@ Texture2D cover : register(t1);          // Terrain::GroundColours: rgb the grou
 Texture2D groundNormals : register(t2);  // x in alpha, z in green
 Texture2D<float> trampled : register(t3);  // over the square: 1 where what stands there presses the grass flat
 Texture2D densityA : register(t4);       // Terrain::CoverDensity's first: blades, clumps, flowers, dry stalks
+#ifdef BLASTS
+Texture2D<float2> blastField : register(t8);  // (blasts.h) over the square: which way and how far a blast's wave bends it
+#endif
 
 uint GrassHash(uint x) {
   x ^= x >> 16;
@@ -98,6 +102,16 @@ VOut VS(uint id : SV_VertexID) {
   float swing = sin(time * 1.3 + beat) * 0.6 + sin(time * 2.9 + beat * 1.7) * 0.4;
   float gust = (0.35 + 0.9 * falling.x + 0.3 * falling.y) * (0.45 + 1.3 * CloudNoise(float3((xz - float2(0.915, 0.403) * (time * 7)) * 0.02, time * 0.07)));
   float2 bend = leanWay * lean + float2(0.915, 0.403) * (swing * gust * 0.45);
+#ifdef BLASTS
+  // a blast's wave: laid over away from it (as far as the field says, radians from upright), its height going to its
+  // lean so that the blade keeps about its length
+  float2 blown = blastField.SampleLevel(samplerLinearClamp, (xz - area.xy) / (area.z * area.w), 0);
+  float over = length(blown), laid = min(over, 1.35);
+  if (laid > 1e-3) {
+    height *= cos(laid);
+    bend += blown / over * tan(laid);
+  }
+#endif
   uint2 at = kCorner[corner];
   float v = kUp[at.x];
   // (at least most of a pixel wide, or far blades would flicker in and out between pixels)
@@ -121,6 +135,13 @@ VOut VS(uint id : SV_VertexID) {
   // the sun's light through it (World::leafLight): the side the eye sees faces it; thinner, more toward the tip
   float3 toEye = normalize(cameraPosition - p), faceWay = float3(face.x, 0, face.y);
   o.through = leaves.x > 0.5 ? LeafThrough(dot(faceWay, toEye) < 0 ? -faceWay : faceWay, toEye) * (0.4 + 0.6 * v) : 0;
+#ifdef BLASTS
+  // (grass laid flat is paler: its blades lie open to the sky and show their backs, no longer shading each other; so
+  // the wave shows as a pale ring running out over the grass)
+  float open = sin(laid);
+  o.colour *= 1 + 0.45 * open;
+  o.up = lerp(o.up, 1, open);
+#endif
   return o;
 }
 
@@ -155,6 +176,9 @@ Texture2D densityA : register(t4);       // blades, clumps, flowers, dry stalks
 Texture2D densityB : register(t5);       // ferns, dry cells' share, weeds' share
 Texture2D atlas : register(t6);          // the plants' albedo (sRGB values; alpha their coverage, tested at a half)
 Texture2D atlasNormals : register(t7);   // card space: x in alpha, y (up) in green (BC5 read as the game's DXT5)
+#ifdef BLASTS
+Texture2D<float2> blastField : register(t8);  // (blasts.h) over the square: which way and how far a blast's wave bends it
+#endif
 
 uint PlantHash(uint x) {
   x ^= x >> 16;
@@ -266,6 +290,16 @@ VOut VS(uint id : SV_VertexID) {
   float above = 1 - c.y;  // (0 the foot, 1 the card's top)
   float3 p = root + right * ((c.x - 0.5) * frame) + up * (above * frame);
   p.xz += bend * above * above * frame;
+#ifdef BLASTS
+  {  // a blast's wave: laid over away from it, its top going over as far as it was high
+    float2 blown = blastField.SampleLevel(samplerLinearClamp, (foot - area.xy) / (area.z * area.w), 0);
+    float over = length(blown), lay = min(over, 1.35);
+    if (lay > 1e-3) {
+      p -= up * (above * frame * (1 - cos(lay)));
+      p.xz += blown / over * (sin(lay) * above * above * frame);
+    }
+  }
+#endif
   o.position = mul(viewProj, float4(p, 1));
   o.world = p;
   o.uv = lerp(uvRect.xy, uvRect.zw, float2(flip ? 1 - c.x : c.x, c.y));
@@ -331,7 +365,7 @@ constexpr int kTrampleSize = 256;
 }  // namespace
 
 GroundCover::~GroundCover() {
-  for (gfx::Pipeline p : {pipeline_, trample_, plantPipeline_})
+  for (gfx::Pipeline p : {pipeline_, trample_, plantPipeline_, blastPipeline_, blastPlantPipeline_})
     if (p) device_->Destroy(p);
   if (trampled_) device_->Destroy(trampled_);
 }
@@ -351,6 +385,11 @@ bool GroundCover::Init(std::string* error) {
   pd.vertexSource = pd.pixelSource = plants;
   plantPipeline_ = device_->CreatePipeline(pd, error);
   if (!plantPipeline_) return false;
+  // (the same two laid over by the blasts' waves, shaders of their own so that without them nothing is drawn otherwise:
+  // made by PrepareBlasts when they are first wanted)
+  blastDesc_ = pd;
+  blastSource_ = "#define BLASTS 1\n" + source;
+  blastPlantSource_ = "#define BLASTS 1\n" + plants;
   const std::string trample = std::string(kViewShaderBlock) + kTrample;
   gfx::ComputeDesc cd;
   cd.name = "ground cover: pressed flat";
@@ -363,6 +402,25 @@ bool GroundCover::Init(std::string* error) {
   td.format = gfx::Format::R8;
   trampled_ = device_->CreateTarget(td);
   return static_cast<bool>(trampled_);
+}
+
+bool GroundCover::PrepareBlasts() {
+  if (blastsMade_ || !pipeline_) return blastsMade_ > 0;
+  blastsMade_ = -1;
+  std::string error;
+  gfx::PipelineDesc pd = blastDesc_;
+  pd.name = "ground cover: grass, blasts' waves";
+  pd.vertexSource = pd.pixelSource = blastSource_;
+  blastPipeline_ = device_->CreatePipeline(pd, &error);
+  pd.name = "ground cover: plants, blasts' waves";
+  pd.vertexSource = pd.pixelSource = blastPlantSource_;
+  if (blastPipeline_) blastPlantPipeline_ = device_->CreatePipeline(pd, &error);
+  if (!blastPlantPipeline_) {
+    fprintf(stderr, "render: the ground cover cannot bend in blasts' waves (%s)\n", error.c_str());
+    return false;
+  }
+  blastsMade_ = 1;
+  return true;
 }
 
 void GroundCover::Prepare(const View& view, const Camera& camera, const std::vector<float>& discs) {
@@ -458,8 +516,10 @@ bool GroundCover::SetPlants(const JsonValue& cover, TextureCache* textures, cons
 }
 
 void GroundCover::Draw(const View& view, const Camera& camera, gfx::Texture heights, float heightUnit, gfx::Texture cover,
-                       gfx::Texture normals, float mapWidth, float mapHeight, float waterLevel, gfx::Texture densityA, gfx::Texture densityB) {
+                       gfx::Texture normals, float mapWidth, float mapHeight, float waterLevel, gfx::Texture densityA, gfx::Texture densityB,
+                       gfx::Texture blasts) {
   drawnBlades = drawnPlants = 0;
+  if (!blastPlantPipeline_) blasts = {};  // (PrepareBlasts has not made them)
   if (!prepared_ || !heights || !cover || !normals || view.height <= 0) return;
   const int side = static_cast<int>(area_[3]);
   const float reach = 0.5f * area_[2] * area_[3];
@@ -475,7 +535,8 @@ void GroundCover::Draw(const View& view, const Camera& camera, gfx::Texture heig
   k.mapInfo[3] = waterLevel;
   const bool table = densityA && densityB;
   k.table[0] = table ? 1.0f : 0.0f;
-  device_->SetPipeline(pipeline_);
+  if (blasts) device_->SetTexture(8, blasts);
+  device_->SetPipeline(blasts ? blastPipeline_ : pipeline_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
   device_->SetConstants(1, &k, sizeof k);
   device_->SetTexture(0, heights);
@@ -511,7 +572,7 @@ void GroundCover::Draw(const View& view, const Camera& camera, gfx::Texture heig
     for (int i = 0; i < 16; ++i) p->cells[i * 3 + 2][3] = std::min(metre * plantBoost, plantTallest / std::max(plants_.cells[i][1][2], 1e-3f));
     std::copy(&plants_.order[0][0], &plants_.order[0][0] + 16, &p->order[0][0]);
     std::copy(&plants_.groups[0][0], &plants_.groups[0][0] + 24, &p->groups[0][0]);
-    device_->SetPipeline(plantPipeline_);
+    device_->SetPipeline(blasts ? blastPlantPipeline_ : plantPipeline_);
     device_->SetConstants(0, &view.constants, sizeof view.constants);
     device_->SetConstants(1, p.get(), sizeof(PlantConstants));
     device_->SetTexture(5, densityB);
@@ -520,7 +581,7 @@ void GroundCover::Draw(const View& view, const Camera& camera, gfx::Texture heig
     drawnPlants = plantSide * plantSide;
     device_->Draw(static_cast<uint32_t>(drawnPlants) * 36);
   }
-  for (int slot = 0; slot < 8; ++slot) device_->SetTexture(slot, {});
+  for (int slot = 0; slot < 9; ++slot) device_->SetTexture(slot, {});
 }
 
 }  // namespace render

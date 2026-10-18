@@ -368,7 +368,7 @@ bool FxStand::Init(moho::Vfs* vfs, const FxStandSetup& setup, std::string* error
     }
   }
   if (fxEmitters_.empty() && projectile_.empty() && entity_.empty() && shieldUnit_.empty() && setup_.death.empty() && setup_.move.empty() &&
-      setup_.build.empty() && setup_.fire.empty() && setup_.decals.empty()) {
+      setup_.build.empty() && setup_.fire.empty() && setup_.decals.empty() && setup_.blast <= 0) {
     *error = "nothing to play";
     return false;
   }
@@ -442,6 +442,11 @@ std::string FxStand::Describe() const {
     s += "; " + setup_.fire + b;
     list("its weapons", setup_.fireWeapons);
     list("by an order", setup_.manual);
+  }
+  if (setup_.blast > 0) {
+    char b[96];
+    snprintf(b, sizeof b, "; a blast of size %g %g s into each play", setup_.blast, setup_.killAt);
+    s += b;
   }
   if (!setup_.faction.empty()) s += "; as " + setup_.faction + "'s";
   return s.empty() ? s : s.substr(2);
@@ -719,6 +724,14 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
   }
   if (again) started_ = now;
   world.particles.remastered = world.ribbons.remastered = lookRemastered;
+  // a blast of its own (--fx-blast), `killAt` into the play
+  for (Side& side : sides_) {
+    if (again) side.blasted = false;
+    if (setup_.blast > 0 && !side.blasted && now - started_ >= setup_.killAt) {
+      side.blasted = true;
+      world.blasts.Add(place(setup_.at, side), setup_.blast, now);
+    }
+  }
   // the unit's death, `killAt` into the play (the same moment on both sides)
   for (Side& side : sides_)
     if (entities_ && !setup_.death.empty() && side.unit && !side.killed && now - started_ >= setup_.killAt) {
@@ -751,6 +764,7 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
     world.effects.Queue(std::move(events_));
     events_.clear();
     world.effects.Update(now * 10, entities_->Current());
+    world.WatchDeaths(entities_->Current(), {{0.2f, 0.45f, 1.0f}});  // (debris from the units it kills: the colour it draws them in)
     if (entities_->Current().units.empty()) {
       world.AddFrame(entities_->Current(), {});
     } else {  // (the units the stand draws itself, below: the world draws a game's units with their symbols and bars)

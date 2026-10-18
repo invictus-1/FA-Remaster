@@ -98,6 +98,9 @@ struct FxStandSetup {
   // pictures and their relief on the left, the game's on the right)
   std::vector<std::string> decals;
   float decalSize = 4;
+  // a blast of this size (world units, about an explosion's radius: blasts.h) at `at` at `killAt` into each play, for
+  // looking at the blasts' waves and dust alone (0: none)
+  float blast = 0;
 };
 
 class FxStand {
@@ -143,6 +146,7 @@ class FxStand {
     uint32_t built = 0;  // --fx-build: the unit being built
     bool ordered = false, held = false;  // --fx-fire: its weapons given their orders, and their targets taken again
     bool decalsLaid = false;             // --fx-decal
+    bool blasted = false;                // --fx-blast
   };
   void Fire(World& world, Side& side, double now, Vec3 from);
   FxStandSetup setup_;

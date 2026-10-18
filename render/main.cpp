@@ -104,6 +104,17 @@
 //           --scar-test n[,radius]: n of the game's scorches laid at random round where the camera starts (within
 //           radius, 40), as scripts lay them (a minute's time each), as if over the last twenty minutes: to see
 //           and time the build-up
+// --blasts  what explosions do round them (blasts.h, debris.h; modern look): all three of --blast-waves (a ring runs out over
+//           the ground, pressing the grass and plants flat away from the blast and bending the trees, which spring back;
+//           World::blastWaves), --blast-dust (a bigger blast kicks a low ring of dust off the ground; World::blastDust) and
+//           --debris (a dying unit throws small chunks that bounce and stay as rubble for two minutes, with --battle-scars
+//           until there is too much; World::blastDebris); --debris-most n: the most rubble kept lying (1500)
+// --fx-blast <size>  with the effects stand: a blast of that size (world units, about an explosion's radius: a small
+//           tank's death 0.4, a shell's 1 to 3, an experimental's 4) at --fx-at --fx-kill-at seconds into each play
+//           (alone too, every --fx-repeat seconds)
+// --blast-test n[,radius]  with --blasts (or --blast-waves, --blast-dust): blasts at random round where the camera starts
+//           (within radius, 40), of sizes 0.5 to 4, one after another so that about n are under way at once: to see and
+//           time many at once
 // --order-test  order lines as the interface hands them over while Shift is held (order_lines.h): a move chain, a
 //           patrol loop with its moving chevrons and an attack, with their waypoints' icons, round where the camera starts
 // --frame-generation  FSR 3 frame generation (World::frameGeneration; needs --msaa 1 or --fsr3): a picture made
@@ -374,6 +385,10 @@ struct Options {
   float plantTallest = -1;              // --plant-tallest
   bool battleScars = false;             // --battle-scars
   bool leafLight = false;               // --leaf-light
+  bool blastWaves = false, blastDust = false, debris = false;  // --blasts, --blast-waves, --blast-dust, --debris
+  int debrisMost = -1;                  // --debris-most
+  int blastTest = 0;                    // --blast-test
+  float blastRadius = 40;
   int scarTest = 0;                     // --scar-test
   bool orderTest = false;               // --order-test
   float scarRadius = 40;
@@ -512,6 +527,10 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--ground-cover") o->groundCover = true;
     else if (a == "--battle-scars") o->battleScars = true;
     else if (a == "--leaf-light") o->leafLight = true;
+    else if (a == "--blasts") o->blastWaves = o->blastDust = o->debris = true;
+    else if (a == "--blast-waves") o->blastWaves = true;
+    else if (a == "--blast-dust") o->blastDust = true;
+    else if (a == "--debris") o->debris = true;
     else if (a == "--order-test") o->orderTest = true;
     else if (a == "--frame-generation") o->frameGeneration = true;
     else if (a == "--capture-between") o->captureBetween = true;
@@ -578,6 +597,11 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--fire-light") o->fireLight = static_cast<float>(atof(v));
     else if (a == "--smoke-shadow-strength") o->smokeShadowStrength = static_cast<float>(atof(v));
     else if (a == "--heat-bend") o->heatBend = static_cast<float>(atof(v));
+    else if (a == "--debris-most") o->debrisMost = std::max(0, atoi(v));
+    else if (a == "--fx-blast") o->fx.blast = std::max(0.0f, static_cast<float>(atof(v)));
+    else if (a == "--blast-test") {
+      if (sscanf(v, "%d,%f", &o->blastTest, &o->blastRadius) < 1) return false;
+    }
     else if (a == "--plant-tallest") o->plantTallest = static_cast<float>(atof(v));
     else if (a == "--ripple-test") {
       if (sscanf(v, "%f,%f,%f", &o->rippleTest, &o->rippleTestRadius, &o->rippleTestStrength) < 1) return false;
@@ -1032,6 +1056,10 @@ int main(int argc, char** argv) {
   if (opt.plantTallest > 0) world.grass.plantTallest = opt.plantTallest;
   world.battleScars = opt.battleScars;
   world.leafLight = opt.leafLight;
+  world.blastWaves = opt.blastWaves;
+  world.blastDust = opt.blastDust;
+  world.blastDebris = opt.debris;
+  if (opt.debrisMost >= 0) world.debris.mostRubble = opt.debrisMost;
   world.frameGeneration = opt.frameGeneration;
   device->captureBetween = opt.captureBetween;
   if (opt.sunSize > 0) world.sunSize = opt.sunSize;
@@ -1462,6 +1490,16 @@ int main(int argc, char** argv) {
     }
     printf("render: --scar-test: %d scorches laid, %d of them kept as battle scars\n", laid, world.decals.Scars());
   }
+  // --blast-test: where and when the next blast goes (in the frame loop)
+  const Vec3 blastTestAt = camera.target;
+  double blastTestNext = 0;
+  uint32_t blastTestSeed = 2463534242u;
+  auto blastTestRandom = [&blastTestSeed]() {
+    blastTestSeed ^= blastTestSeed << 13;
+    blastTestSeed ^= blastTestSeed >> 17;
+    blastTestSeed ^= blastTestSeed << 5;
+    return static_cast<float>(blastTestSeed >> 8) / 16777216.0f;
+  };
   if (opt.orderTest) {  // --order-test: a move chain, a patrol loop and an attack, as the interface hands them over
     const std::string dir = "/textures/ui/common/game/";
     world.orders.textures = {dir + "orderline/orderline_generic.dds", dir + "orderline/orderline_arrow02.dds",
@@ -1489,7 +1527,7 @@ int main(int argc, char** argv) {
   // --fx, --fx-shot: the effects test stand
   std::unique_ptr<FxStand> fxStand;
   if (!opt.fx.fx.empty() || !opt.fx.shot.empty() || !opt.fx.entity.empty() || !opt.fx.shield.empty() || !opt.fx.death.empty() ||
-      !opt.fx.move.empty() || !opt.fx.build.empty() || !opt.fx.fire.empty() || !opt.fx.decals.empty()) {
+      !opt.fx.move.empty() || !opt.fx.build.empty() || !opt.fx.fire.empty() || !opt.fx.decals.empty() || opt.fx.blast > 0) {
     if (!opt.fx.decals.empty() && !opt.fx.spacingGiven) opt.fx.spacing = opt.fx.decalSize * 1.4f;  // (--fx-decal: the two rows apart)
     if (!opt.fxAt) opt.fx.at = {emitAt.x, 0, emitAt.z};
     if (!opt.fxRepeat && !opt.fx.shield.empty()) opt.fx.repeat = 20;
@@ -2044,6 +2082,15 @@ int main(int argc, char** argv) {
     if (opt.hasCine) world.lens.strength = cine.LensShare();  // (the lens's blur goes as the picture eases back)
     world.photo = photoLeft > 0;  // (--photo: its frames)
     world.Begin(drawn, device->Width(), device->Height(), time, havePlay ? playTick * 0.1 : static_cast<double>(time));
+    if (opt.blastTest > 0) {  // --blast-test: blasts at random round where the camera started, about n under way at once
+      const double clock = havePlay ? playTick * 0.1 : static_cast<double>(time);
+      while (clock >= blastTestNext) {
+        const float a = blastTestRandom() * 6.2831853f, d = opt.blastRadius * std::sqrt(blastTestRandom()), r = blastTestRandom();
+        const float x = blastTestAt.x + std::cos(a) * d, z = blastTestAt.z + std::sin(a) * d;
+        world.blasts.Add({x, groundHeight(x, z), z}, 0.5f + 3.5f * r * r, clock);
+        blastTestNext = std::max(blastTestNext, clock - 1.0) + 3.5 / opt.blastTest;  // (a wave and its swing last 3 to 4 s)
+      }
+    }
 
     if (fxStand) {  // the effects test stand
       Vec3 right, up, back;
@@ -2453,6 +2500,9 @@ int main(int argc, char** argv) {
         printf("; effects: %d live of %d started, %d events of kinds not drawn yet, %d bands, %.2f ms; %d decals drawn of %d", effects.live,
                effects.started, effects.notShown, ribbons.drawnBands, effects.cpuMs, decals.drawn, decals.Count());
       if (haveLive) printf("; simulation at tick %u, %.2f ms a tick", live.LastTick(), live.MsPerTick());
+      if (world.blastWaves || world.blastDust || world.blastDebris)
+        printf("; blasts: %d told, %d under way, %d dust puffs; debris: %d chunks thrown, %d flying, %d lying", world.blasts.told, world.blasts.Active(),
+               world.blasts.dustPuffs, world.debris.thrown, world.debris.Flying(), world.debris.Lying());
       printf("\n");
       if (opt.timings && timing.frames > 0) {
         printf("render: --timings: %d frames at %dx%d on %s%s, average ms a frame:\n", timing.frames, device->Width(), device->Height(),
