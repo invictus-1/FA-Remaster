@@ -31,6 +31,7 @@
 #include <vector>
 
 #include "camera.h"
+#include "cinecam.h"
 #include "linalg.h"
 
 namespace moho {
@@ -345,6 +346,35 @@ class WorldPicture {
 
   // The height of what one stands on at a place of the map (ground or water surface).
   float GroundHeight(float x, float z) const;
+
+  // --- the cinematic camera (cinecam.h), for watching replays and taking pictures ---
+  // Draw and DrawToWindow take its camera as any other (CineCamera::View, Camera::cinematic set): the world is then
+  // drawn as seen from within it (the sun's shadows along the view out to the distance, the grass ahead of the eye).
+  // The strategic symbols and the deposits' icons are left out for it (far off toward the horizon every unit would
+  // stand there as one); the rest of the interface in the world is the host's to say as for the game's camera, and a
+  // cinematic view wants none of it: SetSelectionMarks(false), SetLifeBars(false), SetWorkBars(false), no shapes.
+  // The height one stands on anywhere, in the map and beyond its edge (where the ground goes on mirrored, World::
+  // worldBeyond): for CineCamera::Update and View. Valid while this picture is.
+  GroundFn CineGround() const;
+  // The lens's depth of field (Lens: off at first; on, the aperture, the focus or auto-focus, how fast it follows),
+  // from the next frame; it stays as set. A cinematic camera's, but it works with any.
+  void SetLens(const Lens& lens);
+  // A cut (CineCamera::TakeCut, after a Jump or a path begun without easing in): the next frame keeps nothing of
+  // the frames before (the temporal upscaler's, frame generation's), and the lens focuses at once.
+  void CameraCut();
+  // A photo: the world as `camera` sees it at `tick` (as Draw), `width` x `height` pixels, which may be larger than
+  // the window (up to 16384 a side, and as the card's memory allows: larger asks are made smaller in proportion and
+  // `*madeWidth` x `*madeHeight` say what came), without anything of the interface (no icons, bars, marks, order
+  // lines, shapes, ghosts, rings or the script's meshes), drawn `supersample` times larger again and made smaller
+  // for smooth edges (0: as the memory allows, at most 2), with the lens as set. `settleFrames` frames are drawn
+  // first at that size and moment, for what settles over frames (the volumetric clouds, the light in the air).
+  // Pixels as Draw gives them (0xAARRGGBB, rows from the top). Between frames (not between LifeBarAnchors and the
+  // Draw after it). The next Draw or DrawToWindow goes back to the window's size; it costs some frames' time.
+  bool TakePhoto(const Camera& camera, int width, int height, double tick, std::vector<uint32_t>* pixels, int* madeWidth, int* madeHeight,
+                 int supersample = 0, int settleFrames = 8);
+  // The size a photo asked for comes out at, and how many times larger again it is drawn (TakePhoto's rule; the
+  // scene's samples a pixel, gSceneSamples, count: they take memory). For a host that draws photos itself.
+  static void PhotoSize(int* width, int* height, int* supersample);
   // The ground's own height at a place of the map, under water the bottom's: the simulation's
   // TerrainHeight (its own function, on the same heights), as the picture has them, the map's and
   // where the game has laid them flat (taken in with the frames drawn).

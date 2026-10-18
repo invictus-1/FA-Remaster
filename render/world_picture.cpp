@@ -73,6 +73,7 @@ struct WorldPicture::Impl {
     if (groundDetail >= 0) world->groundCover = world->battleScars = world->leafLight = groundDetail > 0;
     if (frameGeneration >= 0) world->frameGeneration = frameGeneration > 0;
   }
+  Lens lens;                           // SetLens (cinecam)
   int textureDetail = 0;               // SetTextureDetail
   bool weather = false, dayOff = false;
   std::vector<Vec3> armyColors;
@@ -367,6 +368,7 @@ void WorldPicture::PrepareWorld(const Camera& camera, int width, int height, dou
   m.world->effectsQuality = m.effectsQuality;
   m.world->upscale = m.upscale;
   m.world->temporalUpscale = m.temporalUpscale;
+  m.world->lens = m.lens;
   // the hour and the weather, by the game's clock
   if (m.dayStart >= 0) {
     const double hours = m.dayLength > 0 ? static_cast<double>(m.dayStart) + tick * 0.1 / static_cast<double>(m.dayLength) * 24.0 : static_cast<double>(m.dayStart);
@@ -822,5 +824,110 @@ float WorldPicture::TerrainHeight(float x, float z) const {
   return moho::TerrainHeightOf(m.heights.data(), m.width, m.height, m.heightScale, x, z);
 }
 World* WorldPicture::world() { return impl_->world.get(); }
+
+// --- the cinematic camera (cinecam) ---
+
+GroundFn WorldPicture::CineGround() const {
+  const Impl* m = impl_.get();
+  const float width = m->world ? static_cast<float>(m->world->map.width) : 0, height = m->world ? static_cast<float>(m->world->map.height) : 0;
+  return MirroredGround([m](float x, float z) { return m->world ? m->world->GroundHeight(x, z) : 0.0f; }, width, height);
+}
+
+void WorldPicture::SetLens(const Lens& lens) {
+  impl_->lens = lens;
+  if (impl_->world) impl_->world->lens = lens;
+}
+
+void WorldPicture::CameraCut() {
+  if (impl_->world) impl_->world->cameraCut = true;
+}
+
+// A photo's size: what the card's memory takes (about 2.5 GB for the scene's pictures, by its samples a pixel), at
+// most 16384 a side; then drawn larger again by `supersample` (0: 2) where that fits too.
+void WorldPicture::PhotoSize(int* width, int* height, int* supersample) {
+  constexpr int kMost = 16384;
+  constexpr double kBudget = 2.5e9;
+  const double perPixel = 48.0 + 12.0 * static_cast<double>(gSceneSamples);
+  const int w = std::max(*width, 16), h = std::max(*height, 16);
+  const double fit = std::min({1.0, static_cast<double>(kMost) / w, static_cast<double>(kMost) / h,
+                               std::sqrt(kBudget / perPixel / (static_cast<double>(w) * static_cast<double>(h)))});
+  *width = std::max(16, static_cast<int>(w * fit));
+  *height = std::max(16, static_cast<int>(h * fit));
+  int by = *supersample > 0 ? std::clamp(*supersample, 1, 4) : 2;
+  while (by > 1 && (*width * by > kMost || *height * by > kMost ||
+                    static_cast<double>(*width * by) * static_cast<double>(*height * by) * perPixel > kBudget))
+    --by;
+  *supersample = by;
+}
+
+bool WorldPicture::TakePhoto(const Camera& camera, int width, int height, double tick, std::vector<uint32_t>* pixels, int* madeWidth, int* madeHeight,
+                             int supersample, int settleFrames) {
+  Impl& m = *impl_;
+  pixels->clear();
+  if (madeWidth) *madeWidth = 0;
+  if (madeHeight) *madeHeight = 0;
+  if (!m.world || !m.device || width < 16 || height < 16) return false;
+  if (m.prepared) {  // (a frame LifeBarAnchors began for the next Draw: ended unseen; that Draw prepares its own)
+    m.device->EndFrame(nullptr, false);
+    m.prepared = false;
+  }
+  int by = supersample;
+  PhotoSize(&width, &height, &by);
+  const int drawnWidth = width * by, drawnHeight = height * by;
+  // nothing of the interface in it (put back after, as the minimap's ground does)
+  World& w = *m.world;
+  std::vector<World::Ghost> ghosts;
+  std::vector<World::Line> lines;
+  std::vector<World::Ring> rings;
+  std::vector<World::UserDecal> decals;
+  std::vector<render::RangeGroup> ranges;
+  std::vector<PlacedMesh> placed;
+  std::vector<render::OrderLeg> legs;
+  std::vector<render::OrderMark> marks;
+  auto swapAll = [&] {
+    ghosts.swap(w.ghosts);
+    lines.swap(w.lines);
+    rings.swap(w.rings);
+    decals.swap(w.userDecals);
+    ranges.swap(w.ranges.groups);
+    placed.swap(w.placed);
+    legs.swap(w.orders.legs);
+    marks.swap(w.orders.marks);
+  };
+  swapAll();
+  const bool selectionMarks = w.selectionMarks, lifeBars = w.lifeBars, workBars = w.workBars;
+  w.selectionMarks = w.lifeBars = w.workBars = false;
+  const World::Picking picking = w.KeepPicking();
+  w.photo = true;
+  const int settle = std::clamp(settleFrames, 0, 64);
+  for (int i = 0; i <= settle; ++i) {
+    RenderWorld(camera, drawnWidth, drawnHeight, tick);
+    m.device->EndFrame(i == settle ? &m.capture : nullptr, false);
+  }
+  w.photo = false;
+  w.selectionMarks = selectionMarks;
+  w.lifeBars = lifeBars;
+  w.workBars = workBars;
+  swapAll();
+  w.RestorePicking(picking);
+  if (m.capture.size() < static_cast<size_t>(drawnWidth) * static_cast<size_t>(drawnHeight) * 4) return false;
+  // made smaller: each pixel the mean of the `by` x `by` drawn (red, green, blue, alpha bytes -> 0xAARRGGBB)
+  pixels->resize(static_cast<size_t>(width) * static_cast<size_t>(height));
+  const int n = by * by;
+  for (int y = 0; y < height; ++y)
+    for (int x = 0; x < width; ++x) {
+      int sum[3] = {0, 0, 0};
+      for (int dy = 0; dy < by; ++dy) {
+        const uint8_t* p = m.capture.data() + (static_cast<size_t>(y * by + dy) * static_cast<size_t>(drawnWidth) + static_cast<size_t>(x * by)) * 4;
+        for (int dx = 0; dx < by; ++dx, p += 4)
+          for (int c = 0; c < 3; ++c) sum[c] += p[c];
+      }
+      (*pixels)[static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x)] =
+          0xff000000u | static_cast<uint32_t>((sum[0] + n / 2) / n) << 16 | static_cast<uint32_t>((sum[1] + n / 2) / n) << 8 | static_cast<uint32_t>((sum[2] + n / 2) / n);
+    }
+  if (madeWidth) *madeWidth = width;
+  if (madeHeight) *madeHeight = height;
+  return true;
+}
 
 }  // namespace render

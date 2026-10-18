@@ -16,6 +16,11 @@ struct Camera {
   float pitch = 1.0f;        // radians above the horizon; pi/2 looks straight down
   float fovY = 0.9f;         // vertical field of view, radians
   float zNear = 0.25f;
+  // A cinematic camera's (cinecam.h, CineCamera::View): free in the world, low down and toward the horizon. The
+  // target is then a point ahead on the line of sight (what lies at the picture's middle, near enough), and what
+  // is placed round what the camera looks at is placed for such a view: the sun's shadow maps along the view out
+  // to the distance, the ground cover ahead of the eye. False: the game's camera, as at first.
+  bool cinematic = false;
 
   // right, up and back (pointing from the target to the eye), unit length
   void Axes(Vec3* right, Vec3* up, Vec3* back) const {

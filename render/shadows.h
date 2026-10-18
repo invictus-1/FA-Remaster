@@ -27,8 +27,13 @@ class Shadows {
   int Size() const { return size_; }
   // The pass to begin for a cascade.
   gfx::PassDesc Pass(int i) const;
+  // A cinematic camera's cascades (Camera::cinematic; AlongView): how far from the eye the shadows reach (world
+  // units), and how the slices' ends are spaced (0 evenly .. 1 by a constant ratio: sharper near, coarser far).
+  float cinematicReach = 1000;
+  float cinematicSplit = 0.9f;
 
  private:
+  void AlongView(const Camera& camera, const View& view, Vec3* centres, float* radii);
   gfx::Device* device_;
   gfx::Texture map_;
   int size_ = 0;
