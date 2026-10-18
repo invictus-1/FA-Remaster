@@ -23,6 +23,7 @@
 // of an explosion is a glow laid on the ground (decals.h), which the original look keeps.
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -61,6 +62,8 @@ class Lights {
   // a ramp texture (the scripts' "light particle": `size` is what the original draws its glow with;
   // the light reaches a few times as far).
   void Flash(const std::string& ramp, Vec3 position, float size, double born, float seconds);
+  // (volume explosions, volume_blasts.h) told of every flash as Flash is given it, while set: big ones are blasts
+  std::function<void(const std::string& ramp, Vec3 position, float size, double born, float seconds)> onFlash;
   // The colour a thing glows in whose particles take theirs from that ramp texture: the ramp's
   // strongest place (linear light), for the light a shot in flight throws.
   Vec3 RampGlow(const std::string& ramp);

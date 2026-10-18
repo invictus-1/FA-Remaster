@@ -1,6 +1,8 @@
 #include "clouds.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdio>
 #include <cmath>
 #include <cstring>
 
@@ -90,6 +92,10 @@ cbuffer Clouds : register(b1) {
   float4 coverAt;     // xy: the coverage picture's middle (world x, z); z: the shadows' underside
   float4 cloudBolt;   // a lightning's flash in the layer: xyz where; w how far its light spreads (world units)
   float4 boltLight;   // rgb: its light (0: no flash)
+#ifdef RING
+  float4 cloudRing;   // (volume explosions) a nuke's shock ring: xy its middle (world x, z); z its radius; w how strongly
+  float4 ringLook;    // x its width (world units)
+#endif
 };
 
 RWTexture2D<float> coverOut : register(u0);
@@ -124,6 +130,9 @@ float Phase(float c, float g) {
   return (1 - g2) / pow(max(1 + g2 - 2 * g * c, 1e-4), 1.5);
 }
 
+#ifdef RING
+#define Cloud CloudBeforeRing
+#endif
 // How much cloud there is at a place, `h` its height in the layer (0 underside .. 1 top). `frayed`: with
 // the detail that frays the edges (the steps toward the light go without it).
 float Cloud(float3 p, float h, bool frayed) {
@@ -145,6 +154,22 @@ float Cloud(float3 p, float h, bool frayed) {
   float fray = lerp(fine, 1 - fine, saturate(h * 4));  // (wisps below, billows above)
   return saturate(Remap(d, fray * 0.6, 1, 0, 1));
 }
+#ifdef RING
+#undef Cloud
+// (volume explosions, volume_blasts.h) A nuke's shock ring through the layer: what was inside it is pushed out to its
+// front (a place reads the cloud from nearer the middle, the more the nearer the front), cleared behind the front and
+// heaped up at it.
+float Cloud(float3 p, float h, bool frayed) {
+  float2 off = p.xz - cloudRing.xy;
+  float r = length(off), width = max(ringLook.x, 1);
+  float pushed = cloudRing.w * cloudRing.z * 0.4 * exp(-max(r - cloudRing.z, 0) / width);
+  float3 from = float3(cloudRing.x, p.y, cloudRing.y) + float3(off.x, 0, off.y) * (max(r - pushed, 0) / max(r, 1e-3));
+  float cleared = cloudRing.w * (1 - smoothstep(cloudRing.z - width * 1.5, cloudRing.z - width * 0.2, r));
+  float front = (r - cloudRing.z) / width;
+  float heaped = 1 + 0.8 * cloudRing.w * exp(-front * front);
+  return saturate(CloudBeforeRing(from, h, frayed) * (1 - cleared) * heaped);
+}
+#endif
 
 // The clouds' shadows: from each place of the layer's underside (the coverage picture's places) through
 // the layer toward the sun, what comes through.
@@ -241,6 +266,7 @@ struct Constants {
   Mat4 lastViewProj;
   float look[4], light[4], coverAt[4];
   float bolt[4], boltLight[4];
+  float ring[4], ringLook[4];  // (the ring's shaders only)
 };
 
 }  // namespace
@@ -339,20 +365,34 @@ void Clouds::Prepare(View* view, const Camera& camera, bool on) {
     device_->SetStorage(0, {});
     noiseMade_ = true;
   }
+  if (ringsWanted && !ringsTried_) {  // (volume explosions: the shaders with a nuke's ring, the first frame they may be wanted)
+    ringsTried_ = true;
+    std::string error;
+    const std::string source = std::string("#define RING 1\n") + (gSceneSamples > 1 ? "#define MSAA 1\n" : "") + kViewShaderBlock + kShader;
+    gfx::ComputeDesc cd;
+    cd.source = source;
+    cd.name = "clouds: their shadows, a nuke's ring";
+    cd.entry = "ShadowMarch";
+    ringShadowMarch_ = device_->CreateCompute(cd, &error);
+    cd.name = "clouds: marched, a nuke's ring";
+    cd.entry = "March";
+    if (ringShadowMarch_) ringMarch_ = device_->CreateCompute(cd, &error);
+    if (!ringMarch_) fprintf(stderr, "render: clouds: a nuke's ring cannot be drawn (%s)\n", error.c_str());
+  }
   const Vec3 eye = camera.Eye();
   coverAt_[0] = eye.x;
   coverAt_[1] = eye.z;
   Constants k = {};
   FillConstants(&k, *view, camera, *this, base, coverAt_);
   device_->SetConstants(0, &c, sizeof c);
-  device_->SetConstants(1, &k, sizeof k);
+  device_->SetConstants(1, &k, RingNow() ? sizeof k : offsetof(Constants, ring));
   // where the clouds are round the camera
   device_->SetPipeline(coverage_);
   device_->SetStorage(0, cover_);
   device_->Dispatch(kCoverSize / 8, kCoverSize / 8);
   device_->SetStorage(0, {});
   // their shadows, at their underside over the ground's zero
-  device_->SetPipeline(shadowMarch_);
+  device_->SetPipeline(RingNow() ? ringShadowMarch_ : shadowMarch_);
   device_->SetTexture(0, shape_);
   device_->SetTexture(1, detail_);
   device_->SetTexture(4, cover_);
@@ -393,10 +433,10 @@ void Clouds::Build(const View& view, const Camera& camera, const SkyLight& sky, 
     k.size[3] = std::min(k.size[3], 0.3f);
   }
   device_->SetConstants(0, &c, sizeof c);
-  device_->SetConstants(1, &k, sizeof k);
+  device_->SetConstants(1, &k, RingNow() ? sizeof k : offsetof(Constants, ring));
   const int last = now_;
   now_ = 1 - now_;
-  device_->SetPipeline(march_);
+  device_->SetPipeline(RingNow() ? ringMarch_ : march_);
   device_->SetTexture(0, shape_);
   device_->SetTexture(1, detail_);
   device_->SetTexture(2, marched_[last]);
@@ -430,6 +470,11 @@ static void FillConstants(void* to, const View& view, const Camera& camera, cons
   k.coverAt[0] = coverAt[0];
   k.coverAt[1] = coverAt[1];
   k.coverAt[2] = under;
+  k.ring[0] = clouds.ringX;  // (volume explosions: a nuke's ring, read by the ring's shaders only)
+  k.ring[1] = clouds.ringZ;
+  k.ring[2] = clouds.ringRadius;
+  k.ring[3] = std::clamp(clouds.ringStrength, 0.0f, 1.0f);
+  k.ringLook[0] = std::max(clouds.ringWidth, 1.0f);
 }
 
 }  // namespace render

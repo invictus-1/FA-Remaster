@@ -829,7 +829,17 @@ work is not starved of the processor).
    per-beat hits (World::AddCombat) the craters could be put where the killing shots struck.
 13. **Explosions as real volumes, and a nuke worth the name**: big blasts drawn as lit volumes (simulations the
    visuals session makes in Blender, played back through the light in the air); a nuke's flash lighting the map, a
-   shock ring through the clouds, a mushroom cloud. After item 2 (it shares the smoke's lighting).
+   shock ring through the clouds, a mushroom cloud. After item 2 (it shares the smoke's lighting). First version done
+   2026-10-18 (`World::volumeExplosions`, viewer `--volume-explosions`; docs/render-volumes.md has the whole of it and
+   the delivery form asked of the visuals session): the scripts' flashes and the simulation's harm to an area pick the
+   big blasts (at most four drawn) and every nuke; each is a density and temperature volume played back from a flat DDS
+   of slices and frames, marched in a box to the scene's depth, lit by the sun through its own smoke, the shadow maps,
+   the clouds' and the smoke's shadows, by the sky and the small lights, glowing by its temperature as a hot body does
+   and a small light while hot, casting its shadow through the smoke's shadow map. A nuke's flash brightens the sky
+   and everything under it for a moment and lights the clouds from within, its ring pushes and clears the volumetric
+   clouds, the ground glows under it, its mushroom cloud rises and lingers for 90 s. Proven with stand-ins (a
+   noise-advected sphere, a procedural mushroom) until her bakes come. About 0.25-0.4 ms at 1440p with four blasts, up
+   to 0.5-0.6 ms with a nuke's cap over half the screen. Off: pictures identical (regression 0 px on both backends).
 14. **Zooming out through the clouds (a trial)**: the strategic zoom rises through the volumetric clouds, which thin
    out so the map stays readable.
 15. **Units seen behind trees and cliffs (done, first version, 2026-10-18; ON by default):** `World::hiddenOutlines`
@@ -950,6 +960,7 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `hiddenOutlines` (ON) | a thin line in the army's colour round a unit's part hidden behind trees, hills or buildings | 0.06-0.08 ms (200 tanks in a forest) | |
 | `wildlife` | flocks of birds over the woods and gulls over the shores, scattered by fighting; fireflies at dusk and by night | about 0.02 ms (proposed for the "Ground Detail" setting) | a map with trees or shores |
 | `movementDust` | vehicles raise dust on dry ground, hover units throw spray, high aircraft draw contrails | about 0.07 ms with 60 units moving, 0.22 close up | |
+| `volumeExplosions` | big blasts as lit, glowing volumes; a nuke's flash over the map, its ring through the clouds, its mushroom cloud | about 0.25-0.4 ms with four blasts, up to 0.6 ms with a nuke filling half the screen (the files: tens of MB once on) | the visuals session's volume files |
 
 Ray tracing means Direct3D 12 with DXR 1.1 or Vulkan with ray queries: never on the Mac (MoltenVK has none);
 where it is missing those options do nothing. `rayReflections` builds the surfaces' shaders with ray

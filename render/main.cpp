@@ -98,6 +98,12 @@
 // --heat-shimmer  the air bends what is behind it over fires, exhausts and fresh explosions (World::heatShimmer;
 //           modern look); --heat-bend n the most it bends, in pixels (2)
 // --smoke   all three: --lit-smoke --smoke-shadows --heat-shimmer
+// --volume-explosions  big blasts as lit volumes, and a nuke's flash, shock ring through the clouds, ground glow and
+//           mushroom cloud (volume_blasts.h, World::volumeExplosions; modern look), from the visuals session's files
+//           (<remasters>/_effects/export/moho64/volumes). --volume-test n[,size]: n blasts kept going at random round
+//           where the camera looks, as a flash that large (14) makes them (to see and time them); --volume-most n the
+//           blasts drawn at once (4); --volume-steps n the most steps through one (48); --volume-detail n how much a
+//           finer noise frays their edges (0.45; 0 none)
 // --terrain-despite-hold  the remastered ground (<remasters>/_terrain/export/moho64) mounted even with its HOLD file
 //           (to look at it before games may); --ground-ultra  its 8k materials in place of the 4k
 // --ground-cover  grass near the camera (World::groundCover; modern look); on a map with the visuals track's plants
@@ -428,6 +434,10 @@ struct Options {
   bool litSmoke = false;                // --lit-smoke
   bool smokeShadows = false;            // --smoke-shadows
   bool heatShimmer = false;             // --heat-shimmer
+  bool volumeExplosions = false;        // --volume-explosions
+  float volumeTest = 0, volumeTestSize = 14;  // --volume-test
+  int volumeMost = -1, volumeSteps = -1;      // --volume-most, --volume-steps
+  float volumeDetail = -1;                    // --volume-detail
   float smokeDensity = -1, fireLight = -1, smokeShadowStrength = -1, heatBend = -1;  // (their tuning; -1: as at first)
   bool waterDetail = false;             // --water-detail
   bool waterRipples = false;            // --water-ripples
@@ -605,6 +615,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--smoke-shadows") o->smokeShadows = true;
     else if (a == "--heat-shimmer") o->heatShimmer = true;
     else if (a == "--smoke") o->litSmoke = o->smokeShadows = o->heatShimmer = true;
+    else if (a == "--volume-explosions") o->volumeExplosions = true;
     else if (a == "--water-detail") o->waterDetail = true;
     else if (a == "--water-ripples") o->waterRipples = true;
     else if (a == "--ground-cover") o->groundCover = true;
@@ -701,6 +712,13 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--blast-test") {
       if (sscanf(v, "%d,%f", &o->blastTest, &o->blastRadius) < 1) return false;
     }
+    else if (a == "--volume-test") {
+      if (sscanf(v, "%f,%f", &o->volumeTest, &o->volumeTestSize) < 1) return false;
+      o->volumeExplosions = true;
+    }
+    else if (a == "--volume-most") o->volumeMost = atoi(v);
+    else if (a == "--volume-steps") o->volumeSteps = atoi(v);
+    else if (a == "--volume-detail") o->volumeDetail = static_cast<float>(atof(v));
     else if (a == "--plant-tallest") o->plantTallest = static_cast<float>(atof(v));
     else if (a == "--wildlife-noise") {
       if (sscanf(v, "%f,%f,%f,%f", &o->wildlifeNoise[0], &o->wildlifeNoise[1], &o->wildlifeNoise[2], &o->wildlifeNoise[3]) < 3) return false;
@@ -1170,6 +1188,10 @@ int main(int argc, char** argv) {
   world.litSmoke = opt.litSmoke;
   world.smokeShadows = opt.smokeShadows;
   world.heatShimmer = opt.heatShimmer;
+  world.volumeExplosions = opt.volumeExplosions;
+  if (opt.volumeMost >= 0) world.volumes.most = opt.volumeMost;
+  if (opt.volumeSteps > 0) world.volumes.steps = opt.volumeSteps;
+  if (opt.volumeDetail >= 0) world.volumes.detail = opt.volumeDetail;
   if (opt.smokeDensity >= 0) world.particles.smokeDensity = opt.smokeDensity;
   if (opt.fireLight >= 0) world.fireLight = opt.fireLight;
   if (opt.smokeShadowStrength >= 0) world.smokeMap.strength = opt.smokeShadowStrength;
@@ -1932,6 +1954,7 @@ int main(int argc, char** argv) {
              f.kind == 0 ? "starlings" : f.kind == 1 ? "crows" : f.kind == 2 ? "pigeons" : "gulls", f.home.x, f.home.z, f.home.y,
              f.state == 0 ? "resting" : f.state == 1 ? "aloft" : f.state == 2 ? "fleeing" : "landing");
   };
+  std::vector<double> volumeTestBorn;  // (--volume-test: when each of its blasts went off last)
   struct {  // --timings: each stage's time added up over the frames, in the order first met
     std::vector<std::pair<std::string, double>> sums;
     int frames = 0;
@@ -2742,6 +2765,26 @@ int main(int argc, char** argv) {
       }
     }
     if (opt.wildlifeVerbose && frameCount == 1) tellFlocks("at the start");
+    if (opt.volumeTest > 0 && haveMap) {  // --volume-test: n blasts kept going at random round the camera's point, staggered
+      const double clock = havePlay ? playTick * 0.1 : static_cast<double>(time), every = 7.0;
+      const int n = static_cast<int>(opt.volumeTest);
+      volumeTestBorn.resize(static_cast<size_t>(n), -1e9);
+      for (int i = 0; i < n; ++i) {
+        const double offset = every * i / n, born = std::floor((clock - offset) / every) * every + offset;
+        if (born <= volumeTestBorn[static_cast<size_t>(i)] || born > clock) continue;
+        volumeTestBorn[static_cast<size_t>(i)] = born;
+        uint32_t h = static_cast<uint32_t>(born * 10 + 0.5) * 2654435761u + static_cast<uint32_t>(i) * 40503u + 7u;
+        auto next = [&h]() {
+          h ^= h << 13;
+          h ^= h >> 17;
+          h ^= h << 5;
+          return static_cast<float>(h & 0xffffff) / 16777216.0f;
+        };
+        const float reach = std::clamp(camera.distance * 0.35f, 8.0f, 60.0f);
+        const float x = camera.target.x + (next() * 2 - 1) * reach, z = camera.target.z + (next() * 2 - 1) * reach;
+        world.volumes.Offer("", {x, world.GroundHeight(x, z) + 1, z}, opt.volumeTestSize, born, 1.4f);
+      }
+    }
     if (!haveMap) DrawTestScene(draw);
     const auto renderStart = std::chrono::steady_clock::now();
     world.Render();

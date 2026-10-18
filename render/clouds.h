@@ -61,11 +61,19 @@ class Clouds {
   Vec3 boltAt{0, 0, 0};
   float boltReach = 120;
   Vec3 boltLight{0, 0, 0};
+  // (volume explosions, volume_blasts.h) A nuke's shock ring, set by the world each frame: its middle (x, z), radius and
+  // width (world units), how strongly it clears the clouds inside it and heaps them at its front (0: none). Marched by
+  // shaders of their own, made the first frame `ringsWanted` (so that without a ring the clouds are as they were).
+  float ringX = 0, ringZ = 0, ringRadius = 0, ringWidth = 1, ringStrength = 0;
+  bool ringsWanted = false;
 
  private:
   bool Size(int width, int height);
   gfx::Device* device_;
   gfx::Pipeline shapeNoise_, detailNoise_, coverage_, shadowMarch_, march_;
+  gfx::Pipeline ringShadowMarch_, ringMarch_;  // (the same with a nuke's ring; made when rings are first wanted)
+  bool ringsTried_ = false;
+  bool RingNow() const { return ringStrength > 0 && ringMarch_ && ringShadowMarch_; }
   gfx::Texture shape_, detail_, cover_, shadow_, marched_[2];
   bool noiseMade_ = false, built_ = false, haveLast_ = false, prepared_ = false;
   float coverAt_[2] = {};

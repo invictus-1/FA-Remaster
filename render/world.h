@@ -65,6 +65,7 @@
 #include "textures.h"
 #include "unit_wear.h"
 #include "view.h"
+#include "volume_blasts.h"
 #include "placed.h"
 #include "ranges.h"
 #include "wakes.h"
@@ -489,6 +490,12 @@ class World {
   // Modern look; off by default.
   bool movementDust = false;
   MovementDust dust;
+  // Explosions as real volumes (volume_blasts.h; Chris, 2026-10-17, the next looks' item 13): big blasts drawn as lit
+  // volumes played back from the visuals session's simulations, glowing while hot; a nuke's flash lighting the sky and
+  // the map, its shock ring through the volumetric clouds, the ground's glow under it, its mushroom cloud rising and
+  // lingering. Modern look; off by default.
+  bool volumeExplosions = false;
+  VolumeBlasts volumes;
   Clouds clouds;
   // Soft shadows (lighting.h, SunShadow; the lighting upgrade): the sun's shadows sharper near what casts
   // them and blurred farther off, as a sun that is not a point makes them. Modern look; off by default.
@@ -735,6 +742,7 @@ class World {
   bool bounceTried_ = false, bounceMade_ = false, bounceNow_ = false;  // (bounce light: tried, made, on this frame)
   bool grassTried_ = false, grassMade_ = false, grassNow_ = false;  // (ground cover: its shader tried, made, on this frame)
   bool litSmokeNow_ = false, smokeNow_ = false;  // (lit smoke this frame; the smoke's shadow map drawn this frame)
+  bool volumesOn_ = false, volumesDrawn_ = false;  // (volume explosions: on this frame; volumes drawn this frame)
   std::vector<Particles::Hot> hot_;  // (lit smoke: the lasting fires, this frame)
   bool deepTried_ = false, deepNow_ = false;  // (deep tracks: their field tried; on this frame)
   void PressUnit(const FrameUnit& u, const Frame& frame, const std::string& blueprint, const Model* model, Vec3 position, const Quat& orientation);
