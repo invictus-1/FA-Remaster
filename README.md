@@ -112,7 +112,59 @@ The remastered units try to stay faithful to the original designs. They are also
 modelling for me and Claude, the AI this project is built with, so please don't expect anything
 revolutionary. So far the UEF faction's units and buildings are done, and first, rough versions of
 some commanders. The models, the remade effects and the remade Seton's Clutch are not in this
-repository and are not released yet. Pictures will come once the art is finished.
+repository and are not released yet. An early look at them is below.
+
+## A first look
+
+> **EARLY LOOK.** The remastered UEF units in these pictures are an early prototype: they are still being tested and changed, and everything you see may change before it is finished. The original (legacy) units, textures and look still work and can be used as they are - they just don't get the new looks and effects.
+
+![Seton's Clutch Remastered, late afternoon](docs/images/showcase/01_scenery_dusk_bay.jpg)
+*Seton's Clutch Remastered, late afternoon*
+
+![The rock hill](docs/images/showcase/02_scenery_day_hill.jpg)
+*The rock hill*
+
+![Rain over the meadows](docs/images/showcase/03_scenery_rain_meadow.jpg)
+*Rain over the meadows*
+
+![Snow](docs/images/showcase/04_scenery_snow_hill.jpg)
+*Snow*
+
+![UEF vs UEF on the land bridge](docs/images/showcase/05_battle_day_overview.jpg)
+*UEF vs UEF on the land bridge*
+
+![The beach, Riptides and Wasps](docs/images/showcase/06_battle_day_close.jpg)
+*The beach, Riptides and Wasps*
+
+![The clash on the bridge](docs/images/showcase/07_close_t900.jpg)
+*The clash on the bridge*
+
+![Titans and Percivals](docs/images/showcase/08_close_t1550.jpg)
+*Titans and Percivals*
+
+![Ships at dusk](docs/images/showcase/09_battle_dusk_water.jpg)
+*Ships at dusk*
+
+![Night: shields over the bridge](docs/images/showcase/10_battle_night_bridge.jpg)
+*Night: shields over the bridge*
+
+![Night fighting](docs/images/showcase/11_close_night_t900.jpg)
+*Night fighting*
+
+![A storm over the battle](docs/images/showcase/12_battle_rain_bridge.jpg)
+*A storm over the battle*
+
+![Fighting in the rain](docs/images/showcase/13_close_rain_t900.jpg)
+*Fighting in the rain*
+
+![Winter: the end of the Fatboys](docs/images/showcase/14_battle_snow_fatboys.jpg)
+*Winter: the end of the Fatboys*
+
+![Titans in the snow](docs/images/showcase/15_close_snow_t1550.jpg)
+*Titans in the snow*
+
+![Dusk: a Fatboy goes down](docs/images/showcase/16_fatboy_death_2.jpg)
+*Dusk: a Fatboy goes down*
 
 ## Simulation (`src/`)
 
