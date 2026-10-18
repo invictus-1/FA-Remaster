@@ -513,6 +513,8 @@ work is not starved of the processor).
 14. **Zooming out through the clouds (a trial)**: the strategic zoom rises through the volumetric clouds, which thin
    out so the map stays readable.
 15. **Units seen behind trees and cliffs**: a faint outline in the army's colour where a unit is hidden.
+   ON by default (Chris via the interface session, 2026-10-17: readability), and only for what the player may
+   see: his own, allied units, enemies in sight, never an enemy in the fog.
 16. **Dust, spray and contrails**: vehicles raise dust on dry ground, hover units throw spray, high aircraft draw
    contrails. After items 2 and 3 (shared particles and dust).
 17. **Life in the world**: flocks of birds over the forests that scatter when fighting comes near; fireflies at dusk;
