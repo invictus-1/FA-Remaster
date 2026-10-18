@@ -39,6 +39,18 @@ Today all three programs (moho64, moho64ui, moho64view) learn where the game is 
 the part a shipped build replaces.
 
 ### 3.1 Decisions for Chris
+**Chris's answers (2026-10-18):**
+1. Scripts: (b) if FAF's terms allow it, otherwise (c); the replay tests keep running against FAF either way.
+   Checked the same day: FAForever/fa has NO licence (GitHub reports none, no LICENSE file in the repository). Only
+   some newer FAF-written files say "Shared under the MIT license" in their header (e.g. `lua/shared/MapUtilities.lua`,
+   `engine/Library.lua`); the bulk is GPG's original Lua with FAF's changes, and the repository itself carries GPG /
+   THQ's EULA (`lua/ui/help/eula.lua`), which forbids redistribution. So nothing grants us the right to ship FAF's
+   scripts, and the answer is **(c)**: read FAF's game data from the player's own FAF install when there is one (read
+   only), stock Steam scripts otherwise. (Asking FAF's maintainers for permission would be Chris's step, not ours.)
+2. Assets with GPG data: ship them (Seton's Clutch Remastered included); they are useless without the original game.
+3. The one-time profile import (read only): keep it.
+
+The questions as they were put:
 1. **FAF's game scripts.** Every Lua script we run today is FAF's (the frozen FAF 3839 `lua.nx2` in
    `SupComLab\gamedata`; Steam's `lua.scd`, `moholua.scd`, `mohodata.scd` and `schook.scd` are switched off, and
    FAF's units / textures / effects `.nx2` are mounted ahead of Steam's `.scd`). Our script fixes (`data\fixes`) and
