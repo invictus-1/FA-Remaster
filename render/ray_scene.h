@@ -8,15 +8,23 @@
 //  - for each model's level, a colour: its albedo's average (worked out once on the card, from a small level of
 //    its texture, the holes of leaves left out) and how much of it its team colour takes (its specular's alpha);
 //    for leaves (a level with holes), how much of it is leaf instead: a ray takes one of its triangles with that
-//    chance (they are not opaque), so over many rays a canopy lets through what its holes would.
+//    chance (they are not opaque), so over many rays a canopy lets through what its holes would;
+//  - for each solid level (not leaves) with an albedo, also its triangles, each with its own colour (the albedo
+//    read over the triangle, at the texture's level that matches its size), its team colour's share there and the
+//    way it faces (in the model's own space): the triangle table, worked out once on the card from the level's
+//    vertex and index buffers (kTriangles). A ray that meets such a level sees the triangle it met, turned into the
+//    world by the instance's matrix; leaves, and a level the table has no room for, keep the level's one colour and
+//    face the ray.
 // A shader reads the scene (Scene, kSceneSlot), the colours (Colours: RGBA8, entry e at (e % 1024, e / 1024),
 // rgb the albedo as stored, a the team colour's share or, for leaves, their coverage) and what each instance is
 // (InstanceData, a StructuredBuffer of uint4 by the instance's id: x its colour entry; y flags: 1 the ground, 2 the
-// water, 4 scenery (no team colour), 8 leaves; z its team colour as RGBA8).
+// water, 4 scenery (no team colour), 8 leaves; z its team colour as RGBA8; w its level's first entry in the
+// triangle table + 1, 0 none). The shaders that trace read all of it from one picture (InstancesPicture,
+// kRayShaderBlock's t37: every texture slot is taken in the ground's shader, so the triangle table lives there too).
 //
 // A check view (Check; World::rayView, viewer --ray-view) traces a ray from the camera through each pixel, the
 // sun's shadow with another, and shows what they meet lit simply: the ground by its own normals and a colour of
-// its own, models by their colours facing the ray.
+// its own, models by the triangles they meet (their colours and the way they face).
 #pragma once
 #include <string>
 #include <unordered_map>
@@ -28,9 +36,18 @@
 namespace render {
 
 // What a shader that traces the scene shares (the check view, the bounce light, reflections): after the view's
-// block (view.h), in its slots (RayScene binds them: Bind) the scene (t33), what each instance is (t37: rgb its
-// albedo, linear, its team colour in; a 0..1 leaves with that coverage, 2 something solid, 3 the ground, 4 the
-// water), the ground's normals and colours (t38, t39: Terrain::NormalMap, GroundColours).
+// block (view.h), in its slots (RayScene binds them: Bind) the scene (t33), the rays' picture (t37, below), the
+// ground's normals and colours (t38, t39: Terrain::NormalMap, GroundColours).
+// The rays' picture (RayScene::InstancesPicture: RGBA32F, 1024 wide; its rows as RayScene's kInstanceRows and
+// kTableRow say) holds three things:
+//  - rows 0-127, what each instance is (instance i at (i % 1024, i / 1024): rgb its level's albedo, linear, its
+//    team colour in; a 0..1 leaves with that coverage, 2 something solid, 3 the ground, 4 the water);
+//  - rows 128-255, the rest of it (at (i % 1024, 128 + i / 1024): rgb its team colour, linear; a its level's first
+//    entry in the triangle table + 1, negative where it takes no team colour (scenery), 0 where it has none);
+//  - from row 256, the triangle table: a triangle of a level a texel (entry e at (e % 1024, 256 + e / 1024); a
+//    level's triangles in their order, from its first entry): x its colour as stored, red + 256 green + 65536 blue
+//    (0..255 each), a whole number; y its team colour's share; z, w the way it faces in the model's own space
+//    (view.h's octahedral map, BounceOct; the side its corners go round anticlockwise, as the passes draw them).
 inline const char kRayShaderBlock[] = R"hlsl(
 RaytracingAccelerationStructure scene : register(t33);
 Texture2D rayInstances : register(t37);
@@ -42,6 +59,8 @@ StructuredBuffer<float4> lightData : register(t1, space1);  // the small lights 
 #endif
 float3 RayLinear(float3 c) { return pow(max(c, 0), 2.2); }  // (lighting.h's ToLinear)
 float4 RayInstance(uint i) { return rayInstances.Load(int3(i % 1024, i / 1024, 0)); }
+float4 RayInstanceRest(uint i) { return rayInstances.Load(int3(i % 1024, 128 + i / 1024, 0)); }
+float4 RayTriangle(uint e) { return rayInstances.Load(int3(e % 1024, 256 + e / 1024, 0)); }
 uint RayHash(uint x) {
   x ^= x >> 16;
   x *= 0x7feb352d;
@@ -55,10 +74,21 @@ uint RayHash(uint x) {
 bool RayTakesLeaf(uint instance, uint primitive, uint seed) {
   return (RayHash(seed ^ RayHash(primitive * 9781 + instance * 6271)) & 0xffff) < saturate(RayInstance(instance).a) * 65535;
 }
-// The first thing a ray meets (mask: 0xff everything, 0x01 not the water): whether it met something, how far,
-// which instance.
-// (and whether it met the front of a triangle: the side its corners go round anticlockwise, as the passes draw them)
-bool RayTraceFacing(float3 from, float3 d, float tMin, float tMax, uint mask, uint seed, out float t, out uint instance, out bool front) {
+// What a ray met (RayTrace): how far; which instance, and which of its level's triangles (its number in the
+// level's index buffer, so its entry in the triangle table); whether it met the triangle's front (the side its
+// corners go round anticlockwise, as the passes draw them); and the instance's turn (its matrix's 3 x 3, which
+// takes a way of the model's own space into the world).
+struct RayHit {
+  float t;
+  uint instance;
+  uint primitive;
+  bool front;
+  float3x3 turn;
+};
+// The first thing a ray meets (mask: 0xff everything, 0x01 not the water): whether it met something, and what (the
+// hit's fields are read from the query only where it met something; elsewhere t is tMax and the rest are left at
+// nothing in particular).
+bool RayTrace(float3 from, float3 d, float tMin, float tMax, uint mask, uint seed, out RayHit hit) {
   RayDesc ray;
   ray.Origin = from;
   ray.Direction = d;
@@ -68,14 +98,20 @@ bool RayTraceFacing(float3 from, float3 d, float tMin, float tMax, uint mask, ui
   q.TraceRayInline(scene, RAY_FLAG_NONE, mask, ray);
   while (q.Proceed())
     if (RayTakesLeaf(q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), seed)) q.CommitNonOpaqueTriangleHit();
-  t = q.CommittedRayT();
-  instance = q.CommittedInstanceID();
-  front = q.CommittedTriangleFrontFace();
-  return q.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
-}
-bool RayTrace(float3 from, float3 d, float tMin, float tMax, uint mask, uint seed, out float t, out uint instance) {
-  bool front;
-  return RayTraceFacing(from, d, tMin, tMax, mask, seed, t, instance, front);
+  hit.t = tMax;
+  hit.instance = 0;
+  hit.primitive = 0;
+  hit.front = true;
+  hit.turn = float3x3(1, 0, 0, 0, 1, 0, 0, 0, 1);
+  const bool met = q.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
+  [branch] if (met) {
+    hit.t = q.CommittedRayT();
+    hit.instance = q.CommittedInstanceID();
+    hit.primitive = q.CommittedPrimitiveIndex();
+    hit.front = q.CommittedTriangleFrontFace();
+    hit.turn = (float3x3)q.CommittedObjectToWorld3x4();
+  }
+  return met;
 }
 // Whether the sun reaches a place (1) or something stands between (0); the water lets it through.
 float RaySunLit(float3 p, float3 n, uint seed) {
@@ -90,11 +126,14 @@ float RaySunLit(float3 p, float3 n, uint seed) {
     if (RayTakesLeaf(q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), seed ^ 0x5bd1e995)) q.CommitNonOpaqueTriangleHit();
   return q.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? 0 : 1;
 }
-// What a ray met there, as the rays see it: its albedo (linear) and the way it faces. The ground by its own normals
-// and colours, the water dark and facing up, a model by its level's colour (and team colour), facing the ray (no
-// normals are kept for models). `map`: the map's width and height.
-void RaySurfaceAt(uint instance, float3 p, float3 d, float2 map, out float3 albedo, out float3 n) {
-  float4 info = RayInstance(instance);
+// What a ray met at p (RayTrace's hit, the ray's direction d), as the rays see it: its albedo (linear) and the way
+// it faces. The ground by its own normals and colours, the water dark and facing up. A model's solid level by the
+// triangle met (the triangle table): its colour, the instance's team colour by its share (none for scenery), and
+// the way it faces turned into the world, toward the side the ray came from where it met the triangle's back.
+// Leaves, and a level without a table, by the level's one colour (its team colour in), facing the ray. `map`: the
+// map's width and height.
+void RaySurfaceAt(RayHit hit, float3 p, float3 d, float2 map, out float3 albedo, out float3 n) {
+  float4 info = RayInstance(hit.instance);
   if (info.a > 2.5 && info.a < 3.5) {
     float4 stored = rayGroundNormals.SampleLevel(samplerLinearClamp, p.xz / map, 0);
     n.xz = stored.ag * 2 - 1;
@@ -106,6 +145,15 @@ void RaySurfaceAt(uint instance, float3 p, float3 d, float2 map, out float3 albe
   } else {
     albedo = info.rgb;
     n = -d;
+    float4 rest = RayInstanceRest(hit.instance);
+    [branch] if (rest.a != 0) {
+      float4 tri = RayTriangle(uint(abs(rest.a)) - 1 + hit.primitive);
+      uint packed = uint(tri.x);
+      float3 own = RayLinear(float3(packed & 255, (packed >> 8) & 255, packed >> 16) / 255.0);
+      albedo = rest.a > 0 ? lerp(own, rest.rgb, tri.y) : own;
+      n = normalize(mul(hit.turn, BounceDir(tri.zw)));
+      if (!hit.front) n = -n;
+    }
   }
 }
 // The sun's light as the lit surfaces take it (lighting.h: the map's colour and multiplier, the sun's strength).
@@ -167,6 +215,7 @@ inline std::string RayShaders() { return gRayShaders ? std::string("#define RAYS
 
 class MeshRenderer;
 struct MapData;
+struct ModelLod;
 
 class RayScene {
  public:
@@ -186,6 +235,11 @@ class RayScene {
   gfx::Buffer InstanceData() const { return instanceData_; }
   gfx::Texture InstancesPicture() const { return instancesPicture_; }  // (kRayShaderBlock's t37)
   int Instances() const { return static_cast<int>(info_.size()); }
+  // The rays' picture's rows (kRayShaderBlock says what they hold; its numbers are these): what each instance is,
+  // the rest of it from kInstanceRows on, the triangle table from kTableRow on, kTableRows of it (a triangle a texel).
+  static constexpr uint32_t kInstanceRows = 128;  // (131,072 instances at most)
+  static constexpr uint32_t kTableRow = 2 * kInstanceRows;
+  static constexpr uint32_t kTableRows = 1024;    // (1,048,576 triangles; 16 bytes each)
   // The check view, for a scene `view` (one sample a pixel): the picture to show in place of the scene's
   // (none where it cannot be made). The terrain's normal map and its colours (Terrain::GroundColours).
   gfx::Texture Check(const View& view, gfx::Texture groundNormals, gfx::Texture groundColours);
@@ -201,12 +255,21 @@ class RayScene {
   struct Level {
     gfx::Structure structure;
     uint32_t colour = 0;
+    uint32_t table = 0;   // its first entry in the triangle table + 1 (0: it has none)
     bool leaves = false;  // (not opaque: taken by chance)
   };
   gfx::Device* device_;
   bool available_ = false;
-  gfx::Pipeline average_, check_, resolve_;
-  gfx::Texture instancesPicture_;  // (each frame: what each instance is, kRayShaderBlock's t37)
+  gfx::Pipeline average_, triangles_, check_, resolve_;
+  // (what each instance is, made each frame; and the triangle table, a level's part made once: kRayShaderBlock's t37)
+  gfx::Texture instancesPicture_;
+  uint32_t nextTriangle_ = 0;
+  bool tableFull_ = false;  // (said once)
+  struct NewTable {  // a level seen the first time this frame, whose triangles go into the table at `first`
+    const ModelLod* lod;
+    uint32_t first, count;
+  };
+  std::vector<NewTable> newTables_;
   gfx::Structure scene_, ground_, water_;
   gfx::Buffer groundVertices_, groundIndices_, waterVertices_;
   float mapWidth_ = 1, mapHeight_ = 1;

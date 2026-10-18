@@ -1817,10 +1817,14 @@ Buffer VulkanDevice::CreateBuffer(const BufferDesc& desc) {
     if (!desc.data || !desc.size) return {};
     rec.size = desc.size;
     VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    bci.size = desc.size;
-    bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | (desc.kind == BufferKind::Index ? VK_BUFFER_USAGE_INDEX_BUFFER_BIT
-                                                     : desc.kind == BufferKind::Vertex ? VK_BUFFER_USAGE_VERTEX_BUFFER_BIT
-                                                                                      : VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    // (its size a whole number of 4-byte words: a shader reads it a word at a time, SetShaderBuffer, and the last
+    // word of 16-bit indices of an odd count lies half past the data)
+    bci.size = (static_cast<VkDeviceSize>(desc.size) + 3) & ~VkDeviceSize{3};
+    // every static buffer can be read by shaders as well (SetShaderBuffer: a model's vertices and indices)
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                (desc.kind == BufferKind::Index ? VK_BUFFER_USAGE_INDEX_BUFFER_BIT
+                 : desc.kind == BufferKind::Vertex ? VK_BUFFER_USAGE_VERTEX_BUFFER_BIT
+                                                   : 0);
     if (rayTracing_ && desc.kind != BufferKind::Shader)  // (what a geometry structure is built from)
       bci.usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
     if (vkCreateBuffer(device_, &bci, nullptr, &rec.buffer) != VK_SUCCESS) return {};
@@ -2877,8 +2881,14 @@ void VulkanDevice::SetIndexBuffer(Buffer buffer) {
 
 void VulkanDevice::SetShaderBuffer(Buffer buffer, int slot) {
   BufferRec* rec = Find(buffer);
-  if (!rec || rec->kind != BufferKind::Shader || !rec->dynamic || rec->frame != frameNumber_ || slot < 0 || slot > 1) return;
-  boundBuffers_[slot] = {rec->buffer, rec->offset, rec->size};
+  if (!rec || slot < 0 || slot > 1) return;
+  if (rec->dynamic) {  // a Shader buffer's contents of this frame
+    if (rec->kind != BufferKind::Shader || rec->frame != frameNumber_) return;
+    boundBuffers_[slot] = {rec->buffer, rec->offset, rec->size};
+  } else {  // a static buffer, whole (its own buffer, made a whole number of words long: CreateBuffer)
+    if (!rec->buffer) return;
+    boundBuffers_[slot] = {rec->buffer, 0, (static_cast<VkDeviceSize>(rec->size) + 3) & ~VkDeviceSize{3}};
+  }
   setDirty_ = true;
 }
 

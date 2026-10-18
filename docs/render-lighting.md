@@ -255,8 +255,9 @@ Mac", and every ray-traced effect keeps a fallback without it.
      - Cost at 1440p (Direct3D 12, the sunset water scene): the scene 0.12 ms, the water +0.09, the ground
        +0.09, the models about nothing; about 0.3 ms in all. Off: pictures identical, pixel for pixel, on both
        backends; on, Vulkan as Direct3D 12 (mean 0.37 in 255: leaves taken by chance).
-     - Open: what the rays meet is coarse (a colour per model, no normals for models, the ground every fourth
-       height), fine for water and wet ground, too coarse for a sharp chrome mirror; the minimap's frame has
+     - Open: what the rays meet is coarse (a colour per model, no normals for models - each triangle's since,
+       below - the ground every fourth height), fine for water and wet ground, too coarse for a sharp chrome
+       mirror; the minimap's frame has
        none. With it on, a game's picture opens in about 1.46 s against 0.5 s (the surfaces' shaders built
        with ray tracing in them, measured by the ui chat): a shader cache would take that away (for the
        optimisation phase).
@@ -271,6 +272,31 @@ Mac", and every ray-traced effect keeps a fallback without it.
      - Open: the probes keep 0.97 of their light each frame, so an explosion's bounced share comes in over
        about half a second and lingers as long (the flash itself lights at once); faster blending where the
        light changes much (as DDGI does) risks flicker from 64 rays a probe: left for when it shows.
+   - **What the rays meet: each triangle's colour and way** (2026-10-17, Chris's list item 6, sharper
+     reflections with the models' real textures). Each solid level that enters the ray scene gets, once, a part
+     of a triangle table (`kTriangles`, a compute pass over its vertex and index buffers: gfx's `SetShaderBuffer`
+     now takes static buffers too, read as `ByteAddressBuffer`): for each triangle its albedo read over it (its
+     middle and halfway to each corner, at the texture's whole level nearest a quarter of it), its team colour's
+     share there and its face's way in the model's own space. A ray that meets the level reads the triangle it met
+     (`CommittedPrimitiveIndex`), turns its way into the world (`CommittedObjectToWorld3x4`; toward the ray's side
+     where it met the back) and takes the instance's team colour by the triangle's share (`RayHit`,
+     `RaySurfaceAt(hit, ...)`; the check view, the bounce light, reflections and the water's mirror all read it).
+     Leaves keep one colour a level (taken by chance, as before). Every texture slot is taken in the ground's
+     shader (its albedo and normal arrays fill t6-t24), so the table lives in the rays' picture at t37 (RGBA32F,
+     rows 0-127 what each instance is as before, 128-255 its team colour and table entry, from 256 a triangle a
+     texel: 1,048,576 triangles, 20 MB in all against 2 MB before; Seton's with units used 6,501).
+     - Check view: units show their panels, team colour and facets lit by the sun where they were one flat colour
+       (the game's own units too, by their spec-team texture). In the water the change is small where the screen's
+       own mirror shows the place (it has the last word); the mirrored units' sunlit panels and team colour show
+       where the rays decide. Wet sand on Seton's reflects no units either way (too rough for rays).
+     - Cost at 1440p (the dusk shore scene, lowest times): Direct3D 12, the scene's stage 0.25 -> 0.27 ms (the
+       second texel an instance), the ground, the water and the bounce light within their noise; Vulkan all within
+       noise. A level's table once: 29 levels (6,501 triangles) in 0.15-0.25 ms, the first frame. Off: pictures
+       identical, pixel for pixel, on both backends; on, the check view Vulkan as Direct3D 12 (mean 0.000; a
+       texture level between two gave 0.05: NVIDIA's two drivers blend levels differently, so the table reads whole
+       levels), the water as before (mean 0.38, leaves taken by chance).
+     - `--gfx-check` also reads static buffers in a dispatch (16-bit indices of an odd count, floats) and checks a
+       hit's triangle and its instance's matrix (a matrix read the wrong way round on Vulkan would show).
    - **Ray-traced shadows: put off** (2026-10-17, the renderer's judgement). The sun's shadow maps already
      cover all the game's camera sees (each cascade 3.2 times the last, the farthest about 18 times the
      camera's distance), and with soft and contact shadows their edges are right. The rays see each model by
@@ -344,9 +370,9 @@ where it changes the look, off by default, measured like the rest. In the order 
    Cost at 1440p: the ground and the water about +0.02 ms each. Off: pictures identical; on, Vulkan as Direct3D 12
    (mean 0.44 in 255: the water's own). Open: the band does not follow the swell's run up the beach (it is as high
    everywhere); on a steep rocky shore it is thin.
-4. **Sharper reflections with the models' real textures:** the rays read each model's own albedo (its levels'
-   texture coordinates kept for the rays, the albedos in a picture of small copies) instead of one colour a
-   model; the visuals session upgrades what looks grainy.
+4. **Sharper reflections with the models' real textures (done, first version, 2026-10-17):** the rays read each
+   triangle's own colour, team colour share and facing instead of one colour a model ("What the rays meet: each
+   triangle's colour and way", in the ray tracing section above); the visuals session upgrades what looks grainy.
 5. **FSR 3 frame generation (done, first version, 2026-10-17):** `World::frameGeneration` (viewer
    `--frame-generation`, with `--msaa 1` or `--fsr3`; `WorldPicture::SetFrameGeneration`, a sixth setting asked of
    the ui). Each frame is shown twice over: first a picture made between the frame before and this one, then the
@@ -406,7 +432,8 @@ where it changes the look, off by default, measured like the rest. In the order 
      marks, over the square, the discs of every model drawn that is not scenery and stands on the ground (its
      footprint from its bounds); blades there lie at a tenth of their height. Cost at 1440p: 0.05 ms at a close
      zoom (12 units), 0.16 ms at 30. Off: pictures identical; on, Vulkan as Direct3D 12 (mean 0.06).
-     - **The plants: first version, off until Chris has seen them** (2026-10-17; the visuals session's card atlas
+     - **The plants: first version, on** (2026-10-17; Chris, having seen them: "plants I'm good with"; the
+       visuals session's card atlas
        for SETONS_R, her sections 49 and 50: 16 cells re-rendered as patches - tussocks, weeds, flowers, dry
        stalks, a fern - with a density table by the map's nine layers in its JSON). The map's entry in remap.json
        names its `cover` file; `Terrain::ReadCover` reads the table by the layers' names, `Terrain::CoverDensity`
@@ -420,10 +447,11 @@ where it changes the look, off by default, measured like the rest. In the order 
        alpha-tested at a half. Sizes: the tallest (dry stalks, 0.71 m real) at `plantTallest` 0.24 units (half a
        small unit's hull: readability), the low plants `plantBoost` 2.75 times their real proportion but none above
        that cap (at one scale the grass was 4-8 pixels at a close zoom and did not show among the blades). Cost at
-       1440p: +0.025 ms at a close zoom (8 units), +0.05 at 25. `plantDensity` 0 by default (viewer
-       `--plant-density 15`, `--plant-tallest`). Off: pictures identical.
-     - Open: Chris's word on the plants' look (then their density on by default, within Ground Detail); the
-       leafy patches read a little flat from straight above; roads, decals and build pads not yet kept clear; one
+       1440p: +0.025 ms at a close zoom (8 units), +0.05 at 25. `plantDensity` 15 (viewer `--plant-density`,
+       0 none; `--plant-tallest`), with the ground cover (Ground Detail), on maps with a cover atlas. Off:
+       pictures identical.
+     - Open: his playtest's word (he judges them in play); the leafy patches read a little flat from straight
+       above; roads, decals and build pads not yet kept clear; one
        shared wind for grass, trees and weather as it is (the trees').
 7. **Battle scars (done, first version, 2026-10-17; Chris: "build it up now"; in the "Ground Detail" setting):**
    `World::battleScars` (viewer `--battle-scars`; `Decals::battleScars`). The game already lays scorches and craters

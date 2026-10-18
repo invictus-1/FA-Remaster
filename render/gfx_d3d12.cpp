@@ -2441,7 +2441,10 @@ void D3D12Device::SetIndexBuffer(Buffer buffer) {
 
 void D3D12Device::SetShaderBuffer(Buffer buffer, int slot) {
   BufferRec* rec = Find(buffer);
-  if (!rec || rec->kind != BufferKind::Shader || !rec->dynamic || rec->frame != frameNumber_ || slot < 0 || slot > 1) return;
+  if (!rec || slot < 0 || slot > 1) return;
+  // a dynamic Shader buffer of this frame; or a static buffer of any kind, read where it lies in its block (the
+  // block is in the common state, promoted to a read state by this use as by a draw's or a structure build's)
+  if (rec->dynamic ? rec->kind != BufferKind::Shader || rec->frame != frameNumber_ : !rec->gpu) return;
   list_->SetGraphicsRootShaderResourceView(static_cast<UINT>(kCbSlots + 1 + slot), rec->gpu);
   buffersAt_[slot] = rec->gpu;
 }
