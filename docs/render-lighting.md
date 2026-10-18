@@ -466,6 +466,57 @@ where it changes the look, off by default, measured like the rest. In the order 
    circle 60 units across (the worst case), 0.56 ms at 1440p by the lowest times; spread over a map, far fewer are
    in view. Off: as the game, pictures identical. Open: craters' relief from the visuals session's batch 2 (the
    same rule covers it); scars under water or on the water are not kept apart (the game lays none there).
+8. **Water that reacts: ripples (first version, 2026-10-17; Chris approved the task):** `World::waterRipples` (viewer
+   `--water-ripples`; modern look, a map with water). Shells landing in the water, ships, hover units and units
+   wading in the shallows leave rings and wakes that spread, run through each other and die out; the sea nothing
+   disturbs is drawn exactly as before (Chris: "legit perfect"). Its own option, not part of `waterDetail`: it is
+   another thing (the water answering what the game does, not the shore's look), it has its own costs (a compute
+   pass and 24 MB), and a player may want either without the other.
+   - **The field** (`render/ripples.h/.cpp`): a square of 1024 x 1024 cells round what the camera looks at, its
+     heights moved on by the wave equation in a compute pass, sixty steps a second of the game's clock (a paused
+     game's ripples stand still): the nine-point Laplacian (rings stay round at a few cells a wave), the waves at
+     1.6 world units a second in deep water and slower in the shallows, the whole field (not only its motion) dying
+     to half in 0.8 s, so nothing left behind by what moved heaps up. Ground above the water holds its cells at 0
+     (the ripples stop at the shore; the shallows take their strength first); a sponge along the square's edges
+     lets them die there. The square follows the camera in whole cells (it never swims), and a cell is two to three
+     pixels where the camera looks (1/16 to 1 world unit, in steps of two, the field carried over when it changes).
+     Two sets of R32F heights and an RGBA16F surface (height and its slopes) the water reads: 24 MB of the card's
+     memory, made the first time it is on. With nothing put in for 8 s the field is let go and the water drawn as
+     without the option (no cost).
+   - **What goes in** (all bumps of the surface, at most 256 a step, the nearest kept): `Water::AddRipple(x, z,
+     radius, strength)`, the one entry point for anyone (a splash: its amount swings down, up and down again over
+     a few tenths of a second, so it leaves a train of rings; radius about 0.5 for a shell, strength 1, up to about
+     4 for a blast); `Ripples::AddHull` from `World::AddFrame` for every unit seen (and dying ones) whose hull is in
+     the water or just over it: as it moves, bumps at its bow and stern, each with a hollow round it as deep as it
+     raises (so it stirs ripples and makes no water), by the bump's area (a small hull small ripples), a few across a
+     wide hull; a hover unit's by how high its skirt is; a unit wading by how deep; something coming down into the
+     water from above (a falling aircraft) a splash its size; a ship sinking, rings as the water closes over it.
+     `Ripples::AddShot` from the frame's projectiles: a splash where a shot stops at the water's surface (the
+     engine's `stopped`) or goes down through it (a torpedo dropped). The effects stand (`--fx-fire`, `--fx-move`,
+     `--fx-death`) hands over what its scripts were told met the water (`FxEntities::TakeWaterHits`) and its units'
+     bodies.
+   - **On the water** (water.cpp, the modern shader built a second time with `RIPPLES` at the first frame the option is
+     on, `Water::PrepareRipples` from `World::Begin`, with the field's own pipelines and targets: about a quarter of a
+     second once, at the start and not at the game's first splash; without it the shader's source is the same as
+     before): the field's slopes tilt the surface (steep ones less than they are, the tilt never more than 0.4:
+     tilted further, a fresh splash's crater turned toward the horizon and mirrored the bright sky as a white ring),
+     its relief is lit by the sun (sides toward it a little brighter: from the game's height, looking down into the
+     water, this is most of what shows), its height moves the waterline, the steepest crests of a fresh splash foam
+     a little; faded toward the square's edges and where its cells are finer than about a pixel. Viewer: `--ripple-test n[,radius[,strength]]` (n splashes a second at random over the water round the
+     camera), `--ripple-speed`, `--ripple-half-life`, `--ripple-view n` (the field's heights as colours).
+   - The engine's impacts (renderer request 36: `ImpactEvent` in the engine's `src/sim/sim_view.h`) are the exact
+     source for what meets the water, connected 2026-10-18: `SimFrames` takes them every beat (`World::AddCombat`,
+     each handed over when the picture reaches its beat), and `World::AddFrame` turns those the player sees of type
+     'Water' and 'Underwater' into `water.AddRipple`: a shell's 'Water' radius 0.4 + 0.6 x its model's half size
+     (0.4 to 1.2, as `AddShot` guesses it), strength 1; 'Underwater' (a torpedo going off) radius 0.8, strength 0.5,
+     less with its depth, none below 4 units; a crash's 'Water' (a dead aircraft) radius half the unit's larger side
+     (0.5 to 3), strength its speed / 6 (0.5 to 4); a beam's 'Water' radius 0.4, strength 0.3 (all judged by eye).
+     Where the host's simulation keeps impacts, the guesses from the drawn frame stop (`Ripples::impactsGiven`; no
+     splash twice); the hulls' wakes and a sinking ship's rings stay. A host without them (a recording) keeps the
+     guesses. The effects stand hands over its own scripts' 'Water' impacts. The blast list (explosions) connects the
+     same way.
+   - Open: ships make a Mach-like V (the field has one speed of waves), not the Kelvin wedge's feathered pattern;
+     low-flying aircraft's downwash is not put in.
 
 ## The next looks (Chris, 2026-10-17, evening)
 
@@ -479,7 +530,10 @@ picture the fallback; helpers build most of them in parallel, the renderer revie
    within, thickness, smoke's own shadow on the ground, heat shimmer). In work.
 3. **Blast waves and debris** (grass flattened in a running ring, trees bending away, dust; chunks that fly, bounce
    and settle as rubble). In work.
-4. **Water that reacts** (ripples from shells, ships, hover and wading units that spread and cross). In work.
+4. **Water that reacts** (ripples from shells, ships, hover and wading units that spread and cross). First version
+   done 2026-10-18 (`World::waterRipples`, viewer `--water-ripples`): item 8 of "The next pieces" above. Cost about
+   0.04-0.05 ms at 1440p with a battleship and four splashes a second; off, pictures identical (regression 0 px on
+   both backends).
 5. **Light through leaves (done, first version, 2026-10-17; in the "Ground Detail" setting):** `World::leafLight`
    (viewer `--leaf-light`; `lighting.h` `LeafThrough`, `LeafLight`, the view's `leaves`). The sun's light that
    falls on the far side of leaves (the models' leaves), grass blades and the plants' cards comes through, deeper
@@ -544,6 +598,7 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `rainSplashes` | specks where rain meets the ground and units' tops | about 0.01 ms (in rain) | a time of day |
 | `leafLight` | the sun's light through leaves, grass blades and plants, glowing toward a low sun | about 0.04 ms | |
 | `frameGeneration` | FSR 3 frame generation: a picture made between each two frames, twice the frames shown | 1.1-1.4 ms a frame drawn | anti-aliasing off; the device's second queue |
+| `waterRipples` | the water reacts: shells, ships, hover and wading units leave rings and wakes that spread and fade | about 0.04-0.05 ms near water (24 MB of the card's memory once on) | a map with water |
 
 Ray tracing means Direct3D 12 with DXR 1.1 or Vulkan with ray queries: never on the Mac (MoltenVK has none);
 where it is missing those options do nothing. `rayReflections` builds the surfaces' shaders with ray

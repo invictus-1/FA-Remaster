@@ -101,6 +101,12 @@
 //           between each two frames, shown between them (twice the frames shown); --capture-between: what
 //           --screenshot reads is the picture made between (gfx.h, Device::captureBetween), where there is one
 // --water-detail  wet shorelines and stronger caustics (World::waterDetail; modern look)
+// --water-ripples  ripples on the water (ripples.h, World::waterRipples; modern look): shells landing in the water,
+//           ships, hover units and units wading leave rings and wakes that spread and die out. --ripple-test
+//           n[,radius[,strength]]: n splashes a second (Water::AddRipple) at random over the water round where the
+//           camera looks (radius 0.5, strength 1), to see and time them; --ripple-speed s: how fast the rings run
+//           (world units a second, 1.6); --ripple-half-life s: after how long they are half as high (0.8);
+//           --ripple-view n: the field's heights in place of the water (red up, blue down, full at 1 / n units)
 // --bounce  bounce light (bounce.h, World::bounceLight; modern look, where the device has ray tracing): light thrown
 //           back by the ground, the hills and what stands on them, from probes the rays update
 // --ray-view  ray tracing's check view (ray_scene.h, World::rayView; where the device can): a ray from the camera
@@ -327,6 +333,9 @@ struct Options {
   bool litRain = false;                 // --lit-rain
   bool rainSplashes = false;            // --rain-splashes
   bool waterDetail = false;             // --water-detail
+  bool waterRipples = false;            // --water-ripples
+  float rippleTest = 0, rippleTestRadius = 0.5f, rippleTestStrength = 1;  // --ripple-test
+  float rippleSpeed = -1, rippleHalfLife = -1, rippleView = 0;  // --ripple-speed, --ripple-half-life, --ripple-view
   bool groundCover = false;             // --ground-cover
   float plantDensity = -1;              // --plant-density
   float plantTallest = -1;              // --plant-tallest
@@ -452,6 +461,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--lit-rain") o->litRain = true;
     else if (a == "--rain-splashes") o->rainSplashes = true;
     else if (a == "--water-detail") o->waterDetail = true;
+    else if (a == "--water-ripples") o->waterRipples = true;
     else if (a == "--ground-cover") o->groundCover = true;
     else if (a == "--battle-scars") o->battleScars = true;
     else if (a == "--leaf-light") o->leafLight = true;
@@ -518,6 +528,13 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--hide") o->hide = v;
     else if (a == "--plant-density") o->plantDensity = static_cast<float>(atof(v));
     else if (a == "--plant-tallest") o->plantTallest = static_cast<float>(atof(v));
+    else if (a == "--ripple-test") {
+      if (sscanf(v, "%f,%f,%f", &o->rippleTest, &o->rippleTestRadius, &o->rippleTestStrength) < 1) return false;
+      o->waterRipples = true;
+    }
+    else if (a == "--ripple-speed") o->rippleSpeed = static_cast<float>(atof(v));
+    else if (a == "--ripple-half-life") o->rippleHalfLife = static_cast<float>(atof(v));
+    else if (a == "--ripple-view") o->rippleView = static_cast<float>(atof(v));
     else if (a == "--scar-test") {
       if (sscanf(v, "%d,%f", &o->scarTest, &o->scarRadius) < 1) return false;
     }
@@ -928,6 +945,10 @@ int main(int argc, char** argv) {
   world.litRain = opt.litRain;
   world.rainSplashes = opt.rainSplashes;
   world.waterDetail = opt.waterDetail;
+  world.waterRipples = opt.waterRipples;
+  if (opt.rippleSpeed > 0) world.water.ripples.speed = opt.rippleSpeed;
+  if (opt.rippleHalfLife > 0) world.water.ripples.halfLife = opt.rippleHalfLife;
+  world.water.ripples.view = opt.rippleView;
   world.groundCover = opt.groundCover;
   if (opt.plantDensity >= 0) world.grass.plantDensity = opt.plantDensity;
   if (opt.plantTallest > 0) world.grass.plantTallest = opt.plantTallest;
@@ -1417,6 +1438,7 @@ int main(int argc, char** argv) {
   int titleFrames = 0, frameCount = 0, shotNumber = 0;
   auto countedFrom = start;
   CpuTimes::on = opt.timings;
+  int ripplesMade = 0;  // (--ripple-test)
   struct {  // --timings: each stage's time added up over the frames, in the order first met
     std::vector<std::pair<std::string, double>> sums;
     int frames = 0;
@@ -2065,6 +2087,26 @@ int main(int argc, char** argv) {
           }
       }
     }
+    if (opt.rippleTest > 0 && haveMap && world.map.water.present) {  // --ripple-test: splashes at random over the water round the camera's point
+      const int due = static_cast<int>(std::floor(time * opt.rippleTest));
+      for (; ripplesMade < due; ++ripplesMade) {
+        uint32_t h = static_cast<uint32_t>(ripplesMade) * 2654435761u + 12345u;
+        auto next = [&h]() {
+          h ^= h << 13;
+          h ^= h >> 17;
+          h ^= h << 5;
+          return static_cast<float>(h & 0xffffff) / 16777216.0f;
+        };
+        const float reach = std::clamp(camera.distance * 0.5f, 6.0f, 40.0f);
+        for (int tries = 0; tries < 8; ++tries) {  // (a place over the water)
+          const float x = camera.target.x + (next() * 2 - 1) * reach, z = camera.target.z + (next() * 2 - 1) * reach;
+          if (world.map.Height(x, z) < world.map.water.elevation - 0.3f) {
+            world.water.AddRipple(x, z, opt.rippleTestRadius, opt.rippleTestStrength);
+            break;
+          }
+        }
+      }
+    }
     if (!haveMap) DrawTestScene(draw);
     const auto renderStart = std::chrono::steady_clock::now();
     world.Render();
@@ -2142,6 +2184,7 @@ int main(int argc, char** argv) {
       printf("; textures %.0f MB", static_cast<double>(world.textures.bytes) / (1 << 20));
       if (haveLive) printf("; scenery: %d changes, %d gone, %d made in the game standing, %d props of %d squares gone through; %zu script entities", world.propsChanged, world.propsGone, world.MadeProps(), world.propsAdded, world.propCellsSeen, frame.entities.size());
       if (haveLive) printf("; %d hits, %d impacts taken (%d, %d shown)", world.hitsTaken, world.impactsTaken, world.hitsShown, world.impactsShown);
+      if (world.waterRipples) printf("; water ripples: %d splashes added, %d still swinging", world.water.ripples.Added(), world.water.ripples.Live());
       if (opt.focus > 0) printf("; %d buildings remembered, %zu of them gone", world.RememberedCount(), world.rememberedGone.size());
       if (opt.debug) printf("; %d lamps with shadows", world.lampShadowsDrawn);
       if (haveLive && opt.debug) {  // (where to look for them)

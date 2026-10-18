@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <cstdio>
 #include <cstring>
 
 #include "lighting.h"
@@ -117,11 +119,18 @@ cbuffer WaterConstants : register(b1) {
   float4 cameraRight;     // w: tan(half the field of view)
   float4 cameraUp;        // w: aspect
   float4 cameraBack;      // w: near distance
+#if RIPPLES
+  float4 rippleArea;      // the ripples' field (ripples.h): x, y its first cell's corner (world x, z); z 1 / its side; w a cell's size
+  float4 rippleLook;      // x how much its slopes tilt the surface; y the slope from which its crests foam; z how much of its height the waterline takes
+#endif
 };
 Texture2D waterMap : register(t0);
 Texture2D waves[4] : register(t1);
 TextureCube sky : register(t5);
 Texture2D behind : register(t6);
+#if RIPPLES
+Texture2D rippleSurface : register(t8);  // the field's height, and its slope along x and along z
+#endif
 #if SAMPLES > 1
 Texture2DMS<float> sceneDepth : register(t7);
 #define SCENE_DEPTH(at, s) sceneDepth.Load(at, s)
@@ -256,12 +265,42 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
     rings = ring;
     N = normalize(N + float3(CloudNoise(float3(xz * 9, time * 3)) - 0.5, 0, CloudNoise(float3(xz * 9 + 5, time * 3)) - 0.5) * (0.25 * falling.x));
   }
+#if RIPPLES
+  // ripples (ripples.h, World::waterRipples): the field's slopes tilt the surface where it lies (fading out
+  // toward its edges) and where its cells are not much finer than a pixel (finer, they would flicker); its
+  // height moves the waterline a little, and its steepest crests foam
+  float rippleHeight = 0, rippleFoam = 0;
+  float2 rippleTilt = 0;
+  {
+    float2 at = (xz - rippleArea.xy) * rippleArea.z;
+    float2 inside = min(at, 1 - at);
+    float shown = saturate(min(inside.x, inside.y) * 16) * saturate((rippleArea.w / max(grain, 1e-4) - 0.7) * 2);
+    if (rippleLook.w > 0.5) {  // (a view for checking, Ripples::view: red up, blue down, green where it shows)
+      float4 r = rippleSurface.SampleLevel(samplerLinearClamp, at, 0);
+      return float4(saturate(r.x * rippleLook.w), saturate(shown) * 0.3, saturate(-r.x * rippleLook.w), 1);
+    }
+    [branch] if (shown > 0) {
+      float4 r = rippleSurface.SampleLevel(samplerLinearClamp, at, 0);
+      // (steep slopes tilt it less than they are, never more than about 0.4: tilted further, a fresh splash's
+      // crater turned toward the horizon and mirrored the bright sky as a white ring)
+      rippleTilt = -r.yz * (rippleLook.x * shown / (1 + length(r.yz) * rippleLook.x * 2.5));
+      N = normalize(N + float3(rippleTilt.x, 0, rippleTilt.y));
+      rippleHeight = r.x * shown;
+      rippleFoam = smoothstep(rippleLook.y, rippleLook.y * 2.5, length(r.yz)) * shown;
+    }
+  }
+#endif
 
   // the light on the water
   float shadow = SunShadow(i.world, float3(0, 1, 0)) * CloudShadow(i.world);
   float3 sunLight = ToLinear(sunColor) * (lightMultiplier * modern.x);
   float3 skyLight = skyZenith.w > 0.5 ? SkyAmbient(float3(0, 1, 0)) : sunLight * 0.3;
   float3 light = skyLight + sunLight * (saturate(sunDirection.y) * 0.6 * shadow);
+#if RIPPLES
+  // (the ripples' relief in the sun: their sides toward it a little brighter, those away from it darker; from the
+  // game's height, looking down into the water, this is most of what shows of them)
+  light *= 1 + clamp(dot(rippleTilt, normalize(sunDirection.xz + 1e-5)) * saturate(sunDirection.y * 4) * shadow, -0.45, 0.45);
+#endif
   // lamps and flashes near the water: their light on its body and foam, and their glint on its waves
   float3 lamps = SmallLights(i.world, N, -toPixel, float3(0.5, 0.5, 0.5), float3(0.04, 0.04, 0.04), 0.0016, 0.1, saturate(dot(N, -toPixel)) + 1e-4);
 
@@ -272,7 +311,11 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   // water has run back from it (the waterline moves up and down the shore with the swell)
   // (and unevenly, by the foam's own lace: a waterline is never a ruled line)
   float lace = Lace(xz + N.xz * 0.12, grain);
+#if RIPPLES
+  float level = clamp(swell.x * 1.2 + (lace - 0.5) * 0.05 + rippleHeight * rippleLook.z, -kRise, kRise) - kRise;
+#else
   float level = clamp(swell.x * 1.2 + (lace - 0.5) * 0.05, -kRise, kRise) - kRise;
+#endif
   float deep = i.world.y + level - bed.y;
   if (deep <= 0) {
     coverage = 0;
@@ -328,6 +371,9 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   float foam = smoothstep(1.05 - much * 1.1 - 0.04 * open, 1.30 - much * 1.1 + 0.14 * open, lace + 0.42) * (0.55 + 0.45 * edge) * lerp(1, wisps, open);
   float fronts = pow(saturate(sin(deep * 20 - time * 1.5 + lace * 3.0) * 0.5 + 0.5), 5) * edge;
   foam = saturate(foam + fronts * smoothstep(0.42, 0.66, lace) * 0.55 + crest * saturate(swell.x * 14 + 0.25));
+#if RIPPLES
+  foam = saturate(foam + rippleFoam * smoothstep(0.35, 0.7, lace) * 0.35);
+#endif
   color = lerp(color, (light + lamps) * 0.85, foam * 0.94);
   color += lamps * 0.35;
   color += light * (rings * 0.04);
@@ -408,12 +454,49 @@ struct WaterConstants {
   float normalRepeat[4];
   float movement[4][4];
   float cameraRight[4], cameraUp[4], cameraBack[4];  // (the modern water's)
+  float rippleArea[4], rippleLook[4];                // (the modern water's with ripples: given only to it)
 };
+
+// How the ripples' field shows on the water (rippleLook): its slopes' tilt of the surface (as they are), the slope
+// at which its crests begin to foam, and how much of its height the waterline takes.
+constexpr float kRippleTilt = 2.0f, kRippleFoamSlope = 0.8f, kRippleWaterline = 1.0f;
 
 }  // namespace
 
+gfx::Pipeline Water::ModernPipeline(bool ripples, std::string* error) {
+  // (the modern look's water reads the scene's depth: several samples a pixel, or one. Without ripples its source is
+  // the same as it ever was.)
+  std::string modern = std::string(ripples ? "#define RIPPLES 1\n" : "") + "#define SAMPLES " + std::to_string(gSceneSamples) + "\n" +
+                       kViewShaderBlock + RayShaders() + kLightingShaderBlock + kModernShader;
+  gfx::PipelineDesc pd;
+  pd.name = ripples ? "water, modern, ripples" : "water, modern";
+  pd.vertexSource = pd.pixelSource = modern;
+  pd.attrs = {{"POSITION", 0, gfx::AttrType::Float2, 0}};
+  pd.stride = 8;
+  pd.cull = gfx::Cull::None;
+  pd.depthWrite = false;
+  pd.blend = gfx::Blend::Opaque;
+  pd.colorFormat = kSceneFormat;
+  pd.samples = gSceneSamples;
+  pd.alphaWrite = false;
+  pd.depthTest = false;
+  pd.depthTarget = false;
+  return device_->CreatePipeline(pd, error);
+}
+
+void Water::PrepareRipples() {
+  if (!map_ || !map_->water.present || !modern_) return;
+  ripples.Ready();
+  if (ripplesTried_) return;
+  ripplesTried_ = true;
+  std::string why;
+  modernRipples_ = ModernPipeline(true, &why);
+  if (!modernRipples_) fprintf(stderr, "render: the water cannot show ripples (%s)\n", why.c_str());
+}
+
 bool Water::Load(const MapData* map, std::string* error) {
   map_ = map;
+  ripples.SetMap(map);
   if (!map->water.present) return true;
   if (!pipeline_) {
     std::string source = std::string(kViewShaderBlock) + kLightingShaderBlock + kShader;
@@ -436,18 +519,9 @@ bool Water::Load(const MapData* map, std::string* error) {
     bd.size = sizeof corners;
     bd.data = corners;
     vertices_ = device_->CreateBuffer(bd);
-    // the modern look's water (it reads the scene's depth: several samples a pixel, or one)
-    {
-      std::string modern = "#define SAMPLES " + std::to_string(gSceneSamples) + "\n" + kViewShaderBlock + RayShaders() + kLightingShaderBlock +
-                           kModernShader;
-      pd.name = "water, modern";
-      pd.vertexSource = pd.pixelSource = modern;
-      pd.blend = gfx::Blend::Opaque;
-      pd.depthTest = false;
-      pd.depthTarget = false;
-      modern_ = device_->CreatePipeline(pd, error);
-      if (!modern_) return false;
-    }
+    // the modern look's water
+    modern_ = ModernPipeline(false, error);
+    if (!modern_) return false;
   }
   waterMap_ = map->waterMap.empty() ? gfx::Texture{} : textures_->FromDds(map->waterMap, "the map's water map");
   if (!waterMap_) waterMap_ = textures_->White();
@@ -501,18 +575,28 @@ void Water::DrawWith(const View& view, const Camera* camera, gfx::Texture behind
                             back.x, back.y, back.z, camera->zNear};
     std::memcpy(c.cameraRight, axes, sizeof axes);
   }
-  device_->SetPipeline(modern ? modern_ : pipeline_);
+  // with ripples on the water this frame (ripples.h): the modern water that reads their field
+  if (modern && ripples.Active()) PrepareRipples();
+  const bool rippling = modern && ripples.Active() && modernRipples_;
+  if (rippling) {
+    std::memcpy(c.rippleArea, ripples.Area(), sizeof c.rippleArea);
+    const float look[4] = {kRippleTilt, kRippleFoamSlope, kRippleWaterline, ripples.view};
+    std::memcpy(c.rippleLook, look, sizeof look);
+  }
+  device_->SetPipeline(rippling ? modernRipples_ : modern ? modern_ : pipeline_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
-  device_->SetConstants(1, &c, sizeof c);
+  device_->SetConstants(1, &c, static_cast<uint32_t>(rippling ? sizeof c : offsetof(WaterConstants, rippleArea)));
   if (modern) {
     device_->SetTexture(6, behind);
     device_->SetTexture(7, sceneDepth);
   }
+  if (rippling) device_->SetTexture(8, ripples.Surface());
   device_->SetTexture(0, waterMap_);
   for (int i = 0; i < 4; ++i) device_->SetTexture(1 + i, waves_[i]);
   device_->SetTexture(5, sky_);
   device_->SetVertexBuffer(vertices_);
   device_->Draw(6);
+  if (rippling) device_->SetTexture(8, {});  // (the field is written again next frame: not left bound)
 }
 
 }  // namespace render

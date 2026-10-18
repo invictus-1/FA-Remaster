@@ -370,6 +370,10 @@ class World {
   // the waves have wetted it, and the bright net of light on a shallow bed sharper and stronger. Modern look, a map
   // with water; off by default.
   bool waterDetail = false;
+  // Ripples on the water (ripples.h; water.AddRipple): shells landing in the water, ships, hover units and units
+  // wading leave rings and wakes that spread, cross each other and die out. Modern look, a map with water; off by
+  // default.
+  bool waterRipples = false;
   // Ground cover near the camera (grass.h): grass blades on grassy ground, coloured from it, swaying in the wind,
   // low and gone with the distance (nothing when the camera is far). Modern look; off by default.
   bool groundCover = false;

@@ -5,6 +5,7 @@
 
 #include "camera.h"
 #include "gfx.h"
+#include "ripples.h"
 #include "scmap.h"
 #include "textures.h"
 #include "view.h"
@@ -13,7 +14,19 @@ namespace render {
 
 class Water {
  public:
-  Water(gfx::Device* device, TextureCache* textures) : device_(device), textures_(textures) {}
+  Water(gfx::Device* device, TextureCache* textures) : ripples(device), device_(device), textures_(textures) {}
+
+  // Ripples on the modern look's water (ripples.h; World::waterRipples): a splash at (x, z), `radius` world units
+  // across its middle (a shell's about 0.5), `strength` 1 for a usual shell, up to about 4 for a blast: rings run
+  // out from it, cross others and die out in two or three seconds. Anyone may call it between World::Begin and
+  // World::Render; it does nothing where there is no water or while the option is off. (World::AddFrame already
+  // adds what a game's units and shots do in the water.)
+  void AddRipple(float x, float z, float radius, float strength) { ripples.Add(x, z, radius, strength); }
+  Ripples ripples;
+  // The water's pipeline that reads the ripples' field, and the field's own, made now if they are not yet (World::Begin,
+  // each frame the option is on): making them takes a quarter of a second, better at the first frame than in the
+  // middle of a game at its first splash.
+  void PrepareRipples();
 
   // `map` must stay alive while the water is used. Maps without water load fine and draw nothing.
   bool Load(const MapData* map, std::string* error);
@@ -29,7 +42,10 @@ class Water {
   TextureCache* textures_;
   const MapData* map_ = nullptr;
   void DrawWith(const View& view, const Camera* camera, gfx::Texture behind, gfx::Texture sceneDepth);
+  gfx::Pipeline ModernPipeline(bool ripples, std::string* error);
   gfx::Pipeline pipeline_, modern_;
+  gfx::Pipeline modernRipples_;  // (the modern water reading the ripples' field: made the first time it is wanted)
+  bool ripplesTried_ = false;
   gfx::Buffer vertices_;
   gfx::Texture waterMap_, waves_[4], sky_;
 };

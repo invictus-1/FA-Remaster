@@ -137,6 +137,7 @@ class FxEntities {
   // placed, turned and sized, its bones as the scripts posed them (as a frame's bones are, in world
   // units of its model: a wreck's model has the scale 1, its size is `scale`), in the look of its side.
   struct Body {
+    uint32_t id = 0;   // its entity's (the same while it lives)
     std::string unit;  // blueprint id
     bool wreck = false, original = false;
     Vec3 position;
@@ -148,6 +149,9 @@ class FxEntities {
   const std::vector<Body>& Bodies() const;
   // The effect events made since the last call (their ticks are on the same clock: tick = seconds x 10).
   void TakeEvents(std::vector<FrameEffectEvent>* out);
+  // What met the water since the last call (a shot, what a death threw out, an aircraft coming down), as the engine
+  // tells its script OnImpact 'Water': where (x, y, z) and about how large it is (w: world units across its middle).
+  void TakeWaterHits(std::vector<Vec4>* out);
   int Count() const;
   // Every effect made from now on plays this faction's effects in the remastered look ("": as what it
   // is made on is).

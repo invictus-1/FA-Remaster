@@ -1073,6 +1073,7 @@ struct FxEntities::Impl {
   Frame frame;
   std::vector<Body> bodies;
   std::vector<FrameEffectEvent> events;
+  std::vector<Vec4> waterHits;  // what met the water since TakeWaterHits (where; about how large)
   uint32_t nextEntity = kFirstEntity, nextUnit = 1, nextEffect = 1;
   double now = 0;
   int64_t tick = 0;  // the last tick the threads ran at
@@ -3093,6 +3094,9 @@ void FxEntities::Advance(double now) {
       for (const auto& h : hits) {
         Ent* e = m.Find(h.first);
         if (!e) continue;
+        // (for the water's ripples: a unit coming down about its size, a shot or a piece about half a unit)
+        if (std::string(h.second) == "Water" && m.waterHits.size() < 256)
+          m.waterHits.push_back({e->position.x, e->position.y, e->position.z, e->unit ? 1.5f : e->shot ? 0.5f : 0.35f});
         if (e->unit) {
           lua_getglobal(L, "__fxObjects");
           lua_pushnumber(L, e->id);
@@ -3218,6 +3222,7 @@ void FxEntities::Advance(double now) {
     }
     if (e.unit || e.wreck) {
       Body b;
+      b.id = e.id;
       b.unit = e.unitId;
       b.wreck = e.wreck;
       b.original = e.original;
@@ -3371,6 +3376,11 @@ void FxEntities::CallEmitter(uint32_t effect, const std::string& name, const std
 void FxEntities::TakeEvents(std::vector<FrameEffectEvent>* out) {
   out->insert(out->end(), impl_->events.begin(), impl_->events.end());
   impl_->events.clear();
+}
+
+void FxEntities::TakeWaterHits(std::vector<Vec4>* out) {
+  out->insert(out->end(), impl_->waterHits.begin(), impl_->waterHits.end());
+  impl_->waterHits.clear();
 }
 
 int FxEntities::Count() const { return static_cast<int>(impl_->ents.size()); }
