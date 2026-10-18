@@ -115,6 +115,15 @@
 // --blast-test n[,radius]  with --blasts (or --blast-waves, --blast-dust): blasts at random round where the camera starts
 //           (within radius, 40), of sizes 0.5 to 4, one after another so that about n are under way at once: to see and
 //           time many at once
+// --deep-tracks  deep tracks (World::deepTracks; modern look): the ground pressed where units drive and walk, by the
+//           kind it is (snow, mud, sand, grass, dirt, hard), the game's tread marks and footprints pressed in by their
+//           own shapes; --ground-kind <part>=<kind>  the layers whose texture's path holds <part> taken as that kind
+//           (snow, mud, sand, grass, dirt, hard, or two with a plus: "soil=mud"; may be given several times; before
+//           the map opens), as remap.json's "ground" would say it
+// --tracks-test <unit id>=<count>  that many of that unit (UEL0201=100) driving round loops near where the camera
+//           starts (within 24 units), as a game would move them: their tread marks laid as their blueprint's
+//           Display.MovementEffects.Land.Treads says (the game's own pictures, or deep tracks when on); a unit without
+//           treads presses only its outline (deep tracks); to see and to time many tracks at once
 // --order-test  order lines as the interface hands them over while Shift is held (order_lines.h): a move chain, a
 //           patrol loop with its moving chevrons and an attack, with their waypoints' icons, round where the camera starts
 // --frame-generation  FSR 3 frame generation (World::frameGeneration; needs --msaa 1 or --fsr3): a picture made
@@ -292,6 +301,7 @@
 #include <vector>
 
 #include "ambient_occlusion.h"
+#include "bp_reader.h"
 #include "cpu_times.h"
 #include "fx_stand.h"
 #include "camera.h"
@@ -389,6 +399,9 @@ struct Options {
   int debrisMost = -1;                  // --debris-most
   int blastTest = 0;                    // --blast-test
   float blastRadius = 40;
+  bool deepTracks = false;              // --deep-tracks
+  std::vector<std::string> groundKind;  // --ground-kind
+  std::vector<std::string> tracksTest;  // --tracks-test
   int scarTest = 0;                     // --scar-test
   bool orderTest = false;               // --order-test
   float scarRadius = 40;
@@ -531,6 +544,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--blast-waves") o->blastWaves = true;
     else if (a == "--blast-dust") o->blastDust = true;
     else if (a == "--debris") o->debris = true;
+    else if (a == "--deep-tracks") o->deepTracks = true;
     else if (a == "--order-test") o->orderTest = true;
     else if (a == "--frame-generation") o->frameGeneration = true;
     else if (a == "--capture-between") o->captureBetween = true;
@@ -584,6 +598,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--remasters") o->remasters.push_back(v);
     else if (a == "--place") o->place.push_back(v);
     else if (a == "--crowd") o->crowd.push_back(v);
+    else if (a == "--ground-kind") o->groundKind.push_back(v);
+    else if (a == "--tracks-test") o->tracksTest.push_back(v);
     else if (a == "--turn") o->turn = v;
     else if (a == "--hide-bone") {
       o->turn = v;
@@ -1011,6 +1027,12 @@ int main(int argc, char** argv) {
   gRayShaders = opt.rayReflections && device->RayTracing();
   World world(device.get(), &vfs);
   world.terrain.ultraGround = opt.groundUltra;  // (the remastered ground's set: before the map opens)
+  for (const std::string& g : opt.groundKind) {  // --ground-kind <part>=<kind> (deep tracks: before the map opens)
+    const size_t eq = g.find('=');
+    std::string part = g.substr(0, eq);
+    for (char& c : part) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (eq != std::string::npos) world.terrain.groundKinds.push_back({part, g.substr(eq + 1)});
+  }
   {
     World::Options wo;
     wo.displayTable = opt.display;
@@ -1060,6 +1082,7 @@ int main(int argc, char** argv) {
   world.blastDust = opt.blastDust;
   world.blastDebris = opt.debris;
   if (opt.debrisMost >= 0) world.debris.mostRubble = opt.debrisMost;
+  world.deepTracks = opt.deepTracks;
   world.frameGeneration = opt.frameGeneration;
   device->captureBetween = opt.captureBetween;
   if (opt.sunSize > 0) world.sunSize = opt.sunSize;
@@ -1472,6 +1495,70 @@ int main(int argc, char** argv) {
     printf("render: the cinematic camera at %.1f %.1f %.1f%s\n", cine.pose.eye.x, cine.pose.eye.y, cine.pose.eye.z,
            cinePath.keys.empty() ? "" : (", on a path of " + std::to_string(cinePath.keys.size()) + " keys").c_str());
   }
+  // --tracks-test <unit id>=<count>: units driving round loops near where the camera starts, their tread marks laid as
+  // the game's treads script lays them (a piece of each of the blueprint's TreadMarks every TreadMarksInterval while it
+  // moves, CreateSplatOnBone's way: at its offset, turned as the unit is)
+  struct TestTreads {
+    std::string texture;
+    float sizeX = 0, sizeZ = 0, interval = 0.2f;
+    Vec3 offset;
+  };
+  struct TestDriver {
+    uint32_t blueprint = 0;  // (index into testBlueprints)
+    float x = 0, z = 0, radius = 4, speed = 3, angle = 0, turn = 1;
+    float nextPrint = 0;
+  };
+  std::vector<std::string> testBlueprints;
+  std::vector<std::vector<TestTreads>> testTreads;  // (by blueprint)
+  std::vector<TestDriver> drivers;
+  {
+    uint32_t r = 2024;
+    auto next = [&r]() {
+      r = r * 1664525u + 1013904223u;
+      return static_cast<float>(r >> 8) / 16777216.0f;
+    };
+    for (const std::string& t : opt.tracksTest) {
+      const size_t eq = t.find('=');
+      std::string id = t.substr(0, eq);
+      for (char& c : id) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      const int count = eq == std::string::npos ? 100 : atoi(t.c_str() + eq + 1);
+      BpValue bp;
+      auto file = world.textures.ReadFile(models.UnitBlueprintPath(id));
+      if (!file || !ReadBlueprintFile(*file, &bp) || count <= 0) {
+        fprintf(stderr, "render: --tracks-test: %s cannot be read\n", id.c_str());
+        continue;
+      }
+      std::vector<TestTreads> treads;
+      for (const BpValue& m : bp["Display"]["MovementEffects"]["Land"]["Treads"]["TreadMarks"].items) {
+        TestTreads tt;
+        tt.texture = m["TreadMarks"].StringOr(std::string());
+        tt.sizeX = static_cast<float>(m["TreadMarksSizeX"].NumberOr(0));
+        tt.sizeZ = static_cast<float>(m["TreadMarksSizeZ"].NumberOr(0));
+        tt.interval = std::max(static_cast<float>(m["TreadMarksInterval"].NumberOr(0.1)), 0.1f);
+        const BpValue& o = m["TreadOffset"];
+        tt.offset = Vec3{static_cast<float>(o.Item(0).NumberOr(0)), static_cast<float>(o.Item(1).NumberOr(0)), static_cast<float>(o.Item(2).NumberOr(0))};
+        if (!tt.texture.empty() && tt.sizeX > 0 && tt.sizeZ > 0) treads.push_back(tt);
+      }
+      const float speed = static_cast<float>(bp["Physics"]["MaxSpeed"].NumberOr(3));
+      testBlueprints.push_back(id);
+      testTreads.push_back(treads);
+      const Vec3 at = opt.hasAt ? Vec3{opt.at[0], 0, opt.at[1]} : camera.target;
+      for (int i = 0; i < count; ++i) {
+        TestDriver d;
+        d.blueprint = static_cast<uint32_t>(testBlueprints.size() - 1);
+        const float a = next() * 6.2831853f, far = 24 * std::sqrt(next());
+        d.x = at.x + std::cos(a) * far;
+        d.z = at.z + std::sin(a) * far;
+        d.radius = 2.5f + 5.5f * next();
+        d.speed = speed;
+        d.angle = next() * 6.2831853f;
+        d.turn = next() < 0.5f ? 1.0f : -1.0f;
+        drivers.push_back(d);
+      }
+      printf("render: --tracks-test: %d of %s driving, %zu tread marks each\n", count, id.c_str(), treads.size());
+    }
+  }
+  float driversAt = -1;  // (the time they were last moved)
   if (opt.scarTest > 0) {  // --scar-test: the game's scorches laid at random round where the camera starts
     world.decals.battleScars = world.battleScars;
     world.decals.remastered = world.effectsLook == World::EffectsLook::Remastered;
@@ -2209,6 +2296,37 @@ int main(int argc, char** argv) {
       meshes.Add(u.model, Mat4::FromTRS(u.position, Quat{}, u.model->scale), kArmyColors[0], opt.shielded ? 3.0f : opt.built, posed ? &pose : nullptr);
       world.AddLamps(u.model, u.position, Quat{}, posed ? &pose : nullptr, &kArmyColors[0]);
       icons.Add(u.icon, u.position, kArmyColors[0]);
+    }
+    if (!drivers.empty()) {  // --tracks-test: round their loops, their treads laid as they go
+      const float dt = driversAt < 0 ? 0 : std::clamp(time - driversAt, 0.0f, 0.1f);
+      driversAt = time;
+      Frame drive;
+      drive.blueprints = &testBlueprints;
+      for (size_t k = 0; k < drivers.size(); ++k) {
+        TestDriver& d = drivers[k];
+        d.angle += d.turn * d.speed / d.radius * dt;
+        Vec3 p{d.x + std::cos(d.angle) * d.radius, 0, d.z + std::sin(d.angle) * d.radius};
+        p.y = groundHeight(p.x, p.z);
+        const float heading = std::atan2(-std::sin(d.angle) * d.turn, std::cos(d.angle) * d.turn);  // (along the loop)
+        const Quat q{0, std::sin(heading * 0.5f), 0, std::cos(heading * 0.5f)};
+        FrameUnit u;
+        u.id = static_cast<uint32_t>(k + 1);
+        u.blueprint = d.blueprint;
+        u.position[0] = p.x, u.position[1] = p.y, u.position[2] = p.z;
+        u.orientation[0] = q.x, u.orientation[1] = q.y, u.orientation[2] = q.z, u.orientation[3] = q.w;
+        u.health = u.maxHealth = 1;
+        u.layer = 1;
+        drive.units.push_back(u);
+        if (time >= d.nextPrint && dt > 0) {
+          for (const TestTreads& t : testTreads[d.blueprint]) {
+            const Vec3 centre = p + Rotate(q, t.offset);
+            if (!world.tracks.AddPrint(u.id, centre, t.sizeX, t.sizeZ, heading, t.texture))
+              world.decals.Add(t.texture, centre, t.sizeX, t.sizeZ, heading, 130, time, 1);
+          }
+          if (!testTreads[d.blueprint].empty()) d.nextPrint = time + testTreads[d.blueprint][0].interval;
+        }
+      }
+      world.AddFrame(drive, armyColors);
     }
     if (haveLive && playing) {  // what the scripts did with effects in the beats since the last frame
       live.TakeEffectEvents(&effectEvents);

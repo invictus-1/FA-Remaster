@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <initializer_list>
 #include <limits>
 #include <string>
 #include <vector>
@@ -41,6 +42,12 @@ cbuffer TerrainConstants : register(b1) {
   float4 albedoTile[10]; // x: repeats per world unit; y: 1 = the layer has its third map (materialMaps)
   float4 normalTile[9];
   float4 morph[12];      // per level: x: distance where sliding starts, y: 1 / (length of the slide)
+  // deep tracks (deep_tracks.h, TrackFieldConstants): the field's levels, and per layer what kind of ground it is
+  float4 tracksLevel[3];
+  float4 tracksAtlas[3];
+  float4 tracksInfo;     // x, y: 1 / the atlas's size; z: 1 = deep tracks are read
+  float4 kindA[10];      // per layer, shares: snow, mud, sand, grass
+  float4 kindB[10];      // dirt, hard ground (rock, concrete)
 };
 cbuffer Patches : register(b2) {
   float4 patches[1024];  // x, z of the patch's corner, size of a quad, level
@@ -101,6 +108,136 @@ float4 LayerNormal(float4 raw, float up) {
   if (up > 0.5) n.y = -n.y;
   return n;
 }
+
+#ifdef SURFACE_DEEP_TRACKS
+// Deep tracks (deep_tracks.h): a level of the field read at a place (r how much is pressed down, g pushed up),
+// one bilinear reading; a wrapping level by the place's texel within its width (its copied edges make the
+// reading across the wrap right), the map's level clamped.
+float2 TrackTap(int level, float2 xz) {
+  float4 L = tracksLevel[level], A = tracksAtlas[level];
+  float2 s = xz * L.z;
+  float2 c = A.z > 0.5 ? s - L.w * floor(s / L.w) : clamp(s, 0.5, L.w - 0.5);
+  return tracksMap.SampleLevel(samplerLinearClamp, (A.xy + c) * tracksInfo.xy, 0).rg;
+}
+// How far inside a level's window a place is, in its texels (negative: outside).
+float TrackInside(int level, float2 xz) {
+  float4 L = tracksLevel[level];
+  float2 s = xz * L.z - L.xy;
+  return L.w > 0 ? min(min(s.x, s.y), min(L.w - s.x, L.w - s.y)) : -1;
+}
+// What the amounts come to: how deep the trough is (0..1, more passes deeper but never past the ground's
+// most), and the berm beside it (none where it is pressed down).
+float2 TrackShape(float2 pressed) {
+  float t = 1 - exp(-1.5 * pressed.x);
+  return float2(t, (1 - exp(-1.5 * pressed.y)) * (1 - t));
+}
+// A level's trough and berm round a place, and how they slope (per world unit: x, z of the trough's; of the
+// berm's), from the readings a texel to either side.
+void TrackLevel(int level, float2 xz, out float2 shape, out float4 slope) {
+  float e = tracksAtlas[level].w;
+  float2 a = TrackShape(TrackTap(level, xz + float2(e, 0))), b = TrackShape(TrackTap(level, xz - float2(e, 0)));
+  float2 c = TrackShape(TrackTap(level, xz + float2(0, e))), d = TrackShape(TrackTap(level, xz - float2(0, e)));
+  shape = (a + b + c + d) * 0.25;
+  slope = float4(a.x - b.x, c.x - d.x, a.y - b.y, c.y - d.y) / (2 * e);
+}
+// The layers' average colour here (each layer's smallest level, blended as the layers are; the upper layer as it is
+// here): what the ground pressed smooth comes to, its small shapes pressed out of it.
+float3 LayersAverage(float4 low, float4 high, float4 upper) {
+  #define AVERAGE(n) albedoMaps[n].SampleLevel(samplerLinear, float2(0.5, 0.5), 16).rgb
+  float3 a = AVERAGE(0);
+  a = lerp(a, AVERAGE(1), low.x);
+  a = lerp(a, AVERAGE(2), low.y);
+  a = lerp(a, AVERAGE(3), low.z);
+  a = lerp(a, AVERAGE(4), low.w);
+  a = lerp(a, AVERAGE(5), high.x);
+  a = lerp(a, AVERAGE(6), high.y);
+  a = lerp(a, AVERAGE(7), high.z);
+  a = lerp(a, AVERAGE(8), high.w);
+  #undef AVERAGE
+  return lerp(a, upper.rgb, upper.a);
+}
+// The ground where it is pressed, by what kind of ground it is (its layers' kinds blended as their colours are):
+//   snow (a layer of it): deep troughs, a berm of pushed snow, the bottom packed, greyer, bluer and smoother;
+//   mud: dark wet ruts, sheen, water standing in them when the ground is wet (dirt turns to mud in the wet);
+//   sand: soft ruts, the berm beside them lighter (dry, loose sand pushed up);
+//   grass: pressed flat and crushed, darker and browner (the ground cover lies down along them, grass.cpp), the earth
+//   showing where many pass;
+//   dirt: compacted, darker, smooth, the loose earth pushed up beside; hard ground (rock, concrete): only scuffed.
+// Down in a trough the ground is pressed smooth: its colour goes toward the layers' average and its own small
+// shapes (the layers' normals) toward the ground's (`base`), so that a track reads as a smooth band in a pebbly or
+// grassy ground; the trough's walls keep part of the sky from its bottom (`creases`). Relief by the normal; it shows
+// where the level's texels are not much smaller than a pixel and fades beyond (from far, only the map-wide level's
+// darkening of the way trodden). The snow that lies by the weather is pressed in ModernLight (lighting.h), from what
+// this leaves in deepTrack.
+void DeepTracksOn(float2 xz, float2 stepX, float2 stepY, float4 low, float4 high, float4 upper, float3 base, inout float3 albedo, inout float3 N,
+                  inout float roughness, inout float creases) {
+  float pixel = max(length(stepX), length(stepY));  // (world units a pixel spans here)
+  float in0 = TrackInside(0, xz), in1 = TrackInside(1, xz);
+  float w0 = saturate((in0 - 8) / 96) * saturate((2.5 * tracksAtlas[0].w - pixel) / (1.5 * tracksAtlas[0].w));
+  float w1 = saturate((in1 - 8) / 96) * saturate((2.5 * tracksAtlas[1].w - pixel) / (1.5 * tracksAtlas[1].w));
+  float2 c0 = 0, c1 = 0;
+  [branch] if (w0 > 0) c0 = TrackTap(0, xz);
+  [branch] if (w0 < 1 && w1 > 0) c1 = TrackTap(1, xz);
+  float2 c2 = TrackTap(2, xz);
+  [branch] if (tracksInfo.w > 0.5 && tracksInfo.w < 1.5) {  // (a view for checking them: MOHO64_DEBUG_TRACKS=2)
+    albedo = float3(saturate(lerp(c1.x, c0.x, w0)), saturate(lerp(c1.y, c0.y, w0)), w0 > 0 ? 0.6 : w1 > 0 ? 0.3 : 0) + float3(c2.x, 0, 0);
+    return;
+  }
+  if (max(max(c0.x + c0.y, c1.x + c1.y), c2.x) < 0.004) return;  // (nothing pressed here: most of the ground)
+  float2 shape = 0, s1 = 0;
+  float4 slope = 0, g1 = 0;
+  [branch] if (w0 > 0) TrackLevel(0, xz, shape, slope);
+  [branch] if (w0 < 1 && w1 > 0) TrackLevel(1, xz, s1, g1);
+  shape = lerp(s1, shape, w0);
+  slope = lerp(g1, slope, w0);
+  float raw = lerp(c1.x, c0.x, w0);              // (how often it has been pressed: heavy traffic)
+  float relief = w0 + (1 - w0) * w1;             // (how much of the relief shows)
+  float far = TrackShape(c2).x * 0.6;            // (the map's level: the way trodden, without relief)
+  float t = lerp(far, shape.x, relief), q = shape.y * relief;
+  // the kind of ground
+  float4 kA = kindA[0], kB = kindB[0];
+  #define KIND(n, w) { kA = lerp(kA, kindA[n], w); kB = lerp(kB, kindB[n], w); }
+  KIND(1, low.x) KIND(2, low.y) KIND(3, low.z) KIND(4, low.w) KIND(5, high.x) KIND(6, high.y) KIND(7, high.z) KIND(8, high.w)
+  #undef KIND
+  float wet = saturate(weather.x);
+  float snow = kA.x, mud = kA.y + kB.x * wet * 0.8, sand = kA.z, grass = kA.w, dirt = kB.x * (1 - wet * 0.8), hard = kB.y;
+  float sum = max(snow + mud + sand + grass + dirt + hard, 1e-3);
+  snow /= sum, mud /= sum, sand /= sum, grass /= sum, dirt /= sum, hard /= sum;
+  // per kind: how deep a full trough is (world units: somewhat deeper than true to the units' size, so that it reads
+  // from the game's height), how high its berm against that, how much of the ground's own small shapes and colour
+  // the pressing smooths out, the colour down in it and on the berm, and how much its walls hide of the sky
+  float depth = snow * 0.07 + mud * 0.05 + sand * 0.04 + grass * 0.03 + dirt * 0.03 + hard * 0.003;
+  float berm = snow * 0.7 + mud * 0.6 + sand * 0.9 + grass * 0.25 + dirt * 0.45;
+  float smooth = snow * 0.6 + mud * 0.8 + sand * 0.7 + grass * 0.35 + dirt * 0.75 + hard * 0.1;
+  float3 down = snow * float3(0.86, 0.89, 0.95) + mud * float3(0.5, 0.47, 0.44) + sand * float3(0.86, 0.84, 0.8) + grass * float3(0.68, 0.64, 0.46) +
+                dirt * float3(0.7, 0.67, 0.64) + hard * 0.93;
+  float3 up = snow * 1.05 + mud * float3(0.86, 0.84, 0.82) + sand * 1.1 + grass * float3(0.92, 0.9, 0.82) + dirt * 1.08 + hard * 1.0;
+  float shade = snow * 0.5 + mud * 0.45 + sand * 0.4 + grass * 0.35 + dirt * 0.35;
+  // pressed smooth: its colour and small shapes toward the average and the ground's own slope
+  float flat = smooth * saturate(t * 1.4) * relief;
+  albedo = lerp(albedo, LayersAverage(low, high, upper), flat * 0.85);
+  N = normalize(lerp(N, base, flat * 0.9));
+  creases = lerp(creases, 1, flat * 0.8);
+  // the trough and berm's relief, the colours down in it and up on the berm
+  float2 g = depth * (-slope.xy + berm * slope.zw) * relief;
+  N = normalize(N - float3(g.x, 0, g.y));
+  albedo *= lerp(1, down, t) * lerp(1, up, q);
+  // grass worn through to the earth where many have passed
+  float worn = smoothstep(1.5, 5.0, raw) * relief * grass;
+  float grey = dot(albedo, float3(0.3, 0.6, 0.1));
+  albedo = lerp(albedo, grey * float3(1.25, 0.95, 0.68), worn * 0.8);
+  // packed snow, flattened grass and wet mud smoother; water standing in the ruts of wet mud (taken as a puddle,
+  // lighting.h)
+  roughness = lerp(roughness, 0.45, t * snow);
+  roughness = lerp(roughness, 0.6, t * grass * (1 - worn));
+  roughness = lerp(roughness, lerp(0.5, 0.25, wet), t * mud);
+  deepWater = smoothstep(0.4, 0.8, t) * saturate(mud * 1.5) * saturate(wet * 1.5 - 0.2);
+  creases *= 1 - shade * t * relief;
+  deepTrack = float4(t, q, relief, 1);
+  deepSlope = slope * relief;
+  if (tracksInfo.w > 1.5) albedo = float3(t, q, relief * 0.5);  // (MOHO64_DEBUG_TRACKS=3)
+}
+#endif
 
 float4 Ground(VOut i) {
   float2 xz = i.world.xz;
@@ -217,6 +354,13 @@ float4 Ground(VOut i) {
       float wet = saturate(1 - (over + uneven) / shore.z) * saturate(over * 20 + 1);  // (not under the water: its own colours)
       albedo.rgb *= lerp(1, 0.6, wet);
       roughness = lerp(roughness, 0.22, wet * 0.85);
+    }
+#endif
+#ifdef SURFACE_DEEP_TRACKS
+    [branch] if (tracksInfo.z > 0.5) {  // deep tracks: the ground pressed where units have gone
+      float3 pressed = albedo.rgb;
+      DeepTracksOn(i.world.xz, stepX, stepY, low, high, upper, base, pressed, N, roughness, creases);
+      albedo.rgb = pressed;
     }
 #endif
     // (ground that glows gives its own light, by day and by night)
@@ -362,7 +506,94 @@ struct TerrainConstants {
   float albedoTile[10][4];
   float normalTile[9][4];
   float morph[12][4];
+  TrackFieldConstants tracks;  // (deep tracks)
+  float kindA[10][4], kindB[10][4];
 };
+
+// Where the kinds of ground lie (Terrain::GroundKinds): the layers' kinds blended by their masks as the shader
+// blends the layers.
+const char kGroundKinds[] = R"hlsl(
+cbuffer KindConstants : register(b1) {
+  float4 mapSize;
+  float4 params;
+  float4 kindA[10];  // per layer: snow, mud, sand, grass
+  float4 kindB[10];  // dirt, hard
+};
+Texture2D maskLow : register(t2);
+Texture2D maskHigh : register(t3);
+RWTexture2D<float4> kinds : register(u0);
+[numthreads(8, 8, 1)] void CS(uint3 id : SV_DispatchThreadID) {
+  uint w, h;
+  kinds.GetDimensions(w, h);
+  if (id.x >= w || id.y >= h) return;
+  float2 uv = (id.xy + 0.5) / float2(w, h);
+  float4 low = saturate(maskLow.SampleLevel(samplerLinearClamp, uv, 0) * 2 - 1);
+  float4 high = saturate(maskHigh.SampleLevel(samplerLinearClamp, uv, 0) * params.y * 2 - 1);
+  float4 a = kindA[0], b = kindB[0];
+  #define LAYER(n, w) { a = lerp(a, kindA[n], w); b = lerp(b, kindB[n], w); }
+  LAYER(1, low.x);
+  LAYER(2, low.y);
+  LAYER(3, low.z);
+  LAYER(4, low.w);
+  LAYER(5, high.x);
+  LAYER(6, high.y);
+  LAYER(7, high.z);
+  LAYER(8, high.w);
+  kinds[id.xy] = saturate(float4(a.z, a.w, a.x, b.y));  // sand, grass, snow, hard
+}
+)hlsl";
+
+struct KindConstants {
+  float mapSize[4], params[4];
+  float kindA[10][4], kindB[10][4];
+};
+
+// What kind of ground a layer is by its name ("/env/evergreen2/layers/evgrass005_albedo.dds", "sand_wet"): shares
+// of snow, mud, sand, grass, dirt, hard ground. `kind`, where given (remap.json's "ground", the viewer's
+// --ground-kind): one of those words, or two with a plus ("sand+mud": half each).
+void GroundKindOf(const std::string& texture, const std::string& kind, float out[6]) {
+  std::fill(out, out + 6, 0.0f);
+  static const char* const kNames[6] = {"snow", "mud", "sand", "grass", "dirt", "hard"};
+  if (!kind.empty()) {
+    int n = 0;
+    float given[6] = {};
+    size_t at = 0;
+    while (at <= kind.size()) {
+      const size_t plus = kind.find('+', at);
+      const std::string word = kind.substr(at, plus == std::string::npos ? std::string::npos : plus - at);
+      for (int k = 0; k < 6; ++k)
+        if (word == kNames[k]) given[k] += 1, ++n;
+      if (plus == std::string::npos) break;
+      at = plus + 1;
+    }
+    if (n > 0) {
+      for (int k = 0; k < 6; ++k) out[k] = given[k] / static_cast<float>(n);
+      return;
+    }
+  }
+  std::string name = texture;
+  for (char& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  name = name.substr(name.rfind('/') + 1);
+  auto has = [&](std::initializer_list<const char*> words) {
+    for (const char* w : words)
+      if (name.find(w) != std::string::npos) return true;
+    return false;
+  };
+  enum { Snow, Mud, Sand, Grass, Dirt, Hard };
+  if (has({"snow"})) out[Snow] = 1;
+  else if (has({"ice"})) out[Snow] = 0.4f, out[Hard] = 0.6f;
+  else if (has({"mud", "swamp", "bog", "marsh"})) out[Mud] = 1;
+  else if (has({"sand", "beach", "dune", "desert"})) {
+    if (has({"wet"})) out[Sand] = 0.5f, out[Mud] = 0.5f;  // (wet sand: firm, darker ruts that hold water)
+    else out[Sand] = 1;
+  } else if (has({"grass", "veg", "meadow", "moss", "lawn", "field"})) {
+    if (has({"dry"})) out[Grass] = 0.8f, out[Dirt] = 0.2f;
+    else out[Grass] = 1;
+  } else if (has({"gravel", "pebble", "scree", "shingle"})) out[Dirt] = 0.3f, out[Hard] = 0.7f;
+  else if (has({"rock", "cliff", "stone", "concrete", "tarmac", "crystal", "lava", "cracked", "ribbon", "metal", "plate", "macro"}))
+    out[Hard] = 1;
+  else out[Dirt] = 1;  // (dirt, soil, earth, a forest's floor, a path; and what the name does not tell)
+}
 
 // Is any point of the box within `radius` of `center`?
 bool SphereTouchesBox(Vec3 center, float radius, Vec3 lo, Vec3 hi) {
@@ -421,6 +652,47 @@ gfx::Texture Terrain::GroundColours() {
   return groundColours_;
 }
 
+gfx::Texture Terrain::GroundKinds() {
+  if (kinds_ || !map_ || map_->width <= 0 || map_->height <= 0 || !maskLow_) return kinds_;
+  if (!kindsPass_) {
+    const std::string source = std::string(kViewShaderBlock) + kGroundKinds;
+    gfx::ComputeDesc cd;
+    cd.name = "terrain: the kinds of ground";
+    cd.source = source;
+    std::string error;
+    kindsPass_ = device_->CreateCompute(cd, &error);
+    if (!kindsPass_) {
+      fprintf(stderr, "render: %s\n", error.c_str());
+      return {};
+    }
+  }
+  gfx::TargetDesc td;
+  td.storage = true;
+  td.width = std::max(map_->width / 2, 1);
+  td.height = std::max(map_->height / 2, 1);
+  td.format = gfx::Format::RGBA8;
+  kinds_ = device_->CreateTarget(td);
+  if (!kinds_) return {};
+  KindConstants c = {};
+  c.mapSize[0] = static_cast<float>(map_->width);
+  c.mapSize[1] = static_cast<float>(map_->height);
+  c.params[1] = shaderKind_ == 1 ? 1.0f : 0.0f;
+  for (int i = 0; i < 10; ++i) {
+    std::copy(groundKind_[i], groundKind_[i] + 4, c.kindA[i]);
+    std::copy(groundKind_[i] + 4, groundKind_[i] + 6, c.kindB[i]);
+  }
+  device_->SetPipeline(kindsPass_);
+  device_->SetConstants(1, &c, sizeof c);
+  device_->SetTexture(2, maskLow_);
+  device_->SetTexture(3, maskHigh_);
+  device_->SetStorage(0, kinds_);
+  device_->Dispatch(static_cast<uint32_t>((td.width + 7) / 8), static_cast<uint32_t>((td.height + 7) / 8), 1);
+  device_->SetStorage(0, {});
+  device_->SetTexture(2, {});
+  device_->SetTexture(3, {});
+  return kinds_;
+}
+
 // The visuals track's remastered ground (remasters.h, kRemasteredTerrain): where its remap.json lists this map and a
 // layer's albedo, the layer takes the material's albedo, normal (+y up: normalUp_) and ARH (creases, roughness,
 // height: its path into `arh`), at the map's own scale for the layer times scale_mul, or at "scale".
@@ -450,6 +722,7 @@ void Terrain::Remaster(const MapData& m, std::vector<std::string>* arh) {
     const std::string name = entry["material"].StringOr(std::string());
     const std::string dir = remap["materials"][name]["dir"].StringOr(std::string());
     if (name.empty() || dir.empty()) continue;
+    groundGiven_[i] = entry["ground"].StringOr(groundGiven_[i]);  // (deep tracks: the layer's kind of ground, where it says)
     const std::string base = folder + dir + "/" + name + "_";
     if (!textures_->ReadFile(base + "albedo_" + tier + ".dds")) {
       fprintf(stderr, "render: the remastered ground's %s has no %s set\n", name.c_str(), tier);
@@ -580,8 +853,10 @@ bool Terrain::Load(const MapData* map, std::string* error) {
 
   if (!pipeline_) {
     // (the modern look has its own water: water.cpp)
-    std::string source = std::string("#define MODERN_WATER 1\n") + "#define SURFACE_PUDDLES 1.0\n#define SURFACE_TRACKS 1\n" + kViewShaderBlock + RayShaders() +
-                         kLightingShaderBlock + kShader;
+    // (deep tracks: what the ground's shader read of them, for the lying snow and the puddles in ModernLight)
+    std::string source = std::string("#define MODERN_WATER 1\n") + "#define SURFACE_PUDDLES 1.0\n#define SURFACE_TRACKS 1\n" +
+                         "#define SURFACE_DEEP_TRACKS 1\nstatic float4 deepTrack = 0;\nstatic float4 deepSlope = 0;\nstatic float deepWater = 0;\n" +
+                         kViewShaderBlock + RayShaders() + kLightingShaderBlock + kShader;
     gfx::PipelineDesc pd;
     pd.name = "terrain";
     pd.vertexSource = pd.pixelSource = source;
@@ -660,11 +935,24 @@ bool Terrain::Load(const MapData* map, std::string* error) {
       const size_t at = lower.rfind("_albedo.dds");
       if (at != std::string::npos) paths[i] = map->albedo[i].texture.substr(0, at) + "_arh.dds";
     }
+    for (std::string& g : groundGiven_) g.clear();
     Remaster(*map, &paths);  // (the visuals track's remastered ground, where it lists this map)
     std::vector<bool> present;
     materials_ = textures_->Layers(paths, &present);
     for (size_t i = 0; i < 9; ++i) material_[i] = materials_ && present[i];
     if (MaterialLayers()) printf("render: %d of the map's ground layers have a third map (creases, roughness, height)\n", MaterialLayers());
+  }
+  {  // deep tracks: what kind of ground each layer is (by remap.json's "ground", the viewer's --ground-kind, its name)
+    for (int i = 0; i < 10; ++i) {
+      std::string given = groundGiven_[i];
+      std::string lower = map->albedo[i].texture;
+      for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      for (const auto& [part, kind] : groundKinds)
+        if (!part.empty() && lower.find(part) != std::string::npos) given = kind;
+      GroundKindOf(map->albedo[i].texture, given, groundKind_[i]);
+    }
+    if (kinds_) device_->Destroy(kinds_);  // (GroundKinds: made again for this map when asked for)
+    kinds_ = {};
   }
   shaderKind_ = map->shader == "TTerrainXP" ? 1 : map->shader == "TTerrainGlow" ? 2 : 0;
   if (map->shader != "TTerrain" && map->shader != "TTerrainXP" && map->shader != "TTerrainGlow")
@@ -864,6 +1152,11 @@ void Terrain::Draw(const View& view, bool shadowPass) {
   for (int i = 0; i < 9; ++i) c.albedoTile[i][1] = richGround && material_[i] ? 1.0f : 0.0f;
   for (int i = 0; i < 9; ++i) c.normalTile[i][0] = normalScale_[i] > 0 ? 1.0f / normalScale_[i] : 0;
   for (int i = 0; i < 9; ++i) c.normalTile[i][1] = normalUp_[i] ? 1.0f : 0.0f;
+  c.tracks = tracksField;  // (deep tracks)
+  for (int i = 0; i < 10; ++i) {
+    std::copy(groundKind_[i], groundKind_[i] + 4, c.kindA[i]);
+    std::copy(groundKind_[i] + 4, groundKind_[i] + 6, c.kindB[i]);
+  }
   for (int k = 0; k <= top && k < 12; ++k) {
     if (k == top) {
       c.morph[k][0] = 1e30f;

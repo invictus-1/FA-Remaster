@@ -768,6 +768,7 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
     if (entities_->Current().units.empty()) {
       world.AddFrame(entities_->Current(), {});
     } else {  // (the units the stand draws itself, below: the world draws a game's units with their symbols and bars)
+      world.PressGround(entities_->Current());  // (deep tracks: as a game's units press the ground)
       Frame drawn = entities_->Current();
       drawn.units.clear();
       drawn.bones.clear();

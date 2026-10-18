@@ -336,9 +336,12 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
     Quat turn;
     if (n.size() >= 7 && AttachPoint(frame, e.entity, e.bone, &place, &turn) && !Hidden(frame, e.entity)) {
       const Vec3 forward = Rotate(turn, {0, 0, 1});
-      // (in lying snow the print is pressed into the snow as well: the unit's track there)
-      if (tracks_) tracks_->AddPrint(e.entity, place + Rotate(turn, {n[0], n[1], n[2]}), n[3], n[4]);
-      if (decals_->Add(event.blueprint, place + Rotate(turn, {n[0], n[1], n[2]}), n[3], n[4], std::atan2(forward.x, forward.z), n[5], at, n[6])) return;
+      const Vec3 centre = place + Rotate(turn, {n[0], n[1], n[2]});
+      const float heading = std::atan2(forward.x, forward.z);
+      // (in lying snow the print is pressed into the snow as well: the unit's track there; with deep tracks on it
+      // is pressed into the ground by its own shape, and its picture is not laid)
+      if (tracks_ && tracks_->AddPrint(e.entity, centre, n[3], n[4], heading, event.blueprint)) return;
+      if (decals_->Add(event.blueprint, centre, n[3], n[4], heading, n[5], at, n[6])) return;
     }
     missed();
     return;

@@ -282,6 +282,9 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
     // puddles: where the ground is level, in patches that grow as it gets wetter: still water, which
     // mirrors the sky
     float puddle = SURFACE_PUDDLES * smoothstep(0.90, 0.97, N.y) * smoothstep(1.24 - 0.45 * weather.x, 1.34 - 0.45 * weather.x, CloudNoise(float3(world.xz * 0.45, 3.7)) + CloudNoise(float3(world.xz * 1.7, 8.1)) * 0.35);
+#ifdef SURFACE_DEEP_TRACKS
+    puddle = max(puddle, deepWater);  // (deep tracks: water standing in the ruts of wet mud, as the ground's shader found)
+#endif
     if (puddle > 0) {
       N = normalize(lerp(N, float3(0, 1, 0), puddle));
       albedo *= 1 - 0.45 * puddle;
@@ -308,8 +311,31 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
       lying *= 1 - 0.78 * trodden;  // (trodden snow, not bare earth: some of it stays)
     }
 #endif
+#ifdef SURFACE_DEEP_TRACKS
+    // deep tracks (deep_tracks.h; the ground's shader read them: deepTrack x how deep the trough is, y the berm
+    // beside it, z how much of their relief shows from here, w 1 = on; deepSlope their slopes): through lying snow
+    // a trough goes down to packed, greyer, bluer snow (where little lies, to the dark wet ground), its walls hiding
+    // part of the sky from its bottom, the snow pushed out heaped beside it. Its relief and its packed colour are the
+    // snow's own: laid on after the snow has smoothed and covered what lies under it (below). (Off, the lines below are
+    // left exactly as they were: the snow's colour a constant there, so that the compiler makes the same of them.)
+    float2 trackTilt = 0;
+    float packed = 0;
+    [branch] if (deepTrack.w > 0.5 && lying > 0) {
+      float thick = saturate(fallen * 1.6 - 0.2);
+      albedo *= 1 - 0.3 * deepTrack.x * (1 - thick);
+      lying = saturate(lying * (1 - deepTrack.x * (0.9 - 0.6 * thick)) + deepTrack.y * thick * 0.8);
+      packed = deepTrack.x * thick * 0.85;
+      occlusion *= 1 - 0.45 * deepTrack.x * deepTrack.z * lying;
+      trackTilt = (-deepSlope.xy + 0.8 * deepSlope.zw) * (0.1 * lying * deepTrack.z);
+    }
+#endif
     N = normalize(lerp(N, float3(0, 1, 0), 0.5 * lying * saturate(fallen * 2 - 0.8)));
     albedo = lerp(albedo, float3(0.50, 0.53, 0.58), lying);
+#ifdef SURFACE_DEEP_TRACKS
+    // (deep tracks: the trough's relief in the snow, and the snow packed down in it)
+    if (any(trackTilt != 0)) N = normalize(N - float3(trackTilt.x, 0, trackTilt.y));
+    if (packed > 0) albedo = lerp(albedo, float3(0.36, 0.40, 0.48), packed * lying);
+#endif
     metallic *= 1 - lying;
     roughness = lerp(roughness, 0.7, lying);
   }
