@@ -574,6 +574,12 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   } else {
     std::fill(std::begin(c.shore), std::end(c.shore), 0.0f);
   }
+  // light through leaves (y: as much as leaves let through before, in their strongest colour)
+  std::fill(std::begin(c.leaves), std::end(c.leaves), 0.0f);
+  if (leafLight && look == Look::Modern) {
+    c.leaves[0] = 1;
+    c.leaves[1] = 0.6f;
+  }
   // reflections by ray tracing (where the shaders were built for it)
   reflectNow_ = rayReflections && gRayShaders && look == Look::Modern && haveMap_ && !sidePicture && RaysReady();
   if (reflectNow_) {

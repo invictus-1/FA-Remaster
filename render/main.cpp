@@ -90,6 +90,7 @@
 //           (its cover atlas) their cards too: --plant-density n spots a square unit where its table says 1 (15;
 //           0 none),
 //           --plant-tallest n the tallest plant's height in world units (0.24)
+// --leaf-light  the sun's light through leaves, grass blades and plants (World::leafLight; modern look)
 // --battle-scars  the scorches and craters scripts lay stay, weathering, up to a most (World::battleScars);
 //           --scar-test n[,radius]: n of the game's scorches laid at random round where the camera starts (within
 //           radius, 40), as scripts lay them (a minute's time each), as if over the last twenty minutes: to see
@@ -330,6 +331,7 @@ struct Options {
   float plantDensity = -1;              // --plant-density
   float plantTallest = -1;              // --plant-tallest
   bool battleScars = false;             // --battle-scars
+  bool leafLight = false;               // --leaf-light
   int scarTest = 0;                     // --scar-test
   bool orderTest = false;               // --order-test
   float scarRadius = 40;
@@ -452,6 +454,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--water-detail") o->waterDetail = true;
     else if (a == "--ground-cover") o->groundCover = true;
     else if (a == "--battle-scars") o->battleScars = true;
+    else if (a == "--leaf-light") o->leafLight = true;
     else if (a == "--order-test") o->orderTest = true;
     else if (a == "--frame-generation") o->frameGeneration = true;
     else if (a == "--capture-between") o->captureBetween = true;
@@ -929,6 +932,7 @@ int main(int argc, char** argv) {
   if (opt.plantDensity >= 0) world.grass.plantDensity = opt.plantDensity;
   if (opt.plantTallest > 0) world.grass.plantTallest = opt.plantTallest;
   world.battleScars = opt.battleScars;
+  world.leafLight = opt.leafLight;
   world.frameGeneration = opt.frameGeneration;
   device->captureBetween = opt.captureBetween;
   if (opt.sunSize > 0) world.sunSize = opt.sunSize;

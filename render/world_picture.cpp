@@ -70,7 +70,7 @@ struct WorldPicture::Impl {
     if (rayTracing >= 0) world->bounceLight = rayTracing > 0;
     world->rayReflections = rayReflections;
     if (weatherEffects >= 0) world->litRain = world->rainSplashes = world->waterDetail = weatherEffects > 0;
-    if (groundDetail >= 0) world->groundCover = world->battleScars = groundDetail > 0;
+    if (groundDetail >= 0) world->groundCover = world->battleScars = world->leafLight = groundDetail > 0;
     if (frameGeneration >= 0) world->frameGeneration = frameGeneration > 0;
   }
   int textureDetail = 0;               // SetTextureDetail
