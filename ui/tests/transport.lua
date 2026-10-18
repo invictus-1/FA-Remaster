@@ -3,7 +3,7 @@
 -- (0x81d660, TransportReverseLoadUnits; carried out by the engine since request 39), an engineer over an
 -- enemy's building captures it, and a loaded
 -- transport over the ground only moves. Units made by the game's cheat callback.
--- Run it like victory.lua (a launched game with CheatsEnabled = "true"), with --frames 6500.
+-- Run it like victory.lua (a launched game with CheatsEnabled = "true"), with --frames 6800.
 local failed = 0
 local function check(what, got, want)
     if got == want then
