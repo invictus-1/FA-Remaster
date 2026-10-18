@@ -987,10 +987,16 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
         const float h = tu->maxHealth * m;
         if (h != tu->health) EntityAdjustHealth(L, tu, u, h - tu->health);
       } else {
+        // a prop (0x61ff52..0x61ffbe): Prop::Materialize 0x6fa180 by the step, which moves the fraction only
+        // (clamped to [0, 1]; the step is negative) and gives back the change; the prop's health stays as it is. FAF's
+        // Prop.UpdateReclaimLeft counts health / MaxHealth x fraction, so a tree group partly reclaimed and then split
+        // (TreeGroup.OnDamage -> Breakup -> SplitOnBonesByName) hands its fraction to its trees once, not twice. Seen:
+        // MP1 3218, army 3's engineer 0x20001a reclaims a split tree (pine06_big_s3) in one beat: the original pays
+        // 1.0714 E 0.1071 M, ours paid 0.2009 E 0.0201 M, 0.1875 = 3/16 times less again (inferred: its group had 3
+        // of 16 steps left when it split, and ours had brought the group's health down with its fraction, so the
+        // script's ReclaimLeft was 0.1875 x 0.1875). Its ally army 5 gets half of army 3's overflowing energy.
         f = std::clamp(old - c.reclaimStep * k, 0.0f, 1.0f);
         e->fractionComplete = f;
-        float h = e->maxHealth * f;
-        if (h != e->health) EntityAdjustHealth(L, e, u, h - e->health);
       }
       float taken = old - f;
       u->workProgress = 1.0f - f;
