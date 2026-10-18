@@ -1123,6 +1123,28 @@ void CommandStep(Sim& sim, Unit* u) {
         }
         if (!u->dead && !u->commands.empty()) u->headState = kNotStarted;
         break;
+      } else if (!u->commands.empty() && u->commands.front()->type == CommandType::Attack &&
+                 !u->commands.front()->targetId && !u->commands.front()->targetFakeId) {
+        // IAiCommandDispatchImpl::TaskTick 0x598f47 / 0x598fdc..0x599023 (read): an Attack order (type 10, not
+        // FormAttack) whose CAiTarget (cmd+0x11c) is a ground position (type 2) is not simply removed when its task
+        // ends: with a second order in the queue (0x6edc20) the unit leaves the order's formation (FormRemoveUnit
+        // 0x6e8d70) and the order goes to the BACK of the queue (MoveFirstCommandToBackOfQueue 0x6edfc0); alone it is
+        // removed (0x6ede70). Either way the dispatcher answers 1: the next order starts a beat later. (The attack
+        // task never writes the dispatcher's result word +0x2c, so the "failed" branch 0x598ebb is not taken.)
+        // Seen: MP1 beat 3917, army 1's DistributeOrders gives six interceptors (uaa0102, anti-air only) an Attack on
+        // the ground point (426.16, 147.69), then an Attack on the blip of army 2's 0x200037 (probe mp1_3917b: the
+        // same six IssueAttack calls as ours). The ground attack ends in its first tick (no weapon for it, 0x5f3611);
+        // the original's queue stays at two orders through 4060, the blip attack starts at 3919 (Attacking, the
+        // target 0x200037 where it stood after 3918). Ours removed the ground order and started the blip attack in
+        // 3918 (one order, a beat early: MP1 3918).
+        std::shared_ptr<UnitCommand> keep = u->commands.front();
+        PopHead(u);
+        if (!u->commands.empty()) {
+          u->commands.push_back(keep);
+          keep->units.insert(u);
+        }
+        if (!u->dead && !u->commands.empty()) u->headState = kNotStarted;
+        break;
       } else {
         PopHead(u);
       }
