@@ -2883,6 +2883,7 @@ void GuardRepairChildrenCommandEvent(Sim& sim, UnitCommand& c, Unit* self) {
     BuildTask* gt = h->task;
     if (!gt || !gt->gdata || !gt->gdata->child || gt->gdata->child->type != CommandType::Repair) continue;
     BuildTask& ch = *gt->gdata->child;
+    const bool asleep = TaskThreadAsleepOnMove(h, &ch);  // (asked before the event changes the child)
     if (ch.workId) {
       if (Unit* w = FindUnitAny(sim, ch.workId)) w->unitStates.erase("NoReclaim");
       h->workProgress = 0;
@@ -2894,6 +2895,10 @@ void GuardRepairChildrenCommandEvent(Sim& sim, UnitCommand& c, Unit* self) {
     ch.noMove = false;
     ch.state = 0;
     gt->gdata->childFrom = 0;  // (woken: counter 0)
+    // the listener's tail 0x5f9e03..0x5f9e37: the thread's frame count 0 and, when it is suspended (the walking
+    // child's move task suspended it), re-linked at the stage's end, as the reclaim task's listener does
+    // (RetargetPatrolTasks, commands.cpp)
+    if (asleep) sim.ResumeCommandThread(h);
   }
 }
 

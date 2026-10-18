@@ -650,6 +650,16 @@ void EndPatrol(Sim& sim, Unit* u, BuildTask& t) {
 // units still on it. The patrol's reclaim child listens to the same command (ReclaimTaskCommandEvent, build.cpp).
 // NOT MODELLED: the attack and repair children's listeners (0x5f4000, 0x5f9d60). (A reclaim child's walk under way
 // ends with the wake: TickPropReclaim.)
+// The reclaim child's listener wakes the thread (0x620238..0x62026d, read): the frame count (+0x14) 0 and, when the
+// thread is suspended (+0x18, set by its walking child's move task: CUnitMoveTask's ctor), re-linked at the stage's
+// end, as the move task's navigator listener 0x618bb0 does (NavEventWakesCommandThread). The move task's own command
+// listener 0x618c40 and the patrol's 0x61c3e0 only re-goal and re-link nothing (read). The command tells its
+// listeners from the oldest linked on (0x6e94cf starts at the list head's +4; a link as in the move task's ctor,
+// 0x6182f6..0x618315, puts a new listener at the head's +0); ours goes by unit id (the same order here).
+// Seen (probe mp1_3150): MP1 beat 3149, army 7's player drags its engineers' AggressiveMove waypoint; at 3150
+// 0x70003d and 0x70004f (reclaiming, awake) run first, then 0x700027, 0x700042 and 0x70004a, whose reclaim walks the
+// event ended, in that order; at 3156 their patrol legs take the free spots by PrepareMove in that thread order.
+// Ours kept 0x700027 first (last re-linked 3041) and the five took each other's cells (MP1 3158).
 void RetargetPatrolTasks(Sim& sim, UnitCommand& c) {
   if (!IsPatrolType(c.type) || c.form) return;
   std::vector<Unit*> holders(c.units.begin(), c.units.end());
@@ -666,8 +676,10 @@ void RetargetPatrolTasks(Sim& sim, UnitCommand& c) {
     PatrolSearchBox(sim, u, p);
     BuildTask* ch = p.child;
     if (ch && ch->type == CommandType::Reclaim && !ch->pdata && !ch->gdata && !ch->adata) {
+      const bool asleep = TaskThreadAsleepOnMove(u, ch);  // (asked before the event changes the child)
       ReclaimTaskCommandEvent(sim, u, *ch, c);
       p.childFrom = 0;  // (the listener wakes the thread: counter 0)
+      if (asleep) sim.ResumeCommandThread(u);
     }
   }
 }
@@ -1661,7 +1673,12 @@ void IssueClearCommandsTo(Sim& sim, Unit* u) {
   // place, ours was stopped again one second ahead.
   const bool idle = u->commands.empty();
   const bool stopped = HeadTaskStopsMotion(u);
-  const bool undispatched = u->motion.air && !u->commands.empty() && u->headState == kNotStarted;
+  // A head command not dispatched yet has no task, so nothing is torn down and nothing aborts the move, for a land
+  // unit as for an aircraft: its navigator keeps the goal an earlier task left it. Seen: MP2 5684, army 1's 21 Strikers
+  // on a Move get a formation Move with clear from the stream (the old Move's dtor keeps the move: a Move replaces it,
+  // 0x618998), then FAF's DistributeOrders callback clears them (IssueClearCommands) and re-issues the orders: the
+  // original's tanks drive on and turn onto the new paths; ours made brake splines and lost one or two beats.
+  const bool undispatched = !u->commands.empty() && u->headState == kNotStarted;
   const bool loadMove = u->motion.air && !u->commands.empty() && u->headState == kRunning && TransportLoadMoving(u);
   const bool loadWaits = u->motion.air && !u->commands.empty() && u->headState == kRunning && TransportLoadWaiting(u);
   // Nor is a guard that steers itself (its follow goal handed to the navigator directly, no move task): its dtor
