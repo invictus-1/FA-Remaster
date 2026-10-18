@@ -689,7 +689,15 @@ void RetargetPatrolTasks(Sim& sim, UnitCommand& c) {
       const bool asleep = TaskThreadAsleepOnMove(u, ch);  // (asked before the event changes the child)
       ReclaimTaskCommandEvent(sim, u, *ch, c);
       p.childFrom = 0;  // (the listener wakes the thread: counter 0)
-      if (asleep) sim.ResumeCommandThread(u);
+      if (asleep) {
+        // the walk's own listener (linked after the reclaim task's): its navigator takes the command's new position at
+        // once. Seen (probe mp1_3341): MP1 beat 3340, army 7's player drags the AggressiveMove again; the walks of
+        // 0x700055 and 0x70005a (rally overridden: free spots by PrepareMove) get the goals (360, 584) and (362, 584)
+        // from 0x618d76 in the stream, their navigators plan at 3341 before the command stage and the drive-through
+        // byte is 0 after 3341; ours set the goal only in the command stage and the byte followed a beat later.
+        TaskWalkCommandEvent(sim, c, u);
+        sim.ResumeCommandThread(u);
+      }
     }
   }
 }
