@@ -15,28 +15,29 @@ end
 -- open; each can still be changed after; Custom leaves them as they are). Off is the original game's look
 -- whole. What each level turns on is a first proposal, to be set by the renderer's measured costs (his request
 -- for the tooltips). Frame Rate, Graphics API, the two upscalers and Frame Generation are choices of
--- smoothness and screen, not looks: no level touches them.
+-- smoothness and screen, not looks: no level touches them. Water Ripples come on with Weather Effects (the
+-- renderer's advice, 2026-10-18); the Cinematic Lens Blur is a replay camera's, in no level.
 local remasterPresets = {
     [0] = { remaster_look = 'original', remaster_effects = 0, remaster_effects_quality = 1, remaster_tracers = 0,
             remaster_rich_ground = 0, remaster_snow_tracks = 0, remaster_soft_shadows = 0,
             remaster_ground_detail = 0, remaster_atmosphere = 0, remaster_weather_effects = 0,
-            remaster_ray_tracing = 0 },
+            remaster_water_ripples = 0, remaster_ray_tracing = 0 },
     [1] = { remaster_look = 'remastered', remaster_effects = 1, remaster_effects_quality = 0.5,
             remaster_tracers = 1, remaster_rich_ground = 1, remaster_snow_tracks = 1, remaster_soft_shadows = 0,
             remaster_ground_detail = 0, remaster_atmosphere = 0, remaster_weather_effects = 0,
-            remaster_ray_tracing = 0 },
+            remaster_water_ripples = 0, remaster_ray_tracing = 0 },
     [2] = { remaster_look = 'remastered', remaster_effects = 1, remaster_effects_quality = 0.75,
             remaster_tracers = 1, remaster_rich_ground = 1, remaster_snow_tracks = 1, remaster_soft_shadows = 1,
             remaster_ground_detail = 1, remaster_atmosphere = 0, remaster_weather_effects = 0,
-            remaster_ray_tracing = 0 },
+            remaster_water_ripples = 0, remaster_ray_tracing = 0 },
     [3] = { remaster_look = 'remastered', remaster_effects = 1, remaster_effects_quality = 1,
             remaster_tracers = 1, remaster_rich_ground = 1, remaster_snow_tracks = 1, remaster_soft_shadows = 1,
             remaster_ground_detail = 1, remaster_atmosphere = 1, remaster_weather_effects = 1,
-            remaster_ray_tracing = 0 },
+            remaster_water_ripples = 1, remaster_ray_tracing = 0 },
     [4] = { remaster_look = 'remastered', remaster_effects = 1, remaster_effects_quality = 1,
             remaster_tracers = 1, remaster_rich_ground = 1, remaster_snow_tracks = 1, remaster_soft_shadows = 1,
             remaster_ground_detail = 1, remaster_atmosphere = 1, remaster_weather_effects = 1,
-            remaster_ray_tracing = 1 },
+            remaster_water_ripples = 1, remaster_ray_tracing = 1 },
 }
 function RemasterPresetValues(level)  -- (also for the tests)
     local values = remasterPresets[level]
@@ -224,6 +225,22 @@ local looks = {
         },
     },
     {
+        -- the renderer's water ripples (World::waterRipples; Chris's next looks of 2026-10-17): the modern look's
+        -- water, on a map with water
+        title = "Water Ripples",
+        key = 'remaster_water_ripples',
+        tip = "Shells landing in water, ships, hovering units and units wading leave rings and wakes that spread, cross and fade.",
+        type = 'toggle',
+        default = 0,
+        set = Look("remaster_water_ripples"),
+        custom = {
+            states = {
+                { text = "<LOC _Off>", key = 0 },
+                { text = "<LOC _On>", key = 1 },
+            },
+        },
+    },
+    {
         -- the renderer's request 33: grass near the camera, pressed flat round units and buildings; since render
         -- 23e9550 also the battle's scorches and craters kept on the ground, weathering (up to 2000)
         title = "Ground Detail",
@@ -248,6 +265,22 @@ local looks = {
         type = 'toggle',
         default = 0,
         set = Look("remaster_frame_generation"),
+        custom = {
+            states = {
+                { text = "<LOC _Off>", key = 0 },
+                { text = "<LOC _On>", key = 1 },
+            },
+        },
+    },
+    {
+        -- the cinematic camera's lens (World::lens, render/cinecam.h; the renderer's answer of 2026-10-18): depth of
+        -- field only while the replay's cinematic camera shows (the key "Cinematic camera in replays")
+        title = "Cinematic Lens Blur",
+        key = 'remaster_lens',
+        tip = "A camera lens's depth of field: what the camera follows sharp, the near and far blurred. Only in the cinematic camera of a replay.",
+        type = 'toggle',
+        default = 0,
+        set = Look("remaster_lens"),
         custom = {
             states = {
                 { text = "<LOC _Off>", key = 0 },

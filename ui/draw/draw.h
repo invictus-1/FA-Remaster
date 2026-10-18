@@ -103,6 +103,10 @@ class SoftwareTarget : public DrawTarget {
   IntRect touched_;
 };
 
+// Pixels (0xAARRGGBB rows from the top; alpha not looked at) saved as a PNG, RGB, the pixels stored uncompressed
+// (the zlib here is its inflate side only): what SoftwareTarget::SavePng writes, for a block of any size.
+bool SavePngPixels(const std::string& hostPath, const uint32_t* pixels, int width, int height);
+
 // Decode a texture file's top mip level (.dds: DXT1/3/5 and uncompressed formats). An image that
 // cannot be read is empty. Images are cached per file.
 const Image& LoadTexture(const Vfs* vfs, const std::string& vpath);

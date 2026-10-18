@@ -8,12 +8,17 @@
 // What each function should do exactly is to be read from the original when the renderer's camera
 // takes this one's place.
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <ctime>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <string>
 
+#include "core/hostfs.h"
 #include "core/log.h"
 #include "maui/control.h"
 #include "maui/font.h"
@@ -223,8 +228,10 @@ void Place(lua_State* L, Camera* c) {
 // degrees) for a view's width of them; the lean stays between cam_MinSpinPitch (0.1) and almost
 // straight down. Letting go (0x7a6e40) starts the way back.
 const float kSpinSpeed = 360.0f, kMinSpinPitch = 0.1f, kMaxSpinPitch = 1.5608f;
-void SpinCamera(Camera* c, float dx, float dy, float viewWidth) {
+void TakeCameraBack(lua_State* L, Camera* c);  // (below: the cinematic camera hands the camera back first)
+void SpinCamera(lua_State* L, Camera* c, float dx, float dy, float viewWidth) {
   if (viewWidth <= 0) return;
+  TakeCameraBack(L, c);
   float k = kSpinSpeed / viewWidth * kDegrees;
   if (!c->turned) c->turnedPitch = ZoomPitchOf(c);
   c->heading -= dx * k;
@@ -379,6 +386,61 @@ void EndTimedByHand(Camera* c) {
   if (c->mode != 0) c->mode = 0;  // (the original's pan: TargetNothing, following ends too)
   c->entities.clear();
 }
+
+// --- the cinematic camera for replays (ours, not the original's) ---
+// The renderer's free camera (render/cinecam.h), held by the picture's source (WorldSource::CineStart and its kin):
+// the console's remaster_cinecam switches it on in a replay (CineCameraCommand below), and the picture then shows
+// the world from it while the game's camera, the one this file keeps, stays where it was. ANY input of the
+// player's that moves that camera, and a script's move of it, first hands the camera back (TakeCameraBack): the
+// game's camera goes on from where the cinematic one was, and the input then moves it from there while the picture
+// eases back to it (the renderer's CineCamera::Shown). Every place: PanCamera (the middle button's drag, the arrow
+// keys, the screen's edges), SpinCamera (Space and the mouse, Insert and Delete), ZoomByWheel (the wheel, the
+// script's ZoomScale), the middle button's press, the minimap's left press and drag, and the script's moves of a
+// camera (CheckMovedCamera: MoveTo, SnapTo, MoveToRegion, Reset, SetZoom, SetTargetZoom, RestoreSettings,
+// TrackEntities, TargetEntities, NoseCam, Spin; the world view's CameraReset; WorldCameraShowBox).
+//
+// The zoom whose eye is `distance` from the focus (EyeDistance turned round: the field of view across the longer
+// side goes with the zoom, 65 to 60 degrees, so a few rounds).
+float ZoomAtDistance(Camera* c, float distance) {
+  const float kept = c->zoom;
+  float zoom = distance * 2.0f * std::tan((kNearFov + kFarFov) * 0.5f * kDegrees * 0.5f);
+  for (int i = 0; i < 6; ++i) {
+    c->zoom = zoom;
+    zoom = distance * 2.0f * std::tan((kNearFov + ZoomBlend(c) * (kFarFov - kNearFov)) * kDegrees * 0.5f);
+  }
+  c->zoom = kept;
+  return zoom;
+}
+// The game's camera set to look as `w` looks (the camera the cinematic one hands back, CineCamera::Stop): its focus
+// where `w` looks, its heading, and its pitch held as a script's SnapTo holds it (turned: the lean no longer follows
+// the zoom until a turn swings back or a Reset), at the zoom whose eye is as far away as w's. A scripted move or a
+// unit followed meanwhile ends, as by the player's hand.
+void TakeView(Camera* c, const WorldCamera& w) {
+  EndTimedByHand(c);
+  c->anchored = false;
+  c->spinRate = c->spinZoomRate = 0;
+  for (int i = 0; i < 3; ++i) c->focus[i] = w.target[i];
+  c->heading = NearestAngle(0, w.heading + kPi);  // (the picture's heading is ours less pi: CameraFor)
+  c->turned = true, c->swingBack = false;
+  c->turnedPitch = w.pitch;
+  c->zoom = c->targetZoom = ZoomAtDistance(c, w.distance);
+}
+// Before the camera `c` is moved by the player or a script: when the cinematic camera has taken over from it, it is
+// switched off and `c` takes the camera it hands back. Nothing otherwise.
+void TakeCameraBack(lua_State* L, Camera* c) {
+  UserState* user = UserState::From(L);
+  if (user->cineCamera.empty() || c->name != user->cineCamera) return;
+  user->cineCamera.clear();
+  WorldCamera game;
+  WorldSource* source = user->config().world;
+  if (source && source->CineStop(&game)) TakeView(c, game);
+}
+// A script's method that moves its camera: the camera, taken back first.
+Camera* CheckMovedCamera(lua_State* L, int idx) {
+  Camera* c = CheckCamera(L, idx);
+  TakeCameraBack(L, c);
+  return c;
+}
 // A unit's place and turn for the camera: as the coming frame shows it (the picture's), else as
 // the last beat left it.
 bool FollowedPlace(lua_State* L, uint32_t id, float position[3], float orientation[4]) {
@@ -466,8 +528,9 @@ void FollowTargets(lua_State* L, Camera* c) {
 // Pan (FA exe 0x7a6f00): the focus moves over the ground, to the view's left by dx and up the
 // view by dy, in parts of the zoom per width of the view. (Right and forward as the picture's
 // source has them for our heading.)
-void PanCamera(Camera* c, float dx, float dy, float viewWidth) {
+void PanCamera(lua_State* L, Camera* c, float dx, float dy, float viewWidth) {
   if (viewWidth <= 0) return;
+  TakeCameraBack(L, c);
   EndTimedByHand(c);
   float k = c->zoom / viewWidth * kPanSpeed, turn = c->heading - kPi, sh = std::sin(turn), ch = std::cos(turn);
   c->focus[0] += -ch * k * dx - sh * k * dy;
@@ -476,7 +539,8 @@ void PanCamera(Camera* c, float dx, float dy, float viewWidth) {
 
 // The wheel (FA exe 0x7a8260): each notch away from the user brings the target zoom nearer by the
 // factor 2^-cam_ZoomAmount; the zoom itself glides after it (AdvanceCamera).
-void ZoomByWheel(Camera* c, float notches, float x, float y) {
+void ZoomByWheel(lua_State* L, Camera* c, float notches, float x, float y) {
+  TakeCameraBack(L, c);
   c->anchorX = x, c->anchorY = y, c->anchored = true;
   EndTimedByHand(c);
   c->targetZoom = ClampZoom(c, c->targetZoom * std::pow(2.0f, -CameraKeys().zoomAmount * notches));
@@ -486,7 +550,7 @@ void ZoomByWheel(Camera* c, float notches, float x, float y) {
 // 0x7ab760 / 0x7ab560 -> TargetManual): the camera looks at a place from the orientation's heading
 // and pitch at a zoom, along the curve or at once.
 int l_CamMoveTo(lua_State* L) {
-  Camera* c = CheckCamera(L, 1);
+  Camera* c = CheckMovedCamera(L, 1);
   float focus[3] = {c->focus[0], c->focus[1], c->focus[2]};
   ReadVector(L, 2, focus);
   float hpr[3] = {c->heading, PitchOf(c), 0};
@@ -497,7 +561,7 @@ int l_CamMoveTo(lua_State* L) {
 }
 // MoveToRegion(region, seconds): the camera shows a rectangle of the map ({x0, y0, x1, y1}).
 int l_CamMoveToRegion(lua_State* L) {
-  Camera* c = CheckCamera(L, 1);
+  Camera* c = CheckMovedCamera(L, 1);
   if (lua_istable(L, 2)) {
     float r[4] = {0, 0, 0, 0};
     static const char* const kNames[] = {"x0", "y0", "x1", "y1"};
@@ -552,7 +616,7 @@ int l_SyncPlayableRect(lua_State* L) {
   return 0;
 }
 int l_CamReset(lua_State* L) {
-  Camera* c = CheckCamera(L, 1);
+  Camera* c = CheckMovedCamera(L, 1);
   c->placed = false;
   Place(L, c);
   return 0;
@@ -579,7 +643,7 @@ int l_CamGetMaxZoom(lua_State* L) {
 // SetZoom(zoom, seconds) (FA exe 0x7ac7e0): a scripted move to the zoom, from the focus it is
 // going to, holding its turn. SetTargetZoom(zoom): the zoom glides there.
 int l_CamSetZoom(lua_State* L) {
-  Camera* c = CheckCamera(L, 1);
+  Camera* c = CheckMovedCamera(L, 1);
   const float* focus = c->moveSeconds > 0 ? c->toFocus : c->focus;
   float f[3] = {focus[0], focus[1], focus[2]};
   TargetManual(c, f, c->heading, PitchOf(c), static_cast<float>(luaL_checknumber(L, 2)),
@@ -587,7 +651,7 @@ int l_CamSetZoom(lua_State* L) {
   return 0;
 }
 int l_CamSetTargetZoom(lua_State* L) {
-  Camera* c = CheckCamera(L, 1);
+  Camera* c = CheckMovedCamera(L, 1);
   c->anchored = false;
   c->targetZoom = ClampZoom(c, static_cast<float>(luaL_checknumber(L, 2)));
   return 0;
@@ -617,7 +681,7 @@ int l_CamSaveSettings(lua_State* L) {
 // RestoreSettings(table) (FA exe 0x7ad150): a snap to the saved focus, heading, pitch and zoom, then
 // free again, then the turn swings back to north up (RevertRotation).
 int l_CamRestoreSettings(lua_State* L) {
-  Camera* c = CheckCamera(L, 1);
+  Camera* c = CheckMovedCamera(L, 1);
   if (!lua_istable(L, 2)) return 0;
   float focus[3] = {c->focus[0], c->focus[1], c->focus[2]};
   float heading = c->heading, pitch = PitchOf(c), zoom = c->zoom;
@@ -653,7 +717,7 @@ int l_CamRevertRotation(lua_State* L) {
 // a list of entity ids (strings or numbers); unknown ones are passed over.
 template <bool Track>
 int l_CamTargetEntities(lua_State* L) {
-  Camera* c = CheckCamera(L, 1);
+  Camera* c = CheckMovedCamera(L, 1);
   std::vector<uint32_t> ids;
   if (lua_istable(L, 2)) {
     for (int i = 1;; ++i) {
@@ -672,7 +736,7 @@ int l_CamTargetEntities(lua_State* L) {
 }
 // NoseCam(entity id, pitchAdjust, zoom, seconds, transition) (FA exe 0x7ac240).
 int l_CamNoseCam(lua_State* L) {
-  Camera* c = CheckCamera(L, 1);
+  Camera* c = CheckMovedCamera(L, 1);
   if (!lua_isnumber(L, 2) && !lua_isstring(L, 2)) return 0;
   const uint32_t id = static_cast<uint32_t>(std::strtoul(lua_tostring(L, 2), nullptr, 10));
   auto number = [&](int idx, float otherwise) { return lua_isnumber(L, idx) ? static_cast<float>(lua_tonumber(L, idx)) : otherwise; };
@@ -683,7 +747,7 @@ int l_CamNoseCam(lua_State* L) {
 // and its zoom goes by zoomRate map units a second, holding its pitch, until RevertRotation, Reset
 // or Spin(0, 0) (mode 4).
 int l_CamSpin(lua_State* L) {
-  Camera* c = CheckCamera(L, 1);
+  Camera* c = CheckMovedCamera(L, 1);
   c->spinRate = static_cast<float>(luaL_checknumber(L, 2));
   c->spinZoomRate = lua_isnumber(L, 3) ? static_cast<float>(lua_tonumber(L, 3)) : 0;
   if (c->mode != 4) c->toHeading = c->heading, c->toPitch = PitchOf(c);
@@ -781,6 +845,13 @@ class WorldView : public Control {
     w.fovY = FovYOf(c);
     return w;
   }
+  // The camera as the picture is given it (EnsurePicture): the focus at the ground's height there.
+  WorldCamera PictureCameraFor(lua_State* L) {
+    WorldCamera cam = CameraFor(L);
+    const auto& ground = UserState::From(L)->config().groundHeight;
+    if (ground) cam.target[1] = ground(cam.target[0], cam.target[2]);
+    return cam;
+  }
   // Make sure the picture is the one for this frame, this camera and this size; false when there
   // is no picture to have.
   bool EnsurePicture(lua_State* L) {
@@ -791,8 +862,7 @@ class WorldView : public Control {
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
     int w = static_cast<int>(r.x1 - r.x0), h = static_cast<int>(r.y1 - r.y0);
     if (w <= 0 || h <= 0) return false;
-    WorldCamera cam = CameraFor(L);
-    if (user->config().groundHeight) cam.target[1] = user->config().groundHeight(cam.target[0], cam.target[2]);
+    WorldCamera cam = PictureCameraFor(L);
     // The simulation itself only for building sites (outlines, the ghost under the mouse): it waits
     // for a beat running on its thread, so only then (UserState::LiveSim).
     const bool hasSim = user->HasSim();
@@ -1420,6 +1490,7 @@ class WorldView : public Control {
       float world[3];
       Unproject(L, e.x, e.y, world);
       Camera* main = GetCameraObject(L, "WorldCamera");
+      TakeCameraBack(L, main);
       main->focus[0] = world[0], main->focus[2] = world[2];
       return;
     }
@@ -1428,7 +1499,7 @@ class WorldView : public Control {
     Rect r;
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
     const float turn = g_invertMiddlePan ? -1.0f : 1.0f;  // (the player's option: SetInvertMidMouseButton)
-    PanCamera(GetCameraObject(L, cameraName), (e.x - lastX_) * turn, (e.y - lastY_) * turn, r.x1 - r.x0);
+    PanCamera(L, GetCameraObject(L, cameraName), (e.x - lastX_) * turn, (e.y - lastY_) * turn, r.x1 - r.x0);
     lastX_ = e.x, lastY_ = e.y;
   }
   // The outline of the ground a building takes at a site, as lines on the ground: a rectangle of
@@ -1689,7 +1760,7 @@ class WorldView : public Control {
         if (spinning_) {
           Rect r;
           GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
-          SpinCamera(c, e.x - spinX_, e.y - spinY_, r.x1 - r.x0);
+          SpinCamera(L, c, e.x - spinX_, e.y - spinY_, r.x1 - r.x0);
         }
         spinning_ = true;
         spinX_ = e.x, spinY_ = e.y;
@@ -1703,13 +1774,14 @@ class WorldView : public Control {
     }
     if (e.type == EventType::WheelRotation && e.wheelDelta != 0) {
       // The wheel zooms, towards the place under the cursor when it zooms in (see AdvanceCamera).
-      ZoomByWheel(GetCameraObject(L, cameraName), static_cast<float>(e.wheelRotation) / static_cast<float>(e.wheelDelta), e.x, e.y);
+      ZoomByWheel(L, GetCameraObject(L, cameraName), static_cast<float>(e.wheelRotation) / static_cast<float>(e.wheelDelta), e.x, e.y);
       return true;
     }
     // (A second press soon after the first comes as a double click: it is a press too.)
     if (e.type != EventType::ButtonPress && e.type != EventType::ButtonDClick) return false;
     if (e.middle) {
       if (miniMap) return false;
+      TakeCameraBack(L, GetCameraObject(L, cameraName));  // (the drag's start already hands the camera back)
       cameraDrag_ = true;
       lastX_ = e.x, lastY_ = e.y;
       UserState::From(L)->ui().holdPointer = true;
@@ -1761,6 +1833,7 @@ class WorldView : public Control {
     }
     if (miniMap && mode.empty()) {  // a left press on the minimap: the main camera looks there, and
       Camera* main = GetCameraObject(L, "WorldCamera");  // follows the pointer while the button is held
+      TakeCameraBack(L, main);
       main->focus[0] = world[0], main->focus[2] = world[2];
       main->cut = true;
       miniDrag_ = true;
@@ -1950,12 +2023,13 @@ int l_ViewZoomScale(lua_State* L) {
   WorldView* v = View(L);
   float rot = static_cast<float>(lua_tonumber(L, 4)), delta = static_cast<float>(lua_tonumber(L, 5));
   if (delta != 0)
-    ZoomByWheel(GetCameraObject(L, v->cameraName), rot / delta, static_cast<float>(lua_tonumber(L, 2)), static_cast<float>(lua_tonumber(L, 3)));
+    ZoomByWheel(L, GetCameraObject(L, v->cameraName), rot / delta, static_cast<float>(lua_tonumber(L, 2)), static_cast<float>(lua_tonumber(L, 3)));
   return 0;
 }
 int l_ViewCameraReset(lua_State* L) {
   WorldView* v = View(L);
   Camera* c = GetCameraObject(L, v->cameraName);
+  TakeCameraBack(L, c);
   c->placed = false;
   Place(L, c);
   return 0;
@@ -2127,12 +2201,12 @@ void AdvanceCamera(lua_State* L, Camera* c, float seconds) {
     }
     Rect r;
     v->GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
-    if (dx != 0 || dy != 0) PanCamera(c, dx, dy, r.x1 - r.x0);
+    if (dx != 0 || dy != 0) PanCamera(L, c, dx, dy, r.x1 - r.x0);
     // Insert and Delete turn the camera; it stays turned (nothing swings it back but Space let go
     // or a reset, as in the original).
     float turn = keys.turnSpeed * (KeyIsDown(L, kKeyCtrl) ? keys.turnFast : 1.0f) * kPanFramesPerSecond * seconds;
-    if (KeyIsDown(L, kKeyInsert)) SpinCamera(c, turn, 0, r.x1 - r.x0);
-    else if (KeyIsDown(L, kKeyDelete)) SpinCamera(c, -turn, 0, r.x1 - r.x0);
+    if (KeyIsDown(L, kKeyInsert)) SpinCamera(L, c, turn, 0, r.x1 - r.x0);
+    else if (KeyIsDown(L, kKeyDelete)) SpinCamera(L, c, -turn, 0, r.x1 - r.x0);
   }
   // Space let go while the mouse stands still: the turn swings back.
   if (v && v->spinning_ && !KeyIsDown(L, kKeySpace)) {
@@ -2258,6 +2332,17 @@ bool CameraListener(lua_State* L, float eye[3], float focus[3], float right[3], 
   if (it == user->cameras.end()) return false;
   const Camera* c = static_cast<const Camera*>(it->second.get());
   if (!c->placed) return false;
+  // While the cinematic camera shows (or the picture eases back from it): from where the picture is seen, its zoom
+  // the width of the world across the view's longer side at what it looks at, as the game camera's zoom is.
+  WorldCamera shown;
+  if (user->config().world && user->config().world->ShownCamera(&shown)) {
+    const float sh = std::sin(shown.heading), ch = std::cos(shown.heading), sp = std::sin(shown.pitch), cp = std::cos(shown.pitch);
+    for (int i = 0; i < 3; ++i) focus[i] = shown.target[i];
+    eye[0] = focus[0] + sh * cp * shown.distance, eye[1] = focus[1] + sp * shown.distance, eye[2] = focus[2] + ch * cp * shown.distance;
+    right[0] = ch, right[1] = 0, right[2] = -sh;
+    *zoom = 2.0f * shown.distance * std::tan(shown.fovY * 0.5f) * std::max(1.0f, c->aspect);
+    return true;
+  }
   const auto& ground = user->config().groundHeight;  // (the copy after each beat: no waiting)
   focus[0] = c->focus[0], focus[2] = c->focus[2];
   focus[1] = ground ? ground(focus[0], focus[2]) : c->focus[1];
@@ -2271,7 +2356,84 @@ bool CameraListener(lua_State* L, float eye[3], float focus[3], float right[3], 
 }
 
 void WorldCameraShowBox(lua_State* L, const float lo[3], const float hi[3], float seconds) {
-  TargetBox(GetCameraObject(L, "WorldCamera"), lo, hi, seconds);
+  Camera* c = GetCameraObject(L, "WorldCamera");
+  TakeCameraBack(L, c);
+  TargetBox(c, lo, hi, seconds);
+}
+
+namespace {
+// SessionIsReplay(), as the scripts have it.
+bool SessionReplay(lua_State* L) {
+  const int top = lua_gettop(L);
+  lua_getglobal(L, "SessionIsReplay");
+  const bool replay = lua_isfunction(L, -1) && lua_pcall(L, 0, 1, 0) == 0 && lua_toboolean(L, -1);
+  lua_settop(L, top);
+  return replay;
+}
+std::string g_lastPhoto;  // (the last photo's file: moho64ui_CineCamera)
+}  // namespace
+
+// The cinematic camera's switch (user_state.h). In a replay only: the original's camera is the game's to the
+// player in a game he plays (the ui chat's advice, Chris's approval of 2026-10-17), so there it says so and stays
+// off. On: from the main world view's camera as the picture has it now, following the first selected unit (the
+// renderer's suggested 14 world units along the ground and 3 over it), else holding where it is.
+void CineCameraCommand(lua_State* L, const std::string& value) {
+  UserState* user = UserState::From(L);
+  if (!user->gameInterface) return ConsoleNoSession(L);
+  if (!SessionReplay(L)) return ConsolePrint(L, "remaster_cinecam: the cinematic camera is for replays; in a game you play it stays off");
+  std::string word;
+  for (char ch : value)
+    if (!std::isspace(static_cast<unsigned char>(ch))) word.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(ch))));
+  const bool on = !user->cineCamera.empty();
+  const bool wanted = word.empty() ? !on : (word == "ON" || word == "1" || word == "TRUE");
+  if (wanted == on) return;
+  if (!wanted) return TakeCameraBack(L, GetCameraObject(L, user->cineCamera));
+  WorldSource* source = user->config().world;
+  WorldView* v = MainView(user->ui().GetFrame(0));
+  std::vector<uint32_t> selected;
+  UserUnitIds(L, true, &selected);
+  if (!source || !v || !source->CineStart(v->PictureCameraFor(L), selected.empty() ? 0xffffffffu : selected[0]))
+    return ConsolePrint(L, "remaster_cinecam: there is no picture of the world");
+  user->cineCamera = v->cameraName;
+}
+
+// The photo (user_state.h): the world at twice the main view's size (the renderer's TakePhoto: drawn larger again and
+// made smaller for smooth edges, nothing of the interface), from the cinematic camera while it is on, else from the
+// game's camera; saved as <the preferences' folder>/screenshots/photo_<date>_<time>.png by the PC clock (a second
+// one in the same second gets _2, _3, ...); the console says where. In any game: a photo changes nothing in it.
+void CinePhotoCommand(lua_State* L) {
+  UserState* user = UserState::From(L);
+  if (!user->gameInterface) return ConsoleNoSession(L);
+  WorldSource* source = user->config().world;
+  WorldView* v = MainView(user->ui().GetFrame(0));
+  Rect r;
+  if (v) v->GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
+  const int w = v ? static_cast<int>(r.x1 - r.x0) : 0, h = v ? static_cast<int>(r.y1 - r.y0) : 0;
+  std::vector<uint32_t> pixels;
+  int madeW = 0, madeH = 0;
+  if (!source || w <= 0 || h <= 0) return ConsolePrint(L, "remaster_photo: there is no picture of the world");
+  if (!source->TakePhoto(v->PictureCameraFor(L), 2 * w, 2 * h, &pixels, &madeW, &madeH) || madeW <= 0 || madeH <= 0 ||
+      pixels.size() != static_cast<size_t>(madeW) * static_cast<size_t>(madeH))
+    return ConsolePrint(L, "remaster_photo: the photo could not be made");
+  namespace fs = std::filesystem;
+  const std::string folder = (user->config().userDir.empty() ? std::string(".") : user->config().userDir) + "/screenshots";
+  std::error_code ec;
+  fs::create_directories(fs::path(std::u8string(folder.begin(), folder.end())), ec);
+  const std::time_t now = std::time(nullptr);
+  std::tm local{};
+#ifdef _WIN32
+  localtime_s(&local, &now);
+#else
+  localtime_r(&now, &local);
+#endif
+  char stamp[64];
+  std::strftime(stamp, sizeof stamp, "photo_%Y-%m-%d_%H-%M-%S", &local);
+  std::string path = folder + "/" + stamp + ".png";
+  for (int n = 2; hostfs::IsFile(path) && n < 1000; ++n) path = folder + "/" + stamp + "_" + std::to_string(n) + ".png";
+  if (!SavePngPixels(path, pixels.data(), madeW, madeH)) return ConsolePrintf(L, "remaster_photo: cannot write %s", path.c_str());
+  g_lastPhoto = path;
+  Logf(LogLevel::Info, "moho64ui: a photo of %dx%d: %s", madeW, madeH, path.c_str());
+  ConsolePrintf(L, "Photo saved: %s (%dx%d)", path.c_str(), madeW, madeH);
 }
 
 bool UnitsOnScreen(lua_State* L, std::vector<uint32_t>* ids) {
@@ -2404,6 +2566,61 @@ FrameTimes& Times() {
 }
 
 namespace {
+// moho64ui_CineCamera() -> {on, easingBack, following, followed = {x, y, z}, lifeBars, selectionMarks, workBars,
+// lens, camera, photo}: the cinematic camera as it stands, what the picture was last given (the bars and marks it
+// leaves out meanwhile, the lens), the camera it took over from ("" while off) and the last photo's file (the host's
+// own function for tests). The main view's picture is made first, as a drawn frame makes it (a headless run draws
+// no frames), so that what the picture was given is this frame's.
+int l_CineCameraForTests(lua_State* L) {
+  UserState* user = UserState::From(L);
+  if (WorldView* v = MainView(user->ui().GetFrame(0))) v->EnsurePicture(L);
+  const WorldSource::CineState s = user->config().world ? user->config().world->Cine() : WorldSource::CineState();
+  lua_newtable(L);
+  const char* names[7] = {"on", "easingBack", "following", "lifeBars", "selectionMarks", "workBars", "lens"};
+  const bool values[7] = {s.on, s.easingBack, s.following, s.lifeBars, s.selectionMarks, s.workBars, s.lens};
+  for (int i = 0; i < 7; ++i) {
+    lua_pushstring(L, names[i]);
+    lua_pushboolean(L, values[i]);
+    lua_rawset(L, -3);
+  }
+  lua_pushstring(L, "followed");
+  PushVector(L, s.followed[0], s.followed[1], s.followed[2]);
+  lua_rawset(L, -3);
+  lua_pushstring(L, "camera");
+  lua_pushstring(L, user->cineCamera.c_str());
+  lua_rawset(L, -3);
+  lua_pushstring(L, "photo");
+  lua_pushstring(L, g_lastPhoto.c_str());
+  lua_rawset(L, -3);
+  return 1;
+}
+// moho64ui_PngInfo(path) -> {width, height, bytes} of a PNG file by its signature and IHDR; nil when there is no
+// such file or it is no PNG (the host's own function for tests).
+int l_PngInfoForTests(lua_State* L) {
+  const std::string path = luaL_checkstring(L, 1);
+  const auto stat = hostfs::Stat(path);
+  std::FILE* f = stat ? std::fopen(path.c_str(), "rb") : nullptr;
+  unsigned char head[24] = {};
+  const size_t got = f ? std::fread(head, 1, sizeof head, f) : 0;
+  if (f) std::fclose(f);
+  if (got < sizeof head || std::string(reinterpret_cast<const char*>(head), 8) != "\x89PNG\r\n\x1a\n" ||
+      std::string(reinterpret_cast<const char*>(head + 12), 4) != "IHDR") {
+    lua_pushnil(L);
+    return 1;
+  }
+  auto be32 = [&](int at) { return static_cast<double>((uint32_t(head[at]) << 24) | (uint32_t(head[at + 1]) << 16) | (uint32_t(head[at + 2]) << 8) | head[at + 3]); };
+  lua_newtable(L);
+  lua_pushstring(L, "width");
+  lua_pushnumber(L, be32(16));
+  lua_rawset(L, -3);
+  lua_pushstring(L, "height");
+  lua_pushnumber(L, be32(20));
+  lua_rawset(L, -3);
+  lua_pushstring(L, "bytes");
+  lua_pushnumber(L, static_cast<double>(stat->size));
+  lua_rawset(L, -3);
+  return 1;
+}
 // moho64ui_CameraShake() -> {max, min, radius, seconds, time, offset} of the main camera's shake
 // now (the host's own function for tests); offset: this frame's shift, its length.
 int l_CameraShakeForTests(lua_State* L) {
@@ -2435,6 +2652,9 @@ void AdvanceCameras(lua_State* L, float seconds) {
     ShakeStep(c, seconds);
   }
   g_pendingShakes.clear();
+  // The cinematic camera's frame (what it follows, its easing back; ours): after the cameras, so that a hand-back
+  // in their step begins its easing this frame.
+  if (user->config().world) user->config().world->CineFrame(seconds);
   // The world view the mouse is over has its script choose the mouse pointer, every frame (the
   // original's frame function, FA exe 0x871140: "OnUpdateCursor").
   // Before it, what is under the mouse (0x871140 -> 0x86f520): the waypoint of the order lines there; with the
@@ -2506,6 +2726,8 @@ void RegisterWorldViewBindings(lua_State* L) {
   lua_register(L, "moho64ui_MapBorders", l_MapBorders);
   lua_register(L, "moho64ui_OrderEtas", l_OrderEtasForTests);
   lua_register(L, "moho64ui_CameraShake", l_CameraShakeForTests);
+  lua_register(L, "moho64ui_CineCamera", l_CineCameraForTests);
+  lua_register(L, "moho64ui_PngInfo", l_PngInfoForTests);
   SetGlobal(L, "SetInvertMidMouseButton", l_SetInvertMidMouseButton);
   SetGlobal(L, "GetMouseScreenPos", l_GetMouseScreenPos);
   SetGlobal(L, "CreatePrefetchSet", l_CreatePrefetchSet);

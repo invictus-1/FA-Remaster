@@ -156,6 +156,9 @@ class UserState {
   // list, one 0xAARRGGBB per army counted from 0 (0: none given); IconColorsForWorld resolves them.
   bool teamColors = false;
   std::vector<uint32_t> teamColorTable;
+  // The camera the cinematic camera took over from (the main world view's, by name) while it is on; empty while it
+  // is off (worldview.cpp: CineCameraCommand, and the input that hands the camera back).
+  std::string cineCamera;
 
   // One frame: the clock moves on by `seconds`; controls that asked for it get OnFrame; then the
   // script threads that are due run. (The order of those two within a frame is inferred.)
@@ -366,6 +369,14 @@ struct LookSettings {
   // a picture made between each two drawn ones (twice the frames shown, a little more delay). Needs one sample a
   // pixel, as FSR 3's upscaler: with the Anti-Aliasing on it does nothing (its tooltip says so). Off as at first.
   bool frameGeneration = false;
+  // Water Ripples (the renderer's World::waterRipples, render/ripples.h; Chris's next looks of 2026-10-17): shells
+  // landing in the water, ships, hover units and units wading leave rings and wakes that spread and die out. The
+  // Remastered Preset turns it on with Weather Effects (High and Ultra). Off as at first.
+  bool waterRipples = false;
+  // Cinematic Lens Blur (World::lens, render/cinecam.h's Lens): a real lens's depth of field, only while the
+  // cinematic camera of a replay shows (remaster_cinecam), its blur going as the picture eases back to the game's
+  // camera; focused on the unit it follows, else on what is at the picture's middle. In no preset. Off as at first.
+  bool lens = false;
   // Whether the graphics card can ray trace (WorldPicture::RayTracingSupported, asked after a picture opened,
   // the menu's or a game's): -1 not known yet, 0 no, 1 yes.
   int rayTracingSupported = -1;
@@ -495,6 +506,14 @@ std::string ArmyColorOf(lua_State* L, int army);
 // view's picture (false without a picture; then PlaceInCameraView says roughly whether a place
 // is in view); the place of the world under the mouse (false without a world view).
 void WorldCameraShowBox(lua_State* L, const float lo[3], const float hi[3], float seconds);
+// The cinematic camera for replays and the photo (worldview.cpp; ours, not the original's: the renderer's
+// CineCamera and TakePhoto, Chris's approval of 2026-10-17). The console's remaster_cinecam [on|off] (no word:
+// it turns over), in a replay only (in a game one plays it says so and does nothing): on, it takes over from the
+// main world view's camera, following the first selected unit when there is one; any camera input of the player's
+// or a script's move of that camera hands it back. remaster_photo: the world at twice the view's size, as a PNG in
+// <the preferences' folder>/screenshots, named by the PC clock's date and time (in any game).
+void CineCameraCommand(lua_State* L, const std::string& value);
+void CinePhotoCommand(lua_State* L);
 bool UnitsOnScreen(lua_State* L, std::vector<uint32_t>* ids);
 bool PlaceInCameraView(lua_State* L, const float place[3]);
 bool MouseWorldPlace(lua_State* L, float out[3]);

@@ -90,7 +90,7 @@ video.remaster_temporal_upscale.set('remaster_temporal_upscale', 0, false)
 check("off again: the anti-aliasing's samples", moho64ui_Looks().samplesDrawn, moho64ui_Looks().sceneSamples)
 -- The lighting upgrade (the renderer's request 31): four switches, each off unless chosen
 for _, key in {'remaster_atmosphere', 'remaster_soft_shadows', 'remaster_ray_tracing', 'remaster_weather_effects',
-               'remaster_ground_detail', 'remaster_frame_generation'} do
+               'remaster_ground_detail', 'remaster_frame_generation', 'remaster_water_ripples', 'remaster_lens'} do
     check("the Video tab has " .. key .. ", off unless chosen", video[key] and video[key].default, 0)
 end
 -- The Remastered Preset (Chris, 2026-10-17): the new looks set together; Custom (5) by default leaves them
@@ -101,6 +101,9 @@ do
     check("Off: the original look, the remastered effects off", off.remaster_look .. " " .. off.remaster_effects, "original 0")
     check("High: Atmosphere and Weather Effects on, Ray Tracing not yet", high.remaster_atmosphere .. " " .. high.remaster_weather_effects .. " " .. high.remaster_ray_tracing, "1 1 0")
     check("Ultra: Ray Tracing where the card can", ultra.remaster_ray_tracing, moho64ui_RayTracingSupported() == false and 0 or 1)
+    check("Water Ripples come on with Weather Effects: Medium off, High and Ultra on",
+        O.RemasterPresetValues(2).remaster_water_ripples .. " " .. high.remaster_water_ripples .. " " .. ultra.remaster_water_ripples, "0 1 1")
+    check("the Cinematic Lens Blur is in no level", off.remaster_lens == nil and high.remaster_lens == nil and ultra.remaster_lens == nil, true)
     check("Custom touches nothing", O.RemasterPresetValues(5), nil)
 end
 video.remaster_soft_shadows.set('remaster_soft_shadows', 1, false)
@@ -110,6 +113,12 @@ check("switched on in the menu: Soft Shadows and Weather Effects, nothing else",
     "true true false false")
 video.remaster_soft_shadows.set('remaster_soft_shadows', 0, false)
 video.remaster_weather_effects.set('remaster_weather_effects', 0, false)
+check("Water Ripples and the Cinematic Lens Blur are off at first", tostring(moho64ui_Looks().waterRipples) .. " " .. tostring(moho64ui_Looks().lens), "false false")
+video.remaster_water_ripples.set('remaster_water_ripples', 1, false)
+video.remaster_lens.set('remaster_lens', 1, false)
+check("switched on in the menu: both", tostring(moho64ui_Looks().waterRipples) .. " " .. tostring(moho64ui_Looks().lens), "true true")
+video.remaster_water_ripples.set('remaster_water_ripples', 0, false)
+video.remaster_lens.set('remaster_lens', 0, false)
 -- (no picture here says whether the card can ray trace: both states; where it cannot, one, greyed out)
 check("Ray Tracing offers Off and On until the renderer says the card cannot",
     tostring(moho64ui_RayTracingSupported()) .. " " .. table.getn(video.remaster_ray_tracing.custom.states), "nil 2")

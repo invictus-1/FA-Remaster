@@ -201,6 +201,35 @@ class WorldSource {
     (void)id, (void)position, (void)orientation;
     return false;
   }
+
+  // --- the cinematic camera for replays (ours, not the original's: the renderer's CineCamera, render/cinecam.h,
+  // held here beside the picture it needs) ---
+  // While it is on, Draw shows the world from its view in place of the camera given, which stays the game's (the
+  // world view's, that the player's input moves); after CineStop the picture eases back to the game's camera over a
+  // moment. CineStart: switched on from the game's camera as it is now (`game`, as Draw takes it), following the
+  // unit `follow` (an entity id; 0xffffffff: none, it holds where it is); false where there is no picture.
+  // CineStop: switched off, `game` the game's camera that goes on from where the cinematic one was (the same eye
+  // and way of looking); false (and nothing set) when it was off. CineFrame: once a frame, with the frame's
+  // seconds: what it follows, its easing, and what the picture leaves out meanwhile.
+  struct CineState {
+    bool on = false, easingBack = false, following = false;
+    float followed[3] = {0, 0, 0};  // the place it circles while following
+    // What the picture was last given: the life bars, the selection's marks, the work bars (all left out while
+    // the cinematic camera shows), and whether the lens's blur is on.
+    bool lifeBars = false, selectionMarks = true, workBars = true, lens = false;
+  };
+  virtual bool CineStart(const WorldCamera&, uint32_t) { return false; }
+  virtual bool CineStop(WorldCamera*) { return false; }
+  virtual void CineFrame(float) {}
+  virtual CineState Cine() const { return CineState(); }
+  // The camera the picture last drawn was seen from, when it is not the game's (the cinematic camera's, or one on
+  // its way back to the game's); false otherwise.
+  virtual bool ShownCamera(WorldCamera*) const { return false; }
+  // A photo of the world (render/world_picture.h, TakePhoto): `width` x `height` pixels, which may be larger than
+  // the window, from the cinematic camera while it is on, else from `game`; nothing of the interface. The pixels
+  // as Draw gives them; *madeWidth x *madeHeight what came (smaller where the card's memory would not do). False
+  // without a picture.
+  virtual bool TakePhoto(const WorldCamera&, int, int, std::vector<uint32_t>*, int*, int*) { return false; }
 };
 
 }  // namespace moho::ui

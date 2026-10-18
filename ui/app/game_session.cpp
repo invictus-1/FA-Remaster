@@ -73,6 +73,110 @@ struct GameSession::Picture : WorldSource {
   double moment = 0;
   bool momentFixed = false;
   bool DrawsToWindow() const override { return direct; }
+  // The cinematic camera for replays (ours: the renderer's CineCamera, render/cinecam.h, and his answer of
+  // 2026-10-18 in docs/render-answers.md, "To ui: the cinematic camera for replays"): the world view's input and
+  // console command switch it (maui/worldview.cpp); here what it needs of the picture. `cineGround`: the picture's
+  // ground for it (CineGround, taken when it first starts); `cineUnit`: the unit it follows (0xffffffff: none).
+  render::CineCamera cine;
+  render::GroundFn cineGround;
+  uint32_t cineUnit = 0xffffffffu;
+  // While it shows (on, or easing back) the picture has no life bars, selection marks or work bars, and none of
+  // the interface's shapes in the world (lines, range rings, order lines, ghosts); after, again what the player has
+  // (`lifeBarsWanted`: the scene's, his switch). What was last given, so that each is set when it changes.
+  bool lifeBarsWanted = false;
+  bool marksApplied = false, lifeBarsGiven = false, marksGiven = true, workBarsGiven = true, lensGiven = false;
+  // The camera the frame was last drawn with, and whether that was the cinematic camera's (ShownCamera).
+  render::Camera shownNow;
+  bool shownCine = false;
+  bool CineShows() const { return cine.On() || cine.EasingBack(); }
+  static render::Camera ToRender(const WorldCamera& c) {
+    render::Camera cam;
+    cam.target = {c.target[0], c.target[1], c.target[2]};
+    cam.distance = c.distance;
+    cam.heading = c.heading;
+    cam.pitch = c.pitch;
+    cam.fovY = c.fovY;
+    return cam;
+  }
+  static WorldCamera FromRender(const render::Camera& c) {
+    WorldCamera w;
+    w.target[0] = c.target.x, w.target[1] = c.target.y, w.target[2] = c.target.z;
+    w.distance = c.distance;
+    w.heading = c.heading;
+    w.pitch = c.pitch;
+    w.fovY = c.fovY;
+    return w;
+  }
+  // The bars and marks as the cinematic camera wants them (none while it shows), each set when it changes.
+  void ApplyCineMarks() {
+    const bool shows = CineShows();
+    const bool lifeBars = lifeBarsWanted && !shows, marks = Looks().selectionMarks && !shows, work = !shows;
+    if (!marksApplied || lifeBars != lifeBarsGiven) picture.SetLifeBars(lifeBars), lifeBarsGiven = lifeBars;
+    if (!marksApplied || marks != marksGiven) picture.SetSelectionMarks(marks), marksGiven = marks;
+    if (!marksApplied || work != workBarsGiven) picture.SetWorkBars(work), workBarsGiven = work;
+    marksApplied = true;
+  }
+  // The lens's depth of field (the player's Cinematic Lens Blur, LookSettings::lens): only while the cinematic
+  // camera shows, its blur by CineCamera::LensShare (going as the picture eases back), focused on the unit it follows
+  // (FollowedDistance; 0: on what is at the picture's middle); the renderer's lens otherwise (f/2.8, its scale).
+  void ApplyLens() {
+    const bool on = Looks().lens && CineShows();
+    if (!on && !lensGiven) return;
+    render::Lens lens;
+    lens.on = on;
+    lens.strength = cine.LensShare();
+    lens.focus = cine.FollowedDistance();
+    picture.SetLens(lens);
+    lensGiven = on;
+  }
+  bool CineStart(const WorldCamera& game, uint32_t follow) override {
+    if (!cineGround) cineGround = picture.CineGround();
+    const render::Camera from = ToRender(game);
+    cine.Start(CineShows() ? cine.Shown(from, cineGround) : from);  // (switched on again while easing back: from what shows)
+    cineUnit = follow;
+    float p[3], q[4];
+    if (follow != 0xffffffffu && picture.UnitTransform(follow, FrameMoment(), p, q)) cine.Follow({p[0], p[1], p[2]}, 14, 3);
+    ApplyCineMarks();
+    ApplyLens();
+    return true;
+  }
+  bool CineStop(WorldCamera* game) override {
+    if (!cine.On() || !cineGround) return false;
+    *game = FromRender(cine.Stop(cineGround));
+    cineUnit = 0xffffffffu;
+    return true;
+  }
+  void CineFrame(float seconds) override {
+    if (!cineGround) return;
+    if (cine.On() && cine.Following() == render::CineCamera::Mode::Follow) {  // (the unit where the frame shows it)
+      float p[3], q[4];
+      if (picture.UnitTransform(cineUnit, FrameMoment(), p, q)) cine.FollowPlace({p[0], p[1], p[2]});
+      else cine.Hold();  // (gone: it holds where it is)
+    }
+    cine.Update(seconds, cineGround);
+    if (cine.TakeCut()) picture.CameraCut();
+    ApplyCineMarks();
+    ApplyLens();
+  }
+  CineState Cine() const override {
+    CineState s;
+    s.on = cine.On(), s.easingBack = cine.EasingBack();
+    s.following = cine.On() && cine.Following() == render::CineCamera::Mode::Follow;
+    const render::Vec3 f = cine.FollowedPlace();
+    s.followed[0] = f.x, s.followed[1] = f.y, s.followed[2] = f.z;
+    s.lifeBars = lifeBarsGiven, s.selectionMarks = marksGiven, s.workBars = workBarsGiven, s.lens = lensGiven;
+    return s;
+  }
+  bool ShownCamera(WorldCamera* out) const override {
+    if (!shownCine || !CineShows()) return false;
+    *out = FromRender(shownNow);
+    return true;
+  }
+  bool TakePhoto(const WorldCamera& game, int width, int height, std::vector<uint32_t>* pixels, int* madeWidth, int* madeHeight) override {
+    if (!cineGround) cineGround = picture.CineGround();
+    const render::Camera camera = cine.On() ? cine.View(cineGround) : ToRender(game);
+    return picture.TakePhoto(camera, width, height, FrameMoment(), pixels, madeWidth, madeHeight);
+  }
   // The frame's moment, fixed by the first that asks this frame (the camera following a unit asks
   // before the anchors and the drawing); PresentToWindow lets it go after.
   double FrameMoment() {
@@ -94,12 +198,11 @@ struct GameSession::Picture : WorldSource {
   }
 
   const uint32_t* Draw(const WorldCamera& c, int width, int height) override {
-    render::Camera cam;
-    cam.target = {c.target[0], c.target[1], c.target[2]};
-    cam.distance = c.distance;
-    cam.heading = c.heading;
-    cam.pitch = c.pitch;
-    cam.fovY = c.fovY;
+    render::Camera cam = ToRender(c);
+    // (the cinematic camera's view while it shows; Shown is the game's camera once it has eased back)
+    shownCine = CineShows() && cineGround;
+    if (shownCine) cam = cine.Shown(cam, cineGround);
+    shownNow = cam;
     if (direct) {  // (drawn and shown with the interface by PresentToWindow)
       camera = cam, cameraW = width, cameraH = height;
       static const uint32_t token = 0;
@@ -127,8 +230,15 @@ struct GameSession::Picture : WorldSource {
   }
   void SetScene(const WorldScene& scene) override {
     picture.SetSelection(scene.selection);
+    // (While the cinematic camera shows, none of the interface's shapes in the world: the renderer's advice.)
+    const bool cineShows = CineShows();
+    static const std::vector<WorldGhost> kNoGhosts;
+    static const std::vector<WorldLine> kNoLines;
+    static const std::vector<WorldOrderLeg> kNoLegs;
+    static const std::vector<WorldOrderMark> kNoMarks;
+    static const std::vector<WorldRangeGroup> kNoRanges;
     std::vector<render::WorldPicture::BuildPreview> previews;
-    for (const WorldGhost& g : scene.ghosts) {
+    for (const WorldGhost& g : cineShows ? kNoGhosts : scene.ghosts) {
       render::WorldPicture::BuildPreview p;
       p.blueprint = g.blueprint;
       p.position[0] = g.position[0], p.position[1] = g.position[1], p.position[2] = g.position[2];
@@ -138,7 +248,7 @@ struct GameSession::Picture : WorldSource {
     }
     picture.SetBuildPreviews(previews);
     std::vector<render::WorldPicture::Line> lines;
-    for (const WorldLine& l : scene.lines) {
+    for (const WorldLine& l : cineShows ? kNoLines : scene.lines) {
       render::WorldPicture::Line o;
       for (int i = 0; i < 3; ++i) o.a[i] = l.a[i], o.b[i] = l.b[i];
       o.color = l.color;
@@ -148,8 +258,10 @@ struct GameSession::Picture : WorldSource {
     picture.SetShapes(lines, {});
     // The order lines while Shift is held (the original's command graph), when they change; empty
     // lists when Shift is let go (renderer request 30). Then the console variables they go by.
-    if (scene.orderTextures != orderTexturesNow || scene.orderLegs != orderLegsNow || scene.orderMarks != orderMarksNow) {
-      orderTexturesNow = scene.orderTextures, orderLegsNow = scene.orderLegs, orderMarksNow = scene.orderMarks;
+    const std::vector<WorldOrderLeg>& legsWanted = cineShows ? kNoLegs : scene.orderLegs;
+    const std::vector<WorldOrderMark>& marksWanted = cineShows ? kNoMarks : scene.orderMarks;
+    if (scene.orderTextures != orderTexturesNow || legsWanted != orderLegsNow || marksWanted != orderMarksNow) {
+      orderTexturesNow = scene.orderTextures, orderLegsNow = legsWanted, orderMarksNow = marksWanted;
       std::vector<render::WorldPicture::OrderLeg> legs;
       legs.reserve(orderLegsNow.size());
       for (const WorldOrderLeg& l : orderLegsNow) {
@@ -175,7 +287,7 @@ struct GameSession::Picture : WorldSource {
     }
     // The range rings in groups: the renderer draws a group as one outline.
     std::vector<render::WorldPicture::RangeGroup> ranges;
-    for (const WorldRangeGroup& g : scene.ranges) {
+    for (const WorldRangeGroup& g : cineShows ? kNoRanges : scene.ranges) {
       render::WorldPicture::RangeGroup o;
       o.color = g.color, o.glow = g.glow;
       o.outerNear = g.outer[0], o.outerFar = g.outer[1];
@@ -218,7 +330,7 @@ struct GameSession::Picture : WorldSource {
     }
     picture.SetBorders(scene.borders);  // the machinery the map lies in (MapBorderAdd)
     picture.SetHover(scene.hover, scene.hoverKind);  // the brackets on the unit under the mouse
-    picture.SetLifeBars(scene.lifeBars);  // the player's switch (Alt-L in the game's key map)
+    lifeBarsWanted = scene.lifeBars;  // the player's switch (Alt-L in the game's key map): ApplyCineMarks below
     // Life bars over the player's and his allies' units only, as the original (render request
     // 21), unless the player asks for the enemies' too.
     picture.SetLifeBarsOnEnemies(scene.lifeBarsOnEnemies);
@@ -238,6 +350,7 @@ struct GameSession::Picture : WorldSource {
     if (!lookApplied || looks.weatherEffects != lookNow.weatherEffects) picture.SetWeatherEffects(looks.weatherEffects);
     if (!lookApplied || looks.groundDetail != lookNow.groundDetail) picture.SetGroundDetail(looks.groundDetail);  // (request 33)
     if (!lookApplied || looks.frameGeneration != lookNow.frameGeneration) picture.SetFrameGeneration(looks.frameGeneration);  // (34)
+    ApplyLens();  // (Cinematic Lens Blur: only while the cinematic camera shows)
     if (render::World* w = picture.world()) {
       w->look = looks.originalLook ? render::Look::Original : render::Look::Modern;  // (the player's "Look")
       w->ribbons.tracers = looks.tracers;
@@ -252,10 +365,11 @@ struct GameSession::Picture : WorldSource {
       w->icons.always = looks.iconsAlways;
       w->bloom = looks.bloom;
       w->bloomIntensity = looks.bloomIntensity;
+      w->waterRipples = looks.waterRipples;  // (Water Ripples: the renderer's World::waterRipples)
     }
     // The cinematics' switches (UI_NisRenderIcons, ren_SelectBoxes, ren_Oblivion).
     if (!lookApplied || looks.strategicIcons != lookNow.strategicIcons) picture.SetStrategicIcons(looks.strategicIcons);
-    if (!lookApplied || looks.selectionMarks != lookNow.selectionMarks) picture.SetSelectionMarks(looks.selectionMarks);
+    ApplyCineMarks();  // (the selection's marks, ren_SelectBoxes, and the life bars and work bars: none while the cinematic camera shows)
     if (!lookApplied || looks.worldShown != lookNow.worldShown) picture.SetWorldShown(looks.worldShown);
     lookNow = looks;
     lookApplied = true;
@@ -759,6 +873,9 @@ void GameSession::BeginLoad() {
 #ifdef MOHO64UI_WORLD_PICTURE
     sim->collectEffects = wantPicture;  // explosions, shots, smoke: the picture's, asked for before the first beat
     sim->collectProps = wantPicture;    // wreckage, and trees reclaimed, burnt or knocked over (the picture takes the list)
+    // hits, impacts and health changes, for the looks that answer them (marks on units, water ripples, blast waves;
+    // about 1% of a beat's time; the renderer's request of 2026-10-18: render/world_picture.h)
+    sim->collectHits = sim->collectImpacts = sim->collectHealth = wantPicture;
     sim->collectSounds = sounds != nullptr;  // what the scripts play in the world, as a list per beat
     sim->collectShakes = true;               // and the camera shakes they ask for (PostCameraShake)
 #endif
@@ -1264,7 +1381,13 @@ int GameSession::OwnArmy() const { return sim_ && !sim_->isReplay ? sim_->focusA
 void GameSession::NotePictureBeat() {
   g_crashTick = sim_->tick();  // (a crash's line in the log names the beat: src/core/crash.h)
 #ifdef MOHO64UI_WORLD_PICTURE
-  if (picture_) picture_->picture.Beat(*sim_);  // (it takes the beat's effect events too)
+  if (picture_) {
+    picture_->picture.Beat(*sim_);  // (it takes the beat's effect events too)
+  } else if (sim_->collectHits) {  // (no picture to take the hits, impacts and health: dropped, or the lists grow)
+    sim_->TakeHits();
+    sim_->TakeImpacts();
+    sim_->TakeHealth();
+  }
 #endif
 }
 

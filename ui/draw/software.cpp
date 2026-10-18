@@ -234,7 +234,9 @@ void SoftwareTarget::DrawGlyph(const GlyphMask& gl, int x, int y, uint32_t color
 }
 
 // A PNG with the pixels stored uncompressed (deflate "stored" blocks): simple, and every viewer reads it.
-bool SoftwareTarget::SavePng(const std::string& hostPath) const {
+bool SoftwareTarget::SavePng(const std::string& hostPath) const { return SavePngPixels(hostPath, pixels_.data(), width_, height_); }
+
+bool SavePngPixels(const std::string& hostPath, const uint32_t* pixels, int width, int height) {
   auto be32 = [](std::string& s, uint32_t v) {
     for (int i = 3; i >= 0; --i) s += static_cast<char>(v >> (8 * i));
   };
@@ -245,11 +247,11 @@ bool SoftwareTarget::SavePng(const std::string& hostPath) const {
     be32(out, static_cast<uint32_t>(crc32(0, reinterpret_cast<const Bytef*>(body.data()), static_cast<uInt>(body.size()))));
   };
   std::string raw;  // filter byte 0 + RGB per row
-  raw.reserve(static_cast<size_t>(height_) * (static_cast<size_t>(width_) * 3 + 1));
-  for (int y = 0; y < height_; ++y) {
+  raw.reserve(static_cast<size_t>(height) * (static_cast<size_t>(width) * 3 + 1));
+  for (int y = 0; y < height; ++y) {
     raw += '\0';
-    for (int x = 0; x < width_; ++x) {
-      uint32_t c = pixels_[static_cast<size_t>(y) * static_cast<size_t>(width_) + static_cast<size_t>(x)];
+    for (int x = 0; x < width; ++x) {
+      uint32_t c = pixels[static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x)];
       raw += static_cast<char>(R(c));
       raw += static_cast<char>(G(c));
       raw += static_cast<char>(B(c));
@@ -269,8 +271,8 @@ bool SoftwareTarget::SavePng(const std::string& hostPath) const {
   be32(z, static_cast<uint32_t>(adler32(1, reinterpret_cast<const Bytef*>(raw.data()), static_cast<uInt>(raw.size()))));
   std::string out = "\x89PNG\r\n\x1a\n";
   std::string ihdr;
-  be32(ihdr, static_cast<uint32_t>(width_));
-  be32(ihdr, static_cast<uint32_t>(height_));
+  be32(ihdr, static_cast<uint32_t>(width));
+  be32(ihdr, static_cast<uint32_t>(height));
   ihdr += std::string("\x08\x02\x00\x00\x00", 5);  // 8 bits, RGB
   chunk(out, "IHDR", ihdr);
   chunk(out, "IDAT", z);

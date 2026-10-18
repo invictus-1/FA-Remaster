@@ -303,11 +303,12 @@ const std::vector<const char*>& ConsoleNames() {
   static const std::vector<const char*> names = [] {
     std::vector<const char*> all = {
 #include "user/console_names.inc"
-        // ours (the Video options' and the statistics overlay's)
+        // ours (the Video options', the statistics overlay's, the cinematic camera's and the photo's)
         "remaster_effects", "remaster_effects_quality", "remaster_frame_rate", "remaster_graphics_api", "remaster_look",
         "remaster_rich_ground", "remaster_snow_tracks", "remaster_stats", "remaster_temporal_upscale", "remaster_tracers", "remaster_upscale",
         "remaster_atmosphere", "remaster_soft_shadows", "remaster_ray_tracing", "remaster_weather_effects",
-        "remaster_ground_detail", "remaster_frame_generation"};
+        "remaster_ground_detail", "remaster_frame_generation", "remaster_water_ripples", "remaster_lens", "remaster_cinecam",
+        "remaster_photo"};
     std::sort(all.begin(), all.end(), ConNameLess);
     return all;
   }();
@@ -379,12 +380,13 @@ int l_FlushEvents(lua_State*) { return 0; }
 int l_LooksForTests(lua_State* L) {
   const LookSettings& looks = Looks();
   lua_newtable(L);
-  const char* names[13] = {"remasteredEffects", "tracers", "richGround", "snowTracks", "vulkan", "originalLook", "temporalUpscale",
-                           "atmosphere", "softShadows", "rayTracing", "weatherEffects", "groundDetail", "frameGeneration"};
-  const bool values[13] = {looks.remasteredEffects, looks.tracers, looks.richGround, looks.snowTracks, looks.vulkan,
+  const char* names[15] = {"remasteredEffects", "tracers", "richGround", "snowTracks", "vulkan", "originalLook", "temporalUpscale",
+                           "atmosphere", "softShadows", "rayTracing", "weatherEffects", "groundDetail", "frameGeneration",
+                           "waterRipples", "lens"};
+  const bool values[15] = {looks.remasteredEffects, looks.tracers, looks.richGround, looks.snowTracks, looks.vulkan,
                            looks.originalLook, looks.temporalUpscale, looks.atmosphere, looks.softShadows, looks.rayTracing,
-                           looks.weatherEffects, looks.groundDetail, looks.frameGeneration};
-  for (int i = 0; i < 13; ++i) {
+                           looks.weatherEffects, looks.groundDetail, looks.frameGeneration, looks.waterRipples, looks.lens};
+  for (int i = 0; i < 15; ++i) {
     lua_pushstring(L, names[i]);
     lua_pushboolean(L, values[i]);
     lua_rawset(L, -3);
@@ -917,6 +919,9 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
     on = a == std::string::npos ? !on : !(rest[a] == '0' || Upper(rest.substr(a)).rfind("OFF", 0) == 0 || Upper(rest.substr(a)).rfind("FALSE", 0) == 0);
     return;
   }
+  // The cinematic camera for replays, and the photo (ours: worldview.cpp)
+  if (Upper(name) == "REMASTER_CINECAM") return CineCameraCommand(L, rest);
+  if (Upper(name) == "REMASTER_PHOTO") return CinePhotoCommand(L);
   {  // the custom names' four (CustomNameStyle; a value left out leaves it, the switch toggles)
     const std::string key = Upper(name);
     const size_t at = rest.find_first_not_of(" \t");
@@ -1044,12 +1049,14 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
     }
     if (key == "REMASTER_ATMOSPHERE" || key == "REMASTER_SOFT_SHADOWS" || key == "REMASTER_RAY_TRACING" ||
         key == "REMASTER_WEATHER_EFFECTS" || key == "REMASTER_GROUND_DETAIL" ||
-        key == "REMASTER_FRAME_GENERATION") {  // (the renderer's switches: 0 off, 1 on)
+        key == "REMASTER_FRAME_GENERATION" || key == "REMASTER_WATER_RIPPLES" || key == "REMASTER_LENS") {  // (the renderer's switches: 0 off, 1 on)
       bool& on = key == "REMASTER_ATMOSPHERE"         ? looks.atmosphere
                  : key == "REMASTER_SOFT_SHADOWS"     ? looks.softShadows
                  : key == "REMASTER_RAY_TRACING"      ? looks.rayTracing
                  : key == "REMASTER_GROUND_DETAIL"    ? looks.groundDetail
                  : key == "REMASTER_FRAME_GENERATION" ? looks.frameGeneration
+                 : key == "REMASTER_WATER_RIPPLES"    ? looks.waterRipples
+                 : key == "REMASTER_LENS"             ? looks.lens
                                                       : looks.weatherEffects;
       if (!value.empty()) on = value[0] == '1' || Upper(value).rfind("ON", 0) == 0 || Upper(value).rfind("TRUE", 0) == 0;
       return;

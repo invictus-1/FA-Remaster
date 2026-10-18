@@ -108,6 +108,21 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   frame times of the last second (middle, 95%, 99%, longest), the frame's parts (scripts,
   drawing, the host, showing), the beats of the last second (simulation, picture, sounds), the
   memory in use and both Lua heaps; the renderer's own numbers join when he gives them.
+  The cinematic camera for replays (ours, not the original's: the renderer's `CineCamera`, render/cinecam.h; Chris,
+  2026-10-17): the console's `remaster_cinecam [on|off]` (no word: it turns over), the key action "Cinematic
+  camera in replays" (Ctrl-Alt-C at first). In a replay only (in a game one plays it says so in one line and stays
+  off). On, it takes over from the main world view's camera where it is, and follows the first selected unit,
+  circling it 14 world units off and 3 up, else holds where it is; the life bars, selection marks, work bars and
+  the interface's shapes in the world (lines, range rings, order lines) are left out of the picture meanwhile.
+  ANY camera input of the player's (the wheel, the middle button, the arrow keys, the screen's edges, Space and the
+  mouse, Insert and Delete, the minimap) and any script's move of that camera (MoveTo, Reset, ...) hands the camera
+  back first: the game's camera goes on from the cinematic one's eye and view (its turn held, as after a script's
+  SnapTo) and the input moves it from there while the picture eases back over half a second; everything left out
+  comes back as the player had it (`ui/maui/worldview.cpp`, TakeCameraBack). `remaster_photo`, the key action "Take
+  a photo of the world at twice the screen size" (Ctrl-Alt-F12 at first), in any game: the world from the cinematic
+  camera while it is on, else from the game's camera, at twice the view's size without the interface, as
+  `<the preferences' folder>/screenshots/photo_<date>_<time>.png` (stored uncompressed: some 25 MB at 3840x2160);
+  the console says where. `moho64ui_CineCamera()`, `moho64ui_PngInfo(path)`: for the tests (`ui/tests/cinecam.lua`).
   `--fast-forward N`: a game runs ahead to beat N as fast as it goes (for measurements; the
   window's frame times count from there), and the log gives the frame-to-frame times (middle,
   95%, 99%, longest).
@@ -152,11 +167,17 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   A sixth, Frame Generation (`remaster_frame_generation`, the renderer's request 34, off by default): AMD's FSR 3
   frame generation, a picture made between each two drawn ones; like Temporal Upscaling it needs one sample a
   pixel, so with the Anti-Aliasing on it does nothing (its tooltip says so).
+  Water Ripples (`remaster_water_ripples`, the renderer's World::waterRipples, off by default): shells landing in
+  the water, ships, hover units and units wading leave rings and wakes (the simulation keeps its hits, impacts
+  and health changes for the picture: `Sim::collectHits` and its two kin, with the picture only). Cinematic Lens
+  Blur (`remaster_lens`, World::lens, off by default): a real lens's depth of field, only while the replay's
+  cinematic camera shows, its blur going as the picture eases back.
   The Remastered Preset (`remaster_preset`; Chris, 2026-10-17) sets the new looks together, as the game's
   Fidelity Presets set its own: Off (the original game's look whole), Low, Medium, High, Ultra (Ray Tracing
   where the card can), Custom (by default: each as it is). Each look can still be changed after. The levels
   are a first proposal until the renderer's measured costs set them; Frame Rate, Graphics API, the upscalers
-  and Frame Generation are not looks and no level touches them.
+  and Frame Generation are not looks and no level touches them. Water Ripples come on with Weather Effects
+  (High, Ultra); the Cinematic Lens Blur is in no level.
   The game's OWN graphics settings in the Video tab drive the renderer and mean what they say
   (Chris, 2026-10-15): Fidelity (Low: no ambient occlusion, plain ground), Shadow Fidelity
   (Off: none; Low, Medium: the sun's, its maps 1024 / 2048 texels; High: 4096 and the lamps'
