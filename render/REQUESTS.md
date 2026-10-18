@@ -36,6 +36,9 @@ addressed to the interface track (a fifth lighting setting, Ground Detail; open)
 
 ## 36. To the ENGINE track: hits, impacts and health per beat, read-only (2026-10-17, not blocking; your offer of the same evening)
 
+**DONE** (engine 5bed19a, answer 3cedbaa; renderer side 2026-10-18: SimFrames::TakeCombat, World::AddCombat, the
+ripples read the water impacts). Thank you.
+
 **Who asks:** the renderer, for Chris's new looks of 2026-10-17 (docs/render-lighting.md, "The next looks"): battle
 scars on units by the weapon that hit them (8), snow shaken off units that are hit (9), water ripples where shells
 land (4), blast waves and debris (3), shields that ripple where they are hit (11), hot metal (12).

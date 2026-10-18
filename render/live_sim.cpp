@@ -127,6 +127,9 @@ bool LiveSim::Load(std::string* error) {
   e.sim = std::make_unique<moho::Sim>(&e.vfs, e.hookDirs, e.uids);
   e.sim->collectEffects = true;  // the scripts' effect calls are kept for EffectEvents
   e.sim->collectProps = true;    // ... and how the scenery changes, for PropEvents
+  e.sim->collectHits = true;     // ... and hits, impacts and health changes, for TakeCombat (about 1% of a beat)
+  e.sim->collectImpacts = true;
+  e.sim->collectHealth = true;
   e.sim->sessionMods = e.session.header.mods;
   if (!e.sim->LoadRules()) {
     *error = "the game's blueprints could not be loaded (see the simulation's log)";

@@ -414,6 +414,11 @@ void WorldPicture::PrepareWorld(const Camera& camera, int width, int height, dou
       m.frames.TakeGroundChanges(&ground);
       if (!ground.empty()) m.world->ChangeGround(ground);
     }
+    {  // hits, impacts and health changes (when the host's simulation keeps them: see the header)
+      FrameCombat combat;
+      m.frames.TakeCombat(&combat);
+      m.world->AddCombat(std::move(combat));
+    }
     m.world->effects.Queue(std::move(m.events));
     m.world->effects.Update(shown, m.frame);
     m.world->AddFrame(m.frame, m.armyColors);

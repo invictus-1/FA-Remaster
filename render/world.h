@@ -153,6 +153,17 @@ class World {
   // How the simulation changed the ground's heights (SimFrames::TakeGroundChanges): drawn so at once.
   // Within a frame (the ground's height texture is written).
   void ChangeGround(const std::vector<FrameGroundChange>& changes);
+  // The hits, impacts and health changes the simulation had since the last call (SimFrames::TakeCombat: render
+  // REQUESTS 36), for the looks that answer them (marks on units, ripples, blast waves). A host gives them every
+  // frame it takes them, before AddFrame, even when there are none (they also say whether the simulation keeps
+  // them). Each is handed to the looks by the AddFrame whose moment has reached its beat (the picture shows a
+  // moment up to a beat behind the newest), then let go.
+  void AddCombat(FrameCombat&& combat);
+  // What AddCombat has said of the host's simulation: whether it keeps impacts (where it does not, splashes in the
+  // water and the like are guessed from the frames)
+  bool ImpactsKept() const { return combatPending_.impactsKept; }
+  int hitsTaken = 0, impactsTaken = 0;  // since the map was opened (AddCombat)
+  int hitsShown = 0, impactsShown = 0;  // ... and of those, handed to the looks (their beat reached by AddFrame)
   int propsChanged = 0, propsGone = 0;  // since the map was opened
   int groundChanges = 0;                // the simulation's changes of the ground's heights taken in (ChangeGround)
   int propCellsSeen = 0, propsAdded = 0;  // of the frame last begun: squares of scenery gone through, props handed to the mesh renderer
@@ -359,6 +370,10 @@ class World {
   // the waves have wetted it, and the bright net of light on a shallow bed sharper and stronger. Modern look, a map
   // with water; off by default.
   bool waterDetail = false;
+  // Ripples on the water (ripples.h; water.AddRipple): shells landing in the water, ships, hover units and units
+  // wading leave rings and wakes that spread, cross each other and die out. Modern look, a map with water; off by
+  // default.
+  bool waterRipples = false;
   // Ground cover near the camera (grass.h): grass blades on grassy ground, coloured from it, swaying in the wind,
   // low and gone with the distance (nothing when the camera is far). Modern look; off by default.
   bool groundCover = false;
@@ -468,6 +483,9 @@ class World {
   gfx::Texture environment_, sky_, selectionRing_;
   std::vector<PlacedProp> props_;  // the map's, by their index in the map file's list
   std::unordered_map<uint32_t, PlacedProp> madeProps_;  // made during the game (wreckage), by entity id
+  FrameCombat combatPending_;  // AddCombat's, not yet due
+  FrameCombat combat_;         // those due in the frame being added (AddFrame), for the looks that answer them
+  void TakeDueCombat(double shown);
   // The scenery by squares of the map (kPropCell world units a side): which of the map's props and
   // which made ones stand in each. Only the squares near what the camera sees are gone through
   // each frame: a game breaks a map's tree groups up into tens of thousands of single trees.

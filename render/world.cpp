@@ -633,6 +633,11 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   lights.night = 1;
   shafts.Begin();
   wakes.Begin();
+  {  // ripples on the water (their pipelines made the first frame they are on, not at the game's first splash)
+    const bool ripplesOn = waterRipples && look == Look::Modern && haveMap_ && map.water.present;
+    water.ripples.Begin(clock_, ripplesOn, sidePicture);
+    if (ripplesOn) water.PrepareRipples();
+  }
   lampUnitsBefore_ = lampUnits_;
   lampUnits_ = 0;
   if (moving_.size() > 60000) moving_.clear();  // (entity ids pile up over a long game)
@@ -1030,6 +1035,46 @@ void World::ChangeGround(const std::vector<FrameGroundChange>& changes) {
   for (const Rect& d : dirty) terrain.HeightsChanged(d.x0, d.z0, d.x1, d.z1);
 }
 
+void World::AddCombat(FrameCombat&& combat) {
+  hitsTaken += static_cast<int>(combat.hits.size());
+  impactsTaken += static_cast<int>(combat.impacts.size());
+  FrameCombat& p = combatPending_;
+  p.hitsKept = combat.hitsKept;
+  p.impactsKept = combat.impactsKept;
+  p.healthKept = combat.healthKept;
+  // (a host that never adds frames - a menu's picture - must not let them pile up without end)
+  constexpr size_t kMost = 200000;
+  if (p.hits.size() + combat.hits.size() > kMost || p.impacts.size() + combat.impacts.size() > kMost || p.health.size() + combat.health.size() > kMost) {
+    p.hits.clear();
+    p.impacts.clear();
+    p.health.clear();
+  }
+  for (FrameHit& h : combat.hits) p.hits.push_back(std::move(h));
+  for (FrameImpact& m : combat.impacts) p.impacts.push_back(std::move(m));
+  for (const FrameHealth& h : combat.health) p.health.push_back(h);
+}
+
+// Moves what AddCombat gave whose beat the moment shown has reached into combat_, each list's order kept.
+void World::TakeDueCombat(double shown) {
+  auto take = [shown](auto& from, auto& to) {
+    size_t kept = 0;
+    for (size_t i = 0; i < from.size(); ++i) {
+      if (static_cast<double>(from[i].tick) <= shown + 1e-6) to.push_back(std::move(from[i]));
+      else if (kept != i) from[kept++] = std::move(from[i]);
+      else ++kept;
+    }
+    from.resize(kept);
+  };
+  take(combatPending_.hits, combat_.hits);
+  take(combatPending_.impacts, combat_.impacts);
+  take(combatPending_.health, combat_.health);
+  hitsShown += static_cast<int>(combat_.hits.size());
+  impactsShown += static_cast<int>(combat_.impacts.size());
+  combat_.hitsKept = combatPending_.hitsKept;
+  combat_.impactsKept = combatPending_.impactsKept;
+  combat_.healthKept = combatPending_.healthKept;
+}
+
 void World::AddPropEvents(const std::vector<FramePropEvent>& events) {
   for (const FramePropEvent& e : events) propEvents_.push_back(e);
 }
@@ -1096,6 +1141,7 @@ std::string World::MeshFaction(const std::string& mesh) { return render::MeshFac
 
 void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
   auto colorOf = [&](uint32_t army) { return armyColors.empty() ? Vec3{0.6f, 0.6f, 0.6f} : armyColors[army % armyColors.size()]; };
+  TakeDueCombat(static_cast<double>(frame.tick) + frame.blend);  // (hits, impacts, health whose beat is shown now: combat_)
   CpuTimes::Part("units seen first: their files read ahead");
   {  // (their models' files read on the worker threads, all together; the models are made below)
     std::vector<std::string> fresh;
@@ -1174,6 +1220,9 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
         meshes.Add(body, Mat4::FromTRS({u.position[0], u.position[1], u.position[2]}, Quat{u.orientation[0], u.orientation[1], u.orientation[2], u.orientation[3]}, body->scale),
                    colorOf(u.Army()), u.fractionComplete, &pose, nullptr, nullptr, u.id + 1);
         ++dyingDrawn;
+        // (ripples: a ship going down, a plane coming down into the water)
+        water.ripples.AddHull(u.id, {u.position[0], u.position[1], u.position[2]}, Quat{u.orientation[0], u.orientation[1], u.orientation[2], u.orientation[3]},
+                              body->boundsMin * body->scale, body->boundsMax * body->scale);
       }
       continue;
     }
@@ -1351,6 +1400,8 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), color, built, asRemembered ? nullptr : &pose, hitAt,
                  model->scrolls && !hitAt ? u.treads : nullptr, u.id + 1);
       if (u.fractionComplete >= 1 && u.Seen()) AddLamps(model, position, orientation, &pose, &color);
+      // ripples where it floats, hovers or wades in the water (what the army sees)
+      if (u.Seen() && !asRemembered) water.ripples.AddHull(u.id, position, orientation, model->boundsMin * model->scale, model->boundsMax * model->scale);
       // a wake, when it goes on the water: by how far it has come since the frame before
       if (haveMap_ && map.water.present && u.Seen() && std::fabs(position.y - map.water.elevation) < 0.4f) {
         Moving& m = moving_[u.id];
@@ -1423,6 +1474,13 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     ++it;
   }
   CpuTimes::Part("projectiles, entities, beams listed");
+  // ripples: what met the water, as the simulation says it (REQUESTS 36; below, after the shots). A shell's splash
+  // is as large as its model, found among this frame's shots (-1: not drawn)
+  std::unordered_map<uint32_t, float> waterShots;
+  water.ripples.impactsGiven = combat_.impactsKept;
+  if (water.ripples.On() && combat_.impactsKept)
+    for (const FrameImpact& m : combat_.impacts)
+      if (m.seen && m.kind == FrameImpact::Projectile && (m.type == "Water" || m.type == "Underwater")) waterShots.emplace(m.source, -1.0f);
   // projectiles: one with a model as that model; the others are effects in the game - where the
   // game's own effect is not on it, a short soft glowing band along the flight stands in
   for (const FrameProjectile& p : frame.projectiles) {
@@ -1441,6 +1499,11 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       const bool effect = moho::Vfs::Normalize(blueprint).compare(0, 9, "/effects/") == 0;
       return blueprint.empty() ? nullptr : models.Blueprint(blueprint, original, std::string(), effect);
     });
+    // (ripples: its splash where it lands in the water, or goes down through it)
+    const float shotSize = model && model->ok ? Length(model->boundsMax - model->boundsMin) * 0.5f * model->scale : 0.0f;
+    water.ripples.AddShot(p.id, position, p.stopped, shotSize);
+    if (!waterShots.empty())
+      if (auto it = waterShots.find(p.id); it != waterShots.end()) it->second = shotSize;
     if (model && model->ok) {
       const Quat orientation{p.orientation[0], p.orientation[1], p.orientation[2], p.orientation[3]};
       // in its own colours: the original gives every mesh that is not a unit's opaque white where a
@@ -1464,6 +1527,30 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       ribbons.PlainBeam(position - velocity * 0.06f, position, {1.0f, 0.95f, 0.78f}, 0.12f);
     }
   }
+  // ripples from what met the water (seen only): a shell's splash by its size, a torpedo going off below by its depth
+  // (none deeper than 4), a crashing aircraft's by its size and speed, a beam's a little one. (The strengths are
+  // judged by eye, not measured against anything of the game's.)
+  if (water.ripples.On() && combat_.impactsKept)
+    for (const FrameImpact& m : combat_.impacts) {
+      const bool surface = m.type == "Water", under = m.type == "Underwater";
+      if (!m.seen || (!surface && !under)) continue;
+      const float x = m.position[0], z = m.position[2];
+      if (m.kind == FrameImpact::Crash) {
+        if (!surface) continue;
+        const Model* body = m.projectile.empty() ? nullptr : models.Unit(m.projectile);
+        const Vec3 half = body && body->ok ? (body->boundsMax - body->boundsMin) * (0.5f * body->scale) : Vec3{1, 1, 1};
+        water.AddRipple(x, z, std::clamp(std::max(half.x, half.z), 0.5f, 3.0f), std::clamp(m.speed / 6, 0.5f, 4.0f));
+      } else if (m.kind == FrameImpact::Beam) {
+        if (surface) water.AddRipple(x, z, 0.4f, 0.3f);
+      } else if (surface) {
+        const auto shot = waterShots.find(m.source);
+        const float size = shot != waterShots.end() && shot->second >= 0 ? shot->second : 0.17f;  // (not drawn: a usual shell's)
+        water.AddRipple(x, z, std::clamp(0.4f + 0.6f * size, 0.4f, 1.2f), 1);
+      } else {
+        const float depth = haveMap_ ? map.water.elevation - m.position[1] : 0;
+        if (depth < 4) water.AddRipple(x, z, 0.8f, 0.5f * (1 - std::max(depth, 0.0f) / 4));
+      }
+    }
   // what scripts made that has a mesh: shields' bubbles and the like, each its mesh blueprint's model
   // (in the effects' look: the remastered one reads the visuals track's textures. A shield's bubble and
   // the flash where it is hit read those of the shield's faction first: the flash's mesh is shared by
@@ -1534,6 +1621,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     ribbons.PlainBeam({b.start[0], b.start[1], b.start[2]}, {b.end[0], b.end[1], b.end[2]}, c, 0.25f);
   }
   textures.DropFetched();  // (what was read ahead and not used)
+  combat_.clear();         // (handed over above to the looks that answer it: AddCombat)
   CpuTimes::Part(nullptr);
 }
 
@@ -1614,6 +1702,10 @@ void World::Render() {
     Stage("bounce light");
     lights.Bind();  // (what the rays meet takes the small lights too)
     bounce.Update(view, rays, terrain.NormalMap(), terrain.GroundColours(), sky_);
+  }
+  if (water.ripples.On()) {  // ripples on the water: their field moved on (it dispatches: before the scene's pass)
+    Stage("water ripples");
+    water.ripples.Update(camera, view.height, terrain.HeightTexture(), terrain.HeightUnit());
   }
   CpuTimes::Part("particles and bands moved");
   particles.Update(clock_, &view);

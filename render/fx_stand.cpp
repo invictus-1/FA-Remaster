@@ -743,6 +743,9 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
     }
   }
   if (entities_) {  // the effect entities, to the world as a game's
+    // (the stand hands its scripts' 'Water' impacts to the ripples, below: the ripples' own guesses from the frame
+    // would splash a second time where a shot or a falling aircraft meets the water)
+    world.water.ripples.guessSplashes = false;
     entities_->Advance(now);  // (once more: what was made this frame is in the frame too)
     entities_->TakeEvents(&events_);
     world.effects.Queue(std::move(events_));
@@ -756,6 +759,11 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
       drawn.bones.clear();
       world.AddFrame(drawn, {});
     }
+    {  // (ripples on the water: what met it, as the scripts were told)
+      std::vector<Vec4> hits;
+      entities_->TakeWaterHits(&hits);
+      for (const Vec4& h : hits) world.water.AddRipple(h.x, h.z, h.w, 1);
+    }
     // the units and their wrecks, posed as their scripts pose them
     for (const FxEntities::Body& b : entities_->Bodies()) {
       const Model* unit = world.models.Unit(b.unit, b.original);
@@ -767,6 +775,7 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
       pose.now = pose.next = b.bones.data();
       pose.nowCount = pose.nextCount = b.bones.size();
       world.meshes.Add(model, Mat4::FromTRS(b.position, b.turn, b.scale), {0.2f, 0.45f, 1.0f}, b.built, &pose);
+      world.water.ripples.AddHull(b.id, b.position, b.turn, model->boundsMin * b.scale, model->boundsMax * b.scale);  // (ripples where it is in the water)
     }
   }
 }

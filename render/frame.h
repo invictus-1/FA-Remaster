@@ -165,6 +165,65 @@ struct FrameEffectEvent {
   std::string faction;
 };
 
+// What damage, shots' impacts and health changes the simulation had (the engine's HitEvent, ImpactEvent and
+// HealthEvent, src/sim/sim_view.h, which says what each field holds: render REQUESTS 36), copied out for the
+// looks that answer them: marks on units, ripples on the water, blast waves. Reading them changes nothing in
+// the game. `seen`: the army the picture is for sees the place (always, without such an army).
+struct FrameHit {
+  uint32_t tick = 0;                 // the beat it happened in
+  uint32_t target = 0xffffffff;      // a shield's hit: the shield's owner (its unit)
+  int targetKind = 0;                // 0 unit, 1 shield, 2 prop, 3 projectile, 4 other entity
+  bool shield = false;
+  uint32_t shieldId = 0xffffffff;    // the shield entity, when `shield`
+  uint32_t instigator = 0xffffffff;
+  int army = 0;                      // the instigator's army, 1-based, 0 = none
+  std::string weapon;                // "uel0201-1-MainGun" ("": not known)
+  std::string projectile;            // the shell's blueprint id ("": a beam's, or not known)
+  bool beam = false;
+  std::string damageType;            // 'Normal', 'Fire', 'Deathnuke', ...
+  float amount = 0;                  // after armour
+  float position[3] = {0, 0, 0};     // the damage's origin (a blast's centre when radius > 0)
+  float radius = 0;                  // 0: a single hit; an area's radius
+  float direction[3] = {0, 0, 0};    // unit length (0 0 0: none)
+  bool seen = true;
+};
+struct FrameImpact {
+  enum Kind { Projectile, Beam, Crash } kind = Projectile;
+  uint32_t tick = 0;
+  std::string type;                  // 'Terrain', 'Water', 'Air' (a miss), 'Underwater', 'Shield', 'Unit', ...
+  uint32_t source = 0xffffffff;      // the shell, the beam, or the crashing unit
+  int army = 0;
+  std::string projectile;            // the shell's blueprint id; a crash: the unit's; a beam: ""
+  std::string weapon;
+  uint32_t entity = 0xffffffff;      // what it met (a shield: the shield entity), none for a miss
+  float position[3] = {0, 0, 0};
+  float direction[3] = {0, 0, 0};    // unit length
+  float speed = 0;                   // units a second as it struck (a beam: 0)
+  bool seen = true;
+};
+// An entity's health over the beats not taken yet: where it stands now and where it stood before the first of
+// them (several changes in that time are one).
+struct FrameHealth {
+  uint32_t tick = 0;                 // the beat of the newest change
+  uint32_t entity = 0xffffffff;
+  int kind = 0;                      // as FrameHit::targetKind
+  float fraction = 0, before = 0;    // health / max health now, and before
+};
+struct FrameCombat {
+  std::vector<FrameHit> hits;        // in the order they happened
+  std::vector<FrameImpact> impacts;  // the same
+  std::vector<FrameHealth> health;   // in the order each entity first changed
+  // whether the simulation keeps each list at all (its collectHits, collectImpacts, collectHealth): where it does
+  // not, the looks guess from the frames what they can, as before
+  bool hitsKept = false, impactsKept = false, healthKept = false;
+  bool empty() const { return hits.empty() && impacts.empty() && health.empty(); }
+  void clear() {
+    hits.clear();
+    impacts.clear();
+    health.clear();
+  }
+};
+
 // How a blueprint looks, as the simulation has it after the game's scripts and the mods changed it
 // (the engine's BlueprintDisplay, copied out): what the renderer otherwise reads from .bp files.
 struct BlueprintLook {
