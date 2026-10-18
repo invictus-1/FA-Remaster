@@ -673,6 +673,7 @@ void RetargetPatrolTasks(Sim& sim, UnitCommand& c) {
   if (!IsPatrolType(c.type) || c.form) return;
   std::vector<Unit*> holders(c.units.begin(), c.units.end());
   std::sort(holders.begin(), holders.end(), [](const Unit* a, const Unit* b) { return a->id < b->id; });
+  std::vector<Unit*> walkers;  // reclaim children whose walk is under way
   for (Unit* u : holders) {
     if (!IsAlive(u) || u->commands.empty() || u->commands.front().get() != &c) continue;
     if (u->headState != kRunning || !u->task || !u->task->pdata || !u->motion.bp || !u->motion.bp->mobile()) continue;
@@ -689,16 +690,24 @@ void RetargetPatrolTasks(Sim& sim, UnitCommand& c) {
       const bool asleep = TaskThreadAsleepOnMove(u, ch);  // (asked before the event changes the child)
       ReclaimTaskCommandEvent(sim, u, *ch, c);
       p.childFrom = 0;  // (the listener wakes the thread: counter 0)
-      if (asleep) {
-        // the walk's own listener (linked after the reclaim task's): its navigator takes the command's new position at
-        // once. Seen (probe mp1_3341): MP1 beat 3340, army 7's player drags the AggressiveMove again; the walks of
-        // 0x700055 and 0x70005a (rally overridden: free spots by PrepareMove) get the goals (360, 584) and (362, 584)
-        // from 0x618d76 in the stream, their navigators plan at 3341 before the command stage and the drive-through
-        // byte is 0 after 3341; ours set the goal only in the command stage and the byte followed a beat later.
-        TaskWalkCommandEvent(sim, c, u);
-        sim.ResumeCommandThread(u);
-      }
+      if (asleep) walkers.push_back(u);
     }
+  }
+  // The walk's own listener (linked after the reclaim task's): its navigator takes the command's new position at once.
+  // Seen (probe mp1_3341): MP1 beat 3340, army 7's player drags the AggressiveMove again; the walks of 0x700055 and
+  // 0x70005a (rally overridden: free spots by PrepareMove) get the goals (360, 584) and (362, 584) from 0x618d76 in the
+  // stream, their navigators plan at 3341 before the command stage and the drive-through byte is 0 after 3341; ours
+  // set the goal only in the command stage and the byte followed a beat later.
+  // Both listeners are told in the command's listener order, the oldest linked first (0x6e94cf), which for the walks
+  // is the order they were made in, not the unit ids: their re-links (the reclaim task's) and their PrepareMove spots
+  // (the walk's) follow it. Seen (probe mp1_3632): MP1 beat 3623, army 0's player drags its rally AggressiveMove; the
+  // walks are re-goaled 0x49, 0x3c, 0x42, 0x46, 0x3a, 0x44, the first taking the waypoint's own cell (787, 173), and
+  // the threads run in that order at 3624; ours went by id (0x3a first took (787, 173)), and from 3630 the walks of
+  // 0x3a, 0x44 and 0x49 headed for each other's spots (MP1 3632).
+  std::stable_sort(walkers.begin(), walkers.end(), [](const Unit* a, const Unit* b) { return a->walkSeq < b->walkSeq; });
+  for (Unit* u : walkers) {
+    TaskWalkCommandEvent(sim, c, u);
+    sim.ResumeCommandThread(u);
   }
 }
 

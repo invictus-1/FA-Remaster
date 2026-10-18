@@ -3495,6 +3495,7 @@ bool TaskCanMove(const Unit* u) { return CanMove(u); }
 void TaskMoveToward(Sim& sim, Unit* u, const Vec3& goal) {
   MoveToward(sim, u, goal);
   u->walkPrepared = false;
+  u->walkSeq = ++sim.walkSeqNext;
 }
 
 // CUnitMoveTask::OnEvent 0x618c40 (read) for a task's walk: the move task links the queue's head command (ctor 0x6180e0:

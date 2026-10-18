@@ -459,6 +459,7 @@ class Sim {
   // Movement (M3): pathfinding, path searches waiting their turn, issued commands.
   Navigation& navigation();
   std::deque<Unit*> pathQueue;
+  uint64_t walkSeqNext = 0;  // Unit::walkSeq: the order task walks were made in (their listeners' link order)
   std::vector<ResourceDeposit> deposits;
   std::map<uint32_t, std::weak_ptr<UnitCommand>> commandsById;
   uint32_t nextCommandId = 1;

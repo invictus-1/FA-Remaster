@@ -160,6 +160,8 @@ class Unit : public Entity {
   // a task's walking child (a CUnitMoveTask) took the factory rally override in its ctor (0x618a00 -> PrepareMove
   // 0x618521): +0x95, so its command listener 0x618c40 puts a new target through PrepareMove too (MoveTaskWalk)
   bool walkPrepared = false;
+  // when its last task walk (a CUnitMoveTask: its listener linked into the head command's list) was made (Sim::walkSeqNext)
+  uint64_t walkSeq = 0;
   bool isFactoryBuilder = false;
   uint32_t creatorId = 0;              // unit+0x4b8: the factory, engineer or upgrading unit that built it       // builder.IsFactory (a builder in category FACTORY)       // unit+0x4f8: the units guarding this one, ascending id
   std::vector<uint64_t> buildAllowed;  // per-unit build restrictions removed from "all"
