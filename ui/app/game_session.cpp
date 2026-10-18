@@ -370,6 +370,9 @@ struct GameSession::Picture : WorldSource {
       w->blastWaves = w->blastDust = w->blastDebris = looks.battleEffects;
       w->litSmoke = w->smokeShadows = w->heatShimmer = looks.battleEffects;
       w->unitScars = looks.battleEffects;
+      // (render e8a4d56: wrecks and craters that glow and cool; dust, spray and contrails; explosions as lit volumes
+      // and the nuke's set piece, which without the volume art still throws the blasts' light and the nuke's flash)
+      w->hotMetal = w->movementDust = w->volumeExplosions = looks.battleEffects;
       w->energyShields = looks.energyShields;
     }
     if (!lookApplied || looks.hiddenOutlines != lookNow.hiddenOutlines) picture.SetHiddenOutlines(looks.hiddenOutlines);

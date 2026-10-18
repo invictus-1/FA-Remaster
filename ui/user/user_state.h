@@ -382,7 +382,8 @@ struct LookSettings {
   // acts only while the cinematic camera shows).
   bool lens = true;
   // Battle Effects (the renderer's bundle, agreed 2026-10-18): blast waves, dust and debris, smoke and fire lit with
-  // their shadows, heat shimmer, battle scars on units (World's blastWaves .. unitScars). Energy Shields (World::
+  // their shadows, heat shimmer, battle scars on units (World's blastWaves .. unitScars), and since render e8a4d56 hot
+  // metal, movement dust and explosions as volumes (hotMetal, movementDust, volumeExplosions). Energy Shields (World::
   // energyShields): shields that look like energy. Hidden Unit Outlines (WorldPicture::SetHiddenOutlines): units
   // seen behind trees and cliffs, only what the player may see, none in the Original look. All ON by default.
   bool battleEffects = true, energyShields = true, hiddenOutlines = true;
