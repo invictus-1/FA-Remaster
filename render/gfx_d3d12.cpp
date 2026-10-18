@@ -598,6 +598,11 @@ bool D3D12Device::Init(const DeviceDesc& desc, std::string* error) {
   D3D12_FEATURE_DATA_SHADER_MODEL model = {D3D_SHADER_MODEL_6_0};
   dxil_ = !desc.oldShaderCompiler && SUCCEEDED(device_->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &model, sizeof model)) &&
           model.HighestShaderModel >= D3D_SHADER_MODEL_6_0;
+  // (decided here for every shader: see DxcPresent)
+  if (dxil_ && !DxcPresent()) {
+    fprintf(stderr, "render: Direct3D 12: no dxcompiler.dll beside the program; the shaders compiled by Direct3D's own compiler\n");
+    dxil_ = false;
+  }
 
   D3D12_COMMAND_QUEUE_DESC qd = {};
   qd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
