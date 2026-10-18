@@ -684,11 +684,23 @@ void MotionSetGoal(Sim& sim, Unit* u, const std::vector<Vec3>& path, bool passTh
 }
 
 // CAiSteeringImpl::Stop 0x5d35e0: the spline and the collision record go; the unit coasts.
+// Both go only when there IS a spline: Stop tests +0x80 first (0x5d35e3 je 0x5d366b) and with none it only calls
+// CUnitMotion::Stop (0x5d3675); the record reset 0x596560 (0x5d365a) is inside the spline branch, as it is in
+// SetWaypoints(0, 0) (0x5d2ae3). So a unit standing without a spline keeps its record (its link to the other unit,
+// the meeting point, the type) through the navigator's Stop and MakeIdle at the end of a path (Execute 0x5a43dd /
+// 0x5a43fb), and a later prediction on it is passed over unless it is nearer than that point (0x597be5..0x597c81).
+// Seen: MP2 6206, army 1's Striker 0x1000bc reaches the end of its path (MotionNavDone) with no spline and a record
+// against 0x100064 made at 6205 (due 6217); the original keeps it (resolved at 6217 to nothing: link and point stay),
+// so 0x100035's re-prediction at 6238 does not put a record on it, it does not brake at 6239, its stop in FAF's
+// DistributeOrders clear (Lua of 6239) makes no prediction, and at 6240 0x100090 side-steps 0x100083 while 0x100083
+// takes its brake point. Ours had wiped the record at 6206: 0x1000bc braked hard at 6239 (a mode-4 spline), its stop
+// re-predicted onto both, and 0x100083 braked hard at 6240 while 0x100090 stood.
 void SteeringStop(UnitMotion& m) {
+  m.pointNow = false;
+  if (!m.hasSpline) return;
   m.spline.clear();
   m.splineIdx = 0;
   m.hasSpline = false;
-  m.pointNow = false;
   m.colType = 0;
   m.colUnit = 0;
   m.colTick = 0xffffffffu;
