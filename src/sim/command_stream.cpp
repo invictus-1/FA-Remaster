@@ -160,6 +160,14 @@ bool OkayCommand(Sim& sim, const UnitCommand& c) {
 }
 
 std::shared_ptr<UnitCommand> StreamCommand(Sim& sim, uint32_t id) {
+  // (one database in the original, CCommandDb +4, for the stream's ids and the engine's 0x80000000 | index ones)
+  if ((id >> 24) == 0x80u) {
+    auto e = sim.engineCommands.find(id);
+    if (e == sim.engineCommands.end()) return nullptr;
+    auto c = e->second.lock();
+    if (!c || c->id != id) return nullptr;
+    return c;
+  }
   auto it = sim.streamCommands.find(id);
   if (it == sim.streamCommands.end()) return nullptr;
   auto c = it->second.lock();

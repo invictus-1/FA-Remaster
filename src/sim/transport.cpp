@@ -3142,13 +3142,14 @@ std::vector<Unit*> UnitList(lua_State* L, int idx) { return ScriptUnitList(L, id
 
 std::shared_ptr<UnitCommand> NewCommand(Sim& sim, CommandType type) {
   auto c = std::make_shared<UnitCommand>();
-  c->id = sim.nextCommandId++;
   c->type = type;
-  sim.commandsById[c->id] = c;
   return c;
 }
 void Append(Unit* u, const std::shared_ptr<UnitCommand>& c) {
   if (u->commands.size() >= 501) return;
+  // UNIT_IssueCommand 0x6f12c0 makes the command (CCommandDb::AddIssueData 0x6e0db0) for the first unit that passes
+  // the issue test and the queue's 500 cap (0x6f13bf..0x6f13fb): an order no unit takes uses no engine id
+  if (!c->serial && !c->fromStream) AssignEngineCommandId(*Sim::From(u->luaState()), c);
   u->commands.push_back(c);
   c->units.insert(u);
   AirSpeedThroughEvent(*Sim::From(u->luaState()), u);  // queue event 0

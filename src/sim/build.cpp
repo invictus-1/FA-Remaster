@@ -3650,13 +3650,12 @@ std::shared_ptr<UnitCommand> IssueFactoryCommand(Sim& sim, const std::vector<Uni
     if (!IsFactoryBuilder(sim, x)) continue;
     if (!c) {
       c = std::make_shared<UnitCommand>();
-      c->id = sim.nextCommandId++;
+      AssignEngineCommandId(sim, c);
       c->type = type;
       c->pos = pos;
       c->hasPos = true;
       c->targetId = targetId;
       c->factoryIssued = true;
-      sim.commandsById[c->id] = c;
     }
     if (clear) ClearFactoryCommandQueue(x);
     AddFactoryCommand(x, c);
@@ -4297,14 +4296,16 @@ int l_IssueMoveOffFactory(lua_State* L) {
   if (!PosArg(L, 2, &p)) return 0;
   Sim* sim = S(L);
   auto c = std::make_shared<UnitCommand>();
-  c->id = sim->nextCommandId++;
   c->type = CommandType::Move;
   c->pos = p;
   c->hasPos = true;
-  sim->commandsById[c->id] = c;
   c->factoryIssued = true;  // IssueMoveOffFactory 0x6f29d0 = IssueMove (append) + cmd+0x142
   for (Unit* u : units) {
-    if (!c->units.insert(u).second) continue;
+    if (c->units.count(u)) continue;
+    if (c->units.empty()) {  // (made for the first unit that takes it, as IssueToUnits 0x6f12c0)
+      AssignEngineCommandId(*sim, c);
+    }
+    c->units.insert(u);
     u->commands.push_back(c);
     AirSpeedThroughEvent(*S(L), u);  // queue event 0
   }

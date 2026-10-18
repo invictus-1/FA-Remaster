@@ -862,7 +862,7 @@ void Sim::JoinFixesHooks(ScriptState& st) { st.SetExtraHooks(FixesHooks()); }
 
 Sim::Sim(Vfs* vfs, std::vector<std::string> hookDirs, std::vector<std::string> modUids)
     : vfs_(vfs), hookDirs_(std::move(hookDirs)), modUids_(std::move(modUids)),
-      skeletons_(std::make_unique<SkeletonCache>(vfs)) {}
+      skeletons_(std::make_unique<SkeletonCache>(vfs)), commandIds(std::make_shared<CommandIdPool>()) {}
 
 Sim::~Sim() {
   if (rec_) fclose(rec_);
@@ -2069,10 +2069,15 @@ void Sim::Tick() {
     // the unit's own beat: economy events, regeneration or decay, consumption and production (health regen /
     // decay and HandleResourceManagement 0x6aaac0, after the manipulators)
     UnitEconomyTick(*this, u);
+    // ... and a pod with an empty queue orders itself to assist (0x6a921a; pod_assist.md 1). Nothing there asks for a
+    // Destroy (0x6a9214 -> 0x6a921a -> IssueToUnits 0x6a92b0): a pod a script destroyed in this beat's thread stage
+    // still makes its order, which goes again in the Sync's purge (an id of the command database's pool taken and
+    // given back). Seen: MP3 2606, a Cybran build drone that FAF's ReturnBotsThread destroys on its way home: the
+    // original's command database makes an AssistCommander for it in that beat (probe mp3_cmdid, caller 0x6a92b5);
+    // ours did not, and every engine command id after it was one higher.
+    if (u->isPod && u->commands.empty() && !u->dead) IssuePodAssist(*this, u);
     if (u->destroyQueued) continue;
     if (u->isFactoryBuilder) ValidateFactoryCommandQueue(*this, u);  // end of Unit::MotionTick
-    // ... and a pod with an empty queue orders itself to assist (0x6a921a; pod_assist.md 1)
-    if (u->isPod && u->commands.empty() && !u->dead) IssuePodAssist(*this, u);
   }
   beamsBefore(0xffffffffu);  // the beams younger than every unit
   threads_->WakeSignalled();
@@ -2231,8 +2236,10 @@ void Sim::ReleaseId(uint32_t id) {
   IdPool& p = it->second;
   p.ring[(p.tail + 99) % 100].push_back(id & 0xFFFFFu);
 }
-// IdPool::Update 0x403a30, once per beat (EntityDb::Purge)
+// IdPool::Update 0x403a30, once per beat (EntityDb::Purge), and then the command database's (CCommandDb::
+// PublishSyncData 0x6e0f50, called by Sim::Sync at 0x747b0c after the purge 0x747af9; commands.h CommandIdPool)
 void Sim::UpdateIdPools() {
+  commandIds->Update();
   for (auto& [key, p] : idPools_) {
     if ((p.tail + 1) % 100 == p.head) {
       for (uint32_t s : p.ring[p.head]) p.free.insert(s);

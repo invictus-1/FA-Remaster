@@ -13,6 +13,8 @@
 #include <limits>
 #include <map>
 
+#include "core/backtrace.h"
+#include "core/crash.h"
 #include "core/dmath.h"
 #include "core/log.h"
 #include "script/script_state.h"
@@ -215,6 +217,36 @@ bool UpgradeOrderFits(Sim& sim, const Unit* u, const UnitCommand& c) {
 }
 
 }  // namespace
+
+uint32_t AssignEngineCommandId(Sim& sim, const std::shared_ptr<UnitCommand>& c) {
+  // MOHO64_DEBUG_CMDID=1: every engine id taken ("cmdid alloc <tick> <index> slot <s> from <frames>") and given back
+  // ("cmdid free <tick> <index> slot <s>"), to set beside a probe of CCommandDb::AddIssueData 0x6e0db0 /
+  // RemoveCommand 0x6e0ec0. The slot is the pool's ring end: it tells a stream message's work (before the beat, after
+  // the last Update) from the beat's own, which both carry the previous tick.
+  static const bool dbg = getenv("MOHO64_DEBUG_CMDID") != nullptr;
+  std::shared_ptr<CommandIdPool> pool = sim.commandIds;
+  const uint32_t index = pool->Allocate();
+  c->id = 0x80000000u | index;
+  c->serial = sim.nextCommandId++;
+  sim.commandsById[c->serial] = c;
+  sim.engineCommands[c->id] = c;
+  c->idLease = std::shared_ptr<void>(nullptr, [pool, index](void*) {
+    if (dbg) Logf(LogLevel::Info, "cmdid free %lld %u slot %d", static_cast<long long>(g_crashTick), index, pool->tail);
+    pool->Release(index);
+  });
+  if (dbg) {
+    void* fr[8];
+    const int n = CaptureFrames(fr, 8);
+    std::string s;
+    for (int i = 1; i < n; ++i) {
+      char b[32];
+      snprintf(b, sizeof b, " %llx", static_cast<unsigned long long>(ImageOffset(fr[i])));
+      s += b;
+    }
+    Logf(LogLevel::Info, "cmdid alloc %u %u slot %d from%s", sim.tick(), index, pool->tail, s.c_str());
+  }
+  return c->id;
+}
 
 // CUnitMoveTask::OnEvent 0x618c40 (read): a move task listens to its command, and on any event of it (CUnitCommand::
 // SetTarget 0x6e8820 broadcasts event 0 through 0x6e94a0 after storing the new target) it hands its navigator the
@@ -1271,7 +1303,7 @@ bool PosArg(lua_State* L, int idx, Vec3* p) {
 void PushCommand(lua_State* L, const std::shared_ptr<UnitCommand>& c) {
   lua_newtable(L);
   lua_pushstring(L, "moho64_cmd");
-  lua_pushnumber(L, c->id);
+  lua_pushnumber(L, c->serial);
   lua_rawset(L, -3);
 }
 
@@ -1372,9 +1404,7 @@ std::shared_ptr<UnitCommand> Issue(lua_State* L, const std::vector<Unit*>& units
       }
   auto c = std::make_shared<UnitCommand>();
   Sim* sim = S(L);
-  c->id = sim->nextCommandId++;
   c->type = type;
-  sim->commandsById[c->id] = c;
   for (Unit* u : units) {
     // FilterByCommandCap 0x6eecf0 drops immobile factories (their orders go to the rally queue only
     // through IssueFactoryRallyPoint / IssueFactoryCommand, factory_handoff.md 3.2)
@@ -1383,6 +1413,11 @@ std::shared_ptr<UnitCommand> Issue(lua_State* L, const std::vector<Unit*>& units
     if (type == CommandType::Guard && RefusesGuard(*sim, L, u, targetEntity)) continue;
     if (type == CommandType::Repair && RefusesRepair(*sim, u, targetEntity)) continue;
     if (RefusesTargetOutside(*sim, u, target)) continue;
+    // IssueToUnits 0x6f12c0 makes the command for the first unit that takes it (0x6f13ca..0x6f13fb): an order no
+    // unit takes uses no id of the command database's pool (CommandIdPool)
+    if (c->units.empty()) {
+      AssignEngineCommandId(*sim, c);
+    }
     u->commands.push_back(c);
     c->units.insert(u);
     AirSpeedThroughEvent(*sim, u);  // queue event 0
@@ -1482,8 +1517,7 @@ namespace {
 std::shared_ptr<UnitCommand> MakeStreamCommand(Sim& sim, const StreamIssueData& d) {
   auto c = std::make_shared<UnitCommand>();
   if ((d.id >> 24) == 0xffu) {  // AddIssueData 0x6e0db0: an engine-made order (the CPlatoon movers) gets a sim id
-    c->id = sim.nextCommandId++;
-    sim.commandsById[c->id] = c;
+    AssignEngineCommandId(sim, c);
   } else {
     c->id = d.id;
     c->fromStream = true;
@@ -1814,9 +1848,8 @@ std::shared_ptr<UnitCommand> IssueAutoAttack(Sim& sim, Unit* u, Entity* target, 
     if (RefusesTargetOutside(sim, u, &at)) return nullptr;
   }
   auto c = std::make_shared<UnitCommand>();
-  c->id = sim.nextCommandId++;
+  AssignEngineCommandId(sim, c);
   c->type = CommandType::Attack;
-  sim.commandsById[c->id] = c;
   c->targetId = EntityRef(target);
   c->targetViaBlip = viaBlip;  // (what the weapon found was a jammer's blip: the order names the blip's id)
   c->targetPastDeath = pastDeath;
@@ -1840,11 +1873,10 @@ std::shared_ptr<UnitCommand> IssueAutoAttack(Sim& sim, Unit* u, Entity* target, 
 }
 
 std::shared_ptr<UnitCommand> IssuePodAssist(Sim& sim, Unit* u) {
-  if (!IsAlive(u)) return nullptr;
+  if (!u || u->dead) return nullptr;  // (a destroy-queued pod too: Unit::MotionTick 0x6a921a)
   auto c = std::make_shared<UnitCommand>();
-  c->id = sim.nextCommandId++;
+  AssignEngineCommandId(sim, c);
   c->type = CommandType::AssistCommander;
-  sim.commandsById[c->id] = c;
   u->commands.push_back(c);
   c->units.insert(u);
   AirSpeedThroughEvent(sim, u);  // queue event 0
@@ -1989,9 +2021,8 @@ int l_IssueFactoryAssist(lua_State* L) {
     if (RefusesTargetOutside(sim, u, hasTarget ? &targetAt : nullptr)) continue;
     if (!c) {
       c = std::make_shared<UnitCommand>();
-      c->id = sim.nextCommandId++;
+      AssignEngineCommandId(sim, c);
       c->type = CommandType::Guard;
-      sim.commandsById[c->id] = c;
       if (e) {
         c->targetId = EntityRef(e);
         c->pos = e->position;

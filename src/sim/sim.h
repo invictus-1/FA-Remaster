@@ -38,6 +38,7 @@ class EntityGrid;
 class Platoon;
 class Navigation;
 struct UnitCommand;
+struct CommandIdPool;
 struct SessionDescription;
 
 class Army {
@@ -481,8 +482,10 @@ class Sim {
   std::deque<Unit*> pathQueue;
   uint64_t walkSeqNext = 0;  // Unit::walkSeq: the order task walks were made in (their listeners' link order)
   std::vector<ResourceDeposit> deposits;
-  std::map<uint32_t, std::weak_ptr<UnitCommand>> commandsById;
-  uint32_t nextCommandId = 1;
+  std::map<uint32_t, std::weak_ptr<UnitCommand>> commandsById;  // by UnitCommand::serial (the scripts' handles)
+  uint32_t nextCommandId = 1;  // the next serial
+  std::map<uint32_t, std::weak_ptr<UnitCommand>> engineCommands;  // by engine id (0x80000000 | index), for the stream
+  std::shared_ptr<CommandIdPool> commandIds;  // (made by the Sim's ctor, as CCommandDb's pool)
   // Keep an engine object alive for the session (objects scripts may still hold).
   ScriptObject* Own(std::unique_ptr<ScriptObject> o) {
     owned_.push_back(std::move(o));

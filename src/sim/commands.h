@@ -71,6 +71,56 @@ struct UnitCommand {
   int issueTargetType = 0;
   uint32_t issueTargetEntity = 0xf0000000u;
   Vec3 issueTargetPos;
+  // an engine id's hold on its pool: the index goes back (CommandIdPool::Release) when the command is destroyed
+  std::shared_ptr<void> idLease;
+  // the handle scripts get (PushCommand; IsCommandDone, the platoon checks): unique for the session, unlike the
+  // engine ids the pool hands out again (the original's script object points at the command itself, 0x6f8d80)
+  uint32_t serial = 0;
+};
+
+// Give an engine-made command its id from the sim's pool (CommandIdPool) and register it by that id.
+uint32_t AssignEngineCommandId(Sim& sim, const std::shared_ptr<UnitCommand>& c);
+
+// The id pool of the command database (CCommandDb +0x10, an IdPool: ctor 0x403920, read): the ids of the commands
+// the engine makes itself (an issue whose id has the top byte 0xff: Lua Issue*, the platoon movers' stream orders,
+// factory orders, MoveOffFactory, auto-attack, pod assist, ...) are 0x80000000 | index, the index the lowest free one,
+// else the next new one (CCommandDb::AddIssueData 0x6e0db0: 0x6e0dda..0x6e0e15). When such a command is destroyed
+// (CUnitCommand's dtor -> CCommandDb::RemoveCommand 0x6e0ec0, 0x6e85af) its index goes into the ring's newest slot
+// (0x6e0f08..0x6e0f2f: slot (end + 99) % 100). Once per beat, in Sim::Sync after the entity purge,
+// CCommandDb::PublishSyncData 0x6e0f50 calls IdPool::Update 0x403a30: when the ring holds 99 slots, the oldest one's
+// indices become free (0x4010e0) and `next` drops while the index below it is free (0x403ab6..0x403b21); then a new
+// empty slot is pushed (0x403cb0). The ctor pushes the first one. So an index waits 99 beats before it comes back.
+// The user side names such commands by these ids (a waypoint the player drags on a unit's rally order, say), so
+// the stream's SetCommandTarget / SetCommandType / SetCommandCells / RemoveCommandFromQueue find them only if ours
+// numbers them alike. Seen: MP3 5674, a player drags the Move of army 0's aircraft 0x8d, a script-issued order;
+// the stream names it 0x80000081; ours had numbered it 591 and dropped the message.
+struct CommandIdPool {
+  uint32_t next = 0;
+  std::set<uint32_t> free;
+  std::vector<uint32_t> ring[100];
+  int head = 0, tail = 1;
+  uint32_t Allocate() {
+    if (!free.empty()) {
+      const uint32_t i = *free.begin();
+      free.erase(free.begin());
+      return i;
+    }
+    return next++;
+  }
+  void Release(uint32_t index) { ring[(tail + 99) % 100].push_back(index); }
+  void Update() {
+    if ((tail + 1) % 100 == head) {
+      for (uint32_t i : ring[head]) free.insert(i);
+      ring[head].clear();
+      while (next > 0 && free.count(next - 1)) {
+        free.erase(next - 1);
+        --next;
+      }
+      head = (head + 1) % 100;
+    }
+    ring[tail].clear();
+    tail = (tail + 1) % 100;
+  }
 };
 
 // A target as the command stream sends it (SSTITarget): 0 none, 1 entity id, 2 position.
