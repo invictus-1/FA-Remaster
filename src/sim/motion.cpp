@@ -2021,7 +2021,11 @@ void MotionTick(Sim& sim, Unit* u) {
         if (l > 0) iv = {dx / l * imp, 0, dz / l * imp};
         AddImpulse(u, iv);
       }
-      moved = false;
+      // (moved stays true: CalcMoveCommon answers 1 after putting the unit back (0x6c2a33), so CalcMoveLand snaps it to
+      // the ground where it stands (0x6c31cd), with its orientation of now. A pushed unit has no impulse (0x6c299e) and
+      // so no motion+0x90 to ask for the snap: only this answer gives it. Seen: MP2 6704 and 6707, army 0's Mantis 0x32
+      // turning on a steep slope, its steps blocked at 6703 and 6706 (the impulse's snap) and its pushed coast blocked
+      // at 6704 and 6707: the original snaps again there (y 61.9126 -> 61.8516, the tilt follows), ours did not.)
     }
     if (b.motionType == kMotionHover) {
       // (No rebuild of the orientation from m.bx / m.bz here: CalcMoveHover 0x6c2bc0 tilts the transform as
