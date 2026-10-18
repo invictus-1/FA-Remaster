@@ -355,6 +355,14 @@ void CheckScriptTarget(lua_State* L, int idx) {
 // the goal cell (from the 4th run on).
 struct PatrolData {
   bool goalIssued = false, atGoal = false, aggressive = false;
+  // task+0x5c: the goal (SNavGoal) the dispatcher worked out when it made the task (CUnitCommand::GetPosition at
+  // 0x6097cb / 0x609809 / 0x60985f, copied by the ctor 0x61aed2) and that only the command's event changes (OnEvent
+  // 0x61c3e0: GetPosition again, 0x61c43c). TaskTick hands this one to the navigator (0x61c3aa) and the arrival test
+  // 0x61b610 reads it (0x61b61c), so it does not follow the command's later state: a formation command whose other
+  // units have left keeps giving the unit its formation cell. Seen: MP2 6057, army 1's 0x100031, the last of six
+  // aircraft on a formation AggressiveMove, ends it at its formation cell's rect (247, 215) +- 15; ours, asking the
+  // command again, took the order's point (only one unit left: 0x6e8a42) and flew on to 6063.
+  Vec3 goal{};
   int ticks = 0;
   PatrolBox box;
   BuildTask* child = nullptr;
@@ -422,7 +430,7 @@ float UnitTopSpeed(const Unit* u) {
 bool AtPatrolGoal(Sim& sim, Unit* u, const PatrolData& p) {
   if (u->commands.empty() || !u->motion.bp) return false;
   const NamedFootprint& f = UnitFootprint(u);  // (0x61b671: Entity::GetFootprint)
-  Vec3 g = TargetPos(sim, *u->commands.front(), u);
+  const Vec3& g = p.goal;  // (task+0x5c, 0x61b61c)
   int gx = static_cast<int>(std::nearbyint(g.x - f.sizeX * 0.5f));
   int gz = static_cast<int>(std::nearbyint(g.z - f.sizeZ * 0.5f));
   int x0 = gx, z0 = gz, x1 = gx + 1, z1 = gz + 1;
@@ -527,9 +535,9 @@ Entity* PatrolReclaimTarget(Sim& sim, Unit* u, PatrolData& p) {
   return best;
 }
 
-void PatrolSetGoal(Sim& sim, Unit* u) {
+void PatrolSetGoal(Sim& sim, Unit* u, const PatrolData& p) {
   if (u->commands.empty()) return;
-  std::vector<Vec3> path{TargetPos(sim, *u->commands.front(), u)};
+  std::vector<Vec3> path{p.goal};  // (task+0x5c, 0x61c3aa)
   u->motion.arrived = u->motion.failed = false;
   MotionSetGoal(sim, u, path, NextIsMove(u), sim.tick());
   // (no "Moving": that is the move task's state; a patrolling unit on its way only has "Patrolling", as seen in
@@ -545,6 +553,7 @@ BuildTask* StartPatrolTask(Sim& sim, Unit* u, const UnitCommand& c) {
   t->order = "Patrol";
   t->pdata = std::make_shared<PatrolData>();
   t->pdata->aggressive = c.type == CommandType::AggressiveMove;
+  t->pdata->goal = TargetPos(sim, c, u);  // (the dispatcher's GetPosition, into the ctor's +0x5c)
   u->unitStates.insert("Patrolling");
   PatrolSearchBox(sim, u, *t->pdata);
   AirSpeedThroughEvent(sim, u);  // the patrol task ctor
@@ -619,7 +628,7 @@ int TickPatrol(Sim& sim, Unit* u, BuildTask& t) {
     return kTaskRunning;
   }
   if (!u->motion.hasGoal || !p.goalIssued) {
-    PatrolSetGoal(sim, u);
+    PatrolSetGoal(sim, u, *t.pdata);
     p.goalIssued = true;
     p.atGoal = false;
   }
@@ -668,8 +677,9 @@ void RetargetPatrolTasks(Sim& sim, UnitCommand& c) {
     if (!IsAlive(u) || u->commands.empty() || u->commands.front().get() != &c) continue;
     if (u->headState != kRunning || !u->task || !u->task->pdata || !u->motion.bp || !u->motion.bp->mobile()) continue;
     PatrolData& p = *u->task->pdata;
+    p.goal = TargetPos(sim, c, u);  // (OnEvent 0x61c3e0 stores it, +0x5c)
     if (p.goalIssued) {
-      const Vec3 goal = TargetPos(sim, c, u);
+      const Vec3 goal = p.goal;
       if (u->motion.bp->motionType == kMotionAir) MotionSetGoal(sim, u, std::vector<Vec3>{goal}, u->motion.passThrough, sim.tick());
       else if (u->motion.nav) LandNavSetGoal(sim, u, goal, u->motion.nav->speedThroughGoal);
     }
