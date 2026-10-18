@@ -1,6 +1,7 @@
 // Formations: engine-ref/specs/formations.md (CAiFormationInstance 0x5694b0.., CAiFormationDBImpl 0x59c030..,
 // Unit::UpdateInfoCache 0x6a9810).
 #include "sim/formation.h"
+#include "sim/combat.h"
 
 #include <algorithm>
 #include <cmath>
@@ -903,9 +904,13 @@ void GenerateFormation(Sim& sim, UnitCommand& c, Unit* u) {
   std::sort(units.begin(), units.end(), [](const Unit* a, const Unit* b) { return a->id < b->id; });
   std::string name = ScriptName(sim.L(), c.formIndex, units);
   if (name.empty()) return;
-  Vec3 pos = c.pos;
-  if (c.targetId)
-    if (Entity* e = sim.FindEntity(c.targetId)) pos = e->position;
+  // CUnitCommand::GenerateFormation 0x6e88d0 centres a new formation on GetTargetPosGun(cmd+0x11c) with the centre
+  // flag clear (bl = 0, 0x6e897f): for an entity target its target POINT (Unit::GetTargetPoint 0x6ab340: the bone of
+  // the order's pick, or the collision centre), for a recon blip its source unit's (ReconBlip::GetTargetPoint 0x5bf5f0
+  // plus the blip's offset +0x27c; taken as zero for a real blip, inferred). Not the unit's origin. Seen: MP2 6047, army 0's four
+  // artillery on one Attack of a radar blip: the original's formation is laid out 0.04 / -0.03 from ours (each
+  // adjusted point, probe mp2_6047), so 0x104's place lands in another cell and its square is one cell off.
+  const Vec3 pos = c.targetId ? CommandPosGun(sim, c) : c.pos;
   auto F = NewFormation(sim, units, name, pos.x, pos.z, c.formQw, c.formQx, c.formQy, c.formQz,
                         static_cast<int>(c.type), c.formScale);
   c.form = F;
