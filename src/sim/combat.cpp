@@ -1197,7 +1197,12 @@ const std::vector<Unit*>& BlipsInRange(Sim& sim, Unit* u, int period) {
   // EntitiesAroundPoint walks the entity grid, so the list comes in GRID order (rect_queries.md 2.4: rows by z,
   // columns by x, in a bucket the most recently registered first; ids play no part). FindBestEnemy depends on it:
   // the current target only holds its place against candidates that come after it.
-  if (u->blipCache.size() > 1 && sim.entityGrid().ready()) {
+  // And only the grid: a unit with no collision primitive is in none of its cells and is never found (0x6acda0, the
+  // rebuild's EntitiesAroundPoint 0x722350 with the unit mask 0x100). Seen: MP3, army 1's urb1202 0x1001ba, the
+  // stalled upgrade of the extractor 0x100100 (FAF's Unit.OnStartBuild gives an upgrade SetCollisionShape('None'),
+  // Unit.lua 2905): never in the original's lists (probe mp3_9469b: army 0's interceptor 0x1a, 9455-9475), ours
+  // listed it after the others.
+  if (!u->blipCache.empty() && sim.entityGrid().ready()) {
     std::vector<Entity*> grid;
     sim.entityGrid().GatherBox(p.x - R, p.z - R, p.x + R, p.z + R, 1, &grid);
     std::vector<Unit*> ordered;
@@ -1209,9 +1214,6 @@ const std::vector<Unit*>& BlipsInRange(Sim& sim, Unit* u, int period) {
                              [](const Unit* x, const Unit* y) { return x->id < y->id; }))
         ordered.push_back(t);
     }
-    if (ordered.size() != u->blipCache.size())  // (not in the grid: no collision shape; they keep id order, last)
-      for (Unit* t : u->blipCache)
-        if (std::find(ordered.begin(), ordered.end(), t) == ordered.end()) ordered.push_back(t);
     u->blipCache.swap(ordered);
   }
   // 0x6acf27: behind a unit whose jammer is on come the blips the army holds of it that it does not know to be
