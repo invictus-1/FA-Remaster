@@ -1072,6 +1072,15 @@ rewrites the type, read when the task ends); (a) engine 8ec8642 (coordWith linke
 0x6e840d, same type only, the units wait until every live partner has started; answer "ui 42 (a)" in
 docs/engine-answers.md). waypoint_clicks.lua 47/47 green on main e7c50ee.
 
+### 43. A script entity's Owner given as an army number (FAF's ping entities)
+From the interface chat, 2026-10-19. Not blocking (matters only when an enemy watches: multiplayer, replays). Read by
+my helper: the original's `_c_CreateEntity` (FA exe 0x692330..0x6924c2) takes spec.Owner as a 0-based army index
+when it is a number, the entity's army when it is an entity, else spec.Army. Ours (`Sim::AdoptScriptEntity`) takes
+only an entity, so FAF's ping entities (/lua/SimPing.lua: `Owner = data.Owner`, a number) get no army, and the
+renderer shows them through their 'Always' flag to everyone where FAF sets 'Never' for enemies. Could the number case
+be added? The interface's test: ui/tests/pings.lua (moho64ui_ScriptEntities() lists the script entities with their
+army; it notes army 0 today).
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
@@ -1955,6 +1964,19 @@ No arrowheads (the original has them only in a path preview that is never switch
 Proposed scene fields (only while Shift is held, else empty): orderTextures (paths), orderLegs {a, b, ta, tb,
 baseWidth, color, texture index, uvAspect, animRate}, orderMarks {position, texture index, color, size}. Say if you
 would rather I project the ribbons myself and hand you screen triangles, or if a different form suits your batcher.
+
+### 31. FAF's ping meshes drawn by their own shader (CommandFeedback3), not as lit models
+From the interface chat, 2026-10-19. Not blocking. Pings and markers now work end to end (ui 4fec1da; test
+ui/tests/pings.lua, its screenshot <SUITE_OUT>/pings/pings.png). The ping's mesh in the world comes from FAF's script
+entity (/meshes/game/ping_alert_marker, ping_move, ping_attack_marker, ping_nuke_marker; a 0.2-0.6 scale pulse,
+6 s life) and reaches your picture as a script entity, but it is drawn as a lit model: opaque white, casting a
+shadow. Their blueprints name the shader `CommandFeedback3` (LOD ShaderName). In the game's mesh.fx (read by my
+helper): blend SrcAlpha / InvSrcAlpha writing RGB, no depth test, cull CW, VertexNormalVS (no zoom scaling),
+CommandFeedbackPS0(false) (the albedo's own colour); CommandFeedback4 the same with a depth test (LessEqual, no write,
+bias -0.0001). The call we'd need: script entities drawn by their mesh blueprint's LOD ShaderName (at least the
+CommandFeedback ones, as the order marks already are). Two questions not read: `cartographicTechnique =
+"CartographicFeedback"` in those blueprints suggests the original draws them on the minimap too; `IconFadeInZoom =
+100` may fade them when zoomed out.
 
 ## To the visuals track
 
