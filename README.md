@@ -37,7 +37,10 @@ Local play (a skirmish against AI) comes first. Multiplayer comes after it (see 
 
 All thirteen test replays play out **identically to the original, to their last beat**: every unit
 on every beat, every army's economy, and every random draw in the same order. The last of them, a
-five-minute skirmish against seven M28 AIs with mods, got there on 16 October 2026.
+five-minute skirmish against seven M28 AIs with mods, got there on 16 October 2026. Since then the check has
+moved on to three high-level multiplayer games from FAF's replay vault; the first of them, an 18-minute 2v2 on
+Funeral Plains, has been identical to the original to its last beat since 19 October 2026, and the 1v1 and 4v4
+are on their way.
 
 A skirmish can be started from the game's own main menu and lobby. It runs in the new simulation, is
 drawn by the new renderer inside the game's own interface, and can be played: select, order, build,
