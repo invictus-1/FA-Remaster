@@ -627,6 +627,12 @@ bool NoBlockingUnits(Sim& sim, Unit* u, float x0, float z0, float x1, float z1) 
       Vec3 mn, mx;
       ShapeBounds(s, &mn, &mx);
       if (x0 > mx.x || mn.x > x1 || z0 > mx.z || mn.z > z1) return;
+      // (the gather 0x721c00 takes its candidates from the entity grid first, the box's cells by 0x4fcbe0, y from
+      // -1000 to 1000: a unit whose box only touches the square on a multiple of 4 is in other cells and is not
+      // found. Seen: MP3 7778, army 0's engineer 0x3e looks for a spot beside a wall it is to build; the wall 0x18 at
+      // (215.5, 319.5) reaches z 320, the edge of the candidate (215,320): the original takes that cell, ours called
+      // it blocked and sent the engineer to (215,317), round the far side of the walls.)
+      if (!GridCellsMeet(Vec3{x0, -1000.0f, z0}, Vec3{x1, 1000.0f, z1}, mn, mx)) return;
     } else {
       const MotionBlueprint* ob = o->motion.bp;
       float hx = (ob ? ob->sizeX : 1) * 0.5f, hz = (ob ? ob->sizeZ : 1) * 0.5f;
@@ -754,8 +760,9 @@ bool GroundSpotOkImpl(Sim& sim, Unit* u, const NamedFootprint& fp, int cx, int c
     *why = "reserved";
     return false;
   }
+  // (COORDS_CanMoveAt 0x720f70 squares the footprint: x0 + max(SizeX, SizeZ) on both axes, 0x721016..0x721076)
   float x0 = static_cast<float>(cx), z0 = static_cast<float>(cz);
-  if (!NoBlockingUnits(sim, u, x0, z0, x0 + fp.sizeX, z0 + fp.sizeZ)) {
+  if (!NoBlockingUnits(sim, u, x0, z0, x0 + static_cast<float>(S), z0 + static_cast<float>(S))) {
     *why = "unit";
     return false;
   }
