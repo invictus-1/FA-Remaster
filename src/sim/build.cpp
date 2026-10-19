@@ -3143,14 +3143,20 @@ void EndGuard(Sim& sim, Unit* U, BuildTask& t) {
   // called (0x611881..0x6118b6) for a unit that dies too. Seen: MP3 3754, army 3's 0x30003b, guarding its commander
   // 0x300000, is killed; the original's dying unit leaves the commander's guard formation (in formation 0, its own
   // top speed 3.8), ours kept the link and the dead unit took a slot in it (2.7455) from 3755.
-  // (The rest of the dtor is kept to living units here: the ogrid rect, the AbortMove and the speed-through status
-  // also run for a dying unit in the original, 0x611929..0x611977; not modelled.)
+  // The same for the anchor's o-grid rect (0x611929..0x611946: when the anchor, task+0x90, is set, FreeOgridRect
+  // 0x6ab760 on the unit): a guard killed on its walk gives its spot back. Seen (probe mp1_4989): MP1 4415, army 5's
+  // engineer 0x500035 is killed walking to its anchor (426,848) beside the structure it guards; at 4989 six engineers
+  // given a Guard on that structure take their spots in thread order, the first of them (0x500027) (426,848) in the
+  // original. Ours had kept the dead unit's reservation, so each took the next spot down and 0x50006b's path went
+  // the other way round at 5014.
+  // (The rest of the dtor is kept to living units here: the AbortMove and the speed-through status also run for a
+  // dying unit in the original, 0x611947..0x611977; not modelled.)
   U->unitStates.erase("GuardBusy");
   U->unitStates.erase("Guarding");
   SetGuardedUnit(sim, U, nullptr);
+  if (!IsZero(g.anchor)) GroundFreeRect(sim, U);
   if (!Alive(U)) return;
   if (g.childMove) U->unitStates.erase("Moving");
-  if (!IsZero(g.anchor)) GroundFreeRect(sim, U);
   // 0x611947..0x611972: the navigator (unit+0x54c) is told AbortMove (vt+0x10) when the unit moved this beat
   // (+0xb4 != +0xd0, 0x4f0a50). No goal test: an aircraft re-targets the point one second ahead. Seen (MP3 487):
   // Cybran build drones (POD) circling a finished mex; their guard ends and the original's targets jump to the
