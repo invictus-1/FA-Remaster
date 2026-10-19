@@ -1347,7 +1347,15 @@ int TickCall(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d, const BuildT
         if (d.moving) {
           if (u->motion.hasGoal) return kTaskRunning;
           d.moving = false;
-          SetState(u, "Moving", false);  // its dtor clears it
+          // the walk's CUnitMoveTask ends on its navigator's event and its dtor 0x618700 clears Moving (0x6187bd), then
+          // calls the navigator's AbortMove (0x618884, no goal test): MakeIdle -> SetWaypoints(0, 0) makes a brake spline
+          // from whatever spline the steering holds and hands out its first point. Seen: MP1 5064, army 4's hover
+          // artillery 0x400074 reaches its pickup cell; the arrival's Stop puts a record on 0x400035, whose resolve
+          // gives 0x400074 the hard brake (type 5, twice the rates); the original's walk dtor replaces it with a plain
+          // brake from where it rolls (0.1229, then 0.0246 less a beat), and under Teleporting, with no snap, the hover
+          // takes that brake's ground height (18.6719, its Elevation 0.11 gone). Ours ended the walk without the abort.
+          SetState(u, "Moving", false);
+          if (u->motion.bp && u->motion.bp->mobile()) MotionStop(u);
         }
         if (!IsReadyForUnit(O, u)) return kTaskRunning;
         Vec3 p = GetAttachBonePosition(O, u);

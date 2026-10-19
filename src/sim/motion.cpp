@@ -1951,9 +1951,19 @@ void MotionTick(Sim& sim, Unit* u) {
     if (m.pointNow && !m.pushed) {
       // CalcMoveCommon: the unit moves onto the spline point the steering handed out
       const UnitMotion::SplinePoint& q = m.point;
-      if (q.bx != m.bx || q.bz != m.bz) m.needSnap = true;  // turning on the spot
+      // (no snap request here: CalcMoveCommon 0x6c1e69.. writes nothing to motion+0x90, whose writers are AddImpulse,
+      // Warp, NotifyDetached and MotionTick's landing (0x6b8ed7, 0x6b9445, 0x6b971d, 0x6ba160). The point path snaps
+      // anyway where the move calc does, but a hover under Teleporting, which CalcMoveHover 0x6c2e99..0x6c2ea6 snaps
+      // only on +0x90, stays at the point's height. Seen: MP1 5068, army 4's hover artillery 0x400074 turning on
+      // its last brake point under the beam: the original stays at 18.6719, ours asked for a snap and rose to 18.7819.)
       u->position.x = q.pos.x;
       u->position.z = q.pos.z;
+      // (and the height: 0x6c21bb..0x6c21cc copies the point's x, y and z into the new position; the snap that
+      // follows usually puts it back on the ground. Without one, the unit stands at the point's stored height. Seen:
+      // MP1 5064, army 4's hover artillery 0x400074 (Elevation 0.11) under Teleporting, braking at its pickup: no
+      // SnapToGround (CalcMoveHover 0x6c2e8d), so the original is at the brake point's ground height 18.6719; ours kept
+      // its hover height 18.7819.)
+      u->position.y = q.pos.y;
       // vel = point - prevPos (3-D) and prevPos = the point (0x6c21bb..0x6c230f: the point's own x, y, z): the y is the
       // height the point was STORED with when its batch was made (terrain at its centre, water: max with the surface
       // for MotionType 3/7/8; 0x5b40fd), not the ground as it is now (spline_generate.md 3, land_motion_blocking.md
