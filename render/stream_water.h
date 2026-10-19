@@ -27,8 +27,7 @@
 //   white    the white water ribbon: drawn by this pass too (in place of its alpha-tested, swaying model): foam carried
 //            downstream fast, its streaks from the ribbon's own texture, lit as the stream is
 // What the props are (StreamWater::Add): a level whose blueprint ShaderName is "StreamWater" (the white water's
-// "StreamFoam"), or, until the visuals track names them so, a mesh named *_water_lod*.scm drawn "LabPBR" (the white
-// water's *_foam_lod*.scm drawn "LabPBRAlpha") under a map's /env/props/ (models.cpp). Off: they are drawn as before.
+// "StreamFoam") (models.cpp; drawn as "LabPBR" and "LabPBRAlpha" otherwise). Off: they are drawn as before.
 #pragma once
 #include <cstdint>
 #include <functional>

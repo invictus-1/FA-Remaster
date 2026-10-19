@@ -838,18 +838,10 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
         }
       if (kind.empty()) kind = "unit";
     }
-    {  // [stream] a stream's water and its white water (stream_water.h): by their own shader names, drawn as LabPBR and
-       // LabPBRAlpha while World::streamWater is off; or, until the visuals track names them so, a mesh named
-       // *_water_lod*.scm drawn LabPBR (its white water's *_foam_lod*.scm drawn LabPBRAlpha) among a map's props
-       // (/maps/<map>/env/props/)
-      const std::string mesh = Lower(s.mesh);
-      const std::string name = mesh.substr(mesh.rfind('/') + 1);
-      const bool mapProp = mesh.compare(0, 6, "/maps/") == 0 && mesh.find("/env/props/") != std::string::npos && name.size() > 4 &&
-                           name.compare(name.size() - 4, 4, ".scm") == 0;
-      if (kind == "streamwater" || (kind == "labpbr" && mapProp && name.find("_water_lod") != std::string::npos)) lod.stream = 1;
-      else if (kind == "streamfoam" || (kind == "labpbralpha" && mapProp && name.find("_foam_lod") != std::string::npos)) lod.stream = 2;
-      if (kind == "streamwater") kind = "labpbr";
-      if (kind == "streamfoam") kind = "labpbralpha";
+    {  // [stream] a stream's water and its white water (stream_water.h): by their own shader names (the visuals track's
+       // stream props), drawn as LabPBR and LabPBRAlpha while World::streamWater is off
+      if (kind == "streamwater") lod.stream = 1, kind = "labpbr";
+      else if (kind == "streamfoam") lod.stream = 2, kind = "labpbralpha";
       if (lod.stream) lod.streamMesh = s.mesh;
     }
     if (kind.compare(0, 4, "aeon") == 0) lod.faction = 1;

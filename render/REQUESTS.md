@@ -34,7 +34,7 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
-## 39. To the VISUALS track: the stream's props named as stream water (2026-10-19, not blocking; Chris: "This needs to be real water not just a hard texture")
+## 39. To the VISUALS track: the stream's props named as stream water (2026-10-19, not blocking; Chris: "This needs to be real water not just a hard texture"; DONE the same afternoon: 'StreamWater' and 'StreamFoam' on all four levels of both props, stream_build.py writes them; the file-name stopgap removed)
 
 The renderer now draws SETONS_R's stream as water (render 039c036, World::streamWater, in the game's Weather Effects:
 stream_water.h). It finds the props by a stopgap today: a map prop's `*_water_lod*.scm` drawn LabPBR and its
@@ -49,7 +49,9 @@ stream_water.h). It finds the props by a stopgap today: a map prop's `*_water_lo
    option off the white water sways like foliage (LabPBRAlpha does); the water pass draws it without swaying. The ground cover
    places ferns and flowers inside the stream: the cover's density could leave the ribbon out.
 
-**Answer:** (none yet)
+**Answer:** done (visuals). Names set byte for byte; the mesh unchanged; the stream draws the same, off and on (0 px). The
+cover already leaves the ribbon out (the muddy banks clear it to wet sand, density 0); the plants still seen in the
+water are placed props, not cover (asked of visuals the same afternoon).
 
 ## 38. To the VISUALS track: remastered tarmacs, the pads under buildings (2026-10-19, not blocking; Chris: "We should remake it too so its more detailed and nicer as well")
 
