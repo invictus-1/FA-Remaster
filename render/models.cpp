@@ -103,9 +103,61 @@ uint32_t NextLodSerial() {
   return ++made;
 }
 
+// (debris, debris.h; Model::paintSpots) Where a mesh's paint lies on its texture: 24 of its triangles picked evenly by
+// their area along the file's list (so spread over its parts), each its middle in the texture and how much texture a
+// model unit of its surface takes there. Triangles that are flat in the texture or reach out of it are left out.
+void MakePaintSpots(const char* vertices, int64_t vertexCount, const char* indices, int64_t indexCount, int indexBytes, std::vector<Vec3>* out) {
+  out->clear();
+  auto index = [&](int64_t i) -> int64_t {
+    if (indexBytes == 4) {
+      uint32_t v;
+      std::memcpy(&v, indices + i * 4, 4);
+      return v;
+    }
+    uint16_t v;
+    std::memcpy(&v, indices + i * 2, 2);
+    return v;
+  };
+  struct Tri {
+    float area, u, v, density;
+  };
+  std::vector<Tri> tris;
+  double total = 0;
+  for (int64_t t = 0; t + 2 < indexCount; t += 3) {
+    ScmVertex c[3];
+    bool ok = true;
+    for (int k = 0; k < 3 && ok; ++k) {
+      const int64_t i = index(t + k);
+      ok = i >= 0 && i < vertexCount;
+      if (ok) std::memcpy(&c[k], vertices + i * static_cast<int64_t>(sizeof(ScmVertex)), sizeof(ScmVertex));
+    }
+    if (!ok) continue;
+    const Vec3 a{c[0].position[0], c[0].position[1], c[0].position[2]}, b{c[1].position[0], c[1].position[1], c[1].position[2]},
+        d{c[2].position[0], c[2].position[1], c[2].position[2]};
+    const float area = 0.5f * Length(Cross(b - a, d - a));
+    const float du1 = c[1].uv0[0] - c[0].uv0[0], dv1 = c[1].uv0[1] - c[0].uv0[1], du2 = c[2].uv0[0] - c[0].uv0[0], dv2 = c[2].uv0[1] - c[0].uv0[1];
+    const float texture = 0.5f * std::abs(du1 * dv2 - du2 * dv1);
+    bool inside = true;
+    for (const ScmVertex& v : c) inside = inside && v.uv0[0] >= -0.01f && v.uv0[0] <= 1.01f && v.uv0[1] >= -0.01f && v.uv0[1] <= 1.01f;
+    if (area < 1e-8f || texture < 1e-9f || !inside) continue;
+    tris.push_back({area, (c[0].uv0[0] + c[1].uv0[0] + c[2].uv0[0]) / 3, (c[0].uv0[1] + c[1].uv0[1] + c[2].uv0[1]) / 3, std::sqrt(texture / area)});
+    total += area;
+  }
+  if (tris.empty() || total <= 0) return;
+  constexpr int kSpots = 24;
+  double reached = 0;
+  size_t at = 0;
+  for (int k = 0; k < kSpots; ++k) {
+    const double want = total * (k + 0.5) / kSpots;
+    while (at + 1 < tris.size() && reached + tris[at].area < want) reached += tris[at++].area;
+    out->push_back({tris[at].u, tris[at].v, tris[at].density});
+  }
+}
+
 bool LoadScm(gfx::Device* device, const std::string& file, const std::vector<ModelBone>& skeleton, ModelLod* lod, Vec3* boundsMin,
              Vec3* boundsMax, std::string* error, std::vector<Model::BoneBox>* boneBoxes = nullptr,
-             std::shared_ptr<const HitShape>* hitShape = nullptr, int64_t hitShapeMost = 0, bool trees = false) {
+             std::shared_ptr<const HitShape>* hitShape = nullptr, int64_t hitShapeMost = 0, bool trees = false,
+             std::vector<Vec3>* paintSpots = nullptr) {
   auto fail = [&](const char* what) {
     *error = what;
     return false;
@@ -174,6 +226,8 @@ bool LoadScm(gfx::Device* device, const std::string& file, const std::vector<Mod
   }
   if (hitShape && indexCount / 3 <= hitShapeMost)  // (battle scars, unit_wear.h: where on the model a hit lies)
     *hitShape = MakeHitShape(vertices, vertexCount, file.data() + indexOffset, indexCount, static_cast<int>(indexBytes), std::max<size_t>(skeleton.size(), 1));
+  if (paintSpots)  // (debris, debris.h: where its paint lies on its texture)
+    MakePaintSpots(vertices, vertexCount, file.data() + indexOffset, indexCount, static_cast<int>(indexBytes), paintSpots);
   gfx::BufferDesc vb;
   vb.stride = sizeof(ScmVertex);
   vb.size = static_cast<uint32_t>(vertexCount * static_cast<int64_t>(sizeof(ScmVertex)));
@@ -854,7 +908,8 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
     // (what sways, below: its trees of a group told apart, each to sway on its own; ModelLod::treeStep)
     const bool sways = kind.compare(0, 10, "undulating") == 0 || kind == "labpbralpha" || (!m->lods.empty() && m->lods[0].sway > 0);
     if (!mesh || !LoadScm(device_, *mesh, m->bones, &lod, m->lods.empty() ? &m->boundsMin : nullptr, m->lods.empty() ? &m->boundsMax : nullptr, &error,
-                          m->lods.empty() ? &m->boneBoxes : nullptr, shape, i + 1 == sources.size() ? INT64_MAX : kHitShapeTriangles, sways)) {
+                          m->lods.empty() ? &m->boneBoxes : nullptr, shape, i + 1 == sources.size() ? INT64_MAX : kHitShapeTriangles, sways,
+                          unit && m->lods.empty() ? &m->paintSpots : nullptr)) {
       // a missing coarser level is common: the finer ones then stand in
       if (i == 0 || mesh) fprintf(stderr, "render: model %s: mesh %s: %s\n", what.c_str(), s.mesh.c_str(), mesh ? error.c_str() : "file not found");
       if (i == 0) return;
@@ -862,7 +917,7 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
     }
     // a texture that is not there is simply not used (many props have no normal or specular
     // texture); one a blueprint file names itself and that is missing gets reported
-    auto texture = [&](std::string name, bool named, gfx::Texture fallback, bool* remastered = nullptr) {
+    auto texture = [&](std::string name, bool named, gfx::Texture fallback, bool* remastered = nullptr, std::string* used = nullptr) {
       // (an effect's mesh, as a nuke's ball of fire: in the remastered look the visuals track's
       // texture of that path where it has made one, effect_files.h; for an effect entity's or a script
       // entity's mesh wherever its texture is, as the build cube's /meshes/generic/cube02_albedo.dds)
@@ -880,11 +935,13 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
         name = ours;
       }
       if (name.empty() || (!(named && !merged) && !vfs_->Exists(name))) return fallback;
+      if (used) *used = name;
       return textures_->Get(name, fallback);
     };
     lod.albedo = texture(s.albedo, s.albedoNamed, textures_->White(), &lod.remasteredEffect);
     lod.normals = texture(s.normals, s.normalsNamed, textures_->FlatNormal());
-    lod.specular = texture(s.specular, s.specularNamed, gfx::Texture{});  // (none: black, or see plainMaterial below)
+    std::string specularFile;  // (debris: where a unit's paint glows, Model::paintMaterial)
+    lod.specular = texture(s.specular, s.specularNamed, gfx::Texture{}, nullptr, &specularFile);  // (none: black, or see plainMaterial below)
     lod.secondary = texture(s.secondary, s.secondaryNamed, textures_->White());
     lod.labPbr = kind == "labpbr" || kind == "labpbralpha";
     // Remastered textures from outside the blueprint: a previewed model's own, for every level; or,
@@ -897,6 +954,7 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
       lod.albedo = textures_->Get(lab + "albedo.dds", lod.albedo);
       lod.normals = textures_->Get(lab + "normal.dds", lod.normals);
       lod.specular = textures_->Get(lab + "spec.dds", lod.specular);
+      specularFile = vfs_->Exists(lab + "spec.dds") ? lab + "spec.dds" : specularFile;
       lod.secondary = vfs_->Exists(lab + "ao.dds") ? textures_->Get(lab + "ao.dds", textures_->White()) : textures_->White();
       lod.labPbr = true;
       lod.shaderName = "LabPBR";
@@ -905,6 +963,7 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
     if (kind.compare(0, 10, "undulating") == 0 || kind == "labpbralpha") lod.sway = 1;
     lod.plainMaterial = lod.labPbr && !lod.specular;
     if (lod.plainMaterial) lod.specular = textures_->Black();
+    if (unit && m->lods.empty() && !lod.plainMaterial) m->paintMaterial = specularFile;
     m->lods.push_back(std::move(lod));
   }
   // a model that sways does so at every level (or it would stand still from afar and jump when

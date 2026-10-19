@@ -749,6 +749,39 @@ picture the fallback; helpers build most of them in parallel, the renderer revie
    impacts are not there to make them). `Debris::fragments` takes the visuals session's real fragments of a unit
    when she delivers them. Costs at 1440p: in a live fight +0.004 ms for units and scenery, the field +0.006, dust
    0.02-0.04; 32 blasts at once among trees +0.08-0.09 ms. Off: pictures identical (regression 0 px on both backends).
+   **Debris that reads as wreckage** (Chris, 2026-10-18 evening, from the showcase stills: "just black cubes"). The black
+   squares in his pictures were not the debris's chunks but the game's own debris shells: every death script throws a
+   handful (defaultexplosions.lua, CreateScalableUnitExplosion: DebrisMisc04/09/010, Random(1 + 6r, 15r) of them for a
+   unit of bounding radius r, land, air and water alike), drawn by the game as one flat grey plate
+   (/meshes/projectiles/debris_misc_04 in the game's meshes.scd: 24 vertices, a 32 x 32 grey-blue albedo) in the plain
+   "VertexNormal" look; from below or against the light they read as black squares. With `blastDebris` on, the debris
+   now draws those shells itself (`Debris::Shell`, from World::AddFrame's projectile loop): each as a torn piece of the
+   dying unit nearest where it first shows, 65 % of them (`shellsDrawn`) at 0.9 of the plate's size (`shellSize`); the
+   game still flies them (and their smoke trails). When one hits (the engine's `stopped`) or touches the water, the
+   piece is the debris's: into the water it sinks (about three seconds, slowing, under the water's surface), on the
+   ground it hops and lies with the rubble. The debris's own chunks (a ground unit's, thrown with its death's flash) are
+   the same pieces. The shapes are a library made once from a fixed seed (`render/debris_shapes.h/.cpp`, 16 of them,
+   12-76 triangles each): torn plates (three bent), panels folded near square, an angle and a tee of girder, a bent
+   strut, jagged shards, lumps of concrete; a building's pieces are mostly lumps and girders, an aircraft's thin plates
+   and shards, a vehicle's or ship's plates, panels and girders, each kind of unit keeping to six of them (picked by
+   its kind from its size, the same every run: every shape a pass draws is a draw of its own, so a close look at a heap
+   of one unit's rubble costs about what the first version's six shapes did). Their skin wears a patch of the unit's
+   own texture where its paint lies (`Model::paintSpots`: 24 places picked by area over its finest mesh at loading, each with the
+   texture's density there, so a patch is about as much paint as the piece's size; spots whose patch would glow - the
+   specular's blue, read once from `Model::paintMaterial` at a level of 256 or less - are left out, or a Cybran piece
+   glows red), in its material and faction's look, its army's colour at 0.85; three in ten are charred instead (a
+   sooty dark grey-brown with paler blotches of dust, rough, one look shared by all units' pieces, so that each kind of
+   unit adds only its six painted meshes to what is drawn), and the painted ones turn to it 15-90 s after they come to
+   rest (dust). Their torn faces (a plate's rims, a
+   girder's ends, a lump's fractures) are a second model in a material of their own: scorched steel (dark, sooty,
+   metal 0.85, roughness 0.42 - what the hot metal's shader takes for a torn rim of bare steel, so with `hotMetal` on
+   they glow a deep orange cooling to dull red over about three seconds) or broken concrete (no glow); drawn only when
+   the piece is near enough for them to show (a lump's always), and casting no shadow but a lump's (the skin's is the
+   piece's). The two biggest chunks of a death trail the game's own
+   debris smoke while they fly. Sizes: a thirtieth to a sixth of the unit across (mostly small), at most 0.45 world
+   units. Viewer: `--debris-show <unit>` lays the library out in that unit's paint (above) and charred (below), turning;
+   `--debris-test <unit>[,every[,height]]` throws that unit's pieces over and over where the camera starts. The shared
+   shaders are untouched; no new texture slots.
 4. **Water that reacts** (ripples from shells, ships, hover and wading units that spread and cross). First version
    done 2026-10-18 (`World::waterRipples`, viewer `--water-ripples`): item 8 of "The next pieces" above. Cost about
    0.04-0.05 ms at 1440p with a battleship and four splashes a second; off, pictures identical (regression 0 px on
@@ -1028,6 +1061,42 @@ work is not starved of the processor).
    Open: commanders do not build in the effects stand (pictures from games); for the colour tuning: a Seraphim
    factory's beam light is a clear spot on grass by day, the Aeon gold reads khaki on green ground, Cybran lights tint
    a factory's arms pink at night.
+20. **[unit dirt] Wet and muddy units (first version, 2026-10-18; the visuals session's section 56, proposal 4;
+   proposed for the "Weather Effects" setting, beside the units' own snow):** `World::unitDirt` (viewer
+   `--unit-dirt`; `render/unit_wear.h/.cpp`, on unit wear: `UnitWear::Dirt`, the shader's `DirtSurface`). Without it
+   a unit is as wet as the ground (lighting.h: darker, its roughness drawn toward 0.6, which makes glossy paint
+   rougher). With it each unit has its own, worked out every frame by the game's clock:
+   - **Wet:** in rain it soaks within some 15 seconds: the paint a little darker, a film of water over it (roughness
+     toward 0.1); when the rain stops it dries in some three minutes in shade, about one when it drives in sun: the
+     film draws back into streaks down its walls and pools on its tops, the last of it low down; close up, drops run
+     down its walls (after the rain, and faster in it). Its own wetness stands in for the weather's on it
+     (lighting.h's `surfaceWetShare`). Under water (an amphibious unit on the bottom, or wading) it is soaked and washed.
+   - **Mud:** driving through mud, or dirt and grass gone soft in the wet (the ground's kinds as deep tracks read them,
+     `Terrain::LayerKind`, laid over each other by the map's masks on the processor, a grid of two world units; the
+     ground's wetness), builds mud on its running gear and lower hull: up to a height in its own frame that grows with
+     the mud (on a tank about two fifths of its hull's height at most, on a walker a quarter: its feet and shins; on
+     the largest at most 0.3 world units over a seventh of its height), its edge ragged and thrown up the walls in
+     streaks, blots and spatter over it, higher at its front by how fast it drove, less on what faces up. Full in
+     twenty seconds at speed 4 through wet mud (within a minute for a Striker on its loops); dry mud (caked earth) gives
+     none, only dust. Fresh it is dark and glossy (the map's mud material's colour, `setonsr_mud`'s albedo's lighter
+     tenth); it dries in some two and a half minutes (faster in sun), from its thin edges and the spatter down to the
+     thick crust: lighter, matt, cracked; dry, it flakes off over some six minutes (faster as it drives). Rain wets it
+     again and washes it off in a minute and a half; water at once.
+   - **Dust:** dry sand, and dry dirt, give a pale dusty coat instead (sand's or earth's colour), more low down and on
+     what faces up, less on team colour; rain washes it off in seconds.
+   - Hover units and aircraft take no mud or dust (they get wet); ships neither. A unit fresh from the factory is
+     clean and dry; one there from the start is as wet as the ground.
+   The marks' rows in the bone buffer carry three more rows a unit (`WearLook::dirtRows`; a quarter added to the
+   instance's count of marks says they are there). Viewer tests: `--unit-dirt-pace n` (all of it n times faster, to
+   watch it), `--dirt-test wet,mud,mudwet,dust[,sand[,front[,walks]]]` (placed units given that much; and every unit
+   of a test starting with it), `--rain-stops s` (the rain stops s seconds in), `--fx-follow` (with `--fx-move` and
+   `--cam`: the camera follows the driven unit at `--cam`'s distance); `MOHO64_DEBUG_DIRT=1` prints the units' dirt
+   every five seconds. Cost (2560 x 1440, 200 Strikers on SETONS_R's soil, every one carrying dirt, the lowest of the
+   units' stage): +0.017 ms at the game's height in rain (soaked, fresh mud), +0.013 dry (cracked mud and dust), +0.01
+   close (distances 15 and 5); the processor 0.03 ms for the 200 (the ground's grid once a map: 7 ms). Off: nothing of
+   it runs; pictures identical (the regression, the weather's, and SETONS_R with units driving in rain, dry and snow:
+   0 px on both backends). Lighting.h's lines take the unit's share only in the models' shaders (`SURFACE_OWN_WET`):
+   a share in every shader changed how Direct3D 12's compiler built the ground's (a few pixels a step off).
 
 ## Beyond the map's edge, part 2: the weather on the horizon (first version, 2026-10-18; a helper's, for review)
 
@@ -1113,6 +1182,7 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `leafLight` | the sun's light through leaves, grass blades and plants, glowing toward a low sun | about 0.04 ms | |
 | `energyShields` | shields' bubbles bend what is behind, rings run from each hit, the pattern flares, their light inside | +0.07 to 0.16 ms with ten bubbles under fire | |
 | `hotMetal` | fresh wrecks glow where they broke and cool by a black body's colours, fresh scorches glow, wrecks smoulder | +0.07 ms with 40 fresh wrecks from the game's height, +0.15 close up | |
+| `unitDirt` | units wet in rain and drying after it, mud on their running gear and lower hulls from mud and wet dirt (drying lighter, flaking off, washed by rain), dust from dry sand and dirt | +0.01 to 0.02 ms with 200 dirty units, 0.03 ms of the processor (proposed for "Weather Effects") | a time of day for rain |
 | `frameGeneration` | FSR 3 frame generation: a picture made between each two frames, twice the frames shown | 1.1-1.4 ms a frame drawn | anti-aliasing off; the device's second queue |
 | `lens` (with a cinematic camera) | depth of field: a lens's blur, focus eased | 0.36-0.43 ms while on | a cinematic camera (cinecam.h) |
 | `litSmoke` | smoke and dust lit as volumes: the sun through shadows, fires lighting it from within | about 0.02 ms in a fight | |

@@ -122,6 +122,9 @@ class Terrain {
   bool CoverDensity(gfx::Texture trees, gfx::Texture* a, gfx::Texture* b);
   float CoverTreeRadius() const { return coverTreeRadius_; }  // (the table's near_trees radius, world units)
   float HeightUnit() const { return map_ ? 65535.0f * map_->heightScale : 1.0f; }
+  // [unit dirt] Layer i's kind of ground (0..9: shares of snow, mud, sand, grass, dirt, hard), as GroundKinds lays them
+  // (unit_wear.h: what the units drive through, on the processor).
+  const float* LayerKind(int i) const { return groundKind_[i]; }
 
   // Which of the map's own decals remap.json's entry for the map asks to be drawn ("decals": all, normals, albedo
   // or off; World::Options::mapDecals); empty where it says nothing (Load reads it).
