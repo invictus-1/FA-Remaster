@@ -947,11 +947,15 @@ void ProcessSplineMovement(Sim& sim, Unit* u) {
         // yet. (Seen: Skirmish 3041, army 3's 0x300046 stopped at 3032 with a record due at 3041, given a Move to
         // its own cell at 3040: the original stands, ours made a batch toward the old target and stepped 0.028.)
         if (m.steerValid) {
-          if (!m.hasSpline || m.splineIdx >= m.spline.size()) UpdatePath(sim, u, m.steerTarget, true, GetVal(m));
+          if (!m.hasSpline || m.splineIdx >= m.spline.size()) {
+            m.faceDir = {};  // (0x5d2f70: SetTarget 0x6b88f0 with the target, no facing)
+            UpdatePath(sim, u, m.steerTarget, true, GetVal(m));
+          }
           CheckCollisions(sim, u);
         }
         break;
       case 2: {
+        m.faceDir = {};  // (0x5d2ebf: SetTarget 0x6b88f0 with the side-step point, no facing)
         Vec3 T = m.sideStep;
         m.sideStep = {};
         UpdatePath(sim, u, T, true, 2);
@@ -985,6 +989,14 @@ void SteeringTick(Sim& sim, Unit* u) {
   m.steerTarget = m.path[m.pathIndex];
   m.steerValid = true;
   if (AtPosition(u, m.steerTarget)) return;
+  // 0x5d310e: CUnitMotion::SetTarget 0x6b88f0 with the waypoint and no facing: the motion's facing (+0x20) becomes zero
+  // for a unit that cannot fly (0x6b878d -> 0x6b8872). Only here, not at the navigator's SetGoal: a goal that is set and
+  // dropped before the steering takes up a waypoint leaves the facing as it was. Seen: MP1 5544, army 1's frigate
+  // 0x100056 (uas0103, AttackAngle 60): its attack task, woken by the weapon's "target lost", sets the dead target's
+  // blip as the navigator's destination and ends in the same beat (AbortMove); the facing its engaged state set at 5541
+  // (SetFacing 0x6b8590) stays, and when the brake spline is used up (5550) the idle hull turns toward it (CalcMoveCommon's
+  // no-point branch, 0x6c2607). Ours cleared the facing with the goal and stood until its guns found a target (5552).
+  m.faceDir = {};
   UpdatePath(sim, u, m.steerTarget, true, GetVal(m));
   CheckCollisions(sim, u);
   ProcessSplineMovement(sim, u);

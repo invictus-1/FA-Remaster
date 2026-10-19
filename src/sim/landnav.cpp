@@ -952,7 +952,10 @@ void LandNavSetGoalRect(Sim& sim, Unit* u, int x0, int z0, int x1, int z1, bool 
   // whose target is gone; its task's lastPos is (0, 0, 0), its Update asks for the cell (0, 0) every beat, and the
   // original's unit stands Attacking for 150 beats; ours searched a path to the map's corner and drove off.
   if (x0 == 0 && z0 == 0) return;
-  u->motion.faceDir = {};  // (CUnitMotion::SetTarget 0x6b8872 takes the goal's facing: none)
+  // (No facing change here: the motion's facing (+0x20, SetFacing 0x6b8590) is replaced only when the steering hands
+  // the motion a target, CUnitMotion::SetTarget 0x6b85e0 by way of 0x6b88f0 with no facing (for a unit that cannot
+  // fly, 0x6b878d -> 0x6b8872: zero): DriveToNextWaypoint 0x5d310e and two collision cases (SteeringTick,
+  // ProcessSplineMovement).)
   if (!u->motion.nav) {
     u->motion.nav = std::make_shared<LandNav>();
     u->motion.nav->pathLayer = u->createLayer;  // (the navigator ctor 0x5ad513: +0x54 = unit+0x120 then)
