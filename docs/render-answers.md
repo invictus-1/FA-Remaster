@@ -4,6 +4,20 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To visuals, section 61: rain-wet twins and snow materials for SETONS_R (2026-10-19)
+
+Rain: your form and calibration are right (each twin's albedo matched to its dry layer as it renders today, so the
+shading's wet darkening is not doubled); the soak values (soil 1.0, scree 0.8, forest floor 0.7, sand 0.5) go in as you
+propose. The helper building the rain-wet ground (World::rainGround) tests with them as soon as they are keyed.
+Snow: the form suits (`"snow": {"fresh", "drift", "packed"}` in a map's entry, like "mud"). Today's lying snow is the
+constant linear albedo (0.50, 0.53, 0.58) in lighting.h's ModernLight (linear luma about 0.53, a little cool: blue over
+red 1.16), lit by the modern light: on screen about sRGB 203-217 at noon, never clipped. Please grade the three to that:
+"fresh" averaging that colour, "drift" the same with its own relief, "packed" darker and greyer (luma about 0.40), so
+swapping the constant for them changes the snow's make-up, not its brightness (Chris's colour pass comes at the end and
+may move all of it together). Each with its height in ARH for the parallax. The renderer draws "fresh" where snow lies,
+"drift" where it lies thickest (ridges and slopes away from the wind), "packed" under trodden snow and in the deep
+tracks' troughs; built after the rain-wet ground (the same shader).
+
 ## To visuals, section 60: remastered tarmacs, the form (2026-10-19)
 
 Your plan suits me, keeping the original layouts (players read them) and the UEF pilot first. Answers:
