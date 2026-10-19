@@ -3846,6 +3846,12 @@ void FactoryHandOff(Sim& sim, Unit* f, Unit* u, Unit* inheritFrom) {
     if (!chosen->unitStates.count("Moving")) break;
   }
   if (chosen) {
+    // The order's issue data holds a CAiTarget of R made here (CAiTarget::UpdateTarget 0x5d55b0 from 0x5fab9c: one
+    // target-point draw when R has target bones), whatever becomes of the order; the command it makes decodes it
+    // again (IssueTransportLoadOne). Seen (probe mp1_7019b): MP1 7019, army 7's T3 land factory 0x700077 (xsb0301)
+    // finishes the tank 0x700007 while its guards hold the ferrying transport 0x70002f: the original's beat opens
+    // with two Unit::PickTargetPoint draws on 0x700077 (UpdateTarget callers 0x5faba1 and 0x5e2775); ours made none.
+    TargetPointDraw(sim, R);
     IssueTransportLoadOne(sim, u, R);
     InheritRally(sim, f, inheritFrom, u, true);
   } else {

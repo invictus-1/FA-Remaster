@@ -3433,6 +3433,9 @@ bool IssueTransportLoadOne(Sim& sim, Unit* u, Unit* T) {
   lua_State* L = sim.L();
   if (!ValidLoadIssue(sim, L, u, T)) return false;
   auto c = NewCommand(sim, CommandType::TransportLoadUnits);
+  // the CUnitCommand ctor decodes the issue data's target (0x6e8336 -> DecodeFromSSTITarget 0x5e2620 -> UpdateTarget
+  // 0x5d55b0 from 0x5e2770): a second target-point draw (FactoryHandOff made the first)
+  c->targetPoint = TargetPointDraw(sim, T);
   c->targetId = EntityRef(T);
   c->pos = T->position;
   c->hasPos = true;
