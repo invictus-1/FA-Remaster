@@ -216,6 +216,21 @@ bool UpgradeOrderFits(Sim& sim, const Unit* u, const UnitCommand& c) {
   return SameIdNoCase(GeneralString(sim, *to, "UpgradesFrom"), u->blueprint->id);
 }
 
+// ProcessUnitCommand 0x6ef9e0, the Upgrade case (0x6f00a9..0x6f02c1; the type switch 0x6efdc2), its end
+// (0x6f010c..0x6f02c1, read): when the blueprint tests pass (SeedUnit, UpgradesTo / UpgradesFrom, UpgradesFromBase;
+// not modelled here, DispatchTask makes its own: UpgradeOrderFits), an Upgrade is refused when the LAST order of the
+// unit's queue (GetLastCommand 0x6edc50) is an Upgrade (+0x98) to the same blueprint (cmd+0x60, ids stricmp'd
+// 0xaa549e), whether the new one clears the queue or not (the clear comes after, 0x6f1405). Seen: MP3 7769, army 1's
+// T1 extractor 0x10006f, upgrading since 5984, gets the same Upgrade from the command stream again (clear 0): the
+// original's queue stays at one order; ours queued the second and showed two.
+bool RefusesUpgradeAgain(Sim& sim, const Unit* u, const std::string& bpId) {
+  if (u->commands.empty()) return false;
+  const UnitCommand& last = *u->commands.back();
+  if (last.type != CommandType::Upgrade) return false;
+  const BlueprintInfo* a = sim.blueprints().Find(last.blueprintId);
+  return a && a == sim.blueprints().Find(bpId);
+}
+
 }  // namespace
 
 uint32_t AssignEngineCommandId(Sim& sim, const std::shared_ptr<UnitCommand>& c) {
@@ -1394,7 +1409,8 @@ bool RefusesRepair(Sim& sim, const Unit* u, const Entity* target) {
 }
 
 std::shared_ptr<UnitCommand> Issue(lua_State* L, const std::vector<Unit*>& units, CommandType type,
-                                   const Vec3* target = nullptr, const Entity* targetEntity = nullptr) {
+                                   const Vec3* target = nullptr, const Entity* targetEntity = nullptr,
+                                   const std::string* upgradeTo = nullptr) {
   static const long dbgIssue = getenv("MOHO64_DEBUG_ISSUE") ? atol(getenv("MOHO64_DEBUG_ISSUE")) : -1;
   if (dbgIssue >= 0)
     for (Unit* u : units)
@@ -1419,6 +1435,7 @@ std::shared_ptr<UnitCommand> Issue(lua_State* L, const std::vector<Unit*>& units
     if (type == CommandType::Guard && RefusesGuard(*sim, L, u, targetEntity)) continue;
     if (type == CommandType::Repair && RefusesRepair(*sim, u, targetEntity)) continue;
     if (RefusesTargetOutside(*sim, u, target)) continue;
+    if (upgradeTo && RefusesUpgradeAgain(*sim, u, *upgradeTo)) continue;
     // IssueToUnits 0x6f12c0 makes the command for the first unit that takes it (0x6f13ca..0x6f13fb): an order no
     // unit takes uses no id of the command database's pool (CommandIdPool)
     if (c->units.empty()) {
@@ -1659,6 +1676,7 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
     if (d.type == static_cast<int>(CommandType::Guard) && RefusesGuard(sim, sim.L(), u, targetEntity)) continue;
     if (d.type == static_cast<int>(CommandType::Repair) && RefusesRepair(sim, u, targetEntity)) continue;
     if (RefusesTargetOutside(sim, u, target)) continue;
+    if (d.type == static_cast<int>(CommandType::Upgrade) && RefusesUpgradeAgain(sim, u, d.blueprint)) continue;
     if (reverseLoad && RefusesReverseLoad(sim, u, units, reverseTarget)) continue;  // (its case, 0x6f0f53)
     if (d.type == static_cast<int>(CommandType::TransportLoadUnits) && RefusesLoadOrder(sim, u, targetEntity))
       continue;  // (its case, 0x6f0bf3)
@@ -1992,7 +2010,11 @@ int l_IssueOther(lua_State* L) {
       if (isPos) hasTarget = PosArg(L, i, &targetAt);
     }
   }
-  auto c = Issue(L, units, T, hasTarget ? &targetAt : nullptr);
+  std::string upgradeTo;  // (the Upgrade case of ProcessUnitCommand tests the order's blueprint: RefusesUpgradeAgain)
+  if (T == CommandType::Upgrade)
+    for (int i = 2; i <= lua_gettop(L) && upgradeTo.empty(); ++i)
+      if (lua_type(L, i) == LUA_TSTRING) upgradeTo = lua_tostring(L, i);
+  auto c = Issue(L, units, T, hasTarget ? &targetAt : nullptr, nullptr, upgradeTo.empty() ? nullptr : &upgradeTo);
   for (int i = 2; i <= lua_gettop(L); ++i) {
     if (lua_type(L, i) == LUA_TSTRING && c->blueprintId.empty()) c->blueprintId = lua_tostring(L, i);
     else if (lua_type(L, i) == LUA_TNUMBER) c->count = static_cast<int>(lua_tonumber(L, i));
