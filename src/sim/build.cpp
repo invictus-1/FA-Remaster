@@ -1283,6 +1283,18 @@ int TickMobileBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   }
   for (;;) switch (t.state) {
     case 0:
+      // A walk under way when the command's listener (MobileBuildCommandEvent, OnEvent 0x5f80c0) set state 0 and woke
+      // the thread: the walk's CUnitMoveTask on top of the thread is what the wake runs; it ends (TaskTick 0x618a70
+      // returns -1), its dtor clears Moving and aborts the navigator, and this task runs state 0 in the same pass, from
+      // where the builder stands. (The o-grid cell state 0 reserved stays, as in the original, until the dtor or the
+      // next reservation.) Seen: MP1 5685, army 0's player sets the target of the BuildMobile 0x1f (three T3 engineers,
+      // a uab1301 at (930.5, 116.5)) again, to the same place: the original's 0x7c, walking to (924, 111), stops at 5686
+      // (in range already) and builds from there, and the two that waited 49 beats behind a unit on the site start
+      // again at once; the structure 0x84 is there from 5687. Ours walked on and made it at 5697.
+      if (t.moving) {
+        t.moving = false;
+        EndWalk(u);
+      }
       if (!t.bp || !UnitCanBuild(u, *t.bp)) return kTaskFailed;
       t.site = SnapStructurePosition(sim, *t.bp, t.site);
       if (Entity* p = FindSiteProp(sim, L, u, t)) {  // 0x5f6ea0: clear the site first
@@ -3665,6 +3677,30 @@ void ReclaimTaskCommandEvent(Sim& sim, Unit* u, BuildTask& c, const UnitCommand&
   if (e) sim.CallMethod(L, u, "OnAssignedFocusEntity", 0);
   u->workProgress = 0;
   c.state = 0;
+}
+
+// CUnitMobileBuildTask::OnEvent 0x5f80c0 (read; build_stop.md 2), the task's listener on its command (linked by the
+// ctor; the listener is task+0x34). On any event of the command (it does not read the event code): when the task holds
+// a structure (+0xb8), that loses NoReclaim (+0x4a4 bit 8), the builder's work progress goes to 0, the helper's
+// OnStopBuild(true) runs (0x5f5a20) and the structure and the rebuild wreck (+0xc0) are let go (0x5f80cf..0x5f8170).
+// Then the site is taken again from the command (GetTargetPosGun 0x5e2a90, snapped by the footprint 0x50b0f0, the
+// footprint and skirt rects +0xc8 / +0xd8), state 0 (0x5f8321) and the thread woken: frame count 0 and, when it is
+// suspended (a walk's move task), re-linked at the run list's end (0x5f8324..0x5f835d). A walk under way is then ended
+// by the wake (TickMobileBuild state 0). Retries count on (+tries is not reset).
+void MobileBuildCommandEvent(Sim& sim, Unit* u, BuildTask& t, const UnitCommand& cmd) {
+  lua_State* L = sim.L();
+  if (Unit* w = FindUnitAny(sim, t.targetId)) {
+    w->unitStates.erase("NoReclaim");
+    u->workProgress = 0;
+    if (t.started && Alive(u)) StopBuild(sim, L, u, t, true);
+    t.started = false;
+    t.targetId = 0;
+    t.rebuildWreck = 0;
+    if (!Alive(u)) return;
+  }
+  t.site = cmd.targetId ? CommandPosGun(sim, cmd) : cmd.pos;  // (state 0 snaps it to the footprint)
+  t.state = 0;
+  t.waitUntil = 0;
 }
 void TaskStopMoving(Unit* u) { StopMoving(u); }
 

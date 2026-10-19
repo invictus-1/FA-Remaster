@@ -773,6 +773,31 @@ void RetargetPatrolTasks(Sim& sim, UnitCommand& c) {
   }
 }
 
+// The mobile build tasks listening to a command whose target was set (CUnitCommand::SetTarget 0x6e8820 -> 0x6e94a0):
+// CUnitMobileBuildTask::OnEvent 0x5f80c0 for each unit that runs it on this command (the queue's head), in unit id
+// order (inferred, as for the patrol's listeners); a thread asleep on the task's walk is re-linked at the end. The
+// walk's own listener (CUnitMoveTask::OnEvent 0x618c40, linked after the build task's) hands its navigator the
+// command's position first; the woken thread then ends the walk (TickMobileBuild state 0).
+void RetargetMobileBuildTasks(Sim& sim, UnitCommand& c) {
+  if (c.type != CommandType::BuildMobile) return;
+  std::vector<Unit*> holders(c.units.begin(), c.units.end());
+  std::sort(holders.begin(), holders.end(), [](const Unit* a, const Unit* b) { return a->id < b->id; });
+  std::vector<Unit*> walkers;
+  for (Unit* u : holders) {
+    if (!IsAlive(u) || u->commands.empty() || u->commands.front().get() != &c) continue;
+    if (u->headState != kRunning || !u->task || u->task->type != CommandType::BuildMobile) continue;
+    const bool asleep = TaskThreadAsleepOnMove(u, u->task);  // (asked before the event changes the task)
+    MobileBuildCommandEvent(sim, u, *u->task, c);
+    if (asleep) walkers.push_back(u);
+  }
+  std::stable_sort(walkers.begin(), walkers.end(), [](const Unit* a, const Unit* b) { return a->walkSeq < b->walkSeq; });
+  for (Unit* u : walkers) {
+    if (!IsAlive(u)) continue;
+    TaskWalkCommandEvent(sim, c, u);
+    sim.ResumeCommandThread(u);
+  }
+}
+
 namespace {
 
 void StartHead(Sim& sim, Unit* u) {

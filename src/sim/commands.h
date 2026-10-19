@@ -164,6 +164,7 @@ void SetCommandTargetFromStream(Sim& sim, UnitCommand& c, const StreamTarget& t)
 void RetargetMoveTasks(Sim& sim, UnitCommand& c);
 // CUnitPatrolTask's listener 0x61c3e0 (and its reclaim child's 0x620160) for a retargeted patrol command
 void RetargetPatrolTasks(Sim& sim, UnitCommand& c);
+void RetargetMobileBuildTasks(Sim& sim, UnitCommand& c);
 // CUnitGuardTask::OnEvent 0x6147b0: the guard tasks of a retargeted command take its target again (Refresh 0x611a40)
 void RefreshGuardTasks(Sim& sim, UnitCommand& c);
 // CUnitRepairTask's OnEvent 0x5f9d60 for the repair children of a retargeted Guard (self: the unit whose guard did it)
