@@ -65,7 +65,8 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       device_(device),
       vfs_(vfs),
       energy(device),
-      photoFinish(device) {  // (photolook)
+      photoFinish(device),  // (photolook)
+      horizon(device) {  // [horizon]
   particles.rampGlow = [this](const std::string& ramp) { return lights.RampGlow(ramp); };  // (what is hot: lit smoke's fires, heat shimmer)
   // (movement dust: how each kind of unit moves, from its blueprint)
   dust.readBlueprint = [this](const std::string& id, BpValue* out) {
@@ -949,6 +950,23 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     if (timeOfDay >= 0 && look == Look::Modern)
       weatherNow = {wet, rain, snow, snowLying, cloudCover, fog, skyLight.daylight, climate == Climate::Cold, climate == Climate::Dry};
     dust.Begin(clock_, dustNow_, weatherNow, camera.Eye());
+  }
+  {  // [horizon] the weather on the horizon (horizon.h): what of it this frame, by the weather just reckoned
+    horizonNow_ = false;
+    if (horizonWeather && look == Look::Modern && haveMap_ && terrain.beyondReach > 0 && timeOfDay >= 0 && !sidePicture) {
+      Horizon::Weather w;
+      w.hour = timeOfDay;
+      w.snowLying = snowLying;
+      w.rain = rain;
+      w.snow = snow;
+      w.fog = fog;
+      w.wet = wet;
+      w.mist = mistNow;
+      w.cloudCover = c.skyClouds[0];
+      w.cold = climate == Climate::Cold;
+      w.seed = weatherSeed;
+      horizonNow_ = horizon.Begin(map, terrain.beyondReach, w, time, camera, view.width, view.height);
+    }
   }
   CpuTimes::Part("sun shadows placed");
   if (haveMap_ && shadowsOn) {
@@ -2382,6 +2400,10 @@ void World::Render() {
       Stage("wildlife: birds");
       wildlifeDraw.DrawBirds(view);
     }
+    if (horizonNow_) {  // [horizon] the icebergs far out, with what is solid (before the water, which foams round them)
+      Stage("horizon: icebergs");
+      horizon.DrawSolid(view);
+    }
     // ambient occlusion: from the depth of everything solid, laid over it before the water
     Stage("ambient occlusion");
     ao.contactShadows = contactShadows ? 0.8f : 0.0f;
@@ -2423,6 +2445,15 @@ void World::Render() {
     if (ranges.Any() && map.water.present) {
       post.BeginColorOnly();
       ranges.Lay(view, camera, post.Depth(), true);
+      post.ContinueScene();
+      lights.Bind();
+    }
+    if (horizonNow_) {  // [horizon] on the far sea: the floes and the clouds' shadows, then the fog banks and the showers
+      Stage("horizon: on the water");
+      horizon.DrawOnWater(view);
+      Stage("horizon: in the air");
+      post.BeginColorOnly();
+      horizon.DrawInAir(view, post.Depth(), terrain.HeightTexture(), terrain.HeightUnit());
       post.ContinueScene();
       lights.Bind();
     }

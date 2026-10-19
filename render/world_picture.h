@@ -166,7 +166,8 @@ class WorldPicture {
   void SetRayTracing(bool on);
   // Weather effects: rain and snow lit where they fall, rain's splashes, wet shorelines with stronger caustics
   //   (World::litRain, rainSplashes, waterDetail), and each unit's own snow, shed in combat (World::unitSnow);
-  //   about +0.05 ms while it rains.
+  //   about +0.05 ms while it rains. And the weather on the horizon (World::horizonWeather, proposed here: winter
+  //   ice, fog banks and showers on the sea beyond the map's edge).
   void SetWeatherEffects(bool on);
   // Ground detail: grass near the camera, pressed flat round units and buildings (World::groundCover); about
   //   +0.05 to 0.2 ms when zoomed in, nothing from afar; and battle scars (World::battleScars): the scorches and

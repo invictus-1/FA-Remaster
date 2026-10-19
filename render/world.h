@@ -49,6 +49,7 @@
 #include "frame_generation.h"
 #include "gfx.h"
 #include "hot_metal.h"
+#include "horizon.h"  // [horizon]
 #include "icons.h"
 #include "lights.h"
 #include "linalg.h"
@@ -817,6 +818,15 @@ class World {
   // grain, colour fringe), at the end of the finishing in place of the plain tone curve. Modern look; off by default.
   PhotoLook photoLook;
   PhotoFinish photoFinish;
+  // [horizon] The weather on the horizon (horizon.h; Chris, 2026-10-18, "beyond the map's edge, part 2"): on the sea
+  // beyond the map's edge, winter ice while snow lies (floes thickening into pack ice, a few icebergs far out), low
+  // fog banks drifting, showers (rain curtains, snow squalls) passing far out, and the clouds' shadows carried over the
+  // far sea. Modern look, with the world beyond the edge (worldBeyond) and a time of day; off by default.
+  bool horizonWeather = false;
+  Horizon horizon;
+
+ private:
+  bool horizonNow_ = false;  // [horizon] (something of it this frame)
 };
 
 }  // namespace render
