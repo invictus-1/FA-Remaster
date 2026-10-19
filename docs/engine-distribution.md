@@ -125,6 +125,13 @@ The questions as they were put:
 - **renderer**: section 3.3's renderer items.
 - **visuals**: shipped art as our own assets in the override layer (LabVisuals included).
 
+### 3.6 Release gates (open)
+- **Fab / Megascans assets** (visuals chat, 2026-10-19): Chris bought about 79 Megascans on Fab under the Fab Standard
+  Licence, Personal tier (`_fab/INVENTORY.md` in the lab). Epic's summary allows them in a game on any engine, free or
+  paid, but never as standalone redistribution; whether loose files in an install folder count as standalone is for
+  the binding EULA (not reachable from here). Until that is settled, Fab-derived files (`setonsr_fab_*`, the
+  comparison map `SETONS_Q`'s ground) stay in local builds only: never in a repository, never in a release.
+
 ### 3.4 Lab only (stays as it is)
 `init_lab.lua`'s Steam path, FAF vault paths and its shared-cache stamp (our engine blocks those writes; only the
 original exe run by `Launch-Lab.bat` performs them), `init_dbg_m28*.lua` (debug copies with this PC's paths), the
