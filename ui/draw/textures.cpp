@@ -3,7 +3,8 @@
 // without alpha; interlaced files are not read), .bmp and .tga. The original hands every file to
 // D3DX (D3DXCreateTextureFromFileInMemoryEx, DeviceD3D9 0x8ecd20), which knows a file by its
 // content, not its name: FAF's one .tga (a cursor) and mods' .bmp icons, some of them named .dds,
-// are read so here too. JPEG (mods' icons) is not read yet.
+// are read so here too. JPEG (nine mods' icons in the mods manager) through stb_image (Chris's OK,
+// 2026-10-19; ui/third_party/stb/README.md).
 #include <cstdlib>
 #include <cstring>
 #include <map>
@@ -14,6 +15,13 @@
 #include "core/log.h"
 #include "core/vfs.h"
 #include "draw/draw.h"
+
+// (JPEG only, from memory, its functions this file's own)
+#define STBI_ONLY_JPEG
+#define STBI_NO_STDIO
+#define STB_IMAGE_STATIC
+#define STB_IMAGE_IMPLEMENTATION
+#include "third_party/stb/stb_image.h"
 
 namespace moho::ui {
 namespace {
@@ -386,12 +394,30 @@ bool DecodeTga(const std::string& d, Image& img) {
   return true;
 }
 
+// A JPEG (its start of image FF D8 FF), baseline or progressive, through stb_image: opaque, as a JPEG
+// has no alpha.
+bool DecodeJpeg(const std::string& d, Image& img) {
+  if (d.size() < 4 || static_cast<uint8_t>(d[0]) != 0xff || static_cast<uint8_t>(d[1]) != 0xd8 || static_cast<uint8_t>(d[2]) != 0xff)
+    return false;
+  int w = 0, h = 0, channels = 0;
+  stbi_uc* rgb = stbi_load_from_memory(reinterpret_cast<const stbi_uc*>(d.data()), static_cast<int>(d.size()), &w, &h, &channels, 3);
+  if (!rgb) return false;
+  img.width = w, img.height = h;
+  img.pixels.resize(static_cast<size_t>(w) * static_cast<size_t>(h));
+  for (size_t i = 0; i < img.pixels.size(); ++i) {
+    const stbi_uc* p = rgb + i * 3;
+    img.pixels[i] = 0xff000000u | static_cast<uint32_t>(p[0]) << 16 | static_cast<uint32_t>(p[1]) << 8 | p[2];
+  }
+  stbi_image_free(rgb);
+  return true;
+}
+
 }  // namespace
 
 bool DecodeImage(const std::string& data, Image& out) {
   out.serial = NewImageSerial();  // (new pixels in place: new content for draw/recorder.h)
   // (by content, as D3DX: a TGA has no magic, so it comes last)
-  return DecodeDds(data, out) || DecodePng(data, out) || DecodeBmp(data, out) || DecodeTga(data, out);
+  return DecodeDds(data, out) || DecodePng(data, out) || DecodeBmp(data, out) || DecodeJpeg(data, out) || DecodeTga(data, out);
 }
 
 const Image& LoadTexture(const Vfs* vfs, const std::string& vpath) {

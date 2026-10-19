@@ -154,6 +154,18 @@ if not rawget(_G, "SessionIsActive") or not SessionIsActive() then
         check("the .tga's alpha in the hit test too: (1, 1) is a miss", moho64ui_ControlAt(700.5, 600.5) == tga, false)
         check("(16, 16) a hit", moho64ui_ControlAt(715.5, 615.5) == tga, true)
         for _, x in {tga, bmp, named} do x:Destroy() end
+        -- JPEG mod icons (stb_image, Chris's OK of 2026-10-19): every .jpg icon of the frozen vault's mods is read
+        local jpgs, read = 0, 0
+        for uid, mod in import("/lua/mods.lua").AllMods() do
+            if mod.icon and string.find(string.lower(mod.icon), "%.jpe?g$") then
+                jpgs = jpgs + 1
+                local b = picture(mod.icon, 900, 600, 32, 32)
+                if b.BitmapWidth() > 0 and b.BitmapHeight() > 0 then read = read + 1 end
+                b:Destroy()
+            end
+        end
+        LOG(string.format("TEST note: %d mod icons are JPEGs", jpgs))
+        check("the mods' JPEG icons are read (some there)", jpgs > 0 and read == jpgs, true)
         LOG("TEST done: " .. failed .. " failed")
     end)
 else
