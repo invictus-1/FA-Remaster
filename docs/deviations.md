@@ -146,6 +146,28 @@ says `the rules are loaded again with the engine's script fixes`, about one seco
   script error, in 2000 ticks and in 9000 (002 and 006 end before, at 3464 and 7094, when the commander
   nobody plays is killed). The 13 replays play as before (the fix is off in a replay of the original).
 
+### 5. A neighbour without an EntityId (2026-10-19)
+
+- **What is broken:** the engine tells a structure about every unit of its army that touches its footprint
+  (`OnAdjacentTo` when one is finished, `OnNotAdjacentTo` when one goes), with no category test; the original's
+  `CollectAllOverlapping` 0x62d460 does the same. FAF's anchor dummy `ZXA0003` (made by `defaultcomponents.lua`
+  898 and `TConstructionPodUnit.lua` 16: the Fatboy's, an engineering station's) is such a unit, but its
+  `OnCreate` replaces `DummyUnit.OnCreate` without calling it, so it never gets an `EntityId`. FAF's
+  `StructureUnit.lua` then indexes its `AdjacentUnits` table with nil and stops with `table index is nil`
+  (line 824 in `OnNotAdjacentTo`, line 785 in `OnAdjacentTo`). Seen in the interface chat's showcase battle
+  (Seton's Clutch Remastered, UEF against UEF): a dying Fatboy's death blast kills the anti-air gun beside it.
+  The original prints the same error; it does no harm beyond the log line, since nothing after the failing line
+  would have done anything for a dummy.
+- **What we do:** `data/fixes/hook/lua/sim/units/StructureUnit.lua` wraps the two handlers: when the other unit
+  has no `EntityId` they return at the point where FAF's would stop, after doing exactly what FAF's do before it
+  (for `OnAdjacentTo`, both `AdjacentUnits` tables are made). Every other call goes to FAF's handlers unchanged.
+- **Why it is safe, what it changes:** the engine's adjacency stays the original's; no buff, effect or table
+  entry that the original would have made is made or left out. Only the error line goes, so a game plays the
+  same with or without the fix (no replay mark needed for it).
+- **Tested:** the showcase battle's replay to tick 2600 (`--init _scratch\ui\showcase\init_showcase.lua`):
+  `MOHO64_FIXES=0` logs the error and its traceback once; `MOHO64_FIXES=1` logs the hook (`Hooked
+  /lua/sim/units/structureunit.lua`) and no error, and every other log line is the same.
+
 ## Looked broken, left alone
 
 ### M28: `IsM28AIPersonality` on the civilian armies (m28conditions.lua:4291)
