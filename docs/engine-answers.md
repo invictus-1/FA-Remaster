@@ -3,7 +3,7 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
-## ui 42 (a): a coordinated attack's link (IssueCommand's coordWith) — done (cd8c8da)
+## ui 42 (a): a coordinated attack's link (IssueCommand's coordWith) — done (8ec8642)
 
 **The original (FA exe, read).**
 - The link is made in the CUnitCommand constructor (0x6e840d..0x6e84c2). If the issue data's second word (+4,
