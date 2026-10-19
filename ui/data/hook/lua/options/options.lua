@@ -230,7 +230,7 @@ local looks = {
         -- atmosphere's tables; with the lobby's Time of Day
         title = "Atmosphere",
         key = 'remaster_atmosphere',
-        tip = "Light in the air (sun shafts, lamp beams, glowing mist), volumetric clouds and the sky. Needs a Time of Day chosen in the lobby.",
+        tip = "Light in the air (sun shafts, lamp beams, glowing mist), volumetric clouds and the sky, and zooming out through the cloud layer to the whole map. Needs a Time of Day chosen in the lobby.",
         type = 'toggle',
         default = 1,
         set = Look("remaster_atmosphere"),
