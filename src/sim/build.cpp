@@ -3436,11 +3436,17 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
     // reserved cell (still moving), NoReclaim off, OnStopBuild(true); never a failure
     if (t.type == CommandType::Repair) {
       if (Alive(u) && u->HasLuaObject()) sim.CallMethod(L, u, "ClearWork", 0);
+      // 0x5f8ee7..0x5f8ef9: the cell its walk reserved (state 1, the move not suppressed by +0x98) is given back
+      // (Unit::FreeOgridRect 0x6ab760) with no test of the unit's life: a unit destroyed on its way to the repair (by
+      // an army transfer, Sim::TransferUnit, or a kill) frees it too. Seen: MP3 4036, army 3's 0x30001e, on patrol,
+      // walks to repair a structure and holds (489,181) since 3828 when army 3's units go to army 1; ours kept the
+      // cell reserved for good, so at 5847 army 1's 0x100085, sent to repair 0x10004c, was
+      // given (490,181) instead of (489,181), and its walk's last step at 6225 went another way.
+      if (t.state == 1 && !t.noMove) GroundFreeRect(sim, u);
       if (Alive(u)) {
         u->unitStates.erase("Repairing");
         u->workProgress = 0;
         SetArmAimTarget(sim, u, Vec3{});
-        if (t.state == 1 && !t.noMove) GroundFreeRect(sim, u);
         if (t.moving) {
           t.moving = false;
           EndMoveChild(u);
