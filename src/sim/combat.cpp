@@ -1349,6 +1349,15 @@ Unit* FindBestEnemy(Sim& sim, UnitWeapon* w, const std::vector<Unit*>& list, flo
       if (!bestIsBlip || !e || e->destroyQueued || !e->blip || e->blip->destroyQueued) continue;
     } else if (!Alive(e)) {
       continue;
+    } else if (!HasBlip(e, a)) {
+      // 0x5d7b6a..0x5d7b9f: an entry that is a unit (not a blip) counts only while the attacker's army holds a blip
+      // of it NOW (its recon DB's ReconGetBlip 0x5c15a0, a map lookup): the list is only as fresh as the weapon that
+      // built it (GetBlipsInRange's period), so it can hold a unit whose blip the army has let go since. Seen: MP3
+      // 9469, army 0's interceptor 0x1a on patrol; its list of 9467 holds army 1's Corsair 0x1000be, whose blip army 0
+      // lets go in its recon tick of 9468 (out of sight); the original's patrol scan of 9469 passes it over
+      // (probe mp3_9469b: FindBestEnemy never reaches its blacklist test for it) and attacks only at 9475, the
+      // interceptor 0x100052 (passing over the Corsair 0x10010f, let go at 9474); ours took 0x1000be at 9469.
+      continue;
     }
     const Vec3 ep = fake ? fake->position : blip ? e->blip->position : e->position;
     float d2 = Dist2XZ(P, ep);
