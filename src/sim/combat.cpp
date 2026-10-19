@@ -1031,15 +1031,16 @@ void WeaponImpactEvent(Sim& sim, UnitWeapon* w, int event) {
     return;
   }
   Unit* u = w->unit;
+  // (each "did it move" is a memcmp of the position, entity +0xac, with the one before, +0xc8: 0x5d96a0, 0x5d96c9,
+  // 0x5d9727, 0x5d9758)
   auto moved = [](const Entity* e) {
     if (e->kind == Entity::Kind::Unit) {
       const Unit* x = static_cast<const Unit*>(e);
-      return x->position.x != x->lastPosition.x || x->position.y != x->lastPosition.y ||
-             x->position.z != x->lastPosition.z;
+      return !SameBits(x->position, x->lastPosition);
     }
     if (e->kind == Entity::Kind::Projectile) {
       const Projectile* x = static_cast<const Projectile*>(e);
-      return x->position.x != x->prevPos.x || x->position.y != x->prevPos.y || x->position.z != x->prevPos.z;
+      return !SameBits(x->position, x->prevPos);
     }
     return false;
   };
@@ -1491,7 +1492,7 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
   if (cb.needUnpack && (u->unitStates.count("Moving") || u->unitStates.count("TransportLoading") ||
                         u->unitStates.count("WaitingForTransport")))
     return ret;
-  if (u->position.x != u->lastPosition.x || u->position.y != u->lastPosition.y || u->position.z != u->lastPosition.z)
+  if (!SameBits(u->position, u->lastPosition))  // (0x5d8e7f..0x5d8e99, memcmp 0x4f0a50)
     w->blacklist.clear();
   if (u->beingBuilt || !w->enabled) return ret;
   UnitWeapon* prim = PrimaryWeapon(u);

@@ -572,7 +572,7 @@ void MoveTaskWalk(Sim& sim, Unit* u, const Vec3& goal) {
   const Entity* te = c.targetId ? sim.FindEntity(c.targetId) : nullptr;
   const Vec3 tp = te ? te->position : c.pos;
   Vec3 p{static_cast<float>(RoundEven(tp.x)), tp.y, static_cast<float>(RoundEven(tp.z))};
-  if (p.x == 0.0f && p.y == 0.0f && p.z == 0.0f) {  // (0x6184ce: a zero position keeps the goal it was given)
+  if (vm::BitsZero(p)) {  // (0x6184ce, memcmp with the zero vector: a zero position keeps the goal it was given)
     TaskMoveToward(sim, u, goal);
     AirSpeedThroughEvent(sim, u);
     return;
@@ -1162,8 +1162,7 @@ void TryToBuild(Sim& sim, lua_State* L, const Army* army, const int r[4], int fl
   std::vector<Unit*> blockers;
   for (Unit* b : UnitsMeetingBox(sim, cx - hx, cz - hz, cx + hx, cz + hz)) {
     if (!(b->motion.bp && b->motion.bp->mobile())) continue;  // vt+0x30
-    const bool moved = b->position.x != b->lastPosition.x || b->position.y != b->lastPosition.y ||
-                       b->position.z != b->lastPosition.z;
+    const bool moved = !vm::SameBits(b->position, b->lastPosition);  // (0x62df39..0x62df46, memcmp 0x4f0a50)
     if (dbg == -2)
       Logf(LogLevel::Info, "trytobuild %u cand %u pos %.9g %.9g %.9g last %.9g %.9g %.9g moved %d cmds %d layer %s",
            sim.tick(), b->id, b->position.x, b->position.y, b->position.z, b->lastPosition.x, b->lastPosition.y,
@@ -1909,13 +1908,13 @@ struct GuardData {
 
 namespace {
 
-bool IsZero(const Vec3& v) { return v.x == 0 && v.y == 0 && v.z == 0; }
+// the guard's anchor (+0x90) against the zero vector, and a unit's position against the one before: memcmps of
+// 12 bytes in the original (0x4f0a50: the dtor 0x611934, UpdateGuardFollowMoveGoal 0x613d1b / 0x613d31 / 0x613de9,
+// SelectAssistOrCaptureCandidateUnit 0x61324d, the repair task 0x5f947c)
+bool IsZero(const Vec3& v) { return vm::BitsZero(v); }
 bool Cat(Sim& sim, const Unit* u, const char* c) { return u && BpInCategory(sim, u->blueprint, c); }
 bool Mobile(const Unit* u) { return u->motion.bp && u->motion.bp->mobile(); }
-bool Moved(const Unit* u) {
-  return u->position.x != u->lastPosition.x || u->position.y != u->lastPosition.y ||
-         u->position.z != u->lastPosition.z;
-}
+bool Moved(const Unit* u) { return !vm::SameBits(u->position, u->lastPosition); }
 const NamedFootprint& Fp(const Unit* u) { return Footprint(*u->blueprint); }
 
 // RUnitBlueprint::GetSkirtRect 0x51ec50 at (x, z)

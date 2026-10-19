@@ -507,7 +507,7 @@ Vec3 GetTeleportDest(Sim& sim, const TransportObj& T) {
   if (!b || b->dead || b->destroyQueued) return {};
   return b->position;
 }
-bool NoTeleportDest(const Vec3& p) { return p.x == 0.0f && p.y == 0.0f && p.z == 0.0f; }  // memcmp 0x4f0a50
+bool NoTeleportDest(const Vec3& p) { return BitsZero(p); }  // memcmp 0x4f0a50 with the zero vector (0x6259a5)
 // TransportIsTeleportBeaconReady 0x5e81d0 (vt+0xa8): the beacon lives and is idle, Unit::IsIdleState 0x6a7d60 (its
 // queue has no current command)
 bool IsTeleportBeaconReady(Sim& sim, const TransportObj& T) {
@@ -2490,8 +2490,7 @@ bool PodNearby(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
     if (c->dead || c == u) continue;
     // 0x61dbfc: inside the playable rect with a margin of 1 (the whole map if the pod's army may use it)
     if (!sim.IsWithin(c->position.x, c->position.z, 1.0f, Sim::UseWholeMap(u->army))) continue;
-    if (c->position.x != c->lastPosition.x || c->position.y != c->lastPosition.y || c->position.z != c->lastPosition.z)
-      continue;  // it moved
+    if (!SameBits(c->position, c->lastPosition)) continue;  // it moved (0x61dc0c..0x61dc20, memcmp 0x4f0a50)
     if (c->army != u->army && !(c->army && u->army && combat::IsAlly(u->army, c->army))) continue;
     if (State(c, "BeingReclaimed")) continue;
     Unit* T = c;

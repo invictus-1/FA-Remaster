@@ -930,7 +930,7 @@ int l_CreateProjectileAtBone(lua_State* L) {
   Quat q;
   BoneWorld(e, bone, &pos, &q);
   Vec3 d{Uniform(sim, b.dir[0], b.dirRange[0]), Uniform(sim, b.dir[1], b.dirRange[1]), Uniform(sim, b.dir[2], b.dirRange[2])};
-  if (d.x == 0 && d.y == 0 && d.z == 0) d = Forward(q);
+  if (BitsZero(d)) d = Forward(q);  // (0x68a8db..0x68a8e9: RandomDirection's vector against zero by memcmp 0x4f0a50)
   float speed = Uniform(sim, b.initialSpeed, b.initialSpeedRange);
   Projectile* p = sim.CreateProjectile(L, *bp, e->army, e, pos, q, 0, 0, "Normal", AiTarget{}, true);
   if (p && !p->destroyQueued) p->velocity = Mul(d, speed);

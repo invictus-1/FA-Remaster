@@ -31,6 +31,7 @@
 #include "sim/sim_cache.h"
 #include "sim/terrain.h"
 #include "sim/units.h"
+#include "sim/vecmath.h"
 
 namespace moho {
 namespace {
@@ -854,12 +855,13 @@ Unit* FindClosestToPos(Sim& sim, Platoon* p, int cls, const uint64_t* cat, int m
   }
   return best;
 }
-// CPlatoon::FindClosestUnit 0x726120: relative to the squad's centre; nothing for a centre at (0,0,0).
+// CPlatoon::FindClosestUnit 0x726120: relative to the squad's centre; nothing for a centre at (0,0,0) (0x726164..0x726177:
+// the centre, 0x724020, against the zero vector by memcmp 0x4f0a50).
 Unit* FindFromSquad(Sim& sim, Platoon* p, int cls, const uint64_t* cat, int mode, int rel, bool canAttack) {
   Squad* s = SquadOf(p, cls);
   if (!s) return nullptr;
   const Vec3 c = SquadCenter(s);
-  if (c.x == 0 && c.y == 0 && c.z == 0) return nullptr;
+  if (vm::BitsZero(c)) return nullptr;
   return FindClosestToPos(sim, p, cls, cat, mode, rel, canAttack, c);
 }
 // CAiBrain::CenterOfArmy 0x57a510: the mean position of the army's live units in STRUCTURE - MOBILE (army vt+0x9c,

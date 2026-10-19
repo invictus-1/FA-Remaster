@@ -3,6 +3,7 @@
 #pragma once
 #include "core/dmath.h"
 #include <cmath>
+#include <cstring>
 #include <limits>
 
 #include "sim/entity.h"
@@ -29,6 +30,11 @@ inline Vec3 Norm(Vec3 a) {
 }
 inline Vec3 Lerp(Vec3 a, Vec3 b, float t) { return Add(a, Mul(Sub(b, a), t)); }
 inline bool IsNaN(Vec3 a) { return std::isnan(a.x) || std::isnan(a.y) || std::isnan(a.z); }
+// The original's vector tests go through 0x4f0a50, a memcmp of the 12 bytes: a -0.0 part is not 0.0 there, and a
+// NaN part equals the same NaN. Its "did it move" (the position, u+0xb4, against the one before, u+0xd0) and "is it
+// zero" (against the zero vector 0xf3d21c) tests are these.
+inline bool SameBits(const Vec3& a, const Vec3& b) { return std::memcmp(&a, &b, sizeof(Vec3)) == 0; }
+inline bool BitsZero(const Vec3& v) { return SameBits(v, Vec3{0.0f, 0.0f, 0.0f}); }
 inline Vec3 NaNVec() {
   float n = std::numeric_limits<float>::quiet_NaN();
   return {n, n, n};

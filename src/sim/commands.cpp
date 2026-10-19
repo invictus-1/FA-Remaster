@@ -29,6 +29,7 @@
 #include "sim/terrain.h"
 #include "sim/transport.h"
 #include "sim/units.h"
+#include "sim/vecmath.h"
 
 namespace moho {
 
@@ -721,7 +722,7 @@ void EndPatrol(Sim& sim, Unit* u, BuildTask& t) {
   }
   if (!IsAlive(u)) return;
   u->navIgnoreFormation = false;
-  if (u->position.x != u->lastPosition.x || u->position.y != u->lastPosition.y || u->position.z != u->lastPosition.z)
+  if (!vm::SameBits(u->position, u->lastPosition))  // (0x61b1a7..0x61b1c2, memcmp 0x4f0a50)
     MotionStop(u);  // AbortMove only when it moved this tick
   u->unitStates.erase("NeedToTerminateTask");
   u->unitStates.erase("Patrolling");
@@ -2349,8 +2350,7 @@ Unit* U(lua_State* L) { return CheckObject<Unit>(L, 1); }
 // u+0xb4 and u+0xd0); nothing about orders or the navigator.
 int l_IsMoving(lua_State* L) {
   Unit* u = U(L);
-  lua_pushboolean(L, u->position.x != u->lastPosition.x || u->position.y != u->lastPosition.y ||
-                         u->position.z != u->lastPosition.z);
+  lua_pushboolean(L, !vm::SameBits(u->position, u->lastPosition));  // (0x6cc288..0x6cc295)
   return 1;
 }
 

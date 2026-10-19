@@ -1540,8 +1540,9 @@ bool ArrivalTurn(Sim& sim, Unit* u) {
     if (u->form && FormationIsForm(*u->form) && !u->unitStates.count("TransportLoading") &&
         !u->unitStates.count("Refueling") && !combat::HasTarget(sim, u->desiredTarget))
       fv = FormationVector(sim, u);
-    if (fv.x == 0 && fv.y == 0 && fv.z == 0) fv = m.faceDir;  // (0x6c2607: the motion's own facing)
-    if (fv.x == 0 && fv.y == 0 && fv.z == 0) return false;
+    // (both tests are memcmps with the zero vector, 0x6c25fe and 0x6c2631: a -0.0 part is not zero)
+    if (vm::BitsZero(fv)) fv = m.faceDir;  // (0x6c2607: the motion's own facing)
+    if (vm::BitsZero(fv)) return false;
     // T = pos + fv (0x6c2620), and TurnInfo takes the place off again: the vector as the float sum left it
     const Vec3 T{u->position.x + fv.x, u->position.y + fv.y, u->position.z + fv.z};
     fv = Vec3{T.x - u->position.x, T.y - u->position.y, T.z - u->position.z};
