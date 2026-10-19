@@ -227,9 +227,20 @@ local function common()
     c.lens:SetItem(1)
     c.lens:OnClick(1)
 
-    -- photos: 1x and 2x
+    -- photos: 1x and 2x; the first right after the Time of Day and Weather were set above
     photo(1)
+    local first = moho64ui_PhotoMode().photoMean
     photo(2)
+    -- the light of a photo taken at once after a change of the moment is the moment's, not the window's old light (the
+    -- renderer's 72b06b4: a "fresh" photo builds its light from its own frames): a 1x photo 3 s later is as bright
+    WaitSeconds(3)
+    photo(1)
+    local later = moho64ui_PhotoMode().photoMean
+    local function light(m) return (m[1] + m[2] + m[3]) / 3 end
+    LOG(string.format("TEST note: the 1x photos' mean colour: at once %.1f %.1f %.1f, 3 s later %.1f %.1f %.1f",
+        first[1], first[2], first[3], later[1], later[2], later[3]))
+    check("a photo at once after the moment's change has the light of one taken 3 s later (within 5%)",
+        first[1] >= 0 and math.abs(light(first) - light(later)) <= math.max(2, 0.05 * light(later)), true)
 
     -- H hides and shows the panel
     moho64ui_Key("h")

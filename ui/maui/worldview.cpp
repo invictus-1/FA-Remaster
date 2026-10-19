@@ -812,6 +812,8 @@ struct PhotoModeSettings {
   int size = 2;
   std::string note;
   float progress = 0;
+  // the last photo's mean red, green and blue (0..255; -1 before the first), for the tests: its light (moho64ui_PhotoMode)
+  float mean[3] = {-1, -1, -1};
 };
 PhotoModeSettings& PhotoSettings() {
   static PhotoModeSettings settings;
@@ -2727,6 +2729,9 @@ void PhotoModeFrame(lua_State* L, float seconds) {
       p.taking = false;
       settings.progress = 1;
       settings.note = "Saving the photo...";
+      double sum[3] = {0, 0, 0};
+      for (uint32_t c : pixels) sum[0] += (c >> 16) & 0xff, sum[1] += (c >> 8) & 0xff, sum[2] += c & 0xff;  // (ARGB)
+      for (int i = 0; i < 3; ++i) settings.mean[i] = static_cast<float>(sum[i] / static_cast<double>(pixels.size()));
       saver.busy = true, saver.ok = false, saver.written = false;
       saver.path = NextPhotoPath(L), saver.width = w, saver.height = h;
       saver.worker = std::thread([&saver, pixels = std::move(pixels)] {
@@ -2764,7 +2769,8 @@ void PhotoModeFrame(lua_State* L, float seconds) {
 // map's own light), weather (a number of weatherKinds, from 0), weatherName, strength, set (the photo mode's own, else
 // the game's)}, weatherKinds = {names}, lens = {on, strength, fNumber, focus (0: auto)}, size (times the main view's),
 // width, height (the main view's: a 1x photo's), taking, progress 0..1, saving, photo (the last photo's file), note
-// (the panel's line about it), lifeBars, selectionMarks, workBars, lensShown (what the picture was last given)}.
+// (the panel's line about it), photoMean {r, g, b} (the last photo's mean colour, 0..255; -1 before one), lifeBars,
+// selectionMarks, workBars, lensShown (what the picture was last given)}.
 int l_PhotoModeState(lua_State* L) {
   UserState* user = UserState::From(L);
   WorldSource* source = user->config().world;
@@ -2826,6 +2832,9 @@ int l_PhotoModeState(lua_State* L) {
   boolean("saving", Saver().busy);
   text("photo", g_lastPhoto);
   text("note", s.note);
+  lua_pushstring(L, "photoMean");
+  PushVector(L, s.mean[0], s.mean[1], s.mean[2]);
+  lua_rawset(L, -3);
   const WorldSource::CineState c = source ? source->Cine() : WorldSource::CineState();
   boolean("lifeBars", c.lifeBars), boolean("selectionMarks", c.selectionMarks), boolean("workBars", c.workBars), boolean("lensShown", c.lens);
   return 1;
