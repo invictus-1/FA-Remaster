@@ -136,6 +136,7 @@ void AirSetGoal(Sim& sim, Unit* u, Vec3 goal, uint32_t tick, int layer = 0, bool
 // The navigator's SetDestUnit: fly at an entity's exact position (attack runs on a mobile target).
 void AirSetDestEntity(Sim& sim, Unit* u, const Entity* e);
 void AirSetLandHeight(Unit* u, float h);
+void AirNavigatorGone(Unit* u);  // KillCleanup deleted the navigator: it steers no more
 // CUnitMotion::SetFacing: the heading wanted on arrival.
 void AirSetFacing(Unit* u, Vec3 dir);
 // CUnitMotion::SetTarget(p, zero, layer) right away (layer bits: 1 Land, 0x10 Air).

@@ -2419,6 +2419,7 @@ void KillCleanupTick(Sim& sim) {
     // two meet, and 0xda brakes hard; ours took the next point of 0x51's last spline (178.27), found no meeting and
     // drove on.
     UnitMotion& m = u->motion;
+    AirNavigatorGone(u);  // (an aircraft's navigator: its status, for the escorts that follow it)
     m.spline.clear();
     m.splineIdx = 0;
     m.hasSpline = false;

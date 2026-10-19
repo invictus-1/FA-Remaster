@@ -2079,6 +2079,20 @@ void AirSetDestEntity(Sim& sim, Unit* u, const Entity* e) {
   u->motion.arrived = false;
 }
 
+// Unit::KillCleanup 0x6a8790 deletes the unit's navigator (unit+0x54c = null, 0x6a8804..0x6a8832): from then on
+// whoever asks it for its status gets nothing. UpdateCurrentTargetFromFormation 0x5a4d80 returns without a new
+// target when the leader has no navigator (0x5a4ddd..0x5a4de5) or it does not steer (HasGoodPath, 0x5a4de7..0x5a4df2),
+// so the escorts of a killed aircraft keep the slot they last took. Seen: MP3 10543, army 1's five interceptors
+// guarding the Corsair 0x10012f, killed at 10542: the original's targets stay at their 10542 slots; ours took the
+// slots of the falling wreck, which still counted as steering.
+void AirNavigatorGone(Unit* u) {
+  if (!u->motion.air) return;
+  AirMotion& a = A(u);
+  a.steering = false;
+  a.pending = false;
+  a.destEntity = 0;
+}
+
 void AirSetLandHeight(Unit* u, float h) {
   if (u->motion.air) A(u).landHeight = h;
 }
