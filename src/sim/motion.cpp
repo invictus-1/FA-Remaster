@@ -2068,6 +2068,7 @@ void MotionTick(Sim& sim, Unit* u) {
       // turning on a steep slope, its steps blocked at 6703 and 6706 (the impulse's snap) and its pushed coast blocked
       // at 6704 and 6707: the original snaps again there (y 61.9126 -> 61.8516, the tilt follows), ours did not.)
     }
+    bool waterCalcRan = false;  // (CalcMoveWater 0x6c3480 ran this step: it leaves motion+0x90 as it is, below)
     if (b.motionType == kMotionHover) {
       // (No rebuild of the orientation from m.bx / m.bz here: CalcMoveHover 0x6c2bc0 tilts the transform as
       // CalcMoveCommon left it. A turn in place has set it already (0x699940, m.turnQ), and a unit let go or
@@ -2086,6 +2087,7 @@ void MotionTick(Sim& sim, Unit* u) {
       // CalcMoveWater 0x6c3480 (every layer but Land and Seabed): the dive / surfacing step comes after the
       // move, and the unit is put at its depth while it lasts
       const bool landCalc = u->layer == "Land" || u->layer == "Seabed";
+      waterCalcRan = !landCalc;
       const bool diving = !landCalc && HandleDivingAndSurfacing(sim, u);
       // the platform search: CalcMoveLand 0x6c31a2 when CalcMoveCommon moved the unit and it is not Teleporting, or
       // m+0x90 asks; CalcMoveWater 0x6c34b0 when CalcMoveCommon moved it
@@ -2103,7 +2105,16 @@ void MotionTick(Sim& sim, Unit* u) {
         m.needSnap = false;
       }
     }
-    m.surfaceNext = false;  // (cleared after SnapToGround)
+    // motion+0x90 is cleared by CalcMoveLand (0x6c31fa, after its SnapToGround) and CalcMoveHover (0x6c2ee7); CalcMoveWater
+    // never clears it (the byte's only other clears: TransitionBetweenLayers 0x6c315b and AddImpulse's no-cap path
+    // 0x6b8e48). A unit that moves by the water calc keeps the request it was made with (CUnitMotion ctor 0x6b7c9a) or
+    // was last given (AddImpulse 0x6b8ed7, Warp, NotifyDetached), and MotionTick runs its contacts every beat while it
+    // stands (0x6b9e21: ProcessSurfaceCollisionFromLastMove when |vel|^2 > 1e-6 or +0x90). Seen (probe mp1_7020): MP1
+    // 7020, army 2's T2 engineer 0x20009c (url0208) standing in the Water layer, +0x90 = 1 at every turn: in its own turn
+    // its DoCollisionsFor (caller 0x6b9231) meets 0x20006b coming at it and pushes both, so 0x20009c moves (-0.0219,
+    // -0.0512) in that beat and 0x20006b starts its turn pushed (0.0062, 0.1725). Ours had cleared the request after
+    // 0x20009c's first water step; 0x20006b pushed in its own turn and 0x20009c moved a beat later.
+    if (!waterCalcRan) m.surfaceNext = false;
     static const long dbgStep = getenv("MOHO64_DEBUG_MOTION") ? atol(getenv("MOHO64_DEBUG_MOTION")) : -1;
     if (dbgStep == static_cast<long>(u->id))
       fprintf(stderr, "step: tick %u pos %.4f %.4f vel %.5f %.5f %.5f pushed %d wasMoving %d point %d spline %d goal %d waypoint %d moved %d\n",
