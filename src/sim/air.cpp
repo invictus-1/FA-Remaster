@@ -8,6 +8,7 @@
 #include "sim/intel.h"
 #include "sim/landnav.h"
 #include "sim/commands.h"
+#include "sim/motion.h"
 #include "sim/transport.h"
 
 #include <algorithm>
@@ -613,8 +614,9 @@ bool NoBlockingUnits(Sim& sim, Unit* u, float x0, float z0, float x1, float z1) 
     if (o->layer == "Air") return;
     if (u->layer == "Sub" && o->layer != "Sub") return;
     if (!o->transport || InCategory(sim, o, "PODSTAGINGPLATFORM")) {
-      const Vec3& v = o->motion.lastMove;
-      bool moving = v.x != 0.0f || v.y != 0.0f || v.z != 0.0f;
+      // (0x721231..0x72124f: GetVelocity, vt+0x3c, against zero by a memcmp of 12 bytes: UnitVelocityBitsSet; the
+      // test the formation spots use too, as the same function with strict 0)
+      const bool moving = UnitVelocityBitsSet(o);
       if (selfTransport && (moving || loading)) return;
     }
     if (o->parentId || State(o, "Attached")) return;

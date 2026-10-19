@@ -2122,4 +2122,13 @@ const Vec3& UnitVelocity(const Unit* u) {
   return land ? m.vel : m.velCommitted;
 }
 
+bool UnitVelocityBitsSet(const Unit* u) {
+  const Vec3& v = UnitVelocity(u);
+  uint32_t b[3];
+  std::memcpy(&b[0], &v.x, 4);
+  std::memcpy(&b[1], &v.y, 4);
+  std::memcpy(&b[2], &v.z, 4);
+  return (b[0] | b[1] | b[2]) != 0;
+}
+
 }  // namespace moho

@@ -259,6 +259,9 @@ Quat LookQuat(float dx, float dy, float dz);
 // Unit::GetVelocity 0x6a9c90 (entity vtbl+0x3c): a unit with a land motion not on the Air layer reports m+0x38,
 // otherwise the last tick's displacement
 const Vec3& UnitVelocity(const Unit* u);
+// The "is it moving" test of COORDS_CanMoveAt 0x720f70 (0x721231..0x72124f): GetVelocity against (0, 0, 0) with
+// 0x4f0a50, a memcmp of the 12 bytes, so a -0.0 part counts as moving.
+bool UnitVelocityBitsSet(const Unit* u);
 // CAiSteeringImpl::SetWaypoints(nullptr, 0) 0x5d29c0: no waypoint; a unit still on a spline gets a brake spline
 // and its first point at once (engine-ref move_handoff.md).
 void SteeringClearWaypoints(Sim& sim, Unit* u);
