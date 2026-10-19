@@ -67,6 +67,7 @@
 #include "seasons.h"  // [seasons]
 #include "shadows.h"
 #include "smoke.h"
+#include "stream_water.h"  // [stream]
 #include "sunlight.h"  // [sunlight]
 #include "terrain.h"
 #include "textures.h"
@@ -909,8 +910,16 @@ class World {
   // game's "Atmosphere" setting).
   bool lightShafts = false, driftingShadows = false;
   Sunlight sunlight;
+  // [stream] Streams as real water (stream_water.h; Chris, 2026-10-19): a map's stream props (the visuals track's ribbons
+  // laid over the ground) drawn as water instead of as models: deeper and darker in the middle with the bed showing at
+  // the edges, a soft wet shore, ripples and foam carried downstream (faster where it drops, white round rocks and
+  // behind them), the sky mirrored, the sun's glint, rings in rain; their white water flowing. Modern look; off by
+  // default here, in the game's "Weather Effects" (world_picture.h).
+  bool streamWater = false;
+  StreamWater streams;
 
  private:
+  bool streamNow_ = false;  // [stream] (streams drawn as water this frame)
   bool horizonNow_ = false;  // [horizon] (something of it this frame)
   Season seasonOpen_ = Season::Summer;  // [seasons]
   bool leavesNow_ = false;              // [seasons] (falling leaves drawn this frame)

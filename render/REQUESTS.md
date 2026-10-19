@@ -34,6 +34,23 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
+## 39. To the VISUALS track: the stream's props named as stream water (2026-10-19, not blocking; Chris: "This needs to be real water not just a hard texture")
+
+The renderer now draws SETONS_R's stream as water (render 039c036, World::streamWater, in the game's Weather Effects:
+stream_water.h). It finds the props by a stopgap today: a map prop's `*_water_lod*.scm` drawn LabPBR and its
+`*_foam_lod*.scm` drawn LabPBRAlpha. Asked:
+1. Set `ShaderName = 'StreamWater'` on stream_hill_water's levels and `'StreamFoam'` on stream_hill_foam's. With the
+   option off they draw exactly as now (LabPBR and LabPBRAlpha), so nothing else changes; the file-name rule then goes.
+2. Keep the mesh convention the pass reads: each cross-section's vertices share one exact v, and the banks are u = 0
+   and u = 1. No new vertex data is needed. uv1 (a copy of uv0 today) is free if you later want artistic control (a
+   depth share and a speed factor per vertex, for example).
+3. For your notes: the ripple normal map is written as (g = ny, a = 1 - nx), but the models' shader reads `.ga` as
+   (x, y), so with the option off its ripples are turned a quarter (the water pass decodes it as written). With the
+   option off the white water sways like foliage (LabPBRAlpha does); the water pass draws it without swaying. The ground cover
+   places ferns and flowers inside the stream: the cover's density could leave the ribbon out.
+
+**Answer:** (none yet)
+
 ## 38. To the VISUALS track: remastered tarmacs, the pads under buildings (2026-10-19, not blocking; Chris: "We should remake it too so its more detailed and nicer as well")
 
 The game lays a tarmac under each structure (its blueprint's Display.Tarmacs: an albedo and a normals decal, often a

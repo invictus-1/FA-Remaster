@@ -142,6 +142,10 @@ class MeshRenderer {
   // shaders built with it (made by PrepareBuild the first time the world wants them; without it the shaders as they were).
   bool remasteredBuild = false;
   bool PrepareBuild();  // false: they cannot be made (then the build look stays as it was)
+  // [stream] Streams as water (stream_water.h, World::streamWater), set by the world each frame: the levels of a stream's
+  // props (ModelLod::stream) are left out of every pass (the scene's, the sun's and the lamps' shadow maps), the streams'
+  // own pass drawing them instead. False, as at first: drawn as any model.
+  bool divertStream = false;
   // Numbers from the last scene (not shadow) pass.
   int drawnInstances = 0;
   int drawnTriangles = 0;
