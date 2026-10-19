@@ -15,6 +15,7 @@
 #include "effect_files.h"
 #include "hot_metal.h"
 #include "lighting.h"
+#include "plants.h"  // [plants]
 #include "ray_scene.h"
 #include "unit_wear.h"
 
@@ -104,6 +105,9 @@ cbuffer MeshKind : register(b3) {
                 // frame's alpha (ModelLod::rgbOnly: the original writes its colour alone); z: what sways, a group of
                 // trees: model units a step of where each tree stands (ModelLod::treeStep; 0: none); w: the scene's
                 // samples a pixel (NearFade)
+#ifdef PLANTS
+  float4 kind7, kind8;  // [plants] (plants.h) PlantLife::Constants
+#endif
 };
 Texture2D albedoMap : register(t0);
 Texture2D normalsMap : register(t1);
@@ -139,6 +143,9 @@ struct VOut {
   float3 rest : TEXCOORD4;
   float3 restNormal : TEXCOORD5;
   nointerpolation float4 wear : TEXCOORD6;  // (the instance's: unit_wear.h)
+#ifdef PLANTS
+  nointerpolation float4 plants : TEXCOORD7;  // [plants] how it is burnt (PlantsBurnLook: black, brown, lower, embers)
+#endif
 };
 
 VOut VS(VIn i, uint instance : SV_InstanceID) {
@@ -155,6 +162,9 @@ VOut VS(VIn i, uint instance : SV_InstanceID) {
     binormal = mul(turn, binormal);
   }
   VOut o;
+#ifdef PLANTS
+  o.plants = 0;
+#endif
   o.rest = i.position * length(n.row0.xyz);
   o.restNormal = i.normal;
   o.shape = float3(p.x, p.y - kind3.z, p.z) * kind3.w;
@@ -186,12 +196,44 @@ VOut VS(VIn i, uint instance : SV_InstanceID) {
     float swing = sin(time * 1.3 + beat) * 0.6 + sin(time * 2.9 + beat * 1.7 + p.x * kind3.y * 4) * 0.4;
     // (it comes in gusts that run across the land with the wind)
     float gust = (0.35 + 0.9 * falling.x + 0.3 * falling.y) * (0.45 + 1.3 * CloudNoise(float3((foot - float2(0.915, 0.403) * (time * 7)) * 0.02, time * 0.07)));
+#ifdef PLANTS
+    // [plants] a tree the game has felled (lying: its up turned away from the sky) no longer sways
+    o.world.xz += float2(0.915, 0.403) * (swing * gust * kind3.x * high * high * size * 0.035) *
+                  PlantsUpright(n.row1.y / max(length(float3(n.row0.y, n.row1.y, n.row2.y)), 1e-6));
+#else
     o.world.xz += float2(0.915, 0.403) * (swing * gust * kind3.x * high * high * size * 0.035);
+#endif
 #ifdef BLASTS
     // a blast's wave (blasts.h): bent away from it, the more toward the top, then swaying back
     o.world.xz += BlastPush(foot, 1) * (kind3.x * high * high * size);
 #endif
+#ifdef PLANTS
+    // [plants] what is low (a bush, a fern, a sapling: under 2.2 world units) is pressed over by the units driving through it,
+    // the way they push it, and springs back past upright once after they have gone (a third of a second later); burnt
+    // where the ground is (its own share of a half burnt place), and lower
+    [branch] if (size < 2.2 && kind8.z + kind8.w > 0.5) {  // (and only while something is pressed or burnt)
+      float3 root = float3(n.row0.w, n.row1.w, n.row2.w);
+      float4 pressed = PlantsPressAt(root.xz, kind7, kind8);
+      [branch] if (pressed.z > 0.01) {
+        float since = max(pressed.w / pressed.z - 0.3, 0);
+        float over = 1.25 * pressed.z * exp(-since / 0.6) * cos(since * 2.4) * (0.45 + 0.55 * high);
+        float2 way = pressed.xy / pressed.z;
+        way = length(way) > 0.05 ? normalize(way) : float2(0.6, 0.8);
+        float rise = max(o.world.y - root.y, 0);
+        o.world.xz += way * (rise * sin(over));
+        o.world.y -= rise * (1 - cos(over));
+      }
+#ifndef PLANTS_SHADOW  // (the sun's maps: bent, not burnt; lighter, the shadows being drawn four times over)
+      o.plants = PlantsBurnLook(root.xz, kind7, kind8, CloudHash(float3(root.xz, 1.3)));
+      o.world.y -= max(o.world.y - root.y, 0) * (o.plants.z * 0.45);
+#endif
+    }
+#endif
   }
+#ifdef PLANTS
+  // [plants] the game's burnt tree (its burnt mesh: wreckage, with leaves): charred through
+  if (kind4.x > 0.5 && kind4.x < 1.5 && kind2.y > 0.5) o.plants = float4(1, 0, 0, 0);
+#endif
   o.position = mul(viewProj, float4(o.world, 1));
   // (a personal shield's shell lies close over its unit, and the unit's details stand out of it here and
   // there: it is tested as if a world unit and a half nearer the eye, along the line of sight, so that its
@@ -275,9 +317,27 @@ float NearFade(float3 world, float2 pixel, bool coverage) {
   return 1;
 }
 
+#ifdef PLANTS
+// [plants] What fire leaves of leaves and needles: those that are green (not bark, not twigs) go by patches over the model,
+// the more the harder it is burnt (`burnt`: PlantsBurnLook's). True: gone here.
+bool PlantsBurntAway(float4 albedo, float3 shape, float4 burnt) {
+  float burn = saturate(burnt.x + burnt.y * 0.7);
+  [branch] if (burn < 0.02) return false;
+  float patch = CloudNoise(shape * 24 + 3.7) * 0.6 + CloudNoise(shape * 57 + 1.9) * 0.4;  // (about a bough's size, and finer)
+  return albedo.g > albedo.r * 1.08 + 0.01 && patch < 0.2 + 0.32 * burn;
+}
+#endif
+
 // shadow maps: depth only, with foliage's holes (and nothing where a unit is not built yet)
 void ShadowPS(VOut i) {
   if (kind.x > 0) clip(albedoMap.Sample(samplerLinear, i.uv.xy).a - kind.x);
+#if defined(PLANTS) && (!defined(PLANTS_SHADOW) || defined(PLANTS_SHADOW_BURNT))
+  // [plants] (the game's burnt trees: their shadows by a variant of their own, PLANTS_SHADOW_BURNT; the code here would
+  // slow the shadows of everything else that sways)
+  [branch] if (i.plants.x + i.plants.y > 0.02) {
+    if (PlantsBurntAway(albedoMap.Sample(samplerAniso, i.uv.xy), i.shape, i.plants)) discard;
+  }
+#endif
   if (i.color.a < 0.999 && kind.z < 0.5 && kind2.w < 0.5) {
     float3 work;
     clip(BuildSolid(int(kind2.x + 0.5), i.color.a, i.shape, work) - 0.5);
@@ -296,6 +356,9 @@ float4 DepthPS(VOut i) : SV_Target {
     clip(albedo.a - kind.x);
   }
   cover *= NearFade(i.world, i.position.xy, kind2.y > 0.5 && look > 0.5 && kind.y < 0.5);  // [foliage] (as Shade's)
+#ifdef PLANTS
+  if (PlantsBurntAway(albedo, i.shape, i.plants)) discard;  // [plants] (as Shade's)
+#endif
   if (min(i.color.a, 1) < 0.999 && kind.z < 0.5 && kind2.w < 0.5) {
     float3 work;
     clip(BuildSolid(int(kind2.x + 0.5), min(i.color.a, 1), i.shape, work));
@@ -495,6 +558,9 @@ float4 Shade(VOut i, bool front) {
   }
   // [foliage] (a leaf's coverage is its alpha below in the modern look, unless lit by its normals alone)
   cover *= NearFade(i.world, i.position.xy, kind2.y > 0.5 && look > 0.5 && kind.y < 0.5);
+#ifdef PLANTS
+  if (PlantsBurntAway(albedo, i.shape, i.plants)) discard;  // [plants]
+#endif
   float3 vertexNormal = normalize(i.normal);
   if (kind2.y > 0.5 && !front) {  // a leaf seen from behind is lit as from behind
     vertexNormal = -vertexNormal;
@@ -613,6 +679,16 @@ float4 Shade(VOut i, bool front) {
       roughness = lerp(0.8, 0.95, soot);
       emission = 0;
     }
+#ifdef PLANTS
+    // [plants] a burnt bush or fern (the game's own burnt trees are drawn as wreckage, above): black, then brown, its
+    // embers glowing for the first seconds
+    [branch] if (kind4.x < 0.5 && dot(i.plants, 1) > 0.002) {
+      base = PlantsBurnColour(base, i.plants);
+      emission += PlantsEmber(i.plants.w, i.world.xz, time) * (falling.w > 0 ? falling.w : 1);
+    } else if (kind4.x > 0.5 && i.plants.x > 0.5) {
+      base *= 0.45;  // (the game's burnt tree: what is left of it charred, not the wreckage's grey-brown)
+    }
+#endif
     if (building) {
 #ifdef REMASTERED_BUILD
       RemasteredBuildSurface(faction, solid, i.rest, edge, N, base, metallic, roughness, emission, work);  // (buildfx: build_effects.h)
@@ -832,6 +908,13 @@ bool MeshRenderer::Init(std::string* error) {
   // (the same with the blasts' waves, for what sways while blasts are under way: PrepareBlasts makes them)
   blastSource_ = std::string("#define BLASTS 1\n#define SURFACE_SNOW 0.5\n#define SURFACE_OWN_WET 1\n") + kViewShaderBlock + RayShaders() + kLightingShaderBlock +
                  kBlastShaderBlock + kWearShaderBlock + HotMetal::ShaderBlock() + kShader;
+  // [plants] (the same with plants that react, the blasts' waves in them too: PreparePlants makes them; its textures at t8, t9)
+  plantsSource_ = std::string("#define BLASTS 1\n#define PLANTS 1\n#define PLANTS_PRESS t8\n#define PLANTS_BURN t9\n#define SURFACE_SNOW 0.5\n#define SURFACE_OWN_WET 1\n") +
+                  kViewShaderBlock + RayShaders() + kLightingShaderBlock + kBlastShaderBlock + kPlantsShaderBlock + kWearShaderBlock +
+                  HotMetal::ShaderBlock() + kShader;
+  // [plants] (the sun's maps: bent, not burnt; the game's burnt trees with their needles gone by a variant of their own)
+  plantsShadowSource_ = "#define PLANTS_SHADOW 1\n" + plantsSource_;
+  plantsShadowBurntSource_ = "#define PLANTS_SHADOW 1\n#define PLANTS_SHADOW_BURNT 1\n" + plantsSource_;
   // (buildfx: the same with the remastered build look, for while it is on: PrepareBuild makes them)
   buildSource_ = std::string("#define REMASTERED_BUILD 1\n#define SURFACE_SNOW 0.5\n#define SURFACE_OWN_WET 1\n") + kViewShaderBlock + RayShaders() + kLightingShaderBlock +
                  kWearShaderBlock + HotMetal::ShaderBlock() + kBuildShaderBlock + kShader;
@@ -1381,14 +1464,19 @@ void MeshRenderer::Consider(const Cull& c, Entry& e, const View& view, bool shad
 // key's bits, eleven at a time from the lowest (which keeps each step's order).
 void MeshRenderer::SortItems() {
   const size_t n = items_.size();
+  // [plants] (with plants that react, what is drawn by their variants after the rest, together: not a change of shaders
+  // between each two meshes; without it nothing reacts, and the order is as it was)
+  const bool plants = plantsConstants && plantsMade_ > 0;
+  auto reacts = [plants](const ModelLod* l) { return plants && (l->sway > 0 || (l->wreck && l->leaves)); };
   if (n < 64) {
-    std::stable_sort(items_.begin(), items_.end(), [](const Item& a, const Item& b) {
-      return a.lod->blend != b.lod->blend ? b.lod->blend : a.lod->serial != b.lod->serial ? a.lod->serial < b.lod->serial : a.near && !b.near;
+    std::stable_sort(items_.begin(), items_.end(), [&](const Item& a, const Item& b) {
+      return a.lod->blend != b.lod->blend ? b.lod->blend : reacts(a.lod) != reacts(b.lod) ? reacts(b.lod) : a.lod->serial != b.lod->serial ? a.lod->serial < b.lod->serial : a.near && !b.near;
     });
     return;
   }
-  auto key = [](const Item& item) {
-    return (static_cast<uint64_t>(item.lod->blend ? 1 : 0) << 33) | (static_cast<uint64_t>(item.lod->serial) << 1) | (item.near ? 0u : 1u);
+  auto key = [&](const Item& item) {
+    return (static_cast<uint64_t>(item.lod->blend ? 1 : 0) << 34) | (static_cast<uint64_t>(reacts(item.lod) ? 1 : 0) << 33) |
+           (static_cast<uint64_t>(item.lod->serial) << 1) | (item.near ? 0u : 1u);
   };
   // (only the bits that differ between the items need sorting)
   uint64_t all = 0, any = 0, first = key(items_[0]);
@@ -1436,6 +1524,14 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
   device_->SetConstants(0, &view.constants, sizeof view.constants);
   const bool blasts = blastConstants && blastConstantsSize && blastsMade_ > 0;  // (the blasts' waves: for what sways)
   if (blasts) device_->SetConstants(1, blastConstants, blastConstantsSize);
+  // [plants] (plants that react: their textures; with no waves under way, none in the waves' list its shaders read)
+  const bool plants = plantsConstants && plantsMade_ > 0;
+  if (plants) {
+    static const float kNoBlasts[4] = {0, 0, 0, 0};
+    if (!blasts) device_->SetConstants(1, kNoBlasts, sizeof kNoBlasts);
+    device_->SetTexture(8, plantsPress ? plantsPress : textures_->Black());
+    device_->SetTexture(9, plantsBurnt ? plantsBurnt : textures_->Black());
+  }
   if (!shadowPass) {
     device_->SetTexture(3, environment ? environment : textures_->GreyCube());
     if (!insectLookup_) {  // (once: the two lookups, or white where the game's files have none)
@@ -1485,18 +1581,25 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
                        : shadowPass ? 0 : glass ? (lod->impact == 1 || lod->shell ? 5 : lod->nuke == 1 ? (lod->rgbOnly ? 11 : 4) : lod->rgbOnly ? 10 : 3)
                        : lod->blend ? 2 : lod->leaves ? 1 : 0;
     const bool bends = blasts && lod->sway > 0;  // (what sways, while blasts' waves are under way: the shaders with them)
-    if (wanted + (bends ? 100 : 0) != drawing) {
+    const bool reacts = plants && (lod->sway > 0 || (lod->wreck && lod->leaves));  // [plants] (and the game's burnt trees)
+    const bool charred = reacts && shadowPass && lod->wreck;  // [plants] (a burnt tree's shadow: its own variant)
+    const int variant = charred ? 300 : reacts ? 200 : bends ? 100 : 0;
+    if (wanted + variant != drawing) {
       gfx::Pipeline p = wanted == 11 ? domeRgb_ : wanted == 10 ? glassRgb_ : wanted == 9 ? laidLeaves_ : wanted == 8 ? laid_ : wanted == 7 ? prepassLeaves_ :
                         wanted == 6 ? prepass_ : wanted == 5 ? adding_ : wanted == 4 ? dome_ : wanted == 3 ? glass_ : wanted == 2 ? blended_ :
                         wanted == 1 ? leaves_ : shadowPass ? shadow_ : pipeline_;
-      if (bends)
+      if (reacts) {  // [plants]
+        for (const Bending& b : bending_)
+          if (b.original.id == p.id && b.plants) p = charred && b.plantsBurnt ? b.plantsBurnt : b.plants;
+      } else if (bends) {
         for (const Bending& b : bending_)
           if (b.original.id == p.id && b.bending) p = b.bending;
-      if (!bends && remasteredBuild && buildMade_ > 0)  // (buildfx: the remastered build look's variant)
+      }
+      if (!bends && !reacts && remasteredBuild && buildMade_ > 0)  // (buildfx: the remastered build look's variant)
         for (const BuildVariant& b : buildVariants_)
           if (b.original.id == p.id && b.variant) p = b.variant;
       device_->SetPipeline(p);
-      drawing = wanted + (bends ? 100 : 0);
+      drawing = wanted + variant;
     }
     size_t n = 0;
     while (at + n < items_.size() && items_[at + n].lod == lod && items_[at + n].near == near && n < kMaxInstances) {
@@ -1504,7 +1607,7 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
       batch_[n].bones[0] = items_[at + n].bones;
       ++n;
     }
-    float kind[24] = {lod->alphaCut, lod->shell ? 12.0f : lod->impact ? 9.0f + static_cast<float>(lod->impact) : lod->unlit ? 6.0f + static_cast<float>(lod->unlit) : lod->nuke ? 4.0f + static_cast<float>(lod->nuke) : lod->fades ? 4.0f : lod->shield ? 3.0f : lod->frame ? 2.0f : lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f,
+    float kind[32] = {lod->alphaCut, lod->shell ? 12.0f : lod->impact ? 9.0f + static_cast<float>(lod->impact) : lod->unlit ? 6.0f + static_cast<float>(lod->unlit) : lod->nuke ? 4.0f + static_cast<float>(lod->nuke) : lod->fades ? 4.0f : lod->shield ? 3.0f : lod->frame ? 2.0f : lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f,
                             static_cast<float>(lod->faction), lod->leaves ? 1.0f : 0.0f, lod->plainMaterial ? 1.0f : 0.0f, lod->border ? 1.0f : 0.0f,
                             lod->sway, 1 / lod->swayHeight, 0, 1,
                             lod->chrome ? 2.0f : lod->wreck ? 1.0f : 0.0f, lod->shieldTint.x, lod->shieldTint.y, lod->shieldTint.z};
@@ -1527,7 +1630,12 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
     kind[21] = lod->rgbOnly ? 1.0f : 0.0f;
     kind[22] = lod->sway > 0 ? lod->treeStep : 0.0f;  // [foliage] (a group's trees, each on its own beat)
     kind[23] = static_cast<float>(gSceneSamples);     // [foliage] (NearFade: leaves fade by their coverage)
-    device_->SetConstants(3, kind, sizeof kind);
+    if (reacts) {  // [plants] (kind7, kind8; the game's trees neither pressed nor burnt by the picture: Model::simTree)
+      std::copy(plantsConstants, plantsConstants + 8, kind + 24);
+      if (items_[at].entry->model->simTree) kind[30] = kind[31] = 0;
+      if (shadowPass) kind[30] = 0;  // (shadows: bent as the plants are, but not burnt: it would cost the sun's maps too much)
+    }
+    device_->SetConstants(3, kind, static_cast<uint32_t>(sizeof(float) * (reacts ? 32 : 24)));
     device_->SetTexture(0, lod->albedo);
     if (!shadowPass) {
       device_->SetTexture(1, lod->normals);
@@ -1567,6 +1675,29 @@ bool MeshRenderer::PrepareBlasts() {
     }
   }
   blastsMade_ = 1;
+  return true;
+}
+
+// [plants] The variants of what sways with plants that react (and the blasts' waves), made the first time the world wants them.
+bool MeshRenderer::PreparePlants() {
+  if (plantsMade_) return plantsMade_ > 0;
+  plantsMade_ = -1;
+  for (Bending& b : bending_) {
+    if (!b.original) continue;
+    gfx::PipelineDesc d = b.desc;
+    d.vertexSource = d.pixelSource = b.original.id == shadow_.id ? plantsShadowSource_ : plantsSource_;
+    std::string error;
+    b.plants = device_->CreatePipeline(d, &error);
+    if (b.plants && b.original.id == shadow_.id) {
+      d.vertexSource = d.pixelSource = plantsShadowBurntSource_;
+      b.plantsBurnt = device_->CreatePipeline(d, &error);
+    }
+    if (!b.plants || (b.original.id == shadow_.id && !b.plantsBurnt)) {
+      fprintf(stderr, "render: plants cannot react in the models' shaders (%s)\n", error.c_str());
+      return false;
+    }
+  }
+  plantsMade_ = 1;
   return true;
 }
 

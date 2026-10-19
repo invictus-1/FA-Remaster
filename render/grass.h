@@ -14,6 +14,7 @@
 #include "deep_tracks.h"
 #include "gfx.h"
 #include "json.h"
+#include "plants.h"  // [plants]
 #include "textures.h"
 #include "view.h"
 
@@ -46,6 +47,11 @@ class GroundCover {
   // The shaders Draw takes with `blasts` (the same as without, with the waves in them), made the first time the world
   // wants them (after Init); false: they cannot be made (then Draw's `blasts` is left unused).
   bool PrepareBlasts();
+  // [plants] Plants that react (plants.h; World::plantsReact), set by the world each frame (null: off): the blades and the
+  // plants laid over where units drove and rising again, burnt where the ground is; drawn then by shaders of their own
+  // (made by PreparePlants the first time it is wanted, after Init; the blasts' waves in them too).
+  const PlantLife* plants = nullptr;
+  bool PreparePlants();  // false: they cannot be made (then nothing reacts)
 
   // The plants on cards beside the blades (the visuals track's atlas for the map, Terrain::Cover: its cells, each
   // a plant drawn side on, its foot at the cell's bottom middle, its size in metres, how it sways, how many make a
@@ -93,6 +99,10 @@ class GroundCover {
   gfx::PipelineDesc blastDesc_;
   std::string blastSource_, blastPlantSource_;
   int blastsMade_ = 0;
+  // [plants] (the grass, the plants; the same two with the blasts' waves: PreparePlants's)
+  gfx::Pipeline reactingPipelines_[4];
+  std::string reactingSources_[4];
+  int reactingMade_ = 0;
   gfx::Device* device_;
   gfx::Pipeline pipeline_, trample_;
   gfx::Texture trampled_;  // (how flat the grass is pressed over its square: 1 flat)

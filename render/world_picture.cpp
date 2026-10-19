@@ -77,7 +77,7 @@ struct WorldPicture::Impl {
     world->rayReflections = rayReflections;
     if (weatherEffects >= 0) world->litRain = world->rainSplashes = world->waterDetail = world->unitSnow = world->unitDirt = world->surf = weatherEffects > 0;
     if (weatherEffects >= 0) world->horizonWeather = weatherEffects > 0;  // [horizon] (proposed: with the weather effects)
-    if (groundDetail >= 0) world->groundCover = world->battleScars = world->leafLight = world->deepTracks = world->wildlife = groundDetail > 0;
+    if (groundDetail >= 0) world->groundCover = world->battleScars = world->leafLight = world->deepTracks = world->wildlife = world->plantsReact = groundDetail > 0;  // ([plants]: plantsReact)
     if (frameGeneration >= 0) world->frameGeneration = frameGeneration > 0;
     if (hiddenOutlines >= 0) world->hiddenOutlines = hiddenOutlines > 0;
   }

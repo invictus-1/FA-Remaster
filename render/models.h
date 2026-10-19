@@ -167,6 +167,9 @@ struct Model {
   // were made and judged for. Empty: levels are chosen by their triangle counts (mesh_renderer.h).
   std::vector<float> levelPixels;
   std::vector<ModelLight> lights;  // a remastered unit's lamps (at most 16)
+  // [plants] One of the game's trees (its blueprint's script class Tree or TreeGroup): the simulation knocks it over, burns
+  // and removes it, so plants that react never bend or burn it by the picture alone (World::plantsReact).
+  bool simTree = false;
   // A personal shield's shell (ModelCache::ShieldShell): its shape, in model units, for OnShell.
   struct ShellShape {
     int along = 2, acrossA = 0, acrossB = 1;  // its long axis and the two across it (0 x, 1 y, 2 z)

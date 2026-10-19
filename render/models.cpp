@@ -615,6 +615,14 @@ const Model* ModelCache::Blueprint(const std::string& blueprintPath, bool origin
     return m;
   }
   Build(m, path, base, sources, original, false, faction, effect);
+  // [plants] (the game's trees: Model::simTree)
+  if (auto text = vfs_->ReadFile(path)) {
+    BpValue bp;
+    if (ReadBlueprintFile(*text, &bp)) {
+      const std::string kind = bp["ScriptClass"].StringOr(std::string());
+      m->simTree = kind == "Tree" || kind == "TreeGroup";
+    }
+  }
   return m;
 }
 

@@ -1221,6 +1221,61 @@ showers and icebergs are.
      round headlands (their crests follow the distance, which bends round a point); spray on rocks is procedural (the
      visuals session could make flipbooks: see the helper's report); the original game's shoreline wave generators in
      the map file (`scmap.cpp` skips them) are not drawn by either look.
+22. **Plants that react (first version, 2026-10-18, a helper; Chris's yes to the visuals session's proposal 5)**:
+   `World::plantsReact` (viewer `--plants-react`; `render/plants.h/.cpp`; the modern look; proposed for "Ground Detail",
+   and put in that bundle). To be seen only: the simulation owns the props (what it knocks over, burns and takes away is
+   drawn as it says), and nothing goes back to it.
+   - **What was there before it**: the grass pressed flat round what stands (that frame only: it stood up again the
+     moment a tank had passed) and along deep tracks; the plants' cards the same; blasts' waves bending grass, plants
+     and trees; scorches staying (battle scars), craters glowing (hot metal); the game's own fallen, burnt and removed
+     trees. Not there: the map's small props that sway (on SETONS_R some 27,000 bushes, ferns, shrubs, saplings and
+     grass tufts) never answered units; nothing burnt the grass (green blades stood up through every black scorch);
+     a tree the game fells kept swaying in the wind lying on the ground, fell in visible steps (the game moves it once a
+     beat: three to fifteen beats), and burnt it kept every needle, as the original's blackened shader does.
+   - **Pressed**: a field over a square of 128 units round what the camera looks at (512 texels, a compute pass a
+     frame reading the last frame's, whose texels it lies a whole number away from) keeps for each place how hard it
+     was pressed, which way, and how long ago. Each model on the ground that is not scenery presses with its own box
+     (its bounds turned as it is, not a circle: a bush beside a tank is left alone), the way it drives and out toward
+     its sides. The grass and the plants' cards lie over that way and rise over some six seconds; the small props that
+     sway (under 2.2 units) bend over under it, stay down a third of a second after it has passed and spring back past
+     upright once, within about two seconds. Their shadows bend with them.
+   - **Burnt**: a picture over the whole map (2 texels a unit, at most 2048 a side; 16 MB on SETONS_R) keeps how hard
+     each place was burnt and how fresh that is (e to the minus its age over 100 s, faded every half second of the
+     game, so no clock is kept in half floats). Burns come from the game's blasts (`Blasts::Recent`, each once half a
+     second after it, on the ground only: radius 0.6 + 1.6 x its size, a shell's singeing a little, a big one burning
+     through) and from the lasting fires that stand still on the ground (`Particles::HotEmitters`: a burning tree, a
+     wreck, napalm; the longer, the more). The grass and the plants turn black where it burnt through (the first one to
+     four minutes; scorched brown at the edges and after), short as stubble, with sparks of embers for the first seconds;
+     each blade and plant has its own share of a half burnt place, so an edge and a place growing back are burnt ones
+     among green ones, not a line; it grows back to a third in five minutes (`PlantLife::regrow`, viewer
+     `--plants-regrow`), all but gone in fifteen. The small props burn the same way and lose most of their leaves.
+   - **Trees**: one the game has felled (its up turned from the sky) no longer sways; one it has burnt (its burnt mesh)
+     loses about half its needles by patches (the green of the cards: bark and twigs stay), shadows too: a charred
+     skeleton in place of a grey-brown full crown. A prop the game moves beat by beat is drawn between the last beat and
+     the next (told already, not yet due), as the units are: a felled tree falls smoothly (`World::SmoothProps`; steps
+     too small to see, a sinking tree's, are left to the beats).
+   - **The ground** under it: a pass after the ground's marks (as the decals: each pixel's place from the scene's
+     depth) multiplies the ground darker where it burnt: black with paler ash in patches where it burnt through, a dull
+     burnt brown at the edges and after. Without it the burnt grass stood on green ground and hardly read.
+   - **Wrecks**: a unit's fresh wreck (the game's DefaultWreckage, made: World::ApplyPropEvent; the effects stand's
+     own) burns the ground round it as far as it is large.
+   - **Shaders**: variants of their own (the grass's and the cards' four, the models' eight and a ninth for the burnt
+     trees' shadows), made the first frame it is on; their textures at registers local to them (the models' t8, t9; the
+     grass's t9, t10), no global slot. The sun's maps take a lighter variant (bent, not burnt): the burnt look's code
+     in their pixel shader cost 0.06 ms in them for everything that sways. With it on, what sways is drawn after the
+     rest of each pass, together (`MeshRenderer::SortItems`): that alone made the sun's maps 0.045 ms cheaper on
+     SETONS_R (fewer changes of shaders), which the renderer may want for the off path too.
+   - **The game's trees** (blueprint script class Tree or TreeGroup, `Model::simTree`) are never pressed nor burnt by the
+     picture: the simulation knocks them over and burns them (SETONS_R's pines are 1.7 to 3.4 units tall, its saplings
+     1.6: size alone cannot tell them apart).
+   - **Viewer**: `--burn-test n[,radius[,seconds]]` (burns with their scorches round the camera, as if over the last
+     ten minutes), `--tree-test n` (trees made in a row: standing, burnt, felled, felled and burnt; the felled ones
+     fall a second in, as the game's motor fells them), `--bush-test n[,spacing[,kind]]` (a thicket of the map's bush,
+     sapling, shrub or fern for a unit to drive through: `--fx-move UEL0201` at the same place).
+   - **Cost** (2560x1440, RTX 4090, the lowest of four runs, SETONS_R, ground cover on): 24 tanks in grass and bushes
+     with 30 burns, the frame 2.457 -> 2.444 ms (the field 0.010, the burnt ground 0.008, the grass +0.009, the sun's maps
+     0.730 -> 0.683); nothing happening 2.378 -> 2.347; a wood from the game's height 3.146 -> 3.111. Off: pictures
+     identical (regression 0 px on both backends, and SETONS_R with ground cover, blasts and tanks 0 px).
 
 ## The options
 
@@ -1264,6 +1319,7 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `horizonWeather` | beyond the map's edge: winter ice (floes, pack ice, icebergs) while snow lies, fog banks, showers passing far out, the clouds' shadows over the far sea | about 0.1 ms from the game's camera, 0.21 from the strategic view in snow | a time of day; the world beyond the edge |
 | `beyondLand` | a softer map edge (the ground past it dims over 10 units and a soft shadow replaces the dark line; the fog of war goes on past it) and land far off: coastlines, hills and snow-capped ranges round the map out to four map sizes, which way land lies read from the map's own edges, coloured by its ground, lit and hazed (beyond_land.h; Chris, 2026-10-18; in the Atmosphere setting) | 0.03-0.19 ms at 1440p; made once a map (13-21 ms) | the world beyond the edge (the game's edge option two) |
 | `season` (`WorldPicture::SetSeason`) | the season a map is drawn in (Summer as at first, Autumn; Winter reserved): its ground's materials, ground cover, props and mud as its remap.json's "seasons" block lists them (the visuals session's art); in autumn leaves in the wind (off broadleaf trees, blown over the ground where the cover grows; `fallingLeaves`), the autumn climate (showers, more fog, morning fog) (seasons.h; Chris, 2026-10-18: a player's option) | the leaves 0.01 ms; the rest nothing (other textures) | taken in when a map opens; maps with a "seasons" block |
+| `plantsReact` | grass and bushes pressed over where units drive and springing back; ground, grass and plants burnt black, then brown, where blasts and fires were, growing back; felled trees still, burnt ones bare; felled trees fall smoothly | about 0.03 ms of its own in a fight (the field 0.010, the burnt ground 0.008, the grass +0.009), and the sun's maps 0.045 ms cheaper (what sways drawn together): the frame a little cheaper (16 MB for the burnt picture on SETONS_R) | |
 
 Ray tracing means Direct3D 12 with DXR 1.1 or Vulkan with ray queries: never on the Mac (MoltenVK has none);
 where it is missing those options do nothing. `rayReflections` builds the surfaces' shaders with ray
@@ -1283,7 +1339,7 @@ so there is less clutter). WorldPicture sets each bundle's options together, bef
 | `SetSoftShadows` | `softShadows`, `contactShadows` | about +0.37 ms |
 | `SetRayTracing` | `bounceLight`, `rayReflections`, `rayLightShadows` (reflections and the small lights' shadows from the next map) | about +0.75 ms; at night with many lights about 0.5 ms more |
 | `SetWeatherEffects` | `litRain`, `rainSplashes`, `waterDetail`; proposed: `horizonWeather` | about +0.05 ms in rain, +0.04 by water; the horizon about +0.1 (0.21 from the strategic view in snow) |
-| `SetGroundDetail` | `groundCover`, `battleScars`, `leafLight` | +0.05 to 0.16 ms zoomed in, nothing far out; scars up to +0.56 ms with 2000 in view |
+| `SetGroundDetail` | `groundCover`, `battleScars`, `leafLight`, `deepTracks`, `wildlife`, `plantsReact` ([plants], 2026-10-18) | +0.05 to 0.16 ms zoomed in, nothing far out; scars up to +0.56 ms with 2000 in view |
 | `SetFrameGeneration` | `frameGeneration` (a sixth setting, asked of the ui: "Frame Generation") | 1.1-1.4 ms a frame drawn; twice the frames shown |
 | `SetHiddenOutlines` | `hiddenOutlines` (readability, not light: its own setting, ON at first; proposed to the ui as "Hidden Unit Outlines") | 0.06-0.08 ms |
 
