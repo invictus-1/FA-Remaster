@@ -38,7 +38,9 @@ enum class CommandType : int {
   SpecialAction = 38, Dock = 39,
 };
 
-struct UnitCommand {
+// (enable_shared_from_this: the command database keeps an emptied command until the Sync, Sim::commandsEmptied, and a
+// coordinated order points at its partners weakly)
+struct UnitCommand : std::enable_shared_from_this<UnitCommand> {
   int targetPoint = -1;  // CAiTarget bone pick of an entity target (index into AI.TargetBones; -1 none)
   // the order named the army's recon BLIP of an enemy unit (a player's order: the interface only knows blips),
   // not the unit itself (an order the engine issues from what a weapon found: [entity+0x68] at 0x5d9415)
@@ -77,7 +79,24 @@ struct UnitCommand {
   // the handle scripts get (PushCommand; IsCommandDone, the platoon checks): unique for the session, unlike the
   // engine ids the pool hands out again (the original's script object points at the command itself, 0x6f8d80)
   uint32_t serial = 0;
+  // A coordinated order (CUnitCommand+0x144..+0x154; the stream issue data's second word, coordWith: a player's double
+  // click attack over the waypoint of another attack). The ctor 0x6e840d..0x6e84c2 finds the named command in the
+  // command database (0x6e1940; one not yet deleted, Sim::commandsEmptied) and links the new one with it and with every
+  // live command already linked with it, both ways, each link only between commands of the same type (CoordinateWith
+  // 0x6e9000: [cmd+0x98] equal, then a WeakPtr pushed on the other's list; never taken off, a dead partner stays an
+  // empty entry). coordinationStarted (+0x154, 0 in the ctor 0x6e8376) is set by the ctor of the attack task
+  // (0x5f2ae7) made while the command heads the unit's queue.
+  std::vector<std::weak_ptr<UnitCommand>> coordinatedWith;
+  bool coordinationStarted = false;
 };
+
+// CUnitCommand::IsCoordinating 0x5f24e0: the coordination list is not empty (dead partners count).
+bool IsCoordinating(const UnitCommand& c);
+// CUnitCommand::HasSatisfiedCoordination 0x6e90a0: no list, or the command has started and so has every partner still
+// alive.
+bool CoordinationSatisfied(const UnitCommand& c);
+// The head command of u's queue has an attack task now (the ctor's +0x154 = 1); the command, or null.
+std::shared_ptr<UnitCommand> MarkHeadCoordinationStarted(Unit* u);
 
 // Give an engine-made command its id from the sim's pool (CommandIdPool) and register it by that id.
 uint32_t AssignEngineCommandId(Sim& sim, const std::shared_ptr<UnitCommand>& c);
@@ -144,6 +163,9 @@ struct StreamIssueData {
   int maxCount = 1, count = 1;
   std::string lua;  // the serialized Lua value (nil = "\x02")
 };
+// The command database's lookup by id (CCommandDb +4, 0x6e1940): a stream id (source << 24 | n) or an engine one
+// (0x80000000 | index); null when no command has it.
+std::shared_ptr<UnitCommand> StreamCommand(Sim& sim, uint32_t id);
 // UNIT_IssueCommand 0x6f12c0 for a command-stream order: one command for every unit that accepts it (units in
 // ascending entity id), created at the first; clear empties each accepting unit's queue first. nullptr if no
 // unit took it. (A TransportReverseLoadUnits goes to its target and the transport chosen for it instead:

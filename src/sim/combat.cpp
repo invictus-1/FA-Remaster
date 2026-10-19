@@ -2544,6 +2544,9 @@ struct AttackData {
   bool listening = false;    // the attacker-event listener is linked (from the first UpdateAttacker on)
   int result = 0;            // 1 success, 2 failure (the listener's result)
   int ocWeapon = -1;         // +0x5c: the overcharge weapon's index (an OverCharge order only)
+  // +0x54: the command heading the unit's queue when the task was made (the ctor, 0x5f2ab7..0x5f2ae4: unit+0x4b4's
+  // first entry; a guard's or a patrol's own command for their child attacks), marked started (+0x154 = 1, 0x5f2ae7)
+  std::weak_ptr<UnitCommand> cmd;
 };
 
 namespace {
@@ -2614,6 +2617,7 @@ void InitAttack(Sim& sim, Unit* u, BuildTask& t, bool coordinated) {
   // unpacked until the child's first run six beats later.)
   AttackerUnpackStop(sim, u);
   if (CanFlyU(u)) d->firstUpdate = false;
+  d->cmd = MarkHeadCoordinationStarted(u);
 }
 
 // CAiAttackerImpl::VectorIsWithinAttackRange 0x5d70e0: any enabled weapon reaches p (2D)
@@ -2890,6 +2894,11 @@ int AttackStep(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
   bool mobile = IsMobile(u);
   switch (t.state) {
     case 0:
+      // 0x5f362a..0x5f364f: a coordinated order (IsCoordinating 0x5f24e0) waits, asking again in 10 beats, until it
+      // and every partner still alive have an attack task (HasSatisfiedCoordination 0x6e90a0). (A null +0x54 ends
+      // the task, -1: the command was deleted; ours ends the task with its command.)
+      if (std::shared_ptr<UnitCommand> c = d.cmd.lock())
+        if (IsCoordinating(*c) && !CoordinationSatisfied(*c)) return 10;
       t.state = 1;
       return 0;
     case 1:

@@ -123,7 +123,11 @@ void SetMoving(Unit* u, bool on) {
 void ReleaseCommandImpl(Unit* u, UnitCommand& c) {
   FormationRemoveUnit(c, u);
   c.units.erase(u);
-  if (!c.units.empty() || !c.beaconRef) return;
+  if (!c.units.empty()) return;
+  // (the command database keeps it until the Sync: Sim::commandsEmptied)
+  if (Sim* s = Sim::From(u->luaState()))
+    if (auto keep = c.weak_from_this().lock()) s->commandsEmptied.push_back(std::move(keep));
+  if (!c.beaconRef) return;
   Sim& sim = *Sim::From(u->luaState());
   if (Entity* b = sim.FindEntity(c.beaconRef)) {
     static const bool dbg = getenv("MOHO64_DEBUG_TASKS") != nullptr;
@@ -133,7 +137,8 @@ void ReleaseCommandImpl(Unit* u, UnitCommand& c) {
     // The beacon dies in the command object's destructor (0x6e8500), and the original deletes an emptied
     // command a beat's end later than its last holder lets go (seen twice in the Transports replay: a player's
     // order clears the transport's queue after tick T, the beacon is still listed after tick T + 1 and gone
-    // after T + 2). Where the deletion is decided was not found in the exe: this is the observed timing.
+    // after T + 2). (The deletion itself is the Sync's, RefreshPublishedCommandEvent 0x6e8dc0: Sim::commandsEmptied;
+    // the beacon's own end there was not read: this is the observed timing.)
     if (!b->destroyQueued) sim.QueueDestroyAfterBeat(b);
   }
   c.beaconRef = 0;
@@ -1634,6 +1639,13 @@ bool RemoveCommandFromUnit(Sim& sim, Unit* u, UnitCommand& c) {
 }
 
 namespace {
+// CUnitCommand::CoordinateWith 0x6e9000 (ecx: other, edx: self): self's list takes other (a WeakPtr, 0x6e9680), when
+// the two are of one type ([cmd+0x98], 0x6e9015..0x6e9025)
+void CoordinateWith(UnitCommand& self, UnitCommand& other) {
+  if (self.type != other.type) return;
+  self.coordinatedWith.push_back(other.weak_from_this());
+}
+
 // CommandDatabase::AddIssueData: the CUnitCommand of a stream message (one per message, made for the first unit
 // that takes it)
 std::shared_ptr<UnitCommand> MakeStreamCommand(Sim& sim, const StreamIssueData& d) {
@@ -1672,6 +1684,20 @@ std::shared_ptr<UnitCommand> MakeStreamCommand(Sim& sim, const StreamIssueData& 
     if (PushSerializedLua(L, d.lua) && lua_istable(L, -1)) c->scriptRef = luaL_ref(L, LUA_REGISTRYINDEX);
     lua_settop(L, top);
   }
+  // A coordinated order (the ctor, 0x6e840d..0x6e84c2): the command the issue data names (+4, -1: none) is looked up
+  // in the command database (0x6e1940); when there is one, the new command is linked with each live command of a copy
+  // of its list (0x6e7d40), both ways, and then with it, both ways (CoordinateWith checks the types).
+  if (d.coordWith != -1)
+    if (std::shared_ptr<UnitCommand> o = StreamCommand(sim, static_cast<uint32_t>(d.coordWith))) {
+      const std::vector<std::weak_ptr<UnitCommand>> others = o->coordinatedWith;
+      for (const auto& w : others)
+        if (std::shared_ptr<UnitCommand> x = w.lock()) {
+          CoordinateWith(*c, *x);
+          CoordinateWith(*x, *c);
+        }
+      CoordinateWith(*c, *o);
+      CoordinateWith(*o, *c);
+    }
   if (c->fromStream) sim.streamCommands[d.id] = c;
   return c;
 }
@@ -2797,5 +2823,25 @@ void PushUnitCommand(lua_State* L, const std::shared_ptr<UnitCommand>& c) {
 }
 
 void ReleaseCommand(Unit* u, UnitCommand& c) { ReleaseCommandImpl(u, c); }
+
+bool IsCoordinating(const UnitCommand& c) { return !c.coordinatedWith.empty(); }
+
+// 0x6e90a0: an empty list -> true; +0x154 clear -> false; then every entry whose WeakPtr still holds a command
+// (a deleted partner's is empty and skipped) must have +0x154 set
+bool CoordinationSatisfied(const UnitCommand& c) {
+  if (c.coordinatedWith.empty()) return true;
+  if (!c.coordinationStarted) return false;
+  for (const auto& w : c.coordinatedWith)
+    if (std::shared_ptr<UnitCommand> o = w.lock())
+      if (!o->coordinationStarted) return false;
+  return true;
+}
+
+std::shared_ptr<UnitCommand> MarkHeadCoordinationStarted(Unit* u) {
+  if (u->commands.empty()) return nullptr;
+  std::shared_ptr<UnitCommand> c = u->commands.front();
+  if (c) c->coordinationStarted = true;
+  return c;
+}
 
 }  // namespace moho

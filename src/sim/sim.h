@@ -478,6 +478,13 @@ class Sim {
   bool OkayToMessWith(const Army* a) const;  // 0x747320
   // Stream-issued commands by their stream id (source << 24 | n); Lua-issued ones are in commandsById.
   std::map<uint32_t, std::weak_ptr<UnitCommand>> streamCommands;
+  // Commands whose last unit let them go since the last Sync. The original deletes such a command in the Sync
+  // (CCommandDb::PublishSyncData 0x6e0f50 -> CUnitCommand::RefreshPublishedCommandEvent 0x6e8dc0: dirty, +0x141, which
+  // RemoveUnit 0x6e8c20 sets, and no units, +0xf8 == +0xfc -> the deleting dtor, vt+8), before the id pool's turn
+  // (0x6e0fff); until then the command database still finds it by its id. Seen: the interface's coordinated attack
+  // (MP1 3915) takes the hovered order off every unit and then names it as coordWith in the same message batch.
+  // Held here until UpdateIdPools.
+  std::vector<std::shared_ptr<UnitCommand>> commandsEmptied;
 
   static Sim* From(lua_State* L);
   bool PushImport(lua_State* L, const std::string& module);  // import(module) -> table, or false (logged)

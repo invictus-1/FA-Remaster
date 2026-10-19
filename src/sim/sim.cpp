@@ -2255,6 +2255,9 @@ void Sim::ReleaseId(uint32_t id) {
 // IdPool::Update 0x403a30, once per beat (EntityDb::Purge), and then the command database's (CCommandDb::
 // PublishSyncData 0x6e0f50, called by Sim::Sync at 0x747b0c after the purge 0x747af9; commands.h CommandIdPool)
 void Sim::UpdateIdPools() {
+  // the emptied commands go first (RefreshPublishedCommandEvent's deletions, 0x6e0fa9, come before IdPool::Update
+  // 0x6e0fff): an engine id's release lands in the same ring slot as before
+  commandsEmptied.clear();
   commandIds->Update();
   for (auto& [key, p] : idPools_) {
     if ((p.tail + 1) % 100 == p.head) {

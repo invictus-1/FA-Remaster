@@ -159,6 +159,8 @@ bool OkayCommand(Sim& sim, const UnitCommand& c) {
   return true;
 }
 
+}  // namespace
+
 std::shared_ptr<UnitCommand> StreamCommand(Sim& sim, uint32_t id) {
   // (one database in the original, CCommandDb +4, for the stream's ids and the engine's 0x80000000 | index ones)
   if ((id >> 24) == 0x80u) {
@@ -174,6 +176,8 @@ std::shared_ptr<UnitCommand> StreamCommand(Sim& sim, uint32_t id) {
   if (!c) sim.streamCommands.erase(it);
   return c;
 }
+
+namespace {
 
 // The units the current source may order (Sim::IssueCommand 0x749290): unknown ids, non-units, armies out of
 // the game and armies the source does not command (without cheats) are dropped one by one.
