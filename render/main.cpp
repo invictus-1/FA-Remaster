@@ -341,6 +341,12 @@
 //           window's width and height (2), drawn --photo-sample <n> times larger again and made smaller (0: as the
 //           memory allows), after --photo-settle <n> frames drawn at its size first (8); key P takes one at any
 //           time (photo1.png, photo2.png ... in the lab's folder)
+// --photo-look [name]  (photolook) the photographic look (photo_look.h, World::photoLook; modern look): the eye adapts to
+//           the scene's brightness, a film-like grade (film, the default; warm; coldwar; plain: no grade) and lens
+//           touches (a vignette, grain, a colour fringe at the corners); --photo-look-tune name=value,... sets its
+//           numbers (PhotoLook::Tune: the grade's, the eye's - adapt=0 off - and vignette, grain, fringe; 0: none);
+//           --photo-look-compare name,name,name: for choosing, today's finish top left and up to three looks beside it,
+//           each a quarter of the same picture (with --photo --photo-scale 2: each the window's size)
 // --frames N stops after N frames; with --screenshot the last frame is saved (for automatic checks).
 //
 // Mouse: wheel zooms at the pointer, middle button drags the ground, right button turns and tilts.
@@ -585,6 +591,8 @@ struct Options {
   std::string photo;
   float photoScale = 2;
   int photoSample = 0, photoSettle = 8;
+  bool photoLook = false;                // --photo-look (photolook)
+  std::string photoLookName = "film", photoLookTune, photoLookCompare;  // its name, --photo-look-tune, --photo-look-compare
 };
 
 bool ParseOptions(int argc, char** argv, Options* o) {
@@ -664,6 +672,10 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--soft-shadows") {
       o->softShadows = true;
       if (i + 1 < argc && (std::isdigit(static_cast<unsigned char>(argv[i + 1][0])) || argv[i + 1][0] == '.')) o->sunSize = static_cast<float>(atof(argv[++i]));
+    }
+    else if (a == "--photo-look") {  // [name] (photolook)
+      o->photoLook = true;
+      if (i + 1 < argc && argv[i + 1][0] != '-') o->photoLookName = argv[++i];
     }
     else if (a == "--clouds-3d") o->clouds3d = true;
     else if (a == "--clouds-full") o->clouds3d = o->cloudsFull = true;
@@ -951,6 +963,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--photo-scale") o->photoScale = std::clamp(static_cast<float>(atof(v)), 0.25f, 8.0f);
     else if (a == "--photo-sample") o->photoSample = std::clamp(atoi(v), 0, 4);
     else if (a == "--photo-settle") o->photoSettle = std::clamp(atoi(v), 0, 64);
+    else if (a == "--photo-look-tune") o->photoLook = true, o->photoLookTune = v;  // (photolook)
+    else if (a == "--photo-look-compare") o->photoLook = true, o->photoLookCompare = v;
     else return false;
   }
   return true;
@@ -1263,6 +1277,19 @@ int main(int argc, char** argv) {
   if (opt.sunSize > 0) world.sunSize = opt.sunSize;
   world.volumetricClouds = opt.clouds3d;
   if (opt.cloudsFull) world.clouds.shrink = 1;
+  if (opt.photoLook) {  // (photolook)
+    std::string why;
+    world.photoLook.on = true;
+    if (!world.photoLook.Named(opt.photoLookName)) {
+      fprintf(stderr, "render: --photo-look: no look named %s (%s)\n", opt.photoLookName.c_str(), PhotoLook::Names());
+      return 2;
+    }
+    if (!opt.photoLookTune.empty() && !world.photoLook.Tune(opt.photoLookTune, &why)) {
+      fprintf(stderr, "render: --photo-look-tune: %s\n", why.c_str());
+      return 2;
+    }
+    world.photoLook.compare = opt.photoLookCompare;
+  }
   world.cloudZoom = opt.cloudZoom;  // (cloudzoom)
   if (!opt.cloudZoomLook.empty()) {
     std::string why;

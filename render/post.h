@@ -12,6 +12,8 @@
 
 namespace render {
 
+class PhotoFinish;  // (photolook) photo_look.h
+
 class Post {
  public:
   explicit Post(gfx::Device* device) : device_(device) {}
@@ -64,6 +66,9 @@ class Post {
   // the scene up, else the scene's), its size, and the scene's depth and its size, it returns the picture to finish
   // in its place. Empty, as at first: none. Not for a picture shown in place of the scene's (`shown`).
   std::function<gfx::Texture(gfx::Texture picture, int width, int height, gfx::Texture depth, int depthWidth, int depthHeight)> beforeFinish;
+  // (photolook) The photographic look (photo_look.h, World::photoLook), modern look: the picture metered for its eye
+  // before the last pass, and the last pass its own in place of the tone curve's alone. None, as at first: today's.
+  PhotoFinish* photoFinish = nullptr;
 
   // The modern look's glow round what is brighter than the screen can show (lamps, flashes, the
   // sun on water): how much of it is added; 0: none.

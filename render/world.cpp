@@ -64,7 +64,8 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       volumes(device, vfs, &textures),
       device_(device),
       vfs_(vfs),
-      energy(device) {
+      energy(device),
+      photoFinish(device) {  // (photolook)
   particles.rampGlow = [this](const std::string& ramp) { return lights.RampGlow(ramp); };  // (what is hot: lit smoke's fires, heat shimmer)
   // (movement dust: how each kind of unit moves, from its blueprint)
   dust.readBlueprint = [this](const std::string& id, BpValue* out) {
@@ -2530,6 +2531,15 @@ void World::Render() {
     };
   } else if (post.beforeFinish) {
     post.beforeFinish = nullptr;
+  }
+  // (photolook) the photographic look: its eye moved on only in the game's own frames (not in a photo or a picture
+  // drawn between them), set at once after a cut or when the look comes on; no lens touches on a picture drawn
+  // between (the minimap's ground)
+  const bool photoLookBefore = post.photoFinish != nullptr;
+  post.photoFinish = nullptr;
+  if (photoLook.on && look == Look::Modern && !photoFinish.Failed()) {
+    photoFinish.Set(photoLook, sidePicture || photo ? 0.0f : frameSeconds_, (lensSnap_ && !photo) || !photoLookBefore, !sidePicture);
+    post.photoFinish = &photoFinish;
   }
   post.Present(view, &upscaler, screenWidth_, screenHeight_);
   if (framegenNow_ && !sidePicture && !photo) {  // frame generation: the finished picture kept before the icons and the interface, and the rest
