@@ -2043,9 +2043,13 @@ Vec3 ReferencePos(Sim& sim, Unit* U, GuardData& g) {
     // (0x5e2a90) in the unit's footprint cell. Then the cell's centre (COORDS_ToWorldPos 0x50b0f0). Seen: MP3 3941,
     // eleven army-1 engineers guarding one ground point in a formation; the original sends each to its own cell,
     // ours sent all of them to the point's cell (315, 94).
+    // The target's position is GetTargetPosGun with the centre flag clear (0x6e8a6a, CommandPosGun): an entity's
+    // target point (its AI.TargetBones pick, or without one its collision centre), not its origin. Seen: MP1 6470,
+    // army 0's uaa0303 0x8a given a Guard of the blip of army 2's power generator 0x200052 (origin 672.5, 182.5,
+    // collision centre 672.4985, 182.528): the original's air target is (676, 183), from the cell (671, 182);
+    // ours took the origin's cell (672, 182) and PrepareMove's ring gave (677, 183).
     Vec3 p = c->pos;
-    if (!FormationGoal(sim, *c, U, &p) && c->targetId)
-      if (Entity* e = sim.FindEntity(c->targetId)) p = e->position;
+    if (!FormationGoal(sim, *c, U, &p)) p = CommandPosGun(sim, *c);
     const NamedFootprint& fp = Fp(U);
     int cx = static_cast<int>(std::nearbyint(p.x - fp.sizeX * 0.5f));
     int cz = static_cast<int>(std::nearbyint(p.z - fp.sizeZ * 0.5f));
