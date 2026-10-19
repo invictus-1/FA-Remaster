@@ -47,6 +47,10 @@ class LiveSim {
     std::string enhancement;
     // ... and at this beat the same unit is paused (what the pause button sends). 0 = never.
     uint32_t pauseAt = 0;
+    // [pings] For tests of a new game: at this beat every army pings 30 from its first unit (its commander) toward the
+    // map's middle, by the game's own callback as the interface's ping.lua sends it (SimCallback SpawnPing), the kinds
+    // in turn (alert, move, attack, and a nuke's mesh). 0 = never.
+    uint32_t pingAt = 0;
   };
   enum class State { Loading, Running, Ended, Failed };
 
@@ -99,6 +103,7 @@ class LiveSim {
   void SelfDestruct(int army);
   void Enhance(int army, const std::string& enhancement);
   void Pause(int army);
+  void Ping();  // [pings] (Setup::pingAt)
   bool Load(std::string* error);
 
   Setup setup_;

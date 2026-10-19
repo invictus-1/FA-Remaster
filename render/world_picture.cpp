@@ -107,6 +107,8 @@ struct WorldPicture::Impl {
   int seenCells = 0;
   int mapWidth = 0, mapHeight = 0;
   Camera mapCamera;
+  bool minimapMeshes = false;  // [pings] SetMinimapMeshes
+  MinimapStamps stamps;        // [pings] (the meshes' stamps on it, placed.h)
   Mat4 mapMatrix{};
   std::vector<const StrategicIcons::Kind*> iconKinds;  // by FrameUnit::blueprint
   // (photomode) the moment asked for (SetPhotoMoment), eased over a second from what was shown when it was asked
@@ -710,6 +712,8 @@ void WorldPicture::SetHover(uint32_t entity, int kind) {
   impl_->world->hoverKind = kind;
 }
 
+void WorldPicture::SetMinimapMeshes(bool on) { impl_->minimapMeshes = on; }  // [pings]
+
 void WorldPicture::SetBorders(const std::vector<std::string>& meshBlueprints) {
   if (impl_->world) impl_->world->borders = meshBlueprints;
 }
@@ -819,6 +823,7 @@ void WorldPicture::SetWorldMeshes(const std::vector<WorldMesh>& meshes) {
     p.lifetime = m.lifetime;
     p.age = m.age;
     p.fractionComplete = m.fractionComplete;
+    p.lodCutoff = m.lodCutoff;  // [pings]
     placed.push_back(std::move(p));
   }
 }
@@ -935,6 +940,20 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height) {
         else out[x] = (p & 0xff000000u) | (((p >> 1) & 0x007f7f7fu) + ((p >> 3) & 0x001f1f1fu) + ((p >> 4) & 0x000f0f0fu));
       }
     }
+  }
+  // [pings] the meshes the original draws on its minimap by CartographicFeedback (FAF: while its "Disable meshes" is
+  // unticked): stamped on the ground, under the icons (placed.h, MinimapStamps)
+  if (m.minimapMeshes && m.mapWidth) {
+    MinimapStamps::View v;
+    v.matrix = m.mapMatrix;
+    v.ground = [&](float x, float z) { return w.GroundHeight(x, z); };
+    Vec3 right, up, back;
+    m.mapCamera.Axes(&right, &up, &back);
+    v.eye = m.mapCamera.Eye();
+    v.forward = back * -1.0f;
+    v.widthPerDepth = 2 * std::tan(m.mapCamera.fovY * 0.5f) * static_cast<float>(width) / static_cast<float>(height);
+    v.water = w.map.water.present ? w.map.water.elevation : -1e9f;
+    m.stamps.Stamp(w.models, w.textures, m.frame, w.placed, v, m.mapPixels.data(), width, height);
   }
   // the buildings the army remembers though they are gone
   for (const World::RememberedGone& r : w.rememberedGone) {

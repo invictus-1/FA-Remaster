@@ -442,8 +442,17 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   the ferry beacons UEB5102 and the like) is handed to `PlacedMeshes::TakeModel` instead of the mesh
   renderer, so it casts no shadow and is in neither the reflections nor the ray tracing scene. The
   original also draws these on its minimap (`cartographicTechnique = "CartographicFeedback"` in
-  `mesh.fx`); this renderer's minimap does not yet. `IconFadeInZoom` (a mesh blueprint's) is the zoom from
-  which a unit's strategic icon comes in; the original never fades a mesh by it. `--ping-test` shows them.
+  `mesh.fx`, which the CommandFeedback family, RallyPoint and FakeRings carry), when FAF's minimap option
+  "Disable meshes" is unticked (it is ticked unless the player unticks it): the host says so with
+  `WorldPicture::SetMinimapMeshes`, and `MinimapStamps` (placed.h) then stamps them on the minimap on the
+  processor, under the icons: opaque, in the albedo's colour, cut below the water and where the ground is
+  above them, each only where its level of detail reaches the minimap's as the original measures it (the
+  width the view spans times 1.8, against the mesh's LODCutoff: a ping's 99999 always, an interface
+  mark's 1000, `WorldMesh::lodCutoff`, only on small maps). The units' and the props' own minimap looks
+  are not drawn. `IconFadeInZoom` (a mesh blueprint's) is the zoom from which a unit's strategic icon
+  comes in; the original never fades a mesh by it. `--ping-test` shows them in the world; `--ping <beat>`
+  with `--session` has every army ping as the interface does, and `--minimap-meshes` with `--picture`
+  shows the stamps.
 - Scenery that changes (the engine's `PropEvents`, `World::AddPropEvents`; the simulation must
   have `collectProps` set before its first beat). The map's props are still read from the map
   file, kept in the file's order, and the simulation names one by its index there: one that is

@@ -350,6 +350,10 @@ class WorldPicture {
     float lifetime = 0;            // SetLifetimeParameter's seconds (0: not set) ...
     float age = 0;                 // ... and how many of them have passed since it was set
     float fractionComplete = 1;    // SetFractionCompleteParameter
+    // [pings] The mesh description's LODCutoff (the original's default when it gives none, worldmesh.lua's
+    // DEFAULTCUTOFF): beyond it the original does not draw the mesh; only the minimap's stamps go by it here
+    // (SetMinimapMeshes).
+    float lodCutoff = 1000;
   };
   void SetWorldMeshes(const std::vector<WorldMesh>& meshes);
   // What the map lies in (the game's MapBorderAdd): the mesh blueprints to draw around the map, as
@@ -364,6 +368,13 @@ class WorldPicture {
   // by the graphics card once per size and kept; the icons are laid on it on the processor at
   // every call, from the units of the last Draw (selected ones in their selected form).
   const std::vector<uint32_t>& DrawMinimap(int width, int height);
+  // [pings] The meshes on the minimap, FAF's minimap option "Disable meshes" (Prefs disableMinimapMesh; its scripts
+  // set cam_DefaultMiniLOD to 0 for it, 1.8 without it: hand `on` = that value is not 0). Off, as FAF has it until the
+  // player unticks the option: no meshes. On: what the original then draws of the meshes by their technique's
+  // "CartographicFeedback" (the CommandFeedback family, RallyPoint, FakeRings: pings, the interface's WorldMeshes of
+  // those shaders) is stamped under the icons: opaque, in its albedo's colour, where its level of detail reaches the
+  // minimap's (placed.h, MinimapStamps). The units' and the props' own minimap looks are not drawn yet.
+  void SetMinimapMeshes(bool on);
   // Where a place of the world is on the minimap last drawn, and the place on the ground under a
   // point of it.
   bool MinimapProject(Vec3 world, float* x, float* y) const;
