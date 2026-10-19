@@ -1277,6 +1277,90 @@ showers and icebergs are.
      0.730 -> 0.683); nothing happening 2.378 -> 2.347; a wood from the game's height 3.146 -> 3.111. Off: pictures
      identical (regression 0 px on both backends, and SETONS_R with ground cover, blasts and tanks 0 px).
 
+## Sunlight through gaps: light shafts and drifting cloud shadows (first version, 2026-10-19; a helper's, for review)
+
+The visuals session's proposals 1 and 2 (`visuals\renderer_reply_lod.md` section 56; Chris approved them 2026-10-18):
+"light shafts through the forest canopy and through breaks in the clouds" and "cloud shadows drifting across the land".
+`World::lightShafts` (viewer `--shafts`; needs the light in the air, `--air`) and `World::driftingShadows`
+(`--cloud-drift`); `--sunlight` both; `--sunlight-look name=value,...` their numbers (`Sunlight::Set`).
+`render/sunlight.h/.cpp`; modern look with a time of day; proposed for the "Atmosphere" setting (world_picture.cpp sets
+them with the others). Everything follows from the map, the clock and the weather: the same for every player and every
+replay.
+
+**What was there (measured first, SETONS_R).** The light in the air lit the mist, but the trees' shadows in it were
+blurry veils: its cells are 8 pixels and some 7 units deep at 50 units from the eye, too coarse for gaps between crowns,
+and cells straddling the ground average in samples under it (a fine march along the same lines of sight found 4.5 times
+the volume's light in the low band). The clouds' shadows were blobs of 250 to 1000 units: from the game's height the
+view lay all in sun or all in shadow, from far out one or two blobs. Over the sea at dusk no rays under the clouds at
+all (even with ten times the dust).
+
+- **Drifting cloud shadows.** The clouds' field broken into heaps of many sizes (view.h, `CloudFieldBroken`: patches of
+  weather some 550 units across the heaps gather in, heaps of some 120, smaller ones of 50, ragged edges of 20, each
+  octave turned from the last), so that some shadows lie in view from every height of the camera; about the cover's
+  share of the land in shadow (at cover 0.5 half of it), soft over a few units at their edges, 0.8 of the sun's light
+  taken (0.75 before); they drift with the sky's wind (5.5 units a second, `drift` to change it) and change slowly as
+  they go (each octave by about the same clock, so they drift rather than boil). The sea darkens in them too (0.3, its
+  mirror of the sky as well). The flat cloud layer in the sky (sky.cpp, `CloudStepsBroken`) and the volumetric clouds'
+  cover (clouds.cpp, `Coverage`, as many heaps as the shadows have) are cut from the same field, so the shadows lie
+  under the clouds that cast them. Once a frame a picture of them (`Sunlight::Drift`, 1024 texels square round what the
+  camera sees, 1.5 world units a texel from the game's height, 8 from the strategic view; the volumetric clouds' own
+  shadows folded in) takes the clouds' shadows' place (`kCloudShadowSlot`): every surface, the water and the light in
+  the air read it once, where the flat layer's field was three noises at every pixel; before it is drawn in a frame and
+  beyond its edge they work the field out as before.
+- **Shafts through the canopy.** A low band of air over the ground (6 units; the trees are 2.5 to 4 high) holds the
+  morning's haze and the mist: thickest at the ground, all of it in the woods (`SetWoods`: a picture of where the trees
+  stand, 4 units a texel, from the world's tree list), 0.3 of it over open ground; more with mist, wet ground or fog.
+  Its sunlight is worked out finely along each pixel's line of sight through the sun's shadow maps: at half the
+  picture's width and height, only the black squares of a chessboard (packed two to a texel), a step every unit (24 at
+  most, 4 at least: a line of sight steeply down through the band needs few), the steps of the eight marched places in
+  each four by four starting at eight places along a step and averaged again with their neighbours at the same distance
+  (no noise at 2x), then laid over the scene with an upsampling that keeps to each pixel's distance (no light running
+  onto a trunk in front). The light in the air leaves the band's sunlight near the eye to this pass (its `SUNLIGHT`
+  gather, made only when the shafts are on), keeping its haze and its other light. Gaps in the crowns let slanted shafts
+  down through the shadowed haze, trunks and crowns throw dark ones through the lit haze. The pass reaches 2.5 times the
+  game camera's distance (600 at most) and fades out as the camera rises from 350 to 550 (from high up the shafts are
+  finer than a pixel). Strength 0.8 of what the light in the air reckons (a full-mist morning brightened the picture by
+  27 of 255 at 1; 21 at 0.8, the close view at 7:30 with full mist; 6 from the game's camera at 150).
+- **Rays under breaks in the clouds.** A low haze under the clouds (thinning to 1/e over 40 units; most where the clouds
+  are broken and the sun is low; more with wet ground and fog), whose sunlight the same pass works out along each line
+  of sight through the clouds' shadow (12 steps, out to 3000 units; the clouds' shadow read from a picture of it made
+  once a frame, 512 texels square, not worked out at every step). Looking toward the horizon (a low camera, a cinematic
+  one) the bands fan out from the sun as rays; from the game's usual height, looking down, a line of sight crosses
+  several gaps on its way and they read as a soft warm glow with broad faint bands (a CPU model of the same integral
+  agrees: the bands need the long, nearly level lines of sight). Not as visible rays from the game's camera: said
+  plainly.
+- **Cost** at 1440p (RTX 4090, Direct3D 12, 4x MSAA, the lowest of 270 frames; the card shared with other sessions'
+  work). In each: the shafts' pass marched and smoothed; laid over the scene; the drifting shadows' picture; what the
+  volumetric clouds' own pass costs more with their heaps; the light in the air's more; together:
+  the forest at 7:30 in full mist from the game's camera at 150: 0.067, 0.081, 0.019, 0.017, 0.002: 0.19 ms;
+  noon, clouds 0.5, the flat layer: 0.067, 0.081, 0.015, none, 0.004: 0.17 (and the ground's pass about 0.02 cheaper:
+  the shadows one reading where they were three noises); the same with the volumetric clouds: 0.065, 0.077, 0.019,
+  0.013, 0.008: 0.18; dusk over the sea, clouds 0.85: 0.076, 0.065, 0.015, none, 0.003: 0.16; close among the trees
+  (camera at 30, a cinematic view): 0.103, 0.085, 0.019, 0.017, 0.008: 0.23, the one over the 0.2 asked. The drifting
+  shadows alone: their picture 0.015-0.019 ms, with the volumetric clouds 0.013-0.018 more in their own pass. Laying
+  the shafts over the scene is 0.08 of it with 4x MSAA (the blend into four samples a pixel; 0.02 with one sample a
+  pixel, as with FSR 3). The march was 0.51 ms at dusk with the clouds' shadow worked out at every step of the low
+  haze, 0.10 with a picture of it; in the woods 0.12 with every half-size place marched, 0.08 with half of them (a
+  chessboard), the picture the same at 2x. The whole frame's times moved by more than all this from run to run (the
+  card shared): the stages' are the numbers.
+- **Off**: nothing of it runs and the shaders' code without it is as before (the broken field is its own function, taken
+  by a branch at the top of each user, since a branch inside `CloudField` changed the sky's clouds by one level in a few
+  hundred pixels); pictures identical, pixel for pixel: the regression (regress3, both backends) and six SETONS_R scenes
+  with the light in the air, the volumetric clouds and 1 or 4 samples a pixel. On, Vulkan as Direct3D 12 (the looks'
+  change differs between them by 0.34-0.72 in 255 over the picture, as the two differ with it off; Direct3D's own
+  compiler, `--fxc`, 0.08-0.18).
+- Its hooks: view.h (five float4 and `driftPicture` at the end of the view's block; `CloudFieldBroken`, `DriftHeaps`; a
+  branch at the top of `CloudShadow`), sky.cpp (`CloudStepsBroken` and a branch at `CloudSteps`'s top), clouds.cpp (a
+  branch in `Coverage`), water.cpp (the sea darker in the shadows), air.h/.cpp (the `SUNLIGHT` gather), world.h
+  (`lightShafts`, `driftingShadows`, `sunlight`, after `horizon`), world.cpp (`Open`: `SetWoods`; `Begin` after the
+  winter water; `Render`: the drift picture after the clouds' `Prepare`, bound in place of `clouds.Shadows()` at its
+  four uses, the shafts after the horizon's), main.cpp (`--shafts`, `--cloud-drift`, `--sunlight`, `--sunlight-look`),
+  world_picture.cpp (the Atmosphere bundle). Its passes bind t0-t4 of their own.
+- Open: Chris to judge (how hazy a dusk with broken clouds may go: the glow lifts the picture by 16 of 255 from the
+  game's height; whether the drift's speed suits, 5.5 units a second is the sky's own); rays that read as rays from the
+  game's camera would need a long level line of sight it does not have; the shafts in the woods show from close and
+  middle heights (to 350-550 of camera distance) and leave the far views to the light in the air.
+
 ## The options
 
 Each is off by default (but `hiddenOutlines`, on: Chris's word, item 15) and, off, leaves the picture as it was, pixel
@@ -1316,6 +1400,8 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `wildlife` | flocks of birds over the woods and gulls over the shores, scattered by fighting; fireflies at dusk and by night | about 0.02 ms (proposed for the "Ground Detail" setting) | a map with trees or shores |
 | `movementDust` | vehicles raise dust on dry ground, hover units throw spray, high aircraft draw contrails | about 0.07 ms with 60 units moving, 0.22 close up | |
 | `volumeExplosions` | big blasts as lit, glowing volumes; a nuke's flash over the map, its ring through the clouds, its mushroom cloud | about 0.25-0.4 ms with four blasts, up to 0.6 ms with a nuke filling half the screen (the files: tens of MB once on) | the visuals session's volume files |
+| `driftingShadows` | the clouds broken into heaps of many sizes: their soft shadows drift over land and sea with the wind, readable from every height; the sky's layer and the volumetric clouds the same heaps | about 0.02 ms (its picture; the ground's pass a little cheaper), with the volumetric clouds 0.015 more in their own pass | a time of day |
+| `lightShafts` | shafts of sunlight through gaps in the woods' crowns in the low haze (strongest on a misty morning, after rain); under broken clouds a low haze, rays toward a low sun on the horizon, a soft warm glow from the game's height | 0.14-0.15 ms from the game's camera (0.08 of it laying the pass with 4x MSAA), 0.2 close among the trees | `volumetricFog`, a time of day |
 | `horizonWeather` | beyond the map's edge: winter ice (floes, pack ice, icebergs) while snow lies, fog banks, showers passing far out, the clouds' shadows over the far sea | about 0.1 ms from the game's camera, 0.21 from the strategic view in snow | a time of day; the world beyond the edge |
 | `beyondLand` | a softer map edge (the ground past it dims over 10 units and a soft shadow replaces the dark line; the fog of war goes on past it) and land far off: coastlines, hills and snow-capped ranges round the map out to four map sizes, which way land lies read from the map's own edges, coloured by its ground, lit and hazed (beyond_land.h; Chris, 2026-10-18; in the Atmosphere setting) | 0.03-0.19 ms at 1440p; made once a map (13-21 ms) | the world beyond the edge (the game's edge option two) |
 | `season` (`WorldPicture::SetSeason`) | the season a map is drawn in (Summer as at first, Autumn; Winter reserved): its ground's materials, ground cover, props and mud as its remap.json's "seasons" block lists them (the visuals session's art); in autumn leaves in the wind (off broadleaf trees, blown over the ground where the cover grows; `fallingLeaves`), the autumn climate (showers, more fog, morning fog) (seasons.h; Chris, 2026-10-18: a player's option) | the leaves 0.01 ms; the rest nothing (other textures) | taken in when a map opens; maps with a "seasons" block |
@@ -1335,7 +1421,7 @@ so there is less clutter). WorldPicture sets each bundle's options together, bef
 
 | Setting (`WorldPicture::`) | Options | Cost at 1440p |
 |---|---|---|
-| `SetAtmosphere` | `volumetricFog`, `volumetricClouds`, `skyTables` | about 0.25 ms less (needs a time of day) |
+| `SetAtmosphere` | `volumetricFog`, `volumetricClouds`, `skyTables`; proposed (and set with them in world_picture.cpp, for review): `lightShafts`, `driftingShadows` | about 0.25 ms less (needs a time of day); the two proposed about +0.16 to 0.19 from the game's camera |
 | `SetSoftShadows` | `softShadows`, `contactShadows` | about +0.37 ms |
 | `SetRayTracing` | `bounceLight`, `rayReflections`, `rayLightShadows` (reflections and the small lights' shadows from the next map) | about +0.75 ms; at night with many lights about 0.5 ms more |
 | `SetWeatherEffects` | `litRain`, `rainSplashes`, `waterDetail`; proposed: `horizonWeather` | about +0.05 ms in rain, +0.04 by water; the horizon about +0.1 (0.21 from the strategic view in snow) |

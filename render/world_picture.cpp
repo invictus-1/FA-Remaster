@@ -72,6 +72,7 @@ struct WorldPicture::Impl {
   void ApplyBundles() {  // (onto the world, where there is one)
     if (!world) return;
     if (atmosphere >= 0) world->volumetricFog = world->volumetricClouds = world->skyTables = world->cloudZoom = world->beyondLand = atmosphere > 0;
+    if (atmosphere >= 0) world->lightShafts = world->driftingShadows = atmosphere > 0;  // [sunlight] (proposed: with the atmosphere)
     if (softShadows >= 0) world->softShadows = world->contactShadows = softShadows > 0;
     if (rayTracing >= 0) world->bounceLight = world->rayLightShadows = rayTracing > 0;
     world->rayReflections = rayReflections;

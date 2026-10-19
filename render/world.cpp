@@ -68,7 +68,8 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       energy(device),
       photoFinish(device),  // (photolook)
       horizon(device),  // [horizon]
-      leaves(device) {  // [seasons]
+      leaves(device),  // [seasons]
+      sunlight(device) {  // [sunlight]
   particles.rampGlow = [this](const std::string& ramp) { return lights.RampGlow(ramp); };  // (what is hot: lit smoke's fires, heat shimmer)
   // (movement dust: how each kind of unit moves, from its blueprint)
   dust.readBlueprint = [this](const std::string& id, BpValue* out) {
@@ -269,6 +270,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
         trees.push_back({p.world.m[0][3], p.world.m[1][3], p.world.m[2][3], p.model->boundsMax.y * scale});
       }
       wildlifeDraw.SetMap(&map, trees);
+      sunlight.SetWoods(trees, static_cast<float>(map.width), static_cast<float>(map.height));  // [sunlight] (where the woods are)
     }
     {  // [seasons] the trees the season's leaves fall from: in autumn, on a map with an autumn look, those the season draws
        // in its own look and the broadleaf trees by their names (seasons.h)
@@ -985,6 +987,12 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       c.winterWater[2] = static_cast<float>(map.width);
       c.winterWater[3] = static_cast<float>(map.height);
     }
+  }
+  {  // [sunlight] drifting cloud shadows and the light shafts' low band (sunlight.h), by the sky and the weather just reckoned
+    const bool day = timeOfDay >= 0 && look == Look::Modern && haveMap_;
+    sunlight.Begin(&view, day && driftingShadows, day && lightShafts && volumetricFog && !sidePicture, placing, mistNow, wet, fog,
+                   static_cast<float>(map.width), static_cast<float>(map.height), terrain.HeightUnit(),
+                   map.water.present ? map.water.elevation : -1e9f);
   }
   {  // movement dust (movement_dust.h): on in the modern look, with what the weather has done to the ground and the air
     dustNow_ = movementDust && look == Look::Modern && haveMap_ && !sidePicture;
@@ -2547,14 +2555,24 @@ void World::Render() {
   clouds.zoom = cloudZoomDraw.For(camera, clouds, cloudZoom && volumetricClouds && look == Look::Modern && haveMap_);
   if (sidePicture) clouds.Skip(&view);  // (a frame for something else: the game's frames before kept)
   else clouds.Prepare(&view, camera, volumetricClouds && look == Look::Modern && haveMap_);
+  // [sunlight] the drifting cloud shadows' picture (sunlight.h), in the clouds' own shadows' place from here on
+  gfx::Texture cloudShadowsNow = clouds.Shadows();
+  if (driftingShadows && !sidePicture) Stage("drifting cloud shadows");
+  if (!sidePicture && sunlight.Drift(&view, clouds.Shadows())) {
+    cloudShadowsNow = sunlight.DriftPicture();
+    device_->SetTexture(kCloudShadowSlot, cloudShadowsNow);
+  }
   // light in the air: its volume, between the shadow maps and the scene that reads it
   Stage("light in the air");
+  air.sunlight = view.constants.shaftBand[0] > 0;  // [sunlight] (the light shafts' band and hazes: sunlight.h)
+  air.heights = terrain.HeightTexture();
+  air.woods = sunlight.Woods();
   if (sidePicture) air.Skip(&view);
   else air.Build(&view, camera, shadows.Map(), lights.ShadowMap(), &lights, volumetricFog && look == Look::Modern && haveMap_, groundMiddle_);
   if (volumesDrawn_) {  // (volume explosions) the light in each volume, after the shadows it takes, before the scene
     Stage("volume blasts lit");
     device_->SetTexture(kEnvironmentSlot, sky_);
-    volumes.Light(view, shadows.Map(), clouds.Shadows(), smokeNow_ ? smokeMap.Map() : gfx::Texture{}, &lights);
+    volumes.Light(view, shadows.Map(), cloudShadowsNow, smokeNow_ ? smokeMap.Map() : gfx::Texture{}, &lights);
   }
   // the sky from tables (when on): its view from the eye this frame, before the sky's pass and the surfaces read it
   bool skyTable = false;
@@ -2569,7 +2587,7 @@ void World::Render() {
   device_->SetTexture(kLampShadowSlot, lights.ShadowMap());
   device_->SetTexture(kEnvironmentSlot, sky_);
   device_->SetTexture(kAirSlot, air.Volume());
-  device_->SetTexture(kCloudShadowSlot, clouds.Shadows());
+  device_->SetTexture(kCloudShadowSlot, cloudShadowsNow);  // [sunlight] (the clouds' own, or the drifting shadows' with them)
   device_->SetTexture(kSkyTableSlot, skyTable ? skyDraw.SkyView() : gfx::Texture{});
   if (bounceNow_) bounce.Bind();
   if (reflectNow_ || lightRaysNow_) rays.Bind(terrain.NormalMap(), terrain.GroundColours());  // (for the surfaces that trace)
@@ -2709,6 +2727,16 @@ void World::Render() {
       post.ContinueScene();
       lights.Bind();
     }
+    if (sunlight.ShaftsNow() && air.Volume()) {  // [sunlight] the light shafts in the low band over the ground (sunlight.h)
+      Stage("light shafts");
+      sunlight.March(view, camera, post.Depth(), terrain.HeightTexture(), shadows.Map(), air.Volume(), cloudShadowsNow,
+                     smokeNow_ ? smokeMap.Map() : gfx::Texture{}, air.dust, groundMiddle_, air.thinsOver, air.sunInAir, air.sunForward);
+      Stage("light shafts: laid");
+      post.BeginColorOnly();
+      sunlight.Lay(view, post.Depth());
+      post.ContinueScene();
+      lights.Bind();
+    }
   } else {
     draw.Flush(view);
     skyDraw.Draw(view, camera, skyLight, haveMap_ ? sky_ : gfx::Texture{});
@@ -2776,7 +2804,7 @@ void World::Render() {
         lights.Bind();
         device_->SetTexture(kShadowMapSlot, shadows.Map());
         device_->SetTexture(kLampShadowSlot, lights.ShadowMap());
-        device_->SetTexture(kCloudShadowSlot, clouds.Shadows());
+        device_->SetTexture(kCloudShadowSlot, cloudShadowsNow);  // [sunlight]
         device_->SetTexture(kSmokeShadowSlot, smokeNow_ ? smokeMap.Map() : gfx::Texture{});
       }
       particles.Draw(view, post.Depth(), camera.zNear);

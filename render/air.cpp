@@ -2,10 +2,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
 #include "lighting.h"
 #include "lights.h"
+#include "sunlight.h"  // [sunlight]
 
 namespace render {
 namespace {
@@ -133,6 +135,25 @@ RWTexture3D<float4> airTarget : register(u0);
   float dust;
   float thick = Thickness(p, dust);
   float3 scattered = 0;
+#ifdef SUNLIGHT
+  // [sunlight] (sunlight.h; built only for the light shafts) the low band's haze and the haze under the clouds' layer
+  // thicken the air; the band's sunlight near the eye is the shafts' pass's (ShaftShare), worked out there finely; the
+  // haze under the clouds (half as much lost as it scatters: thin, its light mostly forward) shows the clouds' shadow
+  // as rays.
+  float over = p.y - ShaftGround(p.xz);
+  float band = ShaftHaze(p, over), under = LowHaze(over);
+  float near = thick + band;
+  thick = near + under * 0.5;
+  [branch] if (thick > 0) {
+    float3 falls = ToLinear(sunColor) * (lightMultiplier * modern.x * 3.14159265) * SunInAir(p) * CloudShadow(p) * SmokeShadow(p);
+    float c = dot(sunDirection, ray);
+    float3 sun = falls * (AirPhase(c, airLight.x) * airLight.z * near * (1 - ShaftShare(over, length(p - cameraPosition))) + AirPhase(c, shaftLow.y) * airLight.z * under * (1 - LowShare(length(p - cameraPosition))));
+    float3 points;
+    float3 beams = LampsInAir(p, ray, points);
+    scattered = sun + SkyInAir() * (modern.y * airLight.w) * thick + beams * (thick + dust * max(airRange.w - 1, 0)) +
+                points * (thick + dust * max(airPoints.x - 1, 0));
+  }
+#else
   [branch] if (thick > 0) {
     float3 sun = ToLinear(sunColor) * (lightMultiplier * modern.x * 3.14159265) * AirPhase(dot(sunDirection, ray), airLight.x) * SunInAir(p) * CloudShadow(p) * SmokeShadow(p);
     // (the lamps' light strengthened on the clear air's dust alone: in mist and fog a beam shows by itself)
@@ -141,6 +162,7 @@ RWTexture3D<float4> airTarget : register(u0);
     scattered = (sun * airLight.z + SkyInAir() * (modern.y * airLight.w)) * thick + beams * (thick + dust * max(airRange.w - 1, 0)) +
                 points * (thick + dust * max(airPoints.x - 1, 0));
   }
+#endif
   float4 now = float4(scattered, thick);
   // what the cell held last frame, read where its middle was then
   [branch] if (airAhead.w > 0) {
@@ -273,7 +295,25 @@ void Air::Build(View* view, const Camera& camera, gfx::Texture sunShadows, gfx::
   k.light[3] = std::max(skyInAir, 0.0f);
 
   const gfx::Texture last = cells_[1 - now_], gathered = cells_[now_];
-  device_->SetPipeline(gather_);
+  // [sunlight] with the light shafts (sunlight.h): the gather built with their band and haze, made the first time
+  gfx::Pipeline gather = gather_;
+  bool withSunlight = false;
+  if (sunlight && heights && woods) {
+    if (!sunlightTried_) {
+      sunlightTried_ = true;
+      std::string why;
+      const std::string source = std::string("#define SUNLIGHT 1\n#define SHAFT_HEIGHTS t5\n#define SHAFT_WOODS t6\n") + kViewShaderBlock + kLightingShaderBlock + kShaftBandShaderBlock + kShader;
+      gfx::ComputeDesc cd;
+      cd.source = source;
+      cd.name = "air: gather, light shafts";
+      cd.entry = "Gather";
+      gatherSunlight_ = device_->CreateCompute(cd, &why);
+      if (!gatherSunlight_) fprintf(stderr, "render: the light in the air cannot take the light shafts (%s)\n", why.c_str());
+    }
+    if (gatherSunlight_) gather = gatherSunlight_, withSunlight = true;
+  }
+  device_->SetPipeline(gather);
+  if (withSunlight) device_->SetTexture(5, heights), device_->SetTexture(6, woods);
   device_->SetConstants(0, &view->constants, sizeof view->constants);
   device_->SetConstants(1, &k, sizeof k);
   device_->SetTexture(0, last);
@@ -288,6 +328,7 @@ void Air::Build(View* view, const Camera& camera, gfx::Texture sunShadows, gfx::
   device_->Dispatch(static_cast<uint32_t>((width_ + 7) / 8), static_cast<uint32_t>((height_ + 7) / 8), 1);
   device_->SetStorage(0, {});
   device_->SetTexture(0, {});
+  if (withSunlight) device_->SetTexture(5, {}), device_->SetTexture(6, {});
 
   lastViewProj_ = view->constants.viewProj;
   lastEye_ = eye;

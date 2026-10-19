@@ -256,6 +256,13 @@
 //           the autumn climate (--climate autumn: that climate in any season)
 // --terrain-overlay <folder>  [seasons] a folder laid over the remastered ground's (mounted before it, so its files are
 //           found first): a remap.json of one's own (a test block of a season) and stand-in materials beside the real ones
+// --shafts  [sunlight] light shafts (sunlight.h, World::lightShafts; modern look, a time of day, with --air): shafts of
+//           sunlight through gaps in the woods' crowns in the low haze over the ground (more with mist, wet ground and
+//           fog), and rays under breaks in the clouds
+// --cloud-drift  [sunlight] drifting cloud shadows (sunlight.h, World::driftingShadows; modern look, a time of day): the
+//           clouds broken into heaps of many sizes, their shadows drifting over land and sea; --sunlight both.
+//           --sunlight-look name=value,...: their numbers (Sunlight::Set: shadow, edge, sea, drift, top, open, forward,
+//           haze, misty, under, low, lowforward, lowreach, reach, farthest, fadefrom, fadeto, steps, spacing, strength)
 // --bounce  bounce light (bounce.h, World::bounceLight; modern look, where the device has ray tracing): light thrown
 //           back by the ground, the hills and what stands on them, from probes the rays update
 // --ray-view  ray tracing's check view (ray_scene.h, World::rayView; where the device can): a ray from the camera
@@ -543,6 +550,8 @@ struct Options {
   bool wildlife = false, wildlifeVerbose = false;  // --wildlife, --wildlife-verbose
   bool horizon = false;                            // [horizon] --horizon
   std::string horizonParts, horizonLook;            // [horizon] --horizon-parts, --horizon-look
+  bool shafts = false, cloudDrift = false;          // [sunlight] --shafts, --cloud-drift (--sunlight: both)
+  std::string sunlightLook;                         // [sunlight] --sunlight-look
   float wildlifeNoise[4] = {0, 0, -1, 0};          // --wildlife-noise x,z,at,every (at < 0: none)
   float birdScale = -1, fireflyStrength = -1;      // --bird-scale, --firefly-strength
   float plantDensity = -1;              // --plant-density
@@ -758,6 +767,9 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--ground-cover") o->groundCover = true;
     else if (a == "--wildlife") o->wildlife = true;
     else if (a == "--horizon") o->horizon = true;  // [horizon]
+    else if (a == "--shafts") o->shafts = true;  // [sunlight]
+    else if (a == "--cloud-drift") o->cloudDrift = true;  // [sunlight]
+    else if (a == "--sunlight") o->shafts = o->cloudDrift = true;  // [sunlight]
     else if (a == "--wildlife-verbose") o->wildlife = o->wildlifeVerbose = true;
     else if (a == "--battle-scars") o->battleScars = true;
     else if (a == "--leaf-light") o->leafLight = true;
@@ -893,6 +905,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     }
     else if (a == "--horizon-parts") o->horizon = true, o->horizonParts = v;  // [horizon]
     else if (a == "--horizon-look") o->horizonLook = v;  // [horizon]
+    else if (a == "--sunlight-look") o->sunlightLook = v;  // [sunlight]
     else if (a == "--bird-scale") o->birdScale = static_cast<float>(atof(v));
     else if (a == "--firefly-strength") o->fireflyStrength = static_cast<float>(atof(v));
     else if (a == "--ripple-test") {
@@ -1455,6 +1468,12 @@ int main(int argc, char** argv) {
   if (!opt.horizonLook.empty()) {
     std::string why;
     if (!world.horizon.Set(opt.horizonLook, &why)) fprintf(stderr, "render: --horizon-look: %s\n", why.c_str());
+  }
+  world.lightShafts = opt.shafts;  // [sunlight]
+  world.driftingShadows = opt.cloudDrift;
+  if (!opt.sunlightLook.empty()) {
+    std::string why;
+    if (!world.sunlight.Set(opt.sunlightLook, &why)) fprintf(stderr, "render: --sunlight-look: %s\n", why.c_str());
   }
   world.wildlifeDraw.verbose = opt.wildlifeVerbose;
   if (opt.birdScale > 0) world.wildlifeDraw.birdScale = opt.birdScale;

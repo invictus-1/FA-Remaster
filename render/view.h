@@ -154,6 +154,28 @@ struct ViewConstants {
   // sight.cpp): over how many pixels that shadow fades; y over how many world units past the edge the ground dims;
   // z how dark the shadow is at the edge; w how much of its colour the ground loses. 0: off.
   float beyondLand[4];
+  // [sunlight] Drifting cloud shadows and light shafts (sunlight.h; World::driftingShadows, lightShafts). cloudDrift: x 1 =
+  // the clouds' field broken into heaps of many sizes (CloudField), whose shadows read from every height of the camera; y how
+  // much of the sun's light a cloud's shadow takes (0.75 without); z how wide a shadow's soft edge is (in the field's
+  // values); w how much darker the sea goes in a cloud's shadow. shaftBand: the low band of air over the ground whose
+  // sunlight the shafts' pass works out finely, which the light in the air (air.h) then leaves to it: x the band's top over
+  // the ground (0: no band, the light in the air as without it), y how far from the eye it reaches (it fades out over the
+  // last fifth), z the haze in it at the ground (share of light lost per world unit), w the haze under the clouds' layer
+  // (the same; the rays below breaks in the clouds). shaftGround: x the ground's height unit (Terrain::HeightUnit), y, z the
+  // map's width and height, w the water's level (-1e9: none). shaftMore: x the share of the band's haze over open ground (the
+  // woods hold all of it); y, z, w unused. shaftLow: the low haze under broken clouds (its thickness: shaftBand.w): x the
+  // height it thins to 1/e over, y its forward scattering, z how far from the eye the shafts' pass works out its sunlight
+  // (finely, through the clouds' shadow at every step; the light in the air leaves it to the pass; 0: the light in the air
+  // keeps it: a soft glow), w unused. driftPicture: this frame's picture of the drifting shadows round what the camera
+  // sees (Sunlight::Drift, bound at kCloudShadowSlot in the clouds' own picture's place: it holds theirs too), at the
+  // clouds' underside: x, y its middle (world x, z); z 1 / its width; w 1 = drawn (before it is, and beyond it, the
+  // shadows are worked out from the field where they are read).
+  float cloudDrift[4];
+  float shaftBand[4];
+  float shaftGround[4];
+  float shaftMore[4];
+  float shaftLow[4];
+  float driftPicture[4];
 };
 
 // The same block, as HLSL source: shaders start with it.
@@ -204,6 +226,12 @@ cbuffer View : register(b0) {
   float4 rayLights;       // the small lights' shadows by rays: x 1 = on; y rays a place casts at most; z, w a light's size / radius (a beam's)
   float4 winterWater;     // winter water: x how far the water has gone over to winter (0: not at all); y the water's level; z, w the map's size
   float4 beyondLand;      // (beyondland) the soft edge: x its shadow's width in pixels (0: off); y the dimming's width; z the shadow's darkness; w the colour lost
+  float4 cloudDrift;      // [sunlight] drifting cloud shadows: x 1 = on (the broken field); y a shadow's strength; z its edge; w the sea's darkening
+  float4 shaftBand;       // [sunlight] light shafts: x the low band's top over the ground (0: none); y its reach from the eye; z its haze; w the haze under the clouds
+  float4 shaftGround;     // [sunlight] x the ground's height unit; y, z the map's size; w the water's level
+  float4 shaftMore;       // [sunlight] x the share of the band's haze over open ground
+  float4 shaftLow;        // [sunlight] the low haze: x its height; y its forward scattering; z the shafts' pass's reach for it
+  float4 driftPicture;    // [sunlight] the drifting shadows' picture: x, y its middle; z 1 / its width; w 1 = drawn this frame
 };
 // (every texture read with Sample takes the temporal upscaler's bias: textures with levels - the art's - are
 // read as finely as the screen's size wants; pictures drawn by the renderer have one level and do not change)
@@ -349,12 +377,39 @@ float CloudField(float2 q) {
   float3 p = float3((q + skyClouds.yz) * 0.004, skyClouds.w);
   return CloudNoise(p) * 0.55 + CloudNoise(p * 2.3 + 7.1) * 0.3 + CloudNoise(p * 5.1 + 3.3) * 0.15;
 }
+// [sunlight] (drifting cloud shadows, sunlight.h; view's cloudDrift.x) The same field broken into heaps of many sizes: wide
+// patches of weather the heaps gather in (some 550 units), the heaps themselves (some 120), smaller ones (some 50) and their
+// ragged edges (some 20), each turned from the last so that no grid shows; the weights sum to 1 as the field's own do.
+// They change slowly as they drift (the finer not much faster than the coarse: heaps that drift, not boil). Its own
+// function, taken by a branch at the top of each user (CloudShadow, the sky's layer, the volumetric clouds' cover), so
+// that without it CloudField is worked out exactly as before.
+float CloudFieldBroken(float2 q) {
+  float2 p = (q + skyClouds.yz) * 0.004;
+  float t = skyClouds.w;
+  float2 turned = float2(p.x * 0.8 - p.y * 0.6, p.x * 0.6 + p.y * 0.8);
+  float2 again = float2(p.x * 0.28 + p.y * 0.96, p.y * 0.28 - p.x * 0.96);
+  return CloudNoise(float3(p * 0.45 + 17.3, t * 0.45 + 17.3)) * 0.28 + CloudNoise(float3(turned * 2.1 + 7.1, t + 7.1)) * 0.4 +
+         CloudNoise(float3(again * 4.7 + 3.3, t * 1.2 + 3.3)) * 0.2 + CloudNoise(float3(turned.yx * 11.3 + 1.7, t * 1.5 + 1.7)) * 0.12;
+}
 float CloudFrom(float field) { return saturate((field - lerp(0.75, 0.2, skyClouds.x)) * 5); }
+// [sunlight] How much of a place on the clouds' underside lies under a heap (0..1, soft over cloudDrift.z of the broken
+// field either side of the value that leaves the cover's share of the ground in shadow).
+float DriftHeaps(float2 q) { return smoothstep(-cloudDrift.z, cloudDrift.z, CloudFieldBroken(q) - lerp(0.63, 0.37, skyClouds.x)); }
 Texture2D<float> cloudShadowPicture : register(t31);  // (clouds.h: what comes through the clouds toward the sun, at their underside)
 float CloudShadow(float3 world) {
   if (skyZenith.w < 0.5 || skyClouds.x <= 0) return 1;
   float under = cloudShadow.x > 0 ? cloudShadow.x : 150;
   float2 q = world.xz + sunDirection.xz * ((under - world.y) / max(sunDirection.y, 0.2));
+  // [sunlight] (drifting cloud shadows, sunlight.h) their own strength and their own soft edge: from this frame's picture
+  // of them (Sunlight::Drift, at kCloudShadowSlot: with the volumetric clouds their own shadows in it too) where it
+  // reaches; before it is drawn, and beyond it, from the field (soft over cloudDrift.z of it either side of the value that
+  // leaves the cover's share of the ground in shadow)
+  [branch] if (cloudDrift.x > 0.5) {
+    float2 drift = (q - driftPicture.xy) * driftPicture.z + 0.5;
+    [branch] if (driftPicture.w > 0.5 && all(drift > 0.001) && all(drift < 0.999))
+      return 1 - cloudDrift.y * (1 - cloudShadowPicture.SampleLevel(samplerLinearClamp, drift, 0));
+    return 1 - cloudDrift.y * DriftHeaps(q);
+  }
   [branch] if (cloudShadow.x > 0) {  // the volumetric clouds' own (their light through them)
     float2 at = (q - cloudShadow.yz) * cloudShadow.w + 0.5;
     if (any(at < 0) || any(at > 1)) return 1;
