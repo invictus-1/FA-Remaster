@@ -602,6 +602,15 @@ class World {
   // A cut, for the temporal upscaler: the camera jumped (set by the host before the frame; Begin clears it).
   // A camera that moves far in one frame, a map opened and the option just switched on count as one too.
   bool cameraCut = false;
+  // (airfix) A weather cut: the light in the air and the volumetric clouds start again from this frame (Air::Restart,
+  // Clouds::Restart) where they would have taken half a second to forget the light before, so the window shows the new
+  // light at once. Begin makes one itself when the moment or the weather jumps between two of the window's frames (the hour
+  // by more than half an hour, the clouds, rain, snow, fog, wet or mist by more than a tenth, a time of day on or off: the
+  // photo mode's Clear, a key that steps them; the photo mode's own easing over a second does not); a host that knows of
+  // one may set it before the frame too (Begin clears it). Photos and side pictures keep their own (world_picture.cpp).
+  // `weatherCuts` false: none (as before; to compare).
+  bool weatherCut = false;
+  bool weatherCuts = true;
   // A frame drawn for something else between two of the game's (the minimap's ground): no temporal upscaler,
   // no motion, no light in the air and no volumetric clouds, and what they keep of the frames before is left
   // for the game's next frame.
@@ -841,6 +850,10 @@ class World {
   FrameGeneration::Inputs framegenIn_;
   bool MakeBetween();
   Vec3 lastEye_{};
+  // (airfix) the moment and the weather of the window's last frame (the hour, -1 without a time of day; the clouds, rain,
+  // snow, fog, wet, mist), for the weather cut
+  float lastWeather_[7] = {};
+  bool lastWeatherKnown_ = false;
   double lastFrameAt_ = -1;
   float frameSeconds_ = 1 / 60.0f;
   bool raysTried_ = false, raysGround_ = false;  // (RaysReady: its shaders tried; the open map's ground in it)

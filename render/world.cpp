@@ -1005,6 +1005,23 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
                    static_cast<float>(map.width), static_cast<float>(map.height), terrain.HeightUnit(),
                    map.water.present ? map.water.elevation : -1e9f);
   }
+  if (!sidePicture && !photo) {  // (airfix) a weather cut (World::weatherCut): the moment or the weather jumped since the window's last frame
+    const bool lit = timeOfDay >= 0 && look == Look::Modern;
+    const float now[7] = {lit ? timeOfDay : -1.0f, cloudCover, rain, snow, fog, wet, lit ? mistNow : 0.0f};
+    bool jumped = false;
+    if (lastWeatherKnown_) {
+      const float hour = std::fabs(now[0] - lastWeather_[0]);
+      jumped = (now[0] < 0) != (lastWeather_[0] < 0) || (now[0] >= 0 && std::min(hour, 24 - hour) > 0.5f);
+      for (int i = 1; i < 7; ++i) jumped = jumped || std::fabs(now[i] - lastWeather_[i]) > 0.1f;
+    }
+    std::copy(std::begin(now), std::end(now), lastWeather_);
+    lastWeatherKnown_ = true;
+    if (weatherCuts && (weatherCut || jumped)) {
+      air.Restart();
+      clouds.Restart();
+    }
+    weatherCut = false;
+  }
   {  // movement dust (movement_dust.h): on in the modern look, with what the weather has done to the ground and the air
     dustNow_ = movementDust && look == Look::Modern && haveMap_ && !sidePicture;
     MovementDust::Weather weatherNow;
@@ -2663,6 +2680,10 @@ void World::Render() {
   air.sunlight = view.constants.shaftBand[0] > 0;  // [sunlight] (the light shafts' band and hazes: sunlight.h)
   air.heights = terrain.HeightTexture();
   air.woods = sunlight.Woods();
+  air.heightUnit = haveMap_ ? terrain.HeightUnit() : 0.0f;  // (airfix: no air under the ground, air.h)
+  air.mapWidth = static_cast<float>(map.width);
+  air.mapHeight = static_cast<float>(map.height);
+  air.waterLevel = haveMap_ && map.water.present ? map.water.elevation : -1e9f;
   if (sidePicture) air.Skip(&view);
   else air.Build(&view, camera, shadows.Map(), lights.ShadowMap(), &lights, volumetricFog && look == Look::Modern && haveMap_, groundMiddle_);
   if (volumesDrawn_) {  // (volume explosions) the light in each volume, after the shadows it takes, before the scene

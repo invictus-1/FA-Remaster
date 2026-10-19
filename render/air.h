@@ -7,6 +7,10 @@
 //    frame takes its sample at another depth inside the cell and blends with what the cell held last
 //    frame (read where the cell's middle was then), so the volume settles smoothly.
 //  - Sum: along each column from the eye outward, the light gathered and what still comes through.
+// (airfix) Both only above the ground: a cell gathers over its stretch above it, and a column sums nothing past where
+// it meets it, which goes into the summed volume's last layer; AirAt takes the cell a place lies in only as far as the
+// place, by how the mist is spread over it (thickest low down). Before, the cells under the ground held the thickest
+// mist and the cell's share of the distance was taken: rings of fog round the eye, one to a cell.
 // Every surface's shader then sees what is behind the air through it (view.h, AirAt, ThroughAirTo),
 // in place of the haze and mist formulas; so do particles, trails and the water. The lamps' beams
 // show in it with their shadows: the billboards of shafts.h are left out while it is on.
@@ -37,6 +41,9 @@ class Air {
   // In place of Build for a frame drawn for something else (World::sidePicture): none this frame, and what
   // it holds of the frames before is kept for the next Build.
   void Skip(View* view);
+  // (airfix) A weather cut (World::weatherCut): the next Build keeps nothing of the frames before, so a sudden change of the
+  // moment or the weather shows at once (half a second at its usual `keep` otherwise).
+  void Restart() { haveLast_ = false; }
   // The summed volume, for the scene's shaders (kAirSlot); none while it is off.
   gfx::Texture Volume() const { return built_ ? summed_ : gfx::Texture{}; }
 
@@ -59,6 +66,10 @@ class Air {
   // without them.
   bool sunlight = false;
   gfx::Texture heights, woods;
+  // (airfix) The ground, set by the world before Build (with `heights`): no air is gathered under it, and nothing is
+  // summed past where each column of cells meets it (view.h, AirAt). Its heights' unit (Terrain::HeightUnit; 0: no
+  // ground known, the cells go on under it as before), the map's width and height, the water's level (-1e9: none).
+  float heightUnit = 0, mapWidth = 0, mapHeight = 0, waterLevel = -1e9f;
 
  private:
   bool Size(int width, int height);
@@ -73,6 +84,7 @@ class Air {
   int now_ = 0;            // which of cells_ this frame writes
   uint32_t frame_ = 0;
   bool built_ = false, haveLast_ = false;
+  float counted_ = 0;  // (airfix) the places each cell has gathered since a fresh start (a weather cut)
   Mat4 lastViewProj_;
   Vec3 lastEye_;
   float lastNearest_ = 0, lastFarthest_ = 0;

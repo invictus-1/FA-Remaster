@@ -99,6 +99,27 @@ Mac", and every ray-traced effect keeps a fallback without it.
      light, while the sky's pass shows the far distance through all of the volume: seen from far out, a
      hard edge where that ground ended against the sky. With the volume on, the far haze it goes over into
      is seen through all of the volume too (lighting.h `BeyondFar`).
+   - Fixed (2026-10-19, airfix): rings of fog round the eye with the mist on (`--air --mist 1` from a camera at
+     150: one ring to a cell of the volume's depth; `--air-cells 160,128` doubled them). The cells went on under
+     the ground and the water, where the mist is thickest (it thickens downward, to e^1 under its floor): the cell
+     a column met the ground in held mist from under the ground, and a surface took its cell's share of the
+     distance. Now no air is gathered under the ground (the straddling cell samples its stretch above it, a place
+     under the ground is lifted to one unit over it), a column sums nothing past where it meets the ground, and
+     ten layers past the cells (view.h `kAirLayers`) keep where each column meets the ground and its sums at six
+     steps before and two past it, which `AirAt` reads near the ground; elsewhere a cell's share is taken by how
+     the mist is spread over it (`AirShareOf`). Look: the mist lies in banks by height, in the valleys and over
+     the sea, as `MistLost` has it; most of the fog over all land before was the artefact. Cost (1440p, 4x MSAA,
+     lowest of 3): the volume's stage 0.031-0.037 -> 0.051-0.059 ms; the surfaces reading it, within the noise from the
+     game's camera over the woods, about 0.03-0.04 more on the ground and up to 0.03 on the water looking far over the
+     sea at dusk (camera at 200, pitch 30). The ground's distance is kept in two half floats (cut by its bits: Vulkan's
+     compiler takes a half float's round trip for nothing). Off: as before, pixel for pixel; on, Vulkan as Direct3D 12
+     (0.47-0.61 in 255; the build before 0.42).
+   - Weather cut (2026-10-19, airfix): `World::weatherCut` (and by itself when the hour jumps by more than half
+     an hour between two of the window's frames, or the clouds, rain, snow, fog, wet or mist by more than a
+     tenth, or the time of day is switched): the light in the air and the volumetric clouds forget the frames
+     before (`Air::Restart`, `Clouds::Restart`) where they took half a second to; the air's first frame then
+     samples four places a cell. The photo mode's Clear shows the new light at once; photos keep their own
+     histories. Viewer `--weather-jump frame,hours[,clouds]`, `--no-weather-cut`.
    - Open: the lamp shafts' billboards (shafts.cpp) are still drawn with it on; in the fog weather the
      sky goes pale behind the volume (as real fog would make it), which is Chris's to judge.
 2. **Clouds and the sky**: clouds as volumes (noise volumes made once by compute shaders, marched at a
@@ -1320,8 +1341,9 @@ all (even with ten times the dust).
   morning's haze and the mist: thickest at the ground, all of it in the woods (`SetWoods`: a picture of where the trees
   stand, 4 units a texel, from the world's tree list), 0.3 of it over open ground; more with mist, wet ground or fog.
   Its sunlight is worked out finely along each pixel's line of sight through the sun's shadow maps: at half the
-  picture's width and height, only the black squares of a chessboard (packed two to a texel), a step every unit (24 at
-  most, 4 at least: a line of sight steeply down through the band needs few), the steps of the eight marched places in
+  picture's width and height, only the black squares of a chessboard (packed two to a texel), a step every two units (24
+  at most, 4 at least: a line of sight steeply down through the band needs few; one every unit until 2026-10-19, the
+  picture the same but for a grain of 0.8 in 255), the steps of the eight marched places in
   each four by four starting at eight places along a step and averaged again with their neighbours at the same distance
   (no noise at 2x), then laid over the scene with an upsampling that keeps to each pixel's distance (no light running
   onto a trunk in front). The light in the air leaves the band's sunlight near the eye to this pass (its `SUNLIGHT`
@@ -1332,7 +1354,7 @@ all (even with ten times the dust).
   27 of 255 at 1; 21 at 0.8, the close view at 7:30 with full mist; 6 from the game's camera at 150).
 - **Rays under breaks in the clouds.** A low haze under the clouds (thinning to 1/e over 40 units; most where the clouds
   are broken and the sun is low; more with wet ground and fog), whose sunlight the same pass works out along each line
-  of sight through the clouds' shadow (12 steps, out to 3000 units; the clouds' shadow read from a picture of it made
+  of sight through the clouds' shadow (a step every 25 units, 4 to 12, out to 3000 units; the clouds' shadow read from a picture of it made
   once a frame, 512 texels square, not worked out at every step). Looking toward the horizon (a low camera, a cinematic
   one) the bands fan out from the sun as rays; from the game's usual height, looking down, a line of sight crosses
   several gaps on its way and they read as a soft warm glow with broad faint bands (a CPU model of the same integral
@@ -1352,6 +1374,16 @@ all (even with ten times the dust).
   haze, 0.10 with a picture of it; in the woods 0.12 with every half-size place marched, 0.08 with half of them (a
   chessboard), the picture the same at 2x. The whole frame's times moved by more than all this from run to run (the
   card shared): the stages' are the numbers.
+  (airfix, 2026-10-19) The march made cheaper, the picture the same (0.53 in 255 on average at 1440p close among the
+  trees, a fine grain): a step every two units, the sun's shadow read as one texel compared in the shader (the four of a
+  filtered comparison, scattered along the lines of sight, were what it waited on), the low haze's steps by length.
+  Close among the trees the march and its smoothing 0.102 -> 0.068 ms, laid 0.079: with the rest 0.19 (from 0.23);
+  the game's camera at 150 0.065 -> 0.053; dusk over the sea 0.070 -> 0.057. The laying is the card's blending
+  of a half float into four samples a pixel (0.016 when the light is nothing, which the card skips), and with it the
+  finishing's resolve costs about 0.017 less (it is 0.086-0.093 without the laying): it costs the frame about 0.06.
+  Tried and left: marching from the second shadow map (0.035 less, but its coarser trees let 2.6 in 255 more light
+  through close in), the march at a third or a quarter of the size (halos at the crowns' outlines), laying into one
+  sample (its compression broken: dearer).
 - **Off**: nothing of it runs and the shaders' code without it is as before (the broken field is its own function, taken
   by a branch at the top of each user, since a branch inside `CloudField` changed the sky's clouds by one level in a few
   hundred pixels); pictures identical, pixel for pixel: the regression (regress3, both backends) and six SETONS_R scenes

@@ -42,6 +42,9 @@ class Clouds {
   // In place of Prepare for a frame drawn for something else (World::sidePicture): none this frame (Build
   // then does nothing), and what they hold of the frames before is kept.
   void Skip(View* view);
+  // (airfix) A weather cut (World::weatherCut): the next Build keeps nothing of the frames before, so a sudden change of the
+  // moment or the weather shows at once.
+  void Restart() { haveLast_ = false; }
   gfx::Texture Shadows() const { return prepared_ ? shadow_ : gfx::Texture{}; }
   // After the scene's solid surfaces and the water, before the sky: the clouds where the sky shows.
   // `depth`: the scene's depth (any number of samples). It dispatches: begin the scene's pass again after.
