@@ -220,15 +220,22 @@ void GridAdvanceCoords(Sim& sim) {
   // one that a script put back on its plain box (RevertCollisionShape: an aircraft that landed, AirUnit.lua) keeps
   // the plain cells until it moves. (Seen: one blast over four parked aircraft; the order it kills them in, and so
   // the order of their explosions' random draws, is the order of their cells.)
-  // The units go in the order their transforms were set this beat: AdvanceBeat walks the moved-entity list sim+0xa5c
-  // from its oldest link (0x74a239..0x74a25f: [sim+0xa60], then each node's +4), and SetPendingTransform 0x678e90
-  // links an entity at the list's head the first time its transform is set in the beat. A mobile unit sets it in its
-  // MotionTick (MoveTo 0x6b92e0, every beat), so that is the motion stage's order, not the entity id's. Of two units
-  // that change cells in one beat the later one ends up in front in a shared cell (head insertion), which decides who
-  // a steering's CheckCollisions asks first. Seen: MP2 7087, army 1's 0x100118 predicts against 0x100008 (at once)
-  // and 0x10010d (three beats on) in one cell: ours asked 0x10010d first (re-registered after 0x100008 in id order),
-  // kept that record and stopped re-predicting; 0x1000fc then braked hard at 7091 in ours, not in the original.
-  for (Unit* u : sim.MotionOrder()) {
+  // The units go in the order of the dirty-entity list sim+0xa5c: AdvanceBeat walks it from its oldest link
+  // (0x74a239..0x74a25f: [sim+0xa60], then each node's +4) and AdvanceCoords re-registers a unit whose transform
+  // changed; in a shared cell the one re-registered later ends up in front (head insertion), which decides who a
+  // steering's CheckCollisions asks first. The list keeps its order from beat to beat: an entity is linked when it is
+  // made (Entity ctor 0x677c2d), SetPendingTransform 0x678ed9 and AdvanceCoords 0x6790d3 link only an entity that is
+  // not on it, and Entity::SetHealth 0x679a3c..0x679a6b moves the entity to the newest end every time (no test). Read in
+  // the original (oracle probe mp2_8034, MP2 8029-8034): six units stay linked with the same neighbours through all six
+  // beats, the walk is not the motion stage's order (0x100071, 0x10006f, 0x100127, 0x100015, 0x10007b, 0x10005a, against
+  // the entity stage's 0x100015, 0x10007b, 0x10005a, 0x100071, 0x10006f, 0x100127), and the Archer 0x10005a, which
+  // regenerates (SetHealth each beat), is always the newest link; 0x10007b, hit by a shell at 8031, is newer still in
+  // that beat. (Entity::Sync 0x67a0a0 would unlink a unit (+0x1b8 is 0), but no unlink shows in those beats.)
+  // Seen: MP2 8031, 0x100127 and 0x10005a both enter cell (49,58); the original re-registers 0x100127 first, so
+  // 0x10005a heads the cell, land scout 0x10006f's CheckCollisions of 8033 asks it before 0x100127, puts a record at +0
+  // on it and brakes hard at 8034 (case 4). Ours went by the motion stage's order (0x10005a first) and drove on.
+  // (Before: MP2 7087, the order by id had 0x10010d before 0x100008 in cell (30,36).)
+  for (Unit* u : sim.DirtyOrder()) {
     if (u->destroyQueued) continue;
     if (u->gridSeen && std::memcmp(&u->gridPos, &u->position, sizeof(Vec3)) == 0 &&
         std::memcmp(&u->gridOri, &u->orientation, sizeof(Quat)) == 0)

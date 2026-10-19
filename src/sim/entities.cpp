@@ -1172,6 +1172,9 @@ void EntityAdjustHealth(lua_State* L, Entity* e, Entity* /*instigator*/, float a
   float qOld = std::floor(inv * e->health * 4.0f) * 0.25f;
   const float before = e->health;
   e->health = h;
+  // (Entity::SetHealth 0x679a3c..0x679a6b: the entity goes to the newest end of the dirty list, linked or not)
+  if (e->kind == Entity::Kind::Unit)
+    if (Sim* sim = S(L)) sim->MarkDirty(static_cast<Unit*>(e));
   if (Sim* sim = S(L); sim && sim->collectHealth) RecordHealth(*sim, e, before, e->maxHealth);  // (a host's list; reads only)
   if (qNew != qOld && e->HasLuaObject()) {
     lua_pushnumber(L, qNew);

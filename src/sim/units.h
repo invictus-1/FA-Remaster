@@ -195,6 +195,10 @@ class Unit : public Entity {
   // orderedParent: the parent this has been settled for).
   uint64_t motSeq = 0;
   uint32_t orderHandle = 0, orderedParent = 0;
+  // Its place in the sim's dirty-entity list sim+0xa5c (node Entity+0x60; Sim::DirtyOrder): linked when it is made
+  // (Entity ctor 0x677c2d), moved to the list's newest end by every SetHealth (0x679a3c..0x679a6b, no test). The
+  // transform's own link (SetPendingTransform 0x678ed9) only links an entity that is not on the list.
+  uint64_t dirtySeq = 0;
   uint32_t detachedAt = 0xffffffffu;  // the beat a transport let it go (its order queue runs from the next one)
   float fuelRatio = -1;            // u+0x294 (fuel.md): -1 none; 1 at spawn for FuelUseTime > 0
   uint32_t ferryUnit = 0;          // GetFerryUnit (+0x4c8): the ferry assigned to pick it up

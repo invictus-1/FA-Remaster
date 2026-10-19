@@ -406,6 +406,10 @@ class Sim {
   // army, and inside an army the units in the order they were created, which is not id order once an id has
   // been used a second time.
   const std::vector<Unit*>& ArmyStageOrder();
+  // The dirty-entity list sim+0xa5c, oldest link first (the order of AdvanceBeat's AdvanceCoords walk, 0x74a239), and
+  // the move of a unit to its newest end (Entity::SetHealth 0x679a3c).
+  const std::vector<Unit*>& DirtyOrder();
+  void MarkDirty(Unit* u);
   void ResumeCommandThread(Unit* u);
   uint64_t CommandSeqHigh() const { return cmdSeqNext_; }
   // The stamp of a unit that takes a new parent (Unit::attachSeq). The original keeps a parent's children in a list
@@ -528,6 +532,9 @@ class Sim {
   bool motionOrderDirty_ = true;
   std::vector<Unit*> armyOrder_;
   bool armyOrderDirty_ = true;
+  std::vector<Unit*> dirtyOrder_;
+  uint64_t dirtySeqNext_ = 0;
+  bool dirtyOrderDirty_ = true;
   std::vector<std::vector<Unit*>> grid_;
   int gridW_ = 0, gridH_ = 0;
   bool gridDirty_ = true;

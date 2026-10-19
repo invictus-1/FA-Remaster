@@ -1541,6 +1541,18 @@ const std::vector<Unit*>& Sim::MotionOrder() {
   }
   return motionOrder_;
 }
+const std::vector<Unit*>& Sim::DirtyOrder() {
+  if (dirtyOrderDirty_) {
+    dirtyOrder_ = units_;
+    std::sort(dirtyOrder_.begin(), dirtyOrder_.end(), [](const Unit* a, const Unit* b) { return a->dirtySeq < b->dirtySeq; });
+    dirtyOrderDirty_ = false;
+  }
+  return dirtyOrder_;
+}
+void Sim::MarkDirty(Unit* u) {
+  u->dirtySeq = ++dirtySeqNext_;
+  dirtyOrderDirty_ = true;
+}
 const std::vector<Unit*>& Sim::ArmyStageOrder() {
   if (armyOrderDirty_) {
     armyOrder_ = units_;
@@ -1580,11 +1592,14 @@ void Sim::AddUnitToLists(Unit* u) {
   u->motSeq = u->entSeq;
   motionOrderDirty_ = true;
   armyOrderDirty_ = true;
+  u->dirtySeq = ++dirtySeqNext_;
+  dirtyOrderDirty_ = true;
   InsertById(units_, u);
   if (u->army) InsertById(u->army->units, u);
 }
 void Sim::RemoveUnitFromLists(Unit* u) {
   gridDirty_ = true;
+  dirtyOrderDirty_ = true;
   cmdOrderDirty_ = true;
   motionOrderDirty_ = true;
   armyOrderDirty_ = true;
