@@ -47,6 +47,25 @@ void DropLargest(DdsImage* image, int drop) {
   image->mips -= k;
 }
 
+// [seasons] The bytes of a texture's largest levels, for as many levels as it takes to come down to `width` (0: it
+// cannot: not that much larger by whole levels, or its file lacks them); `levels` how many that is.
+size_t BytesAbove(const DdsImage& image, int width, int* levels) {
+  *levels = 0;
+  const size_t unit = static_cast<size_t>(gfx::BytesPerPixelOrBlock(image.format));
+  if (!unit || image.layers != 1 || image.cube) return 0;
+  const bool blocks = gfx::IsBlockCompressed(image.format);
+  size_t skip = 0;
+  int k = 0;
+  while ((image.width >> k) > width && image.mips - k > 1) {
+    const size_t w = static_cast<size_t>(std::max(1, image.width >> k)), h = static_cast<size_t>(std::max(1, image.height >> k));
+    skip += (blocks ? (w + 3) / 4 * ((h + 3) / 4) : w * h) * unit;
+    ++k;
+  }
+  if ((image.width >> k) != width || skip >= image.dataSize) return 0;
+  *levels = k;
+  return skip;
+}
+
 }  // namespace
 
 TextureCache::TextureCache(gfx::Device* device, const moho::Vfs* vfs) : device_(device), vfs_(vfs) {
@@ -91,6 +110,7 @@ gfx::Texture TextureCache::Layers(const std::vector<std::string>& paths, std::ve
   DdsImage first;
   std::vector<uint8_t> all;
   size_t each = 0;
+  bool mixed = false;  // [seasons] (sizes that differed, read at the smallest)
   for (size_t i = 0; i < paths.size(); ++i) {
     if (paths[i].empty()) continue;
     auto file = vfs_->ReadFile(paths[i]);
@@ -98,6 +118,32 @@ gfx::Texture TextureCache::Layers(const std::vector<std::string>& paths, std::ve
     std::string error;
     if (!file || !ParseDds(*file, &image, &error) || image.cube) continue;
     DropLargest(&image, detail);
+    // [seasons] a set whose sizes differ (a season's material at its 4k tier among 8k ones): read at the smallest's
+    // size, the larger ones from that size down where their files hold it (those already laid in cut down as well)
+    if (each && image.format == first.format && image.width != first.width && image.width * first.height == image.height * first.width) {
+      int levels = 0;
+      if (image.width > first.width) {
+        const size_t skip = BytesAbove(image, first.width, &levels);
+        if (skip) {
+          image.data += skip;
+          image.dataSize -= skip;
+          image.width = first.width;
+          image.height = first.height;
+          image.mips -= levels;
+        }
+      } else if (const size_t skip = BytesAbove(first, image.width, &levels); skip && first.dataSize - skip == image.dataSize) {
+        std::vector<uint8_t> cut(image.dataSize * paths.size(), 0);
+        for (size_t j = 0; j < i; ++j)
+          if ((*present)[j]) std::memcpy(cut.data() + image.dataSize * j, all.data() + each * j + skip, image.dataSize);
+        all.swap(cut);
+        each = image.dataSize;
+        first.width = image.width;
+        first.height = image.height;
+        first.mips -= levels;
+        first.dataSize = each;
+      }
+      mixed = mixed || image.width == first.width;
+    }
     if (!each) {
       first = image;
       each = image.dataSize;
@@ -111,6 +157,7 @@ gfx::Texture TextureCache::Layers(const std::vector<std::string>& paths, std::ve
     (*present)[i] = true;
   }
   if (!each) return {};
+  if (mixed) printf("render: a set of %zu layers of different sizes read at %d pixels, its smallest\n", paths.size(), first.width);
   gfx::TextureDesc td;
   td.width = first.width;
   td.height = first.height;

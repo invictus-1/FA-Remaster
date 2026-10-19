@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <initializer_list>
 #include <limits>
 #include <string>
@@ -815,6 +816,8 @@ gfx::Texture Terrain::GroundKinds() {
 // height: its path into `arh`), at the map's own scale for the layer times scale_mul, or at "scale".
 void Terrain::Remaster(const MapData& m, std::vector<std::string>* arh) {
   remasteredLayers_ = 0;
+  seasonLook_ = SeasonLook{};  // [seasons] (read again below, where the map's entry has a block for its season)
+  seasonLook_.season = season;
   auto lower = [](std::string s) {
     for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return s;
@@ -831,31 +834,65 @@ void Terrain::Remaster(const MapData& m, std::vector<std::string>* arh) {
   const JsonValue& layers = remap["maps"][lower(mapPath)];
   if (layers.kind != JsonValue::Object) return;
   mapDecalsGiven_ = layers["decals"].StringOr(std::string());  // (which of the map's own decals are drawn, where it says)
-  // the plants' card atlas and table, where the map's entry names one
-  const std::string coverPath = layers["cover"].StringOr(std::string());
+  seasonLook_.Read(layers, season);  // [seasons] (nothing for summer, or where the entry has no block for the season)
+  // the plants' card atlas and table, where the map's entry names one ([seasons] the season's, where it names its own)
+  const std::string coverPath = seasonLook_.cover.empty() ? layers["cover"].StringOr(std::string()) : seasonLook_.cover;
   if (!coverPath.empty()) ReadCover(m, folder + coverPath);
   const char* tier = ultraGround ? "8k" : "4k";
+  // [seasons] the tier a season's material is read at: the one asked for, or its 4k where its "tiers" lack that one
+  auto seasonTier = [&](const std::string& name) -> const char* {
+    const JsonValue& tiers = remap["materials"][name]["tiers"];
+    if (tiers.kind != JsonValue::Array) return tier;
+    bool wanted = false, four = false;
+    for (const JsonValue& t : tiers.items) {
+      wanted = wanted || t.StringOr(std::string()) == tier;
+      four = four || t.StringOr(std::string()) == "4k";
+    }
+    return wanted || !four ? tier : "4k";
+  };
   for (int i = 0; i < 10; ++i) {
     const JsonValue& entry = layers[lower(m.albedo[i].texture)];
-    const std::string name = entry["material"].StringOr(std::string());
+    std::string name = entry["material"].StringOr(std::string());
+    const char* tierOf = tier;
+    if (const std::string own = seasonLook_.Material(name); !own.empty()) {  // [seasons] the season's material for this one
+      if (remap["materials"][own]["dir"].StringOr(std::string()).empty()) {
+        fprintf(stderr, "render: the %s material %s is not among remap.json's materials: %s kept\n", SeasonName(season), own.c_str(), name.c_str());
+      } else {
+        name = own;
+        tierOf = seasonTier(own);
+      }
+    }
     const std::string dir = remap["materials"][name]["dir"].StringOr(std::string());
     if (name.empty() || dir.empty()) continue;
     groundGiven_[i] = entry["ground"].StringOr(groundGiven_[i]);  // (deep tracks: the layer's kind of ground, where it says)
-    const std::string base = folder + dir + "/" + name + "_";
-    if (!textures_->ReadFile(base + "albedo_" + tier + ".dds")) {
-      fprintf(stderr, "render: the remastered ground's %s has no %s set\n", name.c_str(), tier);
-      continue;
+    std::string base = folder + dir + "/" + name + "_";
+    if (!textures_->ReadFile(base + "albedo_" + tierOf + ".dds")) {
+      fprintf(stderr, "render: the remastered ground's %s has no %s set\n", name.c_str(), tierOf);
+      // [seasons] a season's material: its 4k set, else summer's material as it is
+      const std::string summer = entry["material"].StringOr(std::string());
+      const std::string summerDir = remap["materials"][summer]["dir"].StringOr(std::string());
+      if (name == summer || summerDir.empty()) continue;
+      if (std::strcmp(tierOf, "4k") != 0 && textures_->ReadFile(base + "albedo_4k.dds")) {
+        tierOf = "4k";
+      } else {
+        name = summer;
+        tierOf = tier;
+        base = folder + summerDir + "/" + name + "_";
+        if (!textures_->ReadFile(base + "albedo_" + tier + ".dds")) continue;
+      }
     }
-    albedo_[i] = textures_->Get(base + "albedo_" + tier + ".dds", albedo_[i]);
+    if (name != entry["material"].StringOr(std::string()))  // [seasons]
+      printf("render: the ground's layer %d in its %s material %s (%s)\n", i, SeasonName(season), name.c_str(), tierOf);
+    albedo_[i] = textures_->Get(base + "albedo_" + tierOf + ".dds", albedo_[i]);
     const double scale = entry["scale"].NumberOr(0), mul = entry["scale_mul"].NumberOr(1);
     albedoScale_[i] = scale > 0 ? static_cast<float>(scale) : m.albedo[i].scale * static_cast<float>(mul);
     const double metres = remap["materials"][name]["real_size_m"].NumberOr(0);  // [mud ruts]
     if (metres > 0) layerUnitsPerMetre_[i] = albedoScale_[i] / static_cast<float>(metres);
     if (i < 9) {
-      normal_[i] = textures_->Get(base + "normal_" + tier + ".dds", normal_[i]);
+      normal_[i] = textures_->Get(base + "normal_" + tierOf + ".dds", normal_[i]);
       normalScale_[i] = albedoScale_[i];  // (the material's normal lies on its own albedo)
       normalUp_[i] = true;
-      (*arh)[static_cast<size_t>(i)] = base + "arh_" + tier + ".dds";
+      (*arh)[static_cast<size_t>(i)] = base + "arh_" + tierOf + ".dds";
     }
     ++remasteredLayers_;
   }
@@ -863,6 +900,11 @@ void Terrain::Remaster(const MapData& m, std::vector<std::string>* arh) {
   {  // [mud ruts] deep tracks' mud: the material the map's entry names as "mud", else "<first word>_mud" by the first
      // word of its layers' materials ("setonsr_soil": setonsr_mud), where remap.json has one of that name
     std::string mud = layers["mud"].StringOr(std::string());
+    const char* mudTier = tier;
+    if (!seasonLook_.mud.empty() && !remap["materials"][seasonLook_.mud]["dir"].StringOr(std::string()).empty()) {  // [seasons] the season's own
+      mud = seasonLook_.mud;
+      mudTier = seasonTier(mud);
+    }
     for (int i = 0; i < 10 && mud.empty(); ++i) {
       const std::string name = layers[lower(m.albedo[i].texture)]["material"].StringOr(std::string());
       const size_t cut = name.find('_');
@@ -872,9 +914,9 @@ void Terrain::Remaster(const MapData& m, std::vector<std::string>* arh) {
     const std::string dir = material["dir"].StringOr(std::string());
     if (!mud.empty() && !dir.empty()) {
       const std::string base = folder + dir + "/" + mud + "_";
-      mudFiles_[0] = base + "albedo_" + tier + ".dds";
-      mudFiles_[1] = base + "normal_" + tier + ".dds";
-      mudFiles_[2] = base + "arh_" + tier + ".dds";
+      mudFiles_[0] = base + "albedo_" + mudTier + ".dds";
+      mudFiles_[1] = base + "normal_" + mudTier + ".dds";
+      mudFiles_[2] = base + "arh_" + mudTier + ".dds";
       mudMetres_ = static_cast<float>(material["real_size_m"].NumberOr(0));
     }
   }

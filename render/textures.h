@@ -30,7 +30,9 @@ class TextureCache {
   // Several .dds files as the layers of ONE texture (a shader reads it as an array): for sets too
   // large for a register each. The files must agree in size, format and number of mip levels (the
   // first one found sets them); a path that is empty, missing or disagrees leaves its layer black
-  // and `present[i]` false. Nothing found: no texture.
+  // and `present[i]` false. Nothing found: no texture. ([seasons] Sizes that differ by whole levels, of
+  // one format: the set is read at the smallest, the larger ones from that size down, where their
+  // files hold it: a season's material at its 4k tier among 8k ones.)
   gfx::Texture Layers(const std::vector<std::string>& paths, std::vector<bool>* present);
 
   // The texture detail setting: how many of the largest sizes to leave out of each texture loaded by

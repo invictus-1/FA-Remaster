@@ -33,6 +33,7 @@
 #include "camera.h"
 #include "cinecam.h"
 #include "linalg.h"
+#include "season.h"  // [seasons]
 
 namespace moho {
 class Sim;
@@ -179,6 +180,8 @@ class WorldPicture {
   //   about +0.05 ms while it rains. And the weather on the horizon (World::horizonWeather, proposed here: winter
   //   ice, fog banks and showers on the sea beyond the map's edge).
   //   And units wet in rain and muddy from soft ground, drying and flaking off (World::unitDirt): about 0.01-0.02 ms.
+  //   And surf and sea spray (World::surf): waves breaking on the shores, spray on rocks and off ships' bows; the water
+  //   up to +0.1 ms with surf over a third of the screen.
   void SetWeatherEffects(bool on);
   // Ground detail: grass near the camera, pressed flat round units and buildings (World::groundCover); about
   //   +0.05 to 0.2 ms when zoomed in, nothing from afar; and battle scars (World::battleScars): the scorches and
@@ -219,6 +222,13 @@ class WorldPicture {
   // few minutes (clear, cloudy, rain, storm, fog, snow), drawn from the game's seed; false: fair.
   // It is only seen; it does nothing to the game.
   void SetDayAndWeather(float startHour, float dayLengthSeconds, bool weather);
+  // [seasons] The season the map is drawn in (season.h; seasons.h says what each changes): Summer as at first;
+  // Autumn: where the map's remastered ground lists an autumn look (SETONS_R), its ground's materials, its ground
+  // cover and its props in their autumn art, leaves drifting off the autumn trees in the wind, and with
+  // SetDayAndWeather's changing weather more overcast, showers and morning fog. Taken in by Open: a change shows from
+  // the next map opened. The picture's alone (the simulation keeps the map's blueprints): every player may pick his own.
+  // A player's option.
+  void SetSeason(Season season);
   // Buildings shown as ghosts while their site is chosen: green where the site is free, red where not.
   struct BuildPreview {
     std::string blueprint;  // the unit's blueprint id ("ueb0101")

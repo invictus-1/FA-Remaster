@@ -64,6 +64,7 @@
 #include "bounce.h"
 #include "ribbons.h"
 #include "scmap.h"
+#include "seasons.h"  // [seasons]
 #include "shadows.h"
 #include "smoke.h"
 #include "terrain.h"
@@ -425,6 +426,13 @@ class World {
   // snow lying, nothing changes. Modern look with a time of day, a map with water; off by default (in the game's
   // "Weather Effects").
   bool winterWater = false;
+  // [surf] Surf and sea spray (surf.h, water.surf): waves run in to the map's shores, break into white water that runs
+  // up the beaches and drains back, and burst on the rocks, throwing spray up them; ships at speed throw spray off their
+  // bows. Stronger in rain and most in a storm (the weather's wind), calm on a still day. `surfRoughness`: how rough the
+  // sea is, 0 (still) .. 1 (a storm), for a host that sets it itself; -1: by the weather. Modern look, a map with water;
+  // off by default (proposed for the game's "Weather Effects").
+  bool surf = false;
+  float surfRoughness = -1;
   // Ground cover near the camera (grass.h): grass blades on grassy ground, coloured from it, swaying in the wind,
   // low and gone with the distance (nothing when the camera is far). Modern look; off by default.
   bool groundCover = false;
@@ -825,6 +833,7 @@ class World {
   };
   GameWeather gameWeather_{};
   bool momentShown_ = false;
+  bool surfNow_ = false;  // ([surf] surf and spray: on this frame)
  public:
   EnergyShields energy;  // [energy shields] (last: the other members keep their places)
   // (photolook) A photographic look (photo_look.h; the visuals session's proposal 6, Chris 2026-10-18): the eye adapts
@@ -840,8 +849,23 @@ class World {
   Horizon horizon;
   BeyondLand distantLand;  // (beyondland) the land far off and the soft edge's look (beyondLand)
 
+  // [seasons] The season the map is drawn in (seasons.h; Chris, 2026-10-18: a player's option): taken in when a map is
+  // opened (Open: its ground's materials, its ground cover and its props, where the map's remap.json lists them), so a
+  // change shows from the next map. The picture's alone: the simulation keeps the map's blueprints. In autumn the
+  // weather that changes by itself (weatherAuto) draws from the autumn climate where `climate` is Temperate (weather.h).
+  // Summer, as at first: as always.
+  Season season = Season::Summer;
+  Season SeasonShown() const { return seasonOpen_; }  // the season the open map took
+  // [seasons] Leaves in the autumn wind (seasons.h, FallingLeaves): in autumn on a map with an autumn look, the modern
+  // look: drifting off its broadleaf trees (those the season draws in its own look, and those named so), and blown over
+  // the ground where its cover grows. On (with the season); false: none.
+  bool fallingLeaves = true;
+  FallingLeaves leaves;
+
  private:
   bool horizonNow_ = false;  // [horizon] (something of it this frame)
+  Season seasonOpen_ = Season::Summer;  // [seasons]
+  bool leavesNow_ = false;              // [seasons] (falling leaves drawn this frame)
 };
 
 }  // namespace render

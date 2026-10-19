@@ -207,6 +207,15 @@
 //           camera looks (radius 0.5, strength 1), to see and time them; --ripple-speed s: how fast the rings run
 //           (world units a second, 1.6); --ripple-half-life s: after how long they are half as high (0.8);
 //           --ripple-view n: the field's heights in place of the water (red up, blue down, full at 1 / n units)
+// --surf  surf and sea spray (surf.h, World::surf; modern look): waves run in to the map's shores, break into white water
+//           that runs up the beaches and drains back, burst on the rocks and throw spray up them; ships at speed throw
+//           spray off their bows; by the weather's wind (calm on a still day, most in a storm: --weather storm).
+//           --surf-rough r: the sea that rough (0 still .. 1 a storm) whatever the weather; --surf-strength n: the white
+//           water times n (1); --surf-spray n: the spray times n (1); --surf-break n: the depth a wave breaks at, as a
+//           share of its height (2); --surf-test <unit>=<n>[,...]: that many ships of each driven round loops at their
+//           top speed over deep water near where the camera looks (within --surf-test-radius r, 60), with or without
+//           --surf; --surf-view n: in place of the water 1 the shore field, 2 the waves (Surf::view);
+//           MOHO64_DEBUG_SURF=1 (2: and the spray's counts every second), MOHO64_DEBUG_SURF_FIELD=<file.ppm>
 // --wildlife  life in the world (wildlife.h, World::wildlife; modern look): flocks of birds over the woods and gulls over
 //           the shores, scattered by fighting near them, and fireflies at dusk and by night. --wildlife-verbose: where
 //           the flocks are, and the nearest at the start and the end; --wildlife-noise x,z,at[,every]: a noise of fighting
@@ -227,6 +236,14 @@
 //           picture shown for n refreshes (Direct3D 12; a screen of 240 Hz shows 60 a second with 4); --hitch <n>,<ms>:
 //           every n-th frame runs that much longer (the processor kept busy after the input read: to see what a long
 //           frame does with and without the limiter)
+// --season summer|autumn|winter  [seasons] the season the map is drawn in (seasons.h, World::season; summer as at first):
+//           its ground's materials, ground cover, props and mud as the map's remap.json lists them for it, and in autumn
+//           leaves in the wind, off its broadleaf trees and over the ground where its cover grows (--no-falling-leaves
+//           without them; --leaves-density, --leaves-size, --leaves-sink, --leaves-drift, --leaves-ground n: how many,
+//           how big, how fast they sink and drift, how many on the ground, each times its own, 1) and with --weather auto
+//           the autumn climate (--climate autumn: that climate in any season)
+// --terrain-overlay <folder>  [seasons] a folder laid over the remastered ground's (mounted before it, so its files are
+//           found first): a remap.json of one's own (a test block of a season) and stand-in materials beside the real ones
 // --bounce  bounce light (bounce.h, World::bounceLight; modern look, where the device has ray tracing): light thrown
 //           back by the ground, the hills and what stands on them, from probes the rays update
 // --ray-view  ray tracing's check view (ray_scene.h, World::rayView; where the device can): a ray from the camera
@@ -361,7 +378,7 @@
 // --built <0..1>  placed units are that far under construction (to look at the factions' build looks)
 // --snow-lying <0..1>  how much snow lies at the start (to look at how it builds up and melts)
 // --weather auto  the weather changes by itself, by --seed and the game's clock (or the viewer's, without a
-//           game); --weather-spell <seconds> how long one kind lasts (300), --climate temperate|cold|dry
+//           game); --weather-spell <seconds> how long one kind lasts (300), --climate temperate|cold|dry|autumn
 // --cam     start the camera there (pitch and heading in degrees; pitch 90 looks straight down)
 // --cine-cam x,y,z,yaw,pitch,fov  the cinematic camera (cinecam.h) in place of the game's: free in the world, its eye
 //           at x, z and y over the ground there, turned yaw degrees from north toward the west, pitch degrees below
@@ -505,6 +522,11 @@ struct Options {
   bool waterRipples = false;            // --water-ripples
   float rippleTest = 0, rippleTestRadius = 0.5f, rippleTestStrength = 1;  // --ripple-test
   float rippleSpeed = -1, rippleHalfLife = -1, rippleView = 0;  // --ripple-speed, --ripple-half-life, --ripple-view
+  bool surf = false;                    // --surf
+  float surfRough = -1, surfStrength = -1, surfSpray = -1, surfBreak = -1;  // --surf-rough, --surf-strength, --surf-spray, --surf-break
+  std::string surfTest;                 // --surf-test
+  float surfTestRadius = 60;            // --surf-test-radius
+  int surfView = 0;                     // --surf-view
   bool groundCover = false;             // --ground-cover
   bool wildlife = false, wildlifeVerbose = false;  // --wildlife, --wildlife-verbose
   bool horizon = false;                            // [horizon] --horizon
@@ -605,6 +627,10 @@ struct Options {
   float snowLying = -1;                 // --snow-lying
   float built = 1;                      // --built
   std::string weather, climate;         // --weather, --climate
+  std::string season;                   // [seasons] --season
+  std::string terrainOverlay;           // [seasons] --terrain-overlay
+  bool fallingLeaves = true;            // [seasons] --no-falling-leaves
+  float leaves[5] = {1, 1, 1, 1, 1};    // [seasons] --leaves-density, --leaves-size, --leaves-sink, --leaves-drift, --leaves-ground
   std::string find;                     // --find
   bool show = false;                    // --show
   bool bars = false;                    // --bars
@@ -708,6 +734,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--water-detail") o->waterDetail = true;
     else if (a == "--winter-water") o->winterWater = true;
     else if (a == "--water-ripples") o->waterRipples = true;
+    else if (a == "--surf") o->surf = true;
     else if (a == "--ground-cover") o->groundCover = true;
     else if (a == "--wildlife") o->wildlife = true;
     else if (a == "--horizon") o->horizon = true;  // [horizon]
@@ -737,6 +764,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--low-latency") o->lowLatency = true;
     else if (a == "--latency-stats") o->latencyStats = true;
     else if (a == "--terrain-despite-hold") o->terrainDespiteHold = true;
+    else if (a == "--no-falling-leaves") o->fallingLeaves = false;  // [seasons]
     else if (a == "--ground-ultra") o->groundUltra = true;
     else if (a == "--soft-shadows") {
       o->softShadows = true;
@@ -853,6 +881,13 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--ripple-speed") o->rippleSpeed = static_cast<float>(atof(v));
     else if (a == "--ripple-half-life") o->rippleHalfLife = static_cast<float>(atof(v));
     else if (a == "--ripple-view") o->rippleView = static_cast<float>(atof(v));
+    else if (a == "--surf-rough") o->surfRough = std::clamp(static_cast<float>(atof(v)), 0.0f, 1.0f);
+    else if (a == "--surf-strength") o->surfStrength = std::max(0.0f, static_cast<float>(atof(v)));
+    else if (a == "--surf-spray") o->surfSpray = std::max(0.0f, static_cast<float>(atof(v)));
+    else if (a == "--surf-break") o->surfBreak = std::max(0.1f, static_cast<float>(atof(v)));
+    else if (a == "--surf-test") o->surfTest = v;
+    else if (a == "--surf-test-radius") o->surfTestRadius = std::max(5.0f, static_cast<float>(atof(v)));
+    else if (a == "--surf-view") o->surfView = atoi(v);
     else if (a == "--energy-shield-health") o->energyShieldHealth = std::clamp(static_cast<float>(atof(v)), 0.0f, 1.0f);
     else if (a == "--energy-test") o->energyTest = std::max(0, atoi(v));
     else if (a == "--hot-metal-lights") o->hotLights = std::max(0, atoi(v));
@@ -1025,6 +1060,13 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--built") o->built = static_cast<float>(atof(v));
     else if (a == "--border") o->border.push_back(v);
     else if (a == "--climate") o->climate = v;
+    else if (a == "--season") o->season = v;  // [seasons]
+    else if (a == "--terrain-overlay") o->terrainOverlay = v;
+    else if (a == "--leaves-density") o->leaves[0] = static_cast<float>(atof(v));
+    else if (a == "--leaves-size") o->leaves[1] = static_cast<float>(atof(v));
+    else if (a == "--leaves-sink") o->leaves[2] = static_cast<float>(atof(v));
+    else if (a == "--leaves-drift") o->leaves[3] = static_cast<float>(atof(v));
+    else if (a == "--leaves-ground") o->leaves[4] = static_cast<float>(atof(v));
     else if (a == "--weather-spell") o->weatherSpell = static_cast<float>(atof(v));
     else if (a == "--reflection") o->reflection = static_cast<float>(atof(v));
     else if (a == "--heading") o->heading = static_cast<float>(atof(v));
@@ -1099,6 +1141,11 @@ void MountGameFiles(const Options& o, moho::Vfs* vfs) {
   for (const std::string& folder : o.mods)
     for (const std::string& name : moho::hostfs::ListDirectory(folder))
       if (moho::hostfs::IsDirectory(folder + "/" + name)) vfs->Mount(folder + "/" + name, "/mods/" + name);
+  // [seasons] --terrain-overlay <folder>: laid over the remastered ground's folder, mounted first so that its files win
+  if (!o.terrainOverlay.empty()) {
+    if (vfs->Mount(o.terrainOverlay, kRemasteredTerrain)) printf("render: the remastered ground overlaid by %s\n", o.terrainOverlay.c_str());
+    else fprintf(stderr, "render: --terrain-overlay %s: no such folder\n", o.terrainOverlay.c_str());
+  }
   // --remasters <folder>: every remastered unit's files for this engine found there (remasters.h)
   for (const std::string& root : o.remasters) printf("render: %d remastered units from %s" "%c", MountRemasters(vfs, root, !o.fx.fx.empty() || !o.fx.shot.empty() || !o.fx.entity.empty() || !o.fx.shield.empty() || !o.fx.death.empty() || !o.fx.move.empty() || !o.fx.build.empty() || !o.fx.fire.empty(), o.terrainDespiteHold), root.c_str(), 10);
   // --preview <unit id>=<folder>: a remastered model's files, tried out in place of that unit's
@@ -1256,6 +1303,7 @@ int main(int argc, char** argv) {
     picture.SetTemporalUpscale(opt.fsr3);   // (--fsr3)
     picture.SetRayReflections(opt.rayReflections);  // (--ray-reflections)
     picture.SetHiddenOutlines(opt.hiddenOutlines);  // (--no-hidden-outlines)
+    if (Season s; !opt.season.empty() && SeasonNamed(opt.season, &s)) picture.SetSeason(s);  // [seasons] (--season)
     if (opt.timeOfDay >= 0) picture.SetDayAndWeather(opt.timeOfDay, opt.dayLength, opt.weather == "auto");  // (--picture: the hour and the weather through the pixel interface)
     setup.modUids = opt.modUids;
     if (!live.Open(setup, &error)) {
@@ -1296,6 +1344,14 @@ int main(int argc, char** argv) {
   gRayShaders = (opt.rayReflections || opt.rayLightShadows > 0) && device->RayTracing();
   World world(device.get(), &vfs);
   world.terrain.ultraGround = opt.groundUltra;  // (the remastered ground's set: before the map opens)
+  if (!opt.season.empty() && !SeasonNamed(opt.season, &world.season))  // [seasons] (before the map opens)
+    fprintf(stderr, "render: --season %s: summer, autumn or winter\n", opt.season.c_str());
+  world.fallingLeaves = opt.fallingLeaves;
+  world.leaves.density = opt.leaves[0];
+  world.leaves.size = opt.leaves[1];
+  world.leaves.sink = opt.leaves[2];
+  world.leaves.drift = opt.leaves[3];
+  world.leaves.groundDensity = opt.leaves[4];
   for (const std::string& g : opt.groundKind) {  // --ground-kind <part>=<kind> (deep tracks: before the map opens)
     const size_t eq = g.find('=');
     std::string part = g.substr(0, eq);
@@ -1349,6 +1405,12 @@ int main(int argc, char** argv) {
   if (opt.rippleSpeed > 0) world.water.ripples.speed = opt.rippleSpeed;
   if (opt.rippleHalfLife > 0) world.water.ripples.halfLife = opt.rippleHalfLife;
   world.water.ripples.view = opt.rippleView;
+  world.surf = opt.surf;
+  world.surfRoughness = opt.surfRough;
+  if (opt.surfStrength >= 0) world.water.surf.strength = opt.surfStrength;
+  if (opt.surfSpray >= 0) world.water.surf.sprayStrength = opt.surfSpray;
+  if (opt.surfBreak > 0) world.water.surf.breakDepth = opt.surfBreak;
+  world.water.surf.view = opt.surfView;
   world.groundCover = opt.groundCover;
   world.wildlife = opt.wildlife;
   world.horizonWeather = opt.horizon;  // [horizon]
@@ -1572,7 +1634,7 @@ int main(int argc, char** argv) {
   world.lifeBars = opt.bars;
   world.weatherSeed = opt.seed ? opt.seed : 1;
   world.weatherSpell = opt.weatherSpell;
-  world.climate = opt.climate == "cold" ? Climate::Cold : opt.climate == "dry" ? Climate::Dry : Climate::Temperate;
+  world.climate = opt.climate == "cold" ? Climate::Cold : opt.climate == "dry" ? Climate::Dry : opt.climate == "autumn" ? Climate::Autumn : Climate::Temperate;
   for (int i = 0; i < 5; ++i)
     if (opt.weather == kWeathers[i]) {
       setWeather(i);
@@ -1940,6 +2002,21 @@ int main(int argc, char** argv) {
     } else {
       fprintf(stderr, "render: --movement-dust-test: %s\n", why.empty() ? "nothing to drive" : why.c_str());
       dustTest.reset();
+    }
+  }
+  // --surf-test: ships driven round loops over deep water near where the camera looks (moved and handed to the world as a
+  // game's frame, in the frame loop)
+  std::unique_ptr<SurfTest> surfTest;
+  if (!opt.surfTest.empty() && haveMap && world.map.water.present) {
+    surfTest = std::make_unique<SurfTest>();
+    std::string why;
+    const float level = world.map.water.elevation;
+    if (surfTest->Init(opt.surfTest, camera.target, opt.surfTestRadius, world.dust.readBlueprint,
+                       [&](float x, float z) { return level - world.map.Height(x, z); }, level, &why)) {
+      printf("render: --surf-test: %s%s%s\n", surfTest->Describe().c_str(), why.empty() ? "" : "; ", why.c_str());
+    } else {
+      fprintf(stderr, "render: --surf-test: %s\n", why.empty() ? "nothing to drive" : why.c_str());
+      surfTest.reset();
     }
   }
   // --blast-test: where and when the next blast goes (in the frame loop)
@@ -2897,6 +2974,7 @@ int main(int argc, char** argv) {
       world.AddFrame(dustTest->Update(havePlay ? playTick * 0.1 : static_cast<double>(time), [&](float x, float z) { return haveMap ? map.Height(x, z) : 0.0f; },
                                       haveMap && map.water.present ? map.water.elevation : -1e9f),
                      armyColors);
+    if (surfTest) world.AddFrame(surfTest->Update(havePlay ? playTick * 0.1 : static_cast<double>(time)), armyColors);  // (--surf-test: its ships)
     // --find: once the game is where it was asked to be, the camera goes to the first such thing
     // (a shield's flash lasts two seconds and may not be there at that moment: that search goes on,
     // frame after frame, until one shows)
@@ -3175,6 +3253,9 @@ int main(int argc, char** argv) {
       if (haveLive) printf("; scenery: %d changes, %d gone, %d made in the game standing, %d props of %d squares gone through; %zu script entities", world.propsChanged, world.propsGone, world.MadeProps(), world.propsAdded, world.propCellsSeen, frame.entities.size());
       if (haveLive) printf("; %d hits, %d impacts taken (%d, %d shown)", world.hitsTaken, world.impactsTaken, world.hitsShown, world.impactsShown);
       if (world.waterRipples) printf("; water ripples: %d splashes added, %d still swinging", world.water.ripples.Added(), world.water.ripples.Live());
+      if (world.surf)
+        printf("; surf: field in %.0f ms, %d spray spots, %d bursts, %d ships throwing spray, %d puffs kept, %d drawn", world.water.surf.fieldMs,
+               world.water.surf.Spots(), world.water.surf.bursts, world.water.surf.ships, world.water.surf.Puffs(), world.water.surf.Drawn());
       if (world.wildlife)
         printf("; wildlife: %d flocks of %d birds, %d flocks (%d birds) drawn, %d places for fireflies, %d noises heard, %d flocks scattered",
                world.wildlifeDraw.Flocks(), world.wildlifeDraw.Birds(), world.wildlifeDraw.flocksDrawn, world.wildlifeDraw.birdsDrawn,
