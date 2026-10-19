@@ -1881,6 +1881,9 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       if (m.seen && m.kind == FrameImpact::Projectile && (m.type == "Water" || m.type == "Underwater")) waterShots.emplace(m.source, -1.0f);
   // projectiles: one with a model as that model; the others are effects in the game - where the
   // game's own effect is not on it, a short soft glowing band along the flight stands in
+  // (debris, blastDebris: a death's debris shells are the debris's to draw, as torn pieces of what threw them; debris.h)
+  const bool debrisShells = blastDebris && look == Look::Modern && haveMap_ && !sidePicture;
+  if (debrisShells) debris.BeginShells();
   for (const FrameProjectile& p : frame.projectiles) {
     if (!p.seen) continue;
     const Vec3 position{p.position[0], p.position[1], p.position[2]};
@@ -1902,6 +1905,10 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     water.ripples.AddShot(p.id, position, p.stopped, shotSize);
     if (!waterShots.empty())
       if (auto it = waterShots.find(p.id); it != waterShots.end()) it->second = shotSize;
+    if (debrisShells && !p.original && model && model->ok &&
+        debris.Shell(p.id, p.blueprint, blueprint, position, {p.orientation[0], p.orientation[1], p.orientation[2], p.orientation[3]},
+                     {p.velocity[0], p.velocity[1], p.velocity[2]}, p.sized ? p.size[0] : model->scale, p.stopped))
+      continue;
     if (model && model->ok) {
       const Quat orientation{p.orientation[0], p.orientation[1], p.orientation[2], p.orientation[3]};
       // in its own colours: the original gives every mesh that is not a unit's opaque white where a
@@ -2204,6 +2211,8 @@ void World::Render() {
   if (blastDebris && look == Look::Modern && haveMap_ && !sidePicture) {
     CpuTimes::Part("debris moved");
     debris.rubbleLasts = battleScars ? 0.0f : 120.0f;  // (kept as the scorches are)
+    debris.hot = hotOn_;            // (fresh pieces' torn faces glow with hot metal on)
+    debris.smoke = &particles;      // (the biggest trail smoke)
     debris.Update(clock_, view.eye, &meshes, &blasts);
   }
   {  // the bones of posed models, once for all the frame's passes

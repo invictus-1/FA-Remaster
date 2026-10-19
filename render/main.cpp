@@ -140,6 +140,11 @@
 //           World::blastWaves), --blast-dust (a bigger blast kicks a low ring of dust off the ground; World::blastDust) and
 //           --debris (a dying unit throws small chunks that bounce and stay as rubble for two minutes, with --battle-scars
 //           until there is too much; World::blastDebris); --debris-most n: the most rubble kept lying (1500)
+// --debris-test <unit>[,every[,height]]  with --debris: the debris throws that unit's pieces (Debris::Throw, as its death
+//           would) every `every` seconds (2.5) where the camera starts, `height` over the ground or the water (3): to look
+//           at them close and to time many
+// --debris-show <unit>  the debris's library of shapes (debris_shapes.h) laid out in two rows over where the camera starts,
+//           turning slowly, in that unit's paint (above) and charred (below), with their torn faces (hot with --hot-metal)
 // --fx-blast <size>  with the effects stand: a blast of that size (world units, about an explosion's radius: a small
 //           tank's death 0.4, a shell's 1 to 3, an experimental's 4) at --fx-at --fx-kill-at seconds into each play
 //           (alone too, every --fx-repeat seconds)
@@ -504,6 +509,8 @@ struct Options {
   bool leafLight = false;               // --leaf-light
   bool blastWaves = false, blastDust = false, debris = false;  // --blasts, --blast-waves, --blast-dust, --debris
   int debrisMost = -1;                  // --debris-most
+  std::string debrisTest, debrisShow;   // --debris-test, --debris-show
+  float debrisTestEvery = 2.5f, debrisTestHeight = 3;
   int blastTest = 0;                    // --blast-test
   bool movementDust = false;            // --movement-dust
   bool movementDustOver = false;        // --movement-dust-over
@@ -793,6 +800,14 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--smoke-shadow-strength") o->smokeShadowStrength = static_cast<float>(atof(v));
     else if (a == "--heat-bend") o->heatBend = static_cast<float>(atof(v));
     else if (a == "--debris-most") o->debrisMost = std::max(0, atoi(v));
+    else if (a == "--debris-show") o->debrisShow = v;
+    else if (a == "--debris-test") {
+      const std::string all = v;
+      const size_t comma = all.find(',');
+      o->debrisTest = all.substr(0, comma);
+      if (comma != std::string::npos) sscanf(all.c_str() + comma + 1, "%f,%f", &o->debrisTestEvery, &o->debrisTestHeight);
+      o->debrisTestEvery = std::max(o->debrisTestEvery, 0.1f);
+    }
     else if (a == "--movement-dust-test") o->movementDustTest = v;
     else if (a == "--timings-from") o->timingsFrom = std::max(0, atoi(v));
     else if (a == "--movement-dust-radius") o->movementDustRadius = std::max(1.0f, static_cast<float>(atof(v)));
@@ -1909,7 +1924,8 @@ int main(int argc, char** argv) {
   }
   // --blast-test: where and when the next blast goes (in the frame loop)
   const Vec3 blastTestAt = camera.target;
-  double blastTestNext = 0;
+  double blastTestNext = 0, debrisTestNext = 0;
+  uint32_t debrisTestSeed = 1;
   uint32_t blastTestSeed = 2463534242u;
   auto blastTestRandom = [&blastTestSeed]() {
     blastTestSeed ^= blastTestSeed << 13;
@@ -2635,6 +2651,23 @@ int main(int argc, char** argv) {
       }
     }
 
+    if (!opt.debrisTest.empty() || !opt.debrisShow.empty()) {  // --debris-test, --debris-show (debris.h)
+      const double clock = havePlay ? playTick * 0.1 : static_cast<double>(time);
+      const float x = blastTestAt.x, z = blastTestAt.z;
+      const float below = groundHeight(x, z);  // (the ground's, or the water's over it)
+      if (!opt.debrisTest.empty() && clock >= debrisTestNext) {
+        debrisTestNext = clock + opt.debrisTestEvery;
+        world.debris.Throw(opt.debrisTest, world.models.Unit(opt.debrisTest), {x, below + opt.debrisTestHeight, z}, Quat{}, {0.2f, 0.45f, 1.0f}, {},
+                           debrisTestSeed++);
+      }
+      if (!opt.debrisShow.empty()) {
+        Vec3 right, up, back;
+        camera.Axes(&right, &up, &back);
+        world.debris.hot = opt.hotMetal;
+        world.debris.Show(world.models.Unit(opt.debrisShow), Vec3{x, below + 1.5f, z}, Normalize(Vec3{right.x, 0, right.z}), 0.45f, clock,
+                          &world.meshes);
+      }
+    }
     if (fxStand) {  // the effects test stand
       Vec3 right, up, back;
       camera.Axes(&right, &up, &back);
@@ -3143,8 +3176,8 @@ int main(int argc, char** argv) {
         printf("; movement dust: %d puffs kept, %d of dust and %d of spray drawn, %d contrails of %d pieces", world.dust.Puffs(), world.dust.DustDrawn(),
                world.dust.SprayDrawn(), world.dust.Trails(), world.dust.Segments());
       if (world.blastWaves || world.blastDust || world.blastDebris)
-        printf("; blasts: %d told, %d under way, %d dust puffs; debris: %d chunks thrown, %d flying, %d lying", world.blasts.told, world.blasts.Active(),
-               world.blasts.dustPuffs, world.debris.thrown, world.debris.Flying(), world.debris.Lying());
+        printf("; blasts: %d told, %d under way, %d dust puffs; debris: %d chunks thrown, %d flying, %d lying, %d of the game's shells seen", world.blasts.told,
+               world.blasts.Active(), world.blasts.dustPuffs, world.debris.thrown, world.debris.Flying(), world.debris.Lying(), world.debris.shellsSeen);
       printf("\n");
       if (opt.wildlifeVerbose) tellFlocks("at the end");
       if (opt.timings && timing.frames > 0) {

@@ -749,6 +749,39 @@ picture the fallback; helpers build most of them in parallel, the renderer revie
    impacts are not there to make them). `Debris::fragments` takes the visuals session's real fragments of a unit
    when she delivers them. Costs at 1440p: in a live fight +0.004 ms for units and scenery, the field +0.006, dust
    0.02-0.04; 32 blasts at once among trees +0.08-0.09 ms. Off: pictures identical (regression 0 px on both backends).
+   **Debris that reads as wreckage** (Chris, 2026-10-18 evening, from the showcase stills: "just black cubes"). The black
+   squares in his pictures were not the debris's chunks but the game's own debris shells: every death script throws a
+   handful (defaultexplosions.lua, CreateScalableUnitExplosion: DebrisMisc04/09/010, Random(1 + 6r, 15r) of them for a
+   unit of bounding radius r, land, air and water alike), drawn by the game as one flat grey plate
+   (/meshes/projectiles/debris_misc_04 in the game's meshes.scd: 24 vertices, a 32 x 32 grey-blue albedo) in the plain
+   "VertexNormal" look; from below or against the light they read as black squares. With `blastDebris` on, the debris
+   now draws those shells itself (`Debris::Shell`, from World::AddFrame's projectile loop): each as a torn piece of the
+   dying unit nearest where it first shows, 65 % of them (`shellsDrawn`) at 0.9 of the plate's size (`shellSize`); the
+   game still flies them (and their smoke trails). When one hits (the engine's `stopped`) or touches the water, the
+   piece is the debris's: into the water it sinks (about three seconds, slowing, under the water's surface), on the
+   ground it hops and lies with the rubble. The debris's own chunks (a ground unit's, thrown with its death's flash) are
+   the same pieces. The shapes are a library made once from a fixed seed (`render/debris_shapes.h/.cpp`, 16 of them,
+   12-76 triangles each): torn plates (three bent), panels folded near square, an angle and a tee of girder, a bent
+   strut, jagged shards, lumps of concrete; a building's pieces are mostly lumps and girders, an aircraft's thin plates
+   and shards, a vehicle's or ship's plates, panels and girders, each kind of unit keeping to six of them (picked by
+   its kind from its size, the same every run: every shape a pass draws is a draw of its own, so a close look at a heap
+   of one unit's rubble costs about what the first version's six shapes did). Their skin wears a patch of the unit's
+   own texture where its paint lies (`Model::paintSpots`: 24 places picked by area over its finest mesh at loading, each with the
+   texture's density there, so a patch is about as much paint as the piece's size; spots whose patch would glow - the
+   specular's blue, read once from `Model::paintMaterial` at a level of 256 or less - are left out, or a Cybran piece
+   glows red), in its material and faction's look, its army's colour at 0.85; three in ten are charred instead (a
+   sooty dark grey-brown with paler blotches of dust, rough, one look shared by all units' pieces, so that each kind of
+   unit adds only its six painted meshes to what is drawn), and the painted ones turn to it 15-90 s after they come to
+   rest (dust). Their torn faces (a plate's rims, a
+   girder's ends, a lump's fractures) are a second model in a material of their own: scorched steel (dark, sooty,
+   metal 0.85, roughness 0.42 - what the hot metal's shader takes for a torn rim of bare steel, so with `hotMetal` on
+   they glow a deep orange cooling to dull red over about three seconds) or broken concrete (no glow); drawn only when
+   the piece is near enough for them to show (a lump's always), and casting no shadow but a lump's (the skin's is the
+   piece's). The two biggest chunks of a death trail the game's own
+   debris smoke while they fly. Sizes: a thirtieth to a sixth of the unit across (mostly small), at most 0.45 world
+   units. Viewer: `--debris-show <unit>` lays the library out in that unit's paint (above) and charred (below), turning;
+   `--debris-test <unit>[,every[,height]]` throws that unit's pieces over and over where the camera starts. The shared
+   shaders are untouched; no new texture slots.
 4. **Water that reacts** (ripples from shells, ships, hover and wading units that spread and cross). First version
    done 2026-10-18 (`World::waterRipples`, viewer `--water-ripples`): item 8 of "The next pieces" above. Cost about
    0.04-0.05 ms at 1440p with a battleship and four splashes a second; off, pictures identical (regression 0 px on

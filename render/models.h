@@ -155,6 +155,13 @@ struct Model {
   std::vector<BoneBox> boneBoxes;
   // Its triangles at rest, for where a hit lies on it (unit_wear.h; made while ModelCache::hitShapes is set); null: none.
   std::shared_ptr<const HitShape> hitShape;
+  // (debris, debris.h) A unit's: a few places its finest level's paint lies on its texture, spread over its surface by
+  // area: each the middle of one of its triangles in its texture (x, y) and how much of the texture a model unit of
+  // its surface takes there (z). The debris's pieces wear patches of its texture from these; empty: none known.
+  std::vector<Vec3> paintSpots;
+  // (debris) Its finest level's specular texture's path ("" none): the debris reads where its paint glows from it (its
+  // blue), to keep its pieces' patches off its lights.
+  std::string paintMaterial;
   // For a model built to the four-level standard (a remastered unit's export for this engine): the
   // size on screen, in pixels, down to which each level but the last is used - the sizes its levels
   // were made and judged for. Empty: levels are chosen by their triangle counts (mesh_renderer.h).
