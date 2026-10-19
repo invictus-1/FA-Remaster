@@ -32,11 +32,16 @@ class AmbientOcclusion {
   // shadow maps. How dark (0: none), and how far it looks (world units).
   float contactShadows = 0;
   float contactLength = 1.0f;
+  // (photofix2) A photo's frame drawn larger than the window: this many of its pixels make one of the window's. How far
+  // a pixel looks is at most 48 of the window's pixels (and nothing under 1.5 of them), so that a photo's surroundings
+  // reach as far over the ground as the window's (in its own pixels the cap took a smaller disc, whose nearer samples
+  // shade more: a photo's grass came out darker than the window's). 1 in the game's own frames: as before.
+  float pixelScale = 1;
 
  private:
   struct Constants {
     float tanHalfFov, aspect, zNear, radius;
-    float strength, contact, contactLength, contactPad;
+    float strength, contact, contactLength, pixelScale;
     float sunInView[4], axisRight[4], axisUp[4], axisBack[4];
   };
   gfx::Device* device_;

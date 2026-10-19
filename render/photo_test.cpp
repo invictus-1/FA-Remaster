@@ -577,6 +577,13 @@ void Brightness(const std::vector<uint32_t>& px, double mean[3], double* blackSh
 //   lensf     the lens on at this f-number for the photo (default 0: off); focus (world units; default 0: auto)
 //   before    seconds of the window's frames at the place before anything is set (default 1)
 //   settle    seconds of the window's frames after the photos, for the moment settled in the window (default 1.5)
+//   by        (photofix2) the photos drawn this many times larger again (StartPhoto's and TakePhoto's supersample;
+//             default 0: as the card allows)
+//   take      (photofix2) 1: the photos taken with TakePhoto (blocking, as the cinematic camera's) in place of StartPhoto
+//   full      (photofix2) 1: every photo written at its own size (else one larger than 3840x2160 made as small as the
+//             window)
+//   budget    (photofix2) MB one picture of a photo may take (SetPhotoBudget; default 0: the card's own)
+//   lensoff   (photofix2) 1: the lens put off for the window as soon as the photo is begun (the photo keeps it)
 // Written beside the --picture file: <base>_<name>_window.png (the window's frame just before the photo),
 // <base>_<name>_<k>x.png (each photo; larger than 3840x2160 made as small as the window), <base>_<name>_settled.png.
 void PhotoCases(WorldPicture& picture, const Camera& gameCamera, double tick, const PhotoTestSetup& s) {
@@ -600,7 +607,9 @@ void PhotoCases(WorldPicture& picture, const Camera& gameCamera, double tick, co
     const std::string name = one.substr(0, colon);
     if (name.empty()) continue;
     float x = at.x + 16, z = at.z + 16, height = 3, yaw = 45, pitch = 9, hour = -1, strength = 0.6f, wait = 0, lensF = 0, focus = 0, before = 1, settle = 1.5f;
-    int kind = 4, panel = 0;
+    int kind = 4, panel = 0, by = 0, take = 0, full = 0;
+    double budgetMb = 0;
+    int lensOff = 0;
     std::string sizes = "1";
     for (std::string rest = colon == std::string::npos ? std::string() : one.substr(colon + 1); !rest.empty();) {
       const size_t comma = rest.find(',');
@@ -625,6 +634,11 @@ void PhotoCases(WorldPicture& picture, const Camera& gameCamera, double tick, co
       else if (k == "focus") focus = f;
       else if (k == "before") before = f;
       else if (k == "settle") settle = f;
+      else if (k == "by") by = static_cast<int>(f);  // (photofix2)
+      else if (k == "take") take = static_cast<int>(f);
+      else if (k == "full") full = static_cast<int>(f);
+      else if (k == "budget") budgetMb = f;
+      else if (k == "lensoff") lensOff = static_cast<int>(f);
       else printf("render: --photo-cases: %s: no key %s\n", name.c_str(), k.c_str());
     }
     CineCamera cine;
@@ -672,24 +686,47 @@ void PhotoCases(WorldPicture& picture, const Camera& gameCamera, double tick, co
     Write(s.base + "_" + name + "_window.png", window, w, h);
     double wm[3], wb;
     Brightness(window, wm, &wb);
-    printf("render: --photo-cases: %s: eye %.1f %.1f %.1f yaw %.0f pitch %.0f; moment %s; the window before: mean %.1f %.1f %.1f, %.1f %% black\n", name.c_str(), x,
-           ground(x, z) + height, z, yaw, pitch, hour >= 0 ? (std::to_string(hour) + " kind " + std::to_string(kind) + " at " + std::to_string(strength)).c_str() : "the game's own",
-           wm[0], wm[1], wm[2], wb);
+    printf("render: --photo-cases: %s: eye %.1f %.1f %.1f yaw %.0f pitch %.0f; moment %s; the window before: mean %.1f %.1f %.1f, %.1f %% black; card memory %lld MB\n",
+           name.c_str(), x, ground(x, z) + height, z, yaw, pitch,
+           hour >= 0 ? (std::to_string(hour) + " kind " + std::to_string(kind) + " at " + std::to_string(strength)).c_str() : "the game's own", wm[0], wm[1], wm[2], wb,
+           picture.LastStats().cardBytes >> 20);
     for (char c : sizes) {
       const int k = c - '0';
       if (k < 1 || k > 4) continue;
       std::vector<uint32_t> px;
       int pw = 0, ph = 0, frames = 0;
       const double t0 = Now();
-      if (!picture.StartPhoto(view, w * k, h * k, tick, 0)) {
-        printf("render: --photo-cases: %s: %dx: StartPhoto refused\n", name.c_str(), k);
-        continue;
+      double startMs = 0;
+      WorldPicture::PhotoNumbers n;
+      if (take) {  // (photofix2) the blocking photo, as the cinematic camera takes it (its frames at its own size, 8 to settle)
+        int madeW = 0, madeH = 0;
+        if (!picture.TakePhoto(view, w * k, h * k, tick, &px, &madeW, &madeH, by)) {
+          printf("render: --photo-cases: %s: %dx: TakePhoto failed\n", name.c_str(), k);
+          continue;
+        }
+        pw = madeW;
+        ph = madeH;
+        n.tileWidth = pw;
+        n.tileHeight = ph;
+        n.by = by;
+        if (lensOff) picture.SetLens(Lens{});
+        host.Frame(view, w, h, tick, false);  // (the window's size again)
+      } else {
+        WorldPicture::SetPhotoBudget(budgetMb * 1048576.0);
+        const bool started = picture.StartPhoto(view, w * k, h * k, tick, by);
+        startMs = (Now() - t0) * 1000;
+        WorldPicture::SetPhotoBudget(0);
+        if (!started) {
+          printf("render: --photo-cases: %s: %dx: StartPhoto refused\n", name.c_str(), k);
+          continue;
+        }
+        if (lensOff) picture.SetLens(Lens{});
+        while (!picture.TakeDonePhoto(&px, &pw, &ph) && frames < 100000) {
+          host.Frame(view, w, h, tick, false);
+          ++frames;
+        }
+        n = picture.LastPhotoNumbers();
       }
-      while (!picture.TakeDonePhoto(&px, &pw, &ph) && frames < 100000) {
-        host.Frame(view, w, h, tick, false);
-        ++frames;
-      }
-      const WorldPicture::PhotoNumbers n = picture.LastPhotoNumbers();
       double pm[3], pb;
       Brightness(px, pm, &pb);
       std::vector<uint32_t> small = px;
@@ -700,10 +737,15 @@ void PhotoCases(WorldPicture& picture, const Camera& gameCamera, double tick, co
       if (sw == w && sh == h) Differ(window, small, &mean, &most, &over8);
       printf("render: --photo-cases: %s: %dx photo %dx%d (%s %dx%d x%d) in %.2f s, %d frames: mean %.1f %.1f %.1f, %.1f %% black; from the window before %.1f mean, %.1f %% "
              "of pixels by more than 8\n",
-             name.c_str(), k, pw, ph, n.columns * n.rows > 1 ? "tiles" : "one picture", n.tileWidth, n.tileHeight, n.by, Now() - t0, frames, pm[0], pm[1], pm[2], pb, mean, over8);
+             name.c_str(), k, pw, ph, take ? "TakePhoto" : n.columns * n.rows > 1 ? "tiles" : "one picture", n.tileWidth, n.tileHeight, n.by, Now() - t0, frames, pm[0],
+             pm[1], pm[2], pb, mean, over8);
+      if (!take)  // (photofix2: the plan's budget, and the card's memory at most while drawn)
+        printf("render: --photo-cases: %s: %dx photo: budget %.0f MB (the card's free %llu MB; StartPhoto %.1f ms), %dx%d tiles, card memory at most %llu MB\n", name.c_str(),
+               k, n.budgetBytes / 1048576.0, static_cast<unsigned long long>(n.cardFreeBytes >> 20), startMs, n.columns, n.rows,
+               static_cast<unsigned long long>(n.mostCardBytes >> 20));
       char suffix[32];
       snprintf(suffix, sizeof suffix, "_%dx.png", k);
-      if (pw <= 3840 && ph <= 2160) Write(s.base + "_" + name + suffix, px, pw, ph);
+      if (full || (pw <= 3840 && ph <= 2160)) Write(s.base + "_" + name + suffix, px, pw, ph);
       else Write(s.base + "_" + name + suffix, small, sw, sh);
     }
     picture.SetLens(Lens{});
@@ -712,7 +754,8 @@ void PhotoCases(WorldPicture& picture, const Camera& gameCamera, double tick, co
     Write(s.base + "_" + name + "_settled.png", settled, w, h);
     double sm[3], sb;
     Brightness(settled, sm, &sb);
-    printf("render: --photo-cases: %s: the window %.1f s later: mean %.1f %.1f %.1f, %.1f %% black\n", name.c_str(), settle, sm[0], sm[1], sm[2], sb);
+    printf("render: --photo-cases: %s: the window %.1f s later: mean %.1f %.1f %.1f, %.1f %% black; card memory %lld MB\n", name.c_str(), settle, sm[0], sm[1], sm[2], sb,
+           picture.LastStats().cardBytes >> 20);
     picture.ClearPhotoMoment();
   }
 }

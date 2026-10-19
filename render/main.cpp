@@ -2409,6 +2409,7 @@ int main(int argc, char** argv) {
   // --photo: the frames still to draw at the photo's size (its moment held: the clock does not run on), the last
   // one read back; the size it comes out at and how many times larger it is drawn
   int photoLeft = 0, photoWidth = 0, photoHeight = 0, photoBy = 1, photoNumber = 0;
+  int windowSceneWidth = 0, windowSceneHeight = 0;  // (photofix2: the window's scene as last drawn)
   float photoTime = 0;  // (the moment it shows: the clock of the frame it was asked at)
   std::string photoPath;
   bool photoEnds = false, wantPhoto = false;  // (the run ends after it: --photo; key P: a photo now)
@@ -2944,8 +2945,20 @@ int main(int argc, char** argv) {
     if (cine.TakeCut()) world.cameraCut = true;
     if (opt.hasCine) world.lens.strength = cine.LensShare();  // (the lens's blur goes as the picture eases back)
     world.photo = photoLeft > 0;  // (--photo: its frames)
+    // (photofix2) and what falls, the tracers and the occlusion's reach measured in the window's scene's pixels, as the
+    // window shows them (World::photoPixel, photoShare; WorldPicture::TakePhoto does the same)
+    world.photoPixel = world.photoShare = 1;
+    if (photoLeft > 0 && windowSceneWidth > 0 && windowSceneHeight > 0) {
+      world.photoPixel = static_cast<float>(device->Height()) / static_cast<float>(windowSceneHeight);
+      world.photoShare = static_cast<float>(device->Width()) * static_cast<float>(device->Height()) /
+                         (world.photoPixel * world.photoPixel * static_cast<float>(windowSceneWidth) * static_cast<float>(windowSceneHeight));
+    }
     if (opt.rainStops >= 0 && time >= opt.rainStops && world.rain + world.snow > 0) setWeather(0);  // [unit dirt] --rain-stops
     world.Begin(drawn, device->Width(), device->Height(), time, havePlay ? playTick * 0.1 : static_cast<double>(time));
+    if (photoLeft == 0) {  // (photofix2: the window's scene, as a photo's frames measure what falls by it)
+      windowSceneWidth = world.view.width;
+      windowSceneHeight = world.view.height;
+    }
     if (opt.blastTest > 0) {  // --blast-test: blasts at random round where the camera started, about n under way at once
       const double clock = havePlay ? playTick * 0.1 : static_cast<double>(time);
       while (clock >= blastTestNext) {

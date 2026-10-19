@@ -2721,6 +2721,7 @@ void World::Render() {
     // ambient occlusion: from the depth of everything solid, laid over it before the water
     Stage("ambient occlusion");
     ao.contactShadows = contactShadows ? 0.8f : 0.0f;
+    ao.pixelScale = photoPixel;  // (photofix2: a photo's frame reaches as far as the window's)
     if (look == Look::Modern && (ao.strength > 0 || ao.contactShadows > 0)) {
       ao.Compute(view, camera, post.Depth());
       post.ContinueScene();

@@ -599,7 +599,8 @@ class World {
   // rain's and the snow's widths and the splashes' least size are measured in the window's pixels), and the frame shows
   // `photoShare` of the window's view (a tile, part of it). `photoMeter`: the photographic look's eye meters this frame and
   // is set to it at once (a photo whose moment the window had not settled into yet: the window's eye was not yet there).
-  // 1, 1 and false outside a photo's frames (WorldPicture::PhotoStep sets them for its frames only).
+  // 1, 1 and false outside a photo's frames (WorldPicture::PhotoStep sets them for its frames only; photofix2: TakePhoto's
+  // set the first two too, and the ambient occlusion's reach is measured by photoPixel as well).
   float photoPixel = 1, photoShare = 1;
   bool photoMeter = false;
   // (photomode) A moment of the picture's own (WorldPicture::SetPhotoMoment): while `on`, each frame shows this hour and

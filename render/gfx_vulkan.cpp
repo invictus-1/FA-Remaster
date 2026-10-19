@@ -21,6 +21,7 @@
 //   structures in buffers of their own, built in the frame's commands as Direct3D 12's backend builds them;
 //   a scene is bound in a texture's binding of set 0 as an acceleration structure descriptor.
 
+#include "card_memory.h"  // (photofix2)
 #include "gfx.h"
 
 #if defined(_WIN32)
@@ -359,10 +360,11 @@ class Memory {
       }
     }
     // a new block: 256 MB, or the size asked for when larger
+    constexpr VkDeviceSize kBlock = 256ull << 20;
     Block b;
     b.type = type;
     b.linear = linear;
-    b.size = std::max<VkDeviceSize>(256ull << 20, (req.size + 0xffff) & ~VkDeviceSize{0xffff});
+    b.size = std::max<VkDeviceSize>(kBlock, (req.size + 0xffff) & ~VkDeviceSize{0xffff});
     VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
     mai.allocationSize = b.size;
     mai.memoryTypeIndex = type;
@@ -376,7 +378,10 @@ class Memory {
       b.mapped = static_cast<uint8_t*>(p);
     }
     b.free.push_back({0, b.size});
-    blocks_.push_back(std::move(b));
+    // (photofix2: in the place of one given back, if there is one)
+    const auto empty = std::find_if(blocks_.begin(), blocks_.end(), [](const Block& e) { return !e.memory; });
+    if (empty != blocks_.end()) *empty = std::move(b);
+    else blocks_.push_back(std::move(b));
     return Get(req, want, linear, out);
   }
   void Free(const Allocation& a) {
@@ -391,6 +396,13 @@ class Memory {
       else joined.push_back(r);
     }
     b.free.swap(joined);
+    // (photofix2) a block larger than the usual, made for one large picture (a photo's, the lens's at a photo's size), is
+    // given back to the driver once all of it is free again: else a photo's pictures stayed taken of the card for as long
+    // as the program ran. (Freed only once the card is done with what was in it: Collect, FreeImage.)
+    if (b.size > (256ull << 20) && b.free.size() == 1 && b.free[0].first == 0 && b.free[0].second == b.size) {
+      vkFreeMemory(device_, b.memory, nullptr);
+      b = Block{};
+    }
   }
 
  private:
@@ -519,6 +531,7 @@ class VulkanDevice final : public Device {
   void EndFrame(std::vector<uint8_t>* capture, bool present) override;
   void Mark(const char* name) override;
   uint64_t MemoryInUse() override { return memory_.DeviceLocalBytes(); }
+  bool MemoryBudget(uint64_t* budget, uint64_t* used) override;  // (photofix2)
   void TakeTimes(std::vector<std::pair<const char*, double>>* out) override { *out = lastTimes_; }
   bool SetFrameGeneration(std::function<bool()> make) override;
   bool FrameGenerating() const override { return generating_; }
@@ -637,6 +650,9 @@ class VulkanDevice final : public Device {
   VkQueue queue_ = VK_NULL_HANDLE;
   Memory memory_;
   bool nullDescriptors_ = false;
+  // (photofix2) VK_EXT_memory_budget, where the driver has it: the card's budget for this program (MemoryBudget)
+  bool memoryBudget_ = false;
+  PFN_vkGetPhysicalDeviceMemoryProperties2 memoryProperties2_ = nullptr;
   VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
   VkFormat swapFormat_ = VK_FORMAT_UNDEFINED;
   std::vector<VkImage> swapImages_;
@@ -1227,6 +1243,10 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
   VkPhysicalDevicePresentIdFeaturesKHR presentId{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR};
   VkPhysicalDevicePresentWaitFeaturesKHR presentWaitFeature{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_WAIT_FEATURES_KHR};
   if (calibration) deviceExtensions.push_back(calibrationKhr ? VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME : VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME);
+  // (photofix2) the card's memory budget (asked for a photo's plan only; it changes nothing drawn)
+  memoryProperties2_ = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties2>(vkGetInstanceProcAddr(instance_, "vkGetPhysicalDeviceMemoryProperties2"));
+  memoryBudget_ = memoryProperties2_ && deviceOffers(physical_, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+  if (memoryBudget_) deviceExtensions.push_back(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
   if (presentWait_) {  // (ahead of the rest of the chain)
     deviceExtensions.push_back(VK_KHR_PRESENT_ID_EXTENSION_NAME);
     deviceExtensions.push_back(VK_KHR_PRESENT_WAIT_EXTENSION_NAME);
@@ -1752,6 +1772,38 @@ bool VulkanDevice::Acquire(VkSemaphore semaphore, uint32_t* image) {
     }
     std::this_thread::yield();  // (not a sleep: Windows' sleeps last a whole timer tick, up to 15.6 ms)
   }
+}
+
+// (photofix2) VK_EXT_memory_budget's budget and use of the card's largest heap of its own (where its pictures are made)
+bool VulkanDevice::MemoryBudget(uint64_t* budget, uint64_t* used) {
+  if (!memoryBudget_) return false;
+  VkPhysicalDeviceMemoryBudgetPropertiesEXT b{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT};
+  VkPhysicalDeviceMemoryProperties2 p{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2};
+  p.pNext = &b;
+  memoryProperties2_(physical_, &p);
+  const VkPhysicalDeviceMemoryProperties& m = p.memoryProperties;
+  int heap = -1;
+  for (uint32_t i = 0; i < m.memoryHeapCount && i < VK_MAX_MEMORY_HEAPS; ++i)
+    if ((m.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) && (heap < 0 || m.memoryHeaps[i].size > m.memoryHeaps[heap].size)) heap = static_cast<int>(i);
+  if (heap < 0 || !b.heapBudget[heap]) return false;
+  *budget = b.heapBudget[heap];
+  *used = b.heapUsage[heap];
+  // no more than this program could still take of what all programs together leave free on the card (card_memory.h:
+  // the driver's budget barely heeds the others), where the card's id is known
+  VkPhysicalDeviceIDProperties id{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
+  VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+  p2.pNext = &id;
+  vkGetPhysicalDeviceProperties2(physical_, &p2);
+  uint64_t all = 0;
+  if (id.deviceLUIDValid) {
+    uint32_t low = 0;
+    int32_t high = 0;
+    std::memcpy(&low, id.deviceLUID, 4);
+    std::memcpy(&high, id.deviceLUID + 4, 4);
+    const uint64_t card = m.memoryHeaps[heap].size;
+    if (CardMemoryUsedByAll(low, high, &all)) *budget = std::min<uint64_t>(*budget, *used + (card > all ? card - all : 0));
+  }
+  return true;
 }
 
 // (photomode) The picture a photo's frames draw their window into, and its depth (gfx.h).

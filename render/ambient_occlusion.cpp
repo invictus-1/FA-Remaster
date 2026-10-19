@@ -21,7 +21,7 @@ namespace {
 const char kCompute[] = R"hlsl(
 cbuffer Ao : register(b1) {
   float tanHalfFov, aspect, zNear, radius;
-  float strength, contact, contactLength, contactPad;
+  float strength, contact, contactLength, pixelScale;
   float4 sunInView;   // xyz: toward the sun in the camera's space
   float4 axisRight, axisUp, axisBack;  // the camera's, in the world (its space to the world's)
 };
@@ -58,8 +58,9 @@ float4 PS(VOut i) : SV_Target {
   float away = -P.z;
   // (blue 1 in both: lit, no contact shadow; 0 there darkened everything far off once contact shadows were on)
   if (away > 5e5) return float4(1, 1e6, 1, 1);  // nothing drawn here
-  float pixelRadius = min(radius * viewport.y / (2 * tanHalfFov * away), 48.0);
-  if (pixelRadius < 1.5) return float4(1, away, 1, 1);  // too far away to matter
+  // (photofix2: both measured in the window's pixels, pixelScale of this picture's each: AmbientOcclusion::pixelScale)
+  float pixelRadius = min(radius * viewport.y / (2 * tanHalfFov * away), 48.0 * pixelScale);
+  if (pixelRadius < 1.5 * pixelScale) return float4(1, away, 1, 1);  // too far away to matter
   // [foliage] right at the eye (a cinematic camera among trees) mostly foliage fading out lies there (mesh_renderer.cpp,
   // NearFade): a pixel's first sample, read here, often holds a faded leaf's depth, and so near the estimate below
   // runs away (needles a hair apart in depth turn the pixel black). Nothing nearer than 0.8 world units is shut in,
@@ -120,7 +121,7 @@ float4 PS(VOut i) : SV_Target {
 const char kApply[] = R"hlsl(
 cbuffer Ao : register(b1) {
   float tanHalfFov, aspect, zNear, radius;
-  float strength, contact, contactLength, contactPad;
+  float strength, contact, contactLength, pixelScale;
 };
 Texture2D occlusion : register(t0);
 
@@ -197,6 +198,7 @@ void AmbientOcclusion::Compute(const View& view, const Camera& camera, gfx::Text
   constants_.strength = strength;
   constants_.contact = contactShadows;
   constants_.contactLength = contactLength;
+  constants_.pixelScale = std::max(pixelScale, 1e-3f);  // (photofix2)
   {  // the sun in the camera's space, and the camera's axes in the world's
     Vec3 r, u, b;
     camera.Axes(&r, &u, &b);
