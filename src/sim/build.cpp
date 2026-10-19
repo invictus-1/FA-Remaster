@@ -377,6 +377,35 @@ void PropOccupancy(Sim& sim, Prop* p, const Vec3& pos, bool occupy) {
 
 // ---- build helper (CBuildTaskHelper) -----------------------------------------------------------
 
+// A number field of the object's OWN Lua table (what a script writes as self.Key = v), as the engine reads and writes
+// it. CScriptObject::GetLuaValue 0x5fca70: the object's LuaObject (+0x20), LuaPlus GetByName 0x90a160 (0x908f60: a
+// raw lookup of the string key in the table's nodes, no __index), lua_tonumber (0 for nil or a non-number); an
+// exception (not a table) gives 0. CScriptObject::SetLuaValue 0x5fcb70: LuaPlus SetNumber 0x908320 ->
+// SetTableHelper 0x9074b0 -> luaV_settable (0x929450). (Not ScriptNumber / SetObjectValue: those keep the engine's
+// own Set<X> values in a side table, which no script reads as a field.)
+float ScriptFieldNumber(lua_State* L, ScriptObject* o, const char* key) {
+  const int top = lua_gettop(L);
+  PushObject(L, o);
+  float v = 0.0f;
+  if (lua_istable(L, -1)) {
+    lua_pushstring(L, key);
+    lua_rawget(L, -2);
+    v = static_cast<float>(lua_tonumber(L, -1));
+  }
+  lua_settop(L, top);
+  return v;
+}
+void SetScriptFieldNumber(lua_State* L, ScriptObject* o, const char* key, float v) {
+  const int top = lua_gettop(L);
+  PushObject(L, o);
+  if (lua_istable(L, -1)) {
+    lua_pushstring(L, key);
+    lua_pushnumber(L, v);
+    lua_settable(L, -3);
+  }
+  lua_settop(L, top);
+}
+
 namespace {
 
 void SetFocus(Sim& sim, lua_State* L, Unit* builder, Unit* target, BuildTask& t);
@@ -448,12 +477,25 @@ bool UpdateWorkProgress(Sim& sim, lua_State* L, Unit* builder, BuildTask& t) {
     }
     return false;
   }
-  // assisting an enhancement (the target works on a script work item)
+  // assisting an enhancement (the target works on a script work item: unit state 0x26, 0x5f5dc6..0x5f5ee4): the
+  // target's script WorkProgress (0x5fca70) at 1 or more is done (0x5f6320); else the helper ADDS its own share,
+  // 1 / (the target's WorkItemBuildTime / the builder's BuildRate, attributes+0x58) x what the builder's request was
+  // granted (+0x53c) x 0.1, capped at 1, to that script value (0x5fcb70; only when the grant is not 0), and shows
+  // it as its own work progress (+0x2ac). FAF's EnhanceTask adds the enhancing unit's own share to the same
+  // WorkProgress each beat, so an assisted enhancement ends sooner. Ours added nothing. Seen: MP2 9550, army 1's
+  // commander 0x100000 enhances from 8891, its engineer 0x1000c9 assists from 9264: the original's ends at 9550,
+  // ours ran on to 9626.
   if (target->unitStates.count("Enhancing")) {
-    PushObjectValue(L, target, "WorkProgress");
-    lua_pop(L, 1);
-    builder->workProgress = target->workProgress;
-    return target->workProgress >= 1.0f;
+    float p = ScriptFieldNumber(L, target, "WorkProgress");
+    if (p >= 1.0f) return true;
+    if (rate != 0.0f) {
+      const float bt = ScriptFieldNumber(L, target, "WorkItemBuildTime");
+      const float q = 1.0f / (bt / builder->buildRate) * rate * 0.1f + p;
+      p = q > 1.0f ? 1.0f : q;
+      SetScriptFieldNumber(L, target, "WorkProgress", p);
+    }
+    builder->workProgress = p;
+    return false;
   }
   const UnitBpData& td = *target->bpData;
   float delta = 0;
