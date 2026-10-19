@@ -530,12 +530,16 @@ void AdjustPosition(Formation& F, Unit* u, float* px, float* pz) {
            IsFree(F, x, z, size, layer);
   };
   float x = *px, z = *pz;
-  if (spot(x, z)) {
+  // A NaN place (a formation centred on a gone target, GenerateFormation) fits nowhere: the original's first test
+  // takes the cell fistp(NaN) = 0x80000000, outside the map, and so does every ring cell (NaN + d). Same outcome
+  // without converting a NaN to an int: no spot, then the fallback below.
+  const bool nan = std::isnan(x) || std::isnan(z);
+  if (!nan && spot(x, z)) {
     F.reservations.push_back({x, z, size, layer});
     return;
   }
   int count = 0;
-  for (int r = 1;; ++r) {
+  for (int r = 1; !nan; ++r) {
     for (int dx = -r; dx <= r; ++dx) {
       int step = (dx == -r || dx == r) ? 1 : 2 * r;
       for (int dz = -r; dz <= r; dz += step) {
@@ -947,7 +951,16 @@ void GenerateFormation(Sim& sim, UnitCommand& c, Unit* u) {
   // plus the blip's offset +0x27c; taken as zero for a real blip, inferred). Not the unit's origin. Seen: MP2 6047, army 0's four
   // artillery on one Attack of a radar blip: the original's formation is laid out 0.04 / -0.03 from ours (each
   // adjusted point, probe mp2_6047), so 0x104's place lands in another cell and its square is one cell off.
-  const Vec3 pos = c.targetId ? CommandPosGun(sim, c) : c.pos;
+  // An entity target whose entity is gone (a blip deleted since the order was given) has no point: GetTargetPosGun
+  // 0x5e2a90 takes the type-1 branch (0x5e2ac5), finds the weak entity null and returns the invalid vector (0x5e2ba3:
+  // the static 0x10c7aa4.. copied from 0x10a99a4, the "no target" vector, NaN). The formation is centred on it, so every
+  // raw slot is NaN, AdjustPosition 0x59aa20 finds no spot in its rings and, with no next order of a moving kind, gives
+  // each unit its own position (AdjustPosition below). Seen (probe mp2_10886): MP2 10886, army 1's four units start
+  // their second queued formation Attack, on blip 0x30000033 of army 0's dead structure 0xe0 (deleted at 10885): the
+  // original's Update puts lastPos at each unit's own cell centre ((285.5, 399.5) for 0x100015), the lost-target
+  // branch finds it in reach and ends the task in its first beat; ours centred the formation on the order's stored
+  // point, put each unit at its slot 18-28 away, and kept the order.
+  const Vec3 pos = c.targetId ? (sim.FindEntity(c.targetId) ? CommandPosGun(sim, c) : vm::NaNVec()) : c.pos;
   auto F = NewFormation(sim, units, name, pos.x, pos.z, c.formQw, c.formQx, c.formQy, c.formQz,
                         static_cast<int>(c.type), c.formScale);
   c.form = F;
