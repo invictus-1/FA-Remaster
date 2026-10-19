@@ -660,6 +660,10 @@ void OrderLinesForWorld(lua_State* L, bool shown, uint32_t rollover, WorldScene*
 // (the order's new target sent when it has one; `playable` the playable rectangle x0, z0, x1, z1; gives the
 // order's id for the script), or cancelled; DraggedBuildingSite: a building's order being dragged, its ghost where
 // the mouse is and whether it can stand there, and `from` the order's own place (NAN: none).
+// RemoveHoveredWaypointOrder: the right button let go with Shift and Ctrl (the release's own modifiers) over a
+// hovered waypoint, with a focus army: its order is taken out of the queues of all the units that carry it (the
+// command stream's RemoveCommandFromQueue; gone from the interface's queues at once); true: the release did that (or
+// found the order gone) and gives no other order.
 using WaypointScreen = std::function<bool(const float place[3], float* x, float* y, float* unitsPerPixel)>;
 uint32_t UpdateHoveredWaypoint(lua_State* L, bool active, float x, float y, const WaypointScreen& screenOf);
 uint32_t HoveredWaypoint(lua_State* L);
@@ -668,6 +672,7 @@ bool BeginWaypointDrag(lua_State* L, uint32_t command);
 void MoveWaypointDrag(lua_State* L, const float at[3]);
 uint32_t ReleaseWaypointDrag(lua_State* L, const float at[3], const float playable[4]);
 void CancelWaypointDrag(lua_State* L);
+bool RemoveHoveredWaypointOrder(lua_State* L, bool shift, bool ctrl);
 bool DraggedBuildingSite(lua_State* L, WorldGhost* site, float from[3]);
 // A build template: buildings that are placed together, each where it stood beside the first
 // (the original's struct_BuildTemplate: 0x823b40, entries of 44 bytes with place, order and

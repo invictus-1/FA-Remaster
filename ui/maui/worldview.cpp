@@ -1726,6 +1726,13 @@ class WorldView : public Control {
     }
     if (rightHeld_) {
       rightHeld_ = false;
+      // Let go with Shift and Ctrl over a hovered waypoint: its order is taken out of its units' queues instead, and
+      // the kept order is not given (0x870ff7, user_units.cpp "a waypoint under the mouse"; the cursor update works
+      // out the waypoint under the mouse for the release's event first, 0x8705e0).
+      if (!dead()) {
+        UpdateWaypointHover(L, e.x, e.y);
+        if (RemoveHoveredWaypointOrder(L, e.shift, e.ctrl)) return;
+      }
       IssueRightClick(L);
       return;
     }
@@ -1824,7 +1831,8 @@ class WorldView : public Control {
     if (!dead() && !miniMap && UserState::From(L)->photoMode.open) return PhotoModeEvent(L, e);  // (ours: see there)
     // Each event first works out what is under the mouse (the cursor update 0x86f520, called at 0x8705e0 before
     // the script's handler): here the waypoint of the order lines under it.
-    if (!dead() && !miniMap && (e.type == EventType::MouseMotion || e.type == EventType::ButtonPress || e.type == EventType::ButtonDClick))
+    if (!dead() && !miniMap &&
+        (e.type == EventType::MouseMotion || e.type == EventType::ButtonPress || e.type == EventType::ButtonDClick || e.type == EventType::ButtonRelease))
       UpdateWaypointHover(L, e.x, e.y);
     if (Control::HandleEvent(L, e)) return true;
     if (dead() || inputLocked) return false;
@@ -1857,6 +1865,13 @@ class WorldView : public Control {
       // The wheel zooms, towards the place under the cursor when it zooms in (see AdvanceCamera).
       ZoomByWheel(L, GetCameraObject(L, cameraName), static_cast<float>(e.wheelRotation) / static_cast<float>(e.wheelDelta), e.x, e.y);
       return true;
+    }
+    // The right button let go here: when its press gave no order to keep (none fits, no selection) no dragger caught
+    // the release, and it comes as the view's own event. With Shift and Ctrl over a hovered waypoint it takes that
+    // order out (0x870ff7); else nothing (the kept order is none). Either way the event goes on (0x871118: al 0).
+    if (e.type == EventType::ButtonRelease) {
+      if (e.right && !miniMap) RemoveHoveredWaypointOrder(L, e.shift, e.ctrl);
+      return false;
     }
     // (A second press soon after the first comes as a double click: it is a press too.)
     if (e.type != EventType::ButtonPress && e.type != EventType::ButtonDClick) return false;

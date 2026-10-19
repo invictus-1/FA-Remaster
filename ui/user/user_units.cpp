@@ -169,6 +169,14 @@ struct UnitStore : UserState::Extra {
     uint32_t tick;
   };
   std::vector<SentSite> sent;
+  // Orders taken out of units' queues by a Shift+Ctrl right click on their waypoint that the simulation's queues may
+  // still show (RemoveHoveredWaypointOrder: the original's copy of a unit's queue drops the order at once): by unit and
+  // order, with the sync they were sent after.
+  struct Removal {
+    uint32_t unit = 0xffffffffu, command = 0xffffffffu;
+    uint64_t sync = 0;
+  };
+  std::vector<Removal> removals;
   // The build template being placed (see BuildTemplate), and the units a script has added to
   // the selection's marks without selecting them (AddToSessionExtraSelectList).
   BuildTemplate buildTemplate;
@@ -2369,20 +2377,50 @@ int l_ToggleScriptBit(lua_State* L) {
 // What the panels show of a unit beyond where it is: its queue, what it works on, its switches
 // and meters. Asked of the simulation when a script asks, for the units it asks about.
 
+// An order a Shift+Ctrl right click has taken out of the unit's queue is not in it from then on, as the original's
+// copy of the queue drops it at once (UnitStore::removals; 0x8b6ee0, further down "a waypoint under the mouse").
+void DropRemovedOrders(lua_State* L, const UserUnit* u, UnitStateView* out) {
+  std::vector<UnitStore::Removal>& removals = Store(L).removals;
+  if (removals.empty()) return;
+  const uint64_t sync = UserState::From(L)->syncCount;
+  for (auto r = removals.begin(); r != removals.end();) {
+    if (r->unit != u->view.id) {
+      ++r;
+      continue;
+    }
+    // (the unit's own queue only: 0x8b1220 changes the copy the unit's slot 0x18 gives, +0x3c8, not its factory
+    // queue's, +0x3cc)
+    std::vector<CommandView>& q = out->queue;
+    auto at = std::find_if(q.begin(), q.end(), [&](const CommandView& c) { return c.id == r->command; });
+    // Gone from the simulation's queue: done. Still there ten syncs on: INFERRED, the simulation kept it (it turned
+    // the message down), so the interface shows it again (the original's copy keeps its changes by beat, 0x8b76d0;
+    // when it lets them go is not read).
+    if (at == q.end() || sync > r->sync + 10) {
+      r = removals.erase(r);
+      continue;
+    }
+    q.erase(at);
+    ++r;
+  }
+}
+
 // A unit's state changes only in a beat: it is kept until the next beat's sync comes (the panels
 // ask the same units every frame; each answer runs in the simulation's Lua), and while a beat runs
-// on its own thread the state from before it is the answer (no wait for the beat).
+// on its own thread the state from before it is the answer (no wait for the beat). Orders taken out
+// by their waypoints are left out of it (DropRemovedOrders).
 bool StateOf(lua_State* L, const UserUnit* u, UnitStateView* out) {
   if (!u || u->gone) return false;
   UserState* user = UserState::From(L);
   const bool beat = user->config().beatRunning && user->config().beatRunning();
   if (u->stateSync != ~0ull && (beat || u->stateSync == user->syncCount)) {
     *out = u->stateCopy;
+    DropRemovedOrders(L, u, out);
     return true;
   }
   Sim* sim = TheSim(L);
   if (!sim || !UnitStateOf(*sim, u->view.id, out)) return false;
   u->stateCopy = *out, u->stateSync = user->syncCount;
+  DropRemovedOrders(L, u, out);
   return true;
 }
 
@@ -4073,14 +4111,29 @@ void OrderLinesForWorld(lua_State* L, bool shown, uint32_t rollover, WorldScene*
 //   OnCommandDragEnd(event, cmdId) (0x823f00). Cancelled (0x824290: a dragger posted over it) the node goes back to its
 //   order's place (0x82a030), nothing is sent and the script is not called. A double click after the press does nothing
 //   (0x870c24).
+// - Taking an order out (read 2026-10-19; the world view's HandleEvent 0x8704b6, run as FAF's copy of it 0x12903b8, the
+//   same there): the right button's press (or double click; the event's button +0x14 == 3) gives no order, it keeps
+//   the one a release would give (GetRightMouseButtonAction 0x81ec00 into the view's +0x1a8, 0x870f25). Its release
+//   (0x870ff7 / 0x1290ecc), after the cursor update has worked out the waypoint under the mouse for that event too
+//   (0x8705e0) and the script's handler has left the event alone: when a waypoint is hovered (session+0x4c8, its top
+//   byte not 0xff), the release's own modifiers (+0x1c) hold Shift (1) and Ctrl (2; Alt is not asked) and the session
+//   is no observer (0x896590: a focus army whose slot holds an army), the order is looked up by its id in the
+//   session's table (0x8b5bb0: session+0x3fc +0xcb4) and taken out of the queue of each of ITS units (0x8b43f0: the
+//   order's own unit set, every unit that carries it, selected or not; 0x8b1220 per unit). Then no other order is
+//   given, also when the lookup finds nothing. Else the kept order is given (0x81fcd0; none when there was none).
+//   Either way the formation is reset and the event goes on (al 0). 0x8b1220 (order, unit): the command stream's
+//   RemoveCommandFromQueue(order's id +4, unit's id +0x44) (the sim driver 0x10c4f50, slot 0x80 = CSimDriver
+//   0x73cfd0: the client's slot 0x48 under the driver's lock; it gives the beat the message goes with, +0x24); then
+//   the interface's own copy of the unit's queue (its slot 0x18, +0x3c8: the unit's own queue, not the factory's)
+//   takes a change {beat, 2: out, order} (0x8b6ee0 -> 0x8b76d0; the copy is made again when next read, +0x60, 0x8b6f60:
+//   GetCommandQueue 0x8c5480 reads it so), and the order's unit set a change {beat, 3, unit} (0x8b4880): the order is
+//   gone from the interface at once.
 // Left out (READ, not built): the no-rush circle 0x8b0ee0 tests (the focus army's +0x1bc..+0x1d0: a target
 // farther from its start than the radius is not sent while the timer runs; the interface's other orders do not
 // test it either); the tips the world view shows over a hovered waypoint (0x83ecf0: "<LOC Engine0007>Double
 // left-click for coordinated attack" or Engine0008 right-click, over an Attack / FormAttack none of the selection
 // carries; "<LOC Engine0009>Left-click to convert moves into patrol" or Engine0010 right-click, with +0x274) and
-// what those clicks do; the right button let go with Shift and Ctrl over a hovered waypoint (0x870ff7: modifiers 1
-// and 2), which takes that order out of each of its units' queues (0x8b1220: the driver's slot 0x80,
-// RemoveCommandFromQueue).
+// what those clicks do.
 namespace {
 
 // A command by its id, from the queues of the units the interface knows (the original's session command table,
@@ -4334,6 +4387,33 @@ void CancelWaypointDrag(lua_State* L) {
   }
   g.drag = OrderGraph::Drag();
   g.builtSync = ~0ull;
+}
+
+bool RemoveHoveredWaypointOrder(lua_State* L, bool shift, bool ctrl) {
+  UserState* user = UserState::From(L);
+  if (!user->units) return false;
+  UnitStore& store = Store(L);
+  const uint32_t command = store.graph.hovered;
+  if ((command & 0xff000000u) == 0xff000000u || !shift || !ctrl) return false;  // (0x87100a .. 0x871027)
+  Sim* sim = TheSim(L);
+  if (!sim || sim->focusArmy < 0) return false;  // (an observer, 0x896590: the kept order instead)
+  // (0x871048: the order and its units; not found: nothing, and no other order either)
+  CommandView c;
+  std::vector<uint32_t> carriers;
+  if (!FindCommandView(L, command, &c, &carriers)) return true;
+  // One message per unit (0x871073 .. 0x87109c). INFERRED: in the order of the units' ids (the original goes through
+  // the order's unit set in its own order; each message touches one unit's queue only).
+  for (uint32_t unit : carriers) {
+    Writer(L).RemoveCommandFromQueue(command, unit);
+    UnitStore::Removal r;
+    r.unit = unit, r.command = command, r.sync = user->syncCount;
+    store.removals.push_back(r);
+  }
+  store.graph.builtSync = ~0ull;  // (worked out again without it. INFERRED: at once; what marks the original's graph to
+                                  // be worked out again is not read)
+  Logf(LogLevel::Debug, "moho64ui: Shift+Ctrl right click on the waypoint of order %u: RemoveCommandFromQueue for %zu unit(s)", command,
+       carriers.size());
+  return true;
 }
 
 bool DraggedBuildingSite(lua_State* L, WorldGhost* site, float from[3]) {
