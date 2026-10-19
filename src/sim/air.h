@@ -107,7 +107,6 @@ struct AirMotion {
   // navigator (CAiNavigatorAir)
   bool steering = false;     // status 2
   uint32_t destEntity = 0;   // SetDestUnit's entity: the target follows it every beat until the next SetGoal
-  bool reaimAtDest = false;  // it was at its target at the last beat's end and has a destination: re-aim, not arrive
   bool inFormation = false;  // navigator +0x88: follows its formation slot (air_nav 4.3)
   bool pending = false;      // a SetGoal waiting for its tick
   uint32_t pendingTick = 0;
@@ -164,7 +163,7 @@ bool GroundCellFits(Sim& sim, Unit* u, int cx, int cz);
 // AbortMove: fly on to the point one second ahead and stay there.
 void AirAbort(Sim& sim, Unit* u);
 // CAiNavigatorAir::Execute's arrival test, in the navigators' stage of the beat (sim/landnav.cpp LandNavTickAll).
-void AirNavArrival(Sim& sim, Unit* u);
+bool AirNavArrival(Sim& sim, Unit* u);  // true: Execute re-aimed at its destination entity and returned
 // CUnitMotion::Stop 0x6b8460 with no point: the target is where the aircraft is now.
 void AirStopHere(Sim& sim, Unit* u);
 // Unit::UpdateSpeedThroughStatus 0x6ac940 for aircraft: call at the exe's event points only (air_nav.md 5).

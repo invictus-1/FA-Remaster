@@ -2266,30 +2266,6 @@ void AirMotionTick(Sim& sim, Unit* u) {
   // the navigator's SetGoal (steered from this beat's motion on; the formation slot of AirFormationFollow, taken
   // before, gives way to it)
   if (a.pending && sim.tick() >= a.pendingTick) TakePendingGoal(sim, u);
-  // CAiNavigatorAir::Execute 0x5a50d0, while it steers (status 2): a unit in category TARGETCHASER whose
-  // destination entity is mobile and moved in the last beat (its transform against its previous one) takes the
-  // entity's position as the motion's target again (UpdateCurrentTargetFromDestinationEntity 0x5a4ea0; the layer
-  // stays). Everybody else keeps the target SetDestUnit gave. A CZAR chases; a gunship does not.
-  if (a.destEntity && a.steering && !a.pending) {
-    Entity* de = sim.FindEntity(a.destEntity);
-    if (de && !de->destroyQueued && de->kind == Entity::Kind::Unit) {
-      const Unit* du = static_cast<const Unit*>(de);
-      const bool ticked = du->lastPosTick == sim.tick();  // (it already moved this beat: go back one)
-      const Vec3& now = ticked ? du->lastPosition : du->position;
-      const Vec3& before = ticked ? du->prevLastPosition : du->lastPosition;
-      const bool moved = now.x != before.x || now.y != before.y || now.z != before.z;
-      if (moved && du->motion.bp && du->motion.bp->mobile() && BpInCategory(sim, u->blueprint, "TARGETCHASER"))
-        SetTarget(sim, u, now, Vec3{}, 0);
-      // ... and anybody who would have ARRIVED (AtTarget, last beat's end) does not, while there is a destination
-      // entity: the target is taken from the entity again (0x5a50d0: "if dest: Update...; return" in place of
-      // status 0). So within its arrival radius - a second of flight for a fighter at speed - an aircraft follows
-      // its destination beat by beat, chaser or not. (Seen: the flight record's target of a patrolling fighter
-      // that attacks a passing aircraft is that aircraft's place of the beat before, every beat.)
-      else if (a.reaimAtDest)
-        SetTarget(sim, u, now, Vec3{}, 0);
-    }
-  }
-  a.reaimAtDest = false;
   Transform T{ToW(u->orientation), u->position};
   Vec3 start = u->position;
   bool idle = u->commands.empty();
@@ -2471,11 +2447,37 @@ void AirParentGone(Sim& sim, Unit* u) {
 // ends its walk to the transport: the original's cargo thread still comes first in 1383, finds the transport not yet
 // at its pickup (TransportAtPickupPosition comes in the transport's turn) and starts its beam-up in 1384; ours had
 // re-linked the transport in the motion of 1382, so the transport went first and the cargo beamed up in 1383.
-void AirNavArrival(Sim& sim, Unit* u) {
+//
+// Both re-aims at a destination entity (UpdateCurrentTargetFromDestinationEntity 0x5a4ea0: SetTarget(the entity's
+// committed place +0xac, no direction, layer kept)) are Execute's own and run here too, then Execute returns (no
+// formation following): a TARGETCHASER whose destination moved in the last beat (+0xac against +0xc8, 0x5a5149), and
+// anybody at its target with a destination (0x5a5291..0x5a529b: no arrival). Not later in the beat's motion: a
+// command that aborts the move in this beat's command stage (AbortMove -> Stop at the point one second ahead, which
+// keeps the facing) comes after the re-aim, and the facing the re-aim gave is the one the hover turns to. Seen: MP3
+// 9291, army 0's 0xb8 on a patrol's attack of 0x100170, which died at 9290: at its target with 0x100170 as its
+// destination, the original's Execute aimed at the dead aircraft's place (facing (-0.2047, -0.9788)) before the attack
+// task ended; ours re-aimed only in the motion step, after the abort had dropped the destination, and kept the attack
+// run's facing; at 9296, inside StartTurnDistance, the hover turned to it (quaternion 0.0184 against 0.0174).
+bool AirNavArrival(Sim& sim, Unit* u) {
   UnitMotion& m = u->motion;
-  if (!m.air) return;
+  if (!m.air) return false;
   AirMotion& a = A(u);
   if (a.steering && !a.pending) {
+    // a TARGETCHASER whose destination entity is mobile and moved in the last beat takes its place as the motion's
+    // target again; everybody else keeps the target SetDestUnit gave. A CZAR chases; a gunship does not.
+    if (a.destEntity) {
+      const Entity* de = sim.FindEntity(a.destEntity);
+      if (de && !de->destroyQueued && de->kind == Entity::Kind::Unit) {
+        const Unit* du = static_cast<const Unit*>(de);
+        const Vec3& now = du->position;  // (nothing has moved yet in this beat: the committed transforms)
+        const Vec3& before = du->lastPosition;
+        const bool moved = now.x != before.x || now.y != before.y || now.z != before.z;
+        if (moved && du->motion.bp && du->motion.bp->mobile() && BpInCategory(sim, u->blueprint, "TARGETCHASER")) {
+          SetTarget(sim, u, now, Vec3{}, 0);
+          return true;
+        }
+      }
+    }
     float dx = a.target.x - u->position.x, dz = a.target.z - u->position.z;
     float d = std::sqrt(dx * dx + dz * dz);
     float r = 0.25f;
@@ -2492,11 +2494,14 @@ void AirNavArrival(Sim& sim, Unit* u) {
            cell(a.target.z, ab.footprintZ) == cell(a.goal.z, ab.footprintZ);
     }
     if (at && a.destEntity) {
-      // a destination entity: no arrival, the navigator takes its target from the entity again (next beat, above)
+      // a destination entity: no arrival, the target is taken from the entity again. So within its arrival radius - a
+      // second of flight for a fighter at speed - an aircraft follows its destination beat by beat, chaser or not.
+      // (Seen: the flight record's target of a patrolling fighter that attacks a passing aircraft is that aircraft's
+      // place of the beat before, every beat.)
       const Entity* de = sim.FindEntity(a.destEntity);
       if (de && !de->destroyQueued) {
-        a.reaimAtDest = true;
-        at = false;
+        SetTarget(sim, u, de->position, Vec3{}, 0);
+        return true;
       }
     }
     if (at) {
@@ -2512,6 +2517,7 @@ void AirNavArrival(Sim& sim, Unit* u) {
              u->commands.empty() ? -1 : static_cast<int>(u->commands.front()->type), u->task ? 1 : 0);
     }
   }
+  return false;
 }
 
 namespace {

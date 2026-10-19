@@ -1064,8 +1064,7 @@ void LandNavTickAll(Sim& sim) {
   for (size_t i = 0; i < all.size(); ++i) {
     Unit* u = all[i];
     if (u->motion.air && !u->destroyQueued && !u->dead) {  // (the air navigator, same stage: CAiNavigatorAir::Execute)
-      AirNavArrival(sim, u);
-      if (!u->parentId) AirFormationFollow(sim, u);
+      if (!AirNavArrival(sim, u) && !u->parentId) AirFormationFollow(sim, u);
     }
     LandNav* n = Nav(u);
     if (!n || !n->active || u->destroyQueued || u->dead) continue;
