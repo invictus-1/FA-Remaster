@@ -3034,8 +3034,8 @@ int AttackStep(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
       // overcharge (0x5f3dc3): the weapon's script says whether it may fire (energy); a standing mobile unit
       // whose overcharge has no firing solution goes back to chasing; otherwise fire once and end
       if (CallMethodBool(sim, sim.L(), oc, "CanWeaponFire", 0) <= 0) return 10;
-      if (u->position.x == u->lastPosition.x && u->position.y == u->lastPosition.y &&
-          u->position.z == u->lastPosition.z && u->motion.bp && u->motion.bp->mobile() && !oc->canReach) {
+      // (0x5f3de3..0x5f3e07: the position against the one before by memcmp 0x4f0a50, then IsMobile vt+0x30)
+      if (SameBits(u->position, u->lastPosition) && u->motion.bp && u->motion.bp->mobile() && !oc->canReach) {
         AttackUpdate(sim, u, t, target);
         t.state = 3;
         return 1;
