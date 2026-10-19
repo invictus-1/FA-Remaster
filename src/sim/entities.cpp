@@ -1937,15 +1937,35 @@ Entity* Sim::AdoptScriptEntity(lua_State* L, int t, int spec, bool shield) {
   std::unique_ptr<Entity> owned = shield ? std::make_unique<ShieldEntity>() : std::make_unique<Entity>();
   Entity* e = owned.get();
   e->kind = shield ? Entity::Kind::Shield : Entity::Kind::Entity;
+  // The army (it is also the id's, (army | 0x500) << 20 at 0x6924f3; 0xff: none). _c_CreateEntity 0x692330:
+  // spec.Owner first (0x6923b4..0x692483): a number is taken as the 0-based army index itself (LuaStackObject::
+  // GetInteger 0x41b520, truncated), anything else as an entity (func_GetEntityOpt 0x6208d0), whose army it gives;
+  // with no Owner, spec.Army (0x69248c..0x6924bf): a 1-based index, "Army < 0 passed in" below 1. FAF's pings
+  // (SimPing.lua 95: {Owner = data.Owner}, the pinging army's index) are made so; with no army they were shown to
+  // the enemy (ui REQUESTS 43). _c_CreateShield 0x776aa0 reads spec.Owner as an entity only (0x776b1e..0x776b93).
   if (lua_istable(L, spec)) {
     lua_pushstring(L, "Owner");
     lua_gettable(L, spec);
-    if (Entity* owner = ToObject<Entity>(L, -1)) {
+    const int ownerIdx = lua_gettop(L);
+    lua_pushstring(L, "Army");
+    lua_gettable(L, spec);
+    const int armyIdx = lua_gettop(L);
+    auto armyAt = [&](int i) -> Army* {
+      return i >= 0 && i < static_cast<int>(armies_.size()) ? armies_[static_cast<size_t>(i)].get() : nullptr;
+    };
+    if (!shield && lua_type(L, ownerIdx) == LUA_TNUMBER) {
+      e->army = armyAt(static_cast<int>(static_cast<float>(lua_tonumber(L, ownerIdx))));
+    } else if (Entity* owner = ToObject<Entity>(L, ownerIdx)) {
       e->army = owner->army;
       e->position = owner->position;
       e->orientation = owner->orientation;
+    } else if (!shield && lua_isnil(L, ownerIdx) && !lua_isnil(L, armyIdx)) {
+      if (lua_type(L, armyIdx) != LUA_TNUMBER) luaL_error(L, "integer expected");
+      const int a = static_cast<int>(static_cast<float>(lua_tonumber(L, armyIdx))) - 1;
+      if (a < 0) luaL_error(L, "Army < 0 passed in");
+      e->army = armyAt(a);
     }
-    lua_pop(L, 1);
+    lua_pop(L, 2);
   }
   e->id = ReserveId(e->army, shield ? 0x4 : 0x5);  // shields 0x4AAxxxxx, script entities 0x5AAxxxxx
   BindObject(L, t, e);

@@ -1,0 +1,11 @@
+# A script entity's army from its spec (ui REQUESTS 43; Sim::AdoptScriptEntity, as _c_CreateEntity 0x692330): spec.Owner
+# a number is the 0-based army index (FAF's pings, SimPing.lua 95: {Owner = data.Owner, Location = ...}), spec.Owner an
+# entity gives that entity's army, and with no Owner spec.Army is a 1-based index; none of them: no army (-1). An
+# --orders file for moho64, e.g.
+#   moho64 --init offline\bin\init_lab.lua --session _scratch\ui\session_ai.lua --seed 7 --ticks 12
+#          --orders fa-remaster\tests\script_entity_owner.txt --log out.log
+# The log's line must be (GetArmy is 1-based, -1 for none; GetEntityId's strings: 1343225857 = 0x50100001, an id of
+# army 2's, 1609564160 = 0x5ff00000, one of no army's):
+#   script entity owner: ping 2 1343225857 | Army = 2: 2 1343225858 | the first unit as Owner: 1 | none: -1 1609564160
+# (Before: ping -1 1609564160 | Army = 2: -1 1609564161, so a ping showed to the enemy.)
+10 lua local Entity = import('/lua/sim/Entity.lua').Entity local p = Entity({Owner = 1, Location = {100, 0, 100}}) local q = Entity({Army = 2}) local u = ArmyBrains[1]:GetListOfUnits(categories.ALLUNITS, false)[1] local o = Entity({Owner = u}) local n = Entity({}) LOG(string.format('script entity owner: ping %d %s | Army = 2: %d %s | the first unit as Owner: %d | none: %d %s', p:GetArmy(), p:GetEntityId(), q:GetArmy(), q:GetEntityId(), o:GetArmy(), n:GetArmy(), n:GetEntityId()))
