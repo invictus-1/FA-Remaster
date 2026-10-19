@@ -1126,6 +1126,7 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `movementDust` | vehicles raise dust on dry ground, hover units throw spray, high aircraft draw contrails | about 0.07 ms with 60 units moving, 0.22 close up | |
 | `volumeExplosions` | big blasts as lit, glowing volumes; a nuke's flash over the map, its ring through the clouds, its mushroom cloud | about 0.25-0.4 ms with four blasts, up to 0.6 ms with a nuke filling half the screen (the files: tens of MB once on) | the visuals session's volume files |
 | `horizonWeather` | beyond the map's edge: winter ice (floes, pack ice, icebergs) while snow lies, fog banks, showers passing far out, the clouds' shadows over the far sea | about 0.1 ms from the game's camera, 0.21 from the strategic view in snow | a time of day; the world beyond the edge |
+| `beyondLand` | a softer map edge (the ground past it dims over 10 units and a soft shadow replaces the dark line; the fog of war goes on past it) and land far off: coastlines, hills and snow-capped ranges round the map out to four map sizes, which way land lies read from the map's own edges, coloured by its ground, lit and hazed (beyond_land.h; Chris, 2026-10-18; in the Atmosphere setting) | 0.03-0.19 ms at 1440p; made once a map (13-21 ms) | the world beyond the edge (the game's edge option two) |
 
 Ray tracing means Direct3D 12 with DXR 1.1 or Vulkan with ray queries: never on the Mac (MoltenVK has none);
 where it is missing those options do nothing. `rayReflections` builds the surfaces' shaders with ray
@@ -1152,6 +1153,7 @@ so there is less clutter). WorldPicture sets each bundle's options together, bef
 Proposed (2026-10-18, the interface's wish): a seventh setting, "Battle Effects" (`WorldPicture::SetBattleEffects`, not
 made yet), for the looks of the fighting that come next: `energyShields` first (+0.07 to 0.16 ms with ten bubbles under
 fire), the others of items 12 to 19 as they land.
+| `SetLowLatency` | not a look: the latency limiter (docs/render-optimisation.md, section 9; a seventh setting, asked of the ui: "Low Latency"; the host then calls `WaitForNextFrame` once a frame, just before it reads its input) | nothing on the card, 0.005-0.03 ms a frame on the processor; input to screen with vsync 70 -> 17-23 ms at 60 pictures a second, 20 -> 12 ms at 240 Hz |
 
 `WorldPicture::RayTracingSupported()` (after any Open, the menu's too) says whether the card has ray tracing,
 to grey "Ray tracing" out where it would do nothing (on the Mac always). Viewer: `--picture <file> --settings

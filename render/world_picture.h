@@ -89,6 +89,15 @@ class WorldPicture {
   void DrawToWindow(const Camera& camera, int width, int height, double tick);
   // DrawToWindow waits for the screen's refresh (vertical sync, as at first) or not.
   void SetVsync(bool on);
+  // "Low Latency" (the Video tab's; off as at first, a player's option): the camera, the cursor's feedback and the
+  // interface answer the mouse and the keys sooner (gfx.h, Device::SetLatencyLimiter). The frames waiting to be shown
+  // are kept to one and each frame begins just in time for its refresh; with it, the host calls WaitForNextFrame once
+  // a frame, just before it reads its input (its window's events, the mouse's place), and then draws the frame
+  // (DrawToWindow): the wait is there, so that what it reads is as fresh as the frame allows. Set before or after
+  // Open; only for the picture shown in the host's window.
+  void SetLowLatency(bool on);
+  // Once a frame, just before the host reads its input. With Low Latency off it returns at once.
+  void WaitForNextFrame();
   // For checking: the next DrawToWindow also reads what it shows back into `out` (RGBA bytes).
   void CaptureNextWindowFrame(std::vector<uint8_t>* out);
   void GameStarted(const moho::Sim& sim);
@@ -154,7 +163,8 @@ class WorldPicture {
   // Atmosphere: light in the air, volumetric clouds, the sky from tables (World::volumetricFog, volumetricClouds,
   //   skyTables); with a time of day (SetDayAndWeather); together about 0.25 ms cheaper than without. Since
   //   2026-10-18 also the zoom out through the volumetric clouds (World::cloudZoom, a trial; Chris: every new look
-  //   on): +0.4 to 1.0 ms only with the camera at the clouds' layer or above.
+  //   on): +0.4 to 1.0 ms only with the camera at the clouds' layer or above. And the land far off past the map's
+  //   edge with a softer edge (World::beyondLand; where the world beyond the edge is shown): 0.03-0.19 ms.
   void SetAtmosphere(bool on);
   // Soft shadows: the sun's shadows soft by their distance from what casts them, and contact shadows
   //   (World::softShadows, contactShadows); about +0.37 ms.

@@ -205,6 +205,15 @@
 //           <list>: only those of ice, fog, showers, shadows (commas between); --horizon-look name=value,...: its numbers
 //           (Horizon::Set: floe, drift, fogheight, fog, showerspeed, shadow); MOHO64_DEBUG_HORIZON=1: where its showers and
 //           icebergs are (said when their number changes); --seed n: the weather's seed, which places them
+// --low-latency  the latency limiter (gfx.h, Device::SetLatencyLimiter; gfx_latency.h): the frames waiting to be shown
+//           kept to one, and each frame begun just in time for the coming refresh, so the camera, the cursor and the
+//           keys are answered sooner (key K switches it); --latency-stats: at the end, the latency measured from each
+//           input read to the refresh its frame was first shown at, and the gaps between the pictures shown (needs a
+//           window on the screen: with --frames, --show); --low-latency-switch <n>: the limiter switched every n
+//           frames (to check the switch; --vsync-switch <n>: vsync likewise); --sync-interval <n>: with vsync, each
+//           picture shown for n refreshes (Direct3D 12; a screen of 240 Hz shows 60 a second with 4); --hitch <n>,<ms>:
+//           every n-th frame runs that much longer (the processor kept busy after the input read: to see what a long
+//           frame does with and without the limiter)
 // --bounce  bounce light (bounce.h, World::bounceLight; modern look, where the device has ray tracing): light thrown
 //           back by the ground, the hills and what stands on them, from probes the rays update
 // --ray-view  ray tracing's check view (ray_scene.h, World::rayView; where the device can): a ray from the camera
@@ -303,6 +312,11 @@
 // --effects-look original|remastered  the game's effects as the original has them, or the visuals track's
 //           remastered files where there are some (--remasters <folder>/_effects/export/moho64; the default)
 // --no-beyond-haze  the land beyond the map's edge is not lost in haze but at the far end
+// --beyond-land  (beyondland) with the world beyond the map's edge: a softer edge (the ground past it dims and greys little
+//           by little, a soft shadow along the edge in place of the dark line) and land far off round the horizon, made
+//           up from what the map's edges hold (World::beyondLand, beyond_land.h; modern look); --beyond-land-look
+//           name=value,... tunes it (BeyondLand's numbers: band, edgeShadow, edgeWidth, edgeGrey, haze, hazeHeight, begin,
+//           end, hills, mountains, islands, farLand, snowline, softness)
 // --sun, --sky, --exposure, --reflection  the modern look's strengths (for tuning it by eye)
 // --time-of-day <hours>  the computed sky of that hour (0..24) lights the modern look instead of the map's
 //           own light; --day-length <seconds> lets the day pass, a whole one in that long. Key T: an hour on
@@ -365,7 +379,7 @@
 //
 // Mouse: wheel zooms at the pointer, middle button drags the ground, right button turns and tilts.
 // Keys: W A S D or the arrows move, L switches the look, H the shadows, I the strategic icons, F12 saves a screenshot,
-// V switches vsync, Escape quits;
+// V switches vsync, K the latency limiter, Escape quits;
 // Space pauses, + and - change the speed, Page Up / Page Down jump ten seconds, Home starts over.
 #include <algorithm>
 #include <map>
@@ -517,6 +531,13 @@ struct Options {
   float scarRadius = 40;
   bool frameGeneration = false;         // --frame-generation
   bool captureBetween = false;          // --capture-between
+  bool lowLatency = false;              // --low-latency
+  bool latencyStats = false;            // --latency-stats
+  int lowLatencySwitch = 0;             // --low-latency-switch
+  int vsyncSwitch = 0;                  // --vsync-switch
+  int syncInterval = 1;                 // --sync-interval
+  int hitchEvery = 0;                   // --hitch
+  float hitchMs = 0;
   bool terrainDespiteHold = false;      // --terrain-despite-hold
   bool groundUltra = false;             // --ground-ultra
   float sunSize = -1;                   // (its size, when given)
@@ -542,6 +563,8 @@ struct Options {
   int textureDetail = 0;                // --texture-detail
   bool frame = true;                    // --no-frame
   bool beyondHaze = true;               // --no-beyond-haze
+  bool beyondLand = false;              // --beyond-land (beyondland)
+  std::string beyondLandLook;           // --beyond-land-look (beyondland)
   std::string inspect;                  // --inspect
   float iconScale = 0;  // screen pixels for each pixel of a strategic icon; 0: by the picture's height
   Look look = Look::Modern;
@@ -689,6 +712,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--order-test") o->orderTest = true;
     else if (a == "--frame-generation") o->frameGeneration = true;
     else if (a == "--capture-between") o->captureBetween = true;
+    else if (a == "--low-latency") o->lowLatency = true;
+    else if (a == "--latency-stats") o->latencyStats = true;
     else if (a == "--terrain-despite-hold") o->terrainDespiteHold = true;
     else if (a == "--ground-ultra") o->groundUltra = true;
     else if (a == "--soft-shadows") {
@@ -711,6 +736,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--no-bloom") o->bloom = false;
     else if (a == "--no-frame") o->frame = false;
     else if (a == "--no-beyond-haze") o->beyondHaze = false;
+    else if (a == "--beyond-land") o->beyondLand = true;  // (beyondland)
     else if (a == "--noicons") o->icons = false;
     else if (a == "--unexplored") o->unexplored = true;
     else if (a == "--ranges") o->ranges = true;
@@ -735,6 +761,12 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--size") {
       if (sscanf(v, "%dx%d", &o->width, &o->height) != 2) return false;
     } else if (a == "--frames") o->frames = atoi(v);
+    else if (a == "--low-latency-switch") o->lowLatencySwitch = atoi(v);
+    else if (a == "--vsync-switch") o->vsyncSwitch = atoi(v);
+    else if (a == "--sync-interval") o->syncInterval = atoi(v);
+    else if (a == "--hitch") {
+      if (sscanf(v, "%d,%f", &o->hitchEvery, &o->hitchMs) != 2) return false;
+    }
     else if (a == "--lod") o->lodPixels = static_cast<float>(atof(v));
     else if (a == "--screenshot") o->screenshot = v;
     else if (a == "--fa") o->fa = v;
@@ -979,6 +1011,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
       o->hasCine = o->hasCineCam = true;
     } else if (a == "--cloud-zoom-look") {  // (cloudzoom)
       o->cloudZoomLook = v;
+    } else if (a == "--beyond-land-look") {  // (beyondland)
+      o->beyondLandLook = v;
     } else if (a == "--cam-zoom-path") {  // (cloudzoom)
       o->zoomPath = v;
     } else if (a == "--cine-path") {
@@ -1108,6 +1142,8 @@ int main(int argc, char** argv) {
     return 1;
   }
   printf("render: %s on %s, %dx%d\n", device->BackendName(), device->AdapterName().c_str(), device->Width(), device->Height());
+  // (the checks with --low-latency: their frames through the latency limiter, which then waits in BeginFrame)
+  if (opt.lowLatency && (opt.gfxCheck || opt.fsr3Check || opt.framegenCheck)) device->SetLatencyLimiter(true);
   if (opt.gfxCheck) return GfxCheck(device.get(), [&] { window->Pump(nullptr); }) ? 0 : 1;
   if (opt.fsr3Check) return Fsr3Check(device.get(), [&] { window->Pump(nullptr); }, opt.screenshot) ? 0 : 1;
   if (opt.framegenCheck) return FramegenCheck(device.get(), [&] { window->Pump(nullptr); }, opt.screenshot) ? 0 : 1;
@@ -1198,6 +1234,7 @@ int main(int argc, char** argv) {
       if (opt.pictureWindow) {  // (into a window of its own, as the interface's would be)
         pictureWindow = Window::Create("FA Remastered (picture into a window)", opt.width, opt.height, &error, true, false);
         if (pictureWindow) picture.UseWindow(pictureWindow->Handle());
+        picture.SetLowLatency(opt.lowLatency);  // (--low-latency: the game's host's way, WaitForNextFrame before each frame)
       }
       if (!opt.settings.empty()) {  // (the game's lighting settings, before Open as the interface sets them)
         const std::string s = "," + opt.settings + ",";
@@ -1323,6 +1360,9 @@ int main(int argc, char** argv) {
   world.remasteredBuild = opt.remasteredBuild;
   world.frameGeneration = opt.frameGeneration;
   device->captureBetween = opt.captureBetween;
+  device->measureLatency = opt.latencyStats;
+  device->syncInterval = opt.syncInterval;
+  bool lowLatency = opt.lowLatency && device->SetLatencyLimiter(true);
   if (opt.sunSize > 0) world.sunSize = opt.sunSize;
   world.volumetricClouds = opt.clouds3d;
   if (opt.cloudsFull) world.clouds.shrink = 1;
@@ -1373,6 +1413,14 @@ int main(int argc, char** argv) {
   world.meshes.depthPrepass = opt.prepass;
   world.frame = opt.frame;
   world.beyondHaze = opt.beyondHaze;
+  world.beyondLand = opt.beyondLand;  // (beyondland)
+  if (!opt.beyondLandLook.empty()) {
+    std::string why;
+    if (!world.distantLand.Set(opt.beyondLandLook, &why)) {
+      fprintf(stderr, "render: --beyond-land-look: %s\n", why.c_str());
+      return 2;
+    }
+  }
   static const char* const kInspect[] = {"", "albedo", "normals", "roughness", "metal", "occlusion", "shadow", "lights", "cascades", "detail", "ambient"};
   for (int i = 1; i < 11; ++i)
     if (opt.inspect == kInspect[i]) world.inspect = i;
@@ -2105,7 +2153,17 @@ int main(int argc, char** argv) {
     }
   } timing;
 
-  while (window->Pump(&events)) {
+  for (;;) {
+    // (the latency limiter, when on, waits here, just before the input is read: what is read is then as fresh as
+    // the frame allows; off, it returns at once)
+    device->WaitForNextFrame();
+    if (!window->Pump(&events)) break;
+    if (opt.hitchEvery > 0 && frameCount > 0 && frameCount % opt.hitchEvery == 0) {  // (--hitch: a long frame)
+      // (in whole microseconds: a time point of float nanoseconds would round to some milliseconds)
+      const auto until = std::chrono::steady_clock::now() + std::chrono::microseconds(static_cast<long long>(opt.hitchMs * 1000));
+      while (std::chrono::steady_clock::now() < until) {
+      }
+    }
     auto now = std::chrono::steady_clock::now();
     float dt = std::chrono::duration<float>(now - last).count();
     last = now;
@@ -2124,6 +2182,10 @@ int main(int argc, char** argv) {
           }
           if (e.key == 'P') wantPhoto = true;  // (a photo without the interface, --photo-scale times the window's size)
           if (e.key == 'V') device->SetVsync(vsync = !vsync);
+          if (e.key == 'K') {
+            lowLatency = device->SetLatencyLimiter(!lowLatency) ? !lowLatency : false;
+            printf("render: the latency limiter %s\n", lowLatency ? "on" : "off");
+          }
           if (e.key == kKeySpace) paused = !paused;
           if (e.key == kKeyPlus) playSpeed = std::min(playSpeed * 2, 64.0);
           if (e.key == kKeyMinus) playSpeed = std::max(playSpeed / 2, 0.125);
@@ -2303,9 +2365,11 @@ int main(int argc, char** argv) {
         for (int x = 0; x < w; ++x) layer[static_cast<size_t>(y) * w + x] = 0xb0101010u;  // (premultiplied: 0x10 is the colour times 0xb0)
       for (int y = 20; y < 120; ++y)
         for (int x = 20; x < 220; ++x) layer[static_cast<size_t>(y) * w + x] = 0xffffffffu;
+      picture.WaitForNextFrame();
       picture.SetInterfaceLayer(layer.data(), w, h, w, 0, 0, w, h);
       picture.DrawToWindow(camera, w, h, playTick + 1);
       std::vector<uint8_t> shown;
+      picture.WaitForNextFrame();
       picture.SetInterfaceLayer(layer.data(), w, h, w, 0, 0, 0, 0);
       picture.CaptureNextWindowFrame(&shown);
       picture.DrawToWindow(camera, w, h, playTick + 1);
@@ -2314,6 +2378,7 @@ int main(int argc, char** argv) {
         picture.SetVsync(false);
         const auto t0 = std::chrono::steady_clock::now();
         for (int i = 0; i < 30; ++i) {
+          picture.WaitForNextFrame();
           picture.SetInterfaceLayer(layer.data(), w, h, w, 0, 0, w, h);
           picture.DrawToWindow(camera, w, h, playTick + 1);
         }
@@ -2931,6 +2996,14 @@ int main(int argc, char** argv) {
     if (!(automatic && liveBusy) && photoLeft == 0) {  // an automatic run counts its frames from where it was asked to look
       if (frameCount == 0) countedFrom = std::chrono::steady_clock::now();
       ++frameCount;
+      if (opt.lowLatencySwitch > 0 && frameCount % opt.lowLatencySwitch == 0) {  // (--low-latency-switch)
+        lowLatency = device->SetLatencyLimiter(!lowLatency) ? !lowLatency : false;
+        printf("render: --low-latency-switch: the latency limiter %s at frame %d\n", lowLatency ? "on" : "off", frameCount);
+      }
+      if (opt.vsyncSwitch > 0 && frameCount % opt.vsyncSwitch == 0) {  // (--vsync-switch)
+        device->SetVsync(vsync = !vsync);
+        printf("render: --vsync-switch: vsync %s at frame %d\n", vsync ? "on" : "off", frameCount);
+      }
     }
     const bool lastFrame = opt.frames > 0 && frameCount >= opt.frames && photoLeft == 0;
     // (--shots <n>: every n-th counted frame is written too, as <screenshot>_0001.png ...: a thing
@@ -3111,7 +3184,7 @@ int main(int argc, char** argv) {
     if (titleTime >= 0.5) {
       char title[320];
       int n = snprintf(title, sizeof title, "FA Remastered - %s - %s - %.2f ms (%.0f fps)%s", device->BackendName(),
-                       device->AdapterName().c_str(), 1000.0 * titleTime / titleFrames, titleFrames / titleTime, vsync ? "" : " - vsync off");
+                       device->AdapterName().c_str(), 1000.0 * titleTime / titleFrames, titleFrames / titleTime, vsync ? (lowLatency ? " - low latency" : "") : lowLatency ? " - vsync off, low latency" : " - vsync off");
       if (haveMap && n > 0 && n < static_cast<int>(sizeof title))
         n += snprintf(title + n, sizeof title - static_cast<size_t>(n), " - ground: %d patches, %d triangles", terrain->drawnPatches, terrain->drawnTriangles);
       if (havePlay && n > 0 && n < static_cast<int>(sizeof title)) {

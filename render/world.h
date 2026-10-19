@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "air.h"
+#include "beyond_land.h"  // (beyondland)
 #include "blasts.h"
 #include "build_effects.h"
 #include "clouds.h"
@@ -306,6 +307,10 @@ class World {
   // machinery (`borders`) is drawn. `beyondHaze`: the land beyond is lost in haze from the edge out.
   bool frame = true;
   bool beyondHaze = true;
+  // (beyondland) With the world beyond the edge: a softer edge (the ground past it dims and greys little by little,
+  // only a faint soft shadow along the edge) and land far off round the horizon (beyond_land.h, `distantLand`). Modern
+  // look; off by default.
+  bool beyondLand = false;
   int propsBeyond = 0;  // trees and rocks added beyond the map's edge in the last frame
   float depositIconFrom = 1.0f;
   int lampShadowsDrawn = 0;
@@ -824,6 +829,7 @@ class World {
   // far sea. Modern look, with the world beyond the edge (worldBeyond) and a time of day; off by default.
   bool horizonWeather = false;
   Horizon horizon;
+  BeyondLand distantLand;  // (beyondland) the land far off and the soft edge's look (beyondLand)
 
  private:
   bool horizonNow_ = false;  // [horizon] (something of it this frame)

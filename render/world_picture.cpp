@@ -49,6 +49,7 @@ struct WorldPicture::Impl {
   const uint32_t* layerPixels = nullptr;
   int layerPitch = 0, dirtyX = 0, dirtyY = 0, dirtyW = 0, dirtyH = 0;
   bool vsync = true;
+  bool lowLatency = false;             // SetLowLatency
   bool vulkan = false;                 // SetVulkan
   bool debug = false;                  // SetDebug
   std::vector<uint8_t>* checkCapture = nullptr;  // CaptureNextWindowFrame
@@ -70,7 +71,7 @@ struct WorldPicture::Impl {
   int hiddenOutlines = -1;             // SetHiddenOutlines (-1: the world's own, on)
   void ApplyBundles() {  // (onto the world, where there is one)
     if (!world) return;
-    if (atmosphere >= 0) world->volumetricFog = world->volumetricClouds = world->skyTables = world->cloudZoom = atmosphere > 0;
+    if (atmosphere >= 0) world->volumetricFog = world->volumetricClouds = world->skyTables = world->cloudZoom = world->beyondLand = atmosphere > 0;
     if (softShadows >= 0) world->softShadows = world->contactShadows = softShadows > 0;
     if (rayTracing >= 0) world->bounceLight = world->rayLightShadows = rayTracing > 0;
     world->rayReflections = rayReflections;
@@ -194,6 +195,7 @@ bool WorldPicture::Open(const moho::Vfs* vfs, const std::string& mapPath, std::s
   }
   m.device = gfx::Device::Create(dd, error);
   if (!m.device) return false;
+  if (m.HostShows() && m.lowLatency) m.device->SetLatencyLimiter(true);  // (Low Latency, as set before Open)
   if (m.HostShows()) {  // the interface laid over the world: its pixels as they are, over what is there
     static const char kLayer[] = R"hlsl(
 Texture2D layer : register(t0);
@@ -279,6 +281,15 @@ void WorldPicture::UseNativeWindow(int system, void* window, void* display, int 
 void WorldPicture::SetVsync(bool on) {
   impl_->vsync = on;
   if (impl_->device && impl_->HostShows()) impl_->device->SetVsync(on);
+}
+
+void WorldPicture::SetLowLatency(bool on) {
+  impl_->lowLatency = on;
+  if (impl_->device && impl_->HostShows()) impl_->device->SetLatencyLimiter(on);
+}
+
+void WorldPicture::WaitForNextFrame() {
+  if (impl_->device && impl_->HostShows()) impl_->device->WaitForNextFrame();
 }
 
 void WorldPicture::SetInterfaceLayer(const uint32_t* pixels, int width, int height, int pitch, int x, int y, int w, int h) {

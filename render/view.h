@@ -148,6 +148,12 @@ struct ViewConstants {
   // snow lying (0: not at all, the water exactly as without it; 1: all the way); y the water's level (world y); z, w
   // the map's width and height (the slush and thin ice at the shores fade out past the map's edge).
   float winterWater[4];
+  // (beyondland) The world beyond the map's edge with a softer edge and land far off (World::beyondLand,
+  // beyond_land.h): x 1 or more = on (lighting.h's BeyondFar dims past the edge little by little and lays a soft
+  // shadow along it instead of a dark line; the fog of war goes on past the edge from what it is at the edge,
+  // sight.cpp): over how many pixels that shadow fades; y over how many world units past the edge the ground dims;
+  // z how dark the shadow is at the edge; w how much of its colour the ground loses. 0: off.
+  float beyondLand[4];
 };
 
 // The same block, as HLSL source: shaders start with it.
@@ -197,6 +203,7 @@ cbuffer View : register(b0) {
   row_major float4x4 smokeMatrix;  // world -> the smoke's shadow map (z: the height along the light)
   float4 rayLights;       // the small lights' shadows by rays: x 1 = on; y rays a place casts at most; z, w a light's size / radius (a beam's)
   float4 winterWater;     // winter water: x how far the water has gone over to winter (0: not at all); y the water's level; z, w the map's size
+  float4 beyondLand;      // (beyondland) the soft edge: x its shadow's width in pixels (0: off); y the dimming's width; z the shadow's darkness; w the colour lost
 };
 // (every texture read with Sample takes the temporal upscaler's bias: textures with levels - the art's - are
 // read as finely as the screen's size wants; pictures drawn by the renderer have one level and do not change)
