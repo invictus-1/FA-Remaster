@@ -64,6 +64,7 @@
 #include "bounce.h"
 #include "ribbons.h"
 #include "scmap.h"
+#include "seasons.h"  // [seasons]
 #include "shadows.h"
 #include "smoke.h"
 #include "terrain.h"
@@ -840,8 +841,23 @@ class World {
   Horizon horizon;
   BeyondLand distantLand;  // (beyondland) the land far off and the soft edge's look (beyondLand)
 
+  // [seasons] The season the map is drawn in (seasons.h; Chris, 2026-10-18: a player's option): taken in when a map is
+  // opened (Open: its ground's materials, its ground cover and its props, where the map's remap.json lists them), so a
+  // change shows from the next map. The picture's alone: the simulation keeps the map's blueprints. In autumn the
+  // weather that changes by itself (weatherAuto) draws from the autumn climate where `climate` is Temperate (weather.h).
+  // Summer, as at first: as always.
+  Season season = Season::Summer;
+  Season SeasonShown() const { return seasonOpen_; }  // the season the open map took
+  // [seasons] Leaves in the autumn wind (seasons.h, FallingLeaves): in autumn on a map with an autumn look, the modern
+  // look: drifting off its broadleaf trees (those the season draws in its own look, and those named so), and blown over
+  // the ground where its cover grows. On (with the season); false: none.
+  bool fallingLeaves = true;
+  FallingLeaves leaves;
+
  private:
   bool horizonNow_ = false;  // [horizon] (something of it this frame)
+  Season seasonOpen_ = Season::Summer;  // [seasons]
+  bool leavesNow_ = false;              // [seasons] (falling leaves drawn this frame)
 };
 
 }  // namespace render

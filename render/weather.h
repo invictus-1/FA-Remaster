@@ -22,7 +22,9 @@ namespace render {
 struct WeatherNow {
   float clouds = 0.3f, rain = 0, snow = 0, fog = 0, flash = 0;
 };
-enum class Climate { Temperate, Cold, Dry };  // rain and storms; snow instead of rain; mostly clear
+// rain and storms; snow instead of rain; mostly clear; [seasons] the temperate one in autumn (World: an autumn map's
+// in place of Temperate): more overcast, showers that come and go, fog, and on its mornings fog (AutumnMorningFog)
+enum class Climate { Temperate, Cold, Dry, Autumn };
 
 // The weather of a game at `seconds` of its clock. It follows from the seed and the time alone:
 // whoever asks with the same two gets the same weather, so every player of a game sees the same,
@@ -37,11 +39,15 @@ float LightningAt(uint32_t seed, double seconds, float rain, uint32_t* stroke = 
 // A number 0..1 from a seed and two whole numbers (always the same for the same three).
 float WeatherDraw(uint32_t seed, uint32_t a, uint32_t b);
 // (photomode) The kinds of weather WeatherAt's spells are drawn from, by number: 0 clear, 1 fair, 2 cloudy, 3 overcast,
-// 4 rain, 5 storm, 6 fog, 7 snow; each as WeatherAt gives it through such a spell (no flash). A number out of range: the
-// nearest kind.
+// 4 rain, 5 storm, 6 fog, 7 snow, 8 showers (autumn's: rain that comes and goes; as one kind, a steady shower); each
+// as WeatherAt gives it through such a spell (no flash). A number out of range: the nearest kind.
 int WeatherKindCount();
 const char* WeatherKindName(int kind);
 WeatherNow WeatherKindOf(int kind);
+// [seasons] Autumn's morning fog: how thick it lies at `hour` (0..24), 0..1, on top of what the weather draws: it
+// gathers before daybreak, is thickest from about six to eight and has burnt off by half past ten; how thick, by the
+// game's seed (every player of a game sees the same).
+float AutumnMorningFog(uint32_t seed, float hour);
 
 class Precipitation {
  public:

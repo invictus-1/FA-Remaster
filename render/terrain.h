@@ -15,6 +15,7 @@
 #include "gfx.h"
 #include "json.h"
 #include "scmap.h"
+#include "seasons.h"  // [seasons]
 #include "textures.h"
 #include "view.h"
 
@@ -66,6 +67,12 @@ class Terrain {
   // remap.json is looked up; `ultraGround`: its 8k materials in place of the 4k.
   std::string mapPath;
   bool ultraGround = false;
+  // [seasons] The season the map is drawn in (seasons.h), set before Load (World::Open does): where the map's entry in
+  // remap.json has a block for it, its materials, ground cover and mud in place of summer's (a season's material
+  // without the 8k tier at its 4k one); Summer, or a map without the block: as always. What the season changes, its
+  // props too (World draws them), is SeasonOf()'s once the map is loaded.
+  Season season = Season::Summer;
+  const SeasonLook& SeasonOf() const { return seasonLook_; }
   int RemasteredLayers() const { return remasteredLayers_; }
   // The map's water depth picture and the colour ramp the ground under water is tinted with
   // (decals lying under water take the same tint).
@@ -136,6 +143,7 @@ class Terrain {
   float albedoScale_[10] = {}, normalScale_[9] = {};  // (the layers' scales, the remastered ground's applied)
   bool normalUp_[9] = {};    // (a remastered material's normal: +y up in its texture, the stock layers' turned)
   int remasteredLayers_ = 0;
+  SeasonLook seasonLook_;  // [seasons] (Remaster: the open map's, for `season`)
   void Remaster(const MapData& map, std::vector<std::string>* arh);
   void ReadCover(const MapData& map, const std::string& path);
   JsonValue cover_;

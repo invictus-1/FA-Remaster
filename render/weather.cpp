@@ -258,30 +258,48 @@ float Draw01(uint32_t seed, uint32_t a, uint32_t b) {
   return static_cast<float>(h >> 8) * (1.0f / 16777216.0f);
 }
 
-// The kinds of weather, and how often each comes in a climate (shares of 100).
+// The kinds of weather, and how often each comes in a climate (shares of 100). ([seasons] `autumn`: the temperate
+// climate in autumn, more overcast, fog and showers; `showers`: rain that comes and goes within the spell, Showers)
 struct Kind {
   WeatherNow weather;
-  int temperate, cold, dry;
+  int temperate, cold, dry, autumn;
+  bool showers = false;
 };
 const Kind kKinds[] = {
-    {{0.10f, 0, 0, 0, 0}, 22, 15, 45},     // clear
-    {{0.35f, 0, 0, 0, 0}, 26, 20, 35},     // fair
-    {{0.65f, 0, 0, 0, 0}, 16, 18, 12},     // cloudy
-    {{0.92f, 0, 0, 0.1f, 0}, 8, 12, 0},    // overcast
-    {{0.85f, 0.5f, 0, 0, 0}, 14, 0, 0},    // rain
-    {{1.0f, 1.0f, 0, 0.25f, 0}, 6, 0, 4},  // storm
-    {{0.5f, 0, 0, 1.0f, 0}, 8, 10, 4},     // fog
-    {{0.9f, 0, 0.8f, 0.1f, 0}, 0, 25, 0},  // snow
+    {{0.10f, 0, 0, 0, 0}, 22, 15, 45, 10},     // clear
+    {{0.35f, 0, 0, 0, 0}, 26, 20, 35, 14},     // fair
+    {{0.65f, 0, 0, 0, 0}, 16, 18, 12, 18},     // cloudy
+    {{0.92f, 0, 0, 0.1f, 0}, 8, 12, 0, 16},    // overcast
+    {{0.85f, 0.5f, 0, 0, 0}, 14, 0, 0, 11},    // rain
+    {{1.0f, 1.0f, 0, 0.25f, 0}, 6, 0, 4, 5},   // storm
+    {{0.5f, 0, 0, 1.0f, 0}, 8, 10, 4, 12},     // fog
+    {{0.9f, 0, 0.8f, 0.1f, 0}, 0, 25, 0, 0},   // snow
+    {{0.75f, 0.45f, 0, 0.05f, 0}, 0, 0, 0, 14, true},  // [seasons] showers (autumn's)
 };
 
-const WeatherNow& SpellWeather(uint32_t seed, int64_t spell, Climate climate) {
-  if (spell <= 0) return kKinds[1].weather;
+const Kind& SpellKind(uint32_t seed, int64_t spell, Climate climate) {
+  if (spell <= 0) return kKinds[1];
   float left = Draw01(seed, static_cast<uint32_t>(spell), 17) * 100;
   for (const Kind& k : kKinds) {
-    left -= static_cast<float>(climate == Climate::Cold ? k.cold : climate == Climate::Dry ? k.dry : k.temperate);
-    if (left < 0) return k.weather;
+    left -= static_cast<float>(climate == Climate::Cold ? k.cold : climate == Climate::Dry ? k.dry : climate == Climate::Autumn ? k.autumn : k.temperate);
+    if (left < 0) return k;
   }
-  return kKinds[1].weather;
+  return kKinds[1];
+}
+
+// [seasons] Showers: how much of a shower falls at `seconds`, 0..1. Time in stretches of 50 seconds, about two in five
+// of them a shower, each coming and going over the last fifth of its stretch; between them the clouds break a little.
+WeatherNow Showers(const WeatherNow& kind, uint32_t seed, double seconds) {
+  const double at = std::max(seconds, 0.0) / 50;
+  const int64_t n = static_cast<int64_t>(at);
+  auto on = [&](int64_t i) { return Draw01(seed, static_cast<uint32_t>(i), 97) < 0.4f ? 1.0f : 0.0f; };
+  float t = std::clamp((static_cast<float>(at - static_cast<double>(n)) - 0.8f) * 5, 0.0f, 1.0f);
+  t = t * t * (3 - 2 * t);
+  const float falls = on(n) + (on(n + 1) - on(n)) * t;
+  WeatherNow w = kind;
+  w.rain = kind.rain * falls;
+  w.clouds = kind.clouds * (0.8f + 0.2f * falls);
+  return w;
 }
 
 }  // namespace
@@ -290,19 +308,31 @@ const WeatherNow& SpellWeather(uint32_t seed, int64_t spell, Climate climate) {
 int WeatherKindCount() { return static_cast<int>(sizeof kKinds / sizeof kKinds[0]); }
 
 const char* WeatherKindName(int kind) {
-  static const char* const kNames[] = {"clear", "fair", "cloudy", "overcast", "rain", "storm", "fog", "snow"};
+  static const char* const kNames[] = {"clear", "fair", "cloudy", "overcast", "rain", "storm", "fog", "snow", "showers"};
   static_assert(sizeof kNames / sizeof kNames[0] == sizeof kKinds / sizeof kKinds[0], "a name for every kind");
   return kind >= 0 && kind < WeatherKindCount() ? kNames[kind] : "";
 }
 
 WeatherNow WeatherKindOf(int kind) { return kKinds[std::clamp(kind, 0, WeatherKindCount() - 1)].weather; }
 
+float AutumnMorningFog(uint32_t seed, float hour) {
+  auto rise = [](float from, float to, float h) {
+    const float t = std::clamp((h - from) / (to - from), 0.0f, 1.0f);
+    return t * t * (3 - 2 * t);
+  };
+  const float byHour = rise(3.5f, 5.5f, hour) * (1 - rise(8, 10.5f, hour));
+  return byHour * (0.45f + 0.4f * Draw01(seed, 3, 101));
+}
+
 WeatherNow WeatherAt(uint32_t seed, double seconds, Climate climate, float spell) {
   spell = std::max(spell, 1.0f);
   const double at = std::max(seconds, 0.0) / spell;
   const int64_t index = static_cast<int64_t>(at);
-  const WeatherNow& a = SpellWeather(seed, index, climate);
-  const WeatherNow& b = SpellWeather(seed, index + 1, climate);
+  const Kind& ka = SpellKind(seed, index, climate);
+  const Kind& kb = SpellKind(seed, index + 1, climate);
+  // ([seasons] a spell of showers: its rain as it comes and goes; any other as it was)
+  const WeatherNow a = ka.showers ? Showers(ka.weather, seed, seconds) : ka.weather;
+  const WeatherNow b = kb.showers ? Showers(kb.weather, seed, seconds) : kb.weather;
   float t = std::clamp((static_cast<float>(at - static_cast<double>(index)) - 0.75f) * 4, 0.0f, 1.0f);
   t = t * t * (3 - 2 * t);
   WeatherNow w;

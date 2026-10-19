@@ -66,7 +66,8 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       vfs_(vfs),
       energy(device),
       photoFinish(device),  // (photolook)
-      horizon(device) {  // [horizon]
+      horizon(device),  // [horizon]
+      leaves(device) {  // [seasons]
   particles.rampGlow = [this](const std::string& ramp) { return lights.RampGlow(ramp); };  // (what is hot: lit smoke's fires, heat shimmer)
   // (movement dust: how each kind of unit moves, from its blueprint)
   dust.readBlueprint = [this](const std::string& id, BpValue* out) {
@@ -133,6 +134,8 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     }
     step("map file");
     terrain.mapPath = mapPath;  // (by which the remastered ground's remap.json is looked up)
+    terrain.season = season;    // [seasons] (its materials, cover and mud read for it; its props below)
+    seasonOpen_ = season;
     if (!terrain.Load(&map, &why)) {
       *error = "terrain: " + why;
       return false;
@@ -220,18 +223,21 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
       if (cube.first == "<default>") environment_ = textures.Get(cube.second);
     step("water, decals, mist");
     // the map's props (trees, rocks, wrecks): where each stands does not change
+    // ([seasons] each drawn by the season's blueprint where the season lists one: SeasonLook::Prop; the simulation keeps
+    // the map's own)
+    const SeasonLook& seasonal = terrain.SeasonOf();
     {  // (their models' files read on the worker threads first, all together)
       std::vector<std::string> kinds;
       std::unordered_set<std::string> seen;
       for (const MapProp& p : map.props)
-        if (seen.insert(p.blueprint).second) kinds.push_back(p.blueprint);
+        if (seen.insert(p.blueprint).second) kinds.push_back(seasonal.Prop(p.blueprint));
       models.PrefetchBlueprints(kinds);
     }
     step("props' files read");
     std::unordered_map<std::string, const Model*> kindModels;  // (each kind looked up once, not once a prop)
     for (const MapProp& p : map.props) {
       auto known = kindModels.find(p.blueprint);
-      const Model* model = known != kindModels.end() ? known->second : kindModels.emplace(p.blueprint, models.Blueprint(p.blueprint)).first->second;
+      const Model* model = known != kindModels.end() ? known->second : kindModels.emplace(p.blueprint, models.Blueprint(seasonal.Prop(p.blueprint))).first->second;
       if (!model->ok) {  // (kept in the list all the same: the simulation names a prop by its place in it)
         props_.push_back({nullptr, Mat4::Identity()});
         continue;
@@ -260,6 +266,28 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
         trees.push_back({p.world.m[0][3], p.world.m[1][3], p.world.m[2][3], p.model->boundsMax.y * scale});
       }
       wildlifeDraw.SetMap(&map, trees);
+    }
+    {  // [seasons] the trees the season's leaves fall from: in autumn, on a map with an autumn look, those the season draws
+       // in its own look and the broadleaf trees by their names (seasons.h)
+      std::vector<FallingLeaves::Tree> shedding;
+      if (season == Season::Autumn && seasonal.listed)
+        for (size_t i = 0; i < props_.size() && i < map.props.size(); ++i) {
+          const PlacedProp& p = props_[i];
+          if (!p.model || p.model->lods.empty() || p.model->lods[0].sway <= 0) continue;
+          if (seasonal.Prop(map.props[i].blueprint) == map.props[i].blueprint && !Broadleaf(map.props[i].blueprint)) continue;
+          const Vec3 up{p.world.m[0][1], p.world.m[1][1], p.world.m[2][1]}, side{p.world.m[0][0], p.world.m[1][0], p.world.m[2][0]};
+          const float scale = Length(up), across = Length(side);
+          const float height = (p.model->boundsMax.y - p.model->boundsMin.y) * scale;
+          if (height < 1.5f) continue;  // (a tree, not the undergrowth)
+          FallingLeaves::Tree t;
+          t.foot = {p.world.m[0][3], p.world.m[1][3], p.world.m[2][3]};
+          t.height = p.model->boundsMax.y * scale;
+          t.crown = 0.5f * std::max(p.model->boundsMax.x - p.model->boundsMin.x, p.model->boundsMax.z - p.model->boundsMin.z) * across;
+          t.low = 0.4f;
+          t.key = static_cast<uint32_t>(i);
+          shedding.push_back(t);
+        }
+      leaves.SetTrees(std::move(shedding), static_cast<float>(map.width), static_cast<float>(map.height), map.water.present ? map.water.elevation : -1e9f);
     }
     // the plants of the map's ground cover, where the visuals track has made them for it (its card atlas and table),
     // and where its trees stand (within the table's radius of each: more ferns and clumps, fewer flowers)
@@ -561,11 +589,14 @@ float World::GroundHeight(float x, float z) const {
 // done to surfaces by now. The time since the last frame's.
 float World::AdvanceWeather(float time, double clock) {
   if (weatherAuto) {
-    const WeatherNow now = WeatherAt(weatherSeed, clock, climate, weatherSpell);
+    // [seasons] an autumn map's weather draws from the autumn climate where the host leaves it temperate
+    const Climate climateNow = seasonOpen_ == Season::Autumn && climate == Climate::Temperate ? Climate::Autumn : climate;
+    const WeatherNow now = WeatherAt(weatherSeed, clock, climateNow, weatherSpell);
     cloudCover = now.clouds;
     rain = now.rain;
     snow = now.snow;
     fog = now.fog;
+    if (climateNow == Climate::Autumn) fog = std::max(fog, AutumnMorningFog(weatherSeed, timeOfDay));  // [seasons] (its mornings' fog)
   }
   const float dt = weatherTime_ < 0 ? 0 : std::clamp(time - weatherTime_, 0.0f, 0.5f);
   weatherTime_ = time;
@@ -811,6 +842,8 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   Vec3 lightDirection = sunDirection;
   // (photomode) a moment of the picture's own: this frame's hour and weather, the game's own moved on and kept aside
   if (moment.on && look == Look::Modern) PutMomentIn(time, clock);
+  // [seasons] an autumn map's weather draws from the autumn climate where the host leaves it temperate (AdvanceWeather)
+  const Climate climateNow = seasonOpen_ == Season::Autumn && climate == Climate::Temperate ? Climate::Autumn : climate;
   if (timeOfDay >= 0 && look == Look::Modern) {
     // the weather: what it is by itself, its clouds, and what it has done to surfaces by now
     float flash = 0;
@@ -918,7 +951,8 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       // to seven, and the morning has burnt it off by half past nine
       const float h = timeOfDay;
       const float byHour = h < 12 ? (0.3f + 0.7f * rise(4, 5.5f, h)) * (1 - rise(7, 9.5f, h)) : 0.3f * rise(19, 21, h);
-      mistNow = byHour * (climate == Climate::Dry ? 0.25f : 1.0f) + 0.5f * fog + (rain > 0 ? 0.0f : 0.4f * wet);
+      // ([seasons] more in autumn)
+      mistNow = byHour * (climateNow == Climate::Dry ? 0.25f : climateNow == Climate::Autumn ? 1.3f : 1.0f) + 0.5f * fog + (rain > 0 ? 0.0f : 0.4f * wet);
       mistNow = std::clamp(mistNow * (1 - 0.5f * rain), 0.0f, 1.0f) * (snow > 0 ? 0.0f : 1.0f);
     }
     if (haveMap_ && mistNow > 0) {
@@ -953,7 +987,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     dustNow_ = movementDust && look == Look::Modern && haveMap_ && !sidePicture;
     MovementDust::Weather weatherNow;
     if (timeOfDay >= 0 && look == Look::Modern)
-      weatherNow = {wet, rain, snow, snowLying, cloudCover, fog, skyLight.daylight, climate == Climate::Cold, climate == Climate::Dry};
+      weatherNow = {wet, rain, snow, snowLying, cloudCover, fog, skyLight.daylight, climateNow == Climate::Cold, climateNow == Climate::Dry};
     dust.Begin(clock_, dustNow_, weatherNow, camera.Eye());
   }
   {  // [horizon] the weather on the horizon (horizon.h): what of it this frame, by the weather just reckoned
@@ -1330,7 +1364,9 @@ void World::AddPropEvents(const std::vector<FramePropEvent>& events) {
 // in its place. The game makes a burnt version of every mesh under the name "<mesh>_wreck": a dead
 // unit's wreck is the prop DefaultWreckage with "/units/<id>/<id>_mesh_wreck", a burnt tree its
 // own blueprint with its own mesh's wreck.
-const Model* World::PropModel(const std::string& blueprint, const std::string& mesh) {
+const Model* World::PropModel(const std::string& given, const std::string& mesh) {
+  // [seasons] drawn by the season's blueprint where the season lists one (the simulation's events name the map's own)
+  const std::string blueprint = terrain.SeasonOf().Prop(given);
   if (mesh.empty()) return models.Blueprint(blueprint);
   std::string low = mesh;
   for (char& c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -1345,7 +1381,7 @@ const Model* World::PropModel(const std::string& blueprint, const std::string& m
     if (const Model* own = models.RemasteredWreck(id)) return own;  // (a remastered unit's own wreck, as painted)
     return models.Wreck(models.Unit(id), false);
   }
-  const Model* named = vfs_->Exists(moho::Vfs::Normalize(mesh + ".bp")) ? models.Blueprint(mesh + ".bp") : nullptr;
+  const Model* named = vfs_->Exists(moho::Vfs::Normalize(mesh + ".bp")) ? models.Blueprint(terrain.SeasonOf().Prop(mesh + ".bp")) : nullptr;
   return named && named->ok ? named : models.Blueprint(blueprint);
 }
 
@@ -2307,6 +2343,22 @@ void World::Render() {
   // (beyondland) the land far off (beyond_land.h): made for the map the first time it is wanted, its colours from the
   // map's ground (that dispatches: before the scene's pass)
   distantLand.Prepare(device_, beyondLand && view.constants.beyond[2] > 0 && !sidePicture, terrain);
+  // [seasons] leaves in the autumn wind (seasons.h), on a map with an autumn look: which of its broadleaf trees shed this
+  // frame (those still standing as they were), and the squares of ground round the camera where its cover grows (the
+  // cover's density made the first time, as the ground cover makes it: it dispatches)
+  leavesNow_ = false;
+  if (fallingLeaves && seasonOpen_ == Season::Autumn && terrain.SeasonOf().listed && look == Look::Modern && haveMap_ && !sidePicture &&
+      (leaves.Trees() || plantsReady_)) {
+    if (plantsReady_ && !coverA_) terrain.CoverDensity(treeMask_, &coverA_, &coverB_);
+    const bool weather = timeOfDay >= 0;
+    leavesNow_ = leaves.Prepare(view, camera, weather ? rain : 0.0f, weather ? snow : 0.0f, [this](uint32_t key) {
+      if (key >= props_.size()) return false;
+      const PlacedProp& p = props_[key];
+      if (!p.model || p.model->lods.empty() || p.model->lods[0].sway <= 0) return false;  // (gone, or burnt)
+      const float up = std::sqrt(p.world.m[0][1] * p.world.m[0][1] + p.world.m[1][1] * p.world.m[1][1] + p.world.m[2][1] * p.world.m[2][1]);
+      return p.world.m[1][1] > 0.85f * up;  // (not felled)
+    }, plantsReady_ ? coverA_ : gfx::Texture{});
+  }
   CpuTimes::Part("particles and bands moved");
   particles.Update(clock_, &view);
   ribbons.Update(clock_);
@@ -2456,6 +2508,11 @@ void World::Render() {
       Stage("land far off");
       lights.Bind();
       distantLand.Draw(view);
+    }
+    if (leavesNow_) {  // [seasons] the falling leaves, with what is solid (after the ambient occlusion: no halo round them)
+      Stage("falling leaves");
+      lights.Bind();
+      leaves.Draw(view, terrain.HeightTexture(), terrain.HeightUnit());
     }
     // the clouds as volumes (when on): from the depth of everything solid, before the sky lays them over itself
     if (clouds.Shadows()) {

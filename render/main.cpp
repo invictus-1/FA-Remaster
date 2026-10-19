@@ -227,6 +227,14 @@
 //           picture shown for n refreshes (Direct3D 12; a screen of 240 Hz shows 60 a second with 4); --hitch <n>,<ms>:
 //           every n-th frame runs that much longer (the processor kept busy after the input read: to see what a long
 //           frame does with and without the limiter)
+// --season summer|autumn|winter  [seasons] the season the map is drawn in (seasons.h, World::season; summer as at first):
+//           its ground's materials, ground cover, props and mud as the map's remap.json lists them for it, and in autumn
+//           leaves in the wind, off its broadleaf trees and over the ground where its cover grows (--no-falling-leaves
+//           without them; --leaves-density, --leaves-size, --leaves-sink, --leaves-drift, --leaves-ground n: how many,
+//           how big, how fast they sink and drift, how many on the ground, each times its own, 1) and with --weather auto
+//           the autumn climate (--climate autumn: that climate in any season)
+// --terrain-overlay <folder>  [seasons] a folder laid over the remastered ground's (mounted before it, so its files are
+//           found first): a remap.json of one's own (a test block of a season) and stand-in materials beside the real ones
 // --bounce  bounce light (bounce.h, World::bounceLight; modern look, where the device has ray tracing): light thrown
 //           back by the ground, the hills and what stands on them, from probes the rays update
 // --ray-view  ray tracing's check view (ray_scene.h, World::rayView; where the device can): a ray from the camera
@@ -361,7 +369,7 @@
 // --built <0..1>  placed units are that far under construction (to look at the factions' build looks)
 // --snow-lying <0..1>  how much snow lies at the start (to look at how it builds up and melts)
 // --weather auto  the weather changes by itself, by --seed and the game's clock (or the viewer's, without a
-//           game); --weather-spell <seconds> how long one kind lasts (300), --climate temperate|cold|dry
+//           game); --weather-spell <seconds> how long one kind lasts (300), --climate temperate|cold|dry|autumn
 // --cam     start the camera there (pitch and heading in degrees; pitch 90 looks straight down)
 // --cine-cam x,y,z,yaw,pitch,fov  the cinematic camera (cinecam.h) in place of the game's: free in the world, its eye
 //           at x, z and y over the ground there, turned yaw degrees from north toward the west, pitch degrees below
@@ -605,6 +613,10 @@ struct Options {
   float snowLying = -1;                 // --snow-lying
   float built = 1;                      // --built
   std::string weather, climate;         // --weather, --climate
+  std::string season;                   // [seasons] --season
+  std::string terrainOverlay;           // [seasons] --terrain-overlay
+  bool fallingLeaves = true;            // [seasons] --no-falling-leaves
+  float leaves[5] = {1, 1, 1, 1, 1};    // [seasons] --leaves-density, --leaves-size, --leaves-sink, --leaves-drift, --leaves-ground
   std::string find;                     // --find
   bool show = false;                    // --show
   bool bars = false;                    // --bars
@@ -737,6 +749,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--low-latency") o->lowLatency = true;
     else if (a == "--latency-stats") o->latencyStats = true;
     else if (a == "--terrain-despite-hold") o->terrainDespiteHold = true;
+    else if (a == "--no-falling-leaves") o->fallingLeaves = false;  // [seasons]
     else if (a == "--ground-ultra") o->groundUltra = true;
     else if (a == "--soft-shadows") {
       o->softShadows = true;
@@ -1025,6 +1038,13 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--built") o->built = static_cast<float>(atof(v));
     else if (a == "--border") o->border.push_back(v);
     else if (a == "--climate") o->climate = v;
+    else if (a == "--season") o->season = v;  // [seasons]
+    else if (a == "--terrain-overlay") o->terrainOverlay = v;
+    else if (a == "--leaves-density") o->leaves[0] = static_cast<float>(atof(v));
+    else if (a == "--leaves-size") o->leaves[1] = static_cast<float>(atof(v));
+    else if (a == "--leaves-sink") o->leaves[2] = static_cast<float>(atof(v));
+    else if (a == "--leaves-drift") o->leaves[3] = static_cast<float>(atof(v));
+    else if (a == "--leaves-ground") o->leaves[4] = static_cast<float>(atof(v));
     else if (a == "--weather-spell") o->weatherSpell = static_cast<float>(atof(v));
     else if (a == "--reflection") o->reflection = static_cast<float>(atof(v));
     else if (a == "--heading") o->heading = static_cast<float>(atof(v));
@@ -1099,6 +1119,11 @@ void MountGameFiles(const Options& o, moho::Vfs* vfs) {
   for (const std::string& folder : o.mods)
     for (const std::string& name : moho::hostfs::ListDirectory(folder))
       if (moho::hostfs::IsDirectory(folder + "/" + name)) vfs->Mount(folder + "/" + name, "/mods/" + name);
+  // [seasons] --terrain-overlay <folder>: laid over the remastered ground's folder, mounted first so that its files win
+  if (!o.terrainOverlay.empty()) {
+    if (vfs->Mount(o.terrainOverlay, kRemasteredTerrain)) printf("render: the remastered ground overlaid by %s\n", o.terrainOverlay.c_str());
+    else fprintf(stderr, "render: --terrain-overlay %s: no such folder\n", o.terrainOverlay.c_str());
+  }
   // --remasters <folder>: every remastered unit's files for this engine found there (remasters.h)
   for (const std::string& root : o.remasters) printf("render: %d remastered units from %s" "%c", MountRemasters(vfs, root, !o.fx.fx.empty() || !o.fx.shot.empty() || !o.fx.entity.empty() || !o.fx.shield.empty() || !o.fx.death.empty() || !o.fx.move.empty() || !o.fx.build.empty() || !o.fx.fire.empty(), o.terrainDespiteHold), root.c_str(), 10);
   // --preview <unit id>=<folder>: a remastered model's files, tried out in place of that unit's
@@ -1256,6 +1281,7 @@ int main(int argc, char** argv) {
     picture.SetTemporalUpscale(opt.fsr3);   // (--fsr3)
     picture.SetRayReflections(opt.rayReflections);  // (--ray-reflections)
     picture.SetHiddenOutlines(opt.hiddenOutlines);  // (--no-hidden-outlines)
+    if (Season s; !opt.season.empty() && SeasonNamed(opt.season, &s)) picture.SetSeason(s);  // [seasons] (--season)
     if (opt.timeOfDay >= 0) picture.SetDayAndWeather(opt.timeOfDay, opt.dayLength, opt.weather == "auto");  // (--picture: the hour and the weather through the pixel interface)
     setup.modUids = opt.modUids;
     if (!live.Open(setup, &error)) {
@@ -1296,6 +1322,14 @@ int main(int argc, char** argv) {
   gRayShaders = (opt.rayReflections || opt.rayLightShadows > 0) && device->RayTracing();
   World world(device.get(), &vfs);
   world.terrain.ultraGround = opt.groundUltra;  // (the remastered ground's set: before the map opens)
+  if (!opt.season.empty() && !SeasonNamed(opt.season, &world.season))  // [seasons] (before the map opens)
+    fprintf(stderr, "render: --season %s: summer, autumn or winter\n", opt.season.c_str());
+  world.fallingLeaves = opt.fallingLeaves;
+  world.leaves.density = opt.leaves[0];
+  world.leaves.size = opt.leaves[1];
+  world.leaves.sink = opt.leaves[2];
+  world.leaves.drift = opt.leaves[3];
+  world.leaves.groundDensity = opt.leaves[4];
   for (const std::string& g : opt.groundKind) {  // --ground-kind <part>=<kind> (deep tracks: before the map opens)
     const size_t eq = g.find('=');
     std::string part = g.substr(0, eq);
@@ -1572,7 +1606,7 @@ int main(int argc, char** argv) {
   world.lifeBars = opt.bars;
   world.weatherSeed = opt.seed ? opt.seed : 1;
   world.weatherSpell = opt.weatherSpell;
-  world.climate = opt.climate == "cold" ? Climate::Cold : opt.climate == "dry" ? Climate::Dry : Climate::Temperate;
+  world.climate = opt.climate == "cold" ? Climate::Cold : opt.climate == "dry" ? Climate::Dry : opt.climate == "autumn" ? Climate::Autumn : Climate::Temperate;
   for (int i = 0; i < 5; ++i)
     if (opt.weather == kWeathers[i]) {
       setWeather(i);

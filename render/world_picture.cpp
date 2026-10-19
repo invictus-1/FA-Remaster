@@ -83,6 +83,7 @@ struct WorldPicture::Impl {
   }
   Lens lens;                           // SetLens (cinecam)
   int textureDetail = 0;               // SetTextureDetail
+  Season season = Season::Summer;      // [seasons] SetSeason
   bool weather = false, dayOff = false;
   std::vector<Vec3> armyColors;
   std::vector<FrameEffectEvent> events;
@@ -222,6 +223,7 @@ float4 PS(float4 at : SV_Position) : SV_Target { return layer.Load(int3(at.xy, 0
   gRayShaders = (m.rayReflections || m.rayTracing > 0) && m.device->RayTracing();
   m.world = std::make_unique<World>(m.device.get(), vfs);
   m.world->textures.detail = m.textureDetail;
+  m.world->season = m.season;  // [seasons] (taken in as the map opens)
   m.ApplyBundles();  // (the lighting options, as set before Open)
   if (!m.world->Open(mapPath, World::Options{}, error)) return false;
   m.frames.SetSightGrid(static_cast<float>(m.world->map.width), static_cast<float>(m.world->map.height));
@@ -644,6 +646,12 @@ void WorldPicture::SetHiddenOutlines(bool on) {
 bool WorldPicture::RayTracingSupported() const { return impl_->device && impl_->device->RayTracing(); }
 
 void WorldPicture::SetTextureDetail(int drop) { impl_->textureDetail = std::clamp(drop, 0, 2); }
+
+// [seasons] (kept for the next Open; the open map keeps the season it took)
+void WorldPicture::SetSeason(Season season) {
+  impl_->season = season;
+  if (impl_->world) impl_->world->season = season;
+}
 
 void WorldPicture::SetWorkBars(bool on) {
   if (impl_->world) impl_->world->workBars = on;
