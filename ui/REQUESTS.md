@@ -1067,6 +1067,10 @@ order of the hovered order's type from the hovered one on. Today ours only chang
 task restart as a patrol there (what the original's handler of message 17 does: not read by us)?
 Test for both: ui/tests/waypoint_clicks.lua (the queue's types after a beat; the coordinated link through
 moho64ui_OrderGraph().coordinated).
+DONE: (b) engine ba5c091 (Unit::headType: the running task keeps its dispatched type, SetCommandType 0x749800 only
+rewrites the type, read when the task ends); (a) engine 8ec8642 (coordWith linked in the CUnitCommand constructor
+0x6e840d, same type only, the units wait until every live partner has started; answer "ui 42 (a)" in
+docs/engine-answers.md). waypoint_clicks.lua 47/47 green on main e7c50ee.
 
 ## To the renderer track
 
