@@ -1081,6 +1081,17 @@ renderer shows them through their 'Always' flag to everyone where FAF sets 'Neve
 be added? The interface's test: ui/tests/pings.lua (moho64ui_ScriptEntities() lists the script entities with their
 army; it notes army 0 today).
 
+### 44. Two things seen at a game's end: a platoon.lua script error, and the starting resources counted as collected
+From the interface chat, 2026-10-19. Not blocking; seen by my helper while testing the score screen (ui/tests/
+score_tabs.lua, draw.lua), not checked against the original.
+(a) Every game where the AI's commander dies logs a simulation script error:
+`lua/platoon.lua(1555): attempt to call method 'GetLocationCoords' (a nil value)`. Something the AI's platoon code
+calls on an object that ours lacks or has gone (a base / location manager?).
+(b) The score screen's "Mass / Energy Collected" includes the commander's starting 650 mass and 4000 energy. FAF's
+ACUUnit gives them with GiveResource, and ours counts that as produced (src/sim/economy.cpp:517). Does the original
+count GiveResource into the produced totals (the score's history)? If not, the score's numbers differ from the
+original's by those amounts.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
