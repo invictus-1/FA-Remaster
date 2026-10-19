@@ -75,6 +75,7 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
     return file && ReadBlueprintFile(*file, out);
   };
   wear.readBlueprint = dust.readBlueprint;  // [unit dirt] (how each kind of unit moves: what takes mud)
+  water.surf.readBlueprint = dust.readBlueprint;  // ([surf] which units are ships, and how fast they go)
   volumes.rampGlow = [this](const std::string& ramp) { return lights.RampGlow(ramp); };    // (volume explosions: a nuke's flash's hue)
 }
 
@@ -1007,6 +1008,17 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       horizonNow_ = horizon.Begin(map, terrain.beyondReach, w, time, camera, view.width, view.height);
     }
   }
+  {  // [surf] surf and sea spray (surf.h): the sea as rough as the weather's wind (as the trees' gusts have it: rain and
+     // snow bring it, a storm most), the spray drifting with that wind; the water's surf pipelines made while it is on
+    const bool surfOn = surf && look == Look::Modern && haveMap_ && map.water.present;
+    surfNow_ = surfOn && !sidePicture;
+    const bool weatherOn = timeOfDay >= 0 && look == Look::Modern;
+    const float rough = surfRoughness >= 0 ? surfRoughness : weatherOn ? std::clamp(0.15f + 0.85f * rain + 0.3f * snow, 0.0f, 1.0f) : 0.15f;
+    const float gust = 1 + 2 * rough;
+    const float wind[2] = {dust.wind[0] * gust, dust.wind[1] * gust};
+    water.surf.Begin(time, surfOn, sidePicture, rough, wind, camera.Eye());
+    if (surfOn) water.PrepareSurf(waterRipples, winterWater);
+  }
   CpuTimes::Part("sun shadows placed");
   if (haveMap_ && shadowsOn) {
     if (shadows.Size() != shadowSize) shadows.SetSize(shadowSize);
@@ -1859,6 +1871,8 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       if (u.fractionComplete >= 1 && u.Seen()) AddLamps(model, position, orientation, &pose, &color);
       // (movement dust: what the army sees moving raises dust, spray or contrails)
       if (dustNow_ && u.Seen() && !asRemembered && fractionComplete >= 1) dust.AddUnit(u.id, blueprint, model, position, orientation);
+      // ([surf] a ship at speed throws spray off its bow)
+      if (surfNow_ && u.Seen() && !asRemembered && fractionComplete >= 1) water.surf.AddShip(u.id, blueprint, model, position, orientation);
       // ripples where it floats, hovers or wades in the water (what the army sees)
       if (u.Seen() && !asRemembered) water.ripples.AddHull(u.id, position, orientation, model->boundsMin * model->scale, model->boundsMax * model->scale);
       // a wake, when it goes on the water: by how far it has come since the frame before
@@ -2269,6 +2283,10 @@ void World::Render() {
     dust.Prepare(view);
     if (dust.DustDrawn() > 0) terrain.GroundColours();
   }
+  if (surfNow_) {  // [surf] the spray: the rocks' where waves arrive now, what is over let go of, the rest to the card
+    CpuTimes::Part("surf's spray listed");
+    water.surf.Prepare(view);
+  }
   if (blastDebris && look == Look::Modern && haveMap_ && !sidePicture) {
     CpuTimes::Part("debris moved");
     debris.rubbleLasts = battleScars ? 0.0f : 120.0f;  // (kept as the scorches are)
@@ -2614,6 +2632,11 @@ void World::Render() {
       if (litSmokeNow_) lights.Bind();
       dust.DrawAbove(view, post.Depth(), camera.zNear, terrain.HeightTexture(), terrain.HeightUnit(), terrain.GroundColours(),
                      static_cast<float>(map.width), static_cast<float>(map.height), litSmokeNow_);
+    }
+    if (surfNow_ && water.surf.AnySpray()) {  // [surf] the spray off the rocks and the ships' bows (surf.h), over the water
+      Stage("surf: spray");
+      if (litSmokeNow_) lights.Bind();
+      water.surf.DrawSpray(view, post.Depth(), camera.zNear, litSmokeNow_);
     }
     Stage("particles");
     if (hide.find("particles") == std::string::npos) {

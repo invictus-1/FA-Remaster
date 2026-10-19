@@ -1156,6 +1156,71 @@ showers and icebergs are.
   cloud shadows (only the water does); the icebergs are not in the sun's shadow maps or the ray scene (they cast no
   shadow and are not mirrored by rays; the water's own mirror shows them); a shower's foot is cut where land beyond
   stands in front of it, as it should be, but it does not wet that land.
+21. **Surf and sea spray (first version, 2026-10-18; the visuals session's proposal 3, Chris approved it that
+   evening; a helper's, for review):** `World::surf` (viewer `--surf`; `render/surf.h/.cpp`; modern look, a map with
+   water; proposed for the "Weather Effects" setting). Waves run in to the map's shores and break, the white water runs
+   up the beaches and drains back, the waves burst on the rocks and throw spray up them, and ships at speed throw spray
+   off their bows; by the weather's wind: a still day laps, a storm pounds.
+   - **The shore field** (`Surf::MakeField`, the first frame the option is on: one pause of about 90-140 ms on
+     SETONS_R, on the processor): over the map at one world unit a cell (at most 1025 a side), RGBA16F, 8 MB: the
+     signed distance to the waterline (+ over the water; two exact distance transforms, the nearest dry cell to each wet one and the other way, after
+     Felzenszwalb and Huttenlocher, written from the paper's idea; within a cell and a half of the line from the
+     ground's height over its slope, so the zero lies where the terrain meets the water; rounded off far out, where the
+     lines of equal distance have corners), the water's depth by the map's heights, how steep the nearest shore is
+     (the ground's slope over five cells where the nearest cell of the other kind lies, 0.3 a unit a beach, 0.85 rock;
+     smoothed), and how open the water before it is (the share of water a unit deep or more within 80 units: ponds and
+     inlets none). It is read by the water's shader at t9 of its own pass (`kSurfFieldSlot`: the water binds t0-t8
+     itself; t44 does not exist, both backends have 44 slots and Vulkan's t44 would be b0's binding). SETONS_R's
+     shores are steep: the waterline's slope has a median of 0.76 (a rise of 0.76 a unit), a tenth of it below 0.14.
+   - **The waves** (`kSurfShaderBlock`, the water's shader built a third time, with `SURF`, made by
+     `Water::PrepareSurf` from `World::Begin` while the option is on, with and without the ripples' field, and the
+     winter ones while winter water is on; without it the shader's source is the same as before): trains of waves run
+     in from 30 units out, their crests along the lines of equal distance (bent by a slow offset along the shore, and a
+     little more away from it), shortening and slowing toward the shore (6.6 units long at sea on a still day, 10 in a
+     storm; 2.3 times shorter at the shore), growing as they shoal; a long, even swell at sea, a steep face toward the
+     shore, both rounded into the crest (a crease drew a ruled line); their tilt overdone only seen from above, as the
+     swell's (seen low toward the horizon it lay as dark bands along the shore). They break where the water is shallower than twice
+     their height (`--surf-break`), and, the rougher the sea, over a band along the shore whatever the depth (0.8 units
+     still, about 8 in a storm, uneven, half on rock: Seton's shores are steep and a storm's surf must read from the
+     game's height); a broken wave's face is white, a trail of foam thins behind it into streaks, each wave breaks in
+     stretches of its crest, a little old foam lies between them, all broken by the foam's lace as the water's own foam
+     is. At the shore each wave's water runs up the beach and drains back (quickly up, slowly down, over 60 % of the
+     period; the water's level raised by up to about 0.1 on a still day and 0.36 in a storm, so the waterline with its
+     foam runs up the slope), less on rock, where it strikes in a burst of white that boils and drains. Waves come
+     every 4.5 s on a still day, 7 in a storm, in sets (`SurfStrength`). The sheet lies 0.45 higher with it on (for the
+     run-up), but everything is worked out where it lay before, so the water away from the shores is as without it,
+     pixel for pixel; samples of land the higher sheet takes in are let go unless the water covers them now. The surf's
+     white fades where something stands in the water higher than the map's ground (a unit wading ashore keeps its
+     outline). Past the map's edge it fades out over 16 units (the sea beyond is the horizon's).
+   - **Spray** (puffs as the movement dust's, its own pipeline, lit as lit smoke is): where a wave arrives at rock (983
+     places on SETONS_R: the steepest waterline cell, steep and open enough, in each square of 3 units), a burst thrown
+     up the rock and off it, fanned along 2.6 units of the shore, drawn out along its flight, falling back and gone into
+     the water, and a mist drifting off with the wind; how much by the wave's size, the rock's steepness and openness
+     and the sea's roughness squared (next to none on a still day). The waves' timing is the same on the card and the
+     processor (`SurfOffset`/`Surf::Offset`, `SurfStrength`/`Surf::Strength`, the phase handed over each frame), so the
+     spray goes up as the white strike the water shows. Ships (MotionType Water or SurfacingSub) at more than a quarter
+     of their top speed throw pairs of spray off their bows, streaming back along the hull, by their speed squared and
+     the sea; in a rough sea a burst each time the bow meets a wave (every 1.7-2.5 s); thinned to 30 % where the hull or
+     anything solid lies right behind it (the ship stays readable). At most 3000 puffs; none thrown farther than 420 units
+     from the eye.
+   - **The weather**: the sea's roughness is 0.15 + 0.85 x rain + 0.3 x snow (the trees' gusts have the same wind): 0.15
+     on a still day, 0.58 in rain, 1 in a storm, eased over some seconds; `World::surfRoughness` sets it for a host (and
+     `--surf-rough`); the spray drifts with the movement dust's wind times 1 + 2 x roughness.
+   - Viewer: `--surf`, `--surf-rough r`, `--surf-strength n`, `--surf-spray n`, `--surf-break n`, `--surf-view 1|2`
+     (the field; the waves: red up, blue down, green white water), `--surf-test ues0103=2,...` (ships driven round loops
+     at their top speed over deep water near the camera, `--surf-test-radius`), `MOHO64_DEBUG_SURF=1..4`,
+     `MOHO64_DEBUG_SURF_FIELD=<file.ppm>`.
+   - Cost at 1440p (lowest times of 358 frames, two runs each, a storm): a long coast from the game's height
+     (600,300,160,55,90) the water 0.254 / 0.252 ms -> 0.280 / 0.299, the spray 0.003-0.004 ms, the processor 0.03-0.04
+     ms (listing the spray); a beach close up, the surf over a third of the screen (626,200,35,50,90) the water 0.256 ->
+     0.355 ms (+0.10, the most seen); rocks from low down with spray (585,380,25,18,90) +0.02-0.03 and 0.004 ms; four
+     ships at speed (560,250,45,45,90) the water +0.007, the spray 0.010 ms. Off: pictures identical (the regression,
+     both backends, 0 px). On, Vulkan as Direct3D 12 (mean difference 0.31-0.58 in 255 with it on against 0.32-0.62 for
+     the same scenes with it off: the rain's own).
+   - Open: the run-up leaves no wet sand behind it beyond what `waterDetail` already darkens; the waves do not refract
+     round headlands (their crests follow the distance, which bends round a point); spray on rocks is procedural (the
+     visuals session could make flipbooks: see the helper's report); the original game's shoreline wave generators in
+     the map file (`scmap.cpp` skips them) are not drawn by either look.
 
 ## The options
 
@@ -1191,6 +1256,7 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `blastWaves`, `blastDust`, `blastDebris` | explosions press the grass flat and bend trees in a running ring, kick up dust, throw chunks that lie as rubble | about 0.03-0.09 ms in a fight | |
 | `waterRipples` | the water reacts: shells, ships, hover and wading units leave rings and wakes that spread and fade | about 0.04-0.05 ms near water (24 MB of the card's memory once on) | a map with water |
 | `winterWater` | while snow lies: a cold sea (dark slate, grey-green shallows, no snow under the water), slush and thin ice at the shores; a thaw takes it back | +0.005 to 0.03 ms (only with snow lying) | a time of day, a map with water |
+| `surf` | waves break on the shores and run up the beaches, burst on rocks throwing spray; ships throw bow spray; by the weather's wind (proposed for "Weather Effects") | +0.03 to 0.05 ms with a long coast in view, up to +0.10 close over a beach (8 MB once on) | a map with water |
 | `hiddenOutlines` (ON) | a thin line in the army's colour round a unit's part hidden behind trees, hills or buildings | 0.06-0.08 ms (200 tanks in a forest) | |
 | `wildlife` | flocks of birds over the woods and gulls over the shores, scattered by fighting; fireflies at dusk and by night | about 0.02 ms (proposed for the "Ground Detail" setting) | a map with trees or shores |
 | `movementDust` | vehicles raise dust on dry ground, hover units throw spray, high aircraft draw contrails | about 0.07 ms with 60 units moving, 0.22 close up | |

@@ -207,6 +207,15 @@
 //           camera looks (radius 0.5, strength 1), to see and time them; --ripple-speed s: how fast the rings run
 //           (world units a second, 1.6); --ripple-half-life s: after how long they are half as high (0.8);
 //           --ripple-view n: the field's heights in place of the water (red up, blue down, full at 1 / n units)
+// --surf  surf and sea spray (surf.h, World::surf; modern look): waves run in to the map's shores, break into white water
+//           that runs up the beaches and drains back, burst on the rocks and throw spray up them; ships at speed throw
+//           spray off their bows; by the weather's wind (calm on a still day, most in a storm: --weather storm).
+//           --surf-rough r: the sea that rough (0 still .. 1 a storm) whatever the weather; --surf-strength n: the white
+//           water times n (1); --surf-spray n: the spray times n (1); --surf-break n: the depth a wave breaks at, as a
+//           share of its height (2); --surf-test <unit>=<n>[,...]: that many ships of each driven round loops at their
+//           top speed over deep water near where the camera looks (within --surf-test-radius r, 60), with or without
+//           --surf; --surf-view n: in place of the water 1 the shore field, 2 the waves (Surf::view);
+//           MOHO64_DEBUG_SURF=1 (2: and the spray's counts every second), MOHO64_DEBUG_SURF_FIELD=<file.ppm>
 // --wildlife  life in the world (wildlife.h, World::wildlife; modern look): flocks of birds over the woods and gulls over
 //           the shores, scattered by fighting near them, and fireflies at dusk and by night. --wildlife-verbose: where
 //           the flocks are, and the nearest at the start and the end; --wildlife-noise x,z,at[,every]: a noise of fighting
@@ -513,6 +522,11 @@ struct Options {
   bool waterRipples = false;            // --water-ripples
   float rippleTest = 0, rippleTestRadius = 0.5f, rippleTestStrength = 1;  // --ripple-test
   float rippleSpeed = -1, rippleHalfLife = -1, rippleView = 0;  // --ripple-speed, --ripple-half-life, --ripple-view
+  bool surf = false;                    // --surf
+  float surfRough = -1, surfStrength = -1, surfSpray = -1, surfBreak = -1;  // --surf-rough, --surf-strength, --surf-spray, --surf-break
+  std::string surfTest;                 // --surf-test
+  float surfTestRadius = 60;            // --surf-test-radius
+  int surfView = 0;                     // --surf-view
   bool groundCover = false;             // --ground-cover
   bool wildlife = false, wildlifeVerbose = false;  // --wildlife, --wildlife-verbose
   bool horizon = false;                            // [horizon] --horizon
@@ -720,6 +734,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--water-detail") o->waterDetail = true;
     else if (a == "--winter-water") o->winterWater = true;
     else if (a == "--water-ripples") o->waterRipples = true;
+    else if (a == "--surf") o->surf = true;
     else if (a == "--ground-cover") o->groundCover = true;
     else if (a == "--wildlife") o->wildlife = true;
     else if (a == "--horizon") o->horizon = true;  // [horizon]
@@ -866,6 +881,13 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--ripple-speed") o->rippleSpeed = static_cast<float>(atof(v));
     else if (a == "--ripple-half-life") o->rippleHalfLife = static_cast<float>(atof(v));
     else if (a == "--ripple-view") o->rippleView = static_cast<float>(atof(v));
+    else if (a == "--surf-rough") o->surfRough = std::clamp(static_cast<float>(atof(v)), 0.0f, 1.0f);
+    else if (a == "--surf-strength") o->surfStrength = std::max(0.0f, static_cast<float>(atof(v)));
+    else if (a == "--surf-spray") o->surfSpray = std::max(0.0f, static_cast<float>(atof(v)));
+    else if (a == "--surf-break") o->surfBreak = std::max(0.1f, static_cast<float>(atof(v)));
+    else if (a == "--surf-test") o->surfTest = v;
+    else if (a == "--surf-test-radius") o->surfTestRadius = std::max(5.0f, static_cast<float>(atof(v)));
+    else if (a == "--surf-view") o->surfView = atoi(v);
     else if (a == "--energy-shield-health") o->energyShieldHealth = std::clamp(static_cast<float>(atof(v)), 0.0f, 1.0f);
     else if (a == "--energy-test") o->energyTest = std::max(0, atoi(v));
     else if (a == "--hot-metal-lights") o->hotLights = std::max(0, atoi(v));
@@ -1383,6 +1405,12 @@ int main(int argc, char** argv) {
   if (opt.rippleSpeed > 0) world.water.ripples.speed = opt.rippleSpeed;
   if (opt.rippleHalfLife > 0) world.water.ripples.halfLife = opt.rippleHalfLife;
   world.water.ripples.view = opt.rippleView;
+  world.surf = opt.surf;
+  world.surfRoughness = opt.surfRough;
+  if (opt.surfStrength >= 0) world.water.surf.strength = opt.surfStrength;
+  if (opt.surfSpray >= 0) world.water.surf.sprayStrength = opt.surfSpray;
+  if (opt.surfBreak > 0) world.water.surf.breakDepth = opt.surfBreak;
+  world.water.surf.view = opt.surfView;
   world.groundCover = opt.groundCover;
   world.wildlife = opt.wildlife;
   world.horizonWeather = opt.horizon;  // [horizon]
@@ -1974,6 +2002,21 @@ int main(int argc, char** argv) {
     } else {
       fprintf(stderr, "render: --movement-dust-test: %s\n", why.empty() ? "nothing to drive" : why.c_str());
       dustTest.reset();
+    }
+  }
+  // --surf-test: ships driven round loops over deep water near where the camera looks (moved and handed to the world as a
+  // game's frame, in the frame loop)
+  std::unique_ptr<SurfTest> surfTest;
+  if (!opt.surfTest.empty() && haveMap && world.map.water.present) {
+    surfTest = std::make_unique<SurfTest>();
+    std::string why;
+    const float level = world.map.water.elevation;
+    if (surfTest->Init(opt.surfTest, camera.target, opt.surfTestRadius, world.dust.readBlueprint,
+                       [&](float x, float z) { return level - world.map.Height(x, z); }, level, &why)) {
+      printf("render: --surf-test: %s%s%s\n", surfTest->Describe().c_str(), why.empty() ? "" : "; ", why.c_str());
+    } else {
+      fprintf(stderr, "render: --surf-test: %s\n", why.empty() ? "nothing to drive" : why.c_str());
+      surfTest.reset();
     }
   }
   // --blast-test: where and when the next blast goes (in the frame loop)
@@ -2931,6 +2974,7 @@ int main(int argc, char** argv) {
       world.AddFrame(dustTest->Update(havePlay ? playTick * 0.1 : static_cast<double>(time), [&](float x, float z) { return haveMap ? map.Height(x, z) : 0.0f; },
                                       haveMap && map.water.present ? map.water.elevation : -1e9f),
                      armyColors);
+    if (surfTest) world.AddFrame(surfTest->Update(havePlay ? playTick * 0.1 : static_cast<double>(time)), armyColors);  // (--surf-test: its ships)
     // --find: once the game is where it was asked to be, the camera goes to the first such thing
     // (a shield's flash lasts two seconds and may not be there at that moment: that search goes on,
     // frame after frame, until one shows)
@@ -3209,6 +3253,9 @@ int main(int argc, char** argv) {
       if (haveLive) printf("; scenery: %d changes, %d gone, %d made in the game standing, %d props of %d squares gone through; %zu script entities", world.propsChanged, world.propsGone, world.MadeProps(), world.propsAdded, world.propCellsSeen, frame.entities.size());
       if (haveLive) printf("; %d hits, %d impacts taken (%d, %d shown)", world.hitsTaken, world.impactsTaken, world.hitsShown, world.impactsShown);
       if (world.waterRipples) printf("; water ripples: %d splashes added, %d still swinging", world.water.ripples.Added(), world.water.ripples.Live());
+      if (world.surf)
+        printf("; surf: field in %.0f ms, %d spray spots, %d bursts, %d ships throwing spray, %d puffs kept, %d drawn", world.water.surf.fieldMs,
+               world.water.surf.Spots(), world.water.surf.bursts, world.water.surf.ships, world.water.surf.Puffs(), world.water.surf.Drawn());
       if (world.wildlife)
         printf("; wildlife: %d flocks of %d birds, %d flocks (%d birds) drawn, %d places for fireflies, %d noises heard, %d flocks scattered",
                world.wildlifeDraw.Flocks(), world.wildlifeDraw.Birds(), world.wildlifeDraw.flocksDrawn, world.wildlifeDraw.birdsDrawn,

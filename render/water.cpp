@@ -8,6 +8,7 @@
 
 #include "lighting.h"
 #include "ray_scene.h"
+#include "surf.h"
 #include "winter_water.h"
 
 namespace render {
@@ -120,9 +121,15 @@ cbuffer WaterConstants : register(b1) {
   float4 cameraRight;     // w: tan(half the field of view)
   float4 cameraUp;        // w: aspect
   float4 cameraBack;      // w: near distance
-#if RIPPLES
+#if RIPPLES || SURF
   float4 rippleArea;      // the ripples' field (ripples.h): x, y its first cell's corner (world x, z); z 1 / its side; w a cell's size
   float4 rippleLook;      // x how much its slopes tilt the surface; y the slope from which its crests foam; z how much of its height the waterline takes
+#endif
+#if SURF
+  float4 surfArea;        // [surf] the shore field (surf.h): x, y its first texel's corner (world x, z); z, w 1 / its width and height
+  float4 surfLook;        // x the waves' height near the shore; y their phase (cycles); z their length at sea; w the run-up's height
+  float4 surfLook2;       // x how rough the sea is; y the depth a wave breaks at, by its height; z the run-up's share of a period; w the white water's strength
+  float4 surfLook3;       // x a view for checking (Surf::view: 1 the field, 2 the waves; 0 off)
 #endif
 };
 Texture2D waterMap : register(t0);
@@ -152,7 +159,12 @@ VOut VS(float2 corner : POSITION) {
   // (the sheet lies as high as the swell's crests reach; where the water stands lower just now is
   // worked out per pixel)
   float reach = beyond.z > 0 ? 1 / beyond.z : 0;
+#if SURF
+  // [surf] (and as high as the surf's run-up reaches)
+  o.world = float3(lerp(-reach, mapSize.x + reach, corner.x), surfaceColor.w + kRise + kSurfRise, lerp(-reach, mapSize.y + reach, corner.y));
+#else
   o.world = float3(lerp(-reach, mapSize.x + reach, corner.x), surfaceColor.w + kRise, lerp(-reach, mapSize.y + reach, corner.y));
+#endif
   o.position = mul(viewProj, float4(o.world, 1));
   return o;
 }
@@ -212,6 +224,14 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
     }
   }
   if (coverage == 0) discard;
+#if SURF
+  // [surf] the sheet lies higher by kSurfRise, for the run-up; all else is worked out where it lies without the surf (so
+  // that the water away from the shores is as without it): the place moved down the line of sight to that height, and
+  // its depth on the screen with it
+  i.world += normalize(i.world - cameraPosition) * (kSurfRise / max(normalize(cameraPosition - i.world).y, 1e-3));
+  float4 sheet = mul(viewProj, float4(i.world, 1));
+  i.position.z = sheet.z / sheet.w;
+#endif
 
   float2 xz = i.world.xz;
   float4 water = waterMap.Sample(samplerLinearClamp, MirrorUv(xz * mapSize.zw));  // r: waviness, a: no crests
@@ -291,6 +311,16 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
     }
   }
 #endif
+#if SURF
+  // [surf] (surf.h, World::surf): the waves running in to the shore, breaking, running up the beach; found where the line
+  // of sight meets the water at its level (the sheet lies higher)
+  float3 still = i.world + toPixel * ((surfaceColor.w - i.world.y) / min(toPixel.y, -1e-3));
+  SurfHere surf = SurfAt(still.xz, grain, surfaceColor.w, mapSize.xy, surfArea, surfLook, surfLook2);
+  // (its tilt is overdone for the view from above, as the swell's; seen at a low angle, toward the horizon, the waves
+  // show by themselves, and overdone they lay as dark ruled bands along the shore)
+  N = normalize(N + float3(surf.tilt.x, 0, surf.tilt.y) * lerp(0.4, 1.0, saturate(-toPixel.y * 2.5)));
+  [branch] if (surfLook3.x > 0.5) return float4(SurfView(still.xz, surf, surfArea, surfLook3.x), 1);  // (Surf::view)
+#endif
 
   // the light on the water
   float shadow = SunShadow(i.world, float3(0, 1, 0)) * CloudShadow(i.world);
@@ -320,11 +350,23 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
 #else
   float level = clamp(swell.x * 1.2 + (lace - 0.5) * 0.05, -kRise, kRise) - kRise;
 #endif
+#if SURF
+  level += surf.lift;  // [surf] (the waves near the shore and their run-up)
+#endif
   float deep = i.world.y + level - bed.y;
   if (deep <= 0) {
     coverage = 0;
     discard;
   }
+#if SURF
+  // [surf] (with the sheet higher, a sample of the land just above the water passed the test at the start: only the
+  // samples whose ground the water covers now are kept, so that the waterline's edge stays where it was)
+  [unroll] for (int k = 0; k < SAMPLES; ++k)
+    if ((coverage >> k) & 1u) {
+      if (i.world.y + level - WorldAt(i.position.xy, SCENE_DEPTH(pixel, k)).y <= 0) coverage &= ~(1u << k);
+    }
+  if (coverage == 0) discard;
+#endif
 #if WINTER
   // winter water (winter_water.h): slush and thin ice along the shore, on which the waves are stilled
   WinterIce ice = WinterShore(xz, bed.y, water.r, grain, lace);
@@ -385,6 +427,11 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   foam = saturate(foam + fronts * smoothstep(0.42, 0.66, lace) * 0.55 + crest * saturate(swell.x * 14 + 0.25));
 #if RIPPLES
   foam = saturate(foam + rippleFoam * smoothstep(0.35, 0.7, lace) * 0.35);
+#endif
+#if SURF
+  // [surf] its white water, broken by the lace; thinned where something stands in it higher than the map's ground (a
+  // unit wading ashore keeps its outline)
+  foam = saturate(foam + SurfFoam(surf, lace) * (1 - smoothstep(0.6, 1.2, bed.y - surf.ground)));
 #endif
 #if WINTER
   // (winter water: the foam greyer, none on the ice and slush, which lie over the water)
@@ -478,6 +525,7 @@ struct WaterConstants {
   float movement[4][4];
   float cameraRight[4], cameraUp[4], cameraBack[4];  // (the modern water's)
   float rippleArea[4], rippleLook[4];                // (the modern water's with ripples: given only to it)
+  float surfArea[4], surfLook[4], surfLook2[4], surfLook3[4];  // [surf] (the modern water's with the surf: given only to it)
 };
 
 // How the ripples' field shows on the water (rippleLook): its slopes' tilt of the surface (as they are), the slope
@@ -486,14 +534,15 @@ constexpr float kRippleTilt = 2.0f, kRippleFoamSlope = 0.8f, kRippleWaterline = 
 
 }  // namespace
 
-gfx::Pipeline Water::ModernPipeline(bool ripples, std::string* error, bool winter) {
-  // (the modern look's water reads the scene's depth: several samples a pixel, or one. Without ripples and winter its
-  // source is the same as it ever was.)
-  std::string modern = std::string(ripples ? "#define RIPPLES 1\n" : "") + (winter ? "#define WINTER 1\n" : "") + "#define SAMPLES " +
-                       std::to_string(gSceneSamples) + "\n" + kViewShaderBlock + RayShaders() + kLightingShaderBlock +
-                       (winter ? kWinterWaterShaderBlock : "") + kModernShader;
+gfx::Pipeline Water::ModernPipeline(bool ripples, std::string* error, bool winter, bool surf) {
+  // (the modern look's water reads the scene's depth: several samples a pixel, or one. Without ripples, winter and the
+  // surf its source is the same as it ever was.)
+  std::string modern = std::string(ripples ? "#define RIPPLES 1\n" : "") + (winter ? "#define WINTER 1\n" : "") + (surf ? "#define SURF 1\n" : "") +
+                       "#define SAMPLES " + std::to_string(gSceneSamples) + "\n" + kViewShaderBlock + RayShaders() + kLightingShaderBlock +
+                       (winter ? kWinterWaterShaderBlock : "") + (surf ? kSurfShaderBlock : "") + kModernShader;
   gfx::PipelineDesc pd;
   pd.name = winter ? (ripples ? "water, modern, ripples, winter" : "water, modern, winter") : ripples ? "water, modern, ripples" : "water, modern";
+  if (surf) pd.name = winter ? (ripples ? "water, modern, ripples, winter, surf" : "water, modern, winter, surf") : ripples ? "water, modern, ripples, surf" : "water, modern, surf";
   pd.vertexSource = pd.pixelSource = modern;
   pd.attrs = {{"POSITION", 0, gfx::AttrType::Float2, 0}};
   pd.stride = 8;
@@ -518,6 +567,18 @@ void Water::PrepareRipples() {
   if (!modernRipples_) fprintf(stderr, "render: the water cannot show ripples (%s)\n", why.c_str());
 }
 
+void Water::PrepareSurf(bool ripples, bool winter) {
+  if (!map_ || !map_->water.present || !modern_) return;
+  for (int k = 0; k < 4; ++k) {
+    // (the variants the options on now may want: with the ripples' field or without it, in winter or not)
+    if (((k & 1) != 0 && !ripples) || ((k & 2) != 0 && !winter) || surfTried_[k]) continue;
+    surfTried_[k] = true;
+    std::string why;
+    modernSurf_[k] = ModernPipeline((k & 1) != 0, &why, (k & 2) != 0, true);
+    if (!modernSurf_[k]) fprintf(stderr, "render: the water cannot show the surf (%s)\n", why.c_str());
+  }
+}
+
 void Water::PrepareWinter(bool ripples) {
   if (!map_ || !map_->water.present || !modern_) return;
   const int k = ripples ? 1 : 0;
@@ -531,6 +592,7 @@ void Water::PrepareWinter(bool ripples) {
 bool Water::Load(const MapData* map, std::string* error) {
   map_ = map;
   ripples.SetMap(map);
+  surf.SetMap(map);
   if (!map->water.present) return true;
   if (!pipeline_) {
     std::string source = std::string(kViewShaderBlock) + kLightingShaderBlock + kShader;
@@ -621,13 +683,18 @@ void Water::DrawWith(const View& view, const Camera* camera, gfx::Texture behind
     const float look[4] = {kRippleTilt, kRippleFoamSlope, kRippleWaterline, ripples.view};
     std::memcpy(c.rippleLook, look, sizeof look);
   }
-  device_->SetPipeline(winter ? winter : rippling ? modernRipples_ : modern ? modern_ : pipeline_);
+  // [surf] with the surf on (surf.h): the water's surf pipeline of the same kind, its constants and its field
+  if (modern && surf.Active()) PrepareSurf(rippling, wintry);
+  const gfx::Pipeline surfing = modern && surf.Active() ? modernSurf_[(rippling ? 1 : 0) | (wintry ? 2 : 0)] : gfx::Pipeline{};
+  if (surfing) surf.Constants(c.surfArea, c.surfLook, c.surfLook2, c.surfLook3);
+  device_->SetPipeline(surfing ? surfing : winter ? winter : rippling ? modernRipples_ : modern ? modern_ : pipeline_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
-  device_->SetConstants(1, &c, static_cast<uint32_t>(rippling ? sizeof c : offsetof(WaterConstants, rippleArea)));
+  device_->SetConstants(1, &c, static_cast<uint32_t>(surfing ? sizeof c : rippling ? offsetof(WaterConstants, surfArea) : offsetof(WaterConstants, rippleArea)));
   if (modern) {
     device_->SetTexture(6, behind);
     device_->SetTexture(7, sceneDepth);
   }
+  if (surfing) device_->SetTexture(kSurfFieldSlot, surf.Field());
   if (rippling) device_->SetTexture(8, ripples.Surface());
   device_->SetTexture(0, waterMap_);
   for (int i = 0; i < 4; ++i) device_->SetTexture(1 + i, waves_[i]);
@@ -635,6 +702,7 @@ void Water::DrawWith(const View& view, const Camera* camera, gfx::Texture behind
   device_->SetVertexBuffer(vertices_);
   device_->Draw(6);
   if (rippling) device_->SetTexture(8, {});  // (the field is written again next frame: not left bound)
+  if (surfing) device_->SetTexture(kSurfFieldSlot, {});
 }
 
 }  // namespace render
