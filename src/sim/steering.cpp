@@ -305,8 +305,16 @@ void DoCollisionsFor(Sim& sim, Unit* self, const std::vector<Hit>& hits) {
     if (dbg >= 0 && (static_cast<long>(self->id) == dbg || static_cast<long>(o->id) == dbg))
       Logf(LogLevel::Info, "push %u self %u other %u depth %.3f mag %.3f shares %.3f %.3f", sim.tick(), self->id, o->id,
            h.depth, mag, fOther, fSelf);
-    if (fOther > 0.1f && flagOk(self, o) && !Immobile(self)) AddImpulse(self, Scale(d, mag * fOther));
-    if (fSelf > 0.1f && flagOk(o, self) && !Immobile(o)) AddImpulse(o, Scale(d, -mag * fSelf));
+    // The impulses as 0x5980ba..0x5980f2 and 0x598171..0x5981b6 form them: each component times mag, then times the
+    // share ((d x mag) x fOther; ((0 - d) x mag) x fSelf), not times the one product mag x share: the two orders differ
+    // in the last bit. Seen: MP2 10053, army 1's engineer 0x10012d pushes its T2 engineer 0x100132: the push's last bit
+    // survived the coast's cancellation (0.8 v less the brake leaves 1/25 of v at 10055), so the side-step that
+    // 0x100132's collision record made at 10056 aimed a hair off; at 10086 its spline passed the side-step point
+    // dead astern and turned the other way round (the original to +x, ours to -x).
+    if (fOther > 0.1f && flagOk(self, o) && !Immobile(self))
+      AddImpulse(self, Vec3{d.x * mag * fOther, d.y * mag * fOther, d.z * mag * fOther});
+    if (fSelf > 0.1f && flagOk(o, self) && !Immobile(o))
+      AddImpulse(o, Vec3{(0.0f - d.x) * mag * fSelf, (0.0f - d.y) * mag * fSelf, (0.0f - d.z) * mag * fSelf});
   }
 }
 
