@@ -411,6 +411,18 @@ void RawPosition(Formation& F, Unit* u, FormGroup* g, float* x, float* z) {
   *z = F.cz + it->second.offZ;
 }
 
+// The test 0x721231..0x72124f: the unit's GetVelocity (entity vt+0x3c, Unit::GetVelocity 0x6a9c90: the motion's
+// vector m+0x38 off the Air layer) against (0, 0, 0) with 0x4f0a50, a memcmp of its 12 bytes: a -0.0 part counts as
+// moving. A ship turning on the spot has such a part (the motion writes -0.0 where its step is a negative zero).
+bool VelocityBitsSet(const Unit* e) {
+  const Vec3& v = UnitVelocity(e);
+  uint32_t b[3];
+  std::memcpy(&b[0], &v.x, 4);
+  std::memcpy(&b[1], &v.y, 4);
+  std::memcpy(&b[2], &v.z, 4);
+  return (b[0] | b[1] | b[2]) != 0;
+}
+
 // COORDS_CanMoveAt with strict 0 (air_extra 3.6): no standing, completed, non-air unit of another formation
 bool CanMoveAt(Sim& sim, Unit* u, int cx, int cz) {
   // the box is a square of the footprint's larger side (S = max(SizeX, SizeZ)), y from -1000 to 1000
@@ -433,9 +445,7 @@ bool CanMoveAt(Sim& sim, Unit* u, int cx, int cz) {
                "formspot   box (%g,%g)-(%g,%g) near unit %u %s layer %s box x %.4f..%.4f z %.4f..%.4f dead %d built %d moving %d "
                "attached %d transport %d cells x %d+%d z %d+%d",
                x0, z0, x1, z1, e->id, e->blueprint ? e->blueprint->id.c_str() : "?", e->layer.c_str(), mn.x, mx.x, mn.z, mx.z,
-               static_cast<int>(Gone(e)), static_cast<int>(!e->beingBuilt),
-               static_cast<int>(e->position.x != e->lastPosition.x || e->position.y != e->lastPosition.y ||
-                                e->position.z != e->lastPosition.z),
+               static_cast<int>(Gone(e)), static_cast<int>(!e->beingBuilt), static_cast<int>(VelocityBitsSet(e)),
                static_cast<int>(e->unitStates.count("Attached")), static_cast<int>(e->transport != nullptr), e->gridX0,
                e->gridW, e->gridZ0, e->gridH);
       }
@@ -448,9 +458,14 @@ bool CanMoveAt(Sim& sim, Unit* u, int cx, int cz) {
       // (0x720f70: a unit with a transport object, a carrier too, is in the way whether it moves or not)
       if (sameForm) return;
     } else {
-      // its velocity, all three parts (memcmp of 12 bytes with zero): a submarine diving on the spot moves
-      const bool moving = e->position.x != e->lastPosition.x || e->position.y != e->lastPosition.y ||
-                          e->position.z != e->lastPosition.z;
+      // its velocity, all three parts (memcmp of 12 bytes with zero): a submarine diving on the spot moves, and so
+      // does a ship turning on the spot whose velocity holds a -0.0 (VelocityBitsSet). Seen: MP1 6512 / 6513, army
+      // 1's frigate 0x10009a (uas0103) turns where it stands, velocity (-0.0, 0, 0) / (0, 0, -0.0); army 2's frigate
+      // 0x200011 is given formation spots of the player's Move next to it: the original takes the cell (530,167)
+      // (probe mp1_6527: its SetGoal 0x5a3ed0 gets (530,167) twice), ours took 0x10009a for a standing unit in the
+      // way and went to (530,169) and (530,168); from 6527 its path ran elsewhere. (Before: the position against the
+      // one before the last step, which a -0.0 does not tell.)
+      const bool moving = VelocityBitsSet(e);
       if (selfTransport && (moving || u->unitStates.count("TransportLoading"))) return;
       if (moving) return;
       if (sameForm) return;
