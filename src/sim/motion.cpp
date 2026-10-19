@@ -2045,10 +2045,20 @@ void MotionTick(Sim& sim, Unit* u) {
       m.accel = {};
       m.prevPos = start;
       if (!m.pushed) {
-        float l = std::sqrt(dx * dx + dz * dz);
-        float imp = (m.speedCap > 0 ? m.speedCap : b.maxSpeed * m.speedMult) * 0.010000001f;  // u+0x594
-        Vec3 iv{};
-        if (l > 0) iv = {dx / l * imp, 0, dz / l * imp};
+        // 0x6c29a7..0x6c29fb: (start - position, y 0) brought to the length u+0x594 x 0.01 by SetLength 0x5b1c90: one
+        // factor, length / sqrt((x x + y y) + z z) (fsqrt, fdivr at PC_24), times each component; not each component
+        // over the length, times the size. The two differ in the last bit, and this impulse is the push's whole
+        // velocity, whose length the push's end tests against MaxSpeed x 0.01 (ProcessSplineMovement 0x5d2cc0): the same
+        // size, so the last bit decides whether the push ends. Seen: MP2 10877, army 1's Striker 0x100125 (MaxSpeed 3.4) whose
+        // steps are blocked every other beat: its 10876 impulse came out 0.0339999981 long, under 0.0340000018, so ours
+        // ended the push at 10877 and took a point; the original stays pushed and stands for that beat.
+        const float imp = (m.speedCap > 0 ? m.speedCap : b.maxSpeed * m.speedMult) * 0.010000001f;  // u+0x594
+        Vec3 iv{dx, 0.0f, dz};
+        const float l2 = (iv.x * iv.x + iv.y * iv.y) + iv.z * iv.z;
+        if (l2 > 0.0f) {
+          const float k = imp / std::sqrt(l2);
+          iv = {iv.x * k, iv.y * k, iv.z * k};
+        }
         AddImpulse(u, iv);
       }
       // (moved stays true: CalcMoveCommon answers 1 after putting the unit back (0x6c2a33), so CalcMoveLand snaps it to
