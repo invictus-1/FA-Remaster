@@ -2,6 +2,7 @@
 // engine-ref/specs/pathfinding.md and land_motion_blocking.md give the details.
 #include "sim/landnav.h"
 #include "sim/collision.h"
+#include "sim/entity_grid.h"
 #include "sim/steering.h"
 #include "sim/formation.h"
 #include "sim/air.h"
@@ -129,9 +130,13 @@ bool PathUnitBlocked(Unit* u, int x, int z, int flags) {
     Vec3 mn, mx;
     ShapeBounds(s, &mn, &mx);
     if (x0 > mx.x || mn.x > x1 || -1000.0f > mx.y || mn.y > 1000.0f || z0 > mx.z || mn.z > z1) return;
-    // (the gather asks the entity grid first: a unit whose box only touches the square on a multiple of 4 is in
-    // other cells and is not found at all)
-    if (!GridCellsMeet(Vec3{x0, -1000.0f, z0}, Vec3{x1, 1000.0f, z1}, mn, mx)) return;
+    // (the gather asks the entity grid first: a unit is found only in the cells the grid has it in, its span as of
+    // the last AdvanceCoords, skirt-wide (Unit::UpdateCollision; GridFindsInBox, as the formation's spot test), not
+    // its collision box's own cells. Seen (probe mp1_5397): MP1 beat 5397, army 0's engineer 0x1b on a Repair walk
+    // tries (827,225) from (819,228); 0x4c, repairing at (828.46, 224.79), has a box from x 828.0 exactly but is
+    // registered from cell 206 (x 827.9 skirt-wide): the original finds it touching the square, tries (826,225) next
+    // and takes it; ours left 0x4c out (the box alone starts in cell 207) and took (827,225), 2.5 degrees aside.)
+    if (!GridFindsInBox(sim, e, x0, z0, x1, z1)) return;
     by = e;
     byMn = mn;
     byMx = mx;
