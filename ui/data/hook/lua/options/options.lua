@@ -458,6 +458,23 @@ local looks = {
         },
     },
     {
+        -- the renderer's seasons (WorldPicture::SetSeason, render c267feb; Chris, 2026-10-18: seasons as a player's
+        -- option, visuals' autumn art for SETONS_R): a style pick, today's Summer unless chosen, in no preset; the
+        -- picture's alone, from the next map opened
+        title = "Season",
+        key = 'remaster_season',
+        tip = "The map's season, where the map has one: autumn ground, plants and leaves in the wind, and autumn weather (showers, morning fog). Applies from the next map.",
+        type = 'toggle',
+        default = 0,
+        set = Look("remaster_season"),
+        custom = {
+            states = {
+                { text = "Summer", key = 0 },
+                { text = "Autumn", key = 1 },
+            },
+        },
+    },
+    {
         -- the renderer's battle looks as one setting (agreed 2026-10-18): World's blastWaves, blastDust, blastDebris, litSmoke, smokeShadows, heatShimmer, unitScars
         title = "Battle Effects",
         key = 'remaster_battle_effects',

@@ -1227,6 +1227,7 @@ void GameSession::OpenPicture() {
     pic->picture.SetVulkan(Looks().vulkan);  // (the player's Graphics API)
     pic->picture.SetTextureDetail(Looks().textureDetail);  // (the game's Texture Detail)
     pic->picture.SetLowLatency(pic->lowLatency = Pacing().lowLatency);  // (the Video tab's Low Latency)
+    pic->picture.SetSeason(Looks().season == 1 ? render::Season::Autumn : render::Season::Summer);  // (the Video tab's Season)
     // (Ray Tracing before Open: the surfaces' shaders are made for reflections when the map opens; the
     // renderer's request 31 follow-up. The first frame's looks block sets it again, harmlessly.)
     pic->picture.SetRayTracing(Looks().rayTracing);

@@ -409,6 +409,11 @@ struct LookSettings {
   // touches with today's colours: the grade "plain"), 2 Film, 3 Warm, 4 Cold War (the graded looks). A style pick, not
   // a quality step: Off unless chosen (the renderer's proposal, told to Chris), in no preset. Modern look only.
   int photoLook = 0;
+  // The Season (the renderer's WorldPicture::SetSeason, render/season.h; Chris, 2026-10-18: seasons as a player's
+  // option, visuals' autumn art for SETONS_R): 0 Summer (today's), 1 Autumn (where the map has an autumn look: its
+  // ground, plants and props in autumn art, leaves in the wind, autumn weather). A style pick: Summer unless chosen,
+  // in no preset; the picture's alone (the simulation keeps the map's blueprints), taken when a map opens.
+  int season = 0;
   // Whether the graphics card can ray trace (WorldPicture::RayTracingSupported, asked after a picture opened,
   // the menu's or a game's): -1 not known yet, 0 no, 1 yes.
   int rayTracingSupported = -1;

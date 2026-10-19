@@ -102,6 +102,23 @@ video.remaster_photo_look.set('remaster_photo_look', 4, false)
 check("Cold War chosen in the menu reaches the program", moho64ui_Looks().photoLook, 4)
 video.remaster_photo_look.set('remaster_photo_look', 0, false)
 check("and Off again", moho64ui_Looks().photoLook, 0)
+-- The Season (render c267feb; Chris: seasons as a player's option): today's Summer unless chosen, in no preset level
+check("the Season: Summer unless chosen, and its two choices", video.remaster_season and
+    video.remaster_season.default .. " " .. table.getn(video.remaster_season.custom.states), "0 2")
+check("the program starts in Summer", moho64ui_Looks().season, 0)
+video.remaster_season.set('remaster_season', 1, false)
+check("Autumn chosen in the menu reaches the program", moho64ui_Looks().season, 1)
+video.remaster_season.set('remaster_season', 0, false)
+check("and Summer again", moho64ui_Looks().season, 0)
+ConExecute("remaster_season autumn")
+check("the console's remaster_season takes the season's name", moho64ui_Looks().season, 1)
+ConExecute("remaster_season summer")
+do
+    local O = import('/lua/options/options.lua')
+    local inAny = false
+    for level = 0, 4 do inAny = inAny or O.RemasterPresetValues(level).remaster_season ~= nil end
+    check("the Season is in no preset level", inAny, false)
+end
 check("Ray Tracing on unless chosen, where the card can", video.remaster_ray_tracing.default, moho64ui_RayTracingSupported() == false and 0 or 1)
 -- The Remastered Preset (Chris, 2026-10-17): the new looks set together; Custom (5) by default leaves them
 check("the Video tab has the Remastered Preset, Ultra unless chosen", video.remaster_preset and video.remaster_preset.default, 4)

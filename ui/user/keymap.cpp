@@ -309,7 +309,7 @@ const std::vector<const char*>& ConsoleNames() {
         "remaster_atmosphere", "remaster_soft_shadows", "remaster_ray_tracing", "remaster_weather_effects",
         "remaster_ground_detail", "remaster_frame_generation", "remaster_water_ripples", "remaster_lens", "remaster_cinecam",
         "remaster_photo", "remaster_battle_effects", "remaster_energy_shields", "remaster_hidden_outlines",
-        "remaster_photo_look", "remaster_low_latency", "remaster_photo_mode"};
+        "remaster_photo_look", "remaster_low_latency", "remaster_photo_mode", "remaster_season"};
     std::sort(all.begin(), all.end(), ConNameLess);
     return all;
   }();
@@ -390,6 +390,9 @@ int l_LooksForTests(lua_State* L) {
                            looks.battleEffects, looks.energyShields, looks.hiddenOutlines};
   lua_pushstring(L, "photoLook");
   lua_pushnumber(L, looks.photoLook);
+  lua_rawset(L, -3);
+  lua_pushstring(L, "season");
+  lua_pushnumber(L, looks.season);
   lua_rawset(L, -3);
   for (int i = 0; i < 18; ++i) {
     lua_pushstring(L, names[i]);
@@ -1120,6 +1123,15 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
         const int named = v == "OFF" ? 0 : v == "NATURAL" ? 1 : v == "FILM" ? 2 : v == "WARM" ? 3 : v == "COLDWAR" ? 4 : -1;
         const int n = named >= 0 ? named : std::atoi(value.c_str());
         if (n >= 0 && n <= 4) looks.photoLook = n;
+      }
+      return;
+    }
+    if (key == "REMASTER_SEASON") {  // (0 summer, 1 autumn; or those words, "fall" too: from the next map opened)
+      if (!value.empty()) {
+        const std::string v = Upper(value);
+        const int named = v == "SUMMER" ? 0 : (v == "AUTUMN" || v == "FALL") ? 1 : -1;
+        const int n = named >= 0 ? named : std::atoi(value.c_str());
+        if (n >= 0 && n <= 1) looks.season = n;
       }
       return;
     }
