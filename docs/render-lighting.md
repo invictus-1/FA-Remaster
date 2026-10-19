@@ -1152,6 +1152,7 @@ so there is less clutter). WorldPicture sets each bundle's options together, bef
 Proposed (2026-10-18, the interface's wish): a seventh setting, "Battle Effects" (`WorldPicture::SetBattleEffects`, not
 made yet), for the looks of the fighting that come next: `energyShields` first (+0.07 to 0.16 ms with ten bubbles under
 fire), the others of items 12 to 19 as they land.
+| `SetLowLatency` | not a look: the latency limiter (docs/render-optimisation.md, section 9; a seventh setting, asked of the ui: "Low Latency"; the host then calls `WaitForNextFrame` once a frame, just before it reads its input) | nothing on the card, 0.005-0.03 ms a frame on the processor; input to screen with vsync 70 -> 17-23 ms at 60 pictures a second, 20 -> 12 ms at 240 Hz |
 
 `WorldPicture::RayTracingSupported()` (after any Open, the menu's too) says whether the card has ray tracing,
 to grey "Ray tracing" out where it would do nothing (on the Mac always). Viewer: `--picture <file> --settings

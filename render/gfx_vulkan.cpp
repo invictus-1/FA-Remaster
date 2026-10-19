@@ -69,6 +69,7 @@ struct wl_surface;
 #include <mutex>
 #include <thread>
 
+#include "gfx_latency.h"
 #include "gfx_pacing.h"
 #include "gfx_vulkan_dxc.h"
 
@@ -524,6 +525,9 @@ class VulkanDevice final : public Device {
   Texture WindowPicture() override { return generating_ ? windowPictures_[cur_] : Texture{}; }
   Texture BetweenPicture() override { return generating_ ? betweenPictures_[cur_] : Texture{}; }
   bool SetPhotoWindow(int width, int height) override;
+  bool SetLatencyLimiter(bool on) override;
+  bool LatencyLimiter() const override { return latency_; }
+  void WaitForNextFrame() override;
 
  private:
   // (photomode) SetPhotoWindow: the picture and the depth a frame draws its window into while it is on, their size; a
@@ -533,6 +537,24 @@ class VulkanDevice final : public Device {
   bool photoOn_ = false;
   bool PhotoNow() { return photoOn_ && Find(photoColor_) && Find(photoDepth_); }
   void EndFramePhoto(std::vector<uint8_t>* capture);
+  // the latency limiter (gfx.h, SetLatencyLimiter; gfx_latency.h; as Direct3D 12's, gfx_d3d12.cpp, with the driver's
+  // present wait in place of the swap chain's frame latency object): the switch (to wantLatency_; the chain stays as
+  // it is); the frames' work taken from the slots the card has finished; the wait for a frame to begin (with the
+  // just-in-time wait or without), and with frame generation the wait for the presenter; the screen's refresh; the
+  // chain's image for the coming frame acquired (before the input read, with the limiter on); whether
+  // presents carry ids (the present wait's, for the limiter or the measure); the measure's watcher thread, which waits
+  // for each picture's showing and notes when it came
+  void SwitchLatency();
+  void TakeWork();
+  double CardFree() const;
+  void LimitFrames(bool justInTime);
+  void WaitForPresenter();
+  double Refresh();
+  struct Frame;
+  void AcquireImage(Frame& f);
+  bool PresentIds() const { return presentWait_ && (latency_ || measureLatency); }
+  void Watch(uint64_t id, double readAt);
+  void Watcher();
   struct Image {  // the window's picture and its depth (not texture records)
     VkImage image = VK_NULL_HANDLE;
     Allocation memory;
@@ -556,7 +578,7 @@ class VulkanDevice final : public Device {
   void WaitPresented(int slot);
   void Presenter();
   bool Acquire(VkSemaphore semaphore, uint32_t* image);
-  void Show(uint32_t image, double* at);
+  void Show(uint32_t image, double* at, double readAt = 0);
   void EndFrameGenerating(std::vector<uint8_t>* capture, bool present);
   bool EnsureReadback(VkDeviceSize need = 0);  // (0: the window's size)
   bool CreateWindowImages(std::string* error);
@@ -637,6 +659,7 @@ class VulkanDevice final : public Device {
     int slot = 0;
     VkFence fence = VK_NULL_HANDLE;  // the frame's work (its copies into the chain's images included) done
     int64_t between = -1, frame = -1;  // the chain's images to show (-1: none)
+    double readAt = 0;                 // (the measure) when the frame's input was read
   };
   std::thread presenter_;
   std::mutex presentMutex_;  // (over the jobs, presentStop_ and slotShowing_)
@@ -647,6 +670,45 @@ class VulkanDevice final : public Device {
   bool slotShowing_[kFrames] = {};  // handed to the presenter and not shown yet
   Pacing pacing_;                   // (the presenter's)
   double lastShown_ = 0;            // (the presenter's)
+
+  // the latency limiter (SetLatencyLimiter): asked for, and on; whether the device has the present wait
+  // (VK_KHR_present_id and VK_KHR_present_wait, enabled where offered: nothing changes until a present names an id)
+  // and its function; the ids presents are given (rising, over every chain), the last one given (the presenter's
+  // while frame generation is on) and the first of the chain made last; the last input read (WaitForNextFrame; 0:
+  // none since the last frame began); whether WaitForNextFrame acquired the coming frame's image; each slot's frame:
+  // its input read, its hand-over, whether the card's time was taken (two timestamps a slot, written only while the
+  // limiter is on); the limiter, its wait, and the showings the main thread waited for
+  bool wantLatency_ = false, latency_ = false, presentWait_ = false;
+  PFN_vkWaitForPresentKHR vkWaitForPresent_ = nullptr;
+  std::atomic<uint64_t> presentIdNext_{1}, lastPresentId_{0};
+  uint64_t chainFirstId_ = 1;
+  double readAt_ = 0, nextDeadline_ = 0;
+  bool earlyAcquired_ = false, latencyStalled_ = false, nextPaced_ = false;
+  struct LatencySlot {
+    double read = 0, handed = 0, deadline = 0;
+    bool paced = false, timed = false;
+    uint64_t order = 0;  // (the frames' count at its hand-over: the order they were handed over in)
+  };
+  uint64_t handedCount_ = 0;
+  // the card's clock in the processor's (the limiter's: when a frame's work began and ended on the card, by Now()'s
+  // clock): calibrated timestamps, where the device offers them with the clock Now() reads (0: none)
+  PFN_vkGetCalibratedTimestampsKHR vkGetCalibratedTimestamps_ = nullptr;
+  VkTimeDomainKHR hostDomain_ = VK_TIME_DOMAIN_DEVICE_KHR;
+  LatencySlot latencySlots_[kFrames];
+  VkQueryPool latencyQueries_ = VK_NULL_HANDLE;
+  gfx::LatencyLimiter limiter_;
+  Waiter latencyWaiter_;
+  ShowingTimes shown_;
+  double osRefresh_ = 0, osRefreshAt_ = -1;  // (Refresh: the screen's, from the system, and when it was asked)
+  // the measure (measureLatency): the watcher thread, the ids it is to wait for (with their input reads), and the
+  // record; watchChain_ is held while it waits on the chain, and by the chain's destruction
+  std::thread watcher_;
+  std::mutex watchMutex_, watchChain_;
+  std::condition_variable watchWake_;
+  std::deque<std::pair<uint64_t, double>> watchIds_;
+  bool watchStop_ = false;
+  LatencyRecord latencyRecord_;
+  LatencyCost cost_;  // (the measure's: what the limiter's own work and waits took)
 
   VkSampler samplers_[6] = {};
   VkDescriptorSetLayout constantsLayout_ = VK_NULL_HANDLE;  // set 1: b0-b3
@@ -777,6 +839,21 @@ VulkanDevice::~VulkanDevice() {
   }
   if (generating_) StopPresenter();
   vkDeviceWaitIdle(device_);
+  earlyAcquired_ = false;  // (its semaphore goes with the frames' below)
+  if (watcher_.joinable()) {  // (the measure's watcher: what it still waits for shown or given up)
+    {
+      std::lock_guard<std::mutex> lock(watchMutex_);
+      watchStop_ = true;
+    }
+    watchWake_.notify_all();
+    watcher_.join();
+  }
+  if (measureLatency) {
+    const double refresh = Refresh();
+    latencyRecord_.Print(!presentWait_ ? "Vulkan (no present wait: not measured)" : latency_ ? "Vulkan (low latency)" : "Vulkan", vsync_ ? refresh : 0, refresh);
+    if (latency_) limiter_.Print(presentWait_ ? "Vulkan (present wait)" : "Vulkan (no present wait: the frames on the card kept to two)"), cost_.Print("Vulkan");
+  }
+  if (latencyQueries_) vkDestroyQueryPool(device_, latencyQueries_, nullptr);
   for (Frame& f : frames_) {
     Collect(f.garbage);
     Collect(f.later);
@@ -1036,6 +1113,38 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
   VkPhysicalDeviceRobustness2FeaturesEXT haveRobust{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT};
   VkPhysicalDeviceFeatures2 have{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
   if (nullDescriptors_) have.pNext = &haveRobust;
+  // the present wait (the latency limiter's, and its measure's): presents with ids, and waiting until one is shown
+  presentWait_ = deviceOffers(physical_, VK_KHR_PRESENT_ID_EXTENSION_NAME) && deviceOffers(physical_, VK_KHR_PRESENT_WAIT_EXTENSION_NAME);
+  VkPhysicalDevicePresentIdFeaturesKHR havePresentId{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR};
+  VkPhysicalDevicePresentWaitFeaturesKHR havePresentWait{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_WAIT_FEATURES_KHR};
+  if (presentWait_) {
+    havePresentWait.pNext = have.pNext;
+    havePresentId.pNext = &havePresentWait;
+    have.pNext = &havePresentId;
+  }
+  // calibrated timestamps (the latency limiter's): the card's clock read together with the processor's, in the
+  // domain Now()'s clock is (Windows: the performance counter; Linux: CLOCK_MONOTONIC; none on macOS here)
+  const bool calibrationKhr = deviceOffers(physical_, VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME);
+  bool calibration = calibrationKhr || deviceOffers(physical_, VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME);
+#if defined(_WIN32)
+  hostDomain_ = VK_TIME_DOMAIN_QUERY_PERFORMANCE_COUNTER_KHR;
+#elif defined(__linux__)
+  hostDomain_ = VK_TIME_DOMAIN_CLOCK_MONOTONIC_KHR;
+#else
+  calibration = false;
+#endif
+  if (calibration) {
+    auto domainsOf = reinterpret_cast<PFN_vkGetPhysicalDeviceCalibrateableTimeDomainsKHR>(
+        vkGetInstanceProcAddr(instance_, calibrationKhr ? "vkGetPhysicalDeviceCalibrateableTimeDomainsKHR" : "vkGetPhysicalDeviceCalibrateableTimeDomainsEXT"));
+    uint32_t n = 0;
+    std::vector<VkTimeDomainKHR> domains;
+    if (domainsOf && domainsOf(physical_, &n, nullptr) == VK_SUCCESS) {
+      domains.resize(n);
+      if (domainsOf(physical_, &n, domains.data()) != VK_SUCCESS) domains.clear();
+    }
+    calibration = std::find(domains.begin(), domains.end(), VK_TIME_DOMAIN_DEVICE_KHR) != domains.end() &&
+                  std::find(domains.begin(), domains.end(), hostDomain_) != domains.end();
+  }
   // ray tracing, only where the card offers all it takes: acceleration structures (with the deferred host
   // operations they ask for), ray queries in any shader, and buffers' device addresses (what builds read from)
   bool rays = deviceOffers(physical_, VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) && deviceOffers(physical_, VK_KHR_RAY_QUERY_EXTENSION_NAME) &&
@@ -1052,6 +1161,7 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
   vkGetPhysicalDeviceFeatures2(physical_, &have);
   nullDescriptors_ = nullDescriptors_ && haveRobust.nullDescriptor;
   rays = rays && have12.bufferDeviceAddress && haveStructures.accelerationStructure && haveQueries.rayQuery;
+  presentWait_ = presentWait_ && havePresentId.presentId && havePresentWait.presentWait;
   if (!have.features.textureCompressionBC) fprintf(stderr, "render: Vulkan: this card reads no BC textures (most of the game's)\n");
   // frame generation's presenter (SetFrameGeneration) shows from a queue of its own: a second one of the drawing
   // family where it has two, else one of another family that can show in this window; with neither, frame
@@ -1114,6 +1224,18 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
     f12.pNext = &structures;
     features.pNext = &f12;
   }
+  VkPhysicalDevicePresentIdFeaturesKHR presentId{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR};
+  VkPhysicalDevicePresentWaitFeaturesKHR presentWaitFeature{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_WAIT_FEATURES_KHR};
+  if (calibration) deviceExtensions.push_back(calibrationKhr ? VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME : VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME);
+  if (presentWait_) {  // (ahead of the rest of the chain)
+    deviceExtensions.push_back(VK_KHR_PRESENT_ID_EXTENSION_NAME);
+    deviceExtensions.push_back(VK_KHR_PRESENT_WAIT_EXTENSION_NAME);
+    presentId.presentId = VK_TRUE;
+    presentWaitFeature.presentWait = VK_TRUE;
+    presentWaitFeature.pNext = features.pNext;
+    presentId.pNext = &presentWaitFeature;
+    features.pNext = &presentId;
+  }
   features.features.samplerAnisotropy = have.features.samplerAnisotropy;
   features.features.textureCompressionBC = have.features.textureCompressionBC;
   // (compute shaders write storage images declared without a format, some in the extended formats: R16F, RG16F)
@@ -1146,6 +1268,11 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
 #define VK_HAVE(name) && name
   rayTracing_ = rays VK_RAY_FUNCTIONS(VK_HAVE);
 #undef VK_HAVE
+  if (presentWait_) vkWaitForPresent_ = reinterpret_cast<PFN_vkWaitForPresentKHR>(vkGetDeviceProcAddr(device_, "vkWaitForPresentKHR"));
+  presentWait_ = presentWait_ && vkWaitForPresent_;
+  if (calibration)
+    vkGetCalibratedTimestamps_ = reinterpret_cast<PFN_vkGetCalibratedTimestampsKHR>(
+        vkGetDeviceProcAddr(device_, calibrationKhr ? "vkGetCalibratedTimestampsKHR" : "vkGetCalibratedTimestampsEXT"));
   if (rayTracing_ && vkGetPhysicalDeviceProperties2) {  // (where a build's scratch room may start)
     VkPhysicalDeviceAccelerationStructurePropertiesKHR sp{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR};
     VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
@@ -1362,7 +1489,13 @@ bool VulkanDevice::CreateSwapchain(std::string* error) {
   sci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
   sci.presentMode = mode;
   sci.clipped = VK_TRUE;
-  VkResult r = vkCreateSwapchainKHR(device_, &sci, nullptr, &swapchain_);
+  chainFirstId_ = presentIdNext_.load();  // (the present wait: ids before it were another chain's)
+  VkResult r;
+  {
+    std::unique_lock<std::mutex> chain(watchChain_, std::defer_lock);  // (the measure's watcher reads the handle)
+    if (watcher_.joinable()) chain.lock();
+    r = vkCreateSwapchainKHR(device_, &sci, nullptr, &swapchain_);
+  }
   if (r != VK_SUCCESS) {
     if (error) *error = std::string("Vulkan: the swap chain: ") + Result(r);
     return false;
@@ -1393,8 +1526,24 @@ bool VulkanDevice::CreateWindowImages(std::string* error) {
 void VulkanDevice::DestroySwapchain() {
   imageHeld_ = false;
   chainStale_ = false;
+  if (earlyAcquired_) {  // (the latency limiter acquired an image for the frame to come: its semaphore, signalled and
+                         // never waited for, made anew; the card is idle here)
+    Frame& f = frames_[cur_];
+    vkDestroySemaphore(device_, f.acquired, nullptr);
+    VkSemaphoreCreateInfo smi{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+    vkCreateSemaphore(device_, &smi, nullptr, &f.acquired);
+    earlyAcquired_ = waitAcquired_ = false;
+  }
+  if (watcher_.joinable()) {  // (the measure's watcher: out of its wait on this chain, what it waits for given up)
+    std::lock_guard<std::mutex> chain(watchChain_);
+    std::lock_guard<std::mutex> lock(watchMutex_);
+    watchIds_.clear();
+    if (swapchain_) vkDestroySwapchainKHR(device_, swapchain_, nullptr);
+    swapchain_ = VK_NULL_HANDLE;
+  }
   if (swapchain_) vkDestroySwapchainKHR(device_, swapchain_, nullptr);
   swapchain_ = VK_NULL_HANDLE;
+  shown_.Reset();
   for (VkSemaphore sem : rendered_)
     if (sem) vkDestroySemaphore(device_, sem, nullptr);
   rendered_.clear();
@@ -1545,7 +1694,7 @@ void VulkanDevice::Presenter() {
       record.Shown(lastShown_, true);
     }
     waiter.Until(lastShown_ + spacing);
-    Show(static_cast<uint32_t>(job.frame), &lastShown_);
+    Show(static_cast<uint32_t>(job.frame), &lastShown_, job.readAt);
     record.Shown(lastShown_, false);
     {
       std::lock_guard<std::mutex> lock(presentMutex_);
@@ -1555,13 +1704,21 @@ void VulkanDevice::Presenter() {
   }
 }
 
-void VulkanDevice::Show(uint32_t image, double* at) {
+void VulkanDevice::Show(uint32_t image, double* at, double readAt) {
   VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
   pi.waitSemaphoreCount = 1;
   pi.pWaitSemaphores = &rendered_[image];
   pi.swapchainCount = 1;
   pi.pSwapchains = &swapchain_;
   pi.pImageIndices = &image;
+  VkPresentIdKHR pid{VK_STRUCTURE_TYPE_PRESENT_ID_KHR};  // (the latency limiter's and the measure's)
+  uint64_t id = 0;
+  if (PresentIds()) {
+    id = presentIdNext_++;
+    pid.swapchainCount = 1;
+    pid.pPresentIds = &id;
+    pi.pNext = &pid;
+  }
   *at = Now();  // (as AMD's: the time just before it is shown, not after the call returns, which may wait)
   VkResult r;
   {
@@ -1569,6 +1726,10 @@ void VulkanDevice::Show(uint32_t image, double* at) {
     r = vkQueuePresentKHR(presentQueue_, &pi);
   }
   if (r != VK_SUCCESS) chainStale_ = true;  // (out of date or suboptimal: a new chain before the next frame)
+  if (id) {
+    lastPresentId_ = id;
+    if (measureLatency) Watch(id, readAt);
+  }
 }
 
 // An image of the chain, without holding the chain while it waits (the presenter shows from it meanwhile): tried
@@ -1696,6 +1857,10 @@ void VulkanDevice::EndFrameGenerating(std::vector<uint8_t>* capture, bool presen
   }
   Transition(window, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
   Transition(between, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+  if (latency_ && latencyQueries_) {  // (the latency limiter: the frame's last timestamp)
+    vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, latencyQueries_, static_cast<uint32_t>(2 * cur_ + 1));
+    latencySlots_[cur_].timed = true;
+  }
   if (capture && EnsureReadback()) {
     VkBufferImageCopy copy{};
     copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
@@ -1753,12 +1918,13 @@ void VulkanDevice::EndFrameGenerating(std::vector<uint8_t>* capture, bool presen
   si.signalSemaphoreCount = n;
   si.pSignalSemaphores = signals;
   vkQueueSubmit(queue_, 1, &si, f.done);
+  if (latency_ || measureLatency) latencySlots_[cur_].handed = Now(), latencySlots_[cur_].order = ++handedCount_;
   inFrame_ = false;
   if (frameImage >= 0) {  // handed to the presenter, which shows them once the card has finished the frame
     {
       std::lock_guard<std::mutex> lock(presentMutex_);
       slotShowing_[cur_] = true;
-      presentJobs_.push_back({cur_, f.done, betweenImage, frameImage});
+      presentJobs_.push_back({cur_, f.done, betweenImage, frameImage, latencySlots_[cur_].read});
     }
     presentWake_.notify_one();
   }
@@ -1779,6 +1945,251 @@ void VulkanDevice::SetVsync(bool on) {
   DestroySwapchain();
   std::string error;
   if (!CreateSwapchain(&error)) fprintf(stderr, "render: %s\n", error.c_str());
+}
+
+// --- the latency limiter (gfx.h, SetLatencyLimiter; gfx_latency.h) ---
+
+// Switched now when between frames, else at the next WaitForNextFrame or BeginFrame. The chain stays as it is (the
+// present wait needs nothing of it); with frame generation the presenter is stopped and started again around it.
+bool VulkanDevice::SetLatencyLimiter(bool on) {
+  wantLatency_ = on;
+  if (!inFrame_ && wantLatency_ != latency_) SwitchLatency();
+  return true;
+}
+
+void VulkanDevice::SwitchLatency() {
+  if (wantLatency_ && !latencyQueries_ && queries_) {  // the slots' timestamps, the first time
+    VkQueryPoolCreateInfo qpi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+    qpi.queryType = VK_QUERY_TYPE_TIMESTAMP;
+    qpi.queryCount = 2 * kFrames;
+    if (vkCreateQueryPool(device_, &qpi, nullptr, &latencyQueries_) != VK_SUCCESS) latencyQueries_ = VK_NULL_HANDLE;
+  }
+  if (generating_) StopPresenter();
+  latency_ = wantLatency_;
+  limiter_ = gfx::LatencyLimiter{};
+  for (LatencySlot& s : latencySlots_) s = LatencySlot{};
+  readAt_ = nextDeadline_ = 0;
+  nextPaced_ = false;
+  if (generating_) {
+    pacing_.Reset();
+    lastShown_ = 0;
+    StartPresenter();
+  }
+}
+
+// Called by the host just before it reads its input: with the limiter on, the waits that keep the frames waiting to
+// be shown to one (or two), the chain's image acquired, then the wait that begins the frame just in time; with it off,
+// nothing (the moment is only noted for the measure).
+void VulkanDevice::WaitForNextFrame() {
+  if (inFrame_) return;
+  if (wantLatency_ != latency_) SwitchLatency();
+  if (latency_ && !PhotoNow()) {  // (a photo's frames are never shown: nothing to wait for, no image to acquire)
+    if (generating_) WaitForPresenter();
+    // (a switch: BeginFrame's)
+    else if (wantGenerating_ == generating_ && !earlyAcquired_ && !imageHeld_) LimitFrames(true);
+  }
+  if (latency_ || measureLatency) readAt_ = Now();
+}
+
+// The frames the card has finished, for the limiter, in the order they were handed over: their input read, their
+// hand-over, the card's time for them (their first and last timestamps) and, where the device has calibrated
+// timestamps, its begin and end in the processor's time; and the time each was to be done by.
+void VulkanDevice::TakeWork() {
+  if (!latencyQueries_) return;
+  int order[kFrames], n = 0;
+  for (int i = 0; i < kFrames; ++i)
+    if (latencySlots_[i].timed && vkGetFenceStatus(device_, frames_[i].done) == VK_SUCCESS) order[n++] = i;
+  if (n == 0) return;
+  std::sort(order, order + n, [&](int a, int b) { return latencySlots_[a].order < latencySlots_[b].order; });
+  // (the card's clock and the processor's read together: a timestamp's processor time is the processor's reading and
+  // the card's ticks from its reading to the timestamp)
+  uint64_t together[2] = {}, deviation = 0;
+  bool calibrated = false;
+  if (vkGetCalibratedTimestamps_) {
+    VkCalibratedTimestampInfoKHR infos[2] = {{VK_STRUCTURE_TYPE_CALIBRATED_TIMESTAMP_INFO_KHR}, {VK_STRUCTURE_TYPE_CALIBRATED_TIMESTAMP_INFO_KHR}};
+    infos[0].timeDomain = VK_TIME_DOMAIN_DEVICE_KHR;
+    infos[1].timeDomain = hostDomain_;
+    calibrated = vkGetCalibratedTimestamps_(device_, 2, infos, together, &deviation) == VK_SUCCESS;
+  }
+#if defined(_WIN32)
+  static const double hostPerSecond = [] {
+    LARGE_INTEGER f;
+    QueryPerformanceFrequency(&f);
+    return static_cast<double>(f.QuadPart);
+  }();
+#else
+  constexpr double hostPerSecond = 1e9;  // (CLOCK_MONOTONIC: nanoseconds)
+#endif
+  auto cpuTime = [&](uint64_t t) {
+    return calibrated ? static_cast<double>(together[1]) / hostPerSecond + (static_cast<double>(t) - static_cast<double>(together[0])) * msPerTick_ / 1000 : 0.0;
+  };
+  for (int k = 0; k < n; ++k) {
+    LatencySlot& s = latencySlots_[order[k]];
+    s.timed = false;
+    uint64_t t[2] = {};
+    if (vkGetQueryPoolResults(device_, latencyQueries_, static_cast<uint32_t>(2 * order[k]), 2, sizeof t, t, 8, VK_QUERY_RESULT_64_BIT) != VK_SUCCESS) continue;
+    LatencyFrame lf;
+    lf.read = s.read, lf.handed = s.handed, lf.deadline = s.deadline, lf.paced = s.paced;
+    if (t[1] > t[0]) {
+      lf.card = static_cast<double>(t[1] - t[0]) * msPerTick_ / 1000;
+      lf.cardBegin = cpuTime(t[0]), lf.cardEnd = cpuTime(t[1]);
+    }
+    limiter_.Work(lf);
+  }
+}
+
+// When the card will be done with the frames it was given (0: not known): as Direct3D 12's (gfx_d3d12.cpp).
+double VulkanDevice::CardFree() const {
+  double free = limiter_.LastCardEnd();
+  if (free <= 0) return 0;
+  int order[kFrames], n = 0;
+  for (int i = 0; i < kFrames; ++i)
+    if (latencySlots_[i].timed) order[n++] = i;
+  std::sort(order, order + n, [&](int a, int b) { return latencySlots_[a].order < latencySlots_[b].order; });
+  for (int k = 0; k < n; ++k) free = std::max(free, latencySlots_[order[k]].handed) + limiter_.Card();
+  return free;
+}
+
+// The chain's image for the frame to come (a chain anew where it no longer fits the window): BeginFrame's, and with
+// the limiter on WaitForNextFrame's, so that any wait for an image comes before the input read.
+void VulkanDevice::AcquireImage(Frame& f) {
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    if (chainStale_ || !swapchain_) {  // (the window changed, or had no size: a chain anew)
+      vkDeviceWaitIdle(device_);
+      DestroySwapchain();
+      std::string error;
+      if (!CreateSwapchain(&error)) fprintf(stderr, "render: %s\n", error.c_str());
+    }
+    if (!swapchain_) break;
+    const VkResult r = vkAcquireNextImageKHR(device_, swapchain_, UINT64_MAX, f.acquired, VK_NULL_HANDLE, &swapIndex_);
+    if (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR) {
+      imageHeld_ = waitAcquired_ = true;
+      chainStale_ = r == VK_SUBOPTIMAL_KHR;
+      break;
+    }
+    chainStale_ = true;
+  }
+}
+
+// Without frame generation. With vsync and the present wait: until the picture before the last is shown (one ahead:
+// as Direct3D 12's frame latency of one; two ahead, the one before that); with vsync and without it (an older driver;
+// MoltenVK): the frames on the card kept to two; without vsync, or stepped back to the way without the limiter
+// (gfx_latency.h, Keep), neither (as Direct3D 12's). Then the chain's image acquired, and the wait that begins the
+// frame no earlier than the card is about to be free of the frames before.
+// No wait for the refresh it will be shown at, as Direct3D 12 has: the present wait's times come too unevenly to
+// pace by (NVIDIA's driver on Windows, a window the compositor shows: the gaps between pictures shown at 240 Hz
+// spread by 6-7 ms), and a refresh's time reckoned from them fed back into the waits themselves (a wait of two such
+// "refreshes" made the gaps longer still: the viewer all but stopped).
+void VulkanDevice::LimitFrames(bool justInTime) {
+  const double t0 = Now();
+  TakeWork();
+  const double t1 = Now();
+  // (three ahead, stepped back to the way without the limiter: no wait for the screen beyond the slots' own)
+  const bool held = vsync_ && limiter_.Ahead() < 3;
+  if (presentWait_ && held) {
+    const uint64_t last = lastPresentId_.load(), ahead = static_cast<uint64_t>(limiter_.Ahead());
+    if (last >= chainFirstId_ + ahead && swapchain_) {
+      const uint64_t id = last - ahead;
+      if (id > shown_.Newest()) {
+        // (a tenth of a second at most; after a wait that ran out, a window hidden or minimised, only looked at until
+        // pictures are shown again, so that such a window's frames are not held up)
+        const VkResult r = vkWaitForPresent_(device_, swapchain_, id, latencyStalled_ ? 0 : 100000000ull);
+        latencyStalled_ = r == VK_TIMEOUT;
+        if (r == VK_SUCCESS && shown_.Shown(id, Now()) && vsync_) limiter_.Shown(shown_.Late(), false);
+        else if (r != VK_SUCCESS && r != VK_TIMEOUT) chainStale_ = true;
+      }
+    }
+  } else if (held && !presentWait_) {
+    // (the frame before the last)
+    vkWaitForFences(device_, 1, &frames_[(cur_ + 1) % kFrames].done, VK_TRUE, 100000000ull);
+  }
+  Frame& f = frames_[cur_];
+  vkWaitForFences(device_, 1, &f.done, VK_TRUE, UINT64_MAX);  // (done already: its acquire semaphore free again)
+  AcquireImage(f);
+  earlyAcquired_ = imageHeld_;
+  const double t2 = Now();
+  limiter_.Pace(vsync_, Refresh());  // (for how many frames may wait: one, or two where they do not fit a refresh)
+  nextDeadline_ = 0;
+  nextPaced_ = false;
+  const double now = Now();
+  const double at = justInTime ? limiter_.StartAt(now, nextDeadline_, CardFree()) : now;
+  nextPaced_ = justInTime && limiter_.Paced();
+  cost_.Add(t1 - t0, now - t2, t2 - t1, at - now);
+  if (!justInTime) return;
+  if (at > now) latencyWaiter_.Until(at);
+}
+
+// The time between the screen's refreshes (s; 0: not known): on Windows the rate of the screen the window is on, from
+// the system (asked at most once a second: the window may be moved to another screen); elsewhere the middle of the gaps
+// between the pictures the present wait saw shown (only for how many frames may wait, never for a wait's length).
+double VulkanDevice::Refresh() {
+#if defined(_WIN32)
+  const double now = Now();
+  if (now - osRefreshAt_ >= 1 || osRefreshAt_ < 0) {
+    osRefreshAt_ = now;
+    osRefresh_ = 0;
+    MONITORINFOEXW mi = {};
+    mi.cbSize = sizeof mi;
+    DEVMODEW dm = {};
+    dm.dmSize = sizeof dm;
+    const HMONITOR screen = MonitorFromWindow(static_cast<HWND>(window_), MONITOR_DEFAULTTONEAREST);
+    if (screen && GetMonitorInfoW(screen, &mi) && EnumDisplaySettingsW(mi.szDevice, ENUM_CURRENT_SETTINGS, &dm) && dm.dmDisplayFrequency > 1)
+      osRefresh_ = 1.0 / dm.dmDisplayFrequency;
+  }
+  if (osRefresh_ > 0) return osRefresh_;
+#endif
+  return shown_.Period();
+}
+
+// With frame generation: as Direct3D 12's (the real frames handed to the presenter and not yet shown kept to one, or
+// none where the screen sets the pace and a frame's work fits well within a refresh; the presenter as without).
+void VulkanDevice::WaitForPresenter() {
+  const double period = Refresh();
+  limiter_.Pace(vsync_, period);
+  TakeWork();
+  if (limiter_.SteppedBack()) return;  // (the way without the limiter, where frames came faster so: gfx_latency.h, Keep)
+  const bool none = vsync_ && period > 0 && limiter_.Predicted() + limiter_.Margin() < period;
+  std::unique_lock<std::mutex> lock(presentMutex_);
+  presentDone_.wait_for(lock, std::chrono::milliseconds(250), [&] {
+    int waiting = 0;
+    for (bool b : slotShowing_) waiting += b ? 1 : 0;
+    return waiting <= (none ? 0 : 1);
+  });
+}
+
+// The measure: a picture handed over, for the watcher to wait for its showing (started the first time).
+void VulkanDevice::Watch(uint64_t id, double readAt) {
+  {
+    std::lock_guard<std::mutex> lock(watchMutex_);
+    latencyRecord_.Presented(id, readAt);
+    watchIds_.push_back({id, readAt});
+  }
+  if (!watcher_.joinable()) watcher_ = std::thread([this] { Watcher(); });
+  watchWake_.notify_one();
+}
+
+// The measure's thread: for each picture in turn, the present wait until it is shown (a fiftieth of a second at a
+// time, so that a chain being made anew is not held up), and when that was.
+void VulkanDevice::Watcher() {
+  for (;;) {
+    uint64_t id = 0;
+    {
+      std::unique_lock<std::mutex> lock(watchMutex_);
+      watchWake_.wait(lock, [&] { return watchStop_ || !watchIds_.empty(); });
+      if (watchIds_.empty()) return;
+      id = watchIds_.front().first;
+    }
+    VkResult r = VK_ERROR_OUT_OF_DATE_KHR;
+    {
+      std::lock_guard<std::mutex> chain(watchChain_);
+      if (swapchain_ && id >= chainFirstId_) r = vkWaitForPresent_(device_, swapchain_, id, 20000000ull);
+    }
+    const double at = Now();
+    std::lock_guard<std::mutex> lock(watchMutex_);
+    if (r == VK_TIMEOUT && !watchStop_) continue;
+    if (!watchIds_.empty() && watchIds_.front().first == id) watchIds_.pop_front();
+    if (r == VK_SUCCESS) latencyRecord_.Shown(id, at);
+  }
 }
 
 // --- barriers ---
@@ -2612,9 +3023,18 @@ void VulkanDevice::ReleaseGeneral() {
 
 void VulkanDevice::BeginFrame(const float clearColor[4]) {
   if (wantGenerating_ != generating_) SwitchFrameGeneration();  // (asked for during the frame before)
+  if (wantLatency_ != latency_) SwitchLatency();
+  // (the latency limiter, where the host did not wait before its input: its wait here)
+  if (latency_ && !generating_ && !earlyAcquired_ && !imageHeld_ && !PhotoNow()) LimitFrames(false);  // (not for a photo's frames)
   Frame& f = frames_[cur_];
   vkWaitForFences(device_, 1, &f.done, VK_TRUE, UINT64_MAX);
   if (generating_) WaitPresented(cur_);  // (the presenter no longer waits on this slot's fence)
+  if (latency_ && latencySlots_[cur_].timed) TakeWork();  // (as Direct3D 12's: the slot's frame before, done now)
+  if (latency_ || measureLatency) {  // (this frame's input read: the host's last WaitForNextFrame, else now)
+    latencySlots_[cur_] = LatencySlot{readAt_ > 0 ? readAt_ : Now(), 0, nextDeadline_, nextPaced_, false};
+    readAt_ = nextDeadline_ = 0;
+    nextPaced_ = false;
+  }
   Collect(f.garbage);
   f.garbage = std::move(f.later);  // (what was let go of since: once this frame is done)
   f.later = Garbage{};
@@ -2633,7 +3053,9 @@ void VulkanDevice::BeginFrame(const float clearColor[4]) {
     }
   }
   f.marks.clear();
-  waitAcquired_ = false;
+  // (the latency limiter acquired this frame's image before the input read)
+  if (!earlyAcquired_) waitAcquired_ = false;
+  earlyAcquired_ = false;
   if (generating_) {  // (the frame's end acquires the chain's images; a chain anew when it no longer fits)
     if (chainStale_ || !swapchain_) {
       DrainPresenter();
@@ -2643,22 +3065,7 @@ void VulkanDevice::BeginFrame(const float clearColor[4]) {
       if (!CreateSwapchain(&error)) fprintf(stderr, "render: %s\n", error.c_str());
     }
   } else if (!imageHeld_) {  // (an image held by a frame not shown is drawn into again)
-    for (int attempt = 0; attempt < 2; ++attempt) {
-      if (chainStale_ || !swapchain_) {  // (the window changed, or had no size: a chain anew)
-        vkDeviceWaitIdle(device_);
-        DestroySwapchain();
-        std::string error;
-        if (!CreateSwapchain(&error)) fprintf(stderr, "render: %s\n", error.c_str());
-      }
-      if (!swapchain_) break;
-      const VkResult r = vkAcquireNextImageKHR(device_, swapchain_, UINT64_MAX, f.acquired, VK_NULL_HANDLE, &swapIndex_);
-      if (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR) {
-        imageHeld_ = waitAcquired_ = true;
-        chainStale_ = r == VK_SUBOPTIMAL_KHR;
-        break;
-      }
-      chainStale_ = true;
-    }
+    AcquireImage(f);
   }
   vkResetFences(device_, 1, &f.done);
   vkResetCommandPool(device_, f.pool, 0);
@@ -2688,6 +3095,10 @@ void VulkanDevice::BeginFrame(const float clearColor[4]) {
     vkCmdPipelineBarrier2(f.cmd, &di);
   }
   if (queries_) vkCmdResetQueryPool(f.cmd, queries_, static_cast<uint32_t>(cur_) * kMarks, kMarks);
+  if (latency_ && latencyQueries_) {  // (the latency limiter: the frame's first timestamp)
+    vkCmdResetQueryPool(f.cmd, latencyQueries_, static_cast<uint32_t>(2 * cur_), 2);
+    vkCmdWriteTimestamp2(f.cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, latencyQueries_, static_cast<uint32_t>(2 * cur_));
+  }
   inFrame_ = true;
   rendering_ = false;
   pipeline_ = VK_NULL_HANDLE;
@@ -3623,6 +4034,10 @@ void VulkanDevice::EndFrame(std::vector<uint8_t>* capture, bool present) {
     Barrier(cmd, swap, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_ASPECT_COLOR_BIT);
     swapLayouts_[swapIndex_] = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
   }
+  if (latency_ && latencyQueries_) {  // (the latency limiter: the frame's last timestamp)
+    vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, latencyQueries_, static_cast<uint32_t>(2 * cur_ + 1));
+    latencySlots_[cur_].timed = true;
+  }
   vkEndCommandBuffer(cmd);
   FlushUploads();  // (what this frame draws with goes to the card ahead of it)
   VkPipelineStageFlags wait = VK_PIPELINE_STAGE_TRANSFER_BIT;
@@ -3635,6 +4050,7 @@ void VulkanDevice::EndFrame(std::vector<uint8_t>* capture, bool present) {
   si.signalSemaphoreCount = show ? 1 : 0;
   si.pSignalSemaphores = show ? &rendered_[swapIndex_] : nullptr;
   vkQueueSubmit(queue_, 1, &si, f.done);
+  if (latency_ || measureLatency) latencySlots_[cur_].handed = Now(), latencySlots_[cur_].order = ++handedCount_;
   if (show) {
     VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
     pi.waitSemaphoreCount = 1;
@@ -3642,9 +4058,21 @@ void VulkanDevice::EndFrame(std::vector<uint8_t>* capture, bool present) {
     pi.swapchainCount = 1;
     pi.pSwapchains = &swapchain_;
     pi.pImageIndices = &swapIndex_;
+    VkPresentIdKHR pid{VK_STRUCTURE_TYPE_PRESENT_ID_KHR};  // (the latency limiter's and the measure's)
+    uint64_t id = 0;
+    if (PresentIds()) {
+      id = presentIdNext_++;
+      pid.swapchainCount = 1;
+      pid.pPresentIds = &id;
+      pi.pNext = &pid;
+    }
     const VkResult r = vkQueuePresentKHR(queue_, &pi);
     if (r != VK_SUCCESS) chainStale_ = true;  // (out of date or suboptimal: a new chain before the next frame)
     imageHeld_ = false;
+    if (id) {
+      lastPresentId_ = id;
+      if (measureLatency) Watch(id, latencySlots_[cur_].read);
+    }
   }
   inFrame_ = false;
   if (capture) {

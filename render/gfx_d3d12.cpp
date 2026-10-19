@@ -26,6 +26,7 @@
 #include <dxgi1_6.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <array>
 #include <condition_variable>
@@ -37,6 +38,7 @@
 #include <thread>
 #include <unordered_map>
 
+#include "gfx_latency.h"
 #include "gfx_pacing.h"
 
 namespace render::gfx {
@@ -319,6 +321,9 @@ class D3D12Device final : public Device {
   Texture WindowPicture() override { return generating_ ? windowPictures_[cur_] : Texture{}; }
   Texture BetweenPicture() override { return generating_ ? betweenPictures_[cur_] : Texture{}; }
   bool SetPhotoWindow(int width, int height) override;
+  bool SetLatencyLimiter(bool on) override;
+  bool LatencyLimiter() const override { return latency_; }
+  void WaitForNextFrame() override;
 
  private:
   // (photomode) SetPhotoWindow: the picture and the depth a frame draws its window into while it is on, their size;
@@ -328,6 +333,29 @@ class D3D12Device final : public Device {
   bool photoOn_ = false;
   bool PhotoNow() { return photoOn_ && Find(photoColor_) && Find(photoDepth_); }
   void BindPhotoWindow(bool clearColor, const float clearValue[4], bool clearDepth);
+  // the latency limiter (gfx.h, SetLatencyLimiter; gfx_latency.h): the switch (to wantLatency_), making the swap
+  // chain anew; the swap chain's flags (the waitable object's only while it is on); the frames' work taken from the
+  // slots the card has finished; the wait for a frame to begin (with the just-in-time wait or without), and with
+  // frame generation, the wait for the presenter; the swap chain's frame statistics taken (the refreshes, what was
+  // shown when, refreshes missed)
+  void SwitchLatency();
+  UINT ChainFlags(bool presenter) const;
+  bool ChainWrongForVsync() const {  // (the limiter on, without frame generation: the chain made for the other vsync)
+    return latency_ && !generating_ && ((chainFlags_ & DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT) != 0) != vsync_;
+  }
+  void TakeWork();
+  double CardFree() const;
+  void LimitFrames(bool justInTime);
+  void WaitForPresenter();
+  void TakeStatistics();
+  double Deadline() const;
+  // (refreshes a picture is shown for, with vsync)
+  UINT Interval() const { return static_cast<UINT>(std::clamp(syncInterval, 1, 4)); }
+  UINT LastPresent() const {  // (the number of the swap chain's last Present: the frame statistics' numbering)
+    UINT n = 0;
+    swapChain_->GetLastPresentCount(&n);
+    return n;
+  }
   // frame generation (gfx.h): the swap chain made on `queue`; each frame slot's window picture and the one made
   // between; the thread that shows them (Presenter), its start, its end (after what was handed to it), waiting
   // until it has shown all it was handed and the card has copied it; waiting until a slot's pictures are copied
@@ -502,6 +530,7 @@ class D3D12Device final : public Device {
     ID3D12Resource* between = nullptr;  // the picture made between (none: the frame alone)
     ID3D12Resource* frame = nullptr;
     bool vsync = true;
+    double readAt = 0;                  // (measureLatency) when the frame's input was read
   };
   bool generating_ = false, wantGenerating_ = false;
   std::function<bool()> makeBetween_;
@@ -525,11 +554,53 @@ class D3D12Device final : public Device {
   uint64_t slotCopied_[kFrames] = {};  // the present fence's value once the card has copied the slot's pictures
   Pacing pacing_;                      // (the presenter's)
   double lastShown_ = 0;               // (the presenter's: when it last showed a picture)
+
+  // the latency limiter (SetLatencyLimiter): asked for, and on (the swap chain then made with its frame latency
+  // waitable object, latencyWait_, at a frame latency of latencyAhead_); whether the frame to come has had its
+  // waits already, on that object among them (until its Present uses it); when the last input read was
+  // (WaitForNextFrame; 0: none since the last frame began), and the time the frame to come is to be done by and
+  // whether its start was put off for it; each slot's frame: its input read, its hand-over to the card, that time
+  // and whether, and whether the card's time for it was taken (two timestamps a slot, written only while the limiter
+  // is on)
+  bool wantLatency_ = false, latency_ = false;
+  HANDLE latencyWait_ = nullptr;
+  UINT chainFlags_ = 0;  // (the swap chain's, as it was made: ResizeBuffers keeps them)
+  // (latencyDebt_: frames let ahead that the object is to take back, LimitFrames)
+  int latencyAhead_ = 1, latencyDebt_ = 0;
+  bool latencyTicket_ = false, latencyStalled_ = false;
+  double readAt_ = 0, nextDeadline_ = 0;
+  bool nextPaced_ = false;
+  struct LatencySlot {
+    double read = 0, handed = 0, deadline = 0;
+    bool paced = false, timed = false;
+  };
+  LatencySlot latencySlots_[kFrames];
+  Com<ID3D12QueryHeap> latencyQueries_;
+  Com<ID3D12Resource> latencyTimes_;
+  gfx::LatencyLimiter limiter_;
+  Waiter latencyWaiter_;
+  // the swap chain's frame statistics (the main thread's, or the presenter's while frame generation is on): the
+  // refreshes, the newest picture shown and its refresh, the refresh's time for the main thread while the presenter
+  // takes them; and the measure (measureLatency)
+  RefreshGrid grid_;
+  UINT statsPresent_ = 0, statsRefresh_ = 0;
+  double statsShownAt_ = 0;  // (the time of the refresh the newest picture shown was first shown at)
+  long statsAsked_ = 0, statsMissing_ = 0;  // (the measure's: the statistics asked for, and not given)
+  uint64_t chainBase_ = 0;  // (added to a swap chain's picture numbers for the measure's: each new chain starts again)
+  std::atomic<double> presenterPeriod_{0};
+  LatencyRecord latencyRecord_;
+  LatencyCost cost_;  // (the measure's: what the limiter's own work and waits took)
 };
 
 D3D12Device::~D3D12Device() {
   if (generating_) StopPresenter();
   if (queue_ && fence_) WaitIdle();
+  if (measureLatency) {
+    latencyRecord_.Print(latency_ ? "Direct3D 12 (low latency)" : "Direct3D 12", vsync_ ? grid_.Period() * Interval() : 0, grid_.Period());
+    fprintf(stderr, "render: Direct3D 12: the frame statistics asked for %ld times, not given %ld\n", statsAsked_, statsMissing_);
+    if (latency_) limiter_.Print("Direct3D 12"), cost_.Print("Direct3D 12");
+  }
+  if (latencyWait_) CloseHandle(latencyWait_);
   if (fenceEvent_) CloseHandle(fenceEvent_);
   if (presentEvent_) CloseHandle(presentEvent_);
 }
@@ -808,7 +879,9 @@ bool D3D12Device::MakeSwapChain(ID3D12CommandQueue* queue, std::string* error) {
   sd.BufferCount = kFrames;
   sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
   sd.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
-  sd.Flags = tearing_ ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
+  // (frame generation's: the presenter shows from it)
+  const bool presenter = presentQueue_ && queue == presentQueue_.Get();
+  sd.Flags = chainFlags_ = ChainFlags(presenter);
   Com<IDXGISwapChain1> sc1;
   HRESULT hr = factory_->CreateSwapChainForHwnd(queue, hwnd_, &sd, nullptr, nullptr, sc1.Put());
   if (SUCCEEDED(hr)) hr = sc1->QueryInterface(IID_PPV_ARGS(swapChain_.Put()));
@@ -819,7 +892,30 @@ bool D3D12Device::MakeSwapChain(ID3D12CommandQueue* queue, std::string* error) {
     return false;
   }
   factory_->MakeWindowAssociation(hwnd_, DXGI_MWA_NO_ALT_ENTER);
+  latencyAhead_ = 1;
+  latencyDebt_ = 0;
+  latencyTicket_ = latencyStalled_ = false;
+  // the latency limiter: a frame latency of one, and the object that says when a frame may begin
+  if (chainFlags_ & DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT) {
+    swapChain_->SetMaximumFrameLatency(1);
+    latencyWait_ = swapChain_->GetFrameLatencyWaitableObject();
+  }
+  // (a new swap chain counts its pictures from the start: the measure's numbers go on)
+  statsPresent_ = statsRefresh_ = 0;
+  chainBase_ += uint64_t{1} << 32;
   return true;
+}
+
+// The swap chain's flags: as they always were (tearing where the system allows it), and with the latency limiter on
+// and vsync the frame latency waitable object's. Not without vsync (frames are then not held back for the screen, and
+// a chain with the object ran slower there in most runs: 1.4 -> 1.8-3.0 ms a frame, light scene, busy machine; the
+// limiter keeps only its wait for the card then), and not for frame generation's presenter: its chain stays as it
+// always was (a frame latency of one there, waited for before each picture, cost the pictures' rate at 240 Hz and
+// without vsync, as much as half of it on a busy machine; WaitForPresenter keeps the real frames waiting for the
+// presenter few instead). The chain is made anew when vsync is switched (WaitForNextFrame, BeginFrame).
+UINT D3D12Device::ChainFlags(bool presenter) const {
+  const bool waitable = latency_ && vsync_ && !presenter;
+  return (tearing_ ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0u) | (waitable ? DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT : 0u);
 }
 
 // (between frames, the card idle)
@@ -829,6 +925,8 @@ bool D3D12Device::RemakeSwapChain(ID3D12CommandQueue* queue) {
     f.garbage.clear();
   }
   depth_.Reset();
+  if (latencyWait_) CloseHandle(latencyWait_);
+  latencyWait_ = nullptr;
   swapChain_.Reset();  // (the window's old swap chain gone before another is made for it)
   std::string why;
   if (!MakeSwapChain(queue, &why)) {
@@ -916,6 +1014,226 @@ bool D3D12Device::SwitchFrameGeneration() {
   return true;
 }
 
+// The latency limiter switched now when between frames, else at the next WaitForNextFrame or BeginFrame.
+bool D3D12Device::SetLatencyLimiter(bool on) {
+  wantLatency_ = on;
+  if (!inFrame_ && wantLatency_ != latency_) SwitchLatency();
+  return inFrame_ || latency_ == on;  // (false: the swap chain could not be made with the waitable object)
+}
+
+// The swap chain made anew, with the frame latency waitable object or without it (as it always was: ChainFlags), the
+// card idle; while frame generation is on its presenter's chain is the same either way and stays (the presenter
+// stopped and started again around the switch).
+void D3D12Device::SwitchLatency() {
+  if (wantLatency_ && !latencyQueries_ && ticksPerMs_ > 0) {  // the slots' timestamps, the first time
+    D3D12_QUERY_HEAP_DESC qd = {};
+    qd.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+    qd.Count = 2 * kFrames;
+    D3D12_HEAP_PROPERTIES hp = HeapProps(D3D12_HEAP_TYPE_READBACK);
+    D3D12_RESOURCE_DESC rd = BufferResourceDesc(16 * kFrames);
+    if (FAILED(device_->CreateQueryHeap(&qd, IID_PPV_ARGS(latencyQueries_.Put()))) ||
+        FAILED(device_->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(latencyTimes_.Put()))))
+      latencyQueries_ = {}, latencyTimes_ = {};
+  }
+  if (generating_) StopPresenter();
+  WaitIdle();
+  latency_ = wantLatency_;
+  // (only where its flags change: without vsync the chain is the same either way, and a chain made anew without vsync
+  // ran at times far slower than the first one made for the window: 1.4 -> 4.6 ms a frame, the light scene)
+  if (!generating_ && ChainFlags(false) != chainFlags_ && !RemakeSwapChain(queue_.Get()) && latency_) {
+    fprintf(stderr, "render: Direct3D 12: the latency limiter could not be switched on\n");
+    latency_ = wantLatency_ = false;
+    RemakeSwapChain(queue_.Get());
+  }
+  limiter_ = gfx::LatencyLimiter{};
+  for (LatencySlot& s : latencySlots_) s = LatencySlot{};
+  readAt_ = nextDeadline_ = 0;
+  nextPaced_ = false;
+  if (generating_) {
+    pacing_.Reset();
+    lastShown_ = 0;
+    StartPresenter();
+  }
+}
+
+// Called by the host just before it reads its input: with the limiter on, the waits that keep the frames waiting to
+// be shown to one (or two, gfx_latency.h), then the wait that begins the frame just in time; with it off, nothing
+// (the moment is only noted for the measure).
+void D3D12Device::WaitForNextFrame() {
+  if (inFrame_) return;
+  if (wantLatency_ != latency_ || ChainWrongForVsync()) SwitchLatency();
+  if (latency_ && !PhotoNow()) {  // (a photo's frames are never shown: nothing to wait for, photo.h)
+    if (generating_) WaitForPresenter();
+    else LimitFrames(true);
+  }
+  if (latency_ || measureLatency) readAt_ = Now();
+}
+
+// The frames the card has finished, for the limiter, in the order they were handed over: their input read, their
+// hand-over, the card's first and last timestamps in the processor's time (by the queue's clock calibration) and its
+// time for them, and the time each was to be done by.
+void D3D12Device::TakeWork() {
+  if (!latencyTimes_) return;
+  const uint64_t done = fence_->GetCompletedValue();
+  int order[kFrames], n = 0;
+  for (int i = 0; i < kFrames; ++i)
+    if (latencySlots_[i].timed && done >= frames_[i].fence) order[n++] = i;
+  if (n == 0) return;
+  std::sort(order, order + n, [&](int a, int b) { return frames_[a].fence < frames_[b].fence; });
+  UINT64 calibratedCard = 0, calibratedQpc = 0;
+  static const double qpcPerSecond = [] {
+    LARGE_INTEGER f;
+    QueryPerformanceFrequency(&f);
+    return static_cast<double>(f.QuadPart);
+  }();
+  const bool calibrated = SUCCEEDED(queue_->GetClockCalibration(&calibratedCard, &calibratedQpc));
+  const double ticksPerSecond = ticksPerMs_ * 1000;
+  // (a timestamp in the processor's time: the calibration's, and the card's ticks from the calibration to it)
+  auto cpuTime = [&](uint64_t t) {
+    return calibrated ? static_cast<double>(calibratedQpc) / qpcPerSecond + (static_cast<double>(t) - static_cast<double>(calibratedCard)) / ticksPerSecond : 0.0;
+  };
+  for (int k = 0; k < n; ++k) {
+    LatencySlot& s = latencySlots_[order[k]];
+    s.timed = false;
+    void* mapped = nullptr;
+    const SIZE_T at = static_cast<SIZE_T>(order[k]) * 16;
+    D3D12_RANGE range = {at, at + 16};
+    if (FAILED(latencyTimes_->Map(0, &range, &mapped))) continue;
+    uint64_t t[2];
+    std::memcpy(t, static_cast<const uint8_t*>(mapped) + at, sizeof t);
+    D3D12_RANGE none = {0, 0};
+    latencyTimes_->Unmap(0, &none);
+    LatencyFrame f;
+    f.read = s.read, f.handed = s.handed, f.deadline = s.deadline, f.paced = s.paced;
+    if (t[1] > t[0]) {
+      f.card = static_cast<double>(t[1] - t[0]) / ticksPerSecond;
+      f.cardBegin = cpuTime(t[0]), f.cardEnd = cpuTime(t[1]);
+    }
+    limiter_.Work(f);
+  }
+}
+
+// When the card will be done with the frames it was given (0: not known): the newest finished frame's end, then for
+// each frame not finished yet, in the order handed over, the card's least time for a frame from its hand-over or the
+// end of the one before, whichever is later.
+double D3D12Device::CardFree() const {
+  double free = limiter_.LastCardEnd();
+  if (free <= 0) return 0;
+  int order[kFrames], n = 0;
+  for (int i = 0; i < kFrames; ++i)
+    if (latencySlots_[i].timed) order[n++] = i;
+  std::sort(order, order + n, [&](int a, int b) { return frames_[a].fence < frames_[b].fence; });
+  for (int k = 0; k < n; ++k) free = std::max(free, latencySlots_[order[k]].handed) + limiter_.Card();
+  return free;
+}
+
+// Without frame generation: the frame latency (one, or two where frames do not fit into a refresh one after the
+// other), the wait on the swap chain's object until a frame may begin (once a frame: the host may call this more than
+// once, and BeginFrame waits itself when it did not), and then the wait that begins it as late as the frames before
+// allow (gfx_latency.h): for the refresh it will be shown at, and until the card is about to be free of the frames
+// before. Without vsync the chain has no such object (ChainFlags): only the wait for the card is left.
+void D3D12Device::LimitFrames(bool justInTime) {
+  const double t0 = Now();
+  TakeWork();
+  const double t1 = Now();
+  limiter_.Pace(vsync_, grid_.Period() * Interval());
+  // (the object counts the frames that may still begin, as a semaphore: a higher frame latency adds to its count at
+  // once, a lower one takes nothing away (as Wine's notes on it say too), so what was let ahead before is taken back
+  // here (latencyDebt_), as it comes free, by waits that do not wait)
+  if (latencyWait_ && limiter_.Ahead() != latencyAhead_ && SUCCEEDED(swapChain_->SetMaximumFrameLatency(static_cast<UINT>(limiter_.Ahead())))) {
+    latencyDebt_ = limiter_.Ahead() < latencyAhead_ ? latencyDebt_ + latencyAhead_ - limiter_.Ahead() : 0;
+    latencyAhead_ = limiter_.Ahead();
+  }
+  if (!latencyTicket_ && latencyWait_) {
+    // (never for good: a window hidden or minimised shows nothing, and its object may not come free; after a wait that
+    // ran out, the object is only looked at until it comes free again, so such a window's frames are not held up; the
+    // frame that did not wait is taken back as above)
+    latencyStalled_ = WaitForSingleObjectEx(latencyWait_, latencyStalled_ ? 0 : 100, FALSE) == WAIT_TIMEOUT;
+    if (latencyStalled_) latencyDebt_ = std::min(latencyDebt_ + 1, kFrames);  // (never more than the swap chain holds)
+    else
+      while (latencyDebt_ > 0 && WaitForSingleObjectEx(latencyWait_, 0, FALSE) == WAIT_OBJECT_0) --latencyDebt_;
+  }
+  latencyTicket_ = true;  // (this frame's waits done: BeginFrame does not wait again)
+  const double t2 = Now();
+  TakeStatistics();
+  limiter_.Pace(vsync_, grid_.Period() * Interval());
+  nextDeadline_ = vsync_ ? Deadline() : 0;
+  nextPaced_ = false;
+  const double now = Now();
+  const double at = justInTime ? limiter_.StartAt(now, nextDeadline_, CardFree()) : now;
+  nextPaced_ = justInTime && limiter_.Paced();
+  cost_.Add(t1 - t0, now - t2, t2 - t1, at - now);
+  if (!justInTime) return;
+  if (at > now) latencyWaiter_.Until(at);
+}
+
+// When the frame to come must be done (0: not known): the refresh it will be first shown at, as the swap chain's
+// statistics tell it (the newest picture shown and the refresh it was first shown at, then an interval of refreshes
+// for each picture handed over since and one for this frame), less one refresh: the system's compositor takes a
+// window's picture at the refresh before the one it shows it at (measured: the frame latency object comes free just
+// after a refresh, with the picture handed over last still a whole interval from being shown). A window the
+// compositor leaves out (one that fills the screen) is shown a refresh sooner; the deadline is then a refresh early,
+// which costs that refresh but misses none.
+double D3D12Device::Deadline() const {
+  const double period = grid_.Period();
+  if (!statsPresent_ || period <= 0) return 0;
+  const UINT queued = LastPresent() - statsPresent_;  // (handed over and not yet shown)
+  if (queued > 4) return 0;  // (the statistics behind: a window not on the screen)
+  return statsShownAt_ + (static_cast<double>((queued + 1) * Interval()) - 1) * period;
+}
+
+// With frame generation (the presenter shows the frames): the real frames handed to the presenter and not yet shown
+// kept to one, or to none where the screen sets the pace (vsync) and a frame's work fits well within a refresh:
+// the frame then begins as the frame before is shown, and is ready for its own first showing a refresh later. The
+// presenter and its swap chain are as without the limiter (ChainFlags), and there is no just-in-time wait beyond
+// this: the pictures' pacing is the presenter's (docs/render-optimisation.md, section 9).
+void D3D12Device::WaitForPresenter() {
+  const double period = presenterPeriod_.load();
+  limiter_.Pace(vsync_, period);
+  TakeWork();
+  if (limiter_.SteppedBack()) return;  // (the way without the limiter, where frames came faster so: gfx_latency.h, Keep)
+  const bool none = vsync_ && period > 0 && limiter_.Predicted() + limiter_.Margin() < period;
+  std::unique_lock<std::mutex> lock(presentMutex_);
+  presentDone_.wait_for(lock, std::chrono::milliseconds(250), [&] {
+    int waiting = 0;
+    for (bool b : slotShowing_) waiting += b ? 1 : 0;
+    return waiting <= (none ? 0 : 1);
+  });
+}
+
+// The swap chain's frame statistics, when it says something new: the refreshes (their period and the last one's
+// time), the newest picture shown and the refresh it was first shown at (for the measure), and whether a refresh was
+// missed since the picture seen before (more refreshes than pictures, with vsync: for the limiter's margin).
+void D3D12Device::TakeStatistics() {
+  DXGI_FRAME_STATISTICS st = {};
+  ++statsAsked_;
+  if (!swapChain_ || FAILED(swapChain_->GetFrameStatistics(&st)) || !st.SyncRefreshCount) {
+    ++statsMissing_;  // (none while the window is not shown by the compositor: hidden, covered, minimised)
+    return;
+  }
+  static const double qpcPerSecond = [] {
+    LARGE_INTEGER f;
+    QueryPerformanceFrequency(&f);
+    return static_cast<double>(f.QuadPart);
+  }();
+  // (Now()'s clock: steady_clock is QPC's)
+  const double sync = static_cast<double>(st.SyncQPCTime.QuadPart) / qpcPerSecond;
+  grid_.Refresh(st.SyncRefreshCount, sync);
+  // (the time between pictures with vsync: the refresh's, or its multiple with an interval; the presenter's thread,
+  // while frame generation is on: the main thread's limiter takes it from there)
+  if (generating_) presenterPeriod_.store(grid_.Period() * Interval());
+  if (st.PresentCount <= statsPresent_ || grid_.Period() <= 0) return;
+  const double shown = sync - static_cast<double>(st.SyncRefreshCount - st.PresentRefreshCount) * grid_.Period();
+  if (!generating_ && latency_ && vsync_ && statsPresent_ && st.PresentRefreshCount >= statsRefresh_) {
+    const bool late = st.PresentRefreshCount - statsRefresh_ > (st.PresentCount - statsPresent_) * Interval();
+    limiter_.Shown(late, true);
+  }
+  statsPresent_ = st.PresentCount;
+  statsRefresh_ = st.PresentRefreshCount;
+  statsShownAt_ = shown;
+  if (measureLatency) latencyRecord_.Shown(chainBase_ + st.PresentCount, shown);
+}
+
 void D3D12Device::StartPresenter() {
   presentStop_ = false;
   for (int i = 0; i < kFrames; ++i) slotShowing_[i] = false;
@@ -984,10 +1302,13 @@ void D3D12Device::Presenter() {
       waiter.Until(lastShown_ + spacing);
       copied = Show(job.between, job.vsync, &lastShown_);
       record.Shown(lastShown_, true);
+      if (measureLatency || latency_) TakeStatistics();
     }
     waiter.Until(lastShown_ + spacing);
     copied = Show(job.frame, job.vsync, &lastShown_);
     record.Shown(lastShown_, false);
+    if (measureLatency) latencyRecord_.Presented(chainBase_ + LastPresent(), job.readAt);
+    if (measureLatency || latency_) TakeStatistics();
     {
       std::lock_guard<std::mutex> lock(presentMutex_);
       slotShowing_[job.slot] = false;
@@ -1013,7 +1334,7 @@ uint64_t D3D12Device::Show(ID3D12Resource* picture, bool vsync, double* at) {
   ID3D12CommandList* lists[] = {showList_.Get()};
   presentQueue_->ExecuteCommandLists(1, lists);
   *at = Now();  // (as AMD's: the time just before it is shown, not after Present returns, which may wait)
-  HRESULT hr = swapChain_->Present(vsync ? 1 : 0, !vsync && tearing_ ? DXGI_PRESENT_ALLOW_TEARING : 0);
+  HRESULT hr = swapChain_->Present(vsync ? Interval() : 0, !vsync && tearing_ ? DXGI_PRESENT_ALLOW_TEARING : 0);
   if (FAILED(hr)) Complain("Present", hr);
   showFences_[a] = presentNext_++;
   presentQueue_->Signal(presentFence_.Get(), showFences_[a]);
@@ -1047,9 +1368,9 @@ void D3D12Device::Resize(int width, int height) {
   depth_.Reset();
   width_ = width;
   height_ = height;
-  HRESULT hr = swapChain_->ResizeBuffers(kFrames, static_cast<UINT>(width), static_cast<UINT>(height), kBackFormat,
-                                         tearing_ ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0);
+  HRESULT hr = swapChain_->ResizeBuffers(kFrames, static_cast<UINT>(width), static_cast<UINT>(height), kBackFormat, chainFlags_);
   if (FAILED(hr)) Complain("ResizeBuffers", hr);
+  if (chainFlags_ & DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT) swapChain_->SetMaximumFrameLatency(static_cast<UINT>(latencyAhead_));
   CreateTargets();
   if (generating_ && !MakeFramePictures()) {  // (frame generation off: the swap chain back on the frame's queue)
     fprintf(stderr, "render: Direct3D 12: frame generation's pictures could not be made; it is off\n");
@@ -1896,11 +2217,22 @@ void D3D12Device::Destroy(Pipeline pipeline) {
 
 void D3D12Device::BeginFrame(const float clearColor[4]) {
   if (wantGenerating_ != generating_) SwitchFrameGeneration();  // (asked for during the frame before)
+  if (wantLatency_ != latency_ || ChainWrongForVsync()) SwitchLatency();
+  // (the latency limiter, where the host did not wait before its input: the wait for the swap chain's object here)
+  if (latency_ && !generating_ && !latencyTicket_ && !PhotoNow()) LimitFrames(false);  // (not for a photo's frames)
   // (with frame generation, the slots in turn; the presenter done with the slot's pictures)
   cur_ = generating_ ? static_cast<int>(frameNumber_ % kFrames) : static_cast<int>(swapChain_->GetCurrentBackBufferIndex());
   FrameSlot& f = frames_[cur_];
   WaitFence(f.fence);
   if (generating_) WaitPresented(cur_);
+  // (the slot's frame before, done now, for the limiter before its record makes way: where the card sets the pace it
+  // is done only just in time for this wait, after the limiter last looked)
+  if (latency_ && latencySlots_[cur_].timed) TakeWork();
+  if (latency_ || measureLatency) {  // (this frame's input read: the host's last WaitForNextFrame, else now)
+    latencySlots_[cur_] = LatencySlot{readAt_ > 0 ? readAt_ : Now(), 0, nextDeadline_, nextPaced_, false};
+    readAt_ = nextDeadline_ = 0;
+    nextPaced_ = false;
+  }
   if (timeQueries_ && f.marks.size() > 1) {  // the stages' times of this slot's last frame, done now
     void* mapped = nullptr;
     const size_t first = static_cast<size_t>(cur_) * kMarks;
@@ -1929,6 +2261,7 @@ void D3D12Device::BeginFrame(const float clearColor[4]) {
   inFrame_ = true;
   f.allocator->Reset();
   list_->Reset(f.allocator.Get(), nullptr);
+  if (latency_ && latencyQueries_) list_->EndQuery(latencyQueries_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, static_cast<UINT>(2 * cur_));
 
   D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtvStart_, dsv = dsvStart_;
   int viewWidth = width_, viewHeight = height_;
@@ -2682,13 +3015,25 @@ void D3D12Device::EndFrame(std::vector<uint8_t>* capture, bool present) {
     list_->ResolveQueryData(timeQueries_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, first, static_cast<UINT>(f.marks.size()), timeReadback_.Get(),
                             static_cast<UINT64>(first) * 8);
   }
+  if (latency_ && latencyQueries_) {  // (the latency limiter: the frame's last timestamp, and both copied out)
+    list_->EndQuery(latencyQueries_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, static_cast<UINT>(2 * cur_ + 1));
+    list_->ResolveQueryData(latencyQueries_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, static_cast<UINT>(2 * cur_), 2, latencyTimes_.Get(),
+                            static_cast<UINT64>(cur_) * 16);
+    latencySlots_[cur_].timed = true;
+  }
   list_->Close();
   FlushUploads();  // (what this frame draws with is on the card before it)
   ID3D12CommandList* lists[] = {list_.Get()};
   queue_->ExecuteCommandLists(1, lists);
+  if (latency_ || measureLatency) latencySlots_[cur_].handed = Now();
   if (present && !window && !photo) {
-    HRESULT hr = swapChain_->Present(vsync_ ? 1 : 0, !vsync_ && tearing_ ? DXGI_PRESENT_ALLOW_TEARING : 0);
+    HRESULT hr = swapChain_->Present(vsync_ ? Interval() : 0, !vsync_ && tearing_ ? DXGI_PRESENT_ALLOW_TEARING : 0);
     if (FAILED(hr)) Complain("Present", hr);
+    latencyTicket_ = false;  // (the limiter: the Present used the wait on the swap chain's object)
+    if (measureLatency) {
+      latencyRecord_.Presented(chainBase_ + LastPresent(), latencySlots_[cur_].read);
+      TakeStatistics();
+    }
   }
   if (infoQueue_) {  // --debug: the validation layer's messages, which otherwise only a debugger sees
     std::vector<char> buf;
@@ -2708,7 +3053,7 @@ void D3D12Device::EndFrame(std::vector<uint8_t>* capture, bool present) {
     {
       std::lock_guard<std::mutex> lock(presentMutex_);
       slotShowing_[cur_] = true;
-      presentJobs_.push_back({cur_, f.fence, made ? between->resource.Get() : nullptr, window->resource.Get(), vsync_});
+      presentJobs_.push_back({cur_, f.fence, made ? between->resource.Get() : nullptr, window->resource.Get(), vsync_, latencySlots_[cur_].read});
     }
     presentWake_.notify_one();
   }

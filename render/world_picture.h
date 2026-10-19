@@ -89,6 +89,15 @@ class WorldPicture {
   void DrawToWindow(const Camera& camera, int width, int height, double tick);
   // DrawToWindow waits for the screen's refresh (vertical sync, as at first) or not.
   void SetVsync(bool on);
+  // "Low Latency" (the Video tab's; off as at first, a player's option): the camera, the cursor's feedback and the
+  // interface answer the mouse and the keys sooner (gfx.h, Device::SetLatencyLimiter). The frames waiting to be shown
+  // are kept to one and each frame begins just in time for its refresh; with it, the host calls WaitForNextFrame once
+  // a frame, just before it reads its input (its window's events, the mouse's place), and then draws the frame
+  // (DrawToWindow): the wait is there, so that what it reads is as fresh as the frame allows. Set before or after
+  // Open; only for the picture shown in the host's window.
+  void SetLowLatency(bool on);
+  // Once a frame, just before the host reads its input. With Low Latency off it returns at once.
+  void WaitForNextFrame();
   // For checking: the next DrawToWindow also reads what it shows back into `out` (RGBA bytes).
   void CaptureNextWindowFrame(std::vector<uint8_t>* out);
   void GameStarted(const moho::Sim& sim);

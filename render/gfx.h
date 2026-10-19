@@ -357,6 +357,36 @@ class Device {
   // photo of its size; (-1, -1): off and the picture let go of. Between frames. False where the picture cannot be made
   // (then it is off).
   virtual bool SetPhotoWindow(int width, int height) { return width <= 0 || height <= 0; }
+  // The latency limiter ("Low Latency", a player's option; off as at first): the camera, the cursor's feedback and
+  // the interface answer the mouse and the keys sooner. With it on, the frames waiting to be shown are kept to one
+  // (Direct3D 12: the swap chain made with its frame latency waitable object, at a frame latency of 1; Vulkan: the
+  // driver's present wait where it has one, else the frames on the card kept to two), and a frame then begins as
+  // late as the frames before it allow (gfx_latency.h): never so early that it would only wait for the card to
+  // finish the frames before, and on Direct3D 12 with vsync, still in time for the refresh it is for, less a margin
+  // that grows at once when a frame was too late and shrinks slowly while none is (Vulkan has no such wait: the
+  // present wait's times are too uneven to pace by). Frames that cannot be made one after the other within a
+  // refresh are let two ahead, so it shows as many frames as without. Without vsync only the wait for the card is
+  // kept (the swap chain and the frames waiting to be shown as without the limiter). Where the frames do not keep up
+  // (without vsync, or slower than the refresh), it tries the way without its waits now and then and keeps to that
+  // where frames come faster so (other programs sharing the card: gfx_latency.h, Keep).
+  // With frame generation, only the real frames waiting for the presenter are kept to one (or none, where they are
+  // made well within a refresh); the presenter and its swap chain are as without. A host calls WaitForNextFrame once
+  // a frame, just before it reads its input (the window's events, the mouse's place): the waits are there, so that
+  // what is read is as fresh as it can be; with the limiter off it returns at once (a host that does not call it
+  // still gets the waits, in BeginFrame, only after its input read). Switching happens at once between frames, else
+  // at the next WaitForNextFrame or BeginFrame (Direct3D 12 makes its swap chain anew, as frame generation does, and
+  // waits for the card). With it off, the swap chain and the waits are as they always were. False where the device
+  // cannot.
+  virtual bool SetLatencyLimiter(bool on) { return !on; }
+  virtual bool LatencyLimiter() const { return false; }
+  virtual void WaitForNextFrame() {}
+  // (checks) the latency measured: from each input read (WaitForNextFrame's return) to the refresh its frame was
+  // first shown at (Direct3D 12: the swap chain's frame statistics; Vulkan: the present wait, where the driver has
+  // it), and the gaps between the frames shown; one line printed when the device goes. Set before the first frame.
+  bool measureLatency = false;
+  // (checks) with vsync, each picture shown for this many refreshes (1 to 4; Direct3D 12's sync interval; Vulkan: 1
+  // always): a screen of 240 Hz shows 60 pictures a second with 4
+  int syncInterval = 1;
   // The graphics card's time at this point of the frame: a stage of that name starts here and lasts
   // until the next mark or the frame's end. `name` must last (a string literal). At most 62 a frame.
   virtual void Mark(const char* name) = 0;
