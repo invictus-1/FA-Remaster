@@ -37,8 +37,8 @@ addressed to the interface track (a fifth lighting setting, Ground Detail; open)
 ## 40. To the VISUALS track: the trees and stumps off SETONS_R's stream (2026-10-19, not blocking; Chris: "Yes, move the 28 trees and stumps off the stream onto the bank, and tell the engine so it knows SETONS_R changed.")
 
 The 28 gameplay props whose base lies on the stream ribbon (stream.json's half width + 0.25), 14 on each twin, found
-read-only by `_scratch\render\edgetrees\find.py` (edge.json): 9 pine groups, 3 big pine groups ... per twin: pine06/07
-groups, pine06_big groups, roots, a stump and a dead trunk, at along 76-109 (upper), 155-169 (lower), 196-201 (the
+read-only by `_scratch\render\edgetrees\find.py` (edge.json). Per twin: 7 pine groups (pine06/07 groupa/b), 4 big
+pine groups (pine06_big), roots, a stump and a dead trunk, at along 76-109 (upper), 155-169 (lower), 196-201 (the
 mouth). Chris saw them marked (edgetrees\t2_*_marked.png) and said move them. Asked: your stream_clear.py with
 `--trees` on SETONS_R (and SETONS_Q, whose stream is the same), onto the bank as for the scenery, the twins kept
 mirrored; tell the renderer when it is live. The engine is told by the renderer (a sim-relevant change: reclaimable,
