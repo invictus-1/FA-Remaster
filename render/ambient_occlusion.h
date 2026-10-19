@@ -24,6 +24,15 @@ class AmbientOcclusion {
   void Compute(const View& view, const Camera& camera, gfx::Texture sceneDepth);
   // Draws into the current (scene) pass.
   void Apply(const View& view);
+  // [coverdark] The ground cover (grass.h) left out: its blades are one to three pixels wide and its cards thin, which
+  // the depth alone takes for solid walls (each blade shut in by the ground in front of its foot, the ground round it
+  // shut in by the blade: dark slashes and halos all over a meadow). Around the cover's drawing, CoverBefore keeps the
+  // ground's depth and CoverAfter where the cover then lies in front of it; this frame's Compute then reads, where the
+  // cover is still what is seen, the ground's depth behind it: the cover neither shades the ground nor itself, and
+  // takes the occlusion of the ground it stands on (by a unit, a rock, a crease) and its contact shadows. Each begins
+  // its own pass (Post::ContinueScene afterwards); call both or neither in a frame, with Compute after them.
+  void CoverBefore(const View& view, gfx::Texture sceneDepth);
+  void CoverAfter(const View& view, gfx::Texture sceneDepth);
 
   float radius = 0.9f;    // world units: how far a surface looks for things that shade it
   float strength = 1.0f;  // 0: no effect
@@ -49,6 +58,14 @@ class AmbientOcclusion {
   gfx::Texture target_;
   int width_ = 0, height_ = 0;
   Constants constants_{};
+  // [coverdark] (the ground cover left out: its shaders, made the first time it is wanted, -1 they cannot be; the
+  // ground's depth, the cover's and the scene's without it, each one 32-bit float a pixel at the view's size; kept /
+  // marked this frame)
+  bool CoverReady(const View& view);
+  gfx::Pipeline computeCover_, groundCopy_, coverMark_, coverSolid_;
+  gfx::Texture groundDepth_, coverDepth_, solidDepth_;
+  int coverMade_ = 0, coverWidth_ = 0, coverHeight_ = 0;
+  bool coverKept_ = false, coverNow_ = false;
 };
 
 }  // namespace render

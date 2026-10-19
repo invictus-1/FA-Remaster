@@ -2669,9 +2669,21 @@ void World::Render() {
     // ground cover near the camera (prepared before the pass)
     if (grassNow_) {
       Stage("ground cover");
+      // [coverdark] left out of the ambient occlusion (ambient_occlusion.h, CoverBefore): the ground's depth kept before it
+      const bool coverOut = look == Look::Modern && (ao.strength > 0 || contactShadows);
+      if (coverOut) {
+        ao.CoverBefore(view, post.Depth());
+        post.ContinueScene();
+        lights.Bind();
+      }
       grass.Draw(view, camera, terrain.HeightTexture(), terrain.HeightUnit(), terrain.GroundColours(), terrain.NormalMap(),
                  static_cast<float>(map.width), static_cast<float>(map.height), map.water.present ? map.water.elevation : -1e9f,
                  plantsReady_ ? coverA_ : gfx::Texture{}, plantsReady_ ? coverB_ : gfx::Texture{}, grassBlasts_ ? blasts.Field() : gfx::Texture{});
+      if (coverOut) {  // [coverdark] (and where it lies)
+        ao.CoverAfter(view, post.Depth());
+        post.ContinueScene();
+        lights.Bind();
+      }
     }
     // range rings on the land, before anything stands on it (their picture is made from the
     // ground's depth; over the water they are laid after the water)

@@ -210,12 +210,13 @@ cbuffer Plants : register(b1) {
                     // its world units a metre
   float4 order[4];  // the cells by group (16 indices)
   float4 groups[6]; // per group: where its cells start in `order`, how many
+  float4 tones[16]; // [coverdark] per cell: rgb its mean colour (linear), w how far it takes the ground's colour (0: none)
 #ifdef PLANTS
   float4 plantsK[2];  // [plants] (plants.h) PlantLife::Constants
 #endif
 };
 Texture2D<float> heightMap : register(t0);
-Texture2D cover : register(t1);          // Terrain::GroundColours (unused here but for its place)
+Texture2D cover : register(t1);          // Terrain::GroundColours: rgb the ground's colour ([coverdark] the grass's clumps take it)
 Texture2D groundNormals : register(t2);  // x in alpha, z in green
 Texture2D<float> trampled : register(t3);
 Texture2D densityA : register(t4);       // blades, clumps, flowers, dry stalks
@@ -272,6 +273,7 @@ struct VOut {
 #ifdef PLANTS
   nointerpolation float4 burnt : TEXCOORD7;  // [plants] how it is burnt (PlantsBurnLook)
 #endif
+  nointerpolation float3 tint : TEXCOORD8;   // [coverdark] its colour times this (the ground's under a clump of grass)
 };
 
 static const float2 kCard[6] = {float2(0, 1), float2(1, 1), float2(0, 0), float2(0, 0), float2(1, 1), float2(1, 0)};
@@ -379,6 +381,15 @@ VOut VS(uint id : SV_VertexID) {
   n.y = sqrt(saturate(1 - dot(n.xz, n.xz)));
   o.ground = n;
   o.shade = float2(SunShadow(root + float3(0, height * 0.5, 0), n), above * frame / max(height, 0.001));
+  // [coverdark] a clump of the meadow's grass takes the ground's colour under it, as the blades do (the card's own light
+  // and dark kept, its mean brought to the ground's, a little varied): else, at the art's own colour, it stands out as a
+  // dark blot on the ground it grows from
+  float4 tone = tones[cell];
+  o.tint = 1;
+  [branch] if (tone.w > 0) {
+    float3 under = ToLinear(cover.SampleLevel(samplerLinearClamp, foot / mapInfo.xy, 0).rgb) * (0.9 + 0.2 * PlantRand(PlantHash(hc + 10)));
+    o.tint = lerp(1, clamp(under / max(tone.rgb, 1e-3), 0.25, 4), tone.w);
+  }
   return o;
 }
 
@@ -408,7 +419,7 @@ float4 PS(VOut i) : SV_Target {
   rayLightsAtMost = 1;  // (one ray for the small lights' shadows; lighting.h, SmallLightsTraced)
 #endif
   // (the sun's light through its leaves, World::leafLight: by the card's own way, the side the eye sees)
-  float3 albedo = ToLinear(c.rgb);
+  float3 albedo = ToLinear(c.rgb) * i.tint;  // ([coverdark] i.tint)
 #ifdef PLANTS
   albedo = PlantsBurnColour(albedo, i.burnt);  // [plants]
 #endif
@@ -425,6 +436,7 @@ struct PlantConstants {
   float cells[48][4];
   float order[4][4];
   float groups[6][4];
+  float tones[16][4];   // [coverdark]
   float plantsK[2][4];  // [plants] (read by the shaders with them only)
 };
 
@@ -642,6 +654,13 @@ bool GroundCover::SetPlants(const JsonValue& cover, TextureCache* textures, cons
     cell[2][1] = clump.items.size() == 2 ? static_cast<float>(clump.items[0].NumberOr(1)) : 1.0f;
     cell[2][2] = clump.items.size() == 2 ? static_cast<float>(clump.items[1].NumberOr(1)) : 1.0f;
     if (height <= 0 || cell[1][0] <= 0) continue;
+    // [coverdark] the grass's clumps (not the dry ones): their mean colour, from the cover's stats (its sRGB, made linear
+    // as the shader makes the atlas's and the ground's), for bringing it to the ground's; none without stats
+    const JsonValue& mean = cover["stats"][name]["albedo_srgb8"];
+    if (g == 0 && mean.items.size() == 3) {
+      for (int k = 0; k < 3; ++k) plants_.tones[index][k] = std::pow(static_cast<float>(mean.items[static_cast<size_t>(k)].NumberOr(0)) / 255.0f, 2.2f);
+      plants_.tones[index][3] = 1;
+    }
     tallest = std::max(tallest, high);
     byGroup[g].push_back(index);
   }
@@ -729,6 +748,10 @@ void GroundCover::Draw(const View& view, const Camera& camera, gfx::Texture heig
     for (int i = 0; i < 16; ++i) p->cells[i * 3 + 2][3] = std::min(metre * plantBoost, plantTallest / std::max(plants_.cells[i][1][2], 1e-3f));
     std::copy(&plants_.order[0][0], &plants_.order[0][0] + 16, &p->order[0][0]);
     std::copy(&plants_.groups[0][0], &plants_.groups[0][0] + 24, &p->groups[0][0]);
+    for (int i = 0; i < 16; ++i) {  // [coverdark] (how far the grass's clumps take the ground's colour)
+      std::copy(plants_.tones[i], plants_.tones[i] + 3, p->tones[i]);
+      p->tones[i][3] = plants_.tones[i][3] * clumpsToGround;
+    }
     if (reacting) std::copy(plants->Constants(), plants->Constants() + 8, &p->plantsK[0][0]);  // [plants]
     device_->SetPipeline(reacting ? reactingPipelines_[with + 1] : blasts ? blastPlantPipeline_ : plantPipeline_);
     device_->SetConstants(0, &view.constants, sizeof view.constants);
