@@ -1370,6 +1370,51 @@ all (even with ten times the dust).
   game's camera would need a long level line of sight it does not have; the shafts in the woods show from close and
   middle heights (to 350-550 of camera distance) and leave the far views to the light in the air.
 
+## The ground's relief close by: ground parallax (first version, 2026-10-19; a helper's, for review)
+
+Chris, 2026-10-19: "build the ground parallax for close zoom, as an option like the other looks". `World::groundParallax`
+(viewer `--ground-parallax`, `--ground-parallax-tune depth[,reach[,shadows]]`; `Terrain::parallax`, set by World each frame
+in the modern look; render/terrain.cpp, `GroundParallax`); off by default, proposed for the "Ground Detail" setting.
+- **What was there before it**: a remastered layer's third map holds its scan's relief in its blue (0..1, 0.5 the
+  middle); it told the layers where to meet (pebbles out of sand) and the mud where its hollows are, but every picture
+  lay flat on the ground's surface: close up a stony road read as a photograph of stones.
+- **How**: in the ground's pixel shader, before the layers are read, the eye's ray is followed down through the relief of
+  the one or two layers that show most at the pixel (their heights joined as the layers meet; as the second gives way to
+  a third, the strongest one's alone, so that no seam shows where they change places): even steps (one for about every
+  two pixels the ray crosses the relief, 4 to 24), then three halvings and the crossing between the last two (parallax
+  occlusion mapping with a binary refinement). Every read after it (albedo, normal, the third map, the mud, the deep
+  tracks' field) is at the place found, with the surface's own steps (no blur at the relief's edges); the relief is read a
+  level less sharp than the pictures (steadier, thin grass blades make no walls). The sun: a short march up its ray (2 to
+  6 steps by its length in pixels) shades the hollows behind stones, soft by how far the relief stands over the ray
+  (`--ground-parallax-tune ...,shadows`), none where deep tracks have pressed the ground smooth.
+- **Depth**: the scans' real relief (the visuals session, 2026-10-19: about 3 cm over scans of 1 to 3 m, stretched to
+  0..1) by each layer's world units a metre (remap.json's real_size_m over the layer's repeat): on SETONS_R 0.12 world
+  units (soil, wet sand, forest floor, scree), 0.16 dry sand, 0.22 pale rock, 0.024 the 50 m rock. At most a fiftieth of
+  the repeat (a small scan stretched far: SETONS_Q's 33 cm of dry sand over 8 units would stand 0.73 high, a tenth of its
+  width) and 0.25 world units; half for grass (its scan's relief is mostly blades lying over the turf, which this draws
+  as solid ridges: 0.06 grass, 0.072 dry grass).
+- **Where**: full within 20 world units of the eye, gone by 30, and nowhere the whole relief would cross under about a
+  pixel: the game's camera at distance 45 sees none (its nearest ground is 37 away) and pays nothing for it. Drawn by a
+  pipeline of its own (the same shader with GROUND_PARALLAX), made the first time it is on: off, the ground's shader is
+  compiled from the same text as before.
+- **What lies on the ground** (decals, scorches, craters, tread marks without deep tracks, the plants) lies on the
+  geometry, which is the relief's middle, and is not shifted. Judged by measuring the ground's picture with it on against
+  off in the same frames during camera slides (phase correlation in 64-pixel windows, 1280x800): from a camera as the
+  game's at zoom 10 sliding 4 units, every window within about a pixel (10th to 90th centile -1.1 to +1.1), its median
+  moving under 0.2 px over the slide; from the cinematic camera 2 over the ground, the stones stand up to 9-10 px off,
+  the median within 2 px. The ground slides under a decal only as far as real stones half the relief high would against
+  paint on the ground (the parallax 1.5 cm makes), and decals' own pictures are soft: nothing reads as swimming.
+- **Cost** (2560x1440, RTX 4090, SETONS_R, the lowest of three runs): the ground at zoom 10 0.374 -> 0.510 ms, zoom 5
+  0.434 -> 0.608, the cinematic camera 1.5 over the ground at a low sun (the most there is) 0.310 -> 0.550, from the
+  game's height (45) 0.339 -> 0.345.
+- **Checked**: off, regress3 all eight 0 px; the base exe against ours off on SETONS_R (close by day, the cinematic camera
+  at a low sun, deep tracks with the mud in rain) and SETONS_Q (close): 0 px on both backends; on against off from the
+  game's height: 0 px on both backends; on, Vulkan against Direct3D 12: mean 0.21 of 255 (off: 0.06).
+- Open: Chris to judge the depth (`--ground-parallax-tune 0.5` / `1.5` to compare); thin things in a scan (grass blades,
+  twigs) stand as solid ridges with their sides drawn from their edge's picture, the method's limit; from very low and
+  near (the cinematic camera under 2 units) the steepest edges alias a little without the temporal upscaler; decals do not
+  follow the relief (a scorch lies on the middle, not over the stones' tops).
+
 ## The options
 
 Each is off by default (but `hiddenOutlines`, on: Chris's word, item 15) and, off, leaves the picture as it was, pixel
@@ -1415,6 +1460,7 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `beyondLand` | a softer map edge (the ground past it dims over 10 units and a soft shadow replaces the dark line; the fog of war goes on past it) and land far off: coastlines, hills and snow-capped ranges round the map out to four map sizes, which way land lies read from the map's own edges, coloured by its ground, lit and hazed (beyond_land.h; Chris, 2026-10-18; in the Atmosphere setting) | 0.03-0.19 ms at 1440p; made once a map (13-21 ms) | the world beyond the edge (the game's edge option two) |
 | `season` (`WorldPicture::SetSeason`) | the season a map is drawn in (Summer as at first, Autumn; Winter reserved): its ground's materials, ground cover, props and mud as its remap.json's "seasons" block lists them (the visuals session's art); in autumn leaves in the wind (off broadleaf trees, blown over the ground where the cover grows; `fallingLeaves`; with motion on, each leaf's own motion drawn for FSR 3 and frame generation, `FallingLeaves::DrawMotion`, +0.004 ms), the autumn climate (showers, more fog, morning fog) (seasons.h; Chris, 2026-10-18: a player's option) | the leaves 0.01 ms; the rest nothing (other textures) | taken in when a map opens; maps with a "seasons" block |
 | `plantsReact` | grass and bushes pressed over where units drive and springing back; ground, grass and plants burnt black, then brown, where blasts and fires were, growing back; felled trees still, burnt ones bare; felled trees fall smoothly | about 0.03 ms of its own in a fight (the field 0.010, the burnt ground 0.008, the grass +0.009), and the sun's maps 0.045 ms cheaper (what sways drawn together): the frame a little cheaper (16 MB for the burnt picture on SETONS_R) | |
+| `groundParallax` | close by, the remastered ground's stones stand up and its hollows sink as the eye passes (its materials' scanned relief), a low sun shading the hollows; nothing from the game's height (proposed for the "Ground Detail" setting) | +0.14 to 0.17 ms at zoom 10 to 5, +0.24 the cinematic camera low over the ground, nothing from the game's height | a remastered map (its materials' third maps) |
 
 Ray tracing means Direct3D 12 with DXR 1.1 or Vulkan with ray queries: never on the Mac (MoltenVK has none);
 where it is missing those options do nothing. `rayReflections` builds the surfaces' shaders with ray
@@ -1434,7 +1480,7 @@ so there is less clutter). WorldPicture sets each bundle's options together, bef
 | `SetSoftShadows` | `softShadows`, `contactShadows` | about +0.37 ms |
 | `SetRayTracing` | `bounceLight`, `rayReflections`, `rayLightShadows` (reflections and the small lights' shadows from the next map) | about +0.75 ms; at night with many lights about 0.5 ms more |
 | `SetWeatherEffects` | `litRain`, `rainSplashes`, `waterDetail`; proposed: `horizonWeather` | about +0.05 ms in rain, +0.04 by water; the horizon about +0.1 (0.21 from the strategic view in snow) |
-| `SetGroundDetail` | `groundCover`, `battleScars`, `leafLight`, `deepTracks`, `wildlife`, `plantsReact` ([plants], 2026-10-18) | +0.05 to 0.16 ms zoomed in, nothing far out; scars up to +0.56 ms with 2000 in view |
+| `SetGroundDetail` | `groundCover`, `battleScars`, `leafLight`, `deepTracks`, `wildlife`, `plantsReact` ([plants], 2026-10-18); proposed: `groundParallax` ([parallax], 2026-10-19: +0.14 to 0.17 ms zoomed in) | +0.05 to 0.16 ms zoomed in, nothing far out; scars up to +0.56 ms with 2000 in view |
 | `SetFrameGeneration` | `frameGeneration` (a sixth setting, asked of the ui: "Frame Generation") | 1.1-1.4 ms a frame drawn; twice the frames shown |
 | `SetHiddenOutlines` | `hiddenOutlines` (readability, not light: its own setting, ON at first; proposed to the ui as "Hidden Unit Outlines") | 0.06-0.08 ms |
 
