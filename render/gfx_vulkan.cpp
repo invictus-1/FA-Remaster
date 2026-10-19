@@ -523,8 +523,16 @@ class VulkanDevice final : public Device {
   bool FrameGenerating() const override { return generating_; }
   Texture WindowPicture() override { return generating_ ? windowPictures_[cur_] : Texture{}; }
   Texture BetweenPicture() override { return generating_ ? betweenPictures_[cur_] : Texture{}; }
+  bool SetPhotoWindow(int width, int height) override;
 
  private:
+  // (photomode) SetPhotoWindow: the picture and the depth a frame draws its window into while it is on, their size; a
+  // photo frame's end (read back, never shown)
+  Texture photoColor_, photoDepth_;
+  int photoWidth_ = 0, photoHeight_ = 0;
+  bool photoOn_ = false;
+  bool PhotoNow() { return photoOn_ && Find(photoColor_) && Find(photoDepth_); }
+  void EndFramePhoto(std::vector<uint8_t>* capture);
   struct Image {  // the window's picture and its depth (not texture records)
     VkImage image = VK_NULL_HANDLE;
     Allocation memory;
@@ -550,7 +558,7 @@ class VulkanDevice final : public Device {
   bool Acquire(VkSemaphore semaphore, uint32_t* image);
   void Show(uint32_t image, double* at);
   void EndFrameGenerating(std::vector<uint8_t>* capture, bool present);
-  bool EnsureReadback();
+  bool EnsureReadback(VkDeviceSize need = 0);  // (0: the window's size)
   bool CreateWindowImages(std::string* error);
   bool NextConstantPage();
   bool MakeImage(Image* image, VkFormat format, int width, int height, VkImageUsageFlags usage, VkImageAspectFlags aspect);
@@ -1583,6 +1591,92 @@ bool VulkanDevice::Acquire(VkSemaphore semaphore, uint32_t* image) {
     }
     std::this_thread::yield();  // (not a sleep: Windows' sleeps last a whole timer tick, up to 15.6 ms)
   }
+}
+
+// (photomode) The picture a photo's frames draw their window into, and its depth (gfx.h).
+bool VulkanDevice::SetPhotoWindow(int width, int height) {
+  if (inFrame_) return false;  // (between frames only)
+  if (width < 0 || height < 0) {  // let go of
+    photoOn_ = false;
+    if (photoColor_) Destroy(photoColor_);
+    if (photoDepth_) Destroy(photoDepth_);
+    photoColor_ = photoDepth_ = {};
+    photoWidth_ = photoHeight_ = 0;
+    return true;
+  }
+  photoOn_ = false;
+  if (width == 0 || height == 0) return true;  // (the window again; the picture kept)
+  if (width > 16384 || height > 16384) return false;
+  if (!Find(photoColor_) || !Find(photoDepth_) || width != photoWidth_ || height != photoHeight_) {
+    if (photoColor_) Destroy(photoColor_);
+    if (photoDepth_) Destroy(photoDepth_);
+    TargetDesc td;
+    td.width = width;
+    td.height = height;
+    td.format = Format::RGBA8;
+    photoColor_ = CreateTarget(td);
+    td.format = Format::D32;  // (cleared to 0: depth is reversed)
+    photoDepth_ = CreateTarget(td);
+    photoWidth_ = width;
+    photoHeight_ = height;
+    if (!photoColor_ || !photoDepth_) {
+      SetPhotoWindow(-1, -1);
+      return false;
+    }
+  }
+  photoOn_ = true;
+  return true;
+}
+
+// (photomode) A photo frame's end: its picture read back with `capture`; nothing shown, the window's own picture and
+// the chain's image held for the next frame untouched.
+void VulkanDevice::EndFramePhoto(std::vector<uint8_t>* capture) {
+  Frame& f = frames_[cur_];
+  VkCommandBuffer cmd = f.cmd;
+  if (queries_ && !f.marks.empty()) {  // the frame's end
+    vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, queries_, static_cast<uint32_t>(cur_) * kMarks + static_cast<uint32_t>(f.marks.size()));
+    f.marks.push_back("(end)");
+  }
+  TextureRec* picture = Find(photoColor_);
+  const VkDeviceSize bytes = static_cast<VkDeviceSize>(photoWidth_) * static_cast<VkDeviceSize>(photoHeight_) * 4;
+  const bool reading = capture && EnsureReadback(bytes);
+  if (reading) {
+    Transition(picture, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    VkBufferImageCopy copy{};
+    copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    copy.imageExtent = {static_cast<uint32_t>(photoWidth_), static_cast<uint32_t>(photoHeight_), 1};
+    vkCmdCopyImageToBuffer(cmd, picture->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback_, 1, &copy);
+    VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};  // (what the copy wrote, for the processor to read)
+    mb.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+    mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    mb.dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT;
+    mb.dstAccessMask = VK_ACCESS_2_HOST_READ_BIT;
+    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    di.memoryBarrierCount = 1;
+    di.pMemoryBarriers = &mb;
+    vkCmdPipelineBarrier2(cmd, &di);
+    Transition(picture, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  }
+  vkEndCommandBuffer(cmd);
+  FlushUploads();  // (what this frame draws with goes to the card ahead of it)
+  VkPipelineStageFlags wait = VK_PIPELINE_STAGE_TRANSFER_BIT;
+  VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+  si.waitSemaphoreCount = waitAcquired_ ? 1 : 0;  // (an image of the chain acquired at BeginFrame stays held for the next)
+  si.pWaitSemaphores = &f.acquired;
+  si.pWaitDstStageMask = &wait;
+  si.commandBufferCount = 1;
+  si.pCommandBuffers = &cmd;
+  vkQueueSubmit(queue_, 1, &si, f.done);
+  inFrame_ = false;
+  if (capture) {
+    capture->clear();
+    if (reading) {
+      vkWaitForFences(device_, 1, &f.done, VK_TRUE, UINT64_MAX);
+      capture->resize(static_cast<size_t>(bytes));
+      std::memcpy(capture->data(), readbackMemory_.mapped, capture->size());
+    }
+  }
+  cur_ = (cur_ + 1) % kFrames;
 }
 
 // A frame's end with frame generation on: the picture between made (it may dispatch and draw), both pictures copied
@@ -2622,7 +2716,24 @@ void VulkanDevice::BeginPass(const PassDesc& pass) {
   VkCommandBuffer cmd = frames_[cur_].cmd;
   VkImageView colorView = VK_NULL_HANDLE, depthView = VK_NULL_HANDLE;
   int width = width_, height = height_;
-  if (pass.window) {
+  if (pass.window && PhotoNow()) {  // (photomode) a photo's frame: its picture and depth in place of the window's
+    TextureRec* c = Find(photoColor_);
+    TextureRec* d = Find(photoDepth_);
+    if (passColor_ != photoColor_.id || passDepth_ != photoDepth_.id) ReleasePassTargets();
+    for (uint32_t& bound : boundTextures_)  // (a target is not read while it is drawn into)
+      if (bound && (bound == photoColor_.id || bound == photoDepth_.id)) {
+        bound = 0;
+        setDirty_ = true;
+      }
+    Transition(c, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    Transition(d, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
+    colorView = c->attachView;
+    depthView = d->attachView;
+    width = photoWidth_;
+    height = photoHeight_;
+    passColor_ = photoColor_.id;
+    passDepth_ = photoDepth_.id;
+  } else if (pass.window) {
     TextureRec* picture = generating_ ? Find(windowPictures_[cur_]) : nullptr;
     if (picture) {  // frame generation: the slot's window picture, as a target (not read while drawn into)
       const uint32_t id = windowPictures_[cur_].id;
@@ -3436,8 +3547,8 @@ void VulkanDevice::Mark(const char* name) {
   f.marks.push_back(name);
 }
 
-bool VulkanDevice::EnsureReadback() {
-  const VkDeviceSize need = static_cast<VkDeviceSize>(width_) * static_cast<VkDeviceSize>(height_) * 4;
+bool VulkanDevice::EnsureReadback(VkDeviceSize need) {
+  if (need == 0) need = static_cast<VkDeviceSize>(width_) * static_cast<VkDeviceSize>(height_) * 4;
   if (readbackSize_ < need) {
     if (readback_) {
       vkDeviceWaitIdle(device_);
@@ -3468,6 +3579,10 @@ void VulkanDevice::EndFrame(std::vector<uint8_t>* capture, bool present) {
   EndRendering();
   ReleasePassTargets();
   ReleaseGeneral();
+  if (PhotoNow()) {  // (photomode) a photo's frame: read back, never shown
+    EndFramePhoto(capture);
+    return;
+  }
   if (generating_ && Find(windowPictures_[cur_]) && Find(betweenPictures_[cur_])) {
     EndFrameGenerating(capture, present);
     return;

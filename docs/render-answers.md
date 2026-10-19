@@ -4,6 +4,42 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To ui: the photo mode's calls are in (2026-10-18)
+
+As promised in "a photo mode, together" below, with one addition (`SetMap`, for the free camera's reach):
+
+```
+cine.Start(gameCam); float mw, mh; picture.MapSize(&mw, &mh); cine.SetMap(mw, mh);   // Fly's reach needs the map's size
+each frame: cine.Fly(seconds, {right, up, forward}, {turnX, turnY}, roll); cine.Update(seconds, ground);
+            picture.DrawToWindow(cine.Shown(gameCam, ground), w, h, tick);   // marks and bars off as on the cinecam path
+Esc:        gameCam = cine.Stop(ground);   // eases back, the roll levels out
+picture.SetPhotoMoment(hour 0..24, kind, strength 0..1);  picture.ClearPhotoMoment();
+picture.GetPhotoMoment(&hour, &kind, &strength);    // the game's own when none is set; hour -1: the map's fixed light
+WorldPicture::WeatherKinds()   // clear, fair, cloudy, overcast, rain, storm, fog, snow: `kind` is the index
+float d = picture.FocusAt(x, y);   // window pixels; 0 = sky (do not put 0 in lens.focus: 0 is auto-focus)
+picture.StartPhoto(cine.View(ground), w * k, h * k, tick, 0);   // k 1..4; false while one is being made
+then every frame DrawToWindow as ever; picture.PhotoProgress() 0..1; if (picture.TakeDonePhoto(&px, &pw, &ph)) save it
+```
+
+- move: held keys -1..1 (x3 with Shift); forward along the ground, up straight up; the speed 1.5 x the eye's height a
+  second (at least 4 units a second), eased over 0.1 s; two keys together no faster than one. A wheel notch: up = +-1
+  held for 0.2 s.
+- turn: not a rate: the drag's pixels this frame over the window's height (x right, y down); a drag across the whole
+  window turns by the view's height.
+- roll: Q -1, E +1, 30 degrees a second; it stays where it is let go, and within 1.5 degrees of level settles level;
+  at most 90 either way.
+- The moment eases over 1 s of the wall clock, paused too; the ground wet or snowed on to match; modern look only; a
+  photo shows it settled.
+- FocusAt: 0.1-6 ms (its first call about 60 ms more); 0 while a photo is being made.
+- A photo: during its frames DrawToWindow shows the world as it was when the photo began, with your layer over it
+  live (a progress bar works); camera input is not drawn until it is done. PhotoProgress back to 0 and TakeDonePhoto
+  false: it could not be made. Large photos are drawn in tiles (the photographic look's vignette and fringe are left
+  out of a tiled photo, or they would repeat in each tile).
+- Measured (RTX 4090, every lighting bundle on): 1440p 1x 0.5-0.7 s, 2x 0.4-0.9 s, 4x 2.6-2.9 s; 4K 1x 0.25 s, 2x
+  1.3-1.7 s, 4x 4.9-5.3 s (15360x8640). The card takes 1.3-1.8 GB more while one is drawn, all given back; at 4x the
+  program peaks 2-3 GB more. Window frames while a photo is made: about 26 ms.
+- TakePhoto is unchanged.
+
 ## To visuals, section 57: autumn as a season, your form (2026-10-18)
 
 Your form, made from your art: a regrade in the shader would be colour tuning by another name, and autumn ground is

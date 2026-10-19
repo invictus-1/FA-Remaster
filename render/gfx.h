@@ -349,6 +349,14 @@ class Device {
   virtual Texture BetweenPicture() { return {}; }
   // (checks) EndFrame's capture reads the picture made between, when there is one, instead of the frame
   bool captureBetween = false;
+  // (photomode) A photo's frames (WorldPicture::StartPhoto): while on, the window a frame draws into is a picture of the
+  // device's own, `width` x `height` pixels (RGBA8, as the window's; at most 16384 a side) with a depth of its own, in
+  // place of the window and its depth: passes into the window draw there, at that size, EndFrame reads it back with
+  // `capture` and shows nothing, and no picture is made between frames. The window, its size (Width, Height) and what it
+  // last showed stay as they are. (0, 0): off, the next frame draws into the window again, the picture kept for another
+  // photo of its size; (-1, -1): off and the picture let go of. Between frames. False where the picture cannot be made
+  // (then it is off).
+  virtual bool SetPhotoWindow(int width, int height) { return width <= 0 || height <= 0; }
   // The graphics card's time at this point of the frame: a stage of that name starts here and lasts
   // until the next mark or the frame's end. `name` must last (a string literal). At most 62 a frame.
   virtual void Mark(const char* name) = 0;

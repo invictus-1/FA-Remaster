@@ -1029,6 +1029,65 @@ work is not starved of the processor).
    factory's beam light is a clear spot on grass by day, the Aeon gold reads khaki on green ground, Cybran lights tint
    a factory's arms pink at night.
 
+## Beyond the map's edge, part 2: the weather on the horizon (first version, 2026-10-18; a helper's, for review)
+
+Chris, from the snow showcase still: beyond the edge the sea was flat and empty into the fog, "too sharp like nothing is
+there", most of all on the snowy side. `World::horizonWeather` (viewer `--horizon`, `--horizon-parts ice,fog,showers,
+shadows` for one part alone, `--horizon-look floe=16,drift=0.08,fogheight=14,fog=1,showerspeed=1.2,shadow=0.4`;
+`render/horizon.h/.cpp`; modern look, with the world beyond the edge and a time of day; proposed for the "Weather Effects"
+setting, `WorldPicture::SetWeatherEffects`). Everything follows from the map, the weather's seed (`World::weatherSeed`,
+viewer `--seed`) and the clock, so every player and every replay sees the same; `MOHO64_DEBUG_HORIZON=1` says where the
+showers and icebergs are.
+- **Winter ice, while snow lies** (`World::snowLying`): floes on the sea past the edge, few and small a few units out,
+  more and larger farther out, closing into pack ice toward the horizon (nearer the more snow lies). Two sizes of floes,
+  each a cell of a Voronoi pattern (16 and 5 units), corners rounded, outlines bent by noise, neighbours frozen together
+  into floes of several cells (more of them in the pack: no honeycomb), each a size and shade of its own, lying in
+  patches and bands drawn out along the wind with open water between. Flat plates on the water (a pass after the water
+  over four strips round the map, tested against the scene's depth, so land beyond hides them), lit as the ground is
+  (`ModernLight`: the lying snow on them in patches, a wet darker rim), rocking a little as the swell runs under them,
+  drifting with the wind (0.08 units a second). A floe under about four pixels across, from far, goes over into its share
+  of the sea (no salting of white points). Sixteen small icebergs (2.5-7 units across, tabular or peaked) placed once a
+  map where the sea beyond is deep, 0.16-0.62 of the way out, rising as the snow comes; drawn with the scene before the
+  water (fourteen sides, five rings, faces half flat and half rounded), so the water foams round them and shows their
+  sunken part.
+- **Fog banks on the far sea**: a full-screen pass marching each line of sight (12 steps) through the layer they lie in,
+  beyond the edge only and only over the sea (the mist lies on low land), up to the scene's depth (per sample with MSAA).
+  Long low banks drawn out along the wind, drifting, thicker toward the horizon; how much fog by the mist's own reckoning
+  (`World::mistNow`: most at daybreak, after damp nights), the hour, fog, wetness and the cold (lying snow, a cold
+  climate). Lit as the light in the air is (air.cpp: the sun's light sent on mostly forward, Henyey-Greenstein g 0.55, so
+  a low sun behind a bank glows through it; some scattered on inside; the sky's light half as the air takes it and half
+  the haze's own colour, so a bank is never darker than the air round it), seen through the air (`ThroughAirTo`, the light
+  in the air's volume when it is on) and lost in the far haze with the sea under it (`BeyondScenery`).
+- **Showers on the horizon**: up to 16 rain curtains or, when it snows, snow squalls (whiter, wider, softer, more
+  slanted), as many as it rains or snows (a few under heavy cloud without rain), passing far out with the wind (1.2 units
+  a second, round a square holding the world beyond), seen only 0.28-0.97 of the way out. Each a column from the sea up to
+  the clouds' underside, leaning with the wind; drawn over the rectangle its box takes on the screen, the way through it
+  summed in five steps: densest in its middle, ragged at its edge, thinning into the cloud base, in streaks that fall.
+  Lit as the fog. Seen from high above, looking down on it, it gives way to its cloud (it is weather on the horizon).
+- **The clouds' shadows over the far sea**: where the far sea goes over into the haze (`BeyondFar`) its own shading, and
+  the clouds' shadows on it, are lost; the floes' pass carries the shadows on over the far water (`CloudShadow`, the 2D
+  layer's or the volumetric clouds'), fading toward the far end, as much as the cover is broken (none under an even
+  overcast, where it only set the far water apart from the land).
+- **Never over the playable map from the game's camera**: the floes begin a few units out and the icebergs well out;
+  where what the line of sight ends at is on the map, the fog banks and showers in front of it are left out (seen with the
+  game's camera's eye beyond the north edge, looking back over the fog: the map's pixels unchanged). A cinematic camera
+  sees the world as it is.
+- **Cost** at 1440p (RTX 4090, Direct3D 12, by the lowest times; the card shared with other work), icebergs + floes and
+  shadows + fog and showers: Chris's snow view from the game's camera 0.001 + 0.038 + 0.069 ms; the strategic view in
+  snow (the ice round the whole map) 0.000 + 0.102 + 0.108; low over the sea in snow with two squalls in view 0.001 +
+  0.020 + 0.090; in a storm with two rain shafts in view 0.121 for the showers; a cold dawn's fog 0.002 + 0.031 + 0.055.
+  The processor under 0.02 ms.
+- **Off**: nothing of it runs (its shaders are made the first frame it is on); pictures identical, pixel for pixel
+  (the regression, both backends). On, Vulkan as Direct3D 12 (the option's change of the picture differs by 0.08-0.18 in
+  255 over the pixels it changes, at most 6); Direct3D's own compiler (`--fxc`) makes the same shaders (0.24).
+- Its hooks: world.h (`horizonWeather`, `horizon`, after `energy`), world.cpp (`Begin` after the movement dust; `Render`
+  after the birds and after the water's range rings), main.cpp (`--horizon` ...), world_picture.cpp (the bundle). It binds
+  only slots of its own passes (t0 its noise, t2 the scene's depth, t3 the heights), no view-wide slot.
+- Open: Chris to judge (the floes' size, how much fog at dawn, the showers' streaks); the land beyond takes no carried
+  cloud shadows (only the water does); the icebergs are not in the sun's shadow maps or the ray scene (they cast no
+  shadow and are not mirrored by rays; the water's own mirror shows them); a shower's foot is cut where land beyond
+  stands in front of it, as it should be, but it does not wet that land.
+
 ## The options
 
 Each is off by default (but `hiddenOutlines`, on: Chris's word, item 15) and, off, leaves the picture as it was, pixel
@@ -1066,6 +1125,7 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `wildlife` | flocks of birds over the woods and gulls over the shores, scattered by fighting; fireflies at dusk and by night | about 0.02 ms (proposed for the "Ground Detail" setting) | a map with trees or shores |
 | `movementDust` | vehicles raise dust on dry ground, hover units throw spray, high aircraft draw contrails | about 0.07 ms with 60 units moving, 0.22 close up | |
 | `volumeExplosions` | big blasts as lit, glowing volumes; a nuke's flash over the map, its ring through the clouds, its mushroom cloud | about 0.25-0.4 ms with four blasts, up to 0.6 ms with a nuke filling half the screen (the files: tens of MB once on) | the visuals session's volume files |
+| `horizonWeather` | beyond the map's edge: winter ice (floes, pack ice, icebergs) while snow lies, fog banks, showers passing far out, the clouds' shadows over the far sea | about 0.1 ms from the game's camera, 0.21 from the strategic view in snow | a time of day; the world beyond the edge |
 
 Ray tracing means Direct3D 12 with DXR 1.1 or Vulkan with ray queries: never on the Mac (MoltenVK has none);
 where it is missing those options do nothing. `rayReflections` builds the surfaces' shaders with ray
@@ -1084,7 +1144,7 @@ so there is less clutter). WorldPicture sets each bundle's options together, bef
 | `SetAtmosphere` | `volumetricFog`, `volumetricClouds`, `skyTables` | about 0.25 ms less (needs a time of day) |
 | `SetSoftShadows` | `softShadows`, `contactShadows` | about +0.37 ms |
 | `SetRayTracing` | `bounceLight`, `rayReflections`, `rayLightShadows` (reflections and the small lights' shadows from the next map) | about +0.75 ms; at night with many lights about 0.5 ms more |
-| `SetWeatherEffects` | `litRain`, `rainSplashes`, `waterDetail` | about +0.05 ms in rain, +0.04 by water |
+| `SetWeatherEffects` | `litRain`, `rainSplashes`, `waterDetail`; proposed: `horizonWeather` | about +0.05 ms in rain, +0.04 by water; the horizon about +0.1 (0.21 from the strategic view in snow) |
 | `SetGroundDetail` | `groundCover`, `battleScars`, `leafLight` | +0.05 to 0.16 ms zoomed in, nothing far out; scars up to +0.56 ms with 2000 in view |
 | `SetFrameGeneration` | `frameGeneration` (a sixth setting, asked of the ui: "Frame Generation") | 1.1-1.4 ms a frame drawn; twice the frames shown |
 | `SetHiddenOutlines` | `hiddenOutlines` (readability, not light: its own setting, ON at first; proposed to the ui as "Hidden Unit Outlines") | 0.06-0.08 ms |

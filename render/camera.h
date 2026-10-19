@@ -21,6 +21,10 @@ struct Camera {
   // is placed round what the camera looks at is placed for such a view: the sun's shadow maps along the view out
   // to the distance, the ground cover ahead of the eye. False: the game's camera, as at first.
   bool cinematic = false;
+  // (photomode) The picture turned round the line of sight, radians: positive turns the camera's right side down (the
+  // horizon then leans the other way on the screen), as a free camera banks (cinecam.h, CineCamera::Fly). 0 for every
+  // other camera, which is then exactly as before.
+  float roll = 0;
 
   // right, up and back (pointing from the target to the eye), unit length
   void Axes(Vec3* right, Vec3* up, Vec3* back) const {
@@ -28,6 +32,12 @@ struct Camera {
     *back = {sh * cp, sp, ch * cp};
     *right = {ch, 0, -sh};
     *up = Cross(*back, *right);
+    if (roll != 0) {  // (photomode: right and up turned round the line of sight)
+      const float cr = std::cos(roll), sr = std::sin(roll);
+      const Vec3 r = *right, u = *up;
+      *right = r * cr - u * sr;
+      *up = u * cr + r * sr;
+    }
   }
   Vec3 Eye() const {
     Vec3 r, u, b;

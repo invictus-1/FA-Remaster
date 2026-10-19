@@ -36,6 +36,12 @@ WeatherNow WeatherAt(uint32_t seed, double seconds, Climate climate = Climate::T
 float LightningAt(uint32_t seed, double seconds, float rain, uint32_t* stroke = nullptr);
 // A number 0..1 from a seed and two whole numbers (always the same for the same three).
 float WeatherDraw(uint32_t seed, uint32_t a, uint32_t b);
+// (photomode) The kinds of weather WeatherAt's spells are drawn from, by number: 0 clear, 1 fair, 2 cloudy, 3 overcast,
+// 4 rain, 5 storm, 6 fog, 7 snow; each as WeatherAt gives it through such a spell (no flash). A number out of range: the
+// nearest kind.
+int WeatherKindCount();
+const char* WeatherKindName(int kind);
+WeatherNow WeatherKindOf(int kind);
 
 class Precipitation {
  public:

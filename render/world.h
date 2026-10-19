@@ -49,6 +49,7 @@
 #include "frame_generation.h"
 #include "gfx.h"
 #include "hot_metal.h"
+#include "horizon.h"  // [horizon]
 #include "icons.h"
 #include "lights.h"
 #include "linalg.h"
@@ -558,6 +559,25 @@ class World {
   // game's next (the temporal upscaler, motion, frame generation's picture), and with nothing of the interface laid
   // over it (icons, bars, order lines). What else of the interface is in the world the host takes out itself.
   bool photo = false;
+  // (photomode) A frame drawn for a tile of a photo (WorldPicture::StartPhoto, photo.h): the photo's own camera, round
+  // which what is placed for the camera is placed in every tile of it (the sun's and the lamps' shadows, the grass, the
+  // rain's box, the bounce light's probes, the smoke's shadow, lightning, deep tracks, the hot things' lights), so that
+  // the tiles agree where they meet. Off at first.
+  bool photoTiled = false;
+  Camera photoWhole;
+  const Camera& Placing() const { return photoTiled ? photoWhole : camera; }
+  // (photomode) A moment of the picture's own (WorldPicture::SetPhotoMoment): while `on`, each frame shows this hour and
+  // this weather in place of the game's, in the modern look, also where the map's own fixed light is used (the day is
+  // then on for the picture). The game's own go on underneath: its weather by the clock (weatherAuto), what that does to
+  // surfaces by the time, the hour as the host sets timeOfDay; between frames timeOfDay, cloudCover, rain, snow, fog,
+  // wet, snowLying and weatherAuto hold the game's own. Off at first: everything as before.
+  struct Moment {
+    bool on = false;
+    float hour = 12;                                   // 0..24
+    float clouds = 0.3f, rain = 0, snow = 0, fog = 0;  // as cloudCover, rain, snow, fog
+    float wet = 0, snowLying = 0;                      // what the weather has done to surfaces, 0..1
+  };
+  Moment moment;
   // (cinecam) The cinematic camera's lens (cinecam.h): its depth of field, on the finished light before the glow and
   // the tone curve (dof.h), in either look. Off at first.
   Lens lens;
@@ -780,6 +800,17 @@ class World {
   bool outlinesNow_ = false;  // (hidden outlines this frame)
   bool lightRaysNow_ = false;  // (the small lights' shadows by rays this frame)
   bool dustNow_ = false;  // (movement dust: on this frame)
+  // (photomode) the game's weather moved on to a frame; a moment of the picture's own put in for a frame (Begin) and the
+  // game's own hour and weather, kept aside meanwhile, put back (the end of Render)
+  float AdvanceWeather(float time, double clock);
+  void PutMomentIn(float time, double clock);
+  void TakeMomentOut();
+  struct GameWeather {
+    float timeOfDay, cloudCover, rain, snow, fog, wet, snowLying;
+    bool weatherAuto;
+  };
+  GameWeather gameWeather_{};
+  bool momentShown_ = false;
  public:
   EnergyShields energy;  // [energy shields] (last: the other members keep their places)
   // (photolook) A photographic look (photo_look.h; the visuals session's proposal 6, Chris 2026-10-18): the eye adapts
@@ -787,6 +818,15 @@ class World {
   // grain, colour fringe), at the end of the finishing in place of the plain tone curve. Modern look; off by default.
   PhotoLook photoLook;
   PhotoFinish photoFinish;
+  // [horizon] The weather on the horizon (horizon.h; Chris, 2026-10-18, "beyond the map's edge, part 2"): on the sea
+  // beyond the map's edge, winter ice while snow lies (floes thickening into pack ice, a few icebergs far out), low
+  // fog banks drifting, showers (rain curtains, snow squalls) passing far out, and the clouds' shadows carried over the
+  // far sea. Modern look, with the world beyond the edge (worldBeyond) and a time of day; off by default.
+  bool horizonWeather = false;
+  Horizon horizon;
+
+ private:
+  bool horizonNow_ = false;  // [horizon] (something of it this frame)
 };
 
 }  // namespace render

@@ -46,6 +46,10 @@
 //           once the game is where --tick asks, the world is drawn through it into that file, its
 //           answers about the screen are printed (and the life bars' anchors checked and marked in
 //           magenta, where custom names go), and the viewer ends
+// --photo-test  with --picture (photomode): the photo mode's pieces through the pixel interface (photo_test.h): the free
+//           camera flown by a script of inputs, moments of the picture's own, focus by a pixel, a shallow-focus photo, one
+//           picture against tiles, and photos of 1, 2 and 4 times the window's size timed at each of --photo-test-sizes
+//           WxH,WxH (2560x1440,3840x2160 unless given); pictures beside the --picture file, numbers printed
 // --settings <bundles>  with --picture: the game's lighting settings, as the interface sets them (WorldPicture's
 //           bundles): any of atmosphere, soft-shadows, ray-tracing, weather-effects, ground-detail,
 //           frame-generation, with commas between
@@ -195,6 +199,12 @@
 //           the flocks are, and the nearest at the start and the end; --wildlife-noise x,z,at[,every]: a noise of fighting
 //           there (loudness 1.5) `at` seconds in, and every `every` seconds after, to see a flock scatter;
 //           --bird-scale n: the birds' size times their own (1); --firefly-strength n: how bright the fireflies glow (1)
+// --horizon  [horizon] the weather on the horizon (horizon.h, World::horizonWeather; modern look, a time of day, the world
+//           beyond the edge): winter ice on the sea beyond the map's edge while snow lies (floes, pack ice, icebergs),
+//           fog banks on the far sea, showers passing far out, the clouds' shadows over the far sea. --horizon-parts
+//           <list>: only those of ice, fog, showers, shadows (commas between); --horizon-look name=value,...: its numbers
+//           (Horizon::Set: floe, drift, fogheight, fog, showerspeed, shadow); MOHO64_DEBUG_HORIZON=1: where its showers and
+//           icebergs are (said when their number changes); --seed n: the weather's seed, which places them
 // --bounce  bounce light (bounce.h, World::bounceLight; modern look, where the device has ray tracing): light thrown
 //           back by the ground, the hills and what stands on them, from probes the rays update
 // --ray-view  ray tracing's check view (ray_scene.h, World::rayView; where the device can): a ray from the camera
@@ -396,6 +406,7 @@
 #include "mesh_renderer.h"
 #include "models.h"
 #include "particles.h"
+#include "photo_test.h"
 #include "png.h"
 #include "post.h"
 #include "live_sim.h"
@@ -469,6 +480,8 @@ struct Options {
   float rippleSpeed = -1, rippleHalfLife = -1, rippleView = 0;  // --ripple-speed, --ripple-half-life, --ripple-view
   bool groundCover = false;             // --ground-cover
   bool wildlife = false, wildlifeVerbose = false;  // --wildlife, --wildlife-verbose
+  bool horizon = false;                            // [horizon] --horizon
+  std::string horizonParts, horizonLook;            // [horizon] --horizon-parts, --horizon-look
   float wildlifeNoise[4] = {0, 0, -1, 0};          // --wildlife-noise x,z,at,every (at < 0: none)
   float birdScale = -1, fireflyStrength = -1;      // --bird-scale, --firefly-strength
   float plantDensity = -1;              // --plant-density
@@ -517,6 +530,8 @@ struct Options {
   float airDust = -1, airSun = -1, airLamps = -1;  // --air-dust, --air-sun, --air-lamps (negative: the default)
   int airAcross = 0, airDeep = 0;       // --air-cells
   bool pictureWindow = false;           // --picture-window
+  bool photoTest = false;               // (photomode) --photo-test
+  std::vector<std::pair<int, int>> photoTestSizes = {{2560, 1440}, {3840, 2160}};  // --photo-test-sizes
   bool windowCycle = false;             // --window-cycle
   float effectsQuality = 1;             // --effects-quality
   float upscale = 1;                    // --fsr
@@ -652,6 +667,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--water-ripples") o->waterRipples = true;
     else if (a == "--ground-cover") o->groundCover = true;
     else if (a == "--wildlife") o->wildlife = true;
+    else if (a == "--horizon") o->horizon = true;  // [horizon]
     else if (a == "--wildlife-verbose") o->wildlife = o->wildlifeVerbose = true;
     else if (a == "--battle-scars") o->battleScars = true;
     else if (a == "--leaf-light") o->leafLight = true;
@@ -687,6 +703,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--clouds-full") o->clouds3d = o->cloudsFull = true;
     else if (a == "--cloud-zoom") o->cloudZoom = true;  // (cloudzoom)
     else if (a == "--picture-window") o->pictureWindow = true;
+    else if (a == "--photo-test") o->photoTest = true;  // (photomode)
     else if (a == "--window-cycle") o->windowCycle = true;
     else if (a == "--prepass") o->prepass = true;
     else if (a == "--no-prepass") o->prepass = false;
@@ -763,6 +780,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
       if (sscanf(v, "%f,%f,%f,%f", &o->wildlifeNoise[0], &o->wildlifeNoise[1], &o->wildlifeNoise[2], &o->wildlifeNoise[3]) < 3) return false;
       o->wildlife = true;
     }
+    else if (a == "--horizon-parts") o->horizon = true, o->horizonParts = v;  // [horizon]
+    else if (a == "--horizon-look") o->horizonLook = v;  // [horizon]
     else if (a == "--bird-scale") o->birdScale = static_cast<float>(atof(v));
     else if (a == "--firefly-strength") o->fireflyStrength = static_cast<float>(atof(v));
     else if (a == "--ripple-test") {
@@ -794,6 +813,16 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--wear-test") o->wearTest = v;
     else if (a == "--fx-decal-size") o->fx.decalSize = std::max(0.1f, static_cast<float>(atof(v)));
     else if (a == "--picture") o->picture = v;
+    else if (a == "--photo-test-sizes") {  // (photomode)
+      o->photoTestSizes.clear();
+      for (const char* at = v; *at;) {
+        int pw = 0, ph = 0;
+        if (sscanf(at, "%dx%d", &pw, &ph) == 2 && pw >= 16 && ph >= 16) o->photoTestSizes.push_back({pw, ph});
+        const char* comma = std::strchr(at, ',');
+        if (!comma) break;
+        at = comma + 1;
+      }
+    }
     else if (a == "--settings") o->settings = v;
     else if (a == "--motion-view") o->motionView = atoi(v);
     else if (a == "--pan") {
@@ -1152,6 +1181,7 @@ int main(int argc, char** argv) {
     setup.pauseAt = static_cast<uint32_t>(std::max(opt.pauseAt, 0));
     live.SetFocusArmy(opt.focus);
     picture.SetVulkan(opt.vulkan);
+    picture.SetDebug(opt.debug);  // (photomode: the validation layer for the pixel interface's device too)
     picture.SetFocusArmy(opt.focus);
     picture.SetUpscale(opt.upscale);        // (--fsr)
     picture.SetTemporalUpscale(opt.fsr3);   // (--fsr3)
@@ -1251,6 +1281,18 @@ int main(int argc, char** argv) {
   world.water.ripples.view = opt.rippleView;
   world.groundCover = opt.groundCover;
   world.wildlife = opt.wildlife;
+  world.horizonWeather = opt.horizon;  // [horizon]
+  if (!opt.horizonParts.empty()) {
+    const std::string& parts = opt.horizonParts;
+    world.horizon.ice = parts.find("ice") != std::string::npos;
+    world.horizon.fog = parts.find("fog") != std::string::npos;
+    world.horizon.showers = parts.find("showers") != std::string::npos;
+    world.horizon.shadows = parts.find("shadows") != std::string::npos;
+  }
+  if (!opt.horizonLook.empty()) {
+    std::string why;
+    if (!world.horizon.Set(opt.horizonLook, &why)) fprintf(stderr, "render: --horizon-look: %s\n", why.c_str());
+  }
   world.wildlifeDraw.verbose = opt.wildlifeVerbose;
   if (opt.birdScale > 0) world.wildlifeDraw.birdScale = opt.birdScale;
   if (opt.fireflyStrength >= 0) world.wildlifeDraw.fireflyStrength = opt.fireflyStrength;
@@ -2238,6 +2280,20 @@ int main(int argc, char** argv) {
       }
     }
 
+    if (!opt.picture.empty() && opt.photoTest && playing && !liveBusy && frameCount >= 3) {
+      // (photomode) --photo-test: the photo mode's pieces through the pixel interface (or, with --picture-window, the
+      // window's)
+      PhotoTestSetup ps;
+      ps.base = opt.picture.substr(0, opt.picture.rfind('.'));
+      ps.window = opt.pictureWindow && pictureWindow;
+      ps.width = ps.window ? pictureWindow->Width() : opt.width;
+      ps.height = ps.window ? pictureWindow->Height() : opt.height;
+      ps.sizes = opt.photoTestSizes;
+      for (const FrameUnit& u : frame.units)
+        if (!u.dead) ps.units.insert(ps.units.end(), {u.position[0], u.position[1], u.position[2]});
+      PhotoTest(picture, camera, playTick + 1, ps);
+      break;
+    }
     if (!opt.picture.empty() && opt.pictureWindow && pictureWindow && playing && !liveBusy && frameCount >= 3) {
       // --picture-window: the world into the window, a made-up interface over it: a dark see-through
       // bar along the bottom, a solid white square at the top left, the rest open
@@ -3007,6 +3063,9 @@ int main(int argc, char** argv) {
         printf("; effects: %d live of %d started, %d events of kinds not drawn yet, %d bands, %.2f ms; %d decals drawn of %d", effects.live,
                effects.started, effects.notShown, ribbons.drawnBands, effects.cpuMs, decals.drawn, decals.Count());
       if (haveLive) printf("; simulation at tick %u, %.2f ms a tick", live.LastTick(), live.MsPerTick());
+      if (world.horizonWeather)  // [horizon]
+        printf("; horizon: ice %.2f, fog %.2f, %d showers, %d icebergs", world.horizon.iceNow, world.horizon.fogNow, world.horizon.showersNow,
+               world.horizon.bergsNow);
       if (world.movementDust)
         printf("; movement dust: %d puffs kept, %d of dust and %d of spray drawn, %d contrails of %d pieces", world.dust.Puffs(), world.dust.DustDrawn(),
                world.dust.SprayDrawn(), world.dust.Trails(), world.dust.Segments());
