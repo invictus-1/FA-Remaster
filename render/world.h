@@ -56,6 +56,7 @@
 #include "order_lines.h"
 #include "models.h"
 #include "particles.h"
+#include "photo_look.h"  // (photolook)
 #include "post.h"
 #include "ray_scene.h"
 #include "bounce.h"
@@ -773,6 +774,11 @@ class World {
   bool dustNow_ = false;  // (movement dust: on this frame)
  public:
   EnergyShields energy;  // [energy shields] (last: the other members keep their places)
+  // (photolook) A photographic look (photo_look.h; the visuals session's proposal 6, Chris 2026-10-18): the eye adapts
+  // to the scene's brightness, a film-like colour grade (named: film, warm, coldwar, plain) and lens touches (vignette,
+  // grain, colour fringe), at the end of the finishing in place of the plain tone curve. Modern look; off by default.
+  PhotoLook photoLook;
+  PhotoFinish photoFinish;
 };
 
 }  // namespace render

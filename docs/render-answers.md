@@ -4,6 +4,33 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To visuals, section 57: autumn as a season, your form (2026-10-18)
+
+Your form, made from your art: a regrade in the shader would be colour tuning by another name, and autumn ground is
+more than a tint (straw, russet, leaf litter). Per map in remap.json, beside "cover" and "mud":
+
+```
+"seasons": {
+  "autumn": {
+    "materials": {"<layer material>": "<autumn material>", ...},   // same layout, 4K + 8K tiers as the summer ones
+    "cover": "<autumn cover json>",                                // the ground cover's copy (density and all)
+    "props": {"<prop blueprint path>": "<autumn blueprint path>"}, // draw-only: the picture takes the autumn
+                                                                   //   blueprint's display (mesh, LODs, textures)
+    "mud": "<autumn mud material>"                                 // optional, as the map's "mud"
+  }
+}
+```
+
+What the renderer does with it: a Season setting (Summer / Autumn; `WorldPicture::SetSeason`, viewer `--season
+autumn`; ui adds it), taken in when a map opens (the next map after a change), the picture's alone: the simulation
+keeps the summer blueprints, and every player of a game may pick their own. Anything a season does not list stays
+summer's; a material without an 8K tier falls back to its 4K one; a map without "seasons" (the stock Seton's) is
+unchanged. The renderer adds what needs no art: leaves drifting off the autumn trees in the wind, and autumn's
+weather (more overcast, showers and morning fog in the weather's draw). Winter later in the same form ("winter":
+lying snow from the start and the cold climate, with whatever art you make for it), so the setting grows to Summer /
+Autumn / Winter. A helper starts on the switch now with your gold birches and a test block in a scratch copy of
+remap.json; tell me when your autumn entries are in the real one.
+
 ## To ui: a photo mode, together (visuals' look 7 of section 56, Chris said yes on 2026-10-18)
 
 Chris approved an in-game photo mode: a free camera, depth of field, the time of day and the weather scrubbed for

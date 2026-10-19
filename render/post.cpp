@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cstring>
 
+#include "photo_look.h"
+
 namespace render {
 namespace {
 
@@ -468,6 +470,9 @@ void Post::Present(const View& view, Upscaler* upscaler, int screenWidth, int sc
       run(bloom_[0], bloomBlur_, bloom_[1], across);
     }
   }
+  // (photolook) the photographic look: its eye meters the picture (it dispatches), then the last pass is its own
+  PhotoFinish* const photo =
+      photoFinish && view.constants.look > 0.5f && photoFinish->Prepare(view, picture, pictureWidth, pictureHeight) ? photoFinish : nullptr;
   // drawn smaller than the screen: the picture as a screen shows it first, then FSR brings it up
   const bool scaled = !upscaled && upscaler && screenWidth > 0 && screenHeight > 0 && (screenWidth != width_ || screenHeight != height_);
   if (scaled && !ldr_) {
@@ -485,11 +490,15 @@ void Post::Present(const View& view, Upscaler* upscaler, int screenWidth, int sc
     pass.clearColor = false;
   }
   device_->BeginPass(pass);
-  device_->SetPipeline(scaled && ldr_ ? toTarget_ : pipeline_);
-  device_->SetConstants(0, &view.constants, sizeof view.constants);
-  device_->SetTexture(0, picture);
-  device_->SetTexture(1, glowing ? glowSteps_[0] : blooming ? bloom_[0] : black_);
-  device_->Draw(3);
+  if (photo) {  // (photolook)
+    photo->Finish(view, scaled && ldr_, picture, glowing ? glowSteps_[0] : blooming ? bloom_[0] : black_);
+  } else {
+    device_->SetPipeline(scaled && ldr_ ? toTarget_ : pipeline_);
+    device_->SetConstants(0, &view.constants, sizeof view.constants);
+    device_->SetTexture(0, picture);
+    device_->SetTexture(1, glowing ? glowSteps_[0] : blooming ? bloom_[0] : black_);
+    device_->Draw(3);
+  }
   if (scaled && ldr_) upscaler->Run(ldr_, width_, height_, screenWidth, screenHeight);
 }
 

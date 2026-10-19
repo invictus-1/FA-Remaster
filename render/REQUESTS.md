@@ -34,7 +34,7 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
-## 37. To the VISUALS track: the mud's normal map re-exported, and the mud named in remap.json (2026-10-18, not blocking)
+## 37. To the VISUALS track: the mud's normal map re-exported, and the mud named in remap.json (2026-10-18, not blocking; DONE the same evening: the normals re-exported red = x, green = y in the masters and the 4k/8k DDS, and "mud": "setonsr_mud" on all three SETONS_R entries; the renderer reads them without the lean warning)
 
 The ruts of mud now take the mud material (render b197ac4 and later: deep tracks on SETONS_R draw `setonsr_mud`'s
 albedo, normal and ARH in the ruts of the soil and the wet sand). Two small things from you, when it suits:
