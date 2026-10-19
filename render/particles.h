@@ -84,6 +84,9 @@ struct EmitterBlueprint {
   // (Particles::HotEmitters, the first time it is asked: -1 not known yet, 1 its glow is a hot colour, and that colour)
   mutable int warm = -1;
   mutable Vec3 warmColor;
+  // Whether its file's name says it is a fire (flames, embers, something burning: a wreck's, a damaged unit's, a
+  // napalm's), not a warm glow of something else (build sparks, a warp-in, an engine): Particles::Hot::fire.
+  bool fire = false;
   int sortOrder = 0;
   float lodCutoff = 0;      // an emitter that hangs on something throws nothing out farther from the camera (0: no limit)
   float longestLife = 1;    // the longest a particle of it can live, in ticks
@@ -175,6 +178,7 @@ class Particles {
     Vec3 color;      // its glow's, linear
     uint32_t id;
     bool moving;     // on something that flies fast (a missile)
+    bool fire;       // a fire by its blueprint's name (EmitterBlueprint::fire): what may burn the ground under it
   };
   void HotEmitters(Vec3 near, size_t most, std::vector<Hot>* out);
   std::function<Vec3(const std::string&)> rampGlow;

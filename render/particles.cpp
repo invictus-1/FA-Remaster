@@ -681,6 +681,12 @@ const EmitterBlueprint* Particles::Blueprint(const std::string& path, const std:
   auto known = blueprints_.find(key);
   if (known != blueprints_.end()) return known->second.get();
   EmitterBlueprint* bp = blueprints_.emplace(key, std::make_unique<EmitterBlueprint>()).first->second.get();
+  {  // (a fire by its name: flames, embers, burning; never a build's sparks, a warp-in's, an engine's or an exhaust's glow)
+    const std::string name = moho::Vfs::Normalize(path);
+    auto has = [&](const char* word) { return name.find(word) != std::string::npos; };
+    bp->fire = (has("fire") || has("flame") || has("burn") || has("ember") || has("napalm")) && !has("build") &&
+               !has("teleport") && !has("afterburn") && !has("exhaust") && !has("engine") && !has("thrust");
+  }
   const std::string file = own ? FactionEffectFile(path, faction) : moho::Vfs::Normalize(EffectFile(*vfs_, path, remastered));
   auto text = vfs_->ReadFile(file);
   BpValue v;
@@ -1098,7 +1104,7 @@ void Particles::HotEmitters(Vec3 near, size_t most, std::vector<Hot>* out) {
     if (!bp.warm) continue;
     const float size = bp.largestSize * e.scale;
     if (size < 0.15f) continue;  // (a spark of a lamp)
-    out->push_back({e.position, size, bp.warmColor, e.id, Length(e.position - e.positionBefore) > 0.6f});
+    out->push_back({e.position, size, bp.warmColor, e.id, Length(e.position - e.positionBefore) > 0.6f, bp.fire});
   }
   if (out->size() > most) {
     std::nth_element(out->begin(), out->begin() + static_cast<std::ptrdiff_t>(most), out->end(),

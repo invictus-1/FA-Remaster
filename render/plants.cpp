@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <string>
 
@@ -277,6 +278,8 @@ void PlantLife::SetMap(float mapWidth, float mapHeight) {
 
 void PlantLife::AddBurn(float x, float z, float radius, float strength, double born) {
   if (strength <= 0.001f || radius <= 0 || x < -radius || z < -radius || x > mapWidth_ + radius || z > mapHeight_ + radius) return;
+  static const bool debug = getenv("MOHO64_DEBUG_BURNS") != nullptr;  // (each burn laid: where, how large, how strong)
+  if (debug && strength > 0.05f) printf("render: plants: a burn at %.1f, %.1f, radius %.2f, strength %.2f, at %.1f s\n", x, z, radius, strength, born);
   if (burns_.size() >= 4096) burns_.erase(burns_.begin());  // (a backlog never drawn)
   burns_.push_back({x, z, radius, std::min(strength, 1.0f), born});
 }
@@ -296,6 +299,9 @@ void PlantLife::WatchBlasts(const Blasts& blasts, double clock, const std::funct
   if (blastsSeen_ > clock) blastsSeen_ = -1e30;  // (a game played back from earlier)
   for (const Blasts::Blast& b : blasts.Recent()) {
     if (b.born <= blastsSeen_ || b.born > upTo || b.splash || b.water) continue;
+    if (!b.hot) continue;  // (a scorch mark alone, without an explosion's heat; nothing burns)
+    // (the game's first quarter-minute: commanders warping in, with flashes and scorches of their own; nothing fires yet)
+    if (b.born < 15) continue;
     // (on the ground: not a hit high on a unit, nor one in the air)
     if (ground && b.at.y - ground(b.at.x, b.at.z) > std::max(1.5f, 0.5f * b.size)) continue;
     // larger than its scorch; a shell's small blast singes, a big one burns through. Past a size of 4 it grows little
@@ -312,7 +318,7 @@ void PlantLife::WatchFires(const std::vector<Particles::Hot>& hot, double clock,
   std::unordered_map<uint32_t, Vec3> seen;
   for (const Particles::Hot& h : hot) {
     seen[h.id] = h.position;
-    if (h.moving) continue;
+    if (h.moving || !h.fire) continue;  // (a warm glow that is no fire, a commander's build sparks: burns nothing)
     auto before = fireAt_.find(h.id);
     // (it burns the ground only standing still on it: not on something driving, nor high on a building)
     if (before == fireAt_.end() || Length(before->second - h.position) > 0.05f) continue;
