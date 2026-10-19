@@ -476,6 +476,11 @@ class World {
   // worn to the earth; fading with the weather and the ground. The game's tread marks and footprints are pressed in
   // by their own shapes instead of laid as pictures. Modern look; off by default.
   bool deepTracks = false;
+  // [parallax] The ground's relief close by (terrain.h, Terrain::parallax; Chris, 2026-10-19): on a remastered map, the
+  // ground's stones, pebbles and clods stand up out of it and its hollows sink as the eye passes, from the height its
+  // materials' scans hold; with a low sun its high places shade the hollows. Only near the eye at close zoom (nothing
+  // from the game's usual height). Modern look; off by default (proposed for the "Ground Detail" setting).
+  bool groundParallax = false;
   // [plants] Plants that react (plants.h, `plantLife`; Chris, 2026-10-18): grass and the plants laid over where units drive,
   // rising again over seconds; bushes, ferns, saplings and the like bending under them and springing back; the grass, the
   // plants and the undergrowth burnt black, then brown and lower where explosions and fires were, growing back over
