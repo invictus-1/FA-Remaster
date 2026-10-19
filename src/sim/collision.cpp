@@ -35,7 +35,10 @@ bool GetWorldShape(const Entity* e, WorldShape* out) {
   out->type = s.type;
   const Vec3& pos = e->shapeHeld ? e->shapePos : e->position;
   const Quat& ori = e->shapeHeld ? e->shapeOri : e->orientation;
-  out->c = Add(pos, Rotate(ori, s.center));
+  // the primitive's SetTransform (box 0x4ff470, sphere 0x4febc0): its offset turned by MultQuadVec 0x452d40, through
+  // the quaternion's matrix 0x452fd0 (RotateM), plus the position; not the cross-product form, which differs from it
+  // in the last bits
+  out->c = Add(pos, RotateM(ori, s.center));
   if (s.type == ShapeType::Box) {
     BoxAxes(ori, out->ax);  // (the box primitive's SetTransform 0x4ff470)
     out->half = s.half;
