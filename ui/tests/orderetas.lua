@@ -117,8 +117,10 @@ ForkThread(function()
         LOG("TEST done: " .. failed .. " failed")
         return
     end
-    local goal = {spot[1] + 90 * sx, spot[2], spot[3]}
-    GetCamera("WorldCamera"):SnapTo({spot[1] + 45 * sx, spot[2], spot[3]}, nil, 170)
+    -- (on land: 90 towards the middle was deep water on scmp_009, where a formation move finds no slot and, with no
+    -- order after it, ends at once, as the original's does: the engine's 64ad753, FindSlotFor 0x59aa20 / 0x59adc0)
+    local goal = {spot[1] + 30 * sx, spot[2], spot[3] + 10 * sz}
+    GetCamera("WorldCamera"):SnapTo({spot[1] + 15 * sx, spot[2], spot[3] + 5 * sz}, nil, 170)
     WaitSeconds(0.5)
     check("Shift up: no times", table.getn(moho64ui_OrderGraph().etas or {}), 0)
 
