@@ -1391,6 +1391,28 @@ bool RefusesGuard(Sim& sim, lua_State* L, const Unit* u, const Entity* target) {
   return false;
 }
 
+// ProcessUnitCommand, the Move case (0x6efed4: index 0 of the type switch 0x6efdc2 (table 0x6f128c), taken by Move 2,
+// FormMove 4, Patrol 16, FormPatrol 18, AggressiveMove 35 and FormAggressiveMove 36). The unit does not take the order
+// (0x6efe44)
+// - when it rides a transport that is no CARRIER and it is no POD (GetTransportedBy 0x5e3c30, 0x6efed6..0x6eff87);
+// - when it has no motion (IUnit::IsMobile 0x6a4a10, vt+0x30 at 0x6eff8d): a structure (a factory's rally orders go
+//   to its own rally queue, Sim::IssueFactoryCommand, not through here);
+// - when the order's point has a NaN (IsValid_Vector3f 0x5657f0 on the target's point +0x18, 0x6eff9e..0x6effaf);
+// - without a target (the target's type +0x10 is 0, 0x6effb5).
+// Seen: MP3 9430, army 1's hydrocarbon plants 0x100056 and 0x1001a7 (xsb1102) in a player's Move for a group: the
+// original's queues stay empty; ours queued the Move and dropped it at the next dispatch ("not carried out").
+bool MoveCaseType(int t) { return t == 2 || t == 4 || t == 16 || t == 18 || t == 35 || t == 36; }
+bool RefusesMoveOrder(Sim& sim, const Unit* u, bool hasTarget, const Vec3* point) {
+  if (u->transportedBy) {
+    const Entity* t = sim.FindEntity(u->transportedBy);
+    const Unit* tu = t && t->kind == Entity::Kind::Unit ? static_cast<const Unit*>(t) : nullptr;
+    if (tu && !BpInCategory(sim, tu->blueprint, "CARRIER") && !BpInCategory(sim, u->blueprint, "POD")) return true;
+  }
+  if (!(u->motion.bp && u->motion.bp->mobile())) return true;
+  if (point && !(point->x == point->x && point->y == point->y && point->z == point->z)) return true;
+  return !hasTarget;
+}
+
 // ProcessUnitCommand, the Repair case (0x6f075e: type 20, index 8 of the type switch 0x6efdc2). The unit does not take
 // the order (0x6efe44)
 // - without a target (0x6f0760);
@@ -1435,6 +1457,7 @@ std::shared_ptr<UnitCommand> Issue(lua_State* L, const std::vector<Unit*>& units
     if (type == CommandType::Guard && RefusesGuard(*sim, L, u, targetEntity)) continue;
     if (type == CommandType::Repair && RefusesRepair(*sim, u, targetEntity)) continue;
     if (RefusesTargetOutside(*sim, u, target)) continue;
+    if (MoveCaseType(static_cast<int>(type)) && RefusesMoveOrder(*sim, u, target || targetEntity, target)) continue;
     if (upgradeTo && RefusesUpgradeAgain(*sim, u, *upgradeTo)) continue;
     // IssueToUnits 0x6f12c0 makes the command for the first unit that takes it (0x6f13ca..0x6f13fb): an order no
     // unit takes uses no id of the command database's pool (CommandIdPool)
@@ -1676,6 +1699,7 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
     if (d.type == static_cast<int>(CommandType::Guard) && RefusesGuard(sim, sim.L(), u, targetEntity)) continue;
     if (d.type == static_cast<int>(CommandType::Repair) && RefusesRepair(sim, u, targetEntity)) continue;
     if (RefusesTargetOutside(sim, u, target)) continue;
+    if (MoveCaseType(d.type) && RefusesMoveOrder(sim, u, d.target.type != 0, &d.target.pos)) continue;
     if (d.type == static_cast<int>(CommandType::Upgrade) && RefusesUpgradeAgain(sim, u, d.blueprint)) continue;
     if (reverseLoad && RefusesReverseLoad(sim, u, units, reverseTarget)) continue;  // (its case, 0x6f0f53)
     if (d.type == static_cast<int>(CommandType::TransportLoadUnits) && RefusesLoadOrder(sim, u, targetEntity))
