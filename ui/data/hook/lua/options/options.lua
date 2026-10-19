@@ -281,7 +281,7 @@ local looks = {
         -- shallows' caustics
         title = "Weather Effects",
         key = 'remaster_weather_effects',
-        tip = "Rain and snow lit by lamps, rain's splashes, wet shorelines and caustics in shallow water.",
+        tip = "Rain and snow lit by lamps, rain's splashes, wet shorelines and caustics in shallow water, snow lying on the units themselves, and weather on the horizon beyond the map's edge: fog banks, distant showers, ice floes while snow lies.",
         type = 'toggle',
         default = 1,
         set = Look("remaster_weather_effects"),
