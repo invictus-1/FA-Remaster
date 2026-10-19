@@ -1420,10 +1420,20 @@ bool LeashOrInvisible(Sim& sim, Unit* u) {
   return dx * dx + dy * dy + dz * dz > r * r;
 }
 
+void RelinkSuspendedAttackThread(Unit* u);  // (below AttackData)
 void ReportState(Unit* u, int code) {
   if (u->attackState != code) {
     u->attackState = code;
     u->attackStateSignal = true;
+    // the attack task's listener (Listener_AiAttackerEvent_CUnitAttackTargetTask::Receive 0x5f3ee0): after it sets
+    // the task's state, the thread's counter goes to 0 and a SUSPENDED thread (the in-range branch's -2, 0x5f3a63;
+    // ours: waitUntil = ~0) is linked back at the command stage's new end (0x5f3f9f..0x5f3fd5). The report comes in
+    // the army's attacker stage, so the task runs after every other command thread in this beat's command stage.
+    // Seen (probe mp1_5234): MP1 5220, army 1's frigate 0x100056 comes in reach (5219: -2) and its weapon reports
+    // (5220); at 5233 its new formation Attack runs after the other ten members' in the original (their slots are
+    // reserved first: its place (498.98, 200.55), its square (482,184)..(515,217)); ours kept its old place in the
+    // run list, so its slot was the free raw place and its square left its cell out.
+    RelinkSuspendedAttackThread(u);
   }
 }
 
@@ -2525,6 +2535,13 @@ struct AttackData {
 };
 
 namespace {
+void RelinkSuspendedAttackThread(Unit* u) {
+  if (u->task && u->task->adata && u->task->adata->listening && u->task->waitUntil == 0xffffffffu)
+    if (Sim* sim = Sim::From(u->luaState())) sim->ResumeCommandThread(u);
+}
+}  // namespace
+
+namespace {
 
 bool IsZeroV(const Vec3& v) { return v.x == 0 && v.y == 0 && v.z == 0; }
 // !Unit::WontFitAt 0x62aa90: the point inside the playable rect (STIMap::IsWithin, margin 0, the unit's army's
@@ -2792,9 +2809,15 @@ void UpdateAttacker(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
   }
 }
 
+// CUnitAttackTargetTask's AbortNavigation 0x5f3420: the navigator's IgnoreFormation(false) (vt+0x30) and AbortMove
+// (vt+0x10), with no test of a goal: an idle navigator's AbortMove still asks SetSpeedThroughGoal(0), which with the
+// last waypoint in the goal turns the drive-through byte off. Seen: MP1 5243, army 1's frigate 0x100056, engaged
+// (AttackAngle: state 4 every ten beats) after the AI's appended Attack turned its byte on at 5234: the original's
+// byte is 0 from its next engaged tick; ours, with no goal to abort, kept 1.
 void AbortNavigation(Unit* u) {
   u->navIgnoreFormation = false;
-  TaskStopMoving(u);
+  if (u->motion.bp && u->motion.bp->mobile()) MotionStop(u);
+  u->unitStates.erase("Moving");
 }
 
 // the weapon's state report (attacker-event listener 0x5f3ee0)

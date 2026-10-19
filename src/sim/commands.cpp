@@ -1023,6 +1023,13 @@ static bool PatrolTaskDecidesAbort(const Unit* u) {
 static bool ThreadAsleepOnMove(const Unit* u) {
   if (u->commands.empty() || u->headState == kNotStarted) return false;
   if (u->commands.front()->type == CommandType::Move) return true;
+  // an attack task with its target in reach suspends the thread until its weapon reports (TaskTick's in-range branch
+  // returns -2, 0x5f3a63; ours marks it waitUntil = ~0); the queue's events re-link a suspended thread whatever
+  // suspended it (OnEvent 0x599030). Seen (probe mp1_5234): MP1 5232, eleven of army 1's ships given a formation
+  // Attack with clear; the frigate 0x100056, standing in reach of its target since 5220, runs after the other
+  // members at 5233 in the original (their slots reserved before its own: (498.98, 200.55), its square's corner
+  // (482,184)); ours kept it fifth and its slot was the free raw place.
+  if (u->task && u->task->adata && u->task->waitUntil == 0xffffffffu) return true;
   // a patrol whose repair / reclaim child walks: the child's CUnitMoveTask suspended the thread (ctor 0x6186d6, the
   // same listener NavEventWakesCommandThread has for it), and the clear wakes it to the run list's end. Seen: MP3
   // 3109, army 0's engineer 0xf, its patrol's child walking, gets a BuildMobile with clear together with the idle 0x2e
