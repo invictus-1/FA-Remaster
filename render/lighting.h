@@ -26,6 +26,15 @@ inline const char kLightingShaderBlock[] = R"hlsl(
 static float surfaceSnowShare = 1;
 static bool surfaceSnowOwn = false;
 static float3 surfaceSnowPlace = float3(0, 0, 0);
+// [unit dirt] How wet this very surface is by the weather: the weather's wetness; on units (a shader that says
+// SURFACE_OWN_WET), times the share of it the surface takes: 1, or 0 for a unit with its own (unit_wear.h,
+// World::unitDirt: its own laid on before ModernLight). Elsewhere the lines below are as they were, word for word.
+#ifdef SURFACE_OWN_WET
+static float surfaceWetShare = 1;
+#define SURFACE_WET (weather.x * surfaceWetShare)
+#else
+#define SURFACE_WET weather.x
+#endif
 #ifdef SURFACE_TRACKS
 Texture2D tracksMap : register(t26);  // (the ground only) how much of the lying snow is trodden away at a place
 #endif
@@ -565,7 +574,7 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
   // the weather on the surface: wet is darker and shinier; snow lies on what faces up
   [branch] if (weather.x + weather.y > 0) {
     float upward = saturate(N.y * 1.5 - 0.2);
-    albedo *= 1 - 0.25 * weather.x;
+    albedo *= 1 - 0.25 * SURFACE_WET;  // [unit dirt] (SURFACE_WET: weather.x but on units)
     // puddles: where the ground is level, in patches that grow as it gets wetter: still water, which
     // mirrors the sky
     float puddle = SURFACE_PUDDLES * smoothstep(0.90, 0.97, N.y) * smoothstep(1.24 - 0.45 * weather.x, 1.34 - 0.45 * weather.x, CloudNoise(float3(world.xz * 0.45, 3.7)) + CloudNoise(float3(world.xz * 1.7, 8.1)) * 0.35);
@@ -577,7 +586,7 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
       albedo *= 1 - 0.45 * puddle;
       roughness = lerp(roughness, 0.07, puddle);
     }
-    roughness = lerp(roughness, 0.6, weather.x * (0.35 + 0.5 * upward));
+    roughness = lerp(roughness, 0.6, SURFACE_WET * (0.35 + 0.5 * upward));  // [unit dirt] (SURFACE_WET)
 #ifdef SURFACE_DEEP_TRACKS
     roughness = lerp(roughness, deepGloss.x, deepGloss.y * (1 - puddle));  // [mud ruts] (wet mud in the ruts keeps its own gloss, terrain.cpp; still water over it its own)
 #endif

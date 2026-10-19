@@ -476,15 +476,24 @@ class World {
   // Snow on units (unit_wear.h): each unit holds its own share of the lying snow, which builds up while it stands
   // in snowfall and comes off as it moves, fires, is hit, burns or a blast is near. Modern look; off by default.
   bool unitScars = false, unitSnow = false;
+  // [unit dirt] Wet and muddy units (unit_wear.h): each unit its own wetness (soaked in rain, a film of water and drops
+  // running down, drying over minutes, faster driving and in sun), mud on its running gear and lower hull where it
+  // drives through mud or wet dirt (fresh dark and glossy, drying lighter, flaking off, washed by rain) and dust from dry
+  // sand and dirt; none of mud or dust on hover units and aircraft. Modern look; off by default. `unitDirtPace`: all its
+  // changes that many times faster (the viewer's --unit-dirt-pace, to look at them).
+  bool unitDirt = false;
+  float unitDirtPace = 1;
   UnitWear wear;
   // A game's beat for them: AddFrame calls it; a host that draws units itself (the effects stand) calls it with its
-  // frame first. Only the first call for a beat counts.
+  // frame first. Only the first call for a beat counts (the dirt's: every call, by the clock).
   void WatchWear(const Frame& frame);
-  // What a unit (its entity id) wears this frame, for MeshRenderer::Wear; null: nothing of its own.
-  const WearLook* WearOf(uint32_t id) {
+  // What a unit (its entity id) wears this frame, for MeshRenderer::Wear; null: nothing of its own. ([unit dirt]
+  // `drawn`: the model a host that draws the unit itself draws it with, UnitWear::Look)
+  const WearLook* WearOf(uint32_t id, const Model* drawn = nullptr) {
     wear.scars = unitScars;
     wear.snow = unitSnow;
-    return look == Look::Modern && (unitScars || unitSnow) ? wear.Look(id, clock_) : nullptr;
+    wear.dirt = unitDirt;  // [unit dirt]
+    return look == Look::Modern && (unitScars || unitSnow || unitDirt) ? wear.Look(id, clock_, drawn) : nullptr;
   }
   // Units seen behind trees and cliffs (hidden_outlines.h; docs/render-lighting.md, item 15): where a unit the player
   // may see (his own, an ally's, an enemy's in sight; never one in the fog of war, nor a building only remembered) is

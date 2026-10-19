@@ -1061,6 +1061,42 @@ work is not starved of the processor).
    Open: commanders do not build in the effects stand (pictures from games); for the colour tuning: a Seraphim
    factory's beam light is a clear spot on grass by day, the Aeon gold reads khaki on green ground, Cybran lights tint
    a factory's arms pink at night.
+20. **[unit dirt] Wet and muddy units (first version, 2026-10-18; the visuals session's section 56, proposal 4;
+   proposed for the "Weather Effects" setting, beside the units' own snow):** `World::unitDirt` (viewer
+   `--unit-dirt`; `render/unit_wear.h/.cpp`, on unit wear: `UnitWear::Dirt`, the shader's `DirtSurface`). Without it
+   a unit is as wet as the ground (lighting.h: darker, its roughness drawn toward 0.6, which makes glossy paint
+   rougher). With it each unit has its own, worked out every frame by the game's clock:
+   - **Wet:** in rain it soaks within some 15 seconds: the paint a little darker, a film of water over it (roughness
+     toward 0.1); when the rain stops it dries in some three minutes in shade, about one when it drives in sun: the
+     film draws back into streaks down its walls and pools on its tops, the last of it low down; close up, drops run
+     down its walls (after the rain, and faster in it). Its own wetness stands in for the weather's on it
+     (lighting.h's `surfaceWetShare`). Under water (an amphibious unit on the bottom, or wading) it is soaked and washed.
+   - **Mud:** driving through mud, or dirt and grass gone soft in the wet (the ground's kinds as deep tracks read them,
+     `Terrain::LayerKind`, laid over each other by the map's masks on the processor, a grid of two world units; the
+     ground's wetness), builds mud on its running gear and lower hull: up to a height in its own frame that grows with
+     the mud (on a tank about two fifths of its hull's height at most, on a walker a quarter: its feet and shins; on
+     the largest at most 0.3 world units over a seventh of its height), its edge ragged and thrown up the walls in
+     streaks, blots and spatter over it, higher at its front by how fast it drove, less on what faces up. Full in
+     twenty seconds at speed 4 through wet mud (within a minute for a Striker on its loops); dry mud (caked earth) gives
+     none, only dust. Fresh it is dark and glossy (the map's mud material's colour, `setonsr_mud`'s albedo's lighter
+     tenth); it dries in some two and a half minutes (faster in sun), from its thin edges and the spatter down to the
+     thick crust: lighter, matt, cracked; dry, it flakes off over some six minutes (faster as it drives). Rain wets it
+     again and washes it off in a minute and a half; water at once.
+   - **Dust:** dry sand, and dry dirt, give a pale dusty coat instead (sand's or earth's colour), more low down and on
+     what faces up, less on team colour; rain washes it off in seconds.
+   - Hover units and aircraft take no mud or dust (they get wet); ships neither. A unit fresh from the factory is
+     clean and dry; one there from the start is as wet as the ground.
+   The marks' rows in the bone buffer carry three more rows a unit (`WearLook::dirtRows`; a quarter added to the
+   instance's count of marks says they are there). Viewer tests: `--unit-dirt-pace n` (all of it n times faster, to
+   watch it), `--dirt-test wet,mud,mudwet,dust[,sand[,front[,walks]]]` (placed units given that much; and every unit
+   of a test starting with it), `--rain-stops s` (the rain stops s seconds in), `--fx-follow` (with `--fx-move` and
+   `--cam`: the camera follows the driven unit at `--cam`'s distance); `MOHO64_DEBUG_DIRT=1` prints the units' dirt
+   every five seconds. Cost (2560 x 1440, 200 Strikers on SETONS_R's soil, every one carrying dirt, the lowest of the
+   units' stage): +0.017 ms at the game's height in rain (soaked, fresh mud), +0.013 dry (cracked mud and dust), +0.01
+   close (distances 15 and 5); the processor 0.03 ms for the 200 (the ground's grid once a map: 7 ms). Off: nothing of
+   it runs; pictures identical (the regression, the weather's, and SETONS_R with units driving in rain, dry and snow:
+   0 px on both backends). Lighting.h's lines take the unit's share only in the models' shaders (`SURFACE_OWN_WET`):
+   a share in every shader changed how Direct3D 12's compiler built the ground's (a few pixels a step off).
 
 ## Beyond the map's edge, part 2: the weather on the horizon (first version, 2026-10-18; a helper's, for review)
 
@@ -1146,6 +1182,7 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `leafLight` | the sun's light through leaves, grass blades and plants, glowing toward a low sun | about 0.04 ms | |
 | `energyShields` | shields' bubbles bend what is behind, rings run from each hit, the pattern flares, their light inside | +0.07 to 0.16 ms with ten bubbles under fire | |
 | `hotMetal` | fresh wrecks glow where they broke and cool by a black body's colours, fresh scorches glow, wrecks smoulder | +0.07 ms with 40 fresh wrecks from the game's height, +0.15 close up | |
+| `unitDirt` | units wet in rain and drying after it, mud on their running gear and lower hulls from mud and wet dirt (drying lighter, flaking off, washed by rain), dust from dry sand and dirt | +0.01 to 0.02 ms with 200 dirty units, 0.03 ms of the processor (proposed for "Weather Effects") | a time of day for rain |
 | `frameGeneration` | FSR 3 frame generation: a picture made between each two frames, twice the frames shown | 1.1-1.4 ms a frame drawn | anti-aliasing off; the device's second queue |
 | `lens` (with a cinematic camera) | depth of field: a lens's blur, focus eased | 0.36-0.43 ms while on | a cinematic camera (cinecam.h) |
 | `litSmoke` | smoke and dust lit as volumes: the sun through shadows, fires lighting it from within | about 0.02 ms in a fight | |

@@ -29,7 +29,25 @@
 // the ground), and comes off when it moves fast, fires, is hit, burns, or a blast is near; hot parts (what glows)
 // stay clear; a unit fresh from the factory has none. A puff of falling snow where much comes off at once. Its
 // patches lie by its place on the model at rest (lighting.h's surfaceSnowPlace), so that they go with it.
+//
+// [unit dirt] Wet and muddy units (World::unitDirt; the visuals session's proposal 4 of section 56). Without the
+// option a unit is as wet as the ground (lighting.h, the weather's `wet`: darker, its roughness drawn toward the
+// ground's). With it each unit has its own (UnitWear::Dirt, by the game's clock, every frame):
+//   wet: in rain it soaks within a quarter of a minute: a little darker, a film of water over it (glossier), water
+//     running down its walls; when the rain stops it dries over a few minutes (faster as it drives, and in sun): the
+//     film draws back into streaks down its walls and pools on its flat tops, drops running down them, the last of it
+//     low down. Under water (amphibious units on the bottom) it is soaked and washed.
+//   mud: driving through mud, or through dirt and grass gone soft in the wet (the ground's kinds, Terrain::LayerKind,
+//     laid over each other by the map's masks; the ground's wetness), builds mud on its running gear and its lower
+//     hull: up to a height in its own frame that grows with the mud (lower on a walker: its feet and shins), in
+//     splashes with a ragged edge and spatter above it, higher on the front by its speed, less on what faces up.
+//     Fresh it is dark and glossy (the map's mud material's colour, setonsr_mud), drying it turns lighter and matt,
+//     cracks and flakes off over minutes (the thin spatter first, the thick crust low down last); rain wets it again
+//     and washes it off. Dry sand, and dry dirt, give dust instead: a pale dusty coat, more low down and on what faces
+//     up, washed off by rain. Hover units and aircraft take none (they get wet).
+// A unit fresh from the factory is clean and dry; one there from the start is as wet as the ground.
 #pragma once
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -37,11 +55,14 @@
 #include <unordered_map>
 #include <vector>
 
+#include "bp_reader.h"
 #include "frame.h"
 #include "linalg.h"
 #include "models.h"
 
 namespace render {
+
+struct MapData;
 
 // The shape a hit is cast onto (Model::hitShape): the triangles of one of the model's levels at rest, by bone, each
 // bone's in a tree of boxes, so that a mark lies on the surface the shot met (the game's collision box, where a shot
@@ -82,7 +103,17 @@ struct WearLook {
   // there (unit length) and its kind (0 kinetic, 1 energy, 2 explosive, 3 fire); how fresh it is (1 fresh .. 0
   // mended), how hot (1 glowing .. 0), a number of its own (0..1) and how strong it is (0..1)
   Vec4 rows[kWearMarks * 3];
+  // [unit dirt] its own wetness, mud and dust (the option on): three rows after its marks (kDirtRows), as the shader's
+  // DirtSurface reads them:
+  //   0: how wet (0 dry .. 1 soaked), how much mud (0..1), how wet the mud is (1 fresh .. 0 a dry crust), how dusty;
+  //   1: its lowest point and its height (world units, its own frame at rest), the middle of its length (z) and 1 /
+  //      half its length;
+  //   2: how high the mud reaches over its lowest point (world units), how much higher at its front, how much of the
+  //      dust is sand's (0 dirt's .. 1), a number of its own (0..1)
+  bool dirt = false;
+  Vec4 dirtRows[3];
 };
+inline constexpr int kDirtRows = 3;
 
 class UnitWear {
  public:
@@ -145,8 +176,9 @@ class UnitWear {
   void Hit(uint32_t id, const Model* model, Vec3 rest, Vec3 way, Kind kind, float share, float damage, double clock);
   // Health given back to a unit, a share of its most (repair, regeneration): its marks look mended the more.
   void Heal(uint32_t id, float share);
-  // What it wears now; null when it wears nothing of its own (the options off, or it is not known).
-  const WearLook* Look(uint32_t id, double clock);
+  // What it wears now; null when it wears nothing of its own (the options off, or it is not known). [unit dirt]
+  // `drawn`: the model it is drawn with, where the host draws it itself (the effects stand): its box for the dirt.
+  const WearLook* Look(uint32_t id, double clock, const Model* drawn = nullptr);
   // The tier it is in (0: never hurt), for the log and tests.
   int Tier(uint32_t id) const;
   // Where snow fell off units at once since the last call: the place (xyz) and how large a puff (w, world units).
@@ -158,6 +190,50 @@ class UnitWear {
   // drops of health no hit was found for, marks made (merged ones not counted), heals.
   int toldHits = 0, shotHits = 0, beamHits = 0, blastHits = 0, unseenHits = 0, marksMade = 0, heals = 0;
   int known() const { return static_cast<int>(units_.size()); }
+
+  // [unit dirt] Wet and muddy units (the top of this file). Whether it is on (World sets it each frame, as scars, snow).
+  bool dirt = false;
+  // What the weather does and has done (World, with a time of day; else all dry): how hard it rains, how wet the ground
+  // is and how much snow lies (World's rain, wet, snowLying), how much sun reaches the ground (0 night or overcast .. 1
+  // a clear day), the water's level (none: very low); `pace`: all of the dirt's changes that many times faster (the
+  // viewer's --unit-dirt-pace, to look at them; 1).
+  struct DirtWeather {
+    float rain = 0, wet = 0, snowLying = 0, sun = 0;
+    float waterLevel = -1e9f;
+    float pace = 1;
+  };
+  // How a kind of unit moves (its blueprint's Physics.MotionType, and whether it walks as movement dust reads it): what
+  // takes mud and dust. `readBlueprint`: a unit's blueprint by its id ("uel0201"; World sets it), read once a kind.
+  enum Moves { Rolls = 0, Walks = 1, Hovers = 2, Flies = 3, Sails = 4 };
+  std::function<bool(const std::string&, BpValue*)> readBlueprint;
+  // The units of a frame (World::WatchWear: every frame drawn, by the game's clock, not once a beat as Watch): their
+  // wetness, mud and dust. `model`: as Watch's (only one already made).
+  void Dirt(const Frame& frame, double clock, const DirtWeather& weather, const std::function<const Model*(uint32_t, bool make)>& model);
+  // The ground the units drive on: the map's layers' kinds (Terrain::LayerKind: shares of snow, mud, sand, grass, dirt
+  // and hard ground, the tenth the upper one, left out as the ground's dust leaves it out) laid over each other by the
+  // map's masks as the ground's shader lays them, on the processor: a grid of two world units a cell (more on the
+  // largest maps: at most 512 a side). World makes it the first frame the dirt is on, and forgets it with the map.
+  void SetGround(const MapData& map, const float kinds[10][6]);
+  void ForgetGround() {
+    ground_.clear();
+    groundMade_ = false;
+  }
+  bool HasGround() const { return groundMade_; }
+  // The kinds there (shares as above; without a grid all dirt).
+  void GroundAt(float x, float z, float out[6]) const;
+  // A unit's dirt told straight (the viewer's --dirt-test, for its placed units): known as `id`, with that model, its
+  // wetness, mud (and how wet it is), dust (and how much of it is sand's), how much higher the mud is at its front, and
+  // whether it walks.
+  void SetDirt(uint32_t id, const Model* model, float wet, float mud, float mudWet, float dust, float sandy, float front, bool walks, double clock);
+  // What every unit of the frames starts with when first seen, in place of clean (and as wet as the ground): the
+  // viewer's --dirt-test (to watch it dry and flake off). Wetness, mud, its wetness, dust, its sand, the mud's front.
+  void DirtStart(float wet, float mud, float mudWet, float dust, float sandy, float front) {
+    start_ = {wet, mud, mudWet, dust, sandy, front};
+    startGiven_ = true;
+  }
+  // For the log: the units' dirt on average (and the most mud). MOHO64_DEBUG_DIRT=1: Dirt prints it every five seconds
+  // of the clock.
+  std::string DirtSummary() const;
 
  private:
   struct Mark {
@@ -185,6 +261,18 @@ class UnitWear {
     float toldAhead = 0;  // hit points told (Tell) that its health has not yet been seen to lose
     std::vector<Mark> marks;
     WearLook look;
+    // [unit dirt] (Dirt: its own clock; the blueprint it was worked out for, another under the same id a new one)
+    uint32_t dirtBlueprint = 0xffffffffu;
+    bool dirty = false;      // worked out at least once
+    float wet = 0, mud = 0, mudWet = 0, dust = 0;
+    float sandy = 0;         // how much of its dust is sand's
+    float front = 0;         // 0..1: how much its mud was thrown at its front (by its speed as it built up)
+    int moves = Rolls;
+    double dirtClock = -1;
+    Vec3 dirtPlace;
+    float dirtSpeed = 0;     // world units a second, smoothed
+    Vec3 lo, hi;             // its model's box at rest, world units (its own frame)
+    bool box = false;        // (lo, hi known)
   };
   static int TierOf(float taken) { return taken <= 0 ? 0 : taken < 0.35f ? 1 : taken < 1.0f ? 2 : 3; }
   void AddMark(Unit& u, Vec3 rest, Vec3 way, Kind kind, float share, float damage, double clock);
@@ -197,6 +285,18 @@ class UnitWear {
   bool haveTick_ = false;
   std::vector<Vec4> puffs_;
   std::vector<HitEvent> told_;  // (Tell's, until the Watch of their beat)
+  // [unit dirt] the ground's kinds (SetGround): six shares a cell, 0..255
+  std::vector<uint8_t> ground_;
+  int groundW_ = 0, groundH_ = 0;
+  float groundCell_ = 2;
+  bool groundMade_ = false;
+  static constexpr uint32_t kToldDirt = 0xfffffffeu;  // (Unit::dirtBlueprint of a unit told by SetDirt)
+  double dirtSwept_ = -1e9;                           // (when Dirt last forgot the units long not seen)
+  std::unordered_map<std::string, int> moves_;        // (MovesOf's, by blueprint id)
+  std::array<float, 6> start_{};                      // (DirtStart's)
+  bool startGiven_ = false;
+  int MovesOf(const std::string& blueprint);
+  void DirtRows(uint32_t id, const Unit& u, WearLook* w) const;
 };
 
 // The model shader's part (mesh_renderer.cpp, modern look): a unit's marks and wear over all on its surface,
@@ -204,6 +304,8 @@ class UnitWear {
 // `p`, `n`: the place on the model at rest and its surface's way there (world units); `world`: the place in the world;
 // `teamMask`: how much of the surface is team colour; `glowDim`: what glowing is multiplied by under the hour's light.
 // Changes the surface's colour (linear), metal, roughness, glow and its way N (the dents).
+// [unit dirt] And DirtSurface: a unit's own wetness, mud and dust (WearLook::dirtRows, from `at` in the same buffer) on
+// its surface, before it is lit; it sets lighting.h's surfaceWetShare to 0 (its own wetness in place of the weather's).
 extern const char kWearShaderBlock[];  // (its text in unit_wear.cpp)
 
 }  // namespace render

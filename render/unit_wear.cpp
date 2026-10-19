@@ -2,11 +2,16 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <iterator>
 
+#include "dds.h"
 #include "models.h"
+#include "scmap.h"
 
 namespace render {
 namespace {
@@ -763,10 +768,15 @@ void UnitWear::Watch(const Frame& frame, double clock, float snowing, float snow
     for (auto it = units_.begin(); it != units_.end();) it = clock - it->second.seen > 60 || clock < it->second.seen - 1 ? units_.erase(it) : std::next(it);
 }
 
-const WearLook* UnitWear::Look(uint32_t id, double clock) {
+const WearLook* UnitWear::Look(uint32_t id, double clock, const Model* drawn) {
   auto it = units_.find(id);
   if (it == units_.end()) return nullptr;
   Unit& u = it->second;
+  if (!u.box && drawn && drawn->ok) {  // [unit dirt] (its box, from the model it is drawn with)
+    u.lo = drawn->boundsMin * drawn->scale;
+    u.hi = drawn->boundsMax * drawn->scale;
+    u.box = true;
+  }
   WearLook& w = u.look;
   w.general = 0;
   w.count = 0;
@@ -790,8 +800,259 @@ const WearLook* UnitWear::Look(uint32_t id, double clock) {
       ++w.count;
     }
   }
-  if (w.count == 0 && w.general <= 0 && w.snow < 0) return nullptr;
+  // [unit dirt] its own wetness, mud and dust (once worked out and its model's box known)
+  w.dirt = dirt && u.dirty && u.box;
+  if (w.dirt) DirtRows(id, u, &w);
+  if (w.count == 0 && w.general <= 0 && w.snow < 0 && !w.dirt) return nullptr;
   return &w;
+}
+
+// [unit dirt] (unit_wear.h says what it does)
+void UnitWear::DirtRows(uint32_t id, const Unit& u, WearLook* w) const {
+  const float height = std::max(u.hi.y - u.lo.y, 0.05f), half = std::max((u.hi.z - u.lo.z) * 0.5f, 0.05f);
+  // how high the mud reaches: on what rolls up to some two fifths of its hull's height with all the mud it can hold
+  // (its box's height, but not over three fifths of its length: an aerial is no hull), on a walker a quarter of its
+  // height (its feet and shins); on the largest at most 0.3 world units over a seventh of their height (an
+  // experimental's mud a man's height up, not over half of it); a little mud only on its running gear
+  const float body = u.moves == Walks ? height : std::min(height, 0.6f * std::max(u.hi.z - u.lo.z, u.hi.x - u.lo.x));
+  const float most = std::min(body * (u.moves == Walks ? 0.26f : 0.42f), 0.3f + body * 0.15f);
+  const float reach = most * (0.25f + 0.75f * std::sqrt(std::clamp(u.mud, 0.0f, 1.0f)));
+  w->dirtRows[0] = {u.wet, u.mud, u.mudWet, u.dust};
+  w->dirtRows[1] = {u.lo.y, height, (u.lo.z + u.hi.z) * 0.5f, 1 / half};
+  w->dirtRows[2] = {reach, u.front * reach * 0.6f, u.sandy, Hash01(id, 0x5eed)};
+}
+
+int UnitWear::MovesOf(const std::string& blueprint) {
+  auto known = moves_.find(blueprint);
+  if (known != moves_.end()) return known->second;
+  int moves = Rolls;
+  BpValue bp;
+  if (!blueprint.empty() && readBlueprint && readBlueprint(blueprint, &bp)) {
+    // (as movement dust reads it, movement_dust.cpp's KindOf)
+    const std::string motion = bp["Physics"]["MotionType"].StringOr(std::string());
+    if (motion == "RULEUMT_Air") moves = Flies;
+    else if (motion == "RULEUMT_Hover") moves = Hovers;
+    else if (motion == "RULEUMT_Land" || motion == "RULEUMT_Amphibious" || motion == "RULEUMT_AmphibiousFloating")
+      moves = bp["Display"]["MovementEffects"]["Land"]["Footfall"].IsTable() || !bp["Display"]["AnimationWalk"].StringOr(std::string()).empty() ? Walks : Rolls;
+    else if (!motion.empty() && motion != "RULEUMT_None") moves = Sails;
+  }
+  moves_[blueprint] = moves;
+  return moves;
+}
+
+void UnitWear::Dirt(const Frame& frame, double clock, const DirtWeather& weather, const std::function<const Model*(uint32_t, bool)>& modelOf) {
+  const float rain = std::clamp(weather.rain, 0.0f, 1.0f), groundWet = std::clamp(weather.wet, 0.0f, 1.0f);
+  const float sun = std::clamp(weather.sun, 0.0f, 1.0f), lying = std::clamp(weather.snowLying, 0.0f, 1.0f);
+  const float pace = std::max(weather.pace, 0.0f);
+  for (const FrameUnit& f : frame.units) {
+    if (f.dead) continue;  // (a dying unit keeps what it had)
+    Unit& u = units_[f.id];
+    const Vec3 at{f.position[0], f.position[1], f.position[2]};
+    const bool built = f.fractionComplete >= 1 && !f.beingBuilt;
+    u.seen = clock;
+    if (u.dirtBlueprint != f.blueprint || clock < u.dirtClock - 1) {
+      // first seen, another unit under its id, or the game played again from earlier: a unit fresh from the factory
+      // is dry and clean, one there from the start as wet as the ground
+      u.dirtBlueprint = f.blueprint;
+      u.dirty = true;
+      u.wet = built ? groundWet : 0.0f;
+      u.mud = u.mudWet = u.dust = u.sandy = u.front = 0;
+      if (startGiven_ && built) {  // (--dirt-test: as told)
+        u.wet = start_[0], u.mud = start_[1], u.mudWet = start_[2], u.dust = start_[3], u.sandy = start_[4], u.front = start_[5];
+      }
+      u.moves = frame.blueprints && f.blueprint < frame.blueprints->size() ? MovesOf((*frame.blueprints)[f.blueprint]) : Rolls;
+      u.dirtClock = clock;
+      u.dirtPlace = at;
+      u.dirtSpeed = 0;
+      u.box = false;
+    }
+    if (!u.box)
+      if (const Model* m = modelOf(f.blueprint, false)) {
+        u.lo = m->boundsMin * m->scale;
+        u.hi = m->boundsMax * m->scale;
+        u.box = true;
+      }
+    const float step = static_cast<float>(std::clamp(clock - u.dirtClock, 0.0, 0.5));
+    u.dirtClock = clock;
+    if (step <= 0) continue;
+    // its speed (a jump of more than 20 world units in a step: put there, not driven)
+    const float moved = Length(at - u.dirtPlace);
+    u.dirtPlace = at;
+    if (moved < 20) u.dirtSpeed += (moved / step - u.dirtSpeed) * std::min(step * 4, 1.0f);
+    const float v = std::clamp(u.dirtSpeed, 0.0f, 6.0f);
+    const float dt = step * pace;
+    if (!built) {  // (under construction: as it comes out of the factory)
+      u.wet = u.mud = u.dust = 0;
+      continue;
+    }
+    // under water (an amphibious unit on the bottom, or wading): soaked, and the water washes it
+    const bool onGround = u.moves == Rolls || u.moves == Walks;
+    const bool underWater = (f.layer & 6u) != 0 || (onGround && at.y < weather.waterLevel - 0.05f);
+    // its wetness: soaked within a quarter of a minute of rain; dry in some three minutes, faster as it drives (the
+    // wind of it) and in sun
+    if (underWater) u.wet = 1;
+    else if (rain > 0) u.wet = std::min(1.0f, u.wet + dt * (0.25f + rain) / 12);
+    else u.wet = std::max(0.0f, u.wet - dt / 200 * (1 + 0.15f * std::min(v, 4.0f)) * (1 + 1.5f * sun));
+    // what it drives through (what rolls or walks, on the ground, moving)
+    if (onGround && !underWater && (f.layer & 0x10u) == 0 && v > 0.3f) {
+      float k[6];
+      GroundAt(at.x, at.z, k);
+      // mud's ground gives mud, the more and the wetter the wetter it is (dry, it is caked earth: none); dirt turns
+      // to mud in the wet (as the ground's shader has it), grass's earth a little; dry sand, dry dirt and dry mud
+      // (caked earth) give dust (none in rain or where snow lies)
+      const float muddy = k[1] * std::pow(groundWet, 0.7f) + k[4] * groundWet * 0.8f + k[3] * groundWet * 0.15f;
+      const float sand = k[2], dusts = k[2] + k[4] * 0.6f + k[1] * 0.5f + k[3] * 0.05f;
+      const float dusty = dusts * std::pow(1 - groundWet, 1.5f) * (rain > 0 ? 0.0f : 1.0f) * (1 - lying);
+      const float thrown = std::min(v, 4.0f) / 4 * (u.moves == Walks ? 0.6f : 1.0f);  // (the faster, the more)
+      const float gain = muddy * thrown * dt / 18;  // (full in some twenty seconds of fast driving through mud)
+      if (gain > 0) {
+        const float sum = std::max(u.mud + gain, 1e-4f);
+        u.mudWet = (u.mudWet * u.mud + std::clamp(0.4f + 0.6f * groundWet, 0.0f, 1.0f) * gain) / sum;  // (as wet as the mud thrown)
+        u.front = (u.front * u.mud + std::min(v / 4, 1.0f) * gain) / sum;
+        u.mud = std::min(1.0f, u.mud + gain);
+      }
+      const float dgain = dusty * thrown * dt / 25;
+      if (dgain > 0) {
+        u.sandy = (u.sandy * u.dust + (dusts > 0 ? sand / dusts : 0) * dgain) / std::max(u.dust + dgain, 1e-4f);
+        u.dust = std::min(1.0f, u.dust + dgain);
+      }
+    }
+    // its mud dries in some two and a half minutes (faster in sun), and in rain is wet again; dry it cracks and flakes
+    // off over some six minutes (the faster as it drives), rain washes it off in a minute and a half, water at once
+    if (rain > 0) u.mudWet = std::min(1.0f, u.mudWet + dt * rain / 20);
+    else u.mudWet = std::max(0.0f, u.mudWet - dt / 150 * (1 + 1.2f * sun) * (1 + 0.1f * v));
+    const float dry = 1 - u.mudWet;
+    u.mud = std::max(0.0f, u.mud - dt * (dry * dry / 480 * (1 + 0.15f * std::min(v, 4.0f)) + rain / 90 + (underWater ? 0.2f : 0.0f)));
+    // its dust: blown off slowly, washed off by rain or water within seconds
+    u.dust = std::max(0.0f, u.dust - dt * (1.0f / 400 + rain / 15 + (underWater ? 0.3f : 0.0f)));
+  }
+  static const bool debug = std::getenv("MOHO64_DEBUG_DIRT") != nullptr;
+  if (debug && static_cast<int64_t>(clock) / 5 != static_cast<int64_t>(dirtSwept_) / 5)
+    printf("render: unit dirt at %.1f s (rain %.2f, ground wet %.2f, sun %.2f): %s\n", clock, rain, groundWet, sun, DirtSummary().c_str());
+  // (those long not seen are forgotten, as Watch does; units told straight by SetDirt are kept)
+  if (static_cast<int64_t>(clock) / 5 != static_cast<int64_t>(dirtSwept_) / 5) {
+    dirtSwept_ = clock;
+    for (auto it = units_.begin(); it != units_.end();)
+      it = it->second.dirtBlueprint != kToldDirt && (clock - it->second.seen > 60 || clock < it->second.seen - 1) ? units_.erase(it) : std::next(it);
+  }
+}
+
+std::string UnitWear::DirtSummary() const {
+  int n = 0;
+  double wet = 0, mud = 0, mudWet = 0, dust = 0, most = 0;
+  for (const auto& [id, u] : units_) {
+    if (!u.dirty) continue;
+    ++n;
+    wet += u.wet;
+    mud += u.mud;
+    mudWet += u.mudWet * u.mud;
+    dust += u.dust;
+    most = std::max(most, static_cast<double>(u.mud));
+  }
+  char b[200];
+  snprintf(b, sizeof b, "%d units, wet %.2f, mud %.2f (most %.2f, its wetness %.2f), dust %.2f", n, n ? wet / n : 0.0, n ? mud / n : 0.0, most,
+           mud > 0 ? mudWet / mud : 0.0, n ? dust / n : 0.0);
+  return b;
+}
+
+void UnitWear::SetDirt(uint32_t id, const Model* model, float wet, float mud, float mudWet, float dust, float sandy, float front, bool walks, double clock) {
+  Unit& u = units_[id];
+  u.model = model;
+  u.seen = clock;
+  u.dirtBlueprint = kToldDirt;
+  u.dirty = true;
+  u.wet = std::clamp(wet, 0.0f, 1.0f);
+  u.mud = std::clamp(mud, 0.0f, 1.0f);
+  u.mudWet = std::clamp(mudWet, 0.0f, 1.0f);
+  u.dust = std::clamp(dust, 0.0f, 1.0f);
+  u.sandy = std::clamp(sandy, 0.0f, 1.0f);
+  u.front = std::clamp(front, 0.0f, 1.0f);
+  u.moves = walks ? Walks : Rolls;
+  u.dirtClock = clock;
+  u.box = model && model->ok;
+  if (u.box) {
+    u.lo = model->boundsMin * model->scale;
+    u.hi = model->boundsMax * model->scale;
+  }
+}
+
+void UnitWear::SetGround(const MapData& map, const float kinds[10][6]) {
+  const auto started = std::chrono::steady_clock::now();
+  groundMade_ = true;
+  ground_.clear();
+  groundW_ = groundH_ = 0;
+  if (map.width <= 0 || map.height <= 0) return;
+  // the masks (the second only for the ground's look of eight layers, as its shader reads them), as movement dust reads
+  // them (movement_dust.cpp, MakeGrid): plain ones where they lie in the map's file, compressed ones decoded whole
+  struct Mask {
+    DdsImage image;
+    std::vector<uint8_t> decoded;
+    const uint8_t* texels = nullptr;
+    int w = 0, h = 0;
+    bool swap = false;  // (stored blue first)
+    bool Open(const std::string& dds) {
+      std::string why;
+      if (dds.empty() || !ParseDds(dds, &image, &why) || image.width <= 0 || image.height <= 0) return false;
+      w = image.width;
+      h = image.height;
+      if (image.format == gfx::Format::RGBA8 || image.format == gfx::Format::BGRA8) {
+        texels = image.data;
+        swap = image.format == gfx::Format::BGRA8;
+        return true;
+      }
+      if (!DecodeRgba(image, 0, &decoded)) return false;
+      texels = decoded.data();
+      return true;
+    }
+    float At(float u, float v, int k) const {  // (channel k: 0 red .. 3 alpha, as a shader reads it)
+      const uint8_t* t = texels + (static_cast<size_t>(std::min(static_cast<int>(v * static_cast<float>(h)), h - 1)) * static_cast<size_t>(w) +
+                                   static_cast<size_t>(std::min(static_cast<int>(u * static_cast<float>(w)), w - 1))) * 4;
+      return static_cast<float>(t[swap && k != 1 && k != 3 ? 2 - k : k]) / 255.0f;
+    }
+  };
+  Mask low, high;
+  const bool haveLow = low.Open(map.maskLow);
+  const bool haveHigh = map.shader == "TTerrainXP" && high.Open(map.maskHigh);
+  const float width = static_cast<float>(map.width), height = static_cast<float>(map.height);
+  groundCell_ = std::max(2.0f, std::max(width, height) / 512.0f);
+  groundW_ = static_cast<int>(std::ceil(width / groundCell_)) + 1;
+  groundH_ = static_cast<int>(std::ceil(height / groundCell_)) + 1;
+  ground_.assign(static_cast<size_t>(groundW_) * static_cast<size_t>(groundH_) * 6, 0);
+  double mudSum = 0;
+  for (int gz = 0; gz < groundH_; ++gz)
+    for (int gx = 0; gx < groundW_; ++gx) {
+      const float u = std::min(static_cast<float>(gx) * groundCell_ / width, 1.0f), v = std::min(static_cast<float>(gz) * groundCell_ / height, 1.0f);
+      float k[6];
+      std::copy(kinds[0], kinds[0] + 6, k);
+      // (laid over each other as the ground's shader lays the layers, Terrain::GroundKinds: each by its mask pushed
+      // to its upper half)
+      auto over = [&](int layer, float raw) {
+        const float t = std::clamp(raw * 2 - 1, 0.0f, 1.0f);
+        for (int i = 0; i < 6; ++i) k[i] += (kinds[layer][i] - k[i]) * t;
+      };
+      for (int c = 0; c < 4 && haveLow; ++c) over(1 + c, low.At(u, v, c));
+      for (int c = 0; c < 4 && haveHigh; ++c) over(5 + c, high.At(u, v, c));
+      uint8_t* cell = ground_.data() + (static_cast<size_t>(gz) * static_cast<size_t>(groundW_) + static_cast<size_t>(gx)) * 6;
+      for (int i = 0; i < 6; ++i) cell[i] = static_cast<uint8_t>(std::clamp(k[i], 0.0f, 1.0f) * 255 + 0.5f);
+      mudSum += k[1];
+    }
+  printf("render: unit dirt: the ground's kinds over %dx%d cells of %.1f units (masks %dx%d%s), mud on %.1f%% of it, in %.1f ms\n", groundW_,
+         groundH_, groundCell_, low.w, low.h, haveHigh ? " and the second" : "", 100 * mudSum / static_cast<double>(groundW_) / static_cast<double>(groundH_),
+         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
+}
+
+void UnitWear::GroundAt(float x, float z, float out[6]) const {
+  if (ground_.empty()) {
+    const float dirtOnly[6] = {0, 0, 0, 0, 1, 0};
+    std::copy(dirtOnly, dirtOnly + 6, out);
+    return;
+  }
+  const float gx = std::clamp(x / groundCell_, 0.0f, static_cast<float>(groundW_ - 1)), gz = std::clamp(z / groundCell_, 0.0f, static_cast<float>(groundH_ - 1));
+  const int x0 = std::min(static_cast<int>(gx), std::max(groundW_ - 2, 0)), z0 = std::min(static_cast<int>(gz), std::max(groundH_ - 2, 0));
+  const int x1 = std::min(x0 + 1, groundW_ - 1), z1 = std::min(z0 + 1, groundH_ - 1);
+  const float fx = gx - static_cast<float>(x0), fz = gz - static_cast<float>(z0);
+  auto at = [&](int i, int k, int c) { return static_cast<float>(ground_[(static_cast<size_t>(k) * static_cast<size_t>(groundW_) + static_cast<size_t>(i)) * 6 + c]) / 255.0f; };
+  for (int c = 0; c < 6; ++c) out[c] = (at(x0, z0, c) * (1 - fx) + at(x1, z0, c) * fx) * (1 - fz) + (at(x0, z1, c) * (1 - fx) + at(x1, z1, c) * fx) * fz;
 }
 
 // (unit_wear.h says what it does)
@@ -1020,6 +1281,137 @@ void WearSurface(StructuredBuffer<float4> rows, float4 wear, float3 p, float3 n,
   float3 tilt = (det < 0 ? -1 : 1) * (hx * r1 + hy * r2);
   float3 bent = abs(det) * N - tilt;
   if (dot(bent, bent) > 1e-12) N = normalize(bent);
+}
+// [unit dirt] A unit's own wetness, mud and dust (unit_wear.h: WearLook::dirtRows, three rows from `at`) on its surface,
+// before it is lit. `p`, `n`: the place on the model at rest and its surface's way there (world units, its own frame);
+// `world`: the place in the world; `teamMask`: how much of the surface is team colour. Its own wetness stands in for
+// the weather's (surfaceWetShare 0, lighting.h).
+void DirtSurface(StructuredBuffer<float4> rows, uint at, float3 p, float3 n, float3 world, float teamMask, inout float3 base, inout float metallic,
+                 inout float roughness, inout float3 N) {
+  surfaceWetShare = 0;
+  float4 d0 = rows[at], d1 = rows[at + 1], d2 = rows[at + 2];
+  float wet = d0.x, mud = d0.y, mudWet = d0.z, dust = d0.w;
+  if (wet + mud + dust < 0.002) return;
+  float pixel = max(length(fwidth(p)), 1e-4);  // world units a pixel spans here
+  float h = p.y - d1.x;                        // its height over the unit's lowest point (world units)
+  float tall = max(d1.y, 0.05);
+  float front = saturate((p.z - d1.z) * d1.w);  // 0 its middle and back .. 1 its front
+  float upward = saturate(n.y);                 // (1 a roof)
+  float upright = saturate(1.25 - abs(n.y) * 1.6);  // (1 a wall)
+  float seed = d2.w * 61.7;
+  float keep = 1 - 0.4 * teamMask;              // (team colour must still read: dust takes less of it)
+  float height = 0;                             // the mud's lumps (world units)
+  // dust: a pale coat, in patches, more on what faces up and low down; darker while wet
+  [branch] if (dust > 0.002) {
+    float patches = CloudNoise(p * 2.7 + seed);
+    float lie = dust * saturate(0.3 + 0.7 * upward + 0.6 * saturate(1 - h / (tall * 0.6))) * (0.5 + 0.5 * patches) * keep;
+    float3 colour = lerp(float3(0.15, 0.125, 0.095), float3(0.28, 0.24, 0.17), d2.z);  // (dry earth's, dry sand's: SETONS_R's soil and sand_dry, paler)
+    colour *= 1 - 0.5 * saturate(wet * 1.5);
+    base = lerp(base, colour, saturate(lie * 0.45));
+    roughness = lerp(roughness, 0.88, saturate(lie * 0.9) * (1 - 0.7 * wet));
+    metallic *= 1 - 0.8 * saturate(lie);
+  }
+  // mud: on the running gear and the lower hull up to the height it reaches (higher at the front by its speed), in
+  // splashes with a ragged edge, spatter over it, less on what faces up (it is thrown from below); fresh dark and
+  // glossy, drying from its thin edges and spatter down to the thick crust low down, lighter and matt, cracked, flaking
+  float reach = d2.x + d2.y * front;
+  [branch] if (mud > 0.002 && h < reach * 2.0 + 0.05) {
+    // (its patterns by its own size: some half a dozen splashes up the height the mud reaches)
+    float s = 1 / max(d2.x, 0.04);
+    float big = CloudNoise(p * (1.7 * s) + seed);
+    float fine = CloudNoise(p * (6.0 * s) + seed * 1.7);
+    // its edge: ragged, thrown higher up the walls in streaks (a noise stretched up and down)
+    float streak = CloudNoise(float3(p.x * (9 * s), p.y * (2.2 * s), p.z * (9 * s)) + seed * 2.9);
+    float edge = reach * (0.6 + 0.55 * big + (streak - 0.5) * 0.9 * upright) + (fine - 0.5) * 0.25 * d2.x;
+    float below = edge - h;                                    // how far under its edge this place lies
+    float aw = pixel * 1.2;
+    float gear = saturate(1.3 - h / max(d2.x * 0.4, 0.02));    // (the running gear, low down: coated whichever way it faces)
+    float thick = saturate(below / max(reach * 0.5, 0.02));    // 0 at its edge .. 1 deep in the crust
+    float solid = saturate(thick * 3 + fine * 0.8 - 0.3);      // (solid but toward its edge, in patches there)
+    float band = smoothstep(-aw, aw, below) * lerp(lerp(1, 0.25, upward) * solid, 1, gear) * saturate(mud * 5);
+    // over its edge, fewer the higher: blots in cells of a third of the height it reaches, and spatter in cells of some
+    // five hundredths of a world unit (not where a drop is under a pixel); less on what faces up
+    float over = saturate(1 + below / max(reach * 0.7, 0.05)) * saturate(mud * 1.6) * lerp(0.35, 1, 1 - upward);
+    float3 bq = p * (3.2 * s);
+    float3 bcell = floor(bq);
+    float bh = CloudHash(bcell + seed * 0.71);
+    float3 bc = bcell + 0.25 + 0.5 * float3(frac(bh * 7.3), frac(bh * 13.1), frac(bh * 3.7));
+    float br = 0.12 + 0.2 * frac(bh * 5.1);
+    float bw = pixel * 3.2 * s;
+    float blot = (1 - smoothstep(br - bw, br + bw, length((bq - bc) * float3(1, 0.6, 1)) + (fine - 0.5) * 0.5)) * step(bh, over * 0.6);  // (thrown up: long)
+    float3 q = p * 21.0;
+    float3 cell = floor(q);
+    float hc = CloudHash(cell + seed * 0.37);
+    float3 centre = cell + 0.3 + 0.4 * float3(frac(hc * 7.3), frac(hc * 13.1), frac(hc * 3.7));
+    float radius = 0.16 + 0.2 * frac(hc * 5.1);
+    float drop = (1 - smoothstep(radius - pixel * 21, radius + pixel * 21, length(q - centre))) * step(hc, over * 0.55) * saturate(4 - pixel * 70);
+    float thrown = saturate(blot + drop) * (1 - band);
+    float muddy = saturate(band + thrown);
+    [branch] if (muddy > 0.001) {
+      // how wet it is here: what was thrown over its edge and its thin edge dry first, the thick crust last
+      float damp = saturate(mudWet * 1.7 - (1 - thick) * 0.7 - thrown * 0.35);
+      float dryness = 1 - damp;
+      // dry: it cracks, and flakes off where it was thin (more of it the less mud is left)
+      float cracks = 0;
+      [branch] if (dryness > 0.3 && pixel < 0.02) {
+        float c = CloudNoise(p * 17.0 + seed * 2.3);
+        cracks = (1 - smoothstep(0.015, 0.045 + pixel * 2, abs(c - 0.5))) * saturate((dryness - 0.3) * 2) * band;
+        muddy *= 1 - step(c, 0.1 + 0.35 * (1 - mud)) * saturate((dryness - 0.6) * 3) * (1 - thick * 0.7);
+      }
+      float3 wetMud = float3(0.085, 0.057, 0.031);  // (the map's mud material's colour: setonsr_mud's albedo, its lighter tenth, browner)
+      float3 dryMud = float3(0.15, 0.115, 0.075);   // (dried: a pale crust, twice as light as SETONS_R's soil and greyer)
+      float3 colour = lerp(dryMud, wetMud, damp) * (0.75 + 0.35 * big + 0.25 * fine) * (1 - 0.6 * cracks);
+      base = lerp(base, colour, muddy);
+      metallic *= 1 - muddy;
+      roughness = lerp(roughness, lerp(0.92, lerp(0.55, 0.38, thick), damp), muddy);
+      height += (muddy * (0.002 + 0.016 * thick * (0.3 + big)) - cracks * 0.002) * min(d2.x * 4, 2);
+    }
+  }
+  // wet: the paint a little darker while damp; a film of water over it (glossy): all over in rain, drawing back as it
+  // dries into the streaks down its walls and the pools on its tops, the last of it low down; drops running down
+  [branch] if (wet > 0.002) {
+    base *= 1 - 0.18 * saturate(wet * 1.5);
+    float2 along = float2(-n.z, n.x);
+    float across = dot(p.xz, along / max(length(along), 1e-3));  // (along the surface, level: across its streaks)
+    float film = 1;
+    [branch] if (wet < 0.97) {
+      float streaks = CloudNoise(float3(across * 9.0, p.y * 1.3, seed));
+      float pools = CloudNoise(p * 3.1 + seed + 5.3);
+      float holds = lerp(pools, streaks, upright) * 0.75 + saturate(1 - h / tall) * 0.25;  // how long it stays wet here
+      film = saturate((wet * 1.35 - (1 - holds)) * 3);
+    }
+    roughness = lerp(roughness, 0.1, film * 0.8 * (1 - 0.75 * metallic));  // (bare metal under water stays as it was, nearly)
+    base *= 1 - 0.06 * film;
+    // drops running down its walls, in columns some seven hundredths of a world unit apart (near the eye only): after
+    // the rain and, faster, in it
+    float drips = saturate(wet * 1.6 - 0.2);
+    [branch] if (drips > 0.01 && upright > 0.3 && pixel < 0.01) {
+      float col = across * 14 + seed;
+      float hc = CloudHash(float3(floor(col), 3.7, seed));
+      [branch] if (hc < drips * 0.45) {
+        float dx = (frac(col) - 0.5) / 14;                  // across the column (world units)
+        float period = 0.25 + 0.35 * frac(hc * 3.3);        // (one drop a column in that much of its height)
+        float speed = (0.12 + 0.2 * frac(hc * 9.1)) * (1 + 2 * falling.x);
+        float u = frac((p.y + time * speed) / period + hc * 7) * period;  // above the drop's foot along its column
+        float dropAt = length(float2(dx, (u - 0.009) * 0.8));
+        float bead = (1 - smoothstep(0.007, 0.007 + pixel, dropAt)) * upright;
+        float trail = (1 - smoothstep(0.0015, 0.0015 + pixel, abs(dx))) * step(0.009, u) * saturate(1 - u / 0.12) * upright;
+        roughness = lerp(roughness, 0.04, saturate(bead + trail * 0.8));
+        base *= 1 - 0.15 * trail;
+        height += bead * 0.004 * sqrt(saturate(1 - dropAt / 0.009));
+      }
+    }
+  }
+  // the mud's lumps and the drops tilt the surface (as WearSurface's dents)
+  float3 dpdx = ddx(world), dpdy = ddy(world);
+  float hx = ddx(height), hy = ddy(height);
+  if (hx != 0 || hy != 0) {
+    float3 r1 = cross(dpdy, N), r2 = cross(N, dpdx);
+    float det = dot(dpdx, r1);
+    float3 tilt = (det < 0 ? -1 : 1) * (hx * r1 + hy * r2);
+    float3 bent = abs(det) * N - tilt;
+    if (dot(bent, bent) > 1e-12) N = normalize(bent);
+  }
 }
 )hlsl";
 

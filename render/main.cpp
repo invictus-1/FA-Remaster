@@ -170,6 +170,14 @@
 //           fire, or mixed: all four by turns), from all round above the ground, just now; healed: then repaired whole
 // --unit-snow  snow on units (unit_wear.h, World::unitSnow; modern look): each unit's own share of the lying snow, built
 //           up standing still in snowfall, shed by moving, firing, hits, burning and blasts near
+// --unit-dirt  [unit dirt] wet and muddy units (unit_wear.h, World::unitDirt; modern look): each unit's own wetness (in
+//           rain, drying after it), mud on its running gear and lower hull from mud or wet dirt it drives through
+//           (drying lighter, flaking off, washed by rain) and dust from dry sand and dirt; --unit-dirt-pace n: all of it
+//           n times faster (1; to watch it build up and dry); --dirt-test wet,mud,mudwet,dust[,sandy[,front[,walks]]]:
+//           each placed unit (--place) given that much (0..1 each; walks: 1 as a walker), to look at the look itself,
+//           and every unit of a game or a test (--tracks-test, --fx-move) starting with it; --rain-stops s: the rain
+//           (or snow) stops s seconds into the run, to watch things dry; --fx-follow: with --fx-move and --cam, the
+//           camera follows the driven unit all the same, at --cam's distance, pitch and heading (to look at it close)
 // --hot-metal  fresh wrecks glow where they broke and on their thin parts and cool over a minute or two, fresh scorches
 //           and craters glow in the middle, cooling wrecks smoulder (World::hotMetal, hot_metal.h; modern look);
 //           --wreck-test n[,unit]: n wrecks of that unit (uel0201) laid in a square round where the camera starts, as a
@@ -526,6 +534,11 @@ struct Options {
   float energyShieldHealth = -1;        // --energy-shield-health
   int energyTest = 0;                   // --energy-test
   bool unitScars = false, unitSnow = false;  // --unit-scars, --unit-snow
+  bool unitDirt = false;                // --unit-dirt [unit dirt]
+  float unitDirtPace = 1;               // --unit-dirt-pace
+  std::string dirtTest;                 // --dirt-test
+  float rainStops = -1;                 // --rain-stops
+  bool fxFollow = false;                // --fx-follow
   std::string wearTest;                 // --wear-test
   bool hiddenOutlines = true;           // --no-hidden-outlines, --hidden-outlines
   bool hotMetal = false;                // --hot-metal
@@ -712,6 +725,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--energy-shields") o->energyShields = true;
     else if (a == "--unit-scars") o->unitScars = true;
     else if (a == "--unit-snow") o->unitSnow = true;
+    else if (a == "--unit-dirt") o->unitDirt = true;  // [unit dirt]
+    else if (a == "--fx-follow") o->fxFollow = true;  // [unit dirt]
     else if (a == "--hidden-outlines") o->hiddenOutlines = true;
     else if (a == "--no-hidden-outlines") o->hiddenOutlines = false;
     else if (a == "--hot-metal") o->hotMetal = true;
@@ -858,6 +873,9 @@ bool ParseOptions(int argc, char** argv, Options* o) {
       }
     }
     else if (a == "--wear-test") o->wearTest = v;
+    else if (a == "--unit-dirt-pace") o->unitDirtPace = std::max(0.0f, static_cast<float>(atof(v)));  // [unit dirt]
+    else if (a == "--dirt-test") o->dirtTest = v, o->unitDirt = true;                                 // [unit dirt]
+    else if (a == "--rain-stops") o->rainStops = static_cast<float>(atof(v));                          // [unit dirt]
     else if (a == "--fx-decal-size") o->fx.decalSize = std::max(0.1f, static_cast<float>(atof(v)));
     else if (a == "--picture") o->picture = v;
     else if (a == "--photo-test-sizes") {  // (photomode)
@@ -1365,6 +1383,8 @@ int main(int argc, char** argv) {
   world.unitScars = opt.unitScars;
   world.models.hitShapes = opt.unitScars;  // (units' models keep their triangles for where hits lie: unit_wear.h)
   world.unitSnow = opt.unitSnow;
+  world.unitDirt = opt.unitDirt;  // [unit dirt]
+  world.unitDirtPace = opt.unitDirtPace;
   world.hiddenOutlines = opt.hiddenOutlines;
   world.hotMetal = opt.hotMetal;
   if (opt.hotLights >= 0) world.heat.mostLights = opt.hotLights;
@@ -1971,6 +1991,26 @@ int main(int argc, char** argv) {
       if (healed || half) world.wear.Heal(0x40000000u | static_cast<uint32_t>(n), healed ? 1.0f : 0.2f);
     }
     printf("render: --wear-test: tier %d (%d hits on each of %zu units)%s\n", world.wear.Tier(0x40000000u), hits, placedUnits.size(), healed ? ", repaired whole" : half ? ", a fifth repaired" : "");
+  }
+  if (!opt.dirtTest.empty()) {  // [unit dirt] --dirt-test: each placed unit given that much wetness, mud and dust
+    float v[7] = {0, 0, 0, 0, 0, 0, 0};
+    std::string all = opt.dirtTest;
+    for (int k = 0; k < 7 && !all.empty(); ++k) {
+      const size_t comma = all.find(',');
+      v[k] = static_cast<float>(atof(all.substr(0, comma).c_str()));
+      all = comma == std::string::npos ? std::string() : all.substr(comma + 1);
+    }
+    world.wear.DirtStart(v[0], v[1], v[2], v[3], v[4], v[5]);  // (and the units of a game or a test start so)
+    for (size_t n = 0; n < placedUnits.size(); ++n) {
+      const Model* m = placedUnits[n].model;
+      world.wear.SetDirt(0x40000000u | static_cast<uint32_t>(n), m, v[0], v[1], v[2], v[3], v[4], v[5], v[6] > 0.5f, 0.0);
+      if (m && m->ok) {
+        const Vec3 lo = m->boundsMin * m->scale, hi = m->boundsMax * m->scale;
+        printf("render: --dirt-test: unit %zu's box %.2f..%.2f across, %.2f..%.2f high, %.2f..%.2f long (world units)\n", n, lo.x, hi.x, lo.y, hi.y, lo.z, hi.z);
+      }
+    }
+    printf("render: --dirt-test: wet %.2f, mud %.2f (wet %.2f), dust %.2f (sand %.2f), front %.2f%s on %zu units\n", v[0], v[1], v[2], v[3], v[4], v[5],
+           v[6] > 0.5f ? ", walking" : "", placedUnits.size());
   }
   if (opt.wreckTest > 0) {  // --wreck-test: wrecks laid round where the camera starts as a game makes them, just made
     std::string id = opt.wreckUnit;
@@ -2628,7 +2668,7 @@ int main(int argc, char** argv) {
     }
     {  // --fx-move: the camera follows the driven units (where the stand had them last frame)
       Vec3 at;
-      if (fxStand && !opt.hasCam && fxStand->Focus(&at)) camera.target = at;
+      if (fxStand && (!opt.hasCam || opt.fxFollow) && fxStand->Focus(&at)) camera.target = at;  // ([unit dirt] --fx-follow)
     }
     if (!zoomPath.keys.empty() && haveMap)  // (cloudzoom) --cam-zoom-path: the zoom, lean and field of view at this time
       zoomPath.Apply(time, static_cast<float>(map.width), static_cast<float>(map.height),
@@ -2640,6 +2680,7 @@ int main(int argc, char** argv) {
     if (cine.TakeCut()) world.cameraCut = true;
     if (opt.hasCine) world.lens.strength = cine.LensShare();  // (the lens's blur goes as the picture eases back)
     world.photo = photoLeft > 0;  // (--photo: its frames)
+    if (opt.rainStops >= 0 && time >= opt.rainStops && world.rain + world.snow > 0) setWeather(0);  // [unit dirt] --rain-stops
     world.Begin(drawn, device->Width(), device->Height(), time, havePlay ? playTick * 0.1 : static_cast<double>(time));
     if (opt.blastTest > 0) {  // --blast-test: blasts at random round where the camera started, about n under way at once
       const double clock = havePlay ? playTick * 0.1 : static_cast<double>(time);
@@ -3139,6 +3180,7 @@ int main(int argc, char** argv) {
                world.wildlifeDraw.Flocks(), world.wildlifeDraw.Birds(), world.wildlifeDraw.flocksDrawn, world.wildlifeDraw.birdsDrawn,
                world.wildlifeDraw.firefliesTried, world.wildlifeDraw.heard, world.wildlifeDraw.scares);
       if (opt.focus > 0) printf("; %d buildings remembered, %zu of them gone", world.RememberedCount(), world.rememberedGone.size());
+      if (opt.unitDirt) printf("; unit dirt: %s", world.wear.DirtSummary().c_str());  // [unit dirt]
       if (opt.unitScars || opt.unitSnow)  // (battle scars: what the hits were found by; unit_wear.h)
         printf("; wear: %d units known, hits %d told, %d by shots seen to stop, %d by beams, %d by blasts near, %d unseen; %d marks made, %d heals",
                world.wear.known(), world.wear.toldHits, world.wear.shotHits, world.wear.beamHits, world.wear.blastHits, world.wear.unseenHits,

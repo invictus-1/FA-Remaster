@@ -663,6 +663,10 @@ float4 Shade(VOut i, bool front) {
     // battle scars (unit_wear.h, World::unitScars): its marks and its wear over all, on a finished unit's lit surface
     [branch] if ((i.wear.y > 0.5 || i.wear.z > 0.001) && !building && kind4.x < 0.5 && kind2.w < 0.5 && kind.y < 0.5)
       WearSurface(boneRows, i.wear, i.rest, normalize(i.restNormal), i.world, teamMask, falling.w > 0 ? falling.w : 1, base, metallic, roughness, emission, N);
+    // [unit dirt] wet and muddy units (unit_wear.h, World::unitDirt): its own wetness, mud and dust, in the rows after its
+    // marks (a quarter in the wear's y says they are there)
+    [branch] if (frac(i.wear.y) > 0.1 && i.wear.x >= 0 && !building && kind4.x < 0.5 && kind2.w < 0.5 && kind.y < 0.5)
+      DirtSurface(boneRows, (uint)(i.wear.x + 0.5) + (uint)i.wear.y * 3, i.rest, normalize(i.restNormal), i.world, teamMask, base, metallic, roughness, N);
     // snow on units (World::unitSnow): its own share of what lies, none on what glows (engines, hot parts)
     [branch] if (i.wear.w >= 0) {
       surfaceSnowShare = i.wear.w * saturate(1 - dot(emission, float3(0.3, 0.6, 0.1)) * 6);
@@ -823,12 +827,13 @@ float2 PS(VOut i) : SV_Target {
 
 bool MeshRenderer::Init(std::string* error) {
   // (units and props take half the lying snow the ground takes: they must still be told apart)
-  std::string source = std::string("#define SURFACE_SNOW 0.5\n") + kViewShaderBlock + RayShaders() + kLightingShaderBlock + kWearShaderBlock + HotMetal::ShaderBlock() + kShader;  // (hot metal: hot_metal.h)
+  // ([unit dirt] SURFACE_OWN_WET: a unit's own wetness may stand in for the weather's, lighting.h)
+  std::string source = std::string("#define SURFACE_SNOW 0.5\n#define SURFACE_OWN_WET 1\n") + kViewShaderBlock + RayShaders() + kLightingShaderBlock + kWearShaderBlock + HotMetal::ShaderBlock() + kShader;  // (hot metal: hot_metal.h)
   // (the same with the blasts' waves, for what sways while blasts are under way: PrepareBlasts makes them)
-  blastSource_ = std::string("#define BLASTS 1\n#define SURFACE_SNOW 0.5\n") + kViewShaderBlock + RayShaders() + kLightingShaderBlock +
+  blastSource_ = std::string("#define BLASTS 1\n#define SURFACE_SNOW 0.5\n#define SURFACE_OWN_WET 1\n") + kViewShaderBlock + RayShaders() + kLightingShaderBlock +
                  kBlastShaderBlock + kWearShaderBlock + HotMetal::ShaderBlock() + kShader;
   // (buildfx: the same with the remastered build look, for while it is on: PrepareBuild makes them)
-  buildSource_ = std::string("#define REMASTERED_BUILD 1\n#define SURFACE_SNOW 0.5\n") + kViewShaderBlock + RayShaders() + kLightingShaderBlock +
+  buildSource_ = std::string("#define REMASTERED_BUILD 1\n#define SURFACE_SNOW 0.5\n#define SURFACE_OWN_WET 1\n") + kViewShaderBlock + RayShaders() + kLightingShaderBlock +
                  kWearShaderBlock + HotMetal::ShaderBlock() + kBuildShaderBlock + kShader;
   int kept = 0;
   auto keep = [&](gfx::Pipeline p, const gfx::PipelineDesc& d) {
@@ -1032,7 +1037,7 @@ void MeshRenderer::Prepare(const std::vector<const View*>& views) {
     w.at = seen ? static_cast<int64_t>(floats / 4) : -1;
     e.instance.wear[0] = seen ? static_cast<float>(floats / 4) : -1.0f;
     if (!seen) e.instance.wear[1] = 0;
-    else floats += static_cast<size_t>(w.count) * 3 * 4;
+    else floats += static_cast<size_t>(w.rows) * 4;
   }
   // motion: after the hits, the bones of the frame before of each keyed model the camera's view may see
   // (where the frame before knew it, as the same model)
@@ -1092,7 +1097,7 @@ void MeshRenderer::Prepare(const std::vector<const View*>& views) {
         out += 4;
       }
     for (const WearRows& w : wears_)
-      if (w.at >= 0) std::memcpy(rowsOut_ + w.at * 4, wearRows_.data() + w.from, static_cast<size_t>(w.count) * 3 * sizeof(Vec4));
+      if (w.at >= 0) std::memcpy(rowsOut_ + w.at * 4, wearRows_.data() + w.from, static_cast<size_t>(w.rows) * sizeof(Vec4));
     (void)lastFrom;
   } else {
     for (Entry* e : rowsToBuild_) e->rows = -1;  // (no room this frame: drawn at rest)
@@ -1233,12 +1238,14 @@ void MeshRenderer::AddShell(const Model* shell, const Mat4& world, const std::ve
 void MeshRenderer::Wear(const WearLook& look) {
   if (entries_.empty()) return;
   Entry& e = entries_.back();
-  e.instance.wear[1] = static_cast<float>(look.count);
+  e.instance.wear[1] = static_cast<float>(look.count) + (look.dirt ? 0.25f : 0.0f);  // [unit dirt] (a quarter: its dirt's rows follow the marks)
   e.instance.wear[2] = look.general;
   e.instance.wear[3] = look.snow;
-  if (look.count > 0) {
-    wears_.push_back({entries_.size() - 1, look.count, wearRows_.size(), -1});
+  const int rows = look.count * 3 + (look.dirt ? kDirtRows : 0);
+  if (rows > 0) {
+    wears_.push_back({entries_.size() - 1, rows, wearRows_.size(), -1});
     wearRows_.insert(wearRows_.end(), look.rows, look.rows + look.count * 3);
+    if (look.dirt) wearRows_.insert(wearRows_.end(), look.dirtRows, look.dirtRows + kDirtRows);  // [unit dirt]
   }
 }
 

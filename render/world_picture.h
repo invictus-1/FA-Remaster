@@ -178,6 +178,7 @@ class WorldPicture {
   //   (World::litRain, rainSplashes, waterDetail), and each unit's own snow, shed in combat (World::unitSnow);
   //   about +0.05 ms while it rains. And the weather on the horizon (World::horizonWeather, proposed here: winter
   //   ice, fog banks and showers on the sea beyond the map's edge).
+  //   And units wet in rain and muddy from soft ground, drying and flaking off (World::unitDirt): about 0.01-0.02 ms.
   void SetWeatherEffects(bool on);
   // Ground detail: grass near the camera, pressed flat round units and buildings (World::groundCover); about
   //   +0.05 to 0.2 ms when zoomed in, nothing from afar; and battle scars (World::battleScars): the scorches and

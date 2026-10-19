@@ -252,11 +252,11 @@ class MeshRenderer {
     std::vector<Vec4> hits;
   };
   std::vector<ShellHits> shellHits_;
-  // the units' marks this frame (Wear): which entry, how many, where its rows begin in wearRows_, and where Prepare laid
-  // them in the bone buffer (after the hits; -1: not, no pass sees it)
+  // the units' marks this frame (Wear): which entry, how many rows (three a mark, and its dirt's: unit_wear.h), where
+  // its rows begin in wearRows_, and where Prepare laid them in the bone buffer (after the hits; -1: not, no pass sees it)
   struct WearRows {
     size_t entry;
-    int count;
+    int rows;
     size_t from;
     int64_t at;
   };
