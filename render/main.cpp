@@ -136,6 +136,11 @@
 // --ping-test  [pings] without a game: FAF's four pings (alert, move, attack, nuke) as its SimPing.lua makes them, script
 //           entities with the ping's mesh pulsing in size, in a row round where the camera starts, and a UEF ferry beacon
 //           in front of them (placed.h: both drawn by their meshes' CommandFeedback shaders, as the original does)
+// --ping <beat>  [pings] with --session: at that beat every army pings 30 from its commander toward the map's middle, as
+//           the interface's ping.lua
+//           sends it (SimCallback SpawnPing; the kinds in turn: alert, move, attack, a nuke's mesh; 6 seconds each)
+// --minimap-meshes  [pings] with --picture: the minimap shows meshes as FAF's does with its "Disable meshes" unticked
+//           (WorldPicture::SetMinimapMeshes: the pings', the interface's marks', stamped as the original draws them)
 // --no-hidden-outlines  no outlines of units hidden behind trees, cliffs and buildings (World::hiddenOutlines,
 //           hidden_outlines.h: on unless this is given, in the modern look); --hidden-outlines: on (as at first)
 // --battle-scars  the scorches and craters scripts lay stay, weathering, up to a most (World::battleScars);
@@ -711,6 +716,8 @@ struct Options {
   int selfDestructAt = 0, selfDestructArmy = 1;  // --self-destruct
   int enhanceAt = 0, enhanceArmy = 1;            // --enhance
   int pauseAt = 0;                               // --pause-at
+  int pingAt = 0;                                // [pings] --ping
+  bool minimapMeshes = false;                    // [pings] --minimap-meshes
   std::string enhancement;
   float soften = -1;                    // --soften
   std::vector<std::string> border;      // --border
@@ -870,6 +877,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--unexplored") o->unexplored = true;
     else if (a == "--ranges") o->ranges = true;
     else if (a == "--ping-test") o->pingTest = true;  // [pings]
+    else if (a == "--minimap-meshes") o->minimapMeshes = true;  // [pings]
     else if (a == "--shielded") o->shielded = true;
     else if (a == "--bones") o->listBones = true;
     else if (!(v = value())) return false;
@@ -1149,6 +1157,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
         o->animate.resize(comma);
       }
     }
+    else if (a == "--ping") o->pingAt = atoi(v);  // [pings] <beat>: every army pings near its commander then (a new game)
     else if (a == "--pause-at") o->pauseAt = atoi(v);  // <beat>: the commander of --enhance's army is paused then
     else if (a == "--enhance") {  // <beat>,<army>,<enhancement>: that army's commander is ordered to build it then
       char name[128] = "";
@@ -1397,6 +1406,7 @@ int main(int argc, char** argv) {
     setup.enhanceArmy = opt.enhanceArmy;
     setup.enhancement = opt.enhancement;
     setup.pauseAt = static_cast<uint32_t>(std::max(opt.pauseAt, 0));
+    setup.pingAt = static_cast<uint32_t>(std::max(opt.pingAt, 0));  // [pings]
     live.SetFocusArmy(opt.focus);
     picture.SetVulkan(opt.vulkan);
     picture.SetDebug(opt.debug);  // (photomode: the validation layer for the pixel interface's device too)
@@ -1414,6 +1424,7 @@ int main(int argc, char** argv) {
     }
     if (opt.map.empty()) opt.map = live.MapPath();
     if (!opt.picture.empty()) {  // the pixel interface, fed by the same simulation
+      picture.SetMinimapMeshes(opt.minimapMeshes);  // [pings] (--minimap-meshes)
       if (opt.pictureWindow) {  // (into a window of its own, as the interface's would be)
         pictureWindow = Window::Create("FA Remastered (picture into a window)", opt.width, opt.height, &error, true, false);
         if (pictureWindow) picture.UseWindow(pictureWindow->Handle());
@@ -2800,6 +2811,22 @@ int main(int argc, char** argv) {
           WorldPicture::UserDecal outer{"/textures/ui/common/game/AreaTargetDecal/nuke_icon_outer.dds", camera.target.x, camera.target.z, 40, 40};
           WorldPicture::UserDecal splash{"/textures/ui/common/game/AreaTargetDecal/weapon_icon_small.dds", spot.x, spot.z, 10, 10};
           picture.SetUserDecals({outer, splash});
+          if (opt.pingAt > 0) {  // [pings] (--ping) and two of the interface's marks, for the minimap's stamps: a move order's mark
+            // at the ghost's spot with the original's default LODCutoff, 1000 (beyond which a 20 km map's minimap lies: not
+            // stamped), and the same mark 24 east of it with 99999, made 8 times larger to be seen at the
+            // minimap's scale (stamped where --minimap-meshes is given)
+            WorldPicture::WorldMesh mark;
+            mark.mesh = "/meshes/game/crosshair02d_lod0.scm";
+            mark.texture = "/meshes/game/crosshair02d_albedo.dds";
+            mark.shader = "CommandFeedback";
+            mark.uniformScale = 0.5f;
+            mark.position[0] = spot.x, mark.position[1] = spot.y, mark.position[2] = spot.z;
+            WorldPicture::WorldMesh far = mark;
+            far.uniformScale = 4;
+            far.lodCutoff = 99999;
+            far.position[0] = spot.x + 24, far.position[1] = spot.y + 3, far.position[2] = spot.z;
+            picture.SetWorldMeshes({mark, far});
+          }
         }
       }
       // where the interface would write the units' custom names: asked first, for the frame then drawn

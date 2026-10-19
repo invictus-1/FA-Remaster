@@ -20,6 +20,7 @@
 #include "sim/replay.h"
 #include "sim/session.h"
 #include "sim/sim.h"
+#include "sim/terrain.h"  // [pings] (the ground where a ping is placed)
 #include "sim/sim_view.h"
 
 namespace render {
@@ -225,6 +226,62 @@ void LiveSim::Pause(int army) {
              e.sim->tick(), first->workProgress);
 }
 
+// [pings] Every army pings near its first unit: SimCallbacks' SpawnPing with the table ping.lua's DoPing hands it ({Owner =
+// army - 1, Type, Location, Lifetime = 6, Mesh}: SimPing.lua makes the script entity with "/meshes/game/ping_" .. Mesh 2
+// above Location), from the army's own command source; the kinds in turn. The place: 30 from the unit toward the map's
+// middle, on the ground or the water there (as the mouse's place in the world is given).
+void LiveSim::Ping() {
+  Engine& e = *engine_;
+  std::vector<moho::UnitView> units;
+  moho::UnitViews(*e.sim, &units);
+  static const char* const kKinds[4][2] = {{"Alert", "alert_marker"}, {"Move", "move"}, {"Attack", "attack_marker"}, {"Alert", "nuke_marker"}};
+  for (int army = 1; army <= static_cast<int>(e.session.header.armies.size()); ++army) {
+    const moho::UnitView* first = nullptr;
+    for (const moho::UnitView& u : units)
+      if (u.army == army && (!first || u.id < first->id)) first = &u;
+    if (!first) continue;
+    std::string t;  // (the engine's byte form of a Lua value: 0 a number, 1 a string, 4 a table's pairs up to 5)
+    auto number = [&](float v) {
+      t.push_back(0);
+      t.append(reinterpret_cast<const char*>(&v), 4);
+    };
+    auto text = [&](const char* s) {
+      t.push_back(1);
+      t.append(s);
+      t.push_back(0);
+    };
+    const char* const* kind = kKinds[(army - 1) % 4];
+    t.push_back(4);
+    text("Owner");
+    number(static_cast<float>(army - 1));
+    text("Type");
+    text(kind[0]);
+    text("Mesh");
+    text(kind[1]);
+    text("Lifetime");
+    number(6);
+    text("Location");
+    float at[3] = {first->position[0], first->position[1], first->position[2]};
+    if (const moho::TerrainMap* map = e.sim->map()) {
+      const float dx = static_cast<float>(map->width()) * 0.5f - at[0], dz = static_cast<float>(map->height()) * 0.5f - at[2];
+      const float d = std::sqrt(dx * dx + dz * dz);
+      if (d > 1) at[0] += dx / d * 30, at[2] += dz / d * 30;
+      at[1] = map->SurfaceHeight(at[0], at[2]);
+    }
+    t.push_back(4);
+    for (int k = 0; k < 3; ++k) {
+      number(static_cast<float>(k + 1));
+      number(at[k]);
+    }
+    t.push_back(5);
+    t.push_back(5);
+    moho::CommandWriter writer(e.session.header.armies[army - 1].source);
+    writer.LuaSimCallback("SpawnPing", t, {});
+    moho::ApplyCommands(*e.sim, writer.Take());
+    moho::Logf(moho::LogLevel::Info, "render: army %d pings (%s) at beat %u, at %.1f, %.1f", army, kind[1], e.sim->tick(), at[0], at[2]);
+  }
+}
+
 void LiveSim::Run() {
   const auto t0 = std::chrono::steady_clock::now();
   std::string error;
@@ -268,6 +325,7 @@ void LiveSim::Run() {
     } else if (setup_.pauseAt && e.sim->tick() == setup_.pauseAt) {
       Pause(setup_.enhanceArmy);
     }
+    if (!e.stream && setup_.pingAt && e.sim->tick() == setup_.pingAt) Ping();  // [pings] (a new game's only)
     const auto b0 = std::chrono::steady_clock::now();
     e.sim->Tick();
     const float ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - b0).count();
