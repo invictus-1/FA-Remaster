@@ -221,6 +221,28 @@ sim-side uses put an address into data: `factory-manager.lua:386` names a platoo
 `ChatBrainComponent.lua:118` stamps a chat message's Id, `utilities.lua` SerializableDeepCopy marks a repeated table
 (the last two only travel to the interface).
 
+## Rerun (2026-10-19, main ff78363)
+
+Since the run above, main has gained coordinated orders (weak links between commands, `Sim::commandsEmptied`), the
+cargo's catch-up in the entity pass, the dead landing at rest, the head-type dispatch, the issue target on script
+orders, the guard's reference point by CommandPosGun, and more (119 sim commits).
+
+| Input | Beats | Result |
+|---|---|---|
+| The 13 gate replays | each to its end (701 to 13311) | identical, all 13 |
+| MP3 | 10737 | identical |
+| MP2 | 11804 | identical |
+| MP2, `--focus-a 1 --focus-b 2` | 11804 | identical state; the Lua side differs from beat 56 (below) |
+| MP1, `--ticks 7000` | 7001 | identical |
+
+Read in the new code, for an order taken from addresses or hashes. None found:
+- Every walk over `UnitCommand::units` (a `std::set<Unit*>`) copies it and sorts by id, or only asks whether any or all
+  units match. The two `walkSeq` stable sorts start from the id-sorted list.
+- The carrier launch, retrieve, load and unload lists are sorted by id.
+- `commandsEmptied` is a vector in push order. A coordinated order's links are kept in link order, and they only
+  answer yes or no.
+- The unordered maps (hpath, `goneIds_`, the blueprint caches) are only looked up.
+
 ## The sim's Lua and the outside world (read 2026-10-17)
 
 A read of FAF 3839's sim scripts, M28AI, RNGAI, AI-Uveso and the unit packs (items 4 and 5 above). Nothing was
@@ -249,11 +271,20 @@ closure, thread or userdata in one copy shifts every later serial there. The one
 - Every multiplayer game with humans can meet it; AI-only games cannot.
 - It splits two machines only together with a walk over object keys that reaches the state, and none was found.
 
-Focus-army allocations break the serial assumption in real multiplayer:
+Focus-army allocations break the serial assumption in real multiplayer, in every game whose copies have different
+focus armies:
+- FAF's unit data setter (`Unit.lua:77-86`) copies a unit's data into `Sync.UnitData` only when the unit is the
+  focus army's (or the copy is an observer's), and makes that unit's table there the first time. From the first
+  build on, the copies make different numbers of objects, and every later serial differs. Seen 2026-10-19 (main
+  ff78363): MP2 with `--focus-a 1 --focus-b 2` has object serials 148206 and 148202 from beat 56, the beat army 1's
+  first structure is started. The heaps differ from beat 56 and the collector threshold from beat 1566. The state
+  is identical to the end (11804 beats).
 - `ChatUtils.lua` makes `Sync.ChatMessages` only on the machines an allies-only chat goes to, so the serials
   then differ between the teams' machines. There are about 120 sim-side `GetFocusArmy` calls.
-- The focus runs above stayed alike because no replay in them had such a chat.
-- The check: twocopies `--focus-a` / `--focus-b` on a stream with an allies-only chat.
+- With the serials apart, a walk over object keys gives each copy its own order. The copies split only when such a
+  walk reaches the state. None did in the focus runs above; they did not stay alike because the serials matched.
+- The check: twocopies `--focus-a` / `--focus-b` on any replay. Its `lua` line names the first beat the serials
+  part.
 - Remedies: entity script tables take a serial derived from the entity id (in a range of their own), or
   option (c) above.
 - Commander Survival Kit's `UI/campaignconfig_sim.lua` calls `AddBuildRestriction(GetFocusArmy(), ...)` in the
