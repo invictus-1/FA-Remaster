@@ -1302,13 +1302,24 @@ void BrakeSpline(Sim& sim, Unit* u, int mode) {
   // start, and 0x2f's 2950 step lands on that brake's second point, 734.1437. Ours braked from 734.2187.)
   const bool stepped = sim.coordsPending && u->lastPosTick == sim.tick();
   const Quat& q0 = stepped ? u->lastOrientation : u->orientation;
-  Vec3 F = Rotate(q0, Vec3{0, 0, 1});
+  // F: the quaternion's forward column as 0x5b270f..0x5b2785 forms it (2 (wy + zx), 2 (zy - wx), 1 - 2 (yy + xx)),
+  // not a rotation of (0, 0, 1); V: SetLength 0x5b1c90 of F to the speed, one factor speed / |F| times each
+  // component, not each component times the speed over |F|. The two forms differ in the last bit. (The factor is
+  // never stored: fsqrt 0x40eaf0, fdivr, then the three fmul from the x87 stack (0x5b1cd6..0x5b1cf7); at PC_24 each
+  // of those rounds to 24 significant bits as the float operations here do, only the exponent range is wider.)
+  // Seen: MP3 9750, army 1's 0x10006e brakes for 0x100105 (collision brake): ours' first brake point lay one float
+  // step off in x (284.7557678 for the original's 284.7557373), its tilt and height followed, and at 9965 a box test
+  // that tied two axes to the bit went the other way (a push the original does not make).
+  Vec3 F = vm::Forward(q0);
   m.brakeDir = F;
   const Vec3& lm = UnitVelocity(u);
   float s = std::sqrt(lm.x * lm.x + lm.y * lm.y + lm.z * lm.z);
-  float fl = std::sqrt(F.x * F.x + F.y * F.y + F.z * F.z);
-  Vec3 V{0, 0, 0};
-  if (fl > 0) V = Vec3{F.x * s / fl, F.y * s / fl, F.z * s / fl};
+  const float fl2 = (F.x * F.x + F.y * F.y) + F.z * F.z;
+  Vec3 V = F;
+  if (fl2 > 0.0f) {
+    const float k = s / std::sqrt(fl2);
+    V = Vec3{F.x * k, k * F.y, k * F.z};
+  }
   if (s > 0 && (lm.x * F.x + lm.y * F.y + lm.z * F.z) / s < 0) V = Vec3{-V.x, -V.y, -V.z};
   float fxz = std::sqrt(F.x * F.x + F.z * F.z);
   float dfx = fxz > 0 ? F.x / fxz : m.fx, dfz = fxz > 0 ? F.z / fxz : m.fz;
