@@ -232,8 +232,8 @@ local ai = ConTextMatches("ai")
 check("'_' comes before letters: the ai_ names, then Air...", ai[table.getn(ai)], "AirLookAheadMult")
 check("no text, no names", table.getn(ConTextMatches("")), 0)
 check("our own commands are among them", names(ConTextMatches("remaster_s")), "remaster_snow_tracks remaster_soft_shadows remaster_stats")
-check("the cinematic camera's, the lens's and the photo's too", names(ConTextMatches("remaster_c")) .. " " .. names(ConTextMatches("remaster_l")) .. " " ..
-    names(ConTextMatches("remaster_p")), "remaster_cinecam remaster_lens remaster_look remaster_photo remaster_photo_look")
+check("the cinematic camera's, the lens's, the photo's and Low Latency's too", names(ConTextMatches("remaster_c")) .. " " .. names(ConTextMatches("remaster_l")) .. " " ..
+    names(ConTextMatches("remaster_p")), "remaster_cinecam remaster_lens remaster_look remaster_low_latency remaster_photo remaster_photo_look")
 check("one argument, no more", pcall(ConTextMatches), false)
 
 parent:Destroy()

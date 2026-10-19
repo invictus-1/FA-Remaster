@@ -119,6 +119,8 @@ struct WindowHooks {
   std::function<bool()> direct;
   // `changed`: the part of the layer drawn anew since the last call.
   std::function<void(const SoftwareTarget& interfaceLayer, const IntRect& changed)> present;
+  // Once a frame, before the window's events are read (the renderer's Low Latency wait); unset: none.
+  std::function<void()> waitForFrame;
   // True while the host runs ahead (--fast-forward): the frame times count only after it.
   std::function<bool()> catchingUp;
   // True while the game's beat runs on its own thread: the frame only shows the picture, and the

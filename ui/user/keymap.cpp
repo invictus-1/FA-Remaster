@@ -309,7 +309,7 @@ const std::vector<const char*>& ConsoleNames() {
         "remaster_atmosphere", "remaster_soft_shadows", "remaster_ray_tracing", "remaster_weather_effects",
         "remaster_ground_detail", "remaster_frame_generation", "remaster_water_ripples", "remaster_lens", "remaster_cinecam",
         "remaster_photo", "remaster_battle_effects", "remaster_energy_shields", "remaster_hidden_outlines",
-        "remaster_photo_look"};
+        "remaster_photo_look", "remaster_low_latency"};
     std::sort(all.begin(), all.end(), ConNameLess);
     return all;
   }();
@@ -401,6 +401,9 @@ int l_LooksForTests(lua_State* L) {
   lua_rawset(L, -3);
   lua_pushstring(L, "verticalSync");
   lua_pushboolean(L, Pacing().verticalSync);
+  lua_rawset(L, -3);
+  lua_pushstring(L, "lowLatency");
+  lua_pushboolean(L, Pacing().lowLatency);
   lua_rawset(L, -3);
   const char* gfx[6] = {"fidelity", "shadows", "sceneSamples", "meshDetail", "textureDetail", "samplesDrawn"};
   const double gfxValues[6] = {static_cast<double>(looks.fidelity), static_cast<double>(looks.shadows),
@@ -1098,6 +1101,10 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
       const int fps = std::atoi(value.c_str());
       pacing.verticalSync = Upper(value) == "VSYNC";
       if (!pacing.verticalSync) pacing.frameMs = fps > 0 ? 1000.0 / fps : 0.0;
+      return;
+    }
+    if (key == "REMASTER_LOW_LATENCY") {  // (the renderer's latency limiter: 0 off, 1 on)
+      if (!value.empty()) Pacing().lowLatency = value[0] == '1' || Upper(value).rfind("ON", 0) == 0 || Upper(value).rfind("TRUE", 0) == 0;
       return;
     }
   }

@@ -721,6 +721,7 @@ int main(int argc, char** argv) {
       };
       hooks.direct = [&]() { return session.DrawsToWindow(); };
       hooks.present = [&](const ui::SoftwareTarget& layer, const ui::IntRect& changed) { session.PresentToWindow(layer, changed); };
+      hooks.waitForFrame = [&]() { session.WaitForNextFrame(); };
       // The game's beats on a thread of their own, the window showing the world meanwhile
       // (MOHO64UI_BEATS_HERE=1: on this thread, as before).
       session.beatsOnThread = std::getenv("MOHO64UI_BEATS_HERE") == nullptr;

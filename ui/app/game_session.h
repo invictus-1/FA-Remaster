@@ -137,6 +137,9 @@ class GameSession {
   // window's size, transparent where the world shows) over it. `changed`: the part of `target`
   // drawn anew since the last call (a picture new or of another size takes all of it).
   void PresentToWindow(const SoftwareTarget& target, const IntRect& changed);
+  // Once a frame, before its input is read: the renderer's wait for the frame's time with Low Latency on
+  // (WorldPicture::WaitForNextFrame on the picture about to be shown; FramePacing::lowLatency).
+  void WaitForNextFrame();
   // For checking: the next shown frame is read back and saved as a PNG.
   void CaptureWindow(const std::string& path);
 

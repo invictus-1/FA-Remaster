@@ -188,6 +188,19 @@ video.remaster_frame_rate.set('remaster_frame_rate', 'uncapped', false)
 check("uncapped has no shortest frame", moho64ui_Looks().frameMs, 0)
 video.remaster_frame_rate.set('remaster_frame_rate', 'vsync', false)
 check("and back to vertical sync", moho64ui_Looks().verticalSync, true)
+-- Low Latency (the renderer's latency limiter, render 0ed9975): on unless chosen, in no preset level
+check("the Video tab has Low Latency, on unless chosen", video.remaster_low_latency and video.remaster_low_latency.default, 1)
+check("the window's pictures are told so at the start", moho64ui_Looks().lowLatency, true)
+video.remaster_low_latency.set('remaster_low_latency', 0, false)
+check("Low Latency off in the menu reaches the program", moho64ui_Looks().lowLatency, false)
+video.remaster_low_latency.set('remaster_low_latency', 1, false)
+check("and on again", moho64ui_Looks().lowLatency, true)
+do
+    local O = import('/lua/options/options.lua')
+    local inAny = false
+    for level = 0, 4 do inAny = inAny or O.RemasterPresetValues(level).remaster_low_latency ~= nil end
+    check("Low Latency is in no preset level", inAny, false)
+end
 -- Options the remastered picture does its own way are not in the menu; the glow is on unless chosen
 for _, key in {'shadow_resolution', 'shadow_render_distance', 'render_skydome'} do
     check("the Video tab leaves out " .. key, video[key], nil)

@@ -67,6 +67,7 @@ struct GameSession::Picture : WorldSource {
   render::Camera camera;
   int cameraW = 0, cameraH = 0;
   bool vsync = true;
+  bool lowLatency = false;  // (as the renderer's picture starts: SetLowLatency)
   int layerW = 0, layerH = 0;  // the interface layer's size as last given (0: none yet)
   // The moment the frame shows, once fixed this frame by LifeBarAnchors (PresentToWindow takes
   // the same, so the bars it draws are those the anchors were of).
@@ -980,6 +981,7 @@ bool GameSession::FinishLoad(std::string* why) {
 struct GameSession::MenuPicture {
   render::WorldPicture picture;
   bool vsync = true;
+  bool lowLatency = false;  // (as the renderer's picture starts: SetLowLatency)
   int layerW = 0, layerH = 0;  // the interface layer's size as last given (0: none yet)
 };
 namespace {
@@ -1040,6 +1042,17 @@ void UseGameWindow(render::WorldPicture& picture, void* window) {
 }  // namespace
 #endif
 
+void GameSession::WaitForNextFrame() {
+#ifdef MOHO64UI_WORLD_PICTURE
+  // (the picture about to be shown: the game's on its window, else the menu's; with Low Latency off it returns at once)
+  if (picture_) {
+    if (picture_->direct) picture_->picture.WaitForNextFrame();
+  } else if (menuPicture_) {
+    menuPicture_->picture.WaitForNextFrame();
+  }
+#endif
+}
+
 void GameSession::PresentToWindow(const SoftwareTarget& target, const IntRect& changed) {
 #ifdef MOHO64UI_WORLD_PICTURE
   if (!window) return;
@@ -1047,6 +1060,7 @@ void GameSession::PresentToWindow(const SoftwareTarget& target, const IntRect& c
     if (!menuPicture_) {
       auto menu = std::make_unique<MenuPicture>();
       menu->picture.SetVulkan(Looks().vulkan);
+      menu->picture.SetLowLatency(menu->lowLatency = Pacing().lowLatency);  // (the Video tab's Low Latency, before Open)
       UseGameWindow(menu->picture, window);
       std::string error;
       if (!menu->picture.Open(vfs_, "", &error)) {
@@ -1061,6 +1075,8 @@ void GameSession::PresentToWindow(const SoftwareTarget& target, const IntRect& c
     GiveLayer(menu.picture, target, changed, &menu.layerW, &menu.layerH);
     const bool vsync = Pacing().verticalSync;
     if (vsync != menu.vsync) menu.picture.SetVsync(vsync), menu.vsync = vsync;
+    const bool lowLatency = Pacing().lowLatency;
+    if (lowLatency != menu.lowLatency) menu.picture.SetLowLatency(lowLatency), menu.lowLatency = lowLatency;
     std::vector<uint8_t> rgba;
     if (!captureTo_.empty()) menu.picture.CaptureNextWindowFrame(&rgba);
     menu.picture.DrawToWindow(render::Camera(), w, h, 0.0);
@@ -1074,6 +1090,8 @@ void GameSession::PresentToWindow(const SoftwareTarget& target, const IntRect& c
   GiveLayer(pic.picture, target, changed, &pic.layerW, &pic.layerH);
   const bool vsync = Pacing().verticalSync;
   if (vsync != pic.vsync) pic.picture.SetVsync(vsync), pic.vsync = vsync;
+  const bool lowLatency = Pacing().lowLatency;
+  if (lowLatency != pic.lowLatency) pic.picture.SetLowLatency(lowLatency), pic.lowLatency = lowLatency;
   std::vector<uint8_t> rgba;
   if (!captureTo_.empty()) pic.picture.CaptureNextWindowFrame(&rgba);
   const auto t0 = std::chrono::steady_clock::now();
@@ -1130,6 +1148,7 @@ void GameSession::OpenPicture() {
     }
     pic->picture.SetVulkan(Looks().vulkan);  // (the player's Graphics API)
     pic->picture.SetTextureDetail(Looks().textureDetail);  // (the game's Texture Detail)
+    pic->picture.SetLowLatency(pic->lowLatency = Pacing().lowLatency);  // (the Video tab's Low Latency)
     // (Ray Tracing before Open: the surfaces' shaders are made for reflections when the map opens; the
     // renderer's request 31 follow-up. The first frame's looks block sets it again, harmlessly.)
     pic->picture.SetRayTracing(Looks().rayTracing);

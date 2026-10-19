@@ -178,6 +178,8 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     // step of the interface, nothing that touches the simulation. Those come in the next frame
     // after the beat, with all the time that passed.
     const bool busy = hooks.busy && hooks.busy();
+    // (Low Latency: the wait for the frame's time comes before the input is read, so that what is read is fresh.)
+    if (hooks.waitForFrame) hooks.waitForFrame();
     if (!busy && !window.Pump()) break;
     auto now = Clock::now();
     const bool direct = hooks.direct && hooks.direct() && hooks.present;

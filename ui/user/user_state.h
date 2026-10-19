@@ -493,9 +493,13 @@ bool AnySelectionSets(lua_State* L);
 // remaster_frame_rate vsync | uncapped | <frames a second>. The game's own two, "Vertical Sync"
 // (SC_VerticalSync) and "Frametime" (SC_FrameTimeClamp, the shortest frame in milliseconds),
 // set the same when changed in the menu. The window's loop keeps to it.
+// "Low Latency" beside it (the renderer's latency limiter, look 7 of Chris's list of 2026-10-17, render 0ed9975;
+// WorldPicture::SetLowLatency on the window's pictures, WaitForNextFrame before each frame's input):
+// remaster_low_latency 0 | 1. ON by default (Chris, 2026-10-18: every new thing on; the renderer's ask).
 struct FramePacing {
   bool verticalSync = true;   // the screen's own rate
   double frameMs = 8;         // otherwise the shortest frame; 0: as fast as it goes
+  bool lowLatency = true;     // one frame waiting to be shown, each begun just in time
 };
 FramePacing& Pacing();
 // The performance statistics drawn over the interface (docs/performance-lessons.md 5.5 and 6):

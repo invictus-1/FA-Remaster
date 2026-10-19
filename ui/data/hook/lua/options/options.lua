@@ -143,6 +143,22 @@ local looks = {
         },
     },
     {
+        -- the renderer's latency limiter (look 7 of Chris's list of 2026-10-17, render 0ed9975): one frame waiting to
+        -- be shown, each begun just in time for its refresh. On by default (the renderer's ask), in no preset
+        title = "Low Latency",
+        key = 'remaster_low_latency',
+        tip = "Fewer frames wait to be shown, so the picture answers the mouse and the keys sooner; on a busy PC a frame may now and then come a refresh late.",
+        type = 'toggle',
+        default = 1,
+        set = Look("remaster_low_latency"),
+        custom = {
+            states = {
+                { text = "<LOC _Off>", key = 0 },
+                { text = "<LOC _On>", key = 1 },
+            },
+        },
+    },
+    {
         title = "Remastered Preset",
         key = 'remaster_preset',
         tip = "Sets the remastered looks below together, from Off (the original game's look) to Ultra. Each can still be changed after; Custom leaves them as they are.",
