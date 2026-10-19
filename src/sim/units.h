@@ -52,7 +52,7 @@ class UnitWeapon : public ScriptObject {
   int layerCaps = 0;
   float firingRandomness = 0;
   std::vector<std::vector<uint64_t>> priorities;
-  struct BlackEntry { uint32_t id; Vec3 pos; int counter; };
+  struct BlackEntry { uint32_t id; int counter; };  // (weapon +0x160: a WeakPtr to the entity and a count, 12 bytes)
   std::vector<BlackEntry> blacklist;
   int missCount = 0, shots = 0;
   int fireClock = 0;

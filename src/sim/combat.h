@@ -16,6 +16,7 @@
 //   OnKilled); the dying unit is destroyed by its script later.
 #pragma once
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <vector>
@@ -100,9 +101,11 @@ struct AiTarget {
   // set): it stands where the fake stands and lasts as long as the fake does
   uint32_t fakeId = 0;
   // (a unit and the blip of that unit are two entities in the original: going from one to the other is a new target)
+  // (the original's CAiTarget compare 0x6d31d0, UnitWeapon::SetTarget 0x6d5f47: the type, the entity, and for a point
+  // the point by memcmp 0x4f0a50 at 0x6d31f7..0x6d320a, so a -0.0 part is another point)
   bool operator==(const AiTarget& o) const {
     return type == o.type && entityId == o.entityId && (type != 1 || (viaBlip == o.viaBlip && fakeId == o.fakeId)) &&
-           (type != 2 || (pos.x == o.pos.x && pos.y == o.pos.y && pos.z == o.pos.z));
+           (type != 2 || std::memcmp(&pos, &o.pos, sizeof(Vec3)) == 0);
   }
 };
 

@@ -970,14 +970,25 @@ __attribute__((noinline)) bool PickPointBelowWater(Sim& sim, Entity* e, int* bon
 }
 
 // Blacklist decay (0x6d78f0), run whenever a weapon gets a target.
+// 0x6d78f0 (from UnitWeapon::SetTarget 0x6d5f84): each entry's count goes down by one (0x6d7910..0x6d791a), and the
+// entry goes when its entity is gone (its WeakPtr empty: deleted, not merely queued for it), when that entity moved
+// in this beat (its position, +0xac, against the one before, +0xc8, by memcmp 0x4f0a50: 0x6d7924..0x6d7938), or
+// when the count is down to 0 (0x6d793a). The entry keeps no place of its own: an entity that moved some beats ago
+// and stands again stays on the list.
 void DecayBlacklist(Sim& sim, UnitWeapon* w) {
   auto& bl = w->blacklist;
-  for (auto& b : bl) --b.counter;
   bl.erase(std::remove_if(bl.begin(), bl.end(),
-                          [&](const UnitWeapon::BlackEntry& b) {
+                          [&](UnitWeapon::BlackEntry& b) {
+                            const int left = --b.counter;
                             Entity* e = sim.FindEntity(b.id);
-                            if (!e || e->destroyQueued || b.counter < 1) return true;
-                            return e->position.x != b.pos.x || e->position.y != b.pos.y || e->position.z != b.pos.z;
+                            if (!e) return true;
+                            const Vec3& before = e->kind == Entity::Kind::Unit
+                                                     ? static_cast<const Unit*>(e)->lastPosition
+                                                     : e->kind == Entity::Kind::Projectile
+                                                           ? static_cast<const Projectile*>(e)->prevPos
+                                                           : e->position;
+                            if (!SameBits(e->position, before)) return true;
+                            return left <= 0;
                           }),
            bl.end());
 }
@@ -1063,7 +1074,7 @@ void WeaponImpactEvent(Sim& sim, UnitWeapon* w, int event) {
         b.counter = 10;
         found = true;
       }
-    if (!found) w->blacklist.push_back({ref, te->position, 10});
+    if (!found) w->blacklist.push_back({ref, 10});
     SetTarget(sim, w, AiTarget{});
     return;
   }
@@ -1426,7 +1437,7 @@ bool LeashOrInvisible(Sim& sim, Unit* u) {
   Vec3 leash = u->leashPos;
   if (u->guardedId)
     if (Entity* g = sim.FindEntity(u->guardedId)) leash = g->position;
-  if (leash.x == 0 && leash.y == 0 && leash.z == 0) return false;
+  if (BitsZero(leash)) return false;  // (0x5d8b5d..0x5d8b6d: memcmp 0x4f0a50 with the zero vector)
   float dx = u->position.x - leash.x, dy = u->position.y - leash.y, dz = u->position.z - leash.z;
   float r = CB(u).guardReturnRadius;
   return dx * dx + dy * dy + dz * dz > r * r;
