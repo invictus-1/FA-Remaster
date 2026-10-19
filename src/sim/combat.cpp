@@ -3250,11 +3250,16 @@ void EndAttack(Sim& sim, Unit* u, BuildTask& t) {
   // (MakingAttackRun is not the task's: only the flight code sets it and clears it, in its own pass; a killed
   // aircraft keeps it)
   u->unitStates.erase("Attacking");
-  if (u->dead || u->destroyQueued) return;
   // the dtor 0x5f4160: IgnoreFormation(false), attacker.Stop() 0x5d56f0 = SetDesiredTarget(none) whatever the
   // desired target was (every weapon is told SetTarget(none): one that still holds a target, also a long dead
   // one, gets OnLostTarget - a missile launcher packs up), then AbortMove (the caller)
-  if (!u->weapons.empty()) SetDesiredTarget(sim, u, AiTarget{});
+  // The Stop has no test of the unit's life either (0x5f41f1..0x5f4217: only that the attacker unit+0x544 exists, which
+  // KillCleanup deletes a beat later), so a unit killed on an Attack (Unit::Kill empties its queue, 0x6a841a) has its
+  // weapons' OnLostTarget run in its Kill. Seen: MP2 7298, army 0's Corsair 0xe0 (dra0202) shot down while its
+  // GroundMissile held a target: that weapon's OnLostTarget sets SetSpeedMult(1.0) (DRA0202_Script.lua 66), and the
+  // original's falling Corsair has top speed 15 from 7299; ours skipped the Stop for the dead unit and kept 0.67 x 15.
+  if (!u->destroyQueued && !u->combatGone && !u->weapons.empty()) SetDesiredTarget(sim, u, AiTarget{});
+  if (u->dead || u->destroyQueued) return;
   u->navIgnoreFormation = false;
 }
 
