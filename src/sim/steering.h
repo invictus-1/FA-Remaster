@@ -21,6 +21,9 @@ bool AtPosition(const Unit* u, const Vec3& q);
 // A box primitive against an oriented query box with BoxBox 0x474830's own arithmetic (touching counts).
 struct WorldShape;
 bool BoxPrimitiveMeetsBox(const WorldShape& s, const Vec3& centre, const Vec3 axes[3], const float half[3]);
+// An oriented box's AABB as CollectEntitiesInBox 0x721dc0 takes it (0x4fe2d0: its eight corners, then the centre and
+// half size of their bounds, 0xa3ae40, and centre -/+ half size).
+void OrientedBoxAabb(const Vec3& centre, const Vec3 axes[3], const float half[3], Vec3* mn, Vec3* mx);
 // v turned a quarter turn about +y with the quaternion of 0x10b965c through its matrix (0x452d40).
 Vec3 RotateQuarterTurnY(const Vec3& v);
 // CUnitMotion::AddImpulse 0x6b8ac0 (land): v = v/2 + imp (capped at 0.2 x the max speed); pushed.

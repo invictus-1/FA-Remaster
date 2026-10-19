@@ -192,11 +192,10 @@ bool UnitInLine(Sim& sim, Unit* u, float ax, float az, float bx, float bz, int f
   const float half[3] = {hw, 1000.0f, len * 0.5f};
   bool blocked = false;
   const float reach = hw + 16.0f;  // (candidates come by their centre: far enough for the biggest hulls)
-  // the line box's own bounds, for the entity grid (0x721de9: 0x4fe2d0, then 0x4fcbe0)
-  const Vec3 ext{std::fabs(axes[0].x) * half[0] + std::fabs(axes[2].x) * half[2], 1000.0f,
-                 std::fabs(axes[0].z) * half[0] + std::fabs(axes[2].z) * half[2]};
-  const Vec3 boxMn{centre.x - ext.x, centre.y - ext.y, centre.z - ext.z};
-  const Vec3 boxMx{centre.x + ext.x, centre.y + ext.y, centre.z + ext.z};
+  // the line box's own bounds (0x721de9: 0x4fe2d0, its corners' aligned box), for the entity grid (0x4fcbe0) and the
+  // AABB test
+  Vec3 boxMn, boxMx;
+  OrientedBoxAabb(centre, axes, half, &boxMn, &boxMx);
   sim.ForUnitsInRect(std::min(ax, bx) - reach, std::min(az, bz) - reach, std::max(ax, bx) + reach,
                      std::max(az, bz) + reach, [&](Unit* e) {
                        if (blocked || e == u) return;
@@ -204,7 +203,14 @@ bool UnitInLine(Sim& sim, Unit* u, float ax, float az, float bx, float bz, int f
                        if (!GetWorldShape(e, &s)) return;
                        Vec3 mn, mx;
                        ShapeBounds(s, &mn, &mx);
-                       if (!GridCellsMeet(boxMn, boxMx, mn, mx)) return;
+                       // CollectEntitiesInBox 0x721dc0 takes its candidates from the grid's lists for the box's cells
+                       // (0x722df0), where a unit is registered by its span as of the last AdvanceCoords, skirt-wide
+                       // (GridFindsInBox, as PathUnitBlocked and the spot test), not by its box's own cells; then the
+                       // AABB test against the entity's (0x721ea0..0x721ee6, touching passes)
+                       if (!GridFindsInBox(sim, e, boxMn.x, boxMn.z, boxMx.x, boxMx.z)) return;
+                       if (boxMn.x > mx.x || mn.x > boxMx.x || boxMn.y > mx.y || mn.y > boxMx.y || boxMn.z > mx.z ||
+                           mn.z > boxMx.z)
+                         return;
                        // (CollectEntitiesInBox's primitive test: a box goes through BoxBox 0x474830, whose interval
                        // arithmetic is not the plain separation test's to the last bit. Seen: Skirmish 3095, army 4's
                        // 0x40001b checking its line to (610, 192) past 0x40002e, 4.7e-5 apart by the plain test: the

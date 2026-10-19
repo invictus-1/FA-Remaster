@@ -458,6 +458,16 @@ bool PropHitTest(Entity* p, const Obb& box, const Vec3& mn, const Vec3& mx, Vec3
 }
 }  // namespace
 
+void OrientedBoxAabb(const Vec3& centre, const Vec3 axes[3], const float half[3], Vec3* mn, Vec3* mx) {
+  Obb b;
+  b.c = centre;
+  b.ax[0] = axes[0];
+  b.ax[1] = axes[1];
+  b.ax[2] = axes[2];
+  b.h = Vec3{half[0], half[1], half[2]};
+  BoxAabb(b, mn, mx);
+}
+
 void ProcessSurfaceCollision(Sim& sim, Unit* u) {
   UnitMotion& m = u->motion;
   m.contacts.clear();  // (0x6b904f: emptied before any of the early returns)
