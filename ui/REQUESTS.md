@@ -1054,6 +1054,20 @@ exe's SCR_ConcatArgsAndCall builds them (an argument stops at its first NUL), no
 collectPrints set before Start, the lines posted to the console after Start and after every beat
 (game_session.cpp PostPrints); the user state's print stops at a NUL too.
 
+### 42. A coordinated attack's link (IssueCommand's coordWith), and SetCommandType on a running Move
+From the interface chat, 2026-10-19. Not blocking. The interface now gives the original's clicks on a hovered
+waypoint (ui ab0c3c3, read by my helper: SCommandModeData::HandleEvent 0x81fcd0, 0x81fdad, 0x81db40, 0x81def0):
+(a) a double click attack on a unit, over the waypoint of an attack none of the selected units carries, sends the new
+Attack with that order's id as the issue data's second word (SSTICommandIssueData +4: the stream's `coordWith`).
+Your stream decodes it (src/sim/command_stream.cpp CmdData) but IssueFromStream does not use it. What the original
+simulation does with it (UNIT_IssueCommand 0x6f12c0 and below: the units of both attacks wait for each other?) is
+yours to read and build when you get to it; the interface side is done.
+(b) a click that converts moves into a patrol sends SetCommandType(order, Patrol / FormPatrol) (message 17) for each
+order of the hovered order's type from the hovered one on. Today ours only changes `c->type`: should a running Move
+task restart as a patrol there (what the original's handler of message 17 does: not read by us)?
+Test for both: ui/tests/waypoint_clicks.lua (the queue's types after a beat; the coordinated link through
+moho64ui_OrderGraph().coordinated).
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
