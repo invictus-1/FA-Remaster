@@ -1091,6 +1091,10 @@ calls on an object that ours lacks or has gone (a base / location manager?).
 ACUUnit gives them with GiveResource, and ours counts that as produced (src/sim/economy.cpp:517). Does the original
 count GiveResource into the produced totals (the score's history)? If not, the score's numbers differ from the
 original's by those amounts.
+DONE, no change (engine answer "ui 44" in docs/engine-answers.md): (a) FAF's own Lua, the original logs it too
+(BaseManagersDistressAI on the ArmyPool platoon, never disbanded, 0x700540, after DisableAI cleared the bases'
+EngineerManager; in docs/deviations.md "Looked broken, left alone"); (b) the original counts GiveResource as
+collected too (economy income 0x5883a2..0x5883c5 into Economy_TotalProduced_* 0x77249e / 0x772503).
 
 ## To the renderer track
 
