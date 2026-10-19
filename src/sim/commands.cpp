@@ -795,6 +795,12 @@ void StartHead(Sim& sim, Unit* u) {
       // afresh from where the unit stands. (A Stop a SCRIPT queued has not cleared anything when it gets here:
       // not read what the original does with one behind other orders; it stops the motion as before.)
       const bool fromStream = c.fromStream;
+      // The attacker's Stop (0x60a49e, when unit+0x544 has one) clears the desired target and tells every weapon
+      // SetTarget(none), so the acquire tasks look again, an AutoInitiateAttackCommand weapon two beats on. Seen: MP2
+      // 7325, army 0's interceptors (ura0102) given a Stop by the player while their AutoCannons hold an air target:
+      // the original's weapons look again and auto-attack it (an Attack order at 7328); ours kept the targets and
+      // never ordered the attack.
+      AttackerStop(sim, u);
       PopHead(u);
       if (!fromStream) MotionStop(u);
       SetMoving(u, false);
