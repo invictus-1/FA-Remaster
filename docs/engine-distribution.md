@@ -145,6 +145,10 @@ The questions as they were put:
     before the first release: the bundled M28AI (CC BY-NC-SA, its own component), and anything GPL that ships.
   - 6(b)(iii): Fab content may not be exposed in map or mod editing tools or templates that let players build their
     own maps with it (affects the planned built-in map editor).
+  - Chris (2026-10-19, via the renderer chat): "we'll see if we even keep quixel ... if it is we keep it as a personal
+    copy and call it a day." So the Quixel twin `SETONS_Q` does not ship; the shipped remastered map is `SETONS_R`
+    (CC0). An optional separate download of it in its own packed archive (under the Fab rules above) was asked about
+    and is undecided: no installer work for it now.
 
 ### 3.4 Lab only (stays as it is)
 `init_lab.lua`'s Steam path, FAF vault paths and its shared-cache stamp (our engine blocks those writes; only the
