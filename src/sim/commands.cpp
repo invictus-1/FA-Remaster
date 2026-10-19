@@ -1734,6 +1734,15 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
       const bool asleep = ThreadAsleepOnMove(u);
       u->clearKeepsMove = keep;
       const bool stopped = HeadTaskStopsMotion(u);  // a pod's task: its dtor's Stop is the last word
+      // A head command not dispatched yet has no task, so the clear tears nothing down and nothing aborts the move
+      // (as IssueClearCommandsTo, below); and a patrol or attack-move under way makes the only abort itself, in its
+      // dtor, and only when the unit moved this beat (CUnitPatrolTask dtor 0x61b1bd, EndPatrol). Seen: MP3 7779, army
+      // 0's engineer 0xd0 ends a patrol leg at 7778 (its dtor's abort: a brake spline, first point handed out); the
+      // next leg is not dispatched yet when the stream's BuildMobile with clear arrives, so the original's brake goes
+      // on (7779 at its second point); ours braked again from where the unit stood, handed out that brake's first
+      // point in the message and the second in the beat's steering, two steps at once.
+      const bool undispatched = hadCommands && u->headState == kNotStarted;
+      const bool patrolSelf = PatrolTaskDecidesAbort(u);
       ForgetUnitCommands(u);
       u->clearKeepsMove = false;
       // CUnitMoveTask's destructor takes the unit out of state Moving FIRST (0x6187bd: bit 2 of unit+0x4a0) and
@@ -1742,7 +1751,7 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
       // down puts its record on the neighbour that still moves; the neighbour's own teardown wipes that record
       // and, both standing now, the formation rule decides: one of the two brakes hard, not both.
       if (moveAsleep || formTask) SetMoving(u, false);
-      if (!keep && hadCommands && !stopped) MotionStop(u);
+      if (!keep && hadCommands && !stopped && !undispatched && !patrolSelf) MotionStop(u);
       if (asleep) sim.ResumeCommandThread(u);
       SetMoving(u, false);
       at = -1;
