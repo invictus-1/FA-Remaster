@@ -859,6 +859,27 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   rings, overcharge), handed over as `WorldScene::decals` to the renderer's `SetUserDecals`
   (renderer request 25). Checked in a game: a bomber in attack mode shows its splash ring at the
   mouse, and nuke rings made by a script lie on the ground under the trees.
+- Pings and markers, FAF's own (`/lua/ui/game/ping.lua`, `SimPing.lua`, the world view's
+  DisplayPing / UpdatePing / ShowPings, all run unchanged): the keys F5 to F8 and the four buttons
+  of the multifunction panel; through the simulation (SimCallback SpawnPing, UpdateMarker) and back
+  with the Sync; the script's rings and arrow in the main view and the minimap, the ping's mesh in
+  the world (an entity of the simulation's scripts, drawn by the renderer), its sound; a marker's
+  name dialog, its icon and name (while Shift is held), renaming, dragging, Ctrl and a right click
+  to delete it. What the engine side does for them, read from the original (2026-10-19): the left
+  press in the script's mode "ping" (the buttons' mode) ends it not cancelled
+  (`commandmode.EndCommandMode(false)`, FA exe action kind 6: GetLeftMouseButtonAction 0x81fb9b,
+  SCommandModeData::HandleEvent 0x81fcd0, UI_EndCommandMode 0x83e080), so the script pings at the
+  mouse; the right button in ANY command mode does the same when it is let go (kind 7,
+  GetRightMouseButtonAction 0x81ed31; kept at the press 0x870f43, given at the release 0x8710a0): a
+  right click ends an order's or a building's mode and orders nothing, and in the mode "ping" it
+  pings; `GetMouseWorldPos` is the place under the mouse in the world view that last heard an
+  event (the session's cursor info, written by each view's cursor update 0x86f520; read by
+  0x842c30), so over the minimap it is the minimap's place; a world view's `Project` gives the
+  point from the view's own top left corner (0x872ea0: Width and Height only; the scripts add
+  Left and Top), which the rings and markers on the minimap need. FAF registers the minimap with
+  its markers off (minimap.lua `Register('MiniMap', true, ...)`): a marker shows in the main view
+  only, its rings on both. `moho64ui_ScriptEntities()` lists what the picture is given of the
+  simulation's script entities. Test: `ui/tests/pings.lua` (a game, session_ai_cheats.lua, seed 7).
 - `SetAutoSurfaceMode(units, on)` (FA exe 0x8bb360): the info pair `SetAutoSurfaceMode` for each
   own unit, as `SetAutoMode`; the simulation keeps the switch (`GetIsAutoSurfaceMode` reads it
   back) but does not surface a submarine by it yet (the engine's). `GetIsSubmerged(units)` (0x8bafe0,

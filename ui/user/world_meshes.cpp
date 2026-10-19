@@ -345,6 +345,42 @@ int l_WorldMeshes(lua_State* L) {
   return 1;
 }
 
+// moho64ui_ScriptEntities() -> what the simulation's scripts have put in the world with a mesh, as the world's
+// picture is given it (the engine's EntityViews, which render/sim_frames.cpp hands to the picture each beat): each
+// {id, mesh, army (counted from 1, 0 none), x, y, z, scale (SetScale's first times SetDrawScale), focus, allies,
+// enemies, neutrals (the SetVizTo... words: "Always", "Never", "Intel", "" when not set)}. FAF's pings stand in the
+// world so (SimPing.lua SpawnPingMesh: an Entity with the mesh /meshes/game/ping_<kind>, scaled up and down while it
+// lasts). The host's own function for tests; nil without a simulation.
+int l_ScriptEntities(lua_State* L) {
+  Sim* sim = UserState::From(L)->LiveSim("moho64ui_ScriptEntities");
+  if (!sim) return 0;
+  std::vector<EntityView> list;
+  EntityViews(*sim, &list);
+  static const char* const kViz[] = {"", "Always", "Never", "Intel"};
+  auto viz = [](uint8_t v) { return v < 4 ? kViz[v] : "?"; };
+  lua_newtable(L);
+  int n = 0;
+  for (const EntityView& v : list) {
+    lua_newtable(L);
+    auto text = [&](const char* k, const char* s) {
+      lua_pushstring(L, k);
+      lua_pushstring(L, s);
+      lua_rawset(L, -3);
+    };
+    auto number = [&](const char* k, double d) {
+      lua_pushstring(L, k);
+      lua_pushnumber(L, d);
+      lua_rawset(L, -3);
+    };
+    number("id", v.id), text("mesh", v.mesh.c_str()), number("army", v.army);
+    number("x", v.position[0]), number("y", v.position[1]), number("z", v.position[2]);
+    number("scale", v.scale[0] * v.drawScale);
+    text("focus", viz(v.vizFocus)), text("allies", viz(v.vizAllies)), text("enemies", viz(v.vizEnemies)), text("neutrals", viz(v.vizNeutrals));
+    lua_rawseti(L, -2, ++n);
+  }
+  return 1;
+}
+
 }  // namespace
 
 void WorldMeshesForWorld(lua_State* L, std::vector<WorldMeshView>* out) {
@@ -416,6 +452,7 @@ void RegisterWorldMeshBindings(lua_State* L) {
   SetMethod(L, cls, "SetAuxiliaryParameter", l_SetOtherParameter);
   SetMethod(L, cls, "GetInterpolatedPosition", l_GetInterpolatedPosition);
   lua_register(L, "moho64ui_WorldMeshes", l_WorldMeshes);
+  lua_register(L, "moho64ui_ScriptEntities", l_ScriptEntities);
 }
 
 }  // namespace moho::ui

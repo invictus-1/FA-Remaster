@@ -231,6 +231,7 @@ void LogDrawProfile() {
 void UiManager::Forget(Control* c) {
   if (focus == c) focus = nullptr;
   if (hover == c) hover = nullptr;
+  if (cursorView == c) cursorView = nullptr;
   if (engineDragger == c) engineDragger = nullptr;
   inputCapture.erase(std::remove(inputCapture.begin(), inputCapture.end(), c), inputCapture.end());
 }

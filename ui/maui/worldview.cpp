@@ -803,6 +803,28 @@ void CommandGraphScript(lua_State* L, const char* fn, Control* view, const UiEve
   lua_settop(L, top);
 }
 
+// The script's command mode ended, not cancelled: /lua/ui/game/commandmode.lua's EndCommandMode(false) (FA exe
+// IUIManager::UI_EndCommandMode 0x83e080: the module imported, the function called with false, Call_Bool 0x830cb0;
+// an error logged as "Error running '/lua/ui/game/commandmode.lua:EndCommandMode': %s", 0xe44450). What the mouse's
+// action kinds 6 and 7 do (SCommandModeData::HandleEvent 0x81fcd0, its table 0x821f04 -> 0x81fd63): the left button
+// in the mode "ping", the right button in any mode.
+void EndScriptCommandMode(lua_State* L) {
+  const int top = lua_gettop(L);
+  lua_pushcfunction(L, ScriptTraceback);
+  lua_getglobal(L, "import");
+  lua_pushstring(L, "/lua/ui/game/commandmode.lua");
+  if (lua_pcall(L, 1, 1, top + 1) == 0 && lua_istable(L, -1)) {
+    lua_pushstring(L, "EndCommandMode");
+    lua_gettable(L, -2);
+    if (lua_isfunction(L, -1)) {
+      lua_pushboolean(L, 0);
+      if (lua_pcall(L, 1, 0, top + 1) != 0)
+        Logf(LogLevel::Warning, "Error running '/lua/ui/game/commandmode.lua:EndCommandMode': %s", lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
+    }
+  }
+  lua_settop(L, top);
+}
+
 // The photo mode's own settings (ours; PhotoModeCommand below), kept while the program runs so that each opening
 // starts as the last one was left: its lens (off at first; its blur, aperture and focus, 0 auto-focus) and the photo's
 // size in times the main view's (2 at first, as remaster_photo); the panel's line about the last photo and how far a
@@ -1477,6 +1499,8 @@ class WorldView : public Control {
   // one; the order's name, the unit under the cursor, the place, the keys, the waypoint hovered (+0x58) and the mouse's
   // place on the screen (+0x28).
   bool leftOrderPress_ = false, leftShift_ = false, leftCtrl_ = false;
+  // The last left press ended the script's mode "ping" (its action kind 6, kept as the original's +0x148).
+  bool leftPingPress_ = false;
   std::string leftOrder_;
   uint32_t leftUnder_ = 0xffffffffu, leftHovered_ = 0xffffffffu;
   float leftAt_[3] = {0, 0, 0}, leftX_ = 0, leftY_ = 0;
@@ -1682,6 +1706,8 @@ class WorldView : public Control {
   // `rightDouble_`: the press was a double click's second (+0x144 == 6); `rightHovered_` the waypoint hovered at the
   // press (the action's +0x58) and (rightX_, rightY_) the mouse's place on the screen there (+0x28).
   bool rightHeld_ = false, rightShift_ = false, rightCtrl_ = false, rightAlt_ = false, rightTurned_ = false, rightDouble_ = false;
+  // The right button's kept action is a command mode's end (kind 7; HandleEvent, the right press and the release).
+  bool rightEndsMode_ = false;
   std::string rightOrder_;
   uint32_t rightUnder_ = 0xffffffffu, rightHovered_ = 0xffffffffu;
   float rightAt_[3] = {0, 0, 0}, rightLast_[3] = {0, 0, 0}, rightHeading_ = 0, rightX_ = 0, rightY_ = 0;
@@ -1901,6 +1927,10 @@ class WorldView : public Control {
   // there; with Shift after what they are doing); a left press follows the script's command mode,
   // or selects.
   bool HandleEvent(lua_State* L, const UiEvent& e) override {
+    // Every event the view gets makes it the one the place under the mouse is asked of (the cursor update 0x86f520 at
+    // 0x8705e0 writes the session's cursor info from this view: CursorView, GetMouseWorldPos). INFERRED: also while the
+    // photo mode is open (the original has none).
+    if (!dead()) UserState::From(L)->ui().cursorView = this;
     if (!dead() && !miniMap && UserState::From(L)->photoMode.open) return PhotoModeEvent(L, e);  // (ours: see there)
     // Each event first works out what is under the mouse (the cursor update 0x86f520, called at 0x8705e0 before
     // the script's handler): here the waypoint of the order lines under it.
@@ -1939,11 +1969,15 @@ class WorldView : public Control {
       ZoomByWheel(L, GetCameraObject(L, cameraName), static_cast<float>(e.wheelRotation) / static_cast<float>(e.wheelDelta), e.x, e.y);
       return true;
     }
-    // The right button let go here: when its press gave no order to keep (none fits, no selection) no dragger caught
-    // the release, and it comes as the view's own event. With Shift and Ctrl over a hovered waypoint it takes that
-    // order out (0x870ff7); else nothing (the kept order is none). Either way the event goes on (0x871118: al 0).
+    // The right button let go here: when its press gave no order to keep (none fits, no selection, or a command mode's
+    // end) no dragger caught the release, and it comes as the view's own event. With Shift and Ctrl over a hovered
+    // waypoint it takes that order out (0x870ff7); else the kept action is given (0x8710a0 -> HandleEvent 0x81fcd0):
+    // a command mode's end (rightEndsMode_), or nothing. Either way the event goes on (0x871118: al 0).
     if (e.type == EventType::ButtonRelease) {
-      if (e.right && !miniMap) RemoveHoveredWaypointOrder(L, e.shift, e.ctrl);
+      if (e.right) {
+        const bool removed = !miniMap && RemoveHoveredWaypointOrder(L, e.shift, e.ctrl);
+        if (!removed && rightEndsMode_) EndScriptCommandMode(L);
+      }
       return false;
     }
     // (A second press soon after the first comes as a double click: it is a press too.)
@@ -1960,7 +1994,21 @@ class WorldView : public Control {
     float world[3];
     Unproject(L, e.x, e.y, world);
     if (e.right) {
-      // (No command mode ends here: the script's own handler ends it on a right click before this.)
+      // While the script is in a command mode (any: an order's, a building's, FAF's "ping") and there is a focus army,
+      // the right button's action is the mode's end, kind 7 (GetRightMouseButtonAction 0x81ecc4..0x81ed7b: no order
+      // is asked for). It is kept at the press (+0x1a8 by 0x82b230), with no dragger and nothing else done (0x870f7c:
+      // only an order, kind 1, starts the formation), and the event goes on (0x87110f: al 0); the button let go over
+      // the view gives it (above: commandmode.EndCommandMode(false), so the mode "ping" pings at the mouse). The kept
+      // action stays until the next right press here, as the original's.
+      rightEndsMode_ = false;
+      {
+        std::string mode, name;
+        CommandMode(L, &mode, &name);
+        if (!mode.empty() && UserState::From(L)->focusArmyCopy >= 0) {
+          rightEndsMode_ = true;
+          return false;
+        }
+      }
       uint32_t under = UnitUnder(L, e.x, e.y);
       std::string order = RightClickOrder(L, under);
       Logf(LogLevel::Debug, "moho64ui: right press at %.1f %.1f (world %.1f %.1f): under %u, order %s%s%s", e.x, e.y, world[0], world[2],
@@ -1981,11 +2029,13 @@ class WorldView : public Control {
     }
     if (!e.left) return false;
     // (Every left press keeps what it did, the view's +0x148 by 0x82b230; a double click goes by it.)
-    const bool afterWaypointPress = waypointPress_, afterOrderPress = leftOrderPress_;
-    if (e.type == EventType::ButtonPress) waypointPress_ = leftOrderPress_ = false;
+    const bool afterWaypointPress = waypointPress_, afterOrderPress = leftOrderPress_, afterPingPress = leftPingPress_;
+    if (e.type == EventType::ButtonPress) waypointPress_ = leftOrderPress_ = leftPingPress_ = false;
     // A double click after a press that gave an order: that order again, as a double click (0x870c7a: the kept action,
-    // whatever the command mode is now).
+    // whatever the command mode is now). After a press that ended the mode "ping" (kind 6): nothing (0x870c24: only a
+    // kept order, 1, or selection, 4, does anything; al 0).
     if (e.type == EventType::ButtonDClick && afterOrderPress) return IssueLeftOrder(L, true);
+    if (e.type == EventType::ButtonDClick && afterPingPress) return false;
     // A left press while the game script is in a command mode: an order with the place as its
     // target, or a building to build there. A building goes where the simulation would put it
     // (the site snapped to its grid) and only where it can stand, as the original's interface
@@ -2004,6 +2054,17 @@ class WorldView : public Control {
       }
       buildDrag_ = true, buildName_ = name, buildShift_ = e.shift;
       UserState::From(L)->ui().PostEngineDragger(L, this, e.keyCode);
+      return true;
+    }
+    // FAF's ping buttons start the mode "ping" (multifunction.lua PingClickHandler; its end behaviour, EndBehavior,
+    // pings at GetMouseWorldPos when the mode ends not cancelled). With a focus army the left button's action there is
+    // kind 6 (GetLeftMouseButtonAction 0x81fb9b; without one no action, 0x81f899), given at the press as an order's
+    // (0x870edc -> 0x870310 -> SCommandModeData::HandleEvent 0x81fcd0 -> 0x81fd63): the mode ends, not cancelled
+    // (EndScriptCommandMode). The same on the minimap, which pings at its own place (CursorView).
+    if (mode == "ping") {
+      if (UserState::From(L)->focusArmyCopy < 0) return false;
+      leftPingPress_ = e.type == EventType::ButtonPress;
+      EndScriptCommandMode(L);
       return true;
     }
     if (miniMap && mode.empty()) {  // a left press on the minimap: the main camera looks there, and
@@ -2092,13 +2153,19 @@ int l_ViewUnlockInput(lua_State* L) {
   View(L)->inputLocked = false;
   return 0;
 }
-// Project(position): where a place of the world is on screen
+// Project(position): where a place of the world is in the view, from the view's top left corner (FA exe 0x872ea0: the
+// camera's projection of the place, x = (cx + 1) / 2 * Width and y = (1 - cy) / 2 * Height, the lazy variables +0x98
+// and +0xac; Left and Top are not added: the game's scripts add self.Left() and self.Top() themselves, as its pings
+// and reclaim labels do). UnProject below takes a point of the screen (0x872ce0: the camera's own unprojection,
+// vtable +0x1c, which events' points go to as well).
 int l_ViewProject(lua_State* L) {
   WorldView* v = View(L);
   float world[3] = {0, 0, 0}, sx = 0, sy = 0;
   ReadVector(L, 2, world);
   v->ProjectPoint(L, world, &sx, &sy);
-  PushPoint(L, sx, sy);
+  Rect r;
+  v->GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
+  PushPoint(L, sx - r.x0, sy - r.y0);
   return 1;
 }
 // UnProject(view, point) (a global, FA exe 0x872c60): the place of the world under a point of the
@@ -2215,6 +2282,18 @@ WorldView* MainView(Control* c) {
   for (Control* k : c->children())
     if (WorldView* v = MainView(k)) return v;
   return nullptr;
+}
+
+// The world view the place under the mouse is asked of (GetMouseWorldPos, MouseWorldPlace): the one that last heard
+// an event (UiManager::cursorView: the original's session cursor info is written by each view's cursor update, so over
+// the minimap the place is the minimap's), else the main view. INFERRED: the place is worked out now, at the mouse's
+// place now, where the original keeps the one its last cursor update wrote (each event of a view, and each frame for
+// the view the mouse is in, 0x871171).
+WorldView* CursorView(lua_State* L) {
+  UiManager& ui = UserState::From(L)->ui();
+  if (WorldView* v = dynamic_cast<WorldView*>(ui.cursorView))
+    if (!v->dead()) return v;
+  return MainView(ui.GetFrame(0));
 }
 
 // The main view that shows a camera.
@@ -2401,11 +2480,12 @@ void AdvanceCamera(lua_State* L, Camera* c, float seconds) {
   ClampFocus(c);
 }
 
-// GetMouseWorldPos(): the place of the world under the mouse; GetMouseScreenPos(): the mouse on screen.
+// GetMouseWorldPos(): the place of the world under the mouse (in the view that last heard an event: CursorView);
+// GetMouseScreenPos(): the mouse on screen.
 int l_GetMouseWorldPos(lua_State* L) {
   UiManager& ui = UserState::From(L)->ui();
   float world[3] = {0, 0, 0};
-  if (WorldView* v = MainView(ui.GetFrame(0))) v->Unproject(L, ui.mouseX, ui.mouseY, world);
+  if (WorldView* v = CursorView(L)) v->Unproject(L, ui.mouseX, ui.mouseY, world);
   PushVector(L, world[0], world[1], world[2]);
   return 1;
 }
@@ -3012,7 +3092,7 @@ bool PlaceInCameraView(lua_State* L, const float place[3]) {
 
 bool MouseWorldPlace(lua_State* L, float out[3]) {
   UiManager& ui = UserState::From(L)->ui();
-  WorldView* v = MainView(ui.GetFrame(0));
+  WorldView* v = CursorView(L);
   if (!v) return false;
   v->Unproject(L, ui.mouseX, ui.mouseY, out);
   return true;

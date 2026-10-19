@@ -195,6 +195,11 @@ class UiManager {
   float controlsAlpha = 1.0f;
   Control* focus = nullptr;                // keyboard focus
   Control* hover = nullptr;                // the control the cursor was last over (MouseEnter / MouseExit)
+  // The world view that last heard an event (FA exe CUIWorldView::UpdateSelection 0x86f520 writes the session's
+  // cursor info, +0x4b0, from the view's own camera for every event the view gets, 0x8705e0, and each frame for the
+  // view the mouse is in, 0x871171): the place under the mouse is asked of it (GetMouseWorldPos 0x842c30 reads +0x4b4;
+  // over the minimap it is the minimap's place). Null: none yet, or it died (maui/worldview.cpp CursorView).
+  Control* cursorView = nullptr;
   float mouseX = 0, mouseY = 0;            // where the mouse was last reported
   int draggerRef = LUA_NOREF;              // the active dragger's script table (PostDragger), if any
   int draggerKey = 0;                      // the key code whose release ends it
