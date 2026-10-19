@@ -2097,6 +2097,7 @@ void Sim::Tick() {
   beamsBefore(0xffffffffu);  // the beams younger than every unit
   threads_->WakeSignalled();
   // transport cargo follows its attach bone (Entity::TaskTick: after the parents moved)
+  cargoFollowTick = tick_;
   if (anyAttached) {
     AttachedUnitsTick(*this);
     anyAttached = false;

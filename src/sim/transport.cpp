@@ -84,6 +84,8 @@ struct TransportTaskData {
   bool rectHeld = false;  // CUnitCallTeleport+0x39: the unit's o-grid rect is reserved
 };
 
+void FollowAttachBone(Sim& sim, Unit* u, Entity* p, int pass);
+
 namespace {
 
 // MOHO64_DEBUG_TRANSPORT=1: one line per attach / detach / task end
@@ -551,9 +553,24 @@ void AttachUnit(Sim& sim, Unit* child, Unit* parent, int parentBone, int childBo
 
 void NotifyDetachedMotion(Sim& sim, Unit* child, bool skipBallistic);
 
+// A unit hanging on its parent takes the bone's transform in its OWN turn of the entity pass (Entity::TaskTick 0x679c40:
+// a parent ticked this beat -> CalculateAttachedTransform 0x67a020 and the pending transform, 0x678e90; otherwise -4,
+// a turn later in the pass). Ours moves every piece of cargo after the pass (AttachedUnitsTick); cargo let go in the
+// pass after its turn has come (its carrier killed by a shell stepping later in the pass) has moved with its carrier
+// in this beat, and its fall starts from that step (Unit::GetVelocity: the last displacement). Seen: MP1 6037, army
+// 4's transport 0x40004f is killed by a shell stepping in the pass; its nine units (0x400018 ...), killed by FAF's
+// KillCargo and let go, are where the transport's bone took them in that beat (454.26, 26.37, 34.46 for 0x400018)
+// and drift on at that step while they fall; ours left them where they were at 6036 and they fell straight down.
+void CatchUpCargo(Sim& sim, Unit* child) {
+  if (!child->parentId || !child->attachFull || child->lastPosTick != sim.tick() || sim.cargoFollowTick == sim.tick())
+    return;
+  if (Entity* p = sim.FindEntity(child->parentId)) FollowAttachBone(sim, child, p, 0);
+}
+
 // Unit::DetachFrom 0x6ab480 + CUnitMotion::NotifyDetached 0x6b9570
 void DetachUnitFrom(Sim& sim, Unit* child, bool skipBallistic) {
   if (!child->parentId) return;
+  CatchUpCargo(sim, child);
   child->parentId = 0;
   child->attachFull = false;
   SetState(child, "Attached", false);
@@ -634,6 +651,7 @@ bool FootprintFitsHere(Sim& sim, const Unit* cu) {
 
 // TransportDetachUnit 0x5e7170
 bool TransportDetach(Sim& sim, TransportObj& T, Unit* cu) {
+  CatchUpCargo(sim, cu);  // (the footprint test reads where the unit is)
   if (T.owner->layer == "Air" && !FootprintFitsHere(sim, cu)) return false;
   int bone = cu->parentBone;
   if (Dbg()) Logf(LogLevel::Debug, "moho64: tick %u transport %u detach %u (%s)", sim.tick(), T.owner->id, cu->id, cu->blueprint->id.c_str());
@@ -1002,12 +1020,51 @@ void AttachedTransform(Unit* u, const Vec3& Pp, const Quat& Pq, Vec3* outPos, Qu
   if (outCq) *outCq = Cq;
 }
 
+// One piece of cargo takes its parent bone's transform (AttachedUnitsTick, CatchUpCargo).
+void FollowAttachBone(Sim& sim, Unit* u, Entity* p, int pass) {
+  const Vec3 before = u->position;
+  Vec3 Pp;
+  Quat Pq;
+  if (p->kind == Entity::Kind::Unit) BoneWorldT(static_cast<Unit*>(p), u->parentBone, &Pp, &Pq);
+  else BoneWorld(p, u->parentBone, &Pp, &Pq);
+  Vec3 Cp;
+  Quat Cq;
+  Quat q;
+  Vec3 pos;
+  AttachedTransform(u, Pp, Pq, &pos, &q, &Cp, &Cq);
+  {  // MOHO64_DEBUG_ATTACH=<unit id>: the attach step's inputs and result as bits
+    static const long dbg = getenv("MOHO64_DEBUG_ATTACH") ? atol(getenv("MOHO64_DEBUG_ATTACH")) : -1;
+    if (dbg >= 0 && static_cast<long>(u->id) == dbg) {
+      auto b = [](float f) {
+        uint32_t v;
+        std::memcpy(&v, &f, 4);
+        return v;
+      };
+      const Unit* pu = p->kind == Entity::Kind::Unit ? static_cast<const Unit*>(p) : nullptr;
+      Logf(LogLevel::Info,
+           "attach %u bone %d own %d P.q(wxyz) %08x %08x %08x %08x P.pos %08x %08x %08x C.q %08x %08x %08x %08x C.pos %08x %08x "
+           "%08x -> q %08x %08x %08x %08x pos %08x %08x %08x | parent q %08x %08x %08x %08x pos %08x %08x %08x posed %d",
+           sim.tick(), u->parentBone, u->ownBone, b(Pq.w), b(Pq.x), b(Pq.y), b(Pq.z), b(Pp.x), b(Pp.y), b(Pp.z), b(Cq.w), b(Cq.x),
+           b(Cq.y), b(Cq.z), b(Cp.x), b(Cp.y), b(Cp.z), b(q.w), b(q.x), b(q.y), b(q.z), b(pos.x), b(pos.y), b(pos.z),
+           b(p->orientation.w), b(p->orientation.x), b(p->orientation.y), b(p->orientation.z), b(p->position.x), b(p->position.y),
+           b(p->position.z), pu && pu->poseSet ? 1 : 0);
+    }
+  }
+  u->orientation = q;
+  u->position = pos;
+  // (the second pass, for cargo of cargo, adds to the first's step: replacing it zeroed the beat's move of
+  // every piece of cargo, which an aircraft let go in the next beat reads as its velocity)
+  u->motion.lastMove = pass == 0 ? Sub(pos, before) : Add(u->motion.lastMove, Sub(pos, before));
+  u->motion.vel = {};
+  if (pass == 0 && p->kind == Entity::Kind::Unit) SetUnitLayer(sim, u, static_cast<Unit*>(p)->layer);
+  if (pos.x != before.x || pos.y != before.y || pos.z != before.z) u->lastMoveTick = sim.tick();
+}
+
 void AttachedUnitsTick(Sim& sim) {
   for (int pass = 0; pass < 2; ++pass)  // (cargo of cargo follows on the second pass)
     for (Unit* u : sim.units()) {
       if (u->destroyQueued || !u->parentId) continue;
       Entity* p = sim.FindEntity(u->parentId);
-      Vec3 before = u->position;
       if (!p || p->destroyQueued) {
         if (u->attachFull && pass == 0) {  // orphaned cargo starts to fall
           u->parentId = 0;
@@ -1020,41 +1077,7 @@ void AttachedUnitsTick(Sim& sim) {
         continue;
       }
       if (!u->attachFull) continue;  // a factory's product (held at the build bone by the motion loop)
-      Vec3 Pp;
-      Quat Pq;
-      if (p->kind == Entity::Kind::Unit) BoneWorldT(static_cast<Unit*>(p), u->parentBone, &Pp, &Pq);
-      else BoneWorld(p, u->parentBone, &Pp, &Pq);
-      Vec3 Cp;
-      Quat Cq;
-      Quat q;
-      Vec3 pos;
-      AttachedTransform(u, Pp, Pq, &pos, &q, &Cp, &Cq);
-      {  // MOHO64_DEBUG_ATTACH=<unit id>: the attach step's inputs and result as bits
-        static const long dbg = getenv("MOHO64_DEBUG_ATTACH") ? atol(getenv("MOHO64_DEBUG_ATTACH")) : -1;
-        if (dbg >= 0 && static_cast<long>(u->id) == dbg) {
-          auto b = [](float f) {
-            uint32_t v;
-            std::memcpy(&v, &f, 4);
-            return v;
-          };
-          const Unit* pu = p->kind == Entity::Kind::Unit ? static_cast<const Unit*>(p) : nullptr;
-          Logf(LogLevel::Info,
-               "attach %u bone %d own %d P.q(wxyz) %08x %08x %08x %08x P.pos %08x %08x %08x C.q %08x %08x %08x %08x C.pos %08x %08x "
-               "%08x -> q %08x %08x %08x %08x pos %08x %08x %08x | parent q %08x %08x %08x %08x pos %08x %08x %08x posed %d",
-               sim.tick(), u->parentBone, u->ownBone, b(Pq.w), b(Pq.x), b(Pq.y), b(Pq.z), b(Pp.x), b(Pp.y), b(Pp.z), b(Cq.w), b(Cq.x),
-               b(Cq.y), b(Cq.z), b(Cp.x), b(Cp.y), b(Cp.z), b(q.w), b(q.x), b(q.y), b(q.z), b(pos.x), b(pos.y), b(pos.z),
-               b(p->orientation.w), b(p->orientation.x), b(p->orientation.y), b(p->orientation.z), b(p->position.x), b(p->position.y),
-               b(p->position.z), pu && pu->poseSet ? 1 : 0);
-        }
-      }
-      u->orientation = q;
-      u->position = pos;
-      // (the second pass, for cargo of cargo, adds to the first's step: replacing it zeroed the beat's move of
-      // every piece of cargo, which an aircraft let go in the next beat reads as its velocity)
-      u->motion.lastMove = pass == 0 ? Sub(pos, before) : Add(u->motion.lastMove, Sub(pos, before));
-      u->motion.vel = {};
-      if (pass == 0 && p->kind == Entity::Kind::Unit) SetUnitLayer(sim, u, static_cast<Unit*>(p)->layer);
-      if (pos.x != before.x || pos.y != before.y || pos.z != before.z) u->lastMoveTick = sim.tick();
+      FollowAttachBone(sim, u, p, pass);
     }
   // A unit hung on cargo (not cargo itself: AttachTo / AttachBoneTo) takes its place again now that the cargo has
   // moved. The original ticks a child only after its parent (Entity::TaskTick returns -4, "not yet", for a child
