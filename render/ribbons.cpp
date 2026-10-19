@@ -366,7 +366,7 @@ void Ribbons::Draw(const View& view) {
       // or from far up it is a line that flickers in and out)
       auto half = [&](Vec3 p, float age) {
         if (!tracers || !k.hot) return k.halfWidth;
-        const float pixel = 2 * std::tan(view.fovY * 0.5f) / static_cast<float>(std::max(view.height, 1)) * Length(p - view.eye);
+        const float pixel = 2 * std::tan(view.fovY * 0.5f) / static_cast<float>(std::max(view.height, 1)) * Length(p - view.eye) * pixelScale;  // (photofix)
         // (and a head: over the first twentieth of its length it swells to a bright bead at the shell)
         const float t = std::clamp(age, 0.0f, 1.0f);
         return std::max(k.halfWidth, 0.6f * pixel) * (1.7f - 1.2f * t + 2.6f * std::exp(-t * 45.0f));

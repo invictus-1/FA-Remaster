@@ -2761,6 +2761,7 @@ void World::Render() {
   Stage("wakes, beams, trails");
   // beams and trails, then particles: over everything solid and the water, by the scene's depth
   wakes.Draw(view);
+  ribbons.pixelScale = photoPixel;  // (photofix: a photo's frame as the window shows it)
   if (hide.find("bands") == std::string::npos) ribbons.Draw(view);
   if (wildlifeNow_) {  // the fireflies, with what glows
     Stage("wildlife: fireflies");
@@ -2840,6 +2841,8 @@ void World::Render() {
     c.target = {eye.x - std::sin(placing.heading) * c.distance * 0.3f, ground, eye.z - std::cos(placing.heading) * c.distance * 0.3f};
     return c;
   }();
+  falling.pixelScale = photoPixel;  // (photofix: in a photo's frame as the window shows it; else 1, 1)
+  falling.pictureShare = photoShare;
   if (view.constants.skyZenith[3] > 0.5f) falling.Draw(view, fall, rain, snow, litRain && look == Look::Modern);
   if (rainSplashes && look == Look::Modern && view.constants.skyZenith[3] > 0.5f && rain > 0) {  // (reading the depth)
     post.BeginColorOnly();
@@ -2910,8 +2913,9 @@ void World::Render() {
   const bool photoLookBefore = post.photoFinish != nullptr;
   post.photoFinish = nullptr;
   if (photoLook.on && look == Look::Modern && !photoFinish.Failed()) {
-    photoFinish.Set(photoLook, sidePicture || photo ? 0.0f : frameSeconds_, (lensSnap_ && !photo) || !photoLookBefore,
-                    !sidePicture && !photoTiled);
+    // (photofix: a photo whose moment the window had not settled into yet meters its own frames, the eye set at once)
+    photoFinish.Set(photoLook, photoMeter ? 1 / 60.0f : sidePicture || photo ? 0.0f : frameSeconds_,
+                    photoMeter || (lensSnap_ && !photo) || !photoLookBefore, !sidePicture && !photoTiled);
     post.photoFinish = &photoFinish;
   }
   post.Present(view, &upscaler, screenWidth_, screenHeight_);

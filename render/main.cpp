@@ -50,9 +50,13 @@
 //           camera flown by a script of inputs, moments of the picture's own, focus by a pixel, a shallow-focus photo, one
 //           picture against tiles, and photos of 1, 2 and 4 times the window's size timed at each of --photo-test-sizes
 //           WxH,WxH (2560x1440,3840x2160 unless given); pictures beside the --picture file, numbers printed
+// --photo-cases <cases>  (photofix) with --picture: in place of --photo-test, single photos as a host takes them, each
+//           case "name:key=value,..." with ';' between (photo_test.cpp, PhotoCases, says the keys)
 // --settings <bundles>  with --picture: the game's lighting settings, as the interface sets them (WorldPicture's
 //           bundles): any of atmosphere, soft-shadows, ray-tracing, weather-effects, ground-detail,
-//           frame-generation, with commas between
+//           frame-generation, with commas between; (photofix) battle-effects: the interface's Battle Effects, Energy
+//           Shields, Water Ripples and High shadows on the picture's world, as ui's game sets them; photo-look: its
+//           Photographic Look "Natural"
 // --hide <kinds>  leaves kinds of effect out, to find what draws what or what costs what: any of
 //           particles, bands, decals, with commas between
 // --beam <blueprint>, --trail <blueprint>  shows that beam (eight units long, above the same spot) or that
@@ -623,6 +627,7 @@ struct Options {
   int airAcross = 0, airDeep = 0;       // --air-cells
   bool pictureWindow = false;           // --picture-window
   bool photoTest = false;               // (photomode) --photo-test
+  std::string photoCases;               // (photofix) --photo-cases
   std::vector<std::pair<int, int>> photoTestSizes = {{2560, 1440}, {3840, 2160}};  // --photo-test-sizes
   bool windowCycle = false;             // --window-cycle
   float effectsQuality = 1;             // --effects-quality
@@ -957,6 +962,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--rain-stops") o->rainStops = static_cast<float>(atof(v));                          // [unit dirt]
     else if (a == "--fx-decal-size") o->fx.decalSize = std::max(0.1f, static_cast<float>(atof(v)));
     else if (a == "--picture") o->picture = v;
+    else if (a == "--photo-cases") o->photoCases = v, o->photoTest = true;  // (photofix)
     else if (a == "--photo-test-sizes") {  // (photomode)
       o->photoTestSizes.clear();
       for (const char* at = v; *at;) {
@@ -1373,6 +1379,18 @@ int main(int argc, char** argv) {
       if (!picture.Open(&vfs, opt.map, &error)) {
         fprintf(stderr, "render: --picture: %s\n", error.c_str());
         return 1;
+      }
+      if (World* pw = picture.world(); pw && opt.settings.find("battle-effects") != std::string::npos) {
+        // (photofix) the interface's Battle Effects, Energy Shields, Water Ripples and High shadows, as ui's game sets them
+        // on the picture's world (its game_session.cpp), for checks of the picture as players see it
+        pw->blastWaves = pw->blastDust = pw->blastDebris = pw->litSmoke = pw->smokeShadows = pw->heatShimmer = pw->unitScars = true;
+        pw->hotMetal = pw->movementDust = pw->volumeExplosions = pw->remasteredBuild = pw->energyShields = pw->waterRipples = true;
+        pw->lampShadows = true;
+        pw->shadowSize = 4096;
+      }
+      if (World* pw = picture.world(); pw && opt.settings.find("photo-look") != std::string::npos) {
+        pw->photoLook.on = true;  // (photofix) the interface's Photographic Look "Natural" (the eye, today's colours)
+        pw->photoLook.Named("plain");
       }
       printf("render: --picture: ray tracing %s\n", picture.RayTracingSupported() ? "supported" : "not supported");
       live.onStarted = [&](const moho::Sim& sim) { picture.GameStarted(sim); };
@@ -2653,7 +2671,9 @@ int main(int argc, char** argv) {
       ps.sizes = opt.photoTestSizes;
       for (const FrameUnit& u : frame.units)
         if (!u.dead) ps.units.insert(ps.units.end(), {u.position[0], u.position[1], u.position[2]});
-      PhotoTest(picture, camera, playTick + 1, ps);
+      ps.cases = opt.photoCases;  // (photofix)
+      if (!ps.cases.empty()) PhotoCases(picture, camera, playTick + 1, ps);
+      else PhotoTest(picture, camera, playTick + 1, ps);
       break;
     }
     if (!opt.picture.empty() && opt.pictureWindow && pictureWindow && playing && !liveBusy && frameCount >= 3) {

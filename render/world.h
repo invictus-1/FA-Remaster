@@ -595,6 +595,13 @@ class World {
   bool photoTiled = false;
   Camera photoWhole;
   const Camera& Placing() const { return photoTiled ? photoWhole : camera; }
+  // (photofix) A photo's frame as the window shows it: `photoPixel` of this frame's pixels make one of the window's (the
+  // rain's and the snow's widths and the splashes' least size are measured in the window's pixels), and the frame shows
+  // `photoShare` of the window's view (a tile, part of it). `photoMeter`: the photographic look's eye meters this frame and
+  // is set to it at once (a photo whose moment the window had not settled into yet: the window's eye was not yet there).
+  // 1, 1 and false outside a photo's frames (WorldPicture::PhotoStep sets them for its frames only).
+  float photoPixel = 1, photoShare = 1;
+  bool photoMeter = false;
   // (photomode) A moment of the picture's own (WorldPicture::SetPhotoMoment): while `on`, each frame shows this hour and
   // this weather in place of the game's, in the modern look, also where the map's own fixed light is used (the day is
   // then on for the picture). The game's own go on underneath: its weather by the clock (weatherAuto), what that does to

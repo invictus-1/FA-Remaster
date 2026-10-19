@@ -125,6 +125,14 @@ struct WorldPicture::Impl {
     Lens lens;
     int settle = 8, frame = 0;
     size_t tile = 0;
+    // (photofix) `fresh`: the window's frames had not yet caught up with the photo's light, or were seen from elsewhere
+    // (StartPhoto): what keeps frames before starts afresh from the photo's own frames, the first tile drawn takes
+    // `settleFirst` frames (the bounce light's probes gather from nothing) and the photographic look's eye is metered on
+    // it. `order`: the tiles in the order drawn (the one at the photo's middle first); `framesDrawn` all its frames so far.
+    bool fresh = false;
+    int settleFirst = 8, framesDrawn = 0;
+    std::vector<size_t> order;
+    float pixelScale = 1;  // (the drawn photo's pixels to one of the window's scene, at the photo's axis)
     std::vector<std::vector<uint8_t>> drawn;
     std::vector<uint32_t> pixels;
     std::thread worker;
@@ -139,6 +147,19 @@ struct WorldPicture::Impl {
   };
   Photo photo;
   bool photoFrame = false;      // (a photo's frame: drawn at its own size into the device's photo window, no resize)
+  // (photofix) The light the window's frames showed (the hour, the clouds, rain, snow, fog, wet and snow lying, as the
+  // world drew them), noted at each of them (NoteLight): how many in a row have shown much the same light, and the eye,
+  // the camera's distance and the scene's size of the last. What keeps frames before (the light in the air, the
+  // volumetric clouds, the bounce light's probes: 0.97 of theirs each frame, the photographic look's eye) catches up with
+  // a change of light only so many frames later: a photo begun sooner, or from another eye, starts them afresh.
+  float lightShown[7] = {};
+  bool lightKnown = false;
+  int lightSteady = 0;
+  Vec3 shownEye;
+  float shownDistance = 10;
+  int shownWidth = 0, shownHeight = 0;
+  void NoteLight();
+  static constexpr int kSteadyFrames = 150;  // (the probes then hold 1 % of before: 0.97 ^ 150)
   bool depthIsWindow = false;   // (the scene's depth is the main picture's, as last drawn: FocusAt reads it)
   std::unique_ptr<PhotoFocus> focus;
   void LayInterface(int width, int height);  // (the host's interface over what is in the window, DrawToWindow)
@@ -522,6 +543,7 @@ void WorldPicture::PrepareWorld(const Camera& camera, int width, int height, dou
   const auto t2 = std::chrono::steady_clock::now();
   m.stats.waitMs = std::chrono::duration<float, std::milli>(t2 - t1).count();
   m.world->Begin(camera, width, height, static_cast<float>(shown * 0.1), shown * 0.1);
+  if (!m.photoFrame && !m.world->photo && !m.world->sidePicture) m.NoteLight();  // (photofix: a frame of the window's)
   if (playing) {
     m.frames.TakeEffectEvents(&m.events);
     {  // how the scenery changed
@@ -1064,6 +1086,33 @@ bool WorldPicture::TakePhoto(const Camera& camera, int width, int height, double
 
 // --- (photomode) the photo mode ---
 
+// (photofix) Whether two lights are much the same (the hour within three minutes, the rest within a hundredth).
+static bool SameLight(const float a[7], const float b[7]) {
+  for (int k = 0; k < 7; ++k) {
+    float d = std::fabs(a[k] - b[k]);
+    if (k == 0) d = std::min(d, 24 - d);  // (the hour the short way round the clock; -1, the map's own light, as itself)
+    if (d > (k == 0 ? 0.05f : 0.01f)) return false;
+  }
+  return true;
+}
+
+// (photofix) A frame of the window's, its world begun: the light it shows, and where from.
+void WorldPicture::Impl::NoteLight() {
+  const World& w = *world;
+  const float now[7] = {w.timeOfDay, w.cloudCover, w.rain, w.snow, w.fog, w.wet, w.snowLying};
+  if (lightKnown && SameLight(now, lightShown)) {
+    lightSteady = std::min(lightSteady + 1, 1 << 20);
+  } else {
+    std::copy(now, now + 7, lightShown);
+    lightKnown = true;
+    lightSteady = 0;
+  }
+  shownEye = w.camera.Eye();
+  shownDistance = w.camera.distance;
+  shownWidth = w.view.width;
+  shownHeight = w.view.height;
+}
+
 // The moment shown now: from what was shown when it was asked to what was asked, over a second (smoothly in and out);
 // the hour the short way round the clock. `settled`: what was asked (a photo's frames).
 World::Moment WorldPicture::Impl::MomentShown(bool settled) const {
@@ -1228,6 +1277,26 @@ bool WorldPicture::StartPhoto(const Camera& camera, int width, int height, doubl
   p.settle = 8;
   p.frame = 0;
   p.tile = 0;
+  // (photofix) whether what the window's frames kept is the photo's: the same light for some frames (the moment as it
+  // will be, not on its way to it), seen from the photo's eye; if not, the photo starts it afresh from its own frames,
+  // and with the bounce light its first tile takes three times the frames (the probes gather from nothing)
+  p.fresh = !m.lightKnown || m.lightSteady < Impl::kSteadyFrames;
+  if (m.momentOn) {
+    const World::Moment s = m.MomentShown(true);
+    const float to[7] = {s.hour, s.clouds, s.rain, s.snow, s.fog, s.wet, s.snowLying};
+    if (!SameLight(to, m.lightShown)) p.fresh = true;
+  }
+  if (Length(camera.Eye() - m.shownEye) > 0.3f * std::max(m.shownDistance, 10.0f)) p.fresh = true;
+  p.settleFirst = p.fresh && m.world->bounceLight ? 3 * p.settle : p.settle;
+  p.framesDrawn = 0;
+  // (photofix) the tiles in the order drawn: the one at the photo's middle first (where the eye is metered), then the rest
+  p.order.clear();
+  const size_t middle = static_cast<size_t>(p.plan.rows / 2) * static_cast<size_t>(p.plan.columns) + static_cast<size_t>(p.plan.columns / 2);
+  p.order.push_back(std::min(middle, p.plan.tiles.size() - 1));
+  for (size_t k = 0; k < p.plan.tiles.size(); ++k)
+    if (k != p.order.front()) p.order.push_back(k);
+  // (photofix) the drawn photo's pixels to one of the window's scene (what falls is measured in the window's pixels)
+  p.pixelScale = m.shownHeight > 0 ? static_cast<float>(p.plan.drawnHeight) / static_cast<float>(m.shownHeight) : 1.0f;
   p.drawn.assign(p.plan.tiles.size(), {});
   p.held = false;
   p.frameKept = false;
@@ -1250,7 +1319,8 @@ void WorldPicture::PhotoStep() {
     m.device->EndFrame(nullptr, false);
     m.prepared = false;
   }
-  const PhotoTile& t = p.plan.tiles[p.tile];
+  const size_t at = p.tile < p.order.size() ? p.order[p.tile] : p.tile;  // (photofix: the tile drawn now)
+  const PhotoTile& t = p.plan.tiles[at];
   if (!m.device->SetPhotoWindow(p.plan.tileWidth, p.plan.tileHeight)) {
     fprintf(stderr, "render: a photo of %dx%d could not be drawn (no picture of %dx%d could be made)\n", p.plan.width, p.plan.height, p.plan.tileWidth,
             p.plan.tileHeight);
@@ -1300,9 +1370,37 @@ void WorldPicture::PhotoStep() {
   w.photoTiled = p.plan.Tiled();
   w.photoWhole = p.camera;
   m.photoFrame = true;
+  // (photofix) What keeps frames before gathers from this photo's own frames only where what it holds is not the photo's:
+  // each frame then keeps n / (n + 1) of what it held (n: the frames that count before it), a plain mean of the photo's
+  // frames with nothing of the window's. The light in the air from a tile's first frame where the window's was stale or
+  // each tile looks its own way; the volumetric clouds from a tile's first always (a size of their own: they start
+  // afresh, Clouds::Size); the bounce light's probes, where the window's was stale, from the photo's first frame (they
+  // are the world's, the same for every tile).
+  const float airKeep = w.air.keep, cloudKeep = w.clouds.keep, zoomKeep = w.cloudZoomDraw.history, bounceKeep = w.bounce.keep;
+  auto mean = [](float keep, int before) { return std::min(keep, static_cast<float>(before) / static_cast<float>(before + 1)); };
+  if (p.fresh || p.plan.Tiled()) w.air.keep = mean(airKeep, p.frame);
+  w.clouds.keep = mean(cloudKeep, p.frame);
+  w.cloudZoomDraw.history = mean(zoomKeep, p.frame);
+  if (p.fresh) w.bounce.keep = mean(bounceKeep, p.framesDrawn);
+  // (photofix) the photographic look's eye metered on the first tile's frames where the window's was stale; what falls
+  // as the window shows it (a tile's pixels to the drawn photo's: its focal length's share)
+  w.photoMeter = p.fresh && p.tile == 0;
+  w.photoPixel = p.pixelScale * t.focalShare;
+  w.photoShare = m.shownWidth > 0 && m.shownHeight > 0
+                     ? static_cast<float>(p.plan.tileWidth) * static_cast<float>(p.plan.tileHeight) /
+                           (w.photoPixel * w.photoPixel * static_cast<float>(m.shownWidth) * static_cast<float>(m.shownHeight))
+                     : 1.0f;
   RenderWorld(t.camera, p.plan.tileWidth, p.plan.tileHeight, p.tick);
-  const bool last = p.frame >= p.settle;
-  m.device->EndFrame(last ? &p.drawn[p.tile] : nullptr, false);
+  const int settle = p.tile == 0 ? p.settleFirst : p.settle;
+  const bool last = p.frame >= settle;
+  m.device->EndFrame(last ? &p.drawn[at] : nullptr, false);
+  w.air.keep = airKeep;
+  w.clouds.keep = cloudKeep;
+  w.cloudZoomDraw.history = zoomKeep;
+  w.bounce.keep = bounceKeep;
+  w.photoMeter = false;
+  w.photoPixel = w.photoShare = 1;
+  ++p.framesDrawn;
   m.photoFrame = false;
   w.photo = false;
   w.photoTiled = false;
@@ -1367,8 +1465,10 @@ float WorldPicture::PhotoProgress() const {
   if (p.done) return 1;
   if (p.assembling) return p.ready ? 1.0f : 0.97f;
   if (!p.on || p.plan.tiles.empty()) return 0;
-  const double frames = static_cast<double>(p.plan.tiles.size()) * (p.settle + 1);
-  return static_cast<float>(0.95 * (static_cast<double>(p.tile) * (p.settle + 1) + p.frame) / frames);
+  // (photofix: the first tile drawn may take more frames)
+  const double frames = static_cast<double>(p.settleFirst + 1) + static_cast<double>(p.plan.tiles.size() - 1) * (p.settle + 1);
+  const double done = p.tile == 0 ? p.frame : (p.settleFirst + 1) + static_cast<double>(p.tile - 1) * (p.settle + 1) + p.frame;
+  return static_cast<float>(0.95 * done / frames);
 }
 
 WorldPicture::PhotoNumbers WorldPicture::LastPhotoNumbers() const {
@@ -1382,7 +1482,7 @@ WorldPicture::PhotoNumbers WorldPicture::LastPhotoNumbers() const {
   n.tileWidth = p.plan.tileWidth;
   n.tileHeight = p.plan.tileHeight;
   n.by = p.plan.by;
-  n.frames = static_cast<int>(p.plan.tiles.size()) * (p.settle + 1);
+  n.frames = p.settleFirst + 1 + static_cast<int>(p.plan.tiles.size() - 1) * (p.settle + 1);  // (photofix: the first may take more)
   return n;
 }
 
