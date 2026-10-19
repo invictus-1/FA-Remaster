@@ -3,6 +3,78 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 42 (a): a coordinated attack's link (IssueCommand's coordWith) — done (cd8c8da)
+
+**The original (FA exe, read).**
+- The link is made in the CUnitCommand constructor (0x6e840d..0x6e84c2). If the issue data's second word (+4,
+  coordWith) is not -1, the constructor looks that id up in the command database (CCommandDb +4, 0x6e1940): stream ids
+  and engine ids (0x80000000 | index) alike. If a command is found:
+  - it takes a copy of that command's coordination list (0x6e7d40);
+  - it links the new command with every live command in the copy, both ways;
+  - then it links the new command with the named command, both ways.
+- CoordinateWith (0x6e9000) puts a WeakPtr to the other command on this command's list (cmd+0x144, a vector of
+  WeakPtr<CUnitCommand>; push_back 0x6e9680). It does this only when the two have the same type (cmd+0x98,
+  0x6e9015..0x6e9025). A link is never taken off: when a partner is deleted, its entry stays as an empty WeakPtr. The
+  list is freed in DestroyInternal (0x6e8500).
+- The "started" flag is cmd+0x154. The constructor sets it to 0 (0x6e8376). The attack task's constructor sets it to 1
+  (0x5f2ae7), and so does the melee attack task's (0x61580b). Each sets it on the command at the head of the unit's
+  queue when the task is made, so a guard's or a patrol's own command gets it for their child attacks.
+- IsCoordinating (0x5f24e0): the list is not empty. Dead partners count.
+- HasSatisfiedCoordination (0x6e90a0):
+  - an empty list: true;
+  - otherwise, if the command itself has not started: false;
+  - otherwise, if any partner that still exists has not started: false;
+  - otherwise true.
+- Three places use these:
+  - The attack task, state 0 (0x5f362a..0x5f364f). With no command it returns -1. A coordinated command that is not
+    yet satisfied returns 10: the units wait and ask again in 10 beats. Once it is satisfied the task goes on to
+    state 1.
+  - The melee attack task (0x616cf2): the same test.
+  - Unit::UpdateSpeedThroughStatus (0x6acaca): if the next order is coordinating, speed-through is off.
+- So "coordinated" means the units of all the linked attacks start together. Each group waits until every partner
+  that still exists has an attack task.
+- When an emptied command is deleted:
+  - Sim::Sync calls CCommandDb::PublishSyncData (0x6e0f50), which calls RefreshPublishedCommandEvent (0x6e8dc0) for
+    every command.
+  - A command with the dirty flag (+0x141, set by RemoveUnit 0x6e8c20) and no units left is deleted there (vt+8).
+  - This happens before the id pool's turn (0x6e0fff).
+  - Until that Sync, the database still finds the command by its id. That matters here: your double click first takes
+    the hovered order off every unit, then names it as coordWith in the same message batch, and the link is still made.
+- The Lua function CoordinateAttacks({commands}) (0x6f3980) links every pair of the listed commands, both ways.
+
+**Ours now.**
+- `UnitCommand::coordinatedWith` (a vector of weak_ptr) and `coordinationStarted` (+0x154).
+- `IsCoordinating` and `CoordinationSatisfied` (commands.h).
+- `MakeStreamCommand` makes the links from `d.coordWith`, through `StreamCommand`, which is now public in commands.h.
+- The attack task marks its head command started (`MarkHeadCoordinationStarted`, from InitAttack). State 0 returns 10
+  while the command is coordinating and not satisfied.
+- `UpdateSpeedThrough` checks whether the next order is coordinating.
+- An emptied command is held in `Sim::commandsEmptied` until UpdateIdPools (the Sync), so the database finds it until
+  then. An engine id's release still lands in the same ring slot.
+
+**Not built:**
+- the Lua CoordinateAttacks: no script in the lab calls it;
+- the melee task, which ours does not have.
+
+The link as the interface shows it stays on your side (moho64ui_OrderGraph().coordinated); the sim does not publish it.
+
+**The test cases in the replays.**
+- MP1 3915, the same pattern in MP1 7091, 9370 and 10069, and MP2 10687: the player takes an Attack off its units and
+  issues a new Attack on the same target, coordWith the old one.
+- MP1 3915 in detail:
+  - The old Attack 0x0100005d (issued 3914) was still queued behind another order, so it had never started.
+  - The link is made, and the old command is deleted at that beat's Sync.
+  - When 0x01000062 starts, nothing is left to wait for.
+- MP2 10687 is the same: 0x28 with 0x37, behind the running Attack 0x0c. As the next order and coordinating, 0x28
+  turns speed-through off from the issue on. The recording matches the original over 10684-10691.
+- MP1 9373 names 0x3d after it is gone, so it gets no link.
+
+**Results:**
+- the 13 + bench: no differences;
+- MP3: identical;
+- MP2 on e60a204: 10877 / 10918 / 10889, draws 775127 (main's marks);
+- MP1 to 3960: identical. The full MP1 is in the lead's gate.
+
 ## render 36: hits, impacts and health per beat, read-only — done (5bed19a)
 
 **In the same form as ui 41's print lines:**
