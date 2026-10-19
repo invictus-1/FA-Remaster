@@ -132,6 +132,12 @@ const Unit* MoreInLine(const Unit* A, const Unit* B) {
 
 }  // namespace
 
+// The quaternion SweptPathBlockedByUnit 0x7216d0 turns its line's direction with (0x721785: ecx = 0x10b965c, then the
+// matrix product 0x452d40): (cos a, 0, sin a, 0) made by the static initialiser 0xbda970 from the float pi/4 (0xe4f8b0)
+// with x87 fcos / fsin, the same numbers as kTurnQuarterPi (0x10ae278). Through the matrix, 1 - 2y^2 is not quite 0
+// and 2wy not quite 1, so the side axis is a float step off (fz, 0, -fx) now and then.
+Vec3 RotateQuarterTurnY(const Vec3& v) { return RotY(kTurnQuarterPi, v); }
+
 bool SameFormationLayer(const Unit* a, const Unit* b) {
   if (St(a, "Attacking") || St(b, "Attacking")) return false;
   return a->form && a->form == b->form;

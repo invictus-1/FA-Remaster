@@ -178,9 +178,17 @@ bool UnitInLine(Sim& sim, Unit* u, float ax, float az, float bx, float bz, int f
   // centres with a radius: a turned or long hull was judged wrong by a few tenths.)
   float dx = bx - ax, dz = bz - az, len = std::sqrt(dz * dz + dx * dx);
   if (len <= 0) return false;
-  const float fx = dx / len, fz = dz / len, hw = Bp(u).sizeX * 0.5555556f;
+  // 0x72170d..0x72173d: the direction is normalised by 0x44f7e0, the components times 1 / length (not divided by it),
+  // and the side axis is that direction turned a quarter turn about +y through the quaternion of 0x10b965c and its
+  // matrix (0x721785..0x7217a3), which is a float step off (fz, 0, -fx) now and then. Seen: MP1 5689, army 4's Seraphim
+  // engineer 0x400020 asks its line to the path cell (668, 320) past its fellow 0x40006b (bit-equal in both games): the
+  // two boxes overlap by 1e-5 with (fz, 0, -fx) and stand 1.5e-5 apart with the original's axis; the original takes
+  // (668, 320) (its watch line "wn 5689"), ours took (672, 324) and its hull turned 0.03 degrees aside.
+  const float inv = 1.0f / len;
+  const float fx = dx * inv, fz = dz * inv, hw = Bp(u).sizeX * 0.5555556f;
   const Vec3 centre{(ax + bx) * 0.5f, u->position.y, (az + bz) * 0.5f};
-  const Vec3 axes[3] = {{fz, 0.0f, -fx}, {0.0f, 1.0f, 0.0f}, {fx, 0.0f, fz}};
+  const Vec3 side = RotateQuarterTurnY(Vec3{fx, 0.0f, fz});
+  const Vec3 axes[3] = {side, {0.0f, 1.0f, 0.0f}, {fx, 0.0f, fz}};
   const float half[3] = {hw, 1000.0f, len * 0.5f};
   bool blocked = false;
   const float reach = hw + 16.0f;  // (candidates come by their centre: far enough for the biggest hulls)
