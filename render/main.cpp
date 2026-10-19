@@ -175,6 +175,13 @@
 //           (World::remasteredTarmacs, tarmacs.h; modern look with the remastered effects): lit with the modern light, wet
 //           with puddles in their joints in rain, their relief close by with --ground-parallax, scuffed by --deep-tracks,
 //           the ground cover cleared under them; --tarmac-relief n: world units of relief at a pad's real size (0.12)
+// --mud-mask  [ground mud] the map's painted mud (World::mudMask, Terrain::mudMask; modern look, a map whose remap.json entry
+//           names a "mud_mask"): its mud material laid over the ground by the mask, the hollows first; wet and glossy in rain
+//           with puddles in it, paler and cracked as it dries; deep tracks press into it as mud; no plants on it
+// --rain-ground  [rain ground] the rain-wet ground (World::rainGround, Terrain::rainGround; modern look with the weather, a map
+//           whose remap.json entry has "weather": {"rain": {"materials": {dry: wet}}}): the listed layers go over to their wet
+//           twins as the ground gets wet (--weather rain, --wet n), the hollows first, and back as it dries (--rain-stops s);
+//           --rain-starts s: rain begins s seconds into the run on dry ground (to watch it wet; with --rain-stops, dry again)
 // --plants-react  [plants] plants that react (plants.h, World::plantsReact; modern look): grass and plants laid over where units
 //           drive, rising again; bushes, ferns, saplings bending under them and springing back; grass, plants and undergrowth
 //           burnt black, then brown and short, where the game's blasts and lasting fires were, growing back over minutes
@@ -603,6 +610,8 @@ struct Options {
   std::vector<std::string> groundKind;  // --ground-kind
   bool noMudRuts = false;               // --no-mud-ruts [mud ruts]
   bool groundParallax = false;          // [parallax] --ground-parallax
+  bool mudMask = false;                 // [ground mud] --mud-mask
+  bool rainGround = false;              // [rain ground] --rain-ground
   float parallaxTune[3] = {1, 20, 1};   // [parallax] --ground-parallax-tune
   bool remasteredTarmacs = false;       // [tarmac] --remastered-tarmacs
   float tarmacRelief = -1;              // [tarmac] --tarmac-relief
@@ -619,6 +628,7 @@ struct Options {
   float unitDirtPace = 1;               // --unit-dirt-pace
   std::string dirtTest;                 // --dirt-test
   float rainStops = -1;                 // --rain-stops
+  float rainStarts = -1;                // [rain ground] --rain-starts
   bool fxFollow = false;                // --fx-follow
   std::string wearTest;                 // --wear-test
   bool hiddenOutlines = true;           // --no-hidden-outlines, --hidden-outlines
@@ -815,6 +825,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--no-mud-ruts") o->noMudRuts = true;  // [mud ruts]
     else if (a == "--ground-parallax") o->groundParallax = true;  // [parallax]
     else if (a == "--remastered-tarmacs") o->remasteredTarmacs = true;  // [tarmac]
+    else if (a == "--mud-mask") o->mudMask = true;  // [ground mud]
+    else if (a == "--rain-ground") o->rainGround = true;  // [rain ground]
     else if (a == "--plants-react") o->plantsReact = true;  // [plants]
     else if (a == "--energy-shields") o->energyShields = true;
     else if (a == "--unit-scars") o->unitScars = true;
@@ -999,6 +1011,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--unit-dirt-pace") o->unitDirtPace = std::max(0.0f, static_cast<float>(atof(v)));  // [unit dirt]
     else if (a == "--dirt-test") o->dirtTest = v, o->unitDirt = true;                                 // [unit dirt]
     else if (a == "--rain-stops") o->rainStops = static_cast<float>(atof(v));                          // [unit dirt]
+    else if (a == "--rain-starts") o->rainStarts = static_cast<float>(atof(v));                        // [rain ground]
     else if (a == "--fx-decal-size") o->fx.decalSize = std::max(0.1f, static_cast<float>(atof(v)));
     else if (a == "--picture") o->picture = v;
     else if (a == "--photo-cases") o->photoCases = v, o->photoTest = true;  // (photofix)
@@ -1548,6 +1561,8 @@ int main(int argc, char** argv) {
   world.deepTracks = opt.deepTracks;
   world.terrain.mudRuts = !opt.noMudRuts;  // [mud ruts]
   world.groundParallax = opt.groundParallax;  // [parallax]
+  world.mudMask = opt.mudMask;  // [ground mud]
+  world.rainGround = opt.rainGround;  // [rain ground]
   world.terrain.parallaxDepth = std::max(opt.parallaxTune[0], 0.0f);
   world.terrain.parallaxReach = std::max(opt.parallaxTune[1], 1.0f);
   world.terrain.parallaxShadows = std::clamp(opt.parallaxTune[2], 0.0f, 1.0f);
@@ -3002,6 +3017,10 @@ int main(int argc, char** argv) {
       world.photoPixel = static_cast<float>(device->Height()) / static_cast<float>(windowSceneHeight);
       world.photoShare = static_cast<float>(device->Width()) * static_cast<float>(device->Height()) /
                          (world.photoPixel * world.photoPixel * static_cast<float>(windowSceneWidth) * static_cast<float>(windowSceneHeight));
+    }
+    if (opt.rainStarts >= 0 && time >= opt.rainStarts && (opt.rainStops < 0 || time < opt.rainStops) && weatherNow == 0) {  // [rain ground] --rain-starts
+      if (world.timeOfDay < 0) world.timeOfDay = 12;
+      setWeather(1);
     }
     if (opt.rainStops >= 0 && time >= opt.rainStops && world.rain + world.snow > 0) setWeather(0);  // [unit dirt] --rain-stops
     world.Begin(drawn, device->Width(), device->Height(), time, havePlay ? playTick * 0.1 : static_cast<double>(time));

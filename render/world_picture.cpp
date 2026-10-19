@@ -81,6 +81,8 @@ struct WorldPicture::Impl {
     if (weatherEffects >= 0) world->horizonWeather = weatherEffects > 0;  // [horizon] (proposed: with the weather effects)
     if (weatherEffects >= 0) world->streamWater = weatherEffects > 0;  // [stream] (streams as water: with the weather effects)
     if (groundDetail >= 0) world->groundCover = world->battleScars = world->leafLight = world->deepTracks = world->wildlife = world->plantsReact = world->groundParallax = world->remasteredTarmacs = groundDetail > 0;  // ([plants]: plantsReact; the ground parallax)
+    if (groundDetail >= 0) world->mudMask = groundDetail > 0;  // [ground mud] (with the ground detail)
+    if (weatherEffects >= 0) world->rainGround = weatherEffects > 0;  // [rain ground] (with the weather effects)
     if (frameGeneration >= 0) world->frameGeneration = frameGeneration > 0;
     if (hiddenOutlines >= 0) world->hiddenOutlines = hiddenOutlines > 0;
   }

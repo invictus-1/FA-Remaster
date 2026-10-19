@@ -1415,6 +1415,61 @@ in the modern look; render/terrain.cpp, `GroundParallax`); off by default, propo
   near (the cinematic camera under 2 units) the steepest edges alias a little without the temporal upscaler; decals do not
   follow the relief (a scorch lies on the middle, not over the stones' tops).
 
+## A painted mud layer and a rain-wet ground (first version, 2026-10-19; a helper's, for review)
+
+The visuals session's sections 58 and 59 (Chris: "the grass/soil around it is too green wouldn't it be more muddy"; "We
+might be able to have textures change when it rains"), in the form agreed in render-answers.md. Two options, both off by
+default, the modern look only: `World::mudMask` (viewer `--mud-mask`; `Terrain::mudMask`), in "Ground Detail", and
+`World::rainGround` (viewer `--rain-ground`; `Terrain::rainGround`), in "Weather Effects". The viewer's
+`--rain-starts s` (rain begins s seconds in, on dry ground) with `--rain-stops` shows a shower come and go.
+- **Registers**: the root signature has t0-t43 only (on Vulkan the buffers follow at binding 60), and the ground's pass uses
+  them all. But the modern look's ground does not read the water's map and ramp (t4, t5: the modern water colours what lies
+  under it). So the new work is drawn by pipelines of its own, built for the modern look only (the same shader with
+  GROUND_MORE, and GROUND_WET for the twins; the relief close by in both), in which t4 is the mud mask and t5 the twins'
+  normals; the twins' albedo and third maps are laid in the layers' own array (t25, materials_) after the layers' third maps
+  (one BC7 set). Off, or on where the map has neither, the ground is drawn by its other pipelines, whose text after the
+  preprocessor is as before (the hooks in them are empty macros there).
+- **The mud mask** (remap.json's `"mud_mask"`, BC4 over the whole map; SETONS_R's and SETONS_Q's stream banks): read once a
+  pixel where the layers' masks are; where it is above zero the map's mud material (the ruts' `"mud"`, MudRead) is laid over
+  the layers by it, the hollows first (the layers' height as they are laid and the mud's own: a soft weight gives mud lying
+  between the stones and clods, an uneven edge, not a fade); rain raises it a little. Mud holds water: it stays as wet as
+  the visuals session made it (dark, glossy) until the ground is about half dry, and still water gathers in its low places
+  as the wetness rises (level, darker, a mirror: laid in the ground's shader and kept through the weather's gloss, because
+  lighting.h's own puddles are taken back toward the wet ground's roughness by the step after them). Drying it goes paler
+  (by about what the visuals session darkened the wet mud by), a little greyer and matt, and its thicker crust cracks in
+  patches into plates a hand's breadth across (thin gaps of wandering width, rims curled a little; where the gaps are under
+  a pixel, their share of the colour: nothing shimmers from the game's height). The relief close by is mostly filled where it
+  is mud. Deep tracks press into it as mud (the ruts' mud in them; GroundKinds counts it as mud for the tracks' fading), and
+  the ground cover does not grow on it (CoverDensity). Only the patches that may hold mud are drawn by the mud's pipeline (a
+  coarse grid from a small level of the mask's file, two blocks of margin: on SETONS_R 1.3 % of the map); the rest of the
+  ground is drawn as without it.
+- **The rain-wet ground** (the map's entry: `"weather": {"rain": {"materials": {dry: wet}, "soak": {dry: n}}}`): each layer
+  drawn in a listed material goes over to its wet twin as the weather's wetness times its soak rises, its hollows first (its
+  third map's height), in slow patches, with a thin edge where both are read; back the same way as it dries. A pixel reads
+  the dry set or the wet one (one more read than dry: the dry third map, which decides). The weather's darkening and gloss
+  lie over a twin as over all ground: the visuals session makes each twin the colour of its dry layer as it is drawn
+  (section 61), so that the twin changes the make-up (smeared, slick mud), not the darkness; its roughness is taken a little
+  rougher where its small shapes are under a pixel. The twins are read the first time the option is on for a map (a twin
+  without the layers' tier, or of another size or kind, stays dry). SETONS_R's live twins (CC0, section 61): soil, forest
+  floor, scree and dry sand (soaks 1.0, 0.7, 0.8, 0.5); first tried with a stand-in block (soil -> setonsr_mud).
+- **Cost** (2560x1440, RTX 4090, SETONS_R, the ground's pass, the lowest of three runs; the PC busy with other work): the
+  mud from the game's height over the banks 0.393 -> 0.427 ms, close by (6) 0.429 -> 0.531, close and wet 0.466 -> 0.547,
+  with no mud in view 0.342 -> 0.339 (nothing: those patches are drawn as without it). The twins while the ground is wet
+  (none dry), SETONS_R's live four at wet 0.5: close by 0.400 -> 0.560, from the game's height 0.401 -> 0.556, from the
+  game's height in rain 0.425 -> 0.559; both on a wet bank close by 0.460 -> 0.691. Memory: the mask 11 MB; each twin its
+  albedo, third map and normal (about 67 MB at 4k, 268 MB at 8k: SETONS_R's four 268 MB / 1.07 GB), read the first frame the
+  option is on for a map.
+- **Checked**: off, regress3 all eight 0 px and the weather regression (rain, snow) all four 0 px against b197ac4; the base
+  exe against ours off on SETONS_R (close by day, the stream bank dry and wet, deep tracks with the ruts' mud in rain, the
+  ground cover at the bank, the ground parallax at the bank) and SETONS_Q (close): 0 px on both backends; both options on
+  over stock Seton's in rain (no mask, no block): 0 px; the mask on with no mud in view: 0 px. On, Vulkan against Direct3D
+  12 (both options and the relief, the bank at wet 0.6): mean 0.16 of 255, the differences in the trees' tops.
+- Open: units do not yet take mud from the mask's mud (unit_wear's ground grid reads the layers' kinds only); the ray
+  tracing scene's ground colours (bounce light) do not show it; with the twins, the relief close by and the deep tracks'
+  pressed-smooth colour are the dry layers'; the twins' memory at the 8k tier (about 1 GB for SETONS_R's four); lighting.h's
+  own puddles: the wet ground's roughness step after them takes their still water back to about 0.5 (a change there would
+  move today's rain picture, so it is left to be decided).
+
 ## The options
 
 Each is off by default (but `hiddenOutlines`, on: Chris's word, item 15) and, off, leaves the picture as it was, pixel
@@ -1461,6 +1516,8 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `season` (`WorldPicture::SetSeason`) | the season a map is drawn in (Summer as at first, Autumn; Winter reserved): its ground's materials, ground cover, props and mud as its remap.json's "seasons" block lists them (the visuals session's art); in autumn leaves in the wind (off broadleaf trees, blown over the ground where the cover grows; `fallingLeaves`; with motion on, each leaf's own motion drawn for FSR 3 and frame generation, `FallingLeaves::DrawMotion`, +0.004 ms), the autumn climate (showers, more fog, morning fog) (seasons.h; Chris, 2026-10-18: a player's option) | the leaves 0.01 ms; the rest nothing (other textures) | taken in when a map opens; maps with a "seasons" block |
 | `plantsReact` | grass and bushes pressed over where units drive and springing back; ground, grass and plants burnt black, then brown, where blasts and fires were, growing back; felled trees still, burnt ones bare; felled trees fall smoothly | about 0.03 ms of its own in a fight (the field 0.010, the burnt ground 0.008, the grass +0.009), and the sun's maps 0.045 ms cheaper (what sways drawn together): the frame a little cheaper (16 MB for the burnt picture on SETONS_R) | |
 | `groundParallax` | close by, the remastered ground's stones stand up and its hollows sink as the eye passes (its materials' scanned relief), a low sun shading the hollows; nothing from the game's height (proposed for the "Ground Detail" setting) | +0.14 to 0.17 ms at zoom 10 to 5, +0.24 the cinematic camera low over the ground, nothing from the game's height | a remastered map (its materials' third maps) |
+| `mudMask` | the map's painted mud (stream banks): its mud material over the ground by the mask, wet and glossy with puddles in rain, paler and cracked dry; deep tracks press into it as mud, no plants on it (in "Ground Detail") | +0.03 ms from the game's height over the mud, +0.08 to 0.10 close by, nothing with no mud in view | a map whose remap.json entry names a "mud_mask" |
+| `rainGround` | the listed layers go over to their wet twins as the ground gets wet, the hollows first, and back as it dries (in "Weather Effects") | +0.13 to 0.16 ms while the ground is wet (SETONS_R's four twins), nothing dry | a time of day; a map whose entry has a "weather" rain block |
 
 Ray tracing means Direct3D 12 with DXR 1.1 or Vulkan with ray queries: never on the Mac (MoltenVK has none);
 where it is missing those options do nothing. `rayReflections` builds the surfaces' shaders with ray
@@ -1479,8 +1536,8 @@ so there is less clutter). WorldPicture sets each bundle's options together, bef
 | `SetAtmosphere` | `volumetricFog`, `volumetricClouds`, `skyTables`; proposed (and set with them in world_picture.cpp, for review): `lightShafts`, `driftingShadows` | about 0.25 ms less (needs a time of day); the two proposed about +0.16 to 0.19 from the game's camera |
 | `SetSoftShadows` | `softShadows`, `contactShadows` | about +0.37 ms |
 | `SetRayTracing` | `bounceLight`, `rayReflections`, `rayLightShadows` (reflections and the small lights' shadows from the next map) | about +0.75 ms; at night with many lights about 0.5 ms more |
-| `SetWeatherEffects` | `litRain`, `rainSplashes`, `waterDetail`; proposed: `horizonWeather` | about +0.05 ms in rain, +0.04 by water; the horizon about +0.1 (0.21 from the strategic view in snow) |
-| `SetGroundDetail` | `groundCover`, `battleScars`, `leafLight`, `deepTracks`, `wildlife`, `plantsReact` ([plants], 2026-10-18); proposed: `groundParallax` ([parallax], 2026-10-19: +0.14 to 0.17 ms zoomed in) | +0.05 to 0.16 ms zoomed in, nothing far out; scars up to +0.56 ms with 2000 in view |
+| `SetWeatherEffects` | `litRain`, `rainSplashes`, `waterDetail`; `streamWater` ([stream], 2026-10-19: 0.05 to 0.13 ms), `rainGround` ([rain ground], 2026-10-19: +0.13 to 0.16 ms while wet); proposed: `horizonWeather` | about +0.05 ms in rain, +0.04 by water; the horizon about +0.1 (0.21 from the strategic view in snow) |
+| `SetGroundDetail` | `groundCover`, `battleScars`, `leafLight`, `deepTracks`, `wildlife`, `plantsReact` ([plants], 2026-10-18); `groundParallax` ([parallax], 2026-10-19: +0.14 to 0.17 ms zoomed in), `remasteredTarmacs` ([tarmac], 2026-10-19), `mudMask` ([ground mud], 2026-10-19: +0.03 ms over the mud from the game's height, nothing away from it) | +0.05 to 0.16 ms zoomed in, nothing far out; scars up to +0.56 ms with 2000 in view |
 | `SetFrameGeneration` | `frameGeneration` (a sixth setting, asked of the ui: "Frame Generation") | 1.1-1.4 ms a frame drawn; twice the frames shown |
 | `SetHiddenOutlines` | `hiddenOutlines` (readability, not light: its own setting, ON at first; proposed to the ui as "Hidden Unit Outlines") | 0.06-0.08 ms |
 

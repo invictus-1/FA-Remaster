@@ -490,6 +490,15 @@ class World {
   // original effects keep the game's pads, as do pads not remade yet. Modern look with the remastered effects; off by
   // default (proposed for the "Ground Detail" setting).
   bool remasteredTarmacs = false;
+  // [ground mud] The map's painted mud (terrain.h, Terrain::mudMask; Chris and the visuals session, 2026-10-19): where the map's
+  // remap.json entry names a mud mask (SETONS_R's stream banks), its mud material laid over the ground by it, wet and glossy in
+  // rain with puddles in it, drying paler and cracked; deep tracks press into it as mud, no plants grow on it. Modern look;
+  // off by default here, in the game's "Ground Detail" (world_picture.h).
+  bool mudMask = false;
+  // [rain ground] The rain-wet ground (terrain.h, Terrain::rainGround): where the map's entry lists wet twins of its layers'
+  // materials, the ground goes over to them as the weather wets it, the hollows first, and back as it dries. Modern look with
+  // the weather; off by default here, in the game's "Weather Effects" (world_picture.h).
+  bool rainGround = false;
   // [plants] Plants that react (plants.h, `plantLife`; Chris, 2026-10-18): grass and the plants laid over where units drive,
   // rising again over seconds; bushes, ferns, saplings and the like bending under them and springing back; the grass, the
   // plants and the undergrowth burnt black, then brown and lower where explosions and fires were, growing back over
