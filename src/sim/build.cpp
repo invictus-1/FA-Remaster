@@ -554,13 +554,20 @@ void StopMoving(Unit* u) {
   u->unitStates.erase("Moving");
 }
 
-// A task's move child torn down with the task (CUnitMoveTask's dtor 0x618700): Moving off (0x6187bd), and the
+// A task's move child torn down with the task (CUnitMoveTask's dtor 0x618700): Moving off (0x6187bd), then the
 // navigator's AbortMove (0x618884) unless the queue is being cleared for an order its table 0x618998 keeps
 // (u->clearKeepsMove, set by IssueFromStream). (A move that ends by itself goes through StopMoving: queue+0x1c is 0
-// then, and the table aborts for 0.)
+// then, and the table aborts for 0.) The dtor asks nothing of the goal (0x618855..0x618884: a navigator and the
+// table's byte +0x90): a navigator that has already arrived is aborted too, and its MakeIdle -> SetWaypoints(0, 0)
+// makes a brake spline from whatever spline the steering holds by then. Seen: MP1 4803, army 5's engineer 0x50002c,
+// guarding, reclaims for its guarded unit; its walk arrives in the navigator stage (Stop: no spline), its steering
+// then takes a side-step from a neighbour's record (0x50002a), and in the command stage its reclaim ends with the walk
+// still on it (TickReclaim's target test, before the walk's own end): the original's move dtor brakes from that
+// side-step spline along the old heading (0.152 -> 0.114 -> 0.076 -> 0.038); ours, testing the goal, did not abort,
+// and took the side-step (0.190, turning).
 void EndMoveChild(Unit* u) {
-  if (u->motion.hasGoal && !u->clearKeepsMove) MotionStop(u);
   u->unitStates.erase("Moving");
+  if (!u->clearKeepsMove && u->motion.bp && u->motion.bp->mobile()) MotionStop(u);
 }
 
 // The end of a task's walk that ended by itself (the navigator's event): the walk is a CUnitMoveTask child
