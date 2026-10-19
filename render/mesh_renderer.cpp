@@ -101,7 +101,9 @@ cbuffer MeshKind : register(b3) {
   float4 kind5; // x: 1 = the Cybran's highlight lookup is there; y: 1 = the Seraphim's mirror ramp is there;
                 // w: 1 = the visuals track's lattice for this faction's personal shields is there (shieldPatterns)
   float4 kind6; // x: 1 = its texture's treads scroll (ModelLod::scrolling: the original's anim.w); y: 1 = no glow in the
-                // frame's alpha (ModelLod::rgbOnly: the original writes its colour alone)
+                // frame's alpha (ModelLod::rgbOnly: the original writes its colour alone); z: what sways, a group of
+                // trees: model units a step of where each tree stands (ModelLod::treeStep; 0: none); w: the scene's
+                // samples a pixel (NearFade)
 };
 Texture2D albedoMap : register(t0);
 Texture2D normalsMap : register(t1);
@@ -168,13 +170,21 @@ VOut VS(VIn i, uint instance : SV_InstanceID) {
   o.world = float3(dot(n.row0, p), dot(n.row1, p), dot(n.row2, p));
   [branch] if (kind3.x > 0) {
     // the wind: the higher on the model, the farther it is carried; every tree on its own beat (by
-    // where it stands), with a slow swing and a quicker one over it; harder when it rains
+    // where it stands; a tree of a group by its own place too), with a slow swing and a quicker one
+    // over it; harder when it rains
     float high = saturate(p.y * kind3.y);
     float size = length(float3(n.row0.x, n.row1.x, n.row2.x)) / kind3.y;  // its height in the world
-    float beat = dot(float2(n.row0.w, n.row2.w), float2(0.11, 0.07));
+    float2 foot = float2(n.row0.w, n.row2.w);
+    float beat = dot(foot, float2(0.11, 0.07));
+    // [foliage] a tree of a group (several trees in one model, one bone a tree; ModelLod::treeStep): where it stands
+    // itself, and a beat of its own on top of that place's
+    [branch] if (i.bones.w > 0 && kind6.z > 0 && look > 0.5) {  // (the modern look; the original's swing together)
+      float2 own = (float2(i.bones.yz) - 128) * kind6.z;  // (model units)
+      foot = float2(dot(n.row0, float4(own.x, 0, own.y, 1)), dot(n.row2, float4(own.x, 0, own.y, 1)));
+      beat = dot(foot, float2(0.11, 0.07)) + (i.bones.w - 1) * (6.2831853 / 254);
+    }
     float swing = sin(time * 1.3 + beat) * 0.6 + sin(time * 2.9 + beat * 1.7 + p.x * kind3.y * 4) * 0.4;
     // (it comes in gusts that run across the land with the wind)
-    float2 foot = float2(n.row0.w, n.row2.w);
     float gust = (0.35 + 0.9 * falling.x + 0.3 * falling.y) * (0.45 + 1.3 * CloudNoise(float3((foot - float2(0.915, 0.403) * (time * 7)) * 0.02, time * 0.07)));
     o.world.xz += float2(0.915, 0.403) * (swing * gust * kind3.x * high * high * size * 0.035);
 #ifdef BLASTS
@@ -244,6 +254,27 @@ float BuildSolid(int faction, float f, float3 shape, out float3 work) {
 #define BuildSolid(whose, f, shape, work) RemasteredBuildSolid(whose, f, shape, i.rest, work)
 #endif
 
+// [foliage] Foliage right at the eye (a cinematic camera low among trees, cinecam.h): its cards would fill the screen
+// as flat sheets, so they fade out, dithered, from 1.2 world units to nothing under 0.4. Only what sways and has
+// holes (leaves, needles, plants' cards; never a unit or a solid prop; a tree's trunk is in its foliage's mesh and goes
+// with it); the game's camera comes that close only zoomed all the way in among trees (ambient_occlusion.cpp leaves
+// that zone out too). `coverage`: the caller's alpha is a leaf's coverage (alpha to coverage); with several samples
+// a pixel that coverage is multiplied by what is returned, and the samples dither it finely; otherwise whole pixels
+// are cut, dithered across the screen. The scene's depth first and its full shading drop the same; the shadows keep
+// them all.
+float NearFade(float3 world, float2 pixel, bool coverage) {
+  [branch] if (kind3.x > 0 && kind.x > 0) {
+    float d = length(world - cameraPosition);
+    [branch] if (d < 1.2) {
+      float fade = smoothstep(0.4, 1.2, d);
+      if (coverage && kind6.w > 1.5) return fade;
+      float noise = frac(52.9829189 * frac(dot(pixel, float2(0.06711056, 0.00583715))));  // (interleaved gradient noise)
+      if (fade <= noise) discard;
+    }
+  }
+  return 1;
+}
+
 // shadow maps: depth only, with foliage's holes (and nothing where a unit is not built yet)
 void ShadowPS(VOut i) {
   if (kind.x > 0) clip(albedoMap.Sample(samplerLinear, i.uv.xy).a - kind.x);
@@ -264,6 +295,7 @@ float4 DepthPS(VOut i) : SV_Target {
   } else if (kind.x > 0) {
     clip(albedo.a - kind.x);
   }
+  cover *= NearFade(i.world, i.position.xy, kind2.y > 0.5 && look > 0.5 && kind.y < 0.5);  // [foliage] (as Shade's)
   if (min(i.color.a, 1) < 0.999 && kind.z < 0.5 && kind2.w < 0.5) {
     float3 work;
     clip(BuildSolid(int(kind2.x + 0.5), min(i.color.a, 1), i.shape, work));
@@ -461,6 +493,8 @@ float4 Shade(VOut i, bool front) {
   } else if (kind.x > 0) {
     clip(albedo.a - kind.x);
   }
+  // [foliage] (a leaf's coverage is its alpha below in the modern look, unless lit by its normals alone)
+  cover *= NearFade(i.world, i.position.xy, kind2.y > 0.5 && look > 0.5 && kind.y < 0.5);
   float3 vertexNormal = normalize(i.normal);
   if (kind2.y > 0.5 && !front) {  // a leaf seen from behind is lit as from behind
     vertexNormal = -vertexNormal;
@@ -1484,6 +1518,8 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
     kind[19] = !shadowPass && lod->faction >= 0 && lod->faction < 4 && shieldPatternOf_[lod->faction] ? 1.0f : 0.0f;
     kind[20] = lod->scrolling ? 1.0f : 0.0f;
     kind[21] = lod->rgbOnly ? 1.0f : 0.0f;
+    kind[22] = lod->sway > 0 ? lod->treeStep : 0.0f;  // [foliage] (a group's trees, each on its own beat)
+    kind[23] = static_cast<float>(gSceneSamples);     // [foliage] (NearFade: leaves fade by their coverage)
     device_->SetConstants(3, kind, sizeof kind);
     device_->SetTexture(0, lod->albedo);
     if (!shadowPass) {

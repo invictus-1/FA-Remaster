@@ -322,6 +322,18 @@ VOut VS(uint id : SV_VertexID) {
 float4 PS(VOut i) : SV_Target {
   float4 c = atlas.Sample(samplerAniso, i.uv);
   clip(c.a - 0.5);
+  // [foliage] right at the eye (a cinematic camera down among the plants): faded out from 1.2 world units to nothing
+  // under 0.4, as the models' foliage is (mesh_renderer.cpp, NearFade): with several samples a pixel by its coverage
+  // among them (the alpha returned, alpha to coverage: PLANT_SAMPLES), else whole pixels cut, dithered
+  float fade = 1;
+  float near = length(i.world - cameraPosition);
+  [branch] if (near < 1.2) {
+    fade = smoothstep(0.4, 1.2, near);
+#if PLANT_SAMPLES < 2
+    if (fade <= frac(52.9829189 * frac(dot(i.position.xy, float2(0.06711056, 0.00583715))))) discard;
+    fade = 1;
+#endif
+  }
   float2 t = atlasNormals.Sample(samplerAniso, i.uv).ag * 2 - 1;
   float3 card = normalize(i.right * t.x + i.up * t.y + i.toward * sqrt(saturate(1 - dot(t, t))));
   float3 n = normalize(lerp(i.ground, card, 0.5));  // (the card's own normals at half strength: the visuals track's advice)
@@ -332,7 +344,7 @@ float4 PS(VOut i) : SV_Target {
   // (the sun's light through its leaves, World::leafLight: by the card's own way, the side the eye sees)
   float3 albedo = ToLinear(c.rgb);
   float3 through = LeafLight(albedo, LeafThrough(card, normalize(cameraPosition - i.world)), i.world, i.shade.x, 0.7);
-  return float4(ModernLight(albedo, 0, 0.85, occlusion, through, n, i.world, i.shade.x), 1);
+  return float4(ModernLight(albedo, 0, 0.85, occlusion, through, n, i.world, i.shade.x), fade);
 }
 )hlsl";
 
@@ -402,10 +414,14 @@ bool GroundCover::Init(std::string* error) {
   pd.samples = gSceneSamples;
   pipeline_ = device_->CreatePipeline(pd, error);
   if (!pipeline_) return false;
-  const std::string plants = std::string(kViewShaderBlock) + RayShaders() + kLightingShaderBlock + kPlantShader;
+  // [foliage] (the plants' cards fade right at the eye by their coverage among a pixel's samples: PLANT_SAMPLES, alpha
+  // to coverage; elsewhere their alpha is 1, every sample, as before)
+  const std::string plants = "#define PLANT_SAMPLES " + std::to_string(gSceneSamples) + "\n" + kViewShaderBlock + RayShaders() + kLightingShaderBlock + kPlantShader;
   pd.name = "ground cover: plants";
   pd.vertexSource = pd.pixelSource = plants;
+  pd.alphaToCoverage = true;  // [foliage]
   plantPipeline_ = device_->CreatePipeline(pd, error);
+  pd.alphaToCoverage = false;  // [foliage]
   if (!plantPipeline_) return false;
   // (the same two laid over by the blasts' waves, shaders of their own so that without them nothing is drawn otherwise:
   // made by PrepareBlasts when they are first wanted)
@@ -436,6 +452,7 @@ bool GroundCover::PrepareBlasts() {
   blastPipeline_ = device_->CreatePipeline(pd, &error);
   pd.name = "ground cover: plants, blasts' waves";
   pd.vertexSource = pd.pixelSource = blastPlantSource_;
+  pd.alphaToCoverage = true;  // [foliage] (as plantPipeline_)
   if (blastPipeline_) blastPlantPipeline_ = device_->CreatePipeline(pd, &error);
   if (!blastPlantPipeline_) {
     fprintf(stderr, "render: the ground cover cannot bend in blasts' waves (%s)\n", error.c_str());

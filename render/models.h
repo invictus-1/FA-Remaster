@@ -25,7 +25,7 @@ struct ScmVertex {
   float binormal[3];
   float uv0[2];
   float uv1[2];
-  uint8_t bones[4];  // only the first is used: each vertex follows one bone
+  uint8_t bones[4];  // only the first is a bone: each vertex follows one (what sways: the rest, ModelLod::treeStep)
 };
 
 // A bone of a model's skeleton, standing at rest: where it is in the model's own space (model
@@ -83,6 +83,12 @@ struct ModelLod {
   float sway = 0;              // how much it sways in the wind (the original's "Undulating..." trees, the
                                // remaster's foliage): 0 not at all, 1 as a tree does
   float swayHeight = 1;        // the model's height in its own units: the sway grows from the foot to there
+  // A group of trees in one mesh (the game's tree groups, the visuals track's; one bone a tree; models.cpp, TagTrees):
+  // each vertex of what sways says where its tree stands (its bone indices' second and third bytes: x and z in steps
+  // of this many model units, 128 the model's origin) and its tree's own beat (the fourth: 1..255, a share of a whole
+  // swing; 0 the model's beat), so that each tree sways on its own (mesh_renderer.cpp). 0: no trees of their own (a
+  // single tree, a group's far card: every vertex on one bone, the model's beat as before).
+  float treeStep = 0;
   bool leaves = false;         // "LabPBRAlpha": a remastered surface with holes: seen from both sides (lit as
                                // facing whoever looks), its holes' edges smoothed, and its specular texture's
                                // alpha is how much light comes through from the far side (no team colour)
