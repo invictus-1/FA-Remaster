@@ -28,7 +28,8 @@
 // --emit <emitter>  plays that particle emitter of the game over and over where placed units would stand
 //           (a name such as destruction_explosion_fire_01, or a blueprint's path); may be given several times
 // --emit-scale <n>  the size those emitters are played at
-// --map-decals normals|all|albedo|off|corner  which of the map's decals are drawn: normals (the default: only
+// --map-decals normals|all|albedo|off|corner  which of the map's decals are drawn (without it: as the map's entry in
+//           the remastered ground's remap.json says, "decals", else normals): normals (the default: only
 //           the sculpting of cliffs and erosion), all (also the painted ground details, which as drawn
 //           today make the ground too busy), albedo (those alone), off; corner: all, with a decal's position
 //           taken as its corner (for finding out what the map file means)
@@ -576,7 +577,7 @@ struct Options {
   std::string picture; // --picture
   std::string settings; // --settings
   int testLights = 0;  // --lights
-  std::string mapDecals = "normals";  // --map-decals
+  std::string mapDecals;  // --map-decals (empty: as the map's remap.json entry says, else normals)
   float decalTurn = 1, decalRange = 1;
   std::string decalFilter;  // --decal-filter: only the map's decals whose texture's name holds this
   bool listBones = false;

@@ -86,7 +86,9 @@ class World {
   struct Options {
     std::string displayTable;        // the engine's tools/dump_display.lua log, or empty (models.h)
     float lodPixels = 0;             // the ground's quad size on screen; 0: the default
-    std::string mapDecals = "normals";  // normals | all | albedo | off | corner (main.cpp says what each is)
+    // normals | all | albedo | off | corner (main.cpp says what each is); empty: as the map's entry in the remastered
+    // ground's remap.json says ("decals"), else normals
+    std::string mapDecals;
     std::string decalFilter;         // only the map's decals whose texture's name holds this
     float decalTurn = 1, decalRange = 1;
     bool verbose = false;            // says what it loads

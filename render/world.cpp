@@ -190,15 +190,17 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     dust.SetMap(&map, mapPath, [this](const std::string& path) { return textures.ReadFile(path); });
     // the map's own decals: albedo ones (pictures over the ground's colour) and normal ones (its sculpting)
     decals.hotMetal = false;  // (hot metal: the map's own scorches are no fresh marks; Begin sets it again)
-    if (options.mapDecals != "off") {
+    const std::string mapDecals = !options.mapDecals.empty() ? options.mapDecals
+                                  : !terrain.MapDecalsGiven().empty() ? terrain.MapDecalsGiven() : std::string("normals");
+    if (mapDecals != "off") {
       int laid = 0;
       for (const MapDecal& d : map.decals) {
         if (d.type != 1 && d.type != 2) continue;
         if (!options.decalFilter.empty() && d.textures[0].find(options.decalFilter) == std::string::npos) continue;
-        if ((options.mapDecals == "albedo" && d.type != 1) || (options.mapDecals == "normals" && d.type != 2)) continue;  // one kind alone
+        if ((mapDecals == "albedo" && d.type != 1) || (mapDecals == "normals" && d.type != 2)) continue;  // one kind alone
         const float heading = d.rotation.y * options.decalTurn;
         Vec3 centre = d.position;
-        if (options.mapDecals == "corner") {  // the position as the corner the decal is turned about
+        if (mapDecals == "corner") {  // the position as the corner the decal is turned about
           const float c = std::cos(heading), s = std::sin(heading), hx = d.scale.x * 0.5f, hz = d.scale.z * 0.5f;
           centre.x += hx * c + hz * s;
           centre.z += -hx * s + hz * c;

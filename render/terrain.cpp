@@ -830,6 +830,7 @@ void Terrain::Remaster(const MapData& m, std::vector<std::string>* arh) {
   }
   const JsonValue& layers = remap["maps"][lower(mapPath)];
   if (layers.kind != JsonValue::Object) return;
+  mapDecalsGiven_ = layers["decals"].StringOr(std::string());  // (which of the map's own decals are drawn, where it says)
   // the plants' card atlas and table, where the map's entry names one
   const std::string coverPath = layers["cover"].StringOr(std::string());
   if (!coverPath.empty()) ReadCover(m, folder + coverPath);
@@ -1102,6 +1103,7 @@ bool Terrain::Load(const MapData* map, std::string* error) {
     for (std::string& f : mudFiles_) f.clear();  // [mud ruts] (Remaster finds them again)
     mudMetres_ = 0;
     std::fill(layerUnitsPerMetre_, layerUnitsPerMetre_ + 10, 0.0f);
+    mapDecalsGiven_.clear();
     Remaster(*map, &paths);  // (the visuals track's remastered ground, where it lists this map)
     std::vector<bool> present;
     materials_ = textures_->Layers(paths, &present);

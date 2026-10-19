@@ -123,7 +123,12 @@ class Terrain {
   float CoverTreeRadius() const { return coverTreeRadius_; }  // (the table's near_trees radius, world units)
   float HeightUnit() const { return map_ ? 65535.0f * map_->heightScale : 1.0f; }
 
+  // Which of the map's own decals remap.json's entry for the map asks to be drawn ("decals": all, normals, albedo
+  // or off; World::Options::mapDecals); empty where it says nothing (Load reads it).
+  const std::string& MapDecalsGiven() const { return mapDecalsGiven_; }
+
  private:
+  std::string mapDecalsGiven_;
   gfx::Texture albedo_[10], normal_[9];
   float albedoScale_[10] = {}, normalScale_[9] = {};  // (the layers' scales, the remastered ground's applied)
   bool normalUp_[9] = {};    // (a remastered material's normal: +y up in its texture, the stock layers' turned)
