@@ -522,8 +522,16 @@ void AdjustPosition(Formation& F, Unit* u, float* px, float* pz) {
     }
     if (count >= 2000) break;
   }
-  if (!u->commands.empty()) {
-    CommandType t = u->commands.front()->type;
+  // No spot found (0x59adc0..0x59ade0): the order AFTER the current one decides, CUnitCommandQueue::GetNextCommand
+  // 0x6edc20 (the queue's second command, null with fewer than two). One of Move, Attack, Patrol, FormMove, FormAttack,
+  // FormPatrol, Guard (0x552c10) keeps the formation position as it is (not reserved); with none the unit is given
+  // its own position. Seen (probe mp1_4987): MP1 4986, army 7's 13-unit Move from the stream: the Thaams 0x700053 /
+  // 0x70005f, each holding only that Move, have slots in the water (395,493) / (395,490) where the rings find no
+  // spot; the original's SetGoal gets their own cells (482,515) / (483,512), so they stand and search nothing. Ours
+  // read the head command (the Move), kept the water cells and searched them with the unreachable cap
+  // (ProblemGettingToGoal at 4987), and 0x700063's search waited a beat behind them.
+  if (u->commands.size() >= 2) {
+    CommandType t = u->commands[1]->type;
     if (t == CommandType::Move || t == CommandType::Attack || t == CommandType::Patrol || t == CommandType::FormMove ||
         t == CommandType::FormAttack || t == CommandType::FormPatrol || t == CommandType::Guard)
       return;
