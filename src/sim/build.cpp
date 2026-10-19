@@ -2507,8 +2507,14 @@ int CaptureStep(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
     case 0:  // within 5: stay; otherwise a move to a free spot beside the target
       t.state = 1;
       if (gap > 5.0f && CanMove(u)) {
+        // 0x604663..0x6046be: the rect kept free is the target's skirt (Unit::GetSkirtRect 0x6a7600) only when the
+        // task's CAiTarget holds a unit (vt+0x10); a target held through the army's recon blip (a player's order:
+        // the interface only knows blips) gives the empty rect, so the spot may lie beside the target's footprint.
+        // Seen: MP3 7921, army 0's engineer 0xb9 is ordered to capture the blip of army 1's radar 0x100122 at
+        // (221.5, 230.5): the original's PrepareMove takes (220,231) (probe mp3_7789: SetGoal (220,231,221,232),
+        // the batch target (220.5, 231.5)); ours kept the 2x2 skirt free and took (219,232).
         float excl[4] = {0, 0, 0, 0};
-        if (T) SkirtRect(T, excl);
+        if (T && !t.targetViaBlip) SkirtRect(T, excl);
         Vec3 a = e->position;
         PrepareMoveFor(sim, u, &a, excl, 1);
         int x0 = static_cast<int>(std::nearbyint(a.x - uf.sizeX * 0.5f));
@@ -3211,6 +3217,7 @@ BuildTask* StartBuildTask(Sim& sim, Unit* u, const UnitCommand& c) {
       if (!c.targetId) return nullptr;
       t->order = "Capture";
       t->goalId = c.targetId;
+      t->targetViaBlip = c.targetViaBlip;  // (its CAiTarget holds the blip: CaptureStep's spot search)
       // the ctor 0x603f90 first makes its own CAiTarget of the order's entity (UpdateTarget 0x5d55b0 at 0x604020):
       // one Unit::PickTargetPoint draw for a unit (or a unit's blip) with AI.TargetBones, the value unused. Seen:
       // Engineers 2272, three engineers given Capture of a blip at 2271 draw 0x6aaf94 once each as their tasks start
