@@ -96,7 +96,9 @@ local function arrived(kind, place, ring, mesh, before, what)
         check(what .. ": its mesh stands in the world, 2 above the place", e ~= nil and math.abs(e.y - p.Location[2]) < 0.01, true)
         check(what .. ": seen by the player and allies, not by enemies",
             e and (e.focus .. " " .. e.allies .. " " .. e.enemies .. " " .. e.neutrals), "Always Always Never Never")
-        LOG("TEST note: " .. what .. ": its mesh's army " .. tostring(e and e.army) .. " (the simulation's Owner)")
+        -- (the simulation takes a number Owner as the 0-based army, as the original's _c_CreateEntity 0x692330:
+        -- engine 61536c5, ui REQUESTS 43; the hook counts armies from 1)
+        check(what .. ": its mesh is the player's army's", e and e.army, GetFocusArmy())
     end
     check(what .. ": a ring in the main view", table.getn(rings(view, p)) >= 1, true)
     check(what .. ": a ring on the minimap", table.getn(rings(mini, p)) >= 1, true)
