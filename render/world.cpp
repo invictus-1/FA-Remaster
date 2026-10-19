@@ -1064,6 +1064,16 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   terrain.tracksMap = deepNow_ ? trackField.Atlas() : tracks.Map();
   terrain.tracksField = deepNow_ ? trackField.Constants() : TrackFieldConstants{};
   terrain.parallax = groundParallax && look == Look::Modern;  // [parallax]
+  // [tarmac] remastered tarmacs: the modern look with the remastered effects; their relief close by with the ground's, its
+  // reach and shade; the ground's tracks; its tier
+  decals.remasteredTarmacs = remasteredTarmacs && look == Look::Modern && effectsLook == EffectsLook::Remastered && haveMap_;
+  decals.tarmacs.parallax = terrain.parallax;
+  decals.tarmacs.parallaxReach = terrain.parallaxReach;
+  decals.tarmacs.parallaxShadows = terrain.parallaxShadows;
+  decals.tarmacs.depth = terrain.parallaxDepth;
+  decals.tarmacs.tracksMap = terrain.tracksMap;
+  decals.tarmacs.field = terrain.tracksField;
+  decals.tarmacs.ultra = terrain.ultraGround;
   meshes.Begin();
   energy.Begin();  // [energy shields]
   // (buildfx) the remastered build look (build_effects.h): the effects list this frame's build beams while it is on, and
@@ -2525,6 +2535,12 @@ void World::Render() {
       grass.tracksField = deepNow_ ? trackField.Constants() : TrackFieldConstants{};
       grass.Prepare(view, placing, discs);
       grassNow_ = true;
+      // [tarmac] none where a remastered pad lies: its coverage over the grass's square (between passes: it draws)
+      grass.cleared = {};
+      if (decals.remasteredTarmacs) {
+        decals.TarmacPads(clock_, &padsNear_);
+        grass.cleared = decals.tarmacs.ClearCover(view, grass.Area(), padsNear_);
+      }
       if (blastsNow_ && blasts.Waves() && grass.PrepareBlasts()) grassBlasts_ = blasts.PrepareField(grass.Area());  // (the blasts' waves over it)
     }
   }

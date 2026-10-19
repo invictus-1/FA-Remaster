@@ -304,6 +304,9 @@ bool Decals::Add(const std::string& texture, Vec3 centre, float sizeX, float siz
   if (hotMetal && IsScar(texture)) decals_.back().burn = true;  // (hot metal: its middle glows while fresh)
   decals_.back().snowAtBirth = settled_ ? snowFallen_ : snowFallen_ - 1;
   decals_.back().id = lastId_ = nextId_++;
+  decals_.back().tarmac = TarmacOf(texture);  // [tarmac] (a pad's: its material looked up when remastered pads are drawn)
+  decals_.back().original = addingOriginal;
+  decals_.back().mapOwn = !settled_;
   return true;
 }
 
@@ -346,9 +349,66 @@ bool Decals::AddLight(const std::string& texture, const std::string& ramp, Vec3 
   return true;
 }
 
+// [tarmac] A pad's picture's name among those seen (Tarmacs::Key), or -1: not a pad's.
+int Decals::TarmacOf(const std::string& texture) {
+  const std::string key = Tarmacs::Key(texture);
+  if (key.empty()) return -1;
+  for (size_t i = 0; i < tarmacKeys_.size(); ++i)
+    if (tarmacKeys_[i] == key) return static_cast<int>(i);
+  tarmacKeys_.push_back(key);
+  tarmacMaterial_.push_back(-2);
+  return static_cast<int>(tarmacKeys_.size() - 1);
+}
+
+// [tarmac] The material a decal of a pad is drawn in with remastered tarmacs on (-1: the game's pictures): none for one the
+// original effects laid, nor for a mark, a light or a "Water Albedo" decal.
+int Decals::TarmacMaterial(const Decal& d) {
+  if (d.tarmac < 0 || d.original || d.mark || d.water || d.ramp) return -1;
+  int& m = tarmacMaterial_[static_cast<size_t>(d.tarmac)];
+  if (m == -2) m = tarmacs.MaterialOf(tarmacKeys_[static_cast<size_t>(d.tarmac)]);
+  return m >= 0 && tarmacs.Usable(m) ? m : -1;
+}
+
+// [tarmac] A pad as Tarmacs draws it: over its material's extent, faded as the game's picture would be (its last seconds;
+// with `view`: also as it comes in over the last fifth of its distance, and not where the view does not see it).
+bool Decals::TarmacPad(const Decal& d, double now, const View* view, Tarmacs::Pad* pad) {
+  const int material = TarmacMaterial(d);
+  if (material < 0 || d.normal || now < d.born) return false;
+  const float extent = tarmacs.Extent(material);
+  const float halfX = d.halfX * extent, halfZ = d.halfZ * extent;
+  float alpha = d.seconds > 0 ? Clamp(static_cast<float>(d.born + static_cast<double>(d.seconds) - now) / std::min(5.0f, d.seconds * 0.5f), 0, 1) : 1.0f;
+  if (view) {
+    const float reach = std::max(std::fabs(halfX), std::fabs(halfZ)) * 1.5f;
+    const Vec3 r{reach, reach * 0.7f + 1.5f, reach};
+    const float distance = Length(d.centre - view->eye);
+    if ((d.cutoff > 0 && distance > d.cutoff) || !view->BoxVisible(d.centre - r, d.centre + r)) return false;
+    if (d.cutoff > 0) alpha *= Clamp((d.cutoff - distance) / (d.cutoff * 0.2f), 0, 1);
+  }
+  if (alpha <= 0) return false;
+  pad->centre = d.centre;
+  pad->halfX = halfX;
+  pad->halfZ = halfZ;
+  pad->cosHeading = std::cos(d.heading);
+  pad->sinHeading = std::sin(d.heading);
+  pad->alpha = alpha;
+  pad->snow = snowLying > 0 ? Clamp(snowFallen_ - d.snowAtBirth, 0, 1) : 1;  // (as a picture's mark: Draw)
+  pad->depth = tarmacs.Depth(material, 2 * d.halfX);
+  pad->material = material;
+  return true;
+}
+
+void Decals::TarmacPads(double now, std::vector<Tarmacs::Pad>* out) {
+  out->clear();
+  if (!remasteredTarmacs) return;
+  Tarmacs::Pad pad;
+  for (const Decal& d : decals_)
+    if (d.tarmac >= 0 && TarmacPad(d, now, nullptr, &pad)) out->push_back(pad);
+}
+
 void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDepth, double now, bool overWater) {
   if (!overWater) {
     drawn = 0;
+    tarmacsDrawn = 0;  // [tarmac]
     // the snow that has fallen since the last frame (a mark is covered by one unit of it)
     if (snowClock_ >= 0 && now > snowClock_) snowFallen_ += snowing * static_cast<float>(std::min(now - snowClock_, 0.5)) / 90.0f;
     snowClock_ = now;
@@ -364,9 +424,17 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
     waterDecals_ = static_cast<int>(std::count_if(decals_.begin(), decals_.end(), [](const Decal& d) { return d.water; }));
   }
   visible_.clear();
+  pads_.clear();  // [tarmac]
+  const bool pads = remasteredTarmacs && !overWater;
   for (size_t which = 0; which < decals_.size() + marks_.size(); ++which) {
     const Decal& d = which < decals_.size() ? decals_[which] : marks_[which - decals_.size()];
     if (overWater && !d.water) continue;
+    // [tarmac] a pad the visuals track has a material for: drawn in it (Tarmacs), its "_normals" twin not at all
+    if (pads && d.tarmac >= 0 && TarmacMaterial(d) >= 0) {
+      Tarmacs::Pad pad;
+      if (TarmacPad(d, now, &view, &pad)) pads_.push_back(pad);
+      continue;
+    }
     const float reach = std::max(std::fabs(d.halfX), std::fabs(d.halfZ)) * 1.5f;
     // the ground under a decal may rise and fall across it: the box is tall for its width
     const float halfHeight = reach * 0.7f + 1.5f;
@@ -403,7 +471,7 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
     if (!d.mark && !d.ramp && !d.normal) n.age = snowLying > 0 ? Clamp(snowFallen_ - d.snowAtBirth, 0, 1) : 1;
     // (a light's brightness; a picture's 1 with its own relief; a normal decal's 1 when it is the visuals track's)
     n.glow = d.ramp ? glow : d.normal ? (d.ours ? 1.0f : 0.0f) : d.relief && !d.mark && !d.water ? 1.0f : 0.0f;
-    visible_.push_back({d.texture.id, d.ramp.id, d.relief.id, d.water ? 4 : d.mark ? 3 : d.ramp ? 2 : d.normal ? 1 : 0, n});
+    visible_.push_back({d.texture.id, d.ramp.id, d.relief.id, d.water ? 4 : d.mark ? 3 : d.ramp ? 2 : d.normal ? 1 : 0, n, d.mapOwn});
     // hot metal: a fresh scorch's or crater's middle glows over it (not under water, where it would only steam)
     if (d.burn && hotMetal && heat && !overWater && !d.normal && !d.water && !d.mark && !d.ramp && d.centre.y > waterLevel) {
       const float across = 2 * std::max(std::fabs(d.halfX), std::fabs(d.halfZ));
@@ -419,11 +487,14 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
     }
   }
   if (!overWater) marks_.clear();
-  if (visible_.empty()) return;
+  if (visible_.empty() && pads_.empty()) return;
   // pictures first, then lights; by texture; those of one texture keep the order they were made in
   // (hot metal's glows, kind 5, after the lights and before the marks)
-  std::stable_sort(visible_.begin(), visible_.end(), [](const Visible& a, const Visible& b) {
-    if (a.kind != b.kind) return (a.kind == 5 ? 2.5f : static_cast<float>(a.kind)) < (b.kind == 5 ? 2.5f : static_cast<float>(b.kind));
+  // ([tarmac] with remastered pads drawn: the map's own pictures, the pads, then the pictures laid since: rank 0.5)
+  const bool padsNow = !pads_.empty();
+  auto rank = [padsNow](const Visible& v) { return v.kind == 5 ? 2.5f : padsNow && v.kind == 0 && !v.mapOwn ? 0.5f : static_cast<float>(v.kind); };
+  std::stable_sort(visible_.begin(), visible_.end(), [&rank](const Visible& a, const Visible& b) {
+    if (rank(a) != rank(b)) return rank(a) < rank(b);
     if (a.texture != b.texture) return a.texture < b.texture;
     return a.ramp != b.ramp ? a.ramp < b.ramp : a.relief < b.relief;
   });
@@ -436,7 +507,14 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
                                      back.x, back.y, back.z, camera.zNear,
                                      water ? 1 / mapWidth_ : 0, water ? 1 / mapHeight_ : 0, water ? 1.0f : 0.0f, water ? waterLevel : 0.0f};
   int bound = -1;
+  bool padsDone = !padsNow;  // [tarmac] (the pads drawn after the map's own pictures, before what was laid since)
+  auto drawPads = [&]() {
+    tarmacsDrawn = tarmacs.Draw(view, cameraConstants, sceneDepth, water ? waterMap_ : gfx::Texture{}, water ? waterRamp_ : gfx::Texture{}, cube_, pads_);
+    padsDone = true;
+    bound = -1;  // (the decals' own pipeline and textures bound again)
+  };
   for (size_t at = 0; at < visible_.size();) {
+    if (!padsDone && rank(visible_[at]) >= 0.5f) drawPads();
     const uint32_t texture = visible_[at].texture, ramp = visible_[at].ramp, relief = visible_[at].relief;
     const int kind = visible_[at].kind;
     size_t n = 0;
@@ -463,6 +541,7 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
     drawn += static_cast<int>(n);
     at += n;
   }
+  if (!padsDone) drawPads();
 }
 
 }  // namespace render
