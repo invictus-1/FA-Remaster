@@ -1439,6 +1439,67 @@ class WorldView : public Control {
   // "a waypoint under the mouse"); `waypointPress_`: the last left press began one (a double click after it does
   // nothing, 0x870c24); `convertToPatrol_`: the view's +0x274, ShowConvertToPatrolCursor's answer.
   bool waypointDrag_ = false, waypointPress_ = false, convertToPatrol_ = false;
+  // The tips over a hovered waypoint (FA exe 0x870612 .. 0x8708af; user_units.cpp "Clicks on a hovered waypoint"):
+  // each event the script leaves to the view works out +0x274 again and shows the tip, or stops the one shown.
+  void UpdateWaypointTips(lua_State* L, const UiEvent& e) {
+    convertToPatrol_ = false;  // (0x870619)
+    bool stop = true;          // (0x87061f)
+    const WaypointOffer offer = miniMap ? WaypointOffer::None : HoveredWaypointOffer(L);
+    if (offer != WaypointOffer::None) {
+      std::string mode, name;
+      CommandMode(L, &mode, &name);       // (UI_GetCommandMode, 0x870667)
+      const bool order = mode == "order";  // (0x87076b, 0x870812: the left button's words in the mode "order")
+      if (offer == WaypointOffer::JoinAttack) {
+        // Would either click there give an Attack (0x87071e, 0x87073b: their actions' +4 is RULEUCC_Attack)? The left
+        // in the mode "order" with Attack its order (with a focus army, 0x81f899); the right with no command mode
+        // (else its action is the mode's end, 0x81ed4e), by what is under the cursor.
+        Sim* sim = UserState::From(L)->LiveSim("the waypoint's tip");
+        const bool left = order && name == "RULEUCC_Attack" && sim && sim->focusArmy >= 0;
+        const bool right = mode.empty() && RightClickOrder(L, UnitUnder(L, e.x, e.y, false)) == "RULEUCC_Attack";
+        if (left || right) {
+          StartCursorText(L, e.x, e.y,
+                          order ? "<LOC Engine0007>Double left-click for coordinated attack" : "<LOC Engine0008>Double right-click for coordinated attack",
+                          0xffffffffu, -1.0f, false);
+          stop = false;
+        }
+      } else {
+        StartCursorText(L, e.x, e.y,
+                        order ? "<LOC Engine0009>Left-click to convert moves into patrol" : "<LOC Engine0010>Right-click to convert moves into patrol",
+                        0xffffffffu, -1.0f, false);
+        stop = false;
+        convertToPatrol_ = true;  // (0x870853)
+      }
+    }
+    if (stop) StopCursorText(L);  // (0x8708af)
+  }
+  // A left press's order in the script's command mode "order", kept for a double click after it (the original keeps
+  // the press's action, +0x148; a double click gives it again, 0x870c7a): `leftOrderPress_` the last left press was
+  // one; the order's name, the unit under the cursor, the place, the keys, the waypoint hovered (+0x58) and the mouse's
+  // place on the screen (+0x28).
+  bool leftOrderPress_ = false, leftShift_ = false, leftCtrl_ = false;
+  std::string leftOrder_;
+  uint32_t leftUnder_ = 0xffffffffu, leftHovered_ = 0xffffffffu;
+  float leftAt_[3] = {0, 0, 0}, leftX_ = 0, leftY_ = 0;
+  // The kept left order given (0x870310 -> SCommandModeData::HandleEvent 0x81fcd0); `dbl`: a double click.
+  bool IssueLeftOrder(lua_State* L, bool dbl) {
+    const std::string& order = leftOrder_;
+    const bool clear = !leftShift_;
+    if (order == "Script") return IssueScriptAt(L, leftAt_[0], leftAt_[1], leftAt_[2], clear);
+    // A Move on a waypoint of the selection's moves: they become a patrol instead (0x8207c2).
+    if (order == "Move" && ConvertMovesToPatrol(L, leftHovered_, leftX_, leftY_)) return true;
+    // An Attack: on a double click the first click's goes, and one on a unit may join the hovered attack (0x81fdad).
+    if (order == "Attack" && AttackClick(L, leftUnder_, leftAt_, leftHovered_, dbl, clear, leftCtrl_, false, NAN, leftX_, leftY_)) return true;
+    // An order chosen by its button or key: for the unit under the cursor when there is one
+    // (attack it, guard it, repair, reclaim, capture it), else for the place. (INFERRED: the
+    // original's rule for which of the two an order mode takes is not read.)
+    if (leftUnder_ != 0xffffffffu && order != "Move" && order != "Patrol" && IssueToSelectionAt(L, order, leftUnder_, clear, leftCtrl_)) return true;
+    // Reclaim by its button on what is not a unit: the tree, rock or wreck nearest the click,
+    // with more room than a right click gets (the player has said what is meant). With nothing
+    // there the order still goes out with the place, as the original sends it; the simulation
+    // makes no task of it (IssueReclaimTask 0x61ef60 needs a live entity: engine main 1dded52).
+    if (order == "Reclaim" && !miniMap && IssueReclaimAtPlace(L, leftAt_, std::max(1.0f, MapUnitsOf(L, 14)), clear)) return true;
+    return IssueToSelection(L, order, leftAt_[0], leftAt_[1], leftAt_[2], clear);
+  }
   // Where a place of the world is on the screen by the picture last drawn, and how many map units a pixel is
   // there (the original's w(p), dot(cam+0x2a4, p) + cam+0x2b0: the place's depth along the view times
   // 2 tan(fov / 2) / the picture's height); false outside the view (the original's frustum planes, 0x829890).
@@ -1618,10 +1679,12 @@ class WorldView : public Control {
   // formation turns to face from the press point towards the pointer (CFormation::UpdateOrientation 0x838860, once
   // the pointer is 0.05 map units from both the press point and its last turn), and the order goes as the
   // formation's (FormMove and the like) at the press point.
-  bool rightHeld_ = false, rightShift_ = false, rightCtrl_ = false, rightAlt_ = false, rightTurned_ = false;
+  // `rightDouble_`: the press was a double click's second (+0x144 == 6); `rightHovered_` the waypoint hovered at the
+  // press (the action's +0x58) and (rightX_, rightY_) the mouse's place on the screen there (+0x28).
+  bool rightHeld_ = false, rightShift_ = false, rightCtrl_ = false, rightAlt_ = false, rightTurned_ = false, rightDouble_ = false;
   std::string rightOrder_;
-  uint32_t rightUnder_ = 0xffffffffu;
-  float rightAt_[3] = {0, 0, 0}, rightLast_[3] = {0, 0, 0}, rightHeading_ = 0;
+  uint32_t rightUnder_ = 0xffffffffu, rightHovered_ = 0xffffffffu;
+  float rightAt_[3] = {0, 0, 0}, rightLast_[3] = {0, 0, 0}, rightHeading_ = 0, rightX_ = 0, rightY_ = 0;
   double rightSince_ = 0;  // (the interface's clock: live in a window, as the original's wall clock; frame steps in tests)
   static constexpr double kFormationHold = 0.5;  // (CFormation +0x5c after Reset)
   bool RightHeldLong(lua_State* L) const { return UserState::From(L)->clockNow() - rightSince_ >= kFormationHold; }
@@ -1633,19 +1696,27 @@ class WorldView : public Control {
     const float heading = rightTurned_ ? rightHeading_ : NAN;
     if (order == "Invalid") return true;  // (an enemy the selection cannot attack: no order, FA exe 0x821a24)
     if ((order == "CallTransport" || order == "Transport") && IssueTransportOrderAt(L, order, under, clear)) return true;
+    // A tree, a rock or a wreck right under the cursor with no unit there, and the selection can
+    // reclaim: the click reclaims it (below). (As players know it from the original; its code for what
+    // is under the cursor beside units is not read. The cursor must be ON it, within a few pixels: a
+    // click beside a tree stays a move.)
+    const bool reclaims = under == 0xffffffffu && !held && !miniMap && CanReclaimAtPlace(L, rightAt_, MapUnitsOf(L, 4));
+    // A Move on a waypoint of the selection's moves: they become a patrol instead (0x8207c2; user_units.cpp).
+    if (order == "Move" && !reclaims && ConvertMovesToPatrol(L, rightHovered_, rightX_, rightY_)) return true;
     // (With Alt held, a right click that would be a move is FAF's attack-move.)
     if (order == "Move" && rightAlt_ && !rightCtrl_ && IssueAttackMoveAt(L, rightAt_[0], rightAt_[1], rightAt_[2], clear)) return true;
+    // An Attack (on the unit under the cursor, or with no unit there over an attack's waypoint on the ground there): on
+    // a double click the first click's goes, and one on a unit may join the hovered attack (0x81fdad; user_units.cpp).
+    if (order == "Attack" && !reclaims &&
+        AttackClick(L, under, rightAt_, rightHovered_, rightDouble_, clear, rightCtrl_, held, heading, rightX_, rightY_))
+      return true;
     // (A guard held past the half second is the move's, 0x82014f: the cursor offers Guard only before it.)
     if (order != "Move" && !(order == "Guard" && held)) {
       if (under != 0xffffffffu) {
         if (IssueToSelectionAt(L, order, under, clear, rightCtrl_, held, heading)) return true;
       }
     }
-    // No unit there, but a tree, a rock or a wreck right under the cursor, and the selection
-    // can reclaim: reclaim it. (As players know it from the original; its code for what is
-    // under the cursor beside units is not read. The cursor must be ON it, within a few
-    // pixels: a click beside a tree stays a move.)
-    if (under == 0xffffffffu && !held && !miniMap && IssueReclaimAtPlace(L, rightAt_, MapUnitsOf(L, 4), clear)) return true;
+    if (reclaims && IssueReclaimAtPlace(L, rightAt_, MapUnitsOf(L, 4), clear)) return true;
     return IssueFormationOrder(L, "Move", rightAt_[0], rightAt_[1], rightAt_[2], 0xffffffffu, clear, rightCtrl_, held, heading);
   }
   std::string buildName_;
@@ -1841,8 +1912,8 @@ class WorldView : public Control {
     // Each event the script leaves to the view works out again whether the selection's moves could become a patrol
     // at the waypoint under the mouse (+0x274, cleared at 0x870619, set at 0x870853; ShowConvertToPatrolCursor):
     // with the graph held and a waypoint hovered whose order a selected unit carries (0x8706c6), a Move or FormMove,
-    // and 0x81dd00 saying yes. (The tips the original starts there, Engine0007..0010: not built.)
-    convertToPatrol_ = !miniMap && HoveredConvertsToPatrol(L);
+    // and 0x81dd00 saying yes; and shows the tip of what a click there does, or stops it (UpdateWaypointTips).
+    UpdateWaypointTips(L, e);
     if (e.type == EventType::MouseMotion && !miniMap) {
       // With Space held the mouse turns the camera, from near only (a zoom under 125) as in the
       // original (0x870970); letting Space go lets it swing back.
@@ -1898,6 +1969,9 @@ class WorldView : public Control {
       rightOrder_ = order.substr(8);
       rightUnder_ = under;
       rightShift_ = e.shift, rightCtrl_ = e.ctrl, rightAlt_ = e.alt, rightTurned_ = false;
+      rightDouble_ = e.type == EventType::ButtonDClick;            // (0x870f2c: +0x144, the event's type)
+      rightHovered_ = miniMap ? 0xffffffffu : HoveredWaypoint(L);  // (0x81f59b: the action's +0x58)
+      rightX_ = e.x, rightY_ = e.y;
       for (int i = 0; i < 3; ++i) rightAt_[i] = rightLast_[i] = world[i];
       rightSince_ = UserState::From(L)->clockNow();
       if (miniMap) return IssueRightClick(L);  // (the minimap: at once, no formation to turn)
@@ -1907,8 +1981,11 @@ class WorldView : public Control {
     }
     if (!e.left) return false;
     // (Every left press keeps what it did, the view's +0x148 by 0x82b230; a double click goes by it.)
-    const bool afterWaypointPress = waypointPress_;
-    if (e.type == EventType::ButtonPress) waypointPress_ = false;
+    const bool afterWaypointPress = waypointPress_, afterOrderPress = leftOrderPress_;
+    if (e.type == EventType::ButtonPress) waypointPress_ = leftOrderPress_ = false;
+    // A double click after a press that gave an order: that order again, as a double click (0x870c7a: the kept action,
+    // whatever the command mode is now).
+    if (e.type == EventType::ButtonDClick && afterOrderPress) return IssueLeftOrder(L, true);
     // A left press while the game script is in a command mode: an order with the place as its
     // target, or a building to build there. A building goes where the simulation would put it
     // (the site snapped to its grid) and only where it can stand, as the original's interface
@@ -1938,20 +2015,17 @@ class WorldView : public Control {
       UserState::From(L)->ui().PostEngineDragger(L, this, e.keyCode);
       return true;
     }
-    if (mode == "order" && name == "RULEUCC_Script") return IssueScriptAt(L, world[0], world[1], world[2], !e.shift);
     if (mode == "order" && name.rfind("RULEUCC_", 0) == 0) {
-      // An order chosen by its button or key: for the unit under the cursor when there is one
-      // (attack it, guard it, repair, reclaim, capture it), else for the place. (INFERRED: the
-      // original's rule for which of the two an order mode takes is not read.)
-      const std::string order = name.substr(8);
-      const uint32_t under = miniMap ? 0xffffffffu : UnitUnder(L, e.x, e.y);
-      if (under != 0xffffffffu && order != "Move" && order != "Patrol" && IssueToSelectionAt(L, order, under, !e.shift, e.ctrl)) return true;
-      // Reclaim by its button on what is not a unit: the tree, rock or wreck nearest the click,
-      // with more room than a right click gets (the player has said what is meant). With nothing
-      // there the order still goes out with the place, as the original sends it; the simulation
-      // makes no task of it (IssueReclaimTask 0x61ef60 needs a live entity: engine main 1dded52).
-      if (order == "Reclaim" && !miniMap && IssueReclaimAtPlace(L, world, std::max(1.0f, MapUnitsOf(L, 14)), !e.shift)) return true;
-      return IssueToSelection(L, order, world[0], world[1], world[2], !e.shift);
+      // An order chosen by its button or key (the original's action kind 1, 0x81f91c), given at the press
+      // (IssueLeftOrder) and kept for a double click after it.
+      leftOrder_ = name.substr(8);
+      leftUnder_ = miniMap || leftOrder_ == "Script" ? 0xffffffffu : UnitUnder(L, e.x, e.y);
+      for (int i = 0; i < 3; ++i) leftAt_[i] = world[i];
+      leftShift_ = e.shift, leftCtrl_ = e.ctrl;
+      leftHovered_ = miniMap ? 0xffffffffu : HoveredWaypoint(L);  // (0x81fbeb: the action's +0x58)
+      leftX_ = e.x, leftY_ = e.y;
+      leftOrderPress_ = e.type == EventType::ButtonPress;
+      return IssueLeftOrder(L, false);
     }
     if (!mode.empty() || miniMap) return false;
     // A waypoint of the order lines under the mouse (Shift held): the left button drags it (the original's
@@ -2065,7 +2139,7 @@ int l_ViewHasHighlightCommand(lua_State* L) {
   return 1;
 }
 // bool moho.UIWorldView:ShowConvertToPatrolCursor() (0x872020): the view's +0x274, the hovered waypoint is a move
-// the selection's moves could be turned into a patrol at (user_units.cpp HoveredConvertsToPatrol).
+// the selection's moves could be turned into a patrol at (user_units.cpp HoveredWaypointOffer, ToPatrol).
 int l_ViewShowConvertToPatrolCursor(lua_State* L) {
   lua_pushboolean(L, View(L)->convertToPatrol_);
   return 1;

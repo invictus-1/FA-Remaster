@@ -177,6 +177,23 @@ struct UnitStore : UserState::Extra {
     uint64_t sync = 0;
   };
   std::vector<Removal> removals;
+  // The order the interface sent last to each unit (IssueOrder), with the sync it was sent after: the original's copy
+  // of a unit's queue takes an order at once (ISSUE_Command 0x8b0577), the simulation's queues show it a beat later;
+  // what a double click's ISSUE_RemoveLastCommand takes out (RemoveSelectionsLastOrders).
+  struct Sent {
+    uint32_t command = 0xffffffffu;
+    uint64_t sync = 0;
+  };
+  std::map<uint32_t, Sent> lastSent;
+  // Orders given a new type by the patrol conversion (ConvertMovesToPatrol: the original's copy of the order takes it
+  // at once, 0x8b4ac0) that the simulation's queues may not show yet: by order, the new type and the sync.
+  struct Retype {
+    int type = 0;
+    uint64_t sync = 0;
+  };
+  std::map<uint32_t, Retype> retypes;
+  // The last attack sent coordinated with another (AttackClick), for the tests (moho64ui_OrderGraph's coordinated).
+  uint32_t coordinatedOrder = 0xffffffffu, coordinatedWith = 0xffffffffu;
   // The build template being placed (see BuildTemplate), and the units a script has added to
   // the selection's marks without selecting them (AddToSessionExtraSelectList).
   BuildTemplate buildTemplate;
@@ -1306,7 +1323,8 @@ void ReportCommandIssued(lua_State* L, const char* type, const std::vector<UserU
 namespace {
 // An order for the selected units of the player's army, with a place or a unit as its target.
 bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float z, uint32_t entity, bool clear,
-                const std::string& blueprint, bool ctrl = false, bool form = false, float headingGiven = NAN) {
+                const std::string& blueprint, bool ctrl = false, bool form = false, float headingGiven = NAN,
+                uint32_t coordWith = 0xffffffffu) {
   Sim* sim = TheSim(L);
   if (!sim) return false;
   static const struct {
@@ -1352,6 +1370,8 @@ bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float 
   d.target.entity = entity != 0xffffffffu ? entity : d.target.entity;
   d.target.pos.x = x, d.target.pos.y = y, d.target.pos.z = z;
   d.blueprint = blueprint;
+  // (the issue data's second word, SSTICommandIssueData +4: the order this one is coordinated with, 0x81fef1)
+  if (coordWith != 0xffffffffu) d.coordWith = static_cast<int32_t>(coordWith);
   // The formation, as the original's interface sends it (the engine track's count over about
   // 1,250 orders of real replays, docs/engine-answers.md "ui 14"): a Move to a place, an Attack on
   // a unit and a Patrol carry formation 0 at scale 1 and a turn about the up axis whose heading
@@ -1439,7 +1459,12 @@ bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float 
     if (!factories.empty()) Writer(L).IssueFactoryCommand(factories, startRally, clear);
     clear = false;
   }
-  if (!others.empty()) Writer(L).IssueCommand(others, d, clear);
+  if (!others.empty()) {
+    const uint32_t id = Writer(L).IssueCommand(others, d, clear);
+    UnitStore& store = Store(L);
+    for (uint32_t unit : others) store.lastSent[unit] = {id, UserState::From(L)->syncCount};
+    if (coordWith != 0xffffffffu) store.coordinatedOrder = id, store.coordinatedWith = coordWith;
+  }
   if (!factories.empty()) Writer(L).IssueFactoryCommand(factories, rally, clear);
   ReportCommandIssued(L, name, units, x, y, z, clear, blueprint, entity);
   return true;
@@ -1672,12 +1697,13 @@ bool IssueTransportOrderAt(lua_State* L, const std::string& order, uint32_t enti
   return true;
 }
 
-bool IssueToSelectionAt(lua_State* L, const std::string& order, uint32_t entity, bool clear, bool ctrl, bool form, float heading) {
+bool IssueToSelectionAt(lua_State* L, const std::string& order, uint32_t entity, bool clear, bool ctrl, bool form, float heading,
+                        uint32_t coordWith) {
   UnitStore& store = Store(L);
   auto it = store.units.find(entity);
   if (it == store.units.end() || it->second->gone) return false;
   const float* p = it->second->view.position;
-  return IssueOrder(L, order, p[0], p[1], p[2], entity, clear, std::string(), ctrl, form, heading);
+  return IssueOrder(L, order, p[0], p[1], p[2], entity, clear, std::string(), ctrl, form, heading, coordWith);
 }
 
 namespace {
@@ -1748,10 +1774,13 @@ int l_ReclaimableAtForTests(lua_State* L) {
 //     or SILO left out); else Guard, unless the selection is that unit alone or it is a
 //     CAMPAIGNGATE; else Repair an ally's damaged unit or one that is upgrading;
 //   else Move.
+// With no unit under the cursor, the waypoint under it (the session's, cursor info +0x18; 0x81f513) of an Attack or
+// FormAttack makes the click an Attack when the selection can attack (the click then attacks the ground there,
+// AttackClick).
 // Left out so far: Capture (the original asks a flag of the unit, +0x69 of its attributes, that
 // the simulation's view does not give; without it engineers reclaim, as players know it), the
 // transport and ferry cases (0x81d280, 0x81d660, 0x81da20),
-// an attack order's marker under the cursor, the option "switch_right_click_behavior". Things that
+// the option "switch_right_click_behavior". Things that
 // are not units (wreckage, trees, rocks) are the world view's to ask for: IssueReclaimAtPlace.
 // The blueprint's Air.CanFly (bp +0x368, the Air block's first field), kept by blueprint.
 bool CanFlyOf(lua_State* L, const UserUnit* u) {
@@ -1818,6 +1847,10 @@ bool AllFactories(lua_State* L, const std::vector<UserUnit*>& selection) {
   return !selection.empty();
 }
 
+namespace {
+bool FindCommandView(lua_State* L, uint32_t id, CommandView* out, std::vector<uint32_t>* carriers);  // further down
+}  // namespace
+
 std::string RightClickOrder(lua_State* L, uint32_t under) {
   Sim* sim = TheSim(L);
   if (!sim) return std::string();
@@ -1836,7 +1869,16 @@ std::string RightClickOrder(lua_State* L, uint32_t under) {
   const std::string move = caps & kMove ? "RULEUCC_Move" : "";
   auto it = store.units.find(under);
   UserUnit* e = it != store.units.end() && !it->second->gone ? it->second.get() : nullptr;
-  if (!e) return move;
+  if (!e) {
+    // (0x81f513: the hovered order looked up in the session's table, 0x8b6160; an Attack or FormAttack, and the
+    // selection's bits hold RULEUCC_Attack: an Attack)
+    const uint32_t hovered = HoveredWaypoint(L);
+    CommandView c;
+    if ((caps & kAttack) && (hovered & 0xff000000u) != 0xff000000u && FindCommandView(L, hovered, &c, nullptr) &&
+        (c.type == static_cast<int>(CommandType::Attack) || c.type == static_cast<int>(CommandType::FormAttack)))
+      return "RULEUCC_Attack";
+    return move;
+  }
   int stance = e->view.army == army ? 2 : 0;
   for (const ArmyView& v : ArmyViews(*sim))
     if (v.index == e->view.army && e->view.army != army && army <= static_cast<int>(v.alliance.size()))
@@ -2392,22 +2434,43 @@ void DropRemovedOrders(lua_State* L, const UserUnit* u, UnitStateView* out) {
     // queue's, +0x3cc)
     std::vector<CommandView>& q = out->queue;
     auto at = std::find_if(q.begin(), q.end(), [&](const CommandView& c) { return c.id == r->command; });
-    // Gone from the simulation's queue: done. Still there ten syncs on: INFERRED, the simulation kept it (it turned
-    // the message down), so the interface shows it again (the original's copy keeps its changes by beat, 0x8b76d0;
-    // when it lets them go is not read).
-    if (at == q.end() || sync > r->sync + 10) {
+    // Still there ten syncs on: INFERRED, the simulation kept it (it turned the message down), so the interface shows
+    // it again (the original's copy keeps its changes by beat, 0x8b76d0; when it lets them go is not read). Not there:
+    // gone from the simulation's queue, or not in it yet (an order sent and taken out before the simulation's queues
+    // showed it, RemoveSelectionsLastOrders): the record is kept as long, so that the order stays out when it comes.
+    if (sync > r->sync + 10) {
       r = removals.erase(r);
       continue;
     }
-    q.erase(at);
+    if (at != q.end()) q.erase(at);
     ++r;
   }
+}
+
+// An order the patrol conversion has given a new type shows it at once, as the original's copy of the order takes it
+// (0x8b4ac0; UnitStore::retypes), until the simulation's queues show it (or ten syncs on: INFERRED, as above).
+void RetypeSentOrders(lua_State* L, UnitStateView* out) {
+  std::map<uint32_t, UnitStore::Retype>& retypes = Store(L).retypes;
+  if (retypes.empty()) return;
+  const uint64_t sync = UserState::From(L)->syncCount;
+  for (auto r = retypes.begin(); r != retypes.end();) r = sync > r->second.sync + 10 ? retypes.erase(r) : std::next(r);
+  for (std::vector<CommandView>* q : {&out->queue, &out->factoryQueue})
+    for (CommandView& c : *q) {
+      auto r = retypes.find(c.id);
+      if (r == retypes.end()) continue;
+      if (c.type == r->second.type) {
+        retypes.erase(r);  // (the simulation's queues show it: every unit's copy of this sync does)
+        continue;
+      }
+      c.type = r->second.type;
+    }
 }
 
 // A unit's state changes only in a beat: it is kept until the next beat's sync comes (the panels
 // ask the same units every frame; each answer runs in the simulation's Lua), and while a beat runs
 // on its own thread the state from before it is the answer (no wait for the beat). Orders taken out
-// by their waypoints are left out of it (DropRemovedOrders).
+// by their waypoints are left out of it (DropRemovedOrders), and orders the patrol conversion has
+// changed show their new type (RetypeSentOrders).
 bool StateOf(lua_State* L, const UserUnit* u, UnitStateView* out) {
   if (!u || u->gone) return false;
   UserState* user = UserState::From(L);
@@ -2415,12 +2478,14 @@ bool StateOf(lua_State* L, const UserUnit* u, UnitStateView* out) {
   if (u->stateSync != ~0ull && (beat || u->stateSync == user->syncCount)) {
     *out = u->stateCopy;
     DropRemovedOrders(L, u, out);
+    RetypeSentOrders(L, out);
     return true;
   }
   Sim* sim = TheSim(L);
   if (!sim || !UnitStateOf(*sim, u->view.id, out)) return false;
   u->stateCopy = *out, u->stateSync = user->syncCount;
   DropRemovedOrders(L, u, out);
+  RetypeSentOrders(L, out);
   return true;
 }
 
@@ -3942,7 +4007,8 @@ void WorkOutOrderGraph(lua_State* L, bool shown, uint32_t rollover, OrderGraphOu
 // (a node with time left, before the world view's tests of ui_MaxTextLOD and display_eta): position,
 // size (the node's times its state's waypoint scale), state, ticks, text ("ETA: 1.05"), command, id.
 // hovered: the id of the waypoint under the mouse's order (nil: none); dragged: the id of the order
-// whose waypoint is being dragged.
+// whose waypoint is being dragged; coordinated: {order, with}, the last attack the interface sent
+// coordinated with another order (a double click on its waypoint) and that order's id (nil: none yet).
 int l_OrderGraphForTests(lua_State* L) {
   uint32_t rollover = UnitUnderMouse(L);
   if (const UserUnit* u = ToUnit(L, 1)) rollover = u->view.id;
@@ -3983,6 +4049,12 @@ int l_OrderGraphForTests(lua_State* L) {
   field("shown");
   if (g.hovered != 0xffffffffu) PushCommandId(L, g.hovered), field("hovered");
   if (g.drag.command != 0xffffffffu) PushCommandId(L, g.drag.command), field("dragged");
+  if (Store(L).coordinatedOrder != 0xffffffffu) {  // (the last attack sent coordinated with another: AttackClick)
+    lua_newtable(L);
+    PushCommandId(L, Store(L).coordinatedOrder), field("order");
+    PushCommandId(L, Store(L).coordinatedWith), field("with");
+    field("coordinated");
+  }
   lua_newtable(L);
   for (size_t i = 0; i < out.legs.size(); ++i) {
     const OrderGraphOut::LegOut& o = out.legs[i];
@@ -4128,12 +4200,11 @@ void OrderLinesForWorld(lua_State* L, bool shown, uint32_t rollover, WorldScene*
 //   takes a change {beat, 2: out, order} (0x8b6ee0 -> 0x8b76d0; the copy is made again when next read, +0x60, 0x8b6f60:
 //   GetCommandQueue 0x8c5480 reads it so), and the order's unit set a change {beat, 3, unit} (0x8b4880): the order is
 //   gone from the interface at once.
+// - Clicks on a hovered waypoint (read 2026-10-19; HandleEvent 0x870612 .. 0x8708af, SCommandModeData::HandleEvent
+//   0x81fcd0, the same in FAF's copy 0x12903b8): see "Clicks on a hovered waypoint" below.
 // Left out (READ, not built): the no-rush circle 0x8b0ee0 tests (the focus army's +0x1bc..+0x1d0: a target
 // farther from its start than the radius is not sent while the timer runs; the interface's other orders do not
-// test it either); the tips the world view shows over a hovered waypoint (0x83ecf0: "<LOC Engine0007>Double
-// left-click for coordinated attack" or Engine0008 right-click, over an Attack / FormAttack none of the selection
-// carries; "<LOC Engine0009>Left-click to convert moves into patrol" or Engine0010 right-click, with +0x274) and
-// what those clicks do.
+// test it either).
 namespace {
 
 // A command by its id, from the queues of the units the interface knows (the original's session command table,
@@ -4230,34 +4301,240 @@ uint32_t HoveredWaypoint(lua_State* L) {
   return user->units ? Store(L).graph.hovered : 0xffffffffu;
 }
 
-bool HoveredConvertsToPatrol(lua_State* L) {
-  UserState* user = UserState::From(L);
-  if (!user->units) return false;
+// --- clicks on a hovered waypoint ---
+//
+// Read from the FA exe by a helper of the ui chat (2026-10-19; the world view's HandleEvent 0x8704b6, run as FAF's copy
+// 0x12903b8, the same there; CUIActionHandler's GetRightMouseButtonAction 0x81ec00 and GetLeftMouseButtonAction 0x81f7b0;
+// SCommandModeData::HandleEvent 0x81fcd0):
+// - The tips (0x870612 .. 0x8708af): every event the script's handler leaves to the view (its input not locked, +0x138)
+//   clears +0x274 (ShowConvertToPatrolCursor) and, while the view holds the command graph (+0x20c) and a waypoint is
+//   hovered whose order the session's table holds (0x8b5bb0), looks at that order:
+//   - no selected unit carries it (0x8b4300 for each) and it is an Attack or FormAttack (0x8b4140: 10, 11): when the
+//     right click or the left click there would give an Attack (0x81ec00 and 0x81f7b0 asked with no modifiers: their
+//     action's +4, the order's RULEUCC bit, is 4), "<LOC Engine0007>Double left-click for coordinated attack" in the
+//     command mode "order" (0x4207d0 on the mode's name), else "<LOC Engine0008>Double right-click ...";
+//   - else a Move or FormMove (2, 4) that 0x81dd00 (MovesConvertibleAt) says yes to: "<LOC Engine0009>Left-click to
+//     convert moves into patrol" in the command mode "order", else "<LOC Engine0010>Right-click ..."; and +0x274 is set.
+//   Either is /lua/ui/uimain.lua StartCursorText(x, y, text, "ffffffff", -1, false) (0x83ecf0: the mouse's place on the
+//   screen, session+0x4cc; the color by SCR_EncodeColor 0x4b2e60, "%08x"); every other such event StopCursorText()
+//   (0x83edf0; its only caller). No option picks the button's word: the command mode does (in the mode "order" the
+//   left click gives the mode's order, 0x81f8ff, and the right click ends the mode, action 7 at 0x81ed4e).
+// - What gives the order: the left click in the command mode "order" (0x81f91c: the action's +4 the RULEUCC bit of the
+//   mode's name), at the press (0x870edc -> 0x870310); the right click by what is under the cursor (RightClickOrder;
+//   with no unit there an attack waypoint makes it an Attack, 0x81f513), at the release (0x870ff7 -> 0x8710ca). Both
+//   actions keep the hovered order's id as they are made (+0x58, from the cursor info's +0x18: 0x81fbeb, 0x81f59b) and
+//   the mouse's place on the screen (+0x28). A double click (event type 6): the right button's action is made again at
+//   the second press and given at its release with the double flag (+0x144 == 6, 0x8710b8); the left button's is the
+//   first press's, kept (+0x148), given again with the flag when it was an order (kind 1: 0x870c7a, +0x140 == 6).
+// - An Attack (0x81fdad; the only branch that asks the double flag): with it, first ISSUE_RemoveLastCommand (0x8b1390
+//   -> 0x8b1270: for each selected unit the last order of its own queue's copy goes, the stream's
+//   RemoveCommandFromQueue(order, unit) and the copy's change, as 0x8b1220). On a unit (the cursor info's +0x10): with
+//   the flag and a kept order (+0x58) that 0x81db40 says yes to (CoordinatedAttackOn), the new attack's issue data takes
+//   that order's id as its second word (+4: the command stream's coordinated id) and "<LOC Engine0011>Coordinated
+//   Attack!" shows (StartCursorText at +0x28, "ffff0000", 3 seconds, flashing); then ISSUE_Command (0x8b05e0). On the
+//   ground (0x81ff17) neither is asked; that branch splits the selection for an aggressive move (0x81eb20), which is not
+//   built: AttackClick sends the plain Attack there, as the order mode's click did before.
+// - A Move (0x820661): with the kept order (+0x58) valid and 0x81dd00 saying yes (0x8207e6), no move is sent (nor the
+//   factories' rally order): 0x81def0 (RestartQueuedCommandsFromHelper) turns the moves into a patrol and "<LOC
+//   Engine0012>Patrol Initiated to location!" shows ("ff00ff00", 3 seconds, flashing). 0x81def0: Move becomes Patrol,
+//   FormMove FormPatrol (0x81df23: 0x10 + 2 * (type != Move)); for each selected unit (living, with a queue) each order
+//   of its queue's copy from the hovered one on, of the hovered one's type, gets the stream's SetCommandType(order,
+//   type) (the sim driver's slot 0x78, message 17) and its copy the type at once (0x8b4ac0). "From the hovered one on"
+//   is a flag set once for all the units (0x81df1e), so the units after the first that holds it have every order of
+//   that type turned; as the copy changes at once, an order two units share is sent once.
+// - The words (loc/US/strings_db.lua): Engine0007 "Double left-click for coordinated attack", Engine0008 "Double
+//   right-click for coordinated attack", Engine0009 "Left-click to convert moves into patrol", Engine0010 "Right-click
+//   to convert moves into patrol", Engine0011 "Coordinated Attack!", Engine0012 "Patrol Initiated to location!".
+// - With FAF's scripts: its cursor script turns its ignore mode on in the Move and Attack order modes
+//   (/lua/ui/controls/worldview.lua OnCursorMove, OnCursorAttackGround: EnableIgnoreMode, ui_CommandClickScale 0 and a
+//   select tolerance that picks no unit), so there no waypoint is hovered and the Attack mode's click attacks the
+//   ground: the left button's joins and conversions are met only with that mode off. In the other order modes (Patrol,
+//   Guard, ...) the left button's tip shows as the original's does, and the click gives that mode's order.
+// What the simulation makes of the coordinated id is the engine's (its IssueCommand reads it, CmdData; not used yet).
+namespace {
+
+// 0x81dd00 (the selection, an order): the order is a Move or FormMove, and each selected unit (living; not a unit or
+// with no queue: passed over) is no POD and has more than one order, the order among them and not the last, all of the
+// order's type. (An order not in the session's table: no, 0x81dd1e.)
+bool MovesConvertibleAt(lua_State* L, uint32_t command) {
   UnitStore& store = Store(L);
-  OrderGraph& g = store.graph;
-  if (g.hovered == 0xffffffffu || !g.made || store.selection.empty()) return false;
-  auto node = g.nodeOf.find(g.hovered);
-  if (node == g.nodeOf.end()) return false;
-  const int type = g.nodes[static_cast<size_t>(node->second)].type;
-  bool carried = false;  // (0x8706b0: a selected unit carries it)
-  for (uint32_t id : g.carriers[g.hovered])
-    for (const UserUnit* u : store.selection) carried = carried || u->view.id == id;
-  if (!carried || (type != static_cast<int>(CommandType::Move) && type != static_cast<int>(CommandType::FormMove))) return false;
-  for (const UserUnit* u : store.selection) {  // (0x81dd00)
+  CommandView c;
+  if (store.selection.empty() || !FindCommandView(L, command, &c, nullptr)) return false;
+  const int type = c.type;
+  if (type != static_cast<int>(CommandType::Move) && type != static_cast<int>(CommandType::FormMove)) return false;
+  for (const UserUnit* u : store.selection) {
     if (u->gone || u->view.dead) continue;
     UnitStateView s;
     if (!StateOf(L, u, &s)) continue;
     if (InCategory(L, u, "POD")) return false;
     const std::vector<CommandView>& q = s.queue;
-    if (q.size() <= 1 || q.back().id == g.hovered) return false;
+    if (q.size() <= 1 || q.back().id == command) return false;
     bool in = false;
-    for (const CommandView& c : q) in = in || c.id == g.hovered;
+    for (const CommandView& o : q) in = in || o.id == command;
     if (!in) return false;
-    for (const CommandView& c : q)
-      if (c.type != type) return false;
+    for (const CommandView& o : q)
+      if (o.type != type) return false;
   }
   return true;
 }
+
+// 0x81db40 (the session, an order): the order is an Attack or FormAttack in the session's table and no selected unit
+// (living: INFERRED for the unit's own two tests, slots +0x28 and +0x2c of its interface, not read) has it in its queue.
+bool CoordinatedAttackOn(lua_State* L, uint32_t command) {
+  if ((command & 0xff000000u) == 0xff000000u) return false;  // (0x81fea6)
+  CommandView c;
+  if (!FindCommandView(L, command, &c, nullptr)) return false;
+  if (c.type != static_cast<int>(CommandType::Attack) && c.type != static_cast<int>(CommandType::FormAttack)) return false;
+  for (const UserUnit* u : Store(L).selection) {
+    if (u->gone || u->view.dead) continue;
+    UnitStateView s;
+    if (!StateOf(L, u, &s)) continue;
+    for (const CommandView& o : s.queue)
+      if (o.id == command) return false;
+  }
+  return true;
+}
+
+// ISSUE_RemoveLastCommand (0x8b1390 -> 0x8b1270): each selected unit's last order (its own queue's copy, slot 0x18;
+// the last entry that holds one) is taken out: the command stream's RemoveCommandFromQueue(order, unit) (the sim
+// driver's slot 0x80) and the copy drops it at once (UnitStore::removals). The copy here lags the original's by a
+// beat: an order sent to the unit that its queue does not show yet is its last (UnitStore::lastSent).
+void RemoveSelectionsLastOrders(lua_State* L) {
+  UserState* user = UserState::From(L);
+  UnitStore& store = Store(L);
+  for (const UserUnit* u : store.selection) {  // (the selection's entities that are units, in its order: 0x8b13fc)
+    if (u->gone) continue;
+    UnitStateView s;
+    if (!StateOf(L, u, &s)) continue;
+    uint32_t last = s.queue.empty() ? 0xffffffffu : s.queue.back().id;
+    auto sent = store.lastSent.find(u->view.id);
+    if (sent != store.lastSent.end() && user->syncCount <= sent->second.sync + 10) {
+      const uint32_t id = sent->second.command;
+      bool shown = false, removed = false;
+      for (const CommandView& c : s.queue) shown = shown || c.id == id;
+      for (const UnitStore::Removal& r : store.removals) removed = removed || (r.unit == u->view.id && r.command == id);
+      if (!shown && !removed) last = id;
+    }
+    if (last == 0xffffffffu) continue;
+    Writer(L).RemoveCommandFromQueue(last, u->view.id);
+    UnitStore::Removal r;
+    r.unit = u->view.id, r.command = last, r.sync = user->syncCount;
+    store.removals.push_back(r);
+    if (sent != store.lastSent.end() && sent->second.command == last) store.lastSent.erase(sent);
+    Logf(LogLevel::Debug, "moho64ui: a double click's attack: the last order %u of unit %u taken out", last, u->view.id);
+  }
+  store.graph.builtSync = ~0ull;
+}
+
+}  // namespace
+
+WaypointOffer HoveredWaypointOffer(lua_State* L) {
+  UserState* user = UserState::From(L);
+  if (!user->units) return WaypointOffer::None;
+  UnitStore& store = Store(L);
+  const uint32_t hovered = store.graph.hovered;
+  if ((hovered & 0xff000000u) == 0xff000000u) return WaypointOffer::None;  // (0x87062a)
+  CommandView c;
+  std::vector<uint32_t> carriers;
+  if (!FindCommandView(L, hovered, &c, &carriers)) return WaypointOffer::None;  // (0x870651)
+  bool carried = false;  // (0x8706c6: a selected unit carries it)
+  for (const UserUnit* u : store.selection) carried = carried || std::find(carriers.begin(), carriers.end(), u->view.id) != carriers.end();
+  if (!carried)
+    return c.type == static_cast<int>(CommandType::Attack) || c.type == static_cast<int>(CommandType::FormAttack) ? WaypointOffer::JoinAttack
+                                                                                                                  : WaypointOffer::None;
+  return (c.type == static_cast<int>(CommandType::Move) || c.type == static_cast<int>(CommandType::FormMove)) && MovesConvertibleAt(L, hovered)
+             ? WaypointOffer::ToPatrol
+             : WaypointOffer::None;
+}
+
+bool AttackClick(lua_State* L, uint32_t under, const float at[3], uint32_t hovered, bool dbl, bool clear, bool ctrl, bool form,
+                 float heading, float sx, float sy) {
+  if (!UserState::From(L)->units) return false;
+  if (dbl) RemoveSelectionsLastOrders(L);  // (0x81fdb9)
+  if (under == 0xffffffffu) return IssueToSelection(L, "Attack", at[0], at[1], at[2], clear);  // (0x81ff17)
+  uint32_t with = 0xffffffffu;
+  if (dbl && CoordinatedAttackOn(L, hovered)) {  // (0x81fe9e .. 0x81fef1)
+    with = hovered;
+    StartCursorText(L, sx, sy, "<LOC Engine0011>Coordinated Attack!", 0xffff0000u, 3.0f, true);
+    Logf(LogLevel::Debug, "moho64ui: a double click on the waypoint of attack %u: the attack is coordinated with it", hovered);
+  }
+  return IssueToSelectionAt(L, "Attack", under, clear, ctrl, form, heading, with);
+}
+
+bool ConvertMovesToPatrol(lua_State* L, uint32_t hovered, float sx, float sy) {
+  UserState* user = UserState::From(L);
+  if (!user->units || (hovered & 0xff000000u) == 0xff000000u) return false;  // (0x82078b)
+  if (!MovesConvertibleAt(L, hovered)) return false;                        // (0x8207d9, 0x8207e6)
+  UnitStore& store = Store(L);
+  CommandView c;
+  FindCommandView(L, hovered, &c, nullptr);
+  const int from = c.type;
+  const int to = static_cast<int>(from == static_cast<int>(CommandType::Move) ? CommandType::Patrol : CommandType::FormPatrol);
+  // (INFERRED: the selection's units by their ids; the original goes through its selection set in that set's order,
+  // which decides which unit comes first for the flag below)
+  std::vector<const UserUnit*> units(store.selection.begin(), store.selection.end());
+  std::sort(units.begin(), units.end(), [](const UserUnit* a, const UserUnit* b) { return a->view.id < b->view.id; });
+  bool found = false;  // (0x81df1e: once, for all the units)
+  int sent = 0;
+  for (const UserUnit* u : units) {
+    if (u->gone || u->view.dead) continue;
+    UnitStateView s;
+    if (!StateOf(L, u, &s)) continue;  // (the copy, with the types already changed: RetypeSentOrders)
+    for (const CommandView& o : s.queue) {
+      if (o.id == hovered) found = true;
+      else if (!found) continue;
+      if (o.type != from) continue;
+      Writer(L).SetCommandType(o.id, to);
+      store.retypes[o.id] = {to, user->syncCount};
+      ++sent;
+    }
+  }
+  store.graph.builtSync = ~0ull;
+  StartCursorText(L, sx, sy, "<LOC Engine0012>Patrol Initiated to location!", 0xff00ff00u, 3.0f, true);
+  Logf(LogLevel::Debug, "moho64ui: a click on the waypoint of move %u: the moves become a patrol (SetCommandType for %d order(s))", hovered,
+       sent);
+  return true;
+}
+
+// The script's function by its name in /lua/ui/uimain.lua, imported for each call (as SCR_Import and the lookup at
+// 0x83ed31 .. 0x83ed56): its arguments are on the stack above `top + 1` (the traceback).
+namespace {
+void CallCursorText(lua_State* L, const char* fn, int top, int args) {
+  lua_pushcfunction(L, ScriptTraceback);
+  lua_insert(L, top + 1);
+  lua_getglobal(L, "import");
+  lua_pushstring(L, "/lua/ui/uimain.lua");
+  bool ok = lua_pcall(L, 1, 1, top + 1) == 0 && lua_istable(L, -1);
+  if (ok) {
+    lua_pushstring(L, fn);
+    lua_gettable(L, -2);
+    lua_remove(L, -2);
+    ok = lua_isfunction(L, -1);
+    if (ok) {
+      lua_insert(L, top + 2);
+      ok = lua_pcall(L, args, 0, top + 1) == 0;
+      if (!ok)
+        Logf(LogLevel::Warning, "Error running '/lua/ui/uimain.lua:%s': %s", fn, lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
+    }
+  }
+  lua_settop(L, top);
+}
+}  // namespace
+
+void StartCursorText(lua_State* L, float x, float y, const char* text, uint32_t color, float time, bool flash) {
+  const int top = lua_gettop(L);
+  char encoded[16];
+  std::snprintf(encoded, sizeof encoded, "%08x", color);  // (SCR_EncodeColor 0x4b2e60)
+  lua_pushnumber(L, x);
+  lua_pushnumber(L, y);
+  lua_pushstring(L, text);
+  lua_pushstring(L, encoded);
+  lua_pushnumber(L, time);
+  lua_pushboolean(L, flash);
+  CallCursorText(L, "StartCursorText", top, 6);
+}
+
+void StopCursorText(lua_State* L) { CallCursorText(L, "StopCursorText", lua_gettop(L), 0); }
 
 bool BeginWaypointDrag(lua_State* L, uint32_t command) {
   if (command == 0xffffffffu) return false;

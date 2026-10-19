@@ -298,9 +298,11 @@ bool IssueFormationOrder(lua_State* L, const std::string& order, float x, float 
                          bool ctrl, bool form, float heading);
 // The same with a unit as the target ("Attack", "Guard", "Repair", "Reclaim", "Capture", "Move":
 // the unit's entity id); and what a right click orders by the unit under the cursor (0xffffffff:
-// none): "RULEUCC_Move", "RULEUCC_Attack", ..., empty for nothing.
+// none): "RULEUCC_Move", "RULEUCC_Attack", ..., empty for nothing. `coordWith` (an Attack): the order it is
+// coordinated with (the command stream's coordinated id; 0xffffffff none): a double click on another attack's
+// waypoint (AttackClick in user_units.cpp).
 bool IssueToSelectionAt(lua_State* L, const std::string& order, uint32_t entity, bool clear, bool ctrl = false,
-                        bool form = false, float heading = NAN);
+                        bool form = false, float heading = NAN, uint32_t coordWith = 0xffffffffu);
 // The right click's transport orders on a unit ("CallTransport", "Transport": RightClickOrder's answers).
 bool IssueTransportOrderAt(lua_State* L, const std::string& order, uint32_t entity, bool clear);
 // A Script order at a place for the selected units, as the game's own script allows it
@@ -654,8 +656,10 @@ void OrderLinesForWorld(lua_State* L, bool shown, uint32_t rollover, WorldScene*
 // (user_units.cpp). `screenOf`: where a place of the world is on the screen and how many map units a pixel is
 // there (false: not in view). UpdateHoveredWaypoint works out the waypoint under the mouse at (x, y) while
 // `active` (Shift held over a world view whose highlight is on, not a minimap; else there is none), keeps it as
-// the session's and gives it: its order's id, 0xffffffff for none. HoveredConvertsToPatrol: the hovered waypoint
-// is one the selection's moves could be turned into a patrol at (the cursor's MOVE2PATROLCOMMAND). A drag: begun
+// the session's and gives it: its order's id, 0xffffffff for none. HoveredWaypointOffer: what the hovered waypoint
+// offers the selection (the world view's tips, FA exe 0x870612): JoinAttack, an Attack or FormAttack none of the
+// selected units carries (a double click joins it); ToPatrol, a Move or FormMove a selected unit carries that the
+// selection's moves can be turned into a patrol at (the cursor's MOVE2PATROLCOMMAND, ConvertMovesToPatrol). A drag: begun
 // on a hovered waypoint (false: none, or no focus army), its node moved to the ground under the mouse, let go
 // (the order's new target sent when it has one; `playable` the playable rectangle x0, z0, x1, z1; gives the
 // order's id for the script), or cancelled; DraggedBuildingSite: a building's order being dragged, its ghost where
@@ -667,13 +671,28 @@ void OrderLinesForWorld(lua_State* L, bool shown, uint32_t rollover, WorldScene*
 using WaypointScreen = std::function<bool(const float place[3], float* x, float* y, float* unitsPerPixel)>;
 uint32_t UpdateHoveredWaypoint(lua_State* L, bool active, float x, float y, const WaypointScreen& screenOf);
 uint32_t HoveredWaypoint(lua_State* L);
-bool HoveredConvertsToPatrol(lua_State* L);
+enum class WaypointOffer { None, JoinAttack, ToPatrol };
+WaypointOffer HoveredWaypointOffer(lua_State* L);
 bool BeginWaypointDrag(lua_State* L, uint32_t command);
 void MoveWaypointDrag(lua_State* L, const float at[3]);
 uint32_t ReleaseWaypointDrag(lua_State* L, const float at[3], const float playable[4]);
 void CancelWaypointDrag(lua_State* L);
 bool RemoveHoveredWaypointOrder(lua_State* L, bool shift, bool ctrl);
 bool DraggedBuildingSite(lua_State* L, WorldGhost* site, float from[3]);
+// The clicks on a hovered waypoint (user_units.cpp "Clicks on a hovered waypoint"). AttackClick: an Attack the click
+// gives (SCommandModeData::HandleEvent 0x81fdad) on the unit `under` (0xffffffff: on the ground at `at`); `dbl`: the
+// click is a double click, so the selection's last orders go first (the first click's attack), and on a unit, when
+// `hovered` (the waypoint under the mouse as the click was pressed) is an attack none of the selection carries, the
+// attack is coordinated with it and "Coordinated Attack!" shows at (sx, sy). ConvertMovesToPatrol: a Move the click
+// gives, with `hovered` a move the selection's moves can become a patrol at: they become one instead (true), and
+// "Patrol Initiated to location!" shows at (sx, sy); false: give the Move.
+bool AttackClick(lua_State* L, uint32_t under, const float at[3], uint32_t hovered, bool dbl, bool clear, bool ctrl, bool form,
+                 float heading, float sx, float sy);
+bool ConvertMovesToPatrol(lua_State* L, uint32_t hovered, float sx, float sy);
+// /lua/ui/uimain.lua StartCursorText(x, y, text, color, time, flash) and StopCursorText() (FA exe 0x83ecf0, 0x83edf0):
+// the game's script shows a text beside the pointer (`time` seconds, -1 until stopped; `color` 0xAARRGGBB).
+void StartCursorText(lua_State* L, float x, float y, const char* text, uint32_t color, float time, bool flash);
+void StopCursorText(lua_State* L);
 // A build template: buildings that are placed together, each where it stood beside the first
 // (the original's struct_BuildTemplate: 0x823b40, entries of 44 bytes with place, order and
 // blueprint; to scripts {width, height, {blueprint, order, x, z}, ...}: 0x8472f0).
