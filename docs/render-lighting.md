@@ -993,7 +993,7 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `temporalUpscale` | AMD's FSR 3 (in the game's Video tab already) | at Quality the frame 2.7 -> 1.4-1.9 ms | anti-aliasing off |
 | `volumetricFog` | light in the air: the sun's shafts, the lamps' beams, glowing mist | 0.05-0.09 ms | |
 | `volumetricClouds` | heaped clouds lit through, their shadows on the ground | about 0.4 ms, against 0.63 ms for today's sky with its layer: cheaper | a time of day |
-| `cloudZoom` (a trial) | the zoom out rises through the volumetric clouds, which then lie below, thinning | +0.4 to 1.0 ms from the clouds' layer up, nothing below it | `volumetricClouds` |
+| `cloudZoom` (a trial) | the zoom out rises through the volumetric clouds, which then lie below, thinning | +0.4 to 1.0 ms from the clouds' layer up, nothing below it | `volumetricClouds`; in the Atmosphere setting since 2026-10-18 (Chris: every new look on) |
 | `remasteredBuild` | build beams light what they work on, sparks bounce off the scene, a better build shimmer per faction | about 0.1 ms with ten engineers building | the remastered effects |
 | `skyTables` | the sky from tables of the atmosphere (the planet's shadow at dusk, many-times scattered light) | about 0.1 ms less | a time of day |
 | `softShadows` | the sun's shadows sharp at the foot, soft farther off | +0.25 ms | |
