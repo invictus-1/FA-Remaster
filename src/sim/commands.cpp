@@ -1557,6 +1557,11 @@ void SetCommandTargetFromStream(Sim& sim, UnitCommand& c, const StreamTarget& t)
     c.pos = t.pos;
     c.hasPos = true;
   }
+  // CUnitCommand::SetTarget 0x6e8820 writes the new target into cmd+0x9c..+0xac too (0x6e883a: 0x5e27d0 from the
+  // CAiTarget, 0x6e884d..0x6e8875), so a dragged order is compared as it now stands
+  c.issueTargetType = t.type;
+  c.issueTargetEntity = t.entity;
+  c.issueTargetPos = t.pos;
 }
 
 bool RemoveCommandFromUnit(Sim& sim, Unit* u, UnitCommand& c) {
@@ -2008,6 +2013,24 @@ static bool ReclaimOrderValid(lua_State* L, const Unit* u, Entity* t) {
   return ok;
 }
 
+// The command's issue target (cmd+0x9c..+0xac, SSTITarget): an entity's raw id (the blip a script passed stays the
+// blip), else the point.
+void SetIssueTarget(UnitCommand& c, const Entity* e, const Vec3* p) {
+  if (e) {
+    c.issueTargetType = 1;
+    c.issueTargetEntity = e->id;
+    c.issueTargetPos = Vec3{};
+  } else if (p) {
+    c.issueTargetType = 2;
+    c.issueTargetEntity = 0xf0000000u;
+    c.issueTargetPos = *p;
+  } else {
+    c.issueTargetType = 0;
+    c.issueTargetEntity = 0xf0000000u;
+    c.issueTargetPos = Vec3{};
+  }
+}
+
 template <CommandType T>
 int l_IssueTarget(lua_State* L) {
   // SCR_GetTarget 0x6eef60 converts the target first: an entity target picks a target point (one draw,
@@ -2047,6 +2070,14 @@ int l_IssueTarget(lua_State* L) {
   } else {
     c->hasPos = PosArg(L, 2, &c->pos);
   }
+  // cmd+0x9c..+0xac (the SSTITarget the command was made from: type, raw entity id, point) is a script's order's as
+  // well as a player's: the CUnitCommand ctor 0x6e81b0 takes it from the issue data whoever made it, and
+  // ProcessUnitCommand's "same order again" test (0x6efbb4) compares a player's order with it. Seen: MP1 5943, army
+  // 1's 17 ships hold one Move FAF's DistributeOrders issued at 5939 (IssueMove to the point of the order they had);
+  // the player's Move with clear to that very point at 5943 is not taken by the original (no clear: they go on, Moving,
+  // their navigators' goals unchanged); ours compared it with a point of (0, 0, 0), cleared their queues and planned
+  // again.
+  SetIssueTarget(*c, te, c->hasPos ? &c->pos : nullptr);
   if (kForm) {
     c->formation = lua_tostring(L, 3);
     c->formIndex = formIndex;
@@ -2087,11 +2118,13 @@ int l_IssueOther(lua_State* L) {
     for (int i = 2; i <= lua_gettop(L) && upgradeTo.empty(); ++i)
       if (lua_type(L, i) == LUA_TSTRING) upgradeTo = lua_tostring(L, i);
   auto c = Issue(L, units, T, hasTarget ? &targetAt : nullptr, nullptr, upgradeTo.empty() ? nullptr : &upgradeTo);
+  Entity* issuedAt = nullptr;  // (the entity argument, for the command's issue target)
   for (int i = 2; i <= lua_gettop(L); ++i) {
     if (lua_type(L, i) == LUA_TSTRING && c->blueprintId.empty()) c->blueprintId = lua_tostring(L, i);
     else if (lua_type(L, i) == LUA_TNUMBER) c->count = static_cast<int>(lua_tonumber(L, i));
     else if (Entity* e = ToObject<Entity>(L, i)) {
       c->targetId = EntityRef(e);
+      if (!issuedAt) issuedAt = e;
       TargetPointDraw(*S(L), e);  // UpdateTarget (IssueSacrifice ...), then the command ctor's decode
       if (!c->units.empty()) c->targetPoint = TargetPointDraw(*S(L), e);
     } else if (!c->hasPos && lua_istable(L, i)) {
@@ -2105,6 +2138,7 @@ int l_IssueOther(lua_State* L) {
       }
     }
   }
+  SetIssueTarget(*c, issuedAt, c->hasPos ? &c->pos : nullptr);  // (cmd+0x9c, as l_IssueTarget)
   PushCommand(L, c);
   return 1;
 }
