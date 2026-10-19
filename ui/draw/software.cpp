@@ -174,12 +174,15 @@ void SoftwareTarget::DrawImage(const Image& img, const Rect& s, const Rect& d, u
         ta = A(t), tr = R(t), tg = G(t), tb = B(t);
       } else {
         // The four texels around the sample point stay inside the source rectangle, so a texture's
-        // border ring does not leak in.
+        // border ring does not leak in. (A source given right to left or bottom to top is the picture
+        // mirrored: a turned bitmap, maui/bitmap.cpp.)
         float fu = u - 0.5f, fv = v - 0.5f;
         int tx = static_cast<int>(std::floor(fu)), ty = static_cast<int>(std::floor(fv));
         float wx = fu - static_cast<float>(tx), wy = fv - static_cast<float>(ty);
-        int minX = std::max(0, static_cast<int>(std::floor(s.x0))), maxX = std::min(lastX, static_cast<int>(std::ceil(s.x1)) - 1);
-        int minY = std::max(0, static_cast<int>(std::floor(s.y0))), maxY = std::min(lastY, static_cast<int>(std::ceil(s.y1)) - 1);
+        int minX = std::max(0, static_cast<int>(std::floor(std::min(s.x0, s.x1))));
+        int maxX = std::min(lastX, static_cast<int>(std::ceil(std::max(s.x0, s.x1))) - 1);
+        int minY = std::max(0, static_cast<int>(std::floor(std::min(s.y0, s.y1))));
+        int maxY = std::min(lastY, static_cast<int>(std::ceil(std::max(s.y0, s.y1))) - 1);
         int xa = std::max(minX, std::min(maxX, tx)), xb = std::max(minX, std::min(maxX, tx + 1));
         int ya = std::max(minY, std::min(maxY, ty)), yb = std::max(minY, std::min(maxY, ty + 1));
         const uint32_t* p = img.pixels.data();

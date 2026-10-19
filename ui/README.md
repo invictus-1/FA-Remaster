@@ -784,7 +784,13 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   script's own with `SetFramePattern`), one step per frame once a step's time has passed (12 a
   second at first, real time: it runs on in a pause), at the end back to the start when it loops,
   else it stops on the last; `OnAnimationFrame`, `OnAnimationFinished`, `OnAnimationStopped` as
-  the original calls them (`ui/tests/bitmap.lua`).
+  the original calls them (`ui/tests/bitmap.lua`). A bitmap laid out turned over (its Top below its
+  Bottom, or its Left right of its Right) covers the strip between its edges, its picture mirrored,
+  as the original's quad does (FA exe 0x780850: DRAW_ClippedQuad 0x454e20 gets the control's own
+  rectangle as its clip, so nothing tests the quad for being empty, and the interface's pass draws
+  without culling): FAF's score graph lays the shares' bands behind its lines out so. The host's
+  test function `moho64ui_PixelAt(x, y)` draws the head and gives a pixel's colour
+  (`ui/tests/controls.lua`).
 - The map's border (the machinery the map lies in, a mesh for each skin): `MapBorderAdd` and
   `MapBorderClear` keep the script's list and hand it to the picture's source with every scene
   (`WorldScene::borders`), which gives it to the renderer's `WorldPicture::SetBorders`: from the
@@ -1012,7 +1018,18 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   `ui/tests/victory.lua` (that one in a game launched with cheats on: it makes a dozen heavy
   bots beside the opponent's commander with the game's own cheat callback, `SimCallback`
   "CheatSpawnUnit", which works here as in the original and is a handy way to make any unit
-  in a test).
+  in a test). The score screen of a real game, every page (`ui/tests/score_tabs.lua`: five
+  minutes run ahead, a fight, a victory, the Score button): the history handed over is the
+  simulation's number for number (one entry printed in the simulation, `ui/tests/score_sim.lua`
+  through `ExecLuaInSim('dofile', ...)`), the Graph page's line per army through every history
+  entry with the shares' bands behind them, its buttons, its list of graphs and the value under
+  the mouse; the Chart page's bars and their pages; Dual; the Standard page's three tabs with each
+  army's numbers in every kind they offer and the sorting both ways; Continue. A draw as FAF's
+  victory rules make one, every army still in the game offering it: "It's a draw.", "<name>
+  receives a draw.", the game ends and stands, its Score button, the screen titled Defeat as FAF's
+  gameresult.lua calls it; and both commanders destroyed in the same beat, which the rules do not
+  call a draw: both armies defeated, "You have been defeated!" (`ui/tests/draw.lua`,
+  `-- /drawcase together`; the commanders killed in the simulation by `ui/tests/draw_sim.lua`).
 - Pause and the game's speed. `SessionRequestPause` / `SessionResume` (FA exe 0x8942b0, 0x894330)
   go into the player's orders like every command, so the simulation pauses with a beat; the
   game's script hears of it from the sync table and shows its own sign (the Pause key runs the

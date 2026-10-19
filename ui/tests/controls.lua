@@ -127,6 +127,22 @@ ForkThread(function()
     check("other methods on a destroyed control are errors", pcall(g.Hide, g), false)
     check("the root frame cannot be destroyed", pcall(root.Destroy, root), false)
 
+    -- a bitmap laid out turned over (its Top below its Bottom, or its Left right of its Right) still
+    -- covers the strip between its edges: the original draws its quad as the corners are given, without
+    -- culling (FA exe 0x780850, DRAW_ClippedQuad 0x454e20); FAF's score graph lays its shares out so
+    local function strip(l, t, r, bottom)
+        local s = Bitmap(root)
+        s:SetSolidColor("ff20c040")
+        s.Left:Set(l) s.Top:Set(t) s.Right:Set(r) s.Bottom:Set(bottom)
+        return s
+    end
+    local strips = {strip(1500, 980, 1520, 1000), strip(1540, 1000, 1560, 980), strip(1600, 980, 1580, 1000)}
+    check("a bitmap draws its colour", moho64ui_PixelAt(1510, 990), "ff20c040")
+    check("turned upside down: between its edges", moho64ui_PixelAt(1550, 990), "ff20c040")
+    check("turned left for right: between its edges", moho64ui_PixelAt(1590, 990), "ff20c040")
+    check("and nothing beside them", moho64ui_PixelAt(1530, 990), "00000000")
+    for _, s in strips do s:Destroy() end
+
     -- options: the current profile's, whole or one by its key (the second form is FAF's)
     local Prefs = import("/lua/user/prefs.lua")
     local profile = GetPreference("profile")

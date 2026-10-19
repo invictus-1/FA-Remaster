@@ -24,9 +24,19 @@ class Bitmap : public Control {
 
   // Draw (FA exe 0x780850): the current texture stretched over the control's rectangle (or tiled
   // at its own size), its border ring left out, multiplied by the control's alpha.
+  // A rectangle whose Top lies below its Bottom (or Left right of Right) is drawn too: the original
+  // hands DRAW_ClippedQuad (0x454e20) the control's own rectangle as the clip as well (0x780a0d), so
+  // its first test always passes and the quad goes to CD3DPrimBatcher::DrawQuad (0x4389a0) with the
+  // corners as they are, never tested for being empty; the interface's pass draws with primbatcher's
+  // TAlphaBlendLinearSampleNoDepth (IUIManager::RenderFrames, 0x84d584), Rasterizer_Cull_None. So
+  // the turned quad covers the strip between the two edges, its picture mirrored. FAF's score graph
+  // lays the shares' bands behind its lines out so (hotstats.lua create_graph, the second thread).
   void Draw(lua_State* L, DrawTarget& target) override {
     Rect dst;
     GetRect(&dst.x0, &dst.y0, &dst.x1, &dst.y1);
+    const bool turnedX = dst.x0 > dst.x1, turnedY = dst.y0 > dst.y1;
+    if (turnedX) std::swap(dst.x0, dst.x1);
+    if (turnedY) std::swap(dst.y0, dst.y1);
     if (solid) {
       target.FillRect(dst, WithAlpha(ParseColor(color), alpha));
       return;
@@ -40,8 +50,15 @@ class Bitmap : public Control {
     float iw = static_cast<float>(img.width) - 2 * b, ih = static_cast<float>(img.height) - 2 * b;
     Rect src{b + u0 * iw, b + v0 * ih, b + u1 * iw, b + v1 * ih};
     uint32_t tint = WithAlpha(0xffffffffu, alpha);
-    if (tiled) target.DrawImageTiled(img, src, dst, tint);
-    else target.DrawImage(img, src, dst, tint);
+    // (Not read: how the original's DRAW_TiledQuad, 0x455150, lays the tiles of a turned quad. Here
+    // they are laid unmirrored from its top left.)
+    if (tiled) {
+      target.DrawImageTiled(img, src, dst, tint);
+      return;
+    }
+    if (turnedX) std::swap(src.x0, src.x1);
+    if (turnedY) std::swap(src.y0, src.y1);
+    target.DrawImage(img, src, dst, tint);
   }
 
   LazyVar bitmapWidth, bitmapHeight;

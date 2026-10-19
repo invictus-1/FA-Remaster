@@ -490,6 +490,25 @@ int l_Describe(lua_State* L) {
   return 1;
 }
 
+// moho64ui_PixelAt(x, y): not an engine function of the original. The host's own function for tests:
+// the first head's controls drawn now over a clear picture (no world, no mouse pointer), and the colour
+// of the pixel at (x, y) as "aarrggbb"; nil outside the head.
+int l_PixelAt(lua_State* L) {
+  UiManager& ui = UserState::From(L)->ui();
+  const int x = static_cast<int>(luaL_checknumber(L, 1)), y = static_cast<int>(luaL_checknumber(L, 2));
+  if (x < 0 || y < 0 || x >= ui.width() || y >= ui.height()) {
+    lua_pushnil(L);
+    return 1;
+  }
+  SoftwareTarget target(ui.width(), ui.height());
+  target.Clear(0);
+  ui.Render(L, target, 0);
+  char buf[16];
+  std::snprintf(buf, sizeof buf, "%08x", target.pixels()[static_cast<size_t>(y) * static_cast<size_t>(ui.width()) + static_cast<size_t>(x)]);
+  lua_pushstring(L, buf);
+  return 1;
+}
+
 }  // namespace
 
 void RegisterFrameBindings(lua_State* L) {
@@ -520,6 +539,7 @@ void RegisterFrameBindings(lua_State* L) {
   SetMethod(L, "CMauiLuaDragger", "Destroy", l_Dragger_Destroy);
 
   lua_register(L, "moho64ui_Describe", l_Describe);
+  lua_register(L, "moho64ui_PixelAt", l_PixelAt);
 }
 
 }  // namespace moho::ui
