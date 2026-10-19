@@ -633,6 +633,22 @@ where it changes the look, off by default, measured like the rest. In the order 
      it to packed, greyer, bluer snow (to the dark wet ground where little lies), the snow pushed out heaped beside
      it, the walls hiding part of the sky; its relief is laid after the snow has smoothed what lies under it. The
      ground cover lies flat along the troughs (its pressing pass reads levels 0 and 1).
+   - **The map's mud in the ruts (2026-10-18):** where the map's remap.json has a mud material (the map's entry's
+     `"mud"`, else `<its layers' materials' first word>_mud`: SETONS_R's `setonsr_mud`) and a layer is mud by its
+     kind (SETONS_R's soil "soil+mud", wet sand "sand+mud"), the ruts are drawn in that material in place of the
+     layers' smooth average: its albedo, normal and creases / roughness / height (t41-t43, `kMudSlot`, bound by the
+     ground's pass only), tiled at its real size by the world units a metre of the mud layers (their scale over their
+     material's `real_size_m`: 9.69 units a repeat on SETONS_R), read twice (its size, and a third larger, turned 34
+     degrees) and joined by a slow noise along the mud's own ridges, so that no repeat shows from the game's height.
+     How much: by how pressed (the trough, less on the berm) and how wet: dry a quarter, in the hollows of its
+     picture, matt (dark dry mud); wet all of it with its own gloss (kept through the weather's roughening; still
+     water over it its own); then darkened and given the trough's relief as before. A normal map whose mean leans far
+     one way (its channels wrong) is not used: the mud is drawn without its small shapes, and the log says so.
+     `--no-mud-ruts`: without it. With deep tracks off, or no mud named, the pictures are as before. Cost (2560 x
+     1440, rain, 100 tanks on SETONS_R's soil, the lowest of the frames after the ruts were laid): the ground +0.01 to
+     0.02 ms from the game's height, +0.04 ms close (distance 15; a Fatboy's broad ruts at 12 the same). Put in last
+     in DeepTracksOn: in the middle of its sums it changed how Direct3D 12's compiler rounded them (a pixel or two
+     a step off with deep tracks on and no mud).
    - **No parallax:** at the game's camera (pitch 57 degrees, distance 60, 1440p) a mud trough of 0.05 units seems to
      move under a pixel; close up (distance 15) three or four (snow's: four or five): not worth the four more
      readings a pixel it takes from the game's height; a later choice for close-ups in snow.

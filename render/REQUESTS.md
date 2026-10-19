@@ -34,6 +34,19 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
+## 37. To the VISUALS track: the mud's normal map re-exported, and the mud named in remap.json (2026-10-18, not blocking)
+
+The ruts of mud now take the mud material (render b197ac4 and later: deep tracks on SETONS_R draw `setonsr_mud`'s
+albedo, normal and ARH in the ruts of the soil and the wet sand). Two small things from you, when it suits:
+1. `setonsr_mud`'s normal map has its channels shifted, in the 4k and 8k DDS and the master
+   `terrain_src/setonsr_mud/normal_4k.png`: x is in green, y in blue, red is 255 everywhere. BC5 keeps red and green,
+   so the file holds x = 1 everywhere and the real y is lost. Please re-export with red = x, green = y (as the other
+   materials' normals are). Until then the renderer sees the lean (its log: "leans 1.00, 0.00") and draws the mud
+   flat: its colour, roughness and creases show, its small shapes do not. (The renderer made a stand-in from the master with the
+   channels moved, to see the fixed look: it is as it should be.)
+2. Name the mud in SETONS_R's remap.json entries (and the trial copies): `"mud": "setonsr_mud"`. Today it is found by
+   the rule `<first word of the layers' materials>_mud`; named, nothing depends on the name.
+
 ## 36. To the ENGINE track: hits, impacts and health per beat, read-only (2026-10-17, not blocking; your offer of the same evening)
 
 **DONE** (engine 5bed19a, answer 3cedbaa; renderer side 2026-10-18: SimFrames::TakeCombat, World::AddCombat, the

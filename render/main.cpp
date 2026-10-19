@@ -148,7 +148,8 @@
 //           kind it is (snow, mud, sand, grass, dirt, hard), the game's tread marks and footprints pressed in by their
 //           own shapes; --ground-kind <part>=<kind>  the layers whose texture's path holds <part> taken as that kind
 //           (snow, mud, sand, grass, dirt, hard, or two with a plus: "soil=mud"; may be given several times; before
-//           the map opens), as remap.json's "ground" would say it
+//           the map opens), as remap.json's "ground" would say it; the map's mud material (remap.json) is drawn in the
+//           ruts of ground that is mud by its kind, --no-mud-ruts without it [mud ruts]
 // --tracks-test <unit id>=<count>  that many of that unit (UEL0201=100) driving round loops near where the camera
 //           starts (within 24 units), as a game would move them: their tread marks laid as their blueprint's
 //           Display.MovementEffects.Land.Treads says (the game's own pictures, or deep tracks when on); a unit without
@@ -474,6 +475,7 @@ struct Options {
   bool deepTracks = false;              // --deep-tracks
   bool remasteredBuild = false;         // --remastered-build
   std::vector<std::string> groundKind;  // --ground-kind
+  bool noMudRuts = false;               // --no-mud-ruts [mud ruts]
   std::vector<std::string> tracksTest;  // --tracks-test
   bool energyShields = false;           // --energy-shields
   float energyShieldHealth = -1;        // --energy-shield-health
@@ -646,6 +648,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--movement-dust-over") o->movementDust = true, o->movementDustOver = true;
     else if (a == "--debris") o->debris = true;
     else if (a == "--deep-tracks") o->deepTracks = true;
+    else if (a == "--no-mud-ruts") o->noMudRuts = true;  // [mud ruts]
     else if (a == "--energy-shields") o->energyShields = true;
     else if (a == "--unit-scars") o->unitScars = true;
     else if (a == "--unit-snow") o->unitSnow = true;
@@ -1241,6 +1244,7 @@ int main(int argc, char** argv) {
   world.dust.drawUnder = !opt.movementDustOver;
   if (opt.debrisMost >= 0) world.debris.mostRubble = opt.debrisMost;
   world.deepTracks = opt.deepTracks;
+  world.terrain.mudRuts = !opt.noMudRuts;  // [mud ruts]
   world.energyShields = opt.energyShields;
   if (opt.energyShieldHealth >= 0) world.energy.healthUnknown = opt.energyShieldHealth;
   world.unitScars = opt.unitScars;

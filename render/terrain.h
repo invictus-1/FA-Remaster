@@ -37,6 +37,11 @@ class Terrain {
   // first ("soil"): the second, a kind as remap.json's "ground" says it (snow, mud, sand, grass, dirt, hard, or two
   // with a plus). The viewer's --ground-kind; otherwise by remap.json, else by the layer's name.
   std::vector<std::pair<std::string, std::string>> groundKinds;
+  // [mud ruts] Deep tracks' mud: where the map's remap.json has a mud material (the map's entry's "mud", else
+  // "<its layers' materials' first word>_mud", e.g. setonsr_mud) and a layer is mud by its kind, its ruts are drawn in
+  // that material (its albedo, normal and third map, at its real size), when deep tracks are on (tracksField). false:
+  // the ruts as deep tracks draw them without it.
+  bool mudRuts = true;
   // Where the kinds of ground lie, over the whole map at half its size (RGBA8: sand, grass, snow, hard ground; the
   // rest dirt and mud), by the layers' kinds blended by their masks. Made the first time it is asked for once a map
   // is loaded (it dispatches: between passes).
@@ -139,6 +144,16 @@ class Terrain {
   std::string groundGiven_[10];
   gfx::Pipeline kindsPass_;
   gfx::Texture kinds_;
+  // [mud ruts] the mud material remap.json names for this map (Remaster): its albedo, normal and third map's files (the
+  // layers' tier) and its real size (m); each layer's world units a metre (its scale over its material's real size; 0:
+  // not known); and what is made of them for this map (FindMud: the world units a repeat, 0 none; the textures, read
+  // when first drawn)
+  std::string mudFiles_[3];
+  float mudMetres_ = 0, layerUnitsPerMetre_[10] = {};
+  float mudSize_ = 0;
+  gfx::Texture mud_[3];
+  bool mudTried_ = false;
+  void FindMud();
   // A remastered map's third map per layer (beside `<name>_albedo.dds` a `<name>_arh.dds`: red what
   // its creases let in of the sky's light, green how rough it is, blue how high it stands), all
   // nine as the layers of one texture; `material_[i]`: layer i has one.

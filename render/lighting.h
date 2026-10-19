@@ -562,6 +562,9 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
       roughness = lerp(roughness, 0.07, puddle);
     }
     roughness = lerp(roughness, 0.6, weather.x * (0.35 + 0.5 * upward));
+#ifdef SURFACE_DEEP_TRACKS
+    roughness = lerp(roughness, deepGloss.x, deepGloss.y * (1 - puddle));  // [mud ruts] (wet mud in the ruts keeps its own gloss, terrain.cpp; still water over it its own)
+#endif
     // snow builds up: it lies first where the surface is level, in patches; the patches close as
     // more falls, steeper ground comes last and the steepest stays bare. Where it lies thick it
     // hides the small shapes under it.
