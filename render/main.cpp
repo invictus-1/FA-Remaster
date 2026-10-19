@@ -133,6 +133,9 @@
 //           not known has left (0..1, 1: the effects stand's), to see it weakened; --energy-test n: without a game, n
 //           shield generators of the four factions in two rows round where the camera starts, overlapping, each hit
 //           every --fx-hit-every seconds (0.8) from above, their shields at different strengths (to look and to time)
+// --ping-test  [pings] without a game: FAF's four pings (alert, move, attack, nuke) as its SimPing.lua makes them, script
+//           entities with the ping's mesh pulsing in size, in a row round where the camera starts, and a UEF ferry beacon
+//           in front of them (placed.h: both drawn by their meshes' CommandFeedback shaders, as the original does)
 // --no-hidden-outlines  no outlines of units hidden behind trees, cliffs and buildings (World::hiddenOutlines,
 //           hidden_outlines.h: on unless this is given, in the modern look); --hidden-outlines: on (as at first)
 // --battle-scars  the scorches and craters scripts lay stay, weathering, up to a most (World::battleScars);
@@ -600,6 +603,7 @@ struct Options {
   bool energyShields = false;           // --energy-shields
   float energyShieldHealth = -1;        // --energy-shield-health
   int energyTest = 0;                   // --energy-test
+  bool pingTest = false;                // [pings] --ping-test
   bool unitScars = false, unitSnow = false;  // --unit-scars, --unit-snow
   bool unitDirt = false;                // --unit-dirt [unit dirt]
   float unitDirtPace = 1;               // --unit-dirt-pace
@@ -842,6 +846,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--noicons") o->icons = false;
     else if (a == "--unexplored") o->unexplored = true;
     else if (a == "--ranges") o->ranges = true;
+    else if (a == "--ping-test") o->pingTest = true;  // [pings]
     else if (a == "--shielded") o->shielded = true;
     else if (a == "--bones") o->listBones = true;
     else if (!(v = value())) return false;
@@ -3019,6 +3024,12 @@ int main(int argc, char** argv) {
       static Frame test;
       static std::vector<std::string> names;
       EnergyShieldsTestFrame(opt.energyTest, energyTestAt, time, opt.fx.hitEvery, groundHeight, &test, &names);
+      world.AddFrame(test, armyColors);
+    }
+    if (opt.pingTest && !havePlay && !fxStand) {  // [pings] --ping-test (placed.h)
+      static Frame test;
+      static std::vector<std::string> names;
+      PingTestFrame(energyTestAt, time, groundHeight, &test, &names);
       world.AddFrame(test, armyColors);
     }
     // --emit: every emitter is started again once all have ended and three seconds have passed

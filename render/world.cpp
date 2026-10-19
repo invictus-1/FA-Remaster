@@ -1075,6 +1075,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   decals.tarmacs.field = terrain.tracksField;
   decals.tarmacs.ultra = terrain.ultraGround;
   meshes.Begin();
+  placedDraw.Begin();  // [pings] (the models of the CommandFeedback family taken this frame)
   energy.Begin();  // [energy shields]
   // (buildfx) the remastered build look (build_effects.h): the effects list this frame's build beams while it is on, and
   // the models are drawn by their build look's shaders (made the first frame it is on); a frame for something else
@@ -1936,6 +1937,12 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     Vec3 centre = position + Vec3{0, 0.4f, 0};
     if (blip) {
       // (its blip alone, which can be pointed at)
+    } else if (PlacedMeshes::Feedback(model)) {
+      // [pings] a unit whose mesh is drawn by CommandFeedback4 (the ferry beacons): by that shader's rules after the water
+      // (placed.h), unlit, casting no shadow; none of a unit's other looks
+      placedDraw.TakeModel(model, Mat4::FromTRS(position, orientation, model->scale));
+      centre = position + Rotate(orientation, (model->boundsMin + model->boundsMax) * (0.5f * model->scale));
+      radius = Length(model->boundsMax - model->boundsMin) * 0.5f * model->scale;
     } else if (model && model->ok) {
       // (it treads the lying snow where it stands: what is on the ground and seen; a track must not
       // give away a unit the army does not see)
@@ -2074,7 +2081,8 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       icons.Add(kind, r.position, iconColor, false, false, true);
       rememberedGone.push_back({kind, r.position, iconColor});
       const Model* model = models.Unit(blueprint);
-      if (model && model->ok) meshes.Add(model, Mat4::FromTRS(r.position, r.orientation, model->scale), r.color, r.fractionComplete);
+      if (model && model->ok && !placedDraw.TakeModel(model, Mat4::FromTRS(r.position, r.orientation, model->scale)))  // [pings]
+        meshes.Add(model, Mat4::FromTRS(r.position, r.orientation, model->scale), r.color, r.fractionComplete);
     }
     ++it;
   }
@@ -2125,6 +2133,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       Mat4 at = Mat4::FromTRS(position, orientation, p.sized ? 1.0f : model->scale);
       for (int row = 0; row < 3 && p.sized; ++row)
         for (int k = 0; k < 3; ++k) at.m[row][k] *= std::max(p.size[k], 0.0f);
+      if (placedDraw.TakeModel(model, at)) continue;  // [pings] (one of the CommandFeedback family: placed.h)
       // what fades with its age (the UEF's build slices: whole for two seconds, then gone at
       // 0.145 a second, the original's numbers) says how much of it is left
       float left = 1;
@@ -2221,6 +2230,8 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     Mat4 at = Mat4::FromTRS({f.position[0], f.position[1], f.position[2]}, Quat{f.orientation[0], f.orientation[1], f.orientation[2], f.orientation[3]}, model->scale);
     for (int row = 0; row < 3; ++row)
       for (int k = 0; k < 3; ++k) at.m[row][k] *= f.scale[k];
+    // [pings] a mesh of the CommandFeedback family (FAF's pings): drawn by that shader's rules after the water (placed.h)
+    if (placedDraw.TakeModel(model, at)) continue;
     // [energy shields] a bubble of energy (energy_shields.h) in place of the plain one; its flashes give it its hits (below)
     const bool energyHere = energyShields && look == Look::Modern && !f.original && !model->lods.empty();
     if (energyHere && model->lods[0].shield) {
@@ -2843,7 +2854,8 @@ void World::Render() {
   }
   Stage("see-through (shields)");
   meshes.Draw(view, environment_, false, true);
-  if (!placed.empty()) placedDraw.Draw(view, placed, lights.night);
+  if (!placed.empty() || placedDraw.AnyTaken())  // [pings] (and the CommandFeedback models taken: placed.h)
+    placedDraw.Draw(view, placed, lights.night, PlacedMeshes::DepthPull(camera.zNear, placing.distance));
   Stage("wakes, beams, trails");
   // beams and trails, then particles: over everything solid and the water, by the scene's depth
   wakes.Draw(view);
