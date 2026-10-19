@@ -426,7 +426,7 @@ local looks = {
         -- the renderer's battle looks as one setting (agreed 2026-10-18): World's blastWaves, blastDust, blastDebris, litSmoke, smokeShadows, heatShimmer, unitScars
         title = "Battle Effects",
         key = 'remaster_battle_effects',
-        tip = "Blast waves that press the grass and bend the trees, dust and debris, smoke and fire lit properly with their shadows, heat shimmer, wrecks and craters that glow and cool, dust, spray and contrails behind moving units, explosions that light their surroundings, and battle scars on units that survive.",
+        tip = "Blast waves that press the grass and bend the trees, dust and debris, smoke and fire lit properly with their shadows, heat shimmer, wrecks and craters that glow and cool, dust, spray and contrails behind moving units, explosions that light their surroundings, remade build effects, and battle scars on units that survive.",
         type = 'toggle',
         default = 1,
         set = Look("remaster_battle_effects"),

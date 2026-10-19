@@ -373,6 +373,7 @@ struct GameSession::Picture : WorldSource {
       // (render e8a4d56: wrecks and craters that glow and cool; dust, spray and contrails; explosions as lit volumes
       // and the nuke's set piece, which without the volume art still throws the blasts' light and the nuke's flash)
       w->hotMetal = w->movementDust = w->volumeExplosions = looks.battleEffects;
+      w->remasteredBuild = looks.battleEffects;  // (render 6b8109e: the build effects remade; with the remastered effects and the modern look)
       w->energyShields = looks.energyShields;
     }
     if (!lookApplied || looks.hiddenOutlines != lookNow.hiddenOutlines) picture.SetHiddenOutlines(looks.hiddenOutlines);
