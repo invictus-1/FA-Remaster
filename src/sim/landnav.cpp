@@ -1047,8 +1047,16 @@ void LandNavSetSpeedThrough(Unit* u, bool on) {
   if (u->motion.wpInGoal) u->motion.passThrough = on;
 }
 
+// The steering's push report (navigator vt Func1 0x5a3e80..0x5a3e93): +0x94 is set only while the formation's waiting
+// byte +0x91 is clear. A follower that holds for its leader (ConfigureGoal sets +0x91 for a member whose leader is
+// another unit) is not poked, so its formation block still runs at its next beat (ok = !+0x94), finds the leader's path
+// done, clears +0x91 and takes up its slot. Seen: MP2 9717, army 0's guard 0xda (url0103): its guard re-goals it at
+// 9712, a push ends at 9713; the original follows its slot on from 9714 and rolls on at 9717; ours set +0x94, so the
+// formation block never ran, +0x91 stayed (the tail returns while it is set) and the own cell went over as the
+// waypoint: it braked at 9717 until the guard's next goal.
 void LandNavPoke(Unit* u) {
-  if (LandNav* n = Nav(u)) n->poke = true;
+  if (LandNav* n = Nav(u))
+    if (!n->waiting) n->poke = true;
 }
 
 bool LandNavActive(const Unit* u) {
