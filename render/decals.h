@@ -21,6 +21,7 @@
 #include "gfx.h"
 #include "hot_metal.h"
 #include "linalg.h"
+#include "tarmacs.h"  // [tarmac]
 #include "textures.h"
 #include "view.h"
 
@@ -83,7 +84,20 @@ class Decals {
   // The picture a script's mark is named by (a path, or a short name looked up in the game's two
   // folders of them); none: not there.
   gfx::Texture Picture(const std::string& texture) { return Resolve(texture, nullptr, nullptr); }
-  Decals(gfx::Device* device, const moho::Vfs* vfs, TextureCache* textures) : device_(device), vfs_(vfs), textures_(textures) {}
+  // [tarmac] Remastered tarmacs (tarmacs.h; World::remasteredTarmacs, set by the world each frame: the modern look with the
+  // remastered effects): a pad the game laid whose picture the visuals track has made a material for is drawn in that
+  // material (its "_normals" twin, the game's relief for it, left out), after the map's own pictures and before the marks
+  // laid since, so that scorches and tread marks lie on it. `tarmacs` takes the world's settings for them. A pad laid by
+  // the original effects (the effects stand's right side: `addingOriginal` while Effects lays it) keeps the game's
+  // pictures. false: every pad the game's, as before.
+  bool remasteredTarmacs = false;
+  Tarmacs tarmacs;
+  bool addingOriginal = false;
+  // [tarmac] The pads drawn in their materials now (with remasteredTarmacs), each with its fade by its time alone: for
+  // the ground cover cleared under them (Tarmacs::ClearCover).
+  void TarmacPads(double now, std::vector<Tarmacs::Pad>* out);
+  int tarmacsDrawn = 0;  // [tarmac] (in the last Draw)
+  Decals(gfx::Device* device, const moho::Vfs* vfs, TextureCache* textures) : tarmacs(device, textures), device_(device), vfs_(vfs), textures_(textures) {}
   bool Init(std::string* error);
 
   // A decal: `texture` is a path, or a script's short name ("Scorch_generic_002_albedo": looked for
@@ -155,6 +169,9 @@ class Decals {
     bool scar = false;      // a battle scar (`battleScars`), and when it has faded out (0: it has not begun to)
     double scarGone = 0;
     bool burn = false;      // a scorch or crater laid with hot metal on (`hotMetal`): its middle glows while fresh
+    int tarmac = -1;        // [tarmac] a pad's picture: its name among tarmacKeys_ (-1: not a pad's)
+    bool original = false;  // [tarmac] laid by the original effects (`addingOriginal`)
+    bool mapOwn = false;    // [tarmac] one of the map's own (laid before the first frame)
   };
   struct Instance {  // as the shader reads it
     float centre[3], halfHeight;
@@ -187,8 +204,16 @@ class Decals {
     uint32_t texture, ramp, relief;
     int kind;  // drawn in this order: 0 pictures, 1 normal decals, 2 lights, 3 marks
     Instance instance;
+    bool mapOwn = false;  // [tarmac] (with remastered pads drawn: the map's own pictures before them, the rest after)
   };
   std::vector<Visible> visible_;
+  // [tarmac] the pads' names (Tarmacs::Key) and the material each is drawn in (-2: not looked up yet); this frame's pads
+  std::vector<std::string> tarmacKeys_;
+  std::vector<int> tarmacMaterial_;
+  std::vector<Tarmacs::Pad> pads_;
+  int TarmacOf(const std::string& texture);
+  int TarmacMaterial(const Decal& d);
+  bool TarmacPad(const Decal& d, double now, const View* view, Tarmacs::Pad* pad);
   std::vector<Instance> batch_;
 };
 

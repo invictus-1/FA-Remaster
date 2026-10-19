@@ -321,6 +321,12 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
     auto keep = [&]() {
       if (n[4] <= 0) decalOf_[event.id] = decals_->LastAdded();
     };
+    // [tarmac] (one the original effects lay, the effects stand's right side: a pad of it keeps the game's pictures)
+    struct Original {
+      Decals* d;
+      ~Original() { d->addingOriginal = false; }
+    } original{decals_};
+    decals_->addingOriginal = event.original;
     if (blasts_ && n.size() >= 5 && Decals::IsScar(event.blueprint)) blasts_->FromScar(e.position, n[1], n[2], at);  // (a blast, blasts.h)
     if (n.size() >= 5 && (f == "CreateSplat" || kind == "albedo") && decals_->Add(event.blueprint, e.position, n[1], n[2], n[0], n[3], at, n[4])) return keep();
     // the campaign's objective areas ("Water Albedo": unlit, and over water on its surface)

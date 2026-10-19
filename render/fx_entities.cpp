@@ -2090,6 +2090,16 @@ int Decal(lua_State* L) {
   ev.text = Str(L, 7);
   ev.text2 = Str(L, 8);
   ev.numbers = {Num(L, 5), Num(L, 9), Num(L, 10), Num(L, 11), Num(L, 12)};
+  // [tarmac] (laid on the original effects' side when the thread that lays it is of that side: a structure's pad there
+  // keeps the game's pictures, Decals::addingOriginal)
+  lua_getglobal(L, "__fxSide");
+  const int side = static_cast<int>(lua_tonumber(L, -1));
+  lua_pop(L, 1);
+  for (const Ent& e : m.ents)
+    if (e.side == side && !e.dead) {
+      ev.original = e.original;
+      break;
+    }
   m.events.push_back(ev);
   return 0;
 }

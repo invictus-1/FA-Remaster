@@ -44,6 +44,10 @@ class GroundCover {
             gfx::Texture blasts = {});
   // Prepare's square (its first cell's x, z; a cell's size; cells a side), for what is laid over it (the blasts' waves).
   const float* Area() const { return area_; }
+  // [tarmac] Where a remastered pad lies over Prepare's square (Tarmacs::ClearCover: R8, its coverage, 1 all), set by the
+  // host after Prepare; none: nothing cleared. A blade's tuft and a plant's spot there are left out by it (the worn rim
+  // thinned).
+  gfx::Texture cleared;
   // The shaders Draw takes with `blasts` (the same as without, with the waves in them), made the first time the world
   // wants them (after Init); false: they cannot be made (then Draw's `blasts` is left unused).
   bool PrepareBlasts();

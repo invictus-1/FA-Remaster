@@ -19,7 +19,8 @@ cbuffer Grass : register(b1) {
   float4 blades;   // x: the tallest blade; y: its width at the foot; z: how far from the eye it thins out to nothing;
                    // w: world units of the heights' largest value
   float4 mapInfo;  // xy: the map's width and height; z: world units a pixel covers at distance 1; w: the water's level
-  float4 table;    // x: 1 where the map's cover table says how many blades grow (densityA's red), else by how grassy
+  float4 table;    // x: 1 where the map's cover table says how many blades grow (densityA's red), else by how grassy;
+                   // [tarmac] y: 1 = none where a remastered pad lies (padCover)
 #ifdef PLANTS
   float4 plantsK[2];  // [plants] (plants.h) PlantLife::Constants
 #endif
@@ -32,6 +33,7 @@ Texture2D densityA : register(t4);       // Terrain::CoverDensity's first: blade
 #ifdef BLASTS
 Texture2D<float2> blastField : register(t8);  // (blasts.h) over the square: which way and how far a blast's wave bends it
 #endif
+Texture2D<float> padCover : register(t11);  // [tarmac] over the square: where a remastered pad lies (GroundCover::cleared; table.y)
 
 uint GrassHash(uint x) {
   x ^= x >> 16;
@@ -101,6 +103,8 @@ VOut VS(uint id : SV_VertexID) {
   float thin = saturate((1 - length(xz - (area.xy + half)) / half) * 3);
   const float grassy = table.x > 0.5 ? densityA.SampleLevel(samplerLinearClamp, xz / mapInfo.xy, 0).r : c.a;
   if (GrassRand(GrassHash(h + 2)) > grassy * thin) return o;
+  // [tarmac] none where a remastered pad lies, by its coverage (its worn rim thinned)
+  [branch] if (table.y > 0.5 && padCover.SampleLevel(samplerLinearClamp, (xz - area.xy) / (area.z * area.w), 0) > GrassRand(GrassHash(h + 12))) return o;
   float height = blades.x * (0.55 + 0.45 * GrassRand(GrassHash(hb + 3))) * saturate(thin * 2.5);
   height *= 1 - 0.9 * trampled.SampleLevel(samplerLinearClamp, (xz - area.xy) / (area.z * area.w), 0);  // (pressed flat)
   float turn = GrassRand(GrassHash(hb + 4)) * 6.2832;
@@ -204,7 +208,8 @@ const char kPlantShader[] = R"hlsl(
 cbuffer Plants : register(b1) {
   float4 area;      // xy: the first cell's world x, z; z: a cell's size; w: cells along a side
   float4 mapInfo;   // xy: the map's width and height; z: world units of the heights' largest value; w: the water's level
-  float4 info;      // x: spots a cell where the table says 1; y: (unused); z: flowers' patches' size; w: their cover
+  float4 info;      // x: spots a cell where the table says 1; y: [tarmac] 1 = none where a remastered pad lies (padCover);
+                    // z: flowers' patches' size; w: their cover
   float4 lean;      // x: how far a card leans back toward the camera
   float4 cells[48]; // per cell three: uv rectangle; frame, low, high height, height (metres); sway, clump's least, most,
                     // its world units a metre
@@ -226,6 +231,7 @@ Texture2D atlasNormals : register(t7);   // card space: x in alpha, y (up) in gr
 #ifdef BLASTS
 Texture2D<float2> blastField : register(t8);  // (blasts.h) over the square: which way and how far a blast's wave bends it
 #endif
+Texture2D<float> padCover : register(t11);  // [tarmac] (as the blades')
 
 uint PlantHash(uint x) {
   x ^= x >> 16;
@@ -288,6 +294,8 @@ VOut VS(uint id : SV_VertexID) {
   uint h = PlantHash(uint(cellId.x) * 83492791u ^ PlantHash(uint(cellId.y) * 2971215073u));
   float2 xz = cellAt + float2(PlantRand(h), PlantRand(PlantHash(h + 1))) * area.z;
   if (any(xz < 0) || any(xz > mapInfo.xy)) return o;
+  // [tarmac] none where a remastered pad lies, by its coverage
+  [branch] if (info.y > 0.5 && padCover.SampleLevel(samplerLinearClamp, (xz - area.xy) / (area.z * area.w), 0) > PlantRand(PlantHash(h + 12))) return o;
   float4 a = densityA.SampleLevel(samplerLinearClamp, xz / mapInfo.xy, 0);
   float4 b = densityB.SampleLevel(samplerLinearClamp, xz / mapInfo.xy, 0);
   // which group grows here, if any: clumps, flowers (in patches), dry stalks, ferns, by the table
@@ -706,6 +714,8 @@ void GroundCover::Draw(const View& view, const Camera& camera, gfx::Texture heig
   k.mapInfo[3] = waterLevel;
   const bool table = densityA && densityB;
   k.table[0] = table ? 1.0f : 0.0f;
+  k.table[1] = cleared ? 1.0f : 0.0f;  // [tarmac]
+  device_->SetTexture(11, cleared ? cleared : trampled_);  // [tarmac] (read only with table.y)
   if (blasts) device_->SetTexture(8, blasts);
   if (reacting) {  // [plants]
     std::copy(plants->Constants(), plants->Constants() + 8, &k.plantsK[0][0]);
@@ -735,7 +745,7 @@ void GroundCover::Draw(const View& view, const Camera& camera, gfx::Texture heig
     p->mapInfo[2] = heightUnit;
     p->mapInfo[3] = waterLevel;
     p->info[0] = plantDensity * plantCell * plantCell;
-    p->info[1] = 0;
+    p->info[1] = cleared ? 1.0f : 0.0f;  // [tarmac]
     p->info[2] = plants_.patchScale;
     p->info[3] = plants_.patchCover;
     p->lean[0] = plantLean;
@@ -763,6 +773,7 @@ void GroundCover::Draw(const View& view, const Camera& camera, gfx::Texture heig
     device_->Draw(static_cast<uint32_t>(drawnPlants) * 36);
   }
   for (int slot = 0; slot < (reacting ? 11 : 9); ++slot) device_->SetTexture(slot, {});
+  device_->SetTexture(11, {});  // [tarmac]
 }
 
 }  // namespace render

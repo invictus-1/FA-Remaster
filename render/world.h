@@ -481,6 +481,14 @@ class World {
   // materials' scans hold; with a low sun its high places shade the hollows. Only near the eye at close zoom (nothing
   // from the game's usual height). Modern look; off by default (proposed for the "Ground Detail" setting).
   bool groundParallax = false;
+  // [tarmac] Remastered tarmacs (tarmacs.h, Decals::remasteredTarmacs; Chris, 2026-10-19): the pads under buildings whose
+  // picture the visuals track has remade (remap.json's "tarmacs": the UEF pads first) drawn in its material: lit with the
+  // modern light, wet and glossy in rain with puddles in their joints, their relief close by with groundParallax, scuffed
+  // by deep tracks, scorches and tread marks on them as on the ground, the ground cover cleared under them; faded as the
+  // game fades a dead structure's pad; its 8k tier with the ground's (terrain.ultraGround). The original look and the
+  // original effects keep the game's pads, as do pads not remade yet. Modern look with the remastered effects; off by
+  // default (proposed for the "Ground Detail" setting).
+  bool remasteredTarmacs = false;
   // [plants] Plants that react (plants.h, `plantLife`; Chris, 2026-10-18): grass and the plants laid over where units drive,
   // rising again over seconds; bushes, ferns, saplings and the like bending under them and springing back; the grass, the
   // plants and the undergrowth burnt black, then brown and lower where explosions and fires were, growing back over
@@ -906,6 +914,7 @@ class World {
   bool horizonNow_ = false;  // [horizon] (something of it this frame)
   Season seasonOpen_ = Season::Summer;  // [seasons]
   bool leavesNow_ = false;              // [seasons] (falling leaves drawn this frame)
+  std::vector<Tarmacs::Pad> padsNear_;  // [tarmac] (the remastered pads, for the ground cover cleared under them)
 };
 
 }  // namespace render

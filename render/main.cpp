@@ -168,6 +168,10 @@
 //           remastered map): its stones stand up and its hollows sink as the eye passes, a low sun shades the hollows;
 //           --ground-parallax-tune depth[,reach[,shadows]]: the relief that many times the scans' real one (1), full
 //           within reach world units of the eye and gone by half as far again (20), its shade from the sun 0..1 (1)
+// --remastered-tarmacs  [tarmac] the pads under buildings drawn in the visuals track's materials where it has remade them
+//           (World::remasteredTarmacs, tarmacs.h; modern look with the remastered effects): lit with the modern light, wet
+//           with puddles in their joints in rain, their relief close by with --ground-parallax, scuffed by --deep-tracks,
+//           the ground cover cleared under them; --tarmac-relief n: world units of relief at a pad's real size (0.12)
 // --plants-react  [plants] plants that react (plants.h, World::plantsReact; modern look): grass and plants laid over where units
 //           drive, rising again; bushes, ferns, saplings bending under them and springing back; grass, plants and undergrowth
 //           burnt black, then brown and short, where the game's blasts and lasting fires were, growing back over minutes
@@ -590,6 +594,8 @@ struct Options {
   bool noMudRuts = false;               // --no-mud-ruts [mud ruts]
   bool groundParallax = false;          // [parallax] --ground-parallax
   float parallaxTune[3] = {1, 20, 1};   // [parallax] --ground-parallax-tune
+  bool remasteredTarmacs = false;       // [tarmac] --remastered-tarmacs
+  float tarmacRelief = -1;              // [tarmac] --tarmac-relief
   std::vector<std::string> tracksTest;  // --tracks-test
   bool energyShields = false;           // --energy-shields
   float energyShieldHealth = -1;        // --energy-shield-health
@@ -793,6 +799,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--deep-tracks") o->deepTracks = true;
     else if (a == "--no-mud-ruts") o->noMudRuts = true;  // [mud ruts]
     else if (a == "--ground-parallax") o->groundParallax = true;  // [parallax]
+    else if (a == "--remastered-tarmacs") o->remasteredTarmacs = true;  // [tarmac]
     else if (a == "--plants-react") o->plantsReact = true;  // [plants]
     else if (a == "--energy-shields") o->energyShields = true;
     else if (a == "--unit-scars") o->unitScars = true;
@@ -955,6 +962,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
       if (sscanf(v, "%d,%f,%31s", &o->bushTest, &o->bushSpacing, kind) < 1) return false;
       if (kind[0]) o->bushKind = kind;
     }
+    else if (a == "--tarmac-relief") o->tarmacRelief = std::max(0.0f, static_cast<float>(atof(v)));  // [tarmac]
     else if (a == "--ground-parallax-tune") {  // [parallax]
       if (sscanf(v, "%f,%f,%f", &o->parallaxTune[0], &o->parallaxTune[1], &o->parallaxTune[2]) < 1) return false;
     }
@@ -1522,6 +1530,8 @@ int main(int argc, char** argv) {
   world.terrain.parallaxDepth = std::max(opt.parallaxTune[0], 0.0f);
   world.terrain.parallaxReach = std::max(opt.parallaxTune[1], 1.0f);
   world.terrain.parallaxShadows = std::clamp(opt.parallaxTune[2], 0.0f, 1.0f);
+  world.remasteredTarmacs = opt.remasteredTarmacs;  // [tarmac]
+  if (opt.tarmacRelief >= 0) world.decals.tarmacs.relief = opt.tarmacRelief;
   world.plantsReact = opt.plantsReact;                                       // [plants]
   if (opt.plantsRegrow > 0) world.plantLife.regrow = opt.plantsRegrow;      // [plants]
   world.energyShields = opt.energyShields;
@@ -3505,6 +3515,7 @@ int main(int argc, char** argv) {
       if (haveLive)
         printf("; effects: %d live of %d started, %d events of kinds not drawn yet, %d bands, %.2f ms; %d decals drawn of %d", effects.live,
                effects.started, effects.notShown, ribbons.drawnBands, effects.cpuMs, decals.drawn, decals.Count());
+      if (world.remasteredTarmacs) printf(" (and %d remastered pads)", decals.tarmacsDrawn);  // [tarmac]
       if (haveLive) printf("; simulation at tick %u, %.2f ms a tick", live.LastTick(), live.MsPerTick());
       if (world.horizonWeather)  // [horizon]
         printf("; horizon: ice %.2f, fog %.2f, %d showers, %d icebergs", world.horizon.iceNow, world.horizon.fogNow, world.horizon.showersNow,
