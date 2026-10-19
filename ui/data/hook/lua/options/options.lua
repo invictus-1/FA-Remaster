@@ -246,7 +246,7 @@ local looks = {
         -- atmosphere's tables; with the lobby's Time of Day
         title = "Atmosphere",
         key = 'remaster_atmosphere',
-        tip = "Light in the air (sun shafts, lamp beams, glowing mist), volumetric clouds and the sky, and zooming out through the cloud layer to the whole map. Needs a Time of Day chosen in the lobby.",
+        tip = "Light in the air (sun shafts, lamp beams, glowing mist), volumetric clouds and the sky, zooming out through the cloud layer to the whole map, and land and mountains past the map's edge. Needs a Time of Day chosen in the lobby.",
         type = 'toggle',
         default = 1,
         set = Look("remaster_atmosphere"),
@@ -297,7 +297,7 @@ local looks = {
         -- shallows' caustics
         title = "Weather Effects",
         key = 'remaster_weather_effects',
-        tip = "Rain and snow lit by lamps, rain's splashes, wet shorelines and caustics in shallow water, snow lying on the units themselves, and weather on the horizon beyond the map's edge: fog banks, distant showers, ice floes while snow lies.",
+        tip = "Rain and snow lit by lamps, rain's splashes, wet shorelines and caustics in shallow water, units wet in rain and muddy from soft ground, snow lying on the units themselves, and weather on the horizon beyond the map's edge: fog banks, distant showers, ice floes while snow lies.",
         type = 'toggle',
         default = 1,
         set = Look("remaster_weather_effects"),
