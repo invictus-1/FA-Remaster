@@ -1085,6 +1085,9 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   decals.tarmacs.tracksMap = terrain.tracksMap;
   decals.tarmacs.field = terrain.tracksField;
   decals.tarmacs.ultra = terrain.ultraGround;
+  if (terrain.mudMask != mudMask) coverA_ = coverB_ = {};  // [ground mud] (where plants grow made again: none on the mud)
+  terrain.mudMask = mudMask;      // [ground mud] (the terrain draws it in the modern look only)
+  terrain.rainGround = rainGround;  // [rain ground] (likewise)
   meshes.Begin();
   placedDraw.Begin();  // [pings] (the models of the CommandFeedback family taken this frame)
   energy.Begin();  // [energy shields]

@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "dds.h"  // [ground mud]
 #include "json.h"
 #include "lighting.h"
 #include "ray_scene.h"
@@ -54,6 +55,12 @@ cbuffer TerrainConstants : register(b1) {
   float4 parallax;       // [parallax] x 1 = on; y the distance from the eye it is full within; z 1 / the length it fades out over;
                          // w how much the relief shades itself from the sun (albedoTile[n].z: each layer's depth)
 #endif
+#ifdef GROUND_MORE
+  float4 wetInfo[10];    // [rain ground] per layer: x its wet twin's albedo's layer of materialMaps (-1: none), y its third map's,
+                         // z its normal's layer of wetNormalMaps, w how readily it soaks
+  float4 wetTile[10];    // [rain ground] x: the twin's repeats per world unit
+  float4 more;           // x 1 = the mask's mud is drawn [ground mud]; y 1 = the wet twins are [rain ground]
+#endif
 };
 cbuffer Patches : register(b2) {
   float4 patches[1024];  // x, z of the patch's corner, size of a quad, level
@@ -63,11 +70,31 @@ Texture2D<float> heightMap : register(t0);
 Texture2D normalMap : register(t1);
 Texture2D maskLow : register(t2);
 Texture2D maskHigh : register(t3);
+#ifndef GROUND_MORE
 Texture2D waterMap : register(t4);
 Texture2D waterRamp : register(t5);
+#endif
 Texture2D albedoMaps[10] : register(t6);
 Texture2D normalMaps[9] : register(t16);
 Texture2DArray materialMaps : register(t25);  // per layer: r creases' shading, g roughness, b height
+#ifdef GROUND_MORE
+// [ground mud] [rain ground] (the pipelines "terrain, mud" and, with GROUND_WET, "terrain, mud and wet": the modern look only,
+// whose ground does not read the water's map and ramp (the modern water colours what lies under it): their registers hold
+// these)
+Texture2D<float> mudMaskMap : register(t4);  // the map's painted mud over the whole map: 0 none .. 1 all mud
+#ifdef GROUND_WET
+Texture2DArray wetNormalMaps : register(t5);  // the wet twins' normals (two channels, +y up), by wetInfo[n].z
+#endif
+// (what the layers' sums leave for the mud, the deep tracks and the light: the layers' height as they are laid, how much
+// of each layer has gone over to its twin, the slow patches the ground soaks in, how much of the pixel is the mask's mud and
+// its colour on the whole, how much of the relief the mud leaves standing)
+static float groundHeight = 0.5;
+static float wetT[10] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+static float wetPatch = 0;
+static float groundMud = 0;
+static float3 groundMudAverage = 0;
+static float reliefKept = 1;
+#endif
 
 float HeightAt(int2 c) {
   c = clamp(c, int2(0, 0), int2(mapSize.xy));
@@ -267,6 +294,11 @@ void DeepTracksOn(float2 xz, float2 stepX, float2 stepY, float4 low, float4 high
   #define KIND(n, w) { kA = lerp(kA, kindA[n], w); kB = lerp(kB, kindB[n], w); }
   KIND(1, low.x) KIND(2, low.y) KIND(3, low.z) KIND(4, low.w) KIND(5, high.x) KIND(6, high.y) KIND(7, high.z) KIND(8, high.w)
   #undef KIND
+#ifdef GROUND_MORE
+  // [ground mud] where the mask's mud lies, the ground is mud
+  kA = lerp(kA, float4(0, 1, 0, 0), groundMud);
+  kB = lerp(kB, 0, groundMud);
+#endif
   float wet = saturate(weather.x);
   float snow = kA.x, mud = kA.y + kB.x * wet * 0.8, sand = kA.z, grass = kA.w, dirt = kB.x * (1 - wet * 0.8), hard = kB.y;
   float sum = max(snow + mud + sand + grass + dirt + hard, 1e-3);
@@ -283,7 +315,11 @@ void DeepTracksOn(float2 xz, float2 stepX, float2 stepY, float4 low, float4 high
   float shade = snow * 0.5 + mud * 0.45 + sand * 0.4 + grass * 0.35 + dirt * 0.35;
   // pressed smooth: its colour and small shapes toward the average and the ground's own slope
   float flat = smooth * saturate(t * 1.4) * relief;
+#ifdef GROUND_MORE
+  albedo = lerp(albedo, lerp(LayersAverage(low, high, upper), groundMudAverage, groundMud), flat * 0.85);  // [ground mud] (in it, the mud's)
+#else
   albedo = lerp(albedo, LayersAverage(low, high, upper), flat * 0.85);
+#endif
   N = normalize(lerp(N, base, flat * 0.9));
   creases = lerp(creases, 1, flat * 0.8);
   // the trough and berm's relief, the colours down in it and up on the berm
@@ -311,6 +347,164 @@ void DeepTracksOn(float2 xz, float2 stepX, float2 stepY, float4 low, float4 high
   deepTrack = float4(t, q, relief, 1);
   deepSlope = slope * relief;
   if (tracksInfo.w > 1.5) albedo = float3(t, q, relief * 0.5);  // (MOHO64_DEBUG_TRACKS=3)
+}
+#endif
+
+#ifdef GROUND_WET
+// [rain ground] How much of layer n has gone over to its wet twin here (0 dry .. 1 wet). As the weather's wetness times how
+// readily the layer soaks (wetInfo[n].w) rises, the layer's hollows go first (`h`, its third map's height here) and its
+// high places last, in patches (wetPatch, a slow noise, so that a stretch of ground does not turn all at once), with a
+// thin edge between; as it dries, back the same way, the hollows last.
+float WetShare(int n, float h) {
+  [branch] if (more.y < 0.5 || wetInfo[n].x < 0) return 0;
+  float level = saturate(weather.x * wetInfo[n].w);
+  return saturate((level * 1.15 - (h * 0.8 + wetPatch * 0.2)) / 0.06);
+}
+// Layer n's creases and roughness from its third map `m` as read (whose height says how much of it has gone over: wetT[n]),
+// with its twin's where it has; the twin's third map read only there. (A wet scan's roughness is low in places: where its
+// small shapes are smaller than a pixel it is taken rougher, so that their glints do not sparkle, as the ruts' mud.)
+float2 WetMatter(int n, float3 m, float2 xz, float2 stepX, float2 stepY) {
+  float t = WetShare(n, m.b);
+  wetT[n] = t;
+  [branch] if (t <= 0) return m.rg;
+  float s = wetTile[n].x;
+  float2 w = materialMaps.SampleGrad(samplerAniso, float3(xz * s, wetInfo[n].y), stepX * s, stepY * s).rg;
+  uint width, height, layers, levels;
+  materialMaps.GetDimensions(0, width, height, layers, levels);
+  float lod = log2(max(max(length(stepX), length(stepY)) * s * float(width), 1));
+  w.y = sqrt(w.y * w.y + 0.1 * saturate(lod / 4));
+  return lerp(m.rg, w, t);
+}
+// Layer n's albedo from its own texture (`dry`) or its twin's (in materialMaps), both read only on the edge between them.
+float4 WetAlbedo(Texture2D dry, int n, float2 xz, float2 stepX, float2 stepY) {
+  float t = wetT[n], s = albedoTile[n].x;
+  float4 a = 0;
+  [branch] if (t < 1) a = dry.SampleGrad(samplerAniso, xz * s, stepX * s, stepY * s);
+  [branch] if (t > 0) {
+    float w = wetTile[n].x;
+    a = lerp(a, materialMaps.SampleGrad(samplerAniso, float3(xz * w, wetInfo[n].x), stepX * w, stepY * w), t);
+  }
+  return a;
+}
+// Its normal likewise (as Ground's NORMAL reads a layer's).
+float4 WetNormal(Texture2D dry, int n, float2 xz, float2 stepX, float2 stepY) {
+  float t = wetT[n], s = normalTile[n].x;
+  float4 v = 0;
+  [branch] if (t < 1) v = LayerNormal(dry.SampleGrad(samplerAniso, xz * s, stepX * s, stepY * s), normalTile[n].y);
+  [branch] if (t > 0) {
+    float w = wetTile[n].x;
+    v = lerp(v, LayerNormal(wetNormalMaps.SampleGrad(samplerAniso, float3(xz * w, wetInfo[n].z), stepX * w, stepY * w), 1), t);
+  }
+  return v;
+}
+#endif
+
+#ifdef GROUND_MORE
+// [ground mud] Dried mud's cracks at a place of the mud's picture (`uv`: in its repeats; some thirty plates across a repeat,
+// a hand's breadth each, cut by a jittered grid's nearest points, their borders made wavy by a slow noise): x how much of
+// the pixel is a crack (its gap, of a width that wanders along it, smoothed over the pixel's width in plates, `fw`; where
+// the gaps are thinner than a pixel, their share of the ground), y how near the plate's rim the place is, z the plate's own
+// shade (0..1). `tilt`: the rims curling up toward the cracks, as a slope along the picture's u and v (the world's x, z).
+float3 MudCracks(float2 uv, float fw, out float2 tilt) {
+  float2 p = uv * 30;
+  p += (float2(CloudNoise(float3(p * 0.21, 1.7)), CloudNoise(float3(p * 0.21, 5.3))) - 0.5) * 0.7;
+  float2 cell = floor(p), f = p - cell;
+  float d1 = 9, d2 = 9;
+  float2 g1 = 0, g2 = 0, c1 = 0;
+  [unroll] for (int y = -1; y <= 1; ++y)
+    [unroll] for (int x = -1; x <= 1; ++x) {
+      float2 o = float2(x, y), c = cell + o;
+      uint2 q = uint2(int2(c) + 65536);
+      uint k = q.x * 0x8da6b343u ^ q.y * 0xd8163841u;
+      k ^= k >> 13;
+      k *= 0x2c1b3c6du;
+      k ^= k >> 12;
+      float2 r = o + 0.15 + 0.7 * float2(k & 0xffffu, k >> 16) / 65535.0 - f;
+      float d = dot(r, r);
+      if (d < d1) {
+        d2 = d1, g2 = g1;
+        d1 = d, g1 = r, c1 = c;
+      } else if (d < d2) {
+        d2 = d, g2 = r;
+      }
+    }
+  float2 across = normalize(g2 - g1 + 1e-5);  // (from the place's plate toward its neighbour)
+  float edge = dot(0.5 * (g1 + g2), across);  // (how far the place is from the border between them, in plates)
+  float w = 0.03 * (0.2 + 1.6 * CloudNoise(float3(p * 0.45, 2.9)));  // (some cracks barely open, some gaping)
+  float aa = max(fw, 1e-4);
+  float gap = saturate((w - edge) / aa + 0.5);
+  float crack = lerp(3.7 * w, gap, saturate(2.5 * w / aa));
+  float rim = smoothstep(5 * w, w, edge) * saturate(1.5 - fw * 6);
+  tilt = -across * (rim * 0.25 * (1 - gap));
+  uint2 qc = uint2(int2(c1) + 65536);
+  uint s = qc.x * 0x9e3779b1u ^ qc.y * 0x85ebca77u;
+  s ^= s >> 15;
+  s *= 0x2c1b3c6du;
+  return float3(crack, rim, float(s >> 16) / 65535.0);
+}
+// [ground mud] The map's painted mud (Terrain::mudMask). `m`: the mask's weight here (read once a pixel, in Ground). The mud
+// material (MudRead, as the ruts read it) is laid over the layers by it, the ground's hollows first (the layers' height as
+// they are laid, groundHeight) and its own (its third map's height): a soft weight gives an uneven edge of mud lying
+// between the stones and clods, not a fade. Rain raises it a little (the wet soil at its edge goes over to mud). Mud holds
+// water: it stays wet until the ground is about half dry. Wet it is as the visuals session made it (dark, glossy: its own
+// roughness, a little rougher, as the ruts' mud), and still water gathers in its low places (its picture's hollows, in slow
+// patches; not on steep banks) as the wetness rises, drying back the same way. Dry it is paler (the
+// visuals session's wet mud is the soil's x 0.55 in linear light: back by about that), a little greyer and matt, and where
+// it lies thick it cracks into plates whose rims curl up a little. Its normal is put on the ground's as the layers' are.
+// It leaves how much of the pixel it covers and its colour on the whole for the deep tracks (groundMud, groundMudAverage).
+float3 MudPale(float3 c) {
+  c *= 1.3;
+  return lerp(c, dot(c, float3(0.3, 0.59, 0.11)) * float3(1.04, 1.0, 0.93), 0.3);
+}
+void MudLayer(float2 xz, float2 stepX, float2 stepY, float3 base, float m, inout float3 albedo, inout float3 N, inout float roughness,
+              inout float creases) {
+  float wet = saturate(weather.x);
+  m = saturate(m * (1 + 0.35 * wet));
+  float3 colour, arh;
+  float2 n;
+  float lod;
+  MudRead(xz, stepX, stepY, colour, arh, n, lod);
+  float share = saturate((0.5 * (1 - groundHeight) + 0.5 * (1 - arh.b) + m * 1.35 - 1) / 0.35);
+  [branch] if (share <= 0) return;
+  float moist = saturate(wet * 1.6);
+  float3 c = lerp(MudPale(colour), colour, moist);
+  float3 average = mudAlbedo.SampleLevel(samplerLinear, float2(0.5, 0.5), 16).rgb;
+  groundMudAverage = lerp(MudPale(average), average, moist);
+  // dry and thick: cracked into plates (each a shade of its own), the cracks dark and hiding the sky; in patches, on the
+  // mud's higher crust (its hollows stay smooth)
+  float crust = saturate((arh.b - 0.25) * 2.5 + (CloudNoise(float3(xz * 0.35, 7.7)) - 0.4) * 1.5);
+  float dry = saturate(1 - moist / 0.4) * smoothstep(0.5, 0.95, share) * smoothstep(0.35, 0.75, m) * crust;
+  float2 tilt = 0;
+  float crack = 0;
+  [branch] if (dry > 0) {
+    float3 k = MudCracks(xz * mudInfo.y, max(length(stepX), length(stepY)) * mudInfo.y * 30, tilt);
+    crack = k.x * dry;
+    c *= (1 - 0.4 * crack) * (1 + (k.z - 0.5) * 0.1 * dry);
+    tilt *= dry;
+  }
+  albedo = lerp(albedo, c, share);
+  float rough = lerp(saturate(0.75 + 0.35 * arh.g), lerp(arh.g, 0.6, 0.3), moist);
+  rough = sqrt(rough * rough + 0.1 * saturate(lod / 4));  // (its small shapes a pixel takes in: rougher, no sparkle)
+  roughness = lerp(roughness, rough, share);
+  creases = lerp(creases, arh.r * (1 - 0.7 * crack), share);
+  n += tilt;
+  float3 detail = float3(n.x, sqrt(saturate(1 - dot(n, n))), n.y);
+  float3 h = normalize(base + float3(0, 1, 0));
+  float3 axisX = float3(1 - 2 * h.x * h.x, 2 * h.x * h.y, -2 * h.x * h.z);
+  float3 axisZ = float3(-2 * h.z * h.x, 2 * h.z * h.y, 1 - 2 * h.z * h.z);
+  N = normalize(lerp(N, float3(dot(detail, axisX), dot(detail, base), dot(detail, axisZ)), share));
+  groundMud = share;
+  // still water in its low places: level, darker, a mirror that lets in all the sky (laid here and kept through the weather's
+  // gloss with the mud's, deepGloss in Ground: lighting.h's own puddles are taken back toward the wet ground's roughness)
+  float level = wet * share * smoothstep(0.3, 0.9, m);
+  [branch] if (level > 0) {
+    float pool = 0.6 * (1 - arh.b) + 0.4 * CloudNoise(float3(xz * 0.55, 9.2));
+    float p = smoothstep(1.02 - 0.42 * level, 1.08 - 0.42 * level, pool) * smoothstep(0.75, 0.9, base.y);
+    N = normalize(lerp(N, float3(0, 1, 0), p));
+    albedo *= 1 - 0.45 * p;
+    roughness = lerp(roughness, 0.05, p);
+    creases = lerp(creases, 1, p);
+  }
 }
 #endif
 
@@ -377,6 +571,9 @@ float2 GroundParallax(float3 world, float3 base, float4 low, float4 high, float2
   float pair = lo == up ? 0 : saturate((second - third) * 8);
   bool bestUp = a == up && lo != up;
   float deepLo = pair > 0 || !bestUp ? albedoTile[lo].z : 0, deepUp = pair > 0 || bestUp ? albedoTile[up].z : 0;
+#ifdef GROUND_MORE
+  deepLo *= reliefKept, deepUp *= reliefKept;  // [ground mud] (the mask's mud fills the relief)
+#endif
   float deep = max(deepLo, deepUp);
   if (deep <= 0) return world.xz;
   // the eye's ray: its way over the ground per unit of depth (in the ground's plane, the pictures' coordinates being
@@ -452,6 +649,18 @@ float4 Ground(VOut i) {
   // inside such a branch the sampler cannot work the steps out itself; the temporal upscaler's bias, view.h,
   // as steps that much smaller)
   float2 stepX = ddx(xz) * exp2(temporal.x), stepY = ddy(xz) * exp2(temporal.x);
+#ifdef GROUND_MORE
+  // [ground mud] the mask's weight here, read once a pixel where the layers' masks are (not moved by the relief); the relief
+  // close by mostly filled where it is mud. [rain ground] the slow patches the ground soaks in.
+  float mudWeight = 0;
+  [branch] if (more.x > 0.5) {
+    mudWeight = mudMaskMap.SampleGrad(samplerLinearClamp, uv, stepX * mapSize.zw, stepY * mapSize.zw);
+    reliefKept = 1 - 0.85 * smoothstep(0.3, 0.9, mudWeight);
+  }
+#endif
+#ifdef GROUND_WET
+  [branch] if (more.y > 0.5) wetPatch = CloudNoise(float3(xz * 0.21, 6.3));
+#endif
 #ifdef GROUND_PARALLAX
   // [parallax] where the layers' pictures (and the deep tracks' field) are read: along the eye's ray into their relief,
   // close by (GroundParallax); with the same steps, so that their sharpness is the surface's
@@ -470,8 +679,28 @@ float4 Ground(VOut i) {
   #define LXZ xz
   #define TRACKS_XZ i.world.xz
 #endif
+#ifdef GROUND_WET
+  // [rain ground] a layer's own pictures or its wet twin's, by how much of it has gone over here (wetT, RICH: MORE_RICH);
+  // [ground mud] the layers' height as they are laid (for the mud's hollows first)
+  #define ALBEDO(n) WetAlbedo(albedoMaps[n], n, LXZ, stepX, stepY)
+  #define NORMAL(n) WetNormal(normalMaps[n], n, LXZ, stepX, stepY)
+  #define MORE_BASE(m) groundHeight = m.b; m.rg = WetMatter(0, m, LXZ, stepX, stepY);
+  #define MORE_RICH(n, m, mask) groundHeight = lerp(groundHeight, m.b, mask); m.rg = WetMatter(n, m, LXZ, stepX, stepY);
+  #define MORE_PLAIN(mask) groundHeight = lerp(groundHeight, 0.5, mask);
+#elif defined(GROUND_MORE)
+  // [ground mud] the layers' height as they are laid (for the mud's hollows first)
   #define ALBEDO(n) albedoMaps[n].SampleGrad(samplerAniso, LXZ * albedoTile[n].x, stepX * albedoTile[n].x, stepY * albedoTile[n].x)
   #define NORMAL(n) LayerNormal(normalMaps[n].SampleGrad(samplerAniso, LXZ * normalTile[n].x, stepX * normalTile[n].x, stepY * normalTile[n].x), normalTile[n].y)
+  #define MORE_BASE(m) groundHeight = m.b;
+  #define MORE_RICH(n, m, mask) groundHeight = lerp(groundHeight, m.b, mask);
+  #define MORE_PLAIN(mask) groundHeight = lerp(groundHeight, 0.5, mask);
+#else
+  #define ALBEDO(n) albedoMaps[n].SampleGrad(samplerAniso, LXZ * albedoTile[n].x, stepX * albedoTile[n].x, stepY * albedoTile[n].x)
+  #define NORMAL(n) LayerNormal(normalMaps[n].SampleGrad(samplerAniso, LXZ * normalTile[n].x, stepX * normalTile[n].x, stepY * normalTile[n].x), normalTile[n].y)
+  #define MORE_BASE(m)
+  #define MORE_RICH(n, m, mask)
+  #define MORE_PLAIN(mask)
+#endif
   // a layer laid over what is there only where it is there: a share of nothing changes nothing, and a
   // map's layers each cover a part of it only (most pixels need two or three of the ten)
   #define OVER(value, read, share) [branch] if ((share) > 0) value = lerp(value, read, share)
@@ -482,6 +711,7 @@ float4 Ground(VOut i) {
   float3 matter = 0;
   [branch] if (look > 0.5 && albedoTile[0].y > 0.5) {
     float3 m = materialMaps.SampleGrad(samplerAniso, float3(LXZ * albedoTile[0].x, 0), stepX * albedoTile[0].x, stepY * albedoTile[0].x).rgb;
+    MORE_BASE(m)
     matter = float3(m.r, m.g, 1);
   }
   #define RICH(n, mask, raw) \
@@ -489,9 +719,11 @@ float4 Ground(VOut i) {
       float3 m = materialMaps.SampleGrad(samplerAniso, float3(LXZ * albedoTile[n].x, n), stepX * albedoTile[n].x, stepY * albedoTile[n].x).rgb; \
       mask = saturate((m.b + mask * 1.35 - 1) / 0.35); \
       raw = saturate((m.b + raw * 1.35 - 1) / 0.35); \
+      MORE_RICH(n, m, mask) \
       matter = lerp(matter, float3(m.r, m.g, 1), mask); \
     } else { \
       matter = lerp(matter, 0, mask); \
+      MORE_PLAIN(mask) \
     }
   RICH(1, low.x, rawLow.x)
   RICH(2, low.y, rawLow.y)
@@ -550,8 +782,10 @@ float4 Ground(VOut i) {
   float3 N = float3(dot(detail, axisX), dot(detail, base), dot(detail, axisZ));
 
   // under water: tinted toward the ramp's colour by depth
+#ifndef GROUND_MORE
   float depth = waterMap.Sample(samplerLinearClamp, uv).g;
   float4 ramp = waterRamp.Sample(samplerLinearClamp, float2(depth, 0.5));
+#endif
   float shadow = SunShadow(i.world, base);
   // how shiny the ground is: the plain look keeps it in the albedo's alpha inverted, the XP look as it is
   float gloss = lerp(1 - albedo.a, albedo.a, xp);
@@ -562,6 +796,13 @@ float4 Ground(VOut i) {
     // (a remastered map's layers say their own; the upper, map-wide layer has none)
     roughness = lerp(roughness, matter.y, matter.z);
     float creases = lerp(1, matter.x, matter.z);
+#ifdef GROUND_MORE
+    [branch] if (mudWeight > 0) {  // [ground mud] the mask's mud over the layers
+      float3 mudded = albedo.rgb;
+      MudLayer(LXZ, stepX, stepY, base, mudWeight, mudded, N, roughness, creases);
+      albedo.rgb = mudded;
+    }
+#endif
 #ifdef MODERN_WATER
     [branch] if (shore.x > 0.5) {
       // the beach the waves have just wetted: darker and shinier in a band over the water's level, its edge
@@ -580,6 +821,12 @@ float4 Ground(VOut i) {
       albedo.rgb = pressed;
     }
 #endif
+#ifdef GROUND_MORE
+    // [ground mud] the mud (its puddles too) keeps its own gloss through the weather's (lighting.h: deepGloss), where it is
+    // more of the pixel than the ruts' mud. ([rain ground] The wet twins take the weather's darkening and gloss as all
+    // ground: the visuals session made each one the colour of its dry layer as it is drawn, section 61.)
+    if (groundMud > deepGloss.y) deepGloss = float2(roughness, groundMud);
+#endif
     // (ground that glows gives its own light, by day and by night)
 #ifdef GROUND_PARALLAX
     // [parallax] the relief's own high places' shadow; none where deep tracks have pressed the ground smooth
@@ -591,10 +838,15 @@ float4 Ground(VOut i) {
 #ifdef MODERN_WATER
     return float4(lit, 1);  // (the modern water colours what is under it itself, by how deep it is)
 #endif
+#ifndef GROUND_MORE
     float full = max(lightMultiplier * modern.x * (skyZenith.w > 0.5 ? skyGlow.w * lerp(1, 0.45, skyHorizon.w) : 1), 0.001);  // (a computed sky: as bright as the day is)
     float3 screen = lerp(pow(max(lit / full, 0), 1 / 2.2), ramp.rgb, ramp.a);
     return float4(ToLinear(screen) * full, 1);
+#endif
   }
+#ifdef GROUND_MORE
+  return 0;  // (this pipeline draws the modern look only)
+#else
 
   float3 sun = sunDirection;
   float3 toPixel = normalize(i.world - cameraPosition);
@@ -617,6 +869,7 @@ float4 Ground(VOut i) {
   float glowAlpha = 0.01 + lerp(pow(saturate(dot(sun - 2 * sunDotN * N, toPixel)), 80) * gloss * specularColor.w, 0, xp) +
                     max(glowing.r, max(glowing.g, glowing.b));
   return float4(lerp(color, ramp.rgb, ramp.a), ramp.a > 0.001 ? 0 : saturate(glowAlpha));
+#endif
 }
 
 float4 PS(VOut i) : SV_Target {
@@ -681,11 +934,12 @@ cbuffer CoverConstants : register(b1) {
   float4 coverA[10];  // per layer: blades, clumps, flowers, dry stalks
   float4 coverB[10];  // per layer: ferns, dry cells' share, weeds' share, 1 where near trees counts
   float4 nearTrees;   // near a tree: blades, clumps, flowers, stalks times these
-  float4 nearFern;    // x: and this many more ferns
+  float4 nearFern;    // x: and this many more ferns; y: 1 = the mud mask is read [ground mud]
 };
 Texture2D maskLow : register(t2);
 Texture2D maskHigh : register(t3);
 Texture2D<float> trees : register(t4);
+Texture2D<float> mudMask : register(t5);  // [ground mud] the map's painted mud (Terrain::mudMask)
 RWTexture2D<float4> outA : register(u0);
 RWTexture2D<float4> outB : register(u1);
 [numthreads(8, 8, 1)] void CS(uint3 id : SV_DispatchThreadID) {
@@ -709,6 +963,13 @@ RWTexture2D<float4> outB : register(u1);
   float near = trees.SampleLevel(samplerLinearClamp, uv, 0) * b.w;
   a *= lerp(1, nearTrees, near);
   b.x += nearFern.x * near;
+  [branch] if (nearFern.y > 0.5) {  // [ground mud] nothing grows on the mask's mud
+    uint mw, mh, ml;
+    mudMask.GetDimensions(0, mw, mh, ml);
+    float bare = 1 - smoothstep(0.1, 0.6, mudMask.SampleLevel(samplerLinearClamp, uv, max(log2(float(mw) / float(w)), 0)));
+    a *= bare;
+    b.x *= bare;
+  }
   outA[id.xy] = saturate(a);
   outB[id.xy] = float4(saturate(b.xyz), 0);
 }
@@ -717,7 +978,7 @@ RWTexture2D<float4> outB : register(u1);
 struct CoverConstants {
   float mapSize[4], params[4];
   float coverA[10][4], coverB[10][4];
-  float nearTrees[4], nearFern[4];
+  float nearTrees[4], nearFern[4];  // ([ground mud] nearFern[1]: 1 = the mud mask is read)
 };
 
 struct TerrainConstants {
@@ -731,14 +992,17 @@ struct TerrainConstants {
   float kindA[10][4], kindB[10][4];
   float mudInfo[4];  // [mud ruts]
   float parallax[4];  // [parallax] (read only by the ground's parallax pipeline)
+  float wetInfo[10][4], wetTile[10][4], more[4];  // [rain ground] [ground mud] (read only by the GROUND_MORE pipeline)
 };
 
 // The ground's shader as the scene draws it. [parallax] `parallax`: with the relief close by (GROUND_PARALLAX), the
-// ground's parallax pipeline's; without it the source is as it always was.
-std::string GroundSource(bool parallax) {
+// ground's parallax pipeline's; without it the source is as it always was. [ground mud] [rain ground] `more`: with the
+// mask's mud (GROUND_MORE; the modern look only), `wet`: and the wet twins (GROUND_WET).
+std::string GroundSource(bool parallax, bool more = false, bool wet = false) {
   // (the modern look has its own water: water.cpp)
   // (deep tracks: what the ground's shader read of them, for the lying snow and the puddles in ModernLight)
-  return std::string(parallax ? "#define GROUND_PARALLAX 1\n" : "") + "#define MODERN_WATER 1\n" +
+  return std::string(wet ? "#define GROUND_WET 1\n" : "") + (more ? "#define GROUND_MORE 1\n" : "") + (parallax ? "#define GROUND_PARALLAX 1\n" : "") +
+         "#define MODERN_WATER 1\n" +
          "#define SURFACE_PUDDLES 1.0\n#define SURFACE_TRACKS 1\n" +
          "#define SURFACE_DEEP_TRACKS 1\nstatic float4 deepTrack = 0;\nstatic float4 deepSlope = 0;\nstatic float deepWater = 0;\n" +
          "static float2 deepGloss = 0;\n" +  // [mud ruts] (the mud's roughness and share, MudInRuts)
@@ -756,6 +1020,7 @@ cbuffer KindConstants : register(b1) {
 };
 Texture2D maskLow : register(t2);
 Texture2D maskHigh : register(t3);
+Texture2D<float> mudMask : register(t4);  // [ground mud] the map's painted mud (Terrain::mudMask; params.w 1: read)
 RWTexture2D<float4> kinds : register(u0);
 [numthreads(8, 8, 1)] void CS(uint3 id : SV_DispatchThreadID) {
   uint w, h;
@@ -774,7 +1039,13 @@ RWTexture2D<float4> kinds : register(u0);
   LAYER(6, high.y);
   LAYER(7, high.z);
   LAYER(8, high.w);
-  kinds[id.xy] = saturate(float4(a.z, a.w, a.x, b.y));  // sand, grass, snow, hard
+  float4 k = saturate(float4(a.z, a.w, a.x, b.y));  // sand, grass, snow, hard
+  [branch] if (params.w > 0.5) {  // [ground mud] the mask's mud is mud (none of the four: the rest is dirt and mud)
+    uint mw, mh, ml;
+    mudMask.GetDimensions(0, mw, mh, ml);
+    k *= 1 - mudMask.SampleLevel(samplerLinearClamp, uv, max(log2(float(mw) / float(w)), 0));
+  }
+  kinds[id.xy] = k;
 }
 )hlsl";
 
@@ -876,6 +1147,24 @@ bool NormalMapMean(const std::string& file, float* x, float* y) {
   return true;
 }
 
+// [ground mud] The largest value a BC4 block (8 bytes) holds, 0..255, by the values its texels take (eight between its two
+// ends where the first is the larger; else six between them, 0 and 255).
+int Bc4BlockMost(const uint8_t* b) {
+  const int a0 = b[0], a1 = b[1];
+  int value[8] = {a0, a1};
+  if (a0 > a1) {
+    for (int k = 1; k < 7; ++k) value[k + 1] = ((7 - k) * a0 + k * a1) / 7;
+  } else {
+    for (int k = 1; k < 5; ++k) value[k + 1] = ((5 - k) * a0 + k * a1) / 5;
+    value[6] = 0, value[7] = 255;
+  }
+  uint64_t bits = 0;
+  for (int k = 0; k < 6; ++k) bits |= static_cast<uint64_t>(b[2 + k]) << (8 * k);
+  int most = 0;
+  for (int p = 0; p < 16; ++p) most = std::max(most, value[(bits >> (3 * p)) & 7]);
+  return most;
+}
+
 // Is any point of the box within `radius` of `center`?
 bool SphereTouchesBox(Vec3 center, float radius, Vec3 lo, Vec3 hi) {
   float dx = std::max({lo.x - center.x, 0.0f, center.x - hi.x});
@@ -934,6 +1223,12 @@ gfx::Texture Terrain::GroundColours() {
 }
 
 gfx::Texture Terrain::GroundKinds() {
+  // [ground mud] (made again when the mask's mud comes or goes: it is mud)
+  const bool withMud = mudMask && MudMaskReady();
+  if (kinds_ && withMud != kindsMud_) {
+    device_->Destroy(kinds_);
+    kinds_ = {};
+  }
   if (kinds_ || !map_ || map_->width <= 0 || map_->height <= 0 || !maskLow_) return kinds_;
   if (!kindsPass_) {
     const std::string source = std::string(kViewShaderBlock) + kGroundKinds;
@@ -962,15 +1257,19 @@ gfx::Texture Terrain::GroundKinds() {
     std::copy(groundKind_[i], groundKind_[i] + 4, c.kindA[i]);
     std::copy(groundKind_[i] + 4, groundKind_[i] + 6, c.kindB[i]);
   }
+  c.params[3] = withMud ? 1.0f : 0.0f;  // [ground mud]
+  kindsMud_ = withMud;
   device_->SetPipeline(kindsPass_);
   device_->SetConstants(1, &c, sizeof c);
   device_->SetTexture(2, maskLow_);
   device_->SetTexture(3, maskHigh_);
+  if (withMud) device_->SetTexture(4, mudMask_);  // [ground mud]
   device_->SetStorage(0, kinds_);
   device_->Dispatch(static_cast<uint32_t>((td.width + 7) / 8), static_cast<uint32_t>((td.height + 7) / 8), 1);
   device_->SetStorage(0, {});
   device_->SetTexture(2, {});
   device_->SetTexture(3, {});
+  if (withMud) device_->SetTexture(4, {});  // [ground mud]
   return kinds_;
 }
 
@@ -1083,6 +1382,40 @@ void Terrain::Remaster(const MapData& m, std::vector<std::string>* arh) {
       mudMetres_ = static_cast<float>(material["real_size_m"].NumberOr(0));
     }
   }
+  // [ground mud] the map's painted mud: its mask's path (read the first time the mask's mud is drawn)
+  if (const std::string mask = layers["mud_mask"].StringOr(std::string()); !mask.empty()) mudMaskFile_ = folder + mask;
+  // [rain ground] the layers' wet twins: "weather": {"rain": {"materials": {dry: wet}, "soak": {dry: n}}}, by the material
+  // each layer is drawn in (a season's own, where it has one); a twin at the layers' tier only (the layers' third maps and
+  // the twins' albedo and third maps are read as one set: a twin of another size would bring the whole set down to it)
+  const JsonValue& rain = layers["weather"]["rain"];
+  if (rain["materials"].kind == JsonValue::Object) {
+    int twins = 0;
+    for (int i = 0; i < 9; ++i) {
+      const JsonValue& entry = layers[lower(m.albedo[i].texture)];
+      std::string name = entry["material"].StringOr(std::string());
+      if (const std::string own = seasonLook_.Material(name); !own.empty() && !remap["materials"][own]["dir"].StringOr(std::string()).empty()) name = own;
+      const std::string wet = rain["materials"][name].StringOr(std::string());
+      if (name.empty() || wet.empty() || albedoScale_[i] <= 0) continue;
+      const JsonValue& material = remap["materials"][wet];
+      const std::string dir = material["dir"].StringOr(std::string());
+      const std::string base = folder + dir + "/" + wet + "_";
+      bool hasTier = material["tiers"].kind != JsonValue::Array;  // (no list: taken as having it; a file missing is found when read)
+      for (const JsonValue& t : material["tiers"].items) hasTier = hasTier || t.StringOr(std::string()) == tier;
+      if (dir.empty() || !hasTier) {
+        fprintf(stderr, "render: the rain-wet ground: %s's wet twin %s has no %s set: left dry\n", name.c_str(), wet.c_str(), tier);
+        continue;
+      }
+      wetFiles_[i][0] = base + "albedo_" + tier + ".dds";
+      wetFiles_[i][1] = base + "normal_" + tier + ".dds";
+      wetFiles_[i][2] = base + "arh_" + tier + ".dds";
+      wetSoak_[i] = static_cast<float>(rain["soak"][name].NumberOr(1));
+      // (at its own real size beside the dry one's, where both are given; else at the dry one's repeat)
+      const double dryMetres = remap["materials"][name]["real_size_m"].NumberOr(0), wetMetres = material["real_size_m"].NumberOr(0);
+      wetScale_[i] = albedoScale_[i] * (dryMetres > 0 && wetMetres > 0 ? static_cast<float>(wetMetres / dryMetres) : 1.0f);
+      ++twins;
+    }
+    if (twins) printf("render: the rain-wet ground: %d of the map's layers have wet twins (%s)\n", twins, tier);
+  }
 }
 
 // [mud ruts] Deep tracks' mud for this map, once the layers' kinds are known: none unless a layer is mud by its kind; tiled
@@ -1090,6 +1423,7 @@ void Terrain::Remaster(const MapData& m, std::vector<std::string>* arh) {
 // real size; else the middle of all the remastered layers').
 void Terrain::FindMud() {
   mudSize_ = 0;
+  mudSizeAny_ = 0;  // [ground mud]
   mudTried_ = false;
   for (gfx::Texture& t : mud_) t = {};
   if (mudFiles_[0].empty() || mudMetres_ <= 0) return;
@@ -1103,9 +1437,11 @@ void Terrain::FindMud() {
     all.push_back(layerUnitsPerMetre_[i]);
     if (groundKind_[i][1] > 0) sum += layerUnitsPerMetre_[i], ++count;
   }
-  if (!any || all.empty()) return;
+  if (all.empty()) return;
   std::sort(all.begin(), all.end());
   const float perMetre = count ? sum / static_cast<float>(count) : all[all.size() / 2];
+  mudSizeAny_ = mudMetres_ * perMetre;  // [ground mud] (the mask's mud: also where no layer is mud by its kind)
+  if (!any) return;
   mudSize_ = mudMetres_ * perMetre;
   printf("render: deep tracks' mud in the ruts: %s, a repeat every %.2f world units (%.2f m)\n", mudFiles_[0].c_str(), mudSize_, mudMetres_);
 }
@@ -1157,6 +1493,13 @@ void Terrain::ReadCover(const MapData& m, const std::string& path) {
 
 bool Terrain::CoverDensity(gfx::Texture trees, gfx::Texture* a, gfx::Texture* b) {
   if (!hasCover_ || !map_ || !maskLow_) return false;
+  // [ground mud] (made again when the mask's mud comes or goes: nothing grows on it)
+  const bool withMud = mudMask && MudMaskReady();
+  if (coverA_tex_ && withMud != coverMud_) {
+    device_->Destroy(coverA_tex_);
+    device_->Destroy(coverB_tex_);
+    coverA_tex_ = coverB_tex_ = {};
+  }
   if (!coverA_tex_) {
     if (!coverPass_) {
       gfx::ComputeDesc cd;
@@ -1187,17 +1530,21 @@ bool Terrain::CoverDensity(gfx::Texture trees, gfx::Texture* a, gfx::Texture* b)
     std::copy(&coverB_[0][0], &coverB_[0][0] + 40, &c.coverB[0][0]);
     std::copy(coverNear_, coverNear_ + 4, c.nearTrees);
     c.nearFern[0] = coverFern_;
+    c.nearFern[1] = withMud ? 1.0f : 0.0f;  // [ground mud]
+    coverMud_ = withMud;
     device_->SetPipeline(coverPass_);
     device_->SetConstants(1, &c, sizeof c);
     device_->SetTexture(2, maskLow_);
     device_->SetTexture(3, maskHigh_);
     device_->SetTexture(4, trees ? trees : textures_->Black());
+    if (withMud) device_->SetTexture(5, mudMask_);  // [ground mud]
     device_->SetStorage(0, coverA_tex_);
     device_->SetStorage(1, coverB_tex_);
     device_->Dispatch(static_cast<uint32_t>((td.width + 7) / 8), static_cast<uint32_t>((td.height + 7) / 8), 1);
     device_->SetStorage(0, {});
     device_->SetStorage(1, {});
     for (int i = 2; i < 5; ++i) device_->SetTexture(i, {});
+    if (withMud) device_->SetTexture(5, {});  // [ground mud]
   }
   *a = coverA_tex_;
   *b = coverB_tex_;
@@ -1304,7 +1651,17 @@ bool Terrain::Load(const MapData* map, std::string* error) {
     mudMetres_ = 0;
     std::fill(layerUnitsPerMetre_, layerUnitsPerMetre_ + 10, 0.0f);
     mapDecalsGiven_.clear();
+    // [ground mud] [rain ground] (Remaster finds them again; their textures read again when first wanted)
+    mudMaskFile_.clear();
+    mudMask_ = {};
+    mudMaskTried_ = false;
+    for (auto& files : wetFiles_)
+      for (std::string& f : files) f.clear();
+    if (wetNormals_) device_->Destroy(wetNormals_);
+    wetNormals_ = {};
+    wetTried_ = wetAny_ = false;
     Remaster(*map, &paths);  // (the visuals track's remastered ground, where it lists this map)
+    arhPaths_ = paths;  // [rain ground]
     std::vector<bool> present;
     materials_ = textures_->Layers(paths, &present);
     for (size_t i = 0; i < 9; ++i) material_[i] = materials_ && present[i];
@@ -1394,6 +1751,7 @@ void Terrain::AddPatch(const View& view, int level, float x, float z, float size
     InWorld(x, z, x + size, z + size, lo, hi, &a, &b);
   }
   patches_.push_back({a.x, a.z, size / kPatchQuads, static_cast<float>(level)});
+  if (markMud_) patchMud_.push_back(MudNear(x, z, size) ? 1 : 0);  // [ground mud]
 }
 
 void Terrain::AddNode(const View& view, int level, int ix, int iz) {
@@ -1521,6 +1879,168 @@ bool Terrain::ParallaxPipeline() {
   return true;
 }
 
+// [mud ruts] [ground mud] The map's mud material's textures (albedo, normal, third map), read the first time either the
+// ruts or the mask's mud draw them. False: there is none, or it cannot be read.
+bool Terrain::MudReady() {
+  if (mudSizeAny_ <= 0) return false;
+  if (!mudTried_) {
+    mudTried_ = true;
+    for (int k = 0; k < 3; ++k) mud_[k] = textures_->Get(mudFiles_[k]);
+    // (a normal map whose mean leans far one way has its channels wrong: drawn flat, the mud's small shapes left out)
+    float mx = 0.5f, my = 0.5f;
+    if (auto file = textures_->ReadFile(mudFiles_[1]))
+      if (NormalMapMean(*file, &mx, &my) && (std::fabs(mx - 0.5f) > 0.2f || std::fabs(my - 0.5f) > 0.2f)) {
+        fprintf(stderr, "render: deep tracks' mud: %s leans %.2f, %.2f on the whole (a normal map's channels wrong?): drawn without it\n",
+                mudFiles_[1].c_str(), mx * 2 - 1, my * 2 - 1);
+        mud_[1] = textures_->FlatNormal();
+      }
+    if (!mud_[0] || !mud_[1] || !mud_[2]) fprintf(stderr, "render: deep tracks' mud cannot be read: the ruts are drawn without it\n");
+  }
+  return mud_[0] && mud_[1] && mud_[2];
+}
+
+// [ground mud] The mask's texture, read the first time it is wanted, and where on the map there is mud at all (mudBlocks_:
+// from the level of the mask's file whose blocks of 4 x 4 texels are at most 256 across, each block's largest value; a block
+// counts where it or one within two of it holds any). False: the map has none, or it cannot be read.
+bool Terrain::MudMaskReady() {
+  if (mudMaskFile_.empty()) return false;
+  if (!mudMaskTried_) {
+    mudMaskTried_ = true;
+    mudBlocks_.clear();
+    mudBlocksW_ = mudBlocksH_ = 0;
+    mudMask_ = textures_->Get(mudMaskFile_);
+    if (!mudMask_) {
+      fprintf(stderr, "render: the map's painted mud cannot be read (%s): drawn without it\n", mudMaskFile_.c_str());
+      return false;
+    }
+    DdsImage image;
+    std::string why;
+    auto file = textures_->ReadFile(mudMaskFile_);
+    if (map_ && file && ParseDds(*file, &image, &why) && image.format == gfx::Format::BC4) {
+      int w = image.width, h = image.height, level = 0;
+      size_t at = 0;
+      while (level + 1 < image.mips && (w + 3) / 4 > 256) {
+        at += static_cast<size_t>(std::max(1, (w + 3) / 4)) * static_cast<size_t>(std::max(1, (h + 3) / 4)) * 8;
+        w = std::max(w / 2, 1), h = std::max(h / 2, 1), ++level;
+      }
+      const int bw = std::max(1, (w + 3) / 4), bh = std::max(1, (h + 3) / 4);
+      if (at + static_cast<size_t>(bw) * static_cast<size_t>(bh) * 8 <= image.dataSize) {
+        std::vector<uint8_t> any(static_cast<size_t>(bw) * static_cast<size_t>(bh), 0);
+        for (int z = 0; z < bh; ++z)
+          for (int x = 0; x < bw; ++x)
+            if (Bc4BlockMost(image.data + at + (static_cast<size_t>(z) * static_cast<size_t>(bw) + static_cast<size_t>(x)) * 8) > 0)
+              for (int dz = -2; dz <= 2; ++dz)
+                for (int dx = -2; dx <= 2; ++dx) {
+                  const int cx = x + dx, cz = z + dz;
+                  if (cx >= 0 && cz >= 0 && cx < bw && cz < bh) any[static_cast<size_t>(cz) * static_cast<size_t>(bw) + static_cast<size_t>(cx)] = 1;
+                }
+        mudBlocksW_ = bw, mudBlocksH_ = bh;
+        mudBlock_ = static_cast<float>(map_->width) / static_cast<float>(bw);
+        mudBlocks_.assign(static_cast<size_t>(bw + 1) * static_cast<size_t>(bh + 1), 0);
+        int share = 0;
+        for (int z = 0; z < bh; ++z)
+          for (int x = 0; x < bw; ++x) {
+            const size_t row = static_cast<size_t>(bw + 1);
+            const int v = any[static_cast<size_t>(z) * static_cast<size_t>(bw) + static_cast<size_t>(x)];
+            share += v;
+            mudBlocks_[(static_cast<size_t>(z) + 1) * row + static_cast<size_t>(x) + 1] =
+                v + mudBlocks_[static_cast<size_t>(z) * row + static_cast<size_t>(x) + 1] + mudBlocks_[(static_cast<size_t>(z) + 1) * row + static_cast<size_t>(x)] -
+                mudBlocks_[static_cast<size_t>(z) * row + static_cast<size_t>(x)];
+          }
+        printf("render: the map's painted mud: %s (near %.1f %% of the map)\n", mudMaskFile_.c_str(), 100.0 * share / (static_cast<double>(bw) * bh));
+      }
+    }
+    if (mudBlocks_.empty()) printf("render: the map's painted mud: %s (where it lies not known: all the ground drawn with it)\n", mudMaskFile_.c_str());
+  }
+  return static_cast<bool>(mudMask_);
+}
+
+// [ground mud] May a patch of the map (x, z its corner, `size` its side, map units) hold the mask's mud? (true where it is
+// not known)
+bool Terrain::MudNear(float x, float z, float size) const {
+  if (mudBlocks_.empty()) return true;
+  auto block = [&](float v, int n) { return std::clamp(static_cast<int>(std::floor(v / mudBlock_)), 0, n - 1); };
+  const int x0 = block(x, mudBlocksW_), x1 = block(x + size, mudBlocksW_), z0 = block(z, mudBlocksH_), z1 = block(z + size, mudBlocksH_);
+  const size_t row = static_cast<size_t>(mudBlocksW_ + 1);
+  auto at = [&](int bx, int bz) { return mudBlocks_[static_cast<size_t>(bz) * row + static_cast<size_t>(bx)]; };
+  return at(x1 + 1, z1 + 1) - at(x0, z1 + 1) - at(x1 + 1, z0) + at(x0, z0) > 0;
+}
+
+// [rain ground] The wet twins' textures, read the first time they are wanted: their albedos and third maps laid in
+// materials_ after the layers' own third maps (made again with them: one register holds them all), their normals as the
+// layers of wetNormals_. A twin whose files are missing, or not of the layers' size and kind, is left out (its layer stays
+// dry). False: no twin is drawn.
+bool Terrain::WetReady() {
+  if (wetTried_) return wetAny_;
+  wetTried_ = true;
+  std::vector<std::string> paths = arhPaths_, normals;
+  int listed[9] = {};
+  for (int i = 0; i < 9; ++i) {
+    for (int k = 0; k < 3; ++k) wetSlice_[i][k] = -1;
+    if (wetFiles_[i][0].empty() || !material_[i]) continue;
+    listed[i] = static_cast<int>(paths.size());
+    paths.push_back(wetFiles_[i][0]);
+    paths.push_back(wetFiles_[i][2]);
+    normals.push_back(wetFiles_[i][1]);
+  }
+  if (normals.empty() || !materials_) return false;
+  std::vector<bool> present, normalPresent;
+  gfx::Texture set = textures_->Layers(paths, &present);
+  gfx::Texture wetNormals = textures_->Layers(normals, &normalPresent);
+  bool ownKept = static_cast<bool>(set);
+  for (size_t i = 0; i < 9 && ownKept; ++i) ownKept = present[i] == material_[i];
+  if (!ownKept || !wetNormals) {  // (the layers' own set not read as before: leave it as it is, no twins)
+    fprintf(stderr, "render: the rain-wet ground's twins cannot be read with the layers' own: the ground stays dry\n");
+    if (set) device_->Destroy(set);
+    if (wetNormals) device_->Destroy(wetNormals);
+    return false;
+  }
+  int n = 0, drawn = 0;
+  for (int i = 0; i < 9; ++i) {
+    if (!listed[i]) continue;
+    const size_t a = static_cast<size_t>(listed[i]);
+    if (present[a] && present[a + 1] && normalPresent[static_cast<size_t>(n)]) {
+      wetSlice_[i][0] = listed[i];
+      wetSlice_[i][1] = listed[i] + 1;
+      wetSlice_[i][2] = n;
+      ++drawn;
+    } else {
+      fprintf(stderr, "render: the rain-wet ground: layer %d's wet twin (%s) cannot be read, or is not of the layers' size and kind: left dry\n", i,
+              wetFiles_[i][0].c_str());
+    }
+    ++n;
+  }
+  device_->Destroy(materials_);
+  materials_ = set;
+  wetNormals_ = wetNormals;
+  wetAny_ = drawn > 0;
+  printf("render: the rain-wet ground: %d wet twins read\n", drawn);
+  return wetAny_;
+}
+
+// [ground mud] [rain ground] The ground's pipeline with the mask's mud (GROUND_MORE) and, `wet` 1, the wet twins too
+// (GROUND_WET); the relief close by in both, as in the parallax pipeline. Each made the first time it is asked for. False:
+// it cannot be made (the ground is drawn as without them).
+bool Terrain::MorePipeline(int wet) {
+  if (morePipeline_[wet] || moreTried_[wet]) return static_cast<bool>(morePipeline_[wet]);
+  moreTried_[wet] = true;
+  const std::string source = GroundSource(true, true, wet == 1);
+  gfx::PipelineDesc pd;
+  pd.name = wet ? "terrain, mud and wet" : "terrain, mud";
+  pd.vertexSource = pd.pixelSource = source;
+  pd.attrs = {{"POSITION", 0, gfx::AttrType::Float2, 0}};
+  pd.stride = 8;
+  pd.colorFormat = kSceneFormat;
+  pd.samples = gSceneSamples;
+  std::string error;
+  morePipeline_[wet] = device_->CreatePipeline(pd, &error);
+  if (!morePipeline_[wet]) {
+    fprintf(stderr, "render: the ground's %s cannot be drawn: %s\n", wet ? "mud and wet twins" : "mud", error.c_str());
+    return false;
+  }
+  return true;
+}
+
 void Terrain::Draw(const View& view, bool shadowPass) {
   if (!shadowPass) drawnPatches = drawnTriangles = 0;
   if (!map_ || levels_.empty()) return;
@@ -1531,6 +2051,12 @@ void Terrain::Draw(const View& view, bool shadowPass) {
   ranges_.resize(levels_.size());
   for (int k = 0; k <= top; ++k) ranges_[static_cast<size_t>(k)] = k == top ? std::numeric_limits<float>::max() : base * static_cast<float>(1 << k);
   patches_.clear();
+  patchMud_.clear();  // [ground mud]
+  // [ground mud] the mask's mud (the modern look; its textures read the first time): each patch marked as it is chosen,
+  // whether it may hold mud
+  const bool modern = view.constants.look > 0.5f;
+  const bool mudLaid = !shadowPass && modern && mudMask && MudMaskReady() && MudReady();
+  markMud_ = mudLaid;
   const Level& T = levels_[static_cast<size_t>(top)];
   // the map, and (not into shadow maps) the eight copies of it round it that the ground beyond
   // its edge is made of
@@ -1540,6 +2066,7 @@ void Terrain::Draw(const View& view, bool shadowPass) {
       for (int iz = 0; iz < T.nz; ++iz)
         for (int ix = 0; ix < T.nx; ++ix) Select(view, top, ix, iz);
   tileX_ = tileZ_ = 0;
+  markMud_ = false;
   if (patches_.empty()) return;
 
   const MapData& m = *map_;
@@ -1567,24 +2094,26 @@ void Terrain::Draw(const View& view, bool shadowPass) {
   }
   // [mud ruts] deep tracks' mud, while deep tracks are drawn: its textures read the first time
   bool mud = false;
-  if (!shadowPass && mudRuts && mudSize_ > 0 && tracksField.info[2] > 0.5f) {
-    if (!mudTried_) {
-      mudTried_ = true;
-      for (int k = 0; k < 3; ++k) mud_[k] = textures_->Get(mudFiles_[k]);
-      // (a normal map whose mean leans far one way has its channels wrong: drawn flat, the mud's small shapes left out)
-      float mx = 0.5f, my = 0.5f;
-      if (auto file = textures_->ReadFile(mudFiles_[1]))
-        if (NormalMapMean(*file, &mx, &my) && (std::fabs(mx - 0.5f) > 0.2f || std::fabs(my - 0.5f) > 0.2f)) {
-          fprintf(stderr, "render: deep tracks' mud: %s leans %.2f, %.2f on the whole (a normal map's channels wrong?): drawn without it\n",
-                  mudFiles_[1].c_str(), mx * 2 - 1, my * 2 - 1);
-          mud_[1] = textures_->FlatNormal();
-        }
-      if (!mud_[0] || !mud_[1] || !mud_[2]) fprintf(stderr, "render: deep tracks' mud cannot be read: the ruts are drawn without it\n");
-    }
-    mud = mud_[0] && mud_[1] && mud_[2];
-  }
+  if (!shadowPass && mudRuts && mudSize_ > 0 && tracksField.info[2] > 0.5f) mud = MudReady();
+  // [rain ground] the wet twins, in the modern look while the ground is wet (read the first time they are wanted, wet or
+  // not): all the ground by "terrain, mud and wet" (with the mask's mud, where there is any). [ground mud] The mask's mud
+  // alone: the patches that may hold it by "terrain, mud", the rest of the ground as without it (`split`).
+  const bool wetLaid = !shadowPass && modern && rainGround && richGround && WetReady() && view.constants.weather[0] > 0;
+  const int kind = wetLaid ? 1 : 0;
+  const bool more = (mudLaid || wetLaid) && MorePipeline(kind);
+  const bool split = more && !wetLaid && patchMud_.size() == patches_.size();
   c.mudInfo[0] = mud ? 1.0f : 0.0f;
-  c.mudInfo[1] = mud ? 1 / mudSize_ : 0.0f;
+  c.mudInfo[1] = mud ? 1 / mudSize_ : more && mudLaid ? 1 / mudSizeAny_ : 0.0f;
+  if (more) {
+    c.more[0] = mudLaid ? 1.0f : 0.0f;
+    c.more[1] = wetLaid ? 1.0f : 0.0f;
+    for (int i = 0; i < 10; ++i) {
+      const bool twin = wetLaid && i < 9 && wetSlice_[i][0] >= 0;
+      for (int k = 0; k < 3; ++k) c.wetInfo[i][k] = twin ? static_cast<float>(wetSlice_[i][k]) : -1.0f;
+      c.wetInfo[i][3] = twin ? wetSoak_[i] : 0.0f;
+      c.wetTile[i][0] = twin && wetScale_[i] > 0 ? 1 / wetScale_[i] : 0.0f;
+    }
+  }
 
   for (int k = 0; k <= top && k < 12; ++k) {
     if (k == top) {
@@ -1598,7 +2127,8 @@ void Terrain::Draw(const View& view, bool shadowPass) {
   }
 
   // [parallax] the ground's relief close by: by its own pipeline (made the first time), each remastered layer's depth
-  const bool relief = parallax && !shadowPass && materials_ && richGround && ParallaxPipeline();
+  // ([ground mud] [rain ground] or in the GROUND_MORE pipelines, which have it too)
+  const bool relief = parallax && !shadowPass && materials_ && richGround && ((more && !split) || ParallaxPipeline());
   if (relief) {
     for (int i = 0; i < 9; ++i) c.albedoTile[i][2] = material_[i] ? LayerDepth(i) : 0.0f;
     c.parallax[0] = 1;
@@ -1607,7 +2137,8 @@ void Terrain::Draw(const View& view, bool shadowPass) {
     c.parallax[3] = parallaxShadows;
   }
 
-  device_->SetPipeline(shadowPass ? shadowPipeline_ : relief ? parallaxPipeline_ : pipeline_);
+  const bool moreAll = more && !split;  // [ground mud] [rain ground] (all the ground by a GROUND_MORE pipeline)
+  device_->SetPipeline(shadowPass ? shadowPipeline_ : moreAll ? morePipeline_[kind] : relief ? parallaxPipeline_ : pipeline_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
   device_->SetConstants(1, &c, sizeof c);
   device_->SetTexture(0, heightTexture_);
@@ -1615,24 +2146,57 @@ void Terrain::Draw(const View& view, bool shadowPass) {
     device_->SetTexture(1, normalMap_);
     device_->SetTexture(2, maskLow_);
     device_->SetTexture(3, maskHigh_);
-    device_->SetTexture(4, waterMap_);
-    device_->SetTexture(5, waterRamp_);
+    if (moreAll) {  // [ground mud] [rain ground] (GROUND_MORE: the mask and the twins' normals where the water's map and ramp are)
+      device_->SetTexture(4, mudLaid ? mudMask_ : textures_->Black());
+      device_->SetTexture(5, wetNormals_ ? wetNormals_ : materials_ ? materials_ : textures_->Black());
+    } else {
+      device_->SetTexture(4, waterMap_);
+      device_->SetTexture(5, waterRamp_);
+    }
     for (int i = 0; i < 10; ++i) device_->SetTexture(6 + i, albedo_[i]);
     for (int i = 0; i < 9; ++i) device_->SetTexture(16 + i, normal_[i]);
     if (materials_) device_->SetTexture(25, materials_);
     device_->SetTexture(26, tracksMap ? tracksMap : textures_->Black());
-    if (mud)
-      for (int k = 0; k < 3; ++k) device_->SetTexture(kMudSlot + k, mud_[k]);  // [mud ruts]
+    if (mud || (more && mudLaid))
+      for (int k = 0; k < 3; ++k) device_->SetTexture(kMudSlot + k, mud_[k]);  // [mud ruts] ([ground mud] the mask's mud too)
   }
   device_->SetVertexBuffer(gridVertices_);
   device_->SetIndexBuffer(gridIndices_);
-  // the shader's array is always handed over whole, so the list is padded to full batches
   const size_t count = patches_.size();
-  patches_.resize((count + kMaxPatches - 1) / kMaxPatches * kMaxPatches, Patch{});
-  for (size_t at = 0; at < count; at += kMaxPatches) {
-    const uint32_t n = static_cast<uint32_t>(std::min<size_t>(kMaxPatches, count - at));
-    device_->SetConstants(2, patches_.data() + at, kMaxPatches * static_cast<uint32_t>(sizeof(Patch)));
-    device_->DrawIndexed(gridIndexCount_, 0, 0, n);
+  if (!split) {
+    // the shader's array is always handed over whole, so the list is padded to full batches
+    patches_.resize((count + kMaxPatches - 1) / kMaxPatches * kMaxPatches, Patch{});
+    for (size_t at = 0; at < count; at += kMaxPatches) {
+      const uint32_t n = static_cast<uint32_t>(std::min<size_t>(kMaxPatches, count - at));
+      device_->SetConstants(2, patches_.data() + at, kMaxPatches * static_cast<uint32_t>(sizeof(Patch)));
+      device_->DrawIndexed(gridIndexCount_, 0, 0, n);
+    }
+  } else {
+    // [ground mud] the patches far from the mud first, as without it; then those that may hold it, by the mud's pipeline
+    // (the list padded so that a batch handed over whole from any place in it stays within it)
+    std::vector<Patch> order;
+    order.reserve(count + kMaxPatches);
+    for (size_t i = 0; i < count; ++i)
+      if (!patchMud_[i]) order.push_back(patches_[i]);
+    const size_t far = order.size();
+    for (size_t i = 0; i < count; ++i)
+      if (patchMud_[i]) order.push_back(patches_[i]);
+    order.resize(count + kMaxPatches, Patch{});
+    patches_.swap(order);
+    auto draw = [&](size_t from, size_t to) {
+      for (size_t at = from; at < to; at += kMaxPatches) {
+        const uint32_t n = static_cast<uint32_t>(std::min<size_t>(kMaxPatches, to - at));
+        device_->SetConstants(2, patches_.data() + at, kMaxPatches * static_cast<uint32_t>(sizeof(Patch)));
+        device_->DrawIndexed(gridIndexCount_, 0, 0, n);
+      }
+    };
+    draw(0, far);
+    if (far < count) {
+      device_->SetPipeline(morePipeline_[0]);
+      device_->SetTexture(4, mudMask_);
+      device_->SetTexture(5, textures_->Black());
+      draw(far, count);
+    }
   }
   if (shadowPass) return;
   drawnPatches = static_cast<int>(count);

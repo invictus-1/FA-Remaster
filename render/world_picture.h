@@ -184,6 +184,8 @@ class WorldPicture {
   //   up to +0.1 ms with surf over a third of the screen.
   //   And a map's streams as real water (World::streamWater, stream_water.h): deeper in the middle, a soft wet shore,
   //   ripples and white water flowing downstream, the sky mirrored, rings in rain; about 0.05-0.13 ms at 1440p.
+  //   And the rain-wet ground (World::rainGround): where a map has wet twins of its ground's materials, the ground goes
+  //   over to them as it gets wet, the hollows first, and back as it dries; +0.13-0.16 ms while the ground is wet.
   void SetWeatherEffects(bool on);
   // Ground detail: grass near the camera, pressed flat round units and buildings (World::groundCover); about
   //   +0.05 to 0.2 ms when zoomed in, nothing from afar; and battle scars (World::battleScars): the scorches and
@@ -192,7 +194,8 @@ class WorldPicture {
   //   where units drive and walk, by the kind of ground it is; wildlife (World::wildlife): birds over the
   //   woods and shores that scatter from fighting, fireflies at dusk; and plants that react (World::plantsReact,
   //   [plants]): grass and bushes pressed over where units drive and springing back, burnt where blasts and fires
-  //   were and growing back, felled trees still, burnt ones bare.
+  //   were and growing back, felled trees still, burnt ones bare. And a map's painted mud (World::mudMask): its
+  //   banks muddy, glossy with puddles in rain, paler and cracked as they dry; up to +0.1 ms close by, only where mud is.
   void SetGroundDetail(bool on);
   // FSR 3 frame generation (World::frameGeneration): a picture made between each two frames and shown between
   // them, evenly apart, so twice the frames are shown, for a little more than half a frame's delay; the icons and

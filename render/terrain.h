@@ -53,6 +53,22 @@ class Terrain {
   // pipeline of its own (the same shader with GROUND_PARALLAX), made the first time; false: as before.
   bool parallax = false;
   float parallaxDepth = 1, parallaxReach = 20, parallaxShadows = 1;
+  // [ground mud] The map's painted mud (World::mudMask sets it each frame): where the map's entry in remap.json names a
+  // "mud_mask" (a greyscale picture over the whole map: 0 no mud .. 1 all mud), the map's mud material (the ruts' "mud")
+  // laid over the layers by the mask's weight, the ground's hollows first, so that a soft weight gives an uneven edge;
+  // wet, darker and glossy in rain with puddles gathering in it, paler and cracked as it dries. Deep tracks press into
+  // it as mud (GroundKinds counts it as mud), and the plants do not grow on it (CoverDensity). Modern look only; the
+  // patches of the ground that may hold mud (a coarse grid from the mask) drawn by a pipeline of its own (the same shader
+  // with GROUND_MORE, made the first time), the rest as without it. false, or no mask: as before.
+  bool mudMask = false;
+  // [rain ground] The rain-wet ground (World::rainGround sets it each frame): where the map's entry holds
+  // "weather": {"rain": {"materials": {"<dry material>": "<wet material>"}, "soak": {"<dry material>": n}}}, each layer
+  // drawn in a listed material goes over to its wet twin as the weather's wetness rises, its hollows first (by its third
+  // map's height), and back as it dries; "soak" says how readily (1: with the wetness; more: sooner). A pixel reads the
+  // dry or the wet set, both only on the thin edge between them; the weather's darkening and gloss lie over a twin as over
+  // all ground (the visuals session makes each twin the colour of its dry layer as drawn: it changes the make-up, slick
+  // mud, not the darkness). Modern look only, the GROUND_WET pipeline while the ground is wet.
+  bool rainGround = false;
   // Where the kinds of ground lie, over the whole map at half its size (RGBA8: sand, grass, snow, hard ground; the
   // rest dirt and mud), by the layers' kinds blended by their masks. Made the first time it is asked for once a map
   // is loaded (it dispatches: between passes).
@@ -185,6 +201,41 @@ class Terrain {
   bool parallaxTried_ = false;
   bool ParallaxPipeline();
   float LayerDepth(int i) const;
+  // [ground mud] [rain ground] the ground's pipelines with the mask's mud ([0], GROUND_MORE) and with the wet twins too ([1],
+  // GROUND_WET), the relief in both (MorePipeline: each made the first time); the mud material's textures read once for the
+  // ruts or the mask (MudReady); the mud's repeat whether or not a layer is mud by its kind (FindMud)
+  gfx::Pipeline morePipeline_[2];
+  bool moreTried_[2] = {};
+  bool MorePipeline(int wet);
+  bool MudReady();
+  float mudSizeAny_ = 0;
+  // [ground mud] the mask's file (remap.json's "mud_mask", Remaster), its texture (MudMaskReady: read the first time it is
+  // wanted); what GroundKinds' and CoverDensity's pictures were made with (made again when it changes)
+  std::string mudMaskFile_;
+  gfx::Texture mudMask_;
+  bool mudMaskTried_ = false, kindsMud_ = false, coverMud_ = false;
+  bool MudMaskReady();
+  // [ground mud] where on the map there is mud at all, coarsely (MudMaskReady, from a small level of the mask's file): blocks
+  // of `mudBlock_` world units, each 1 where its block or one within two of it has any mud, summed (an integral picture,
+  // (mudBlocksW_ + 1) x (mudBlocksH_ + 1)); and of each patch drawn (AddPatch, beside patches_) whether it may hold mud. Only
+  // those are drawn by the mud's pipeline: the rest of the ground as without it, paying nothing.
+  std::vector<int> mudBlocks_;
+  int mudBlocksW_ = 0, mudBlocksH_ = 0;
+  float mudBlock_ = 0;
+  std::vector<uint8_t> patchMud_;
+  bool markMud_ = false;  // (Draw: the patches are marked this time)
+  bool MudNear(float x, float z, float size) const;
+  // [rain ground] per layer: its wet twin's albedo, normal and third map's files (Remaster; empty: none), how readily it
+  // soaks, its repeat (world units); where they lie once read (WetReady, the first time it is wanted: the albedo's and
+  // third map's layers of materials_, made again with them after the layers' own third maps, the normal's of wetNormals_;
+  // -1 none); the layers' own third maps' paths (Load), for that
+  std::string wetFiles_[9][3];
+  float wetSoak_[9] = {}, wetScale_[9] = {};
+  int wetSlice_[9][3] = {};
+  gfx::Texture wetNormals_;
+  bool wetTried_ = false, wetAny_ = false;
+  std::vector<std::string> arhPaths_;
+  bool WetReady();
   // A remastered map's third map per layer (beside `<name>_albedo.dds` a `<name>_arh.dds`: red what
   // its creases let in of the sky's light, green how rough it is, blue how high it stands), all
   // nine as the layers of one texture; `material_[i]`: layer i has one.
