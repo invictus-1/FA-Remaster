@@ -2,12 +2,15 @@
 
 #include <algorithm>
 
+#include <atomic>
 #include <chrono>
 #include <cmath>
+#include <thread>
 
 #include "core/vfs.h"
 #include "ground.h"
 #include "gfx.h"
+#include "photo.h"
 #include "sim/terrain.h"
 #include "sim_frames.h"
 #include "window.h"
@@ -47,6 +50,7 @@ struct WorldPicture::Impl {
   int layerPitch = 0, dirtyX = 0, dirtyY = 0, dirtyW = 0, dirtyH = 0;
   bool vsync = true;
   bool vulkan = false;                 // SetVulkan
+  bool debug = false;                  // SetDebug
   std::vector<uint8_t>* checkCapture = nullptr;  // CaptureNextWindowFrame
   std::unique_ptr<World> world;
   SimFrames frames;
@@ -97,11 +101,56 @@ struct WorldPicture::Impl {
   Camera mapCamera;
   Mat4 mapMatrix{};
   std::vector<const StrategicIcons::Kind*> iconKinds;  // by FrameUnit::blueprint
+  // (photomode) the moment asked for (SetPhotoMoment), eased over a second from what was shown when it was asked
+  bool momentOn = false;
+  float momentHour = 12, momentStrength = 1;
+  int momentWeather = 1;
+  World::Moment momentFrom, momentTo;
+  double momentAt = 0;  // (steady seconds)
+  World::Moment MomentShown(bool settled) const;
+  // (photomode) the photo being made (StartPhoto): its plan, camera, moment and lens; the tile drawn now and its frame;
+  // what each tile drew; the photo put together on a thread; the window's picture when it began (DrawToWindow)
+  struct Photo {
+    bool on = false;              // its frames being drawn
+    bool assembling = false;      // being put together on `worker`
+    std::atomic<bool> ready{false};
+    bool done = false;            // put together, waiting to be taken
+    PhotoPlan plan;
+    Camera camera;
+    double tick = 0;
+    Lens lens;
+    int settle = 8, frame = 0;
+    size_t tile = 0;
+    std::vector<std::vector<uint8_t>> drawn;
+    std::vector<uint32_t> pixels;
+    std::thread worker;
+    bool held = false;
+    gfx::Texture heldPicture;
+    int heldWidth = 0, heldHeight = 0;
+    double began = 0, drawSeconds = 0, assembleSeconds = 0;  // (for a host's numbers: the viewer's --photo-test)
+    Frame gameFrame;              // (the moment of the game its first frame showed, kept for all its frames)
+    double shown = 0;
+    bool playing = false, frameKept = false;
+    uint64_t mostCardBytes = 0;
+  };
+  Photo photo;
+  bool photoFrame = false;      // (a photo's frame: drawn at its own size into the device's photo window, no resize)
+  bool depthIsWindow = false;   // (the scene's depth is the main picture's, as last drawn: FocusAt reads it)
+  std::unique_ptr<PhotoFocus> focus;
+  void LayInterface(int width, int height);  // (the host's interface over what is in the window, DrawToWindow)
+  ~Impl() {
+    if (photo.worker.joinable()) photo.worker.join();
+  }
 };
+
+static double SteadySeconds() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+static double photoBudget = 0;  // (photomode: SetPhotoBudget, for checks; 0: TakePhoto's rule)
+void WorldPicture::SetPhotoBudget(double bytes) { photoBudget = std::max(bytes, 0.0); }
 
 WorldPicture::WorldPicture() : impl_(std::make_unique<Impl>()) {}
 
 void WorldPicture::SetVulkan(bool on) { impl_->vulkan = on; }
+void WorldPicture::SetDebug(bool on) { impl_->debug = on; }
 WorldPicture::~WorldPicture() = default;
 
 bool WorldPicture::Open(const moho::Vfs* vfs, const std::string& mapPath, std::string* error) {
@@ -112,6 +161,7 @@ bool WorldPicture::Open(const moho::Vfs* vfs, const std::string& mapPath, std::s
   dd.width = 640;
   dd.height = 360;
   dd.vsync = false;
+  dd.debug = m.debug;
   if (m.HostShows()) {  // (the host's window: the picture is shown there, at its size)
     dd.window = m.hostWindow;
     dd.display = m.hostDisplay;
@@ -187,7 +237,12 @@ const std::vector<uint32_t>& WorldPicture::Draw(const Camera& camera, int width,
     m.pixels.assign(static_cast<size_t>(width) * static_cast<size_t>(height), 0xff000000u);
     return m.pixels;
   }
+  if (m.photo.on) {  // (photomode) a frame of the photo being made; the world held as last drawn
+    PhotoStep();
+    return m.pixels;
+  }
   RenderWorld(camera, width, height, tick);
+  m.depthIsWindow = true;
   const auto ending = std::chrono::steady_clock::now();
   m.device->EndFrame(&m.capture);
   TakeStats(std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - ending).count());
@@ -258,14 +313,47 @@ void WorldPicture::DrawToWindow(const Camera& camera, int width, int height, dou
   if (!m.device || !m.HostShows()) return;
   width = std::max(width, 16);
   height = std::max(height, 16);
+  if (m.world && m.photo.on) {  // (photomode) a frame of the photo being made, then the window as it was when it began
+    if (!m.photo.held) {
+      RenderWorld(camera, width, height, tick);
+      std::vector<uint8_t> shown;
+      m.device->EndFrame(&shown, false);
+      m.depthIsWindow = true;
+      gfx::TextureDesc td;
+      td.width = width;
+      td.height = height;
+      td.format = gfx::Format::RGBA8;
+      td.data = shown.data();
+      td.dataSize = shown.size();
+      if (shown.size() >= static_cast<size_t>(width) * static_cast<size_t>(height) * 4) m.photo.heldPicture = m.device->CreateTexture(td);
+      m.photo.heldWidth = width;
+      m.photo.heldHeight = height;
+      m.photo.held = true;
+    } else {
+      PhotoStep();
+    }
+    ShowHeld(width, height);
+    return;
+  }
   if (m.world) {
     RenderWorld(camera, width, height, tick);
+    m.depthIsWindow = true;
   } else {  // (the menu's: the interface alone, over black)
     if (m.device->Width() != width || m.device->Height() != height) m.device->Resize(width, height);
     const float black[4] = {0, 0, 0, 1};
     m.device->BeginFrame(black);
   }
-  // the interface over it: its texture made anew at a new size, and what has changed in it handed over
+  m.LayInterface(width, height);
+  const auto ending = std::chrono::steady_clock::now();
+  m.device->EndFrame(m.checkCapture, true);
+  m.checkCapture = nullptr;
+  if (m.world) TakeStats(std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - ending).count());
+}
+
+// The host's interface over what is in the window: its texture made anew at a new size, and what has changed in it
+// handed over (DrawToWindow).
+void WorldPicture::Impl::LayInterface(int width, int height) {
+  Impl& m = *this;
   if (m.layerPixels && m.layerWidth > 0 && m.layerHeight > 0) {
     if (!m.layer || m.layerMadeWidth != m.layerWidth || m.layerMadeHeight != m.layerHeight) {
       if (m.layer) m.device->Destroy(m.layer);
@@ -299,10 +387,6 @@ void WorldPicture::DrawToWindow(const Camera& camera, int width, int height, dou
     m.device->Draw(3);
   }
   m.layerPixels = nullptr;
-  const auto ending = std::chrono::steady_clock::now();
-  m.device->EndFrame(m.checkCapture, true);
-  m.checkCapture = nullptr;
-  if (m.world) TakeStats(std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - ending).count());
 }
 
 void WorldPicture::CaptureNextWindowFrame(std::vector<uint8_t>* out) { impl_->checkCapture = out; }
@@ -362,7 +446,8 @@ void WorldPicture::TakeStats(float endMs) {
 void WorldPicture::PrepareWorld(const Camera& camera, int width, int height, double tick) {
   Impl& m = *impl_;
   const auto t0 = std::chrono::steady_clock::now();
-  if (m.device->Width() != width || m.device->Height() != height) m.device->Resize(width, height);
+  // (photomode: a photo's frame is drawn at its own size into the device's photo window; the window keeps its size)
+  if (!m.photoFrame && (m.device->Width() != width || m.device->Height() != height)) m.device->Resize(width, height);
   if (m.armyColors.empty()) m.armyColors = m.frames.ArmyColors();
   m.world->focusArmy = m.focusArmy > 0 ? m.focusArmy - 1 : -1;
   m.world->alliedArmies = m.allies;
@@ -382,6 +467,8 @@ void WorldPicture::PrepareWorld(const Camera& camera, int width, int height, dou
     m.world->weatherAuto = false;
     m.dayOff = false;
   }
+  // (photomode) the picture's own moment, eased from what was shown when it was asked; settled for a photo
+  m.world->moment = m.MomentShown(m.photoFrame);
   {  // how the blueprints look, once the game has said
     std::vector<BlueprintLook> looks;
     m.frames.TakeLooks(&looks);
@@ -397,8 +484,21 @@ void WorldPicture::PrepareWorld(const Camera& camera, int width, int height, dou
   }
   // the moment shown lies between the last two beats known: one beat back from the newest
   const double first = static_cast<double>(m.frames.FirstTick()), last = static_cast<double>(m.frames.LastTick());
-  const double shown = std::clamp(tick - 1, first, last);
-  const bool playing = m.frames.FrameAt(shown, &m.frame);
+  double shown = std::clamp(tick - 1, first, last);
+  bool playing = false;
+  if (m.photoFrame && m.photo.frameKept) {  // (photomode: a photo's frames all show the moment its first showed, also
+    shown = m.photo.shown;                   // while the game goes on: the beats kept here are only half a second's)
+    m.frame = m.photo.gameFrame;
+    playing = m.photo.playing;
+  } else {
+    playing = m.frames.FrameAt(shown, &m.frame);
+    if (m.photoFrame) {
+      m.photo.gameFrame = m.frame;
+      m.photo.shown = shown;
+      m.photo.playing = playing;
+      m.photo.frameKept = true;
+    }
+  }
   m.lastTick = shown;
 
   const float clear[4] = {0.05f, 0.06f, 0.08f, 1}, black[4] = {0, 0, 0, 1};
@@ -669,6 +769,7 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height) {
     m.mapPixels.assign(static_cast<size_t>(width) * static_cast<size_t>(height), 0xff000000u);
     return m.mapPixels;
   }
+  if (m.photo.on && m.mapWidth == width && m.mapHeight == height) return m.mapPixels;  // (photomode: as last drawn while a photo's frames are)
   World& w = *m.world;
   // the ground is drawn anew when the light has changed: the hour by a quarter, or the weather
   const float hourNow = w.timeOfDay < 0 ? -1 : w.timeOfDay;
@@ -715,6 +816,7 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height) {
     w.Begin(c, width, height, 0, m.lastTick * 0.1);
     w.Render();
     m.device->EndFrame(&m.capture, !m.HostShows());  // (in the host's window: read back, not shown)
+    m.depthIsWindow = false;
     w.iconsOn = icons;
     w.shadowsOn = shadows;
     w.sidePicture = false;
@@ -913,6 +1015,7 @@ bool WorldPicture::TakePhoto(const Camera& camera, int width, int height, double
     m.device->EndFrame(i == settle ? &m.capture : nullptr, false);
   }
   w.photo = false;
+  m.depthIsWindow = false;
   w.selectionMarks = selectionMarks;
   w.lifeBars = lifeBars;
   w.workBars = workBars;
@@ -936,6 +1039,346 @@ bool WorldPicture::TakePhoto(const Camera& camera, int width, int height, double
   if (madeWidth) *madeWidth = width;
   if (madeHeight) *madeHeight = height;
   return true;
+}
+
+// --- (photomode) the photo mode ---
+
+// The moment shown now: from what was shown when it was asked to what was asked, over a second (smoothly in and out);
+// the hour the short way round the clock. `settled`: what was asked (a photo's frames).
+World::Moment WorldPicture::Impl::MomentShown(bool settled) const {
+  World::Moment m;
+  if (!momentOn) return m;
+  float t = settled ? 1.0f : static_cast<float>(std::clamp((SteadySeconds() - momentAt) / 1.0, 0.0, 1.0));
+  t = t * t * (3 - 2 * t);
+  const World::Moment& a = momentFrom;
+  const World::Moment& b = momentTo;
+  auto mix = [t](float x, float y) { return x + (y - x) * t; };
+  float to = b.hour;
+  if (to - a.hour > 12) to -= 24;
+  if (to - a.hour < -12) to += 24;
+  m.on = true;
+  m.hour = std::fmod(mix(a.hour, to) + 24.0f, 24.0f);
+  m.clouds = mix(a.clouds, b.clouds);
+  m.rain = mix(a.rain, b.rain);
+  m.snow = mix(a.snow, b.snow);
+  m.fog = mix(a.fog, b.fog);
+  m.wet = mix(a.wet, b.wet);
+  m.snowLying = mix(a.snowLying, b.snowLying);
+  return m;
+}
+
+void WorldPicture::SetPhotoMoment(float hour, int weather, float strength) {
+  Impl& m = *impl_;
+  // what is asked: the kind's clouds, its rain, snow and fog at that strength, the ground wet or snowed on to match
+  hour = std::fmod(std::clamp(hour, 0.0f, 24.0f), 24.0f);
+  weather = std::clamp(weather, 0, WeatherKindCount() - 1);
+  strength = std::clamp(strength, 0.0f, 1.0f);
+  const WeatherNow kind = WeatherKindOf(weather);
+  World::Moment to;
+  to.on = true;
+  to.hour = hour;
+  to.clouds = kind.clouds;
+  to.rain = kind.rain * strength;
+  to.snow = kind.snow * strength;
+  to.fog = kind.fog * strength;
+  to.wet = std::min(1.0f, to.rain * 2);
+  to.snowLying = std::min(1.0f, to.snow * 1.25f);
+  // eased from what is shown now: the moment on its way, or the game's own as last drawn (with the map's own fixed
+  // light there is no hour to come from: the hour is there at once)
+  World::Moment from = m.MomentShown(false);
+  if (!m.momentOn) {
+    from = to;
+    if (const World* w = m.world.get()) {
+      if (w->timeOfDay >= 0) from.hour = w->timeOfDay;
+      from.clouds = w->timeOfDay >= 0 ? w->cloudCover : to.clouds;
+      from.rain = w->rain;
+      from.snow = w->snow;
+      from.fog = w->fog;
+      from.wet = w->wet;
+      from.snowLying = w->snowLying;
+    }
+  }
+  m.momentFrom = from;
+  m.momentTo = to;
+  m.momentAt = SteadySeconds();
+  m.momentOn = true;
+  m.momentHour = hour;
+  m.momentWeather = weather;
+  m.momentStrength = strength;
+}
+
+void WorldPicture::ClearPhotoMoment() {
+  impl_->momentOn = false;
+  if (impl_->world) impl_->world->moment.on = false;
+}
+
+void WorldPicture::GetPhotoMoment(float* hour, int* weather, float* strength) const {
+  const Impl& m = *impl_;
+  if (m.momentOn) {
+    *hour = m.momentHour;
+    *weather = m.momentWeather;
+    *strength = m.momentStrength;
+    return;
+  }
+  // the game's own: its hour, and the kind of weather nearest to what it is (each kind's rain, snow and fog at the
+  // strength that comes nearest)
+  const World* w = m.world.get();
+  const bool day = w && w->timeOfDay >= 0;
+  *hour = day ? w->timeOfDay : -1;
+  const float clouds = day ? w->cloudCover : 0.3f, rain = day ? w->rain : 0, snow = day ? w->snow : 0, fog = day ? w->fog : 0;
+  float best = 1e30f;
+  *weather = 1;
+  *strength = 1;
+  for (int k = 0; k < WeatherKindCount(); ++k) {
+    const WeatherNow kind = WeatherKindOf(k);
+    const float along = kind.rain * kind.rain + kind.snow * kind.snow + kind.fog * kind.fog;
+    const float s = along > 0 ? std::clamp((kind.rain * rain + kind.snow * snow + kind.fog * fog) / along, 0.0f, 1.0f) : 1.0f;
+    const float dc = kind.clouds - clouds, dr = kind.rain * s - rain, ds = kind.snow * s - snow, df = kind.fog * s - fog;
+    const float off = dc * dc + dr * dr + ds * ds + df * df;
+    if (off < best) {
+      best = off;
+      *weather = k;
+      *strength = s;
+    }
+  }
+}
+
+WorldPicture::WeatherNames WorldPicture::WeatherKinds() {
+  WeatherNames names;
+  for (int k = 0; k < WeatherKindCount(); ++k) names.emplace_back(WeatherKindName(k));
+  return names;
+}
+
+float WorldPicture::FocusAt(float x, float y) {
+  Impl& m = *impl_;
+  if (!m.world || !m.device || m.photo.on || !m.depthIsWindow) return 0;
+  if (m.prepared) {  // (a frame LifeBarAnchors began for the next Draw: ended unseen; that Draw prepares its own)
+    m.device->EndFrame(nullptr, false);
+    m.prepared = false;
+  }
+  if (!m.focus) m.focus = std::make_unique<PhotoFocus>(m.device.get());
+  const World& w = *m.world;
+  // (the window's pixel in the scene's depth, which FSR draws smaller)
+  const float sx = static_cast<float>(w.view.width) / static_cast<float>(std::max(w.ScreenWidth(), 1));
+  const float sy = static_cast<float>(w.view.height) / static_cast<float>(std::max(w.ScreenHeight(), 1));
+  const float water = w.HaveMap() && w.map.water.present ? w.map.water.elevation : -1e9f;
+  return m.focus->Read(w.post.Depth(), w.view.width, w.view.height, x * sx, y * sy, false, w.camera, water);
+}
+
+bool WorldPicture::StartPhoto(const Camera& camera, int width, int height, double tick, int supersample) {
+  Impl& m = *impl_;
+  Impl::Photo& p = m.photo;
+  if (p.assembling && p.ready) {  // (one put together and never asked for)
+    p.worker.join();
+    p.assembling = false;
+    p.done = true;
+  }
+  if (!m.world || !m.device || p.on || p.assembling) return false;
+  if (p.done) {  // (one made and never taken: let go of)
+    p.done = false;
+    p.pixels.clear();
+  }
+  if (m.prepared) {  // (a frame LifeBarAnchors began for the next Draw: ended unseen)
+    m.device->EndFrame(nullptr, false);
+    m.prepared = false;
+  }
+  // the plan: one picture where it fits the card's memory (TakePhoto's rule), else tiles
+  const double budget = photoBudget > 0 ? photoBudget : 2.5e9, perPixel = 48.0 + 12.0 * static_cast<double>(gSceneSamples);
+  p.lens = m.lens;
+  p.plan = PlanPhoto(camera, width, height, supersample, budget, perPixel, 64);
+  if (p.plan.Tiled() && p.lens.on && p.lens.strength > 0.001f) {
+    // the lens's blur misses what lies past a tile's edge: a guard band as wide as its widest blur; and every tile
+    // focused where the photo is (the lens's own measure at the middle of the picture last drawn, as the window had it)
+    const int guard = std::max(64, static_cast<int>(std::ceil(p.lens.largestBlur * static_cast<float>(p.plan.drawnHeight) * 1.1f)) + 16);
+    p.plan = PlanPhoto(camera, width, height, supersample, budget, perPixel, guard);
+    if (p.lens.focus <= 0) {
+      float focus = 0;
+      if (m.depthIsWindow) {
+        if (!m.focus) m.focus = std::make_unique<PhotoFocus>(m.device.get());
+        const World& w = *m.world;
+        focus = m.focus->Read(w.post.Depth(), w.view.width, w.view.height, 0, 0, true, w.camera,
+                              w.HaveMap() && w.map.water.present ? w.map.water.elevation : -1e9f);
+      }
+      p.lens.focus = std::clamp(focus > 0 ? focus : 20000.0f, 0.3f, 20000.0f);
+    }
+  }
+  p.camera = camera;
+  p.tick = tick;
+  p.settle = 8;
+  p.frame = 0;
+  p.tile = 0;
+  p.drawn.assign(p.plan.tiles.size(), {});
+  p.held = false;
+  p.frameKept = false;
+  p.ready = false;
+  p.began = SteadySeconds();
+  p.drawSeconds = p.assembleSeconds = 0;
+  p.mostCardBytes = m.device->MemoryInUse();
+  p.on = true;
+  return true;
+}
+
+// One frame of the photo being made: its tile drawn at its size into the device's photo window (the window keeps its
+// own), with nothing of the interface; the last of a tile's frames read back; after the last tile, put together on a
+// thread of its own.
+void WorldPicture::PhotoStep() {
+  Impl& m = *impl_;
+  Impl::Photo& p = m.photo;
+  if (!p.on || !m.world || p.tile >= p.plan.tiles.size()) return;
+  if (m.prepared) {  // (a frame LifeBarAnchors began: ended unseen)
+    m.device->EndFrame(nullptr, false);
+    m.prepared = false;
+  }
+  const PhotoTile& t = p.plan.tiles[p.tile];
+  if (!m.device->SetPhotoWindow(p.plan.tileWidth, p.plan.tileHeight)) {
+    fprintf(stderr, "render: a photo of %dx%d could not be drawn (no picture of %dx%d could be made)\n", p.plan.width, p.plan.height, p.plan.tileWidth,
+            p.plan.tileHeight);
+    p.on = false;
+    p.done = true;  // (handed over empty: TakeDonePhoto says false)
+    p.pixels.clear();
+    p.drawn.clear();
+    if (p.heldPicture) m.device->Destroy(p.heldPicture);
+    p.heldPicture = {};
+    p.held = false;
+    return;
+  }
+  // nothing of the interface in it (put back after, as TakePhoto does)
+  World& w = *m.world;
+  std::vector<World::Ghost> ghosts;
+  std::vector<World::Line> lines;
+  std::vector<World::Ring> rings;
+  std::vector<World::UserDecal> decals;
+  std::vector<render::RangeGroup> ranges;
+  std::vector<PlacedMesh> placed;
+  std::vector<render::OrderLeg> legs;
+  std::vector<render::OrderMark> marks;
+  auto swapAll = [&] {
+    ghosts.swap(w.ghosts);
+    lines.swap(w.lines);
+    rings.swap(w.rings);
+    decals.swap(w.userDecals);
+    ranges.swap(w.ranges.groups);
+    placed.swap(w.placed);
+    legs.swap(w.orders.legs);
+    marks.swap(w.orders.marks);
+  };
+  swapAll();
+  const bool selectionMarks = w.selectionMarks, lifeBars = w.lifeBars, workBars = w.workBars;
+  w.selectionMarks = w.lifeBars = w.workBars = false;
+  const World::Picking picking = w.KeepPicking();
+  // the lens: a tile's aperture as wide as the photo's own (its blur then as large in the photo), its widest blur as
+  // the photo's, its focus the photo's
+  const Lens kept = m.lens;
+  Lens lens = p.lens;
+  if (p.plan.Tiled() && lens.on) {
+    lens.fNumber = lens.fNumber * t.focalShare;
+    lens.largestBlur = lens.largestBlur * static_cast<float>(p.plan.drawnHeight) * t.focalShare / static_cast<float>(p.plan.tileHeight);
+  }
+  m.lens = lens;
+  w.photo = true;
+  w.photoTiled = p.plan.Tiled();
+  w.photoWhole = p.camera;
+  m.photoFrame = true;
+  RenderWorld(t.camera, p.plan.tileWidth, p.plan.tileHeight, p.tick);
+  const bool last = p.frame >= p.settle;
+  m.device->EndFrame(last ? &p.drawn[p.tile] : nullptr, false);
+  m.photoFrame = false;
+  w.photo = false;
+  w.photoTiled = false;
+  m.lens = kept;
+  w.lens = kept;
+  w.selectionMarks = selectionMarks;
+  w.lifeBars = lifeBars;
+  w.workBars = workBars;
+  swapAll();
+  w.RestorePicking(picking);
+  m.depthIsWindow = false;
+  m.device->SetPhotoWindow(0, 0);
+  p.mostCardBytes = std::max<uint64_t>(p.mostCardBytes, m.device->MemoryInUse());
+  if (!last) {
+    ++p.frame;
+    return;
+  }
+  p.frame = 0;
+  if (++p.tile < p.plan.tiles.size()) return;
+  // all drawn: the device's photo window let go of, the window's held picture too, and the photo put together on a
+  // thread of its own (the window drawn as ever meanwhile)
+  m.device->SetPhotoWindow(-1, -1);
+  if (p.heldPicture) m.device->Destroy(p.heldPicture);
+  p.heldPicture = {};
+  p.held = false;
+  p.on = false;
+  p.assembling = true;
+  p.drawSeconds = SteadySeconds() - p.began;
+  p.worker = std::thread([&p] {
+    const double from = SteadySeconds();
+    if (p.plan.Tiled()) {
+      AssemblePhoto(p.plan, p.drawn, &p.pixels, static_cast<int>(std::max(2u, std::thread::hardware_concurrency()) - 1));
+    } else if (!p.drawn.empty()) {
+      ShrinkPhoto(p.drawn[0], p.plan.drawnWidth, p.plan.by, p.plan.width, p.plan.height, &p.pixels);
+    }
+    p.drawn.clear();
+    p.drawn.shrink_to_fit();
+    p.assembleSeconds = SteadySeconds() - from;
+    p.ready = true;
+  });
+}
+
+// The window while a photo's frames are drawn: the picture it showed when the photo began, the interface over it.
+void WorldPicture::ShowHeld(int width, int height) {
+  Impl& m = *impl_;
+  if (m.device->Width() != width || m.device->Height() != height) m.device->Resize(width, height);
+  const float black[4] = {0, 0, 0, 1};
+  m.device->BeginFrame(black);
+  if (m.photo.heldPicture && m.photo.heldWidth == width && m.photo.heldHeight == height && m.layerPipeline) {
+    m.device->SetPipeline(m.layerPipeline);  // (its pixels as they are: opaque, so over black)
+    m.device->SetTexture(0, m.photo.heldPicture);
+    m.device->Draw(3);
+    m.device->SetTexture(0, {});
+  }
+  m.LayInterface(width, height);
+  m.device->EndFrame(m.checkCapture, true);
+  m.checkCapture = nullptr;
+}
+
+float WorldPicture::PhotoProgress() const {
+  const Impl::Photo& p = impl_->photo;
+  if (p.done) return 1;
+  if (p.assembling) return p.ready ? 1.0f : 0.97f;
+  if (!p.on || p.plan.tiles.empty()) return 0;
+  const double frames = static_cast<double>(p.plan.tiles.size()) * (p.settle + 1);
+  return static_cast<float>(0.95 * (static_cast<double>(p.tile) * (p.settle + 1) + p.frame) / frames);
+}
+
+WorldPicture::PhotoNumbers WorldPicture::LastPhotoNumbers() const {
+  const Impl::Photo& p = impl_->photo;
+  PhotoNumbers n;
+  n.drawSeconds = p.drawSeconds;
+  n.assembleSeconds = p.assembleSeconds;
+  n.mostCardBytes = p.mostCardBytes;
+  n.columns = p.plan.columns;
+  n.rows = p.plan.rows;
+  n.tileWidth = p.plan.tileWidth;
+  n.tileHeight = p.plan.tileHeight;
+  n.by = p.plan.by;
+  n.frames = static_cast<int>(p.plan.tiles.size()) * (p.settle + 1);
+  return n;
+}
+
+bool WorldPicture::TakeDonePhoto(std::vector<uint32_t>* pixels, int* width, int* height) {
+  Impl::Photo& p = impl_->photo;
+  if (p.assembling && p.ready) {
+    p.worker.join();
+    p.assembling = false;
+    p.done = true;
+  }
+  if (!p.done) return false;
+  p.done = false;
+  *pixels = std::move(p.pixels);
+  p.pixels.clear();
+  if (width) *width = p.plan.width;
+  if (height) *height = p.plan.height;
+  return !pixels->empty();
 }
 
 }  // namespace render

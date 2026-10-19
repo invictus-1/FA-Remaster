@@ -318,8 +318,16 @@ class D3D12Device final : public Device {
   bool FrameGenerating() const override { return generating_; }
   Texture WindowPicture() override { return generating_ ? windowPictures_[cur_] : Texture{}; }
   Texture BetweenPicture() override { return generating_ ? betweenPictures_[cur_] : Texture{}; }
+  bool SetPhotoWindow(int width, int height) override;
 
  private:
+  // (photomode) SetPhotoWindow: the picture and the depth a frame draws its window into while it is on, their size;
+  // binding them as the window's pass (BeginFrame, BeginPass)
+  Texture photoColor_, photoDepth_;
+  int photoWidth_ = 0, photoHeight_ = 0;
+  bool photoOn_ = false;
+  bool PhotoNow() { return photoOn_ && Find(photoColor_) && Find(photoDepth_); }
+  void BindPhotoWindow(bool clearColor, const float clearValue[4], bool clearDepth);
   // frame generation (gfx.h): the swap chain made on `queue`; each frame slot's window picture and the one made
   // between; the thread that shows them (Presenter), its start, its end (after what was handed to it), waiting
   // until it has shown all it was handed and the card has copied it; waiting until a slot's pictures are copied
@@ -1922,9 +1930,27 @@ void D3D12Device::BeginFrame(const float clearColor[4]) {
   f.allocator->Reset();
   list_->Reset(f.allocator.Get(), nullptr);
 
-  D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtvStart_;
-  TextureRec* window = generating_ ? Find(windowPictures_[cur_]) : nullptr;
-  if (window) {  // frame generation: the slot's window picture drawn into (its pictures back from the presenter)
+  D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtvStart_, dsv = dsvStart_;
+  int viewWidth = width_, viewHeight = height_;
+  const bool photo = PhotoNow();
+  TextureRec* window = generating_ && !photo ? Find(windowPictures_[cur_]) : nullptr;
+  if (photo) {  // (photomode) a photo's frame: the picture of SetPhotoWindow is its window, with a depth of its own
+    TextureRec* color = Find(photoColor_);
+    TextureRec* depth = Find(photoDepth_);
+    D3D12_RESOURCE_BARRIER b[2];
+    UINT n = 0;
+    for (TextureRec* t : {color, depth}) {
+      if (t->writable) continue;
+      b[n++] = Transition(t->resource.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                          t->depth ? D3D12_RESOURCE_STATE_DEPTH_WRITE : D3D12_RESOURCE_STATE_RENDER_TARGET);
+      t->writable = true;
+    }
+    if (n) list_->ResourceBarrier(n, b);
+    rtv = RtvHandle(color->view);
+    dsv = DsvHandle(depth->view);
+    viewWidth = photoWidth_;
+    viewHeight = photoHeight_;
+  } else if (window) {  // frame generation: the slot's window picture drawn into (its pictures back from the presenter)
     const D3D12_RESOURCE_STATES readable = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     D3D12_RESOURCE_BARRIER b[2];
     UINT n = 0;
@@ -1942,9 +1968,9 @@ void D3D12Device::BeginFrame(const float clearColor[4]) {
     rtv.ptr += static_cast<SIZE_T>(cur_) * rtvStep_;
   }
   list_->ClearRenderTargetView(rtv, clearColor, 0, nullptr);
-  list_->ClearDepthStencilView(dsvStart_, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);
-  list_->OMSetRenderTargets(1, &rtv, FALSE, &dsvStart_);
-  SetViewport(width_, height_);
+  list_->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);
+  list_->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
+  SetViewport(viewWidth, viewHeight);
   list_->SetGraphicsRootSignature(rootSignature_.Get());
   ID3D12DescriptorHeap* heaps[] = {ringHeap_.Get()};
   list_->SetDescriptorHeaps(1, heaps);
@@ -1952,6 +1978,10 @@ void D3D12Device::BeginFrame(const float clearColor[4]) {
   texturesDirty_ = true;
   passColor_ = passDepth_ = 0;
   if (window) passColor_ = windowPictures_[cur_].id;  // (readable again once the pass ends, as a target's)
+  if (photo) {  // (the same for the photo's picture and depth)
+    passColor_ = photoColor_.id;
+    passDepth_ = photoDepth_.id;
+  }
   boundStorage_ = {};
   std::fill(std::begin(constantsAt_), std::end(constantsAt_), D3D12_GPU_VIRTUAL_ADDRESS{0});
   buffersAt_[0] = buffersAt_[1] = 0;
@@ -1963,6 +1993,66 @@ void D3D12Device::SetViewport(int width, int height) {
   D3D12_RECT scissor = {0, 0, width, height};
   list_->RSSetViewports(1, &vp);
   list_->RSSetScissorRects(1, &scissor);
+}
+
+// (photomode) The picture a photo's frames draw their window into, and its depth (gfx.h).
+bool D3D12Device::SetPhotoWindow(int width, int height) {
+  if (inFrame_) return false;  // (between frames only)
+  if (width < 0 || height < 0) {  // let go of
+    photoOn_ = false;
+    if (photoColor_) Destroy(photoColor_);
+    if (photoDepth_) Destroy(photoDepth_);
+    photoColor_ = photoDepth_ = {};
+    photoWidth_ = photoHeight_ = 0;
+    return true;
+  }
+  photoOn_ = false;
+  if (width == 0 || height == 0) return true;  // (the window again; the picture kept)
+  if (width > 16384 || height > 16384) return false;
+  if (!Find(photoColor_) || !Find(photoDepth_) || width != photoWidth_ || height != photoHeight_) {
+    if (photoColor_) Destroy(photoColor_);
+    if (photoDepth_) Destroy(photoDepth_);
+    TargetDesc td;
+    td.width = width;
+    td.height = height;
+    td.format = Format::RGBA8;
+    photoColor_ = CreateTarget(td);
+    td.format = Format::D32;  // (cleared to 0: depth is reversed)
+    photoDepth_ = CreateTarget(td);
+    photoWidth_ = width;
+    photoHeight_ = height;
+    if (!photoColor_ || !photoDepth_) {
+      SetPhotoWindow(-1, -1);
+      return false;
+    }
+  }
+  photoOn_ = true;
+  return true;
+}
+
+void D3D12Device::BindPhotoWindow(bool clearColor, const float clearValue[4], bool clearDepth) {
+  TextureRec* color = Find(photoColor_);
+  TextureRec* depth = Find(photoDepth_);
+  if (passColor_ != photoColor_.id || passDepth_ != photoDepth_.id) ReleasePassTargets();
+  for (uint32_t& bound : boundTextures_.t)  // (a target is not read while it is drawn into)
+    if (bound && (bound == photoColor_.id || bound == photoDepth_.id)) {
+      bound = 0;
+      texturesDirty_ = true;
+    }
+  for (TextureRec* t : {color, depth}) {
+    if (t->writable) continue;
+    D3D12_RESOURCE_BARRIER b = Transition(t->resource.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                          t->depth ? D3D12_RESOURCE_STATE_DEPTH_WRITE : D3D12_RESOURCE_STATE_RENDER_TARGET);
+    list_->ResourceBarrier(1, &b);
+    t->writable = true;
+  }
+  passColor_ = photoColor_.id;
+  passDepth_ = photoDepth_.id;
+  const D3D12_CPU_DESCRIPTOR_HANDLE rtv = RtvHandle(color->view), dsv = DsvHandle(depth->view);
+  list_->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
+  if (clearColor) list_->ClearRenderTargetView(rtv, clearValue, 0, nullptr);
+  if (clearDepth) list_->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);
+  SetViewport(photoWidth_, photoHeight_);
 }
 
 // The targets of the pass that ends become readable as textures again.
@@ -2015,6 +2105,10 @@ void D3D12Device::Resolve(Texture from, Texture to) {
 void D3D12Device::BeginPass(const PassDesc& pass) {
   if (!inFrame_) return;
   ReleaseUnordered();  // (what dispatches wrote, readable by the pass's draws)
+  if (pass.window && PhotoNow()) {  // (photomode) a photo's frame: its picture and depth in place of the window's
+    BindPhotoWindow(pass.clearColor, pass.clearValue, pass.clearDepth);
+    return;
+  }
   if (pass.window) {
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = RtvHandle(static_cast<uint32_t>(cur_));
     TextureRec* window = generating_ ? Find(windowPictures_[cur_]) : nullptr;
@@ -2508,8 +2602,10 @@ void D3D12Device::EndFrame(std::vector<uint8_t>* capture, bool present) {
   // frame generation: the picture between this frame and the one before made (it may dispatch and draw); what is
   // read back is the window's picture (or that one), which is readable now
   const D3D12_RESOURCE_STATES readable = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-  TextureRec* window = generating_ ? Find(windowPictures_[cur_]) : nullptr;
-  TextureRec* between = generating_ ? Find(betweenPictures_[cur_]) : nullptr;
+  // (photomode: a photo's frame, drawn into the picture of SetPhotoWindow, makes no picture between and is never shown)
+  TextureRec* photo = PhotoNow() ? Find(photoColor_) : nullptr;
+  TextureRec* window = generating_ && !photo ? Find(windowPictures_[cur_]) : nullptr;
+  TextureRec* between = generating_ && !photo ? Find(betweenPictures_[cur_]) : nullptr;
   const bool made = window && between && makeBetween_ && makeBetween_();
   if (window) {
     ReleasePassTargets();
@@ -2518,7 +2614,8 @@ void D3D12Device::EndFrame(std::vector<uint8_t>* capture, bool present) {
     window = Find(windowPictures_[cur_]);
     between = Find(betweenPictures_[cur_]);
   }
-  ID3D12Resource* shown = window ? (captureBetween && made ? between : window)->resource.Get() : f.backBuffer.Get();
+  ID3D12Resource* shown = photo ? photo->resource.Get() : window ? (captureBetween && made ? between : window)->resource.Get() : f.backBuffer.Get();
+  const int shownWidth = photo ? photoWidth_ : width_, shownHeight = photo ? photoHeight_ : height_;
   D3D12_PLACED_SUBRESOURCE_FOOTPRINT layout = {};
   if (capture) {
     D3D12_RESOURCE_DESC bd = shown->GetDesc();
@@ -2534,7 +2631,21 @@ void D3D12Device::EndFrame(std::vector<uint8_t>* capture, bool present) {
       if (FAILED(hr)) Complain("creating the read-back buffer", hr);
     }
   }
-  if (window) {  // both pictures left as copies' sources: the presenter copies them into the swap chain
+  if (photo) {  // (photomode) its picture read back, then readable again; the window's own back buffer untouched
+    if (capture && readback_) {
+      D3D12_RESOURCE_BARRIER b = Transition(shown, readable, D3D12_RESOURCE_STATE_COPY_SOURCE);
+      list_->ResourceBarrier(1, &b);
+      D3D12_TEXTURE_COPY_LOCATION to = {}, from = {};
+      to.pResource = readback_.Get();
+      to.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+      to.PlacedFootprint = layout;
+      from.pResource = shown;
+      from.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+      list_->CopyTextureRegion(&to, 0, 0, 0, &from, nullptr);
+      b = Transition(shown, D3D12_RESOURCE_STATE_COPY_SOURCE, readable);
+      list_->ResourceBarrier(1, &b);
+    }
+  } else if (window) {  // both pictures left as copies' sources: the presenter copies them into the swap chain
     D3D12_RESOURCE_BARRIER b[2] = {Transition(window->resource.Get(), readable, D3D12_RESOURCE_STATE_COPY_SOURCE),
                                    Transition(between->resource.Get(), readable, D3D12_RESOURCE_STATE_COPY_SOURCE)};
     list_->ResourceBarrier(2, b);
@@ -2575,7 +2686,7 @@ void D3D12Device::EndFrame(std::vector<uint8_t>* capture, bool present) {
   FlushUploads();  // (what this frame draws with is on the card before it)
   ID3D12CommandList* lists[] = {list_.Get()};
   queue_->ExecuteCommandLists(1, lists);
-  if (present && !window) {
+  if (present && !window && !photo) {
     HRESULT hr = swapChain_->Present(vsync_ ? 1 : 0, !vsync_ && tearing_ ? DXGI_PRESENT_ALLOW_TEARING : 0);
     if (FAILED(hr)) Complain("Present", hr);
   }
@@ -2609,11 +2720,11 @@ void D3D12Device::EndFrame(std::vector<uint8_t>* capture, bool present) {
     void* mapped = nullptr;
     D3D12_RANGE range = {0, static_cast<SIZE_T>(readbackSize_)};
     if (FAILED(readback_->Map(0, &range, &mapped))) return;
-    capture->resize(static_cast<size_t>(width_) * static_cast<size_t>(height_) * 4);
-    for (int y = 0; y < height_; ++y)
-      std::memcpy(capture->data() + static_cast<size_t>(y) * static_cast<size_t>(width_) * 4,
+    capture->resize(static_cast<size_t>(shownWidth) * static_cast<size_t>(shownHeight) * 4);
+    for (int y = 0; y < shownHeight; ++y)
+      std::memcpy(capture->data() + static_cast<size_t>(y) * static_cast<size_t>(shownWidth) * 4,
                   static_cast<const uint8_t*>(mapped) + layout.Offset + static_cast<size_t>(y) * layout.Footprint.RowPitch,
-                  static_cast<size_t>(width_) * 4);
+                  static_cast<size_t>(shownWidth) * 4);
     D3D12_RANGE none = {0, 0};
     readback_->Unmap(0, &none);
   }

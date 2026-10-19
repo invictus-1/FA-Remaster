@@ -77,6 +77,8 @@ class WorldPicture {
   void UseHostSurface(std::vector<std::string> instanceExtensions, std::function<uint64_t(void* vkInstance)> createSurface, int width, int height);
   // Before Open: draws with Vulkan in place of Direct3D 12 (being tried: docs/render-vulkan.md).
   void SetVulkan(bool on);
+  // (checks) Before Open: the graphics API's validation layer, where installed (the viewer's --debug).
+  void SetDebug(bool on);
   // The host's interface, laid over the world by the next DrawToWindow: `width` x `height` pixels
   // (the window's size), each 0xAARRGGBB with the colour already multiplied by its alpha (alpha 0:
   // the world shows through), `pitch` pixels from one row to the next. (x, y, w, h) is the part that
@@ -388,6 +390,58 @@ class WorldPicture {
   // The size a photo asked for comes out at, and how many times larger again it is drawn (TakePhoto's rule; the
   // scene's samples a pixel, gSceneSamples, count: they take memory). For a host that draws photos itself.
   static void PhotoSize(int* width, int* height, int* supersample);
+
+  // --- (photomode) the photo mode (the screen is the interface's: docs/render-answers.md "To ui: a photo mode") ---
+  // The free camera is CineCamera::Fly (cinecam.h); the lens is SetLens.
+  // A moment of the picture's own: the picture alone shows `hour` (0..24) and the kind of weather `weather` (a number of
+  // WeatherKinds) at `strength` (0..1: how hard it rains or snows and how thick its fog is; the clouds are the kind's own;
+  // the ground wet or snowed on to match), eased over about a second from what is shown, so that the volumetric clouds
+  // and the light settle; the game's own clock and weather go on underneath. With the map's own fixed light (no time of
+  // day) the moment is shown anyway: it switches the day on for the picture. The modern look's (the original look has
+  // no hours and no weather). Stays until set again or cleared; a photo taken meanwhile shows it settled.
+  void SetPhotoMoment(float hour, int weather, float strength);
+  // The game's own hour and weather in the picture again, at once (the light in the air and the volumetric clouds then
+  // settle over a few frames, as they do whenever the weather changes).
+  void ClearPhotoMoment();
+  // The moment set; with none, the game's own as last drawn: its hour (-1: the map's own fixed light), the kind of
+  // weather nearest to what it is now and that kind's strength.
+  void GetPhotoMoment(float* hour, int* weather, float* strength) const;
+  using WeatherNames = std::vector<std::string>;
+  // The kinds of weather by their number: clear, fair, cloudy, overcast, rain, storm, fog, snow.
+  static WeatherNames WeatherKinds();
+  // What is under a pixel of the picture last drawn (x, y in its pixels): its distance from the eye along the line of
+  // sight, as the lens measures its focus (Lens::focus: picture.SetLens with it focuses there), the water's surface where
+  // the line of sight meets it first; 0 for the sky (Lens::focus 0 is auto-focus: for the far distance give a large one),
+  // and while a photo is being made. The scene's depth there read back: a small frame of its own between frames (0.2 to
+  // 3 ms measured; the first call some 60 ms more, its shader made).
+  float FocusAt(float x, float y);
+  // A photo made over the next frames: as StartPhoto's camera sees it at `tick`, `width` x `height` pixels (at most
+  // 16384 a side, made smaller in proportion), drawn `supersample` times larger again and made smaller for smooth edges
+  // (0: twice where that fits the card's memory, else not; 1..4 as asked), with the lens and the moment as set, nothing
+  // of the interface in it. Each Draw or DrawToWindow after it draws one frame of the photo (its settling frames first,
+  // as TakePhoto's) and then shows the world as it was when the photo began (the interface's layer over it as given), so
+  // the window goes on being drawn, its camera held; then the photo is put together on a thread of its own, while the
+  // window is drawn as ever. Every frame of a photo shows the game's moment its first showed, also while the game goes on
+  // (multiplayer). Where one picture that large does not fit the card's memory (TakePhoto's rule), it is drawn in tiles
+  // (photo.h). False when a photo is being made already, or there is no world.
+  bool StartPhoto(const Camera& camera, int width, int height, double tick, int supersample = 0);
+  // How far the photo has come, 0..1 (1: done, until taken); 0 when none is being made (back to 0 with TakeDonePhoto
+  // false: it could not be made, the card had no room for its picture).
+  float PhotoProgress() const;
+  // Once the photo is done: its pixels (0xAARRGGBB, rows from the top) and size, handed over (true once). Ask once a frame.
+  bool TakeDonePhoto(std::vector<uint32_t>* pixels, int* width, int* height);
+  // What the last photo took, for a host's numbers: the seconds its frames took (from StartPhoto to the last read back)
+  // and putting it together took, the card's memory at most meanwhile (as the device counts it), how it was drawn (tiles
+  // across and down, each one's size, drawn larger by) and its frames.
+  struct PhotoNumbers {
+    double drawSeconds = 0, assembleSeconds = 0;
+    uint64_t mostCardBytes = 0;
+    int columns = 1, rows = 1, tileWidth = 0, tileHeight = 0, by = 1, frames = 0;
+  };
+  PhotoNumbers LastPhotoNumbers() const;
+  // (checks) The card's memory one picture of a photo may take, bytes, in place of TakePhoto's rule (2.5 GB); 0: the
+  // rule again. A smaller one makes photos be drawn in tiles that would fit in one picture (the viewer's --photo-test).
+  static void SetPhotoBudget(double bytes);
   // The ground's own height at a place of the map, under water the bottom's: the simulation's
   // TerrainHeight (its own function, on the same heights), as the picture has them, the map's and
   // where the game has laid them flat (taken in with the frames drawn).
@@ -430,6 +484,8 @@ class WorldPicture {
   void RenderWorld(const Camera& camera, int width, int height, double tick);
   void PrepareWorld(const Camera& camera, int width, int height, double tick);  // (RenderWorld up to the drawing)
   void TakeStats(float endMs);  // (after a frame has ended)
+  void PhotoStep();             // (photomode: one frame of the photo being made)
+  void ShowHeld(int width, int height);  // (photomode: the window as it was when the photo began, the interface over it)
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };

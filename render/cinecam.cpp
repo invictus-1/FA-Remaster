@@ -74,6 +74,8 @@ void CineCamera::Jump(const CinePose& to) {
   pose = wanted = to;
   eyeSpeed_ = {};
   yawSpeed_ = pitchSpeed_ = fovSpeed_ = 0;
+  rollSpeed_ = 0;
+  flySpeed_ = {};
   cut_ = true;
 }
 
@@ -100,10 +102,45 @@ void CineCamera::Turn(float yaw, float pitch) {
 
 void CineCamera::Zoom(float factor) { wanted.fovY = Clamp(wanted.fovY * factor, lowestFov, highestFov); }
 
+// (photomode) the free camera: what is held moves what is asked, eased; Update then eases the pose to it as always
+void CineCamera::Fly(float seconds, Vec3 move, Vec2 turn, float roll) {
+  const float dt = std::clamp(seconds, 0.0f, 0.25f);
+  if (mode_ != Mode::Free) {
+    mode_ = Mode::Free;
+    flySpeed_ = {};
+  }
+  // the speed: as fast as the eye is high over the ground (from the last Update), at least four units a second; what
+  // is held eased in and out over about a tenth of a second
+  const float speed = std::max(4.0f, flyHeight_ * 1.5f);
+  // (two ways held at once go no faster than the harder of them alone)
+  const float held = std::max({std::fabs(move.x), std::fabs(move.y), std::fabs(move.z)}), length = Length(move);
+  const Vec3 want = length > 0 ? move * (speed * held / length) : Vec3{};
+  const float ease = 1 - std::exp(-dt / 0.1f);
+  flySpeed_ = flySpeed_ + (want - flySpeed_) * ease;
+  if (Length(flySpeed_) < 1e-4f && Length(want) <= 0) flySpeed_ = {};
+  Fly(flySpeed_ * dt, true);  // (right, straight up, forward along the ground)
+  // turning: a share of the view's height (a drag to the right turns right, a drag down looks down)
+  Turn(-turn.x * wanted.fovY, turn.y * wanted.fovY);
+  // rolling: 30 degrees a second at 1, kept when let go; near level it settles to level
+  constexpr float kRollRate = kPi / 6, kMostRoll = kPi / 2, kLevel = 1.5f * kPi / 180;
+  if (roll != 0) wanted.roll = Clamp(wanted.roll + roll * kRollRate * dt, -kMostRoll, kMostRoll);
+  else if (std::fabs(wanted.roll) < kLevel) wanted.roll = 0;
+  // the reach round the map: a tenth of its longer side past each edge, and no higher over the ground there than that
+  // side is long
+  if (mapWidth_ > 0 && mapHeight_ > 0) {
+    const float side = std::max(mapWidth_, mapHeight_), margin = 0.1f * side;
+    wanted.eye.x = Clamp(wanted.eye.x, -margin, mapWidth_ + margin);
+    wanted.eye.z = Clamp(wanted.eye.z, -margin, mapHeight_ + margin);
+    wanted.eye.y = std::min(wanted.eye.y, pose.eye.y - flyHeight_ + side);  // (the ground under the eye as Update had it)
+  }
+}
+
 void CineCamera::Start(const Camera& game) {
   pose = wanted = PoseOf(game);
   eyeSpeed_ = {};
   yawSpeed_ = pitchSpeed_ = fovSpeed_ = 0;
+  rollSpeed_ = 0;
+  flySpeed_ = {};
   on_ = true;
   back_ = 1;
   mode_ = Mode::Hold;
@@ -130,6 +167,7 @@ Camera CineCamera::Shown(const Camera& game, const GroundFn& ground) const {
   p.yaw = left_.yaw + (Near(to.yaw, left_.yaw) - left_.yaw) * t;
   p.pitch = left_.pitch + (to.pitch - left_.pitch) * t;
   p.fovY = std::exp(std::log(left_.fovY) + (std::log(to.fovY) - std::log(left_.fovY)) * t);
+  p.roll = left_.roll + (to.roll - left_.roll) * t;  // (photomode: a rolled free camera levels out to the game's)
   return MakeView(p, ground);
 }
 
@@ -163,6 +201,7 @@ CinePose CineCamera::PoseOf(const Camera& camera) {
   p.yaw = camera.heading;
   p.pitch = camera.pitch;
   p.fovY = camera.fovY;
+  p.roll = camera.roll;
   return p;
 }
 
@@ -202,6 +241,7 @@ void CineCamera::Update(float seconds, const GroundFn& ground) {
     const Vec3 look = Normalize(followPlace_ - wanted.eye);
     wanted.yaw = Near(std::atan2(-look.x, -look.z), pose.yaw);
     wanted.pitch = -std::asin(Clamp(look.y, -1, 1));
+    wanted.roll = 0;  // (photomode: level again, as it circles)
   }
   wanted.pitch = Clamp(wanted.pitch, lowestPitch, highestPitch);
   wanted.fovY = Clamp(wanted.fovY, lowestFov, highestFov);
@@ -214,7 +254,9 @@ void CineCamera::Update(float seconds, const GroundFn& ground) {
   pose.pitch = Spring(pose.pitch, wanted.pitch, &pitchSpeed_, turnSeconds, dt);
   // (the field of view by its logarithm: a zoom from 10 to 20 degrees takes as long as one from 40 to 80)
   pose.fovY = std::exp(Spring(std::log(pose.fovY), std::log(wanted.fovY), &fovSpeed_, zoomSeconds, dt));
+  pose.roll = Spring(pose.roll, wanted.roll, &rollSpeed_, turnSeconds, dt);  // (photomode)
   if (ground) pose.eye.y = std::max(pose.eye.y, ground(pose.eye.x, pose.eye.z) + clearance);
+  if (ground) flyHeight_ = std::max(pose.eye.y - ground(pose.eye.x, pose.eye.z), 0.0f);  // (photomode: Fly's speed)
   // (the angles kept near each other's numbers, both moved together by whole turns)
   const float turns = std::round(pose.yaw / (2 * kPi)) * 2 * kPi;
   pose.yaw -= turns;
@@ -227,6 +269,7 @@ Camera CineCamera::MakeView(const CinePose& pose, const GroundFn& ground) {
   c.heading = pose.yaw;
   c.pitch = Clamp(pose.pitch, -1.55f, kPi / 2);
   c.fovY = Clamp(pose.fovY, 0.02f, 2.6f);
+  c.roll = pose.roll;  // (photomode)
   c.zNear = 0.15f;  // (an eye a little over the grass sees it close by)
   Vec3 right, up, back;
   c.Axes(&right, &up, &back);

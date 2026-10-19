@@ -286,6 +286,17 @@ const WeatherNow& SpellWeather(uint32_t seed, int64_t spell, Climate climate) {
 
 }  // namespace
 
+// (photomode) the kinds, by their number in kKinds
+int WeatherKindCount() { return static_cast<int>(sizeof kKinds / sizeof kKinds[0]); }
+
+const char* WeatherKindName(int kind) {
+  static const char* const kNames[] = {"clear", "fair", "cloudy", "overcast", "rain", "storm", "fog", "snow"};
+  static_assert(sizeof kNames / sizeof kNames[0] == sizeof kKinds / sizeof kKinds[0], "a name for every kind");
+  return kind >= 0 && kind < WeatherKindCount() ? kNames[kind] : "";
+}
+
+WeatherNow WeatherKindOf(int kind) { return kKinds[std::clamp(kind, 0, WeatherKindCount() - 1)].weather; }
+
 WeatherNow WeatherAt(uint32_t seed, double seconds, Climate climate, float spell) {
   spell = std::max(spell, 1.0f);
   const double at = std::max(seconds, 0.0) / spell;

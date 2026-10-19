@@ -46,6 +46,10 @@
 //           once the game is where --tick asks, the world is drawn through it into that file, its
 //           answers about the screen are printed (and the life bars' anchors checked and marked in
 //           magenta, where custom names go), and the viewer ends
+// --photo-test  with --picture (photomode): the photo mode's pieces through the pixel interface (photo_test.h): the free
+//           camera flown by a script of inputs, moments of the picture's own, focus by a pixel, a shallow-focus photo, one
+//           picture against tiles, and photos of 1, 2 and 4 times the window's size timed at each of --photo-test-sizes
+//           WxH,WxH (2560x1440,3840x2160 unless given); pictures beside the --picture file, numbers printed
 // --settings <bundles>  with --picture: the game's lighting settings, as the interface sets them (WorldPicture's
 //           bundles): any of atmosphere, soft-shadows, ray-tracing, weather-effects, ground-detail,
 //           frame-generation, with commas between
@@ -396,6 +400,7 @@
 #include "mesh_renderer.h"
 #include "models.h"
 #include "particles.h"
+#include "photo_test.h"
 #include "png.h"
 #include "post.h"
 #include "live_sim.h"
@@ -517,6 +522,8 @@ struct Options {
   float airDust = -1, airSun = -1, airLamps = -1;  // --air-dust, --air-sun, --air-lamps (negative: the default)
   int airAcross = 0, airDeep = 0;       // --air-cells
   bool pictureWindow = false;           // --picture-window
+  bool photoTest = false;               // (photomode) --photo-test
+  std::vector<std::pair<int, int>> photoTestSizes = {{2560, 1440}, {3840, 2160}};  // --photo-test-sizes
   bool windowCycle = false;             // --window-cycle
   float effectsQuality = 1;             // --effects-quality
   float upscale = 1;                    // --fsr
@@ -687,6 +694,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--clouds-full") o->clouds3d = o->cloudsFull = true;
     else if (a == "--cloud-zoom") o->cloudZoom = true;  // (cloudzoom)
     else if (a == "--picture-window") o->pictureWindow = true;
+    else if (a == "--photo-test") o->photoTest = true;  // (photomode)
     else if (a == "--window-cycle") o->windowCycle = true;
     else if (a == "--prepass") o->prepass = true;
     else if (a == "--no-prepass") o->prepass = false;
@@ -794,6 +802,16 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--wear-test") o->wearTest = v;
     else if (a == "--fx-decal-size") o->fx.decalSize = std::max(0.1f, static_cast<float>(atof(v)));
     else if (a == "--picture") o->picture = v;
+    else if (a == "--photo-test-sizes") {  // (photomode)
+      o->photoTestSizes.clear();
+      for (const char* at = v; *at;) {
+        int pw = 0, ph = 0;
+        if (sscanf(at, "%dx%d", &pw, &ph) == 2 && pw >= 16 && ph >= 16) o->photoTestSizes.push_back({pw, ph});
+        const char* comma = std::strchr(at, ',');
+        if (!comma) break;
+        at = comma + 1;
+      }
+    }
     else if (a == "--settings") o->settings = v;
     else if (a == "--motion-view") o->motionView = atoi(v);
     else if (a == "--pan") {
@@ -1152,6 +1170,7 @@ int main(int argc, char** argv) {
     setup.pauseAt = static_cast<uint32_t>(std::max(opt.pauseAt, 0));
     live.SetFocusArmy(opt.focus);
     picture.SetVulkan(opt.vulkan);
+    picture.SetDebug(opt.debug);  // (photomode: the validation layer for the pixel interface's device too)
     picture.SetFocusArmy(opt.focus);
     picture.SetUpscale(opt.upscale);        // (--fsr)
     picture.SetTemporalUpscale(opt.fsr3);   // (--fsr3)
@@ -2238,6 +2257,20 @@ int main(int argc, char** argv) {
       }
     }
 
+    if (!opt.picture.empty() && opt.photoTest && playing && !liveBusy && frameCount >= 3) {
+      // (photomode) --photo-test: the photo mode's pieces through the pixel interface (or, with --picture-window, the
+      // window's)
+      PhotoTestSetup ps;
+      ps.base = opt.picture.substr(0, opt.picture.rfind('.'));
+      ps.window = opt.pictureWindow && pictureWindow;
+      ps.width = ps.window ? pictureWindow->Width() : opt.width;
+      ps.height = ps.window ? pictureWindow->Height() : opt.height;
+      ps.sizes = opt.photoTestSizes;
+      for (const FrameUnit& u : frame.units)
+        if (!u.dead) ps.units.insert(ps.units.end(), {u.position[0], u.position[1], u.position[2]});
+      PhotoTest(picture, camera, playTick + 1, ps);
+      break;
+    }
     if (!opt.picture.empty() && opt.pictureWindow && pictureWindow && playing && !liveBusy && frameCount >= 3) {
       // --picture-window: the world into the window, a made-up interface over it: a dark see-through
       // bar along the bottom, a solid white square at the top left, the rest open

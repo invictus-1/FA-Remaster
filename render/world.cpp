@@ -553,6 +553,57 @@ float World::GroundHeight(float x, float z) const {
   return map.water.present ? std::max(y, map.water.elevation) : y;
 }
 
+// The game's weather moved on to this frame (with a time of day, the modern look): what it is by itself, and what it has
+// done to surfaces by now. The time since the last frame's.
+float World::AdvanceWeather(float time, double clock) {
+  if (weatherAuto) {
+    const WeatherNow now = WeatherAt(weatherSeed, clock, climate, weatherSpell);
+    cloudCover = now.clouds;
+    rain = now.rain;
+    snow = now.snow;
+    fog = now.fog;
+  }
+  const float dt = weatherTime_ < 0 ? 0 : std::clamp(time - weatherTime_, 0.0f, 0.5f);
+  weatherTime_ = time;
+  wet = std::clamp(wet + (rain > 0 ? dt / 15 : -dt / 120), 0.0f, 1.0f);
+  // (snow builds up over two and a half minutes of snowfall and is gone in five; while it melts,
+  // the ground it leaves is wet)
+  snowLying = std::clamp(snowLying + (snow > 0 ? dt / 150 : -dt / 300), 0.0f, 1.0f);
+  if (snow <= 0 && snowLying > 0) wet = std::max(wet, std::min(snowLying * 3, 1.0f));
+  return dt;
+}
+
+// (photomode) The picture's own moment in for this frame (Begin to the end of Render): the game's own weather first moved
+// on as every frame moves it, then it and the hour kept aside.
+void World::PutMomentIn(float time, double clock) {
+  TakeMomentOut();  // (a Begin whose Render did not come: the game's own back first)
+  if (timeOfDay >= 0) AdvanceWeather(time, clock);
+  gameWeather_ = {timeOfDay, cloudCover, rain, snow, fog, wet, snowLying, weatherAuto};
+  timeOfDay = std::fmod(std::clamp(moment.hour, 0.0f, 24.0f), 24.0f);
+  weatherAuto = false;
+  cloudCover = moment.clouds;
+  rain = moment.rain;
+  snow = moment.snow;
+  fog = moment.fog;
+  wet = moment.wet;
+  snowLying = moment.snowLying;
+  momentShown_ = true;
+}
+
+void World::TakeMomentOut() {
+  if (!momentShown_) return;
+  const GameWeather& g = gameWeather_;
+  timeOfDay = g.timeOfDay;
+  cloudCover = g.cloudCover;
+  rain = g.rain;
+  snow = g.snow;
+  fog = g.fog;
+  wet = g.wet;
+  snowLying = g.snowLying;
+  weatherAuto = g.weatherAuto;
+  momentShown_ = false;
+}
+
 void World::Begin(const Camera& cam, int width, int height, float time, double clock) {
   CpuTimes::Part("light, sky, weather set");
   particles.remastered = ribbons.remastered = decals.remastered = effectsLook == EffectsLook::Remastered;
@@ -564,6 +615,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   if (hotOn_ && !sidePicture) heat.Begin(clock);
   particles.quality = effectsQuality;
   camera = cam;
+  const Camera& placing = Placing();  // (photomode: a photo's tile places as the whole photo; else the camera itself)
   time_ = time;
   clock_ = clock;
   barAnchors.clear();
@@ -688,8 +740,8 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     if (bounceMade_) {
       // (cinecam: a cinematic camera's probes round a place forty units ahead of its eye, at the finest spacing, where
       // its target may lie in the air far off)
-      const Vec3 ahead = camera.cinematic ? camera.Eye() + Vec3{-std::sin(camera.heading), 0, -std::cos(camera.heading)} * 40.0f : camera.target;
-      bounce.Place(ahead, camera.cinematic ? 30.0f : camera.distance, [this](float x, float z) { return GroundHeight(x, z); }, &c);
+      const Vec3 ahead = placing.cinematic ? placing.Eye() + Vec3{-std::sin(placing.heading), 0, -std::cos(placing.heading)} * 40.0f : placing.target;
+      bounce.Place(ahead, placing.cinematic ? 30.0f : placing.distance, [this](float x, float z) { return GroundHeight(x, z); }, &c);
       bounceNow_ = true;
     }
   }
@@ -752,31 +804,18 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   }
   // a time of day: the computed sky's light in place of the map's (modern look)
   Vec3 lightDirection = sunDirection;
+  // (photomode) a moment of the picture's own: this frame's hour and weather, the game's own moved on and kept aside
+  if (moment.on && look == Look::Modern) PutMomentIn(time, clock);
   if (timeOfDay >= 0 && look == Look::Modern) {
     // the weather: what it is by itself, its clouds, and what it has done to surfaces by now
     float flash = 0;
     uint32_t stroke = 0;
-    if (weatherAuto) {
-      const WeatherNow now = WeatherAt(weatherSeed, clock, climate, weatherSpell);
-      cloudCover = now.clouds;
-      rain = now.rain;
-      snow = now.snow;
-      fog = now.fog;
-      flash = LightningAt(weatherSeed, clock, rain, &stroke);
-    } else {
-      flash = LightningAt(weatherSeed, clock, rain, &stroke);
-    }
-    const float dt = weatherTime_ < 0 ? 0 : std::clamp(time - weatherTime_, 0.0f, 0.5f);
-    weatherTime_ = time;
-    wet = std::clamp(wet + (rain > 0 ? dt / 15 : -dt / 120), 0.0f, 1.0f);
-    // (snow builds up over two and a half minutes of snowfall and is gone in five; while it melts,
-    // the ground it leaves is wet)
-    snowLying = std::clamp(snowLying + (snow > 0 ? dt / 150 : -dt / 300), 0.0f, 1.0f);
+    const float dt = momentShown_ ? 0.0f : AdvanceWeather(time, clock);  // (photomode: with a moment, PutMomentIn moved it on)
+    flash = LightningAt(weatherSeed, clock, rain, &stroke);
     // (the tracks in it: falling snow covers them again in about a minute and a half of heavy fall)
     tracksCovering_ = snow > 0 ? dt * snow / 90 : 0;
     decals.snowLying = snowLying;
     decals.snowing = snow;
-    if (snow <= 0 && snowLying > 0) wet = std::max(wet, std::min(snowLying * 3, 1.0f));
     const float cover = std::max({cloudCover, rain > 0 ? 0.8f + 0.2f * rain : 0.0f, snow > 0 ? 0.75f + 0.2f * snow : 0.0f, fog * 0.6f});
     skyLight = SkyAt(timeOfDay, cover, skyTables && look == Look::Modern);
     Vec3 bolt{0, 0, 0};
@@ -791,11 +830,11 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       // the bolt itself: from the clouds to the ground somewhere round what the camera looks at (the
       // place and its zigzag follow from which stroke it is, so it stands still while it flashes),
       // and its light on the ground where it strikes
-      const float reach = std::max(camera.distance * 0.4f, 25.0f);  // (near enough to be in the picture most times)
-      Vec3 foot = camera.target + Vec3{(WeatherDraw(weatherSeed, stroke, 71) - 0.5f) * 2 * reach, 0, (WeatherDraw(weatherSeed, stroke, 73) - 0.5f) * 2 * reach};
-      foot.y = haveMap_ ? GroundHeight(foot.x, foot.z) : camera.target.y;
+      const float reach = std::max(placing.distance * 0.4f, 25.0f);  // (near enough to be in the picture most times)
+      Vec3 foot = placing.target + Vec3{(WeatherDraw(weatherSeed, stroke, 71) - 0.5f) * 2 * reach, 0, (WeatherDraw(weatherSeed, stroke, 73) - 0.5f) * 2 * reach};
+      foot.y = haveMap_ ? GroundHeight(foot.x, foot.z) : placing.target.y;
       const Vec3 light = Vec3{0.8f, 0.86f, 1.0f} * (flash * 22 / skyLight.exposure);
-      const float top = foot.y + 150, wide = std::max(0.3f, camera.distance * 0.009f);
+      const float top = foot.y + 150, wide = std::max(0.3f, placing.distance * 0.009f);
       Vec3 from{foot.x + (WeatherDraw(weatherSeed, stroke, 79) - 0.5f) * 40, top, foot.z + (WeatherDraw(weatherSeed, stroke, 83) - 0.5f) * 40};
       // (the volumetric clouds lit from within where the bolt leaves them, a little up in the layer)
       clouds.boltAt = Vec3{from.x, clouds.Underside(camera.Eye().y) + clouds.thickness * 0.3f, from.z};  // (cloudzoom: where the march has the layer)
@@ -914,7 +953,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   CpuTimes::Part("sun shadows placed");
   if (haveMap_ && shadowsOn) {
     if (shadows.Size() != shadowSize) shadows.SetSize(shadowSize);
-    shadows.Place(camera, lightDirection, &view);
+    shadows.Place(placing, lightDirection, &view);
   }
   CpuTimes::Part("tracks, icons, deposits begun");
 
@@ -933,7 +972,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   }
   if (!sidePicture) {
     trackField.on = deepNow_;
-    trackField.Begin(camera.target, clock);
+    trackField.Begin(placing.target, clock);
   }
   if (!deepNow_ && haveMap_ && tracks.on && snowLying > 0 && look == Look::Modern && timeOfDay >= 0) {
     c.tracksArea[0] = tracks.InverseWidth();
@@ -2018,6 +2057,7 @@ void World::PressGround(const Frame& frame) {
 
 void World::Render() {
   const bool shadowed = haveMap_ && shadowsOn;
+  const Camera& placing = Placing();  // (photomode: a photo's tile places as the whole photo; else the camera itself)
   post.glow = bloom ? 0.5f * std::max(bloomIntensity, 0.0f) / 1.5f : 0.0f;  // (the player's bloom options)
   // (and the original look's own bloom, as the original makes it: the same options, the map's Bloom)
   post.originalBloom.on = bloom && look == Look::Original;
@@ -2041,7 +2081,7 @@ void World::Render() {
   }
   tracksCovering_ = 0;
   CpuTimes::Part("lights and lamp shadows placed");
-  lampShadowsDrawn = shadowed && lampShadows && look == Look::Modern ? lights.PlaceShadows(camera, view) : 0;
+  lampShadowsDrawn = shadowed && lampShadows && look == Look::Modern ? lights.PlaceShadows(placing, view) : 0;
   // the light of flashes and explosions (the remastered look's: particles.h, Flash), fading over its time
   for (Particles::Flash& f : particles.flashes) {
     const float age = static_cast<float>(clock_ - f.born) / std::max(f.seconds, 1e-3f);
@@ -2062,7 +2102,7 @@ void World::Render() {
   particles.litSmoke = litSmokeNow_;
   particles.heat = heatShimmer && look == Look::Modern && haveMap_ && !sidePicture;
   if (litSmokeNow_ && particles.remastered && fireLight > 0) {
-    particles.HotEmitters(camera.target, 48, &hot_);
+    particles.HotEmitters(placing.target, 48, &hot_);
     // the fires of one burning thing are one light: a wreck burns in a dozen places a pace apart, and a light for
     // each would add up to a glare (gathered within 3 units; a few together a little brighter than one, at most
     // twice). By day a fire's light is little beside the sun's: a third of it at noon.
@@ -2107,7 +2147,7 @@ void World::Render() {
     decals.ForEachHot(clock_, [&](Vec3 centre, float across, float age, float seconds, uint32_t id) {
       heat.Glowing((uint64_t{2} << 40) | id, centre, across * 0.25f, age, seconds, false);
     });
-    heat.End(&lights, &particles, camera.target, lights.night);
+    heat.End(&lights, &particles, placing.target, lights.night);
   }
   // (volume explosions) which are drawn this frame, their light while hot, a nuke's flash and the ground's glow under it;
   // its ring through the clouds
@@ -2128,7 +2168,7 @@ void World::Render() {
     // are made the first frame the options are on, not at the first blast: no stall in the middle of a fight)
     const bool waves = blastWaves && meshes.PrepareBlasts();
     if (waves && groundCover) grass.PrepareBlasts();
-    blasts.Prepare(clock_, view, camera.target, waves, blastDust);
+    blasts.Prepare(clock_, view, placing.target, waves, blastDust);
     blastsNow_ = blasts.Active() > 0;
     if (blastsNow_ && blastDust) terrain.GroundColours();  // (made the first time here: it dispatches, so not in a pass)
   }
@@ -2169,8 +2209,8 @@ void World::Render() {
       if (!grassMade_) fprintf(stderr, "render: ground cover cannot be drawn (%s)\n", why.c_str());
     }
     // (cinecam: a cinematic camera by the eye's height over the ground under it, grass.cpp)
-    const Vec3 eye = camera.Eye();
-    if (grassMade_ && (camera.cinematic ? eye.y - GroundHeight(eye.x, eye.z) : camera.distance) <= grass.farthest) {
+    const Vec3 eye = placing.Eye();
+    if (grassMade_ && (placing.cinematic ? eye.y - GroundHeight(eye.x, eye.z) : placing.distance) <= grass.farthest) {
       std::vector<float> discs;
       meshes.ForEachAdded([&](const Model* model, const float* row0, const float* row1, const float* row2, const float*, bool scenery) {
         if (scenery || !model || discs.size() >= 3 * 1024) return;
@@ -2186,7 +2226,7 @@ void World::Render() {
       if (plantsReady_ && !coverA_) terrain.CoverDensity(treeMask_, &coverA_, &coverB_);
       grass.tracks = deepNow_ ? trackField.Atlas() : gfx::Texture{};  // (deep tracks: the grass laid flat along them)
       grass.tracksField = deepNow_ ? trackField.Constants() : TrackFieldConstants{};
-      grass.Prepare(view, camera, discs);
+      grass.Prepare(view, placing, discs);
       grassNow_ = true;
       if (blastsNow_ && blasts.Waves() && grass.PrepareBlasts()) grassBlasts_ = blasts.PrepareField(grass.Area());  // (the blasts' waves over it)
     }
@@ -2238,7 +2278,7 @@ void World::Render() {
   Stage("smoke's shadow");
   smokeNow_ = false;
   if ((litSmokeNow_ || (smokeShadows && look == Look::Modern && haveMap_)) && !sidePicture && hide.find("particles") == std::string::npos &&
-      smokeMap.Place(camera, Vec3{view.constants.sunDirection[0], view.constants.sunDirection[1], view.constants.sunDirection[2]}, &view,
+      smokeMap.Place(placing, Vec3{view.constants.sunDirection[0], view.constants.sunDirection[1], view.constants.sunDirection[2]}, &view,
                      smokeShadows && look == Look::Modern)) {
     particles.Gather();
     device_->SetTexture(kSmokeShadowSlot, {});
@@ -2473,13 +2513,15 @@ void World::Render() {
   // (cinecam) what falls is drawn in a box round what the game's camera looks at, as large as that is far off; a
   // cinematic camera's target may lie far ahead or in the air: its box is round the eye instead, a little ahead of
   // it, as large as the eye is high over the ground
+  // (photomode: a photo's tile has the box of the whole photo, measured in its own pixels)
   const Camera fall = [&] {
-    if (!camera.cinematic) return camera;
-    Camera c = camera;
-    const Vec3 eye = camera.Eye();
+    Camera c = placing;
+    c.fovY = camera.fovY;
+    if (!placing.cinematic) return c;
+    const Vec3 eye = placing.Eye();
     const float ground = haveMap_ ? std::min(GroundHeight(eye.x, eye.z), eye.y) : eye.y;
     c.distance = std::clamp((eye.y - ground) * 1.5f + 20.0f, 25.0f, 560.0f);
-    c.target = {eye.x - std::sin(camera.heading) * c.distance * 0.3f, ground, eye.z - std::cos(camera.heading) * c.distance * 0.3f};
+    c.target = {eye.x - std::sin(placing.heading) * c.distance * 0.3f, ground, eye.z - std::cos(placing.heading) * c.distance * 0.3f};
     return c;
   }();
   if (view.constants.skyZenith[3] > 0.5f) falling.Draw(view, fall, rain, snow, litRain && look == Look::Modern);
@@ -2547,11 +2589,13 @@ void World::Render() {
   }
   // (photolook) the photographic look: its eye moved on only in the game's own frames (not in a photo or a picture
   // drawn between them), set at once after a cut or when the look comes on; no lens touches on a picture drawn
-  // between (the minimap's ground)
+  // between (the minimap's ground), nor on a tile of a photo drawn in tiles (photoTiled: a vignette in each tile's
+  // corners would be a pattern over the whole photo)
   const bool photoLookBefore = post.photoFinish != nullptr;
   post.photoFinish = nullptr;
   if (photoLook.on && look == Look::Modern && !photoFinish.Failed()) {
-    photoFinish.Set(photoLook, sidePicture || photo ? 0.0f : frameSeconds_, (lensSnap_ && !photo) || !photoLookBefore, !sidePicture);
+    photoFinish.Set(photoLook, sidePicture || photo ? 0.0f : frameSeconds_, (lensSnap_ && !photo) || !photoLookBefore,
+                    !sidePicture && !photoTiled);
     post.photoFinish = &photoFinish;
   }
   post.Present(view, &upscaler, screenWidth_, screenHeight_);
@@ -2583,6 +2627,7 @@ void World::Render() {
   // (cinecam: no strategic symbols for a cinematic camera: every unit far off toward the horizon would stand there as one)
   icons.showSymbols = iconsOn && !camera.cinematic;
   if (!photo) icons.Draw();  // on the finished picture, as the original draws them (and the life bars; cinecam: none on a photo)
+  TakeMomentOut();  // (photomode: between frames the game's own hour and weather again)
   CpuTimes::Part(nullptr);
 }
 

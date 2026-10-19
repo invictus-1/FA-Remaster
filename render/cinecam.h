@@ -21,6 +21,8 @@
 //                  picture.DrawToWindow(cine.Shown(game, ground), width, height, tick);
 //   any camera input from the player:  game = cine.Stop(ground);  (then that input moves `game`)
 // While it is off and not easing back, Shown returns `game` itself, so the host may draw with Shown always.
+// (photomode) A photo mode's free camera: cine.Start(game); cine.SetMap(width, height); then each frame
+// cine.Fly(seconds, move, turn, roll) with the player's keys and mouse, and Update as above.
 #pragma once
 #include <functional>
 #include <string>
@@ -37,6 +39,7 @@ struct CinePose {
   float yaw = 0;      // radians round the upright axis, as Camera::heading: 0 looks north (toward -z), pi/2 west
   float pitch = 0;    // radians below the horizon: 0 at the horizon, positive down (pi/2 straight down), negative up
   float fovY = 0.7f;  // the vertical field of view, radians (0.7: 40 degrees)
+  float roll = 0;     // (photomode) radians round the line of sight, as Camera::roll (positive: the right side down)
 };
 
 // The height one stands on at a place (the ground, or the water's surface over it).
@@ -110,7 +113,29 @@ class CineCamera {
   void FollowPlace(Vec3 place) { followPlace_ = place; }
   // Nothing: it stays where it is (and Fly, Turn, Zoom move it).
   void Hold() { mode_ = Mode::Hold; }
-  enum class Mode { Hold, Path, Follow };
+  // (photomode) Flown freely by the player's keys and mouse, once a frame before Update (Mode::Free from the first
+  // call; Hold, a path or a place to follow end it):
+  //   `move`  {right, up, forward}: how hard each way is held, -1..1 (more for faster: Shift's 3). Forward is along the
+  //           ground whatever the pitch, up is straight up. The speed grows with the eye's height over the ground (at 1:
+  //           1.5 times that height a second, at least 4 world units a second); it eases in and out over about a tenth
+  //           of a second, so a key going down or up gives no jerk. A wheel's notch: up = +-1 held for a fifth of a
+  //           second (or, for one frame only, +-0.2 / seconds: the same height).
+  //   `turn`  {heading, pitch}: by how much to turn now, as a share of the view's height (its vertical field of view):
+  //           a mouse drag's pixels over the window's height, x to the right, y down (a drag across the whole window
+  //           turns by as much as the view shows). Eased as Turn is.
+  //   `roll`  how hard the picture is rolled, -1..1 (Q -1, E +1; more for faster): at 1, 30 degrees a second, the right
+  //           side going down for positive. Kept when let go, so a tilted horizon stays; within 1.5 degrees of level it
+  //           settles to level once let go. At most 90 degrees either way.
+  // `seconds` the frame's time. The eye stays over what one stands on (the ground, the water's surface: never under it)
+  // by `clearance`, and with SetMap inside a reach round the map: a tenth of its longer side past each edge, and at
+  // most as high over the ground as the map's longer side.
+  void Fly(float seconds, Vec3 move, Vec2 turn, float roll);
+  // The map's size in world units (WorldPicture::MapSize), for Fly's reach; not set (0): anywhere.
+  void SetMap(float width, float height) {
+    mapWidth_ = width;
+    mapHeight_ = height;
+  }
+  enum class Mode { Hold, Path, Follow, Free };
   Mode Following() const { return mode_; }
   const CinePath& Path() const { return path_; }   // (the path it flies, Mode::Path)
   Vec3 FollowedPlace() const { return followPlace_; }  // (the place it circles, Mode::Follow)
@@ -164,6 +189,12 @@ class CineCamera {
   float followDistance_ = 20, followHeight_ = 6, orbit_ = 0;
   CinePose left_;     // (where it was when it was switched off)
   float back_ = 1;    // (how far the easing back has come, 0..1)
+  // (photomode) the roll's spring; Fly's eased speed in the camera's own directions (right, up, forward: world units a
+  // second); the eye's height over the ground at the last Update; the map's size for the reach
+  float rollSpeed_ = 0;
+  Vec3 flySpeed_;
+  float flyHeight_ = 10;
+  float mapWidth_ = 0, mapHeight_ = 0;
 };
 
 // The lens (World::lens): depth of field for the cinematic camera, as a real lens makes it (thin-lens sums on a

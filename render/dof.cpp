@@ -18,7 +18,7 @@ cbuffer Lens : register(b1) {
   float4 lens;       // x the focal length (mm), y the aperture's width (mm), z picture pixels a mm of the sensor, w mm a world unit
   float4 focusing;   // x the focus asked for (world units; 0: auto-focus), y the share of the way to it taken this frame, z the widest blur (picture pixels), w the rings' most
   float4 tiling;     // x, y the tiles across and down; z how many tiles round a tile its near blur may reach; w the samples' spacing (half-size pixels)
-  float4 surface;    // the water's surface: x how much the line of sight rises, y how much the picture's up rises; w the field of view's half-height (its tangent)
+  float4 surface;    // the water's surface: x how much the line of sight rises, y how much the picture's up rises, z how much its right rises (a rolled camera's); w the field of view's half-height (its tangent)
   float4 surfaceAt;  // x the water's height less the eye's; y 1 = there is water
 };
 #ifdef MSAA
@@ -36,10 +36,11 @@ float DistanceAt(float2 pixel) {
   float d = DepthLoad(q);
   float distance = d > 0 ? depthSize.z / d : 1e7;  // (reversed depth: zNear / distance; nothing drawn: the sky, far away)
   // the water writes no depth (what lies under it shows through): where the line through the pixel meets its
-  // surface first, that is what is seen (the camera's right is level: only its forward and up rise)
+  // surface first, that is what is seen (the camera's forward, up and, rolled, its right rise)
   [branch] if (surfaceAt.y > 0.5) {
     float up = (1 - 2 * pixel.y * size.w) * surface.w;
-    float t = surfaceAt.x / (surface.x + up * surface.y);
+    float side = (2 * pixel.x * size.z - 1) * surface.w * (size.x * size.w);
+    float t = surfaceAt.x / (surface.x + up * surface.y + side * surface.z);
     if (t > 0) distance = min(distance, t);
   }
   return distance;
@@ -360,6 +361,7 @@ gfx::Texture DepthOfField::Apply(const Lens& lens, const Camera& camera, gfx::Te
     const float tanY = std::tan(std::clamp(camera.fovY, 0.02f, 3.0f) * 0.5f);
     k.surface[0] = -back.y;
     k.surface[1] = up.y;
+    k.surface[2] = right.y;  // (photomode: 0 but for a rolled camera)
     k.surface[3] = tanY;
     k.surfaceAt[0] = waterLevel - camera.Eye().y;
     k.surfaceAt[1] = 1;
