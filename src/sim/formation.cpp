@@ -198,14 +198,15 @@ void AssignGroup(Formation& F, const std::vector<Unit*>& units, int k) {
   bool rotate = false;
   if (!RunScript(L, F.script, units, &slots, &rotate) || slots.empty()) return;
   FormGroup G;
-  // unit side (8.2)
-  double sx = 0, sz = 0;
+  // unit side (8.2): the sums in single precision, times 1 / count (0x567480..0x5674fd; no units: FLT_MAX)
+  float sx = 0, sz = 0;
   for (Unit* u : units) {
-    sx += CommittedPos(sim, u).x;
-    sz += CommittedPos(sim, u).z;
+    sx = CommittedPos(sim, u).x + sx;
+    sz = CommittedPos(sim, u).z + sz;
   }
-  G.cx = static_cast<float>(sx / units.size());
-  G.cz = static_cast<float>(sz / units.size());
+  const float invU = 1.0f / static_cast<float>(units.size());
+  G.cx = invU * sx;
+  G.cz = sz * invU;
   struct URec {
     Unit* u;
     float rx, rz;
@@ -224,7 +225,7 @@ void AssignGroup(Formation& F, const std::vector<Unit*>& units, int k) {
   };
   std::vector<SRec> S;
   float minX = kInfF, maxX = -kInfF, minZ = kInfF, maxZ = -kInfF;
-  double mx = 0, mz = 0;
+  float mx = 0, mz = 0;  // single precision too (0x5678a6..0x5678cb), times 1 / count (0x56796d..0x567982)
   const float unit = static_cast<float>(F.largest + 2);
   for (const ScriptSlot& s : slots) {
     Vec3 v{s.x * F.scale, 0 * F.scale, s.z * F.scale};
@@ -238,7 +239,8 @@ void AssignGroup(Formation& F, const std::vector<Unit*>& units, int k) {
     maxZ = std::max(maxZ, r.oz);
     S.push_back(r);
   }
-  float mOffX = static_cast<float>(mx / S.size()), mOffZ = static_cast<float>(mz / S.size());
+  const float invS = 1.0f / static_cast<float>(S.size());
+  float mOffX = invS * mx, mOffZ = mz * invS;
   G.extX = std::max(0.0f, maxX - minX);
   G.extZ = std::max(0.0f, maxZ - minZ);
   float E = std::max(G.extX, G.extZ);
