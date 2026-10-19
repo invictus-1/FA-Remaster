@@ -38,6 +38,7 @@
 #include "hidden_outlines.h"
 #include "camera.h"
 #include "cinecam.h"
+#include "cloud_zoom.h"  // (cloudzoom)
 #include "dof.h"
 #include "debug_draw.h"
 #include "decals.h"
@@ -497,6 +498,11 @@ class World {
   bool volumeExplosions = false;
   VolumeBlasts volumes;
   Clouds clouds;
+  // (cloudzoom) Zooming out through the clouds (cloud_zoom.h; a trial): with the volumetric clouds, the game's camera
+  // rises through their layer as it zooms out, and they lie below it, thinning so the map stays readable. Modern
+  // look; off by default. `cloudZoomDraw`: its look (CloudZoom's numbers) and the pass that lays them over the scene.
+  bool cloudZoom = false;
+  CloudZoom cloudZoomDraw;
   // Soft shadows (lighting.h, SunShadow; the lighting upgrade): the sun's shadows sharper near what casts
   // them and blurred farther off, as a sun that is not a point makes them. Modern look; off by default.
   // `sunSize`: how much wider an edge grows per world unit from its caster (0.02: twice the real sun's).

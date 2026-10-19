@@ -40,6 +40,7 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       outlines(device),
       dust(device),
       clouds(device),
+      cloudZoomDraw(device),  // (cloudzoom)
       motion(device),
       upscaler(device),
       dof(device),
@@ -790,7 +791,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       const float top = foot.y + 150, wide = std::max(0.3f, camera.distance * 0.009f);
       Vec3 from{foot.x + (WeatherDraw(weatherSeed, stroke, 79) - 0.5f) * 40, top, foot.z + (WeatherDraw(weatherSeed, stroke, 83) - 0.5f) * 40};
       // (the volumetric clouds lit from within where the bolt leaves them, a little up in the layer)
-      clouds.boltAt = Vec3{from.x, std::max(clouds.base, camera.Eye().y + 40) + clouds.thickness * 0.3f, from.z};
+      clouds.boltAt = Vec3{from.x, clouds.Underside(camera.Eye().y) + clouds.thickness * 0.3f, from.z};  // (cloudzoom: where the march has the layer)
       clouds.boltReach = clouds.thickness * 0.9f;
       clouds.boltLight = Vec3{0.8f, 0.86f, 1.0f} * (flash * 8 / skyLight.exposure);
       const int pieces = 18;
@@ -2226,6 +2227,8 @@ void World::Render() {
   }
   // the volumetric clouds: where they are and their shadows, before the light in the air and the scene read them
   Stage("clouds' shadows");
+  // (cloudzoom) the zoom through them (cloud_zoom.h): whether the layer stays where it is this frame, and how thin
+  clouds.zoom = cloudZoomDraw.For(camera, clouds, cloudZoom && volumetricClouds && look == Look::Modern && haveMap_);
   if (sidePicture) clouds.Skip(&view);  // (a frame for something else: the game's frames before kept)
   else clouds.Prepare(&view, camera, volumetricClouds && look == Look::Modern && haveMap_);
   // light in the air: its volume, between the shadow maps and the scene that reads it
@@ -2455,6 +2458,11 @@ void World::Render() {
     post.BeginColorOnly();
     lights.Bind();
     falling.DrawSplashes(view, fall, rain, post.Depth());
+  }
+  if (clouds.Zoomed()) {  // (cloudzoom) the clouds the eye has risen into or above, over all that lies under them (cloud_zoom.h)
+    Stage("clouds over the scene (cloud zoom)");
+    post.BeginColorOnly();
+    cloudZoomDraw.Lay(view, clouds.Picture(), post.Depth());
   }
   Stage("fog of war");
   if (haveMap_ && sight.On() && sightShown) {  // the fog of war: what is not seen, darkened

@@ -12,8 +12,11 @@
 //    the frame before.
 // The sky's pass lays the result over the sky. The clouds stay above the eye (the layer's underside at
 // least 40 units over it) and are only seen against the sky: they never hide the battlefield.
+// (cloudzoom) Unless the zoom through them is on (`zoom`, cloud_zoom.h): then the eye rises into and above the
+// layer, and the clouds below it are laid over the ground, thinned so the map stays readable.
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 
@@ -67,6 +70,35 @@ class Clouds {
   float ringX = 0, ringZ = 0, ringRadius = 0, ringWidth = 1, ringStrength = 0;
   bool ringsWanted = false;
 
+  // (cloudzoom) Zooming out through the clouds (cloud_zoom.h, World::cloudZoom), set by the world before Build each
+  // frame. While `on` and the eye is no more than 40 under the layer, the layer stays where it is (it no longer keeps
+  // 40 over the eye: the eye goes into it and above it) and the view is marched through it wherever it lies before
+  // what was drawn, the ground too; Picture() then holds the clouds over the ground as well (Zoomed()), which
+  // CloudZoom::Lay puts over the scene. Off, or with the eye lower: the march as without it.
+  struct Zoom {
+    bool on = false;
+    float erode = 0;         // everywhere: how much is eaten from the clouds' thin outer parts (0 nothing .. 1 all but the hearts)
+    float keep = 1;          // and what is kept of the density of the rest (1 all)
+    float partErode = 0;     // round the view's middle, at its strongest: eaten as by `erode` ...
+    float partKeep = 1;      // ... and kept as by `keep`
+    float partFrom = 0.35f;  // the parting whole up to this far off the view's middle (in half the view's heights)
+    float partTo = 1.1f;     // and gone from this far
+    float near = 25;         // clouds nearer the eye than this fade away (world units), so the eye is never in a white-out
+    float gain = 1;          // the density times this (seen from close, outlines crisper)
+    float lumps = 0;         // how far lumps raise and lower their tops (in the layer's thickness): heaps, not a sheet
+    float powder = 0;        // how much thin outer parts seen away from the light are darkened (the billows' edges)
+    float fine = 0;          // how deep a finer detail bites into their outer parts (billows on top, wisps at the edges)
+    float fineSize = 0.27f;  // its size against the detail's (Clouds::detailSize)
+    float history = 0.85f;   // how much of the frame before a pixel keeps (as `keep`, below the layer) ...
+    float letGo = 10;        // ... less as the eye moves: none once it has gone a tenth (1 / this) of the clouds' distance
+    float inside = 0.3f;     // the least of the falling light that reaches deep inside them (light scattered on and on) ...
+    float insideFade = 0.25f;  // ... fading by this share of their depth toward the light (as without the zoom: 0.3, 0.25)
+  };
+  Zoom zoom;
+  bool Zoomed() const { return built_ && zoomedNow_; }  // this frame's Picture() holds clouds over the ground too
+  // The layer's underside as the march has it for an eye at that height (the lightning's flash is put in it).
+  float Underside(float eyeY) const { return zoom.on && marchZoom_ && eyeY > base - 40 ? base : std::max(base, eyeY + 40); }
+
  private:
   bool Size(int width, int height);
   gfx::Device* device_;
@@ -80,6 +112,12 @@ class Clouds {
   int width_ = 0, height_ = 0, now_ = 0;
   uint32_t frame_ = 0;
   Mat4 lastViewProj_ = Mat4::Identity();
+  // (cloudzoom) the zoom's march (made the first frame the zoom is on), whether this frame was marched by it, the
+  // finer coverage picture round the camera it reads, and where the eye was the frame before
+  gfx::Pipeline marchZoom_;
+  bool zoomTried_ = false, zoomedNow_ = false;
+  gfx::Texture coverFine_;
+  Vec3 lastEye_{0, 0, 0};
 };
 
 }  // namespace render

@@ -844,6 +844,33 @@ work is not starved of the processor).
    out so the map stays readable.
 15. **Units seen behind trees and cliffs (done, first version, 2026-10-18; ON by default):** `World::hiddenOutlines`
    (`hidden_outlines.h`; viewer `--no-hidden-outlines` / `--hidden-outlines`; `WorldPicture::SetHiddenOutlines`).
+   - **First version, for Chris to judge (2026-10-18)**: `World::cloudZoom` (viewer `--cloud-zoom`, with `--clouds-3d`;
+     `render/cloud_zoom.h/.cpp`; the zoom's own march `MarchZoom` in cloud_zoom.cpp, put after the clouds' shader
+     source with its numbers in a constant buffer of its own and made the first frame the zoom is on, so the march
+     without it and its constants are untouched). The layer (150-290 over the ground's zero, where its shadows
+     are) stays where it is instead of keeping 40 over the eye: as the game's camera zooms out (the original's zoom
+     about 190-330, a little after the strategic icons come in) the eye rises into it and then sees it below; zooming
+     in goes down through it again. Below it (the eye more than 40 under its underside) the march and the picture are
+     as without it; a cinematic camera never has it. Over the ground the clouds are laid by a pass of their own after
+     the rain and before the fog of war (the sky's pass still lays them against the sky).
+   - Thinning, of the three ways offered: by the eye's height over the layer's top over 900 units (their outer parts
+     eaten, so they shrink and break up, the rest faint): the main one, the strategic view keeps a few small clouds,
+     as fair-weather cumulus look from far up, and reads as today; a mild parting round the view's middle from the
+     layer's top up (inside the layer it showed as a dark disc in the fog); and the shadows on the ground as they are
+     at every height. Seen from close the clouds as made for the sky were soft blobs: the zoom's march makes them
+     denser, heaps their tops in lumps, lets a finer detail bite into their edges, shades lumps with short first steps
+     toward the light, reads a finer coverage picture round the camera, and fades them within 60 units of the eye.
+     The frames before are found by where the clouds are (by direction alone they smeared as the eye rose) and kept
+     less while the eye moves against their distance (else each frame's edge showed, carried inward as rings).
+   - Cost at 1440p (RTX 4090, Seton's Remastered, clouds 0.7, the lowest of 300 frames): the march 1.03 ms with the eye
+     in the layer (zoom 260), 0.50 just above it (zoom 500), 0.40 at the strategic view, against 0.02 without the zoom
+     (no sky in a steep view); laying them 0.02-0.06 ms. Off: pictures identical on both backends (the regression, and
+     the volumetric clouds on Seton's Remastered with the zoom off, and on with the eye low and with a cinematic
+     camera); on, Vulkan as Direct3D 12 (mean 0.15, as without it 0.17). Viewer: `--cam-zoom-path "t:zoom;..."` zooms
+     the game's camera as the original's does (the lean and the field of view by the zoom), `--cloud-zoom-look` tunes it.
+   - Open: at the default cloud cover (0.3) there is little to rise through, the trial is shown at 0.7; a camera
+     stopped inside a cloud sees fog; the clouds just under the eye are still soft; Chris to judge.
+15. **Units seen behind trees and cliffs**: a faint outline in the army's colour where a unit is hidden.
    ON by default (Chris via the interface session, 2026-10-17: readability), and only for what the player may
    see: his own, allied units, enemies in sight, never an enemy in the fog. Where such a unit's surface lies behind
    the scene's depth (leaves, props, a hill, a building), a thin line (1.5 pixels at 1080 lines, the same share of
@@ -939,6 +966,7 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `temporalUpscale` | AMD's FSR 3 (in the game's Video tab already) | at Quality the frame 2.7 -> 1.4-1.9 ms | anti-aliasing off |
 | `volumetricFog` | light in the air: the sun's shafts, the lamps' beams, glowing mist | 0.05-0.09 ms | |
 | `volumetricClouds` | heaped clouds lit through, their shadows on the ground | about 0.4 ms, against 0.63 ms for today's sky with its layer: cheaper | a time of day |
+| `cloudZoom` (a trial) | the zoom out rises through the volumetric clouds, which then lie below, thinning | +0.4 to 1.0 ms from the clouds' layer up, nothing below it | `volumetricClouds` |
 | `skyTables` | the sky from tables of the atmosphere (the planet's shadow at dusk, many-times scattered light) | about 0.1 ms less | a time of day |
 | `softShadows` | the sun's shadows sharp at the foot, soft farther off | +0.25 ms | |
 | `contactShadows` | small shadows at units' feet and under trees | +0.12 ms | |
