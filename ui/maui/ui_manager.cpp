@@ -99,6 +99,7 @@ bool UiManager::CreateRootFrames(lua_State* L, int width, int height) {
   }
   lua_settop(L, top);
   frame->head = static_cast<int>(frames_.size());
+  frame->renderPass = 8;  // (UIRP_PostGlow: 0x84ce94, after CMauiFrame::Create; every control made on it takes it)
   frames_.push_back(frame);
   Resize(width, height);
   return true;
@@ -124,15 +125,28 @@ void UiManager::Update(lua_State* L, float seconds) {
 }
 
 // Drawing a head (FA exe 0x786fa0, 0x7870f0): the frame and everything below it, depth first,
-// makes one list ordered by Depth; the controls that are not hidden draw in that order, lowest
-// first. Depth is only asked of controls that are not hidden. Inferred: controls of equal depth
-// keep their tree order. Render passes are not told apart yet: every pass draws.
-// The main world view's picture is the world itself, which the original draws before any
-// control; here it is a control's picture, so it goes first whatever its Depth. Without that,
-// what the script puts over the world at a Depth below the view's own is hidden under it: FAF's
-// reclaim labels sit at a thousandth of their mass (0.1 for a rock of 113), the view at 3.
-// (INFERRED that the original's world lies under all controls: seen by those labels showing
-// there; its order of drawing world and interface is not read.)
+// makes one list ordered by Depth (Depth is only asked of controls that are not hidden; INFERRED:
+// controls of equal depth keep their tree order). The list is drawn in render passes: in each, the
+// controls that are not hidden and whose render pass has the pass's bit draw, lowest Depth first
+// (CMauiFrame::DoRender 0x7870f0: renderPass & pass, then the control's Draw); a control with several
+// bits draws in each of them. WRenViewport::Render (0x7f90d0) draws, in this order: pass 1
+// (UIRP_UnderWorld: IUIManager::RenderFrames 0x84d550), the world of each world view in its
+// rectangle (the views' scenes, then the cartographic ones, 0x7f97b2), pass 4 (UIRP_Glow: DrawUI
+// 0x84d5d0), the bloom (0x7f983a), pass 8 (UIRP_PostGlow: RenderUI 0x7f88b0 -> DrawHead 0x84d650).
+// No pass has bit 2 (UIRP_World, "reserved for world views"): a control with none of 1, 4 and 8 is
+// never drawn. So a control of pass 8 (a root frame's, which every control takes from its parent
+// unless a script sets another) draws over one of pass 1 or 4 whatever their Depths, and anything
+// of pass 1 lies under the world: FAF's minimap window keeps its middle (window_m) there.
+// A world view: the original's draws only its viewport's rectangle in pass 1 and its marks in its
+// other passes (0x86ef40), its world comes between. Here a world view's picture is a control's
+// Draw, made at the world's place whatever the view's passes: the main view first (DrawsBeneathAll),
+// the others (minimaps) by Depth; its marks with it (INFERRED: in the original they are drawn in
+// its pass 4 or 8 among the other controls). What pass 1 draws inside the main view is covered by
+// its world in the original: here it is left out where it lies wholly inside the main view (the
+// picture would cover it, and where the renderer lays the world under the interface it would show
+// through; INFERRED for a control only partly inside: drawn, the picture covering that part).
+// (INFERRED that the original's world lies under all controls of pass 4 and 8: read in the order
+// above, and seen in FAF's reclaim labels showing over it at a Depth below the view's.)
 namespace {
 // Where drawing the interface's picture goes, by kind of control (with MOHO64UI_DRAW_PROFILE set;
 // logged by LogDrawProfile at the end of a window run): for finding what to draw less often.
@@ -197,23 +211,52 @@ void UiManager::Render(lua_State* L, DrawTarget& target, int head) {
   for (Control* c : all)
     if (!c->dead() && !c->IsHidden()) order.emplace_back(c->DrawsBeneathAll() ? -1e30f : c->depth.Get(), c);
   std::stable_sort(order.begin(), order.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
-  if (!profile) {
-    for (auto& [depth, c] : order)
-      if (!c->dead()) SetLazyVarContext(c), c->Draw(L, target);
-    SetLazyVarContext(nullptr);
-    return;
+  if (profile) {
+    ++g_renders;
+    DrawCost& sorting = DrawCosts()["(collecting and sorting the controls)"];
+    sorting.seconds += std::chrono::duration<double>(Clock::now() - t0).count(), sorting.draws += static_cast<long long>(all.size());
   }
-  ++g_renders;
-  DrawCost& sorting = DrawCosts()["(collecting and sorting the controls)"];
-  sorting.seconds += std::chrono::duration<double>(Clock::now() - t0).count(), sorting.draws += static_cast<long long>(all.size());
-  for (auto& [depth, c] : order) {
-    if (c->dead()) continue;
+  auto draw = [&](Control* c) {
+    if (c->dead()) return;  // (a script run by an earlier Draw may have destroyed it)
+    SetLazyVarContext(c);
+    if (!profile) {
+      c->Draw(L, target);
+      return;
+    }
     const auto a = Clock::now();
     c->Draw(L, target);
     DrawCost& cost = DrawCosts()[c->ClassName()];
     cost.seconds += std::chrono::duration<double>(Clock::now() - a).count();
     ++cost.draws;
+  };
+  // The rectangles of the main world views (their world covers what pass 1 drew there).
+  std::vector<Rect> worlds;
+  for (auto& [depth, c] : order) {
+    Rect r;
+    if (!c->IsWorldView() || !c->DrawsBeneathAll()) continue;
+    SetLazyVarContext(c);
+    c->GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
+    if (r.x1 > r.x0 && r.y1 > r.y0) worlds.push_back(r);
   }
+  auto underWorld = [&](const Control* c) {
+    if (worlds.empty()) return false;
+    Rect r;
+    SetLazyVarContext(c);
+    c->GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
+    if (r.x0 > r.x1) std::swap(r.x0, r.x1);  // (a bitmap laid out turned over draws between its edges)
+    if (r.y0 > r.y1) std::swap(r.y0, r.y1);
+    for (const Rect& w : worlds)
+      if (r.x0 >= w.x0 && r.y0 >= w.y0 && r.x1 <= w.x1 && r.y1 <= w.y1) return true;
+    return false;
+  };
+  for (auto& [depth, c] : order)
+    if (!c->IsWorldView() && (c->renderPass & 1) && !underWorld(c)) draw(c);
+  for (auto& [depth, c] : order)
+    if (c->IsWorldView()) draw(c);
+  for (const int pass : {4, 8})
+    for (auto& [depth, c] : order)
+      if (!c->IsWorldView() && (c->renderPass & pass)) draw(c);
+  SetLazyVarContext(nullptr);
 }
 
 void LogDrawProfile() {

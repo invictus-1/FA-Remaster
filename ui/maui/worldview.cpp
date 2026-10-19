@@ -849,6 +849,7 @@ class WorldView : public Control {
  public:
   const char* ClassName() const override { return "worldview"; }
   bool DrawsBeneathAll() const override { return !miniMap; }
+  bool IsWorldView() const override { return true; }
   void Describe(std::string& out) const override { out += "camera " + cameraName + (miniMap ? " minimap" : ""); }
 
   std::string cameraName;

@@ -43,6 +43,9 @@ class Control : public ScriptObject {
   // A control whose picture lies under every other control of its head whatever its Depth: the
   // main world view (see UiManager::Render).
   virtual bool DrawsBeneathAll() const { return false; }
+  // A world view (FA exe CUIWorldView): its picture is the world, which the original draws between
+  // the interface's first render pass and the later ones, whatever the view's own (UiManager::Render).
+  virtual bool IsWorldView() const { return false; }
   // Draw this control alone (its children draw themselves). A plain control draws nothing.
   virtual void Draw(lua_State* L, DrawTarget& target) {
     (void)L;
@@ -65,7 +68,8 @@ class Control : public ScriptObject {
   // DisableHitTest / EnableHitTest (0x787210): the flag, and with `recursive` the children's too.
   void SetHitTestDisabled(bool disabled, bool recursive);
   bool IsHitTestDisabled() const { return hitTestDisabled_; }
-  // HitTest (0x787270): Left <= x < Right and Top <= y < Bottom.
+  // HitTest (0x787270): Left <= x < Right and Top <= y < Bottom (a bitmap may ask its picture too).
+  // The render passes play no part in it (GetTopmostControl 0x7872e0 compares Depth alone).
   virtual bool HitTest(float x, float y) const;
   void SetParent(Control* parent);
   void SetAlpha(float alpha, bool children);
@@ -112,6 +116,9 @@ class Control : public ScriptObject {
   LazyVar left, right, top, bottom, width, height, depth;
   std::string name;
   float alpha = 1.0f;
+  // The render passes it draws in, a set of bits (+0xf8; FAF's uiutil.lua names them: 1 UIRP_UnderWorld,
+  // 2 UIRP_World, 4 UIRP_Glow, 8 UIRP_PostGlow): 0 at first, the parent's at creation (0x786951), 8 for
+  // a root frame (0x84ce94). See UiManager::Render.
   int renderPass = 0;
   bool needsFrameUpdate = false;
 

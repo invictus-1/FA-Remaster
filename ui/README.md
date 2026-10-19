@@ -777,8 +777,8 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   (request 27): the playable part drawn (outside it black in the original's look, dimmed in the modern
   one; the minimap shows the part), the cinematics' switches UI_NisRenderIcons, ren_SelectBoxes,
   ren_Oblivion.
-- Not real yet: the other console commands, render passes, other texture formats, and the
-  engine functions the screens behind the menu call (their stubs are named in the log).
+- Not real yet: the other console commands, JPEG pictures (some mods' icons in the mods manager),
+  and the engine functions the screens behind the menu call (their stubs are named in the log).
 - A bitmap of several textures animates as the original's (FA exe, CMauiBitmap, read 2026-10-16):
   a pattern of the textures to show in turn (forward, backward, ping-pong, looping ping-pong, or the
   script's own with `SetFramePattern`), one step per frame once a step's time has passed (12 a
@@ -791,6 +791,21 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   without culling): FAF's score graph lays the shares' bands behind its lines out so. The host's
   test function `moho64ui_PixelAt(x, y)` draws the head and gives a pixel's colour
   (`ui/tests/controls.lua`).
+- Hit testing by a picture's transparency and the render passes, as the original's (FA exe, read
+  2026-10-19; `ui/tests/hittest_passes.lua`, the front end and a game). A bitmap with
+  `UseAlphaHitTest(true)` is hit only where its texture's pixel at the mouse (in the control's own
+  pixels, also when it is stretched; plus the texture's border; the frame shown now; a solid colour
+  by its colour) has an alpha above 0 (CMauiBitmap::HitTest 0x77ff70): a click on its transparent
+  part goes to what lies under it. FAF's construction tabs ask for it (construction.lua `CreateTab`),
+  and its layouts switch it off again. The render passes are a set of bits (FAF's uiutil.lua: 1
+  UnderWorld, 2 World, 4 Glow, 8 PostGlow); a root frame's is 8 and a control takes its parent's when
+  it is made. The head draws pass 1, then the world (the world views' pictures), then pass 4, then
+  pass 8, each by Depth (WRenViewport::Render 0x7f90d0, CMauiFrame::DoRender 0x7870f0): a control of a
+  later pass lies over one of an earlier pass whatever their Depths, one of no pass 1, 4 or 8 is not
+  drawn, and hit testing still goes by Depth alone. So FAF's minimap window keeps its half
+  transparent middle (pass 1) under the world, not over the minimap. Besides DDS and PNG the
+  interface reads TGA (FAF's reclaim-disabled cursor) and BMP (mods' icons, some named .dds), known
+  by content as D3DX knows them.
 - The map's border (the machinery the map lies in, a mesh for each skin): `MapBorderAdd` and
   `MapBorderClear` keep the script's list and hand it to the picture's source with every scene
   (`WorldScene::borders`), which gives it to the renderer's `WorldPicture::SetBorders`: from the

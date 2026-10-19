@@ -1,9 +1,13 @@
 // Texture files to pixels: .dds (DXT1, DXT3, DXT5 and uncompressed formats), top mip level only,
-// and .png (FAF's newer interface pictures: 8 and 16 bits a channel, grey, colour and palette,
-// with or without alpha; interlaced files are not read).
+// .png (FAF's newer interface pictures: 8 and 16 bits a channel, grey, colour and palette, with or
+// without alpha; interlaced files are not read), .bmp and .tga. The original hands every file to
+// D3DX (D3DXCreateTextureFromFileInMemoryEx, DeviceD3D9 0x8ecd20), which knows a file by its
+// content, not its name: FAF's one .tga (a cursor) and mods' .bmp icons, some of them named .dds,
+// are read so here too. JPEG (mods' icons) is not read yet.
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <vector>
 
 #include <zlib.h>
 
@@ -242,11 +246,152 @@ bool DecodePng(const std::string& d, Image& img) {
   return true;
 }
 
+// A Windows bitmap ("BM"): the 12-byte (OS/2) and 40-byte or longer headers; 1, 4 and 8 bits through
+// the palette, 16 (5-5-5), 24 and 32 bits uncompressed, 16 and 32 bits by bit masks (BI_BITFIELDS);
+// rows from the bottom unless the height is negative. Run-length compressed files are not read.
+// INFERRED: 32 bits uncompressed, and bit masks without an alpha mask, are opaque (an X8R8G8B8 file).
+bool DecodeBmp(const std::string& d, Image& img) {
+  if (d.size() < 26 || d[0] != 'B' || d[1] != 'M') return false;
+  const size_t pixelsAt = Le32(d, 10), headerSize = Le32(d, 14);
+  int w = 0, h = 0, bpp = 0;
+  uint32_t compression = 0, colors = 0, masks[4] = {0, 0, 0, 0};
+  size_t paletteAt = 14 + headerSize, paletteEntry = 4;
+  if (headerSize == 12) {
+    w = static_cast<int>(Le16(d, 18)), h = static_cast<int>(Le16(d, 20)), bpp = static_cast<int>(Le16(d, 24));
+    paletteEntry = 3;
+  } else if (headerSize >= 40 && d.size() >= 54) {
+    w = static_cast<int32_t>(Le32(d, 18)), h = static_cast<int32_t>(Le32(d, 22)), bpp = static_cast<int>(Le16(d, 28));
+    compression = Le32(d, 30), colors = Le32(d, 46);
+    if (compression == 3) {  // the masks: after a 40-byte header, else inside the longer one
+      if (d.size() < 66) return false;
+      for (size_t i = 0; i < 3; ++i) masks[i] = Le32(d, 54 + 4 * i);
+      if (headerSize >= 56 && d.size() >= 70) masks[3] = Le32(d, 66);
+      if (headerSize == 40) paletteAt += 12;
+    }
+  } else {
+    return false;
+  }
+  const bool topDown = h < 0;
+  if (topDown) h = -h;
+  if (w <= 0 || h <= 0 || w > 16384 || h > 16384) return false;
+  if (compression != 0 && !(compression == 3 && (bpp == 16 || bpp == 32))) return false;
+  if (bpp != 1 && bpp != 4 && bpp != 8 && bpp != 16 && bpp != 24 && bpp != 32) return false;
+  const size_t stride = (static_cast<size_t>(w) * static_cast<size_t>(bpp) + 31) / 32 * 4;
+  if (pixelsAt + stride * static_cast<size_t>(h) > d.size()) return false;
+  if (bpp <= 8 && !colors) colors = 1u << bpp;
+  img.width = w, img.height = h;
+  img.pixels.assign(static_cast<size_t>(w) * static_cast<size_t>(h), 0);
+  for (int y = 0; y < h; ++y) {
+    const size_t row = pixelsAt + stride * static_cast<size_t>(topDown ? y : h - 1 - y);
+    for (int x = 0; x < w; ++x) {
+      uint32_t px = 0xff000000u;
+      if (bpp <= 8) {  // (the leftmost pixel in a byte's high bits)
+        const size_t bit = static_cast<size_t>(x) * static_cast<size_t>(bpp);
+        const int shift = 8 - bpp - static_cast<int>(bit % 8);
+        const uint32_t v = (static_cast<uint8_t>(d[row + bit / 8]) >> shift) & ((1u << bpp) - 1);
+        const size_t at = paletteAt + v * paletteEntry;
+        if (v < colors && at + 3 <= d.size())
+          px |= static_cast<uint32_t>(static_cast<uint8_t>(d[at + 2])) << 16 | static_cast<uint8_t>(d[at + 1]) << 8 | static_cast<uint8_t>(d[at]);
+      } else if (bpp == 24) {
+        const size_t at = row + static_cast<size_t>(x) * 3;
+        px |= static_cast<uint32_t>(static_cast<uint8_t>(d[at + 2])) << 16 | static_cast<uint8_t>(d[at + 1]) << 8 | static_cast<uint8_t>(d[at]);
+      } else {
+        const uint32_t v = bpp == 16 ? Le16(d, row + static_cast<size_t>(x) * 2) : Le32(d, row + static_cast<size_t>(x) * 4);
+        const bool masked = compression == 3;
+        const uint32_t r = masked ? masks[0] : bpp == 16 ? 0x7c00u : 0x00ff0000u;
+        const uint32_t g = masked ? masks[1] : bpp == 16 ? 0x03e0u : 0x0000ff00u;
+        const uint32_t b = masked ? masks[2] : bpp == 16 ? 0x001fu : 0x000000ffu;
+        const uint32_t a = masked && masks[3] ? Channel(v, masks[3]) : 255u;
+        px = a << 24 | Channel(v, r) << 16 | Channel(v, g) << 8 | Channel(v, b);
+      }
+      img.pixels[static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)] = px;
+    }
+  }
+  return true;
+}
+
+// A Truevision TGA file (no magic: its header has to make sense): colour mapped (types 1, 9), true colour
+// (2, 10) and grey (3, 11), 9 to 11 run-length packed; 8, 15, 16, 24 and 32 bits a pixel; rows from the
+// bottom unless the descriptor's bit 5 says from the top, right to left by its bit 4. INFERRED: the alpha
+// is the file's where the descriptor counts alpha bits (its low four), else the pixels are opaque.
+bool DecodeTga(const std::string& d, Image& img) {
+  if (d.size() < 18) return false;
+  const uint32_t idLength = static_cast<uint8_t>(d[0]), mapType = static_cast<uint8_t>(d[1]), type = static_cast<uint8_t>(d[2]);
+  const uint32_t mapFirst = Le16(d, 3), mapLength = Le16(d, 5), mapBits = static_cast<uint8_t>(d[7]);
+  const int w = static_cast<int>(Le16(d, 12)), h = static_cast<int>(Le16(d, 14));
+  const int bpp = static_cast<uint8_t>(d[16]), descriptor = static_cast<uint8_t>(d[17]);
+  const uint32_t kind = type & 7u;  // 1 mapped, 2 true colour, 3 grey
+  if ((type & ~8u) < 1 || (type & ~8u) > 3 || mapType > 1 || w <= 0 || h <= 0) return false;
+  if (bpp != 8 && bpp != 15 && bpp != 16 && bpp != 24 && bpp != 32) return false;
+  if ((kind == 1 && (mapType != 1 || bpp > 16)) || (kind == 3 && bpp != 8)) return false;
+  const bool alpha = (descriptor & 15) != 0;
+  // a colour from `bits` bits read little-endian (a palette entry or a true colour pixel)
+  auto colour = [&](uint32_t v, uint32_t bits) -> uint32_t {
+    if (bits == 8) return 0xff000000u | v * 0x010101u;
+    if (bits == 15 || bits == 16) {
+      const uint32_t a = bits == 16 && alpha ? ((v & 0x8000u) ? 255u : 0u) : 255u;
+      return a << 24 | Channel(v, 0x7c00u) << 16 | Channel(v, 0x03e0u) << 8 | Channel(v, 0x001fu);
+    }
+    if (bits == 24 || !alpha) return 0xff000000u | (v & 0xffffffu);
+    return v;
+  };
+  size_t at = 18 + idLength;
+  std::vector<uint32_t> palette;
+  if (mapType == 1) {
+    const size_t entry = (mapBits + 7) / 8;
+    if (entry < 2 || entry > 4 || at + entry * mapLength > d.size()) return false;
+    for (uint32_t i = 0; i < mapLength; ++i) {
+      uint32_t v = 0;
+      for (size_t k = 0; k < entry; ++k) v |= static_cast<uint32_t>(static_cast<uint8_t>(d[at + i * entry + k])) << (8 * k);
+      palette.push_back(colour(v, mapBits));
+    }
+    at += entry * mapLength;
+  }
+  const size_t bytes = static_cast<size_t>((bpp + 7) / 8), count = static_cast<size_t>(w) * static_cast<size_t>(h);
+  auto read = [&](size_t o) -> uint32_t {
+    uint32_t v = 0;
+    for (size_t k = 0; k < bytes; ++k) v |= static_cast<uint32_t>(static_cast<uint8_t>(d[o + k])) << (8 * k);
+    if (kind != 1) return colour(v, kind == 3 ? 8u : static_cast<uint32_t>(bpp));
+    return v >= mapFirst && v - mapFirst < palette.size() ? palette[v - mapFirst] : 0xff000000u;
+  };
+  std::vector<uint32_t> pixels;  // in the file's order
+  pixels.reserve(count);
+  if (type < 8) {
+    if (at + count * bytes > d.size()) return false;
+    for (size_t i = 0; i < count; ++i) pixels.push_back(read(at + i * bytes));
+  } else {
+    while (pixels.size() < count) {
+      if (at >= d.size()) return false;
+      const uint8_t packet = static_cast<uint8_t>(d[at++]);
+      const size_t n = (packet & 0x7fu) + 1u;
+      if (packet & 0x80) {  // one pixel, n times
+        if (at + bytes > d.size()) return false;
+        const uint32_t v = read(at);
+        at += bytes;
+        for (size_t i = 0; i < n && pixels.size() < count; ++i) pixels.push_back(v);
+      } else {
+        if (at + n * bytes > d.size()) return false;
+        for (size_t i = 0; i < n && pixels.size() < count; ++i) pixels.push_back(read(at + i * bytes));
+        at += n * bytes;
+      }
+    }
+  }
+  img.width = w, img.height = h;
+  img.pixels.assign(count, 0);
+  const bool fromTop = (descriptor & 0x20) != 0, fromRight = (descriptor & 0x10) != 0;
+  for (int y = 0; y < h; ++y)
+    for (int x = 0; x < w; ++x)
+      img.pixels[static_cast<size_t>(fromTop ? y : h - 1 - y) * static_cast<size_t>(w) + static_cast<size_t>(fromRight ? w - 1 - x : x)] =
+          pixels[static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)];
+  return true;
+}
+
 }  // namespace
 
 bool DecodeImage(const std::string& data, Image& out) {
   out.serial = NewImageSerial();  // (new pixels in place: new content for draw/recorder.h)
-  return DecodeDds(data, out) || DecodePng(data, out);
+  // (by content, as D3DX: a TGA has no magic, so it comes last)
+  return DecodeDds(data, out) || DecodePng(data, out) || DecodeBmp(data, out) || DecodeTga(data, out);
 }
 
 const Image& LoadTexture(const Vfs* vfs, const std::string& vpath) {

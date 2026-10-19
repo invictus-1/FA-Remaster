@@ -61,6 +61,36 @@ class Bitmap : public Control {
     target.DrawImage(img, src, dst, tint);
   }
 
+  // HitTest (FA exe 0x77ff70, the bitmap's slot 9; the only control class with its own): the
+  // control's rectangle first (0x787270). With UseAlphaHitTest on (+0x168) the texture shown now,
+  // textures[pattern[frame]] (+0x120, +0x180, +0x174), is asked of its pixel at (x - Left, y - Top),
+  // each cut toward zero (cvttss2si), and only a pixel whose alpha is not 0 is a hit. A file's texture
+  // (CD3DFileBatchTexture slot 2, 0x448190) reads the file's pixel at that place plus its border
+  // (+0x14), from the DXT5 copy the device keeps of every interface texture (0x8ecd20 converts the
+  // other formats; DXT_GetTexelAlpha 0x404fe0); a solid colour's (CD3DSolidBatchTexture 0x447890)
+  // is its colour's alpha. The place is in the control's own pixels, not scaled to the texture: a
+  // stretched bitmap is asked of the texture's pixels from its top left on. (The bit mask the
+  // original tests first, +0x164, is never made in this exe: only its constructor and destructor
+  // touch it.) INFERRED where the original reads past the texture (a place beyond the file's pixels:
+  // its DXT5 rows run on into the next ones) or has no texture to ask: past the file a miss, no
+  // texture or one we cannot decode a hit (a file the original cannot load becomes an opaque solid
+  // colour, 0xffaaaa00, at SetNewTexture); and the alpha is the file's own, not re-encoded to DXT5.
+  bool HitTest(float x, float y) const override {
+    if (!Control::HitTest(x, y)) return false;
+    if (!alphaHitTest) return true;
+    if (solid) return (ParseColor(color) >> 24) != 0;
+    if (pattern.empty() || textures.empty()) return true;
+    const float dx = x - left.Get(), dy = y - top.Get();  // (0 or more: the rectangle's test passed)
+    if (!(dx < 1e9f && dy < 1e9f)) return false;
+    const int at = pattern[static_cast<size_t>(std::max(0, std::min(frame, static_cast<int>(pattern.size()) - 1)))];
+    const size_t index = static_cast<size_t>(std::max(0, std::min(at, static_cast<int>(textures.size()) - 1)));
+    const Image& img = LoadTexture(vfs_, textures[index]);
+    if (!img.valid()) return true;
+    const long long px = static_cast<long long>(dx) + border, py = static_cast<long long>(dy) + border;
+    if (px < 0 || py < 0 || px >= img.width || py >= img.height) return false;
+    return (img.pixels[static_cast<size_t>(py) * static_cast<size_t>(img.width) + static_cast<size_t>(px)] >> 24) != 0;
+  }
+
   LazyVar bitmapWidth, bitmapHeight;
   std::vector<std::string> textures;  // more than one: animation frames
   int border = 1;
@@ -68,6 +98,7 @@ class Bitmap : public Control {
   std::string color;  // as the script gave it ("ffRRGGBB" or a colour name)
   float u0 = 0, v0 = 0, u1 = 1, v1 = 1;
   bool tiled = false, alphaHitTest = false;
+  const Vfs* vfs_ = nullptr;  // where the textures come from (for HitTest, which has no script state)
   // The animation, as the original's (FA exe, CMauiBitmap; read 2026-10-16, notes in the ui chat's
   // scratchpad helper_bitmap\findings.md): `pattern` lists the textures to show in turn (0-based),
   // `frame` is the place in it, one step every `period` seconds (12 a second at first).
@@ -141,6 +172,7 @@ int l_InternalCreateBitmap(lua_State* L) {
   luaL_checktype(L, 1, LUA_TTABLE);
   Control* parent = CheckParent(L);
   Bitmap* b = new Bitmap;
+  b->vfs_ = ScriptState::From(L)->vfs();
   b->Create(L, 1, parent);
   b->MakeVars(L);
   b->RunInit(L);
@@ -206,6 +238,7 @@ int l_SetTiled(lua_State* L) {
   CheckControl<Bitmap>(L, 1)->tiled = lua_toboolean(L, 2) != 0;
   return 0;
 }
+// UseAlphaHitTest(bool) (0x7819d0): the flag HitTest reads; off at first (the constructor, 0x77fa1f).
 int l_UseAlphaHitTest(lua_State* L) {
   CheckControl<Bitmap>(L, 1)->alphaHitTest = lua_toboolean(L, 2) != 0;
   return 0;
