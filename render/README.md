@@ -435,6 +435,15 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   from afar, shrinking or growing over a lifetime, the feedback ones fading) and `FakeRings`
   (unlit, hidden by what is in front) are drawn by `PlacedMeshes` as those techniques are in
   the original's `mesh.fx`; any other name is an ordinary lit model (`ModelCache::Mesh`).
+  `CommandFeedback3` and `CommandFeedback4` (unlit, blended by the texture's alpha, at the mesh's own
+  place and size; 3 over everything, 4 hidden by what is in front with its depth taken a little nearer
+  the camera, as the original's depth bias) are drawn there too, and not only for the interface: a
+  script entity's or a unit's model whose mesh blueprint names one of them (FAF's pings, SimPing.lua;
+  the ferry beacons UEB5102 and the like) is handed to `PlacedMeshes::TakeModel` instead of the mesh
+  renderer, so it casts no shadow and is in neither the reflections nor the ray tracing scene. The
+  original also draws these on its minimap (`cartographicTechnique = "CartographicFeedback"` in
+  `mesh.fx`); this renderer's minimap does not yet. `IconFadeInZoom` (a mesh blueprint's) is the zoom from
+  which a unit's strategic icon comes in; the original never fades a mesh by it. `--ping-test` shows them.
 - Scenery that changes (the engine's `PropEvents`, `World::AddPropEvents`; the simulation must
   have `collectProps` set before its first beat). The map's props are still read from the map
   file, kept in the file's order, and the simulation names one by its index there: one that is

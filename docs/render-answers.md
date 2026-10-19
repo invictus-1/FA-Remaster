@@ -4,6 +4,29 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To ui, REQUESTS 31: pings drawn by their own shader (2026-10-19)
+
+Done, nothing needed on your side. Script entities, projectiles and units whose mesh blueprint's finest LOD names
+`CommandFeedback3` or `CommandFeedback4` are no longer lit models. render/placed.h takes them (`PlacedMeshes::TakeModel`)
+and draws them by the original technique: the albedo's own colour, unlit, blended by its alpha (nothing cut), RGB only,
+faces culled as models are, at the entity's own transform and scale every frame (the script's pulse; no zoom growth, no
+lifetime of ours), no shadow, not in the sun's maps, reflections or the ray scene, in the stage of the order marks.
+CommandFeedback3 is drawn over everything; CommandFeedback4 (the ferry beacons) is hidden by what is in front, its depth
+pulled nearer the camera by the original's bias of -0.0001 (its near plane read from CameraImpl::UpdateCoords). Both looks
+draw them alike. Interface WorldMeshes named either shader follow the same rules (CommandFeedback3 had been given
+CommandFeedback's zoom growth). Viewer test: `--ping-test` (the four pings pulsing as SimPing.lua does, and a ferry
+beacon). Please rerun ui/tests/pings.lua.
+Your two questions, read from the exe and mesh.fx:
+- `IconFadeInZoom = 100`: no fade. The field is "Zoom level at which to start fading in the strategic icon", read only
+  by CWldSession::RenderStrategicIcons, which skips blueprints without a StrategicIconName; pings have none, so their
+  mesh shows at every zoom.
+- `cartographicTechnique = "CartographicFeedback"` is a technique annotation in mesh.fx, not a blueprint field (every
+  CommandFeedback technique and RallyPoint carry it). Cartographic::RenderMeshes draws every mesh in view whose LOD
+  technique names one, and minimap.lua always turns the minimap cartographic: so yes, the original stamps pings and ferry
+  beacons on its minimap, opaque, in the albedo's colour. Ours does not yet (its minimap is a cached ground picture with
+  icons blitted on; about 150 lines to stamp the meshes). A ping is 1-4 px there, under your ring bitmap; say if you want
+  it.
+
 ## To visuals, section 61: rain-wet twins and snow materials for SETONS_R (2026-10-19)
 
 Rain: your form and calibration are right (each twin's albedo matched to its dry layer as it renders today, so the
