@@ -323,6 +323,7 @@ void RayScene::Build(const MeshRenderer& meshes) {
     for (auto l = model->lods.rbegin(); l != model->lods.rend() && !chosen; ++l)
       if (Solid(*l) && l->vertices && l->indices && l->vertexCount && l->indexCount) chosen = &*l;
     if (!chosen) return;
+    if (chosen->stream && meshes.divertStream) return;  // [stream] (a stream drawn as water: stream_water.h; no ribbon to cast)
     const ModelLod& lod = *chosen;
     auto it = levels_.find(lod.serial);
     if (it == levels_.end()) {  // (a level seen the first time: its structure, and its colour worked out)

@@ -69,7 +69,8 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       photoFinish(device),  // (photolook)
       horizon(device),  // [horizon]
       leaves(device),  // [seasons]
-      sunlight(device) {  // [sunlight]
+      sunlight(device),  // [sunlight]
+      streams(device, &textures) {  // [stream]
   particles.rampGlow = [this](const std::string& ramp) { return lights.RampGlow(ramp); };  // (what is hot: lit smoke's fires, heat shimmer)
   // (movement dust: how each kind of unit moves, from its blueprint)
   dust.readBlueprint = [this](const std::string& id, BpValue* out) {
@@ -257,6 +258,13 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
       props_.push_back({model, world});
     }
     step("props' models made");
+    {  // [stream] the map's streams (stream_water.h): the props whose levels are a stream's water or its white water
+      streams.Forget();
+      for (size_t i = 0; i < props_.size(); ++i)
+        if (props_[i].model && !props_[i].model->lods.empty() && props_[i].model->lods[0].stream)
+          streams.Add(props_[i].model, props_[i].world, static_cast<uint32_t>(i));
+      if (streams.Any()) printf("render: %d stream ribbons, %d of white water (World::streamWater)\n", streams.Count(false), streams.Count(true));
+    }
     // ... listed by squares of the map
     propCellsX_ = std::max(1, static_cast<int>(std::ceil(static_cast<float>(map.width) / kPropCell)));
     propCellsZ_ = std::max(1, static_cast<int>(std::ceil(static_cast<float>(map.height) / kPropCell)));
@@ -1032,6 +1040,9 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     water.surf.Begin(time, surfOn, sidePicture, rough, wind, camera.Eye());
     if (surfOn) water.PrepareSurf(waterRipples, winterWater);
   }
+  // [stream] streams as water (stream_water.h): their props left out of the models' drawing while the streams' pass draws them
+  streamNow_ = streamWater && look == Look::Modern && haveMap_ && !sidePicture && streams.Any() && streams.Prepare();
+  meshes.divertStream = streamNow_;
   CpuTimes::Part("sun shadows placed");
   if (haveMap_ && shadowsOn) {
     if (shadows.Size() != shadowSize) shadows.SetSize(shadowSize);
@@ -2786,6 +2797,19 @@ void World::Render() {
     }
     Stage("sky");
     skyDraw.Draw(view, camera, skyLight, haveMap_ ? sky_ : gfx::Texture{}, clouds.Picture());  // where nothing solid is
+    if (streamNow_) {  // [stream] the streams as water (stream_water.h): over what is solid, under the sea, seeing through to a copy
+      Stage("stream water");
+      if (post.CopyBehind()) {
+        post.BeginColorOnly();
+        lights.Bind();
+        device_->SetTexture(kShadowMapSlot, shadows.Map());
+        device_->SetTexture(kLampShadowSlot, lights.ShadowMap());
+        streams.Draw(view, camera, post.Behind(), post.Depth(), terrain.HeightTexture(), terrain.HeightUnit(), static_cast<float>(map.width),
+                     static_cast<float>(map.height), [this](uint32_t key) { return key < props_.size() && props_[key].model != nullptr; });
+        post.ContinueScene();
+        lights.Bind();
+      }
+    }
     Stage("water");
     // the water: the modern look's sees through to a copy of the picture as it is now
     if (look == Look::Modern && map.water.present && post.CopyBehind()) {

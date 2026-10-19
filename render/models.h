@@ -133,6 +133,11 @@ struct ModelLod {
   // Whose look the textures were painted for (the channels mean different things, mesh_renderer.cpp):
   // 0 the UEF's "Unit" and everything else, 1 Aeon, 2 Cybran ("Insect"), 3 Seraphim.
   int faction = 0;
+  // [stream] A stream's water (1) or its white water (2) (stream_water.h, World::streamWater): drawn by the streams' own
+  // pass while that is on (MeshRenderer::divertStream), and as before while it is off; `streamMesh` its mesh file, which
+  // that pass reads for the ribbon's shape.
+  int stream = 0;
+  std::string streamMesh;
 };
 
 struct HitShape;  // (unit_wear.h)

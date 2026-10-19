@@ -1451,6 +1451,7 @@ void MeshRenderer::Consider(const Cull& c, Entry& e, const View& view, bool shad
     }
     const ModelLod* lod = &lods[level];
     if (lod->hidden || lod->glass != glass) return;
+    if (lod->stream && divertStream) return;  // [stream] (the streams' own pass draws it: stream_water.h)
     // the far-away cards of trees are flat pictures: they cast no shadow
     if (shadowPass && lod->blend) return;
     if (shadowPass && lod->noShadow) return;  // (a shader of the original's that casts none)

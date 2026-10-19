@@ -182,6 +182,8 @@ class WorldPicture {
   //   And units wet in rain and muddy from soft ground, drying and flaking off (World::unitDirt): about 0.01-0.02 ms.
   //   And surf and sea spray (World::surf): waves breaking on the shores, spray on rocks and off ships' bows; the water
   //   up to +0.1 ms with surf over a third of the screen.
+  //   And a map's streams as real water (World::streamWater, stream_water.h): deeper in the middle, a soft wet shore,
+  //   ripples and white water flowing downstream, the sky mirrored, rings in rain; about 0.05-0.13 ms at 1440p.
   void SetWeatherEffects(bool on);
   // Ground detail: grass near the camera, pressed flat round units and buildings (World::groundCover); about
   //   +0.05 to 0.2 ms when zoomed in, nothing from afar; and battle scars (World::battleScars): the scorches and

@@ -243,6 +243,13 @@
 //           top speed over deep water near where the camera looks (within --surf-test-radius r, 60), with or without
 //           --surf; --surf-view n: in place of the water 1 the shore field, 2 the waves (Surf::view);
 //           MOHO64_DEBUG_SURF=1 (2: and the spray's counts every second), MOHO64_DEBUG_SURF_FIELD=<file.ppm>
+// --stream-water  [stream] streams as real water (stream_water.h, World::streamWater; modern look): a map's stream props
+//           (the visuals track's ribbons) drawn as water: deep and dark in the middle, the bed showing at the edges, a
+//           soft wet shore, ripples and foam carried downstream (faster where it drops, white round rocks and behind
+//           them), the sky mirrored and the sun's glint, rings in rain; their white water flowing.
+//           --stream-water-tune depth[,murk[,flow]]: the deepest water as a share of the half width (0.32), how much a unit
+//           of it hides of the bed as so many units of the sea's water (6), its speed times (1); --stream-water-view n: in
+//           place of the water 1 its depth, 2 its flow (red the speed, green the white water, blue what it meets)
 // --wildlife  life in the world (wildlife.h, World::wildlife; modern look): flocks of birds over the woods and gulls over
 //           the shores, scattered by fighting near them, and fireflies at dusk and by night. --wildlife-verbose: where
 //           the flocks are, and the nearest at the start and the end; --wildlife-noise x,z,at[,every]: a noise of fighting
@@ -599,6 +606,9 @@ struct Options {
   float parallaxTune[3] = {1, 20, 1};   // [parallax] --ground-parallax-tune
   bool remasteredTarmacs = false;       // [tarmac] --remastered-tarmacs
   float tarmacRelief = -1;              // [tarmac] --tarmac-relief
+  bool streamWater = false;             // [stream] --stream-water
+  float streamTune[3] = {-1, -1, -1};   // [stream] --stream-water-tune (below 0: the default)
+  int streamView = 0;                   // [stream] --stream-water-view
   std::vector<std::string> tracksTest;  // --tracks-test
   bool energyShields = false;           // --energy-shields
   float energyShieldHealth = -1;        // --energy-shield-health
@@ -785,6 +795,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--winter-water") o->winterWater = true;
     else if (a == "--water-ripples") o->waterRipples = true;
     else if (a == "--surf") o->surf = true;
+    else if (a == "--stream-water") o->streamWater = true;  // [stream]
     else if (a == "--ground-cover") o->groundCover = true;
     else if (a == "--wildlife") o->wildlife = true;
     else if (a == "--horizon") o->horizon = true;  // [horizon]
@@ -971,6 +982,11 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--ground-parallax-tune") {  // [parallax]
       if (sscanf(v, "%f,%f,%f", &o->parallaxTune[0], &o->parallaxTune[1], &o->parallaxTune[2]) < 1) return false;
     }
+    else if (a == "--stream-water-tune") {  // [stream]
+      if (sscanf(v, "%f,%f,%f", &o->streamTune[0], &o->streamTune[1], &o->streamTune[2]) < 1) return false;
+      o->streamWater = true;
+    }
+    else if (a == "--stream-water-view") o->streamView = atoi(v), o->streamWater = true;  // [stream]
     else if (a == "--plants-regrow") o->plantsRegrow = std::max(1.0f, static_cast<float>(atof(v)));  // [plants]
     else if (a == "--fx-decal") {  // (names with commas between, or the option given again)
       for (std::string all = v; !all.empty();) {
@@ -1537,6 +1553,11 @@ int main(int argc, char** argv) {
   world.terrain.parallaxShadows = std::clamp(opt.parallaxTune[2], 0.0f, 1.0f);
   world.remasteredTarmacs = opt.remasteredTarmacs;  // [tarmac]
   if (opt.tarmacRelief >= 0) world.decals.tarmacs.relief = opt.tarmacRelief;
+  world.streamWater = opt.streamWater;  // [stream]
+  if (opt.streamTune[0] >= 0) world.streams.depth = opt.streamTune[0];
+  if (opt.streamTune[1] >= 0) world.streams.murk = opt.streamTune[1];
+  if (opt.streamTune[2] >= 0) world.streams.flow = opt.streamTune[2];
+  world.streams.view = opt.streamView;
   world.plantsReact = opt.plantsReact;                                       // [plants]
   if (opt.plantsRegrow > 0) world.plantLife.regrow = opt.plantsRegrow;      // [plants]
   world.energyShields = opt.energyShields;
