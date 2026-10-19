@@ -830,6 +830,13 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
   Entity* e = c.goalId ? sim.FindEntity(c.goalId) : nullptr;
   if (!e || e->destroyQueued) return kTaskFailed;
   Unit* tu = e->kind == Entity::Kind::Unit ? static_cast<Unit*>(e) : nullptr;
+  // Every Execute, before the states (0x61f166..0x61f19d): a target that is not being built (Entity vt+0x2c,
+  // IsBeingBuilt) and stands on the Air layer (entity+0x118 == 0x10) ends the task at once with result 2 (0x61f07e;
+  // OnStopReclaim, if it was started, comes from the dtor). Seen: MP1 4716, army 0's patrolling engineers 0x3c / 0x42 /
+  // 0x4c sent at 4710 to reclaim army 1's landed scout 0x100068, which takes off at 4713: at 4716 the original's
+  // children end before they walk and the patrols pick a tree in the same beat (Moving at 4722); ours walked two
+  // beats toward the flying scout first (Moving at 4716, the tree only from 4724).
+  if (tu && !tu->beingBuilt && tu->layer == "Air") return kTaskFailed;
   Vec3 tp = e->position;
   float dx = u->position.x - tp.x, dz = u->position.z - tp.z;
   float dist = std::sqrt(dx * dx + dz * dz);
