@@ -1437,6 +1437,17 @@ bool CheckAutoInitiate(Sim& sim, const UnitWeapon* w) {
   const UnitCommand& c = *u->commands.front();
   if (c.type != CommandType::Attack && c.type != CommandType::FormAttack) return false;
   if (!c.targetId) return false;  // (a ground target)
+  // The order's CAiTarget names the entity it was given (0x5d8cc8 -> 0x5d5980): for a player's order that is the army's
+  // recon BLIP, which lives on after its unit died and after the unit is gone, until the recon database lets it go
+  // (DestroyIfUnused, intel.cpp). The order stands while that entity is neither dead (+0x99) nor going (+0x1b9,
+  // 0x5d8cd8..0x5d8ce8). Seen: MP2 7382, army 0's Corsair 0x10c on a player's Attack of a structure's blip; the
+  // structure was destroyed at 7380, its blip lives on: the original's acquire task keeps waiting, the attack ends in
+  // that beat's command stage, and the weapon auto-attacks only at 7384 (the Stop's two beats); ours looked at the gone
+  // unit, ordered the auto-attack at once (7382) and flew a different attack.
+  if (c.targetViaBlip && c.targetBlipRef && !c.targetFakeId) {
+    const Entity* b = sim.FindEntity(c.targetBlipRef);
+    if (b) return b->dead || b->destroyQueued;
+  }
   const Entity* e = sim.FindEntity(c.targetId);
   // (0x5d5980: the entity the order names; for a blip taken after its unit died that is the blip, which lives)
   if (c.targetFakeId) {  // a jammer's fake blip: the order stands while the fake does

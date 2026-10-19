@@ -1442,11 +1442,13 @@ std::shared_ptr<UnitCommand> Issue(lua_State* L, const std::vector<Unit*>& units
 void SetCommandEntityTarget(UnitCommand& c, Entity* e) {
   c.targetViaBlip = false;
   c.targetFakeId = 0;
+  c.targetBlipRef = 0;
   Vec3 at = e->position;
   if (e->kind == Entity::Kind::Blip) {
     auto* b = static_cast<ReconBlip*>(e);
     if (b->source && !b->source->destroyQueued) {
       if (b->fake) c.targetFakeId = EntityRef(b);
+      c.targetBlipRef = EntityRef(b);
       e = b->source;
       c.targetViaBlip = true;
       if (!c.targetFakeId) at = e->position;
@@ -1464,6 +1466,7 @@ void SetCommandTargetFromStream(Sim& sim, UnitCommand& c, const StreamTarget& t)
   c.targetPoint = -1;
   c.targetViaBlip = false;
   c.targetFakeId = 0;
+  c.targetBlipRef = 0;
   if (t.type == 1) {
     if (Entity* e = sim.FindEntityById(t.entity)) {
       c.targetPoint = TargetPointDraw(sim, e);  // CAiTarget::UpdateTarget: a unit / unit blip draws

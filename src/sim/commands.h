@@ -45,6 +45,7 @@ struct UnitCommand {
   bool targetViaBlip = false;
   bool targetPastDeath = false;  // ... and that unit was dead already (AiTarget::pastDeath)
   uint32_t targetFakeId = 0;     // ... or the order names one of a jammer's FAKE blips (AiTarget::fakeId)
+  uint32_t targetBlipRef = 0;    // ... the blip itself (entity ref), which outlives its unit (CheckAutoInitiate)
   uint32_t id = 0;
   CommandType type = CommandType::None;
   Vec3 pos;
