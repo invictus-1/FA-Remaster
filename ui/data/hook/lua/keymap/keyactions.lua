@@ -14,3 +14,9 @@ keyActions['remaster_photo'] = {
     action = 'remaster_photo',
     category = 'ui',
 }
+-- The photo mode, open or closed (ui/maui/worldview.cpp, its panel /moho64ui/lua/photomode.lua): a free camera, the
+-- picture's own time of day, weather and lens, photos up to four times the screen's size; Esc leaves it too.
+keyActions['remaster_photo_mode'] = {
+    action = 'remaster_photo_mode',
+    category = 'ui',
+}

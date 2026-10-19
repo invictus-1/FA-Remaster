@@ -303,13 +303,13 @@ const std::vector<const char*>& ConsoleNames() {
   static const std::vector<const char*> names = [] {
     std::vector<const char*> all = {
 #include "user/console_names.inc"
-        // ours (the Video options', the statistics overlay's, the cinematic camera's and the photo's)
+        // ours (the Video options', the statistics overlay's, the cinematic camera's, the photo's and the photo mode's)
         "remaster_effects", "remaster_effects_quality", "remaster_frame_rate", "remaster_graphics_api", "remaster_look",
         "remaster_rich_ground", "remaster_snow_tracks", "remaster_stats", "remaster_temporal_upscale", "remaster_tracers", "remaster_upscale",
         "remaster_atmosphere", "remaster_soft_shadows", "remaster_ray_tracing", "remaster_weather_effects",
         "remaster_ground_detail", "remaster_frame_generation", "remaster_water_ripples", "remaster_lens", "remaster_cinecam",
         "remaster_photo", "remaster_battle_effects", "remaster_energy_shields", "remaster_hidden_outlines",
-        "remaster_photo_look", "remaster_low_latency"};
+        "remaster_photo_look", "remaster_low_latency", "remaster_photo_mode"};
     std::sort(all.begin(), all.end(), ConNameLess);
     return all;
   }();
@@ -527,8 +527,10 @@ void KeyMapKeyDown(lua_State* L, int vk, bool shift, bool ctrl, bool alt, bool r
   KeyMap& map = Map(L);
   const bool wasDown = map.down.count(vk) != 0;
   map.down.insert(vk);
-  if (vk == KeycodeMauiToMSW(306) && !wasDown) CommandGraphShown(L, true);  // (306: Shift)
+  // (306: Shift; not while the photo mode is open, whose Shift is its own: faster)
+  if (vk == KeycodeMauiToMSW(306) && !wasDown && !PhotoModeOpen(L)) CommandGraphShown(L, true);
   if (UserState::From(L)->ui().focus) return;
+  if (PhotoModeKey(L, vk, repeat)) return;  // (the photo mode's own keys, ours: they reach no action of the key map)
   uint32_t code = static_cast<uint32_t>(vk) | (shift ? kShift : 0) | (ctrl ? kCtrl : 0) | (alt ? kAlt : 0);
   if (repeat && !map.repeats.count(code)) return;
   auto it = map.actions.find(code);
@@ -927,9 +929,27 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
     on = a == std::string::npos ? !on : !(rest[a] == '0' || Upper(rest.substr(a)).rfind("OFF", 0) == 0 || Upper(rest.substr(a)).rfind("FALSE", 0) == 0);
     return;
   }
-  // The cinematic camera for replays, and the photo (ours: worldview.cpp)
+  // The cinematic camera for replays, the photo and the photo mode (ours: worldview.cpp)
   if (Upper(name) == "REMASTER_CINECAM") return CineCameraCommand(L, rest);
   if (Upper(name) == "REMASTER_PHOTO") return CinePhotoCommand(L);
+  if (Upper(name) == "REMASTER_PHOTO_MODE") return PhotoModeCommand(L, rest);
+  // UI_ToggleGamePanels (FA exe 0x8349d0, READ: its whole body is import("/lua/ui/game/gamemain.lua").HideGameUI()
+  // called without an argument, which turns the game's panels over; no session check of its own). FAF's UserSync runs
+  // it for Sync.ToggleGamePanels.
+  if (Upper(name) == "UI_TOGGLEGAMEPANELS") {
+    const int top = lua_gettop(L);
+    lua_pushcfunction(L, ScriptTraceback);
+    lua_getglobal(L, "import");
+    lua_pushstring(L, "/lua/ui/game/gamemain.lua");
+    if (lua_pcall(L, 1, 1, top + 1) == 0 && lua_istable(L, -1)) {
+      lua_pushstring(L, "HideGameUI");
+      lua_gettable(L, -2);
+      if (lua_isfunction(L, -1) && lua_pcall(L, 0, 0, top + 1) != 0)
+        LogScriptError(lua_isstring(L, -1) ? lua_tostring(L, -1) : "(error object is not a string)");
+    }
+    lua_settop(L, top);
+    return;
+  }
   {  // the custom names' four (CustomNameStyle; a value left out leaves it, the switch toggles)
     const std::string key = Upper(name);
     const size_t at = rest.find_first_not_of(" \t");

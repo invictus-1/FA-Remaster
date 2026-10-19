@@ -159,6 +159,17 @@ class UserState {
   // The camera the cinematic camera took over from (the main world view's, by name) while it is on; empty while it
   // is off (worldview.cpp: CineCameraCommand, and the input that hands the camera back).
   std::string cineCamera;
+  // The photo mode while it is open (worldview.cpp: PhotoModeCommand, PhotoModeKey, PhotoModeFrame): whether it
+  // paused the game (and so lets it go on when it closes); the right button's drag since the last frame, in pixels (x
+  // right, y down); the wheel's notches not given yet, as seconds of up (+) or down (-); a photo being made.
+  struct PhotoModeState {
+    bool open = false;
+    bool paused = false;
+    float drag[2] = {0, 0};
+    float wheel = 0;
+    bool taking = false;
+  };
+  PhotoModeState photoMode;
 
   // One frame: the clock moves on by `seconds`; controls that asked for it get OnFrame; then the
   // script threads that are due run. (The order of those two within a frame is inferred.)
@@ -561,6 +572,14 @@ void WorldCameraShowBox(lua_State* L, const float lo[3], const float hi[3], floa
 // <the preferences' folder>/screenshots, named by the PC clock's date and time (in any game).
 void CineCameraCommand(lua_State* L, const std::string& value);
 void CinePhotoCommand(lua_State* L);
+// The photo mode (worldview.cpp; ours, not the original's: Chris's approval of 2026-10-18, the visuals session's look
+// 7). The console's remaster_photo_mode [on|off] (no word: it turns over; the key "Photo mode", Alt-P at first), in a
+// game or a replay: a free camera, the picture's own time of day, weather and lens, and photos up to four times the
+// screen's size; in a game one plays alone and in a replay the game pauses meanwhile. While it is open the photo
+// mode's keys go to it before the key map (PhotoModeKey: true when the key was its own, and no key map action runs).
+void PhotoModeCommand(lua_State* L, const std::string& value);
+bool PhotoModeKey(lua_State* L, int vk, bool repeat);
+bool PhotoModeOpen(lua_State* L);
 bool UnitsOnScreen(lua_State* L, std::vector<uint32_t>* ids);
 bool PlaceInCameraView(lua_State* L, const float place[3]);
 bool MouseWorldPlace(lua_State* L, float out[3]);

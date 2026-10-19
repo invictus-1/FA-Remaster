@@ -127,11 +127,14 @@ ConExecute("UI_SelectByCategory +add LAND")
 check("UI_SelectByCategory without a game", take(), noSession)
 ConExecute("UI_ExpandCurrentSelection")
 check("UI_ExpandCurrentSelection without a game", take(), noSession)
--- ours: the cinematic camera and the photo need a game too (ui/tests/cinecam.lua tests them in one)
+-- ours: the cinematic camera, the photo and the photo mode need a game too (ui/tests/cinecam.lua and photomode.lua
+-- test them in one)
 ConExecute("remaster_cinecam on")
 check("remaster_cinecam without a game", take(), noSession)
 ConExecute("remaster_photo")
 check("remaster_photo without a game", take(), noSession)
+ConExecute("remaster_photo_mode")
+check("remaster_photo_mode without a game", take(), noSession)
 
 -- lines from other threads, and the simulation's print: heard on the main thread's next frame
 moho64ui_ConsolePostFromThread("from a thread")

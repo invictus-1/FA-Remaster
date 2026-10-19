@@ -8,6 +8,7 @@
 // What each function should do exactly is to be read from the original when the renderer's camera
 // takes this one's place.
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <cmath>
@@ -17,6 +18,8 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <thread>
+#include <vector>
 
 #include "core/hostfs.h"
 #include "core/log.h"
@@ -800,6 +803,21 @@ void CommandGraphScript(lua_State* L, const char* fn, Control* view, const UiEve
   lua_settop(L, top);
 }
 
+// The photo mode's own settings (ours; PhotoModeCommand below), kept while the program runs so that each opening
+// starts as the last one was left: its lens (off at first; its blur, aperture and focus, 0 auto-focus) and the photo's
+// size in times the main view's (2 at first, as remaster_photo); the panel's line about the last photo and how far a
+// photo being made has come.
+struct PhotoModeSettings {
+  WorldSource::PhotoLens lens;
+  int size = 2;
+  std::string note;
+  float progress = 0;
+};
+PhotoModeSettings& PhotoSettings() {
+  static PhotoModeSettings settings;
+  return settings;
+}
+
 class WorldView;
 WorldView* MainView(Control* c);  // further down: the first world view that is not a minimap
 
@@ -900,7 +918,8 @@ class WorldView : public Control {
     // (The selected units' orders show while Shift is held, as in the original: a green outline
     // round the site of every building among them: green as in Chris's pictures of the original,
     // whose guide for a site is 0xff00ff00 (0x854e52).)
-    const bool shiftHeld = KeyIsDown(L, kKeyShift);
+    // (Not while the photo mode is open: its Shift is its own, faster, and no orders show then.)
+    const bool shiftHeld = KeyIsDown(L, kKeyShift) && !user->photoMode.open;
     std::vector<WorldGhost> ordered, queued;
     SelectionForWorld(L, &scene.selection, &ordered, shiftHeld, &queued);
     lap("(the picture's scene: the selection)");
@@ -1295,9 +1314,11 @@ class WorldView : public Control {
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
     if (!UserState::From(L)->config().world->DrawsToWindow())  // (else the renderer lays the world under the interface)
       target.DrawPixels(pixels_, pictureW_, pictureH_, static_cast<int>(r.x0), static_cast<int>(r.y0));
-    DrawOrderEtas(L, target, r);
-    DrawCustomNames(L, target, r);
-    DrawEconomyOverlay(L, target, r);
+    if (!UserState::From(L)->photoMode.open) {  // (none of the interface's texts over the world in the photo mode)
+      DrawOrderEtas(L, target, r);
+      DrawCustomNames(L, target, r);
+      DrawEconomyOverlay(L, target, r);
+    }
     // The box of a selection being drawn with the mouse: a thin frame from the press to the
     // pointer. (First version of its look: one pixel, white; the original's is not measured.)
     if (selecting_ && (std::fabs(dragX_ - pressX_) > 4 || std::fabs(dragY_ - pressY_) > 4)) {
@@ -1462,11 +1483,65 @@ class WorldView : public Control {
   }
   // A dragger posted over this one (UICommandDragger::DragCancel 0x824290): the waypoint back to its order's place.
   void DragCancel(lua_State* L) override {
+    if (photoTurn_) EndPhotoTurn(L);
     if (!waypointDrag_) return;
     waypointDrag_ = false;
     CancelWaypointDrag(L);
   }
+  // The photo mode's (ours): while it is open the main view's events are its own, and neither the script's handler nor
+  // the view's own hear them (no orders, no selection, no camera of the game's moved): the right button's drag turns
+  // the free camera (its pixels go to PhotoModeFrame: the pointer held, as for the middle button's drag), the wheel
+  // moves it up and down (a notch: up or down held for a fifth of a second, the renderer's measure), a left click
+  // focuses the lens on what is there.
+  bool photoTurn_ = false;
+  static constexpr float kPhotoWheelSeconds = 0.2f;
+  bool PhotoModeEvent(lua_State* L, const UiEvent& e) {
+    UserState* user = UserState::From(L);
+    if (e.type == EventType::WheelRotation && e.wheelDelta != 0) {
+      const float notches = static_cast<float>(e.wheelRotation) / static_cast<float>(e.wheelDelta);
+      float& wheel = user->photoMode.wheel;
+      if (wheel != 0 && (wheel > 0) != (notches > 0)) wheel = 0;  // (turned the other way: from now)
+      wheel = std::max(-1.0f, std::min(1.0f, wheel + kPhotoWheelSeconds * notches));
+      return true;
+    }
+    if (e.type != EventType::ButtonPress && e.type != EventType::ButtonDClick) return true;
+    if (e.right) {
+      photoTurn_ = true;
+      lastX_ = e.x, lastY_ = e.y;
+      user->ui().holdPointer = true;
+      user->ui().PostEngineDragger(L, this, e.keyCode);
+      return true;
+    }
+    if (e.left) PhotoFocusAt(L, e.x, e.y);
+    return true;
+  }
+  void EndPhotoTurn(lua_State* L) {
+    photoTurn_ = false;
+    UserState::From(L)->ui().holdPointer = false;
+  }
+  // Focus by a click: the lens focused at the distance of what is under the point (WorldPicture::FocusAt, by the
+  // picture last drawn: in a run without a window this frame's is drawn first); the sky (0) gives auto-focus. Not while
+  // a photo is being made (its frames are not the window's: FocusAt says 0 then).
+  void PhotoFocusAt(lua_State* L, float x, float y) {
+    UserState* user = UserState::From(L);
+    WorldSource* source = user->config().world;
+    if (!source || user->photoMode.taking) return;
+    if (!source->DrawsToWindow()) EnsurePicture(L);
+    Rect r;
+    GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
+    const float d = source->FocusAt(x - r.x0, y - r.y0);
+    PhotoModeSettings& s = PhotoSettings();
+    s.lens.focus = d > 0 ? d : 0;
+    source->SetPhotoLens(s.lens);
+    Logf(LogLevel::Debug, "moho64ui: the photo mode's focus by a click at %.0f %.0f: %.1f", x, y, d);
+  }
   void DragMove(lua_State* L, const UiEvent& e) override {
+    if (photoTurn_) {  // (the photo mode's turn: the drag's pixels since the last frame)
+      float* drag = UserState::From(L)->photoMode.drag;
+      drag[0] += e.x - lastX_, drag[1] += e.y - lastY_;
+      lastX_ = e.x, lastY_ = e.y;
+      return;
+    }
     if (waypointDrag_) {  // (UICommandDragger::DragMove 0x8241b0: the waypoint to the ground under the mouse)
       float to[3];
       Unproject(L, e.x, e.y, to, false);
@@ -1634,6 +1709,10 @@ class WorldView : public Control {
     }
   }
   void DragRelease(lua_State* L, const UiEvent& e) override {
+    if (photoTurn_) {
+      EndPhotoTurn(L);
+      return;
+    }
     if (waypointDrag_) {  // (UICommandDragger::DragRelease 0x824210: the order's new target, then the script)
       waypointDrag_ = false;
       float to[3], play[4];
@@ -1742,6 +1821,7 @@ class WorldView : public Control {
   // there; with Shift after what they are doing); a left press follows the script's command mode,
   // or selects.
   bool HandleEvent(lua_State* L, const UiEvent& e) override {
+    if (!dead() && !miniMap && UserState::From(L)->photoMode.open) return PhotoModeEvent(L, e);  // (ours: see there)
     // Each event first works out what is under the mouse (the cursor update 0x86f520, called at 0x8705e0 before
     // the script's handler): here the waypoint of the order lines under it.
     if (!dead() && !miniMap && (e.type == EventType::MouseMotion || e.type == EventType::ButtonPress || e.type == EventType::ButtonDClick))
@@ -2181,8 +2261,8 @@ void AdvanceCamera(lua_State* L, Camera* c, float seconds) {
   }
   // The arrow keys and the screen's edges move the view that takes the camera's commands; Alt
   // holds it still. (Of the original's frame function this much is built; not turning with
-  // Insert and Delete or with Space and the mouse.)
-  if (v && v->globalCameraCommands && !v->inputLocked && !KeyIsDown(L, kKeyAlt)) {
+  // Insert and Delete or with Space and the mouse.) Not while the photo mode is open (ours: the arrow keys are its).
+  if (v && v->globalCameraCommands && !v->inputLocked && !KeyIsDown(L, kKeyAlt) && !UserState::From(L)->photoMode.open) {
     const CameraControls& keys = CameraKeys();
     float rate = keys.panSpeed * (KeyIsDown(L, kKeyCtrl) ? keys.panFast : 1.0f) * kPanFramesPerSecond * seconds;
     float dx = 0, dy = 0;
@@ -2371,7 +2451,28 @@ bool SessionReplay(lua_State* L) {
   lua_settop(L, top);
   return replay;
 }
-std::string g_lastPhoto;  // (the last photo's file: moho64ui_CineCamera)
+std::string g_lastPhoto;  // (the last photo's file: moho64ui_CineCamera, moho64ui_PhotoMode)
+// The next photo's file: <the preferences' folder>/screenshots/photo_<date>_<time>.png by the PC clock (a second one in
+// the same second gets _2, _3, ...); the folder is made.
+std::string NextPhotoPath(lua_State* L) {
+  UserState* user = UserState::From(L);
+  namespace fs = std::filesystem;
+  const std::string folder = (user->config().userDir.empty() ? std::string(".") : user->config().userDir) + "/screenshots";
+  std::error_code ec;
+  fs::create_directories(fs::path(std::u8string(folder.begin(), folder.end())), ec);
+  const std::time_t now = std::time(nullptr);
+  std::tm local{};
+#ifdef _WIN32
+  localtime_s(&local, &now);
+#else
+  localtime_r(&now, &local);
+#endif
+  char stamp[64];
+  std::strftime(stamp, sizeof stamp, "photo_%Y-%m-%d_%H-%M-%S", &local);
+  std::string path = folder + "/" + stamp + ".png";
+  for (int n = 2; hostfs::IsFile(path) && n < 1000; ++n) path = folder + "/" + stamp + "_" + std::to_string(n) + ".png";
+  return path;
+}
 }  // namespace
 
 // The cinematic camera's switch (user_state.h). In a replay only: the original's camera is the game's to the
@@ -2382,6 +2483,7 @@ void CineCameraCommand(lua_State* L, const std::string& value) {
   UserState* user = UserState::From(L);
   if (!user->gameInterface) return ConsoleNoSession(L);
   if (!SessionReplay(L)) return ConsolePrint(L, "remaster_cinecam: the cinematic camera is for replays; in a game you play it stays off");
+  if (user->photoMode.open) return ConsolePrint(L, "remaster_cinecam: the photo mode has the camera; leave it first (Esc)");
   std::string word;
   for (char ch : value)
     if (!std::isspace(static_cast<unsigned char>(ch))) word.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(ch))));
@@ -2413,29 +2515,379 @@ void CinePhotoCommand(lua_State* L) {
   std::vector<uint32_t> pixels;
   int madeW = 0, madeH = 0;
   if (!source || w <= 0 || h <= 0) return ConsolePrint(L, "remaster_photo: there is no picture of the world");
+  if (user->photoMode.taking) return ConsolePrint(L, "remaster_photo: the photo mode's photo is being made");
   if (!source->TakePhoto(v->PictureCameraFor(L), 2 * w, 2 * h, &pixels, &madeW, &madeH) || madeW <= 0 || madeH <= 0 ||
       pixels.size() != static_cast<size_t>(madeW) * static_cast<size_t>(madeH))
     return ConsolePrint(L, "remaster_photo: the photo could not be made");
-  namespace fs = std::filesystem;
-  const std::string folder = (user->config().userDir.empty() ? std::string(".") : user->config().userDir) + "/screenshots";
-  std::error_code ec;
-  fs::create_directories(fs::path(std::u8string(folder.begin(), folder.end())), ec);
-  const std::time_t now = std::time(nullptr);
-  std::tm local{};
-#ifdef _WIN32
-  localtime_s(&local, &now);
-#else
-  localtime_r(&now, &local);
-#endif
-  char stamp[64];
-  std::strftime(stamp, sizeof stamp, "photo_%Y-%m-%d_%H-%M-%S", &local);
-  std::string path = folder + "/" + stamp + ".png";
-  for (int n = 2; hostfs::IsFile(path) && n < 1000; ++n) path = folder + "/" + stamp + "_" + std::to_string(n) + ".png";
+  const std::string path = NextPhotoPath(L);
   if (!SavePngPixels(path, pixels.data(), madeW, madeH)) return ConsolePrintf(L, "remaster_photo: cannot write %s", path.c_str());
   g_lastPhoto = path;
   Logf(LogLevel::Info, "moho64ui: a photo of %dx%d: %s", madeW, madeH, path.c_str());
   ConsolePrintf(L, "Photo saved: %s (%dx%d)", path.c_str(), madeW, madeH);
 }
+
+// --- the photo mode (ours, not the original's: Chris's approval of 2026-10-18, the visuals session's look 7) ---
+// The screen is ours, the drawing the renderer's (his calls: docs/render-answers.md, "To ui: the photo mode's calls are
+// in" and "To ui: a photo mode, together"). Opened and closed by the console's remaster_photo_mode [on|off] (the key
+// "Photo mode", Alt-P at first: free in FAF's key maps), in a game or a replay:
+// - the free camera (the cinematic camera's CineCamera, flown: WorldSource::PhotoStart) starts where the main view's
+//   camera looks; the game's camera stays where it is, and on leaving the picture eases back to it (CineCamera::Shown,
+//   the cinematic camera's half second; the roll levels out);
+// - in a game the player plays alone (the session's one command source) and in a replay the game pauses (the game's
+//   own SessionRequestPause, as its pause key: in a replay the viewer's pause) unless it is paused already, and goes on
+//   when the photo mode closes only if it paused it; in a game with other players it runs on;
+// - the game's panels go away the game's own way and the photo mode's panel comes (/moho64ui/lua/photomode.lua, of the
+//   game's own controls: Open, Close, TogglePanel); the picture has no bars, marks, icons or shapes meanwhile (as for
+//   the cinematic camera);
+// - its keys come before the key map (PhotoModeKey): W A S D and the arrow keys move, R F up and down, Q E roll, Shift
+//   three times as fast, H shows and hides the panel, Esc leaves; none of them runs its key map action meanwhile. The
+//   right button's drag turns, the wheel moves up and down, a left click focuses the lens (the world view's
+//   PhotoModeEvent); the frame gives what is held to the camera (PhotoModeFrame).
+// - a photo (moho64ui_PhotoModeTake, the panel's Take Photo): the renderer's StartPhoto at 1 to 4 times the main view's
+//   size, made over the next frames while the window goes on being drawn, then saved on a thread of its own as
+//   remaster_photo saves its photo (<the preferences' folder>/screenshots/photo_<date>_<time>.png), with the same
+//   console line.
+namespace {
+// A global function of the scripts called without arguments (the game's own, as the scripts call it: FAF's pause.lua
+// wraps SessionRequestPause and SessionResume), its first result as a boolean.
+bool CallGlobal(lua_State* L, const char* name) {
+  const int top = lua_gettop(L);
+  lua_pushcfunction(L, ScriptTraceback);
+  lua_getglobal(L, name);
+  bool result = false;
+  if (lua_isfunction(L, -1)) {
+    if (lua_pcall(L, 0, 1, top + 1) == 0) result = lua_toboolean(L, -1) != 0;
+    else LogScriptError(lua_isstring(L, -1) ? lua_tostring(L, -1) : "(error object is not a string)");
+  }
+  lua_settop(L, top);
+  return result;
+}
+// The photo mode's panel (ours: ui/data/lua/photomode.lua, mounted at /moho64ui with this program's own files): its
+// function `fn`, called without arguments.
+void CallPhotoPanel(lua_State* L, const char* fn) {
+  const int top = lua_gettop(L);
+  lua_pushcfunction(L, ScriptTraceback);
+  lua_getglobal(L, "import");
+  lua_pushstring(L, "/moho64ui/lua/photomode.lua");
+  if (lua_pcall(L, 1, 1, top + 1) == 0 && lua_istable(L, -1)) {
+    lua_pushstring(L, fn);
+    lua_gettable(L, -2);
+    if (lua_isfunction(L, -1) && lua_pcall(L, 0, 0, top + 1) != 0)
+      LogScriptError(lua_isstring(L, -1) ? lua_tostring(L, -1) : "(error object is not a string)");
+  } else {
+    Logf(LogLevel::Warning, "moho64ui: the photo mode's panel (/moho64ui/lua/photomode.lua) is not there: %s", lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
+  }
+  lua_settop(L, top);
+}
+// The photo being saved (one at a time): on a thread of its own, as a large one takes a while (a stored PNG of 4 times
+// a 4K screen is some 400 MB); the frame tells of it once it is written (PhotoModeFrame). Joined at the program's end.
+struct PhotoSaver {
+  std::thread worker;
+  std::atomic<bool> written{false};
+  bool busy = false, ok = false;
+  std::string path;
+  int width = 0, height = 0;
+  ~PhotoSaver() {
+    if (worker.joinable()) worker.join();
+  }
+};
+PhotoSaver& Saver() {
+  static PhotoSaver saver;
+  return saver;
+}
+std::string FileNameOf(const std::string& path) {
+  const size_t slash = path.find_last_of("/\\");
+  return slash == std::string::npos ? path : path.substr(slash + 1);
+}
+// Whether the photo mode pauses the game: in a replay, and in a game with one command source (one player; AIs have
+// none, an observer has one of his own).
+bool PausesForPhotoMode(lua_State* L) {
+  if (SessionReplay(L)) return true;
+  Sim* sim = UserState::From(L)->LiveSim("the photo mode: who plays");
+  return sim && sim->cmdSources.size() <= 1;
+}
+void OpenPhotoMode(lua_State* L) {
+  UserState* user = UserState::From(L);
+  WorldSource* source = user->config().world;
+  WorldView* v = MainView(user->ui().GetFrame(0));
+  if (!source || !v) return ConsolePrint(L, "remaster_photo_mode: there is no picture of the world");
+  // (a replay's cinematic camera hands the camera back first: the free camera then starts from what shows)
+  if (!user->cineCamera.empty()) TakeCameraBack(L, GetCameraObject(L, user->cineCamera));
+  if (!source->PhotoStart(v->PictureCameraFor(L))) return ConsolePrint(L, "remaster_photo_mode: there is no picture of the world");
+  UserState::PhotoModeState& p = user->photoMode;
+  p.open = true;
+  p.paused = false;
+  p.drag[0] = p.drag[1] = 0;
+  p.wheel = 0;
+  source->SetPhotoLens(PhotoSettings().lens);
+  if (PausesForPhotoMode(L) && !CallGlobal(L, "SessionIsPaused")) {
+    CallGlobal(L, "SessionRequestPause");
+    p.paused = true;
+  }
+  Logf(LogLevel::Info, "moho64ui: the photo mode is open%s", p.paused ? "; the game pauses" : "");
+  CallPhotoPanel(L, "Open");  // (the game's panels away, ours there)
+}
+void ClosePhotoMode(lua_State* L) {
+  UserState* user = UserState::From(L);
+  UserState::PhotoModeState& p = user->photoMode;
+  if (!p.open) return;
+  p.open = false;
+  CallPhotoPanel(L, "Close");  // (ours away, the game's panels back as they were)
+  if (WorldSource* source = user->config().world) source->PhotoStop();  // (the game's own moment; the picture eases back)
+  if (p.paused) CallGlobal(L, "SessionResume");
+  Logf(LogLevel::Info, "moho64ui: the photo mode is closed%s", p.paused ? "; the game goes on" : "");
+  p.paused = false;
+}
+}  // namespace
+
+void PhotoModeCommand(lua_State* L, const std::string& value) {
+  UserState* user = UserState::From(L);
+  if (!user->gameInterface) return ConsoleNoSession(L);
+  std::string word;
+  for (char ch : value)
+    if (!std::isspace(static_cast<unsigned char>(ch))) word.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(ch))));
+  const bool on = user->photoMode.open;
+  const bool wanted = word.empty() ? !on : (word == "ON" || word == "1" || word == "TRUE");
+  if (wanted == on) return;
+  if (wanted) OpenPhotoMode(L);
+  else ClosePhotoMode(L);
+}
+
+bool PhotoModeOpen(lua_State* L) { return UserState::From(L)->photoMode.open; }
+
+// A key going down while the photo mode is open (`vk` its Windows key code, with whatever Shift, Ctrl or Alt): its own
+// keys whatever is held with them (Shift is its own: faster), so that none of them runs the action the game's key map
+// binds to it (FAF's: W zoom out, Q zoom in, A attack, S stop, R repair, E reclaim, F ferry, D dive, H the nearest
+// factory, Esc the escape handler or in its other key map stop). Esc leaves, H shows or hides the panel (not again
+// while held); the others are read as they are held (PhotoModeFrame).
+bool PhotoModeKey(lua_State* L, int vk, bool repeat) {
+  if (!UserState::From(L)->photoMode.open) return false;
+  if (vk == KeycodeMauiToMSW(27)) {  // (Esc)
+    if (!repeat) ClosePhotoMode(L);
+    return true;
+  }
+  if (vk == 'H') {
+    if (!repeat) CallPhotoPanel(L, "TogglePanel");
+    return true;
+  }
+  for (int letter : {'W', 'A', 'S', 'D', 'Q', 'E', 'R', 'F'})
+    if (vk == letter) return true;
+  for (int code : {kKeyLeft, kKeyUp, kKeyRight, kKeyDown, kKeyShift})
+    if (vk == KeycodeMauiToMSW(code)) return true;
+  return false;
+}
+
+namespace {
+// Once a frame (AdvanceCameras, before the cinematic camera's frame): a photo being made (in a run without a window its
+// frames are drawn here, as nothing else draws them) and one being saved; then, while the photo mode is open, what the
+// player holds to the free camera: the keys -1..1 each way (two the same way no faster than one), the wheel's notches
+// still to give, Shift three times all of it, the right button's drag over the window's height (the renderer's turn).
+// While a photo is being made the camera holds: the photo is of what showed when it began.
+void PhotoModeFrame(lua_State* L, float seconds) {
+  UserState* user = UserState::From(L);
+  UserState::PhotoModeState& p = user->photoMode;
+  WorldSource* source = user->config().world;
+  PhotoModeSettings& settings = PhotoSettings();
+  PhotoSaver& saver = Saver();
+  if (saver.busy && saver.written.load()) {
+    saver.worker.join();
+    saver.busy = false;
+    if (saver.ok) {
+      g_lastPhoto = saver.path;
+      settings.note = "Saved " + FileNameOf(saver.path);
+      Logf(LogLevel::Info, "moho64ui: a photo of %dx%d: %s", saver.width, saver.height, saver.path.c_str());
+      ConsolePrintf(L, "Photo saved: %s (%dx%d)", saver.path.c_str(), saver.width, saver.height);
+    } else {
+      settings.note = "The photo could not be saved";
+      ConsolePrintf(L, "remaster_photo_mode: cannot write %s", saver.path.c_str());
+    }
+  }
+  if (p.taking && source) {
+    if (!source->DrawsToWindow())
+      if (WorldView* v = MainView(user->ui().GetFrame(0))) v->EnsurePicture(L);
+    const float progress = source->PhotoProgress();
+    std::vector<uint32_t> pixels;
+    int w = 0, h = 0;
+    if (source->TakeDonePhoto(&pixels, &w, &h) && w > 0 && h > 0 && pixels.size() == static_cast<size_t>(w) * static_cast<size_t>(h)) {
+      p.taking = false;
+      settings.progress = 1;
+      settings.note = "Saving the photo...";
+      saver.busy = true, saver.ok = false, saver.written = false;
+      saver.path = NextPhotoPath(L), saver.width = w, saver.height = h;
+      saver.worker = std::thread([&saver, pixels = std::move(pixels)] {
+        saver.ok = SavePngPixels(saver.path, pixels.data(), saver.width, saver.height);
+        saver.written = true;
+      });
+    } else if (progress >= 1) {  // (done, and nothing handed over: the card had no room for it)
+      p.taking = false;
+      settings.progress = 0;
+      settings.note = "The photo could not be made";
+      ConsolePrint(L, "remaster_photo_mode: the photo could not be made");
+    } else {
+      settings.progress = progress;
+    }
+  }
+  if (!p.open || !source) return;
+  auto held = [&](int code) { return KeyIsDown(L, code) ? 1.0f : 0.0f; };
+  auto one = [](float v) { return std::max(-1.0f, std::min(1.0f, v)); };
+  float up = held('R') - held('F');
+  if (p.wheel > 0) up += 1, p.wheel = std::max(0.0f, p.wheel - seconds);
+  else if (p.wheel < 0) up -= 1, p.wheel = std::min(0.0f, p.wheel + seconds);
+  const float fast = KeyIsDown(L, kKeyShift) ? 3.0f : 1.0f;
+  float move[3] = {one(held('D') + held(kKeyRight) - held('A') - held(kKeyLeft)) * fast, one(up) * fast,
+                   one(held('W') + held(kKeyUp) - held('S') - held(kKeyDown)) * fast};
+  const float height = static_cast<float>(std::max(1, user->ui().height()));
+  float turn[2] = {p.drag[0] / height, p.drag[1] / height};
+  float roll = (held('E') - held('Q')) * fast;
+  p.drag[0] = p.drag[1] = 0;
+  if (p.taking) move[0] = move[1] = move[2] = turn[0] = turn[1] = roll = 0;
+  source->PhotoFly(seconds, move, turn, roll);
+}
+
+// moho64ui_PhotoMode() -> the photo mode as it stands (the panel's and the tests'): {open, paused (it paused the game),
+// free (the camera is flown), camera = {eye = {x, y, z}, yaw, pitch, roll, fov} (radians), moment = {hour (-1: the
+// map's own light), weather (a number of weatherKinds, from 0), weatherName, strength, set (the photo mode's own, else
+// the game's)}, weatherKinds = {names}, lens = {on, strength, fNumber, focus (0: auto)}, size (times the main view's),
+// width, height (the main view's: a 1x photo's), taking, progress 0..1, saving, photo (the last photo's file), note
+// (the panel's line about it), lifeBars, selectionMarks, workBars, lensShown (what the picture was last given)}.
+int l_PhotoModeState(lua_State* L) {
+  UserState* user = UserState::From(L);
+  WorldSource* source = user->config().world;
+  const PhotoModeSettings& s = PhotoSettings();
+  auto number = [&](const char* name, double v) {
+    lua_pushstring(L, name);
+    lua_pushnumber(L, v);
+    lua_rawset(L, -3);
+  };
+  auto boolean = [&](const char* name, bool v) {
+    lua_pushstring(L, name);
+    lua_pushboolean(L, v);
+    lua_rawset(L, -3);
+  };
+  auto text = [&](const char* name, const std::string& v) {
+    lua_pushstring(L, name);
+    lua_pushstring(L, v.c_str());
+    lua_rawset(L, -3);
+  };
+  lua_newtable(L);
+  boolean("open", user->photoMode.open);
+  boolean("paused", user->photoMode.paused);
+  const WorldSource::PhotoPose pose = source ? source->PhotoCamera() : WorldSource::PhotoPose();
+  boolean("free", pose.free);
+  lua_pushstring(L, "camera");
+  lua_newtable(L);
+  lua_pushstring(L, "eye");
+  PushVector(L, pose.eye[0], pose.eye[1], pose.eye[2]);
+  lua_rawset(L, -3);
+  number("yaw", pose.yaw), number("pitch", pose.pitch), number("roll", pose.roll), number("fov", pose.fovY);
+  lua_rawset(L, -3);
+  const WorldSource::PhotoMoment m = source ? source->GetPhotoMoment() : WorldSource::PhotoMoment();
+  const std::vector<std::string> kinds = source ? source->WeatherKinds() : std::vector<std::string>();
+  lua_pushstring(L, "moment");
+  lua_newtable(L);
+  number("hour", m.hour), number("weather", m.weather), number("strength", m.strength);
+  text("weatherName", m.weather >= 0 && m.weather < static_cast<int>(kinds.size()) ? kinds[m.weather] : std::string());
+  boolean("set", m.set);
+  lua_rawset(L, -3);
+  lua_pushstring(L, "weatherKinds");
+  lua_newtable(L);
+  for (size_t i = 0; i < kinds.size(); ++i) {
+    lua_pushstring(L, kinds[i].c_str());
+    lua_rawseti(L, -2, static_cast<int>(i) + 1);
+  }
+  lua_rawset(L, -3);
+  lua_pushstring(L, "lens");
+  lua_newtable(L);
+  boolean("on", s.lens.on);
+  number("strength", s.lens.strength), number("fNumber", s.lens.fNumber), number("focus", s.lens.focus);
+  lua_rawset(L, -3);
+  number("size", s.size);
+  Rect r;
+  WorldView* v = MainView(user->ui().GetFrame(0));
+  if (v) v->GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
+  number("width", v ? static_cast<int>(r.x1 - r.x0) : 0), number("height", v ? static_cast<int>(r.y1 - r.y0) : 0);
+  boolean("taking", user->photoMode.taking);
+  number("progress", user->photoMode.taking ? s.progress : 0);
+  boolean("saving", Saver().busy);
+  text("photo", g_lastPhoto);
+  text("note", s.note);
+  const WorldSource::CineState c = source ? source->Cine() : WorldSource::CineState();
+  boolean("lifeBars", c.lifeBars), boolean("selectionMarks", c.selectionMarks), boolean("workBars", c.workBars), boolean("lensShown", c.lens);
+  return 1;
+}
+
+// moho64ui_PhotoModeSet{...}: what the panel sets, each field left out stays: hour (0..24), weather (a number of the
+// kinds, from 0, or a kind's name) and strength (0..1) set the picture's own moment (what is left out of the three as
+// shown now; with the map's own fixed light, noon); gameOwn = true gives the game's own hour and weather again; lens
+// (on or off), lensStrength (0..1), fNumber (1.4..22), focus (world units; 0 or "auto": auto-focus); size (1..4).
+int l_PhotoModeSet(lua_State* L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  UserState* user = UserState::From(L);
+  WorldSource* source = user->config().world;
+  PhotoModeSettings& s = PhotoSettings();
+  auto field = [&](const char* name) {
+    lua_pushstring(L, name);
+    lua_gettable(L, 1);
+    return lua_gettop(L);
+  };
+  auto clamp = [](double v, double lo, double hi) { return static_cast<float>(std::max(lo, std::min(hi, v))); };
+  const int top = lua_gettop(L);
+  if (source) {
+    const int own = field("gameOwn"), hour = field("hour"), weather = field("weather"), strength = field("strength");
+    if (lua_toboolean(L, own)) {
+      source->ClearPhotoMoment();
+    } else if (!lua_isnil(L, hour) || !lua_isnil(L, weather) || !lua_isnil(L, strength)) {
+      const WorldSource::PhotoMoment m = source->GetPhotoMoment();
+      float h = lua_isnumber(L, hour) ? clamp(lua_tonumber(L, hour), 0, 24) : (m.hour >= 0 ? m.hour : 12.0f);
+      int kind = m.weather;
+      if (lua_type(L, weather) == LUA_TNUMBER) {
+        kind = static_cast<int>(lua_tonumber(L, weather));
+      } else if (lua_type(L, weather) == LUA_TSTRING) {
+        const std::vector<std::string> kinds = source->WeatherKinds();
+        for (size_t i = 0; i < kinds.size(); ++i)
+          if (kinds[i] == lua_tostring(L, weather)) kind = static_cast<int>(i);
+      }
+      const float hard = lua_isnumber(L, strength) ? clamp(lua_tonumber(L, strength), 0, 1) : m.strength;
+      source->SetPhotoMoment(h, kind, hard);
+    }
+  }
+  const int lens = field("lens"), lensStrength = field("lensStrength"), fNumber = field("fNumber"), focus = field("focus"), size = field("size");
+  if (!lua_isnil(L, lens)) s.lens.on = lua_toboolean(L, lens) != 0;
+  if (lua_isnumber(L, lensStrength)) s.lens.strength = clamp(lua_tonumber(L, lensStrength), 0, 1);
+  if (lua_isnumber(L, fNumber)) s.lens.fNumber = clamp(lua_tonumber(L, fNumber), 1.4, 22);
+  if (lua_type(L, focus) == LUA_TNUMBER) s.lens.focus = std::max(0.0f, static_cast<float>(lua_tonumber(L, focus)));
+  else if (lua_type(L, focus) == LUA_TSTRING) s.lens.focus = 0;  // ("auto")
+  if (lua_isnumber(L, size)) s.size = static_cast<int>(clamp(std::floor(lua_tonumber(L, size)), 1, 4));
+  if (source) source->SetPhotoLens(s.lens);
+  lua_settop(L, top);
+  return 0;
+}
+
+// moho64ui_PhotoModeTake() -> true when a photo has begun (the size: PhotoModeSettings::size times the main view's),
+// else false and why. One at a time: not while one is made or saved.
+int l_PhotoModeTake(lua_State* L) {
+  UserState* user = UserState::From(L);
+  WorldSource* source = user->config().world;
+  WorldView* v = MainView(user->ui().GetFrame(0));
+  auto refuse = [&](const char* why) {
+    lua_pushboolean(L, 0);
+    lua_pushstring(L, why);
+    return 2;
+  };
+  if (!user->photoMode.open || !source || !v) return refuse("the photo mode is not open");
+  if (user->photoMode.taking || Saver().busy) return refuse("a photo is being made");
+  Rect r;
+  v->GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
+  const int k = PhotoSettings().size, w = static_cast<int>(r.x1 - r.x0), h = static_cast<int>(r.y1 - r.y0);
+  if (w <= 0 || h <= 0 || !source->StartPhoto(w * k, h * k)) return refuse("the photo could not be begun");
+  user->photoMode.taking = true;
+  PhotoSettings().progress = 0;
+  PhotoSettings().note = "Taking the photo...";
+  Logf(LogLevel::Info, "moho64ui: the photo mode takes a photo of %dx%d", w * k, h * k);
+  lua_pushboolean(L, 1);
+  return 1;
+}
+}  // namespace
 
 bool UnitsOnScreen(lua_State* L, std::vector<uint32_t>* ids) {
   UserState* user = UserState::From(L);
@@ -2653,6 +3105,8 @@ void AdvanceCameras(lua_State* L, float seconds) {
     ShakeStep(c, seconds);
   }
   g_pendingShakes.clear();
+  // The photo mode's frame (ours): what the player holds goes to the free camera before its frame below.
+  PhotoModeFrame(L, seconds);
   // The cinematic camera's frame (what it follows, its easing back; ours): after the cameras, so that a hand-back
   // in their step begins its easing this frame.
   if (user->config().world) user->config().world->CineFrame(seconds);
@@ -2728,6 +3182,9 @@ void RegisterWorldViewBindings(lua_State* L) {
   lua_register(L, "moho64ui_OrderEtas", l_OrderEtasForTests);
   lua_register(L, "moho64ui_CameraShake", l_CameraShakeForTests);
   lua_register(L, "moho64ui_CineCamera", l_CineCameraForTests);
+  lua_register(L, "moho64ui_PhotoMode", l_PhotoModeState);
+  lua_register(L, "moho64ui_PhotoModeSet", l_PhotoModeSet);
+  lua_register(L, "moho64ui_PhotoModeTake", l_PhotoModeTake);
   lua_register(L, "moho64ui_PngInfo", l_PngInfoForTests);
   SetGlobal(L, "SetInvertMidMouseButton", l_SetInvertMidMouseButton);
   SetGlobal(L, "GetMouseScreenPos", l_GetMouseScreenPos);

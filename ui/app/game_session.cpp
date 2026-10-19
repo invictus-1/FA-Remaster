@@ -90,6 +90,12 @@ struct GameSession::Picture : WorldSource {
   render::Camera shownNow;
   bool shownCine = false;
   bool CineShows() const { return cine.On() || cine.EasingBack(); }
+  // The photo mode (ours: the renderer's answer of 2026-10-18 in docs/render-answers.md, "To ui: the photo mode's calls
+  // are in"): the same CineCamera, flown freely (PhotoFly) while `photoOn`; `photoEasing` while the picture eases back
+  // from it (its lens goes with it, not the replay camera's). `photoLens`: the photo mode's own lens; `momentSet`: a
+  // moment of its own is set (SetPhotoMoment).
+  bool photoOn = false, photoEasing = false, momentSet = false;
+  PhotoLens photoLens;
   static render::Camera ToRender(const WorldCamera& c) {
     render::Camera cam;
     cam.target = {c.target[0], c.target[1], c.target[2]};
@@ -120,20 +126,25 @@ struct GameSession::Picture : WorldSource {
   // The lens's depth of field (the player's Cinematic Lens Blur, LookSettings::lens): only while the cinematic
   // camera shows, its blur by CineCamera::LensShare (going as the picture eases back), focused on the unit it follows
   // (FollowedDistance; 0: on what is at the picture's middle); the renderer's lens otherwise (f/2.8, its scale).
+  // From the photo mode (and while the picture eases back from it): the photo mode's own lens, its blur by LensShare too.
   void ApplyLens() {
-    const bool on = Looks().lens && CineShows();
+    const bool photo = photoOn || photoEasing;
+    const bool on = (photo ? photoLens.on : Looks().lens) && CineShows();
     if (!on && !lensGiven) return;
     render::Lens lens;
     lens.on = on;
-    lens.strength = cine.LensShare();
-    lens.focus = cine.FollowedDistance();
+    lens.strength = cine.LensShare() * (photo ? photoLens.strength : 1.0f);
+    if (photo) lens.fNumber = photoLens.fNumber, lens.focus = photoLens.focus;
+    else lens.focus = cine.FollowedDistance();
     picture.SetLens(lens);
     lensGiven = on;
   }
   bool CineStart(const WorldCamera& game, uint32_t follow) override {
+    if (photoOn) return false;  // (the photo mode has the camera)
     if (!cineGround) cineGround = picture.CineGround();
     const render::Camera from = ToRender(game);
     cine.Start(CineShows() ? cine.Shown(from, cineGround) : from);  // (switched on again while easing back: from what shows)
+    photoEasing = false;
     cineUnit = follow;
     float p[3], q[4];
     if (follow != 0xffffffffu && picture.UnitTransform(follow, FrameMoment(), p, q)) cine.Follow({p[0], p[1], p[2]}, 14, 3);
@@ -142,7 +153,7 @@ struct GameSession::Picture : WorldSource {
     return true;
   }
   bool CineStop(WorldCamera* game) override {
-    if (!cine.On() || !cineGround) return false;
+    if (!cine.On() || !cineGround || photoOn) return false;
     *game = FromRender(cine.Stop(cineGround));
     cineUnit = 0xffffffffu;
     return true;
@@ -156,9 +167,75 @@ struct GameSession::Picture : WorldSource {
     }
     cine.Update(seconds, cineGround);
     if (cine.TakeCut()) picture.CameraCut();
+    if (photoEasing && !CineShows()) photoEasing = false;  // (eased back from the photo mode)
     ApplyCineMarks();
     ApplyLens();
   }
+  // The photo mode (WorldSource: PhotoStart and its kin).
+  bool PhotoStart(const WorldCamera& game) override {
+    if (!picture.world()) return false;
+    if (!cineGround) cineGround = picture.CineGround();
+    const render::Camera from = ToRender(game);
+    cine.Start(CineShows() ? cine.Shown(from, cineGround) : from);  // (from what shows: no jump)
+    float mapW = 0, mapH = 0;
+    picture.MapSize(&mapW, &mapH);
+    cine.SetMap(mapW, mapH);  // (Fly's reach round the map)
+    cineUnit = 0xffffffffu;
+    photoOn = true, photoEasing = false;
+    ApplyCineMarks();
+    ApplyLens();
+    return true;
+  }
+  void PhotoFly(float seconds, const float move[3], const float turn[2], float roll) override {
+    if (!photoOn || !cine.On()) return;
+    cine.Fly(seconds, {move[0], move[1], move[2]}, {turn[0], turn[1]}, roll);
+  }
+  void PhotoStop() override {
+    if (!photoOn) return;
+    photoOn = false;
+    // (the game's camera Stop hands back is not taken: the player's camera stays where it was, and Shown eases the
+    // picture back to it over the cinematic camera's half second, the roll levelling out)
+    if (cine.On() && cineGround) cine.Stop(cineGround);
+    photoEasing = CineShows();
+    picture.ClearPhotoMoment();
+    momentSet = false;
+    ApplyCineMarks();
+    ApplyLens();
+  }
+  PhotoPose PhotoCamera() const override {
+    PhotoPose p;
+    const render::CinePose& at = cine.pose;
+    p.eye[0] = at.eye.x, p.eye[1] = at.eye.y, p.eye[2] = at.eye.z;
+    p.yaw = at.yaw, p.pitch = at.pitch, p.roll = at.roll, p.fovY = at.fovY;
+    p.free = photoOn && cine.Following() == render::CineCamera::Mode::Free;
+    return p;
+  }
+  void SetPhotoMoment(float hour, int weather, float strength) override {
+    picture.SetPhotoMoment(hour, weather, strength);
+    momentSet = true;
+  }
+  void ClearPhotoMoment() override {
+    picture.ClearPhotoMoment();
+    momentSet = false;
+  }
+  PhotoMoment GetPhotoMoment() const override {
+    PhotoMoment m;
+    picture.GetPhotoMoment(&m.hour, &m.weather, &m.strength);
+    m.set = momentSet;
+    return m;
+  }
+  std::vector<std::string> WeatherKinds() const override { return render::WorldPicture::WeatherKinds(); }
+  void SetPhotoLens(const PhotoLens& lens) override {
+    photoLens = lens;
+    ApplyLens();
+  }
+  float FocusAt(float x, float y) override { return picture.FocusAt(x, y); }
+  bool StartPhoto(int width, int height) override {
+    if (!photoOn || !cineGround || width <= 0 || height <= 0) return false;
+    return picture.StartPhoto(cine.View(cineGround), width, height, FrameMoment(), 0);  // (0: the renderer's supersampling)
+  }
+  float PhotoProgress() const override { return picture.PhotoProgress(); }
+  bool TakeDonePhoto(std::vector<uint32_t>* pixels, int* width, int* height) override { return picture.TakeDonePhoto(pixels, width, height); }
   CineState Cine() const override {
     CineState s;
     s.on = cine.On(), s.easingBack = cine.EasingBack();
@@ -330,7 +407,8 @@ struct GameSession::Picture : WorldSource {
       picture.SetIconColors(iconColorsNow);
     }
     picture.SetBorders(scene.borders);  // the machinery the map lies in (MapBorderAdd)
-    picture.SetHover(scene.hover, scene.hoverKind);  // the brackets on the unit under the mouse
+    // the brackets on the unit under the mouse (none while the cinematic camera or the photo mode's shows: a mark)
+    picture.SetHover(cineShows ? 0xffffffffu : scene.hover, cineShows ? 0 : scene.hoverKind);
     lifeBarsWanted = scene.lifeBars;  // the player's switch (Alt-L in the game's key map): ApplyCineMarks below
     // Life bars over the player's and his allies' units only, as the original (render request
     // 21), unless the player asks for the enemies' too.

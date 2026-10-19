@@ -123,6 +123,24 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   camera while it is on, else from the game's camera, at twice the view's size without the interface, as
   `<the preferences' folder>/screenshots/photo_<date>_<time>.png` (stored uncompressed: some 25 MB at 3840x2160);
   the console says where. `moho64ui_CineCamera()`, `moho64ui_PngInfo(path)`: for the tests (`ui/tests/cinecam.lua`).
+  The photo mode (ours, not the original's: Chris, 2026-10-18, the visuals session's look 7; the renderer's free camera,
+  moment, lens and photos, docs/render-answers.md "To ui: the photo mode's calls are in"): the console's
+  `remaster_photo_mode [on|off]` (no word: it turns over), the key action "Photo mode (open / close)" (Alt-P at first,
+  free in FAF's key maps), in a game or a replay. Open: in a game one plays alone (one command source) and in a replay
+  the game pauses (the game's own SessionRequestPause; not when paused already, and it goes on when the photo mode
+  closes only if it paused it); with other players it runs on. The game's panels go away the game's own way
+  (gamemain.HideGameUI, as `UI_ToggleGamePanels`, FA exe 0x8349d0, now built too) and stay away while it is open;
+  its panel comes (`ui/data/lua/photomode.lua`, of the game's own controls): Time of Day (0..24 h; "Map's light" while
+  the game's own fixed light shows), Weather (clear, fair, cloudy, overcast, rain, storm, fog, snow) and Weather
+  Strength, Game's Own (the game's hour and weather again), Lens (off at first), Lens Strength, Blur Depth (f/1.4 ..
+  f/22), Focus (auto, or a left click in the world; Auto Focus), Photo Size (1x .. 4x the screen's), Take Photo (a bar
+  while it is made; saved as `remaster_photo` saves, the console's line and the panel's note name the file). The free
+  camera starts where the main view looks: W A S D or the arrow keys move, R F or the wheel up and down, Q E roll,
+  Shift three times as fast, the right button's drag turns, H hides the panel, Esc leaves; none of these keys runs
+  its key map action while it is open, and the main view's mouse gives no orders. Leaving: the game's own moment
+  again, the picture eases back to the game's camera (which stayed where it was), the pause and the panels as they
+  were. `moho64ui_PhotoMode()`, `moho64ui_PhotoModeSet{...}`, `moho64ui_PhotoModeTake()`: the panel's and the tests'
+  (`ui/tests/photomode.lua`).
   `--fast-forward N`: a game runs ahead to beat N as fast as it goes (for measurements; the
   window's frame times count from there), and the log gives the frame-to-frame times (middle,
   95%, 99%, longest).

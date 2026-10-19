@@ -4,3 +4,4 @@
 defaultKeyMap['Ctrl-Alt-S'] = 'remaster_stats'
 defaultKeyMap['Ctrl-Alt-C'] = 'remaster_cinecam'
 defaultKeyMap['Ctrl-Alt-F12'] = 'remaster_photo'
+defaultKeyMap['Alt-P'] = 'remaster_photo_mode'

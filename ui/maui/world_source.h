@@ -230,6 +230,52 @@ class WorldSource {
   // as Draw gives them; *madeWidth x *madeHeight what came (smaller where the card's memory would not do). False
   // without a picture.
   virtual bool TakePhoto(const WorldCamera&, int, int, std::vector<uint32_t>*, int*, int*) { return false; }
+
+  // --- the photo mode (ours, not the original's: Chris's approval of 2026-10-18, the visuals session's look 7; the
+  // renderer's calls, docs/render-answers.md "To ui: the photo mode's calls are in") ---
+  // The cinematic camera above, flown freely (CineCamera::Fly) while the world view's photo mode is open
+  // (maui/worldview.cpp: PhotoModeCommand); the game's camera stays where it is meanwhile, and while it is open the
+  // picture leaves out the bars, marks and shapes as for the cinematic camera. PhotoStart: from the game's camera as
+  // it is now (from what shows while the picture eases back from the cinematic camera), with the map's size for its
+  // reach; false without a picture. PhotoFly: once a frame before CineFrame, what the player holds: `move` {right, up,
+  // forward} -1..1 (3 with Shift), `turn` {right, down} as a share of the window's height, `roll` -1..1. PhotoStop:
+  // the free camera off; the picture eases back to the game's camera as it is (CineCamera::Stop and Shown: what Stop
+  // hands back is not taken) and shows the game's own hour and weather again (ClearPhotoMoment).
+  struct PhotoLens {  // (render::Lens's: on, how much of its blur, the aperture, the focus; 0 auto-focus)
+    bool on = false;
+    float strength = 1, fNumber = 2.8f, focus = 0;
+  };
+  struct PhotoMoment {  // (WorldPicture::GetPhotoMoment's; `set`: one of the photo mode's, else the game's own)
+    float hour = -1;    // -1: the map's own fixed light
+    int weather = 1;    // a number of WeatherKinds
+    float strength = 1;
+    bool set = false;
+  };
+  struct PhotoPose {  // (the free camera's, CinePose)
+    float eye[3] = {0, 0, 0};
+    float yaw = 0, pitch = 0, roll = 0, fovY = 0;
+    bool free = false;  // flown (CineCamera::Mode::Free)
+  };
+  virtual bool PhotoStart(const WorldCamera&) { return false; }
+  virtual void PhotoFly(float, const float[3], const float[2], float) {}
+  virtual void PhotoStop() {}
+  virtual PhotoPose PhotoCamera() const { return PhotoPose(); }
+  // The picture's own moment (WorldPicture::SetPhotoMoment, ClearPhotoMoment, GetPhotoMoment, WeatherKinds).
+  virtual void SetPhotoMoment(float, int, float) {}
+  virtual void ClearPhotoMoment() {}
+  virtual PhotoMoment GetPhotoMoment() const { return PhotoMoment(); }
+  virtual std::vector<std::string> WeatherKinds() const { return {}; }
+  // The photo mode's lens (World::lens while it is open and while the picture eases back from it).
+  virtual void SetPhotoLens(const PhotoLens&) {}
+  // What is under a pixel of the picture last drawn (WorldPicture::FocusAt): its distance along the line of sight; 0
+  // for the sky, while a photo is being made, and without a picture.
+  virtual float FocusAt(float, float) { return 0; }
+  // A photo made over the next frames from the free camera (WorldPicture::StartPhoto: `width` x `height`, the
+  // renderer's own supersampling), its progress 0..1 (PhotoProgress) and its pixels once it is done (TakeDonePhoto,
+  // as Draw gives them). StartPhoto false while one is being made or the photo mode is not open.
+  virtual bool StartPhoto(int, int) { return false; }
+  virtual float PhotoProgress() const { return 0; }
+  virtual bool TakeDonePhoto(std::vector<uint32_t>*, int*, int*) { return false; }
 };
 
 }  // namespace moho::ui
