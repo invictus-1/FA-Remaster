@@ -1975,6 +1975,22 @@ void IssueClearCommandsTo(Sim& sim, Unit* u) {
   // navigators go on (inferred: the new task's SetGoal finds the same goal, 0x5a3f37) and the units drive off at
   // 6806 with speed-through 1; ours stopped them and they started at 6808. (Land units, as for the guard above.)
   const bool patrolSelf = PatrolTaskDecidesAbort(u);
+  // Nor is a mobile builder's own task: CUnitMobileBuildTask (dtor 0x5f6ac0), CUnitRepairTask (0x5f8e20),
+  // CUnitReclaimTask (0x620280), CUnitCaptureTask (0x6050f0). Read: their dtors and what they call (RunScript 0x581aa0,
+  // CBuildTaskHelper::OnStopBuild 0x5f5a20 / dtor 0x5f5790, Unit::FreeOgridRect 0x6ab760, CUnitCaptureTask::DoCallback
+  // 0x604e10, 0x620110, ~CCommandTask 0x608e90, unit-state / script vt calls) reach neither the navigator (unit+0x54c)
+  // nor CUnitMotion::Stop 0x6b8460. Only their walking child's CUnitMoveTask dtor aborts the move, and that abort is
+  // counted below (stopCount) when the teardown makes it. (Keyed by the task's own kind, BuildTask::type, the type
+  // the head was dispatched with. Every other kind keeps the stop here: a Move or FormMove head has no task of ours
+  // and is unaffected; Upgrade, BuildFactory, Teleport, Sacrifice, Script, FireAt, OverCharge, Attack and the transport
+  // and guard tasks keep their paths.) Seen: MP1 6966, army 4's Seraphim engineer 0x400013 (in the water), still
+  // braking from the stream's BuildMobile with clear of 6963 (dispatched 6964 in build range: no walk), is cleared by
+  // FAF's DistributeOrders (IssueClearCommands + IssueBuildMobile, distribute-queue.lua 148 / 257): the original's
+  // brake goes on (velocity 0.1520 -> 0.1216 at 6966); ours made a new brake spline and took two of its steps at once.
+  const BuildTask* ht = !u->commands.empty() && u->headState == kRunning ? u->task : nullptr;
+  const bool buildSelf = ht && !ht->gdata && !ht->adata && !ht->pdata && !ht->tdata &&
+                         (ht->type == CommandType::BuildMobile || ht->type == CommandType::Repair ||
+                          ht->type == CommandType::Reclaim || ht->type == CommandType::Capture);
   // CUnitMoveTask's dtor clears state Moving (0x6187bd) BEFORE its AbortMove, as in the stream's clear above: the
   // abort's CheckCollisions sees this unit standing ("a standing unit has priority over a mover"). Seen: Skirmish
   // 1890, M28 clears army 6's engineer 0x60001b walking beside the engineer 0x600024 (IssueClearCommands +
@@ -1988,7 +2004,7 @@ void IssueClearCommandsTo(Sim& sim, Unit* u) {
   // IssueClearCommands (0x6f19eb) for Skirmish 2949's engineer 0x2f, cleared on its Repair.
   const uint32_t stops = u->motion.stopCount;
   ForgetUnitCommands(u);
-  if (!stopped && !idle && !undispatched && !loadMove && !loadWaits && !guardSelf && !patrolSelf &&
+  if (!stopped && !idle && !undispatched && !loadMove && !loadWaits && !guardSelf && !patrolSelf && !buildSelf &&
       u->motion.stopCount == stops)
     MotionStop(u);
   SetMoving(u, false);
