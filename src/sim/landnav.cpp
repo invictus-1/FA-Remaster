@@ -51,8 +51,12 @@ const NamedFootprint& Fp(const Unit* u) { return UnitFootprint(u); }
 int SX(const Unit* u) { return std::max<int>(1, Fp(u).sizeX); }
 int SZ(const Unit* u) { return std::max<int>(1, Fp(u).sizeZ); }
 
+// SFootprint::ToCellPos 0x579300: fistp of each, kept as a 16-bit pair (word stores 0x579359 / 0x57935d). A NaN (a
+// formation slot made from a formation centred on a gone target) gives fistp's indefinite 0x80000000, low word 0: cell 0.
+// (Converting the NaN in C++ is undefined.)
 PathCell CellOf(const Unit* u, float x, float z) {
-  return {static_cast<int>(std::nearbyint(x - SX(u) * 0.5f)), static_cast<int>(std::nearbyint(z - SZ(u) * 0.5f))};
+  const float fx = x - SX(u) * 0.5f, fz = z - SZ(u) * 0.5f;
+  return {std::isnan(fx) ? 0 : static_cast<int>(std::nearbyint(fx)), std::isnan(fz) ? 0 : static_cast<int>(std::nearbyint(fz))};
 }
 
 const PathGrid* Grid(Sim& sim, const Unit* u) { return UnitFootprintGrid(sim, u); }

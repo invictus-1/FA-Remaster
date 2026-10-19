@@ -508,8 +508,13 @@ bool IsFree(const Formation& F, float x, float z, int size, int layer) {
   return true;
 }
 
-int CellOfX(const Unit* u, float x) { return static_cast<int>(std::nearbyint(x - FpSizeX(u) * 0.5f)); }
-int CellOfZ(const Unit* u, float z) { return static_cast<int>(std::nearbyint(z - FpSizeZ(u) * 0.5f)); }
+// fistp into the int16 cell GetFormationCell 0x569ea0 stores (0x569f21 / 0x569f48, then the word stores at 0x569f4c /
+// 0x569f51): a NaN place (a formation centred on a gone target) gives the indefinite 0x80000000, whose low word is 0,
+// so cell 0. (Converting the NaN in C++ is undefined; with this, the cell's world centre is (SizeX/2, SizeZ/2), as the
+// original's 0x50b0f0 makes of cell (0, 0).)
+int FormCellCoord(float v) { return std::isnan(v) ? 0 : static_cast<int>(std::nearbyint(v)); }
+int CellOfX(const Unit* u, float x) { return FormCellCoord(x - FpSizeX(u) * 0.5f); }
+int CellOfZ(const Unit* u, float z) { return FormCellCoord(z - FpSizeZ(u) * 0.5f); }
 
 // vt+0x64 AdjustPosition (7.1)
 void AdjustPosition(Formation& F, Unit* u, float* px, float* pz) {

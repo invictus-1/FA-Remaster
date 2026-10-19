@@ -1140,7 +1140,10 @@ bool Sim::Start(const ReplayHeader& replay) {
 bool Sim::IsWithin(float x, float z, float m, bool wholeMap) const {
   if (wholeMap) {  // (0x62ca6e: the heightfield's size - 1, x87 sums at single precision)
     const float W = map_ ? static_cast<float>(map_->width()) : 0.0f, H = map_ ? static_cast<float>(map_->height()) : 0.0f;
-    return !(0.0f > x - m) && !(0.0f > z - m) && x + m < W && z + m < H;
+    // (the two upper tests are x87 compares that branch away on "x + m >= W" (jae 0x62cac8) and on to true on
+    // "z + m < H" (jb 0x62caec): an unordered (NaN) compare sets CF, so a NaN place passes both, as it passes the
+    // SSE "ja" tests of both branches. Same results for every other value.)
+    return !(0.0f > x - m) && !(0.0f > z - m) && !(x + m >= W) && !(z + m >= H);
   }
   return !(static_cast<float>(playableRect[0]) > x - m) && !(static_cast<float>(playableRect[1]) > z - m) &&
          !(x + m > static_cast<float>(playableRect[2])) && !(z + m > static_cast<float>(playableRect[3]));
