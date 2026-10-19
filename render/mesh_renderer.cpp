@@ -11,6 +11,7 @@
 #include <cstring>
 
 #include "blasts.h"
+#include "build_effects.h"
 #include "effect_files.h"
 #include "hot_metal.h"
 #include "lighting.h"
@@ -100,7 +101,9 @@ cbuffer MeshKind : register(b3) {
   float4 kind5; // x: 1 = the Cybran's highlight lookup is there; y: 1 = the Seraphim's mirror ramp is there;
                 // w: 1 = the visuals track's lattice for this faction's personal shields is there (shieldPatterns)
   float4 kind6; // x: 1 = its texture's treads scroll (ModelLod::scrolling: the original's anim.w); y: 1 = no glow in the
-                // frame's alpha (ModelLod::rgbOnly: the original writes its colour alone)
+                // frame's alpha (ModelLod::rgbOnly: the original writes its colour alone); z: what sways, a group of
+                // trees: model units a step of where each tree stands (ModelLod::treeStep; 0: none); w: the scene's
+                // samples a pixel (NearFade)
 };
 Texture2D albedoMap : register(t0);
 Texture2D normalsMap : register(t1);
@@ -167,13 +170,21 @@ VOut VS(VIn i, uint instance : SV_InstanceID) {
   o.world = float3(dot(n.row0, p), dot(n.row1, p), dot(n.row2, p));
   [branch] if (kind3.x > 0) {
     // the wind: the higher on the model, the farther it is carried; every tree on its own beat (by
-    // where it stands), with a slow swing and a quicker one over it; harder when it rains
+    // where it stands; a tree of a group by its own place too), with a slow swing and a quicker one
+    // over it; harder when it rains
     float high = saturate(p.y * kind3.y);
     float size = length(float3(n.row0.x, n.row1.x, n.row2.x)) / kind3.y;  // its height in the world
-    float beat = dot(float2(n.row0.w, n.row2.w), float2(0.11, 0.07));
+    float2 foot = float2(n.row0.w, n.row2.w);
+    float beat = dot(foot, float2(0.11, 0.07));
+    // [foliage] a tree of a group (several trees in one model, one bone a tree; ModelLod::treeStep): where it stands
+    // itself, and a beat of its own on top of that place's
+    [branch] if (i.bones.w > 0 && kind6.z > 0 && look > 0.5) {  // (the modern look; the original's swing together)
+      float2 own = (float2(i.bones.yz) - 128) * kind6.z;  // (model units)
+      foot = float2(dot(n.row0, float4(own.x, 0, own.y, 1)), dot(n.row2, float4(own.x, 0, own.y, 1)));
+      beat = dot(foot, float2(0.11, 0.07)) + (i.bones.w - 1) * (6.2831853 / 254);
+    }
     float swing = sin(time * 1.3 + beat) * 0.6 + sin(time * 2.9 + beat * 1.7 + p.x * kind3.y * 4) * 0.4;
     // (it comes in gusts that run across the land with the wind)
-    float2 foot = float2(n.row0.w, n.row2.w);
     float gust = (0.35 + 0.9 * falling.x + 0.3 * falling.y) * (0.45 + 1.3 * CloudNoise(float3((foot - float2(0.915, 0.403) * (time * 7)) * 0.02, time * 0.07)));
     o.world.xz += float2(0.915, 0.403) * (swing * gust * kind3.x * high * high * size * 0.035);
 #ifdef BLASTS
@@ -238,6 +249,31 @@ float BuildSolid(int faction, float f, float3 shape, out float3 work) {
   work = float3(0.2, 0.55, 1.0) * (wire * (0.8 + 1.5 * band * band));
   return wire > 0.3 ? 0 : -1;
 }
+#ifdef REMASTERED_BUILD
+// (buildfx: the remastered build look's in its place, build_effects.h, kBuildShaderBlock; with the place on the model at rest)
+#define BuildSolid(whose, f, shape, work) RemasteredBuildSolid(whose, f, shape, i.rest, work)
+#endif
+
+// [foliage] Foliage right at the eye (a cinematic camera low among trees, cinecam.h): its cards would fill the screen
+// as flat sheets, so they fade out, dithered, from 1.2 world units to nothing under 0.4. Only what sways and has
+// holes (leaves, needles, plants' cards; never a unit or a solid prop; a tree's trunk is in its foliage's mesh and goes
+// with it); the game's camera comes that close only zoomed all the way in among trees (ambient_occlusion.cpp leaves
+// that zone out too). `coverage`: the caller's alpha is a leaf's coverage (alpha to coverage); with several samples
+// a pixel that coverage is multiplied by what is returned, and the samples dither it finely; otherwise whole pixels
+// are cut, dithered across the screen. The scene's depth first and its full shading drop the same; the shadows keep
+// them all.
+float NearFade(float3 world, float2 pixel, bool coverage) {
+  [branch] if (kind3.x > 0 && kind.x > 0) {
+    float d = length(world - cameraPosition);
+    [branch] if (d < 1.2) {
+      float fade = smoothstep(0.4, 1.2, d);
+      if (coverage && kind6.w > 1.5) return fade;
+      float noise = frac(52.9829189 * frac(dot(pixel, float2(0.06711056, 0.00583715))));  // (interleaved gradient noise)
+      if (fade <= noise) discard;
+    }
+  }
+  return 1;
+}
 
 // shadow maps: depth only, with foliage's holes (and nothing where a unit is not built yet)
 void ShadowPS(VOut i) {
@@ -259,6 +295,7 @@ float4 DepthPS(VOut i) : SV_Target {
   } else if (kind.x > 0) {
     clip(albedo.a - kind.x);
   }
+  cover *= NearFade(i.world, i.position.xy, kind2.y > 0.5 && look > 0.5 && kind.y < 0.5);  // [foliage] (as Shade's)
   if (min(i.color.a, 1) < 0.999 && kind.z < 0.5 && kind2.w < 0.5) {
     float3 work;
     clip(BuildSolid(int(kind2.x + 0.5), min(i.color.a, 1), i.shape, work));
@@ -456,6 +493,8 @@ float4 Shade(VOut i, bool front) {
   } else if (kind.x > 0) {
     clip(albedo.a - kind.x);
   }
+  // [foliage] (a leaf's coverage is its alpha below in the modern look, unless lit by its normals alone)
+  cover *= NearFade(i.world, i.position.xy, kind2.y > 0.5 && look > 0.5 && kind.y < 0.5);
   float3 vertexNormal = normalize(i.normal);
   if (kind2.y > 0.5 && !front) {  // a leaf seen from behind is lit as from behind
     vertexNormal = -vertexNormal;
@@ -559,6 +598,13 @@ float4 Shade(VOut i, bool front) {
       metallic = 1;
       roughness = 0.14;
       emission = 0;
+#ifdef REMASTERED_BUILD
+      // (buildfx: the remastered build look's Aeon pool is liquid gold with the same faint warm light of its own as the
+      // unit rising out of it, so the two are one liquid by day and by night (the light dimmed with the night as the
+      // game's glowing effects are, or the eye opened for the night sees a flat yellow disc); build_effects.h)
+      base = float3(1.0, 0.74, 0.33);
+      emission = base * (0.06 * (falling.w > 0 ? falling.w : 1));
+#endif
     } else if (kind4.x > 0.5) {  // wreckage: most of its colour gone, dark where the soot is thick with a little rust, dull
       float grey = dot(base, float3(0.3, 0.6, 0.1));
       base = lerp(float3(grey, grey, grey), base, 0.35) * lerp(0.12, 0.55, soot);
@@ -568,6 +614,9 @@ float4 Shade(VOut i, bool front) {
       emission = 0;
     }
     if (building) {
+#ifdef REMASTERED_BUILD
+      RemasteredBuildSurface(faction, solid, i.rest, edge, N, base, metallic, roughness, emission, work);  // (buildfx: build_effects.h)
+#else
       if (faction == 1) {  // Aeon: liquid metal that sets
         base = lerp(float3(0.72, 0.75, 0.78), base, solid);
         metallic = lerp(1, metallic, solid);
@@ -579,6 +628,7 @@ float4 Shade(VOut i, bool front) {
         work = 0;
       }
       emission += work * 2;
+#endif
     }
     if (shielded) {  // its personal shield: light of its faction's shield along its outline, breathing slowly
       float3 tint = faction == 1 ? float3(0.35, 1.0, 0.75) : faction == 2 ? float3(1.0, 0.2, 0.12) : faction == 3 ? float3(0.95, 0.85, 0.55) : float3(0.25, 0.5, 1.0);
@@ -777,8 +827,14 @@ bool MeshRenderer::Init(std::string* error) {
   // (the same with the blasts' waves, for what sways while blasts are under way: PrepareBlasts makes them)
   blastSource_ = std::string("#define BLASTS 1\n#define SURFACE_SNOW 0.5\n") + kViewShaderBlock + RayShaders() + kLightingShaderBlock +
                  kBlastShaderBlock + kWearShaderBlock + HotMetal::ShaderBlock() + kShader;
+  // (buildfx: the same with the remastered build look, for while it is on: PrepareBuild makes them)
+  buildSource_ = std::string("#define REMASTERED_BUILD 1\n#define SURFACE_SNOW 0.5\n") + kViewShaderBlock + RayShaders() + kLightingShaderBlock +
+                 kWearShaderBlock + HotMetal::ShaderBlock() + kBuildShaderBlock + kShader;
   int kept = 0;
-  auto keep = [&](gfx::Pipeline p, const gfx::PipelineDesc& d) { bending_[kept++] = {p, d, {}}; };
+  auto keep = [&](gfx::Pipeline p, const gfx::PipelineDesc& d) {
+    bending_[kept++] = {p, d, {}};
+    buildVariants_.push_back({p, d, {}});  // (buildfx)
+  };
   gfx::PipelineDesc pd;
   pd.name = "models";
   pd.vertexSource = pd.pixelSource = source;
@@ -807,10 +863,12 @@ bool MeshRenderer::Init(std::string* error) {
   pd.alphaWrite = true;
   glass_ = device_->CreatePipeline(pd, error);
   if (!glass_) return false;
+  buildVariants_.push_back({glass_, pd, {}});  // (buildfx: a unit's glass is built too)
   pd.name = "models, see-through, colour alone";
   pd.alphaWrite = false;
   glassRgb_ = device_->CreatePipeline(pd, error);
   if (!glassRgb_) return false;
+  buildVariants_.push_back({glassRgb_, pd, {}});
   pd.alphaWrite = true;
   pd.cull = gfx::Cull::Back;
   pd.depthWrite = true;
@@ -1427,6 +1485,9 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
       if (bends)
         for (const Bending& b : bending_)
           if (b.original.id == p.id && b.bending) p = b.bending;
+      if (!bends && remasteredBuild && buildMade_ > 0)  // (buildfx: the remastered build look's variant)
+        for (const BuildVariant& b : buildVariants_)
+          if (b.original.id == p.id && b.variant) p = b.variant;
       device_->SetPipeline(p);
       drawing = wanted + (bends ? 100 : 0);
     }
@@ -1457,6 +1518,8 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
     kind[19] = !shadowPass && lod->faction >= 0 && lod->faction < 4 && shieldPatternOf_[lod->faction] ? 1.0f : 0.0f;
     kind[20] = lod->scrolling ? 1.0f : 0.0f;
     kind[21] = lod->rgbOnly ? 1.0f : 0.0f;
+    kind[22] = lod->sway > 0 ? lod->treeStep : 0.0f;  // [foliage] (a group's trees, each on its own beat)
+    kind[23] = static_cast<float>(gSceneSamples);     // [foliage] (NearFade: leaves fade by their coverage)
     device_->SetConstants(3, kind, sizeof kind);
     device_->SetTexture(0, lod->albedo);
     if (!shadowPass) {
@@ -1497,6 +1560,25 @@ bool MeshRenderer::PrepareBlasts() {
     }
   }
   blastsMade_ = 1;
+  return true;
+}
+
+// (buildfx) The remastered build look's variants of the pipelines that may draw something under construction, made the
+// first time the world wants them.
+bool MeshRenderer::PrepareBuild() {
+  if (buildMade_) return buildMade_ > 0;
+  buildMade_ = -1;
+  for (BuildVariant& b : buildVariants_) {
+    gfx::PipelineDesc d = b.desc;
+    d.vertexSource = d.pixelSource = buildSource_;
+    std::string error;
+    b.variant = device_->CreatePipeline(d, &error);
+    if (!b.variant) {
+      fprintf(stderr, "render: the remastered build look cannot be drawn (%s)\n", error.c_str());
+      return false;
+    }
+  }
+  buildMade_ = 1;
   return true;
 }
 

@@ -79,6 +79,11 @@ struct FxStandSetup {
   // (0: the game's own time)
   std::string build, buildUnit;
   float buildSeconds = 0;
+  // (buildfx) where an engineer stands round what it builds, in degrees from behind it as the camera sees it (0) toward
+  // the camera's right (90) and in front of it (180): what it builds is seen from the side it works on
+  float buildSide = 0;
+  // (buildfx) how many engineers build it, standing round it evenly from `buildSide` on (to see and time many at once)
+  int buildCount = 1;
   // whether --fx-repeat and --fx-spacing were given (else a move's and a build's are worked out)
   bool repeatGiven = false, spacingGiven = false;
   // a unit (its id; a mod's too) firing its weapons at the point `to` (on the ground, `to.y` above it): the

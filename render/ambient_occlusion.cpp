@@ -60,6 +60,12 @@ float4 PS(VOut i) : SV_Target {
   if (away > 5e5) return float4(1, 1e6, 1, 1);  // nothing drawn here
   float pixelRadius = min(radius * viewport.y / (2 * tanHalfFov * away), 48.0);
   if (pixelRadius < 1.5) return float4(1, away, 1, 1);  // too far away to matter
+  // [foliage] right at the eye (a cinematic camera among trees) mostly foliage fading out lies there (mesh_renderer.cpp,
+  // NearFade): a pixel's first sample, read here, often holds a faded leaf's depth, and so near the estimate below
+  // runs away (needles a hair apart in depth turn the pixel black). Nothing nearer than 0.8 world units is shut in,
+  // and from there to 1.6 it comes in gradually (the game's camera comes that close only zoomed all the way in among
+  // trees).
+  if (away < 0.8) return float4(1, away, 1, 1);
 
   // the surface normal from whichever neighbour on each axis is nearer in depth (so edges stay edges)
   float3 l = ViewPosition(p + int2(-1, 0)), r = ViewPosition(p + int2(1, 0));
@@ -84,6 +90,7 @@ float4 PS(VOut i) : SV_Target {
     sum += max(0, dot(v, N) - bias) / (vv + 0.0001) * inRange;
   }
   float openness = saturate(1 - sum * radius * (1.1 / count));
+  if (away < 1.6) openness = lerp(1, openness, smoothstep(0.8, 1.6, away));  // [foliage] (as above)
   float lit = 1;
   [branch] if (contact > 0) {
     float3 world = cameraPosition + axisRight.xyz * P.x + axisUp.xyz * P.y + axisBack.xyz * P.z;

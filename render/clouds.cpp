@@ -1,4 +1,5 @@
 #include "clouds.h"
+#include "cloud_zoom.h"  // (cloudzoom: the zoom's march)
 
 #include <algorithm>
 #include <cstddef>
@@ -272,7 +273,7 @@ struct Constants {
 }  // namespace
 
 Clouds::~Clouds() {
-  for (gfx::Texture t : {shape_, detail_, cover_, shadow_, marched_[0], marched_[1]})
+  for (gfx::Texture t : {shape_, detail_, cover_, shadow_, marched_[0], marched_[1], coverFine_})
     if (t) device_->Destroy(t);
 }
 
@@ -414,10 +415,39 @@ void Clouds::Build(const View& view, const Camera& camera, const SkyLight& sky, 
   const ViewConstants& c = view.constants;
   Constants k = {};
   FillConstants(&k, view, camera, *this, base, coverAt_);
+  // (cloudzoom) the zoom through them (cloud_zoom.h), once the eye is no more than 40 under the layer (lower, the
+  // layer was 40 over it as without the zoom, and the march is that one); its march made the first frame it is on
+  if (zoom.on && !zoomTried_) {
+    zoomTried_ = true;
+    marchZoom_ = MakeCloudZoomMarch(device_, std::string(gSceneSamples > 1 ? "#define MSAA 1\n" : "") + kViewShaderBlock + kShader);
+  }
+  zoomedNow_ = zoom.on && marchZoom_ && camera.Eye().y > base - 40;
+  const CloudZoomMarchNumbers zoomNumbers = zoomedNow_ ? CloudZoomNumbers(zoom, base, camera, lastEye_, view.width, view.height) : CloudZoomMarchNumbers{};
+  if (zoomedNow_) {  // the finer coverage picture round the camera that its march reads first (the coverage's own pass)
+    if (!coverFine_) {
+      gfx::TargetDesc td;
+      td.storage = true;
+      td.width = td.height = kCloudZoomCoverSize;
+      td.format = gfx::Format::R16F;
+      coverFine_ = device_->CreateTarget(td);
+    }
+    if (coverFine_) {
+      Constants fine = k;
+      fine.size[2] = 1 / kCloudZoomCoverReach;
+      device_->SetConstants(0, &c, sizeof c);
+      device_->SetConstants(1, &fine, sizeof fine);
+      device_->SetPipeline(coverage_);
+      device_->SetStorage(0, coverFine_);
+      device_->Dispatch(kCloudZoomCoverSize / 8, kCloudZoomCoverSize / 8);
+      device_->SetStorage(0, {});
+    } else {
+      zoomedNow_ = false;
+    }
+  }
   k.ahead[3] = std::fmod(static_cast<float>(frame_) * 0.6180339887f, 1.0f);
   k.size[0] = static_cast<float>(width_);
   k.size[1] = static_cast<float>(height_);
-  k.size[3] = haveLast_ ? std::clamp(keep, 0.0f, 0.97f) : 0.0f;
+  k.size[3] = haveLast_ ? std::clamp(zoomedNow_ ? zoom.history : keep, 0.0f, 0.97f) : 0.0f;
   k.lastViewProj = lastViewProj_;
   k.light[0] = sky.cloudSun.x;
   k.light[1] = sky.cloudSun.y;
@@ -442,11 +472,18 @@ void Clouds::Build(const View& view, const Camera& camera, const SkyLight& sky, 
   device_->SetTexture(2, marched_[last]);
   device_->SetTexture(3, depth);
   device_->SetTexture(4, cover_);
+  if (zoomedNow_) {  // (cloudzoom) the zoom's march in place of that one, with its own numbers and the finer coverage
+    device_->SetPipeline(marchZoom_);
+    device_->SetConstants(2, &zoomNumbers, sizeof zoomNumbers);
+    device_->SetTexture(5, coverFine_);
+  }
   device_->SetStorage(1, marched_[now_]);
   device_->Dispatch(static_cast<uint32_t>((width_ + 7) / 8), static_cast<uint32_t>((height_ + 7) / 8));
   device_->SetStorage(1, {});
   for (int slot = 0; slot < 5; ++slot) device_->SetTexture(slot, {});
+  if (zoomedNow_) device_->SetTexture(5, {});
   lastViewProj_ = c.viewProj;
+  lastEye_ = camera.Eye();  // (cloudzoom)
   haveLast_ = true;
   ++frame_;
   built_ = true;

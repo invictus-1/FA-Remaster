@@ -386,7 +386,16 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   trees, the remaster's `LabPBRAlpha` foliage) are bent in the vertex shader, more the higher on
   the model, each on its own beat by where it stands, harder when it rains or snows; their
   shadows move with them. One wind over the whole map, from one side; it comes in gusts that
-  run across the land with it (noise that drifts downwind, so a wood bends in waves).
+  run across the land with it (noise that drifts downwind, so a wood bends in waves). A group
+  of trees in one mesh (the game's tree groups, the visuals track's; one bone a tree) sways
+  tree by tree: each tree's place and a beat of its own ride in its vertices' spare bone bytes
+  (`models.cpp`, `TagTrees`; `ModelLod::treeStep`). Cut-out foliage closer than 1.2 world
+  units to the eye (a cinematic camera among trees) fades out, gone under 0.4: the remaster's
+  leaves and the ground cover's plant cards by their coverage among a pixel's samples (MSAA),
+  everything else (and without MSAA) by whole pixels, dithered (`mesh_renderer.cpp`,
+  `NearFade`; `grass.cpp`). The ambient occlusion leaves out what lies under 0.8 units from the
+  eye and comes in gradually to 1.6 (`ambient_occlusion.cpp`): so near, its estimate ran away
+  among needles and turned faded leaves into black shapes.
 - A host's one call for the hour and the weather: `WorldPicture::SetDayAndWeather(startHour,
   dayLengthSeconds, weather)` drives `World::timeOfDay` from the tick given to `Draw` and
   switches the self-changing weather on (the viewer's `--picture` test uses it with

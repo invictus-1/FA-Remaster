@@ -31,6 +31,7 @@
 namespace render {
 
 class Blasts;
+class BuildEffects;
 
 class Effects {
  public:
@@ -57,6 +58,9 @@ class Effects {
   void SetTracks(Tracks* tracks) { tracks_ = tracks; }
   // The blasts' list (blasts.h): told of every flash of light and every scorch or crater a script makes.
   void SetBlasts(Blasts* blasts) { blasts_ = blasts; }
+  // (buildfx) The remastered build look (build_effects.h): told of every build beam drawn and of the frame's units under
+  // construction, while it is on.
+  void SetBuild(BuildEffects* build) { build_ = build; }
   int shotLights = 0;  // lights given this frame to shots in flight and to weapons' beams
   float shotLight = 1.0f;  // how strong those are (0: none)
   int started = 0;     // since the beginning
@@ -91,6 +95,8 @@ class Effects {
     bool glowTracers = false;  // (a trail's: whether hot tracers were on when it was looked up)
     Vec3 glowColor;
     std::string faction;       // beams and trails: whose blueprint they play (FactionOf)
+    bool buildBeam = false;    // (buildfx) a build beam (BuildEffects::IsBuildBeam)
+    bool original = false;     // (buildfx) made in the original effects' look whatever the world's (the stand's right side)
   };
   void Apply(const FrameEffectEvent& event, const Frame& frame);
   void End(uint32_t id);
@@ -111,6 +117,7 @@ class Effects {
   Decals* decals_;
   Tracks* tracks_ = nullptr;
   Blasts* blasts_ = nullptr;
+  BuildEffects* build_ = nullptr;  // (buildfx)
   Lights* lights_;
   ModelCache* models_;
   std::deque<FrameEffectEvent> pending_;

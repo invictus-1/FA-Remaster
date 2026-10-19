@@ -79,6 +79,13 @@
 // --pan <dx,dz>  the camera's point moves that far every frame (world units): a moving camera that repeats
 // --clouds-3d  volumetric clouds (clouds.h, World::volumetricClouds; modern look, a time of day): the clouds as
 //           real volumes lit by the sun, in place of the sky's own layer (--clouds sets how much of the sky)
+// --cloud-zoom  (cloudzoom) zooming out through the clouds (cloud_zoom.h, World::cloudZoom; with --clouds-3d): the game's
+//           camera rises through the cloud layer as it zooms out, the clouds then lie below it, thinning the higher it is;
+//           --cloud-zoom-look name=value,... tunes it (CloudZoom's numbers, cloud_zoom.h: band, erode, keep, partErode,
+//           partKeep, partFrom, partTo, near, gain, lumps, powder, fine, fineSize, history, letGo, inside, insideFade)
+// --cam-zoom-path "t:zoom;t:zoom;..."  (cloudzoom) the game's camera zoomed along a path by the run's clock (cloud_zoom.h,
+//           ZoomPath): the zoom as the original's (map units across the view's longer side; 5 nearest, "max" farthest),
+//           the lean and the field of view following it as the original's camera does; heading and point as --cam gives
 // --soft-shadows [size]  soft shadows (World::softShadows; modern look): the sun's shadows blurred the more the
 //           farther from what casts them; `size` how much wider per world unit (0.02 at first; a number is optional)
 // --ray-reflections  reflections by ray tracing (World::rayReflections; the shaders built for it, gRayShaders; where the
@@ -134,6 +141,9 @@
 // --blast-test n[,radius]  with --blasts (or --blast-waves, --blast-dust): blasts at random round where the camera starts
 //           (within radius, 40), of sizes 0.5 to 4, one after another so that about n are under way at once: to see and
 //           time many at once
+// --remastered-build  the remastered build look (build_effects.h, World::remasteredBuild; modern look with the remastered
+//           effects): build beams light what they work on, sparks fly from where they meet it and bounce off what the
+//           picture shows, units under construction take a better build shimmer of their faction's (with --fx-build)
 // --deep-tracks  deep tracks (World::deepTracks; modern look): the ground pressed where units drive and walk, by the
 //           kind it is (snow, mud, sand, grass, dirt, hard), the game's tread marks and footprints pressed in by their
 //           own shapes; --ground-kind <part>=<kind>  the layers whose texture's path holds <part> taken as that kind
@@ -251,7 +261,9 @@
 //           the camera follows it (unless --cam)
 // --fx-build <builder> <unit>  (or <builder>,<unit>) the builder building that unit at --fx-at as the game's
 //           scripts make it: a factory (UEB0101 UEL0201) on its build bone, an engineer (UEL0105 UEB1101) from
-//           beside it; --fx-build-seconds s: the build takes that long (else the game's own time)
+//           beside it; --fx-build-seconds s: the build takes that long (else the game's own time); --fx-build-side d: an
+//           engineer stands d degrees round from behind what it builds toward the camera's right (0; 180: in front of it);
+//           --fx-build-count n: n engineers build it, standing round it evenly (to see and time many at once)
 // --fx-fire <unit> [label ...]  that unit (UEL0201; a mod's too, with --mods) made at --fx-at by its own script class
 //           with its weapons as the engine makes them, firing at the point --fx-to x,z[,height] (else one in its
 //           weapons' reach, to the right of the spot as the camera sees it; with --fx-compare across it, away from
@@ -460,6 +472,7 @@ struct Options {
   float movementDustRadius = 30;        // --movement-dust-radius
   float blastRadius = 40;
   bool deepTracks = false;              // --deep-tracks
+  bool remasteredBuild = false;         // --remastered-build
   std::vector<std::string> groundKind;  // --ground-kind
   std::vector<std::string> tracksTest;  // --tracks-test
   bool energyShields = false;           // --energy-shields
@@ -483,6 +496,9 @@ struct Options {
   float sunSize = -1;                   // (its size, when given)
   bool clouds3d = false;                // --clouds-3d
   bool cloudsFull = false;              // --clouds-full (the same, marched at the picture's own size)
+  bool cloudZoom = false;               // --cloud-zoom (cloudzoom)
+  std::string cloudZoomLook;             // --cloud-zoom-look
+  std::string zoomPath;                 // --cam-zoom-path
   int motionView = 0;                   // --motion-view
   float pan[2] = {0, 0};                // --pan
   float airDust = -1, airSun = -1, airLamps = -1;  // --air-dust, --air-sun, --air-lamps (negative: the default)
@@ -636,6 +652,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--hidden-outlines") o->hiddenOutlines = true;
     else if (a == "--no-hidden-outlines") o->hiddenOutlines = false;
     else if (a == "--hot-metal") o->hotMetal = true;
+    else if (a == "--remastered-build") o->remasteredBuild = true;
     else if (a == "--order-test") o->orderTest = true;
     else if (a == "--frame-generation") o->frameGeneration = true;
     else if (a == "--capture-between") o->captureBetween = true;
@@ -647,6 +664,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     }
     else if (a == "--clouds-3d") o->clouds3d = true;
     else if (a == "--clouds-full") o->clouds3d = o->cloudsFull = true;
+    else if (a == "--cloud-zoom") o->cloudZoom = true;  // (cloudzoom)
     else if (a == "--picture-window") o->pictureWindow = true;
     else if (a == "--window-cycle") o->windowCycle = true;
     else if (a == "--prepass") o->prepass = true;
@@ -821,6 +839,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
         o->fx.buildUnit = w;
       }
     } else if (a == "--fx-build-seconds") o->fx.buildSeconds = std::max(0.0f, static_cast<float>(atof(v)));
+    else if (a == "--fx-build-side") o->fx.buildSide = static_cast<float>(atof(v));  // (buildfx)
+    else if (a == "--fx-build-count") o->fx.buildCount = std::clamp(atoi(v), 1, 32);  // (buildfx)
     else if (a == "--fx-fire" || a == "--fx-manual") {  // --fx-fire <unit>[,label...] [label ...]; --fx-manual <label>[,label...]
       // (the labels: given with commas, and for --fx-fire also as the words that follow it, up to the next option)
       std::vector<std::string> words;
@@ -907,6 +927,10 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     } else if (a == "--cine-cam") {
       if (sscanf(v, "%f,%f,%f,%f,%f,%f", &o->cine[0], &o->cine[1], &o->cine[2], &o->cine[3], &o->cine[4], &o->cine[5]) < 5) return false;
       o->hasCine = o->hasCineCam = true;
+    } else if (a == "--cloud-zoom-look") {  // (cloudzoom)
+      o->cloudZoomLook = v;
+    } else if (a == "--cam-zoom-path") {  // (cloudzoom)
+      o->zoomPath = v;
     } else if (a == "--cine-path") {
       o->cinePath = v;
       o->hasCine = true;
@@ -1229,11 +1253,28 @@ int main(int argc, char** argv) {
     world.heat.smokeRate = opt.hotSmoke;
     if (opt.hotSmoke <= 0) world.heat.smokeEmitter.clear();
   }
+  world.remasteredBuild = opt.remasteredBuild;
   world.frameGeneration = opt.frameGeneration;
   device->captureBetween = opt.captureBetween;
   if (opt.sunSize > 0) world.sunSize = opt.sunSize;
   world.volumetricClouds = opt.clouds3d;
   if (opt.cloudsFull) world.clouds.shrink = 1;
+  world.cloudZoom = opt.cloudZoom;  // (cloudzoom)
+  if (!opt.cloudZoomLook.empty()) {
+    std::string why;
+    if (!world.cloudZoomDraw.Set(opt.cloudZoomLook, &why)) {
+      fprintf(stderr, "render: --cloud-zoom-look: %s\n", why.c_str());
+      return 2;
+    }
+  }
+  ZoomPath zoomPath;  // (cloudzoom) --cam-zoom-path: the game's camera zoomed along a path
+  if (!opt.zoomPath.empty()) {
+    std::string why;
+    if (!zoomPath.Parse(opt.zoomPath, &why)) {
+      fprintf(stderr, "render: --cam-zoom-path: %s\n", why.c_str());
+      return 2;
+    }
+  }
   world.motionView = opt.motionView;
   if (opt.airDust >= 0) world.air.dust = opt.airDust;
   if (opt.airSun >= 0) world.air.sunInAir = opt.airSun;
@@ -2414,6 +2455,9 @@ int main(int argc, char** argv) {
       Vec3 at;
       if (fxStand && !opt.hasCam && fxStand->Focus(&at)) camera.target = at;
     }
+    if (!zoomPath.keys.empty() && haveMap)  // (cloudzoom) --cam-zoom-path: the zoom, lean and field of view at this time
+      zoomPath.Apply(time, static_cast<float>(map.width), static_cast<float>(map.height),
+                     static_cast<float>(device->Width()) / static_cast<float>(std::max(device->Height(), 1)), &camera);
     // the cinematic camera: moved on (an automatic run by a 60th of a second a frame, as its clock), and drawn with
     // while it is on or easing back to the game's
     cine.Update(photoLeft > 0 ? 0.0f : automatic ? 1 / 60.0f : dt, cineGround);

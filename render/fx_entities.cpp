@@ -3420,6 +3420,8 @@ void FxEntities::Advance(double now) {
         u.dead = e.killed;
         u.health = e.health;  // (a target's: --fx-target; 0 for the others)
         u.maxHealth = e.maxHealth;
+        u.fractionComplete = e.fraction;  // (buildfx: what is under construction, as a game's frame says it)
+        u.beingBuilt = e.fraction < 1;
         u.firstBone = u.nextFirstBone = static_cast<uint32_t>(m.frame.bones.size());
         u.boneCount = u.nextBoneCount = static_cast<uint32_t>(b.bones.size());
         m.frame.bones.insert(m.frame.bones.end(), b.bones.begin(), b.bones.end());

@@ -587,14 +587,29 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
         std::string why;
         // (a factory at the spot builds there; an engineer stands off it, facing it)
         const bool factory = buildOrder_ == "FactoryBuild";
-        const Vec3 builderAt = factory ? at : at - forward * (setup_.spacing * 0.5f);
-        side.unit = entities_->AddUnit(setup_.build, builderAt, how, &why);
+        const float round = setup_.buildSide * 3.14159265f / 180;  // (buildfx: --fx-build-side)
+        const Vec3 away = forward * std::cos(round) - Vec3{right.x, 0, right.z} * std::sin(round);
+        const Vec3 builderAt = factory ? at : at - away * (setup_.spacing * 0.5f);
+        FxEntities::UnitPlace builderHow = how;
+        if (!factory) builderHow.forward = away;  // (facing what it builds)
+        side.unit = entities_->AddUnit(setup_.build, builderAt, builderHow, &why);
         if (!side.unit) fprintf(stderr, "render: --fx-build: %s\n", why.c_str());
+        // (buildfx: --fx-build-count, more engineers round it, each building it too)
+        std::vector<uint32_t> more;
+        for (int k = 1; !factory && side.unit && k < setup_.buildCount; ++k) {
+          const float a = round + 6.2831853f * static_cast<float>(k) / static_cast<float>(setup_.buildCount);
+          const Vec3 to = forward * std::cos(a) - Vec3{right.x, 0, right.z} * std::sin(a);
+          builderHow.forward = to;
+          const uint32_t one = entities_->AddUnit(setup_.build, at - to * (setup_.spacing * 0.5f), builderHow, &why);
+          if (one) more.push_back(one);
+        }
         if (side.unit) {
           how.builder = side.unit;
           side.built = entities_->AddUnit(setup_.buildUnit, at, how, &why);
           if (!side.built) fprintf(stderr, "render: --fx-build: %s\n", why.c_str());
           else entities_->Build(side.unit, side.built, buildOrder_, setup_.buildSeconds);
+          for (uint32_t one : more)
+            if (side.built) entities_->Build(one, side.built, buildOrder_, setup_.buildSeconds);
         }
       }
       if (entities_ && unitsReady_ && !setup_.fire.empty()) {  // the unit to fire, as the game makes one, with its weapons

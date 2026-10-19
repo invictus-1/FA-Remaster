@@ -1,6 +1,7 @@
 #include "models.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstddef>
@@ -55,8 +56,48 @@ void ReadScmBones(const std::string& file, std::vector<ModelBone>* bones) {
   }
 }
 
+// Trees of a group (ModelLod::treeStep), for a level of what sways: `bytes` its vertices as the file has them, `bones`
+// the file's own bones. A tree is a bone that carries vertices, and it stands where that bone stands at rest (x, z;
+// the same in every level of a group, whatever order or names a level lists its bones by). Only where two or more
+// bones carry vertices and stand apart is the level a group; otherwise (a single tree, a group's far card) the bytes
+// are cleared and the model's own beat holds.
+void TagTrees(const std::vector<ModelBone>& bones, std::string* bytes, ModelLod* lod) {
+  const size_t count = bytes->size() / sizeof(ScmVertex);
+  auto tagOf = [&](size_t v) { return reinterpret_cast<uint8_t*>(&(*bytes)[v * sizeof(ScmVertex) + offsetof(ScmVertex, bones)]); };
+  std::vector<char> carries(256, 0);
+  for (size_t v = 0; v < count; ++v) carries[tagOf(v)[0]] = 1;
+  float lo[2] = {1e30f, 1e30f}, hi[2] = {-1e30f, -1e30f}, farthest = 0;
+  int trees = 0;
+  for (size_t b = 0; b < bones.size() && b < carries.size(); ++b) {
+    if (!carries[b]) continue;
+    ++trees;
+    const float at[2] = {bones[b].position.x, bones[b].position.z};
+    for (int k = 0; k < 2; ++k) {
+      lo[k] = std::min(lo[k], at[k]);
+      hi[k] = std::max(hi[k], at[k]);
+      farthest = std::max(farthest, std::fabs(at[k]));
+    }
+  }
+  const bool group = trees >= 2 && std::max(hi[0] - lo[0], hi[1] - lo[1]) > 1e-3f;
+  lod->treeStep = group ? std::max(farthest, 1e-3f) / 127 : 0;
+  for (size_t v = 0; v < count; ++v) {
+    uint8_t* tag = tagOf(v);
+    tag[1] = tag[2] = tag[3] = 0;
+    if (!group || tag[0] >= bones.size()) continue;
+    const float x = bones[tag[0]].position.x, z = bones[tag[0]].position.z;
+    tag[1] = static_cast<uint8_t>(std::clamp(std::lround(x / lod->treeStep) + 128, 0L, 255L));
+    tag[2] = static_cast<uint8_t>(std::clamp(std::lround(z / lod->treeStep) + 128, 0L, 255L));
+    // its own beat, a share of a whole swing, from where it stands: smooth in the place (each level's bones stand
+    // where the others' do, to a hair, and the beat must not jump when the level changes), yet unrelated between
+    // trees a few model units apart
+    const float s = std::sin(x * 0.13f + z * 0.29f) * 3.7f + x * 0.071f + z * 0.053f;
+    tag[3] = static_cast<uint8_t>(1 + std::min(253, static_cast<int>((s - std::floor(s)) * 254)));
+  }
+}
+
 // `skeleton`: the bones the model's vertices are to follow by index (Model::bones). Where the file
 // lists its own bones in another order, its vertices are renumbered by the bones' names.
+// `trees`: a level of what sways: its trees of a group are told apart first (TagTrees).
 uint32_t NextLodSerial() {
   static uint32_t made = 0;
   return ++made;
@@ -64,7 +105,7 @@ uint32_t NextLodSerial() {
 
 bool LoadScm(gfx::Device* device, const std::string& file, const std::vector<ModelBone>& skeleton, ModelLod* lod, Vec3* boundsMin,
              Vec3* boundsMax, std::string* error, std::vector<Model::BoneBox>* boneBoxes = nullptr,
-             std::shared_ptr<const HitShape>* hitShape = nullptr, int64_t hitShapeMost = 0) {
+             std::shared_ptr<const HitShape>* hitShape = nullptr, int64_t hitShapeMost = 0, bool trees = false) {
   auto fail = [&](const char* what) {
     *error = what;
     return false;
@@ -97,6 +138,12 @@ bool LoadScm(gfx::Device* device, const std::string& file, const std::vector<Mod
   // which of the skeleton's bones each of the file's bones is; left alone when they are the same list
   std::vector<ModelBone> own;
   ReadScmBones(file, &own);
+  std::string tagged;  // (trees of a group: by the file's own bones, before they are renumbered)
+  if (trees) {
+    tagged.assign(vertices, static_cast<size_t>(vertexCount) * sizeof(ScmVertex));
+    TagTrees(own, &tagged, lod);
+    vertices = tagged.data();
+  }
   bool same = own.size() <= skeleton.size();
   for (size_t i = 0; same && i < own.size(); ++i) same = own[i].name == skeleton[i].name;
   std::string renumbered;
@@ -804,8 +851,10 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
     const bool unit = !effect && stem.empty() && (what.find('/') == std::string::npos ||
                                                   (what.size() > 8 && what.compare(what.size() - 8, 8, "_unit.bp") == 0));
     std::shared_ptr<const HitShape>* shape = hitShapes && unit && !m->hitShape ? &m->hitShape : nullptr;
+    // (what sways, below: its trees of a group told apart, each to sway on its own; ModelLod::treeStep)
+    const bool sways = kind.compare(0, 10, "undulating") == 0 || kind == "labpbralpha" || (!m->lods.empty() && m->lods[0].sway > 0);
     if (!mesh || !LoadScm(device_, *mesh, m->bones, &lod, m->lods.empty() ? &m->boundsMin : nullptr, m->lods.empty() ? &m->boundsMax : nullptr, &error,
-                          m->lods.empty() ? &m->boneBoxes : nullptr, shape, i + 1 == sources.size() ? INT64_MAX : kHitShapeTriangles)) {
+                          m->lods.empty() ? &m->boneBoxes : nullptr, shape, i + 1 == sources.size() ? INT64_MAX : kHitShapeTriangles, sways)) {
       // a missing coarser level is common: the finer ones then stand in
       if (i == 0 || mesh) fprintf(stderr, "render: model %s: mesh %s: %s\n", what.c_str(), s.mesh.c_str(), mesh ? error.c_str() : "file not found");
       if (i == 0) return;

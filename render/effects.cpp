@@ -8,6 +8,7 @@
 #include <cstdio>
 
 #include "blasts.h"
+#include "build_effects.h"
 #include "effect_files.h"
 
 namespace render {
@@ -288,6 +289,8 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
   } else if (f == "CreateBeamEmitter" || f == "CreateBeamEmitterOnEntity" || f == "CreateBeamEntityToEntity" || f == "AttachBeamEntityToEntity") {
     e.kind = Kind::Beam;
     e.attached = e.entity != kNone;
+    e.buildBeam = BuildEffects::IsBuildBeam(event.blueprint);  // (buildfx)
+    e.original = event.original;
   } else if (f == "CreateAttachedBeam" || f == "CreateBeamToEntityBone") {
     e.kind = Kind::TextureBeam;
     e.attached = true;
@@ -364,6 +367,7 @@ void Effects::Update(double tick, const Frame& frame) {
   for (uint32_t i = 0; i < frame.entities.size(); ++i) entityAt_[frame.entities[i].id] = i;
   for (uint32_t i = 0; i < frame.projectiles.size(); ++i) projectileAt_[frame.projectiles[i].id] = i;
   for (uint32_t i = 0; i < frame.beams.size(); ++i) beamAt_[frame.beams[i].id] = i;
+  if (build_ && build_->On()) build_->TakeSites(frame, models_);  // (buildfx: the units under construction)
 
   while (!pending_.empty() && static_cast<double>(pending_.front().tick) <= tick) {
     const FrameEffectEvent& event = pending_.front();
@@ -475,6 +479,13 @@ void Effects::Update(double tick, const Frame& frame) {
         }
         if (e.kind == Kind::Beam) ribbons_->Beam(e.blueprint, e.position, end, e.faction);
         else ribbons_->TextureBeam(e.blueprint, e.position, end, e.halfWidth);
+        // (buildfx) a build beam, for the remastered build look's light and sparks where it meets what it builds
+        if (e.buildBeam && !e.original && build_ && build_->On()) {
+          std::string unusedRamp;
+          Vec3 glow{0, 0, 0};
+          if (!ribbons_->Glows(e.blueprint, &unusedRamp, &glow, e.faction)) glow = Vec3{0, 0, 0};
+          build_->AddBeam(e.position, end, e.faction, glow, (static_cast<uint64_t>(e.entity) << 32) ^ e.entity2 ^ (static_cast<uint64_t>(e.bone + 1) << 24));
+        }
         // a weapon's beam lights the ground it runs over and, more, what it hits
         if (e.kind == Kind::Beam && shotLight > 0 && beamAt_.count(e.entity)) {
           std::string unusedRamp;

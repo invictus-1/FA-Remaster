@@ -39,7 +39,9 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       debris(device, &textures),
       outlines(device),
       dust(device),
+      build(device),
       clouds(device),
+      cloudZoomDraw(device),  // (cloudzoom)
       motion(device),
       upscaler(device),
       dof(device),
@@ -106,6 +108,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
   effects.verbose = options.verbose;
   effects.SetTracks(&tracks);
   effects.SetBlasts(&blasts);
+  effects.SetBuild(&build);
   tracks.deep = &trackField;  // (deep tracks: the prints go there while they are on)
   trackField.picture = [this](const std::string& name) { return decals.Picture(name); };
   trackField.groundHeight = [this](float x, float z) { return map.Height(x, z); };
@@ -790,7 +793,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       const float top = foot.y + 150, wide = std::max(0.3f, camera.distance * 0.009f);
       Vec3 from{foot.x + (WeatherDraw(weatherSeed, stroke, 79) - 0.5f) * 40, top, foot.z + (WeatherDraw(weatherSeed, stroke, 83) - 0.5f) * 40};
       // (the volumetric clouds lit from within where the bolt leaves them, a little up in the layer)
-      clouds.boltAt = Vec3{from.x, std::max(clouds.base, camera.Eye().y + 40) + clouds.thickness * 0.3f, from.z};
+      clouds.boltAt = Vec3{from.x, clouds.Underside(camera.Eye().y) + clouds.thickness * 0.3f, from.z};  // (cloudzoom: where the march has the layer)
       clouds.boltReach = clouds.thickness * 0.9f;
       clouds.boltLight = Vec3{0.8f, 0.86f, 1.0f} * (flash * 8 / skyLight.exposure);
       const int pieces = 18;
@@ -927,6 +930,12 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   terrain.tracksField = deepNow_ ? trackField.Constants() : TrackFieldConstants{};
   meshes.Begin();
   energy.Begin();  // [energy shields]
+  // (buildfx) the remastered build look (build_effects.h): the effects list this frame's build beams while it is on, and
+  // the models are drawn by their build look's shaders (made the first frame it is on); a frame for something else
+  // leaves the sparks under way as they are
+  buildNow_ = remasteredBuild && look == Look::Modern && effectsLook == EffectsLook::Remastered && !sidePicture;
+  build.Begin(clock, buildNow_, sidePicture);
+  meshes.remasteredBuild = buildNow_ && meshes.PrepareBuild();
   // (icons and bars at the screen's size: the scene's view with the screen's numbers)
   screenView_ = view;
   if (temporalNow_) screenView_.SetMatrix(motion.Now());  // (icons, bars and what is picked: without the jitter)
@@ -2096,6 +2105,7 @@ void World::Render() {
     volumes.AddLights(&lights, lights.night, timeOfDay >= 0 && look == Look::Modern ? skyLight.daylight : 1.0f);
     volumes.CloudRing(clock_, &clouds.ringX, &clouds.ringZ, &clouds.ringRadius, &clouds.ringWidth, &clouds.ringStrength);
   }
+  if (buildNow_) build.AddLights(&lights, lights.night);  // (buildfx: the build beams' lights, the sparks thrown)
   lights.Build(&view);  // (after everything has said what lights there are; before any pass reads the view)
   // blasts (blasts.h): the waves and the dust under way near what the camera sees; the debris's chunks moved on and listed
   blastsNow_ = grassBlasts_ = false;
@@ -2226,6 +2236,8 @@ void World::Render() {
   }
   // the volumetric clouds: where they are and their shadows, before the light in the air and the scene read them
   Stage("clouds' shadows");
+  // (cloudzoom) the zoom through them (cloud_zoom.h): whether the layer stays where it is this frame, and how thin
+  clouds.zoom = cloudZoomDraw.For(camera, clouds, cloudZoom && volumetricClouds && look == Look::Modern && haveMap_);
   if (sidePicture) clouds.Skip(&view);  // (a frame for something else: the game's frames before kept)
   else clouds.Prepare(&view, camera, volumetricClouds && look == Look::Modern && haveMap_);
   // light in the air: its volume, between the shadow maps and the scene that reads it
@@ -2389,6 +2401,11 @@ void World::Render() {
     Stage("wildlife: fireflies");
     wildlifeDraw.DrawFireflies(view);
   }
+  if (buildNow_ && build.Busy()) {  // (buildfx: the build sparks moved on, bouncing off the scene's depth: it dispatches)
+    Stage("build sparks");
+    build.Simulate(view, camera, post.Depth(), terrain.HeightTexture(), terrain.HeightUnit(), static_cast<float>(map.width),
+                   static_cast<float>(map.height), haveMap_ && map.water.present ? map.water.elevation : -1e9f);
+  }
   {
     // lamps' shafts and particles go into the scene's colour alone: they test the scene's depth
     // themselves and fade where they meet something solid
@@ -2397,6 +2414,7 @@ void World::Render() {
       Stage("volume blasts");
       volumes.Draw(view, post.Depth(), camera.zNear);
     }
+    if (buildNow_ && hide.find("particles") == std::string::npos) build.Draw(view, post.Depth(), camera);  // (buildfx: the sparks)
     Stage("lamp shafts");
     shafts.Draw(view, post.Depth(), camera.zNear);
     if (blastsNow_ && blastDust) {  // the blasts' dust, under the game's own fire and smoke
@@ -2455,6 +2473,11 @@ void World::Render() {
     post.BeginColorOnly();
     lights.Bind();
     falling.DrawSplashes(view, fall, rain, post.Depth());
+  }
+  if (clouds.Zoomed()) {  // (cloudzoom) the clouds the eye has risen into or above, over all that lies under them (cloud_zoom.h)
+    Stage("clouds over the scene (cloud zoom)");
+    post.BeginColorOnly();
+    cloudZoomDraw.Lay(view, clouds.Picture(), post.Depth());
   }
   Stage("fog of war");
   if (haveMap_ && sight.On() && sightShown) {  // the fog of war: what is not seen, darkened
