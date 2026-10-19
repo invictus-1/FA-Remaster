@@ -31,6 +31,7 @@
 #include "sim/sim_cache.h"
 #include "sim/terrain.h"
 #include "sim/units.h"
+#include "sim/vecmath.h"
 
 namespace moho {
 
@@ -2486,7 +2487,7 @@ bool AirNavArrival(Sim& sim, Unit* u) {
         const Unit* du = static_cast<const Unit*>(de);
         const Vec3& now = du->position;  // (nothing has moved yet in this beat: the committed transforms)
         const Vec3& before = du->lastPosition;
-        const bool moved = now.x != before.x || now.y != before.y || now.z != before.z;
+        const bool moved = !vm::SameBits(now, before);  // (0x5a5142..0x5a5156: memcmp 0x4f0a50 of +0xac / +0xc8)
         if (moved && du->motion.bp && du->motion.bp->mobile() && BpInCategory(sim, u->blueprint, "TARGETCHASER")) {
           SetTarget(sim, u, now, Vec3{}, 0);
           return true;

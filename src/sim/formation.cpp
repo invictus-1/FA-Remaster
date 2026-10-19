@@ -667,7 +667,7 @@ void AtGoalCheck(Formation& F, FormGroup& g) {
                  t == CommandType::FormMove || t == CommandType::FormAttack || t == CommandType::FormPatrol ||
                  t == CommandType::Guard;
     }
-    if (!nextMove && (F.fwd.x != 0 || F.fwd.y != 0 || F.fwd.z != 0)) {
+    if (!nextMove && !vm::BitsZero(F.fwd)) {  // (0x59bbf1..0x59bc05: +0x2c8 against zero, memcmp 0x4f0a50)
       Vec3 f = vm::Forward(m->orientation);
       if (f.x * F.fwd.x + f.y * F.fwd.y + f.z * F.fwd.z < 0.95f) return;
     }

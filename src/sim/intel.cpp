@@ -15,6 +15,7 @@
 #include "sim/sim.h"
 #include "sim/terrain.h"
 #include "sim/units.h"
+#include "sim/vecmath.h"
 
 namespace moho {
 
@@ -108,7 +109,9 @@ void UpdatePos(IntelHandle& h, int slot, Vec3 p, uint32_t tick, bool exact) {
     if (exact) h.lastTick = tick;
     return;
   }
-  bool moved = p.x != h.pos.x || p.y != h.pos.y || p.z != h.pos.z;
+  // (the new place against the handle's, memcmp 0x4f0a50: CIntel::Update 0x76e4e1..0x76e4f1, CIntelPosHandle::Update
+  // 0x76efc1..0x76efd2)
+  bool moved = !vm::SameBits(p, h.pos);
   if (!exact) {
     float dx = p.x - h.pos.x, dy = p.y - h.pos.y, dz = p.z - h.pos.z;
     float t = static_cast<float>(h.radius) * 0.333f;
@@ -698,7 +701,7 @@ void AdvanceIntelCoords(Sim& sim) {
       IntelHandle* any = nullptr;
       for (int s = 1; s <= 8; ++s)
         if (ei.h[s].exists) any = &ei.h[s];
-      moved = any && (any->pos.x != p.x || any->pos.y != p.y || any->pos.z != p.z);
+      moved = any && !vm::SameBits(any->pos, p);
       exact = moved;  // script entities move by Warp / attach: exact
     }
     if (!moved && !exact) continue;

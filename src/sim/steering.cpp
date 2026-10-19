@@ -22,6 +22,7 @@
 #include "sim/motion.h"
 #include "sim/sim.h"
 #include "sim/units.h"
+#include "sim/vecmath.h"
 
 namespace moho {
 namespace {
@@ -176,9 +177,8 @@ bool UnitPriority(const Unit* A, const Unit* B) {
 
 bool UnitIgnores(const Unit* self, const Unit* e, int flags) {
   if (!e || e->dead || e->destroyQueued || e == self || !Mobile(e)) return true;
-  if (flags == 1 && (e->position.x != e->lastPosition.x || e->position.y != e->lastPosition.y ||
-                     e->position.z != e->lastPosition.z))
-    return true;  // it moved this tick
+  if (flags == 1 && !vm::SameBits(e->position, e->lastPosition))
+    return true;  // it moved this tick (func_IsSourceUnit 0x62eee9..0x62eefd: memcmp 0x4f0a50 of +0xb4 / +0xd0)
   if (e->parentId || St(e, "Attached")) return true;
   if (self->layer != e->layer) return true;
   if (Naval(self) && !Naval(e)) return true;

@@ -22,6 +22,7 @@
 #include "sim/sim.h"
 #include "sim/terrain.h"
 #include "sim/units.h"
+#include "sim/vecmath.h"
 
 namespace moho {
 
@@ -627,7 +628,9 @@ bool TryAdvance(Sim& sim, Unit* u, LandNav& n) {
   return false;
 }
 
-bool IsZeroVec(const Vec3& v) { return v.x == 0 && v.y == 0 && v.z == 0; }
+// (+0x84 against the zero vector: memcmp 0x4f0a50 in GetTargetPos 0x5ad8c9..0x5ad8dd and UpdateCurrentPosition
+// 0x5ae7d8..0x5ae7ea)
+bool IsZeroVec(const Vec3& v) { return vm::BitsZero(v); }
 // GetTargetPos 0x5ad8b0: the followed slot point +0x84 is the target position while +0x92 is set and the point is not
 // (0, 0, 0) (0x4f0a50 against the zero vector 0xf3d21c)
 bool FollowsSlotPoint(const LandNav& n) { return n.following && !IsZeroVec(n.lastFollow); }
@@ -795,7 +798,8 @@ void UpdateCurrentPosition(Sim& sim, Unit* u, LandNav& n) {
     }
   }
   if (n.waiting) return;   // waiting for the leader: no stuck count, no advance
-  bool still = u->position.x == n.prevPos.x && u->position.y == n.prevPos.y && u->position.z == n.prevPos.z;
+  // (0x5aeaef..0x5aeb09: the position, u+0xb4, against the one before, u+0xd0, by memcmp 0x4f0a50)
+  bool still = vm::SameBits(u->position, n.prevPos);
   n.stuck = (still && !u->immobile) ? n.stuck + 1 : 0;
   if (n.advanceDist < d && !force && n.stuck < 31) return;
   n.lastAdvance = sim.tick();
@@ -859,7 +863,7 @@ void Execute(Sim& sim, Unit* u, LandNav& n) {
     // ours took the height of the own cell, so the point differed and went over as a new waypoint, drive-through 1.
     const Vec3 wp = FollowsSlotPoint(n) ? n.lastFollow : WorldOf(sim, u, n.target);
     const UnitMotion& m = u->motion;
-    const bool same = m.steerWpSet && m.steerWp.x == wp.x && m.steerWp.y == wp.y && m.steerWp.z == wp.z;
+    const bool same = m.steerWpSet && vm::SameBits(m.steerWp, wp);  // (0x5a434c..0x5a4366: memcmp 0x4f0a50)
     if (!same) {
       bool inGoal = InGoal(n, n.target);
       bool f9e = n.thinking ? false : n.spliced < 0;
