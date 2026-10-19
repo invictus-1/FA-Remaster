@@ -44,7 +44,9 @@ mouth). Chris saw them marked (edgetrees\t2_*_marked.png) and said move them. As
 mirrored; tell the renderer when it is live. The engine is told by the renderer (a sim-relevant change: reclaimable,
 destructible props moved; its SETONS_R references may need remaking).
 
-**Answer:** (none yet)
+**Answer:** done (visuals, the same afternoon). 28 moved per map (14 per twin, as edge.json), positions only (at most
+1.63 units onto the bank), symmetric, reclaim totals unchanged; SETONS_R md5 5d939139..., SETONS_Q d30ce225...; the
+rebuild chain keeps it. find.py on the live map: 0 left on the stream. The engine: nothing of its own uses SETONS_R.
 
 ## 39. To the VISUALS track: the stream's props named as stream water (2026-10-19, not blocking; Chris: "This needs to be real water not just a hard texture"; DONE the same afternoon: 'StreamWater' and 'StreamFoam' on all four levels of both props, stream_build.py writes them; the file-name stopgap removed)
 
