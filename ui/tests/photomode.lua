@@ -179,13 +179,20 @@ local function common()
     moho64ui_Key("w", "Shift")
     moho64ui_Key("w", "Ctrl")
     check("W A S D Q E R F, the arrows, Shift-W, Ctrl-W: none reaches the key map", PhotoTestKeys, 0)
+    -- and no other action of the key map either (Chris, 2026-10-19: "that way things don't get messed up")
+    local others = { ['1'] = counter, ['G'] = counter, ['P'] = counter, ['Ctrl-Alt-C'] = counter }
+    IN_AddKeyMapTable(others)
+    for _, key in { "1", "g", "p" } do moho64ui_Key(key) end
+    moho64ui_Key("c", "Ctrl-Alt")
+    check("1, G, P, Ctrl-Alt-C: no other key map action runs while it is open", PhotoTestKeys, 0)
+    check("and the photo mode stays open", moho64ui_PhotoMode().open, true)
 
     -- the moment: by the panel's slider and combo (the picture's own; read back)
     local c = Panel.Controls
     local own = moho64ui_PhotoMode().moment
     LOG(string.format("TEST note: the game's own moment: hour %.2f, weather %s, strength %.2f", own.hour, own.weatherName, own.strength))
     check("at first the game's own", own.set, false)
-    check("the weather's kinds", table.concat(moho64ui_PhotoMode().weatherKinds, " "), "clear fair cloudy overcast rain storm fog snow")
+    check("the weather's kinds", table.concat(moho64ui_PhotoMode().weatherKinds, " "), "clear fair cloudy overcast rain storm fog snow showers")
     c.timeSlider:SetValue(15.5)
     c.timeSlider:OnValueSet(15.5)
     local m = moho64ui_PhotoMode().moment
@@ -253,6 +260,27 @@ local function common()
     IN_RemoveKeyMapTable({ ['W'] = counter, ['A'] = counter, ['S'] = counter, ['D'] = counter, ['Q'] = counter, ['E'] = counter,
         ['R'] = counter, ['F'] = counter, ['Shift-W'] = counter, ['UpArrow'] = counter, ['Ctrl-W'] = counter, ['H'] = counter,
         ['Esc'] = counter })
+    moho64ui_Key("g")
+    check("the other keys' actions run again once it is closed", PhotoTestKeys, 2)
+    IN_RemoveKeyMapTable(others)
+
+    -- a key of the player's own (Chris: "make sure people can bind a different one"): the key bindings' way, the
+    -- action on another key opens and closes it
+    IN_AddKeyMapTable({ ['Ctrl-Shift-K'] = { action = 'remaster_photo_mode' } })
+    check("Ctrl-Shift-K bound to the photo mode", tostring(moho64ui_KeyMapAction("Ctrl-Shift-K")), "remaster_photo_mode")
+    moho64ui_Key("k", "Ctrl-Shift")
+    check("the player's own key opens it", moho64ui_PhotoMode().open, true)
+    WaitSeconds(0.3)
+    moho64ui_Key("k", "Ctrl-Shift")
+    check("and closes it again", moho64ui_PhotoMode().open, false)
+    WaitSeconds(0.3)
+    moho64ui_Key("p", "Alt")
+    check("Alt-P still opens it", moho64ui_PhotoMode().open, true)
+    WaitSeconds(0.3)
+    moho64ui_Key("p", "Alt")
+    check("and closes it", moho64ui_PhotoMode().open, false)
+    IN_RemoveKeyMapTable({ ['Ctrl-Shift-K'] = { action = 'remaster_photo_mode' } })
+    WaitSeconds(1)
 end
 
 if not SessionIsReplay() then

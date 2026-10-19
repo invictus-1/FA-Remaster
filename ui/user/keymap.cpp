@@ -523,6 +523,15 @@ void CommandGraphShown(lua_State* L, bool show) {
   lua_settop(L, top);
 }
 
+// Whether a key map action is the photo mode's own switch (its console command remaster_photo_mode, with or without
+// a word after it).
+static bool IsPhotoModeAction(const std::string& action) {
+  const size_t a = action.find_first_not_of(" \t");
+  if (a == std::string::npos) return false;
+  const size_t b = action.find_first_of(" \t", a);
+  return Upper(action.substr(a, b == std::string::npos ? std::string::npos : b - a)) == "REMASTER_PHOTO_MODE";
+}
+
 void KeyMapKeyDown(lua_State* L, int vk, bool shift, bool ctrl, bool alt, bool repeat) {
   KeyMap& map = Map(L);
   const bool wasDown = map.down.count(vk) != 0;
@@ -530,10 +539,22 @@ void KeyMapKeyDown(lua_State* L, int vk, bool shift, bool ctrl, bool alt, bool r
   // (306: Shift; not while the photo mode is open, whose Shift is its own: faster)
   if (vk == KeycodeMauiToMSW(306) && !wasDown && !PhotoModeOpen(L)) CommandGraphShown(L, true);
   if (UserState::From(L)->ui().focus) return;
-  if (PhotoModeKey(L, vk, repeat)) return;  // (the photo mode's own keys, ours: they reach no action of the key map)
   uint32_t code = static_cast<uint32_t>(vk) | (shift ? kShift : 0) | (ctrl ? kCtrl : 0) | (alt ? kAlt : 0);
-  if (repeat && !map.repeats.count(code)) return;
   auto it = map.actions.find(code);
+  // While the photo mode is open no action of the key map runs but its own (Chris, 2026-10-19: "that way things don't
+  // get messed up when in photomode"): the key the player bound "Photo mode" to closes it (Alt-P at first, or any
+  // other: the key bindings dialog's), the photo mode's own keys fly its camera (PhotoModeKey), every other key does
+  // nothing.
+  if (PhotoModeOpen(L)) {
+    if (it != map.actions.end() && !repeat && IsPhotoModeAction(it->second)) {
+      std::string action = it->second;
+      ExecuteConsoleCommand(L, action);
+      return;
+    }
+    PhotoModeKey(L, vk, repeat);
+    return;
+  }
+  if (repeat && !map.repeats.count(code)) return;
   if (it == map.actions.end()) return;
   std::string action = it->second;  // the action may change the key map
   ExecuteConsoleCommand(L, action);
