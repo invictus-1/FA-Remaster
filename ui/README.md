@@ -178,6 +178,19 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   are a first proposal until the renderer's measured costs set them; Frame Rate, Graphics API, the upscalers
   and Frame Generation are not looks and no level touches them. Water Ripples come on with Weather Effects
   (High, Ultra); the Cinematic Lens Blur is in no level.
+  The first-start graphics check (Chris, 2026-10-18: "if the PC can't hold 60 fps, turn ray tracing off first,
+  then step the preset down, and say so once"; a hook of ours, `ui/data/hook/lua/ui/game/gamemain.lua`, a
+  deviation from FAF): once per profile, in the player's first game (not a replay), from 5 s of game time on and
+  no cinematic showing, the graphics card's time per frame of the world's picture is measured (`FrameCostMeter`,
+  `moho64ui_MeasureFrameCost` / `moho64ui_FrameCost`: the median of 120 frames after 30 left out, the card's own
+  time `WorldPicture::LastStats().gpuMs`, not the frame interval). Above 16.7 ms a dialog (the game's
+  `UIUtil.QuickDialog`) gives the time and asks: "Lower settings" turns Ray Tracing off first, then the Remastered
+  Preset one level at a time (`RemasterLowerStep` in the options hook; never to Off, never raising what the
+  player set lower), measured again after each step (the looks turned off take effect at once), until the card
+  keeps up or Low is reached, then one note says what changed; "Keep" changes nothing. Either way the profile's
+  options get `remaster_first_start_check = 1`. The changes go in as the Options dialog's OK puts them
+  (`optionslogic.SetCurrent`). A run without a window never finishes a measurement and never asks; the tests make
+  the card's time up (`moho64ui_SetFrameCostForTests`, test runs only; `ui/tests/firststart.lua`).
   The game's OWN graphics settings in the Video tab drive the renderer and mean what they say
   (Chris, 2026-10-15): Fidelity (Low: no ambient occlusion, plain ground), Shadow Fidelity
   (Off: none; Low, Medium: the sun's, its maps 1024 / 2048 texels; High: 4096 and the lamps'

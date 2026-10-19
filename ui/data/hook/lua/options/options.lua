@@ -65,6 +65,66 @@ local function SetRemasterPreset(control, level)
     end
 end
 
+-- The first-start graphics check's next step down (ui/data/hook/lua/ui/game/gamemain.lua; Chris, 2026-10-18: "turn
+-- ray tracing off first, then step the preset down"): given the options as they stand, the changes that lower the
+-- remastered looks by one step and, for a step of the preset, the level it went to; nil when nothing is left to lower.
+-- Ray Tracing goes first (where the card can ray trace: elsewhere it does nothing, and is left as it is); then the
+-- Remastered Preset one level down, Ultra, High, Medium, Low, never to Off (the original's look), a level that would
+-- change nothing being passed over (High after Ray Tracing went: it is Ultra without it). A level only ever lowers:
+-- what the player has set lower than the level has stays as he set it (each value the lesser of his and the level's;
+-- his Original Look stays), so from Custom the levels are tried from Ultra down. The Remastered Preset then names the
+-- level the looks match, or Custom (as the Video tab would show them).
+function RemasterLowerStep(current)
+    local rayTracing = moho64ui_RayTracingSupported() ~= false
+    local function Counts(key) return rayTracing or key ~= 'remaster_ray_tracing' end
+    local changes, level = nil, nil
+    if rayTracing and current.remaster_ray_tracing == 1 then
+        changes = { remaster_ray_tracing = 0 }
+    else
+        local from = current.remaster_preset
+        if type(from) ~= 'number' or from > 4 then from = 5 end  -- (Custom)
+        for l = from - 1, 1, -1 do
+            local step, any = {}, false
+            for key, value in RemasterPresetValues(l) do
+                local now, want = current[key], value
+                if key == 'remaster_look' then
+                    if now == 'original' then want = now end
+                elseif type(now) == 'number' and type(value) == 'number' then
+                    want = math.min(now, value)
+                end
+                if want ~= now and Counts(key) then
+                    step[key] = want
+                    any = true
+                end
+            end
+            if any then
+                changes, level = step, l
+                break
+            end
+        end
+    end
+    if not changes then return nil end
+    local after = {}
+    for key, value in current do after[key] = value end
+    for key, value in changes do after[key] = value end
+    local named = 5
+    for l = 4, 0, -1 do
+        local same = true
+        for key, value in RemasterPresetValues(l) do
+            if after[key] ~= value and Counts(key) then
+                same = false
+                break
+            end
+        end
+        if same then
+            named = l
+            break
+        end
+    end
+    if named ~= current.remaster_preset then changes.remaster_preset = named end
+    return changes, level
+end
+
 local looks = {
     {
         title = "Frame Rate",

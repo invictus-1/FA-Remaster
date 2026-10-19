@@ -1072,7 +1072,11 @@ void GameSession::PresentToWindow(const SoftwareTarget& target, const IntRect& c
   const auto t0 = std::chrono::steady_clock::now();
   const double moment = pic.momentFixed ? pic.moment : PictureTick();  // (the one the anchors were of)
   pic.momentFixed = false;
-  if (pic.cameraW > 0) pic.picture.DrawToWindow(pic.camera, w, h, moment);
+  if (pic.cameraW > 0) {
+    pic.picture.DrawToWindow(pic.camera, w, h, moment);
+    // (the first-start graphics check's measurement: the card's time of the newest frame it has finished)
+    if (FrameCost().fakeMs < 0) FrameCost().Note(pic.picture.LastStats().gpuMs);
+  }
   FrameTimes& times = Times();
   // (The picture shows moment - 1, between the beats round it: past the newest beat it stands still.)
   if (sim_) {
@@ -1247,6 +1251,9 @@ void GameSession::StatsLines(std::vector<std::string>* lines) const {
 
 void GameSession::Advance(double seconds) {
   if (!sim_) return;
+  // (a test run's made-up time of the card, moho64ui_SetFrameCostForTests: every frame of a game counts, also without
+  // a window)
+  if (FrameCost().fakeMs >= 0) FrameCost().Note(FrameCost().fakeMs);
   if (BeatRunning()) {  // (the beats' thread is busy: the time counts, nothing else is done)
     AdvanceClock(seconds);
     return;

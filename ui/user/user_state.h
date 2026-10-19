@@ -266,7 +266,8 @@ inline void PushCommandId(lua_State* L, uint32_t id) { lua_pushnumber(L, static_
 // PlaySound, StopSound, SetVolume and the others (sound_bindings.cpp).
 void RegisterSoundBindings(lua_State* L);
 // The host's test functions that write a file a script names (moho64ui_SoundMix's file) write it only in a run
-// started with a test script (--lua or --game-lua), never for a game's or a mod's script (sound_bindings.cpp).
+// started with a test script (--lua or --game-lua), never for a game's or a mod's script (sound_bindings.cpp). The
+// same gate keeps the tests' made-up time of the graphics card (moho64ui_SetFrameCostForTests, FrameCostMeter).
 void AllowTestFileWrites(bool allowed);
 bool TestFileWritesAllowed();
 // GetSpecialFiles, LaunchReplaySession and their kin: replays and saved games (special_files.cpp).
@@ -511,6 +512,28 @@ struct FrameTimes {
   int beats = 0;
 };
 FrameTimes& Times();
+// The graphics card's time per frame of a game's world picture, for the first-start graphics check (this program's
+// own, not the original's: ui/data/hook/lua/ui/game/gamemain.lua; Chris, 2026-10-18: "if the PC can't hold 60 fps,
+// turn ray tracing off first, then step the preset down"). The game's script starts a measurement
+// (moho64ui_MeasureFrameCost) and reads its result (moho64ui_FrameCost). The window's loop gives it the card's time
+// of every frame of the game's picture it shows (WorldPicture::LastStats().gpuMs: the card's own, not the frame
+// interval, which vertical sync holds at the screen's rate); the first kSettle frames after the start are left out
+// (the card's times come back a few frames late, and a setting just changed must have reached the picture), then
+// kSamples frames make the result, their median. A run without a window draws no frames on the card and never
+// finishes a measurement. In a run with a test script (TestFileWritesAllowed) moho64ui_SetFrameCostForTests(ms)
+// makes every frame of a game count as one of that many milliseconds (GameSession::Advance), and the card's own
+// are left out.
+struct FrameCostMeter {
+  static constexpr int kSettle = 30, kSamples = 120;
+  bool measuring = false;
+  int settle = 0;
+  std::vector<float> samples;
+  float result = -1;  // the last measurement's median, ms; below 0: none (or one under way)
+  float fakeMs = -1;  // the tests' time a frame; below 0: none
+  void Start();
+  void Note(float gpuMs);  // a frame of the game's picture, the card's milliseconds (0: not known, left out)
+};
+FrameCostMeter& FrameCost();
 // The unit under the mouse in the main world view (0xffffffff: none, or the mouse is over
 // something else), by the picture last drawn (worldview.cpp); an army's colour as scripts take
 // colours, "aarrggbb" (session_bindings.cpp; army counted from 1).

@@ -1243,6 +1243,34 @@ bool KeyIsDown(lua_State* L, int mauiCode) {
   return !blocked && mauiCode >= 0 && Map(L).down.count(KeycodeMauiToMSW(mauiCode)) != 0;
 }
 
+FrameCostMeter& FrameCost() {
+  static FrameCostMeter meter;
+  return meter;
+}
+
+void FrameCostMeter::Start() {
+  measuring = true;
+  settle = kSettle;
+  samples.clear();
+  result = -1;
+}
+
+void FrameCostMeter::Note(float gpuMs) {
+  if (!measuring || !(gpuMs > 0)) return;  // (0: the card's times are not known for this frame)
+  if (settle > 0) return void(--settle);
+  samples.push_back(gpuMs);
+  if (static_cast<int>(samples.size()) < kSamples) return;
+  // The median: the frames of the first seconds carry one-off costs (pipelines and textures made as they are first
+  // needed) that no setting takes away; half the frames cost this or more. (Our choice: the 90th percentile would
+  // count those spikes.)
+  std::vector<float> sorted = samples;
+  std::sort(sorted.begin(), sorted.end());
+  result = 0.5f * (sorted[kSamples / 2 - 1] + sorted[kSamples / 2]);
+  measuring = false;
+  Logf(LogLevel::Info, "moho64ui: the graphics card takes %.2f ms a frame of the game's picture (the median of %d frames%s; the fastest %.2f, the slowest %.2f)",
+       result, kSamples, fakeMs >= 0 ? ", the tests' time" : "", sorted.front(), sorted.back());
+}
+
 void RegisterKeyMapBindings(lua_State* L) {
   g_consoleThread = std::this_thread::get_id();  // (the user state is made on the main thread)
   SetGlobal(L, "print", l_print);
@@ -1266,6 +1294,31 @@ void RegisterKeyMapBindings(lua_State* L) {
     const int known = Looks().rayTracingSupported;
     if (known < 0) lua_pushnil(S);
     else lua_pushboolean(S, known);
+    return 1;
+  });
+  // The first-start graphics check's measurement (FrameCostMeter): moho64ui_MeasureFrameCost() starts one (the last
+  // result goes); moho64ui_FrameCost() -> the graphics card's milliseconds a frame of the game's picture once it is
+  // done, nil until then (and in a run without a window, where the card draws no frames: always).
+  lua_register(L, "moho64ui_MeasureFrameCost", [](lua_State*) -> int {
+    FrameCost().Start();
+    return 0;
+  });
+  lua_register(L, "moho64ui_FrameCost", [](lua_State* S) -> int {
+    const FrameCostMeter& meter = FrameCost();
+    if (meter.measuring || meter.result < 0) lua_pushnil(S);
+    else lua_pushnumber(S, meter.result);
+    return 1;
+  });
+  // moho64ui_SetFrameCostForTests(ms | nil) -> true: from now on every frame of a game counts as one of `ms`
+  // milliseconds of the card (nil: the card's own again). Only in a run with a test script (TestFileWritesAllowed);
+  // elsewhere it does nothing and gives false, so no game's or mod's script can fake the card's time.
+  lua_register(L, "moho64ui_SetFrameCostForTests", [](lua_State* S) -> int {
+    if (!TestFileWritesAllowed()) {
+      lua_pushboolean(S, 0);
+      return 1;
+    }
+    FrameCost().fakeMs = lua_isnumber(S, 1) ? static_cast<float>(lua_tonumber(S, 1)) : -1.0f;
+    lua_pushboolean(S, 1);
     return 1;
   });
   lua_register(L, "moho64ui_LifeBars", l_LifeBars);
