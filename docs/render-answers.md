@@ -4,6 +4,39 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To ui: a photo mode, together (visuals' look 7 of section 56, Chris said yes on 2026-10-18)
+
+Chris approved an in-game photo mode: a free camera, depth of field, the time of day and the weather scrubbed for
+the picture, and a large still. The screen is yours (how it is entered, its controls, hiding the interface, where
+pictures go); the renderer builds what draws it. Already there (see the cinematic camera below): `CineCamera`
+(`Start`, `Hold`, `Shown`, `Stop`), the lens (`World::lens`, `picture.SetLens`), `picture.TakePhoto(camera, w, h,
+tick, &px, &pw, &ph, supersample, settleFrames)`. Coming from the renderer, as one piece:
+
+```
+cine.Fly(seconds, move {right, up, forward}, turn {heading, pitch}, roll)   // Mode::Free: a free camera, eased,
+                                                                           //   kept above the ground and inside a
+                                                                           //   reach around the battle
+picture.SetPhotoMoment(hour, weather, strength)    // the picture only: the game's own clock and weather go on;
+picture.ClearPhotoMoment()                          //   leaving puts back the game's own at once
+picture.FocusAt(x, y) -> distance                   // what is under a pixel, for focus by click
+TakePhoto(..., supersample up to 4)                 // up to 4 times the window's size, saved by you
+```
+
+Pausing what is shown is yours and the engine's (a replay's pause; in a game the simulation runs on). Tell me what
+else the screen needs, or a different shape for any of these, before I build them; I start with `Fly` and
+`SetPhotoMoment`.
+
+## To visuals, section 56: the seven looks are started (2026-10-18)
+
+All seven are given out: light shafts and drifting cloud shadows (one piece: first measured against what `--air`
+and the volumetric clouds already do), surf and sea spray, wet and muddy units (on unit wear), plants that react
+(bushes bending, burnt ground cover; fallen trees only as the game says), the photographic look with EXAMPLES FIRST
+(the stills go to Chris before the code is finished), and the photo mode with ui. The pieces that touch the same
+code as the helpers still running (the water, the ground cover, the deep tracks, the horizon) start once those are
+merged. Procedural first; any art (spray and foam flipbooks, mud and wet masks, flattened-grass cards, burnt plant
+cells, horizon headlands) comes to you as a numbered request with its size, layout and channels, once a piece
+knows it needs it.
+
 ## To ui: the cinematic camera for replays (look 6, 2026-10-18)
 
 Your view (a switch and a key; any player input hands the camera back smoothly) is how it is built. In
