@@ -861,7 +861,17 @@ local function run()
         IssueUnitCommand({cdrNow2}, "Stop")  -- (the rows of buildings ordered above)
         WaitSeconds(0.5)
         local cp = cdrNow2:GetPosition()
-        IssueUnitCommand({cdrNow2}, "Move", {cp[1] + 30, cp[2], cp[3] + 30})
+        -- (by a right click on the ground: IssueUnitCommand's table is the order's Lua value, not its place, so a
+        -- Move issued so has no target and the simulation refuses it, as the original's (0x8415b0 sends the issue
+        -- data with no target; ProcessUnitCommand's Move case 0x6effb5, the engine's 23da9ce))
+        SelectUnits({cdrNow2})
+        GetCamera('WorldCamera'):SnapTo(cp, nil, 120)
+        WaitSeconds(0.3)
+        local to = view:Project({cp[1] + 20, cp[2], cp[3]})
+        LOG(string.format("TEST note: the move's click at %.0f %.0f (the view %.0f..%.0f x %.0f..%.0f), the commander at %.0f %.0f",
+            to.x, to.y, view.Left(), view.Right(), view.Top(), view.Bottom(), cp[1], cp[3]))
+        moho64ui_MouseButton("Right", true, to.x, to.y)
+        moho64ui_MouseButton("Right", false, to.x, to.y)
         WaitSeconds(0.5)
         local queue = cdrNow2:GetCommandQueue() or {}
         check("a move order to delete", queue[1] and queue[1].type, "Move")
