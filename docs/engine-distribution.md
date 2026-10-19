@@ -122,7 +122,9 @@ The questions as they were put:
 - **ui**: the first-run window, which runs before any game data is mounted: a native folder picker (Windows
   IFileDialog; SDL3's folder dialog on Linux / Mac) and a plain message when the check fails; storing the found path
   (a file under our folder, e.g. `FA Remastered\install.ini`); no-argument defaults; section 3.3's ui items.
-- **renderer**: section 3.3's renderer items.
+- **renderer**: section 3.3's renderer items; `render/remasters.cpp` MountRemasters mounts our packed art archive in
+  place of today's folders (`<root>/_terrain/export/moho64`, `_effects/export/moho64`) once the archive's form and
+  name are chosen (Fab-derived art must ship packed, 3.6).
 - **visuals**: shipped art as our own assets in the override layer (LabVisuals included).
 
 ### 3.6 Release gates (open)
@@ -131,6 +133,18 @@ The questions as they were put:
   paid, but never as standalone redistribution; whether loose files in an install folder count as standalone is for
   the binding EULA (not reachable from here). Until that is settled, Fab-derived files (`setonsr_fab_*`, the
   comparison map `SETONS_Q`'s ground) stay in local builds only: never in a repository, never in a release.
+  Update (visuals chat read the binding Fab EULA, https://www.fab.com/eula, Standard License; summary in the lab's
+  `_fab/INVENTORY.md`, "Rules"):
+  - 4(c): a public game, free or paid, may include Fab content if end users are kept from extracting it or using it
+    outside the game. So the installer ships Fab-derived files PACKED in an archive, never loose, and the game's terms
+    say they may not be extracted.
+  - 4(b): screenshots and videos are fine.
+  - 5(a): no public repository (a private one shared with collaborators is allowed). Ours stays public, so Fab files
+    stay out of it.
+  - 6(a): Fab content may not be combined with GPL, LGPL or CC BY-SA content so that it falls under those terms. Check
+    before the first release: the bundled M28AI (CC BY-NC-SA, its own component), and anything GPL that ships.
+  - 6(b)(iii): Fab content may not be exposed in map or mod editing tools or templates that let players build their
+    own maps with it (affects the planned built-in map editor).
 
 ### 3.4 Lab only (stays as it is)
 `init_lab.lua`'s Steam path, FAF vault paths and its shared-cache stamp (our engine blocks those writes; only the
