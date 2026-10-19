@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 
 #include "lighting.h"
 
@@ -154,6 +155,44 @@ float4 PS(VOut i) : SV_Target {
 }
 )hlsl";
 
+// [coverdark] The ground cover left out: the scene's depth (its first sample) kept before the cover is drawn (Ground),
+// then where the cover lies after it, in front of that (Cover; 0 elsewhere: the depth is zNear / distance, never 0 on
+// something drawn); before the occlusion, the scene's depth with the cover taken out (Solid: where the cover is still
+// what is seen, nothing drawn over it since, the ground's behind it), which Compute then reads in place of the scene's.
+const char kCoverDepth[] = R"hlsl(
+#ifdef MSAA
+Texture2DMS<float> sceneDepth : register(t0);
+float DepthAt(int2 p) { return sceneDepth.Load(p, 0); }
+#else
+Texture2D<float> sceneDepth : register(t0);
+float DepthAt(int2 p) { return sceneDepth.Load(int3(p, 0)); }
+#endif
+Texture2D<float> groundDepth : register(t1);
+Texture2D<float> coverDepth : register(t2);
+
+struct VOut {
+  float4 position : SV_Position;
+};
+VOut VS(uint id : SV_VertexID) {
+  VOut o;
+  float2 uv = float2((id << 1) & 2, id & 2);
+  o.position = float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);
+  return o;
+}
+
+float Ground(VOut i) : SV_Target { return DepthAt(int2(i.position.xy)); }
+float Cover(VOut i) : SV_Target {
+  int2 p = int2(i.position.xy);
+  float d = DepthAt(p);
+  return d > groundDepth.Load(int3(p, 0)) ? d : 0;  // (nearer is more: the cover drawn in front of the ground)
+}
+float Solid(VOut i) : SV_Target {
+  int2 p = int2(i.position.xy);
+  float d = DepthAt(p), c = coverDepth.Load(int3(p, 0));
+  return c > 0 && d == c ? groundDepth.Load(int3(p, 0)) : d;
+}
+)hlsl";
+
 }  // namespace
 
 bool AmbientOcclusion::Init(std::string* error) {
@@ -191,6 +230,23 @@ void AmbientOcclusion::Compute(const View& view, const Camera& camera, gfx::Text
     width_ = view.width;
     height_ = view.height;
   }
+  // [coverdark] the ground cover left out this frame (CoverAfter): the scene's depth with it taken out, read in its place
+  const bool cover = coverNow_ && coverWidth_ == view.width && coverHeight_ == view.height;
+  coverNow_ = false;
+  if (cover) {
+    gfx::PassDesc solid;
+    solid.color = solidDepth_;
+    solid.clearColor = false;  // every pixel is written
+    device_->BeginPass(solid);
+    device_->SetPipeline(coverSolid_);
+    device_->SetTexture(0, sceneDepth);
+    device_->SetTexture(1, groundDepth_);
+    device_->SetTexture(2, coverDepth_);
+    device_->Draw(3);
+    device_->SetTexture(1, {});
+    device_->SetTexture(2, {});
+    sceneDepth = solidDepth_;
+  }
   constants_.tanHalfFov = std::tan(camera.fovY * 0.5f);
   constants_.aspect = static_cast<float>(view.width) / static_cast<float>(view.height);
   constants_.zNear = camera.zNear;
@@ -215,11 +271,96 @@ void AmbientOcclusion::Compute(const View& view, const Camera& camera, gfx::Text
   pass.color = target_;
   pass.clearColor = false;  // every pixel is written
   device_->BeginPass(pass);
-  device_->SetPipeline(compute_);
+  device_->SetPipeline(cover ? computeCover_ : compute_);  // ([coverdark] one sample a pixel)
   device_->SetConstants(0, &view.constants, sizeof view.constants);
   device_->SetConstants(1, &constants_, sizeof constants_);
   device_->SetTexture(0, sceneDepth);
   device_->Draw(3);
+}
+
+// [coverdark] The ground cover left out of the occlusion: its shaders made the first time it is wanted, its three
+// pictures at the view's size.
+bool AmbientOcclusion::CoverReady(const View& view) {
+  if (coverMade_ < 0) return false;
+  if (!coverMade_) {
+    coverMade_ = -1;
+    std::string error;
+    const std::string samples = gSceneSamples > 1 ? "#define MSAA 1\n" : "";
+    // (Compute then reads the scene's depth with the cover taken out, one sample a pixel: with several samples a
+    // pipeline of its own for it, else its own)
+    const std::string compute = std::string(kViewShaderBlock) + kLightingShaderBlock + kCompute;
+    gfx::PipelineDesc pd;
+    pd.name = "ambient occlusion, the ground cover left out";
+    pd.vertexSource = pd.pixelSource = compute;
+    pd.cull = gfx::Cull::None;
+    pd.depthTest = pd.depthWrite = false;
+    pd.depthTarget = false;
+    pd.colorFormat = gfx::Format::RGBA16F;
+    computeCover_ = gSceneSamples > 1 ? device_->CreatePipeline(pd, &error) : compute_;
+    const std::string copy = samples + kCoverDepth;
+    pd.vertexSource = pd.pixelSource = copy;
+    pd.colorFormat = gfx::Format::R32F;
+    pd.name = "ambient occlusion: the ground's depth";
+    pd.pixelEntry = "Ground";
+    if (computeCover_) groundCopy_ = device_->CreatePipeline(pd, &error);
+    pd.name = "ambient occlusion: the ground cover's depth";
+    pd.pixelEntry = "Cover";
+    if (groundCopy_) coverMark_ = device_->CreatePipeline(pd, &error);
+    pd.name = "ambient occlusion: the depth without the ground cover";
+    pd.pixelEntry = "Solid";
+    if (coverMark_) coverSolid_ = device_->CreatePipeline(pd, &error);
+    if (!coverSolid_) {
+      fprintf(stderr, "render: the ground cover cannot be left out of the ambient occlusion (%s)\n", error.c_str());
+      return false;
+    }
+    coverMade_ = 1;
+  }
+  if (view.width != coverWidth_ || view.height != coverHeight_ || !groundDepth_ || !coverDepth_ || !solidDepth_) {
+    for (gfx::Texture t : {groundDepth_, coverDepth_, solidDepth_})
+      if (t) device_->Destroy(t);
+    gfx::TargetDesc td;
+    td.width = view.width;
+    td.height = view.height;
+    td.format = gfx::Format::R32F;
+    groundDepth_ = device_->CreateTarget(td);
+    coverDepth_ = device_->CreateTarget(td);
+    solidDepth_ = device_->CreateTarget(td);
+    coverWidth_ = view.width;
+    coverHeight_ = view.height;
+  }
+  return groundDepth_ && coverDepth_ && solidDepth_;
+}
+
+void AmbientOcclusion::CoverBefore(const View& view, gfx::Texture sceneDepth) {
+  coverNow_ = coverKept_ = false;
+  if (!CoverReady(view)) return;
+  gfx::PassDesc pass;
+  pass.color = groundDepth_;
+  pass.clearColor = false;  // every pixel is written
+  device_->BeginPass(pass);
+  device_->SetPipeline(groundCopy_);
+  device_->SetConstants(0, &view.constants, sizeof view.constants);
+  device_->SetTexture(0, sceneDepth);
+  device_->Draw(3);
+  device_->SetTexture(0, {});  // (the scene's depth is its target again next)
+  coverKept_ = true;
+}
+
+void AmbientOcclusion::CoverAfter(const View& view, gfx::Texture sceneDepth) {
+  if (!coverKept_) return;
+  coverKept_ = false;
+  gfx::PassDesc pass;
+  pass.color = coverDepth_;
+  pass.clearColor = false;  // every pixel is written
+  device_->BeginPass(pass);
+  device_->SetPipeline(coverMark_);
+  device_->SetConstants(0, &view.constants, sizeof view.constants);
+  device_->SetTexture(0, sceneDepth);
+  device_->SetTexture(1, groundDepth_);
+  device_->Draw(3);
+  device_->SetTexture(0, {});
+  device_->SetTexture(1, {});
+  coverNow_ = true;
 }
 
 void AmbientOcclusion::Apply(const View& view) {

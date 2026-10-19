@@ -70,6 +70,9 @@ class GroundCover {
   float plantDensity = 15;
   float plantLean = 0.35f;    // how far a card leans back from the camera (its face up toward it)
   float plantBoost = 2.75f;   // the low plants this many times their real proportion to the tallest, up to the cap
+  // [coverdark] how far the grass's clumps (the cells of the cover's "clump" group but its dry ones) take the colour of the
+  // ground under them, as the blades do (0: the art's own; their mean from the cover's stats, none without)
+  float clumpsToGround = 1;
   int drawnPlants = 0;        // (the last Draw: spots gone through)
 
   float bladeHeight = 0.22f;  // the tallest blade, world units
@@ -88,6 +91,7 @@ class GroundCover {
     float cells[16][3][4] = {};
     float order[4][4] = {};
     float groups[6][4] = {};
+    float tones[16][4] = {};  // [coverdark] per cell: its mean colour (linear), 1 where it takes the ground's
     float tallest = 1;  // the tallest plant's real height (metres)
     float patchScale = 12, patchCover = 0.35f;
     int count = 0;
