@@ -1932,7 +1932,9 @@ void GuardAbort(Unit* u) {
 
 // RefreshGuardedUnitFromTarget 0x611a40 (never clears anything)
 void Refresh(Sim& sim, Unit* U, GuardData& g, const UnitCommand& c) {
-  Unit* gu = c.targetId ? FindUnit(sim, c.targetId) : nullptr;
+  // (0x611a67..0x611a86: the target's entity through its weak link, CAiTarget::GetEntity 0x5e2ce0, and its GetUnit:
+  // no test of the unit's life, so a unit destroyed in this beat (still linked until the drain) is G)
+  Unit* gu = c.targetId ? FindUnitAny(sim, c.targetId) : nullptr;
   if (gu && (Mobile(gu) || !Cat(sim, U, "REBUILDER"))) {
     g.hasUnit = true;
     g.G = EntityRef(gu);
@@ -2844,7 +2846,17 @@ BuildTask* StartGuardTask(Sim& sim, Unit* u, const UnitCommand& c) {
   // 6205, army 1's engineers 0x10006a / 0x10000a reach the end of a Move with a Guard queued behind it on a mass
   // extractor that has since been destroyed (its id 0x10003f now another unit's): the original's queue is empty at
   // 6205; ours guarded the extractor's old place.
-  if (c.targetId && !FindUnit(sim, c.targetId) && (!c.hasPos || !c.targetViaBlip)) return nullptr;
+  // HasTarget asks the unit's IsDead (IUnit vt+0x28 = 0x6a49f0, +0xa1), which a Destroy sets only in the beat's drain
+  // (Unit::OnDestroy 0x6a8a31): a unit destroyed earlier in this beat still counts, and the guard task is made. It ends
+  // in its first tick (its unit destroyed: the validity test of TickGuard), and its dtor's status call (0x6ac940) sees
+  // this order at the head. Seen: MP1 5417, army 6's engineers 0x60000c / 0x600017 / 0x60004c hold two Guards of the
+  // structure 0x600036, whose upgrade 0x60005e finished; its OnStopBuild destroys it (structureunit.lua:1018) earlier
+  // in the command stage. The first Guard ends (dtor: both Guards queued, speed-through on); the original makes the
+  // second one's task, whose dtor (the second Guard, then BuildMobile) turns it off again (0 at 5417); ours took the
+  // second Guard for one without a target and left it on.
+  if (c.targetId && !(FindUnitAny(sim, c.targetId) && !FindUnitAny(sim, c.targetId)->dead) &&
+      (!c.hasPos || !c.targetViaBlip))
+    return nullptr;
   auto t = std::make_unique<BuildTask>();
   t->type = CommandType::Guard;
   t->order = "Guard";
