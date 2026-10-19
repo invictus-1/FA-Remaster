@@ -190,15 +190,17 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     dust.SetMap(&map, mapPath, [this](const std::string& path) { return textures.ReadFile(path); });
     // the map's own decals: albedo ones (pictures over the ground's colour) and normal ones (its sculpting)
     decals.hotMetal = false;  // (hot metal: the map's own scorches are no fresh marks; Begin sets it again)
-    if (options.mapDecals != "off") {
+    const std::string mapDecals = !options.mapDecals.empty() ? options.mapDecals
+                                  : !terrain.MapDecalsGiven().empty() ? terrain.MapDecalsGiven() : std::string("normals");
+    if (mapDecals != "off") {
       int laid = 0;
       for (const MapDecal& d : map.decals) {
         if (d.type != 1 && d.type != 2) continue;
         if (!options.decalFilter.empty() && d.textures[0].find(options.decalFilter) == std::string::npos) continue;
-        if ((options.mapDecals == "albedo" && d.type != 1) || (options.mapDecals == "normals" && d.type != 2)) continue;  // one kind alone
+        if ((mapDecals == "albedo" && d.type != 1) || (mapDecals == "normals" && d.type != 2)) continue;  // one kind alone
         const float heading = d.rotation.y * options.decalTurn;
         Vec3 centre = d.position;
-        if (options.mapDecals == "corner") {  // the position as the corner the decal is turned about
+        if (mapDecals == "corner") {  // the position as the corner the decal is turned about
           const float c = std::cos(heading), s = std::sin(heading), hx = d.scale.x * 0.5f, hz = d.scale.z * 0.5f;
           centre.x += hx * c + hz * s;
           centre.z += -hx * s + hz * c;
@@ -730,6 +732,8 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     const bool ripplesOn = waterRipples && look == Look::Modern && haveMap_ && map.water.present;
     water.ripples.Begin(clock_, ripplesOn, sidePicture);
     if (ripplesOn) water.PrepareRipples();
+    // (winter water's pipeline made while the option is on, before the first snow needs it)
+    if (winterWater && look == Look::Modern && haveMap_ && map.water.present) water.PrepareWinter(ripplesOn);
   }
   lampUnitsBefore_ = lampUnits_;
   lampUnits_ = 0;
@@ -890,6 +894,15 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       c.skyExtra[2] = bolt.z;
     }
     lightDirection = skyLight.direction;
+    // winter water (winter_water.h): the water goes over to its winter look with the lying snow, half of the way while
+    // a third of a covering lies and all of it by two thirds; back again as it thaws
+    if (winterWater && haveMap_ && map.water.present && snowLying > 0) {
+      const float t = std::clamp(snowLying / 0.65f, 0.0f, 1.0f);
+      c.winterWater[0] = std::max(t * t * (3 - 2 * t), 1e-4f);
+      c.winterWater[1] = map.water.elevation;
+      c.winterWater[2] = static_cast<float>(map.width);
+      c.winterWater[3] = static_cast<float>(map.height);
+    }
   }
   {  // movement dust (movement_dust.h): on in the modern look, with what the weather has done to the ground and the air
     dustNow_ = movementDust && look == Look::Modern && haveMap_ && !sidePicture;

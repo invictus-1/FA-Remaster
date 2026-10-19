@@ -398,6 +398,54 @@ Mac", and every ray-traced effect keeps a fallback without it.
      +0.012 ms. Off: pictures identical; on, Vulkan as Direct3D 12 (mean 0.05).
      - With FSR 3: the rain and the splashes are in its reactive mask (drawn after the picture is kept for
        it, Post::KeepOpaque), so it does not build them up from frames before.
+   - **Winter water: first version** (2026-10-18; Chris's snow still of SETONS_R: the shallows a bright tropical
+     turquoise beside white snow): `World::winterWater` (viewer `--winter-water`; modern look with a time of day, a
+     map with water; NOT in a bundle: Chris, 2026-10-18, prefers the bright blues of today's water beside snow, so
+     it stays off by default, a player's choice at most). Most of the turquoise was
+     the snow itself: ModernLight laid it on the bed under the water too, and the water's summer colours (red gone
+     after 3 of depth, green after 8, blue after 10) turn a white bed turquoise. Now, while snow lies:
+     - **No snow under the water** (lighting.h, ModernLight, one guarded line): none below the water's level, none on
+       a strip just over it that the waves wash (0 to about 0.1 high, uneven), which is darker there (wet); the bed
+       just under the waterline darker too, deeper down as it was (the water colours it). Units, props and decals
+       under the water keep none either.
+     - **A cold palette** (winter_water.h `WinterColours`, the water's shader built a second time with `WINTER`, as
+       with `RIPPLES`: without snow the shader's source is the one it always was): the water murkier (the bed hidden
+       by 1 - exp(-depth / 4.2) in place of 7.5), red gone after 2.4, blue after 4, green last, after 5.2 (so a pale
+       bed goes grey-green, never turquoise); its own colour a muted grey-green (0.10, 0.155, 0.115) over the
+       shallows going to a dark slate (0.015, 0.021, 0.033) where deep; the bed seen through it greyer (40 %) and a
+       tenth dimmer; the foam 30 % greyer. The sky's reflection as it was (the snow's overcast greys it already).
+     - **Slush and thin ice at the shores** (`WinterShore`): plates of ice about 2.6 units across along the
+       waterline, their borders wandering (cells round jittered points, the place bent by a slow noise), out to a
+       depth of 0.45-2.45 (less where the map's water is rough, uneven along the shore): each plate holds to its own
+       depth and the edge is jagged by noise, so it breaks plate by plate; hairline cracks here and there near the
+       shore, opening wider toward the edge where the plates drift apart; snow dusting them, thick near the shore,
+       patchy farther out, bare grey ice between. Past them, out to 1.8 times as deep, slush in clumps of the foam's
+       lace. On the ice and slush the waves are stilled, no foam, and they mirror next to nothing (snow on them); their
+       colours lit as the foam is (plates 0.25-0.44, slush 0.2: greyer than the snow on land). Fine noise is left at
+       its mean where it would be finer than two pixels (no salting from far up). Only on the map's own shores: past
+       the map's edge the slush and ice fade out over 16 units (the sea beyond is the horizon helper's, with its own
+       floes and pack ice); the drifting floes the task left optional are not made, for that reason.
+     - **By how much snow lies**: the view's `winterWater.x` = smoothstep of snowLying / 0.65 (World::Begin), so the
+       water is half of the way to winter with a third of a covering and all of it by two thirds; the ice and slush
+       from x = 0.375 (gathering to full at 1). A thaw (snowLying going down over five minutes) takes it all back:
+       at snowLying 0.15 the bay differs from the summer water by 0.85 in 255 on average, at 0.05 by 0.14, at 0
+       not at all.
+     - Measured on SETONS_R (median sRGB of a patch; before = the snowy bed under summer water): snowing, the game's
+       height over the beach at 846,505: deep water (40, 56, 69) -> (44, 47, 53), the shallows by the shore
+       (140, 178, 187) -> (70, 83, 78); the bay of Chris's still from afar (470,480,420,30,30): the shallows
+       (125, 163, 173) -> (95, 103, 104) with the slush rim in the patch, deeper water (52, 69, 82) -> (56, 59, 64).
+       A clear day with the snow lying: deep (26, 48, 69) -> (32, 38, 49), shallows (153, 194, 204) -> (56, 73, 70).
+       The snow on land unchanged ((201, 203, 209) snowing, (214, 217, 223) clear).
+     - Cost at 1440p (lowest times, snowing): the water +0.005 ms from afar, +0.02-0.03 ms close to a shore; the
+       ground and units unchanged. The winter pipeline is made at the first frame the option is on (from the shader
+       cache about 2 ms). Off, or on without snow lying: pictures identical (the regression, and its snow and storm
+       scenes, 0 px on both backends, with the option off and on). On, Vulkan as Direct3D 12 (over the water mean
+       0.12 in 255 against 0.10 for the same scene without it: a few plate borders and cracks fall on the other side
+       of a pixel).
+     - Open: the ice does not follow the swell's run up the beach (it lies at the water's level); the plates are
+       drawn, not lit by the small lights' shadows' rays or the ray-traced reflections beyond what the water's own
+       mirror does; no ice on lakes or rivers of other heights (one water level a map); a unit or a ship moving through
+       the ice does not break it (ripples could, later).
 
 ## The next pieces (Chris, 2026-10-17)
 
@@ -1013,6 +1061,7 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `heatShimmer` | the air bends over fires, exhausts and fresh explosions | about 0.04-0.1 ms in a fight | |
 | `blastWaves`, `blastDust`, `blastDebris` | explosions press the grass flat and bend trees in a running ring, kick up dust, throw chunks that lie as rubble | about 0.03-0.09 ms in a fight | |
 | `waterRipples` | the water reacts: shells, ships, hover and wading units leave rings and wakes that spread and fade | about 0.04-0.05 ms near water (24 MB of the card's memory once on) | a map with water |
+| `winterWater` | while snow lies: a cold sea (dark slate, grey-green shallows, no snow under the water), slush and thin ice at the shores; a thaw takes it back | +0.005 to 0.03 ms (only with snow lying) | a time of day, a map with water |
 | `hiddenOutlines` (ON) | a thin line in the army's colour round a unit's part hidden behind trees, hills or buildings | 0.06-0.08 ms (200 tanks in a forest) | |
 | `wildlife` | flocks of birds over the woods and gulls over the shores, scattered by fighting; fireflies at dusk and by night | about 0.02 ms (proposed for the "Ground Detail" setting) | a map with trees or shores |
 | `movementDust` | vehicles raise dust on dry ground, hover units throw spray, high aircraft draw contrails | about 0.07 ms with 60 units moving, 0.22 close up | |

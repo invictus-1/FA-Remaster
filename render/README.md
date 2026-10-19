@@ -534,7 +534,7 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   how much water lies between (so shallows are clear and the deep is dark, by the real depth
   and not by a painted depth picture: the ground under it is no longer tinted by the map's
   water ramp in this look; the colours are fixed numbers, a turquoise over the shallows going to
-  a deep navy, chosen by Chris on the remastered Seton's, and the same for every map for now); the sky is mirrored (the computed one, or the map's), and so is what
+  a deep navy, chosen by Chris on the remastered Seton's, and the same for every map for now; while snow lies, with `World::winterWater`, a cold palette, slate and grey-green, and slush and thin ice at the shores: `winter_water.h`); the sky is mirrored (the computed one, or the map's), and so is what
   the picture shows in the mirrored direction, land and units, found by walking through the
   picture's depth; foam lies where the water is shallow, along the shore and round whatever
   stands in it, with a line running in toward the land; on a shallow bed the waves throw their

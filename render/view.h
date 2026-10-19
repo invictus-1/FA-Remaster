@@ -144,6 +144,10 @@ struct ViewConstants {
   // SmallLightsTraced): x 1 = on; y the rays a place casts at most (1..4; more: one for every light, exact);
   // z a light's own size as a share of its radius (a beam's: w).
   float rayLights[4];
+  // Winter water (World::winterWater, winter_water.h): x how far the water has gone over to its winter look with the
+  // snow lying (0: not at all, the water exactly as without it; 1: all the way); y the water's level (world y); z, w
+  // the map's width and height (the slush and thin ice at the shores fade out past the map's edge).
+  float winterWater[4];
 };
 
 // The same block, as HLSL source: shaders start with it.
@@ -192,6 +196,7 @@ cbuffer View : register(b0) {
   float4 smokeShadow;     // smoke's shadow (smoke.h): x 1 = surfaces take it; y the least spread; z the strength; w 1 = the map is drawn
   row_major float4x4 smokeMatrix;  // world -> the smoke's shadow map (z: the height along the light)
   float4 rayLights;       // the small lights' shadows by rays: x 1 = on; y rays a place casts at most; z, w a light's size / radius (a beam's)
+  float4 winterWater;     // winter water: x how far the water has gone over to winter (0: not at all); y the water's level; z, w the map's size
 };
 // (every texture read with Sample takes the temporal upscaler's bias: textures with levels - the art's - are
 // read as finely as the screen's size wants; pictures drawn by the renderer have one level and do not change)

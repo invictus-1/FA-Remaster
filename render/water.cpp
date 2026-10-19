@@ -8,6 +8,7 @@
 
 #include "lighting.h"
 #include "ray_scene.h"
+#include "winter_water.h"
 
 namespace render {
 namespace {
@@ -324,6 +325,11 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
     coverage = 0;
     discard;
   }
+#if WINTER
+  // winter water (winter_water.h): slush and thin ice along the shore, on which the waves are stilled
+  WinterIce ice = WinterShore(xz, bed.y, water.r, grain, lace);
+  N = normalize(lerp(N, float3(0, 1, 0), ice.calm));
+#endif
   float2 uv = i.position.xy * viewport.zw;
   float2 bent = uv + N.xz * (0.035 * saturate(deep * 1.5) / (1 + distance * 0.02));
   float depthBent = SCENE_DEPTH(int2(bent * viewport.xy), 0);
@@ -358,6 +364,9 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   float3 kept = exp(-through * float3(1 / 3.0, 1 / 8.0, 1 / 10.0));
   float hidden = 1 - exp(-through / 7.5);
   float3 own = lerp(float3(0.027, 0.672, 0.604), float3(0.001, 0.019, 0.058), saturate(1 - exp(-through / 5.0)));
+#if WINTER
+  WinterColours(through, under, kept, hidden, own);  // (winter water: the cold palette, by how far winter has come)
+#endif
   float3 color = lerp(under * kept, own * (light + lamps) * 0.6, hidden);
 
   // foam: at the shore and round what stands in the water. Thick at the waterline and thinning to
@@ -377,7 +386,14 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
 #if RIPPLES
   foam = saturate(foam + rippleFoam * smoothstep(0.35, 0.7, lace) * 0.35);
 #endif
+#if WINTER
+  // (winter water: the foam greyer, none on the ice and slush, which lie over the water)
+  foam *= 1 - ice.cover;
+  color = lerp(color, (light + lamps) * (0.85 * (1 - 0.3 * winterWater.x)), foam * 0.94);
+  color = lerp(color, ice.albedo * (light + lamps), ice.cover);
+#else
   color = lerp(color, (light + lamps) * 0.85, foam * 0.94);
+#endif
   color += lamps * 0.35;
   color += light * (rings * 0.04);
 
@@ -438,6 +454,10 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   }
   float facing = saturate(dot(-toPixel, N));
   float fresnel = 0.02 + 0.98 * pow(1 - facing, 5);
+#if WINTER
+  // (winter water: snow on the ice and slush mirror nothing; bare ice as the water)
+  foam = 1 - (1 - foam) * (1 - ice.cover * ice.matte);
+#endif
   color = lerp(color, mirror, fresnel * (1 - foam));
   // the sun's (or the moon's) glint
   color += sunLight * (pow(saturate(dot(R, sunDirection)), 500) * 0.9 * shadow * (1 - foam));
@@ -466,13 +486,14 @@ constexpr float kRippleTilt = 2.0f, kRippleFoamSlope = 0.8f, kRippleWaterline = 
 
 }  // namespace
 
-gfx::Pipeline Water::ModernPipeline(bool ripples, std::string* error) {
-  // (the modern look's water reads the scene's depth: several samples a pixel, or one. Without ripples its source is
-  // the same as it ever was.)
-  std::string modern = std::string(ripples ? "#define RIPPLES 1\n" : "") + "#define SAMPLES " + std::to_string(gSceneSamples) + "\n" +
-                       kViewShaderBlock + RayShaders() + kLightingShaderBlock + kModernShader;
+gfx::Pipeline Water::ModernPipeline(bool ripples, std::string* error, bool winter) {
+  // (the modern look's water reads the scene's depth: several samples a pixel, or one. Without ripples and winter its
+  // source is the same as it ever was.)
+  std::string modern = std::string(ripples ? "#define RIPPLES 1\n" : "") + (winter ? "#define WINTER 1\n" : "") + "#define SAMPLES " +
+                       std::to_string(gSceneSamples) + "\n" + kViewShaderBlock + RayShaders() + kLightingShaderBlock +
+                       (winter ? kWinterWaterShaderBlock : "") + kModernShader;
   gfx::PipelineDesc pd;
-  pd.name = ripples ? "water, modern, ripples" : "water, modern";
+  pd.name = winter ? (ripples ? "water, modern, ripples, winter" : "water, modern, winter") : ripples ? "water, modern, ripples" : "water, modern";
   pd.vertexSource = pd.pixelSource = modern;
   pd.attrs = {{"POSITION", 0, gfx::AttrType::Float2, 0}};
   pd.stride = 8;
@@ -495,6 +516,16 @@ void Water::PrepareRipples() {
   std::string why;
   modernRipples_ = ModernPipeline(true, &why);
   if (!modernRipples_) fprintf(stderr, "render: the water cannot show ripples (%s)\n", why.c_str());
+}
+
+void Water::PrepareWinter(bool ripples) {
+  if (!map_ || !map_->water.present || !modern_) return;
+  const int k = ripples ? 1 : 0;
+  if (winterTried_[k]) return;
+  winterTried_[k] = true;
+  std::string why;
+  modernWinter_[k] = ModernPipeline(ripples, &why, true);
+  if (!modernWinter_[k]) fprintf(stderr, "render: the water cannot show winter (%s)\n", why.c_str());
 }
 
 bool Water::Load(const MapData* map, std::string* error) {
@@ -581,12 +612,16 @@ void Water::DrawWith(const View& view, const Camera* camera, gfx::Texture behind
   // with ripples on the water this frame (ripples.h): the modern water that reads their field
   if (modern && ripples.Active()) PrepareRipples();
   const bool rippling = modern && ripples.Active() && modernRipples_;
+  // with snow lying (winter_water.h): the water's winter pipeline, with the ripples' field or without
+  const bool wintry = modern && view.constants.winterWater[0] > 0;
+  if (wintry) PrepareWinter(rippling);
+  const gfx::Pipeline winter = wintry ? modernWinter_[rippling ? 1 : 0] : gfx::Pipeline{};
   if (rippling) {
     std::memcpy(c.rippleArea, ripples.Area(), sizeof c.rippleArea);
     const float look[4] = {kRippleTilt, kRippleFoamSlope, kRippleWaterline, ripples.view};
     std::memcpy(c.rippleLook, look, sizeof look);
   }
-  device_->SetPipeline(rippling ? modernRipples_ : modern ? modern_ : pipeline_);
+  device_->SetPipeline(winter ? winter : rippling ? modernRipples_ : modern ? modern_ : pipeline_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
   device_->SetConstants(1, &c, static_cast<uint32_t>(rippling ? sizeof c : offsetof(WaterConstants, rippleArea)));
   if (modern) {

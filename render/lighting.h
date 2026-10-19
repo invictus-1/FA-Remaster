@@ -569,6 +569,13 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
     // more falls, steeper ground comes last and the steepest stays bare. Where it lies thick it
     // hides the small shapes under it.
     float fallen = weather.y * SURFACE_SNOW * surfaceSnowShare;
+    // (winter water, winter_water.h: no snow lies under the water, nor on the strip just over it that the waves wash,
+    // which is dark with wet)
+    [branch] if (winterWater.x > 0) {
+      float washed = saturate((world.y - winterWater.y + 0.03 - 0.12 * CloudNoise(float3(world.xz * 0.7, 3.3))) * 12);
+      fallen *= washed;
+      albedo *= 1 - 0.45 * (1 - washed) * saturate(1 + (world.y - winterWater.y) * 3);  // (not deeper down: the water colours it)
+    }
     float3 snowAt = surfaceSnowOwn ? surfaceSnowPlace : world;
     float patch = CloudNoise(snowAt * 0.9) * 0.55 + CloudNoise(float3(snowAt.xz * 0.21, 5.3)) * 0.45;
     float takes = patch * 0.75 + saturate((N.y - 0.35) * 1.6) * 0.25;  // how readily it lies here

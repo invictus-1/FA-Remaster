@@ -27,6 +27,10 @@ class Water {
   // each frame the option is on): making them takes a quarter of a second, better at the first frame than in the
   // middle of a game at its first splash.
   void PrepareRipples();
+  // The water's winter pipelines (winter_water.h; World::winterWater), made now if they are not yet (World::Begin, each
+  // frame the option is on, so that the first snow brings no pause): `ripples` the one that also reads the ripples'
+  // field. The water draws with them while the view's winterWater.x is above 0 (snow lies).
+  void PrepareWinter(bool ripples);
 
   // `map` must stay alive while the water is used. Maps without water load fine and draw nothing.
   bool Load(const MapData* map, std::string* error);
@@ -42,10 +46,12 @@ class Water {
   TextureCache* textures_;
   const MapData* map_ = nullptr;
   void DrawWith(const View& view, const Camera* camera, gfx::Texture behind, gfx::Texture sceneDepth);
-  gfx::Pipeline ModernPipeline(bool ripples, std::string* error);
+  gfx::Pipeline ModernPipeline(bool ripples, std::string* error, bool winter = false);
   gfx::Pipeline pipeline_, modern_;
   gfx::Pipeline modernRipples_;  // (the modern water reading the ripples' field: made the first time it is wanted)
   bool ripplesTried_ = false;
+  gfx::Pipeline modernWinter_[2];  // (winter water: without and with the ripples' field; made the first time wanted)
+  bool winterTried_[2] = {false, false};
   gfx::Buffer vertices_;
   gfx::Texture waterMap_, waves_[4], sky_;
 };

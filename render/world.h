@@ -86,7 +86,9 @@ class World {
   struct Options {
     std::string displayTable;        // the engine's tools/dump_display.lua log, or empty (models.h)
     float lodPixels = 0;             // the ground's quad size on screen; 0: the default
-    std::string mapDecals = "normals";  // normals | all | albedo | off | corner (main.cpp says what each is)
+    // normals | all | albedo | off | corner (main.cpp says what each is); empty: as the map's entry in the remastered
+    // ground's remap.json says ("decals"), else normals
+    std::string mapDecals;
     std::string decalFilter;         // only the map's decals whose texture's name holds this
     float decalTurn = 1, decalRange = 1;
     bool verbose = false;            // says what it loads
@@ -411,6 +413,12 @@ class World {
   // wading leave rings and wakes that spread, cross each other and die out. Modern look, a map with water; off by
   // default.
   bool waterRipples = false;
+  // Winter water (winter_water.h): while snow lies (snowLying) the water goes over to a cold palette (deep water a dark
+  // slate, the shallows a muted grey-green, the bed dimmer and colder), slush and thin ice gather along the shores, the
+  // foam greys; and no snow lies under the water. It follows snowLying, so a thaw brings the summer water back. With no
+  // snow lying, nothing changes. Modern look with a time of day, a map with water; off by default (in the game's
+  // "Weather Effects").
+  bool winterWater = false;
   // Ground cover near the camera (grass.h): grass blades on grassy ground, coloured from it, swaying in the wind,
   // low and gone with the distance (nothing when the camera is far). Modern look; off by default.
   bool groundCover = false;
