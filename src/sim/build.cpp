@@ -1025,7 +1025,16 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
           u->army->econ.reclaimed[i] += got;
         }
       }
-      if (f <= 0.0f && !e->destroyQueued) {
+      // A prop at nothing left goes in its Materialize (Prop::Materialize 0x6fa25e..0x6fa28d: OnReclaimed, then
+      // Destroy 0x679af0). An unfinished UNIT does not: the task's unit case (0x61fe55..0x61ff32) is Materialize and
+      // SetHealth only, and neither Unit::Materialize 0x6a9f40 nor Entity::AdjustHealth / SetHealth kills or
+      // destroys; the unit stays at fraction 0, health 0, for the rest of the beat. What takes it is its own decay in
+      // the entity stage after the threads (Unit::MotionTick 0x6a90f6..0x6a91bb: being built, no Materialize up
+      // for more than a beat -> the decay step, then health <= 0 -> OnDecayed, FAF's Destroy), so every reclaimer
+      // of that beat still has its target, and each ends at the next beat's pre-check. Seen: MP2 8810, six of army
+      // 1's engineers reclaim its abandoned unfinished 0x1000ed; ours destroyed it in the step that took the last
+      // of it, so the two whose step came after (0x100065, 0x1000c2) dropped their order a beat early.
+      if (!tu && f <= 0.0f && !e->destroyQueued) {
         PushObject(L, u);
         sim.CallMethod(L, e, "OnReclaimed", 1);
         if (!e->destroyQueued) sim.QueueDestroy(e);
