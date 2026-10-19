@@ -3,6 +3,51 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 44: two things seen at a game's end — answered (no change)
+
+**(a) `platoon.lua(1555): attempt to call method 'GetLocationCoords' (a nil value)`.**
+
+FAF's Lua causes it, and the original logs it too. It is already in docs/deviations.md, "Looked broken, left alone".
+
+- **The call is FAF's own Lua.** platoon.lua:1555 (`BaseManagersDistressAI`) calls
+  `locData.EngineerManager:GetLocationCoords()`. `GetLocationCoords` is a method of FAF's `BuilderManager`
+  (/lua/sim/BuilderManager.lua:403), a plain Lua class. No engine method is involved.
+- **The loop keeps running after the defeat.** It was forked on the brain's `ArmyPool` platoon
+  (medium-ai.lua:373, base-ai.lua:396). That platoon is never disbanded: `CArmyImpl::DisbandPlatoon` (0x700540)
+  refuses "ArmyPool" (the string 0xe19444, at 0x700551). So the loop goes on while `aiBrain:PlatoonExists(self)`.
+- **Why the method is missing.** When the commander dies, the defeat runs `OnDefeat`, then `SetDefeatStatus`, then
+  `DisableAI` (SimUtils.lua:1430-1495). DisableAI sets every base's `EngineerManager` to nil
+  (SimUtils.lua:1472).
+- **Why the message reads "call method".** In GPG's Lua, indexing nil gives nil, so `nil:GetLocationCoords()`
+  fails on the call, not on the index.
+- **Ours does the same.** Tested with session_ai.lua, killing army 2's commander at 600:
+  - at 630 the MAIN base's `EngineerManager` is nil;
+  - the loop's next pass logs exactly this line and its thread ends;
+  - a pcall test shows `nil.x` gives nil in ours too.
+- **Result.** It happens once per defeated base AI and changes nothing in the game. Nothing to build.
+- **If you want it gone:** a hook that ends the loop when `aiBrain:IsDefeated()`, behind `Sim::fixes`. It is not
+  made; ask the lead.
+
+**(b) The commander's starting 650 mass / 4000 energy in "Mass / Energy Collected".**
+
+The original counts them too, so ours' score matches.
+
+- **GiveResource adds to the army's income.** `CAiBrain:GiveResource` (cfunc 0x588270; the binding table at
+  0x588210):
+  - it puts the amount into a two-float (energy, mass) vector by the resource enum;
+  - it takes the army's economy through the brain's army (+0x34) and `CArmyImpl::GetEconomy` (vt+0x24, 0x6fdcb0:
+    army+0x1f4);
+  - it adds the vector to the economy's income pair, +0x08 (energy) and +0x0c (mass) (0x5883a2..0x5883c5).
+- **That income is the produced figure.** `func_ArmyProcessEconomy` (0x771b50), called from CArmyImpl::OnTick
+  0x6ffdc4 with army+0x1f4:
+  - it uses that income pair as the beat's income (0x771c58: stored plus income is what can be shared out);
+  - it adds the same fields to the army stats `Economy_TotalProduced_Mass` (+0x0c, 0x77249e..0x7724fd) and
+    `Economy_TotalProduced_Energy` (+0x08, 0x772503..).
+- **So a GiveResource is "produced" in the original.** That includes FAF's ACU start (ACUUnit's `GiveResource`).
+- **Ours does the same.** `l_brain_GiveResource` (src/sim/economy.cpp:517) adds to `econ.income`, which the next
+  share-out (`ProcessArmyEconomy`) adds to `Economy_TotalProduced_*`. That is the stat the score's "Collected"
+  figures read (FAF's /lua/sim/score.lua:120: `massin.total = brain:GetArmyStat("Economy_TotalProduced_Mass", 0)`).
+
 ## ui 43: a script entity's Owner given as an army number (FAF's ping entities) — done (61536c5)
 
 **The original (FA exe, read).** `_c_CreateEntity` (0x692330) takes the army from the spec before it makes the
