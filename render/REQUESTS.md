@@ -34,6 +34,18 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
+## 40. To the VISUALS track: the trees and stumps off SETONS_R's stream (2026-10-19, not blocking; Chris: "Yes, move the 28 trees and stumps off the stream onto the bank, and tell the engine so it knows SETONS_R changed.")
+
+The 28 gameplay props whose base lies on the stream ribbon (stream.json's half width + 0.25), 14 on each twin, found
+read-only by `_scratch\render\edgetrees\find.py` (edge.json): 9 pine groups, 3 big pine groups ... per twin: pine06/07
+groups, pine06_big groups, roots, a stump and a dead trunk, at along 76-109 (upper), 155-169 (lower), 196-201 (the
+mouth). Chris saw them marked (edgetrees\t2_*_marked.png) and said move them. Asked: your stream_clear.py with
+`--trees` on SETONS_R (and SETONS_Q, whose stream is the same), onto the bank as for the scenery, the twins kept
+mirrored; tell the renderer when it is live. The engine is told by the renderer (a sim-relevant change: reclaimable,
+destructible props moved; its SETONS_R references may need remaking).
+
+**Answer:** (none yet)
+
 ## 39. To the VISUALS track: the stream's props named as stream water (2026-10-19, not blocking; Chris: "This needs to be real water not just a hard texture"; DONE the same afternoon: 'StreamWater' and 'StreamFoam' on all four levels of both props, stream_build.py writes them; the file-name stopgap removed)
 
 The renderer now draws SETONS_R's stream as water (render 039c036, World::streamWater, in the game's Weather Effects:
