@@ -548,6 +548,7 @@ void AttachUnit(Sim& sim, Unit* child, Unit* parent, int parentBone, int childBo
   AirNotifyAttached(sim, child);  // aircraft: motion Attached, Stopped, Bottom (refuels)
   child->motion.vel = {};
   child->motion.ballistic = false;
+  child->motion.atRest = false;  // (NotifyAttached 0x6b94bf: motion+0x78 = 1)
   sim.MarkUnitsMoved();
 }
 
@@ -584,6 +585,7 @@ void DetachUnitFrom(Sim& sim, Unit* child, bool skipBallistic) {
 void NotifyDetachedMotion(Sim& sim, Unit* child, bool skipBallistic) {
   UnitMotion& m = child->motion;
   m.vel = {};
+  m.atRest = false;  // (motion+0x78 = 2 or 0: 0x6b968e / 0x6b96ba)
   // the motion's facing: the unit's current heading
   Vec3 f = Forward(child->orientation);
   float l = std::sqrt(f.x * f.x + f.z * f.z);
@@ -799,6 +801,9 @@ bool LandBallisticTick(Sim& sim, Unit* u) {
         RecordImpact(sim, 2, u, layer == "Land" ? "Terrain" : "Water", nullptr, P1,
                      Vec3{v2.x * 10.0f, v2.y * 10.0f, v2.z * 10.0f});
       sim.CallMethod(L, u, "OnImpact", 1);
+      // ... and the motion goes to state 3 (CalcMoveBallistic 0x6c0b89..0x6c0be8: IsDead, vt+0x28, then OnImpact,
+      // then motion+0x78 = 3; alive: 0, 0x6c0bf9): MotionTick moves it no more (UnitMotion::atRest)
+      m.atRest = true;
     } else {
       m.needSnap = true;
     }

@@ -192,6 +192,7 @@ struct UnitMotion {
   bool arrived = false;   // set when the goal cell was reached (consumed by the move command)
   bool failed = false;    // no path
   bool ballistic = false;  // dropped from a transport: falls (sim/transport.cpp)
+  bool atRest = false;     // motion+0x78 = 3: a dead unit's fall has ended; it never moves again (MotionTick)
   std::shared_ptr<AirMotion> air;  // aircraft: the flight model's state (sim/air.cpp)
   // Land navigator (sim/landnav.cpp): it decides the waypoint and when a move ends.
   std::shared_ptr<LandNav> nav;

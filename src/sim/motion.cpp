@@ -1849,6 +1849,15 @@ void MotionTick(Sim& sim, Unit* u) {
     AirMotionTick(sim, u);
     return;
   }
+  // CUnitMotion::MotionTick 0x6b9e88 switches on the motion's state (motion+0x78): 1 attached, 2 ballistic (0x6ba078:
+  // CalcMoveBallistic), 3 at rest: 0x6ba1ca returns with nothing moved (no CalcMove*, no MoveTo). State 3 is set only
+  // where a dead unit's fall ends (CalcMoveBallistic 0x6c0bdc, LandBallisticTick). Seen: MP1 6056, army 4's nine
+  // dead xsl0103 (hover artillery killed with their transport) land in the water: the original's stay as they came
+  // down, tilted, at 17.5; ours went on as dead hovers, wobbled and were set level on the water (17.61) at 6057.
+  if (m.atRest) {
+    m.lastMove = {};
+    return;
+  }
   if (m.ballistic) {  // dropped from a transport: falls (also when dead)
     LandBallisticTick(sim, u);
     return;
