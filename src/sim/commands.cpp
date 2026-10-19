@@ -82,6 +82,20 @@ bool ApproachLike(CommandType t) {
 
 // Per-unit progress of the head command (Unit::headState).
 enum HeadState : int { kNotStarted = 0, kWaitingPath = 1, kRunning = 2 };
+
+// The type the head command had when it was dispatched: the running task's kind. DispatchTask 0x608ef0 picks the task
+// by cmd+0x98 at that moment, and the stream's SetCommandType (Sim::SetCommandType 0x749800) writes only cmd+0x98 and
+// the publish flag +0x141 (read by RefreshPublishedCommandEvent 0x6e8dc0 alone): nothing is dispatched again. A Move
+// turned into a Patrol keeps its CUnitMoveTask: the task's command listener 0x618c40 takes a dragged target
+// (CUnitCommand::SetTarget 0x6e8820 -> 0x6e94a0), its ctor suspended the thread until the navigator's event (0x6186d6,
+// the listener 0x618bb0 re-links it) and its dtor 0x618700 aborts the move. Only what the dispatcher does once the
+// task has ended reads the type as it is then (TaskTick 0x598ebb / 0x598f47: ArrivalStep). Seen: MP1 6026, army 5's
+// player turns the three Moves of its air scout 0x50008a into Patrols and drags the first (the one under way) to
+// (551.38, 808.94) at 6028: the original's target at 6029 is (551, 809); ours took no listener for a Patrol without a
+// patrol task and kept (555, 827).
+CommandType HeadTaskType(const Unit* u) {
+  return u->headState != kNotStarted ? static_cast<CommandType>(u->headType) : u->commands.front()->type;
+}
 // Path search work per tick (cells walked or expanded): searches start, in the order they were
 // asked for, while the tick's work is below this. Fitted to the probe: 17 moves issued in one
 // tick start in two batches (the second after a long search).
@@ -284,14 +298,16 @@ uint32_t AssignEngineCommandId(Sim& sim, const std::shared_ptr<UnitCommand>& c) 
 // 0x02000033 of nine aircraft to (160.80, 198.81): the original's 0x200043 turns at 4150 for (163, 195), its cell
 // by the new centre; ours left the formation where it was and kept (150, 196).
 void RetargetMoveTasks(Sim& sim, UnitCommand& c) {
-  if (c.type != CommandType::Move && !(c.type == CommandType::FormMove && c.form)) return;
   std::vector<Unit*> holders(c.units.begin(), c.units.end());
   std::sort(holders.begin(), holders.end(), [](const Unit* a, const Unit* b) { return a->id < b->id; });
   for (Unit* u : holders) {
     if (!IsAlive(u) || u->commands.empty() || u->commands.front().get() != &c) continue;
     if (u->headState != kRunning || u->task || !u->motion.bp || !u->motion.bp->mobile()) continue;
+    // (the task the head was dispatched as, not the command's type now: HeadTaskType)
+    const CommandType task = HeadTaskType(u);
+    if (task != CommandType::Move && !(task == CommandType::FormMove && c.form)) continue;
     Vec3 tp = TargetPos(sim, c, u);
-    if (c.type == CommandType::FormMove && !FormationGoalOfForm(c, u, &tp)) continue;
+    if (task == CommandType::FormMove && !FormationGoalOfForm(c, u, &tp)) continue;
     const NamedFootprint& fp = UnitFootprint(u);
     int cx = static_cast<int>(std::nearbyint(tp.x - fp.sizeX * 0.5f));
     int cz = static_cast<int>(std::nearbyint(tp.z - fp.sizeZ * 0.5f));
@@ -732,7 +748,8 @@ void EndPatrol(Sim& sim, Unit* u, BuildTask& t) {
 // 5382 the original's reclaim task has no target (+0x44 null, +0x4c set, state 0, not started), ends there and the
 // patrol walks to (737, 270) (SetGoal from NewMoveTask 0x6190cb); ours left formation commands out and reclaimed on.
 void RetargetPatrolTasks(Sim& sim, UnitCommand& c) {
-  if (!IsPatrolType(c.type)) return;
+  // (whatever the command's type is now: a patrol task under way keeps its listener when the type is changed,
+  // HeadTaskType; read, not seen)
   std::vector<Unit*> holders(c.units.begin(), c.units.end());
   std::sort(holders.begin(), holders.end(), [](const Unit* a, const Unit* b) { return a->id < b->id; });
   std::vector<Unit*> walkers;  // reclaim children whose walk is under way
@@ -832,6 +849,7 @@ void StartHead(Sim& sim, Unit* u) {
   u->dispatchResult = 0;  // (0x598fc4, before DispatchTask)
   while (!u->commands.empty()) {
     UnitCommand& c = *u->commands.front();
+    u->headType = static_cast<int>(c.type);  // (HeadTaskType)
     if (c.type == CommandType::Stop) {
       // DispatchTask's case for Stop (0x608f98 -> 0x60a490) does not touch the motion: it clears the attacker's
       // desired target (0x5d56f0), calls unit+0x558's vt+0x2c and sets unit+0xa2. What stops the unit is the
@@ -1049,12 +1067,12 @@ static bool HeadTaskStopsMotion(const Unit* u) {
 // when its task is torn down, and only when the unit moved this beat (EndPatrol).
 static bool PatrolTaskDecidesAbort(const Unit* u) {
   return !u->motion.air && !u->commands.empty() && u->headState == kRunning &&
-         IsPatrolType(u->commands.front()->type) && u->task && u->task->pdata;
+         IsPatrolType(HeadTaskType(u)) && u->task && u->task->pdata;
 }
 
 static bool ThreadAsleepOnMove(const Unit* u) {
   if (u->commands.empty() || u->headState == kNotStarted) return false;
-  if (u->commands.front()->type == CommandType::Move) return true;
+  if (HeadTaskType(u) == CommandType::Move) return true;
   // an attack task with its target in reach suspends the thread until its weapon reports (TaskTick's in-range branch
   // returns -2, 0x5f3a63; ours marks it waitUntil = ~0); the queue's events re-link a suspended thread whatever
   // suspended it (OnEvent 0x599030). Seen (probe mp1_5234): MP1 5232, eleven of army 1's ships given a formation
@@ -1068,7 +1086,7 @@ static bool ThreadAsleepOnMove(const Unit* u) {
   // and 0x2f, and the three reclaim the site prop 0x2ff010e3. In the original 0xf leaves Reclaiming at 3117 and 0x2e
   // at 3118: 0x2e takes the last step and 0xf, after it in the run list, ends at once (the order is inferred from
   // those states). Ours kept 0xf first (its last re-link 2875): 0xf took the last step and 0x2e ended at once.
-  if (IsPatrolType(u->commands.front()->type)) {
+  if (IsPatrolType(HeadTaskType(u))) {
     const BuildTask* c = u->task && u->task->pdata ? u->task->pdata->child : nullptr;
     return c && TaskThreadAsleepOnMove(u, c);
   }
@@ -1098,7 +1116,7 @@ static bool ThreadAsleepOnMove(const Unit* u) {
 bool NavEventWakesCommandThread(const Unit* u) {
   if (u->commands.empty() || u->headState == kNotStarted) return false;  // idle: a SIM_TryToBuild goal
   const BuildTask* t = u->task;
-  if (IsPatrolType(u->commands.front()->type)) {  // only the patrol's child's walk listens
+  if (IsPatrolType(HeadTaskType(u))) {  // only the patrol's child's walk listens
     const BuildTask* c = t && t->pdata ? t->pdata->child : nullptr;
     return c && (c->moving || (c->sub && c->sub->moving));
   }
@@ -1123,28 +1141,38 @@ void ForgetUnitCommands(Unit* u) {
 }
 
 namespace {
-// A finished move ends its command (the move task returns -1 and the dispatcher starts the next one).
-void ArrivalStep(Sim& sim, Unit* u) {
-  if (!IsAlive(u) || u->commands.empty()) return;
-  if (u->headState != kRunning) return;
+// A finished move ends its command (the move task returns -1 and the dispatcher starts the next one). Answers true
+// when the dispatcher waits a beat before the next command (TaskTick 0x598e80 answers 1).
+bool ArrivalStep(Sim& sim, Unit* u) {
+  if (!IsAlive(u) || u->commands.empty()) return false;
+  if (u->headState != kRunning) return false;
   UnitMotion& m = u->motion;
-  if (!m.arrived && !m.failed) return;
-  if (u->task) return;  // a task command (build, guard, attack, ...) handles its own moves
+  if (!m.arrived && !m.failed) return false;
+  if (u->task) return false;  // a task command (build, guard, attack, ...) handles its own moves
   if (u->engageId) {  // arrived at the enemy it stopped for, not at the patrol point
     m.arrived = m.failed = false;
-    return;
+    return false;
   }
   UnitCommand& c = *u->commands.front();
+  const CommandType task = HeadTaskType(u);  // (the move task's kind: the type the head was dispatched as)
   // CUnitFormAndMoveTask: arriving does not end it; it waits for its group to be at goal (formations.md 11)
-  if (c.type == CommandType::FormMove && !m.failed && FormationHas(c, u)) {
+  if (task == CommandType::FormMove && !m.failed && FormationHas(c, u)) {
     m.arrived = false;
-    return;
+    return false;
   }
-  bool patrol = c.type == CommandType::Patrol || c.type == CommandType::FormPatrol;
+  // The dispatcher reads the command's type as it is NOW (cmd+0x98, TaskTick 0x598ebb / 0x598f47): a Patrol or
+  // FormPatrol (16 / 18) goes to the back of the queue, at once when the task's result word is 2 (the navigator's
+  // failed event: the move task's listener 0x618bb0 writes 2, a success 1) and the next command is dispatched in the
+  // same beat (0x598ee0 -> 0x598f6d); otherwise to the back when the queue holds another order (0x6edc20, 0x6edfc0),
+  // else removed (0x6ede70), and the next command waits a beat (answer 1). A move task under a Patrol order is one
+  // whose Move was turned into a Patrol after its dispatch (HeadTaskType); a patrol dispatched as one has its patrol
+  // task.
+  const bool patrol = c.type == CommandType::Patrol || c.type == CommandType::FormPatrol;
+  const bool failed = m.failed;
   std::shared_ptr<UnitCommand> keep = u->commands.front();
   PopHead(u);
   m.arrived = false;
-  if (patrol && !m.failed) {  // patrols cycle through their points
+  if (patrol && (failed || !u->commands.empty())) {  // patrols cycle through their points
     u->commands.push_back(keep);
     keep->units.insert(u);
   }
@@ -1153,7 +1181,7 @@ void ArrivalStep(Sim& sim, Unit* u) {
   // ... and the same destructor (0x618700) calls the navigator's AbortMove when the task ends by itself
   // (queue+0x1c is 0 then, and its table 0x618998 says "abort" for 0): an aircraft at the end of a Move order is
   // stopped at the point one second ahead (CAiNavigatorAir::AbortMove 0x5a4f00), not held at its goal cell
-  if (keep->type == CommandType::Move && u->motion.air) AirAbort(sim, u);
+  if (task == CommandType::Move && u->motion.air) AirAbort(sim, u);
   // A land navigator's AbortMove 0x5a3750 is SetSpeedThroughGoal(0) (vt+0x18), MakeIdle (vt+0x4c 0x5a3e00:
   // SetWaypoints(0, 0) 0x5d29c0) and event 1 (the move task has already unlinked itself, 0x61885f). The navigator's
   // own end of the path (Execute 0x5a43dd: Stop, then MakeIdle) came first, in the army stage, and the steering of
@@ -1165,9 +1193,11 @@ void ArrivalStep(Sim& sim, Unit* u) {
   // the steering stage into a seven-point hard brake (mode 4). The original stood on that beat and made its
   // broadside turn (AttackAngle 60) at 606: the move task's abort had cut the hard brake down to a one-point brake.
   // Ours ended the order without the abort, kept the hard brake and turned at 611.
-  else if (keep->type == CommandType::Move && u->motion.nav) MotionStop(u);
-  if (u->commands.empty()) return;
+  else if (task == CommandType::Move && u->motion.nav) MotionStop(u);
+  if (u->commands.empty()) return false;
+  if (patrol && !failed) return true;  // (the next command a beat later)
   StartHead(sim, u);
+  return false;
 }
 
 void CommandStep(Sim& sim, Unit* u) {
@@ -1261,7 +1291,7 @@ void CommandStep(Sim& sim, Unit* u) {
     return;
   }
   // a form move ends when its group (or every group) is at goal: FormationAtGoal / u+0x590
-  if (st == kRunning && !u->commands.empty() && u->commands.front()->type == CommandType::FormMove &&
+  if (st == kRunning && !u->commands.empty() && HeadTaskType(u) == CommandType::FormMove &&
       FormationHas(*u->commands.front(), u) &&
       (u->formAllAtGoal || FormationGroupAtGoal(sim, *u->commands.front(), u))) {
     PopHead(u);
@@ -1300,8 +1330,7 @@ void CommandStep(Sim& sim, Unit* u) {
 // Threads created during the pass run in it, after every older thread.
 void CommandStage(Sim& sim) {
   auto step = [&](Unit* u) {
-    ArrivalStep(sim, u);
-    CommandStep(sim, u);
+    if (!ArrivalStep(sim, u)) CommandStep(sim, u);
   };
   std::vector<Unit*> order = sim.CommandOrder();
   uint64_t hi = sim.CommandSeqHigh();
@@ -1781,7 +1810,7 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
       // motion takes two brake steps at once (0.145) and then 0.026, before the new path's batch; ours kept the old
       // batch at 0.119 per beat.
       const bool formTask = !u->commands.empty() && u->headState != kNotStarted &&
-                            u->commands.front()->type == CommandType::FormMove && FormationHas(*u->commands.front(), u);
+                            HeadTaskType(u) == CommandType::FormMove && FormationHas(*u->commands.front(), u);
       if (formTask) keep = false;
       // the stop comes from the running command's task being torn down (its navigator's AbortMove): a unit with an
       // empty queue has none, so nothing touches its motion (seen in the original: an idle CZAR's target layer
@@ -1793,7 +1822,7 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
       // thread is linked in at the list's end. So when one order reaches idle units and units under way, the
       // idle ones are dispatched first, whatever their ids. Seen: 28 ships ordered to one place, each reserving
       // its spot at dispatch (formation AdjustPosition); the ones already moving came last and had to give way.
-      const bool moveAsleep = hadCommands && u->headState != kNotStarted && u->commands.front()->type == CommandType::Move;
+      const bool moveAsleep = hadCommands && u->headState != kNotStarted && HeadTaskType(u) == CommandType::Move;
       // (a task's walking child too, a guard's child's included. Seen: Economy 3965, SACUs 0x26 (a build walking) and
       // 0x27 (guarding 0x26, its child walking) get a Reclaim with clear: both threads wake and go to the run list's end
       // in the message's unit order, so 0x26 runs before 0x27 from then on; at 4483 the second of the two reclaimers of
