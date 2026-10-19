@@ -40,7 +40,7 @@ cbuffer TerrainConstants : register(b1) {
   float4 params;         // x: world height of the largest height value, y: 1 for the XP look, z: 1 for the glowing look,
                          // w: 1 = the ground goes on beyond the map's edge (the map mirrored)
   float4 specularColor;
-  float4 albedoTile[10]; // x: repeats per world unit; y: 1 = the layer has its third map (materialMaps)
+  float4 albedoTile[10]; // x: repeats per world unit; y: 1 = the layer has its third map (materialMaps); [parallax] z: its depth
   float4 normalTile[9];
   float4 morph[12];      // per level: x: distance where sliding starts, y: 1 / (length of the slide)
   // deep tracks (deep_tracks.h, TrackFieldConstants): the field's levels, and per layer what kind of ground it is
@@ -50,6 +50,10 @@ cbuffer TerrainConstants : register(b1) {
   float4 kindA[10];      // per layer, shares: snow, mud, sand, grass
   float4 kindB[10];      // dirt, hard ground (rock, concrete)
   float4 mudInfo;        // deep tracks' mud (MudInRuts): x 1 = the map's mud is drawn in the ruts; y its repeats per world unit
+#ifdef GROUND_PARALLAX
+  float4 parallax;       // [parallax] x 1 = on; y the distance from the eye it is full within; z 1 / the length it fades out over;
+                         // w how much the relief shades itself from the sun (albedoTile[n].z: each layer's depth)
+#endif
 };
 cbuffer Patches : register(b2) {
   float4 patches[1024];  // x, z of the patch's corner, size of a quad, level
@@ -310,6 +314,130 @@ void DeepTracksOn(float2 xz, float2 stepX, float2 stepY, float4 low, float4 high
 }
 #endif
 
+#ifdef GROUND_PARALLAX
+// [parallax] The ground's relief close by (World::groundParallax; the modern look). A remastered layer's third map holds
+// how high each point of its picture stands (its blue: the scan's relief stretched to 0..1, 0.5 its middle), and the
+// picture was taken from straight above. Seen at a slant, a stone should hide what lies just behind it and a hollow
+// sink away from the eye: the place whose picture a pixel shows is found by following the eye's ray down through that
+// relief, and every layer's picture is read there (parallax occlusion mapping: even steps down the ray, then the
+// crossing between the last two). The ground's own surface, its geometry, which the decals, the tracks' marks and the
+// plants lie on, is the relief's middle: on the whole they stay where they lie on it.
+//
+// The relief of the one or two layers that show most at a pixel, `a` under `b`: each about its middle by its depth
+// (world units from its lowest to its highest), b's share by its height as the layers meet (RICH, in Ground); and as
+// the second of them gives way to a third (`pair` toward 0), the strongest one's alone, so that where they change places
+// nothing jumps.
+struct Relief {
+  float tileA, tileB;    // repeats per world unit
+  float deepA, deepB;    // depths, as faded
+  float sliceA, sliceB;  // their layers of materialMaps
+  float maskB;           // b's mask
+  float richB;           // 1: b's share goes by its height
+  float pair;            // how much the two show together (0: the strongest alone)
+  float bestB;           // 1: b is the strongest
+  float2 gx, gy;         // the place's steps (world units a pixel)
+};
+float ReliefAt(Relief r, float2 p) {
+  float za = 0, zb = 0, hb = 0.5;
+  [branch] if (r.pair > 0 || r.bestB < 0.5)
+    za = (materialMaps.SampleGrad(samplerLinear, float3(p * r.tileA, r.sliceA), r.gx * r.tileA, r.gy * r.tileA).b - 0.5) * r.deepA;
+  [branch] if (r.pair > 0 || r.bestB > 0.5) {
+    hb = materialMaps.SampleGrad(samplerLinear, float3(p * r.tileB, r.sliceB), r.gx * r.tileB, r.gy * r.tileB).b;
+    zb = (hb - 0.5) * r.deepB;
+  }
+  float share = r.richB > 0.5 ? saturate((hb + r.maskB * 1.35 - 1) / 0.35) : r.maskB;
+  return lerp(r.bestB > 0.5 ? zb : za, lerp(za, zb, share), r.pair);
+}
+// Where the layers' pictures are read for the pixel at `world` (on the ground's surface, `base` its normal; `low`, `high`
+// the layers' masks), and how much of the sun's light the relief's own high places leave it (`sunSeen`, parallax.w).
+// Full within parallax.y of the eye, fading out over 1 / parallax.z beyond (past that Ground does not call it: from the
+// game's usual height it costs nothing); nothing where the whole relief would cross under about a pixel.
+float2 GroundParallax(float3 world, float3 base, float4 low, float4 high, float2 stepX, float2 stepY, out float sunSeen) {
+  sunSeen = 1;
+  // each layer's share of the pixel as the layers are laid over each other (before their heights push them), the two
+  // that show most, and how far the second stands above the third
+  float masks[9] = {1, low.x, low.y, low.z, low.w, high.x, high.y, high.z, high.w};
+  float left = 1, best = 0, second = 0, third = 0, bestMask = 1, secondMask = 0;
+  int a = 0, b = 0;
+  [unroll] for (int n = 8; n >= 0; --n) {
+    float w = masks[n] * left;
+    left *= 1 - masks[n];
+    if (w > best) {
+      third = second;
+      second = best, secondMask = bestMask, b = a;
+      best = w, bestMask = masks[n], a = n;
+    } else if (w > second) {
+      third = second;
+      second = w, secondMask = masks[n], b = n;
+    } else {
+      third = max(third, w);
+    }
+  }
+  int lo = min(a, b), up = max(a, b);
+  float pair = lo == up ? 0 : saturate((second - third) * 8);
+  bool bestUp = a == up && lo != up;
+  float deepLo = pair > 0 || !bestUp ? albedoTile[lo].z : 0, deepUp = pair > 0 || bestUp ? albedoTile[up].z : 0;
+  float deep = max(deepLo, deepUp);
+  if (deep <= 0) return world.xz;
+  // the eye's ray: its way over the ground per unit of depth (in the ground's plane, the pictures' coordinates being
+  // the world's x and z), and how many pixels it crosses the whole relief over
+  float3 V = world - cameraPosition;
+  float dist = length(V);
+  V /= max(dist, 1e-4);
+  float facing = max(-dot(V, base), 0.1);
+  float2 along = (V.xz + base.xz * facing) / facing;
+  float pixel = max(max(length(stepX), length(stepY)), 1e-6);
+  float across = deep * length(along) / pixel;
+  float fade = saturate((parallax.y - dist) * parallax.z + 1) * saturate(across - 0.5);
+  [branch] if (fade <= 0) return world.xz;
+  Relief r;
+  r.tileA = albedoTile[lo].x, r.tileB = albedoTile[up].x;
+  r.deepA = deepLo * fade, r.deepB = deepUp * fade;
+  r.sliceA = lo, r.sliceB = up;
+  r.maskB = a == up ? bestMask : secondMask;
+  r.richB = albedoTile[up].y;
+  r.pair = pair, r.bestB = bestUp ? 1 : 0;
+  r.gx = stepX * 2, r.gy = stepY * 2;  // (the relief a level less sharp than the pictures: steadier, and no thin walls)
+  // down the ray from where it enters the relief's top to where it leaves its bottom: the first step below the
+  // relief (a step for about every two pixels the ray crosses, 4 to 24), then the crossing between it and the step
+  // before, halved three times and taken between the last two by their heights over the relief (so that no slices
+  // show where the ray runs along a steep side)
+  float half = 0.5 * deep * fade;
+  float2 from = world.xz - along * half, way = along * (2 * half);
+  int steps = int(clamp(ceil(across * fade * 0.5), 4, 24));
+  float t = 0, gap = half - ReliefAt(r, from), lastT = 0, lastGap = gap;
+  [loop] for (int k = 1; k <= steps; ++k) {
+    t = float(k) / steps;
+    gap = half * (1 - 2 * t) - ReliefAt(r, from + way * t);
+    if (gap <= 0) break;
+    lastT = t, lastGap = gap;
+  }
+  [loop] for (int h = 0; h < 3 && gap < 0; ++h) {
+    float middle = 0.5 * (lastT + t), g = half * (1 - 2 * middle) - ReliefAt(r, from + way * middle);
+    if (g > 0) lastT = middle, lastGap = g;
+    else t = middle, gap = g;
+  }
+  float hit = gap < 0 ? lerp(lastT, t, lastGap / max(lastGap - gap, 1e-6)) : t;
+  float2 at = from + way * hit;
+  // the sun's light there: up the sun's ray through the relief to its top, shaded by what stands over that ray (soft
+  // by how far over, against the whole depth: so that it fades out with the relief)
+  [branch] if (parallax.w > 0 && sunDirection.y > 0) {
+    float rise = dot(sunDirection, base);
+    [branch] if (rise > 0.02) {
+      float2 toSun = (sunDirection.xz - base.xz * rise) / max(rise, 0.15);
+      float z = half * (1 - 2 * hit), room = half - z, most = 0;
+      int sunSteps = int(clamp(ceil(room * length(toSun) / pixel * 0.5), 2, 6));  // (a step for every two pixels)
+      [loop] for (int j = 1; j <= sunSteps; ++j) {
+        float climb = room * j / sunSteps;
+        most = max(most, ReliefAt(r, at + toSun * climb) - (z + climb));
+      }
+      sunSeen = lerp(1, saturate(1 - most / (0.25 * deep)), parallax.w);
+    }
+  }
+  return at;
+}
+#endif
+
 float4 Ground(VOut i) {
   float2 xz = i.world.xz;
   float2 uv = MirrorUv(xz * mapSize.zw);
@@ -324,8 +452,26 @@ float4 Ground(VOut i) {
   // inside such a branch the sampler cannot work the steps out itself; the temporal upscaler's bias, view.h,
   // as steps that much smaller)
   float2 stepX = ddx(xz) * exp2(temporal.x), stepY = ddy(xz) * exp2(temporal.x);
-  #define ALBEDO(n) albedoMaps[n].SampleGrad(samplerAniso, xz * albedoTile[n].x, stepX * albedoTile[n].x, stepY * albedoTile[n].x)
-  #define NORMAL(n) LayerNormal(normalMaps[n].SampleGrad(samplerAniso, xz * normalTile[n].x, stepX * normalTile[n].x, stepY * normalTile[n].x), normalTile[n].y)
+#ifdef GROUND_PARALLAX
+  // [parallax] where the layers' pictures (and the deep tracks' field) are read: along the eye's ray into their relief,
+  // close by (GroundParallax); with the same steps, so that their sharpness is the surface's
+  float2 lxz = xz;
+  float sunSeen = 1;
+  [branch] if (look > 0.5 && parallax.x > 0.5 && distance(i.world, cameraPosition) < parallax.y + 1 / parallax.z) {
+    float4 under = normalMap.SampleLevel(samplerLinearClamp, uv, 0);
+    float3 surface;
+    surface.xz = (under.ag * 2 - 1) * mirrored;
+    surface.y = sqrt(saturate(1 - dot(surface.xz, surface.xz)));
+    lxz = GroundParallax(i.world, surface, low, high, stepX, stepY, sunSeen);
+  }
+  #define LXZ lxz
+  #define TRACKS_XZ lxz
+#else
+  #define LXZ xz
+  #define TRACKS_XZ i.world.xz
+#endif
+  #define ALBEDO(n) albedoMaps[n].SampleGrad(samplerAniso, LXZ * albedoTile[n].x, stepX * albedoTile[n].x, stepY * albedoTile[n].x)
+  #define NORMAL(n) LayerNormal(normalMaps[n].SampleGrad(samplerAniso, LXZ * normalTile[n].x, stepX * normalTile[n].x, stepY * normalTile[n].x), normalTile[n].y)
   // a layer laid over what is there only where it is there: a share of nothing changes nothing, and a
   // map's layers each cover a part of it only (most pixels need two or three of the ten)
   #define OVER(value, read, share) [branch] if ((share) > 0) value = lerp(value, read, share)
@@ -335,12 +481,12 @@ float4 Ground(VOut i) {
   // `matter`: x creases' shading, y roughness, z how much of the pixel is such a layer's at all.
   float3 matter = 0;
   [branch] if (look > 0.5 && albedoTile[0].y > 0.5) {
-    float3 m = materialMaps.SampleGrad(samplerAniso, float3(xz * albedoTile[0].x, 0), stepX * albedoTile[0].x, stepY * albedoTile[0].x).rgb;
+    float3 m = materialMaps.SampleGrad(samplerAniso, float3(LXZ * albedoTile[0].x, 0), stepX * albedoTile[0].x, stepY * albedoTile[0].x).rgb;
     matter = float3(m.r, m.g, 1);
   }
   #define RICH(n, mask, raw) \
     [branch] if (look > 0.5 && albedoTile[n].y > 0.5 && raw > 0.002) { \
-      float3 m = materialMaps.SampleGrad(samplerAniso, float3(xz * albedoTile[n].x, n), stepX * albedoTile[n].x, stepY * albedoTile[n].x).rgb; \
+      float3 m = materialMaps.SampleGrad(samplerAniso, float3(LXZ * albedoTile[n].x, n), stepX * albedoTile[n].x, stepY * albedoTile[n].x).rgb; \
       mask = saturate((m.b + mask * 1.35 - 1) / 0.35); \
       raw = saturate((m.b + raw * 1.35 - 1) / 0.35); \
       matter = lerp(matter, float3(m.r, m.g, 1), mask); \
@@ -430,11 +576,15 @@ float4 Ground(VOut i) {
 #ifdef SURFACE_DEEP_TRACKS
     [branch] if (tracksInfo.z > 0.5) {  // deep tracks: the ground pressed where units have gone
       float3 pressed = albedo.rgb;
-      DeepTracksOn(i.world.xz, stepX, stepY, low, high, upper, base, pressed, N, roughness, creases);
+      DeepTracksOn(TRACKS_XZ, stepX, stepY, low, high, upper, base, pressed, N, roughness, creases);
       albedo.rgb = pressed;
     }
 #endif
     // (ground that glows gives its own light, by day and by night)
+#ifdef GROUND_PARALLAX
+    // [parallax] the relief's own high places' shadow; none where deep tracks have pressed the ground smooth
+    shadow *= lerp(sunSeen, 1, saturate(deepTrack.x * 1.4) * deepTrack.z);
+#endif
     float3 lit = ModernLight(ToLinear(albedo.rgb), 0, roughness, creases, ToLinear(glowing) * 2.5, N, i.world, shadow);
     // the under-water tint is mixed the way the original mixes it (in screen colours, relative to
     // full sunlight), so that shallows keep the map's water colours
@@ -580,7 +730,20 @@ struct TerrainConstants {
   TrackFieldConstants tracks;  // (deep tracks)
   float kindA[10][4], kindB[10][4];
   float mudInfo[4];  // [mud ruts]
+  float parallax[4];  // [parallax] (read only by the ground's parallax pipeline)
 };
+
+// The ground's shader as the scene draws it. [parallax] `parallax`: with the relief close by (GROUND_PARALLAX), the
+// ground's parallax pipeline's; without it the source is as it always was.
+std::string GroundSource(bool parallax) {
+  // (the modern look has its own water: water.cpp)
+  // (deep tracks: what the ground's shader read of them, for the lying snow and the puddles in ModernLight)
+  return std::string(parallax ? "#define GROUND_PARALLAX 1\n" : "") + "#define MODERN_WATER 1\n" +
+         "#define SURFACE_PUDDLES 1.0\n#define SURFACE_TRACKS 1\n" +
+         "#define SURFACE_DEEP_TRACKS 1\nstatic float4 deepTrack = 0;\nstatic float4 deepSlope = 0;\nstatic float deepWater = 0;\n" +
+         "static float2 deepGloss = 0;\n" +  // [mud ruts] (the mud's roughness and share, MudInRuts)
+         kViewShaderBlock + RayShaders() + kLightingShaderBlock + kShader;
+}
 
 // Where the kinds of ground lie (Terrain::GroundKinds): the layers' kinds blended by their masks as the shader
 // blends the layers.
@@ -1057,12 +1220,7 @@ bool Terrain::Load(const MapData* map, std::string* error) {
   const int w = map->width, h = map->height;
 
   if (!pipeline_) {
-    // (the modern look has its own water: water.cpp)
-    // (deep tracks: what the ground's shader read of them, for the lying snow and the puddles in ModernLight)
-    std::string source = std::string("#define MODERN_WATER 1\n") + "#define SURFACE_PUDDLES 1.0\n#define SURFACE_TRACKS 1\n" +
-                         "#define SURFACE_DEEP_TRACKS 1\nstatic float4 deepTrack = 0;\nstatic float4 deepSlope = 0;\nstatic float deepWater = 0;\n" +
-                         "static float2 deepGloss = 0;\n" +  // [mud ruts] (the mud's roughness and share, MudInRuts)
-                         kViewShaderBlock + RayShaders() + kLightingShaderBlock + kShader;
+    std::string source = GroundSource(false);
     gfx::PipelineDesc pd;
     pd.name = "terrain";
     pd.vertexSource = pd.pixelSource = source;
@@ -1324,6 +1482,45 @@ void Terrain::HeightsChanged(int x0, int z0, int x1, int z1) {
   }
 }
 
+// [parallax] Layer i's relief: world units from its lowest to its highest point. A remastered layer's scan holds about 3 cm
+// of relief, its height map stretched to 0..1 (the visuals session, 2026-10-19: 2 to 4 cm over scans of 1 to 3 m), which
+// its world units a metre (remap.json's real_size_m over its repeat) turn into the world's; a layer whose real size is
+// not given is taken as a 2 m scan over its repeat. At most a fiftieth of its repeat (a small scan stretched far, such
+// as a third of a metre of sand over 8 world units, would otherwise stand a tenth of its width high: its relief is
+// smaller than 3 cm) and a quarter of a world unit (the decals lie on the relief's middle). Half of it for grass (a grass
+// scan's relief is mostly the blades lying over the turf, which this draws as solid ridges, nothing seen under them).
+// Times parallaxDepth.
+float Terrain::LayerDepth(int i) const {
+  const float perMetre = layerUnitsPerMetre_[i] > 0 ? layerUnitsPerMetre_[i] : albedoScale_[i] / 2.0f;
+  return std::min({0.03f * perMetre, 0.02f * albedoScale_[i], 0.25f}) * (1 - 0.5f * groundKind_[i][3]) * parallaxDepth;
+}
+
+// [parallax] The ground's pipeline with its relief close by (GROUND_PARALLAX), made the first time it is asked for. False:
+// it cannot be made (the ground is drawn as without it).
+bool Terrain::ParallaxPipeline() {
+  if (parallaxPipeline_ || parallaxTried_) return static_cast<bool>(parallaxPipeline_);
+  parallaxTried_ = true;
+  const std::string source = GroundSource(true);
+  gfx::PipelineDesc pd;
+  pd.name = "terrain, parallax";
+  pd.vertexSource = pd.pixelSource = source;
+  pd.attrs = {{"POSITION", 0, gfx::AttrType::Float2, 0}};
+  pd.stride = 8;
+  pd.colorFormat = kSceneFormat;
+  pd.samples = gSceneSamples;
+  std::string error;
+  parallaxPipeline_ = device_->CreatePipeline(pd, &error);
+  if (!parallaxPipeline_) {
+    fprintf(stderr, "render: the ground's parallax cannot be drawn: %s\n", error.c_str());
+    return false;
+  }
+  printf("render: the ground's parallax: the layers' relief (world units, lowest to highest):");
+  for (int i = 0; i < 9; ++i)
+    if (material_[i]) printf(" %d: %.3f", i, LayerDepth(i));
+  printf("\n");
+  return true;
+}
+
 void Terrain::Draw(const View& view, bool shadowPass) {
   if (!shadowPass) drawnPatches = drawnTriangles = 0;
   if (!map_ || levels_.empty()) return;
@@ -1400,7 +1597,17 @@ void Terrain::Draw(const View& view, bool shadowPass) {
     }
   }
 
-  device_->SetPipeline(shadowPass ? shadowPipeline_ : pipeline_);
+  // [parallax] the ground's relief close by: by its own pipeline (made the first time), each remastered layer's depth
+  const bool relief = parallax && !shadowPass && materials_ && richGround && ParallaxPipeline();
+  if (relief) {
+    for (int i = 0; i < 9; ++i) c.albedoTile[i][2] = material_[i] ? LayerDepth(i) : 0.0f;
+    c.parallax[0] = 1;
+    c.parallax[1] = parallaxReach;
+    c.parallax[2] = 1 / std::max(0.5f * parallaxReach, 1.0f);
+    c.parallax[3] = parallaxShadows;
+  }
+
+  device_->SetPipeline(shadowPass ? shadowPipeline_ : relief ? parallaxPipeline_ : pipeline_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
   device_->SetConstants(1, &c, sizeof c);
   device_->SetTexture(0, heightTexture_);

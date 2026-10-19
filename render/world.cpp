@@ -1063,6 +1063,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   }
   terrain.tracksMap = deepNow_ ? trackField.Atlas() : tracks.Map();
   terrain.tracksField = deepNow_ ? trackField.Constants() : TrackFieldConstants{};
+  terrain.parallax = groundParallax && look == Look::Modern;  // [parallax]
   meshes.Begin();
   energy.Begin();  // [energy shields]
   // (buildfx) the remastered build look (build_effects.h): the effects list this frame's build beams while it is on, and

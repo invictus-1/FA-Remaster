@@ -43,6 +43,16 @@ class Terrain {
   // that material (its albedo, normal and third map, at its real size), when deep tracks are on (tracksField). false:
   // the ruts as deep tracks draw them without it.
   bool mudRuts = true;
+  // [parallax] The ground's relief close by (World::groundParallax sets it each frame; the modern look): where a layer has
+  // its third map, its picture is read where the eye's ray meets the relief that map's height gives it (parallax
+  // occlusion), so that close by its stones stand up and hide what lies behind them and its hollows sink, and
+  // (`parallaxShadows`, 0..1) its high places shade the hollows from a low sun. Full within `parallaxReach` world units
+  // of the eye, gone by half as far again, and wherever the whole relief would cross less than about a pixel. Its depth:
+  // the scans' real relief (about 3 cm; remap.json's real_size_m gives a layer's world units a metre) times
+  // `parallaxDepth`. The ground's surface stays the relief's middle (what lies on it stays put on the whole). Drawn by a
+  // pipeline of its own (the same shader with GROUND_PARALLAX), made the first time; false: as before.
+  bool parallax = false;
+  float parallaxDepth = 1, parallaxReach = 20, parallaxShadows = 1;
   // Where the kinds of ground lie, over the whole map at half its size (RGBA8: sand, grass, snow, hard ground; the
   // rest dirt and mud), by the layers' kinds blended by their masks. Made the first time it is asked for once a map
   // is loaded (it dispatches: between passes).
@@ -170,6 +180,11 @@ class Terrain {
   gfx::Texture mud_[3];
   bool mudTried_ = false;
   void FindMud();
+  // [parallax] the ground's pipeline with its relief (ParallaxPipeline: made the first time it is asked for), a layer's depth
+  gfx::Pipeline parallaxPipeline_;
+  bool parallaxTried_ = false;
+  bool ParallaxPipeline();
+  float LayerDepth(int i) const;
   // A remastered map's third map per layer (beside `<name>_albedo.dds` a `<name>_arh.dds`: red what
   // its creases let in of the sky's light, green how rough it is, blue how high it stands), all
   // nine as the layers of one texture; `material_[i]`: layer i has one.
