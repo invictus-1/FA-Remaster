@@ -679,29 +679,21 @@ void AdvanceIntelCoords(Sim& sim) {
     Vec3 p = SourcePos(e);
     bool exact = false, moved;
     if (e->kind == Entity::Kind::Unit) {
-      Unit* u = static_cast<Unit*>(e);
-      moved = u->lastMoveTick == tick;
       // (coming to rest: the exact update ran when the horizontal event turned Stopped, IntelExactUpdate)
-      // CUnitMotion::MotionTick 0x6b9d10 ends every beat of a mobile unit in CUnitMotion::MoveTo 0x6b92e0, whose
-      // Entity::SetPendingTransform 0x678e90 links the unit on the moved list with no compare: AdvanceCoords then
-      // runs CIntel::ForceUpdate -> UpdatePos for a unit that stands still too, and UpdatePos's 6-tick clock
-      // (lastTick) keeps running while it stands (the circle itself only moves when the position differs). Not
-      // reached: a unit being built (0x6b9d2a), an attached one (motion state 3, 0x6b9ea0), an immobile or stunned
-      // one outside a layer blend (0x6b9eb5 / 0x6b9f19 -> 0x6ba04a), and (ours) a unit with no motion turn. Seen:
-      // MP2, army 1's land scout 0x100018 stands from 2073 and is given a Move at 2186: the original's radar keeps
-      // its clock (2073 + 6k: lastTick 2187, first raster on the move 2193, then 2307), ours restarted it on the
-      // first step (2189, then 2303, 2309), and army 1's radar reached army 0's engineer 4 one recon tick late.
-      if (!moved && !exact && u->lastPosTick == tick && u->motion.bp && u->motion.bp->mobile() && !u->beingBuilt &&
-          !u->parentId && !((u->immobile || u->unitStates.count("Immobile") || u->stunned) && u->motion.layerBlend == 0.0f))
-        moved = true;
-      // Entity::TaskTick 0x679c40: an attached entity whose parent has had its turn takes its transform from the
-      // parent's bone (0x67a020) and links itself on the moved list (SetPendingTransform 0x678e90, no compare) in
-      // every beat, so Sim::AdvanceBeat (0x74a255) runs its AdvanceCoords and the 6-tick clock keeps running, a unit
-      // being built on a factory's bone included. Seen (oracle probe): MP3, army 1's interceptor 0x100028, built in
-      // an air factory from 2365 and released at 2615: the original's vision clock ran 2365 + 6k all through
-      // (lastTick 2599, 2605, 2611, 2617, ... 2785, 2791), ours started on release (2615 + 6k), and army 1's recon at
-      // 2791 saw army 2's aircraft from the circle raster of 2789 (the original's of 2785 did not reach it).
-      if (!moved && !exact && u->parentId && u->lastPosTick == tick) moved = true;
+      // Sim::AdvanceBeat (0x74a239..0x74a25f) runs Entity::AdvanceCoords 0x678f10 for every entity on the dirty-entity
+      // list sim+0xa5c, and AdvanceCoords runs CIntel::ForceUpdate 0x76e490 for every entity with intel (+0x1d8,
+      // 0x67907e..0x6790cb) whether its transform changed or not. The list keeps its links from beat to beat (a unit is
+      // linked when it is made; probe mp2_8034: no unlink in the oracle's beats; see GridAdvanceCoords), so every unit
+      // has its ForceUpdate -> UpdatePos in every beat: the 6-tick clock (lastTick) runs while the unit stands, is being
+      // built, is attached, immobile or stunned alike (the circle itself only moves when the position differs). Seen:
+      // MP2 7929-7949, army 1's Pillar 0x100123 stunned (position held; the exact update when it came to rest at 7936):
+      // the original's clock ran on through the stun (7936 + 6k: ... 8362, 8368), so the raster at 8368 reached army 0's
+      // mass extractor 0x48 and army 1 made its blip at the recon beat 8369 (probe mp2_8374: FindOrCreateBlip at 8369);
+      // the Pillar took it at 8370 and fired at 8374. Ours stopped the clock during the stun and restarted it at 7949
+      // (8363, 8369): the blip came at 8373 and the Pillar fired later (the draws split at 8374). (Earlier cases that
+      // the same rule covers: MP2 2186, a land scout standing from 2073 whose radar clock ran on; MP3 2365, an
+      // interceptor built in an air factory whose vision clock ran from 2365.)
+      moved = true;
     } else {
       IntelHandle* any = nullptr;
       for (int s = 1; s <= 8; ++s)
