@@ -790,7 +790,7 @@ void CommandGraphScript(lua_State* L, const char* fn, Control* view, const UiEve
       int args = 0;
       if (e) {
         PushEventTable(L, view, *e);
-        lua_pushnumber(L, command);
+        PushCommandId(L, command);  // (Call_ObjectInt at 0x823f94: a signed int)
         args = 2;
       }
       if (lua_pcall(L, args, 0, top + 1) != 0)

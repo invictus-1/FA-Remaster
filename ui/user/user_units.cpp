@@ -2413,11 +2413,10 @@ int l_GetCommandQueue(lua_State* L) {
   // engine's first rally in it.)
   for (const CommandView& c : s.hasFactoryQueue ? s.factoryQueue : s.queue) {
     lua_newtable(L);
-    // "ID": FAF's patch of the original (FA exe 0x8c55aa jumps to 0x129115c: LuaObject::SetInteger("ID", command+4)), a
-    // SIGNED int made a Lua number, a float: an engine-made command's id 0x80000000 | index comes out negative and
-    // rounded to the float's 24 bits, in the original too (read 2026-10-18).
+    // "ID": FAF's patch of the original (FA exe 0x8c55aa jumps to 0x129115c: LuaObject::SetInteger("ID", command+4));
+    // the original itself gives only type and position. Signed, as PushCommandId says (read 2026-10-18).
     lua_pushstring(L, "ID");
-    lua_pushnumber(L, static_cast<lua_Number>(static_cast<int32_t>(c.id)));
+    PushCommandId(L, c.id);
     lua_rawset(L, -3);
     lua_pushstring(L, "type");
     lua_pushstring(L, CommandName(c.type));
@@ -3939,13 +3938,13 @@ int l_OrderGraphForTests(lua_State* L) {
   auto commandId = [&](int node) {
     const OrderGraph::Node& n = g.nodes[static_cast<size_t>(node)];
     if (n.command == 0xffffffffu) lua_pushnil(L);
-    else lua_pushnumber(L, n.command);
+    else PushCommandId(L, n.command);  // (as GetCommandQueue's ID, so that tests can compare them)
   };
   lua_newtable(L);
   lua_pushboolean(L, g.made && shown);
   field("shown");
-  if (g.hovered != 0xffffffffu) lua_pushnumber(L, g.hovered), field("hovered");
-  if (g.drag.command != 0xffffffffu) lua_pushnumber(L, g.drag.command), field("dragged");
+  if (g.hovered != 0xffffffffu) PushCommandId(L, g.hovered), field("hovered");
+  if (g.drag.command != 0xffffffffu) PushCommandId(L, g.drag.command), field("dragged");
   lua_newtable(L);
   for (size_t i = 0; i < out.legs.size(); ++i) {
     const OrderGraphOut::LegOut& o = out.legs[i];

@@ -258,6 +258,11 @@ void RegisterSessionBindings(lua_State* L);
 // to date with the simulation; InstallUnitCategoryFunctions goes after the rules are in the state.
 void RegisterUserUnitBindings(lua_State* L);
 void RefreshUserUnits(lua_State* L);
+// A command's id as the original hands it to scripts: a SIGNED int made a Lua number (a float). GetCommandQueue's "ID"
+// (FAF's patch: SetInteger, FA exe 0x129115c) and commandgraph.lua's OnCommandDragEnd(event, cmdId) (Call_ObjectInt,
+// 0x823f94). So an engine-made command's id 0x80000000 | index comes out negative and rounded to 24 bits, there too.
+// Every id we hand to Lua goes through this, so that the scripts' comparisons match.
+inline void PushCommandId(lua_State* L, uint32_t id) { lua_pushnumber(L, static_cast<lua_Number>(static_cast<int32_t>(id))); }
 // PlaySound, StopSound, SetVolume and the others (sound_bindings.cpp).
 void RegisterSoundBindings(lua_State* L);
 // The host's test functions that write a file a script names (moho64ui_SoundMix's file) write it only in a run
