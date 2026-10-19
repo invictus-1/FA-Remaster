@@ -1080,6 +1080,9 @@ only an entity, so FAF's ping entities (/lua/SimPing.lua: `Owner = data.Owner`, 
 renderer shows them through their 'Always' flag to everyone where FAF sets 'Never' for enemies. Could the number case
 be added? The interface's test: ui/tests/pings.lua (moho64ui_ScriptEntities() lists the script entities with their
 army; it notes army 0 today).
+DONE (engine 61536c5, finding 60, answer "ui 43" in docs/engine-answers.md): a number Owner is the 0-based army, an
+entity Owner gives its army, with no Owner spec.Army (1-based). pings.lua now checks each ping's mesh is the
+player's army's (96 / 96 on main).
 
 ### 44. Two things seen at a game's end: a platoon.lua script error, and the starting resources counted as collected
 From the interface chat, 2026-10-19. Not blocking; seen by my helper while testing the score screen (ui/tests/
@@ -1992,6 +1995,10 @@ bias -0.0001). The call we'd need: script entities drawn by their mesh blueprint
 CommandFeedback ones, as the order marks already are). Two questions not read: `cartographicTechnique =
 "CartographicFeedback"` in those blueprints suggests the original draws them on the minimap too; `IconFadeInZoom =
 100` may fade them when zoomed out.
+DONE (render aab30c9, on main): script entities whose mesh's LOD names CommandFeedback3 / 4 draw by that shader's
+rules (albedo colour, unlit, blended, CF3 over everything, CF4 depth-tested, no shadow, the entity's own scale);
+answers in docs/render-answers.md: IconFadeInZoom: no fade (strategic icons only); CartographicFeedback: the
+original stamps pings and beacons on its minimap: he builds that next (my yes). pings.lua green on main.
 
 ## To the visuals track
 
