@@ -2543,7 +2543,6 @@ void RelinkSuspendedAttackThread(Unit* u) {
 
 namespace {
 
-bool IsZeroV(const Vec3& v) { return v.x == 0 && v.y == 0 && v.z == 0; }
 // !Unit::WontFitAt 0x62aa90: the point inside the playable rect (STIMap::IsWithin, margin 0, the unit's army's
 // whole-map flag, 0x62aad4), and the unit's footprint fits at world position p
 bool StandableFor(Sim& sim, Unit* u, const Vec3& p) {
@@ -2585,8 +2584,16 @@ void InitAttack(Sim& sim, Unit* u, BuildTask& t, bool coordinated) {
   if (target.type == 1)
     if (Entity* e = sim.FindEntity(target.entityId))
       d->trackMobile = e->kind == Entity::Kind::Unit && BpInCategory(sim, e->blueprint, "MOBILE");
-  if (TaskHasTarget(sim, target)) d->lastPos = TargetPos(sim, target, false);  // UpdatePos
-  if (IsZeroV(d->lastPos)) d->lastPos = u->position;
+  // UpdatePos 0x5f2e90: lastPos = the target's position when the target holds (HasTarget 0x5e2a10); then, only when a
+  // component is NaN (0x5657f0: _isnan per component), the unit's own position. The zero vector the ctor starts with
+  // is a valid point and stays: a task whose target is already gone keeps lastPos (0, 0, 0), which is never within
+  // its attack range, so the lost-target branch (0x5f3994) does not end it: it asks the navigator every beat. Seen
+  // (probe mp2_8416b): MP2 8416, army 1's Striker 0x10000d starts the stream's queued Attack of 8351 on army 0's
+  // 0x104 (dead at 8353, its blip gone at 8369): the original's task holds a null target and lastPos (0, 0, 0) and
+  // returns 1 every beat (state 3) with the unit standing Attacking; ours put lastPos at the unit, in reach, and
+  // ended the task at once.
+  if (TaskHasTarget(sim, target)) d->lastPos = TargetPos(sim, target, false);
+  if (IsNaN(d->lastPos)) d->lastPos = u->position;
   // 0x5f2c22..0x5f2c72: a unit standing unpacked (Immobile) whose blueprint has AI.NeedUnpack (bp+0x48c) and that
   // has an attacker is told SetDesiredTarget(none) (attacker vt+0x20 with an empty CAiTarget): every weapon drops
   // what it holds and packs up, and the task's own target is taken up later. (Seen: LAND, a heavy artillery
@@ -2697,8 +2704,8 @@ void AttackUpdate(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
   if (fc) {
     Vec3 cell;
     if (d.trackMobile) {  // a mobile target: the formation is centred on where it is now (SetCentre)
-      if (has) d.lastPos = TargetPos(sim, target, false);
-      if (IsZeroV(d.lastPos)) d.lastPos = u->position;
+      if (has) d.lastPos = TargetPos(sim, target, false);  // UpdatePos 0x5f2e90 (see InitAttack)
+      if (IsNaN(d.lastPos)) d.lastPos = u->position;
       FormationSetCentre(*fc, d.lastPos.x, d.lastPos.z);
     } else {
       d.lastPos = FormationGoalOfForm(*fc, u, &cell) ? cell : u->position;
@@ -2725,8 +2732,8 @@ void AttackUpdate(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
     d.firstUpdate = false;
     return;
   }
-  if (has) d.lastPos = TargetPos(sim, target, false);
-  if (IsZeroV(d.lastPos)) d.lastPos = u->position;
+  if (has) d.lastPos = TargetPos(sim, target, false);  // UpdatePos 0x5f2e90 (see InitAttack)
+  if (IsNaN(d.lastPos)) d.lastPos = u->position;
   UnitWeapon* w = d.firstUpdate ? TargetWeapon(sim, u, target) : nullptr;
   Entity* e = target.type == 1 ? sim.FindEntity(target.entityId) : nullptr;
   {

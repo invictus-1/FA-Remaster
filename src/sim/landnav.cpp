@@ -947,6 +947,11 @@ void LandNavSetGoal(Sim& sim, Unit* u, const Vec3& goalPos, bool speedThrough) {
 // SetGoal 0x5a3ed0 with a goal rect [x0, x1) x [z0, z1) of cells: a 1x1 goal is moved to a free spot nearby,
 // larger rects are taken as they are (pathfinding.md 4.1)
 void LandNavSetGoalRect(Sim& sim, Unit* u, int x0, int z0, int x1, int z1, bool speedThrough) {
+  // 0x5a3f3d..0x5a3f46: a goal rect whose corner is cell (0, 0) is no goal: SetGoal returns at once (0x5a416a) and the
+  // navigator keeps what it had. Seen (probe mp2_8416b): MP2 8416, army 1's Striker 0x10000d starts a queued Attack
+  // whose target is gone; its task's lastPos is (0, 0, 0), its Update asks for the cell (0, 0) every beat, and the
+  // original's unit stands Attacking for 150 beats; ours searched a path to the map's corner and drove off.
+  if (x0 == 0 && z0 == 0) return;
   u->motion.faceDir = {};  // (CUnitMotion::SetTarget 0x6b8872 takes the goal's facing: none)
   if (!u->motion.nav) {
     u->motion.nav = std::make_shared<LandNav>();
