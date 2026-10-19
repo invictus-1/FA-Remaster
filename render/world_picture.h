@@ -163,7 +163,8 @@ class WorldPicture {
   // Atmosphere: light in the air, volumetric clouds, the sky from tables (World::volumetricFog, volumetricClouds,
   //   skyTables); with a time of day (SetDayAndWeather); together about 0.25 ms cheaper than without. Since
   //   2026-10-18 also the zoom out through the volumetric clouds (World::cloudZoom, a trial; Chris: every new look
-  //   on): +0.4 to 1.0 ms only with the camera at the clouds' layer or above.
+  //   on): +0.4 to 1.0 ms only with the camera at the clouds' layer or above. And the land far off past the map's
+  //   edge with a softer edge (World::beyondLand; where the world beyond the edge is shown): 0.03-0.19 ms.
   void SetAtmosphere(bool on);
   // Soft shadows: the sun's shadows soft by their distance from what casts them, and contact shadows
   //   (World::softShadows, contactShadows); about +0.37 ms.

@@ -71,7 +71,7 @@ struct WorldPicture::Impl {
   int hiddenOutlines = -1;             // SetHiddenOutlines (-1: the world's own, on)
   void ApplyBundles() {  // (onto the world, where there is one)
     if (!world) return;
-    if (atmosphere >= 0) world->volumetricFog = world->volumetricClouds = world->skyTables = world->cloudZoom = atmosphere > 0;
+    if (atmosphere >= 0) world->volumetricFog = world->volumetricClouds = world->skyTables = world->cloudZoom = world->beyondLand = atmosphere > 0;
     if (softShadows >= 0) world->softShadows = world->contactShadows = softShadows > 0;
     if (rayTracing >= 0) world->bounceLight = world->rayLightShadows = rayTracing > 0;
     world->rayReflections = rayReflections;

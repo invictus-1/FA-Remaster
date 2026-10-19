@@ -428,11 +428,10 @@ float3 SmallLightsTraced(float3 world, float3 N, float3 V, float3 diffuseColor, 
 }
 #endif
 
-// The world beyond the map's edge: ground or water there, a shade dimmer just outside (the
-// playable ground ends here) and lost in the distance farther out: it goes over into what the
-// sky's pass shows in that direction, so the land has no rim. On the map: the colour as it is.
-float3 BeyondFar(float3 color, float3 world, float outside, float pixel) {
-  float3 d = normalize(world - cameraPosition);
+// The far distance the world beyond the map's edge is lost in, toward `d` (unit length): what the
+// sky's pass shows below the horizon that way. (beyondland: the land far off is lost in it too,
+// beyond_land.cpp)
+float3 BeyondBack(float3 d) {
   float3 back;
   if (skyZenith.w > 0.5) {  // (as sky.cpp shows the far distance under a computed sky)
     back = BeyondGrey(HorizonHaze(d)) * pow(max(skyGlow.w, 0.006), 0.43);
@@ -444,16 +443,33 @@ float3 BeyondFar(float3 color, float3 world, float outside, float pixel) {
     float4 a = AirAt(cameraPosition + d * (air.y * exp(air.z) * 0.999));
     back = back * a.a + a.rgb;
   }
+  return back;
+}
+// The world beyond the map's edge: ground or water there, a shade dimmer just outside (the
+// playable ground ends here) and lost in the distance farther out: it goes over into what the
+// sky's pass shows in that direction, so the land has no rim. On the map: the colour as it is.
+float3 BeyondFar(float3 color, float3 world, float outside, float pixel) {
+  float3 back = BeyondBack(normalize(world - cameraPosition));
   float t = saturate(outside * beyond.z);
   // without the haze (beyond.w < 0): the land stays clear and is lost only in the last tenth of
   // the way, where it meets the horizon
   if (beyond.w < 0) t = saturate((t - 0.9) * 10);
-  // just outside: dimmer and with a third of its colour gone, behind a thin dark line along the
-  // edge that keeps its width in the picture at any zoom: where the playable ground ends must be
-  // plain from all the way up
-  float near = saturate(outside / 6);
-  color = lerp(color, dot(color, float3(0.3, 0.6, 0.1)), 0.35 * near) * lerp(1, abs(beyond.w), near);
-  if (pixel > 0) color *= 1 - 0.7 * saturate(1 - outside / max(pixel * 1.6, 1e-4));
+  [branch] if (beyondLand.x > 0.5) {
+    // (beyondland) the soft edge: past the edge the ground dims and loses some of its colour little by little,
+    // over beyondLand.y world units, and a soft shadow lies along the edge itself, fading out over beyondLand.x
+    // pixels at any zoom (`pixel`: how much of the way out one pixel is), so where the playable ground ends stays
+    // plain from all the way up without a hard line
+    float grow = smoothstep(0, beyondLand.y, outside);
+    color = lerp(color, dot(color, float3(0.3, 0.6, 0.1)), beyondLand.w * grow) * lerp(1, abs(beyond.w), grow);
+    if (pixel > 0) color *= 1 - beyondLand.z * exp(-outside / max(pixel * beyondLand.x, 1e-4));
+  } else {
+    // just outside: dimmer and with a third of its colour gone, behind a thin dark line along the
+    // edge that keeps its width in the picture at any zoom: where the playable ground ends must be
+    // plain from all the way up
+    float near = saturate(outside / 6);
+    color = lerp(color, dot(color, float3(0.3, 0.6, 0.1)), 0.35 * near) * lerp(1, abs(beyond.w), near);
+    if (pixel > 0) color *= 1 - 0.7 * saturate(1 - outside / max(pixel * 1.6, 1e-4));
+  }
   return lerp(color, back, t * t * (3 - 2 * t));
 }
 float3 BeyondMap(float3 color, float3 world) {

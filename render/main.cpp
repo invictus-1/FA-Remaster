@@ -312,6 +312,11 @@
 // --effects-look original|remastered  the game's effects as the original has them, or the visuals track's
 //           remastered files where there are some (--remasters <folder>/_effects/export/moho64; the default)
 // --no-beyond-haze  the land beyond the map's edge is not lost in haze but at the far end
+// --beyond-land  (beyondland) with the world beyond the map's edge: a softer edge (the ground past it dims and greys little
+//           by little, a soft shadow along the edge in place of the dark line) and land far off round the horizon, made
+//           up from what the map's edges hold (World::beyondLand, beyond_land.h; modern look); --beyond-land-look
+//           name=value,... tunes it (BeyondLand's numbers: band, edgeShadow, edgeWidth, edgeGrey, haze, hazeHeight, begin,
+//           end, hills, mountains, islands, farLand, snowline, softness)
 // --sun, --sky, --exposure, --reflection  the modern look's strengths (for tuning it by eye)
 // --time-of-day <hours>  the computed sky of that hour (0..24) lights the modern look instead of the map's
 //           own light; --day-length <seconds> lets the day pass, a whole one in that long. Key T: an hour on
@@ -558,6 +563,8 @@ struct Options {
   int textureDetail = 0;                // --texture-detail
   bool frame = true;                    // --no-frame
   bool beyondHaze = true;               // --no-beyond-haze
+  bool beyondLand = false;              // --beyond-land (beyondland)
+  std::string beyondLandLook;           // --beyond-land-look (beyondland)
   std::string inspect;                  // --inspect
   float iconScale = 0;  // screen pixels for each pixel of a strategic icon; 0: by the picture's height
   Look look = Look::Modern;
@@ -729,6 +736,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--no-bloom") o->bloom = false;
     else if (a == "--no-frame") o->frame = false;
     else if (a == "--no-beyond-haze") o->beyondHaze = false;
+    else if (a == "--beyond-land") o->beyondLand = true;  // (beyondland)
     else if (a == "--noicons") o->icons = false;
     else if (a == "--unexplored") o->unexplored = true;
     else if (a == "--ranges") o->ranges = true;
@@ -1003,6 +1011,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
       o->hasCine = o->hasCineCam = true;
     } else if (a == "--cloud-zoom-look") {  // (cloudzoom)
       o->cloudZoomLook = v;
+    } else if (a == "--beyond-land-look") {  // (beyondland)
+      o->beyondLandLook = v;
     } else if (a == "--cam-zoom-path") {  // (cloudzoom)
       o->zoomPath = v;
     } else if (a == "--cine-path") {
@@ -1403,6 +1413,14 @@ int main(int argc, char** argv) {
   world.meshes.depthPrepass = opt.prepass;
   world.frame = opt.frame;
   world.beyondHaze = opt.beyondHaze;
+  world.beyondLand = opt.beyondLand;  // (beyondland)
+  if (!opt.beyondLandLook.empty()) {
+    std::string why;
+    if (!world.distantLand.Set(opt.beyondLandLook, &why)) {
+      fprintf(stderr, "render: --beyond-land-look: %s\n", why.c_str());
+      return 2;
+    }
+  }
   static const char* const kInspect[] = {"", "albedo", "normals", "roughness", "metal", "occlusion", "shadow", "lights", "cascades", "detail", "ambient"};
   for (int i = 1; i < 11; ++i)
     if (opt.inspect == kInspect[i]) world.inspect = i;

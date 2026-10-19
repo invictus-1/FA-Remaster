@@ -137,6 +137,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
       return false;
     }
     if (options.lodPixels > 0) terrain.quadPixels = options.lodPixels;
+    distantLand.Forget(map, mapPath);  // (beyondland: read from this map as opened; the land far off made when it is wanted)
     step("ground");
     if (!water.Load(&map, &why)) {
       *error = "water: " + why;
@@ -766,6 +767,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     // and sea do, not greyed (view.h, BeyondGrey): from up high the grey sets the map apart; from low down it would lie
     // as a grey band under the bright horizon
     if (camera.cinematic) c.skyExtra[3] = 1;
+    if (beyondLand) distantLand.SetView(&c);  // (beyondland) the soft edge (beyond_land.h)
   }
   set(c.sunDirection, sunDirection);
   set(c.sunColor, haveMap_ ? map.lighting.sunColor : Vec3{1, 1, 1});
@@ -899,6 +901,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     // whole map seen from high up would be gone)
     c.weather[2] = 0.0035f * fog + 0.0007f * rain + 0.0010f * snow;
     c.weather[3] = 0.55f + 0.3f * fog;
+    distantLand.thickAir = c.weather[2];  // (beyondland: the weather's own, before a cinematic camera's least)
     // (cinecam) a cinematic camera low over the land sees far toward the horizon: some of the air's haze then, even
     // in clear weather, so that the distance lies back as it does outdoors
     if (camera.cinematic) c.weather[2] = std::max(c.weather[2], cinematicHaze);
@@ -2267,6 +2270,9 @@ void World::Render() {
   } else if (!sidePicture) {
     wildlifeDraw.Pause();
   }
+  // (beyondland) the land far off (beyond_land.h): made for the map the first time it is wanted, its colours from the
+  // map's ground (that dispatches: before the scene's pass)
+  distantLand.Prepare(device_, beyondLand && view.constants.beyond[2] > 0 && !sidePicture, terrain);
   CpuTimes::Part("particles and bands moved");
   particles.Update(clock_, &view);
   ribbons.Update(clock_);
@@ -2411,6 +2417,11 @@ void World::Render() {
       ao.Compute(view, camera, post.Depth());
       post.ContinueScene();
       ao.Apply(view);
+    }
+    if (distantLand.On()) {  // (beyondland) the land far off: after the map's own (no occlusion out there), before the clouds and the sky
+      Stage("land far off");
+      lights.Bind();
+      distantLand.Draw(view);
     }
     // the clouds as volumes (when on): from the depth of everything solid, before the sky lays them over itself
     if (clouds.Shadows()) {

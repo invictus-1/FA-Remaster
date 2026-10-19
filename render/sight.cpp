@@ -32,6 +32,19 @@ float4 VS(uint id : SV_VertexID) : SV_Position {
   return float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);
 }
 
+// What a place of the map (uv: x and z as shares of the map's size) keeps of its light by what is seen there.
+float3 SightKeeps(float2 uv, float3 world) {
+  float4 grid = sight.SampleLevel(samplerLinearClamp, uv, 0);  // seen now; seen at some time; radar; sonar
+  float seen = smoothstep(0.2, 0.8, grid.r);
+  float known = smoothstep(0.2, 0.8, grid.g);
+  // (sonar tells of water only; with the modern water the depth here is the bed's, which lies under the level)
+  float radar = smoothstep(0.2, 0.8, max(grid.b, world.y < cover.y + 0.3 ? grid.a : 0));
+  // unseen: darker, and a little toward blue; never seen: as dark as the game's option says; under
+  // radar it keeps a little more, where the ground is known at all
+  float keeps = lerp(mapInfo.w, lerp(mapInfo.z, cover.x, radar), known);
+  return lerp(float3(0.85, 0.95, 1.2) * keeps, 1, seen);
+}
+
 float4 PS(float4 position : SV_Position) : SV_Target {
   float depth = DepthAt(int2(position.xy));
   if (depth <= 0) return 1;  // the sky
@@ -44,17 +57,13 @@ float4 PS(float4 position : SV_Position) : SV_Target {
     // ground the army knows and does not see, less and less the farther out
     float outside = OutsideMap(world);
     if (outside <= 0) return 1;
-    return float4(lerp(float3(0.85, 0.95, 1.2) * mapInfo.z, 1, saturate(outside * beyond.z * 1.5)), 1);
+    float3 far = lerp(float3(0.85, 0.95, 1.2) * mapInfo.z, 1, saturate(outside * beyond.z * 1.5));
+    // (beyondland) the soft edge: going on from what the fog of war is at the edge over twice the soft edge's
+    // width, not dimmed all at once there
+    [branch] if (beyondLand.x > 0.5) far = lerp(SightKeeps(saturate(uv), world), far, smoothstep(0, beyondLand.y * 2, outside));
+    return float4(far, 1);
   }
-  float4 grid = sight.SampleLevel(samplerLinearClamp, uv, 0);  // seen now; seen at some time; radar; sonar
-  float seen = smoothstep(0.2, 0.8, grid.r);
-  float known = smoothstep(0.2, 0.8, grid.g);
-  // (sonar tells of water only; with the modern water the depth here is the bed's, which lies under the level)
-  float radar = smoothstep(0.2, 0.8, max(grid.b, world.y < cover.y + 0.3 ? grid.a : 0));
-  // unseen: darker, and a little toward blue; never seen: as dark as the game's option says; under
-  // radar it keeps a little more, where the ground is known at all
-  float keeps = lerp(mapInfo.w, lerp(mapInfo.z, cover.x, radar), known);
-  return float4(lerp(float3(0.85, 0.95, 1.2) * keeps, 1, seen), 1);
+  return float4(SightKeeps(uv, world), 1);
 }
 
 // What lies outside the part of the map that can be played now.
