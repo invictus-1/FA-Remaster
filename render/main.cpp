@@ -180,6 +180,9 @@
 //           between each two frames, shown between them (twice the frames shown); --capture-between: what
 //           --screenshot reads is the picture made between (gfx.h, Device::captureBetween), where there is one
 // --water-detail  wet shorelines and stronger caustics (World::waterDetail; modern look)
+// --winter-water  winter water (winter_water.h, World::winterWater; modern look, a time of day): while snow lies the
+//           water goes over to a cold palette, slush and thin ice gather at the shores, no snow lies under the water
+//           (with --weather snow, or --snow-lying n to see it at that much snow, a thaw by smaller n)
 // --water-ripples  ripples on the water (ripples.h, World::waterRipples; modern look): shells landing in the water,
 //           ships, hover units and units wading leave rings and wakes that spread and die out. --ripple-test
 //           n[,radius[,strength]]: n splashes a second (Water::AddRipple) at random over the water round where the
@@ -459,6 +462,7 @@ struct Options {
   float volumeDetail = -1;                    // --volume-detail
   float smokeDensity = -1, fireLight = -1, smokeShadowStrength = -1, heatBend = -1;  // (their tuning; -1: as at first)
   bool waterDetail = false;             // --water-detail
+  bool winterWater = false;             // --winter-water
   bool waterRipples = false;            // --water-ripples
   float rippleTest = 0, rippleTestRadius = 0.5f, rippleTestStrength = 1;  // --ripple-test
   float rippleSpeed = -1, rippleHalfLife = -1, rippleView = 0;  // --ripple-speed, --ripple-half-life, --ripple-view
@@ -643,6 +647,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--smoke") o->litSmoke = o->smokeShadows = o->heatShimmer = true;
     else if (a == "--volume-explosions") o->volumeExplosions = true;
     else if (a == "--water-detail") o->waterDetail = true;
+    else if (a == "--winter-water") o->winterWater = true;
     else if (a == "--water-ripples") o->waterRipples = true;
     else if (a == "--ground-cover") o->groundCover = true;
     else if (a == "--wildlife") o->wildlife = true;
@@ -1238,6 +1243,7 @@ int main(int argc, char** argv) {
   if (opt.smokeShadowStrength >= 0) world.smokeMap.strength = opt.smokeShadowStrength;
   if (opt.heatBend >= 0) world.particles.heatBend = opt.heatBend;
   world.waterDetail = opt.waterDetail;
+  world.winterWater = opt.winterWater;
   world.waterRipples = opt.waterRipples;
   if (opt.rippleSpeed > 0) world.water.ripples.speed = opt.rippleSpeed;
   if (opt.rippleHalfLife > 0) world.water.ripples.halfLife = opt.rippleHalfLife;

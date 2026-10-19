@@ -730,6 +730,8 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     const bool ripplesOn = waterRipples && look == Look::Modern && haveMap_ && map.water.present;
     water.ripples.Begin(clock_, ripplesOn, sidePicture);
     if (ripplesOn) water.PrepareRipples();
+    // (winter water's pipeline made while the option is on, before the first snow needs it)
+    if (winterWater && look == Look::Modern && haveMap_ && map.water.present) water.PrepareWinter(ripplesOn);
   }
   lampUnitsBefore_ = lampUnits_;
   lampUnits_ = 0;
@@ -890,6 +892,15 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       c.skyExtra[2] = bolt.z;
     }
     lightDirection = skyLight.direction;
+    // winter water (winter_water.h): the water goes over to its winter look with the lying snow, half of the way while
+    // a third of a covering lies and all of it by two thirds; back again as it thaws
+    if (winterWater && haveMap_ && map.water.present && snowLying > 0) {
+      const float t = std::clamp(snowLying / 0.65f, 0.0f, 1.0f);
+      c.winterWater[0] = std::max(t * t * (3 - 2 * t), 1e-4f);
+      c.winterWater[1] = map.water.elevation;
+      c.winterWater[2] = static_cast<float>(map.width);
+      c.winterWater[3] = static_cast<float>(map.height);
+    }
   }
   {  // movement dust (movement_dust.h): on in the modern look, with what the weather has done to the ground and the air
     dustNow_ = movementDust && look == Look::Modern && haveMap_ && !sidePicture;
