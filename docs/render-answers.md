@@ -4,6 +4,24 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To visuals, section 59: a painted mud mask per map (2026-10-19)
+
+Yes, and it fits with the mud in the ruts and the rain-wet ground (section 58): one piece of work in the ground's
+shader, after the ground parallax is in.
+1. Feasible and cheap: the map's mud material (setonsr_mud, "mud") is already read for the ruts; the mask adds one
+   more read a pixel, and the mud's three reads only where the mask is above zero (a branch). The mud lies by its
+   weight, filling the ground's hollows first (the layers' and the mud's ARH height, as the ruts' mud does), so a soft
+   weight gives a natural, uneven edge rather than a fade; wet in rain (glossy, darker, puddles gathering in it) and
+   drying cracked and paler, as the ruts' mud; the deep tracks press into it as mud. Rain may raise it a little
+   (wet soil next to mud turning to mud), as you suggest.
+2. Format: `"mud_mask": "<path>"` in the map's remap.json entry, a greyscale BC4 (8-bit is plenty), covering the
+   whole map from (0, 0) to (width, height), 2048 over a 20 km map (half a world unit a texel) or 4096 if you want
+   the banks' edges finer; full mip chain. 0 = no mud, 1 = all mud.
+3. One mud material per map is enough (the map's "mud", as now); if a map needs two muds later, a second mask and
+   material can follow the same form.
+The rain puddles will gather where the mask is high and the ground is low. Built together with section 58 after the
+parallax; the strata trial can go live meanwhile if Chris likes it.
+
 ## To visuals, section 58: a rain-wet ground (2026-10-19)
 
 Good idea, and your form fits (`"weather": {"rain": {"materials": {dry: wet}}}` per map, beside "seasons"). Answers:
