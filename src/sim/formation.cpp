@@ -37,6 +37,17 @@ Unit* UnitOf(Sim& sim, uint32_t h) {
 }
 bool Mobile(const Unit* u) { return u->motion.bp && u->motion.bp->mobile(); }
 bool Gone(const Unit* u) { return !u || u->dead || u->destroyQueued; }
+// What the rebuild and the slot assignment read of a unit (0x568ca0, 0x567300) is IUnit::GetPosition / GetOrientation
+// (vt+0x14 0x6a49b0 = unit+0xb4, vt+0x18 0x6a49c0 = unit+0xa4): the entity's committed transform, which motion only
+// replaces in Entity::AdvanceCoords (beat_order.md step 13). A formation built inside the motion loop (a guard
+// formation, made in the guarded unit's own MotionTick) sees the units that have had their turn where the beat
+// found them, like those still to come.
+const Vec3& CommittedPos(const Sim& sim, const Unit* u) {
+  return sim.coordsPending && u->lastPosTick == sim.tick() ? u->lastPosition : u->position;
+}
+const Quat& CommittedOri(const Sim& sim, const Unit* u) {
+  return sim.coordsPending && u->lastPosTick == sim.tick() ? u->lastOrientation : u->orientation;
+}
 // the rebuild's unit filter (0x568ca0): mobile, alive, complete
 bool ValidMember(const Unit* u) { return !Gone(u) && Mobile(u) && !u->beingBuilt && !u->parentId; }
 bool IsAirUnit(const Unit* u) { return u->motion.bp && u->motion.bp->motionType == kMotionAir; }
@@ -190,8 +201,8 @@ void AssignGroup(Formation& F, const std::vector<Unit*>& units, int k) {
   // unit side (8.2)
   double sx = 0, sz = 0;
   for (Unit* u : units) {
-    sx += u->position.x;
-    sz += u->position.z;
+    sx += CommittedPos(sim, u).x;
+    sz += CommittedPos(sim, u).z;
   }
   G.cx = static_cast<float>(sx / units.size());
   G.cz = static_cast<float>(sz / units.size());
@@ -201,7 +212,8 @@ void AssignGroup(Formation& F, const std::vector<Unit*>& units, int k) {
   };
   std::vector<URec> U;
   for (Unit* u : units) {
-    Vec3 rel{u->position.x - G.cx, 0, u->position.z - G.cz};
+    const Vec3& p = CommittedPos(sim, u);
+    Vec3 rel{p.x - G.cx, 0, p.z - G.cz};
     if (rotate && !AssignZero(F)) rel = RotW(F.aw, F.ax, F.ay, F.az, rel);
     U.push_back({u, rel.x, rel.z});
   }
@@ -300,7 +312,7 @@ void Rebuild(Formation& F) {
     Unit* u = UnitOf(sim, h);
     if (!ValidMember(u)) continue;
     valid.push_back(u);
-    Vec3 f = vm::Forward(u->orientation);
+    Vec3 f = vm::Forward(CommittedOri(sim, u));
     fx += f.x;
     fz += f.z;
     F.largest = std::max(F.largest, FormFootprint(u));
