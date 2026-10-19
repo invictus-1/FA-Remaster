@@ -67,6 +67,7 @@
 #include "seasons.h"  // [seasons]
 #include "shadows.h"
 #include "smoke.h"
+#include "sunlight.h"  // [sunlight]
 #include "terrain.h"
 #include "textures.h"
 #include "unit_wear.h"
@@ -877,6 +878,14 @@ class World {
   // the ground where its cover grows. On (with the season); false: none.
   bool fallingLeaves = true;
   FallingLeaves leaves;
+  // [sunlight] Sunlight through gaps (sunlight.h; the visuals session's proposals 1 and 2, Chris 2026-10-18). `lightShafts`:
+  // shafts of sunlight through gaps in the woods' crowns in the low haze over the ground (strongest on a misty morning and
+  // after rain), and rays under breaks in the clouds; needs the light in the air (volumetricFog). `driftingShadows`: the
+  // clouds broken into heaps of many sizes, their shadows drifting over land and sea with the wind, readable from every
+  // height of the camera, with or without the volumetric clouds. Modern look with a time of day; off by default (in the
+  // game's "Atmosphere" setting).
+  bool lightShafts = false, driftingShadows = false;
+  Sunlight sunlight;
 
  private:
   bool horizonNow_ = false;  // [horizon] (something of it this frame)

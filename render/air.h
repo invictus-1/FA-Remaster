@@ -53,12 +53,20 @@ class Air {
   float lampGlowInAir = 0.25f;  // of a beam's glow to all sides near its lamp (lights.h), what the air shows (all of it made halos)
   float sunForward = 0.6f, lampForward = 0.35f;      // how much of it goes on forward (0: alike to all sides)
   float keep = 0.9f;                   // how much of last frame's a cell keeps
+  // [sunlight] The light shafts (sunlight.h, World::lightShafts), set by the world before Build: the low band's haze and
+  // the haze under the clouds thicken the air, and the band's sunlight near the eye is left to the shafts' pass; `heights`
+  // the ground's (Terrain::HeightTexture), `woods` where the woods are (Sunlight::Woods). Off (or none): the gather as
+  // without them.
+  bool sunlight = false;
+  gfx::Texture heights, woods;
 
  private:
   bool Size(int width, int height);
 
   gfx::Device* device_;
   gfx::Pipeline gather_, sum_;
+  gfx::Pipeline gatherSunlight_;  // [sunlight] (made the first time the light shafts are on)
+  bool sunlightTried_ = false;
   gfx::Texture cells_[2];  // what each cell gathered: this frame's and last frame's, in turn
   gfx::Texture summed_;    // from the eye to each cell's far end: rgb the light gathered, a what comes through
   int width_ = 0, height_ = 0, depth_ = 0;

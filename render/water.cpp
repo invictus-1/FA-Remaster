@@ -506,6 +506,9 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   foam = 1 - (1 - foam) * (1 - ice.cover * ice.matte);
 #endif
   color = lerp(color, mirror, fresnel * (1 - foam));
+  // [sunlight] (drifting cloud shadows, sunlight.h) the sea darker in a cloud's shadow, its mirror of the sky too: from
+  // above, a cloud's shadow on the water reads as one darker patch, as on the land
+  [branch] if (cloudDrift.x > 0.5) color *= 1 - cloudDrift.w * saturate((1 - CloudShadow(i.world)) / max(cloudDrift.y, 1e-3));
   // the sun's (or the moon's) glint
   color += sunLight * (pow(saturate(dot(R, sunDirection)), 500) * 0.9 * shadow * (1 - foam));
   // at its very edge the water thins out to nothing over what is behind it

@@ -106,6 +106,13 @@ RWTexture2D<float> coverOut : register(u0);
   coverOut.GetDimensions(w, h);
   if (id.x >= w || id.y >= h) return;
   float2 q = coverAt.xy + ((id.xy + 0.5) / float2(w, h) - 0.5) / cloudSize.z;
+  // [sunlight] (drifting cloud shadows, sunlight.h) the heaps of many sizes, as many as the flat layer's drifting shadows
+  // have (view.h, CloudShadow: about the cover's share of the land under them), full in their middles, thinning over their
+  // last few units (the broken field varies less than the field: CloudFrom's thresholds would leave few clouds)
+  [branch] if (cloudDrift.x > 0.5) {
+    coverOut[id.xy] = saturate((CloudFieldBroken(q) - lerp(0.63, 0.37, skyClouds.x)) * 6 + 0.6);
+    return;
+  }
   coverOut[id.xy] = CloudFrom(CloudField(q));
 }
 

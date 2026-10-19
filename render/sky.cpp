@@ -145,10 +145,35 @@ float3 Stars(float3 d, float cells, float share, float brightest) {
 
 TextureCube mapSky : register(t29);
 
+// [sunlight] (drifting cloud shadows, sunlight.h) CloudSteps below, through the clouds' field broken into heaps of many
+// sizes (view.h, CloudFieldBroken): the layer then shows the clouds whose shadows drift over the ground. A copy of its
+// own, taken by a branch at CloudSteps's top, so that without it the layer is worked out exactly as before.
+void CloudStepsBroken(float3 d, const int steps, float start, float under, float3 around, float mark, float2 toLight, inout float through,
+                      inout float3 gathered) {
+  for (int k = 0; k < steps; ++k) {
+    float high = (k + start) / steps;
+    float2 q = cameraPosition.xz + d.xz * ((under + 45 * high) / (d.y + 0.1));
+    float field = CloudFieldBroken(q) + (Cloudy(float3(q * 0.03, high * 2 + skyClouds.w * 3)) - 0.47) * 0.14;
+    float thick = saturate((saturate((field - mark) * 5) - high * (0.85 - 0.6 * skyClouds.x)) * 2.5);
+    [branch] if (thick > 0.01) {
+      float fieldToLight = CloudFieldBroken(q + toLight);
+      float shade = saturate((saturate((fieldToLight - mark) * 5) - (high + 0.25) * (0.85 - 0.6 * skyClouds.x)) * 2.5);
+      float3 color = around * (0.32 + 0.5 * high) + cloudLight.rgb * (exp(-shade * 2.4) * 0.8);
+      float takes = thick * 0.42;
+      gathered += color * (through * takes);
+      through *= 1 - takes;
+    }
+  }
+}
+
 // The cloud layer's steps up through its thickness along a direction (PS, below): what of the light from behind still
 // comes through, and the light gathered on the way.
 void CloudSteps(float3 d, const int steps, float start, float under, float3 around, float mark, float2 toLight, inout float through,
                 inout float3 gathered) {
+  [branch] if (cloudDrift.x > 0.5) {  // [sunlight]
+    CloudStepsBroken(d, steps, start, under, around, mark, toLight, through, gathered);
+    return;
+  }
   for (int k = 0; k < steps; ++k) {
     float high = (k + start) / steps;
     float2 q = cameraPosition.xz + d.xz * ((under + 45 * high) / (d.y + 0.1));
