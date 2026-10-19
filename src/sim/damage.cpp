@@ -264,7 +264,6 @@ float ShieldReduce(const std::vector<Absorb>& S_, Entity* e, float amount) {
 // Entities whose primitive meets the sphere (ring: and not the inner sphere).
 std::vector<Entity*> Gather(Sim& sim, Vec3 c, float r, float rInner, bool ring) {
   std::vector<Entity*> out;
-  const float margin = 10;  // projectiles (not in our grid)
   auto test = [&](Entity* e) {
     WorldShape ws;
     if (!GetWorldShape(e, &ws)) return;  // destroy-queued entities stay candidates until teardown (damage.md 1.6)
@@ -283,14 +282,17 @@ std::vector<Entity*> Gather(Sim& sim, Vec3 c, float r, float rInner, bool ring) 
     out.push_back(e);
   };
   // COGrid::ForAllEntitiesIterator 0x721fb0 / the ring's 0x722560: the entity-grid cells covering the sphere's
-  // box (AABoxToRect 0x4fcbe0: floor / ceil), in grid order (units, then props, per cell); destroy-queued
-  // entities are still there until teardown
+  // box (AABoxToRect 0x4fcbe0: floor / ceil), in grid order; destroy-queued entities are still there until
+  // teardown. Both gather with the mask 0xf00 (0x737727 / 0x722650: GatherUnmarkedEntities 0x722df0): units, props,
+  // shells and the rest of the third list (shields, script entities), each where its cells are first met, after the
+  // cell's units and props. So a shield takes its damage (and its OnDamage its Random) in the cell order, not after
+  // everything else. Seen: MP2 11690, army 0's ACU death blast (acudeathweapon.lua:46) meets army 1's shield
+  // 0x40100005 (at 240.9, 409.1); the original's ApplyDamage Random (shield.lua:614) comes before the T2
+  // 0x1001ce (uea0203)'s death effects and debris. Ours took the shields, and the shells by their distance alone,
+  // after the grid's units and props.
   std::vector<Entity*> cand;
-  sim.entityGrid().GatherBox(c.x - r, c.z - r, c.x + r, c.z + r, 3, &cand);
+  sim.entityGrid().GatherBox(c.x - r, c.z - r, c.x + r, c.z + r, 15, &cand);
   for (Entity* e : cand) test(e);
-  for (Projectile* p : sim.projectiles)
-    if (std::fabs(p->position.x - c.x) <= r + margin && std::fabs(p->position.z - c.z) <= r + margin) test(p);
-  for (ShieldEntity* sh : sim.shields) test(sh);
   return out;
 }
 
