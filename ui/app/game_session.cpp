@@ -375,6 +375,12 @@ struct GameSession::Picture : WorldSource {
       w->hotMetal = w->movementDust = w->volumeExplosions = looks.battleEffects;
       w->remasteredBuild = looks.battleEffects;  // (render 6b8109e: the build effects remade; with the remastered effects and the modern look)
       w->energyShields = looks.energyShields;
+      // (the Photographic Look, render ef7e1bb: on change only; Named sets the grade, the eye and lens keep theirs)
+      if (!lookApplied || looks.photoLook != lookNow.photoLook) {
+        w->photoLook.on = looks.photoLook != 0;
+        static const char* const kNames[5] = {"", "plain", "film", "warm", "coldwar"};
+        if (w->photoLook.on) w->photoLook.Named(kNames[looks.photoLook]);
+      }
     }
     if (!lookApplied || looks.hiddenOutlines != lookNow.hiddenOutlines) picture.SetHiddenOutlines(looks.hiddenOutlines);
     // The cinematics' switches (UI_NisRenderIcons, ren_SelectBoxes, ren_Oblivion).

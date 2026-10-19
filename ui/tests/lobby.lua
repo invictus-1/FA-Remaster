@@ -96,6 +96,12 @@ for _, key in {'remaster_atmosphere', 'remaster_soft_shadows', 'remaster_weather
     check("the Video tab has " .. key .. ", on unless chosen", video[key] and video[key].default, 1)
 end
 check("Frame Generation off unless chosen", video.remaster_frame_generation.default, 0)
+check("the Photographic Look: Off unless chosen, and its five choices", video.remaster_photo_look and
+    video.remaster_photo_look.default .. " " .. table.getn(video.remaster_photo_look.custom.states), "0 5")
+video.remaster_photo_look.set('remaster_photo_look', 4, false)
+check("Cold War chosen in the menu reaches the program", moho64ui_Looks().photoLook, 4)
+video.remaster_photo_look.set('remaster_photo_look', 0, false)
+check("and Off again", moho64ui_Looks().photoLook, 0)
 check("Ray Tracing on unless chosen, where the card can", video.remaster_ray_tracing.default, moho64ui_RayTracingSupported() == false and 0 or 1)
 -- The Remastered Preset (Chris, 2026-10-17): the new looks set together; Custom (5) by default leaves them
 check("the Video tab has the Remastered Preset, Ultra unless chosen", video.remaster_preset and video.remaster_preset.default, 4)

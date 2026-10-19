@@ -393,6 +393,11 @@ struct LookSettings {
   // energyShields): shields that look like energy. Hidden Unit Outlines (WorldPicture::SetHiddenOutlines): units
   // seen behind trees and cliffs, only what the player may see, none in the Original look. All ON by default.
   bool battleEffects = true, energyShields = true, hiddenOutlines = true;
+  // The Photographic Look (the renderer's World::photoLook, render/photo_look.h; Chris, 2026-10-18: "an option in
+  // game as in you can choose which one you want"): 0 off (today's picture), 1 Natural (the adapting eye and the lens
+  // touches with today's colours: the grade "plain"), 2 Film, 3 Warm, 4 Cold War (the graded looks). A style pick, not
+  // a quality step: Off unless chosen (the renderer's proposal, told to Chris), in no preset. Modern look only.
+  int photoLook = 0;
   // Whether the graphics card can ray trace (WorldPicture::RayTracingSupported, asked after a picture opened,
   // the menu's or a game's): -1 not known yet, 0 no, 1 yes.
   int rayTracingSupported = -1;

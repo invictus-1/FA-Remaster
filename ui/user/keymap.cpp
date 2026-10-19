@@ -308,7 +308,8 @@ const std::vector<const char*>& ConsoleNames() {
         "remaster_rich_ground", "remaster_snow_tracks", "remaster_stats", "remaster_temporal_upscale", "remaster_tracers", "remaster_upscale",
         "remaster_atmosphere", "remaster_soft_shadows", "remaster_ray_tracing", "remaster_weather_effects",
         "remaster_ground_detail", "remaster_frame_generation", "remaster_water_ripples", "remaster_lens", "remaster_cinecam",
-        "remaster_photo", "remaster_battle_effects", "remaster_energy_shields", "remaster_hidden_outlines"};
+        "remaster_photo", "remaster_battle_effects", "remaster_energy_shields", "remaster_hidden_outlines",
+        "remaster_photo_look"};
     std::sort(all.begin(), all.end(), ConNameLess);
     return all;
   }();
@@ -387,6 +388,9 @@ int l_LooksForTests(lua_State* L) {
                            looks.originalLook, looks.temporalUpscale, looks.atmosphere, looks.softShadows, looks.rayTracing,
                            looks.weatherEffects, looks.groundDetail, looks.frameGeneration, looks.waterRipples, looks.lens,
                            looks.battleEffects, looks.energyShields, looks.hiddenOutlines};
+  lua_pushstring(L, "photoLook");
+  lua_pushnumber(L, looks.photoLook);
+  lua_rawset(L, -3);
   for (int i = 0; i < 18; ++i) {
     lua_pushstring(L, names[i]);
     lua_pushboolean(L, values[i]);
@@ -1064,6 +1068,15 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
                  : key == "REMASTER_HIDDEN_OUTLINES"  ? looks.hiddenOutlines
                                                       : looks.weatherEffects;
       if (!value.empty()) on = value[0] == '1' || Upper(value).rfind("ON", 0) == 0 || Upper(value).rfind("TRUE", 0) == 0;
+      return;
+    }
+    if (key == "REMASTER_PHOTO_LOOK") {  // (0 off, 1 natural, 2 film, 3 warm, 4 cold war; or those words)
+      if (!value.empty()) {
+        const std::string v = Upper(value);
+        const int named = v == "OFF" ? 0 : v == "NATURAL" ? 1 : v == "FILM" ? 2 : v == "WARM" ? 3 : v == "COLDWAR" ? 4 : -1;
+        const int n = named >= 0 ? named : std::atoi(value.c_str());
+        if (n >= 0 && n <= 4) looks.photoLook = n;
+      }
       return;
     }
     if (key == "REMASTER_TEMPORAL_UPSCALE") {  // (FSR 3: 0 off, 1 on)

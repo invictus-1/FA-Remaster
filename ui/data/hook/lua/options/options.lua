@@ -423,6 +423,25 @@ local looks = {
         },
     },
     {
+        -- the renderer's photographic finish (World::photoLook, render ef7e1bb; Chris, 2026-10-18: "it should just be an
+        -- option in game as in you can choose which one you want"): a style pick, Off unless chosen, in no preset
+        title = "Photographic Look",
+        key = 'remaster_photo_look',
+        tip = "A photographic finish: the exposure adapts to the scene like an eye, a film-like colour grade, and a light vignette and grain. Natural keeps today's colours; Film, Warm and Cold War grade them. Remastered look only.",
+        type = 'toggle',
+        default = 0,
+        set = Look("remaster_photo_look"),
+        custom = {
+            states = {
+                { text = "<LOC _Off>", key = 0 },
+                { text = "Natural", key = 1 },
+                { text = "Film", key = 2 },
+                { text = "Warm", key = 3 },
+                { text = "Cold War", key = 4 },
+            },
+        },
+    },
+    {
         -- the renderer's battle looks as one setting (agreed 2026-10-18): World's blastWaves, blastDust, blastDebris, litSmoke, smokeShadows, heatShimmer, unitScars
         title = "Battle Effects",
         key = 'remaster_battle_effects',
