@@ -381,7 +381,7 @@ void PropOccupancy(Sim& sim, Prop* p, const Vec3& pos, bool occupy) {
 // it. CScriptObject::GetLuaValue 0x5fca70: the object's LuaObject (+0x20), LuaPlus GetByName 0x90a160 (0x908f60: a
 // raw lookup of the string key in the table's nodes, no __index), lua_tonumber (0 for nil or a non-number); an
 // exception (not a table) gives 0. CScriptObject::SetLuaValue 0x5fcb70: LuaPlus SetNumber 0x908320 ->
-// SetTableHelper 0x9074b0 -> luaV_settable (0x929450). (Not ScriptNumber / SetObjectValue: those keep the engine's
+// SetTableHelper 0x9074b0 -> luaV_settable (0x929450). (Not PushObjectValue / SetObjectValue: those keep the engine's
 // own Set<X> values in a side table, which no script reads as a field.)
 float ScriptFieldNumber(lua_State* L, ScriptObject* o, const char* key) {
   const int top = lua_gettop(L);
@@ -2726,12 +2726,6 @@ Unit* UnitOfRef(Sim& sim, uint32_t ref) {
   Entity* e = ref ? sim.FindEntity(ref) : nullptr;
   return e && e->kind == Entity::Kind::Unit ? static_cast<Unit*>(e) : nullptr;
 }
-float ScriptNumber(lua_State* L, Unit* u, const char* key) {  // CScriptObject::GetLuaValue 0x5fca70
-  PushObjectValue(L, u, key);
-  float v = static_cast<float>(lua_tonumber(L, -1));
-  lua_pop(L, 1);
-  return v;
-}
 
 int TickSacrifice(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   if (t.moving) {  // the move child: the task runs again when it ends
@@ -2801,14 +2795,16 @@ int TickSacrifice(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
       // each as a fraction of the target's cost; a cost of 0 counts as a half (0xe4f724), the smaller one is given
       auto share = [](float given, float cost) { return cost > 0.0f ? given / cost : 0.5f; };
       if (T->unitStates.count("Enhancing")) {
-        float p = ScriptNumber(L, T, "WorkProgress");
-        float r = std::min(share(mass, ScriptNumber(L, T, "WorkItemBuildCostMass")),
-                           share(energy, ScriptNumber(L, T, "WorkItemBuildCostEnergy")));
-        p += r;
+        // (unit state 0x26, 0x5fb27d..0x5fb3a9) the target's own Lua fields, as the scripts write them: WorkProgress
+        // (0x5fb2aa), WorkItemBuildCostMass (0x5fb2d3), WorkItemBuildCostEnergy (0x5fb31f), then WorkProgress
+        // written back (0x5fb392 / 0x5fb3a4). (Ours read and wrote its side table of engine values: the scripts'
+        // fields read 0 and the sacrifice's share never reached FAF's EnhanceTask.)
+        float p = ScriptFieldNumber(L, T, "WorkProgress");
+        const float rm = share(mass, ScriptFieldNumber(L, T, "WorkItemBuildCostMass"));
+        const float re = share(energy, ScriptFieldNumber(L, T, "WorkItemBuildCostEnergy"));
+        p += rm > re ? re : rm;
         if (p > 1.0f) p = 1.0f;
-        lua_pushnumber(L, p);
-        SetObjectValue(L, T, "WorkProgress", lua_gettop(L));
-        lua_pop(L, 1);
+        SetScriptFieldNumber(L, T, "WorkProgress", p);
       } else {
         const UnitBpData* td = T->bpData;
         float rm = share(mass, td ? td->buildCostMass : 0.0f), re = share(energy, td ? td->buildCostEnergy : 0.0f);
