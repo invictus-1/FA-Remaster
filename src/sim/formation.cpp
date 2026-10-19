@@ -1009,13 +1009,14 @@ bool FormationAdjusted(Sim& sim, UnitCommand& c, Unit* u, float* x, float* z) {
   return true;
 }
 
-// vt+0x08 SetCentre 0x569a30: a new centre (both finite, and different from the old one) moves the formation;
-// the adjusted-position cache and the reservations go, the slots stay (no rebuild)
+// vt+0x08 SetCentre 0x569a30: a new centre (different from the old one, 0x569a44..0x569a6b, and neither x nor z a NaN:
+// _isnan 0x569a86 / 0x569aa0) moves the formation; the adjusted-position cache and the reservations go, the slots
+// stay (no rebuild)
 void FormationSetCentre(UnitCommand& c, float x, float z) {
   if (!c.form) return;
   Formation& F = *c.form;
   if (F.cx == x && F.cz == z) return;
-  if (!std::isfinite(x) || !std::isfinite(z)) return;
+  if (std::isnan(x) || std::isnan(z)) return;
   F.cx = x;
   F.cz = z;
   F.adjusted.clear();

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <set>
 #include <strings.h>
 
@@ -476,8 +477,12 @@ void CommandStream::Apply(Sim& sim, int type, const std::string& payload) {
       // CUnitCommand::SetTarget 0x6e8820: a command with a formation (+0x118) moves it to the target's point
       // (GetTargetPosGun 0x5e2a90 with the flag clear, then the formation's vt+0x08 SetCentre(x, z)) before it tells
       // its listeners (0x6e94a0)
+      // GetTargetPosGun gives a point target's point and an entity's gun point; for no target, or an entity target
+      // whose weak pointer is empty (the stream named an entity that is not there: 0x5e2ac5..0x5e2ad3), it gives its
+      // static "no target" vector, all NaN (0x5e2ba3..0x5e2bc9), and SetCentre leaves the centre (FormationSetCentre)
       if (c->form) {
-        const Vec3 p = c->targetId ? CommandPosGun(sim, *c) : c->pos;  // as GenerateFormation (formation.cpp)
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        const Vec3 p = t.type == 2 ? c->pos : c->targetId ? CommandPosGun(sim, *c) : Vec3{nan, nan, nan};
         FormationSetCentre(*c, p.x, p.z);
       }
       RetargetMoveTasks(sim, *c);  // CUnitCommand::SetTarget 0x6e8820 -> its listeners (0x6e94a0, event 0)
