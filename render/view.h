@@ -453,16 +453,92 @@ float MistLost(float3 world) {
 }
 // Light in the air (air.h), when it is on: what the air between the eye and `world` adds to what is
 // seen there (rgb) and what of the light from there still comes through (a). The volume holds, for
-// each cell, the sum from the eye to the cell's far end, its depth spaced by the log of the distance.
+// each cell, the sum from the eye to the cell's far end, its depth spaced by the log of the distance;
+// (airfix) the cell its column meets the ground in ends there, and its last layer says where (air.cpp, Sum).
 Texture3D airVolume : register(t30);
+// (airfix) The volume's layers past its cells: where each column meets the ground (x, and y / 1024: a share of the volume's
+// depth by the log of the distance; 2: never), then the column's sums at places before where it meets the ground, from
+// kAirPast steps past it to kAirAhead steps before it, a step a kAirAhead-th of a cell's length there (air.cpp, Sum).
+static const int kAirAhead = 6, kAirPast = 2;
+static const int kAirLayers = 2 + kAirAhead + kAirPast;  // (all past the cells)
+// The air's thickness along a line of sight: the mist thickest at its floor and thinning upward (`mistHere` its thickness at
+// the floor; summed as MistLost sums it), the rest alike all along (`rest`, per world unit). Its heights over the mist's floor
+// in the mist's depths at `t` world units from the eye (`y0` the eye's height, `rayY` how much it climbs a unit), held below
+// its floor as the gather holds them:
+float AirMistHeight(float t, float y0, float rayY) { return max((y0 + rayY * t - mist.y) * mist.z, -1); }
+// and from t0 to t1, from those (`u0`, `e0` = exp(-u0); `u1`, `e1`).
+float AirStretch(float t0, float t1, float u0, float e0, float u1, float e1, float mistHere, float rest) {
+  float mean = abs(u1 - u0) > 1e-3 ? (e0 - e1) / (u1 - u0) : e0;
+  return (mistHere * mean + rest) * max(t1 - t0, 0);
+}
+// How far through the air of a stretch from `begins` to `ends` a place `t` lies (0..1), by how its thickness is spread.
+float AirShareOf(float t, float begins, float ends, float y0, float rayY, float mistHere, float rest) {
+  float upto = clamp(t, begins, ends);
+  [branch] if (mistHere > 0) {
+    float u0 = AirMistHeight(begins, y0, rayY), u1 = AirMistHeight(upto, y0, rayY), u2 = AirMistHeight(ends, y0, rayY);
+    float e0 = exp(-u0), e1 = exp(-u1), e2 = exp(-u2);
+    float done = AirStretch(begins, upto, u0, e0, u1, e1, mistHere, rest);
+    float whole = done + AirStretch(upto, ends, u1, e1, u2, e2, mistHere, rest);
+    return whole > 1e-9 ? saturate(done / whole) : 1;
+  }
+  return ends > begins ? (upto - begins) / (ends - begins) : 1;
+}
+// Between the sums at a stretch's near end and its far end, a place `share` of the way through its air (the light it throws
+// and what it takes, both as its own light falls off through it).
+float4 AirBetween(float4 from, float4 into, float share) {
+  float kept = saturate(into.a / max(from.a, 1e-6));
+  float lost = kept > 0.8 ? (1 - kept) * (1 + 0.5 * (1 - kept)) : -log(max(kept, 1e-6));
+  float w = share * (1 + 0.5 * lost * (1 - share));  // (thin: near enough, without the exponentials)
+  [branch] if (lost > 0.2) w = (1 - exp(-lost * share)) / (1 - exp(-lost));
+  return lerp(from, into, w);
+}
 float4 AirAt(float3 world) {
   float4 clip = mul(viewProj, float4(world, 1));
   float2 uv = clip.w > 1e-4 ? saturate(clip.xy / clip.w * float2(0.5, -0.5) + 0.5) : float2(0.5, 0.5);
-  uint cellsX, cellsY, cellsZ;
-  airVolume.GetDimensions(cellsX, cellsY, cellsZ);
-  float along = log(max(length(world - cameraPosition), air.y) / air.y) / air.z * cellsZ;  // (in cells)
-  float4 a = airVolume.SampleLevel(samplerLinearClamp, float3(uv, max(along - 0.5, 0.5) / cellsZ), 0);
-  if (along < 1) a = lerp(float4(0, 0, 0, 1), a, along);  // (nearer than the first cell's far end)
+  uint cellsX, cellsY, layers;
+  airVolume.GetDimensions(cellsX, cellsY, layers);
+  // (airfix) Near the ground, from the columns' sums at places as far before where each meets the ground as this place lies
+  // before the ground between them (read at the same distance, the nearer columns' sums end short of it at their own ground:
+  // lines and stripes where the columns met the ground in different cells); away from it, from the cell it lies in, how far
+  // through it by how the air is spread over it (AirShareOf), not by its share of the distance (a thin layer of mist in a
+  // long cell showed as rings of fog round the eye, one to a cell).
+  int cellsZ = int(layers) - kAirLayers;
+  float step = air.z / cellsZ, growth = exp(step);
+  float away = length(world - cameraPosition), rayY = (world.y - cameraPosition.y) / max(away, 1e-4);
+  // where the four columns round the place meet the ground (in full: the card filters half floats to their own precision)
+  float2 across = uv * float2(cellsX, cellsY) - 0.5, f = frac(across);
+  int2 corner = int2(floor(across)), last = int2(cellsX, cellsY) - 1;
+  float4 ground, weight;
+  [unroll] for (int c = 0; c < 4; ++c) {
+    int2 o = int2(c & 1, c >> 1);
+    float2 meets = airVolume.Load(int4(clamp(corner + o, 0, last), cellsZ, 0)).xy;
+    ground[c] = air.y * exp((meets.x + meets.y / 1024) * air.z);
+    weight[c] = (o.x ? f.x : 1 - f.x) * (o.y ? f.y : 1 - f.y);
+  }
+  float lo = min(min(ground.x, ground.y), min(ground.z, ground.w)), hi = max(max(ground.x, ground.y), max(ground.z, ground.w));
+  float mid = dot(ground, weight);
+  float ahead = (mid - away) / (mid * (1 - 1 / growth)) * kAirAhead;  // (how far before the ground, in the steps of its layers)
+  // (by the ground's layers: fully within them, fading out over their last step either end, not across an edge where the
+  // columns meet the ground far apart)
+  float byGround = saturate(kAirAhead - ahead) * saturate(ahead + kAirPast) * saturate(2 - (hi - lo) / max(0.125 * away, 1e-3));
+  float4 a = 0;
+  [branch] if (byGround < 1) {
+    // (the mist's banks only matter beside the weather's haze: alone, its spread is the same in them as between them)
+    float mistHere = mist.x;
+    [branch] if (mistHere > 0 && weather.z > 0) {
+      float2 q = world.xz + skyClouds.yz * 0.12;
+      mistHere *= smoothstep(0.28, 0.8, CloudNoise(float3(q * 0.008, skyClouds.w * 2.5 + 11.0)) * 0.5 + CloudNoise(float3(q.yx * 0.021 + 7.3, skyClouds.w * 4.0 + 3.0)) * 0.3 +
+                                        CloudNoise(float3(q * 0.057 + 2.9, skyClouds.w * 6.0 + 5.0)) * 0.2) * 1.5;
+    }
+    int k = min(int(log(max(away, air.y) / air.y) / step), cellsZ - 1);
+    float end = air.y * exp((k + 1) * step), start = k > 0 ? end / growth : 0;
+    float4 from = k > 0 ? airVolume.SampleLevel(samplerLinearClamp, float3(uv, (k - 0.5) / layers), 0) : float4(0, 0, 0, 1);
+    float4 into = airVolume.SampleLevel(samplerLinearClamp, float3(uv, (k + 0.5) / layers), 0);
+    float ends = mid >= start ? min(end, max(mid, away)) : end;  // (the cell ends at the ground where it meets it)
+    a = AirBetween(from, into, AirShareOf(away, start, ends, cameraPosition.y, rayY, mistHere, weather.z + 1.5e-4)) * (1 - byGround);
+  }
+  [branch] if (byGround > 0)
+    a += airVolume.SampleLevel(samplerLinearClamp, float3(uv, (cellsZ + 1 + kAirPast + clamp(ahead, -kAirPast, kAirAhead) + 0.5) / layers), 0) * byGround;
   // (never all of a far thing hidden: what is lost is held to the most the air may hide)
   float kept = max(a.a, 1 - air.w);
   a.rgb *= (1 - kept) / max(1 - a.a, 1e-4);

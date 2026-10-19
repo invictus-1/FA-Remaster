@@ -12,19 +12,22 @@
 namespace render {
 namespace {
 
+constexpr int kAirLayersPast = 10;  // (airfix) the summed volume's layers past its cells: view.h's kAirLayers
+
 // What both shaders are told (b1): the camera's axes for the cells' rays, the volume's size and range,
 // last frame's view for the blending, and the strengths.
 struct AirConstants {
   float right[4];      // xyz: the camera's right x tan(half the view's width)
   float up[4];         // xyz: up x tan(half the view's height); w: where in each cell's depth this frame samples (0..1)
   float ahead[4];      // xyz: forward; w: how much of last frame's a cell keeps (0: none)
-  float cells[4];      // cells across, down, deep
+  float cells[4];      // cells across, down, deep; w (airfix) the places each cell takes this frame
   float range[4];      // x the nearest distance, y log(farthest / nearest), z the air's own thickness, w the lamps' light in it
   Mat4 lastViewProj;   // last frame's
   float lastEye[4];    // xyz: last frame's eye; w: last frame's log(farthest / nearest)
   float light[4];      // x the sun's forward scattering, y the lamps', z the sun's light in the air, w the sky's
   float lastRange[4];  // x last frame's nearest distance; y the height the haze and dust thin above; z 1 / their scale height; w the share of a lamp's glow to all sides the air takes
   float points[4];     // x the other small lights' (flashes, glows) light in the air
+  float ground[4];     // (airfix) x the ground's height unit (0: no heights, nothing left out); y, z the map's width and height; w the water's level (-1e9: none)
 };
 
 const char kShader[] = R"hlsl(
@@ -39,6 +42,7 @@ cbuffer Air : register(b1) {
   float4 airLight;
   float4 lastRange;
   float4 airPoints;
+  float4 airGround;
 };
 
 // Henyey-Greenstein: how much of the light goes off at an angle whose cosine is `c` (g > 0: forward).
@@ -48,6 +52,38 @@ float AirPhase(float c, float g) {
 }
 float CellDistance(float t) { return airRange.x * exp(t * airRange.y); }  // (t: 0 .. 1 along the volume's depth)
 float3 CellRay(float2 uv) { return normalize(airAhead.xyz + airRight.xyz * (uv.x * 2 - 1) + airUp.xyz * (1 - uv.y * 2)); }
+
+// (airfix) The ground: there is no air under it. A column of cells goes on past where it meets the ground (or the water),
+// and the mist is thickest low down: what the cells there gathered under the ground was laid over the ground itself as
+// rings of fog round the eye, one to a cell. So the cell a column meets the ground in gathers over its stretch above the
+// ground only, Sum ends that cell's sum where the column meets the ground and says where that is (in the summed volume's
+// last layer) for AirAt (view.h), which takes the cell a place lies in only as far as the place. The cells past it are
+// read only by what is seen past the place the column's middle meets the ground (the far sea and land when the camera
+// looks along them, the land behind a ridge): they gather the air just over the ground under them.
+Texture2D<float> airHeights : register(t7);  // the ground's heights (Terrain::HeightTexture)
+// The ground's height under a place: the map's heights (past its edge mirrored, as the world beyond lays them), or the
+// water's level where that is higher (as sunlight.cpp's ShaftGround).
+float AirGround(float2 xz) {
+  float2 m = MirrorUv(xz / airGround.yz) * airGround.yz;
+  return max(airHeights.SampleLevel(samplerLinearClamp, (m + 0.5) / (airGround.yz + 1), 0) * airGround.x, airGround.w);
+}
+// How far along `ray` the stretch from `t0` to `t1` lies above the ground: `t1` when its far end does (a ridge it dips
+// under between them is not looked for), `t0` when its near end lies under it already, else where it meets the ground.
+float AirOverGround(float3 ray, float t0, float t1) {
+  if (airGround.x <= 0) return t1;
+  float3 far = cameraPosition + ray * t1;
+  if (far.y >= AirGround(far.xz)) return t1;
+  float3 near = cameraPosition + ray * t0;
+  if (near.y < AirGround(near.xz)) return t0;
+  float lo = t0, hi = t1;
+  [unroll] for (int i = 0; i < 7; ++i) {
+    float t = (lo + hi) * 0.5;
+    float3 p = cameraPosition + ray * t;
+    if (p.y >= AirGround(p.xz)) lo = t;
+    else hi = t;
+  }
+  return (lo + hi) * 0.5;
+}
 
 // How thick the air is at a place (the share of light lost per world unit): its own dust and the haze of
 // the weather, thinning with height above the ground, and the mist on low ground in its drifting banks (as
@@ -131,46 +167,68 @@ RWTexture3D<float4> airTarget : register(u0);
   if (any(id >= uint3(airCells.xyz))) return;
   float2 uv = (id.xy + 0.5) / airCells.xy;
   float3 ray = CellRay(uv);
-  float3 p = cameraPosition + ray * CellDistance((id.z + airUp.w) / airCells.z);
-  float dust;
-  float thick = Thickness(p, dust);
-  float3 scattered = 0;
+  // (airfix) this frame's place in the cell: in the cell the column meets the ground in, in its stretch above it; under the
+  // ground (past it), just over the ground there
+  float t0 = CellDistance(id.z / airCells.z), t1 = CellDistance((id.z + 1) / airCells.z);
+  float clearTo = AirOverGround(ray, t0, t1);
+  // (airfix) a weather cut's first frame (Air::Restart) takes several places, evenly spread over the cell: one alone, at the
+  // same share of every cell's depth, is off the cells' mean all alike, and the frames after would keep that
+  float4 now = 0;
+  uint samples = max(uint(airCells.w), 1u);
+  for (uint i = 0; i < samples; ++i) {
+    float jitter = frac(airUp.w + float(i) / samples);
+    float at = clearTo < t1 && clearTo > t0 ? t0 * exp(jitter * log(clearTo / t0)) : CellDistance((id.z + jitter) / airCells.z);
+    float3 p = cameraPosition + ray * at;
+    [branch] if (clearTo < t1) {  // (a unit over it: not in the ground's own shadow)
+      float g = AirGround(p.xz);
+      if (p.y < g) p.y = g + 1;
+    }
+    float dust;
+    float thick = Thickness(p, dust);
+    float3 scattered = 0;
 #ifdef SUNLIGHT
-  // [sunlight] (sunlight.h; built only for the light shafts) the low band's haze and the haze under the clouds' layer
-  // thicken the air; the band's sunlight near the eye is the shafts' pass's (ShaftShare), worked out there finely; the
-  // haze under the clouds (half as much lost as it scatters: thin, its light mostly forward) shows the clouds' shadow
-  // as rays.
-  float over = p.y - ShaftGround(p.xz);
-  float band = ShaftHaze(p, over), under = LowHaze(over);
-  float near = thick + band;
-  thick = near + under * 0.5;
-  [branch] if (thick > 0) {
-    float3 falls = ToLinear(sunColor) * (lightMultiplier * modern.x * 3.14159265) * SunInAir(p) * CloudShadow(p) * SmokeShadow(p);
-    float c = dot(sunDirection, ray);
-    float3 sun = falls * (AirPhase(c, airLight.x) * airLight.z * near * (1 - ShaftShare(over, length(p - cameraPosition))) + AirPhase(c, shaftLow.y) * airLight.z * under * (1 - LowShare(length(p - cameraPosition))));
-    float3 points;
-    float3 beams = LampsInAir(p, ray, points);
-    scattered = sun + SkyInAir() * (modern.y * airLight.w) * thick + beams * (thick + dust * max(airRange.w - 1, 0)) +
-                points * (thick + dust * max(airPoints.x - 1, 0));
-  }
+    // [sunlight] (sunlight.h; built only for the light shafts) the low band's haze and the haze under the clouds' layer
+    // thicken the air; the band's sunlight near the eye is the shafts' pass's (ShaftShare), worked out there finely; the
+    // haze under the clouds (half as much lost as it scatters: thin, its light mostly forward) shows the clouds' shadow
+    // as rays.
+    float over = p.y - ShaftGround(p.xz);
+    float band = ShaftHaze(p, over), under = LowHaze(over);
+    float near = thick + band;
+    thick = near + under * 0.5;
+    [branch] if (thick > 0) {
+      float3 falls = ToLinear(sunColor) * (lightMultiplier * modern.x * 3.14159265) * SunInAir(p) * CloudShadow(p) * SmokeShadow(p);
+      float c = dot(sunDirection, ray);
+      float3 sun = falls * (AirPhase(c, airLight.x) * airLight.z * near * (1 - ShaftShare(over, length(p - cameraPosition))) + AirPhase(c, shaftLow.y) * airLight.z * under * (1 - LowShare(length(p - cameraPosition))));
+      float3 points;
+      float3 beams = LampsInAir(p, ray, points);
+      scattered = sun + SkyInAir() * (modern.y * airLight.w) * thick + beams * (thick + dust * max(airRange.w - 1, 0)) +
+                  points * (thick + dust * max(airPoints.x - 1, 0));
+    }
 #else
-  [branch] if (thick > 0) {
-    float3 sun = ToLinear(sunColor) * (lightMultiplier * modern.x * 3.14159265) * AirPhase(dot(sunDirection, ray), airLight.x) * SunInAir(p) * CloudShadow(p) * SmokeShadow(p);
-    // (the lamps' light strengthened on the clear air's dust alone: in mist and fog a beam shows by itself)
-    float3 points;
-    float3 beams = LampsInAir(p, ray, points);
-    scattered = (sun * airLight.z + SkyInAir() * (modern.y * airLight.w)) * thick + beams * (thick + dust * max(airRange.w - 1, 0)) +
-                points * (thick + dust * max(airPoints.x - 1, 0));
-  }
+    [branch] if (thick > 0) {
+      float3 sun = ToLinear(sunColor) * (lightMultiplier * modern.x * 3.14159265) * AirPhase(dot(sunDirection, ray), airLight.x) * SunInAir(p) * CloudShadow(p) * SmokeShadow(p);
+      // (the lamps' light strengthened on the clear air's dust alone: in mist and fog a beam shows by itself)
+      float3 points;
+      float3 beams = LampsInAir(p, ray, points);
+      scattered = (sun * airLight.z + SkyInAir() * (modern.y * airLight.w)) * thick + beams * (thick + dust * max(airRange.w - 1, 0)) +
+                  points * (thick + dust * max(airPoints.x - 1, 0));
+    }
 #endif
-  float4 now = float4(scattered, thick);
+    now += float4(scattered, thick);
+  }
+  now /= samples;
   // what the cell held last frame, read where its middle was then
   [branch] if (airAhead.w > 0) {
     float3 middle = cameraPosition + ray * CellDistance((id.z + 0.5) / airCells.z);
+    // (airfix) where the column meets the ground in it: the middle of its stretch above the ground, and the cell that holds
+    // that last frame, not blended with the one before or after it (in motion they were, and arcs showed)
+    bool snap = clearTo < t1 && clearTo > t0;
+    if (snap) middle = cameraPosition + ray * sqrt(t0 * clearTo);
     float4 c = mul(lastViewProj, float4(middle, 1));
     if (c.w > 1e-3) {
       float2 lastUv = c.xy / c.w * float2(0.5, -0.5) + 0.5;
       float lastT = log(max(length(middle - lastEye.xyz), lastRange.x) / lastRange.x) / lastEye.w;
+      if (snap) lastT = (floor(lastT * airCells.z) + 0.5) / airCells.z;
       if (all(lastUv >= 0) && all(lastUv <= 1) && lastT <= 1) now = lerp(now, airSource.SampleLevel(samplerLinearClamp, float3(lastUv, lastT), 0), airAhead.w);
     }
   }
@@ -179,21 +237,86 @@ RWTexture3D<float4> airTarget : register(u0);
 
 // Along each column from the eye outward: the light each cell throws toward the eye, dimmed by the air
 // before it (what a cell of even thickness and light gives over its length, so a thick cell is not too bright).
+// (airfix) The cell the column meets the ground in only as far as the ground, the next one on from there (what lies past is
+// seen only past the place the column's middle meets the ground: the far sea and land when the camera looks along them, and
+// by the next column's places as the volume is filtered). Into the layers past the cells (view.h, kAirLayers): where the
+// column meets the ground (a share of the volume's depth by the log of the distance; 2: it never does; in two parts, the
+// second what the first's half float loses, a thousand times over), and the column's sums at the places before it and just
+// past it that AirAt reads near the ground (the cells' sums there taken by how the air is spread over them, AirShareOf).
 [numthreads(8, 8, 1)] void Sum(uint3 id : SV_DispatchThreadID) {
   if (any(id.xy >= uint2(airCells.xy))) return;
+  float3 ray = CellRay((id.xy + 0.5) / airCells.xy);
   float3 light = 0;
-  float through = 1, start = 0;
-  uint depth = uint(airCells.z);
+  float through = 1, start = 0, ground = 2, meets = 0, lastStart = 0, growth = exp(airRange.y / airCells.z);
+  float4 lastFrom = float4(0, 0, 0, 1), atGround = float4(0, 0, 0, 1);
+  uint depth = uint(airCells.z), layer = depth + 1 + kAirPast;  // (the layer of the column's sum at the ground)
+  int past = 0;  // (1: this cell is the one after the ground's)
+  // where the column meets the ground: the first cell whose far end lies under it (four cells' ends read at a time: one
+  // thread a column, each reading waiting on the last), then halved down in it (AirOverGround, as Gather has it)
+  uint metCell = depth;
+  float metAt = 0;
+  [branch] if (airGround.x > 0) {
+    for (uint s = 0; s < depth && metCell == depth; s += 4) {
+      float4 under;
+      [unroll] for (uint i = 0; i < 4; ++i) {
+        float3 p = cameraPosition + ray * CellDistance(min(s + i + 1, depth) / airCells.z);
+        under[i] = p.y < AirGround(p.xz) ? 1 : 0;
+      }
+      metCell = under.x > 0 ? s : under.y > 0 ? s + 1 : under.z > 0 ? s + 2 : under.w > 0 ? s + 3 : depth;
+    }
+    metCell = min(metCell, depth);
+    if (metCell < depth) metAt = AirOverGround(ray, CellDistance(metCell / airCells.z), CellDistance((metCell + 1) / airCells.z));
+  }
   for (uint s = 0; s < depth; ++s) {
-    float end = CellDistance((s + 1) / airCells.z);
+    float stop = CellDistance((s + 1) / airCells.z);
+    bool met = s == metCell;
+    if (met) {
+      stop = max(metAt, start);
+      ground = log(max(stop, airRange.x) / airRange.x) / airRange.y;
+    }
+    float4 from = float4(light, through);
     float4 g = airSource.Load(int4(id.xy, s, 0));
     float thick = max(g.a, 1e-7);
-    float cell = exp(-thick * (end - start));
+    float cell = exp(-thick * (stop - start));
     light += through * (g.rgb / thick) * (1 - cell);
     through *= cell;
-    airTarget[uint3(id.xy, s)] = float4(light, through);
-    start = end;
+    float4 into = float4(light, through);
+    airTarget[uint3(id.xy, s)] = into;
+    float len = meets * (1 - 1 / growth) / kAirAhead;  // (a step of the ground's layers)
+    [branch] if (past == 1) {  // the stretch from the ground on, its air alike all along
+      for (int j = 1; j <= kAirPast; ++j)
+        airTarget[uint3(id.xy, layer - j)] = AirBetween(atGround, into, saturate(j * len / max(stop - start, 1e-4)));
+      past = 2;
+    }
+    [branch] if (met) {  // the places before the ground: in this cell, or the one before
+      meets = stop;
+      atGround = into;
+      past = 1;
+      len = meets * (1 - 1 / growth) / kAirAhead;
+      float3 p = cameraPosition + ray * meets;
+      float2 q = p.xz + skyClouds.yz * 0.12;
+      float mistHere = mist.x > 0 ? mist.x * smoothstep(0.28, 0.8, CloudNoise(float3(q * 0.008, skyClouds.w * 2.5 + 11.0)) * 0.5 +
+                                                              CloudNoise(float3(q.yx * 0.021 + 7.3, skyClouds.w * 4.0 + 3.0)) * 0.3 +
+                                                              CloudNoise(float3(q * 0.057 + 2.9, skyClouds.w * 6.0 + 5.0)) * 0.2) * 1.5 : 0;
+      float rest = weather.z + airRange.z;
+      for (int j = 0; j <= kAirAhead; ++j) {
+        float t = max(meets - j * len, lastStart);
+        airTarget[uint3(id.xy, layer + j)] = t >= start ? AirBetween(from, into, AirShareOf(t, start, meets, cameraPosition.y, ray.y, mistHere, rest))
+                                                        : AirBetween(lastFrom, from, AirShareOf(t, lastStart, start, cameraPosition.y, ray.y, mistHere, rest));
+      }
+    }
+    lastFrom = from;
+    lastStart = start;
+    start = stop;
   }
+  // (a column that never meets the ground, or meets it in the last cell: its layers its last sum)
+  if (past < 2)
+    for (int j = past == 1 ? 1 : -kAirAhead; j <= kAirPast; ++j) airTarget[uint3(id.xy, layer - j)] = float4(light, through);
+  // (the first part cut to the ten bits of a half float's mantissa by its bits: a half float holds it exactly; Vulkan's
+  // compiler took f16tof32(f32tof16(x)) for x, the second part was then 0 and the ground's distance had a half float's
+  // precision there, in blocks and rings)
+  float coarse = asfloat(asuint(ground) & 0xFFFFE000u);
+  airTarget[uint3(id.xy, depth)] = float4(coarse, (ground - coarse) * 1024, 0, 1);
 }
 )hlsl";
 
@@ -236,6 +359,7 @@ bool Air::Size(int width, int height) {
   td.format = gfx::Format::RGBA16F;
   cells_[0] = device_->CreateTarget(td);
   cells_[1] = device_->CreateTarget(td);
+  td.depth = d + kAirLayersPast;  // (airfix: and the layers past the cells, view.h's kAirLayers)
   summed_ = device_->CreateTarget(td);
   width_ = w;
   height_ = h;
@@ -271,6 +395,11 @@ void Air::Build(View* view, const Camera& camera, gfx::Texture sunShadows, gfx::
   // this frame's place inside each cell's depth: the golden ratio's steps, which spread evenly over frames
   k.up[3] = std::fmod(static_cast<float>(frame_) * 0.6180339887f, 1.0f);
   k.ahead[3] = haveLast_ ? std::clamp(keep, 0.0f, 0.98f) : 0.0f;
+  // (airfix) from a fresh start (a weather cut, Restart; the first frame): four places a cell, evenly spread, and the frames
+  // after keep the mean of all since then until that is as much as `keep` keeps (else the first frame's one place, at the
+  // same share of every cell's depth, lingered off the mean for a quarter of a second)
+  if (haveLast_) k.ahead[3] = std::min(k.ahead[3], counted_ / (counted_ + 1));
+  k.cells[3] = haveLast_ ? 1.0f : 4.0f;
   k.cells[0] = static_cast<float>(width_);
   k.cells[1] = static_cast<float>(height_);
   k.cells[2] = static_cast<float>(depth_);
@@ -289,6 +418,12 @@ void Air::Build(View* view, const Camera& camera, gfx::Texture sunShadows, gfx::
   k.lastRange[2] = 1 / std::max(thinsOver, 1.0f);
   k.lastRange[3] = std::max(lampGlowInAir, 0.0f);
   k.points[0] = std::max(pointsInAir, 0.0f);
+  // (airfix) the ground, where the cells' air ends
+  const bool ground = heights && heightUnit > 0 && mapWidth > 0 && mapHeight > 0;
+  k.ground[0] = ground ? heightUnit : 0.0f;
+  k.ground[1] = std::max(mapWidth, 1.0f);
+  k.ground[2] = std::max(mapHeight, 1.0f);
+  k.ground[3] = waterLevel;
   k.light[0] = std::clamp(sunForward, -0.95f, 0.95f);
   k.light[1] = std::clamp(lampForward, -0.95f, 0.95f);
   k.light[2] = std::max(sunInAir, 0.0f);
@@ -319,6 +454,7 @@ void Air::Build(View* view, const Camera& camera, gfx::Texture sunShadows, gfx::
   device_->SetTexture(0, last);
   device_->SetTexture(kShadowMapSlot, sunShadows);
   device_->SetTexture(kLampShadowSlot, lampShadows);
+  device_->SetTexture(7, ground ? heights : gfx::Texture{});  // (airfix)
   if (lights) lights->Bind();
   device_->SetStorage(0, gathered);
   device_->Dispatch(static_cast<uint32_t>((width_ + 7) / 8), static_cast<uint32_t>((height_ + 7) / 8), static_cast<uint32_t>(depth_));
@@ -328,12 +464,14 @@ void Air::Build(View* view, const Camera& camera, gfx::Texture sunShadows, gfx::
   device_->Dispatch(static_cast<uint32_t>((width_ + 7) / 8), static_cast<uint32_t>((height_ + 7) / 8), 1);
   device_->SetStorage(0, {});
   device_->SetTexture(0, {});
+  device_->SetTexture(7, {});
   if (withSunlight) device_->SetTexture(5, {}), device_->SetTexture(6, {});
 
   lastViewProj_ = view->constants.viewProj;
   lastEye_ = eye;
   lastNearest_ = closest;
   lastFarthest_ = farthestNow;
+  counted_ = haveLast_ ? std::min(counted_ + 1, 1000.0f) : k.cells[3];
   haveLast_ = true;
   now_ = 1 - now_;
   ++frame_;

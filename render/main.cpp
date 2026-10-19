@@ -404,6 +404,8 @@
 // --time-of-day <hours>  the computed sky of that hour (0..24) lights the modern look instead of the map's
 //           own light; --day-length <seconds> lets the day pass, a whole one in that long. Key T: an hour on
 //           (from noon when the map's light was on), Y: the map's own light again.
+// --weather-jump <frame>,<hours>[,<clouds>]  (airfix) at that frame the hour (and how much the clouds cover) jumps there, as
+//           the photo mode's Clear makes it (to see the weather cut, World::weatherCut); --no-weather-cut: none (as before)
 // --border <mesh blueprint>  what the map lies in, as the game's MapBorderAdd names it (may be given twice),
 //           for example /meshes/game/map-border_squ_uef_mesh
 // --focus <army>  with --sim or --session: the picture is for that army (from 1): other armies' units show
@@ -634,6 +636,9 @@ struct Options {
   std::string dirtTest;                 // --dirt-test
   float rainStops = -1;                 // --rain-stops
   float rainStarts = -1;                // [rain ground] --rain-starts
+  int jumpFrame = -1;                   // (airfix) --weather-jump
+  float jumpHours = 12, jumpClouds = -1;
+  bool weatherCuts = true;              // (airfix) --no-weather-cut
   bool fxFollow = false;                // --fx-follow
   std::string wearTest;                 // --wear-test
   bool hiddenOutlines = true;           // --no-hidden-outlines, --hidden-outlines
@@ -787,6 +792,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--framegen-check") o->framegenCheck = true;
     else if (a == "--fsr3") o->fsr3 = true;
     else if (a == "--air") o->air = true;
+    else if (a == "--no-weather-cut") o->weatherCuts = false;  // (airfix)
     else if (a == "--contact-shadows") o->contactShadows = true;
     else if (a == "--sky-tables") o->skyTables = true;
     else if (a == "--ray-view") o->rayView = true;
@@ -1020,6 +1026,9 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--dirt-test") o->dirtTest = v, o->unitDirt = true;                                 // [unit dirt]
     else if (a == "--rain-stops") o->rainStops = static_cast<float>(atof(v));                          // [unit dirt]
     else if (a == "--rain-starts") o->rainStarts = static_cast<float>(atof(v));                        // [rain ground]
+    else if (a == "--weather-jump") {  // (airfix)
+      if (sscanf(v, "%d,%f,%f", &o->jumpFrame, &o->jumpHours, &o->jumpClouds) < 2) return false;
+    }
     else if (a == "--fx-decal-size") o->fx.decalSize = std::max(0.1f, static_cast<float>(atof(v)));
     else if (a == "--picture") o->picture = v;
     else if (a == "--photo-cases") o->photoCases = v, o->photoTest = true;  // (photofix)
@@ -1677,6 +1686,7 @@ int main(int argc, char** argv) {
   world.wet = opt.wet;
   world.cloudCover = opt.clouds;
   world.mist = opt.mist;
+  world.weatherCuts = opt.weatherCuts;  // (airfix)
   world.borders = opt.border;
   world.unexplored = opt.unexplored;
   if (opt.soften >= 0) world.particles.soften = opt.soften;
@@ -3020,6 +3030,10 @@ int main(int argc, char** argv) {
     // effects run on the game's clock while a game plays (so they stand still when it is paused)
     {  // the time of day: where it started, what T added, and what has passed of a running day
       float hours = (opt.timeOfDay >= 0 ? opt.timeOfDay : 12) + dayShift;
+      if (opt.jumpFrame >= 0 && frameCount >= opt.jumpFrame) {  // (airfix) --weather-jump
+        hours = opt.jumpHours + dayShift;
+        if (frameCount == opt.jumpFrame && opt.jumpClouds >= 0) world.cloudCover = opt.jumpClouds;
+      }
       if (opt.dayLength > 0) hours += time / opt.dayLength * 24;
       world.timeOfDay = dayOn ? std::fmod(hours, 24.0f) : -1;
     }
