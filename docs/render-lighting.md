@@ -951,8 +951,19 @@ work is not starved of the processor).
      `--firefly-strength`.
 18. **Textures streamed in** (games start sooner, less memory: the RTX 3060 has room): in the optimisation phase,
    talked through with Chris first as agreed.
-19. **Build effects remade**: build beams that light what they touch, sparks, a better build shimmer (the original's
-   kept as an option). After item 2 (shared particles).
+19. **Build effects remade (done, first version, 2026-10-18)**: `World::remasteredBuild` (viewer `--remastered-build`;
+   `render/build_effects.h/.cpp`, docs/render-build.md; the modern look with the remastered effects; the original
+   effects keep the game's build look). Each build beam (the game's 11 build-beam blueprints) lights what it works on
+   with a small flickering light where it enters the box of what is built (a long beam a faint one halfway), sparks
+   of each faction's kind fly from there on the graphics card (up to 4096), bouncing off the scene's depth and the
+   ground. The build shimmer, per faction (the models drawn by variants of their shaders while it is on): UEF a
+   white-blue weld seam at the work's level with the fresh metal above it glowing and cooling; Cybran each plate's
+   edges white-hot, then red, then cool, with build-bot glints on the lattice; Aeon liquid gold (the pool too) that
+   sets from the foot up; Seraphim a net of slow flowing veins and a dissolving front with a bright rim. The team
+   colour still comes in over the last tenth. About 0.1 ms with ten engineers building; nothing with nothing built.
+   Open: commanders do not build in the effects stand (pictures from games); for the colour tuning: a Seraphim
+   factory's beam light is a clear spot on grass by day, the Aeon gold reads khaki on green ground, Cybran lights tint
+   a factory's arms pink at night.
 
 ## The options
 
@@ -967,6 +978,7 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `volumetricFog` | light in the air: the sun's shafts, the lamps' beams, glowing mist | 0.05-0.09 ms | |
 | `volumetricClouds` | heaped clouds lit through, their shadows on the ground | about 0.4 ms, against 0.63 ms for today's sky with its layer: cheaper | a time of day |
 | `cloudZoom` (a trial) | the zoom out rises through the volumetric clouds, which then lie below, thinning | +0.4 to 1.0 ms from the clouds' layer up, nothing below it | `volumetricClouds` |
+| `remasteredBuild` | build beams light what they work on, sparks bounce off the scene, a better build shimmer per faction | about 0.1 ms with ten engineers building | the remastered effects |
 | `skyTables` | the sky from tables of the atmosphere (the planet's shadow at dusk, many-times scattered light) | about 0.1 ms less | a time of day |
 | `softShadows` | the sun's shadows sharp at the foot, soft farther off | +0.25 ms | |
 | `contactShadows` | small shadows at units' feet and under trees | +0.12 ms | |

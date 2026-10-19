@@ -23,6 +23,7 @@
 
 #include "air.h"
 #include "blasts.h"
+#include "build_effects.h"
 #include "clouds.h"
 #include "debris.h"
 #include "motion.h"
@@ -497,6 +498,12 @@ class World {
   // lingering. Modern look; off by default.
   bool volumeExplosions = false;
   VolumeBlasts volumes;
+  // The remastered build look (build_effects.h; Chris's list of 17 October, look 19): build beams light what they work on,
+  // sparks fly from where they meet it and bounce off what the picture shows, and units under construction take a better
+  // build shimmer of their faction's. Modern look with the remastered effects (the original effects keep the game's build
+  // look); off by default.
+  bool remasteredBuild = false;
+  BuildEffects build;
   Clouds clouds;
   // (cloudzoom) Zooming out through the clouds (cloud_zoom.h; a trial): with the volumetric clouds, the game's camera
   // rises through their layer as it zooms out, and they lie below it, thinning so the map stays readable. Modern
@@ -751,6 +758,7 @@ class World {
   bool volumesOn_ = false, volumesDrawn_ = false;  // (volume explosions: on this frame; volumes drawn this frame)
   std::vector<Particles::Hot> hot_;  // (lit smoke: the lasting fires, this frame)
   bool deepTried_ = false, deepNow_ = false;  // (deep tracks: their field tried; on this frame)
+  bool buildNow_ = false;  // (buildfx: the remastered build look this frame)
   void PressUnit(const FrameUnit& u, const Frame& frame, const std::string& blueprint, const Model* model, Vec3 position, const Quat& orientation);
   bool wildlifeNow_ = false;  // (wildlife: something of it drawn this frame)
   // (the ground cover's plants: the map's cover read; where its trees stand; where the plants grow, Terrain's)

@@ -141,6 +141,9 @@
 // --blast-test n[,radius]  with --blasts (or --blast-waves, --blast-dust): blasts at random round where the camera starts
 //           (within radius, 40), of sizes 0.5 to 4, one after another so that about n are under way at once: to see and
 //           time many at once
+// --remastered-build  the remastered build look (build_effects.h, World::remasteredBuild; modern look with the remastered
+//           effects): build beams light what they work on, sparks fly from where they meet it and bounce off what the
+//           picture shows, units under construction take a better build shimmer of their faction's (with --fx-build)
 // --deep-tracks  deep tracks (World::deepTracks; modern look): the ground pressed where units drive and walk, by the
 //           kind it is (snow, mud, sand, grass, dirt, hard), the game's tread marks and footprints pressed in by their
 //           own shapes; --ground-kind <part>=<kind>  the layers whose texture's path holds <part> taken as that kind
@@ -258,7 +261,9 @@
 //           the camera follows it (unless --cam)
 // --fx-build <builder> <unit>  (or <builder>,<unit>) the builder building that unit at --fx-at as the game's
 //           scripts make it: a factory (UEB0101 UEL0201) on its build bone, an engineer (UEL0105 UEB1101) from
-//           beside it; --fx-build-seconds s: the build takes that long (else the game's own time)
+//           beside it; --fx-build-seconds s: the build takes that long (else the game's own time); --fx-build-side d: an
+//           engineer stands d degrees round from behind what it builds toward the camera's right (0; 180: in front of it);
+//           --fx-build-count n: n engineers build it, standing round it evenly (to see and time many at once)
 // --fx-fire <unit> [label ...]  that unit (UEL0201; a mod's too, with --mods) made at --fx-at by its own script class
 //           with its weapons as the engine makes them, firing at the point --fx-to x,z[,height] (else one in its
 //           weapons' reach, to the right of the spot as the camera sees it; with --fx-compare across it, away from
@@ -467,6 +472,7 @@ struct Options {
   float movementDustRadius = 30;        // --movement-dust-radius
   float blastRadius = 40;
   bool deepTracks = false;              // --deep-tracks
+  bool remasteredBuild = false;         // --remastered-build
   std::vector<std::string> groundKind;  // --ground-kind
   std::vector<std::string> tracksTest;  // --tracks-test
   bool energyShields = false;           // --energy-shields
@@ -646,6 +652,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--hidden-outlines") o->hiddenOutlines = true;
     else if (a == "--no-hidden-outlines") o->hiddenOutlines = false;
     else if (a == "--hot-metal") o->hotMetal = true;
+    else if (a == "--remastered-build") o->remasteredBuild = true;
     else if (a == "--order-test") o->orderTest = true;
     else if (a == "--frame-generation") o->frameGeneration = true;
     else if (a == "--capture-between") o->captureBetween = true;
@@ -832,6 +839,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
         o->fx.buildUnit = w;
       }
     } else if (a == "--fx-build-seconds") o->fx.buildSeconds = std::max(0.0f, static_cast<float>(atof(v)));
+    else if (a == "--fx-build-side") o->fx.buildSide = static_cast<float>(atof(v));  // (buildfx)
+    else if (a == "--fx-build-count") o->fx.buildCount = std::clamp(atoi(v), 1, 32);  // (buildfx)
     else if (a == "--fx-fire" || a == "--fx-manual") {  // --fx-fire <unit>[,label...] [label ...]; --fx-manual <label>[,label...]
       // (the labels: given with commas, and for --fx-fire also as the words that follow it, up to the next option)
       std::vector<std::string> words;
@@ -1244,6 +1253,7 @@ int main(int argc, char** argv) {
     world.heat.smokeRate = opt.hotSmoke;
     if (opt.hotSmoke <= 0) world.heat.smokeEmitter.clear();
   }
+  world.remasteredBuild = opt.remasteredBuild;
   world.frameGeneration = opt.frameGeneration;
   device->captureBetween = opt.captureBetween;
   if (opt.sunSize > 0) world.sunSize = opt.sunSize;

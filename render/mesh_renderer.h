@@ -127,6 +127,11 @@ class MeshRenderer {
   const void* blastConstants = nullptr;
   uint32_t blastConstantsSize = 0;
   bool PrepareBlasts();  // false: they cannot be made (then nothing bends)
+  // (buildfx) The remastered build look (build_effects.h, World::remasteredBuild), set by the world each frame: what is
+  // under construction takes its faction's remastered build shimmer, the models being drawn by the variants of their
+  // shaders built with it (made by PrepareBuild the first time the world wants them; without it the shaders as they were).
+  bool remasteredBuild = false;
+  bool PrepareBuild();  // false: they cannot be made (then the build look stays as it was)
   // Numbers from the last scene (not shadow) pass.
   int drawnInstances = 0;
   int drawnTriangles = 0;
@@ -296,6 +301,15 @@ class MeshRenderer {
   Bending bending_[8];
   std::string blastSource_;
   int blastsMade_ = 0;
+  // (buildfx) the pipelines that may draw something under construction, and their remastered build look's variants
+  struct BuildVariant {
+    gfx::Pipeline original;
+    gfx::PipelineDesc desc;
+    gfx::Pipeline variant;
+  };
+  std::vector<BuildVariant> buildVariants_;
+  std::string buildSource_;
+  int buildMade_ = 0;  // (0 not yet, 1 made, -1 they cannot be made)
 };
 
 }  // namespace render

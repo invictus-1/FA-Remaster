@@ -39,6 +39,7 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       debris(device, &textures),
       outlines(device),
       dust(device),
+      build(device),
       clouds(device),
       cloudZoomDraw(device),  // (cloudzoom)
       motion(device),
@@ -107,6 +108,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
   effects.verbose = options.verbose;
   effects.SetTracks(&tracks);
   effects.SetBlasts(&blasts);
+  effects.SetBuild(&build);
   tracks.deep = &trackField;  // (deep tracks: the prints go there while they are on)
   trackField.picture = [this](const std::string& name) { return decals.Picture(name); };
   trackField.groundHeight = [this](float x, float z) { return map.Height(x, z); };
@@ -928,6 +930,12 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   terrain.tracksField = deepNow_ ? trackField.Constants() : TrackFieldConstants{};
   meshes.Begin();
   energy.Begin();  // [energy shields]
+  // (buildfx) the remastered build look (build_effects.h): the effects list this frame's build beams while it is on, and
+  // the models are drawn by their build look's shaders (made the first frame it is on); a frame for something else
+  // leaves the sparks under way as they are
+  buildNow_ = remasteredBuild && look == Look::Modern && effectsLook == EffectsLook::Remastered && !sidePicture;
+  build.Begin(clock, buildNow_, sidePicture);
+  meshes.remasteredBuild = buildNow_ && meshes.PrepareBuild();
   // (icons and bars at the screen's size: the scene's view with the screen's numbers)
   screenView_ = view;
   if (temporalNow_) screenView_.SetMatrix(motion.Now());  // (icons, bars and what is picked: without the jitter)
@@ -2097,6 +2105,7 @@ void World::Render() {
     volumes.AddLights(&lights, lights.night, timeOfDay >= 0 && look == Look::Modern ? skyLight.daylight : 1.0f);
     volumes.CloudRing(clock_, &clouds.ringX, &clouds.ringZ, &clouds.ringRadius, &clouds.ringWidth, &clouds.ringStrength);
   }
+  if (buildNow_) build.AddLights(&lights, lights.night);  // (buildfx: the build beams' lights, the sparks thrown)
   lights.Build(&view);  // (after everything has said what lights there are; before any pass reads the view)
   // blasts (blasts.h): the waves and the dust under way near what the camera sees; the debris's chunks moved on and listed
   blastsNow_ = grassBlasts_ = false;
@@ -2392,6 +2401,11 @@ void World::Render() {
     Stage("wildlife: fireflies");
     wildlifeDraw.DrawFireflies(view);
   }
+  if (buildNow_ && build.Busy()) {  // (buildfx: the build sparks moved on, bouncing off the scene's depth: it dispatches)
+    Stage("build sparks");
+    build.Simulate(view, camera, post.Depth(), terrain.HeightTexture(), terrain.HeightUnit(), static_cast<float>(map.width),
+                   static_cast<float>(map.height), haveMap_ && map.water.present ? map.water.elevation : -1e9f);
+  }
   {
     // lamps' shafts and particles go into the scene's colour alone: they test the scene's depth
     // themselves and fade where they meet something solid
@@ -2400,6 +2414,7 @@ void World::Render() {
       Stage("volume blasts");
       volumes.Draw(view, post.Depth(), camera.zNear);
     }
+    if (buildNow_ && hide.find("particles") == std::string::npos) build.Draw(view, post.Depth(), camera);  // (buildfx: the sparks)
     Stage("lamp shafts");
     shafts.Draw(view, post.Depth(), camera.zNear);
     if (blastsNow_ && blastDust) {  // the blasts' dust, under the game's own fire and smoke
