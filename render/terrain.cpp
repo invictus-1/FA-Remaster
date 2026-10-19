@@ -48,6 +48,7 @@ cbuffer TerrainConstants : register(b1) {
   float4 tracksInfo;     // x, y: 1 / the atlas's size; z: 1 = deep tracks are read
   float4 kindA[10];      // per layer, shares: snow, mud, sand, grass
   float4 kindB[10];      // dirt, hard ground (rock, concrete)
+  float4 mudInfo;        // deep tracks' mud (MudInRuts): x 1 = the map's mud is drawn in the ruts; y its repeats per world unit
 };
 cbuffer Patches : register(b2) {
   float4 patches[1024];  // x, z of the patch's corner, size of a quad, level
@@ -110,6 +111,68 @@ float4 LayerNormal(float4 raw, float up) {
 }
 
 #ifdef SURFACE_DEEP_TRACKS
+// [mud ruts] The map's mud material (Terrain::mudRuts; the ground's pass binds them, kMudSlot): albedo, normal (two
+// channels, +y up), and creases, roughness, height as the layers' third maps.
+Texture2D mudAlbedo : register(t41);
+Texture2D mudNormal : register(t42);
+Texture2D mudMaterial : register(t43);
+// Its three maps at a place, read twice and joined so that its repeats do not show: at its own size, and a third
+// larger, turned and shifted; which of the two shows goes by patches of a slow noise, their edges by the mud's own
+// height (its ridges come through first). `n`: its normal's x and z (the layers' way: along world x and z).
+void MudRead(float2 xz, float2 stepX, float2 stepY, out float3 albedo, out float3 arh, out float2 n, out float lod) {
+  float s = mudInfo.y;
+  const float2x2 turn = float2x2(0.8253, -0.5646, 0.5646, 0.8253);  // (34 degrees)
+  float2 uvA = xz * s, uvB = mul(turn, xz) * (s * 0.77) + float2(0.37, 0.71);
+  float2 aX = stepX * s, aY = stepY * s, bX = mul(turn, stepX) * (s * 0.77), bY = mul(turn, stepY) * (s * 0.77);
+  float3 albedoA = mudAlbedo.SampleGrad(samplerAniso, uvA, aX, aY).rgb, albedoB = mudAlbedo.SampleGrad(samplerAniso, uvB, bX, bY).rgb;
+  float3 arhA = mudMaterial.SampleGrad(samplerAniso, uvA, aX, aY).rgb, arhB = mudMaterial.SampleGrad(samplerAniso, uvB, bX, bY).rgb;
+  float2 nA = LayerNormal(mudNormal.SampleGrad(samplerAniso, uvA, aX, aY), 1).xy, nB = LayerNormal(mudNormal.SampleGrad(samplerAniso, uvB, bX, bY), 1).xy;
+  nB = mul(nB, turn);  // (the turned reading's slopes turned back to the world's axes)
+  float b = saturate((CloudNoise(float3(xz * (s * 0.35), 4.2)) - 0.5) * 3 + 0.5);
+  float ha = arhA.b + (1 - b) * 1.5, hb = arhB.b + b * 1.5, top = max(ha, hb) - 0.3;
+  float wa = max(ha - top, 0), wb = max(hb - top, 0), k = wb / max(wa + wb, 1e-4);
+  albedo = lerp(albedoA, albedoB, k);
+  arh = lerp(arhA, arhB, k);
+  n = lerp(nA, nB, k);
+  uint w, h, levels;
+  mudNormal.GetDimensions(0, w, h, levels);
+  lod = log2(max(max(length(aX), length(aY)) * float(w), 1));
+}
+// The mud in the ruts: where the ground is mud by its kind (`kind`, the layers' given share of it), in the troughs
+// (`t`) and less on their berms (`q`), the map's mud in place of the pressed ground's smooth average, with its own
+// small shapes, creases and roughness: when dry a quarter of it, in the hollows of its picture (dark dry mud, matt),
+// when wet all of it (glossy; the ruts' standing water lies on it as before). Its albedo as the visuals session made
+// it (wet mud: the soil's x 0.55 in linear light; the weather wets it further as all ground, lighting.h).
+// Put in once DeepTracksOn has done all its own sums, so that where there is none they are done exactly as before:
+// as if before its darkening by kind (`dark`, which `darkened` is the ground after), its wear (`worn`), the shade of
+// its walls (`open`) and its relief (`tilt`), which it is given here as the pressed ground was there. Its roughness is
+// kept through the weather's (lighting.h: deepGloss).
+void MudInRuts(float2 xz, float2 stepX, float2 stepY, float3 base, float kind, float t, float q, float wet, float2 tilt, float3 dark,
+               float3 darkened, float worn, float open, inout float3 albedo, inout float3 N, inout float roughness, inout float creases) {
+  float want = kind * saturate(t * 1.6 + q * 0.5) * lerp(0.25, 1, wet);
+  if (want < 0.01) return;
+  float3 colour, arh;
+  float2 n;
+  float lod;
+  MudRead(xz, stepX, stepY, colour, arh, n, lod);
+  float share = saturate((want * 1.35 - arh.b) / 0.35);  // (its hollows first)
+  if (share <= 0) return;
+  float3 a = lerp(darkened, colour * dark, share);
+  albedo = lerp(a, dot(a, float3(0.3, 0.6, 0.1)) * float3(1.25, 0.95, 0.68), worn * 0.8);  // (worn as DeepTracksOn wears)
+  // (dry: matt; wet: its own, a little rougher than the scan says: at its full gloss its hollows glint in specks)
+  float rough = lerp(0.7 + 0.5 * arh.g, lerp(arh.g, 0.6, 0.3), wet);
+  rough = sqrt(rough * rough + 0.1 * saturate(lod / 4));  // (its small shapes a pixel takes in: rougher, no sparkle)
+  roughness = lerp(roughness, rough, share);
+  deepGloss = float2(rough, share);
+  creases = lerp(creases, arh.r * open, share);
+  // its normal as the layers' are put on the ground's (Ground below), with the trough's relief
+  float3 detail = float3(n.x, sqrt(saturate(1 - dot(n, n))), n.y);
+  float3 h = normalize(base + float3(0, 1, 0));
+  float3 axisX = float3(1 - 2 * h.x * h.x, 2 * h.x * h.y, -2 * h.x * h.z);
+  float3 axisZ = float3(-2 * h.z * h.x, 2 * h.z * h.y, 1 - 2 * h.z * h.z);
+  float3 M = float3(dot(detail, axisX), dot(detail, base), dot(detail, axisZ));
+  N = normalize(lerp(N, normalize(M - float3(tilt.x, 0, tilt.y)), share));
+}
 // Deep tracks (deep_tracks.h): a level of the field read at a place (r how much is pressed down, g pushed up),
 // one bilinear reading; a wrapping level by the place's texel within its width (its copied edges make the
 // reading across the wrap right), the map's level clamped.
@@ -221,7 +284,9 @@ void DeepTracksOn(float2 xz, float2 stepX, float2 stepY, float4 low, float4 high
   // the trough and berm's relief, the colours down in it and up on the berm
   float2 g = depth * (-slope.xy + berm * slope.zw) * relief;
   N = normalize(N - float3(g.x, 0, g.y));
-  albedo *= lerp(1, down, t) * lerp(1, up, q);
+  float3 dark = lerp(1, down, t) * lerp(1, up, q);
+  albedo *= dark;
+  float3 darkened = albedo;  // [mud ruts] (for MudInRuts)
   // grass worn through to the earth where many have passed
   float worn = smoothstep(1.5, 5.0, raw) * relief * grass;
   float grey = dot(albedo, float3(0.3, 0.6, 0.1));
@@ -232,7 +297,12 @@ void DeepTracksOn(float2 xz, float2 stepX, float2 stepY, float4 low, float4 high
   roughness = lerp(roughness, 0.6, t * grass * (1 - worn));
   roughness = lerp(roughness, lerp(0.5, 0.25, wet), t * mud);
   deepWater = smoothstep(0.4, 0.8, t) * saturate(mud * 1.5) * saturate(wet * 1.5 - 0.2);
-  creases *= 1 - shade * t * relief;
+  float open = 1 - shade * t * relief;
+  creases *= open;
+  // [mud ruts] where the ground is mud by its kind, the map's own mud in place of the pressed ground's smooth average
+  // (MudInRuts: last, so that without it the sums above are as they were)
+  [branch] if (mudInfo.x > 0.5 && kA.y > 0.01)
+    MudInRuts(xz, stepX, stepY, base, saturate(kA.y), t, q, wet, g, dark, darkened, worn, open, albedo, N, roughness, creases);
   deepTrack = float4(t, q, relief, 1);
   deepSlope = slope * relief;
   if (tracksInfo.w > 1.5) albedo = float3(t, q, relief * 0.5);  // (MOHO64_DEBUG_TRACKS=3)
@@ -508,6 +578,7 @@ struct TerrainConstants {
   float morph[12][4];
   TrackFieldConstants tracks;  // (deep tracks)
   float kindA[10][4], kindB[10][4];
+  float mudInfo[4];  // [mud ruts]
 };
 
 // Where the kinds of ground lie (Terrain::GroundKinds): the layers' kinds blended by their masks as the shader
@@ -593,6 +664,52 @@ void GroundKindOf(const std::string& texture, const std::string& kind, float out
   else if (has({"rock", "cliff", "stone", "concrete", "tarmac", "crystal", "lava", "cracked", "ribbon", "metal", "plate", "macro"}))
     out[Hard] = 1;
   else out[Dirt] = 1;  // (dirt, soil, earth, a forest's floor, a path; and what the name does not tell)
+}
+
+// [mud ruts] A two-channel (BC5) normal map's mean x and y (0..1), from its 4 x 4 level (one block): a normal map's mean
+// is near 0.5, 0.5 (its small shapes lean every way alike). False: not a BC5 file with that level.
+bool NormalMapMean(const std::string& file, float* x, float* y) {
+  if (file.size() < 128 || file.compare(0, 4, "DDS ") != 0) return false;
+  auto word = [&](size_t at) {
+    uint32_t v = 0;
+    for (int k = 0; k < 4; ++k) v |= static_cast<uint32_t>(static_cast<uint8_t>(file[at + static_cast<size_t>(k)])) << (8 * k);
+    return v;
+  };
+  const uint32_t height = word(12), width = word(16), mips = std::max(word(28), 1u), fourCC = word(84);
+  size_t at = 128;
+  if (fourCC == 0x30315844u) {  // "DX10"
+    if (file.size() < 148 || word(128) != 83) return false;
+    at = 148;
+  } else if (fourCC != 0x32495441u && fourCC != 0x55354342u) {  // "ATI2", "BC5U"
+    return false;
+  }
+  uint32_t w = width, h = height, level = 0;
+  while ((w > 4 || h > 4) && level + 1 < mips) {
+    at += static_cast<size_t>(std::max(1u, (w + 3) / 4)) * std::max(1u, (h + 3) / 4) * 16;
+    w = std::max(w / 2, 1u), h = std::max(h / 2, 1u), ++level;
+  }
+  if (w > 4 || h > 4 || at + 16 > file.size()) return false;
+  float mean[2];
+  for (int c = 0; c < 2; ++c) {  // (the block's two halves: red, then green, each as a BC4 block)
+    const uint8_t* b = reinterpret_cast<const uint8_t*>(file.data() + at + 8 * static_cast<size_t>(c));
+    float v[8];
+    v[0] = b[0] / 255.0f, v[1] = b[1] / 255.0f;
+    if (b[0] > b[1]) {
+      for (int k = 1; k < 7; ++k) v[k + 1] = ((7 - k) * v[0] + k * v[1]) / 7;
+    } else {
+      for (int k = 1; k < 5; ++k) v[k + 1] = ((5 - k) * v[0] + k * v[1]) / 5;
+      v[6] = 0, v[7] = 1;
+    }
+    uint64_t bits = 0;
+    for (int k = 0; k < 6; ++k) bits |= static_cast<uint64_t>(b[2 + k]) << (8 * k);
+    float sum = 0;
+    int n = 0;
+    for (uint32_t p = 0; p < 16; ++p)
+      if (p % 4 < w && p / 4 < h) sum += v[(bits >> (3 * p)) & 7], ++n;
+    mean[c] = sum / static_cast<float>(std::max(n, 1));
+  }
+  *x = mean[0], *y = mean[1];
+  return true;
 }
 
 // Is any point of the box within `radius` of `center`?
@@ -731,6 +848,8 @@ void Terrain::Remaster(const MapData& m, std::vector<std::string>* arh) {
     albedo_[i] = textures_->Get(base + "albedo_" + tier + ".dds", albedo_[i]);
     const double scale = entry["scale"].NumberOr(0), mul = entry["scale_mul"].NumberOr(1);
     albedoScale_[i] = scale > 0 ? static_cast<float>(scale) : m.albedo[i].scale * static_cast<float>(mul);
+    const double metres = remap["materials"][name]["real_size_m"].NumberOr(0);  // [mud ruts]
+    if (metres > 0) layerUnitsPerMetre_[i] = albedoScale_[i] / static_cast<float>(metres);
     if (i < 9) {
       normal_[i] = textures_->Get(base + "normal_" + tier + ".dds", normal_[i]);
       normalScale_[i] = albedoScale_[i];  // (the material's normal lies on its own albedo)
@@ -740,6 +859,49 @@ void Terrain::Remaster(const MapData& m, std::vector<std::string>* arh) {
     ++remasteredLayers_;
   }
   if (remasteredLayers_) printf("render: %d of the map's ground layers remastered (%s)\n", remasteredLayers_, tier);
+  {  // [mud ruts] deep tracks' mud: the material the map's entry names as "mud", else "<first word>_mud" by the first
+     // word of its layers' materials ("setonsr_soil": setonsr_mud), where remap.json has one of that name
+    std::string mud = layers["mud"].StringOr(std::string());
+    for (int i = 0; i < 10 && mud.empty(); ++i) {
+      const std::string name = layers[lower(m.albedo[i].texture)]["material"].StringOr(std::string());
+      const size_t cut = name.find('_');
+      if (cut != std::string::npos && remap["materials"][name.substr(0, cut) + "_mud"].kind == JsonValue::Object) mud = name.substr(0, cut) + "_mud";
+    }
+    const JsonValue& material = remap["materials"][mud];
+    const std::string dir = material["dir"].StringOr(std::string());
+    if (!mud.empty() && !dir.empty()) {
+      const std::string base = folder + dir + "/" + mud + "_";
+      mudFiles_[0] = base + "albedo_" + tier + ".dds";
+      mudFiles_[1] = base + "normal_" + tier + ".dds";
+      mudFiles_[2] = base + "arh_" + tier + ".dds";
+      mudMetres_ = static_cast<float>(material["real_size_m"].NumberOr(0));
+    }
+  }
+}
+
+// [mud ruts] Deep tracks' mud for this map, once the layers' kinds are known: none unless a layer is mud by its kind; tiled
+// at the material's real size by the world units a metre of the layers that are mud (their scale over their material's
+// real size; else the middle of all the remastered layers').
+void Terrain::FindMud() {
+  mudSize_ = 0;
+  mudTried_ = false;
+  for (gfx::Texture& t : mud_) t = {};
+  if (mudFiles_[0].empty() || mudMetres_ <= 0) return;
+  bool any = false;
+  float sum = 0;
+  int count = 0;
+  std::vector<float> all;
+  for (int i = 0; i < 10; ++i) {
+    any = any || groundKind_[i][1] > 0;
+    if (layerUnitsPerMetre_[i] <= 0) continue;
+    all.push_back(layerUnitsPerMetre_[i]);
+    if (groundKind_[i][1] > 0) sum += layerUnitsPerMetre_[i], ++count;
+  }
+  if (!any || all.empty()) return;
+  std::sort(all.begin(), all.end());
+  const float perMetre = count ? sum / static_cast<float>(count) : all[all.size() / 2];
+  mudSize_ = mudMetres_ * perMetre;
+  printf("render: deep tracks' mud in the ruts: %s, a repeat every %.2f world units (%.2f m)\n", mudFiles_[0].c_str(), mudSize_, mudMetres_);
 }
 
 void Terrain::ReadCover(const MapData& m, const std::string& path) {
@@ -856,6 +1018,7 @@ bool Terrain::Load(const MapData* map, std::string* error) {
     // (deep tracks: what the ground's shader read of them, for the lying snow and the puddles in ModernLight)
     std::string source = std::string("#define MODERN_WATER 1\n") + "#define SURFACE_PUDDLES 1.0\n#define SURFACE_TRACKS 1\n" +
                          "#define SURFACE_DEEP_TRACKS 1\nstatic float4 deepTrack = 0;\nstatic float4 deepSlope = 0;\nstatic float deepWater = 0;\n" +
+                         "static float2 deepGloss = 0;\n" +  // [mud ruts] (the mud's roughness and share, MudInRuts)
                          kViewShaderBlock + RayShaders() + kLightingShaderBlock + kShader;
     gfx::PipelineDesc pd;
     pd.name = "terrain";
@@ -936,6 +1099,9 @@ bool Terrain::Load(const MapData* map, std::string* error) {
       if (at != std::string::npos) paths[i] = map->albedo[i].texture.substr(0, at) + "_arh.dds";
     }
     for (std::string& g : groundGiven_) g.clear();
+    for (std::string& f : mudFiles_) f.clear();  // [mud ruts] (Remaster finds them again)
+    mudMetres_ = 0;
+    std::fill(layerUnitsPerMetre_, layerUnitsPerMetre_ + 10, 0.0f);
     Remaster(*map, &paths);  // (the visuals track's remastered ground, where it lists this map)
     std::vector<bool> present;
     materials_ = textures_->Layers(paths, &present);
@@ -953,6 +1119,7 @@ bool Terrain::Load(const MapData* map, std::string* error) {
     }
     if (kinds_) device_->Destroy(kinds_);  // (GroundKinds: made again for this map when asked for)
     kinds_ = {};
+    FindMud();  // [mud ruts]
   }
   shaderKind_ = map->shader == "TTerrainXP" ? 1 : map->shader == "TTerrainGlow" ? 2 : 0;
   if (map->shader != "TTerrain" && map->shader != "TTerrainXP" && map->shader != "TTerrainGlow")
@@ -1157,6 +1324,27 @@ void Terrain::Draw(const View& view, bool shadowPass) {
     std::copy(groundKind_[i], groundKind_[i] + 4, c.kindA[i]);
     std::copy(groundKind_[i] + 4, groundKind_[i] + 6, c.kindB[i]);
   }
+  // [mud ruts] deep tracks' mud, while deep tracks are drawn: its textures read the first time
+  bool mud = false;
+  if (!shadowPass && mudRuts && mudSize_ > 0 && tracksField.info[2] > 0.5f) {
+    if (!mudTried_) {
+      mudTried_ = true;
+      for (int k = 0; k < 3; ++k) mud_[k] = textures_->Get(mudFiles_[k]);
+      // (a normal map whose mean leans far one way has its channels wrong: drawn flat, the mud's small shapes left out)
+      float mx = 0.5f, my = 0.5f;
+      if (auto file = textures_->ReadFile(mudFiles_[1]))
+        if (NormalMapMean(*file, &mx, &my) && (std::fabs(mx - 0.5f) > 0.2f || std::fabs(my - 0.5f) > 0.2f)) {
+          fprintf(stderr, "render: deep tracks' mud: %s leans %.2f, %.2f on the whole (a normal map's channels wrong?): drawn without it\n",
+                  mudFiles_[1].c_str(), mx * 2 - 1, my * 2 - 1);
+          mud_[1] = textures_->FlatNormal();
+        }
+      if (!mud_[0] || !mud_[1] || !mud_[2]) fprintf(stderr, "render: deep tracks' mud cannot be read: the ruts are drawn without it\n");
+    }
+    mud = mud_[0] && mud_[1] && mud_[2];
+  }
+  c.mudInfo[0] = mud ? 1.0f : 0.0f;
+  c.mudInfo[1] = mud ? 1 / mudSize_ : 0.0f;
+
   for (int k = 0; k <= top && k < 12; ++k) {
     if (k == top) {
       c.morph[k][0] = 1e30f;
@@ -1182,6 +1370,8 @@ void Terrain::Draw(const View& view, bool shadowPass) {
     for (int i = 0; i < 9; ++i) device_->SetTexture(16 + i, normal_[i]);
     if (materials_) device_->SetTexture(25, materials_);
     device_->SetTexture(26, tracksMap ? tracksMap : textures_->Black());
+    if (mud)
+      for (int k = 0; k < 3; ++k) device_->SetTexture(kMudSlot + k, mud_[k]);  // [mud ruts]
   }
   device_->SetVertexBuffer(gridVertices_);
   device_->SetIndexBuffer(gridIndices_);

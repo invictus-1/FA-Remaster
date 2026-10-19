@@ -30,6 +30,9 @@ inline constexpr int kRaySceneSlot = 33;      // ray tracing (ray_scene.h): the 
 inline constexpr int kRayInstancesSlot = 37;  // what each of its instances is
 inline constexpr int kRayGroundSlot = 38;     // the ground's normals (39: its colours)
 inline constexpr int kSmokeShadowSlot = 40;   // smoke's shadow (smoke.h): the smoke as the sun sees it, when it is drawn
+// [mud ruts] (the ground's pass only, bound by Terrain::Draw as t0-t26 are, not by the frame code): deep tracks' mud,
+// the map's mud material's albedo (41), normal (42), creases / roughness / height (43)
+inline constexpr int kMudSlot = 41;
 inline constexpr int kMaxCascades = 4;
 
 // The two ways of lighting. Everything is drawn in either; the game's files are the same.
