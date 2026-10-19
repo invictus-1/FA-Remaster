@@ -1446,12 +1446,19 @@ void World::ApplyPropEvent(const FramePropEvent& e) {
     std::string low = e.blueprint + "|" + e.mesh;
     for (char& c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     kept.wreck = low.find("defaultwreckage") != std::string::npos || low.find("_mesh_wreck") != std::string::npos;
-    // [plants] (a unit's fresh wreck: its death burnt the ground round it; a burnt tree's mesh is no unit's wreck)
+    // [plants] (a unit's fresh wreck: its death burnt the ground round it; a burnt tree's mesh is no unit's wreck. Only
+    // where a death's explosion went off there just before: the map's own scenery wrecks the game makes as it starts,
+    // or later, are old and burnt nothing)
     if (plantsReact && kept.model && e.kind == FramePropEvent::Create && low.find("defaultwreckage") != std::string::npos) {
       Vec3 centre;
       float radius;
       Sphere(kept.model, kept.world, &centre, &radius);
-      plantLife.AddWreck(centre.x, centre.z, radius, born);
+      bool died = false;
+      for (const Blasts::Blast& b : blasts.Recent()) {
+        const float dx = b.at.x - centre.x, dz = b.at.z - centre.z, reach = radius + b.size + 2;
+        if (b.hot && b.born >= born - 6 && b.born <= born + 1 && dx * dx + dz * dz <= reach * reach) died = true;
+      }
+      if (died) plantLife.AddWreck(centre.x, centre.z, radius, born);
     }
     ListProp(&kept, e.id, true);
     if (hotOn_) HoldHot(e.id, &kept);
@@ -1660,15 +1667,22 @@ void World::WatchDeaths(const Frame& frame, const std::vector<Vec3>& armyColors)
 void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
   auto colorOf = [&](uint32_t army) { return armyColors.empty() ? Vec3{0.6f, 0.6f, 0.6f} : armyColors[army % armyColors.size()]; };
   TakeDueCombat(static_cast<double>(frame.tick) + frame.blend);  // (hits, impacts, health whose beat is shown now: combat_)
-  // blasts where the game says an area's damage went off (an area's hits, one a target, merge into one blast; the trees'
-  // own push, 'TreeForce', is the same shot's and left out), beside the flashes and scorches the effects tell of
+  // blasts where the game says an area's damage went off (an area's hits, one a target, merge into one blast), beside
+  // the flashes and scorches the effects tell of. A push is no explosion and left out: the trees' own, 'TreeForce', is
+  // the same shot's; 'Force' rings knock trees and props over (a commander's warp-in sends several round its start,
+  // which made blasts there, and plants that react burnt the start black)
+  auto push = [](const std::string& type) {
+    std::string low = type;
+    for (char& c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return low.find("force") != std::string::npos;
+  };
   for (const FrameHit& h : combat_.hits)
-    if (h.radius > 0 && !h.shield && h.seen && h.damageType != "TreeForce")
+    if (h.radius > 0 && !h.shield && h.seen && !push(h.damageType))
       blasts.FromImpact({h.position[0], h.position[1], h.position[2]}, h.radius, h.amount, h.tick * 0.1);
   WatchDeaths(frame, armyColors);  // (the debris of what has died: blastDebris)
-  if (volumesOn_ && combat_.hitsKept)  // (volume explosions: harm to an area is a blast that large)
+  if (volumesOn_ && combat_.hitsKept)  // (volume explosions: harm to an area is a blast that large; a push is none)
     for (const FrameHit& h : combat_.hits)
-      if (h.radius > 0 && h.seen) volumes.OfferArea({h.position[0], h.position[1], h.position[2]}, h.radius, static_cast<double>(h.tick) * 0.1);
+      if (h.radius > 0 && h.seen && !push(h.damageType)) volumes.OfferArea({h.position[0], h.position[1], h.position[2]}, h.radius, static_cast<double>(h.tick) * 0.1);
   CpuTimes::Part("units seen first: their files read ahead");
   {  // (their models' files read on the worker threads, all together; the models are made below)
     std::vector<std::string> fresh;

@@ -49,6 +49,8 @@ class Blasts {
     double born = 0;      // when, on the effects' clock (seconds)
     bool water = false;   // on water (the ground there lies under the water's surface)
     bool splash = false;  // no explosion: a piece of debris fallen into the water (debris.h); no wave, no dust
+    bool hot = false;     // an explosion's heat made it (a flash of light, a shot's impact), not a scorch mark alone
+                          // (a commander's warp-in lays a scorch 28 across without burning anything)
   };
   // What the game made (Effects): a flash of light of that glow size (CreateLightParticle's), a scorch or a crater of
   // that size across (a scar decal's: Decals::IsScar), at a place and a moment. Both of one explosion make one blast.
@@ -67,7 +69,7 @@ class Blasts {
   // only: this hears of every one. (The several hits of one area's damage, one a target, make one blast here.)
   void FromImpact(Vec3 at, float damageRadius, float damage, double born);
   // A blast of a size (world units) itself: the effects stand's --fx-blast; and a piece of debris falling into water.
-  void Add(Vec3 at, float size, double born, bool splash = false);
+  void Add(Vec3 at, float size, double born, bool splash = false, bool hot = false);
   // The blasts of the last half minute (at most kKept), the oldest first.
   static constexpr size_t kKept = 512;
   const std::deque<Blast>& Recent() const { return recent_; }

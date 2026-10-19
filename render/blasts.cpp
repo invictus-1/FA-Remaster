@@ -245,7 +245,7 @@ bool Blasts::Init() {
   return true;
 }
 
-void Blasts::Add(Vec3 at, float size, double born, bool splash) {
+void Blasts::Add(Vec3 at, float size, double born, bool splash, bool hot) {
   // one explosion's scorch and flash (and the decal and splat a death may lay) are one blast: near in place and time
   for (auto it = recent_.rbegin(); it != recent_.rend() && !splash; ++it) {
     Blast& b = *it;
@@ -255,6 +255,7 @@ void Blasts::Add(Vec3 at, float size, double born, bool splash) {
     if (dx * dx + dz * dz > std::pow(std::max(0.8f, 0.6f * std::max(b.size, size)), 2.0f)) continue;
     b.size = std::max(b.size, size);
     b.born = std::min(b.born, born);
+    b.hot = b.hot || hot;
     return;
   }
   Blast b;
@@ -262,6 +263,7 @@ void Blasts::Add(Vec3 at, float size, double born, bool splash) {
   b.size = size;
   b.born = born;
   b.splash = splash;
+  b.hot = hot;
   b.water = groundHeight && groundHeight(at.x, at.z) < waterLevel - 0.05f;
   recent_.push_back(b);
   if (fresh_.size() >= 256) fresh_.erase(fresh_.begin());
@@ -278,7 +280,7 @@ void Blasts::FromFlash(Vec3 at, float glowSize, double born, uint32_t entity) {
   // (the game's death makes its flash 2 to 3 times the unit's radius; a scorch is about the radius across: the same
   // size for both of one death. The smallest flashes - a muzzle's, a spark's - shake nothing.)
   const float size = 0.4f * glowSize;
-  if (size >= 0.3f) Add(at, std::min(size, 60.0f), born);
+  if (size >= 0.3f) Add(at, std::min(size, 60.0f), born, false, true);
 }
 
 bool Blasts::FlashedOn(uint32_t entity, double since) const {
@@ -294,7 +296,7 @@ void Blasts::FromScar(Vec3 at, float sizeX, float sizeZ, double born) {
 
 void Blasts::FromImpact(Vec3 at, float damageRadius, float damage, double born) {
   const float size = damageRadius > 0 ? 0.85f * damageRadius * std::clamp(0.01f * damage, 0.25f, 1.0f) : std::min(0.15f + damage / 800, 0.6f);
-  if (size >= 0.2f) Add(at, std::min(size, 60.0f), born);
+  if (size >= 0.2f) Add(at, std::min(size, 60.0f), born, false, true);
 }
 
 float Blasts::Reach(float size) const { return std::min(2.5f + 5 * size, 60.0f); }
