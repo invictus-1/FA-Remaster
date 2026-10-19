@@ -373,7 +373,7 @@ class WorldPicture {
   // player unticks the option: no meshes. On: what the original then draws of the meshes by their technique's
   // "CartographicFeedback" (the CommandFeedback family, RallyPoint, FakeRings: pings, the interface's WorldMeshes of
   // those shaders) is stamped under the icons: opaque, in its albedo's colour, where its level of detail reaches the
-  // minimap's (placed.h, FeedbackStamps). The units' and the props' own minimap looks are not drawn yet.
+  // minimap's (placed.h, MinimapStamps). The units' and the props' own minimap looks are not drawn yet.
   void SetMinimapMeshes(bool on);
   // Where a place of the world is on the minimap last drawn, and the place on the ground under a
   // point of it.
