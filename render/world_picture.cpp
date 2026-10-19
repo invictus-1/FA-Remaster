@@ -7,6 +7,7 @@
 #include <cmath>
 #include <thread>
 
+#include "card_memory.h"  // (photofix2)
 #include "core/vfs.h"
 #include "ground.h"
 #include "gfx.h"
@@ -144,6 +145,8 @@ struct WorldPicture::Impl {
     double shown = 0;
     bool playing = false, frameKept = false;
     uint64_t mostCardBytes = 0;
+    double budget = 0;            // (photofix2: the card's memory one picture might take, PhotoBudgetNow)
+    uint64_t cardFree = 0;        // (photofix2: what the card said was free when it began; 0 not known)
   };
   Photo photo;
   bool photoFrame = false;      // (a photo's frame: drawn at its own size into the device's photo window, no resize)
@@ -169,8 +172,26 @@ struct WorldPicture::Impl {
 };
 
 static double SteadySeconds() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
-static double photoBudget = 0;  // (photomode: SetPhotoBudget, for checks; 0: TakePhoto's rule)
+static double photoBudget = 0;  // (photomode: SetPhotoBudget, for checks; 0: the card's own, PhotoBudgetNow)
 void WorldPicture::SetPhotoBudget(double bytes) { photoBudget = std::max(bytes, 0.0); }
+
+// (photofix2) The card's memory one picture of a photo may take (StartPhoto: the photo in one picture where it fits, else
+// in tiles; `perPixel` the bytes a drawn pixel takes): what the system still lets this program have on the card now (its
+// budget less what it uses, gfx::Device::MemoryBudget), three quarters of it less half a gigabyte (what the measure by
+// pixels leaves out, and what other programs may take meanwhile); at least half a gigabyte (tiles of some five million
+// pixels: a card that full is slow whatever is done); at most so much that the scene's largest picture (its colour, 8
+// bytes a sample) stays under 2 GiB (the largest one picture has been tried at, and within the drivers' limits for one
+// allocation). Where the card does not say: TakePhoto's rule, 2.5 GB. SetPhotoBudget's, where set, in place of all.
+// `cardFree`: what the card said was left (0: not known).
+static double PhotoBudgetNow(gfx::Device* device, double perPixel, uint64_t* cardFree) {
+  *cardFree = 0;
+  if (photoBudget > 0) return photoBudget;
+  uint64_t budget = 0, used = 0;
+  if (!device || !device->MemoryBudget(&budget, &used)) return 2.5e9;
+  *cardFree = budget > used ? budget - used : 0;
+  const double most = 2147483648.0 / (8.0 * std::max(gSceneSamples, 1)) * perPixel;
+  return std::clamp(0.75 * static_cast<double>(*cardFree) - 0.5e9, 0.5e9, most);
+}
 
 WorldPicture::WorldPicture() : impl_(std::make_unique<Impl>()) {}
 
@@ -1013,6 +1034,14 @@ void WorldPicture::PhotoSize(int* width, int* height, int* supersample) {
   *supersample = by;
 }
 
+// (photofix2) The share of the window's view a photo's picture of `width` x `height` shows, `pixel` of its pixels making
+// one of the window's (`shownWidth` x `shownHeight`: the window's scene as last drawn); 1 when the window is not known.
+// What falls is so many to the window's view (World::photoShare).
+static float WindowShare(int width, int height, float pixel, int shownWidth, int shownHeight) {
+  if (shownWidth <= 0 || shownHeight <= 0) return 1.0f;
+  return static_cast<float>(width) * static_cast<float>(height) / (pixel * pixel * static_cast<float>(shownWidth) * static_cast<float>(shownHeight));
+}
+
 bool WorldPicture::TakePhoto(const Camera& camera, int width, int height, double tick, std::vector<uint32_t>* pixels, int* madeWidth, int* madeHeight,
                              int supersample, int settleFrames) {
   Impl& m = *impl_;
@@ -1052,12 +1081,18 @@ bool WorldPicture::TakePhoto(const Camera& camera, int width, int height, double
   w.selectionMarks = w.lifeBars = w.workBars = false;
   const World::Picking picking = w.KeepPicking();
   w.photo = true;
+  // (photofix2) what falls (rain, snow, splashes), the tracers and the occlusion's reach measured in the window's pixels,
+  // as in StartPhoto's frames (PhotoStep): a photo drawn larger than the window shows its rain as the window does
+  w.photoPixel = m.shownHeight > 0 ? static_cast<float>(drawnHeight) / static_cast<float>(m.shownHeight) : 1.0f;
+  w.photoShare = WindowShare(drawnWidth, drawnHeight, w.photoPixel, m.shownWidth, m.shownHeight);
   const int settle = std::clamp(settleFrames, 0, 64);
   for (int i = 0; i <= settle; ++i) {
     RenderWorld(camera, drawnWidth, drawnHeight, tick);
     m.device->EndFrame(i == settle ? &m.capture : nullptr, false);
   }
   w.photo = false;
+  w.photoPixel = w.photoShare = 1;
+  if (m.lens.on && m.lens.strength > 0.001f) w.dof.Release();  // (photofix2: the lens's pictures at the photo's size not kept)
   m.depthIsWindow = false;
   w.selectionMarks = selectionMarks;
   w.lifeBars = lifeBars;
@@ -1139,6 +1174,7 @@ World::Moment WorldPicture::Impl::MomentShown(bool settled) const {
 
 void WorldPicture::SetPhotoMoment(float hour, int weather, float strength) {
   Impl& m = *impl_;
+  gfx::CardMemoryWarmUp();  // (photofix2: a photo may follow; its plan asks the card's memory)
   // what is asked: the kind's clouds, its rain, snow and fog at that strength, the ground wet or snowed on to match
   hour = std::fmod(std::clamp(hour, 0.0f, 24.0f), 24.0f);
   weather = std::clamp(weather, 0, WeatherKindCount() - 1);
@@ -1184,6 +1220,7 @@ void WorldPicture::ClearPhotoMoment() {
 
 void WorldPicture::GetPhotoMoment(float* hour, int* weather, float* strength) const {
   const Impl& m = *impl_;
+  gfx::CardMemoryWarmUp();  // (photofix2: as SetPhotoMoment)
   if (m.momentOn) {
     *hour = m.momentHour;
     *weather = m.momentWeather;
@@ -1221,6 +1258,7 @@ WorldPicture::WeatherNames WorldPicture::WeatherKinds() {
 
 float WorldPicture::FocusAt(float x, float y) {
   Impl& m = *impl_;
+  gfx::CardMemoryWarmUp();  // (photofix2: as SetPhotoMoment)
   if (!m.world || !m.device || m.photo.on || !m.depthIsWindow) return 0;
   if (m.prepared) {  // (a frame LifeBarAnchors began for the next Draw: ended unseen; that Draw prepares its own)
     m.device->EndFrame(nullptr, false);
@@ -1252,15 +1290,19 @@ bool WorldPicture::StartPhoto(const Camera& camera, int width, int height, doubl
     m.device->EndFrame(nullptr, false);
     m.prepared = false;
   }
-  // the plan: one picture where it fits the card's memory (TakePhoto's rule), else tiles
-  const double budget = photoBudget > 0 ? photoBudget : 2.5e9, perPixel = 48.0 + 12.0 * static_cast<double>(gSceneSamples);
+  // the plan: one picture where it fits the card's memory (photofix2: as much of it as the card has free now), else tiles
+  const double perPixel = 48.0 + 12.0 * static_cast<double>(gSceneSamples);
+  const double budget = PhotoBudgetNow(m.device.get(), perPixel, &p.cardFree);
+  p.budget = budget;
   p.lens = m.lens;
-  p.plan = PlanPhoto(camera, width, height, supersample, budget, perPixel, 64);
+  // (photofix2: drawn twice as large by TakePhoto's rule, 2.5 GB, as before: the free memory chooses one picture or tiles)
+  constexpr double kSampleBudget = 2.5e9;
+  p.plan = PlanPhoto(camera, width, height, supersample, budget, perPixel, 64, kSampleBudget);
   if (p.plan.Tiled() && p.lens.on && p.lens.strength > 0.001f) {
     // the lens's blur misses what lies past a tile's edge: a guard band as wide as its widest blur; and every tile
     // focused where the photo is (the lens's own measure at the middle of the picture last drawn, as the window had it)
     const int guard = std::max(64, static_cast<int>(std::ceil(p.lens.largestBlur * static_cast<float>(p.plan.drawnHeight) * 1.1f)) + 16);
-    p.plan = PlanPhoto(camera, width, height, supersample, budget, perPixel, guard);
+    p.plan = PlanPhoto(camera, width, height, supersample, budget, perPixel, guard, kSampleBudget);
     if (p.lens.focus <= 0) {
       float focus = 0;
       if (m.depthIsWindow) {
@@ -1386,10 +1428,7 @@ void WorldPicture::PhotoStep() {
   // as the window shows it (a tile's pixels to the drawn photo's: its focal length's share)
   w.photoMeter = p.fresh && p.tile == 0;
   w.photoPixel = p.pixelScale * t.focalShare;
-  w.photoShare = m.shownWidth > 0 && m.shownHeight > 0
-                     ? static_cast<float>(p.plan.tileWidth) * static_cast<float>(p.plan.tileHeight) /
-                           (w.photoPixel * w.photoPixel * static_cast<float>(m.shownWidth) * static_cast<float>(m.shownHeight))
-                     : 1.0f;
+  w.photoShare = WindowShare(p.plan.tileWidth, p.plan.tileHeight, w.photoPixel, m.shownWidth, m.shownHeight);
   RenderWorld(t.camera, p.plan.tileWidth, p.plan.tileHeight, p.tick);
   const int settle = p.tile == 0 ? p.settleFirst : p.settle;
   const bool last = p.frame >= settle;
@@ -1423,6 +1462,7 @@ void WorldPicture::PhotoStep() {
   // all drawn: the device's photo window let go of, the window's held picture too, and the photo put together on a
   // thread of its own (the window drawn as ever meanwhile)
   m.device->SetPhotoWindow(-1, -1);
+  if (p.lens.on && p.lens.strength > 0.001f) w.dof.Release();  // (photofix2: the lens's pictures at the tiles' size not kept)
   if (p.heldPicture) m.device->Destroy(p.heldPicture);
   p.heldPicture = {};
   p.held = false;
@@ -1477,6 +1517,8 @@ WorldPicture::PhotoNumbers WorldPicture::LastPhotoNumbers() const {
   n.drawSeconds = p.drawSeconds;
   n.assembleSeconds = p.assembleSeconds;
   n.mostCardBytes = p.mostCardBytes;
+  n.budgetBytes = p.budget;  // (photofix2)
+  n.cardFreeBytes = p.cardFree;
   n.columns = p.plan.columns;
   n.rows = p.plan.rows;
   n.tileWidth = p.plan.tileWidth;

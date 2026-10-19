@@ -46,8 +46,10 @@ struct PhotoPlan {
 // The plan for a photo of `width` x `height` (made at most 16384 a side, in proportion) as `camera` sees it, drawn
 // `supersample` times larger again (0: 2 where one picture that size fits the memory, else 1; asked for: 1 .. 4).
 // `budget`: the card's memory one drawn picture may take, `perPixel` its bytes a pixel. `guard`: drawn pixels round
-// each tile that are drawn but never used.
-PhotoPlan PlanPhoto(const Camera& camera, int width, int height, int supersample, double budget, double perPixel, int guard);
+// each tile that are drawn but never used. (photofix2) `sampleBudget`: the memory `supersample` 0 chooses 2 or 1 by, in
+// place of `budget` (0: `budget`), so that a larger budget (a card with much free) draws in one picture what would have
+// been tiles without drawing the photo any larger than before.
+PhotoPlan PlanPhoto(const Camera& camera, int width, int height, int supersample, double budget, double perPixel, int guard, double sampleBudget = 0);
 
 // The photo put together from its tiles (RGBA bytes, each tileWidth x tileHeight, in the plan's order) as 0xAARRGGBB,
 // rows from the top; `threads` at once.

@@ -409,6 +409,9 @@ class WorldPicture {
   // first at that size and moment, for what settles over frames (the volumetric clouds, the light in the air).
   // Pixels as Draw gives them (0xAARRGGBB, rows from the top). Between frames (not between LifeBarAnchors and the
   // Draw after it). The next Draw or DrawToWindow goes back to the window's size; it costs some frames' time.
+  // (photofix2) Drawn larger than the window, its rain, snow, splashes, tracers and ambient occlusion are measured in the
+  // window's pixels (as StartPhoto's), so it shows them as the window does; the lens's working pictures at its size are
+  // let go of after it.
   bool TakePhoto(const Camera& camera, int width, int height, double tick, std::vector<uint32_t>* pixels, int* madeWidth, int* madeHeight,
                  int supersample = 0, int settleFrames = 8);
   // The size a photo asked for comes out at, and how many times larger again it is drawn (TakePhoto's rule; the
@@ -446,8 +449,12 @@ class WorldPicture {
   // as TakePhoto's) and then shows the world as it was when the photo began (the interface's layer over it as given), so
   // the window goes on being drawn, its camera held; then the photo is put together on a thread of its own, while the
   // window is drawn as ever. Every frame of a photo shows the game's moment its first showed, also while the game goes on
-  // (multiplayer). Where one picture that large does not fit the card's memory (TakePhoto's rule), it is drawn in tiles
-  // (photo.h). False when a photo is being made already, or there is no world.
+  // (multiplayer). Where one picture that large does not fit the card's memory, it is drawn in tiles (photo.h): the
+  // memory the card has free for this program when it begins (photofix2: three quarters of it less half a gigabyte, at
+  // most what keeps the scene's largest picture under 2 GiB; TakePhoto's rule, 2.5 GB, where the card does not say), so
+  // a busy card takes tiles and a free one one picture (whether `supersample` 0 draws it twice as large still goes by
+  // TakePhoto's rule, as before). With the lens on, its working pictures at the photo's size are let go of when the
+  // photo is done. False when a photo is being made already, or there is no world.
   bool StartPhoto(const Camera& camera, int width, int height, double tick, int supersample = 0);
   // How far the photo has come, 0..1 (1: done, until taken); 0 when none is being made (back to 0 with TakeDonePhoto
   // false: it could not be made, the card had no room for its picture).
@@ -457,14 +464,18 @@ class WorldPicture {
   // What the last photo took, for a host's numbers: the seconds its frames took (from StartPhoto to the last read back)
   // and putting it together took, the card's memory at most meanwhile (as the device counts it), how it was drawn (tiles
   // across and down, each one's size, drawn larger by) and its frames.
+  // (photofix2) and the card's memory one picture of it might take (budgetBytes) and what the card said was free for this
+  // program when it began (cardFreeBytes; 0: not known), which chose one picture or tiles.
   struct PhotoNumbers {
     double drawSeconds = 0, assembleSeconds = 0;
     uint64_t mostCardBytes = 0;
     int columns = 1, rows = 1, tileWidth = 0, tileHeight = 0, by = 1, frames = 0;
+    double budgetBytes = 0;
+    uint64_t cardFreeBytes = 0;
   };
   PhotoNumbers LastPhotoNumbers() const;
-  // (checks) The card's memory one picture of a photo may take, bytes, in place of TakePhoto's rule (2.5 GB); 0: the
-  // rule again. A smaller one makes photos be drawn in tiles that would fit in one picture (the viewer's --photo-test).
+  // (checks) The card's memory one picture of a photo may take, bytes, in place of the card's own (StartPhoto); 0: the
+  // card's again. A smaller one makes photos be drawn in tiles that would fit in one picture (the viewer's --photo-test).
   static void SetPhotoBudget(double bytes);
   // The ground's own height at a place of the map, under water the bottom's: the simulation's
   // TerrainHeight (its own function, on the same heights), as the picture has them, the map's and

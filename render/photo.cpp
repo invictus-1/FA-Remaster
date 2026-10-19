@@ -62,7 +62,7 @@ Camera CameraWithAxes(Vec3 eye, Vec3 right, Vec3 up, Vec3 back, float distance) 
   return c;
 }
 
-PhotoPlan PlanPhoto(const Camera& camera, int width, int height, int supersample, double budget, double perPixel, int guard) {
+PhotoPlan PlanPhoto(const Camera& camera, int width, int height, int supersample, double budget, double perPixel, int guard, double sampleBudget) {
   PhotoPlan p;
   width = std::max(width, 16);
   height = std::max(height, 16);
@@ -72,8 +72,11 @@ PhotoPlan PlanPhoto(const Camera& camera, int width, int height, int supersample
   const double most = budget / std::max(perPixel, 1.0);  // (the pixels one picture drawn may have)
   auto fits = [&](double w, double h) { return w <= kMostSide && h <= kMostSide && w * h <= most; };
   int by = supersample > 0 ? std::clamp(supersample, 1, 4) : 2;
+  // (photofix2: 2 where it fits `sampleBudget`, when given)
+  const double mostSampled = (sampleBudget > 0 ? sampleBudget : budget) / std::max(perPixel, 1.0);
+  auto fitsSampled = [&](double w, double h) { return w <= kMostSide && h <= kMostSide && w * h <= mostSampled; };
   if (supersample <= 0)
-    while (by > 1 && !fits(static_cast<double>(p.width) * by, static_cast<double>(p.height) * by)) --by;
+    while (by > 1 && !fitsSampled(static_cast<double>(p.width) * by, static_cast<double>(p.height) * by)) --by;
   while (by > 1 && static_cast<double>(p.width) * by * static_cast<double>(p.height) * by > 6e8) --by;  // (more drawn takes too long)
   p.by = by;
   p.drawnWidth = p.width * by;

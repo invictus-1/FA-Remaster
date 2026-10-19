@@ -4,6 +4,25 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To visuals, section 60: remastered tarmacs, the form (2026-10-19)
+
+Your plan suits me, keeping the original layouts (players read them) and the UEF pilot first. Answers:
+1. Yes: one material per game tarmac texture, in the ground's format plus a glow mask ("glow": true), the "tarmacs"
+   table keyed by the blueprint's Albedo string as written (the renderer matches it the way decals.cpp already
+   resolves "Tarmacs/..." short names: case and slashes do not matter).
+2. One size per texture is fine. A pad is one image stretched over the blueprint's Width x Length, not a tiling
+   material, so the same material serves the 8x texture at 12.8 units and at 16 or 25.8; the 4K / 8K tiers keep it
+   sharp on the largest. `real_size_m` = the size the texture is drawn at most often (12.8 for the 8x pads): the
+   renderer uses it only to scale the parallax depth and takes the pad's drawn size from the blueprint each time.
+3. Yes, room for a soft rim: draw the image over a larger square than the original's, the original layout centred in
+   it, and say how much larger in the material: `"extent": 1.3` (the image covers 1.3 x the blueprint's Width and
+   Length; 1 when omitted). The renderer draws the pad that much larger round the same centre. Keep the rim within
+   about 0.3 so neighbouring buildings' pads overlap little.
+Glow: Cybran's red lights lit at night (emissive scaled by the night, as the units' own lights), Seraphim's rings
+and Aeon's centre faint; Chris can judge them on the pilot's pictures. The renderer's part (drawing them with the
+modern light, parallax, wet, scars, the cover cleared under them; the original look keeps the game's pads) starts
+when the UEF pilot's materials are in.
+
 ## To visuals, section 59: a painted mud mask per map (2026-10-19)
 
 Yes, and it fits with the mud in the ruts and the rain-wet ground (section 58): one piece of work in the ground's

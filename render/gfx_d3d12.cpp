@@ -14,6 +14,7 @@
 //  - Compute shaders share the root signature; its last table holds the sixteen storage views (u0..u15),
 //    copied from a CPU-side heap of their own at each dispatch. A storage target is in the
 //    unordered-access state from a dispatch that writes it until a dispatch reads it or a pass begins.
+#include "card_memory.h"  // (photofix2)
 #include "gfx.h"
 #include "gfx_vulkan_dxc.h"
 
@@ -295,6 +296,7 @@ class D3D12Device final : public Device {
   void Destroy(Pipeline pipeline) override;
   void Mark(const char* name) override;
   uint64_t MemoryInUse() override;
+  bool MemoryBudget(uint64_t* budget, uint64_t* used) override;  // (photofix2)
   void TakeTimes(std::vector<std::pair<const char*, double>>* out) override;
 
   void BeginFrame(const float clearColor[4]) override;
@@ -3088,6 +3090,24 @@ uint64_t D3D12Device::MemoryInUse() {
   DXGI_QUERY_VIDEO_MEMORY_INFO info = {};
   if (!adapter3_ || FAILED(adapter3_->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info))) return 0;
   return info.CurrentUsage;
+}
+
+// (photofix2) the system's budget for this program on the card, and what it uses of it; the budget no more than this
+// program could still take of what all programs together leave free on the card (card_memory.h: the system's own
+// budget barely heeds the others)
+bool D3D12Device::MemoryBudget(uint64_t* budget, uint64_t* used) {
+  DXGI_QUERY_VIDEO_MEMORY_INFO info = {};
+  if (!adapter3_ || FAILED(adapter3_->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info)) || !info.Budget) return false;
+  *budget = info.Budget;
+  *used = info.CurrentUsage;
+  DXGI_ADAPTER_DESC1 desc = {};
+  uint64_t all = 0;
+  if (SUCCEEDED(adapter3_->GetDesc1(&desc)) && desc.DedicatedVideoMemory > 0 &&
+      CardMemoryUsedByAll(desc.AdapterLuid.LowPart, desc.AdapterLuid.HighPart, &all)) {
+    const uint64_t card = desc.DedicatedVideoMemory, left = card > all ? card - all : 0;
+    *budget = std::min<uint64_t>(*budget, info.CurrentUsage + left);
+  }
+  return true;
 }
 
 }  // namespace

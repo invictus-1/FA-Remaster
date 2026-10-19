@@ -396,6 +396,17 @@ class Device {
   // The card's memory this program uses, in bytes (Direct3D 12: as the system counts it; Vulkan: the
   // blocks it has taken of the card's own memory); 0 when not known.
   virtual uint64_t MemoryInUse() = 0;
+  // (photofix2) The card's own memory as the system shares it out now: `budget`, how much of it this program may use
+  // before the system has to move some of what it holds out to the computer's memory, and `used`, how much it uses
+  // (Direct3D 12: IDXGIAdapter3::QueryVideoMemoryInfo, the local group; Vulkan: VK_EXT_memory_budget, the card's
+  // largest heap of its own, where the driver has it); the budget no more than `used` and what all programs together
+  // leave free on the card (card_memory.h: the system's own budget barely heeds other programs). Bytes; false when not
+  // known. Asked when wanted (a photo's plan), not every frame.
+  virtual bool MemoryBudget(uint64_t* budget, uint64_t* used) {
+    (void)budget;
+    (void)used;
+    return false;
+  }
   // The draw calls of the last frame ended (EndFrame).
   int DrawCallsLastFrame() const { return drawsLast_; }
 

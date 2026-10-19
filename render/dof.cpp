@@ -318,6 +318,14 @@ bool DepthOfField::Size(int width, int height) {
   return out_ && half_ && far_ && near_ && tileNear_ && dilated_;
 }
 
+void DepthOfField::Release() {
+  for (gfx::Texture* t : {&half_, &tileNear_, &dilated_, &far_, &near_, &out_}) {
+    if (*t) device_->Destroy(*t);
+    *t = {};
+  }
+  width_ = height_ = 0;
+}
+
 gfx::Texture DepthOfField::Apply(const Lens& lens, const Camera& camera, gfx::Texture picture, int width, int height, gfx::Texture depth,
                                  int depthWidth, int depthHeight, float seconds, bool snap) {
   if (!picture || !depth || width < 16 || height < 16 || depthWidth <= 0 || depthHeight <= 0) return picture;

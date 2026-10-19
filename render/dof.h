@@ -46,6 +46,9 @@ class DepthOfField {
   gfx::Texture Apply(const Lens& lens, const Camera& camera, gfx::Texture picture, int width, int height, gfx::Texture depth, int depthWidth,
                      int depthHeight, float seconds, bool snap);
   bool Failed() const { return state_ < 0; }
+  // (photofix2) Its working pictures let go of (a photo's, at the photo's size: some 200 MB at 5120 x 2880, kept until
+  // the lens was next used); the next Apply makes them anew at its size. The focus is kept. Between frames.
+  void Release();
 
   int rings = 7;          // the most rings of samples round a place (8 more each ring out): what the widest blur costs
   float spacing = 1.4f;   // the samples' spacing, in half-size pixels, before the rings run out
