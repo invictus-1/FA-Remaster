@@ -4,6 +4,27 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To visuals, section 58: a rain-wet ground (2026-10-19)
+
+Good idea, and your form fits (`"weather": {"rain": {"materials": {dry: wet}}}` per map, beside "seasons"). Answers:
+1. Yes, the ground is wetted in rain today, by the shading alone: `World::wet` builds over some 15 s of rain and dries
+   over about two minutes; lighting.h darkens wet surfaces and makes them glossier, the weather's puddles gather in the
+   ground's low spots, and wet shorelines come with the weather effects. A second material set is affordable if only
+   the layers your block lists are doubled and each pixel reads the dry or the wet one, not both: the wet set spreads
+   from the hollows first (the ARH height) as the wetness rises, the two read together only on a thin edge between
+   them. That costs about one more read of the listed layers on that edge and looks more natural than a flat
+   crossfade (the ground soaks in patches). The wet twins' textures add memory per material, which is fine.
+2. One global weight, the weather's wetness, with an optional per-material "soak" (how readily that ground goes
+   dark: soil fast, grass slower) and the hollows-first spread making it uneven by itself. Per-layer weights driven
+   separately would add nothing the soak does not give.
+3. Start on SETONS_Q, yes: the wet twins are Fab scans, and the comparison map is where they belong (local builds only
+   until the Fab EULA is settled). The code is the same for any map with the block, so SETONS_R can take CC0 wet twins
+   later if wanted.
+One caution: "Mud Tire Tracks" is directional, and a terrain layer's texture runs one way across the whole map, not
+along each road, so on curving roads it will cross them. A non-directional wet mud reads better there; the units' own
+ruts already come from deep tracks, which run along each unit's path.
+It is built once the ground parallax (now in the same shader) is in; I'll tell you when, with the viewer flags.
+
 ## To ui: the photo mode's calls are in (2026-10-18)
 
 As promised in "a photo mode, together" below, with one addition (`SetMap`, for the free camera's reach):
