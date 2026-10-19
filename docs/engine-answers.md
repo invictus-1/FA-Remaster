@@ -3,6 +3,54 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 43: a script entity's Owner given as an army number (FAF's ping entities) — done (61536c5)
+
+**The original (FA exe, read).** `_c_CreateEntity` (0x692330) takes the army from the spec before it makes the
+entity:
+- It needs exactly 2 arguments. The army starts as 0xff (none). If the spec is a table, it reads `spec.Owner` and
+  `spec.Army` (0x6923b4..0x6923f8).
+- If Owner is not nil (0x692414):
+  - A number is the army index itself, 0-based: LuaStackObject::GetInteger (0x41b520), truncated
+    (0x692434..0x692442). Nothing checks its range.
+  - Anything else is read as an entity (func_GetEntityOpt 0x6208d0, which raises "Expected a game object..." for a
+    value that is no game object). The army is that entity's army (entity+0x14c, then +8), or 0xff when there is
+    none (0x692446..0x69248a).
+- If Owner is nil and Army is not (0x69248c..0x6924bf), Army is a 1-based index: GetInteger minus 1. Below 0 it
+  raises "Army < 0 passed in".
+- The army goes into the entity's id: `(army | 0x500) << 20` (0x6924f3) is the key of the id pool (0x684480). So a
+  ping's id is one of its army's (0x501xxxxx for army index 1), and 0x5ffxxxxx means no army.
+- `_c_CreateShield` (0x776aa0) is not the same. It reads only `spec.Owner`, and only as an entity
+  (0x776b1e..0x776b93); there is no number case and no Army.
+
+**Ours now** (`Sim::AdoptScriptEntity`, src/sim/entities.cpp):
+- A script entity takes its army in the same order: Owner as a number (0-based), then Owner as an entity, then Army
+  (1-based, with the same error).
+- An entity Owner still gives its position and orientation, as before. That part was not checked against the exe.
+- Shields read Owner as an entity only, as before.
+- The id follows the army.
+
+So FAF's pings (`/lua/SimPing.lua` 95: `Entity({Owner = data.Owner, Location = ...})`) belong to the pinging army.
+FAF's `SetVizToEnemies('Never')` then hides them from the enemy.
+
+**Not done:** a value for Owner that is neither a number nor a game object is still taken as no army, without the
+original's error.
+
+**Test:** `tests/script_entity_owner.txt`, an --orders file (the command line is in its header). It logs:
+```
+script entity owner: ping 2 1343225857 | Army = 2: 2 1343225858 | the first unit as Owner: 1 | none: -1 1609564160
+```
+- GetArmy is 1-based. 1343225857 is 0x50100001, an id of army 2's; 1609564160 is 0x5ff00000, an id of no army's.
+- Before this change the line read `ping -1 1609564160 | Army = 2: -1 1609564161`.
+- In your ui/tests/pings.lua, moho64ui_ScriptEntities() should now list the ping with its army instead of army 0.
+
+**Results.** I ran each replay with the change and without it (main e761279):
+- the 13 + bench: no differences;
+- MP3: identical to the end;
+- MP2: 10886 / 10918 / 10889, draws 775127, the same as without the change;
+- MP1 cut to 7002: 6966, air 6998, draws 852593, the same as without the change. It has 8 of its 49 SpawnPing
+  callbacks before 7000 (Owner = the sender's 0-based army, e.g. 2 from source 2). Those pings now take their army and
+  an id of that army's, and the state does not change.
+
 ## ui 42 (a): a coordinated attack's link (IssueCommand's coordWith) — done (8ec8642)
 
 **The original (FA exe, read).**
