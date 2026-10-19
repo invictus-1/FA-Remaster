@@ -1416,6 +1416,7 @@ void EndCall(Sim& sim, Unit* u, TransportTaskData& d) {
   // M28 cleared the transport's load at 1615 (the load's dtor aborts the walker's navigator; its move ends, then its
   // call fails, in the next command stage): the original's engineer is out of Moving at 1616, ours kept it until
   // its next order's task four beats later.
+  const bool walking = d.moving;
   if (d.moving) {
     d.moving = false;
     SetState(u, "Moving", false);
@@ -1436,8 +1437,13 @@ void EndCall(Sim& sim, Unit* u, TransportTaskData& d) {
   if (T && !T->dead && T->transport) RemovePickupUnit(sim, *T->transport, u, true);
   // (the walk to the pickup place is a move child: its destructor's abort rule. A unit whose load order is given
   // again keeps walking until the new task sets its goal: seen in the original's navigator log, status 2 with the
-  // old goal for two beats after the order.)
-  if (u->motion.hasGoal && !u->clearKeepsMove) MotionStop(u);
+  // old goal for two beats after the order.) CUnitCallTransport's own dtor (0x5ff7f0..0x5ff961: the two state bits,
+  // the beam-up's OnStopTransportBeamUp and NotifyDetached, the transport's RemovePickupUnit, vt+0x14) stops nothing:
+  // the abort is the walk's, so a call that ends before its walk began (state 0 or 1) leaves the unit's motion
+  // alone. Seen: MP2 8281, army 1's Pillar 0x1000d4 under way on a Move is told to board transport 0x10003f at 8278
+  // (clear: the Move's dtor keeps the motion, table 0x618998); its call fails in state 1 at 8281, before any walk
+  // (both engines end the order in that beat) and the original drives on along the old path at 2.44; ours braked.
+  if (walking && u->motion.hasGoal && !u->clearKeepsMove) MotionStop(u);
 }
 
 // --- unload (CUnitUnloadUnits 0x625ee0 / 0x626390) ---------------------------------------------
