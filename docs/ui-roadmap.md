@@ -61,10 +61,16 @@ world's picture (renderer) and the stock AI opponents (engine; the mod AI M28 al
 
 ## Stage 2: a skirmish can be set up completely
 
-- **P** Open slots: adding and removing AI opponents, their faction, colour and team.
+- **P** **Done** (2026-10-19, `ui/tests/lobby_slots.lua`): open slots: adding and removing AI opponents
+  (the slot's list: an AI, Kick Player, Move AI to slot), their faction, colour and team (the row's
+  lists), the AI fill panel (Fill Slots, Clear Slots, the teams count), close empty slots, the map's
+  markers (a right click closes a slot, a left click moves the player), auto teams, autobalance, random
+  map, random faction; the launched game has those armies, factions, colours and teams.
 - **P** The mods manager, so that AI mods and other mods can be switched on for the game.
-- The map selection dialog (list, filters, preview, map options), game options, presets. It opens and
-  looks like the original; choosing in it needs the list clicks and drop-down lists of stage 1.
+- **Done** (2026-10-19, `ui/tests/lobby_slots.lua`): the map selection dialog: its list (a click and
+  OK, Cancel, its Random Map), filters (players with =, >=, <=, size, type, the name), picture and
+  description, and a map's own options (shown under Advanced, one set reaches the game's scenario
+  options; the map's defaults for the others). Game options and presets as before.
 - **Done** (2026-10-18, `ui/tests/lobby_small.lua`): the lobby's chat line and its smaller dialogs
   (rules, CPU benchmark, presets, "Load"; loading a saved game itself is stage 7's).
 - The changelog dialog only once per version (it follows the preferences).

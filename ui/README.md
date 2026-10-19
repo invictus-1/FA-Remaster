@@ -429,6 +429,22 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   before its script sets a font; saved games are `.SCFASaveGame` files; `LoadSavedGame`. The
   benchmark times its loops with `GetSystemTimeSeconds` inside a frame: headless the clock stands
   still there and it measures 0; in a window the clock is live.
+- The lobby's slots and its map, driven as a player drives them, and the game launched from them
+  (checked 2026-10-19: `ui/tests/lobby_slots.lua`, 109 checks, `--frames 900`; its map with options
+  of its own is `ui/tests/maps/lobby_test`, mounted with `--maps ui/tests/maps`): an AI put into a
+  slot from the slot's list, its faction, colour and team from the row's lists (the row and the
+  map's marker show them), Kick Player and Move AI to slot from an AI's list, the AI fill panel
+  (Fill Slots, Clear Slots, the teams count), closing the empty slots, a right click on a marker
+  closing its slot and a left click moving the player there, auto teams through its five states,
+  autobalance, the random map button, an AI of random faction; the map dialog's list (a click and
+  OK, Cancel, its Random Map), its filters and name filter, and a map's own options (shown under
+  Advanced, one set, the lobby's options list shows it). The game has the lobby's armies, factions,
+  colours and teams (allies by team), the chosen map and its options. FAF's scripts needed nothing
+  new of the engine; read on the way: `ItemList:SetSelection` (FA exe 0x79ba00) leaves the selection
+  for a negative row and returns the list; the user state's `Random` (0x8bea00, FAF's math.random
+  there) is the original's: lo + (draw * (hi + 1 - lo)) >> 32 without a check of the interval, at
+  most two arguments, from a twister seeded with the time at the start (0xbc32a0), which
+  math.randomseed does not touch.
 - The console's output (`user/keymap.cpp`, read from the original 2026-10-17; `ui/tests/console.lua`,
   43 checks): the functions given to `AddConsoleOutputReciever` (the console window's list, the
   echo on the game's screen) hear what the original's CON_Printf (0x41c990) gets, and only that:

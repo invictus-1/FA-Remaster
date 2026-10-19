@@ -2,7 +2,9 @@
 // the interface state, front-end data, random numbers.
 #include <cctype>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
+#include <ctime>
 #include <map>
 #include <random>
 #include <string>
@@ -171,22 +173,40 @@ int l_GetFrontEndData(lua_State* L) {
   return 1;
 }
 
-// Random(): [0, 1); Random(n): 1..n; Random(a, b): a..b. The interface's own generator: nothing
-// here may draw from the simulation's.
+// Random(): [0, 1]; Random(n): 1..n; Random(a, b): a..b (FA exe 0x8bea00; FAF's config.lua makes it
+// math.random, so the lobby's random map, random factions and AI names draw from it). The interface's
+// own generator, never the simulation's: an MT19937 (CMersenneTwister 0x10a6a90) seeded once at the
+// start with time(0) ^ GetTickCount() (0xbc32a0; here the steady clock's milliseconds stand in for the
+// tick count), so math.randomseed does not touch it and its draws differ from run to run. As the
+// original computes them: draw * 2^-32 rounded to a float; lo + (draw * (hi + 1 - lo)) >> 32 in 32 bits,
+// with no check of the interval (Random(1, 0) is 1). The arguments are integers (cut towards zero, as
+// the sim's Random 0x759010 takes them), at most two.
+int32_t RandomArg(lua_State* L, int i) {
+  if (lua_type(L, i) != LUA_TNUMBER) luaL_typerror(L, i, "integer");  // (LuaStackObject::GetInteger 0x41b520)
+  float f = static_cast<float>(lua_tonumber(L, i));
+  if (!(f > -2147483904.0f && f < 2147483648.0f)) return INT32_MIN;  // MSVC cvttss2si: NaN / out of range
+  return static_cast<int32_t>(f);
+}
 int l_Random(lua_State* L) {
-  static std::mt19937 rng(std::random_device{}());
-  int n = lua_gettop(L);
+  static std::mt19937 rng(static_cast<uint32_t>(std::time(nullptr)) ^
+                          static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::steady_clock::now().time_since_epoch()).count()));
+  const int n = lua_gettop(L);
+  if (n > 2) return luaL_error(L, "%s\n  expected between %d and %d args, but got %d", "Random", 0, 2, n);
   if (n == 0) {
-    lua_pushnumber(L, static_cast<lua_Number>(std::uniform_real_distribution<double>(0.0, 1.0)(rng)));
+    lua_pushnumber(L, static_cast<lua_Number>(static_cast<float>(rng()) * 0x1p-32f));
     return 1;
   }
-  int lo = 1, hi = static_cast<int>(luaL_checknumber(L, 1));
-  if (n >= 2) {
-    lo = hi;
-    hi = static_cast<int>(luaL_checknumber(L, 2));
+  uint32_t lo = 1, span;
+  if (n == 1) {
+    span = static_cast<uint32_t>(RandomArg(L, 1));
+  } else {
+    const uint32_t hp1 = static_cast<uint32_t>(RandomArg(L, 2)) + 1u;
+    lo = static_cast<uint32_t>(RandomArg(L, 1));
+    span = hp1 - lo;
   }
-  if (hi < lo) return luaL_error(L, "Random: interval is empty");
-  lua_pushnumber(L, static_cast<lua_Number>(std::uniform_int_distribution<int>(lo, hi)(rng)));
+  const uint32_t r = static_cast<uint32_t>((static_cast<uint64_t>(rng()) * span) >> 32) + lo;
+  lua_pushnumber(L, static_cast<lua_Number>(static_cast<float>(static_cast<int32_t>(r))));
   return 1;
 }
 

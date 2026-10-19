@@ -304,12 +304,13 @@ int l_GetSelection(lua_State* L) {
   lua_pushnumber(L, static_cast<lua_Number>(Self(L)->selection));
   return 1;
 }
-// Inferred: a row outside the list clears the selection (-1).
+// SetSelection(row) (FA exe 0x79ba00): a row of the list becomes the selection, a row past its end
+// clears it (-1), a negative row leaves it as it is; the list is returned. It does not scroll.
 int l_SetSelection(lua_State* L) {
   ItemList* c = Self(L);
   int row = static_cast<int>(luaL_checknumber(L, 2));
-  c->selection = row >= 0 && row < c->Count() ? row : -1;
-  return 0;
+  if (row >= 0) c->selection = row < c->Count() ? row : -1;
+  return ReturnSelf(L);
 }
 
 int l_ScrollToTop(lua_State* L) {
