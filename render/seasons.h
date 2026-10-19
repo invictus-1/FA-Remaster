@@ -94,6 +94,11 @@ class FallingLeaves {
                gfx::Texture plants);
   // Into the scene's pass, with what is solid. `heights`, `heightUnit`: the ground's (Terrain::HeightTexture, HeightUnit).
   void Draw(const View& view, gfx::Texture heights, float heightUnit);
+  // [groundfix] Their motion (motion.h), for the temporal upscaler and frame generation: after Motion::Build, each leaf
+  // drawn again over the scene's depth (`depth`, one sample a pixel) into `motion`, writing where it was the frame before
+  // (`now`, `before`: the views without the jitter, Motion::Now and Before). It begins a pass of its own.
+  void DrawMotion(const View& view, gfx::Texture motion, gfx::Texture depth, const Mat4& now, const Mat4& before, gfx::Texture heights,
+                  float heightUnit);
 
   // Tuning (viewer --leaves-*): how many (1: a few a tree), how big (1: 0.07 world units off the trees, 0.16 on the
   // ground, about as large as the leaves the crowns' and the autumn ground's art hold), how fast they sink and drift;
@@ -114,6 +119,11 @@ class FallingLeaves {
   float mapWidth_ = 0, mapHeight_ = 0, water_ = -1e9f;
   bool tried_ = false;
   gfx::Pipeline draw_, ground_;
+  // [groundfix] (the motion's: made the first time it is asked for; the time of the frame before the last Prepare's, and
+  // that one's)
+  gfx::Pipeline drawMotion_, groundMotion_;
+  bool motionTried_ = false;
+  float lastTime_ = -1e30f, beforeTime_ = 0;
   std::vector<float> constants_, groundConstants_;  // this frame's (LeafConstants)
   std::vector<std::pair<float, uint32_t>> near_;  // (Prepare's: the trees near enough, by their distance)
   gfx::Texture plants_;

@@ -15,7 +15,9 @@
 //    off their bows (by their speed and how rough the sea is; in a rough sea a burst as the bow meets a wave). Puffs lit
 //    as the lit smoke is (the sun through the shadows, the sky round about, the small lights), seen through the air.
 //
-// Where the shores are is read once from the map's heights, the first frame the option is on (MakeField): a field over
+// Where the shores are is read once from the map's heights, on a thread of its own from the first frame the option is on
+// (or from the map's opening, when it is on then: StartField), the frames going on meanwhile; the surf fades in when it
+// is there (at once when it was there from its first frame on) (WorkOutField, TakeField): a field over
 // the map of the signed distance to the waterline, the water's depth, how steep the nearest shore is and how open the
 // water before it is (the share of open water round about), handed to the water's shader as a texture (t9 of the
 // water's pass, kSurfFieldSlot); and the places on rocky shores that throw spray. The map's own shores only: past the
@@ -28,10 +30,13 @@
 //
 // Off: nothing is made or done, and the water's shader is built without SURF (the same source as before).
 #pragma once
+#include <atomic>
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <memory>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -86,6 +91,7 @@ static const float kSurfRise = 0.45;  // how much higher the water's sheet lies 
 static const float kSurfFar = 30;      // the waves' trains begin this far out from the shore (world units) ...
 static const float kSurfWarp = 1.3;    // ... and are this much shorter again at the shore, shortening over ...
 static const float kSurfWarpReach = 8; // ... about this far
+static const float kSurfSwash = 0.06;   // [groundfix] how much the run-up's sheet falls a world unit toward its tip
 
 // `xz` where the line of sight meets the water at its level; `grain` how much water one pixel covers (world units);
 // `level` the water's level; `mapSize` the map's width and height; `area`: the field's first texel's corner (world x,
@@ -166,14 +172,23 @@ SurfHere SurfAt(float2 xz, float grain, float level, float2 mapSize, float4 area
   float n0 = floor(c0), w0 = c0 - n0;
   float S0 = SurfStrength(n0, xz);
   float tau = w0 / look2.z;
-  float run = tau < 1 ? sin(3.14159 * pow(tau, 0.7)) : 0;
+  // ([groundfix] eased in over the first moments of its arrival, `arrive`: a wave coming in at an angle to the shore
+  // arrives along it a stretch at a time, its run-up sweeping along the beach; begun at once at the run's pace, endlessly
+  // steep at its start, the run-up's front along the beach was a sharp corner, and the rock's burst a step in its white)
+  float arrive = smoothstep(0, 0.07, w0);
+  float run = tau < 1 ? sin(3.14159 * pow(tau, 0.7)) * arrive : 0;
   float runUp = look.w * open * S0 * run * lerp(1, 0.55, steep);
   float shore = saturate(1 - d / 2.5);
   s.lift = lerp(s.lift, runUp, shore) * saturate((d + 6) / 2);
+  // ([groundfix] over the land the run-up's sheet slopes down toward its tip, kSurfSwash a world unit inland: how far it
+  // runs is then the run-up's, not only the land's. Level, it spread over a flat berm all at once the moment it rose past
+  // the berm's height: a step in the waterline, sweeping along the beach with an oblique wave)
+  s.lift += min(d, 0) * kSurfSwash;
   // the sheet running up is foam at first, clearing as it drains (the water's own foam whitens its edge)
   white = max(white, shore * saturate(1 - d / 1.2) * saturate(S0 * 1.5) * open * run * lerp(0.8, 0.25, saturate(tau * 1.6)));
   // on rock: a burst of white where the wave strikes, boiling at the foot of it and draining away
-  float strike = steep * S0 * open * (exp(-w0 * 6) * saturate(1 - d / 2) + 0.35 * exp(-w0 * 1.5) * saturate(1 - d / 4));
+  float strike = steep * S0 * open * (exp(-w0 * 6) * saturate(1 - d / 2) + 0.35 * exp(-w0 * 1.5) * saturate(1 - d / 4)) *
+                 smoothstep(0, 0.02, w0) * (1 - smoothstep(0.85, 1, w0));  // ([groundfix] eased in, and gone by the next wave)
   white = max(white, strike * (0.5 + 0.5 * rough));
   s.white = saturate(white) * look2.w;
   s.lift = clamp(s.lift, -0.2, kSurfRise);
@@ -200,6 +215,9 @@ class Surf {
 
   // The map whose shores it is (Water::Load); its field is worked out the first frame the option is on.
   void SetMap(const MapData* map);
+  // [groundfix] Its field begun on a thread of its own now (a map opened with the option on), not at the first frame
+  // (Begin begins it then if not yet). Once for each map.
+  void StartField();
   // A unit's blueprint by its id ("ues0103"), read once for each kind of unit (World sets it): which units are ships
   // and how fast they go.
   std::function<bool(const std::string&, BpValue*)> readBlueprint;
@@ -248,7 +266,9 @@ class Surf {
   int Puffs() const { return static_cast<int>(puffs_.size()); }
   int Drawn() const { return drawn_; }
   int bursts = 0, ships = 0;  // rock bursts thrown since the map was opened; ships throwing spray in the last frame
-  float fieldMs = 0;          // how long working out the field took
+  float fieldMs = 0;          // how long working out the field took (on its thread)
+  float fieldMainMs = 0;      // [groundfix] and how long the frames took over it (the heights copied, the texture made)
+  int fieldWaited = 0;        // [groundfix] frames the surf was on before its field was there
 
  private:
   struct Spot {  // a place on a rocky shore that throws spray
@@ -274,7 +294,23 @@ class Surf {
     float maxSpeed = 5;
   };
   const Kind& KindOf(const std::string& blueprint);
-  bool MakeField();
+  // [groundfix] The field, worked out on a thread of its own from a copy of the map's heights (WorkOutField: nothing of
+  // the device's), taken in by Begin when done (TakeField: its texture made there).
+  struct FieldWork {
+    std::shared_ptr<MapData> map;  // (its size, heights and water alone: a copy)
+    int w = 0, h = 0;
+    float cell = 1;
+    std::vector<uint16_t> texels;
+    std::vector<Spot> spots;
+    float ms = 0;
+    bool ok = false;
+  };
+  static void WorkOutField(FieldWork* work, int debug);
+  bool TakeField();
+  std::thread worker_;
+  std::atomic<bool> workDone_{false};
+  std::unique_ptr<FieldWork> work_;
+  float fade_ = 1;  // (the surf's share shown: fading in when its field came after its first frame)
   bool Init();  // (the spray's shader, the first time it is wanted)
   float Random();
   void Throw(const Puff& p);

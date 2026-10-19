@@ -4,8 +4,10 @@
 #include <cctype>
 #include <cmath>
 #include <cstring>
+#include <optional>
 
 #include "blasts.h"
+#include "core/vfs.h"
 #include "dds.h"
 #include "hot_metal.h"
 #include "mesh_renderer.h"
@@ -90,6 +92,12 @@ size_t LevelBytes(gfx::Format f, int w, int h) {
 }  // namespace
 
 Debris::~Debris() {
+  {  // [groundfix] (the thread reading ahead where paint glows: stopped)
+    std::lock_guard<std::mutex> lock(glowMutex_);
+    glowStopping_ = true;
+  }
+  glowWake_.notify_all();
+  if (glowThread_.joinable()) glowThread_.join();
   for (Shape& s : shape_) {
     if (s.skinIndices) device_->Destroy(s.skinIndices);
     if (s.charredVertices) device_->Destroy(s.charredVertices);
@@ -227,12 +235,30 @@ void Debris::MakeShapes() {
 
 // A unit's paint spots whose patches (`piece` model units across) are clear of where its paint glows: its specular
 // texture's blue (the glow of every faction's look and of LabPBR), read from its file at a level no larger than 256
-// (a few milliseconds, once for each kind of unit that dies). Pieces glowing with the unit's lights would read as shots.
-// When every spot glows somewhere, all are kept.
+// (once for each kind of unit that dies: 0.3 to 9 ms for the game's units, 5 to 43 for a remastered one's, 2026-10-19;
+// [groundfix] read ahead on a thread of its own as the kind is first drawn, Warm, and taken here). Pieces glowing with
+// the unit's lights would read as shots. When every spot glows somewhere, all are kept.
 std::vector<Vec3> Debris::ClearSpots(const Model* unit, float piece) {
-  std::vector<Vec3> spots = unit->paintSpots;
-  if (unit->paintMaterial.empty() || spots.empty()) return spots;
+  if (unit->paintMaterial.empty() || unit->paintSpots.empty()) return unit->paintSpots;
+  {  // [groundfix] read ahead (Warm): taken when done; waited for while its thread works on it; one still waiting in the
+     // queue is taken out of it and read here (as one never told)
+    std::unique_lock<std::mutex> lock(glowMutex_);
+    auto it = glow_.find(unit);
+    if (it != glow_.end() && it->second.started) {
+      glowDone_.wait(lock, [&] { return glow_[unit].done; });
+      return glow_[unit].clear;
+    }
+    if (it != glow_.end()) {
+      glowQueue_.erase(std::remove(glowQueue_.begin(), glowQueue_.end(), unit), glowQueue_.end());
+      glow_.erase(it);
+    }
+  }
   const auto file = textures_->ReadFile(unit->paintMaterial);
+  return ClearOf(unit->paintSpots, file ? &*file : nullptr, piece);
+}
+
+// (ClearSpots' work, from the specular file's bytes; on any thread)
+std::vector<Vec3> Debris::ClearOf(const std::vector<Vec3>& spots, const std::string* file, float piece) {
   DdsImage image;
   std::string error;
   if (!file || !ParseDds(*file, &image, &error) || image.layers != 1) return spots;
@@ -267,6 +293,50 @@ std::vector<Vec3> Debris::ClearSpots(const Model* unit, float piece) {
   return clear.empty() ? spots : clear;
 }
 
+// (a usual piece's size, the unit's model units)
+float Debris::PieceOf(const Model* unit) {
+  const Vec3 extent = (unit->boundsMax - unit->boundsMin) * unit->scale;
+  return std::max({extent.x, extent.z, 0.3f}) * 0.07f / std::max(unit->scale, 1e-4f);
+}
+
+// [groundfix] (debris.h says what it does)
+void Debris::Warm(const Model* unit) {
+  if (!unit || !unit->ok || unit->paintMaterial.empty() || unit->paintSpots.empty() || !files || looks_.count(unit)) return;
+  std::lock_guard<std::mutex> lock(glowMutex_);
+  if (glow_.count(unit)) return;
+  Glow& g = glow_[unit];
+  g.material = unit->paintMaterial;  // (copies: the thread reads nothing of the model)
+  g.spots = unit->paintSpots;
+  g.piece = PieceOf(unit);
+  glowQueue_.push_back(unit);
+  if (!glowThread_.joinable()) glowThread_ = std::thread([this] { GlowWorker(); });
+  glowWake_.notify_one();
+}
+
+// [groundfix] (Warm's thread: each kind told, in turn; waits while there is none; stops with the debris)
+void Debris::GlowWorker() {
+  std::unique_lock<std::mutex> lock(glowMutex_);
+  for (;;) {
+    glowWake_.wait(lock, [this] { return glowStopping_ || !glowQueue_.empty(); });
+    if (glowStopping_) return;
+    const Model* unit = glowQueue_.front();
+    glowQueue_.pop_front();
+    Glow& g = glow_[unit];
+    g.started = true;
+    const std::string material = g.material;
+    const std::vector<Vec3> spots = g.spots;
+    const float piece = g.piece;
+    lock.unlock();
+    const std::optional<std::string> file = files->ReadFile(moho::Vfs::Normalize(material));
+    std::vector<Vec3> clear = ClearOf(spots, file ? &*file : nullptr, piece);
+    lock.lock();
+    Glow& done = glow_[unit];  // (again: the map may have grown meanwhile)
+    done.clear = std::move(clear);
+    done.done = true;
+    glowDone_.notify_all();
+  }
+}
+
 // A unit's pieces' painted skins: each shape's skin laid onto a patch of the unit's texture where its paint lies (one of
 // its paint spots for each shape; a piece's patch about as much of the texture as the piece's size takes of the unit),
 // in the unit's own textures and material. Without a unit (a debris shell whose unit is not known): plain, the colour
@@ -296,11 +366,7 @@ const Debris::Looks& Debris::LooksOf(const Model* unit, char kind) {
     }
   }
   const ModelLod* from = unit && !unit->lods.empty() ? &unit->lods[0] : nullptr;
-  float piece = 0;  // (a usual piece's size, the unit's model units)
-  if (unit) {
-    const Vec3 extent = (unit->boundsMax - unit->boundsMin) * unit->scale;
-    piece = std::max({extent.x, extent.z, 0.3f}) * 0.07f / std::max(unit->scale, 1e-4f);
-  }
+  const float piece = unit ? PieceOf(unit) : 0.0f;  // (a usual piece's size, the unit's model units)
   const std::vector<Vec3> spots = unit ? ClearSpots(unit, piece) : std::vector<Vec3>{};
   for (int k = 0; k < kDebrisShapes; ++k) {
     const DebrisShape& s = shapes_[static_cast<size_t>(k)];

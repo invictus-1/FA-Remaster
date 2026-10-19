@@ -351,7 +351,13 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   float level = clamp(swell.x * 1.2 + (lace - 0.5) * 0.05, -kRise, kRise) - kRise;
 #endif
 #if SURF
+#if WINTER
+  // [surf] (the waves near the shore and their run-up; [groundfix] none where winter's ice lies along the shore: it lies
+  // still at the water's level, and the run-up slid the waterline in under its rim and out over the beach past it)
+  level += surf.lift * (1 - WinterShare(xz));
+#else
   level += surf.lift;  // [surf] (the waves near the shore and their run-up)
+#endif
 #endif
   float deep = i.world.y + level - bed.y;
   if (deep <= 0) {

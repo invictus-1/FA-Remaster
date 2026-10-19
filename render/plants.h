@@ -62,6 +62,10 @@ class PlantLife {
   // the middle, its forward way's x, z (a unit vector), half its length, half its width, 0, 0: units standing on the
   // ground), the clock. The field round what `camera` looks at; nothing pressed when the camera is far.
   void Prepare(const View& view, const Camera& camera, const std::vector<float>& boxes, double clock);
+  // The square the field covers round what `camera` looks at (x0, z0, x1, z1, world units), as Prepare places it; false
+  // when the camera is too far for anything to be pressed. (What the host need not go through for its boxes: the game's
+  // wrecks, World::PreparePlants.)
+  bool FieldSquare(const Camera& camera, float square[4]) const;
   // The ground where it burnt, into the scene's colour alone (the decals' pass: after the ground and its marks, before
   // anything stands on it; `sceneDepth` the scene's depth with the ground in it): ash black, then a burnt brown, as the
   // grass on it. Nothing where nothing has burnt for half an hour.
@@ -82,6 +86,7 @@ class PlantLife {
 
  private:
   bool Init();
+  void FieldMiddle(const Camera& camera, float* x, float* z) const;  // (the field's middle: Prepare's, FieldSquare's)
   bool Burning() const { return burnt_ && lastBurnt_ > -1e30 && lastClock_ - lastBurnt_ < 1800; }  // (AnyBurnt's, before ready_)
   gfx::Device* device_;
   int tried_ = 0;  // 0 not yet, 1 made, -1 they cannot be

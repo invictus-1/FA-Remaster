@@ -162,8 +162,9 @@ LOut Card(float3 p, uint corner, uint c, float yaw, float roll, float pitch, boo
   return o;
 }
 
-// Off a tree: comes off its crown, flutters and spins down, carried by the wind, lies a while where it lands.
-LOut VS(uint id : SV_VertexID) {
+// Off a tree: comes off its crown, flutters and spins down, carried by the wind, lies a while where it lands. (`now`: the
+// time it is drawn at; the motion's pass draws it at the frame before's too)
+LOut TreeLeaf(uint id, float now) {
   LOut o = (LOut)0;
   o.position = float4(0, 0, -1, 1);
   uint leaf = id / 6, corner = id % 6;
@@ -173,11 +174,11 @@ LOut VS(uint id : SV_VertexID) {
   // its cycle: long enough to fall from the top of the tree at the slowest and lie a while
   float slowest = motion.x * 0.8;
   float period = A.w / slowest + 8.5 + 3.0 * LeafRand(LeafHash(h + 1));
-  float phase = time / period + LeafRand(LeafHash(h + 2));
+  float phase = now / period + LeafRand(LeafHash(h + 2));
   float since = frac(phase) * period;
   uint c = LeafHash(h ^ (uint(floor(phase)) * 2654435761u));
   // the wind at the tree when it comes off
-  float gust = Gust(A.xz, time - since);
+  float gust = Gust(A.xz, now - since);
   if (LeafRand(c) > motion.z * saturate(0.35 + 0.65 * gust)) return o;  // (more come off in a gust)
   // where it comes off: somewhere on the crown, mostly toward its outside (from deep inside it would fall unseen)
   float turn = LeafRand(LeafHash(c + 1)) * 6.2831853, out_ = B.x * (0.8 + 0.3 * sqrt(LeafRand(LeafHash(c + 2))));
@@ -207,10 +208,11 @@ LOut VS(uint id : SV_VertexID) {
   float roll = lying > 0 ? 0.06 : 0.95 * swing, pitch = lying > 0 ? 0 : 0.35 * cos(w * t + ph);
   return Card(p, corner, c, yaw, roll, pitch, lying > 0, shown, 0);
 }
+LOut VS(uint id : SV_VertexID) { return TreeLeaf(id, time); }
 
 // On the ground: a leaf lies where the ground cover grows; a gust takes it a few units along the wind, hopping and
 // tumbling over the ground, and it lies again, and is gone. Squares round what the camera looks at, a few places in each.
-LOut GroundVS(uint id : SV_VertexID) {
+LOut GroundLeaf(uint id, float now) {
   LOut o = (LOut)0;
   o.position = float4(0, 0, -1, 1);
   uint place = id / 6, corner = id % 6;
@@ -220,7 +222,7 @@ LOut GroundVS(uint id : SV_VertexID) {
   int2 cell = int2(floor(at / area.z + 0.5));
   uint h = LeafHash(uint(cell.x) * 73856093u ^ LeafHash(uint(cell.y) * 19349663u + k * 83492791u + 11u));
   float period = 7.0 + 4.0 * LeafRand(LeafHash(h + 1));
-  float phase = time / period + LeafRand(LeafHash(h + 2));
+  float phase = now / period + LeafRand(LeafHash(h + 2));
   float since = frac(phase) * period;
   uint c = LeafHash(h ^ (uint(floor(phase)) * 2654435761u));
   float2 anchor = at + float2(LeafRand(LeafHash(c + 1)), LeafRand(LeafHash(c + 2))) * area.z;
@@ -228,7 +230,7 @@ LOut GroundVS(uint id : SV_VertexID) {
   // as many as the cover has plants there (its blades, clumps and dry stalks), more in a gust
   float4 grows = plants.SampleLevel(samplerLinearClamp, anchor / mapInfo.xy, 0);
   float go = 1.0 + 3.0 * LeafRand(LeafHash(c + 3));  // (when the gust takes it)
-  float gust = Gust(anchor, time - since + go);
+  float gust = Gust(anchor, now - since + go);
   if (LeafRand(c) > motion.z * saturate(grows.r * 0.5 + grows.g + grows.a) * saturate(0.3 + 0.7 * gust)) return o;
   // carried for a second or three, a few units, eased in and out, a little to one side
   float dur = 1.2 + 1.8 * LeafRand(LeafHash(c + 4));
@@ -250,12 +252,49 @@ LOut GroundVS(uint id : SV_VertexID) {
   float roll = moving ? 1.1 * sin(6.2831853 * hops * u) : 0.06, pitch = moving ? 0.5 * cos(6.2831853 * hops * u) : 0;
   return Card(p, corner, c, yaw, roll, pitch, !moving, shown, 1);
 }
+LOut GroundVS(uint id : SV_VertexID) { return GroundLeaf(id, time); }
+
+// a birch leaf's outline: broadest a third of the way from its stalk, to a point at its tip, and a short stalk
+bool LeafOutside(float2 shape) {
+  float s = shape.x * 0.5 + 0.5;
+  float wide = pow(saturate(s), 0.55) * (1 - s) * 2.3;
+  return abs(shape.y) > wide && !(s < 0.1 && abs(shape.y) < 0.09);
+}
+
+// [groundfix] The motion (motion.h): each leaf drawn again as the scene drew it (meeting the depth it left), writing where
+// the same corner of it was the frame before (`then`: drawn at that frame's time), both seen by the views without the
+// jitter. One that was not there the frame before (its cycle just begun, or not yet shown) is taken to stand still.
+cbuffer LeafMotion : register(b2) {
+  row_major float4x4 motionNow;     // this frame's view without the jitter
+  row_major float4x4 motionBefore;  // the frame before's
+  float4 motionWhen;                // x: the frame before's time
+};
+struct MOut {
+  float4 position : SV_Position;
+  float2 shape : TEXCOORD0;
+  float4 here : TEXCOORD1;
+  float4 then : TEXCOORD2;
+};
+MOut Moved(LOut a, LOut b) {
+  MOut o;
+  o.position = a.position;
+  o.shape = a.shape;
+  o.here = mul(motionNow, float4(a.world, 1));
+  bool was = b.position.w > 0 && b.position.z >= 0;  // (Card's "none" lies behind the eye: z -1, w 1)
+  o.then = mul(motionBefore, float4(was ? b.world : a.world, 1));
+  return o;
+}
+MOut MotionVS(uint id : SV_VertexID) { return Moved(TreeLeaf(id, time), TreeLeaf(id, motionWhen.x)); }
+MOut GroundMotionVS(uint id : SV_VertexID) { return Moved(GroundLeaf(id, time), GroundLeaf(id, motionWhen.x)); }
+float2 MotionPS(MOut i) : SV_Target {
+  if (LeafOutside(i.shape)) discard;
+  return (i.then.xy / i.then.w - i.here.xy / i.here.w) * float2(0.5, -0.5);
+}
 
 float4 PS(LOut i) : SV_Target {
-  // a birch leaf's outline: broadest a third of the way from its stalk, to a point at its tip, and a short stalk
   float s = i.shape.x * 0.5 + 0.5;
   float wide = pow(saturate(s), 0.55) * (1 - s) * 2.3;
-  if (abs(i.shape.y) > wide && !(s < 0.1 && abs(i.shape.y) < 0.09)) discard;
+  if (LeafOutside(i.shape)) discard;
   // (its midrib, and darker toward its edge, as a leaf drying from its rim)
   float3 albedo = i.albedo * (abs(i.shape.y) < 0.07 ? 0.82 : 1) * lerp(0.6, 1, saturate((wide - abs(i.shape.y)) / max(wide, 1e-3) * 3));
   float3 n = normalize(i.normal);
@@ -283,7 +322,7 @@ float Smooth(float a, float b, float x) {
 }  // namespace
 
 FallingLeaves::~FallingLeaves() {
-  for (gfx::Pipeline p : {draw_, ground_})
+  for (gfx::Pipeline p : {draw_, ground_, drawMotion_, groundMotion_})
     if (p) device_->Destroy(p);
 }
 
@@ -341,6 +380,11 @@ bool FallingLeaves::Prepare(const View& view, const Camera& camera, float rain, 
                             gfx::Texture plants) {
   treesDrawn = leavesDrawn = groundPlaces = 0;
   drawNow_ = groundNow_ = false;
+  // [groundfix] (the frame before's time, for the motion: none when there was no frame just before - the leaves just
+  // switched on, or a gap - and when the game's time stands still, none moves)
+  const float now = view.constants.time;
+  beforeTime_ = now - lastTime_ > 0 && now - lastTime_ <= 0.25f ? lastTime_ : now;
+  lastTime_ = now;
   if (density <= 0 || size <= 0 || (trees_.empty() && !plants)) return false;
   // fewer as the game's camera rises, none from the strategic zoom (a cinematic camera is low down)
   const float rise = camera.cinematic ? 0.0f : camera.distance;
@@ -419,6 +463,66 @@ void FallingLeaves::Draw(const View& view, gfx::Texture heights, float heightUni
     device_->SetConstants(0, &view.constants, sizeof view.constants);
     device_->SetConstants(1, groundConstants_.data(), static_cast<uint32_t>(sizeof(LeafConstants)));
     device_->SetTexture(0, heights);
+    device_->SetTexture(1, plants_);
+    device_->Draw(static_cast<uint32_t>(groundPlaces) * 6);
+  }
+  device_->SetTexture(0, {});
+  device_->SetTexture(1, {});
+}
+
+void FallingLeaves::DrawMotion(const View& view, gfx::Texture motion, gfx::Texture depth, const Mat4& now, const Mat4& before, gfx::Texture heights,
+                               float heightUnit) {
+  if (!motion || !depth || (!drawNow_ && !groundNow_)) return;
+  if (!motionTried_) {
+    motionTried_ = true;
+    std::string error;
+    const std::string defines = "#define TREES " + std::to_string(kTreesMost) + "\n#define LEAVES " + std::to_string(kLeavesPerTree) +
+                                "\n#define PER_SQUARE " + std::to_string(kPerSquare) + "\n";
+    const std::string source = std::string(kViewShaderBlock) + kLightingShaderBlock + defines + kLeaves;
+    gfx::PipelineDesc pd;
+    pd.name = "seasons: falling leaves, motion";
+    pd.vertexSource = pd.pixelSource = source;
+    pd.vertexEntry = "MotionVS";
+    pd.pixelEntry = "MotionPS";
+    pd.cull = gfx::Cull::None;
+    pd.colorFormat = gfx::Format::RG16F;
+    pd.depthWrite = false;
+    pd.depthBias = 16;  // (as the models' motion: the same placement compiled in another shader may land a hair farther)
+    drawMotion_ = device_->CreatePipeline(pd, &error);
+    if (drawMotion_) {
+      pd.name = "seasons: leaves on the ground, motion";
+      pd.vertexEntry = "GroundMotionVS";
+      groundMotion_ = device_->CreatePipeline(pd, &error);
+    }
+    if (!drawMotion_ || !groundMotion_) fprintf(stderr, "render: the falling leaves' motion cannot be drawn (%s)\n", error.c_str());
+  }
+  if (!drawMotion_ || !groundMotion_) return;
+  gfx::PassDesc pass;
+  pass.color = motion;
+  pass.depth = depth;
+  pass.clearColor = pass.clearDepth = false;
+  device_->BeginPass(pass);
+  struct {
+    Mat4 now, before;
+    float when[4];
+  } k{now, before, {beforeTime_, 0, 0, 0}};
+  device_->SetConstants(0, &view.constants, sizeof view.constants);
+  device_->SetConstants(2, &k, sizeof k);
+  device_->SetTexture(0, heights);
+  if (drawNow_ && !constants_.empty()) {
+    reinterpret_cast<LeafConstants*>(constants_.data())->mapInfo[2] = heightUnit;
+    device_->SetPipeline(drawMotion_);
+    device_->SetConstants(0, &view.constants, sizeof view.constants);
+    device_->SetConstants(1, constants_.data(), static_cast<uint32_t>(sizeof(LeafConstants)));
+    device_->SetConstants(2, &k, sizeof k);
+    device_->Draw(static_cast<uint32_t>(treesDrawn) * kLeavesPerTree * 6);
+  }
+  if (groundNow_ && !groundConstants_.empty()) {
+    reinterpret_cast<LeafConstants*>(groundConstants_.data())->mapInfo[2] = heightUnit;
+    device_->SetPipeline(groundMotion_);
+    device_->SetConstants(0, &view.constants, sizeof view.constants);
+    device_->SetConstants(1, groundConstants_.data(), static_cast<uint32_t>(sizeof(LeafConstants)));
+    device_->SetConstants(2, &k, sizeof k);
     device_->SetTexture(1, plants_);
     device_->Draw(static_cast<uint32_t>(groundPlaces) * 6);
   }

@@ -33,7 +33,8 @@ class SightShade {
   // map that can be played now): black, as the original's boundary pass makes everything there (on the
   // map; its frame beyond the edge is left); `dimmed`: a little of its light kept instead, a shade
   // toward blue, behind a dark line along the edge that keeps its width in the picture at any zoom,
-  // and the world beyond the map's edge with it (the modern look's).
+  // and the world beyond the map's edge with it (the modern look's); [groundfix] with World::beyondLand on (the view's
+  // beyondLand set), the softer edge of the map's own instead: dimmed little by little, a soft shadow for the line.
   void DrawBoundary(const View& view, const Camera& camera, gfx::Texture sceneDepth, const float rect[4], float mapWidth, float mapHeight, bool dimmed);
   float outsideKeeps = 0.45f;  // `dimmed`: how much of its light what lies outside keeps
 

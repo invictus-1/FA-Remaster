@@ -39,11 +39,14 @@
 // water splashes (told to the blasts, blasts.h, for the water's ripples) and sinks.
 #pragma once
 #include <array>
+#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -70,6 +73,13 @@ class Debris {
   // null: then each throws them as soon as it is seen dead). Only units the army the picture is for sees now.
   void Watch(const Frame& frame, double clock, const std::function<const Model*(const std::string&)>& model,
              const std::function<Vec3(uint32_t)>& color, const Blasts* flashes);
+  // [groundfix] Where a kind of unit's paint glows (its specular texture's blue, which its pieces' patches keep clear of)
+  // read ahead on a thread of its own, from `files` (the game's file system: read from any thread), as the kind is first
+  // drawn (World::AddFrame: the model its units are drawn with): its first death then reads no texture (5 to 43 ms for
+  // a remastered unit's, 2026-10-19). A death before it is done waits for what is left of it; one of a kind never told
+  // here (the debris switched on after it was first drawn: World tells all it knows then) reads it itself.
+  void Warm(const Model* unit);
+  const moho::Vfs* files = nullptr;
   // One piece a death throws: its model, drawn at `scale`; where it sat in the unit (its middle, in the unit's own frame,
   // world units) and how it was turned there; its size across (world units: how it bounces and lies).
   struct Piece {
@@ -175,6 +185,24 @@ class Debris {
   void MakeShapes();
   const Looks& LooksOf(const Model* unit, char kind);
   std::vector<Vec3> ClearSpots(const Model* unit, float piece);
+  // [groundfix] (ClearSpots' work, from the specular file's bytes, `file`, none: not read; any thread) and a unit's usual
+  // piece's size (its model units)
+  static std::vector<Vec3> ClearOf(const std::vector<Vec3>& spots, const std::string* file, float piece);
+  static float PieceOf(const Model* unit);
+  // [groundfix] (Warm's: each kind's work, the queue its thread takes them from, in the order told)
+  struct Glow {
+    std::string material;
+    std::vector<Vec3> spots, clear;
+    float piece = 0;
+    bool started = false, done = false;
+  };
+  std::mutex glowMutex_;
+  std::condition_variable glowWake_, glowDone_;
+  std::unordered_map<const Model*, Glow> glow_;
+  std::deque<const Model*> glowQueue_;
+  std::thread glowThread_;
+  bool glowStopping_ = false;
+  void GlowWorker();
   // a piece of the library for a unit (of that kind: its blueprint id's third letter), its army's colour, that size
   void Dress(Chunk* c, const Model* unit, char kind, Vec3 color);
   // a piece goes into the water (from flying, or a game's shell the game ended there)
