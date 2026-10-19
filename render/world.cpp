@@ -55,6 +55,7 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       shafts(device),
       tracks(device),
       trackField(device, &textures),
+      plantLife(device),  // [plants]
       wakes(device),
       ranges(device),
       placedDraw(device, &models),
@@ -155,6 +156,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     tracks.SetMap(static_cast<float>(map.width), static_cast<float>(map.height));
     trackField.SetMap(static_cast<float>(map.width), static_cast<float>(map.height));
     trackField.waterLevel = map.water.present ? map.water.elevation : -1e9f;
+    plantLife.SetMap(static_cast<float>(map.width), static_cast<float>(map.height));  // [plants]
     printf("render: map %s: %dx%d, look %s, %zu props, %zu decals\n", mapPath.c_str(), map.width, map.height, map.shader.c_str(), map.props.size(),
            map.decals.size());
     {  // the ground's lowest and highest (for what the map lies in)
@@ -1100,6 +1102,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     ApplyPropEvent(propEvents_.front());
     propEvents_.pop_front();
   }
+  if (plantsReact && look == Look::Modern && !sidePicture) SmoothProps(clock);  // [plants] (a felled tree falling: between beats)
   if (hotOn_ || hotBefore_) UpdateHotProps();  // (hot metal: the wrecks that have cooled go back into their groups)
   // (only the squares near what the camera sees: a square counts when it, widened by the largest
   // prop's reach and by room for a shadow thrown into the picture from outside it, is in view)
@@ -1435,10 +1438,89 @@ void World::ApplyPropEvent(const FramePropEvent& e) {
     std::string low = e.blueprint + "|" + e.mesh;
     for (char& c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     kept.wreck = low.find("defaultwreckage") != std::string::npos || low.find("_mesh_wreck") != std::string::npos;
+    // [plants] (a unit's fresh wreck: its death burnt the ground round it; a burnt tree's mesh is no unit's wreck)
+    if (plantsReact && kept.model && e.kind == FramePropEvent::Create && low.find("defaultwreckage") != std::string::npos) {
+      Vec3 centre;
+      float radius;
+      Sphere(kept.model, kept.world, &centre, &radius);
+      plantLife.AddWreck(centre.x, centre.z, radius, born);
+    }
     ListProp(&kept, e.id, true);
     if (hotOn_) HoldHot(e.id, &kept);
   }
   ++propsChanged;
+}
+
+// [plants] A prop the game moves beat by beat (a felled tree falls over in three to fifteen beats, and sinks away later:
+// src/sim/prop_motor.cpp) is drawn between where the last beat left it and where the next beat has it (told already,
+// not yet due), as the units are, instead of jumping ten times a second. Its square's group is filled anew each frame it
+// moves; the next beat's change, when due, puts it exactly where the game has it.
+void World::SmoothProps(double clock) {
+  // (a matrix's rotation as a quaternion, its scale taken out of each column)
+  auto turnOf = [](const Mat4& m, Vec3* scale) {
+    Vec3 c[3];
+    for (int k = 0; k < 3; ++k) {
+      const Vec3 axis{m.m[0][k], m.m[1][k], m.m[2][k]};
+      const float s = std::max(Length(axis), 1e-8f);
+      (&scale->x)[k] = s;
+      c[k] = axis * (1 / s);
+    }
+    Quat q;
+    const float trace = c[0].x + c[1].y + c[2].z;
+    if (trace > 0) {
+      const float s = std::sqrt(trace + 1) * 2;
+      q = {(c[1].z - c[2].y) / s, (c[2].x - c[0].z) / s, (c[0].y - c[1].x) / s, 0.25f * s};
+    } else if (c[0].x > c[1].y && c[0].x > c[2].z) {
+      const float s = std::sqrt(1 + c[0].x - c[1].y - c[2].z) * 2;
+      q = {0.25f * s, (c[1].x + c[0].y) / s, (c[2].x + c[0].z) / s, (c[1].z - c[2].y) / s};
+    } else if (c[1].y > c[2].z) {
+      const float s = std::sqrt(1 + c[1].y - c[0].x - c[2].z) * 2;
+      q = {(c[1].x + c[0].y) / s, 0.25f * s, (c[2].y + c[1].z) / s, (c[2].x - c[0].z) / s};
+    } else {
+      const float s = std::sqrt(1 + c[2].z - c[0].x - c[1].y) * 2;
+      q = {(c[2].x + c[0].z) / s, (c[2].y + c[1].z) / s, 0.25f * s, (c[0].y - c[1].x) / s};
+    }
+    return q;
+  };
+  for (const FramePropEvent& e : propEvents_) {
+    const double due = static_cast<double>(e.tick) * 0.1;
+    if (due - clock > 0.1 + 1e-6) break;  // (the list is in the beats' order: only the next beat's)
+    if (e.kind != FramePropEvent::Change) continue;
+    PlacedProp* p = nullptr;
+    if (e.mapIndex >= 0) {
+      if (static_cast<size_t>(e.mapIndex) < props_.size()) p = &props_[static_cast<size_t>(e.mapIndex)];
+    } else {
+      auto made = madeProps_.find(e.id);
+      if (made != madeProps_.end()) p = &made->second;
+    }
+    if (!p || !p->model) continue;
+    // (where the last beat left it: kept the first frame it is drawn toward this beat, before it is moved)
+    const int64_t key = e.mapIndex >= 0 ? e.mapIndex : -1 - static_cast<int64_t>(e.id);
+    PropBeat& last = propBeats_[key];
+    if (last.tick != e.tick) last = {e.tick, p->world};
+    Mat4 next = Mat4::FromTRS({e.position[0], e.position[1], e.position[2]}, Quat{e.orientation[0], e.orientation[1], e.orientation[2], e.orientation[3]},
+                              p->model->scale);
+    for (int row = 0; row < 3; ++row)
+      for (int k = 0; k < 3; ++k) next.m[row][k] *= e.scale[k];
+    const float t = static_cast<float>(std::clamp(1 - (due - clock) / 0.1, 0.0, 1.0));
+    Vec3 scaleA, scaleB;
+    const Quat a = turnOf(last.at, &scaleA), b = turnOf(next, &scaleB);
+    // (a step too small to see - sinking away, a hundredth of a unit a beat - is left to the beats: its square's group
+    // would be filled anew every frame for nothing)
+    const float turned = std::fabs(a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w);
+    const float dx = next.m[0][3] - last.at.m[0][3], dy = next.m[1][3] - last.at.m[1][3], dz = next.m[2][3] - last.at.m[2][3];
+    if (turned > 0.99999f && dx * dx + dy * dy + dz * dz < 0.05f * 0.05f) continue;
+    Mat4 now = Mat4::FromTRS({last.at.m[0][3] + (next.m[0][3] - last.at.m[0][3]) * t, last.at.m[1][3] + (next.m[1][3] - last.at.m[1][3]) * t,
+                              last.at.m[2][3] + (next.m[2][3] - last.at.m[2][3]) * t},
+                             Nlerp(a, b, t));
+    const Vec3 scale = scaleA + (scaleB - scaleA) * t;
+    for (int row = 0; row < 3; ++row)
+      for (int k = 0; k < 3; ++k) now.m[row][k] *= (&scale.x)[k];
+    p->world = now;
+    if (p->cell >= 0) propCells_[static_cast<size_t>(p->cell)].changed = true;
+  }
+  for (auto it = propBeats_.begin(); it != propBeats_.end();)  // (those long done)
+    it = static_cast<double>(it->second.tick) * 0.1 < clock - 1 ? propBeats_.erase(it) : std::next(it);
 }
 
 void World::WatchWear(const Frame& frame) {
@@ -2148,6 +2230,48 @@ void World::PressUnit(const FrameUnit& u, const Frame& frame, const std::string&
   trackField.AddUnit(u.id, path, position, orientation, (model->boundsMax - model->boundsMin) * model->scale, feet, footCount);
 }
 
+// [plants] Plants that react (plants.h): what stands on the ground near the camera presses them (every model drawn that
+// is not scenery, nor a shield's bubble or the like, and stands on the ground: its box from its bounds, turned as it is),
+// the game's blasts and its lasting fires burn them; the field and the burnt picture made before the scene's pass, and
+// handed to the grass's and the models' shaders (theirs made the first frame it is on).
+void World::PreparePlants() {
+  plantsNow_ = false;
+  meshes.plantsConstants = nullptr;
+  grass.plants = nullptr;
+  if (!plantsReact || look != Look::Modern || !haveMap_ || sidePicture) return;
+  device_->Mark("plants react");
+  CpuTimes::Part("plants react");
+  if (!meshes.PreparePlants()) return;
+  if (groundCover && grassMade_) grass.PreparePlants();
+  std::vector<float> boxes;
+  meshes.ForEachAdded([&](const Model* model, const float* row0, const float* row1, const float* row2, const float*, bool scenery) {
+    if (scenery || !model || !model->ok || model->lods.empty() || boxes.size() >= 8 * 256) return;
+    const ModelLod& l = model->lods[0];
+    if (l.glass || l.shield || l.impact || l.frame || l.nuke || l.fades || l.unlit || l.shell) return;  // (light, not a body)
+    const Vec3 lo = model->boundsMin, hi = model->boundsMax;
+    const float cx = 0.5f * (lo.x + hi.x), cz = 0.5f * (lo.z + hi.z);
+    const float x = row0[0] * cx + row0[2] * cz + row0[3], z = row2[0] * cx + row2[2] * cz + row2[3];
+    const float bottom = row1[0] * cx + row1[1] * lo.y + row1[2] * cz + row1[3];
+    if (bottom > GroundHeight(x, z) + 1.0f) return;  // (in the air)
+    // (its forward and sideways ways on the ground, and its half length and width in the world)
+    const Vec3 forward{row0[2], row1[2], row2[2]}, side{row0[0], row1[0], row2[0]};
+    const float flat = std::sqrt(forward.x * forward.x + forward.z * forward.z);
+    if (flat < 1e-5f) return;
+    boxes.insert(boxes.end(), {x, z, forward.x / flat, forward.z / flat, 0.5f * (hi.z - lo.z) * Length(forward) * 0.95f,
+                               0.5f * (hi.x - lo.x) * Length(side) * 0.95f, 0, 0});
+  });
+  plantLife.WatchBlasts(blasts, clock_, decals.groundHeight);
+  particles.HotEmitters(camera.target, 64, &plantFires_);
+  plantLife.WatchFires(plantFires_, clock_, decals.groundHeight);
+  plantLife.Prepare(view, camera, boxes, clock_);
+  if (!plantLife.Ready()) return;
+  plantsNow_ = true;
+  meshes.plantsConstants = plantLife.Constants();
+  meshes.plantsPress = plantLife.Press();
+  meshes.plantsBurnt = plantLife.Burnt();
+  grass.plants = &plantLife;
+}
+
 void World::PressGround(const Frame& frame) {
   if (!deepNow_ || !frame.blueprints) return;
   for (const FrameUnit& u : frame.units) {
@@ -2302,6 +2426,7 @@ void World::Render() {
     CpuTimes::Part("bones posed");
     meshes.Prepare(views);
   }
+  PreparePlants();  // [plants] (plants that react: what presses and burns them; it draws and dispatches, before the scene's pass)
   if ((rayView || bounceNow_ || reflectNow_ || lightRaysNow_) && RaysReady()) {  // the ray tracing scene, from the models just prepared
     Stage("ray tracing scene");
     rays.Build(meshes);
@@ -2458,6 +2583,13 @@ void World::Render() {
       post.BeginColorOnly();
       lights.Bind();
       decals.Draw(view, camera, post.Depth(), clock_);
+      post.ContinueScene();
+      lights.Bind();
+    }
+    if (plantsNow_ && plantLife.AnyBurnt()) {  // [plants] the ground where it burnt, darker (as the marks: it reads the ground's depth)
+      Stage("burnt ground");
+      post.BeginColorOnly();
+      plantLife.DrawGround(view, camera, post.Depth());
       post.ContinueScene();
       lights.Bind();
     }

@@ -127,6 +127,16 @@ class MeshRenderer {
   const void* blastConstants = nullptr;
   uint32_t blastConstantsSize = 0;
   bool PrepareBlasts();  // false: they cannot be made (then nothing bends)
+  // [plants] Plants that react (plants.h, World::plantsReact), set by the world each frame (null: off): what sways and is
+  // low (a bush, a fern, a sapling) is pressed over by the units driving through it and springs back, and is burnt where
+  // the ground is; a tree the game has felled stops swaying, and one it has burnt loses most of its needles. What sways and
+  // the game's burnt trees are then drawn by shaders of their own with it, the blasts' waves in them too (made by
+  // PreparePlants the first time the world wants them), after the rest of a pass, together (SortItems); the sun's maps
+  // by lighter ones (bent, not burnt; the game's burnt trees' by one of their own). PlantLife::Constants, and its two
+  // textures (read at t8, t9: registers of the models' shaders alone).
+  const float* plantsConstants = nullptr;
+  gfx::Texture plantsPress, plantsBurnt;
+  bool PreparePlants();  // false: they cannot be made (then nothing reacts)
   // (buildfx) The remastered build look (build_effects.h, World::remasteredBuild), set by the world each frame: what is
   // under construction takes its faction's remastered build shimmer, the models being drawn by the variants of their
   // shaders built with it (made by PrepareBuild the first time the world wants them; without it the shaders as they were).
@@ -297,10 +307,14 @@ class MeshRenderer {
     gfx::Pipeline original;
     gfx::PipelineDesc desc;
     gfx::Pipeline bending;
+    gfx::Pipeline plants;       // [plants] (PreparePlants)
+    gfx::Pipeline plantsBurnt;  // [plants] (the shadows' only: the game's burnt trees)
   };
   Bending bending_[8];
   std::string blastSource_;
   int blastsMade_ = 0;
+  std::string plantsSource_, plantsShadowSource_, plantsShadowBurntSource_;  // [plants]
+  int plantsMade_ = 0;        // [plants] (0 not yet, 1 made, -1 they cannot be made)
   // (buildfx) the pipelines that may draw something under construction, and their remastered build look's variants
   struct BuildVariant {
     gfx::Pipeline original;

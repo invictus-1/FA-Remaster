@@ -6,6 +6,7 @@
 #include <memory>
 
 #include "lighting.h"
+#include "plants.h"  // [plants]
 #include "ray_scene.h"
 
 namespace render {
@@ -19,6 +20,9 @@ cbuffer Grass : register(b1) {
                    // w: world units of the heights' largest value
   float4 mapInfo;  // xy: the map's width and height; z: world units a pixel covers at distance 1; w: the water's level
   float4 table;    // x: 1 where the map's cover table says how many blades grow (densityA's red), else by how grassy
+#ifdef PLANTS
+  float4 plantsK[2];  // [plants] (plants.h) PlantLife::Constants
+#endif
 };
 Texture2D<float> heightMap : register(t0);
 Texture2D cover : register(t1);          // Terrain::GroundColours: rgb the ground's colour, a how grassy
@@ -58,6 +62,9 @@ struct VOut {
   float up : TEXCOORD3;       // 0 at the foot, 1 at the tip
   float shadow : TEXCOORD4;
   float through : TEXCOORD5;  // the sun's light through the blade (World::leafLight; lighting.h, LeafThrough)
+#ifdef PLANTS
+  float3 ember : TEXCOORD6;   // [plants] a burnt blade's embers' light
+#endif
 };
 
 // (level along the blade: 0 the foot .. 3 the tip; side 0 / 1)
@@ -71,6 +78,9 @@ VOut VS(uint id : SV_VertexID) {
   o.position = float4(0, 0, -1, 1);  // (no blade: behind the eye)
   o.world = o.colour = o.normal = 0;
   o.up = o.shadow = o.through = 0;
+#ifdef PLANTS
+  o.ember = 0;
+#endif
   uint blade = id / 15, corner = id % 15;
   uint tuft = blade / 3, k = blade % 3;  // (three blades a cell, from close roots)
   uint side = uint(area.w);
@@ -103,6 +113,25 @@ VOut VS(uint id : SV_VertexID) {
   float swing = sin(time * 1.3 + beat) * 0.6 + sin(time * 2.9 + beat * 1.7) * 0.4;
   float gust = (0.35 + 0.9 * falling.x + 0.3 * falling.y) * (0.45 + 1.3 * CloudNoise(float3((xz - float2(0.915, 0.403) * (time * 7)) * 0.02, time * 0.07)));
   float2 bend = leanWay * lean + float2(0.915, 0.403) * (swing * gust * 0.45);
+#ifdef PLANTS
+  // [plants] pressed by what drove over it: laid over the way it was pushed (its height going to its lean, as in a blast's
+  // wave), rising again over some seconds; burnt where the ground is (black, then brown, and short), its own share of a
+  // half burnt place
+  float4 pressedBy = PlantsPressAt(xz, plantsK[0], plantsK[1]);
+  [branch] if (pressedBy.z > 0.01) {
+    float down = pressedBy.z * exp(-(pressedBy.w / pressedBy.z) / 6.0) * (0.85 + 0.3 * GrassRand(GrassHash(hb + 8)));
+    float2 way = pressedBy.xy / pressedBy.z;
+    float layOver = min(down * 1.3, 1.3);
+    if (layOver > 1e-3 && length(way) > 0.05) {
+      height *= cos(layOver);
+      bend += normalize(way) * tan(layOver);
+    } else {
+      height *= 1 - 0.9 * saturate(down);
+    }
+  }
+  float4 burnt = PlantsBurnLook(xz, plantsK[0], plantsK[1], GrassRand(GrassHash(hb + 9)));
+  height *= 1 - 0.8 * burnt.z;
+#endif
 #ifdef BLASTS
   // a blast's wave: laid over away from it (as far as the field says, radians from upright), its height going to its
   // lean so that the blade keeps about its length
@@ -136,6 +165,12 @@ VOut VS(uint id : SV_VertexID) {
   // the sun's light through it (World::leafLight): the side the eye sees faces it; thinner, more toward the tip
   float3 toEye = normalize(cameraPosition - p), faceWay = float3(face.x, 0, face.y);
   o.through = leaves.x > 0.5 ? LeafThrough(dot(faceWay, toEye) < 0 ? -faceWay : faceWay, toEye) * (0.4 + 0.6 * v) : 0;
+#ifdef PLANTS
+  // [plants] burnt: its colour, no light through it, its embers glowing toward the tip for the first seconds
+  o.colour = PlantsBurnColour(o.colour, burnt);
+  o.through *= 1 - saturate(burnt.x + burnt.y);
+  o.ember = PlantsEmber(burnt.w, xz, time) * (v * (falling.w > 0 ? falling.w : 1));
+#endif
 #ifdef BLASTS
   // (grass laid flat is paler: its blades lie open to the sky and show their backs, no longer shading each other; so
   // the wave shows as a pale ring running out over the grass)
@@ -152,12 +187,16 @@ float4 PS(VOut i) : SV_Target {
   rayLightsAtMost = 1;  // (one ray for the small lights' shadows; lighting.h, SmallLightsTraced)
 #endif
   float3 through = LeafLight(i.colour, i.through, i.world, i.shadow, 0.8);
+#ifdef PLANTS
+  through += i.ember;  // [plants]
+#endif
   return float4(ModernLight(i.colour, 0, 0.85, occlusion, through, normalize(i.normal), i.world, i.shadow), 1);
 }
 )hlsl";
 
 struct GrassConstants {
   float area[4], blades[4], mapInfo[4], table[4];
+  float plantsK[2][4];  // [plants] (read by the shaders with them only)
 };
 
 // The plants on cards (GroundCover::SetPlants): six corners a card, up to six cards a spot (a clump's), a spot a cell.
@@ -171,6 +210,9 @@ cbuffer Plants : register(b1) {
                     // its world units a metre
   float4 order[4];  // the cells by group (16 indices)
   float4 groups[6]; // per group: where its cells start in `order`, how many
+#ifdef PLANTS
+  float4 plantsK[2];  // [plants] (plants.h) PlantLife::Constants
+#endif
 };
 Texture2D<float> heightMap : register(t0);
 Texture2D cover : register(t1);          // Terrain::GroundColours (unused here but for its place)
@@ -227,6 +269,9 @@ struct VOut {
   float3 toward : TEXCOORD4;   // the card's face, toward the camera
   float3 ground : TEXCOORD5;   // the ground's normal under it
   float2 shade : TEXCOORD6;    // x: its sun shadow; y: how high up the plant (0 the foot, 1 its top)
+#ifdef PLANTS
+  nointerpolation float4 burnt : TEXCOORD7;  // [plants] how it is burnt (PlantsBurnLook)
+#endif
 };
 
 static const float2 kCard[6] = {float2(0, 1), float2(1, 1), float2(0, 0), float2(0, 0), float2(1, 1), float2(1, 0)};
@@ -276,6 +321,11 @@ VOut VS(uint id : SV_VertexID) {
   float thin = saturate((1 - length(foot - (area.xy + half)) / half) * 3);
   float height = lerp(size.y, size.z, PlantRand(PlantHash(hc + 2))) * more.w * saturate(thin * 2.5);
   height *= 1 - 0.9 * trampled.SampleLevel(samplerLinearClamp, (foot - area.xy) / (area.z * area.w), 0);
+#ifdef PLANTS
+  // [plants] burnt where the ground is (its own share of a half burnt place): short
+  o.burnt = PlantsBurnLook(foot, plantsK[0], plantsK[1], PlantRand(PlantHash(hc + 9)));
+  height *= 1 - 0.8 * o.burnt.z;
+#endif
   if (height <= 0.001) return o;
   float frame = size.x * height / max(size.w, 0.001);  // (the card: the cell's frame, as tall as the plant is)
   // facing the camera, leaning back toward it
@@ -294,6 +344,19 @@ VOut VS(uint id : SV_VertexID) {
   float above = 1 - c.y;  // (0 the foot, 1 the card's top)
   float3 p = root + right * ((c.x - 0.5) * frame) + up * (above * frame);
   p.xz += bend * above * above * frame;
+#ifdef PLANTS
+  {  // [plants] pressed by what drove over it: laid over the way it was pushed, rising again over some seconds
+    float4 pressedBy = PlantsPressAt(foot, plantsK[0], plantsK[1]);
+    [branch] if (pressedBy.z > 0.01) {
+      float down = pressedBy.z * exp(-(pressedBy.w / pressedBy.z) / 6.0);
+      float2 way = pressedBy.xy / pressedBy.z;
+      float layOver = min(down * 1.3, 1.3);
+      way = length(way) > 0.05 ? normalize(way) : -toward.xz;
+      p -= up * (above * frame * (1 - cos(layOver)));
+      p.xz += way * (sin(layOver) * above * above * frame);
+    }
+  }
+#endif
 #ifdef BLASTS
   {  // a blast's wave: laid over away from it, its top going over as far as it was high
     float2 blown = blastField.SampleLevel(samplerLinearClamp, (foot - area.xy) / (area.z * area.w), 0);
@@ -322,6 +385,9 @@ VOut VS(uint id : SV_VertexID) {
 float4 PS(VOut i) : SV_Target {
   float4 c = atlas.Sample(samplerAniso, i.uv);
   clip(c.a - 0.5);
+#ifdef PLANTS
+  clip(c.a - 0.5 - 0.3 * saturate(i.burnt.x + i.burnt.y));  // [plants] (burnt: thinner)
+#endif
   // [foliage] right at the eye (a cinematic camera down among the plants): faded out from 1.2 world units to nothing
   // under 0.4, as the models' foliage is (mesh_renderer.cpp, NearFade): with several samples a pixel by its coverage
   // among them (the alpha returned, alpha to coverage: PLANT_SAMPLES), else whole pixels cut, dithered
@@ -343,7 +409,13 @@ float4 PS(VOut i) : SV_Target {
 #endif
   // (the sun's light through its leaves, World::leafLight: by the card's own way, the side the eye sees)
   float3 albedo = ToLinear(c.rgb);
+#ifdef PLANTS
+  albedo = PlantsBurnColour(albedo, i.burnt);  // [plants]
+#endif
   float3 through = LeafLight(albedo, LeafThrough(card, normalize(cameraPosition - i.world)), i.world, i.shade.x, 0.7);
+#ifdef PLANTS
+  through = through * (1 - saturate(i.burnt.x + i.burnt.y)) + PlantsEmber(i.burnt.w, i.world.xz, time) * (falling.w > 0 ? falling.w : 1);  // [plants]
+#endif
   return float4(ModernLight(albedo, 0, 0.85, occlusion, through, n, i.world, i.shade.x), fade);
 }
 )hlsl";
@@ -353,6 +425,7 @@ struct PlantConstants {
   float cells[48][4];
   float order[4][4];
   float groups[6][4];
+  float plantsK[2][4];  // [plants] (read by the shaders with them only)
 };
 
 // Over the grass's square, how flat what stands there presses it: each texel the most of the discs round it (full
@@ -399,7 +472,8 @@ constexpr int kTrampleSize = 256;
 }  // namespace
 
 GroundCover::~GroundCover() {
-  for (gfx::Pipeline p : {pipeline_, trample_, plantPipeline_, blastPipeline_, blastPlantPipeline_})
+  for (gfx::Pipeline p : {pipeline_, trample_, plantPipeline_, blastPipeline_, blastPlantPipeline_, reactingPipelines_[0], reactingPipelines_[1],
+                          reactingPipelines_[2], reactingPipelines_[3]})
     if (p) device_->Destroy(p);
   if (trampled_) device_->Destroy(trampled_);
 }
@@ -428,6 +502,14 @@ bool GroundCover::Init(std::string* error) {
   blastDesc_ = pd;
   blastSource_ = "#define BLASTS 1\n" + source;
   blastPlantSource_ = "#define BLASTS 1\n" + plants;
+  // [plants] (and the same two with plants that react, without and with the blasts' waves: made by PreparePlants when first
+  // wanted; its textures at t9, t10)
+  const std::string reacting = std::string("#define PLANTS 1\n#define PLANTS_PRESS t9\n#define PLANTS_BURN t10\n");
+  reactingSources_[0] = reacting + kViewShaderBlock + RayShaders() + kLightingShaderBlock + kPlantsShaderBlock + kShader;
+  reactingSources_[1] = "#define PLANT_SAMPLES " + std::to_string(gSceneSamples) + "\n" + reacting + kViewShaderBlock + RayShaders() + kLightingShaderBlock +
+                        kPlantsShaderBlock + kPlantShader;
+  reactingSources_[2] = "#define BLASTS 1\n" + reactingSources_[0];
+  reactingSources_[3] = "#define BLASTS 1\n" + reactingSources_[1];
   const std::string trample = std::string(kViewShaderBlock) + kTrample;
   gfx::ComputeDesc cd;
   cd.name = "ground cover: pressed flat";
@@ -459,6 +541,28 @@ bool GroundCover::PrepareBlasts() {
     return false;
   }
   blastsMade_ = 1;
+  return true;
+}
+
+// [plants] The grass and the plants with plants that react (without, then with the blasts' waves), made the first time the
+// world wants them.
+bool GroundCover::PreparePlants() {
+  if (reactingMade_ || !pipeline_) return reactingMade_ > 0;
+  reactingMade_ = -1;
+  std::string error;
+  for (int k = 0; k < 4; ++k) {
+    gfx::PipelineDesc pd = blastDesc_;
+    pd.name = k == 0 ? "ground cover: grass, reacting" : k == 1 ? "ground cover: plants, reacting" : k == 2 ? "ground cover: grass, reacting, blasts' waves"
+                                                                                                   : "ground cover: plants, reacting, blasts' waves";
+    pd.vertexSource = pd.pixelSource = reactingSources_[k];
+    pd.alphaToCoverage = (k & 1) != 0;  // (the plants' cards, as plantPipeline_)
+    reactingPipelines_[k] = device_->CreatePipeline(pd, &error);
+    if (!reactingPipelines_[k]) {
+      fprintf(stderr, "render: the ground cover cannot react (%s)\n", error.c_str());
+      return false;
+    }
+  }
+  reactingMade_ = 1;
   return true;
 }
 
@@ -567,6 +671,8 @@ void GroundCover::Draw(const View& view, const Camera& camera, gfx::Texture heig
   drawnBlades = drawnPlants = 0;
   if (!blastPlantPipeline_) blasts = {};  // (PrepareBlasts has not made them)
   if (!prepared_ || !heights || !cover || !normals || view.height <= 0) return;
+  const bool reacting = plants && plants->Ready() && reactingMade_ > 0;  // [plants]
+  const int with = blasts ? 2 : 0;                                       // [plants] (reactingPipelines_: the blasts' pair)
   const int side = static_cast<int>(area_[3]);
   const float reach = 0.5f * area_[2] * area_[3];
   GrassConstants k{};
@@ -582,7 +688,12 @@ void GroundCover::Draw(const View& view, const Camera& camera, gfx::Texture heig
   const bool table = densityA && densityB;
   k.table[0] = table ? 1.0f : 0.0f;
   if (blasts) device_->SetTexture(8, blasts);
-  device_->SetPipeline(blasts ? blastPipeline_ : pipeline_);
+  if (reacting) {  // [plants]
+    std::copy(plants->Constants(), plants->Constants() + 8, &k.plantsK[0][0]);
+    device_->SetTexture(9, plants->Press());
+    device_->SetTexture(10, plants->Burnt());
+  }
+  device_->SetPipeline(reacting ? reactingPipelines_[with] : blasts ? blastPipeline_ : pipeline_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
   device_->SetConstants(1, &k, sizeof k);
   device_->SetTexture(0, heights);
@@ -618,7 +729,8 @@ void GroundCover::Draw(const View& view, const Camera& camera, gfx::Texture heig
     for (int i = 0; i < 16; ++i) p->cells[i * 3 + 2][3] = std::min(metre * plantBoost, plantTallest / std::max(plants_.cells[i][1][2], 1e-3f));
     std::copy(&plants_.order[0][0], &plants_.order[0][0] + 16, &p->order[0][0]);
     std::copy(&plants_.groups[0][0], &plants_.groups[0][0] + 24, &p->groups[0][0]);
-    device_->SetPipeline(blasts ? blastPlantPipeline_ : plantPipeline_);
+    if (reacting) std::copy(plants->Constants(), plants->Constants() + 8, &p->plantsK[0][0]);  // [plants]
+    device_->SetPipeline(reacting ? reactingPipelines_[with + 1] : blasts ? blastPlantPipeline_ : plantPipeline_);
     device_->SetConstants(0, &view.constants, sizeof view.constants);
     device_->SetConstants(1, p.get(), sizeof(PlantConstants));
     device_->SetTexture(5, densityB);
@@ -627,7 +739,7 @@ void GroundCover::Draw(const View& view, const Camera& camera, gfx::Texture heig
     drawnPlants = plantSide * plantSide;
     device_->Draw(static_cast<uint32_t>(drawnPlants) * 36);
   }
-  for (int slot = 0; slot < 9; ++slot) device_->SetTexture(slot, {});
+  for (int slot = 0; slot < (reacting ? 11 : 9); ++slot) device_->SetTexture(slot, {});
 }
 
 }  // namespace render

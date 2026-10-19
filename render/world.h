@@ -73,6 +73,7 @@
 #include "view.h"
 #include "volume_blasts.h"
 #include "placed.h"
+#include "plants.h"  // [plants]
 #include "ranges.h"
 #include "wakes.h"
 #include "water.h"
@@ -474,6 +475,11 @@ class World {
   // worn to the earth; fading with the weather and the ground. The game's tread marks and footprints are pressed in
   // by their own shapes instead of laid as pictures. Modern look; off by default.
   bool deepTracks = false;
+  // [plants] Plants that react (plants.h, `plantLife`; Chris, 2026-10-18): grass and the plants laid over where units drive,
+  // rising again over seconds; bushes, ferns, saplings and the like bending under them and springing back; the grass, the
+  // plants and the undergrowth burnt black, then brown and lower where explosions and fires were, growing back over
+  // minutes; the trees the game fells no longer swaying, the ones it burns charred skeletons. Modern look; off by default.
+  bool plantsReact = false;
   // [energy shields] Shields that look like energy (energy_shields.h; docs/render-lighting.md, item 11): a shield's
   // bubble bends what is behind it, rings run across it from each hit, its pattern flares where it is hit and as it
   // weakens, and its light falls on what is inside it. Drawn by `energy` (at the end of the class) in place of the
@@ -645,6 +651,7 @@ class World {
   Shafts shafts;          // lamps' beams seen in the air
   Tracks tracks;          // where lying snow is trodden away by units (tracks.on switches it)
   DeepTracks trackField;  // deep tracks (deepTracks): the field of where the ground is pressed
+  PlantLife plantLife;    // [plants] (plantsReact) where the plants are pressed and burnt
   Wakes wakes;            // the foam behind what moves on the water
   Ranges ranges;          // range rings, each group as one outline (set ranges.groups)
   PlacedMeshes placedDraw;  // what of `placed` is not an ordinary lit model
@@ -834,6 +841,15 @@ class World {
   GameWeather gameWeather_{};
   bool momentShown_ = false;
   bool surfNow_ = false;  // ([surf] surf and spray: on this frame)
+  bool plantsNow_ = false;  // [plants] (plants that react: on this frame, and ready)
+  std::vector<Particles::Hot> plantFires_;  // [plants] (the lasting fires near the camera, this frame)
+  void PreparePlants();     // [plants]
+  void SmoothProps(double clock);  // [plants] (props the game moves beat by beat, drawn between the beats)
+  struct PropBeat {
+    uint32_t tick = 0xffffffffu;  // (the beat it is drawn toward)
+    Mat4 at = Mat4::Identity();   // (where the beat before left it)
+  };
+  std::unordered_map<int64_t, PropBeat> propBeats_;  // [plants] (by its index in the map's list, or -1 - its id)
  public:
   EnergyShields energy;  // [energy shields] (last: the other members keep their places)
   // (photolook) A photographic look (photo_look.h; the visuals session's proposal 6, Chris 2026-10-18): the eye adapts

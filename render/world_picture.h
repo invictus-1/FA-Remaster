@@ -187,8 +187,10 @@ class WorldPicture {
   //   +0.05 to 0.2 ms when zoomed in, nothing from afar; and battle scars (World::battleScars): the scorches and
   //   craters of the fighting stay on the ground, weathering, up to 2000; light through leaves (World::leafLight):
   //   the sun shines through leaves, grass and plants; deep tracks (World::deepTracks): the ground pressed
-  //   where units drive and walk, by the kind of ground it is; and wildlife (World::wildlife): birds over the
-  //   woods and shores that scatter from fighting, fireflies at dusk.
+  //   where units drive and walk, by the kind of ground it is; wildlife (World::wildlife): birds over the
+  //   woods and shores that scatter from fighting, fireflies at dusk; and plants that react (World::plantsReact,
+  //   [plants]): grass and bushes pressed over where units drive and springing back, burnt where blasts and fires
+  //   were and growing back, felled trees still, burnt ones bare.
   void SetGroundDetail(bool on);
   // FSR 3 frame generation (World::frameGeneration): a picture made between each two frames and shown between
   // them, evenly apart, so twice the frames are shown, for a little more than half a frame's delay; the icons and

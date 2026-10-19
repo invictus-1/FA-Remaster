@@ -837,6 +837,8 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
       const Mat4 at = Mat4::FromTRS(b.position, b.turn, b.scale);
       // (hot metal: a fresh wreck's heat, World::hotMetal; the original side's stays as the game has it)
       const Vec3* heat = b.wreck && !b.original ? world.WreckHeat(b.id, model, at) : nullptr;
+      // [plants] (plants that react: a fresh wreck's death burnt the ground round it, as a game's wreck does, World::ApplyPropEvent)
+      if (b.wreck && !b.original && world.plantsReact) world.plantLife.AddWreck(b.position.x, b.position.z, 0.5f * Length(model->boundsMax - model->boundsMin) * b.scale, now);
       world.meshes.Add(model, at, {0.2f, 0.45f, 1.0f}, b.built, &pose, heat);
       world.water.ripples.AddHull(b.id, b.position, b.turn, model->boundsMin * b.scale, model->boundsMax * b.scale);  // (ripples where it is in the water)
       if (!b.wreck)

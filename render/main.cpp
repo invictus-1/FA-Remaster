@@ -160,6 +160,18 @@
 //           (snow, mud, sand, grass, dirt, hard, or two with a plus: "soil=mud"; may be given several times; before
 //           the map opens), as remap.json's "ground" would say it; the map's mud material (remap.json) is drawn in the
 //           ruts of ground that is mud by its kind, --no-mud-ruts without it [mud ruts]
+// --plants-react  [plants] plants that react (plants.h, World::plantsReact; modern look): grass and plants laid over where units
+//           drive, rising again; bushes, ferns, saplings bending under them and springing back; grass, plants and undergrowth
+//           burnt black, then brown and short, where the game's blasts and lasting fires were, growing back over minutes
+//           (--plants-regrow s: to a third in s seconds, 300); trees the game fells stop swaying, those it burns lose their
+//           needles. --burn-test n[,radius[,seconds]]: n burns with their scorches laid at random round where the camera
+//           starts (within radius, 30), as if over the last ten minutes (or seconds), to see every stage at once;
+//           --tree-test n: n trees of the kind of the map's single tree nearest where the camera starts made in a row
+//           across the view as the game makes them when a group breaks up: standing, burnt, felled, felled and burnt
+//           (the felled ones fall a second in, over three beats, as the game's falling motor fells them);
+//           --bush-test n[,spacing[,kind]]: a thicket of n bushes (the kind of the map's prop nearest where the camera
+//           starts whose name holds `kind`, "bush" unless given: "shrub", "sapling", "fern") made in a square round it,
+//           `spacing` apart (0.9): for a unit to drive through (--fx-move)
 // --tracks-test <unit id>=<count>  that many of that unit (UEL0201=100) driving round loops near where the camera
 //           starts (within 24 units), as a game would move them: their tread marks laid as their blueprint's
 //           Display.MovementEffects.Land.Treads says (the game's own pictures, or deep tracks when on); a unit without
@@ -548,6 +560,14 @@ struct Options {
   float movementDustRadius = 30;        // --movement-dust-radius
   float blastRadius = 40;
   bool deepTracks = false;              // --deep-tracks
+  bool plantsReact = false;             // [plants] --plants-react
+  float plantsRegrow = -1;              // [plants] --plants-regrow
+  int burnTest = 0;                     // [plants] --burn-test
+  float burnRadius = 30, burnAge = 600;
+  int treeTest = 0;                     // [plants] --tree-test
+  int bushTest = 0;                     // [plants] --bush-test
+  float bushSpacing = 0.9f;
+  std::string bushKind = "bush";
   bool remasteredBuild = false;         // --remastered-build
   std::vector<std::string> groundKind;  // --ground-kind
   bool noMudRuts = false;               // --no-mud-ruts [mud ruts]
@@ -749,6 +769,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--debris") o->debris = true;
     else if (a == "--deep-tracks") o->deepTracks = true;
     else if (a == "--no-mud-ruts") o->noMudRuts = true;  // [mud ruts]
+    else if (a == "--plants-react") o->plantsReact = true;  // [plants]
     else if (a == "--energy-shields") o->energyShields = true;
     else if (a == "--unit-scars") o->unitScars = true;
     else if (a == "--unit-snow") o->unitSnow = true;
@@ -900,6 +921,16 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--scar-test") {
       if (sscanf(v, "%d,%f", &o->scarTest, &o->scarRadius) < 1) return false;
     }
+    else if (a == "--burn-test") {  // [plants]
+      if (sscanf(v, "%d,%f,%f", &o->burnTest, &o->burnRadius, &o->burnAge) < 1) return false;
+    }
+    else if (a == "--tree-test") o->treeTest = std::max(0, atoi(v));                                   // [plants]
+    else if (a == "--bush-test") {                                                                      // [plants]
+      char kind[32] = "";
+      if (sscanf(v, "%d,%f,%31s", &o->bushTest, &o->bushSpacing, kind) < 1) return false;
+      if (kind[0]) o->bushKind = kind;
+    }
+    else if (a == "--plants-regrow") o->plantsRegrow = std::max(1.0f, static_cast<float>(atof(v)));  // [plants]
     else if (a == "--fx-decal") {  // (names with commas between, or the option given again)
       for (std::string all = v; !all.empty();) {
         const size_t comma = all.find(',');
@@ -1440,6 +1471,8 @@ int main(int argc, char** argv) {
   if (opt.debrisMost >= 0) world.debris.mostRubble = opt.debrisMost;
   world.deepTracks = opt.deepTracks;
   world.terrain.mudRuts = !opt.noMudRuts;  // [mud ruts]
+  world.plantsReact = opt.plantsReact;                                       // [plants]
+  if (opt.plantsRegrow > 0) world.plantLife.regrow = opt.plantsRegrow;      // [plants]
   world.energyShields = opt.energyShields;
   if (opt.energyShieldHealth >= 0) world.energy.healthUnknown = opt.energyShieldHealth;
   world.unitScars = opt.unitScars;
@@ -1990,6 +2023,121 @@ int main(int argc, char** argv) {
       if (world.decals.Add(name, at, size, size, next() * 6.2831853f, 400, -1200.0 * next(), 60)) ++laid;  // (laid over the last 20 minutes)
     }
     printf("render: --scar-test: %d scorches laid, %d of them kept as battle scars\n", laid, world.decals.Scars());
+  }
+  if (opt.burnTest > 0) {  // [plants] --burn-test: burns with their scorches round where the camera starts, over the last ten minutes
+    world.decals.remastered = world.effectsLook == World::EffectsLook::Remastered;
+    uint32_t r = 777;
+    auto next = [&r]() {
+      r = r * 1664525u + 1013904223u;
+      return static_cast<float>(r >> 8) / 16777216.0f;
+    };
+    for (int i = 0; i < opt.burnTest; ++i) {
+      char name[32];
+      snprintf(name, sizeof name, "scorch_%03d_albedo", 1 + static_cast<int>(next() * 10) % 10);
+      const float a = next() * 6.2831853f, d = opt.burnRadius * std::sqrt(next()), size = 0.5f + next() * 2.5f;
+      const double born = -static_cast<double>(opt.burnAge) * (static_cast<double>(i) + 0.5) / opt.burnTest;  // (the oldest first, evenly)
+      const Vec3 at{camera.target.x + std::cos(a) * d, haveMap ? map.Height(camera.target.x + std::cos(a) * d, camera.target.z + std::sin(a) * d) : 0,
+                    camera.target.z + std::sin(a) * d};
+      world.decals.Add(name, at, size * 1.6f, size * 1.6f, next() * 6.2831853f, 400, born, 0);
+      world.plantLife.AddBurn(at.x, at.z, 0.4f + 1.1f * size, std::clamp(0.25f + 0.5f * size, 0.3f, 1.0f), born);
+    }
+    printf("render: --burn-test: %d burns laid within %.0f, over the last ten minutes\n", opt.burnTest, opt.burnRadius);
+  }
+  if (opt.treeTest > 0 && haveMap) {  // [plants] --tree-test: single trees made in a row, as the game makes them, burnt, felled, both
+    // (the map's single tree nearest where the camera starts gives the kind: a group breaks up into such ones in a game)
+    int nearest = -1;
+    float best = 1e30f;
+    for (size_t i = 0; i < map.props.size(); ++i) {
+      std::string bp = map.props[i].blueprint;
+      for (char& ch : bp) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+      if (bp.find("tree") == std::string::npos || bp.find("group") != std::string::npos) continue;
+      const Vec3 d = map.props[i].position - camera.target;
+      if (d.x * d.x + d.z * d.z < best) best = d.x * d.x + d.z * d.z, nearest = static_cast<int>(i);
+    }
+    std::vector<FramePropEvent> made;
+    if (nearest >= 0) {
+      const MapProp& t = map.props[static_cast<size_t>(nearest)];
+      // (across the view, two and a half units apart: standing, burnt, felled, felled and burnt, by turns)
+      const Vec3 across{std::cos(camera.heading), 0, -std::sin(camera.heading)};
+      for (int k = 0; k < opt.treeTest; ++k) {
+        FramePropEvent e;
+        e.kind = FramePropEvent::Create;
+        e.tick = 0;
+        e.id = 0x7e000000u + static_cast<uint32_t>(k);
+        e.blueprint = t.blueprint;
+        // (the game's burnt mesh: its mesh blueprint's "_wreck", blueprints.lua's ExtractWreckageBlueprint)
+        const size_t cut = t.blueprint.rfind("_prop.bp");
+        if (k % 4 == 1 || k % 4 == 3) e.mesh = (cut == std::string::npos ? t.blueprint : t.blueprint.substr(0, cut)) + "_mesh_wreck";
+        Vec3 at = camera.target + across * (2.5f * (static_cast<float>(k) - 0.5f * static_cast<float>(opt.treeTest - 1)));
+        at.y = map.Height(at.x, at.z);
+        const float heading = 1.7f * static_cast<float>(k);
+        Quat q{0, std::sin(heading * 0.5f), 0, std::cos(heading * 0.5f)};
+        std::memcpy(e.position, &at.x, sizeof e.position);
+        e.orientation[0] = q.x, e.orientation[1] = q.y, e.orientation[2] = q.z, e.orientation[3] = q.w;
+        e.scale[0] = t.scale.x, e.scale[1] = t.scale.y, e.scale[2] = t.scale.z;
+        made.push_back(e);
+        if (k % 4 >= 2) {
+          // felled a second in, as the game's falling motor fells one struck by a blast (Whack 0.5: 0.5, 1.05 radians, then
+          // lying, a beat each), its foot lifted toward a tenth of a unit as it goes over
+          const float way = 2.39996323f * static_cast<float>(k);
+          const Vec3 axis{std::cos(way), 0, -std::sin(way)};
+          const float over[3] = {0.5f, 1.05f, 1.5707964f};
+          for (int beat = 0; beat < 3; ++beat) {
+            FramePropEvent f = e;
+            f.kind = FramePropEvent::Change;
+            f.tick = 10 + static_cast<uint32_t>(beat);
+            const float half = over[beat] * 0.5f;
+            const Quat fall = Mul(Quat{axis.x * std::sin(half), 0, axis.z * std::sin(half), std::cos(half)}, q);
+            f.orientation[0] = fall.x, f.orientation[1] = fall.y, f.orientation[2] = fall.z, f.orientation[3] = fall.w;
+            f.position[1] = at.y + 0.1f * std::max(0.0f, (over[beat] - 0.785398f) / 0.785398f);
+            made.push_back(f);
+          }
+        }
+      }
+      // (in the order of their beats, as the game tells them)
+      std::stable_sort(made.begin(), made.end(), [](const FramePropEvent& x, const FramePropEvent& y) { return x.tick < y.tick; });
+      world.AddPropEvents(made);
+    }
+    printf("render: --tree-test: %zu trees made (standing, burnt, felled, felled and burnt by turns)\n", made.size());
+  }
+  if (opt.bushTest > 0 && haveMap) {  // [plants] --bush-test: a thicket made round where the camera starts
+    int nearest = -1;
+    float best = 1e30f;
+    for (size_t i = 0; i < map.props.size(); ++i) {
+      std::string bp = map.props[i].blueprint;
+      for (char& ch : bp) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+      if (bp.find(opt.bushKind) == std::string::npos || bp.find("small") != std::string::npos || bp.find("group") != std::string::npos) continue;
+      const Vec3 d = map.props[i].position - camera.target;
+      if (d.x * d.x + d.z * d.z < best) best = d.x * d.x + d.z * d.z, nearest = static_cast<int>(i);
+    }
+    std::vector<FramePropEvent> made;
+    if (nearest >= 0) {
+      const MapProp& b = map.props[static_cast<size_t>(nearest)];
+      const int across = static_cast<int>(std::ceil(std::sqrt(static_cast<float>(opt.bushTest))));
+      for (int k = 0; k < opt.bushTest; ++k) {
+        FramePropEvent e;
+        e.kind = FramePropEvent::Create;
+        e.id = 0x7d000000u + static_cast<uint32_t>(k);
+        e.blueprint = b.blueprint;
+        const float jitter = 0.25f * opt.bushSpacing;
+        const float x = camera.target.x + (static_cast<float>(k % across) - 0.5f * static_cast<float>(across - 1)) * opt.bushSpacing +
+                        jitter * std::sin(static_cast<float>(k) * 12.9898f);
+        const float z = camera.target.z + (static_cast<float>(k / across) - 0.5f * static_cast<float>(across - 1)) * opt.bushSpacing +
+                        jitter * std::cos(static_cast<float>(k) * 78.233f);
+        const float heading = 2.39996323f * static_cast<float>(k);
+        e.position[0] = x;
+        e.position[1] = map.Height(x, z);
+        e.position[2] = z;
+        e.orientation[1] = std::sin(heading * 0.5f);
+        e.orientation[3] = std::cos(heading * 0.5f);
+        const float size = 0.8f + 0.4f * (0.5f + 0.5f * std::sin(static_cast<float>(k) * 3.7f));
+        e.scale[0] = e.scale[1] = e.scale[2] = b.scale.x * size;
+        made.push_back(e);
+      }
+      world.AddPropEvents(made);
+    }
+    printf("render: --bush-test: %zu bushes made, %.2f apart%s%s\n", made.size(), opt.bushSpacing, made.empty() ? "" : ", of ",
+           made.empty() ? "" : made[0].blueprint.c_str());
   }
   // --movement-dust-test: units driven round loops near where the camera looks (moved and handed to the world as a game's
   // frame, in the frame loop)
