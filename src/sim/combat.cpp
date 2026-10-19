@@ -4141,7 +4141,9 @@ void SlideSetGoal(SlideManipulator* m, float x, float y, float z) {
     const float s = SlideScale(m);
     m->goal = {m->goal.x * s, m->goal.y * s, m->goal.z * s};
   }
-  m->signalled = m->cur.x == m->goal.x && m->cur.y == m->goal.y && m->cur.z == m->goal.z;
+  // (0x647599..0x6475a7: the goal, +0x8c, against where the slider is, +0x80, by memcmp 0x4f0a50: a -0.0 part is
+  // another place)
+  m->signalled = SameBits(m->cur, m->goal);
   if (!m->unit) {  // (not on a unit: nothing moves it, it is there at once)
     m->cur = m->goal;
     m->signalled = true;
