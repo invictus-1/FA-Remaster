@@ -769,7 +769,9 @@ picture the fallback; helpers build most of them in parallel, the renderer revie
    own texture where its paint lies (`Model::paintSpots`: 24 places picked by area over its finest mesh at loading, each with the
    texture's density there, so a patch is about as much paint as the piece's size; spots whose patch would glow - the
    specular's blue, read once from `Model::paintMaterial` at a level of 256 or less - are left out, or a Cybran piece
-   glows red), in its material and faction's look, its army's colour at 0.85; three in ten are charred instead (a
+   glows red; that read, 0.3 to 9 ms for the game's units and 5 to 43 for a remastered one's, is done ahead on a thread
+   of the debris's own as each kind is first drawn, `Debris::Warm`, so a kind's first death costs the frame none of it),
+   in its material and faction's look, its army's colour at 0.85; three in ten are charred instead (a
    sooty dark grey-brown with paler blotches of dust, rough, one look shared by all units' pieces, so that each kind of
    unit adds only its six painted meshes to what is drawn), and the painted ones turn to it 15-90 s after they come to
    rest (dust). Their torn faces (a plate's rims, a
@@ -1161,8 +1163,10 @@ showers and icebergs are.
    water; proposed for the "Weather Effects" setting). Waves run in to the map's shores and break, the white water runs
    up the beaches and drains back, the waves burst on the rocks and throw spray up them, and ships at speed throw spray
    off their bows; by the weather's wind: a still day laps, a storm pounds.
-   - **The shore field** (`Surf::MakeField`, the first frame the option is on: one pause of about 90-140 ms on
-     SETONS_R, on the processor): over the map at one world unit a cell (at most 1025 a side), RGBA16F, 8 MB: the
+   - **The shore field** (`Surf::WorkOutField`, 90-140 ms on SETONS_R, on a thread of its own from the map's opening when
+     the option is on then, else from its first frame on; the frames go on meanwhile, and the surf fades in over a second
+     when the field is there; the frames' share: the heights copied, 0.4-0.6 ms, and its texture made, 8.4-9.3 ms on
+     Direct3D 12, 0.5 on Vulkan): over the map at one world unit a cell (at most 1025 a side), RGBA16F, 8 MB: the
      signed distance to the waterline (+ over the water; two exact distance transforms, the nearest dry cell to each wet one and the other way, after
      Felzenszwalb and Huttenlocher, written from the paper's idea; within a cell and a half of the line from the
      ground's height over its slope, so the zero lies where the terrain meets the water; rounded off far out, where the
@@ -1186,7 +1190,11 @@ showers and icebergs are.
      stretches of its crest, a little old foam lies between them, all broken by the foam's lace as the water's own foam
      is. At the shore each wave's water runs up the beach and drains back (quickly up, slowly down, over 60 % of the
      period; the water's level raised by up to about 0.1 on a still day and 0.36 in a storm, so the waterline with its
-     foam runs up the slope), less on rock, where it strikes in a burst of white that boils and drains. Waves come
+     foam runs up the slope; its sheet slopes down toward its tip, 0.06 a unit inland, so that it does not spread over a
+     flat berm all at once the moment it rises past the berm's height, which drew a step in the waterline sweeping along
+     the beach with an oblique wave; eased in over the first moments of a wave's arrival along the shore; none where
+     winter water's ice lies along the shore, which lies still at the water's level), less on rock, where it strikes in
+     a burst of white that boils and drains. Waves come
      every 4.5 s on a still day, 7 in a storm, in sets (`SurfStrength`). The sheet lies 0.45 higher with it on (for the
      run-up), but everything is worked out where it lay before, so the water away from the shores is as without it,
      pixel for pixel; samples of land the higher sheet takes in are let go unless the water covers them now. The surf's
@@ -1236,7 +1244,8 @@ showers and icebergs are.
      frame reading the last frame's, whose texels it lies a whole number away from) keeps for each place how hard it
      was pressed, which way, and how long ago. Each model on the ground that is not scenery presses with its own box
      (its bounds turned as it is, not a circle: a bush beside a tank is left alone), the way it drives and out toward
-     its sides. The grass and the plants' cards lie over that way and rise over some six seconds; the small props that
+     its sides; and so does each of the game's wrecks (the DefaultWreckage props, scenery), for as long as it lies (the
+     field then is worked every frame, about 0.01 ms, while a wreck lies within it). The grass and the plants' cards lie over that way and rise over some six seconds; the small props that
      sway (under 2.2 units) bend over under it, stay down a third of a second after it has passed and spring back past
      upright once, within about two seconds. Their shadows bend with them.
    - **Burnt**: a picture over the whole map (2 texels a unit, at most 2048 a side; 16 MB on SETONS_R) keeps how hard
@@ -1404,7 +1413,7 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `lightShafts` | shafts of sunlight through gaps in the woods' crowns in the low haze (strongest on a misty morning, after rain); under broken clouds a low haze, rays toward a low sun on the horizon, a soft warm glow from the game's height | 0.14-0.15 ms from the game's camera (0.08 of it laying the pass with 4x MSAA), 0.2 close among the trees | `volumetricFog`, a time of day |
 | `horizonWeather` | beyond the map's edge: winter ice (floes, pack ice, icebergs) while snow lies, fog banks, showers passing far out, the clouds' shadows over the far sea | about 0.1 ms from the game's camera, 0.21 from the strategic view in snow | a time of day; the world beyond the edge |
 | `beyondLand` | a softer map edge (the ground past it dims over 10 units and a soft shadow replaces the dark line; the fog of war goes on past it) and land far off: coastlines, hills and snow-capped ranges round the map out to four map sizes, which way land lies read from the map's own edges, coloured by its ground, lit and hazed (beyond_land.h; Chris, 2026-10-18; in the Atmosphere setting) | 0.03-0.19 ms at 1440p; made once a map (13-21 ms) | the world beyond the edge (the game's edge option two) |
-| `season` (`WorldPicture::SetSeason`) | the season a map is drawn in (Summer as at first, Autumn; Winter reserved): its ground's materials, ground cover, props and mud as its remap.json's "seasons" block lists them (the visuals session's art); in autumn leaves in the wind (off broadleaf trees, blown over the ground where the cover grows; `fallingLeaves`), the autumn climate (showers, more fog, morning fog) (seasons.h; Chris, 2026-10-18: a player's option) | the leaves 0.01 ms; the rest nothing (other textures) | taken in when a map opens; maps with a "seasons" block |
+| `season` (`WorldPicture::SetSeason`) | the season a map is drawn in (Summer as at first, Autumn; Winter reserved): its ground's materials, ground cover, props and mud as its remap.json's "seasons" block lists them (the visuals session's art); in autumn leaves in the wind (off broadleaf trees, blown over the ground where the cover grows; `fallingLeaves`; with motion on, each leaf's own motion drawn for FSR 3 and frame generation, `FallingLeaves::DrawMotion`, +0.004 ms), the autumn climate (showers, more fog, morning fog) (seasons.h; Chris, 2026-10-18: a player's option) | the leaves 0.01 ms; the rest nothing (other textures) | taken in when a map opens; maps with a "seasons" block |
 | `plantsReact` | grass and bushes pressed over where units drive and springing back; ground, grass and plants burnt black, then brown, where blasts and fires were, growing back; felled trees still, burnt ones bare; felled trees fall smoothly | about 0.03 ms of its own in a fight (the field 0.010, the burnt ground 0.008, the grass +0.009), and the sun's maps 0.045 ms cheaper (what sways drawn together): the frame a little cheaper (16 MB for the burnt picture on SETONS_R) | |
 
 Ray tracing means Direct3D 12 with DXR 1.1 or Vulkan with ray queries: never on the Mac (MoltenVK has none);

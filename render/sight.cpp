@@ -81,6 +81,14 @@ float4 BoundaryPS(float4 position : SV_Position) : SV_Target {
   // (one pixel's width on the ground there, square to the line of sight: the line keeps its width
   // in the picture however far the camera is)
   float pixel = away * 2 * cameraRight.w * viewport.w;
+  // [groundfix] (beyondland: World::beyondLand) the soft edge the map's own edge has (lighting.h, BeyondFar): dimmed and
+  // turned toward blue little by little over beyondLand.y world units past the line, with a soft shadow along it fading
+  // out over beyondLand.x pixels at any zoom, in place of the dark line
+  [branch] if (beyondLand.x > 0.5) {
+    float grow = smoothstep(0, beyondLand.y, outside);
+    float3 keeps = lerp(1, float3(0.9, 0.95, 1.08) * boundary.x, grow);
+    return float4(keeps * (1 - beyondLand.z * exp(-outside / max(pixel * beyondLand.x, 1e-4))), 1);
+  }
   float edge = saturate(1 - outside / max(pixel * 1.6, 1e-4));
   return float4(float3(0.9, 0.95, 1.08) * boundary.x * (1 - 0.8 * edge), 1);
 }

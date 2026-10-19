@@ -150,6 +150,9 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
       *error = "water: " + why;
       return false;
     }
+    // [groundfix] the surf on as the map opens: its shore field begun now on a thread of its own (the rest of the map
+    // loading meanwhile), not the first frame
+    if (surf && look == Look::Modern && map.water.present) water.surf.StartField();
     haveMap_ = true;
     volumes.Clear();  // (volume explosions: none of the map before)
     temporalBefore_ = false;  // (the temporal upscaler: nothing of the map before is used)
@@ -1446,6 +1449,7 @@ void World::ApplyPropEvent(const FramePropEvent& e) {
     std::string low = e.blueprint + "|" + e.mesh;
     for (char& c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     kept.wreck = low.find("defaultwreckage") != std::string::npos || low.find("_mesh_wreck") != std::string::npos;
+    kept.unitWreck = low.find("defaultwreckage") != std::string::npos;  // [groundfix]
     // [plants] (a unit's fresh wreck: its death burnt the ground round it; a burnt tree's mesh is no unit's wreck. Only
     // where a death's explosion went off there just before: the map's own scenery wrecks the game makes as it starts,
     // or later, are old and burnt nothing)
@@ -1659,7 +1663,16 @@ std::string World::MeshFaction(const std::string& mesh) { return render::MeshFac
 void World::WatchDeaths(const Frame& frame, const std::vector<Vec3>& armyColors) {
   // (a frame without units says nothing of deaths: the effects stand hands the world its frame without them, as it
   // draws them itself, and its units here)
+  if (!blastDebris || look != Look::Modern) debrisWarm_ = false;  // [groundfix]
   if (!blastDebris || look != Look::Modern || !haveMap_ || sidePicture || frame.units.empty()) return;
+  // [groundfix] where each kind of unit's paint glows, read ahead on the debris's own thread (Debris::Warm): the kinds
+  // drawn from now on as AddFrame first makes their models, and those made already as the debris is switched on
+  debris.files = vfs_;
+  if (!debrisWarm_) {
+    debrisWarm_ = true;
+    for (const KnownModel& k : unitModels_)
+      if (k.known && k.model) debris.Warm(k.model);
+  }
   debris.Watch(frame, clock_, [this](const std::string& id) { return models.Unit(id); },
                [&](uint32_t army) { return armyColors.empty() ? Vec3{0.6f, 0.6f, 0.6f} : armyColors[army % armyColors.size()]; }, &blasts);
 }
@@ -1737,7 +1750,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     }
   }
   if (unitScars || unitSnow || unitDirt) {  // (battle scars and snow on units: what hit whom this beat; unit_wear.h; [unit dirt])
-    CpuTimes::Part("units' battle scars and snow watched");
+    CpuTimes::Part("units' battle scars, snow and dirt watched");  // ([groundfix] the dirt's too)
     // what the simulation says hit a unit or its shield (REQUESTS 36): the marks where and by what; where it says so,
     // health drops with no hit told make none (reclaim, a script's SetHealth)
     wear.exactHits = combat_.hitsKept;
@@ -1847,9 +1860,11 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
         AddBrackets(hoverKind, position, orientation, *kind, bracketed);
       }
     }
+    const bool freshModel = u.blueprint >= unitModels_.size() || !unitModels_[u.blueprint].known;  // [groundfix]
     const Model* model = blueprint.empty() || blip
                              ? nullptr
                              : Known(unitModels_, u.blueprint, frame.blueprints->size(), [&] { return models.Unit(blueprint); });
+    if (freshModel && debrisWarm_ && model) debris.Warm(model);  // [groundfix] (a kind first drawn: where its paint glows, read ahead)
     // Its bars, as the original draws them (Chris's pictures of it, 2026-10-13): the life bar under
     // the unit, about as wide as the unit, black with a filling that is green, yellow at middling
     // health and red when low, on every unit near enough to be a model (and on a selected or
@@ -1967,7 +1982,9 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       // (and its treads' scroll, where its mesh's treads scroll and its shield's hit does not take the place)
       meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), color, built, asRemembered ? nullptr : &pose, hitAt,
                  model->scrolls && !hitAt ? u.treads : nullptr, u.id + 1);
-      if (const WearLook* w = WearOf(u.id)) meshes.Wear(*w);  // (its battle scars and snow: unit_wear.h)
+      // (its battle scars and snow: unit_wear.h; [groundfix] its dirt from the first frame it is drawn: its box from the
+      // model drawn, which WatchWear, before the models are made, finds only from the next frame)
+      if (const WearLook* w = WearOf(u.id, model)) meshes.Wear(*w);
       // (its outline where it is hidden, hidden_outlines.h: only what the player may see of it now - his own, an ally's,
       // an enemy's in sight - and finished; never a building drawn as it was remembered)
       if (outlinesNow_ && u.Seen() && !asRemembered && fractionComplete >= 1 && !allHidden)
@@ -2266,10 +2283,8 @@ void World::PreparePlants() {
   if (!meshes.PreparePlants()) return;
   if (groundCover && grassMade_) grass.PreparePlants();
   std::vector<float> boxes;
-  meshes.ForEachAdded([&](const Model* model, const float* row0, const float* row1, const float* row2, const float*, bool scenery) {
-    if (scenery || !model || !model->ok || model->lods.empty() || boxes.size() >= 8 * 256) return;
-    const ModelLod& l = model->lods[0];
-    if (l.glass || l.shield || l.impact || l.frame || l.nuke || l.fades || l.unlit || l.shell) return;  // (light, not a body)
+  // (a model's box on the ground, from its bounds, turned as it is: `row0..2` the world matrix's top three rows)
+  auto press = [&](const Model* model, const float* row0, const float* row1, const float* row2) {
     const Vec3 lo = model->boundsMin, hi = model->boundsMax;
     const float cx = 0.5f * (lo.x + hi.x), cz = 0.5f * (lo.z + hi.z);
     const float x = row0[0] * cx + row0[2] * cz + row0[3], z = row2[0] * cx + row2[2] * cz + row2[3];
@@ -2281,7 +2296,32 @@ void World::PreparePlants() {
     if (flat < 1e-5f) return;
     boxes.insert(boxes.end(), {x, z, forward.x / flat, forward.z / flat, 0.5f * (hi.z - lo.z) * Length(forward) * 0.95f,
                                0.5f * (hi.x - lo.x) * Length(side) * 0.95f, 0, 0});
+  };
+  meshes.ForEachAdded([&](const Model* model, const float* row0, const float* row1, const float* row2, const float*, bool scenery) {
+    if (scenery || !model || !model->ok || model->lods.empty() || boxes.size() >= 8 * 256) return;
+    const ModelLod& l = model->lods[0];
+    if (l.glass || l.shield || l.impact || l.frame || l.nuke || l.fades || l.unlit || l.shell) return;  // (light, not a body)
+    press(model, row0, row1, row2);
   });
+  // [groundfix] the game's wrecks are scenery (left out above), yet a wreck lies on what grows under it: each unit's wreck
+  // in the squares under the field presses it as a unit's box does, for as long as it lies (gone, reclaimed: the plants
+  // rise again). Through the props' squares, not every made prop: a game breaks its tree groups up into thousands.
+  float square[4];
+  if (!propCells_.empty() && plantLife.FieldSquare(camera, square)) {
+    const int cx0 = std::clamp(static_cast<int>((square[0] - propReach_) / kPropCell), 0, propCellsX_ - 1);
+    const int cz0 = std::clamp(static_cast<int>((square[1] - propReach_) / kPropCell), 0, propCellsZ_ - 1);
+    const int cx1 = std::clamp(static_cast<int>((square[2] + propReach_) / kPropCell), 0, propCellsX_ - 1);
+    const int cz1 = std::clamp(static_cast<int>((square[3] + propReach_) / kPropCell), 0, propCellsZ_ - 1);
+    for (int cz = cz0; cz <= cz1; ++cz)
+      for (int cx = cx0; cx <= cx1; ++cx)
+        for (uint32_t id : propCells_[static_cast<size_t>(cz) * static_cast<size_t>(propCellsX_) + static_cast<size_t>(cx)].made) {
+          if (boxes.size() >= 8 * 256) break;
+          auto made = madeProps_.find(id);
+          if (made == madeProps_.end() || !made->second.unitWreck || !made->second.model || !made->second.model->ok) continue;
+          const Mat4& m = made->second.world;
+          press(made->second.model, m.m[0], m.m[1], m.m[2]);
+        }
+  }
   plantLife.WatchBlasts(blasts, clock_, decals.groundHeight);
   particles.HotEmitters(camera.target, 64, &plantFires_);
   plantLife.WatchFires(plantFires_, clock_, decals.groundHeight);
@@ -2759,6 +2799,8 @@ void World::Render() {
   if (meshes.motion) {
     Stage("motion");
     motion.Build(view, post.Depth(), motionView == 4 ? nullptr : &meshes);  // (4: for checking, the camera's part alone)
+    if (leavesNow_ && motionView != 4)  // [groundfix] the falling leaves' own motion, over it
+      leaves.DrawMotion(view, motion.Texture(), post.Depth(), motion.Now(), motion.Before(), terrain.HeightTexture(), terrain.HeightUnit());
     post.KeepOpaque();  // (the solid scene and the water, for the upscaler's reactive mask)
     post.ContinueScene();
     lights.Bind();

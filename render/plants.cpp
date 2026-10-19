@@ -415,8 +415,8 @@ void PlantLife::Prepare(const View& view, const Camera& camera, const std::vecto
     return;
   }
   const float reach = 0.5f * kPressSize * kPressTexel;
-  const float middleX = camera.cinematic ? eye.x - std::sin(camera.heading) * reach * 0.6f : camera.target.x;
-  const float middleZ = camera.cinematic ? eye.z - std::cos(camera.heading) * reach * 0.6f : camera.target.z;
+  float middleX, middleZ;
+  FieldMiddle(camera, &middleX, &middleZ);
   const float originX = std::floor((middleX - reach) / kPressTexel) * kPressTexel;
   const float originZ = std::floor((middleZ - reach) / kPressTexel) * kPressTexel;
   auto k = std::make_unique<PressConstants>();
@@ -462,6 +462,27 @@ void PlantLife::Prepare(const View& view, const Camera& camera, const std::vecto
   constants_[1] = originZ;
   constants_[2] = 1 / wide;
   constants_[7] = pressedAt_ >= 0 && clock - pressedAt_ < 45 ? 1.0f : 0.0f;
+}
+
+// (a cinematic camera: the square ahead of the eye; else round what it looks at)
+void PlantLife::FieldMiddle(const Camera& camera, float* x, float* z) const {
+  const float reach = 0.5f * kPressSize * kPressTexel;
+  const Vec3 eye = camera.Eye();
+  *x = camera.cinematic ? eye.x - std::sin(camera.heading) * reach * 0.6f : camera.target.x;
+  *z = camera.cinematic ? eye.z - std::cos(camera.heading) * reach * 0.6f : camera.target.z;
+}
+
+bool PlantLife::FieldSquare(const Camera& camera, float square[4]) const {
+  const Vec3 eye = camera.Eye();
+  if ((camera.cinematic ? eye.y - camera.target.y : camera.distance) > farthest) return false;
+  const float reach = 0.5f * kPressSize * kPressTexel;
+  float x, z;
+  FieldMiddle(camera, &x, &z);
+  square[0] = x - reach - kPressTexel;
+  square[1] = z - reach - kPressTexel;
+  square[2] = x + reach + kPressTexel;
+  square[3] = z + reach + kPressTexel;
+  return true;
 }
 
 void PlantLife::DrawGround(const View& view, const Camera& camera, gfx::Texture sceneDepth) {

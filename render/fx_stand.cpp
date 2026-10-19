@@ -843,6 +843,7 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
       world.water.ripples.AddHull(b.id, b.position, b.turn, model->boundsMin * b.scale, model->boundsMax * b.scale);  // (ripples where it is in the water)
       if (!b.wreck)
         if (const WearLook* w = world.WearOf(b.id, model)) world.meshes.Wear(*w);  // (its battle scars and snow; [unit dirt] its dirt)
+      if (!b.wreck && world.blastDebris) world.debris.Warm(model);  // [groundfix] (where its paint glows, read ahead for its death's debris)
       // (movement dust: what drives, hovers or flies raises its dust, spray or contrails; on the remastered side only)
       if (!b.wreck && !b.original && b.built >= 1) world.dust.AddUnit(b.id, b.unit, unit, b.position, b.turn);
     }

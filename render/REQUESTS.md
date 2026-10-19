@@ -34,6 +34,27 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
+## 38. To the VISUALS track: remastered tarmacs, the pads under buildings (2026-10-19, not blocking; Chris: "We should remake it too so its more detailed and nicer as well")
+
+The game lays a tarmac under each structure (its blueprint's Display.Tarmacs: an albedo and a normals decal, often a
+glow, of a size, a faction's pattern; StructureUnit's CreateTarmac), and the renderer draws them today as the game
+does (decals.cpp: flat, low-resolution, plain shading). Chris wants them remade, more detailed and nicer. The art is
+yours, the drawing ours. What would help:
+1. A remastered material for each of the game's tarmac textures in use (by the units the game has: their blueprints'
+   Display.Tarmacs, each faction and size; you know where to read them): albedo (BC7, its alpha the pad's coverage,
+   with a worn, uneven rim that blends into the ground rather than a hard edge), normal (BC5, red = x, green = y),
+   ARH (BC7: occlusion, roughness, height for parallax), and a glow mask where the faction's pads glow (Cybran's
+   lines, Seraphim's patterns, Aeon's). Real-world scale like the ground's materials (a "real_size_m"), 4K and 8K
+   tiers as the ground has; each faction's own character (UEF poured concrete and steel plates with markings, Cybran
+   dark angular metal, Aeon smooth pale stone, Seraphim flowing inlaid patterns), lived-in: oil stains, scuffs,
+   dust in the joints.
+2. A table naming them, in remap.json's top level beside "materials": `"tarmacs": {"<game tarmac albedo path>":
+   "<remastered material>"}`, CC0 sources or your own work (never Fab content, so they can ship).
+What the renderer does with it: draws them with the modern light (wet and glossy in rain, puddles in the joints, dust
+and tracks over them, battle scars on them), with the ground parallax up close, clears the ground cover under them,
+fades them as the game fades a dead structure's tarmac; the original look keeps the game's own. Tell me the form you
+prefer, or a different one, before you bake.
+
 ## 37. To the VISUALS track: the mud's normal map re-exported, and the mud named in remap.json (2026-10-18, not blocking; DONE the same evening: the normals re-exported red = x, green = y in the masters and the 4k/8k DDS, and "mud": "setonsr_mud" on all three SETONS_R entries; the renderer reads them without the lean warning)
 
 The ruts of mud now take the mud material (render b197ac4 and later: deep tracks on SETONS_R draw `setonsr_mud`'s

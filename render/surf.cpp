@@ -302,12 +302,18 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
 }  // namespace
 
 Surf::~Surf() {
+  if (worker_.joinable()) worker_.join();  // [groundfix]
   if (pipeline_) device_->Destroy(pipeline_);
   if (rows_) device_->Destroy(rows_);
   if (field_) device_->Destroy(field_);
 }
 
 void Surf::SetMap(const MapData* map) {
+  if (worker_.joinable()) worker_.join();  // [groundfix] (the last map's field, if still being worked out: let go of)
+  work_.reset();
+  fade_ = 1;
+  fieldWaited = 0;
+  fieldMainMs = 0;
   map_ = map;
   tried_ = false;  // (worked out again the first frame it is on)
   if (field_) device_->Destroy(field_);
@@ -331,23 +337,24 @@ float Surf::Strength(float n, float x, float z) {
   return 0.3f + 0.7f * (0.65f * s * s + 0.35f * t);
 }
 
-bool Surf::MakeField() {
-  tried_ = true;
-  if (!map_ || !map_->water.present || map_->width <= 0 || map_->height <= 0 || map_->heights.empty()) return false;
+// [groundfix] On a thread of its own (StartField): from the copy of the map's heights in `work`, nothing of the device's
+// nor of the Surf's; the texture's texels and the spray's places into `work`, `ok` set when there is a field.
+void Surf::WorkOutField(FieldWork* work, int debug) {
+  const MapData* map = work->map.get();
   const auto started = std::chrono::steady_clock::now();
   // a cell of one world unit (more on the largest maps: at most 1025 cells a side)
-  const float width = static_cast<float>(map_->width), height = static_cast<float>(map_->height);
+  const float width = static_cast<float>(map->width), height = static_cast<float>(map->height);
   const float cell = std::max(1.0f, std::max(width, height) / 1024.0f);
   const int w = static_cast<int>(std::ceil(width / cell)) + 1, h = static_cast<int>(std::ceil(height / cell)) + 1;
   const size_t count = static_cast<size_t>(w) * h;
-  level_ = map_->water.elevation;
+  const float level = map->water.elevation;
   std::vector<float> ground(count);
   std::vector<uint8_t> wet(count), dry(count);
   for (int z = 0; z < h; ++z)
     for (int x = 0; x < w; ++x) {
       const size_t at = static_cast<size_t>(z) * w + x;
-      ground[at] = map_->Height(std::min(static_cast<float>(x) * cell, width), std::min(static_cast<float>(z) * cell, height));
-      wet[at] = ground[at] < level_ ? 1 : 0;
+      ground[at] = map->Height(std::min(static_cast<float>(x) * cell, width), std::min(static_cast<float>(z) * cell, height));
+      wet[at] = ground[at] < level ? 1 : 0;
       dry[at] = 1 - wet[at];
     }
   // the nearest dry cell to each wet one and the nearest wet cell to each dry one: both lie on the waterline
@@ -363,7 +370,7 @@ bool Surf::MakeField() {
   const std::vector<float> slopeWide = BoxMean(slope, w, h, 2);
   // how open the water is: the share of water a unit or more deep within 80 world units
   std::vector<float> deepWater(count);
-  for (size_t i = 0; i < count; ++i) deepWater[i] = level_ - ground[i] >= 1.0f ? 1.0f : 0.0f;
+  for (size_t i = 0; i < count; ++i) deepWater[i] = level - ground[i] >= 1.0f ? 1.0f : 0.0f;
   const std::vector<float> share = BoxMean(deepWater, w, h, std::max(1, static_cast<int>(80 / cell)));
   // the signed distance to the waterline (world units, + over the water): from the nearest cell of the other kind;
   // within a cell and a half of the line, where the heights tell it better, by the ground's height and its slope
@@ -373,7 +380,7 @@ bool Surf::MakeField() {
     const float d2 = isWet ? toDry[i] : toWet[i];
     float d = d2 >= 1e11f ? 64.0f : (std::sqrt(d2) - 0.5f) * cell;
     if (d < 1.5f * cell) {
-      const float local = (level_ - ground[i]) / std::max(slope[i], 0.02f);
+      const float local = (level - ground[i]) / std::max(slope[i], 0.02f);
       if (std::fabs(local) < 1.5f * cell && (local >= 0) == isWet) d = std::fabs(local);
     }
     distance[i] = std::clamp(isWet ? d : -d, -16.0f, 64.0f);
@@ -403,28 +410,16 @@ bool Surf::MakeField() {
   std::vector<uint16_t> texels(count * 4);
   for (size_t i = 0; i < count; ++i) {
     texels[i * 4 + 0] = Half(distance[i]);
-    texels[i * 4 + 1] = Half(std::clamp(level_ - ground[i], -16.0f, 64.0f));
+    texels[i * 4 + 1] = Half(std::clamp(level - ground[i], -16.0f, 64.0f));
     texels[i * 4 + 2] = Half(steep[i]);
     texels[i * 4 + 3] = Half(open[i]);
   }
-  gfx::TextureDesc td;
-  td.width = w;
-  td.height = h;
-  td.format = gfx::Format::RGBA16F;
-  td.data = texels.data();
-  td.dataSize = texels.size() * sizeof(uint16_t);
-  field_ = device_->CreateTexture(td);
-  if (!field_) {
-    fprintf(stderr, "render: the surf's field cannot be made\n");
-    return false;
-  }
-  area_[0] = -0.5f * cell;
-  area_[1] = -0.5f * cell;
-  area_[2] = 1 / (static_cast<float>(w) * cell);
-  area_[3] = 1 / (static_cast<float>(h) * cell);
+  work->w = w;
+  work->h = h;
+  work->cell = cell;
   // the places on rocky, open shores that throw spray: wet cells on the waterline, the steepest in each square of three
   // world units
-  spots_.clear();
+  std::vector<Spot>& spots = work->spots;
   const int bin = std::max(1, static_cast<int>(3 / cell));
   const int bw = (w + bin - 1) / bin, bh = (h + bin - 1) / bin;
   std::vector<int> best(static_cast<size_t>(bw) * bh, -1);
@@ -458,10 +453,10 @@ bool Surf::MakeField() {
     s.toLandZ = gz;
     s.steep = steep[static_cast<size_t>(at)];
     s.open = open[static_cast<size_t>(at)];
-    spots_.push_back(s);
+    spots.push_back(s);
   }
-  fieldMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - started).count();
-  if (debug_) {
+  work->ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - started).count();
+  if (debug) {
     int shore = 0, rocky = 0, sheltered = 0;
     for (size_t i = 0; i < count; ++i)
       if (wet[i] && distance[i] < cell * 1.5f) {
@@ -470,7 +465,7 @@ bool Surf::MakeField() {
         if (open[i] < 0.2f) ++sheltered;
       }
     printf("render: surf: field %dx%d cells of %.1f units in %.0f ms; %d waterline cells, %d rocky, %d sheltered; %zu spray spots\n", w, h, cell,
-           fieldMs, shore, rocky, sheltered, spots_.size());
+           work->ms, shore, rocky, sheltered, spots.size());
   }
   // (MOHO64_DEBUG_SURF_FIELD=<file.ppm>: the field as a picture, north up: the water blue by its distance from the
   // shore (bands of four units), red the steepness, green the openness; the land dark)
@@ -487,6 +482,62 @@ bool Surf::MakeField() {
       fclose(f);
     }
   }
+  work->texels = std::move(texels);
+  work->ok = true;
+}
+
+// [groundfix] (the first frame it is on, or the map's opening with it on: the heights and the water copied, then the rest
+// on a thread of its own)
+void Surf::StartField() {
+  if (tried_) return;
+  tried_ = true;
+  if (!map_ || !map_->water.present || map_->width <= 0 || map_->height <= 0 || map_->heights.empty()) return;
+  const auto started = std::chrono::steady_clock::now();
+  level_ = map_->water.elevation;
+  work_ = std::make_unique<FieldWork>();
+  work_->map = std::make_shared<MapData>();
+  work_->map->width = map_->width;
+  work_->map->height = map_->height;
+  work_->map->heightScale = map_->heightScale;
+  work_->map->heights = map_->heights;
+  work_->map->water = map_->water;
+  workDone_ = false;
+  worker_ = std::thread([this, work = work_.get(), debug = debug_] {
+    WorkOutField(work, debug);
+    workDone_ = true;
+  });
+  fieldMainMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - started).count();
+}
+
+// [groundfix] (Begin's, once its thread is done: the texture made of what it worked out, the spray's places taken over)
+bool Surf::TakeField() {
+  if (!worker_.joinable() || !workDone_) return false;
+  const auto started = std::chrono::steady_clock::now();
+  worker_.join();
+  const std::unique_ptr<FieldWork> work = std::move(work_);
+  if (!work || !work->ok) return false;
+  gfx::TextureDesc td;
+  td.width = work->w;
+  td.height = work->h;
+  td.format = gfx::Format::RGBA16F;
+  td.data = work->texels.data();
+  td.dataSize = work->texels.size() * sizeof(uint16_t);
+  field_ = device_->CreateTexture(td);
+  if (!field_) {
+    fprintf(stderr, "render: the surf's field cannot be made\n");
+    return false;
+  }
+  area_[0] = -0.5f * work->cell;
+  area_[1] = -0.5f * work->cell;
+  area_[2] = 1 / (static_cast<float>(work->w) * work->cell);
+  area_[3] = 1 / (static_cast<float>(work->h) * work->cell);
+  spots_ = std::move(work->spots);
+  fieldMs = work->ms;
+  const float took = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - started).count();
+  if (debug_)
+    printf("render: surf: the field taken in after %d frames of the surf on; the frames' share of it %.2f ms (the heights copied %.2f, the "
+           "texture made %.2f; on its thread %.0f ms)\n", fieldWaited, fieldMainMs + took, fieldMainMs, took, fieldMs);
+  fieldMainMs += took;
   return true;
 }
 
@@ -499,9 +550,14 @@ void Surf::Begin(float time, bool on, bool side, float rough, const float wind[2
     lastTime_ = -1;
     return;
   }
-  if (!tried_) MakeField();
+  // [groundfix] the field on a thread of its own, the frames going on; taken in when it is done, the surf fading in over a
+  // second from then (at once when it was there from the surf's first frame)
+  if (!tried_) StartField();
+  if (!field_ && TakeField()) fade_ = fieldWaited > 0 ? 0.0f : 1.0f;
+  if (!field_ && worker_.joinable()) ++fieldWaited;
   if (lastTime_ >= 0 && time < lastTime_ - 1) puffs_.clear();  // (the clock went back: a run started over)
   const float dt = lastTime_ < 0 ? 0 : std::clamp(time - lastTime_, 0.0f, 0.5f);
+  if (field_ && fade_ < 1) fade_ = std::min(1.0f, fade_ + std::max(dt, 1.0f / 120));
   lastTime_ = time;
   time_ = time;
   eye_ = eye;
@@ -523,14 +579,14 @@ void Surf::Constants(float area[4], float look[4], float look2[4], float look3[4
   std::memcpy(area, area_, sizeof area_);
   const float r = std::max(rough_, 0.0f);
   // the waves' height near the shore, their phase, their length out at sea and how high they run up the beach
-  look[0] = 0.07f + 0.23f * r;
+  look[0] = (0.07f + 0.23f * r) * fade_;  // ([groundfix] fade_: 1 but while fading in)
   look[1] = static_cast<float>(phase_);
   look[2] = 6 + 4 * r;
-  look[3] = std::min(0.06f + 0.3f * r, 0.42f);
+  look[3] = std::min(0.06f + 0.3f * r, 0.42f) * fade_;
   look2[0] = r;
   look2[1] = breakDepth;
   look2[2] = 0.6f;
-  look2[3] = strength;
+  look2[3] = strength * fade_;
   look3[0] = static_cast<float>(view);
   look3[1] = look3[2] = look3[3] = 0;
 }
@@ -728,7 +784,7 @@ void Surf::Prepare(const View& view) {
     const float far = std::hypot(s.x - eye_.x, s.z - eye_.z);
     if (far > farthest || !view.BoxVisible({s.x - 3, level_ - 1, s.z - 3}, {s.x + 3, level_ + 4, s.z + 3})) continue;
     const float amount = Strength(static_cast<float>(crest), s.x, s.z) * s.open * s.steep * rougher;
-    if (amount > 0.12f) Burst(s, std::min(amount * 1.2f, 1.2f));
+    if (amount * fade_ > 0.12f) Burst(s, std::min(amount * 1.2f, 1.2f) * fade_);  // ([groundfix] fade_: 1 but while fading in)
   }
   // what is over let go of (the longest life is under five seconds)
   while (!puffs_.empty() && time_ - puffs_.front().born > 5) puffs_.pop_front();

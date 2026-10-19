@@ -79,6 +79,14 @@ void WinterPlates(float2 p, out float2 plate, out float border) {
     }
 }
 
+// [groundfix] How much of a winter shore's rim there is at a place (0 none .. 1 all of it): as WinterShore's `share` (once
+// winter has come most of the way, on the map's own shores only). For the surf (surf.h): where ice lies along the shore
+// the waves run up the beach no more, so that the waterline stays where the ice lies (at the water's level).
+float WinterShare(float2 xz) {
+  float2 inside = min(xz, winterWater.zw - xz);
+  return saturate(winterWater.x * 1.6 - 0.6) * saturate(1 + min(inside.x, inside.y) / 16);
+}
+
 // The rim of a winter shore at a place on the water: `bed` the height of what is under it, `waviness` the map's (the
 // water map's red: calm water holds more ice), `grain` how much water one pixel covers, `lace` the foam's lace there
 // (0..1, about a half).

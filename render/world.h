@@ -678,6 +678,7 @@ class World {
     // while it glows, hotProps_)
     double born = -1;
     bool wreck = false, hot = false;
+    bool unitWreck = false;  // [groundfix] a unit's wreck (the game's DefaultWreckage): it presses the plants under it
   };
   struct Pickable {  // a unit of the frame, for UnitAt and UnitsIn
     uint32_t id;
@@ -742,6 +743,7 @@ class World {
     bool known = false;
   };
   std::vector<KnownModel> unitModels_, shotModels_, entityModels_;
+  bool debrisWarm_ = false;  // [groundfix] (the debris on: each kind's glow read ahead as its model is made, Debris::Warm)
   std::vector<KnownModel> originalShotModels_;  // (shots a frame wants in the original look whatever the world's)
   std::vector<KnownModel> originalEntityModels_;  // (the same for script entities)
   EffectsLook entitiesLook_ = EffectsLook::Remastered;  // (the look entityModels_ were looked up in)
