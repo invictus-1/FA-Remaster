@@ -724,8 +724,15 @@ void EndPatrol(Sim& sim, Unit* u, BuildTask& t) {
 // 0x70003d and 0x70004f (reclaiming, awake) run first, then 0x700027, 0x700042 and 0x70004a, whose reclaim walks the
 // event ended, in that order; at 3156 their patrol legs take the free spots by PrepareMove in that thread order.
 // Ours kept 0x700027 first (last re-linked 3041) and the five took each other's cells (MP1 3158).
+// A command with a formation tells the same listeners: CUnitCommand::SetTarget 0x6e8820 only moves the formation's
+// centre first (0x6e887d..0x6e88bf) and then calls 0x6e94a0 either way (0x6e88c1), and neither listener (0x61c3e0,
+// 0x620160) asks for a formation; the patrol's goal is GetPosition's, the formation cell while the command holds more
+// units than one (TargetPos). Seen (probe mp1_5381): MP1 beat 5381, army 0's player drags the AggressiveMove 0x11
+// (issued with a formation at 4311, only 0x1a left on it) while 0x1a reclaims the tree group 0x2ff00d29 for it: at
+// 5382 the original's reclaim task has no target (+0x44 null, +0x4c set, state 0, not started), ends there and the
+// patrol walks to (737, 270) (SetGoal from NewMoveTask 0x6190cb); ours left formation commands out and reclaimed on.
 void RetargetPatrolTasks(Sim& sim, UnitCommand& c) {
-  if (!IsPatrolType(c.type) || c.form) return;
+  if (!IsPatrolType(c.type)) return;
   std::vector<Unit*> holders(c.units.begin(), c.units.end());
   std::sort(holders.begin(), holders.end(), [](const Unit* a, const Unit* b) { return a->id < b->id; });
   std::vector<Unit*> walkers;  // reclaim children whose walk is under way
