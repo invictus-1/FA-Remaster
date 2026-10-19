@@ -62,6 +62,12 @@ class Precipitation {
   // rise and fade; found from `sceneDepth` (the scene's, read: a pass into the scene's colour alone).
   void DrawSplashes(const View& view, const Camera& camera, float rain, gfx::Texture sceneDepth);
 
+  // (photofix) A photo's frame (WorldPicture::StartPhoto) draws what falls as the window shows it: `pixelScale` of this
+  // picture's pixels make one of the window's (a drop's width, its least length and a splash's least size are the
+  // window's), and the picture shows `pictureShare` of the window's view (a tile: part of it; the splashes, so many to
+  // the window's view, go by it). 1 and 1 in the game's own frames: as before.
+  float pixelScale = 1, pictureShare = 1;
+
  private:
   gfx::Pipeline Make(bool lit, std::string* error);
   gfx::Pipeline MakeSplashes(std::string* error);

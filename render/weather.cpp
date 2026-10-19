@@ -213,11 +213,22 @@ SOut SplashVS(uint id : SV_VertexID) {
   // (a real splash is far smaller than a pixel from the game's camera: a speck of a pixel or two, a little taller
   // than wide, up at once and gone)
   float size = max(splash.y, pixel * 1.2);
-  float3 side = normalize(cross(float3(0, 1, 0), toEye));
+  // (photofix) Near the eye a splash is many pixels wide, and as many splashes fall in each part of the picture as far
+  // off: so many large ones near a low camera that they cover it (white arcs over the whole picture). One larger than
+  // four pixels is shown only as often as keeps the share of the picture splashes cover as it is at four (the same
+  // number to each piece of ground as it nears), the rest left out; four pixels and smaller, as before.
+  float across = size / pixel;
+  if (across > 4 && SplashHash(n ^ 0x9e3779b9u, r) > 16 / (across * across)) return o;
+  float3 side = cross(float3(0, 1, 0), toEye);
+  side = dot(side, side) > 1e-10 ? normalize(side) : float3(1, 0, 0);  // (straight under the eye: any way across)
+  // (photofix) and such a large one seen from above is turned toward the eye, the more the steeper it is seen: a speck,
+  // not a card seen edge on (a bar round the middle of the picture); four pixels and smaller, upright as before
+  float3 rise = float3(0, 1, 0);
+  [branch] if (across > 4) rise = normalize(lerp(rise, cross(toEye, side), saturate((across - 4) / 4) * smoothstep(0.6, 0.95, abs(toEye.y))));
   float2 uv = corner == 0 ? float2(-1, 0) : corner == 1 ? float2(1, 0) : corner == 2 ? float2(1, 1)
             : corner == 3 ? float2(-1, 0) : corner == 4 ? float2(1, 1) : float2(-1, 1);
   float wide = size * (0.6 + 0.6 * age), high = size * 2 * sin(3.14159 * min(age * 1.6, 1));
-  o.position = mul(viewProj, float4(p + nrm * 0.02 + side * (uv.x * wide) + float3(0, 1, 0) * (uv.y * max(high, pixel)), 1));
+  o.position = mul(viewProj, float4(p + nrm * 0.02 + side * (uv.x * wide) + rise * (uv.y * max(high, pixel)), 1));
   o.across = uv;
   o.show = tint.a * (1 - age) * (1 - age) * saturate((splash.w - far) / (splash.w * 0.3));
   float3 small;
@@ -419,7 +430,7 @@ void Precipitation::DrawSplashes(const View& view, const Camera& camera, float r
   k.back = Inverse(c.viewProj);
   k.splash[0] = 0.2f;
   k.splash[1] = 0.05f;
-  k.splash[2] = 2 * std::tan(camera.fovY * 0.5f) / static_cast<float>(view.height);
+  k.splash[2] = 2 * std::tan(camera.fovY * 0.5f) / static_cast<float>(view.height) * pixelScale;  // (photofix: the window's pixel)
   k.splash[3] = std::clamp(camera.distance * 2.5f, 60.0f, 400.0f);
   for (int i = 0; i < 3; ++i) k.tint[i] = (c.skyZenith[i] + c.skyHorizon[i]) * 0.6f * 1.2f;  // (as the rain's)
   k.tint[3] = 0.45f;
@@ -427,7 +438,8 @@ void Precipitation::DrawSplashes(const View& view, const Camera& camera, float r
   device_->SetConstants(0, &c, sizeof c);
   device_->SetConstants(1, &k, sizeof k);
   device_->SetTexture(3, sceneDepth);
-  const uint32_t splashes = static_cast<uint32_t>(3000.0f * std::clamp(rain, 0.0f, 1.0f));
+  // (photofix: so many to the window's view, a photo's tile its share)
+  const uint32_t splashes = static_cast<uint32_t>(3000.0f * std::clamp(rain, 0.0f, 1.0f) * pictureShare);
   if (splashes) device_->Draw(splashes * 6);
   device_->SetTexture(3, {});
 }
@@ -451,7 +463,7 @@ void Precipitation::Draw(const View& view, const Camera& camera, float rain, flo
   const float light[3] = {c.skyZenith[0] * 0.6f + c.skyHorizon[0] * 0.6f, c.skyZenith[1] * 0.6f + c.skyHorizon[1] * 0.6f,
                           c.skyZenith[2] * 0.6f + c.skyHorizon[2] * 0.6f};
   const float edge = std::clamp(camera.distance * 1.6f, 30.0f, 900.0f);
-  const float perPixel = 2 * std::tan(camera.fovY * 0.5f) / static_cast<float>(view.height);
+  const float perPixel = 2 * std::tan(camera.fovY * 0.5f) / static_cast<float>(view.height) * pixelScale;  // (photofix: the window's pixel)
   device_->SetPipeline(lit ? litPipeline_ : pipeline_);
   device_->SetConstants(0, &c, sizeof c);
   // `low`: the lit drops' layer near the ground (seen only where the small lights light it)

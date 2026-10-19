@@ -298,8 +298,11 @@ void PlantLife::WatchBlasts(const Blasts& blasts, double clock, const std::funct
     if (b.born <= blastsSeen_ || b.born > upTo || b.splash || b.water) continue;
     // (on the ground: not a hit high on a unit, nor one in the air)
     if (ground && b.at.y - ground(b.at.x, b.at.z) > std::max(1.5f, 0.5f * b.size)) continue;
-    // larger than its scorch; a shell's small blast singes, a big one burns through
-    AddBurn(b.at.x, b.at.z, std::min(0.6f + 1.6f * b.size, 30.0f), std::clamp(0.35f + 0.5f * b.size, 0.4f, 1.0f), b.born);
+    // larger than its scorch; a shell's small blast singes, a big one burns through. Past a size of 4 it grows little
+    // more than the scorch itself: a commander's warp-in mark (28 across) burnt a circle of 30 round every start
+    // position, and photos taken there came out black (2026-10-19)
+    const float reach = b.size <= 4 ? 0.6f + 1.6f * b.size : 7.0f + 0.3f * (b.size - 4);
+    AddBurn(b.at.x, b.at.z, std::min(reach, 30.0f), std::clamp(0.35f + 0.5f * b.size, 0.4f, 1.0f), b.born);
   }
   blastsSeen_ = std::max(blastsSeen_, upTo);
 }

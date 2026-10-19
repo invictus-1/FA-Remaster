@@ -4,6 +4,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <string>
 
 #include "cinecam.h"
 #include "png.h"
@@ -536,6 +538,182 @@ void PhotoTest(WorldPicture& picture, const Camera& gameCamera, double tick, con
       printf("render: --photo-test: the window while a photo %dx%d was made: %d frames, %.1f ms on average, the slowest %.1f ms (without a photo %.1f ms)\n", pw, ph, frames,
              frames ? sum / frames * 1000 : 0.0, slowest * 1000, normal / 20 * 1000);
     }
+  }
+}
+
+namespace {
+
+// The mean of each channel (0..255) and the share of pixels darker than 8 in all three.
+void Brightness(const std::vector<uint32_t>& px, double mean[3], double* blackShare) {
+  mean[0] = mean[1] = mean[2] = 0;
+  *blackShare = 0;
+  if (px.empty()) return;
+  double s[3] = {0, 0, 0};
+  size_t black = 0;
+  for (uint32_t p : px) {
+    const int r = (p >> 16) & 255, g = (p >> 8) & 255, b = p & 255;
+    s[0] += r;
+    s[1] += g;
+    s[2] += b;
+    black += r < 8 && g < 8 && b < 8;
+  }
+  for (int c = 0; c < 3; ++c) mean[c] = s[c] / static_cast<double>(px.size());
+  *blackShare = 100.0 * static_cast<double>(black) / static_cast<double>(px.size());
+}
+
+}  // namespace
+
+// (photofix) --photo-cases. A case: "name:key=value,key=value,...", cases with ';' between. Keys (all may be left out):
+//   x, z      where the eye is (world units; default: 16 past what the game's camera looks at, as the test's view)
+//   h         the eye's height over what one stands on (default 3)
+//   yaw       degrees (Camera::heading's way; default 45); pitch degrees below the horizon (default 9; 90 straight down)
+//   hour      the moment's hour (default none: the game's own); kind (weather kind's number, default 4 rain);
+//   strength  (default 0.6)
+//   panel     1: the moment set as the photo mode's panel sets it (the hour with the game's own kind, then the kind, then
+//             the strength, a frame between each), the lens put on at f/5.5, a focus asked by a pixel, the lens put off
+//             again, as ui's photomode.lua does (default 0: the moment set at once)
+//   wait      seconds of the window's frames between the moment being set and the photo (default 0)
+//   sizes     the photos' sizes as times the window's, digits (default 1: "124" for 1x, 2x and 4x)
+//   lensf     the lens on at this f-number for the photo (default 0: off); focus (world units; default 0: auto)
+//   before    seconds of the window's frames at the place before anything is set (default 1)
+//   settle    seconds of the window's frames after the photos, for the moment settled in the window (default 1.5)
+// Written beside the --picture file: <base>_<name>_window.png (the window's frame just before the photo),
+// <base>_<name>_<k>x.png (each photo; larger than 3840x2160 made as small as the window), <base>_<name>_settled.png.
+void PhotoCases(WorldPicture& picture, const Camera& gameCamera, double tick, const PhotoTestSetup& s) {
+  Host host{picture, s.window};
+  const GroundFn ground = picture.CineGround();
+  const int w = s.width, h = s.height;
+  float mapW = 0, mapH = 0;
+  picture.MapSize(&mapW, &mapH);
+  picture.SetSelection({});
+  picture.SetLifeBars(false);
+  picture.SetStrategicIcons(false);
+  picture.SetSelectionMarks(false);
+  picture.SetWorkBars(false);
+  const Vec3 at = gameCamera.target;
+  std::string list = s.cases;
+  while (!list.empty()) {
+    const size_t semi = list.find(';');
+    const std::string one = list.substr(0, semi);
+    list = semi == std::string::npos ? std::string() : list.substr(semi + 1);
+    const size_t colon = one.find(':');
+    const std::string name = one.substr(0, colon);
+    if (name.empty()) continue;
+    float x = at.x + 16, z = at.z + 16, height = 3, yaw = 45, pitch = 9, hour = -1, strength = 0.6f, wait = 0, lensF = 0, focus = 0, before = 1, settle = 1.5f;
+    int kind = 4, panel = 0;
+    std::string sizes = "1";
+    for (std::string rest = colon == std::string::npos ? std::string() : one.substr(colon + 1); !rest.empty();) {
+      const size_t comma = rest.find(',');
+      const std::string kv = rest.substr(0, comma);
+      rest = comma == std::string::npos ? std::string() : rest.substr(comma + 1);
+      const size_t eq = kv.find('=');
+      if (eq == std::string::npos) continue;
+      const std::string k = kv.substr(0, eq), v = kv.substr(eq + 1);
+      const float f = static_cast<float>(atof(v.c_str()));
+      if (k == "x") x = f;
+      else if (k == "z") z = f;
+      else if (k == "h") height = f;
+      else if (k == "yaw") yaw = f;
+      else if (k == "pitch") pitch = f;
+      else if (k == "hour") hour = f;
+      else if (k == "kind") kind = static_cast<int>(f);
+      else if (k == "strength") strength = f;
+      else if (k == "panel") panel = static_cast<int>(f);
+      else if (k == "wait") wait = f;
+      else if (k == "sizes") sizes = v;
+      else if (k == "lensf") lensF = f;
+      else if (k == "focus") focus = f;
+      else if (k == "before") before = f;
+      else if (k == "settle") settle = f;
+      else printf("render: --photo-cases: %s: no key %s\n", name.c_str(), k.c_str());
+    }
+    CineCamera cine;
+    cine.Start(gameCamera);
+    cine.SetMap(mapW, mapH);
+    cine.Jump(CinePose{{x, ground(x, z) + height, z}, yaw * kPi / 180, pitch * kPi / 180, 0.7f});
+    cine.Update(0, ground);
+    picture.CameraCut();
+    const Camera view = cine.View(ground);
+    picture.ClearPhotoMoment();
+    picture.SetLens(Lens{});
+    host.DrawFor(view, w, h, tick, before);
+    if (hour >= 0) {
+      if (panel) {  // as the panel: the hour with the game's own weather, then the kind, then the strength
+        float ownHour = 0, ownStrength = 1;
+        int ownKind = 1;
+        picture.GetPhotoMoment(&ownHour, &ownKind, &ownStrength);
+        picture.SetPhotoMoment(hour, ownKind, ownStrength);
+        host.Frame(view, w, h, tick, false);
+        picture.SetPhotoMoment(hour, kind, ownStrength);
+        host.Frame(view, w, h, tick, false);
+        picture.SetPhotoMoment(hour, kind, strength);
+        Lens lens;
+        lens.on = true;
+        lens.fNumber = 5.55f;
+        picture.SetLens(lens);
+        host.Frame(view, w, h, tick, false);
+        host.Frame(view, w, h, tick, false);
+        lens.focus = picture.FocusAt(w * 0.4f, h * 0.6f);
+        host.Frame(view, w, h, tick, false);
+        picture.SetLens(Lens{});
+      } else {
+        picture.SetPhotoMoment(hour, kind, strength);
+      }
+    }
+    if (wait > 0) host.DrawFor(view, w, h, tick, wait);
+    Lens lens;
+    if (lensF > 0) {
+      lens.on = true;
+      lens.fNumber = lensF;
+      lens.focus = focus;
+      picture.SetLens(lens);
+    }
+    const std::vector<uint32_t> window = host.Frame(view, w, h, tick);
+    Write(s.base + "_" + name + "_window.png", window, w, h);
+    double wm[3], wb;
+    Brightness(window, wm, &wb);
+    printf("render: --photo-cases: %s: eye %.1f %.1f %.1f yaw %.0f pitch %.0f; moment %s; the window before: mean %.1f %.1f %.1f, %.1f %% black\n", name.c_str(), x,
+           ground(x, z) + height, z, yaw, pitch, hour >= 0 ? (std::to_string(hour) + " kind " + std::to_string(kind) + " at " + std::to_string(strength)).c_str() : "the game's own",
+           wm[0], wm[1], wm[2], wb);
+    for (char c : sizes) {
+      const int k = c - '0';
+      if (k < 1 || k > 4) continue;
+      std::vector<uint32_t> px;
+      int pw = 0, ph = 0, frames = 0;
+      const double t0 = Now();
+      if (!picture.StartPhoto(view, w * k, h * k, tick, 0)) {
+        printf("render: --photo-cases: %s: %dx: StartPhoto refused\n", name.c_str(), k);
+        continue;
+      }
+      while (!picture.TakeDonePhoto(&px, &pw, &ph) && frames < 100000) {
+        host.Frame(view, w, h, tick, false);
+        ++frames;
+      }
+      const WorldPicture::PhotoNumbers n = picture.LastPhotoNumbers();
+      double pm[3], pb;
+      Brightness(px, pm, &pb);
+      std::vector<uint32_t> small = px;
+      int sw = pw, sh = ph;
+      if (k > 1 && pw == w * k && ph == h * k) small = Scale(px, pw, ph, k, &sw, &sh);
+      double mean = 0, over8 = 0;
+      int most = 0;
+      if (sw == w && sh == h) Differ(window, small, &mean, &most, &over8);
+      printf("render: --photo-cases: %s: %dx photo %dx%d (%s %dx%d x%d) in %.2f s, %d frames: mean %.1f %.1f %.1f, %.1f %% black; from the window before %.1f mean, %.1f %% "
+             "of pixels by more than 8\n",
+             name.c_str(), k, pw, ph, n.columns * n.rows > 1 ? "tiles" : "one picture", n.tileWidth, n.tileHeight, n.by, Now() - t0, frames, pm[0], pm[1], pm[2], pb, mean, over8);
+      char suffix[32];
+      snprintf(suffix, sizeof suffix, "_%dx.png", k);
+      if (pw <= 3840 && ph <= 2160) Write(s.base + "_" + name + suffix, px, pw, ph);
+      else Write(s.base + "_" + name + suffix, small, sw, sh);
+    }
+    picture.SetLens(Lens{});
+    host.DrawFor(view, w, h, tick, settle);
+    const std::vector<uint32_t> settled = host.Frame(view, w, h, tick);
+    Write(s.base + "_" + name + "_settled.png", settled, w, h);
+    double sm[3], sb;
+    Brightness(settled, sm, &sb);
+    printf("render: --photo-cases: %s: the window %.1f s later: mean %.1f %.1f %.1f, %.1f %% black\n", name.c_str(), settle, sm[0], sm[1], sm[2], sb);
+    picture.ClearPhotoMoment();
   }
 }
 

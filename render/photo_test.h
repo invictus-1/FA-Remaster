@@ -21,8 +21,15 @@ struct PhotoTestSetup {
   std::vector<std::pair<int, int>> sizes;  // the window sizes photos are timed at
   bool window = false;                // the picture is drawn into a window (DrawToWindow): its check too
   std::vector<float> units;           // where the game's units are (x, y, z each), to focus on and look at
+  // (photofix) --photo-cases: in place of the test above, single photos as a host takes them, each case
+  // "name:key=value,..." with ';' between (PhotoCases in photo_test.cpp says the keys)
+  std::string cases;
 };
 
 void PhotoTest(WorldPicture& picture, const Camera& gameCamera, double tick, const PhotoTestSetup& setup);
+// (photofix) The cases of --photo-cases: each a free camera placed, a moment set (as the photo mode's panel sets it, or
+// at once), the lens, then photos at the sizes asked for; the window's frame before each photo, the photo, and the
+// window once the moment has settled are written, and their mean brightness printed.
+void PhotoCases(WorldPicture& picture, const Camera& gameCamera, double tick, const PhotoTestSetup& setup);
 
 }  // namespace render

@@ -69,6 +69,9 @@ class Ribbons {
   // rounds) is drawn hot instead: white at the shell, through yellow and orange to a dull red where
   // it ends, wider at the shell and never thinner than a pixel. false: as the files say.
   bool tracers = true;
+  // (photofix) A photo's frame: this many of its pixels make one of the window's (a tracer's least width is the
+  // window's pixel, as the window shows it); 1 in the game's frames.
+  float pixelScale = 1;
   int drawnBands = 0; // beams and trails in the last Draw
 
  private:
