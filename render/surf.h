@@ -10,6 +10,13 @@
 //    rock a wave breaks at its foot in a burst of white that boils and drains away. How high the waves are: by how
 //    rough the sea is (the weather's wind: a still day laps, a storm pounds), by how open the water in front of the
 //    shore is (none on ponds or in narrow inlets) and wave by wave (they come in sets).
+//    [coast] (Chris, 2026-10-20: "the white coast line seems to run around the landmass vs naturally bouncing against
+//    it", and a patch of surf racing round the coast.) The waves arrive a stretch of shore at a time, each stretch at a
+//    moment of its own and with waves of its own size (SurfStretchAt), never a moment running on along the coast; how
+//    big they are also by how exposed the shore is to the swell (a coast facing it or a headland most, a bay or a lee
+//    shore little); the smaller waves of a set run in without breaking white; where a wave meets the shore its white
+//    water bursts out over the water and spreads out to sea, fading into lace; and the water's own even band of foam
+//    along the waterline gives way to what the waves leave (SurfHere::lap).
 //  - Spray: where waves hit rock (steep ground at the waterline), a burst of spray thrown up the rock as each wave
 //    arrives, more and higher the rougher the sea, a mist drifting off with the wind; and ships at speed throw spray
 //    off their bows (by their speed and how rough the sea is; in a rough sea a burst as the bow meets a wave). Puffs lit
@@ -19,7 +26,8 @@
 // (or from the map's opening, when it is on then: StartField), the frames going on meanwhile; the surf fades in when it
 // is there (at once when it was there from its first frame on) (WorkOutField, TakeField): a field over
 // the map of the signed distance to the waterline, the water's depth, how steep the nearest shore is and how open the
-// water before it is (the share of open water round about), handed to the water's shader as a texture (t9 of the
+// water before it is (the share of open water round about; [coast] times how exposed it is to the sea's swell, by how far
+// open water reaches from it toward where the swell comes from), handed to the water's shader as a texture (t9 of the
 // water's pass, kSurfFieldSlot); and the places on rocky shores that throw spray. The map's own shores only: past the
 // map's edge the surf fades out (the sea beyond the edge is the horizon's).
 //
@@ -61,7 +69,8 @@ inline constexpr int kSurfFieldSlot = 9;
 inline const char kSurfShaderBlock[] = R"hlsl(
 // The shore field (Surf::MakeField): r the signed distance to the waterline (world units; over the water +, over land
 // -); g the water's depth by the map's heights; b how steep the nearest shore is (0 a beach .. 1 rock); a how open the
-// water before that shore is (0 a pond or an inlet .. 1 the open sea).
+// water before that shore is (0 a pond or an inlet .. 1 the open sea; [coast] times how exposed it is to the swell: a lee
+// shore or a bay less).
 Texture2D surfField : register(t9);  // (kSurfFieldSlot)
 
 // The waves' timing, the same as the processor's (Surf::Offset, Surf::Strength): keep the two alike.
@@ -78,6 +87,54 @@ float SurfStrength(float n, float2 xz) {
   return 0.3 + 0.7 * (0.65 * s * s + 0.35 * t);
 }
 
+// [coast] The shore's stretches: along a shore the waves arrive a stretch at a time, each stretch at a moment of its own,
+// a wave breaking along all of a stretch at once. A place's stretch is found from where it lies on the waterline (the place
+// carried in to it along the way the sea lies, so that all the water in front of a stretch keeps its timing), on a grid of
+// kSurfStretch world units; each stretch holds its own values (its waves' timing, how big each of its waves is), the same
+// over the stretch and blended over its ends. (Before, the timing was SurfOffset alone, one smooth offset over the map:
+// along a shore the moment a wave arrived ran on from place to place, and a patch of white raced round the coast once a
+// wave - Chris, 2026-10-20.) Keep it alike with the processor's (Surf::Offset, Surf::Strength).
+static const float kSurfStretch = 16;       // a stretch's size (world units)
+static const float kSurfStretchEnds = 0.3;  // over how much of a stretch (each side of its border) it blends into the next
+uint SurfHash(int2 cell, uint salt) {
+  uint h = uint(cell.x) * 0x8da6b343u ^ uint(cell.y) * 0xd8163841u ^ salt * 0xcb1ab31fu;
+  h ^= h >> 15;
+  h *= 0x2c1b3c6du;
+  h ^= h >> 12;
+  h *= 0x297a2d39u;
+  h ^= h >> 15;
+  return h;
+}
+float SurfHash01(int2 cell, uint salt) { return float(SurfHash(cell, salt) >> 8) * (1.0 / 16777216.0); }
+struct SurfStretch {
+  int2 cell;     // the stretch at the grid's corner below the place (its neighbours at +x, +z and both)
+  float2 share;  // how much of the neighbours' values the place takes (0 within the corner's stretch, 1 within theirs)
+  float ends;    // 1 on a border between two stretches .. 0 a little way from it
+};
+SurfStretch SurfStretchAt(float2 onShore) {
+  SurfStretch s;
+  float2 q = onShore / kSurfStretch - 0.5;  // (a stretch's middle at a whole number)
+  float2 f = q - floor(q);
+  s.cell = int2(floor(q));
+  s.share = smoothstep(0.5 - kSurfStretchEnds, 0.5 + kSurfStretchEnds, f);
+  float2 b = 1 - smoothstep(0, kSurfStretchEnds, abs(f - 0.5));
+  s.ends = max(b.x, b.y);
+  return s;
+}
+// When a stretch's waves arrive (cycles): the map's smooth offset where it lies, and a share of a cycle of its own.
+float SurfStretchTiming(int2 cell) { return SurfOffset((float2(cell) + 0.5) * kSurfStretch) + (SurfHash01(cell, 1u) - 0.5) * 0.6; }
+float SurfStretchOffset(SurfStretch s) {
+  return lerp(lerp(SurfStretchTiming(s.cell), SurfStretchTiming(s.cell + int2(1, 0)), s.share.x),
+              lerp(SurfStretchTiming(s.cell + int2(0, 1)), SurfStretchTiming(s.cell + int2(1, 1)), s.share.x), s.share.y);
+}
+// A value of the stretch's own (0..1), by `salt`.
+float SurfStretchValue(SurfStretch s, uint salt) {
+  return lerp(lerp(SurfHash01(s.cell, salt), SurfHash01(s.cell + int2(1, 0), salt), s.share.x),
+              lerp(SurfHash01(s.cell + int2(0, 1), salt), SurfHash01(s.cell + int2(1, 1), salt), s.share.x), s.share.y);
+}
+// How big wave `n` is on a stretch, against the map's (0.6 .. 1.4): the waves of a set do not break alike all along a shore.
+float SurfStretchSize(SurfStretch s, float n) { return 0.6 + 0.8 * SurfStretchValue(s, uint(int(n)) * 2u + 7u); }
+
 // The surf at a place on the water (or on the beach just above it).
 struct SurfHere {
   float lift;    // how far the water stands over its level here now (world units): the waves near the shore, their run-up
@@ -85,6 +142,8 @@ struct SurfHere {
   float white;   // how much white water there is (0..1), before the foam's lace breaks it up
   float ground;  // the height of the map's ground here (for telling something that stands in the water)
   float shown;   // how much of the surf there is here at all (0: none, the water as without it)
+  float lap;     // [coast] how much of the water's own foam along its edge stays at the map's ground (1 all, as without
+                 // the surf; at the map's shores the waves leave it: little where the water is calm or sheltered)
 };
 
 static const float kSurfRise = 0.45;  // how much higher the water's sheet lies with the surf on (its run-up comes so high)
@@ -92,6 +151,7 @@ static const float kSurfFar = 30;      // the waves' trains begin this far out f
 static const float kSurfWarp = 1.3;    // ... and are this much shorter again at the shore, shortening over ...
 static const float kSurfWarpReach = 8; // ... about this far
 static const float kSurfSwash = 0.06;   // [groundfix] how much the run-up's sheet falls a world unit toward its tip
+static const float kSurfLapCalm = 0.15; // [coast] how much of the water's own foam stays along a shore between the waves
 
 // `xz` where the line of sight meets the water at its level; `grain` how much water one pixel covers (world units);
 // `level` the water's level; `mapSize` the map's width and height; `area`: the field's first texel's corner (world x,
@@ -105,9 +165,11 @@ SurfHere SurfAt(float2 xz, float grain, float level, float2 mapSize, float4 area
   s.ground = level - f.g;
   // (on the map's own shores: fading out past its edge)
   float2 inside = min(xz, mapSize.xy - xz);
-  float open = f.a * saturate(1 + min(inside.x, inside.y) / 16);
+  float onMap = saturate(1 + min(inside.x, inside.y) / 16);
+  float open = f.a * onMap;
   float d = f.r;
   s.shown = open * saturate((kSurfFar - d) / 10) * saturate((d + 6) / 2);
+  s.lap = lerp(1, kSurfLapCalm, onMap);  // [coast] (a sheltered shore's: the waves', below)
   [branch] if (s.shown <= 0) return s;
   float steep = f.b;
   float rough = look2.x;
@@ -115,6 +177,11 @@ SurfHere SurfAt(float2 xz, float grain, float level, float2 mapSize, float4 area
   float2 seaward = float2(surfField.SampleLevel(samplerLinearClamp, uv + float2(area.z, 0), 0).r,
                           surfField.SampleLevel(samplerLinearClamp, uv + float2(0, area.w), 0).r) - d;
   seaward *= 1 / max(length(seaward), 1e-4);
+  // [coast] the stretch of shore this water lies before, and its waves' timing: the stretch's near the shore, the map's
+  // smooth offset out at sea (the waves come in obliquely there, and come round to the stretch's timing as they near it)
+  SurfStretch stretch = SurfStretchAt(xz - seaward * d);
+  float nearOffset = SurfStretchOffset(stretch);
+  float outAtSea = smoothstep(6, 22, d);
 
   // the waves running in: their phase (cycles) by the distance, made shorter toward the shore (warped), the clock's
   // phase and the place's offset; n counts the crests, w goes from 0 at crest n to 1 at crest n + 1, the next out to sea
@@ -122,7 +189,7 @@ SurfHere SurfAt(float2 xz, float grain, float level, float2 mapSize, float4 area
   float near = exp(-dd / kSurfWarpReach);
   float warped = dd + kSurfWarp * kSurfWarpReach * (1 - near);
   float perUnit = (1 + kSurfWarp * near) / look.z;  // cycles per world unit here
-  float c = warped / look.z + look.y + SurfOffset(xz);
+  float c = warped / look.z + look.y + lerp(nearOffset, SurfOffset(xz), outAtSea);  // [coast] (was SurfOffset(xz))
   // (the crests bent a little more, at a smaller scale, away from the shore: at the waterline the waves arrive as the
   // processor has them, for the spray)
   c += 0.36 * (CloudNoise(float3(xz * 0.045, 1.3)) - 0.5) * saturate(dd / 4);
@@ -135,7 +202,7 @@ SurfHere SurfAt(float2 xz, float grain, float level, float2 mapSize, float4 area
   float u = face ? (w - (1 - fw)) / fw : w / (1 - fw);
   float h = face ? u * u * (3 - 2 * u) : 1 - u * u * (3 - 2 * u);
   float dh = (face ? 6 : -6) * u * (1 - u) / (face ? fw : 1 - fw);
-  float S = SurfStrength(face ? n + 1 : n, xz);
+  float S = SurfStrength(face ? n + 1 : n, xz) * SurfStretchSize(stretch, face ? n + 1 : n);  // [coast] (and the stretch's)
   // its height: the sea's (look.x) by how open, growing as it shoals; where the water is shallow enough for it, it
   // breaks, and carries on lower as white water
   float crest = look.x * open * S * (1 + 0.6 * exp(-dd / 6));
@@ -144,6 +211,7 @@ SurfHere SurfAt(float2 xz, float grain, float level, float2 mapSize, float4 area
   // (and, whatever the depth, over a band along the shore that widens the rougher the sea: Seton's shores are steep, and
   // the surf of a storm should read from the game's height; narrower on rock, where the water deepens at once)
   float zone = (0.8 + 7 * rough * rough) * open * lerp(1, 0.55, steep) * (0.65 + 0.7 * CloudNoise(float3(xz * 0.06, 2.9)));
+  zone *= lerp(0.45, 1.25, SurfStretchValue(stretch, 3u));  // [coast] (and by the stretch: in a storm an even white band else)
   broken = max(broken, smoothstep(zone * 1.25, zone * 0.6, d));
   float high = crest * lerp(1, 0.55, broken);
   // (fine waves that a pixel cannot show: their mean, a level sea, and no lines of white that would flicker)
@@ -158,19 +226,25 @@ SurfHere SurfAt(float2 xz, float grain, float level, float2 mapSize, float4 area
   // (the streaks: a noise fine across the shore, by the distance from it, and coarse along it)
   float streakShown = saturate(1.5 - grain * 6);  // (streaks finer than about two pixels: their mean)
   float streaks = lerp(0.5, CloudNoise(float3(xz * 0.6, d * 3.2 + look.y * 0.4)), streakShown);
-  float faceWhite = face ? smoothstep(1 - fw, 1 - fw * 0.45, w) : 0;
-  float trail = face ? 0 : exp(-w * lerp(8, 4.5, rough)) * (0.25 + 1.2 * streaks);
+  // ([coast] its foot ragged by the streaks: a ruled edge else, the white band cut out with scissors)
+  float faceWhite = face ? smoothstep(1 - fw, 1 - fw * 0.45, w + (streaks - 0.5) * fw * 0.5) : 0;
+  float trail = face ? 0 : exp(-w * lerp(8, 6, rough)) * (0.25 + 1.2 * streaks);  // [coast] (in a storm 4.5: the trails ran together)
   // (each wave breaks along stretches of its crest, not all of it: by a noise of its own along the shore)
   float crestN = face ? n + 1 : n;
   float stretches = saturate(CloudNoise(float3(xz * 0.15, crestN * 0.71)) * 2.4 - 0.5);
-  float whiteLines = broken * saturate(S * 1.5) * max(faceWhite, 0.85 * trail) * lerp(1, stretches, 0.75 * saturate(d / 2));
-  float white = (lerp(broken * 0.25, whiteLines, lines) + broken * (0.05 + 0.2 * rough) * streaks) * (0.45 + 0.55 * rough);
+  // ([coast] and right up to the shore, where it was left out: every wave broke there all along the coast, an even white
+  // edge; nor does every wave break white: the smaller ones of a set run in unbroken, `breaks`, but in a storm nearly all)
+  float breaks = saturate((S - 0.25 * (1 - rough)) * 2.5);
+  float whiteLines = broken * breaks * max(faceWhite, 0.85 * trail) * lerp(1, stretches, lerp(0.7, 0.45, rough));
+  // ([coast] the old foam between the waves less, 0.05 + 0.2 * rough before: in a storm it filled the band in evenly)
+  float white = (lerp(broken * 0.25 * breaks * lerp(1, stretches, 0.7), whiteLines, lines) + broken * (0.04 + 0.12 * rough) * streaks) *
+                (0.45 + 0.55 * rough);
 
   // at the shore: the wave's water runs up the beach and drains back (n0, w0: the phase of the waves arriving here);
   // quickly up, slowly down; less far up steep rock, where it surges and boils instead
-  float c0 = look.y + SurfOffset(xz);
+  float c0 = look.y + nearOffset;  // [coast] (the stretch's timing: was SurfOffset(xz))
   float n0 = floor(c0), w0 = c0 - n0;
-  float S0 = SurfStrength(n0, xz);
+  float S0 = SurfStrength(n0, xz) * SurfStretchSize(stretch, n0);
   float tau = w0 / look2.z;
   // ([groundfix] eased in over the first moments of its arrival, `arrive`: a wave coming in at an angle to the shore
   // arrives along it a stretch at a time, its run-up sweeping along the beach; begun at once at the run's pace, endlessly
@@ -184,12 +258,27 @@ SurfHere SurfAt(float2 xz, float grain, float level, float2 mapSize, float4 area
   // runs is then the run-up's, not only the land's. Level, it spread over a flat berm all at once the moment it rose past
   // the berm's height: a step in the waterline, sweeping along the beach with an oblique wave)
   s.lift += min(d, 0) * kSurfSwash;
-  // the sheet running up is foam at first, clearing as it drains (the water's own foam whitens its edge)
-  white = max(white, shore * saturate(1 - d / 1.2) * saturate(S0 * 1.5) * open * run * lerp(0.8, 0.25, saturate(tau * 1.6)));
-  // on rock: a burst of white where the wave strikes, boiling at the foot of it and draining away
-  float strike = steep * S0 * open * (exp(-w0 * 6) * saturate(1 - d / 2) + 0.35 * exp(-w0 * 1.5) * saturate(1 - d / 4)) *
-                 smoothstep(0, 0.02, w0) * (1 - smoothstep(0.85, 1, w0));  // ([groundfix] eased in, and gone by the next wave)
-  white = max(white, strike * (0.5 + 0.5 * rough));
+  // [coast] how much this wave brings to the shore: by how big it is (the smaller ones of a set lap) and how exposed the shore
+  float wave0 = open * saturate((S0 - 0.22) * 2.5);
+  // the sheet running up the beach is foam at first, clearing as it drains ([coast] over the beach alone: drawn over the
+  // water's edge too, it lay as a white band along every shore, pulsing with the waves)
+  white = max(white, shore * saturate(0.5 - d / 0.3) * wave0 * run * lerp(0.8, 0.25, saturate(tau * 1.6)));
+  // [coast] where the wave meets the shore its white water bursts out over the water at the waterline (the swash falling
+  // back, on rock the wave thrown back off it) and spreads out to sea as it fades into lace: the bigger the wave, the more
+  // exposed the shore and the rougher the sea, the farther; on rock farther and sooner gone. A stretch at a time, and not
+  // every wave. Its edge out at sea is ragged, wave by wave, and within it the white thins out into the lace's streaks as
+  // it fades. (It takes the place of the rock's burst, which stood where it was, a white edge brightening and fading.)
+  float reach = (0.4 + 2.2 * wave0 * (0.6 + 0.8 * rough)) * lerp(0.85, 1.3, steep) * (0.6 + 0.8 * CloudNoise(float3(xz * 0.4, n0 * 1.37 + 0.5)));
+  float spread = 0.15 + reach * (1 - exp(-w0 * 5));
+  float ragged = d + (CloudNoise(float3(xz * 0.9, n0 * 0.61 + 3.3)) - 0.5) * (0.4 + 0.5 * spread);
+  float burst = wave0 * exp(-w0 * lerp(2.2, 3.4, steep)) * (0.45 + 0.6 * streaks) * smoothstep(spread + 0.5, spread - 0.3, ragged) *
+                saturate((d + 0.6) / 0.4) * smoothstep(0, 0.03, w0) * (1 - smoothstep(0.85, 1, w0));  // (eased in, and gone by the next wave)
+  white = max(white, burst * (0.6 + 0.4 * rough));
+  // [coast] the water's own foam along its edge: what the last wave left, clearing until the next
+  s.lap = lerp(1, kSurfLapCalm + 0.25 * wave0 * exp(-w0 * 2.5), onMap);
+  // [coast] (a little less where two stretches meet, their waves arriving between the two's moments: each stretch's
+  // breaking reads as its own)
+  white *= 1 - (0.35 + 0.3 * rough) * stretch.ends * (1 - outAtSea);
   s.white = saturate(white) * look2.w;
   s.lift = clamp(s.lift, -0.2, kSurfRise);
   return s;
@@ -203,8 +292,11 @@ float3 SurfView(float2 xz, SurfHere s, float4 area, float which) {
 }
 
 // The surf's foam at a place: its white water broken up by the foam's lace (water.cpp, Lace), as the water's own foam is.
+// ([coast] Even where it is thickest a little of the lace's holes stay open, and it is mottled, thinner where the lace is:
+// solid, a storm's white water lay along the shore as a flat white band with smooth, hard edges.)
 float SurfFoam(SurfHere s, float lace) {
-  return smoothstep(1.02 - s.white * 1.1, 1.22 - s.white * 1.1, lace + 0.42) * saturate(s.white * 2.5) * s.shown;
+  float thick = min(s.white, 0.45);
+  return smoothstep(1.02 - thick * 1.1, 1.22 - thick * 1.1, lace + 0.42) * saturate(s.white * 2.5) * s.shown * lerp(0.7, 1, smoothstep(0.38, 0.62, lace));
 }
 )hlsl";
 
@@ -246,7 +338,8 @@ class Surf {
   void Constants(float area[4], float look[4], float look2[4], float look3[4]) const;
 
   // The waves' timing (the shader's SurfOffset, SurfStrength): how far ahead a place's waves are (cycles), how big
-  // wave n is at a place.
+  // wave n is at a place. [coast] For a place on the waterline (the spray's): its stretch of shore's timing and size of
+  // wave n (the shader's SurfStretchOffset, SurfStretchSize).
   static float Offset(float x, float z);
   static float Strength(float n, float x, float z);
 
@@ -276,6 +369,7 @@ class Surf {
     float toLandX, toLandZ;  // level, length 1
     float steep, open;
     double lastCrest = -1e9;  // the crest that last arrived here
+    float offset = 0;         // [coast] its waves' timing (Offset: its stretch's, worked out once with the field)
   };
   struct Puff {
     Vec3 at;        // where it was thrown
