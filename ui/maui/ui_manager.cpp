@@ -92,7 +92,7 @@ bool UiManager::CreateRootFrames(lua_State* L, int width, int height) {
   }
   Frame* frame = ok ? dynamic_cast<Frame*>(GetObject(L, -1)) : nullptr;
   if (!frame) {
-    Logf(LogLevel::Warning, "Error in CMauiFrame::Create(): %s",
+    LogScriptErrorf("Error in CMauiFrame::Create(): %s",
          !ok && lua_isstring(L, -1) ? lua_tostring(L, -1) : "the Frame class did not make a frame");
     lua_settop(L, top);
     return false;

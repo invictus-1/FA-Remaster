@@ -538,7 +538,7 @@ void DeliverChat(lua_State* L) {
       if (lua_isfunction(L, -1)) {
         lua_pushstring(L, name.c_str());
         lua_rawgeti(L, list, i);
-        if (lua_pcall(L, 2, 0, 0) != 0) Logf(LogLevel::Warning, "ReceiveChat: %s", lua_tostring(L, -1));
+        if (lua_pcall(L, 2, 0, 0) != 0) LogScriptErrorf("ReceiveChat: %s", lua_tostring(L, -1));
       }
     }
     lua_settop(L, list);

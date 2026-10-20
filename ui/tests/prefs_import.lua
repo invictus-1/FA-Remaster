@@ -1,8 +1,9 @@
+local framework = import('/testing/framework.lua')
 -- The original game's profiles taken over once (ui/README.md, "Preferences are ours"): the host is
 -- pointed at a made-up file in the original's form (--import-prefs) as the original's, and at a
 -- file of ours that does not exist yet (--prefs). Checked from the script side, in three cases
 -- named after "--" (/prefscase):
---   taken: moho64ui --init <init.lua> --prefs <a NEW file> --import-prefs ui/tests/prefs_import.prefs
+--   taken: moho64ui_test --init <init.lua> --prefs <a NEW file> --import-prefs ui/tests/prefs_import.prefs
 --          --stage setup --lua ui/tests/prefs_import.lua --frames 8 --log out.log -- /prefscase taken
 --   again: the same --prefs file once more, with --import-prefs ui/tests/prefs_import_old.prefs: ours
 --          exists now, so nothing is taken over again (the mark the first run set is still there)
@@ -12,15 +13,8 @@
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
 local Prefs = import("/lua/user/prefs.lua")
 
-local failed = 0
-local function check(what, got, want)
-    if got == want then
-        LOG("TEST ok   " .. what)
-    else
-        failed = failed + 1
-        LOG("TEST FAIL " .. what .. ": got " .. tostring(got) .. ", want " .. tostring(want))
-    end
-end
+local test = framework.suite('prefs_import')
+local check = function(what, got, want) return test:equal(what, got, want) end
 
 local case = (GetCommandLineArg("/prefscase", 1) or {})[1]
 check("a case is named (-- /prefscase taken|again|fresh)", case == "taken" or case == "again" or case == "fresh", true)
@@ -64,4 +58,4 @@ elseif case == "fresh" then
     check("nothing taken over: no current profile", GetPreference("profile.current"), nil)
 end
 
-LOG("TEST done: " .. failed .. " failed")
+test:finish()

@@ -535,7 +535,7 @@ void CommandStream::Apply(Sim& sim, int type, const std::string& payload) {
       lua_getglobal(L, fn.c_str());
       if (!PushSerializedLua(L, arg)) lua_pushnil(L);
       if (lua_pcall(L, 1, 0, top + 1) != 0)
-        Logf(LogLevel::Warning, "Error running global lua function '%s':\n%s", fn.c_str(),
+        LogScriptErrorf("Error running global lua function '%s':\n%s", fn.c_str(),
              lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
       lua_settop(L, top);
       break;
@@ -569,7 +569,7 @@ void CommandStream::Apply(Sim& sim, int type, const std::string& payload) {
         }
       }
       if (lua_pcall(L, 3, 0, handler) != 0)
-        Logf(LogLevel::Warning, "Error running sim lua callback function '%s':\n%s", name.c_str(),
+        LogScriptErrorf("Error running sim lua callback function '%s':\n%s", name.c_str(),
              lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
       lua_settop(L, top);
       break;

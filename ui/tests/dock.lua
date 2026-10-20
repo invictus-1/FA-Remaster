@@ -1,17 +1,12 @@
+local framework = import('/testing/framework.lua')
+local driver = framework.input()
 -- The Dock order (IssueDockCommand, as the original's FA exe 0x840a70), GetIsSubmerged and the idle
 -- selection: aircraft made by the game's cheat callback, docked at an air staging platform. Then
 -- what hangs on the platform (GetAttachedUnitsList) and the drones of a commander
 -- (GetAssistingUnitsList).
 -- Run it like victory.lua (a launched game with CheatsEnabled = "true"), with --frames 4200.
-local failed = 0
-local function check(what, got, want)
-    if got == want then
-        LOG("TEST ok   " .. what)
-    else
-        failed = failed + 1
-        LOG("TEST FAIL " .. what .. ": got " .. tostring(got) .. ", want " .. tostring(want))
-    end
-end
+local test = framework.suite('dock')
+local check = function(what, got, want) return test:equal(what, got, want) end
 local function ownOf(bp)
     local found = {}
     for _, u in GetSelectedUnits() or {} do
@@ -19,7 +14,7 @@ local function ownOf(bp)
     end
     return found
 end
-ForkThread(function()
+test:fork(function()
     WaitSeconds(6)
     local cdr = GetArmyAvatars()[1]
     local p = cdr:GetPosition()
@@ -102,7 +97,7 @@ ForkThread(function()
         local view = import("/lua/ui/game/worldview.lua").viewLeft
         SelectUnits({tank, pad})
         local at = view:Project(cdr:GetPosition())
-        moho64ui_MouseMove(at.x, at.y)
+        driver:move(at.x, at.y)
         WaitSeconds(0.3)
         local valid = GetValidAttackingUnits()
         check("GetValidAttackingUnits: of the tank and the platform, the tank", valid ~= nil and table.getn(valid) == 1 and valid[1] == tank, true)
@@ -128,11 +123,11 @@ ForkThread(function()
             WaitSeconds(0.5)
             local g = view:Project(gen)
             LOG("TEST note: the generator on screen at " .. g.x .. "," .. g.y)
-            moho64ui_MouseMove(g.x, g.y)
+            driver:move(g.x, g.y)
             WaitSeconds(0.3)
             check("the anti-air turret over an enemy on land: the invalid attack", view:GetRightMouseButtonOrder(), "RULEUCC_Invalid")
-            moho64ui_MouseButton("Right", true, g.x, g.y)
-            moho64ui_MouseButton("Right", false, g.x, g.y)
+            driver:button("Right", true, g.x, g.y)
+            driver:button("Right", false, g.x, g.y)
             WaitSeconds(0.5)
             check("and a right click gives it no order", table.getn(turret:GetCommandQueue() or {}), 0)
             SelectUnits({tank})
@@ -141,20 +136,20 @@ ForkThread(function()
             -- the original's two debugging switches (CanSelectUnit 0x865830, ReleaseDrag 0x865920): with
             -- UI_SelectAnything and cheats on a click selects the enemy's generator; with ui_DebugAltClick, Alt and
             -- a click on it looks through the enemy's army
-            moho64ui_MouseButton("Left", true, g.x, g.y)
-            moho64ui_MouseButton("Left", false, g.x, g.y)
+            driver:button("Left", true, g.x, g.y)
+            driver:button("Left", false, g.x, g.y)
             check("a click on the enemy's generator selects nothing", GetSelectedUnits(), nil)
             ConExecute("UI_SelectAnything 1")
-            moho64ui_MouseButton("Left", true, g.x, g.y)
-            moho64ui_MouseButton("Left", false, g.x, g.y)
+            driver:button("Left", true, g.x, g.y)
+            driver:button("Left", false, g.x, g.y)
             local picked = GetSelectedUnits()
             check("with UI_SelectAnything (and cheats) it selects it", picked ~= nil and picked[1]:GetUnitId(), "ueb1101")
             ConExecute("UI_SelectAnything 0")
             SelectUnits(nil)
             local mine = GetFocusArmy()
             ConExecute("ui_DebugAltClick 1")
-            moho64ui_MouseButton("Left", true, g.x, g.y, "Alt")
-            moho64ui_MouseButton("Left", false, g.x, g.y, "Alt")
+            driver:button("Left", true, g.x, g.y, "Alt")
+            driver:button("Left", false, g.x, g.y, "Alt")
             WaitSeconds(0.5)
             check("with ui_DebugAltClick, Alt and a click on it: the enemy's view", GetFocusArmy(), enemy)
             ConExecute("ui_DebugAltClick 0")
@@ -163,5 +158,5 @@ ForkThread(function()
             check("and back to the player's own", GetFocusArmy(), mine)
         end
     end
-    LOG("TEST done: " .. failed .. " failed")
+    test:finish()
 end)

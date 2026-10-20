@@ -25,6 +25,7 @@
 #include <shlobj.h>
 #endif
 
+#include "app/application.h"
 #include "app/backdrop.h"
 #include "app/game_session.h"
 #include "app/window.h"
@@ -247,7 +248,7 @@ bool RunInit(const Options& o, Vfs& vfs, std::vector<std::string>& hookDirs, std
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int moho::ui::RunApplication(int argc, char** argv, const ApplicationHost& host) {
   Options o;
   g_opts = &o;
   for (int i = 1; i < argc; ++i) {
@@ -315,7 +316,6 @@ int main(int argc, char** argv) {
     }
   }
   if (!o.logFile.empty()) LogOpenFile(o.logFile);
-  ui::AllowTestFileWrites(!o.luaFile.empty() || !gameLuaFile.empty());  // (test runs only: user_state.h)
   InstallCrashHandler();  // (a fatal fault writes its place and frames to the log: src/core/crash.h)
   if (o.quiet) LogSetEcho(false);
   if (o.init.empty() || width < 1 || height < 1 ||
@@ -330,6 +330,9 @@ int main(int argc, char** argv) {
   if (fullScreen && !ui::Window::ScreenSize(&width, &height)) fullScreen = false;  // the head is the screen
   Vfs vfs;
   ui::UserState::Config cfg;
+  cfg.registerBindings = host.registerBindings;
+  cfg.afterFrame = host.afterFrame;
+  cfg.beforeStateClose = host.beforeStateClose;
   cfg.width = width;
   cfg.height = height;
   // The game's /preferences/Game.prefs (the init file mounts the original's folder, LOCAL_APPDATA/Gas Powered
@@ -341,6 +344,7 @@ int main(int argc, char** argv) {
   if (!vfs.MountMemoryFile(kGamePrefsPath, "PreGameData = {\n}\n"))
     Logf(LogLevel::Warning, "moho64ui: the game's own %s could not be mounted", kGamePrefsPath);
   if (!RunInit(o, vfs, cfg.hookDirs, cfg.protocols)) return 1;
+  if (host.mountResources && !host.mountResources(vfs)) return 1;
   for (const std::string& folder : moreMaps) {
     if (!vfs.Mount(folder, "/maps")) Logf(LogLevel::Warning, "moho64ui: --maps %s: no such folder", folder.c_str());
   }
@@ -558,7 +562,10 @@ int main(int argc, char** argv) {
     if (auto code = hostfs::ReadFile(o.luaFile)) front->RunString(*code, "@" + o.luaFile);
     else Logf(LogLevel::Error, "cannot read %s", o.luaFile.c_str());
   }
-  if (ok && !sessionIn.empty()) {  // start a game at once from a recorded configuration (what --session-out wrote)
+  bool sessionInputPending = ok && !sessionIn.empty();
+  auto launchSessionInput = [&]() {
+    if (!sessionInputPending || (host.readyForGame && !host.readyForGame())) return;
+    sessionInputPending = false;
     lua_State* L = front->L();
     std::string why;
     if (!PushGameConfigFile(L, sessionIn, &why) || !session.Launch(L, -1, &why)) {
@@ -566,7 +573,8 @@ int main(int argc, char** argv) {
       ok = false;
     }
     lua_settop(L, 0);
-  }
+  };
+  launchSessionInput();
   // When a game has been launched, its interface gets a state of its own: the session's start
   // script, the rules, the root frame and the main script again, then the in-game interface.
   // The front end's state stays as it is and is no longer shown.
@@ -609,6 +617,7 @@ int main(int argc, char** argv) {
       return;
     }
     if (!session.Loading() || !session.LoadDone()) return;
+    if (host.readyForGame && !host.readyForGame()) return;
     {
       std::string why;
       if (!session.FinishLoad(&why)) {  // (the original: "map %s failed. aborting session.", back to the front end)
@@ -714,6 +723,7 @@ int main(int argc, char** argv) {
     // on the card (no picture read back and copied again): the renderer track's way, with Chris's
     // go-ahead (2026-10-15). --gdi: the old way (see directWindow).
     ui::WindowHooks hooks;
+    hooks.windowChanged = host.windowChanged;
     if (directWindow) {
       hooks.opened = [&](void* handle) {
         session.window = handle;
@@ -737,6 +747,7 @@ int main(int argc, char** argv) {
     hooks.statsLines = [&](std::vector<std::string>* lines) { session.StatsLines(lines); };
     done = ui::RunWindow([&]() -> ui::UserState& { return *shown; }, width, height, o.frames,
                          [&](double seconds, ui::SoftwareTarget& target) {
+                           launchSessionInput();
                            session.OpenPictureIfDue();
                            if (session.Loading()) ++loadingDrawn;
                            listen();
@@ -761,6 +772,7 @@ int main(int argc, char** argv) {
   } else {
     for (; done < o.frames && !ui::ExitRequested(); ++done) {
       shown->Frame(1.0 / 60.0);
+      launchSessionInput();
       session.Advance(1.0 / 60.0);
       listen();
       sounds.Update(1.0f / 60.0f);

@@ -1,20 +1,14 @@
+local framework = import('/testing/framework.lua')
 -- The replay kept by replay_record.lua is played back from the front end, as the game's Replay
 -- dialog does (LaunchReplaySession), and watched: it is a replay, the player has no army, and the
 -- commander walks as he walked in the game.
 -- Run after replay_record.lua with the same preferences folder:
---   moho64ui --stage frontend --lua ui/tests/replay_play.lua --game-lua ui/tests/replay_play.lua
+--   moho64ui_test --stage frontend --lua ui/tests/replay_play.lua --game-lua ui/tests/replay_play.lua
 --            --frames 2400 ...
 -- (The same file serves both states: in the front end it opens the dialog and launches the
 -- replay, in the game it checks.)
-local failed = 0
-local function check(what, got, want)
-    if got == want then
-        LOG("TEST ok   " .. what)
-    else
-        failed = failed + 1
-        LOG("TEST FAIL " .. what .. ": got " .. tostring(got) .. ", want " .. tostring(want))
-    end
-end
+local test = framework.suite('replay_play')
+local check = function(what, got, want) return test:equal(what, got, want) end
 if not rawget(_G, "SessionIsActive") or not SessionIsActive() then
     -- the front end: the game's own Replay dialog opens and closes, then the kept replay starts
     local profile = import("/lua/user/prefs.lua").GetCurrentProfile().Name
@@ -22,15 +16,16 @@ if not rawget(_G, "SessionIsActive") or not SessionIsActive() then
         local dialog = import("/lua/ui/dialogs/replay.lua")
         dialog.CreateDialog(GetFrame(0), true)
     end)
-    LOG((ok and "TEST ok   " or "TEST FAIL ") .. "the game's Replay dialog opens")
+    test:check("the game's Replay dialog opens", ok)
     local file = GetSpecialFilePath(profile, "moho64_test", "Replay")
     LOG("TEST note the replay: " .. file)
     local started = LaunchReplaySession(file)
-    LOG((started and "TEST ok   " or "TEST FAIL ") .. "LaunchReplaySession starts the kept replay")
+    test:check("LaunchReplaySession starts the kept replay", started)
     check("and a file that is not there starts nothing", LaunchReplaySession(file .. ".missing"), false)
+    test:checkpoint()
     return
 end
-ForkThread(function()
+test:fork(function()
     check("the game is a replay", SessionIsReplay(), true)
     check("its screen was made as a replay's (no orders panel)", import("/lua/ui/game/gamemain.lua").GetReplayState(), true)
     check("the player watches: no army", GetFocusArmy(), -1)
@@ -39,7 +34,7 @@ ForkThread(function()
     local cdr = GetUnitById("0")
     check("the player's commander is there", cdr ~= nil, true)
     if not cdr then
-        LOG("TEST done: " .. failed .. " failed")
+        test:finish()
         return
     end
     local start = cdr:GetPosition()
@@ -68,5 +63,5 @@ ForkThread(function()
         waited = waited + 0.1
     end
     check("SetFocusArmy(-1): every army again", GetFocusArmy(), -1)
-    LOG("TEST done: " .. failed .. " failed")
+    test:finish()
 end)

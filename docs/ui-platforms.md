@@ -25,7 +25,7 @@ public headers (zlib licence, `ui/third_party/SDL3`) and stb_truetype 1.26 (publ
 - Tried on Windows, the only system here: a test build draws the text with stb_truetype
   (`--define MOHO64UI_STB_FONTS`): the front end's text-measuring tests pass as with GDI and the
   main menu's text lies on the same pixels. A test build runs through SDL (`--sdl --sdl-lib <the
-  SDL3 mingw package's lib>`): `ui/tests/sdl_input.lua` puts events into SDL's own queue and checks
+  SDL3 mingw package's lib>`): `tests/ui/input_contract.lua` uses the shared framework to check
   what the interface hears (keys, characters, modifiers, clicks, double clicks, the wheel).
 - A Mac's Cmd is the game's Ctrl (Chris, 2026-10-16: "that should be fine"): the Cmd key's events carry
   Ctrl's code and with it held the events say Ctrl; tried on Windows with `--define MOHO64UI_CMD_AS_CTRL`

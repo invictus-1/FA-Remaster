@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "origin": "original_game",
+  "executable_sha256": "c6783580c0b7a408ec2ad3bfe5eb1fdbef31a60d92c1007ff9b90c33bb960aa0",
+  "hook_sha256": "f58eb3ea31d3e3a0916e1c81e89eab3f8c292399ab19287ab68ae7f8b587098b",
+  "exporter_sha256": "9059bfdca01f0d5b93d47b8db376fb49ee49182d2e28a6018f4efacac5341310",
+  "protocol": "FA_ORACLE 1",
+  "map": "SCMP_001",
+  "seed": 1,
+  "original_repeatability": {
+    "runs": 2,
+    "matching_ticks": 6000,
+    "exact_match": true
+  },
+  "files": {
+    "full.jsonl.gz": "fd5203a3af3d497f6645639473d4b6429e64a5c369eb700b1108a51c722cdb66",
+    "prefix.jsonl.gz": "c42e89ad31c8fe277bea563c5647a64804aca1541492f628b5a65e5868f31d13",
+    "startup.jsonl.gz": "bc591aca456c52da51f141d4930a137abdb9ffbc7a728bd830bfabc50673b4cc",
+    "session.lua": "1dc4da7e026cba492f0087cba217624e31c89b17f77f525f4860a8b37430549a"
+  },
+  "setup_sha256": "9cd3ea63a9bd2a1dd0fc65d648f66ec50a96d038204cbe03531f41b56ed70c42",
+  "coverage": [
+    "unit identity",
+    "unit position",
+    "unit health",
+    "army stored mass and energy"
+  ]
+}

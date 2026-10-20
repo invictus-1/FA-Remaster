@@ -1,18 +1,12 @@
+local framework = import('/testing/framework.lua')
 -- A launched game loads as the original's does: WorldIsLoading() is true from the launch call
 -- until the world is there; the game's loading screen comes up the frame after the launch, in
 -- the front end's own state (uimain.SetupUI, uimain.StartGameUI, provider:StartLoadingDialog);
 -- headless, the world is then loaded and the loading screen has one frame before the game.
---   moho64ui --init <init.lua> --stage setup --lua ui/tests/loading.lua --frames 60 --log out.log
+--   moho64ui_test --init <init.lua> --stage setup --lua ui/tests/loading.lua --frames 60 --log out.log
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
-local failed = 0
-local function check(what, got, want)
-    if got == want then
-        LOG("TEST ok   " .. what)
-    else
-        failed = failed + 1
-        LOG("TEST FAIL " .. what .. ": got " .. tostring(got) .. ", want " .. tostring(want))
-    end
-end
+local test = framework.suite('loading')
+local check = function(what, got, want) return test:equal(what, got, want) end
 
 -- what the engine calls in this state while the loading screen comes up
 local calls = {}
@@ -27,7 +21,7 @@ uimain.StartGameUI = function()
     startGameUI()
 end
 
-ForkThread(function()
+test:fork(function()
     WaitFrames(2)
     check("before a launch the world is not loading", WorldIsLoading(), false)
     local stateBefore = GetCurrentUIState()
@@ -59,5 +53,5 @@ ForkThread(function()
     check("the world is still loading while the loading screen shows", WorldIsLoading(), true)
     local _, _, _, hidden = moho64ui_Cursor()
     check("the loading screen hides the pointer (FAF's StartLoadingDialog ran here)", hidden, true)
-    LOG("TEST done: " .. failed .. " failed")
+    test:finish()
 end)

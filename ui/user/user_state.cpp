@@ -36,7 +36,6 @@ UserState::UserState(Vfs* vfs, Config config) : config_(std::move(config)) {
   RegisterEditBindings(L);
   RegisterSimpleControlBindings(L);
   RegisterInputBindings(L);
-  RegisterWindowTestBindings(L);
   RegisterLobbyBindings(L);
   RegisterSpecialFileBindings(L);
   RegisterKeyMapBindings(L);
@@ -47,6 +46,7 @@ UserState::UserState(Vfs* vfs, Config config) : config_(std::move(config)) {
   RegisterRangeBindings(L);
   RegisterWorldMeshBindings(L);
   RegisterMapPreviewBindings(L);
+  if (config_.registerBindings) config_.registerBindings(L);
   InitFonts(vfs);
   if (!config_.prefsFile.empty()) LoadPrefs(L, config_.prefsFile);
   // Hooks of the active mods apply to the scripts of this state as well. (The original's front end
@@ -55,6 +55,7 @@ UserState::UserState(Vfs* vfs, Config config) : config_(std::move(config)) {
 }
 
 UserState::~UserState() {
+  if (config_.beforeStateClose) config_.beforeStateClose(L());
   units.reset();
   ranges.reset();
   worldMeshes.reset();  // (its meshes let go of their Lua tables: before the state closes; a crash at the end of a run before)
@@ -205,6 +206,7 @@ void UserState::Frame(double seconds) {
   DeliverChat(state_->L());
   DeliverConsoleLines(state_->L());  // (the console's lines from other threads: user/keymap.cpp)
   threads_->RunTick(frame_);
+  if (config_.afterFrame) config_.afterFrame(L());
 }
 
 }  // namespace moho::ui

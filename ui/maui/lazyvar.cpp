@@ -26,7 +26,7 @@ bool LazyVar::Create(lua_State* L, float initial) {
     ok = lua_pcall(L, 1, 1, 0) == 0;
   }
   if (!ok) {
-    Logf(LogLevel::Warning, "Error in lazyvar.Create(): %s", lua_tostring(L, -1) ? lua_tostring(L, -1) : "?");
+    LogScriptErrorf("Error in lazyvar.Create(): %s", lua_tostring(L, -1) ? lua_tostring(L, -1) : "?");
     lua_settop(L, top);
     return false;
   }
@@ -69,7 +69,7 @@ float LazyVar::Get() const {
         }
         where += "]";
       }
-      Logf(LogLevel::Warning, "Evaluating LazyVar failed: %s%s", lua_tostring(L, -1) ? lua_tostring(L, -1) : "?", where.c_str());
+      LogScriptErrorf("Evaluating LazyVar failed: %s%s", lua_tostring(L, -1) ? lua_tostring(L, -1) : "?", where.c_str());
       lua_pop(L, 1);
       lua_pushnumber(L, 0);
       lua_rawseti(L, top + 1, 1);  // it reads as 0 from now on, until a script sets it again
@@ -78,7 +78,7 @@ float LazyVar::Get() const {
     }
   }
   if (lua_type(L, -1) != LUA_TNUMBER) {
-    Logf(LogLevel::Warning, "LazyVar has non-number value.");
+    LogScriptError("LazyVar has non-number value.");
     lua_pushnumber(L, 0);
     lua_rawseti(L, top + 1, 1);
     lua_settop(L, top);
@@ -110,7 +110,7 @@ void LazyVar::Set(float v) {
   lua_pushvalue(L, -2);
   lua_pushnumber(L, v);
   if (lua_pcall(L, 2, 0, 0) != 0)
-    Logf(LogLevel::Warning, "Setting LazyVar failed: %s", lua_tostring(L, -1) ? lua_tostring(L, -1) : "?");
+    LogScriptErrorf("Setting LazyVar failed: %s", lua_tostring(L, -1) ? lua_tostring(L, -1) : "?");
   lua_settop(L, top);
 }
 

@@ -1,16 +1,10 @@
+local framework = import('/testing/framework.lua')
 -- The campaign from its own screens: the operation briefing (FAF's operationbriefing.lua with our
 -- hook) opened as the operation select opens it (no parent: the original's briefing), its Launch
 -- button pressed; the operation starts with the briefing's choices. The same file serves both states:
---   moho64ui --stage frontend --lua ui/tests/briefing.lua --game-lua ui/tests/briefing.lua --frames 1500 ...
-local failed = 0
-local function check(what, got, want)
-    if got == want then
-        LOG("TEST ok   " .. what)
-    else
-        failed = failed + 1
-        LOG("TEST FAIL " .. what .. ": got " .. tostring(got) .. ", want " .. tostring(want))
-    end
-end
+--   moho64ui_test --stage frontend --lua ui/tests/briefing.lua --game-lua ui/tests/briefing.lua --frames 1500 ...
+local test = framework.suite('briefing')
+local check = function(what, got, want) return test:equal(what, got, want) end
 if not rawget(_G, "SessionIsActive") or not SessionIsActive() then
     -- catch the briefing's Launch button as it is made (as our hook does)
     local UIUtil = import("/lua/ui/uiutil.lua")
@@ -27,13 +21,13 @@ if not rawget(_G, "SessionIsActive") or not SessionIsActive() then
     check("the operation briefing opens", ok, true)
     check("it has a Launch button", launch ~= nil, true)
     check("and the button is on", launch ~= nil and not launch._isDisabled, true)
-    ForkThread(function()
+    test:fork(function()
         WaitSeconds(1)
         if launch then launch.OnClick(launch) end
-        if failed > 0 then LOG("TEST done: " .. failed .. " failed (in the front end)") end
+        test:checkpoint()
     end)
 else
-    ForkThread(function()
+    test:fork(function()
         check("Launch started a session", SessionIsActive(), true)
         local scenario = SessionGetScenarioInfo()
         check("the briefing's operation", scenario.campaignInfo and scenario.campaignInfo.opKey, "X1CA_001")
@@ -41,6 +35,6 @@ else
         LOG("TEST note: campaign faction " .. tostring(scenario.Options.FACampaignFaction))
         check("with a campaign faction", type(scenario.Options.FACampaignFaction), "string")
         check("the player's army first", GetFocusArmy(), 1)
-        LOG("TEST done: " .. failed .. " failed")
+        test:finish()
     end)
 end

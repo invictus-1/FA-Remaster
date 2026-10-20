@@ -304,7 +304,7 @@ void ReportSelection(lua_State* L, const std::vector<UserUnit*>& before, const s
       PushUnitList(L, removed, false);
       store.reporting = true;
       if (lua_pcall(L, 4, 0, top + 1) != 0)
-        Logf(LogLevel::Warning, "Error running '/lua/ui/game/gamemain.lua:OnSelectionChanged': %s",
+        LogScriptErrorf("Error running '/lua/ui/game/gamemain.lua:OnSelectionChanged': %s",
              lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
       store.reporting = false;
     }
@@ -1313,7 +1313,7 @@ void ReportCommandIssued(lua_State* L, const char* type, const std::vector<UserU
       lua_rawset(L, -3);
       lua_rawset(L, -3);
       if (lua_pcall(L, 1, 0, top + 1) != 0)
-        Logf(LogLevel::Warning, "Error running '/lua/ui/game/commandmode.lua:OnCommandIssued': %s",
+        LogScriptErrorf("Error running '/lua/ui/game/commandmode.lua:OnCommandIssued': %s",
              lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
     }
   }
@@ -1526,7 +1526,7 @@ bool IssueScriptAt(lua_State* L, float x, float y, float z, bool clear) {
   lua_rawset(L, -3);
   lua_rawset(L, -3);
   if (!lua_isfunction(L, -2) || lua_pcall(L, 1, 1, top + 1) != 0 || !lua_istable(L, -1)) {
-    if (lua_isstring(L, -1)) Logf(LogLevel::Warning, "Error running '/lua/user/userscriptcommand.lua:VerifyScriptCommand': %s", lua_tostring(L, -1));
+    if (lua_isstring(L, -1)) LogScriptErrorf("Error running '/lua/user/userscriptcommand.lua:VerifyScriptCommand': %s", lua_tostring(L, -1));
     lua_settop(L, top);
     return true;  // (the click is used up all the same)
   }
@@ -2919,7 +2919,7 @@ void ReportQueueChange(lua_State* L) {
     if (lua_isfunction(L, -1)) {
       PushBuildQueue(L, queue);
       if (lua_pcall(L, 1, 0, top + 1) != 0)
-        Logf(LogLevel::Warning, "Error running '/lua/ui/game/gamemain.lua:OnQueueChanged': %s", lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
+        LogScriptErrorf("Error running '/lua/ui/game/gamemain.lua:OnQueueChanged': %s", lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
     }
   }
   lua_settop(L, top);
@@ -3798,7 +3798,7 @@ int64_t WorkTicks(lua_State* L, UnitStore& store, OrderGraph& g, const OrderGrap
       lua_remove(L, -2);
     }
     if (lua_pcall(L, 2, 1, 0) != 0) {
-      Logf(LogLevel::Warning, "Error estimating work time: %s", lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
+      LogScriptErrorf("Error estimating work time: %s", lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
       lua_settop(L, model);
       continue;
     }

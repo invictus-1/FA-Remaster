@@ -1,0 +1,43 @@
+{
+  "tests": [
+    {
+      "name": "original-battle-startup",
+      "oracle": "tests/fixtures/session_replay/original_battle/startup.jsonl.gz",
+      "oracle_format": "fa-oracle",
+      "session_info": "tests/fixtures/session_replay/original_battle/session.lua",
+      "sim_setup": "tests/replay/fixtures/battle.lua",
+      "setup_input": {
+        "action": "battle",
+        "end_tick": 6000
+      },
+      "seed": 1,
+      "timeout": 60
+    },
+    {
+      "name": "original-battle-prefix",
+      "oracle": "tests/fixtures/session_replay/original_battle/prefix.jsonl.gz",
+      "oracle_format": "fa-oracle",
+      "session_info": "tests/fixtures/session_replay/original_battle/session.lua",
+      "sim_setup": "tests/replay/fixtures/battle.lua",
+      "setup_input": {
+        "action": "battle",
+        "end_tick": 6000
+      },
+      "seed": 1,
+      "timeout": 60
+    },
+    {
+      "name": "original-battle-full",
+      "oracle": "tests/fixtures/session_replay/original_battle/full.jsonl.gz",
+      "oracle_format": "fa-oracle",
+      "session_info": "tests/fixtures/session_replay/original_battle/session.lua",
+      "sim_setup": "tests/replay/fixtures/battle.lua",
+      "setup_input": {
+        "action": "battle",
+        "end_tick": 6000
+      },
+      "seed": 1,
+      "timeout": 600
+    }
+  ]
+}

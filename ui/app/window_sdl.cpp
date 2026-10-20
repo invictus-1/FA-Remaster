@@ -358,6 +358,10 @@ bool Window::Pump() {
         break;
       case SDL_EVENT_MOUSE_MOTION: {
         UiEvent e = MouseEvent(ev.motion.x, ev.motion.y);
+        // The event's snapshot preserves button state when several moves are queued.
+        e.left = (ev.motion.state & SDL_BUTTON_LMASK) != 0;
+        e.middle = (ev.motion.state & SDL_BUTTON_MMASK) != 0;
+        e.right = (ev.motion.state & SDL_BUTTON_RMASK) != 0;
         if (holding_) {
           heldX_ += ev.motion.xrel, heldY_ += ev.motion.yrel;
           e.x = heldX_, e.y = heldY_;
@@ -454,86 +458,6 @@ void Window::Present(const SoftwareTarget& target) {
   SDL_UpdateTexture(t, nullptr, target.pixels().data(), w * 4);
   SDL_RenderTexture(r, t, nullptr, nullptr);
   SDL_RenderPresent(r);
-}
-
-// --- For tests: events put into SDL's own queue, so that they come through Pump as the system's
-// would (the translation to the interface's keys, characters, clicks and wheel steps is what they
-// try). SDL builds only.
-// moho64ui_SdlKey(scancode [, "down" | "up"]): SDL's key by its scancode, both halves without the
-// second argument. moho64ui_SdlMods(names): the modifiers held from now on ("Ctrl", "Shift Alt",
-// "" for none; "Cmd" a Mac's Cmd, Windows' Windows key). moho64ui_SdlText(text): typed text, as the system's text input brings it.
-// moho64ui_SdlMouse(kind, x, y [, button or notches [, clicks]]): "move", "down", "up" (button 1
-// left, 2 middle, 3 right; clicks 2 for a double click's second), "wheel" (notches, away is
-// positive).
-namespace {
-int l_SdlKey(lua_State* L) {
-  const int sc = static_cast<int>(luaL_checknumber(L, 1));
-  const std::string half = lua_isstring(L, 2) ? lua_tostring(L, 2) : "";
-  for (int down = 1; down >= 0; --down) {
-    if ((down && half == "up") || (!down && half == "down")) continue;
-    SDL_Event ev{};
-    ev.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
-    ev.key.scancode = static_cast<SDL_Scancode>(sc);
-    ev.key.key = SDL_GetKeyFromScancode(static_cast<SDL_Scancode>(sc), SDL_GetModState(), false);
-    ev.key.mod = SDL_GetModState();
-    ev.key.down = down != 0;
-    SDL_PushEvent(&ev);
-  }
-  return 0;
-}
-int l_SdlMods(lua_State* L) {
-  const std::string names = luaL_checkstring(L, 1);
-  SDL_Keymod m = SDL_KMOD_NONE;
-  if (names.find("Ctrl") != std::string::npos) m |= SDL_KMOD_LCTRL;
-  if (names.find("Shift") != std::string::npos) m |= SDL_KMOD_LSHIFT;
-  if (names.find("Alt") != std::string::npos) m |= SDL_KMOD_LALT;
-  if (names.find("Cmd") != std::string::npos) m |= SDL_KMOD_LGUI;
-  SDL_SetModState(m);
-  return 0;
-}
-int l_SdlText(lua_State* L) {
-  static std::vector<std::string> kept;  // (the event points at its text until Pump has read it)
-  if (kept.size() > 64) kept.erase(kept.begin(), kept.begin() + 32);
-  kept.push_back(luaL_checkstring(L, 1));
-  SDL_Event ev{};
-  ev.type = SDL_EVENT_TEXT_INPUT;
-  ev.text.text = kept.back().c_str();
-  SDL_PushEvent(&ev);
-  return 0;
-}
-int l_SdlMouse(lua_State* L) {
-  const std::string kind = luaL_checkstring(L, 1);
-  const float x = static_cast<float>(luaL_checknumber(L, 2)), y = static_cast<float>(luaL_checknumber(L, 3));
-  SDL_Event ev{};
-  if (kind == "move") {
-    ev.type = SDL_EVENT_MOUSE_MOTION;
-    ev.motion.x = x, ev.motion.y = y;
-  } else if (kind == "down" || kind == "up") {
-    ev.type = kind == "down" ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
-    ev.button.button = static_cast<Uint8>(luaL_optnumber(L, 4, 1));
-    ev.button.down = kind == "down";
-    ev.button.clicks = static_cast<Uint8>(luaL_optnumber(L, 5, 1));
-    ev.button.x = x, ev.button.y = y;
-  } else if (kind == "wheel") {
-    ev.type = SDL_EVENT_MOUSE_WHEEL;
-    ev.wheel.y = static_cast<float>(luaL_optnumber(L, 4, 1));
-    ev.wheel.direction = SDL_MOUSEWHEEL_NORMAL;
-    ev.wheel.mouse_x = x, ev.wheel.mouse_y = y;
-  } else {
-    return luaL_error(L, "moho64ui_SdlMouse: no such kind '%s'", kind.c_str());
-  }
-  SDL_PushEvent(&ev);
-  return 0;
-}
-}  // namespace
-
-void RegisterWindowTestBindings(lua_State* L) {
-  lua_register(L, "moho64ui_SdlKey", l_SdlKey);
-  lua_register(L, "moho64ui_SdlMods", l_SdlMods);
-  lua_pushboolean(L, kCmdIsCtrl);
-  lua_setglobal(L, "moho64ui_SdlCmdIsCtrl");  // (whether this build takes Cmd as Ctrl)
-  lua_register(L, "moho64ui_SdlText", l_SdlText);
-  lua_register(L, "moho64ui_SdlMouse", l_SdlMouse);
 }
 
 }  // namespace moho::ui

@@ -410,7 +410,6 @@ size_t Window::ProcessMemory() {
 
 #ifndef MOHO64UI_SDL
 namespace moho::ui {
-void RegisterWindowTestBindings(lua_State*) {}  // (the SDL build's only: window_sdl.cpp)
 std::vector<std::string> Window::SurfaceExtensions() const { return {}; }  // (the renderer takes the HWND here)
 uint64_t Window::CreateSurface(void*) const { return 0; }
 }  // namespace moho::ui

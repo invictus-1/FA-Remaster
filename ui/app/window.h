@@ -115,6 +115,8 @@ class UserState;
 // drawn over a transparent background and handed to `present` instead of being copied to the
 // window (the renderer lays it over the world and shows both).
 struct WindowHooks {
+  // Non-null while the window is alive; null before its destruction.
+  std::function<void(Window*)> windowChanged;
   std::function<void(void* handle)> opened;
   std::function<bool()> direct;
   // `changed`: the part of the layer drawn anew since the last call.

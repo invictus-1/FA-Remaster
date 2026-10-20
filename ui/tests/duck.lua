@@ -1,23 +1,17 @@
+local framework = import('/testing/framework.lua')
 -- Ducking, as the original's sound manager: a voice played with PlayVoice(params, true) takes the
 -- other sounds down while it plays. The game ramps its sound settings' variable "Duck" from 0 to 1
 -- over "DuckLength" (0.5 s) and back when the last ducking voice ends; the cut is the settings'
 -- curve by "Duck" (10 dB at most), which the menu's ambient loop has, and the voices do not.
 -- Without a sound device: moho64ui_SoundMix moves the sounds on.
---   moho64ui --init <init.lua> --stage frontend --lua ui/tests/duck.lua --frames 600 --log out.log
-local failed = 0
-local function check(what, got, want)
-    if got == want then
-        LOG("TEST ok   " .. what)
-    else
-        failed = failed + 1
-        LOG("TEST FAIL " .. what .. ": got " .. tostring(got) .. ", want " .. tostring(want))
-    end
-end
+--   moho64ui_test --init <init.lua> --stage frontend --lua ui/tests/duck.lua --frames 600 --log out.log
+local test = framework.suite('duck')
+local check = function(what, got, want) return test:equal(what, got, want) end
 local function duck() return moho64ui_SoundInfo().duck end
 local function level(h) return (moho64ui_SoundPlace(h)) or -1 end
-local function near(a, b, d) return math.abs(a - b) <= d end
+local near = framework.within
 local voiceCue = Sound({Bank = "XGG", Cue = "XGG_Computer_CV01_04765"})
-ForkThread(function()
+test:fork(function()
     StopAllSounds()
     WaitSeconds(0.1)
     local loop = PlaySound(Sound({Bank = "AmbientTest", Cue = "AMB_Menu_Loop"}))
@@ -73,5 +67,5 @@ ForkThread(function()
     check("PlayTutorialVO does not duck", duck(), 0)
     check("its second argument prepares it only", string.find(moho64ui_SoundVoices(), "(waiting)", 1, true) ~= nil, true)
     StopAllSounds()
-    LOG("TEST done: " .. failed .. " failed")
+    test:finish()
 end)

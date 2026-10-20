@@ -1,19 +1,21 @@
+local framework = import('/testing/framework.lua')
 -- The camera's scripted moves, as the original's CameraImpl (the campaign's cinematics): a timed
 -- MoveTo is an event WaitFor waits on; it keeps the script's heading and pitch until RevertRotation;
 -- the curve is soft at both ends (straight after DisableEaseInOut); Spin turns by turns a second;
 -- with UseGameClock a move stands while the game is paused.
 -- Run it like game.lua (a launched game) with --frames 2400.
-local failed = 0
-local function check(what, got, want)
-    if got == want then
-        LOG("TEST ok   " .. what)
-    else
-        failed = failed + 1
-        LOG("TEST FAIL " .. what .. ": got " .. tostring(got) .. ", want " .. tostring(want))
-    end
+local test = framework.suite('camera')
+local check = function(what, got, want) return test:equal(what, got, want) end
+local near = framework.within
+local function waitElapsed(start, seconds)
+    local elapsed
+    repeat
+        WaitFrames(1)
+        elapsed = GetSystemTimeSeconds() - start
+    until elapsed >= seconds
+    return elapsed
 end
-local function near(a, b, d) return math.abs(a - b) <= d end
-ForkThread(function()
+test:fork(function()
     WaitSeconds(4)
     local cam = GetCamera('WorldCamera')
     local focus = cam:GetFocusPosition()
@@ -42,31 +44,36 @@ ForkThread(function()
     cam:RevertRotation()
     WaitSeconds(1)
     check("RevertRotation: the pitch follows the zoom again", cam:SaveSettings().Pitch > 0.65, true)
-    -- the curve: soft at both ends, straight after DisableEaseInOut (a quarter of the way in time)
+    -- The eased curve is smoothstep; DisableEaseInOut uses elapsed time directly.
     local from = cam:GetFocusPosition()
     local far = {from[1] + 100, from[2], from[3]}
+    local softStart = GetSystemTimeSeconds()
     cam:MoveTo(far, {3.14159, 0.8, 0}, 60, 4)
-    WaitSeconds(1)
+    local softTime = waitElapsed(softStart, 1) / 4
     local soft = (cam:GetFocusPosition()[1] - from[1]) / 100
     WaitFor(cam)
     cam:DisableEaseInOut()
     from = cam:GetFocusPosition()
     far = {from[1] - 100, from[2], from[3]}
+    local straightStart = GetSystemTimeSeconds()
     cam:MoveTo(far, {3.14159, 0.8, 0}, 60, 4)
-    WaitSeconds(1)
+    local straightTime = waitElapsed(straightStart, 1) / 4
     local straight = (from[1] - cam:GetFocusPosition()[1]) / 100
     WaitFor(cam)
     cam:EnableEaseInOut()
-    LOG("TEST note: a quarter of the way in time: soft " .. string.format("%.3f", soft) .. ", straight " .. string.format("%.3f", straight))
-    check("soft at both ends: a quarter in time is 0.156 of the way", near(soft, 0.156, 0.03), true)
-    check("straight after DisableEaseInOut: a quarter is 0.25", near(straight, 0.25, 0.03), true)
+    LOG(string.format("TEST note: eased sample at %.3f: %.3f; linear sample at %.3f: %.3f", softTime, soft, straightTime, straight))
+    check("the eased sample precedes the midpoint", softTime > 0.1 and softTime < 0.4, true)
+    check("soft at both ends follows smoothstep at the sampled time", near(soft, softTime * softTime * (3 - 2 * softTime), 0.03), true)
+    check("the linear sample precedes the midpoint", straightTime > 0.1 and straightTime < 0.4, true)
+    check("straight after DisableEaseInOut follows the sampled time", near(straight, straightTime, 0.03), true)
     -- Spin: a quarter turn a second
     local h0 = cam:SaveSettings().Heading
+    local spinStart = GetSystemTimeSeconds()
     cam:Spin(0.25)
-    WaitSeconds(1)
+    local spinTime = waitElapsed(spinStart, 1)
     cam:Spin(0, 0)
     local turned = cam:SaveSettings().Heading - h0
-    check("Spin(0.25): a quarter turn in a second", near(math.abs(turned), 3.14159 / 2, 0.1), true)
+    check("Spin(0.25): a quarter turn per elapsed second", near(math.abs(turned), spinTime * 3.14159 / 2, 0.1), true)
     cam:RevertRotation()
     WaitSeconds(1.5)
     -- the game's clock: a move stands while the game is paused
@@ -106,5 +113,6 @@ ForkThread(function()
     cam:RevertRotation()
     WaitSeconds(1)
     check("RevertRotation ends the nose camera", near(cam:SaveSettings().Pitch, 0.3, 0.05), false)
-    LOG("TEST done: " .. failed .. " failed")
+    test:finish()
+    ExitApplication()
 end)

@@ -1,0 +1,14 @@
+{
+  "tests": [
+    {"name": "input-contract", "script": "tests/ui/input_contract.lua", "width": 1280, "height": 720},
+    {"name": "input", "script": "ui/tests/input.lua"},
+    {"name": "controls", "script": "ui/tests/controls.lua"},
+    {"name": "keys", "script": "ui/tests/keys.lua"},
+    {"name": "lists", "script": "ui/tests/lists.lua"},
+    {"name": "bitmap", "script": "ui/tests/bitmap.lua"},
+    {"name": "console", "script": "ui/tests/console.lua"},
+    {"name": "lobby", "script": "ui/tests/lobby.lua", "window": false},
+    {"name": "movie", "script": "ui/tests/movie.lua", "stage": "frontend", "frames": 900},
+    {"name": "sound", "script": "ui/tests/sound.lua"}
+  ]
+}

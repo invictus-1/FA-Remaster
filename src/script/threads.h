@@ -2,6 +2,7 @@
 // them. A thread runs until it yields; `coroutine.yield(n)` (WaitTicks) sleeps n ticks.
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <list>
 #include <string>
 #include <vector>
@@ -40,6 +41,9 @@ class ThreadScheduler {
   void PushCurrent(lua_State* L);        // the running thread object, or nil
   lua_State* Current() const { return current_ ? current_->co : nullptr; }
   size_t Count() const { return threads_.size(); }
+  enum class Outcome { Completed, Cancelled, Failed };
+  // Called before a scheduler coroutine's registry reference is released.
+  std::function<void(lua_State*, Outcome)> onRelease;
 
   static ThreadScheduler* From(lua_State* L);
 
@@ -56,6 +60,7 @@ class ThreadScheduler {
     int waitRef = LUA_NOREF;  // WaitFor(event)
     uint32_t waitSeq = 0;     // when it began to wait (Signal: the last to begin goes first)
     bool inWaiters = false;   // listed in waiters_
+    Outcome outcome = Outcome::Cancelled;
   };
   lua_State* L_;
   std::list<Thread> threads_;

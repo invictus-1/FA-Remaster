@@ -1,17 +1,11 @@
+local framework = import('/testing/framework.lua')
 -- The lobby object in its local form, checked from the script side.
---   moho64ui --init <init.lua> --stage setup --lua ui/tests/lobby.lua --frames 2 --log out.log
+--   moho64ui_test --init <init.lua> --stage setup --lua ui/tests/lobby.lua --frames 2 --log out.log
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
 local LobbyComm = import("/lua/ui/lobby/lobbyComm.lua")
 
-local failed = 0
-local function check(what, got, want)
-    if got == want then
-        LOG("TEST ok   " .. what)
-    else
-        failed = failed + 1
-        LOG("TEST FAIL " .. what .. ": got " .. tostring(got) .. ", want " .. tostring(want))
-    end
-end
+local test = framework.suite('lobby')
+local check = function(what, got, want) return test:equal(what, got, want) end
 
 local lobby = LobbyComm.CreateLobbyComm("None", 0, "Tester", nil, nil)
 check("a lobby is made", lobby ~= nil and not IsDestroyed(lobby), true)
@@ -128,17 +122,14 @@ do
     check("Off: the original look, the remastered effects off", off.remaster_look .. " " .. off.remaster_effects, "original 0")
     check("High: Atmosphere and Weather Effects on, Ray Tracing not yet", high.remaster_atmosphere .. " " .. high.remaster_weather_effects .. " " .. high.remaster_ray_tracing, "1 1 0")
     check("Ultra: Ray Tracing where the card can", ultra.remaster_ray_tracing, moho64ui_RayTracingSupported() == false and 0 or 1)
-    check("Water Ripples come on with Weather Effects: Medium off, High and Ultra on",
-        O.RemasterPresetValues(2).remaster_water_ripples .. " " .. high.remaster_water_ripples .. " " .. ultra.remaster_water_ripples, "0 1 1")
+    check("Water Ripples come on with Weather Effects: Medium off, High and Ultra on", O.RemasterPresetValues(2).remaster_water_ripples .. " " .. high.remaster_water_ripples .. " " .. ultra.remaster_water_ripples, "0 1 1")
     check("the Cinematic Lens Blur is in no level", off.remaster_lens == nil and high.remaster_lens == nil and ultra.remaster_lens == nil, true)
     check("Custom touches nothing", O.RemasterPresetValues(5), nil)
     local low, medium = O.RemasterPresetValues(1), O.RemasterPresetValues(2)
-    check("Hidden Unit Outlines from Low, Battle Effects and Energy Shields from Medium, none at Off",
-        off.remaster_hidden_outlines .. low.remaster_hidden_outlines .. low.remaster_battle_effects .. medium.remaster_battle_effects ..
+    check("Hidden Unit Outlines from Low, Battle Effects and Energy Shields from Medium, none at Off", off.remaster_hidden_outlines .. low.remaster_hidden_outlines .. low.remaster_battle_effects .. medium.remaster_battle_effects ..
         medium.remaster_energy_shields .. ultra.remaster_battle_effects, "010111")
 end
-check("on at first: the lighting, Water Ripples, the lens, Battle Effects, Energy Shields, Hidden Unit Outlines",
-    tostring(moho64ui_Looks().softShadows and moho64ui_Looks().weatherEffects and moho64ui_Looks().atmosphere and
+check("on at first: the lighting, Water Ripples, the lens, Battle Effects, Energy Shields, Hidden Unit Outlines", tostring(moho64ui_Looks().softShadows and moho64ui_Looks().weatherEffects and moho64ui_Looks().atmosphere and
              moho64ui_Looks().waterRipples and moho64ui_Looks().lens and moho64ui_Looks().battleEffects and
              moho64ui_Looks().energyShields and moho64ui_Looks().hiddenOutlines), "true")
 video.remaster_soft_shadows.set('remaster_soft_shadows', 0, false)
@@ -156,8 +147,7 @@ check("Water Ripples and the lens off in the menu", tostring(moho64ui_Looks().wa
 video.remaster_water_ripples.set('remaster_water_ripples', 1, false)
 video.remaster_lens.set('remaster_lens', 1, false)
 -- (no picture here says whether the card can ray trace: both states; where it cannot, one, greyed out)
-check("Ray Tracing offers Off and On until the renderer says the card cannot",
-    tostring(moho64ui_RayTracingSupported()) .. " " .. table.getn(video.remaster_ray_tracing.custom.states), "nil 2")
+check("Ray Tracing offers Off and On until the renderer says the card cannot", tostring(moho64ui_RayTracingSupported()) .. " " .. table.getn(video.remaster_ray_tracing.custom.states), "nil 2")
 -- The game's own graphics settings drive the renderer and mean what they say; a player who has
 -- never chosen starts at the full look.
 check("Fidelity is High unless chosen", video.fidelity and video.fidelity.default, 2)
@@ -189,13 +179,13 @@ video.remaster_look.set('remaster_look', 'original', false)
 check("Look Original gives the renderer's original look", moho64ui_Looks().originalLook, true)
 video.remaster_look.set('remaster_look', 'remastered', false)
 check("and back", moho64ui_Looks().originalLook, false)
--- The graphics API: Direct3D 12 unless chosen (Chris's choice), or Vulkan
-check("the Video tab has Graphics API, Direct3D 12 unless chosen", video.remaster_graphics_api and video.remaster_graphics_api.default, 'd3d12')
-check("the pictures are drawn with Direct3D 12 at the start", moho64ui_Looks().vulkan, false)
-video.remaster_graphics_api.set('remaster_graphics_api', 'vulkan', false)
-check("Vulkan chosen: the next picture is drawn with Vulkan", moho64ui_Looks().vulkan, true)
-video.remaster_graphics_api.set('remaster_graphics_api', 'd3d12', false)
-check("and back", moho64ui_Looks().vulkan, false)
+-- Graphics selection uses logical names; adapters know the backend identifiers.
+check("the Video tab defines a graphics default", type(framework.graphics.default_api(video)), 'string')
+check("the default graphics selection is active", framework.graphics.selected_api(), 'default')
+framework.graphics.select_api(video, 'alternative')
+check("the alternative graphics selection takes effect", framework.graphics.selected_api(), 'alternative')
+framework.graphics.select_api(video, 'default')
+check("the default selection is restored", framework.graphics.selected_api(), 'default')
 -- The frame rate: vertical sync unless chosen (Chris's choice), uncapped, or a cap
 check("the Video tab has Frame Rate, vertical sync unless chosen", video.remaster_frame_rate and video.remaster_frame_rate.default, 'vsync')
 check("the window keeps to the screen's rate at the start", moho64ui_Looks().verticalSync, true)
@@ -291,4 +281,4 @@ check("and all back to the game's defaults", math.abs(back.zoomAmount - 0.4) < 0
     and back.turnSpeed == 10 and back.turnFast == 2 and back.edgePans and back.arrowsPan and not back.lockCursor and back.iconScale == 1
     and not back.iconsAlways, true)
 
-LOG("TEST done: " .. failed .. " failed")
+test:finish()

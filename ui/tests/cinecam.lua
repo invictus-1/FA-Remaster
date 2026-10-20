@@ -1,7 +1,9 @@
+local framework = import('/testing/framework.lua')
+local driver = framework.input()
 -- The cinematic camera for replays (ours: the renderer's CineCamera, maui/worldview.cpp) and the photo. A game is
 -- played and kept as a replay, then played back from the front end, as replay_record.lua and replay_play.lua do;
 -- the same file serves the three states:
---   the game played (moho64ui --stage setup --session session_ai.lua --seed 7 --game-lua ui/tests/cinecam.lua
+--   the game played (moho64ui_test --stage setup --session session_ai.lua --seed 7 --game-lua ui/tests/cinecam.lua
 --     --frames 1500): the camera is refused there with one line, the photo is not; the commander walks; the
 --     replay is kept as "moho64_cinecam";
 --   the front end, then the replay (with the same preferences folder: --stage frontend --lua ui/tests/cinecam.lua
@@ -10,15 +12,8 @@
 --     and the command itself hand the camera back, the picture easing back; the photo comes from it at twice the
 --     view's size. It is left on at the end, following the commander (for a --screenshot).
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
-local failed = 0
-local function check(what, got, want)
-    if got == want then
-        LOG("TEST ok   " .. what)
-    else
-        failed = failed + 1
-        LOG("TEST FAIL " .. what .. ": got " .. tostring(got) .. ", want " .. tostring(want))
-    end
-end
+local test = framework.suite('cinecam')
+local check = function(what, got, want) return test:equal(what, got, want) end
 local function flat(a, b) return math.sqrt((a[1] - b[1]) * (a[1] - b[1]) + (a[3] - b[3]) * (a[3] - b[3])) end
 local function bools(...)
     local out = {}
@@ -33,8 +28,8 @@ if not rawget(_G, "SessionIsActive") or not SessionIsActive() then
     local file = GetSpecialFilePath(profile, REPLAY, "Replay")
     LOG("TEST note the replay: " .. file)
     local started = LaunchReplaySession(file)
-    LOG((started and "TEST ok   " or "TEST FAIL ") .. "LaunchReplaySession starts the kept replay")
-    if not started then LOG("TEST done: 1 failed") end
+    test:check("LaunchReplaySession starts the kept replay", started)
+    if not started then test:finish() else test:checkpoint() end
     return
 end
 
@@ -57,8 +52,7 @@ local function photo(what)
         return
     end
     LOG("TEST note: the photo " .. path)
-    check(what .. ": in the preferences' folder's screenshots, named by the date and time",
-        string.find(path, "/screenshots/photo_%d%d%d%d%-%d%d%-%d%d_%d%d%-%d%d%-%d%d") ~= nil, true)
+    check(what .. ": in the preferences' folder's screenshots, named by the date and time", string.find(path, "/screenshots/photo_%d%d%d%d%-%d%d%-%d%d_%d%d%-%d%d%-%d%d") ~= nil, true)
     local info = moho64ui_PngInfo(path)
     check(what .. ": the file is a PNG", info ~= nil, true)
     local want = string.format("%dx%d", 2 * view.Width(), 2 * view.Height())
@@ -69,17 +63,15 @@ end
 
 if not SessionIsReplay() then
     -- the game played: the camera stays off with one line; the photo is taken; the replay is kept
-    ForkThread(function()
+    test:fork(function()
         WaitSeconds(3)
-        check("the keys at first: Ctrl-Alt-C the cinematic camera, Ctrl-Alt-F12 the photo",
-            tostring(moho64ui_KeyMapAction("Ctrl-Alt-C")) .. " " .. tostring(moho64ui_KeyMapAction("Ctrl-Alt-F12")), "remaster_cinecam remaster_photo")
+        check("the keys at first: Ctrl-Alt-C the cinematic camera, Ctrl-Alt-F12 the photo", tostring(moho64ui_KeyMapAction("Ctrl-Alt-C")) .. " " .. tostring(moho64ui_KeyMapAction("Ctrl-Alt-F12")), "remaster_cinecam remaster_photo")
         local cdr = GetArmyAvatars()[1]
         local c = cdr:GetPosition()
         IssueUnitCommand({cdr}, "Move", {c[1] + 40, c[2], c[3] - 30})  -- (so the replay has a unit walking)
         take()
         ConExecute("remaster_cinecam")
-        check("in a game one plays the cinematic camera says it is for replays, one line", take(),
-            "remaster_cinecam: the cinematic camera is for replays; in a game you play it stays off")
+        check("in a game one plays the cinematic camera says it is for replays, one line", take(), "remaster_cinecam: the cinematic camera is for replays; in a game you play it stays off")
         ConExecute("remaster_cinecam on")
         check("on as well", take(), "remaster_cinecam: the cinematic camera is for replays; in a game you play it stays off")
         check("and it stays off", bools(moho64ui_CineCamera().on, moho64ui_CineCamera().camera == ""), "false true")
@@ -89,27 +81,26 @@ if not SessionIsReplay() then
         CopyCurrentReplay(profile, REPLAY)
         local kept = GetSpecialFileInfo(profile, REPLAY, "Replay")
         check("the game is kept as a replay", kept and kept.SizeBytes > 100, true)
-        LOG("TEST done: " .. failed .. " failed")
+        test:finish()
     end)
     return
 end
 
 -- the replay
-ForkThread(function()
+test:fork(function()
     check("the game is a replay", SessionIsReplay(), true)
     WaitSeconds(3)
     local cdr = GetUnitById("0")
     check("the commander is there", cdr ~= nil, true)
     if not cdr then
-        LOG("TEST done: " .. failed .. " failed")
+        test:finish()
         return
     end
     local cam = GetCamera("WorldCamera")
     local before = cam:SaveSettings()
     local s0 = moho64ui_CineCamera()
     check("before: off", bools(s0.on, s0.easingBack), "false false")
-    check("before: the picture has the player's life bars, the selection's marks and the work bars",
-        bools(s0.lifeBars, s0.selectionMarks, s0.workBars), bools(moho64ui_LifeBars(), true, true))
+    check("before: the picture has the player's life bars, the selection's marks and the work bars", bools(s0.lifeBars, s0.selectionMarks, s0.workBars), bools(moho64ui_LifeBars(), true, true))
 
     -- on, following the selected unit (once the commander can be selected: not while he warps in)
     local waited = 0
@@ -124,8 +115,7 @@ ForkThread(function()
     take()
     ConExecute("remaster_cinecam")
     local s = moho64ui_CineCamera()
-    check("remaster_cinecam (no word) in a replay: on, following the selected unit, silently",
-        bools(s.on, s.following, take() == ""), "true true true")
+    check("remaster_cinecam (no word) in a replay: on, following the selected unit, silently", bools(s.on, s.following, take() == ""), "true true true")
     check("it took over from the main view's camera", s.camera, "WorldCamera")
     check("while it shows: no life bars, selection marks or work bars in the picture", bools(s.lifeBars, s.selectionMarks, s.workBars), "false false false")
     WaitSeconds(2)
@@ -147,7 +137,7 @@ ForkThread(function()
 
     -- a wheel notch over the view hands the camera back: the game's camera goes on from where it was
     local mx, my = view.Left() + view.Width() / 2, view.Top() + view.Height() / 2
-    moho64ui_MouseWheel(mx, my, 1)
+    driver:scroll(mx, my, 1)
     s = moho64ui_CineCamera()
     check("a wheel notch hands the camera back: off, the picture easing back", bools(s.on, s.easingBack, s.camera == ""), "false true true")
     local f = cam:GetFocusPosition()
@@ -168,14 +158,14 @@ ForkThread(function()
     s = moho64ui_CineCamera()
     check("remaster_cinecam off: off, easing back", bools(s.on, s.easingBack), "false true")
     ConExecute("remaster_cinecam")
-    moho64ui_Key(316, "", "down")  -- (the left arrow held: the camera's frame pans)
+    driver:key_down('Left', "")  -- (the left arrow held: the camera's frame pans)
     WaitFrames(2)
-    moho64ui_Key(316, "", "up")
+    driver:key_up('Left', "")
     check("an arrow key hands it back", moho64ui_CineCamera().on, false)
     ConExecute("remaster_cinecam")
-    moho64ui_MouseButton("Middle", true, mx, my)
+    driver:button("Middle", true, mx, my)
     check("the middle button's press hands it back", moho64ui_CineCamera().on, false)
-    moho64ui_MouseButton("Middle", false, mx, my)
+    driver:button("Middle", false, mx, my)
     ConExecute("remaster_cinecam")
     cam:Reset()
     check("a script's camera Reset hands it back", moho64ui_CineCamera().on, false)
@@ -194,5 +184,5 @@ ForkThread(function()
     SelectUnits({cdr})
     ConExecute("remaster_cinecam")
     check("on again at the end, following", bools(moho64ui_CineCamera().on, moho64ui_CineCamera().following), "true true")
-    LOG("TEST done: " .. failed .. " failed")
+    test:finish()
 end)

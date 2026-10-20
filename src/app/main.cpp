@@ -67,6 +67,7 @@ struct Options {
   bool quiet = false;
   std::string replay;   // --sim <replay>: start that session headless
   std::string session;  // --session <file>: start the session a lobby's game configuration describes
+  std::string sessionInfo;  // --session-info <file>: the original LaunchSinglePlayerSession table, returned by Lua
   uint32_t seed = 0;    // --seed N: that session's random seed (default: from the clock)
   bool hasSeed = false;
   std::string orders;   // --orders file: orders issued through the command writer at given ticks (testing)
@@ -894,6 +895,40 @@ int RunGameConfig(const Options& o, Vfs& vfs, const std::vector<std::string>& ho
   return RunTimes(o, vfs, hookDirs, uids, session, nullptr);
 }
 
+int RunSessionInfo(const Options& o, Vfs& vfs, const std::vector<std::string>& hookDirs,
+                   const std::vector<std::string>& uids) {
+  SessionDescription session;
+  {
+    auto source = hostfs::ReadFile(o.sessionInfo);
+    if (!source) {
+      Logf(LogLevel::Error, "cannot read session info %s", o.sessionInfo.c_str());
+      return 1;
+    }
+    ScriptState st(ScriptState::Kind::User, &vfs);
+    st.SetHookDirs(hookDirs);
+    lua_State* L = st.L();
+    lua_pushcfunction(L, ScriptTraceback);
+    if (luaL_loadbuffer(L, source->data(), source->size(), ("@" + hostfs::DisplayPath(o.sessionInfo)).c_str())) {
+      LogScriptError(lua_isstring(L, -1) ? lua_tostring(L, -1) : "(error object is not a string)");
+      return 1;
+    }
+    lua_newtable(L);
+    lua_setfenv(L, -2);
+    if (lua_pcall(L, 0, 1, 1)) {
+      LogScriptError(lua_isstring(L, -1) ? lua_tostring(L, -1) : "(error object is not a string)");
+      return 1;
+    }
+    SinglePlayerParams params;
+    params.seed = o.hasSeed ? o.seed : 0;
+    std::string error;
+    if (!SessionFromSinglePlayerInfo(L, -1, params, &session, &error)) {
+      Logf(LogLevel::Error, "moho64: %s", error.c_str());
+      return 1;
+    }
+  }
+  return RunTimes(o, vfs, hookDirs, uids, session, nullptr);
+}
+
 // /map: the table FAF's SinglePlayerLaunch.lua builds for a campaign scenario (StartCommandLineSession 365-393 and
 // SetupCampaignSession 70-127; the lobby's GetDefaultPlayerOptions per army, lobbycomm.lua 35), here without the
 // interface's preferences: the player is 'Player', the factions are the stock four. The interface adds
@@ -1041,6 +1076,7 @@ int main(int argc, char** argv) {
     else if (a == "--exec") o.exec.push_back(next());
     else if (a == "--sim") o.replay = next();
     else if (a == "--session") o.session = next();
+    else if (a == "--session-info") o.sessionInfo = next();
     else if (a == "--seed") {
       o.seed = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 0));
       o.hasSeed = true;
@@ -1104,6 +1140,7 @@ int main(int argc, char** argv) {
   if (o.rules) rc |= RunRules(vfs, hookDirs, uids);
   if (!o.replay.empty()) rc |= RunSim(o, vfs, hookDirs, uids);
   if (!o.session.empty()) rc |= RunGameConfig(o, vfs, hookDirs, uids);
+  if (!o.sessionInfo.empty()) rc |= RunSessionInfo(o, vfs, hookDirs, uids);
   if (!o.spMap.empty()) rc |= RunSinglePlayer(o, vfs, hookDirs, uids);
   return rc;
 }

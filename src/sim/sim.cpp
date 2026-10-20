@@ -39,6 +39,7 @@
 #include "sim/ai_threat.h"
 #include "sim/ai_build.h"
 #include "sim/session.h"
+#include "sim/prefetch.h"
 #include "sim/sim_cache.h"
 #include "sim/terrain.h"
 #include "sim/units.h"
@@ -1069,6 +1070,7 @@ bool Sim::Start(const ReplayHeader& replay) {
   RegisterSimClasses(L);
   RegisterThreadBindings(L, threads_.get());
   RegisterSimBindings(L);
+  RegisterPrefetchBindings(L);
   RegisterEntityBindings(L);
   RegisterPlatoonBindings(L);
   RegisterCommandBindings(L);

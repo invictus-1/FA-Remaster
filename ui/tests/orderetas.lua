@@ -1,3 +1,5 @@
+local framework = import('/testing/framework.lua')
+local driver = framework.input()
 -- The time left at the order lines' nodes while Shift is held: the original's ETA texts (FA exe 0x828610;
 -- user_units.cpp WorkOutEtas, worldview.cpp DrawOrderEtas), as the host's test functions report them:
 -- moho64ui_OrderGraph().etas (every node with time left) and moho64ui_OrderEtas() (what the main world view
@@ -9,15 +11,8 @@
 -- world the view spans at the node) is below ui_MaxTextLOD; nothing is drawn with the option display_eta off.
 -- Units made by the game's cheat callback. Run it like orderlines.lua (a launched game with CheatsEnabled =
 -- "true"), with --frames 6500.
-local failed = 0
-local function check(what, got, want)
-    if got == want then
-        LOG("TEST ok   " .. what)
-    else
-        failed = failed + 1
-        LOG("TEST FAIL " .. what .. ": got " .. tostring(got) .. ", want " .. tostring(want))
-    end
-end
+local test = framework.suite('orderetas')
+local check = function(what, got, want) return test:equal(what, got, want) end
 local function made(bp, category)
     UISelectionByCategory(category, false, false, false, false)
     local found = {}
@@ -27,9 +22,7 @@ local function made(bp, category)
     SelectUnits(nil)
     return found
 end
-local function near(a, b, within)
-    return a ~= nil and b ~= nil and math.abs(a[1] - b[1]) <= within and math.abs(a[3] - b[3]) <= within
-end
+local near = framework.within_xz
 local function dist(a, b)
     return math.sqrt((b[1] - a[1]) * (b[1] - a[1]) + (b[2] - a[2]) * (b[2] - a[2]) + (b[3] - a[3]) * (b[3] - a[3]))
 end
@@ -72,19 +65,19 @@ local function within(got, x)
     return math.abs(x - math.floor(x + 0.5)) < 1e-3 and math.abs(got - math.floor(x + 0.5)) <= 1
 end
 local function shift(down)
-    if down then moho64ui_Key(306, "Shift", "down") else moho64ui_Key(306, "", "up") end
+    if down then driver:key_down('Shift', "Shift") else driver:key_up('Shift', "") end
     WaitSeconds(0.2)
 end
 local view
 -- a click, then the mouse away from the waypoint it made (with Shift held the waypoint under the mouse is
 -- highlighted with the legs leading to it: waypoints.lua)
 local function click(button, x, y, mods)
-    moho64ui_MouseMove(x, y)
+    driver:move(x, y)
     WaitSeconds(0.2)
-    moho64ui_MouseButton(button, true, x, y, mods)
-    moho64ui_MouseButton(button, false, x, y, mods)
+    driver:button(button, true, x, y, mods)
+    driver:button(button, false, x, y, mods)
     WaitSeconds(0.5)
-    moho64ui_MouseMove(view.Left() + 60, view.Top() + 220)
+    driver:move(view.Left() + 60, view.Top() + 220)
     WaitSeconds(0.2)
 end
 local function setDisplayEta(on)
@@ -94,7 +87,7 @@ local function setDisplayEta(on)
     Prefs.SetToCurrentProfile('options', options)
 end
 
-ForkThread(function()
+test:fork(function()
     WaitSeconds(6)
     view = import("/lua/ui/game/worldview.lua").viewLeft
     local CM = import("/lua/ui/game/commandmode.lua")
@@ -114,7 +107,7 @@ ForkThread(function()
     local tanks = made("uel0201", "LAND")
     check("three tanks are made", table.getn(tanks), 3)
     if table.getn(tanks) ~= 3 then
-        LOG("TEST done: " .. failed .. " failed")
+        test:finish()
         return
     end
     -- (on land: 90 towards the middle was deep water on scmp_009, where a formation move finds no slot and, with no
@@ -174,7 +167,7 @@ ForkThread(function()
     -- not selected: the normal state, drawn only where the camera's level of detail (at the node: the width
     -- of the world across the view, about the zoom) is below ui_MaxTextLOD (80)
     SelectUnits(nil)
-    moho64ui_MouseMove(30, 300)  -- (no unit under the mouse)
+    driver:move(30, 300)  -- (no unit under the mouse)
     GetCamera("WorldCamera"):SnapTo(goal, nil, 110)
     WaitSeconds(0.4)
     g = moho64ui_OrderGraph()
@@ -253,10 +246,10 @@ ForkThread(function()
         WaitSeconds(0.2)
         local site = {epos[1] + 16 * sx, epos[2], epos[3]}
         at = view:Project(site)
-        moho64ui_MouseMove(at.x, at.y)
+        driver:move(at.x, at.y)
         WaitSeconds(0.2)
-        moho64ui_MouseButton("Left", true, at.x, at.y)
-        moho64ui_MouseButton("Left", false, at.x, at.y)
+        driver:button("Left", true, at.x, at.y)
+        driver:button("Left", false, at.x, at.y)
         WaitSeconds(0.3)
         local q = engineer:GetCommandQueue() or {}
         check("the engineer has the building to make", q[1] and q[1].type, "BuildMobile")
@@ -274,8 +267,7 @@ ForkThread(function()
             local work = math.floor(10 * buildTime / rate)
             LOG("TEST note: the building: walk " .. walk .. " beats, BuildTime " .. buildTime .. " at rate " .. rate .. " -> " ..
                 work .. " beats; the graph's " .. e.ticks .. " '" .. e.text .. "'")
-            check("its beats: the walk less one, and BuildTime x 10 / the build rate",
-                math.abs(e.ticks - (math.max(walk - 1, 0) + work)) <= 1, true)
+            check("its beats: the walk less one, and BuildTime x 10 / the build rate", math.abs(e.ticks - (math.max(walk - 1, 0) + work)) <= 1, true)
             check("its text", e.text, etaText(e.ticks))
         end
         -- once begun: what is left of it, 1 - its health / max health
@@ -298,8 +290,7 @@ ForkThread(function()
                 local work = math.floor(left * 10 * buildTime / rate)
                 LOG("TEST note: being built: health " .. focus:GetHealth() .. " / " .. focus:GetMaxHealth() .. "; walk " .. walk ..
                     ", work " .. work .. "; the graph's " .. e.ticks .. " '" .. e.text .. "'")
-                check("its beats: what is left of the work (and the walk from where the engineer stands)",
-                    math.abs(e.ticks - (math.max(walk - 1, 0) + work)) <= 1, true)
+                check("its beats: what is left of the work (and the walk from where the engineer stands)", math.abs(e.ticks - (math.max(walk - 1, 0) + work)) <= 1, true)
                 check("less than the whole work", e.ticks < math.floor(10 * buildTime / rate), true)
             end
         end
@@ -308,5 +299,5 @@ ForkThread(function()
     end
     shift(false)
     check("Shift let go: no times", table.getn(moho64ui_OrderGraph().etas or {}) .. " " .. table.getn(moho64ui_OrderEtas()), "0 0")
-    LOG("TEST done: " .. failed .. " failed")
+    test:finish()
 end)

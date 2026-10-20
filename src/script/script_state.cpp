@@ -89,7 +89,7 @@ int ScriptTraceback(lua_State* L) {
   return 1;
 }
 
-void LogScriptError(const std::string& message) { LogWrite(LogLevel::Warning, message); }
+void LogScriptError(const std::string& message) { LogWrite(LogLevel::Warning, message, LogKind::ScriptError); }
 
 int LoadScriptWithHooks(lua_State* L, const std::string& name) {
   ScriptState* st = ScriptState::From(L);

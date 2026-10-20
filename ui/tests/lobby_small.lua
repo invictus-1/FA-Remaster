@@ -1,8 +1,10 @@
+local framework = import('/testing/framework.lua')
+local driver = framework.input()
 -- The lobby's smaller dialogs in single-player form, driven as a player drives them: the game's own
 -- lobby (FAF's /lua/ui/lobby/lobby.lua) opened as the main menu's Skirmish opens it, then the Rules
 -- text, the chat line, the lobby presets (save and load back), the Load button's dialog, and the CPU
 -- benchmark with its bar in the player's row.
---   moho64ui --init <init.lua> --prefs <a copy> --stage setup --size 1920x1080 --lua ui/tests/lobby_small.lua
+--   moho64ui_test --init <init.lua> --prefs <a copy> --stage setup --size 1920x1080 --lua ui/tests/lobby_small.lua
 --            --frames 1100 --log out.log
 -- (It writes the preferences: give it a copy. The profile's LobbyPresets, SaveGame and CPUBenchmark
 -- change; a savegames/ folder is made beside the preferences. Run it from the repository's top:
@@ -11,15 +13,8 @@
 -- so the benchmark, which times its loops with GetSystemTimeSeconds inside one frame, measures 0
 -- here: the checks take whatever it measured and look that the lobby shows and keeps it.
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
-local failed = 0
-local function check(what, got, want)
-    if got == want then
-        LOG("TEST ok   " .. what)
-    else
-        failed = failed + 1
-        LOG("TEST FAIL " .. what .. ": got " .. tostring(got) .. ", want " .. tostring(want))
-    end
-end
+local test = framework.suite('lobby_small')
+local check = function(what, got, want) return test:equal(what, got, want) end
 -- the lobby keeps its controls and settings in locals of its module: read through a function using them
 local function upvalue(fn, name)
     for i = 1, 200 do
@@ -29,11 +24,11 @@ local function upvalue(fn, name)
     end
 end
 local function click(x, y)
-    moho64ui_MouseMove(x, y)
+    driver:move(x, y)
     WaitFrames(3)
-    moho64ui_MouseButton("Left", true, x, y)
+    driver:button("Left", true, x, y)
     WaitFrames(2)
-    moho64ui_MouseButton("Left", false, x, y)
+    driver:button("Left", false, x, y)
     WaitFrames(3)
 end
 local function centre(c)
@@ -68,7 +63,7 @@ local function findText(text)
     end, 400, 150, 1520, 950)
 end
 
-ForkThread(function()
+test:fork(function()
     WaitFrames(3)
     local Prefs = import('/lua/user/prefs.lua')
     local lobby = import('/lua/ui/lobby/lobby.lua')
@@ -105,8 +100,8 @@ ForkThread(function()
     click(rules.Left() + 20, rules.Top() + 5)  -- (on the text's row: the list's rows take the click)
     local box = GUI.chatEdit:GetCurrentFocusControl()
     check("a click on it opens the rules dialog, whose field takes the focus", box ~= nil and box ~= GUI.chatEdit and box.GetText ~= nil, true)
-    moho64ui_Type("No rush for 10 minutes")
-    moho64ui_Key(13)
+    driver:type_keys("No rush for 10 minutes")
+    driver:press('Enter')
     WaitFrames(3)
     check("Enter sets the game's rules", gameInfo.GameOptions.GameRules, "No rush for 10 minutes")
     check("and the label shows them", rules:GetText(), "No rush for 10 minutes")
@@ -120,29 +115,29 @@ ForkThread(function()
     check("Cancel closes it and keeps the rules", tostring(GUI.chatEdit:GetCurrentFocusControl() == GUI.chatEdit) .. " " .. tostring(gameInfo.GameOptions.GameRules), "true No rush for 10 minutes")
 
     -- the chat line: typing, Enter shows the line with the player's name, a command it does not
-    -- know is answered, Up and Down bring back what was sent (the keys as Windows codes, 38 and 40)
-    moho64ui_Type("hello there")
+    -- know is answered, Up and Down bring back what was sent (the named Up and Down keys)
+    driver:type_keys("hello there")
     check("typing goes into the chat line", GUI.chatEdit:GetText(), "hello there")
-    moho64ui_Key(13)
+    driver:press('Enter')
     WaitFrames(2)
     check("Enter empties it", GUI.chatEdit:GetText(), "")
     local lines = GUI.chatDisplay.linesGroup.Lines
     check("the chat shows the line with the player's name", lines[1].author:GetText() .. "|" .. string.gsub(lines[1].message:GetText(), "%s+$", ""), "[Tester] |hello there")
     check("the line is kept in the chat's history", GUI.chatDisplay.ChatHistory[1] and GUI.chatDisplay.ChatHistory[1].messageText, "hello there")
-    moho64ui_Type("/nosuch")
-    moho64ui_Key(13)
+    driver:type_keys("/nosuch")
+    driver:press('Enter')
     WaitFrames(2)
     check("a command the lobby does not know is answered in the chat", string.gsub(lines[2].message:GetText(), "%s+$", ""), LOCF("<LOC lobui_0396>Command Not Known: %s", "nosuch"))
-    moho64ui_Key(317)  -- Up
+    driver:press('Up')  -- Up
     check("Up brings back the last line sent", GUI.chatEdit:GetText(), "/nosuch")
-    moho64ui_Key(317)
+    driver:press('Up')
     check("Up again the one before", GUI.chatEdit:GetText(), "hello there")
-    moho64ui_Key(319)  -- Down
+    driver:press('Down')  -- Down
     check("Down goes forward again", GUI.chatEdit:GetText(), "/nosuch")
-    moho64ui_Key(319)
+    driver:press('Down')
     check("and past the newest empties the line", GUI.chatEdit:GetText(), "")
     local cues = moho64ui_SoundInfo().played
-    moho64ui_Type(string.rep("x", 205))
+    driver:type_keys(string.rep("x", 205))
     check("the chat line takes 200 characters", string.len(GUI.chatEdit:GetText()), 200)
     check("each one more plays the error sound", moho64ui_SoundInfo().played - cues, 5)
     GUI.chatEdit:SetText("")
@@ -160,14 +155,13 @@ ForkThread(function()
     local create = findButton("<LOC _Create>Create")
     check("the presets dialog has Create", create ~= nil, true)
     if create then click(centre(create)) end
-    moho64ui_Type("Test preset")
-    moho64ui_Key(13)
+    driver:type_keys("Test preset")
+    driver:press('Enter')
     WaitFrames(3)
     local saved = Prefs.GetFromCurrentProfile('LobbyPresets') or {}
     local mine = saved[1] or {}
     check("Create with a name saves a preset in the profile", table.getn(saved) .. " " .. tostring(mine.Name), "1 Test preset")
-    check("with the map and the options", tostring(mine.MapName) .. " " .. tostring(mine.MapPath) .. " " .. tostring(mine.GameOptions and mine.GameOptions.GameRules),
-        "Seton's Clutch " .. gameInfo.GameOptions.ScenarioFile .. " No rush for 10 minutes")
+    check("with the map and the options", tostring(mine.MapName) .. " " .. tostring(mine.MapPath) .. " " .. tostring(mine.GameOptions and mine.GameOptions.GameRules), "Seton's Clutch " .. gameInfo.GameOptions.ScenarioFile .. " No rush for 10 minutes")
     local info = findList("Preset Name: Test preset")
     check("its details are shown, the map found", info and info:GetItem(1), "Map: Seton's Clutch")
     local load = findButton("<LOC _Load>Load")
@@ -210,7 +204,7 @@ ForkThread(function()
     check("its OK closes the question", findText("<LOC file_0002>You must select a file to delete first."), nil)
     check("the field lost the focus to the click on Delete", GUI.chatEdit:GetCurrentFocusControl(), nil)
     if field then click(centre(field)) end
-    moho64ui_Type("No such game")
+    driver:type_keys("No such game")
     check("typing goes into the filename field", field and field:GetText(), "No such game")
     local okLoad = findButton("<LOC _Ok>")
     if okLoad then click(centre(okLoad)) end
@@ -252,5 +246,5 @@ ForkThread(function()
     check("the button measures again and stores the new score", again ~= 120 and type(again) == 'number' and again >= 0 and again <= 450, true)
     check("which the row shows", tostring(bar._value()), tostring(again))
     check("the lobby is still open", left, 0)
-    LOG("TEST done: " .. failed .. " failed")
+    test:finish()
 end)

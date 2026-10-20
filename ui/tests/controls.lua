@@ -1,21 +1,15 @@
+local framework = import('/testing/framework.lua')
 -- The control tree, checked from the script side: creation, layout through LazyVars, hide and
 -- show, hit testing, frame updates, the order of destruction.
---   moho64ui --init <init.lua> --stage setup --size 1920x1080 --lua ui/tests/controls.lua --frames 8 --log out.log
+--   moho64ui_test --init <init.lua> --stage setup --size 1920x1080 --lua ui/tests/controls.lua --frames 8 --log out.log
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
 local Group = import("/lua/maui/group.lua").Group
 local Bitmap = import("/lua/maui/bitmap.lua").Bitmap
 local Text = import("/lua/maui/text.lua").Text
 local LayoutHelpers = import("/lua/maui/layouthelpers.lua")
 
-local failed = 0
-local function check(what, got, want)
-    if got == want then
-        LOG("TEST ok   " .. what)
-    else
-        failed = failed + 1
-        LOG("TEST FAIL " .. what .. ": got " .. tostring(got) .. ", want " .. tostring(want))
-    end
-end
+local test = framework.suite('controls')
+local check = function(what, got, want) return test:equal(what, got, want) end
 
 local root = GetFrame(0)
 check("root frame covers the head", root.Left() .. "," .. root.Top() .. " " .. root.Right() .. "," .. root.Bottom(), "0,0 1920,1080")
@@ -47,9 +41,11 @@ check("bitmap takes its texture's size", b.Width() .. "x" .. b.Height(), "358x70
 check("bitmap centred in the group", b.Left() .. "," .. b.Top(), "121,165")
 
 local t = Text(b, "testtext")
+LayoutHelpers.AtLeftTopIn(t, b)
 t:SetFont("Arial", 14)
 t:SetText("Hello")
 t.OnDestroy = function(self) table.insert(log, "text destroy") Text.OnDestroy(self) end
+test:cleanup(function() if not IsDestroyed(g) then g:Destroy() end end)
 check("text", t:GetText(), "Hello")
 check("text width is its advance", t.Width(), t.TextAdvance())
 check("text height is ascent + descent", t.Height(), math.floor(t.FontAscent() + t.FontDescent()))
@@ -112,9 +108,11 @@ g.OnFrame = function(self, elapsed) frames = frames + 1 end
 g:SetNeedsFrameUpdate(true)
 g:Hide()  -- hidden controls still get frame updates
 log = {}
-ForkThread(function()
-    WaitFrames(3)
-    check("OnFrame runs once per frame, hidden or not", frames, 3)
+test:fork(function()
+    WaitFrames(1)
+    local before = frames
+    test:advance_frames(3)
+    check("OnFrame runs once per frame, hidden or not", frames - before, 3)
     check("topmost depth", root:GetTopmostDepth(), 3)
     g:Destroy()
     check("destroy order: the control first, then its children", table.concat(log, ", "), "bitmap destroy, text destroy")
@@ -155,5 +153,5 @@ ForkThread(function()
         Prefs.SetToCurrentProfile("options", saved)
     end
     check("ExitApplication is the engine's", type(ExitApplication), "cfunction")
-    LOG("TEST done: " .. failed .. " failed")
+    test:finish()
 end)

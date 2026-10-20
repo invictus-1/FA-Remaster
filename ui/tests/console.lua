@@ -1,18 +1,12 @@
+local framework = import('/testing/framework.lua')
 -- The console's output, checked from the script side: what the functions given to
 -- AddConsoleOutputReciever hear (the original's CON_Printf, FA exe 0x41c990, and its callers: the
 -- user state's print, the simulation's print, the console commands' own lines). In the front end,
 -- so the commands that need a game say there is none.
---   moho64ui --init <init.lua> --prefs <a copy> --stage setup --lua ui/tests/console.lua --frames 8 --log out.log
+--   moho64ui_test --init <init.lua> --prefs <a copy> --stage setup --lua ui/tests/console.lua --frames 8 --log out.log
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
-local failed = 0
-local function check(what, got, want)
-    if got == want then
-        LOG("TEST ok   " .. what)
-    else
-        failed = failed + 1
-        LOG("TEST FAIL " .. what .. ": got " .. tostring(got) .. ", want " .. tostring(want))
-    end
-end
+local test = framework.suite('console')
+local check = function(what, got, want) return test:equal(what, got, want) end
 
 local heard = {}
 local handle = AddConsoleOutputReciever(function(text) table.insert(heard, text) end)
@@ -78,8 +72,7 @@ check("CON_Echo alone prints nothing", take(), "")
 local bloom = moho64ui_Looks().bloom
 local function onOff(b) if b then return "on" else return "off" end end
 ConExecute("REN_BLOOM")
-check("a bool without a value turns over and says so", take() .. " " .. tostring(moho64ui_Looks().bloom),
-    "toggled ren_Bloom is now " .. onOff(not bloom) .. " " .. tostring(not bloom))
+check("a bool without a value turns over and says so", take() .. " " .. tostring(moho64ui_Looks().bloom), "toggled ren_Bloom is now " .. onOff(not bloom) .. " " .. tostring(not bloom))
 ConExecute("ren_bloom show")
 check("show says its value", take(), "bool ren_Bloom is " .. onOff(not bloom))
 ConExecute("ren_Bloom tog")
@@ -140,11 +133,11 @@ check("remaster_photo_mode without a game", take(), noSession)
 moho64ui_ConsolePostFromThread("from a thread")
 moho64ui_SimPrint("sim", 1)
 check("a line from another thread is not heard at once", take(), "")
-ForkThread(function()
+test:fork(function()
     WaitFrames(1)
     check("the next frame it is, in the order posted", take(), "from a thread|sim   1")
     RemoveConsoleOutputReciever(handle)
     print("gone")
     check("no receiver, nothing heard", take(), "")
-    LOG("TEST done: " .. failed .. " failed")
+    test:finish()
 end)

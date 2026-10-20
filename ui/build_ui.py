@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """build_ui.py - build the interface host (moho64ui) with zig's bundled clang.
 
+    python3 ui/build_ui.py --tests         -> build-ui/moho64ui_test
+
     py -m pip install ziglang             (once)
     py ui/build_ui.py                     -> build-ui/moho64ui.exe (Windows) or build-ui/moho64ui (Linux)
     py ui/build_ui.py --jobs 32
@@ -45,6 +47,7 @@ def main():
     ap.add_argument("--sdl", action="store_true", help="the window and sound through SDL3 on Windows too (a test build)")
     ap.add_argument("--sdl-lib", help="the folder of the SDL3 library to link to")
     ap.add_argument("--headless", action="store_true", help="elsewhere than Windows: no SDL (no window, no sound)")
+    ap.add_argument("--tests", action="store_true", help="build the dedicated UI test host")
     a = ap.parse_args()
     target = a.target or ("x86_64-windows-gnu" if os.name == "nt" else None)
     windows = (target or "").find("windows") >= 0 or (target is None and os.name == "nt")
@@ -88,10 +91,17 @@ def main():
         for f in sorted(glob.glob(os.path.join(ROOT, "src", d, "*.cpp"))):
             add(f, cxxflags, True)
     for f in sorted(glob.glob(os.path.join(UI, "**", "*.cpp"), recursive=True)):
+        if a.tests and os.path.relpath(f, UI).replace(os.sep, "/") in ("app/entry.cpp", "maui/clipboard.cpp"):
+            continue
         add(f, cxxflags, True)
+    if a.tests:
+        for f in sorted(glob.glob(os.path.join(ROOT, "tests", "framework", "host", "*.cpp"))):
+            if os.path.basename(f) == "command_main.cpp":
+                continue
+            add(f, cxxflags, True)
 
     newest_header = max(os.path.getmtime(h)
-                        for pat in ("src/**/*.h", "src/**/*.inc", "third_party/**/*.h", "ui/**/*.h", "ui/**/*.inc", "render/*.h")
+                        for pat in ("src/**/*.h", "src/**/*.inc", "third_party/**/*.h", "ui/**/*.h", "ui/**/*.inc", "render/*.h", "tests/framework/**/*.h")
                         for h in glob.glob(os.path.join(ROOT, pat), recursive=True))
     todo = [j for j in jobs if not os.path.exists(j[1]) or
             os.path.getmtime(j[1]) < max(os.path.getmtime(j[0]), newest_header)]
@@ -106,7 +116,7 @@ def main():
                 sys.stderr.write(f"--- {os.path.relpath(j[0], ROOT)}\n{r.stderr}\n")
     if failed:
         sys.exit(f"build_ui: {len(failed)} file(s) failed")
-    exe = os.path.join(a.out, "moho64ui.exe" if windows else "moho64ui")
+    exe = os.path.join(a.out, ("moho64ui_test" if a.tests else "moho64ui") + (".exe" if windows else ""))
     if sdl and not windows and os.name == "nt" and not a.sdl_lib:
         print("build_ui: compiled for " + str(target) + "; not linked (SDL3 is linked on that system itself)")
         return

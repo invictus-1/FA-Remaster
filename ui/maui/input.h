@@ -60,9 +60,7 @@ void KeyPress(lua_State* L, UiManager& ui, int charCode, bool shift, bool ctrl, 
 // The event as scripts get it, pushed on the stack (FA exe 0x795bd0).
 void PushEventTable(lua_State* L, Control* c, const UiEvent& e);
 
-// The host's own debugging functions for tests (not engine functions of the original):
-// moho64ui_MouseMove(x, y), moho64ui_MouseButton(button, pressed, x, y), moho64ui_ControlAt(x, y),
-// moho64ui_Key(code [, "Shift Ctrl Alt"]), moho64ui_Type(text).
+// Register the game's PostDragger binding.
 void RegisterInputBindings(lua_State* L);
 
 }  // namespace moho::ui

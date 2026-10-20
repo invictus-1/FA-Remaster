@@ -520,7 +520,7 @@ void CommandGraphShown(lua_State* L, bool show) {
     lua_gettable(L, -2);
     if (lua_isfunction(L, -1)) {
       lua_pushboolean(L, show ? 1 : 0);
-      if (lua_pcall(L, 1, 0, 0) != 0) Logf(LogLevel::Warning, "OnCommandGraphShow: %s", lua_tostring(L, -1));
+      if (lua_pcall(L, 1, 0, 0) != 0) LogScriptErrorf("OnCommandGraphShow: %s", lua_tostring(L, -1));
     }
   }
   lua_settop(L, top);
@@ -608,10 +608,10 @@ void RenderUnitBars(lua_State* L, const std::string& value) {
     lua_getglobal(L, "SetPreference");
     lua_pushstring(L, kLifeBarsKey);
     lua_pushboolean(L, user->lifeBars > 0);
-    lua_pcall(L, 2, 0, 0);
+    if (lua_pcall(L, 2, 0, 0) != 0) LogScriptError(lua_isstring(L, -1) ? lua_tostring(L, -1) : "SetPreference failed");
     lua_settop(L, top);
     lua_getglobal(L, "SavePreferences");
-    lua_pcall(L, 0, 0, 0);
+    if (lua_pcall(L, 0, 0, 0) != 0) LogScriptError(lua_isstring(L, -1) ? lua_tostring(L, -1) : "SavePreferences failed");
     lua_settop(L, top);
   }
 }

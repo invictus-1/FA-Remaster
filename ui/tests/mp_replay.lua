@@ -1,41 +1,30 @@
+local framework = import('/testing/framework.lua')
 -- A multiplayer replay recorded in the original game (the engine track's, 2026-10-16: the lab's
 -- replays/mp folder), started from the front end as the game's Replay dialog does
 -- (LaunchReplaySession) and watched: it is a replay, watched by an observer, every player's
 -- command source is there, the game's clock runs, and the viewer can watch as one of the players.
---   moho64ui --init <init.lua> --prefs <a copy> --stage frontend --no-world --lua ui/tests/mp_replay.lua
+--   moho64ui_test --init <init.lua> --prefs <a copy> --stage frontend --no-world --lua ui/tests/mp_replay.lua
 --            --game-lua ui/tests/mp_replay.lua --frames 3000 --log out.log
--- The replay: MP_REPLAY_FILE if a wrapper sets it, else the lab's 1v1 (the working folder is the
--- worktree, the lab's replays beside it); where it is not there the test is skipped. The replays hold
--- real players' names: they stay in the lab, and nothing of them goes into this file or its expectations.
--- Every check logs "TEST ok ..." or "TEST FAIL ...".
-local file = rawget(_G, "MP_REPLAY_FILE") or "../replays/mp/mp2_1v1_abhor_20261016.SCFAReplay"
-local failed = 0
-local function check(what, got, want)
-    if got == want then
-        LOG("TEST ok   " .. what)
-    else
-        failed = failed + 1
-        LOG("TEST FAIL " .. what .. ": got " .. tostring(got) .. ", want " .. tostring(want))
-    end
-end
+-- Supply the multiplayer_replay fixture through the common runner.
+local file = framework.fixture('multiplayer_replay')
+local test = framework.suite('mp_replay')
+local check = function(what, got, want) return test:equal(what, got, want) end
+if not file then test:skip('multiplayer replay fixture is required') return end
 
 local inGame = GetArmiesTable and GetArmiesTable()
 if not inGame then
     -- the front end: the replay starts as from the game's own Replay dialog
-    ForkThread(function()
+    test:fork(function()
         WaitSeconds(2)
         local started = LaunchReplaySession(file)
-        if not started then  -- (a machine without the lab's replays: nothing to watch)
-            LOG("TEST note: no replay at " .. file .. " (the lab's replays/mp): skipped")
-            LOG("TEST done: 0 failed")
-            return
-        end
-        LOG("TEST ok   LaunchReplaySession starts the multiplayer replay " .. file)
+        test:check("LaunchReplaySession starts the multiplayer replay", started)
+        if not started then test:finish() return end
+        test:checkpoint()
     end)
     return
 end
 
-ForkThread(function()
+test:fork(function()
     WaitSeconds(4)
     check("the game is a replay", SessionIsReplay(), true)
     check("watched by an observer", GetFocusArmy(), -1)
@@ -55,5 +44,5 @@ ForkThread(function()
     SetFocusArmy(-1)
     WaitSeconds(1)
     check("and as an observer again", GetFocusArmy(), -1)
-    LOG("TEST done: " .. failed .. " failed")
+    test:finish()
 end)

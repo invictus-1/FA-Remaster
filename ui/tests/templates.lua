@@ -1,18 +1,13 @@
+local framework = import('/testing/framework.lua')
+local driver = framework.input()
 -- Build templates: selected buildings become a template, the template is handed to the script
 -- and taken back, and placed it orders every building of it where it stood beside the first.
 -- With them the small functions around a game that have no test of their own.
 -- Run it like victory.lua (a launched game whose options have CheatsEnabled = "true": the
 -- buildings are made by the game's own cheat callback), with --frames 6900.
-local failed = 0
-local function check(what, got, want)
-    if got == want then
-        LOG("TEST ok   " .. what)
-    else
-        failed = failed + 1
-        LOG("TEST FAIL " .. what .. ": got " .. tostring(got) .. ", want " .. tostring(want))
-    end
-end
-ForkThread(function()
+local test = framework.suite('templates')
+local check = function(what, got, want) return test:equal(what, got, want) end
+test:fork(function()
     WaitSeconds(8)
     local view = import("/lua/ui/game/worldview.lua").viewLeft
     local CM = import("/lua/ui/game/commandmode.lua")
@@ -63,17 +58,17 @@ ForkThread(function()
     end
     UIZoomTo({cdr}, 0)
     WaitSeconds(1)
-    for i = 1, 2 do moho64ui_MouseWheel(800, 300, -1) WaitSeconds(0.1) end
+    for i = 1, 2 do driver:scroll(800, 300, -1) WaitSeconds(0.1) end
     WaitSeconds(1.5)
     SelectUnits({cdr})
     CM.StartCommandMode("build", {name = t[3][1]})
     SetActiveBuildTemplate(t)
     check("the script's template is the active one", table.getn(GetActiveBuildTemplate()), 5)
     local s = view:Project({x + 16.7, c[2], z - 11.3})  -- (somewhere inside the cell)
-    moho64ui_MouseMove(s.x, s.y)
+    driver:move(s.x, s.y)
     WaitSeconds(0.3)
-    moho64ui_MouseButton("Left", true, s.x, s.y)
-    moho64ui_MouseButton("Left", false, s.x, s.y)
+    driver:button("Left", true, s.x, s.y)
+    driver:button("Left", false, s.x, s.y)
     WaitSeconds(0.8)
     local sites = {}
     for _, o in cdr:GetCommandQueue() do
@@ -157,7 +152,7 @@ ForkThread(function()
         s.Focus = ml:GetPosition()
         s.Zoom = 80
         cam:RestoreSettings(s)
-        moho64ui_Key("k", "Ctrl")
+        driver:press("k", "Primary")
         local most, shook = 0, nil
         for i = 1, 48 do
             WaitSeconds(0.25)
@@ -175,5 +170,5 @@ ForkThread(function()
     check("with Shake intensity at 0 the next blast is still there", shook ~= nil, true)
     check("but the view does not move", most, 0)
     ConExecute("cam_ShakeMult 1")
-    LOG("TEST done: " .. failed .. " failed")
+    test:finish()
 end)

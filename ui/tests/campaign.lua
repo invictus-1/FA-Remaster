@@ -1,18 +1,12 @@
+local framework = import('/testing/framework.lua')
 -- An operation of the campaign, started as the briefing's Launch button starts it
 -- (operationbriefing.lua: MapUtil.LoadScenario, SinglePlayerLaunch.SetupCampaignSession,
 -- LaunchSinglePlayerSession), then looked at from its interface: a single-player session of the
 -- campaign with the player's army first and the others the computer's, and the operation's own
 -- playable area. The same file serves both states:
---   moho64ui --stage frontend --lua ui/tests/campaign.lua --game-lua ui/tests/campaign.lua --frames 7200 ...
-local failed = 0
-local function check(what, got, want)
-    if got == want then
-        LOG("TEST ok   " .. what)
-    else
-        failed = failed + 1
-        LOG("TEST FAIL " .. what .. ": got " .. tostring(got) .. ", want " .. tostring(want))
-    end
-end
+--   moho64ui_test --stage frontend --lua ui/tests/campaign.lua --game-lua ui/tests/campaign.lua --frames 7200 ...
+local test = framework.suite('campaign')
+local check = function(what, got, want) return test:equal(what, got, want) end
 local file = "/maps/X1CA_001/X1CA_001_scenario.lua"
 if not rawget(_G, "SessionIsActive") or not SessionIsActive() then
     local scenario = import("/lua/ui/maputil.lua").LoadScenario(file)
@@ -26,15 +20,14 @@ if not rawget(_G, "SessionIsActive") or not SessionIsActive() then
     local again, why = pcall(LaunchSinglePlayerSession, info)
     check("a second launch while it runs is an error", again, false)
     LOG("TEST note: " .. tostring(why))
-    if failed > 0 then LOG("TEST done: " .. failed .. " failed (in the front end)") end
+    test:checkpoint()
 else
     -- the operation opens with a cinematic (Sync.NISMode 'on' in the first sync): the interface
     -- goes into its cinematic mode (gamemain.NISMode, which needs the main world view made first)
     check("the opening cinematic switches the strategic icons off", moho64ui_Looks().strategicIcons, false)
     check("and the selection marks", moho64ui_Looks().selectionMarks, false)
     -- the setup's sync (Sync.CampaignMode) came before the screen was made: the objectives panel
-    check("campaign mode known as the screen was made: the objectives panel is there",
-        import("/lua/ui/game/objectives2.lua").controls.objectiveContainer ~= nil, true)
+    check("campaign mode known as the screen was made: the objectives panel is there", import("/lua/ui/game/objectives2.lua").controls.objectiveContainer ~= nil, true)
     -- the faction choice the operation asks for (factionselect.lua): its UEF button, caught as made
     local UIUtil = import("/lua/ui/uiutil.lua")
     local makeButton = UIUtil.CreateButton
@@ -44,7 +37,7 @@ else
         if type(up) == "string" and string.find(up, "logo-uef_btn_up", 1, true) then uef = button end
         return button
     end
-    ForkThread(function()
+    test:fork(function()
         check("a session is active and it is no replay", tostring(SessionIsActive()) .. tostring(SessionIsReplay()), "truefalse")
         check("the player's army is the first", GetFocusArmy(), 1)
         check("the player is no observer", IsObserver(), false)
@@ -101,6 +94,6 @@ else
         check("the profile notes the operation won (all primary objectives)", noted and noted.allPrimary, true)
         local nextOp = GetFrontEndData("NextOpBriefing")
         check("the next operation's briefing waits in the menu", type(nextOp) == "table" and nextOp.opID, "X1CA_002")
-        LOG("TEST done: " .. failed .. " failed")
+        test:finish()
     end)
 end

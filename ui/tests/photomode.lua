@@ -1,7 +1,9 @@
+local framework = import('/testing/framework.lua')
+local driver = framework.input()
 -- The photo mode (ours: maui/worldview.cpp, its panel ui/data/lua/photomode.lua; the renderer's free camera, moment,
 -- lens and photos). A game is played and kept as a replay, then played back from the front end, as cinecam.lua does;
 -- the same file serves the three states:
---   the game played (moho64ui --stage setup --session session_ai.lua --seed 7 --game-lua ui/tests/photomode.lua
+--   the game played (moho64ui_test --stage setup --session session_ai.lua --seed 7 --game-lua ui/tests/photomode.lua
 --     --frames 3000, with the world's picture): opened by its command it pauses the game (one player) and puts the
 --     game's panels away; the keys and the mouse fly, roll and turn the free camera and reach no key map action; the
 --     panel sets the moment, the weather and the lens; a click focuses; photos at 1x and 2x are saved; H hides the
@@ -11,15 +13,8 @@
 --     --game-lua ui/tests/photomode.lua --frames 1500): the photo mode pauses the replay too and takes over from the
 --     cinematic camera; it is left open at the end with its panel (for a --screenshot).
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
-local failed = 0
-local function check(what, got, want)
-    if got == want then
-        LOG("TEST ok   " .. what)
-    else
-        failed = failed + 1
-        LOG("TEST FAIL " .. what .. ": got " .. tostring(got) .. ", want " .. tostring(want))
-    end
-end
+local test = framework.suite('photomode')
+local check = function(what, got, want) return test:equal(what, got, want) end
 local function bools(...)
     local out = {}
     for i = 1, arg.n do table.insert(out, tostring(arg[i])) end
@@ -37,8 +32,8 @@ if not rawget(_G, "SessionIsActive") or not SessionIsActive() then
     local file = GetSpecialFilePath(profile, REPLAY, "Replay")
     LOG("TEST note the replay: " .. file)
     local started = LaunchReplaySession(file)
-    LOG((started and "TEST ok   " or "TEST FAIL ") .. "LaunchReplaySession starts the kept replay")
-    if not started then LOG("TEST done: 1 failed") end
+    test:check("LaunchReplaySession starts the kept replay", started)
+    if not started then test:finish() else test:checkpoint() end
     return
 end
 
@@ -54,9 +49,9 @@ local Panel = import("/moho64ui/lua/photomode.lua")
 local view = import("/lua/ui/game/worldview.lua").viewLeft
 -- a key held for a while (the camera's frame reads what is held)
 local function hold(key, seconds, mods)
-    moho64ui_Key(key, mods or "", "down")
+    driver:key_down(key, mods or "")
     WaitSeconds(seconds)
-    moho64ui_Key(key, mods or "", "up")
+    driver:key_up(key, mods or "")
     WaitSeconds(0.4)  -- (the move eases out)
 end
 -- a photo from the panel's Take Photo at `k` times the view's size: saved, a PNG of that size, said on the console
@@ -86,8 +81,7 @@ local function photo(k)
         LOG("TEST note: the console said \"" .. line .. "\"")
         return
     end
-    check(k .. "x: in the preferences' folder's screenshots, named by the date and time",
-        string.find(path, "/screenshots/photo_%d%d%d%d%-%d%d%-%d%d_%d%d%-%d%d%-%d%d") ~= nil, true)
+    check(k .. "x: in the preferences' folder's screenshots, named by the date and time", string.find(path, "/screenshots/photo_%d%d%d%d%-%d%d%-%d%d_%d%d%-%d%d%-%d%d") ~= nil, true)
     local info = moho64ui_PngInfo(path)
     check(k .. "x: the file is a PNG", info ~= nil, true)
     check(k .. "x: at " .. k .. " times the view's size", info and (info.width .. "x" .. info.height), string.format("%dx%d", k * view.Width(), k * view.Height()))
@@ -130,9 +124,9 @@ local function common()
     hold(316, 0.5)  -- (the left arrow: as A)
     check("the left arrow moves it too", distance(e2, eye()) > 1, true)
     e2 = eye()
-    moho64ui_Key(306, "", "down")  -- (Shift held)
+    driver:key_down('Shift', "")  -- (Shift held)
     hold("s", 0.5, "Shift")
-    moho64ui_Key(306, "", "up")
+    driver:key_up('Shift', "")
     local fast = distance(e2, eye())
     LOG(string.format("TEST note: half a second: %.1f units, with Shift %.1f", plain, fast))
     check("with Shift: about three times as fast", fast > plain * 2 and fast < plain * 4, true)
@@ -151,18 +145,18 @@ local function common()
     -- the wheel: a notch up
     local mx, my = view.Left() + view.Width() * 0.3, view.Top() + view.Height() * 0.5
     e2 = eye()
-    moho64ui_MouseWheel(mx, my, 1)
+    driver:scroll(mx, my, 1)
     WaitSeconds(0.6)
     check("a wheel notch up: up", eye()[2] > e2[2], true)
     -- the right button's drag turns
     local yaw0 = moho64ui_PhotoMode().camera.yaw
     local game0 = cam:SaveSettings()
-    moho64ui_MouseButton("Right", true, mx, my)
-    moho64ui_MouseMove(mx + 200, my)
+    driver:button("Right", true, mx, my)
+    driver:move(mx + 200, my)
     WaitFrames(2)
-    moho64ui_MouseMove(mx + 300, my + 60)
+    driver:move(mx + 300, my + 60)
     WaitFrames(2)
-    moho64ui_MouseButton("Right", false, mx + 300, my + 60)
+    driver:button("Right", false, mx + 300, my + 60)
     WaitSeconds(0.3)
     local yaw1 = moho64ui_PhotoMode().camera.yaw
     LOG(string.format("TEST note: the right drag of 300 pixels: the yaw %.3f -> %.3f", yaw0, yaw1))
@@ -175,15 +169,15 @@ local function common()
     IN_AddKeyMapTable({ ['W'] = counter, ['A'] = counter, ['S'] = counter, ['D'] = counter, ['Q'] = counter, ['E'] = counter,
         ['R'] = counter, ['F'] = counter, ['Shift-W'] = counter, ['UpArrow'] = counter, ['Ctrl-W'] = counter, ['H'] = counter,
         ['Esc'] = counter })
-    for _, key in { "w", "a", "s", "d", "q", "e", "r", "f", 317 } do moho64ui_Key(key) end
-    moho64ui_Key("w", "Shift")
-    moho64ui_Key("w", "Ctrl")
+    for _, key in { "w", "a", "s", "d", "q", "e", "r", "f", "Up" } do driver:press(key) end
+    driver:press("w", "Shift")
+    driver:press("w", "Primary")
     check("W A S D Q E R F, the arrows, Shift-W, Ctrl-W: none reaches the key map", PhotoTestKeys, 0)
     -- and no other action of the key map either (Chris, 2026-10-19: "that way things don't get messed up")
     local others = { ['1'] = counter, ['G'] = counter, ['P'] = counter, ['Ctrl-Alt-C'] = counter }
     IN_AddKeyMapTable(others)
-    for _, key in { "1", "g", "p" } do moho64ui_Key(key) end
-    moho64ui_Key("c", "Ctrl-Alt")
+    for _, key in { "1", "g", "p" } do driver:press(key) end
+    driver:press("c", "Primary Alt")
     check("1, G, P, Ctrl-Alt-C: no other key map action runs while it is open", PhotoTestKeys, 0)
     check("and the photo mode stays open", moho64ui_PhotoMode().open, true)
 
@@ -215,8 +209,8 @@ local function common()
     check("the picture's lens is on", moho64ui_PhotoMode().lensShown, true)
     -- focus by a left click in the world
     check("focus at first: auto", moho64ui_PhotoMode().lens.focus, 0)
-    moho64ui_MouseButton("Left", true, view.Left() + view.Width() * 0.4, view.Top() + view.Height() * 0.6)
-    moho64ui_MouseButton("Left", false, view.Left() + view.Width() * 0.4, view.Top() + view.Height() * 0.6)
+    driver:button("Left", true, view.Left() + view.Width() * 0.4, view.Top() + view.Height() * 0.6)
+    driver:button("Left", false, view.Left() + view.Width() * 0.4, view.Top() + view.Height() * 0.6)
     local focus = moho64ui_PhotoMode().lens.focus
     LOG(string.format("TEST note: the click's focus: %.1f", focus))
     check("a left click focuses on what is there", focus > 1, true)
@@ -239,18 +233,17 @@ local function common()
     local function light(m) return (m[1] + m[2] + m[3]) / 3 end
     LOG(string.format("TEST note: the 1x photos' mean colour: at once %.1f %.1f %.1f, 3 s later %.1f %.1f %.1f",
         first[1], first[2], first[3], later[1], later[2], later[3]))
-    check("a photo at once after the moment's change has the light of one taken 3 s later (within 5%)",
-        first[1] >= 0 and math.abs(light(first) - light(later)) <= math.max(2, 0.05 * light(later)), true)
+    check("a photo at once after the moment's change has the light of one taken 3 s later (within 5%)", first[1] >= 0 and math.abs(light(first) - light(later)) <= math.max(2, 0.05 * light(later)), true)
 
     -- H hides and shows the panel
-    moho64ui_Key("h")
+    driver:press("h")
     check("H hides the panel", bools(Panel.State.shown, Panel.Controls.take:IsHidden()), "false true")
-    moho64ui_Key("h")
+    driver:press("h")
     check("H again shows it", Panel.State.shown, true)
     check("H reached no key map action either (FAF: the nearest factory)", PhotoTestKeys, 0)
 
     -- Esc leaves
-    moho64ui_Key(27)
+    driver:press('Escape')
     s = moho64ui_PhotoMode()
     check("Esc leaves", bools(s.open, Panel.State.open), "false false")
     check("the moment is the game's own again", s.moment.set, false)
@@ -266,12 +259,12 @@ local function common()
     check("a second later the picture has eased back", moho64ui_CineCamera().easingBack, false)
     check("the bars and marks are back", bools(s.selectionMarks, s.workBars), "true true")
     check("Esc reached no key map action", PhotoTestKeys, 0)
-    moho64ui_Key("w")
+    driver:press("w")
     check("closed: the keys reach the key map again", PhotoTestKeys, 1)
     IN_RemoveKeyMapTable({ ['W'] = counter, ['A'] = counter, ['S'] = counter, ['D'] = counter, ['Q'] = counter, ['E'] = counter,
         ['R'] = counter, ['F'] = counter, ['Shift-W'] = counter, ['UpArrow'] = counter, ['Ctrl-W'] = counter, ['H'] = counter,
         ['Esc'] = counter })
-    moho64ui_Key("g")
+    driver:press("g")
     check("the other keys' actions run again once it is closed", PhotoTestKeys, 2)
     IN_RemoveKeyMapTable(others)
 
@@ -279,23 +272,23 @@ local function common()
     -- action on another key opens and closes it
     IN_AddKeyMapTable({ ['Ctrl-Shift-K'] = { action = 'remaster_photo_mode' } })
     check("Ctrl-Shift-K bound to the photo mode", tostring(moho64ui_KeyMapAction("Ctrl-Shift-K")), "remaster_photo_mode")
-    moho64ui_Key("k", "Ctrl-Shift")
+    driver:press("k", "Primary Shift")
     check("the player's own key opens it", moho64ui_PhotoMode().open, true)
     WaitSeconds(0.3)
-    moho64ui_Key("k", "Ctrl-Shift")
+    driver:press("k", "Primary Shift")
     check("and closes it again", moho64ui_PhotoMode().open, false)
     WaitSeconds(0.3)
-    moho64ui_Key("p", "Alt")
+    driver:press("p", "Alt")
     check("Alt-P still opens it", moho64ui_PhotoMode().open, true)
     WaitSeconds(0.3)
-    moho64ui_Key("p", "Alt")
+    driver:press("p", "Alt")
     check("and closes it", moho64ui_PhotoMode().open, false)
     IN_RemoveKeyMapTable({ ['Ctrl-Shift-K'] = { action = 'remaster_photo_mode' } })
     WaitSeconds(1)
 end
 
 if not SessionIsReplay() then
-    ForkThread(function()
+    test:fork(function()
         -- (the game shows its panels once its opening is over, some four seconds in: StopLoadingDialog's
         -- InitialAnimations)
         local waited = 0
@@ -315,13 +308,13 @@ if not SessionIsReplay() then
         CopyCurrentReplay(profile, REPLAY)
         local kept = GetSpecialFileInfo(profile, REPLAY, "Replay")
         check("the game is kept as a replay", kept and kept.SizeBytes > 100, true)
-        LOG("TEST done: " .. failed .. " failed")
+        test:finish()
     end)
     return
 end
 
 -- the replay
-ForkThread(function()
+test:fork(function()
     check("the game is a replay", SessionIsReplay(), true)
     WaitSeconds(1.5)
     check("the replay runs", SessionIsPaused(), false)
@@ -339,7 +332,7 @@ ForkThread(function()
     check("D: it moves", distance(e0, eye()) > 1, true)
     WaitSeconds(4)
     check("past the game's opening its panels stay away", bools(GameMain.gameUIHidden, GameMain.GetControlCluster():IsHidden(), Panel.State.hidGameUI), "true true true")
-    moho64ui_Key(27)
+    driver:press('Escape')
     check("Esc leaves", moho64ui_PhotoMode().open, false)
     check("and the game's panels come back", GameMain.gameUIHidden, false)
     WaitSeconds(1)
@@ -360,12 +353,12 @@ ForkThread(function()
     local pitch0 = moho64ui_PhotoMode().camera.pitch
     local x, y = view.Left() + view.Width() * 0.3, view.Top() + view.Height() * 0.9
     for i = 1, 3 do
-        moho64ui_MouseButton("Right", true, x, y)
-        moho64ui_MouseMove(x, y - view.Height() * 0.4)
+        driver:button("Right", true, x, y)
+        driver:move(x, y - view.Height() * 0.4)
         WaitFrames(1)
-        moho64ui_MouseMove(x, y - view.Height() * 0.8)
+        driver:move(x, y - view.Height() * 0.8)
         WaitFrames(1)
-        moho64ui_MouseButton("Right", false, x, y - view.Height() * 0.8)
+        driver:button("Right", false, x, y - view.Height() * 0.8)
         WaitFrames(2)
     end
     WaitSeconds(0.5)
@@ -375,5 +368,5 @@ ForkThread(function()
     hold("f", 1.2)
     hold("w", 0.4)
     check("left open at the end, the panel shown", bools(moho64ui_PhotoMode().open, Panel.State.shown), "true true")
-    LOG("TEST done: " .. failed .. " failed")
+    test:finish()
 end)

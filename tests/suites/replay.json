@@ -1,0 +1,9 @@
+{
+  "tests": [{
+    "name": "multiplayer-replay", "stage": "frontend", "frames": 3000,
+    "stages": [
+      {"name": "launch", "script": "ui/tests/mp_replay.lua"},
+      {"name": "watch", "script": "ui/tests/mp_replay.lua", "context": "game"}
+    ]
+  }]
+}

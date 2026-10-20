@@ -1,17 +1,12 @@
+local framework = import('/testing/framework.lua')
+local driver = framework.input()
 -- A game is recorded as a replay, the original's way: LastGame.SCFAReplay in the player's replay
 -- folder, which the game's Replay dialog lists; "Save Replay" keeps it under a name.
 -- Run it as the game test (--session with session_ai.lua, --seed 7, --game-lua this file),
 -- with --frames 1800; then replay_play.lua plays the kept replay back.
-local failed = 0
-local function check(what, got, want)
-    if got == want then
-        LOG("TEST ok   " .. what)
-    else
-        failed = failed + 1
-        LOG("TEST FAIL " .. what .. ": got " .. tostring(got) .. ", want " .. tostring(want))
-    end
-end
-ForkThread(function()
+local test = framework.suite('replay_record')
+local check = function(what, got, want) return test:equal(what, got, want) end
+test:fork(function()
     WaitSeconds(8)
     -- the commander walks somewhere (a right click on the ground), so the replay has an order
     local view = import("/lua/ui/game/worldview.lua").viewLeft
@@ -25,8 +20,8 @@ ForkThread(function()
     SelectUnits({cdr})
     local c = cdr:GetPosition()
     local at = view:Project({c[1] + 30, c[2], c[3] - 20})
-    moho64ui_MouseButton("Right", true, at.x, at.y)
-    moho64ui_MouseButton("Right", false, at.x, at.y)
+    driver:button("Right", true, at.x, at.y)
+    driver:button("Right", false, at.x, at.y)
     WaitSeconds(10)
     local p = cdr:GetPosition()
     check("the commander walks", math.abs(p[1] - c[1]) + math.abs(p[3] - c[3]) > 10, true)
@@ -51,5 +46,5 @@ ForkThread(function()
     local path = GetSpecialFilePath(profile, "moho64_test", "Replay")
     check("whose path is the folder, the profile and the name", string.sub(path, -string.len(profile .. "/moho64_test.SCFAReplay")), profile .. "/moho64_test.SCFAReplay")
     check("a file that is not there has no info", GetSpecialFileInfo(profile, "no_such_replay", "Replay"), false)
-    LOG("TEST done: " .. failed .. " failed")
+    test:finish()
 end)

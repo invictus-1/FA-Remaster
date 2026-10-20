@@ -109,7 +109,8 @@ void CallOnMouseButtonPress(lua_State* L, const UiEvent& e) {
     SetNumber(L, "y", e.y);
     ok = lua_pcall(L, 1, 0, top + 1) == 0;
   }
-  if (!ok) Logf(LogLevel::Warning, "Error running '/lua/ui/uimain.lua:OnMouseButtonPress': %s", lua_tostring(L, -1) ? lua_tostring(L, -1) : "?");
+  if (!ok) LogScriptError(std::string("Error running '/lua/ui/uimain.lua:OnMouseButtonPress': ") +
+                          (lua_tostring(L, -1) ? lua_tostring(L, -1) : "?"));
   lua_settop(L, top);
 }
 
@@ -336,104 +337,11 @@ void MouseWheel(lua_State* L, UiManager& ui, UiEvent e) {
   PostEvent(L, target, e);
 }
 
-namespace {
-
-UiEvent EventAt(lua_State* L, int xIdx) {
-  UiEvent e;
-  e.x = static_cast<float>(luaL_checknumber(L, xIdx));
-  e.y = static_cast<float>(luaL_checknumber(L, xIdx + 1));
-  return e;
-}
-
-// moho64ui_Resize(width, height): the head takes a new size, as when the window is resized. The
-// host's own function for tests.
-int l_Resize(lua_State* L) {
-  UserState::From(L)->ui().Resize(static_cast<int>(luaL_checknumber(L, 1)), static_cast<int>(luaL_checknumber(L, 2)));
-  return 0;
-}
-int l_MouseMove(lua_State* L) {
-  MouseMove(L, UserState::From(L)->ui(), EventAt(L, 1));
-  return 0;
-}
-
-// moho64ui_MouseButton(button, pressed, x, y [, modifiers]): button is "Left", "Middle" or
-// "Right"; modifiers names any of Shift, Ctrl, Alt, and "Double" for the second press of a double click
-int l_MouseButton(lua_State* L) {
-  std::string button = luaL_checkstring(L, 1);
-  bool pressed = lua_toboolean(L, 2) != 0;
-  UiEvent e = EventAt(L, 3);
-  e.left = button == "Left";
-  e.middle = button == "Middle";
-  e.right = button == "Right";
-  // (the fifth argument may name "Double" and the keys held with the click: Shift, Ctrl, Alt)
-  const std::string with = lua_isstring(L, 5) ? lua_tostring(L, 5) : "";
-  bool twice = with.find("Double") != std::string::npos;
-  if (with.find("Shift") != std::string::npos) e.shift = true;
-  if (with.find("Ctrl") != std::string::npos) e.ctrl = true;
-  if (with.find("Alt") != std::string::npos) e.alt = true;
-  MouseButton(L, UserState::From(L)->ui(), e, pressed, twice);
-  return 0;
-}
-
-// moho64ui_MouseWheel(x, y, notches): the wheel turned at a place; positive is away from the user
-int l_MouseWheel(lua_State* L) {
-  UiEvent e = EventAt(L, 1);
-  e.wheelDelta = 120;
-  e.wheelRotation = static_cast<int>(luaL_checknumber(L, 3)) * 120;
-  MouseWheel(L, UserState::From(L)->ui(), e);
-  return 0;
-}
-
-int l_ControlAt(lua_State* L) {
-  UiEvent e = EventAt(L, 1);
-  PushObject(L, ControlAt(UserState::From(L)->ui(), 0, e.x, e.y));
-  return 1;
-}
-
-// moho64ui_Key(code [, modifiers]): one key pressed and let go. `code` is a character ("a"), or
-// a key code as events carry it (13 Enter, 27 Escape, 8 Backspace, 127 Delete, 314 End, 315 Home,
-// 316 Left, 318 Right, 324 Insert); modifiers is a string naming any of Shift, Ctrl, Alt.
-// moho64ui_Key(code, modifiers, "down" or "up"): only that half, for a key that is held.
-int l_Key(lua_State* L) {
-  int code = lua_type(L, 1) == LUA_TSTRING ? static_cast<unsigned char>(lua_tostring(L, 1)[0])
-                                           : static_cast<int>(luaL_checknumber(L, 1));
-  std::string mods = luaL_optstring(L, 2, "");
-  std::string half = luaL_optstring(L, 3, "");
-  if (half == "down" || half == "up") {
-    UiEvent e;
-    e.shift = mods.find("Shift") != std::string::npos, e.ctrl = mods.find("Ctrl") != std::string::npos,
-    e.alt = mods.find("Alt") != std::string::npos;
-    e.keyCode = code >= 'a' && code <= 'z' ? code - 32 : code;
-    e.rawKeyCode = KeycodeMauiToMSW(e.keyCode);
-    e.type = half == "down" ? EventType::KeyDown : EventType::KeyUp;
-    KeyEvent(L, UserState::From(L)->ui(), e);
-    return 0;
-  }
-  KeyPress(L, UserState::From(L)->ui(), code, mods.find("Shift") != std::string::npos,
-           mods.find("Ctrl") != std::string::npos, mods.find("Alt") != std::string::npos);
-  return 0;
-}
-
-// moho64ui_Type(text): the characters of an ASCII text typed one after the other.
-int l_Type(lua_State* L) {
-  std::string text = luaL_checkstring(L, 1);
-  for (unsigned char ch : text) KeyPress(L, UserState::From(L)->ui(), ch, false, false, false);
-  return 0;
-}
-
-}  // namespace
 
 void SetGlobal(lua_State* L, const char* name, lua_CFunction f);  // user/bindings.h
 
 void RegisterInputBindings(lua_State* L) {
   SetGlobal(L, "PostDragger", l_PostDragger);
-  lua_register(L, "moho64ui_Resize", l_Resize);
-  lua_register(L, "moho64ui_MouseMove", l_MouseMove);
-  lua_register(L, "moho64ui_MouseButton", l_MouseButton);
-  lua_register(L, "moho64ui_ControlAt", l_ControlAt);
-  lua_register(L, "moho64ui_MouseWheel", l_MouseWheel);
-  lua_register(L, "moho64ui_Key", l_Key);
-  lua_register(L, "moho64ui_Type", l_Type);
 }
 
 }  // namespace moho::ui

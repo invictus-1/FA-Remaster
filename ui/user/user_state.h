@@ -6,6 +6,7 @@
 // StartGameUI() when a session starts). Script threads of this state are stepped once per frame:
 // WaitFrames is coroutine.yield.
 #pragma once
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -43,6 +44,10 @@ class SoundSystem;
 class UserState {
  public:
   struct Config {
+    // Additional host bindings, registered before the state's scripts boot.
+    std::function<void(lua_State*)> registerBindings;
+    std::function<void(lua_State*)> afterFrame;
+    std::function<void(lua_State*)> beforeStateClose;
     std::vector<std::string> hookDirs;  // the init file's `hook` table
     std::vector<std::string> protocols;  // the init file's `protocols` table (the schemes OpenURL may open)
     std::vector<std::string> modUids;   // active mods (their /hook folders apply to this state too)

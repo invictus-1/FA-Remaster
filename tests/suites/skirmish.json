@@ -1,0 +1,29 @@
+{
+  "tests": [
+    {
+      "name": "stage-handoff", "script": "tests/ui/stage_handoff.lua", "setup": "tests/ui/stage_handoff.lua",
+      "session": "tests/fixtures/skirmish.lua", "game_script": true,
+      "args": ["--seed", "7"], "frames": 120
+    },
+    {
+      "name": "simulation", "host": "sim", "session": "tests/fixtures/skirmish.lua",
+      "args": ["--seed", "7", "--ticks", "300", "--view"],
+      "completion": false, "required": ["ran 300 ticks", "view: unit .*uel0001"]
+    },
+    {
+      "name": "skirmish-smoke", "script": "tests/ui/skirmish_smoke.lua",
+      "session": "tests/fixtures/skirmish.lua", "game_script": true,
+      "args": ["--seed", "7"], "frames": 1500
+    },
+    {
+      "name": "camera", "script": "ui/tests/camera.lua",
+      "session": "tests/fixtures/skirmish.lua", "game_script": true,
+      "args": ["--seed", "7"], "frames": 2400
+    },
+    {
+      "name": "restart", "script": "ui/tests/restart.lua",
+      "session": "tests/fixtures/skirmish.lua", "game_script": true,
+      "args": ["--seed", "7"], "frames": 1500
+    }
+  ]
+}

@@ -335,6 +335,24 @@ The simulation alone also builds with CMake (`cmake -B build -G Ninja && cmake -
 `./build.sh`. For the Vulkan backend, put `dxcompiler.dll` beside the program; see
 [docs/render-vulkan.md](docs/render-vulkan.md).
 
+## Testing
+
+The [portable testing framework](docs/testing.md) runs the same Lua tests through Windows, SDL, or
+headless compatibility adapters. Test code uses named keys, clicks, Unicode text, clipboard and
+window operations. The shared runner isolates preferences and writes JSON and JUnit results:
+
+UI cases run in `moho64ui_test`, which shares the game's application library and contains the test
+adapters. CMake can build the software test host without SDL or world rendering; the existing UI build script
+uses `--tests` for its windowed hosts.
+
+```sh
+cmake -S . -B build-native -DMOHO64_BUILD_UI=ON -DBUILD_TESTING=ON
+cmake --build build-native --parallel 4
+python3 tests/run.py --build-dir build-native --init path/to/init.lua
+```
+
+Framework self-tests run through `ctest --test-dir build-native --output-on-failure` without game data.
+
 ## Run
 
     moho64ui  --init <the game's init .lua> --window [--remasters <folder>] [--maps <folder>]
@@ -377,7 +395,7 @@ The simulation alone also builds with CMake (`cmake -B build -G Ninja && cmake -
   performance, and the answers the tracks gave each other (`engine-answers.md`,
   `render-answers.md`), many of them accounts of how the original does something.
 - `tools/`: build script, the recording comparison (`recdiff.py`, `regress.py`), generators.
-- `tests/`: dialect tests. `ui/tests/`: interface tests that run in the game's Lua state.
+- `tests/`: dialect tests and the portable framework. `ui/tests/`: existing interface tests.
 
 ## Licences
 

@@ -118,6 +118,11 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     Logf(LogLevel::Error, "moho64ui: cannot open a window");
     return -1;
   }
+  struct WindowNotification {
+    const std::function<void(Window*)>& callback;
+    ~WindowNotification() { if (callback) callback(nullptr); }
+  } notification{hooks.windowChanged};
+  if (hooks.windowChanged) hooks.windowChanged(&window);
   if (hooks.opened) {
     hooks.opened(window.Handle());
     window.Show();

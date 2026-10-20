@@ -1,3 +1,5 @@
+local framework = import('/testing/framework.lua')
+local driver = framework.input()
 -- An order taken out of the queues by its waypoint, as the original's world view does it (user_units.cpp "a waypoint
 -- under the mouse", "Taking an order out"; FA exe 0x870ff7): with Shift held, the right button let go with Shift and Ctrl
 -- over a hovered waypoint takes that order out of the queue of every unit that carries it (the command stream's
@@ -7,15 +9,8 @@
 -- only) a right click on a waypoint is the plain queued order, and so is Shift and Ctrl with no waypoint under the
 -- mouse. Units made by the game's cheat callback. Run it like waypoints.lua (a launched game with CheatsEnabled =
 -- "true"), with --frames 6500.
-local failed = 0
-local function check(what, got, want)
-    if got == want then
-        LOG("TEST ok   " .. what)
-    else
-        failed = failed + 1
-        LOG("TEST FAIL " .. what .. ": got " .. tostring(got) .. ", want " .. tostring(want))
-    end
-end
+local test = framework.suite('waypoint_delete')
+local check = function(what, got, want) return test:equal(what, got, want) end
 local function made(bp, category)
     UISelectionByCategory(category, false, false, false, false)
     local found = {}
@@ -25,9 +20,7 @@ local function made(bp, category)
     SelectUnits(nil)
     return found
 end
-local function near(a, b, within)
-    return a ~= nil and b ~= nil and math.abs(a[1] - b[1]) <= within and math.abs(a[3] - b[3]) <= within
-end
+local near = framework.within_xz
 local function legTo(graph, id)
     for _, leg in graph.legs do
         if leg.toId == id then return leg end
@@ -45,28 +38,28 @@ local function types(unit)
     return table.concat(out, " ")
 end
 local function shift(down)
-    if down then moho64ui_Key(306, "Shift", "down") else moho64ui_Key(306, "", "up") end
+    if down then driver:key_down('Shift', "Shift") else driver:key_up('Shift', "") end
     WaitSeconds(0.2)
 end
 local function hover(x, y)
-    moho64ui_MouseMove(x, y)
+    driver:move(x, y)
     WaitSeconds(0.2)
 end
 local function click(button, x, y, mods)
-    moho64ui_MouseMove(x, y)
+    driver:move(x, y)
     WaitSeconds(0.2)
-    moho64ui_MouseButton(button, true, x, y, mods)
-    moho64ui_MouseButton(button, false, x, y, mods)
+    driver:button(button, true, x, y, mods)
+    driver:button(button, false, x, y, mods)
     WaitSeconds(0.5)
 end
 -- the right button pressed and let go where the mouse is, with no wait after it
 local function rightNow(at, mods)
-    moho64ui_MouseButton("Right", true, at.x, at.y, mods)
-    moho64ui_MouseButton("Right", false, at.x, at.y, mods)
+    driver:button("Right", true, at.x, at.y, mods)
+    driver:button("Right", false, at.x, at.y, mods)
 end
 local function xz(v) return v and string.format("%.1f,%.1f", v[1], v[3]) or "nil" end
 
-ForkThread(function()
+test:fork(function()
     WaitSeconds(6)
     local view = import("/lua/ui/game/worldview.lua").viewLeft
     -- the point of the screen over the ground at a place's x, z (as waypoints.lua: the height of the ground under the
@@ -87,7 +80,7 @@ ForkThread(function()
     local tanks = made("uel0201", "LAND")
     check("four tanks are made", table.getn(tanks), 4)
     if table.getn(tanks) ~= 4 then
-        LOG("TEST done: " .. failed .. " failed")
+        test:finish()
         return
     end
     SetFireState(tanks, 1)  -- (hold fire)
@@ -108,7 +101,7 @@ ForkThread(function()
     local q = a:GetCommandQueue() or {}
     check("three moves", types(a), "Move Move Move")
     if table.getn(q) ~= 3 then
-        LOG("TEST done: " .. failed .. " failed")
+        test:finish()
         return
     end
     local id1, id2, id3 = tonumber(q[1].ID), tonumber(q[2].ID), tonumber(q[3].ID)
@@ -211,5 +204,5 @@ ForkThread(function()
     LOG("TEST note: queued at " .. xz(last and last.position) .. ", the mouse's place " .. xz(empty))
 
     shift(false)
-    LOG("TEST done: " .. failed .. " failed")
+    test:finish()
 end)

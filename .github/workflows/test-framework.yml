@@ -1,0 +1,26 @@
+name: Portable test framework
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  contracts:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022, macos-14]
+    runs-on: ${{ matrix.os }}
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+      - name: Configure framework and software UI
+        run: cmake -S . -B build-contracts -DMOHO64_BUILD_UI=ON -DMOHO64_HEADLESS_UI=ON -DBUILD_TESTING=ON
+      - name: Build
+        run: cmake --build build-contracts --config Release --parallel 4
+      - name: Validate configuration, lifecycle, diagnostics, input and isolation
+        run: ctest --test-dir build-contracts -C Release --output-on-failure

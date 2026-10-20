@@ -797,7 +797,7 @@ void CommandGraphScript(lua_State* L, const char* fn, Control* view, const UiEve
         args = 2;
       }
       if (lua_pcall(L, args, 0, top + 1) != 0)
-        Logf(LogLevel::Warning, "Error running '/lua/ui/game/commandgraph.lua:%s': %s", fn, lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
+        LogScriptErrorf("Error running '/lua/ui/game/commandgraph.lua:%s': %s", fn, lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
     }
   }
   lua_settop(L, top);
@@ -1136,7 +1136,7 @@ class WorldView : public Control {
       lua_gettable(L, -2);
       lua_pushstring(L, "display_eta");
       if (lua_pcall(L, 1, 1, 0) == 0) on = lua_toboolean(L, -1);
-      else Logf(LogLevel::Warning, "Error running '/lua/user/prefs.lua:GetOption': %s", lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
+      else LogScriptErrorf("Error running '/lua/user/prefs.lua:GetOption': %s", lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
     }
     lua_settop(L, top);
     return on;

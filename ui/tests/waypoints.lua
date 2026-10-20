@@ -1,3 +1,5 @@
+local framework = import('/testing/framework.lua')
+local driver = framework.input()
 -- The waypoint under the mouse and dragging it, as the original's command graph and its UICommandDragger
 -- (user_units.cpp "a waypoint under the mouse"): with Shift held, the waypoint nearest the mouse within its mark's
 -- half side is the session's hovered one (HasHighlightCommand), its mark and the legs leading to it are highlighted
@@ -8,15 +10,8 @@
 -- of that army goes onto that unit; a drag cancelled by a dragger posted over it puts the waypoint back and sends
 -- nothing. Units made by the game's cheat callback. Run it like orderlines.lua (a launched game with CheatsEnabled =
 -- "true"), with --frames 6500.
-local failed = 0
-local function check(what, got, want)
-    if got == want then
-        LOG("TEST ok   " .. what)
-    else
-        failed = failed + 1
-        LOG("TEST FAIL " .. what .. ": got " .. tostring(got) .. ", want " .. tostring(want))
-    end
-end
+local test = framework.suite('waypoints')
+local check = function(what, got, want) return test:equal(what, got, want) end
 local function made(bp, category)
     UISelectionByCategory(category, false, false, false, false)
     local found = {}
@@ -26,9 +21,7 @@ local function made(bp, category)
     SelectUnits(nil)
     return found
 end
-local function near(a, b, within)
-    return a ~= nil and b ~= nil and math.abs(a[1] - b[1]) <= within and math.abs(a[3] - b[3]) <= within
-end
+local near = framework.within_xz
 local function legTo(graph, id)
     for _, leg in graph.legs do
         if leg.toId == id then return leg end
@@ -51,34 +44,34 @@ local function orderOf(unit, id)
     end
 end
 local function shift(down)
-    if down then moho64ui_Key(306, "Shift", "down") else moho64ui_Key(306, "", "up") end
+    if down then driver:key_down('Shift', "Shift") else driver:key_up('Shift', "") end
     WaitSeconds(0.2)
 end
 local function hover(x, y)
-    moho64ui_MouseMove(x, y)
+    driver:move(x, y)
     WaitSeconds(0.2)
 end
 local function click(button, x, y, mods)
-    moho64ui_MouseMove(x, y)
+    driver:move(x, y)
     WaitSeconds(0.2)
-    moho64ui_MouseButton(button, true, x, y, mods)
-    moho64ui_MouseButton(button, false, x, y, mods)
+    driver:button(button, true, x, y, mods)
+    driver:button(button, false, x, y, mods)
     WaitSeconds(0.5)
 end
 local function xz(v) return v and string.format("%.1f,%.1f", v[1], v[3]) or "nil" end
 -- a waypoint dragged from one place of the screen to another: press, two moves, release
 local function drag(from, to, mods)
-    moho64ui_MouseMove(from.x, from.y)
+    driver:move(from.x, from.y)
     WaitSeconds(0.2)
-    moho64ui_MouseButton("Left", true, from.x, from.y, mods)
+    driver:button("Left", true, from.x, from.y, mods)
     WaitSeconds(0.1)
-    moho64ui_MouseMove((from.x + to.x) / 2, (from.y + to.y) / 2)
+    driver:move((from.x + to.x) / 2, (from.y + to.y) / 2)
     WaitSeconds(0.1)
-    moho64ui_MouseMove(to.x, to.y)
+    driver:move(to.x, to.y)
     WaitSeconds(0.2)
 end
 
-ForkThread(function()
+test:fork(function()
     WaitSeconds(6)
     local view = import("/lua/ui/game/worldview.lua").viewLeft
     -- the point of the screen over the ground at a place's x, z (the interface knows no ground height: the height
@@ -110,7 +103,7 @@ ForkThread(function()
     local tanks = made("uel0201", "LAND")
     check("three tanks are made", table.getn(tanks), 3)
     if table.getn(tanks) ~= 3 then
-        LOG("TEST done: " .. failed .. " failed")
+        test:finish()
         return
     end
     SetFireState(tanks, 1)  -- (hold fire: the generators stay)
@@ -128,7 +121,7 @@ ForkThread(function()
     local q = tanks[1]:GetCommandQueue() or {}
     check("two moves", table.getn(q) .. " " .. tostring(q[1] and q[1].type) .. " " .. tostring(q[2] and q[2].type), "2 Move Move")
     if table.getn(q) ~= 2 then
-        LOG("TEST done: " .. failed .. " failed")
+        test:finish()
         return
     end
     local id1, id2 = tonumber(q[1].ID), tonumber(q[2].ID)
@@ -178,7 +171,7 @@ ForkThread(function()
     check("the leg to it follows the mouse", l1 ~= nil and near(l1.b, target, 1.5), true)
     check("and the leg from it", near((legFrom(g, id1) or {}).a, target, 1.5), true)
     LOG("TEST note: dragged to " .. xz(l1 and l1.b) .. ", the mouse's place " .. xz(target))
-    moho64ui_MouseButton("Left", false, att.x, att.y, "Shift")
+    driver:button("Left", false, att.x, att.y, "Shift")
     WaitSeconds(0.2)
     g = moho64ui_OrderGraph()
     check("let go: no drag", g.dragged, nil)
@@ -224,7 +217,7 @@ ForkThread(function()
         local drop = {e2at[1] + 3, e2at[2], e2at[3] + 2}
         local to = onScreen(drop)
         drag(from, to, "Shift")
-        moho64ui_MouseButton("Left", false, to.x, to.y, "Shift")
+        driver:button("Left", false, to.x, to.y, "Shift")
         WaitSeconds(1.2)
         local o3 = orderOf(tanks[1], id3)
         check("the attack now on the second generator", o3 ~= nil and near(o3.position, e2at, 2.5), true)
@@ -251,7 +244,7 @@ ForkThread(function()
         g = moho64ui_OrderGraph()
         check("another dragger posted over it: the drag is cancelled", g.dragged, nil)
         check("the waypoint back at its order's place at once", near((legTo(g, id2) or {}).b, o2.position, 0.5), true)
-        moho64ui_MouseButton("Left", false, to2.x, to2.y, "Shift")
+        driver:button("Left", false, to2.x, to2.y, "Shift")
         WaitSeconds(1)
         check("the button's release goes to that dragger", released, true)
         check("nothing was sent: the order stays where it was", near((orderOf(tanks[1], id2) or {}).position, o2.position, 0.1), true)
@@ -262,5 +255,5 @@ ForkThread(function()
     hover(at1.x + 1, at1.y + 1)
     g = moho64ui_OrderGraph()
     check("Shift let go: none hovered, no graph", tostring(g.hovered) .. " " .. tostring(g.shown), "nil false")
-    LOG("TEST done: " .. failed .. " failed")
+    test:finish()
 end)

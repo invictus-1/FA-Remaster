@@ -1,18 +1,12 @@
+local framework = import('/testing/framework.lua')
 -- A game that ends by itself: the player's commander is destroyed (the game's own Ctrl-K path,
 -- at once), the simulation's victory script reports the defeat, the game's interface script
 -- announces it, and the game ends and stands.
 -- Run it like game.lua (a launched game with one opponent, Victory = "demoralization") with
 -- --frames 1500.
-local failed = 0
-local function check(what, got, want)
-    if got == want then
-        LOG("TEST ok   " .. what)
-    else
-        failed = failed + 1
-        LOG("TEST FAIL " .. what .. ": got " .. tostring(got) .. ", want " .. tostring(want))
-    end
-end
-ForkThread(function()
+local test = framework.suite('defeat')
+local check = function(what, got, want) return test:equal(what, got, want) end
+test:fork(function()
     WaitSeconds(8)
     local cdr = GetArmyAvatars()[1]
     SelectUnits({cdr})
@@ -49,5 +43,5 @@ ForkThread(function()
     check("and stands", GetGameTimeSeconds(), stood)
     local final = import("/lua/ui/dialogs/hotstats.lua").scoreData
     check("with the final score handed over", final ~= nil and final.current ~= nil and final.history ~= nil, true)
-    LOG("TEST done: " .. failed .. " failed")
+    test:finish()
 end)

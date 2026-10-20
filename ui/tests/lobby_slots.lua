@@ -1,3 +1,5 @@
+local framework = import('/testing/framework.lua')
+local driver = framework.input()
 -- The skirmish lobby's slots and its map, driven as a player drives them: the game's own lobby (FAF's
 -- /lua/ui/lobby/lobby.lua) opened as the main menu's Skirmish opens it, then
 --   the slots: an AI put into a slot from the slot's list, its faction, colour and team from the row's
@@ -10,28 +12,19 @@
 --   with --maps) found by its name and one of its options set;
 -- and Launch Game: the launched game has those armies, factions, colours and teams, that map and its
 -- options. The same file serves both states:
---   moho64ui --init <init.lua> --prefs <a copy> --stage setup --size 1920x1080 --maps ui/tests/maps
+--   moho64ui_test --init <init.lua> --prefs <a copy> --stage setup --size 1920x1080 --maps ui/tests/maps
 --            --lua ui/tests/lobby_slots.lua --game-lua ui/tests/lobby_slots.lua --frames 900 --no-world --log out.log
 -- (It writes the preferences: give it a copy. Run it from the repository's top, for --maps.)
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
-local failed = 0
-local function check(what, got, want)
-    if got == want then
-        LOG("TEST ok   " .. what)
-    else
-        failed = failed + 1
-        LOG("TEST FAIL " .. what .. ": got " .. tostring(got) .. ", want " .. tostring(want))
-    end
-end
+local test = framework.suite('lobby_slots')
+local check = function(what, got, want) return test:equal(what, got, want) end
 local TEST_MAP = '/maps/lobby_test/lobby_test_scenario.lua'
 
 if rawget(_G, "SessionIsActive") and SessionIsActive() then
     -- the launched game: what the lobby set up (army 1 the player, 2 the AI: Normal, 3 the AI: Easy)
-    ForkThread(function()
+    test:fork(function()
         WaitFrames(5)
         local wanted = GetFrontEndData('lobby_slots_test') or {}
-        failed = wanted.failed or 0
-        if failed > 0 then LOG("TEST note: " .. failed .. " failed in the front end") end
         local armies = GetArmiesTable()
         local t = armies.armiesTable
         local players = 0
@@ -53,7 +46,7 @@ if rawget(_G, "SessionIsActive") and SessionIsActive() then
         check("and its other option at the map's default (the lobby adds it at the launch)", scenario.Options.lobby_test_waves, '2')
         check("the lobby's own options come along", scenario.Options.UnitCap .. " " .. scenario.Options.Victory, "1000 demoralization")
         SetFrontEndData('lobby_slots_test', nil)
-        LOG("TEST done: " .. failed .. " failed")
+        test:finish()
     end)
     return
 end
@@ -68,11 +61,11 @@ local function upvalue(fn, name)
 end
 local function click(x, y, button)
     button = button or "Left"
-    moho64ui_MouseMove(x, y)
+    driver:move(x, y)
     WaitFrames(3)
-    moho64ui_MouseButton(button, true, x, y)
+    driver:button(button, true, x, y)
     WaitFrames(2)
-    moho64ui_MouseButton(button, false, x, y)
+    driver:button(button, false, x, y)
     WaitFrames(3)
 end
 local function centre(c)
@@ -93,8 +86,8 @@ local function clickRow(list, row)
     local lines = math.max(1, math.floor(list.Height() / h))
     for i = 1, list:GetItemCount() do
         local top = topRow(list)
-        if row < top then moho64ui_MouseWheel(list.Left() + 20, list.Top() + 2, 1)
-        elseif row >= top + lines then moho64ui_MouseWheel(list.Left() + 20, list.Top() + 2, -1)
+        if row < top then driver:scroll(list.Left() + 20, list.Top() + 2, 1)
+        elseif row >= top + lines then driver:scroll(list.Left() + 20, list.Top() + 2, -1)
         else break end
     end
     click(list.Left() + 20, list.Top() + (row - topRow(list)) * h + math.floor(h / 2))
@@ -138,7 +131,7 @@ local function shows(control)
     return control and moho64ui_Describe(control) or "nil"
 end
 
-ForkThread(function()
+test:fork(function()
     WaitFrames(3)
     local Prefs = import('/lua/user/prefs.lua')
     Prefs.SetToCurrentProfile('stored_filter_state', nil)  -- (the map dialog's filters as a new profile has them)
@@ -199,8 +192,7 @@ ForkThread(function()
     got = pickPicture(slots[2].color, function(s) return string.lower(s) == fifth end)
     local colour = string.lower(gameColors.PlayerColors[players[2].PlayerColor])
     check("the fifth colour picked is the AI's", got and string.lower(got), "bitmap colour " .. colour)
-    check("its row and its marker show it", string.lower(shows(slots[2].color._bitmap)) .. " " .. string.lower(shows(marker(2).marker)),
-        "bitmap colour " .. colour .. " bitmap colour " .. colour)
+    check("its row and its marker show it", string.lower(shows(slots[2].color._bitmap)) .. " " .. string.lower(shows(marker(2).marker)), "bitmap colour " .. colour .. " bitmap colour " .. colour)
     check("team 2 picked from the team list", pick(slots[2].team, " 2"), true)
     check("puts it into team 2 (the lobby's 3)", tostring(players[2].Team) .. " '" .. slots[2].team._text:GetText() .. "'", "3 ' 2'")
 
@@ -270,8 +262,7 @@ ForkThread(function()
     -- from 1 to table.getn of it, which counts from 1 to the first gap, as the original's luaL_getn
     -- (FA exe 0x90e090): when the first map in name order has too few start spots the count is 0, the
     -- draw gives 1 and the script stops at the map that is not there, in the original as here.)
-    check("the lobby draws with the interface's Random (FAF's math.random): 1..n, and 1 for Random(1, 0) as the original's (0x8bea00)",
-        tostring(math.random == Random) .. " " .. Random(1, 0) .. " " .. tostring(Random(3) >= 1 and Random(3) <= 3), "true 1 true")
+    check("the lobby draws with the interface's Random (FAF's math.random): 1..n, and 1 for Random(1, 0) as the original's (0x8bea00)", tostring(math.random == Random) .. " " .. Random(1, 0) .. " " .. tostring(Random(3) >= 1 and Random(3) <= 3), "true 1 true")
     check("Random takes at most two numbers", pcall(Random, 1, 2, 3), false)
     local before = gameInfo.GameOptions.ScenarioFile
     local maps = import('/lua/ui/dialogs/mapselect.lua').LoadScenarios()
@@ -384,8 +375,7 @@ ForkThread(function()
     -- left out without a team
     clickOn(GUI.PenguinAutoBalance)
     local pair = players[1].Team .. players[2].Team
-    check("autobalance: the player and the AI: Normal in teams 1 and 2, the AI: Easy without",
-        tostring(pair == "23" or pair == "32") .. " " .. players[3].Team, "true 1")
+    check("autobalance: the player and the AI: Normal in teams 1 and 2, the AI: Easy without", tostring(pair == "23" or pair == "32") .. " " .. players[3].Team, "true 1")
     -- the teams by hand for the game: the player without a team, the two AIs in team 2
     pick(slots[1].team, " - ")
     pick(slots[2].team, " 2")
@@ -412,20 +402,17 @@ ForkThread(function()
     mapList = dialog.mapSelectGroup.mapList
     local nameField = upvalue(ms.PopulateMapList, 'nameFilter')
     clickOn(nameField)
-    moho64ui_Type("Lobby Test")
-    check("typing into the name filter leaves the maps of that name (and the chosen one)",
-        mapList:GetItemCount() .. " " .. tostring(mapList:GetItem(0)), "2 Lobby Test Map")
+    driver:type_keys("Lobby Test")
+    check("typing into the name filter leaves the maps of that name (and the chosen one)", mapList:GetItemCount() .. " " .. tostring(mapList:GetItem(0)), "2 Lobby Test Map")
     clickRow(mapList, 0)
     check("a click chooses the test map", dialog.mapInfoGroup.description:GetItem(0), "Lobby Test Map")
     local container = upvalue(ms.RefreshOptions, 'OptionContainer')
     local options = upvalue(ms.RefreshOptions, 'Options')
     local lines = upvalue(container.CalcVisible, 'OptionDisplay')
     local last = options[table.getn(options)]
-    check("the options panel ends with the map's own options under Advanced",
-        LOC(options[table.getn(options) - 2].text) .. ", " .. LOC(options[table.getn(options) - 1].text) .. ", " .. LOC(last.text),
-        LOC("<LOC lobui_0164>Advanced") .. ", Test: supply drops, Test: waves")
+    check("the options panel ends with the map's own options under Advanced", LOC(options[table.getn(options) - 2].text) .. ", " .. LOC(options[table.getn(options) - 1].text) .. ", " .. LOC(last.text), LOC("<LOC lobui_0164>Advanced") .. ", Test: supply drops, Test: waves")
     local cx, cy = centre(container)
-    for i = 1, table.getn(options) do moho64ui_MouseWheel(cx, cy, -1) end
+    for i = 1, table.getn(options) do driver:scroll(cx, cy, -1) end
     WaitFrames(2)
     local dropsLine
     for _, line in lines do if line.text:GetText() == "Test: supply drops" then dropsLine = line end end
@@ -443,7 +430,7 @@ ForkThread(function()
     end
     check("the lobby's options list has it", shown, true)
     local ox, oy = centre(GUI.OptionContainer)
-    for i = 1, 100 do moho64ui_MouseWheel(ox, oy, -1) end
+    for i = 1, 100 do driver:scroll(ox, oy, -1) end
     shown = false
     for _, line in GUI.OptionDisplay do shown = shown or (line.text:GetText() == "Test: supply drops" and line.value:GetText() == "many") end
     check("and shows it at the end, scrolled there with the wheel", shown, true)
@@ -452,10 +439,8 @@ ForkThread(function()
     ---------------------------------------------------------------------------------------------------
     -- Launch Game: the game part of this file checks what the game got
     -- (the launched game ends the front end and this thread with it: the failures so far go along)
-    SetFrontEndData('lobby_slots_test', {color = gameColors.PlayerColors[players[2].PlayerColor], failed = failed})
+    SetFrontEndData('lobby_slots_test', {color = gameColors.PlayerColors[players[2].PlayerColor]})
     Prefs.SetToCurrentProfile('stored_filter_state', nil)
-    clickOn(GUI.launchGameButton)
-    WaitFrames(30)
-    check("Launch Game starts the game", false, true)
-    LOG("TEST done: " .. failed .. " failed (in the front end)")
+    driver:click(centre(GUI.launchGameButton))
+    test:checkpoint()
 end)

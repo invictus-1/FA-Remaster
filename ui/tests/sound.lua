@@ -1,17 +1,11 @@
+local framework = import('/testing/framework.lua')
 -- The sound functions, checked without a sound device: the cues of the game's own sound banks
 -- are found, their waves are mixed (moho64ui_SoundMix moves the sound on and gives the loudest
 -- sample), volumes and stops act on what is mixed.
---   moho64ui --init <init.lua> --stage setup --lua ui/tests/sound.lua --frames 8 --log out.log
+--   moho64ui_test --init <init.lua> --stage setup --lua ui/tests/sound.lua --frames 8 --log out.log
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
-local failed = 0
-local function check(what, got, want)
-    if got == want then
-        LOG("TEST ok   " .. what)
-    else
-        failed = failed + 1
-        LOG("TEST FAIL " .. what .. ": got " .. tostring(got) .. ", want " .. tostring(want))
-    end
-end
+local test = framework.suite('sound')
+local check = function(what, got, want) return test:equal(what, got, want) end
 
 -- a cue of the interface's bank
 local before = moho64ui_SoundInfo().played
@@ -150,4 +144,4 @@ end)(), true)
 StopAllSounds()
 moho64ui_SoundMix(100)
 
-LOG("TEST done: " .. failed .. " failed")
+test:finish()

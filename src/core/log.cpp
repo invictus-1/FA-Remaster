@@ -3,12 +3,14 @@
 #include <cstdarg>
 #include <cstdio>
 #include <mutex>
+#include <utility>
 
 namespace moho {
 namespace {
 std::mutex g_mutex;
 FILE* g_file = nullptr;
 bool g_echo = true;
+LogObserverScope::Observer g_observer;
 
 const char* Prefix(LogLevel level) {
   switch (level) {
@@ -19,7 +21,22 @@ const char* Prefix(LogLevel level) {
   }
   return "";
 }
+
+void VLog(LogLevel level, LogKind kind, const char* format, va_list arguments) {
+  char buffer[4096];
+  std::vsnprintf(buffer, sizeof buffer, format, arguments);
+  LogWrite(level, buffer, kind);
+}
 }  // namespace
+
+LogObserverScope::LogObserverScope(Observer observer) {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  g_observer = std::move(observer);
+}
+LogObserverScope::~LogObserverScope() {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  g_observer = nullptr;
+}
 
 void LogOpenFile(const std::string& path) {
   std::lock_guard<std::mutex> lock(g_mutex);
@@ -29,8 +46,9 @@ void LogOpenFile(const std::string& path) {
 
 void LogSetEcho(bool echo) { g_echo = echo; }
 
-void LogWrite(LogLevel level, std::string_view message) {
+void LogWrite(LogLevel level, std::string_view message, LogKind kind) {
   std::lock_guard<std::mutex> lock(g_mutex);
+  if (g_observer) g_observer(level, kind, message);
   const char* prefix = Prefix(level);
   // Every line of a multi-line message carries the level prefix, as in the original log.
   size_t start = 0;
@@ -60,12 +78,17 @@ void LogWrite(LogLevel level, std::string_view message) {
 }
 
 void Logf(LogLevel level, const char* fmt, ...) {
-  char buf[4096];
   va_list ap;
   va_start(ap, fmt);
-  std::vsnprintf(buf, sizeof buf, fmt, ap);
+  VLog(level, LogKind::Message, fmt, ap);
   va_end(ap);
-  LogWrite(level, buf);
+}
+
+void LogScriptErrorf(const char* format, ...) {
+  va_list arguments;
+  va_start(arguments, format);
+  VLog(LogLevel::Warning, LogKind::ScriptError, format, arguments);
+  va_end(arguments);
 }
 
 void LogEmergency(const char* line) {

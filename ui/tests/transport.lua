@@ -1,18 +1,13 @@
+local framework = import('/testing/framework.lua')
+local driver = framework.input()
 -- The right click's transport and capture orders (GetRightMouseButtonAction, FA exe 0x81ec00): units over
 -- their own transport get on it (0x81d280, TransportLoadUnits), a transport over a unit picks it up
 -- (0x81d660, TransportReverseLoadUnits; carried out by the engine since request 39), an engineer over an
 -- enemy's building captures it, and a loaded
 -- transport over the ground only moves. Units made by the game's cheat callback.
 -- Run it like victory.lua (a launched game with CheatsEnabled = "true"), with --frames 6800.
-local failed = 0
-local function check(what, got, want)
-    if got == want then
-        LOG("TEST ok   " .. what)
-    else
-        failed = failed + 1
-        LOG("TEST FAIL " .. what .. ": got " .. tostring(got) .. ", want " .. tostring(want))
-    end
-end
+local test = framework.suite('transport')
+local check = function(what, got, want) return test:equal(what, got, want) end
 local function made(bp, category)
     UISelectionByCategory(category, false, false, false, false)
     local found = {}
@@ -27,10 +22,10 @@ local function head(u)
     return q[1] and q[1].type or "none"
 end
 local function rightClick(view, x, y)
-    moho64ui_MouseMove(x, y)
+    driver:move(x, y)
     WaitSeconds(0.2)
-    moho64ui_MouseButton("Right", true, x, y)
-    moho64ui_MouseButton("Right", false, x, y)
+    driver:button("Right", true, x, y)
+    driver:button("Right", false, x, y)
     WaitSeconds(0.5)
 end
 
@@ -44,7 +39,7 @@ commandmode.OnCommandIssued = function(command)
 end
 local function lastIssued() return issued[table.getn(issued)] or "none" end
 
-ForkThread(function()
+test:fork(function()
     WaitSeconds(6)
     local view = import("/lua/ui/game/worldview.lua").viewLeft
     local p = GetArmyAvatars()[1]:GetPosition()
@@ -63,7 +58,7 @@ ForkThread(function()
     local engineer = made("uel0105", "ENGINEER")[1]
     check("a transport, two tanks and an engineer are made", (transport and 1 or 0) .. " " .. table.getn(tanks) .. " " .. (engineer and 1 or 0), "1 2 1")
     if not transport or table.getn(tanks) < 2 or not engineer then
-        LOG("TEST done: " .. failed .. " failed")
+        test:finish()
         return
     end
     GetCamera("WorldCamera"):SnapTo(spot, nil, 90)
@@ -71,7 +66,7 @@ ForkThread(function()
     -- the tanks over their transport: the load order; a right click gives it, the transport joins to meet them
     SelectUnits(tanks)
     local at = view:Project(transport:GetPosition())
-    moho64ui_MouseMove(at.x, at.y)
+    driver:move(at.x, at.y)
     WaitSeconds(0.3)
     check("tanks over their own transport: CallTransport", view:GetRightMouseButtonOrder(), "RULEUCC_CallTransport")
     rightClick(view, at.x, at.y)
@@ -99,7 +94,7 @@ ForkThread(function()
         WaitSeconds(0.5)
         SelectUnits({transport})
         local t3 = view:Project(third:GetPosition())
-        moho64ui_MouseMove(t3.x, t3.y)
+        driver:move(t3.x, t3.y)
         WaitSeconds(0.3)
         check("the transport over our tank: Transport (it picks the tank up)", view:GetRightMouseButtonOrder(), "RULEUCC_Transport")
         rightClick(view, t3.x, t3.y)
@@ -116,7 +111,7 @@ ForkThread(function()
         -- the loaded transport over open ground: a move, never an unload
         local ground = {where[1] - 15, where[2], where[3] - 15}
         local g = view:Project(ground)
-        moho64ui_MouseMove(g.x, g.y)
+        driver:move(g.x, g.y)
         WaitSeconds(0.3)
         check("the loaded transport over the ground: a move", view:GetRightMouseButtonOrder(), "RULEUCC_Move")
     end
@@ -132,7 +127,7 @@ ForkThread(function()
     WaitSeconds(0.5)
     SelectUnits({engineer})
     local gp = view:Project(gen)
-    moho64ui_MouseMove(gp.x, gp.y)
+    driver:move(gp.x, gp.y)
     WaitSeconds(0.3)
     check("our engineer over an enemy's generator: Capture", view:GetRightMouseButtonOrder(), "RULEUCC_Capture")
     rightClick(view, gp.x, gp.y)
@@ -199,10 +194,10 @@ ForkThread(function()
         import("/lua/ui/game/commandmode.lua").StartCommandMode("order", {name = "RULEUCC_Patrol"})
         WaitSeconds(0.2)
         local goal = view:Project({pair[1] + 12, pair[2], pair[3] + 12})
-        moho64ui_MouseMove(goal.x, goal.y)
+        driver:move(goal.x, goal.y)
         WaitSeconds(0.2)
-        moho64ui_MouseButton("Left", true, goal.x, goal.y)
-        moho64ui_MouseButton("Left", false, goal.x, goal.y)
+        driver:button("Left", true, goal.x, goal.y)
+        driver:button("Left", false, goal.x, goal.y)
         WaitSeconds(0.5)
         local q = group[1]:GetCommandQueue() or {}
         check("the patrol is two points", table.getn(q) .. " " .. (q[1] and q[1].type or "") .. " " .. (q[2] and q[2].type or ""), "2 Patrol Patrol")
@@ -216,27 +211,27 @@ ForkThread(function()
         WaitSeconds(1.5)
         SelectUnits(group)
         local tp = view:Project(target)
-        moho64ui_MouseMove(tp.x, tp.y)
+        driver:move(tp.x, tp.y)
         WaitSeconds(0.3)
-        moho64ui_MouseButton("Right", true, tp.x, tp.y, "Ctrl")
-        moho64ui_MouseButton("Right", false, tp.x, tp.y, "Ctrl")
+        driver:button("Right", true, tp.x, tp.y, "Ctrl")
+        driver:button("Right", false, tp.x, tp.y, "Ctrl")
         WaitSeconds(0.5)
         check("Ctrl and a right click on an enemy: the group's FormAttack", lastIssued(), "FormAttack")
         -- the right button: a quick click is a plain move (given when it is let go); held half a second and dragged,
         -- the group's formation move (CFormation 0x838860), facing from the press point towards the pointer
         local ground = view:Project({pair[1] - 10, pair[2], pair[3] - 10})
         SelectUnits(group)
-        moho64ui_MouseMove(ground.x, ground.y)
+        driver:move(ground.x, ground.y)
         WaitSeconds(0.2)
-        moho64ui_MouseButton("Right", true, ground.x, ground.y)
-        moho64ui_MouseButton("Right", false, ground.x, ground.y)
+        driver:button("Right", true, ground.x, ground.y)
+        driver:button("Right", false, ground.x, ground.y)
         WaitSeconds(0.3)
         check("a quick right click on the ground: a move", lastIssued(), "Move")
-        moho64ui_MouseButton("Right", true, ground.x, ground.y)
+        driver:button("Right", true, ground.x, ground.y)
         WaitSeconds(0.7)
-        moho64ui_MouseMove(ground.x + 120, ground.y)
+        driver:move(ground.x + 120, ground.y)
         WaitSeconds(0.2)
-        moho64ui_MouseButton("Right", false, ground.x + 120, ground.y)
+        driver:button("Right", false, ground.x + 120, ground.y)
         WaitSeconds(0.3)
         check("held and dragged: the group's formation move", lastIssued(), "FormMove")
         local q = group[1]:GetCommandQueue() or {}
@@ -256,5 +251,5 @@ ForkThread(function()
     end
     check("the simulation's print is heard in the console", found, true)
     RemoveConsoleOutputReciever(handle)
-    LOG("TEST done: " .. failed .. " failed")
+    test:finish()
 end)

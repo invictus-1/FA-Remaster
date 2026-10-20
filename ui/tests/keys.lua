@@ -1,22 +1,17 @@
+local framework = import('/testing/framework.lua')
+local driver = framework.input()
 -- Keyboard, checked from the script side: where key events go, who hears of a focus change, and
 -- typing, selecting and deleting in an edit field. The host's debugging functions stand in for
 -- the keyboard and the mouse. The clipboard keys are left out: a test must not touch the clipboard.
---   moho64ui --init <init.lua> --stage setup --size 1920x1080 --lua ui/tests/keys.lua --frames 2 --log out.log
+--   moho64ui_test --init <init.lua> --stage setup --size 1920x1080 --lua ui/tests/keys.lua --frames 2 --log out.log
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
 local Group = import("/lua/maui/group.lua").Group
 local Edit = import("/lua/maui/edit.lua").Edit
 
-local failed = 0
-local function check(what, got, want)
-    if got == want then
-        LOG("TEST ok   " .. what)
-    else
-        failed = failed + 1
-        LOG("TEST FAIL " .. what .. ": got " .. tostring(got) .. ", want " .. tostring(want))
-    end
-end
+local test = framework.suite('keys')
+local check = function(what, got, want) return test:equal(what, got, want) end
 
-local BACK, ENTER, ESC, DEL, END, HOME, LEFT, UP, RIGHT = 8, 13, 27, 127, 314, 315, 316, 317, 318
+local BACK, ENTER, ESC, DEL, END, HOME, LEFT, UP, RIGHT = 'Backspace', 'Enter', 'Escape', 'Delete', 'End', 'Home', 'Left', 'Up', 'Right'
 local root = GetFrame(0)
 
 -- key events go to the control with the keyboard focus only
@@ -30,17 +25,16 @@ child.HandleEvent = function(self, event)
     return handle
 end
 parent.HandleEvent = function(self, event) table.insert(seen, "parent") return true end
-check("a key with no focus and no input capture is no error", pcall(moho64ui_Key, "a"), true)
+check("a key with no focus and no input capture is no error", pcall(function() driver:press('A') end), true)
 child:AcquireKeyboardFocus(true)
 check("AcquireKeyboardFocus gives the focus", child:GetCurrentFocusControl() == child, true)
-moho64ui_Key("a")
-check("key down, then the character when the key down was not handled, then key up; the parent hears none",
-    table.concat(seen, " "), "KeyDown65 Char97 KeyUp65")
+driver:press("a")
+check("key down, then the character when the key down was not handled, then key up; the parent hears none", table.concat(seen, " "), "KeyDown65 Char97 KeyUp65")
 seen, handle = {}, true
-moho64ui_Key("b", "Shift")
+driver:press("B", "Shift", "b")
 check("a handled key down gets no character", table.concat(seen, " "), "KeyDown66s KeyUp66s")
 seen, handle = {}, false
-moho64ui_Key(LEFT)
+driver:press(LEFT)
 check("a key without a character has its key code in all three", table.concat(seen, " "), "KeyDown316 Char316 KeyUp316")
 
 -- who hears of a focus change: the control that had the focus
@@ -60,65 +54,65 @@ check("the edit field has the focus and shows its caret", tostring(edit:GetCurre
 -- typing
 local changes = {}
 edit.OnTextChanged = function(self, newText, oldText) table.insert(changes, oldText .. ">" .. newText) end
-moho64ui_Type("hello")
+driver:type_keys("hello")
 check("typed text", edit:GetText() .. edit:GetCaretPosition(), "hello5")
 check("OnTextChanged(new, old) for every character", table.concat(changes, " "), ">h h>he he>hel hel>hell hell>hello")
-moho64ui_Key(LEFT) moho64ui_Key(LEFT)
-moho64ui_Type("X")
+driver:press(LEFT) driver:press(LEFT)
+driver:type_keys("X")
 check("a character goes in at the caret", edit:GetText() .. edit:GetCaretPosition(), "helXlo4")
-moho64ui_Key(HOME) moho64ui_Key(DEL)
+driver:press(HOME) driver:press(DEL)
 check("Home, then Delete takes the character after the caret", edit:GetText() .. edit:GetCaretPosition(), "elXlo0")
-moho64ui_Key(END) moho64ui_Key(BACK)
+driver:press(END) driver:press(BACK)
 check("End, then Backspace takes the character before the caret", edit:GetText() .. edit:GetCaretPosition(), "elXl4")
 changes = {}
-moho64ui_Key(HOME) moho64ui_Key(BACK)
+driver:press(HOME) driver:press(BACK)
 check("Backspace at the start changes nothing but still reports", edit:GetText() .. " " .. table.concat(changes, " "), "elXl elXl>elXl")
-moho64ui_Key(RIGHT) moho64ui_Key(RIGHT) moho64ui_Key(RIGHT) moho64ui_Key(RIGHT) moho64ui_Key(RIGHT)
+driver:press(RIGHT) driver:press(RIGHT) driver:press(RIGHT) driver:press(RIGHT) driver:press(RIGHT)
 check("Right stops at the end", edit:GetCaretPosition(), 4)
 
 -- selecting with Shift
 local function state() return string.gsub(moho64ui_Describe(edit), "^.- caret ", "caret ") end
-moho64ui_Key(LEFT, "Shift") moho64ui_Key(LEFT, "Shift")
+driver:press(LEFT, "Shift") driver:press(LEFT, "Shift")
 check("Shift+Left selects back from the caret", (state()), "caret 2 selection 2..4")
-moho64ui_Key(RIGHT, "Shift")
+driver:press(RIGHT, "Shift")
 check("Shift+Right takes the caret's end of the selection back", (state()), "caret 3 selection 3..4")
-moho64ui_Key(RIGHT, "Shift")
+driver:press(RIGHT, "Shift")
 check("a selection that shrinks to nothing is gone", (state()), "caret 4")
-moho64ui_Key(HOME, "Shift")
+driver:press(HOME, "Shift")
 check("Shift+Home selects to the start", (state()), "caret 0 selection 0..4")
 changes = {}
-moho64ui_Type("Z")
+driver:type_keys("Z")
 check("a typed character takes the selection's place", edit:GetText() .. edit:GetCaretPosition(), "Z1")
 check("the script hears of the removal and of the character", table.concat(changes, " "), "elXl> >Z")
-moho64ui_Key(LEFT, "Shift")
+driver:press(LEFT, "Shift")
 changes = {}
-moho64ui_Key(BACK)
+driver:press(BACK)
 check("Backspace removes the selection", edit:GetText() .. " " .. table.getn(changes), " 2")
 
 -- words
 edit:SetText("one two  three")
-moho64ui_Key(LEFT, "Ctrl")
+driver:press(LEFT, "Primary")
 check("Ctrl+Left goes to the start of the word", edit:GetCaretPosition(), 9)
-moho64ui_Key(LEFT, "Ctrl")
+driver:press(LEFT, "Primary")
 check("and from there to the start of the word before", edit:GetCaretPosition(), 4)
-moho64ui_Key(RIGHT, "Ctrl")
+driver:press(RIGHT, "Primary")
 check("Ctrl+Right goes to the start of the next word", edit:GetCaretPosition(), 9)
-moho64ui_Key(LEFT, "Ctrl Shift")
+driver:press(LEFT, "Primary Shift")
 check("Ctrl+Shift+Left selects the word before", (state()), "caret 4 selection 4..9")
-moho64ui_Key(RIGHT)
+driver:press(RIGHT)
 check("an arrow key alone drops the selection", (state()), "caret 5")
-moho64ui_Key(END)
+driver:press(END)
 changes = {}
-moho64ui_Key(BACK, "Ctrl")
+driver:press(BACK, "Primary")
 check("Ctrl+Backspace removes the word before the caret, without OnTextChanged", edit:GetText() .. "|" .. table.getn(changes), "one two  |0")
-moho64ui_Key(HOME)
-moho64ui_Key(DEL, "Ctrl")
+driver:press(HOME)
+driver:press(DEL, "Primary")
 check("Ctrl+Delete removes up to the next word", edit:GetText(), "two  ")
 
 -- the maximum length
 edit:SetText("")
 edit:SetMaxChars(5)
-moho64ui_Type("abcdefgh")
+driver:type_keys("abcdefgh")
 check("typing stops at the maximum length", edit:GetText(), "abcde")
 edit:SetMaxChars(1024)
 
@@ -126,42 +120,40 @@ edit:SetMaxChars(1024)
 local calls = {}
 edit.OnCharPressed = function(self, code) table.insert(calls, "char" .. code) return code == 113 end  -- swallow "q"
 edit.OnNonTextKeyPressed = function(self, code, event) table.insert(calls, "key" .. code .. event.Type .. event.KeyCode) end
-moho64ui_Type("qa")
-moho64ui_Key(UP)
--- (the code as Windows has it, 38 for Up, as the original's 0x791ed6 converts it; the event keeps 317)
-check("OnCharPressed can keep a character out; other keys go to OnNonTextKeyPressed(code, event)",
-    edit:GetText() .. " " .. table.concat(calls, " "), "abcdea char113 char97 key38Char317")
+driver:type_keys("qa")
+driver:press(UP)
+-- (the compatibility binding code, 38 for Up, as the original's 0x791ed6 converts it; the event keeps 317)
+check("OnCharPressed can keep a character out; other keys go to OnNonTextKeyPressed(code, event)", edit:GetText() .. " " .. table.concat(calls, " "), "abcdea char113 char97 key38Char317")
 edit.OnCharPressed = nil
 edit.OnEnterPressed = function(self, text) table.insert(calls, "enter " .. text) return true end
 calls = {}
-moho64ui_Key(ENTER)
+driver:press(ENTER)
 check("OnEnterPressed(text) returning true keeps the text", edit:GetText() .. " " .. table.concat(calls, " "), "abcdea enter abcdea")
 edit.OnEnterPressed = function(self, text) end
-moho64ui_Key(ENTER)
+driver:press(ENTER)
 check("otherwise Enter clears the field", edit:GetText(), "")
-moho64ui_Type("xy")
+driver:type_keys("xy")
 edit.OnEscPressed = function(self, text) table.insert(calls, "esc " .. text) return false end
 calls = {}
-moho64ui_Key(ESC)
+driver:press(ESC)
 check("Escape clears a field with text", edit:GetText() .. "|" .. table.concat(calls, " ") .. "|" .. tostring(edit:GetCurrentFocusControl() == edit), "|esc xy|true")
 heard = {}
-moho64ui_Key(ESC)
+driver:press(ESC)
 check("Escape in an empty field gives the focus up", tostring(edit:GetCurrentFocusControl()) .. tostring(edit:IsCaretVisible()) .. " " .. table.concat(heard, " "), "nilfalse edit")
 
 -- the mouse in an edit field
 edit:SetText("alpha beta gamma")
 local function x(chars) return 100 + edit:GetStringAdvance(string.sub("alpha beta gamma", 1, chars)) + 1 end
-moho64ui_MouseButton("Left", true, x(7), 110)
-check("a click gives the focus, shows the caret and puts it at the click",
-    tostring(edit:GetCurrentFocusControl() == edit) .. tostring(edit:IsCaretVisible()) .. edit:GetCaretPosition(), "truetrue7")
-moho64ui_MouseMove(x(12), 110)
+driver:button("Left", true, x(7), 110)
+check("a click gives the focus, shows the caret and puts it at the click", tostring(edit:GetCurrentFocusControl() == edit) .. tostring(edit:IsCaretVisible()) .. edit:GetCaretPosition(), "truetrue7")
+driver:move(x(12), 110)
 check("dragging selects from the click to the cursor", (state()), "caret 12 selection 7..12")
-moho64ui_MouseMove(x(2), 110)
+driver:move(x(2), 110)
 check("also backwards", (state()), "caret 2 selection 2..7")
-moho64ui_MouseButton("Left", false, x(2), 110)
+driver:button("Left", false, x(2), 110)
 check("the selection stays when the button is let go", (state()), "caret 2 selection 2..7")
-moho64ui_MouseButton("Left", true, x(3), 110)
-moho64ui_MouseButton("Left", false, x(3), 110)
+driver:button("Left", true, x(3), 110)
+driver:button("Left", false, x(3), 110)
 check("a click without dragging drops it", (state()), "caret 3")
 
 -- text wider than the field: the window follows the caret
@@ -169,17 +161,16 @@ edit.Width:Set(60)
 edit:SetText("0123456789012345678901234567890123456789")
 local from = tonumber((string.gsub(moho64ui_Describe(edit), "^.- from (%d+).*$", "%1")))
 check("after SetText the window shows the text's end", from ~= nil and from > 20, true)
-moho64ui_Key(HOME)
+driver:press(HOME)
 check("Home brings the window back to the start", string.find(moho64ui_Describe(edit), " from ") == nil, true)
-moho64ui_Key(END)
+driver:press(END)
 check("End moves it to the end again", string.find(moho64ui_Describe(edit), " from " .. tostring(from), 1, true) ~= nil, true)
 
 -- a click elsewhere
 heard = {}
-moho64ui_MouseButton("Left", true, 10, 10)
-moho64ui_MouseButton("Left", false, 10, 10)
-check("a press on another control: the edit field gives the focus up and hears both callbacks",
-    tostring(edit:GetCurrentFocusControl()) .. " " .. table.concat(heard, " "), "nil edit edit lost")
+driver:button("Left", true, 10, 10)
+driver:button("Left", false, 10, 10)
+check("a press on another control: the edit field gives the focus up and hears both callbacks", tostring(edit:GetCurrentFocusControl()) .. " " .. table.concat(heard, " "), "nil edit edit lost")
 
 -- the caret's alpha cycles while frames pass (looked at through the frame update only: no error)
 check("frame updates are on for an edit field", edit:NeedsFrameUpdate(), true)
@@ -196,20 +187,20 @@ IN_AddKeyMapTable({
     ["NoSuchKey"] = {action = "UI_Lua table.insert(keyRan, 'never')"},
 })
 check("a binding is found by its key name with modifiers in any order", moho64ui_KeyMapAction("Shift-Ctrl-K"), "ui_lua table.insert(keyRan, 'csk')")
-moho64ui_Key(346)  -- F5
+driver:press('F5')  -- F5
 check("a bound key runs its action as a console command; the key counts as down meanwhile", table.concat(keyRan, " "), "f5true")
 check("and as up afterwards", IsKeyDown("F5"), false)
-moho64ui_Key("k", "Ctrl Shift")
-moho64ui_Key("k")
-moho64ui_Key("k", "Ctrl")
+driver:press("k", "Primary Shift")
+driver:press("k")
+driver:press("k", "Primary")
 check("modifiers are part of the binding", table.concat(keyRan, " "), "f5true csk")
 child:AcquireKeyboardFocus(true)
-moho64ui_Key(346)
+driver:press('F5')
 check("no binding runs while a control has the keyboard focus", table.getn(keyRan), 2)
 child:AbandonKeyboardFocus()
 IN_RemoveKeyMapTable({["F5"] = {action = ""}})
-moho64ui_Key(346)
-moho64ui_Key("k", "Shift Ctrl")
+driver:press('F5')
+driver:press("k", "Shift Primary")
 check("IN_RemoveKeyMapTable unbinds the table's keys", table.concat(keyRan, " "), "f5true csk csk")
 ConExecute("UI_Lua table.insert(keyRan, 'console')")
 check("ConExecute runs a console command", keyRan[4], "console")
@@ -226,8 +217,7 @@ local function names(t)
     return table.concat(out, " ")
 end
 check("ConTextMatches: the names that begin so", names(ConTextMatches("wld_g")), "WLD_GameSpeed")
-check("the case not counting, in the registry's order", names(ConTextMatches("UI_SELECT")),
-    "UI_SelectAnything UI_SelectByCategory ui_SelectionSetNamesColor ui_SelectTolerance")
+check("the case not counting, in the registry's order", names(ConTextMatches("UI_SELECT")), "UI_SelectAnything UI_SelectByCategory ui_SelectionSetNamesColor ui_SelectTolerance")
 local ai = ConTextMatches("ai")
 check("'_' comes before letters: the ai_ names, then Air...", ai[table.getn(ai)], "AirLookAheadMult")
 check("no text, no names", table.getn(ConTextMatches("")), 0)
@@ -238,4 +228,4 @@ check("one argument, no more", pcall(ConTextMatches), false)
 
 parent:Destroy()
 edit:Destroy()
-LOG("TEST done: " .. failed .. " failed")
+test:finish()

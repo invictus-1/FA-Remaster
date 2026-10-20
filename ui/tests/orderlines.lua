@@ -1,3 +1,5 @@
+local framework = import('/testing/framework.lua')
+local driver = framework.input()
 -- The order lines while Shift is held: the original's command graph (user_units.cpp OrderLinesForWorld), as
 -- the host's test function moho64ui_OrderGraph() reports what the picture is given: the legs between the
 -- graph's nodes (a group's order one leg from the group's middle, n its units, the width
@@ -5,15 +7,8 @@
 -- their colours from the game's commandgraphparams.lua, the orders never drawn, and the waypoints' marks.
 -- Units made by the game's cheat callback. Run it like transport.lua (a launched game with CheatsEnabled =
 -- "true"), with --frames 6500.
-local failed = 0
-local function check(what, got, want)
-    if got == want then
-        LOG("TEST ok   " .. what)
-    else
-        failed = failed + 1
-        LOG("TEST FAIL " .. what .. ": got " .. tostring(got) .. ", want " .. tostring(want))
-    end
-end
+local test = framework.suite('orderlines')
+local check = function(what, got, want) return test:equal(what, got, want) end
 local function made(bp, category)
     UISelectionByCategory(category, false, false, false, false)
     local found = {}
@@ -23,9 +18,7 @@ local function made(bp, category)
     SelectUnits(nil)
     return found
 end
-local function near(a, b, within)
-    return a ~= nil and b ~= nil and math.abs(a[1] - b[1]) <= within and math.abs(a[3] - b[3]) <= within
-end
+local near = framework.within_xz
 local function middle(units)
     local m = {0, 0, 0}
     for _, u in units do
@@ -54,23 +47,23 @@ local function states(legs)
     return table.concat(s, ", ")
 end
 local function shift(down)
-    if down then moho64ui_Key(306, "Shift", "down") else moho64ui_Key(306, "", "up") end
+    if down then driver:key_down('Shift', "Shift") else driver:key_up('Shift', "") end
     WaitSeconds(0.2)
 end
 local view
 -- a click, then the mouse away from the waypoint it made (with Shift held the waypoint under the mouse is
 -- highlighted with the legs leading to it: waypoints.lua)
 local function click(button, x, y, mods)
-    moho64ui_MouseMove(x, y)
+    driver:move(x, y)
     WaitSeconds(0.2)
-    moho64ui_MouseButton(button, true, x, y, mods)
-    moho64ui_MouseButton(button, false, x, y, mods)
+    driver:button(button, true, x, y, mods)
+    driver:button(button, false, x, y, mods)
     WaitSeconds(0.5)
-    moho64ui_MouseMove(view.Left() + 60, view.Top() + 220)
+    driver:move(view.Left() + 60, view.Top() + 220)
     WaitSeconds(0.2)
 end
 
-ForkThread(function()
+test:fork(function()
     WaitSeconds(6)
     view = import("/lua/ui/game/worldview.lua").viewLeft
     local p = GetArmyAvatars()[1]:GetPosition()
@@ -84,7 +77,7 @@ ForkThread(function()
     local tanks = made("uel0201", "LAND")
     check("three tanks are made", table.getn(tanks), 3)
     if table.getn(tanks) ~= 3 then
-        LOG("TEST done: " .. failed .. " failed")
+        test:finish()
         return
     end
     GetCamera("WorldCamera"):SnapTo(spot, nil, 110)
@@ -104,8 +97,7 @@ ForkThread(function()
     g = moho64ui_OrderGraph()
     local mid = middle(tanks)
     check("Shift held: the graph is there", g.shown, true)
-    check("the game's commandwaypoint.lua sets the console variables",
-        string.format("%g %g %g %g %g", g.settings.lineScale, g.settings.curveSmoothness, g.settings.curveSegments,
+    check("the game's commandwaypoint.lua sets the console variables", string.format("%g %g %g %g %g", g.settings.lineScale, g.settings.curveSmoothness, g.settings.curveSegments,
             g.settings.minWaypointSize, g.settings.maxWaypointSize), "1 35 32 7 100")
     local moves = legsTo(g, "Move")
     check("one leg to the move", table.getn(moves), 1)
@@ -121,9 +113,7 @@ ForkThread(function()
     check("selected units' move: the selected colour", leg.state .. " " .. leg.color, "selected dd00ffff")
     check("the move's line texture", leg.texture, "/textures/ui/common/game/orderline/orderline_generic.dds")
     local m = marksOf(g, "Move")[1] or {}
-    check("the move's mark: its waypoint icon, selected colour, size 1",
-        tostring(m.texture) .. " " .. tostring(m.color) .. " " .. tostring(m.size),
-        "/textures/ui/common/game/waypoints/move_btn_up.dds 88ffffff 1")
+    check("the move's mark: its waypoint icon, selected colour, size 1", tostring(m.texture) .. " " .. tostring(m.color) .. " " .. tostring(m.size), "/textures/ui/common/game/waypoints/move_btn_up.dds 88ffffff 1")
     local function xyz(v) return v and string.format("%.2f,%.2f,%.2f", v[1], v[2], v[3]) or "nil" end
     LOG("TEST note: first leg a=" .. xyz(leg.a) .. " b=" .. xyz(leg.b) .. ", clicked at " .. xyz(first) .. ", the group's middle " .. xyz(mid))
 
@@ -183,9 +173,7 @@ ForkThread(function()
     check("no mark for it", table.getn(marksOf(g, "Script")), 0)
     local aggressive = legsTo(g, "AggressiveMove")[1] or {}
     check("a leg from the last move to the AggressiveMove", aggressive.from, "Move")
-    check("drawn as FAF's table says: arrow02, 0.25, 0.2, the attack colour",
-        tostring(aggressive.texture) .. " " .. string.format("%.4g %.4g", aggressive.animRate or 0, aggressive.uvAspect or 0) .. " " .. tostring(aggressive.color),
-        "/textures/ui/common/game/orderline/orderline_arrow02.dds 0.25 0.2 ddff0000")
+    check("drawn as FAF's table says: arrow02, 0.25, 0.2, the attack colour", tostring(aggressive.texture) .. " " .. string.format("%.4g %.4g", aggressive.animRate or 0, aggressive.uvAspect or 0) .. " " .. tostring(aggressive.color), "/textures/ui/common/game/orderline/orderline_arrow02.dds 0.25 0.2 ddff0000")
 
     -- not selected: the normal state's colours; under the mouse: highlighted
     SelectUnits(nil)
@@ -229,13 +217,9 @@ ForkThread(function()
             if l.from == "Patrol" and q[1] and l.toId == tonumber(q[1].ID) then back = l end
         end
         check("the leg back from the last point to the first", back ~= nil and q[2] ~= nil and back.fromId == tonumber(q[2].ID), true)
-        check("its texture moves: arrow02, 0.25 a tick, 0.2 a width",
-            back and (tostring(back.texture) .. " " .. string.format("%.4g %.4g", back.animRate, back.uvAspect)) or "none",
-            "/textures/ui/common/game/orderline/orderline_arrow02.dds 0.25 0.2")
-        check("the patrol's marks", table.getn(marksOf(g, "Patrol")) .. " " .. tostring((marksOf(g, "Patrol")[1] or {}).texture),
-            "2 /textures/ui/common/game/waypoints/patrol_btn_up.dds")
-        check("the selected patrol's legs selected, the other group's normal",
-            (patrol[1] and patrol[1].state or "") .. " " .. ((legsTo(g, "Move")[1] or {}).state or ""), "selected normal")
+        check("its texture moves: arrow02, 0.25 a tick, 0.2 a width", back and (tostring(back.texture) .. " " .. string.format("%.4g %.4g", back.animRate, back.uvAspect)) or "none", "/textures/ui/common/game/orderline/orderline_arrow02.dds 0.25 0.2")
+        check("the patrol's marks", table.getn(marksOf(g, "Patrol")) .. " " .. tostring((marksOf(g, "Patrol")[1] or {}).texture), "2 /textures/ui/common/game/waypoints/patrol_btn_up.dds")
+        check("the selected patrol's legs selected, the other group's normal", (patrol[1] and patrol[1].state or "") .. " " .. ((legsTo(g, "Move")[1] or {}).state or ""), "selected normal")
         -- the patrol's selected legs before the moves' normal ones
         local seenNormal, order = false, true
         for _, l in g.legs do
@@ -268,5 +252,5 @@ ForkThread(function()
     shift(false)
     g = moho64ui_OrderGraph()
     check("Shift let go: no graph", tostring(g.shown) .. " " .. table.getn(g.legs) .. " " .. table.getn(g.marks), "false 0 0")
-    LOG("TEST done: " .. failed .. " failed")
+    test:finish()
 end)

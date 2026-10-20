@@ -161,7 +161,10 @@ void ThreadScheduler::Release(Thread& t) {
         break;
       }
   }
-  if (t.ref != LUA_NOREF) luaL_unref(L_, LUA_REGISTRYINDEX, t.ref);
+  if (t.ref != LUA_NOREF) {
+    if (onRelease) onRelease(t.co, t.outcome);
+    luaL_unref(L_, LUA_REGISTRYINDEX, t.ref);
+  }
   t.ref = LUA_NOREF;
   if (t.waitRef != LUA_NOREF) luaL_unref(L_, LUA_REGISTRYINDEX, t.waitRef);
   t.waitRef = LUA_NOREF;
@@ -226,16 +229,14 @@ void ThreadScheduler::Step(Thread& t) {
     // when the thread was destroyed during this run (the flag the task points at, ebp-0x11), "Error running lua
     // script from destroyed thread: %s" (0xe09320). Step runs only live threads, so t.dead here = killed itself.
     g_threadError.insert(0, t.dead ? "Error running lua script from destroyed thread: " : "Error running lua script: ");
-    for (size_t a = 0, b; a <= g_threadError.size(); a = b + 1) {
-      b = g_threadError.find('\n', a);
-      if (b == std::string::npos) b = g_threadError.size();
-      LogWrite(LogLevel::Warning, g_threadError.substr(a, b - a));
-    }
+    LogScriptError(g_threadError);
+    t.outcome = Outcome::Failed;
     t.dead = true;
     return;
   }
   lua_Debug ar;
   if (lua_getstack(t.co, 0, &ar) == 0) {  // returned: no active frame
+    t.outcome = Outcome::Completed;
     t.dead = true;
     return;
   }
