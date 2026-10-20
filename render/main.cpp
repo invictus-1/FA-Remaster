@@ -169,6 +169,11 @@
 // --remastered-build  the remastered build look (build_effects.h, World::remasteredBuild; modern look with the remastered
 //           effects): build beams light what they work on, sparks fly from where they meet it and bounce off what the
 //           picture shows, units under construction take a better build shimmer of their faction's (with --fx-build)
+// --exhausts  (unitsfx) real exhausts (exhausts.h, World::realExhausts; modern look): engines' beams (aircraft, missiles, a
+//           mod's drives) drawn as soft plumes, a white-hot core, a sheath of their colour and a deeper fringe, shock
+//           diamonds on large drives at full burn, a light per drive on the hull and the ground, heat haze behind, the
+//           throttle followed smoothly; --exhaust-tune bright[,light[,haze]]: their brightness, lights' and haze's, times
+//           their own (1)
 // --deep-tracks  deep tracks (World::deepTracks; modern look): the ground pressed where units drive and walk, by the
 //           kind it is (snow, mud, sand, grass, dirt, hard), the game's tread marks and footprints pressed in by their
 //           own shapes; --ground-kind <part>=<kind>  the layers whose texture's path holds <part> taken as that kind
@@ -617,6 +622,8 @@ struct Options {
   float bushSpacing = 0.9f;
   std::string bushKind = "bush";
   bool remasteredBuild = false;         // --remastered-build
+  bool realExhausts = false;            // --exhausts (unitsfx)
+  float exhaustTune[3] = {1, 1, 1};     // --exhaust-tune (unitsfx)
   std::vector<std::string> groundKind;  // --ground-kind
   bool noMudRuts = false;               // --no-mud-ruts [mud ruts]
   bool groundParallax = false;          // [parallax] --ground-parallax
@@ -855,6 +862,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--no-hidden-outlines") o->hiddenOutlines = false;
     else if (a == "--hot-metal") o->hotMetal = true;
     else if (a == "--remastered-build") o->remasteredBuild = true;
+    else if (a == "--exhausts") o->realExhausts = true;
     else if (a == "--order-test") o->orderTest = true;
     else if (a == "--frame-generation") o->frameGeneration = true;
     else if (a == "--capture-between") o->captureBetween = true;
@@ -943,6 +951,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--fire-light") o->fireLight = static_cast<float>(atof(v));
     else if (a == "--smoke-shadow-strength") o->smokeShadowStrength = static_cast<float>(atof(v));
     else if (a == "--heat-bend") o->heatBend = static_cast<float>(atof(v));
+    else if (a == "--exhaust-tune") sscanf(v, "%f,%f,%f", &o->exhaustTune[0], &o->exhaustTune[1], &o->exhaustTune[2]);
     else if (a == "--debris-most") o->debrisMost = std::max(0, atoi(v));
     else if (a == "--debris-show") o->debrisShow = v;
     else if (a == "--debris-test") {
@@ -1617,6 +1626,10 @@ int main(int argc, char** argv) {
     if (opt.hotSmoke <= 0) world.heat.smokeEmitter.clear();
   }
   world.remasteredBuild = opt.remasteredBuild;
+  world.realExhausts = opt.realExhausts;  // (unitsfx)
+  world.exhausts.brightness = opt.exhaustTune[0];
+  world.exhausts.lightStrength = opt.exhaustTune[1];
+  world.exhausts.hazeStrength = opt.exhaustTune[2];
   world.frameGeneration = opt.frameGeneration;
   device->captureBetween = opt.captureBetween;
   device->measureLatency = opt.latencyStats;

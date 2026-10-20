@@ -10,6 +10,7 @@
 #include "blasts.h"
 #include "build_effects.h"
 #include "effect_files.h"
+#include "exhausts.h"  // (unitsfx)
 
 namespace render {
 namespace {
@@ -207,6 +208,13 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
       else if (parameter == "POSITION_Z") e.offset.z = n[0];
       else if (e.kind == Kind::Emitter) particles_->SetParam(e.handle, parameter, n[0]);
       // (ResizeEmitterCurve, SetBeamParam: not acted on; the game's scripts call neither)
+    } else if (event.name == "SetBeamParam" && !n.empty() && e.kind == Kind::Beam) {
+      // (unitsfx) a beam's length or thickness as a script sets it: kept for the real exhausts (exhausts.h), which ease
+      // a drive's plume to it; the band itself is drawn as before
+      std::string parameter = event.text;
+      for (char& c : parameter) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+      if (parameter == "LENGTH") e.beamLength = n[0];
+      else if (parameter == "THICKNESS") e.beamThickness = n[0];
     } else if (event.name == "SetEmitterCurveParam" && n.size() >= 2) {
       if (e.kind == Kind::Emitter) {
         particles_->SetCurve(e.handle, event.text, n[0], n[1]);
@@ -478,6 +486,15 @@ void Effects::Update(double tick, const Frame& frame) {
           // on one thing: along the way that thing faces, as long as the blueprint (or the call) says
           const Vec3 forward = Rotate(e.orientation, {0, 0, 1});
           if (e.kind == Kind::Beam) {
+            // (unitsfx) an engine's exhaust while the real exhausts are on: a plume (exhausts.h) in place of the band
+            if (exhausts_ && exhausts_->On() && !e.original && exhausts_->Takes(e.blueprint, e.faction, ribbons_->remastered)) {
+              Vec3 origin = e.position;
+              Quat turn;
+              AttachPoint(frame, e.entity, -1, &origin, &turn);
+              exhausts_->Add((static_cast<uint64_t>(e.entity) << 32) | static_cast<uint32_t>(e.bone + 1), e.blueprint, e.faction, ribbons_->remastered,
+                             e.position, forward, e.beamLength, e.beamThickness, origin);
+              break;
+            }
             ribbons_->BeamAlong(e.blueprint, e.position, forward, e.faction);
             break;
           }
