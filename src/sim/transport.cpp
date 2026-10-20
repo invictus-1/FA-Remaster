@@ -1212,7 +1212,19 @@ void LoadDoTask(Sim& sim, Unit* T, TransportTaskData& d) {
     if (State(T, "Ferrying") || State(T, "AssistMoving")) {
       for (Unit* u : L) {
         u->ferryUnit = EntityRef(T);
-        if (State(T, "Ferrying") && State(u, "WaitForFerry") && !State(u, "TransportLoading")) MotionStop(u);
+        if (State(T, "Ferrying") && State(u, "WaitForFerry") && !State(u, "TransportLoading")) {
+          // The stop is the cargo's navigator AbortMove (vf+0x10, 0x5a3750): MakeIdle, then the Aborted broadcast,
+          // which the walk's move task (navigator listener 0x618bb0) takes as Failed, and it resumes the cargo's
+          // thread, re-linked at the run list's end: the cargo runs again in this command stage, its walk ends and
+          // WaitForFerry goes 1 -> 2 -> CallTransport in the same beat (ferry_tasks.md 4, beat L+1), as Lua's
+          // navigator:AbortMove does (l_nav_AbortMove). Seen: MP1 7067, army 7's ferry 0x70002f lands by the beacon
+          // at 7065 (TransportLoading 7066) and its load assigns the T3 tank 0x700007 at 7067, after the tank's turn;
+          // the original's tank has TransportLoading (and no Moving) at 7067, ours woke at its next turn (7068).
+          const bool wake = u->motion.hasGoal && !u->motion.arrived && !u->motion.failed &&
+                            NavEventWakesCommandThread(u);  // (asked before the goal is gone)
+          MotionStop(u);
+          if (wake) sim.ResumeCommandThread(u);
+        }
       }
       d.cargo.clear();
       d.picks.clear();
