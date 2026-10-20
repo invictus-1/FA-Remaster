@@ -22,6 +22,7 @@ namespace moho {
 class CommandStream;
 class ScriptState;
 class Sim;
+class Fingerprint;
 class SimBlueprints;
 class Vfs;
 }  // namespace moho
@@ -290,6 +291,12 @@ class GameSession {
   std::FILE* stream_ = nullptr;  // the game's record (replayOut), open while a game runs
   int recorded_ = 0;             // games recorded in this run
   void Record(const std::string& bytes);
+  // The recorded game's fingerprint beside its record (<replayOut>.fp: the engine's sim/fingerprint.h, one line per
+  // beat, paused ones included, beat 0 after Start), so that a playback can name the first beat it leaves the
+  // game at (tools/twocopies.py --compare). Only for a live game with --replay-out.
+  std::shared_ptr<Fingerprint> fp_;
+  uint32_t fpBeats_ = 0;
+  void FingerprintBeat();
   // The last launch, for Relaunch.
   std::unique_ptr<SessionDescription> last_;
   std::vector<std::string> lastUids_;

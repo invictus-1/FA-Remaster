@@ -24,6 +24,7 @@
 #include "sim/blueprints.h"
 #include "sim/command_stream.h"
 #include "sim/command_writer.h"
+#include "sim/fingerprint.h"
 #include "sim/replay.h"
 #include "sim/session.h"
 #include "sim/sim.h"
@@ -813,6 +814,7 @@ bool GameSession::LaunchReplay(lua_State* L, const std::string& file, std::strin
   play_.reset();
   PrepareSession(session, uids);
   play_ = std::make_unique<CommandStream>(playData_, h->streamOffset);
+  ReplayHeld() = false;  // (a new replay plays: no hold of a replay watched before)
   last_ = std::make_unique<SessionDescription>(session);
   lastUids_ = uids;
   lastWasReplay_ = true;
@@ -904,6 +906,7 @@ void GameSession::End() {
   loadSim_.reset();
   loadSession_.reset();
   if (stream_) std::fclose(stream_), stream_ = nullptr;
+  if (fp_) fp_->End(fpBeats_), fp_.reset();
   if (replay_) std::fclose(replay_), replay_ = nullptr;
   play_.reset();
   if (sounds) sounds->StopWorld();
@@ -1055,6 +1058,23 @@ bool GameSession::FinishLoad(std::string* why) {
       for (const std::string& folder : replayMaps) std::fprintf(f, "maps %s\n", folder.c_str());
       std::fclose(f);
     }
+    // (the engine's class opens its file from MOHO64_FINGERPRINT: set to this game's for that moment, the
+    // variable's own value put back after)
+    if (fp_) fp_->End(fpBeats_), fp_.reset();
+    const char* before = std::getenv("MOHO64_FINGERPRINT");
+    const std::string kept = before ? before : "";
+    const std::string mine = base + ".fp";
+#ifdef _WIN32
+    _putenv_s("MOHO64_FINGERPRINT", mine.c_str());
+    fp_ = std::shared_ptr<Fingerprint>(Fingerprint::FromEnvironment().release());
+    _putenv_s("MOHO64_FINGERPRINT", kept.c_str());
+#else
+    setenv("MOHO64_FINGERPRINT", mine.c_str(), 1);
+    fp_ = std::shared_ptr<Fingerprint>(Fingerprint::FromEnvironment().release());
+    if (before) setenv("MOHO64_FINGERPRINT", kept.c_str(), 1);
+    else unsetenv("MOHO64_FINGERPRINT");
+#endif
+    fpBeats_ = 0;
   }
   pace.rate = session.gameSpeed;
   pace.adjustable = session.adjustableSpeed;
@@ -1395,9 +1415,13 @@ void GameSession::Advance(double seconds) {
     due_ -= 0.1;
     if (play_) {  // a replay: its own orders, beat by beat; the player's only pause and resume it
       if (takeOrders) ViewerControls(takeOrders());
-      if (sim_->Paused()) {
-        sim_->PausedBeat();
-      } else if (!play_->AtEnd() && play_->ApplyUntilAdvance(*sim_)) {
+      if (ReplayHeld()) {  // (the viewer holds the replay: no beat runs, and the time held does not pile up)
+        due_ = 0;
+        break;
+      }
+      // (every beat its stream's orders first, as the engine's own player of the original's replays: so the recorded
+      // game's pause and its resume are both applied; a paused beat while the recorded game is paused)
+      if (!play_->AtEnd() && play_->ApplyUntilAdvance(*sim_)) {
         if (sim_->Paused()) {
           sim_->PausedBeat();
         } else if (onThread) {
@@ -1419,7 +1443,11 @@ void GameSession::Advance(double seconds) {
       if (!orders.empty() && !ApplyCommands(*sim_, orders)) Logf(LogLevel::Warning, "moho64ui: an order was not understood by the simulation");
     }
     if (sim_->Paused()) {
+      // (recorded as every beat: the original's replays hold their paused beats (the engine: AIR 40, LAND 72), and
+      // a paused beat changes the simulation's state, so a playback must run it too)
       sim_->PausedBeat();
+      Record(CommandWriter::AdvanceMessage(1));
+      FingerprintBeat();
     } else if (onThread) {
       Record(CommandWriter::AdvanceMessage(1));
       StartBeatOnThread();
@@ -1427,6 +1455,7 @@ void GameSession::Advance(double seconds) {
     } else {
       TimedTick();
       Record(CommandWriter::AdvanceMessage(1));
+      FingerprintBeat();
     }
     NoteBeat();
     DeliverBeatSync();
@@ -1459,8 +1488,13 @@ void GameSession::StartBeatOnThread() {
 }
 
 // After a beat on the thread: its times, its sounds and shakes, and its sync for the interface.
+void GameSession::FingerprintBeat() {  // (after each beat of a recorded live game: its line in <replayOut>.fp)
+  if (fp_ && !play_ && sim_) fp_->Beat(*sim_, ++fpBeats_);
+}
+
 void GameSession::FinishBeat() {
   beatToFinish_ = false;
+  FingerprintBeat();  // (the beat that ran on its own thread, done now)
   FrameTimes& times = Times();
   times.simBeats += workerSimSeconds_;
   times.pictureBeats += workerPictureSeconds_;
@@ -1491,8 +1525,8 @@ void GameSession::ViewerControls(const std::string& orders) {
     const int type = static_cast<unsigned char>(orders[p]);
     const size_t length = static_cast<unsigned char>(orders[p + 1]) | (static_cast<size_t>(static_cast<unsigned char>(orders[p + 2])) << 8);
     if (length < 3) break;
-    if (type == 4) sim_->pauseOwner = 0;
-    else if (type == 5) sim_->pauseOwner = -1;
+    if (type == 4) ReplayHeld() = true;  // (the viewer's hold, the host's own: not the recorded game's pause)
+    else if (type == 5) ReplayHeld() = false;
     p += length;
   }
 }
@@ -1628,8 +1662,10 @@ void GameSession::RunFirstBeat() {
   if (!sim_ || sim_->tick() != 0) return;
   // (A replay's first beat is its stream's first: what came before the first Advance, then it.)
   if (play_ && !play_->AtEnd()) play_->ApplyUntilAdvance(*sim_);
+  if (fp_ && !play_) fp_->Beat(*sim_, 0);  // (beat 0: the state Start left)
   sim_->Tick();
   Record(CommandWriter::AdvanceMessage(1));
+  FingerprintBeat();
   NoteBeat();
   for (std::string& sync : sim_->TakeSync()) {
     if (onSync) onSync(sync);

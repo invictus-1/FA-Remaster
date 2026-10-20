@@ -173,7 +173,8 @@ int l_SessionIsReplay(lua_State* L) {
   return 1;
 }
 int l_SessionIsPaused(lua_State* L) {
-  lua_pushboolean(L, TheSim(L)->pauseOwner != -1);
+  // (in a replay also while its viewer holds it: ReplayHeld)
+  lua_pushboolean(L, TheSim(L)->pauseOwner != -1 || (TheSim(L)->isReplay && ReplayHeld()));
   return 1;
 }
 // GetFocusArmy(): the army the player looks through, counted from 1; -1 for an observer.

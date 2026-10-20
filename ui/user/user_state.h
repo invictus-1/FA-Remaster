@@ -541,6 +541,12 @@ struct FramePacing {
   bool lowLatency = true;     // one frame waiting to be shown, each begun just in time
 };
 FramePacing& Pacing();
+// A replay held by its viewer (the player's pause while watching: SessionRequestPause in a replay): no beat at all
+// runs meanwhile, not even a paused one, since a paused beat changes the simulation's state (the destroy queue, the
+// id pools' quarantine) and a replay's outcome must not depend on when it was paused while watched (the engine,
+// 2026-10-20: INFERRED for the original's viewer, not read). The simulation's own pause (pauseOwner) is the
+// recorded game's. SessionIsPaused answers true for either in a replay.
+bool& ReplayHeld();
 // The performance statistics drawn over the interface (docs/performance-lessons.md 5.5 and 6):
 // the console's remaster_stats [on|off] (no value: toggles), bound to a key by the program's own
 // key action "remaster_stats" (Ctrl-Alt-S at first). Drawn by the window's loop (run_window.cpp).

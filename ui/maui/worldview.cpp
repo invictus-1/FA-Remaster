@@ -3435,6 +3435,10 @@ StatsOverlay& Overlay() {
   static StatsOverlay overlay;
   return overlay;
 }
+bool& ReplayHeld() {
+  static bool held = false;
+  return held;
+}
 FramePacing& Pacing() {
   static FramePacing pacing;
   return pacing;
