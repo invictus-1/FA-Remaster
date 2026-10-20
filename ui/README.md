@@ -607,7 +607,12 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   footprint and skirt: the original's spacing is not read, INFERRED). Buildings the selected
   units (selected or not) have been ordered to build and have not begun show as ghosts where they will stand. What a unit may not build yet (its own restrictions, the engine's `UnitRestrictedBlueprints`) is left out of its build menu. A minimap world view shows the renderer's minimap picture with the
   outline of the ground the main view shows; a left press on it moves the main camera there, and
-  the camera follows the pointer while the button is held. `--no-world` runs a game without the picture
+  the camera follows the pointer while the button is held (the place with its height, the original's
+  TargetLocation 0x7a82f0). Its window (FAF's Window) is moved, resized, pinned, reset and closed by hand, and
+  kept in the profile for the next game (`tests/minimap_window.lua`); until its picture is drawn at a new size
+  its places go by the map laid over the view. The resource icons: a world view's EnableResourceRendering is on
+  when made (0x86e544) and the main view's goes to the renderer's deposit icons; the minimap's ground is drawn
+  without them (the original's default; on, they wait for the renderer). `--no-world` runs a game without the picture
   (no graphics device is opened); the world view then answers with a plain view from above.
 - Sound: the scripts' `PlaySound(Sound({Bank, Cue}))` plays the cue from the game's own sound
   files in `/sounds` (read by the files' own layout: every sound entry of every bank of the game

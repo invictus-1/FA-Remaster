@@ -380,6 +380,22 @@ void TargetBox(Camera* c, const float lo[3], const float hi[3], float seconds) {
   c->cut = true;
   ClampFocus(c);
 }
+// The camera looks at a place at once (TargetLocation, FA exe 0x7a82f0, with no time: what the minimap's left press,
+// 0x870d8a, and its dragger's moves, CMiniMapDragger::DragMove 0x86e3bd, call with the place under the pointer, its
+// height too): the place becomes the focus (+0x380, +0x360), following stops (mode 0), kept on the playable ground
+// (ClampTargetPos 0x7a9320); the turn stays, and a zoom on its way stops where it is (the target zoom, +0x354 as
+// GetTargetZoom 0x7a6ca0 reads it, takes +0x358's value: INFERRED to be the zoom now). With the ground's own height
+// ClampFocusPos (0x7a9470) leaves it where it is: the focus is not a script's to be moved along the view onto the
+// ground (focusFromScript).
+void TargetLocation(Camera* c, const float place[3]) {
+  c->focusFromScript = false;
+  c->entities.clear();
+  StartTimed(c, 0);
+  for (int i = 0; i < 3; ++i) c->focus[i] = place[i];
+  c->mode = 0;
+  c->targetZoom = c->zoom;
+  ClampFocus(c);
+}
 // Ours: the player's hand (pan, wheel) ends a timed move (the original lets it run on); waiting
 // scripts are let go.
 void EndTimedByHand(Camera* c) {
@@ -854,7 +870,9 @@ class WorldView : public Control {
 
   std::string cameraName;
   bool miniMap = false;
-  bool cartographic = false, resources = false, inputLocked = false, globalCameraCommands = false, highlight = true;
+  // (resources: EnableResourceRendering, the view's +0x136, which its constructor sets to 1, 0x86e544: a new view
+  // draws the resource icons; FAF's minimap.lua turns the minimap's off unless the profile says otherwise)
+  bool cartographic = false, resources = true, inputLocked = false, globalCameraCommands = false, highlight = true;
   bool customRender = false;  // the script wants to draw into the world each frame (see SetCustomRender)
   std::string rightOrder;     // GetRightMouseButtonOrder's last answer (given while a beat runs)
   bool rightOrderKnown = false;
@@ -954,6 +972,7 @@ class WorldView : public Control {
     scene.borders = user->mapBorders;
     scene.lifeBars = LifeBarsShown(L);
     scene.lifeBarsOnEnemies = user->lifeBarsOnEnemies;
+    scene.resourceIcons = resources;  // (this view's EnableResourceRendering)
     // The unit under the mouse gets its mark (by the picture before this one), unless the script
     // has switched highlighting off or the mouse is over something else.
     UiManager& mouse = user->ui();
@@ -1323,6 +1342,41 @@ class WorldView : public Control {
     out->x1 = out->x0 + pw, out->y1 = out->y0 + ph;
     return pw >= 1 && ph >= 1;
   }
+  // The size the minimap's picture was last drawn at (Draw). The picture's own answers (MinimapProject,
+  // MinimapGroundAt) go by the picture last drawn, so they hold for the minimap's rectangle only while it has that
+  // size: after the window is resized, until the next drawing (and in a headless run, which draws nothing until
+  // asked), the place is worked out from the map laid over the rectangle as the picture is made to fill it.
+  int minimapW_ = 0, minimapH_ = 0;
+  bool MinimapDrawnAt(const Rect& r) const {
+    return minimapW_ == static_cast<int>(r.x1 - r.x0) && minimapH_ == static_cast<int>(r.y1 - r.y0);
+  }
+  // That map laid over the rectangle `r` (MinimapRect): the part that can be played (or the whole map) from straight
+  // above, its height filling the rectangle's height, centred across it (the renderer's DrawMinimap: from so far up
+  // with so narrow a view that it is as good as a map). Ours, INFERRED: the original's minimap camera is not read.
+  // `world` x and z from a point of the screen, or the other way round.
+  void MinimapPart(lua_State* L, float* x0, float* z0, float* x1, float* z1) {
+    float mw = 0, mh = 0;
+    UserState::From(L)->config().world->MapSize(&mw, &mh);
+    const float* play = UserState::From(L)->playableRect;
+    const bool part = play[2] > play[0] && play[3] > play[1];
+    *x0 = part ? play[0] : 0, *z0 = part ? play[1] : 0, *x1 = part ? play[2] : mw, *z1 = part ? play[3] : mh;
+  }
+  void MinimapLaidUnproject(lua_State* L, const Rect& r, float sx, float sy, float world[3]) {
+    float x0, z0, x1, z1;
+    MinimapPart(L, &x0, &z0, &x1, &z1);
+    const float perPixel = (z1 - z0) / (r.y1 - r.y0);
+    world[0] = (x0 + x1) * 0.5f + (sx - (r.x0 + r.x1) * 0.5f) * perPixel;
+    world[2] = z0 + (sy - r.y0) * perPixel;
+    const auto& ground = UserState::From(L)->config().groundHeight;  // (the copy after each beat: no waiting)
+    world[1] = ground ? ground(world[0], world[2]) : 0.0f;
+  }
+  void MinimapLaidProject(lua_State* L, const Rect& r, const float world[3], float* sx, float* sy) {
+    float x0, z0, x1, z1;
+    MinimapPart(L, &x0, &z0, &x1, &z1);
+    const float perWorld = (r.y1 - r.y0) / (z1 - z0);
+    *sx = (r.x0 + r.x1) * 0.5f + (world[0] - (x0 + x1) * 0.5f) * perWorld;
+    *sy = r.y0 + (world[2] - z0) * perWorld;
+  }
 
   void Draw(lua_State* L, DrawTarget& target) override {
     Rect r;
@@ -1330,8 +1384,10 @@ class WorldView : public Control {
       int w = static_cast<int>(r.x1 - r.x0), h = static_cast<int>(r.y1 - r.y0);
       float corners[4][3];
       const bool outline = MainViewCorners(L, corners);
-      if (const uint32_t* pixels = UserState::From(L)->config().world->DrawMinimap(w, h))
+      if (const uint32_t* pixels = UserState::From(L)->config().world->DrawMinimap(w, h, resources)) {
         target.DrawPixels(pixels, w, h, static_cast<int>(r.x0), static_cast<int>(r.y0));
+        minimapW_ = w, minimapH_ = h;
+      }
       if (outline) DrawMainViewOutline(L, target, r, corners);
       return;
     }
@@ -1399,14 +1455,16 @@ class WorldView : public Control {
   }
 
   // World to screen and back: the picture's own answers when there is one. Without a picture, a
-  // plain view from straight above with the camera's focus at the view's middle.
+  // plain view from straight above with the camera's focus at the view's middle. A minimap: its
+  // picture's while that was last drawn at the minimap's size now, else the map laid over it
+  // (MinimapDrawnAt).
   void ProjectPoint(lua_State* L, const float world[3], float* sx, float* sy) {
     Camera* c = GetCameraObject(L, cameraName);
     Rect r;
     if (MinimapRect(L, &r)) {
       float x = 0, y = 0;
-      if (UserState::From(L)->config().world->MinimapProject(world, &x, &y)) *sx = r.x0 + x, *sy = r.y0 + y;
-      else *sx = *sy = -100000.0f;
+      if (MinimapDrawnAt(r) && UserState::From(L)->config().world->MinimapProject(world, &x, &y)) *sx = r.x0 + x, *sy = r.y0 + y;
+      else MinimapLaidProject(L, r, world, sx, sy);
       return;
     }
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
@@ -1432,7 +1490,11 @@ class WorldView : public Control {
   void Unproject(lua_State* L, float sx, float sy, float world[3], bool fresh = true) {
     Camera* c = GetCameraObject(L, cameraName);
     Rect r;
-    if (MinimapRect(L, &r) && UserState::From(L)->config().world->MinimapGroundAt(sx - r.x0, sy - r.y0, world)) return;
+    if (MinimapRect(L, &r)) {
+      if (!MinimapDrawnAt(r) || !UserState::From(L)->config().world->MinimapGroundAt(sx - r.x0, sy - r.y0, world))
+        MinimapLaidUnproject(L, r, sx, sy, world);
+      return;
+    }
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
     if (((!fresh && PictureIsCurrent(L)) || EnsurePicture(L)) && UserState::From(L)->config().world->GroundAt(sx - r.x0, sy - r.y0, world)) return;
     float scale = c->zoom > 0 && r.y1 > r.y0 ? (r.y1 - r.y0) / (2.0f * EyeDistance(c) * std::tan(FovYOf(c) * 0.5f)) : 1;
@@ -1655,7 +1717,7 @@ class WorldView : public Control {
       Unproject(L, e.x, e.y, world);
       Camera* main = GetCameraObject(L, "WorldCamera");
       TakeCameraBack(L, main);
-      main->focus[0] = world[0], main->focus[2] = world[2];
+      TargetLocation(main, world);
       return;
     }
     if (selecting_) dragX_ = e.x, dragY_ = e.y;
@@ -2071,7 +2133,7 @@ class WorldView : public Control {
     if (miniMap && mode.empty()) {  // a left press on the minimap: the main camera looks there, and
       Camera* main = GetCameraObject(L, "WorldCamera");  // follows the pointer while the button is held
       TakeCameraBack(L, main);
-      main->focus[0] = world[0], main->focus[2] = world[2];
+      TargetLocation(main, world);
       main->cut = true;
       miniDrag_ = true;
       UserState::From(L)->ui().PostEngineDragger(L, this, e.keyCode);

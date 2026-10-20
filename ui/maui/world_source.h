@@ -136,6 +136,10 @@ struct WorldScene {
   // Lifebars" (the console's UI_ForceLifbarsOnEnemy). Off, as the original's: then only the
   // army's own and its allies' units have life bars.
   bool lifeBarsOnEnemies = false;
+  // The icons on the mass and hydrocarbon deposits from far up: the view's EnableResourceRendering (FA exe: the
+  // world view's drawing calls CWldSession::RenderResources, 0x862a80, at 0x86ee44 while it is on, +0x136, and the
+  // console's UI_RenResources too; the minimap's go with its own view, which draws no scene: WorldSource::DrawMinimap).
+  bool resourceIcons = true;
   // The camera jumped since the picture before (a snap, a minimap click), for the temporal upscaler.
   bool cameraCut = false;
 };
@@ -171,8 +175,8 @@ class WorldSource {
   // The minimap: the whole map from straight above with every unit's icon, width * height pixels
   // as Draw gives them (the map's height fills the picture's height: give a width in the map's
   // proportion). MapSize: the map's size in world units. The other two go between the world and
-  // the minimap picture last drawn.
-  virtual const uint32_t* DrawMinimap(int width, int height) = 0;
+  // the minimap picture last drawn. `resourceIcons`: the minimap view's EnableResourceRendering.
+  virtual const uint32_t* DrawMinimap(int width, int height, bool resourceIcons) = 0;
   virtual bool MapSize(float* width, float* height) = 0;
   virtual bool MinimapProject(const float world[3], float* x, float* y) = 0;
   virtual bool MinimapGroundAt(float x, float y, float world[3]) = 0;

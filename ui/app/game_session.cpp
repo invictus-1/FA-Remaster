@@ -416,6 +416,9 @@ struct GameSession::Picture : WorldSource {
     // The camera jumped (a snap, the minimap): FSR 3 starts afresh rather than mix the frames before in.
     if (scene.cameraCut)
       if (render::World* w = picture.world()) w->cameraCut = true;
+    // The icons on the resource deposits from far up (the renderer's World::depositIcons, its "resource icons"): the
+    // main view's EnableResourceRendering (off, for one, while an operation's cinematic plays: FAF's gamemain.NISMode).
+    if (render::World* w = picture.world()) w->depositIcons = scene.resourceIcons;
     // The player's own looks (the Options menu's Video tab), when they change.
     const LookSettings& looks = Looks();
     if (!lookApplied || looks.remasteredEffects != lookNow.remasteredEffects) picture.SetRemasteredEffects(looks.remasteredEffects);
@@ -470,8 +473,17 @@ struct GameSession::Picture : WorldSource {
     lookApplied = true;
     if (session && session->sim_) picture.SetAllies(session->allies_);  // (as of the last beat: SetScene may come while one runs)
   }
-  const uint32_t* DrawMinimap(int width, int height) override {
+  // The minimap's ground is drawn without the deposits' icons whatever its switch says: the renderer draws them into
+  // the ground it keeps between calls (anew only for another size or light), which therefore cannot follow the
+  // switch (FAF's minimap.lua sets it a frame after the minimap's first drawing). Without them is the original's
+  // default (minimap.lua: off unless the profile's MiniMap_resource_icons). With them on: the renderer's part, asked
+  // for (the deposits' icons laid on the minimap at every call, under the units' icons, when this says so).
+  const uint32_t* DrawMinimap(int width, int height, bool /*resourceIcons*/) override {
+    render::World* w = picture.world();
+    const bool main = w && w->depositIcons;  // (the main picture's, put back after)
+    if (w) w->depositIcons = false;
     const std::vector<uint32_t>& pixels = picture.DrawMinimap(width, height);
+    if (w) w->depositIcons = main;
     return pixels.size() == static_cast<size_t>(width) * static_cast<size_t>(height) ? pixels.data() : nullptr;
   }
   bool MapSize(float* width, float* height) override {
@@ -489,7 +501,7 @@ struct GameSession::Picture : WorldSource {
   }
 #else
   void SetScene(const WorldScene&) override {}
-  const uint32_t* DrawMinimap(int, int) override { return nullptr; }
+  const uint32_t* DrawMinimap(int, int, bool) override { return nullptr; }
   bool MapSize(float*, float*) override { return false; }
   bool MinimapProject(const float*, float*, float*) override { return false; }
   bool MinimapGroundAt(float, float, float*) override { return false; }
