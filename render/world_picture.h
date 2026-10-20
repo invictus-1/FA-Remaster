@@ -327,6 +327,9 @@ class WorldPicture {
     // Outer and Inner pairs): of the outline round the group, and of the holes' outlines.
     float outerNear = 0.04f, outerFar = 4.0f;
     float innerNear = 0.04f, innerFar = 4.0f;
+    // [range fill] The original's range_Fill (off at first): the inside of the group's lines filled white at an alpha
+    // of 0.125, as its frame.fx RangeFill does (ranges.h).
+    bool fill = false;
     std::vector<RangeRing> rings;
   };
   // `zoomNear`, `zoomFar`: the camera's distances that count as the nearest and the farthest zoom
@@ -367,7 +370,12 @@ class WorldPicture {
   // in its proportion. The ground is drawn
   // by the graphics card once per size and kept; the icons are laid on it on the processor at
   // every call, from the units of the last Draw (selected ones in their selected form).
-  const std::vector<uint32_t>& DrawMinimap(int width, int height);
+  // [minimap deposits] `resourceIcons`: the minimap view's switch for the deposits' icons (its EnableResourceRendering:
+  // FAF's minimap.lua turns it off unless the profile has MiniMap_resource_icons). On, they are laid at every call on
+  // the copy handed out, under the units' icons, as the original's RenderResources draws them (16 pixels across at
+  // ui_StrategicIconScale 1: icons.playerScale); the kept ground never has them. True unless given: the deposits' icons
+  // show as they did before this switch (the viewer's --picture).
+  const std::vector<uint32_t>& DrawMinimap(int width, int height, bool resourceIcons = true);
   // [pings] The meshes on the minimap, FAF's minimap option "Disable meshes" (Prefs disableMinimapMesh; its scripts
   // set cam_DefaultMiniLOD to 0 for it, 1.8 without it: hand `on` = that value is not 0). Off, as FAF has it until the
   // player unticks the option: no meshes. On: what the original then draws of the meshes by their technique's

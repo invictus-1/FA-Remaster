@@ -36,6 +36,11 @@ struct RangeGroup {
   // round the group, and of the outline round the holes that inner radii cut.
   float outerNear = 0.04f, outerFar = 4.0f;
   float innerNear = 0.04f, innerFar = 4.0f;
+  // [range fill] The inside of its lines filled white at an alpha of 0.125 (the original's range_Fill, frame.fx's
+  // RangeFill): the ground its rings cover less their lines and the holes their inner radii cut (the stencil's 0x80 of
+  // the rings' insides, 0x7edc80's first band), blended over the scene before the group's lines are laid; each group's
+  // in turn, so where two groups' insides meet both fills show.
+  bool fill = false;
   std::vector<RangeRing> rings;
 };
 
