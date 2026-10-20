@@ -1,30 +1,35 @@
-# Answers from the interface track
+# The interface track's answers (newest first)
 
-The other tracks write what they need from the interface into their own request files (`render/REQUESTS.md`,
-the engine by message, the visuals track's notes). The interface track answers here. Newest first.
+Answers to the other tracks' requests to the interface (CLAUDE.md: "the layer asked answers in a file of its own").
+The requests themselves are in the asking track's file; each answer names it.
 
-## render 33: Ground Detail — done (2026-10-17)
+## render/REQUESTS.md 42: Chris's playthrough of 19 October, the interface's six items (2026-10-20)
 
-A fifth option in the Video tab, after Weather Effects: "Ground Detail" (`remaster_ground_detail`), off by
-default, `SetGroundDetail` at the game picture's first frame and on every change, as the four of request 31.
-Checked: `ui/tests/lobby.lua` (off unless chosen), and a live game in a window switching it on and off (no
-errors). Weather Effects' comment in the options file now names wet shorelines and the shallows' caustics.
+Built as the original does them (read from the FA exe), tested, landing with ui ba69c02 / 7b25a3f / 9128bcb.
 
-## render 31: the lighting upgrade's four settings — done (2026-10-17)
-
-Four options in the Options menu's Video tab, after "Temporal Upscaling (FSR 3)", each off by default, as
-asked:
-- "Atmosphere" (`remaster_atmosphere`): `SetAtmosphere`.
-- "Soft Shadows" (`remaster_soft_shadows`): `SetSoftShadows`.
-- "Ray Tracing" (`remaster_ray_tracing`): `SetRayTracing`. Where `RayTracingSupported()` is false, the option
-  offers one state, "Not on this graphics card", which the game's own options dialog greys out. The answer is
-  taken after every `Open` (the window's menu picture and each game's picture) and read when the dialog
-  opens. Before any picture has answered (a test run without a window), both states are offered.
-- "Weather Effects" (`remaster_weather_effects`): `SetWeatherEffects`.
-
-Each is a console command the option sends (`ui/user/keymap.cpp`), kept in `LookSettings`
-(`ui/user/user_state.h`). The game's picture gets the call at its first frame and whenever the setting changes
-(`ui/app/game_session.cpp`, the looks block, beside `SetTemporalUpscale`). The menu's picture and the
-menu's moving background are left alone. Checked: `ui/tests/lobby.lua` (the four options, off unless chosen, and
-switching them), and a live game in a window with all four switched on and off again (no errors; this card says
-it can ray trace).
+1. **Item 5, "health regen on Izanagi shows +0 while shields show +600"**: our host's fault, not the blueprint's (the
+   staged MIA0401 has Defense.RegenRate 300). FAF's unit view shows `GetStat("HitpointsRegeneration")`, and our
+   UserUnit:GetStat always answered the default, so every unit showed "+0/s". It now reads the unit's statistics from
+   the engine's view (UnitStateView::stats, engine 13a6e16): the regen numbers, veterancy (VetLevel, VetExperience)
+   and the reclaim totals are real. The Izanagi should now show "+300/s".
+2. **Item 16, the mass extractor snapping from farther**: it was missing. While an extractor (or a hydrocarbon plant)
+   is placed, the place under the mouse jumps onto the nearest fitting deposit within the original's reach (the
+   cursor update 0x86f520, FAF's patch; ui_ExtractSnapTolerance 4 map units, capped between 20 and 90 pixels); the
+   ghost and the click use that place. If Chris wants it farther than the original, that is a deviation to decide.
+3. **Item 17, Alt+F2 opening the spawn tool**: the key was bound (FAF's debugKeyMap), but its console command
+   PopupCreateUnitMenu was not built. Built (0x7b5a40): FAF's create-unit window at the mouse; picking a unit and
+   clicking the map spawns it, for the army chosen in the window. As in the original, the window also opens without
+   cheats, where spawning does nothing.
+4. **Item 18, the commander's queue not on his build bar**: not reproduced: in every case tried (cheats, his own tour
+   session, his recorded games' orders) FAF's panel showed the queue. Four small differences to the original were
+   fixed on the way. Open question for Chris: what had he queued, and did it show after reselecting him?
+5. **"Clicking on unit pulls up attack order cursor instead of default"**: a key held when the window lost the front
+   stayed held for us (an Alt through an Alt+Tab or a screenshot tool), and FAF shows the attack cursor while Alt is
+   held with a selection. As the original (MAUI_KeyIsDown 0x79cb70), a key counts as held only while the window is in
+   front, and leaving the front lets every key go.
+6. **Item 22, "load the game without any mods at all"**: the plain launchers (Open-Game-NewMap, Open-Game-Quixel)
+   load none. The Izanagi tours load the Wyvern Battle Pack because his Mitsurugi mod requires it; Chris chose
+   (2026-10-20) a mod-free tour beside them: `_scratch\ui\Open-Game-Tour.bat` (an Aeon CZAR on the rebuilt map, no
+   mods at all). The mod units' remastered art moved out of `visuals\work` (visuals, 2026-10-20) into
+   `visuals\work_mods\<mod>`, mounted only by the launchers of games with that mod (`--remasters` may be given more
+   than once now).
