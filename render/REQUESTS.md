@@ -34,6 +34,60 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
+## 43. To the VISUALS track: from Chris's playthrough of 19 October (2026-10-20, not blocking)
+
+Chris played a long game during the weekly limit and gave the renderer a list of 22 items with 17 named screenshots
+(the originals on his Desktop, `C:\Users\chris\Desktop\<name>.png`; read them by name). Yours (his words in quotes):
+1. Item 8: "thrusters on Izanagi need to be more integrated and look much more realistic. I'm talking about the
+   blue/purplish flame that comes out when it flies. Its fine for og game but ours is next gen" (the mod's exhaust
+   emitters are yours; tell the renderer what drawing you want: a hot core, heat shimmer, light on the hull, volume).
+2. Item 11: "Some trees are unable to be reclaimed all trees should be able to be reclaimed." Read: SETONS_R's
+   scenery young trees (no Categories) look like trees but are not in the simulation. Chris's word is that all trees
+   be reclaimable: a sim change (count, reclaim values), so tell the engine when you change them.
+3. Item 21: "Some of the rocks on the map look off as in they are just sitting on sitting or floating off an edge make
+   sure to do a full check of everything and screenshot all angles if you have to, to make sure things are proper."
+   Screenshots: "Front side is fine but looks awkward try to integrate better or remove.png", "Reverse side of rocks
+   here is empty no textures.png" (the renderer checks first whether its culling hides back faces, and tells you).
+4. "Stream starts on top of hill but starting point makes no sense integrate it better into the map so that it makes
+   sense + it has random white spots.png": the start is the map's (a spring, a pool, a gully); the white spots are
+   the renderer's (its stream helper looks at them).
+5. Item 22: "Some items I noticed were from mods if possible load the game without any mods at all and all the non
+   vanilla units remove them cause we can't be shipping with modded units as that belongs to other people. Though we
+   will ship it separately when I remaster that way we keep things different." Yours: the remastered mod units in
+   visuals\work that the game mounts (EEL0001, the BlackOps commander, and any other non-vanilla ID) kept out of
+   what ships; the interface and the engine get the launch side.
+
+**Answer:** (none yet)
+
+## 42. To the INTERFACE track: from Chris's playthrough of 19 October (2026-10-20, not blocking)
+
+Chris's list (see 43 for the screenshots). Yours (his words in quotes):
+1. Item 5: "health regen on Izanagi shows +0 while shields show +600 for the regen." (the unit view's numbers; the
+   Izanagi's blueprint is the visuals session's: ask her if it has no hull regen).
+2. Item 16: "When you have a mass extractor in hand it should auto clip to the mass extractor spot from farther
+   current you have to be super accurate it should auto clip it into the spot you need to place to save time."
+3. Item 17: "alt + f2 should open up the admin tool that allows me to spawn things in just like og."
+4. Item 18: "stuff you queue for com doesn't appear on build bar for him."
+5. From a screenshot's name: "Clicking on unit pulls up attack order cursor instead of default in game one."
+6. Item 22 (launch side): "load the game without any mods at all" (see 43.5).
+
+**Answer:** (none yet)
+
+## 41. To the ENGINE track: from Chris's playthrough of 19 October (2026-10-20, not blocking)
+
+Chris's list (see 43 for the screenshots). Yours (his words in quotes):
+1. Item 2: "missing unit adjacency as in units level up through kills. It should be mass equivalent like og game where
+   how much xp points you get depends on the mass of the enemy unit. I'm not sure on exact math so you'll have to
+   find it." (veterancy by the mass killed).
+2. Item 14: "Targeting for t2 mobile missile launcher seems very inaccurate not sure if that is apart of game but check
+   it" (the renderer takes the second half: the scorch its missiles leave is too large).
+3. Item 19: "when your own com dies it doesn't really damage your stuff around him. Some units were barely damaged"
+   (screenshot "acu death low damage.png").
+4. Item 1, if it is the simulation's: "upgrading to t2 on uef factory causes momentary lag spike" (the renderer
+   measures its own side first and tells you which part the spike is in).
+
+**Answer:** (none yet)
+
 ## 40. To the VISUALS track: the trees and stumps off SETONS_R's stream (2026-10-19, not blocking; Chris: "Yes, move the 28 trees and stumps off the stream onto the bank, and tell the engine so it knows SETONS_R changed.")
 
 The 28 gameplay props whose base lies on the stream ribbon (stream.json's half width + 0.25), 14 on each twin, found
