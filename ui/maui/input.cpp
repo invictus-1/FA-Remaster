@@ -155,6 +155,12 @@ void KeyPress(lua_State* L, UiManager& ui, int charCode, bool shift, bool ctrl, 
   KeyEvent(L, ui, e);
 }
 
+void WindowFocus(lua_State* L, UiManager& ui, bool inFront) {
+  if (ui.windowInFront == inFront) return;
+  ui.windowInFront = inFront;
+  if (!inFront) KeyMapAllKeysUp(L);
+}
+
 void PostEvent(lua_State* L, Control* c, const UiEvent& e) {
   while (c) {
     Control* parent = c->parent();  // taken first: the script may destroy or move the control
@@ -414,6 +420,13 @@ int l_Key(lua_State* L) {
   return 0;
 }
 
+// moho64ui_WindowFocus(inFront): the host's window leaves the front (false) or comes back (true), as a live window
+// tells it (WindowFocus).
+int l_WindowFocus(lua_State* L) {
+  WindowFocus(L, UserState::From(L)->ui(), lua_toboolean(L, 1) != 0);
+  return 0;
+}
+
 // moho64ui_Type(text): the characters of an ASCII text typed one after the other.
 int l_Type(lua_State* L) {
   std::string text = luaL_checkstring(L, 1);
@@ -434,6 +447,7 @@ void RegisterInputBindings(lua_State* L) {
   lua_register(L, "moho64ui_MouseWheel", l_MouseWheel);
   lua_register(L, "moho64ui_Key", l_Key);
   lua_register(L, "moho64ui_Type", l_Type);
+  lua_register(L, "moho64ui_WindowFocus", l_WindowFocus);
 }
 
 }  // namespace moho::ui

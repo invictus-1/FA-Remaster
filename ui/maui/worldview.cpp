@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
+#include <limits>
 #include <map>
 #include <memory>
 #include <string>
@@ -29,6 +30,7 @@
 #include "maui/world_source.h"
 #include "script/script_handle.h"
 #include "script/script_state.h"
+#include "sim/blueprints.h"
 #include "sim/sim.h"
 #include "sim/sim_view.h"
 #include "sim/terrain.h"
@@ -885,6 +887,8 @@ class WorldView : public Control {
   WorldCamera pictureCamera_;
   // The time-left texts at the order lines' nodes as the scene was last made (OrderLinesForWorld).
   std::vector<OrderEta> orderEtas_;
+  // The buildings being placed under the mouse as the scene was last made (for tests: moho64ui_BuildGhosts).
+  std::vector<WorldGhost> placingGhosts_;
 
   // The camera's farthest zoom and its field of view go by the shape of the view that shows it.
   void TakeAspect(Camera* c) {
@@ -1017,6 +1021,7 @@ class WorldView : public Control {
       float at[3];
       WorldGhost ghost;
       if (source->GroundAt(ui.mouseX - r.x0, ui.mouseY - r.y0, at)) {
+        SnapToDeposit(L, at);  // (an extractor's place jumps onto the deposit near the mouse, as the cursor's does)
         if (buildDrag_ && name == buildName_) {  // the left button is held: the row so far
           BuildRow(L, sim(), name, buildFrom_, at, &scene.ghosts, buildShift_);
         } else if (ActiveBuildTemplate(L)) {  // a template: all its buildings round the mouse
@@ -1028,6 +1033,7 @@ class WorldView : public Control {
         }
       }
     }
+    placingGhosts_ = scene.ghosts;  // (the building about to be placed, for the extractor snap)
     // Round each building being placed, the outline of the ground it takes: green where it can
     // stand, red where not (the guide of the original, by Chris's pictures of it).
     for (const WorldGhost& g : scene.ghosts) SiteOutline(L, sim(), g, g.free ? 0xff10d010u : 0xffe02020u, &scene.lines);
@@ -1623,6 +1629,108 @@ class WorldView : public Control {
     *w = 1.0f / scale;
     return *sx >= r.x0 && *sx <= r.x1 && *sy >= r.y0 && *sy <= r.y1;
   }
+  // The extractor's snap: while a building that goes on a deposit is placed, the place under the mouse jumps onto the
+  // nearest deposit of its kind within reach. READ, the cursor update 0x86f520 at 0x86ffaf..0x8701db (FAF's exe; its
+  // patch at 0x870044 -> 0x128daa8), before the cursor's place is written to the session's cursor info (0x8701fc),
+  // which the left button's build, the ghost and GetMouseWorldPos all take:
+  // - the left button's action (GetLeftMouseButtonAction 0x81f7b0) is a building's: the command mode "build" (2) or
+  //   "buildanchored" (3) with a blueprint the rules know, and a focus army (0x81f899);
+  // - its Physics.BuildRestriction (bp+0x2f8) is RULEUBR_OnMassDeposit: mass deposits (type 1); or
+  //   RULEUBR_OnHydrocarbonDeposit with no build template active (FAF's patch: hydrocarbon (2) only without one; its
+  //   nops at 0x86fff0 let mass snap with a template too); anything else: no snap;
+  // - the cell = the footprint's corner under the mouse, fistp(x - Footprint.SizeX / 2), fistp(z - SizeZ / 2)
+  //   (bp+0xd8, +0xd9; round to even, kept as int16);
+  // - the reach: ui_ExtractSnapTolerance map units, in pixels at the mouse's place (tolerance / w, w the map units a
+  //   pixel is there: dot(cam+0x2a4, p) + cam+0x2b0, ScreenOf) brought into [ui_MinExtractSnapPixels,
+  //   ui_MaxExtractSnapPixels], times w again;
+  // - CSimResources slot 10 (0x546760): of the deposits of the type, in the list's order, the one whose middle cell
+  //   (x0 + (x1 - x0) / 2, z0 + (z1 - z0) / 2, integer halves) is nearest the cell, sqrt of the integer distance's
+  //   square, a later one only when strictly nearer, and only within the reach;
+  // - the place becomes that middle cell's (COORDS_ToWorldPos 0x50b0f0 with 1 x 1: the cell + 0.5 on both axes, y the
+  //   ground's height there, or the water's above it unless Footprint.OccupancyCaps (bp+0xda) holds the Seabed, 2).
+  // The building's own grid snap then puts the ghost and the order on the deposit (BuildSiteOf). INFERRED: the root
+  // compares as a float (the main thread's x87 runs at 24 bits as D3D9 leaves it, as the sim thread's: core/dmath.h);
+  // the minimap's map units per pixel are its map width over its width in pixels (its camera's plane is not read).
+  bool SnapToDeposit(lua_State* L, float world[3]) {
+    std::string mode, name;
+    CommandMode(L, &mode, &name);
+    if ((mode != "build" && mode != "buildanchored") || name.empty()) return false;
+    UserState* user = UserState::From(L);
+    if (!user->HasSim() || user->focusArmyCopy < 0 || user->depositsCopy.empty()) return false;
+    std::string id = name;
+    for (char& ch : id) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    SimBlueprints* bps = SimBlueprints::From(L);
+    const BlueprintInfo* bp = bps ? bps->Find(id) : nullptr;
+    if (!bp || bp->kind != BpKind::Unit) return false;
+    std::string restriction;
+    const int top = lua_gettop(L);
+    lua_getglobal(L, "__blueprints");
+    if (lua_istable(L, -1)) {
+      lua_pushstring(L, id.c_str());
+      lua_rawget(L, -2);
+      if (lua_istable(L, -1)) {
+        lua_pushstring(L, "Physics");
+        lua_rawget(L, -2);
+        if (lua_istable(L, -1)) {
+          lua_pushstring(L, "BuildRestriction");
+          lua_rawget(L, -2);
+          if (lua_isstring(L, -1)) restriction = lua_tostring(L, -1);
+        }
+      }
+    }
+    lua_settop(L, top);
+    int type = 0;
+    if (restriction == "RULEUBR_OnMassDeposit") {
+      type = 1;
+    } else if (restriction == "RULEUBR_OnHydrocarbonDeposit") {
+      const BuildTemplate* t = ActiveBuildTemplate(L);
+      if (!t || t->buildings.empty()) type = 2;
+    }
+    if (!type) return false;
+    const uint8_t sizeX = bp->hasFootprint ? bp->footprint.sizeX : 1, sizeZ = bp->hasFootprint ? bp->footprint.sizeZ : 1;
+    const uint8_t caps = bp->hasFootprint ? bp->footprint.caps : 1;
+    const int cellX = static_cast<int16_t>(std::lrintf(world[0] - static_cast<float>(sizeX) * 0.5f));
+    const int cellZ = static_cast<int16_t>(std::lrintf(world[2] - static_cast<float>(sizeZ) * 0.5f));
+    float w = 0;
+    Rect mini;
+    if (MinimapRect(L, &mini)) {
+      float mw = 0, mh = 0;
+      if (user->config().world && user->config().world->MapSize(&mw, &mh)) {
+        const float* play = user->playableRect;
+        if (play[2] > play[0] && play[3] > play[1]) mw = play[2] - play[0];
+        w = mw / std::max(1.0f, mini.x1 - mini.x0);
+      }
+    } else {
+      float sx = 0, sy = 0;
+      ScreenOf(L, world, &sx, &sy, &w);
+    }
+    if (!(w > 0)) return false;
+    const LookSettings& looks = Looks();
+    const float pixels = std::max(looks.extractSnapMinPixels, std::min(looks.extractSnapMaxPixels, looks.extractSnapTolerance / w));
+    const float reach = pixels * w;
+    float best = std::numeric_limits<float>::max();
+    int bestX = 0, bestZ = 0;
+    for (const UserState::DepositCopy& d : user->depositsCopy) {
+      if (d.type != type) continue;
+      const int cx = d.x0 + (d.x1 - d.x0) / 2, cz = d.z0 + (d.z1 - d.z0) / 2;
+      const int dx = cellX - cx, dz = cellZ - cz;
+      const float dist = static_cast<float>(std::sqrt(static_cast<double>(dx * dx + dz * dz)));
+      if (!(dist < best) || dist > reach) continue;
+      best = dist, bestX = cx, bestZ = cz;
+    }
+    if (best == std::numeric_limits<float>::max()) return false;
+    world[0] = static_cast<float>(bestX) + 0.5f, world[2] = static_cast<float>(bestZ) + 0.5f;
+    const auto& ground = user->config().groundHeight;
+    world[1] = ground ? ground(world[0], world[2]) : world[1];
+    if (!(caps & 2) && user->hasWaterCopy && user->waterElevationCopy > world[1]) world[1] = user->waterElevationCopy;
+    return true;
+  }
+  // The place of the world under a point of the screen as the cursor's info has it: the ground there, snapped onto a
+  // deposit while an extractor is placed (SnapToDeposit).
+  void CursorPlace(lua_State* L, float sx, float sy, float world[3]) {
+    Unproject(L, sx, sy, world);
+    SnapToDeposit(L, world);
+  }
   // The waypoint under the mouse (the original's cursor update 0x86f520, its part at 0x86ff47): only while the view
   // holds the command graph (its +0x20c: Shift was held when it last drew, 0x86ed00; here Shift held now), its
   // highlight is on (+0x2a4) and it is no minimap (+0x135).
@@ -1916,7 +2024,7 @@ class WorldView : public Control {
       Sim* sim = UserState::From(L)->LiveSim("a building placed");
       if (!sim) return;
       float to[3];
-      Unproject(L, e.x, e.y, to);
+      CursorPlace(L, e.x, e.y, to);
       std::vector<WorldGhost> row;
       BuildRow(L, *sim, buildName_, buildFrom_, to, &row, buildShift_);
       bool clear = !buildShift_;
@@ -2119,6 +2227,7 @@ class WorldView : public Control {
       Sim* sim = UserState::From(L)->LiveSim("a building's press");
       bool free = true;
       if (!sim) return true;
+      SnapToDeposit(L, world);  // (the cursor's place: on the deposit near the mouse for an extractor)
       if (ActiveBuildTemplate(L)) {  // (a template goes by the cell under the mouse: TemplateSites)
         for (int i = 0; i < 3; ++i) buildFrom_[i] = world[i];
       } else if (!BuildSiteOf(*sim, name, world, buildFrom_, &free)) {
@@ -2193,6 +2302,26 @@ class WorldView : public Control {
 
 // moho.UIWorldView.__init(self, parentControl, cameraName, depth, isMiniMap, trackCamera): the
 // script class's constructor makes the control.
+// A world view's making takes the script's WorldViewParams (CUIWorldView's ctor, FA exe 0x86e84e..0x86e9e1, READ):
+// /lua/ui/controls/worldview.lua imported, its table WorldViewParams, and of that ui_ExtractSnapTolerance when it is
+// not nil, into the console variable (0xf57a94; FAF's table has 4.0). (The ctor takes ui_SelectTolerance, 0xf57a90,
+// and ui_DisableCursorFixing, 0x10a6464, from the same table: not done here.)
+void TakeWorldViewParams(lua_State* L) {
+  const int top = lua_gettop(L);
+  lua_getglobal(L, "import");
+  lua_pushstring(L, "/lua/ui/controls/worldview.lua");
+  if (lua_isfunction(L, -2) && lua_pcall(L, 1, 1, 0) == 0 && lua_istable(L, -1)) {
+    lua_pushstring(L, "WorldViewParams");
+    lua_gettable(L, -2);
+    if (lua_istable(L, -1)) {
+      lua_pushstring(L, "ui_ExtractSnapTolerance");
+      lua_gettable(L, -2);
+      if (!lua_isnil(L, -1)) Looks().extractSnapTolerance = static_cast<float>(lua_tonumber(L, -1));
+    }
+  }
+  lua_settop(L, top);
+}
+
 int l_WorldViewInit(lua_State* L) {
   luaL_checktype(L, 1, LUA_TTABLE);
   Control* parent = CheckParent(L);
@@ -2201,6 +2330,7 @@ int l_WorldViewInit(lua_State* L) {
   c->miniMap = lua_toboolean(L, 5) != 0;
   c->Create(L, 1, parent);
   GetCameraObject(L, c->cameraName);
+  TakeWorldViewParams(L);
   c->RunInit(L);
   return 0;
 }
@@ -2552,13 +2682,46 @@ void AdvanceCamera(lua_State* L, Camera* c, float seconds) {
   ClampFocus(c);
 }
 
-// GetMouseWorldPos(): the place of the world under the mouse (in the view that last heard an event: CursorView);
+// GetMouseWorldPos(): the place of the world under the mouse (in the view that last heard an event: CursorView), as
+// the session's cursor info has it: snapped onto a deposit while an extractor is placed (SnapToDeposit);
 // GetMouseScreenPos(): the mouse on screen.
 int l_GetMouseWorldPos(lua_State* L) {
   UiManager& ui = UserState::From(L)->ui();
   float world[3] = {0, 0, 0};
-  if (WorldView* v = CursorView(L)) v->Unproject(L, ui.mouseX, ui.mouseY, world);
+  if (WorldView* v = CursorView(L)) v->CursorPlace(L, ui.mouseX, ui.mouseY, world);
   PushVector(L, world[0], world[1], world[2]);
+  return 1;
+}
+// GetDepositsAroundPoint(X, Z, Radius, Type): FAF's own function in its exe (0x128d6a3, READ; the user state has it
+// as the sim's does). X, Z, Radius as numbers (a NaN among their sum: no results at all); Type truncated to an
+// integer, 0 for every kind. Of the deposits in the list's order whose middle ((x0 + x1) / 2, (z0 + z1) / 2, floats)
+// lies within Radius of (X, Z) (the squares compared, the edge counted), a list from 1 of {X1 = x0, Z1 = z0, X2 = x1,
+// Z2 = z1, Type = type, Dist = the distance}. FAF's context-based templates ask it (hotkeys/context-based-templates).
+int l_GetDepositsAroundPoint(lua_State* L) {
+  const float x = static_cast<float>(lua_tonumber(L, 1)), z = static_cast<float>(lua_tonumber(L, 2));
+  const float radius = static_cast<float>(lua_tonumber(L, 3));
+  if (std::isnan(x + z + radius)) return 0;
+  const int type = static_cast<int>(static_cast<float>(lua_tonumber(L, 4)));
+  const float r2 = radius * radius;
+  lua_newtable(L);
+  int n = 0;
+  for (const UserState::DepositCopy& d : UserState::From(L)->depositsCopy) {
+    if (type != 0 && d.type != type) continue;
+    const float dx = static_cast<float>(d.x0 + d.x1) * 0.5f - x, dz = static_cast<float>(d.z0 + d.z1) * 0.5f - z;
+    const float d2 = dx * dx + dz * dz;
+    if (d2 > r2) continue;
+    lua_pushnumber(L, ++n);
+    lua_newtable(L);
+    const std::pair<const char*, float> fields[] = {{"X1", static_cast<float>(d.x0)}, {"Z1", static_cast<float>(d.z0)},
+                                                    {"X2", static_cast<float>(d.x1)}, {"Z2", static_cast<float>(d.z1)},
+                                                    {"Type", static_cast<float>(d.type)}, {"Dist", std::sqrt(d2)}};
+    for (const auto& [key, value] : fields) {
+      lua_pushstring(L, key);
+      lua_pushnumber(L, value);
+      lua_rawset(L, -3);
+    }
+    lua_settable(L, -3);
+  }
   return 1;
 }
 }  // namespace
@@ -2615,6 +2778,31 @@ int l_OrderEtasForTests(lua_State* L) {
     lua_rawset(L, -3);
     lua_pushstring(L, "state");
     lua_pushstring(L, states[e.state >= 0 && e.state < 3 ? e.state : 0]);
+    lua_rawset(L, -3);
+    lua_rawseti(L, -2, ++n);
+  }
+  return 1;
+}
+// moho64ui_BuildGhosts(): not an engine function of the original. The host's own for tests: the buildings being
+// placed under the mouse as the main view's last picture had them, {{blueprint =, x =, y =, z =, free =}, ...}.
+int l_BuildGhostsForTests(lua_State* L) {
+  lua_newtable(L);
+  WorldView* v = MainView(UserState::From(L)->ui().GetFrame(0));
+  if (!v) return 1;
+  int n = 0;
+  for (const WorldGhost& g : v->placingGhosts_) {
+    lua_newtable(L);
+    lua_pushstring(L, "blueprint");
+    lua_pushstring(L, g.blueprint.c_str());
+    lua_rawset(L, -3);
+    const char* axes[] = {"x", "y", "z"};
+    for (int i = 0; i < 3; ++i) {
+      lua_pushstring(L, axes[i]);
+      lua_pushnumber(L, g.position[i]);
+      lua_rawset(L, -3);
+    }
+    lua_pushstring(L, "free");
+    lua_pushboolean(L, g.free);
     lua_rawset(L, -3);
     lua_rawseti(L, -2, ++n);
   }
@@ -3166,7 +3354,7 @@ bool MouseWorldPlace(lua_State* L, float out[3]) {
   UiManager& ui = UserState::From(L)->ui();
   WorldView* v = CursorView(L);
   if (!v) return false;
-  v->Unproject(L, ui.mouseX, ui.mouseY, out);
+  v->CursorPlace(L, ui.mouseX, ui.mouseY, out);
   return true;
 }
 
@@ -3426,9 +3614,11 @@ void RegisterWorldViewBindings(lua_State* L) {
   SetMethod(L, cam, "UseSystemClock", l_CamSetFlag<&Camera::gameClock, false>);
 
   SetGlobal(L, "GetMouseWorldPos", l_GetMouseWorldPos);
+  SetGlobal(L, "GetDepositsAroundPoint", l_GetDepositsAroundPoint);
   SetGlobal(L, "MapBorderAdd", l_MapBorderAdd);
   SetGlobal(L, "MapBorderClear", l_MapBorderClear);
   lua_register(L, "moho64ui_MapBorders", l_MapBorders);
+  lua_register(L, "moho64ui_BuildGhosts", l_BuildGhostsForTests);
   lua_register(L, "moho64ui_OrderEtas", l_OrderEtasForTests);
   lua_register(L, "moho64ui_CameraShake", l_CameraShakeForTests);
   lua_register(L, "moho64ui_CineCamera", l_CineCameraForTests);

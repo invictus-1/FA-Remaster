@@ -223,6 +223,8 @@ class UiManager {
   // (what reads it is with the key maps).
   void SetFocus(lua_State* L, Control* c, bool blocksKeyDown = true);
   bool focusBlocksKeyDown = false;
+  // The host's window is the one in front (WindowFocus, input.h): IsKeyDown says no key is held otherwise.
+  bool windowInFront = true;
 
  private:
   std::vector<Frame*> frames_;

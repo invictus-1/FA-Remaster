@@ -20,6 +20,7 @@
 #include "sim/replay.h"
 #include "sim/sim.h"
 #include "sim/sim_view.h"
+#include "sim/terrain.h"
 #include "maui/world_source.h"
 #include "user/bindings.h"
 #include "user/user_state.h"
@@ -592,6 +593,12 @@ void UserState::CopyFromSimulation() {
   tickCopy = sim->tick();
   isReplayCopy = sim->isReplay;
   armiesCopy = ArmyViews(*sim);
+  // (the deposits: the map's script makes them at the start, CreateResourceDeposit; a script may add more)
+  if (depositsCopy.size() != sim->deposits.size()) {
+    depositsCopy.clear();
+    for (const ResourceDeposit& d : sim->deposits) depositsCopy.push_back({d.x0, d.z0, d.x1, d.z1, d.type});
+  }
+  if (const TerrainMap* map = sim->map()) hasWaterCopy = map->hasWater, waterElevationCopy = map->waterElevation;
   focusNickname.clear();
   for (const ArmyView& a : armiesCopy)
     if (a.index == sim->focusArmy + 1) focusNickname = a.nickname;

@@ -420,9 +420,11 @@ bool Window::Pump() {
         break;
       case SDL_EVENT_WINDOW_FOCUS_GAINED:  // in front: the mouse stays inside a full screen (if the player locks it)
         if (fullScreen) KeepMouseInside(lockMouse);
+        if (callbacks.focus) callbacks.focus(true);
         break;
       case SDL_EVENT_WINDOW_FOCUS_LOST:
         KeepMouseInside(false);
+        if (callbacks.focus) callbacks.focus(false);  // (the keys held: input.h WindowFocus)
         break;
       default:
         break;

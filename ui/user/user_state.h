@@ -208,6 +208,15 @@ class UserState {
   void AdvanceTickFraction(double seconds);
   bool isReplayCopy = false;  // SessionIsReplay
   std::vector<ArmyView> armiesCopy;  // ArmyViews (GetArmiesTable)
+  // The map's resource deposits (the simulation's CSimResources list, which the original's interface reads
+  // directly: CWldSession+0x424, its find-nearest slot 0x546760) and its water, for the extractor's snap and
+  // GetDepositsAroundPoint (worldview.cpp). Cells [x0, x1) x [z0, z1); type 1 mass, 2 hydrocarbon.
+  struct DepositCopy {
+    int x0 = 0, z0 = 0, x1 = 0, z1 = 0, type = 0;
+  };
+  std::vector<DepositCopy> depositsCopy;
+  bool hasWaterCopy = false;
+  float waterElevationCopy = 0;
   bool economyCopied = false;  // (these copies are there: one beat's sync came)
   void CopyFromSimulation();
   double now() const { return now_; }      // seconds since the state was created, as of this frame
@@ -467,6 +476,13 @@ struct LookSettings {
   // own margin applies (World::UnitAt: ten pixels, the option's default).
   float selectTolerance = 10.0f;
   float commandClickScale = 1.0f;
+  // The extractor's snap while a building that goes on a deposit is placed (worldview.cpp SnapToDeposit): the
+  // console variables ui_ExtractSnapTolerance (map units; FA exe 0xf57a94, 20 in the exe, and every world view's
+  // creation takes WorldViewParams.ui_ExtractSnapTolerance of /lua/ui/controls/worldview.lua when it has one, FAF's
+  // 4.0: 0x86e974), ui_MinExtractSnapPixels and ui_MaxExtractSnapPixels (0xf57a98, 0xf57a9c: 20 and 90; the exe
+  // reads no script value for these two, so FAF's 10 and 1000 in that table stay unused).
+  float extractSnapTolerance = 20.0f;
+  float extractSnapMinPixels = 20.0f, extractSnapMaxPixels = 90.0f;
 };
 LookSettings& Looks();
 // The names players give their units, as the original draws them under the life bars (its console

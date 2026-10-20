@@ -70,7 +70,7 @@
 //   zoom / maxZoom the camera's (CameraImpl slots 0x4c GetZoom and 0x50 GetMaxZoom). The outline lies
 //   inside the ring (outer - thickness .. outer), a hole's outside the hole (inner .. inner + thickness:
 //   sub_7EDC80). range_Fill (0x10a6415, off at first) also lays white at 1/8 over what the rings cover
-//   (RangeFill): the renderer has no such fill yet, so here it is only kept and reported.
+//   (RangeFill): every group carries it to the renderer (RangeGroup::fill, render a8ac1f0).
 //
 // OURS where it differs, or not read:
 // - Radar, Sonar, Omni, AllIntel and CounterIntel take the BLUEPRINT's radii: the unit's own (its synced
@@ -513,6 +513,7 @@ void ToGroups(const RangeStore& store, const RangeView& view, const std::vector<
     // renderer's own blend by the camera's distance changes nothing)
     g.outer[0] = g.outer[1] = Thickness(p.filter->outer, store.outerCoeff, view.zoomShare, view.playable);
     g.inner[0] = g.inner[1] = Thickness(p.filter->inner, store.innerCoeff, view.zoomShare, view.playable);
+    g.fill = store.fill;  // (range_Fill: every group, as the original; the renderer's RangeGroup::fill, render a8ac1f0)
     std::vector<uint32_t> ids;
     for (const Found& r : p.rings) {
       WorldRangeRing ring;

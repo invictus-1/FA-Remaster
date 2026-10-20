@@ -34,8 +34,10 @@ void LoadKeyMappings(lua_State* L);
 // down also runs what is bound to it.
 void KeyMapKeyDown(lua_State* L, int vk, bool shift, bool ctrl, bool alt, bool repeat);
 void KeyMapKeyUp(lua_State* L, int vk);
+// Every key held is let go (the host's window left the front: input.h WindowFocus), as KeyMapKeyUp for each.
+void KeyMapAllKeysUp(lua_State* L);
 // Whether a key is held (FA exe 0x79cb70), by the original's key code; never while a control holds
-// the keyboard focus in the blocking way.
+// the keyboard focus in the blocking way, nor while the host's window is not in front (0x79cb71).
 bool KeyIsDown(lua_State* L, int mauiCode);
 
 // Run a console command line. Built: UI_Lua <code> (the code runs in this state),

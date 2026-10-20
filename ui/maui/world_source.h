@@ -78,6 +78,7 @@ struct WorldRangeGroup {
   // this frame's thickness at both ends, worked out by the original's rule).
   float outer[2] = {0.04f, 4.0f};
   float inner[2] = {0.04f, 4.0f};
+  bool fill = false;  // range_Fill: white at 1/8 over what the group covers inside its lines (RangeFill)
   std::vector<WorldRangeRing> rings;
 };
 // A mesh the game's script has placed in the world (its WorldMesh, or the mark where an order

@@ -107,6 +107,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
   cb.mouseButton = [&](const UiEvent& e, bool pressed, bool dbl) { MouseButton(current().L(), current().ui(), e, pressed, dbl); };
   cb.mouseWheel = [&](const UiEvent& e) { MouseWheel(current().L(), current().ui(), e); };
   cb.key = [&](const UiEvent& e) { return KeyEvent(current().L(), current().ui(), e); };
+  cb.focus = [&](bool inFront) { WindowFocus(current().L(), current().ui(), inFront); };
   cb.resized = [&](int w, int h) {
     if (w == target->Width() && h == target->Height()) return;
     target = std::make_unique<SoftwareTarget>(w, h);

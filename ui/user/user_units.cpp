@@ -49,6 +49,15 @@ class UserUnit : public ScriptObject {
   // Its state as last asked of the simulation, and at which sync (StateOf; ~0: never).
   mutable UnitStateView stateCopy;
   mutable uint64_t stateSync = ~0ull;
+  // The statistics GetStat last read of the simulation, by name, and at which sync (StatOf): a number, a text,
+  // or none (the simulation keeps no such statistic for the unit).
+  struct StatCopy {
+    uint64_t sync = ~0ull;
+    int type = LUA_TNIL;  // LUA_TNUMBER, LUA_TSTRING or LUA_TNIL
+    lua_Number number = 0;
+    std::string text;
+  };
+  mutable std::map<std::string, StatCopy> statCopies;
 };
 
 // The original's command graph (FA exe UICommandGraph.cpp; the object GetCommandGraph 0x895eb0 makes
@@ -1110,8 +1119,8 @@ int l_SetCustomName(lua_State* L) {
   CheckUnit(L, 1)->customName = lua_isstring(L, 2) ? lua_tostring(L, 2) : "";
   return 0;
 }
-// GetStat(name [, default]): a statistic the unit's script keeps; {Value = default} while the
-// interface gets none of them.
+// GetStat(name [, default]): a statistic the unit's script keeps; {Value = default} without a
+// simulation to read them from (with one: l_GetStatNow).
 int l_GetStat(lua_State* L) {
   CheckUnit(L, 1);
   bool hasDefault = lua_gettop(L) >= 3;
@@ -1383,7 +1392,15 @@ bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float 
   std::vector<UserUnit*> units;
   for (UserUnit* u : Store(L).selection)
     if (!u->gone && !u->view.dead && u->view.army == sim->focusArmy + 1) ids.push_back(u->view.id), units.push_back(u);
-  if (ids.empty()) return false;
+  // A building order goes out with the selection as it stands, an empty one too (READ 2026-10-20): the build
+  // dragger's release (FA exe 0x823220) gives each site that passes its test to ISSUE_Command (0x8b05e0 ->
+  // 0x8b0180) with the session's selection (+0x4a0), and neither looks at the set's size; the client writes the
+  // message with no units (CClientManagerImpl::IssueCommand 0x6e6690: no test either; our simulation gives it to
+  // none), and the script's OnCommandIssued hears it with Units = {} (0x8b0599). FAF's spawn window (Alt-F2,
+  // createunit.lua) builds on that: the unit picked there is placed in the build mode with nothing selected, and
+  // commandmode.lua's OnBuildMobileIssued sends CheatSpawnUnit for a building order without units. The other orders
+  // here still want a unit (INFERRED: where the original's other ways to them test the selection is not read).
+  if (ids.empty() && type != CommandType::BuildMobile) return false;
   StreamIssueData d;
   d.type = static_cast<int>(type);
   d.target.type = entity != 0xffffffffu ? 1 : 2;  // a unit, or a position
@@ -1420,7 +1437,7 @@ bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float 
     }
     mean[0] += at[0], mean[1] += at[1];
   }
-  mean[0] /= static_cast<float>(units.size()), mean[1] /= static_cast<float>(units.size());
+  if (!units.empty()) mean[0] /= static_cast<float>(units.size()), mean[1] /= static_cast<float>(units.size());
   // Ctrl with more than one unit: an attack on a unit goes as FormAttack (SCommandModeData::HandleEvent 0x81fe4c;
   // FAF's exe leaves a Move as it is: its 0x82074d skips the original's FormMove).
   if (ctrl && units.size() > 1 && type == CommandType::Attack && entity != 0xffffffffu) {
@@ -1456,7 +1473,8 @@ bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float 
   for (UserUnit* u : units)
     (type != CommandType::BuildMobile && InCategory(L, u, "FACTORY") && InCategory(L, u, "STRUCTURE") ? factories : others)
         .push_back(u->view.id);
-  if (type == CommandType::BuildMobile && !blueprint.empty()) {  // (remembered until the queues show it: SiteMeetsOrdered)
+  // (remembered until the queues show it: SiteMeetsOrdered; an order without units is in no queue)
+  if (type == CommandType::BuildMobile && !blueprint.empty() && !units.empty()) {
     UnitStore::SentSite e;
     e.site.blueprint = blueprint;
     e.site.position[0] = x, e.site.position[1] = y, e.site.position[2] = z;
@@ -1479,7 +1497,7 @@ bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float 
     if (!factories.empty()) Writer(L).IssueFactoryCommand(factories, startRally, clear);
     clear = false;
   }
-  if (!others.empty()) {
+  if (!others.empty() || units.empty()) {  // (none at all: a building order with nothing selected, above)
     const uint32_t id = Writer(L).IssueCommand(others, d, clear);
     UnitStore& store = Store(L);
     for (uint32_t unit : others) store.lastSent[unit] = {id, UserState::From(L)->syncCount};
@@ -2618,6 +2636,57 @@ int l_GetMissileInfoNow(lua_State* L) {
   return 1;
 }
 
+// One statistic of a unit as the simulation's scripts keep it (sim/entities.cpp GetStat / SetStat: the value under
+// "stat:<name>" on the unit's script object), into u->statCopies. Read when no beat runs; while one runs on its own
+// thread, and for a unit the simulation no longer holds, the copy read before (none: type LUA_TNIL). The same copy
+// serves the rest of the sync (the panels ask every frame).
+const UserUnit::StatCopy& StatOf(lua_State* L, const UserUnit* u, const std::string& name) {
+  UserUnit::StatCopy& copy = u->statCopies[name];
+  UserState* user = UserState::From(L);
+  const bool beat = user->config().beatRunning && user->config().beatRunning();
+  if (beat || copy.sync == user->syncCount) return copy;
+  Sim* sim = TheSim(L);
+  Entity* e = sim && !u->gone ? sim->FindEntityById(u->view.id) : nullptr;
+  if (!e || e->kind != Entity::Kind::Unit || e->destroyQueued || !e->HasLuaObject()) return copy;
+  lua_State* S = sim->L();
+  const int top = lua_gettop(S);
+  PushObjectValue(S, e, ("stat:" + name).c_str());
+  copy.type = lua_type(S, -1) == LUA_TNUMBER ? LUA_TNUMBER : lua_type(S, -1) == LUA_TSTRING ? LUA_TSTRING : LUA_TNIL;
+  copy.number = copy.type == LUA_TNUMBER ? lua_tonumber(S, -1) : 0;
+  copy.text = copy.type == LUA_TSTRING ? lua_tostring(S, -1) : "";
+  lua_settop(S, top);
+  copy.sync = user->syncCount;
+  return copy;
+}
+// unit:GetStat(name [, default]) (FA exe 0x8c3160, READ 2026-10-20): a statistic of the unit, as its scripts in the
+// simulation keep it (Unit:UpdateStat, SetStat). The original's user unit reads a statistics tree it holds by a
+// shared pointer (from the beat's sync, its new units' entries of 0x1c bytes at 0x894a1b: the UserUnit constructor
+// copies the entry's +0x10 / +0x14 into +0x188 / +0x18c, 0x8bf556; IUnit_UserUnit::GetStat 0x8bf080.. ->
+// Stats_StatItem::GetItem 0x40c200, under the tree's lock). INFERRED that the tree is the simulation unit's own (the
+// simulation's side of the entry is not read; the lock fits two threads, and FAF's scripts set the statistics in
+// the simulation for the interface to read), so the panels see what the simulation set last: FAF's unit view shows
+// HitpointsRegeneration, which Unit.lua's OnCreate sets to the
+// blueprint's Defense.RegenRate and SetRegen to what veterancy or an aura makes of it; VetLevel, VetExperience,
+// ReclaimedMass the same way. (Until 2026-10-20 this gave the default for every name: "+0/s" for every unit, Chris's
+// playthrough of 2026-10-19.) The answer: {Value = v} (STAT_GetLuaTable 0x41b390 fills more, by the item's own slot 1,
+// and `Children`; the scripts read Value). A name the simulation keeps nothing under: {Value = default}, 0 without
+// one, as before. NOT as the original: without a default it finds no item and gives nil (0x8bf080: GetItem(name,
+// false), 0x8c3403); with a number it makes the item (0x8bf0a0: GetItem(name, true), the default not used) in the
+// tree it shares with the simulation, which the interface here does not write.
+int l_GetStatNow(lua_State* L) {
+  const UserUnit* u = CheckUnit(L, 1);
+  const UserUnit::StatCopy& s = StatOf(L, u, luaL_checkstring(L, 2));
+  const bool hasDefault = lua_gettop(L) >= 3 && !lua_isnil(L, 3);
+  lua_newtable(L);
+  lua_pushstring(L, "Value");
+  if (s.type == LUA_TNUMBER) lua_pushnumber(L, s.number);
+  else if (s.type == LUA_TSTRING) lua_pushstring(L, s.text.c_str());
+  else if (hasDefault) lua_pushvalue(L, 3);
+  else lua_pushnumber(L, 0);
+  lua_rawset(L, -3);
+  return 1;
+}
+
 // GetRolloverInfo() (FA exe 0x842920; a unit's table 0x8421f0): what the mouse is over in the
 // world, nil for nothing. A unit: blueprintId, health, maxHealth, kills, the economy and silo
 // numbers, fuelRatio, shieldRatio, workProgress, userUnit, entityId (a string), armyIndex (from
@@ -2798,10 +2867,14 @@ int l_GetScriptBitNow(lua_State* L) {
 // (gamemain.OnQueueChanged(queue), which the original calls by name, FA exe 0x836270);
 // ClearCurrentFactoryForQueueDisplay() ends that. DecreaseBuildCountInQueue(index, count) and
 // IncreaseBuildCountInQueue(index, count) change an entry (counted from 1).
+// Any builder's, a factory's or a commander's alike (READ, the queue's making 0x835df0): the unit's own command queue
+// (its slot 0x18, +0x3c8; not the factory's rally queue, +0x3cc), its BuildFactory, BuildMobile and Upgrade orders
+// (0x8b4140: 7, 8, 0x1b) that name a blueprint; and only for a unit whose blueprint is in SHOWQUEUE (0x835e55: no
+// queue at all otherwise; every commander, engineer and factory of the game has it).
 
 void BuildQueue(lua_State* L, const UserUnit* factory, std::vector<CommandView>* out) {
   UnitStateView s;
-  if (!StateOf(L, factory, &s)) return;
+  if (!factory || !InCategory(L, factory, "SHOWQUEUE") || !StateOf(L, factory, &s)) return;
   for (const CommandView& c : s.queue)
     if (c.type == static_cast<int>(CommandType::BuildFactory) || c.type == static_cast<int>(CommandType::BuildMobile) ||
         c.type == static_cast<int>(CommandType::Upgrade))
@@ -2809,8 +2882,8 @@ void BuildQueue(lua_State* L, const UserUnit* factory, std::vector<CommandView>*
 }
 // The queue as the panel shows it: orders for the same thing that follow one another are ONE
 // entry with their counts added up (two engineers, a tank, two engineers: three entries of 2, 1
-// and 2), as players know it from the original. (INFERRED where the original adds them up: in
-// what it hands the script, as here, or by putting a second order into the first.)
+// and 2), as the original makes its list (0x835f5a..0x835fe3, READ: an order whose blueprint id is the last entry's
+// adds its count, 0x8b4220, to it and its id to the entry's ids; else a new entry), whatever the orders' types.
 struct QueueStack {
   std::string blueprint;
   int count = 0;
@@ -2819,7 +2892,7 @@ struct QueueStack {
 std::vector<QueueStack> StacksOf(const std::vector<CommandView>& queue) {
   std::vector<QueueStack> stacks;
   for (const CommandView& c : queue) {
-    if (stacks.empty() || stacks.back().blueprint != c.blueprint || c.type != stacks.back().orders.back().type) {
+    if (stacks.empty() || stacks.back().blueprint != c.blueprint) {
       stacks.emplace_back();
       stacks.back().blueprint = c.blueprint;
     }
@@ -2847,6 +2920,7 @@ std::string QueueKey(const std::vector<CommandView>& queue) {
   for (const QueueStack& stack : StacksOf(queue)) key += stack.blueprint + "*" + std::to_string(stack.count) + ",";
   return key;
 }
+// (An empty queue is nil, 0x836536 READ; OnQueueChanged gets a table, empty too, 0x836080.)
 int l_SetCurrentFactoryForQueueDisplay(lua_State* L) {
   UnitStore& store = Store(L);
   UserUnit* u = ToUnit(L, 1);
@@ -2854,7 +2928,8 @@ int l_SetCurrentFactoryForQueueDisplay(lua_State* L) {
   std::vector<CommandView> queue;
   BuildQueue(L, u, &queue);
   store.queueKey = QueueKey(queue);
-  PushBuildQueue(L, queue);
+  if (queue.empty()) lua_pushnil(L);
+  else PushBuildQueue(L, queue);
   return 1;
 }
 int l_ClearCurrentFactoryForQueueDisplay(lua_State* L) {
@@ -2918,14 +2993,17 @@ int l_DeleteCommand(lua_State* L) {
   return 0;
 }
 
-// After a beat: tell the game script when the shown factory's queue is not what it was.
+// After a beat: tell the game script when the shown factory's queue is not what it was (the UI manager's beat,
+// CUIManager::DoBeat 0x84d310 -> 0x836180, READ: the queue made again and compared with the last). When the unit is
+// gone and its last queue was not empty, the script hears OnQueueChanged(nil) once (0x8362ec).
 void ReportQueueChange(lua_State* L) {
   UnitStore& store = Store(L);
   if (store.queueFactory == 0xffffffffu || !UserState::From(L)->gameInterface) return;
   auto it = store.units.find(store.queueFactory);
-  if (it == store.units.end()) return;
+  const bool gone = it == store.units.end();
+  if (gone && store.queueKey.empty()) return;
   std::vector<CommandView> queue;
-  BuildQueue(L, it->second.get(), &queue);
+  if (!gone) BuildQueue(L, it->second.get(), &queue);
   std::string key = QueueKey(queue);
   if (key == store.queueKey) return;
   store.queueKey = key;
@@ -2937,7 +3015,8 @@ void ReportQueueChange(lua_State* L) {
     lua_pushstring(L, "OnQueueChanged");
     lua_gettable(L, -2);
     if (lua_isfunction(L, -1)) {
-      PushBuildQueue(L, queue);
+      if (gone) lua_pushnil(L);
+      else PushBuildQueue(L, queue);
       if (lua_pcall(L, 1, 0, top + 1) != 0)
         Logf(LogLevel::Warning, "Error running '/lua/ui/game/gamemain.lua:OnQueueChanged': %s", lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
     }
@@ -4899,6 +4978,7 @@ void RegisterUserUnitBindings(lua_State* L) {
   SetMethod(L, cls, "GetBuildRate", l_GetBuildRateNow);
   SetMethod(L, cls, "GetEconData", l_GetEconDataNow);
   SetMethod(L, cls, "GetMissileInfo", l_GetMissileInfoNow);
+  SetMethod(L, cls, "GetStat", l_GetStatNow);
   SetGlobal(L, "GetFireState", l_GetFireStateNow);
   SetGlobal(L, "GetScriptBit", l_GetScriptBitNow);
   SetGlobal(L, "GetIsPaused", l_AnySwitch<&UnitStateView::paused>);

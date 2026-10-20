@@ -118,6 +118,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       return 1;  // every frame covers the whole window
     case WM_ACTIVATE:  // in front: the mouse stays inside a window that fills the screen (if the player locks it); behind: it is free
       if (w->fullScreen) w->KeepMouseInside(LOWORD(wp) != WA_INACTIVE && w->lockMouse);
+      if (w->callbacks.focus) w->callbacks.focus(LOWORD(wp) != WA_INACTIVE);  // (the keys held: input.h WindowFocus)
       break;
     case WM_SETCURSOR:
       if (LOWORD(lp) == HTCLIENT) {  // inside the window: the interface's pointer

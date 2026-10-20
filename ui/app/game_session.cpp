@@ -373,6 +373,7 @@ struct GameSession::Picture : WorldSource {
       o.color = g.color, o.glow = g.glow;
       o.outerNear = g.outer[0], o.outerFar = g.outer[1];
       o.innerNear = g.inner[0], o.innerFar = g.inner[1];
+      o.fill = g.fill;
       for (const WorldRangeRing& r : g.rings) {
         render::WorldPicture::RangeRing ring;
         for (int i = 0; i < 3; ++i) ring.centre[i] = r.centre[i];
@@ -459,6 +460,7 @@ struct GameSession::Picture : WorldSource {
       // (render e8a4d56: wrecks and craters that glow and cool; dust, spray and contrails; explosions as lit volumes
       // and the nuke's set piece, which without the volume art still throws the blasts' light and the nuke's flash)
       w->hotMetal = w->movementDust = w->volumeExplosions = looks.battleEffects;
+      w->realExhausts = looks.battleEffects;  // (engines' exhausts as lit plumes, render 3e6ce2e: Chris's item 8)
       w->remasteredBuild = looks.battleEffects;  // (render 6b8109e: the build effects remade; with the remastered effects and the modern look)
       w->energyShields = looks.energyShields;
       // (the Photographic Look, render ef7e1bb: on change only; Named sets the grade, the eye and lens keep theirs)
@@ -479,17 +481,12 @@ struct GameSession::Picture : WorldSource {
     lookApplied = true;
     if (session && session->sim_) picture.SetAllies(session->allies_);  // (as of the last beat: SetScene may come while one runs)
   }
-  // The minimap's ground is drawn without the deposits' icons whatever its switch says: the renderer draws them into
-  // the ground it keeps between calls (anew only for another size or light), which therefore cannot follow the
-  // switch (FAF's minimap.lua sets it a frame after the minimap's first drawing). Without them is the original's
-  // default (minimap.lua: off unless the profile's MiniMap_resource_icons). With them on: the renderer's part, asked
-  // for (the deposits' icons laid on the minimap at every call, under the units' icons, when this says so).
-  const uint32_t* DrawMinimap(int width, int height, bool /*resourceIcons*/) override {
-    render::World* w = picture.world();
-    const bool main = w && w->depositIcons;  // (the main picture's, put back after)
-    if (w) w->depositIcons = false;
-    const std::vector<uint32_t>& pixels = picture.DrawMinimap(width, height);
-    if (w) w->depositIcons = main;
+  // The minimap's picture with the deposits' icons when the minimap view's switch (EnableResourceRendering) says so:
+  // the renderer lays them per call under the units' icons, as the original's RenderResources 0x862a80 (render
+  // a8ac1f0, ui REQUESTS 32); off is the original's default (FAF's minimap.lua: off unless the profile's
+  // MiniMap_resource_icons).
+  const uint32_t* DrawMinimap(int width, int height, bool resourceIcons) override {
+    const std::vector<uint32_t>& pixels = picture.DrawMinimap(width, height, resourceIcons);
     return pixels.size() == static_cast<size_t>(width) * static_cast<size_t>(height) ? pixels.data() : nullptr;
   }
   bool MapSize(float* width, float* height) override {

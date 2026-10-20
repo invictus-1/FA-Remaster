@@ -59,10 +59,18 @@ bool KeyEvent(lua_State* L, UiManager& ui, UiEvent e);
 void KeyPress(lua_State* L, UiManager& ui, int charCode, bool shift, bool ctrl, bool alt);
 // The event as scripts get it, pushed on the stack (FA exe 0x795bd0).
 void PushEventTable(lua_State* L, Control* c, const UiEvent& e);
+// The host's window came to the front or left it. The original's IsKeyDown (MAUI_KeyIsDown 0x79cb70, READ) says no
+// key is held while its window is not the foreground one (WindowIsForeground 0x79cb10: GetForegroundWindow against
+// the heads' windows) and else asks Windows (GetKeyState, 0x79cba8), so a key let go in another window is not held
+// when the player comes back. Ours keeps the states from the key events, and a window in the back gets no key up:
+// leaving the front, every key held is let go (KeyMapAllKeysUp), and until it is back IsKeyDown says no. INFERRED: a
+// key still held when the window comes back counts from its next key down (its repeats), where the original's
+// GetKeyState would have it at once.
+void WindowFocus(lua_State* L, UiManager& ui, bool inFront);
 
 // The host's own debugging functions for tests (not engine functions of the original):
 // moho64ui_MouseMove(x, y), moho64ui_MouseButton(button, pressed, x, y), moho64ui_ControlAt(x, y),
-// moho64ui_Key(code [, "Shift Ctrl Alt"]), moho64ui_Type(text).
+// moho64ui_Key(code [, "Shift Ctrl Alt"]), moho64ui_Type(text), moho64ui_WindowFocus(inFront).
 void RegisterInputBindings(lua_State* L);
 
 }  // namespace moho::ui

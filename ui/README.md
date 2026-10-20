@@ -468,10 +468,19 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   names (`/lua/keymap/keyNames.lua`) and the default bindings are loaded as the original loads
   them (184 keys with the stock files); `IN_AddKeyMapTable`, `IN_RemoveKeyMapTable`,
   `IN_ClearKeyMap`, `IsKeyDown` and the two key code conversions are built with the original's
-  tables. A bound key runs its action as a console command before the controls hear of the key;
+  tables (`IsKeyDown` says no key is held while the window is not in front, and every key held is let go when it
+  leaves the front, so a key let go in another window does not stay held: `moho64ui_WindowFocus(false)` in tests,
+  ui/tests/playthrough_build.lua). A bound key runs its action as a console command before the controls hear of the key;
   nothing is bound while a control has the keyboard focus. The console commands the bindings and
   the game's options use are built (`UI_Lua`, game speed, selection, camera, graphics switches);
-  one the original knows that is not built here is logged once as not built.
+  one the original knows that is not built here is logged once as not built. Among them the debug
+  key map's Alt-F2, `PopupCreateUnitMenu` (FA exe 0x7b5a40): FAF's "Debug Spawn and Army Focus"
+  window (`/lua/ui/dialogs/createunit.lua` CreateDialog at the mouse; no cheat test in the command,
+  as in the original). A unit picked there is placed in the build mode with nothing selected; that
+  building order goes out without units, as the original's build dragger sends it (0x823220), and
+  FAF's commandmode.lua spawns the unit for the army chosen in the window (`SimCallback`
+  CheatSpawnUnit, which the simulation's script carries out only with cheats on). Test:
+  `ui/tests/playthrough_spawn.lua` (session_ai_cheats.lua; `-- /spawncase off` in session_ai.lua).
 - The in-game interface comes up on a running game. As in the original, a launched game gets a
   script state of its own (`/lua/SessionInit.lua`); the rules go into it through the engine's own
   functions (5,334 blueprints, the categories); the game script makes its world interface
@@ -557,7 +566,8 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   it builds, guards and who built it, fire state, toggles, pause, shield and fuel, its economy;
   the order buttons follow what a unit can do right now; what the army may not build is taken
   off the construction panel; a factory's queue is shown and changed
-  (`SetCurrentFactoryForQueueDisplay`, `gamemain.OnQueueChanged`).
+  (`SetCurrentFactoryForQueueDisplay`, `gamemain.OnQueueChanged`), and so is any builder's, a commander's or an
+  engineer's, as the original's (only for a unit in SHOWQUEUE; ui/tests/playthrough_build.lua).
 - The world is on screen (Windows): the renderer track's code is built into the host
   (`render/world_picture.h`) and the main world view shows its picture under the controls, as
   its camera sees it (`maui/world_source.h`, `app/game_session.*`). World to screen and back,
@@ -601,7 +611,9 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   the world: the selected units (a ring under each), the order lines while Shift is held (the original's command graph, read from the exe: the orders of every unit whose orders the interface holds, the player's and his allies', not only the selection's; one node per order and a start node at the middle of the units an order begins with, legs shared and as wide as `CalculateWaypointLineWidth` of their units, curved through each waypoint, a patrol's leg back to its first point, highlighted for the unit under the mouse, selected or normal, in the textures, colours and marks of the game's own `commandgraphparams.lua` and with `commandwaypoint.lua`'s console variables; `WorldPicture::SetOrderLines` draws them; the test function `moho64ui_OrderGraph()` reports them, ui/tests/orderlines.lua; with Shift held the waypoint nearest the mouse within its mark is highlighted with the legs leading to it (the scripts' `HasHighlightCommand` and the patrol cursor's `ShowConvertToPatrolCursor` answer by it), and a left press drags it: let go, the order takes the new place for all the units that share it (the command stream's SetCommandTarget), an order on a unit goes onto the nearest unit of that army, a building's order only where the building can stand (ui/tests/waypoints.lua), and the right button let go over it with Shift and Ctrl takes that order out of the queues of all the units that carry it, selected or not (the command stream's RemoveCommandFromQueue; gone from `GetCommandQueue` at once; ui/tests/waypoint_delete.lua); over a hovered waypoint the original's tips through the script's `StartCursorText` and what the clicks there do: over an attack none of the selection carries a double click takes the first click's attack out again and sends one coordinated with it (the command stream's coordinated id; "Coordinated Attack!"), over a move of the selection's a click that would move turns its moves from there on into a patrol instead (the stream's SetCommandType, at once in `GetCommandQueue`; "Patrol Initiated to location!"; ui/tests/waypoint_clicks.lua); and over each node with time left the original's white ETA text, `ETA: 1.05` in minutes and seconds: the walk there at the slowest unit's speed and a building's work by `GetConstructEconomyModel`, hidden on a normal node beyond `ui_MaxTextLOD` and with the option "Show Waypoint ETAs" off; `moho64ui_OrderEtas()`, ui/tests/orderetas.lua), a blue outline round each queued building's site, the outline of the ground a building being placed takes (green or red), and the ghost of
   a building being placed where the mouse points, green where the engine says it can stand
   (`BuildSiteOf`) and red where not; a build order goes to that snapped site and is not sent
-  where the building cannot stand. The order goes out when the left button is let go: let go
+  where the building cannot stand. An extractor's place jumps onto the deposit near the mouse, as the original's
+  (`ui_ExtractSnapTolerance` map units, FAF's 4, and 20 to 90 pixels; mass, and hydrocarbon without a template;
+  `GetMouseWorldPos` says the snapped place too; FAF's `GetDepositsAroundPoint`; ui/tests/playthrough_build.lua). The order goes out when the left button is let go: let go
   elsewhere than pressed, a ROW of the building is ordered, one on every free site between the
   two places (shown as ghosts while the button is held; one building's room apart, the larger of
   footprint and skirt: the original's spacing is not read, INFERRED). Buildings the selected
@@ -824,7 +836,12 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
 - `GetRolloverInfo` tells the game's unit panel what the mouse is over in the world (a unit's
   blueprint, health, economy, what it works on, its army and colour; the fields as the original
   writes them), from the picture last drawn. `GetOptions` gives the profile's options, or one by
-  its key as FAF's scripts ask.
+  its key as FAF's scripts ask. `UserUnit:GetStat(name, default)` gives the statistic the unit's
+  scripts keep in the simulation (FA exe 0x8c3160: the user unit reads a statistics tree from the
+  beat's sync, inferred to be the simulation unit's own): the unit view's health regeneration (`HitpointsRegeneration`, the blueprint's
+  RegenRate or what veterancy made of it), the veterancy stars (`VetLevel`), the reclaim totals; a
+  name the simulation keeps nothing under gives `{Value = default}` (the original: nil without a
+  default; it makes the item with one, in the tree it shares with the simulation).
 - Selecting by category and going to units, as read from the original: `UISelectionByCategory`
   (FA exe 0x8662b0: the keys for "all engineers", "nearest idle engineer", "all of this kind on
   screen": the player's selectable units of a category expression, optionally only those in

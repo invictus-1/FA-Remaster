@@ -23,6 +23,7 @@ class Window {  // (the host's one window)
     std::function<void(const UiEvent&)> mouseWheel;
     std::function<bool(const UiEvent&)> key;  // a key down, key up or character; true when it was handled
     std::function<void(int width, int height)> resized;
+    std::function<void(bool inFront)> focus;  // the window came to the front (true) or left it
   };
 
   ~Window();

@@ -265,7 +265,8 @@ int l_ClearKeyMap(lua_State* L) {
 
 // IsKeyDown(keyCode) (FA exe 0x79d820, 0x79cb70): the code of a key event, or the name of one of
 // the original's key codes. Never true while a control holds the keyboard focus in the blocking
-// way. The original asks Windows for the key's state; we keep the states from the key events.
+// way. The original asks Windows for the key's state; we keep the states from the key events, and let them all go
+// when the window leaves the front (input.h WindowFocus).
 int l_IsKeyDown(lua_State* L) {
   int code = lua_type(L, 1) == LUA_TSTRING ? MauiCodeByName(lua_tostring(L, 1)) : static_cast<int>(luaL_checknumber(L, 1));
   lua_pushboolean(L, KeyIsDown(L, code));
@@ -570,6 +571,11 @@ void KeyMapKeyUp(lua_State* L, int vk) {
   if (Map(L).down.erase(vk) && vk == KeycodeMauiToMSW(306)) CommandGraphShown(L, false);
 }
 
+void KeyMapAllKeysUp(lua_State* L) {
+  const std::vector<int> held(Map(L).down.begin(), Map(L).down.end());
+  for (int vk : held) KeyMapKeyUp(L, vk);
+}
+
 // The life bars over units. In the original UI_RenderUnitBars is a console variable: the game's
 // script sets it true when a game's interface comes up and false for a cinematic, and the key
 // bound to "toggle_lifebars" (Alt-L) runs it without a value, which turns it over. Here the
@@ -854,6 +860,9 @@ ConVarNow ConVarOf(lua_State* L, const std::string& key) {
   else if (key == "REN_BLOOM") set("ren_Bloom", 'b', looks.bloom);
   else if (key == "UI_SELECTTOLERANCE") set("ui_SelectTolerance", 'f', looks.selectTolerance);
   else if (key == "UI_COMMANDCLICKSCALE") set("ui_CommandClickScale", 'f', looks.commandClickScale);
+  else if (key == "UI_EXTRACTSNAPTOLERANCE") set("ui_ExtractSnapTolerance", 'f', looks.extractSnapTolerance);
+  else if (key == "UI_MINEXTRACTSNAPPIXELS") set("ui_MinExtractSnapPixels", 'f', looks.extractSnapMinPixels);
+  else if (key == "UI_MAXEXTRACTSNAPPIXELS") set("ui_MaxExtractSnapPixels", 'f', looks.extractSnapMaxPixels);
   else if (key == "REN_BLOOMBLURKERNELSCALE") set("ren_BloomBlurKernelScale", 'f', looks.bloomIntensity);
   else if (key == "UI_SELECTANYTHING") set("UI_SelectAnything", 'b', looks.selectAnything);
   else if (key == "UI_DEBUGALTCLICK") set("ui_DebugAltClick", 'b', looks.debugAltClick);
@@ -1092,6 +1101,13 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
       if (!value.empty()) looks.commandClickScale = static_cast<float>(std::atof(value.c_str()));
       return;
     }
+    if (key == "UI_EXTRACTSNAPTOLERANCE" || key == "UI_MINEXTRACTSNAPPIXELS" || key == "UI_MAXEXTRACTSNAPPIXELS") {
+      float& v = key == "UI_EXTRACTSNAPTOLERANCE"   ? looks.extractSnapTolerance
+                 : key == "UI_MINEXTRACTSNAPPIXELS" ? looks.extractSnapMinPixels
+                                                    : looks.extractSnapMaxPixels;
+      if (!value.empty()) v = static_cast<float>(std::atof(value.c_str()));
+      return;
+    }
     if (key == "REN_BLOOMBLURKERNELSCALE") {  // the game's Bloom Intensity / 10
       if (!value.empty()) looks.bloomIntensity = std::max(0.0f, static_cast<float>(std::atof(value.c_str())));
       return;
@@ -1260,6 +1276,34 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
     lua_settop(L, top);
     return;
   }
+  // PopupCreateUnitMenu (FA exe 0x7b5a40, READ 2026-10-20): the debug key map's Alt-F2 ("debug_create_unit"), FAF's
+  // "Debug Spawn and Army Focus" window. No test of cheats here or around it: its registration (0xbdfa80) and its
+  // ConCommand's Execute (0x41e5f0) only call it; the spawning is the simulation's script's to allow (FAF's
+  // CheatSpawnUnit asks CheatsEnabled()). Without a session the engine's "no session" line (0x7b5a6c); with one,
+  // import("/lua/ui/dialogs/createunit.lua").CreateDialog(x, y) in the session's user state, x and y the mouse's
+  // place on the screen (the session's +0x4cc and +0x4d0; FAF's CreateDialog takes none). A module that is not a
+  // table is the original's Lua error 'failed to load "/lua/ui/dialogs/createunit.lua" module' (0x7b5afb): logged
+  // here, as an error in the dialog's own script is.
+  if (Upper(name) == "POPUPCREATEUNITMENU") {
+    UserState* user = UserState::From(L);
+    if (!user->gameInterface) return ConsoleNoSession(L);
+    const int top = lua_gettop(L);
+    lua_pushcfunction(L, ScriptTraceback);
+    lua_getglobal(L, "import");
+    lua_pushstring(L, "/lua/ui/dialogs/createunit.lua");
+    if (lua_pcall(L, 1, 1, top + 1) != 0 || !lua_istable(L, -1)) {
+      if (lua_isstring(L, -1)) LogScriptError(lua_tostring(L, -1));
+      LogScriptError("failed to load \"/lua/ui/dialogs/createunit.lua\" module");
+    } else {
+      lua_pushstring(L, "CreateDialog");
+      lua_gettable(L, -2);
+      lua_pushnumber(L, user->ui().mouseX);
+      lua_pushnumber(L, user->ui().mouseY);
+      if (lua_pcall(L, 2, 0, top + 1) != 0) LogScriptError(lua_isstring(L, -1) ? lua_tostring(L, -1) : "(error object is not a string)");
+    }
+    lua_settop(L, top);
+    return;
+  }
   if (Upper(name) == "CON_ECHO") {  // (FA exe 0x41ee10: the words after it, a space between them)
     const std::vector<std::string> words = Words(rest);
     if (words.empty()) return;
@@ -1318,6 +1362,7 @@ void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
 
 bool KeyIsDown(lua_State* L, int mauiCode) {
   UiManager& ui = UserState::From(L)->ui();
+  if (!ui.windowInFront) return false;  // (WindowIsForeground 0x79cb10 first)
   bool blocked = ui.focus && ui.focusBlocksKeyDown;
   return !blocked && mauiCode >= 0 && Map(L).down.count(KeycodeMauiToMSW(mauiCode)) != 0;
 }
