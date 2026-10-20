@@ -934,12 +934,13 @@ cbuffer CoverConstants : register(b1) {
   float4 coverA[10];  // per layer: blades, clumps, flowers, dry stalks
   float4 coverB[10];  // per layer: ferns, dry cells' share, weeds' share, 1 where near trees counts
   float4 nearTrees;   // near a tree: blades, clumps, flowers, stalks times these
-  float4 nearFern;    // x: and this many more ferns; y: 1 = the mud mask is read [ground mud]
+  float4 nearFern;    // x: and this many more ferns; y: 1 = the mud mask is read [ground mud]; z: 1 = the cover mask is read [cover]
 };
 Texture2D maskLow : register(t2);
 Texture2D maskHigh : register(t3);
 Texture2D<float> trees : register(t4);
 Texture2D<float> mudMask : register(t5);  // [ground mud] the map's painted mud (Terrain::mudMask)
+Texture2D<float> coverMask : register(t6);  // [cover] where the map's cover does not grow (Terrain::CoverMask)
 RWTexture2D<float4> outA : register(u0);
 RWTexture2D<float4> outB : register(u1);
 [numthreads(8, 8, 1)] void CS(uint3 id : SV_DispatchThreadID) {
@@ -961,6 +962,7 @@ RWTexture2D<float4> outB : register(u1);
   LAYER(7, high.z);
   LAYER(8, high.w);
   float near = trees.SampleLevel(samplerLinearClamp, uv, 0) * b.w;
+  float meadow = a.x;  // [cover] (the blades as the layers give them, before the trees change them: CoverBare's trails)
   a *= lerp(1, nearTrees, near);
   b.x += nearFern.x * near;
   [branch] if (nearFern.y > 0.5) {  // [ground mud] nothing grows on the mask's mud
@@ -969,9 +971,18 @@ RWTexture2D<float4> outB : register(u1);
     float bare = 1 - smoothstep(0.1, 0.6, mudMask.SampleLevel(samplerLinearClamp, uv, max(log2(float(mw) / float(w)), 0)));
     a *= bare;
     b.x *= bare;
+    meadow *= bare;  // [cover]
+  }
+  [branch] if (nearFern.z > 0.5) {  // [cover] none where the map's cover mask says, by how much
+    uint cw, ch, cl;
+    coverMask.GetDimensions(0, cw, ch, cl);
+    float keep = 1 - saturate(coverMask.SampleLevel(samplerLinearClamp, uv, max(log2(float(cw) / float(w)), 0)));
+    a *= keep;
+    b.x *= keep;
+    meadow *= keep;
   }
   outA[id.xy] = saturate(a);
-  outB[id.xy] = float4(saturate(b.xyz), 0);
+  outB[id.xy] = float4(saturate(b.xyz), saturate(meadow));  // ([cover] alpha: the meadow's blades)
 }
 )hlsl";
 
@@ -1384,6 +1395,8 @@ void Terrain::Remaster(const MapData& m, std::vector<std::string>* arh) {
   }
   // [ground mud] the map's painted mud: its mask's path (read the first time the mask's mud is drawn)
   if (const std::string mask = layers["mud_mask"].StringOr(std::string()); !mask.empty()) mudMaskFile_ = folder + mask;
+  // [cover] where the map's ground cover does not grow: its mask's path (read the first time the cover is drawn)
+  if (const std::string mask = layers["cover_mask"].StringOr(std::string()); !mask.empty()) coverMaskFile_ = folder + mask;
   // [rain ground] the layers' wet twins: "weather": {"rain": {"materials": {dry: wet}, "soak": {dry: n}}}, by the material
   // each layer is drawn in (a season's own, where it has one); a twin at the layers' tier only (the layers' third maps and
   // the twins' albedo and third maps are read as one set: a twin of another size would bring the whole set down to it)
@@ -1514,10 +1527,12 @@ bool Terrain::CoverDensity(gfx::Texture trees, gfx::Texture* a, gfx::Texture* b)
         return false;
       }
     }
+    // ([cover] a texel a world unit, at most 2048 a side: a trail a few units wide through the meadow keeps its shape)
+    const float perUnit = std::min(1.0f, 2048.0f / static_cast<float>(std::max(map_->width, map_->height)));
     gfx::TargetDesc td;
     td.storage = true;
-    td.width = std::max(map_->width / 2, 1);
-    td.height = std::max(map_->height / 2, 1);
+    td.width = std::max(static_cast<int>(static_cast<float>(map_->width) * perUnit), 1);
+    td.height = std::max(static_cast<int>(static_cast<float>(map_->height) * perUnit), 1);
     td.format = gfx::Format::RGBA8;
     coverA_tex_ = device_->CreateTarget(td);
     coverB_tex_ = device_->CreateTarget(td);
@@ -1531,6 +1546,8 @@ bool Terrain::CoverDensity(gfx::Texture trees, gfx::Texture* a, gfx::Texture* b)
     std::copy(coverNear_, coverNear_ + 4, c.nearTrees);
     c.nearFern[0] = coverFern_;
     c.nearFern[1] = withMud ? 1.0f : 0.0f;  // [ground mud]
+    const gfx::Texture coverMask = CoverMask();  // [cover]
+    c.nearFern[2] = coverMask ? 1.0f : 0.0f;
     coverMud_ = withMud;
     device_->SetPipeline(coverPass_);
     device_->SetConstants(1, &c, sizeof c);
@@ -1538,6 +1555,7 @@ bool Terrain::CoverDensity(gfx::Texture trees, gfx::Texture* a, gfx::Texture* b)
     device_->SetTexture(3, maskHigh_);
     device_->SetTexture(4, trees ? trees : textures_->Black());
     if (withMud) device_->SetTexture(5, mudMask_);  // [ground mud]
+    if (coverMask) device_->SetTexture(6, coverMask);  // [cover]
     device_->SetStorage(0, coverA_tex_);
     device_->SetStorage(1, coverB_tex_);
     device_->Dispatch(static_cast<uint32_t>((td.width + 7) / 8), static_cast<uint32_t>((td.height + 7) / 8), 1);
@@ -1545,6 +1563,7 @@ bool Terrain::CoverDensity(gfx::Texture trees, gfx::Texture* a, gfx::Texture* b)
     device_->SetStorage(1, {});
     for (int i = 2; i < 5; ++i) device_->SetTexture(i, {});
     if (withMud) device_->SetTexture(5, {});  // [ground mud]
+    if (coverMask) device_->SetTexture(6, {});  // [cover]
   }
   *a = coverA_tex_;
   *b = coverB_tex_;
@@ -1655,12 +1674,16 @@ bool Terrain::Load(const MapData* map, std::string* error) {
     mudMaskFile_.clear();
     mudMask_ = {};
     mudMaskTried_ = false;
+    coverMaskFile_.clear();  // [cover]
+    coverMask_ = {};
+    coverMaskTried_ = false;
     for (auto& files : wetFiles_)
       for (std::string& f : files) f.clear();
     if (wetNormals_) device_->Destroy(wetNormals_);
     wetNormals_ = {};
     wetTried_ = wetAny_ = false;
     Remaster(*map, &paths);  // (the visuals track's remastered ground, where it lists this map)
+    if (!coverMaskGiven.empty()) coverMaskFile_ = coverMaskGiven;  // [cover] (the viewer's --cover-mask: tests)
     arhPaths_ = paths;  // [rain ground]
     std::vector<bool> present;
     materials_ = textures_->Layers(paths, &present);
@@ -1953,6 +1976,18 @@ bool Terrain::MudMaskReady() {
     if (mudBlocks_.empty()) printf("render: the map's painted mud: %s (where it lies not known: all the ground drawn with it)\n", mudMaskFile_.c_str());
   }
   return static_cast<bool>(mudMask_);
+}
+
+// [cover] The map's cover mask, read the first time it is asked for (none: the map has none, or it cannot be read).
+gfx::Texture Terrain::CoverMask() {
+  if (coverMaskFile_.empty()) return {};
+  if (!coverMaskTried_) {
+    coverMaskTried_ = true;
+    coverMask_ = textures_->Get(coverMaskFile_);
+    if (coverMask_) printf("render: the ground cover's mask: %s\n", coverMaskFile_.c_str());
+    else fprintf(stderr, "render: the ground cover's mask cannot be read (%s): the cover as its table says\n", coverMaskFile_.c_str());
+  }
+  return coverMask_;
 }
 
 // [ground mud] May a patch of the map (x, z its corner, `size` its side, map units) hold the mask's mud? (true where it is

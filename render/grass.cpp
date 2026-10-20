@@ -12,6 +12,32 @@
 namespace render {
 namespace {
 
+// [cover] What the blades' and the plants' shaders share (after their constants): where the ground is bare, how much of a
+// tuft or a plant is there as the cover comes in, and the meadow's colour for a blade.
+const char kCoverShared[] = R"hlsl(
+Texture2D<float> bareGround : register(t12);  // over the map: 1 where it is bare (GroundCover::bare, cover_bare.h)
+// How much of a tuft or a plant is there (its height's share) by how much of the cover is (`shown`, 0..1) and a number of
+// its own (0..1): nothing while `shown` is under its number, then growing to its full height as `shown` passes it. So the
+// cover comes in one tuft and one plant at a time, each growing out of the ground: no sudden appearance.
+float CoverGrown(float shown, float own) { return saturate((shown * 1.25 - own) * 4); }
+// A blade's colour (linear) from the ground's under it: the ground's own where it is green or straw, but never the
+// brown of bare earth (a blade at a trail's edge, on a patch of soil, would be a brown stick): the red and blue held to
+// what a dry blade has, at the ground's brightness. Varied over the meadow in patches some units across (yellower,
+// bluer, paler, darker), as a real meadow is never one colour.
+float3 MeadowColour(float3 ground, float2 xz) {
+  const float3 luma = float3(0.2126, 0.7152, 0.0722);
+  float bright = dot(ground, luma);
+  float3 c = float3(min(ground.r, ground.g * 1.0), ground.g, min(ground.b, ground.g * 0.6));
+  c *= bright / max(dot(c, luma), 1e-4);
+  float hue = CloudNoise(float3(xz * 0.31, 7.7)), pale = CloudNoise(float3(xz * 0.93 + 3.1, 2.3));
+  c *= lerp(float3(1.08, 1.0, 0.80), float3(0.90, 1.0, 1.10), hue);
+  // (fresh blades a little lighter and richer than the ground's mean, which mixes in the soil between them: else they
+  // vanish into it)
+  c = max(lerp(dot(c, luma), c, 1.25), 0);
+  return c * (0.95 + 0.4 * pale);
+}
+)hlsl";
+
 // Fifteen corners a blade (three segments, the last a point): no vertex data; a blade's number gives its cell.
 const char kShader[] = R"hlsl(
 cbuffer Grass : register(b1) {
@@ -21,6 +47,8 @@ cbuffer Grass : register(b1) {
   float4 mapInfo;  // xy: the map's width and height; z: world units a pixel covers at distance 1; w: the water's level
   float4 table;    // x: 1 where the map's cover table says how many blades grow (densityA's red), else by how grassy;
                    // [tarmac] y: 1 = none where a remastered pad lies (padCover)
+  float4 shown;    // [cover] x: how much of the cover is there (GroundCover::Prepare: the camera's distance, since it came
+                   // in); y: 1 = the bare ground's picture is read (bareGround)
 #ifdef PLANTS
   float4 plantsK[2];  // [plants] (plants.h) PlantLife::Constants
 #endif
@@ -60,7 +88,7 @@ struct VOut {
   float4 position : SV_Position;
   float3 world : TEXCOORD0;
   float3 colour : TEXCOORD1;  // linear
-  float3 normal : TEXCOORD2;
+  float3 normal : TEXCOORD2;  // ([cover] folded along its middle: each edge's turned a little to its own side)
   float up : TEXCOORD3;       // 0 at the foot, 1 at the tip
   float shadow : TEXCOORD4;
   float through : TEXCOORD5;  // the sun's light through the blade (World::leafLight; lighting.h, LeafThrough)
@@ -102,10 +130,24 @@ VOut VS(uint id : SV_VertexID) {
   float half = area.z * area.w * 0.5;
   float thin = saturate((1 - length(xz - (area.xy + half)) / half) * 3);
   const float grassy = table.x > 0.5 ? densityA.SampleLevel(samplerLinearClamp, xz / mapInfo.xy, 0).r : c.a;
-  if (GrassRand(GrassHash(h + 2)) > grassy * thin) return o;
+  // [cover] in tufts and gaps, not evenly strewn: the tufts gathered where a noise of the place (patches a unit or two
+  // across) is high, fewer between them, as many over all
+  float gathered = 0.3 + 1.4 * smoothstep(0.25, 0.75, CloudNoise(float3(xz * 0.7, 1.7)));
+  if (GrassRand(GrassHash(h + 2)) > grassy * thin * gathered) return o;
   // [tarmac] none where a remastered pad lies, by its coverage (its worn rim thinned)
   [branch] if (table.y > 0.5 && padCover.SampleLevel(samplerLinearClamp, (xz - area.xy) / (area.z * area.w), 0) > GrassRand(GrassHash(h + 12))) return o;
-  float height = blades.x * (0.55 + 0.45 * GrassRand(GrassHash(hb + 3))) * saturate(thin * 2.5);
+  // [cover] none where the ground is bare (a stream, a trail), by how bare; lower where it thins out
+  float bare = 0;
+  [branch] if (shown.y > 0.5) {
+    bare = bareGround.SampleLevel(samplerLinearClamp, xz / mapInfo.xy, 0);
+    if (bare > GrassRand(GrassHash(h + 13))) return o;
+  }
+  // [cover] as the cover comes in (the camera coming near, the map opened): this tuft growing when its turn comes
+  const float grown = CoverGrown(shown.x, GrassRand(GrassHash(h + 14)));
+  if (grown <= 0) return o;
+  // (its height: its own, and [cover] taller and shorter grass in patches some units across)
+  float height = blades.x * (0.7 + 0.3 * GrassRand(GrassHash(hb + 3))) * (0.55 + 0.45 * CloudNoise(float3(xz * 0.23, 4.1))) * saturate(thin * 2.5);
+  height *= grown * (1 - 0.5 * bare);
   height *= 1 - 0.9 * trampled.SampleLevel(samplerLinearClamp, (xz - area.xy) / (area.z * area.w), 0);  // (pressed flat)
   float turn = GrassRand(GrassHash(hb + 4)) * 6.2832;
   float2 face = float2(cos(turn), sin(turn)), across = float2(-face.y, face.x);
@@ -155,17 +197,23 @@ VOut VS(uint id : SV_VertexID) {
   o.position = mul(viewProj, float4(p, 1));
   o.world = p;
   o.up = v;
-  // its colour: the ground's under it, varied; a share of the blades drier toward the tip (late summer)
-  float3 base = ToLinear(c.rgb) * (0.8 + 0.4 * GrassRand(GrassHash(hb + 6)));
-  float dry = GrassRand(GrassHash(hb + 7)) < 0.22 ? 1 : 0;
-  o.colour = lerp(base * lerp(0.9, 1.15, v), ToLinear(float3(0.62, 0.55, 0.32)) * 0.75, dry * v * 0.85);
-  // lit as the ground under it, a little toward the blade's own face
+  // its colour: [cover] the meadow's from the ground's under it (MeadowColour: never bare earth's brown, varied in
+  // patches), each blade a little its own, lighter toward the tip; a share of the blades drier toward the tip (late
+  // summer), paler and yellower at about their own brightness, not a bright straw that stands out of the green
+  float3 base = MeadowColour(ToLinear(c.rgb), xz) * (0.85 + 0.3 * GrassRand(GrassHash(hb + 6)));
+  float dry = GrassRand(GrassHash(hb + 7)) < 0.14 ? 1 : 0;
+  float3 straw = float3(1.0, 0.86, 0.5) * (dot(base, float3(0.2126, 0.7152, 0.0722)) * 1.35 / 0.864);
+  o.colour = lerp(base * lerp(0.8, 1.35, v), straw, dry * v * 0.7);
+  // lit as the ground under it, a little toward the blade's own face, [cover] folded along its middle (each edge turned a
+  // little its own way: a blade is never flat, and so it shades across)
   float4 stored = groundNormals.SampleLevel(samplerLinearClamp, xz / mapInfo.xy, 0);
   float3 n;
   n.xz = stored.ag * 2 - 1;
   n.y = sqrt(saturate(1 - dot(n.xz, n.xz)));
-  o.normal = normalize(n + float3(face.x, 0, face.y) * 0.3);
-  o.shadow = SunShadow(root + float3(0, height * 0.5, 0), n);
+  o.normal = normalize(n + float3(face.x, 0, face.y) * 0.3 + float3(across.x, 0, across.y) * (at.y ? 0.35 : -0.35));
+  // [cover] the sun's shadow where this corner is (a little off the ground), not one for the whole blade: as the camera
+  // zooms and the shadow maps change, a blade at a shadow's edge is not all lit, then all dark
+  o.shadow = SunShadow(p + n * 0.02, n);
   // the sun's light through it (World::leafLight): the side the eye sees faces it; thinner, more toward the tip
   float3 toEye = normalize(cameraPosition - p), faceWay = float3(face.x, 0, face.y);
   o.through = leaves.x > 0.5 ? LeafThrough(dot(faceWay, toEye) < 0 ? -faceWay : faceWay, toEye) * (0.4 + 0.6 * v) : 0;
@@ -186,7 +234,7 @@ VOut VS(uint id : SV_VertexID) {
 }
 
 float4 PS(VOut i) : SV_Target {
-  float occlusion = lerp(0.65, 1, i.up);  // (darker down among the blades)
+  float occlusion = lerp(0.55, 1, i.up);  // (darker down among the blades: [cover] they shade each other near the ground)
 #if RAYS
   rayLightsAtMost = 1;  // (one ray for the small lights' shadows; lighting.h, SmallLightsTraced)
 #endif
@@ -200,22 +248,27 @@ float4 PS(VOut i) : SV_Target {
 
 struct GrassConstants {
   float area[4], blades[4], mapInfo[4], table[4];
+  float shown[4];       // [cover]
   float plantsK[2][4];  // [plants] (read by the shaders with them only)
 };
 
-// The plants on cards (GroundCover::SetPlants): six corners a card, up to six cards a spot (a clump's), a spot a cell.
+// The plants (GroundCover::SetPlants): a spot a cell, 108 corners a spot. [cover] Up to six plants a spot (a clump's), each
+// a star of three cards crossing at its foot (eighteen corners); or, for the grass's clumps, the spot one tuft of up to
+// twelve real blades (nine corners each: a quad from the foot to the middle, then the tip).
 const char kPlantShader[] = R"hlsl(
 cbuffer Plants : register(b1) {
   float4 area;      // xy: the first cell's world x, z; z: a cell's size; w: cells along a side
   float4 mapInfo;   // xy: the map's width and height; z: world units of the heights' largest value; w: the water's level
   float4 info;      // x: spots a cell where the table says 1; y: [tarmac] 1 = none where a remastered pad lies (padCover);
                     // z: flowers' patches' size; w: their cover
-  float4 lean;      // x: how far a card leans back toward the camera
+  float4 shown;     // [cover] x: how much of the cover is there (as the blades'); y: 1 = the bare ground's picture is read;
+                    // z: world units a pixel covers at distance 1; w: a blade's width at its foot (the meadow's)
   float4 cells[48]; // per cell three: uv rectangle; frame, low, high height, height (metres); sway, clump's least, most,
                     // its world units a metre
   float4 order[4];  // the cells by group (16 indices)
   float4 groups[6]; // per group: where its cells start in `order`, how many
-  float4 tones[16]; // [coverdark] per cell: rgb its mean colour (linear), w how far it takes the ground's colour (0: none)
+  float4 tones[16]; // per cell: rgb its mean colour (linear); w [coverdark] above 0: how far it takes the ground's colour,
+                    // [cover] below 0: how far its brightness goes toward the ground's (0: the art's own)
 #ifdef PLANTS
   float4 plantsK[2];  // [plants] (plants.h) PlantLife::Constants
 #endif
@@ -266,6 +319,7 @@ float PlantPatch(float2 xz) {
   return saturate((n - (1 - cover)) / 0.08) / cover;  // (the same flowers in all, gathered in the patches)
 }
 uint OrderAt(uint i) { return uint(order[i / 4][i % 4]); }
+float PlantLuma(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
 
 struct VOut {
   float4 position : SV_Position;
@@ -273,21 +327,28 @@ struct VOut {
   float2 uv : TEXCOORD1;
   float3 right : TEXCOORD2;
   float3 up : TEXCOORD3;
-  float3 toward : TEXCOORD4;   // the card's face, toward the camera
+  float3 toward : TEXCOORD4;   // a card's face (one of its two sides: the pixel takes the one the eye sees); [cover] a
+                               // tuft's blade: its lighting normal
   float3 ground : TEXCOORD5;   // the ground's normal under it
-  float2 shade : TEXCOORD6;    // x: its sun shadow; y: how high up the plant (0 the foot, 1 its top)
+  float3 shade : TEXCOORD6;    // x: its sun shadow; y: how high up the plant (0 the foot, 1 its top); z: [cover] a tuft's
+                               // blade: the sun's light through it (LeafThrough)
 #ifdef PLANTS
   nointerpolation float4 burnt : TEXCOORD7;  // [plants] how it is burnt (PlantsBurnLook)
 #endif
-  nointerpolation float3 tint : TEXCOORD8;   // [coverdark] its colour times this (the ground's under a clump of grass)
+  nointerpolation float4 tint : TEXCOORD8;   // rgb: a card's colour times this ([coverdark] the ground's under a clump of
+                                             // grass); [cover] a tuft's blade's own colour; w: 1 a tuft's blade (no picture)
 };
 
 static const float2 kCard[6] = {float2(0, 1), float2(1, 1), float2(0, 0), float2(0, 0), float2(1, 1), float2(1, 0)};
+// [cover] a tuft's blade: level along it (0 the foot, 1 the middle, 2 the tip), side 0 / 1
+static const uint2 kTuftCorner[9] = {uint2(0, 0), uint2(0, 1), uint2(1, 0), uint2(1, 0), uint2(0, 1), uint2(1, 1), uint2(1, 0), uint2(1, 1), uint2(2, 0)};
+static const float kTuftUp[3] = {0, 0.55, 1};
+static const float kTuftWide[3] = {1, 0.6, 0};
 
 VOut VS(uint id : SV_VertexID) {
   VOut o = (VOut)0;
   o.position = float4(0, 0, -1, 1);  // (no plant: behind the eye)
-  uint spot = id / 36, card = (id / 6) % 6, corner = id % 6;
+  uint spot = id / 108, local = id % 108;
   uint side = uint(area.w);
   float2 cellAt = area.xy + float2(spot % side, spot / side) * area.z;
   int2 cellId = int2(floor(cellAt / area.z + 0.5));
@@ -296,6 +357,15 @@ VOut VS(uint id : SV_VertexID) {
   if (any(xz < 0) || any(xz > mapInfo.xy)) return o;
   // [tarmac] none where a remastered pad lies, by its coverage
   [branch] if (info.y > 0.5 && padCover.SampleLevel(samplerLinearClamp, (xz - area.xy) / (area.z * area.w), 0) > PlantRand(PlantHash(h + 12))) return o;
+  // [cover] none where the ground is bare (a stream, a trail), by how bare; lower where it thins out
+  float bare = 0;
+  [branch] if (shown.y > 0.5) {
+    bare = bareGround.SampleLevel(samplerLinearClamp, xz / mapInfo.xy, 0);
+    if (bare > PlantRand(PlantHash(h + 13))) return o;
+  }
+  // [cover] as the cover comes in: this spot growing when its turn comes
+  const float grown = CoverGrown(shown.x, PlantRand(PlantHash(h + 14)));
+  if (grown <= 0) return o;
   float4 a = densityA.SampleLevel(samplerLinearClamp, xz / mapInfo.xy, 0);
   float4 b = densityB.SampleLevel(samplerLinearClamp, xz / mapInfo.xy, 0);
   // which group grows here, if any: clumps, flowers (in patches), dry stalks, ferns, by the table
@@ -315,11 +385,14 @@ VOut VS(uint id : SV_VertexID) {
   uint cell = OrderAt(uint(g.x) + PlantHash(h + 5) % uint(g.y));
   float4 uvRect = cells[cell * 3], size = cells[cell * 3 + 1], more = cells[cell * 3 + 2];
   uint count = uint(more.y) + PlantHash(h + 6) % uint(max(more.z - more.y + 1, 1));
-  if (card >= count) return o;
-  // this card of the spot: its own foot near the spot's, its own height and side
-  uint hc = PlantHash(h * 31 + card * 977 + 7);
+  // [cover] the grass's clumps (groups 0 and 1) a tuft of blades: two blades for each plant of its clump; the rest stars
+  const bool tuft = group <= 1;
+  uint plant = tuft ? 0 : local / 18;
+  if (tuft ? local / 9 >= count * 2 : plant >= count) return o;
+  // this plant of the spot: its own foot near the spot's, its own height and turn
+  uint hc = PlantHash(h * 31 + plant * 977 + 7);
   float2 foot = xz;
-  if (card > 0) {
+  if (plant > 0) {
     float angle = PlantRand(hc) * 6.2832, reach = size.x * more.w * 0.35 * sqrt(PlantRand(PlantHash(hc + 1)));
     foot += float2(cos(angle), sin(angle)) * reach;
   }
@@ -331,23 +404,95 @@ VOut VS(uint id : SV_VertexID) {
   float thin = saturate((1 - length(foot - (area.xy + half)) / half) * 3);
   float height = lerp(size.y, size.z, PlantRand(PlantHash(hc + 2))) * more.w * saturate(thin * 2.5);
   height *= 1 - 0.9 * trampled.SampleLevel(samplerLinearClamp, (foot - area.xy) / (area.z * area.w), 0);
+  height *= grown * (1 - 0.5 * bare);  // [cover]
 #ifdef PLANTS
   // [plants] burnt where the ground is (its own share of a half burnt place): short
   o.burnt = PlantsBurnLook(foot, plantsK[0], plantsK[1], PlantRand(PlantHash(hc + 9)));
   height *= 1 - 0.8 * o.burnt.z;
 #endif
   if (height <= 0.001) return o;
-  float frame = size.x * height / max(size.w, 0.001);  // (the card: the cell's frame, as tall as the plant is)
-  // facing the camera, leaning back toward it
-  float2 to = cameraPosition.xz - foot;
-  to = length(to) > 1e-4 ? normalize(to) : float2(0, 1);
-  float3 toward = float3(to.x, 0, to.y);
-  float3 right = float3(to.y, 0, -to.x);
-  float3 up = normalize(float3(0, 1, 0) - toward * lean.x);  // (its top back from the camera: its face up toward it)
+  float4 stored = groundNormals.SampleLevel(samplerLinearClamp, foot / mapInfo.xy, 0);
+  float3 n;
+  n.xz = stored.ag * 2 - 1;
+  n.y = sqrt(saturate(1 - dot(n.xz, n.xz)));
+  o.ground = n;
   // the trees' wind (as the blades'), the more toward the top by the cell's sway
   float beat = dot(foot, float2(0.11, 0.07));
   float swing = sin(time * 1.3 + beat) * 0.6 + sin(time * 2.9 + beat * 1.7) * 0.4;
   float gust = (0.35 + 0.9 * falling.x + 0.3 * falling.y) * (0.45 + 1.3 * CloudNoise(float3((foot - float2(0.915, 0.403) * (time * 7)) * 0.02, time * 0.07)));
+  float4 tone = tones[cell];
+
+  [branch] if (tuft) {
+    // [cover] a blade of the tuft: its root near the tuft's middle, fanned out from it (each its own way round, leaning out
+    // the more the longer), swaying as the meadow's blades, its colour the meadow's (the dry clumps: their own straw)
+    uint blade = local / 9;
+    uint2 at = kTuftCorner[local % 9];
+    uint hb = PlantHash(h * 53 + blade * 7919 + 11);
+    float turn = float(blade) * 2.39996 + PlantRand(hb) * 0.9;
+    float2 fan = float2(cos(turn), sin(turn)), across = float2(-fan.y, fan.x);
+    float2 rootAt = foot + fan * (size.x * more.w * 0.12 * sqrt(PlantRand(PlantHash(hb + 1))));
+    float bh = height * (0.6 + 0.4 * PlantRand(PlantHash(hb + 2)));
+    float2 bend = fan * (0.25 + 0.55 * PlantRand(PlantHash(hb + 3))) + float2(0.915, 0.403) * (swing * gust * 0.45 * more.x);
+#ifdef PLANTS
+    {  // [plants] pressed by what drove over it: laid over the way it was pushed (as the meadow's blades)
+      float4 pressedBy = PlantsPressAt(foot, plantsK[0], plantsK[1]);
+      [branch] if (pressedBy.z > 0.01) {
+        float down = pressedBy.z * exp(-(pressedBy.w / pressedBy.z) / 6.0) * (0.85 + 0.3 * PlantRand(PlantHash(hb + 8)));
+        float2 way = pressedBy.xy / pressedBy.z;
+        float layOver = min(down * 1.3, 1.3);
+        if (layOver > 1e-3 && length(way) > 0.05) {
+          bh *= cos(layOver);
+          bend += normalize(way) * tan(layOver);
+        } else {
+          bh *= 1 - 0.9 * saturate(down);
+        }
+      }
+    }
+#endif
+#ifdef BLASTS
+    float laid = 0;
+    {  // a blast's wave: laid over away from it (as the meadow's blades)
+      float2 blown = blastField.SampleLevel(samplerLinearClamp, (foot - area.xy) / (area.z * area.w), 0);
+      float over = length(blown);
+      laid = min(over, 1.35);
+      if (laid > 1e-3) {
+        bh *= cos(laid);
+        bend += blown / over * tan(laid);
+      }
+    }
+#endif
+    float v = kTuftUp[at.x];
+    float3 p = float3(rootAt.x, ground, rootAt.y) + float3(bend.x * v * v * bh, v * bh, bend.y * v * v * bh);
+    // (at least most of a pixel wide, or far blades would flicker in and out between pixels)
+    float wide = max(shown.w * 0.75, shown.z * length(root - cameraPosition) * 0.8) * kTuftWide[at.x];
+    p.xz += across * ((at.y ? 0.5 : -0.5) * wide);
+    o.position = mul(viewProj, float4(p, 1));
+    o.world = p;
+    float3 face = float3(fan.x, 0, fan.y);
+    o.toward = normalize(n + face * 0.3 + float3(across.x, 0, across.y) * (at.y ? 0.35 : -0.35));
+    float3 toEye = normalize(cameraPosition - p);
+    o.shade = float3(SunShadow(p + n * 0.02, n), v,
+                     leaves.x > 0.5 ? LeafThrough(dot(face, toEye) < 0 ? -face : face, toEye) * (0.4 + 0.6 * v) : 0);
+    float3 colour = group == 0 ? MeadowColour(ToLinear(cover.SampleLevel(samplerLinearClamp, foot / mapInfo.xy, 0).rgb), foot)
+                               : (any(tone.rgb > 0) ? tone.rgb : float3(0.30, 0.24, 0.13));
+    colour *= (0.85 + 0.3 * PlantRand(PlantHash(hb + 6))) * lerp(0.8, 1.35, v);
+#ifdef BLASTS
+    // (grass laid flat is paler, as the meadow's)
+    colour *= 1 + 0.45 * sin(laid);
+#endif
+    o.tint = float4(colour, 1);
+    return o;
+  }
+
+  // [cover] a card of the plant's star: three cards 60 degrees apart, upright, the plant turned its own way and leaning a
+  // little its own way (a plant is never quite straight); the picture's foot at the plant's foot
+  uint card = (local % 18) / 6, corner = local % 6;
+  float frame = size.x * height / max(size.w, 0.001);  // (the card: the cell's frame, as tall as the plant is)
+  float turn = PlantRand(PlantHash(hc + 3)) * 3.14159 + float(card) * 1.0472;
+  float3 right = float3(cos(turn), 0, sin(turn));
+  float3 toward = float3(-right.z, 0, right.x);  // (one side's face)
+  float2 tilt = (float2(PlantRand(PlantHash(hc + 4)), PlantRand(PlantHash(hc + 5))) - 0.5) * 0.3;
+  float3 up = normalize(float3(tilt.x, 1, tilt.y));
   float2 bend = float2(0.915, 0.403) * (swing * gust * 0.35 * more.x);
   float2 c = kCard[corner];
   bool flip = (hc & 64u) != 0;
@@ -361,7 +506,7 @@ VOut VS(uint id : SV_VertexID) {
       float down = pressedBy.z * exp(-(pressedBy.w / pressedBy.z) / 6.0);
       float2 way = pressedBy.xy / pressedBy.z;
       float layOver = min(down * 1.3, 1.3);
-      way = length(way) > 0.05 ? normalize(way) : -toward.xz;
+      way = length(way) > 0.05 ? normalize(way) : toward.xz;
       p -= up * (above * frame * (1 - cos(layOver)));
       p.xz += way * (sin(layOver) * above * above * frame);
     }
@@ -383,25 +528,38 @@ VOut VS(uint id : SV_VertexID) {
   o.right = flip ? -right : right;
   o.up = up;
   o.toward = toward;
-  float4 stored = groundNormals.SampleLevel(samplerLinearClamp, foot / mapInfo.xy, 0);
-  float3 n;
-  n.xz = stored.ag * 2 - 1;
-  n.y = sqrt(saturate(1 - dot(n.xz, n.xz)));
-  o.ground = n;
-  o.shade = float2(SunShadow(root + float3(0, height * 0.5, 0), n), above * frame / max(height, 0.001));
+  // [cover] the sun's shadow at this corner (a little off the ground), not one for the whole card: as the camera zooms and
+  // the shadow maps change, a plant at a shadow's edge is not all lit, then all dark
+  o.shade = float3(SunShadow(p + n * 0.03, n), above * frame / max(height, 0.001), 0);
   // [coverdark] a clump of the meadow's grass takes the ground's colour under it, as the blades do (the card's own light
   // and dark kept, its mean brought to the ground's, a little varied): else, at the art's own colour, it stands out as a
-  // dark blot on the ground it grows from
-  float4 tone = tones[cell];
-  o.tint = 1;
-  [branch] if (tone.w > 0) {
+  // dark blot on the ground it grows from. [cover] The weeds and ferns (dark leaves): their brightness brought part of the
+  // way toward the ground's, their colour kept (at the art's own they are black holes in the trees' shade).
+  o.tint = float4(1, 1, 1, 0);
+  [branch] if (tone.w != 0) {
     float3 under = ToLinear(cover.SampleLevel(samplerLinearClamp, foot / mapInfo.xy, 0).rgb) * (0.9 + 0.2 * PlantRand(PlantHash(hc + 10)));
-    o.tint = lerp(1, clamp(under / max(tone.rgb, 1e-3), 0.25, 4), tone.w);
+    if (tone.w > 0) o.tint.rgb = lerp(1, clamp(under / max(tone.rgb, 1e-3), 0.25, 4), tone.w);
+    else o.tint.rgb = lerp(1, clamp(PlantLuma(under) / max(PlantLuma(tone.rgb), 1e-3), 0.5, 3), -tone.w);
   }
   return o;
 }
 
 float4 PS(VOut i) : SV_Target {
+#if RAYS
+  rayLightsAtMost = 1;  // (one ray for the small lights' shadows; lighting.h, SmallLightsTraced)
+#endif
+  [branch] if (i.tint.w > 0.5) {
+    // [cover] a tuft's blade: lit as the meadow's blades (darker down among them)
+    float3 colour = i.tint.rgb;
+#ifdef PLANTS
+    colour = PlantsBurnColour(colour, i.burnt);  // [plants]
+#endif
+    float3 lightThrough = LeafLight(colour, i.shade.z, i.world, i.shade.x, 0.8);
+#ifdef PLANTS
+    lightThrough = lightThrough * (1 - saturate(i.burnt.x + i.burnt.y)) + PlantsEmber(i.burnt.w, i.world.xz, time) * (i.shade.y * (falling.w > 0 ? falling.w : 1));  // [plants]
+#endif
+    return float4(ModernLight(colour, 0, 0.85, lerp(0.55, 1, i.shade.y), lightThrough, normalize(i.toward), i.world, i.shade.x), 1);
+  }
   float4 c = atlas.Sample(samplerAniso, i.uv);
   clip(c.a - 0.5);
 #ifdef PLANTS
@@ -419,19 +577,19 @@ float4 PS(VOut i) : SV_Target {
     fade = 1;
 #endif
   }
+  // [cover] the card's side the eye sees (a card stands in the world, seen from either side)
+  float3 toEye = normalize(cameraPosition - i.world);
+  float3 face = dot(i.toward, toEye) < 0 ? -i.toward : i.toward;
   float2 t = atlasNormals.Sample(samplerAniso, i.uv).ag * 2 - 1;
-  float3 card = normalize(i.right * t.x + i.up * t.y + i.toward * sqrt(saturate(1 - dot(t, t))));
+  float3 card = normalize(i.right * t.x + i.up * t.y + face * sqrt(saturate(1 - dot(t, t))));
   float3 n = normalize(lerp(i.ground, card, 0.5));  // (the card's own normals at half strength: the visuals track's advice)
   float occlusion = lerp(0.7, 1, saturate(i.shade.y));
-#if RAYS
-  rayLightsAtMost = 1;  // (one ray for the small lights' shadows; lighting.h, SmallLightsTraced)
-#endif
   // (the sun's light through its leaves, World::leafLight: by the card's own way, the side the eye sees)
-  float3 albedo = ToLinear(c.rgb) * i.tint;  // ([coverdark] i.tint)
+  float3 albedo = ToLinear(c.rgb) * i.tint.rgb;  // ([coverdark] i.tint)
 #ifdef PLANTS
   albedo = PlantsBurnColour(albedo, i.burnt);  // [plants]
 #endif
-  float3 through = LeafLight(albedo, LeafThrough(card, normalize(cameraPosition - i.world)), i.world, i.shade.x, 0.7);
+  float3 through = LeafLight(albedo, LeafThrough(card, toEye), i.world, i.shade.x, 0.7);
 #ifdef PLANTS
   through = through * (1 - saturate(i.burnt.x + i.burnt.y)) + PlantsEmber(i.burnt.w, i.world.xz, time) * (falling.w > 0 ? falling.w : 1);  // [plants]
 #endif
@@ -440,7 +598,7 @@ float4 PS(VOut i) : SV_Target {
 )hlsl";
 
 struct PlantConstants {
-  float area[4], mapInfo[4], info[4], lean[4];
+  float area[4], mapInfo[4], info[4], shown[4];  // ([cover] shown)
   float cells[48][4];
   float order[4][4];
   float groups[6][4];
@@ -499,7 +657,7 @@ GroundCover::~GroundCover() {
 }
 
 bool GroundCover::Init(std::string* error) {
-  const std::string source = std::string(kViewShaderBlock) + RayShaders() + kLightingShaderBlock + kShader;  // (RayShaders: the small lights' shadows by rays)
+  const std::string source = std::string(kViewShaderBlock) + RayShaders() + kLightingShaderBlock + kCoverShared + kShader;  // (RayShaders: the small lights' shadows by rays)
   gfx::PipelineDesc pd;
   pd.name = "ground cover: grass";
   pd.vertexSource = pd.pixelSource = source;
@@ -510,7 +668,7 @@ bool GroundCover::Init(std::string* error) {
   if (!pipeline_) return false;
   // [foliage] (the plants' cards fade right at the eye by their coverage among a pixel's samples: PLANT_SAMPLES, alpha
   // to coverage; elsewhere their alpha is 1, every sample, as before)
-  const std::string plants = "#define PLANT_SAMPLES " + std::to_string(gSceneSamples) + "\n" + kViewShaderBlock + RayShaders() + kLightingShaderBlock + kPlantShader;
+  const std::string plants = "#define PLANT_SAMPLES " + std::to_string(gSceneSamples) + "\n" + kViewShaderBlock + RayShaders() + kLightingShaderBlock + kCoverShared + kPlantShader;
   pd.name = "ground cover: plants";
   pd.vertexSource = pd.pixelSource = plants;
   pd.alphaToCoverage = true;  // [foliage]
@@ -525,9 +683,9 @@ bool GroundCover::Init(std::string* error) {
   // [plants] (and the same two with plants that react, without and with the blasts' waves: made by PreparePlants when first
   // wanted; its textures at t9, t10)
   const std::string reacting = std::string("#define PLANTS 1\n#define PLANTS_PRESS t9\n#define PLANTS_BURN t10\n");
-  reactingSources_[0] = reacting + kViewShaderBlock + RayShaders() + kLightingShaderBlock + kPlantsShaderBlock + kShader;
+  reactingSources_[0] = reacting + kViewShaderBlock + RayShaders() + kLightingShaderBlock + kPlantsShaderBlock + kCoverShared + kShader;
   reactingSources_[1] = "#define PLANT_SAMPLES " + std::to_string(gSceneSamples) + "\n" + reacting + kViewShaderBlock + RayShaders() + kLightingShaderBlock +
-                        kPlantsShaderBlock + kPlantShader;
+                        kPlantsShaderBlock + kCoverShared + kPlantShader;
   reactingSources_[2] = "#define BLASTS 1\n" + reactingSources_[0];
   reactingSources_[3] = "#define BLASTS 1\n" + reactingSources_[1];
   const std::string trample = std::string(kViewShaderBlock) + kTrample;
@@ -591,7 +749,19 @@ void GroundCover::Prepare(const View& view, const Camera& camera, const std::vec
   // (a cinematic camera, cinecam.h: by how high the eye is over the ground ahead, and the square ahead of the eye,
   // from a little behind it to some fifty units on, where a low eye sees the grass)
   const Vec3 eye = camera.Eye();
-  if (!pipeline_ || !trample_ || !trampled_ || (camera.cinematic ? eye.y - camera.target.y : camera.distance) > farthest) return;
+  const float away = camera.cinematic ? eye.y - camera.target.y : camera.distance;
+  if (!pipeline_ || !trample_ || !trampled_ || away > farthest) return;
+  // [cover] how much of the cover is there: none at `farthest`, all from `fadeFrom` of it on; and since it came in, over
+  // `appearSeconds` (the view's clock: a frame's step counted at most a tenth of a second, so that a hitch is no jump; it
+  // starts again after two seconds without it, or the clock turned back more than a second: a map opened, a new game;
+  // a photo's frames, which hold the clock, leave it as it is)
+  const float now = view.constants.time;
+  float step = std::clamp(now - lastShown_, 0.0f, 0.1f);
+  if (now > lastShown_ + 2 || now < lastShown_ - 1) step = cameIn_ = 0;
+  cameIn_ = std::min(cameIn_ + (appearSeconds > 0 ? step / appearSeconds : 1.0f), 1.0f);
+  lastShown_ = now;
+  const float byDistance = std::clamp((farthest - away) / std::max(farthest * (1 - fadeFrom), 1e-3f), 0.0f, 1.0f);
+  shown_ = byDistance * cameIn_ * cameIn_ * (3 - 2 * cameIn_);
   // a square round what the camera looks at, as wide as it sees near there (no more than about 370 cells a side)
   const float reach = camera.cinematic ? 28.0f : std::clamp(camera.distance * 0.75f, 8.0f, 28.0f);
   const int side = static_cast<int>(std::ceil(2 * reach / cell));
@@ -662,12 +832,13 @@ bool GroundCover::SetPlants(const JsonValue& cover, TextureCache* textures, cons
     cell[2][1] = clump.items.size() == 2 ? static_cast<float>(clump.items[0].NumberOr(1)) : 1.0f;
     cell[2][2] = clump.items.size() == 2 ? static_cast<float>(clump.items[1].NumberOr(1)) : 1.0f;
     if (height <= 0 || cell[1][0] <= 0) continue;
-    // [coverdark] the grass's clumps (not the dry ones): their mean colour, from the cover's stats (its sRGB, made linear
-    // as the shader makes the atlas's and the ground's), for bringing it to the ground's; none without stats
+    // [coverdark] each cell's mean colour, from the cover's stats (its sRGB, made linear as the shader makes the atlas's and
+    // the ground's): the grass's clumps (not the dry ones) for bringing it to the ground's (1), [cover] the weeds and ferns
+    // their brightness toward the ground's (-1), the dry clumps' tufts their colour; none without stats
     const JsonValue& mean = cover["stats"][name]["albedo_srgb8"];
-    if (g == 0 && mean.items.size() == 3) {
+    if (mean.items.size() == 3) {
       for (int k = 0; k < 3; ++k) plants_.tones[index][k] = std::pow(static_cast<float>(mean.items[static_cast<size_t>(k)].NumberOr(0)) / 255.0f, 2.2f);
-      plants_.tones[index][3] = 1;
+      plants_.tones[index][3] = g == 0 ? 1.0f : g == 2 || g == 5 ? -1.0f : 0.0f;
     }
     tallest = std::max(tallest, high);
     byGroup[g].push_back(index);
@@ -682,6 +853,7 @@ bool GroundCover::SetPlants(const JsonValue& cover, TextureCache* textures, cons
     }
   }
   plants_.count = at;
+  lastShown_ = -1e9f;  // [cover] (a map opened: the cover comes in again)
   if (!at || tallest <= 0) return false;
   plants_.tallest = tallest;  // (the tallest's real height: each cell's scale is worked out as it is drawn, Draw)
   const JsonValue& patches = cover["density"]["flowers_patches"];
@@ -716,6 +888,9 @@ void GroundCover::Draw(const View& view, const Camera& camera, gfx::Texture heig
   k.table[0] = table ? 1.0f : 0.0f;
   k.table[1] = cleared ? 1.0f : 0.0f;  // [tarmac]
   device_->SetTexture(11, cleared ? cleared : trampled_);  // [tarmac] (read only with table.y)
+  k.shown[0] = shown_;              // [cover]
+  k.shown[1] = bare ? 1.0f : 0.0f;  // [cover]
+  device_->SetTexture(12, bare ? bare : trampled_);  // [cover] (read only with shown.y)
   if (blasts) device_->SetTexture(8, blasts);
   if (reacting) {  // [plants]
     std::copy(plants->Constants(), plants->Constants() + 8, &k.plantsK[0][0]);
@@ -748,7 +923,10 @@ void GroundCover::Draw(const View& view, const Camera& camera, gfx::Texture heig
     p->info[1] = cleared ? 1.0f : 0.0f;  // [tarmac]
     p->info[2] = plants_.patchScale;
     p->info[3] = plants_.patchCover;
-    p->lean[0] = plantLean;
+    p->shown[0] = shown_;  // [cover]
+    p->shown[1] = k.shown[1];
+    p->shown[2] = k.mapInfo[2];
+    p->shown[3] = bladeWidth;
     std::copy(&plants_.cells[0][0][0], &plants_.cells[0][0][0] + 16 * 3 * 4, &p->cells[0][0]);
     // each cell's scale: the low plants `plantBoost` times the factor that brings the tallest to `plantTallest`, but
     // none taller than that (the readability rule): the stalks and the tall flowers at the cap, the grass and the
@@ -758,9 +936,9 @@ void GroundCover::Draw(const View& view, const Camera& camera, gfx::Texture heig
     for (int i = 0; i < 16; ++i) p->cells[i * 3 + 2][3] = std::min(metre * plantBoost, plantTallest / std::max(plants_.cells[i][1][2], 1e-3f));
     std::copy(&plants_.order[0][0], &plants_.order[0][0] + 16, &p->order[0][0]);
     std::copy(&plants_.groups[0][0], &plants_.groups[0][0] + 24, &p->groups[0][0]);
-    for (int i = 0; i < 16; ++i) {  // [coverdark] (how far the grass's clumps take the ground's colour)
+    for (int i = 0; i < 16; ++i) {  // [coverdark] (how far the grass's clumps take the ground's colour; [cover] the leaves its brightness)
       std::copy(plants_.tones[i], plants_.tones[i] + 3, p->tones[i]);
-      p->tones[i][3] = plants_.tones[i][3] * clumpsToGround;
+      p->tones[i][3] = plants_.tones[i][3] * (plants_.tones[i][3] > 0 ? clumpsToGround : leavesToGround);
     }
     if (reacting) std::copy(plants->Constants(), plants->Constants() + 8, &p->plantsK[0][0]);  // [plants]
     device_->SetPipeline(reacting ? reactingPipelines_[with + 1] : blasts ? blastPlantPipeline_ : plantPipeline_);
@@ -770,10 +948,11 @@ void GroundCover::Draw(const View& view, const Camera& camera, gfx::Texture heig
     device_->SetTexture(6, atlas_);
     device_->SetTexture(7, atlasNormals_);
     drawnPlants = plantSide * plantSide;
-    device_->Draw(static_cast<uint32_t>(drawnPlants) * 36);
+    device_->Draw(static_cast<uint32_t>(drawnPlants) * 108);  // ([cover] up to six stars of three cards, or a tuft of twelve blades)
   }
   for (int slot = 0; slot < (reacting ? 11 : 9); ++slot) device_->SetTexture(slot, {});
   device_->SetTexture(11, {});  // [tarmac]
+  device_->SetTexture(12, {});  // [cover]
 }
 
 }  // namespace render

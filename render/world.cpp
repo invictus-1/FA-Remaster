@@ -265,9 +265,12 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
       // [stream mouth] (the sea and the ground, for carrying a stream that ends just above the sea on into it)
       streams.seaLevel = map.water.present ? map.water.elevation : -1e9f;
       streams.groundHeight = [this](float x, float z) { return map.Height(Clamp(x, 0, static_cast<float>(map.width)), Clamp(z, 0, static_cast<float>(map.height))); };
+      grass.bareMap.SetMap(static_cast<float>(map.width), static_cast<float>(map.height));  // [cover] (no cover on them)
       for (size_t i = 0; i < props_.size(); ++i)
-        if (props_[i].model && !props_[i].model->lods.empty() && props_[i].model->lods[0].stream)
+        if (props_[i].model && !props_[i].model->lods.empty() && props_[i].model->lods[0].stream) {
           streams.Add(props_[i].model, props_[i].world, static_cast<uint32_t>(i));
+          grass.bareMap.AddStream(props_[i].model, props_[i].world, &textures);  // [cover]
+        }
       if (streams.Any()) printf("render: %d stream ribbons, %d of white water (World::streamWater)\n", streams.Count(false), streams.Count(true));
     }
     // ... listed by squares of the map
@@ -2583,7 +2586,10 @@ void World::Render() {
       });
       Stage("ground cover pressed flat");
       // (and where the plants grow, made the first time: it dispatches, so before the scene's pass)
+      const bool coverMade = plantsReady_ && !coverA_;  // [cover]
       if (plantsReady_ && !coverA_) terrain.CoverDensity(treeMask_, &coverA_, &coverB_);
+      // [cover] where nothing grows: the streams, the trails through the meadow (made the first time: it dispatches)
+      grass.bare = grass.bareMap.Picture(plantsReady_ ? coverB_ : gfx::Texture{}, terrain.CoverMask(), coverMade);
       grass.tracks = deepNow_ ? trackField.Atlas() : gfx::Texture{};  // (deep tracks: the grass laid flat along them)
       grass.tracksField = deepNow_ ? trackField.Constants() : TrackFieldConstants{};
       grass.Prepare(view, placing, discs);

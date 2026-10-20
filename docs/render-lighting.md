@@ -585,6 +585,41 @@ where it changes the look, off by default, measured like the rest. In the order 
      - Open: his playtest's word (he judges them in play); the leafy patches read a little flat from straight
        above; roads, decals and build pads not yet kept clear; one
        shared wind for grass, trees and weather as it is (the trees').
+     - **From Chris's playthrough of 19 October** (2026-10-20, a helper; his pictures: flat 2D cards on the meadow and
+       on the stream, pop-in, black flickering plants under trees, grass on the trails, grass that looks fake):
+       - *Plants in 3D*: the flat cards were the plants' camera-facing cards, leaning back toward the camera: from the
+         game's camera (40 to 90 degrees down) a side-on picture of a clump, twice as wide as tall, reads as a strip
+         lying on the ground. Now each plant is a star of three cards crossing at its foot, 60 degrees apart, upright,
+         turned its own way in the world and leaning a little its own way (it keeps its shape and place as the camera
+         moves round it; some of it faces the eye from every side), lit by the side the eye sees. The grass's clumps
+         (the "clump" group, its dry cells too) are no longer pictures: each spot a tuft of up to twelve real blades
+         (two for each plant of its clump), fanned out from its middle, coloured as the meadow's (the dry ones their
+         own straw from the cover's stats). 108 corners a spot (36 before).
+       - *Where nothing grows* (`render/cover_bare.h/.cpp`, `GroundCover::bareMap`, `bare`): a picture over the map,
+         two texels a unit: the streams' ribbons (the props whose finest level is a stream's, laid on the processor
+         when the map opens) and 0.6 units past them, always; the map's cover mask (remap.json's `"cover_mask"`,
+         `Terrain::CoverMask`, the visuals session's painting of streams, trails and roads: BC4, 1 = no cover; the
+         viewer's `--cover-mask <path>` for tests), which `CoverDensity` lays into the table (everything times 1 - the
+         mask); where a map has no mask, the trails and bare patches found in the table (where its layers give
+         markedly fewer blades than 2 and 4 units round about: a path through the meadow, a patch of soil; a wide
+         thinner stretch keeps what its table says). `CoverDensity` now a texel a unit (at most 2048 a side), its
+         second picture's alpha the blades before the trees change them.
+       - *Under the trees*: the sun's shadow taken at each corner of a blade, a tuft and a card (it was one value for
+         a whole card or blade, at its middle, which flipped all of it between lit and dark as the shadow maps changed
+         with the zoom: the cover's pixels whose shadow jumps between zooms 7.0 and 7.3, 4.0 % -> 1.5 %); the weeds
+         and ferns (dark leaves) brought half way to the ground's brightness (`leavesToGround`).
+       - *No pop-in*: the cover thins out from 35 to 50 units of zoom (`fadeFrom` 0.7 of `farthest`), each tuft and
+         plant at a distance of its own and growing out of the ground (`CoverGrown`), and comes in over a second when
+         a map opens or the cover comes back after two seconds away (`appearSeconds`; the view's clock, a hitch counted
+         at most a tenth of a second, a photo's held clock leaves it as it is). At 49 units the cover changed 3.6 % of
+         the picture before (then nothing at 51), 0.03 % now.
+       - *Grass more real*: the blades' colour the meadow's (`MeadowColour`: never the brown of bare earth, varied in
+         patches, a little lighter and richer than the ground's mean), drier blades paler at their own brightness (not
+         a bright straw), gathered in tufts and gaps and taller and shorter in patches (noise of the place), folded
+         along the middle (the light changes across a blade), darker down among them.
+       - Cost (2560x1440, RTX 4090 busy with other work, the lowest of three runs, the cover alone): 0.103 -> 0.112 ms
+         at a close zoom (8 units), 0.111 -> 0.130 at 16, 0.242 -> 0.324 at 32, 0.17 -> 0.16 low among trees; the bare
+         picture once a map (a dispatch over 2048 x 2048). Off: identical (regression 0 px on both backends).
 7. **Battle scars (done, first version, 2026-10-17; Chris: "build it up now"; in the "Ground Detail" setting):**
    `World::battleScars` (viewer `--battle-scars`; `Decals::battleScars`). The game already lays scorches and craters
    where things die and shells land (deaths, blasts, artillery, bombs, beams, nukes, teleports), each for a minute

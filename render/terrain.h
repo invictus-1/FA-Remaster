@@ -147,12 +147,20 @@ class Terrain {
   // JSON with its density table by the map's layers): the JSON (null where the map has none), its files' paths
   // below kRemasteredTerrain.
   const JsonValue* Cover() const { return hasCover_ ? &cover_ : nullptr; }
-  // Where the plants grow, over the whole map at half its size, by the cover's table blended as the layers are:
-  // `a` RGBA8 (blades, clumps, flowers, dry stalks), `b` RGBA8 (ferns, the share of a clump taken from the dry cells,
-  // the share of clumps that are weeds, 0); near trees (`trees`: R8 over the whole map, 1 within the table's radius
-  // of a tree) as its near_trees says, not on the layers it names. Made the first time it is asked for once a map is
-  // loaded (it dispatches: between passes). False where the map has no cover.
+  // Where the plants grow, over the whole map ([cover] a texel a world unit, at most 2048 a side), by the cover's table
+  // blended as the layers are: `a` RGBA8 (blades, clumps, flowers, dry stalks), `b` RGBA8 (ferns, the share of a clump
+  // taken from the dry cells, the share of clumps that are weeds, [cover] the blades as the layers give them before the
+  // trees change them: CoverBare's trails); near trees (`trees`: R8 over the whole map, 1 within the table's radius
+  // of a tree) as its near_trees says, not on the layers it names; [cover] all of it times 1 - the map's cover mask
+  // (CoverMask) where it has one. Made the first time it is asked for once a map is loaded (it dispatches: between
+  // passes). False where the map has no cover.
   bool CoverDensity(gfx::Texture trees, gfx::Texture* a, gfx::Texture* b);
+  // [cover] The map's cover mask (remap.json: the map's entry's "cover_mask", a greyscale picture over the whole map, 0
+  // the cover as its table says .. 1 none: the visuals session paints the streams, trails and roads with soft edges),
+  // read the first time it is asked for; none where the map has none or it cannot be read. `coverMaskGiven` (the
+  // viewer's --cover-mask, set before a map opens): a picture's path in place of the entry's, for tests.
+  gfx::Texture CoverMask();
+  std::string coverMaskGiven;
   float CoverTreeRadius() const { return coverTreeRadius_; }  // (the table's near_trees radius, world units)
   float HeightUnit() const { return map_ ? 65535.0f * map_->heightScale : 1.0f; }
   // [unit dirt] Layer i's kind of ground (0..9: shares of snow, mud, sand, grass, dirt, hard), as GroundKinds lays them
@@ -214,6 +222,11 @@ class Terrain {
   std::string mudMaskFile_;
   gfx::Texture mudMask_;
   bool mudMaskTried_ = false, kindsMud_ = false, coverMud_ = false;
+  // [cover] the cover mask's file (remap.json's "cover_mask", Remaster; or coverMaskGiven), its texture (CoverMask: read the
+  // first time it is wanted)
+  std::string coverMaskFile_;
+  gfx::Texture coverMask_;
+  bool coverMaskTried_ = false;
   bool MudMaskReady();
   // [ground mud] where on the map there is mud at all, coarsely (MudMaskReady, from a small level of the mask's file): blocks
   // of `mudBlock_` world units, each 1 where its block or one within two of it has any mud, summed (an integral picture,
