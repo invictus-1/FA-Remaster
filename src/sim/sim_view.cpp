@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 #include "sim/blueprints.h"
 #include "sim/build.h"
@@ -470,6 +471,27 @@ bool UnitStateOf(Sim& sim, uint32_t unitId, UnitStateView* out) {
     PeekObjectValue(L, u, "Reclaimable");
     if (!lua_isnil(L, -1)) v.reclaimable = lua_toboolean(L, -1) != 0;
     lua_pop(L, 1);
+    // the scripts' statistics (entities.cpp l_SetStat keeps each as the value "stat:<name>"): reads only, and
+    // making nothing (lua_gpg_rawgetstr, StrField below; lua_next and lua_rawget make nothing either)
+    lua_gpg_rawgetstr(L, LUA_REGISTRYINDEX, "moho64.values");  // (entities.cpp kValuesKey)
+    if (lua_istable(L, -1)) {
+      lua_pushlightuserdata(L, u);
+      lua_rawget(L, -2);
+      if (lua_istable(L, -1)) {
+        lua_pushnil(L);
+        while (lua_next(L, -2)) {
+          // (lua_type, not lua_isstring / lua_isnumber: those would turn a number key into a string mid-walk)
+          if (lua_type(L, -2) == LUA_TSTRING && lua_type(L, -1) == LUA_TNUMBER) {
+            const char* k = lua_tostring(L, -2);
+            if (!std::strncmp(k, "stat:", 5)) v.stats.emplace_back(k + 5, static_cast<float>(lua_tonumber(L, -1)));
+          }
+          lua_pop(L, 1);
+        }
+      }
+      lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+    std::sort(v.stats.begin(), v.stats.end());
   }
   for (int i = 0; i < 2; ++i) {
     v.productionPerSecond[i] = u->production[i];

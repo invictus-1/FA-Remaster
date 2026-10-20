@@ -265,6 +265,25 @@ void LogView(Sim& sim, size_t syncBeats, size_t syncBytes, const std::string& la
          s.fuelRatio, s.tacticalSiloCount, s.nukeSiloCount, s.produced[0], s.consumed[0], s.produced[1], s.consumed[1],
          s.buildRate, q.c_str());
   }
+  {  // the scripts' statistics a unit's panel reads (UnitStateView::stats): the first units with veterancy
+    int vetShown = 0;
+    size_t withStats = 0;
+    for (const UnitView& u : units) {
+      UnitStateView s;
+      if (!UnitStateOf(sim, u.id, &s) || s.stats.empty()) continue;
+      ++withStats;
+      bool vet = false;
+      std::string list;
+      for (const auto& [name, value] : s.stats) {
+        char b[96];
+        std::snprintf(b, sizeof b, " %s=%g", name.c_str(), value);
+        list += b;
+        vet |= (name == "VetLevel" || name == "VetExperience") && value > 0;
+      }
+      if (vet && vetShown++ < 5) Logf(LogLevel::Info, "view: stats %#x %s:%s", u.id, u.blueprint.c_str(), list.c_str());
+    }
+    Logf(LogLevel::Info, "view: %zu units keep script statistics, %d with veterancy", withStats, vetShown);
+  }
   for (const ArmyView& a : ArmyViews(sim)) {
     const std::vector<std::string> r = RestrictedBlueprints(sim, a.index);
     if (!r.empty()) Logf(LogLevel::Info, "view: army %d may not build %zu blueprints (first %s)", a.index, r.size(), r.front().c_str());

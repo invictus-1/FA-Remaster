@@ -3,6 +3,7 @@
 // (The per-beat Sync table is Sim::TakeSync.)
 #pragma once
 #include <cstdint>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -293,6 +294,13 @@ struct UnitStateView {
   int tacticalSiloBuildCount = 0, nukeSiloBuildCount = 0;
   int tacticalSiloMaxStorage = 0, nukeSiloMaxStorage = 0;
   int kills = 0;                  // the unit's KILLS statistic, as its scripts last set it
+  // Every number statistic the unit's scripts keep (Unit:SetStat / FAF's Unit:UpdateStat), by name, sorted: what
+  // the interface's UserUnit:GetStat(name, default) answers with (the original's binding, cfunc_UserUnitGetStat
+  // 0x8c3160, asks an object at UserUnit+0x148 through its vtable +0x50 / +0x54; that it holds the sim unit's
+  // stats as synced is inferred from FAF's Unit.lua 5060 "retrieve on the UI side"). FAF's veterancy is kept there:
+  // VetLevel, VetExperience, VetMassKillCredit (defaultcomponents.lua 621-627, 682-742; unitview.lua 553-554
+  // reads the first two for the stars and the bar). KILLS is among them too.
+  std::vector<std::pair<std::string, float>> stats;
   // what SetCapturable / SetReclaimable left (both true until a script says otherwise)
   bool capturable = true, reclaimable = true;
   // economy, [0] energy, [1] mass, per second: what its scripts ask for, and what last beat gave and took
