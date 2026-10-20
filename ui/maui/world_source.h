@@ -92,6 +92,7 @@ struct WorldMeshView {
   bool hidden = false;
   float lifetime = 0, age = 0;  // seconds given with SetLifetimeParameter (0: none), and how many have passed
   float fractionComplete = 1;
+  float lodCutoff = 1000;  // the description's LODCutoff (worldmesh.lua's DEFAULTCUTOFF when it gives none)
 };
 // A decal the interface's script lays on the ground (the game's UserDecal, FA exe ScriptedDecal):
 // a texture of the game's files over a square of size[0] x size[1] world units (the script's

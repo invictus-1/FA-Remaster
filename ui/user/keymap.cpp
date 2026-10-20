@@ -394,6 +394,9 @@ int l_LooksForTests(lua_State* L) {
   lua_pushstring(L, "season");
   lua_pushnumber(L, looks.season);
   lua_rawset(L, -3);
+  lua_pushstring(L, "minimapLod");
+  lua_pushnumber(L, looks.minimapLod);
+  lua_rawset(L, -3);
   for (int i = 0; i < 18; ++i) {
     lua_pushstring(L, names[i]);
     lua_pushboolean(L, values[i]);
@@ -857,6 +860,7 @@ ConVarNow ConVarOf(lua_State* L, const std::string& key) {
   else if (key == "SC_FRAMETIMECLAMP") set("sc_FrameTimeClamp", 'f', Pacing().frameMs);
   else if (key == "CAM_SHAKEMULT") set("cam_ShakeMult", 'f', CameraShakeMult());
   else if (key == "CAM_ZOOMAMOUNT") set("cam_ZoomAmount", 'f', keys.zoomAmount);
+  else if (key == "CAM_DEFAULTMINILOD") set("cam_DefaultMiniLOD", 'f', looks.minimapLod);
   else if (key == "UI_KEYBOARDPANSPEED") set("ui_KeyboardPanSpeed", 'f', keys.panSpeed);
   else if (key == "UI_KEYBOARDPANACCELERATEMULTIPLIER") set("ui_KeyboardPanAccelerateMultiplier", 'f', keys.panFast);
   else if (key == "UI_KEYBOARDROTATESPEED") set("ui_KeyboardRotateSpeed", 'f', keys.turnSpeed);
@@ -1171,6 +1175,10 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
     // a switch: no value turns it over, as the console's switches do
     auto turn = [&](bool& on) { on = value.empty() ? !on : (value[0] != '0' && Upper(value).rfind("FALSE", 0) != 0 && Upper(value).rfind("OFF", 0) != 0); };
     CameraControls& keys = CameraKeys();
+    if (key == "CAM_DEFAULTMINILOD") {  // (the minimap's meshes: LookSettings::minimapLod)
+      if (!value.empty()) Looks().minimapLod = std::max(0.0f, number);
+      return;
+    }
     if (key == "CAM_ZOOMAMOUNT") {
       if (!value.empty()) keys.zoomAmount = std::max(0.01f, number);
       return;

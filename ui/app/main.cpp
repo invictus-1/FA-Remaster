@@ -45,6 +45,10 @@
 
 using namespace moho;
 
+namespace moho::ui {
+extern const char kBuildCommit[];  // (build_ui.py: the commit the program was built from)
+}
+
 namespace {
 
 struct Options {
@@ -93,11 +97,13 @@ int wantBackdrop = -1;            // --backdrop / --no-backdrop: the menu's movi
 // --map-edge frame|beyond: likewise the map's edge (RemasterMapEdge); without it, "beyond".
 ui::GameSession::Sky sky;
 // --maps <folder> (may be given more than once): more map folders, beside the game's own at /maps
-// (maps in the making). --remasters <folder>: the remastered units' own files, one folder per
-// unit (render/remasters.h). --own <folder>: this program's own files (ui/data); without it they
-// are looked for beside the program.
-std::vector<std::string> moreMaps;
-std::string remastersFolder, ownFolder;
+// (maps in the making). --remasters <folder> (may be given more than once): the remastered units' own files, one
+// folder per unit (render/remasters.h), each root mounted in turn: the stock units' (visuals/work) and, by the
+// launchers of games with a mod, that mod's own (visuals/work_mods/<mod>: Chris, 2026-10-20, item 22: no mod unit
+// in what ships). --own <folder>: this program's own files (ui/data); without it they are looked for beside the
+// program.
+std::vector<std::string> moreMaps, remastersFolders;
+std::string ownFolder;
 bool noWorld = false;             // --no-world: a launched game gets no picture of the world (no graphics device is opened)
 std::string sessionIn;            // --session file: a recorded game configuration to start a game from at once
 std::string gameLuaFile;          // --game-lua file: a host Lua file run in a launched game's state once its interface is up
@@ -294,7 +300,7 @@ int main(int argc, char** argv) {
     else if (a == "--no-weather") sky.weather = "none";
     else if (a == "--map-edge") sky.edge = next();
     else if (a == "--maps") moreMaps.push_back(next());
-    else if (a == "--remasters") remastersFolder = next();
+    else if (a == "--remasters") remastersFolders.push_back(next());
     else if (a == "--own") ownFolder = next();
     else if (a == "--seed") session_seed = static_cast<long long>(std::strtoull(next().c_str(), nullptr, 10));
     else if (a == "--fast-forward") fastForward = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
@@ -356,11 +362,11 @@ int main(int argc, char** argv) {
   if (!ownFolder.empty() && vfs.Mount(ownFolder, "/moho64ui")) cfg.hookDirs.push_back("/moho64ui/hook");
   else Logf(LogLevel::Warning, "moho64ui: this program's own files were not found (--own <folder>): the lobby has no day and weather options");
 #ifdef MOHO64UI_WORLD_PICTURE
-  if (!remastersFolder.empty()) {
-    Logf(LogLevel::Info, "moho64ui: remastered units: %d from %s", render::MountRemasters(&vfs, remastersFolder), hostfs::DisplayPath(remastersFolder).c_str());
-  }
+  for (const std::string& folder : remastersFolders)
+    Logf(LogLevel::Info, "moho64ui: remastered units: %d from %s", render::MountRemasters(&vfs, folder), hostfs::DisplayPath(folder).c_str());
 #endif
   Logf(LogLevel::Info, "moho64ui: %zu search paths, %zu files", vfs.MountCount(), vfs.FileCount());
+  Logf(LogLevel::Info, "moho64ui: built from commit %s", ui::kBuildCommit);
   if (!o.modsFile.empty()) {
     std::ifstream f(o.modsFile);
     std::string line;

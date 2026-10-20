@@ -406,6 +406,11 @@ struct LookSettings {
   // energyShields): shields that look like energy. Hidden Unit Outlines (WorldPicture::SetHiddenOutlines): units
   // seen behind trees and cliffs, only what the player may see, none in the Original look. All ON by default.
   bool battleEffects = true, energyShields = true, hiddenOutlines = true;
+  // cam_DefaultMiniLOD (the minimap's mesh level; FAF's minimap.lua and multifunction.lua set it from the profile's
+  // "Disable meshes", disableMinimapMesh, ticked by default: ConExecute("cam_DefaultMiniLOD 0"), else "... 1.8"): not 0,
+  // the minimap stamps the script's meshes (pings, beacons) under its icons (the renderer's SetMinimapMeshes, render
+  // 4a061d2). INFERRED: 0 until the script sets it (it does when the minimap is made).
+  float minimapLod = 0;
   // The Photographic Look (the renderer's World::photoLook, render/photo_look.h; Chris, 2026-10-18: "an option in
   // game as in you can choose which one you want"): 0 off (today's picture), 1 Natural (the adapting eye and the lens
   // touches with today's colours: the grade "plain"), 2 Film, 3 Warm, 4 Cold War (the graded looks). A style pick, not
