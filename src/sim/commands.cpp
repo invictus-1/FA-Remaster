@@ -446,6 +446,7 @@ struct PatrolData {
   uint32_t childFrom = 0;
   std::vector<uint32_t> tried;  // +0xc8: what the reclaim helper sent the unit to reclaim (never again)
 };
+const BuildTask* PatrolChildTask(const BuildTask& t) { return t.pdata ? t.pdata->child : nullptr; }
 
 namespace {
 
@@ -1085,7 +1086,15 @@ static bool ThreadAsleepOnMove(const Unit* u) {
   // Attack with clear; the frigate 0x100056, standing in reach of its target since 5220, runs after the other
   // members at 5233 in the original (their slots reserved before its own: (498.98, 200.55), its square's corner
   // (482,184)); ours kept it fifth and its slot was the free raw place.
-  if (u->task && u->task->adata && u->task->waitUntil == 0xffffffffu) return true;
+  // The same for a guard's attack child in reach (ThreadAttackTask). Seen (probe mp1_7061): MP1 7055, army 2's four
+  // subs and the ship 0x200044 on a Guard of an enemy blip, attacking from it since 7037 (GuardBusy; the subs' attacks
+  // end at 7044 and start again at 7050), get a formation Move with clear; at 7056 the original dispatches it in the
+  // thread order 0x20003a, 0x20007d, 0x200007, 0x200076, 0x200044 (CUnitCommand::GetPosition 0x6e8a5d ->
+  // GetAdjustedFormationPosition -> FindSlotFor 0x59aa20), so the sub 0x20007d takes its raw slot (563.18, 273.71) and
+  // the ship rings out to (562.12, 268.42). Ours had never re-linked a guard's suspended attack and went by id: the
+  // ship's ring took (563.12, 273.42), which refused the sub's slot and its rings out to 3, and the sub drove to
+  // (562.19, 277.71) (MP1 7061).
+  if (const BuildTask* a = ThreadAttackTask(u); a && a->waitUntil == 0xffffffffu) return true;
   // a patrol whose repair / reclaim child walks: the child's CUnitMoveTask suspended the thread (ctor 0x6186d6, the
   // same listener NavEventWakesCommandThread has for it), and the clear wakes it to the run list's end. Seen: MP3
   // 3109, army 0's engineer 0xf, its patrol's child walking, gets a BuildMobile with clear together with the idle 0x2e

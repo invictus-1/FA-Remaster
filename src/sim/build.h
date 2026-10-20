@@ -100,6 +100,10 @@ bool TaskThreadAsleepOnMove(const Unit* u, const BuildTask* from = nullptr);  //
 // The head task is a guard (CUnitGuardTask) with no child task of its own: whatever goal its navigator has, the guard
 // set itself (UpdateGuardFollowMoveGoal 0x613c40: no move task).
 bool GuardSteersItself(const Unit* u);
+// The attack task on top of the unit's command thread: the head task itself, or the attack child a guard pushed
+// (null when neither is an attack task).
+const BuildTask* ThreadAttackTask(const Unit* u);
+const BuildTask* PatrolChildTask(const BuildTask& t);  // (sim/commands.cpp: the patrol's pushed child, or null)
 // Movement helpers for command tasks (sim/combat.cpp).
 bool TaskCanMove(const Unit* u);
 void TaskMoveToward(Sim& sim, Unit* u, const Vec3& goal);

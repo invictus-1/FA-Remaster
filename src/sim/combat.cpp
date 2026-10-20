@@ -2563,7 +2563,9 @@ struct AttackData {
 
 namespace {
 void RelinkSuspendedAttackThread(Unit* u) {
-  if (u->task && u->task->adata && u->task->adata->listening && u->task->waitUntil == 0xffffffffu)
+  // (the head attack, or a guard's attack child: ThreadAttackTask)
+  const BuildTask* t = ThreadAttackTask(u);
+  if (t && t->adata->listening && t->waitUntil == 0xffffffffu)
     if (Sim* sim = Sim::From(u->luaState())) sim->ResumeCommandThread(u);
 }
 }  // namespace

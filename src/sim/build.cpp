@@ -3752,6 +3752,17 @@ bool GuardSteersItself(const Unit* u) {
   return t && t->gdata && !t->gdata->child && !t->gdata->childMove;
 }
 
+// A guard's attack child (CUnitGuardTask::TaskTick 0x6141a0 state 3 -> MakeAttackTaskOn) is a CUnitAttackTargetTask
+// pushed on the dispatcher's own thread, above the guard: its in-range return -2 (0x5f3a63) suspends that thread
+// as the head attack's does, and its attacker listener (0x5f3ee0, the tail 0x5f3f9f..0x5f3fd5) and the queue's
+// events (OnEvent 0x599030) re-link it when suspended, whichever task suspended it.
+const BuildTask* ThreadAttackTask(const Unit* u) {
+  const BuildTask* t = u->task;
+  if (t && t->gdata && t->gdata->child) t = t->gdata->child;
+  else if (t && t->pdata && PatrolChildTask(*t)) t = PatrolChildTask(*t);  // (a patrol's attack child: the same thread)
+  return t && t->adata ? t : nullptr;
+}
+
 bool TaskThreadAsleepOnMove(const Unit* u, const BuildTask* from) {
   if (!u->motion.hasGoal || u->motion.arrived || u->motion.failed) return false;  // (the event came: awake)
   for (const BuildTask* t = from ? from : u->task; t;) {
