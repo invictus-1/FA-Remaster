@@ -728,14 +728,30 @@ void DeliverChat(lua_State* L);
 // when there is no such unit.
 void UserUnitIds(lua_State* L, bool selectedOnly, std::vector<uint32_t>* ids);
 bool UserUnitFacts(lua_State* L, uint32_t id, std::string* blueprint, float position[3], int* army);
+// The simulation's view of a living unit the interface knows (nullptr: none; valid until the next sync), and
+// its toggles now (UnitStateView::scriptBits; false when not known): for range_rings.cpp (user_units.cpp).
+const UnitView* UserUnitView(lua_State* L, uint32_t id);
+bool UserUnitScriptBits(lua_State* L, uint32_t id, uint32_t* bits);
 // Range rings (range_rings.cpp): SetOverlayFilter / SetOverlayFilters; the console variables
-// range_RenderSelected / range_RenderHighlighted / range_RenderBuild (the name in upper case;
-// false: not one of them) and such a variable's value now; and the rings to draw now, given the
-// unit under the mouse (0xffffffff: none) and the building about to be placed (nullptr: none).
+// range_RenderSelected / range_RenderHighlighted / range_RenderBuild / range_Fill /
+// range_InnerThicknessCoeff / range_OuterThicknessCoeff / ren_Ranges (the name in upper case; false: not one
+// of them), and such a variable's spelling, kind ('b' or 'f') and value now; and the rings to draw now, in the
+// order drawn, for what the world view says of this frame:
+struct RangeView {
+  uint32_t rollover = 0xffffffffu;  // the unit under the mouse (the session's rollover unit)
+  bool placing = false;             // a build mode with a blueprint, the mouse over the world:
+  std::string blueprint;            // the building about to be placed
+  float mouse[3] = {0, 0, 0};       // and the place of the world under the mouse
+  float zoomShare = 1;              // the camera's zoom over its farthest zoom (GetZoom / GetMaxZoom)
+  float playable = 512;             // the longer side of the playable map
+  bool interpolate = true;          // the units where the picture draws them this frame
+  // The units in the camera's view (false: not known; then PlaceInCameraView says).
+  std::function<bool(std::vector<uint32_t>*)> unitsInView;
+};
 void RegisterRangeBindings(lua_State* L);
 bool RangeConsoleCommand(lua_State* L, const std::string& upperName, const std::string& value);
-bool RangeConsoleValue(lua_State* L, const std::string& upperName, bool* value);
-void RangeRingsForWorld(lua_State* L, uint32_t hover, const WorldGhost* build, std::vector<WorldRangeGroup>* out);
+bool RangeConVar(lua_State* L, const std::string& upperName, const char** name, char* kind, double* value);
+void RangeRingsForWorld(lua_State* L, const RangeView& view, std::vector<WorldRangeGroup>* out);
 // The meshes the game's script places in the world (world_meshes.cpp): InternalCreateWorldMesh
 // and its methods, AddCommandFeedbackBlip; and the list to draw now (hidden ones left out, an
 // order's mark gone when its time is over).

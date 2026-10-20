@@ -1253,6 +1253,26 @@ bool UserUnitFacts(lua_State* L, uint32_t id, std::string* blueprint, float posi
   return true;
 }
 
+const UnitView* UserUnitView(lua_State* L, uint32_t id) {
+  UserState* user = UserState::From(L);
+  if (!user->units) return nullptr;
+  UnitStore& store = static_cast<UnitStore&>(*user->units);
+  auto it = store.units.find(id);
+  if (it == store.units.end() || it->second->gone || it->second->view.dead) return nullptr;
+  return &it->second->view;
+}
+
+bool UserUnitScriptBits(lua_State* L, uint32_t id, uint32_t* bits) {
+  UserState* user = UserState::From(L);
+  if (!user->units) return false;
+  UnitStore& store = static_cast<UnitStore&>(*user->units);
+  auto it = store.units.find(id);
+  UnitStateView s;
+  if (it == store.units.end() || !StateOf(L, it->second.get(), &s)) return false;
+  *bits = s.scriptBits;
+  return true;
+}
+
 void RequestSessionEnd(lua_State* L) {
   if (TheSim(L)) Writer(L).EndGame();
 }

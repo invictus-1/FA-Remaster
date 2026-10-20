@@ -1028,8 +1028,6 @@ class WorldView : public Control {
         }
       }
     }
-    // (The building about to be placed comes first: the range rings below take it from there.)
-    const bool placing = !scene.ghosts.empty();
     // Round each building being placed, the outline of the ground it takes: green where it can
     // stand, red where not (the guide of the original, by Chris's pictures of it).
     for (const WorldGhost& g : scene.ghosts) SiteOutline(L, sim(), g, g.free ? 0xff10d010u : 0xffe02020u, &scene.lines);
@@ -1048,20 +1046,31 @@ class WorldView : public Control {
       if (hasSim) SiteOutline(L, sim(), dragged, dragged.free ? 0xd800d800u : 0xd8d80000u, &scene.lines);
       scene.ghosts.push_back(dragged);
     }
-    // The range rings: of the selected units, the unit under the mouse, the building about to be
-    // placed, and of every unit in a filter the player has switched on.
+    // The range rings (range_rings.cpp): of the building about to be placed (at the place under the
+    // mouse, the original's session+0x4b4), of every unit of the player's in the view in a filter the
+    // player has switched on, of the selected units, of the unit under the mouse (the session's rollover
+    // unit); their lines as thick as the camera's zoom over its farthest and the playable map's longer
+    // side make them (func_RenderRings 0x7ef5a0: CameraImpl GetZoom / GetMaxZoom, GetPlayableMapRect).
     lap("(the picture's scene: hover, buildings)");
-    RangeRingsForWorld(L, scene.hover, placing ? &scene.ghosts[0] : nullptr, &scene.ranges);
-    lap("(the picture's scene: range rings)");
-    {  // (the eye's distance at the camera's nearest and farthest zoom)
+    {
+      RangeView rings;
+      rings.rollover = rollover;
       Camera* c = GetCameraObject(L, cameraName);
-      const float zoom = c->zoom;
-      c->zoom = kNearZoom;
-      scene.zoomNear = EyeDistance(c);
-      c->zoom = MaxZoom(c);
-      scene.zoomFar = EyeDistance(c);
-      c->zoom = zoom;
+      float x0, z0, x1, z1;
+      PlayRect(c, &x0, &z0, &x1, &z1);
+      const float farthest = MaxZoom(c);
+      rings.zoomShare = farthest > 0 ? c->zoom / farthest : 1;
+      rings.playable = std::max(x1 - x0, z1 - z0);
+      rings.placing = building && pixels_ && HitTest(ui.mouseX, ui.mouseY) &&
+                      source->GroundAt(ui.mouseX - r.x0, ui.mouseY - r.y0, rings.mouse);
+      if (rings.placing) rings.blueprint = name;
+      rings.unitsInView = [source, w, h](std::vector<uint32_t>* ids) {
+        source->UnitsIn(0, 0, static_cast<float>(w), static_cast<float>(h), ids);
+        return true;
+      };
+      RangeRingsForWorld(L, rings, &scene.ranges);
     }
+    lap("(the picture's scene: range rings)");
     // The meshes the game's script has placed in the world, and the marks of orders just given.
     WorldMeshesForWorld(L, &scene.meshes);
     UserDecalsForWorld(L, &scene.decals);

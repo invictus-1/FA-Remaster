@@ -74,8 +74,10 @@ struct WorldRangeRing {
 struct WorldRangeGroup {
   uint32_t color = 0xffffffffu;      // 0xAARRGGBB
   int glow = 0;                      // 0..255, the first byte of the script's colour
-  float outer[2] = {0.04f, 4.0f};    // the outline's thickness at the nearest and the farthest zoom
-  float inner[2] = {0.04f, 4.0f};    // a hole's outline's
+  // The outline's thickness at the nearest and the farthest zoom, and a hole's outline's (range_rings.cpp gives
+  // this frame's thickness at both ends, worked out by the original's rule).
+  float outer[2] = {0.04f, 4.0f};
+  float inner[2] = {0.04f, 4.0f};
   std::vector<WorldRangeRing> rings;
 };
 // A mesh the game's script has placed in the world (its WorldMesh, or the mark where an order
@@ -110,7 +112,8 @@ struct WorldScene {
   std::vector<WorldOrderMark> orderMarks;
   WorldOrderSettings orderSettings;
   // The range rings, and the camera's distances at its nearest and its farthest zoom (the rings'
-  // thickness goes between its two numbers with them).
+  // thickness goes between its two numbers with them; the world view leaves them as they are, its rings
+  // have the same thickness at both ends).
   std::vector<WorldRangeGroup> ranges;
   float zoomNear = 10, zoomFar = 1000;
   std::vector<WorldMeshView> meshes;

@@ -833,7 +833,6 @@ ConVarNow ConVarOf(lua_State* L, const std::string& key) {
   const LookSettings& looks = Looks();
   const CameraControls& keys = CameraKeys();
   const CustomNameStyle& names = CustomNames();
-  bool range = false;
   if (key == "UI_RENDERCUSTOMNAMES") set("ui_RenderCustomNames", 'b', names.on);
   else if (key == "UI_CUSTOMNAMECOLOR") set("ui_CustomNameColor", 'u', names.color);
   else if (key == "UI_CUSTOMNAMEFONTSIZE") set("ui_CustomNameFontSize", 'i', names.size);
@@ -873,8 +872,7 @@ ConVarNow ConVarOf(lua_State* L, const std::string& key) {
   else if (key == "UI_MAXWAYPOINTSIZE") set("ui_MaxWaypointSize", 'f', GraphVars().maxWaypointSize);
   else if (key == "UI_WAYPOINTLINESCALE") set("ui_WaypointLineScale", 'f', GraphVars().waypointLineScale);
   else if (key == "UI_MAXTEXTLOD") set("ui_MaxTextLOD", 'f', GraphVars().maxTextLod);
-  else if (RangeConsoleValue(L, key, &range))
-    set(key == "RANGE_RENDERSELECTED" ? "range_RenderSelected" : key == "RANGE_RENDERHIGHLIGHTED" ? "range_RenderHighlighted" : "range_RenderBuild", 'b', range);
+  else RangeConVar(L, key, &v.name, &v.kind, &v.number);  // (the range rings': range_RenderSelected and the others)
   return v;
 }
 
@@ -946,7 +944,7 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
     CallScript(L, "/lua/ui/game/selection.lua", make ? "AddCurrentSelectionSet" : "ApplySelectionSet", rest.substr(a, b - a + 1));
     return;
   }
-  if (RangeConsoleCommand(L, Upper(name), rest)) return;  // range_RenderSelected and its two kin
+  if (RangeConsoleCommand(L, Upper(name), rest)) return;  // range_RenderSelected and the range rings' others
   if (Upper(name) == "REMASTER_STATS") {  // the performance statistics over the interface (StatsOverlay)
     const size_t a = rest.find_first_not_of(" \t");
     bool& on = Overlay().on;
