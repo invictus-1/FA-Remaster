@@ -31,18 +31,26 @@ const char* const kStatNames[2][12] = {
 enum { kTotalProduced, kTotalConsumed, kIncome, kOutput, kStored, kReclaimed, kMaxStorage, kPeak, kShared,
        kTrend, kRatio, kAccumExcess };
 
-float GetNum(lua_State* L, int t, const char* k, float def) {
-  if (!lua_istable(L, t)) return def;
+thread_local int g_viewRead = 0;  // ViewReadScope (units.h)
+// t[k], raw: while a view reads, through lua_gpg_rawgetstr (it makes and checks nothing); else as ever
+void RawGetKey(lua_State* L, int t, const char* k) {
+  if (g_viewRead) {
+    lua_gpg_rawgetstr(L, t, k);
+    return;
+  }
   lua_pushstring(L, k);
   lua_rawget(L, t);
+}
+float GetNum(lua_State* L, int t, const char* k, float def) {
+  if (!lua_istable(L, t)) return def;
+  RawGetKey(L, t, k);
   float v = lua_isnumber(L, -1) ? static_cast<float>(lua_tonumber(L, -1)) : def;
   lua_pop(L, 1);
   return v;
 }
 bool GetBool(lua_State* L, int t, const char* k) {
   if (!lua_istable(L, t)) return false;
-  lua_pushstring(L, k);
-  lua_rawget(L, t);
+  RawGetKey(L, t, k);
   bool v = lua_toboolean(L, -1) != 0;
   lua_pop(L, 1);
   return v;
@@ -53,8 +61,7 @@ void PushField(lua_State* L, int t, const char* k) {
     lua_pushnil(L);
     return;
   }
-  lua_pushstring(L, k);
-  lua_rawget(L, t);
+  RawGetKey(L, t, k);
 }
 
 int LayerBits(const char* s) {  // "Land", "Seabed", "Sub", "Water", "Air", or a decimal mask
@@ -262,10 +269,17 @@ void EconomyEventTick(Sim& sim, lua_State* L, EconomyEvent* ev) {
 
 // ---- blueprint values ------------------------------------------------------------------------
 
+ViewReadScope::ViewReadScope() { ++g_viewRead; }
+ViewReadScope::~ViewReadScope() { --g_viewRead; }
+
 const UnitBpData& GetUnitBpData(lua_State* L, const BlueprintInfo& bp) {
   static SimCache<std::map<const BlueprintInfo*, UnitBpData>> cache;
   auto it = cache.find(&bp);
   if (it != cache.end()) return it->second;
+  // (a view's read of a blueprint the sim has not read yet: kept apart, ViewReadScope)
+  static SimCache<std::map<const BlueprintInfo*, UnitBpData>> viewCache;
+  if (g_viewRead)
+    if (auto v = viewCache.find(&bp); v != viewCache.end()) return v->second;
   UnitBpData d;
   Sim* sim = S(L);
   int top = lua_gettop(L);
@@ -336,7 +350,7 @@ const UnitBpData& GetUnitBpData(lua_State* L, const BlueprintInfo& bp) {
   d.skirtSizeX = GetNum(L, ph, "SkirtSizeX", 0);
   d.skirtSizeZ = GetNum(L, ph, "SkirtSizeZ", 0);
   lua_settop(L, top);
-  return cache.emplace(&bp, std::move(d)).first->second;
+  return (g_viewRead ? viewCache : cache).emplace(&bp, std::move(d)).first->second;
 }
 
 // ---- beat --------------------------------------------------------------------------------------

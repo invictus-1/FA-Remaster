@@ -87,6 +87,28 @@ TString *luaS_newlstr (lua_State *L, const char *str, size_t l) {
 }
 
 
+/*
+** moho64: the interned string `str', or NULL when the state has none: luaS_newlstr's search without its
+** making. Allocates nothing (lapi.c lua_gpg_rawgetstr).
+*/
+TString *luaS_gpg_find (lua_State *L, const char *str, size_t l) {
+  GCObject *o;
+  lu_hash h = (lu_hash)l;  /* seed (as luaS_newlstr) */
+  size_t step = (l>>5)+1;
+  size_t l1;
+  for (l1=l; l1>=step; l1-=step)
+    h = h ^ ((h<<5)+(h>>2)+(unsigned char)(str[l1-1]));
+  for (o = G(L)->strt.hash[lmod(h, G(L)->strt.size)];
+       o != NULL;
+       o = o->gch.next) {
+    TString *ts = gcotots(o);
+    if (ts->tsv.len == l && (memcmp(str, getstr(ts), l) == 0))
+      return ts;
+  }
+  return NULL;
+}
+
+
 Udata *luaS_newudata (lua_State *L, size_t s) {
   Udata *u;
   u = cast(Udata *, luaM_malloc(L, sizeudata(s)));

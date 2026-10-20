@@ -87,6 +87,16 @@ struct UnitBpData {
   bool hasBuilder = false;          // it can build (non-empty BuildableCategory)
 };
 const UnitBpData& GetUnitBpData(lua_State* L, const BlueprintInfo& bp);
+// While one lives, a host's view is reading (sim/sim_view.cpp BuildSiteOf): GetUnitBpData reads a blueprint the sim
+// has not read yet into a cache of the views' own, through reads that make and check nothing in the state, so the
+// sim's own first read of it (its collector checks, a key string it makes) stays where it would be without the
+// view. Only for the views, on the thread they run on.
+struct ViewReadScope {
+  ViewReadScope();
+  ~ViewReadScope();
+  ViewReadScope(const ViewReadScope&) = delete;
+  ViewReadScope& operator=(const ViewReadScope&) = delete;
+};
 // An EUnitState name (reflection 0x55bba0); Lua calls with any other name raise "Invalid enum value".
 bool IsUnitStateName(const char* name);
 
@@ -377,6 +387,7 @@ void UnitFinishedBuilding(Sim& sim, lua_State* L, Unit* u);
 // Helpers to keep a script value per object (for engine state that only scripts read back).
 void SetObjectValue(lua_State* L, ScriptObject* obj, const char* key, int valueIdx);
 void PushObjectValue(lua_State* L, ScriptObject* obj, const char* key);  // nil if unset
+void PeekObjectValue(lua_State* L, ScriptObject* obj, const char* key);  // the same for a host's view: makes nothing
 
 void RegisterEntityBindings(lua_State* L);
 // The entity's texture scroller's step (entity.h TextureScroller; CTextureScroller::Tick 0x777730), first thing in

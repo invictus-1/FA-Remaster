@@ -525,6 +525,27 @@ LUA_API void lua_pushcobjectkey (lua_State *L) {
   lua_unlock(L);
 }
 
+/*
+** moho64: t[k] (raw) for a C string key, pushed, for a host's views of the simulation (src/sim/sim_view.cpp)
+** that run between beats as often as the host likes. lua_pushstring makes the key's string if it is new and
+** runs the collector's check (luaC_checkGC) either way, so a host's reads could move a collection to another
+** moment or change the heap; this makes and checks nothing. A key the state has no string for is in no
+** table: nil.
+*/
+LUA_API void lua_gpg_rawgetstr (lua_State *L, int idx, const char *k) {
+  StkId t;
+  TString *ts;
+  lua_lock(L);
+  t = luaA_index(L, idx);
+  api_check(L, ttistable(t));
+  ts = luaS_gpg_find(L, k, strlen(k));
+  if (ts == NULL) setnilvalue(L->top);
+  else setobj2s(L->top, luaH_getstr(hvalue(t), ts));
+  api_incr_top(L);
+  lua_unlock(L);
+}
+
+
 LUA_API void lua_rawgeti (lua_State *L, int idx, int n) {
   StkId o;
   lua_lock(L);
@@ -821,6 +842,19 @@ LUA_API int lua_getgcthreshold (lua_State *L) {
 ** made. Only read (the two-copies fingerprint, src/sim/fingerprint.h). */
 LUA_API unsigned int lua_getnextserial (lua_State *L) {
   return G(L)->nextserial;
+}
+
+/* moho64: the heap and the collector's threshold in bytes (lua_getgccount / lua_getgcthreshold give KB). Only
+** read. */
+LUA_API void lua_gpg_gcbytes (lua_State *L, size_t *inuse, size_t *threshold) {
+  *inuse = cast(size_t, G(L)->nblocks);
+  *threshold = cast(size_t, G(L)->GCthreshold);
+}
+
+/* moho64, for a check only (src/app/main.cpp MOHO64_GC_DUE): the collector's threshold set to the heap, so
+** that a collection is due at the state's next check, without checking here (lua_setgcthreshold checks). */
+LUA_API void lua_gpg_gcdue (lua_State *L) {
+  G(L)->GCthreshold = G(L)->nblocks;
 }
 
 LUA_API int lua_getgccount (lua_State *L) {

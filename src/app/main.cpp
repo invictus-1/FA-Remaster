@@ -545,6 +545,66 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
   // the state Start left. With a peer, the first beat the two differ at ends the run.
   std::unique_ptr<Fingerprint> fingerprint = ok ? Fingerprint::FromEnvironment() : nullptr;
   bool diverged = fingerprint && !fingerprint->Beat(sim, 0);
+  // MOHO64_VIEW_READS=1 (a check): after every beat the reads of the simulation an interface makes between beats,
+  // for every unit at once: UnitStateOf for each, ReclaimableAt at the first units, BuildSiteOf of one more unit
+  // blueprint a beat, and once, before the first beat, BlueprintDisplays (the panels, the cursor and the building
+  // ghost at their busiest; sim/sim_view.h). The game must play the same with them as without: compare
+  // MOHO64_FINGERPRINT, its lua part too, of a run with and one without. The log says in how many beats the reads
+  // ran a collection or changed the Lua heap. MOHO64_GC_DUE=<n> makes a collection due after every n-th beat (the
+  // collector's threshold set to the heap, lua_gpg_gcdue), in a run with the reads and one without alike, so that
+  // the reads meet a due collection whenever wanted.
+  struct ViewReads {
+    bool on = false;
+    int due = 0;
+    size_t beats = 0, collected = 0, changed = 0;
+    long long bytes = 0;
+    std::vector<std::string> unitBps;
+    size_t nextBp = 0;
+  } vr;
+  vr.on = getenv("MOHO64_VIEW_READS") && std::atoi(getenv("MOHO64_VIEW_READS")) > 0;
+  vr.due = getenv("MOHO64_GC_DUE") ? std::atoi(getenv("MOHO64_GC_DUE")) : 0;
+  auto viewReads = [&](bool first) {
+    lua_State* L = sim.L();
+    if (!L) return;
+    if (vr.due > 0 && !first && sim.tick() % static_cast<uint32_t>(vr.due) == 0) lua_gpg_gcdue(L);
+    if (!vr.on) return;
+    size_t heap0 = 0, thr0 = 0, heap1 = 0, thr1 = 0;
+    lua_gpg_gcbytes(L, &heap0, &thr0);
+    if (first) {
+      std::vector<BlueprintDisplay> bd;
+      BlueprintDisplays(sim, &bd);
+      for (const BlueprintDisplay& d : bd)
+        if (d.kind == 0) vr.unitBps.push_back(d.id);
+    }
+    std::vector<UnitView> units;
+    UnitViews(sim, &units);
+    for (const UnitView& u : units) {
+      UnitStateView st;
+      UnitStateOf(sim, u.id, &st);
+    }
+    for (size_t i = 0; i < units.size() && i < 8; ++i) {
+      ReclaimableView rv;
+      ReclaimableAt(sim, units[i].position, 5.0f, &rv);
+    }
+    if (!units.empty() && !vr.unitBps.empty()) {
+      float site[3];
+      bool can = false;
+      BuildSiteOf(sim, vr.unitBps[vr.nextBp++ % vr.unitBps.size()], units[0].position, site, &can);
+    }
+    lua_gpg_gcbytes(L, &heap1, &thr1);
+    ++vr.beats;
+    if (thr1 != thr0) {
+      if (vr.collected++ < 10)
+        Logf(LogLevel::Info, "view reads: tick %u: a collection ran in the reads (heap %zu -> %zu, threshold %zu -> %zu)",
+             sim.tick(), heap0, heap1, thr0, thr1);
+    } else if (heap1 != heap0) {
+      if (vr.changed++ < 10)
+        Logf(LogLevel::Info, "view reads: tick %u: the reads changed the heap by %lld bytes", sim.tick(),
+             static_cast<long long>(heap1) - static_cast<long long>(heap0));
+      vr.bytes += static_cast<long long>(heap1) - static_cast<long long>(heap0);
+    }
+  };
+  if (ok) viewReads(true);
   while (ok && !diverged && done < o.ticks) {
     if (playStream && !stream.AtEnd()) {
       if (!stream.ApplyUntilAdvance(sim)) {
@@ -571,6 +631,7 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
       diverged = true;
       break;
     }
+    viewReads(false);
     if (o.view) {  // the live frame's extras: the most seen at one beat, and one sample of each
       std::vector<UnitPose> poses;
       std::vector<ProjectileView> shots;
@@ -763,6 +824,9 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
     for (const std::string& line : hitsSeen.samples) Logf(LogLevel::Info, "hits: %s", line.c_str());
   }
   if (fingerprint && !diverged) fingerprint->End(static_cast<uint32_t>(done + paused));
+  if (vr.on)
+    Logf(LogLevel::Info, "view reads: %zu beats read; a collection ran in the reads of %zu, the heap changed in %zu (%lld bytes)",
+         vr.beats, vr.collected, vr.changed, vr.bytes);
   for (auto& [what, n] : ordersUnhandled) Logf(LogLevel::Warning, "orders: %s not carried out (x%d)", what.c_str(), n);
   if (ok && o.view) LogView(sim, syncBeats, syncBytes, lastSync);
   if (stream_ && playStream)

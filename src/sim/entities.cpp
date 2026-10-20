@@ -1231,6 +1231,18 @@ void PushObjectValue(lua_State* L, ScriptObject* obj, const char* key) {
   lua_remove(L, -2);
 }
 
+// The same for a host's view (sim/sim_view.cpp), which must make and check nothing in the state (lua_gpg_rawgetstr).
+void PeekObjectValue(lua_State* L, ScriptObject* obj, const char* key) {
+  lua_gpg_rawgetstr(L, LUA_REGISTRYINDEX, kValuesKey);
+  if (!lua_istable(L, -1)) return;
+  lua_pushlightuserdata(L, obj);
+  lua_rawget(L, -2);
+  lua_remove(L, -2);
+  if (!lua_istable(L, -1)) return;
+  lua_gpg_rawgetstr(L, -1, key);
+  lua_remove(L, -2);
+}
+
 void RegisterEntityBindings(lua_State* L) {
   SetGlobal(L, "CreateUnit", l_CreateUnit);
   SetGlobal(L, "CreateUnitHPR", l_CreateUnitHPR);

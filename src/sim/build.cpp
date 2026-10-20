@@ -4721,14 +4721,22 @@ void SiloNumbers(Sim& sim, const Unit* u, int building[2], int room[2]) {
     room[1] = s->maxStore[1];
     return;
   }
-  // (no missile was asked for yet: the room is what the counted weapons' blueprints say, as GetSilo reads them)
+  // (no missile was asked for yet: the room is what the counted weapons' blueprints say, as GetSilo reads them;
+  // read as a view reads, making and checking nothing in the state: sim/sim_view.cpp UnitStateOf is the only caller)
   lua_State* L = sim.L();
   const int top = lua_gettop(L);
+  auto field = [&](int t, const char* k) {
+    lua_gpg_rawgetstr(L, t, k);
+    return lua_gettop(L);
+  };
   for (const UnitWeapon* w : u->weapons) {
     lua_rawgeti(L, LUA_REGISTRYINDEX, w->bpRef);
     const int t = lua_gettop(L);
-    if (lua_istable(L, t) && FieldBool(L, t, "CountedProjectile") && w->projBp)
-      room[FieldBool(L, t, "NukeWeapon") ? 1 : 0] = static_cast<int>(FieldNum(L, t, "MaxProjectileStorage", 0));
+    if (lua_istable(L, t) && lua_toboolean(L, field(t, "CountedProjectile")) && w->projBp) {
+      const bool nuke = lua_toboolean(L, field(t, "NukeWeapon")) != 0;
+      const int n = field(t, "MaxProjectileStorage");
+      room[nuke ? 1 : 0] = lua_isnumber(L, n) ? static_cast<int>(static_cast<float>(lua_tonumber(L, n))) : 0;
+    }
     lua_settop(L, top);
   }
 }

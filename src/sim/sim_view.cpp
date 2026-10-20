@@ -459,15 +459,15 @@ bool UnitStateOf(Sim& sim, uint32_t unitId, UnitStateView* out) {
     v.nukeSiloMaxStorage = room[1];
   }
   if (u->HasLuaObject()) {  // values the scripts keep on the unit
-    PushObjectValue(L, u, "stat:KILLS");
+    PeekObjectValue(L, u, "stat:KILLS");  // (not PushObjectValue: a view makes and checks nothing, StrField)
     if (lua_isnumber(L, -1)) v.kills = static_cast<int>(lua_tonumber(L, -1));
     lua_pop(L, 1);
     // (the keys are the setters' names without their "Set": entities.cpp's kAttrs. These two were read with it,
     // as the shield's ratio was, and so never saw what a script had set.)
-    PushObjectValue(L, u, "Capturable");
+    PeekObjectValue(L, u, "Capturable");
     if (!lua_isnil(L, -1)) v.capturable = lua_toboolean(L, -1) != 0;
     lua_pop(L, 1);
-    PushObjectValue(L, u, "Reclaimable");
+    PeekObjectValue(L, u, "Reclaimable");
     if (!lua_isnil(L, -1)) v.reclaimable = lua_toboolean(L, -1) != 0;
     lua_pop(L, 1);
   }
@@ -523,17 +523,20 @@ bool UnitMayBuild(const Sim& sim, uint32_t unitId, const std::string& blueprintI
 }
 
 namespace {
-// field `key` of the table at `idx` as a string ("" when it is not one) / a number (`def` when it is not one)
+// field `key` of the table at `idx` as a string ("" when it is not one) / a number (`def` when it is not one). The
+// views' reads of the scripts' state go through lua_gpg_rawgetstr, never lua_pushstring: they run between beats as
+// often as a host likes, and lua_pushstring makes a key's string when the state has none and runs the collector's
+// check either way, so the host's frames would move the state's collections and change its heap (two players'
+// machines, or a game and its replay, would then collect at other moments). This way a view makes and checks
+// nothing.
 std::string StrField(lua_State* L, int idx, const char* key) {
-  lua_pushstring(L, key);
-  lua_rawget(L, idx);
+  lua_gpg_rawgetstr(L, idx, key);
   std::string s = lua_type(L, -1) == LUA_TSTRING ? lua_tostring(L, -1) : "";
   lua_pop(L, 1);
   return s;
 }
 float NumField(lua_State* L, int idx, const char* key, float def) {
-  lua_pushstring(L, key);
-  lua_rawget(L, idx);
+  lua_gpg_rawgetstr(L, idx, key);
   float v = lua_type(L, -1) == LUA_TNUMBER ? static_cast<float>(lua_tonumber(L, -1)) : def;
   lua_pop(L, 1);
   return v;
@@ -555,8 +558,7 @@ void BlueprintDisplays(const Sim& sim, std::vector<BlueprintDisplay>* out) {
   lua_State* L = sim.L();
   const SimBlueprints& bps = sim.blueprints();
   const int top = lua_gettop(L);
-  lua_pushstring(L, "__blueprints");
-  lua_rawget(L, LUA_GLOBALSINDEX);
+  lua_gpg_rawgetstr(L, LUA_GLOBALSINDEX, "__blueprints");  // (a view: no lua_pushstring, StrField above)
   const int all = lua_gettop(L);
   if (!lua_istable(L, all)) {
     lua_settop(L, top);
@@ -569,18 +571,15 @@ void BlueprintDisplays(const Sim& sim, std::vector<BlueprintDisplay>* out) {
     bps.PushTable(L, *bp);
     const int t = lua_gettop(L);
     if (!lua_istable(L, t)) continue;
-    lua_pushstring(L, "Display");
-    lua_rawget(L, t);
+    lua_gpg_rawgetstr(L, t, "Display");
     const int disp = lua_gettop(L);
     if (!lua_istable(L, disp)) continue;
     const std::string meshId = StrField(L, disp, "MeshBlueprint");
     if (meshId.empty()) continue;
-    lua_pushstring(L, meshId.c_str());
-    lua_rawget(L, all);
+    lua_gpg_rawgetstr(L, all, meshId.c_str());
     const int mesh = lua_gettop(L);
     if (!lua_istable(L, mesh)) continue;
-    lua_pushstring(L, "LODs");
-    lua_rawget(L, mesh);
+    lua_gpg_rawgetstr(L, mesh, "LODs");
     const int lods = lua_gettop(L);
     if (!lua_istable(L, lods)) continue;
     BlueprintDisplay d;
@@ -603,8 +602,7 @@ void BlueprintDisplays(const Sim& sim, std::vector<BlueprintDisplay>* out) {
       x.lookup = StrField(L, lod, "LookupName");
       x.shader = StrField(L, lod, "ShaderName");
       x.cutoff = NumField(L, lod, "LODCutoff", 0.0f);
-      lua_pushstring(L, "Scrolling");
-      lua_rawget(L, lod);
+      lua_gpg_rawgetstr(L, lod, "Scrolling");
       x.scrolling = lua_toboolean(L, -1) != 0;
       lua_pop(L, 1);
       d.lods.push_back(std::move(x));
@@ -622,8 +620,7 @@ void BlueprintDisplays(const Sim& sim, std::vector<BlueprintDisplay>* out) {
       d.selectionCenterOffset[0] = NumField(L, t, "SelectionCenterOffsetX", 0.0f);
       d.selectionCenterOffset[1] = NumField(L, t, "SelectionCenterOffsetY", 0.0f);
       d.selectionCenterOffset[2] = NumField(L, t, "SelectionCenterOffsetZ", 0.0f);
-      lua_pushstring(L, "Mesh");
-      lua_rawget(L, disp);
+      lua_gpg_rawgetstr(L, disp, "Mesh");
       if (lua_istable(L, -1)) d.iconFadeInZoom = NumField(L, lua_gettop(L), "IconFadeInZoom", 0.0f);
       lua_pop(L, 1);
     }
@@ -635,6 +632,7 @@ void BlueprintDisplays(const Sim& sim, std::vector<BlueprintDisplay>* out) {
 bool BuildSiteOf(Sim& sim, const std::string& blueprint, const float pos[3], float site[3], bool* canBuild) {
   const BlueprintInfo* bp = sim.blueprints().Find(blueprint);
   if (!bp || bp->kind != BpKind::Unit) return false;
+  ViewReadScope view;  // (the building ghost: its blueprint's data is read without filling the sim's cache)
   const Vec3 s = SnapStructurePosition(sim, *bp, Vec3{pos[0], pos[1], pos[2]});
   site[0] = s.x;
   site[1] = s.y;

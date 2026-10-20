@@ -170,6 +170,7 @@ LUA_API void  lua_pushlightuserdata (lua_State *L, void *p);
 LUA_API void  lua_gettable (lua_State *L, int idx);
 LUA_API void  lua_rawget (lua_State *L, int idx);
 LUA_API void  lua_rawgeti (lua_State *L, int idx, int n);
+LUA_API void  lua_gpg_rawgetstr (lua_State *L, int idx, const char *k);  /* moho64: makes and collects nothing */
 /* moho64 extensions: per-state host pointers (O(1), no registry lookup) and a raw get of the
 ** table field "_c_object" with the pre-interned key (engine objects' handles). */
 LUA_API void *lua_getextra (lua_State *L, int i);
@@ -219,6 +220,8 @@ LUA_API int  lua_resume (lua_State *L, int narg);
 LUA_API int   lua_getgcthreshold (lua_State *L);
 LUA_API int   lua_getgccount (lua_State *L);
 LUA_API unsigned int lua_getnextserial (lua_State *L);  /* moho64: objects with a serial made so far */
+LUA_API void  lua_gpg_gcbytes (lua_State *L, size_t *inuse, size_t *threshold);  /* moho64: only reads */
+LUA_API void  lua_gpg_gcdue (lua_State *L);  /* moho64: a check's tool (a collection due at the next check) */
 LUA_API void  lua_setgcthreshold (lua_State *L, int newthreshold);
 
 /*
