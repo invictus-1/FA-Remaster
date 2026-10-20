@@ -2636,25 +2636,23 @@ int l_GetMissileInfoNow(lua_State* L) {
   return 1;
 }
 
-// One statistic of a unit as the simulation's scripts keep it (sim/entities.cpp GetStat / SetStat: the value under
-// "stat:<name>" on the unit's script object), into u->statCopies. Read when no beat runs; while one runs on its own
-// thread, and for a unit the simulation no longer holds, the copy read before (none: type LUA_TNIL). The same copy
-// serves the rest of the sync (the panels ask every frame).
+// One statistic of a unit as the simulation's scripts keep it (FAF's Unit:UpdateStat / SetStat), from the engine's
+// view of the unit (UnitStateView::stats, engine 13a6e16: every number statistic, sorted by name), into
+// u->statCopies: the view is the one safe way to the simulation's state (the engine's fix 47: reading it allocates
+// nothing in the simulation's Lua), and StateOf keeps it per sync (while a beat runs on its own thread, the copy from
+// before it). A unit the simulation no longer holds: the copy read before (none: type LUA_TNIL).
 const UserUnit::StatCopy& StatOf(lua_State* L, const UserUnit* u, const std::string& name) {
   UserUnit::StatCopy& copy = u->statCopies[name];
   UserState* user = UserState::From(L);
-  const bool beat = user->config().beatRunning && user->config().beatRunning();
-  if (beat || copy.sync == user->syncCount) return copy;
-  Sim* sim = TheSim(L);
-  Entity* e = sim && !u->gone ? sim->FindEntityById(u->view.id) : nullptr;
-  if (!e || e->kind != Entity::Kind::Unit || e->destroyQueued || !e->HasLuaObject()) return copy;
-  lua_State* S = sim->L();
-  const int top = lua_gettop(S);
-  PushObjectValue(S, e, ("stat:" + name).c_str());
-  copy.type = lua_type(S, -1) == LUA_TNUMBER ? LUA_TNUMBER : lua_type(S, -1) == LUA_TSTRING ? LUA_TSTRING : LUA_TNIL;
-  copy.number = copy.type == LUA_TNUMBER ? lua_tonumber(S, -1) : 0;
-  copy.text = copy.type == LUA_TSTRING ? lua_tostring(S, -1) : "";
-  lua_settop(S, top);
+  if (copy.sync == user->syncCount) return copy;
+  UnitStateView s;
+  if (!StateOf(L, u, &s)) return copy;
+  auto it = std::lower_bound(s.stats.begin(), s.stats.end(), name,
+                             [](const std::pair<std::string, float>& e, const std::string& n) { return e.first < n; });
+  const bool found = it != s.stats.end() && it->first == name;
+  copy.type = found ? LUA_TNUMBER : LUA_TNIL;
+  copy.number = found ? it->second : 0;
+  copy.text.clear();
   copy.sync = user->syncCount;
   return copy;
 }
