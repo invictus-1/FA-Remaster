@@ -167,7 +167,7 @@ void Advance(Animator* a) {
     // the turn of the beat before this one (0x4f0b40 on unit+0xa4 / unit+0xc0)
     const Quat& q1 = u->lastOrientation;
     const Quat& q0 = u->prevLastOrientation;
-    const bool turning = q1.x != q0.x || q1.y != q0.y || q1.z != q0.z || q1.w != q0.w;
+    const bool turning = !vm::SameBits(q1, q0);
     if (turning && !(f > 0.25f)) f = 0.25f;
     a->time += f * rate * 0.1f;
   } else {

@@ -35,6 +35,14 @@ inline bool IsNaN(Vec3 a) { return std::isnan(a.x) || std::isnan(a.y) || std::is
 // zero" (against the zero vector 0xf3d21c) tests are these.
 inline bool SameBits(const Vec3& a, const Vec3& b) { return std::memcmp(&a, &b, sizeof(Vec3)) == 0; }
 inline bool BitsZero(const Vec3& v) { return SameBits(v, Vec3{0.0f, 0.0f, 0.0f}); }
+// The same for a quaternion, the exe's 16-byte memcmp 0x4f0b40 (the order of the parts does not matter to it)
+inline bool SameBits(const Quat& a, const Quat& b) { return std::memcmp(&a, &b, sizeof(Quat)) == 0; }
+inline bool BitsZero4(float a, float b, float c, float d) {
+  const float v[4] = {a, b, c, d};
+  const float z[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+  return std::memcmp(v, z, sizeof v) == 0;
+}
+inline bool BitsZero(const Quat& q) { return BitsZero4(q.x, q.y, q.z, q.w); }
 inline Vec3 NaNVec() {
   float n = std::numeric_limits<float>::quiet_NaN();
   return {n, n, n};

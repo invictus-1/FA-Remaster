@@ -66,8 +66,11 @@ float TopSpeed(Sim& sim, const Unit* u) {
   if (CanFly(u)) return GetAirBp(sim.L(), *u->blueprint).maxAirspeed;
   return u->motion.bp ? u->motion.bp->maxSpeed : 0.0f;
 }
-bool QuatZero(const Formation& f) { return f.qw == 0 && f.qx == 0 && f.qy == 0 && f.qz == 0; }
-bool AssignZero(const Formation& f) { return f.aw == 0 && f.ax == 0 && f.ay == 0 && f.az == 0; }
+// the formation's orientation (+0x2d4) and its assignment rotation (+0x2e4) against the zero quaternion 0x10c7a58 by
+// the 16-byte memcmp 0x4f0b40 (ComputeRunScriptOffset 0x566aa8, RunScript 0x567613, UpdateFormation 0x568f7b, the
+// ctor 0x569755): a -0.0 part is not zero
+bool QuatZero(const Formation& f) { return vm::BitsZero4(f.qw, f.qx, f.qy, f.qz); }
+bool AssignZero(const Formation& f) { return vm::BitsZero4(f.aw, f.ax, f.ay, f.az); }
 // MultQuadVec with (w, x, y, z)
 // Every rotation of the formation code is MultQuadVec 0x452d40 (formations.md: the layout's 0x452d40 at 0x59b6d9 and the
 // assignment's): through the quaternion's matrix (QuatToMatrix 0x452fd0) and its row sums ((0 + x m0) + y m1) + z m2,

@@ -183,6 +183,12 @@ int l_CreateUnit(lua_State* L) {
          static_cast<float>(luaL_checknumber(L, 5))};
   Quat q{static_cast<float>(luaL_optnumber(L, 6, 0)), static_cast<float>(luaL_optnumber(L, 7, 0)),
          static_cast<float>(luaL_optnumber(L, 8, 0)), static_cast<float>(luaL_optnumber(L, 9, 1))};
+  // 0x6cf90a..0x6cf984: a quaternion of four zeros (the 16-byte memcmp 0x4f0b40 with the zero quaternion 0x10c7a58)
+  // is reported and replaced by the identity
+  if (vm::BitsZero(q)) {
+    Logf(LogLevel::Warning, "Passed in an invalid quaternion when creating unit %s", bp->id.c_str());
+    q = Quat{0.0f, 0.0f, 0.0f, 1.0f};
+  }
   bool layer = lua_gettop(L) >= 10 && !lua_isnil(L, 10);  // an explicit layer keeps the given y (0x585ab0 +0x25)
   uint8_t want = layer && lua_isstring(L, 10) ? LayerBit(lua_tostring(L, 10)) : 0;
   return PushNew(L, S(L)->CreateUnit(L, *bp, a, p, q, true, nullptr, layer, want));
