@@ -1270,7 +1270,11 @@ int TickLoad(Sim& sim, Unit* T, BuildTask& t, TransportTaskData& d) {
           t.state = 2;
           return kTaskRunning;
         }
-        if (T->motion.hasGoal) MotionStop(T);
+        // 0x625c3e..0x625ca3: a transport that does not fly to the pickup point (an air staging platform, a
+        // teleporter, or one that cannot fly: +0x80, +0x81, +0x68b) is told AbortMove (navigator vt+0x10) when it
+        // moved in the last beat (its position, +0xb4, against the one before, +0xd0, by memcmp 0x4f0a50), goal or
+        // none; state 2 either way, return 1
+        if (!SameBits(T->position, T->lastPosition)) MotionStop(T);
         t.state = 2;
         return kTaskRunning;
       }

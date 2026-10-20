@@ -1525,6 +1525,18 @@ int TickUpgrade(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
       if (!t.bp) return kTaskFailed;
       if (sim.tick() < t.waitUntil) return kTaskRunning;  // (restarting after a lost upgrade unit, or paused)
       u->unitStates.insert("Upgrading");  // (the ctor 0x5f8484: +0x4a0 |= 0x40)
+      // State 0 (0x5f88e2..0x5f8932): a mobile upgrader (IsMobile, vt+0x30) that moved in the last beat (its position,
+      // u+0xb4, against the one before, u+0xd0, by memcmp 0x4f0a50) and has a navigator (u+0x54c) is told AbortMove
+      // (vt+0x10) and asks again a beat later (return 1); otherwise state 1 in the same call. So a unit still rolling
+      // when the order comes in brakes to a stand first, and the new unit is made where it stopped.
+      if (!t.upgradeMoveDone) {
+        if (u->motion.bp && u->motion.bp->mobile() && !vm::SameBits(u->position, u->lastPosition)) {
+          MotionStop(u);
+          t.waitUntil = sim.tick() + 1;
+          return kTaskRunning;
+        }
+        t.upgradeMoveDone = true;
+      }
       // State 1 (0x5f8936): a paused upgrader (unit+0x2a0) returns 10 before anything else: no NoCost, no unit. Seen:
       // MP1 2660, army 3 orders its mex 0x300018 to upgrade and pauses it in the same beat; the original's record has
       // no upgrade unit and the mex is Upgrading only (not NoCost) while it stays paused; ours made 0x300033 at 2661.
@@ -1553,6 +1565,7 @@ int TickUpgrade(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
         StopBuild(sim, L, u, t, false);
         t.targetId = 0;
         t.state = 0;
+        t.upgradeMoveDone = false;  // (0x5f8b30: state 0 again, its step included)
         t.waitUntil = sim.tick() + 10;
         return kTaskRunning;
       }

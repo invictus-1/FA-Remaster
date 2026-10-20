@@ -57,6 +57,9 @@ struct BuildTask : public ScriptObject {
   Quat orderOri;  // CUnitTeleportTask +0x58: the unit's orientation when the order was dispatched
   uint32_t teleporterId = 0;  // CUnitTeleportTask +0x50: the teleporter (weak; entity ref): the unit, or a TELEPORTATION unit
   bool capStarted = false;
+  // CUnitUpgradeTask: past its state 0, the "moved -> AbortMove" step (0x5f88e2..0x5f8932); its failure (state 2,
+  // 0x5f8b30) goes back to state 0
+  bool upgradeMoveDone = false;
   int capProgress = 0, capTotal = 0;
   float capPerTick[2] = {0, 0};
   std::shared_ptr<struct EconRequest> capRequest;

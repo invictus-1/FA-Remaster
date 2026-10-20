@@ -1,0 +1,18 @@
+# A unit still moving when its Upgrade starts brakes to a stand first (CUnitUpgradeTask::TaskTick 0x5f8890, state 0,
+# 0x5f88e2..0x5f8932: a mobile upgrader that moved in the last beat, its position against the one before by memcmp
+# 0x4f0a50, and has a navigator is told AbortMove and asks again a beat later; the new unit is made only once it
+# stands). Stock FAF has no mobile unit with an upgrade, so the test gives the T1 UEF engineer one (UpgradesTo
+# uel0208) in the sim's own blueprint table before it is made. An --orders file for moho64, e.g.
+#   moho64 --init offline\bin\init_lab.lua --session _scratch\ui\session_ai.lua --seed 7 --ticks 50
+#          --orders fa-remaster\tests\upgrade_moving_abort.txt --log out.log
+# The engineer drives east from tick 6; at 30 its orders are cleared and it is told to upgrade. The log's lines
+# "upgrade abort: tick N pos X Z ... focus F" must show it braking with no focus (no new unit) at ticks 31 to 38
+# and the new unit (focus 2) from tick 39, when it has stopped:
+#   upgrade abort: tick 31 pos 643.6801 340.2347 moving false upgrading true focus -
+#   upgrade abort: tick 38 pos 644.0577 340.2460 moving false upgrading true focus -
+#   upgrade abort: tick 39 pos 644.0577 340.2460 moving false upgrading true focus 2
+# (Before: focus 2 from tick 31, the new unit made where the engineer was still rolling.)
+5 lua __blueprints['uel0105'].General.UpgradesTo = 'uel0208' local u = CreateUnitHPR('uel0105', 'ARMY_1', 640, 0, 340, 0, 0, 0) ScenarioInfo.UpgTest = u LOG('upgrade abort: engineer ', u:GetEntityId())
+6 lua IssueMove({ScenarioInfo.UpgTest}, {700, 0, 340})
+30 lua local u = ScenarioInfo.UpgTest IssueClearCommands({u}) IssueUpgrade({u}, 'uel0208')
+30 lua ForkThread(function() for i = 1, 12 do local u = ScenarioInfo.UpgTest if u:BeenDestroyed() then break end local p = u:GetPosition() local f = u:GetFocusUnit() LOG(string.format('upgrade abort: tick %d pos %.4f %.4f moving %s upgrading %s focus %s', GetGameTick(), p[1], p[3], tostring(u:IsUnitState('Moving')), tostring(u:IsUnitState('Upgrading')), f and f:GetEntityId() or '-')) WaitTicks(1) end end)
