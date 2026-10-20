@@ -854,24 +854,26 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   yet moved along the view onto the ground for markers above or below it. Test `ui/tests/camera.lua`.
   Inferred: which unit counts as "being upgraded" (unfinished, a structure, made by a
   structure); the box of `UISelectAndZoomTo` is the blueprint's size, not the model's.
-- Range rings, first form (`user/range_rings.cpp`, with what was read from the original's range
-  renderer at its top): `SetOverlayFilter` and `SetOverlayFilters` keep the game script's
-  filters; the console variables `range_RenderSelected`, `range_RenderHighlighted` and
-  `range_RenderBuild` (the script switches all three on unless the profile says otherwise) give
-  rings to the selected units, to the player's unit under the mouse and to the building about
-  to be placed; a filter the player switches on in the game's overlay menu gives them to every
-  unit of the player's in it. What a ring measures goes by the filter's name as in the original:
-  the weapons of a range category (the greatest EffectiveRadius or MaxRadius, the least
-  MinRadius as an inner ring), or the blueprint's radar, sonar, omni and counter-intel radii.
-  They go to the picture's source in groups (`WorldScene::ranges`: a filter in one colour, with
-  the script's glow byte and its thickness numbers), which the renderer's `SetRanges` draws as
-  the original does: one outline round what a group's rings cover together. The groups go in
-  the reverse of the original's table of filter names, so that of rings lying on one another
-  the direct fire one is seen, as in pictures of the original (inferred from those, not read).
-  "Miscellaneous" is the build range of engineers and commanders (the game's scripts make it
-  so). Checked against pictures of the original for one unit: the same rings at the same sizes.
-  Not the original's yet: how thickness and glow go with the zoom (the renderer's guess;
-  `func_RenderRings` is not read) and radii changed while the game runs.
+- Range rings and the intel overlays (`user/range_rings.cpp`, read from the original's range
+  renderer and FAF's patches of it, the details at the file's top; test `ui/tests/intel_overlays.lua`):
+  `SetOverlayFilter` and `SetOverlayFilters` keep the game script's filters (FAF's multifunction
+  panel: the military and intel filters, their "combine" entries, the three conditions); the
+  console variables `range_RenderSelected`, `range_RenderHighlighted`, `range_RenderBuild`,
+  `range_Fill`, `range_InnerThicknessCoeff`, `range_OuterThicknessCoeff` and `ren_Ranges` as the
+  original's (bools and floats, as its console reports them). The rings go to the picture as the
+  original draws them, pass by pass, one group per filter (one outline round what its rings cover
+  together, a later group over an earlier one): the building about to be placed (at the place under
+  the mouse, by its blueprint), the filters switched on (the player's units in the camera's view, not
+  being built, the selected ones left out as FAF does), the selection (each filter in the order of
+  the filters' names), the unit under the mouse. What a ring measures goes by the filter's name: the
+  unit's weapons of a range category as the simulation keeps them (the greatest MaxRadius, the least
+  MinRadius as an inner ring; an enhancement's weapons too, as in the original), the shield, the
+  build range (Miscellaneous), the radar, sonar, omni and counter-intel radii (none while the unit's
+  intel, jamming or stealth toggle is set). The lines' thickness is the original's: the script's
+  pair by the camera's zoom over its farthest and the playable map's size. Not the original's yet:
+  the intel radii are the blueprint's (the unit's own, which scripts can change, are not in the
+  simulation's view of a unit); `range_Fill`'s fill is not drawn (the renderer has none); the
+  no-rush circle is not built (the army's no-rush place and time are not known here).
 - The meshes the game's script places in the world (`user/world_meshes.cpp`): its `WorldMesh`
   (`InternalCreateWorldMesh` and the `CUIWorldMesh` methods: the factories' rally points, the
   marks under the cursor) and `AddCommandFeedbackBlip`, the mark where an order lands, which
