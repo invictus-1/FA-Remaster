@@ -19,6 +19,7 @@ cbuffer RangeCamera : register(b1) {
   float4 boxInfo;      // x: the middle of the heights the ground lies between; y: half of them; z: 1 = there are
                        // outlines of earlier groups to lay this one over
   float4 lineColor;    // as the scene holds colour
+  float4 fillColor;    // [range fill] the group's fill as the scene holds white; a: its alpha (0: none)
 };
 #ifdef MSAA
 Texture2DMS<float> sceneDepth : register(t1);
@@ -99,6 +100,13 @@ float4 PS(float4 position : SV_Position) : SV_Target {
   float4 m = mask.Load(int3(position.xy, 0));
   float edge = saturate(m.r) * (1 - saturate(m.g));
   float4 mine = float4(lineColor.rgb * edge, edge * lineColor.a);
+  if (fillColor.a > 0) {  // [range fill] the group's inside first, over what the groups before laid; then its line, as below
+    float4 under = boxInfo.z < 0.5 ? float4(0, 0, 0, 0) : before.Load(int3(position.xy, 0));
+    float f = fillColor.a * saturate(m.g);
+    under = float4(fillColor.rgb * f + under.rgb * (1 - f), f + under.a * (1 - f));
+    float left = max(under.a - mine.a, 0) / max(under.a, 1e-4);
+    return float4(mine.rgb + under.rgb * left, max(under.a, mine.a));
+  }
   if (boxInfo.z < 0.5) return mine;
   float4 under = before.Load(int3(position.xy, 0));
   // (what of the earlier lines this one does not cover stays; together they cover as much of the
@@ -215,7 +223,7 @@ void Ranges::Build(const View& view, const Camera& camera, gfx::Texture sceneDep
   // how far the camera is between the nearest and the farthest zoom: the thickness goes with it
   const float zoom = std::clamp((camera.distance - zoomNear) / std::max(zoomFar - zoomNear, 1e-3f), 0.0f, 1.0f);
   const bool modern = view.constants.look > 0.5f;
-  float constants[24];
+  float constants[28];
   CameraConstants(view, camera, constants);
   constants[14] = waterLevel;
   constants[15] = 0;
@@ -237,6 +245,12 @@ void Ranges::Build(const View& view, const Camera& camera, gfx::Texture sceneDep
       constants[20 + k] = modern ? std::pow(c, 2.2f) * 1.6f * glow * night : c;
     }
     constants[23] = 1;
+    // [range fill] RangePS's white at 0.125. The original blends it into the picture as shown; the modern look's picture is
+    // linear light, mapped back at the end, where a white as strong as the marks' (1.6) brightened the ground about
+    // three times as much as the original's does: 0.42 is the white that brightens it as much (measured on SETONS_R at
+    // 16 o'clock: ground at 46 and 56 of 255 filled to 72 and 81, as 0.875 x ground + 0.125 x 255 gives)
+    constants[24] = constants[25] = constants[26] = modern ? 0.42f * night : 1.0f;
+    constants[27] = g.fill ? 0.125f : 0.0f;
     gfx::PassDesc pass;
     pass.color = maskTarget_;
     device_->BeginPass(pass);
@@ -279,7 +293,7 @@ void Ranges::Build(const View& view, const Camera& camera, gfx::Texture sceneDep
 
 void Ranges::Lay(const View& view, const Camera& camera, gfx::Texture sceneDepth, bool onWater) {
   if (!built_) return;
-  float constants[24] = {};
+  float constants[28] = {};
   CameraConstants(view, camera, constants);
   constants[14] = waterLevel;
   constants[15] = onWater ? 1.0f : 0.0f;

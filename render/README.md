@@ -428,6 +428,16 @@ Steps 1 and 2 of the order of work are done, steps 3 and 4 in a first version.
   over the water's surface after the water. Not read out of the original: how its thickness
   goes with the zoom between the two numbers (here: evenly with the camera's distance, between
   10 and 1000 unless the host says otherwise), and how strong its glow is.
+  A group's `fill` (the original's range_Fill, off at first; `--range-fill` fills the red test
+  group) lays white at 0.125 over the ground its rings cover less their lines and holes, before
+  its lines, as frame.fx's RangeFill does with the stencil the original casts (its 0x80, the
+  rings' insides). The modern look takes a white of 0.42 for it, measured to brighten the
+  ground as much as the original's blend does.
+- The minimap's deposit icons (`WorldPicture::DrawMinimap`'s `resourceIcons`): laid at every
+  call on the copy handed out, before the units' icons, as the original's RenderResources
+  draws them (mass_strategic.dds, hydrocarbon_strategic.dds, a square of a quarter of the
+  texture's width each way times ui_StrategicIconScale, point-sampled, blended by its alpha);
+  the minimap's kept ground never has them. `--no-minimap-resources` with `--picture`: without.
 - The meshes the game's interface script places in the world (`placed.h`, `World::placed`,
   `WorldPicture::SetWorldMeshes`): a rally point's flag, the marks under the cursor, the mark
   where an order lands. Each names a mesh file, an albedo texture and one of the original's

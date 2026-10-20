@@ -9,6 +9,7 @@
 
 #include "card_memory.h"  // (photofix2)
 #include "core/vfs.h"
+#include "dds.h"  // [minimap deposits]
 #include "ground.h"
 #include "gfx.h"
 #include "photo.h"
@@ -108,6 +109,12 @@ struct WorldPicture::Impl {
   int mapWidth = 0, mapHeight = 0;
   Camera mapCamera;
   bool minimapMeshes = false;  // [pings] SetMinimapMeshes
+  // [minimap deposits] the deposits' two pictures for the minimap, mass's and hydrocarbon's, read once (RGBA rows)
+  struct DepositPicture {
+    bool read = false;
+    int width = 0, height = 0;
+    std::vector<uint8_t> rgba;
+  } depositPictures[2];
   MinimapStamps stamps;        // [pings] (the meshes' stamps on it, placed.h)
   Mat4 mapMatrix{};
   std::vector<const StrategicIcons::Kind*> iconKinds;  // by FrameUnit::blueprint
@@ -800,6 +807,7 @@ void WorldPicture::SetRanges(const std::vector<RangeGroup>& groups, float zoomNe
     to.outerFar = g.outerFar;
     to.innerNear = g.innerNear;
     to.innerFar = g.innerFar;
+    to.fill = g.fill;  // [range fill]
     for (const RangeRing& r : g.rings) to.rings.push_back({{r.centre[0], r.centre[1], r.centre[2]}, r.radius, r.innerRadius});
     ranges.groups.push_back(std::move(to));
   }
@@ -833,7 +841,7 @@ void WorldPicture::MapSize(float* width, float* height) const {
   *height = impl_->world ? static_cast<float>(impl_->world->map.height) : 0;
 }
 
-const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height) {
+const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height, bool resourceIcons) {
   Impl& m = *impl_;
   width = std::max(width, 16);
   height = std::max(height, 16);
@@ -865,7 +873,7 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height) {
     c.fovY = 0.05f;
     c.distance = (z1 - z0) * 0.5f / std::tan(c.fovY * 0.5f);
     m.device->Resize(width, height);
-    const bool icons = w.iconsOn, shadows = w.shadowsOn;
+    const bool icons = w.iconsOn, shadows = w.shadowsOn, deposits = w.depositIcons;
     std::vector<World::Ghost> ghosts;
     std::vector<World::Line> lines;
     std::vector<World::Ring> rings;
@@ -877,6 +885,7 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height) {
     ranges.swap(w.ranges.groups);
     placed.swap(w.placed);
     w.iconsOn = false;
+    w.depositIcons = false;  // [minimap deposits] (the deposits' icons are laid at every call, by `resourceIcons`)
     w.shadowsOn = false;  // (the cascades are placed for the game's camera, not for one this far away)
     w.sidePicture = true;  // (no FSR 3 or motion: their frames before are the game camera's, kept for its next)
     w.sightShown = false; // (what is not seen is darkened below, on the copy handed out)
@@ -890,6 +899,7 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height) {
     m.device->EndFrame(&m.capture, !m.HostShows());  // (in the host's window: read back, not shown)
     m.depthIsWindow = false;
     w.iconsOn = icons;
+    w.depositIcons = deposits;
     w.shadowsOn = shadows;
     w.sidePicture = false;
     w.sightShown = true;
@@ -954,6 +964,63 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height) {
     v.widthPerDepth = 2 * std::tan(m.mapCamera.fovY * 0.5f) * static_cast<float>(width) / static_cast<float>(height);
     v.water = w.map.water.present ? w.map.water.elevation : -1e9f;
     m.stamps.Stamp(w.models, w.textures, m.frame, w.placed, v, m.mapPixels.data(), width, height);
+  }
+  // [minimap deposits] the deposits' icons, when the minimap's switch is on: before the units' icons, as the original's
+  // CWldSession::RenderResources (0x862a80) draws them before the strategic icons. Every deposit in the playable part
+  // where the view's level of detail is above 75 (0xf57b08; the minimap's, its LOD scale 1.8 times the width it spans,
+  // always is), at its place on the picture rounded down to the pixel: mass_strategic.dds for mass, then
+  // hydrocarbon_strategic.dds, each a square of the texture's width / 4 times ui_StrategicIconScale (FAF's 0x1292adc)
+  // each way from that pixel, the texture point-sampled and blended by its alpha (primbatcher.fx TResourceIcon, its
+  // pass P0; P1 writes the alpha alone), all of it, whether the army has seen the place or not.
+  if (resourceIcons && m.mapWidth && !w.decals.Deposits().empty()) {
+    static const char* const kPictures[2] = {"/env/common/splats/mass_strategic.dds", "/env/common/splats/hydrocarbon_strategic.dds"};
+    Vec3 right, up, back;
+    m.mapCamera.Axes(&right, &up, &back);
+    const Vec3 eye = m.mapCamera.Eye();
+    const float widthPerDepth = 2 * std::tan(m.mapCamera.fovY * 0.5f) * static_cast<float>(width) / static_cast<float>(height);
+    for (int kind = 0; kind < 2; ++kind) {
+      Impl::DepositPicture& pic = m.depositPictures[kind];
+      if (!pic.read) {
+        pic.read = true;
+        const auto file = w.textures.ReadFile(kPictures[kind]);
+        DdsImage image;
+        std::string error;
+        if (file && ParseDds(*file, &image, &error) && DecodeRgba(image, 0, &pic.rgba) && image.width > 0 && image.height > 0) {
+          pic.width = image.width;
+          pic.height = image.height;
+        } else {
+          pic.rgba.clear();
+        }
+      }
+      if (pic.rgba.empty()) continue;
+      const float halfW = static_cast<float>(pic.width >> 2) * w.icons.playerScale, halfH = static_cast<float>(pic.height >> 2) * w.icons.playerScale;
+      if (halfW <= 0 || halfH <= 0) continue;
+      for (const Decals::Deposit& d : w.decals.Deposits()) {
+        if (d.hydrocarbon != (kind == 1) || w.OutsidePlayable(d.position.x, d.position.z)) continue;
+        if (1.8f * widthPerDepth * Dot(d.position - eye, back * -1.0f) <= 75) continue;
+        float px, py;
+        if (!MinimapProject(d.position, &px, &py)) continue;
+        const float cx = std::floor(px), cy = std::floor(py);
+        // (the pixels whose middles the square holds, each the texel under its middle)
+        const int x0 = std::max(static_cast<int>(std::ceil(cx - halfW - 0.5f)), 0), x1 = std::min(static_cast<int>(std::ceil(cx + halfW - 0.5f)), width);
+        const int y0 = std::max(static_cast<int>(std::ceil(cy - halfH - 0.5f)), 0), y1 = std::min(static_cast<int>(std::ceil(cy + halfH - 0.5f)), height);
+        for (int y = y0; y < y1; ++y) {
+          const float v = (static_cast<float>(y) + 0.5f - (cy - halfH)) / (2 * halfH);
+          const int ty = std::clamp(static_cast<int>(v * static_cast<float>(pic.height)), 0, pic.height - 1);
+          uint32_t* out = &m.mapPixels[static_cast<size_t>(y) * static_cast<size_t>(width)];
+          for (int x = x0; x < x1; ++x) {
+            const float u = (static_cast<float>(x) + 0.5f - (cx - halfW)) / (2 * halfW);
+            const int tx = std::clamp(static_cast<int>(u * static_cast<float>(pic.width)), 0, pic.width - 1);
+            const uint8_t* t = &pic.rgba[(static_cast<size_t>(ty) * static_cast<size_t>(pic.width) + static_cast<size_t>(tx)) * 4];
+            if (t[3] == 0) continue;  // (its alpha test: above 0)
+            const uint32_t p = out[x];
+            const uint32_t a = t[3];
+            auto mix = [&](uint32_t src, uint32_t dst) { return (src * a + dst * (255 - a) + 127) / 255; };
+            out[x] = 0xff000000u | mix(t[0], (p >> 16) & 0xff) << 16 | mix(t[1], (p >> 8) & 0xff) << 8 | mix(t[2], p & 0xff);
+          }
+        }
+      }
+    }
   }
   // the buildings the army remembers though they are gone
   for (const World::RememberedGone& r : w.rememberedGone) {

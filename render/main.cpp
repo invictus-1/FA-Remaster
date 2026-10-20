@@ -141,6 +141,9 @@
 //           sends it (SimCallback SpawnPing; the kinds in turn: alert, move, attack, a nuke's mesh; 6 seconds each)
 // --minimap-meshes  [pings] with --picture: the minimap shows meshes as FAF's does with its "Disable meshes" unticked
 //           (WorldPicture::SetMinimapMeshes: the pings', the interface's marks', stamped as the original draws them)
+// --no-minimap-resources  [minimap deposits] with --picture: the minimap without the deposits' icons (DrawMinimap's
+//           resourceIcons false, FAF's default for its minimap; without this they are laid at every call)
+// --range-fill  [range fill] with --ranges: the red group filled inside its lines (the original's range_Fill)
 // --no-hidden-outlines  no outlines of units hidden behind trees, cliffs and buildings (World::hiddenOutlines,
 //           hidden_outlines.h: on unless this is given, in the modern look); --hidden-outlines: on (as at first)
 // --battle-scars  the scorches and craters scripts lay stay, weathering, up to a most (World::battleScars);
@@ -723,6 +726,8 @@ struct Options {
   int pauseAt = 0;                               // --pause-at
   int pingAt = 0;                                // [pings] --ping
   bool minimapMeshes = false;                    // [pings] --minimap-meshes
+  bool minimapResources = true;                  // [minimap deposits] --no-minimap-resources
+  bool rangeFill = false;                        // [range fill] --range-fill
   std::string enhancement;
   float soften = -1;                    // --soften
   std::vector<std::string> border;      // --border
@@ -884,6 +889,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--ranges") o->ranges = true;
     else if (a == "--ping-test") o->pingTest = true;  // [pings]
     else if (a == "--minimap-meshes") o->minimapMeshes = true;  // [pings]
+    else if (a == "--no-minimap-resources") o->minimapResources = false;  // [minimap deposits]
+    else if (a == "--range-fill") o->rangeFill = true;  // [range fill]
     else if (a == "--shielded") o->shielded = true;
     else if (a == "--bones") o->listBones = true;
     else if (!(v = value())) return false;
@@ -1705,6 +1712,7 @@ int main(int argc, char** argv) {
     yellow.rings = {{at + Vec3{40, 0, -30}, 15, 0}};
     cyan.color = 0xff00ffffu;
     cyan.rings = {{at + Vec3{40, 0, -30}, 15, 0}};
+    fire.fill = opt.rangeFill;  // [range fill] (--range-fill: the red group)
     world.ranges.groups = {yellow, cyan, fire, radar};
     // ... and the meshes the game's script places: a rally point's flag, and an order's mark half way through its life
     PlacedMesh flag, mark;
@@ -2894,7 +2902,7 @@ int main(int argc, char** argv) {
         // first drawing of a size: that pass has a camera of its own, which must not stay)
         Vec3 before, after;
         const bool hadGround = picture.GroundAt(static_cast<float>(w) * 0.5f, static_cast<float>(h) * 0.5f, &before);
-        const std::vector<uint32_t>& mini = picture.DrawMinimap(mapW, mapH);
+        const std::vector<uint32_t>& mini = picture.DrawMinimap(mapW, mapH, opt.minimapResources);
         const bool hasGround = picture.GroundAt(static_cast<float>(w) * 0.5f, static_cast<float>(h) * 0.5f, &after);
         printf("render: --picture: the ground under the middle before the minimap %.1f %.1f, after it %.1f %.1f%s\n", before.x, before.z, after.x, after.z,
                hadGround && hasGround && Length(before - after) < 0.01f ? "" : " (NOT the same)");
@@ -2907,7 +2915,7 @@ int main(int argc, char** argv) {
         }
         const std::string miniPath = opt.picture.substr(0, opt.picture.rfind('.')) + "_minimap.png";
         const auto t0 = std::chrono::steady_clock::now();
-        for (int i = 0; i < 30; ++i) picture.DrawMinimap(mapW, mapH);
+        for (int i = 0; i < 30; ++i) picture.DrawMinimap(mapW, mapH, opt.minimapResources);
         const double each = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / 30;
         Vec3 back;
         float mx = 0, my = 0;
@@ -2915,6 +2923,22 @@ int main(int argc, char** argv) {
         printf("render: --picture: minimap %dx%d %s, %.2f ms a call; the camera's target %.1f %.1f is at %.1f %.1f on it, and back %.1f %.1f%s\n", mapW, mapH,
                WritePng(miniPath, miniBytes.data(), mapW, mapH) ? miniPath.c_str() : "could not be written", each, camera.target.x, camera.target.z, mx, my,
                back.x, back.z, there ? "" : " (failed)");
+        if (opt.minimapResources) {  // [minimap deposits] and at the same moment with the switch off: the deposits' icons alone differ
+          const std::vector<uint32_t>& bare = picture.DrawMinimap(mapW, mapH, false);
+          std::vector<uint8_t> bareBytes(bare.size() * 4);
+          for (size_t i = 0; i < bare.size(); ++i) {
+            bareBytes[i * 4] = static_cast<uint8_t>(bare[i] >> 16);
+            bareBytes[i * 4 + 1] = static_cast<uint8_t>(bare[i] >> 8);
+            bareBytes[i * 4 + 2] = static_cast<uint8_t>(bare[i]);
+            bareBytes[i * 4 + 3] = 255;
+          }
+          const std::string barePath = opt.picture.substr(0, opt.picture.rfind('.')) + "_minimap_noresources.png";
+          const auto t1 = std::chrono::steady_clock::now();
+          for (int i = 0; i < 30; ++i) picture.DrawMinimap(mapW, mapH, false);
+          printf("render: --picture: minimap without the deposits' icons %s, %.2f ms a call\n",
+                 WritePng(barePath, bareBytes.data(), mapW, mapH) ? barePath.c_str() : "could not be written",
+                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count() / 30);
+        }
         picture.Draw(camera, w, h, playTick + 1);  // (the device goes back to the picture's size)
       }
       std::vector<uint32_t> inside;
