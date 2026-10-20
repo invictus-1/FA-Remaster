@@ -423,6 +423,13 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   float edge = saturate(1 - deep / 0.5);
   // (how much of the lace is foam: nearly all of it only in the last hand's breadth of water)
   float much = edge * edge * edge * 0.6 + saturate(1 - deep / 0.05) * 0.3;
+#if SURF
+  // [coast] at the map's own shores the surf's waves draw the white water (surf.h, SurfAt): of this even band along the
+  // waterline only what the last wave left stays (surf.lap: little where the water is calm or sheltered); round what
+  // stands in the water (higher than the map's ground) it stays as it was
+  float shoreLap = lerp(surf.lap, 1, smoothstep(0.3, 0.8, bed.y - surf.ground));
+  much *= shoreLap;
+#endif
   // (open water, away from every shore: only wisps of it are left, soft at their edges, on the
   // swell's crests and near the eye; from far up the sea is one blue - Chris, 2026-10-13: "too
   // sparkly ... the white should blend in more")
@@ -430,6 +437,9 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   float wisps = 0.3 * saturate(swell.x * 9 + 0.3) * saturate(1.2 - distance / 150);
   float foam = smoothstep(1.05 - much * 1.1 - 0.04 * open, 1.30 - much * 1.1 + 0.14 * open, lace + 0.42) * (0.55 + 0.45 * edge) * lerp(1, wisps, open);
   float fronts = pow(saturate(sin(deep * 20 - time * 1.5 + lace * 3.0) * 0.5 + 0.5), 5) * edge;
+#if SURF
+  fronts *= shoreLap;  // [coast] (its fronts as well: the surf's waves run in there)
+#endif
   foam = saturate(foam + fronts * smoothstep(0.42, 0.66, lace) * 0.55 + crest * saturate(swell.x * 14 + 0.25));
 #if RIPPLES
   foam = saturate(foam + rippleFoam * smoothstep(0.35, 0.7, lace) * 0.35);

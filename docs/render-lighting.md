@@ -1246,6 +1246,44 @@ showers and icebergs are.
      ships at speed (560,250,45,45,90) the water +0.007, the spray 0.010 ms. Off: pictures identical (the regression,
      both backends, 0 px). On, Vulkan as Direct3D 12 (mean difference 0.31-0.58 in 255 with it on against 0.32-0.62 for
      the same scenes with it off: the rain's own).
+   - **The coast (2026-10-20, a helper's, for review; from Chris's playthrough: "the white coast line seems to run around
+     the landmass vs naturally bouncing against it", and a patch of surf that "races around the entirety of a section"
+     following the coast, then starts over).** What drew them: the waves' arrival at the shore took its timing from one
+     smooth offset over the map (`SurfOffset`, about 250 units across, +-1.1 cycles), so along a shore the moment a wave
+     arrived ran on from place to place at some 14 units a second, and the run-up's white, the rock's burst and the
+     rocks' spray all rode it round the coast once a wave; and every shore had the same white at the waterline at every
+     moment: the water's own band of foam by depth (solid in the last tenth of a unit), the run-up's white drawn over
+     the water's edge (pulsing in place), the forced breaking band, and every wave breaking there. Now:
+     - The shore is cut into stretches (a grid of 16 units over the place carried in to the waterline along the way the
+       sea lies, so the water in front of a stretch keeps its timing); each stretch has its own moment (the map's offset
+       at its middle and a share of a cycle of its own, +-0.3) and its own size for each wave (0.6-1.4), blended over 30 %
+       of a stretch each side of a border (there the arrival peels along the shore at about 3 units a second, slowly);
+       out at sea (6 to 22 units out) the crests come round from the map's offset as before. `Surf::Offset` and
+       `Surf::Strength` work the same out for the spray, which goes up a stretch at a time with the white.
+     - How exposed the water is (in the field's alpha, times the openness): from each place within 48 units of a shore,
+       how far open water reaches in 16 ways (up to 160 units; past the map's edge the sea goes on), weighted toward the
+       way the swell comes from (as the movement dust's wind blows: from the west-north-west) and a quarter from every
+       way; a coast facing the swell 1, a lee shore about 0.3, a bay about 0.5, a pond 0. Every part of the surf scales
+       with it (height, white, run-up, spray places: 787 now on SETONS_R, 983 before). The field takes 250-290 ms on
+       its thread (was 100-140).
+     - The smaller waves of a set run in without breaking white (all but the smallest in a storm); each crest breaks in
+       stretches of its own right up to the shore (near the shore it broke all along); the breaking band along the shore
+       is as wide as its stretch has it (0.45-1.25 times), the trails behind the crests shorter in a storm, the old foam
+       between them less (0.04 + 0.12 x roughness, was 0.05 + 0.2): a storm's white was one even band.
+     - Where a wave meets the shore its white water bursts out over the water and spreads out to sea (up to about 2
+       units on a still day, 4-5 in a storm; farther and sooner gone on rock), its edge ragged wave by wave, fading into
+       lace; it takes the place of the rock's burst and of the run-up's white over the water (that stays over the beach
+       only). The water's own band of foam at the map's ground keeps 15 % between the waves and a little more just after
+       one (`SurfHere::lap`); round what stands in the water (higher than the map's ground) it stays as it was.
+     - Dense white water keeps a little of the lace's holes and is mottled (it was flat white with hard edges).
+     - Cost at 1440p (lowest of two runs each, the game's water options on, 3 pm; the PC busy with other work): the
+       water from the game's height (985,730,88,75,0) 0.194 -> 0.193-0.196 ms, in a storm 0.219 -> 0.220-0.227, a beach
+       close up (628,200,30,45,90) 0.279 -> 0.234-0.241 (within the noise); the spray as before (0.002-0.013); the
+       processor's spray listing lower (0.03-0.04 -> 0.01-0.02 ms: each spray place's timing is worked out once, with
+       the field, not every frame); the field on its thread 330-375 ms (was 125-175 the same runs).
+     - A look change for Chris: `World::surf` is on in the game (Weather Effects). Off: the water's shader without `SURF`
+       is the same source as before; the regression is identical (both backends, 0 px). On, Vulkan against Direct3D 12
+       differs as much as before the change (mean 0.192 against 0.189 in 255, the same scene).
    - Open: the run-up leaves no wet sand behind it beyond what `waterDetail` already darkens; the waves do not refract
      round headlands (their crests follow the distance, which bends round a point); spray on rocks is procedural (the
      visuals session could make flipbooks: see the helper's report); the original game's shoreline wave generators in

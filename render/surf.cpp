@@ -326,15 +326,65 @@ void Surf::SetMap(const MapData* map) {
   debug_ = debug ? std::max(1, atoi(debug)) : 0;
 }
 
-float Surf::Offset(float x, float z) {
+namespace {
+
+// The map's smooth offset (the shader's SurfOffset).
+float MapOffset(float x, float z) {
   return 0.55f * std::sin(x * 0.0211f + z * 0.0137f) + 0.35f * std::sin(-x * 0.0173f + z * 0.0291f + 1.7f) +
          0.20f * std::sin(x * 0.047f - z * 0.031f + 4.1f);
+}
+
+// [coast] The shore's stretches, as the shader has them (surf.h: SurfHash, SurfStretchAt, SurfStretchTiming): keep the two
+// alike.
+constexpr float kStretch = 16, kStretchEnds = 0.3f;
+uint32_t StretchHash(int32_t cx, int32_t cz, uint32_t salt) {
+  uint32_t h = (static_cast<uint32_t>(cx) * 0x8da6b343u) ^ (static_cast<uint32_t>(cz) * 0xd8163841u) ^ (salt * 0xcb1ab31fu);
+  h ^= h >> 15;
+  h *= 0x2c1b3c6du;
+  h ^= h >> 12;
+  h *= 0x297a2d39u;
+  h ^= h >> 15;
+  return h;
+}
+float StretchHash01(int32_t cx, int32_t cz, uint32_t salt) { return static_cast<float>(StretchHash(cx, cz, salt) >> 8) * (1.0f / 16777216.0f); }
+struct StretchPlace {
+  int32_t cx = 0, cz = 0;
+  float sx = 0, sz = 0;
+};
+StretchPlace StretchAt(float x, float z) {
+  StretchPlace s;
+  const float qx = x / kStretch - 0.5f, qz = z / kStretch - 0.5f;
+  s.cx = static_cast<int32_t>(std::floor(qx));
+  s.cz = static_cast<int32_t>(std::floor(qz));
+  s.sx = Smooth(0.5f - kStretchEnds, 0.5f + kStretchEnds, qx - std::floor(qx));
+  s.sz = Smooth(0.5f - kStretchEnds, 0.5f + kStretchEnds, qz - std::floor(qz));
+  return s;
+}
+float StretchTiming(int32_t cx, int32_t cz) {
+  return MapOffset((static_cast<float>(cx) + 0.5f) * kStretch, (static_cast<float>(cz) + 0.5f) * kStretch) + (StretchHash01(cx, cz, 1u) - 0.5f) * 0.6f;
+}
+float Blend(const StretchPlace& s, float a, float b, float c, float d) {
+  const float ab = a + (b - a) * s.sx, cd = c + (d - c) * s.sx;
+  return ab + (cd - ab) * s.sz;
+}
+
+}  // namespace
+
+float Surf::Offset(float x, float z) {
+  // [coast] the stretch's timing (was the map's smooth offset at the place: the arrival ran along the coast)
+  const StretchPlace s = StretchAt(x, z);
+  return Blend(s, StretchTiming(s.cx, s.cz), StretchTiming(s.cx + 1, s.cz), StretchTiming(s.cx, s.cz + 1), StretchTiming(s.cx + 1, s.cz + 1));
 }
 
 float Surf::Strength(float n, float x, float z) {
   const float s = 0.5f + 0.5f * std::sin(n * 0.897f + x * 0.013f + z * 0.009f);
   const float t = 0.5f + 0.5f * std::sin(n * 2.31f - x * 0.029f + z * 0.041f + 2.0f);
-  return 0.3f + 0.7f * (0.65f * s * s + 0.35f * t);
+  // [coast] times the stretch's own size of wave n
+  const StretchPlace p = StretchAt(x, z);
+  const uint32_t salt = static_cast<uint32_t>(static_cast<int32_t>(n)) * 2u + 7u;
+  const float own = 0.6f + 0.8f * Blend(p, StretchHash01(p.cx, p.cz, salt), StretchHash01(p.cx + 1, p.cz, salt), StretchHash01(p.cx, p.cz + 1, salt),
+                                        StretchHash01(p.cx + 1, p.cz + 1, salt));
+  return (0.3f + 0.7f * (0.65f * s * s + 0.35f * t)) * own;
 }
 
 // [groundfix] On a thread of its own (StartField): from the copy of the map's heights in `work`, nothing of the device's
@@ -394,6 +444,70 @@ void Surf::WorkOutField(FieldWork* work, int debug) {
   }
   // (the nearest cell's steepness changes at once between two shores: smoothed over a few cells)
   steep = BoxMean(steep, w, h, 2);
+  // [coast] how exposed the water near the shores is to the sea's waves (it scales the openness, and with it all of the
+  // surf): from each place, how far open water reaches in sixteen ways (its fetch, up to kFetch world units; past the map's
+  // edge the sea is taken to go on), each way weighted by how near it is to the way the swell comes from (kSwellX, kSwellZ:
+  // the way it runs, as the spray's wind blows, movement_dust.h) and a little from every way (the wind's own small waves).
+  // A coast facing the swell or a headland gets the most, a bay less and a lee shore little; a pond nothing. On cells of
+  // two (the rays stepping as much), smoothed over about ten world units; the land takes its nearest water's.
+  {
+    constexpr int kWays = 16, kStep = 2;
+    constexpr float kFetch = 160, kSwellX = 0.915f, kSwellZ = 0.403f;
+    float wayX[kWays], wayZ[kWays], weight[kWays], total = 0;
+    for (int k = 0; k < kWays; ++k) {
+      const float a = 6.2831853f * static_cast<float>(k) / kWays;
+      wayX[k] = std::cos(a);
+      wayZ[k] = std::sin(a);
+      const float toward = std::max(0.0f, -(wayX[k] * kSwellX + wayZ[k] * kSwellZ) / std::hypot(kSwellX, kSwellZ));  // (back where it comes from)
+      weight[k] = 0.25f + 0.75f * toward * toward;
+      total += weight[k];
+    }
+    const int cw = (w + kStep - 1) / kStep, chh = (h + kStep - 1) / kStep;
+    const float reach = kFetch / cell;  // (cells)
+    std::vector<float> value(static_cast<size_t>(cw) * chh, 0.0f), worked(static_cast<size_t>(cw) * chh, 0.0f);
+    for (int cz = 0; cz < chh; ++cz)
+      for (int cx = 0; cx < cw; ++cx) {
+        const int x = std::min(cx * kStep, w - 1), z = std::min(cz * kStep, h - 1);
+        const size_t at = static_cast<size_t>(z) * w + x;
+        if (!wet[at] || distance[at] > 48) continue;
+        float sum = 0;
+        for (int k = 0; k < kWays; ++k) {
+          float fetch = reach;
+          for (float t = kStep; t <= reach; t += kStep) {
+            const int px = static_cast<int>(std::lround(static_cast<float>(x) + wayX[k] * t)), pz = static_cast<int>(std::lround(static_cast<float>(z) + wayZ[k] * t));
+            if (px < 0 || pz < 0 || px >= w || pz >= h) break;  // (past the map's edge: the sea goes on)
+            if (!wet[static_cast<size_t>(pz) * w + px]) {
+              fetch = t;
+              break;
+            }
+          }
+          sum += weight[k] * fetch / reach;
+        }
+        value[static_cast<size_t>(cz) * cw + cx] = sum / total;
+        worked[static_cast<size_t>(cz) * cw + cx] = 1;
+      }
+    const std::vector<float> valueMean = BoxMean(value, cw, chh, 2), workedMean = BoxMean(worked, cw, chh, 2);
+    auto coarse = [&](int cx, int cz) {
+      const size_t at = static_cast<size_t>(std::clamp(cz, 0, chh - 1)) * cw + std::clamp(cx, 0, cw - 1);
+      return workedMean[at] > 0 ? valueMean[at] / workedMean[at] : 1.0f;
+    };
+    // (a coast facing the swell straight on comes to about 0.7, a lee shore 0.3, a pond under 0.1: from 0.1 none to 0.7 all)
+    std::vector<float> exposed(count, 1.0f);
+    for (int z = 0; z < h; ++z)
+      for (int x = 0; x < w; ++x) {
+        const size_t at = static_cast<size_t>(z) * w + x;
+        if (!wet[at]) continue;
+        const float fx = static_cast<float>(x) / kStep, fz = static_cast<float>(z) / kStep;
+        const int ix = static_cast<int>(fx), iz = static_cast<int>(fz);
+        const float ax = fx - static_cast<float>(ix), az = fz - static_cast<float>(iz);
+        const float e = (coarse(ix, iz) * (1 - ax) + coarse(ix + 1, iz) * ax) * (1 - az) + (coarse(ix, iz + 1) * (1 - ax) + coarse(ix + 1, iz + 1) * ax) * az;
+        exposed[at] = std::clamp((e - 0.1f) / 0.6f, 0.0f, 1.0f);
+      }
+    for (size_t i = 0; i < count; ++i) {
+      if (!wet[i] && nearWet[i] >= 0) exposed[i] = exposed[static_cast<size_t>(nearWet[i])];
+      open[i] *= exposed[i];
+    }
+  }
   // (out at sea the distance's lines of equal value have corners, where the nearest shore changes: the waves' crests
   // would follow them; rounded off by the mean over three cells, then eight, the farther out the more)
   {
@@ -453,6 +567,7 @@ void Surf::WorkOutField(FieldWork* work, int debug) {
     s.toLandZ = gz;
     s.steep = steep[static_cast<size_t>(at)];
     s.open = open[static_cast<size_t>(at)];
+    s.offset = Offset(s.x, s.z);  // [coast] (four stretches' timings blended: once here, not every frame)
     spots.push_back(s);
   }
   work->ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - started).count();
@@ -776,7 +891,7 @@ void Surf::Prepare(const View& view) {
   const float rough = std::max(rough_, 0.0f);
   const float rougher = 0.15f + 0.85f * rough * rough;
   for (Spot& s : spots_) {
-    const double crest = std::floor(phase_ + static_cast<double>(Offset(s.x, s.z)));
+    const double crest = std::floor(phase_ + static_cast<double>(s.offset));
     if (crest <= s.lastCrest) continue;
     const bool first = s.lastCrest < -1e8;
     s.lastCrest = crest;
