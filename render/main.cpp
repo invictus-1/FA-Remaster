@@ -127,6 +127,8 @@
 //           (its cover atlas) their cards too: --plant-density n spots a square unit where its table says 1 (15;
 //           0 none),
 //           --plant-tallest n the tallest plant's height in world units (0.24)
+//           [cover] --cover-mask <path>: a cover mask (a greyscale picture over the whole map, 1 no cover) in place of the
+//           map's remap.json "cover_mask" (tests: a picture under a --maps folder, /maps/<folder>/<file>.dds)
 // --leaf-light  the sun's light through leaves, grass blades and plants (World::leafLight; modern look)
 // --energy-shields  shields that look like energy (World::energyShields, energy_shields.h; modern look): a bubble bends
 //           what is behind it, rings run across it from each hit, its pattern flares where hit and as it weakens, its
@@ -672,6 +674,7 @@ struct Options {
   float hitchMs = 0;
   bool terrainDespiteHold = false;      // --terrain-despite-hold
   bool groundUltra = false;             // --ground-ultra
+  std::string coverMask;               // [cover] --cover-mask
   float sunSize = -1;                   // (its size, when given)
   bool clouds3d = false;                // --clouds-3d
   bool cloudsFull = false;              // --clouds-full (the same, marched at the picture's own size)
@@ -977,6 +980,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--volume-steps") o->volumeSteps = atoi(v);
     else if (a == "--volume-detail") o->volumeDetail = static_cast<float>(atof(v));
     else if (a == "--plant-tallest") o->plantTallest = static_cast<float>(atof(v));
+    else if (a == "--cover-mask") o->coverMask = v;  // [cover]
     else if (a == "--wildlife-noise") {
       if (sscanf(v, "%f,%f,%f,%f", &o->wildlifeNoise[0], &o->wildlifeNoise[1], &o->wildlifeNoise[2], &o->wildlifeNoise[3]) < 3) return false;
       o->wildlife = true;
@@ -1495,6 +1499,7 @@ int main(int argc, char** argv) {
   gRayShaders = (opt.rayReflections || opt.rayLightShadows > 0) && device->RayTracing();
   World world(device.get(), &vfs);
   world.terrain.ultraGround = opt.groundUltra;  // (the remastered ground's set: before the map opens)
+  world.terrain.coverMaskGiven = opt.coverMask;  // [cover] (before the map opens)
   if (!opt.season.empty() && !SeasonNamed(opt.season, &world.season))  // [seasons] (before the map opens)
     fprintf(stderr, "render: --season %s: summer, autumn or winter\n", opt.season.c_str());
   world.fallingLeaves = opt.fallingLeaves;
