@@ -17,7 +17,10 @@
 // the sky, which sees their shaded undersides); fewer as the camera rises and none from the strategic zoom.
 //
 // Fireflies: no state at all. A square of cells round what the camera looks at, each cell a few places where one
-// may be, kept or not by how much of a wood's edge and of grass is there; each drifts slowly a little over the
+// may be, kept or not by whether the place lies in one of their loose groups (about one a 50 world units, empty ground
+// between; (sky) Chris, 2026-10-20: far fewer, where they live) and by where they keep in life: a wood's edge, damp grass
+// low by the water and in hollows, a little meadow; none on bare rock, sand, scree or where it is steep; most at dusk
+// and in the first hours of the night. Each drifts slowly a little over the
 // ground and glows now and then for half a second, yellow-green, seen through the air (and through the light in
 // the air, World::volumetricFog) as anything else is.
 //

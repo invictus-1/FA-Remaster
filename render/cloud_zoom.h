@@ -69,6 +69,17 @@ class CloudZoom {
   float letGo = 10;          // ... less as the eye moves: none once it has gone 1 / this of the clouds' distance
   float inside = 0.5f;       // the least of the falling light deep inside them (light scattered on and on; 0.3 without the zoom) ...
   float insideFade = 0.12f;  // ... fading by this share of their depth toward the light (0.25 without)
+  // (sky) The layer lifted (Chris, 2026-10-20: "lift that much higher cause I think its too close to the ground and can
+  // make things blurry"): with the zoom on, its underside lies at `lift` times the map's larger side over the ground's
+  // zero (at least where it lies without the zoom, Clouds::base's 150; at most `liftMost`), so that the eye goes up
+  // through it only far out (on a 20 km map from some 600 over the ground, the map mostly in view), and the zooms
+  // played at see the land clear under the sky. Without the zoom the clouds lie where they did.
+  float lift = 0.6f;
+  float liftMost = 1500;
+  // The clouds' underside for this frame (World, before their Prepare): lifted while `on` (the option, with volumetric
+  // clouds, whatever the camera: a cinematic one sees them where the game's does), else as the clouds had it the first
+  // time this was asked.
+  void Place(Clouds* clouds, bool on, float mapWidth, float mapHeight);
   // Sets those named in a list "band=900,keep=0.08,..." (the names as above, without "Most"); false and why when one is wrong.
   bool Set(const std::string& list, std::string* why);
 
@@ -76,6 +87,7 @@ class CloudZoom {
   gfx::Device* device_;
   gfx::Pipeline pipeline_;
   bool tried_ = false;
+  float ownBase_ = -1;  // (sky) the clouds' own underside, kept the first time Place is asked
 };
 
 // For the clouds' Build (clouds.cpp): the zoom's own march through the layer, MarchZoom (the HLSL in cloud_zoom.cpp),

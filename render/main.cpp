@@ -91,7 +91,8 @@
 // --cloud-zoom  (cloudzoom) zooming out through the clouds (cloud_zoom.h, World::cloudZoom; with --clouds-3d): the game's
 //           camera rises through the cloud layer as it zooms out, the clouds then lie below it, thinning the higher it is;
 //           --cloud-zoom-look name=value,... tunes it (CloudZoom's numbers, cloud_zoom.h: band, erode, keep, partErode,
-//           partKeep, partFrom, partTo, near, gain, lumps, powder, fine, fineSize, history, letGo, inside, insideFade)
+//           partKeep, partFrom, partTo, near, gain, lumps, powder, fine, fineSize, history, letGo, inside, insideFade,
+//           lift, liftMost)
 // --cam-zoom-path "t:zoom;t:zoom;..."  (cloudzoom) the game's camera zoomed along a path by the run's clock (cloud_zoom.h,
 //           ZoomPath): the zoom as the original's (map units across the view's longer side; 5 nearest, "max" farthest),
 //           the lean and the field of view following it as the original's camera does; heading and point as --cam gives
@@ -407,7 +408,7 @@
 //           by little, a soft shadow along the edge in place of the dark line) and land far off round the horizon, made
 //           up from what the map's edges hold (World::beyondLand, beyond_land.h; modern look); --beyond-land-look
 //           name=value,... tunes it (BeyondLand's numbers: band, edgeShadow, edgeWidth, edgeGrey, haze, hazeHeight, begin,
-//           end, hills, mountains, islands, farLand, snowline, softness)
+//           end, hills, mountains, islands, farLand, snowline, softness, reach)
 // --sun, --sky, --exposure, --reflection  the modern look's strengths (for tuning it by eye)
 // --time-of-day <hours>  the computed sky of that hour (0..24) lights the modern look instead of the map's
 //           own light; --day-length <seconds> lets the day pass, a whole one in that long. Key T: an hour on

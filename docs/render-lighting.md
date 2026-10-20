@@ -1540,6 +1540,80 @@ default, the modern look only: `World::mudMask` (viewer `--mud-mask`; `Terrain::
   own puddles: the wet ground's roughness step after them takes their still water back to about 0.5 (a change there would
   move today's rain picture, so it is left to be decided).
 
+## Chris's playthrough of 2026-10-20: the clouds from far out, the far edges, the seam, the fireflies (a helper's, for review)
+
+Chris, of the strategic view: "Full zoom clouds pulsate Even zoomed in causes flickering on map ... Far edges of map are
+clouds have it be the map instead just random landmasses that fit vs white bars we can brainstorm"; item 10: "lift that
+much higher cause I think its too close to the ground and can make things blurry as well on top of the flicking"; item
+12: fireflies "too many ... spread out throughout the map ... near parts similar to how they are irl". Each change lies
+inside an option the game's settings turn on (Atmosphere: `cloudZoom`, `lightShafts`, `beyondLand`; Ground Detail:
+`wildlife`); off, the pictures are as before, pixel for pixel.
+
+- **The pulse (light shafts' haze in the light in the air)**: from the strategic view the whole picture brightened by
+  some 6% at once and sank back over a dozen frames, every 13, 21 or 34 frames (the golden ratio's steps). The light in
+  the air takes one place a frame in each cell, anywhere in its depth; with the light shafts on (`air.cpp`, the `SUNLIGHT`
+  gather) the shafts' band of haze lies within 2 world units of the ground and the low haze under the clouds within 40,
+  while a cell is some 300 units deep at the strategic view: the place mostly missed them and, when the steps came near
+  the cell's far end, fell into them, many times the cell's light, which the frames after kept. Proven: the band's haze
+  off (`--sunlight-look haze=0,misty=0`), no pulse. Now (`GatherSpread`) over the cell's stretch above the ground each
+  haze (the air's own, the mist, the band, the low haze) is taken whole, its mean along the stretch worked out exactly
+  for a height over its floor that changes evenly, and the place whose light the cell takes is drawn by how the hazes lie
+  along it (one of them by its share of the whole, then by where that one is thick), the light there counting for each
+  by its share of the thickness there: the same light on average, no jumps. Measured (Seton's Remastered 14h, the
+  game's looks on): the strategic view's brightness from frame to frame 57.0-63.4 before, 59.4-60.0 after; a still
+  camera at 420: the frames' flicker (a frame against the mean of the two either side) 0.174 -> 0.093 on average, its
+  worst frame 0.47 -> 0.16, the largest jump of the mean 0.80 -> 0.06. Cost: +0.011-0.016 ms (lowest, 1440p).
+- **The clouds lifted** (`CloudZoom::lift`, `liftMost`; `CloudZoom::Place`, World before the clouds' `Prepare`): with the
+  zoom on, the layer's underside at 0.6 of the map's larger side over the ground's zero (at least the 150 it has
+  without, at most 1500): 614 on a 20 km map, where the eye comes up to it at a zoom of some 650 across (most of the map
+  in view), instead of 150, where the zooms played at (200-400 across) put the eye inside the clouds, the ground under
+  a white veil or a white-out. The shadows on the ground follow the layer (they are cast from its underside). On a 5 km
+  map the layer stays at 150. A cinematic camera sees the layer where the game's does.
+- **The clouds' pictures held still** (clouds.cpp, with the zoom on): the coverage pictures (the coarse one, 31 world
+  units a texel, and the zoom's finer one, 6) and their shadows' were laid out afresh round the eye each frame, so a
+  place was read between other texels as the camera moved and the clouds' outlines and shadows crawled; now they move
+  on by 93.75 world units (3 and 16 of their texels) at a time.
+- **The far edges** (`beyondLand`): at the strategic view the map's mirrored continuation (0.6 of the map out) ended
+  inside the picture at both sides, the far distance past it the horizon's haze: the white bars. (1) The continuation
+  now reaches `BeyondLand::reach` = 0.95 of the map's shorter side (its copies end at 1), so the farthest zoom shows the
+  map and its own continuation on windows up to about twice as wide as high (Chris's 3824x2076 included); the trees and
+  rocks past the edge stay within the band they were. (2) Past it, seen from above, the far sea (view.h `BeyondSea`, the
+  view's `beyondSea`, set by `BeyondLand::SetView` on a map with water): the modern water's deep colour in the light that
+  falls on it, its mirror of the sky, darker under the drifting shadows, dimmed and greyed as the world beyond is, seen
+  through the air, lost by its distance in the haze as the land far off is (low toward the horizon, the haze as before):
+  in `BeyondBack` (lighting.h: what the world beyond and the land far off go over into) and in the sky's pass below the
+  horizon (the zoom's clouds laid over it again). Ultra-wide windows (2560x1080) see a band of slate-blue sea at their
+  sides in place of white. The land far off begins `begin` past the continuation's end, so farther out than before.
+  Cost at the strategic view: the ground +0.03 ms, the water +0.02, the frame +0.07-0.1 (lowest, 1440p).
+- **The seam** (Chris's picture of the coast, the island on the map's east edge): the straight dark line through the
+  island and the sea is the soft shadow along the playable edge (`edgeShadow`, 2.5 pixels at any zoom), which close in
+  read as a seam cut through the land. It is now only drawn while the edge's dimming band (10 world units) is under some
+  6-24 pixels wide in the picture (from far up, where it keeps the playable edge plain); close in, the band's dimming and
+  greying alone show the edge. The coast meeting its mirror image at the edge is the mirroring's own.
+- **Fireflies** (`wildlife.cpp`): only in loose groups (`FlyGroups`: squares of 36 world units, about half home to one, 5
+  to 14 units round, the same every night), and there by where they keep in life: a wood's edge, damp grass low by the
+  water and in hollows (the ground lower than 8 units round it), a little meadow; none on bare rock, sand or scree (the
+  ground's grassiness), where steep, nor over water; most from dusk into the first hours of the night, half as many
+  late. In view from the game's camera at 80: 973 glowing at once before, 43 after (21h, two groups: a meadow by the
+  shore, a wood's edge); 978 -> 57 at dusk elsewhere (five groups).
+- **Off, identical**: the regression (regress3 against bisect/b197ac4): 8 lines 0 px on both backends; Seton's
+  Remastered with the volumetric clouds, the light in the air (no shafts), the sky from tables and the drifting shadows,
+  and with the horizon's weather, the surf and the water's detail, at the strategic view and low toward the horizon,
+  and at night with the ground cover: 0 px against the untouched build (the surf differs run to run by itself). On,
+  Vulkan as Direct3D 12 (mean 0.26-0.39 in 255).
+- Hooks: view.h (`beyondSea` at the end of the view's block; `BeyondSea` after `SkyAmbient`), lighting.h (`BeyondBack`
+  takes the far sea; `BeyondFar` the edge's shadow from far up only, and what it goes over into worked out only where it
+  does with the far sea on), sky.cpp (the far sea below the horizon), air.cpp (`GatherSpread`, the `SUNLIGHT` gather),
+  clouds.cpp (the pictures held still), cloud_zoom.h/.cpp (`lift`, `liftMost`, `Place`), beyond_land.h/.cpp (`reach`,
+  `SetView`'s far sea), world.cpp (`Place` before the clouds' `Prepare`; the reach; the band of trees past the edge),
+  wildlife.h/.cpp, main.cpp (the look lists).
+- Open: the sun's glitter on the sea (the water's glint, a power of 500) twinkles as single bright pixels from the
+  strategic view where the sun's reflection lies, now on more of the far sea that the white bars hid (the water's own,
+  not touched: a glint softened by the pixel's size would be the fix); a lifted layer's clouds look larger from the
+  strategic view (nearer the eye); the shower columns of the horizon's weather still reach 150 (horizon.cpp); the far
+  sea is greyer than the near one on very wide windows (the land far off's haze: `hazeHeight=300` clears both from
+  above); Chris to judge.
+
 ## The options
 
 Each is off by default (but `hiddenOutlines`, on: Chris's word, item 15) and, off, leaves the picture as it was, pixel
@@ -1552,7 +1626,7 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `temporalUpscale` | AMD's FSR 3 (in the game's Video tab already) | at Quality the frame 2.7 -> 1.4-1.9 ms | anti-aliasing off |
 | `volumetricFog` | light in the air: the sun's shafts, the lamps' beams, glowing mist | 0.05-0.09 ms | |
 | `volumetricClouds` | heaped clouds lit through, their shadows on the ground | about 0.4 ms, against 0.63 ms for today's sky with its layer: cheaper | a time of day |
-| `cloudZoom` (a trial) | the zoom out rises through the volumetric clouds, which then lie below, thinning | +0.4 to 1.0 ms from the clouds' layer up, nothing below it | `volumetricClouds`; in the Atmosphere setting since 2026-10-18 (Chris: every new look on) |
+| `cloudZoom` (a trial) | the zoom out rises through the volumetric clouds, which then lie below, thinning; (2026-10-20) the layer lifted to 0.6 of the map's size, its pictures held still | +0.4 to 1.0 ms from the clouds' layer up, nothing below it | `volumetricClouds`; in the Atmosphere setting since 2026-10-18 (Chris: every new look on) |
 | `remasteredBuild` | build beams light what they work on, sparks bounce off the scene, a better build shimmer per faction | about 0.1 ms with ten engineers building | the remastered effects |
 | `skyTables` | the sky from tables of the atmosphere (the planet's shadow at dusk, many-times scattered light) | about 0.1 ms less | a time of day |
 | `softShadows` | the sun's shadows sharp at the foot, soft farther off | +0.25 ms | |
@@ -1576,13 +1650,13 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `winterWater` | while snow lies: a cold sea (dark slate, grey-green shallows, no snow under the water), slush and thin ice at the shores; a thaw takes it back | +0.005 to 0.03 ms (only with snow lying) | a time of day, a map with water |
 | `surf` | waves break on the shores and run up the beaches, burst on rocks throwing spray; ships throw bow spray; by the weather's wind (proposed for "Weather Effects") | +0.03 to 0.05 ms with a long coast in view, up to +0.10 close over a beach (8 MB once on) | a map with water |
 | `hiddenOutlines` (ON) | a thin line in the army's colour round a unit's part hidden behind trees, hills or buildings | 0.06-0.08 ms (200 tanks in a forest) | |
-| `wildlife` | flocks of birds over the woods and gulls over the shores, scattered by fighting; fireflies at dusk and by night | about 0.02 ms (proposed for the "Ground Detail" setting) | a map with trees or shores |
+| `wildlife` | flocks of birds over the woods and gulls over the shores, scattered by fighting; fireflies at dusk and by night ((2026-10-20) in loose groups where they live, far fewer) | about 0.02 ms (proposed for the "Ground Detail" setting) | a map with trees or shores |
 | `movementDust` | vehicles raise dust on dry ground, hover units throw spray, high aircraft draw contrails | about 0.07 ms with 60 units moving, 0.22 close up | |
 | `volumeExplosions` | big blasts as lit, glowing volumes; a nuke's flash over the map, its ring through the clouds, its mushroom cloud | about 0.25-0.4 ms with four blasts, up to 0.6 ms with a nuke filling half the screen (the files: tens of MB once on) | the visuals session's volume files |
 | `driftingShadows` | the clouds broken into heaps of many sizes: their soft shadows drift over land and sea with the wind, readable from every height; the sky's layer and the volumetric clouds the same heaps | about 0.02 ms (its picture; the ground's pass a little cheaper), with the volumetric clouds 0.015 more in their own pass | a time of day |
 | `lightShafts` | shafts of sunlight through gaps in the woods' crowns in the low haze (strongest on a misty morning, after rain); under broken clouds a low haze, rays toward a low sun on the horizon, a soft warm glow from the game's height | 0.14-0.15 ms from the game's camera (0.08 of it laying the pass with 4x MSAA), 0.2 close among the trees | `volumetricFog`, a time of day |
 | `horizonWeather` | beyond the map's edge: winter ice (floes, pack ice, icebergs) while snow lies, fog banks, showers passing far out, the clouds' shadows over the far sea | about 0.1 ms from the game's camera, 0.21 from the strategic view in snow | a time of day; the world beyond the edge |
-| `beyondLand` | a softer map edge (the ground past it dims over 10 units and a soft shadow replaces the dark line; the fog of war goes on past it) and land far off: coastlines, hills and snow-capped ranges round the map out to four map sizes, which way land lies read from the map's own edges, coloured by its ground, lit and hazed (beyond_land.h; Chris, 2026-10-18; in the Atmosphere setting) | 0.03-0.19 ms at 1440p; made once a map (13-21 ms) | the world beyond the edge (the game's edge option two) |
+| `beyondLand` | a softer map edge (the ground past it dims over 10 units and a soft shadow replaces the dark line, (2026-10-20) from far up only; the fog of war goes on past it) and land far off: coastlines, hills and snow-capped ranges round the map out to four map sizes, which way land lies read from the map's own edges, coloured by its ground, lit and hazed (beyond_land.h; Chris, 2026-10-18; in the Atmosphere setting); (2026-10-20) the map's continuation out to 0.95 of it, the far sea from above in place of the white haze | 0.03-0.19 ms at 1440p; made once a map (13-21 ms) | the world beyond the edge (the game's edge option two) |
 | `season` (`WorldPicture::SetSeason`) | the season a map is drawn in (Summer as at first, Autumn; Winter reserved): its ground's materials, ground cover, props and mud as its remap.json's "seasons" block lists them (the visuals session's art); in autumn leaves in the wind (off broadleaf trees, blown over the ground where the cover grows; `fallingLeaves`; with motion on, each leaf's own motion drawn for FSR 3 and frame generation, `FallingLeaves::DrawMotion`, +0.004 ms), the autumn climate (showers, more fog, morning fog) (seasons.h; Chris, 2026-10-18: a player's option) | the leaves 0.01 ms; the rest nothing (other textures) | taken in when a map opens; maps with a "seasons" block |
 | `plantsReact` | grass and bushes pressed over where units drive and springing back; ground, grass and plants burnt black, then brown, where blasts and fires were, growing back; felled trees still, burnt ones bare; felled trees fall smoothly | about 0.03 ms of its own in a fight (the field 0.010, the burnt ground 0.008, the grass +0.009), and the sun's maps 0.045 ms cheaper (what sways drawn together): the frame a little cheaper (16 MB for the burnt picture on SETONS_R) | |
 | `groundParallax` | close by, the remastered ground's stones stand up and its hollows sink as the eye passes (its materials' scanned relief), a low sun shading the hollows; nothing from the game's height (proposed for the "Ground Detail" setting) | +0.14 to 0.17 ms at zoom 10 to 5, +0.24 the cinematic camera low over the ground, nothing from the game's height | a remastered map (its materials' third maps) |

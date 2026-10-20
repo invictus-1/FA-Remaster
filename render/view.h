@@ -176,6 +176,11 @@ struct ViewConstants {
   float shaftMore[4];
   float shaftLow[4];
   float driftPicture[4];
+  // (sky) The far sea (World::beyondLand, BeyondLand::SetView; view.h's BeyondSea): seen from above, what lies past the
+  // world beyond the edge (past the map's mirrored continuation and between the coasts of the land far off) is the sea and
+  // not the horizon's haze: x 1 = on (a map with water, a time of day); y the sea's level; z the haze it is lost in by 1/e
+  // (world units), w the height over the sea that haze thins to 1/e over (the land far off's, BeyondLand::haze, hazeHeight).
+  float beyondSea[4];
 };
 
 // The same block, as HLSL source: shaders start with it.
@@ -232,6 +237,7 @@ cbuffer View : register(b0) {
   float4 shaftMore;       // [sunlight] x the share of the band's haze over open ground
   float4 shaftLow;        // [sunlight] the low haze: x its height; y its forward scattering; z the shafts' pass's reach for it
   float4 driftPicture;    // [sunlight] the drifting shadows' picture: x, y its middle; z 1 / its width; w 1 = drawn this frame
+  float4 beyondSea;       // (sky) the far sea from above: x 1 = on; y the sea's level; z its haze's 1/e distance; w the haze's thinning height
 };
 // (every texture read with Sample takes the temporal upscaler's bias: textures with levels - the art's - are
 // read as finely as the screen's size wants; pictures drawn by the renderer have one level and do not change)
@@ -571,6 +577,31 @@ float3 BeyondGrey(float3 c) {
 // What of it reaches a surface that faces that way, from all sides.
 float3 SkyAmbient(float3 n) {
   return lerp(skyHorizon.rgb * 0.3, skyZenith.rgb * 0.8 + skyHorizon.rgb * 0.2, saturate(n.y * 0.5 + 0.5));
+}
+// (sky) The far sea (the view's beyondSea; Chris, 2026-10-20, of the strategic view's far edges: "have it be the map
+// instead ... vs white bars"): along `d` (unit length, down), where the line of sight meets the sea past the world beyond
+// the edge, the sea as the map's deep water looks (water.cpp's modern water: its own deep navy in the light that falls on
+// it, its mirror of the sky, darker under the drifting clouds' shadows), dimmed and greyed as the world beyond the edge
+// is, seen through the air; lost by its distance in `haze` (what was shown there before: the horizon's haze) as the land
+// far off is lost in it. Low toward the horizon it is that haze, as before; from above, the sea.
+float3 BeyondSea(float3 d, float3 haze) {
+  if (beyondSea.x < 0.5 || skyZenith.w < 0.5 || d.y > -1e-3) return haze;
+  float t = (cameraPosition.y - beyondSea.y) / -d.y;
+  if (t <= 0) return haze;
+  // (the haze thins with the height over the sea: from high up, less of it lies between the eye and the sea below)
+  float eye = max(cameraPosition.y - beyondSea.y, 0), thins = max(beyondSea.w, 1);
+  float mean = eye > 1 ? thins * (1 - exp(-eye / thins)) / eye : 1;
+  float keep = exp(-t * mean * (1 / max(beyondSea.z, 1) + 0.5 * weather.z));
+  [branch] if (keep < 0.004) return haze;
+  float3 p = cameraPosition + d * t;
+  float shadow = CloudShadow(p);
+  float3 sunLight = pow(max(sunColor, 0), 2.2) * (lightMultiplier * modern.x);
+  float3 sea = float3(0.001, 0.019, 0.058) * (SkyAmbient(float3(0, 1, 0)) + sunLight * (saturate(sunDirection.y) * 0.6 * shadow)) * 0.6;
+  float3 R = normalize(float3(d.x, max(-d.y, 0.02), d.z));
+  sea = lerp(sea, ComputedSky(R), 0.02 + 0.98 * pow(1 - saturate(-d.y), 5));
+  [branch] if (cloudDrift.x > 0.5) sea *= 1 - cloudDrift.w * saturate((1 - shadow) / max(cloudDrift.y, 1e-3));
+  sea = lerp(sea, dot(sea, float3(0.3, 0.6, 0.1)), beyondLand.w) * abs(beyond.w);
+  return lerp(haze, ThroughAirTo(sea, p), keep);
 }
 )hlsl";
 

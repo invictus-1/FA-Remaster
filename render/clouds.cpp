@@ -390,6 +390,16 @@ void Clouds::Prepare(View* view, const Camera& camera, bool on) {
   const Vec3 eye = camera.Eye();
   coverAt_[0] = eye.x;
   coverAt_[1] = eye.z;
+  // (sky) With the zoom through them (cloud_zoom.h), the pictures of where they are (the coarse one and the zoom's finer
+  // one) and of their shadows stay put on the ground and move on by whole texels of both as the camera goes (3 of the
+  // coarse one's, 16 of the finer one's: 93.75 world units). Laid out afresh round a moving camera, a place was read
+  // between other texels each frame, and the clouds' outlines and their shadows on the ground crawled as it moved.
+  if (zoom.on) {
+    constexpr float kStep = 3 * kCoverReach / kCoverSize;
+    static_assert(3 * kCoverReach / kCoverSize == 16 * kCloudZoomCoverReach / kCloudZoomCoverSize, "a step of whole texels of both pictures");
+    coverAt_[0] = std::round(eye.x / kStep) * kStep;
+    coverAt_[1] = std::round(eye.z / kStep) * kStep;
+  }
   Constants k = {};
   FillConstants(&k, *view, camera, *this, base, coverAt_);
   device_->SetConstants(0, &c, sizeof c);

@@ -370,6 +370,22 @@ float FlyGround(float2 xz) {
   float d = heightMap.Load(int3(min(c + int2(0, 1), most), 0)), e = heightMap.Load(int3(min(c + int2(1, 1), most), 0));
   return lerp(lerp(a, b, t.x), lerp(d, e, t.x), t.y) * mapInfo.z;
 }
+// (sky) How much a place lies in one of the fireflies' groups (0 outside them .. 1 in the middle of one): the map cut
+// into squares of 36 world units, about half of them home to a group, somewhere in it, 5 to 14 units round, thinning
+// toward its edge; the rest are empty. The same groups every night and for every player (the place alone gives them).
+float FlyGroups(float2 xz) {
+  float2 cell = floor(xz / 36);
+  float most = 0;
+  [unroll] for (int k = 0; k < 9; ++k) {
+    int2 c = int2(cell) + int2(k % 3 - 1, k / 3 - 1);
+    uint h = FlyHash(uint(c.x) * 2654435761u ^ FlyHash(uint(c.y) * 40503u + 977u));
+    if (FlyRand(h) > 0.5) continue;
+    float2 middle = (float2(c) + 0.15 + 0.7 * float2(FlyRand(FlyHash(h + 1)), FlyRand(FlyHash(h + 2)))) * 36;
+    float radius = 5 + 9 * FlyRand(FlyHash(h + 3));
+    most = max(most, 1 - smoothstep(0.35, 1, length(xz - middle) / radius));
+  }
+  return most;
+}
 
 struct FOut {
   float4 position : SV_Position;
@@ -392,18 +408,30 @@ FOut VS(uint id : SV_VertexID) {
   if (FlyRand(h) > glow.x) return o;  // (most places hold none)
   float2 anchor = cellAt + float2(FlyRand(FlyHash(h + 1)), FlyRand(FlyHash(h + 2))) * area.z;
   if (any(anchor < 0) || any(anchor > mapInfo.xy)) return o;
-  // where they keep: along the woods' edges (in them a little), and over grass
+  // (sky) In loose groups with empty stretches between (Chris, 2026-10-20: "there are too many. Tone it down so they are
+  // spread out throughout the map and don't seem like they are on every single inch of it. They should be near parts
+  // similar to how they are irl"): only in a group's reach (FlyGroups), and there by where they keep in life.
+  float gather = FlyGroups(anchor);
+  if (gather <= 0) return o;
+  float ground = FlyGround(anchor);
+  if (ground < mapInfo.w + 0.1) return o;  // (none over the water)
+  // where they keep: along the woods' edges (in them a little) ...
   float2 uv = anchor / woodsAt.xy, apart = 6 / woodsAt.xy;
   float w0 = woods.SampleLevel(samplerLinearClamp, uv, 0);
   float w1 = woods.SampleLevel(samplerLinearClamp, uv + float2(apart.x, 0), 0), w2 = woods.SampleLevel(samplerLinearClamp, uv - float2(apart.x, 0), 0);
   float w3 = woods.SampleLevel(samplerLinearClamp, uv + float2(0, apart.y), 0), w4 = woods.SampleLevel(samplerLinearClamp, uv - float2(0, apart.y), 0);
   float most = max(w0, max(max(w1, w2), max(w3, w4))), least = min(w0, min(min(w1, w2), min(w3, w4)));
   float edge = saturate(most * 2) * (1 - 0.7 * saturate(least * 1.5));
-  // (over open grass only in patches, a few tens of units across: a wet meadow here, nothing there)
+  // ... over damp grass: low by the water (a shore, a stream's mouth, a lake) and in hollows, the ground lower than round
+  // it, where water gathers (a stream's bed, a wet meadow); over dry meadow a little. None on bare ground: rock, sand and
+  // scree (not grassy), nor where it is steep.
   float grass = groundColours.SampleLevel(samplerLinearClamp, anchor / mapInfo.xy, 0).a;
-  float patch = smoothstep(0.55, 0.8, CloudNoise(float3(anchor * 0.035, 3.1)));
-  if (FlyRand(FlyHash(h + 3)) > saturate(edge * 0.9 + grass * patch * 0.45)) return o;
-  if (FlyGround(anchor) < mapInfo.w + 0.1) return o;  // (none over the water)
+  float e = FlyGround(anchor + float2(8, 0)), wst = FlyGround(anchor - float2(8, 0)), n = FlyGround(anchor + float2(0, 8)), s = FlyGround(anchor - float2(0, 8));
+  float hollow = saturate(((e + wst + n + s) * 0.25 - ground) * 0.8);
+  float damp = max(1 - smoothstep(1, 6, ground - mapInfo.w), hollow);
+  float steep = smoothstep(0.3, 0.6, max(abs(e - wst), abs(n - s)) / 16);
+  float live = saturate(edge * (0.45 + 0.55 * grass) + grass * (0.12 + 0.88 * damp)) * smoothstep(0.08, 0.3, grass + edge * 0.3) * (1 - steep);
+  if (FlyRand(FlyHash(h + 3)) > live * gather) return o;
   // fewer toward the square's edge
   float halfSide = area.z * area.w * 0.5;
   float thin = saturate((1 - length(anchor - (area.xy + halfSide)) / halfSide) * 4);
@@ -1002,7 +1030,9 @@ bool Wildlife::Update(const View& view, const Camera& camera, float time, float 
   drawBirds_ = flocksDrawn > 0;
   // the fireflies: at dusk and by night (fewer in rain, none on lying snow), round what the camera looks at, gone as it
   // rises
-  const float dark = std::clamp((0.05f - sunHeight) / 0.15f, 0.0f, 1.0f);  // (from about sunset, all from the end of the twilight)
+  // (from about sunset, all from the end of the twilight; (sky) and, as in life, most from dusk into the first hours of
+  // the night, half as many late in it)
+  const float dark = std::clamp((0.05f - sunHeight) / 0.15f, 0.0f, 1.0f) * (1 - 0.5f * Smooth(-0.35f, -0.65f, sunHeight));
   const float share = dark * fireflyDensity * (1 - snowLying) * (1 - 0.7f * std::clamp(rain, 0.0f, 1.0f)) * (1 - Smooth(90, 160, camera.distance)) * 0.3f;
   if (share > 0.005f && ground_ && woodsMap_) {
     const float reach = std::clamp(camera.distance * 0.9f, 20.0f, 75.0f);

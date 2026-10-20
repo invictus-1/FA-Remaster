@@ -272,7 +272,7 @@ bool BeyondLand::Set(const std::string& list, std::string* why) {
     float* value;
   } named[] = {{"band", &band}, {"edgeShadow", &edgeShadow}, {"edgeWidth", &edgeWidth}, {"edgeGrey", &edgeGrey}, {"haze", &haze}, {"hazeHeight", &hazeHeight},
                {"begin", &begin}, {"end", &end}, {"hills", &hills}, {"mountains", &mountains}, {"islands", &islands},
-               {"farLand", &farLand}, {"snowline", &snowline}, {"softness", &softness}};
+               {"farLand", &farLand}, {"snowline", &snowline}, {"softness", &softness}, {"reach", &reach}};  // (sky: reach)
   size_t at = 0;
   while (at < list.size()) {
     size_t stop = list.find(',', at);
@@ -288,7 +288,7 @@ bool BeyondLand::Set(const std::string& list, std::string* why) {
       }
     if (!found) {
       *why = "not a name=value of band, edgeShadow, edgeWidth, edgeGrey, haze, hazeHeight, begin, end, hills, mountains, islands, farLand, snowline, "
-             "softness: " + item;
+             "softness, reach: " + item;
       return false;
     }
   }
@@ -323,6 +323,7 @@ void BeyondLand::Forget(const MapData& map, const std::string& path) {
   seed_ = seed;
   highest_ = highest;
   sea_ = map.water.present ? map.water.elevation : lowest - 1;
+  hasWater_ = map.water.present;  // (sky: the far sea, SetView)
   mapSize_[0] = W;
   mapSize_[1] = H;
   middle_[0] = W * 0.5f;
@@ -395,6 +396,13 @@ void BeyondLand::SetView(ViewConstants* c) {
   c->beyondLand[1] = std::max(band, 0.01f);
   c->beyondLand[2] = std::clamp(edgeShadow, 0.0f, 1.0f);
   c->beyondLand[3] = std::clamp(edgeGrey, 0.0f, 1.0f);
+  // (sky) the far sea from above (view.h, BeyondSea), on a map with water: its level, lost in the land far off's haze
+  if (read_ && hasWater_) {
+    c->beyondSea[0] = 1;
+    c->beyondSea[1] = sea_;
+    c->beyondSea[2] = std::max(haze, 1.0f);
+    c->beyondSea[3] = std::max(hazeHeight, 1.0f);
+  }
 }
 
 bool BeyondLand::MakePipelines() {
