@@ -1,0 +1,15 @@
+Checks: >
+  -*,
+  bugprone-suspicious-missing-comma,
+  bugprone-suspicious-semicolon,
+  bugprone-use-after-move,
+  modernize-use-nullptr,
+  modernize-use-override,
+  readability-braces-around-statements,
+  readability-redundant-control-flow,
+  readability-simplify-boolean-expr
+WarningsAsErrors: ''
+HeaderFilterRegex: '(^|/)(src|render|ui|tests)/'
+ExcludeHeaderFilterRegex: '(^|/)(third_party|build[^/]*)(/|$)'
+CheckOptions:
+  readability-braces-around-statements.ShortStatementLines: '0'

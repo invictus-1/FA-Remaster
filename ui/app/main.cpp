@@ -758,7 +758,8 @@ int moho::ui::RunApplication(int argc, char** argv, const ApplicationHost& host)
                            if (!windowCapture.empty() && session.DrawsToWindow()) {
                              // (MOHO64UI_CAPTURE_FRAME: the game's frame it is taken at, 300 unless given)
                              static const int captureAt = std::getenv("MOHO64UI_CAPTURE_FRAME") ? std::atoi(std::getenv("MOHO64UI_CAPTURE_FRAME")) : 300;
-                             if (game && ++capturedFrames == captureAt) session.CaptureWindow(windowCapture + "_game.png"), gameSeen = true;
+                             if (game && ++capturedFrames >= captureAt && !gameSeen && session.PictureTick() >= 60)
+                               session.CaptureWindow(windowCapture + "_game.png"), gameSeen = true;
                              if (!game && gameSeen && ++menuFrames == 300) session.CaptureWindow(windowCapture + "_menu.png");
                              if (!game && session.Loading() && ++loadingFrames == 90) session.CaptureWindow(windowCapture + "_loading.png");
                            }

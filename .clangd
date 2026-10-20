@@ -1,0 +1,10 @@
+CompileFlags:
+  CompilationDatabase: build-native
+---
+If:
+  PathMatch: '(third_party|ui/third_party|render/third_party|build[^/]*)/.*'
+Index:
+  Background: Skip
+Diagnostics:
+  ClangTidy:
+    Remove: '*'

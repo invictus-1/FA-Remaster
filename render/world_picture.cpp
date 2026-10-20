@@ -232,14 +232,13 @@ bool WorldPicture::Open(const moho::Vfs* vfs, const std::string& mapPath, std::s
     }
     dd.vsync = m.vsync;
   } else {
-#if defined(_WIN32)
     m.window = Window::Create("FA Remastered (world picture)", 640, 360, error, false, true);
     if (!m.window) return false;
     dd.window = m.window->Handle();
-#else
-    // (an invisible window of its own is Windows' alone so far)
-    *error = "the world picture needs the host's window on this system (UseNativeWindow)";
-    return false;
+#if !defined(_WIN32)
+    dd.windowSystem = gfx::DeviceDesc::WindowSystem::Host;
+    dd.hostExtensions = m.window->SurfaceExtensions();
+    dd.hostSurface = [&m](void* instance) { return m.window->CreateSurface(instance); };
 #endif
   }
   m.device = gfx::Device::Create(dd, error);

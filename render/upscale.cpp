@@ -1,6 +1,7 @@
 #include "upscale.h"
 
 #include <cstdint>
+#include <cmath>
 #include <cstring>
 
 // FSR's constants are worked out on the processor by its own functions (its C path)

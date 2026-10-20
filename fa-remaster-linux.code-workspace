@@ -1,0 +1,132 @@
+{
+  "folders": [
+    {
+      "name": "FA Remastered",
+      "path": "."
+    }
+  ],
+  "extensions": {
+    "recommendations": [
+      "ms-vscode.cpptools"
+    ]
+  },
+  "tasks": {
+    "version": "2.0.0",
+    "tasks": [
+      {
+        "label": "Configure CMake",
+        "type": "process",
+        "command": "cmake",
+        "args": [
+          "-S", "${workspaceFolder}",
+          "-B", "${workspaceFolder}/build-native",
+          "-G", "Ninja",
+          "-DCMAKE_C_COMPILER=/usr/bin/cc",
+          "-DCMAKE_CXX_COMPILER=/usr/bin/c++",
+          "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
+          "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+          "-DBUILD_TESTING=ON",
+          "-DMOHO64_BUILD_UI=ON",
+          "-DMOHO64_BUILD_VIEWER=ON",
+          "-DMOHO64_HEADLESS_UI=OFF",
+          "-DMOHO64_FETCH_SDL3=ON"
+        ],
+        "options": {
+          "cwd": "${workspaceFolder}"
+        },
+        "problemMatcher": []
+      },
+      {
+        "label": "Configure C++ workspace",
+        "type": "process",
+        "command": "cmake",
+        "args": [
+          "-E", "create_symlink",
+          "build-native/compile_commands.json", "compile_commands.json"
+        ],
+        "options": {
+          "cwd": "${workspaceFolder}"
+        },
+        "dependsOn": "Configure CMake",
+        "problemMatcher": []
+      },
+      {
+        "label": "Build native hosts",
+        "type": "process",
+        "command": "cmake",
+        "args": [
+          "--build", "${workspaceFolder}/build-native",
+          "--target", "moho64", "moho64ui", "moho64view",
+          "--parallel", "4"
+        ],
+        "dependsOn": "Configure C++ workspace",
+        "group": {
+          "kind": "build",
+          "isDefault": true
+        },
+        "problemMatcher": ["$gcc"]
+      },
+      {
+        "label": "Build UI",
+        "type": "process",
+        "command": "cmake",
+        "args": [
+          "--build", "${workspaceFolder}/build-native",
+          "--target", "moho64ui", "--parallel", "4"
+        ],
+        "dependsOn": "Configure C++ workspace",
+        "problemMatcher": ["$gcc"]
+      },
+      {
+        "label": "Build simulation",
+        "type": "process",
+        "command": "cmake",
+        "args": [
+          "--build", "${workspaceFolder}/build-native",
+          "--target", "moho64", "--parallel", "4"
+        ],
+        "dependsOn": "Configure C++ workspace",
+        "problemMatcher": ["$gcc"]
+      }
+    ]
+  },
+  "launch": {
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "name": "Game UI (GDB)",
+        "type": "cppdbg",
+        "request": "launch",
+        "program": "${workspaceFolder}/build-native/moho64ui",
+        "args": ["--init", "${workspaceFolder}/.fa-remaster/init_linux.lua", "--window"],
+        "cwd": "${workspaceFolder}",
+        "MIMode": "gdb",
+        "miDebuggerPath": "gdb",
+        "preLaunchTask": "Build UI",
+        "setupCommands": [
+          {
+            "text": "-enable-pretty-printing",
+            "ignoreFailures": true
+          }
+        ]
+      },
+      {
+        "name": "Simulation (GDB)",
+        "type": "cppdbg",
+        "request": "launch",
+        "program": "${workspaceFolder}/build-native/moho64",
+        "args": ["--init", "${workspaceFolder}/.fa-remaster/init_linux.lua"],
+        "cwd": "${workspaceFolder}",
+        "MIMode": "gdb",
+        "miDebuggerPath": "gdb",
+        "preLaunchTask": "Build simulation",
+        "setupCommands": [
+          {
+            "text": "-enable-pretty-printing",
+            "ignoreFailures": true
+          }
+        ]
+      }
+    ]
+  }
+}

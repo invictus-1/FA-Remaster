@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""build_ui.py - build the interface host (moho64ui) with zig's bundled clang.
+"""build_ui.py - build the interface host (moho64ui): native CMake on Linux/macOS, Zig on Windows.
 
+    python3 ui/build_ui.py --fetch-sdl3    -> build-ui/moho64ui (native CMake, no Zig needed)
+    python3 ui/build_ui.py --headless      -> without SDL/Vulkan
     python3 ui/build_ui.py --tests         -> build-ui/moho64ui_test
 
     py -m pip install ziglang             (once)
@@ -43,12 +45,20 @@ def main():
     ap.add_argument("--no-debug", action="store_true", help="leave out -g")
     ap.add_argument("--target", help="zig target triple (default: this machine; Windows -> x86_64-windows-gnu)")
     ap.add_argument("--out", default=os.path.join(ROOT, "build-ui"))
-    ap.add_argument("--define", action="append", default=[], help="a preprocessor name for the interface's own files (test builds)")
+    ap.add_argument("--define", action="append", default=[], help="a preprocessor name for the interface's own files (Zig test builds)")
     ap.add_argument("--sdl", action="store_true", help="the window and sound through SDL3 on Windows too (a test build)")
     ap.add_argument("--sdl-lib", help="the folder of the SDL3 library to link to")
     ap.add_argument("--headless", action="store_true", help="elsewhere than Windows: no SDL (no window, no sound)")
+    ap.add_argument("--fetch-sdl3", action="store_true", help="native CMake build: download pinned SDL3 if the system has none")
     ap.add_argument("--tests", action="store_true", help="build the dedicated UI test host")
     a = ap.parse_args()
+    if os.name != "nt" and not a.target:
+        if a.define:
+            ap.error("--define requires a Zig build with --target")
+        sys.path.insert(0, os.path.join(ROOT, "tools"))
+        from build_native import build
+        build(a.out, "moho64ui_test" if a.tests else "moho64ui", a.jobs, a.no_debug, a.headless, a.fetch_sdl3, a.sdl_lib)
+        return
     target = a.target or ("x86_64-windows-gnu" if os.name == "nt" else None)
     windows = (target or "").find("windows") >= 0 or (target is None and os.name == "nt")
     tflag = ["-target", target] if target else []
@@ -85,7 +95,7 @@ def main():
     if windows or sdl:
         cxxflags.append("-DMOHO64UI_WORLD_PICTURE=1")
         for f in sorted(glob.glob(os.path.join(ROOT, "render", "*.cpp"))):
-            if os.path.basename(f) != "main.cpp" and (windows or os.path.basename(f) != "window_win32.cpp"):
+            if os.path.basename(f) not in ("main.cpp", "window_sdl.cpp") and (windows or os.path.basename(f) != "window_win32.cpp"):
                 add(f, ["-std=c++20", "-w", "-I", os.path.join(ROOT, "src")] + lua_inc + zlib_inc, True)
     for d in ("core", "script", "sim"):
         for f in sorted(glob.glob(os.path.join(ROOT, "src", d, "*.cpp"))):

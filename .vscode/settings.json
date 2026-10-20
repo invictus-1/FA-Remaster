@@ -1,0 +1,27 @@
+{
+  "cpp.disableBuckIntegration": true,
+  "cpp.fusionMode": "ClangD",
+  "cpp.clangdRemote.useClangdRemote": "off",
+  "cpp.clangdRemote.useFuzzyFind": "off",
+  "cpp.disable-diagnostics": false,
+  "cpp.customClangd.clangTidyMode": "on",
+  "cpp.clangdArguments": [
+    "--enable-config",
+    "--query-driver=/usr/bin/cc,/usr/bin/c++",
+    "-clang-tidy=true",
+    "--header-insertion=never"
+  ],
+  "arclint.lintOnSave": false,
+  "C_Cpp.intelliSenseEngine": "disabled",
+  "C_Cpp.errorSquiggles": "disabled",
+  "C_Cpp.codeAnalysis.runAutomatically": false,
+  "C_Cpp.codeAnalysis.clangTidy.enabled": false,
+  "[c]": {
+    "editor.defaultFormatter": "nuclide.cpp",
+    "editor.formatOnSave": false
+  },
+  "[cpp]": {
+    "editor.defaultFormatter": "nuclide.cpp",
+    "editor.formatOnSave": false
+  }
+}

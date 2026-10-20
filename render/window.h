@@ -1,5 +1,6 @@
 // The window and its input, behind a small platform-neutral interface (window_win32.cpp for Windows).
 #pragma once
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -42,6 +43,9 @@ class Window {
   virtual bool MouseDown(int button) const = 0;
   virtual void MousePosition(int* x, int* y) const = 0;
   virtual void SetTitle(const std::string& title) = 0;
+  // SDL hosts create their Vulkan surface after the device has made its instance.
+  virtual std::vector<std::string> SurfaceExtensions() const { return {}; }
+  virtual uint64_t CreateSurface(void*) const { return 0; }
 };
 
 }  // namespace render

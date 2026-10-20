@@ -1300,6 +1300,9 @@ int main(int argc, char** argv) {
                     "                  [--cam x,z,distance,pitch,heading] [--frames N] [--screenshot file.png]\n");
     return 2;
   }
+#if !defined(_WIN32)
+  opt.vulkan = true;
+#endif
   setvbuf(stdout, nullptr, _IONBF, 0);  // messages appear in order with stderr's, and survive a crash
   gSceneSamples = opt.fsr3 ? 1 : opt.msaa == 2 || opt.msaa == 4 || opt.msaa == 8 ? opt.msaa : 1;  // (FSR 3: one sample a pixel)
   std::string error;
@@ -1315,6 +1318,11 @@ int main(int argc, char** argv) {
   }
   gfx::DeviceDesc dd;
   dd.window = window->Handle();
+#if !defined(_WIN32)
+  dd.windowSystem = gfx::DeviceDesc::WindowSystem::Host;
+  dd.hostExtensions = window->SurfaceExtensions();
+  dd.hostSurface = [&window](void* instance) { return window->CreateSurface(instance); };
+#endif
   dd.width = window->Width();
   dd.height = window->Height();
   dd.vsync = opt.vsync;
@@ -1373,6 +1381,9 @@ int main(int argc, char** argv) {
       WorldPicture p;
       p.SetVulkan(opt.vulkan);
       p.UseWindow(window->Handle());
+#if !defined(_WIN32)
+      p.UseHostSurface(window->SurfaceExtensions(), [&window](void* instance) { return window->CreateSurface(instance); }, w, h);
+#endif
       std::string why;
       if (!p.Open(&vfs, map, &why)) {
         printf("render: --window-cycle: %s could not open: %s\n", what, why.c_str());
@@ -1437,6 +1448,11 @@ int main(int argc, char** argv) {
       if (opt.pictureWindow) {  // (into a window of its own, as the interface's would be)
         pictureWindow = Window::Create("FA Remastered (picture into a window)", opt.width, opt.height, &error, true, false);
         if (pictureWindow) picture.UseWindow(pictureWindow->Handle());
+#if !defined(_WIN32)
+        if (pictureWindow) picture.UseHostSurface(pictureWindow->SurfaceExtensions(), [&pictureWindow](void* instance) {
+          return pictureWindow->CreateSurface(instance);
+        }, pictureWindow->Width(), pictureWindow->Height());
+#endif
         picture.SetLowLatency(opt.lowLatency);  // (--low-latency: the game's host's way, WaitForNextFrame before each frame)
       }
       if (!opt.settings.empty()) {  // (the game's lighting settings, before Open as the interface sets them)

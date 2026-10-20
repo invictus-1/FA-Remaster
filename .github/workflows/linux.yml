@@ -1,0 +1,30 @@
+name: Linux native
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Native desktop dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libasound2-dev libx11-dev libxext-dev \
+            libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libxtst-dev \
+            libwayland-dev libxkbcommon-dev wayland-protocols libdecor-0-dev \
+            libgl1-mesa-dev libegl1-mesa-dev libvulkan1 mesa-vulkan-drivers xvfb xauth
+      - name: Build the simulation, interface and viewer
+        run: python3 tools/linux.py build --fetch-sdl3 --jobs 4
+      - name: Lua dialect and formation sorting
+        run: ctest --test-dir build-native --output-on-failure
+      - name: DXC, Vulkan shaders and readback without proprietary game data
+        run: |
+          python3 tools/linux.py dxc
+          xvfb-run -a build-native/moho64view --vulkan-clear --size 320x240 --frames 3
+          xvfb-run -a build-native/moho64view --gfx-check --size 320x240 --frames 3

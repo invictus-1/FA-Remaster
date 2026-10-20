@@ -3,3 +3,5 @@ build-*/
 *.log
 __pycache__/
 .fa-remaster/
+/compile_commands.json
+.cache/

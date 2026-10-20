@@ -135,6 +135,21 @@ function RemasterFirstStartCheck()
         nil, nil, true, { escapeButton = 2, enterButton = 1, worldCover = false })
 end
 
+-- FAF's startup selection loop can stop at tick 51; the commander's warp ends at tick 52.
+local RemasterStartupSequence = StartupSequence
+function StartupSequence(avatars)
+    local army = GetFocusArmy()
+    RemasterStartupSequence(avatars)
+    local deadline = GameTick() + 50
+    while GameTick() < deadline and GetFocusArmy() == army and not avatars[1]:IsDead() do
+        if not table.empty(GetSelectedUnits() or {}) then return end
+        WaitSeconds(0.1)
+        if not table.empty(GetSelectedUnits() or {}) then return end
+        if GameTick() >= deadline or GetFocusArmy() ~= army or avatars[1]:IsDead() then return end
+        if not gameUIHidden then SelectUnits(avatars) end
+    end
+end
+
 local RemasterGameOnFirstUpdate = OnFirstUpdate
 function OnFirstUpdate()
     RemasterGameOnFirstUpdate()

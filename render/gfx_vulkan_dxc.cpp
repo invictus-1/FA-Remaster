@@ -21,11 +21,13 @@
 #include <map>
 #include <set>
 #include <thread>
+#include "core/hostfs.h"
 
 namespace render::gfx {
-namespace {
 
 // --- the part of DXC's interface used (dxcapi.h: IDxcCompiler3, IDxcResult, IDxcBlob) ---
+// These imported interfaces need external linkage. GCC can devirtualize a pure interface in an
+// anonymous namespace to __cxa_pure_virtual because it sees no possible implementation in this TU.
 struct Guid {
   uint32_t a;
   uint16_t b, c;
@@ -37,20 +39,26 @@ constexpr Guid kIidResult = {0x58346cda, 0xdde7, 0x4497, {0x94, 0x61, 0x6f, 0x87
 
 struct DxcUnknown {
   virtual int32_t QueryInterface(const Guid& iid, void** out) = 0;
+#if defined(_WIN32)
   virtual uint32_t AddRef() = 0;
   virtual uint32_t Release() = 0;
-#if !defined(_WIN32)
-  // (outside Windows DXC's IUnknown has a virtual destructor: two entries of the table)
-  virtual void DestroyComplete() = 0;
-  virtual void DestroyDeleting() = 0;
+#else
+  virtual unsigned long AddRef() = 0;  // WinAdapter.h's ULONG
+  virtual unsigned long Release() = 0;
 #endif
+  // DXC's WinAdapter.h declares no virtual destructor, including on Linux.
+  // Adding destructor slots shifts Compile/GetStatus/GetBufferPointer onto unrelated methods.
 };
 struct DxcBlob : DxcUnknown {
   virtual void* GetBufferPointer() = 0;
   virtual size_t GetBufferSize() = 0;
 };
 struct DxcBlobEncoding : DxcBlob {
+#if defined(_WIN32)
   virtual int32_t GetEncoding(int32_t* known, uint32_t* codePage) = 0;
+#else
+  virtual int32_t GetEncoding(bool* known, uint32_t* codePage) = 0;  // WinAdapter.h's BOOL
+#endif
 };
 struct DxcOperationResult : DxcUnknown {
   virtual int32_t GetStatus(int32_t* status) = 0;
@@ -68,6 +76,8 @@ struct DxcCompiler3 : DxcUnknown {
   virtual int32_t Disassemble(const DxcSource* object, const Guid& iid, void** result) = 0;
 };
 using CreateInstanceFn = int32_t (*)(const Guid& clsid, const Guid& iid, void** out);
+
+namespace {
 
 template <typename T>
 struct Ref {
@@ -96,10 +106,17 @@ CreateInstanceFn DxcCreate() {
 #if defined(_WIN32)
     if (HMODULE lib = LoadLibraryExW(DxcBeside().c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH))
       fn = reinterpret_cast<CreateInstanceFn>(reinterpret_cast<void*>(GetProcAddress(lib, "DxcCreateInstance")));
-#elif defined(__APPLE__)
-    if (void* lib = dlopen("libdxcompiler.dylib", RTLD_NOW | RTLD_LOCAL)) fn = reinterpret_cast<CreateInstanceFn>(dlsym(lib, "DxcCreateInstance"));
 #else
-    if (void* lib = dlopen("libdxcompiler.so", RTLD_NOW | RTLD_LOCAL)) fn = reinterpret_cast<CreateInstanceFn>(dlsym(lib, "DxcCreateInstance"));
+    const char* name =
+#if defined(__APPLE__)
+        "libdxcompiler.dylib";
+#else
+        "libdxcompiler.so";
+#endif
+    const std::string folder = moho::hostfs::ProgramFolder();
+    void* lib = folder.empty() ? nullptr : dlopen((folder + "/" + name).c_str(), RTLD_NOW | RTLD_LOCAL);
+    if (!lib) lib = dlopen(name, RTLD_NOW | RTLD_LOCAL);
+    if (lib) fn = reinterpret_cast<CreateInstanceFn>(dlsym(lib, "DxcCreateInstance"));
 #endif
     return fn;
   }();
@@ -436,7 +453,7 @@ bool DxcPresent() {
 #if defined(_WIN32)
   return GetFileAttributesW(DxcBeside().c_str()) != INVALID_FILE_ATTRIBUTES;
 #else
-  return true;  // (dlopen's own search decides, at the first shader compiled)
+  return DxcCreate() != nullptr;
 #endif
 }
 

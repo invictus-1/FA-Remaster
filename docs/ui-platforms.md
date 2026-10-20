@@ -1,5 +1,10 @@
 # The interface host on Linux and Mac: where it stands, what a port needs
 
+**Linux update, 2026-10-19:** native builds and runtime verification now exist. The SDL interface,
+Vulkan viewer and integrated game window run on CentOS 9/X11 using Mesa. See [linux.md](linux.md)
+for setup, checks and the remaining hardware audio/GPU and Wayland verification limits. The original
+port notes below are retained as history; their statements that Linux has never run are superseded.
+
 From the interface chat, 2026-10-16. Chris approved Vulkan for Linux and Mac (Mac = M1); there is no
 Linux or Mac machine here, so on those systems nothing below has run: it is built, and tried on
 Windows through the same code where that is possible.

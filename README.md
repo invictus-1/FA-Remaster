@@ -291,23 +291,18 @@ Not yet: saved games, the console, joining a network game.
 
 ## Platforms
 
-**Windows (x64)** is the platform in daily use, and the only one tested.
+**Windows (x64)** is the upstream platform in daily use.
 
-**Linux and macOS: support exists in parts, untested.** Nobody working on the project has a Linux
-machine or a Mac, so read this as "may work, expect problems":
+**Linux (x86-64)** now has a native CMake build for the simulation, SDL3 interface and Vulkan viewer,
+and a setup/launch/verification tool. Local checks on CentOS Stream 9 with Xvfb and Mesa software
+rendering pass, including a seeded skirmish, unit orders, SDL input and Vulkan pipelines. Terrain,
+units and the integrated game interface render. Hardware GPU performance, physical audio output and
+Wayland interaction remain unverified. See [the Linux guide](docs/linux.md) for commands and evidence.
 
-- The headless simulation (`moho64`) builds for Linux (x86-64) and for macOS on Apple Silicon
-  (`py tools/build_zig.py --target x86_64-linux-gnu` or `--target aarch64-macos`; CMake or
-  `./build.sh` on Linux itself). It ran on Linux early in the project with results identical to
-  Windows; it has never run on macOS.
-- The renderer's Vulkan backend has code for Linux (X11 and Wayland) and macOS (through MoltenVK).
-  It compiles for both but has never run on either.
-- The game itself (`moho64ui`) has its Linux and macOS parts written: the window, keys, mouse, sound
-  and clipboard through SDL 3, the game's fonts through stb_truetype, and the world drawn by the
-  renderer's Vulkan backend on the window. Cross-built from Windows it compiles for both; built on
-  Linux or a Mac it links to the system's SDL 3 (`py ui/build_ui.py`). It has never run on either.
-  Some of these parts were tried on Windows through the same code (the SDL input, the stb fonts),
-  but a first run on each system is still to come. Details: [docs/ui-platforms.md](docs/ui-platforms.md).
+**macOS: support exists in parts, untested.** The headless simulation cross-builds for Apple Silicon
+(`py tools/build_zig.py --target aarch64-macos`). The interface has SDL3 window/input/audio code,
+stb font rendering and Vulkan surface support through MoltenVK. A first native run on macOS is still
+needed. Details: [docs/ui-platforms.md](docs/ui-platforms.md).
 
 ## Multiplayer
 
@@ -335,6 +330,17 @@ The simulation alone also builds with CMake (`cmake -B build -G Ninja && cmake -
 `./build.sh`. For the Vulkan backend, put `dxcompiler.dll` beside the program; see
 [docs/render-vulkan.md](docs/render-vulkan.md).
 
+## Build and run (Linux)
+
+```sh
+python3 tools/linux.py setup --game '/path/to/Forged Alliance' --fetch-faf --fetch-dxc
+python3 tools/linux.py build --fetch-sdl3
+python3 tools/linux.py run -- --size 1280x720
+python3 tools/linux.py verify --window
+```
+
+Dependencies, server checks, headless builds and tested revisions: [docs/linux.md](docs/linux.md).
+
 ## Testing
 
 The [portable testing framework](docs/testing.md) runs the same Lua tests through Windows, SDL, or
@@ -342,13 +348,11 @@ headless compatibility adapters. Test code uses named keys, clicks, Unicode text
 window operations. The shared runner isolates preferences and writes JSON and JUnit results:
 
 UI cases run in `moho64ui_test`, which shares the game's application library and contains the test
-adapters. CMake can build the software test host without SDL or world rendering; the existing UI build script
-uses `--tests` for its windowed hosts.
+adapters. CMake builds it with `BUILD_TESTING=ON`; the UI build script uses `--tests`.
 
 ```sh
-cmake -S . -B build-native -DMOHO64_BUILD_UI=ON -DBUILD_TESTING=ON
-cmake --build build-native --parallel 4
 python3 tests/run.py --build-dir build-native --init path/to/init.lua
+python3 tests/run.py --build-dir build-native --init path/to/init.lua --mode windowed
 ```
 
 Framework self-tests run through `ctest --test-dir build-native --output-on-failure` without game data.

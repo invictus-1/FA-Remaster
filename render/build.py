@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""render/build.py - build the renderer's program with zig's bundled clang.
+"""render/build.py - build the viewer: native CMake on Linux/macOS, Zig on Windows.
+
+    python3 render/build.py --fetch-sdl3   -> build-render/moho64view (native CMake)
+    python3 render/build.py --target x86_64-windows-gnu   (Zig cross-build from Linux)
 
     py -m pip install ziglang          (once; the same compiler tools/build_zig.py uses)
     py render/build.py                 -> build-render/moho64view.exe
@@ -47,7 +50,16 @@ def main():
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
     ap.add_argument("--no-debug", action="store_true")
     ap.add_argument("--out", default=os.path.join(ROOT, "build-render"))
+    ap.add_argument("--target", help="cross-build with Zig for x86_64-windows-gnu; default: native CMake on Linux/macOS")
+    ap.add_argument("--fetch-sdl3", action="store_true", help="native build: download pinned SDL3 if the system has none")
     a = ap.parse_args()
+    if os.name != "nt" and not a.target:
+        sys.path.insert(0, os.path.join(ROOT, "tools"))
+        from build_native import build
+        build(a.out, "moho64view", a.jobs, a.no_debug, fetch_sdl3=a.fetch_sdl3)
+        return
+    if a.target and a.target != "x86_64-windows-gnu":
+        ap.error("the cross-build supports x86_64-windows-gnu; use the native CMake build on Linux/macOS")
     target = ["-target", "x86_64-windows-gnu"]
     objdir = os.path.join(a.out, "obj")
     os.makedirs(objdir, exist_ok=True)
@@ -77,6 +89,8 @@ def main():
         for f in sorted(glob.glob(os.path.join(ROOT, "src", d, "*.cpp"))):
             add(f, ["-std=c++20", "-w", "-ffp-contract=off", "-fno-fast-math", *includes], True)
     for f in sorted(glob.glob(os.path.join(ROOT, "render", "*.cpp"))):
+        if os.path.basename(f) == "window_sdl.cpp":
+            continue
         add(f, ["-std=c++20", "-Wall", "-Wextra", *includes], True)
 
     todo = [j for j in jobs if stale(j[0], j[1])]

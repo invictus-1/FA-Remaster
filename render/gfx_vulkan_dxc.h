@@ -1,8 +1,8 @@
 // HLSL to SPIR-V with Microsoft's DirectX Shader Compiler (DXC), loaded at run time, for the Vulkan
 // backend (gfx_vulkan.cpp); and to DXIL for Direct3D 12 (gfx_d3d12.cpp). The few calls used are declared
 // here rather than through dxcapi.h, so that no Windows headers or compiler extensions are needed on any
-// system (on Linux and macOS DXC's objects have a virtual destructor in their base, which this file
-// allows for).
+// system. The declarations follow DXC's WinAdapter.h COM layout on Linux too: IUnknown has three
+// methods and no virtual destructor.
 #pragma once
 
 #include <cstdint>

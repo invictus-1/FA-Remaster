@@ -1208,6 +1208,11 @@ he expects (the commander selected with its build menu as the warp ends), for ex
 last try come after the commander is free, and list it as a deviation from the script as written. Nothing to
 change on the simulation's side.
 
+FA Remastered's UI hook follows the original startup sequence with up to five more seconds of game-time
+retries while the selection is empty. It stops once a selection appears, the focus army changes, or the
+commander dies, and does not select while the game UI is hidden. This is a UI-only deviation from FAF's
+startup loop; the simulation's warp timing and the engine's selection rules are preserved.
+
 ## ui 17: a building can be set inside another building's skirt — fixed
 
 Chris is right, and the original tests exactly what he says: skirt against skirt. Read in the exe: the site test
