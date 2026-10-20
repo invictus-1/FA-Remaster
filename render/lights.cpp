@@ -10,8 +10,14 @@
 namespace render {
 namespace {
 
-constexpr int kMaxCellsAcross = 96;  // the grid is at most this many squares each way
-constexpr float kSmallestCell = 3;   // world units (about a unit's lamp's reach)
+// (unitsfx) The squares' size: kSmallestCell times a power of the square root of two, the smallest that keeps the grid
+// within kMaxCellsAcross each way (before: 96 across whatever the lights spread over, which made squares of nine to ten
+// world units on a whole map's lights, more than 48 lights in a square over a lit base at night, the farthest left out
+// and the square dark; and the squares moved every frame with the lights at the map's far ends, so the dark squares
+// jumped about - Chris's black squares over building units at night, 2026-10-20).
+constexpr int kMaxCellsAcross = 256;  // the grid is at most this many squares each way
+constexpr float kSmallestCell = 3;    // world units (about a unit's lamp's reach)
+constexpr int kMostInSquare = 48;     // the lights a pixel looks at, at most (lighting.h, and the shaders reading the grid)
 
 }  // namespace
 
@@ -185,8 +191,18 @@ void Lights::Build(View* view) {
     x1 = std::max(x1, l.position.x + l.radius);
     z1 = std::max(z1, l.position.z + l.radius);
   }
-  const float cell = std::max(kSmallestCell, std::max(x1 - x0, z1 - z0) / static_cast<float>(kMaxCellsAcross));
-  const int cols = std::max(1, static_cast<int>(std::ceil((x1 - x0) / cell))), rows = std::max(1, static_cast<int>(std::ceil((z1 - z0) / cell)));
+  // (unitsfx) the squares' size from a ladder (kSmallestCell times powers of the square root of two), kept from frame to
+  // frame while it still fits and is not more than a step too coarse; the grid's corner on a multiple of it, so that a
+  // square is the same piece of ground from frame to frame while the size stays
+  const float wide = std::max(x1 - x0, z1 - z0);
+  int step = 0;
+  while (kSmallestCell * std::exp2(0.5f * static_cast<float>(step)) * static_cast<float>(kMaxCellsAcross) < wide && step < 40) ++step;
+  if (cellStep_ < step || cellStep_ > step + 1) cellStep_ = step;
+  const float cell = kSmallestCell * std::exp2(0.5f * static_cast<float>(cellStep_));
+  x0 = std::floor(x0 / cell) * cell;
+  z0 = std::floor(z0 / cell) * cell;
+  const int cols = std::clamp(static_cast<int>(std::ceil((x1 - x0) / cell)), 1, kMaxCellsAcross + 1);
+  const int rows = std::clamp(static_cast<int>(std::ceil((z1 - z0) / cell)), 1, kMaxCellsAcross + 1);
   const size_t cells = static_cast<size_t>(cols) * static_cast<size_t>(rows);
   cellCount_.assign(cells, 0);
   auto span = [&](const Light& l, int* cx0, int* cx1, int* cz0, int* cz1) {
@@ -218,20 +234,25 @@ void Lights::Build(View* view) {
         indices_[cellFirst_[at] + cellCount_[at]++] = n;
       }
   }
-  // a square with more lights than a pixel looks at (48, lighting.h): the ones nearest its middle
-  // come first, so that what is left out is what reaches the square least, and not whichever
-  // lights were named last (which showed as stripes across a crowd)
+  // a square with more lights than a pixel looks at (kMostInSquare, lighting.h): the ones that light it most come first
+  // (their brightness by how much of it reaches the square's nearest point), so that what is left out is what the
+  // square would miss least; before (unitsfx), the nearest to its middle, which left out a bright lamp's light a little
+  // farther off and darkened the square
   for (int z = 0; z < rows; ++z)
     for (int x = 0; x < cols; ++x) {
       const size_t at = static_cast<size_t>(z) * static_cast<size_t>(cols) + static_cast<size_t>(x);
-      if (cellCount_[at] <= 48) continue;
+      if (cellCount_[at] <= static_cast<uint32_t>(kMostInSquare)) continue;
       const float mx = x0 + (static_cast<float>(x) + 0.5f) * cell, mz = z0 + (static_cast<float>(z) + 0.5f) * cell;
-      auto away = [&](uint32_t n) {
-        const float dx = lights_[n].position.x - mx, dz = lights_[n].position.z - mz;
-        return dx * dx + dz * dz;
+      auto reaches = [&](uint32_t n) {
+        const Light& l = lights_[n];
+        const float dx = std::max(std::fabs(l.position.x - mx) - 0.5f * cell, 0.0f), dz = std::max(std::fabs(l.position.z - mz) - 0.5f * cell, 0.0f);
+        const float far2 = (dx * dx + dz * dz) / (l.radius * l.radius);
+        if (far2 >= 1) return 0.0f;
+        const float fade = (1 - far2) * (1 - far2) / (1 + 4 * far2);
+        return (0.3f * l.color.x + 0.6f * l.color.y + 0.1f * l.color.z) * fade;
       };
       uint32_t* list = indices_.data() + cellFirst_[at];
-      std::nth_element(list, list + 48, list + cellCount_[at], [&](uint32_t a, uint32_t b) { return away(a) < away(b); });
+      std::nth_element(list, list + kMostInSquare, list + cellCount_[at], [&](uint32_t a, uint32_t b) { return reaches(a) > reaches(b); });
     }
   // the buffer, in rows of four numbers: one row per square (where its list begins, how long it
   // is), then the lists (four light numbers a row), then four rows per light, then four rows per

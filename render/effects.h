@@ -32,6 +32,7 @@ namespace render {
 
 class Blasts;
 class BuildEffects;
+class Exhausts;
 
 class Effects {
  public:
@@ -61,6 +62,9 @@ class Effects {
   // (buildfx) The remastered build look (build_effects.h): told of every build beam drawn and of the frame's units under
   // construction, while it is on.
   void SetBuild(BuildEffects* build) { build_ = build; }
+  // (unitsfx) The real exhausts (exhausts.h): told of every engine's beam on one thing while they are on, which they draw
+  // as a plume in place of the band.
+  void SetExhausts(Exhausts* exhausts) { exhausts_ = exhausts; }
   int shotLights = 0;  // lights given this frame to shots in flight and to weapons' beams
   float shotLight = 1.0f;  // how strong those are (0: none)
   int started = 0;     // since the beginning
@@ -97,6 +101,7 @@ class Effects {
     std::string faction;       // beams and trails: whose blueprint they play (FactionOf)
     bool buildBeam = false;    // (buildfx) a build beam (BuildEffects::IsBuildBeam)
     bool original = false;     // (buildfx) made in the original effects' look whatever the world's (the stand's right side)
+    float beamLength = -1e30f, beamThickness = -1e30f;  // (unitsfx) what SetBeamParam set (below -1e29: not set; exhausts.h)
   };
   void Apply(const FrameEffectEvent& event, const Frame& frame);
   void End(uint32_t id);
@@ -118,6 +123,7 @@ class Effects {
   Tracks* tracks_ = nullptr;
   Blasts* blasts_ = nullptr;
   BuildEffects* build_ = nullptr;  // (buildfx)
+  Exhausts* exhausts_ = nullptr;   // (unitsfx)
   Lights* lights_;
   ModelCache* models_;
   std::deque<FrameEffectEvent> pending_;

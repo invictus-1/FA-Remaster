@@ -40,6 +40,7 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       outlines(device),
       dust(device),
       build(device),
+      exhausts(device, vfs),  // (unitsfx)
       clouds(device),
       cloudZoomDraw(device),  // (cloudzoom)
       motion(device),
@@ -117,6 +118,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
   effects.SetTracks(&tracks);
   effects.SetBlasts(&blasts);
   effects.SetBuild(&build);
+  effects.SetExhausts(&exhausts);  // (unitsfx)
   tracks.deep = &trackField;  // (deep tracks: the prints go there while they are on)
   trackField.picture = [this](const std::string& name) { return decals.Picture(name); };
   trackField.groundHeight = [this](float x, float z) { return map.Height(x, z); };
@@ -1117,6 +1119,9 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   buildNow_ = remasteredBuild && look == Look::Modern && effectsLook == EffectsLook::Remastered && !sidePicture;
   build.Begin(clock, buildNow_, sidePicture);
   meshes.remasteredBuild = buildNow_ && meshes.PrepareBuild();
+  // (unitsfx) the real exhausts (exhausts.h): the effects hand this frame's engines' beams to them while they are on
+  exhaustsNow_ = realExhausts && look == Look::Modern && !sidePicture;
+  exhausts.Begin(clock, exhaustsNow_);
   // (icons and bars at the screen's size: the scene's view with the screen's numbers)
   screenView_ = view;
   if (temporalNow_) screenView_.SetMatrix(motion.Now());  // (icons, bars and what is picked: without the jitter)
@@ -2505,6 +2510,7 @@ void World::Render() {
     volumes.CloudRing(clock_, &clouds.ringX, &clouds.ringZ, &clouds.ringRadius, &clouds.ringWidth, &clouds.ringStrength);
   }
   if (buildNow_) build.AddLights(&lights, lights.night);  // (buildfx: the build beams' lights, the sparks thrown)
+  if (exhaustsNow_) exhausts.AddLights(&lights, lights.night);  // (unitsfx: a light per drive)
   lights.Build(&view);  // (after everything has said what lights there are; before any pass reads the view)
   // blasts (blasts.h): the waves and the dust under way near what the camera sees; the debris's chunks moved on and listed
   blastsNow_ = grassBlasts_ = false;
@@ -2943,6 +2949,10 @@ void World::Render() {
     if (buildNow_ && hide.find("particles") == std::string::npos) build.Draw(view, post.Depth(), camera);  // (buildfx: the sparks)
     Stage("lamp shafts");
     shafts.Draw(view, post.Depth(), camera.zNear);
+    if (exhaustsNow_ && hide.find("bands") == std::string::npos) {  // (unitsfx: the real exhausts' plumes)
+      Stage("exhausts");
+      exhausts.Draw(view, post.Depth(), camera.zNear);
+    }
     if (blastsNow_ && blastDust) {  // the blasts' dust, under the game's own fire and smoke
       Stage("blasts' dust");
       blasts.DrawDust(view, post.Depth(), camera.zNear, terrain.HeightTexture(), terrain.HeightUnit(), terrain.GroundColours(),
@@ -2981,6 +2991,13 @@ void World::Render() {
           post.BeginColorOnly();
           particles.DrawHeat(view, post.Behind(), post.Depth(), camera.zNear);
         }
+      }
+    }
+    if (exhaustsNow_ && exhausts.PrepareHaze(view)) {  // (unitsfx: the heat haze behind the drives, bending the picture as it is now)
+      Stage("exhausts' haze");
+      if (post.CopyBehind()) {
+        post.BeginColorOnly();
+        exhausts.DrawHaze(view, post.Behind(), post.Depth(), camera.zNear);
       }
     }
     post.ContinueScene();

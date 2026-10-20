@@ -123,6 +123,7 @@ class Lights {
   std::unordered_map<std::string, std::vector<Vec3>> ramps_;
   std::vector<float> rows_;
   std::vector<uint32_t> cellCount_, cellFirst_, indices_;
+  int cellStep_ = -1;  // (unitsfx) the grid's squares' size, as a step of its ladder (lights.cpp, Build)
   double now_ = 0;
 };
 
