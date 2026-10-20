@@ -260,6 +260,9 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     step("props' models made");
     {  // [stream] the map's streams (stream_water.h): the props whose levels are a stream's water or its white water
       streams.Forget();
+      // [stream mouth] (the sea and the ground, for carrying a stream that ends just above the sea on into it)
+      streams.seaLevel = map.water.present ? map.water.elevation : -1e9f;
+      streams.groundHeight = [this](float x, float z) { return map.Height(Clamp(x, 0, static_cast<float>(map.width)), Clamp(z, 0, static_cast<float>(map.height))); };
       for (size_t i = 0; i < props_.size(); ++i)
         if (props_[i].model && !props_[i].model->lods.empty() && props_[i].model->lods[0].stream)
           streams.Add(props_[i].model, props_[i].world, static_cast<uint32_t>(i));
@@ -2846,6 +2849,17 @@ void World::Render() {
       lights.Bind();
     } else {
       water.Draw(view);
+    }
+    if (streamNow_) {  // [stream mouth] the streams' white water, after the sea: it lies on the sea where a stream runs into it
+      Stage("stream white water");
+      post.BeginColorOnly();
+      lights.Bind();
+      device_->SetTexture(kShadowMapSlot, shadows.Map());
+      device_->SetTexture(kLampShadowSlot, lights.ShadowMap());
+      streams.Draw(view, camera, gfx::Texture{}, post.Depth(), terrain.HeightTexture(), terrain.HeightUnit(), static_cast<float>(map.width),
+                   static_cast<float>(map.height), [this](uint32_t key) { return key < props_.size() && props_[key].model != nullptr; }, true);
+      post.ContinueScene();
+      lights.Bind();
     }
     // the campaign's objective areas over the water: on its surface (Decals::AddWater)
     if (decals.AnyWater() && map.water.present && hide.find("decals") == std::string::npos) {

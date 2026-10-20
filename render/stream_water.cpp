@@ -23,6 +23,7 @@ cbuffer StreamConstants : register(b1) {
   float4 cameraBack;        // w: near distance
   float4 mapInfo;           // x, y the map's width and height; z its height unit; w 1 for a white water ribbon
   float4 streamLook;        // x the deepest water, as a share of the half width; y how murky; z its speed, times; w a view for checking
+  float4 seaInfo;           // [stream mouth] x the sea's level (below -1e8: no sea)
 };
 Texture2D behind : register(t0);  // (kStreamBehindSlot)
 #if SAMPLES > 1
@@ -44,6 +45,8 @@ struct VIn {
   float3 across : TEXCOORD0;  // toward the bank at u = 1
   float3 along : TEXCOORD1;   // downstream
   float4 shape : TEXCOORD2;   // u; how far downstream; the half width; the drop per unit downstream
+  float4 more : TEXCOORD3;    // [stream mouth] from its run's start, to its run's end; how far run on toward the sea (0..1); how steep its
+                              // stretch is (the drop per unit over three units either side), -1 on a plume
 };
 struct VOut {
   float4 position : SV_Position;
@@ -51,11 +54,22 @@ struct VOut {
   float3 across : TEXCOORD1;
   float3 along : TEXCOORD2;
   float4 shape : TEXCOORD3;  // x across from the middle (world units, toward u = 1); y how far downstream; z the half width; w the drop per unit
+  float4 more : TEXCOORD4;   // [stream mouth] (as VIn's, the distances in world units)
 };
 
 float3 Turned(float3 d) { return float3(dot(row0.xyz, d), dot(row1.xyz, d), dot(row2.xyz, d)); }
 
 VOut VS(VIn v) {
+  VOut o;
+  [branch] if (v.more.w < -1.5) {  // [stream] (an outlet's box, StreamWater::Outlet: placed in the world as it is, its numbers kept)
+    o.world = v.position;
+    o.position = mul(viewProj, float4(v.position, 1));
+    o.across = v.across;
+    o.along = v.along;
+    o.shape = v.shape;
+    o.more = v.more;
+    return o;
+  }
   float3 across = Turned(v.across), along = Turned(v.along);
   float scale = max(length(across), 1e-6);  // (the prop's own scale: the direction was of unit length)
   across /= scale;
@@ -66,12 +80,12 @@ VOut VS(VIn v) {
   float reach = mapInfo.w > 0.5 ? 0 : kWetBank;
   float3 world = float3(dot(row0.xyz, v.position) + row0.w, dot(row1.xyz, v.position) + row1.w, dot(row2.xyz, v.position) + row2.w);
   world += across * (side * reach) + float3(0, abs(side) * reach * 0.5, 0);
-  VOut o;
   o.world = world;
   o.position = mul(viewProj, float4(world, 1));
   o.across = across;
   o.along = along;
   o.shape = float4(side * (halfW + reach), v.shape.y * scale, halfW, v.shape.w);
+  o.more = float4(v.more.xy * scale, v.more.zw);
   return o;
 }
 
@@ -194,6 +208,12 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   float sideOf = across >= 0 ? 1 : -1;
   float waver = (CloudNoise(float3(downstream * 1.3, sideOf * 5.0, 0.5)) - 0.5) * min(0.16, halfW * 0.3) + sin(time * 1.7 + downstream * 2.3) * 0.006;
   float inside = halfW - abs(across) + waver;
+  // [stream mouth] at both ends of its run it closes in, so no square end shows: at its head it spills out of the stone as
+  // a trickle that widens over its first two units (white: StreamWater::Outlet wets the stone round it), at its end over
+  // the last unit and a half
+  float head = saturate(i.more.x / 2.0);
+  float ends = head * saturate(i.more.y / 1.5);
+  inside -= (1 - ends * (2 - ends)) * halfW;
   // the bank it has wetted: darker, a little glossy
   float wet = saturate(1 + inside / kWetBank);
   wet *= wet;
@@ -206,7 +226,8 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   float3 sky = skyZenith.w > 0.5 ? ComputedSky(normalize(sheenDir)) : ToLinear(environmentSky.SampleLevel(samplerLinear, sheenDir, 0).rgb) * (lightMultiplier * modern.x * 0.5);
   float3 wetBank = lerp(straight * lerp(1, 0.6, wet), ThroughAirTo(sky, i.world), wet * 0.06);
   if (inside <= 0) {
-    if (wet < 0.002 || streamLook.w > 0.5) {
+    // (the bank along its spilling head is the outlet's wet stone, drawn before: left to it)
+    if (wet < 0.002 || streamLook.w > 0.5 || i.more.x < 2.2) {
       coverage = 0;
       discard;
     }
@@ -217,6 +238,7 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   float x = saturate(abs(across) / halfW);
   float pools = 0.7 + 0.6 * CloudNoise(float3(downstream * 0.11, 3.7, 1.3));
   float bedDepth = streamLook.x * halfW * (1 - x * x) * pools * saturate(inside / 0.03);
+  bedDepth *= (1 - 0.85 * i.more.z) * (0.3 + 0.7 * head);  // [stream mouth] (run on over the beach toward the sea, or near its spring: thin)
   // its speed: faster where it drops
   float speed = streamLook.z * min(0.14 + 1.5 * sqrt(slope), 2.4);
   float2 offsets;
@@ -300,10 +322,28 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
 
   // foam: a lace carried downstream, white where it drops, where it meets what stands in it and behind that, and specks
   // everywhere
-  float lace = StreamLace(q - float2(0, offsets.x), grain) * w + StreamLace(q - float2(0, offsets.y) + float2(3.1, 7.7), grain) * (1 - w);
+  // (finer where it runs fast or steep, and drawn out along it: streaming froth, not blots)
+  float fast = saturate(slope * 3 + saturate((i.more.w - 0.15) * 2.5));
+  float2 froth = float2(1 + 1.6 * fast, 1 + 0.2 * fast);
+  float lace = StreamLace((q - float2(0, offsets.x)) * froth, grain) * w + StreamLace((q - float2(0, offsets.y)) * froth + float2(3.1, 7.7), grain) * (1 - w);
   float rough = saturate((slope - 0.05) * 2.5);
-  float much = saturate(0.05 + rough * 0.5 + wake * 0.3 + meet * 0.35);
-  float foam = smoothstep(0.76 - much * 0.5, 0.88 - much * 0.42, lace) * (0.45 + 0.55 * much);
+  // [stream mouth] (and where it runs into the sea: the surf's line, the sea's swell washing over it)
+  float surf = seaInfo.x > -1e8 ? saturate(1 - (i.world.y - seaInfo.x) / 0.35) * saturate(i.more.z * 4) : 0;
+  // (a stretch that drops steeply, its pools between the drops too, is white water all along: a cascade)
+  float steep = saturate((i.more.w - 0.15) * 2.5);
+  // (and where it comes out of the stone, and where a drop eases out below it, or at its lip: steeper round about than here)
+  float spill = (1 - head) * (1 - head);
+  float eases = saturate((i.more.w - slope) * 1.5);
+  // (never all of it: white water is white in tufts and streaks, the water showing between)
+  float much = min(0.05 + rough * 0.45 + steep * 0.4 + spill * 0.7 + eases * 0.35 + wake * 0.3 + meet * 0.35 + surf * 0.7, 0.65);
+  // (the lace lies about a half, a tenth either side: `much` 0.7 covers about half of it, 0.05 leaves specks)
+  float cut = 0.75 - much * 0.35;
+  float foam = smoothstep(cut - 0.05, cut + 0.05, lace) * (0.45 + 0.55 * much);
+  // (from afar the lace is at its mean and would leave next to no foam: there the foam is as much of the water as the lace
+  // would cover near by, so that a cascade still reads as white water from above, not as dashes)
+  // (mottled, so that from above it is a fall of white water and not paint)
+  float mottled = 0.6 + 0.8 * (CloudNoise(float3(i.world.xz * 1.7, time * 0.6)) - 0.5) + 0.4 * (CloudNoise(float3(i.world.xz * 4.1 + 9.0, time * 1.1)) - 0.5);
+  foam = lerp(foam, saturate(0.5 + (0.5 - cut) / 0.2) * (0.45 + 0.55 * much) * mottled, saturate((grain - 0.015) / 0.05));
   color = lerp(color, (light + lamps) * 0.85, foam * 0.92);
   color += lamps * 0.35;
   color += light * (rings * 0.04);
@@ -362,8 +402,56 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   return float4(lerp(wetBank, color, smoothstep(0, min(0.12, halfW * 0.35), inside)), 1);
 }
 
-// The white water: foam carried fast downstream, its streaks from the ribbon's own picture (alpha), thinning toward its
-// sides, lit as the stream is. Premultiplied.
+// [stream] The wet stone round a stream's outlet (StreamWater::Outlet: a box round its head, both its faces drawn): what the
+// scene shows inside the box, rock face or ground or whatever stands there, is darkened as wet, in streaks running down
+// the stone from the outlet (blotches where it lies flat), with the sky's sheen on it and the glint of trickles; most at
+// and under the outlet, none toward the box's sides and top. i.shape.xyz: the head (the middle of its first cross-section,
+// at the ground there), w: the head's half width; i.across, i.along: across it and downstream; i.more.x: the box's half
+// width, y: how far it reaches back from the head.
+static const float kOutletBelow = 2.0, kOutletAbove = 1.0, kOutletAhead = 2.5;  // (ahead: over the water's whole spilling head)
+float4 SeepPS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
+  int2 pixel = int2(i.position.xy);
+  float3 o = i.shape.xyz, a = normalize(i.across), b = normalize(i.along);
+  float wide = i.more.x, back = i.more.y;
+  coverage = 0;
+  float3 p = 0;
+  [unroll] for (int s = 0; s < SAMPLES; ++s) {
+    float3 q = WorldAt(i.position.xy, SCENE_DEPTH(pixel, s));
+    float3 l = float3(dot(q - o, a), q.y - o.y, dot(q - o, b));
+    if (abs(l.x) < wide && l.y > -kOutletBelow && l.y < kOutletAbove && l.z > -back && l.z < kOutletAhead) {
+      coverage |= 1u << s;
+      p = q;
+    }
+  }
+  if (coverage == 0) discard;
+  float3 l = float3(dot(p - o, a), p.y - o.y, dot(p - o, b));
+  // the stone's facing, from the picture's depth round the pixel
+  float3 toPixel = normalize(p - cameraPosition);
+  float3 n = normalize(cross(ddx(p), ddy(p)) + 1e-7);
+  if (dot(n, toPixel) > 0) n = -n;
+  // round the outlet (wider under it, where the water has run down), in streaks down the stone, in blotches where it lies flat
+  float spread = i.shape.w * 1.4 + 0.15 + max(-l.y, 0) * 0.15;
+  float stain = exp(-l.x * l.x / (spread * spread));
+  float streaks = CloudNoise(float3(l.x * 9.0, l.y * 0.9, 3.0)) * 0.7 + CloudNoise(float3(l.x * 23.0, l.y * 2.0, 5.0)) * 0.3;
+  float blotches = CloudNoise(float3(l.x * 6.0, l.z * 6.0, 7.0)) * 0.7 + CloudNoise(float3(l.x * 15.0, l.z * 15.0, 9.0)) * 0.3;
+  float wet = stain * saturate(0.3 + lerp(streaks, blotches, saturate(abs(n.y) * 1.5 - 0.4)) * 1.1) * saturate(1 - l.y / kOutletAbove) *
+              saturate((l.y + kOutletBelow) / 0.6) * saturate((l.z + back) / 0.4) * saturate((kOutletAhead - l.z) / 0.6) * saturate((wide - abs(l.x)) / 0.25);
+  wet = saturate(wet * 1.3);
+  float3 R = reflect(toPixel, n);
+  R.y = max(R.y, 0.02);
+  R = normalize(R);
+  float3 sky = skyZenith.w > 0.5 ? ComputedSky(R) : ToLinear(environmentSky.SampleLevel(samplerLinear, R, 0).rgb) * (lightMultiplier * modern.x * 0.5);
+  float fresnel = 0.02 + 0.98 * pow(1 - saturate(dot(-toPixel, n)), 5);
+  float trickle = pow(CloudNoise(float3(l.x * 14.0, l.y * 3.0 + time * 1.8, 1.7)), 6) * 4;  // (glints running down the stone)
+  float3 c = behind.SampleLevel(samplerLinearClamp, i.position.xy * viewport.zw, 0).rgb * lerp(1, 0.5, wet);
+  c += ThroughAirTo(sky, p) * ((fresnel * 0.6 + 0.04 + trickle * 0.06) * wet);
+  if (streamLook.w > 0.5) c = float3(wet, wet * 0.5, 0);  // (a view for checking: how wet)
+  return float4(c, 1);
+}
+
+// The white water: foam carried fast downstream, its streaks from the ribbon's own picture (alpha), broken into clots,
+// thinning toward its ragged sides and both its ends, lit as the stream is; and [stream mouth] a mouth's plume of foam on
+// the sea. Premultiplied.
 float4 WhitePS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   float3 toPixel = normalize(i.world - cameraPosition);
   float distance = length(i.world - cameraPosition);
@@ -372,18 +460,50 @@ float4 WhitePS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   if (coverage == 0) discard;
   float across = i.shape.x, downstream = i.shape.y, halfW = max(i.shape.z, 0.05), slope = max(i.shape.w, 0);
   float grain = max(length(ddx(i.world)), length(ddy(i.world)));
-  float speed = streamLook.z * min(0.3 + 2.2 * sqrt(slope), 3.2);
+  const bool plume = i.more.w < -0.5 && i.more.w > -1.5;  // [stream mouth] (a fan of foam on the sea where the stream runs into it)
+  float speed = streamLook.z * (plume ? 0.22 : min(0.3 + 2.2 * sqrt(slope), 3.2));
   float2 offsets;
   float w;
   FlowLayers(speed, offsets, w);
   float2 q = float2(across, downstream);
-  float u = across / (2 * halfW) + 0.5;
-  float streak = foamMap.Sample(samplerAniso, float2(u, (downstream - offsets.x) / 2.5)).a * w +
-                 foamMap.Sample(samplerAniso, float2(u + 0.37, (downstream - offsets.y) / 2.5 + 0.61)).a * (1 - w);
   float lace = StreamLace(q * 1.6 - float2(0, offsets.x * 1.6), grain) * w + StreamLace(q * 1.6 - float2(0, offsets.y * 1.6) + float2(5.3, 2.9), grain) * (1 - w);
-  float sides = saturate((halfW - abs(across)) / (halfW * 0.5));
-  // (broken: bright streaks and the water between them, not a sheet)
-  float a = smoothstep(0.3, 0.72, streak * 0.75 + lace * 0.55) * sides * sides * (0.5 + 0.5 * saturate(slope * 3));
+  // [stream mouth] coarse patches carried along with it: the white water broken along and across into clots, not laid
+  // as one band
+  float clots = StreamLace(q * 0.45 - float2(0, offsets.x * 0.45) + 11.0, grain) * w + StreamLace(q * 0.45 - float2(0, offsets.y * 0.45) + 23.0, grain) * (1 - w);
+  // its sides ragged, as the water's shore wavers, and both ends of each run thinning out over a third of it (a unit at most)
+  float sideOf = across >= 0 ? 1 : -1;
+  float ragged = (CloudNoise(float3(downstream * 1.7 - time * 0.4, sideOf * 3.0, 2.0)) - 0.5) * halfW * 0.6;
+  float sides = saturate((halfW - abs(across) + ragged) / (halfW * 0.55));
+  float run = i.more.x + i.more.y;
+  // (a cascade's runs fade over a fifth of each, 0.6 at most: fading over a third, each run read as a separate spot)
+  float reach = max(plume ? run * 0.33 : min(0.6, run * 0.2), 0.05);
+  float ends = (plume ? 1 : saturate(i.more.x / reach)) * saturate(i.more.y / reach);  // (a plume is thick where it comes in)
+  float a;
+  if (plume) {
+    // spreading over the sea from where the stream goes under it, thinning out as it goes (a lace, no streaks): thick
+    // where it comes in, in clots further out
+    // (a finer lace than the streams', cut sharp: foam on the sea, not a haze over it)
+    float away = saturate(i.more.x / max(run, 0.05));
+    float core = saturate(1 - i.more.x / 0.9);
+    float fine = StreamLace(q * 3.4 - float2(0, offsets.x * 3.4) + 7.0, grain) * w + StreamLace(q * 3.4 - float2(0, offsets.y * 3.4) + 31.0, grain) * (1 - w);
+    a = saturate(smoothstep(0.5, 0.6, fine * 0.5 + clots * 0.6 - away * 0.3) * (1 - away) * (1 - away) + core * core * smoothstep(0.42, 0.55, fine) * 0.85) * sides *
+        saturate(i.more.x / 0.25 + 0.4);
+  } else {
+    // its streaks: the ribbon's own picture (alpha); across, as the mesh lays it on a narrow run (the cascade), but on a
+    // wide one never broader than on a run 0.6 across (laid by u, the mouth's run 2 units wide had broad parallel bands)
+    float2 at = float2(across / min(2 * halfW, 0.6) + 0.5, 0);
+    // (and a wide run broken into clots, its streaks shorter: on a wide run long streaks read as stripes)
+    float wide = saturate((halfW - 0.35) * 2.5);
+    float along = lerp(2.5, 1.1, wide);
+    float streak = foamMap.Sample(samplerAniso, float2(at.x, (downstream - offsets.x) / along)).a * w +
+                   foamMap.Sample(samplerAniso, float2(at.x + 0.37, (downstream - offsets.y) / along + 0.61)).a * (1 - w);
+    a = smoothstep(0.3, 0.72, streak * 0.7 + lace * 0.5 + (clots - 0.5) * 0.5) * sides * sides * (0.5 + 0.5 * saturate(slope * 3));
+    a *= lerp(1, smoothstep(0.38, 0.62, clots), wide);
+    // (from afar its streaks are at their mean: laid as the white they would cover, one fall of white water from above)
+    float mottled = 0.55 + 0.9 * (CloudNoise(float3(i.world.xz * 2.3, time * 0.8)) - 0.5);
+    a = lerp(a, 0.65 * sides * (0.55 + 0.45 * saturate(slope * 3)) * mottled, saturate((grain - 0.015) / 0.05));
+  }
+  a *= ends * ends * (3 - 2 * ends);
   if (a <= 0.002) {
     coverage = 0;
     discard;
@@ -408,6 +528,7 @@ struct StreamConstants {
   float cameraRight[4], cameraUp[4], cameraBack[4];
   float mapInfo[4];
   float look[4];
+  float seaInfo[4];  // [stream mouth]
 };
 
 Vec3 Level(Vec3 v) {
@@ -415,38 +536,258 @@ Vec3 Level(Vec3 v) {
   return l > 1e-9f ? Vec3{v.x / l, 0, v.z / l} : Vec3{0, 0, 0};
 }
 
+Vec3 Moved(const Mat4& m, Vec3 p) {
+  const Vec4 w = m * Vec4{p.x, p.y, p.z, 1};
+  return {w.x, w.y, w.z};
+}
+
+Vec3 Turned(const Mat4& m, Vec3 d) {
+  return {m.m[0][0] * d.x + m.m[0][1] * d.y + m.m[0][2] * d.z, m.m[1][0] * d.x + m.m[1][1] * d.y + m.m[1][2] * d.z,
+          m.m[2][0] * d.x + m.m[2][1] * d.y + m.m[2][2] * d.z};
+}
+
+// Both faces of the quad between two cross-sections (a0, a1: the banks of the one before; b0, b1: of this one), as the
+// visuals track's ribbons list them (the pass draws the one facing up).
+void Quad(std::vector<uint32_t>* out, uint32_t a0, uint32_t a1, uint32_t b0, uint32_t b1) {
+  out->insert(out->end(), {a0, b0, a1, a1, b0, b1, a0, a1, b0, a1, b1, b0});
+}
+
 }  // namespace
 
 void StreamWater::Forget() {
-  placed_.clear();
-  for (auto& [model, mesh] : meshes_) {  // (made again for the next map's: a model of the last one may be gone)
-    if (mesh.vertices) device_->Destroy(mesh.vertices);
-    if (mesh.indices) device_->Destroy(mesh.indices);
+  for (Placed& p : placed_) {
+    if (p.vertices) device_->Destroy(p.vertices);
+    if (p.indices) device_->Destroy(p.indices);
   }
-  meshes_.clear();
+  placed_.clear();
+  ribbons_.clear();  // (made again for the next map's: a model of the last one may be gone)
 }
 
 int StreamWater::Count(bool whiteWater) const {
   int n = 0;
-  for (const Placed& p : placed_) n += p.mesh->whiteWater == whiteWater ? 1 : 0;
+  for (const Placed& p : placed_) n += p.whiteWater == whiteWater && !p.plume && !p.outlet ? 1 : 0;
   return n;
 }
 
 void StreamWater::Add(const Model* model, const Mat4& world, uint32_t key) {
-  const Mesh* mesh = MeshOf(model);
-  if (mesh) placed_.push_back({mesh, world, key});
+  const Ribbon* ribbon = RibbonOf(model);
+  if (!ribbon) return;
+  std::vector<Vertex> vertices = ribbon->vertices;
+  std::vector<uint32_t> indices = ribbon->indices;
+  std::vector<Vertex> plume;
+  std::vector<uint32_t> plumeIndices;
+  if (!ribbon->whiteWater && CarryOn(*ribbon, world, &vertices, &indices, &plume, &plumeIndices))
+    printf("render: a stream runs on into the sea (%zu cross-sections carried on, a plume of %zu)\n", (vertices.size() - ribbon->vertices.size()) / 2,
+           plume.size() / 2);
+  Place(std::move(vertices), indices, ribbon->texture, world, key, ribbon->whiteWater);
+  if (!ribbon->whiteWater) {  // [stream] (its outlet's wet stone)
+    std::vector<Vertex> box;
+    std::vector<uint32_t> boxIndices;
+    Outlet(*ribbon, world, &box, &boxIndices);
+    const size_t before = placed_.size();
+    if (!box.empty()) Place(std::move(box), boxIndices, ribbon->texture, Mat4::Identity(), key, false);
+    if (placed_.size() > before) placed_.back().outlet = true;
+  }
+  if (!plume.empty()) {
+    const size_t before = placed_.size();
+    Place(std::move(plume), plumeIndices, ribbon->texture, Mat4::Identity(), key, true);
+    if (placed_.size() > before) placed_.back().plume = true;
+  }
+}
+
+void StreamWater::Place(std::vector<Vertex> vertices, const std::vector<uint32_t>& indices, gfx::Texture texture, const Mat4& world, uint32_t key,
+                        bool whiteWater) {
+  Placed p;
+  p.whiteWater = whiteWater;
+  p.texture = texture;
+  p.world = world;
+  p.key = key;
+  // (its box in the world, for whether a view sees it; the wet bank's margin, up a little, round it)
+  Vec3 lo{1e30f, 1e30f, 1e30f}, hi{-1e30f, -1e30f, -1e30f};
+  for (const Vertex& v : vertices) {
+    const Vec3 w = Moved(world, {v.position[0], v.position[1], v.position[2]});
+    lo = {std::min(lo.x, w.x), std::min(lo.y, w.y), std::min(lo.z, w.z)};
+    hi = {std::max(hi.x, w.x), std::max(hi.y, w.y), std::max(hi.z, w.z)};
+  }
+  p.lo = lo - Vec3{0.3f, 0.1f, 0.3f};
+  p.hi = hi + Vec3{0.3f, 0.3f, 0.3f};
+  gfx::BufferDesc vb;
+  vb.kind = gfx::BufferKind::Vertex;
+  vb.stride = sizeof(Vertex);
+  vb.size = static_cast<uint32_t>(vertices.size() * sizeof(Vertex));
+  vb.data = vertices.data();
+  p.vertices = device_->CreateBuffer(vb);
+  gfx::BufferDesc ib;
+  ib.kind = gfx::BufferKind::Index;
+  ib.stride = 4;
+  ib.size = static_cast<uint32_t>(indices.size() * 4);
+  ib.data = indices.data();
+  p.indices = device_->CreateBuffer(ib);
+  if (!p.vertices || !p.indices) {
+    fprintf(stderr, "render: a stream's buffers cannot be made (not drawn as water)\n");
+    return;
+  }
+  p.indexCount = static_cast<uint32_t>(indices.size());
+  placed_.push_back(p);
+}
+
+// [stream] The box round a water ribbon's head, placed by `world`, in which SeepPS wets what the scene shows (its outlet's
+// stone, wherever the head lies: on the ground, at a rock face, in a crack): its corners in the world, each carrying the
+// head (the middle of its first cross-section, at the ground there), across it, downstream, the box's half width and how
+// far it reaches back (kOutletBelow, kOutletAbove, kOutletAhead in the shader: the same numbers as here).
+void StreamWater::Outlet(const Ribbon& ribbon, const Mat4& world, std::vector<Vertex>* box, std::vector<uint32_t>* boxIndices) const {
+  const Vertex& s0 = ribbon.vertices[ribbon.startBank[0]];
+  const Vertex& s1 = ribbon.vertices[ribbon.startBank[1]];
+  const Vec3 bank0 = Moved(world, {s0.position[0], s0.position[1], s0.position[2]});
+  const Vec3 bank1 = Moved(world, {s1.position[0], s1.position[1], s1.position[2]});
+  const Vec3 head = (bank0 + bank1) * 0.5f - Vec3{0, 0.04f, 0};
+  const Vec3 across = Level(bank1 - bank0);
+  const Vec3 along = Level(Turned(world, {s0.along[0], 0, s0.along[2]}));
+  const float scale = std::max(Length(Turned(world, {1, 0, 0})), 1e-6f);
+  if ((along.x == 0 && along.z == 0) || (across.x == 0 && across.z == 0)) return;
+  const float halfHead = ribbon.startHalf * scale;
+  const float wide = std::max(0.8f, halfHead * 3 + 0.3f), back = 1.5f;
+  constexpr float kBelow = 2.0f, kAbove = 1.0f, kAhead = 2.5f;
+  for (int k = 0; k < 8; ++k) {
+    const Vec3 c = head + across * ((k & 1) ? wide : -wide) + Vec3{0, (k & 2) ? kAbove : -kBelow, 0} + along * ((k & 4) ? kAhead : -back);
+    Vertex v{};
+    v.position[0] = c.x;
+    v.position[1] = c.y;
+    v.position[2] = c.z;
+    v.across[0] = across.x;
+    v.across[2] = across.z;
+    v.along[0] = along.x;
+    v.along[2] = along.z;
+    v.shape[0] = head.x;
+    v.shape[1] = head.y;
+    v.shape[2] = head.z;
+    v.shape[3] = halfHead;
+    v.more[0] = wide;
+    v.more[1] = back;
+    v.more[3] = -2;
+    box->push_back(v);
+  }
+  // its six faces (corner k: bit 0 across, 1 up, 2 downstream), each pixel shaded from what the scene shows behind it
+  static const uint32_t kFaces[6][4] = {{0, 1, 3, 2}, {4, 6, 7, 5}, {0, 2, 6, 4}, {1, 5, 7, 3}, {0, 4, 5, 1}, {2, 3, 7, 6}};
+  for (const auto& f : kFaces) boxIndices->insert(boxIndices->end(), {f[0], f[1], f[2], f[0], f[2], f[3]});
+}
+
+// [stream mouth] A stream whose water ends just above the sea (its last cross-section's middle less than 2.5 over it, and
+// the ground the way it ran going under the sea within 8 world units) is carried on that way, a cross-section every half
+// unit at the ground's height (as the mesh's own are laid), spreading by a third of its width a unit (to twice it at
+// most), until the ground is a third of a unit under the sea; from where the ground goes under, a fan of foam on the sea's
+// surface, 3.5 units long, widening to twice.
+bool StreamWater::CarryOn(const Ribbon& ribbon, const Mat4& world, std::vector<Vertex>* vertices, std::vector<uint32_t>* indices,
+                          std::vector<Vertex>* plume, std::vector<uint32_t>* plumeIndices) const {
+  if (!groundHeight || seaLevel < -1e8f) return false;
+  const Vertex e0 = (*vertices)[ribbon.endBank[0]];
+  const Vertex e1 = (*vertices)[ribbon.endBank[1]];
+  const Vec3 bank0 = Moved(world, {e0.position[0], e0.position[1], e0.position[2]});
+  const Vec3 bank1 = Moved(world, {e1.position[0], e1.position[1], e1.position[2]});
+  const Vec3 middle = (bank0 + bank1) * 0.5f;
+  const Vec3 across = Level(bank1 - bank0);
+  const Vec3 along = Level(Turned(world, {e0.along[0], 0, e0.along[2]}));
+  const float scale = std::max(Length(Turned(world, {1, 0, 0})), 1e-6f);
+  if (along.x == 0 && along.z == 0) return false;
+  if (middle.y - seaLevel > 2.5f) return false;  // (it ends inland)
+  constexpr float kStep = 0.5f, kMost = 8.0f, kUnder = 0.33f;
+  // how far it is carried on: until the ground is kUnder under the sea; and where the ground goes under
+  float carried = 0, under = -1;
+  float before = groundHeight(middle.x, middle.z);
+  for (float t = kStep; t <= kMost + 1e-3f; t += kStep) {
+    const Vec3 p = middle + along * t;
+    const float g = groundHeight(p.x, p.z);
+    if (under < 0 && g < seaLevel) under = t - kStep + kStep * std::clamp((before - seaLevel) / std::max(before - g, 1e-4f), 0.0f, 1.0f);
+    before = g;
+    if (g < seaLevel - kUnder) {
+      carried = t;
+      break;
+    }
+  }
+  if (carried <= 0) return false;
+  const Mat4 back = Inverse(world);
+  const float halfEnd = ribbon.endHalf * scale;
+  // the ribbon's own last run now ends further on (its places within a run's length of the end)
+  for (Vertex& v : *vertices)
+    if (v.shape[1] >= ribbon.endS - (v.more[0] + v.more[1]) - 1e-3f) v.more[1] += carried / scale;
+  uint32_t a0 = ribbon.endBank[0], a1 = ribbon.endBank[1];
+  float last = groundHeight(middle.x, middle.z);
+  for (float t = kStep; t <= carried + 1e-3f; t += kStep) {
+    const Vec3 p = middle + along * t;
+    const float g = groundHeight(p.x, p.z);
+    const float halfNow = halfEnd * std::min(1 + 0.33f * t, 2.0f);
+    for (int side = 0; side < 2; ++side) {
+      Vec3 bank = p + across * (side ? halfNow : -halfNow);
+      bank.y = std::max(groundHeight(bank.x, bank.z), g - 0.05f) + 0.04f;
+      Vertex v = side ? e1 : e0;
+      const Vec3 m = Moved(back, bank);
+      v.position[0] = m.x;
+      v.position[1] = m.y;
+      v.position[2] = m.z;
+      v.shape[1] = ribbon.endS + t / scale;
+      v.shape[2] = halfNow / scale;
+      v.shape[3] = std::max((last - g) / kStep, 0.0f);
+      v.more[0] = e0.more[0] + t / scale;
+      v.more[1] = (carried - t) / scale;
+      v.more[2] = t / carried;
+      v.more[3] = e0.more[3];
+      vertices->push_back(v);
+    }
+    last = g;
+    const uint32_t b0 = static_cast<uint32_t>(vertices->size() - 2), b1 = b0 + 1;
+    Quad(indices, a0, a1, b0, b1);
+    a0 = b0;
+    a1 = b1;
+  }
+  // the plume: on the sea from where the ground goes under (world space: placed as it is)
+  if (under >= 0) {
+    constexpr float kPlume = 3.5f;
+    const Vec3 start = middle + along * under;
+    const float halfStart = halfEnd * std::min(1 + 0.33f * under, 2.0f);
+    for (float t = 0; t <= kPlume + 1e-3f; t += kStep) {
+      const Vec3 p = start + along * t;
+      const float halfNow = halfStart * (1 + 1.0f * t / kPlume);
+      for (int side = 0; side < 2; ++side) {
+        Vec3 bank = p + across * (side ? halfNow : -halfNow);
+        bank.y = std::max(seaLevel + 0.03f, groundHeight(bank.x, bank.z) + 0.03f);
+        Vertex v{};
+        v.position[0] = bank.x;
+        v.position[1] = bank.y;
+        v.position[2] = bank.z;
+        v.across[0] = across.x;
+        v.across[2] = across.z;
+        v.along[0] = along.x;
+        v.along[2] = along.z;
+        v.shape[0] = static_cast<float>(side);
+        v.shape[1] = t;
+        v.shape[2] = halfNow;
+        v.shape[3] = 0;
+        v.more[0] = t;
+        v.more[1] = kPlume - t;
+        v.more[2] = 1;
+        v.more[3] = -1;
+        plume->push_back(v);
+      }
+      if (t > 0) {
+        const uint32_t b0 = static_cast<uint32_t>(plume->size() - 2);
+        Quad(plumeIndices, b0 - 2, b0 - 1, b0, b0 + 1);
+      }
+    }
+  }
+  return true;
 }
 
 // A stream's ribbon as its shaders take it, from its finest level's mesh file: the vertices of each cross-section (those
 // that share a v) give the half width there and its middle; the middles' heights the way it falls (downstream: from the
-// higher end) and how steeply, over a world unit either side (the banks follow the ground's bumps).
-const StreamWater::Mesh* StreamWater::MeshOf(const Model* model) {
-  auto known = meshes_.find(model);
-  if (known != meshes_.end()) return known->second.ok ? &known->second : nullptr;
-  Mesh& mesh = meshes_[model];
+// higher end) and how steeply, over a world unit either side (the banks follow the ground's bumps); its runs (the white
+// water's lie apart, with gaps between them) how far each place is from its run's two ends.
+const StreamWater::Ribbon* StreamWater::RibbonOf(const Model* model) {
+  auto known = ribbons_.find(model);
+  if (known != ribbons_.end()) return known->second.ok ? &known->second : nullptr;
+  Ribbon& ribbon = ribbons_[model];
   if (!model || model->lods.empty() || !model->lods[0].stream) return nullptr;
   const ModelLod& lod = model->lods[0];
-  auto fail = [&](const char* why) -> const Mesh* {
+  auto fail = [&](const char* why) -> const Ribbon* {
     fprintf(stderr, "render: stream %s: %s (not drawn as water)\n", lod.streamMesh.c_str(), why);
     return nullptr;
   };
@@ -484,11 +825,12 @@ const StreamWater::Mesh* StreamWater::MeshOf(const Model* model) {
     double v;
     Vec3 middle, across;
     float halfW;
+    uint32_t bank[2];  // its vertices at the lowest and the highest u
   };
   std::vector<Section> sections;
   std::vector<uint32_t> sectionOf(in.size(), 0);
   for (const auto& [key, list] : byV) {
-    Section s{static_cast<double>(key) / 4096.0, {0, 0, 0}, {0, 0, 0}, 0};
+    Section s{static_cast<double>(key) / 4096.0, {0, 0, 0}, {0, 0, 0}, 0, {list[0], list[0]}};
     uint32_t lo = list[0], hi = list[0];
     for (uint32_t k : list) {
       s.middle = s.middle + Vec3{in[k].position[0], in[k].position[1], in[k].position[2]} * (1.0f / static_cast<float>(list.size()));
@@ -499,19 +841,33 @@ const StreamWater::Mesh* StreamWater::MeshOf(const Model* model) {
     const Vec3 gap{in[hi].position[0] - in[lo].position[0], 0, in[hi].position[2] - in[lo].position[2]};
     s.halfW = 0.5f * std::sqrt(gap.x * gap.x + gap.z * gap.z);
     s.across = Level(gap);
+    s.bank[0] = lo;
+    s.bank[1] = hi;
     sections.push_back(s);
   }
   if (sections.size() < 2) return fail("not a ribbon: fewer than two cross-sections (vertices sharing a v)");
   // world units of the model along it per unit of v: the sections' spacing (the middle of what they give: the white
-  // water's runs have gaps between them)
-  std::vector<double> perV;
+  // water's runs have gaps between them); and the runs, split where the spacing in v is more than one and three quarter
+  // times its usual
+  std::vector<double> perV, spacing;
   for (size_t k = 1; k < sections.size(); ++k) {
     const Vec3 d = sections[k].middle - sections[k - 1].middle;
     const double dv = sections[k].v - sections[k - 1].v;
     if (dv > 1e-9) perV.push_back(std::sqrt(d.x * d.x + d.z * d.z) / dv);
+    spacing.push_back(dv);
   }
   std::nth_element(perV.begin(), perV.begin() + static_cast<std::ptrdiff_t>(perV.size() / 2), perV.end());
   const double unitsPerV = std::max(perV[perV.size() / 2], 1e-6);
+  std::vector<double> sorted = spacing;
+  std::nth_element(sorted.begin(), sorted.begin() + static_cast<std::ptrdiff_t>(sorted.size() / 2), sorted.end());
+  const double usual = sorted[sorted.size() / 2];
+  std::vector<size_t> runOf(sections.size(), 0);
+  for (size_t k = 1; k < sections.size(); ++k) runOf[k] = runOf[k - 1] + (spacing[k - 1] > usual * 1.75 ? 1 : 0);
+  std::vector<double> runLo(runOf.back() + 1, 1e30), runHi(runOf.back() + 1, -1e30);
+  for (size_t k = 0; k < sections.size(); ++k) {
+    runLo[runOf[k]] = std::min(runLo[runOf[k]], sections[k].v);
+    runHi[runOf[k]] = std::max(runHi[runOf[k]], sections[k].v);
+  }
   // downstream: from the higher end
   const float sign = sections.front().middle.y >= sections.back().middle.y ? 1.0f : -1.0f;
   auto heightAt = [&](double v) {
@@ -522,16 +878,18 @@ const StreamWater::Mesh* StreamWater::MeshOf(const Model* model) {
     const double t = (v - before->v) / std::max(next->v - before->v, 1e-9);
     return before->middle.y + (next->middle.y - before->middle.y) * t;
   };
-  std::vector<float> drop(sections.size());
-  const double reach = 1.0 / unitsPerV;  // (a world unit, in v)
+  // its drop per unit downstream over a world unit either side, and (how steep its stretch is) over three
+  auto dropOver = [&](double v, double units) {
+    const double a = std::max(v - units / unitsPerV, sections.front().v), b = std::min(v + units / unitsPerV, sections.back().v);
+    return b > a ? std::max(static_cast<float>(sign * (heightAt(a) - heightAt(b)) / ((b - a) * unitsPerV)), 0.0f) : 0.0f;
+  };
+  std::vector<float> drop(sections.size()), steep(sections.size());
   for (size_t k = 0; k < sections.size(); ++k) {
-    const double a = std::max(sections[k].v - reach, sections.front().v), b = std::min(sections[k].v + reach, sections.back().v);
-    drop[k] = b > a ? static_cast<float>(sign * (heightAt(a) - heightAt(b)) / ((b - a) * unitsPerV)) : 0.0f;
-    drop[k] = std::max(drop[k], 0.0f);
+    drop[k] = dropOver(sections[k].v, 1.0);
+    steep[k] = dropOver(sections[k].v, 3.0);
   }
 
   std::vector<Vertex> out(in.size());
-  Vec3 lo{1e30f, 1e30f, 1e30f}, hi{-1e30f, -1e30f, -1e30f};
   for (size_t k = 0; k < in.size(); ++k) {
     const size_t s = sectionOf[k];
     const Section& at = sections[s];
@@ -552,35 +910,33 @@ const StreamWater::Mesh* StreamWater::MeshOf(const Model* model) {
     v.shape[1] = static_cast<float>(sign * at.v * unitsPerV);
     v.shape[2] = at.halfW;
     v.shape[3] = drop[s];
-    const Vec3 p{in[k].position[0], in[k].position[1], in[k].position[2]};
-    lo = {std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z)};
-    hi = {std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z)};
+    // (its run's ends: the upstream one first)
+    const double fromLo = (at.v - runLo[runOf[s]]) * unitsPerV, toHi = (runHi[runOf[s]] - at.v) * unitsPerV;
+    v.more[0] = static_cast<float>(sign > 0 ? fromLo : toHi);
+    v.more[1] = static_cast<float>(sign > 0 ? toHi : fromLo);
+    v.more[2] = 0;
+    v.more[3] = steep[s];
   }
-  // (the wet bank past its edges: kWetBank in the shaders, and as much again up)
-  mesh.lo = lo - Vec3{0.3f, 0.1f, 0.3f};
-  mesh.hi = hi + Vec3{0.3f, 0.3f, 0.3f};
-  gfx::BufferDesc vb;
-  vb.kind = gfx::BufferKind::Vertex;
-  vb.stride = sizeof(Vertex);
-  vb.size = static_cast<uint32_t>(out.size() * sizeof(Vertex));
-  vb.data = out.data();
-  mesh.vertices = device_->CreateBuffer(vb);
-  gfx::BufferDesc ib;
-  ib.kind = gfx::BufferKind::Index;
-  ib.stride = 4;
-  ib.size = static_cast<uint32_t>(indices.size() * 4);
-  ib.data = indices.data();
-  mesh.indices = device_->CreateBuffer(ib);
-  if (!mesh.vertices || !mesh.indices) return fail("its buffers cannot be made");
-  mesh.indexCount = static_cast<uint32_t>(indices.size());
-  mesh.whiteWater = lod.stream == 2;
-  mesh.texture = mesh.whiteWater ? lod.albedo : lod.normals;
-  mesh.ok = true;
-  return &mesh;
+  const Section& start = sign > 0 ? sections.front() : sections.back();
+  ribbon.startBank[0] = start.bank[0];
+  ribbon.startBank[1] = start.bank[1];
+  ribbon.startS = static_cast<float>(sign * start.v * unitsPerV);
+  ribbon.startHalf = start.halfW;
+  const Section& end = sign > 0 ? sections.back() : sections.front();
+  ribbon.endBank[0] = end.bank[0];
+  ribbon.endBank[1] = end.bank[1];
+  ribbon.endS = static_cast<float>(sign * end.v * unitsPerV);
+  ribbon.endHalf = end.halfW;
+  ribbon.vertices = std::move(out);
+  ribbon.indices = std::move(indices);
+  ribbon.whiteWater = lod.stream == 2;
+  ribbon.texture = ribbon.whiteWater ? lod.albedo : lod.normals;
+  ribbon.ok = true;
+  return &ribbon;
 }
 
 bool StreamWater::Prepare() {
-  if (tried_) return water_ && white_;
+  if (tried_) return water_ && outlet_ && white_;
   tried_ = true;
   const std::string source = "#define SAMPLES " + std::to_string(gSceneSamples) + "\n" + kViewShaderBlock + RayShaders() + kLightingShaderBlock + kShader;
   gfx::PipelineDesc pd;
@@ -589,7 +945,8 @@ bool StreamWater::Prepare() {
   pd.attrs = {{"POSITION", 0, gfx::AttrType::Float3, offsetof(Vertex, position)},
               {"TEXCOORD", 0, gfx::AttrType::Float3, offsetof(Vertex, across)},
               {"TEXCOORD", 1, gfx::AttrType::Float3, offsetof(Vertex, along)},
-              {"TEXCOORD", 2, gfx::AttrType::Float4, offsetof(Vertex, shape)}};
+              {"TEXCOORD", 2, gfx::AttrType::Float4, offsetof(Vertex, shape)},
+              {"TEXCOORD", 3, gfx::AttrType::Float4, offsetof(Vertex, more)}};
   pd.stride = sizeof(Vertex);
   pd.cull = gfx::Cull::Back;  // (the ribbons hold both faces: the one facing up is drawn)
   pd.depthTest = false;
@@ -602,19 +959,26 @@ bool StreamWater::Prepare() {
   std::string why;
   water_ = device_->CreatePipeline(pd, &why);
   if (water_) {
+    pd.name = "stream water, outlet";  // [stream] (the wet stone round its head: the box's faces, both sides)
+    pd.pixelEntry = "SeepPS";
+    pd.cull = gfx::Cull::None;
+    outlet_ = device_->CreatePipeline(pd, &why);
+  }
+  if (outlet_) {
     pd.name = "stream water, white water";
     pd.pixelEntry = "WhitePS";
+    pd.cull = gfx::Cull::Back;
     pd.blend = gfx::Blend::Premultiplied;
     white_ = device_->CreatePipeline(pd, &why);
   }
-  if (!water_ || !white_) fprintf(stderr, "render: streams cannot be drawn as water (%s)\n", why.c_str());
-  return water_ && white_;
+  if (!water_ || !outlet_ || !white_) fprintf(stderr, "render: streams cannot be drawn as water (%s)\n", why.c_str());
+  return water_ && outlet_ && white_;
 }
 
 void StreamWater::Draw(const View& view, const Camera& camera, gfx::Texture behind, gfx::Texture sceneDepth, gfx::Texture heights,
-                       float heightUnit, float mapWidth, float mapHeight, const std::function<bool(uint32_t)>& standing) {
-  drawn = triangles = 0;
-  if (placed_.empty() || !behind || !sceneDepth || !heights || !Prepare()) return;
+                       float heightUnit, float mapWidth, float mapHeight, const std::function<bool(uint32_t)>& standing, bool whiteWater) {
+  if (!whiteWater) drawn = triangles = 0;
+  if (placed_.empty() || (!whiteWater && !behind) || !sceneDepth || !heights || !Prepare()) return;
   StreamConstants c = {};
   Vec3 right, up, back;
   camera.Axes(&right, &up, &back);
@@ -625,45 +989,37 @@ void StreamWater::Draw(const View& view, const Camera& camera, gfx::Texture behi
   c.mapInfo[0] = mapWidth;
   c.mapInfo[1] = mapHeight;
   c.mapInfo[2] = heightUnit;
+  c.mapInfo[3] = whiteWater ? 1.0f : 0.0f;
   c.look[0] = depth;
   c.look[1] = murk;
   c.look[2] = flow;
   c.look[3] = static_cast<float>(this->view);
-  device_->SetTexture(kStreamBehindSlot, behind);
+  c.seaInfo[0] = seaLevel;
+  if (!whiteWater) device_->SetTexture(kStreamBehindSlot, behind);
   device_->SetTexture(kStreamDepthSlot, sceneDepth);
   device_->SetTexture(kStreamHeightsSlot, heights);
-  for (int pass = 0; pass < 2; ++pass) {  // the water, then its white water over it
-    const bool white = pass == 1;
-    bool set = false;
+  // (the water's pass: the outlets' wet stone first, the water over it; else the white water)
+  gfx::Pipeline set;
+  for (int outlets = whiteWater ? 0 : 1; outlets >= 0; --outlets) {
     for (const Placed& p : placed_) {
-      if (p.mesh->whiteWater != white || (standing && !standing(p.key))) continue;
-      // (its box in the world, for whether the view sees it)
-      Vec3 lo{1e30f, 1e30f, 1e30f}, hi{-1e30f, -1e30f, -1e30f};
-      for (int corner = 0; corner < 8; ++corner) {
-        const Vec3 m{(corner & 1) ? p.mesh->hi.x : p.mesh->lo.x, (corner & 2) ? p.mesh->hi.y : p.mesh->lo.y, (corner & 4) ? p.mesh->hi.z : p.mesh->lo.z};
-        const Vec4 w4 = p.world * Vec4{m.x, m.y, m.z, 1};
-        const Vec3 w{w4.x, w4.y, w4.z};
-        lo = {std::min(lo.x, w.x), std::min(lo.y, w.y), std::min(lo.z, w.z)};
-        hi = {std::max(hi.x, w.x), std::max(hi.y, w.y), std::max(hi.z, w.z)};
-      }
-      if (!view.BoxVisible(lo, hi)) continue;
-      if (!set) {
-        device_->SetPipeline(white ? white_ : water_);
+      if (p.whiteWater != whiteWater || p.outlet != (outlets == 1) || (standing && !standing(p.key)) || !view.BoxVisible(p.lo, p.hi)) continue;
+      const gfx::Pipeline wanted = whiteWater ? white_ : outlets ? outlet_ : water_;
+      if (set.id != wanted.id) {
+        device_->SetPipeline(wanted);
         device_->SetConstants(0, &view.constants, sizeof view.constants);
-        set = true;
+        set = wanted;
       }
       for (int r = 0; r < 3; ++r) {
         float* row = r == 0 ? c.row0 : r == 1 ? c.row1 : c.row2;
         for (int k = 0; k < 4; ++k) row[k] = p.world.m[r][k];
       }
-      c.mapInfo[3] = white ? 1.0f : 0.0f;
       device_->SetConstants(1, &c, sizeof c);
-      device_->SetTexture(white ? kStreamFoamSlot : kStreamRipplesSlot, p.mesh->texture);
-      device_->SetVertexBuffer(p.mesh->vertices);
-      device_->SetIndexBuffer(p.mesh->indices);
-      device_->DrawIndexed(p.mesh->indexCount);
+      device_->SetTexture(whiteWater ? kStreamFoamSlot : kStreamRipplesSlot, p.texture);
+      device_->SetVertexBuffer(p.vertices);
+      device_->SetIndexBuffer(p.indices);
+      device_->DrawIndexed(p.indexCount);
       ++drawn;
-      triangles += static_cast<int>(p.mesh->indexCount / 6);  // (both faces are listed; the one facing up is drawn)
+      triangles += static_cast<int>(p.indexCount / 6);  // (both faces are listed; the one facing up is drawn)
     }
   }
   for (int slot : {kStreamBehindSlot, kStreamDepthSlot, kStreamHeightsSlot, kStreamRipplesSlot, kStreamFoamSlot}) device_->SetTexture(slot, {});
