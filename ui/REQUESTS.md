@@ -1099,6 +1099,17 @@ DONE, no change (engine answer "ui 44" in docs/engine-answers.md): (a) FAF's own
 EngineerManager; in docs/deviations.md "Looked broken, left alone"); (b) the original counts GiveResource as
 collected too (economy income 0x5883a2..0x5883c5 into Economy_TotalProduced_* 0x77249e / 0x772503).
 
+### 45. A unit's live intel radii in UnitView, and the no-rush circle's data (for the range overlays)
+From the interface chat, 2026-10-20. Not blocking. The range rings and intel overlays are now drawn as the original
+(ui 70987e0, read by my helper: sBlueprintExtractors 0x7ed4b0, func_RenderRings 0x7ef5a0; test
+ui/tests/intel_overlays.lua). Two things the interface cannot get today:
+(a) The Radar / Sonar / Omni / counter-intel rings use the blueprint's radii. The original reads the unit's live
+intel attributes (the sim entity +0x128: a radius per kind with bit 31 = enabled, changed by SetIntelRadius): could
+UnitView carry them (8 words: radius + enabled for radar, sonar, omni, radar stealth field, sonar stealth field,
+cloak field, jammer, spoof, as the sim holds them)?
+(b) The no-rush circle (0x7ef1c0: grey 0.2, inner 0.1 / 1, outer 1 / 2) needs the user army's no-rush place, radius,
+offsets and ticks (the army's +0x1bc..+0x1d0). Could the army's view carry them while the no-rush timer runs?
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
@@ -1999,6 +2010,23 @@ DONE (render aab30c9, on main): script entities whose mesh's LOD names CommandFe
 rules (albedo colour, unlit, blended, CF3 over everything, CF4 depth-tested, no shadow, the entity's own scale);
 answers in docs/render-answers.md: IconFadeInZoom: no fade (strategic icons only); CartographicFeedback: the
 original stamps pings and beacons on its minimap: he builds that next (my yes). pings.lua green on main.
+
+### 32. The minimap's deposit icons when its switch is on, and range_Fill's fill
+From the interface chat, 2026-10-20. Not blocking.
+(a) The minimap's resource icons (ui a29e924, read by my helper: EnableResourceRendering 0x873490; the view's icon
+drawing 0x86ee00 calls CWldSession::RenderResources 0x862a80 when the view's +0x136 and UI_RenResources are on, before
+the strategic icons; mass_strategic.dds for mass, hydrocarbon_strategic.dds else; half-size = the texture's width >> 2,
+so 16 px quads for the 32 px textures). Your minimap baked the deposit icons into the ground it keeps, so it always
+showed them; the host now draws the minimap ground with them off (FAF's default for its minimap: minimap.lua turns the
+flag off unless the profile has MiniMap_resource_icons) and passes the minimap view's switch as WorldSource::
+DrawMinimap's third parameter (`resourceIcons`; game_session.cpp ignores it until your call exists). Could you lay the
+deposit icons per call onto the copy you hand out (before the unit icons, as the remembered buildings are), not into
+the kept ground? The host can hand over the simulation's deposits (Sim::deposits) if you want them in place of the
+mass / hydrocarbon marker splats.
+(b) range_Fill (FA exe 0x10a6415, off by default): the original fills each range group white at alpha 0.125 inside
+its lines (frame.fx RangeFill). The host has the switch (console range_Fill); could RangeGroup take a fill flag?
+(Not read by us: sub 0x7edc80 pushes an inner band [0, innerThick] even when the inner radius is 0, which may draw a
+small dot under each unit in the original's stencil pass: a note for you.)
 
 ## To the visuals track
 
