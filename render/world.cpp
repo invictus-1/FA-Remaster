@@ -812,7 +812,8 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   // the world beyond the map's edge: six tenths of the map's shorter side out, then lost in the distance
   terrain.beyondReach = 0;
   if (haveMap_ && worldBeyond && look == Look::Modern) {
-    terrain.beyondReach = 0.6f * static_cast<float>(std::min(map.width, map.height));
+    // (sky) with the land far off on, farther: BeyondLand::reach
+    terrain.beyondReach = (beyondLand ? std::clamp(distantLand.reach, 0.6f, 1.0f) : 0.6f) * static_cast<float>(std::min(map.width, map.height));
     c.beyond[0] = static_cast<float>(map.width);
     c.beyond[1] = static_cast<float>(map.height);
     c.beyond[2] = 1 / terrain.beyondReach;
@@ -1236,7 +1237,8 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
             // haze has taken most of it, and trees cost; only near the camera, where a tree is more
             // than a dot; and only what the camera sees)
             const float dx = std::max({-hi.x, lo.x - w, 0.0f}), dz = std::max({-hi.z, lo.z - h, 0.0f});
-            const float band = reach * 0.25f + margin;
+            // ((sky) as wide as it was before the land far off took the ground farther out: BeyondLand::reach)
+            const float band = std::min(reach, 0.6f * std::min(w, h)) * 0.25f + margin;
             if (dx * dx + dz * dz > band * band || !view.BoxVisible(lo, hi)) continue;
             const Vec3 nearest{std::clamp(view.eye.x, lo.x, hi.x), std::clamp(view.eye.y, lo.y, hi.y), std::clamp(view.eye.z, lo.z, hi.z)};
             if (Length(nearest - view.eye) > 450) continue;
@@ -2674,6 +2676,8 @@ void World::Render() {
   // the volumetric clouds: where they are and their shadows, before the light in the air and the scene read them
   Stage("clouds' shadows");
   // (cloudzoom) the zoom through them (cloud_zoom.h): whether the layer stays where it is this frame, and how thin
+  // (sky) and with it on, the layer lifted by the map's size (CloudZoom::Place)
+  cloudZoomDraw.Place(&clouds, cloudZoom && volumetricClouds && look == Look::Modern && haveMap_, static_cast<float>(map.width), static_cast<float>(map.height));
   clouds.zoom = cloudZoomDraw.For(camera, clouds, cloudZoom && volumetricClouds && look == Look::Modern && haveMap_);
   if (sidePicture) clouds.Skip(&view);  // (a frame for something else: the game's frames before kept)
   else clouds.Prepare(&view, camera, volumetricClouds && look == Look::Modern && haveMap_);

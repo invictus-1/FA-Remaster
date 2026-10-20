@@ -51,6 +51,12 @@ class BeyondLand {
                              // land may lie off a sea edge too, as much as the map's edges hold land at all (0 never)
   float snowline = 0.55f;    // with no snow lying: the share of the ridges' height above which snow lies
   float softness = 0.06f;    // how soft the hills' shadows are (the slope over which a shadow's edge fades)
+  // (sky) How far the map's own mirrored continuation reaches past its edge, in the map's shorter side (0.6 .. 1: its
+  // copies round it end at 1; 0.6 without the land far off). Chris, 2026-10-20, of the strategic view: "Far edges of map
+  // are clouds have it be the map instead": at 0.6 the farthest zoom saw past it at both sides, the far distance there a
+  // band of white haze; at 0.95 the map and its continuation fill the farthest zoom on windows up to twice as wide as
+  // high (the land far off begins `begin` farther out, made once the map is open: World::Begin reads this then).
+  float reach = 0.95f;
   // Sets those named in a list "haze=2400,mountains=170,..." (the names as above); false and why when one is wrong.
   bool Set(const std::string& list, std::string* why);
 
@@ -90,7 +96,7 @@ class BeyondLand {
   // what is read of the map when it is opened (Forget): whether one is, its seed, its highest ground over the sea, and
   // for 256 directions round its middle how much of its edge that way is land and how high that land stands
   static constexpr int kDirections = 256;
-  bool read_ = false;
+  bool read_ = false, hasWater_ = false;  // ((sky) hasWater_: the far sea)
   uint32_t seed_ = 0;
   float highest_ = 0;
   std::array<float, kDirections> landward_{}, highness_{};

@@ -163,6 +163,69 @@ float3 LampsInAir(float3 p, float3 ray, out float3 points) {
 Texture3D airSource : register(t0);
 RWTexture3D<float4> airTarget : register(u0);
 
+#ifdef SUNLIGHT
+// (sky) The hazes that lie on the ground are far thinner than a cell is deep once the eye is high: the light shafts' band
+// (thinning to 1/e over 2 world units), the low haze under the clouds (over 40), the mist over its floor, in cells some
+// 300 units deep at the strategic view. One place a frame anywhere in the cell mostly missed them and now and then, as the
+// golden ratio's steps came near the cell's far end, fell into them: that frame's light was many times the cell's, and
+// the frames after kept it, so the whole view brightened at once and sank back (the strategic view pulsing every 13 to 34
+// frames, the far part of a nearer view flickering). So over the cell's stretch above the ground each haze is taken whole
+// (its mean along the stretch, worked out exactly for a height over its floor that changes evenly along the way), and the
+// place whose light the cell takes is drawn by how the hazes lie along the stretch: one of them by its share of the whole,
+// then a place along the stretch by where that one is thick; the light there counts for each haze by its share of the
+// thickness there. On average the cell's light is what it was; it no longer jumps.
+// A haze whose thickness goes as exp(-k o), o going evenly from o0 to o1 along a stretch: its mean over the stretch ...
+float SpreadMean(float k, float o0, float o1) {
+  float a = abs(k * (o1 - o0));
+  return exp(-k * min(o0, o1)) * (a < 1e-3 ? 1 - a * 0.5 : (1 - exp(-a)) / a);
+}
+// ... and a place along it (0 at o0 .. 1 at o1) drawn by where it is thick, from `u` (0..1).
+float SpreadPlace(float k, float o0, float o1, float u) {
+  float c = k * (o1 - o0), a = abs(c);
+  if (a < 1e-3) return u;
+  float v = -log(1 - u * (1 - exp(-a))) / a;  // (from its thick end)
+  return c > 0 ? v : 1 - v;
+}
+// The cell's light and thickness (as Gather's sample) from its stretch above the ground, `t0` to `t1` along `ray`;
+// `meets`: the stretch ends where the column meets the ground; `u`: this frame's place (0..1).
+float4 GatherSpread(float3 ray, float t0, float t1, bool meets, float u) {
+  float3 p0 = cameraPosition + ray * t0, p1 = cameraPosition + ray * t1;
+  float over0 = max(p0.y - ShaftGround(p0.xz), 0), over1 = meets ? 0 : max(p1.y - ShaftGround(p1.xz), 0);
+  // the hazes: the air's own (dust and the weather's, thinning above the floor), the mist, the band, the low haze; each
+  // how thick at its floor (c), how fast it thins (k), and its height over its floor at either end (o0, o1)
+  float mistFloor = -1 / max(mist.z, 1e-6);
+  float4 c = float4(airRange.z + weather.z, mist.x > 0 ? mist.x * ShaftMistBanks(p1.xz) : 0,
+                    shaftBand.z * lerp(shaftMore.x, 1, shaftWoods.SampleLevel(samplerLinearClamp, MirrorUv(p1.xz / shaftGround.yz), 0)), shaftBand.w);
+  float4 k = float4(lastRange.z, mist.x > 0 ? mist.z : 0, 3 / max(shaftBand.x, 1e-3), 1 / max(shaftLow.x, 1));
+  float4 o0 = float4(max(p0.y - lastRange.y, 0), max(p0.y - mist.y, mistFloor), over0, over0);
+  float4 o1 = float4(max(p1.y - lastRange.y, 0), max(p1.y - mist.y, mistFloor), over1, over1);
+  float4 mean = c * float4(SpreadMean(k.x, o0.x, o1.x), SpreadMean(k.y, o0.y, o1.y), SpreadMean(k.z, o0.z, o1.z), SpreadMean(k.w, o0.w, o1.w));
+  float whole = mean.x + mean.y + mean.z + mean.w;
+  float thick = mean.x + mean.y + mean.z + mean.w * 0.5;  // (the low haze loses half as much as it scatters)
+  if (whole <= 0) return float4(0, 0, 0, thick);
+  // the haze the place is drawn from, and where along the stretch
+  float4 upTo = float4(mean.x, mean.x + mean.y, mean.x + mean.y + mean.z, whole) / whole;
+  int which = u < upTo.x ? 0 : u < upTo.y ? 1 : u < upTo.z ? 2 : 3;
+  float from = which == 0 ? 0 : upTo[which - 1];
+  float s = SpreadPlace(k[which], o0[which], o1[which], saturate((u - from) / max(upTo[which] - from, 1e-6)));
+  float3 p = cameraPosition + ray * lerp(t0, t1, s);
+  float3 q = float3(p.x, max(p.y, AirGround(p.xz) + 1), p.z);  // (its light a unit over the ground at least: not in its own shadow)
+  // each haze's share of the thickness there, as the means have them
+  float4 here = c * exp(-k * lerp(o0, o1, s));
+  float4 share = here / max(here.x + here.y + here.z + here.w, 1e-30);
+  float over = lerp(over0, over1, s), away = length(p - cameraPosition);
+  float near = share.x + share.y + share.z, thin = near + share.w * 0.5, dust = share.x * airRange.z / max(c.x, 1e-30);
+  float3 falls = ToLinear(sunColor) * (lightMultiplier * modern.x * 3.14159265) * SunInAir(q) * CloudShadow(q) * SmokeShadow(q);
+  float cs = dot(sunDirection, ray);
+  float3 sun = falls * (AirPhase(cs, airLight.x) * airLight.z * near * (1 - ShaftShare(over, away)) + AirPhase(cs, shaftLow.y) * airLight.z * share.w * (1 - LowShare(away)));
+  float3 points;
+  float3 beams = LampsInAir(q, ray, points);
+  float3 scattered = sun + SkyInAir() * (modern.y * airLight.w) * thin + beams * (thin + dust * max(airRange.w - 1, 0)) +
+                     points * (thin + dust * max(airPoints.x - 1, 0));
+  return float4(scattered * whole, thick);
+}
+#endif
+
 [numthreads(8, 8, 1)] void Gather(uint3 id : SV_DispatchThreadID) {
   if (any(id >= uint3(airCells.xyz))) return;
   float2 uv = (id.xy + 0.5) / airCells.xy;
@@ -177,6 +240,12 @@ RWTexture3D<float4> airTarget : register(u0);
   uint samples = max(uint(airCells.w), 1u);
   for (uint i = 0; i < samples; ++i) {
     float jitter = frac(airUp.w + float(i) / samples);
+#ifdef SUNLIGHT
+    [branch] if (clearTo > t0) {  // (sky) a stretch above the ground: the hazes on it taken whole (GatherSpread)
+      now += GatherSpread(ray, t0, clearTo, clearTo < t1, jitter);
+      continue;
+    }
+#endif
     float at = clearTo < t1 && clearTo > t0 ? t0 * exp(jitter * log(clearTo / t0)) : CellDistance((id.z + jitter) / airCells.z);
     float3 p = cameraPosition + ray * at;
     [branch] if (clearTo < t1) {  // (a unit over it: not in the ground's own shadow)

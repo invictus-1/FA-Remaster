@@ -452,13 +452,13 @@ float3 BeyondBack(float3 d) {
     float4 a = AirAt(cameraPosition + d * (air.y * exp(air.z) * 0.999));
     back = back * a.a + a.rgb;
   }
+  [branch] if (beyondSea.x > 0.5) back = BeyondSea(d, back);  // (sky) from above, the far sea (view.h)
   return back;
 }
 // The world beyond the map's edge: ground or water there, a shade dimmer just outside (the
 // playable ground ends here) and lost in the distance farther out: it goes over into what the
 // sky's pass shows in that direction, so the land has no rim. On the map: the colour as it is.
 float3 BeyondFar(float3 color, float3 world, float outside, float pixel) {
-  float3 back = BeyondBack(normalize(world - cameraPosition));
   float t = saturate(outside * beyond.z);
   // without the haze (beyond.w < 0): the land stays clear and is lost only in the last tenth of
   // the way, where it meets the horizon
@@ -470,7 +470,10 @@ float3 BeyondFar(float3 color, float3 world, float outside, float pixel) {
     // plain from all the way up without a hard line
     float grow = smoothstep(0, beyondLand.y, outside);
     color = lerp(color, dot(color, float3(0.3, 0.6, 0.1)), beyondLand.w * grow) * lerp(1, abs(beyond.w), grow);
-    if (pixel > 0) color *= 1 - beyondLand.z * exp(-outside / max(pixel * beyondLand.x, 1e-4));
+    // (sky) the shadow only from far up, while the dimming's band is too narrow in the picture to show the edge by itself;
+    // close in, over a band many pixels wide, it read as a seam cut through the land and the sea
+    float shadow = beyondLand.z * (1 - smoothstep(6, 24, beyondLand.y / max(pixel, 1e-5)));
+    if (pixel > 0) color *= 1 - shadow * exp(-outside / max(pixel * beyondLand.x, 1e-4));
   } else {
     // just outside: dimmer and with a third of its colour gone, behind a thin dark line along the
     // edge that keeps its width in the picture at any zoom: where the playable ground ends must be
@@ -479,7 +482,8 @@ float3 BeyondFar(float3 color, float3 world, float outside, float pixel) {
     color = lerp(color, dot(color, float3(0.3, 0.6, 0.1)), 0.35 * near) * lerp(1, abs(beyond.w), near);
     if (pixel > 0) color *= 1 - 0.7 * saturate(1 - outside / max(pixel * 1.6, 1e-4));
   }
-  return lerp(color, back, t * t * (3 - 2 * t));
+  [branch] if (beyondSea.x > 0.5 && t <= 0) return color;  // ((sky) the far sea is dearer: what it is lost in only where it is)
+  return lerp(color, BeyondBack(normalize(world - cameraPosition)), t * t * (3 - 2 * t));
 }
 float3 BeyondMap(float3 color, float3 world) {
   float outside = OutsideMap(world);

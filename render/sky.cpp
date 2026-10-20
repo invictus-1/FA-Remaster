@@ -292,6 +292,15 @@ float4 PS(VOut i) : SV_Target {
     float4 a = AirAt(cameraPosition + normalize(d) * (air.y * exp(air.z) * 0.999));
     c = c * a.a + a.rgb;
   }
+  // (sky) with the far sea (view.h, BeyondSea; the land far off on): below the horizon past the world beyond the edge, seen
+  // from above, the sea through the air in place of that haze; the clouds the zoom put before it laid over it again
+  [branch] if (beyondSea.x > 0.5 && beyond.z > 0 && d.y < -1e-3) {
+    c = BeyondSea(normalize(d), c);
+    [branch] if (cloudLight.w > 0.5) {
+      float4 marched = cloudPicture.SampleLevel(samplerLinearClamp, i.position.xy * viewport.zw, 0);
+      c = c * marched.a + marched.rgb;
+    }
+  }
   return float4(c, 1);
 }
 )hlsl";

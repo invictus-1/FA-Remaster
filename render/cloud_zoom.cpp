@@ -236,7 +236,8 @@ bool CloudZoom::Set(const std::string& list, std::string* why) {
     const char* name;
     float* value;
   } named[] = {{"band", &band}, {"erode", &erodeMost}, {"keep", &keepMost}, {"partErode", &partErode}, {"partKeep", &partKeep},
-               {"partDepth", &partDepth}, {"partFrom", &partFrom}, {"partTo", &partTo}, {"near", &near}, {"gain", &gain}, {"lumps", &lumps}, {"powder", &powder}, {"fine", &fine}, {"fineSize", &fineSize}, {"history", &history}, {"letGo", &letGo}, {"inside", &inside}, {"insideFade", &insideFade}};
+               {"partDepth", &partDepth}, {"partFrom", &partFrom}, {"partTo", &partTo}, {"near", &near}, {"gain", &gain}, {"lumps", &lumps}, {"powder", &powder}, {"fine", &fine}, {"fineSize", &fineSize}, {"history", &history}, {"letGo", &letGo}, {"inside", &inside}, {"insideFade", &insideFade},
+               {"lift", &lift}, {"liftMost", &liftMost}};  // (sky: lift, liftMost)
   size_t at = 0;
   while (at < list.size()) {
     size_t end = list.find(',', at);
@@ -251,11 +252,16 @@ bool CloudZoom::Set(const std::string& list, std::string* why) {
         found = true;
       }
     if (!found) {
-      *why = "not a name=value of band, erode, keep, partErode, partKeep, partDepth, partFrom, partTo, near, gain, lumps, powder, fine, fineSize, history, letGo, inside, insideFade: " + item;
+      *why = "not a name=value of band, erode, keep, partErode, partKeep, partDepth, partFrom, partTo, near, gain, lumps, powder, fine, fineSize, history, letGo, inside, insideFade, lift, liftMost: " + item;
       return false;
     }
   }
   return true;
+}
+
+void CloudZoom::Place(Clouds* clouds, bool on, float mapWidth, float mapHeight) {
+  if (ownBase_ < 0) ownBase_ = clouds->base;
+  clouds->base = on ? std::clamp(lift * std::max(mapWidth, mapHeight), ownBase_, std::max(liftMost, ownBase_)) : ownBase_;
 }
 
 void CloudZoom::Lay(const View& view, gfx::Texture clouds, gfx::Texture sceneDepth) {
