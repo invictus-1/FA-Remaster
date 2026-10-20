@@ -1915,21 +1915,10 @@ void MotionTick(Sim& sim, Unit* u) {
       const Vec3 np{(m.blendToPos.x - m.blendFromPos.x) * t + m.blendFromPos.x,
                     (m.blendToPos.y - m.blendFromPos.y) * t + m.blendFromPos.y,
                     (m.blendToPos.z - m.blendFromPos.z) * t + m.blendFromPos.z};
-      // 0x4eba80: a x (1 - t) + b x t, b negated when the two point apart, then brought back to unit length
-      Quat a = m.blendFromOri, q2 = m.blendToOri, nq = a;
-      if (!(a.w == q2.w && a.x == q2.x && a.y == q2.y && a.z == q2.z)) {
-        const float tc = std::fmax(0.0f, std::fmin(1.0f, t)), uc = 1.0f - tc;
-        if (0.0f > ((a.w * q2.w + a.x * q2.x) + a.y * q2.y) + a.z * q2.z) q2 = {0.0f - q2.x, 0.0f - q2.y, 0.0f - q2.z, 0.0f - q2.w};
-        nq = {a.x * uc + tc * q2.x, a.y * uc + tc * q2.y, a.z * uc + tc * q2.z, a.w * uc + tc * q2.w};
-        const float len = std::sqrt(((nq.w * nq.w + nq.x * nq.x) + nq.y * nq.y) + nq.z * nq.z);
-        if (len > 9.99999997e-07f) {
-          const float inv = 1.0f / len;
-          nq.w *= inv;
-          nq.x *= inv;
-          nq.y *= inv;
-          nq.z *= inv;
-        }
-      }
+      // func_QuatLERP 0x4eba80 (from +0x120, to +0x13c: 0x6c30e5..0x6c3120): the from rotation itself when every part
+      // is within 1e-6 of the other's (0x4eded0), else the blend, b negated as -0.0 - b (0xe4f748) when the two point
+      // apart, normalised (a length of 1e-6 or less gives zero): vm::NlerpExe
+      const Quat nq = vm::NlerpExe(m.blendFromOri, m.blendToOri, t);
       m.layerBlend += 1.0f;
       m.surfaceNext = false;
       if (m.layerBlend >= n) m.layerBlend = 0.0f;

@@ -1424,11 +1424,9 @@ int TickCall(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d, const BuildT
           GetAttachBoneTransform(O, u, &bp, &bq);
           bp.y -= BpNumF(u, "SizeY");
           Vec3 pos = Add(d.aPos, Mul(Sub(bp, d.aPos), tt));
-          // QuatLerp 0x4eba80
-          Quat a = d.aQ, b = bq;
-          if (a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w < 0) b = {-b.x, -b.y, -b.z, -b.w};
-          float s = 1.0f - tt;
-          Quat q = QNorm(Quat{a.x * s + tt * b.x, a.y * s + tt * b.y, a.z * s + tt * b.z, a.w * s + tt * b.w});
+          // func_QuatLERP 0x4eba80 (from: the task's start orientation +0x40, to: the bone's; 0x60013a..0x600171), in
+          // the exe's order of operations: vm::NlerpExe (its 1e-6 test, the clamp, -0.0 - b, times 1 / length)
+          const Quat q = NlerpExe(d.aQ, bq, tt);
           u->position = pos;
           u->orientation = q;
           u->lastMoveTick = sim.tick();

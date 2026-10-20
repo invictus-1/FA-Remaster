@@ -196,8 +196,8 @@ void BlendQuat(const float* q0, const float* q1, float t, float* out) {
   float b[4] = {q1[0], q1[1], q1[2], q1[3]};
   const float dot = ((q0[0] * b[0] + q0[1] * b[1]) + q0[2] * b[2]) + q0[3] * b[3];
   const float inv = 1.0f - t;
-  if (0.0f > dot)
-    for (float& x : b) x = 0.0f - x;
+  if (0.0f > dot)  // -0.0 - b (0x4ebb25..0x4ebb45, -0.0 at 0xe4f748): a +0 part turns -0
+    for (float& x : b) x = -0.0f - x;
   for (int i = 0; i < 4; ++i) out[i] = q0[i] * inv + t * b[i];
   const float len = std::sqrt(((out[0] * out[0] + out[1] * out[1]) + out[2] * out[2]) + out[3] * out[3]);
   if (len > 1e-6f) {
