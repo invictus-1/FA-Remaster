@@ -25,7 +25,20 @@
 //            ripples, the modern light through the sun's and the clouds' shadows, the lamps; the bright net of light
 //            on a shallow bed; in rain, rings where the drops fall and a roughened surface
 //   white    the white water ribbon: drawn by this pass too (in place of its alpha-tested, swaying model): foam carried
-//            downstream fast, its streaks from the ribbon's own texture, lit as the stream is
+//            downstream fast, its streaks from the ribbon's own texture, broken along and across, its sides ragged,
+//            lit as the stream is; drawn after the sea (World::Render), so that it can lie on the sea where the
+//            stream runs into it
+//   ends     every ribbon thins out over the last of its length at both ends (no square end shows)
+//   outlet   its head (where the mesh begins: on the ground, at a rock face, in a crack) spills out of the stone as white
+//            water widening over its first two units, foam where its drops ease out below; the stone round the outlet
+//            wet: darker, in streaks running down it, with a sheen and trickles' glints (Chris, 2026-10-20: "come out of
+//            the side of the mountain")
+//   cascade  a stretch that drops steeply is white water all along, the pools between its drops too, and from afar the
+//            foam keeps the share of the water it covers near by: from above a cascade reads as one fall, not dashes
+//   mouth    where a stream ends just above the sea (the remastered Seton's ends at the top of the beach, a step over
+//            the water: Chris, 2026-10-19), its water is carried on (StreamWater::Add, each prop as it is placed) down
+//            the ground the way it ran, spreading and thinning, white where it pours, until it is under the sea; and a
+//            fan of foam spreads from there over the sea's surface and thins out
 // What the props are (StreamWater::Add): a level whose blueprint ShaderName is "StreamWater" (the white water's
 // "StreamFoam") (models.cpp; drawn as "LabPBR" and "LabPBRAlpha" otherwise). Off: they are drawn as before.
 #pragma once
@@ -63,15 +76,20 @@ class StreamWater {
   void Add(const Model* model, const Mat4& world, uint32_t key);
   bool Any() const { return !placed_.empty(); }
   int Count(bool whiteWater) const;
+  // [stream mouth] The sea's level (-1e9: no sea) and the ground's height at (x, z): set before Add (World::Open), for
+  // carrying a stream that ends just above the sea on into it. Without them nothing is carried on.
+  float seaLevel = -1e9f;
+  std::function<float(float, float)> groundHeight;
 
   // Its pipelines, made the first time they are wanted (World::Begin, each frame it is on): false when they cannot be.
   bool Prepare();
   // Into a pass that has the scene's colour ONLY (Post::BeginColorOnly), with the picture as it was before (`behind`, one
   // sample a pixel) and the scene's depth to read, the map's heights (R16, `heightUnit` world units at 1) and size; the
   // sun's and the lamps' shadow maps and the small lights bound as for the sea. `standing`: whether the prop of that key
-  // is still there (the game may remove scenery).
+  // is still there (the game may remove scenery). `whiteWater`: [stream mouth] the white water alone (after the sea; `behind`
+  // is not read), else the water alone (before the sea).
   void Draw(const View& view, const Camera& camera, gfx::Texture behind, gfx::Texture sceneDepth, gfx::Texture heights, float heightUnit,
-            float mapWidth, float mapHeight, const std::function<bool(uint32_t)>& standing);
+            float mapWidth, float mapHeight, const std::function<bool(uint32_t)>& standing, bool whiteWater = false);
 
   // The look (the viewer's --stream-water-tune depth,murk,flow):
   float depth = 0.32f;  // the deepest water, in the middle, as a share of the ribbon's half width
@@ -84,32 +102,57 @@ class StreamWater {
   int drawn = 0, triangles = 0;
 
  private:
-  // A vertex of a stream's ribbon as its shaders take it (made from the mesh file by MeshOf).
+  // A vertex of a stream's ribbon as its shaders take it (made from the mesh file by RibbonOf).
   struct Vertex {
-    float position[3];  // the model's own
+    float position[3];  // the model's own (a mouth's plume: the world's)
     float across[3];    // toward the bank at u = 1 (unit, level)
     float along[3];     // downstream (unit, level)
     float shape[4];     // u; how far downstream (world units of the model); the half width there; the drop per unit downstream
+    // [stream mouth] how far from its run's upstream start and to its run's downstream end (world units of the model,
+    // along it: the ends thin out); how far it has run on past the mesh's end toward the sea (0 on the mesh, 1 at the
+    // end of what is carried on); how steep its stretch is (the drop per unit downstream over three units either side: a
+    // cascade's pools between its drops count as the cascade), -1 on a mouth's plume of foam on the sea, -2 on an outlet's
+    // box (whose fields then say its place: Outlet)
+    float more[4];
   };
-  struct Mesh {
+  // A model's ribbon on the processor (RibbonOf), and where its downstream end is (the last cross-section's banks).
+  struct Ribbon {
     bool ok = false;
     bool whiteWater = false;
+    std::vector<Vertex> vertices;
+    std::vector<uint32_t> indices;
+    gfx::Texture texture;  // the ripples (the water's normal map) or the streaks (the white water's albedo)
+    uint32_t endBank[2] = {0, 0};  // the downstream end's vertices at u = 0 and u = 1
+    float endS = 0, endHalf = 0;
+    uint32_t startBank[2] = {0, 0};  // the upstream start's (its head)
+    float startS = 0, startHalf = 0;
+  };
+  // Each prop as placed: its own buffers (what is carried on toward the sea depends on where it lies).
+  struct Placed {
+    bool whiteWater = false;
+    bool plume = false;  // [stream mouth] (a mouth's plume, not a prop: not counted)
+    bool outlet = false;  // [stream] (an outlet's box: drawn by its own pipeline before the water; not counted)
     gfx::Buffer vertices, indices;
     uint32_t indexCount = 0;
-    gfx::Texture texture;  // the ripples (the water's normal map) or the streaks (the white water's albedo)
-    Vec3 lo{0, 0, 0}, hi{0, 0, 0};  // the model's own, the margin of wet bank included
-  };
-  struct Placed {
-    const Mesh* mesh;
+    gfx::Texture texture;
     Mat4 world;
-    uint32_t key;
+    uint32_t key = 0;
+    Vec3 lo{0, 0, 0}, hi{0, 0, 0};  // in the world, the wet bank's margin included
   };
-  const Mesh* MeshOf(const Model* model);
+  const Ribbon* RibbonOf(const Model* model);
+  void Place(std::vector<Vertex> vertices, const std::vector<uint32_t>& indices, gfx::Texture texture, const Mat4& world, uint32_t key, bool whiteWater);
+  // [stream mouth] Carries a water ribbon placed by `world` on from its downstream end down the ground into the sea (when
+  // it ends just above it), appending to `vertices` and `indices` (the model's own space); a plume of foam on the sea
+  // from where it goes under (world space) into `plume`, `plumeIndices`. False: it ends elsewhere.
+  // [stream] The box round a water ribbon's head in which the outlet's stone is wetted (world space; stream_water.cpp).
+  void Outlet(const Ribbon& ribbon, const Mat4& world, std::vector<Vertex>* box, std::vector<uint32_t>* boxIndices) const;
+  bool CarryOn(const Ribbon& ribbon, const Mat4& world, std::vector<Vertex>* vertices, std::vector<uint32_t>* indices, std::vector<Vertex>* plume,
+               std::vector<uint32_t>* plumeIndices) const;
   gfx::Device* device_;
   TextureCache* textures_;
-  std::unordered_map<const Model*, Mesh> meshes_;
+  std::unordered_map<const Model*, Ribbon> ribbons_;
   std::vector<Placed> placed_;
-  gfx::Pipeline water_, white_;
+  gfx::Pipeline water_, outlet_, white_;
   bool tried_ = false;
 };
 
