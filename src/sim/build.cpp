@@ -939,6 +939,12 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
         if (u->unitStates.count("Patrolling")) range = std::max(GuardScanRadiusOf(u), maxBD);
         if (gap > range) return kTaskFailed;
       }
+      // In range: a target held through the army's recon blip becomes the blip's unit from here on
+      // (0x61f574..0x61f5be: the target entity's vt+0x1c, a ReconBlip, -> ReconBlip::GetCreator 0x579670, and the
+      // task's weak link +0x44 set to it by 0x5a6e00). Until then the task's target is the blip (IssueReclaimTask
+      // 0x61ef60 with the order's CAiTarget), and its dtor's BeingReclaimed clear (CUnitReclaimTask dtor 0x620280:
+      // the target's vt+0x10, no unit for a blip) leaves the unit alone.
+      c.targetViaBlip = false;
       if (!u->builderArms.empty()) SetArmAimTarget(sim, u, tp);
       if (!c.reclaimStarted) {
         c.reclaimStarted = true;
@@ -3291,6 +3297,7 @@ BuildTask* StartBuildTask(Sim& sim, Unit* u, const UnitCommand& c) {
       if (!c.targetId || !sim.FindEntity(c.targetId)) return nullptr;
       t->order = "Reclaim";
       t->goalId = c.targetId;
+      t->targetViaBlip = c.targetViaBlip;  // (its target link holds the order's blip until it is in range: TickPropReclaim)
       ReclaimTaskAbortMove(u);  // (the reclaim task's ctor: DispatchTask 0x60989c -> IssueReclaimTask 0x61ef60)
       break;
     case CommandType::Capture:  // DispatchTask 0x6098a9 -> CUnitCaptureTask::Create; the ctor takes the focus
@@ -3554,7 +3561,12 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
   // are the exe's only writes of the bit. Seen: Skirmish 2288 and 2298, army 4's 0x40001a reclaimed by one, then two,
   // then three engineers: the original shows it without BeingReclaimed for the one beat in which another reclaimer's
   // task ended; ours kept it on until the unit died (0x300032 to the end of the run).
-  if (t.type == CommandType::Reclaim && t.goalId) {
+  // A target the task still holds through a recon blip (TickPropReclaim: until the task finds it in range) is no unit
+  // for that test: the blip keeps nothing. Seen (probe mp1_7040): MP1 7040, army 4's engineer 0x40004c, walking since
+  // 7031 to reclaim army 1's frigate 0x10001f for a player's Reclaim on its blip 0x3010001f, is killed by a shell in
+  // the entity pass; its task's dtor runs with the blip for its target (the other reclaimers' tasks, in range, hold
+  // the frigate) and the frigate stays BeingReclaimed, as the four reclaim steps of that beat left it. Ours cleared it.
+  if (t.type == CommandType::Reclaim && t.goalId && !t.targetViaBlip) {
     Entity* e = sim.FindEntity(t.goalId);
     if (e && e->kind == Entity::Kind::Unit) static_cast<Unit*>(e)->unitStates.erase("BeingReclaimed");
   }
@@ -3670,6 +3682,7 @@ void ReclaimTaskCommandEvent(Sim& sim, Unit* u, BuildTask& c, const UnitCommand&
   }
   Entity* e = cmd.targetId ? sim.FindEntity(cmd.targetId) : nullptr;
   c.goalId = e ? EntityRef(e) : 0;
+  c.targetViaBlip = e && cmd.targetViaBlip;  // (the command's target entity, cmd+0x120: the blip of a blip order)
   c.site = e ? e->position : cmd.pos;
   c.reclaimAtPoint = e == nullptr;
   u->focusId = c.goalId;
