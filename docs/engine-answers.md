@@ -3,6 +3,54 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## render 41: from Chris's playthrough of 19 October — answered (items 2, 3: the original's own; item 1: 13a6e16)
+
+**First: which build played them.** Chris played these games on build-ui as rebuilt at 14:51 that day (ui 80c6cd7).
+Main had six sim commits more by the next day, so main leaves his tour game at beat 9796 (a unit in the water,
+28b00bc). A worktree at 80c6cd7 reproduces the snow and tour games exactly: 152 units at the end of the tour game,
+his commander's death at 16181. The Quixel game plays back exactly to about beat 13,870, then leaves his game
+before his pause at 14959; the interface's host did not record paused beats (now being fixed), which is the likely
+cause. The interface now writes the build's commit into every game's .seed file.
+
+**1. Veterancy: the simulation does it; the interface did not show it.**
+- FAF's veterancy is Lua (defaultcomponents.lua 584-846). `DoTakeDamage` (636) counts each enemy unit's damage.
+  When a unit dies, `VeterancyDispersal` (656, called from Unit.OnKilled 1596) shares its worth
+  (FractionComplete x mass) by those damage shares. A unit levels at n x VeteranMassMult x BuildCostMass
+  (blueprints-units.lua 464-469). The default multiplier is 2 for T1, 1.5 for T2, 1.25 for T3, and 2 for
+  commanders and experimentals.
+- The engine passes the instigating unit to OnDamage (DoDamagePoint 0x737140) and to OnKilled (Unit::Kill 0x6a8090).
+- Seen in Chris's game: experience arrives and levels are gained. Seen in the LAND replay: units reach levels 1 and
+  2, and that replay stays identical to the original, health included.
+- The interface reads `UserUnit:GetStat('VetLevel')` and `GetStat('VetExperience')` (unitview.lua 553-554); ours
+  answered the default. New in the views (13a6e16): `UnitStateView::stats`, every number stat a unit's scripts set,
+  sorted by name. The original's GetStat (0x8c3160) reads an object kept on the user unit (+0x148); that it is
+  the synced copy of the sim unit's stats is inferred. The interface's GetStat reads `stats` now.
+- Chris's Mitsurugi drones cost 0 mass, so every kill was a full level for them; on Chris's choice they are now
+  excluded from veterancy (visuals: General.ExcludeFromVeterancy).
+
+**2. The T2 missile launcher: the original's behaviour.**
+- The UEF Flapjack's missile has `TrackTargetGround` (TIFMissileCruise03_proj.bp 59). FAF's Projectile.lua
+  (158-207) then sends it to a point in the target's hitbox as it stood at launch, fuzzed by 0.8 x its size. A
+  moving unit dodges it by design.
+- In Chris's game, from his 5 launchers: against standing targets the missiles landed about 0.5 from the target;
+  against moving targets about 7 from the target, but about 0.6 from where it stood at launch.
+- The LAND replay shows the same, and it matches the original's every random draw (the ground point's and the
+  zig-zag's included).
+- The scorch size is the renderer's.
+
+**3. The commander's death: the original's behaviour.**
+- The blast is two DamageArea calls of type Deathnuke: 2000 within 30 and 500 within 40 (UEL0001 DeathWeapon;
+  ACUDeathWeapon.lua 46-49). It hurts its own army too.
+- FAF's armour table gives 'Structure' x0.032 against Deathnuke (armordefinition.lua 81): a building within 30
+  loses 80, one between 30 and 40 loses 16.
+- Chris's commander died at 16181 (two Ripper missiles from an AI gunship): his T3 factory went 16000 -> 15920,
+  his power generators 600 -> 520, his point defences 1300 -> 1220; the engineer and two pods within 30 died.
+- The original does the same: in the MP2 replay (11690) its structures within 30 lost 80 and those between 30
+  and 40 lost 16, and our MP2 matches the original to the end.
+
+**4. The lag spike on a UEF factory's T2 upgrade** was the renderer's to measure first; nothing of the simulation's
+has been named for it so far.
+
 ## ui 44: two things seen at a game's end — answered (no change)
 
 **(a) `platoon.lua(1555): attempt to call method 'GetLocationCoords' (a nil value)`.**
