@@ -89,6 +89,22 @@ def main():
             add(f, cxxflags, True)
     for f in sorted(glob.glob(os.path.join(UI, "**", "*.cpp"), recursive=True)):
         add(f, cxxflags, True)
+    # The build's commit (written into each game's .seed file, so that a game's record says which build played it:
+    # the engine's playback of a game needs the same build): one small file in the output folder, written only
+    # when the commit changes, so it alone compiles again. "-dirty" when tracked files differ from it; "unknown"
+    # without git.
+    try:
+        rev = subprocess.run(["git", "-C", ROOT, "rev-parse", "--short=12", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+        dirty = subprocess.run(["git", "-C", ROOT, "status", "--porcelain", "--untracked-files=no"], capture_output=True, text=True, check=True).stdout.strip()
+        commit = rev + ("-dirty" if dirty else "")
+    except (OSError, subprocess.CalledProcessError):
+        commit = "unknown"
+    stamp = os.path.join(a.out, "build_commit.cpp")
+    text = 'namespace moho::ui {\nextern const char kBuildCommit[] = "' + commit + '";\n}\n'
+    if not os.path.exists(stamp) or open(stamp, encoding="utf-8").read() != text:
+        with open(stamp, "w", encoding="utf-8", newline="\n") as f:
+            f.write(text)
+    add(stamp, ["-std=c++20"], True)
 
     newest_header = max(os.path.getmtime(h)
                         for pat in ("src/**/*.h", "src/**/*.inc", "third_party/**/*.h", "ui/**/*.h", "ui/**/*.inc", "render/*.h")

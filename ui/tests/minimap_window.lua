@@ -303,6 +303,18 @@ ForkThread(function()
     check("the minimap view inside it", rect(mini), "1193 194 1687 546")
     moho64ui_MouseMove(900, 700)
     WaitSeconds(0.2)
+    -- the minimap's meshes (render 4a061d2): FAF's minimap sets cam_DefaultMiniLOD from the profile's "Disable
+    -- meshes" (disableMinimapMesh, ticked unless chosen: 0); not 0, the minimap stamps the script's meshes
+    check("FAF's minimap leaves its meshes off (cam_DefaultMiniLOD 0)", moho64ui_Looks().minimapLod, 0)
+    ConExecute("cam_DefaultMiniLOD 1.8")
+    check("cam_DefaultMiniLOD 1.8 reaches the program", math.abs(moho64ui_Looks().minimapLod - 1.8) < 0.001, true)
+    ConExecute("cam_DefaultMiniLOD 0")
+    -- each world mesh carries its description's LODCutoff (worldmesh.lua's 1000 when none is given)
+    local cutoffs = true
+    for _, m in moho64ui_WorldMeshes() or {} do
+        if not (m.lodCutoff and m.lodCutoff > 0) then cutoffs = false end
+    end
+    check("every world mesh has its LOD cutoff", cutoffs, true)
     LOG(string.format("TEST note: done at %.1f s of the run's clock (%d frames)", CurrentTime(), CurrentTime() * 60))
     LOG("TEST done: " .. failed .. " failed")
 end)

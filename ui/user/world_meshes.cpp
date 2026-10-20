@@ -149,7 +149,7 @@ void MeshOfBlueprint(lua_State* L, const std::string& id, WorldMeshView* view, f
 }
 
 // The mesh description table at `t`: MeshName, TextureName, ShaderName (or BlueprintID, whose own
-// names then count), UniformScale, Color.
+// names then count), UniformScale, Color, LODCutoff.
 void ReadDescription(lua_State* L, int t, WorldMeshView* view) {
   std::string blueprint = TextField(L, t, "BlueprintID"), mesh = TextField(L, t, "MeshName");
   if (!mesh.empty()) {
@@ -165,6 +165,10 @@ void ReadDescription(lua_State* L, int t, WorldMeshView* view) {
   lua_pop(L, 1);
   std::string color = TextField(L, t, "Color");
   if (!color.empty()) view->color = ColorOf(color);
+  lua_pushstring(L, "LODCutoff");  // (the renderer's minimap stamps go by it: render 4a061d2)
+  lua_gettable(L, t);
+  if (lua_isnumber(L, -1)) view->lodCutoff = static_cast<float>(lua_tonumber(L, -1));
+  lua_pop(L, 1);
 }
 
 // InternalCreateWorldMesh(luaobj)
@@ -340,6 +344,7 @@ int l_WorldMeshes(lua_State* L) {
     text("mesh", v.mesh), text("texture", v.texture), text("shader", v.shader);
     number("x", v.position[0]), number("y", v.position[1]), number("z", v.position[2]);
     number("scale", v.uniformScale), number("lifetime", v.lifetime), number("age", v.age);
+    number("lodCutoff", v.lodCutoff);
     lua_rawseti(L, -2, ++n);
   }
   return 1;

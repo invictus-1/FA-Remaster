@@ -46,6 +46,9 @@
 
 namespace moho::ui {
 
+// The commit this program was built from (build_ui.py writes it into the build folder's build_commit.cpp).
+extern const char kBuildCommit[];
+
 // The renderer's world picture behind the interface's WorldSource.
 struct GameSession::Picture : WorldSource {
 #ifdef MOHO64UI_WORLD_PICTURE
@@ -389,6 +392,7 @@ struct GameSession::Picture : WorldSource {
       for (int i = 0; i < 4; ++i) o.orientation[i] = m.orientation[i];
       o.color = m.color, o.hidden = m.hidden;
       o.lifetime = m.lifetime, o.age = m.age, o.fractionComplete = m.fractionComplete;
+      o.lodCutoff = m.lodCutoff;
       meshes.push_back(std::move(o));
     }
     picture.SetWorldMeshes(meshes);
@@ -465,6 +469,8 @@ struct GameSession::Picture : WorldSource {
       }
     }
     if (!lookApplied || looks.hiddenOutlines != lookNow.hiddenOutlines) picture.SetHiddenOutlines(looks.hiddenOutlines);
+    // (the minimap stamps the script's meshes while cam_DefaultMiniLOD is not 0: render 4a061d2)
+    if (!lookApplied || (looks.minimapLod != 0) != (lookNow.minimapLod != 0)) picture.SetMinimapMeshes(looks.minimapLod != 0);
     // The cinematics' switches (UI_NisRenderIcons, ren_SelectBoxes, ren_Oblivion).
     if (!lookApplied || looks.strategicIcons != lookNow.strategicIcons) picture.SetStrategicIcons(looks.strategicIcons);
     ApplyCineMarks();  // (the selection's marks, ren_SelectBoxes, and the life bars and work bars: none while the cinematic camera shows)
@@ -1047,6 +1053,7 @@ bool GameSession::FinishLoad(std::string* why) {
     else Logf(LogLevel::Info, "moho64ui: this game is recorded in %s.stream (seed %u)", base.c_str(), h.seed);
     if (std::FILE* f = std::fopen((base + ".seed").c_str(), "wb")) {
       std::fprintf(f, "seed %u\nmap %s\narmies %zu\nfocus army %d\n", h.seed, h.map.c_str(), h.armies.size(), session.focusArmy + 1);
+      std::fprintf(f, "build %s\n", kBuildCommit);  // (the commit this program was built from: the engine's playback picks its build by it)
       if (!replayTable.empty()) std::fprintf(f, "session %s\n", replayTable.c_str());
       for (const std::string& folder : replayMaps) std::fprintf(f, "maps %s\n", folder.c_str());
       std::fclose(f);
