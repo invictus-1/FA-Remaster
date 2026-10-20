@@ -11,6 +11,7 @@
 
 #include "core/dmath.h"
 #include "core/log.h"
+#include "core/profile.h"
 #include "script/script_state.h"
 #include "sim/blueprints.h"
 #include "sim/build.h"
@@ -246,6 +247,7 @@ void CallUnitBinding(Sim& sim, Unit* u, const char* method, int nargs) {
   }
   PushObject(L, u);
   for (int i = 0; i < nargs; ++i) lua_pushvalue(L, base + 1 + i);
+  prof::NextSource(prof::kCallUnit);  // (MOHO64_PROFILE only: the Lua timer's source)
   if (lua_pcall(L, nargs + 1, 0, base + nargs + 1) != 0)
     LogScriptError(lua_isstring(L, -1) ? lua_tostring(L, -1) : "ProcessInfoPair failed");
   lua_settop(L, base);
@@ -534,6 +536,7 @@ void CommandStream::Apply(Sim& sim, int type, const std::string& payload) {
       lua_pushcfunction(L, ScriptTraceback);
       lua_getglobal(L, fn.c_str());
       if (!PushSerializedLua(L, arg)) lua_pushnil(L);
+      prof::NextSource(prof::kSimCallback);  // (MOHO64_PROFILE only)
       if (lua_pcall(L, 1, 0, top + 1) != 0)
         Logf(LogLevel::Warning, "Error running global lua function '%s':\n%s", fn.c_str(),
              lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
@@ -568,6 +571,7 @@ void CommandStream::Apply(Sim& sim, int type, const std::string& payload) {
           lua_rawseti(L, -2, i++);
         }
       }
+      prof::NextSource(prof::kSimCallback);  // (MOHO64_PROFILE only)
       if (lua_pcall(L, 3, 0, handler) != 0)
         Logf(LogLevel::Warning, "Error running sim lua callback function '%s':\n%s", name.c_str(),
              lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");

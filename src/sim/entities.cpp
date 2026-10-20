@@ -14,6 +14,7 @@
 #include "core/backtrace.h"
 #include "core/dmath.h"
 #include "core/log.h"
+#include "core/profile.h"
 #include "core/vfs.h"
 #include "script/script_state.h"
 #include "sim/transport.h"
@@ -1517,6 +1518,14 @@ bool Sim::CallMethod(lua_State* L, ScriptObject* obj, const char* method, int na
   // stack: base+1 handler, args..., self, fn  ->  fn, self, args...
   lua_insert(L, base + 2);   // fn
   lua_insert(L, base + 3);   // self
+  if (prof::On()) {  // MOHO64_PROFILE: the Lua timer's source for this callback (core/profile.h)
+    int src = prof::kCallOther;
+    if (const Entity* e = dynamic_cast<const Entity*>(obj))
+      src = e->kind == Entity::Kind::Unit ? prof::kCallUnit : e->kind == Entity::Kind::Projectile ? prof::kCallProjectile : prof::kCallEntity;
+    else if (dynamic_cast<const UnitWeapon*>(obj)) src = prof::kCallWeapon;
+    else if (dynamic_cast<const AiBrain*>(obj)) src = prof::kCallBrain;
+    prof::NextSource(src);
+  }
   bool ok = lua_pcall(L, nargs + 1, 0, base + 1) == 0;
   if (!ok) LogScriptError(lua_isstring(L, -1) ? lua_tostring(L, -1) : "(error object is not a string)");
   lua_settop(L, base);

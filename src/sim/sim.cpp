@@ -27,6 +27,7 @@
 #include "core/crash.h"
 #include "core/hostfs.h"
 #include "core/log.h"
+#include "core/profile.h"
 #include "core/vfs.h"
 #include "script/script_state.h"
 #include "script/threads.h"
@@ -862,7 +863,9 @@ void Sim::JoinFixesHooks(ScriptState& st) { st.SetExtraHooks(FixesHooks()); }
 
 Sim::Sim(Vfs* vfs, std::vector<std::string> hookDirs, std::vector<std::string> modUids)
     : vfs_(vfs), hookDirs_(std::move(hookDirs)), modUids_(std::move(modUids)),
-      skeletons_(std::make_unique<SkeletonCache>(vfs)), commandIds(std::make_shared<CommandIdPool>()) {}
+      skeletons_(std::make_unique<SkeletonCache>(vfs)), commandIds(std::make_shared<CommandIdPool>()) {
+  prof::InstallLuaTimer();  // MOHO64_PROFILE only (core/profile.h): the Lua timer on the sim's thread
+}
 
 Sim::~Sim() {
   if (rec_) fclose(rec_);
@@ -1611,33 +1614,76 @@ void Sim::RemoveUnitFromLists(Unit* u) {
 }
 
 namespace {
-// MOHO64_PROFILE=1: time spent per phase of the tick, logged every 1000 ticks.
+// MOHO64_PROFILE=1: time spent per phase of the tick, logged every 1000 ticks (ms per tick, and the outermost Lua time
+// inside each phase, core/profile.h), and a summary at exit on stderr: the distribution of the tick's time (mean, p50,
+// p95, p99), ticks per second, the Lua share per phase and per source, the peak working set. Measuring only: reads
+// the clock and nothing of the simulation.
 struct PhaseTimer {
-  static constexpr int kN = 12;
-  const char* names[kN] = {"economy", "recon+cleanup", "commands", "collision", "motion+aim", "anim+unitecon",
-                           "projectiles", "beams", "weapons", "navigators+paths", "threads", "destroy"};
-  double total[kN] = {};
-  std::chrono::steady_clock::time_point t;
+  enum Phase {
+    kEconomy, kNavigators, kSteering, kWeapons, kCommands, kThreads, kEntityPass, kAnim, kProjectiles, kRecon,
+    kFormations, kKillCleanup, kAdvanceCoords, kDestroySync, kN
+  };
+  const char* names[kN] = {"economy",     "navigators+paths", "steering", "weapons",      "commands",
+                           "threads",     "entitypass",       "anim",     "projectiles", "recon",
+                           "formations",  "killcleanup",      "advancecoords", "destroy+sync"};
+  double total[kN] = {}, lua[kN] = {};        // since the last report
+  double runTotal[kN] = {}, runLua[kN] = {};  // the whole run
+  double luaBetween = 0;                      // Lua between the ticks (the command stream, the host)
+  std::vector<float> tickMs;
+  std::chrono::steady_clock::time_point t, tickStart;
   bool on = getenv("MOHO64_PROFILE") != nullptr;
   void Start() {
-    if (on) t = std::chrono::steady_clock::now();
+    if (!on) return;
+    if (tickMs.empty()) prof::ResetLuaTotals();  // (before the first tick: the start-up's Lua, not counted)
+    luaBetween += prof::TakeLuaMs();
+    t = tickStart = std::chrono::steady_clock::now();
   }
   void Lap(int i) {
     if (!on) return;
     auto n = std::chrono::steady_clock::now();
-    total[i] += std::chrono::duration<double, std::milli>(n - t).count();
+    const double ms = std::chrono::duration<double, std::milli>(n - t).count(), l = prof::TakeLuaMs();
+    total[i] += ms;
+    runTotal[i] += ms;
+    lua[i] += l;
+    runLua[i] += l;
     t = n;
+  }
+  void EndTick() {
+    if (on) tickMs.push_back(std::chrono::duration<float, std::milli>(t - tickStart).count());
   }
   void Report(uint32_t tick) {
     if (!on || tick % 1000 != 0) return;
-    std::string s;
+    std::string s, sl;
     char buf[64];
     for (int i = 0; i < kN; ++i) {
       std::snprintf(buf, sizeof buf, " %s %.2f", names[i], total[i] / 1000.0);
       s += buf;
-      total[i] = 0;
+      std::snprintf(buf, sizeof buf, " %s %.2f", names[i], lua[i] / 1000.0);
+      sl += buf;
+      total[i] = lua[i] = 0;
     }
     Logf(LogLevel::Info, "moho64 profile tick %u (ms/tick):%s", tick, s.c_str());
+    Logf(LogLevel::Info, "moho64 profile tick %u lua (ms/tick):%s", tick, sl.c_str());
+  }
+  ~PhaseTimer() {
+    if (!on || tickMs.empty()) return;
+    std::vector<float> v = tickMs;
+    std::sort(v.begin(), v.end());
+    double sum = 0, luaSum = 0;
+    for (float x : v) sum += x;
+    for (int i = 0; i < kN; ++i) luaSum += runLua[i];
+    auto pct = [&](double p) { return v[std::min(v.size() - 1, static_cast<size_t>(p * static_cast<double>(v.size())))]; };
+    fprintf(stderr, "profile: %zu ticks, tick time %.1f s: mean %.3f ms, p50 %.3f, p95 %.3f, p99 %.3f, max %.3f; %.1f ticks/s "
+                    "(%.1f x game speed); Lua %.1f s = %.1f%% of the tick time (and %.2f s between ticks); peak working set %.0f MB\n",
+            v.size(), sum / 1000.0, sum / static_cast<double>(v.size()), pct(0.50), pct(0.95), pct(0.99), v.back(),
+            1000.0 * static_cast<double>(v.size()) / sum, 100.0 * static_cast<double>(v.size()) / sum, luaSum / 1000.0,
+            100.0 * luaSum / sum, luaBetween / 1000.0, prof::PeakWorkingSetMB());
+    for (int i = 0; i < kN; ++i)
+      fprintf(stderr, "profile: phase %-16s %8.2f s (%5.1f%%), Lua %8.2f s (%5.1f%% of the phase)\n", names[i],
+              runTotal[i] / 1000.0, 100.0 * runTotal[i] / sum, runLua[i] / 1000.0,
+              runTotal[i] > 0 ? 100.0 * runLua[i] / runTotal[i] : 0.0);
+    for (int s = 0; s < prof::kSources; ++s)
+      fprintf(stderr, "profile: Lua source %-16s %8.2f s\n", prof::SourceName(s), prof::LuaMsTotal(s) / 1000.0);
   }
 };
 PhaseTimer g_prof;
@@ -1869,22 +1915,22 @@ void Sim::Tick() {
   // that army rather than between the armies' other stages changes nothing (inferred from what it reads).
   ThreatMapBeat(*this);
   threads_->WakeSignalled();  // (a thread whose event a stage signalled goes to the run order's end at that moment)
-  g_prof.Lap(0);
+  g_prof.Lap(PhaseTimer::kEconomy);
   LandNavTickAll(*this);
-  g_prof.Lap(9);
+  g_prof.Lap(PhaseTimer::kNavigators);
   // CArmyImpl::OnTick 0x6ffd70: the brain's stages in this order: navigators (brain+0xa8), steering (brain+0xac,
   // CAiSteeringImpl::OnTick 0x5d32b0), attackers and weapons (brain+0xb0); only then the sim's command stage. So
   // a waypoint the navigator set this beat already has its spline when a command task stops the unit in the same
   // beat, and the stop turns it into a brake spline (the unit slows down along its hull) instead of a coast.
   SteeringTickAll(*this);  // the steering stage (spline points, predicted collisions)
-  g_prof.Lap(3);
+  g_prof.Lap(PhaseTimer::kSteering);
   WeaponsTick(*this);
   threads_->WakeSignalled();
-  g_prof.Lap(8);
+  g_prof.Lap(PhaseTimer::kWeapons);
   CommandStage(*this);  // stage 0x958 (arrivals from last beat's motion end their commands here)
-  g_prof.Lap(2);
+  g_prof.Lap(PhaseTimer::kCommands);
   threads_->RunTick(tick_);  // stage 0x944: Lua threads
-  g_prof.Lap(10);
+  g_prof.Lap(PhaseTimer::kThreads);
   std::vector<Unit*> motionOrder = MotionOrder();  // (a copy: a unit sent to the pass's end is appended to it)
   coordsPending = true;
   // The entity stage runs its tasks in creation order, units and collision beams alike, and a unit's task is its
@@ -2149,12 +2195,11 @@ void Sim::Tick() {
     attachedEntities.resize(keep);
   }
   MotorsTick(*this);  // the entity stage: props with a motor (falling trees, sinking)
-  g_prof.Lap(4);
+  g_prof.Lap(PhaseTimer::kEntityPass);
   AnimTick(*this);
   threads_->WakeSignalled();
   gridDirty_ = true;
-  g_prof.Lap(5);
-  g_prof.Lap(7);
+  g_prof.Lap(PhaseTimer::kAnim);
   // Projectiles move after every task stage (Sim::AdvanceBeat runs the three task stages first), so a shot
   // moves in the beat it was fired, and Lua sees the move next beat.
   ProjectilesTick(*this);
@@ -2174,8 +2219,9 @@ void Sim::Tick() {
       const char* pl = p->position.y > map_->waterElevation ? "Air" : "Water";
       if (u->layer != pl) SetAttachedUnitLayer(*this, u, pl);
     }
-  g_prof.Lap(6);
+  g_prof.Lap(PhaseTimer::kProjectiles);
   ReconBeat(*this);  // army (tick % armies) updates its blips
+  g_prof.Lap(PhaseTimer::kRecon);
   {
     // Step 11 (the formation DB) runs before step 13 (Entity::AdvanceCoords): motion only wrote each entity's
     // PENDING transform, so the formation update still sees every unit where it stood before this beat's
@@ -2195,7 +2241,9 @@ void Sim::Tick() {
       who[i]->orientation = moved[i].second;
     }
   }
+  g_prof.Lap(PhaseTimer::kFormations);
   KillCleanupTick(*this);
+  g_prof.Lap(PhaseTimer::kKillCleanup);
   for (Unit* u : units_) u->motion.velCommitted = u->motion.lastMove;  // step 13: previous = committed = pending
   coordsPending = false;
   // (the same for a shell that did not move in this beat, its impact beat for one: its velocity, committed -
@@ -2207,7 +2255,7 @@ void Sim::Tick() {
   GridAdvanceCoords(*this);    // step 13: moved units take their (widened) cells in the entity grid
   MotorsAdvanceCoords(*this);  // and moved props theirs
   AdvanceIntelCoords(*this);  // moved intel sources move their circles
-  g_prof.Lap(1);
+  g_prof.Lap(PhaseTimer::kAdvanceCoords);
   ProcessDestroyQueue();
   QueueLateDestroys();
   ApplyFocusArmy();  // Sim::Sync's start: a requested focus army, NoteFocusArmyChanged
@@ -2215,7 +2263,8 @@ void Sim::Tick() {
   SyncStep(collectSync);
   singleStep = false;  // step 14 (sim+0x8e4 = 0)
   frozen = endGame;    // Sync copies sim+0x8dc to sim+0x8dd
-  g_prof.Lap(11);
+  g_prof.Lap(PhaseTimer::kDestroySync);
+  g_prof.EndTick();
   g_prof.Report(tick_);
   static const bool stats = getenv("MOHO64_STATS") != nullptr;
   if (stats && tick_ % 600 == 0) {  // a quick health line per game minute

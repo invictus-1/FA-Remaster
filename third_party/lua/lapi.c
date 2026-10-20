@@ -712,16 +712,24 @@ static void f_call (lua_State *L, void *ud) {
 
 
 
+/* moho64 (MOHO64_PROFILE only): timing hooks around the API's entry points, set by the host's profiler
+   (src/core/profile.cpp); kind 0 = lua_pcall, 1 = lua_resume. NULL (the default): nothing is called. They never
+   touch the state. */
+void (*lua_gpg_prof_enter)(lua_State *L, int kind) = NULL;
+void (*lua_gpg_prof_exit)(lua_State *L) = NULL;
+
 LUA_API int lua_pcall (lua_State *L, int nargs, int nresults, int errfunc) {
   struct CallS c;
   int status;
   ptrdiff_t func;
+  if (lua_gpg_prof_enter) lua_gpg_prof_enter(L, 0);
   lua_lock(L);
   func = (errfunc == 0) ? 0 : savestack(L, luaA_index(L, errfunc));
   c.func = L->top - (nargs+1);  /* function to be called */
   c.nresults = nresults;
   status = luaD_pcall(L, f_call, &c, savestack(L, c.func), func);
   lua_unlock(L);
+  if (lua_gpg_prof_exit) lua_gpg_prof_exit(L);
   return status;
 }
 

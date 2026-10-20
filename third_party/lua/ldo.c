@@ -358,7 +358,20 @@ int luaD_gpg_outermost (lua_State *L) {
   return L->errorJmp != NULL && L->errorJmp->previous == NULL && L != G(L)->mainthread;
 }
 
+extern void (*lua_gpg_prof_enter)(lua_State *L, int kind);  /* lapi.c (MOHO64_PROFILE only) */
+extern void (*lua_gpg_prof_exit)(lua_State *L);
+
+static int lua_resume_unprofiled (lua_State *L, int nargs);
+
 LUA_API int lua_resume (lua_State *L, int nargs) {
+  int status;
+  if (lua_gpg_prof_enter) lua_gpg_prof_enter(L, 1);
+  status = lua_resume_unprofiled(L, nargs);
+  if (lua_gpg_prof_exit) lua_gpg_prof_exit(L);
+  return status;
+}
+
+static int lua_resume_unprofiled (lua_State *L, int nargs) {
   int status;
   lu_byte old_allowhooks;
   lua_lock(L);

@@ -1,9 +1,11 @@
 #include "script/threads.h"
 
 #include <algorithm>
+#include <cctype>
 #include <string>
 
 #include "core/log.h"
+#include "core/profile.h"
 #include "script/script_state.h"
 #include "script/script_handle.h"
 
@@ -117,6 +119,21 @@ ThreadScheduler* ThreadScheduler::From(lua_State* L) {
 }
 
 void ThreadScheduler::Fork(lua_State* caller, int fn, int nargs) {
+  int profSource = -1;
+  if (prof::On()) {  // MOHO64_PROFILE: the thread's kind for the Lua timer, from its function's chunk name
+    lua_Debug ar;
+    lua_pushvalue(caller, fn);
+    if (lua_getinfo(caller, ">S", &ar) && ar.source) {
+      std::string s = ar.source;
+      // (lower case, and '/' for '\\': a chunk read from the host's disk is named by its host path)
+      std::transform(s.begin(), s.end(), s.begin(),
+                     [](unsigned char c) { return c == '\\' ? '/' : static_cast<char>(std::tolower(c)); });
+      auto has = [&](const char* k) { return s.find(k) != std::string::npos; };
+      profSource = has("/ai/") || has("aibrain") || has("platoon") ? prof::kThreadAI
+                   : has("unit") || has("weapon") || has("projectile") || has("effect") ? prof::kThreadUnit
+                                                                                         : prof::kThreadOther;
+    }
+  }
   lua_State* co = lua_newthread(caller);  // pushed on caller
   lua_pushvalue(caller, -1);
   int ref = luaL_ref(caller, LUA_REGISTRYINDEX);
@@ -128,6 +145,7 @@ void ThreadScheduler::Fork(lua_State* caller, int fn, int nargs) {
   t.co = co;
   t.ref = ref;
   t.pendingArgs = nargs;
+  t.profSource = profSource;
   // A new thread runs in the next pass over the threads: a thread forked by a running thread runs
   // later in the same pass, after the threads already due (probe v7: forked at 1603 from a thread,
   // first runs at 1603 after its parent yields; the exe's CTaskThread joins the stage's list
@@ -217,6 +235,7 @@ void ThreadScheduler::Step(Thread& t) {
   int nargs = t.started ? 0 : t.pendingArgs;
   t.started = true;
   g_threadError.clear();
+  if (t.profSource >= 0) prof::NextSource(t.profSource);  // (MOHO64_PROFILE only)
   int rc = lua_resume(t.co, nargs);
   current_ = prev;
   if (rc != 0) {
