@@ -783,7 +783,6 @@ int main(int argc, char** argv) {
   } else {
     for (; done < o.frames && !ui::ExitRequested(); ++done) {
       shown->Frame(1.0 / 60.0);
-      shown->UpdateControls(1.0 / 60.0);  // (no picture here: the controls' frame right after the threads)
       session.Advance(1.0 / 60.0);
       listen();
       sounds.Update(1.0f / 60.0f);

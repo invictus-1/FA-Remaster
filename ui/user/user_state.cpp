@@ -200,12 +200,11 @@ void UserState::Frame(double seconds) {
   frameBegan_ = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
   ++frame_;
   AdvanceTickFraction(seconds);  // (the game's clock first, as the original's SessionFrame)
+  ui_->Update(state_->L(), static_cast<float>(seconds));
   AdvanceCameras(state_->L(), static_cast<float>(seconds));
   DeliverChat(state_->L());
   DeliverConsoleLines(state_->L());  // (the console's lines from other threads: user/keymap.cpp)
   threads_->RunTick(frame_);
 }
-
-void UserState::UpdateControls(double seconds) { ui_->Update(state_->L(), static_cast<float>(seconds)); }
 
 }  // namespace moho::ui

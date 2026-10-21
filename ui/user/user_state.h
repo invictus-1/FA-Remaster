@@ -171,16 +171,9 @@ class UserState {
   };
   PhotoModeState photoMode;
 
-  // One frame: the clock moves on by `seconds`, then the script threads that are due run. The controls' own frame
-  // (OnFrame, UpdateControls) comes after the threads and after the picture, as in the original's app frame
-  // (CScApp::Main 0x8d1470: the session's frame with its script threads, CWldSession::SessionFrame 0x895d80, and the
-  // front end's, 0x8d1b5d; the picture, REN_Frame 0x8d1b75; then the interface's frames, IUIManager slot 5 0x84d160
-  // -> CMauiFrame::Frame 0x7965a0, at 0x8d1bb1). A control a script makes is thus laid out by its first OnFrame
-  // before the next input is read (the window's messages come between two app frames).
+  // One frame: the clock moves on by `seconds`; controls that asked for it get OnFrame; then the
+  // script threads that are due run. (The order of those two within a frame is inferred.)
   void Frame(double seconds);
-  // The controls that asked for it get OnFrame (Frame::Update): after the frame's picture, or in a run without a
-  // window right after Frame.
-  void UpdateControls(double seconds);
 
   // import('/lua/ui/uimain.lua').<fn>() with a traceback on error.
   bool CallUiMain(const char* fn);
