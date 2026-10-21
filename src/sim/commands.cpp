@@ -2560,8 +2560,22 @@ int l_IsMobile(lua_State* L) {
 
 // ---- navigator -------------------------------------------------------------------------------
 
+// Unit::Unit 0x6a5d9f..0x6a5e2f: a unit gets a motion (0x6b7b60, unit+0x4b0) and a navigator (unit+0x54c: the land
+// one 0x5a5790, or the air one 0x5a5800 for MotionType 2) only when its blueprint's MotionType is 1..8 (bp+0x290 - 1
+// above 7 jumps past both, 0x6a5da5..0x6a5dab); RULEUMT_None (a structure, a carrier's external factory, a dummy)
+// has neither. Unit:GetNavigator 0x6cc350 then pushes nil (0x6cc3d8..0x6cc3ef). Ours made a navigator object for
+// any unit: the probe's navigator lines of a carrier's external factory (Naval), and a script's `if nav then` took
+// the other branch; FAF's abort-navigation.lua calls GetNavigator():AbortMove() on every unit it is given.
+static bool UnitHasNavigator(const Unit* u) {
+  return u->motion.bp && u->motion.bp->motionType >= kMotionLand && u->motion.bp->motionType <= kMotionAmphibiousFloating;
+}
+
 int l_GetNavigator(lua_State* L) {
   Unit* u = U(L);
+  if (!UnitHasNavigator(u)) {
+    lua_pushnil(L);
+    return 1;
+  }
   if (!u->navigator) {
     auto nav = std::make_unique<NavigatorObject>();
     nav->unit = u;
