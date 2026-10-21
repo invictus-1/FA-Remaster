@@ -254,6 +254,15 @@ then the second wave.
 It grows linearly: about 30-36 ms per upgrade (31 ms in a run with a quieter machine). Nearly all of it falls in
 the one beat; the next beats are back to normal.
 
+**Must-fix for the optimisation phase (2026-10-21).** The pre-step-2 baseline:
+- the set-up: main 4363eb5, 16 upgrades in one army;
+- the runner `par_bench.py` on a quiet machine (no other sim running), in mp2's scratch bench\par_baseline_4363eb5.
+- **The upgrade beats:** beat 161 is **479 ms** and beat 401 is **413 ms** at n = 1. At n = 32 they are 463 / 405:
+  nothing of this is parallel yet.
+- **The whole run:** 15.5 ms a beat mean, p99 354 ms.
+- **The target:** Chris's "near seamless" with 16 armies upgrading at once. The two halves above (FlattenSkirt's
+  per-vertex `FlattenMapRect` through every path grid, and M28's buildable-location re-check) are where it goes.
+
 **Where an upgrade's time goes** (4 upgrades, read from the hitch log, the call timer and the instruction sampler):
 
 1. **Command stage, about half.** The upgrade task makes the T2 unit, and its OnCreate costs 13-18 ms:
