@@ -118,6 +118,87 @@ The benchmarks:
 - M28 logs four script errors at the start: `IsM28AIPersonality` fails on the two civilian armies, which have no AI
   personality. The errors are M28's, and M28 carries on.
 
+## B9: many factory upgrades starting in one beat (draft, 2026-10-21)
+
+Chris, 2026-10-20 (via the renderer), on the lag at a UEF factory's T2 upgrade: "imagine in a game with 16 ai or
+players all upgrading that is going to cause massive lag we have to make it near seamless and extremely fast." For
+the optimisation phase this is a must.
+
+**The scenario.**
+- The renderer's set-up `_scratch/render/config_m28_setons_r.lua`: seven M28 AIx armies and one player on the
+  rebuilt Seton's Clutch (SETONS_R), with Chris's mods. Run with `--seed 7 --maps visuals/maps`, headless.
+- `--orders orders_<case>.txt`, written by `make_orders.py`:
+  - at beat 100, CreateUnitHPR makes N T1 land factories (ueb0101) in a 4 x 4 grid, 14 apart, round 685, 365 (the
+    renderer's `--upgrade-test` spot);
+  - at beat 160, one Lua line orders all N to upgrade to ueb0201 (IssueClearCommands + IssueUpgrade). The line is
+    repeated every other beat to beat 200 for any factory not yet upgrading, because the army's M28 may give its
+    own orders;
+  - a second wave of N, made at beat 300 round 685, 425, is ordered at beat 400. By then the T2's files and data
+    are already read, so this wave measures the steady cost.
+- **Cases:** N = 1, 4, 8, 16 for army 1; and 16 spread over the eight armies, 2 each.
+- **The number:** the beat after the order (161 and 401), from `MOHO64_PROFILE=1 MOHO64_PROFILE_HITCH=10` (the
+  beat's phases, its Lua by source, its longest calls, and engine sections). Without the orders, both beats take
+  under 10 ms.
+
+**Baseline (main 896c551 plus the hitch log, Ryzen 9 9950X3D shared, not pinned).** Each cell gives the first wave
+then the second wave.
+
+| Upgrades in the beat | The beat | Command stage | Lua threads stage |
+|---|---|---|---|
+| 0 | under 10 ms | - | - |
+| 1 | 46.6 / 45.0 ms | 21.9 / 23.1 | 23.1 / 20.1 |
+| 4 | 189.8 / 193.3 ms | 93.6 / 93.9 | 94.6 / 97.2 |
+| 8 | 303.0 / 281.6 ms | 145.8 / 152.6 | 155.3 / 126.9 |
+| 16, one army | 575.4 / 517.5 ms | 286.4 / 270.7 | 287.2 / 244.7 |
+| 16, two each in eight armies | 523.8 / 284.3 ms | 277.7 / 183.3 | 244.2 / 99.0 |
+
+It grows linearly: about 30-36 ms per upgrade (31 ms in a run with a quieter machine). Nearly all of it falls in
+the one beat; the next beats are back to normal.
+
+**Where an upgrade's time goes** (4 upgrades, read from the hitch log, the call timer and the instruction sampler):
+
+1. **Command stage, about half.** The upgrade task makes the T2 unit, and its OnCreate costs 13-18 ms:
+   - The path: FAF `FactoryUnit.OnCreate` (factoryunit.lua:42) → `StructureUnit.OnCreate` (structureunit.lua:90) →
+     `FlattenSkirt` (structureunit.lua:350) → terrainutils.lua:55, which flattens the skirt vertex by vertex: 81
+     calls of the engine's `FlattenMapRect` per factory.
+   - Each of those calls runs `Navigation::TerrainChanged` (src/sim/entities.cpp → src/sim/navigation.cpp:70). That
+     function updates every path grid the game has built, one grid per footprint kind, 21 at the start and more
+     later.
+   - 324 calls for 4 factories took 57.7 ms: 14.4 ms per factory, about 0.18 ms per call. The heights,
+     NoteHeightChange, AirTerrainChanged and the units' re-snap are 0.4 ms together.
+   - This is C++, but the profile counts it as "Lua" because it runs inside the OnCreate script call.
+   - The rest of the script work is under 1 ms: OnDestroy of the T1, the unit states, buffs, effects. The first T2
+     of the game also loads its skeleton (2-2.7 ms) and its script file (under 0.5 ms).
+2. **Lua threads stage, the other half: M28.** In the same beat, M28 runs one engineer thread per new structure:
+   - `m28engineer.lua:611` → `CheckIfSegmentsStillBuildable` (m28engineer.lua:769), 15-17 ms per upgrade.
+   - It re-checks about 16,700 build locations: `CanBuildAtLocation` (m28engineer.lua:424) about 16,750 times,
+     `GetPositionFromPathingSegments` (697), `IsTableEmpty` (m28utilities.lua:293), M28's own profiler wrapper
+     (m28profiler.lua:52, called although it is off), and the engine's `CanBuildStructureAt` about 16,780 times.
+   - With the call timer on, the engine's `CanBuildStructureAt` was about a tenth of that thread's time. The rest is
+     M28's own Lua.
+   - This part is M28's, not the engine's. Across eight armies it was lower in the second wave: 99 ms for 16
+     against 245 ms in one army.
+
+**What else stands out in the same game** (the same tools, the first 600 beats):
+- **Start-up beats** (Lua threads, M28's map set-up):
+  - Beat 10, 1.0-1.5 s: FAF's NavMesh generator (navgenerator.lua, via navutils.lua:143 from m28map.lua:9246 in
+    M28's brain set-up, m28events.lua:4104), 97% of that beat's samples.
+  - Beats 16 and 17, 0.33-0.46 s: M28Map (m28map.lua:5135 / 8292 / 1917 / 2294) with NavUtils queries
+    (navutils.lua:1038).
+  - Beat 21, 0.78-0.97 s: M28Map (7263 / 6734 / 6791), NavUtils, and M28Engineer's buildable-location search with
+    92,700 `CanBuildStructureAt` calls.
+- **Lua collections:** a full collection took 96-195 ms (at beats 16 and 21 here). Lua 5.0's collector stops
+  everything, and its pause grows with the heap.
+- **New path grids:** the first unit of a new footprint kind builds a path grid for the whole map: 21-144 ms in the
+  game (beats 49, 253, 382, 569), and 3.56 s for the 21 grids made before beat 1 (inside the 22.9 s start-up).
+
+**What this benchmark needs to become part of the suite:**
+- the hitch log in the engine (now a measuring patch, `measure_hitch_log.patch`, not on main);
+- `make_orders.py` and its orders files in `tools/bench/`;
+- a 16-army set-up for the "16 AIs" case: Seton's has 8 start spots, so either a 16-spot test map of our own, or 16
+  factories in fewer armies as here;
+- pinned runs, as the other benchmarks.
+
 ## 2026-10-19/20: first baselines (main 652823a + the instrument, one exe for every row)
 
 B2 and MP1 ran on 2026-10-19 and B1 on 2026-10-20. B1's off and on runs played the same game: the unit counts of
