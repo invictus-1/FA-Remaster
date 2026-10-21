@@ -1920,6 +1920,12 @@ void Sim::WarpUnit(lua_State* L, Unit* u, Vec3 pos, Quat q) {
     if (u->motion.air) AirWarp(*this, u);
     if (layer == kLayerLand) u->motion.surfaceNext = true;
   }
+  // Entity::Warp 0x679210 (called by Unit::Warp at 0x6aa415, after CUnitMotion::Warp and before SetCurrentLayer):
+  // for an entity with intel (+0x1d8, its CIntel), CIntel::Update 0x76e4c0 at the new place, 1 up, with the game
+  // tick (0x67923a..0x67927f): every handle re-rasters there at once and its 6-tick clock restarts. (Its two
+  // AdvanceCoords before that run CIntel::ForceUpdate 0x76e490 at the same place; the exact update ends the same.)
+  // Ours moved the circles only at the next AdvanceIntelCoords, by the r / 3 or 6-tick rule.
+  IntelExactUpdate(*this, u);
   const std::string name = LayerName(layer);
   if (u->layer != name) {
     const std::string old = u->layer;
