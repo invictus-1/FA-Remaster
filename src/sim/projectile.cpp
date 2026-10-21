@@ -453,8 +453,18 @@ void UpdateTracking(Sim& sim, Projectile* p, Quat& q, Vec3& v) {
     if (f.y > 0) {
       float t = (w - pos.y) / f.y;
       if (t < 1) {
+        // (0x69d050..0x69d102: the squared length summed z, y, x; below 1e-6 the shell looks along its quaternion's
+        // up axis, ((y*x - z*w)*2, 1 - (z*z + x*x)*2, (y*z + w*x)*2); otherwise (NaN too) along f normalised by
+        // 0x452af0; both through COORDS_Orient 0x50b480. Ours kept q below 1e-6 and for NaN, and took vm::Orient.)
         f.y *= t;
-        if (Len2(f) >= 1e-6f) q = Orient(f);
+        const float l2 = (f.z * f.z + f.y * f.y) + f.x * f.x;
+        if (9.99999997e-07f > l2) {
+          q = LookQuat((q.y * q.x - q.z * q.w) * 2.0f, 1.0f - (q.z * q.z + q.x * q.x) * 2.0f,
+                       (q.y * q.z + q.w * q.x) * 2.0f);
+        } else {
+          vm::NormalizeExe(f);
+          q = LookQuat(f.x, f.y, f.z);
+        }
       }
     }
   }
