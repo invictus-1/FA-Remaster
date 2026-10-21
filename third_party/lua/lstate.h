@@ -24,8 +24,11 @@
 ** or when reading immutable fields from global objects
 ** (such as string values and udata values). 
 */
+/* moho64: the check that no parallel task touches a Lua state (src/core/workers.h): NULL unless the sim's worker
+   pool has workers or the order check is on; then every API entry (its lua_lock) asks whether a task is running. */
+extern void (*lua_gpg_lock_check)(lua_State *L);
 #ifndef lua_lock
-#define lua_lock(L)	((void) 0)
+#define lua_lock(L)	((void) (lua_gpg_lock_check ? lua_gpg_lock_check(L) : (void) 0))
 #endif
 
 #ifndef lua_unlock

@@ -17,6 +17,9 @@
 #include <string>
 #include <vector>
 
+namespace moho {
+class WorkerPool;
+}
 #include "sim/blueprints.h"
 #include "sim/economy.h"
 #include "sim/entity.h"
@@ -409,6 +412,8 @@ class Sim {
   // (sim.cpp OrderLatency). A host calls it right after it gave them one order (src/app/main.cpp, the --orders verb
   // issuegroup). It only reads the units.
   void ProfileTrackOrder(const std::vector<uint32_t>& ids, const std::string& what);
+  // The worker pool every parallel stage runs through (core/workers.h; MOHO64_THREADS, MOHO64_PAR_CHECK).
+  WorkerPool& workers() { return *workers_; }
   // The command stage (0x958) runs the units' command threads oldest first; a thread suspended on a
   // move and resumed by its navigator is re-linked at the stage's new end (beat_order.md 2.6).
   const std::vector<Unit*>& CommandOrder();
@@ -612,6 +617,7 @@ class Sim {
   // The entity's skeleton: Display.MeshBlueprint -> that mesh blueprint's first LOD MeshName.
   void AttachSkeleton(lua_State* L, Entity* e);
   std::unique_ptr<SkeletonCache> skeletons_;
+  std::unique_ptr<WorkerPool> workers_;  // MOHO64_THREADS (core/workers.h): made once per Sim
   bool armorLoaded_ = false;
   std::map<std::string, std::map<std::string, float>> armorTypes_;  // armour type -> damage type -> multiplier
 

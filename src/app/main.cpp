@@ -20,7 +20,9 @@
 
 #include "core/crash.h"
 #include "core/hostfs.h"
+#include "core/fpenv.h"
 #include "core/log.h"
+#include "core/workers.h"
 #include "core/vfs.h"
 #include "script/mount.h"
 #include "script/script_state.h"
@@ -1166,6 +1168,13 @@ int main(int argc, char** argv) {
     else if (a == "--sim-lua") o.simLua = next();
     else if (a == "--raw-blueprints") SimBlueprints::reflect = false;
     else if (a == "--twice") o.twice = true;
+    else if (a == "--workers-selftest") {  // the worker pool's own check (core/workers.h), with MOHO64_THREADS / _PAR_CHECK
+      WorkerPool pool(ThreadsFromEnvironment(), ParCheckFromEnvironment());
+      SimFpScope fp;  // (as a sim entry does: the calling thread takes tasks too)
+      const bool ok = pool.SelfTest();
+      std::printf("workers self-test: %d thread(s): %s\n", pool.Threads(), ok ? "ok" : "FAILED");
+      return ok ? 0 : 1;
+    }
     else if (a == "--focus") {
       o.focus = std::atoi(next().c_str());
       o.hasFocus = true;

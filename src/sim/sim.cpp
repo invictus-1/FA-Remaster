@@ -30,6 +30,7 @@
 #include "core/hostfs.h"
 #include "core/log.h"
 #include "core/profile.h"
+#include "core/workers.h"
 #include "core/vfs.h"
 #include "script/script_state.h"
 #include "script/threads.h"
@@ -842,8 +843,15 @@ void Sim::JoinFixesHooks(ScriptState& st) { st.SetExtraHooks(FixesHooks()); }
 
 Sim::Sim(Vfs* vfs, std::vector<std::string> hookDirs, std::vector<std::string> modUids)
     : vfs_(vfs), hookDirs_(std::move(hookDirs)), modUids_(std::move(modUids)),
-      skeletons_(std::make_unique<SkeletonCache>(vfs)), commandIds(std::make_shared<CommandIdPool>()) {
+      skeletons_(std::make_unique<SkeletonCache>(vfs)),
+      workers_(std::make_unique<WorkerPool>(ThreadsFromEnvironment(), ParCheckFromEnvironment())),
+      commandIds(std::make_shared<CommandIdPool>()) {
   prof::InstallLuaTimer();  // MOHO64_PROFILE only (core/profile.h): the Lua timer on the sim's thread
+  if (workers_->Threads() > 1 || workers_->Check().mode != ParCheck::kOff)
+    Logf(LogLevel::Info, "moho64: the sim's worker pool: %d thread(s)%s", workers_->Threads(),
+         workers_->Check().mode == ParCheck::kShuffle   ? ", order check: shuffle (tasks on this thread)"
+         : workers_->Check().mode == ParCheck::kReverse ? ", order check: reverse (tasks on this thread)"
+                                                        : "");
 }
 
 Sim::~Sim() {

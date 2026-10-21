@@ -737,6 +737,7 @@ static void f_call (lua_State *L, void *ud) {
    (src/core/profile.cpp); kind 0 = lua_pcall, 1 = lua_resume. NULL (the default): nothing is called. They never
    touch the state. */
 void (*lua_gpg_prof_enter)(lua_State *L, int kind) = NULL;
+void (*lua_gpg_lock_check)(lua_State *L) = NULL;  /* lstate.h lua_lock (src/core/workers.h) */
 void (*lua_gpg_prof_exit)(lua_State *L) = NULL;
 /* (and a collection's start (0) and end (1): lgc.c luaC_collectgarbage; MOHO64_PROFILE_HITCH only) */
 void (*lua_gpg_prof_gc)(lua_State *L, int end) = NULL;
