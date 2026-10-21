@@ -88,6 +88,10 @@ class Entity : public ScriptObject {
   float fractionComplete = 1;  // units under construction; props being reclaimed
   bool dead = false;
   bool destroyQueued = false;  // Destroy() was called; OnDestroy runs when the sim processes the queue
+  // ui REQUESTS 47. The original's entity+0x9a: set by Entity:RequestRefreshUI (0x68bb60) and Entity::Kill (0x679ad8),
+  // copied into the beat's sync by Entity::Sync's writer (0x67a290) and cleared (0x67a10b). refreshUI is the pending
+  // flag; refreshUISynced is the beat's copy, which the views read (Sim::SyncStep). Nothing in the sim reads either.
+  bool refreshUI = false, refreshUISynced = false;
   CollisionShape shape;
   // The collision primitive follows its entity in Entity::AdvanceCoords 0x678f10 only (step 13, vt+0x84): once
   // the entity has moved in a beat (Sim::HoldShape) the shape still stands at the transform the beat began with

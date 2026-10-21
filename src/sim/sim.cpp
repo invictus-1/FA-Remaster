@@ -1969,7 +1969,25 @@ void Sim::ExecuteDebugCommand(lua_State* L, const std::string& text, Vec3 mouse,
 // the scripts' ResetSyncTable() empties it for the next beat. (Not built: the statistics' Children: only the debug
 // window /lua/debug/ArmyStats.lua reads them.)
 // keep: the bytes go to pendingSync_ for TakeSync (collectSync for a beat, always for the setup's Sync).
+void Sim::RequestRefreshUI(Entity* e) {
+  if (e->refreshUI) return;
+  e->refreshUI = true;
+  refreshPending_.push_back(e->id);
+}
+
 void Sim::SyncStep(bool keep) {
+  // The entities' refresh-UI flag (entity.h): last beat's copy is cleared, and this beat's pending flags become this
+  // beat's copy (Entity::Sync's writer 0x67a290 copies +0x9a into the sync and clears it, 0x67a10b).
+  for (uint32_t id : refreshSynced_)
+    if (Entity* e = FindEntity(id)) e->refreshUISynced = false;
+  refreshSynced_.clear();
+  for (uint32_t id : refreshPending_)
+    if (Entity* e = FindEntity(id)) {
+      e->refreshUI = false;
+      e->refreshUISynced = true;
+      refreshSynced_.push_back(id);
+    }
+  refreshPending_.clear();
   lua_State* L = state_->L();
   const int top = lua_gettop(L);
   lua_pushstring(L, "Sync");

@@ -444,6 +444,7 @@ int l_Kill(lua_State* L) {
   Entity* e = CheckObject<Entity>(L, 1);
   Sim& sim = *S(L);
   if (e->dead) return 0;
+  sim.RequestRefreshUI(e);  // (Entity::Kill sets entity+0x9a too, 0x679ad8)
   Entity* inst = OptEntity(L, 2);
   Entity* k = inst && inst->army ? inst : nullptr;
   std::string type = lua_isstring(L, 3) ? lua_tostring(L, 3) : "";

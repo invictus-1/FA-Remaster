@@ -401,6 +401,7 @@ class Sim {
   Platoon* CreatePlatoon(lua_State* L, Army* army, const std::string& name, const std::string& plan);
   Entity* FindEntity(uint32_t id) const;
   void QueueDestroy(Entity* e);  // Entity:Destroy(): OnDestroy and removal happen at the end of the tick
+  void RequestRefreshUI(Entity* e);  // Entity:RequestRefreshUI / Entity::Kill (entity.h refreshUI; ui REQUESTS 47)
   // For what dies with a command object (a ferry beacon): the original deletes an emptied command only after
   // the beat's destroy queue has run, so the entity is queued then and goes at the end of the beat after.
   void QueueDestroyAfterBeat(Entity* e);
@@ -628,6 +629,7 @@ class Sim {
   uint32_t propSerial_ = 0;
   std::vector<Entity*> destroyQueue_;
   void ProcessDestroyQueue();
+  std::vector<uint32_t> refreshPending_, refreshSynced_;  // entity ids with Entity::refreshUI / refreshUISynced set
   std::vector<uint32_t> lateDestroy_;  // entity references (QueueDestroyAfterBeat)
   void QueueLateDestroys();
 

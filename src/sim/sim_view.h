@@ -87,6 +87,9 @@ struct UnitView {
   bool beingBuilt = false;
   bool selectable = true;  // not in the 'UnSelectable' state
   bool paused = false;     // Unit:SetPaused (the same flag as UnitStateView::paused)
+  // ui REQUESTS 47: this beat's sync asks the interface to refresh the unit's UI (Entity:RequestRefreshUI, or the
+  // unit was killed: the original's entity+0x9a in the beat's sync). FAF calls it when an enhancement finishes.
+  bool refreshUI = false;
   int queueLength = 0;     // commands in its queue
   int headCommand = -1;    // the first one's type (the engine's command numbers), -1 = none
   // what it can do this beat: RULEUCC_ and RULEUTC_ bits (the blueprint's, as scripts changed them since); the

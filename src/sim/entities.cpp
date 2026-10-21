@@ -772,6 +772,11 @@ int l_SetScale(lua_State* L) {
 // Enemies / Neutrals('Always' | 'Never' | 'Intel'): what the entity is drawn as, how large, and for whom. Kept
 // for a host that draws the game (EntityViews, PropEvents, UnitView::mesh); the simulation does not go by them
 // (an entity's bones stay those of its blueprint's mesh).
+// Entity:RequestRefreshUI() 0x68bb60: sets entity+0x9a for the beat's sync (entity.h refreshUI; ui REQUESTS 47)
+int l_RequestRefreshUI(lua_State* L) {
+  S(L)->RequestRefreshUI(CheckObject<Entity>(L, 1));
+  return 0;
+}
 int l_SetMesh(lua_State* L) {
   Entity* e = E(L);
   e->mesh = lua_isstring(L, 2) ? lua_tostring(L, 2) : "";
@@ -1296,6 +1301,7 @@ void RegisterEntityBindings(lua_State* L) {
   SetMethod(L, "Entity", "GetScale", l_GetScale);
   SetMethod(L, "Entity", "SetScale", l_SetScale);
   SetMethod(L, "Entity", "SetMesh", l_SetMesh);
+  SetMethod(L, "Entity", "RequestRefreshUI", l_RequestRefreshUI);
   SetMethod(L, "Entity", "SetDrawScale", l_SetDrawScale);
   SetMethod(L, "Entity", "SetVizToFocusPlayer", l_SetVizTo<0>);
   SetMethod(L, "Entity", "SetVizToAllies", l_SetVizTo<1>);

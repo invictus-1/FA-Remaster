@@ -3,6 +3,21 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 47: Entity:RequestRefreshUI for the interface — done (UnitView::refreshUI)
+
+`UnitView::refreshUI` (sim/sim_view.h) is true in the beat whose sync carries the request. The original keeps it at
+entity+0x9a:
+- Entity:RequestRefreshUI (0x68bb60) and Entity::Kill (0x679ad8) set it;
+- Entity::Sync's writer copies it into the beat's sync (0x67a290) and clears it (0x67a10b).
+
+Ours does the same with a pending flag (`Entity::refreshUI`) and the beat's copy (`Entity::refreshUISynced`):
+- Sim::SyncStep clears last beat's copies and turns this beat's pending flags into copies;
+- paused beats sync too, as in the original;
+- nothing in the simulation reads either.
+
+FAF calls RequestRefreshUI when an enhancement finishes, so read `refreshUI` in the beat's views and rebuild the unit's
+panel then.
+
 ## visuals (by message, 2026-10-21): the Izanagi holding still while Divine Judgment fires — answered
 
 Chris's design: the Izanagi (MIA0401, a winged air unit) stops and holds in the air for the bow opening, the 3 s
