@@ -3119,11 +3119,22 @@ int AttackStep(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
           Vec3 v{tp.x - u->position.x, tp.y - u->position.y, tp.z - u->position.z};
           const Quat& q = u->orientation;
           const float fx = (q.w * q.y + q.z * q.x) * 2.0f, fz = 1.0f - (q.y * q.y + q.x * q.x) * 2.0f;
-          const float ang = (v.z * fx - fz * v.x > 0.0f) ? aa * 0.017453292f : aa * -0.017453292f;
-          double s, c;
-          dmath::SinCos(static_cast<double>(ang), &s, &c);
-          const float sn = static_cast<float>(s), cs = static_cast<float>(c);
-          u->motion.faceDir = Norm(Vec3{v.x * cs + v.z * sn, v.y, v.z * cs - v.x * sn});
+          // (0x5f3cd4: the direction's normalised copy 0x44f7e0, ((x*x + y*y) + z*z), above 0 times 1 / len, else
+          // zero; the side test and the turn take it, 0x5f3cd9..0x5f3cfd. The turn is the quaternion 0x570750 of the
+          // half angle about (0, 1, 0) (w = cosf, xyz = axis x sinf), applied by 0x452d40 (0x5f3d73), and SetFacing
+          // 0x6b8590 normalises the result (0x452af0). Ours turned the raw direction by the full angle's sine and
+          // cosine.)
+          Vec3 n{0.0f, 0.0f, 0.0f};
+          if (const float l = std::sqrt((v.x * v.x + v.y * v.y) + v.z * v.z); l > 0.0f) {
+            const float inv = 1.0f / l;
+            n = {v.x * inv, inv * v.y, inv * v.z};
+          }
+          const float ang = (n.z * fx - fz * n.x > 0.0f) ? aa * 0.017453292f : aa * -0.017453292f;
+          const float h = ang * 0.5f, sn = dmath::Sin(h);
+          const Quat r{0.0f * sn, 1.0f * sn, sn * 0.0f, dmath::Cos(h)};
+          Vec3 f = RotateM(r, n);
+          vm::NormalizeExe(f);
+          u->motion.faceDir = f;
         }
         return 10;
       }
