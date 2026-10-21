@@ -105,10 +105,8 @@ uint64_t* PushCategory(lua_State* L);
 const uint64_t* ToCategory(lua_State* L, int idx);
 bool CategoryHas(const uint64_t* bits, int entityIndex);
 // Number of 64-bit words in a category set of L's blueprints (SimBlueprints::From(L)); parse an expression
-// ("TECH1 LAND", "A + B", ...). The form without a state answers for the last blueprints copied in the process
-// (the interface's, ui/: it copies the session's blueprints after the sim, so the two agree); engine code uses L's.
+// ("TECH1 LAND", "A + B", ...).
 int CategoryWordCount(lua_State* L);
-int CategoryWordCount();
 bool ParseCategory(lua_State* L, const char* expr, std::vector<uint64_t>& out);
 
 }  // namespace moho

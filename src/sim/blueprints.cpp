@@ -17,7 +17,6 @@ namespace {
 
 const char* kRecordKey = "moho64.registered";
 const char kBpsKey = 0;
-int g_lastWords = 1;  // the last blueprints copied in this process: only for CategoryWordCount() (ui/)
 
 std::string Lower(std::string s) {
   for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -221,7 +220,6 @@ void ParseNames(lua_State* L, const char* expr, std::vector<uint64_t>& out) {
 }
 
 }  // namespace
-int CategoryWordCount() { return g_lastWords; }
 int CategoryWordCount(lua_State* L) { return SimBlueprints::From(L)->CategoryWords(); }
 bool ParseCategory(lua_State* L, const char* expr, std::vector<uint64_t>& out) {
   ParseNames(L, expr, out);
@@ -570,7 +568,6 @@ void SimBlueprints::CopyToSim(lua_State* rules, lua_State* sim) {
   for (const auto& bp : all_)
     if (bp.entityIndex >= 0) entities_[bp.entityIndex] = &bp;
   words_ = std::max(1, (EntityCount() + 63) / 64);
-  g_lastWords = words_;
   // Categories the engine defines itself.
   for (const auto& bp : all_) {
     if (bp.kind == BpKind::Unit) {
