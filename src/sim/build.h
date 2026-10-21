@@ -33,6 +33,9 @@ struct BuildTask : public ScriptObject {
   bool targetPastDeath = false;  // (UnitCommand::targetPastDeath)
   uint32_t targetFakeId = 0;     // (UnitCommand::targetFakeId)
   uint32_t targetBlipRef = 0;    // (UnitCommand::targetBlipRef: the order's blip itself, which outlives its unit)
+  // when its listener was linked into the head command's list (a repair task's ctor links it there, cmd+0x34: for a
+  // guard's repair child that is the Guard order's list; Sim::walkSeqNext, the counter of those links)
+  uint64_t linkSeq = 0;
   uint32_t targetId = 0;  // the unit being worked on (focus)
   bool started = false;   // OnStartBuild ran for targetId
   bool completed = false; // the work finished (the task's done state: mobile 5, factory 4, upgrade 3)

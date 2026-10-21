@@ -2305,6 +2305,7 @@ Unit* AssistCandidate(Sim& sim, Unit* U, GuardData& g) {
 
 // ctor 0x5f8c80
 void InitRepair(Sim& sim, Unit* B, BuildTask& t, Unit* target, bool silo) {
+  t.linkSeq = ++sim.walkSeqNext;  // (the ctor links its listener at the end of the head command's list)
   t.order = "Repair";
   t.goalId = EntityRef(target);
   t.silo = silo;
@@ -3024,6 +3025,17 @@ void GuardRepairChildrenCommandEvent(Sim& sim, UnitCommand& c, Unit* self) {
   lua_State* L = sim.L();
   std::vector<Unit*> holders(c.units.begin(), c.units.end());
   std::sort(holders.begin(), holders.end(), [](const Unit* a, const Unit* b) { return a->id < b->id; });
+  // The event goes down the command's listener list in link order (0x6e94cf..0x6e954b: from the head's first node,
+  // each node moved to the end before it is called), and a repair child's listener is linked at the end when the child
+  // is made: the children are told, and their suspended threads re-linked, in the order they were made. Seen: MP1
+  // 7503, army 0's engineers 0x5a and 0x28, whose repair children of one Guard were made in that order at 6859: the
+  // original's command stage runs 0x5a before 0x28 from then on, and at 7769 0x5a takes the spot (777, 161) beside
+  // 0x2f first, so 0x28 goes to (777, 153) by the south; ours went by unit id and gave 0x28 the north spot.
+  auto seqOf = [](const Unit* h) -> uint64_t {
+    const BuildTask* gt = h->task;
+    return gt && gt->gdata && gt->gdata->child ? gt->gdata->child->linkSeq : 0;
+  };
+  std::stable_sort(holders.begin(), holders.end(), [&](const Unit* a, const Unit* b) { return seqOf(a) < seqOf(b); });
   for (Unit* h : holders) {
     if (h == self || !Alive(h) || h->commands.empty() || h->commands.front().get() != &c) continue;
     BuildTask* gt = h->task;
