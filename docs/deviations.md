@@ -256,6 +256,28 @@ says `the rules are loaded again with the engine's script fixes`, about one seco
   thread for a dead one, change.
 - **Tested:** in the same runs as 7 (it is on in every one); the hook loads with no error in the B2 session.
 
+### 9. A trash bag's order (2026-10-21)
+
+- **What is broken:** FAF's `TrashBag` (`lua/system/trashbag.lua`: every unit, projectile and effect keeps its
+  objects in one) is a weak-valued table.
+  - `Add` puts an object at `table.getn(bag) + 1`. Lua 5.0's `getn` counts from 1 to the first nil, and an entry the
+    collector cleared (an object nothing else held) is such a nil.
+  - `Destroy` destroys what is left in the table's own order.
+
+  So where a new object went, and in what order a dying unit's entities, threads and effects were destroyed, depended
+  on when the collector last ran. Entity destroy order is the order of `OnDestroy` and of the destroy queue.
+- **What we do:** `data/fixes/hook/lua/system/trashbag.lua` (our own code).
+  - A bag numbers its objects itself, 1, 2, 3, ... from its last `Destroy`, with the count kept in a weak-keyed table
+    beside the bag, not in it.
+  - `Destroy` goes through them in that order, including any an object's `Destroy` adds meanwhile.
+  - Anything a script put in without `Add` goes last, in the table's order, as before.
+- **Why it is safe, what it changes:**
+  - A bag with no cleared entry puts every object where FAF's would and destroys them in the same order.
+  - A cleared entry (the object is garbage, gone or destroyed already) no longer moves later objects.
+  - `Add` gets cheaper (no counting).
+- **Tested:** in the same runs as 7; the hook loads ("Hooked /lua/system/trashbag.lua") with no error in the B2
+  session.
+
 ## Looked broken, left alone
 
 ### M28: `IsM28AIPersonality` on the civilian armies (m28conditions.lua:4291)
