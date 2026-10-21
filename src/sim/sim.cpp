@@ -1972,7 +1972,7 @@ void Sim::ExecuteDebugCommand(lua_State* L, const std::string& text, Vec3 mouse,
 void Sim::RequestRefreshUI(Entity* e) {
   if (e->refreshUI) return;
   e->refreshUI = true;
-  refreshPending_.push_back(e->id);
+  refreshPending_.push_back(EntityRef(e));  // (the handle FindEntity takes, not the game id)
 }
 
 void Sim::SyncStep(bool keep) {

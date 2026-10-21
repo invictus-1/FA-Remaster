@@ -629,7 +629,7 @@ class Sim {
   uint32_t propSerial_ = 0;
   std::vector<Entity*> destroyQueue_;
   void ProcessDestroyQueue();
-  std::vector<uint32_t> refreshPending_, refreshSynced_;  // entity ids with Entity::refreshUI / refreshUISynced set
+  std::vector<uint32_t> refreshPending_, refreshSynced_;  // entity handles (EntityRef) with refreshUI / refreshUISynced set
   std::vector<uint32_t> lateDestroy_;  // entity references (QueueDestroyAfterBeat)
   void QueueLateDestroys();
 
