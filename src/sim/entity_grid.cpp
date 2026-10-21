@@ -24,6 +24,9 @@ int ListOf(const Entity* e) {
 void EntityGrid::Init(int mapW, int mapH) {
   w_ = std::max(1, mapW >> 2);
   h_ = std::max(1, mapH >> 2);
+  shift_ = 0;
+  while ((2 << shift_) <= w_) ++shift_;  // (bsr)
+  mask_ = static_cast<uint32_t>(w_) * static_cast<uint32_t>(h_) - 1u;
   for (auto& l : lists_) l.assign(static_cast<size_t>(w_) * h_, {});
 }
 
@@ -33,9 +36,9 @@ void EntityGrid::Remove(Entity* e) {
     e->gridW = e->gridH = 0;
     return;
   }
-  for (int z = e->gridZ0; z < e->gridZ0 + e->gridH && z < h_; ++z)
-    for (int x = e->gridX0; x < e->gridX0 + e->gridW && x < w_; ++x) {
-      auto& c = lists_[k][static_cast<size_t>(z) * w_ + x];
+  for (int z = e->gridZ0; z < e->gridZ0 + e->gridH; ++z)
+    for (int x = e->gridX0; x < e->gridX0 + e->gridW; ++x) {
+      auto& c = lists_[k][Cell(x, z)];
       auto it = std::find(c.begin(), c.end(), e);
       if (it != c.end()) c.erase(it);
     }
@@ -52,8 +55,12 @@ void EntityGrid::Place(Entity* e, int cx0, int cz0, int w, int h) {
   e->gridZ0 = static_cast<uint16_t>(cz0);
   e->gridW = static_cast<uint16_t>(w);
   e->gridH = static_cast<uint16_t>(h);
-  for (int z = cz0; z < cz0 + h && z < h_; ++z)
-    for (int x = cx0; x < cx0 + w && x < w_; ++x) lists_[k][static_cast<size_t>(z) * w_ + x].push_back(e);
+  // (every cell of the span, through the mask: an entity off the map, an aircraft past its edge, is in the lists of
+  // the cells its index aliases. Seen (probe mp1_7224): MP1 7223, army 3's spy plane 0x300090 (a SizeSphere of 2.7)
+  // flies at x 1033 over the 1024 map; army 0's Coronas' shells cross its sphere and the original's line march finds
+  // it, both hit and it dies at 7224. Ours left it out of every cell and the shells flew through it.)
+  for (int z = cz0; z < cz0 + h; ++z)
+    for (int x = cx0; x < cx0 + w; ++x) lists_[k][Cell(x, z)].push_back(e);
 }
 
 void EntityGrid::Gather(float x0, float z0, float x1, float z1, int mask, std::vector<Entity*>* out) {
@@ -153,8 +160,8 @@ void EntityGrid::GatherLine(float fromX, float fromZ, float toX, float toZ, std:
   for (int guard = 0; guard < 200000; ++guard) {
     if (static_cast<float>(ix) > ex || static_cast<float>(iz) > ez) break;
     const int cx = ix ^ mx, cz = iz ^ mz;
-    if (cx >= 0 && cx < w_ && cz >= 0 && cz < h_) {
-      const size_t idx = static_cast<size_t>(cz) * w_ + cx;
+    {  // (0x4fd2a2..0x4fd2be: ((cz << shift) + cx) & mask, no bounds)
+      const size_t idx = Cell(cx, cz);
       for (int k : {2, 0}) {  // (0x4fd2c1: the third list first, then the units)
         const auto& l = lists_[k][idx];
         for (auto it = l.rbegin(); it != l.rend(); ++it)

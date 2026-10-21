@@ -36,6 +36,15 @@ class EntityGrid {
 
  private:
   int w_ = 0, h_ = 0;
+  // EntityOccupationManager 0x4fcd20: shift = bsr(W) (+0xc), mask = W * H - 1 (+8). A cell's list is at
+  // ((z << shift) + x) & mask, and an entity's own cells (CollisionShape::Add 0x4fd420 / Remove 0x4fd490) and the line
+  // march (0x4fd200) take that index for any cell, the map's or not: a cell east of the last column is a cell of the
+  // next row, one south of the last row one of the first. Only the rect queries (0x4fd000) clip to W and H.
+  int shift_ = 0;
+  uint32_t mask_ = 0;
+  size_t Cell(int x, int z) const {
+    return static_cast<size_t>(((static_cast<uint32_t>(z) << shift_) + static_cast<uint32_t>(x)) & mask_);
+  }
   // per cell; the back is the head. 0: units (0x100), 1: props (0x200), 2: shells (0x400) and shields, beams,
   // script entities (0x800)
   std::vector<std::vector<Entity*>> lists_[3];
