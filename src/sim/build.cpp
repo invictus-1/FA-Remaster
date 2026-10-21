@@ -769,7 +769,7 @@ void EndPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
     PushObject(L, e);
     sim.CallMethod(L, u, "OnStopReclaim", 1);
   }
-  if (!u->builderArms.empty()) SetArmAimTarget(sim, u, Vec3{0, 0, 0});
+  SetArmAimTarget(sim, u, Vec3{0, 0, 0});  // (the dtor 0x620280: the builder unit+0x554, if any, SetAimTarget(0) +0x9f..+0xd6)
   u->unitStates.erase("Reclaiming");
   u->focusId = 0;
   u->workProgress = 0;
@@ -945,7 +945,16 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
       // 0x61ef60 with the order's CAiTarget), and its dtor's BeingReclaimed clear (CUnitReclaimTask dtor 0x620280:
       // the target's vt+0x10, no unit for a blip) leaves the unit alone.
       c.targetViaBlip = false;
-      if (!u->builderArms.empty()) SetArmAimTarget(sim, u, tp);
+      // 0x61f5d7..0x61f619: the unit's builder (unit+0x554, CAiBuilderImpl) is told the target's position (vt+0x3c
+      // SetAimTarget), whether or not the unit has builder arm controllers; a non-zero aim calls the script's
+      // OnPrepareArmToBuild (SetArmAimTarget). Seen (probes mp1_7173 / mp1_7173b): MP1 7173, army 6's Aeon engineer
+      // 0x600096 (ual0105: a builder without arm controllers) starts reclaiming a site prop while it still brakes;
+      // ConstructionUnit.OnPrepareArmToBuild finds it IsMoving and calls navigator:AbortMove() (0x5a5d01), which brakes
+      // it once more from where the beat found it (SetWaypoints(0, 0) -> Update(3)): its hull turns 6e-5 rad and its z
+      // lands a float step lower. Ours skipped the call for an armless builder, braked only at 7172, and from 7183 the
+      // original's engineer flickers in height by a float step, so army 6's 0x6000ad's continuation path at 7186 counts
+      // it as a mover (UnitIsBlocked's filter 0x62eee9) and runs through its cells (MP1 7187).
+      SetArmAimTarget(sim, u, tp);
       if (!c.reclaimStarted) {
         c.reclaimStarted = true;
         PushObject(L, e);
@@ -3623,7 +3632,7 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
     if (t.type == CommandType::Reclaim) {
       // CUnitReclaimTask's dtor 0x620280: the arm let go (SetAimTarget(0, 0, 0)); a walk still under way gives its
       // reserved ground back
-      if (!u->builderArms.empty()) SetArmAimTarget(sim, u, Vec3{});
+      SetArmAimTarget(sim, u, Vec3{});  // (through the builder unit+0x554, 0x62031f, as the tick's aim)
       if (t.moving) {
         t.moving = false;
         GroundFreeRect(sim, u);
