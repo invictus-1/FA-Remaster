@@ -79,6 +79,13 @@ The questions as they were put:
 4. **First-run prefs import.** moho64ui reads the shared `Game.prefs` once, read only, to take over the player's
    profiles (`ui\app\main.cpp:381`). Keep it (read only, nothing written), or never touch the shared file at all?
 
+5. **FAF's own extra units** (2026-10-21, Chris: "For the faf extra units I'd say yes"). Units that exist only in
+   FAF's gamedata (e.g. DELK002 Cougar, the support factories ZEB9501-9503 / ZEB9601-9603) count as vanilla for what
+   ships: their remasters stay in visuals/work and are mounted like the retail units'. They appear in a player's game
+   only when the player's FAF install provides their blueprints (decision 1). Open for each remaster: if it was built
+   from FAF's own mesh or texture files rather than made from scratch, it shares the licence question of FAF's
+   scripts (FAForever/fa carries no licence).
+
 ### 3.2 Gaps to build (no decision needed, but a shipped build needs them)
 - [engine] **Install finder**: none exists (no registry, `libraryfolders.vdf` or browse dialog anywhere). It belongs in
   `src\core` so all three programs share it, with a default init file of our own that mounts: our overlay, our assets,
