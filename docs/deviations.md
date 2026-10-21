@@ -205,6 +205,14 @@ says `the rules are loaded again with the engine's script fixes`, about one seco
   - With `MOHO64_REAL_PROFILE_CLOCK=1` the Lua part differs again in two of three Transports runs (163 and 191 beats).
   - The gate's replays play with the fixes off, so they are unchanged. With 6-10 built in, the 15 gate replays at n = 1
     and n = 32 have fingerprints identical to main's build on every beat (the MP1 cut, 3,000 beats, too).
+- **In the gate** (the original's replays, fixes off): `MOHO64_PROFILE_CLOCK=game` gives the game time with the fixes
+  off too. The gate sets it in every mode, so the replays' Lua objects no longer depend on how busy the PC is.
+  - It changes no replay's sim state, so the marks hold. The 15 gate replays with the real clock and with the game
+    clock, at once, under gate load (8 runs together): the state is identical on every beat in all 15. With the real
+    clock, the object serial differed in 10 of them.
+  - The gate's n = 1 / n = cores pairs with the game clock, under the same load: heap and object serial identical on
+    every beat in all 15 (the real clock in the same test: Transports' heap 187 beats apart).
+  - A player who plays back a replay keeps the original's clock.
 
 ### 7. The energy manager's walks (2026-10-21)
 

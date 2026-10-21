@@ -267,12 +267,15 @@ int l_GetGameTimeSeconds(lua_State* L) {
 // profile clock"): FAF's sim scripts only log and profile with it, but its sim-callback timer (SimCallbacks.lua
 // DoCallback: a log line, and the first time SimUtils' lazy CommandSourceToArmyMap table, for a callback over 5 ms)
 // made the sim's Lua heap and its object serials depend on how fast the PC was. MOHO64_REAL_PROFILE_CLOCK=1 gives
-// the PC's clock back, for profiling scripts.
+// the PC's clock back, for profiling scripts. MOHO64_PROFILE_CLOCK=game gives the game time with the fixes off too:
+// the gate sets it for the original's replays, whose sim state it leaves unchanged (only logs and profiles read the
+// clock; checked on the 15 gate replays), so that their Lua objects no longer depend on how busy the PC is.
 int l_GetSystemTimeSecondsOnlyForProfileUse(lua_State* L) {
   using namespace std::chrono;
   static const auto t0 = steady_clock::now();
   static const bool real = getenv("MOHO64_REAL_PROFILE_CLOCK") && std::atoi(getenv("MOHO64_REAL_PROFILE_CLOCK")) != 0;
-  if (S(L)->fixes && !real) {
+  static const bool game = getenv("MOHO64_PROFILE_CLOCK") && std::strcmp(getenv("MOHO64_PROFILE_CLOCK"), "game") == 0;
+  if ((S(L)->fixes || game) && !real) {
     lua_pushnumber(L, S(L)->tick() * 0.1f);  // (GetGameTimeSeconds)
     return 1;
   }
