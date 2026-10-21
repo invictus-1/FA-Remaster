@@ -296,8 +296,9 @@ void StrategicIcons::AddUnder(int icon, Vec3 position, float alpha) {
 void StrategicIcons::Add(const Kind* kind, Vec3 position, Vec3 color, bool selected, bool blip, bool known) {
   if (kind->icon < 0) return;
   const int icon = blip && !known && kind->iconBlip >= 0 ? kind->iconBlip : selected && kind->iconSelected >= 0 ? kind->iconSelected : kind->icon;
-  // how far it has come in: nothing below (1 - fadeShare) of its distance, all of it from the distance on
-  const float distance = Length(position - view_.eye);
+  // how far it has come in: nothing below (1 - fadeShare) of its distance, all of it from the distance on ([lodscale]
+  // the distance times the camera's LOD scale, as the original's RenderStrategicIcons 0x85ba52 reads the scaled row)
+  const float distance = Length(position - view_.eye) * view_.lodScale;
   const float from = kind->fadeIn * (1 - fadeShare);
   float alpha = kind->fadeIn > from ? (distance - from) / (kind->fadeIn - from) : (distance >= from ? 1.0f : 0.0f);
   if (blip || always) alpha = 1;  // (a blip is all there is to see of the unit; or the player wants them at every distance)
