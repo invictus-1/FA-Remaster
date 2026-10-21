@@ -2147,6 +2147,8 @@ void Sim::Tick() {
           q.x *= inv;
           q.y *= inv;
           q.z *= inv;
+        } else {
+          q = Quat{0.0f, 0.0f, 0.0f, 0.0f};  // (0x4edb40: a length of 1e-6 or less gives zero)
         }
       }
     }

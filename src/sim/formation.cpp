@@ -786,7 +786,7 @@ void Update(Formation& F) {
           n.angleSet = true;
         }
         n.d = Dist2D(m->position.x, m->position.z, p.x, p.z);
-        minD = std::min(minD, n.d);
+        if (!(n.d > minD)) minD = n.d;  // (0x59b8fe..0x59b90d: fcompi / ja: a NaN distance is taken)
         maxD = std::max(maxD, n.d);
         float rx, rz;
         RawPosition(F, m, &g, &rx, &rz);

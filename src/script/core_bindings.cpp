@@ -896,8 +896,24 @@ void RegisterCoreBindings(ScriptState& state) {
 // rounded value. pow goes to the library's double version (0xa8e0e0 -> 0xaa93c0 with exceptions masked), sqrt is
 // fsqrt, mod is fprem, deg and rad multiply by a float constant.
 extern "C" {
-float moho_lua_acos(float x) { return moho::dmath::Acos(x); }
-float moho_lua_asin(float x) { return moho::dmath::Asin(x); }
+// acos / asin (the CRT's x87 cores _CIacos 0xa8dd28 / _CIasin 0xa8de78): a NaN stays as it is, outside [-1, 1]
+// (and +-inf) the x87 indefinite -QNaN (0xa8ddaa: fld [0xf3f200]), +-1 exactly as dmath's ends
+static float LuaIndefinite() {
+  const uint32_t b = 0xffc00000u;
+  float f;
+  std::memcpy(&f, &b, sizeof f);
+  return f;
+}
+float moho_lua_acos(float x) {
+  if (x != x) return x;
+  if (x > 1.0f || x < -1.0f) return LuaIndefinite();
+  return moho::dmath::Acos(x);
+}
+float moho_lua_asin(float x) {
+  if (x != x) return x;
+  if (x > 1.0f || x < -1.0f) return LuaIndefinite();
+  return moho::dmath::Asin(x);
+}
 float moho_lua_exp(float x) {
   if (!(x == x)) return x;
   const float t = static_cast<float>(static_cast<double>(x) * 1.4426950408889634074);

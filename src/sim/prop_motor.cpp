@@ -134,6 +134,8 @@ void UpdateFall(Sim& sim, Entity* e, Motor& m) {
     mx *= inv;
     my *= inv;
     mz *= inv;
+  } else {  // 0x452af0 (0x50cb9f): a length of 1e-6 or less gives the zero vector
+    mx = my = mz = 0.0f;
   }
   Quat r;
   r.w = uz * mz + ux * mx + uy * my;

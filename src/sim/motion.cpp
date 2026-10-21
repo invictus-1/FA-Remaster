@@ -1339,7 +1339,14 @@ void BrakeSpline(Sim& sim, Unit* u, int mode) {
     const float k = s / std::sqrt(fl2);
     V = Vec3{F.x * k, k * F.y, k * F.z};
   }
-  if (s > 0 && (lm.x * F.x + lm.y * F.y + lm.z * F.z) / s < 0) V = Vec3{-V.x, -V.y, -V.z};
+  {  // the velocity times 1 / s (FLT_MAX parts at s == 0), its dot with F summed y, z, x (0x5b2889..0x5b2997)
+    Vec3 un{3.40282347e+38f, 3.40282347e+38f, 3.40282347e+38f};
+    if (s != 0.0f) {
+      const float inv = 1.0f / s;
+      un = {lm.x * inv, lm.y * inv, lm.z * inv};
+    }
+    if (0.0f > (un.y * F.y + un.z * F.z) + un.x * F.x) V = Vec3{-0.0f - V.x, -0.0f - V.y, -0.0f - V.z};
+  }
   float fxz = std::sqrt(F.x * F.x + F.z * F.z);
   float dfx = fxz > 0 ? F.x / fxz : m.fx, dfz = fxz > 0 ? F.z / fxz : m.fz;
   Gen g;

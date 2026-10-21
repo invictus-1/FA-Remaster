@@ -2012,7 +2012,13 @@ Vec3 Aim(Sim& sim, AimController* c) {
     }
     return {hz.x, -dmath::Sin(p), hz.z};
   }
-  return Norm(Sub(tPos, Mpos));
+  {  // the normalised copy 0x44f7e0 (0x631ec7): times 1 / length, the +0 vector for none
+    const Vec3 d = Sub(tPos, Mpos);
+    const float l = std::sqrt((d.x * d.x + d.y * d.y) + d.z * d.z);
+    if (!(l > 0.0f)) return Vec3{0.0f, 0.0f, 0.0f};
+    const float inv = 1.0f / l;
+    return Vec3{d.x * inv, inv * d.y, inv * d.z};
+  }
 }
 
 // MoveManipulator 0x630db0
