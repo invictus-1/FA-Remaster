@@ -790,11 +790,13 @@ void MotionTick(Sim& sim, Projectile* p) {
   Vec3 v = p->velocity, v0 = v;
   Quat q = p->orientation;
   Quat qStart = q;
-  float maxAng = p->turnRate * 0.1f * kPi / 180;
   if (!p->trackTarget) {
     v = Add(v, Mul(p->ballisticAccel, 0.1f));
     v = Add(v, Mul(Forward(q), p->accel * 0.1f));
-    if (p->velocityAlign && maxAng > 0) q = TurnToward(q, v, p->turnRate * 0.00174532924f);  // 0x69c11e
+    // 0x69c115..0x69c13b: a VelocityAlign shell turns whatever its rate. At TurnRate 0 the clamp (0x4eb740) makes the
+    // turn (0, 0, 0, 1), except when the forward and the velocity lie exactly along each other (f x h = 0, not
+    // above sin(0)^2): the half-vector rotation stays as built and its w = f.h scales q by an ulp.
+    if (p->velocityAlign) q = TurnToward(q, v, p->turnRate * 0.00174532924f);  // 0x69c11e
   } else {
     UpdateTracking(sim, p, q, v);
     if (p->destroyQueued) return;
