@@ -134,6 +134,9 @@ ForkThread(function()
     end
 
     -- 1. Alt-F2: the key, the window, its list, a unit picked and placed
+    -- (the window opens where the profile last kept it, maui/window.lua's 'spawn_window': a place kept on a bigger
+    -- screen lies partly off this test's 1920x1080, as Chris's game of 21 October left in menu.prefs; forgotten here)
+    import("/lua/user/prefs.lua").SetToCurrentProfile("spawn_window", nil)
     check("Alt-F2 is bound to the create unit menu", moho64ui_KeyMapAction("Alt-F2"), "PopupCreateUnitMenu")
     local CU = import("/lua/ui/dialogs/createunit.lua")
     local realCreate, opened, openedAt = CU.CreateDialog, 0, nil
