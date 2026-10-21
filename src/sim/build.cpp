@@ -1345,7 +1345,13 @@ int TickMobileBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
         if (u->motion.hasGoal && !u->motion.arrived && !u->motion.failed) return kTaskRunning;
         t.moving = false;
         EndWalk(u);
-        GroundFreeRect(sim, u);
+        // The cell state 0 reserved (ReserveOgridRect 0x6ab6f0 at 0x5f7723) stays reserved while the builder works:
+        // only the task's dtor gives it back (FreeOgridRect 0x6ab760 at 0x5f6bd6, EndBuildTask), or the builder's
+        // next reservation; the walk's own dtor frees only a cell it reserved itself (+0x92, 0x618891). Seen: MP1
+        // 7595, army 6's engineer 0x60009c looks for a spot by the torpedo launcher at (951.5, 726.5): (952, 723) is
+        // still held by 0x6000d1, building there since 7558, so the original takes (951, 723); its search from
+        // (958, 716) then ends at (956, 720), and at 7623 it heads there; ours had freed the cell when 0x6000d1's
+        // walk ended, took (952, 723) and drove north past the builders.
       }
       if (!InBuildRange(u, *t.bp, t.site)) return kTaskFailed;  // no re-move
       StopMoving(u);
