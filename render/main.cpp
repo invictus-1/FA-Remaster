@@ -361,6 +361,8 @@
 //           the view, the sun's shafts and the lamps' beams in it. Tuning: --air-dust <thickness per world unit>,
 //           --air-sun <strength>, --air-lamps <strength>, --air-cells <across>,<deep>
 // --no-lamp-shadows  lamps' beams cast no shadows (they do unless this is given: the eight nearest)
+// --lamp-scale <n>  [unit lamps] every remastered unit's lamps n times the strength their list gives (ModelCache::lampScale, 1):
+//           to try a factor before a unit's lights list is changed (docs/render-unit-lights.md)
 // --no-tracers  plain white shell trails are drawn as the game's files give them, not as hot tracers
 // --plain-ground  a remastered map's ground without its layers' third maps (roughness, creases, height)
 // --map-ends  the map ends at its edge (with --border: in its frame), as the original; unless given, land
@@ -590,6 +592,7 @@ struct Options {
   int width = 1600, height = 900;
   bool vsync = true, debug = false, paused = false, shadows = true, icons = true;
   bool lampShadows = true;              // --no-lamp-shadows
+  float lampScale = 1;                  // --lamp-scale [unit lamps]
   bool tracers = true;                  // --no-tracers
   bool richGround = true;               // --plain-ground
   bool worldBeyond = true;              // --map-ends
@@ -989,6 +992,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--mod-uids") o->modUids = v;
     else if (a == "--simlog") o->simLog = v;
     else if (a == "--tick") o->tick = atof(v);
+    else if (a == "--lamp-scale") o->lampScale = static_cast<float>(std::max(atof(v), 0.0));  // [unit lamps]
     else if (a == "--size") {
       if (sscanf(v, "%dx%d", &o->width, &o->height) != 2) return false;
     } else if (a == "--frames") o->frames = atoi(v);
@@ -1716,6 +1720,7 @@ int main(int argc, char** argv) {
   world.energyShields = opt.energyShields;
   if (opt.energyShieldHealth >= 0) world.energy.healthUnknown = opt.energyShieldHealth;
   world.unitScars = opt.unitScars;
+  world.models.lampScale = opt.lampScale;  // [unit lamps] (--lamp-scale)
   world.models.hitShapes = opt.unitScars;  // (units' models keep their triangles for where hits lie: unit_wear.h)
   world.unitSnow = opt.unitSnow;
   world.unitDirt = opt.unitDirt;  // [unit dirt]
@@ -3744,6 +3749,7 @@ int main(int argc, char** argv) {
       if (havePlay) printf("; %d posed, %zu projectiles, %zu beams", meshes.posedInstances, frame.projectiles.size(), frame.beams.size());
       if (meshes.posedInstances) printf("; bones %.2f ms", meshes.prepareMs);
       if (lights.count) printf("; %d lights", lights.count);
+      if (lights.mergedMost) printf(" (at most %d merged in a frame where squares were crowded)", lights.mergedMost);  // [unitfx]
       if (world.hotMetal) printf("; hot metal: %d glowing, %d lit, %d smoking", world.heat.glowing, world.heat.lit, world.heat.smoking);
       printf("; textures %.0f MB", static_cast<double>(world.textures.bytes) / (1 << 20));
       if (haveLive) printf("; scenery: %d changes, %d gone, %d made in the game standing, %d props of %d squares gone through; %zu script entities", world.propsChanged, world.propsGone, world.MadeProps(), world.propsAdded, world.propCellsSeen, frame.entities.size());

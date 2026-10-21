@@ -882,7 +882,8 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
       if (!bone.empty() && light.bone < 0) fprintf(stderr, "render: %s: no bone named %s (the light rides on the unit itself)\n", file.c_str(), bone.c_str());
       light.color = three("Color", {1, 1, 1});
       light.radius = static_cast<float>(entry["Radius"].NumberOr(1.5));
-      light.strength = static_cast<float>(entry["Strength"].NumberOr(1));
+      // ([unit lamps] lampScale: the viewer's --lamp-scale, to try a unit's lamps' strengths before they are written; 1)
+      light.strength = static_cast<float>(entry["Strength"].NumberOr(1)) * lampScale;
       light.blink = static_cast<float>(entry["Blink"].NumberOr(0));
       // a beam: Direction is the lamp's facing in the mesh's coordinates at rest, and turns with the bone
       const Vec3 facing = three("Direction", {0, 0, 0});

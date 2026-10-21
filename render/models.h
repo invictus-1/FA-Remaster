@@ -272,6 +272,9 @@ class ModelCache {
   // Units' models loaded while this is set keep a shape of their triangles for battle scars (Model::hitShape,
   // unit_wear.h; World sets it with unitScars).
   bool hitShapes = false;
+  // [unit lamps] Every remastered unit's lamps this many times the strength its list gives each (1; the viewer's
+  // --lamp-scale, set before models are made: to try a factor before a unit's list is changed, docs/render-unit-lights.md).
+  float lampScale = 1;
 
  private:
   struct LodSource {
