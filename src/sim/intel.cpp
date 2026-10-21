@@ -59,25 +59,43 @@ struct ArmyIntel {
   std::unique_ptr<Grid> g[8];
   bool fog = true;
 };
-std::vector<ArmyIntel> g_armies;
-std::vector<Entity*> g_sources;     // entities with intel handles
-std::vector<ReconBlip*> g_blips;    // live blip entities
+}  // namespace
 
-Grid* GridFor(int army, int slot) {  // pos handle slots 1..5
-  if (army < 0 || army >= static_cast<int>(g_armies.size())) return nullptr;
-  return g_armies[static_cast<size_t>(army)].g[slot - 1].get();
+// The sim's intel (Sim::intelState). Multicore step 1: these were process-wide (g_armies, g_sources, g_blips,
+// g_goneUnits), so two sims in one process shared them.
+struct IntelState {
+  std::vector<ArmyIntel> armies;
+  std::vector<Entity*> sources;   // entities with intel handles
+  std::vector<ReconBlip*> blips;  // live blip entities
+  std::vector<Unit*> goneUnits;   // destroyed units whose blips armies may still hold
+};
+
+namespace {
+
+IntelState& IS(Sim& sim) {
+  if (!sim.intelState) sim.intelState = std::make_shared<IntelState>();
+  return *sim.intelState;
+}
+const IntelState& IS(const Sim& sim) {
+  static const IntelState none;  // (a sim whose intel was never set up: no armies; immutable)
+  return sim.intelState ? *sim.intelState : none;
 }
 
-void Viz(IntelHandle& h, int slot, int delta) {
+Grid* GridFor(IntelState& st, int army, int slot) {  // pos handle slots 1..5
+  if (army < 0 || army >= static_cast<int>(st.armies.size())) return nullptr;
+  return st.armies[static_cast<size_t>(army)].g[slot - 1].get();
+}
+
+void Viz(IntelState& st, IntelHandle& h, int slot, int delta) {
   if (!h.enabled || h.radius == 0) return;
   if (slot <= 5) {
-    Grid* g = GridFor(h.army, slot);
+    Grid* g = GridFor(st, h.army, slot);
     if (!g) return;
     g->Raster(h.pos, static_cast<int>(h.radius / static_cast<uint32_t>(g->cs)), delta);
   } else {  // counter fields paint into every other army's counter grid
-    for (size_t a = 0; a < g_armies.size(); ++a) {
+    for (size_t a = 0; a < st.armies.size(); ++a) {
       if (static_cast<int>(a) == h.army) continue;
-      Grid* g = g_armies[a].g[slot - 1].get();
+      Grid* g = st.armies[a].g[slot - 1].get();
       if (g) g->Raster(h.pos, static_cast<int>(h.radius / static_cast<uint32_t>(g->cs)), delta);
     }
   }
@@ -109,10 +127,10 @@ void SetAttrEnabled(Entity* e, int t, bool on) {
   else e->intelAttr[s] &= 0x7fffffffu;      // 0x68e4ac..0x68e500
 }
 
-EntityIntel& IntelOf(Entity* e) {
+EntityIntel& IntelOf(IntelState& st, Entity* e) {
   if (!e->intel) {
     e->intel = std::make_shared<EntityIntel>();
-    g_sources.push_back(e);
+    st.sources.push_back(e);
   }
   return *e->intel;
 }
@@ -120,7 +138,7 @@ EntityIntel& IntelOf(Entity* e) {
 Vec3 SourcePos(const Entity* e) { return {e->position.x, e->position.y + 1, e->position.z}; }
 
 // CIntelPosHandle::UpdatePos 0x76f1e0 (exact: CIntel::Update 0x76e4c0)
-void UpdatePos(IntelHandle& h, int slot, Vec3 p, uint32_t tick, bool exact) {
+void UpdatePos(IntelState& st, IntelHandle& h, int slot, Vec3 p, uint32_t tick, bool exact) {
   if (!h.exists) return;
   if (!h.enabled) {
     h.pos = p;
@@ -137,9 +155,9 @@ void UpdatePos(IntelHandle& h, int slot, Vec3 p, uint32_t tick, bool exact) {
   }
   h.lastTick = tick;
   if (moved) {
-    Viz(h, slot, -1);
+    Viz(st, h, slot, -1);
     h.pos = p;
-    Viz(h, slot, +1);
+    Viz(st, h, slot, +1);
   }
 }
 
@@ -184,11 +202,12 @@ uint8_t CanDetect(Sim& sim, int a, const Entity* e, Vec3 p) {
   if (sim.map() && !sim.IsWithin(p.x, p.z, 0.0f, Sim::UseWholeMap(us))) return 0;
   if (e->army && combat::Relation(e->army, us) == 2) return 0xF;
   bool under = Underwater(e);
-  const ArmyIntel& db = g_armies[static_cast<size_t>(a)];
+  const std::vector<ArmyIntel>& dbs = IS(sim).armies;
+  const ArmyIntel& db = dbs[static_cast<size_t>(a)];
   uint8_t f = NewReconFor(db, e, p, under);
-  for (size_t j = 0; j < armies.size() && j < g_armies.size(); ++j)
+  for (size_t j = 0; j < armies.size() && j < dbs.size(); ++j)
     if (static_cast<int>(j) != a && combat::Relation(armies[j].get(), us) == 2)
-      f |= NewReconFor(g_armies[j], e, p, under);
+      f |= NewReconFor(dbs[j], e, p, under);
   if (f == 0) return 0;
   if (f & 4) return f;
   bool unit = e->kind == Entity::Kind::Unit;
@@ -258,7 +277,7 @@ ReconBlip* MakeBlip(Sim& sim, lua_State* L, Unit* u, bool fake = false) {
   BindObject(L, -1, b);
   lua_settop(L, top);
   sim.AddEntity(std::move(o));
-  g_blips.push_back(b);
+  IS(sim).blips.push_back(b);
   return b;
 }
 
@@ -305,10 +324,9 @@ void DestroyIfUnused(Sim& sim, ReconBlip* b) {
   if (u) u->blip = nullptr;
   b->source = nullptr;
   if (!b->destroyQueued) sim.QueueDestroy(b);
-  g_blips.erase(std::remove(g_blips.begin(), g_blips.end(), b), g_blips.end());
+  std::vector<ReconBlip*>& blips = IS(sim).blips;
+  blips.erase(std::remove(blips.begin(), blips.end(), b), blips.end());
 }
-
-std::vector<Unit*> g_goneUnits;  // destroyed units whose blips armies may still hold
 
 // ---- a jammer's fake blips (intel.md 3.4, 3.5) ----
 
@@ -325,7 +343,8 @@ void DestroyFakeIfUnused(Sim& sim, ReconBlip* b) {
   if (Unit* u = b->source) u->fakeBlips.erase(std::remove(u->fakeBlips.begin(), u->fakeBlips.end(), b), u->fakeBlips.end());
   b->source = nullptr;
   if (!b->destroyQueued) sim.QueueDestroy(b);
-  g_blips.erase(std::remove(g_blips.begin(), g_blips.end(), b), g_blips.end());
+  std::vector<ReconBlip*>& blips = IS(sim).blips;
+  blips.erase(std::remove(blips.begin(), blips.end(), b), blips.end());
 }
 
 // army a lets go of a fake (DeleteBlip: events for what it showed, the entry cleared)
@@ -382,8 +401,9 @@ void UpdateFake(Sim& sim, lua_State* L, int a, ReconBlip* b) {
 // CAiReconDBImpl::ReconTick 0x5c0c40 for army a
 void ReconTick(Sim& sim, lua_State* L, int a) {
   // blips whose unit is gone: mobile ones go, structures stay (MaybeDead) until seen again
-  for (size_t i = 0; i < g_goneUnits.size(); ++i) {
-    Unit* u = g_goneUnits[i];
+  std::vector<Unit*>& goneUnits = IS(sim).goneUnits;
+  for (size_t i = 0; i < goneUnits.size(); ++i) {
+    Unit* u = goneUnits[i];
     {
       const std::vector<ReconBlip*> fakes = u->fakeBlips;  // (a gone jammer's fakes go with it)
       for (ReconBlip* f : fakes)
@@ -430,13 +450,13 @@ void ReconTick(Sim& sim, lua_State* L, int a) {
       }
     }
   }
-  g_goneUnits.erase(std::remove_if(g_goneUnits.begin(), g_goneUnits.end(),
+  goneUnits.erase(std::remove_if(goneUnits.begin(), goneUnits.end(),
                                    [](Unit* u) {
                                      for (int k = 0; k < 16; ++k)
                                        if ((u->recon[k] & kReconInUse) || HoldsFake(u, k)) return false;
                                      return true;
                                    }),
-                    g_goneUnits.end());
+                  goneUnits.end());
   // every unit of every other army
   struct Pending {
     Unit* u;
@@ -530,7 +550,8 @@ bool ArmyHasBlip(const Unit* u, int a) { return a >= 0 && a < 16 && (u->recon[a]
 // surface (sonar counts too), 2 = under water (water vision instead of vision, sonar, no radar).
 uint32_t ReconAtPoint(const Sim& sim, int a, Vec3 p, int water) {
   const auto& armies = sim.armies();
-  if (a < 0 || static_cast<size_t>(a) >= armies.size() || static_cast<size_t>(a) >= g_armies.size()) return 0;
+  const std::vector<ArmyIntel>& dbs = IS(sim).armies;
+  if (a < 0 || static_cast<size_t>(a) >= armies.size() || static_cast<size_t>(a) >= dbs.size()) return 0;
   const TerrainMap* m = sim.map();
   if (m && (p.x < 0 || p.z < 0 || p.x > m->width() || p.z > m->height())) return 0;
   auto of = [&](const ArmyIntel& db) {
@@ -543,10 +564,10 @@ uint32_t ReconAtPoint(const Sim& sim, int a, Vec3 p, int water) {
     return f;
   };
   const Army* us = armies[static_cast<size_t>(a)].get();
-  const ArmyIntel& db = g_armies[static_cast<size_t>(a)];
+  const ArmyIntel& db = dbs[static_cast<size_t>(a)];
   uint8_t f = of(db);
-  for (size_t j = 0; j < armies.size() && j < g_armies.size(); ++j)
-    if (static_cast<int>(j) != a && combat::Relation(armies[j].get(), us) == 2) f |= of(g_armies[j]);
+  for (size_t j = 0; j < armies.size() && j < dbs.size(); ++j)
+    if (static_cast<int>(j) != a && combat::Relation(armies[j].get(), us) == 2) f |= of(dbs[j]);
   if (f == 0 || (f & 4)) return f;
   if (db.g[5] && db.g[5]->Visible(p)) f &= static_cast<uint8_t>(~1);
   if (db.g[6] && db.g[6]->Visible(p)) f &= static_cast<uint8_t>(~2);
@@ -564,10 +585,11 @@ uint32_t ReconOfEntity(const Sim& sim, int a, const Entity* e) {
 }
 
 void InitIntelGrids(Sim& sim, lua_State* L) {
-  g_armies.clear();
-  g_sources.clear();
-  g_blips.clear();
-  g_goneUnits.clear();
+  IntelState& st = IS(sim);
+  st.armies.clear();
+  st.sources.clear();
+  st.blips.clear();
+  st.goneUnits.clear();
   bool fog = true;
   int top = lua_gettop(L);
   lua_getglobal(L, "ScenarioInfo");
@@ -578,8 +600,8 @@ void InitIntelGrids(Sim& sim, lua_State* L) {
   lua_settop(L, top);
   const TerrainMap* m = sim.map();
   int mw = m ? m->width() : 1024, mh = m ? m->height() : 1024;
-  g_armies.resize(sim.armies().size());
-  for (auto& ai : g_armies) {
+  st.armies.resize(sim.armies().size());
+  for (auto& ai : st.armies) {
     ai.fog = fog;
     for (int i = 0; i < 8; ++i) {
       if (i <= 1 && !fog) continue;
@@ -609,7 +631,7 @@ void CreateUnitIntel(Sim& sim, lua_State* L, Unit* u) {
     // Omni radii (Intel+0x00..+0x10) and the three field radii (Intel+0x18..+0x20), enabled when not 0
     u->intelAttr[s - 1] = R != 0 ? (R | 0x80000000u) : 0u;
     if (R == 0) continue;
-    if (!ei) ei = &IntelOf(u);
+    if (!ei) ei = &IntelOf(IS(sim), u);
     IntelHandle& h = ei->h[s];
     h.exists = true;
     h.radius = R;
@@ -624,7 +646,7 @@ void CreateUnitIntel(Sim& sim, lua_State* L, Unit* u) {
   int sr = lu::Sub(L, intel, "SpoofRadius");
   float smax = lu::Num(L, sr, "Max", 0);
   if (rs || ss || cl || (jb > 0 && jmax > 0) || smax > 0) {
-    EntityIntel& e = IntelOf(u);
+    EntityIntel& e = IntelOf(IS(sim), u);
     e.has[12] = rs;
     e.has[13] = ss;
     e.has[11] = cl;
@@ -638,19 +660,19 @@ void CreateUnitIntel(Sim& sim, lua_State* L, Unit* u) {
 }
 
 void ReleaseEntityIntel(Sim& sim, Entity* e) {
-  (void)sim;
+  IntelState& st = IS(sim);
   if (e->intel) {
-    for (int s = 1; s <= 8; ++s) Viz(e->intel->h[s], s, -1);
+    for (int s = 1; s <= 8; ++s) Viz(st, e->intel->h[s], s, -1);
     e->intel->h[0] = IntelHandle{};
     for (int s = 1; s <= 8; ++s) e->intel->h[s].enabled = false;
-    g_sources.erase(std::remove(g_sources.begin(), g_sources.end(), e), g_sources.end());
+    st.sources.erase(std::remove(st.sources.begin(), st.sources.end(), e), st.sources.end());
   }
   if (e->kind == Entity::Kind::Unit) {
     Unit* u = static_cast<Unit*>(e);
     bool any = !u->fakeBlips.empty();
     for (int a = 0; a < 16; ++a) any = any || (u->recon[a] & kReconInUse);
     if (any) {
-      g_goneUnits.push_back(u);
+      st.goneUnits.push_back(u);
     } else if (u->blip) {
       // (no army holds it: nothing destroys it any more; its weak pointer to the unit goes empty)
       u->blip->source = nullptr;
@@ -661,9 +683,9 @@ void ReleaseEntityIntel(Sim& sim, Entity* e) {
 
 void ReconBeat(Sim& sim) {
   lua_State* L = sim.L();
-  if (g_armies.size() != sim.armies().size()) InitIntelGrids(sim, L);
+  if (IS(sim).armies.size() != sim.armies().size()) InitIntelGrids(sim, L);
   // every blip follows its unit (ReconBlip::Refresh 0x5bf810)
-  for (ReconBlip* b : g_blips) {
+  for (ReconBlip* b : IS(sim).blips) {
     Unit* u = b->source;
     if (!u || u->destroyQueued) continue;
     // (current := the unit's committed transform, pending := its pending one; AdvanceCoords then makes the first the
@@ -695,13 +717,14 @@ void IntelExactUpdate(Sim& sim, Unit* u) {
   if (!u || !u->intel) return;
   const Vec3& c = sim.coordsPending && u->lastPosTick == sim.tick() ? u->lastPosition : u->position;
   const Vec3 p{c.x, c.y + 1, c.z};
-  for (int s = 1; s <= 8; ++s) UpdatePos(u->intel->h[s], s, p, sim.tick(), true);
+  for (int s = 1; s <= 8; ++s) UpdatePos(IS(sim), u->intel->h[s], s, p, sim.tick(), true);
 }
 
 void AdvanceIntelCoords(Sim& sim) {
   uint32_t tick = sim.tick();
-  for (size_t i = 0; i < g_sources.size(); ++i) {
-    Entity* e = g_sources[i];
+  IntelState& st = IS(sim);
+  for (size_t i = 0; i < st.sources.size(); ++i) {
+    Entity* e = st.sources[i];
     if (!e->intel || e->destroyQueued) continue;
     EntityIntel& ei = *e->intel;
     Vec3 p = SourcePos(e);
@@ -730,7 +753,7 @@ void AdvanceIntelCoords(Sim& sim) {
       exact = moved;  // script entities move by Warp / attach: exact
     }
     if (!moved && !exact) continue;
-    for (int s = 1; s <= 8; ++s) UpdatePos(ei.h[s], s, p, tick, exact);
+    for (int s = 1; s <= 8; ++s) UpdatePos(st, ei.h[s], s, p, tick, exact);
   }
 }
 
@@ -749,7 +772,7 @@ void FlushBlipsInRect(Sim& sim, lua_State* L, int a, const int r[4]) {
     return !(static_cast<float>(r[0]) > p.x) && !(p.x > static_cast<float>(r[2])) &&
            !(static_cast<float>(r[1]) > p.z) && !(p.z > static_cast<float>(r[3]));
   };
-  const std::vector<Unit*> gone = g_goneUnits;
+  const std::vector<Unit*> gone = IS(sim).goneUnits;
   for (Unit* u : gone) {
     if ((u->recon[a] & (kReconInUse | 0x40)) != (kReconInUse | 0x40)) continue;
     ReconBlip* b = u->blip;
@@ -787,7 +810,7 @@ int l_FlushIntelInRect(lua_State* L) {
   }
   const int r[4] = {v[1], v[2], v[3], v[4]};
   Sim& sim = *S(L);
-  if (g_armies.size() != sim.armies().size()) return 0;
+  if (IS(sim).armies.size() != sim.armies().size()) return 0;
   for (size_t a = 0; a < sim.armies().size() && a < 16; ++a) FlushBlipsInRect(sim, L, static_cast<int>(a), r);
   return 0;
 }
@@ -805,7 +828,7 @@ int l_InitIntel(lua_State* L) {
   Army* army = sim.GetArmy(L, 2);
   int t = TypeArg(L, 3);
   if (!KindOk(t)) return 0;
-  EntityIntel& ei = IntelOf(e);
+  EntityIntel& ei = IntelOf(IS(sim), e);
   uint32_t R = 0;
   if (lua_isnumber(L, 4)) {
     double r = lua_tonumber(L, 4);
@@ -815,7 +838,7 @@ int l_InitIntel(lua_State* L) {
   SetAttrRadius(e, t, R);  // 0x68ece3..0x68ecf9, for every kind (the view's words only)
   if (t >= 1 && t <= 8) {
     IntelHandle& h = ei.h[t];
-    Viz(h, t, -1);
+    Viz(IS(*S(L)), h, t, -1);
     h = IntelHandle{};
     h.exists = true;
     h.radius = R;
@@ -839,7 +862,7 @@ int l_EnableIntel(lua_State* L) {
     IntelHandle& h = ei.h[t];
     if (h.exists && !h.enabled) {
       h.enabled = true;
-      Viz(h, t, +1);
+      Viz(IS(*S(L)), h, t, +1);
     }
   } else if (ei.has[t]) {
     ei.on[t] = true;
@@ -856,7 +879,7 @@ int l_DisableIntel(lua_State* L) {
   if (t <= 8) {
     IntelHandle& h = ei.h[t];
     if (h.exists && h.enabled) {
-      Viz(h, t, -1);
+      Viz(IS(*S(L)), h, t, -1);
       h.enabled = false;
     }
   } else {
@@ -882,9 +905,9 @@ int l_SetIntelRadius(lua_State* L) {
   if (!e->intel || t > 8) return 0;
   IntelHandle& h = e->intel->h[t];
   if (!h.exists || h.radius == R) return 0;
-  Viz(h, t, -1);
+  Viz(IS(*S(L)), h, t, -1);
   h.radius = R;
-  Viz(h, t, +1);
+  Viz(IS(*S(L)), h, t, +1);
   return 0;
 }
 int l_GetIntelRadius(lua_State* L) {

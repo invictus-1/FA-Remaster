@@ -510,6 +510,9 @@ class Sim {
   uint32_t nextCommandId = 1;  // the next serial
   std::map<uint32_t, std::weak_ptr<UnitCommand>> engineCommands;  // by engine id (0x80000000 | index), for the stream
   std::shared_ptr<CommandIdPool> commandIds;  // (made by the Sim's ctor, as CCommandDb's pool)
+  // Each system's own state, made by that system when it first needs it (multicore step 1: these were
+  // process-wide variables in the systems' files, so two sims in one process shared them; docs/multicore.md)
+  std::shared_ptr<struct IntelState> intelState;  // sim/intel.cpp: the armies' grids, the sources, the blips
   // Keep an engine object alive for the session (objects scripts may still hold).
   ScriptObject* Own(std::unique_ptr<ScriptObject> o) {
     owned_.push_back(std::move(o));
