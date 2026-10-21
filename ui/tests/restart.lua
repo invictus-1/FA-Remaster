@@ -24,6 +24,12 @@ ForkThread(function()
     local cdr = GetArmyAvatars()[1]
     check("the second game has begun anew", GetGameTimeSeconds() < 10, true)
     check("with the commander again", cdr ~= nil and cdr:IsInCategory("COMMAND"), true)
-    check("and the game's own opening (the commander selected)", table.getn(GetSelectedUnits() or {}), 1)
+    -- The game's own opening ran again: FAF's OnFirstUpdate names the commander after the player. (Its selection
+    -- of the commander is a race in the original too: StartupSequence tries until GameTick() > 50, and the commander
+    -- is selectable from beat 52 on, after CommanderWarpDelay's 3 s and the warp-in's 2.1 s, engine 2026-10-21; so
+    -- whether it is selected depends on the frames' phase and is only logged.)
+    local me = GetArmiesTable().armiesTable[GetFocusArmy()]
+    check("and the game's own opening (the commander named after the player)", cdr ~= nil and cdr:GetCustomName(), me and me.nickname)
+    LOG("TEST note: the commander selected by the opening: " .. table.getn(GetSelectedUnits() or {}))
     LOG("TEST done: " .. failed .. " failed")
 end)
