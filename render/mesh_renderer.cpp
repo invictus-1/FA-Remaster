@@ -1568,7 +1568,9 @@ void MeshRenderer::Consider(const Cull& c, Entry& e, const View& view, bool shad
     if (view.hasCarrier && Length(c.centre - view.carrier) < 0.02f) return;                   // what the lamp rides on
     const float pixels = 2 * c.sizeRadius * focal / std::max(Length(c.centre - view.eye), 0.01f);  // its diameter on screen
     if (pixels < smallest) return;
-    const float wanted = wish * pixels * pixels;
+    // [lodscale] the level is chosen as if it stood view.lodScale times as far (the camera's LOD scale; 1: its size)
+    const float sized = pixels / view.lodScale;
+    const float wanted = wish * sized * sized;
     // the level whose triangle count is nearest to that wish (nearest by ratio: a step down is taken
     // at the geometric mean of two neighbours, so chains with big gaps - a tree and its flat card -
     // behave as well as even ones)
@@ -1578,7 +1580,7 @@ void MeshRenderer::Consider(const Cull& c, Entry& e, const View& view, bool shad
     if (!sizes.empty()) {
       // built to the standard: each level down to the size it was made for (the quality setting and
       // the shadows' coarser wish count as a smaller size)
-      const float size = pixels * 0.75f * std::sqrt(detail * (shadowPass ? shadowDetail : 1.0f));
+      const float size = sized * 0.75f * std::sqrt(detail * (shadowPass ? shadowDetail : 1.0f));
       while (level < sizes.size() && level + 1 < lods.size() && size < sizes[level]) ++level;
     } else {
       while (level + 1 < lods.size() &&

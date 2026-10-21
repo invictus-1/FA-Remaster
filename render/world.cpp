@@ -228,6 +228,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
         centre.y = map.Height(Clamp(centre.x, 0, static_cast<float>(map.width)), Clamp(centre.z, 0, static_cast<float>(map.height)));
         const bool ok = d.type == 2 ? decals.AddNormal(d.textures[0], centre, d.scale.x, d.scale.z, heading, d.cutoffLod * options.decalRange)
                                     : decals.Add(d.textures[0], centre, d.scale.x, d.scale.z, heading, d.cutoffLod * options.decalRange);
+        if (ok && d.nearCutoffLod > 0) decals.SetNearCutoff(decals.LastAdded(), d.nearCutoffLod * options.decalRange);  // [decalfade]
         if (ok) ++laid;
       }
       printf("render: %d of the map's %zu decals laid\n", laid, map.decals.size());
@@ -730,6 +731,15 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   particles.quality = effectsQuality;
   camera = cam;
   const Camera& placing = Placing();  // (photomode: a photo's tile places as the whole photo; else the camera itself)
+  {  // [decalfade] the decals' fade, measured from the camera the picture is placed by (decals.h, Decals::Lod)
+    Vec3 right, up, back;
+    placing.Axes(&right, &up, &back);
+    decals.fadeFraction = decalFadeFraction;
+    decals.lod.eye = placing.Eye();
+    decals.lod.forward = back * -1.0f;
+    decals.lod.widthPerDepth = 2 * std::tan(placing.fovY * 0.5f) * static_cast<float>(width) / static_cast<float>(std::max(height, 1));
+    decals.lod.scale = placing.lodScale > 0 ? placing.lodScale : 1.0f;
+  }
   time_ = time;
   clock_ = clock;
   barAnchors.clear();
@@ -1221,7 +1231,8 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       if (OutsidePlayable(d.position.x, d.position.z)) continue;  // (in the dark beyond the part that can be played)
       const float away = Length(d.position - view.eye), full = std::max(d.cutoff * depositIconFrom, 1.0f);
       const int k = 2.5f * perUnit / std::max(away, 1.0f) >= 16.0f * icons.Pixel() ? 1 : 0;
-      icons.AddUnder(d.hydrocarbon ? hydrocarbonIcon_[k] : massIcon_[k], d.position, Clamp((away - full * 0.8f) / (full * 0.2f), 0, 1));
+      const float measure = decals.Measure(d.position, view.eye);  // [decalfade] (as its mark's fade measures it)
+      icons.AddUnder(d.hydrocarbon ? hydrocarbonIcon_[k] : massIcon_[k], d.position, Clamp((measure - full * 0.8f) / (full * 0.2f), 0, 1));
     }
   }
   lights.Begin(clock);

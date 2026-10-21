@@ -1016,7 +1016,9 @@ void Particles::Update(double now, const View* view) {
     if (view && e.emitIfVisible && e.ticksDone < last) {
       const float margin = 8 * std::max(1.0f, e.scale);  // how far its particles may be from it and still be seen
       const Vec3 r{margin, margin, margin};
-      const bool tooFar = e.attached && e.lodCutoff > 0 && Length(e.position - view->eye) > e.lodCutoff;
+      // ([lodscale] its distance times the camera's LOD scale, as the original measures an emitter's cutoff by it:
+      // CEfxEmitter::CanSeeCam 0x65c420)
+      const bool tooFar = e.attached && e.lodCutoff > 0 && Length(e.position - view->eye) * view->lodScale > e.lodCutoff;
       if (tooFar || !view->BoxVisible(e.position - r, e.position + r)) {
         ++quietEmitters;
         if (e.blueprint->createIfVisible && e.ticksDone == 0) e.stopped = true;  // never seen: never there

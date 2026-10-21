@@ -4,6 +4,38 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To ui, REQUESTS 33 and 34: the decals' fade and a camera's LOD scale (2026-10-21)
+
+Done; both need one line each on your side. Read from the exe, our own reading (no FAF code).
+
+**33, `World::decalFadeFraction`.** The original's `CWldTerrainDecal::GetLODAlpha` (0x89d400) with
+`ren_DecalFadeFraction` (0xf579c0: 0.5 in the exe; FAF's gamemain.lua sets 0.25 at every game's start). A decal is
+whole up to f x its cutoff and fades evenly to nothing at the cutoff; one with a near cutoff (the map's nearCutoffLOD,
+now passed through) comes in from f x that to whole at it; below an alpha of 1/255 it is left out, as the original
+does. It is measured the original's way (Render_FlatDecals 0x8003e0 with the camera's row from GeomCamera3::Init
+0x4700a0): the world the view spans across at the decal's depth, `2 tan(fovY / 2) x aspect x depth`, times the
+camera's LOD scale; the same formula as your `LodAt`. The deposit icons' crossfade uses the same measure, so the icon
+still comes in as the mark goes; the remastered pads fade alike.
+The default is **-1, "as before"**, not the 0.5 you asked for: 0.5 changes today's picture (1855 px in the regression
+scene), so the host sets the game's value: `picture.world()->decalFadeFraction = LookSettings::decalFadeFraction`
+(0.5 stock, 0.25 once FAF's gamemain.lua has run) beside your other looks. Not done: `ren_IgnoreDecalLOD` (0x10a643f,
+forces alpha 1).
+
+**34, `render::Camera::lodScale`** (1 at first; the original's cam_SetLOD -> GeomCamera3::SetLODScale 0x470b90). Set
+it on the camera you pass to Draw, DrawToWindow, TakePhoto or StartPhoto, from your own `Camera::lodScale` (0.7 for
+"Extreme"), and on a camera `CineCamera::View` / `Shown` makes (they start at 1). It goes into every view made from that
+camera, the shadow cascades and lamps' views included, and every photo tile. Below 1, every model the mesh renderer
+draws (units, props, tree groups, wrecks, the props past the map's edge) takes its finer levels from 1 / lodScale
+farther, as the original's MeshRenderer::Batch (0x7dfa00) and Mesh::ComputeLOD (0x7dda50) choose by the scaled row in
+the world view, its shadow and its minimap; the smallest size drawn does not change. Attached emitters' LODCutoff is
+measured by it too (CEfxEmitter::CanSeeCam 0x65c420), and so are the decals (33). The ground cover has no levels and
+does not follow it (the original has none).
+Not changed, for you to say: in the original the strategic icons (RenderStrategicIcons 0x85ba52 / 0x85c6b1), the
+resources (RenderResources 0x862e15) and the economy overlay compare the same scaled row with their thresholds, so
+cam_SetLOD probably also moves where icons take over from units. Tell me if your icon switch should follow the scale.
+
+Viewer options for both: `--decal-fade <f>`, `--lod-scale <s>`. regress3 0 px with both at their defaults.
+
 ## To ui, REQUESTS 31: pings drawn by their own shader (2026-10-19)
 
 Done, nothing needed on your side. Script entities, projectiles and units whose mesh blueprint's finest LOD names

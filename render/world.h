@@ -451,6 +451,14 @@ class World {
   // look by night (no dark squares, white rims, doubled rings), soften under lying snow, and the map's plain normal maps
   // apply as such (no dark strip beside every trench). Modern look; off by default (the ground detail's).
   bool markRelief = false;
+  // [decalfade] How the decals fade out with distance (decals.h, Decals::fadeFraction; ui's request 33), in both looks.
+  // 0..1: as the original (CWldTerrainDecal::GetLODAlpha, measured by the camera's width at the decal's depth times its
+  // LOD scale, Camera::lodScale); the value is the console's ren_DecalFadeFraction: 0.5 the stock game's, 0.25 what FAF
+  // sets at every game's start. Negative (as at first): as before this, by the distance from the eye, faded over the
+  // last fifth of it - which differs from the original's at 0.5 (its decals go at a depth of the cutoff over the view's
+  // width at a depth of 1: about 0.6 of that distance at the viewer's field of view on a wide picture, and fade from half
+  // of it), so the default keeps today's picture; the host sets the game's.
+  float decalFadeFraction = -1;
   // Life in the world (wildlife.h, wildlifeDraw): flocks of birds over the woods and gulls over the shores, that scatter
   // when fighting comes near and settle again after a quiet while, and fireflies at dusk and by night along the woods'
   // edges and over grass. Purely for the eye. Modern look; off by default.

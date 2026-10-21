@@ -609,6 +609,7 @@ struct View {
   ViewConstants constants;
   Vec3 eye;        // where levels of detail are measured from (the camera, also in a shadow pass)
   float fovY = 1;
+  float lodScale = 1;  // [lodscale] the camera's (Camera::lodScale), also in a shadow pass
   int width = 1, height = 1;
   Vec4 planes[5];  // left, right, bottom, top, near: a point p is inside when dot(plane.xyz, p) + plane.w >= 0
   // A shadow cascade's view only: the square of ground (seen from the sun) that the cascade before
@@ -647,6 +648,7 @@ struct View {
     v.width = width;
     v.height = height;
     v.fovY = camera.fovY;
+    v.lodScale = camera.lodScale > 0 ? camera.lodScale : 1.0f;  // [lodscale]
     v.eye = camera.Eye();
     v.SetMatrix(camera.Projection(static_cast<float>(width) / static_cast<float>(height)) * camera.View());
     v.constants.cameraPosition[0] = v.eye.x;

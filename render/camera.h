@@ -25,6 +25,12 @@ struct Camera {
   // horizon then leans the other way on the screen), as a free camera banks (cinecam.h, CineCamera::Fly). 0 for every
   // other camera, which is then exactly as before.
   float roll = 0;
+  // [lodscale] The view's level-of-detail scale (ui's request 34): the original's camera multiplies its measure of
+  // detail by it (cam_SetLOD -> GeomCamera3::SetLODScale 0x470b90; 1 at first, cam_DefaultLOD; FAF's Level of Detail
+  // "Extreme" sets 0.7 on every world view's camera). Every model's level is chosen as if it stood this many times as
+  // far (below 1: the finer levels from 1 / lodScale farther), and the decals' and the effects' cutoffs are measured
+  // the same way (decals.h, Decals::Lod; particles.cpp). 1: exactly as before.
+  float lodScale = 1;
 
   // right, up and back (pointing from the target to the eye), unit length
   void Axes(Vec3* right, Vec3* up, Vec3* back) const {

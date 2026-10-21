@@ -35,6 +35,10 @@
 //           taken as its corner (for finding out what the map file means)
 // --decal-turn 1|-1, --decal-range <n>  which way a map decal's heading turns; a factor on the distance up
 //           to which the map's decals are drawn
+// --decal-fade <f>  [decalfade] the decals fade out with distance as the original's (World::decalFadeFraction): <f>
+//           is its ren_DecalFadeFraction, 0.5 the stock game's, 0.25 FAF's (without it: as before, the last fifth)
+// --lod-scale <s>  [lodscale] the camera's LOD scale (Camera::lodScale, the original's cam_SetLOD): 0.7 FAF's Level of
+//           Detail "Extreme", finer levels from 1 / 0.7 farther (without it: 1)
 // --lights <n>  n small coloured lights circling the spot placed units stand at (to see and to measure them)
 // --window-cycle  with --map and --screenshot <name>.png: one window shown by a menu's picture (the interface
 //           alone), then a game's (the map), then a menu's again, each closed before the next opens on it, as
@@ -802,6 +806,7 @@ struct Options {
   int testLights = 0;  // --lights
   std::string mapDecals;  // --map-decals (empty: as the map's remap.json entry says, else normals)
   float decalTurn = 1, decalRange = 1;
+  float decalFade = -1, lodScale = 1;  // [decalfade] --decal-fade, [lodscale] --lod-scale
   std::string decalFilter;  // --decal-filter: only the map's decals whose texture's name holds this
   bool listBones = false;
   int msaa = 4;        // samples per pixel of the scene (anti-aliasing): 1 off, 2, 4, 8
@@ -1134,6 +1139,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--decal-filter") o->decalFilter = v;
     else if (a == "--decal-turn") o->decalTurn = static_cast<float>(atof(v));
     else if (a == "--decal-range") o->decalRange = static_cast<float>(atof(v));
+    else if (a == "--decal-fade") o->decalFade = static_cast<float>(atof(v));  // [decalfade]
+    else if (a == "--lod-scale") o->lodScale = static_cast<float>(atof(v));    // [lodscale]
     else if (a == "--trail") o->trail.push_back(v);
     else if (a == "--emit-scale") o->emitScale = static_cast<float>(atof(v));
     else if (a == "--detail") o->detail = static_cast<float>(atof(v));
@@ -1660,6 +1667,7 @@ int main(int argc, char** argv) {
   if (opt.plantTallest > 0) world.grass.plantTallest = opt.plantTallest;
   world.battleScars = opt.battleScars;
   world.markRelief = opt.markRelief;  // [scars]
+  world.decalFadeFraction = opt.decalFade;  // [decalfade]
   world.leafLight = opt.leafLight;
   world.blastWaves = opt.blastWaves;
   world.blastDust = opt.blastDust;
@@ -3166,7 +3174,8 @@ int main(int argc, char** argv) {
     // the cinematic camera: moved on (an automatic run by a 60th of a second a frame, as its clock), and drawn with
     // while it is on or easing back to the game's
     cine.Update(photoLeft > 0 ? 0.0f : automatic ? 1 / 60.0f : dt, cineGround);
-    const Camera drawn = cine.Shown(camera, cineGround);
+    Camera drawn = cine.Shown(camera, cineGround);
+    drawn.lodScale = opt.lodScale;  // [lodscale] --lod-scale
     if (cine.TakeCut()) world.cameraCut = true;
     if (opt.hasCine) world.lens.strength = cine.LensShare();  // (the lens's blur goes as the picture eases back)
     world.photo = photoLeft > 0;  // (--photo: its frames)
