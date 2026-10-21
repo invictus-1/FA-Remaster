@@ -36,6 +36,11 @@
 // rock. Readable: the spray is thin and low, and the surf's white water fades where something stands in it (a unit
 // wading ashore keeps its outline).
 //
+// [shore] With World::waterDetail (wet shorelines) the surf also wets the beach (SurfWetAt below; the water's pass lays it,
+// water.cpp's WetBeach, its sheet lying higher for it): soaked as far up as the waves run, damp above that over a band the
+// wider the more exposed the shore and the rougher the sea, a film glistening after each wave; the ground's own wet band
+// by height (terrain.cpp) narrowed meanwhile to what a calm bay keeps (World::Begin, by WetShare).
+//
 // Off: nothing is made or done, and the water's shader is built without SURF (the same source as before).
 #pragma once
 #include <atomic>
@@ -284,6 +289,68 @@ SurfHere SurfAt(float2 xz, float grain, float level, float2 mapSize, float4 area
   return s;
 }
 
+// [shore] The beach the surf wets (World::waterDetail with the surf on; the renderer's task, 2026-10-21: the wet sand was a
+// band by height alone, the same all along the coast, while the surf breaks by stretches and by exposure). The water's pass
+// lays it over the ground just above the water (water.cpp, WetBeach; the ground's own band by height, terrain.cpp, narrowed
+// meanwhile to what a calm bay keeps, World::Begin): soaked as far up as the bigger waves of a set run, damp above that over
+// a band the wider the more exposed the shore and the rougher the sea, so narrow in a calm bay; and the film of water each
+// wave leaves on the sand it ran over, glistening as it drains away, a stretch of shore at a time, in time with the waves.
+struct SurfWet {
+  float wet;     // how wet (0 dry .. 1 soaked)
+  float film;    // how much is left of the film the last wave to reach it left (0..1)
+  float ground;  // the map's ground's height here (by the field's depth)
+  float3 up;     // which way the ground faces (from the field's depths a world unit apart)
+  float open;    // how exposed the shore is (the field's openness, on the map)
+};
+static const float kSurfFilmDrains = 4.0;  // how fast the film drains (to 1/e in a quarter of a wave's period)
+// `xz`, `y`: a place on the ground; `level` the water's level; the rest as SurfAt's.
+SurfWet SurfWetAt(float2 xz, float y, float level, float2 mapSize, float4 area, float4 look, float4 look2) {
+  SurfWet s = (SurfWet)0;
+  float2 uv = (xz - area.xy) * area.zw;
+  float4 f = surfField.SampleLevel(samplerLinearClamp, uv, 0);
+  float4 fx = surfField.SampleLevel(samplerLinearClamp, uv + float2(area.z, 0), 0);  // (a world unit off, as SurfAt's)
+  float4 fz = surfField.SampleLevel(samplerLinearClamp, uv + float2(0, area.w), 0);
+  s.ground = level - f.g;
+  s.up = normalize(float3(fx.g - f.g, 1, fz.g - f.g));
+  float2 inside = min(xz, mapSize.xy - xz);
+  s.open = f.a * saturate(1 + min(inside.x, inside.y) / 16);
+  float d = f.r;
+  // its stretch of shore and that stretch's waves (as SurfAt's: the place carried out to the waterline)
+  float2 seaward = float2(fx.r, fz.r) - d;
+  seaward *= 1 / max(length(seaward), 1e-4);
+  SurfStretch stretch = SurfStretchAt(xz - seaward * d);
+  float c0 = look.y + SurfStretchOffset(stretch);
+  float n0 = floor(c0), w0 = c0 - n0;
+  // how high the waves run up here (SurfAt's run-up at its top), and the damp band over that (in height over the water):
+  // the wider the more exposed the shore and the rougher the sea; `above` the place's height over the water, a little
+  // uneven along the shore (as the ground's own band is)
+  float top = look.w * s.open * lerp(1, 0.55, f.b);
+  float band = (0.3 + 1.2 * s.open) * (0.85 + 0.3 * look2.x);
+  float above = y - level + (CloudNoise(float3(xz * 0.7, 2.5)) - 0.5) * band * 0.4;
+  // soaked up to where the bigger waves of a set run, damp above that over `band`
+  s.wet = 1 - smoothstep(top * 1.2, top * 1.2 + band, above);
+  // (by the run-up's own measure, not uneven, the place lies higher by kSurfSwash a world unit inland: its sheet slopes down;
+  // and lower by what the swell's crests add to the water's height there, 0.07: water.cpp's kRise)
+  float h = y - level - min(d, 0) * kSurfSwash - 0.07;
+  // the film: this wave's when it has run over the place and drained off it again, else the last one's (the run-up rises
+  // above the place at `on` and falls below it at `off`, shares of a period, SurfAt's sin(pi tau^0.7) over look2.z of it)
+  float since = 2;
+  bool found = false;
+  [unroll] for (int k = 0; k < 2; ++k) {
+    float n = n0 - k, t = w0 + k;
+    float need = h / max(top * SurfStrength(n, xz) * SurfStretchSize(stretch, n), 1e-4);
+    float a = asin(saturate(need)) / 3.14159;
+    float on = pow(a, 1 / 0.7) * look2.z, off = pow(1 - a, 1 / 0.7) * look2.z;
+    if (!found && need < 1 && t >= on) {
+      since = max(t - off, 0);
+      found = true;
+    }
+  }
+  s.film = h <= 0 ? 1 : found ? exp(-since * kSurfFilmDrains) : 0;  // (under the water's level: bared by a trough a moment)
+  s.wet = max(s.wet, s.film);
+  return s;
+}
+
 // A view for checking (Surf::view): 1 the field, 2 the waves.
 float3 SurfView(float2 xz, SurfHere s, float4 area, float which) {
   float4 f = surfField.SampleLevel(samplerLinearClamp, (xz - area.xy) * area.zw, 0);
@@ -341,6 +408,10 @@ class Surf {
   bool Active() const { return on_ && !side_ && field_; }
   gfx::Texture Field() const { return field_; }
   void Constants(float area[4], float look[4], float look2[4], float look3[4]) const;
+  // [shore] How much of the beach's wetness the surf lays this frame (SurfWetAt; 0 while it is not shown, rising as it fades
+  // in): World::Begin narrows the ground's own wet band by as much (the view's shore.z), the water's pass reads it as
+  // surfLook3.y.
+  float WetShare() const { return Active() ? fade_ : 0.0f; }
 
   // The waves' timing (the shader's SurfOffset, SurfStrength): how far ahead a place's waves are (cycles), how big
   // wave n is at a place. [coast] For a place on the waterline (the spray's): its stretch of shore's timing and size of
@@ -353,7 +424,8 @@ class Surf {
   float strength = 1, sprayStrength = 1, breakDepth = 2.0f;
   // A view for checking (viewer --surf-view n): the water shows 1 the field (red how steep the shore is, green how open
   // the water, blue bands of four world units of distance from the waterline), 2 the waves (red where the water stands
-  // up, blue down, green the white water); 0 off.
+  // up, blue down, green the white water); [shore] 3 with World::waterDetail, over the beach the wetness the surf lays
+  // (SurfWetAt: red the film a wave left, green how wet; the water as it is); 0 off.
   int view = 0;
   // The most puffs kept (the oldest let go first), and how far from the eye spray is still thrown.
   static constexpr int kMostPuffs = 3000;

@@ -36,7 +36,7 @@ class Water {
   // (made by PrepareSurf, from World::Begin each frame the option is on, before the first frame needs them: with the
   // ripples' field or without it, and the winter ones while winter water is on); the spray by `surf` itself.
   Surf surf;
-  void PrepareSurf(bool ripples, bool winter);
+  void PrepareSurf(bool ripples, bool winter, bool wet = false);  // ([shore] wet: World::waterDetail's wet beach, SURF_WET)
 
   // `map` must stay alive while the water is used. Maps without water load fine and draw nothing.
   bool Load(const MapData* map, std::string* error);
@@ -52,14 +52,14 @@ class Water {
   TextureCache* textures_;
   const MapData* map_ = nullptr;
   void DrawWith(const View& view, const Camera* camera, gfx::Texture behind, gfx::Texture sceneDepth);
-  gfx::Pipeline ModernPipeline(bool ripples, std::string* error, bool winter = false, bool surf = false);
+  gfx::Pipeline ModernPipeline(bool ripples, std::string* error, bool winter = false, bool surf = false, bool wet = false);
   gfx::Pipeline pipeline_, modern_;
   gfx::Pipeline modernRipples_;  // (the modern water reading the ripples' field: made the first time it is wanted)
   bool ripplesTried_ = false;
   gfx::Pipeline modernWinter_[2];  // (winter water: without and with the ripples' field; made the first time wanted)
   bool winterTried_[2] = {false, false};
-  gfx::Pipeline modernSurf_[4];  // [surf] (by 1 the ripples' field, 2 winter; each made the first time it is wanted)
-  bool surfTried_[4] = {false, false, false, false};
+  gfx::Pipeline modernSurf_[8];  // [surf] (by 1 the ripples' field, 2 winter, [shore] 4 the wet beach; each made the first time wanted)
+  bool surfTried_[8] = {false, false, false, false, false, false, false, false};
   gfx::Buffer vertices_;
   gfx::Texture waterMap_, waves_[4], sky_;
 };

@@ -9,6 +9,7 @@
 #include "lighting.h"
 #include "ray_scene.h"
 #include "surf.h"
+#include "water_glint.h"
 #include "winter_water.h"
 
 namespace render {
@@ -129,7 +130,8 @@ cbuffer WaterConstants : register(b1) {
   float4 surfArea;        // [surf] the shore field (surf.h): x, y its first texel's corner (world x, z); z, w 1 / its width and height
   float4 surfLook;        // x the waves' height near the shore; y their phase (cycles); z their length at sea; w the run-up's height
   float4 surfLook2;       // x how rough the sea is; y the depth a wave breaks at, by its height; z the run-up's share of a period; w the white water's strength
-  float4 surfLook3;       // x a view for checking (Surf::view: 1 the field, 2 the waves; 0 off)
+  float4 surfLook3;       // x a view for checking (Surf::view: 1 the field, 2 the waves; 0 off); y [shore] how much of the beach's
+                          // wetness the surf lays (Surf::WetShare; read with World::waterDetail alone)
 #endif
 };
 Texture2D waterMap : register(t0);
@@ -148,6 +150,15 @@ Texture2D<float> sceneDepth : register(t7);  // (one sample a pixel: an ordinary
 #endif
 
 static const float kRise = 0.07;  // how far the swell carries the water above and below its level
+// [shore] (World::waterDetail) the sun's glint widened by the waves a pixel takes in (water_glint.h, SoftGlint): from a pixel
+// of kGlintFrom world units (the game's usual height: as before) to one of kGlintTo (the strategic view), by slopes of
+// that spread (the lobe then about a power of 40: a sheen)
+static const float kGlintFrom = 0.08, kGlintTo = 2.0, kGlintSlopes = 0.006;
+#if SURF_WET
+// [shore] (World::waterDetail with the surf: the surf's pipelines built with SURF_WET) how much higher again the sheet lies,
+// for the wet beach above the water (WetBeach: as high as the damp band reaches in a storm on an exposed beach)
+static const float kSurfWetRise = 1.5;
+#endif
 
 struct VOut {
   float4 position : SV_Position;
@@ -162,6 +173,9 @@ VOut VS(float2 corner : POSITION) {
 #if SURF
   // [surf] (and as high as the surf's run-up reaches)
   o.world = float3(lerp(-reach, mapSize.x + reach, corner.x), surfaceColor.w + kRise + kSurfRise, lerp(-reach, mapSize.y + reach, corner.y));
+#if SURF_WET
+  o.world.y += kSurfWetRise;  // [shore] (with World::waterDetail as high as the beach it wets)
+#endif
 #else
   o.world = float3(lerp(-reach, mapSize.x + reach, corner.x), surfaceColor.w + kRise, lerp(-reach, mapSize.y + reach, corner.y));
 #endif
@@ -211,6 +225,61 @@ float3 WorldAt(float2 pixel, float depth) {
   return cameraPosition + (cameraRight.xyz * (ndc.x * cameraRight.w * cameraUp.w) + cameraUp.xyz * (ndc.y * cameraRight.w) - cameraBack.xyz) * away;
 }
 
+#if SURF_WET
+// [shore] (World::waterDetail with the surf: SURF_WET) The beach just above the water as the surf wets it (surf.h, SurfWetAt), at the
+// pixel's ground `bed`: the ground as the ground's pass drew it (`behind`, its own wet band by height narrowed meanwhile to
+// what a calm bay keeps, World::Begin) darker as far up as the waves wet it, darkest where they run up an exposed beach;
+// the film a wave leaves glistening as it drains, the sky in it and the sun's glint. Only where the picture shows the map's
+// ground (a unit, a tree, a rock standing on the beach is left as it is: those samples are taken out of `coverage`); a
+// pixel left alone is discarded. `grain`: how much ground one pixel covers.
+float4 WetBeach(float2 pixel, float3 bed, float grain, inout uint coverage) {
+  SurfWet s = SurfWetAt(bed.xz, bed.y, surfaceColor.w, mapSize.xy, surfArea, surfLook, surfLook2);
+  // (how far over the field's ground the map's ground may lie: the ground's mesh is coarser far off, steeper ground more)
+  float slack = 0.12 + 0.5 * length(s.up.xz) + grain * 0.5;
+  [unroll] for (int k = 0; k < SAMPLES; ++k)
+    if ((coverage >> k) & 1u) {
+      if (WorldAt(pixel, SCENE_DEPTH(int2(pixel), k)).y - s.ground > slack) coverage &= ~(1u << k);
+    }
+  // (a little less where rain has wetted all the ground already, none under lying snow; fading in with the surf; and only up
+  // to the sheet's height: the water's pass sees no ground above it)
+  float share = surfLook3.y * (1 - 0.25 * weather.x) * (1 - weather.y) * saturate((surfaceColor.w + kRise + kSurfRise + kSurfWetRise - bed.y) / 0.15);
+  float wet = s.wet * share, film = s.film * share;
+  // (a view for checking, Surf::view 3: red the film, green how wet; the water itself as it is)
+  if (surfLook3.x > 2.5) return float4(film, wet * 0.5, 0, 1);
+  if (coverage == 0 || wet < 0.004) discard;
+  // what the ground's pass laid there already (its band by height: terrain.cpp's formula, the view's shore)
+  float over = bed.y - shore.y;
+  float groundWet = saturate(1 - (over + (CloudNoise(float3(bed.xz * 0.7, 2.5)) - 0.5) * shore.z * 0.8) / max(shore.z, 1e-3)) * saturate(over * 20 + 1);
+  // soaked sand: its albedo as the ground's band has it (0.6) in a calm bay, darker on an exposed beach, a little more under
+  // the film; the darker of the two
+  float had = lerp(1, 0.6, groundWet);
+  float want = lerp(1, lerp(0.6, 0.48, s.open) * (1 - 0.1 * film), wet);
+  float3 c = behind.SampleLevel(samplerLinearClamp, pixel * viewport.zw, 0).rgb * (min(want, had) / had);
+  // the film's sheen, as of a thin sheet of water: the sky in it, and the sun's light off it (the sharper the fresher the
+  // film, widened by what a pixel takes in as the water's glint is, water_glint.h). (The damp sand above it has drunk its
+  // water: matt but for a trace of the sky. Where the ground's own band lies, that lights its sheen itself, roughness 0.22.)
+  float3 toPixel = normalize(bed - cameraPosition);
+  float3 n = s.up;
+  float3 R = reflect(toPixel, n);
+  R.y = max(R.y, 0.02);
+  R = normalize(R);
+  float fresnel = 0.02 + 0.98 * pow(1 - saturate(dot(-toPixel, n)), 5);
+  float3 mirror = skyZenith.w > 0.5 ? ComputedSky(R) : ToLinear(sky.Sample(samplerLinear, R).rgb) * (lightMultiplier * modern.x * 0.5);
+  float3 air = ThroughAirTo(0, bed);
+  c = lerp(c, ThroughAirTo(mirror, bed), fresnel * (0.04 * wet + 0.6 * film));
+  float shadow = SunShadow(bed, s.up) * CloudShadow(bed);
+  float3 H = normalize(sunDirection - toPixel);
+  float rough = lerp(0.3, 0.12, film);
+  float a2 = rough * rough * rough * rough + 4 * kGlintSlopes * smoothstep(kGlintFrom, kGlintTo, grain);
+  float dd = saturate(dot(n, H)) * saturate(dot(n, H)) * (a2 - 1) + 1;
+  float D = a2 / (3.14159 * dd * dd);
+  float F = 0.02 + 0.98 * pow(1 - saturate(dot(H, -toPixel)), 5);
+  float spec = min(D * F * saturate(dot(n, sunDirection)) / (4 * max(dot(n, -toPixel), 0.05)), 20);
+  c += ThroughAirTo(ToLinear(sunColor) * (lightMultiplier * modern.x) * (spec * 0.7 * film * (1 - groundWet) * shadow), bed) - air;
+  return float4(c, 1);
+}
+#endif
+
 float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   // where in the pixel the water is in front (a nearer thing has the larger depth)
   int2 pixel = int2(i.position.xy);
@@ -228,9 +297,22 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   // [surf] the sheet lies higher by kSurfRise, for the run-up; all else is worked out where it lies without the surf (so
   // that the water away from the shores is as without it): the place moved down the line of sight to that height, and
   // its depth on the screen with it
+#if SURF_WET
+  // ([shore] with World::waterDetail higher again by kSurfWetRise, for WetBeach)
+  i.world += normalize(i.world - cameraPosition) * (kSurfWetRise / max(normalize(cameraPosition - i.world).y, 1e-3));
+#endif
   i.world += normalize(i.world - cameraPosition) * (kSurfRise / max(normalize(cameraPosition - i.world).y, 1e-3));
   float4 sheet = mul(viewProj, float4(i.world, 1));
   i.position.z = sheet.z / sheet.w;
+#if SURF_WET
+  // [shore] ground higher than the water ever stands (the swell's crest and the run-up's top over its level): the beach the
+  // surf wets, nothing of the water
+  {
+    float3 ground = WorldAt(i.position.xy, depthBehind);
+    float wetGrain = max(length(ddx(i.world.xz)), length(ddy(i.world.xz)));
+    [branch] if (ground.y > surfaceColor.w + kRise + kSurfRise) return WetBeach(i.position.xy, ground, wetGrain, coverage);
+  }
+#endif
 #endif
 
   float2 xz = i.world.xz;
@@ -319,7 +401,7 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   // (its tilt is overdone for the view from above, as the swell's; seen at a low angle, toward the horizon, the waves
   // show by themselves, and overdone they lay as dark ruled bands along the shore)
   N = normalize(N + float3(surf.tilt.x, 0, surf.tilt.y) * lerp(0.4, 1.0, saturate(-toPixel.y * 2.5)));
-  [branch] if (surfLook3.x > 0.5) return float4(SurfView(still.xz, surf, surfArea, surfLook3.x), 1);  // (Surf::view)
+  [branch] if (surfLook3.x > 0.5 && surfLook3.x < 2.5) return float4(SurfView(still.xz, surf, surfArea, surfLook3.x), 1);  // (Surf::view; [shore] 3: WetBeach)
 #endif
 
   // the light on the water
@@ -360,6 +442,10 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
 #endif
 #endif
   float deep = i.world.y + level - bed.y;
+#if SURF_WET
+  // [shore] (ground the water has run back from just now: the beach the surf wets, with World::waterDetail)
+  [branch] if (deep <= 0) return WetBeach(i.position.xy, bed, grain, coverage);
+#endif
   if (deep <= 0) {
     coverage = 0;
     discard;
@@ -525,8 +611,19 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   // [sunlight] (drifting cloud shadows, sunlight.h) the sea darker in a cloud's shadow, its mirror of the sky too: from
   // above, a cloud's shadow on the water reads as one darker patch, as on the land
   [branch] if (cloudDrift.x > 0.5) color *= 1 - cloudDrift.w * saturate((1 - CloudShadow(i.world)) / max(cloudDrift.y, 1e-3));
-  // the sun's (or the moon's) glint
-  color += sunLight * (pow(saturate(dot(R, sunDirection)), 500) * 0.9 * shadow * (1 - foam));
+  // the sun's (or the moon's) glint ([shore] with World::waterDetail: widened and dimmed by the waves a pixel takes in,
+  // water_glint.h: from far up a calm sheen where the sun's mirror image lies, not single pixels twinkling)
+  [branch] if (shore.x > 0.5 && grain > kGlintFrom) {  // (closer in exactly as before)
+    // (the swell's long trains, which a pixel far off still shows, counted among the slopes it takes in there: their even
+    // tilt, mirrored by a widened lobe, lay as ruled stripes of light across the far sea)
+    float far = smoothstep(kGlintFrom, kGlintTo, grain);
+    float3 swellTilt = float3(-swell.y, 0, -swell.z) * lerp(1.0, 2.5, saturate(-toPixel.y * 2.5));
+    float3 calm = reflect(toPixel, normalize(N - swellTilt * far));
+    calm.y = max(calm.y, 0.02);
+    color += sunLight * (SoftGlint(dot(normalize(calm), sunDirection), 500, grain, kGlintFrom, kGlintTo, kGlintSlopes) * 0.9 * shadow * (1 - foam));
+  } else {
+    color += sunLight * (pow(saturate(dot(R, sunDirection)), 500) * 0.9 * shadow * (1 - foam));
+  }
   // at its very edge the water thins out to nothing over what is behind it
   color = lerp(behind.SampleLevel(samplerLinearClamp, uv, 0).rgb, ThroughAirTo(color, i.world), saturate(deep / 0.035));
   return float4(BeyondMap(color, i.world), 1);
@@ -553,15 +650,19 @@ constexpr float kRippleTilt = 2.0f, kRippleFoamSlope = 0.8f, kRippleWaterline = 
 
 }  // namespace
 
-gfx::Pipeline Water::ModernPipeline(bool ripples, std::string* error, bool winter, bool surf) {
+gfx::Pipeline Water::ModernPipeline(bool ripples, std::string* error, bool winter, bool surf, bool wet) {
   // (the modern look's water reads the scene's depth: several samples a pixel, or one. Without ripples, winter and the
-  // surf its source is the same as it ever was.)
+  // surf its source is the same as it ever was, but for [shore] the glint's block, water_glint.h, read only with
+  // World::waterDetail.)
   std::string modern = std::string(ripples ? "#define RIPPLES 1\n" : "") + (winter ? "#define WINTER 1\n" : "") + (surf ? "#define SURF 1\n" : "") +
+                       (surf && wet ? "#define SURF_WET 1\n" : "") +  // [shore]
                        "#define SAMPLES " + std::to_string(gSceneSamples) + "\n" + kViewShaderBlock + RayShaders() + kLightingShaderBlock +
-                       (winter ? kWinterWaterShaderBlock : "") + (surf ? kSurfShaderBlock : "") + kModernShader;
+                       kGlintShaderBlock + (winter ? kWinterWaterShaderBlock : "") + (surf ? kSurfShaderBlock : "") + kModernShader;
   gfx::PipelineDesc pd;
   pd.name = winter ? (ripples ? "water, modern, ripples, winter" : "water, modern, winter") : ripples ? "water, modern, ripples" : "water, modern";
   if (surf) pd.name = winter ? (ripples ? "water, modern, ripples, winter, surf" : "water, modern, winter, surf") : ripples ? "water, modern, ripples, surf" : "water, modern, surf";
+  if (surf && wet) pd.name = winter ? (ripples ? "water, modern, ripples, winter, surf, wet beach" : "water, modern, winter, surf, wet beach")
+                             : ripples ? "water, modern, ripples, surf, wet beach" : "water, modern, surf, wet beach";  // [shore]
   pd.vertexSource = pd.pixelSource = modern;
   pd.attrs = {{"POSITION", 0, gfx::AttrType::Float2, 0}};
   pd.stride = 8;
@@ -586,14 +687,15 @@ void Water::PrepareRipples() {
   if (!modernRipples_) fprintf(stderr, "render: the water cannot show ripples (%s)\n", why.c_str());
 }
 
-void Water::PrepareSurf(bool ripples, bool winter) {
+void Water::PrepareSurf(bool ripples, bool winter, bool wet) {
   if (!map_ || !map_->water.present || !modern_) return;
-  for (int k = 0; k < 4; ++k) {
+  for (int k = 0; k < 8; ++k) {
     // (the variants the options on now may want: with the ripples' field or without it, in winter or not)
-    if (((k & 1) != 0 && !ripples) || ((k & 2) != 0 && !winter) || surfTried_[k]) continue;
+    // ([shore] and, 4, the wet beach's: World::waterDetail on)
+    if (((k & 1) != 0 && !ripples) || ((k & 2) != 0 && !winter) || ((k & 4) != 0 && !wet) || surfTried_[k]) continue;
     surfTried_[k] = true;
     std::string why;
-    modernSurf_[k] = ModernPipeline((k & 1) != 0, &why, (k & 2) != 0, true);
+    modernSurf_[k] = ModernPipeline((k & 1) != 0, &why, (k & 2) != 0, true, (k & 4) != 0);
     if (!modernSurf_[k]) fprintf(stderr, "render: the water cannot show the surf (%s)\n", why.c_str());
   }
 }
@@ -703,8 +805,10 @@ void Water::DrawWith(const View& view, const Camera* camera, gfx::Texture behind
     std::memcpy(c.rippleLook, look, sizeof look);
   }
   // [surf] with the surf on (surf.h): the water's surf pipeline of the same kind, its constants and its field
-  if (modern && surf.Active()) PrepareSurf(rippling, wintry);
-  const gfx::Pipeline surfing = modern && surf.Active() ? modernSurf_[(rippling ? 1 : 0) | (wintry ? 2 : 0)] : gfx::Pipeline{};
+  // ([shore] the wet beach's with World::waterDetail on: the view's shore.x)
+  const bool wet = view.constants.shore[0] > 0.5f;
+  if (modern && surf.Active()) PrepareSurf(rippling, wintry, wet);
+  const gfx::Pipeline surfing = modern && surf.Active() ? modernSurf_[(rippling ? 1 : 0) | (wintry ? 2 : 0) | (wet ? 4 : 0)] : gfx::Pipeline{};
   if (surfing) surf.Constants(c.surfArea, c.surfLook, c.surfLook2, c.surfLook3);
   device_->SetPipeline(surfing ? surfing : winter ? winter : rippling ? modernRipples_ : modern ? modern_ : pipeline_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
