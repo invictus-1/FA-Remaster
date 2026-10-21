@@ -606,8 +606,9 @@ int Tarmacs::Draw(const View& view, const float* camera16, gfx::Texture sceneDep
   return drawn;  // (t26 left as the ground bound it)
 }
 
-gfx::Texture Tarmacs::ClearCover(const View& view, const float* area, const std::vector<Pad>& pads) {
+gfx::Texture Tarmacs::ClearCover(const View& view, const float* area, const std::vector<Pad>& pads, gfx::Texture into, int intoSize) {
   if (pads.empty() || area[2] <= 0 || area[3] <= 0 || !Pipelines()) return {};
+  const int size = into ? intoSize : kCoverSize;  // [plantlod] (the picture's texels a side)
   const float wide = area[2] * area[3];
   // the pads over the square, by material
   bool any = false;
@@ -617,7 +618,7 @@ gfx::Texture Tarmacs::ClearCover(const View& view, const float* area, const std:
     if (p.material >= 0 && p.material < static_cast<int>(materials_.size()) && Load(materials_[static_cast<size_t>(p.material)])) any = true;
   }
   if (!any) return {};
-  if (!coverField_) {
+  if (!coverField_ && !into) {
     gfx::TargetDesc td;
     td.width = td.height = kCoverSize;
     td.format = gfx::Format::R8;
@@ -625,7 +626,7 @@ gfx::Texture Tarmacs::ClearCover(const View& view, const float* area, const std:
     if (!coverField_) return {};
   }
   gfx::PassDesc pass;
-  pass.color = coverField_;
+  pass.color = into ? into : coverField_;  // [plantlod]
   pass.clearColor = true;
   device_->BeginPass(pass);
   device_->SetPipeline(cover_);
@@ -641,7 +642,7 @@ gfx::Texture Tarmacs::ClearCover(const View& view, const float* area, const std:
       if (p.centre.x + reach < area[0] || p.centre.z + reach < area[1] || p.centre.x - reach > area[0] + wide || p.centre.z - reach > area[1] + wide) continue;
       // (read at the level whose texels are about the picture's: its texels across the pad over the square's across it)
       const float texels = mat.tier == "8k" ? 8192.0f : 4096.0f;
-      const float level = std::max(0.0f, std::log2(texels * (wide / kCoverSize) / std::max(2 * std::fabs(p.halfX), 0.1f)));
+      const float level = std::max(0.0f, std::log2(texels * (wide / static_cast<float>(size)) / std::max(2 * std::fabs(p.halfX), 0.1f)));
       k.insert(k.end(), {p.centre.x, p.centre.z, p.halfX, p.halfZ, p.cosHeading, p.sinHeading, p.alpha, level});
       if ((k.size() - 4) / 8 >= kMaxCoverPads) break;
     }
@@ -652,7 +653,7 @@ gfx::Texture Tarmacs::ClearCover(const View& view, const float* area, const std:
     device_->Draw(static_cast<uint32_t>(n * 6));
   }
   device_->SetTexture(0, {});
-  return coverField_;
+  return into ? into : coverField_;
 }
 
 }  // namespace render

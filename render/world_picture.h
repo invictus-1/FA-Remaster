@@ -208,6 +208,12 @@ class WorldPicture {
   //   and soften under lying snow (no dark squares round the marks, no dark strips beside the trenches).
   //   [leftover] And dry ground matt at grazing light (World::groundMatt): no sheen like wet plastic on the soil
   //   at dusk and dawn.
+  //   [plantlod] And the cover's plants by their size on screen (World::plantsFar, plantsRound, plantModels): over all the
+  //   ground in view down to a few pixels across, no longer gone past the cover's square; their cards fanned out and
+  //   rounded so they read with volume from above; the visuals session's 3D plants by size on screen down to their card.
+  //   At 2560x1440 (RTX 4090): about +0.01 ms close by (+0.27 ms with the 3D plants), +0.07 ms at 160 world units, up to
+  //   +0.22 ms looking straight down from about 110 (+0.31 with the 3D plants); clearing them off the pads and what stands
+  //   beyond the cover's square about +0.01 ms.
   void SetGroundDetail(bool on);
   // FSR 3 frame generation (World::frameGeneration): a picture made between each two frames and shown between
   // them, evenly apart, so twice the frames are shown, for a little more than half a frame's delay; the icons and

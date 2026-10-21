@@ -455,6 +455,13 @@ class World {
   // Ground cover near the camera (grass.h): grass blades on grassy ground, coloured from it, swaying in the wind,
   // low and gone with the distance (nothing when the camera is far). Modern look; off by default.
   bool groundCover = false;
+  // [plantlod] With the ground cover (plant_lod.h; Chris's test run of 21 October): its plants by their size on screen over
+  // all the ground in view, no longer gone beyond the cover's square (each down to a few pixels across, a clump drawn as
+  // fewer plants once small, and the ground taking their colour where they are no longer drawn: GroundCover::plantsFar);
+  // their cards fanned out and rounded, to read with volume from the game's high camera (plantsRound); the visuals
+  // session's 3D plants where the cover has them, by size on screen down to their card (plantModels, with plantsFar).
+  // Off by default (proposed for the game's Ground Detail).
+  bool plantsFar = false, plantsRound = false, plantModels = false;
   // Battle scars (decals.h, Decals::battleScars): the scorches and craters of the fighting stay on the ground,
   // weathering, up to a most for cost. Off by default (the game's own times).
   bool battleScars = false;

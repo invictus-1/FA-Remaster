@@ -43,7 +43,8 @@ float3 MeadowColour(float3 ground, float2 xz) {
 // the trees' crowns and on steep and windward ground; times coverSnow.x at the most. Its share of a full cover (0..1) in
 // `share`. `ground`: the ground's normal there; `map`: the map's width and height.
 cbuffer CoverSnow : register(b3) {
-  float4 coverSnow;      // x: world units the snow lies at the most where all of it lies (0: the cover as without snow); y: 1 = the shelter is read
+  float4 coverSnow;      // x: world units the snow lies at the most where all of it lies (0: the cover as without snow); y: 1 = the shelter is read;
+                         // z: [plantlod] 1 = the ground lays the map's snow materials (their mottled margin: GroundCover::snowMaterials)
   float4 coverSnowWind;  // xy: the way the wind blows (unit length); z: the trees' crowns' weight, w: the drifts' (Terrain::snowTune y, w)
 };
 Texture2D snowShelter : register(t13);  // (Terrain::SnowShelter) g the sky it sees, b the trees' crowns over it, a how it lies
@@ -62,6 +63,12 @@ float CoverSnowDepth(float2 xz, float y, float3 ground, float2 map, out float sh
   float bar = 1.02 - fallen * 1.15;
   // (with the shelter, over the snow ground's wider margin)
   float lying = (coverSnow.y > 0.5 ? smoothstep(bar - 0.15, bar + 0.35, takes) : smoothstep(bar, bar + 0.2, takes)) * smoothstep(0.25, 0.5, ground.y);
+  // [plantlod] with the map's snow materials laid the ground's margin is mottled (thinner snow, islands and holes) as the marks
+  // and the map's low plants take it (decals.cpp's MarkSnowLying, under_snow.h): the cover green where the ground is bare
+  [branch] if (coverSnow.z > 0.5) {
+    float mottle = CloudNoise(float3(xz * 0.45, 1.3)) * 0.6 + CloudNoise(float3(xz * 1.3, 4.7)) * 0.4;
+    lying = saturate(lying + (mottle - 0.5) * 3.2 * lying * (1 - lying));
+  }
   share = saturate(lying * fallen);
   // (never quite even: a little deeper and shallower in patches a unit or so across, so that what stands out of it does so
   // in places, not as the same tips everywhere)
@@ -374,7 +381,7 @@ struct CoverMotionConstants {
 // The plants (GroundCover::SetPlants): a spot a cell, 108 corners a spot. [cover] Up to six plants a spot (a clump's), each
 // a star of three cards crossing at its foot (eighteen corners); or, for the grass's clumps, the spot one tuft of up to
 // twelve real blades (nine corners each: a quad from the foot to the middle, then the tip).
-const char kPlantShader[] = R"hlsl(
+const char kPlantDecls[] = R"hlsl(
 cbuffer Plants : register(b1) {
   float4 area;      // xy: the first cell's world x, z; z: a cell's size; w: cells along a side
   float4 mapInfo;   // xy: the map's width and height; z: world units of the heights' largest value; w: the water's level
@@ -390,6 +397,20 @@ cbuffer Plants : register(b1) {
                     // [cover] below 0: how far its brightness goes toward the ground's (0: the art's own)
 #ifdef PLANTS
   float4 plantsK[2];  // [plants] (plants.h) PlantLife::Constants
+#endif
+#ifdef PLANT_LOD
+#ifndef PLANTS
+  float4 plantsKUnused[2];  // [plantlod] (their place kept: the constants are laid out alike with and without)
+#endif
+  float4 lodInfo[4];      // [plantlod] (plant_lod.h; GroundCover::FillPlantConstants says what each holds)
+  float4 cellModels[16];  // [plantlod] per cell: x its model's kind (-1: none); y, z, w the pixels its levels 0, 1, 2 go down to
+  float4 modelKinds[8];   // [plantlod] per kind: x its levels, y 1 = it ends on a card
+  float4 extraCells[24];  // [plantlod] per kind with no card (cell 16 + its number): its model (as cellModels), size, more (as cells)
+  float4 extraRules[8];   // [plantlod] the same: x the group whose spots it takes, y the share of them
+  float4 extraTones[8];   // [plantlod] the same: as tones (its leaves' mean colour; w below 0: its brightness toward the ground's)
+  float4 modelTint[8];    // [plantlod] per kind: rgb its colour times this (its leaves' mean brought to its card's); w its
+                          // card's width times this (the model's width over the card's frame)
+  float4 farField;        // [plantlod] the far field (farCleared): its first x, z; 1 / its width; 1 = made this frame
 #endif
 };
 Texture2D<float> heightMap : register(t0);
@@ -439,7 +460,9 @@ float PlantPatch(float2 xz) {
 }
 uint OrderAt(uint i) { return uint(order[i / 4][i % 4]); }
 float PlantLuma(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
-
+)hlsl";
+// (the plants' shader goes on; with plantsFar plant_lod.h's kPlantLodBlock comes between)
+const char kPlantShader[] = R"hlsl(
 struct VOut {
   float4 position : SV_Position;
   float3 world : TEXCOORD0;
@@ -461,6 +484,9 @@ struct VOut {
   float4 here : TEXCOORD9;    // [leftover] (this frame's place and the frame before's, by the views without the jitter)
   float4 then : TEXCOORD10;
 #endif
+#ifdef PLANT_ROUND
+  float3 mass : TEXCOORD11;   // [plantlod] a card's: the plant's normal as a mass, out from a point under its middle
+#endif
 };
 
 static const float2 kCard[6] = {float2(0, 1), float2(1, 1), float2(0, 0), float2(0, 0), float2(1, 1), float2(1, 0)};
@@ -475,6 +501,27 @@ VOut VS(uint id : SV_VertexID) {
 #ifdef MOTION
   o.here = o.then = float4(0, 0, 0, 1);
 #endif
+#ifdef PLANT_LOD
+  // [plantlod] a spot of this frame's tiles (plant_lod.h): lodInfo[0].x corners a spot in this draw's tiles (from the tile
+  // lodInfo[0].y on), 16 x 16 spots a tile; drawn as large as its size on screen says (PlantLodScale), or by the models
+  uint perSpot = uint(lodInfo[0].x);
+  uint spot = id / perSpot, local = id % perSpot;
+  float4 tile = plantTiles[uint(lodInfo[0].y) + spot / 256u];
+  uint within = spot % 256u;
+  PlantSpot s;
+  if (!PlantSpotAt(int2(tile.xy) + int2(within % 16u, within / 16u), s) || s.cell >= 16) return o;  // (a model with no card: its pass alone)
+  uint h = s.h, group = s.group, cell = s.cell, count = s.count;
+  float2 xz = s.xz;
+  float bare = s.bare;
+  const float grown = s.grown;
+  float4 uvRect = cells[cell * 3], size = cells[cell * 3 + 1], more = cells[cell * 3 + 2];
+  const bool tuft = group <= 1;
+  uint plant = tuft ? 0 : local / 18;
+  if (tuft ? local / 9 >= count * 2 : plant >= count) return o;
+  const float px = PlantPixels(s);
+  const float lodScale = PlantLodScale(s, px, tuft ? local / 18 : plant);
+  if (lodScale <= 0.01) return o;
+#else
   uint spot = id / 108, local = id % 108;
   uint side = uint(area.w);
   float2 cellAt = area.xy + float2(spot % side, spot / side) * area.z;
@@ -516,8 +563,13 @@ VOut VS(uint id : SV_VertexID) {
   const bool tuft = group <= 1;
   uint plant = tuft ? 0 : local / 18;
   if (tuft ? local / 9 >= count * 2 : plant >= count) return o;
+#endif
   // this plant of the spot: its own foot near the spot's, its own height and turn
   uint hc = PlantHash(h * 31 + plant * 977 + 7);
+#ifdef PLANT_LOD
+  // [plantlod] drawn by the models' pass where it had room for it (its flags; else the card)
+  [branch] if (tile.z >= 0 && PlantModelLevel(s, px, hc) >= 0 && ((modelFlags.Load(int3(within, int(tile.z), 0)) >> plant) & 1u) != 0) return o;
+#endif
   float2 foot = xz;
   if (plant > 0) {
     float angle = PlantRand(hc) * 6.2832, reach = size.x * more.w * 0.35 * sqrt(PlantRand(PlantHash(hc + 1)));
@@ -526,11 +578,18 @@ VOut VS(uint id : SV_VertexID) {
   float ground = PlantGround(foot);
   if (ground < mapInfo.w + 0.08) return o;  // (none in or at the water)
   float3 root = float3(foot.x, ground, foot.y);
+#ifdef PLANT_LOD
+  // [plantlod] as large as its size on screen says (a tuft's blades: less taller, wider), pressed flat where something
+  // stands (where that is kept)
+  float height = lerp(size.y, size.z, PlantRand(PlantHash(hc + 2))) * more.w * (tuft ? sqrt(lodScale) : lodScale);
+  height *= 1 - 0.9 * trampled.SampleLevel(samplerLinearClamp, PlantFieldUv(foot), 0) * PlantFieldWeight(foot);
+#else
   // fewer toward the square's edge, none at it; pressed flat where something stands
   float half = area.z * area.w * 0.5;
   float thin = saturate((1 - length(foot - (area.xy + half)) / half) * 3);
   float height = lerp(size.y, size.z, PlantRand(PlantHash(hc + 2))) * more.w * saturate(thin * 2.5);
   height *= 1 - 0.9 * trampled.SampleLevel(samplerLinearClamp, (foot - area.xy) / (area.z * area.w), 0);
+#endif
   height *= grown * (1 - 0.5 * bare);  // [cover]
 #ifdef PLANTS
   // [plants] burnt where the ground is (its own share of a half burnt place): short
@@ -608,6 +667,9 @@ VOut VS(uint id : SV_VertexID) {
     float laid = 0;
     {  // a blast's wave: laid over away from it (as the meadow's blades)
       float2 blown = blastField.SampleLevel(samplerLinearClamp, (foot - area.xy) / (area.z * area.w), 0);
+#ifdef PLANT_LOD
+      blown *= PlantFieldWeight(foot);  // [plantlod] (where the waves are kept)
+#endif
       float over = length(blown);
       laid = min(over, 1.35);
       if (laid > 1e-3) {
@@ -634,6 +696,9 @@ VOut VS(uint id : SV_VertexID) {
     float3 p = float3(rootAt.x, ground, rootAt.y) + float3(bend.x * v * v * bh, v * bh, bend.y * v * v * bh);
     // (at least most of a pixel wide, or far blades would flicker in and out between pixels)
     float wide = max(shown.w * 0.75, shown.z * length(root - cameraPosition) * 0.8) * kTuftWide[at.x];
+#ifdef PLANT_LOD
+    wide *= lodScale;  // [plantlod] (the first pair wider as the tuft is drawn as fewer blades, the others narrower)
+#endif
     p.xz += across * ((at.y ? 0.5 : -0.5) * wide);
     o.position = mul(viewProj, float4(p, 1));
 #ifdef MOTION
@@ -671,12 +736,29 @@ VOut VS(uint id : SV_VertexID) {
   float3 toward = float3(-right.z, 0, right.x);  // (one side's face)
   float2 tilt = (float2(PlantRand(PlantHash(hc + 4)), PlantRand(PlantHash(hc + 5))) - 0.5) * 0.3;
   float3 up = normalize(float3(tilt.x, 1, tilt.y));
+#ifdef PLANT_ROUND
+  // [plantlod] fanned out from the foot: each card leaning out its own way (the three round the plant, 120 degrees apart),
+  // the weeds' and ferns' far over as their leaves and fronds spread, the flowers' and stalks' a little; seen from above
+  // the plant then shows its cards' faces, a tuft, not three lines
+  {
+    float2 leanBy = group == 2 ? float2(0.75, 0.3) : group == 5 ? float2(0.6, 0.3) : group == 3 ? float2(0.25, 0.2) : float2(0.1, 0.15);
+    float lean = leanBy.x + leanBy.y * PlantRand(PlantHash(hc + 30 + card));
+    up = normalize(up * cos(lean) + ((card & 1u) != 0 ? -toward : toward) * sin(lean));
+    toward = normalize(cross(up, right));
+  }
+#endif
   float2 bend = float2(0.915, 0.403) * (swing * gust * 0.35 * more.x);
   float2 c = kCard[corner];
   [branch] if (deep > 0) c.y = min(c.y, 1 - deep / frame);  // [leftover] (under lying snow: the picture's foot at the snow's top)
   bool flip = (hc & 64u) != 0;
   float above = 1 - c.y;  // (0 the foot, 1 the card's top)
+#ifdef PLANT_LOD
+  // [plantlod] a card a model ends on: as wide as the model (modelTint's w), so that the plant keeps its size where it changes
+  float cardWide = CellModel(cell).x >= 0 && lodInfo[2].y > 0.5 ? modelTint[uint(CellModel(cell).x)].w : 1;
+  float3 p = root + right * ((c.x - 0.5) * frame * cardWide) + up * (above * frame);
+#else
   float3 p = root + right * ((c.x - 0.5) * frame) + up * (above * frame);
+#endif
 #ifdef MOTION
   float3 pB = p;  // [leftover] (the frame before's: its wind then)
   pB.xz += float2(0.915, 0.403) * (swingB * gustB * 0.35 * more.x) * above * above * frame;
@@ -706,6 +788,9 @@ VOut VS(uint id : SV_VertexID) {
 #ifdef BLASTS
   {  // a blast's wave: laid over away from it, its top going over as far as it was high
     float2 blown = blastField.SampleLevel(samplerLinearClamp, (foot - area.xy) / (area.z * area.w), 0);
+#ifdef PLANT_LOD
+    blown *= PlantFieldWeight(foot);  // [plantlod] (where the waves are kept)
+#endif
     float over = length(blown), lay = min(over, 1.35);
     if (lay > 1e-3) {
       p -= up * (above * frame * (1 - cos(lay)));
@@ -738,6 +823,10 @@ VOut VS(uint id : SV_VertexID) {
   // [cover] the sun's shadow at this corner (a little off the ground), not one for the whole card: as the camera zooms and
   // the shadow maps change, a plant at a shadow's edge is not all lit, then all dark
   o.shade = float3(SunShadow(p + n * 0.03, n), above * frame / max(height, 0.001), 0);
+#ifdef PLANT_ROUND
+  // [plantlod] (out from a point under the plant's middle: its top faces the sky, its rim outward)
+  o.mass = normalize(p - (root + float3(0, -0.35 * height, 0)) + n * (0.05 * height));
+#endif
   // [coverdark] a clump of the meadow's grass takes the ground's colour under it, as the blades do (the card's own light
   // and dark kept, its mean brought to the ground's, a little varied): else, at the art's own colour, it stands out as a
   // dark blot on the ground it grows from. [cover] The weeds and ferns (dark leaves): their brightness brought part of the
@@ -819,6 +908,9 @@ float4 PS(VOut i) : SV_Target {
   float2 t = atlasNormals.Sample(samplerAniso, i.uv).ag * 2 - 1;
   float3 card = normalize(i.right * t.x + i.up * t.y + face * sqrt(saturate(1 - dot(t, t))));
   float3 n = normalize(lerp(i.ground, card, 0.5));  // (the card's own normals at half strength: the visuals track's advice)
+#ifdef PLANT_ROUND
+  n = normalize(lerp(normalize(i.mass), card, 0.35));  // [plantlod] (rounded over the plant as a mass, a little of the card's own)
+#endif
   float occlusion = lerp(0.7, 1, saturate(i.shade.y));
   // (the sun's light through its leaves, World::leafLight: by the card's own way, the side the eye sees)
   float3 albedo = ToLinear(c.rgb) * i.tint.rgb;  // ([coverdark] i.tint)
@@ -838,14 +930,6 @@ float4 PS(VOut i) : SV_Target {
 }
 )hlsl";
 
-struct PlantConstants {
-  float area[4], mapInfo[4], info[4], shown[4];  // ([cover] shown)
-  float cells[48][4];
-  float order[4][4];
-  float groups[6][4];
-  float tones[16][4];   // [coverdark]
-  float plantsK[2][4];  // [plants] (read by the shaders with them only)
-};
 
 // Over the grass's square, how flat what stands there presses it: each texel the most of the discs round it (full
 // within a disc, nothing a quarter of a world unit outside it). A thread for each texel.
@@ -890,13 +974,110 @@ constexpr int kTrampleSize = 256;
 
 }  // namespace
 
+// The plants' constants (kPlantDecls' Plants; [plantlod] out of the file's own namespace: grass.h names it)
+struct PlantConstants {
+  float area[4], mapInfo[4], info[4], shown[4];  // ([cover] shown)
+  float cells[48][4];
+  float order[4][4];
+  float groups[6][4];
+  float tones[16][4];   // [coverdark]
+  float plantsK[2][4];  // [plants] (read by the shaders with them only)
+  // [plantlod] (read by the shaders with plantsFar only: PLANT_LOD) lod[0]: x a spot's corners in this draw, y its first
+  // tile, z pixels a world unit at a distance of one, w unused; lod[1]: the clump's collapse (pixels: all of it above x,
+  // one plant below y), the cut's band (z, w); lod[2]: x 1 = the fields over the square are this frame's, y 1 = models,
+  // z the models' band; lod[3]: x a model draw's list, y its mesh's height, z 1 = it has its material
+  float lod[4][4];
+  float cellModels[16][4];  // [plantlod] per cell: its model's kind (-1 none), the pixels its levels go down to
+  float modelKinds[8][4];   // [plantlod] per kind: its levels, 1 = it ends on a card
+  float extraCells[24][4];  // [plantlod] per kind with no card: its cell (16 + its number): as cellModels, cells' size and more
+  float extraRules[8][4];   // [plantlod] the same: the group whose spots it takes, the share of them
+  float extraTones[8][4];   // [plantlod] the same: as tones
+  float modelTint[8][4];    // [plantlod] per kind: its colour times this; w its card's width times this
+  float farField[4];        // [plantlod] the far field over the tiles (GroundCover::FarArea)
+};
+
 GroundCover::~GroundCover() {
   for (gfx::Pipeline p : {pipeline_, trample_, plantPipeline_, blastPipeline_, blastPlantPipeline_, reactingPipelines_[0], reactingPipelines_[1],
                           reactingPipelines_[2], reactingPipelines_[3]})
     if (p) device_->Destroy(p);
   for (gfx::Pipeline p : motionPipelines_)  // [leftover]
     if (p) device_->Destroy(p);
+  for (gfx::Pipeline p : {farCover_, modelPlace_, modelClear_, farDiscPipeline_})  // [plantlod]
+    if (p) device_->Destroy(p);
+  if (farField_) device_->Destroy(farField_);  // [plantlod]
+  for (gfx::Pipeline p : modelPipelines_)  // [plantlod]
+    if (p) device_->Destroy(p);
+  for (gfx::Buffer b : {tileBuffer_, modelTileBuffer_})  // [plantlod]
+    if (b) device_->Destroy(b);
   if (trampled_) device_->Destroy(trampled_);
+}
+
+// [plantlod] What the plants' shaders are made with for the switches (none: as without them).
+std::string GroundCover::PlantDefines() const {
+  return std::string((plantVariant_ & 1) ? "#define PLANT_LOD 1\n" : "") + ((plantVariant_ & 2) ? "#define PLANT_ROUND 1\n" : "");
+}
+
+// The plants' shaders' text (for the switches, plantVariant_): plantSource_, blastPlantSource_ and the reacting ones'.
+void GroundCover::BuildPlantSources() {
+  const bool lod = (plantVariant_ & 1) != 0;
+  const std::string reacting = std::string("#define PLANTS 1\n#define PLANTS_PRESS t9\n#define PLANTS_BURN t10\n");
+  auto text = [&](const std::string& head, bool reacts) {
+    return PlantDefines() + "#define PLANT_SAMPLES " + std::to_string(gSceneSamples) + "\n" + head + kViewShaderBlock + RayShaders() + kLightingShaderBlock +
+           (reacts ? std::string(kPlantsShaderBlock) : std::string()) + kCoverShared + kPlantDecls + (lod ? kPlantLodBlock : "") + kPlantShader +
+           (lod ? kPlantModelShader : "");  // ([plantlod] the models' drawing in the same text)
+  };
+  plantSource_ = text(std::string(), false);
+  blastPlantSource_ = "#define BLASTS 1\n" + plantSource_;
+  reactingSources_[1] = text(reacting, true);
+  reactingSources_[3] = "#define BLASTS 1\n" + reactingSources_[1];
+}
+
+// [plantlod] The plants' pipelines made again when plantsFar or plantsRound changed (those of the blasts' waves and of
+// plants that react only where they were made already; the motion's and the models' when next wanted).
+void GroundCover::MakePlantVariant() {
+  const int want = (plantsFar ? 1 : 0) | (plantsRound ? 2 : 0);
+  if (want == plantVariant_ || !pipeline_) return;
+  plantVariant_ = want;
+  for (gfx::Pipeline* p : {&plantPipeline_, &blastPlantPipeline_, &reactingPipelines_[1], &reactingPipelines_[3]})
+    if (*p) {
+      device_->Destroy(*p);
+      *p = {};
+    }
+  for (int k = 1; k < 8; k += 2) {
+    if (motionPipelines_[k]) device_->Destroy(motionPipelines_[k]);
+    motionPipelines_[k] = {};
+    motionTried_[k] = false;
+  }
+  for (int k = 0; k < 8; ++k) {
+    if (modelPipelines_[k]) device_->Destroy(modelPipelines_[k]);
+    modelPipelines_[k] = {};
+    modelTried_[k] = false;
+  }
+  for (gfx::Pipeline* p : {&modelPlace_, &modelClear_})
+    if (*p) {
+      device_->Destroy(*p);
+      *p = {};
+    }
+  modelPlaceTried_ = false;
+  BuildPlantSources();
+  std::string error;
+  gfx::PipelineDesc pd = blastDesc_;
+  pd.alphaToCoverage = true;
+  pd.name = "ground cover: plants";
+  pd.vertexSource = pd.pixelSource = plantSource_;
+  plantPipeline_ = device_->CreatePipeline(pd, &error);
+  if (!plantPipeline_) fprintf(stderr, "render: the ground cover's plants cannot be drawn so (%s)\n", error.c_str());
+  if (blastsMade_ > 0) {
+    pd.name = "ground cover: plants, blasts' waves";
+    pd.vertexSource = pd.pixelSource = blastPlantSource_;
+    blastPlantPipeline_ = device_->CreatePipeline(pd, &error);
+  }
+  if (reactingMade_ > 0)
+    for (int k : {1, 3}) {
+      pd.name = k == 1 ? "ground cover: plants, reacting" : "ground cover: plants, reacting, blasts' waves";
+      pd.vertexSource = pd.pixelSource = reactingSources_[k];
+      reactingPipelines_[k] = device_->CreatePipeline(pd, &error);
+    }
 }
 
 bool GroundCover::Init(std::string* error) {
@@ -911,7 +1092,10 @@ bool GroundCover::Init(std::string* error) {
   if (!pipeline_) return false;
   // [foliage] (the plants' cards fade right at the eye by their coverage among a pixel's samples: PLANT_SAMPLES, alpha
   // to coverage; elsewhere their alpha is 1, every sample, as before)
-  const std::string plants = "#define PLANT_SAMPLES " + std::to_string(gSceneSamples) + "\n" + kViewShaderBlock + RayShaders() + kLightingShaderBlock + kCoverShared + kPlantShader;
+  // ([plantlod] the plants' text for the switches as they are now: BuildPlantSources; without them as before)
+  plantVariant_ = (plantsFar ? 1 : 0) | (plantsRound ? 2 : 0);
+  BuildPlantSources();
+  const std::string plants = plantSource_;
   pd.name = "ground cover: plants";
   pd.vertexSource = pd.pixelSource = plants;
   pd.alphaToCoverage = true;  // [foliage]
@@ -922,17 +1106,12 @@ bool GroundCover::Init(std::string* error) {
   // made by PrepareBlasts when they are first wanted)
   blastDesc_ = pd;
   blastSource_ = "#define BLASTS 1\n" + source;
-  blastPlantSource_ = "#define BLASTS 1\n" + plants;
   // [plants] (and the same two with plants that react, without and with the blasts' waves: made by PreparePlants when first
   // wanted; its textures at t9, t10)
   const std::string reacting = std::string("#define PLANTS 1\n#define PLANTS_PRESS t9\n#define PLANTS_BURN t10\n");
   reactingSources_[0] = reacting + kViewShaderBlock + RayShaders() + kLightingShaderBlock + kPlantsShaderBlock + kCoverShared + kShader;
-  reactingSources_[1] = "#define PLANT_SAMPLES " + std::to_string(gSceneSamples) + "\n" + reacting + kViewShaderBlock + RayShaders() + kLightingShaderBlock +
-                        kPlantsShaderBlock + kCoverShared + kPlantShader;
   reactingSources_[2] = "#define BLASTS 1\n" + reactingSources_[0];
-  reactingSources_[3] = "#define BLASTS 1\n" + reactingSources_[1];
   bladeSource_ = source;  // [leftover] (for the motion's: DrawMotion)
-  plantSource_ = plants;
   const std::string trample = std::string(kViewShaderBlock) + kTrample;
   gfx::ComputeDesc cd;
   cd.name = "ground cover: pressed flat";
@@ -991,12 +1170,16 @@ bool GroundCover::PreparePlants() {
 
 void GroundCover::Prepare(const View& view, const Camera& camera, const std::vector<float>& discs) {
   prepared_ = false;
+  farReady_ = modelsPlaced_ = farFieldReady_ = false;  // [plantlod] (PrepareFar's, this frame's)
+  if (plantsFar) farDiscs_ = discs;                     // [plantlod] (the far field's footprints: PlaceFar)
   // (a cinematic camera, cinecam.h: by how high the eye is over the ground ahead, and the square ahead of the eye,
   // from a little behind it to some fifty units on, where a low eye sees the grass)
   const Vec3 eye = camera.Eye();
   const float away = camera.cinematic ? eye.y - camera.target.y : camera.distance;
   away_ = away;  // [leftover] (for the motion: motionFarthest)
-  if (!pipeline_ || !trample_ || !trampled_ || away > farthest) return;
+  if (pipeline_) MakePlantVariant();  // [plantlod] (the plants' shaders for the switches as they are now)
+  const bool farOnly = plantsFar && pipeline_ && (!trample_ || !trampled_ || away > farthest);  // [plantlod] (the plants alone)
+  if (!farOnly && (!pipeline_ || !trample_ || !trampled_ || away > farthest)) return;
   // [cover] how much of the cover is there: none at `farthest`, all from `fadeFrom` of it on; and since it came in, over
   // `appearSeconds` (the view's clock: a frame's step counted at most a tenth of a second, so that a hitch is no jump; it
   // starts again after two seconds without it, or the clock turned back more than a second: a map opened, a new game;
@@ -1006,6 +1189,8 @@ void GroundCover::Prepare(const View& view, const Camera& camera, const std::vec
   if (now > lastShown_ + 2 || now < lastShown_ - 1) step = cameIn_ = 0;
   cameIn_ = std::min(cameIn_ + (appearSeconds > 0 ? step / appearSeconds : 1.0f), 1.0f);
   lastShown_ = now;
+  cameInShown_ = cameIn_ * cameIn_ * (3 - 2 * cameIn_);  // [plantlod] (the plants by plantsFar: from any distance)
+  if (farOnly) return;  // [plantlod] (no blades, nothing pressed flat: the plants only, PrepareFar)
   const float byDistance = std::clamp((farthest - away) / std::max(farthest * (1 - fadeFrom), 1e-3f), 0.0f, 1.0f);
   shown_ = byDistance * cameIn_ * cameIn_ * (3 - 2 * cameIn_);
   // a square round what the camera looks at, as wide as it sees near there (no more than about 370 cells a side)
@@ -1081,6 +1266,7 @@ bool GroundCover::SetPlants(const JsonValue& cover, TextureCache* textures, cons
     // [coverdark] each cell's mean colour, from the cover's stats (its sRGB, made linear as the shader makes the atlas's and
     // the ground's): the grass's clumps (not the dry ones) for bringing it to the ground's (1), [cover] the weeds and ferns
     // their brightness toward the ground's (-1), the dry clumps' tufts their colour; none without stats
+    plants_.cover[index] = static_cast<float>(cover["stats"][name]["cover"].NumberOr(0.15));  // [plantlod] (the far cover's)
     const JsonValue& mean = cover["stats"][name]["albedo_srgb8"];
     if (mean.items.size() == 3) {
       for (int k = 0; k < 3; ++k) plants_.tones[index][k] = std::pow(static_cast<float>(mean.items[static_cast<size_t>(k)].NumberOr(0)) / 255.0f, 2.2f);
@@ -1110,13 +1296,165 @@ bool GroundCover::SetPlants(const JsonValue& cover, TextureCache* textures, cons
   return static_cast<bool>(atlas_);
 }
 
+// The plants' constants (Draw's, and [plantlod] PrepareFar's for the models' placing): the square they lie over, the map,
+// the cover's cells and how each is scaled, coloured and grouped; [plantlod] with plantsFar their sizes on screen.
+// `pixelAngle`: world units a pixel covers at a distance of one. Returns the square's cells a side.
+int GroundCover::FillPlantConstants(PlantConstants* p, float mapWidth, float mapHeight, float heightUnit, float waterLevel, float pixelAngle,
+                                    bool reacting) const {
+  const float reach = 0.5f * area_[2] * area_[3];
+  const int plantSide = static_cast<int>(std::ceil(2 * reach / plantCell));
+  p->area[0] = std::floor(area_[0] / plantCell) * plantCell;  // (the blades' square, by the plants' cells)
+  p->area[1] = std::floor(area_[1] / plantCell) * plantCell;
+  p->area[2] = plantCell;
+  p->area[3] = static_cast<float>(plantSide);
+  p->mapInfo[0] = mapWidth;
+  p->mapInfo[1] = mapHeight;
+  p->mapInfo[2] = heightUnit;
+  p->mapInfo[3] = waterLevel;
+  p->info[0] = plantDensity * plantCell * plantCell;
+  p->info[1] = cleared ? 1.0f : 0.0f;  // [tarmac]
+  p->info[2] = plants_.patchScale;
+  p->info[3] = plants_.patchCover;
+  p->shown[0] = plantsFar ? cameInShown_ : shown_;  // [cover] ([plantlod] with plantsFar not by the camera's distance)
+  p->shown[1] = bare ? 1.0f : 0.0f;
+  p->shown[2] = pixelAngle;
+  p->shown[3] = bladeWidth;
+  std::copy(&plants_.cells[0][0][0], &plants_.cells[0][0][0] + 16 * 3 * 4, &p->cells[0][0]);
+  // each cell's scale: the low plants `plantBoost` times the factor that brings the tallest to `plantTallest`, but
+  // none taller than that (the readability rule): the stalks and the tall flowers at the cap, the grass and the
+  // small flowers bigger than their real proportion, so that they read from the game's camera (the visuals
+  // track's advice)
+  const float metre = plantTallest / std::max(plants_.tallest, 1e-3f);
+  for (int i = 0; i < 16; ++i) p->cells[i * 3 + 2][3] = std::min(metre * plantBoost, plantTallest / std::max(plants_.cells[i][1][2], 1e-3f));
+  std::copy(&plants_.order[0][0], &plants_.order[0][0] + 16, &p->order[0][0]);
+  std::copy(&plants_.groups[0][0], &plants_.groups[0][0] + 24, &p->groups[0][0]);
+  for (int i = 0; i < 16; ++i) {  // [coverdark] (how far the grass's clumps take the ground's colour; [cover] the leaves its brightness)
+    std::copy(plants_.tones[i], plants_.tones[i] + 3, p->tones[i]);
+    p->tones[i][3] = plants_.tones[i][3] * (plants_.tones[i][3] > 0 ? clumpsToGround : leavesToGround);
+    if (plants_.tones[i][3] < 0 && leavesToGround > 0 && leavesBaked > 0) {
+      // [cover] the leaves' art already carries `leavesBaked` of the lift: the screen as before, the art's mean c' = k c,
+      // c' x f = c x lerp(1, g / c, w): f = (1 - w) / k + w g / c' = lerp(1, g / L, w') with w' = 1 - (1 - w) / k and
+      // L = c' w' / w (the shader takes the leaves' tone only for its brightness)
+      const float w = leavesToGround, wk = 1 - (1 - w) / leavesBaked;
+      for (int k = 0; k < 3; ++k) p->tones[i][k] *= wk / w;
+      p->tones[i][3] = -wk;
+    }
+  }
+  if (reacting) std::copy(plants->Constants(), plants->Constants() + 8, &p->plantsK[0][0]);  // [plants]
+  // [plantlod] (plantsFar's: kPlantLodBlock)
+  if (plantsFar && tiles_) {
+    p->lod[0][2] = tiles_->focal;
+    p->lod[1][0] = plantLod.collapseHigh;
+    p->lod[1][1] = std::min(plantLod.collapseLow, plantLod.collapseHigh - 1);
+    p->lod[1][2] = plantLod.cutLow * tiles_->cutScale;
+    p->lod[1][3] = std::max(plantLod.cutHigh, plantLod.cutLow) * tiles_->cutScale;
+    p->lod[2][0] = prepared_ ? 1.0f : 0.0f;
+    const bool models = ModelsOn();
+    p->lod[2][1] = models ? 1.0f : 0.0f;
+    p->lod[2][2] = plantLod.modelBand;
+    for (int i = 0; i < 16; ++i) p->cellModels[i][0] = -1;
+    int extra = 0;
+    if (models)
+      for (size_t kind = 0; kind < models_->kinds.size(); ++kind) {
+        const PlantModels::Kind& m = models_->kinds[kind];
+        p->modelKinds[kind][0] = static_cast<float>(m.levelCount);
+        p->modelKinds[kind][1] = m.card >= 0 ? 1.0f : 0.0f;
+        // its colour: its leaves' mean brought to its card's (the stats' means, linear), so that it reads as its card does
+        // where it changes to it; a kind with no card, or no means: its own
+        const bool means = m.mean[0] + m.mean[1] + m.mean[2] > 0;
+        for (int c = 0; c < 3; ++c)
+          p->modelTint[kind][c] = m.card >= 0 && means && plants_.tones[m.card][c] > 0
+                                      ? std::clamp(plants_.tones[m.card][c] / std::max(m.mean[c], 1e-4f), 0.5f, 2.0f)
+                                      : 1.0f;
+        // (the card it ends on as wide as it: its width over the card's frame, the visuals session's ask)
+        p->modelTint[kind][3] = m.card >= 0 && plants_.cells[m.card][1][0] > 0
+                                    ? std::clamp(std::max(m.size[0], m.size[1]) / plants_.cells[m.card][1][0], 0.3f, 1.5f)
+                                    : 1.0f;
+        // the pixels its levels go down to: by its size on screen, or where its json gives distances, by them (its width
+        // over each distance)
+        float bounds[3];
+        const float frame = m.card >= 0 ? FrameOf(m.card) : ModelFrame(m);
+        for (int l = 0; l < 3; ++l) bounds[l] = m.swap[l] > 0 ? frame * tiles_->focal / m.swap[l] : plantLod.modelPixels[l];
+        float* model = nullptr;
+        if (m.card >= 0) {
+          model = p->cellModels[m.card];
+        } else if (extra < 8) {
+          // a kind with no card: a cell of its own past the cover's (its size and more as the cells', its share of a
+          // group's spots)
+          model = p->extraCells[extra * 3];
+          float* size = p->extraCells[extra * 3 + 1];
+          float* more = p->extraCells[extra * 3 + 2];
+          size[0] = std::max(m.size[0], m.size[1]);
+          size[1] = m.size[2] * 0.8f;
+          size[2] = m.size[2] * 1.2f;
+          size[3] = m.size[2];
+          more[0] = m.sway;
+          more[1] = static_cast<float>(m.clump[0]);
+          more[2] = static_cast<float>(m.clump[1]);
+          more[3] = ModelScale(m);
+          p->extraRules[extra][0] = static_cast<float>(m.placeGroup);
+          p->extraRules[extra][1] = m.placeShare;
+          // (its leaves' brightness brought toward the ground's as the weeds' and ferns' are, by its own mean)
+          if (m.mean[0] + m.mean[1] + m.mean[2] > 0 && leavesToGround > 0) {
+            std::copy(m.mean, m.mean + 3, p->extraTones[extra]);
+            p->extraTones[extra][3] = -leavesToGround;
+          }
+          ++extra;
+        }
+        if (!model) continue;
+        model[0] = static_cast<float>(kind);
+        for (int l = 0; l < 3; ++l) model[1 + l] = bounds[l];
+      }
+    p->lod[2][3] = static_cast<float>(extra);
+    // (the far field: where it lies, made this frame or not)
+    p->farField[0] = farArea_[0];
+    p->farField[1] = farArea_[1];
+    p->farField[2] = 1.0f / std::max(farArea_[2] * farArea_[3], 1e-3f);
+    p->farField[3] = farFieldReady_ ? 1.0f : 0.0f;
+    // (for pictures, PlantLodTune::onlyCell: that cell and its group; -1 as the table says)
+    p->lod[0][3] = -1;
+    const int only = plantLod.onlyCell;
+    if (only >= 0 && only < 16 && plants_.cells[only][1][0] > 0) {
+      for (int g = 0; g < 6; ++g)
+        for (int j = 0; j < static_cast<int>(plants_.groups[g][1]); ++j) {
+          const int at = static_cast<int>(plants_.groups[g][0]) + j;
+          if (static_cast<int>(plants_.order[at / 4][at % 4]) == only) p->lod[3][3] = static_cast<float>(g);
+        }
+      p->lod[0][3] = static_cast<float>(only);
+    } else if (only >= 16 && only < 16 + extra) {
+      p->lod[3][3] = p->extraRules[only - 16][0];
+      p->lod[0][3] = static_cast<float>(only);
+    }
+  }
+  return plantSide;
+}
+
+// [plantlod] A cell's card's width in world units at its own height (as Draw scales it), 0 where the cover has no such cell.
+float GroundCover::FrameOf(int cell) const {
+  if (cell < 0 || cell >= 16 || plants_.cells[cell][1][0] <= 0 || plants_.cells[cell][1][3] <= 0) return 0;
+  const float metre = plantTallest / std::max(plants_.tallest, 1e-3f);
+  const float scale = std::min(metre * plantBoost, plantTallest / std::max(plants_.cells[cell][1][2], 1e-3f));
+  return plants_.cells[cell][1][0] * scale;
+}
+
+// [plantlod] A model with no card: world units a metre of it (as the cells are scaled, by its tallest, but to modelTallest:
+// a bush stands over the ferns, as the map's small bushes do), and its width.
+float GroundCover::ModelScale(const PlantModels::Kind& m) const {
+  const float metre = plantTallest / std::max(plants_.tallest, 1e-3f);
+  return std::min(metre * plantBoost, modelTallest / std::max(m.size[2] * 1.2f, 1e-3f));
+}
+float GroundCover::ModelFrame(const PlantModels::Kind& m) const { return std::max(m.size[0], m.size[1]) * ModelScale(m); }
+bool GroundCover::ModelsOn() const { return plantModels && models_ && !models_->kinds.empty(); }
+
 void GroundCover::Draw(const View& view, const Camera& camera, gfx::Texture heights, float heightUnit, gfx::Texture cover,
                        gfx::Texture normals, float mapWidth, float mapHeight, float waterLevel, gfx::Texture densityA, gfx::Texture densityB,
                        gfx::Texture blasts) {
   drawnBlades = drawnPlants = 0;
+  drawnTiles = drawnModels = 0;  // [plantlod]
   drawn_ = Drawn{};  // [leftover]
   if (!blastPlantPipeline_) blasts = {};  // (PrepareBlasts has not made them)
-  if (!prepared_ || !heights || !cover || !normals || view.height <= 0) return;
+  const bool farPlants = plantsFar && farReady_;  // [plantlod] (the plants by their tiles, with or without the blades)
+  if ((!prepared_ && !farPlants) || !heights || !cover || !normals || view.height <= 0) return;
   const bool reacting = plants && plants->Ready() && reactingMade_ > 0;  // [plants]
   const int with = blasts ? 2 : 0;                                       // [plants] (reactingPipelines_: the blasts' pair)
   const int side = static_cast<int>(area_[3]);
@@ -1148,22 +1486,24 @@ void GroundCover::Draw(const View& view, const Camera& camera, gfx::Texture heig
   const bool snowing = view.constants.weather[1] > 0 && snowDepth > 0;
   const bool shelter = snowing && snowShelter;
   const float wind = std::sqrt(snowWind[0] * snowWind[0] + snowWind[1] * snowWind[1]);
-  const CoverSnowConstants snow{{snowing ? snowDepth : 0.0f, shelter ? 1.0f : 0.0f, 0, 0},
+  const CoverSnowConstants snow{{snowing ? snowDepth : 0.0f, shelter ? 1.0f : 0.0f, snowing && snowMaterials ? 1.0f : 0.0f, 0},  // ([plantlod] z)
                                 {wind > 0 ? snowWind[0] / wind : 0.0f, wind > 0 ? snowWind[1] / wind : 0.0f, snowTune[1], snowTune[3]}};
   device_->SetTexture(13, shelter ? snowShelter : trampled_);
-  device_->SetPipeline(reacting ? reactingPipelines_[with] : blasts ? blastPipeline_ : pipeline_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
-  device_->SetConstants(1, &k, sizeof k);
   device_->SetConstants(3, &snow, sizeof snow);  // [leftover]
   device_->SetTexture(0, heights);
   device_->SetTexture(1, cover);
   device_->SetTexture(2, normals);
   device_->SetTexture(3, trampled_);
   device_->SetTexture(4, table ? densityA : cover);
-  drawnBlades = side * side * 3;
-  device_->Draw(static_cast<uint32_t>(drawnBlades) * 15);
-  // [leftover] (what was drawn with, for the motion: DrawMotion)
-  drawn_.blades = true;
+  if (prepared_) {  // [plantlod] (the blades: where Prepare laid out their square this frame; always without plantsFar)
+    device_->SetPipeline(reacting ? reactingPipelines_[with] : blasts ? blastPipeline_ : pipeline_);
+    device_->SetConstants(1, &k, sizeof k);
+    drawnBlades = side * side * 3;
+    device_->Draw(static_cast<uint32_t>(drawnBlades) * 15);
+    // [leftover] (what was drawn with, for the motion: DrawMotion)
+    drawn_.blades = true;
+  }
   drawn_.reacting = reacting;
   drawn_.blasts = static_cast<bool>(blasts);
   drawn_.heights = heights;
@@ -1181,45 +1521,7 @@ void GroundCover::Draw(const View& view, const Camera& camera, gfx::Texture heig
   // the plants, where the map has them: their spots over the same square, a little coarser
   if (table && plantDensity > 0 && plantPipeline_ && atlas_ && plants_.count) {
     auto p = std::make_unique<PlantConstants>();
-    const int plantSide = static_cast<int>(std::ceil(2 * reach / plantCell));
-    p->area[0] = std::floor(area_[0] / plantCell) * plantCell;  // (the blades' square, by the plants' cells)
-    p->area[1] = std::floor(area_[1] / plantCell) * plantCell;
-    p->area[2] = plantCell;
-    p->area[3] = static_cast<float>(plantSide);
-    p->mapInfo[0] = mapWidth;
-    p->mapInfo[1] = mapHeight;
-    p->mapInfo[2] = heightUnit;
-    p->mapInfo[3] = waterLevel;
-    p->info[0] = plantDensity * plantCell * plantCell;
-    p->info[1] = cleared ? 1.0f : 0.0f;  // [tarmac]
-    p->info[2] = plants_.patchScale;
-    p->info[3] = plants_.patchCover;
-    p->shown[0] = shown_;  // [cover]
-    p->shown[1] = k.shown[1];
-    p->shown[2] = k.mapInfo[2];
-    p->shown[3] = bladeWidth;
-    std::copy(&plants_.cells[0][0][0], &plants_.cells[0][0][0] + 16 * 3 * 4, &p->cells[0][0]);
-    // each cell's scale: the low plants `plantBoost` times the factor that brings the tallest to `plantTallest`, but
-    // none taller than that (the readability rule): the stalks and the tall flowers at the cap, the grass and the
-    // small flowers bigger than their real proportion, so that they read from the game's camera (the visuals
-    // track's advice)
-    const float metre = plantTallest / std::max(plants_.tallest, 1e-3f);
-    for (int i = 0; i < 16; ++i) p->cells[i * 3 + 2][3] = std::min(metre * plantBoost, plantTallest / std::max(plants_.cells[i][1][2], 1e-3f));
-    std::copy(&plants_.order[0][0], &plants_.order[0][0] + 16, &p->order[0][0]);
-    std::copy(&plants_.groups[0][0], &plants_.groups[0][0] + 24, &p->groups[0][0]);
-    for (int i = 0; i < 16; ++i) {  // [coverdark] (how far the grass's clumps take the ground's colour; [cover] the leaves its brightness)
-      std::copy(plants_.tones[i], plants_.tones[i] + 3, p->tones[i]);
-      p->tones[i][3] = plants_.tones[i][3] * (plants_.tones[i][3] > 0 ? clumpsToGround : leavesToGround);
-      if (plants_.tones[i][3] < 0 && leavesToGround > 0 && leavesBaked > 0) {
-        // [cover] the leaves' art already carries `leavesBaked` of the lift: the screen as before, the art's mean c' = k c,
-        // c' x f = c x lerp(1, g / c, w): f = (1 - w) / k + w g / c' = lerp(1, g / L, w') with w' = 1 - (1 - w) / k and
-        // L = c' w' / w (the shader takes the leaves' tone only for its brightness)
-        const float w = leavesToGround, wk = 1 - (1 - w) / leavesBaked;
-        for (int k = 0; k < 3; ++k) p->tones[i][k] *= wk / w;
-        p->tones[i][3] = -wk;
-      }
-    }
-    if (reacting) std::copy(plants->Constants(), plants->Constants() + 8, &p->plantsK[0][0]);  // [plants]
+    const int plantSide = FillPlantConstants(p.get(), mapWidth, mapHeight, heightUnit, waterLevel, k.mapInfo[2], reacting);
     device_->SetPipeline(reacting ? reactingPipelines_[with + 1] : blasts ? blastPlantPipeline_ : plantPipeline_);
     device_->SetConstants(0, &view.constants, sizeof view.constants);
     device_->SetConstants(1, p.get(), sizeof(PlantConstants));
@@ -1227,16 +1529,502 @@ void GroundCover::Draw(const View& view, const Camera& camera, gfx::Texture heig
     device_->SetTexture(5, densityB);
     device_->SetTexture(6, atlas_);
     device_->SetTexture(7, atlasNormals_);
-    drawnPlants = plantSide * plantSide;
-    device_->Draw(static_cast<uint32_t>(drawnPlants) * 108);  // ([cover] up to six stars of three cards, or a tuft of twelve blades)
-    drawn_.plants = true;  // [leftover] (for the motion)
-    drawn_.densityB = densityB;
-    drawnConstants_[1].assign(reinterpret_cast<const float*>(p.get()), reinterpret_cast<const float*>(p.get()) + sizeof(PlantConstants) / sizeof(float));
+    if (farPlants) {
+      // [plantlod] the tiles (PrepareFar), a draw for each count of corners a spot; then the models
+      drawn_.plants = true;
+      drawn_.far = true;
+      drawn_.densityB = densityB;
+      DrawFarPlants(p.get(), reacting ? 2 + (blasts ? 1 : 0) : blasts ? 1 : 0, false);
+      drawnConstants_[1].assign(reinterpret_cast<const float*>(p.get()), reinterpret_cast<const float*>(p.get()) + sizeof(PlantConstants) / sizeof(float));
+    } else {
+      drawnPlants = plantSide * plantSide;
+      device_->Draw(static_cast<uint32_t>(drawnPlants) * 108);  // ([cover] up to six stars of three cards, or a tuft of twelve blades)
+      drawn_.plants = true;  // [leftover] (for the motion)
+      drawn_.densityB = densityB;
+      drawnConstants_[1].assign(reinterpret_cast<const float*>(p.get()), reinterpret_cast<const float*>(p.get()) + sizeof(PlantConstants) / sizeof(float));
+    }
   }
   for (int slot = 0; slot < (reacting ? 11 : 9); ++slot) device_->SetTexture(slot, {});
   device_->SetTexture(11, {});  // [tarmac]
   device_->SetTexture(12, {});  // [cover]
   device_->SetTexture(13, {});  // [leftover]
+  if (farPlants)  // [plantlod]
+    for (int slot = 14; slot <= 21; ++slot) device_->SetTexture(slot, {});
+}
+
+// [plantlod] The plants of this frame's tiles (Draw, and DrawMotion with `motion`; the plants' pipeline of the kind
+// `variant` - 0 plain, 1 the blasts' waves, 2 reacting, 3 both - set by the caller for the cards, its constants `p`), and
+// the models where there are any.
+void GroundCover::DrawFarPlants(PlantConstants* p, int variant, bool motion) {
+  if (!tiles_ || !tileBuffer_) return;
+  if (!modelsPlaced_) p->lod[2][1] = 0;  // (no models this frame: the flags not written, every plant a card)
+  device_->SetShaderBuffer(tileBuffer_, 0);
+  device_->SetTexture(14, models_ ? models_->Flags() : trampled_);
+  device_->SetTexture(21, farFieldReady_ ? farField_ : trampled_);  // (read only with farField.w)
+  for (const PlantTiles::Batch& b : tiles_->batches) {
+    p->lod[0][0] = static_cast<float>(b.corners);
+    p->lod[0][1] = static_cast<float>(b.first);
+    device_->SetConstants(1, p, sizeof(PlantConstants));
+    device_->Draw(static_cast<uint32_t>(b.count) * 256u * static_cast<uint32_t>(b.corners));
+    if (!motion) {
+      drawnTiles += b.count;
+      drawnPlants += b.count * 256;
+    }
+  }
+  // the models: each kind's levels, as many as there was room for (those past the count put nowhere)
+  if (!modelsPlaced_ || !models_) return;
+  const gfx::Pipeline pipeline = ModelPipeline(variant + (motion ? 4 : 0));
+  if (!pipeline) return;
+  device_->SetPipeline(pipeline);
+  device_->SetTexture(15, models_->Instances());
+  device_->SetTexture(16, models_->Counters());
+  for (size_t kind = 0; kind < models_->kinds.size(); ++kind) {
+    const PlantModels::Kind& m = models_->kinds[kind];
+    device_->SetTexture(17, m.albedo);
+    device_->SetTexture(18, m.normal);
+    device_->SetTexture(19, m.spec ? m.spec : m.albedo);
+    device_->SetTexture(20, m.ao);
+    for (int l = 0; l < m.levelCount && l < PlantModels::kLevels; ++l) {
+      const int bucket = static_cast<int>(kind) * PlantModels::kLevels + l;
+      const uint32_t room = room_[bucket];
+      if (!room) continue;
+      p->lod[3][0] = static_cast<float>(bucket);
+      p->lod[3][1] = m.levels[l].height;
+      p->lod[3][2] = m.spec ? 1.0f : 0.0f;
+      device_->SetConstants(1, p, sizeof(PlantConstants));
+      device_->SetVertexBuffer(m.levels[l].vertices);
+      device_->SetIndexBuffer(m.levels[l].indices);
+      device_->DrawIndexed(m.levels[l].indexCount, 0, 0, room);
+      if (!motion) drawnModels += static_cast<int>(room);
+    }
+  }
+}
+
+// [plantlod] The models' pipelines (made the first time each is wanted, from the plants' text for the switches): `k` 0
+// plain, 1 the blasts' waves, 2 reacting, 3 both; + 4 the motion's.
+gfx::Pipeline GroundCover::ModelPipeline(int k) {
+  if (k < 0 || k >= 8) return {};
+  if (!modelTried_[k]) {
+    modelTried_[k] = true;
+    const int kind = k & 3;
+    const std::string& scene = kind == 0 ? plantSource_ : kind == 1 ? blastPlantSource_ : kind == 2 ? reactingSources_[1] : reactingSources_[3];
+    const std::string source = (k >= 4 ? "#define MOTION 1\n" : "") + scene;
+    gfx::PipelineDesc pd;
+    pd.name = k >= 4 ? "ground cover: plant models, motion" : "ground cover: plant models";
+    pd.vertexSource = pd.pixelSource = source;
+    pd.vertexEntry = "MVS";
+    pd.pixelEntry = k >= 4 ? "MotionMPS" : "MPS";
+    pd.attrs = {{"POSITION", 0, gfx::AttrType::Float3, 0},
+                {"NORMAL", 0, gfx::AttrType::Float3, 12},
+                {"TANGENT", 0, gfx::AttrType::Float3, 24},
+                {"BINORMAL", 0, gfx::AttrType::Float3, 36},
+                {"TEXCOORD", 0, gfx::AttrType::Float2, 48}};
+    pd.stride = 68;
+    pd.cull = gfx::Cull::None;  // (seen from both sides, lit by the same normals: the visuals session's)
+    if (k >= 4) {
+      pd.colorFormat = gfx::Format::RG16F;
+      pd.depthWrite = false;
+      pd.depthBias = 16;
+    } else {
+      pd.colorFormat = kSceneFormat;
+      pd.samples = gSceneSamples;
+      pd.alphaToCoverage = true;
+    }
+    std::string error;
+    modelPipelines_[k] = device_->CreatePipeline(pd, &error);
+    if (!modelPipelines_[k]) fprintf(stderr, "render: the ground cover's 3D plants cannot be drawn (%s)\n", error.c_str());
+  }
+  return modelPipelines_[k];
+}
+
+// [plantlod] (grass.h)
+void GroundCover::SetHeights(const std::vector<uint16_t>& heights, int width, int height, float heightScale, float waterLevel) {
+  if (!tiles_) tiles_ = std::make_unique<PlantTiles>();
+  tiles_->SetHeights(heights, width, height, heightScale, waterLevel);
+}
+
+// [plantlod] (grass.h) Kept for when the models are first wanted (their files read then: LoadPlantModels); and the most
+// each group's spots may be of a cell, from the cover's table (for the models' room).
+void GroundCover::SetPlantModels(const JsonValue& cover, TextureCache* textures, const std::string& folder) {
+  if (models_) models_->Set(JsonValue{}, textures, folder, {});  // (the last map's let go)
+  modelsCover_ = cover;
+  modelsTextures_ = textures;
+  modelsFolder_ = folder;
+  modelsLoaded_ = false;
+  float most[4] = {0, 0, 0, 0};  // clumps, flowers, stalks, ferns over the layers
+  for (const auto& [layer, d] : cover["density"]["layers"].members) {
+    most[0] = std::max(most[0], static_cast<float>(d["clumps"].NumberOr(0)));
+    most[1] = std::max(most[1], static_cast<float>(d["flowers"].NumberOr(0)));
+    most[2] = std::max(most[2], static_cast<float>(d["stalks"].NumberOr(0)));
+    most[3] = std::max(most[3], static_cast<float>(d["fern"].NumberOr(0)));
+  }
+  const JsonValue& near = cover["density"]["near_trees"];
+  most[0] *= std::max(1.0f, static_cast<float>(near["clumps"].NumberOr(1)));
+  most[1] *= std::max(1.0f, static_cast<float>(near["flowers"].NumberOr(1))) / std::max(plants_.patchCover, 0.05f);  // (in their patches)
+  most[2] *= std::max(1.0f, static_cast<float>(near["stalks"].NumberOr(1)));
+  most[3] += static_cast<float>(near["fern_add"].NumberOr(0));
+  const float byGroup[6] = {most[0], most[0], most[0], most[1], most[2], most[3]};
+  std::copy(byGroup, byGroup + 6, densityMost_);
+}
+
+// [plantlod] The cover's models read, the first time they are wanted after a map opened (none read without plantModels).
+void GroundCover::LoadPlantModels() {
+  if (modelsLoaded_ || !plantModels || !modelsTextures_) return;
+  modelsLoaded_ = true;
+  if (!models_) models_ = std::make_unique<PlantModels>(device_);
+  std::vector<std::string> names(16);
+  for (const auto& [name, c] : modelsCover_["cells"].members) {
+    const int index = static_cast<int>(c["index"].NumberOr(-1));
+    if (index >= 0 && index < 16) names[static_cast<size_t>(index)] = name;
+  }
+  models_->Set(modelsCover_, modelsTextures_, modelsFolder_, names);
+}
+
+// [plantlod] The models' placing's two compute pipelines, made the first time wanted (PrepareFar, PrepareAhead).
+void GroundCover::MakeModelPlace() {
+  if (modelPlaceTried_) return;
+  {
+    modelPlaceTried_ = true;
+    const std::string source = std::string("#define PLANT_LOD 1\n") + kViewShaderBlock + kCoverShared + kPlantDecls + kPlantLodBlock + kPlantModelPlace;
+    std::string error;
+    gfx::ComputeDesc cd;
+    cd.name = "ground cover: plant models placed";
+    cd.source = source;
+    cd.entry = "CS";
+    modelPlace_ = device_->CreateCompute(cd, &error);
+    cd.entry = "ClearCS";
+    if (modelPlace_) modelClear_ = device_->CreateCompute(cd, &error);
+    if (!modelClear_) fprintf(stderr, "render: the ground cover's 3D plants cannot be placed (%s)\n", error.c_str());
+  }
+}
+
+// [plantlod] (grass.h)
+void GroundCover::PrepareAhead(bool reacting) {
+  if (!plantsFar || !plantModels || !pipeline_) return;
+  MakePlantVariant();
+  LoadPlantModels();
+  if (!ModelsOn()) return;
+  ModelPipeline(0);
+  if (reacting) ModelPipeline(2);
+  MakeModelPlace();
+}
+
+// [plantlod] (grass.h)
+void GroundCover::PrepareFar(const View& view, const Camera& camera, gfx::Texture heights, float heightUnit, gfx::Texture cover, float mapWidth,
+                             float mapHeight, float waterLevel, gfx::Texture densityA, gfx::Texture densityB) {
+  farReady_ = false;
+  modelsPlaced_ = false;
+  if (!plantsFar || !pipeline_ || !atlas_ || !plants_.count || !densityA || !densityB || plantDensity <= 0 || view.height <= 0 || !heights) return;
+  MakePlantVariant();
+  if (!plantPipeline_) return;
+  if (!tiles_) tiles_ = std::make_unique<PlantTiles>();
+  far_ = {cover, densityA, densityB, mapWidth, mapHeight, waterLevel};
+  LoadPlantModels();
+  // the cells' sizes (and the models', and the kinds with no card)
+  const bool models = ModelsOn();
+  std::vector<PlantTiles::CellSize> sizes(16);
+  for (int i = 0; i < 16; ++i) {
+    sizes[static_cast<size_t>(i)].frame = FrameOf(i);
+    sizes[static_cast<size_t>(i)].clumpMost = std::clamp(static_cast<int>(plants_.cells[i][2][2]), 1, 6);
+  }
+  if (models)
+    for (const PlantModels::Kind& m : models_->kinds) {
+      PlantTiles::CellSize c;
+      c.model = true;
+      if (m.card >= 0) {
+        c = sizes[static_cast<size_t>(m.card)];
+        c.model = true;
+        c.modelDownTo = m.swap[2] > 0 ? c.frame * tiles_->focal / m.swap[2] : plantLod.modelPixels[std::min(m.levelCount, 3) - 1];
+        sizes[static_cast<size_t>(m.card)] = c;
+      } else {
+        c.frame = ModelFrame(m);
+        c.clumpMost = m.clump[1];
+        c.cardless = true;
+        c.modelDownTo = 0;  // (down to the cut)
+        sizes.push_back(c);
+      }
+    }
+  tiles_->Select(view, plantCell, sizes, plantLod, plantTallest * 3);
+  if (!tileBuffer_) {
+    gfx::BufferDesc bd;
+    bd.kind = gfx::BufferKind::Shader;
+    bd.stride = 16;
+    bd.dynamic = true;
+    tileBuffer_ = device_->CreateBuffer(bd);
+  }
+  if (!tileBuffer_) return;
+  if (tiles_->Count()) device_->UpdateBuffer(tileBuffer_, tiles_->rows.data(), static_cast<uint32_t>(tiles_->rows.size() * sizeof(float)));
+  else tiles_->batches.clear();
+  farReady_ = true;
+  // the far field over the tiles (PlaceFar): a square round their bounds
+  if (tiles_->Count()) {
+    float x0 = 1e30f, z0 = 1e30f, x1 = -1e30f, z1 = -1e30f;
+    const float tileWide = plantCell * PlantTiles::kSide;
+    for (size_t r = 0; r + 3 < tiles_->rows.size(); r += 4) {
+      x0 = std::min(x0, tiles_->rows[r] * plantCell);
+      z0 = std::min(z0, tiles_->rows[r + 1] * plantCell);
+      x1 = std::max(x1, tiles_->rows[r] * plantCell + tileWide);
+      z1 = std::max(z1, tiles_->rows[r + 1] * plantCell + tileWide);
+    }
+    const float wide = std::max({x1 - x0, z1 - z0, 1.0f});
+    farArea_[0] = 0.5f * (x0 + x1 - wide);
+    farArea_[1] = 0.5f * (z0 + z1 - wide);
+    farArea_[2] = wide / static_cast<float>(kFarField);
+    farArea_[3] = static_cast<float>(kFarField);
+  }
+}
+
+// [plantlod] (grass.h) The far field (where pads lie and what stands on the ground: the plants beyond the square are
+// cleared by it as the near ones are), then the models' placing.
+gfx::Texture GroundCover::FarField() {
+  if (!farField_) {
+    gfx::TargetDesc td;
+    td.width = td.height = kFarField;
+    td.format = gfx::Format::R8;
+    farField_ = device_->CreateTarget(td);
+  }
+  return farField_;
+}
+
+void GroundCover::PlaceFar(const View& view, const Camera& camera, gfx::Texture heights, float heightUnit, float mapWidth, float mapHeight,
+                           float waterLevel, bool padsDrawn) {
+  farFieldReady_ = false;
+  if (!plantsFar || !farReady_ || !tiles_) return;
+  if (!farDiscsTried_) {
+    farDiscsTried_ = true;
+    const std::string source = std::string(kViewShaderBlock) + kFarDiscShader;
+    gfx::PipelineDesc pd;
+    pd.name = "ground cover: the far field's footprints";
+    pd.vertexSource = pd.pixelSource = source;
+    pd.cull = gfx::Cull::None;
+    pd.depthTest = pd.depthWrite = false;
+    pd.depthTarget = false;
+    pd.blend = gfx::Blend::Additive;
+    pd.colorFormat = gfx::Format::R8;
+    std::string error;
+    farDiscPipeline_ = device_->CreatePipeline(pd, &error);
+    if (!farDiscPipeline_) fprintf(stderr, "render: the ground cover's far field cannot be made (%s)\n", error.c_str());
+  }
+  if (plantLod.farClear > 0 && FarField() && farDiscPipeline_) {
+    // what stands on the ground over the far field (Prepare's discs), 256 a draw, added over the pads the host drew
+    const float wide = farArea_[2] * farArea_[3];
+    struct {
+      float area[4];
+      float discs[256][4];
+    } k = {};
+    std::copy(farArea_, farArea_ + 4, k.area);
+    std::vector<float> inside;
+    for (size_t i = 0; i + 2 < farDiscs_.size(); i += 3) {
+      const float x = farDiscs_[i], z = farDiscs_[i + 1], r = farDiscs_[i + 2] + 0.5f;
+      if (x + r < farArea_[0] || z + r < farArea_[1] || x - r > farArea_[0] + wide || z - r > farArea_[1] + wide) continue;
+      inside.insert(inside.end(), {farDiscs_[i], farDiscs_[i + 1], farDiscs_[i + 2], 0});
+    }
+    if (!padsDrawn || !inside.empty()) {
+      gfx::PassDesc pass;
+      pass.color = farField_;
+      pass.clearColor = !padsDrawn;
+      device_->BeginPass(pass);
+      device_->SetPipeline(farDiscPipeline_);
+      device_->SetConstants(0, &view.constants, sizeof view.constants);
+      for (size_t at = 0; at < inside.size(); at += 256 * 4) {
+        const size_t n = std::min<size_t>(256, (inside.size() - at) / 4);
+        std::copy(inside.begin() + static_cast<std::ptrdiff_t>(at), inside.begin() + static_cast<std::ptrdiff_t>(at + n * 4), &k.discs[0][0]);
+        device_->SetConstants(1, &k, static_cast<uint32_t>(sizeof(float) * 4 * (1 + n)));
+        device_->Draw(static_cast<uint32_t>(n * 6));
+      }
+    }
+    farFieldReady_ = true;
+  }
+  // the models' placing: their room this frame (by the tiles they may be in, at most what the cover's table lets grow
+  // there), then a thread a spot of those tiles
+  const bool models = ModelsOn();
+  const gfx::Texture densityA = far_.densityA, densityB = far_.densityB;
+  std::fill(room_, room_ + PlantModels::kMostKinds * PlantModels::kLevels, 0u);
+  if (!models || tiles_->modelRows.empty()) return;
+  MakeModelPlace();
+  if (!modelPlace_ || !modelClear_ || !models_->Instances() || !models_->Counters() || !models_->Flags()) return;
+  {  // the room: per tile the levels its plants may be at (from its nearest point to its farthest), its spots by the chance
+     // of the kind's group (and of the kind in it), and its most plants a spot
+    const float k = plantDensity * plantCell * plantCell;
+    const float diagonal = plantCell * PlantTiles::kSide * 1.5f + plantTallest * 3;
+    double want[PlantModels::kMostKinds * PlantModels::kLevels] = {};
+    for (size_t kind = 0; kind < models_->kinds.size(); ++kind) {
+      const PlantModels::Kind& m = models_->kinds[kind];
+      int group = m.placeGroup;
+      float chance;
+      if (m.card >= 0) {
+        group = -1;
+        for (int g = 0; g < 6 && group < 0; ++g)
+          for (int j = 0; j < static_cast<int>(plants_.groups[g][1]); ++j)
+            if (static_cast<int>(plants_.order[(static_cast<int>(plants_.groups[g][0]) + j) / 4][(static_cast<int>(plants_.groups[g][0]) + j) % 4]) == m.card) group = g;
+        if (group < 0) continue;
+        chance = std::min(1.0f, k * densityMost_[group]) / std::max(plants_.groups[group][1], 1.0f);
+      } else {
+        chance = std::min(1.0f, k * densityMost_[group]) * m.placeShare;
+      }
+      const float frame = m.card >= 0 ? FrameOf(m.card) : ModelFrame(m);
+      float bounds[3];
+      for (int l = 0; l < 3; ++l) bounds[l] = m.swap[l] > 0 ? frame * tiles_->focal / m.swap[l] : plantLod.modelPixels[l];
+      const int last = std::min(m.levelCount, PlantModels::kLevels) - 1;
+      auto levelAt = [&](float px) {
+        const int level = px >= bounds[0] ? 0 : px >= bounds[1] ? 1 : px >= bounds[2] ? 2 : 3;
+        return level <= last ? level : m.card >= 0 ? -1 : last;
+      };
+      const int clump = m.card >= 0 ? std::clamp(static_cast<int>(plants_.cells[m.card][2][2]), 1, 6) : m.clump[1];
+      for (size_t r = 0; r + 3 < tiles_->modelRows.size(); r += 4) {
+        const float dNear = tiles_->modelRows[r + 3];
+        const float pxNear = frame * tiles_->focal / dNear * (1 + 0.5f * plantLod.modelBand);
+        const float pxFar = frame * tiles_->focal / (dNear + diagonal) * (1 - 0.5f * plantLod.modelBand);
+        const int from = levelAt(pxNear), to = levelAt(pxFar);
+        if (from < 0) continue;
+        for (int l = from; l <= (to < 0 ? last : to); ++l) want[kind * PlantModels::kLevels + static_cast<size_t>(l)] += 256.0 * chance * clump;
+      }
+    }
+    for (int b = 0; b < PlantModels::kMostKinds * PlantModels::kLevels; ++b)
+      if (want[b] > 0) room_[b] = static_cast<uint32_t>(std::min<double>(PlantModels::kMostInBucket, want[b] * 1.3 + 32));
+  }
+  if (!modelTileBuffer_) {
+    gfx::BufferDesc bd;
+    bd.kind = gfx::BufferKind::Shader;
+    bd.stride = 16;
+    bd.dynamic = true;
+    modelTileBuffer_ = device_->CreateBuffer(bd);
+  }
+  if (!modelTileBuffer_) return;
+  device_->UpdateBuffer(modelTileBuffer_, tiles_->modelRows.data(), static_cast<uint32_t>(tiles_->modelRows.size() * sizeof(float)));
+  auto p = std::make_unique<PlantConstants>();
+  FillPlantConstants(p.get(), mapWidth, mapHeight, heightUnit, waterLevel, 2 * std::tan(camera.fovY * 0.5f) / static_cast<float>(view.height), false);
+  struct {
+    float room[8][4];
+    float info[4];
+  } place = {};
+  for (int b = 0; b < 32; ++b) place.room[b / 4][b % 4] = static_cast<float>(room_[b]);
+  const int modelTiles = static_cast<int>(tiles_->modelRows.size() / 4);
+  place.info[0] = static_cast<float>(modelTiles);
+  device_->SetPipeline(modelClear_);
+  device_->SetStorage(0, models_->Counters());
+  device_->Dispatch(1, 1, 1);
+  device_->SetPipeline(modelPlace_);
+  device_->SetConstants(0, &view.constants, sizeof view.constants);
+  device_->SetConstants(1, p.get(), sizeof(PlantConstants));
+  device_->SetConstants(2, &place, sizeof place);
+  device_->SetShaderBuffer(modelTileBuffer_, 0);
+  device_->SetTexture(0, heights);
+  device_->SetTexture(4, densityA);
+  device_->SetTexture(5, densityB);
+  device_->SetTexture(11, cleared ? cleared : trampled_);
+  device_->SetTexture(12, bare ? bare : trampled_);
+  device_->SetTexture(21, farFieldReady_ ? farField_ : trampled_);
+  device_->SetStorage(0, models_->Counters());
+  device_->SetStorage(1, models_->Instances());
+  device_->SetStorage(2, models_->Flags());
+  device_->Dispatch(static_cast<uint32_t>(modelTiles) * 4u, 1, 1);
+  for (int s = 0; s < 3; ++s) device_->SetStorage(s, {});
+  for (int t : {0, 4, 5, 11, 12, 21}) device_->SetTexture(t, {});
+  modelsPlaced_ = true;
+}
+
+// [plantlod] The far cover's constants (kFarCoverShader's FarCover).
+namespace {
+struct FarCoverConstants {
+  float cameraRight[4], cameraUp[4], cameraBack[4];
+  float mapInfo[4], cutInfo[4], bladeInfo[4], bladeLook[4];
+  float groupLook[6][4], groupSize[6][4];
+  float farMore[4];
+  float farField[4];
+};
+}  // namespace
+
+// [plantlod] (grass.h)
+void GroundCover::DrawFarCover(const View& view, const Camera& camera, gfx::Texture sceneDepth) {
+  if (!FarCoverWanted() || !sceneDepth || !far_.densityA || !far_.densityB || !far_.cover || !tiles_) return;
+  if (!farCoverTried_) {
+    farCoverTried_ = 1;
+    const std::string source = std::string(gSceneSamples > 1 ? "#define MSAA 1\n" : "") + kViewShaderBlock + kLightingShaderBlock + kFarCoverShader;
+    gfx::PipelineDesc pd;
+    pd.name = "ground cover: far cover";
+    pd.vertexSource = pd.pixelSource = source;
+    pd.cull = gfx::Cull::None;
+    pd.depthTest = pd.depthWrite = false;
+    pd.depthTarget = false;
+    pd.blend = gfx::Blend::Multiply;
+    pd.colorFormat = kSceneFormat;
+    pd.samples = gSceneSamples;
+    pd.alphaWrite = false;
+    std::string error;
+    farCover_ = device_->CreatePipeline(pd, &error);
+    if (!farCover_) fprintf(stderr, "render: the ground cover's far cover cannot be drawn (%s)\n", error.c_str());
+  }
+  if (!farCover_) return;
+  Vec3 right, up, back;
+  camera.Axes(&right, &up, &back);
+  FarCoverConstants c = {};
+  c.cameraRight[0] = right.x, c.cameraRight[1] = right.y, c.cameraRight[2] = right.z, c.cameraRight[3] = std::tan(camera.fovY * 0.5f);
+  c.cameraUp[0] = up.x, c.cameraUp[1] = up.y, c.cameraUp[2] = up.z;
+  c.cameraUp[3] = static_cast<float>(view.width) / static_cast<float>(std::max(view.height, 1));
+  c.cameraBack[0] = back.x, c.cameraBack[1] = back.y, c.cameraBack[2] = back.z, c.cameraBack[3] = camera.zNear;
+  c.mapInfo[0] = far_.mapWidth;
+  c.mapInfo[1] = far_.mapHeight;
+  c.mapInfo[2] = far_.waterLevel;
+  c.mapInfo[3] = plantDensity * plantCell * plantCell;
+  c.cutInfo[0] = tiles_->focal;
+  c.cutInfo[1] = plantLod.cutLow * tiles_->cutScale;
+  c.cutInfo[2] = std::max(plantLod.cutHigh, plantLod.cutLow) * tiles_->cutScale;
+  c.cutInfo[3] = plantCell;
+  const float half = 0.5f * area_[2] * area_[3];
+  c.bladeInfo[0] = area_[0] + half;
+  c.bladeInfo[1] = area_[1] + half;
+  c.bladeInfo[2] = half;
+  c.bladeInfo[3] = prepared_ ? shown_ : 0.0f;
+  c.bladeLook[0] = farBlades;
+  c.bladeLook[1] = plantLod.farCover;
+  c.bladeLook[2] = plants_.patchScale;
+  c.bladeLook[3] = plants_.patchCover;
+  // per group: its colour (the mean of its cells' art, linear, a little darker for the shade among its leaves) and how it
+  // takes the ground's (the meadow's clumps: the ground's own; the weeds and ferns: their brightness toward it), its
+  // card's width, how much of it covers the ground seen from above, its plants a spot
+  // (how much of its cards' frames a plant covers seen from above: its picture's own share, the cover's stats, times what
+  // its cards show from above - measured 2026-10-21 on a field of ferns at 1440p: 0.6 upright, 1.1 fanned out)
+  const float shows = plantsRound ? 1.1f : 0.6f;
+  for (int g = 0; g < 6; ++g) {
+    const int first = static_cast<int>(plants_.groups[g][0]), n = static_cast<int>(plants_.groups[g][1]);
+    float colour[3] = {0, 0, 0}, frame = 0, plantsASpot = 0, covers = 0;
+    int coloured = 0;
+    for (int j = 0; j < n; ++j) {
+      const int cell = static_cast<int>(plants_.order[(first + j) / 4][(first + j) % 4]);
+      frame += FrameOf(cell);
+      covers += plants_.cover[cell] * (g <= 1 ? 0.6f : shows);  // (the grass's tufts are blades, not cards)
+      plantsASpot += 0.5f * (plants_.cells[cell][2][1] + plants_.cells[cell][2][2]);
+      if (plants_.tones[cell][0] + plants_.tones[cell][1] + plants_.tones[cell][2] > 0) {
+        for (int k = 0; k < 3; ++k) colour[k] += plants_.tones[cell][k];
+        ++coloured;
+      }
+    }
+    if (n <= 0) continue;
+    for (int k = 0; k < 3; ++k) c.groupLook[g][k] = coloured ? colour[k] / static_cast<float>(coloured) : 0.1f;
+    c.groupLook[g][3] = g == 0 ? 1.0f : (g == 2 || g == 5) ? -leavesToGround : 0.0f;
+    c.groupSize[g][0] = frame / static_cast<float>(n);
+    c.groupSize[g][1] = covers / static_cast<float>(n);
+    c.groupSize[g][2] = plantsASpot / static_cast<float>(n);
+    c.groupSize[g][3] = farShade;
+  }
+  c.farMore[0] = bare ? 1.0f : 0.0f;
+  c.farMore[1] = plantLod.farPlants;
+  c.farField[0] = farArea_[0];
+  c.farField[1] = farArea_[1];
+  c.farField[2] = 1.0f / std::max(farArea_[2] * farArea_[3], 1e-3f);
+  c.farField[3] = farFieldReady_ ? 1.0f : 0.0f;
+  device_->SetPipeline(farCover_);
+  device_->SetConstants(0, &view.constants, sizeof view.constants);
+  device_->SetConstants(1, &c, sizeof c);
+  device_->SetTexture(1, sceneDepth);
+  device_->SetTexture(2, far_.cover);
+  device_->SetTexture(4, far_.densityA);
+  device_->SetTexture(5, far_.densityB);
+  device_->SetTexture(12, bare ? bare : trampled_);
+  device_->SetTexture(21, farFieldReady_ ? farField_ : trampled_);
+  device_->Draw(3);
+  for (int t : {1, 2, 4, 5, 12, 21}) device_->SetTexture(t, {});
 }
 
 // [leftover] The motion of what Draw drew this frame (grass.h): the same squares of blades and plants, by the scene's own
@@ -1303,9 +2091,17 @@ void GroundCover::DrawMotion(const View& view, gfx::Texture motion, gfx::Texture
     device_->SetTexture(5, drawn_.densityB);
     device_->SetTexture(6, atlas_);
     device_->SetTexture(7, atlasNormals_);
-    device_->Draw(static_cast<uint32_t>(drawnPlants) * 108);
+    if (drawn_.far) {  // [plantlod] (the tiles' plants and the models, as Draw drew them)
+      PlantConstants p;
+      std::memcpy(&p, drawnConstants_[1].data(), std::min(sizeof p, drawnConstants_[1].size() * sizeof(float)));
+      DrawFarPlants(&p, (drawn_.blasts ? 1 : 0) + (drawn_.reacting ? 2 : 0), true);
+    } else {
+      device_->Draw(static_cast<uint32_t>(drawnPlants) * 108);
+    }
   }
   for (int slot = 0; slot <= 13; ++slot) device_->SetTexture(slot, {});
+  if (drawn_.far)  // [plantlod]
+    for (int slot = 14; slot <= 21; ++slot) device_->SetTexture(slot, {});
 }
 
 }  // namespace render

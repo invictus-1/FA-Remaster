@@ -85,7 +85,9 @@ class Tarmacs {
   // The ground cover cleared under the pads: their coverage drawn over the grass's square (GroundCover::Area: its first
   // cell's x, z, a cell's size, cells a side) into a picture of its own, which the grass reads (GroundCover::cleared).
   // Between passes. None: no pad there (or it cannot be drawn).
-  gfx::Texture ClearCover(const View& view, const float* area, const std::vector<Pad>& pads);
+  // [plantlod] `into` (an R8 target `intoSize` texels a side): drawn there in place of the picture of its own (the plants'
+  // far field over the tiles in view, GroundCover::FarField); returns it, or none where no pad lies over the area.
+  gfx::Texture ClearCover(const View& view, const float* area, const std::vector<Pad>& pads, gfx::Texture into = {}, int intoSize = 0);
   int drawn = 0;  // in the last Draw
   // [hitches] Read ahead (World::readAhead, set by the host each frame): a material's pictures are wanted as soon as a pad
   // in it is laid anywhere (Want, from Decals: in view or not), read on the textures' own thread (FetchLater) and made one

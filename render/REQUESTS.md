@@ -79,6 +79,11 @@ Same run as 47. Yours (his words in quotes):
    name is cheating pop up." Item 10: "alt + T should teleport any unit or selection of units buildings legit anything I
    have selected to the point on my cursor". (the original's debug keys; the sim's side is the engine's, see 45).
 
+**Answer:** done (ui, docs/ui-answers.md top entry, main d75054d): hotbuild keys as FAF's (test hotbuild.lua); the
+commander's enhancement queue fixed (the interface's own queue copy changed at issue time, as the original's
+ISSUE_Command; test enhancement_queue.lua); Ctrl+Alt+B / Alt+T / Alt+Delete built (DebugCommand / WarpEntity / KillSelf,
+with the engine's 133671a; test sim_commands.lua). Chris's build-ui rebuilt from main at 15:43.
+
 ## 45. To the ENGINE track: from Chris's test run of 21 October (2026-10-21, not blocking)
 
 Same run as 47. Yours, where the sim is concerned (his words in quotes):
