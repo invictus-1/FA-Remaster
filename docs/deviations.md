@@ -33,21 +33,25 @@ says `the rules are loaded again with the engine's script fixes`, about one seco
 
 ## Departures (on with `Sim::fixes`)
 
-### 1. The unit state "Sacrificing" (2026-10-12)
+### 1. The unit state "Sacrificing" (2026-10-12; withdrawn 2026-10-21)
 
-- **What is broken:** FAF's `lua/sim/Unit.lua` calls `self:SetUnitState("Sacrificing", ...)` as the first
-  line of `OnStartSacrifice` and of `OnStopSacrifice`. The original engine has no unit state of that name
-  (the 45 names are listed in `src/sim/recorder.cpp`; the word is in neither the stock nor the FAF
-  executable), so both callbacks stop there with `Invalid enum value Sacrificing`. The sacrifice still
-  works, because the engine itself adds the build progress and destroys the unit; what is lost is
-  everything after that line: the sacrifice effects, and the AI brain's `OnUnitStartSacrifice` /
-  `OnUnitStopSacrifice` events.
-- **What we do:** with `fixes`, `SetUnitState` and `IsUnitState` accept the name. It is a state only
-  scripts read; the engine does nothing with it.
-- **Why it is safe:** the lines that now run only make effects, switch the death weapon off on a unit
-  that is about to be destroyed anyway, and tell the brain. Nothing the simulation computes depends on
-  them.
-- **Tested:** `_scratch\engine\session\sac_start.lua` with and without `MOHO64_FIXES`.
+- **Withdrawn: the original is not broken here.** FAF's `lua/sim/Unit.lua` calls
+  `self:SetUnitState("Sacrificing", ...)` as the first line of `OnStartSacrifice` and of `OnStopSacrifice`, and
+  the original engine has no unit state of that name (the 45 names: `EUnitStateTypeInfo::AddEnums` 0x55bbd0).
+  This entry assumed both callbacks stop there with `Invalid enum value`. They do not. `SetUnitState`
+  (0x6c6d30) calls the type's parse itself (0x6c6e02) instead of `SCR_GetEnum`, and for a name the parse
+  cannot read it returns with nothing done and no error (0x6c6e06 -> 0x6c6e64). So in the original both
+  callbacks run to their end: the effects, `SetDeathWeaponEnabled(false)`, the scripted `Destroy`, and the
+  brain's events. Only `IsUnitState` goes through `SCR_GetEnum` (0x6c5a53) and would raise for the name. FAF
+  never calls it with that name.
+- **Ours now:** one enum parser as the exe's (`src/sim/enum_arg.h`, 2026-10-21). `SetUnitState` does nothing for
+  a name it cannot read, with or without `fixes`, so the callbacks run as in the original. The `fixes` branches
+  that kept "Sacrificing" as a state are removed. No replay of the 16 has a sacrifice. One with an Aeon
+  engineer's sacrifice would now run the callbacks' scripts, as the original does.
+- **Tested** (2026-10-21): `_scratch\engine\session\sac_start.lua` as `MOHO64_START_LUA`, with `MOHO64_FIXES=0` and
+  `=1`, gives the same run: OnStartSacrifice at tick 136, OnStopSacrifice at 145, the engineer destroyed at 146,
+  and no error.
+- Found by reading the exe (helper mp3, 2026-10-21). The number stays, so the entries below keep theirs.
 
 ### 2. `ScenarioInfo.HumanPlayers` for a campaign operation (2026-10-16)
 

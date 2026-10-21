@@ -968,20 +968,15 @@ int l_GetWeapon(lua_State* L) {
   if (i < 1 || i > static_cast<int>(u->weapons.size())) return luaL_error(L, "GetWeapon: index %d out of range", i);
   return PushNew(L, u->weapons[i - 1]);
 }
-// Deviation 1 (docs/deviations.md): FAF's Unit.lua sets a unit state "Sacrificing" in OnStartSacrifice and
-// OnStopSacrifice. The original has no such state; its SetUnitState does nothing for the name (no error: see
-// below), so the two callbacks run on. With Sim::fixes the name is kept as a state that only scripts read.
-// EUnitState by name (sim/enum_arg.h: no case, "UNITSTATE_", numbers, '|'). IsUnitState 0x6c5980 goes through
+// FAF's Unit.lua sets a unit state "Sacrificing" in OnStartSacrifice and OnStopSacrifice. The original has no such
+// state; its SetUnitState does nothing for the name (no error: see below), so the two callbacks run on (deviation 1
+// in docs/deviations.md, withdrawn). EUnitState by name (sim/enum_arg.h: no case, "UNITSTATE_", numbers, '|'). IsUnitState 0x6c5980 goes through
 // SCR_GetEnum (0x6c5a53): a name the parse does not take raises "Invalid enum value". SetUnitState 0x6c6d30 calls
 // the parse itself (0x6c6e02) and does NOTHING for such a name (0x6c6e06 -> 0x6c6e64: no error); the state's bit
 // is 1 << value (0x6c6e2a, u+0x4a0). Ours keeps the states by their names: a value without a name (a number or
 // names or-ed) is no state here.
 int l_IsUnitState(lua_State* L) {
   const char* name = luaL_checkstring(L, 2);
-  if (Sim::From(L)->fixes && !std::strcmp(name, "Sacrificing")) {  // (deviation 1)
-    lua_pushboolean(L, U(L)->unitStates.count(name) > 0);
-    return 1;
-  }
   const char* state = EnumNameOf(kEnumUnitState, EnumValue(L, kEnumUnitState, name));
   lua_pushboolean(L, state && U(L)->unitStates.count(state) > 0);
   return 1;
@@ -989,18 +984,12 @@ int l_IsUnitState(lua_State* L) {
 int l_SetUnitState(lua_State* L) {
   Unit* u = U(L);
   const char* name = luaL_checkstring(L, 2);
-  std::string s;
-  if (Sim::From(L)->fixes && !std::strcmp(name, "Sacrificing")) {  // (deviation 1)
-    s = name;
-  } else {
-    int v = 0;
-    if (!EnumLexical(kEnumUnitState, name, &v)) return 0;
-    const char* state = EnumNameOf(kEnumUnitState, v);
-    if (!state) return 0;
-    s = state;
-  }
-  if (lua_toboolean(L, 3)) u->unitStates.insert(s);
-  else u->unitStates.erase(s);
+  int v = 0;
+  if (!EnumLexical(kEnumUnitState, name, &v)) return 0;
+  const char* state = EnumNameOf(kEnumUnitState, v);
+  if (!state) return 0;
+  if (lua_toboolean(L, 3)) u->unitStates.insert(state);
+  else u->unitStates.erase(state);
   return 0;
 }
 int l_IsBeingBuilt(lua_State* L) {
