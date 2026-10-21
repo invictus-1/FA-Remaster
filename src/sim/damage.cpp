@@ -519,7 +519,7 @@ void BeamCheck(Sim& sim, lua_State* L, CollisionBeam* b) {
   Vec3 P = BeamMuzzle(sim, b, &q);
   sim.HoldShape(b);  // (its committed transform stays what the beat began with: BoneWorld)
   b->position = P;
-  b->orientation = q;
+  b->orientation = NormalizeQuatExe(q);  // (the beam's own transform: see BeamTick)
   Vec3 dir = Forward(q);
   // the horizontal reach: the distance from P to the rounded end point P + dir * L (0x6d6cc2..0x6d6d07)
   const float ex = P.x - (dir.x * Lr + P.x), ez = P.z - (P.z + dir.z * Lr);
@@ -736,7 +736,13 @@ void BeamTick(Sim& sim, CollisionBeam* b) {
   const Vec3 muzzle = BeamMuzzle(sim, b, &q);
   sim.HoldShape(b);
   b->position = muzzle;
-  b->orientation = q;
+  // The beam rides its weapon's muzzle as an attached entity: its transform is Entity::CalculateAttachedTransform
+  // 0x67a020's, which ends with the quaternion normalise 0x4edaa0, while the collision check aims along the unit's
+  // own bone transform (CreateCollisionBeamHelper 0x6d6c1f, vt+0x48). So bone 1, the end its script reads
+  // (CollisionBeamEntity::GetBoneWorldTransform 0x6730b0: the committed position + the forward column x the length
+  // +0x280), turns with the normalised one. Ours kept the bone's quaternion as it came: Naval's beam lines ended 1 to
+  // 5 units in the last place off the original's.
+  b->orientation = NormalizeQuatExe(q);
   if (!b->enabled) return;
   int old = b->counter++;
   if (old >= b->interval) {

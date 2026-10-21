@@ -163,6 +163,14 @@ inline Quat NlerpExe(const Quat& a, Quat b, float t) {
   const float inv = 1.0f / len;
   return {r.x * inv, r.y * inv, r.z * inv, r.w * inv};
 }
+// func_NormalizeQuatInPlace 0x4edaa0: the squares summed w, x, y, z, the root (x87 at PC_24, a float), then w and x
+// times 1 / length and 1 / length times y and z (0x4edb09..0x4edb39); a length of 1e-6 or less gives zero.
+inline Quat NormalizeQuatExe(const Quat& q) {
+  const float len = std::sqrt(((q.w * q.w + q.x * q.x) + q.y * q.y) + q.z * q.z);
+  if (!(len > 9.99999997e-07f)) return Quat{0.0f, 0.0f, 0.0f, 0.0f};
+  const float inv = 1.0f / len;
+  return {q.x * inv, inv * q.y, inv * q.z, q.w * inv};
+}
 // Rotation vector (axis * angle) to quaternion.
 inline Quat FromRotVec(Vec3 r) {
   float a = Len(r);
