@@ -206,6 +206,42 @@ says `the rules are loaded again with the engine's script fixes`, about one seco
   - The gate's replays play with the fixes off, so they are unchanged. With 6-10 built in, the 15 gate replays at n = 1
     and n = 32 have fingerprints identical to main's build on every beat (the MP1 cut, 3,000 beats, too).
 
+### 7. The energy manager's walks (2026-10-21)
+
+- **What is broken:** FAF's `lua/aibrains/components/EnergyManagerBrainComponent.lua` (every army's brain) keeps its
+  energy-dependent units and shields, and its mass fabricators, in weak-valued tables keyed by EntityId. It walks them
+  in the tables' own order:
+  - `OnEnergyTrigger`: the depleted and viable walks, lines 296 and 311;
+  - `ToggleEnergyExcessUnitsThread`: lines 174 and 210, each taking the FIRST eligible fabricator.
+
+  A weak table's order depends on when the Lua collector last ran. The collector clears the entries of units that
+  died; Lua 5.0 reuses a cleared node only for a key whose main position it is, and a rehash lays out only the live
+  entries. The collector's moments depend on everything else in the heap (see 6), and on two players' PCs they
+  differ. So shields switched off and on, and fabricators toggled, in an order that could differ between two copies
+  of one game.
+  - Seen in MP2 with collections forced at other moments (`MOHO64_GC_DUE`): army 2's six shields drop at beat 10505
+    in another order. They come back in that order, and at 10645 two shield meshes take each other's entity ids:
+    the game state parts there.
+  - The original has the same Lua and scripts, so the same exposure.
+- **What we do:** `data/fixes/hook/lua/aibrains/components/EnergyManagerBrainComponent.lua`. FAF's two functions,
+  copied unchanged (FAF's MIT notice kept), except that the four walks visit the keys in EntityId order.
+  - EntityIds are digit strings: shorter is smaller, then by text, which is by value.
+  - Not by `tonumber`: the sim's Lua numbers are single floats, and entity ids above 2^24 (a shield's `0x40100000`
+    and `0x40100001`) fall on one float. A first version that compared them as numbers still let the table's order
+    through.
+- **Why it is safe, what it changes:** the same units get the same calls, in an order that no longer depends on the
+  collector. A game played with it is played back with it.
+- **Tested:**
+  - MP2 with `MOHO64_FIXES=1`, normal against `MOHO64_GC_DUE=5` and `=13` (hundreds of extra collections): identical
+    on all 11,804 beats. Without the fixes they part at 10645 (and with the number-compare version, at 8529).
+  - Skirmish (M28, mods): identical on all 3,120.
+  - The other 13 gate replays (bench, LAND, AIR, Naval, Experimental, Economy, Transports, Missiles, Subs, Engineers,
+    Upgrades, Experimental2, MP3), the same three ways: identical on every beat. With 7-10 and 6 on, the collector's
+    moments no longer reach the game state in any of them, nor the object serials; only the heap's size and the
+    threshold differ, as they must when the collector runs at other times.
+  - The hook loads ("Hooked /lua/aibrains/components/energymanagerbraincomponent.lua") with no error in a played B2
+    session.
+
 ## Looked broken, left alone
 
 ### M28: `IsM28AIPersonality` on the civilian armies (m28conditions.lua:4291)
