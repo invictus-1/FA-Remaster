@@ -32,6 +32,11 @@ class Vfs;
 
 namespace render {
 
+// [padsnow] How much snow lies on a mark's place, as the ground lays it (HLSL: MarkSnowLying(world, ground, fallen), with
+// MODERN_RELIEF or DECAL_SNOW_GROUND; with the latter it reads snowShelter, snowWind, snowTune and snowMore, which the shader
+// declares before it). The decals' and the remastered pads' (tarmacs.cpp) shaders take it.
+extern const char kMarkSnowLying[];
+
 class Decals {
  public:
   // The resource deposits a game has marked on the ground (the script's splats mass_marker and

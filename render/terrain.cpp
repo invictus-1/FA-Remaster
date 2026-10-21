@@ -1327,15 +1327,18 @@ struct KindConstants {
 //   b the trees' crowns over it (the raster);
 //   a how much deeper or shallower than elsewhere the wind lays the snow there (0.5 as elsewhere): deeper in hollows (the
 //     ground rising round it, out to 16 units) and in the lee of rises (the ground rising toward the wind, out to 32 units),
-//     shallower on crests and windward slopes (falling away toward the wind), and the props' tails, scoops and wells.
+//     shallower on crests and windward slopes (falling away toward the wind), and the props' tails, scoops and wells; [snow
+//     mask] and where the map has a painted drift mask (remap.json's "snow_drift_mask"), its laying added (0.5 as elsewhere,
+//     above deeper, below scoured: (m * 2 - 1) times its strength), at its level nearest the shelter's size.
 const char kSnowShelter[] = R"hlsl(
 cbuffer ShelterConstants : register(b1) {
   float4 mapSize;  // width, height, 1 / width, 1 / height
   float4 params;   // x world height of the largest height value, y 1 = the mud mask is read, w 1 = the props are read
-  float4 wind;     // xy the way the wind blows (unit length)
+  float4 wind;     // xy the way the wind blows (unit length); [snow mask] z the drift mask's strength (0: none)
 };
 Texture2D<float> heightMap : register(t0);
 Texture2D<float> mudMask : register(t4);
+Texture2D<float> driftMask : register(t6);  // [snow mask] the map's painted drift mask
 Texture2D props : register(t5);  // r the share of the sky solid props take, g the trees' crowns over the place, b their drifts
 RWTexture2D<float4> shelter : register(u0);
 float HeightOf(float2 p) {
@@ -1381,7 +1384,13 @@ float HeightOf(float2 p) {
     mudMask.GetDimensions(0, mw, mh, ml);
     mud = mudMask.SampleLevel(samplerLinearClamp, uv, max(log2(float(mw) / float(w)), 0));
   }
-  shelter[id.xy] = float4(mud, sky, near.g, saturate(0.5 + 0.5 * clamp(lay + near.b * 2 - 1, -1, 1)));
+  float painted = 0;
+  [branch] if (wind.z > 0) {  // [snow mask]
+    uint dw, dh, dl;
+    driftMask.GetDimensions(0, dw, dh, dl);
+    painted = (driftMask.SampleLevel(samplerLinearClamp, uv, max(log2(float(dw) / float(w)), 0)) * 2 - 1) * wind.z;
+  }
+  shelter[id.xy] = float4(mud, sky, near.g, saturate(0.5 + 0.5 * clamp(lay + near.b * 2 - 1 + painted, -1, 1)));
 }
 )hlsl";
 
@@ -1779,6 +1788,8 @@ void Terrain::Remaster(const MapData& m, std::vector<std::string>* arh) {
     }
     if (found) printf("render: the snow ground: %d snow materials for the map (%s)\n", found, tier);
   }
+  // [snow mask] the map's painted drift mask (read when the snow's shelter is made)
+  if (const std::string mask = layers["snow_drift_mask"].StringOr(std::string()); !mask.empty()) snowMaskFile_ = folder + mask;
 }
 
 // [mud ruts] Deep tracks' mud for this map, once the layers' kinds are known: none unless a layer is mud by its kind; tiled
@@ -2039,6 +2050,9 @@ bool Terrain::Load(const MapData* map, std::string* error) {
     snowTried_ = snowAny_ = extrasWet_ = extrasSnow_ = false;
     if (shelter_) device_->Destroy(shelter_);
     shelter_ = {};
+    snowMaskFile_.clear();  // [snow mask] (Remaster finds it again; read again when the shelter is next made)
+    snowMask_ = {};
+    snowMaskTried_ = false;
     Remaster(*map, &paths);  // (the visuals track's remastered ground, where it lists this map)
     if (!coverMaskGiven.empty()) coverMaskFile_ = coverMaskGiven;  // [cover] (the viewer's --cover-mask: tests)
     arhPaths_ = paths;  // [rain ground]
@@ -2544,19 +2558,30 @@ bool Terrain::SnowShelter(gfx::Texture props) {
   const float wind = std::sqrt(snowWind[0] * snowWind[0] + snowWind[1] * snowWind[1]);
   c.wind[0] = wind > 0 ? snowWind[0] / wind : 1.0f;
   c.wind[1] = wind > 0 ? snowWind[1] / wind : 0.0f;
+  // [snow mask] the map's drift mask, read the first time the shelter is made with it
+  if (!snowMaskTried_ && !snowMaskFile_.empty()) {
+    snowMaskTried_ = true;
+    snowMask_ = textures_->Get(snowMaskFile_);
+    if (!snowMask_) fprintf(stderr, "render: the snow's drift mask cannot be read (%s): the shelter is made without it\n", snowMaskFile_.c_str());
+  }
+  const bool withMask = snowMask_ && snowMaskStrength > 0;
+  c.wind[2] = withMask ? snowMaskStrength : 0.0f;
   device_->SetPipeline(shelterPass_);
   device_->SetConstants(1, &c, sizeof c);
   device_->SetTexture(0, heightTexture_);
   device_->SetTexture(4, withMud ? mudMask_ : textures_->Black());
   device_->SetTexture(5, props ? props : textures_->Black());
+  if (withMask) device_->SetTexture(6, snowMask_);  // [snow mask]
   device_->SetStorage(0, shelter_);
   device_->Dispatch(static_cast<uint32_t>((td.width + 7) / 8), static_cast<uint32_t>((td.height + 7) / 8), 1);
   device_->SetStorage(0, {});
   device_->SetTexture(0, {});
   device_->SetTexture(4, {});
   device_->SetTexture(5, {});
+  if (withMask) device_->SetTexture(6, {});  // [snow mask]
   shelterMud_ = withMud;
-  printf("render: the snow's shelter made (%dx%d%s%s)\n", td.width, td.height, props ? ", with the props" : "", withMud ? ", the mud mask's copy" : "");
+  printf("render: the snow's shelter made (%dx%d%s%s%s)\n", td.width, td.height, props ? ", with the props" : "", withMud ? ", the mud mask's copy" : "",
+         withMask ? ", the painted drift mask" : "");
   return true;
 }
 

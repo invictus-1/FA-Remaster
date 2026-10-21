@@ -8,6 +8,7 @@
 #include <cstring>
 
 #include "hitch_log.h"  // [hitches]
+#include "decals.h"  // [padsnow] (kMarkSnowLying)
 #include "json.h"
 #include "lighting.h"
 #include "ray_scene.h"
@@ -23,7 +24,7 @@ constexpr size_t kMaxCoverPads = 128;  // per draw of it
 // A pad is drawn as the decals are (decals.cpp): the far faces of its box, each pixel's place on the ground from the
 // scene's depth, given up outside its footprint. Then it is the material's picture at that place, read through its
 // relief close by, lit with the modern light.
-const char kShader[] = R"hlsl(
+const char kShaderHead[] = R"hlsl(
 struct Pad {
   float4 centre;   // xyz; w: half the box's height
   float4 shape;    // x, y: half its size along its own x and z (its extent taken in); z, w: its heading's cos, sin
@@ -35,6 +36,11 @@ cbuffer DecalCamera : register(b1) {  // (as the decals' own, decals.cpp)
   float4 cameraUp;     // w: aspect
   float4 cameraBack;   // w: near distance
   float4 mapInfo;      // x, y: 1 / the map's size; z: 1 = the map has water; w: the water's level
+#ifdef DECAL_SNOW_GROUND
+  float4 snowWind;     // [padsnow] as the decals' (decals.cpp): the wind's way, 1 / the map's size
+  float4 snowTune;     // [padsnow] Terrain::snowTune
+  float4 snowMore;     // [padsnow] x 1 = the snow's materials are drawn
+#endif
 };
 cbuffer Pads : register(b2) {
   Pad pads[256];
@@ -52,6 +58,9 @@ Texture2D padNormal : register(t2);    // its normal: x in red, y in green, y up
 Texture2D waterMap : register(t3);
 Texture2D waterRamp : register(t4);
 Texture2D padMaterial : register(t5);  // r what its creases let in of the sky's light, g roughness, b height (0.5 the ground's surface)
+#ifdef DECAL_SNOW_GROUND
+Texture2D snowShelter : register(t6);  // [padsnow] the snow ground's shelter (as the decals')
+#endif
 #ifdef MSAA
 Texture2DMS<float> sceneDepth : register(t1);
 float DepthAt(int2 p) { return sceneDepth.Load(p, 0); }
@@ -60,7 +69,10 @@ Texture2D<float> sceneDepth : register(t1);
 float DepthAt(int2 p) { return sceneDepth.Load(int3(p, 0)); }
 #endif
 
-struct VOut {
+)hlsl";
+
+// ([padsnow] the pads' shader is the head above and the tail below; with the snow ground decals.cpp's MarkSnowLying between)
+const char kShaderTail[] = R"hlsl(struct VOut {
   float4 position : SV_Position;
   nointerpolation float4 centre : TEXCOORD0;
   nointerpolation float4 shape : TEXCOORD1;
@@ -228,6 +240,17 @@ float4 PS(VOut i) : SV_Target {
   float4 c = padAlbedo.SampleGrad(samplerAniso, uv, gx, gy);
   c.a *= i.options.x * (all(abs(uv - 0.5) <= 0.5) ? 1 : 0);
   if (c.a <= 0.003) discard;
+#ifdef DECAL_SNOW_GROUND
+  // [padsnow] (Tarmacs::snowShelter) the snow that lies over the pad is the ground's own: the pad thins out where the snow lies
+  // over it (on the ground's own slope, at the ground's surface), and is lit bare (below). Only where it surely lies (the
+  // reckoning's upper half): where the snow thins, the ground's breaks up by its layers' heights close by, which the pad
+  // cannot know, and a pad gone there would show the ground's bare earth in its place; it shows its own slabs instead, an
+  // apron kept clearer than the field round it.
+  [branch] if (weather.y > 0 && i.options.y > 0) {
+    c.a *= 1 - smoothstep(0.5, 0.95, MarkSnowLying(world, base, weather.y * i.options.y));
+    if (c.a <= 0.003) discard;
+  }
+#endif
   float3 arh = padMaterial.SampleGrad(samplerAniso, uv, gx, gy).rgb;
   // its own normal (y up the picture: toward the pad's -z; a mirrored pad's mirrored), turned as the pad is, then put on
   // the ground's slope as the ground's layers are (terrain.cpp)
@@ -254,7 +277,11 @@ float4 PS(VOut i) : SV_Target {
     deepWater = smoothstep(lerp(0.16, 0.02, wet), lerp(0.2, 0.06, wet), hollow) * smoothstep(0.93, 0.985, base.y) * saturate(wet * 1.6 - 0.2);
   }
   float shadow = SunShadow(world, base) * sunSeen;
+#ifdef DECAL_SNOW_GROUND
+  markSnow = 0;  // [padsnow]
+#else
   markSnow = i.options.y;  // (as a decal's mark: laid on lying snow, it shows on it until new snow covers it)
+#endif
   float3 lit = ModernLight(albedo, 0, roughness, arh.r, 0, N, world, shadow);
 #ifdef MSAA
   return float4(lit, c.a);  // (the modern water colours what is under it itself)
@@ -309,7 +336,7 @@ struct PadLook {
 }  // namespace
 
 Tarmacs::~Tarmacs() {
-  for (gfx::Pipeline p : {pipeline_, cover_})
+  for (gfx::Pipeline p : {pipeline_, cover_, snowPipeline_})
     if (p) device_->Destroy(p);
   if (coverField_) device_->Destroy(coverField_);
 }
@@ -445,16 +472,49 @@ void Tarmacs::Ahead() {
   }
 }
 
+// The pads' shader source ([padsnow] `snow`: with the snow ground's, Tarmacs::snowShelter).
+// (the ground's tracks and puddles as lighting.h has them for the ground: SURFACE_TRACKS, SURFACE_DEEP_TRACKS with the
+// shader's own deepTrack, deepSlope, deepWater; no puddles of the weather's own patches, the pad's gather by its relief;
+// the lying snow on it as on a decal's mark)
+static std::string PadSource(bool snow) {
+  return std::string(snow ? "#define DECAL_SNOW_GROUND 1\n" : "") + (gSceneSamples > 1 ? "#define MSAA 1\n" : "") + "static float markSnow = 1;\n#define SURFACE_SNOW markSnow\n" +
+         "#define SURFACE_TRACKS 1\n#define SURFACE_DEEP_TRACKS 1\nstatic float4 deepTrack = 0;\nstatic float4 deepSlope = 0;\n" +
+         "static float deepWater = 0;\nstatic float2 deepGloss = 0;\n" + kViewShaderBlock + RayShaders() + kLightingShaderBlock + kShaderHead +
+         (snow ? kMarkSnowLying : "") + kShaderTail;
+}
+
+bool Tarmacs::SnowPipeline() {
+  if (snowMade_) return snowMade_ > 0;
+  snowMade_ = -1;
+  if (!Pipelines()) return false;
+  std::string error;
+  const std::string source = PadSource(true);  // (kept while the pipeline is made: the description points into it)
+  gfx::PipelineDesc pd;
+  pd.name = "remastered tarmacs, snow ground";
+  pd.vertexSource = pd.pixelSource = source;
+  pd.attrs = {{"POSITION", 0, gfx::AttrType::Float3, 0}};
+  pd.stride = 12;
+  pd.cull = gfx::Cull::Front;
+  pd.depthTest = pd.depthWrite = false;
+  pd.depthTarget = false;
+  pd.blend = gfx::Blend::Alpha;
+  pd.colorFormat = kSceneFormat;
+  pd.samples = gSceneSamples;
+  pd.alphaWrite = false;
+  snowPipeline_ = device_->CreatePipeline(pd, &error);
+  if (!snowPipeline_) {
+    fprintf(stderr, "render: remastered tarmacs cannot lay the snow ground's snow: %s\n", error.c_str());
+    return false;
+  }
+  snowMade_ = 1;
+  return true;
+}
+
 bool Tarmacs::Pipelines() {
   if (made_) return made_ > 0;
   made_ = -1;
   std::string error;
-  // (the ground's tracks and puddles as lighting.h has them for the ground: SURFACE_TRACKS, SURFACE_DEEP_TRACKS with the
-  // shader's own deepTrack, deepSlope, deepWater; no puddles of the weather's own patches, the pad's gather by its relief;
-  // the lying snow on it as on a decal's mark)
-  const std::string source = std::string(gSceneSamples > 1 ? "#define MSAA 1\n" : "") + "static float markSnow = 1;\n#define SURFACE_SNOW markSnow\n" +
-                             "#define SURFACE_TRACKS 1\n#define SURFACE_DEEP_TRACKS 1\nstatic float4 deepTrack = 0;\nstatic float4 deepSlope = 0;\n" +
-                             "static float deepWater = 0;\nstatic float2 deepGloss = 0;\n" + kViewShaderBlock + RayShaders() + kLightingShaderBlock + kShader;
+  const std::string source = PadSource(false);  // (PadSource says what it holds)
   gfx::PipelineDesc pd;
   pd.name = "remastered tarmacs";
   pd.vertexSource = pd.pixelSource = source;
@@ -502,9 +562,19 @@ int Tarmacs::Draw(const View& view, const float* camera16, gfx::Texture sceneDep
   std::copy(&field.atlas[0][0], &field.atlas[0][0] + 12, &look.tracksAtlas[0][0]);
   std::copy(field.info, field.info + 4, look.tracksInfo);
   if (!tracksMap) look.tracksInfo[2] = 0;
-  device_->SetPipeline(pipeline_);
+  // [padsnow] with the snow ground: its pipeline, the decals' snow constants after the camera's, the shelter at t6
+  const bool snowNow = snowShelter && SnowPipeline();
+  device_->SetPipeline(snowNow ? snowPipeline_ : pipeline_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
-  device_->SetConstants(1, camera16, sizeof(float) * 16);
+  if (snowNow) {
+    float camera28[28];
+    std::copy(camera16, camera16 + 16, camera28);
+    std::copy(snow, snow + 12, camera28 + 16);
+    device_->SetConstants(1, camera28, sizeof camera28);
+    device_->SetTexture(6, snowShelter);
+  } else {
+    device_->SetConstants(1, camera16, sizeof(float) * 16);
+  }
   device_->SetConstants(3, &look, sizeof look);
   device_->SetTexture(1, sceneDepth);
   device_->SetTexture(3, waterMap ? waterMap : textures_->Black());
@@ -532,6 +602,7 @@ int Tarmacs::Draw(const View& view, const float* camera16, gfx::Texture sceneDep
       drawn += static_cast<int>(n);
     }
   }
+  if (snowNow) device_->SetTexture(6, {});  // [padsnow]
   return drawn;  // (t26 left as the ground bound it)
 }
 

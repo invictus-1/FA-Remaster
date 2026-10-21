@@ -1701,6 +1701,15 @@ wind's laying, drifts, depth, its edge) are for tuning.
   mostly the sky's), lies deeper or thinner and patchier (under crowns, on steep, windward and scoured ground), and its
   drifts and scoops get a relief of up to 0.6 world units the sun shades. Bare ground takes some of the shade too, only as
   snow comes.
+- **A painted drift mask** ([snow mask], 2026-10-21; the visuals session's, made for it): where the map's entry names a
+  `"snow_drift_mask"` (BC4 over the whole map: 0.5 as elsewhere, above deeper, below scoured; SETONS_R's and SETONS_Q's
+  from the map's curvature at about 3 and 10 units, steep slopes and rock strata scoured, a drift band outside the woods,
+  wind-free), it is read the first time the shelter is made and added to the shelter's laying (`(m * 2 - 1)` times
+  `Terrain::snowMaskStrength`, 1; viewer `--snow-mask-strength n`, 0 without it), so the ground and the decals' snow
+  (which read the shelter) both take it. No mask, or strength 0: the shelter as before, to the pixel. On SETONS_R with all
+  the snow lying it shows mostly at the woods' edges, on crests and in the drift's place; with less lying (0.7) its scoured
+  places show the ground first. Its deeper half shows little where the wind's own laying is already at its most (open
+  ground in the lee of rises).
 - **Cost** (2560x1440, RTX 4090, SETONS_R in snow at 15:00, the ground's pass, the lowest of two runs; the PC busy with
   other work): from the game's height 0.397 -> 0.597 ms, mid (20) 0.416 -> 0.632, close (6) with the ground parallax 0.626
   -> 0.786, from the game's height with deep tracks and 12 units driving 0.420 -> 0.701, at the thaw with the twins (lying
@@ -1779,6 +1788,15 @@ What Chris saw, what made it, and what changed. Pictures in the helper's folder 
   knows); the relief's softening under the snow (`markRelief`) takes the same. Without the snow ground, or with no snow
   lying, the marks are drawn as before. Cost: nothing more (the marks' pass at 1440p with 300 scars and the map's marks in view, snow lying: 0.26 -> 0.23 ms by
   the lowest of two runs; a mark under the snow lays nothing).
+- **Pads on the snow ground** ([padsnow], 2026-10-21, a helper's): the remastered tarmac pads (tarmacs.cpp,
+  `remasteredTarmacs`) laid the constant snow too, a square of it round every building. With the snow ground they are drawn
+  by a pipeline of their own ("remastered tarmacs, snow ground"; `Tarmacs::snowShelter` and `snow`, set by the decals from
+  theirs) that lays no snow: a pad thins out where the snow surely lies over it (`MarkSnowLying`, decals.cpp, now shared:
+  `kMarkSnowLying`; the upper half of its reckoning, 0.5 to 0.95, so that where the ground's snow thins and breaks up by its
+  layers' heights, which the pad cannot know, the pad shows its own slabs rather than bare earth: an apron kept clearer than
+  the field), and is lit bare. A pad laid before the snow, or covered since, is the ground's snow as on flat open ground; a
+  building laid on lying snow keeps its fresh pad until new snow covers it (about a minute and a half of heavy fall), as a
+  mark does. Without the snow ground, or no snow lying, the pads are drawn as before.
 
 Cost: `markRelief` +0.01 to 0.03 ms at 1440p (the options table); the burns' changes cost nothing (fewer burns are
 drawn). Off: pictures identical (regression 0 px on both backends, snow and rain too; SETONS_R by night and in snow

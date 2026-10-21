@@ -18,7 +18,7 @@ constexpr size_t kMaxInstances = 1024;  // per draw call (the size of the shader
 // Each decal is drawn as a box (its far faces, so that it also works with the camera inside it).
 // The pixel shader finds the ground's place under the pixel from the scene's depth, turns it into
 // the decal's own frame, and gives up where that is outside the footprint.
-const char kShader[] = R"hlsl(
+const char kShaderHead[] = R"hlsl(
 struct Instance {
   float4 centre;   // xyz; w: half the box's height
   float4 shape;    // x, y: half the footprint along its own x and z; z, w: cos and sin of its heading
@@ -82,7 +82,12 @@ float3 WorldAt(float2 pixel, float depth) {
   return cameraPosition + (cameraRight.xyz * (ndc.x * cameraRight.w * cameraUp.w) + cameraUp.xyz * (ndc.y * cameraRight.w) - cameraBack.xyz) * away;
 }
 
-#if defined(MODERN_RELIEF) || defined(DECAL_SNOW_GROUND)
+)hlsl";
+
+}  // namespace
+
+// ([padsnow] the decals' shader is the head above, this, and the tail below, in that order: the pads' takes this too)
+const char kMarkSnowLying[] = R"hlsl(#if defined(MODERN_RELIEF) || defined(DECAL_SNOW_GROUND)
 // How much snow lies on a mark's place (0..1), `fallen` the snow over it (the weather's, times the share on the mark),
 // `ground` the ground's own slope there: as ModernLight lays it on the ground, level ground first, in patches. [decalsnow]
 // With the snow ground (DECAL_SNOW_GROUND) as the ground's snow pipeline lays it: deeper in the lee and hollows, thinner
@@ -111,7 +116,11 @@ float MarkSnowLying(float3 world, float3 ground, float fallen) {
   return smoothstep(bar, bar + 0.2, takes) * smoothstep(0.25, 0.5, ground.y);
 }
 #endif
+)hlsl";
 
+namespace {
+
+const char kShaderTail[] = R"hlsl(
 #ifdef MODERN_RELIEF
 // [scars] A normal decal with Decals::modernRelief (the modern look): the ground's own slope (from how its place changes
 // from pixel to pixel) tilted by the decal's, and the ground multiplied by how much more or less of the modern light the
@@ -273,7 +282,7 @@ float4 PS(VOut i) : SV_Target {
 std::string DecalSource(bool relief, bool snow = false) {
   // (how much of the lying snow a mark takes is the mark's own: see `snowLying`)
   return std::string(snow ? "#define DECAL_SNOW_GROUND 1\n" : "") + (relief ? "#define MODERN_RELIEF 1\n" : "") + (gSceneSamples > 1 ? "#define MSAA 1\n" : "") + "static float markSnow = 1;\n#define SURFACE_SNOW markSnow\n" +
-         kViewShaderBlock + RayShaders() + kLightingShaderBlock + HotMetal::ShaderBlock() + kShader;  // (RayShaders: the small lights' shadows by rays; hot metal: hot_metal.h)
+         kViewShaderBlock + RayShaders() + kLightingShaderBlock + HotMetal::ShaderBlock() + kShaderHead + kMarkSnowLying + kShaderTail;  // (RayShaders: the small lights' shadows by rays; hot metal: hot_metal.h)
 }
 
 // [scars] Whether a DDS picture's blue channel holds anything: the game's normal decals keep it empty (x in alpha, y in
@@ -735,6 +744,9 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
     std::copy(snowGround.tune, snowGround.tune + 4, snowConstants + 20);
     snowConstants[24] = snowGround.materials ? 1.0f : 0.0f;
   }
+  // ([padsnow] the pads lay it as the marks do: Tarmacs::snowShelter)
+  tarmacs.snowShelter = snowNow ? snowGround.shelter : gfx::Texture{};
+  if (snowNow) std::copy(snowConstants + 16, snowConstants + 28, tarmacs.snow);
   int bound = -1;
   bool padsDone = !padsNow;  // [tarmac] (the pads drawn after the map's own pictures, before what was laid since)
   auto drawPads = [&]() {
