@@ -85,6 +85,7 @@ struct WorldPicture::Impl {
     if (groundDetail >= 0) world->mudMask = groundDetail > 0;  // [ground mud] (with the ground detail)
     if (groundDetail >= 0) world->markRelief = groundDetail > 0;  // [scars] (the marks' relief lit as the ground: with the ground detail)
     if (groundDetail >= 0) world->groundMatt = groundDetail > 0;  // [leftover] (with the ground detail)
+    if (groundDetail >= 0) world->plantsFar = world->plantsRound = world->plantModels = groundDetail > 0;  // [plantlod] (with the ground detail)
     if (weatherEffects >= 0) world->rainGround = weatherEffects > 0;  // [rain ground] (with the weather effects)
     if (weatherEffects >= 0) world->snowGround = weatherEffects > 0;  // [snow ground] (with the weather effects)
     if (weatherEffects >= 0) world->plantsUnderSnow = weatherEffects > 0;  // [undersnow] (with the weather effects)

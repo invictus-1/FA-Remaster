@@ -150,6 +150,12 @@
 //           --plant-tallest n the tallest plant's height in world units (0.24)
 //           [cover] --cover-mask <path>: a cover mask (a greyscale picture over the whole map, 1 no cover) in place of the
 //           map's remap.json "cover_mask" (tests: a picture under a --maps folder, /maps/<folder>/<file>.dds)
+//           [plantlod] --plants-far: its plants by their size on screen over all the ground in view, the ground taking
+//           their colour where they are no longer drawn (World::plantsFar, plant_lod.h); --plants-round: their cards fanned
+//           out and rounded (World::plantsRound); --plant-models: the visuals session's 3D plants where the cover has them,
+//           with --plants-far (World::plantModels); --plant-lod name=value,...: their sizes on screen (PlantLodTune:
+//           collapseHigh, collapseLow, cutHigh, cutLow, farCover, farPlants, farClear, model0, model1, model2, modelBand,
+//           onlyCell; farBlades, farShade)
 // --leaf-light  the sun's light through leaves, grass blades and plants (World::leafLight; modern look)
 // --energy-shields  shields that look like energy (World::energyShields, energy_shields.h; modern look): a bubble bends
 //           what is behind it, rings run across it from each hit, its pattern flares where hit and as it weakens, its
@@ -737,6 +743,8 @@ struct Options {
   bool terrainDespiteHold = false;      // --terrain-despite-hold
   bool groundUltra = false;             // --ground-ultra
   std::string coverMask;               // [cover] --cover-mask
+  bool plantsFar = false, plantsRound = false, plantModels = false;  // [plantlod] --plants-far, --plants-round, --plant-models
+  std::string plantLod;                // [plantlod] --plant-lod
   float sunSize = -1;                   // (its size, when given)
   bool clouds3d = false;                // --clouds-3d
   bool cloudsFull = false;              // --clouds-full (the same, marched at the picture's own size)
@@ -911,6 +919,9 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--surf") o->surf = true;
     else if (a == "--stream-water") o->streamWater = true;  // [stream]
     else if (a == "--ground-cover") o->groundCover = true;
+    else if (a == "--plants-far") o->plantsFar = true;      // [plantlod]
+    else if (a == "--plants-round") o->plantsRound = true;  // [plantlod]
+    else if (a == "--plant-models") o->plantModels = true;  // [plantlod]
     else if (a == "--no-plant-motion") o->plantMotion = false;  // [leftover]
     else if (a == "--ground-matt") o->groundMatt = true;        // [leftover]
     else if (a == "--wildlife") o->wildlife = true;
@@ -1063,6 +1074,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--volume-detail") o->volumeDetail = static_cast<float>(atof(v));
     else if (a == "--plant-tallest") o->plantTallest = static_cast<float>(atof(v));
     else if (a == "--cover-mask") o->coverMask = v;  // [cover]
+    else if (a == "--plant-lod") o->plantLod = v;  // [plantlod]
     else if (a == "--wildlife-noise") {
       if (sscanf(v, "%f,%f,%f,%f", &o->wildlifeNoise[0], &o->wildlifeNoise[1], &o->wildlifeNoise[2], &o->wildlifeNoise[3]) < 3) return false;
       o->wildlife = true;
@@ -1671,6 +1683,39 @@ int main(int argc, char** argv) {
   if (opt.surfBreak > 0) world.water.surf.breakDepth = opt.surfBreak;
   world.water.surf.view = opt.surfView;
   world.groundCover = opt.groundCover;
+  world.plantsFar = opt.plantsFar;  // [plantlod]
+  world.plantsRound = opt.plantsRound;
+  world.plantModels = opt.plantModels;
+  if (!opt.plantLod.empty()) {  // [plantlod] --plant-lod name=value,...
+    PlantLodTune& t = world.grass.plantLod;
+    size_t at = 0;
+    const std::string& list = opt.plantLod;
+    while (at < list.size()) {
+      const size_t end = std::min(list.find(',', at), list.size());
+      const std::string item = list.substr(at, end - at);
+      const size_t eq = item.find('=');
+      if (eq != std::string::npos) {
+        const std::string name = item.substr(0, eq);
+        const float value = static_cast<float>(atof(item.c_str() + eq + 1));
+        if (name == "collapseHigh") t.collapseHigh = value;
+        else if (name == "collapseLow") t.collapseLow = value;
+        else if (name == "cutHigh") t.cutHigh = value;
+        else if (name == "cutLow") t.cutLow = value;
+        else if (name == "farCover") t.farCover = value;
+        else if (name == "farPlants") t.farPlants = value;
+        else if (name == "model0") t.modelPixels[0] = value;
+        else if (name == "model1") t.modelPixels[1] = value;
+        else if (name == "model2") t.modelPixels[2] = value;
+        else if (name == "modelBand") t.modelBand = value;
+        else if (name == "onlyCell") t.onlyCell = static_cast<int>(value);
+        else if (name == "farClear") t.farClear = value;
+        else if (name == "farBlades") world.grass.farBlades = value;
+        else if (name == "farShade") world.grass.farShade = value;
+        else fprintf(stderr, "render: --plant-lod: no such number %s\n", name.c_str());
+      }
+      at = end + 1;
+    }
+  }
   world.wildlife = opt.wildlife;
   world.horizonWeather = opt.horizon;  // [horizon]
   if (!opt.horizonParts.empty()) {

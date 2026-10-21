@@ -10,6 +10,7 @@
 // brown of bare earth, varied in patches), each blade folded along its middle; none where the ground is bare (`bare`:
 // the streams, the trails); the cover thinning out toward `farthest` and coming in over a second (no pop-in).
 #pragma once
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -19,11 +20,14 @@
 #include "gfx.h"
 #include "json.h"
 #include "linalg.h"  // [leftover]
+#include "plant_lod.h"  // [plantlod]
 #include "plants.h"  // [plants]
 #include "textures.h"
 #include "view.h"
 
 namespace render {
+
+struct PlantConstants;  // ([plantlod] grass.cpp: the plants' shaders' constants)
 
 class GroundCover {
  public:
@@ -91,6 +95,9 @@ class GroundCover {
   // wind blows, x and z) and `snowTune` (Terrain::snowTune: its y the crowns', its w the drifts' weight).
   float snowDepth = 0.16f;
   gfx::Texture snowShelter;
+  // [plantlod] The ground lays the map's snow materials (Terrain::SnowMaterialsLaid; set by the host before Draw): the snow's
+  // margin mottled over the cover as over the ground, the marks and the map's low plants (decals.cpp's MarkSnowLying).
+  bool snowMaterials = false;
   float snowWind[2] = {0.915f, 0.403f};
   float snowTune[4] = {1, 1, 1, 1};
 
@@ -135,6 +142,60 @@ class GroundCover {
 
   int drawnBlades = 0;  // (the last Draw: cells gone through)
 
+  // [plantlod] The plants by their size on screen, as the models are (plant_lod.h; Chris's test run of 21 October: "at a
+  // distance they are low res like units then close up they are higher res so it just doesn't appear"). Off: as before
+  // (a square round what the camera looks at, all of it gone beyond `farthest`). On: the plants over all the ground in
+  // view, in tiles chosen each frame (PlantTiles), each spot as long as it is `plantLod.cutLow`..`cutHigh` pixels across
+  // on screen (each at its own size in that band, shrinking into the ground), a clump drawn as fewer, larger plants once
+  // it is small on screen (`collapseHigh`..`collapseLow`), and where they are no longer drawn their colour laid on the
+  // ground (`plantLod.farCover`: DrawFarCover); the blades as before. The world's switch World::plantsFar.
+  bool plantsFar = false;
+  // [plantlod] Plants with volume from above (World::plantsRound): each plant's cards fanned out from its foot (leaning
+  // outward, every one its own way round, as a fern's fronds or a weed's leaves), lit by normals rounded over the plant
+  // as a mass, so that from the game's high camera a plant reads as a tuft, not a flat star. Off: upright cards as before.
+  bool plantsRound = false;
+  // [plantlod] The visuals session's 3D plants (the cover json's "models": each kind its levels and the card it ends
+  // on; World::plantModels): with plantsFar on, the plants of a card that has a model drawn as that model at the level
+  // its size on screen asks for, the card below the last. Off (or no models in the cover): cards as before.
+  bool plantModels = false;
+  PlantLodTune plantLod;  // [plantlod] (its sizes on screen; plant_lod.h)
+  // [plantlod] The ground's heights for the tiles (once a map is opened: the heightfield's points, (width + 1) x (height
+  // + 1), and world units of a step of them), and the water's level (none under it).
+  void SetHeights(const std::vector<uint16_t>& heights, int width, int height, float heightScale, float waterLevel);
+  // [plantlod] The cover's 3D plants (its "models" block; SetPlants first): their levels' meshes and their textures read
+  // the first time plantModels wants them.
+  void SetPlantModels(const JsonValue& cover, TextureCache* textures, const std::string& folder);
+  // [plantlod] With plantsFar, before the scene's pass (it dispatches; after Prepare and what is set after it, `cleared`):
+  // the tiles over the view this frame, and which plants the models draw (the models' pass's placing).
+  void PrepareFar(const View& view, const Camera& camera, gfx::Texture heights, float heightUnit, gfx::Texture cover, float mapWidth,
+                  float mapHeight, float waterLevel, gfx::Texture densityA, gfx::Texture densityB);
+  // [plantlod] With plantsFar, after PrepareFar, between passes: what clears the plants beyond the square round what the
+  // camera looks at, as the near cover is cleared - the remastered pads (drawn into FarField over FarArea by the host:
+  // Tarmacs::ClearCover, `padsDrawn` whether it drew any) and what stands on the ground (Prepare's discs: buildings' and
+  // units' footprints) - into the far field the plants and the far cover read; then the models' placing.
+  const float* FarArea() const { return farArea_; }  // (as Area(): its first x, z; a texel's size; texels a side)
+  gfx::Texture FarField();                           // (R8, kFarField a side; made the first time)
+  void PlaceFar(const View& view, const Camera& camera, gfx::Texture heights, float heightUnit, float mapWidth, float mapHeight,
+                float waterLevel, bool padsDrawn);
+  static constexpr int kFarField = 1024;
+  // [plantlod] Modelled kinds with no card of their own stand at most this tall (world units; the cards' plantTallest is
+  // for readability among the units; a bush is taller than a fern, as the map's small bushes are)
+  float modelTallest = 0.6f;
+  // [plantlod] With plantsFar and the far cover on, into the scene's colour after the ground and its marks (a pass of the
+  // scene's colour alone: Post::BeginColorOnly), before Draw: where the plants are no longer drawn (too small on screen,
+  // or the blades beyond their square), their share of the ground and their colour laid on it, so that zooming out
+  // the ground keeps its look (`sceneDepth`: the scene's depth, the ground's alone then).
+  void DrawFarCover(const View& view, const Camera& camera, gfx::Texture sceneDepth);
+  bool FarCoverWanted() const { return plantsFar && plantLod.farCover > 0 && farReady_; }
+  // [plantlod] ([hitches] World::readAhead) The 3D plants' pipelines (drawing and placing; `reacting`: also those with
+  // plants that react) made now, before the first plant comes near enough for one: no hitch then.
+  void PrepareAhead(bool reacting);
+  bool FieldsReady() const { return prepared_; }  // [plantlod] (Area() is this frame's)
+  // [plantlod] the far cover's: how much of fully grassy ground the meadow's blades cover seen from above, and how much
+  // darker a plant is than its art among its own leaves
+  float farBlades = 0.3f, farShade = 0.8f;
+  int drawnTiles = 0, drawnModels = 0;  // [plantlod] (the last Draw: tiles of plants, model plants' room)
+
  private:
   // (the plants' constants as the shader reads them, kept from SetPlants: per cell its uv rectangle; its frame, low
   // and high height, height (metres); its sway, clump's least and most, group; the cells by group, and per group
@@ -146,6 +207,7 @@ class GroundCover {
     float tones[16][4] = {};  // [coverdark] per cell: its mean colour (linear), 1 where it takes the ground's ([cover] -1:
                               // its brightness toward the ground's: the weeds and ferns)
     float tallest = 1;  // the tallest plant's real height (metres)
+    float cover[16] = {};  // [plantlod] per cell: how much of its frame the picture covers (the cover's stats; the far cover)
     float patchScale = 12, patchCover = 0.35f;
     int count = 0;
   } plants_;
@@ -167,6 +229,7 @@ class GroundCover {
   bool motionTried_[8] = {};
   struct Drawn {
     bool blades = false, plants = false, reacting = false, blasts = false;
+    bool far = false;  // [plantlod] (the plants by the tiles: DrawFarPlants)
     gfx::Texture heights, cover, normals, densityA, densityB, blastField, cleared, bare, press, burnt, shelter;
   } drawn_;
   std::vector<float> drawnConstants_[2];  // (the blades' and the plants' constants as Draw handed them)
@@ -180,6 +243,49 @@ class GroundCover {
   // [cover] (how much of the cover is there this frame, Prepare's: by the camera's distance and since it came in; how far
   // it has come in, 0..1; the view's time of the last frame it was prepared)
   float shown_ = 1, cameIn_ = 0, lastShown_ = -1e9f;
+  // [plantlod] (the plants' pipelines are made for these switches; the cameIn_ part of shown_; the tiles and the models;
+  // PrepareFar has set the tiles this frame)
+  int plantVariant_ = 0;
+  std::string PlantDefines() const;
+  void BuildPlantSources();
+  void MakePlantVariant();
+  float cameInShown_ = 1;
+  bool farReady_ = false, modelsPlaced_ = false;
+  std::unique_ptr<PlantTiles> tiles_;
+  std::unique_ptr<PlantModels> models_;
+  gfx::Buffer tileBuffer_, modelTileBuffer_;  // (PlantTiles' rows and model rows, this frame's)
+  gfx::Pipeline farCover_, modelPlace_, modelClear_;
+  gfx::Pipeline modelPipelines_[8];  // (ModelPipeline's)
+  bool modelTried_[8] = {};
+  bool modelPlaceTried_ = false;
+  int farCoverTried_ = 0;
+  uint32_t room_[PlantModels::kMostKinds * PlantModels::kLevels] = {};  // (the models' room this frame, by kind and level)
+  float densityMost_[6] = {};  // (per group the most of a cell the cover's table gives it: the models' room)
+  // (the far field: its picture, the area it lies over, whether it was made this frame; the discs Prepare was handed; the
+  // discs' pipeline)
+  gfx::Texture farField_;
+  float farArea_[4] = {0, 0, 1, 1};
+  bool farFieldReady_ = false;
+  std::vector<float> farDiscs_;
+  gfx::Pipeline farDiscPipeline_;
+  bool farDiscsTried_ = false;
+  JsonValue modelsCover_;      // (SetPlantModels': read by LoadPlantModels the first time the models are wanted)
+  TextureCache* modelsTextures_ = nullptr;
+  std::string modelsFolder_;
+  bool modelsLoaded_ = false;
+  void LoadPlantModels();
+  void MakeModelPlace();
+  struct Far {
+    gfx::Texture cover, densityA, densityB;
+    float mapWidth = 0, mapHeight = 0, waterLevel = -1e9f;
+  } far_;  // (PrepareFar's, for DrawFarCover)
+  int FillPlantConstants(PlantConstants* p, float mapWidth, float mapHeight, float heightUnit, float waterLevel, float pixelAngle, bool reacting) const;
+  void DrawFarPlants(PlantConstants* p, int variant, bool motion);
+  gfx::Pipeline ModelPipeline(int k);
+  float FrameOf(int cell) const;  // (a cell's card's width in world units at its own height, Draw's scale)
+  float ModelScale(const PlantModels::Kind& m) const;
+  float ModelFrame(const PlantModels::Kind& m) const;
+  bool ModelsOn() const;
 };
 
 }  // namespace render

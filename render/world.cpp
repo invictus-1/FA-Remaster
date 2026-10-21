@@ -284,6 +284,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
       streams.seaLevel = map.water.present ? map.water.elevation : -1e9f;
       streams.groundHeight = [this](float x, float z) { return map.Height(Clamp(x, 0, static_cast<float>(map.width)), Clamp(z, 0, static_cast<float>(map.height))); };
       grass.bareMap.SetMap(static_cast<float>(map.width), static_cast<float>(map.height));  // [cover] (no cover on them)
+      grass.SetHeights(map.heights, map.width, map.height, map.heightScale, map.water.present ? map.water.elevation : -1e9f);  // [plantlod]
       for (size_t i = 0; i < props_.size(); ++i)
         if (props_[i].model && !props_[i].model->lods.empty() && props_[i].model->lods[0].stream) {
           streams.Add(props_[i].model, props_[i].world, static_cast<uint32_t>(i));
@@ -343,6 +344,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     coverA_ = coverB_ = {};
     if (const JsonValue* cover = terrain.Cover()) {
       plantsReady_ = grass.SetPlants(*cover, &textures, kRemasteredTerrain);
+      if (plantsReady_) grass.SetPlantModels(*cover, &textures, kRemasteredTerrain);  // [plantlod] (the cover's 3D plants)
       const int w = std::max(map.width / 2, 1), h = std::max(map.height / 2, 1);  // (as the density's pictures)
       std::vector<uint8_t> near(static_cast<size_t>(w) * static_cast<size_t>(h), 0);
       const float radius = terrain.CoverTreeRadius(), texel = static_cast<float>(map.width) / static_cast<float>(w);
@@ -2535,6 +2537,7 @@ void World::PrepareAhead() {
   if (look != Look::Modern) return;
   if (buildNow_) build.PrepareSparks();
   if (groundCover && (ao.strength > 0 || contactShadows)) ao.PrepareCover();
+  if (groundCover && grassMade_ && plantsFar) grass.PrepareAhead(plantsReact);  // [plantlod] (the 3D plants' and the far cover's)
   if (surf && map.water.present) water.surf.PrepareSpray();
   if (litRain) falling.PrepareLit();
   if (rainSplashes) falling.PrepareSplashes();
@@ -2793,6 +2796,9 @@ void World::Render() {
   // not scenery, its footprint from its bounds), then where it lies this frame (its shader made the first time)
   grassNow_ = false;
   if (groundCover && look == Look::Modern && !sidePicture && haveMap_) {
+    grass.plantsFar = plantsFar;  // [plantlod] (and with it the plants from any distance; before Init: its shaders for them)
+    grass.plantsRound = plantsRound;
+    grass.plantModels = plantModels;
     if (!grassTried_) {
       grassTried_ = true;
       std::string why;
@@ -2801,7 +2807,7 @@ void World::Render() {
     }
     // (cinecam: a cinematic camera by the eye's height over the ground under it, grass.cpp)
     const Vec3 eye = placing.Eye();
-    if (grassMade_ && (placing.cinematic ? eye.y - GroundHeight(eye.x, eye.z) : placing.distance) <= grass.farthest) {
+    if (grassMade_ && ((placing.cinematic ? eye.y - GroundHeight(eye.x, eye.z) : placing.distance) <= grass.farthest || grass.plantsFar)) {
       std::vector<float> discs;
       meshes.ForEachAdded([&](const Model* model, const float* row0, const float* row1, const float* row2, const float*, bool scenery) {
         if (scenery || !model || discs.size() >= 3 * 1024) return;
@@ -2824,11 +2830,25 @@ void World::Render() {
       grassNow_ = true;
       // [tarmac] none where a remastered pad lies: its coverage over the grass's square (between passes: it draws)
       grass.cleared = {};
-      if (decals.remasteredTarmacs) {
+      // ([plantlod] with plantsFar, the pads and the waves only where the grass's square is laid out this frame)
+      const bool square = !grass.plantsFar || grass.FieldsReady();
+      if (decals.remasteredTarmacs && square) {
         decals.TarmacPads(clock_, &padsNear_);
         grass.cleared = decals.tarmacs.ClearCover(view, grass.Area(), padsNear_);
       }
-      if (blastsNow_ && blasts.Waves() && grass.PrepareBlasts()) grassBlasts_ = blasts.PrepareField(grass.Area());  // (the blasts' waves over it)
+      if (blastsNow_ && blasts.Waves() && square && grass.PrepareBlasts()) grassBlasts_ = blasts.PrepareField(grass.Area());  // (the blasts' waves over it)
+      if (grass.plantsFar) {  // [plantlod] the plants' tiles over the view, what clears them beyond the square, the models' placing
+        const float water = map.water.present ? map.water.elevation : -1e9f;
+        grass.PrepareFar(view, placing, terrain.HeightTexture(), terrain.HeightUnit(), terrain.GroundColours(), static_cast<float>(map.width),
+                         static_cast<float>(map.height), water, plantsReady_ ? coverA_ : gfx::Texture{}, plantsReady_ ? coverB_ : gfx::Texture{});
+        bool padsDrawn = false;
+        if (decals.remasteredTarmacs && grass.FarField()) {
+          if (!square) decals.TarmacPads(clock_, &padsNear_);
+          padsDrawn = static_cast<bool>(decals.tarmacs.ClearCover(view, grass.FarArea(), padsNear_, grass.FarField(), GroundCover::kFarField));
+        }
+        grass.PlaceFar(view, placing, terrain.HeightTexture(), terrain.HeightUnit(), static_cast<float>(map.width), static_cast<float>(map.height), water,
+                       padsDrawn);
+      }
     }
   }
   if (bounceNow_) {  // bounce light: the probes' rays and their blending
@@ -3009,6 +3029,14 @@ void World::Render() {
       post.ContinueScene();
       lights.Bind();
     }
+    // [plantlod] where the ground cover's plants are no longer drawn, their colour on the ground (it reads the ground's depth)
+    if (grassNow_ && grass.FarCoverWanted()) {
+      Stage("ground cover's far cover");
+      post.BeginColorOnly();
+      grass.DrawFarCover(view, camera, post.Depth());
+      post.ContinueScene();
+      lights.Bind();
+    }
     // ground cover near the camera (prepared before the pass)
     if (grassNow_) {
       Stage("ground cover");
@@ -3021,6 +3049,7 @@ void World::Render() {
       }
       // [leftover] under lying snow: with the snow ground, its shelter (deeper in hollows and the lee, thinner under trees)
       grass.snowShelter = terrain.SnowShelterPicture();
+      grass.snowMaterials = terrain.SnowMaterialsLaid();  // [plantlod] (the snow's mottled margin)
       grass.snowWind[0] = terrain.snowWind[0];
       grass.snowWind[1] = terrain.snowWind[1];
       std::copy(terrain.snowTune, terrain.snowTune + 4, grass.snowTune);
