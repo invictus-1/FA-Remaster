@@ -1,7 +1,9 @@
 #include "lights.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 
 #include "core/vfs.h"
@@ -185,39 +187,137 @@ void Lights::Build(View* view) {
     device_->UpdateBuffer(buffer_, rows_.data(), static_cast<uint32_t>(rows_.size() * sizeof(float)));
     return;
   }
-  // the grid covers the ground all the lights reach, in squares no smaller than kSmallestCell
-  float x0 = 1e30f, z0 = 1e30f, x1 = -1e30f, z1 = -1e30f;
-  for (const Light& l : lights_) {
-    x0 = std::min(x0, l.position.x - l.radius);
-    z0 = std::min(z0, l.position.z - l.radius);
-    x1 = std::max(x1, l.position.x + l.radius);
-    z1 = std::max(z1, l.position.z + l.radius);
-  }
-  // (unitsfx) the squares' size from a ladder (kSmallestCell times powers of the square root of two), kept from frame to
-  // frame while it still fits and is not more than a step too coarse; the grid's corner on a multiple of it, so that a
-  // square is the same piece of ground from frame to frame while the size stays
-  const float wide = std::max(x1 - x0, z1 - z0);
-  int step = 0;
-  while (kSmallestCell * std::exp2(0.5f * static_cast<float>(step)) * static_cast<float>(kMaxCellsAcross) < wide && step < 40) ++step;
-  if (cellStep_ < step || cellStep_ > step + 1) cellStep_ = step;
-  const float cell = kSmallestCell * std::exp2(0.5f * static_cast<float>(cellStep_));
-  x0 = std::floor(x0 / cell) * cell;
-  z0 = std::floor(z0 / cell) * cell;
-  const int cols = std::clamp(static_cast<int>(std::ceil((x1 - x0) / cell)), 1, kMaxCellsAcross + 1);
-  const int rows = std::clamp(static_cast<int>(std::ceil((z1 - z0) / cell)), 1, kMaxCellsAcross + 1);
-  const size_t cells = static_cast<size_t>(cols) * static_cast<size_t>(rows);
-  cellCount_.assign(cells, 0);
+  // the grid covers the ground all the lights reach, in squares no smaller than kSmallestCell (lay: laid over the lights
+  // as they are and each square's lights counted; true when a square has more than a pixel looks at)
+  float x0 = 0, z0 = 0, cell = kSmallestCell;
+  int cols = 1, rows = 1;
+  size_t cells = 1;
   auto span = [&](const Light& l, int* cx0, int* cx1, int* cz0, int* cz1) {
     *cx0 = std::clamp(static_cast<int>((l.position.x - l.radius - x0) / cell), 0, cols - 1);
     *cx1 = std::clamp(static_cast<int>((l.position.x + l.radius - x0) / cell), 0, cols - 1);
     *cz0 = std::clamp(static_cast<int>((l.position.z - l.radius - z0) / cell), 0, rows - 1);
     *cz1 = std::clamp(static_cast<int>((l.position.z + l.radius - z0) / cell), 0, rows - 1);
   };
-  for (const Light& l : lights_) {
-    int a, b, c0, d;
-    span(l, &a, &b, &c0, &d);
-    for (int z = c0; z <= d; ++z)
-      for (int x = a; x <= b; ++x) ++cellCount_[static_cast<size_t>(z) * static_cast<size_t>(cols) + static_cast<size_t>(x)];
+  auto lay = [&]() {
+    x0 = 1e30f, z0 = 1e30f;
+    float x1 = -1e30f, z1 = -1e30f;
+    for (const Light& l : lights_) {
+      x0 = std::min(x0, l.position.x - l.radius);
+      z0 = std::min(z0, l.position.z - l.radius);
+      x1 = std::max(x1, l.position.x + l.radius);
+      z1 = std::max(z1, l.position.z + l.radius);
+    }
+    // (unitsfx) the squares' size from a ladder (kSmallestCell times powers of the square root of two), kept from frame to
+    // frame while it still fits and is not more than a step too coarse; the grid's corner on a multiple of it, so that a
+    // square is the same piece of ground from frame to frame while the size stays
+    const float wide = std::max(x1 - x0, z1 - z0);
+    int step = 0;
+    while (kSmallestCell * std::exp2(0.5f * static_cast<float>(step)) * static_cast<float>(kMaxCellsAcross) < wide && step < 40) ++step;
+    if (cellStep_ < step || cellStep_ > step + 1) cellStep_ = step;
+    cell = kSmallestCell * std::exp2(0.5f * static_cast<float>(cellStep_));
+    x0 = std::floor(x0 / cell) * cell;
+    z0 = std::floor(z0 / cell) * cell;
+    cols = std::clamp(static_cast<int>(std::ceil((x1 - x0) / cell)), 1, kMaxCellsAcross + 1);
+    rows = std::clamp(static_cast<int>(std::ceil((z1 - z0) / cell)), 1, kMaxCellsAcross + 1);
+    cells = static_cast<size_t>(cols) * static_cast<size_t>(rows);
+    cellCount_.assign(cells, 0);
+    for (const Light& l : lights_) {
+      int a, b, c0, d;
+      span(l, &a, &b, &c0, &d);
+      for (int z = c0; z <= d; ++z)
+        for (int x = a; x <= b; ++x) ++cellCount_[static_cast<size_t>(z) * static_cast<size_t>(cols) + static_cast<size_t>(x)];
+    }
+    bool over = false;
+    for (uint32_t n : cellCount_) over = over || n > static_cast<uint32_t>(kMostInSquare);
+    return over;
+  };
+  merged = 0;
+  if (lay()) {
+    // [unitfx] Crowded squares (Chris, 2026-10-21: "shadow squares" when the Izanagi fires its missiles and guns: a hundred
+    // and more shots' glows and hits' flashes where its salvos land, up to 192 lights reaching one square). A square keeps
+    // only the kMostInSquare lights that light it most, so where its neighbour keeps a light it does not, the pool of light
+    // steps at the square's edge. Where squares are that crowded, the lights that crowd them are first merged: lights to
+    // all sides of about the same reach (steps of a quarter) lying within a cube a share of that reach across (a quarter,
+    // then a half, a whole, two, until no square is over) become one at their middle (by brightness), as bright as all
+    // of them together, reaching as far as the farthest of them did and a little more as they lay apart. While the cubes
+    // are small only lights riding on the same model are merged (a lamp's ray-traced shadow passes the model it rides
+    // on: lighting.h, RayLightSeen); from a whole reach on, any, and the merged light passes the model of its brightest
+    // light that rode on one. Many flashes of one salvo's hits are about one light already, and light the ground almost
+    // exactly as they did; a crowd that stays too dense is lit a little coarser, with no square's edge in it. Squares
+    // that are not crowded keep their lights as they were (and a frame with none over keeps every light as it was).
+    for (const float share : {0.25f, 0.5f, 1.0f, 2.0f}) {
+      // (the lights that reach an over-full square: lamps' beams and lights with a shadow map of their own stay as they are)
+      std::vector<std::array<int64_t, 7>> keys(lights_.size());
+      std::vector<uint32_t> order;
+      for (uint32_t n = 0; n < lights_.size(); ++n) {
+        const Light& l = lights_[n];
+        if (l.cosEdge > -1.5f || l.shadow >= 0) continue;
+        int a, b, c0, d;
+        span(l, &a, &b, &c0, &d);
+        bool crowded = false;
+        for (int z = c0; z <= d && !crowded; ++z)
+          for (int x = a; x <= b && !crowded; ++x)
+            crowded = cellCount_[static_cast<size_t>(z) * static_cast<size_t>(cols) + static_cast<size_t>(x)] > static_cast<uint32_t>(kMostInSquare);
+        if (!crowded) continue;
+        const int64_t reachStep = static_cast<int64_t>(std::floor(std::log(std::max(l.radius, 1e-3f)) / std::log(1.25f)));
+        const float side = share * std::pow(1.25f, static_cast<float>(reachStep + 1));
+        const bool byModel = share < 1 && l.hasOrigin;
+        keys[n] = {reachStep, static_cast<int64_t>(std::floor(l.position.x / side)), static_cast<int64_t>(std::floor(l.position.y / side)),
+                   static_cast<int64_t>(std::floor(l.position.z / side)), share < 1 && l.hasOrigin ? 1 : 0,
+                   byModel ? static_cast<int64_t>(std::lround(l.origin.x * 64)) : 0, byModel ? static_cast<int64_t>(std::lround(l.origin.z * 64)) : 0};
+        order.push_back(n);
+      }
+      std::stable_sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) { return keys[a] < keys[b]; });
+      // each group of more than one into its first light (in the list's order), the others left out
+      std::vector<uint8_t> gone(lights_.size(), 0);
+      int joined = 0;
+      for (size_t i = 0; i < order.size();) {
+        size_t j = i + 1;
+        while (j < order.size() && keys[order[j]] == keys[order[i]]) ++j;
+        if (j - i > 1) {
+          uint32_t first = order[i];
+          for (size_t k = i; k < j; ++k) first = std::min(first, order[k]);
+          Vec3 at{0, 0, 0}, colour{0, 0, 0};
+          float weight = 0, farthest = 0, brightestRider = -1;
+          const Light* rider = nullptr;  // (the brightest that rides on a model)
+          for (size_t k = i; k < j; ++k) {
+            const Light& l = lights_[order[k]];
+            const float w = 0.3f * l.color.x + 0.6f * l.color.y + 0.1f * l.color.z + 1e-6f;
+            at = at + l.position * w;
+            colour = colour + l.color;
+            weight += w;
+            farthest = std::max(farthest, l.radius);
+            if (l.hasOrigin && w > brightestRider) brightestRider = w, rider = &l;
+          }
+          const bool rides = rider != nullptr;
+          const Vec3 riddenOn = rides ? rider->origin : Vec3{0, 0, 0};
+          at = at * (1 / weight);
+          float spread = 0;
+          for (size_t k = i; k < j; ++k) {
+            const Light& l = lights_[order[k]];
+            spread += (0.3f * l.color.x + 0.6f * l.color.y + 0.1f * l.color.z + 1e-6f) * Length(l.position - at);
+          }
+          Light& kept = lights_[first];
+          kept.position = at;
+          kept.color = colour;
+          kept.radius = farthest + spread / weight;
+          kept.hasOrigin = rides;
+          kept.origin = riddenOn;
+          for (size_t k = i; k < j; ++k)
+            if (order[k] != first) gone[order[k]] = 1;
+          joined += static_cast<int>(j - i) - 1;
+        }
+        i = j;
+      }
+      if (joined == 0) continue;
+      size_t to = 0;
+      for (size_t n = 0; n < lights_.size(); ++n)
+        if (!gone[n]) lights_[to++] = lights_[n];
+      lights_.resize(to);
+      merged += joined;
+      mergedMost = std::max(mergedMost, merged);
+      if (!lay()) break;
+    }
   }
   cellFirst_.assign(cells, 0);
   uint32_t total = 0;

@@ -51,6 +51,11 @@ One entry per light:
 Lines starting with `--` are comments. Fields the renderer does not know are ignored, so more can be
 added later without breaking older builds.
 
+**Toning one unit's lamps down or up (2026-10-21).** Each lamp's `Strength` (and `Radius`) is the unit's own number:
+change them in its list. To try a factor before writing it, the viewer's `--lamp-scale n` multiplies every remastered
+unit's lamps' strength by `n` (with one unit on the screen, that is its factor), for example
+`--place <id> --time-of-day 23 --lamp-scale 0.6`. Without it, 1 (the lists as written).
+
 **Put the lights that matter most first.** When many units are lit at once, each unit lights only
 the first of its list (down to three with some thousands of units), and where units stand close
 together a small square of ground (2.5 world units) takes three beams and two other lamps from

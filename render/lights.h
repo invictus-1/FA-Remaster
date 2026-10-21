@@ -5,7 +5,9 @@
 // the ground (in this game everything of interest is near the ground, so a flat grid does what
 // other renderers need a grid in the picture's depth for): each square lists the lights that reach
 // it, and a pixel looks only at the lights of the square its place on the ground is in. The grid
-// and the lights go to the shaders in one buffer (lighting.h reads it).
+// and the lights go to the shaders in one buffer (lighting.h reads it). A pixel looks at 48 at most;
+// where more reach a square (a big unit's salvos landing), the lights crowding it are merged first
+// (Build), so that the light does not step at the squares' edges.
 //
 // The beams of the lamps nearest to what the camera looks at also cast shadows: each of those has a
 // small shadow map of its own, a picture of the depth of units and scenery as the lamp sees them.
@@ -89,6 +91,10 @@ class Lights {
   float reach = 3.0f;         // a flash's radius, in sizes of its glow
   float night = 1;            // what flashes are multiplied by this frame (the night's dimming of the game's effects)
   int count = 0;              // lights in the last Build
+  // [unitfx] lights merged into others in the last Build, where squares of the grid were too crowded (Build: a hundred
+  // shots' glows and hits' flashes where a big unit's salvos land); 0 in a frame with no square over
+  int merged = 0;
+  int mergedMost = 0;  // (the most in one Build so far)
 
  private:
   struct Light {
