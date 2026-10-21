@@ -40,6 +40,14 @@ class Vfs;
 
 namespace render {
 
+// What threw a flash, as the effects know it (Effects::Apply), for those told of it (Lights::onFlash: the volume
+// explosions, volume_blasts.h).
+struct FlashFrom {
+  bool explosion = true;  // an explosion's (Effects::Explosion), not a script's light on a living unit or a prop
+  std::string faction;    // whose: "uef", "aeon", "cybran", "seraphim" ("": not known)
+  float dyingWidth = 0;   // a dying unit's: half its model's width (world units, the larger of across and along); 0: none
+};
+
 class Lights {
  public:
   Lights(gfx::Device* device, const moho::Vfs* vfs);
@@ -62,12 +70,11 @@ class Lights {
                const Vec3* origin = nullptr);
   // A light that lives `seconds` from `born` and takes its colour and strength along that time from
   // a ramp texture (the scripts' "light particle": `size` is what the original draws its glow with;
-  // the light reaches a few times as far). `explosion`: whether an explosion threw it (Effects::Explosion), not a script's
-  // light on a living unit or a prop.
-  void Flash(const std::string& ramp, Vec3 position, float size, double born, float seconds, bool explosion = true);
+  // the light reaches a few times as far). `from`: what threw it.
+  void Flash(const std::string& ramp, Vec3 position, float size, double born, float seconds, const FlashFrom& from = {});
   // (volume explosions, volume_blasts.h) told of every explosion's flash as Flash is given it, while set: big ones are
   // blasts (a structure begun, a unit being built, a warp-in, a reclaim throw their flashes too, and are none)
-  std::function<void(const std::string& ramp, Vec3 position, float size, double born, float seconds)> onFlash;
+  std::function<void(const std::string& ramp, Vec3 position, float size, double born, float seconds, const FlashFrom& from)> onFlash;
   // The colour a thing glows in whose particles take theirs from that ramp texture: the ramp's
   // strongest place (linear light), for the light a shot in flight throws.
   Vec3 RampGlow(const std::string& ramp);

@@ -725,6 +725,11 @@ const EmitterBlueprint* Particles::Blueprint(const std::string& path, const std:
   bp->lightSeconds = Number(v["LightSeconds"], 0);
   bp->lightStrength = Number(v["LightStrength"], 1);
   bp->volumeReplaced = Flag(v["VolumeReplaces"], false);
+  {  // (VolumeReplaces = "inside")
+    std::string replaces = v["VolumeReplaces"].StringOr(std::string());
+    for (char& c : replaces) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    bp->volumeInside = replaces == "inside";
+  }
   bp->sortOrder = static_cast<int>(Number(v["SortOrder"], 0));
   bp->lodCutoff = std::max(0.0f, Number(v["LODCutoff"], 0));
   bp->texturePath = v["Texture"].StringOr(std::string());
@@ -757,8 +762,11 @@ uint32_t Particles::Start(const std::string& blueprint, Vec3 position, const Qua
                           const std::string& faction) {
   const EmitterBlueprint* bp = Blueprint(blueprint, faction);
   if (!bp->ok) return 0;
-  if (VolfxLog* log = VolfxLog::Get()) log->Emitter(blueprint, *bp, position, scale, startedAt >= 0 ? startedAt : now_, volumesOn && bp->volumeReplaced);  // (MOHO64_DEBUG_VOLFX: volfx_log.h)
-  if (volumesOn && bp->volumeReplaced) return 0;  // (volume explosions: its volume is drawn in its place)
+  const double when = startedAt >= 0 ? startedAt : now_;
+  // (volume explosions: one whose volume is drawn in its place; or, VolumeReplaces = "inside", a volume born just now over it)
+  const bool covered = volumesOn && bp->volumeInside && volumeCovers && volumeCovers(position, when);
+  if (VolfxLog* log = VolfxLog::Get()) log->Emitter(blueprint, *bp, position, scale, when, (volumesOn && bp->volumeReplaced) || covered);  // (MOHO64_DEBUG_VOLFX: volfx_log.h)
+  if ((volumesOn && bp->volumeReplaced) || covered) return 0;  // (volume explosions: its volume is drawn in its place)
   std::unique_ptr<Set>& set = sets_[bp];
   if (!set) {
     set = std::make_unique<Set>();
@@ -785,6 +793,10 @@ uint32_t Particles::Start(const std::string& blueprint, Vec3 position, const Qua
   e.started = startedAt >= 0 ? startedAt : now_;
   index_[e.id] = emitters_.size();
   emitters_.push_back(e);
+  if (volumesOn && bp->volumeInside) {  // (VolumeReplaces = "inside": remembered a moment, VolumeBorn)
+    inside_.erase(std::remove_if(inside_.begin(), inside_.end(), [&](const Inside& i) { return std::fabs(e.started - i.started) > 2; }), inside_.end());
+    inside_.push_back({e.id, position, e.started, blueprint});
+  }
   // the remastered look: a flash or an explosion lights what is around it for a moment. By
   // default a short emitter (three seconds at most) whose particles add their light, as large as
   // they are; the blueprint may say otherwise (LightRadius, LightSeconds, LightStrength)
@@ -982,6 +994,25 @@ void Particles::Emit(Emitter* emitter, int tick) {
     emitter->set->particles.push_back(p);
   }
   emitter->positionBefore = emitter->position;
+}
+
+void Particles::VolumeBorn(Vec3 at, float radius, double born, float seconds) {
+  auto under = [&](Vec3 p, float slack) { return std::hypot(p.x - at.x, p.z - at.z) <= radius + 0.5f + slack; };
+  bool any = false;  // (one under it, running yet or done already: a short one, a fire's puff of three ticks, may be)
+  for (const Inside& i : inside_) {
+    if (std::fabs(i.started - born) > seconds || !under(i.at, 0)) continue;
+    any = true;
+    if (Emitter* e = Find(i.id); e && !e->stopped) e->stopped = true;
+    if (VolfxLog* log = VolfxLog::Get()) log->TakenBack(i.path, i.at, i.started);  // (MOHO64_DEBUG_VOLFX)
+  }
+  if (!any) return;
+  // what they threw: the particles of such emitters started since a moment before the volume, under it (they start on
+  // their emitter's disc, so a little farther out)
+  for (Set* set : order_) {
+    if (!set->blueprint->volumeInside) continue;
+    for (Particle& p : set->particles)
+      if (p.startTime >= static_cast<float>(born - seconds) - 0.05f && under({p.position[0], p.position[1], p.position[2]}, 2)) p.lifetime = -1;
+  }
 }
 
 void Particles::Hide(uint32_t emitter, bool hidden) {

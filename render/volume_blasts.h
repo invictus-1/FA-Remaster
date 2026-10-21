@@ -23,7 +23,15 @@
 // Which blasts: what a script's flash says (Lights::onFlash: the game's "light particles", as large as the glow it
 // draws on the ground) and the simulation's harm to an area (World::AddCombat's hits with a radius): a flash of
 // `smallest` or larger, or an area of `smallestArea` or larger, is a blast; a flash of `nukeFlash` or larger a nuke.
-// Several of one blast (a unit's death flashes, a nuke's flashes over its first second) are one.
+// Several of one blast (a unit's death flashes, a nuke's flashes over its first second) are one. A dying unit's blast is
+// as large as the unit (the flash the game's death explosion throws is sized by the unit's hitbox, smaller than its
+// model). Only the UEF's strategic missiles are nukes here (each faction gets its own effects in its own pass, Chris
+// 2026-10-21): another faction's keeps the original's look (no volume for it, its own later flashes or its harm; the
+// deaths it causes make theirs).
+//
+// An emitter whose blueprint says VolumeReplaces = "inside" is shared with explosions too small for a volume (a
+// medium unit's death): it is started as ever, and taken back (stopped, what it threw within the moment let go of) when
+// a volume is born within `insideSeconds` of it and over it (onBorn, Covers; Particles::VolumeBorn).
 #pragma once
 #include <cstdint>
 #include <functional>
@@ -33,6 +41,7 @@
 
 #include "camera.h"
 #include "gfx.h"
+#include "lights.h"
 #include "linalg.h"
 #include "view.h"
 
@@ -52,13 +61,18 @@ class VolumeBlasts {
 
   // A flash a script made (Lights::onFlash): its ramp texture, where, its glow's size, when (the game's clock,
   // seconds) and for how long.
-  void Offer(const std::string& ramp, Vec3 position, float size, double born, float seconds);
-  // Harm to an area (a hit with a radius: DamageArea), at that moment.
-  void OfferArea(Vec3 position, float radius, double born);
+  void Offer(const std::string& ramp, Vec3 position, float size, double born, float seconds, const FlashFrom& from = {});
+  // Harm to an area (a hit with a radius: DamageArea), at that moment. `nukeHarm`: a strategic missile's own ('Nuke').
+  void OfferArea(Vec3 position, float radius, double born, bool nukeHarm = false);
   // Forgets every blast (a map opened, the game started over).
   void Clear();
   // The colour a ramp texture glows in (the world sets it: Lights::RampGlow): a nuke's flash takes its hue.
   std::function<Vec3(const std::string&)> rampGlow;
+  // VolumeReplaces = "inside": told of each blast as it is born or grows (where, how large, when), for the emitters
+  // started just before it under it to be taken back (the world sets it: Particles::VolumeBorn); and whether one born
+  // within `insideSeconds` of `when` is over that place (for those started just after it: they are not started).
+  std::function<void(Vec3 at, float radius, double born)> onBorn;
+  bool Covers(Vec3 at, double when) const;
 
   // --- a frame (World::Render), in this order ---
   // The blasts alive at `clock` (ended ones let go of), which are drawn (the files and the pipelines made the first
@@ -94,7 +108,10 @@ class VolumeBlasts {
   float nukeFlash = 100;       // a flash's size from which it is a nuke
   float blastPerFlash = 0.32f; // a blast's radius (the file's unit) per size of its flash
   float blastPerArea = 0.9f;   // ... per radius of its harm
-  float largest = 10;          // the largest a blast is (world units; a strategic bomb's, an experimental's death)
+  float largest = 10;          // the largest a blast is (world units; a strategic bomb's) but for a dying unit's
+  float deathPerWidth = 1.2f;  // a dying unit's blast's radius per half its model's width, when that is more than its flash says
+  float largestDeath = 20;     // the largest a dying unit's blast is (an experimental's, a battleship's)
+  float insideSeconds = 0.3f;  // VolumeReplaces = "inside": how near a blast's birth an emitter is taken back
   float nukeRadius = 40;       // a nuke's radius when nothing says otherwise (the game's strategic missiles' outer ring)
   int steps = 48;              // the most steps a pixel marches through a volume
   float detail = 0.45f;        // how much a finer noise frays the volumes' edges and shades their folds (0: none)
@@ -155,12 +172,16 @@ class VolumeBlasts {
   void Constants(const Slot& s, const View& view, float* out) const;
   void Start(Vec3 at, float radius, double born, bool nuke, float flashSize, const std::string& ramp);
   const Blast* NukeNow(double clock) const;
+  // Whether another faction's strategic missile (quiet_), or a nuke, went off near there lately (a second before to 30 s after).
+  bool Quiet(Vec3 at, double born) const;
+  bool NukeNear(Vec3 at, double born) const;
 
   gfx::Device* device_;
   const moho::Vfs* vfs_;
   TextureCache* textures_;
   std::vector<Blast> blasts_;
   std::vector<Vec4> rings_;  // harm to an area as large as a nuke's lately: x, z, radius, when
+  std::vector<Vec4> quiet_;  // another faction's strategic missiles lately (no volume): x, z, radius, when
   std::unordered_map<std::string, Sequence> sequences_;
   Slot slots_[8];
   int slotCount_ = 0;

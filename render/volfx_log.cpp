@@ -175,7 +175,15 @@ void VolfxLog::Into(Vec3 at, double born, float radius, bool nuke, bool fresh) {
   offer_.clear();
 }
 
-void VolfxLog::Declined(bool flash, float size) {
+void VolfxLog::TakenBack(const std::string& path, Vec3 at, double born) {
+  for (Started& s : started_)
+    if (s.path == path && s.born == born && s.at.x == at.x && s.at.y == at.y && s.at.z == at.z) {
+      s.takenBack = true;
+      return;
+    }
+}
+
+void VolfxLog::Declined(bool flash, float size, const char* why) {
   if (size < (flash ? 5.0f : 3.0f)) return;  // (too small to have been a blast anyway: VolumeBlasts::smallest, smallestArea)
   std::string what = OnWhat(origin_.empty() ? std::string("? ?") : origin_);
   if (!flash) {  // (" Normal 181 by ueb2204-1-AAGun shot /projectiles/x/x_proj.bp": the weapon's unit and the shot)
@@ -187,7 +195,7 @@ void VolfxLog::Declined(bool flash, float size) {
   } else if (what.compare(0, 5, "unit:") == 0) {
     what = what.substr(0, what.rfind(':')) + (what.find(":alive") != std::string::npos ? " (living)" : " (dead)");
   }
-  ++declined_[(flash ? "flash on " : "area by ") + what];
+  ++declined_[std::string(why) + ": " + (flash ? "flash on " : "area by ") + what];
   ++declinedCount_;
 }
 
@@ -220,7 +228,7 @@ void VolfxLog::Print(const Blast& b) {
   // the emitters started with it, one line per blueprint: how many, when (seconds from the blast's birth), how far from
   // its middle (horizontally), at what scales, on what
   struct Group {
-    int n = 0, replaced = 0;
+    int n = 0, replaced = 0, takenBack = 0;
     double dtLow = 1e9, dtHigh = -1e9;
     float dLow = 1e9f, dHigh = 0, scaleLow = 1e9f, scaleHigh = 0, upLow = 1e9f, upHigh = -1e9f;
     const Started* largest = nullptr;
@@ -239,6 +247,7 @@ void VolfxLog::Print(const Blast& b) {
     Group& g = groups[s.path];
     ++g.n;
     if (s.replaced) ++g.replaced;
+    if (s.takenBack) ++g.takenBack;
     g.dtLow = std::min(g.dtLow, dt), g.dtHigh = std::max(g.dtHigh, dt);
     g.dLow = std::min(g.dLow, d), g.dHigh = std::max(g.dHigh, d);
     g.upLow = std::min(g.upLow, up), g.upHigh = std::max(g.upHigh, up);
@@ -261,10 +270,16 @@ void VolfxLog::Print(const Blast& b) {
     t.blend = s.blend;
     t.hint = hint;
     const std::string call = s.origin.substr(0, s.origin.find(' '));
+    // (each start: drawn, not started - REPLACED, VolumeReplaces or under a volume born just before it - or TAKEN-BACK)
+    std::string state = "drawn";
+    if (g.replaced == g.n) state = "REPLACED";
+    else if (g.takenBack == g.n) state = "TAKEN-BACK";
+    else if (g.replaced + g.takenBack == g.n) state = "REPLACED+TAKEN-BACK";
+    else if (g.replaced + g.takenBack > 0) state = "partly-replaced";
     printf("volfx\temitter\t#%d\tx%d\tdt=%+.1f..%+.1f\td=%.1f..%.1f\td/r<=%.2f\tup=%.1f..%.1f\t%s\ttex=%s\tramp=%s\tblend=%d\tsize=%.2f\tscale=%.2f..%.2f\tlife=%g\tplife=%g\tn=%.0f\tspeed=%.2f\tflat=%d%s%s\t%s\t%s %s\thint=%s\n",
            b.id, g.n, g.dtLow, g.dtHigh, g.dLow, g.dHigh, g.dHigh / std::max(b.radius, 0.01f), g.upLow, g.upHigh, path.c_str(), s.texture.c_str(),
            s.ramp.empty() ? "-" : s.ramp.c_str(), s.blend, s.size, g.scaleLow, g.scaleHigh, s.lifetime, s.particleLife, s.count, s.speed, s.flat ? 1 : 0,
-           s.sixWay ? "\tsixway" : "", s.normals ? "\tnormals" : "", g.replaced == g.n ? "REPLACED" : g.replaced ? "partly-replaced" : "drawn", call.c_str(),
+           s.sixWay ? "\tsixway" : "", s.normals ? "\tnormals" : "", state.c_str(), call.c_str(),
            Top(g.on, 3).c_str(), hint.c_str());
   }
   printf("volfx\tend\t#%d\t%d emitters, %zu blueprints\n", b.id, listed, groups.size());

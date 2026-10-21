@@ -353,10 +353,17 @@ VolumeBlasts::~VolumeBlasts() {
 void VolumeBlasts::Clear() {
   blasts_.clear();
   rings_.clear();
+  quiet_.clear();
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Which blasts there are
+
+bool VolumeBlasts::Quiet(Vec3 at, double born) const {
+  for (const Vec4& q : quiet_)
+    if (born - q.w > -1 && born - q.w < 30 && std::hypot(at.x - q.x, at.z - q.y) < q.z * 2.5f) return true;
+  return false;
+}
 
 void VolumeBlasts::Start(Vec3 at, float radius, double born, bool nuke, float flashSize, const std::string& ramp) {
   // (a nuke over everything near it while it lasts: its own later flashes, the flares round it, the harm it does)
@@ -376,7 +383,10 @@ void VolumeBlasts::Start(Vec3 at, float radius, double born, bool nuke, float fl
     Blast& b = blasts_[i];
     const double age = born - b.born;
     if (b.nuke || age < -0.5 || age > 0.8 || Length(at - b.at) > std::max(b.radius, radius) * 1.5f + 1) continue;
-    if (radius > b.radius) b.radius = radius;
+    if (radius > b.radius) {
+      b.radius = radius;
+      if (onBorn) onBorn(b.at, b.radius, b.born);  // (VolumeReplaces = "inside": it covers more now)
+    }
     if (flashSize > b.flashSize && !ramp.empty()) {
       b.flashSize = flashSize;
       b.ramp = ramp;
@@ -401,20 +411,52 @@ void VolumeBlasts::Start(Vec3 at, float radius, double born, bool nuke, float fl
   b.ramp = ramp;
   if (VolfxLog* log = VolfxLog::Get()) log->Into(at, born, radius, nuke, true);  // (MOHO64_DEBUG_VOLFX)
   blasts_.push_back(b);
+  if (onBorn) onBorn(at, radius, born);  // (VolumeReplaces = "inside")
 }
 
-void VolumeBlasts::Offer(const std::string& ramp, Vec3 position, float size, double born, float seconds) {
+void VolumeBlasts::Offer(const std::string& ramp, Vec3 position, float size, double born, float seconds, const FlashFrom& from) {
   (void)seconds;
   if (VolfxLog* log = VolfxLog::Get()) log->Offered(true, size, ramp, position, born);  // (MOHO64_DEBUG_VOLFX)
   if (size >= nukeFlash) {
-    // (the game's strategic missiles flash 140 to 300 large and harm 40 round; a commander's tactical nuke 100 and 25)
+    // (the game's strategic missiles flash 140 to 300 large and harm 40 round; a commander's tactical nuke 100 and 25.
+    // Only the UEF's draw the nuke's volume, its fireball and mushroom: each faction gets its own effects in its own pass
+    // (Chris, 2026-10-21). Whose: as the effects know it, else by the flash's ramp, ramp_nuke_04, which the UEF's nukes
+    // throw (UEFNukeEffectController01 and 02) and the others' do not (ramp_quantum_warhead_flash_01, ramp_red_09,
+    // ramp_white_07, ramp_blue_22).)
+    const bool uef = from.faction.empty() ? ramp.empty() || ramp.find("ramp_nuke_") != std::string::npos : from.faction == "uef";  // (no ramp: --volume-test)
+    if (!uef) {
+      quiet_.erase(std::remove_if(quiet_.begin(), quiet_.end(), [&](const Vec4& q) { return std::fabs(born - q.w) > 30; }), quiet_.end());
+      if (quiet_.size() < 16) quiet_.push_back({position.x, position.z, nukeRadius, static_cast<float>(born)});
+      if (VolfxLog* log = VolfxLog::Get()) log->Declined(true, size, "another faction's strategic missile");  // (MOHO64_DEBUG_VOLFX)
+      return;
+    }
     Start(position, size < 120 ? nukeRadius * 0.62f : nukeRadius, born, true, size, ramp);
   } else if (size >= smallest) {
-    Start(position, std::min(size * blastPerFlash, largest), born, false, size, ramp);
+    // (another faction's strategic missile's own later flashes are its look too; the deaths it causes are not)
+    if (from.dyingWidth <= 0 && Quiet(position, born)) {
+      if (VolfxLog* log = VolfxLog::Get()) log->Declined(true, size, "another faction's strategic missile's own");  // (MOHO64_DEBUG_VOLFX)
+      return;
+    }
+    // (a dying unit's: as large as its flash says, or as the unit is, whichever is more)
+    const float radius = from.dyingWidth > 0 ? std::min(std::max(size * blastPerFlash, deathPerWidth * from.dyingWidth), largestDeath)
+                                             : std::min(size * blastPerFlash, largest);
+    Start(position, radius, born, false, size, ramp);
   }
 }
 
-void VolumeBlasts::OfferArea(Vec3 position, float radius, double born) {
+bool VolumeBlasts::NukeNear(Vec3 at, double born) const {
+  for (const Blast& b : blasts_)
+    if (b.nuke && born - b.born > -1 && born - b.born < 30 && Length(at - b.at) < b.radius * 2.5f) return true;
+  return false;
+}
+
+bool VolumeBlasts::Covers(Vec3 at, double when) const {
+  for (const Blast& b : blasts_)
+    if (std::fabs(when - b.born) <= insideSeconds && std::hypot(at.x - b.at.x, at.z - b.at.z) <= b.radius + 0.5f) return true;
+  return false;
+}
+
+void VolumeBlasts::OfferArea(Vec3 position, float radius, double born, bool nukeHarm) {
   if (VolfxLog* log = VolfxLog::Get()) log->Offered(false, radius, std::string(), position, born);  // (MOHO64_DEBUG_VOLFX)
   if (radius >= 20) {
     // (a nuke's ring: a nuke is known by its flash, which says when it went off and whose it is; its harm sizes it,
@@ -424,6 +466,11 @@ void VolumeBlasts::OfferArea(Vec3 position, float radius, double born) {
     for (Blast& b : blasts_)
       if (b.nuke && born - b.born > -2 && born - b.born < 1 && Length(position - b.at) < b.radius * 2.5f) b.radius = std::max(b.radius, radius);
   } else if (radius >= smallestArea) {
+    // (a strategic missile's own harm, its first rings: a nuke's under its volume, another faction's its own look)
+    if (nukeHarm && (Quiet(position, born) || NukeNear(position, born))) {
+      if (VolfxLog* log = VolfxLog::Get()) log->Declined(false, radius, "a strategic missile's own harm");  // (MOHO64_DEBUG_VOLFX)
+      return;
+    }
     Start(position, std::min(radius * blastPerArea, largest), born, false, 0, std::string());
   }
 }

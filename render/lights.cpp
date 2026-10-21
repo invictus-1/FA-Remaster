@@ -155,10 +155,10 @@ const std::vector<Vec3>* Lights::Ramp(const std::string& path) {
   return &ramp;
 }
 
-void Lights::Flash(const std::string& ramp, Vec3 position, float size, double born, float seconds, bool explosion) {
+void Lights::Flash(const std::string& ramp, Vec3 position, float size, double born, float seconds, const FlashFrom& from) {
   if (size <= 0 || seconds <= 0) return;
-  if (onFlash && explosion) onFlash(ramp, position, size, born, seconds);  // (volume explosions)
-  else if (VolfxLog* log = VolfxLog::Get(); log && onFlash) log->Declined(true, size);  // (MOHO64_DEBUG_VOLFX)
+  if (onFlash && from.explosion) onFlash(ramp, position, size, born, seconds, from);  // (volume explosions)
+  else if (VolfxLog* log = VolfxLog::Get(); log && onFlash) log->Declined(true, size, "no explosion");  // (MOHO64_DEBUG_VOLFX)
   flashes_.push_back({Ramp(ramp), position, size, born, seconds});
 }
 

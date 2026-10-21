@@ -57,8 +57,11 @@ class VolfxLog {
   void Offered(bool flash, float size, const std::string& ramp, Vec3 at, double born);
   void Into(Vec3 at, double born, float radius, bool nuke, bool fresh);
   // A flash or an area's harm that would have been a blast and is not one: no explosion's (Effects::Explosion: on a living
-  // unit, a prop, a warp-in), or harm high in the air or under the water (World::AreaMakesVolume). Counted by what made it.
-  void Declined(bool flash, float size);
+  // unit, a prop, a warp-in), harm high in the air or under the water (World::AreaMakesVolume), another faction's
+  // strategic missile or what is under it (VolumeBlasts::Offer). Counted by why and what made it.
+  void Declined(bool flash, float size, const char* why);
+  // An emitter VolumeReplaces = "inside" taken back by a volume born over it (Particles::VolumeBorn): the one started so.
+  void TakenBack(const std::string& path, Vec3 at, double born);
   // The clock the blasts are drawn at: blasts and emitters old enough to be decided are printed and let go of.
   void Tick(double clock);
 
@@ -70,7 +73,7 @@ class VolfxLog {
     uint32_t effect = 0;
     float scale = 1, size = 0, lifetime = 0, particleLife = 0, count = 0, speed = 0;
     int blend = 0;
-    bool flat = false, replaced = false, matched = false, sixWay = false, normals = false;
+    bool flat = false, replaced = false, matched = false, sixWay = false, normals = false, takenBack = false;
   };
   struct Blast {
     int id = 0;

@@ -136,6 +136,16 @@ std::string Effects::FactionOfUnit(const std::string& id) {  // [wakes]
   return f;
 }
 
+float Effects::DyingWidth(const FrameEffectEvent& event, const Frame& frame) {
+  if (event.entity == kNone || !frame.blueprints) return 0;
+  auto unit = std::lower_bound(frame.units.begin(), frame.units.end(), event.entity, [](const FrameUnit& u, uint32_t id) { return u.id < id; });
+  if (unit == frame.units.end() || unit->id != event.entity || !unit->dead || unit->blueprint >= frame.blueprints->size()) return 0;
+  const Model* model = models_->Unit((*frame.blueprints)[unit->blueprint]);
+  if (!model || !model->ok) return 0;
+  const Vec3 size = (model->boundsMax - model->boundsMin) * model->scale;
+  return 0.5f * std::max(size.x, size.z);
+}
+
 std::string Effects::FactionOf(const FrameEffectEvent& event, const Frame& frame) {
   if (!event.faction.empty()) return event.faction;
   if (!frame.blueprints) return std::string();
@@ -350,8 +360,15 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
     // wreck or a tree was reclaimed; nor a volume explosion where nothing exploded (Lights::onFlash)
     const bool explosion = Explosion(event, frame);
     // the modern look gets a light; the original look the glow on the ground the original draws
-    if (n.size() >= 2 && !event.blueprint.empty() && !Hidden(frame, event.entity))
-      lights_->Flash("/textures/particles/" + event.text + ".dds", e.position, n[0], at, n[1] * 0.1f, explosion);
+    if (n.size() >= 2 && !event.blueprint.empty() && !Hidden(frame, event.entity)) {
+      FlashFrom from;  // (for the volume explosions: whose it is, and how large a unit it is that dies)
+      from.explosion = explosion;
+      if (explosion && lights_->onFlash && n[0] >= 5) {
+        from.faction = FactionOf(event, frame);
+        from.dyingWidth = DyingWidth(event, frame);
+      }
+      lights_->Flash("/textures/particles/" + event.text + ".dds", e.position, n[0], at, n[1] * 0.1f, from);
+    }
     if (VolfxLog* log = VolfxLog::Get()) log->ClearOrigin();
     // (a blast, blasts.h)
     if (blasts_ && n.size() >= 2 && !Hidden(frame, event.entity) && explosion) blasts_->FromFlash(e.position, n[0], at, event.entity);

@@ -127,6 +127,9 @@ class Effects {
   // a teleport's own effect (UnitTeleport01..03) or on a prop (one a new structure clears away, one reclaimed, a tree
   // catching fire) is not: it burns nothing, pushes nothing and makes no volume explosion.
   bool Explosion(const FrameEffectEvent& event, const Frame& frame) const;
+  // (volume explosions) Half the width of the unit a flash is made on, when that unit is dying (its model's, the larger of
+  // across and along, in world units); 0 otherwise.
+  float DyingWidth(const FrameEffectEvent& event, const Frame& frame);
   // Whose effects an event makes in the remastered look ("uef", ...; "" none known). See the top.
   std::string FactionOf(const FrameEffectEvent& event, const Frame& frame);
   // [wakes] Whose a unit is by its blueprint id: the id's (effect_files.h UnitFaction), else, for a mod's unit with an id
