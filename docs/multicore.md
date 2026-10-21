@@ -43,14 +43,41 @@ are [benchmarks.md](benchmarks.md). This page is how we go about it.
 
 | Step | What | Share now | Status |
 |---|---|---|---|
-| 1 | Process-wide state into the `Sim` (parallelism.md 2.9): `g_armies`, `g_sources`, `g_blips`, `g_maps`, `g_state`, `g_motors`, ... and function statics | 0 | first |
+| 1 | Process-wide state into the `Sim` (parallelism.md 2.9): `g_armies`, `g_sources`, `g_blips`, `g_maps`, `g_state`, `g_motors`, ... and function statics | 0 | done (a1158c2..edc9ef5, bit-identical on the 16) |
 | 2 | Path searches: the search loop apart from the per-army budget walk and the delivery; each search's scratch private | MP1 31%, B3 40-49% | after 1 |
 | 3 | The entity pass: each unit's pure step apart from its commit (pushes, draws, Lua, economy, the moved list) | MP1 18%, B3 22-30% | after 2 |
 | 4 | Recon and AdvanceCoords: per-army intel painting, per-unit visibility; blip ids, buckets and callbacks serial | MP1 22% | after 3 |
 | 5 | The command stage: measure its Lua / C++ split before deciding | MP1 15% | later |
 
-Before step 2: settle parallelism.md's open point d (does a blocking test inside one search read what an earlier
-delivery changed in the same beat?). Before step 3: the full list of reads of other units' pending state.
+**Open point d, settled 2026-10-21.** mp2 read our code and mp3 read the exe, independently, and both found that no
+search reads what a delivery of the same beat writes. In the original a delivery happens inside the work loop
+(PathQueue::Work 0x765ed0 -> FinishQuery 0x766140 -> CAiPathNavigator::OnEvent 0x5aeeb0). It writes the navigator's
+own fields and unit states 23-25. The blocking test (COGrid::UnitIsBlocked 0x721340 -> 0x62eea0) reads none of them.
+Its only new-search call (0x5aeff6) needs an empty path, which FinishQuery never delivers. Ours delivers after every
+army's queue has worked, which is the same thing. So the searches' results are independent.
+
+What does couple them is the schedule, and step 2 must reproduce it exactly:
+- each army's single FIFO queue and its budget per beat;
+- a cluster built on demand is charged to whichever search first needs it, in serial order;
+- a search that spans beats continues on the next beat's state;
+- searches make shared things lazily (the map, the grid, the unit-grid rebuild), so step 2 needs a pre-pass that
+  makes them first.
+
+Running across armies in parallel is exact if the cluster charges are kept in a ledger. Within one army it needs
+speculation bounded by the budget. The write-ups are in the helpers' notes: mp2's multicore_point_d.md, mp3's
+open_point_d.md.
+
+Before step 3: the full list of reads of other units' pending state.
+
+**The gate in both modes** (mp2's proposal, to apply in engine-ref/gate.ps1 once step 0's `MOHO64_THREADS` is in):
+- every replay at n = 1 (the gate of record) and at n = cores, both against the marks;
+- the two runs' fingerprints compared (`twocopies.py --compare`);
+- `-ParCheck shuffle` for commits that add or change a parallel stage;
+- `-Update` from the n = 1 run only, when both modes pass and the fingerprints agree.
+
+MP1 runs one at a time in each mode (memory). To save time the 13 small replays run in both modes on every gate, and
+MP1 / MP2 / MP3 at n = cores only on commits that touch a parallel stage. twocopies gets `--env-b` for one copy at
+n = 1 and the other at n = cores.
 
 ## 4. Beyond the original's limits (Chris's choice, per item)
 
