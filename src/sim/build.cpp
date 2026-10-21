@@ -2430,14 +2430,20 @@ int TickRepair(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
         if (u->bpData && u->bpData->needToFaceTargetToBuild) {
           Vec3 ax[3];
           BoxAxes(u->orientation, ax);
+          // f: the normalised copy 0x44f7e0 (0x5f9a82: times 1 / length, zero for none); d: Normalize 0x452af0
+          // (0x5f9ac9); SetFacing 0x6b8590 normalises what it is given once more (0x6b85b5) before it stores it
           Vec3 f{ax[2].x, 0.0f, ax[2].z};
-          const float fl = std::sqrt(f.x * f.x + f.z * f.z);
-          if (fl > 0.0f) f = {f.x / fl, 0.0f, f.z / fl};
+          if (const float fl = std::sqrt((f.x * f.x + f.y * f.y) + f.z * f.z); fl > 0.0f) {
+            const float fi = 1.0f / fl;
+            f = {f.x * fi, fi * f.y, fi * f.z};
+          } else {
+            f = {};
+          }
           Vec3 d{R->position.x - u->position.x, 0.0f, R->position.z - u->position.z};
-          const float dl = std::sqrt(d.x * d.x + d.z * d.z);
-          if (dl > 0.0f) d = {d.x / dl, 0.0f, d.z / dl};
+          vm::NormalizeExe(d);
           const float dot = (f.z * d.z + f.y * d.y) + f.x * d.x;
           if (!(dot > 0.95f)) {
+            vm::NormalizeExe(d);
             u->motion.faceDir = d;
             return kTaskRunning;
           }

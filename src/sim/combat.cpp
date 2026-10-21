@@ -841,8 +841,10 @@ Vec3 CalcBombDrop(const Unit* u, Vec3 T) {
   float h = P.y - T.y, hm = std::fabs(h);
   float disc = (h < 0 ? -2 : 2) * hm * G + vu * vu;
   if (disc < 0) return NaNVec();
-  float t = (vu - std::sqrt(disc)) / G;
-  if (t < 0) t = (vu + std::sqrt(disc)) / G;
+  // times 1 / g (0x62d1a0 divss, then 0x62d1b9..0x62d1c4 and 0x62d273..0x62d282), not over g: 1 / 4.9 is inexact
+  const float sd = std::sqrt(disc), invG = 1.0f / G;
+  float t = -0.0f - (sd - vu) * invG;
+  if (t < 0) t = -0.0f - ((-0.0f - vu) - sd) * invG;
   if (t < 0) return NaNVec();
   Vec3 fall{v.x * t, v.y * t - 0.5f * G * t * t, v.z * t};
   return Sub(T, fall);

@@ -1953,9 +1953,13 @@ Vec3 AttachFacing(const TransportObj& O, const Unit* cu) {  // GetAttachFacing (
   }
   Vec3 f = Forward(lr);
   f.y = 0;
-  f = Rotate(O.owner->orientation, f);
-  float l = std::sqrt(f.x * f.x + f.y * f.y + f.z * f.z);
-  return l > 0 ? Vec3{f.x / l, f.y / l, f.z / l} : Vec3{};
+  // turned by the transport through the quaternion's matrix (0x452d40, 0x5e7b41), then the normalised copy 0x44f7e0
+  // (0x5e7b6c): times 1 / length, zero for none
+  f = RotateM(O.owner->orientation, f);
+  const float l = std::sqrt((f.x * f.x + f.y * f.y) + f.z * f.z);
+  if (!(l > 0.0f)) return Vec3{};
+  const float inv = 1.0f / l;
+  return Vec3{f.x * inv, inv * f.y, inv * f.z};
 }
 
 // CUnitRefuel at a carrier (carriers.md 5): stored by a CarrierLand child, released when full
@@ -2231,8 +2235,7 @@ int TickCarrierLand(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
         }
         d.stagger = ReserveStorage(T, u, &d.bonePos, &d.fwd, &d.dy);
         d.fwd.y = 0;
-        float l = std::sqrt(d.fwd.x * d.fwd.x + d.fwd.z * d.fwd.z);
-        d.fwd = l > 1e-6f ? Vec3{d.fwd.x / l, 0, d.fwd.z / l} : Vec3{};
+        vm::NormalizeExe(d.fwd);  // 0x452af0 (0x606909): times 1 / length
         float f = static_cast<float>(d.stagger) + 20.0f;
         d.approach = {d.bonePos.x - d.fwd.x * f, d.bonePos.y - d.fwd.y * f, d.bonePos.z - d.fwd.z * f};
         t.state = 1;

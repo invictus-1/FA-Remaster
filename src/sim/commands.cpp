@@ -26,6 +26,7 @@
 #include "sim/navigation.h"
 #include "sim/replay.h"
 #include "sim/sim.h"
+#include "sim/steering.h"
 #include "sim/terrain.h"
 #include "sim/transport.h"
 #include "sim/units.h"
@@ -487,8 +488,16 @@ void PatrolSearchBox(Sim& sim, Unit* u, PatrolData& p) {
   p.box.cx = (E.x + S.x) * 0.5f;
   p.box.cz = (E.z + S.z) * 0.5f;
   p.box.cy = (S.y * 2.0f) * 0.5f;
-  p.box.dx = len < 0.001f ? 0.0f : dx / len;
-  p.box.dz = len < 0.001f ? 1.0f : dz / len;
+  // 0.001 > len: (0, 0, 1); otherwise Normalize 0x452af0 (0x61b4e1: times 1 / length; a NaN gives zero)
+  if (0.001f > len) {
+    p.box.dx = 0.0f;
+    p.box.dz = 1.0f;
+  } else {
+    Vec3 dir{dx, 0.0f, dz};
+    vm::NormalizeExe(dir);
+    p.box.dx = dir.x;
+    p.box.dz = dir.z;
+  }
   p.box.side = r;
   p.box.along = len * 0.5f + r;
 }
@@ -552,7 +561,9 @@ Entity* PatrolReclaimTarget(Sim& sim, Unit* u, PatrolData& p) {
   // the search box (RecomputePatrolSearchBox 0x61b2f0): side = dir turned 90 degrees about +Y, up, dir
   const PatrolBox& b = p.box;
   const Vec3 centre{b.cx, b.cy, b.cz};
-  const Vec3 axes[3] = {{b.dz, 0.0f, -b.dx}, {0.0f, 1.0f, 0.0f}, {b.dx, 0.0f, b.dz}};
+  // (the side: dir turned by the quarter-turn quaternion 0x10b1a44 through its matrix, 0x61b4f0..0x61b4f5; the
+  // initialiser 0xbd11c0 makes it with fcos / fsin of pi / 4, as 0x10b965c: not exactly (dz, 0, -dx))
+  const Vec3 axes[3] = {RotateQuarterTurnY(Vec3{b.dx, 0.0f, b.dz}), {0.0f, 1.0f, 0.0f}, {b.dx, 0.0f, b.dz}};
   const float half[3] = {b.side, 100.0f, b.along};
   const Vec3 ext{std::fabs(axes[0].x) * half[0] + std::fabs(axes[2].x) * half[2], half[1],
                  std::fabs(axes[0].z) * half[0] + std::fabs(axes[2].z) * half[2]};
