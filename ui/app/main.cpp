@@ -100,9 +100,11 @@ ui::GameSession::Sky sky;
 // (maps in the making). --remasters <folder> (may be given more than once): the remastered units' own files, one
 // folder per unit (render/remasters.h), each root mounted in turn: the stock units' (visuals/work) and, by the
 // launchers of games with a mod, that mod's own (visuals/work_mods/<mod>: Chris, 2026-10-20, item 22: no mod unit
-// in what ships). --own <folder>: this program's own files (ui/data); without it they are looked for beside the
-// program.
-std::vector<std::string> moreMaps, remastersFolders;
+// in what ships). --remasters-faf <folder> (may be given more than once): the same for FAF's own units (DELK002,
+// the ZEB95xx / ZEB96xx support factories: visuals/work_mods/faf_base), mounted only when the game's files are
+// FAF's (Chris, 2026-10-21: "only appear when its connected to faf"). --own <folder>: this program's own files
+// (ui/data); without it they are looked for beside the program.
+std::vector<std::string> moreMaps, remastersFolders, fafRemastersFolders;
 std::string ownFolder;
 bool noWorld = false;             // --no-world: a launched game gets no picture of the world (no graphics device is opened)
 std::string sessionIn;            // --session file: a recorded game configuration to start a game from at once
@@ -301,6 +303,7 @@ int main(int argc, char** argv) {
     else if (a == "--map-edge") sky.edge = next();
     else if (a == "--maps") moreMaps.push_back(next());
     else if (a == "--remasters") remastersFolders.push_back(next());
+    else if (a == "--remasters-faf") fafRemastersFolders.push_back(next());
     else if (a == "--own") ownFolder = next();
     else if (a == "--seed") session_seed = static_cast<long long>(std::strtoull(next().c_str(), nullptr, 10));
     else if (a == "--fast-forward") fastForward = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
@@ -369,6 +372,14 @@ int main(int argc, char** argv) {
 #ifdef MOHO64UI_WORLD_PICTURE
   for (const std::string& folder : remastersFolders)
     Logf(LogLevel::Info, "moho64ui: remastered units: %d from %s", render::MountRemasters(&vfs, folder), hostfs::DisplayPath(folder).c_str());
+  // (FAF's game files: they hold /lua/version.lua, FAF's own; the original's lua.scd has none)
+  const bool fafData = vfs.Exists("/lua/version.lua");
+  for (const std::string& folder : fafRemastersFolders) {
+    if (fafData)
+      Logf(LogLevel::Info, "moho64ui: remastered FAF units: %d from %s", render::MountRemasters(&vfs, folder), hostfs::DisplayPath(folder).c_str());
+    else
+      Logf(LogLevel::Info, "moho64ui: the game's files are not FAF's: FAF's units' remasters not mounted (%s)", hostfs::DisplayPath(folder).c_str());
+  }
 #endif
   Logf(LogLevel::Info, "moho64ui: %zu search paths, %zu files", vfs.MountCount(), vfs.FileCount());
   Logf(LogLevel::Info, "moho64ui: built from commit %s", ui::kBuildCommit);
