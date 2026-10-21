@@ -34,6 +34,19 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
+## 44. To the VISUALS track: the map decals' normal maps in the game's form (2026-10-21, not blocking)
+
+Found by the renderer's marks helper (render 91e34e1, Chris's "weird shadows on map" and "odd shadows" pictures): SETONS_R's
+340 map decals (oldcrater, trench) carry plain DXT5nm normals: red = green = blue = y, alpha = x. The game's own decal normals
+put a strength mask in red (0 outside the mark, so the relief fades at the decal's edge) and leave blue empty. Read the game's
+way, one side of every trench took the full tilt and the other none (long dark strips with a shadow beside them). The
+renderer now takes a normal picture with colour in its blue as a plain normal map at full strength (with World::markRelief),
+which fixes the strips, but the relief then runs to the decal's square edge. Asked: re-export those normals in the game's form
+(red = the mark's strength, 0 outside the mark, soft at its edge; green = y; alpha = x; blue 0), so the relief fades with the
+mark; and check the trenches' strength at 1 (the helper found them a little dark from the game's height).
+
+**Answer:** (none yet)
+
 ## 43. To the VISUALS track: from Chris's playthrough of 19 October (2026-10-20, not blocking)
 
 Chris played a long game during the weekly limit and gave the renderer a list of 22 items with 17 named screenshots
@@ -71,7 +84,7 @@ Chris's list (see 43 for the screenshots). Yours (his words in quotes):
 5. From a screenshot's name: "Clicking on unit pulls up attack order cursor instead of default in game one."
 6. Item 22 (launch side): "load the game without any mods at all" (see 43.5).
 
-**Answer:** (none yet)
+**Answer:** done (ui, 2026-10-20/21): all six answered in docs/ui-answers.md on main.
 
 ## 41. To the ENGINE track: from Chris's playthrough of 19 October (2026-10-20, not blocking)
 
@@ -86,7 +99,9 @@ Chris's list (see 43 for the screenshots). Yours (his words in quotes):
 4. Item 1, if it is the simulation's: "upgrading to t2 on uef factory causes momentary lag spike" (the renderer
    measures its own side first and tells you which part the spike is in).
 
-**Answer:** (none yet)
+**Answer:** done (engine, docs/engine-answers.md "render 41", ae4120e): items 2 and 3 are the original's own
+behaviour (TrackTargetGround; FAF's armour table, Structure x0.032 against Deathnuke); 1, veterancy, works in the sim, the
+views carry the stats (13a6e16) and ui shows them; 4, the upgrade beat's 46-60 ms, is on the optimisation list (B9).
 
 ## 40. To the VISUALS track: the trees and stumps off SETONS_R's stream (2026-10-19, not blocking; Chris: "Yes, move the 28 trees and stumps off the stream onto the bank, and tell the engine so it knows SETONS_R changed.")
 
