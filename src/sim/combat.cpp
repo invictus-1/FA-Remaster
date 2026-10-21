@@ -1844,17 +1844,14 @@ int CheckTracking(AimController* c, bool heading, bool raw, Vec3 goal, int bone,
     // so pitches below the arc centre carry its error (a 45-degree arc rests at 0.0508, not 0).
     const float hc = center * 0.5f;
     const Vec3 r = RotateM(Quat{dmath::Sin(hc), 0.0f, 0.0f, dmath::Cos(hc)}, v);
+    // (0x50b750..0x50b760: t = y / |r| with no test of the length and no clamp: a zero or NaN vector gives NaN)
     const float l = std::sqrt(r.x * r.x + r.y * r.y + r.z * r.z);
-    if (l > 0) {
-      const float t = std::fmin(1.0f, r.y / l);
-      float p = t * -0.0187293f + 0.0742610f;
-      p = p * t - 0.2121144f;
-      p = p * t + 1.5707288f;
-      const float neg = -(1.5707964f - std::sqrt(1.0f - t) * p);
-      target = center - neg;
-    } else {
-      target = center;
-    }
+    const float t = r.y / l;
+    float p = t * -0.0187293f + 0.0742610f;
+    p = p * t - 0.2121144f;
+    p = p * t + 1.5707288f;
+    const float neg = -(1.5707964f - std::sqrt(1.0f - t) * p);
+    target = center - neg;
   }
   float delta;
   if (half >= 3.1405928f) {
@@ -3835,16 +3832,21 @@ bool HasBuilderObject(const Unit* u) { return u->bpData && u->bpData->hasBuilder
 
 // Axis 0x636220. heading: writes a->heading; pitch: a->pitch. Returns bit 1 off target, bit 2 moving.
 int ArmAxis(BuilderArm* a, Vec3 dir, bool local, bool isHeading, float slew, const Quat& boneRot) {
-  Vec3 d = local ? dir : Rotate(Conj(boneRot), dir);
+  // (0x636250..0x636296: the bone's conjugate (w, -0.0 - x, -0.0 - y, -0.0 - z) applied by 0x452d40, RotateM)
+  Vec3 d = local ? dir : RotateM(Conj(boneRot), dir);
   float center = isHeading ? a->hCenter : a->pCenter, half = isHeading ? a->hHalf : a->pHalf;
   float* cur = isHeading ? &a->heading : &a->pitch;
   float target;
   if (isHeading) {
     target = dmath::Atan2(d.x, d.z);
   } else {
-    Vec3 e = Rotate(AxisAngle({1, 0, 0}, center), d);
-    float len = std::sqrt(e.x * e.x + e.y * e.y + e.z * e.z);
-    target = center - (AcosA(len > 0 ? e.y / len : 0.0f) - 1.57079637f);
+    // (0x6362ec..0x636333: the quaternion (w fcos(c/2), x fsin(c/2), +0, +0) applied by 0x452d40, then 0x50b710:
+    // t = y / |e| with no test; ours turned by AxisAngle (-0 parts for a negative centre) through Rotate and
+    // took 0 for a zero vector)
+    const float hc = center * 0.5f;
+    const Vec3 e = RotateM(Quat{dmath::Sin(hc), 0.0f, 0.0f, dmath::Cos(hc)}, d);
+    const float len = std::sqrt(e.x * e.x + e.y * e.y + e.z * e.z);
+    target = center - (AcosA(e.y / len) - 1.57079637f);
   }
   if (Sim* sim = a->unit ? Sim::From(a->unit->luaState()) : nullptr; sim && sim->Recording()) {
     // labhook 0.7 'R' record (Axis 0x636220 after the target)
