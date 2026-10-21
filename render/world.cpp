@@ -980,7 +980,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   lampsOn_ = 0;
   lights.night = 1;
   shafts.Begin();
-  wakes.Begin();
+  wakes.Begin(wakesRemade && look == Look::Modern);  // [wakes]
   {  // ripples on the water (their pipelines made the first frame they are on, not at the game's first splash)
     const bool ripplesOn = waterRipples && look == Look::Modern && haveMap_ && map.water.present;
     water.ripples.Begin(clock_, ripplesOn, sidePicture);
@@ -2243,7 +2243,8 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
         Moving& m = moving_[u.id];
         const double dt = clock_ - m.clock;
         if (dt > 1e-4 && dt < 1.0) m.speed += (Length(position - m.place) / static_cast<float>(dt) - m.speed) * 0.2f;
-        else if (dt >= 1.0 || dt < 0) {
+        if (dt > 1e-4 && dt < 1.0) m.odometer += Length(Vec3{position.x - m.place.x, 0, position.z - m.place.z});  // [wakes]
+        if (dt >= 1.0 || dt < 0) {
           m.speed = 0;
           m.trailCount = 0;
         }
@@ -2258,17 +2259,24 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
           const float halfX = (model->boundsMax.x - model->boundsMin.x) * 0.5f * model->scale, halfZ = (model->boundsMax.z - model->boundsMin.z) * 0.5f * model->scale;
           const Vec3 stern{position.x + level.x * halfZ * 0.6f, map.water.elevation + 0.03f, position.z + level.z * halfZ * 0.6f};
           // where it has been: a place kept every third of a second, the wake laid along them
-          if (clock_ - m.trailClock > 0.33 || m.trailCount == 0) {
+          // ([wakes] the remade wake: where its middle has been, at least a tenth of the way the wake needs from the last,
+          // so that the twelve kept reach the wake's end behind a large slow ship too)
+          const float length = std::min(m.speed * 1.8f, 14.0f) + halfZ, strength = std::min(m.speed / 2.5f, 1.0f);
+          const bool remade = wakesRemade && look == Look::Modern;
+          const Vec3 kept = remade ? Vec3{position.x, stern.y, position.z} : stern;
+          const bool spaced = !remade || m.trailCount == 0 ||
+                              Length(Vec3{kept.x - m.trail[0].x, 0, kept.z - m.trail[0].z}) >= std::max(0.5f, (length + halfZ * 0.6f) * 0.1f);
+          if ((clock_ - m.trailClock > 0.33 && spaced) || m.trailCount == 0) {
             for (int k = std::min(m.trailCount, 11); k > 0; --k) m.trail[k] = m.trail[k - 1];
-            m.trail[0] = stern;
+            m.trail[0] = kept;
             m.trailCount = std::min(m.trailCount + 1, 12);
             m.trailClock = clock_;
           }
           Vec3 places[13];
-          places[0] = stern;
+          places[0] = kept;
           for (int k = 0; k < m.trailCount; ++k) places[k + 1] = m.trail[k];
-          const float length = std::min(m.speed * 1.8f, 14.0f) + halfZ, strength = std::min(m.speed / 2.5f, 1.0f);
-          if (m.trailCount >= 2) wakes.AddPath(places, m.trailCount + 1, length, halfX * 0.7f, strength);
+          if (remade) wakes.AddPathRemade(places, m.trailCount + 1, halfZ * 0.6f, level, length, halfX * 0.7f, strength, m.odometer);
+          else if (m.trailCount >= 2) wakes.AddPath(places, m.trailCount + 1, length, halfX * 0.7f, strength);
           else wakes.Add(stern, level, length, halfX * 0.7f, strength);
         }
       }

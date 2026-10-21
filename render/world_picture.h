@@ -191,6 +191,9 @@ class WorldPicture {
   //   deeper or thinner by the wind, the trees and the slope; +0.2 to 0.3 ms while snow lies.
   //   [undersnow] And the map's low plants under the lying snow (World::plantsUnderSnow): its ferns, bushes and weeds
   //   sunk into the snow, bowed by it and dusted white, the lowest buried first.
+  //   [wakes] And the ships' wakes remade (World::wakesRemade, wakes.h): foam-line arms, streaks that keep their place on
+  //   the water at the screen's resolution, laid along each ship's way and fading out, so a large slow ship's wake no
+  //   longer shows as broad blocky bands cut off square; +0.001 ms of the card and 0.005 ms of the processor with 28 ships moving at 1440p.
   void SetWeatherEffects(bool on);
   // Ground detail: grass near the camera, pressed flat round units and buildings (World::groundCover); about
   //   +0.05 to 0.2 ms when zoomed in, nothing from afar; and battle scars (World::battleScars): the scorches and

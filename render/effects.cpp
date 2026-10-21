@@ -130,6 +130,12 @@ bool Effects::AttachPoint(const Frame& frame, uint32_t entity, int bone, Vec3* p
   return false;
 }
 
+std::string Effects::FactionOfUnit(const std::string& id) {  // [wakes]
+  std::string f = UnitFaction(id);  // (the game's own: by the id, without looking anything up)
+  if (f.empty() && models_) f = models_->Faction(id);  // (a mod's: as its blueprint names it, read once a kind)
+  return f;
+}
+
 std::string Effects::FactionOf(const FrameEffectEvent& event, const Frame& frame) {
   if (!event.faction.empty()) return event.faction;
   if (!frame.blueprints) return std::string();
@@ -138,7 +144,7 @@ std::string Effects::FactionOf(const FrameEffectEvent& event, const Frame& frame
   if (event.entity != kNone) {
     auto unit = std::lower_bound(frame.units.begin(), frame.units.end(), event.entity, [](const FrameUnit& u, uint32_t id) { return u.id < id; });
     if (unit != frame.units.end() && unit->id == event.entity) {
-      if (unit->blueprint < frame.blueprints->size()) own = UnitFaction((*frame.blueprints)[unit->blueprint]);
+      if (unit->blueprint < frame.blueprints->size()) own = FactionOfUnit((*frame.blueprints)[unit->blueprint]);
       if (army < 0) army = static_cast<int>(unit->Army());
     } else if (auto shot = projectileAt_.find(event.entity); shot != projectileAt_.end()) {
       const FrameProjectile& p = frame.projectiles[shot->second];
@@ -164,7 +170,7 @@ const std::string& Effects::ArmyFaction(const Frame& frame, int army) {
     std::vector<std::array<int, 4>> counts;
     for (const FrameUnit& u : frame.units) {
       if (u.blueprint >= frame.blueprints->size()) continue;
-      const std::string f = UnitFaction((*frame.blueprints)[u.blueprint]);
+      const std::string f = FactionOfUnit((*frame.blueprints)[u.blueprint]);
       for (int k = 0; k < 4; ++k)
         if (f == kNames[k]) {
           if (counts.size() <= u.Army()) counts.resize(u.Army() + 1, {0, 0, 0, 0});

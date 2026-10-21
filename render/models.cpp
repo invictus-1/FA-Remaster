@@ -447,6 +447,26 @@ const PersonalShieldLook& ModelCache::PersonalShield(const std::string& blueprin
   return look;
 }
 
+const std::string& ModelCache::Faction(const std::string& blueprintId) {  // [wakes]
+  const std::string id = Lower(blueprintId);
+  auto known = factions_.find(id);
+  if (known != factions_.end()) return known->second;
+  std::string& faction = factions_[id];
+  faction = UnitFaction(id);  // (the game's own units: by the id, as always)
+  if (!faction.empty()) return faction;
+  const std::string& path = UnitBlueprintPath(id);
+  auto text = path.empty() ? std::optional<std::string>() : vfs_->ReadFile(path);
+  BpValue bp;
+  if (!text || !ReadBlueprintFile(*text, &bp)) return faction;
+  auto named = [](const std::string& name) {
+    const std::string n = Lower(name);
+    return n == "uef" || n == "aeon" || n == "cybran" || n == "seraphim" ? n : std::string();
+  };
+  faction = named(bp["General"]["FactionName"].StringOr(std::string()));
+  for (size_t k = 0; faction.empty() && k < bp["Categories"].items.size(); ++k) faction = named(bp["Categories"].Item(k).StringOr(std::string()));
+  return faction;
+}
+
 Vec3 OnShell(const Model& shell, Vec3 rest) {
   const Model::ShellShape& s = shell.shellShape;
   const float scale = shell.scale > 0 ? shell.scale : 1;

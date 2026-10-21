@@ -8,7 +8,8 @@
 //
 // In the remastered look an emitter, beam or trail plays its faction's own blueprint where the visuals
 // track has made one (effect_files.h). Its faction is that of the thing it is made on or at: a unit's
-// by its blueprint id, a projectile's or an effect entity's by its blueprint's name, a script entity's
+// by its blueprint id ([wakes] a mod's unit whose id says nothing: as its blueprint's General.FactionName or
+// Categories name it, FactionOfUnit), a projectile's or an effect entity's by its blueprint's name, a script entity's
 // by its mesh; where that says nothing (the debris a dying unit throws, the shared helpers), the
 // faction of the army the script made it for - the faction most of that army's units in the frame are.
 #pragma once
@@ -128,6 +129,9 @@ class Effects {
   bool Explosion(const FrameEffectEvent& event, const Frame& frame) const;
   // Whose effects an event makes in the remastered look ("uef", ...; "" none known). See the top.
   std::string FactionOf(const FrameEffectEvent& event, const Frame& frame);
+  // [wakes] Whose a unit is by its blueprint id: the id's (effect_files.h UnitFaction), else, for a mod's unit with an id
+  // of its own, as its blueprint names it (ModelCache::Faction: General.FactionName or Categories). "" none known.
+  std::string FactionOfUnit(const std::string& id);
   // The faction most of an army's units in the frame are (army from 0), worked out once a beat.
   const std::string& ArmyFaction(const Frame& frame, int army);
 

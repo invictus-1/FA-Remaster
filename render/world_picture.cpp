@@ -88,6 +88,7 @@ struct WorldPicture::Impl {
     if (weatherEffects >= 0) world->rainGround = weatherEffects > 0;  // [rain ground] (with the weather effects)
     if (weatherEffects >= 0) world->snowGround = weatherEffects > 0;  // [snow ground] (with the weather effects)
     if (weatherEffects >= 0) world->plantsUnderSnow = weatherEffects > 0;  // [undersnow] (with the weather effects)
+    if (weatherEffects >= 0) world->wakesRemade = weatherEffects > 0;  // [wakes] (the ships' wakes remade: with the weather effects)
     if (frameGeneration >= 0) world->frameGeneration = frameGeneration > 0;
     if (hiddenOutlines >= 0) world->hiddenOutlines = hiddenOutlines > 0;
   }
