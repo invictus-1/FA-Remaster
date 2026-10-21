@@ -1114,6 +1114,22 @@ offsets and ticks (the army's +0x1bc..+0x1d0). Could the army's view carry them 
 no-rush circle is pass 5 from ArmyView (start + offsets, noRushRadius, while noRushTicks > 0). Test
 ui/tests/intel_live.lua (a support commander's omni ring 16 -> 80 after its sensor upgrade; the circle).
 
+### 46. Keep the session's rules state for the interface (one blueprint load per game, as the original)
+From the interface chat, 2026-10-21 (read by my helper). Not blocking.
+The original has one RRuleGameRules per session: func_WorldSessionUserLoad 0x885de0 makes it at 0x885e53 (its ctor
+0x529120 runs /lua/RuleInit.lua, 0x52948e) and exports it into the interface's state (ExportToLuaState, slot 1
+0x529f70, at 0x885fe6) as Sim::Sim does into the sim's (0x743be9..0x743c05). Ours runs /lua/ruleinit.lua a third
+time for the interface (GameSession::LoadInterfaceRules): 0.7-1.6 s per game start (measured: its rules 1.48-1.57 s,
+the copy 0.23 s), and every blueprint warning is logged twice. Could Sim keep its rules state for the host to take?
+```cpp
+bool keepRules = false;  // set before Start: Start leaves rules_ alive after the sim's CopyToSim (sim.cpp: if (!keepRules) rules_.reset();)
+std::unique_ptr<ScriptState> TakeRules() { return std::move(rules_); }  // the host takes it (nullptr: not kept / taken)
+```
+The rules state is its own ScriptState (Kind::Rules), not the sim's state. The interface would read it on the main
+thread after FinishLoad has waited for the worker, before beat 1, copy __blueprints / __active_mods / the categories
+into its own state (CopyToSim), and free it; nothing is made in the sim's state, and the copy matches the sim's by
+construction (the fixes' reload, ui REQUESTS 35, included). moho64ui_BlueprintFacts (ui de5820c) checks the two.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
@@ -2031,6 +2047,24 @@ mass / hydrocarbon marker splats.
 its lines (frame.fx RangeFill). The host has the switch (console range_Fill); could RangeGroup take a fill flag?
 (Not read by us: sub 0x7edc80 pushes an inner band [0, innerThick] even when the inner radius is 0, which may draw a
 small dot under each unit in the original's stencil pass: a note for you.)
+
+### 33. Decals fading by distance as the original (ren_DecalFadeFraction)
+From the interface chat, 2026-10-21 (read by my helper). Not blocking.
+The original's CWldTerrainDecal::GetLODAlpha 0x89d400: a decal is drawn whole up to f x its LODCutoff and fades
+linearly to nothing at the cutoff: alpha = 1 - (clamp(d, L f, L) - L f) / (L - L f), L = the decal's cutOffLOD
+(+0x80); a decal with a nearCutOffLOD (+0x84) > 0 instead comes in from 0 at f x near to 1 at near (both read from
+the scmap, DecalLoad 0x89cdbb / 0x89cdd4). f = ren_DecalFadeFraction: 0.5 stock, and FAF's gamemain.lua sets 0.25 at
+every game's start. Today render/decals.cpp:457 fades over the last fifth (marked GUESS). Could render::World take
+`float decalFadeFraction = 0.5f;`? The host keeps the console's value (LookSettings::decalFadeFraction, ui de5820c)
+and would set it beside the other looks.
+
+### 34. A per-view LOD scale for the models' levels of detail (cam_SetLOD)
+From the interface chat, 2026-10-21. Not blocking.
+The original's camera has a LOD scale (GeomCamera3::SetLODScale 0x470b90, set by the console's cam_SetLOD <camera>
+<scale>, 0x7adfc0; 1 at first = cam_DefaultLOD) that multiplies its level-of-detail distance metric. FAF's options set
+0.70 on every world view's camera for Level of Detail "Extreme" (Chris's prefs have it), so the original picks the
+finer models from 1 / 0.7 farther out. The host now keeps each camera's scale (Camera::lodScale; the order lines'
+ETA texts already go by it). Could the picture take it per view (e.g. a lodScale beside the camera you are given)?
 
 ## To the visuals track
 
