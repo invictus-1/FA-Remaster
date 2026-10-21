@@ -760,7 +760,7 @@ int l_GetUnitCommandData(lua_State* L) {
   lua_newtable(L);  // 2: orders
   lua_newtable(L);  // 3: toggles
   lua_pushnil(L);   // 4: buildable category (made at the end, from `total`)
-  std::vector<uint64_t> total(static_cast<size_t>(CategoryWordCount()), 0);
+  std::vector<uint64_t> total(static_cast<size_t>(CategoryWordCount(L)), 0);
   // In the blueprints as the engine keeps them, a set of orders or toggles is a bit set written
   // as text: the one name when a single bit is set, else the number.
   static const char* const kOrders[] = {"RULEUCC_Move", "RULEUCC_Stop", "RULEUCC_Attack", "RULEUCC_Guard", "RULEUCC_Patrol",

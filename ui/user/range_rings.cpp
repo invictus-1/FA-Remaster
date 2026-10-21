@@ -548,7 +548,7 @@ void ToGroups(const RangeStore& store, const RangeView& view, const std::vector<
 // outerNear, outerFar)
 int l_SetOverlayFilter(lua_State* L) {
   RangeFilter f;
-  if (const uint64_t* bits = ToCategory(L, 2)) f.categories.assign(bits, bits + CategoryWordCount());
+  if (const uint64_t* bits = ToCategory(L, 2)) f.categories.assign(bits, bits + CategoryWordCount(L));
   f.normal = ColorOf(L, 3), f.select = ColorOf(L, 4), f.rollover = ColorOf(L, 5);
   f.inner[0] = static_cast<float>(lua_tonumber(L, 6)), f.inner[1] = static_cast<float>(lua_tonumber(L, 7));
   f.outer[0] = static_cast<float>(lua_tonumber(L, 8)), f.outer[1] = static_cast<float>(lua_tonumber(L, 9));
