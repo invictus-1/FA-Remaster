@@ -112,4 +112,65 @@ inline double Logd(double x) {
 }
 inline float Log(float x) { return static_cast<float>(Logd(x)); }
 
+// COORDS_Orient 0x50b480, the look rotation of a direction (the world's up): Z = the direction, X = (Z.z, 0, -0.0 -
+// Z.x), each through the normalise 0x452af0; a zero Z gives the identity, a zero X (straight up or down) the quarter
+// turn about x; else Y = Z x X and MatrixToQuat 0x4eb3f0 of the rows X, Y, Z. out = x, y, z, w. (The sim's
+// LookQuat, motion.cpp; OrientFromDir, script/core_bindings.cpp.) Ours' norm returned the length also when it
+// zeroed a vector of length 1e-6 or less (or NaN), so the identity / quarter-turn branches were not taken.
+inline void LookQuat(float dx, float dy, float dz, float out[4]) {
+  // 0x452af0: returns the length, or 0 with the zero vector at or below 1e-6 (and for NaN: 0x452b51 jbe, 0x452b92)
+  auto norm = [](float& x, float& y, float& z) {
+    float l = std::sqrt((x * x + y * y) + z * z);
+    if (l > 9.99999997e-07f) {
+      float inv = 1.0f / l;
+      x *= inv;
+      y *= inv;
+      z *= inv;
+      return l;
+    }
+    x = y = z = 0;
+    return 0.0f;
+  };
+  float Z[3] = {dx, dy, dz};
+  if (norm(Z[0], Z[1], Z[2]) == 0.0f) {  // (0x50b4e4..0x50b4f0: the identity, 0xf3d2cc)
+    out[0] = out[1] = out[2] = 0.0f;
+    out[3] = 1.0f;
+    return;
+  }
+  float X[3] = {Z[2], 0.0f, -0.0f - Z[0]};
+  if (norm(X[0], X[1], X[2]) == 0.0f) {
+    out[0] = (dy > 0.0f) ? -0.707106769f : 0.707106769f;  // (0x50b56c..0x50b59a)
+    out[1] = out[2] = 0.0f;
+    out[3] = 0.707106769f;
+    return;
+  }
+  float Y[3] = {Z[1] * X[2] - Z[2] * X[1], Z[2] * X[0] - X[2] * Z[0], X[1] * Z[0] - Z[1] * X[0]};
+  const float* A[3] = {X, Y, Z};
+  float q[3], w;
+  float tr = (A[0][0] + A[1][1]) + A[2][2];
+  if (tr > 0.0f) {
+    float r = std::sqrt(tr + 1.0f);  // x87 at PC_24
+    w = r * 0.5f;
+    float inv = 0.5f / r;
+    q[0] = (A[1][2] - A[2][1]) * inv;
+    q[1] = (A[2][0] - A[0][2]) * inv;
+    q[2] = (A[0][1] - A[1][0]) * inv;
+  } else {
+    static const int next[3] = {1, 2, 0};
+    int i = (A[1][1] > A[0][0]) ? 1 : 0;
+    if (A[2][2] > A[i][i]) i = 2;
+    int j = next[i], k = next[j];
+    float r = std::sqrt((A[i][i] - (A[k][k] + A[j][j])) + 1.0f);
+    float inv = 0.5f / r;
+    q[i] = r * 0.5f;
+    w = (A[j][k] - A[k][j]) * inv;
+    q[j] = (A[j][i] + A[i][j]) * inv;
+    q[k] = (A[i][k] + A[k][i]) * inv;
+  }
+  out[0] = q[0];
+  out[1] = q[1];
+  out[2] = q[2];
+  out[3] = w;
+}
+
 }  // namespace moho::dmath

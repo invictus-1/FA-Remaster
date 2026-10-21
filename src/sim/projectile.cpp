@@ -933,7 +933,8 @@ int l_CreateProjectile(lua_State* L) {
          static_cast<float>(luaL_optnumber(L, 8, 0))};
   }
   Vec3 pos = Add(e->position, o);
-  return PushProj(L, sim.CreateProjectile(L, *bp, e->army, e, pos, Orient(d), 0, 0, "Normal", AiTarget{}, true));
+  // (EntityCreateProjectile 0x68a578: COORDS_Orient 0x50b480 of the direction as given, not vm::Orient's atan2 / asin)
+  return PushProj(L, sim.CreateProjectile(L, *bp, e->army, e, pos, LookQuat(d.x, d.y, d.z), 0, 0, "Normal", AiTarget{}, true));
 }
 
 // Entity:CreateProjectileAtBone(bp, bone) 0x68a6f0

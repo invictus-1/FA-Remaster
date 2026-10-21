@@ -595,21 +595,13 @@ int l_EulerToQuaternion(lua_State* L) {
   return 1;
 }
 
-// OrientFromDir(v): the orientation whose forward (+Z) axis points along v.
+// OrientFromDir(v): the orientation whose forward (+Z) axis points along v: cfunc 0x50d4bd calls COORDS_Orient
+// 0x50b480 (dmath::LookQuat). (Ours took atan2 / asin half angles: within one unit in the last place.)
 int l_OrientFromDir(lua_State* L) {
   luaL_checktype(L, 1, LUA_TTABLE);
-  float x = VecComp(L, 1, 1), y = VecComp(L, 1, 2), z = VecComp(L, 1, 3);
-  float len = std::sqrt(x * x + y * y + z * z);
-  if (len <= 0) {
-    PushQuat4(L, 0, 0, 0, 1);
-    return 1;
-  }
-  float heading = dmath::Atan2(x, z);
-  float pitch = -dmath::Asin(y / len);
-  float ch = dmath::Cos(heading * 0.5f), sh = dmath::Sin(heading * 0.5f);
-  float cp = dmath::Cos(pitch * 0.5f), sp = dmath::Sin(pitch * 0.5f);
-  // probe: equal to the original within 1 ulp; + 0.0f turns -0 into 0 as the original prints it
-  PushQuat4(L, ch * sp + 0.0f, sh * cp + 0.0f, -sh * sp + 0.0f, ch * cp);
+  float q[4];
+  dmath::LookQuat(VecComp(L, 1, 1), VecComp(L, 1, 2), VecComp(L, 1, 3), q);
+  PushQuat4(L, q[0], q[1], q[2], q[3]);
   return 1;
 }
 
