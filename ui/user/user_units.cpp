@@ -1293,12 +1293,19 @@ void RequestSessionPause(lua_State* L, bool pause) {
 }
 
 // commandmode.OnCommandIssued(command) (FA exe 0x83e770): the script hears of every order the
-// engine issued for the player, as a table. First version of that table: CommandType (the
-// order's name), Clear, Target = {Type = "Position", Position} or {Type = "Entity", EntityId,
-// Position}, Units, Blueprint, and LuaParams when the order carries a Lua value (`luaParams`: its
-// stack index, 0 for none): the script reads it for a Script order (an attack-move, an enhancement).
+// engine issued for the player, as a table (func_UserScriptCommandObj 0x83e150, READ 2026-10-21): Units, the
+// units' list; Blueprint, the order's blueprint id or the empty string when it has none (0x83e21c..0x83e240, the
+// issue data's +0x50; never nil); Target = {Type = the lexical of the target's ESTITargetType (data +0x10: "None",
+// "Entity", "Position", registered at 0x55af30), and for an entity EntityId ("%d") and Position, the entity's
+// place (0x83e2cf..0x83e3ab), else Position, the target's place (data +0x18, 0x83e452)}; LuaParams, a copy of the
+// order's Lua value when it has one (0x83e3d1; `luaParams`: its stack index, 0 for none), which the script reads
+// for a Script order (an attack-move, an enhancement); CommandType, the order's name; Clear. An order without a
+// target (`hasTarget` false: Stop, Script, Upgrade, a factory's build order; IssueCommand and its kin) has Type
+// "None" and the place the issue data starts with, 0, 0, 0 (SSTICommandIssueData 0x552550: +0x18..+0x20 zeroed):
+// FAF's AddCommandFeedbackByType shows the default blips there for such an order, in the original too.
 void ReportCommandIssued(lua_State* L, const char* type, const std::vector<UserUnit*>& units, float x, float y, float z,
-                         bool clear, const std::string& blueprint, uint32_t entity = 0xffffffffu, int luaParams = 0) {
+                         bool clear, const std::string& blueprint, uint32_t entity = 0xffffffffu, int luaParams = 0,
+                         bool hasTarget = true) {
   int top = lua_gettop(L);
   if (luaParams < 0) luaParams = top + luaParams + 1;
   lua_pushcfunction(L, ScriptTraceback);
@@ -1316,8 +1323,7 @@ void ReportCommandIssued(lua_State* L, const char* type, const std::vector<UserU
       lua_pushboolean(L, clear);
       lua_rawset(L, -3);
       lua_pushstring(L, "Blueprint");
-      if (blueprint.empty()) lua_pushnil(L);
-      else lua_pushstring(L, blueprint.c_str());
+      lua_pushstring(L, blueprint.c_str());
       lua_rawset(L, -3);
       lua_pushstring(L, "Units");
       PushUnitList(L, units, false);
@@ -1330,7 +1336,7 @@ void ReportCommandIssued(lua_State* L, const char* type, const std::vector<UserU
       lua_pushstring(L, "Target");
       lua_newtable(L);
       lua_pushstring(L, "Type");
-      lua_pushstring(L, entity != 0xffffffffu ? "Entity" : "Position");
+      lua_pushstring(L, !hasTarget ? "None" : entity != 0xffffffffu ? "Entity" : "Position");
       lua_rawset(L, -3);
       if (entity != 0xffffffffu) {
         lua_pushstring(L, "EntityId");
@@ -2159,7 +2165,7 @@ bool IssuePlain(lua_State* L, const std::vector<UserUnit*>& list, const std::str
   // empties the queue. (Inferred: where the original decides that.)
   if (type == CommandType::Stop) clear = true;
   Writer(L).IssueCommand(ids, d, clear);
-  ReportCommandIssued(L, plain, units, 0, 0, 0, clear, blueprint, 0xffffffffu, params && lua_istable(L, params) ? params : 0);
+  ReportCommandIssued(L, plain, units, 0, 0, 0, clear, blueprint, 0xffffffffu, params && lua_istable(L, params) ? params : 0, false);
   return true;
 }
 

@@ -31,7 +31,12 @@ class Bitmap : public Control {
   // TAlphaBlendLinearSampleNoDepth (IUIManager::RenderFrames, 0x84d584), Rasterizer_Cull_None. So
   // the turned quad covers the strip between the two edges, its picture mirrored. FAF's score graph
   // lays the shares' bands behind its lines out so (hotstats.lua create_graph, the second thread).
+  // A bitmap with nothing to show is not drawn, and its rectangle is not read: the original tests its frame
+  // pattern (+0x180), its textures (+0x120) and the texture of the frame shown first (0x780872..0x7808ca) and
+  // reads the four edges only after (0x7808d0..0x7808fa). FAF's notify overlay (notifyoverlay.lua
+  // createEnhancementOverlay) is such a bitmap on the root frame, laid out only in its first OnFrame.
   void Draw(lua_State* L, DrawTarget& target) override {
+    if (!solid && (textures.empty() || pattern.empty())) return;
     Rect dst;
     GetRect(&dst.x0, &dst.y0, &dst.x1, &dst.y1);
     const bool turnedX = dst.x0 > dst.x1, turnedY = dst.y0 > dst.y1;

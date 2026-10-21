@@ -254,6 +254,13 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
         user.ui().Render(user.L(), *target, 0);
         changed = IntRect{0, 0, target->Width(), target->Height()};
       }
+      // The controls' frame (OnFrame) after the picture, as the original's app frame has it (UserState::UpdateControls);
+      // its time is the interface's, not the drawing's.
+      const auto tu = Clock::now();
+      user.UpdateControls(uiDt > 0.25 ? 0.25 : uiDt);
+      const auto tuEnd = Clock::now();
+      frameSeconds += std::chrono::duration<double>(tuEnd - tu).count();
+      t0 += tuEnd - tu;
       const auto te = Clock::now();
       target->ResetTouched();
       if (eachFrame) eachFrame(dt > 0.25 ? 0.25 : dt, *target);

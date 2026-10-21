@@ -171,9 +171,16 @@ class UserState {
   };
   PhotoModeState photoMode;
 
-  // One frame: the clock moves on by `seconds`; controls that asked for it get OnFrame; then the
-  // script threads that are due run. (The order of those two within a frame is inferred.)
+  // One frame: the clock moves on by `seconds`, then the script threads that are due run. The controls' own frame
+  // (OnFrame, UpdateControls) comes after the threads and after the picture, as in the original's app frame
+  // (CScApp::Main 0x8d1470: the session's frame with its script threads, CWldSession::SessionFrame 0x895d80, and the
+  // front end's, 0x8d1b5d; the picture, REN_Frame 0x8d1b75; then the interface's frames, IUIManager slot 5 0x84d160
+  // -> CMauiFrame::Frame 0x7965a0, at 0x8d1bb1). A control a script makes is thus laid out by its first OnFrame
+  // before the next input is read (the window's messages come between two app frames).
   void Frame(double seconds);
+  // The controls that asked for it get OnFrame (Frame::Update): after the frame's picture, or in a run without a
+  // window right after Frame.
+  void UpdateControls(double seconds);
 
   // import('/lua/ui/uimain.lua').<fn>() with a traceback on error.
   bool CallUiMain(const char* fn);
@@ -342,6 +349,14 @@ struct CameraControls {
   float panSpeed = 90.0f, panFast = 4.0f;
   float turnSpeed = 10.0f, turnFast = 2.0f;
   bool edgePans = true, arrowsPan = true;
+  // cam_Free ("Allow the camera to remain rotated", a bool at 0x10a645f, off at first; FAF's key Ctrl-V turns it
+  // over, its gamemain.lua sets it off at the game's start). On: a turn with Space held works at every zoom
+  // (CUIWorldView::HandleEvent 0x870982, else below 125 only), and nothing swings it back, neither Space let go
+  // (0x870a79, CUIWorldView::Frame 0x8711fa) nor the mouse leaving the view (0x870509); and the camera's focus is
+  // not held on the playable ground each frame (CameraImpl::UpdateBasis 0x7a981b -> ClampTargetPos 0x7a9320).
+  // (Not built: its tests in CameraDragger::DragCancel / DragRelease 0x86e1f0 / 0x86e220, a drag this host does
+  // not have, and in CUIWorldView::Render 0x86ee18, not read.)
+  bool camFree = false;
 };
 CameraControls& CameraKeys();
 // "Lock Fullscreen Cursor To Window" (the game's Options; console SC_ToggleCursorClip 0|1, FA exe
@@ -420,6 +435,12 @@ struct LookSettings {
   // the minimap stamps the script's meshes (pings, beacons) under its icons (the renderer's SetMinimapMeshes, render
   // 4a061d2). INFERRED: 0 until the script sets it (it does when the minimap is made).
   float minimapLod = 0;
+  // ren_DecalFadeFraction (a float at 0xf579c0, 0.5 at first; FAF's gamemain.lua sets 0.25 at a game's start): the
+  // share of its LODCutoff a decal is drawn whole up to; from there it fades to nothing at the cutoff
+  // (CWldTerrainDecal::GetLODAlpha 0x89d400: 1 - (clamp(d, L f, L) - L f) / (L - L f), L its cutoff +0x80; a decal
+  // with a near cutoff +0x84 comes in the other way over L f .. L). Kept for the picture: the renderer's decals fade
+  // their own way for now (render/decals.cpp, the last fifth; the ui's request to the renderer).
+  float decalFadeFraction = 0.5f;
   // The Photographic Look (the renderer's World::photoLook, render/photo_look.h; Chris, 2026-10-18: "an option in
   // game as in you can choose which one you want"): 0 off (today's picture), 1 Natural (the adapting eye and the lens
   // touches with today's colours: the grade "plain"), 2 Film, 3 Warm, 4 Cold War (the graded looks). A style pick, not
@@ -606,6 +627,8 @@ void WorldCameraShowBox(lua_State* L, const float lo[3], const float hi[3], floa
 // <the preferences' folder>/screenshots, named by the PC clock's date and time (in any game).
 void CineCameraCommand(lua_State* L, const std::string& value);
 void CinePhotoCommand(lua_State* L);
+// cam_SetLOD <camera> <scale> (worldview.cpp): the LOD scale of a camera, as the original's console command sets it.
+void CameraLodCommand(lua_State* L, const std::string& rest);
 // The photo mode (worldview.cpp; ours, not the original's: Chris's approval of 2026-10-18, the visuals session's look
 // 7). The console's remaster_photo_mode [on|off] (no word: it turns over; the key "Photo mode", Alt-P at first), in a
 // game or a replay: a free camera, the picture's own time of day, weather and lens, and photos up to four times the

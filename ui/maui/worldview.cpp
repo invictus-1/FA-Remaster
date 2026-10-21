@@ -97,6 +97,11 @@ class Camera : public ScriptObject {
   bool turned = false, swingBack = false;
   float turnedPitch = 0;
   bool placed = false;  // false until the map's size or a script put it somewhere
+  // The camera's LOD scale (GeomCamera3 +0x280 in the camera at +0x70): cam_DefaultLOD, 1, when the camera is made
+  // (0x46ff46); cam_SetLOD sets it (0x7adfc0 -> CameraImpl slot 36 0x7a72f0 -> GeomCamera3::SetLODScale 0x470b90,
+  // which also scales the planes +0x294 and +0x2a4 made from it). Here it scales the level of detail the order
+  // lines' texts go by (LodAt); the picture's models do not take it yet (the renderer's request).
+  float lodScale = 1;
   // Scripted moves, as the original's CameraImpl (read by a helper: TimedMoveInit 0x7a74c0,
   // SetupHermite 0x7a8940, InterpolateBasis 0x7a9ba0, UpdateTargets 0x7a9110). `mode` (+0x37c):
   // 0 free, 1 a box, 2 following units, 3 a unit's nose, 4 a scripted move or a spin. A timed
@@ -878,6 +883,14 @@ class WorldView : public Control {
   bool customRender = false;  // the script wants to draw into the world each frame (see SetCustomRender)
   std::string rightOrder;     // GetRightMouseButtonOrder's last answer (given while a beat runs)
   bool rightOrderKnown = false;
+  // The mouse is over the view (its +0x275): set by the MouseEnter the view hears, cleared by its MouseExit
+  // (CUIWorldView::HandleEvent 0x8704e4, 0x870500), so by the hit test of a mouse event only. Each frame the view
+  // with it works out what is under the mouse and asks its script for the pointer (CUIWorldView::Frame 0x871152 ->
+  // UpdateSelection 0x86f520, OnUpdateCursor), and GetRolloverInfo reads what that found (0x842972: the session's
+  // +0x4c0): no frame tests every control against the mouse (MouseInView). A control made since the last mouse
+  // event is not looked at before then, as in the original (FAF's notify overlay: a bitmap on the root frame laid
+  // out only in its first OnFrame).
+  bool mouseIn = false;
 
   // The picture of the world this view shows (the main view only: the renderer has one picture,
   // and a minimap would need a second), as it was last asked for.
@@ -885,6 +898,7 @@ class WorldView : public Control {
   int pictureW_ = 0, pictureH_ = 0;
   uint32_t pictureFrame_ = 0xffffffffu;
   WorldCamera pictureCamera_;
+  float pictureLodScale_ = 1;  // its camera's LOD scale then (Camera::lodScale)
   // The time-left texts at the order lines' nodes as the scene was last made (OrderLinesForWorld).
   std::vector<OrderEta> orderEtas_;
   // The buildings being placed under the mouse as the scene was last made (for tests: moho64ui_BuildGhosts).
@@ -947,6 +961,7 @@ class WorldView : public Control {
     if (sceneMade_ && user->config().beatRunning && user->config().beatRunning()) {
       pixels_ = source->Draw(cam, w, h);
       pictureW_ = w, pictureH_ = h, pictureFrame_ = user->frame(), pictureCamera_ = cam;
+      if (const Camera* shown = GetCameraObject(L, cameraName)) pictureLodScale_ = shown->lodScale;
       return pixels_ != nullptr;
     }
     // (Its parts are timed under their own names in the binding profile.)
@@ -981,7 +996,7 @@ class WorldView : public Control {
     // has switched highlighting off or the mouse is over something else.
     UiManager& mouse = user->ui();
     uint32_t rollover = 0xffffffffu;
-    if (highlight && pixels_ && Looks().selectTolerance >= 0 && ControlAt(mouse, 0, mouse.mouseX, mouse.mouseY) == this) {
+    if (highlight && pixels_ && Looks().selectTolerance >= 0 && mouseIn) {
       uint32_t under = source->UnitAt(mouse.mouseX - r.x0, mouse.mouseY - r.y0);
       int kind = under != 0xffffffffu ? HoverKindOf(L, under) : 0;
       if (kind) scene.hover = under, scene.hoverKind = kind;
@@ -1089,6 +1104,7 @@ class WorldView : public Control {
     pixels_ = source->Draw(cam, w, h);
     lap("(the picture's scene: Draw)");
     pictureW_ = w, pictureH_ = h, pictureFrame_ = user->frame(), pictureCamera_ = cam;
+    if (const Camera* shown = GetCameraObject(L, cameraName)) pictureLodScale_ = shown->lodScale;
     sceneMade_ = true;
     return pixels_ != nullptr;
   }
@@ -1144,8 +1160,8 @@ class WorldView : public Control {
   // view's middle row at its left and right edges on the near and the far plane (the clip points
   // (-1, 0, 0), (1, 0, 0), (-1, 0, 1), (1, 0, 1)) and makes from their distances the plane +0x284 that
   // gives the width of the world the view spans across at a place's depth, in world units; +0x294 is
-  // it times the camera's LOD scale (+0x280: cam_DefaultLOD, 1, when the camera is made, 0x46ff46; 1
-  // here), +0x2a4 it over the view's width in pixels (+0x2bc; so the world units a pixel spans,
+  // it times the camera's LOD scale (+0x280: cam_DefaultLOD, 1, when the camera is made, 0x46ff46; cam_SetLOD
+  // sets it: Camera::lodScale), +0x2a4 it over the view's width in pixels (+0x2bc; so the world units a pixel spans,
   // which the order lines' widths go by). INFERRED: the steps from those widths to the plane are not
   // read one by one; for the picture's perspective camera the width at a depth is depth x 2 tan(fovY / 2)
   // x the view's aspect.
@@ -1155,8 +1171,7 @@ class WorldView : public Control {
     const float back[3] = {sh * cp, sp, ch * cp};  // (from the focus to the eye, as render::Camera::Axes)
     const float depth = c.distance + (c.target[0] - p[0]) * back[0] + (c.target[1] - p[1]) * back[1] + (c.target[2] - p[2]) * back[2];
     const float aspect = pictureH_ > 0 ? static_cast<float>(pictureW_) / static_cast<float>(pictureH_) : 1.0f;
-    const float lodScale = 1.0f;  // (cam_DefaultLOD)
-    return depth * 2.0f * std::tan(c.fovY * 0.5f) * aspect * lodScale;
+    return depth * 2.0f * std::tan(c.fovY * 0.5f) * aspect * pictureLodScale_;
   }
   // The player's option "Show Waypoint ETAs" (display_eta; /lua/options/options.lua's default is on) as
   // OPTIONS_GetBool (0x8c6bf0) asks it: GetOption's answer as a boolean; a failed call is logged and
@@ -2111,6 +2126,17 @@ class WorldView : public Control {
     // 0x8705e0 writes the session's cursor info from this view: CursorView, GetMouseWorldPos). INFERRED: also while the
     // photo mode is open (the original has none).
     if (!dead()) UserState::From(L)->ui().cursorView = this;
+    // MouseEnter and MouseExit set and clear the view's mouse-over flag first, before anything else of the event
+    // (0x8704d7..0x870500); leaving the view swings back a turn made with Space held unless cam_Free (0x8704f9).
+    if (e.type == EventType::MouseEnter) mouseIn = true;
+    if (e.type == EventType::MouseExit) {
+      mouseIn = false;
+      if (spinning_ && !dead()) {
+        spinning_ = false;
+        UserState::From(L)->ui().holdPointer = false;
+        if (!CameraKeys().camFree) RevertCamera(GetCameraObject(L, cameraName));
+      }
+    }
     if (!dead() && !miniMap && UserState::From(L)->photoMode.open) return PhotoModeEvent(L, e);  // (ours: see there)
     // Each event first works out what is under the mouse (the cursor update 0x86f520, called at 0x8705e0 before
     // the script's handler): here the waypoint of the order lines under it.
@@ -2128,7 +2154,8 @@ class WorldView : public Control {
       // With Space held the mouse turns the camera, from near only (a zoom under 125) as in the
       // original (0x870970); letting Space go lets it swing back.
       Camera* c = GetCameraObject(L, cameraName);
-      if (KeyIsDown(L, kKeySpace) && c->zoom < kSpinBelowZoom) {
+      // (with cam_Free at every zoom, 0x870982)
+      if (KeyIsDown(L, kKeySpace) && (CameraKeys().camFree || c->zoom < kSpinBelowZoom)) {
         if (spinning_) {
           Rect r;
           GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
@@ -2140,7 +2167,7 @@ class WorldView : public Control {
       } else if (spinning_) {
         spinning_ = false;
         UserState::From(L)->ui().holdPointer = false;
-        RevertCamera(c);
+        if (!CameraKeys().camFree) RevertCamera(c);  // (0x870a79)
       }
       return false;
     }
@@ -2486,6 +2513,19 @@ WorldView* MainView(Control* c) {
   return nullptr;
 }
 
+// The world view the mouse is over as the last mouse event's hit test left it (its mouseIn, the original's +0x275):
+// the first such view in the head's tree, or null. Asked each frame (AdvanceCameras: the original's frame update of
+// that view, CUIWorldView::Frame 0x871152) and for the unit under the mouse (GetRolloverInfo; the original reads
+// what that frame update found, 0x842972). No other control is tested here, so no layout is read.
+WorldView* MouseInView(Control* c) {
+  if (!c || c->dead()) return nullptr;
+  if (WorldView* v = dynamic_cast<WorldView*>(c))
+    if (v->mouseIn) return v;
+  for (Control* k : c->children())
+    if (WorldView* v = MouseInView(k)) return v;
+  return nullptr;
+}
+
 // The world view the place under the mouse is asked of (GetMouseWorldPos, MouseWorldPlace): the one that last heard
 // an event (UiManager::cursorView: the original's session cursor info is written by each view's cursor update, so over
 // the minimap the place is the minimap's), else the main view. INFERRED: the place is worked out now, at the mouse's
@@ -2661,11 +2701,11 @@ void AdvanceCamera(lua_State* L, Camera* c, float seconds) {
     if (KeyIsDown(L, kKeyInsert)) SpinCamera(L, c, turn, 0, r.x1 - r.x0);
     else if (KeyIsDown(L, kKeyDelete)) SpinCamera(L, c, -turn, 0, r.x1 - r.x0);
   }
-  // Space let go while the mouse stands still: the turn swings back.
+  // Space let go while the mouse stands still: the turn swings back, unless cam_Free (CUIWorldView::Frame 0x8711fa).
   if (v && v->spinning_ && !KeyIsDown(L, kKeySpace)) {
     v->spinning_ = false;
     UserState::From(L)->ui().holdPointer = false;
-    RevertCamera(c);
+    if (!CameraKeys().camFree) RevertCamera(c);
   }
   // The way back (0x7a99eb): heading and lean go towards north up and the zoom's lean by a tenth
   // of a radian a frame (here: as much in a sixtieth of a second), and it is over when both are there.
@@ -2679,7 +2719,8 @@ void AdvanceCamera(lua_State* L, Camera* c, float seconds) {
       c->turned = c->swingBack = false;
     }
   }
-  ClampFocus(c);
+  // (each frame on the playable ground, unless cam_Free: CameraImpl::UpdateBasis 0x7a981b)
+  if (!CameraKeys().camFree) ClampFocus(c);
 }
 
 // GetMouseWorldPos(): the place of the world under the mouse (in the view that last heard an event: CursorView), as
@@ -2905,6 +2946,25 @@ std::string NextPhotoPath(lua_State* L) {
   return path;
 }
 }  // namespace
+
+// cam_SetLOD <camera> <scale> (user_state.h; FA exe 0x7adfc0, READ): with fewer than two words after its name nothing
+// happens (0x7adfe5: three tokens wanted); else the camera of the first word's name (RCamManager::GetCamera 0x7aaaf0:
+// none, nothing; no camera is made) takes atof of the second as its LOD scale (CameraImpl slot 36, 0x7a72f0). It
+// prints nothing. FAF's options set 0.7 on every world view's camera for the Level of Detail "Extreme".
+void CameraLodCommand(lua_State* L, const std::string& rest) {
+  std::vector<std::string> words;
+  size_t at = 0;
+  while ((at = rest.find_first_not_of(" \t", at)) != std::string::npos) {
+    const size_t end = rest.find_first_of(" \t", at);
+    words.push_back(rest.substr(at, end == std::string::npos ? std::string::npos : end - at));
+    at = end;
+  }
+  if (words.size() < 2) return;
+  UserState* user = UserState::From(L);
+  auto it = user->cameras.find(words[0]);
+  if (it == user->cameras.end()) return;
+  static_cast<Camera*>(it->second.get())->lodScale = static_cast<float>(std::atof(words[1].c_str()));
+}
 
 // The cinematic camera's switch (user_state.h). In a replay only: the original's camera is the game's to the
 // player in a game he plays (the ui chat's advice, Chris's approval of 2026-10-17), so there it says so and stays
@@ -3358,9 +3418,12 @@ bool MouseWorldPlace(lua_State* L, float out[3]) {
   return true;
 }
 
+// The unit under the mouse in the view the mouse is over (MouseInView). INFERRED: worked out when asked, at the mouse's
+// place now; the original's GetRolloverInfo reads the unit its view's last frame update found (session +0x4c0, while
+// +0x4b0 says the cursor is in the world).
 uint32_t UnitUnderMouse(lua_State* L) {
   UiManager& ui = UserState::From(L)->ui();
-  WorldView* v = dynamic_cast<WorldView*>(ControlAt(ui, 0, ui.mouseX, ui.mouseY));
+  WorldView* v = MouseInView(ui.GetFrame(0));
   return v ? v->UnitUnder(L, ui.mouseX, ui.mouseY, false) : 0xffffffffu;
 }
 
@@ -3516,6 +3579,15 @@ int l_PngInfoForTests(lua_State* L) {
   lua_rawset(L, -3);
   return 1;
 }
+// moho64ui_CameraLodScale(name) -> the LOD scale of the camera of that name (cam_SetLOD's), nil when there is none
+// (the host's own function for tests: the original has no getter).
+int l_CameraLodScaleForTests(lua_State* L) {
+  UserState* user = UserState::From(L);
+  auto it = user->cameras.find(luaL_checkstring(L, 1));
+  if (it == user->cameras.end()) return 0;
+  lua_pushnumber(L, static_cast<Camera*>(it->second.get())->lodScale);
+  return 1;
+}
 // moho64ui_CameraShake() -> {max, min, radius, seconds, time, offset} of the main camera's shake
 // now (the host's own function for tests); offset: this frame's shift, its length.
 int l_CameraShakeForTests(lua_State* L) {
@@ -3552,13 +3624,13 @@ void AdvanceCameras(lua_State* L, float seconds) {
   // The cinematic camera's frame (what it follows, its easing back; ours): after the cameras, so that a hand-back
   // in their step begins its easing this frame.
   if (user->config().world) user->config().world->CineFrame(seconds);
-  // The world view the mouse is over has its script choose the mouse pointer, every frame (the
-  // original's frame function, FA exe 0x871140: "OnUpdateCursor").
+  // The world view the mouse is over (by its mouse-over flag, 0x871152: MouseInView) has its script choose the mouse
+  // pointer, every frame (the original's frame function, FA exe 0x871140: "OnUpdateCursor").
   // Before it, what is under the mouse (0x871140 -> 0x86f520): the waypoint of the order lines there; with the
   // mouse over no world view, none (0x86f5e3: the session's cursor info reset).
   if (user->gameInterface) {
     UiManager& ui = user->ui();
-    WorldView* v = dynamic_cast<WorldView*>(ControlAt(ui, 0, ui.mouseX, ui.mouseY));
+    WorldView* v = MouseInView(ui.GetFrame(0));
     if (v && !v->dead() && !v->miniMap) v->UpdateWaypointHover(L, ui.mouseX, ui.mouseY);
     else if (user->HasSim()) UpdateHoveredWaypoint(L, false, ui.mouseX, ui.mouseY, nullptr);
     if (v && !v->dead()) v->RunScript(L, "OnUpdateCursor");
@@ -3625,6 +3697,7 @@ void RegisterWorldViewBindings(lua_State* L) {
   lua_register(L, "moho64ui_BuildGhosts", l_BuildGhostsForTests);
   lua_register(L, "moho64ui_OrderEtas", l_OrderEtasForTests);
   lua_register(L, "moho64ui_CameraShake", l_CameraShakeForTests);
+  lua_register(L, "moho64ui_CameraLodScale", l_CameraLodScaleForTests);
   lua_register(L, "moho64ui_CineCamera", l_CineCameraForTests);
   lua_register(L, "moho64ui_PhotoMode", l_PhotoModeState);
   lua_register(L, "moho64ui_PhotoModeSet", l_PhotoModeSet);

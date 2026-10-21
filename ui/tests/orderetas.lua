@@ -173,6 +173,10 @@ ForkThread(function()
 
     -- not selected: the normal state, drawn only where the camera's level of detail (at the node: the width
     -- of the world across the view, about the zoom) is below ui_MaxTextLOD (80)
+    -- (at the camera's LOD scale 1: FAF's world view sets 0.70 when the profile's Level of Detail is "Extreme", and the
+    -- level of detail the texts go by is scaled by it, as the original's cam_SetLOD scales it: tour_logs.lua)
+    local lodBefore = moho64ui_CameraLodScale("WorldCamera")
+    ConExecute("cam_SetLOD WorldCamera 1")
     SelectUnits(nil)
     moho64ui_MouseMove(30, 300)  -- (no unit under the mouse)
     GetCamera("WorldCamera"):SnapTo(goal, nil, 110)
@@ -188,6 +192,12 @@ ForkThread(function()
     WaitSeconds(0.3)
     check("ui_MaxTextLOD 30: not at zoom 40", drawn("normal"), nil)
     ConExecute("ui_MaxTextLOD 80")
+    -- the camera's LOD scale halved (cam_SetLOD, GeomCamera3::SetLODScale 0x470b90): at zoom 110 the text is drawn
+    GetCamera("WorldCamera"):SnapTo(goal, nil, 110)
+    ConExecute("cam_SetLOD WorldCamera 0.5")
+    WaitSeconds(0.4)
+    check("with the camera's LOD scale 0.5 the normal text is drawn at zoom 110", drawn("normal") ~= nil, true)
+    ConExecute("cam_SetLOD WorldCamera " .. tostring(lodBefore))
     -- under the mouse: highlighted, drawn at any zoom
     GetCamera("WorldCamera"):SnapTo(goal, nil, 110)
     WaitSeconds(0.4)

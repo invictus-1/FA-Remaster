@@ -166,6 +166,7 @@ class GameSession {
   // `__blueprints`, the unit categories and the category functions, the way the simulation's own
   // state has them. (The rules are loaded a second time for this; the simulation keeps its own.)
   bool LoadInterfaceRules(lua_State* userState);
+  const SimBlueprints* interfaceBlueprints() const { return interfaceBlueprints_.get(); }
   // Called with each beat's sync tables (the simulation's bytes) once set. Until then the tables
   // are kept, oldest first, for TakePendingSync: the first beats tell the interface things once only.
   std::function<void(const std::string& sync)> onSync;

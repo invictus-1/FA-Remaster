@@ -828,6 +828,66 @@ std::vector<std::string> Words(const std::string& text) {
   return words;
 }
 
+// Console variables of the original's own machinery this host does not have (its resource prefetcher, its terrain
+// tessellator, its decal clipping, its device's pointer): accepted and kept as the original keeps them, with the
+// registry's spelling, kind and starting value, so that a value a script sets reads back. Nothing else looks at them.
+// FAF's gamemain.lua sets all five at a game's start. Each is a TConVar whose value pointer is set at the address
+// given (its static initializer).
+struct KeptConVar {
+  const char* name;
+  char kind;  // 'b' bool, 'i' int, 'f' float
+  double value;
+};
+std::vector<KeptConVar>& KeptConVars() {
+  static std::vector<KeptConVar> vars = {
+      // int at 0xf58da4 (0xbc5b60): the seconds the prefetcher's thread (func_PrefetchThread 0x4ab180, read at
+      // 0x4ab2bd) waits after the game's own disk activity. FAF sets 1.
+      {"res_PrefetcherActivityDelay", 'i', 3},
+      // int at 0xf58da8 (0xbc5ba0): the milliseconds that thread naps after each file it prefetched (0x4ab4cc). FAF: 10.
+      {"res_AfterPrefetchDelay", 'i', 250},
+      // float at 0xf57db0 (0xbe3130): the terrain tessellator's split test (CTesselator::GetIntersectionResult
+      // 0x80e020: a patch is split while its error is at least its distance's measure times this, 0x80e1b9). FAF: 0.004.
+      // The picture draws the ground without such a tessellator.
+      {"ren_ViewError", 'f', 0.003},
+      // int at 0xf57db4 (0xbe31b0): the level of the terrain's tree at which decals are clipped for a quick reject
+      // (0x80c503). FAF: 4. The picture places its decals its own way.
+      {"ren_ClipDecalLevel", 'i', 2},
+      // bool at 0x10a636e (0xbc3f20): Windows' own pointer rather than the device's (WD3DViewport::MSWWindowProc
+      // 0x430ba9, CScApp::CreateDevice 0x8d0403). FAF: on. This host shows the system's pointer always.
+      {"d3d_WindowsCursor", 'b', 0},
+  };
+  return vars;
+}
+KeptConVar* KeptConVarOf(const std::string& key) {
+  for (KeptConVar& v : KeptConVars())
+    if (Upper(v.name) == key) return &v;
+  return nullptr;
+}
+// A kept variable given words (RunConsoleCommand's rest). A bool: none turns it over, else the first word's number
+// (ExecuteConsoleCommand has made on / off / = n into 1 or 0). An int or a float as the original's change from the
+// words (0x41d660 for an int, CON_ChangeFloatFromArgs 0x41e100 for a float, READ: the word "=" takes the next word,
+// "+=", "-=", "*=", "/=" work the next word in, any other word is the value itself; an int by atol, a float by atof).
+// (Not built: the int's further operators after "/=", 0x41d78d on. Ours: "/=" by 0 leaves the value.)
+void SetKeptConVar(KeptConVar* v, const std::string& rest) {
+  const std::vector<std::string> words = Words(rest);
+  if (v->kind == 'b') {
+    v->value = words.empty() ? (v->value != 0 ? 0 : 1) : (std::atoi(words[0].c_str()) != 0 ? 1 : 0);
+    return;
+  }
+  if (words.empty()) return;
+  auto number = [&](const std::string& w) { return v->kind == 'i' ? static_cast<double>(std::atol(w.c_str())) : static_cast<double>(static_cast<float>(std::atof(w.c_str()))); };
+  const std::string& op = words[0];
+  const double next = words.size() > 1 ? number(words[1]) : 0;
+  if (op == "=") v->value = next;
+  else if (op == "+=") v->value += next;
+  else if (op == "-=") v->value -= next;
+  else if (op == "*=") v->value *= next;
+  else if (op == "/=") v->value = next != 0 ? v->value / next : v->value;
+  else v->value = number(op);
+  if (v->kind == 'i') v->value = static_cast<double>(static_cast<int>(v->value));
+  else v->value = static_cast<double>(static_cast<float>(v->value));
+}
+
 // The original's console variables among the commands built here (their names and kinds as its
 // registry has them: bool, int, uint32, float, string) and their values now.
 struct ConVarNow {
@@ -870,6 +930,8 @@ ConVarNow ConVarOf(lua_State* L, const std::string& key) {
   else if (key == "CAM_SHAKEMULT") set("cam_ShakeMult", 'f', CameraShakeMult());
   else if (key == "CAM_ZOOMAMOUNT") set("cam_ZoomAmount", 'f', keys.zoomAmount);
   else if (key == "CAM_DEFAULTMINILOD") set("cam_DefaultMiniLOD", 'f', looks.minimapLod);
+  else if (key == "CAM_FREE") set("cam_Free", 'b', keys.camFree);
+  else if (key == "REN_DECALFADEFRACTION") set("ren_DecalFadeFraction", 'f', looks.decalFadeFraction);
   else if (key == "UI_KEYBOARDPANSPEED") set("ui_KeyboardPanSpeed", 'f', keys.panSpeed);
   else if (key == "UI_KEYBOARDPANACCELERATEMULTIPLIER") set("ui_KeyboardPanAccelerateMultiplier", 'f', keys.panFast);
   else if (key == "UI_KEYBOARDROTATESPEED") set("ui_KeyboardRotateSpeed", 'f', keys.turnSpeed);
@@ -885,6 +947,7 @@ ConVarNow ConVarOf(lua_State* L, const std::string& key) {
   else if (key == "UI_MAXWAYPOINTSIZE") set("ui_MaxWaypointSize", 'f', GraphVars().maxWaypointSize);
   else if (key == "UI_WAYPOINTLINESCALE") set("ui_WaypointLineScale", 'f', GraphVars().waypointLineScale);
   else if (key == "UI_MAXTEXTLOD") set("ui_MaxTextLOD", 'f', GraphVars().maxTextLod);
+  else if (const KeptConVar* kept = KeptConVarOf(key)) set(kept->name, kept->kind, kept->value);
   else RangeConVar(L, key, &v.name, &v.kind, &v.number);  // (the range rings': range_RenderSelected and the others)
   return v;
 }
@@ -1195,6 +1258,12 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
       if (!value.empty()) Looks().minimapLod = std::max(0.0f, number);
       return;
     }
+    if (key == "CAM_FREE") return turn(keys.camFree);  // (CameraControls::camFree)
+    if (key == "CAM_SETLOD") return CameraLodCommand(L, value);  // (a camera's LOD scale: worldview.cpp)
+    if (key == "REN_DECALFADEFRACTION") {  // (kept for the picture: LookSettings::decalFadeFraction)
+      if (!value.empty()) Looks().decalFadeFraction = number;
+      return;
+    }
     if (key == "CAM_ZOOMAMOUNT") {
       if (!value.empty()) keys.zoomAmount = std::max(0.01f, number);
       return;
@@ -1238,6 +1307,7 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
     }
     if (key == "SC_SECONDARYADAPTER") return;  // (a second screen for a second head: none here)
   }
+  if (KeptConVar* kept = KeptConVarOf(Upper(name))) return SetKeptConVar(kept, rest);
   if (Upper(name) == "UI_SELECTBYCATEGORY") {
     SelectByCategoryCommand(L, rest);
     return;

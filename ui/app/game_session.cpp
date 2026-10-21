@@ -1320,6 +1320,42 @@ void GameSession::OpenPicture() {
 #endif
 }
 
+namespace {
+// moho64ui_BlueprintFacts(id): the host's own function for tests (not the original's). What the interface's blueprints
+// and the simulation's hold of one blueprint, from their records in the engine (BlueprintInfo; the simulation's Lua
+// state is not looked at): {interface = facts, sim = facts}, facts = {count = all their blueprints, entities = their
+// entity blueprints, ordinal, entityIndex, commandCaps, toggleCaps}, only the two counts when the id is not among them.
+void PushBlueprintFacts(lua_State* L, const SimBlueprints* bps, const char* id) {
+  lua_newtable(L);
+  if (!bps) return;
+  auto number = [L](const char* key, double v) {
+    lua_pushstring(L, key);
+    lua_pushnumber(L, v);
+    lua_rawset(L, -3);
+  };
+  number("count", static_cast<double>(bps->Count()));
+  number("entities", bps->EntityCount());
+  if (const BlueprintInfo* bp = bps->Find(id)) {
+    number("ordinal", bp->ordinal);
+    number("entityIndex", bp->entityIndex);
+    number("commandCaps", bp->commandCaps);
+    number("toggleCaps", bp->toggleCaps);
+  }
+}
+int l_BlueprintFactsForTests(lua_State* L) {
+  const GameSession* session = static_cast<const GameSession*>(lua_touserdata(L, lua_upvalueindex(1)));
+  const char* id = luaL_checkstring(L, 1);
+  lua_newtable(L);
+  lua_pushstring(L, "interface");
+  PushBlueprintFacts(L, session->interfaceBlueprints(), id);
+  lua_rawset(L, -3);
+  lua_pushstring(L, "sim");
+  PushBlueprintFacts(L, session->sim() ? &session->sim()->blueprints() : nullptr, id);
+  lua_rawset(L, -3);
+  return 1;
+}
+}  // namespace
+
 bool GameSession::LoadInterfaceRules(lua_State* userState) {
   auto t0 = std::chrono::steady_clock::now();
   rules_ = std::make_unique<ScriptState>(ScriptState::Kind::Rules, vfs_);
@@ -1334,13 +1370,21 @@ bool GameSession::LoadInterfaceRules(lua_State* userState) {
   else SetActiveMods(*rules_, modUids_);
   lua_settop(R, 0);
   if (!rules_->DoScript("/lua/ruleinit.lua")) return false;
+  const auto t1 = std::chrono::steady_clock::now();
   interfaceBlueprints_ = std::make_unique<SimBlueprints>();
   interfaceBlueprints_->fileExists = [vfs = vfs_](const std::string& path) { return vfs->Exists(path); };
   interfaceBlueprints_->CopyToSim(R, userState);
   RegisterCategoryBindings(userState, interfaceBlueprints_.get());
+  lua_pushlightuserdata(userState, this);
+  lua_pushcclosure(userState, l_BlueprintFactsForTests, 1);
+  lua_setglobal(userState, "moho64ui_BlueprintFacts");
   NoteRealGlobals(userState);
-  Logf(LogLevel::Info, "moho64ui: session: %zu blueprints in the interface's state, %.2f s", interfaceBlueprints_->Count(),
-       std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+  // (Its own load of the rules, the part the original does not repeat: its one RRuleGameRules per session is exported
+  // into both states, func_WorldSessionUserLoad 0x885fe6 and Sim::Sim 0x743c05; and the copy into this state.)
+  const auto t2 = std::chrono::steady_clock::now();
+  Logf(LogLevel::Info, "moho64ui: session: %zu blueprints in the interface's state, %.2f s (its rules %.2f s, the copy %.2f s)",
+       interfaceBlueprints_->Count(), std::chrono::duration<double>(t2 - t0).count(), std::chrono::duration<double>(t1 - t0).count(),
+       std::chrono::duration<double>(t2 - t1).count());
   return true;
 }
 

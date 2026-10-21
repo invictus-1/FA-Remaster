@@ -67,7 +67,7 @@ ConExecute("no_such_command 1 2")
 check("an unknown command (0x41d03b)", take(), 'Unknown console command "no_such_command"')
 ConExecute("hockey")
 check("the original's joke (0x41ce4c)", take(), "Go Tips   Go Sens")
-ConExecute("cam_Free")
+ConExecute("cam_FarFOV")
 check("a command of the original's that is not built prints nothing", take(), "")
 ConExecute("CON_Echo hello   world")
 check("CON_Echo: the words, a space between them (0x41ee10)", take(), "hello world")
@@ -108,6 +108,63 @@ ConExecute("ui_CutsomNameFont")
 check("a string (the exe's spelling)", take(), "string ui_CutsomNameFont == Arial")
 ConExecute("graphics_Fidelity " .. moho64ui_Looks().fidelity)
 check("a value set says nothing", take(), "")
+
+-- the variables FAF's gamemain.lua sets at a game's start (Chris's tour log of 2026-10-19 had them "not built"): the
+-- original's own machinery this host does not have is kept with its starting values (their TConVars' values:
+-- 0xf58da4, 0xf58da8, 0xf57db0, 0xf57db4, 0xf579c0, 0x10a636e, 0x10a645f) and reads back what is set
+ConExecute("res_PrefetcherActivityDelay")
+check("res_PrefetcherActivityDelay starts at 3", take(), "int res_PrefetcherActivityDelay == 3")
+ConExecute("res_AfterPrefetchDelay")
+check("res_AfterPrefetchDelay at 250", take(), "int res_AfterPrefetchDelay == 250")
+ConExecute("ren_ViewError")
+check("ren_ViewError at 0.003", take(), "float ren_ViewError == 0.0030")
+ConExecute("ren_ClipDecalLevel")
+check("ren_ClipDecalLevel at 2", take(), "int ren_ClipDecalLevel == 2")
+ConExecute("ren_DecalFadeFraction")
+check("ren_DecalFadeFraction at 0.5", take(), "float ren_DecalFadeFraction == 0.5000")
+ConExecute("d3d_WindowsCursor show")
+check("d3d_WindowsCursor off", take(), "bool d3d_WindowsCursor is off")
+ConExecute("cam_Free show")
+check("cam_Free off", take(), "bool cam_Free is off")
+-- as gamemain.lua sends them: silently
+ConExecute("d3d_WindowsCursor on")
+ConExecute("ren_ViewError 0.004")
+ConExecute("ren_ClipDecalLevel 4")
+ConExecute("ren_DecalFadeFraction 0.25")
+ConExecute("Cam_Free off")
+ConExecute("res_AfterPrefetchDelay 10")
+ConExecute("res_PrefetcherActivityDelay 1")
+check("FAF's settings say nothing", take(), "")
+local back = {}
+for _, name in {"d3d_WindowsCursor show", "ren_ViewError", "ren_ClipDecalLevel", "ren_DecalFadeFraction", "cam_Free show",
+                "res_AfterPrefetchDelay", "res_PrefetcherActivityDelay"} do
+    ConExecute(name)
+    table.insert(back, take())
+end
+check("and they read back", table.concat(back, "|"), "bool d3d_WindowsCursor is on|float ren_ViewError == 0.0040|" ..
+    "int ren_ClipDecalLevel == 4|float ren_DecalFadeFraction == 0.2500|bool cam_Free is off|" ..
+    "int res_AfterPrefetchDelay == 10|int res_PrefetcherActivityDelay == 1")
+-- an int's and a float's change by words (0x41d660, CON_ChangeFloatFromArgs 0x41e100)
+ConExecute("res_AfterPrefetchDelay += 5")
+ConExecute("res_AfterPrefetchDelay")
+check("+= adds the next word", take(), "int res_AfterPrefetchDelay == 15")
+ConExecute("res_AfterPrefetchDelay = 7")
+ConExecute("res_AfterPrefetchDelay")
+check("= takes the next word", take(), "int res_AfterPrefetchDelay == 7")
+ConExecute("ren_ViewError *= 2")
+ConExecute("ren_ViewError")
+check("*= for a float", take(), "float ren_ViewError == 0.0080")
+-- cam_Free, the key Ctrl-V's: a bool of the original's
+ConExecute("Cam_Free")
+check("cam_Free without a value turns over and says so", take(), "toggled cam_Free is now on")
+ConExecute("cam_Free 0")
+ConExecute("cam_Free show")
+check("and off again", take(), "bool cam_Free is off")
+-- cam_SetLOD (0x7adfc0): a command, not a variable; it prints nothing, also without a camera of that name
+ConExecute("cam_SetLOD")
+ConExecute("cam_SetLOD NoSuchCamera 0.7")
+check("cam_SetLOD prints nothing", take(), "")
+check("and makes no camera", moho64ui_CameraLodScale("NoSuchCamera"), nil)
 
 -- usage lines, and the engine's line when no game runs
 ConExecute("WLD_GameSpeed")
