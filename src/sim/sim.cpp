@@ -1,3 +1,4 @@
+#include "core/fpenv.h"
 #include "sim/entity_grid.h"
 #include "sim/prop_motor.h"
 #include "sim/landnav.h"
@@ -955,6 +956,7 @@ Army* Sim::GetArmy(lua_State* L, int idx) {
 bool Sim::LoadRules() { return LoadRulesState(false); }
 
 bool Sim::LoadRulesState(bool withFixes) {
+  SimFpScope fp;  // (core/fpenv.h: the blueprints' scripts compute values the sim keeps)
   rules_ = std::make_unique<ScriptState>(ScriptState::Kind::Rules, vfs_);
   rules_->SetHookDirs(hookDirs_);
   if (withFixes) rules_->SetExtraHooks(FixesHooks());
@@ -977,6 +979,7 @@ bool Sim::RulesFixesWanted() const {
 }
 
 bool Sim::RunString(const std::string& code, const std::string& chunkName) {
+  SimFpScope fp;
   return state_->DoString(code, chunkName);
 }
 
@@ -1022,6 +1025,7 @@ bool Sim::CallGlobal(const char* fn, int nargs) {
 }
 
 bool Sim::Start(const ReplayHeader& replay) {
+  SimFpScope fp;  // (core/fpenv.h: the sim runs in one floating-point state, whatever thread a host starts it on)
   // The sim's focus and the driver's pending one both start as the launch's (Sim::Sim 0x743a63 and the
   // CSimDriver ctor 0x73b7dc both read +0x68 of the launch info they are given): no change at the first Sync.
   requestedFocus_.store(focusArmy);
@@ -1162,6 +1166,7 @@ bool Sim::FixesFor(const SessionDescription& session) {
 }
 
 bool Sim::Start(const SessionDescription& session) {
+  SimFpScope fp;
   focusArmy = session.focusArmy;
   isReplay = session.replay;
   fixes = FixesFor(session);
@@ -1880,6 +1885,7 @@ void Sim::SetupSync() {
 }
 
 void Sim::PausedBeat() {
+  SimFpScope fp;
   // AdvanceBeat steps 15-19 run on paused beats too (beat_order.md 1), then Sim::Sync (EntityDB purge)
   if (rec_) RecorderBeat();
   ProcessDestroyQueue();
@@ -1891,6 +1897,10 @@ void Sim::PausedBeat() {
 }
 
 void Sim::Tick() {
+  // The beat in the sim's floating-point state (core/fpenv.h), whatever thread the host runs it on. Seen
+  // 2026-10-20: a played game run with MXCSR FTZ + DAZ (as a library could leave a thread) differs from beat 6496
+  // (a T1 artillery's orientation x and z decaying to 8.3e-40 / -2.9e-39 become 0) and plays differently after.
+  SimFpScope fp;
   if (rec_) RecorderBeat();  // labhook's AdvanceBeat entry: the state after the previous tick
   beatStarted_ = true;
   ++tick_;

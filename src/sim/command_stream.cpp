@@ -2,6 +2,8 @@
 // command sink, 0x748650..0x74b100). Spec: engine-ref command_stream.md.
 #include "sim/command_stream.h"
 
+#include "core/fpenv.h"
+
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
@@ -256,6 +258,7 @@ void CallUnitBinding(Sim& sim, Unit* u, const char* method, int nargs) {
 }  // namespace
 
 bool CommandStream::ApplyUntilAdvance(Sim& sim) {
+  SimFpScope fp;  // (the orders run sim code: core/fpenv.h)
   while (p_ + 3 <= d_.size()) {
     int type = static_cast<uint8_t>(d_[p_]);
     size_t len = static_cast<uint8_t>(d_[p_ + 1]) | (static_cast<size_t>(static_cast<uint8_t>(d_[p_ + 2])) << 8);
