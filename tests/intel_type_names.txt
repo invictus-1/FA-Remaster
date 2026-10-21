@@ -1,0 +1,11 @@
+# The engine reads an intel type's name as any reflected enum (Reflection::SetLexical 0x8d9670): without case, an
+# optional "INTEL_", a number, or parts joined by '|' (or-ed). GetIntelRadius reads the unit's attribute word
+# (0x68e94e), not its circle. FAF's XRB3301 script asks for GetIntelRadius('vision'). An --orders file for moho64:
+#   moho64 --init offline\bin\init_lab.lua --session _scratch\ui\session_ai.lua --seed 7 --ticks 12
+#          --orders fa-remaster\tests\intel_type_names.txt --log out.log
+# (Before: 'vision' raised "Unknown intel type vision" and the thread died.) The log's "intel names:" lines must read (a T1 radar ueb3101: Vision 20, Radar 116, no stealth field):
+#   intel names: vision 20 VISION 20 INTEL_Radar 116 3 116 Radar|Sonar 0 RadarStealth 0 RadarStealthField 0
+#   intel names: after SetIntelRadius('vision', 50): 50, Sonar 0, bad name raises: true
+5 lua local u = CreateUnitHPR('ueb3101', 'ARMY_1', 650, 0, 340, 0, 0, 0) ScenarioInfo.Names = u
+6 lua local u = ScenarioInfo.Names local r = function(k) return string.format('%s %g', k, u:GetIntelRadius(k)) end LOG('intel names: ' .. r('vision') .. ' ' .. r('VISION') .. ' ' .. r('INTEL_Radar') .. ' ' .. r('3') .. ' ' .. r('Radar|Sonar') .. ' ' .. r('RadarStealth') .. ' ' .. r('RadarStealthField'))
+7 lua local u = ScenarioInfo.Names u:SetIntelRadius('vision', 50) local ok, err = pcall(function() return u:GetIntelRadius('Bogus') end) LOG(string.format('intel names: after SetIntelRadius(\'vision\', 50): %g, Sonar %g, bad name raises: %s', u:GetIntelRadius('Vision'), u:GetIntelRadius('Sonar'), tostring(not ok and string.find(tostring(err), 'Invalid enum value Bogus', 1, true) ~= nil)))

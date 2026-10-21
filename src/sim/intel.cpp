@@ -65,10 +65,62 @@ std::vector<ReconBlip*> g_blips;    // live blip entities
 const char* const kIntelNames[14] = {"None", "Vision", "WaterVision", "Radar", "Sonar", "Omni", "RadarStealthField",
                                      "SonarStealthField", "CloakField", "Jammer", "Spoof", "Cloak", "RadarStealth",
                                      "SonarStealth"};
+// The engine's parse of a reflected enum's name (Reflection::SetLexical 0x8d9670, through 0x4d2550): the string
+// is cut at each '|' and the parts' values or'ed; a part loses a leading "INTEL_" (strncmp, the type's prefix
+// 0xe0d970, EIntelTypeInfo::AddEnums 0x50a460) and is then looked up WITHOUT case (_strnicmp, the whole name:
+// 0x8d9729..0x8d9744), else read as a number (func_ParseNum 0x8d8fa0: an optional '-', "0x" hex, a leading 0 octal,
+// else decimal). So 'vision', 'VISION', 'INTEL_Vision', '3' and 'Radar|Sonar' are all names it takes. (The same
+// parse as ai_threat.cpp's CheckThreatType and ai_brain.cpp's EnumArg; FAF's XRB3301 asks for 'vision'.)
+bool ParseEnumNumber(const char* p, const char* end, int* out) {  // func_ParseNum 0x8d8fa0
+  bool neg = false;
+  if (*p == '-') {
+    neg = true;
+    ++p;
+  }
+  int base = 10;
+  if (*p == '0') {
+    if (p[1] == 'x') {
+      base = 16;
+      p += 2;
+    } else {
+      base = 8;
+    }
+  }
+  int v = 0;
+  for (;;) {
+    const unsigned char c = static_cast<unsigned char>(*p);
+    int d;
+    if (static_cast<unsigned char>(c - '0') <= 9) d = c - '0';
+    else if (static_cast<unsigned char>(c - 'a') <= 0x19 || c == 'A') d = static_cast<signed char>(c) - 0x57;
+    else return false;  // (0x8d8ff4: of the capitals only 'A' passes, as the exe has it)
+    if (d >= base) return false;
+    v = base * v + d;
+    ++p;
+    if (*p == 0 || p == end) break;
+  }
+  *out = neg ? -v : v;
+  return true;
+}
 int IntelType(const char* s) {
-  for (int i = 1; i < 14; ++i)
-    if (!std::strcmp(s, kIntelNames[i])) return i;
-  return -1;
+  int value = 0;
+  const char* p = s;
+  for (;;) {
+    const char* bar = std::strchr(p, '|');
+    const char* end = bar ? bar : p + std::strlen(p);
+    const char* q = std::strncmp(p, "INTEL_", 6) == 0 ? p + 6 : p;
+    const size_t n = static_cast<size_t>(end - q);
+    int v = -1;
+    for (int i = 0; i < 14; ++i)
+      if (strncasecmp(q, kIntelNames[i], n) == 0 && kIntelNames[i][n] == 0) {
+        v = i;
+        break;
+      }
+    if (v < 0 && !ParseEnumNumber(q, end, &v)) return -1;
+    value |= v;
+    if (!bar) break;
+    p = bar + 1;
+  }
+  return value;
 }
 
 Grid* GridFor(int army, int slot) {  // pos handle slots 1..5
@@ -800,10 +852,17 @@ int l_FlushIntelInRect(lua_State* L) {
   return 0;
 }
 
+// A kind the bindings act on: the exe indexes its circles and flags with whatever value the parse gave (0x68e1c6..),
+// out of 0..13 that is memory past its tables; ours does nothing for those
+bool KindOk(int t) { return t >= 0 && t <= 13; }
 int TypeArg(lua_State* L, int idx) {
   const char* s = luaL_checkstring(L, idx);
   int t = IntelType(s);
-  if (t < 0) luaL_error(L, "Unknown intel type %s", s);
+  if (t < 0) {  // (0x4d2586..0x4d2677: the value and the type's names; the same text as CheckThreatType's)
+    std::string msg = std::string("Invalid enum value ") + s + "\nValid Options are:\n";
+    for (const char* n : kIntelNames) msg += std::string("\n   ") + n;
+    luaL_error(L, "%s", msg.c_str());
+  }
   return t;
 }
 
@@ -813,6 +872,7 @@ int l_InitIntel(lua_State* L) {
   Sim& sim = *S(L);
   Army* army = sim.GetArmy(L, 2);
   int t = TypeArg(L, 3);
+  if (!KindOk(t)) return 0;
   EntityIntel& ei = IntelOf(e);
   uint32_t R = 0;
   if (lua_isnumber(L, 4)) {
@@ -839,6 +899,7 @@ int l_InitIntel(lua_State* L) {
 int l_EnableIntel(lua_State* L) {
   Entity* e = CheckObject<Entity>(L, 1);
   int t = TypeArg(L, 2);
+  if (!KindOk(t)) return 0;
   if (HasCIntel(e)) SetAttrEnabled(e, t, true);
   if (!e->intel) return 0;
   EntityIntel& ei = *e->intel;
@@ -856,6 +917,7 @@ int l_EnableIntel(lua_State* L) {
 int l_DisableIntel(lua_State* L) {
   Entity* e = CheckObject<Entity>(L, 1);
   int t = TypeArg(L, 2);
+  if (!KindOk(t)) return 0;
   if (HasCIntel(e)) SetAttrEnabled(e, t, false);
   if (!e->intel) return 0;
   EntityIntel& ei = *e->intel;
@@ -874,13 +936,14 @@ int l_IsIntelEnabled(lua_State* L) {
   Entity* e = CheckObject<Entity>(L, 1);
   int t = TypeArg(L, 2);
   bool on = false;
-  if (e->intel) on = t <= 8 ? e->intel->h[t].enabled : (e->intel->has[t] && e->intel->on[t]);
+  if (e->intel && KindOk(t)) on = t <= 8 ? e->intel->h[t].enabled : (e->intel->has[t] && e->intel->on[t]);
   lua_pushboolean(L, on);
   return 1;
 }
 int l_SetIntelRadius(lua_State* L) {
   Entity* e = CheckObject<Entity>(L, 1);
   int t = TypeArg(L, 2);
+  if (!KindOk(t)) return 0;
   double r = luaL_checknumber(L, 3);
   uint32_t R = r > 0 ? static_cast<uint32_t>(r) : 0;
   if (HasCIntel(e)) SetAttrRadius(e, t, R);  // 0x68e76a..0x68e77a, with or without a circle of that kind
@@ -895,7 +958,11 @@ int l_SetIntelRadius(lua_State* L) {
 int l_GetIntelRadius(lua_State* L) {
   Entity* e = CheckObject<Entity>(L, 1);
   int t = TypeArg(L, 2);
-  lua_pushnumber(L, e->intel && t <= 8 ? static_cast<float>(e->intel->h[t].radius) : 0.0f);
+  // the attribute word, not the circle (0x68e94e: EntityAttributes::GetRange 0x5bd530, radius & 0x7fffffff, as an
+  // int): 'RadarStealth' gives the radar stealth field's radius, 'RadarStealthField' 0, and a kind the unit has no
+  // circle of still its word (the exe raises "GetIntelRadius called before InitIntel" for an entity without intel)
+  const int s = HasCIntel(e) ? IntelAttrSlot(t) : -1;
+  lua_pushnumber(L, s >= 0 ? static_cast<float>(static_cast<int>(e->intelAttr[s] & 0x7fffffffu)) : 0.0f);
   return 1;
 }
 
