@@ -231,6 +231,12 @@
 //           (1; 0 none); MOHO64_DEBUG_SNOW=1..6 shows the sky it gets, the crowns, the wind's laying, drifts, depth, edge;
 //           --snow-mask-strength n  [snow mask] the map's painted drift mask (remap.json's "snow_drift_mask") n times as
 //           strong in the snow's laying (1 as made, 0 without it)
+// --plants-under-snow  [undersnow] the map's low plants under lying snow (World::plantsUnderSnow, under_snow.h; modern look
+//           with the weather: --weather snow, --snow-lying n): its ferns, bushes, weeds and tufts placed as props stand in the
+//           same snow as the ground cover (with --snow-ground its shelter: deeper in hollows and the wind's lee, thinner under
+//           trees), sunk by its depth, pressed and bowed by it, the lowest buried first, what stands out white where the
+//           ground round it is; trees and rocks keep their snow. --snow-depth n: world units the snow lies at the most
+//           where all of it lies, for the plants and the ground cover alike (0.16)
 // --plants-react  [plants] plants that react (plants.h, World::plantsReact; modern look): grass and plants laid over where units
 //           drive, rising again; bushes, ferns, saplings bending under them and springing back; grass, plants and undergrowth
 //           burnt black, then brown and short, where the game's blasts and lasting fires were, growing back over minutes
@@ -672,6 +678,8 @@ struct Options {
   bool mudMask = false;                 // [ground mud] --mud-mask
   bool rainGround = false;              // [rain ground] --rain-ground
   bool snowGround = false;              // [snow ground] --snow-ground
+  bool plantsUnderSnow = false;         // [undersnow] --plants-under-snow
+  float plantsSnowDepth = -1;           // [undersnow] --snow-depth (negative: the ground cover's own)
   float snowTune[4] = {1, 1, 1, 1};     // [snow ground] --snow-ground-tune
   float snowMaskStrength = 1;           // [snow mask] --snow-mask-strength
   float parallaxTune[3] = {1, 20, 1};   // [parallax] --ground-parallax-tune
@@ -915,6 +923,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--mud-mask") o->mudMask = true;  // [ground mud]
     else if (a == "--rain-ground") o->rainGround = true;  // [rain ground]
     else if (a == "--snow-ground") o->snowGround = true;  // [snow ground]
+    else if (a == "--plants-under-snow") o->plantsUnderSnow = true;  // [undersnow]
     else if (a == "--plants-react") o->plantsReact = true;  // [plants]
     else if (a == "--energy-shields") o->energyShields = true;
     else if (a == "--unit-scars") o->unitScars = true;
@@ -1274,6 +1283,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     }
     else if (a == "--soften") o->soften = static_cast<float>(atof(v));
     else if (a == "--snow-lying") o->snowLying = static_cast<float>(atof(v));
+    else if (a == "--snow-depth") o->plantsSnowDepth = static_cast<float>(atof(v));  // [undersnow]
     else if (a == "--built") o->built = static_cast<float>(atof(v));
     else if (a == "--border") o->border.push_back(v);
     else if (a == "--climate") o->climate = v;
@@ -1686,6 +1696,8 @@ int main(int argc, char** argv) {
   world.mudMask = opt.mudMask;  // [ground mud]
   world.rainGround = opt.rainGround;  // [rain ground]
   world.snowGround = opt.snowGround;  // [snow ground]
+  world.plantsUnderSnow = opt.plantsUnderSnow;  // [undersnow]
+  if (opt.plantsSnowDepth >= 0) world.grass.snowDepth = std::min(opt.plantsSnowDepth, 2.0f);  // [undersnow]
   for (int k = 0; k < 4; ++k) world.terrain.snowTune[k] = std::clamp(opt.snowTune[k], 0.0f, 2.0f);
   world.terrain.snowMaskStrength = std::min(opt.snowMaskStrength, 3.0f);  // [snow mask]
   world.terrain.parallaxDepth = std::max(opt.parallaxTune[0], 0.0f);
