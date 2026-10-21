@@ -1743,14 +1743,15 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
   return ret;
 }
 
-// UnitWeapon::Fire 0x6d61f0: the script's OnFire, and the wait until the next shot
+// UnitWeapon::Fire 0x6d61f0: the script's OnFire and the shot count (+0x184, 0x6d64b5..0x6d64c2). It does not
+// touch the fire clock: that is the fire task's own (CFireWeaponTask+0x24), refilled only after the task's own
+// shot (FireTick). So a manual-fire weapon fired by the FireAt task (0x60b76b) or the overcharge keeps a clock of 0,
+// and its fire task, woken by the SetTarget before the shot, suspends again at once (0x6d3ed6..0x6d3ee0).
 void FireNow(Sim& sim, UnitWeapon* w) {
   if (w->unit->stunned) return;
   WeaponCall(sim, w, "OnFire");
   ++sim.firesSeen;
   ++w->shots;
-  const float rof = RoF(w);
-  w->fireClock = rof > 0 ? static_cast<int>(std::nearbyint(10.0f / rof)) : 0;
 }
 
 // CFireWeaponTask::Execute 0x6d3dc0
@@ -1783,6 +1784,9 @@ void FireTick(Sim& sim, UnitWeapon* w) {
   if (TargetStatus(sim, w, w->target) != 0) return;
   if (w->bp->cannotAttackGround && w->target.type == 2) return;
   FireNow(sim, w);
+  // the clock restarts after the task's own shot: round(10 / RateOfFire) (0x6d3e8d..0x6d3ec8)
+  const float rof = RoF(w);
+  w->fireClock = rof > 0 ? static_cast<int>(std::nearbyint(10.0f / rof)) : 0;
 }
 
 }  // namespace
