@@ -86,10 +86,16 @@ bool RotateToward(float& x, float& z, float tx, float tz, float maxAngle) {
   // with its spline target at x 860.5 behind it: the original turned toward +x, ours toward -x.)
   if (x * tz - z * tx <= 0.0f) s = -s;  // target is clockwise (x toward -z), or exactly behind
   float n = s * s + c * c;
-  if (std::fabs(n - 1.0f) > 0.0010000000474974513f) {
-    float l = std::sqrt(n);
-    s /= l;
-    c /= l;
+  if (std::fabs(n - 1.0f) > 0.0010000000474974513f) {  // 0x6999f0: times 1 / length, zero at 1e-6 or less
+    const float l = std::sqrt(n);
+    if (l > 9.99999997e-07f) {
+      const float inv = 1.0f / l;
+      s *= inv;
+      c *= inv;
+    } else {
+      s = 0.0f;
+      c = 0.0f;
+    }
   }
   float nx = c * x - s * z, nz = s * x + c * z;
   static const bool dbgRot = getenv("MOHO64_DEBUG_ROT") != nullptr;  // every limited turn, as bits
@@ -972,9 +978,10 @@ bool StepMove(const MotionBlueprint& b, const StepParams& P, const UnitMotion& m
   float dist = std::sqrt(dx * dx + dz * dz);
   // at the target: no turn (the mode-0 cap brakes it to a stop)
   float tx = g.fx, tz = g.fz;
-  if (dist > 0) {
-    tx = dx / dist;
-    tz = dz / dist;
+  if (dist > 0) {  // times 1 / dist (0x5b4281..)
+    const float inv = 1.0f / dist;
+    tx = dx * inv;
+    tz = dz * inv;
   }
   float speed = std::sqrt(g.vel.x * g.vel.x + g.vel.z * g.vel.z);
   const int s = g.state;
@@ -1099,10 +1106,18 @@ bool StepRules(Sim& sim, const Unit* u, const MotionBlueprint& b, const StepPara
   float frac = P.maxF > 0 ? nspeed / P.maxF : 0;
   float ndx = tgt.x - g.p.x, ndz = tgt.z - g.p.z;
   float ndist = std::sqrt(ndx * ndx + ndz * ndz);
-  float ndot = ndist > 0 ? (g.fx * ndx + g.fz * ndz) / ndist : 1.0f;
+  // ndot: the direction times 1 / ndist (divss), summed z, x, then the zero y (0x5b4281..0x5b42ec)
+  float ndot = 1.0f;
+  if (ndist > 0) {
+    const float ninv = 1.0f / ndist;
+    ndot = (g.fz * (ndz * ninv) + (ndx * ninv) * g.fx) + (ninv * 0.0f) * 0.0f;
+  }
   float stopDist = 0;
   float a = std::max(b.maxAccel, b.maxBrake);
-  if (a > 0.0f) stopDist = (nspeed * 10.0f * nspeed * 10.0f) / (a * 2.0f);
+  if (a > 0.0f) {  // (n * 10)^2 / (a * 2) (0x5b43ca..0x5b43e0)
+    const float s10 = nspeed * 10.0f;
+    stopDist = (s10 * s10) / (a * 2.0f);
+  }
   switch (g.state) {
     case 3:
       if (frac <= 0.0099999998f) return true;
@@ -1188,7 +1203,10 @@ void Generate(Sim& sim, Unit* u, const Vec3& tgt, int mode, bool fresh) {
   Vec3 D{2 * (q.w * q.y + q.x * q.z), 2 * (q.y * q.z - q.w * q.x), 1 - 2 * (q.x * q.x + q.y * q.y)};
   if (std::fabs(D.y) > 0.99f) D = {0, 0, 1};
   float dist = std::sqrt(ex * ex + ez * ez);
-  float dot = (D.x * ex + D.z * ez) / dist;  // the 3-D forward: shortened on a slope
+  // the 3-D forward (shortened on a slope) against the direction times 1 / dist, summed z, y, x (0x5b32de,
+  // 0x5b3343..0x5b3374; dist is at least 0.001 here)
+  const float dinv = 1.0f / dist;
+  float dot = ((ez * dinv) * D.z + (dinv * 0.0f) * D.y) + (ex * dinv) * D.x;
   const Vec3& V = UnitVelocity(u);
   // (0x5b3381..0x5b33b6: the squares summed x, z, y)
   float frac = b.maxSpeed > 0 ? std::sqrt((V.x * V.x + V.z * V.z) + V.y * V.y) * 10.0f / b.maxSpeed : 0;

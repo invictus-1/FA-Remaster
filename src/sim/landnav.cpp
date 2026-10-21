@@ -685,9 +685,14 @@ int FollowSlot(Sim& sim, Unit* u, LandNav& n) {
   }
   float dd = Dist(n.cur, s);
   float step = std::min(dd, 10.0f);
+  // 0x5ae170 (0x5ae843): one factor step / sqrt(dz^2 + dx^2) times each cell difference, truncated; none when the
+  // two cells are the same
   PathCell probe = n.cur;
-  if (dd > 0) {
-    probe = {n.cur.x + static_cast<int>((s.x - n.cur.x) * step / dd), n.cur.z + static_cast<int>((s.z - n.cur.z) * step / dd)};
+  const float fdx = static_cast<float>(s.x - n.cur.x), fdz = static_cast<float>(s.z - n.cur.z);
+  const float len2 = fdz * fdz + fdx * fdx;
+  if (len2 != 0.0f) {
+    const float k = step / std::sqrt(len2);
+    probe = {n.cur.x + static_cast<int>(fdx * k), n.cur.z + static_cast<int>(k * fdz)};
   }
   // 0x5ae8a5: the followed point with a margin of 1 inside the playable rect (the whole map: the army's flag)
   bool within = !sim.map() || sim.IsWithin(p.x, p.z, 1.0f, Sim::UseWholeMap(u->army));
