@@ -508,11 +508,14 @@ float DistSqPointSegmentExe(const StepSegment& s, Vec3 pt, Vec3* closest) {
 void CheckCollision(Sim& sim, Projectile* p, Vec3 p0, Vec3 p1) {
   lua_State* L = sim.L();
   Vec3 seg = Sub(p1, p0);
-  float len = Len(seg);
+  // The step's length is twice the half length of its segment (0x69d247 -> 0x4fe130: |h| with h = (p1 - p0) x 0.5,
+  // summed y, z, x; 0x69d26a..0x69d27b: x 2.0), and every fraction is a distance divided by it with no test for a
+  // zero step (0x69d466, 0x69d5e8, 0x69dc68). (Ours: |p1 - p0| summed x, y, z, and 0 for a zero step.)
+  const float len = StepSegmentExe(p0, p1).e * 2.0f;
   const TerrainMap* m = sim.map();
   float w = WaterLevel(sim);
   auto record = [&](float dist, Vec3 at, int type, uint32_t entity) {
-    p->hitFraction = len > 0 ? dist / len : 0;
+    p->hitFraction = dist / len;
     p->hitPos = at;
     p->impactType = type;
     p->hitEntity = entity;
