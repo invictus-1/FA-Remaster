@@ -22,6 +22,7 @@
 #include "core/hostfs.h"
 #include "core/fpenv.h"
 #include "core/log.h"
+#include "core/profile.h"
 #include "core/workers.h"
 #include "core/vfs.h"
 #include "script/mount.h"
@@ -1171,7 +1172,11 @@ int main(int argc, char** argv) {
     else if (a == "--workers-selftest") {  // the worker pool's own check (core/workers.h), with MOHO64_THREADS / _PAR_CHECK
       WorkerPool pool(ThreadsFromEnvironment(), ParCheckFromEnvironment());
       SimFpScope fp;  // (as a sim entry does: the calling thread takes tasks too)
+      const auto t0 = std::chrono::steady_clock::now();
       const bool ok = pool.SelfTest();
+      if (prof::On())  // (the profiler's parallel view of the self-test's calls)
+        std::fputs(pool.Stats()->Summary(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count()).c_str(),
+                   stdout);
       std::printf("workers self-test: %d thread(s): %s\n", pool.Threads(), ok ? "ok" : "FAILED");
       return ok ? 0 : 1;
     }

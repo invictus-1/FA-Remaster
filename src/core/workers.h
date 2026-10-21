@@ -18,14 +18,16 @@
 // the sim's floating-point state (core/fpenv.h); one on the calling thread runs in the caller's, which every sim
 // entry has set already.
 //
-// Under MOHO64_PROFILE each call's wall time, its tasks' summed busy time and its longest task go to the profiler
-// (core/profile.h AddParallel), named by the stage.
+// Under MOHO64_PROFILE each call's wall time, its tasks' summed busy time and its longest task go to the pool's
+// ParallelStats, named by the stage: the profiler's parallel view (sim.cpp PhaseTimer prints it).
 #pragma once
 
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -43,6 +45,26 @@ struct ParCheck {
 int ThreadsFromEnvironment();       // MOHO64_THREADS (at least 1; 1 when unset)
 ParCheck ParCheckFromEnvironment();  // MOHO64_PAR_CHECK
 
+// The profiler's parallel view (MOHO64_PROFILE; docs/multicore.md 2), one per pool and so one per Sim (multicore
+// step 1: no process-wide state). Per stage: its calls, its wall time, its tasks' summed busy time, the speed-up
+// busy / wall, its longest task, and the time workers waited (threads x wall - busy); and the serial share of the
+// beats' time, the part no stage runs in parallel, which limits the speed-up. Written by the pool's calling thread
+// only. Measuring only: nothing of the simulation reads it.
+struct ParallelStats {
+  struct Stage {
+    uint64_t calls = 0;
+    double wallMs = 0, busyMs = 0, longestMs = 0, waitMs = 0;
+    int threads = 1;
+  };
+  std::map<std::string, Stage> run, beat;  // the whole run's; the beat's (cleared by EndBeat)
+  double runWallMs = 0;
+
+  void Add(const char* stage, double wallMs, double busyMs, double longestMs, int threads);
+  std::string BeatLines(uint32_t tick, double beatMs) const;  // a hitch beat's lines ("\nprofile hitch tick ..."; "" when none ran)
+  void EndBeat() { beat.clear(); }
+  std::string Summary(double tickMs) const;  // the run summary's lines ("" when no stage ran)
+};
+
 class WorkerPool {
  public:
   explicit WorkerPool(int threads = 1, ParCheck check = {});
@@ -53,6 +75,8 @@ class WorkerPool {
   // The worker slots a task's index runs over (1 without workers): callers size their per-worker scratch by it.
   int Threads() const { return threads_; }
   ParCheck Check() const { return check_; }
+  // The parallel view's numbers (MOHO64_PROFILE); shared, so that a profiler may outlive the pool.
+  const std::shared_ptr<ParallelStats>& Stats() const { return parallel_; }
 
   // fn(begin, end, worker) over [0, count) in chunks of `grain` items (at least 1); returns when all are done.
   // `stage` names it in the profiler (a string that lives as long as the program).
@@ -89,11 +113,13 @@ class WorkerPool {
   uint64_t generation_ = 0;  // a new job (under mutex_)
   int running_ = 0;          // workers still in the job (under mutex_)
   bool quit_ = false;
+  bool timedJob_ = false;    // the job's tasks are timed (MOHO64_PROFILE; under mutex_)
   Job job_;
   std::atomic<size_t> nextChunk_{0};
   std::vector<WorkerStats> stats_;
   uint64_t calls_ = 0;          // (the order check's per-call shuffle)
   std::vector<size_t> order_;   // (the order check's items, kept between calls)
+  std::shared_ptr<ParallelStats> parallel_ = std::make_shared<ParallelStats>();
 };
 
 }  // namespace moho

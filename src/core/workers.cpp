@@ -10,6 +10,7 @@
 
 #include "core/fpenv.h"
 #include "core/log.h"
+#include "core/profile.h"
 #include "script/lua.hpp"
 
 extern "C" {
@@ -66,6 +67,50 @@ ParCheck ParCheckFromEnvironment() {
   return c;
 }
 
+void ParallelStats::Add(const char* stage, double wallMs, double busyMs, double longestMs, int threads) {
+  for (Stage* a : {&run[stage], &beat[stage]}) {
+    ++a->calls;
+    a->wallMs += wallMs;
+    a->busyMs += busyMs;
+    a->longestMs = std::max(a->longestMs, longestMs);
+    a->waitMs += std::max(0.0, wallMs * threads - busyMs);
+    a->threads = threads;
+  }
+  runWallMs += wallMs;
+}
+
+std::string ParallelStats::BeatLines(uint32_t tick, double beatMs) const {
+  if (beat.empty()) return "";
+  std::string r;
+  char b[256];
+  double par = 0;
+  for (const auto& [name, a] : beat) {
+    std::snprintf(b, sizeof b, "\nprofile hitch tick %u parallel %s: %llu call(s), wall %.2f ms, busy %.2f ms, longest task %.3f ms",
+                  tick, name.c_str(), static_cast<unsigned long long>(a.calls), a.wallMs, a.busyMs, a.longestMs);
+    r += b;
+    par += a.wallMs;
+  }
+  std::snprintf(b, sizeof b, "\nprofile hitch tick %u serial share %.1f%%", tick, beatMs > 0 ? 100.0 * (beatMs - par) / beatMs : 100.0);
+  return r + b;
+}
+
+std::string ParallelStats::Summary(double tickMs) const {
+  if (run.empty()) return "";
+  std::string r;
+  char b[320];
+  for (const auto& [name, a] : run) {
+    std::snprintf(b, sizeof b,
+                  "profile: parallel %-20s %8llu calls, wall %8.2f s, busy %8.2f s (%.2f x on %d threads), longest task "
+                  "%.3f ms, waiting %.2f s\n",
+                  name.c_str(), static_cast<unsigned long long>(a.calls), a.wallMs / 1000.0, a.busyMs / 1000.0,
+                  a.wallMs > 0 ? a.busyMs / a.wallMs : 0.0, a.threads, a.longestMs, a.waitMs / 1000.0);
+    r += b;
+  }
+  std::snprintf(b, sizeof b, "profile: serial share of the beats %.1f%% (parallel stages %.2f s of the tick time %.2f s)\n",
+                tickMs > 0 ? 100.0 * (tickMs - runWallMs) / tickMs : 100.0, runWallMs / 1000.0, tickMs / 1000.0);
+  return r + b;
+}
+
 WorkerPool::WorkerPool(int threads, ParCheck check) : threads_(std::max(1, threads)), check_(check) {
   stats_.resize(static_cast<size_t>(threads_));
   if (threads_ > 1 || check_.mode != ParCheck::kOff) lua_gpg_lock_check = LockCheck;
@@ -85,14 +130,16 @@ WorkerPool::~WorkerPool() {
 
 void WorkerPool::WorkerMain(int index) {
   uint64_t seen = 0;
+  bool timed = false;
   for (;;) {
     {
       std::unique_lock<std::mutex> g(mutex_);
       wake_.wait(g, [&] { return quit_ || generation_ != seen; });
       if (quit_) return;
       seen = generation_;
+      timed = timedJob_;
     }
-    RunChunks(index, false);
+    RunChunks(index, timed);
     std::lock_guard<std::mutex> g(mutex_);
     if (--running_ == 0) done_.notify_one();
   }
@@ -133,26 +180,48 @@ void WorkerPool::RunChecked(const char*, size_t count, Fn fn, void* ctx) {
 void WorkerPool::Run(const char* stage, size_t count, size_t grain, Fn fn, void* ctx) {
   if (count == 0) return;
   if (grain == 0) grain = 1;
+  const bool timed = prof::On();  // (the profiler's parallel view: the call's wall time, busy time, longest task)
+  const double t0 = timed ? Ms() : 0;
   if (check_.mode != ParCheck::kOff) {
     RunChecked(stage, count, fn, ctx);
+    if (timed) {
+      const double w = Ms() - t0;
+      parallel_->Add(stage, w, w, w, 1);
+    }
     return;
   }
   if (threads_ == 1 || count <= grain) {  // (one chunk, or no workers: on the calling thread, as the serial code)
-    TaskScope task;
-    fn(ctx, 0, count, 0);
+    {
+      TaskScope task;
+      fn(ctx, 0, count, 0);
+    }
+    if (timed) {
+      const double w = Ms() - t0;
+      parallel_->Add(stage, w, w, w, 1);
+    }
     return;
   }
+  if (timed)
+    for (WorkerStats& s : stats_) s = WorkerStats{};
   job_ = Job{fn, ctx, count, grain, (count + grain - 1) / grain};
   nextChunk_.store(0, std::memory_order_relaxed);
   {
     std::lock_guard<std::mutex> g(mutex_);
     running_ = threads_ - 1;
     ++generation_;
+    timedJob_ = timed;
   }
   wake_.notify_all();
-  RunChunks(0, false);  // (the calling thread is worker 0)
-  std::unique_lock<std::mutex> g(mutex_);
-  done_.wait(g, [&] { return running_ == 0; });
+  RunChunks(0, timed);  // (the calling thread is worker 0)
+  {
+    std::unique_lock<std::mutex> g(mutex_);
+    done_.wait(g, [&] { return running_ == 0; });
+  }
+  if (timed) {
+    double busy = 0, longest = 0;
+    for (const WorkerStats& s : stats_) busy += s.busyMs, longest = std::max(longest, s.longestMs);
+    parallel_->Add(stage, Ms() - t0, busy, longest, threads_);
+  }
 }
 
 bool WorkerPool::SelfTest() {
@@ -181,7 +250,8 @@ bool WorkerPool::SelfTest() {
     FpState firstBad;
     const FpState want0 = SimFpState();
     const double t0 = Ms();
-    ParallelFor("selftest", kN, 1000, [&](size_t b, size_t e, int w) {
+    static const char* const kStages[] = {"selftest", "selftest-shuffle", "selftest-reverse"};  // (one stage per mode)
+    ParallelFor(kStages[m == 0 ? saved.mode : modes[m].mode], kN, 1000, [&](size_t b, size_t e, int w) {
       const FpState s = GetFpState();
       // (the control bits only: MXCSR's low six bits are the exceptions raised so far, e.g. an inexact result)
       if ((s.mxcsr & ~0x3fu) != (want0.mxcsr & ~0x3fu) || s.x87cw != want0.x87cw) {

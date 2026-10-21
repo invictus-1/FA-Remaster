@@ -1624,6 +1624,7 @@ struct PhaseTimer {
   std::vector<float> tickMs;
   std::chrono::steady_clock::time_point t, tickStart;
   bool on = getenv("MOHO64_PROFILE") != nullptr;
+  std::shared_ptr<ParallelStats> parallel;  // the sim's worker pool's parallel view (core/workers.h)
   void Start() {
     if (!on) return;
     if (tickMs.empty()) prof::ResetLuaTotals();  // (before the first tick: the start-up's Lua, not counted)
@@ -1657,9 +1658,11 @@ struct PhaseTimer {
             std::snprintf(buf, sizeof buf, " %s %.2f (lua %.2f)", names[i], beatMs[i], beatLua[i]);
             s += buf;
           }
-        Logf(LogLevel::Info, "profile hitch tick %u: %.2f ms; phases:%s\n%s", tick, ms, s.c_str(), rest.c_str());
+        Logf(LogLevel::Info, "profile hitch tick %u: %.2f ms; phases:%s\n%s%s", tick, ms, s.c_str(), rest.c_str(),
+             parallel ? parallel->BeatLines(tick, ms).c_str() : "");
       }
     }
+    if (parallel) parallel->EndBeat();  // (the beat's parallel stages: listed by the hitch report above, now cleared)
     for (int i = 0; i < kN; ++i) beatMs[i] = beatLua[i] = 0;
   }
   void Report(uint32_t tick) {
@@ -1695,6 +1698,7 @@ struct PhaseTimer {
               runTotal[i] > 0 ? 100.0 * runLua[i] / runTotal[i] : 0.0);
     for (int s = 0; s < prof::kSources; ++s)
       fprintf(stderr, "profile: Lua source %-16s %8.2f s\n", prof::SourceName(s), prof::LuaMsTotal(s) / 1000.0);
+    if (parallel) fputs(parallel->Summary(sum).c_str(), stderr);  // (the parallel stages, core/workers.h; empty when none ran)
   }
 };
 
@@ -1985,7 +1989,10 @@ void Sim::Tick() {
   beatStarted_ = true;
   ++tick_;
   g_crashTick = tick_;  // (named by a crash's log line, core/crash.h)
-  if (!phaseTimer) phaseTimer = std::make_shared<PhaseTimer>();
+  if (!phaseTimer) {
+    phaseTimer = std::make_shared<PhaseTimer>();
+    phaseTimer->parallel = workers_->Stats();  // (shared: the timer reports when it goes, after the pool)
+  }
   PhaseTimer& phases = *phaseTimer;
   phases.Start();
   {  // debug: MOHO64_DEBUG_RNGSHIFT=<tick>:<n> discards n raw draws at the start of that tick. When the Lua
