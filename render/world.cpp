@@ -479,7 +479,8 @@ void World::MarkOutline(const Model* model, Vec3 position, Vec3 color, bool buil
   float icon = 0;
   if (iconsOn && kind && kind->icon >= 0) {
     const float from = kind->fadeIn * (1 - icons.fadeShare);
-    icon = kind->fadeIn > from ? Clamp((away - from) / (kind->fadeIn - from), 0, 1) : (away >= from ? 1.0f : 0.0f);
+    const float measure = away * view.lodScale;  // [lodscale] (as StrategicIcons::Add measures it)
+    icon = kind->fadeIn > from ? Clamp((measure - from) / (kind->fadeIn - from), 0, 1) : (measure >= from ? 1.0f : 0.0f);
   }
   const float radius = Length(model->boundsMax - model->boundsMin) * 0.5f * model->scale;
   meshes.MarkLast(model, outlines.Mark(color, building, id, outlines.Strength(radius, away, camera.fovY, icon)));
@@ -2048,7 +2049,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       const bool isSelected = !selected.empty() && selected.count(u.id) != 0;
       const uint32_t army = (u.id >> 20) & 0xff;
       const bool friendly = own || (army < 64 && ((alliedArmies >> army) & 1) != 0);
-      const bool life = lifeBars && u.maxHealth > 0 && (friendly || lifeBarsOnEnemies) && (isSelected || u.id == hover || away < kind->fadeIn * 0.9f);
+      const bool life = lifeBars && u.maxHealth > 0 && (friendly || lifeBarsOnEnemies) && (isSelected || u.id == hover || away * view.lodScale < kind->fadeIn * 0.9f);  // ([lodscale] as the icons)
       // (a firing cycle only on the unit under the mouse or selected: Chris, 2026-10-14, the Summit's
       // reload bar "should only show if I put my cursor over it instead of at all times")
       const bool work = workBars && own && u.workProgress > 0 && u.workProgress < 1 && (!kind->fireClock || isSelected || u.id == hover);
