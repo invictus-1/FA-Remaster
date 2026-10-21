@@ -95,6 +95,11 @@ class Tarmacs {
   bool readAhead = false;
   void Want(int material);
   void Ahead();
+  // [snowhitch] The pads' snow pipeline made now (World::PrepareSnow: while the game's weather can snow), not at the first pad
+  // drawn under lying snow (zooming in to a base after the snow began: 1.5 s on a new build). Where the map has remade pads.
+  void PrepareSnow() {
+    if (readAhead && ReadTable()) SnowPipeline();
+  }
 
  private:
   struct Material {

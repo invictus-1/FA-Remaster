@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 
 #include "jobs.h"
 
@@ -30,8 +31,32 @@ uint16_t Half(float f) {
 
 gfx::Texture SnowPropsRaster(gfx::Device* device, const std::vector<SnowProp>& props, float mapWidth, float mapHeight, int width, int height,
                              const float wind[2]) {
+  return SnowPropsTexture(device, SnowPropsTexels(props, mapWidth, mapHeight, width, height, wind, true), width, height);
+}
+
+gfx::Texture SnowPropsTexture(gfx::Device* device, const std::vector<uint16_t>& texels, int width, int height) {
+  if (texels.empty() || texels.size() != static_cast<size_t>(width) * static_cast<size_t>(height) * 4) return {};
+  gfx::TextureDesc td;
+  td.width = width;
+  td.height = height;
+  td.format = gfx::Format::RGBA16F;
+  td.data = texels.data();
+  td.dataSize = texels.size() * sizeof(uint16_t);
+  return device->CreateTexture(td);
+}
+
+std::vector<uint16_t> SnowPropsTexels(const std::vector<SnowProp>& props, float mapWidth, float mapHeight, int width, int height,
+                                      const float wind[2], bool spread) {
   if (props.empty() || width <= 0 || height <= 0 || mapWidth <= 0 || mapHeight <= 0) return {};
   const size_t count = static_cast<size_t>(width) * static_cast<size_t>(height);
+  // (each band writes only its own rows, the props in their order: the same texels however the bands are shared out)
+  auto run = [spread](int pieces, const std::function<void(int)>& piece) {
+    if (spread) {
+      Jobs::Shared().Run(pieces, piece);
+    } else {
+      for (int i = 0; i < pieces; ++i) piece(i);
+    }
+  };
   // (what each leaves of the sky; of the ground uncovered by crowns; the snow's depth against its middle)
   std::vector<float> open(count, 1.0f), bare(count, 1.0f), drift(count, 0.0f);
   const float texelX = mapWidth / static_cast<float>(width), texelZ = mapHeight / static_cast<float>(height);
@@ -51,7 +76,7 @@ gfx::Texture SnowPropsRaster(gfx::Device* device, const std::vector<SnowProp>& p
     *z1 = std::min(*z1, (b + 1) * height / bands - 1);
   };
   // the sky each takes and the trees' crowns
-  Jobs::Shared().Run(bands, [&](int part) {
+  run(bands, [&](int part) {
     for (const SnowProp& p : props) {
       if (p.height <= 0 || p.radius <= 0) continue;
       // (a tree's crown lets half through; something low takes little: what hides the sky beside it is its top, and a bush
@@ -85,7 +110,7 @@ gfx::Texture SnowPropsRaster(gfx::Device* device, const std::vector<SnowProp>& p
   // the snow the wind lays round each: a tail of it in its lee (rising from its edge to its height's way along, dying out
   // over four times its height, widening as it goes), a scoop on its windward side, and a tree's well under its crown (the
   // crown catches what would lie there); in a wood the tails of all its trees drowned in its crowns (as deep as under them)
-  Jobs::Shared().Run(bands, [&](int part) {
+  run(bands, [&](int part) {
     for (const SnowProp& p : props) {
       if (p.height <= 0 || p.radius <= 0) continue;
       const float low = std::clamp((p.height - 0.25f) / 1.0f, 0.0f, 1.0f);
@@ -130,13 +155,7 @@ gfx::Texture SnowPropsRaster(gfx::Device* device, const std::vector<SnowProp>& p
     texels[i * 4 + 2] = Half(0.5f + 0.5f * std::clamp(drift[i], -0.4f, 1.0f));  // (a wood's scoops together no deeper than one)
     texels[i * 4 + 3] = Half(1);
   }
-  gfx::TextureDesc td;
-  td.width = width;
-  td.height = height;
-  td.format = gfx::Format::RGBA16F;
-  td.data = texels.data();
-  td.dataSize = texels.size() * sizeof(uint16_t);
-  return device->CreateTexture(td);
+  return texels;
 }
 
 }  // namespace render

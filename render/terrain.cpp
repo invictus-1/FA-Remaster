@@ -2532,24 +2532,53 @@ bool Terrain::SnowShelterWanted() {
   return !shelter_ || (mudMask && MudMaskReady()) != shelterMud_;
 }
 
+// [snowhitch] The shelter's pass, made the first time it is wanted (SnowShelter, or ahead: PrepareSnow). False: it cannot be.
+bool Terrain::ShelterPass() {
+  if (shelterPass_) return true;
+  if (shelterTried_) return false;
+  shelterTried_ = true;
+  const std::string source = std::string(kViewShaderBlock) + kSnowShelter;
+  gfx::ComputeDesc cd;
+  cd.name = "terrain: the snow's shelter";
+  cd.source = source;
+  std::string error;
+  shelterPass_ = device_->CreateCompute(cd, &error);
+  if (!shelterPass_) fprintf(stderr, "render: the snow's shelter cannot be made: %s\n", error.c_str());
+  return static_cast<bool>(shelterPass_);
+}
+
+// [snow mask] The map's drift mask, read the first time the shelter is made with it ([snowhitch] or ahead: PrepareSnow).
+void Terrain::ReadSnowMask() {
+  if (snowMaskTried_ || snowMaskFile_.empty()) return;
+  snowMaskTried_ = true;
+  snowMask_ = textures_->Get(snowMaskFile_);
+  if (!snowMask_) fprintf(stderr, "render: the snow's drift mask cannot be read (%s): the shelter is made without it\n", snowMaskFile_.c_str());
+}
+
+void Terrain::PrepareSnow() {
+  if (!map_ || !snowGround) return;
+  // the snow's materials: with the wet twins where the wet ground wants them and has not read them yet (Draw's first snow)
+  const bool twinsWanted = rainGround && richGround;
+  if (!snowTried_ && !snowFiles_[0][0].empty()) {
+    if (twinsWanted && !wetTried_) {
+      snowTried_ = wetTried_ = true;
+      ReadExtras(true, true);
+    } else {
+      SnowReady();
+    }
+  }
+  // the pipelines the snow is drawn with: dry, and wet where the map has twins (Draw's `kind`), each with its matt variant
+  const bool twins = twinsWanted && WetReady();
+  for (int wet = 0; wet <= (twins ? 1 : 0); ++wet)
+    if (SnowPipeline(wet) && mattGrazing) MattVariant(snowPipeline_[wet]);
+  if (heightTexture_ && ShelterPass()) ReadSnowMask();
+}
+
 bool Terrain::SnowShelter(gfx::Texture props) {
   if (!map_ || !heightTexture_) return false;
   const bool withMud = mudMask && MudMaskReady();
   if (shelter_ && withMud == shelterMud_) return true;
-  if (!shelterPass_) {
-    if (shelterTried_) return false;
-    shelterTried_ = true;
-    const std::string source = std::string(kViewShaderBlock) + kSnowShelter;
-    gfx::ComputeDesc cd;
-    cd.name = "terrain: the snow's shelter";
-    cd.source = source;
-    std::string error;
-    shelterPass_ = device_->CreateCompute(cd, &error);
-    if (!shelterPass_) {
-      fprintf(stderr, "render: the snow's shelter cannot be made: %s\n", error.c_str());
-      return false;
-    }
-  }
+  if (!ShelterPass()) return false;  // [snowhitch] (made ahead where the weather can snow: PrepareSnow)
   if (shelter_) device_->Destroy(shelter_);
   gfx::TargetDesc td;
   td.storage = true;
@@ -2568,12 +2597,7 @@ bool Terrain::SnowShelter(gfx::Texture props) {
   const float wind = std::sqrt(snowWind[0] * snowWind[0] + snowWind[1] * snowWind[1]);
   c.wind[0] = wind > 0 ? snowWind[0] / wind : 1.0f;
   c.wind[1] = wind > 0 ? snowWind[1] / wind : 0.0f;
-  // [snow mask] the map's drift mask, read the first time the shelter is made with it
-  if (!snowMaskTried_ && !snowMaskFile_.empty()) {
-    snowMaskTried_ = true;
-    snowMask_ = textures_->Get(snowMaskFile_);
-    if (!snowMask_) fprintf(stderr, "render: the snow's drift mask cannot be read (%s): the shelter is made without it\n", snowMaskFile_.c_str());
-  }
+  ReadSnowMask();  // [snow mask] the map's drift mask, read the first time the shelter is made with it ([snowhitch] or ahead)
   const bool withMask = snowMask_ && snowMaskStrength > 0;
   c.wind[2] = withMask ? snowMaskStrength : 0.0f;
   device_->SetPipeline(shelterPass_);

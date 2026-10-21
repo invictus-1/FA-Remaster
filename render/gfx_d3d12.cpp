@@ -210,12 +210,24 @@ struct TextureRec {
   uint32_t uav = 0;        // its first storage view, one per level (index into that heap)
 };
 
+struct BackgroundPipeline;
 struct PipelineRec {
   bool used = false;
   bool compute = false;
   Com<ID3D12PipelineState> state;
   D3D_PRIMITIVE_TOPOLOGY topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
   std::shared_ptr<PendingPipeline> pending;  // (asked for in a batch, not made yet)
+  std::shared_ptr<BackgroundPipeline> background;  // [snowhitch] (being made on the device's own thread, not taken yet)
+};
+
+// [snowhitch] A pipeline asked for between BeginBackgroundPipelines and EndBackgroundPipelines: what it is made from, how far
+// its making is (under the device's backgroundMutex_), and what was made.
+struct BackgroundPipeline {
+  enum Stage { Queued, Making, Made, NotMade };
+  std::shared_ptr<PendingPipeline> what;
+  Stage stage = Queued;
+  PipelineRec made;
+  std::string why;  // (NotMade: why; it is made again on the frames' thread, which says so)
 };
 
 // A ray tracing structure (gfx.h): its buffer, and for a geometry not built yet what it is built from; for a
@@ -293,6 +305,8 @@ class D3D12Device final : public Device {
   Pipeline CreateCompute(const ComputeDesc& desc, std::string* error) override;
   void BeginPipelineBatch() override;
   bool EndPipelineBatch(std::string* error) override;
+  void BeginBackgroundPipelines() override { backgroundAsked_ = dxil_ && !shaderCache_.empty(); }  // [snowhitch]
+  void EndBackgroundPipelines() override { backgroundAsked_ = false; }
   void Destroy(Buffer buffer) override;
   void Destroy(Texture texture) override;
   void Destroy(Pipeline pipeline) override;
@@ -449,8 +463,23 @@ class D3D12Device final : public Device {
   std::string batchError_;   // (the first that could not be made, in a batch)
   bool MakePipeline(const PipelineDesc& desc, PipelineRec* out, std::string* error);
   bool MakeCompute(const ComputeDesc& desc, PipelineRec* out, std::string* error);
+  // ([snowhitch] the two above, also on the device's own thread: `background` takes the shaders from the cache alone,
+  // compiling there what it lacks with a compiler of its own; the driver's time and whether the pipeline was kept go out)
+  bool MakePipelineWith(const PipelineDesc& desc, PipelineRec* out, std::string* error, bool background, double* driverMs, bool* kept);
+  bool MakeComputeWith(const ComputeDesc& desc, PipelineRec* out, std::string* error, bool background, double* driverMs, bool* kept);
   Pipeline Keep(PipelineRec rec);
   bool Realize(uint32_t index, std::string* error);
+  // [snowhitch] pipelines made on a thread of the device's own (BeginBackgroundPipelines): asked for, made there in turn,
+  // taken into their slot the first time one is set (TakeBackground: waited for, or made then if its turn has not come)
+  bool backgroundAsked_ = false;
+  std::thread backgroundThread_;
+  std::mutex backgroundMutex_;
+  std::condition_variable backgroundWake_, backgroundDone_;
+  std::deque<std::shared_ptr<BackgroundPipeline>> backgroundQueue_;
+  bool backgroundStop_ = false;
+  std::shared_ptr<BackgroundPipeline> AskBackground(std::shared_ptr<PendingPipeline> what);
+  void BackgroundWork();
+  void TakeBackground(uint32_t index);
 
   Com<IDXGIFactory4> factory_;
   Com<IDXGIAdapter3> adapter3_;  // (what the system counts of the card's memory this program uses)
@@ -600,6 +629,12 @@ class D3D12Device final : public Device {
 };
 
 D3D12Device::~D3D12Device() {
+  {  // [snowhitch] the thread making pipelines ahead: what it is making finished, the rest left
+    std::lock_guard<std::mutex> lock(backgroundMutex_);
+    backgroundStop_ = true;
+  }
+  backgroundWake_.notify_all();
+  if (backgroundThread_.joinable()) backgroundThread_.join();
   if (generating_) StopPresenter();
   if (queue_ && fence_) WaitIdle();
   pipelineStore_.Save();  // [hitches] (the pipelines made since the map opened, for the next run)
@@ -1974,22 +2009,42 @@ bool D3D12Device::CompileFxc(std::string_view source, const char* entry, const c
 }
 
 bool D3D12Device::MakePipeline(const PipelineDesc& desc, PipelineRec* out, std::string* error) {
+  return MakePipelineWith(desc, out, error, false, &driverMs_, &driverKept_);
+}
+
+bool D3D12Device::MakePipelineWith(const PipelineDesc& desc, PipelineRec* out, std::string* error, bool background, double* driverMs, bool* kept) {
   Com<ID3DBlob> vs, ps;
   const bool hasPixelShader = !desc.pixelSource.empty();
+  auto blob = [](const std::vector<uint8_t>& code, Com<ID3DBlob>& out) {
+    if (FAILED(D3DCreateBlob(code.size(), out.Put()))) return false;
+    std::memcpy(out->GetBufferPointer(), code.data(), code.size());
+    return true;
+  };
   // DXC's DXIL (shader model 6.0) where DXC is beside the program: it compiles the renderer's shaders in
   // well under half the time Direct3D's own compiler (FXC) takes (a first start 20-26 s against 9-11),
   // and the card runs them at least as fast. FXC for both of the pipeline's shaders where DXC cannot
   // make one of them.
   bool compiled = false;
-  if (dxil_) {
+  if (background) {  // [snowhitch] (on the device's own thread: from the cache, what it lacks compiled into it first)
+    std::vector<uint8_t> v, p;
+    const std::string vSource(desc.vertexSource), pSource(desc.pixelSource);
+    auto cached = [&] {
+      return CachedDxil(vSource, desc.vertexEntry, "vs", shaderCache_, &v) && (!hasPixelShader || CachedDxil(pSource, desc.pixelEntry, "ps", shaderCache_, &p));
+    };
+    if (!cached()) {
+      std::vector<ShaderJob> jobs = {{vSource, desc.vertexEntry, "vs"}};
+      if (hasPixelShader) jobs.push_back({pSource, desc.pixelEntry, "ps"});
+      PrewarmDxil(jobs, shaderCache_);
+    }
+    if (!cached() || !blob(v, vs) || (hasPixelShader && !blob(p, ps))) {
+      if (error) *error = std::string(desc.name) + ": its shaders could not be compiled on the device's own thread";
+      return false;
+    }
+    compiled = true;
+  } else if (dxil_) {
     std::vector<uint8_t> v, p;
     std::string why;
     bool missing = false;
-    auto blob = [](const std::vector<uint8_t>& code, Com<ID3DBlob>& out) {
-      if (FAILED(D3DCreateBlob(code.size(), out.Put()))) return false;
-      std::memcpy(out->GetBufferPointer(), code.data(), code.size());
-      return true;
-    };
     compiled = CompileDxil(std::string(desc.vertexSource), desc.vertexEntry, "vs", shaderCache_, &v, &why, &missing) &&
                (!hasPixelShader || CompileDxil(std::string(desc.pixelSource), desc.pixelEntry, "ps", shaderCache_, &p, &why, &missing)) &&
                blob(v, vs) && (!hasPixelShader || blob(p, ps));
@@ -2089,10 +2144,10 @@ bool D3D12Device::MakePipeline(const PipelineDesc& desc, PipelineRec* out, std::
   rec.used = true;
   rec.topology = desc.topology == Topology::Lines ? D3D_PRIMITIVE_TOPOLOGY_LINELIST : D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
   const auto driverStart = std::chrono::steady_clock::now();  // [hitches]
-  bool kept = false;  // [hitches] (made by the driver in an earlier run: gfx_d3d12_pipelines.h)
-  HRESULT hr = pipelineStore_.Graphics(device_.Get(), pd, rec.state.Put(), &kept);
-  driverMs_ = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - driverStart).count();
-  driverKept_ = kept;
+  bool keptNow = false;  // [hitches] (made by the driver in an earlier run: gfx_d3d12_pipelines.h)
+  HRESULT hr = pipelineStore_.Graphics(device_.Get(), pd, rec.state.Put(), &keptNow);
+  *driverMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - driverStart).count();
+  *kept = keptNow;
   if (FAILED(hr)) {
     char buf[160];
     snprintf(buf, sizeof buf, "%s: CreateGraphicsPipelineState failed (0x%08lx)", desc.name, static_cast<unsigned long>(hr));
@@ -2104,9 +2159,23 @@ bool D3D12Device::MakePipeline(const PipelineDesc& desc, PipelineRec* out, std::
 }
 
 bool D3D12Device::MakeCompute(const ComputeDesc& desc, PipelineRec* out, std::string* error) {
+  return MakeComputeWith(desc, out, error, false, &driverMs_, &driverKept_);
+}
+
+bool D3D12Device::MakeComputeWith(const ComputeDesc& desc, PipelineRec* out, std::string* error, bool background, double* driverMs, bool* kept) {
   Com<ID3DBlob> cs;
   bool compiled = false;
-  if (dxil_) {  // (DXC where it is beside the program, as for the drawing pipelines)
+  if (background) {  // [snowhitch] (as MakePipelineWith's)
+    std::vector<uint8_t> code;
+    const std::string source(desc.source);
+    if (!CachedDxil(source, desc.entry, "cs", shaderCache_, &code)) PrewarmDxil({{source, desc.entry, "cs"}}, shaderCache_);
+    if (!CachedDxil(source, desc.entry, "cs", shaderCache_, &code) || FAILED(D3DCreateBlob(code.size(), cs.Put()))) {
+      if (error) *error = std::string(desc.name) + ": its shader could not be compiled on the device's own thread";
+      return false;
+    }
+    std::memcpy(cs->GetBufferPointer(), code.data(), code.size());
+    compiled = true;
+  } else if (dxil_) {  // (DXC where it is beside the program, as for the drawing pipelines)
     std::vector<uint8_t> code;
     std::string why;
     bool missing = false;
@@ -2126,11 +2195,11 @@ bool D3D12Device::MakeCompute(const ComputeDesc& desc, PipelineRec* out, std::st
   cd.CS = {cs->GetBufferPointer(), cs->GetBufferSize()};
   PipelineRec rec;
   rec.used = rec.compute = true;
-  bool kept = false;  // [hitches] (as MakePipeline's)
+  bool keptNow = false;  // [hitches] (as MakePipeline's)
   const auto driverStart = std::chrono::steady_clock::now();
-  HRESULT hr = pipelineStore_.Compute(device_.Get(), cd, rec.state.Put(), &kept);
-  driverMs_ = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - driverStart).count();
-  driverKept_ = kept;
+  HRESULT hr = pipelineStore_.Compute(device_.Get(), cd, rec.state.Put(), &keptNow);
+  *driverMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - driverStart).count();
+  *kept = keptNow;
   if (FAILED(hr)) {
     char buf[160];
     snprintf(buf, sizeof buf, "%s: CreateComputePipelineState failed (0x%08lx)", desc.name, static_cast<unsigned long>(hr));
@@ -2162,6 +2231,12 @@ Pipeline D3D12Device::CreatePipeline(const PipelineDesc& desc, std::string* erro
     rec.pending = PendingPipeline::Of(desc);
     return Keep(std::move(rec));
   }
+  if (backgroundAsked_) {  // [snowhitch] (made on the device's own thread; taken the first time it is set)
+    rec.used = true;
+    rec.topology = desc.topology == Topology::Lines ? D3D_PRIMITIVE_TOPOLOGY_LINELIST : D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    rec.background = AskBackground(PendingPipeline::Of(desc));
+    return Keep(std::move(rec));
+  }
   HitchLog::Scope made("pipeline", desc.name);  // [hitches] (one made outside a batch: while the game runs)
   driverMs_ = 0;
   if (!MakePipeline(desc, &rec, error)) return {};
@@ -2174,6 +2249,11 @@ Pipeline D3D12Device::CreateCompute(const ComputeDesc& desc, std::string* error)
   if (batching_) {
     rec.used = rec.compute = true;
     rec.pending = PendingPipeline::Of(desc);
+    return Keep(std::move(rec));
+  }
+  if (backgroundAsked_) {  // [snowhitch]
+    rec.used = rec.compute = true;
+    rec.background = AskBackground(PendingPipeline::Of(desc));
     return Keep(std::move(rec));
   }
   HitchLog::Scope made("compute pipeline", desc.name);  // [hitches]
@@ -2192,6 +2272,95 @@ bool D3D12Device::Realize(uint32_t index, std::string* error) {
   const bool made = p->compute ? MakeCompute(p->computeDesc, &rec, error) : MakePipeline(p->desc, &rec, error);
   pipelines_[index] = made ? std::move(rec) : PipelineRec{};
   return made;
+}
+
+// [snowhitch] A pipeline to be made on the device's own thread (begun the first time one is asked for).
+std::shared_ptr<BackgroundPipeline> D3D12Device::AskBackground(std::shared_ptr<PendingPipeline> what) {
+  auto job = std::make_shared<BackgroundPipeline>();
+  job->what = std::move(what);
+  {
+    std::lock_guard<std::mutex> lock(backgroundMutex_);
+    backgroundQueue_.push_back(job);
+    if (!backgroundThread_.joinable()) backgroundThread_ = std::thread([this] { BackgroundWork(); });
+  }
+  backgroundWake_.notify_all();
+  return job;
+}
+
+// [snowhitch] The device's own thread: the pipelines asked for, made one after another in the order asked (the shader cache
+// and the kept pipelines are shared with the frames' thread under their own locks; Direct3D 12's device may be called from
+// any thread).
+void D3D12Device::BackgroundWork() {
+  for (;;) {
+    std::shared_ptr<BackgroundPipeline> job;
+    {
+      std::unique_lock<std::mutex> lock(backgroundMutex_);
+      backgroundWake_.wait(lock, [this] { return backgroundStop_ || !backgroundQueue_.empty(); });
+      if (backgroundStop_) return;
+      job = backgroundQueue_.front();
+      backgroundQueue_.pop_front();
+      job->stage = BackgroundPipeline::Making;
+    }
+    const PendingPipeline& what = *job->what;
+    HitchLog::Scope made(what.compute ? "compute pipeline made ahead" : "pipeline made ahead", what.name);  // [hitches] (elsewhere)
+    PipelineRec rec;
+    std::string why;
+    double ms = 0;
+    bool kept = false;
+    const bool ok = what.compute ? MakeComputeWith(what.computeDesc, &rec, &why, true, &ms, &kept) : MakePipelineWith(what.desc, &rec, &why, true, &ms, &kept);
+    if (HitchLog::on && ok) made.Append(" (the driver " + std::to_string(static_cast<int>(ms + 0.5)) + " ms" + (kept ? ", kept" : "") + ")");
+    made.End();
+    {
+      std::lock_guard<std::mutex> lock(backgroundMutex_);
+      job->made = std::move(rec);
+      job->why = why;
+      job->stage = ok ? BackgroundPipeline::Made : BackgroundPipeline::NotMade;
+    }
+    backgroundDone_.notify_all();
+  }
+}
+
+// [snowhitch] Pipeline `index`, asked for in the background, into its slot: as made there; waited for while it is being made;
+// made here, as it would have been when it was asked for, when its turn has not come yet or it could not be made there.
+void D3D12Device::TakeBackground(uint32_t index) {
+  std::shared_ptr<BackgroundPipeline> job = pipelines_[index].background;
+  bool here = false;
+  {
+    std::unique_lock<std::mutex> lock(backgroundMutex_);
+    if (job->stage == BackgroundPipeline::Queued) {
+      backgroundQueue_.erase(std::find(backgroundQueue_.begin(), backgroundQueue_.end(), job));
+      here = true;
+    } else {
+      const bool making = job->stage == BackgroundPipeline::Making;
+      const auto start = std::chrono::steady_clock::now();
+      backgroundDone_.wait(lock, [&] { return job->stage == BackgroundPipeline::Made || job->stage == BackgroundPipeline::NotMade; });
+      here = job->stage == BackgroundPipeline::NotMade;
+      if (HitchLog::on && making)  // [hitches] (wanted while it was being made: the frame waited)
+        HitchLog::Add("waited for a pipeline made ahead: " + job->what->name, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+    }
+  }
+  PipelineRec& rec = pipelines_[index];
+  if (!here) {
+    rec = std::move(job->made);
+    return;
+  }
+  const PendingPipeline& what = *job->what;
+  if (!job->why.empty()) fprintf(stderr, "render: Direct3D 12: %s; made on the frames' thread\n", job->why.c_str());
+  PipelineRec made;
+  std::string why;
+  {
+    HitchLog::Scope note(what.compute ? "compute pipeline" : "pipeline", what.name);  // [hitches] (as CreatePipeline's)
+    driverMs_ = 0;
+    const bool ok = what.compute ? MakeCompute(what.computeDesc, &made, &why) : MakePipeline(what.desc, &made, &why);
+    if (HitchLog::on && ok) note.Append(" (the driver " + std::to_string(static_cast<int>(driverMs_ + 0.5)) + " ms" + (driverKept_ ? ", kept" : "") + ")");
+    if (!ok) fprintf(stderr, "render: Direct3D 12: %s\n", why.c_str());
+  }
+  if (made.state) {
+    rec = std::move(made);
+  } else {  // (cannot be made: its handle draws nothing, as a batch's)
+    rec = PipelineRec{};
+    rec.used = true;
+  }
 }
 
 void D3D12Device::BeginPipelineBatch() {
@@ -2248,6 +2417,11 @@ void D3D12Device::Destroy(Texture texture) {
 void D3D12Device::Destroy(Pipeline pipeline) {
   PipelineRec* rec = Find(pipeline);
   if (!rec) return;
+  if (rec->background) {  // [snowhitch] (asked for in the background and not taken: not made, or let go of when made)
+    std::lock_guard<std::mutex> lock(backgroundMutex_);
+    auto at = std::find(backgroundQueue_.begin(), backgroundQueue_.end(), rec->background);
+    if (at != backgroundQueue_.end()) backgroundQueue_.erase(at);
+  }
   if (rec->state) Retire(rec->state.Get());
   *rec = PipelineRec{};
   freePipelines_.push_back(pipeline.id - 1);
@@ -2546,6 +2720,10 @@ void D3D12Device::SetPipeline(Pipeline pipeline) {
   if (rec && rec->pending) {  // (asked for in a batch and wanted before its end: made now)
     std::string why;
     if (!Realize(pipeline.id - 1, &why) && batchError_.empty()) batchError_ = why;
+    rec = Find(pipeline);
+  }
+  if (rec && rec->background) {  // [snowhitch] (made ahead on the device's own thread: taken now)
+    TakeBackground(pipeline.id - 1);
     rec = Find(pipeline);
   }
   if (!rec || !rec->state) return;

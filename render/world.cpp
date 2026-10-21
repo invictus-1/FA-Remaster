@@ -7,6 +7,7 @@
 #include "dds.h"
 
 #include <algorithm>
+#include <array>  // [snowhitch]
 #include <cmath>
 #include <cstdio>
 
@@ -335,6 +336,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     plantsReady_ = false;
     if (treeMask_) device_->Destroy(treeMask_);
     treeMask_ = {};
+    if (snowPropsAhead_.valid()) snowPropsAhead_.get();  // [snowhitch] (the last map's, being worked out ahead: let go of)
     if (snowProps_) device_->Destroy(snowProps_);  // [snow ground] (made again for this map's props when snow lies)
     snowProps_ = {};
     snowPropsMade_ = false;
@@ -628,13 +630,24 @@ void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation,
 // prop's footprint (its model's widest across, a tree's crown) and its height over the ground; nothing lower than a quarter
 // of a world unit, nor the streams' ribbons.
 gfx::Texture World::SnowProps() {
+  if (snowPropsAhead_.valid()) TakeSnowPropsAhead(true);  // [snowhitch] (being worked out ahead: waited for)
   if (snowPropsMade_ || !haveMap_) return snowProps_;
   snowPropsMade_ = true;
   const auto start = std::chrono::steady_clock::now();
   int w = 0, h = 0;
   terrain.SnowShelterSize(&w, &h);
-  std::vector<SnowProp> list;
   int trees = 0;
+  const std::vector<SnowProp> list = SnowPropList(&trees);
+  snowProps_ = SnowPropsRaster(device_, list, static_cast<float>(map.width), static_cast<float>(map.height), w, h, dust.wind);
+  const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+  printf("render: the snow's shelter: %zu props laid (%d trees), %dx%d, %.0f ms\n", list.size(), trees, w, h, ms);
+  return snowProps_;
+}
+
+// [snow ground] (the props' list SnowProps lays)
+std::vector<SnowProp> World::SnowPropList(int* trees) const {
+  std::vector<SnowProp> list;
+  *trees = 0;
   for (const PlacedProp& p : props_) {
     if (!p.model || (!p.model->lods.empty() && p.model->lods[0].stream)) continue;
     const float sx = Length(Vec3{p.world.m[0][0], p.world.m[1][0], p.world.m[2][0]});
@@ -644,13 +657,60 @@ gfx::Texture World::SnowProps() {
     if (height < 0.25f) continue;
     const float radius = 0.5f * std::max((p.model->boundsMax.x - p.model->boundsMin.x) * sx, (p.model->boundsMax.z - p.model->boundsMin.z) * sz);
     const bool tree = !p.model->lods.empty() && p.model->lods[0].sway > 0 && (p.model->boundsMax.y - p.model->boundsMin.y) * sy >= 1.5f;
-    trees += tree ? 1 : 0;
+    *trees += tree ? 1 : 0;
     list.push_back({p.world.m[0][3], p.world.m[2][3], height, tree ? radius : radius * 0.8f, tree});
   }
-  snowProps_ = SnowPropsRaster(device_, list, static_cast<float>(map.width), static_cast<float>(map.height), w, h, dust.wind);
-  const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
-  printf("render: the snow's shelter: %zu props laid (%d trees), %dx%d, %.0f ms\n", list.size(), trees, w, h, ms);
-  return snowProps_;
+  return list;
+}
+
+// [snowhitch] Whether snow may come in this game: falling or lying now, or the weather changing by itself in a climate whose
+// spells bring snow (the cold one's; an autumn map's temperate weather draws from the autumn climate, as AdvanceWeather).
+bool World::SnowAhead() const {
+  if (snow > 0 || snowLying > 0) return true;
+  const Climate climateNow = seasonOpen_ == Season::Autumn && climate == Climate::Temperate ? Climate::Autumn : climate;
+  return weatherAuto && ClimateSnows(climateNow);
+}
+
+// [snowhitch] (PrepareAhead, while snow may come and the snow ground is on) What the first snow made, made now, so that the
+// frame it begins in makes nothing (Chris's game, 2026-10-21: "froze for around 5-10 seconds right before it began to snow";
+// the viewer measured 7.7 s on a new build's pipelines: the ground's snow materials read again with the rest of its set 2.0 s,
+// the marks' two snow pipelines 3.0 s, the ground's snow pipeline and its matt variant 2.5 s, the props' raster 0.2 s):
+// the ground's (Terrain::PrepareSnow: its materials, pipelines, the shelter's pass and drift mask), the marks' and the pads'
+// snow pipelines, and the props' raster for the shelter, worked out on a thread of its own and made into its texture when
+// done. The shelter itself is still made the first frame snow lies (from the ground's heights as they are then, as before).
+void World::PrepareSnow() {
+  terrain.PrepareSnow();
+  decals.PrepareSnowGround();
+  if (decals.remasteredTarmacs) decals.tarmacs.PrepareSnow();
+  if (snowPropsAhead_.valid()) {
+    TakeSnowPropsAhead(false);
+  } else if (!snowPropsMade_ && terrain.SnowShelterWanted()) {
+    int w = 0, h = 0, trees = 0;
+    terrain.SnowShelterSize(&w, &h);
+    std::vector<SnowProp> list = SnowPropList(&trees);
+    snowPropsTrees_ = trees;
+    snowPropsCount_ = static_cast<int>(list.size());
+    snowPropsStart_ = std::chrono::steady_clock::now();
+    const float mapWidth = static_cast<float>(map.width), mapHeight = static_cast<float>(map.height);
+    const std::array<float, 2> wind = {dust.wind[0], dust.wind[1]};
+    snowPropsAhead_ = std::async(std::launch::async, [list = std::move(list), mapWidth, mapHeight, w, h, wind] {
+      return SnowPropsTexels(list, mapWidth, mapHeight, w, h, wind.data(), false);  // (the frames keep the cores' jobs)
+    });
+  }
+}
+
+// [snowhitch] The props' raster worked out ahead made into its texture once it is done (`wait`: waited for if not yet).
+void World::TakeSnowPropsAhead(bool wait) {
+  if (!snowPropsAhead_.valid()) return;
+  if (!wait && snowPropsAhead_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+  const std::vector<uint16_t> texels = snowPropsAhead_.get();
+  int w = 0, h = 0;
+  terrain.SnowShelterSize(&w, &h);
+  if (snowProps_) device_->Destroy(snowProps_);
+  snowProps_ = SnowPropsTexture(device_, texels, w, h);
+  snowPropsMade_ = true;
+  const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - snowPropsStart_).count();
+  printf("render: the snow's shelter: %d props laid (%d trees), %dx%d, %.0f ms ahead on a thread of its own\n", snowPropsCount_, snowPropsTrees_, w, h, ms);
 }
 
 // (volume explosions) An area's harm makes a blast's volume where it goes off on or near the ground or the water. Not a flak
@@ -2470,7 +2530,29 @@ void World::PrepareAhead() {
   if (surf && map.water.present) water.surf.PrepareSpray();
   if (litRain) falling.PrepareLit();
   if (rainSplashes) falling.PrepareSplashes();
-  if (rainGround) terrain.PrepareWet();
+  // [snowhitch] the snow's (before the wet ground's: its set read with the snow's) and the wet ground's, their pipelines made on
+  // the device's own thread while they are not wanted yet (gfx.h, BeginBackgroundPipelines: a new build's driver takes up to
+  // two seconds for each of these, which the first frame would wait for), at once when they are
+  if (snowGround && timeOfDay >= 0 && SnowAhead()) {
+    const bool now = snow > 0 || snowLying > 0;
+    if (!now) device_->BeginBackgroundPipelines();
+    PrepareSnow();
+    if (!now) device_->EndBackgroundPipelines();
+  }
+  if (rainGround) {
+    const bool now = rain > 0 || wet > 0;
+    if (!now) device_->BeginBackgroundPipelines();
+    terrain.PrepareWet();
+    if (!now) device_->EndBackgroundPipelines();
+  }
+  // [snowhitch] the low plants under the snow ([undersnow]: the models' nine pipelines with UNDER_SNOW, made the first frame the
+  // option is on with a time of day, as World::Render makes them): likewise on the device's own thread while no snow lies
+  if (plantsUnderSnow && timeOfDay >= 0) {
+    const bool now = snowLying > 0;
+    if (!now) device_->BeginBackgroundPipelines();
+    meshes.PrepareUnderSnow();
+    if (!now) device_->EndBackgroundPipelines();
+  }
 }
 
 // [plants] Plants that react (plants.h): what stands on the ground near the camera presses them (every model drawn that

@@ -453,6 +453,7 @@ struct TextureRec {
   std::vector<VkImageView> storageViews;  // storage targets: each level as compute shaders write it
 };
 
+struct BackgroundPipeline;
 struct PipelineRec {
   bool used = false;
   bool compute = false;
@@ -460,6 +461,17 @@ struct PipelineRec {
   const void* layout = nullptr;  // VulkanDevice::Layout
   bool depth = true;  // drawn with a depth attachment (Vulkan wants the pass to match)
   std::shared_ptr<PendingPipeline> pending;  // (asked for in a batch, not made yet)
+  std::shared_ptr<BackgroundPipeline> background;  // [snowhitch] (being made on the device's own thread, not taken yet)
+};
+
+// [snowhitch] A pipeline asked for between BeginBackgroundPipelines and EndBackgroundPipelines (as gfx_d3d12.cpp's): what it is
+// made from, how far its making is (under the device's backgroundMutex_), and what was made.
+struct BackgroundPipeline {
+  enum Stage { Queued, Making, Made, NotMade };
+  std::shared_ptr<PendingPipeline> what;
+  Stage stage = Queued;
+  PipelineRec made;
+  std::string why;
 };
 
 // A ray tracing structure (gfx.h): the structure, the buffer it lies in, and its device address (what an
@@ -512,6 +524,8 @@ class VulkanDevice final : public Device {
   Pipeline CreateCompute(const ComputeDesc& desc, std::string* error) override;
   void BeginPipelineBatch() override;
   bool EndPipelineBatch(std::string* error) override;
+  void BeginBackgroundPipelines() override { backgroundAsked_ = !shaderCache_.empty(); }  // [snowhitch]
+  void EndBackgroundPipelines() override { backgroundAsked_ = false; }
   void Destroy(Buffer buffer) override;
   void Destroy(Texture texture) override;
   void Destroy(Pipeline pipeline) override;
@@ -650,7 +664,7 @@ class VulkanDevice final : public Device {
   // driver's own cache is kept by program) and 3 ms after; kept here, a new build finds them made. The file is the
   // driver's (its header names the card and the driver's cache: another's is not given to it). Pictures are not changed.
   VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;
-  bool pipelineCacheGrew_ = false;
+  std::atomic<bool> pipelineCacheGrew_{false};  // ([snowhitch] also set on the device's own thread)
   void OpenPipelineCache();
   void SavePipelineCache();
 
@@ -814,10 +828,22 @@ class VulkanDevice final : public Device {
   std::vector<PipelineRec> pipelines_; // id = index + 1
   bool batching_ = false;   // pipelines asked for are made at EndPipelineBatch
   std::string batchError_;  // (the first that could not be made, in a batch)
-  bool MakePipeline(const PipelineDesc& desc, PipelineRec* out, std::string* error);
-  bool MakeCompute(const ComputeDesc& desc, PipelineRec* out, std::string* error);
+  bool MakePipeline(const PipelineDesc& desc, PipelineRec* out, std::string* error, bool background = false);
+  bool MakeCompute(const ComputeDesc& desc, PipelineRec* out, std::string* error, bool background = false);
   Pipeline Keep(const PipelineRec& rec);
   bool Realize(uint32_t index, std::string* error);
+  // [snowhitch] pipelines made on a thread of the device's own (BeginBackgroundPipelines; as gfx_d3d12.cpp's): MakePipeline and
+  // MakeCompute there with `background` (their shaders from the cache alone, compiled into it first with a compiler of that
+  // thread's own); the pipeline layouts are shared under layoutsMutex_
+  bool backgroundAsked_ = false;
+  std::thread backgroundThread_;
+  std::mutex backgroundMutex_, layoutsMutex_;
+  std::condition_variable backgroundWake_, backgroundDone_;
+  std::deque<std::shared_ptr<BackgroundPipeline>> backgroundQueue_;
+  bool backgroundStop_ = false;
+  std::shared_ptr<BackgroundPipeline> AskBackground(std::shared_ptr<PendingPipeline> what);
+  void BackgroundWork();
+  void TakeBackground(uint32_t index);
   std::vector<uint32_t> freeBuffers_, freeTextures_, freePipelines_;
 
   // ray tracing (where the card can): the structures, the geometry made since the last scene was built, the
@@ -861,6 +887,12 @@ class VulkanDevice final : public Device {
 };
 
 VulkanDevice::~VulkanDevice() {
+  {  // [snowhitch] the thread making pipelines ahead: what it is making finished, the rest left
+    std::lock_guard<std::mutex> lock(backgroundMutex_);
+    backgroundStop_ = true;
+  }
+  backgroundWake_.notify_all();
+  if (backgroundThread_.joinable()) backgroundThread_.join();
   if (!device_) {
     if (surface_) vkDestroySurfaceKHR(instance_, surface_, nullptr);
     if (instance_) vkDestroyInstance(instance_, nullptr);
@@ -909,8 +941,10 @@ VulkanDevice::~VulkanDevice() {
     for (VkImageView v : t.storageViews) vkDestroyImageView(device_, v, nullptr);
     if (t.image) vkDestroyImage(device_, t.image, nullptr);
   }
-  for (PipelineRec& p : pipelines_)
+  for (PipelineRec& p : pipelines_) {
     if (p.used && p.pipeline) vkDestroyPipeline(device_, p.pipeline, nullptr);
+    if (p.used && p.background && p.background->made.pipeline) vkDestroyPipeline(device_, p.background->made.pipeline, nullptr);  // [snowhitch]
+  }
   for (StructureRec& s : structures_) {
     if (s.used && s.structure) vkDestroyAccelerationStructureKHR(device_, s.structure, nullptr);
     if (s.used && s.buffer) vkDestroyBuffer(device_, s.buffer, nullptr);
@@ -2742,6 +2776,18 @@ void VulkanDevice::Destroy(Texture texture) {
 void VulkanDevice::Destroy(Pipeline pipeline) {
   PipelineRec* rec = Find(pipeline);
   if (!rec) return;
+  if (rec->background) {  // [snowhitch] (asked for in the background and not taken: not made; or made and its pipeline let go of)
+    std::unique_lock<std::mutex> lock(backgroundMutex_);
+    auto at = std::find(backgroundQueue_.begin(), backgroundQueue_.end(), rec->background);
+    if (at != backgroundQueue_.end()) {
+      backgroundQueue_.erase(at);
+    } else {
+      std::shared_ptr<BackgroundPipeline> job = rec->background;
+      backgroundDone_.wait(lock, [&] { return job->stage == BackgroundPipeline::Made || job->stage == BackgroundPipeline::NotMade; });
+      if (job->made.pipeline) Bin().pipelines.push_back(job->made.pipeline);
+      job->made.pipeline = VK_NULL_HANDLE;
+    }
+  }
   if (rec->pipeline) Bin().pipelines.push_back(rec->pipeline);
   *rec = PipelineRec{};
   freePipelines_.push_back(pipeline.id - 1);
@@ -2750,6 +2796,7 @@ void VulkanDevice::Destroy(Pipeline pipeline) {
 // --- pipelines ---
 
 const VulkanDevice::Layout* VulkanDevice::LayoutFor(const std::vector<SpirvImage>& images) {
+  std::lock_guard<std::mutex> lock(layoutsMutex_);  // [snowhitch] (pipelines are made on the device's own thread too)
   for (const auto& l : layouts_)
     if (l->images == images) return l.get();
   std::vector<VkDescriptorSetLayoutBinding> b;
@@ -2780,17 +2827,33 @@ const VulkanDevice::Layout* VulkanDevice::LayoutFor(const std::vector<SpirvImage
   return layouts_.back().get();
 }
 
-bool VulkanDevice::MakePipeline(const PipelineDesc& desc, PipelineRec* out, std::string* error) {
+bool VulkanDevice::MakePipeline(const PipelineDesc& desc, PipelineRec* out, std::string* error, bool background) {
   SpirvShader vs, ps;
   std::string why;
-  if (!CompileSpirv(std::string(desc.vertexSource), desc.vertexEntry, "vs", shaderCache_, &vs, &why)) {
-    if (error) *error = std::string(desc.name) + " (" + desc.vertexEntry + "): " + why;
-    return false;
-  }
   const bool hasPixelShader = !desc.pixelSource.empty();
-  if (hasPixelShader && !CompileSpirv(std::string(desc.pixelSource), desc.pixelEntry, "ps", shaderCache_, &ps, &why)) {
-    if (error) *error = std::string(desc.name) + " (" + desc.pixelEntry + "): " + why;
-    return false;
+  if (background) {  // [snowhitch] (on the device's own thread: from the cache, what it lacks compiled into it first)
+    const std::string vSource(desc.vertexSource), pSource(desc.pixelSource);
+    auto cached = [&] {
+      return CachedSpirv(vSource, desc.vertexEntry, "vs", shaderCache_, &vs) && (!hasPixelShader || CachedSpirv(pSource, desc.pixelEntry, "ps", shaderCache_, &ps));
+    };
+    if (!cached()) {
+      std::vector<ShaderJob> jobs = {{vSource, desc.vertexEntry, "vs"}};
+      if (hasPixelShader) jobs.push_back({pSource, desc.pixelEntry, "ps"});
+      PrewarmSpirv(jobs, shaderCache_);
+      if (!cached()) {
+        if (error) *error = std::string(desc.name) + ": its shaders could not be compiled on the device's own thread";
+        return false;
+      }
+    }
+  } else {
+    if (!CompileSpirv(std::string(desc.vertexSource), desc.vertexEntry, "vs", shaderCache_, &vs, &why)) {
+      if (error) *error = std::string(desc.name) + " (" + desc.vertexEntry + "): " + why;
+      return false;
+    }
+    if (hasPixelShader && !CompileSpirv(std::string(desc.pixelSource), desc.pixelEntry, "ps", shaderCache_, &ps, &why)) {
+      if (error) *error = std::string(desc.name) + " (" + desc.pixelEntry + "): " + why;
+      return false;
+    }
   }
   VkShaderModule modules[2] = {};
   auto module = [&](const SpirvShader& s, VkShaderModule* out) {
@@ -2940,7 +3003,7 @@ bool VulkanDevice::MakePipeline(const PipelineDesc& desc, PipelineRec* out, std:
   rec.layout = layout;
   rec.depth = desc.depthTarget;
   const VkResult r = vkCreateGraphicsPipelines(device_, pipelineCache_, 1, &pi, nullptr, &rec.pipeline);  // [hitches] (the kept ones)
-  pipelineCacheGrew_ = pipelineCacheGrew_ || r == VK_SUCCESS;
+  if (r == VK_SUCCESS) pipelineCacheGrew_ = true;
   for (VkShaderModule m : modules)
     if (m) vkDestroyShaderModule(device_, m, nullptr);
   if (r != VK_SUCCESS) {
@@ -2951,10 +3014,19 @@ bool VulkanDevice::MakePipeline(const PipelineDesc& desc, PipelineRec* out, std:
   return true;
 }
 
-bool VulkanDevice::MakeCompute(const ComputeDesc& desc, PipelineRec* out, std::string* error) {
+bool VulkanDevice::MakeCompute(const ComputeDesc& desc, PipelineRec* out, std::string* error, bool background) {
   SpirvShader cs;
   std::string why;
-  if (!CompileSpirv(std::string(desc.source), desc.entry, "cs", shaderCache_, &cs, &why)) {
+  if (background) {  // [snowhitch] (as MakePipeline's)
+    const std::string source(desc.source);
+    if (!CachedSpirv(source, desc.entry, "cs", shaderCache_, &cs)) {
+      PrewarmSpirv({{source, desc.entry, "cs"}}, shaderCache_);
+      if (!CachedSpirv(source, desc.entry, "cs", shaderCache_, &cs)) {
+        if (error) *error = std::string(desc.name) + ": its shader could not be compiled on the device's own thread";
+        return false;
+      }
+    }
+  } else if (!CompileSpirv(std::string(desc.source), desc.entry, "cs", shaderCache_, &cs, &why)) {
     if (error) *error = std::string(desc.name) + " (" + desc.entry + "): " + why;
     return false;
   }
@@ -2995,7 +3067,7 @@ bool VulkanDevice::MakeCompute(const ComputeDesc& desc, PipelineRec* out, std::s
   rec.used = rec.compute = true;
   rec.layout = layout;
   const VkResult r = vkCreateComputePipelines(device_, pipelineCache_, 1, &ci, nullptr, &rec.pipeline);  // [hitches] (the kept ones)
-  pipelineCacheGrew_ = pipelineCacheGrew_ || r == VK_SUCCESS;
+  if (r == VK_SUCCESS) pipelineCacheGrew_ = true;
   vkDestroyShaderModule(device_, module, nullptr);
   if (r != VK_SUCCESS) {
     if (error) *error = std::string(desc.name) + ": Vulkan made no compute pipeline: " + Result(r);
@@ -3025,6 +3097,12 @@ Pipeline VulkanDevice::CreatePipeline(const PipelineDesc& desc, std::string* err
     rec.pending = PendingPipeline::Of(desc);
     return Keep(rec);
   }
+  if (backgroundAsked_) {  // [snowhitch] (made on the device's own thread; taken the first time it is set)
+    rec.used = true;
+    rec.depth = desc.depthTarget;
+    rec.background = AskBackground(PendingPipeline::Of(desc));
+    return Keep(rec);
+  }
   HitchLog::Scope made("pipeline", desc.name);  // [hitches] (one made outside a batch: while the game runs)
   if (!MakePipeline(desc, &rec, error)) return {};
   return Keep(rec);
@@ -3035,6 +3113,11 @@ Pipeline VulkanDevice::CreateCompute(const ComputeDesc& desc, std::string* error
   if (batching_) {
     rec.used = rec.compute = true;
     rec.pending = PendingPipeline::Of(desc);
+    return Keep(rec);
+  }
+  if (backgroundAsked_) {  // [snowhitch]
+    rec.used = rec.compute = true;
+    rec.background = AskBackground(PendingPipeline::Of(desc));
     return Keep(rec);
   }
   HitchLog::Scope made("compute pipeline", desc.name);  // [hitches]
@@ -3051,6 +3134,90 @@ bool VulkanDevice::Realize(uint32_t index, std::string* error) {
   const bool made = p->compute ? MakeCompute(p->computeDesc, &rec, error) : MakePipeline(p->desc, &rec, error);
   pipelines_[index] = made ? rec : PipelineRec{};
   return made;
+}
+
+// [snowhitch] A pipeline to be made on the device's own thread (begun the first time one is asked for; as gfx_d3d12.cpp's).
+std::shared_ptr<BackgroundPipeline> VulkanDevice::AskBackground(std::shared_ptr<PendingPipeline> what) {
+  auto job = std::make_shared<BackgroundPipeline>();
+  job->what = std::move(what);
+  {
+    std::lock_guard<std::mutex> lock(backgroundMutex_);
+    backgroundQueue_.push_back(job);
+    if (!backgroundThread_.joinable()) backgroundThread_ = std::thread([this] { BackgroundWork(); });
+  }
+  backgroundWake_.notify_all();
+  return job;
+}
+
+// [snowhitch] The device's own thread: the pipelines asked for, made one after another in the order asked (the pipeline cache
+// is the driver's, which keeps it safe from several threads; the layouts are shared under their own lock).
+void VulkanDevice::BackgroundWork() {
+  for (;;) {
+    std::shared_ptr<BackgroundPipeline> job;
+    {
+      std::unique_lock<std::mutex> lock(backgroundMutex_);
+      backgroundWake_.wait(lock, [this] { return backgroundStop_ || !backgroundQueue_.empty(); });
+      if (backgroundStop_) return;
+      job = backgroundQueue_.front();
+      backgroundQueue_.pop_front();
+      job->stage = BackgroundPipeline::Making;
+    }
+    const PendingPipeline& what = *job->what;
+    HitchLog::Scope made(what.compute ? "compute pipeline made ahead" : "pipeline made ahead", what.name);  // [hitches] (elsewhere)
+    PipelineRec rec;
+    std::string why;
+    const bool ok = what.compute ? MakeCompute(what.computeDesc, &rec, &why, true) : MakePipeline(what.desc, &rec, &why, true);
+    made.End();
+    {
+      std::lock_guard<std::mutex> lock(backgroundMutex_);
+      job->made = rec;
+      job->why = why;
+      job->stage = ok ? BackgroundPipeline::Made : BackgroundPipeline::NotMade;
+    }
+    backgroundDone_.notify_all();
+  }
+}
+
+// [snowhitch] Pipeline `index`, asked for in the background, into its slot: as made there; waited for while it is being made;
+// made here, as it would have been when it was asked for, when its turn has not come yet or it could not be made there.
+void VulkanDevice::TakeBackground(uint32_t index) {
+  std::shared_ptr<BackgroundPipeline> job = pipelines_[index].background;
+  bool here = false;
+  {
+    std::unique_lock<std::mutex> lock(backgroundMutex_);
+    if (job->stage == BackgroundPipeline::Queued) {
+      backgroundQueue_.erase(std::find(backgroundQueue_.begin(), backgroundQueue_.end(), job));
+      here = true;
+    } else {
+      const bool making = job->stage == BackgroundPipeline::Making;
+      const auto start = std::chrono::steady_clock::now();
+      backgroundDone_.wait(lock, [&] { return job->stage == BackgroundPipeline::Made || job->stage == BackgroundPipeline::NotMade; });
+      here = job->stage == BackgroundPipeline::NotMade;
+      if (HitchLog::on && making)  // [hitches] (wanted while it was being made: the frame waited)
+        HitchLog::Add("waited for a pipeline made ahead: " + job->what->name, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+    }
+  }
+  PipelineRec& rec = pipelines_[index];
+  if (!here) {
+    rec = job->made;
+    return;
+  }
+  const PendingPipeline& what = *job->what;
+  if (!job->why.empty()) fprintf(stderr, "render: Vulkan: %s; made on the frames' thread\n", job->why.c_str());
+  PipelineRec made;
+  std::string why;
+  bool ok = false;
+  {
+    HitchLog::Scope note(what.compute ? "compute pipeline" : "pipeline", what.name);  // [hitches] (as CreatePipeline's)
+    ok = what.compute ? MakeCompute(what.computeDesc, &made, &why) : MakePipeline(what.desc, &made, &why);
+  }
+  if (!ok) fprintf(stderr, "render: Vulkan: %s\n", why.c_str());
+  if (ok) {
+    rec = made;
+  } else {  // (cannot be made: its handle draws nothing, as a batch's)
+    rec = PipelineRec{};
+    rec.used = true;
+  }
 }
 
 void VulkanDevice::BeginPipelineBatch() {
@@ -3415,6 +3582,10 @@ void VulkanDevice::SetPipeline(Pipeline pipeline) {
   if (rec && rec->pending) {  // (asked for in a batch and wanted before its end: made now)
     std::string why;
     if (!Realize(pipeline.id - 1, &why) && batchError_.empty()) batchError_ = why;
+    rec = Find(pipeline);
+  }
+  if (rec && rec->background) {  // [snowhitch] (made ahead on the device's own thread: taken now)
+    TakeBackground(pipeline.id - 1);
     rec = Find(pipeline);
   }
   if (!rec || !rec->pipeline || !inFrame_) return;

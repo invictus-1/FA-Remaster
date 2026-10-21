@@ -326,6 +326,14 @@ const char* WeatherKindName(int kind) {
 
 WeatherNow WeatherKindOf(int kind) { return kKinds[std::clamp(kind, 0, WeatherKindCount() - 1)].weather; }
 
+bool ClimateSnows(Climate climate) {  // [snowhitch]
+  for (const Kind& k : kKinds) {
+    const int share = climate == Climate::Cold ? k.cold : climate == Climate::Dry ? k.dry : climate == Climate::Autumn ? k.autumn : k.temperate;
+    if (share > 0 && k.weather.snow > 0) return true;
+  }
+  return false;
+}
+
 float AutumnMorningFog(uint32_t seed, float hour) {
   auto rise = [](float from, float to, float h) {
     const float t = std::clamp((h - from) / (to - from), 0.0f, 1.0f);
