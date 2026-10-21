@@ -3,6 +3,51 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 46: keep the session's rules state for the interface — done (7e001be)
+
+As you sketched it, in `sim/sim.h`:
+```cpp
+bool keepRules = false;                                          // set before Start
+std::unique_ptr<ScriptState> TakeRules() { return std::move(rules_); }  // nullptr: not kept, or taken
+```
+`Start` frees the rules state after the blueprints' copy into the sim's state (`bps_.CopyToSim`) only when
+`keepRules` is off. With it on, the state stays alive until you take it. After the fixes' reload (ui REQUESTS 35,
+`RulesFixesWanted`) it is that reloaded state, so your copy matches the sim's by construction. Nothing of the
+sim's state is in it. Take it on your thread once `Start` is done (after FinishLoad's wait), copy what you need,
+and free it. While it is kept, it only costs memory. The 16 gate replays are unchanged (keepRules is off there).
+
+## ui (by message, 2026-10-21 08:11): the sync's tick, and the beat the commander becomes selectable — answered (no change)
+
+Follow-up to ui 18. Both answers are read from the exe. Neither side is off by one, so leave the interface's
+GameTick() as it is.
+
+**(1) The sync of beat k carries k: the same value the sim's GetGameTick() returned during beat k, not k + 1.**
+- The tick counter is `sim+0x900`. The only place that raises it is `Sim::AdvanceBeat` 0x749f40, near its start
+  (0x749fe3 `add [ebp+0x900], 1`), before the beat's stages and threads run. The other accessors only read it,
+  apart from the ctor (0x7435c4) and OnCommandSourceTerminated (0x74870c).
+- The sim's `GetGameTick` (0x75a860 -> 0x75a8e0) pushes `sim+0x900` (0x75a911).
+- The sync filler (0x747595, called after AdvanceBeat) writes `+8 = sim+0x900` (0x747616 / 0x74761c), with no change
+  in between. The user side's GameTick() reads that copy (DoBeat 0x8945a3 -> session+0x458, user GameTick 0x8be420).
+- Ours is the same: `Sim::Tick` raises `tick_` first (sim.cpp, `++tick_` after RecorderBeat). `GetGameTick` returns
+  `tick()`. After the beat the host reads `Sim::tick()` = k.
+
+**(2) SetUnSelectable(false) runs in beat 52 in both.**
+- During that beat the sim's GetGameTick() returns 52. The sync after that beat says tick 52 with the commander free,
+  so the interface's GameTick() is 52 when the commander first shows selectable. That matches what your host shows.
+- The original's own recording of the skirmish replay has the commander UnSelectable on beats 31 to 51 and free on
+  52. Ours is the same (ui 18).
+
+**So FAF's opening is a race in the original as well.** The loop gives up once GameTick() > 50, and the commander is
+selectable from 52 on, so a try can only succeed when one 0.1 s round steps over tick 51. Your change to the
+controls' frame (after the threads, as CScApp::Main) moves the tries' phase, not a tick. Two ways on your side,
+both yours to choose:
+- Keep the original's behaviour, race included.
+- Or treat it as a broken script under Chris's rule for those (a user-side hook behind `fixes`, listed in
+  docs/deviations.md, and tell Chris). Example: let the loop wait until the commander can be selected.
+
+An oracle probe is not needed for (1) or (2); the code settles both. A user-side probe in the original would only show
+one sample of the race's phase. If you want its odds, say so and I'll queue it with the next hold.
+
 ## ui 45: a unit's live intel words in UnitView, and the no-rush circle's data — done (98f3324, view only)
 
 Both are in `sim/sim_view.h`. The simulation is unchanged (the 13 + bench, MP2, MP3 and an MP1 cut are as before).
