@@ -26,6 +26,17 @@ struct ArmyView {
   int armyColor = 0, playerColor = 0;
   int rgb[3] = {-1, -1, -1};
   std::vector<int> alliance;  // towards each army, by index - 1: 0 enemy, 1 neutral, 2 ally
+  // ui request 45: the army's start (SetArmyStart / GenerateArmyStart: the original's army+0x1c4 / +0x1c8, x and
+  // z) and its no-rush circle, as the user side's army holds them (+0x1bc .. +0x1d0, a copy of the sim army's
+  // +0x1c4 .. +0x1d8). noRushTicks: the no-rush timer in beats now (the same number as CAiBrain:GetNoRushTicks;
+  // 0 when off or run out); noRushRadius: ScenarioInfo.norushradius (100 when the map gives none);
+  // noRushOffset: ScenarioInfo.norushoffsetX_<army name> and norushoffsetY_<army name> (both 0 unless both are
+  // given). The original draws the circle (ExtractFocusArmyNoRushRange 0x7ef1c0) for the focus army only while
+  // noRushTicks > 0, around (start[0] + noRushOffset[0], 0, noRushOffset[1] + start[1]) with noRushRadius.
+  float start[2] = {0, 0};
+  int noRushTicks = 0;
+  float noRushRadius = 0;
+  float noRushOffset[2] = {0, 0};
 };
 
 // One army's totals, [0] energy, [1] mass. The rates are per beat (ten beats a second), as the engine keeps them.
@@ -137,6 +148,21 @@ struct UnitView {
   // All 0 for a unit that never had a scroller.
   float scrollPrev[2] = {0, 0};
   float scroll[2] = {0, 0};
+  // ui request 45: its intel attributes as the simulation holds them (the original's EntityAttributes,
+  // entity+0x128, which the user side reads at UserEntity+0x100). Eight words, each a radius in the low 31 bits
+  // and bit 31 = enabled: [0] Vision, [1] WaterVision, [2] Radar, [3] Sonar, [4] Omni, [5] RadarStealth,
+  // [6] SonarStealth, [7] Cloak; [5] .. [7] hold the radar stealth, sonar stealth and cloak FIELD radii.
+  // At the unit's creation each word is its blueprint's radius (Intel.VisionRadius .. OmniRadius,
+  // RadarStealthFieldRadius, SonarStealthFieldRadius, CloakFieldRadius) with bit 31 set when the radius is not 0
+  // (EntityAttributes::Initialize 0x6a46a0); then InitIntel / SetIntelRadius change the radius (keeping the bit)
+  // and EnableIntel / DisableIntel the bit, for these kinds (Jammer, Spoof and the '...Field' kinds have no word).
+  // The original's interface reads them so (radius = word & 0x7fffffff; the enabled bit is not looked at):
+  //   UserUnit::GetIntelRanges 0x8bfd70: omni [4], radar [2], sonar [3]; nothing when the unit has the live
+  //     toggle cap 8 (RULEUTC_IntelToggle) and that toggle is on: toggleCaps & 8 and UnitStateView::scriptBits & 8
+  //     (the user side's unit attributes +0x64 / +0x70, the sim unit's +0x48c / +0x498);
+  //   UserUnit::GetMaxCounterIntel 0x8bfe50: the largest of [7], [6], [5], the blueprint's Intel.JamRadius.Max and
+  //     Intel.SpoofRadius.Max; nothing when toggle 4 (Jamming) or 0x20 (Stealth) is held so in the same way.
+  uint32_t intel[8] = {0, 0, 0, 0, 0, 0, 0, 0};
   // ui request 37. categoryIndex: its blueprint's bit in the simulation's category sets (what CategorySetHas takes;
   // the original's REntityBlueprint+0x5c, which UserUnit::CanAttackTarget 0x8c0d30 looks up in a weapon's sets,
   // 0x8c1115 / 0x8c115f); -1 = none. The interface state's own blueprint numbering may differ: use this one.

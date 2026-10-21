@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstring>
 
+#include "sim/ai_brain.h"
 #include "sim/blueprints.h"
 #include "sim/build.h"
 #include "sim/combat.h"
@@ -34,6 +35,9 @@ std::vector<ArmyView> ArmyViews(const Sim& sim) {
     v.playerColor = a->playerColor;
     for (int i = 0; i < 3; ++i) v.rgb[i] = a->rgb[i];
     v.alliance = a->alliance;
+    v.start[0] = a->startX;
+    v.start[1] = a->startZ;
+    NoRushOf(sim, a->index - 1, &v.noRushTicks, &v.noRushRadius, &v.noRushOffset[0], &v.noRushOffset[1]);
     out.push_back(std::move(v));
   }
   return out;
@@ -123,6 +127,7 @@ void UnitViews(const Sim& sim, std::vector<UnitView>* out) {
     v.creator = idOf(u->creatorId);
     v.hasShield = std::binary_search(shielded.begin(), shielded.end(), EntityRef(u));
     v.shieldRatio = u->shieldRatio;
+    for (int i = 0; i < 8; ++i) v.intel[i] = u->intelAttr[i];
     v.id = u->id;
     if (u->blueprint) v.blueprint = u->blueprint->id;
     v.army = u->army ? u->army->index : 0;

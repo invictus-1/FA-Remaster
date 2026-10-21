@@ -58,6 +58,8 @@ struct BrainState {
   std::vector<AttackVector> vectors;   // brain+0x5c
   std::vector<uint64_t> vectorCat;     // brain+0x70 (an EntityCategory copy; empty: none set yet)
   int noRushStart = 0;                 // army+0x1cc as the army ctor left it
+  // the no-rush circle's (army+0x1d0 the radius, +0x1d4 / +0x1d8 the offsets in x / z), for the view only
+  float noRushRadius = 0, noRushOffX = 0, noRushOffZ = 0;
 };
 std::vector<BrainState> g_state;  // by 0-based army index
 
@@ -777,18 +779,59 @@ void InitBrainState(Sim& sim) {
   if (!L) return;
   const int top = lua_gettop(L);
   int ticks = 0;
+  bool option = false;
   lua_getglobal(L, "ScenarioInfo");
+  const int si = lua_gettop(L);
   if (lua_istable(L, -1)) {
     lua_pushstring(L, "Options");
     lua_gettable(L, -2);
     if (lua_istable(L, -1)) {
       lua_pushstring(L, "NoRushOption");
       lua_gettable(L, -2);
-      if (!lua_isnil(L, -1)) ticks = NoRushTicksOf(lua_tostring(L, -1));  // (LuaObject::GetString)
+      if (!lua_isnil(L, -1)) {
+        option = true;
+        ticks = NoRushTicksOf(lua_tostring(L, -1));  // (LuaObject::GetString)
+      }
     }
   }
+  // With the option given, the ctor also reads (0x6ff47d..0x6ff643) ScenarioInfo.norushradius (100 when nil) and
+  // ScenarioInfo.norushoffsetX_<army name> / norushoffsetY_<army name> (both 0 unless both are given). Without it
+  // the three are never written (taken as 0 here; the circle is drawn only while the timer runs).
+  auto field = [&](const std::string& k, float* out) {
+    if (!lua_istable(L, si)) return false;
+    lua_pushstring(L, k.c_str());
+    lua_gettable(L, si);
+    const bool given = !lua_isnil(L, -1);
+    if (given) *out = static_cast<float>(lua_tonumber(L, -1));  // LuaObject::GetNumber 0x907a30
+    lua_pop(L, 1);
+    return given;
+  };
+  float radius = 0.0f;
+  if (option && !field("norushradius", &radius)) radius = 100.0f;  // 0xe4f744
+  for (size_t i = 0; i < g_state.size(); ++i) {
+    BrainState& st = g_state[i];
+    st.noRushStart = ticks;
+    if (!option) continue;
+    st.noRushRadius = radius;
+    float ox = 0.0f, oz = 0.0f;
+    const std::string& n = sim.armies()[i]->name;
+    if (!field("norushoffsetX_" + n, &ox) || !field("norushoffsetY_" + n, &oz)) ox = oz = 0.0f;
+    st.noRushOffX = ox;
+    st.noRushOffZ = oz;
+  }
   lua_settop(L, top);
-  for (BrainState& st : g_state) st.noRushStart = ticks;
+}
+
+bool NoRushOf(const Sim& sim, int army, int* ticks, float* radius, float* offX, float* offZ) {
+  if (army < 0 || static_cast<size_t>(army) >= g_state.size()) return false;
+  const BrainState& st = g_state[static_cast<size_t>(army)];
+  long long v = st.noRushStart;  // as GetNoRushTicks counts it between beats
+  if (v > 0) v = std::max<long long>(v - static_cast<long long>(sim.tick()), 0);
+  *ticks = static_cast<int>(v);
+  *radius = st.noRushRadius;
+  *offX = st.noRushOffX;
+  *offZ = st.noRushOffZ;
+  return true;
 }
 
 void RegisterBrainBindings(lua_State* L) {

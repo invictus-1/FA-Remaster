@@ -24,6 +24,10 @@ class Sim;
 // after the armies exist and ScenarioInfo.Options is set, before the brains' OnCreateArmyBrain.
 void InitBrainState(Sim& sim);
 
+// The view's no-rush circle of the 0-based army (ui request 45): the timer in beats as GetNoRushTicks gives it now,
+// the radius and the offsets in x and z (the original's army+0x1cc .. +0x1d8). False for no such army.
+bool NoRushOf(const Sim& sim, int army, int* ticks, float* radius, float* offX, float* offZ);
+
 // The CAiBrain methods listed above.
 void RegisterBrainBindings(lua_State* L);
 

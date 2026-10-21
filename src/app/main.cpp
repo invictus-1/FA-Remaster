@@ -189,6 +189,8 @@ void LogView(Sim& sim, size_t syncBeats, size_t syncBytes, const std::string& la
          a.index, a.name.c_str(), a.nickname.c_str(), a.faction, a.human ? " human" : "", a.civilian ? " civilian" : "",
          a.armyColor, a.playerColor, a.rgb[0], a.rgb[1], a.rgb[2], e.stored[1], e.maxStorage[1], e.income[1],
          e.lastUseActual[1], e.stored[0], e.maxStorage[0], e.income[0], e.lastUseActual[0]);
+    Logf(LogLevel::Info, "view: army %d start %.1f %.1f no-rush %d beats radius %.1f offset %.1f %.1f", a.index, a.start[0],
+         a.start[1], a.noRushTicks, a.noRushRadius, a.noRushOffset[0], a.noRushOffset[1]);
   }
   std::vector<UnitView> units;
   UnitViews(sim, &units);
@@ -198,6 +200,8 @@ void LogView(Sim& sim, size_t syncBeats, size_t syncBytes, const std::string& la
     Logf(LogLevel::Info, "view: unit %#x %s army %d at %.1f %.1f %.1f health %.0f/%.0f built %.2f queue %d%s%s", u.id,
          u.blueprint.c_str(), u.army, u.position[0], u.position[1], u.position[2], u.health, u.maxHealth,
          u.fractionComplete, u.queueLength, u.selectable ? "" : " unselectable", u.dead ? " dead" : "");
+    Logf(LogLevel::Info, "view: unit %#x intel %#x %#x %#x %#x %#x %#x %#x %#x", u.id, u.intel[0], u.intel[1], u.intel[2],
+         u.intel[3], u.intel[4], u.intel[5], u.intel[6], u.intel[7]);
   }
   {  // the units' weapons (ui request 37): how many, the shared category sets, and two armed units' weapons
     auto t0 = std::chrono::steady_clock::now();

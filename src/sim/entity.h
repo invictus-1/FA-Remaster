@@ -113,6 +113,11 @@ class Entity : public ScriptObject {
   // dead or queued for destruction (0x67a190). Its size is what DesiredShooterCap is compared with.
   std::vector<uint32_t> shooters;
   std::shared_ptr<EntityIntel> intel;  // intel circles (sim/intel.cpp; InitIntel / unit blueprints)
+  // The original's EntityAttributes (entity+0x128, synced to the user side's UserEntity+0x100): eight words, a
+  // radius each (low 31 bits) with bit 31 = enabled, for Vision, WaterVision, Radar, Sonar, Omni, RadarStealth,
+  // SonarStealth, Cloak (the last three hold the stealth / cloak FIELD radii). Only for the view: the sim reads
+  // its circles (EntityIntel). Writers in sim/intel.cpp (IntelAttrSlot).
+  uint32_t intelAttr[8] = {0, 0, 0, 0, 0, 0, 0, 0};
   // the entity grid (sim/entity_grid.h): its cell span (w or h 0: in no cell), the dedup mark
   uint16_t gridX0 = 0, gridZ0 = 0, gridW = 0, gridH = 0;
   bool gridMark = false;

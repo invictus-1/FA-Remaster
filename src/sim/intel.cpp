@@ -91,6 +91,32 @@ void Viz(IntelHandle& h, int slot, int delta) {
   }
 }
 
+// The EIntel kind t's word in Entity::intelAttr, -1 = none: 1..5 (Vision..Omni) -> t - 1, 12 RadarStealth -> 5,
+// 13 SonarStealth -> 6, 11 Cloak -> 7; the fields (6..8), Jammer and Spoof have none (the jump tables of
+// EntityAttributes::SetIntelRadius 0x5bd470 / GetRange 0x5bd530, EnableIntel 0x68e202, DisableIntel 0x68e4a5).
+int IntelAttrSlot(int t) {
+  if (t >= 1 && t <= 5) return t - 1;
+  if (t == 12) return 5;
+  if (t == 13) return 6;
+  if (t == 11) return 7;
+  return -1;
+}
+// The exe's units always hold a CIntel (Unit::Unit 0x6a5860), so the attribute words of a unit change even when it
+// has no circle of that kind; another entity needs InitIntel first ("... called before InitIntel" otherwise).
+bool HasCIntel(const Entity* e) { return e->intel || dynamic_cast<const Unit*>(e) != nullptr; }
+// SetIntelRadius / InitIntel's word: the radius in the low bits, the enabled bit kept (0x5bd477..: and 0x80000000,
+// or)
+void SetAttrRadius(Entity* e, int t, uint32_t R) {
+  const int s = IntelAttrSlot(t);
+  if (s >= 0) e->intelAttr[s] = (e->intelAttr[s] & 0x80000000u) | R;
+}
+void SetAttrEnabled(Entity* e, int t, bool on) {
+  const int s = IntelAttrSlot(t);
+  if (s < 0) return;
+  if (on) e->intelAttr[s] |= 0x80000000u;   // 0x68e209..0x68e25d
+  else e->intelAttr[s] &= 0x7fffffffu;      // 0x68e4ac..0x68e500
+}
+
 EntityIntel& IntelOf(Entity* e) {
   if (!e->intel) {
     e->intel = std::make_shared<EntityIntel>();
@@ -587,6 +613,9 @@ void CreateUnitIntel(Sim& sim, lua_State* L, Unit* u) {
   for (int s = 1; s <= 8; ++s) {
     float r = lu::Num(L, intel, radii[s], 0);
     uint32_t R = r > 0 ? static_cast<uint32_t>(r) : 0;
+    // EntityAttributes::Initialize 0x6a46a0 (Unit::Unit 0x6a5786): the words from the blueprint's Vision ..
+    // Omni radii (Intel+0x00..+0x10) and the three field radii (Intel+0x18..+0x20), enabled when not 0
+    u->intelAttr[s - 1] = R != 0 ? (R | 0x80000000u) : 0u;
     if (R == 0) continue;
     if (!ei) ei = &IntelOf(u);
     IntelHandle& h = ei->h[s];
@@ -785,13 +814,14 @@ int l_InitIntel(lua_State* L) {
   Army* army = sim.GetArmy(L, 2);
   int t = TypeArg(L, 3);
   EntityIntel& ei = IntelOf(e);
+  uint32_t R = 0;
+  if (lua_isnumber(L, 4)) {
+    double r = lua_tonumber(L, 4);
+    R = r > 0 ? static_cast<uint32_t>(r) : 0;
+  }
+  if (t >= 1 && t <= 8 && lua_isnumber(L, 4) && R == 0) return luaL_error(L, "InitIntel: radius rounds to 0");
+  SetAttrRadius(e, t, R);  // 0x68ece3..0x68ecf9, for every kind (the view's words only)
   if (t >= 1 && t <= 8) {
-    uint32_t R = 0;
-    if (lua_isnumber(L, 4)) {
-      double r = lua_tonumber(L, 4);
-      R = r > 0 ? static_cast<uint32_t>(r) : 0;
-      if (R == 0) return luaL_error(L, "InitIntel: radius rounds to 0");
-    }
     IntelHandle& h = ei.h[t];
     Viz(h, t, -1);
     h = IntelHandle{};
@@ -809,6 +839,7 @@ int l_InitIntel(lua_State* L) {
 int l_EnableIntel(lua_State* L) {
   Entity* e = CheckObject<Entity>(L, 1);
   int t = TypeArg(L, 2);
+  if (HasCIntel(e)) SetAttrEnabled(e, t, true);
   if (!e->intel) return 0;
   EntityIntel& ei = *e->intel;
   if (t <= 8) {
@@ -825,6 +856,7 @@ int l_EnableIntel(lua_State* L) {
 int l_DisableIntel(lua_State* L) {
   Entity* e = CheckObject<Entity>(L, 1);
   int t = TypeArg(L, 2);
+  if (HasCIntel(e)) SetAttrEnabled(e, t, false);
   if (!e->intel) return 0;
   EntityIntel& ei = *e->intel;
   if (t <= 8) {
@@ -851,6 +883,7 @@ int l_SetIntelRadius(lua_State* L) {
   int t = TypeArg(L, 2);
   double r = luaL_checknumber(L, 3);
   uint32_t R = r > 0 ? static_cast<uint32_t>(r) : 0;
+  if (HasCIntel(e)) SetAttrRadius(e, t, R);  // 0x68e76a..0x68e77a, with or without a circle of that kind
   if (!e->intel || t > 8) return 0;
   IntelHandle& h = e->intel->h[t];
   if (!h.exists || h.radius == R) return 0;
