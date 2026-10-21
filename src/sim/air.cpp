@@ -2444,7 +2444,11 @@ void FuelTick(Sim& sim, Unit* u) {
         }
       }
     }
-    if (m.refuelFlag && old > 0.99f && !(u->health < u->maxHealth)) ClearRepairRequest(u);
+    // (the damaged flag is the one taken before this beat's repair, 0x6b9a77 -> [esp+0x13], tested again at
+    // 0x6b9c5d: the beat that heals the unit to full keeps the request, the next one drops it. Seen: MP1 8158, army
+    // 1's fighter 0x8e (uaa0303) on a staging platform; its 30 E repair request still counts in the share-out of 8158
+    // in the original; ours dropped it a beat early.)
+    if (m.refuelFlag && old > 0.99f && !damaged) ClearRepairRequest(u);
     nv = rate + old;
     if (nv > 1.0f) nv = 1.0f;
     if (old == 0 && nv > 0) FuelCallback(sim, u, "OnGotFuel");
