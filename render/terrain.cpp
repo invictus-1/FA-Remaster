@@ -2653,6 +2653,7 @@ void Terrain::Draw(const View& view, bool shadowPass) {
   const bool wetLaid = !shadowPass && modern && rainGround && richGround && WetReady() && view.constants.weather[0] > 0;
   const int kind = wetLaid ? 1 : 0;
   const bool snowLaid = snowing && shelter_ && SnowPipeline(kind);
+  if (!shadowPass) snowLaidNow_ = snowLaid, snowMaterialsNow_ = false;  // [decalsnow]
   const bool more = snowLaid || ((mudLaid || wetLaid) && MorePipeline(kind));
   const bool split = more && !wetLaid && !snowLaid && patchMud_.size() == patches_.size();
   c.mudInfo[0] = mud ? 1.0f : 0.0f;
@@ -2669,6 +2670,7 @@ void Terrain::Draw(const View& view, bool shadowPass) {
   }
   if (snowLaid) {  // [snow ground]
     const bool materials = snowMade && materials_ && wetNormals_;
+    snowMaterialsNow_ = materials;  // [decalsnow]
     const float size = SnowSize(0);
     c.snowInfo[0] = materials ? 1.0f : 0.0f;
     c.snowInfo[1] = 1 / size;

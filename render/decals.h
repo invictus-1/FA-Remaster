@@ -77,6 +77,23 @@ class Decals {
   bool modernRelief = false;
   void SetModernRelief(bool on);  // (each frame: its shader made the first time it is on)
   int plainNormals = 0;           // (the last Draw: normal decals taken as plain normal maps)
+  // [decalsnow] The snow ground (World::snowGround; terrain.h, Terrain::SnowShelterLaid): while the ground lays its snow from
+  // its shelter and materials, a mark lays none of its own. Where the snow lies over a mark (laid before the snow, or covered
+  // by new snow since), the mark thins out by as much as lies there, so that the ground's own snow shows through it -
+  // sheltered under trees, drifted, textured by its materials - and the mark itself is lit bare; the snow over it reckoned as
+  // the ground's (deeper in the lee and hollows, thinner and patchier under trees, on steep, windward and scoured ground: the
+  // shelter's and the wind's numbers, terrain.cpp's SnowAround), and so is the relief's softening under it (modernRelief).
+  // Before, a mark laid the one constant snow colour over its whole picture, which showed as its shape on the ground's snow.
+  // Set by the world each frame before Draw; no shelter: as before.
+  struct SnowGround {
+    gfx::Texture shelter;           // (none: the ground lays no snow of its own now)
+    float wind[2] = {1, 0};         // the way the wind blows (as Terrain::snowWind)
+    float tune[4] = {1, 1, 1, 1};   // Terrain::snowTune
+    bool materials = false;         // the snow's materials drawn (the ground's wider, mottled margin)
+    float mapWidth = 0, mapHeight = 0;
+  } snowGround;
+  // (the snow ground's pipelines, made the first time a shelter is given: before the scene's pass)
+  void PrepareSnowGround();
   int mostScars = 2000;
   float scarWeathering = 600, scarFloor = 0.5f;
   int Scars() const { return scars_; }  // (scars there now, the ones fading out included)
@@ -205,6 +222,9 @@ class Decals {
   bool Plain(uint32_t texture);
   gfx::Pipeline normalsModern_;
   bool reliefTried_ = false;
+  // [decalsnow] the pictures' and the relief's pipelines with the snow ground's (DECAL_SNOW_GROUND), made the first time
+  gfx::Pipeline picturesSnow_, normalsModernSnow_;
+  bool snowTried_ = false, reliefSnowTried_ = false;
   float snowFallen_ = 2;    // all the snow that ever fell, in coverings of a mark (it only grows)
   double snowClock_ = -1;   // when it was last moved on
   bool settled_ = false;    // false until the first frame: marks laid before it are the map's own, old

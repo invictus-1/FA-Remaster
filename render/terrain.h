@@ -97,6 +97,10 @@ class Terrain {
   // it). Made again when the mud mask comes or goes (it holds the mask's copy). False: it cannot be made (the snow is drawn
   // as without the option).
   bool SnowShelter(gfx::Texture props);
+  // [decalsnow] The shelter while the ground's last drawing (not the sun's) laid the snow from it, else none; and whether it
+  // drew the snow's materials then (their wider, mottled margin). The decals lay the same snow (decals.h, Decals::snowGround).
+  gfx::Texture SnowShelterLaid() const { return snowLaidNow_ ? shelter_ : gfx::Texture{}; }
+  bool SnowMaterialsLaid() const { return snowLaidNow_ && snowMaterialsNow_; }
   bool SnowShelterWanted();  // (whether it is to be made now: none yet, or the mud mask came or went)
   // (the shelter's texels across and down, for World's raster of the props: two a world unit, at most 2048 each way)
   void SnowShelterSize(int* width, int* height) const;
@@ -302,6 +306,7 @@ class Terrain {
   gfx::Pipeline shelterPass_;
   gfx::Texture shelter_;
   bool shelterTried_ = false, shelterMud_ = false;
+  bool snowLaidNow_ = false, snowMaterialsNow_ = false;  // [decalsnow] (the last scene drawing's: SnowShelterLaid)
   // A remastered map's third map per layer (beside `<name>_albedo.dds` a `<name>_arh.dds`: red what
   // its creases let in of the sky's light, green how rough it is, blue how high it stands), all
   // nine as the layers of one texture; `material_[i]`: layer i has one.
