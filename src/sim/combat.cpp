@@ -351,6 +351,25 @@ bool WaterPlaneSegmentHit(Vec3 p0, Vec3 p1, float water, float* dist, Vec3* hit)
   return true;
 }
 
+// STIMap::SurfaceIntersection 0x577bc0's first test on a map with water (0x577bdf..0x577c47): when the line's near
+// end (O + D near, near 0, which is always above -inf, 0x10ad410) lies under the water (water > its y), that point
+// is the hit, at distance near, and neither the terrain nor the water plane is asked.
+bool SegmentStartUnderWater(Vec3 p0, Vec3 p1, float water, float* dist, Vec3* hit) {
+  const Vec3 hv{(p1.x - p0.x) * 0.5f, (p1.y - p0.y) * 0.5f, (p1.z - p0.z) * 0.5f};
+  const float ext = std::sqrt(hv.y * hv.y + hv.z * hv.z + hv.x * hv.x);
+  if (!(ext > 0.0f)) return false;
+  const float inv = 1.0f / ext;
+  const Vec3 D{inv * hv.x, hv.y * inv, hv.z * inv};
+  const Vec3 C{p0.x + hv.x, p0.y + hv.y, p0.z + hv.z};
+  const Vec3 O{C.x - D.x * ext, C.y - D.y * ext, C.z - D.z * ext};
+  const float nearT = 0.0f;
+  const Vec3 S{O.x + D.x * nearT, O.y + D.y * nearT, O.z + D.z * nearT};
+  if (!(water > S.y)) return false;
+  *dist = nearT;
+  *hit = S;
+  return true;
+}
+
 Entity* TargetEntity(Sim& sim, const AiTarget& t) {
   if (t.type != 1 || !t.entityId) return nullptr;
   Entity* e = sim.FindEntity(t.entityId);

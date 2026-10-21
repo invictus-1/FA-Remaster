@@ -38,6 +38,7 @@ namespace moho {
 namespace combat {
 bool TerrainSegmentHit(const TerrainMap* map, Vec3 p0, Vec3 p1, float* dist, Vec3* hit);
 bool WaterPlaneSegmentHit(Vec3 p0, Vec3 p1, float water, float* dist, Vec3* hit);
+bool SegmentStartUnderWater(Vec3 p0, Vec3 p1, float water, float* dist, Vec3* hit);
 bool HasTarget(Sim& sim, const AiTarget& t);
 Vec3 TargetPos(Sim& sim, const AiTarget& t, bool centre);
 Vec3 TargetPosBeatStart(Sim& sim, const AiTarget& t);
@@ -1786,7 +1787,15 @@ void CalcMoveAir(Sim& sim, Unit* u, Transform& T) {
 // water plane (combat::WaterPlaneSegmentHit), and nothing else is tried. Seen: MP1 2695, army 2's interceptor
 // 0x200023, shot down, comes down on the water at x 111.887993 in the original; our march put it at 111.888000, and
 // army 1's interceptor 0x10001f, flying its attack run at the wreck, took a direction a last bit off (2696; its
-// position 2846). The fine march below is left for the other cases (amphibious, no water).
+// position 2846). Before the terrain, 0x577bc0 asks whether the segment's start (O + D near, near 0 > -inf at
+// 0x577be3) is under the water: then that start is the hit, at distance 0 (combat::SegmentStartUnderWater). There
+// is no march: with no hit the unit takes the whole step, and the layer comes from where it started (0x6c0937..
+// 0x6c098d: the elevation 0x44fb90 at the transform's position, which is not yet moved): amphibious, on or under the
+// terrain is Seabed under the water, else Land; otherwise Water when the start is not above the water, Land when it
+// is not above the terrain. Seen: MP1 7268, army 3's spy plane 0x300090, shot down past the map's east edge (x 1044
+// on the 1024 map), where the line test finds nothing (the ray is clipped to the map, 0x4776e0) and the clamped
+// edge's elevation is above its start: Land in the original, and it lies there; ours kept it falling. With a hit
+// the layer is the hit's height against the water (0x6c08b7), not the terrain's there.
 
 void CalcMoveBallistic(Sim& sim, Unit* u, Transform& T, float* scale) {
   AirMotion& a = A(u);
@@ -1805,48 +1814,43 @@ void CalcMoveBallistic(Sim& sim, Unit* u, Transform& T, float* scale) {
   }
   float water = WaterOrNone(map);
   bool amph = u->motion.bp && u->motion.bp->motionType == kMotionAmphibious;
-  // segment against the terrain (and the water plane)
+  // segment against the water's surface (start under it), the terrain and the water plane
   bool hit = false;
   float tHit = 1;
-  bool exact = false;
   Vec3 hitP{};
   const bool waterPlane = !amph && map && map->hasWater;
   {
     float d = 0;
     Vec3 h{};
-    const bool th = combat::TerrainSegmentHit(map, P0, P1, &d, &h);
-    if ((th && (!waterPlane || h.y >= water)) || (waterPlane && combat::WaterPlaneSegmentHit(P0, P1, water, &d, &h))) {
+    bool found = waterPlane && combat::SegmentStartUnderWater(P0, P1, water, &d, &h);
+    if (!found) {
+      const bool th = combat::TerrainSegmentHit(map, P0, P1, &d, &h);
+      found = (th && (!waterPlane || h.y >= water)) || (waterPlane && combat::WaterPlaneSegmentHit(P0, P1, water, &d, &h));
+    }
+    if (found) {
       const Vec3 hv{(P1.x - P0.x) * 0.5f, (P1.y - P0.y) * 0.5f, (P1.z - P0.z) * 0.5f};
       const float ext = std::sqrt(hv.y * hv.y + hv.z * hv.z + hv.x * hv.x);
-      exact = hit = true;
+      hit = true;
       hitP = h;
       tHit = d / (ext * 2.0f);
     }
   }
-  const int N = waterPlane ? 0 : 16;
-  float prevDiff = P0.y - (amph || !map || !map->hasWater ? Elevation(map, P0.x, P0.z)
-                                                          : std::max(Elevation(map, P0.x, P0.z), water));
-  for (int i = 1; i <= N && !hit; ++i) {
-    float t = static_cast<float>(i) / N;
-    Vec3 p{P0.x + v2.x * t, P0.y + v2.y * t, P0.z + v2.z * t};
-    float s = Elevation(map, p.x, p.z);
-    if (!amph && map && map->hasWater) s = std::max(s, water);
-    float dfy = p.y - s;
-    if (dfy <= 0) {
-      float f = (prevDiff > 0 && prevDiff != dfy) ? prevDiff / (prevDiff - dfy) : 0;
-      tHit = (static_cast<float>(i - 1) + f) / N;
-      hit = true;
-    }
-    prevDiff = dfy;
-  }
   int oldLayer = LayerBits(u->layer);
   if (hit) {
-    P1 = exact ? hitP : Vec3{P0.x + v2.x * tHit, P0.y + v2.y * tHit, P0.z + v2.z * tHit};
+    P1 = hitP;
     *scale = tHit;
-    float terr = Elevation(map, P1.x, P1.z);
-    if (water < terr) SetLayerBits(sim, u, kLand);
+    if (water < hitP.y) SetLayerBits(sim, u, kLand);  // (0x6c08b7..0x6c08dd)
     else if (amph) SetLayerBits(sim, u, kSeabed);
     else SetLayerBits(sim, u, kWater);
+  } else {
+    const float elev = Elevation(map, P0.x, P0.z);  // (0x6c0854, at the transform's position)
+    if (amph) {
+      if (elev >= P0.y) SetLayerBits(sim, u, water > elev ? kSeabed : kLand);
+    } else if (water >= P0.y) {
+      SetLayerBits(sim, u, kWater);
+    } else if (elev >= P0.y) {
+      SetLayerBits(sim, u, kLand);
+    }
   }
   if (LayerBits(u->layer) != oldLayer) {
     if (u->dead) {
