@@ -395,7 +395,12 @@ void KillUnit(Sim& sim, lua_State* L, Unit* u, Entity* instigator, const std::st
   u->killCleanup = true;
   if (!u->beingBuilt) AdjacencyLost(sim, L, u);
   const bool hadCommands = !u->commands.empty();
-  ForgetUnitCommands(u);
+  // 0x6a841a: CUnitCommandQueue::ClearCommandQueue 0x6ee2d0, the same teardown IssueClearCommands makes (cfunc
+  // 0x6f1950), without its attacker stop: a move under way ends in its CUnitMoveTask's dtor, whose AbortMove goes
+  // through MakeIdle to ResetPathState 0x5ad9c0, so PathFinding and ProblemGettingToGoal go too. Seen: MP1 7967, army
+  // 6's engineer 0x600015, killed on a Move whose path ended short of its goal: the original's states lose
+  // ProblemGettingToGoal in the kill's beat; ours kept it (the queue forgotten without the move's abort).
+  IssueClearCommandsTo(sim, u, false);
   // the emptied queue's event (Unit::UpdateSpeedThroughStatus 0x6ac940) reaches a killed aircraft too: with nothing
   // queued its speed-through flag goes (seen: five patrolling aircraft killed in one beat, each 1 -> 0)
   if (u->motion.air) {

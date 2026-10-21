@@ -1971,7 +1971,7 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
 // landed at its pickup point (its landing move ended and aborted at 1743), is cleared by M28 before its unload
 // (m28orders.lua 1166): the original stays on the ground (layer Land, target where the abort left it) until the
 // unload's own AbortMove at 1756; ours was stopped again, now not loading: the Air layer, and it took off.
-void IssueClearCommandsTo(Sim& sim, Unit* u) {
+void IssueClearCommandsTo(Sim& sim, Unit* u, bool stopAttacker) {
   const bool moveAsleep = ThreadAsleepOnMove(u);  // (a task's walking child too)
   // An empty queue tears nothing down, a pod's included. (Bench 294's drones, whose guard of the finished structure
   // ended in the command stage, are stopped by that guard's dtor 0x611850, EndGuard: its AbortMove has no goal test.)
@@ -2036,7 +2036,7 @@ void IssueClearCommandsTo(Sim& sim, Unit* u) {
     MotionStop(u);
   SetMoving(u, false);
   if (moveAsleep) sim.ResumeCommandThread(u);
-  AttackerStop(sim, u);
+  if (stopAttacker) AttackerStop(sim, u);
 }
 
 // The acquire task's auto-initiated Attack (0x5d9415: UNIT_IssueCommand(sim, {u}, Attack on the entity, clear)):

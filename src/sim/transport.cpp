@@ -3034,7 +3034,21 @@ void EndTransportTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
   switch (d.kind) {
     case kLoad: EndLoad(sim, u, d); break;
     case kCall: EndCall(sim, u, d); break;
-    case kUnload: SetState(u, "TransportUnloading", false); break;
+    case kUnload:
+      // The landing move (state 2's NewMoveTask) sits on top of the unload on the unit's thread, so a teardown with
+      // the move under way runs ITS dtor first: Moving off and the navigator's AbortMove (CUnitMoveTask dtor 0x618700:
+      // 0x6187bd, 0x618884) while TransportUnloading is still set, and then the unload's dtor 0x626070 clears that
+      // state (0x62607f). CUnitMotion::Stop 0x6b8460 keeps the landing layer for a transport still unloading
+      // (0x6b8480: state 9). Seen: MP1 7931, army 7's transport 0x70002f, descending to unload, is cleared by an
+      // IssueClearCommands: the original's landing layer stays Land (1) until the next goal; ours aborted after
+      // the states were cleared and the stop set Air (16).
+      if (d.moving) {
+        d.moving = false;
+        u->unitStates.erase("Moving");
+        if (!u->clearKeepsMove && u->motion.bp && u->motion.bp->mobile()) MotionStop(u);
+      }
+      SetState(u, "TransportUnloading", false);
+      break;
     case kFerry: EndFerry(sim, u, d); break;
     case kWaitFerry: EndWaitFerry(sim, u, d); break;
     case kRefuel: EndRefuel(sim, u, d); break;

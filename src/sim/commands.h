@@ -197,7 +197,7 @@ void GuardWalksCommandEvent(Sim& sim, UnitCommand& c);
 bool RemoveCommandFromUnit(Sim& sim, Unit* u, UnitCommand& c);
 // What IssueClearCommands (0x6f1950) does to one unit: ClearCommandQueue 0x6ee2d0 and its attacker's Stop
 // 0x5d56f0 (also CSquad::Stop 0x724820, for CPlatoon:Stop).
-void IssueClearCommandsTo(Sim& sim, Unit* u);
+void IssueClearCommandsTo(Sim& sim, Unit* u, bool stopAttacker = true);
 // The Attack order a weapon with AutoInitiateAttackCommand gives its own idle unit (CAcquireTargetTask 0x5d9415).
 std::shared_ptr<UnitCommand> IssueAutoAttack(Sim& sim, Unit* u, Entity* target, bool viaBlip = false,
                                              bool pastDeath = false, uint32_t fakeId = 0);
