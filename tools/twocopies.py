@@ -23,6 +23,10 @@ options:
                     "=": a value that starts with "-" is otherwise read as an option). Without it a copy keeps
                     the launch's own (a replay: none; a lobby game: the local player's army)
   --env K=V         one more environment variable for both copies (may be given more than once)
+  --env-a K=V       one more environment variable for copy A only, --env-b for copy B only (after --env and
+  --env-b K=V       --shift, so they win; may be given more than once), e.g. --env-b MOHO64_THREADS=cores: one
+                    copy on one thread and the other on all the machine's (docs/multicore.md 1.3), or
+                    --env-b MOHO64_PAR_CHECK=shuffle: the order check against the plain run
   --show N          at most N differing lines of the detail listing (default 40)
   --timeout S       give up after S seconds (default 3600)
   -- ARGS           anything after -- goes to both copies' command lines
@@ -192,6 +196,8 @@ def main():
     ap.add_argument("--focus-a")
     ap.add_argument("--focus-b")
     ap.add_argument("--env", action="append", default=[])
+    ap.add_argument("--env-a", action="append", default=[])
+    ap.add_argument("--env-b", action="append", default=[])
     ap.add_argument("--show", type=int, default=40)
     ap.add_argument("--timeout", type=float, default=3600)
     ap.add_argument("--compare", nargs=2)
@@ -236,6 +242,15 @@ def main():
     for kv in a.env:
         k, v = kv.split("=", 1)
         env[k] = v
+    own_env = {}  # each copy's own variables (--env-a / --env-b)
+    for c in "ab":
+        own_env[c] = {}
+        for kv in getattr(a, "env_" + c):
+            if "=" not in kv:
+                print("twocopies: --env-%s wants K=V, not %s" % (c, kv))
+                return 2
+            k, v = kv.split("=", 1)
+            own_env[c][k] = v
 
     os.makedirs(a.out, exist_ok=True)
     fp = {c: os.path.abspath(os.path.join(a.out, c + ".fp")) for c in "ab"}
@@ -278,6 +293,7 @@ def main():
             e["MOHO64_FINGERPRINT_PEER"] = fp[other]
         if c == "b" and a.shift > 0:
             e["MOHO64_LAYOUT_SHIFT"] = str(a.shift)
+        e.update(own_env[c])
         log = os.path.join(a.out, c + ".log")
         cmd = [a.moho64] + args + per[c] + ["--log", log]
         with open(os.path.join(a.out, c + ".cmd.txt"), "w") as f:
@@ -294,8 +310,9 @@ def main():
             p.kill()
         print("twocopies: timed out after %.0f s" % a.timeout)
         return 2
+    own = {c: per[c] + ["%s=%s" % kv for kv in sorted(own_env[c].items())] for c in "ab"}
     print("twocopies: %s%s%s; %.0f s; exit codes %d / %d" % (
-        " ".join(args), "; A: " + " ".join(per["a"]) if per["a"] else "", "; B: " + " ".join(per["b"]) if per["b"] else "",
+        " ".join(args), "; A: " + " ".join(own["a"]) if own["a"] else "", "; B: " + " ".join(own["b"]) if own["b"] else "",
         time.time() - t0, rc["a"], rc["b"]))
     return report(fp["a"], fp["b"], a.show, rc["a"], rc["b"])
 
