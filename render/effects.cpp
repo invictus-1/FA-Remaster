@@ -11,6 +11,7 @@
 #include "build_effects.h"
 #include "effect_files.h"
 #include "exhausts.h"  // (unitsfx)
+#include "volfx_log.h"  // (MOHO64_DEBUG_VOLFX)
 
 namespace render {
 namespace {
@@ -21,6 +22,12 @@ Vec3 V(const float p[3]) { return {p[0], p[1], p[2]}; }
 Quat Q(const float q[4]) { return {q[0], q[1], q[2], q[3]}; }
 
 }  // namespace
+
+bool IsTeleportEffect(const std::string& path) {
+  std::string low = path;
+  for (char& c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  return low.find("/unitteleport") != std::string::npos;
+}
 
 void Effects::Queue(std::vector<FrameEffectEvent>&& events) {
   for (FrameEffectEvent& e : events) pending_.push_back(std::move(e));
@@ -46,7 +53,11 @@ bool Effects::Explosion(const FrameEffectEvent& event, const Frame& frame) const
   if (entity == kNone) return true;
   auto unit = std::lower_bound(frame.units.begin(), frame.units.end(), entity, [](const FrameUnit& u, uint32_t id) { return u.id < id; });
   if (unit != frame.units.end() && unit->id == entity) return unit->dead;
-  if (projectileAt_.count(entity) || entityAt_.count(entity)) return true;
+  if (auto shot = projectileAt_.find(entity); shot != projectileAt_.end()) {  // (but a warp-in's light, thrown by its own effect)
+    const uint32_t bp = frame.projectiles[shot->second].blueprint;
+    return !(frame.blueprints && bp < frame.blueprints->size() && IsTeleportEffect((*frame.blueprints)[bp]));
+  }
+  if (entityAt_.count(entity)) return true;
   return !(isProp && isProp(entity));  // (a shot gone with its impact is in no list: an explosion)
 }
 
@@ -198,6 +209,7 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
     return;
   }
   if (event.kind == FrameEffectEvent::Call) {
+    if (VolfxLog* log = VolfxLog::Get(); log && event.name == "ScaleEmitter" && !event.numbers.empty()) log->Scaled(event.id, event.numbers[0]);  // (MOHO64_DEBUG_VOLFX)
     auto it = effects_.find(event.id);
     if (it == effects_.end()) return;
     Effect& e = it->second;
@@ -300,7 +312,9 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
   if (f == "CreateAttachedEmitter" || f == "CreateEmitterOnEntity" || f == "CreateEmitterAtBone" || f == "CreateEmitterAtEntity") {
     e.kind = Kind::Emitter;
     e.attached = f == "CreateAttachedEmitter" || f == "CreateEmitterOnEntity";
+    if (VolfxLog* log = VolfxLog::Get()) log->SetOrigin(event, frame);  // (MOHO64_DEBUG_VOLFX: what it is made on)
     e.handle = particles_->Start(event.blueprint, e.position, e.orientation, 1, at, e.attached, e.faction);
+    if (VolfxLog* log = VolfxLog::Get()) log->ClearOrigin();
     if (!e.handle) return;
   } else if (f == "CreateTrail") {
     e.kind = Kind::Trail;
@@ -325,11 +339,16 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
   } else if (f == "CreateLightParticle" || f == "CreateLightParticleIntel") {
     // numbers: size, lifetime in ticks; the texture and the ramp are names in /textures/particles
     const std::vector<float>& n = event.numbers;
+    if (VolfxLog* log = VolfxLog::Get()) log->SetOrigin(event, frame);  // (MOHO64_DEBUG_VOLFX: what the flash is on)
+    // [scars] not a light that is no explosion's: Chris, 2026-10-20, a black mass under every wall begun and wherever a
+    // wreck or a tree was reclaimed; nor a volume explosion where nothing exploded (Lights::onFlash)
+    const bool explosion = Explosion(event, frame);
     // the modern look gets a light; the original look the glow on the ground the original draws
-    if (n.size() >= 2 && !event.blueprint.empty() && !Hidden(frame, event.entity)) lights_->Flash("/textures/particles/" + event.text + ".dds", e.position, n[0], at, n[1] * 0.1f);
-    // (a blast, blasts.h; [scars] not a light that is no explosion's: Chris, 2026-10-20, a black mass under every wall begun
-    // and wherever a wreck or a tree was reclaimed)
-    if (blasts_ && n.size() >= 2 && !Hidden(frame, event.entity) && Explosion(event, frame)) blasts_->FromFlash(e.position, n[0], at, event.entity);
+    if (n.size() >= 2 && !event.blueprint.empty() && !Hidden(frame, event.entity))
+      lights_->Flash("/textures/particles/" + event.text + ".dds", e.position, n[0], at, n[1] * 0.1f, explosion);
+    if (VolfxLog* log = VolfxLog::Get()) log->ClearOrigin();
+    // (a blast, blasts.h)
+    if (blasts_ && n.size() >= 2 && !Hidden(frame, event.entity) && explosion) blasts_->FromFlash(e.position, n[0], at, event.entity);
     if (n.size() >= 2 && !event.blueprint.empty())
       decals_->AddLight("/textures/particles/" + event.blueprint + ".dds", "/textures/particles/" + event.text + ".dds", e.position, n[0], at, n[1] * 0.1f);
     return;
@@ -396,6 +415,7 @@ void Effects::Update(double tick, const Frame& frame) {
   for (uint32_t i = 0; i < frame.entities.size(); ++i) entityAt_[frame.entities[i].id] = i;
   for (uint32_t i = 0; i < frame.projectiles.size(); ++i) projectileAt_[frame.projectiles[i].id] = i;
   for (uint32_t i = 0; i < frame.beams.size(); ++i) beamAt_[frame.beams[i].id] = i;
+  if (VolfxLog* log = VolfxLog::Get()) log->SeeShots(frame);  // (MOHO64_DEBUG_VOLFX: an impact's shot, once it is gone)
   if (build_ && build_->On()) build_->TakeSites(frame, models_);  // (buildfx: the units under construction)
 
   while (!pending_.empty() && static_cast<double>(pending_.front().tick) <= tick) {

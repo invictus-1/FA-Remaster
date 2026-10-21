@@ -15,6 +15,7 @@
 #include "remasters.h"
 #include "ground.h"
 #include "snow_ground.h"  // [snow ground]
+#include "volfx_log.h"  // (MOHO64_DEBUG_VOLFX)
 
 namespace render {
 
@@ -635,6 +636,25 @@ gfx::Texture World::SnowProps() {
   const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
   printf("render: the snow's shelter: %zu props laid (%d trees), %dx%d, %.0f ms\n", list.size(), trees, w, h, ms);
   return snowProps_;
+}
+
+// (volume explosions) An area's harm makes a blast's volume where it goes off on or near the ground or the water. Not a flak
+// burst high in the air: in two M28 games on SETONS_R every anti-air shell's harm went off 6.6 to 35 units over the ground
+// or the water under it, every other weapon's within 5 but for a few shells that met an aircraft. Not under the water:
+// below its surface, or a torpedo's or a depth charge's at all (the game's anti-navy shots all say so in their names,
+// TANAnglerTorpedo02, AANDepthCharge01, SANUallCavitationTorpedo01, ...; their harm goes off against a hull at the
+// waterline, most of it within half a unit of the surface). Nor a warp-in's clearing of its spot (IsTeleportEffect), nor
+// a fire burning on: a damage-over-time pulse (DefaultDamage.AreaDoTThread, a UEF bomber's napalm: ten pulses of 4 over
+// 3.6 s) is told with no weapon and no shot, and a little harm; a death weapon's, also told without them, does 1000 and more.
+bool World::AreaMakesVolume(const FrameHit& hit) const {
+  if (IsTeleportEffect(hit.projectile)) return false;
+  if (hit.weapon.empty() && hit.projectile.empty() && hit.amount < 50) return false;
+  const float x = hit.position[0], y = hit.position[1], z = hit.position[2];
+  if (y > GroundHeight(x, z) + 6) return false;
+  if (haveMap_ && map.water.present && y < map.water.elevation - 0.5f) return false;
+  std::string shot = hit.projectile;
+  for (char& c : shot) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  return shot.find("torpedo") == std::string::npos && shot.find("depthcharge") == std::string::npos;
 }
 
 float World::GroundHeight(float x, float z) const {
@@ -1820,7 +1840,11 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
   WatchDeaths(frame, armyColors);  // (the debris of what has died: blastDebris)
   if (volumesOn_ && combat_.hitsKept)  // (volume explosions: harm to an area is a blast that large; a push is none)
     for (const FrameHit& h : combat_.hits)
-      if (h.radius > 0 && h.seen && !push(h.damageType)) volumes.OfferArea({h.position[0], h.position[1], h.position[2]}, h.radius, static_cast<double>(h.tick) * 0.1);
+      if (h.radius > 0 && h.seen && !push(h.damageType)) {
+        if (VolfxLog* log = VolfxLog::Get()) log->SetArea(h.weapon, h.projectile, h.damageType, h.amount);  // (MOHO64_DEBUG_VOLFX: what harmed it)
+        if (AreaMakesVolume(h)) volumes.OfferArea({h.position[0], h.position[1], h.position[2]}, h.radius, static_cast<double>(h.tick) * 0.1);
+        else if (VolfxLog* log = VolfxLog::Get()) log->Declined(false, h.radius);
+      }
   CpuTimes::Part("units seen first: their files read ahead");
   {  // (their models' files read on the worker threads, all together; the models are made below)
     std::vector<std::string> fresh;

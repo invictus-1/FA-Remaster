@@ -13,6 +13,7 @@
 #include "core/vfs.h"
 #include "dds.h"
 #include "lighting.h"
+#include "volfx_log.h"  // (MOHO64_DEBUG_VOLFX)
 
 namespace render {
 namespace {
@@ -756,6 +757,7 @@ uint32_t Particles::Start(const std::string& blueprint, Vec3 position, const Qua
                           const std::string& faction) {
   const EmitterBlueprint* bp = Blueprint(blueprint, faction);
   if (!bp->ok) return 0;
+  if (VolfxLog* log = VolfxLog::Get()) log->Emitter(blueprint, *bp, position, scale, startedAt >= 0 ? startedAt : now_, volumesOn && bp->volumeReplaced);  // (MOHO64_DEBUG_VOLFX: volfx_log.h)
   if (volumesOn && bp->volumeReplaced) return 0;  // (volume explosions: its volume is drawn in its place)
   std::unique_ptr<Set>& set = sets_[bp];
   if (!set) {

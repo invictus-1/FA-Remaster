@@ -37,6 +37,24 @@ emitters' own sizes were looked at too, but the flashes they throw are capped (`
 big explosion from a middling one; so on the effects stand an artillery shell's hit makes no volume (no harm is
 simulated there), in a game it does.
 
+**What makes none** (2026-10-21, the renderer's volfx helper). Most of the flashes and much of the harm a game tells are
+no explosion, and each had made a fireball: in the first 20 minutes of the M28 game on SETONS_R (seed 1) 355 volumes, now
+107 - the same 49 deaths and 58 of the 65 harms on the ground; gone 189 flashes on living units, 12 warp-ins, 30 flak
+bursts, 10 torpedo hits and 7 pulses of burning napalm. Now:
+- a flash only when an explosion threw it (`Effects::Explosion`, the same decision the blasts take): not one on a living
+  unit (a structure begun: `StructureUnit.lua`'s flash of twice its radius; a Seraphim unit being built; a tractor claw;
+  a shield's discharge), on a prop, a reclaim's end, or a warp-in's or a teleport's own effect
+  (/effects/entities/UnitTeleport01..03, `IsTeleportEffect`); `Lights::Flash` is told which, and tells `onFlash` only of
+  explosions;
+- harm to an area only on or near the ground or the water (`World::AreaMakesVolume`): not more than 6 units over it
+  (anti-air shells burst 6.6 to 35 over it in two games, every other weapon's harm within 5 but for a few shells that met
+  an aircraft), not under the water's surface or by a torpedo or a depth charge (their harm goes off against hulls at the
+  waterline), not a warp-in's clearing of its spot, and not a damage-over-time pulse (no weapon, no shot, under 50 of
+  harm: a UEF bomber's napalm, ten pulses over 3.6 s, had made a new volume every 0.8 s while it burned).
+What still makes one: units' deaths (from a footprint radius of about 1.7: T3 land units' do not, experimentals', ships',
+aircraft's that large and structures' do), shells', bombs' and missiles' harm on the ground, death weapons, and nukes.
+The debug print `MOHO64_DEBUG_VOLFX=1` (render/volfx_log.h) lists each volume with what made it and what the fix turned away.
+
 **Which are drawn.** At most `most` blasts (4), the largest for their distance and in view, and the newest nuke in view;
 the rest play as today. The game's own effects are drawn in either case (`VolumeReplaces`, below, leaves out what a
 volume draws in their place).

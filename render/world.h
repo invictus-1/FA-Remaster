@@ -794,6 +794,9 @@ class World {
   std::unordered_map<uint32_t, double> recentProps_;
   double recentPruned_ = 0;
   bool IsProp(uint32_t id) const;
+  // (volume explosions) Whether harm to an area is a blast's volume: not a flak burst high in the air, a torpedo's or a
+  // depth charge's under the water, a warp-in's clearing of its spot or a fire's damage over time (AddFrame)
+  bool AreaMakesVolume(const FrameHit& hit) const;
   // hot metal: on this frame (and the frame before); the made props held out of their groups while they glow; the
   // tint WreckHeat hands out; the bounding sphere of a placed model
   bool hotOn_ = false, hotBefore_ = false;
