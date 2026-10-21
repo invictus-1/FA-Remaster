@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <memory>
 
 #include "lighting.h"
@@ -36,6 +37,50 @@ float3 MeadowColour(float3 ground, float2 xz) {
   c = max(lerp(dot(c, luma), c, 1.25), 0);
   return c * (0.95 + 0.4 * pale);
 }
+// [leftover] Under lying snow (GroundCover::snowDepth): how deep the snow lies over a root, in world units, as the ground's
+// light lays it (lighting.h: its patches, level ground first, by how much lies, the view's weather.y) and, with the snow
+// ground's shelter read (World::snowGround; terrain.cpp's SnowAround), deeper in hollows and the wind's lee and thinner under
+// the trees' crowns and on steep and windward ground; times coverSnow.x at the most. Its share of a full cover (0..1) in
+// `share`. `ground`: the ground's normal there; `map`: the map's width and height.
+cbuffer CoverSnow : register(b3) {
+  float4 coverSnow;      // x: world units the snow lies at the most where all of it lies (0: the cover as without snow); y: 1 = the shelter is read
+  float4 coverSnowWind;  // xy: the way the wind blows (unit length); z: the trees' crowns' weight, w: the drifts' (Terrain::snowTune y, w)
+};
+Texture2D snowShelter : register(t13);  // (Terrain::SnowShelter) g the sky it sees, b the trees' crowns over it, a how it lies
+float CoverSnowDepth(float2 xz, float y, float3 ground, float2 map, out float share) {
+  float lie = 1, less = 0;
+  [branch] if (coverSnow.y > 0.5) {
+    float4 s = snowShelter.SampleLevel(samplerLinearClamp, xz / map, 0);
+    float crowns = s.b, lay = s.a * 2 - 1, slope = length(ground.xz);
+    float lee = slope > 1e-3 ? dot(ground.xz / slope, coverSnowWind.xy) * saturate(slope * 5) : 0;
+    lie = (1 + 0.4 * lay * coverSnowWind.w + 0.15 * lee) * (1 - 0.3 * crowns * coverSnowWind.z);
+    less = 0.08 * crowns * coverSnowWind.z + 0.25 * saturate((0.85 - ground.y) * 4) + 0.1 * saturate(-lee) + 0.3 * saturate(-lay) * coverSnowWind.w;
+  }
+  float fallen = weather.y * lie;
+  float patch = CloudNoise(float3(xz.x, y, xz.y) * 0.9) * 0.55 + CloudNoise(float3(xz * 0.21, 5.3)) * 0.45;
+  float takes = patch * 0.75 + saturate((ground.y - 0.35) * 1.6) * 0.25 - less;
+  float bar = 1.02 - fallen * 1.15;
+  // (with the shelter, over the snow ground's wider margin)
+  float lying = (coverSnow.y > 0.5 ? smoothstep(bar - 0.15, bar + 0.35, takes) : smoothstep(bar, bar + 0.2, takes)) * smoothstep(0.25, 0.5, ground.y);
+  share = saturate(lying * fallen);
+  // (never quite even: a little deeper and shallower in patches a unit or so across, so that what stands out of it does so
+  // in places, not as the same tips everywhere)
+  return lying * fallen * coverSnow.x * (0.75 + 0.5 * CloudNoise(float3(xz * 0.8, 2.9)));
+}
+// What stands out of the snow at the least (world units of a blade or plant `tall`): less is under it (the snow is uneven
+// round each stem; a tip a hair over it would read as a speck of dirt)
+float CoverSnowOut(float tall) { return max(0.025, 0.3 * tall); }
+#ifdef MOTION
+// [leftover] Motion (motion.h; GroundCover::DrawMotion): each corner drawn again where the scene drew it, writing where the
+// same corner was the frame before (the wind at that frame's time, what presses it as long ago less the frame's seconds;
+// the blasts' push as now, their field of the frame before not being kept), both by the views without the jitter.
+cbuffer CoverMotion : register(b2) {
+  row_major float4x4 motionNow;     // this frame's view without the jitter
+  row_major float4x4 motionBefore;  // the frame before's
+  float4 motionWhen;                // x: the frame before's time; y: the seconds between the two
+};
+float2 CoverMoved(float4 here, float4 then) { return (then.xy / then.w - here.xy / here.w) * float2(0.5, -0.5); }
+#endif
 )hlsl";
 
 // Fifteen corners a blade (three segments, the last a point): no vertex data; a blade's number gives its cell.
@@ -95,6 +140,10 @@ struct VOut {
 #ifdef PLANTS
   float3 ember : TEXCOORD6;   // [plants] a burnt blade's embers' light
 #endif
+#ifdef MOTION
+  float4 here : TEXCOORD9;    // [leftover] (this frame's place and the frame before's, by the views without the jitter)
+  float4 then : TEXCOORD10;
+#endif
 };
 
 // (level along the blade: 0 the foot .. 3 the tip; side 0 / 1)
@@ -110,6 +159,9 @@ VOut VS(uint id : SV_VertexID) {
   o.up = o.shadow = o.through = 0;
 #ifdef PLANTS
   o.ember = 0;
+#endif
+#ifdef MOTION
+  o.here = o.then = float4(0, 0, 0, 1);
 #endif
   uint blade = id / 15, corner = id % 15;
   uint tuft = blade / 3, k = blade % 3;  // (three blades a cell, from close roots)
@@ -159,6 +211,13 @@ VOut VS(uint id : SV_VertexID) {
   float swing = sin(time * 1.3 + beat) * 0.6 + sin(time * 2.9 + beat * 1.7) * 0.4;
   float gust = (0.35 + 0.9 * falling.x + 0.3 * falling.y) * (0.45 + 1.3 * CloudNoise(float3((xz - float2(0.915, 0.403) * (time * 7)) * 0.02, time * 0.07)));
   float2 bend = leanWay * lean + float2(0.915, 0.403) * (swing * gust * 0.45);
+#ifdef MOTION
+  // [leftover] the frame before's: the wind at its time, the rest as now (and as below)
+  float swingB = sin(motionWhen.x * 1.3 + beat) * 0.6 + sin(motionWhen.x * 2.9 + beat * 1.7) * 0.4;
+  float gustB = (0.35 + 0.9 * falling.x + 0.3 * falling.y) * (0.45 + 1.3 * CloudNoise(float3((xz - float2(0.915, 0.403) * (motionWhen.x * 7)) * 0.02, motionWhen.x * 0.07)));
+  float2 bendB = leanWay * lean + float2(0.915, 0.403) * (swingB * gustB * 0.45);
+  float heightB = height;
+#endif
 #ifdef PLANTS
   // [plants] pressed by what drove over it: laid over the way it was pushed (its height going to its lean, as in a blast's
   // wave), rising again over some seconds; burnt where the ground is (black, then brown, and short), its own share of a
@@ -174,9 +233,24 @@ VOut VS(uint id : SV_VertexID) {
     } else {
       height *= 1 - 0.9 * saturate(down);
     }
+#ifdef MOTION
+    {  // [leftover] (the frame before: pressed as long ago less the frame's seconds)
+      float downB = pressedBy.z * exp(-max(pressedBy.w / pressedBy.z - motionWhen.y, 0) / 6.0) * (0.85 + 0.3 * GrassRand(GrassHash(hb + 8)));
+      float layOverB = min(downB * 1.3, 1.3);
+      if (layOverB > 1e-3 && length(way) > 0.05) {
+        heightB *= cos(layOverB);
+        bendB += normalize(way) * tan(layOverB);
+      } else {
+        heightB *= 1 - 0.9 * saturate(downB);
+      }
+    }
+#endif
   }
   float4 burnt = PlantsBurnLook(xz, plantsK[0], plantsK[1], GrassRand(GrassHash(hb + 9)));
   height *= 1 - 0.8 * burnt.z;
+#ifdef MOTION
+  heightB *= 1 - 0.8 * burnt.z;
+#endif
 #endif
 #ifdef BLASTS
   // a blast's wave: laid over away from it (as far as the field says, radians from upright), its height going to its
@@ -186,8 +260,30 @@ VOut VS(uint id : SV_VertexID) {
   if (laid > 1e-3) {
     height *= cos(laid);
     bend += blown / over * tan(laid);
+#ifdef MOTION
+    heightB *= cos(laid);
+    bendB += blown / over * tan(laid);
+#endif
   }
 #endif
+  // [leftover] under lying snow: the blade's foot at the snow's top and only what stands out over it (none: buried, the
+  // shorter first), bowed by the snow on it, dusted white toward its tip (its colour, below)
+  float snowDust = 0;
+  [branch] if (weather.y > 0 && coverSnow.x > 0) {
+    float4 under = groundNormals.SampleLevel(samplerLinearClamp, xz / mapInfo.xy, 0);
+    float3 g;
+    g.xz = under.ag * 2 - 1;
+    g.y = sqrt(saturate(1 - dot(g.xz, g.xz)));
+    float deep = CoverSnowDepth(xz, ground, g, mapInfo.xy, snowDust);
+    if (deep > 0 && height - deep < CoverSnowOut(height)) return o;
+    root.y += deep;
+    height -= deep;
+    bend += leanWay * (0.6 * snowDust);
+#ifdef MOTION
+    heightB = max(heightB - deep, 0);
+    bendB += leanWay * (0.6 * snowDust);
+#endif
+  }
   uint2 at = kCorner[corner];
   float v = kUp[at.x];
   // (at least most of a pixel wide, or far blades would flicker in and out between pixels)
@@ -195,6 +291,12 @@ VOut VS(uint id : SV_VertexID) {
   float3 p = root + float3(bend.x * v * v * height, v * height, bend.y * v * v * height);
   p.xz += across * ((at.y ? 0.5 : -0.5) * wide);
   o.position = mul(viewProj, float4(p, 1));
+#ifdef MOTION
+  float3 pB = root + float3(bendB.x * v * v * heightB, v * heightB, bendB.y * v * v * heightB);
+  pB.xz += across * ((at.y ? 0.5 : -0.5) * wide);
+  o.here = mul(motionNow, float4(p, 1));
+  o.then = mul(motionBefore, float4(pB, 1));
+#else
   o.world = p;
   o.up = v;
   // its colour: [cover] the meadow's from the ground's under it (MeadowColour: never bare earth's brown, varied in
@@ -230,14 +332,23 @@ VOut VS(uint id : SV_VertexID) {
   o.colour *= 1 + 0.45 * open;
   o.up = lerp(o.up, 1, open);
 #endif
+  [branch] if (snowDust > 0) o.colour = lerp(o.colour, SNOW_COLOUR, snowDust * (0.3 + 0.55 * v));  // [leftover] (dusted, the more toward its tip)
+#endif
   return o;
 }
+
+#ifdef MOTION
+float2 MotionPS(VOut i) : SV_Target { return CoverMoved(i.here, i.then); }  // [leftover]
+#endif
 
 float4 PS(VOut i) : SV_Target {
   float occlusion = lerp(0.55, 1, i.up);  // (darker down among the blades: [cover] they shade each other near the ground)
 #if RAYS
   rayLightsAtMost = 1;  // (one ray for the small lights' shadows; lighting.h, SmallLightsTraced)
 #endif
+  // [leftover] under lying snow the blade is dusted by its own measure (its colour, CoverSnowDepth), not whitened all over
+  // where the light's snow would lie on what faces up as the ground does
+  [branch] if (weather.y > 0 && coverSnow.x > 0) surfaceSnowShare = 0;
   float3 through = LeafLight(i.colour, i.through, i.world, i.shadow, 0.8);
 #ifdef PLANTS
   through += i.ember;  // [plants]
@@ -250,6 +361,14 @@ struct GrassConstants {
   float area[4], blades[4], mapInfo[4], table[4];
   float shown[4];       // [cover]
   float plantsK[2][4];  // [plants] (read by the shaders with them only)
+};
+// [leftover] (kCoverShared's CoverSnow, at register b3; CoverMotion at b2)
+struct CoverSnowConstants {
+  float snow[4], wind[4];
+};
+struct CoverMotionConstants {
+  Mat4 now, before;
+  float when[4];
 };
 
 // The plants (GroundCover::SetPlants): a spot a cell, 108 corners a spot. [cover] Up to six plants a spot (a clump's), each
@@ -337,6 +456,11 @@ struct VOut {
 #endif
   nointerpolation float4 tint : TEXCOORD8;   // rgb: a card's colour times this ([coverdark] the ground's under a clump of
                                              // grass); [cover] a tuft's blade's own colour; w: 1 a tuft's blade (no picture)
+                                             // ([leftover] under snow: 1 + its dusting a tuft's blade, minus its dusting a card)
+#ifdef MOTION
+  float4 here : TEXCOORD9;    // [leftover] (this frame's place and the frame before's, by the views without the jitter)
+  float4 then : TEXCOORD10;
+#endif
 };
 
 static const float2 kCard[6] = {float2(0, 1), float2(1, 1), float2(0, 0), float2(0, 0), float2(1, 1), float2(1, 0)};
@@ -348,6 +472,9 @@ static const float kTuftWide[3] = {1, 0.6, 0};
 VOut VS(uint id : SV_VertexID) {
   VOut o = (VOut)0;
   o.position = float4(0, 0, -1, 1);  // (no plant: behind the eye)
+#ifdef MOTION
+  o.here = o.then = float4(0, 0, 0, 1);
+#endif
   uint spot = id / 108, local = id % 108;
   uint side = uint(area.w);
   float2 cellAt = area.xy + float2(spot % side, spot / side) * area.z;
@@ -420,7 +547,19 @@ VOut VS(uint id : SV_VertexID) {
   float beat = dot(foot, float2(0.11, 0.07));
   float swing = sin(time * 1.3 + beat) * 0.6 + sin(time * 2.9 + beat * 1.7) * 0.4;
   float gust = (0.35 + 0.9 * falling.x + 0.3 * falling.y) * (0.45 + 1.3 * CloudNoise(float3((foot - float2(0.915, 0.403) * (time * 7)) * 0.02, time * 0.07)));
+#ifdef MOTION
+  // [leftover] the frame before's wind (and below, what pressed it then; the rest as now)
+  float swingB = sin(motionWhen.x * 1.3 + beat) * 0.6 + sin(motionWhen.x * 2.9 + beat * 1.7) * 0.4;
+  float gustB = (0.35 + 0.9 * falling.x + 0.3 * falling.y) * (0.45 + 1.3 * CloudNoise(float3((foot - float2(0.915, 0.403) * (motionWhen.x * 7)) * 0.02, motionWhen.x * 0.07)));
+#endif
   float4 tone = tones[cell];
+  // [leftover] under lying snow (CoverSnowDepth): how deep it lies over this plant's foot; a plant no taller is buried (the
+  // shorter first: each cell's height from the cover's file), a taller one stands out of it, bowed and dusted
+  float deep = 0, snowDust = 0;
+  [branch] if (weather.y > 0 && coverSnow.x > 0) {
+    deep = CoverSnowDepth(foot, ground, n, mapInfo.xy, snowDust);
+    if (deep > 0 && height - deep < CoverSnowOut(height)) return o;
+  }
 
   [branch] if (tuft) {
     // [cover] a blade of the tuft: its root near the tuft's middle, fanned out from it (each its own way round, leaning out
@@ -433,6 +572,10 @@ VOut VS(uint id : SV_VertexID) {
     float2 rootAt = foot + fan * (size.x * more.w * 0.12 * sqrt(PlantRand(PlantHash(hb + 1))));
     float bh = height * (0.6 + 0.4 * PlantRand(PlantHash(hb + 2)));
     float2 bend = fan * (0.25 + 0.55 * PlantRand(PlantHash(hb + 3))) + float2(0.915, 0.403) * (swing * gust * 0.45 * more.x);
+#ifdef MOTION
+    float2 bendB = fan * (0.25 + 0.55 * PlantRand(PlantHash(hb + 3))) + float2(0.915, 0.403) * (swingB * gustB * 0.45 * more.x);  // [leftover]
+    float bhB = bh;
+#endif
 #ifdef PLANTS
     {  // [plants] pressed by what drove over it: laid over the way it was pushed (as the meadow's blades)
       float4 pressedBy = PlantsPressAt(foot, plantsK[0], plantsK[1]);
@@ -446,6 +589,18 @@ VOut VS(uint id : SV_VertexID) {
         } else {
           bh *= 1 - 0.9 * saturate(down);
         }
+#ifdef MOTION
+        {  // [leftover] (the frame before: pressed as long ago less the frame's seconds)
+          float downB = pressedBy.z * exp(-max(pressedBy.w / pressedBy.z - motionWhen.y, 0) / 6.0) * (0.85 + 0.3 * PlantRand(PlantHash(hb + 8)));
+          float layOverB = min(downB * 1.3, 1.3);
+          if (layOverB > 1e-3 && length(way) > 0.05) {
+            bhB *= cos(layOverB);
+            bendB += normalize(way) * tan(layOverB);
+          } else {
+            bhB *= 1 - 0.9 * saturate(downB);
+          }
+        }
+#endif
       }
     }
 #endif
@@ -458,15 +613,36 @@ VOut VS(uint id : SV_VertexID) {
       if (laid > 1e-3) {
         bh *= cos(laid);
         bend += blown / over * tan(laid);
+#ifdef MOTION
+        bhB *= cos(laid);
+        bendB += blown / over * tan(laid);
+#endif
       }
     }
 #endif
+    [branch] if (deep > 0) {  // [leftover] under lying snow: only what stands out of it, bowed outward by the snow on it
+      if (bh - deep < CoverSnowOut(bh)) return o;
+      bh -= deep;
+      ground += deep;
+      bend += fan * (0.5 * snowDust);
+#ifdef MOTION
+      bhB = max(bhB - deep, 0);
+      bendB += fan * (0.5 * snowDust);
+#endif
+    }
     float v = kTuftUp[at.x];
     float3 p = float3(rootAt.x, ground, rootAt.y) + float3(bend.x * v * v * bh, v * bh, bend.y * v * v * bh);
     // (at least most of a pixel wide, or far blades would flicker in and out between pixels)
     float wide = max(shown.w * 0.75, shown.z * length(root - cameraPosition) * 0.8) * kTuftWide[at.x];
     p.xz += across * ((at.y ? 0.5 : -0.5) * wide);
     o.position = mul(viewProj, float4(p, 1));
+#ifdef MOTION
+    float3 pB = float3(rootAt.x, ground, rootAt.y) + float3(bendB.x * v * v * bhB, v * bhB, bendB.y * v * v * bhB);  // [leftover]
+    pB.xz += across * ((at.y ? 0.5 : -0.5) * wide);
+    o.here = mul(motionNow, float4(p, 1));
+    o.then = mul(motionBefore, float4(pB, 1));
+    o.tint.w = 1;  // (a tuft's blade: nothing cut away)
+#else
     o.world = p;
     float3 face = float3(fan.x, 0, fan.y);
     o.toward = normalize(n + face * 0.3 + float3(across.x, 0, across.y) * (at.y ? 0.35 : -0.35));
@@ -481,6 +657,8 @@ VOut VS(uint id : SV_VertexID) {
     colour *= 1 + 0.45 * sin(laid);
 #endif
     o.tint = float4(colour, 1);
+    if (snowDust > 0) o.tint.w = 1 + snowDust;  // [leftover] (dusted toward its tip: the pixel's)
+#endif
     return o;
   }
 
@@ -495,9 +673,14 @@ VOut VS(uint id : SV_VertexID) {
   float3 up = normalize(float3(tilt.x, 1, tilt.y));
   float2 bend = float2(0.915, 0.403) * (swing * gust * 0.35 * more.x);
   float2 c = kCard[corner];
+  [branch] if (deep > 0) c.y = min(c.y, 1 - deep / frame);  // [leftover] (under lying snow: the picture's foot at the snow's top)
   bool flip = (hc & 64u) != 0;
   float above = 1 - c.y;  // (0 the foot, 1 the card's top)
   float3 p = root + right * ((c.x - 0.5) * frame) + up * (above * frame);
+#ifdef MOTION
+  float3 pB = p;  // [leftover] (the frame before's: its wind then)
+  pB.xz += float2(0.915, 0.403) * (swingB * gustB * 0.35 * more.x) * above * above * frame;
+#endif
   p.xz += bend * above * above * frame;
 #ifdef PLANTS
   {  // [plants] pressed by what drove over it: laid over the way it was pushed, rising again over some seconds
@@ -509,6 +692,14 @@ VOut VS(uint id : SV_VertexID) {
       way = length(way) > 0.05 ? normalize(way) : toward.xz;
       p -= up * (above * frame * (1 - cos(layOver)));
       p.xz += way * (sin(layOver) * above * above * frame);
+#ifdef MOTION
+      {  // [leftover] (the frame before: pressed as long ago less the frame's seconds)
+        float downB = pressedBy.z * exp(-max(pressedBy.w / pressedBy.z - motionWhen.y, 0) / 6.0);
+        float layOverB = min(downB * 1.3, 1.3);
+        pB -= up * (above * frame * (1 - cos(layOverB)));
+        pB.xz += way * (sin(layOverB) * above * above * frame);
+      }
+#endif
     }
   }
 #endif
@@ -519,12 +710,28 @@ VOut VS(uint id : SV_VertexID) {
     if (lay > 1e-3) {
       p -= up * (above * frame * (1 - cos(lay)));
       p.xz += blown / over * (sin(lay) * above * above * frame);
+#ifdef MOTION
+      pB -= up * (above * frame * (1 - cos(lay)));
+      pB.xz += blown / over * (sin(lay) * above * above * frame);
+#endif
     }
   }
 #endif
+  [branch] if (deep > 0) {  // [leftover] under lying snow: what stands out of it bowed a little its own way by the snow on it
+    float lay = 0.45 * snowDust, a = PlantRand(PlantHash(hc + 3)) * 6.2832;
+    float3 bowed = -up * (above * frame * (1 - cos(lay))) + float3(cos(a), 0, sin(a)) * (sin(lay) * above * above * frame);
+    p += bowed;
+#ifdef MOTION
+    pB += bowed;
+#endif
+  }
   o.position = mul(viewProj, float4(p, 1));
   o.world = p;
   o.uv = lerp(uvRect.xy, uvRect.zw, float2(flip ? 1 - c.x : c.x, c.y));
+#ifdef MOTION
+  o.here = mul(motionNow, float4(p, 1));  // [leftover] (a card: its holes cut in MotionPS, tint.w 0)
+  o.then = mul(motionBefore, float4(pB, 1));
+#else
   o.right = flip ? -right : right;
   o.up = up;
   o.toward = toward;
@@ -541,13 +748,37 @@ VOut VS(uint id : SV_VertexID) {
     if (tone.w > 0) o.tint.rgb = lerp(1, clamp(under / max(tone.rgb, 1e-3), 0.25, 4), tone.w);
     else o.tint.rgb = lerp(1, clamp(PlantLuma(under) / max(PlantLuma(tone.rgb), 1e-3), 0.5, 3), -tone.w);
   }
+  if (snowDust > 0) o.tint.w = -snowDust;  // [leftover] (dusted where its leaves face up: the pixel's)
+#endif
   return o;
 }
+
+#ifdef MOTION
+// [leftover] the motion: a card's holes cut as the scene cut them (its picture's coverage at a half; right at the eye
+// dithered away), so that what shows through keeps its own motion
+float2 MotionPS(VOut i) : SV_Target {
+  [branch] if (i.tint.w < 0.5) {
+    float a = atlas.Sample(samplerAniso, i.uv).a;
+    clip(a - 0.5);
+#ifdef PLANTS
+    clip(a - 0.5 - 0.3 * saturate(i.burnt.x + i.burnt.y));
+#endif
+    float near = length(i.world - cameraPosition);
+    [branch] if (near < 1.2) {
+      if (smoothstep(0.4, 1.2, near) <= frac(52.9829189 * frac(dot(i.position.xy, float2(0.06711056, 0.00583715))))) discard;
+    }
+  }
+  return CoverMoved(i.here, i.then);
+}
+#endif
 
 float4 PS(VOut i) : SV_Target {
 #if RAYS
   rayLightsAtMost = 1;  // (one ray for the small lights' shadows; lighting.h, SmallLightsTraced)
 #endif
+  // [leftover] under lying snow the cover is dusted by its own measure (CoverSnowDepth: the tint's w), not whitened all over
+  // where the light's snow would lie on what faces up as the ground does
+  [branch] if (weather.y > 0 && coverSnow.x > 0) surfaceSnowShare = 0;
   [branch] if (i.tint.w > 0.5) {
     // [cover] a tuft's blade: lit as the meadow's blades (darker down among them)
     float3 colour = i.tint.rgb;
@@ -558,6 +789,11 @@ float4 PS(VOut i) : SV_Target {
 #ifdef PLANTS
     lightThrough = lightThrough * (1 - saturate(i.burnt.x + i.burnt.y)) + PlantsEmber(i.burnt.w, i.world.xz, time) * (i.shade.y * (falling.w > 0 ? falling.w : 1));  // [plants]
 #endif
+    [branch] if (i.tint.w > 1) {  // [leftover] (dusted with snow toward its tip; less light through there)
+      float dust = (i.tint.w - 1) * (0.3 + 0.55 * smoothstep(0.2, 1, i.shade.y));
+      colour = lerp(colour, SNOW_COLOUR, dust);
+      lightThrough *= 1 - dust;
+    }
     return float4(ModernLight(colour, 0, 0.85, lerp(0.55, 1, i.shade.y), lightThrough, normalize(i.toward), i.world, i.shade.x), 1);
   }
   float4 c = atlas.Sample(samplerAniso, i.uv);
@@ -593,6 +829,11 @@ float4 PS(VOut i) : SV_Target {
 #ifdef PLANTS
   through = through * (1 - saturate(i.burnt.x + i.burnt.y)) + PlantsEmber(i.burnt.w, i.world.xz, time) * (falling.w > 0 ? falling.w : 1);  // [plants]
 #endif
+  [branch] if (i.tint.w < 0) {  // [leftover] (dusted with snow where its leaves face up, the more toward its top; less light through there)
+    float dust = -i.tint.w * saturate(card.y * 2.5 + 0.4) * smoothstep(0.1, 0.6, i.shade.y) * 0.9;
+    albedo = lerp(albedo, SNOW_COLOUR, dust);
+    through *= 1 - dust;
+  }
   return float4(ModernLight(albedo, 0, 0.85, occlusion, through, n, i.world, i.shade.x), fade);
 }
 )hlsl";
@@ -653,6 +894,8 @@ GroundCover::~GroundCover() {
   for (gfx::Pipeline p : {pipeline_, trample_, plantPipeline_, blastPipeline_, blastPlantPipeline_, reactingPipelines_[0], reactingPipelines_[1],
                           reactingPipelines_[2], reactingPipelines_[3]})
     if (p) device_->Destroy(p);
+  for (gfx::Pipeline p : motionPipelines_)  // [leftover]
+    if (p) device_->Destroy(p);
   if (trampled_) device_->Destroy(trampled_);
 }
 
@@ -688,6 +931,8 @@ bool GroundCover::Init(std::string* error) {
                         kPlantsShaderBlock + kCoverShared + kPlantShader;
   reactingSources_[2] = "#define BLASTS 1\n" + reactingSources_[0];
   reactingSources_[3] = "#define BLASTS 1\n" + reactingSources_[1];
+  bladeSource_ = source;  // [leftover] (for the motion's: DrawMotion)
+  plantSource_ = plants;
   const std::string trample = std::string(kViewShaderBlock) + kTrample;
   gfx::ComputeDesc cd;
   cd.name = "ground cover: pressed flat";
@@ -750,6 +995,7 @@ void GroundCover::Prepare(const View& view, const Camera& camera, const std::vec
   // from a little behind it to some fifty units on, where a low eye sees the grass)
   const Vec3 eye = camera.Eye();
   const float away = camera.cinematic ? eye.y - camera.target.y : camera.distance;
+  away_ = away;  // [leftover] (for the motion: motionFarthest)
   if (!pipeline_ || !trample_ || !trampled_ || away > farthest) return;
   // [cover] how much of the cover is there: none at `farthest`, all from `fadeFrom` of it on; and since it came in, over
   // `appearSeconds` (the view's clock: a frame's step counted at most a tenth of a second, so that a hitch is no jump; it
@@ -868,6 +1114,7 @@ void GroundCover::Draw(const View& view, const Camera& camera, gfx::Texture heig
                        gfx::Texture normals, float mapWidth, float mapHeight, float waterLevel, gfx::Texture densityA, gfx::Texture densityB,
                        gfx::Texture blasts) {
   drawnBlades = drawnPlants = 0;
+  drawn_ = Drawn{};  // [leftover]
   if (!blastPlantPipeline_) blasts = {};  // (PrepareBlasts has not made them)
   if (!prepared_ || !heights || !cover || !normals || view.height <= 0) return;
   const bool reacting = plants && plants->Ready() && reactingMade_ > 0;  // [plants]
@@ -897,9 +1144,17 @@ void GroundCover::Draw(const View& view, const Camera& camera, gfx::Texture heig
     device_->SetTexture(9, plants->Press());
     device_->SetTexture(10, plants->Burnt());
   }
+  // [leftover] under lying snow (kCoverShared's CoverSnow; the snow ground's shelter at t13 where it is read)
+  const bool snowing = view.constants.weather[1] > 0 && snowDepth > 0;
+  const bool shelter = snowing && snowShelter;
+  const float wind = std::sqrt(snowWind[0] * snowWind[0] + snowWind[1] * snowWind[1]);
+  const CoverSnowConstants snow{{snowing ? snowDepth : 0.0f, shelter ? 1.0f : 0.0f, 0, 0},
+                                {wind > 0 ? snowWind[0] / wind : 0.0f, wind > 0 ? snowWind[1] / wind : 0.0f, snowTune[1], snowTune[3]}};
+  device_->SetTexture(13, shelter ? snowShelter : trampled_);
   device_->SetPipeline(reacting ? reactingPipelines_[with] : blasts ? blastPipeline_ : pipeline_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
   device_->SetConstants(1, &k, sizeof k);
+  device_->SetConstants(3, &snow, sizeof snow);  // [leftover]
   device_->SetTexture(0, heights);
   device_->SetTexture(1, cover);
   device_->SetTexture(2, normals);
@@ -907,6 +1162,22 @@ void GroundCover::Draw(const View& view, const Camera& camera, gfx::Texture heig
   device_->SetTexture(4, table ? densityA : cover);
   drawnBlades = side * side * 3;
   device_->Draw(static_cast<uint32_t>(drawnBlades) * 15);
+  // [leftover] (what was drawn with, for the motion: DrawMotion)
+  drawn_.blades = true;
+  drawn_.reacting = reacting;
+  drawn_.blasts = static_cast<bool>(blasts);
+  drawn_.heights = heights;
+  drawn_.cover = cover;
+  drawn_.normals = normals;
+  drawn_.densityA = table ? densityA : cover;
+  drawn_.blastField = blasts;
+  drawn_.cleared = cleared ? cleared : trampled_;
+  drawn_.bare = bare ? bare : trampled_;
+  drawn_.press = reacting ? plants->Press() : gfx::Texture{};
+  drawn_.burnt = reacting ? plants->Burnt() : gfx::Texture{};
+  drawn_.shelter = shelter ? snowShelter : trampled_;
+  drawnConstants_[0].assign(reinterpret_cast<const float*>(&k), reinterpret_cast<const float*>(&k) + sizeof k / sizeof(float));
+  std::memcpy(snowConstants_, &snow, sizeof snow);
   // the plants, where the map has them: their spots over the same square, a little coarser
   if (table && plantDensity > 0 && plantPipeline_ && atlas_ && plants_.count) {
     auto p = std::make_unique<PlantConstants>();
@@ -952,15 +1223,89 @@ void GroundCover::Draw(const View& view, const Camera& camera, gfx::Texture heig
     device_->SetPipeline(reacting ? reactingPipelines_[with + 1] : blasts ? blastPlantPipeline_ : plantPipeline_);
     device_->SetConstants(0, &view.constants, sizeof view.constants);
     device_->SetConstants(1, p.get(), sizeof(PlantConstants));
+    device_->SetConstants(3, &snow, sizeof snow);  // [leftover]
     device_->SetTexture(5, densityB);
     device_->SetTexture(6, atlas_);
     device_->SetTexture(7, atlasNormals_);
     drawnPlants = plantSide * plantSide;
     device_->Draw(static_cast<uint32_t>(drawnPlants) * 108);  // ([cover] up to six stars of three cards, or a tuft of twelve blades)
+    drawn_.plants = true;  // [leftover] (for the motion)
+    drawn_.densityB = densityB;
+    drawnConstants_[1].assign(reinterpret_cast<const float*>(p.get()), reinterpret_cast<const float*>(p.get()) + sizeof(PlantConstants) / sizeof(float));
   }
   for (int slot = 0; slot < (reacting ? 11 : 9); ++slot) device_->SetTexture(slot, {});
   device_->SetTexture(11, {});  // [tarmac]
   device_->SetTexture(12, {});  // [cover]
+  device_->SetTexture(13, {});  // [leftover]
+}
+
+// [leftover] The motion of what Draw drew this frame (grass.h): the same squares of blades and plants, by the scene's own
+// shaders with MOTION (kCoverShared's CoverMotion at b2), into the motion over the scene's depth.
+void GroundCover::DrawMotion(const View& view, gfx::Texture motion, gfx::Texture depth, const Mat4& now, const Mat4& before, float timeBefore) {
+  if (!motion || !depth || !drawn_.blades || drawnConstants_[0].empty() || away_ > motionFarthest) return;
+  auto pipelineFor = [&](int k) -> gfx::Pipeline {
+    if (!motionTried_[k]) {
+      motionTried_[k] = true;
+      const bool ofPlants = (k & 1) != 0, withBlasts = (k & 2) != 0, reacts = (k & 4) != 0;
+      const std::string& scene = ofPlants ? (reacts ? reactingSources_[withBlasts ? 3 : 1] : withBlasts ? blastPlantSource_ : plantSource_)
+                                          : (reacts ? reactingSources_[withBlasts ? 2 : 0] : withBlasts ? blastSource_ : bladeSource_);
+      const std::string source = "#define MOTION 1\n" + scene;
+      gfx::PipelineDesc pd;
+      pd.name = ofPlants ? "ground cover: plants, motion" : "ground cover: grass, motion";
+      pd.vertexSource = pd.pixelSource = source;
+      pd.pixelEntry = "MotionPS";
+      pd.cull = gfx::Cull::None;
+      pd.colorFormat = gfx::Format::RG16F;
+      pd.depthWrite = false;
+      pd.depthBias = 16;  // (as the models' motion: the same placement compiled in another shader may land a hair farther)
+      std::string error;
+      motionPipelines_[k] = device_->CreatePipeline(pd, &error);
+      if (!motionPipelines_[k]) fprintf(stderr, "render: the ground cover's motion cannot be drawn (%s)\n", error.c_str());
+    }
+    return motionPipelines_[k];
+  };
+  const int kind = (drawn_.blasts ? 2 : 0) + (drawn_.reacting ? 4 : 0);
+  const gfx::Pipeline blades = pipelineFor(kind), plantCards = drawn_.plants ? pipelineFor(kind + 1) : gfx::Pipeline{};
+  if (!blades && !plantCards) return;
+  gfx::PassDesc pass;
+  pass.color = motion;
+  pass.depth = depth;
+  pass.clearColor = pass.clearDepth = false;
+  device_->BeginPass(pass);
+  const CoverMotionConstants m{now, before, {timeBefore, view.constants.time - timeBefore, 0, 0}};
+  device_->SetTexture(0, drawn_.heights);
+  device_->SetTexture(1, drawn_.cover);
+  device_->SetTexture(2, drawn_.normals);
+  device_->SetTexture(3, trampled_);
+  device_->SetTexture(4, drawn_.densityA);
+  if (drawn_.blasts) device_->SetTexture(8, drawn_.blastField);
+  if (drawn_.reacting) {
+    device_->SetTexture(9, drawn_.press);
+    device_->SetTexture(10, drawn_.burnt);
+  }
+  device_->SetTexture(11, drawn_.cleared);
+  device_->SetTexture(12, drawn_.bare);
+  device_->SetTexture(13, drawn_.shelter);
+  if (blades) {
+    device_->SetPipeline(blades);
+    device_->SetConstants(0, &view.constants, sizeof view.constants);
+    device_->SetConstants(1, drawnConstants_[0].data(), static_cast<uint32_t>(drawnConstants_[0].size() * sizeof(float)));
+    device_->SetConstants(2, &m, sizeof m);
+    device_->SetConstants(3, snowConstants_, sizeof snowConstants_);
+    device_->Draw(static_cast<uint32_t>(drawnBlades) * 15);
+  }
+  if (plantCards && !drawnConstants_[1].empty()) {
+    device_->SetPipeline(plantCards);
+    device_->SetConstants(0, &view.constants, sizeof view.constants);
+    device_->SetConstants(1, drawnConstants_[1].data(), static_cast<uint32_t>(drawnConstants_[1].size() * sizeof(float)));
+    device_->SetConstants(2, &m, sizeof m);
+    device_->SetConstants(3, snowConstants_, sizeof snowConstants_);
+    device_->SetTexture(5, drawn_.densityB);
+    device_->SetTexture(6, atlas_);
+    device_->SetTexture(7, atlasNormals_);
+    device_->Draw(static_cast<uint32_t>(drawnPlants) * 108);
+  }
+  for (int slot = 0; slot <= 13; ++slot) device_->SetTexture(slot, {});
 }
 
 }  // namespace render

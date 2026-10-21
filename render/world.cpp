@@ -764,6 +764,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   // upscaler, the view shifted by this frame's jitter
   const bool moving = (motionOn || motionView > 0 || temporalNow_ || framegenNow_) && gSceneSamples == 1 && !sidePicture && !photo;
   meshes.motion = moving;
+  meshes.swayMotion = plantMotion;  // [leftover] (and what sways)
   meshes.keepLast = sidePicture || photo;
   lensSnap_ = photo;
   if (!sidePicture && !photo) {
@@ -1153,6 +1154,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   terrain.mudMask = mudMask;      // [ground mud] (the terrain draws it in the modern look only)
   terrain.rainGround = rainGround;  // [rain ground] (likewise)
   terrain.snowGround = snowGround;  // [snow ground] (likewise, while snow lies; its drifts by the wind the dust drifts with)
+  terrain.mattGrazing = groundMatt;  // [leftover] (likewise)
   terrain.snowWind[0] = dust.wind[0];
   terrain.snowWind[1] = dust.wind[1];
   meshes.Begin();
@@ -2861,6 +2863,11 @@ void World::Render() {
         post.ContinueScene();
         lights.Bind();
       }
+      // [leftover] under lying snow: with the snow ground, its shelter (deeper in hollows and the lee, thinner under trees)
+      grass.snowShelter = terrain.SnowShelterPicture();
+      grass.snowWind[0] = terrain.snowWind[0];
+      grass.snowWind[1] = terrain.snowWind[1];
+      std::copy(terrain.snowTune, terrain.snowTune + 4, grass.snowTune);
       grass.Draw(view, camera, terrain.HeightTexture(), terrain.HeightUnit(), terrain.GroundColours(), terrain.NormalMap(),
                  static_cast<float>(map.width), static_cast<float>(map.height), map.water.present ? map.water.elevation : -1e9f,
                  plantsReady_ ? coverA_ : gfx::Texture{}, plantsReady_ ? coverB_ : gfx::Texture{}, grassBlasts_ ? blasts.Field() : gfx::Texture{});
@@ -3022,6 +3029,8 @@ void World::Render() {
   if (meshes.motion) {
     Stage("motion");
     motion.Build(view, post.Depth(), motionView == 4 ? nullptr : &meshes);  // (4: for checking, the camera's part alone)
+    if (grassNow_ && plantMotion && motionView != 4)  // [leftover] the ground cover's own motion, over it
+      grass.DrawMotion(view, motion.Texture(), post.Depth(), motion.Now(), motion.Before(), motion.TimeBefore());
     if (leavesNow_ && motionView != 4)  // [groundfix] the falling leaves' own motion, over it
       leaves.DrawMotion(view, motion.Texture(), post.Depth(), motion.Now(), motion.Before(), terrain.HeightTexture(), terrain.HeightUnit());
     post.KeepOpaque();  // (the solid scene and the water, for the upscaler's reactive mask)

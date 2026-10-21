@@ -525,6 +525,10 @@ class World {
   // deeper in the wind's lee and hollows, thinner and patchier under trees and on steep slopes. Modern look with the weather;
   // off by default here, in the game's "Weather Effects" (world_picture.h).
   bool snowGround = false;
+  // [leftover] Dry ground matt at grazing light (terrain.h, Terrain::mattGrazing): at dusk and dawn the sun's highlight on dry
+  // ground fades as the sun sinks (the soil between the grass blades no longer shows a sheen like wet plastic); wet ground,
+  // puddles and lying snow keep theirs. Modern look; off by default here, in the game's "Ground Detail" (world_picture.h).
+  bool groundMatt = false;
   // [plants] Plants that react (plants.h, `plantLife`; Chris, 2026-10-18): grass and the plants laid over where units drive,
   // rising again over seconds; bushes, ferns, saplings and the like bending under them and springing back; the grass, the
   // plants and the undergrowth burnt black, then brown and lower where explosions and fires were, growing back over
@@ -620,6 +624,11 @@ class World {
   bool motionOn = false;
   int motionView = 0;
   Motion motion;
+  // [leftover] What sways and the ground cover tell the motion how they move (MeshRenderer::swayMotion, GroundCover::DrawMotion):
+  // the trees and bushes in the wind, the blasts' waves and plants that react; the blades, tufts and the plants' cards. On
+  // whenever the motion is drawn (the temporal upscaler, frame generation); false (the viewer's --no-plant-motion): as
+  // before, they move with the camera's part alone, and smear under the temporal upscaler.
+  bool plantMotion = true;
   // The glow round what is brighter than the screen can show, in the modern look (the game's Bloom
   // Render and Bloom Intensity): off, or this strong (1.5, the game's default, is the modern look's own).
   bool bloom = true;

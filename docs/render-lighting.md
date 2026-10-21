@@ -1860,6 +1860,65 @@ Three look fixes before Chris's test run, each inside an option the game has on;
   and the film shine): Chris to judge; from the game's height the mouth's white water is a soft bright spill, not
   clumps (they are finer than the pixels there).
 
+## The plants' motion, a matt ground at grazing light, the cover under snow (2026-10-21; a helper's, for review)
+
+Three leftovers before Chris's test run (the renderer's task of 2026-10-21; the third from the visuals session's snow film).
+- **What sways tells the motion how it moves** (`World::plantMotion`, on whenever the motion is drawn: the temporal upscaler,
+  frame generation; viewer `--no-plant-motion` to compare). Until now only the keyed models (units) and the falling leaves
+  wrote motion; the trees, the bushes and the ground cover moved with the camera's part alone. Now: `MeshRenderer::
+  DrawSwayMotion` draws the swaying scenery the scene drew again (a shader of its own, kSwayMotionShader, kept in step with
+  the models' VS: the wind's swing and gusts, a group's trees on their own beat, plants pressed by units and burnt, the
+  blasts' waves), writing where each corner was the frame before: the wind at the frame before's time (`Motion::TimeBefore`;
+  none after a gap over a quarter of a second or with the clock standing still), what pressed it and the blasts' waves as long
+  ago less the frame's seconds; holes cut as the scene cut them. `GroundCover::DrawMotion` draws the blades, the tufts and the
+  plants' cards again by the scene's own shaders with MOTION (each of the eight variants made the first time it is wanted),
+  the wind and the pressing likewise; the blasts' push on the grass as now (their field of the frame before is not kept).
+  Both depth-tested against the scene's depth, as the units' motion. Only where it shows: trees standing 128 px tall or more
+  (24 px while the blasts' waves run; `swayMotionPixels`), the cover with the camera within 20 (`motionFarthest`).
+  - **What it brings**: at 60 frames a second the wind moves a blade's tip by some 0.06 to 0.15 px a frame and a tree's top
+    by 0.05 to 0.6 px, so FSR 3's picture is all but the same with or without it in calm air (SETONS_R, quality, against the
+    picture drawn at the window's size: the meadow 4.48 -> 4.52, a wood 6.59 -> 6.54 of 255). With the clock four times as
+    fast (as a storm's gusts, or a low frame rate) where something moves: the meadow 10.73 -> 9.20, the wood 13.18 -> 12.80;
+    a slow pan within one percent. Blasts' waves throw trees about fast: there it counts most. Checked right with a test
+    build swaying six times as far: the frame before carried by the motion against this frame, where something moved, 26.9 ->
+    19.3 for the cover, 23.2 -> 19.9 for the trees (what is left: the carrying's own blur on thin blades).
+  - **Cost** (2560x1440, FSR 3 quality, RTX 4090, the lowest of three runs, the PC busy): from the game's usual height (40)
+    nothing; the meadow at 10 +0.04 ms, close (5) +0.04, a wood at 14 +0.09, mid (20) +0.10. (Without the two limits: +0.47
+    from 40.)
+- **Dry ground matt at grazing light** (`World::groundMatt`, viewer `--ground-matt`; proposed for "Ground Detail"): at dusk
+  and dawn the soil between the grass blades showed a broad sheen like wet plastic. Why: the light's GGX highlight on the
+  remastered layers' scanned roughness (the third maps' green, means: soil 0.53, dry grass 0.69; grass 0.94, forest floor
+  0.92) with a low light ahead of the eye. At 18:30 that light is the moon some 24 degrees up (the sun has set); without the
+  highlight on the ground the picture's mean 29.07 -> 25.66 of 255, without the sky's mirror on it 27.07. At 7:00 the milky
+  veil is mostly the light in the air. The ground cover's being left out of the ambient occlusion is not it (that dims the
+  sky's light, not this highlight). Now, with the option, dry ground loses that highlight as the light sinks toward the
+  ground's own slope (its small shapes left out): two thirds left at 35 degrees, two fifths at 25, a sixth at 12, a tenth on
+  the horizon; a shore's wet band, rain-wet ground, puddles and lying snow keep theirs. Drawn by variants of the ground's
+  pipelines (GROUND_MATT; `Terrain::MattVariant`, made the first time each is wanted), so that with it off the ground's
+  shaders are what they were (a first try with a branch in them moved one pixel by one level on Vulkan at dusk). 18:30 close:
+  29.07 -> 27.09. Cost: none measurable (the ground's pass 0.49 / 0.65 ms either way at 20 / 6).
+- **The cover under lying snow** (with the ground cover; no option of its own): the blades, tufts and plants went on standing
+  up through the snow, white where the light's snow lay on them, green where it did not, and white blades over bare ground
+  where the snow ground leaves it bare. Now how deep the snow lies over a root is worked out as the light lays it (its patches,
+  level ground first, by World::snowLying) and, with the snow ground, by its shelter (deeper in hollows and the wind's lee,
+  thinner under the trees' crowns, on steep and windward ground; the shelter bound to the cover's pass at t13,
+  `Terrain::SnowShelterPicture`), a little uneven, to `GroundCover::snowDepth` (0.16 world units) where all of it lies. Each
+  blade, tuft and plant (by each cell's height from the cover's file) is cut at the snow's top and buried where less than
+  three tenths of it would show; what stands out is bowed and dusted white, the more toward its top (cards: where their
+  leaves face up), the light's own snow no longer laid on it. Without snow lying nothing changes. Cost: the cover's pass at
+  lying 1 0.32 -> 0.11 ms (most of it buried), at 0.5 +0.01, without snow nothing.
+  - **Found**: at full snow the green plants that still stand out of it in the visuals session's pictures are the map's
+    undergrowth props (models), not the cover (with and without the cover the picture differs by 0.01 of 255): left as they
+    are, the renderer's decision.
+- **Checked**: off, regress3 eight of eight 0 px against b197ac4 on both backends, the weather regression four of four 0 px
+  against the worktree's base (render 0c81623; the rain scene differs from b197ac4 by design since 76e93bf); SETONS_R with the
+  ground cover and Chris's looks, the base exe against ours with the options off: the same picture (the viewer's own
+  run-to-run differences aside, which the base shows against itself too). With `--ground-matt` on in the weather
+  regression: rain 0 px, snow 1298 px by at most 2 levels, all bare ground between the snow a little darker (as meant).
+- **Open**: the blasts' push on the grass has no motion of its own (its field of the frame before would have to be kept). The
+  sway's motion leaves out a cinematic camera's near fade (leaves within 1.2 units) and the remastered build's shrinking.
+  The matt ground's range is a judgement (terrain.cpp, `smoothstep(0.12, 0.9, ...)`).
+
 ## The options
 
 Each is off by default (but `hiddenOutlines`, on: Chris's word, item 15) and, off, leaves the picture as it was, pixel
@@ -1909,6 +1968,7 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `mudMask` | the map's painted mud (stream banks): its mud material over the ground by the mask, wet and glossy with puddles in rain, paler and cracked dry; deep tracks press into it as mud, no plants on it (in "Ground Detail") | +0.03 ms from the game's height over the mud, +0.08 to 0.10 close by, nothing with no mud in view | a map whose remap.json entry names a "mud_mask" |
 | `markRelief` | [scars] the marks' relief lit as the ground: craters' and trenches' normal decals by the modern light (no dark squares and white rims by night), softened under lying snow, the remastered map's plain normal maps applied as such (no dark strip beside the trenches) (in "Ground Detail") | +0.01 to 0.03 ms at 1440p (the marks' pass: 0.055 -> 0.065 over SETONS_R's craters and trenches by day, 0.058 -> 0.084 over a battle's 64 marks by night; the lowest of two or three runs) | |
 | `rainGround` | the listed layers go over to their wet twins as the ground gets wet, the hollows first, and back as it dries (in "Weather Effects") | +0.13 to 0.16 ms while the ground is wet (SETONS_R's four twins), nothing dry | a time of day; a map whose entry has a "weather" rain block |
+| `groundMatt` | dry ground matt at grazing light: no sheen like wet plastic on the soil at dusk and dawn; wet ground, puddles and snow keep their gloss (proposed for "Ground Detail") | none measurable | a time of day |
 | `snowGround` | the lying snow from the map's snow materials (drifted, packed where trodden, breaking up by the ground's height, slush at the thaw) and, on any map, shaded by what is round it (valleys, hollows, trees, rocks), deeper in the wind's lee, thinner under trees and on steep ground (in "Weather Effects") | +0.20 ms from the game's height while snow lies (+0.16 close with the relief, +0.28 with deep tracks), nothing without | a time of day; the materials where the map's entry has a "snow" block |
 
 Ray tracing means Direct3D 12 with DXR 1.1 or Vulkan with ray queries: never on the Mac (MoltenVK has none);
@@ -1929,7 +1989,7 @@ so there is less clutter). WorldPicture sets each bundle's options together, bef
 | `SetSoftShadows` | `softShadows`, `contactShadows` | about +0.37 ms |
 | `SetRayTracing` | `bounceLight`, `rayReflections`, `rayLightShadows` (reflections and the small lights' shadows from the next map) | about +0.75 ms; at night with many lights about 0.5 ms more |
 | `SetWeatherEffects` | `litRain`, `rainSplashes`, `waterDetail`; `streamWater` ([stream], 2026-10-19: 0.05 to 0.13 ms), `rainGround` ([rain ground], 2026-10-19: +0.13 to 0.16 ms while wet), `snowGround` ([snow ground], 2026-10-20: +0.2 to 0.3 ms while snow lies); proposed: `horizonWeather` | about +0.05 ms in rain, +0.04 by water; the horizon about +0.1 (0.21 from the strategic view in snow) |
-| `SetGroundDetail` | `groundCover`, `battleScars`, `leafLight`, `deepTracks`, `wildlife`, `plantsReact` ([plants], 2026-10-18); `groundParallax` ([parallax], 2026-10-19: +0.14 to 0.17 ms zoomed in), `remasteredTarmacs` ([tarmac], 2026-10-19), `mudMask` ([ground mud], 2026-10-19: +0.03 ms over the mud from the game's height, nothing away from it), `markRelief` ([scars], 2026-10-20) | +0.05 to 0.16 ms zoomed in, nothing far out; scars up to +0.56 ms with 2000 in view |
+| `SetGroundDetail` | `groundCover`, `battleScars`, `leafLight`, `deepTracks`, `wildlife`, `plantsReact` ([plants], 2026-10-18); `groundParallax` ([parallax], 2026-10-19: +0.14 to 0.17 ms zoomed in), `remasteredTarmacs` ([tarmac], 2026-10-19), `mudMask` ([ground mud], 2026-10-19: +0.03 ms over the mud from the game's height, nothing away from it), `markRelief` ([scars], 2026-10-20), `groundMatt` ([leftover], 2026-10-21: dry ground matt at grazing light, no cost) | +0.05 to 0.16 ms zoomed in, nothing far out; scars up to +0.56 ms with 2000 in view |
 | `SetFrameGeneration` | `frameGeneration` (a sixth setting, asked of the ui: "Frame Generation") | 1.1-1.4 ms a frame drawn; twice the frames shown |
 | `SetHiddenOutlines` | `hiddenOutlines` (readability, not light: its own setting, ON at first; proposed to the ui as "Hidden Unit Outlines") | 0.06-0.08 ms |
 

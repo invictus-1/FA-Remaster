@@ -201,6 +201,8 @@ class WorldPicture {
   //   banks muddy, glossy with puddles in rain, paler and cracked as they dry; up to +0.1 ms close by, only where mud is.
   //   [scars] And the marks' relief lit as the ground (World::markRelief): craters and trenches keep their look by night
   //   and soften under lying snow (no dark squares round the marks, no dark strips beside the trenches).
+  //   [leftover] And dry ground matt at grazing light (World::groundMatt): no sheen like wet plastic on the soil
+  //   at dusk and dawn.
   void SetGroundDetail(bool on);
   // FSR 3 frame generation (World::frameGeneration): a picture made between each two frames and shown between
   // them, evenly apart, so twice the frames are shown, for a little more than half a frame's delay; the icons and
