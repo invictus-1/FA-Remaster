@@ -3617,7 +3617,8 @@ Unit* FindPlatform(Sim& sim, Unit* plane) {
   for (Unit* P : ps) {
     if (P->dead || P->beingBuilt || P->destroyQueued || !P->transport) continue;
     float dx = plane->position.x - P->position.x, dz = plane->position.z - P->position.z;
-    double d = std::sqrt(static_cast<double>(dx) * dx + static_cast<double>(dz) * dz);
+    // float: dz^2 + dx^2 (0x62f23f..0x62f24e), the root 0x40eaf0 at PC_24 (0x62f257)
+    const float d = std::sqrt(dz * dz + dx * dx);
     if (d > BpNum(L, *P->blueprint, "AI", "StagingPlatformScanRadius", 300.0f)) continue;
     // 0x62f29d Entity::IsInBounds: the platform inside the playable rect with a margin of 1 (the plane's army's flag)
     if (!sim.IsWithin(P->position.x, P->position.z, 1.0f, Sim::UseWholeMap(plane->army))) continue;

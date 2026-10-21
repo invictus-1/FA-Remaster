@@ -316,13 +316,13 @@ int l_GenerateRandomOrientation(lua_State* L) {
   if (lua_gettop(L) != 0) return luaL_error(L, "%s\n  expected %d args, but got %d", "GenerateRandomOrientation", 0, lua_gettop(L));
   Sim& sim = *S(L);
   float g1 = static_cast<float>(sim.Gauss()), g2 = static_cast<float>(sim.Gauss()), g3 = static_cast<float>(sim.Gauss());
-  double g4w = sim.Gauss();
-  float g4 = static_cast<float>(g4w);
-  double sum = ((static_cast<double>(g3) * g3 + static_cast<double>(g2) * g2) + static_cast<double>(g1) * g1) + g4w * g4w;
-  double len = std::sqrt(static_cast<double>(static_cast<float>(sum)));
+  float g4 = static_cast<float>(sim.Gauss());
+  // the x87 sum at PC_24 rounds each step to float (0x75a67b..0x75a696), the root 0x452fc0 (0x75a69b), 1e-6 test
+  const float sum = ((g3 * g3 + g2 * g2) + g1 * g1) + g4 * g4;
+  const float len = std::sqrt(sum);
   Quat q{0, 0, 0, 0};
-  if (len > 1e-6f) {
-    float inv = 1.0f / static_cast<float>(len);
+  if (len > 9.99999997e-07f) {
+    float inv = 1.0f / len;
     q = Quat{g1 * inv, g2 * inv, g3 * inv, g4 * inv};
   }
   PushVector(L, 0, 0, 0);  // {x, y, z, w} with the vector metatable, as GetOrientation

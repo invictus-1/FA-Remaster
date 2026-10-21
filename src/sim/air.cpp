@@ -141,9 +141,9 @@ Vec3 Normalized(const Vec3& v) {
 // 0x452af0: normalise in place; returns the length (zero vector and 0 if the length is <= 1e-6: 0x452b92)
 double NormalizeInPlace(Vec3& v) {
   float s = (v.x * v.x + v.y * v.y) + v.z * v.z;
-  double n = std::sqrt(static_cast<double>(s));
-  if (n > static_cast<double>(9.99999997e-07f)) {
-    float inv = 1.0f / static_cast<float>(n);
+  const float n = std::sqrt(s);  // compared rounded to float, as the x87 holds it at PC_24 (0x452b3e..0x452b51)
+  if (n > 9.99999997e-07f) {
+    float inv = 1.0f / n;
     v.x *= inv;
     v.y *= inv;
     v.z *= inv;
@@ -156,9 +156,9 @@ double NormalizeInPlace(Vec3& v) {
 // func_NormalizeQuatInPlace 0x4edaa0
 void NormalizeQuat(QuatW& q) {
   float s = ((q.w * q.w + q.x * q.x) + q.y * q.y) + q.z * q.z;
-  double n = std::sqrt(static_cast<double>(s));
-  if (n > static_cast<double>(9.99999997e-07f)) {
-    float inv = 1.0f / static_cast<float>(n);
+  const float n = std::sqrt(s);  // compared rounded to float (x87 at PC_24)
+  if (n > 9.99999997e-07f) {
+    float inv = 1.0f / n;
     q.w *= inv;
     q.x *= inv;
     q.y = inv * q.y;

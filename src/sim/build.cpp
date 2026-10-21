@@ -2136,8 +2136,10 @@ bool OutsideRange(Sim& sim, Unit* U, GuardData& g, float r) {
   Unit* G = g.hasUnit ? FindUnit(sim, g.G) : nullptr;
   float size = G ? static_cast<float>(std::max(Fp(G).sizeX, Fp(G).sizeZ)) : 1.0f;
   Vec3 ref = ReferencePos(sim, U, g);
-  double dx = U->position.x - ref.x, dy = U->position.y - ref.y, dz = U->position.z - ref.z;
-  return std::sqrt(dx * dx + dy * dy + dz * dz) > size + r;
+  // all float (x87 at PC_24): the squares summed x, z, then y (0x612506..0x612520), the root (0x452fc0) against
+  // size + r (0x61252e..0x61253b)
+  const float dx = U->position.x - ref.x, dy = U->position.y - ref.y, dz = U->position.z - ref.z;
+  return std::sqrt((dx * dx + dz * dz) + dy * dy) > size + r;
 }
 
 // ResolveGuardCommandSourceUnit 0x611cd0: a factory with work along U's guard chain

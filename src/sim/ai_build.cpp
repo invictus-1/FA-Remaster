@@ -1030,7 +1030,7 @@ int l_CanBuildPlatoon(lua_State* L) {
 
 // GetAvailableFactories([position, radius]) 0x58bd30 -> CAiBrain::GetAvailableFactories 0x57aec0: the army's
 // FACTORY - MOBILE units that are alive, not destroy-queued, factories (builder +8), not being built and not busy;
-// with a radius above 0, within it (2D, sqrt 0x40eaf0 compared on the x87: taken as double). Ascending id.
+// with a radius above 0, within it (2D, sqrt 0x40eaf0 compared on the x87 at PC_24, so a float). Ascending id.
 int l_GetAvailableFactories(lua_State* L) {
   Args(L, "brain:GetAvailableFactories()", 1, 3);
   AiBrain* b = B(L);
@@ -1047,7 +1047,7 @@ int l_GetAvailableFactories(lua_State* L) {
     if (r > 0.0f) {
       const float dz = p.z - u->position.z, dx = p.x - u->position.x;
       const float s = dz * dz + dx * dx;
-      if (std::sqrt(static_cast<double>(s)) > static_cast<double>(r)) continue;
+      if (std::sqrt(s) > r) continue;  // 0x57b022..0x57b037
     }
     out.push_back(u);
   }

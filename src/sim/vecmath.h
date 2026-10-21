@@ -91,12 +91,13 @@ inline Quat Orient(Vec3 dir) {
   return QMul(AxisAngle({0, 1, 0}, yaw), AxisAngle({1, 0, 0}, -pitch));
 }
 // The exe's normalise in place 0x452af0: the squares summed x, y, z, the root taken of the float sum, the parts
-// multiplied by 1 / length; a length of 1e-6 or less gives the zero vector and returns 0.
+// multiplied by 1 / length; a length of 1e-6 or less gives the zero vector and returns 0. The root is compared as
+// the x87 holds it, rounded to float at PC_24 (0x452b3e..0x452b51).
 inline double NormalizeExe(Vec3& v) {
   const float s = (v.x * v.x + v.y * v.y) + v.z * v.z;
-  const double n = std::sqrt(static_cast<double>(s));
-  if (n > static_cast<double>(9.99999997e-07f)) {
-    const float inv = 1.0f / static_cast<float>(n);
+  const float n = std::sqrt(s);
+  if (n > 9.99999997e-07f) {
+    const float inv = 1.0f / n;
     v.x *= inv;
     v.y *= inv;
     v.z *= inv;

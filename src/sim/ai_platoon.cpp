@@ -1124,9 +1124,9 @@ int l_CanFormPlatoon(lua_State* L) {
       for (Unit* u : units) {
         if (Gone(u) || u->beingBuilt) continue;
         const float dx = u->position.x - pos.x, dz = u->position.z - pos.z;
-        // sqrt 0x40eaf0 leaves its result in x87 precision for the compare with the radius (inferred: double here)
-        const double d = std::sqrt(static_cast<double>(dx * dx + dz * dz));
-        if (static_cast<double>(r) > d) {
+        // sqrt 0x40eaf0 (0x72d421): at PC_24 its x87 result is a float, compared with the radius (0x72d426..)
+        const float d = std::sqrt(dx * dx + dz * dz);
+        if (r > d) {
           ++have;
           ++total;
         }
