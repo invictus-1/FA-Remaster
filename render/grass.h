@@ -97,6 +97,11 @@ class GroundCover {
   // [cover] how far the weeds and ferns (dark leaves) are brought toward the brightness of the ground under them (0: the
   // art's own; their mean from the cover's stats): at the art's own they read as black holes in the shade of the trees
   float leavesToGround = 0.5f;
+  // [cover] how much brighter the visuals session made the weeds' and ferns' art after the lift above was tuned (2026-10-21:
+  // x1.30 in linear, baked into sorrel, weed, nettle and fern so the lift is not needed over meadow): the lift is worked out
+  // so that the screen is as it was (over meadow ground the leaves at the art's own, darker or brighter ground still
+  // followed as before). 1: the art as the lift was tuned for.
+  float leavesBaked = 1.30f;
   int drawnPlants = 0;        // (the last Draw: spots gone through)
 
   float bladeHeight = 0.22f;  // the tallest blade, world units

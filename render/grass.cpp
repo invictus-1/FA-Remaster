@@ -939,6 +939,14 @@ void GroundCover::Draw(const View& view, const Camera& camera, gfx::Texture heig
     for (int i = 0; i < 16; ++i) {  // [coverdark] (how far the grass's clumps take the ground's colour; [cover] the leaves its brightness)
       std::copy(plants_.tones[i], plants_.tones[i] + 3, p->tones[i]);
       p->tones[i][3] = plants_.tones[i][3] * (plants_.tones[i][3] > 0 ? clumpsToGround : leavesToGround);
+      if (plants_.tones[i][3] < 0 && leavesToGround > 0 && leavesBaked > 0) {
+        // [cover] the leaves' art already carries `leavesBaked` of the lift: the screen as before, the art's mean c' = k c,
+        // c' x f = c x lerp(1, g / c, w): f = (1 - w) / k + w g / c' = lerp(1, g / L, w') with w' = 1 - (1 - w) / k and
+        // L = c' w' / w (the shader takes the leaves' tone only for its brightness)
+        const float w = leavesToGround, wk = 1 - (1 - w) / leavesBaked;
+        for (int k = 0; k < 3; ++k) p->tones[i][k] *= wk / w;
+        p->tones[i][3] = -wk;
+      }
     }
     if (reacting) std::copy(plants->Constants(), plants->Constants() + 8, &p->plantsK[0][0]);  // [plants]
     device_->SetPipeline(reacting ? reactingPipelines_[with + 1] : blasts ? blastPlantPipeline_ : plantPipeline_);
