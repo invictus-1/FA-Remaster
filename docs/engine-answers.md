@@ -3,6 +3,54 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## visuals (by message, 2026-10-21): the Izanagi holding still while Divine Judgment fires — answered
+
+Chris's design: the Izanagi (MIA0401, a winged air unit) stops and holds in the air for the bow opening, the 3 s
+charge and the beam (about 9 s), preferably CZAR-like, then flies on as a bomber. Helper ct read the exe and tested in
+ours (headless, with mod_r2 read in place).
+
+**1. Winged cannot change at run time, in the original or in ours.** The original reads Air.Winged (bp+0x369) every
+tick from the C++ blueprint built at load. It is used in ComputeAirControl 0x6be6b0 (the orientation mode), in the
+gate in front of ComputeAirCombatTactics (CalcMoveAir 0x6bfdb4), and for the arrival radius. No Lua call sets it.
+Changing `__blueprints` in the sim reaches only Lua, never the motion. SetSpeedMult 0x6cada0, SetAccMult and
+SetTurnMult only scale; SetImmobile 0x6c6770 only sets unit state Immobile (u+0x4a0 bit 1). Ours caches Winged with
+the motion blueprint. So a CZAR-style hover that turns on the spot needs Winged = false for the unit's whole life.
+
+**2. What comes closest.**
+- **SetImmobile(true): an exact freeze in mid-air (recommended).** For a flying unit in state Immobile, the motion tick
+  skips the flight step entirely (no CalcMoveAir, no MoveTo) and sets the horizontal event to Stopped. Ours is the
+  same (air.cpp, `!u->immobile && !u->stunned && canFly`).
+  - Test: flying at about 4.4 units/s, frozen 90 ticks. Position, altitude (38.41) and attitude, including the bank
+    and pitch it had, held to the last digit; velocity 0; layer Air; no drop.
+  - On SetImmobile(false) it carries on at its frozen velocity and finishes its order smoothly.
+  - It cannot turn while frozen: only the beam's turret aims.
+- **SetSpeedMult(0): a winged slow-down to a near hover.** It brakes over about 4 s, levels its wings, holds altitude
+  and drifts about 4 units more. Its heading wanders and can't be pointed. On SetSpeedMult(1) it banks up to about
+  70° and dipped 5 units before flying normally. Usable, but less clean.
+
+**3. Risks.**
+- **WeaponUnpackLocksMotion = true freezes it for good.** FAF's unpack state calls SetImmobile(true) as soon as the
+  weapon gets its target (DefaultProjectileWeapon.lua 1307-1308), at the order, before the aim, the bow and the
+  charge. It packs again only on OnMotionHorzEventChange from 'Stopped' (lines 382-383), which never comes while an
+  aircraft is Immobile, or in RackSalvoReload's pack branch (line 1269), which excludes locked weapons. Test with the
+  lock forced on: frozen from tick 41, the target dropped about tick 191 without a shot, and still frozen at tick 700.
+  The original behaves the same (FAF's Lua, the same motion tick). Keep it false.
+- **The firing arc.** While frozen, the beam reaches only what lies inside its turret limits around the frozen nose
+  (yaw ±30°, pitch -35° ±45°). So freeze when the turret is on target, at the charge start
+  (PlayFxRackSalvoChargeSequence) or the beam start, not at the order.
+- **A safe pattern:** SetImmobile(true) at the charge or beam start. SetImmobile(false) at whichever comes first: the
+  beam lifetime + 1 s (your existing thread), the weapon losing its target, a hard timeout of about 12 s, or death.
+- **Orders during the hold:** the queue is untouched. New orders queue and take effect after the release.
+- **Drones:** docked ones are attached to the bay bones, so they stay put. Guarding drones guard a stationary ship, and
+  returning ones aim at the bay with the ship's velocity, 0 while frozen. No problem seen; a launch and recall during
+  a hold was not run.
+- **No stall or altitude loss with SetImmobile**, since the flight step does not run at all.
+
+**Seen on the way, not looked into:** in the hover runs (no enemies, a ground point 55 ahead) the beam never fired,
+locked or not. Its fire clock went 0 -> 299 at the order (RateOfFire 10/300: a shot every 30 s), and the ground target
+was dropped after about 15 s. With enemy units at the point it fired 5.6 s after the order. If the beam often fails to
+fire for Chris, look there next.
+
 ## render 45: Chris's test run of 21 October, the engine's part — answered (the cheats built, 133671a; the rest not the sim's)
 
 Helper ct read each item in the exe. Only item 1 needed engine code.
