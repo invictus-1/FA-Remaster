@@ -186,6 +186,9 @@ class WorldPicture {
   //   ripples and white water flowing downstream, the sky mirrored, rings in rain; about 0.05-0.13 ms at 1440p.
   //   And the rain-wet ground (World::rainGround): where a map has wet twins of its ground's materials, the ground goes
   //   over to them as it gets wet, the hollows first, and back as it dries; +0.13-0.16 ms while the ground is wet.
+  //   And the lying snow (World::snowGround): where a map has snow materials, the snow drawn in them (drifted, packed where
+  //   trodden, slushy at the thaw); on any map, shaded by what is round it (valleys, hollows, trees and rocks) and lying
+  //   deeper or thinner by the wind, the trees and the slope; +0.2 to 0.3 ms while snow lies.
   void SetWeatherEffects(bool on);
   // Ground detail: grass near the camera, pressed flat round units and buildings (World::groundCover); about
   //   +0.05 to 0.2 ms when zoomed in, nothing from afar; and battle scars (World::battleScars): the scorches and

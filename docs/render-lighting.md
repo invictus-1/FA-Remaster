@@ -1648,6 +1648,79 @@ inside an option the game's settings turn on (Atmosphere: `cloudZoom`, `lightSha
   strategic view (nearer the eye); the shower columns of the horizon's weather still reach 150 (horizon.cpp); the far
   sea is greyer than the near one on very wide windows (the land far off's haze: `hazeHeight=300` clears both from
   above); Chris to judge.
+## The lying snow from real snow materials, shaded by what is round it (first version, 2026-10-20; a helper's, for review)
+
+The visuals session's section 61 (CC0 snow materials for SETONS_R, the form in render-answers.md) and Chris's item 6 of
+2026-10-20 ("when it snows the map looks like a blanket when some spots should be darker/lighter cause of the way the
+trees, rocks, mountains, hills are"). One option, off by default, the modern look with the weather: `World::snowGround`
+(viewer `--snow-ground`; `Terrain::snowGround`), in "Weather Effects" beside `rainGround`. `--snow-ground-tune
+sky,crowns,relief,drifts` (each 0..2, 1 as tuned) and `MOHO64_DEBUG_SNOW=1..6` (the sky the snow gets, the crowns, the
+wind's laying, drifts, depth, its edge) are for tuning.
+- **Where snow lay until now** (lighting.h, ModernLight's weather branch, unchanged with the option off): the fallen amount is
+  World::snowLying (up over 150 s of snowfall, down over 300 s after; the ground wet while it melts); it lies first where the
+  surface is level, in two octaves of noise patches that close as more falls, steep ground last and none past about 75
+  degrees; under winter water and on its wash strip none; the snow tracks' picture treads it away to a dark ground (22 %
+  left), deep tracks cut troughs to packed snow and heap berms. Its colour one constant, linear (0.50, 0.53, 0.58), roughness
+  0.7, the small shapes under it half smoothed. No depth of its own: a share of cover. The winter season lays none
+  (season.h: reserved).
+- **How**: a ground pipeline of its own, "terrain, snow" (GROUND_MORE and GROUND_SNOW; "terrain, snow and wet" with GROUND_WET
+  while the twins are drawn: the twins' code costs some 0.09 ms at 1440p even unused), draws all the ground while snow lies; the snow itself is still laid by lighting.h's snow, given its make-up and its place's numbers through statics
+  the pipeline declares (`#ifdef GROUND_SNOW` hooks; elsewhere the macros SNOW_COLOUR, SNOW_ROUGH, SNOW_UP, SNOW_FLAT,
+  SNOW_PACKED expand to the very tokens that were there, so every other shader is the same after the preprocessor).
+  Registers: t4 holds the snow's shelter (below) with the mud mask's copy in its red, t5 the twins' and the snow's normals,
+  the snow's albedos and third maps laid in the layers' array (t25) after the layers' and the twins' (ReadExtras: one set,
+  made again the first time either is wanted, both at once where both are).
+- **The materials** (a map's remap.json entry: `"snow": {"fresh": m, "drift": m, "packed": m}`, each at the layers' tier,
+  each at its own real size, any map; SETONS_R's CC0 three, SETONS_Q's Fab three): where snow lies, "fresh" in place of the
+  constant (read twice and joined as the mud is, so its repeat does not show), its creases, roughness (taken rougher where
+  its small shapes are under a pixel), small shapes on the smoothed ground (thin snow follows the ground's shapes, deep snow
+  hides them) and its relief with the ground parallax (the snow's relief where snow lies, at a guess from the ground's own
+  slope); "drift" blended in softly only where the shelter says the wind lays the snow deep (hollows, the lee of rises and
+  of props), by the two's heights over a wide edge, its second reading larger (its ripples at two scales); "packed" in
+  deep tracks' troughs and where the snow tracks say it is trodden (read only there), a little smoother, its shapes half
+  pressed out (the trough's relief over it as before). The snow's small shapes weaken as fewer of them show in a pixel
+  (to about half from the game's height, a quarter for the drift, whose two readings are then taken half and half): from
+  45 open snow reads smooth, the ripples only close by (Chris via the renderer, 2026-10-20: natural, not busy). Where the
+  snow thins it goes over a wider margin, mottled (thinner snow, islands and holes at two scales), so that a large bare
+  patch does not read as cut out; close by it also breaks up by the layers' height as laid and its own (the hollows first,
+  the ground's stones showing through). Its brightness as before: the visuals session graded "fresh" to the constant (its linear mean 0.496, 0.508,
+  0.555; luma 0.521 against 0.527), and the snow keeps the sky's light the ground's creases leave on the whole (each layer's
+  smallest level), its own creases' pattern over that, so that it is its make-up that changes, not its brightness.
+- **Wet snow**: at the thaw (the weather melts it as soon as it stops falling: more of it slush as less lies) and in rain on
+  snow, never while snow falls: slush in the hollows first, in patches, darker (x 0.78), greyer and glossier (roughness
+  0.28).
+- **Shaded by what is round it** (any map, with or without the materials): the snow's shelter, made once a map the first time
+  snow lies (Terrain::SnowShelter, a compute pass; RGBA16F over the map, two texels a world unit, at most 2048): how much of
+  the sky a place sees (the highest rise of the map's heights in sixteen ways out to about 85 world units, cos^2; less by the
+  props beside it, World's raster from the map's props, snow_ground.h: each as a disc of its footprint standing its height,
+  trees' crowns at half), the trees' crowns over it, and how deep the wind lays the snow there (hollows and the lee of rises
+  deeper, crests and windward slopes shallower; behind each prop a tail of snow in its lee, a scoop on its windward side, a
+  well under a tree's crown; the wind World's, the dust's). From it the snow takes less of the sky's light in valleys, hollows,
+  under and beside trees and rocks (the share taken counted about four times over, at most two thirds: the snow's light is
+  mostly the sky's), lies deeper or thinner and patchier (under crowns, on steep, windward and scoured ground), and its
+  drifts and scoops get a relief of up to 0.6 world units the sun shades. Bare ground takes some of the shade too, only as
+  snow comes.
+- **Cost** (2560x1440, RTX 4090, SETONS_R in snow at 15:00, the ground's pass, the lowest of two runs; the PC busy with
+  other work): from the game's height 0.397 -> 0.597 ms, mid (20) 0.416 -> 0.632, close (6) with the ground parallax 0.626
+  -> 0.786, from the game's height with deep tracks and 12 units driving 0.420 -> 0.701, at the thaw with the twins (lying
+  0.6, wet 1, the rain ground on in both) 0.566 -> 0.801; with no snow lying nothing (0.355 -> 0.352). Of the +0.20 from
+  the game's height (before the softening, which left it the same): the pipeline with its shelter and hooks +0.08 (most of
+  it GROUND_MORE's own, as the mud's), the materials +0.12. The shelter is made once a map, the first snowy frame.
+- **Memory**: the three snow materials at 4k 201 MB (9 maps of 22.4 MB), at 8k 805 MB (89.5 MB each); the shelter 32 MB; the
+  props' raster 32 MB while the shelter is made, then let go. Read the first time snow lies with the option on. Making the
+  shelter the first time: the props' raster about 0.17 s spread over the cores (0.6-0.9 s on one), and the pass.
+- **Checked**: off, regress3 eight of eight 0 px and the weather regression (snow, rain) four of four 0 px against
+  b197ac4 (again after the softening); the base exe (render b7158a5) against ours on SETONS_R on both backends: in snow with the option off and deep
+  tracks, the mud mask, the relief and the rain ground on (from 45, and close at the stream bank with units driving), in rain
+  with the twins, the mask and the relief, and with the option on but no snow lying (clear; wet ground with the twins): all
+  0 px. On, Vulkan against Direct3D 12 differ as much as without it (mean 1.87 against 1.96 of 255 in a snowy scene with every
+  ground option on: the falling flakes). SETONS_Q reads its three Fab materials (pictures kept in scratch).
+- **Open**: the map's decals lay their own snow (decals.cpp, the constant colour and lighting.h's cover with their own
+  normals): where this snow is thinner (under trees, on scoured ground) or textured, a decal's square shows its old snow
+  over it; the decals want the same hooks (their pipeline reading the shelter, and the materials or at least their colour).
+  The shelter follows the map's props and heights as the map opened (a felled tree, a flattened building site keep their
+  shade). The ray tracing scene's ground colours, the ground cover and units' own snow do not know the materials. Winter has
+  no snow of its own yet.
 
 ## The options
 
@@ -1697,6 +1770,7 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `groundParallax` | close by, the remastered ground's stones stand up and its hollows sink as the eye passes (its materials' scanned relief), a low sun shading the hollows; nothing from the game's height (proposed for the "Ground Detail" setting) | +0.14 to 0.17 ms at zoom 10 to 5, +0.24 the cinematic camera low over the ground, nothing from the game's height | a remastered map (its materials' third maps) |
 | `mudMask` | the map's painted mud (stream banks): its mud material over the ground by the mask, wet and glossy with puddles in rain, paler and cracked dry; deep tracks press into it as mud, no plants on it (in "Ground Detail") | +0.03 ms from the game's height over the mud, +0.08 to 0.10 close by, nothing with no mud in view | a map whose remap.json entry names a "mud_mask" |
 | `rainGround` | the listed layers go over to their wet twins as the ground gets wet, the hollows first, and back as it dries (in "Weather Effects") | +0.13 to 0.16 ms while the ground is wet (SETONS_R's four twins), nothing dry | a time of day; a map whose entry has a "weather" rain block |
+| `snowGround` | the lying snow from the map's snow materials (drifted, packed where trodden, breaking up by the ground's height, slush at the thaw) and, on any map, shaded by what is round it (valleys, hollows, trees, rocks), deeper in the wind's lee, thinner under trees and on steep ground (in "Weather Effects") | +0.20 ms from the game's height while snow lies (+0.16 close with the relief, +0.28 with deep tracks), nothing without | a time of day; the materials where the map's entry has a "snow" block |
 
 Ray tracing means Direct3D 12 with DXR 1.1 or Vulkan with ray queries: never on the Mac (MoltenVK has none);
 where it is missing those options do nothing. `rayReflections` builds the surfaces' shaders with ray
@@ -1715,7 +1789,7 @@ so there is less clutter). WorldPicture sets each bundle's options together, bef
 | `SetAtmosphere` | `volumetricFog`, `volumetricClouds`, `skyTables`; proposed (and set with them in world_picture.cpp, for review): `lightShafts`, `driftingShadows` | about 0.25 ms less (needs a time of day); the two proposed about +0.16 to 0.19 from the game's camera |
 | `SetSoftShadows` | `softShadows`, `contactShadows` | about +0.37 ms |
 | `SetRayTracing` | `bounceLight`, `rayReflections`, `rayLightShadows` (reflections and the small lights' shadows from the next map) | about +0.75 ms; at night with many lights about 0.5 ms more |
-| `SetWeatherEffects` | `litRain`, `rainSplashes`, `waterDetail`; `streamWater` ([stream], 2026-10-19: 0.05 to 0.13 ms), `rainGround` ([rain ground], 2026-10-19: +0.13 to 0.16 ms while wet); proposed: `horizonWeather` | about +0.05 ms in rain, +0.04 by water; the horizon about +0.1 (0.21 from the strategic view in snow) |
+| `SetWeatherEffects` | `litRain`, `rainSplashes`, `waterDetail`; `streamWater` ([stream], 2026-10-19: 0.05 to 0.13 ms), `rainGround` ([rain ground], 2026-10-19: +0.13 to 0.16 ms while wet), `snowGround` ([snow ground], 2026-10-20: +0.2 to 0.3 ms while snow lies); proposed: `horizonWeather` | about +0.05 ms in rain, +0.04 by water; the horizon about +0.1 (0.21 from the strategic view in snow) |
 | `SetGroundDetail` | `groundCover`, `battleScars`, `leafLight`, `deepTracks`, `wildlife`, `plantsReact` ([plants], 2026-10-18); `groundParallax` ([parallax], 2026-10-19: +0.14 to 0.17 ms zoomed in), `remasteredTarmacs` ([tarmac], 2026-10-19), `mudMask` ([ground mud], 2026-10-19: +0.03 ms over the mud from the game's height, nothing away from it) | +0.05 to 0.16 ms zoomed in, nothing far out; scars up to +0.56 ms with 2000 in view |
 | `SetFrameGeneration` | `frameGeneration` (a sixth setting, asked of the ui: "Frame Generation") | 1.1-1.4 ms a frame drawn; twice the frames shown |
 | `SetHiddenOutlines` | `hiddenOutlines` (readability, not light: its own setting, ON at first; proposed to the ui as "Hidden Unit Outlines") | 0.06-0.08 ms |
