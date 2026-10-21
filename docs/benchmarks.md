@@ -118,6 +118,105 @@ The benchmarks:
 - M28 logs four script errors at the start: `IsM28AIPersonality` fails on the two civilian armies, which have no AI
   personality. The errors are M28's, and M28 carries on.
 
+## B3 and B8: first baselines (draft, 2026-10-21, main 533e7cc + the order-latency log)
+
+Measured on main 533e7cc in my worktree wt39, with two test-only additions (`fix_profile_order_latency_on_533e7cc.patch`,
+neutral when off):
+- the `--orders` verb `issuegroup`: one order to every unit of an army, through the command stream, as a player's
+  selection would give it;
+- `Sim::ProfileTrackOrder`, the per-unit "first beat with a path / first beat moving" log under MOHO64_PROFILE.
+
+The runs:
+- headless, on the Ryzen 9 9950X3D, which was shared with the other sessions, not pinned;
+- MOHO64_PROFILE on, MOHO64_FINGERPRINT on with a name per run;
+- the machine's free memory checked every 2 s, with the run stopped under 26 GB. None came near that: the lowest
+  free was 48.9 GB.
+
+**The set-up.**
+- **Map: Hanna Oasis (SCMP_028).** Seton's land is too small for 16,000 units: it is two islands of about
+  400 x 400. Hanna Oasis is 40 km of mostly open land with a lake in the middle.
+- **Session `b3_session_hanna.lua`** (made by `make_session.py`): two armies with no AI, both "human" with owners 0
+  and 1 (army 1 takes the `--orders` commands); UEF against Cybran; no mods; cheats off; fog of war "explored";
+  victory "sandbox".
+- **The units** come from `--orders` files made by `make_orders.py`: CreateUnitHPR before beat 1, in rows 2.5
+  apart.
+
+### B3: mixed land armies ordered at each other (`b3_<total>.txt`)
+
+- **Units:** total/2 per army across x 300..1700. Army 1 starts from z 290 and goes back; army 2 from z 470 and goes
+  back. The two fronts are 180 apart.
+- **Mix, per 20:** T1 tank x7, T2 tank x5, T1 artillery x2, T1 AA x2, T2 missile launcher x2, T3 bot x1, scout x1.
+- **Orders:** before beat 5, each army gets one sim-Lua `IssueAggressiveMove` to the other's block.
+- **Length:** 700 beats, with `--seed 1`.
+
+| Units | ms per beat: mean / p50 / p95 / p99 / longest | Game speed | Lua share | Peak memory | Units alive at beat 600 |
+|---|---|---|---|---|---|
+| 2,000 | 35.5 / 35.5 / 49.8 / 70.4 / 166 | 2.8x | 17.8% | 1.0 GB | 1,626 |
+| 8,000 | 75.4 / 68.6 / 125.7 / 185.6 / 307 | 1.3x | 15.1% | 1.3 GB | 7,694 |
+| 16,000 | 91.9 / 89.9 / 135.8 / 162.4 / 207 | 1.1x | 15.3% | 1.6 GB | 15,697 |
+
+The tick by phase, the share of the 700 beats' time:
+
+| Phase | 2,000 | 8,000 | 16,000 |
+|---|---|---|---|
+| navigators+paths | 49% | 43% | 40% |
+| entitypass (motion, collisions) | 22% | 28% | 30% |
+| weapons | 5% | 7% | 9% |
+| threads (Lua) | 9% | 6% | 5% |
+| steering | 5% | 5% | 5% |
+| commands | 2% | 3% | 4% |
+| recon, coordinates, destroy+sync | 4% | 5% | 6% |
+
+Mean ms per beat by stretch of the run, with the largest phases:
+
+| Beats | 2,000 | 8,000 | 16,000 |
+|---|---|---|---|
+| 1-100 | 23.7 (paths 15.2, entity 4.8) | 47.9 (paths 21.8, entity 14.2) | 53.3 (paths 19.0, entity 18.5) |
+| 101-300 | 41.0 (paths 24.8, entity 8.5) | 83.8 (paths 42.0, entity 22.8) | 85.3 (paths 37.6, entity 25.8) |
+| 301-500 | 40.4 (paths 16.9, entity 9.4) | 96.1 (paths 41.2, entity 26.3) | 121.3 (paths 52.0, entity 35.4) |
+| 501-700 | 31.1 (paths 12.1, entity 7.2) | 60.2 (paths 19.1, entity 17.8) | 88.2 (paths 28.6, entity 26.6) |
+
+**How to read it.**
+- **The cost does not grow linearly with the units yet**, because in 700 beats most of them have not reached the
+  fight: only about 300-380 units died in each case.
+- **Paths:** the army's path queue gives out searches at a fixed rate per beat (B8 below: about 57 a beat). An
+  army of 8,000 gets its last path some 140 beats after the order, and the crowd behind the fronts then waits for
+  room to move.
+- **What dominates:** path searches and the navigators, then the entity pass (motion and collisions).
+- **Next run:** a run of about 3,000 beats would measure the armies fully engaged. At 16,000 it takes about 5
+  minutes.
+
+### B8: order latency (`b8_<n>_<type>.txt`)
+
+- **Units:** n UEF T1 tanks (uel0201) of army 1 in a block 50 wide, 2.5 apart.
+- **The order:** before beat 30, one order to all of them through the command stream (`issuegroup`), to a point
+  150 away.
+- **The log:** per unit, the first beat its navigator has a path (its search delivered, or a formation slot to
+  follow) and the first beat it moved. Beat 1 is the first after the order. The ms are the beats' own compute,
+  headless; in a game each beat is at least 100 ms.
+
+| Selected | Every one has a path | Every one is moving | Per unit, the path's beat p50 / p95 / last | Per unit, the first move's beat p50 / p95 / last |
+|---|---|---|---|---|
+| 50 | beat 4 (31 ms) | beat 5 (34 ms) | 3 / 4 / 4 | 4 / 5 / 5 |
+| 100 | beat 5 (32 ms) | beat 6 (36 ms) | 4 / 5 / 5 | 5 / 6 / 6 |
+| 500 | beat 11 (139 ms) | beat 12 (158 ms) | 7 / 11 / 11 | 8 / 12 / 12 |
+| 2,000 | beat 35 (1.44 s) | beat 262 (8.6 s) | 19 / 33 / 35 | 21 / 120 / 262 |
+
+FormMove (type 4) gave the same beats as Move (type 2). The order carried no formation (`formIndex` -1), so it is a
+plain move; a formation move needs the interface's formation index, which `issuegroup` does not give yet.
+
+**In a game at normal speed** (100 ms a beat):
+- 50 units are all moving after about 0.5 s, and 500 after about 1.2 s;
+- 2,000 have all their paths after 3.5 s, but the last one moves only after about 26 s, because the block's rear
+  waits for the front to clear;
+- half of the 2,000 are moving after 2.1 s.
+
+**What it says, measured** (the reasons are for the optimisation phase to confirm):
+- The paths arrive at about 57 per beat. That rate is the army's path queue, which follows the original's order and
+  budget, so changing it is a fidelity question for Chris.
+- Past the paths, a big block's rear is held up by the units in front of it (crowding), not by compute. At 2,000
+  units a beat cost about 41 ms here.
+
 ## B9: many factory upgrades starting in one beat (draft, 2026-10-21)
 
 Chris, 2026-10-20 (via the renderer), on the lag at a UEF factory's T2 upgrade: "imagine in a game with 16 ai or
