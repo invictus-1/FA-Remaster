@@ -172,6 +172,40 @@ says `the rules are loaded again with the engine's script fixes`, about one seco
   `MOHO64_FIXES=0` logs the error and its traceback once; `MOHO64_FIXES=1` logs the hook (`Hooked
   /lua/sim/units/structureunit.lua`) and no error, and every other log line is the same.
 
+### 6. The profile clock (2026-10-21)
+
+- **What is broken:** `GetSystemTimeSecondsOnlyForProfileUse` answers the PC's clock, in the sim too. FAF's sim
+  scripts only log and profile with it, but one of those logs changes the sim's Lua state:
+  - FAF's `lua/SimCallbacks.lua` `DoCallback` times every sim callback (the orders a player's interface sends).
+  - When one took more than 5 ms of real time, it writes a "Time to process ..." line with the time in it, a string
+    whose text differs run to run.
+  - It also calls `GetCurrentCommandSourceArmy` -> SimUtils `GetArmyOfCommandSource`, whose first call makes the
+    table `CommandSourceToArmyMap`.
+
+  So how fast the PC was at that moment changed the sim's Lua heap, the collector's moments, and the serial of every
+  Lua object made after it. Our Lua hashes object keys by that serial, so `pairs()` over object-keyed tables could
+  change order.
+  - Seen: Subs in the gate's both-modes check (batch 3), the object serial one apart from beat 439.
+  - Seen: two plain runs of Transports, the heap 1 KB apart on 25 of 430 beats.
+  - Proven with a debug clock: every callback "slow" moves the table's beat from 540 to 100; none slow means never.
+- **What we do:** with `Sim::fixes` the sim's `GetSystemTimeSecondsOnlyForProfileUse` answers the game time
+  (`GetGameTimeSeconds`), so a callback always takes 0 s. `MOHO64_REAL_PROFILE_CLOCK=1` gives the PC's clock back,
+  for profiling scripts. The interface's clock is untouched.
+- **Why it is safe, what it changes:**
+  - Every sim-side use in FAF's scripts and in the lab's mods only logs or profiles. Read in full: SimCallbacks,
+    NavGenerator, MarkerUtilities, ScenarioUtilities, the AI Grid helpers, Profiler; M28Map, M28Profiler;
+    AI-Uveso.
+  - What changes is logs only: no "Time to process" lines, and generation times of 0 s. M28's profiler, when someone
+    switches it on, measures game time.
+  - The object serials differ from a run without the fix, which can change the order of object-keyed walks, so a
+    game played with it is played back with it (the replay mark).
+- **Tested:**
+  - Subs and Transports, four runs at once each with `MOHO64_FIXES=1`: state and Lua part (heap, threshold, object
+    serial) identical on every beat (1,721 / 2,212).
+  - With `MOHO64_REAL_PROFILE_CLOCK=1` the Lua part differs again in two of three Transports runs (163 and 191 beats).
+  - The gate's replays play with the fixes off, so they are unchanged. With 6-10 built in, the 15 gate replays at n = 1
+    and n = 32 have fingerprints identical to main's build on every beat (the MP1 cut, 3,000 beats, too).
+
 ## Looked broken, left alone
 
 ### M28: `IsM28AIPersonality` on the civilian armies (m28conditions.lua:4291)
