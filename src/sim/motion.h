@@ -135,6 +135,10 @@ struct UnitMotion {
     Vec3 pos;              // xz (y: the unit's height when generated)
     Vec3 vel;              // per tick
     float fx, fz, bx, bz;  // steering and body facing after the step
+    // The point's state word (+0x18 of the exe's 0x1c-byte point; 7 by default, 0x5b1f4d): a brake spline's points
+    // (CAiPathSpline::Update 0x5b26c0) carry 1, or 2 when it brakes a backward motion (0x5b299d), the last one 8
+    // (0x5b2ec3); a batch's (Generate 0x5b2ff0) the state it was made in (0x5b41e2..0x5b41e6).
+    int state = 7;
   };
   std::vector<SplinePoint> spline;
   size_t splineIdx = 0;    // the next point to hand out (spline+0x240)
@@ -144,6 +148,11 @@ struct UnitMotion {
   SplinePoint genLast{};   // the generator after the last point (continuation start)
   bool genReverse = false;
   Vec3 steerTarget;        // st+0x90: the current waypoint target
+  // CUnitMotion's target m+0x14 (land, hover, naval): what CUnitMotion::SetTarget 0x6b85e0 last wrote (the steering's
+  // waypoint when it takes one up, 0x5d310e, or a collision record's target, 0x5d2f70 / 0x5d2ebf; the place after a
+  // Warp, 0x6b9421, or a detach, 0x6b9654) or CUnitMotion::Stop 0x6b8460 (the unit's position, or 100 ahead along its
+  // velocity when it drives through, 0x6b84c6..0x6b8564). ProcessCommonMotionState measures to it (0x6c2b18).
+  Vec3 motionTarget;
   // st+0x90 holds a waypoint (not the "no target" vector the ctor and SetWaypoints(0, 0) write there, 0x5d2abb):
   // set when DriveToNextWaypoint takes a waypoint up (0x5d30a6). ProcessSplineMovement asks this, not whether
   // the navigator has handed a new waypoint since.
@@ -254,6 +263,9 @@ void SetNewTargetLayer(Sim& sim, Unit* u, int layer);
 void MotionSetGoal(Sim& sim, Unit* u, const std::vector<Vec3>& path, bool passThrough, uint32_t driveTick);
 // Abort the move: the unit coasts to a stop.
 void MotionStop(Unit* u);
+// CUnitMotion::Stop 0x6b8460 without a point, as CAiSteeringImpl::Stop 0x5d35e0 calls it (0x5d3675): the motion's
+// target (UnitMotion::motionTarget) for a unit that is not an aircraft.
+void MotionStopTarget(Unit* u);
 // The look rotation 0x50b480: forward along the direction, the world's up (motion.cpp).
 Quat LookQuat(float dx, float dy, float dz);
 // Unit::GetVelocity 0x6a9c90 (entity vtbl+0x3c): a unit with a land motion not on the Air layer reports m+0x38,

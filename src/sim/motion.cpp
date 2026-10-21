@@ -677,6 +677,27 @@ void SteeringStop(UnitMotion& m) {
   m.sideStep = {};
 }
 
+// CUnitMotion::Stop 0x6b8460 with no point (0x6b84c6): while the motion drives through (m+0x8c), the target is 100
+// ahead along its velocity m+0x38 (normalised copy 0x44f7e0: ((x*x + y*y) + z*z), above 0 times 1 / len, else zero;
+// each part times 100 (0xe4f744), added to the position, 0x6b84d7..0x6b8544); otherwise the position (0x6b854c..).
+// (The air path is air.cpp's Stop.)
+void MotionStopTarget(Unit* u) {
+  UnitMotion& m = u->motion;
+  if (m.air) return;
+  const Vec3& p = u->position;
+  if (m.passThrough) {
+    const float l = std::sqrt((m.vel.x * m.vel.x + m.vel.y * m.vel.y) + m.vel.z * m.vel.z);
+    Vec3 n{};
+    if (l > 0.0f) {
+      const float inv = 1.0f / l;
+      n = {m.vel.x * inv, inv * m.vel.y, inv * m.vel.z};
+    }
+    m.motionTarget = {p.x + n.x * 100.0f, p.y + n.y * 100.0f, p.z + n.z * 100.0f};
+  } else {
+    m.motionTarget = p;
+  }
+}
+
 void MotionNavBegin(Unit* u) {  // CAiNavigatorImpl::SetGoal 0x5a3ed0
   UnitMotion& m = u->motion;
   // a new goal while the steering drives: it keeps its waypoint until the navigator gives the next one
@@ -690,7 +711,10 @@ void MotionNavBegin(Unit* u) {  // CAiNavigatorImpl::SetGoal 0x5a3ed0
   m.hasWaypoint = false;
   m.path.clear();
   m.pathIndex = 0;
-  if (!braking) SteeringStop(m);
+  if (!braking) {
+    SteeringStop(m);
+    MotionStopTarget(u);
+  }
 }
 
 void MotionSetWaypoint(Sim& sim, Unit* u, const Vec3& p, bool through) {
@@ -726,6 +750,7 @@ void MotionNavDone(Unit* u, bool succeeded) {
   // 553. Ours made no prediction there: 0x44 stood until 549, 0x3d until 551.
   const bool unused = m.hasSpline && m.splineIdx < m.spline.size();
   SteeringStop(m);
+  MotionStopTarget(u);
   if (unused) SteeringCheckCollisions(*Sim::From(u->luaState()), u);
   if (succeeded) m.arrived = true;
   else m.failed = true;
@@ -1124,6 +1149,7 @@ UnitMotion::SplinePoint PointOf(const Gen& g) {
   q.fz = g.fz;
   q.bx = g.bx;
   q.bz = g.bz;
+  q.state = g.state;
   return q;
 }
 
@@ -1310,6 +1336,7 @@ void BrakeSpline(Sim& sim, Unit* u, int mode) {
   // that tied two axes to the bit went the other way (a push the original does not make).
   Vec3 F = vm::Forward(q0);
   m.brakeDir = F;
+  int pointState = 1;  // (the brake points' state word: 1 from the start, 0x5b27f0)
   const Vec3& lm = UnitVelocity(u);
   float s = std::sqrt(lm.x * lm.x + lm.y * lm.y + lm.z * lm.z);
   const float fl2 = (F.x * F.x + F.y * F.y) + F.z * F.z;
@@ -1324,7 +1351,10 @@ void BrakeSpline(Sim& sim, Unit* u, int mode) {
       const float inv = 1.0f / s;
       un = {lm.x * inv, lm.y * inv, lm.z * inv};
     }
-    if (0.0f > (un.y * F.y + un.z * F.z) + un.x * F.x) V = Vec3{-0.0f - V.x, -0.0f - V.y, -0.0f - V.z};
+    if (0.0f > (un.y * F.y + un.z * F.z) + un.x * F.x) {
+      V = Vec3{-0.0f - V.x, -0.0f - V.y, -0.0f - V.z};
+      pointState = 2;  // (0x5b299d: braking a backward motion)
+    }
   }
   float fxz = std::sqrt(F.x * F.x + F.z * F.z);
   float dfx = fxz > 0 ? F.x / fxz : m.fx, dfz = fxz > 0 ? F.z / fxz : m.fz;
@@ -1380,6 +1410,7 @@ void BrakeSpline(Sim& sim, Unit* u, int mode) {
     if (zero && (mode == 3 || (mode == 4 && m.spline.size() > 5))) stop = true;
     g.p.y = PointHeight(sim, *m.bp, g.p.x, g.p.z, g.p.y);  // (0x5b2ecb)
     m.spline.push_back(PointOf(g));
+    m.spline.back().state = stop ? 8 : pointState;  // (0x5b2ec3: the last point 8, then 0x5b2fb3..0x5b2fb7)
     if (stop) break;
   }
   m.savedState = 0;
@@ -1843,10 +1874,16 @@ void ProcessCommonMotionState(Sim& sim, Unit* u, bool moving) {
     SetHorzEvent(sim, u, 0);
     return;
   }
-  const float dx = m.steerTarget.x - u->lastPosition.x, dz = m.steerTarget.z - u->lastPosition.z;
+  // (to the motion's target m+0x14, 0x6c2b18: the waypoint, or where CUnitMotion::Stop left it)
+  const float dx = m.motionTarget.x - u->lastPosition.x, dz = m.motionTarget.z - u->lastPosition.z;
   const float dist = std::sqrt(dz * dz + dx * dx);
-  // (also Stopping while the spline point's state is 1: not modelled, our points carry no state)
-  SetHorzEvent(sim, u, m.speedMult * b.maxSpeed > dist ? 2 : 0);
+  // Stopping when a second at full speed (MaxSpeed bp+0x2a0 x the speed multiplier) reaches the target
+  // (0x6c2b40..0x6c2b96), or when the point the steering handed out this beat (m+4, written by the steering at
+  // 0x5d2fcd / 0x5d2bbc, cleared on MotionTick's held path 0x6ba00f..0x6ba012) is a forward brake point, state 1
+  // (0x6c2b98..0x6c2ba7). Seen (probe land_horzevent, LAND): the original's units braking say Stopping 7 to 18
+  // from their target, where the distance alone gives Cruise.
+  const bool stopping = m.speedMult * b.maxSpeed > dist || (m.pointNow && m.point.state == 1);
+  SetHorzEvent(sim, u, stopping ? 2 : 0);
 }
 }  // namespace
 

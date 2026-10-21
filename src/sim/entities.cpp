@@ -1636,6 +1636,7 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   u->position = pos;
   u->orientation = q;
   u->lastPosition = pos;
+  u->motion.motionTarget = pos;  // (the CUnitMotion ctor 0x6b7b8f..0x6b7ba6: m+0x14 = the unit's place, vt+0x14)
   sec.To(prof::kSecCuShape);
   RevertCollisionShape(L, u);
   sec.To(-1);
@@ -1915,6 +1916,7 @@ void Sim::WarpUnit(lua_State* L, Unit* u, Vec3 pos, Quat q) {
   if (mobile) {
     MotionStop(u);
     u->motion.vel = {};
+    u->motion.motionTarget = pos;  // (CUnitMotion::Warp: SetTarget 0x6b85e0 with the new place, 0x6b9421)
     if (u->motion.air) AirWarp(*this, u);
     if (layer == kLayerLand) u->motion.surfaceNext = true;
   }

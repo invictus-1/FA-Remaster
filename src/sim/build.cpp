@@ -4367,14 +4367,14 @@ void Detach(Sim& sim, Unit* u) {
   // front of the factory's back (MovingUp). Seen: Skirmish 1349, Chloe's Aeon transport 0x600018 let go by its air
   // factory (FactoryUnit.lua DetachFrom(true)): the original's target (909.5339, 27.4956, 80.5623) and MovingUp,
   // ours kept the cell it was made on, (909.5, 26.7148, 81.5); its Move's goal came at 1350 in both.
-  if (u->motion.air) {
-    if (const Entity* P = sim.FindEntity(u->parentId)) {
-      const Quat& q = P->orientation;
-      const float zx = (q.w * q.y + q.z * q.x) * 2.0f;
-      const float zy = (q.z * q.y - q.w * q.x) * 2.0f;
-      const float zz = 1.0f - (q.y * q.y + q.x * q.x) * 2.0f;
-      AirSetTargetNow(sim, u, Vec3{u->position.x - zx, u->position.y - zy, u->position.z - zz}, 0);
-    }
+  if (const Entity* P = sim.FindEntity(u->parentId)) {
+    const Quat& q = P->orientation;
+    const float zx = (q.w * q.y + q.z * q.x) * 2.0f;
+    const float zy = (q.z * q.y - q.w * q.x) * 2.0f;
+    const float zz = 1.0f - (q.y * q.y + q.x * q.x) * 2.0f;
+    const Vec3 t{u->position.x - zx, u->position.y - zy, u->position.z - zz};
+    if (u->motion.air) AirSetTargetNow(sim, u, t, 0);
+    else u->motion.motionTarget = t;  // (the same SetTarget for a land, hover or naval unit's motion)
   }
   u->parentId = 0;
   u->unitStates.erase("Attached");

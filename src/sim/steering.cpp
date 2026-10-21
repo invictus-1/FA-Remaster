@@ -895,6 +895,7 @@ void ProcessSplineMovement(Sim& sim, Unit* u) {
       // unhanded points: idx(+0x240) < points.size (0x5d35ee..0x5d3666)
       const bool unused = m.splineIdx < m.spline.size();
       SteeringStop(m);
+      MotionStopTarget(u);
       if (unused) CheckCollisions(sim, u);
     }
     // 0x5d2c7c..0x5d2cc4: the unit's velocity (GetVelocity, vt+0x3c) as a 3-D length, (x^2 + y^2) + z^2, against the
@@ -940,6 +941,7 @@ void ProcessSplineMovement(Sim& sim, Unit* u) {
       // and coasted back; ours stood still.)
       const bool unused = m.splineIdx < m.spline.size();
       SteeringStop(m);
+      MotionStopTarget(u);
       if (unused) CheckCollisions(sim, u);
       return;
     }
@@ -955,6 +957,7 @@ void ProcessSplineMovement(Sim& sim, Unit* u) {
       m.heldLatch = true;
       const bool unused = m.hasSpline && m.splineIdx < m.spline.size();
       SteeringStop(m);
+      MotionStopTarget(u);
       if (unused) CheckCollisions(sim, u);
       return;
     }
@@ -985,6 +988,7 @@ void ProcessSplineMovement(Sim& sim, Unit* u) {
         if (m.steerValid) {
           if (!m.hasSpline || m.splineIdx >= m.spline.size()) {
             m.faceDir = {};  // (0x5d2f70: SetTarget 0x6b88f0 with the target, no facing)
+            m.motionTarget = m.steerTarget;
             UpdatePath(sim, u, m.steerTarget, true, GetVal(m));
           }
           CheckCollisions(sim, u);
@@ -993,6 +997,7 @@ void ProcessSplineMovement(Sim& sim, Unit* u) {
       case 2: {
         m.faceDir = {};  // (0x5d2ebf: SetTarget 0x6b88f0 with the side-step point, no facing)
         Vec3 T = m.sideStep;
+        m.motionTarget = T;
         m.sideStep = {};
         UpdatePath(sim, u, T, true, 2);
         break;
@@ -1033,6 +1038,7 @@ void SteeringTick(Sim& sim, Unit* u) {
   // (SetFacing 0x6b8590) stays, and when the brake spline is used up (5550) the idle hull turns toward it (CalcMoveCommon's
   // no-point branch, 0x6c2607). Ours cleared the facing with the goal and stood until its guns found a target (5552).
   m.faceDir = {};
+  m.motionTarget = m.steerTarget;
   UpdatePath(sim, u, m.steerTarget, true, GetVal(m));
   CheckCollisions(sim, u);
   ProcessSplineMovement(sim, u);
