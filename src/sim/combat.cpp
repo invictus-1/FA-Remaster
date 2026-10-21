@@ -1282,7 +1282,15 @@ bool TerrainBlocked(Sim& sim, Unit* u, Vec3 target, int arc) {
   b.y += 0.25f;
   float d;
   Vec3 h;
-  if (arc == 0) return TerrainSegmentHit(m, a, b, &d, &h);
+  // blocked only when the hit point is valid (0x5657f0: no NaN part) and the segment's length, its squares summed
+  // z, y, x, reaches the hit's distance (0x5d66d7: fcompi / jb: a NaN length is not blocked), as
+  // CheckBlockingTerrain 0x5910a0 (ai_threat.cpp) tests it
+  auto valid = [](const Vec3& v) { return !std::isnan(v.x) && !std::isnan(v.y) && !std::isnan(v.z); };
+  auto reaches = [&](const Vec3& p, const Vec3& q) {
+    const float dx = p.x - q.x, dy = p.y - q.y, dz = p.z - q.z;
+    return std::sqrt((dz * dz + dy * dy) + dx * dx) >= d;
+  };
+  if (arc == 0) return TerrainSegmentHit(m, a, b, &d, &h) && valid(h) && reaches(a, b);
   Vec3 step = Mul(Sub(b, a), 0.25f);
   float sl = std::sqrt((step.z * step.z + step.y * step.y) + step.x * step.x);  // (0x5d6740..0x5d6758)
   const float prof[4] = {0.707f, 0.293f, -0.293f, -0.707f};
@@ -1290,7 +1298,7 @@ bool TerrainBlocked(Sim& sim, Unit* u, Vec3 target, int arc) {
   Vec3 cur = a;
   for (int i = 0; i < 4; ++i) {
     Vec3 nxt{cur.x + step.x, cur.y + step.y + prof[i] * sl * k, cur.z + step.z};
-    if (TerrainSegmentHit(m, cur, nxt, &d, &h)) return true;
+    if (TerrainSegmentHit(m, cur, nxt, &d, &h) && valid(h) && reaches(cur, nxt)) return true;  // (0x5d693e, jae)
     cur = nxt;
   }
   return false;

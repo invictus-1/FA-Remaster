@@ -323,7 +323,8 @@ void DoCollisionsFor(Sim& sim, Unit* self, const std::vector<Hit>& hits) {
     if (fOther > 0.1f && flagOk(self, o) && !Immobile(self))
       AddImpulse(self, Vec3{d.x * mag * fOther, d.y * mag * fOther, d.z * mag * fOther});
     if (fSelf > 0.1f && flagOk(o, self) && !Immobile(o))
-      AddImpulse(o, Vec3{(0.0f - d.x) * mag * fSelf, (0.0f - d.y) * mag * fSelf, (0.0f - d.z) * mag * fSelf});
+      // (-0.0 - d: 0x598171 loads -0.0 from 0xe4f748, so a +0 part of d gives -0 here)
+      AddImpulse(o, Vec3{(-0.0f - d.x) * mag * fSelf, (-0.0f - d.y) * mag * fSelf, (-0.0f - d.z) * mag * fSelf});
   }
 }
 

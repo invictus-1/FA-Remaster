@@ -63,7 +63,11 @@ int MotionIndex(const char* s) {
 }
 
 // The original's sine approximation in RotateDirectionTowardTargetLimited (FA exe 0x6992c0).
-float SinApprox(float a) { return ((a * a * 0.00761000020429492f - 0.1660500019788742f) * a * a + 1.0f) * a; }
+// (0x6993e1..0x699410: the square taken once, t2 = a * a, and the polynomial in t2)
+float SinApprox(float a) {
+  const float t2 = a * a;
+  return ((t2 * 0.00761000020429492f - 0.1660500019788742f) * t2 + 1.0f) * a;
+}
 
 // Turn direction (x, z) toward (tx, tz) by at most `maxAngle` radians; returns true when the
 // target direction was reached. (CAiPathSpline::RotateDirectionTowardTargetLimited)

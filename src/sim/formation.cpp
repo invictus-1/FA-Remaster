@@ -261,7 +261,8 @@ void AssignGroup(Formation& F, const std::vector<Unit*>& units, int k) {
   G.speed = kInfF;
   for (const SRec& s : S) {
     if (U.empty()) break;
-    float tx = G.cx + (s.ox - mOffX), tz = G.cz + (s.oz - mOffZ);
+    // the slot's point (cU + off) - mOff (0x567c98..0x567cbc: addss, then subss)
+    float tx = (G.cx + s.ox) - mOffX, tz = (G.cz + s.oz) - mOffZ;
     int best = -1;
     float bestD = kInfF;
     for (size_t j = 0; j < U.size(); ++j) {
