@@ -62,6 +62,7 @@ from before ... nothing crazy", and item 7: "The new nuke is fucking amazing whe
    over the entire ship instead of acting like the Izanagi. Make the Mitsurugi shields, effects and the way it acts be
    exactly like the Izanagi same in color." Asked: the battleship's shield set up as the Izanagi's (kind, mesh, colour,
    effects); the renderer checks why its hex stays drawn.
+   Added the same day: "The blue hex shield on the Mitsurugi should be red too cause the faction has that red theme".
 
 ## 46. To the INTERFACE track: from Chris's test run of 21 October (2026-10-21, not blocking)
 
