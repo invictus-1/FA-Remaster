@@ -252,7 +252,7 @@ uint32_t Ribbons::StartTrail(const std::string& blueprint, Vec3 position, const 
   t.id = nextId_++;
   t.kind = kind;
   t.head = position;
-  t.started = now_;
+  t.started = t.headAt = now_;
   t.points.push_back({position, now_, 0});
   trails_.push_back(std::move(t));
   return trails_.back().id;
@@ -271,6 +271,7 @@ void Ribbons::MoveTrail(uint32_t trail, Vec3 position) {
       // fiftieth of a second apart; the original adds one a tick, which at a high frame rate shows corners)
       const TrailPoint& last = t.points.back();
       t.head = position;
+      t.headAt = now_;  // (trails: when it was last moved there, StopTrail)
       t.travelled = last.travelled + Length(position - last.position);
       if (Length(position - last.position) > t.kind->halfWidth * 0.6f && now_ - last.born > 0.02) t.points.push_back({position, now_, t.travelled});
     }
@@ -278,7 +279,15 @@ void Ribbons::MoveTrail(uint32_t trail, Vec3 position) {
 
 void Ribbons::StopTrail(uint32_t trail) {
   for (Trail& t : trails_)
-    if (t.id == trail) t.stopped = true;
+    if (t.id == trail && !t.stopped) {
+      // (trails) where the emitter had got to stays as the trail's last place, as laid when it was last moved there: the
+      // original stops a trail at the beat after its thing is gone, its last segment running to where the thing was then
+      // (the engine's reading of CEfxTrailEmitter::ProcessLifetime, 0x6717e0); before, the stretch since the last place
+      // laid (up to a fiftieth of a second of a shot's way) went at once. Every place then lives out the trail's own
+      // TrailLength from when it was laid, as the original's segments do (Update).
+      if (!t.points.empty() && Length(t.head - t.points.back().position) > 1e-4f) t.points.push_back({t.head, t.headAt, t.travelled});
+      t.stopped = true;
+    }
 }
 
 void Ribbons::Update(double now) {

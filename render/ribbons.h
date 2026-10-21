@@ -109,6 +109,7 @@ class Ribbons {
     Vec3 head;
     float travelled = 0;  // by the head
     double started = 0;
+    double headAt = 0;  // (trails) when the emitter was last moved to the head (StopTrail lays it there as the last place)
     bool stopped = false;
   };
   const Kind* Blueprint(const std::string& path, const std::string& faction = std::string());

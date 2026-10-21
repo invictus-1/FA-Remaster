@@ -7,6 +7,7 @@
 #include <cstring>
 #include <limits>
 #include <map>
+#include <unordered_set>
 
 #include "core/log.h"
 #include "core/vfs.h"
@@ -1080,6 +1081,10 @@ struct FxEntities::Impl {
   Frame frame;
   std::vector<Body> bodies;
   std::vector<FrameEffectEvent> events;
+  // (trails) the effects that end with the thing they hang on (entity, effect), as the engine's EffectEvents ends them
+  // (render 8: the attached emitters, trails and beams; a beam between two things with its first): before, the stand's
+  // shots' trails and emitters were never ended and stayed where their shot was last
+  std::vector<std::pair<uint32_t, uint32_t>> attached;
   std::vector<Vec4> waterHits;  // what met the water since TakeWaterHits (where; about how large)
   uint32_t nextEntity = kFirstEntity, nextUnit = 1, nextEffect = 1;
   double now = 0;
@@ -1966,6 +1971,8 @@ int Emitter(lua_State* L) {
     ev.position[1] = p.y;
     ev.position[2] = p.z;
     ev.original = e->original;
+    if (ev.name == "CreateAttachedEmitter" || ev.name == "CreateEmitterOnEntity" || ev.name == "CreateTrail" || ev.name == "CreateBeamEmitterOnEntity")
+      m.attached.push_back({e->id, ev.id});  // (trails)
   }
   m.events.push_back(ev);
   lua_pushnumber(L, ev.id);
@@ -2028,6 +2035,7 @@ int Beam(lua_State* L) {
     ev.position[1] = p.y;
     ev.position[2] = p.z;
     ev.original = e->original;
+    m.attached.push_back({e->id, ev.id});  // (trails: it ends with its first thing)
   }
   if (const Ent* e = m.Find(static_cast<uint32_t>(Num(L, 4)))) {
     ev.entity2 = e->id;
@@ -3360,6 +3368,25 @@ void FxEntities::Advance(double now) {
   for (Ent& b : m.ents)
     if (!b.dead && b.beam) m.BeamFollow(b);
   m.now = now;
+  // (trails) what hangs on a thing gone ends with it, as the engine's EffectEvents ends it at the beat's end
+  if (!m.attached.empty()) {
+    std::unordered_set<uint32_t> gone;
+    for (const Ent& e : m.ents)
+      if (e.dead) gone.insert(e.id);
+    if (!gone.empty()) {
+      size_t keep = 0;
+      for (const auto& a : m.attached) {
+        if (gone.count(a.first)) {
+          FrameEffectEvent ev = m.Event(FrameEffectEvent::Destroy, "Destroy");
+          ev.id = a.second;
+          m.events.push_back(ev);
+        } else {
+          m.attached[keep++] = a;
+        }
+      }
+      m.attached.resize(keep);
+    }
+  }
   m.ents.erase(std::remove_if(m.ents.begin(), m.ents.end(), [](const Ent& e) { return e.dead; }), m.ents.end());
   // the frame: with a mesh as projectiles, without as script entities (for what hangs on them), the
   // units as units with their bones; and what the stand draws itself (units and wrecks)
