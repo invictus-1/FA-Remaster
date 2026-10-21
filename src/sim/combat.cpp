@@ -454,9 +454,29 @@ namespace combat {
 Vec3 TargetPos(Sim& sim, const AiTarget& t, bool centre) {
   if (t.type == 2) return t.pos;
   if (t.type == 1) {
-    if (t.fakeId) {  // a jammer's fake blip: the blip's own place (0x5e2a90: a recon blip is asked vt+0x1c, +0xac)
+    if (t.fakeId) {  // a jammer's fake blip (the CAiTarget's entity is the blip itself)
       const Entity* f = sim.FindEntity(t.fakeId);
-      return f ? f->position : NaNVec();
+      if (!f) return NaNVec();
+      // with the centre flag its own place (0x5e2b44: +0xac); without it ReconBlip::GetTargetPoint (vt+0x98,
+      // 0x5bf5f0): its unit's target point (Unit::GetTargetPoint 0x6ab340, the CAiTarget's pick +0x18) moved by the
+      // fake's offset (+0x27c), and with the unit gone its own place raised by half the blueprint's SizeY plus its
+      // CollisionOffsetY (0x5bf666..0x5bf6d3). Seen: MP1 7806-7813, army 6's torpedo launcher 0x600006 aims at a fake
+      // of army 5's frigate 0x50007c (ues0103, target bone 0): the original's turret goal leads that bone's point, and
+      // its first torpedo (7813) leaves 0.0006 lower; ours aimed at the fake's place, and its torpedo, circling,
+      // dived into the seabed at 7857 (one OnImpact Random too many at 7858).
+      if (!centre && f->kind == Entity::Kind::Blip) {
+        const ReconBlip* fb = static_cast<const ReconBlip*>(f);
+        const Unit* src = fb->source && sim.FindEntity(EntityRef(fb->source)) ? fb->source : nullptr;
+        if (src) {
+          const Vec3 tp = UnitTargetPoint(src, t.aimBone);
+          return Vec3{fb->offset.x + tp.x, fb->offset.y + tp.y, fb->offset.z + tp.z};
+        }
+        if (f->blueprint) {
+          const UnitBpData& d = GetUnitBpData(sim.L(), *f->blueprint);
+          return Vec3{f->position.x, f->position.y + (d.sizeY * 0.5f + d.collisionOffsetY), f->position.z};
+        }
+      }
+      return f->position;
     }
     Entity* e = TargetEntity(sim, t);
     if (!e) return NaNVec();
