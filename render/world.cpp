@@ -999,9 +999,16 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   particles.volumesOn = volumesOn_;
   if (volumesOn_ != static_cast<bool>(lights.onFlash)) {
     if (volumesOn_) {
-      lights.onFlash = [this](const std::string& ramp, Vec3 at, float size, double born, float seconds) { volumes.Offer(ramp, at, size, born, seconds); };
+      lights.onFlash = [this](const std::string& ramp, Vec3 at, float size, double born, float seconds, const FlashFrom& from) {
+        volumes.Offer(ramp, at, size, born, seconds, from);
+      };
+      // (VolumeReplaces = "inside": the emitters a volume covers, taken back as it is born, or not started under it)
+      volumes.onBorn = [this](Vec3 at, float radius, double born) { particles.VolumeBorn(at, radius, born, volumes.insideSeconds); };
+      particles.volumeCovers = [this](Vec3 at, double when) { return volumes.Covers(at, when); };
     } else {
       lights.onFlash = nullptr;
+      volumes.onBorn = nullptr;
+      particles.volumeCovers = nullptr;
       volumes.Clear();
     }
   }
@@ -1915,11 +1922,12 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
   // blasts where the game says an area's damage went off (an area's hits, one a target, merge into one blast), beside
   // the flashes and scorches the effects tell of. A push is no explosion and left out: the trees' own, 'TreeForce', is
   // the same shot's; 'Force' rings knock trees and props over (a commander's warp-in sends several round its start,
-  // which made blasts there, and plants that react burnt the start black)
+  // which made blasts there, and plants that react burnt the start black). Nor is 'TreeFire', which sets trees alight (a
+  // Galactic Colossus's claw drops what it held with it, ADFTractorClaw.lua: it made volume explosions there)
   auto push = [](const std::string& type) {
     std::string low = type;
     for (char& c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return low.find("force") != std::string::npos;
+    return low.find("force") != std::string::npos || low == "treefire";
   };
   for (const FrameHit& h : combat_.hits)
     if (h.radius > 0 && !h.shield && h.seen && !push(h.damageType))
@@ -1929,8 +1937,11 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     for (const FrameHit& h : combat_.hits)
       if (h.radius > 0 && h.seen && !push(h.damageType)) {
         if (VolfxLog* log = VolfxLog::Get()) log->SetArea(h.weapon, h.projectile, h.damageType, h.amount);  // (MOHO64_DEBUG_VOLFX: what harmed it)
-        if (AreaMakesVolume(h)) volumes.OfferArea({h.position[0], h.position[1], h.position[2]}, h.radius, static_cast<double>(h.tick) * 0.1);
-        else if (VolfxLog* log = VolfxLog::Get()) log->Declined(false, h.radius);
+        if (AreaMakesVolume(h)) {
+          std::string type = h.damageType;  // ('Nuke': a strategic missile's own harm, NukeDamage.lua)
+          for (char& c : type) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+          volumes.OfferArea({h.position[0], h.position[1], h.position[2]}, h.radius, static_cast<double>(h.tick) * 0.1, type == "nuke");
+        } else if (VolfxLog* log = VolfxLog::Get()) log->Declined(false, h.radius, "high in the air, under the water, a warp-in's or burning on");
       }
   CpuTimes::Part("units seen first: their files read ahead");
   {  // (their models' files read on the worker threads, all together; the models are made below)

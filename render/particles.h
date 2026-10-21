@@ -80,6 +80,9 @@ struct EmitterBlueprint {
   // (volume explosions, volume_blasts.h) VolumeReplaces: what the blast's volume draws in its place (a nuke's fireball and
   // plume): not thrown out while World::volumeExplosions is on (Particles::volumesOn)
   bool volumeReplaced = false;
+  // VolumeReplaces = "inside": shared with explosions too small for a volume; started as ever, and taken back when a
+  // volume is born over it within a moment of it (Particles::VolumeBorn, volume_blasts.h)
+  bool volumeInside = false;
   float largestSize = 0;  // the largest size its size curves give (for the light it throws)
   // (Particles::HotEmitters, the first time it is asked: -1 not known yet, 1 its glow is a hot colour, and that colour)
   mutable int warm = -1;
@@ -108,6 +111,11 @@ class Particles {
   // (effect_files.h); false: always the game's. The world sets it from its effects look.
   bool remastered = true;
   bool volumesOn = false;  // (volume explosions: emitters whose blueprint says VolumeReplaces are not started)
+  // (volume explosions) VolumeReplaces = "inside": whether a volume born within a moment of `when` is over `at` (an
+  // emitter started then is not started); and a volume born (or grown): the emitters of that kind started within
+  // `seconds` of `born` under it are stopped, and what they threw is let go of.
+  std::function<bool(Vec3 at, double when)> volumeCovers;
+  void VolumeBorn(Vec3 at, float radius, double born, float seconds);
 
   // Starts an emitter of that blueprint ("/effects/emitters/x_emit.bp") there. Returns its handle;
   // 0 when the blueprint cannot be read (reported once). `startedAt`: when it began, if that was
@@ -252,6 +260,13 @@ class Particles {
     // curves a script set on this emitter in place of its blueprint's (SetCurve)
     std::vector<std::pair<EmitterCurve EmitterBlueprint::*, EmitterCurve>> curves;
   };
+  struct Inside {  // (VolumeReplaces = "inside") an emitter of that kind started lately
+    uint32_t id = 0;
+    Vec3 at;
+    double started = 0;
+    std::string path;
+  };
+  std::vector<Inside> inside_;
   const EmitterBlueprint* Blueprint(const std::string& path, const std::string& faction);
   Emitter* Find(uint32_t id);
   void Emit(Emitter* emitter, int tick);

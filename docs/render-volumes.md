@@ -25,11 +25,19 @@ renderer decides). The volumes cast their shadow through the smoke's shadow map 
 **Which blasts.** A script's flash (the game's "light particle", `Lights::Flash`, which every unit's death and every
 nuke makes, sized by the unit: `defaultexplosions.lua` makes a unit's death flash 2 to 3 times its footprint's radius)
 told on to the volumes (`Lights::onFlash`), and the simulation's harm to an area (`World::AddCombat`'s hits with a
-radius, DamageArea). A flash of 5 or larger is a blast of 0.32 of its size in radius, at most 10 world units (the larger
-units' deaths: experimentals, battleships, the largest T3 units; a strategic bomb's); harm of radius 3 or more a blast of
-0.9 of it (artillery, bombs, death weapons: in a game, where hits are kept). A flash of 100 or larger is a nuke (the
-strategic missiles flash 140 to 300 large; the UEF commander's tactical nuke 100), 40 world units in radius (25 for a
-flash under 120); harm of radius 20 or more, told within ten seconds of it at its place, sizes it (the Yolona Oss's 60).
+radius, DamageArea). A flash of 5 or larger is a blast of 0.32 of its size in radius, at most 10 world units (a strategic
+bomb's); a dying unit's (the larger units' deaths: experimentals, ships, the largest T3 units) at least 1.2 times half its
+model's width (`deathPerWidth`; the larger of across and along, `Effects::DyingWidth`) and at most 20 (`largestDeath`):
+the game's death explosion sizes its flash by the unit's hitbox, smaller than its model, which made a Fatboy's volume 2.7
+across a hull of 8 and a CZAR's 7.5 under a disc of 26 (now 4.9 and 15.8; a Monkeylord's own death flash, 29, already
+said 9.4, and does). Harm of radius 3 or more is a blast of 0.9 of it (artillery, bombs, death weapons: in a game, where
+hits are kept). A flash of 100 or larger is a nuke (the strategic missiles flash 140 to 300 large; the UEF commander's
+tactical nuke 100), 40 world units in radius (25 for a flash under 120); harm of radius 20 or more, told within ten
+seconds of it at its place, sizes it (the Yolona Oss's 60). Only the UEF's strategic missiles are nukes here: each
+faction gets its own effects in its own pass (Chris, 2026-10-21), so another faction's missile keeps the original's
+look: no volume, nor for its own later flashes near it over 30 s or its own harm ('Nuke', NukeDamage.lua's first
+rings); the deaths it causes still make theirs. Whose: as the effects know it (`FlashFrom::faction`), else by the
+flash's ramp (`ramp_nuke_04`, the UEF's nukes' alone).
 Several of one blast within 0.8 s (a death's flashes, harm to each thing it reaches) are one, the largest. A nuke takes
 in for 30 s whatever is told near it (its own later flashes, the Aeon's flares, what it harms) and starts with its great
 flash: the UEF's smaller flashes over the second before it are a blast of their own, which goes on under it. The game's
@@ -50,7 +58,8 @@ bursts, 10 torpedo hits and 7 pulses of burning napalm. Now:
   (anti-air shells burst 6.6 to 35 over it in two games, every other weapon's harm within 5 but for a few shells that met
   an aircraft), not under the water's surface or by a torpedo or a depth charge (their harm goes off against hulls at the
   waterline), not a warp-in's clearing of its spot, and not a damage-over-time pulse (no weapon, no shot, under 50 of
-  harm: a UEF bomber's napalm, ten pulses over 3.6 s, had made a new volume every 0.8 s while it burned).
+  harm: a UEF bomber's napalm, ten pulses over 3.6 s, had made a new volume every 0.8 s while it burned), nor 'TreeFire'
+  harm, which sets trees alight (a Galactic Colossus's claw drops what it held with it), as the 'Force' pushes are not.
 What still makes one: units' deaths (from a footprint radius of about 1.7: T3 land units' do not, experimentals', ships',
 aircraft's that large and structures' do), shells', bombs' and missiles' harm on the ground, death weapons, and nukes.
 The debug print `MOHO64_DEBUG_VOLFX=1` (render/volfx_log.h) lists each volume with what made it and what the fix turned away.
@@ -115,7 +124,15 @@ view, far too coarse for a blast's shape close up; the box costs only where a bl
   on (`Particles::volumesOn`): the visuals session's remastered emitters can leave out the game's own fireball and plume
   where her volume draws them. Tried with copies of her `nuke_head_smoke_03`, `nuke_head_smoke_04` and `nuke_head_fire_01`
   marked so (the UEF nuke's spinners): the game's dark little mushroom head under the volume's cap goes. Without such
-  files it shows under the cap.
+  files it shows under the cap. `VolumeReplaces = "inside"`, for an emitter shared with explosions too small for a volume
+  (ExplosionMedium's fire and smoke: a medium unit's death flashes 2 to 3 times its footprint radius, a volume only from
+  about 1.7): it is started as ever and taken back when a volume is born within `insideSeconds` (0.3) of it and over it
+  (stopped, and what it threw since let go of: `Particles::VolumeBorn`, told by `VolumeBlasts::onBorn`), or not started
+  when one was born just before it (`VolumeBlasts::Covers`). Which emitters double up with the volumes, measured in M28
+  games with `MOHO64_DEBUG_VOLFX=1` (the volfx helper's table, 2026-10-21): the game's ExplosionLarge fire and smoke, the
+  UEF T3 artillery's and the Mavor's fire and smoke bodies (antimatter_hit_04 to 11), the Seraphim artillery's smoke
+  bodies (`true`); ExplosionMedium's fire and smoke and one Seraphim artillery smoke the air factory's build effect
+  shares (`"inside"`).
 
 ## The delivery form (for the visuals session's Blender / Mantaflow bakes)
 
@@ -140,7 +157,8 @@ need the reader and both backends extended):
   a white surface in the noon sun), `albedo` (the smoke's colour, linear), `ramps` (optional: the flashes' ramp textures'
   names it is for, "ramp_red_09" the Cybran strategic missile's, "ramp_nuke_04" the UEF's, "ramp_quantum_warhead_flash_01"
   the Aeon's, "ramp_white_07" the Seraphim's, "ramp_blue_22" the Yolona Oss's).
-- **The radius**: a blast's is its flash's (0.32 of its size, at most 10 world units) or its harm's; a nuke's its outer
+- **The radius**: a blast's is its flash's (0.32 of its size, at most 10 world units; a dying unit's at least 1.2 times
+  half its model's width, at most 20) or its harm's; a nuke's its outer
   ring (40 world units for the strategic missiles, 25 for the UEF commander's, 60 for the Yolona Oss where the harm says
   so). Bake at any scale and give the boxes in radii.
 - **Sizes**: 64 x 64 x 64 for a blast, 32 frames over its life with more early (its first second changes most): 4096 x
