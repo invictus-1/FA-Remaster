@@ -87,6 +87,7 @@ struct WorldPicture::Impl {
     if (groundDetail >= 0) world->groundMatt = groundDetail > 0;  // [leftover] (with the ground detail)
     if (weatherEffects >= 0) world->rainGround = weatherEffects > 0;  // [rain ground] (with the weather effects)
     if (weatherEffects >= 0) world->snowGround = weatherEffects > 0;  // [snow ground] (with the weather effects)
+    if (weatherEffects >= 0) world->plantsUnderSnow = weatherEffects > 0;  // [undersnow] (with the weather effects)
     if (frameGeneration >= 0) world->frameGeneration = frameGeneration > 0;
     if (hiddenOutlines >= 0) world->hiddenOutlines = hiddenOutlines > 0;
   }

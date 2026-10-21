@@ -2792,6 +2792,23 @@ void World::Render() {
   }
   // [decalsnow] the marks' pipelines that lay the same snow (made the first time, before the scene's pass)
   if (snowGround && look == Look::Modern && haveMap_ && timeOfDay >= 0 && snowLying > 0) decals.PrepareSnowGround();
+  // [undersnow] the low plants under lying snow (under_snow.h): their shaders made the first frame the option is on with the
+  // weather (not when the first snow lies: no stall then), and while snow lies the snow over them as the ground cover has
+  // it, for every pass of the models from here on
+  meshes.underSnow.depth = 0;
+  meshes.underSnow.shelter = {};
+  if (plantsUnderSnow && look == Look::Modern && haveMap_ && timeOfDay >= 0 && meshes.PrepareUnderSnow() && snowLying > 0) {
+    meshes.underSnow.depth = grass.snowDepth;
+    meshes.underSnow.shelter = terrain.SnowShelterPicture();
+    meshes.underSnow.materials = terrain.SnowMaterialsLaid();
+    meshes.underSnow.groundNormals = terrain.NormalMap();
+    meshes.underSnow.mapSize[0] = static_cast<float>(map.width);
+    meshes.underSnow.mapSize[1] = static_cast<float>(map.height);
+    meshes.underSnow.wind[0] = terrain.snowWind[0];
+    meshes.underSnow.wind[1] = terrain.snowWind[1];
+    meshes.underSnow.tune[0] = terrain.snowTune[1];
+    meshes.underSnow.tune[1] = terrain.snowTune[3];
+  }
   // the sun's shadow maps first, then the scene into its own picture, then that onto the window
   Stage("sun shadows");
   if (shadowed) {

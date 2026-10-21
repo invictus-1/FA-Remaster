@@ -17,6 +17,7 @@
 #include "lighting.h"
 #include "plants.h"  // [plants]
 #include "ray_scene.h"
+#include "under_snow.h"  // [undersnow]
 #include "unit_wear.h"
 
 namespace render {
@@ -108,6 +109,9 @@ cbuffer MeshKind : register(b3) {
 #ifdef PLANTS
   float4 kind7, kind8;  // [plants] (plants.h) PlantLife::Constants
 #endif
+#ifdef UNDER_SNOW
+  float4 kind9, kind10, kind11;  // [undersnow] (under_snow.h) the lying snow over the low plants: its k0, k1, k2
+#endif
 };
 Texture2D albedoMap : register(t0);
 Texture2D normalsMap : register(t1);
@@ -145,6 +149,11 @@ struct VOut {
   nointerpolation float4 wear : TEXCOORD6;  // (the instance's: unit_wear.h)
 #ifdef PLANTS
   nointerpolation float4 plants : TEXCOORD7;  // [plants] how it is burnt (PlantsBurnLook: black, brown, lower, embers)
+#endif
+#ifdef UNDER_SNOW
+  float snowAbove : TEXCOORD8;                  // [undersnow] its height over the snow's top (under 0: under the ground)
+  nointerpolation float3 snowHold : TEXCOORD9;  // [undersnow] x its share of the snow (-1: not under it), y what stands out, z
+                                                // how much of the ground at its foot the snow covers
 #endif
 };
 
@@ -255,6 +264,30 @@ VOut VS(VIn i, uint instance : SV_InstanceID) {
     o.uv.xz += scroll;
     o.tint = 0;  // (no ghost's tint)
   }
+#ifdef UNDER_SNOW
+  // [undersnow] a low plant under lying snow (under_snow.h): sunk into it (the ground hides what goes under), pressed and
+  // bowed by it; buried whole where little of it would stand out (all its corners behind the eye)
+  o.snowAbove = 1e4;
+  o.snowHold = float3(-1, 0, 0);
+  [branch] if (kind3.x > 0) {
+    float3 root = float3(n.row0.w, n.row1.w, n.row2.w);
+    float scale = length(float3(n.row0.x, n.row1.x, n.row2.x));
+    float top = scale / kind3.y;
+    float4 plant;
+    float3 ground;
+    float covered;
+    [branch] if (UnderSnowPlant(root, top, scale / kind3.w, kind9, kind10, kind11, plant, ground, covered)) {
+      if (plant.w > 0.5) {
+        o.position = float4(0, 0, -1, 1);
+        return o;
+      }
+      float turn = CloudHash(root * 1.7 + 0.3) * 6.2831853;
+      o.world = UnderSnowCorner(o.world, root, top, plant, ground, float2(cos(turn), sin(turn)), o.normal, o.tangent, o.binormal, o.snowAbove);
+      o.snowHold = float3(plant.y, max(top * plant.z - plant.x, 1e-3), covered);
+      o.position = mul(viewProj, float4(o.world, 1));
+    }
+  }
+#endif
   return o;
 }
 
@@ -735,7 +768,22 @@ float4 Shade(VOut i, bool front) {
     }
     // leaves: some of the light that falls on their far side comes through (World::leafLight: deeper in colour and
     // stronger toward an eye that looks at the sun through them, LeafLight; without it as at first, below)
+#ifdef UNDER_SNOW
+    // [undersnow] a low plant under lying snow stands in it: the light's snow lies on what faces up at the ground's own
+    // measure where the ground at its foot is covered (twice the half the models take; none where the ground is bare), and
+    // it is dusted a little all over by its own share (under_snow.h, UnderSnowDust); less light comes through its leaves
+    // where snow lies
+    float snowDust = i.snowHold.x >= 0 ? UnderSnowDust(i.snowHold.xy, i.snowAbove, N, i.world) : 0;
+    if (kind2.y > 0.5 && leaves.x > 0.5) emission += LeafLight(base, LeafThrough(N, toCamera), i.world, shadow, spec.a) * (1 - snowDust);
+    [branch] if (i.snowHold.x >= 0) {
+      surfaceSnowShare = 2 * i.snowHold.z;
+      base = lerp(base, SNOW_COLOUR, snowDust);
+      roughness = lerp(roughness, SNOW_ROUGH, snowDust);
+      metallic *= 1 - snowDust;
+    }
+#else
     if (kind2.y > 0.5 && leaves.x > 0.5) emission += LeafLight(base, LeafThrough(N, toCamera), i.world, shadow, spec.a);
+#endif
     // battle scars (unit_wear.h, World::unitScars): its marks and its wear over all, on a finished unit's lit surface
     [branch] if ((i.wear.y > 0.5 || i.wear.z > 0.001) && !building && kind4.x < 0.5 && kind2.w < 0.5 && kind.y < 0.5)
       WearSurface(boneRows, i.wear, i.rest, normalize(i.restNormal), i.world, teamMask, falling.w > 0 ? falling.w : 1, base, metallic, roughness, emission, N);
@@ -766,6 +814,9 @@ float4 Shade(VOut i, bool front) {
     float3 lit = ModernLight(base, metallic, roughness, occlusion, emission, N, i.world, shadow);
     if (kind2.y > 0.5 && leaves.x < 0.5) {  // leaves: some of the light that falls on the far side comes through
       float3 falls = ToLinear(sunColor) * (lightMultiplier * modern.x);
+#ifdef UNDER_SNOW
+      falls *= 1 - snowDust;  // [undersnow]
+#endif
       lit += base * falls * (saturate(dot(-N, sunDirection)) * shadow * CloudShadow(i.world) * spec.a * 0.6);
     }
     return float4(lit * built, kind.y > 0.5 ? albedo.a : cover);
@@ -925,6 +976,9 @@ cbuffer SwayMotion : register(b3) {
   float4 kind3;       // x: how much it sways; y: 1 / its height in model units
   float4 kind6;       // z: a group of trees: model units a step of where each tree stands (0: none)
   float4 kind7, kind8;  // (plants.h) PlantLife::Constants, as the scene's pass had them
+#ifdef UNDER_SNOW
+  float4 kind9, kind10, kind11;  // [undersnow] (under_snow.h) the lying snow over the low plants, as the scene's pass had it
+#endif
 };
 StructuredBuffer<float4> boneRows : register(t0, space1);
 Texture2D albedoMap : register(t0);
@@ -1006,6 +1060,31 @@ VOut VS(VIn i, uint instance : SV_InstanceID) {
   Instance n = instances[instance];
   float3 now = Swayed(i, n, time, 0), before = Swayed(i, n, motionWhen.x, motionWhen.y);
   VOut o;
+#ifdef UNDER_SNOW
+  // [undersnow] a low plant under lying snow where the scene's shader puts it (kShader's VS, under_snow.h): the snow the same
+  // at both moments, each corner bent by it after its sway; buried whole: none of it
+  [branch] if (kind3.x > 0) {
+    float3 root = float3(n.row0.w, n.row1.w, n.row2.w);
+    float scale = length(float3(n.row0.x, n.row1.x, n.row2.x));
+    float top = scale / kind3.y;
+    float4 plant;
+    float3 ground;
+    float covered;
+    [branch] if (UnderSnowPlant(root, top, scale / kind3.w, kind9, kind10, kind11, plant, ground, covered)) {
+      if (plant.w > 0.5) {
+        o.position = float4(0, 0, -1, 1);
+        o.uv = 0;
+        o.here = o.then = float4(0, 0, 0, 1);
+        return o;
+      }
+      float turn = CloudHash(root * 1.7 + 0.3) * 6.2831853;
+      float3 normal = 0, tangent = 0, binormal = 0;
+      float above;
+      now = UnderSnowCorner(now, root, top, plant, ground, float2(cos(turn), sin(turn)), normal, tangent, binormal, above);
+      before = UnderSnowCorner(before, root, top, plant, ground, float2(cos(turn), sin(turn)), normal, tangent, binormal, above);
+    }
+  }
+#endif
   o.position = mul(viewProj, float4(now, 1));
   o.uv = i.uv.xy;
   o.here = mul(motionNow, float4(now, 1));
@@ -1037,6 +1116,12 @@ bool MeshRenderer::Init(std::string* error) {
   // [plants] (the sun's maps: bent, not burnt; the game's burnt trees with their needles gone by a variant of their own)
   plantsShadowSource_ = "#define PLANTS_SHADOW 1\n" + plantsSource_;
   plantsShadowBurntSource_ = "#define PLANTS_SHADOW 1\n#define PLANTS_SHADOW_BURNT 1\n" + plantsSource_;
+  // [undersnow] (the same as the plants' with the low plants under lying snow, under_snow.h: PrepareUnderSnow makes them; the
+  // blasts' waves and plants that react in them, each off by its constants when off; the sun's maps bent, not burnt)
+  snowSource_ = std::string("#define BLASTS 1\n#define PLANTS 1\n#define PLANTS_PRESS t8\n#define PLANTS_BURN t9\n#define SURFACE_SNOW 0.5\n#define SURFACE_OWN_WET 1\n#define UNDER_SNOW 1\n") +
+                kViewShaderBlock + RayShaders() + kLightingShaderBlock + kBlastShaderBlock + kPlantsShaderBlock + kWearShaderBlock +
+                HotMetal::ShaderBlock() + kUnderSnowShaderBlock + kShader;
+  snowShadowSource_ = "#define PLANTS_SHADOW 1\n" + snowSource_;
   // (buildfx: the same with the remastered build look, for while it is on: PrepareBuild makes them)
   buildSource_ = std::string("#define REMASTERED_BUILD 1\n#define SURFACE_SNOW 0.5\n#define SURFACE_OWN_WET 1\n") + kViewShaderBlock + RayShaders() + kLightingShaderBlock +
                  kWearShaderBlock + HotMetal::ShaderBlock() + kBuildShaderBlock + kShader;
@@ -1607,15 +1692,20 @@ void MeshRenderer::SortItems() {
   // between each two meshes; without it nothing reacts, and the order is as it was)
   const bool plants = plantsConstants && plantsMade_ > 0;
   auto reacts = [plants](const ModelLod* l) { return plants && (l->sway > 0 || (l->wreck && l->leaves)); };
+  // [undersnow] (the low plants under lying snow likewise, after the rest, and after what reacts that is not under it; without
+  // snow none sinks, and the order is as it was)
+  auto sinks = [this](const Item& item) { return Sinks(item.lod, item.entry->model); };
   if (n < 64) {
     std::stable_sort(items_.begin(), items_.end(), [&](const Item& a, const Item& b) {
-      return a.lod->blend != b.lod->blend ? b.lod->blend : reacts(a.lod) != reacts(b.lod) ? reacts(b.lod) : a.lod->serial != b.lod->serial ? a.lod->serial < b.lod->serial : a.near && !b.near;
+      const bool ra = reacts(a.lod) || sinks(a), rb = reacts(b.lod) || sinks(b);
+      return a.lod->blend != b.lod->blend ? b.lod->blend : ra != rb ? rb : sinks(a) != sinks(b) ? sinks(b) : a.lod->serial != b.lod->serial ? a.lod->serial < b.lod->serial : a.near && !b.near;
     });
     return;
   }
   auto key = [&](const Item& item) {
-    return (static_cast<uint64_t>(item.lod->blend ? 1 : 0) << 34) | (static_cast<uint64_t>(reacts(item.lod) ? 1 : 0) << 33) |
-           (static_cast<uint64_t>(item.lod->serial) << 1) | (item.near ? 0u : 1u);
+    const bool sunk = sinks(item);  // [undersnow]
+    return (static_cast<uint64_t>(item.lod->blend ? 1 : 0) << 34) | (static_cast<uint64_t>(reacts(item.lod) || sunk ? 1 : 0) << 33) |
+           (static_cast<uint64_t>(sunk ? 1 : 0) << 32) | (static_cast<uint64_t>(item.lod->serial) << 1) | (item.near ? 0u : 1u);
   };
   // (only the bits that differ between the items need sorting)
   uint64_t all = 0, any = 0, first = key(items_[0]);
@@ -1671,6 +1761,21 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
     device_->SetTexture(8, plantsPress ? plantsPress : textures_->Black());
     device_->SetTexture(9, plantsBurnt ? plantsBurnt : textures_->Black());
   }
+  // [undersnow] (the low plants under lying snow: their shaders have the blasts' waves and plants that react in them, each
+  // left out by its constants when off; the snow ground's shelter, read only where it is there, and the ground's normals)
+  float snowK[12] = {};
+  const bool snowing = underSnow.depth > 0 && snowMade_ > 0;
+  if (snowing) {
+    static const float kNoBlasts[4] = {0, 0, 0, 0};
+    if (!blasts && !plants) device_->SetConstants(1, kNoBlasts, sizeof kNoBlasts);
+    if (!plants) {
+      device_->SetTexture(8, textures_->Black());
+      device_->SetTexture(9, textures_->Black());
+    }
+    device_->SetTexture(10, underSnow.shelter ? underSnow.shelter : textures_->Black());
+    device_->SetTexture(11, underSnow.groundNormals ? underSnow.groundNormals : textures_->FlatNormal());
+    UnderSnowConstants(snowK);
+  }
   if (!shadowPass) {
     device_->SetTexture(3, environment ? environment : textures_->GreyCube());
     if (!insectLookup_) {  // (once: the two lookups, or white where the game's files have none)
@@ -1722,12 +1827,16 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
     const bool bends = blasts && lod->sway > 0;  // (what sways, while blasts' waves are under way: the shaders with them)
     const bool reacts = plants && (lod->sway > 0 || (lod->wreck && lod->leaves));  // [plants] (and the game's burnt trees)
     const bool charred = reacts && shadowPass && lod->wreck;  // [plants] (a burnt tree's shadow: its own variant)
-    const int variant = charred ? 300 : reacts ? 200 : bends ? 100 : 0;
+    const bool sinks = snowing && Sinks(lod, items_[at].entry->model);  // [undersnow] (a low plant under lying snow)
+    const int variant = sinks ? 400 : charred ? 300 : reacts ? 200 : bends ? 100 : 0;
     if (wanted + variant != drawing) {
       gfx::Pipeline p = wanted == 11 ? domeRgb_ : wanted == 10 ? glassRgb_ : wanted == 9 ? laidLeaves_ : wanted == 8 ? laid_ : wanted == 7 ? prepassLeaves_ :
                         wanted == 6 ? prepass_ : wanted == 5 ? adding_ : wanted == 4 ? dome_ : wanted == 3 ? glass_ : wanted == 2 ? blended_ :
                         wanted == 1 ? leaves_ : shadowPass ? shadow_ : pipeline_;
-      if (reacts) {  // [plants]
+      if (sinks) {  // [undersnow]
+        for (const Bending& b : bending_)
+          if (b.original.id == p.id && b.snow) p = b.snow;
+      } else if (reacts) {  // [plants]
         for (const Bending& b : bending_)
           if (b.original.id == p.id && b.plants) p = charred && b.plantsBurnt ? b.plantsBurnt : b.plants;
       } else if (bends) {
@@ -1746,7 +1855,7 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
       batch_[n].bones[0] = items_[at + n].bones;
       ++n;
     }
-    float kind[32] = {lod->alphaCut, lod->shell ? 12.0f : lod->impact ? 9.0f + static_cast<float>(lod->impact) : lod->unlit ? 6.0f + static_cast<float>(lod->unlit) : lod->nuke ? 4.0f + static_cast<float>(lod->nuke) : lod->fades ? 4.0f : lod->shield ? 3.0f : lod->frame ? 2.0f : lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f,
+    float kind[44] = {lod->alphaCut, lod->shell ? 12.0f : lod->impact ? 9.0f + static_cast<float>(lod->impact) : lod->unlit ? 6.0f + static_cast<float>(lod->unlit) : lod->nuke ? 4.0f + static_cast<float>(lod->nuke) : lod->fades ? 4.0f : lod->shield ? 3.0f : lod->frame ? 2.0f : lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f,
                             static_cast<float>(lod->faction), lod->leaves ? 1.0f : 0.0f, lod->plainMaterial ? 1.0f : 0.0f, lod->border ? 1.0f : 0.0f,
                             lod->sway, 1 / lod->swayHeight, 0, 1,
                             lod->chrome ? 2.0f : lod->wreck ? 1.0f : 0.0f, lod->shieldTint.x, lod->shieldTint.y, lod->shieldTint.z};
@@ -1774,7 +1883,8 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
       if (items_[at].entry->model->simTree) kind[30] = kind[31] = 0;
       if (shadowPass) kind[30] = 0;  // (shadows: bent as the plants are, but not burnt: it would cost the sun's maps too much)
     }
-    device_->SetConstants(3, kind, static_cast<uint32_t>(sizeof(float) * (reacts ? 32 : 24)));
+    if (sinks) std::copy(snowK, snowK + 12, kind + 32);  // [undersnow] (kind9..11; kind7, kind8 nought when nothing reacts)
+    device_->SetConstants(3, kind, static_cast<uint32_t>(sizeof(float) * (sinks ? 44 : reacts ? 32 : 24)));
     device_->SetTexture(0, lod->albedo);
     if (!shadowPass) {
       device_->SetTexture(1, lod->normals);
@@ -1838,6 +1948,55 @@ bool MeshRenderer::PreparePlants() {
   }
   plantsMade_ = 1;
   return true;
+}
+
+// [undersnow] The variants that draw the low plants under lying snow (under_snow.h), and their motion's, made the first time
+// the world wants them (the first frame the option is on with the weather: not when the first snow lies, a stall then).
+bool MeshRenderer::PrepareUnderSnow() {
+  if (snowMade_) return snowMade_ > 0;
+  snowMade_ = -1;
+  const auto start = std::chrono::steady_clock::now();
+  for (Bending& b : bending_) {
+    if (!b.original) continue;
+    gfx::PipelineDesc d = b.desc;
+    d.vertexSource = d.pixelSource = b.original.id == shadow_.id ? snowShadowSource_ : snowSource_;
+    std::string error;
+    b.snow = device_->CreatePipeline(d, &error);
+    if (!b.snow) {
+      fprintf(stderr, "render: the low plants cannot go under the snow in the models' shaders (%s)\n", error.c_str());
+      return false;
+    }
+  }
+  // (their motion: as what sways, kSwayMotionShader, with the snow in it)
+  const std::string source = std::string("#define PLANTS_PRESS t8\n#define PLANTS_BURN t9\n#define UNDER_SNOW 1\n") + kViewShaderBlock + kBlastShaderBlock +
+                             kPlantsShaderBlock + kUnderSnowShaderBlock + kSwayMotionShader;
+  gfx::PipelineDesc md;
+  md.name = "models, what sways under the snow, motion";
+  md.vertexSource = md.pixelSource = source;
+  md.attrs = {{"POSITION", 0, gfx::AttrType::Float3, offsetof(ScmVertex, position)},
+              {"TEXCOORD", 0, gfx::AttrType::Float4, offsetof(ScmVertex, uv0)},
+              {"BLENDINDICES", 0, gfx::AttrType::UByte4, offsetof(ScmVertex, bones)}};
+  md.stride = sizeof(ScmVertex);
+  md.colorFormat = gfx::Format::RG16F;
+  md.cull = gfx::Cull::None;
+  md.depthWrite = false;
+  md.depthBias = 16;
+  std::string error;
+  swaySnowMotionPipeline_ = device_->CreatePipeline(md, &error);
+  if (!swaySnowMotionPipeline_) fprintf(stderr, "render: the motion of the low plants under the snow cannot be drawn (%s)\n", error.c_str());
+  snowMade_ = 1;
+  printf("render: the low plants under the snow: their shaders made, %.0f ms\n",
+         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+  return true;
+}
+
+// [undersnow] under_snow.h's k0, k1, k2 from underSnow (twelve floats)
+void MeshRenderer::UnderSnowConstants(float* to) const {
+  const float wind = std::sqrt(underSnow.wind[0] * underSnow.wind[0] + underSnow.wind[1] * underSnow.wind[1]);
+  const float k[12] = {underSnow.depth, underSnow.shelter ? 1.0f : 0.0f, underSnow.tallest, underSnow.shelter && underSnow.materials ? 1.0f : 0.0f,
+                       wind > 0 ? underSnow.wind[0] / wind : 0.0f, wind > 0 ? underSnow.wind[1] / wind : 0.0f, underSnow.tune[0], underSnow.tune[1],
+                       1 / std::max(underSnow.mapSize[0], 1.0f), 1 / std::max(underSnow.mapSize[1], 1.0f), 0, 0};
+  std::copy(k, k + 12, to);
 }
 
 // (buildfx) The remastered build look's variants of the pipelines that may draw something under construction, made the
@@ -1929,7 +2088,16 @@ void MeshRenderer::DrawSwayMotion(const View& view, const Mat4& now, const Mat4&
     Mat4 now, before;
     float when[4];
     float kind[4], kind2[4], kind3[4], kind6[4], kind7[4], kind8[4];
-  } k{now, before, {timeBefore, view.constants.time - timeBefore, plants ? 1.0f : 0.0f, 0}, {}, {}, {}, {}, {}, {}};
+    float snow[12];  // [undersnow] (kind9..11: read by the variant under the snow alone)
+  } k{now, before, {timeBefore, view.constants.time - timeBefore, plants ? 1.0f : 0.0f, 0}, {}, {}, {}, {}, {}, {}, {}};
+  // [undersnow] (the low plants under lying snow: by a variant of their own, the snow as the scene's pass had it)
+  const bool snowing = underSnow.depth > 0 && snowMade_ > 0 && swaySnowMotionPipeline_;
+  if (snowing) {
+    device_->SetTexture(10, underSnow.shelter ? underSnow.shelter : textures_->Black());
+    device_->SetTexture(11, underSnow.groundNormals ? underSnow.groundNormals : textures_->FlatNormal());
+    UnderSnowConstants(k.snow);
+  }
+  bool sinking = false;
   for (size_t at = 0; at < swayItems_.size();) {
     const ModelLod* lod = swayItems_[at].lod;
     size_t n = 0;
@@ -1939,10 +2107,22 @@ void MeshRenderer::DrawSwayMotion(const View& view, const Mat4& now, const Mat4&
       batch_[n].bones[0] = item.bones;
       ++n;
     }
+    const bool sinks = snowing && Sinks(lod, swayItems_[at].entry->model);  // [undersnow]
+    if (sinks != sinking) {
+      device_->SetPipeline(sinks ? swaySnowMotionPipeline_ : swayMotionPipeline_);
+      sinking = sinks;
+    }
+    // (under the snow the plants' own sway as the scene's variant has it: PlantsUpright always, the rest off by kind8)
+    k.when[2] = plants || sinks ? 1.0f : 0.0f;
     k.kind[0] = lod->alphaCut;
     k.kind2[1] = lod->leaves ? 1.0f : 0.0f;
     k.kind3[0] = lod->sway;
     k.kind3[1] = 1 / lod->swayHeight;
+    {  // [undersnow] (the model's lowest point and its whole height, as the scene's MeshKind has them)
+      const Model* of = swayItems_[at].entry->model;
+      k.kind3[2] = of->boundsMin.y;
+      k.kind3[3] = 1 / std::max(of->boundsMax.y - of->boundsMin.y, 1e-3f);
+    }
     k.kind6[2] = lod->treeStep;
     if (plants) {  // (as DrawItems hands them: the game's trees neither pressed nor burnt by the picture)
       std::copy(plantsConstants, plantsConstants + 4, k.kind7);
@@ -1959,6 +2139,10 @@ void MeshRenderer::DrawSwayMotion(const View& view, const Mat4& now, const Mat4&
   }
   device_->SetTexture(8, {});
   device_->SetTexture(9, {});
+  if (snowing) {  // [undersnow]
+    device_->SetTexture(10, {});
+    device_->SetTexture(11, {});
+  }
 }
 
 // Hidden outlines (hidden_outlines.h): the marked models the scene drew, again, as DrawMotion draws the keyed ones.

@@ -151,6 +151,24 @@ class MeshRenderer {
   const float* plantsConstants = nullptr;
   gfx::Texture plantsPress, plantsBurnt;
   bool PreparePlants();  // false: they cannot be made (then nothing reacts)
+  // [undersnow] The low plants under lying snow (under_snow.h, World::plantsUnderSnow), set by the world each frame: while
+  // `depth` is above 0 what sways, is no wreck and whose model is lower than `tallest` (its whole height in the world at its
+  // own scale: under a tree) is drawn by variants of its shaders that sink it into the snow, bow it and dust it white
+  // (made by PrepareUnderSnow, the blasts' waves and plants that react in them too), in every pass and in its motion, after
+  // the rest of a pass, together (SortItems); each plant under the tallest at its own scale takes it, a taller one keeps
+  // its look. 0, as at first: drawn by the shaders as they were. Its textures are read at t10, t11 (registers of the
+  // models' shaders alone).
+  struct UnderSnow {
+    float depth = 0;                   // world units the snow lies at the most where all of it lies (GroundCover::snowDepth)
+    gfx::Texture shelter;              // the snow ground's shelter (Terrain::SnowShelterPicture), or none: not read
+    gfx::Texture groundNormals;        // the ground's normals (Terrain::NormalMap)
+    float mapSize[2] = {1, 1};         // the map's width and height
+    float wind[2] = {0.915f, 0.403f};  // the way the wind blows (x, z: the snow ground's)
+    float tune[2] = {1, 1};            // the trees' crowns' and the drifts' weight (Terrain::snowTune y, w)
+    float tallest = 1.5f;              // a plant this tall or taller keeps its look (the snow's shelter's tree, World::SnowProps)
+    bool materials = false;            // the ground lays the map's snow materials (Terrain::SnowMaterialsLaid: a mottled margin)
+  } underSnow;
+  bool PrepareUnderSnow();  // false: they cannot be made (then the plants keep their look)
   // (buildfx) The remastered build look (build_effects.h, World::remasteredBuild), set by the world each frame: what is
   // under construction takes its faction's remastered build shimmer, the models being drawn by the variants of their
   // shaders built with it (made by PrepareBuild the first time the world wants them; without it the shaders as they were).
@@ -313,6 +331,7 @@ class MeshRenderer {
   std::vector<MotionItem> swayItems_;    // [leftover] and of what sways without a key (swayMotion)
   gfx::Pipeline swayMotionPipeline_;     // [leftover] (made the first time it is wanted)
   bool swayMotionTried_ = false;
+  gfx::Pipeline swaySnowMotionPipeline_;  // [undersnow] (the same for the low plants under the snow: made with PrepareUnderSnow)
   void DrawSwayMotion(const View& view, const Mat4& now, const Mat4& before, float timeBefore);
   std::vector<MotionItem> markedItems_;  // (hidden outlines) what they drew of the marked models
   int marks_ = 0;                        // (hidden outlines) models marked this frame
@@ -331,12 +350,22 @@ class MeshRenderer {
     gfx::Pipeline bending;
     gfx::Pipeline plants;       // [plants] (PreparePlants)
     gfx::Pipeline plantsBurnt;  // [plants] (the shadows' only: the game's burnt trees)
+    gfx::Pipeline snow;         // [undersnow] (PrepareUnderSnow)
   };
   Bending bending_[8];
   std::string blastSource_;
   int blastsMade_ = 0;
   std::string plantsSource_, plantsShadowSource_, plantsShadowBurntSource_;  // [plants]
   int plantsMade_ = 0;        // [plants] (0 not yet, 1 made, -1 they cannot be made)
+  std::string snowSource_, snowShadowSource_;  // [undersnow]
+  int snowMade_ = 0;                           // [undersnow] (0 not yet, 1 made, -1 they cannot be made)
+  // [undersnow] Whether a level is drawn under the snow this frame (underSnow): what sways, no wreck, of a model lower than a
+  // tree at its own scale (each instance's own height is tested again by its shader)
+  bool Sinks(const ModelLod* lod, const Model* model) const {
+    return underSnow.depth > 0 && snowMade_ > 0 && lod->sway > 0 && !lod->wreck &&
+           (model->boundsMax.y - model->boundsMin.y) * model->scale < underSnow.tallest;
+  }
+  void UnderSnowConstants(float* to) const;  // [undersnow] (k0, k1, k2 of under_snow.h: twelve floats)
   // (buildfx) the pipelines that may draw something under construction, and their remastered build look's variants
   struct BuildVariant {
     gfx::Pipeline original;

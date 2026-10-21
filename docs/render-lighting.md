@@ -1934,6 +1934,56 @@ Three leftovers before Chris's test run (the renderer's task of 2026-10-21; the 
   sway's motion leaves out a cinematic camera's near fade (leaves within 1.2 units) and the remastered build's shrinking.
   The matt ground's range is a judgement (terrain.cpp, `smoothstep(0.12, 0.9, ...)`).
 
+## The map's low plants under lying snow (2026-10-21; a helper's, for review) [undersnow]
+
+After Chris's test run (the renderer's task of 2026-10-21): with the ground cover under the snow (above), what still stood
+green through it on SETONS_R were the map's own low props, placed by the visuals session: ferns (fern_a..d, 0.28 to 0.55
+world units tall at their scales), shrubs (shrub_a..i, 0.36 to 1.22), grass tufts (grass_tuft_a..q, 0.15 to 1.0),
+dandelions and celandines (0.12 to 0.44), moss clumps, periwinkle, marram, bushes (0.65 to 1.04), gorse and the small
+saplings; some 60 000 of them, all `LabPBRAlpha` (they sway, leaves). They took the light's snow on what faces up at half
+the ground's share (lighting.h, `SURFACE_SNOW 0.5` for every model) and nothing else: `World::unitSnow` is the units' own
+(an instance's wear.w; a prop's is -1, the weather's).
+- **What it does** (`World::plantsUnderSnow`, in "Weather Effects" with the snow ground; viewer `--plants-under-snow`, `--snow-depth n`
+  for the plants' and the cover's depth together): while snow lies, each low plant (what sways, no wreck, under 1.5 world
+  units from its lowest point to its top: the snow shelter's own measure of a tree, `World::SnowProps`) stands in the same
+  snow as the cover round it. How much lies at its foot and how deep is worked out as the cover's (grass.cpp's
+  `CoverSnowDepth`, line for line, with the snow ground's shelter where it is on), and with the map's snow materials over the
+  ground's mottled margin as the marks take it (decals.cpp's `MarkSnowLying`), so that a plant on ground the snow leaves bare
+  stays as it was (a first try without it whitened the tufts on the green patches between the snow at lying 0.5). The plant
+  is sunk by that depth: the ground hides what goes under it, and what stands out meets the ground's surface, its shadow
+  falling where it stands (a first try cut it at the snow's top instead, a plane the depth over the ground: from close by the
+  plants floated over the snow with their shadows apart from them). It is pressed down (a low herb to four fifths of its
+  height under a full cover) and its outer parts bowed down by r^2 (into the ground where they go under), spread a little
+  and leaning its own way, all of it the less the taller it is (`UnderSnowBends`: none for a plant over 1.5 tall), the normal,
+  tangent and binormal turned by the bend; buried whole where less than three tenths of it would stand out (as the cover's
+  blades), so the lowest go first and the tall ones poke out. What stands out takes the light's snow on what faces up at the
+  ground's measure times how much the ground at its foot is covered (`surfaceSnowShare = 2 x covered`), a light dusting all
+  over by its own share, more toward its top, and all round where it comes out of the snow; its leaves let less light
+  through there. Trees, rocks and units keep their look.
+- **How**: `render/under_snow.h` (the shader block: `UnderSnowPlant`, `UnderSnowCorner`, `UnderSnowDust`; the snow ground's
+  shelter at t10, the ground's normals at t11, registers of the models' shaders alone). The models are drawn by variants of
+  their shaders built with `UNDER_SNOW` (`MeshRenderer::PrepareUnderSnow`, `Bending::snow`: the eight that what sways is
+  drawn with, the sun's maps' bent and not burnt; the blasts' waves and plants that react in them, each off by its
+  constants when off), chosen by `MeshRenderer::Sinks` for each level (what sways, no wreck, the model lower than
+  `underSnow.tallest` at its own scale; each instance's own height tested again by the shader), sorted after the rest of a
+  pass (`SortItems`); the motion of what sways by a variant of `kSwayMotionShader` with the same bend. They are made the first
+  frame the option is on with the weather (not when the first snow lies: no stall then). Without snow, or the option off, every
+  model is drawn by the shaders as they were.
+- **Cost** (2560x1440, Direct3D 12, SETONS_R at lying 1 with the snow ground and the cover, the lowest of three runs of 270
+  frames each, the PC busy): the models' pass 0.936 -> 0.935 ms from the game's height (40), 0.546 -> 0.536 mid (16), 0.373 ->
+  0.371 close (6); the sun's shadows 0.648 -> 0.655, 0.474 -> 0.476, 0.552 -> 0.556: nothing measurable (the heavier corners
+  of the plants that stand weigh about what the buried ones no longer cost). Its shaders: made the first frame the option is
+  on with a time of day, 10 to 55 ms from the shader cache (a first compile not measured).
+- **Checked**: off, regress3 eight of eight 0 px against b197ac4 on both backends; the weather regression four of four 0 px
+  against merges/uireq; SETONS_R in full snow with the snow ground and the cover, the option off, ours against the base exe:
+  0 px (the viewer's own run-to-run differences aside, up to 4 px by one level between two runs of the same exe). With the
+  option on in the weather regression: rain 0 px, snow 501 px (Direct3D 12) / 499 (Vulkan), the stock map's low plants
+  going under (as meant). Vulkan draws it as Direct3D 12 does.
+- **Open**: the ray tracing scene (reflections, the small lights' shadows by rays) keeps the plants as they stood; the
+  cover's own depth (`CoverSnowDepth`) has no mottle with the snow materials, so on the mottled margin the cover and the
+  plants may disagree (proposed: the same mottle in the cover); with plants that react off, the variant still multiplies a
+  plant's sway by `PlantsUpright` (a plant tilted more than 25 degrees sways a little less under the snow).
+
 ## The options
 
 Each is off by default (but `hiddenOutlines`, on: Chris's word, item 15) and, off, leaves the picture as it was, pixel
@@ -1985,6 +2035,7 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `rainGround` | the listed layers go over to their wet twins as the ground gets wet, the hollows first, and back as it dries (in "Weather Effects") | +0.13 to 0.16 ms while the ground is wet (SETONS_R's four twins), nothing dry | a time of day; a map whose entry has a "weather" rain block |
 | `groundMatt` | dry ground matt at grazing light: no sheen like wet plastic on the soil at dusk and dawn; wet ground, puddles and snow keep their gloss (proposed for "Ground Detail") | none measurable | a time of day |
 | `snowGround` | the lying snow from the map's snow materials (drifted, packed where trodden, breaking up by the ground's height, slush at the thaw) and, on any map, shaded by what is round it (valleys, hollows, trees, rocks), deeper in the wind's lee, thinner under trees and on steep ground (in "Weather Effects") | +0.20 ms from the game's height while snow lies (+0.16 close with the relief, +0.28 with deep tracks), nothing without | a time of day; the materials where the map's entry has a "snow" block |
+| `plantsUnderSnow` | [undersnow] the map's low plants (ferns, bushes, weeds, tufts placed as props) under lying snow: sunk by its depth as the ground cover, pressed and bowed by it, the lowest buried whole, what stands out white where the ground round it is (in "Weather Effects") | none measurable while snow lies (the models' and the sun's passes within 0.01 ms either way from the game's height, mid and close); its shaders made once, 10 to 55 ms from the shader cache | a time of day |
 
 Ray tracing means Direct3D 12 with DXR 1.1 or Vulkan with ray queries: never on the Mac (MoltenVK has none);
 where it is missing those options do nothing. `rayReflections` builds the surfaces' shaders with ray
@@ -2003,7 +2054,7 @@ so there is less clutter). WorldPicture sets each bundle's options together, bef
 | `SetAtmosphere` | `volumetricFog`, `volumetricClouds`, `skyTables`; proposed (and set with them in world_picture.cpp, for review): `lightShafts`, `driftingShadows` | about 0.25 ms less (needs a time of day); the two proposed about +0.16 to 0.19 from the game's camera |
 | `SetSoftShadows` | `softShadows`, `contactShadows` | about +0.37 ms |
 | `SetRayTracing` | `bounceLight`, `rayReflections`, `rayLightShadows` (reflections and the small lights' shadows from the next map) | about +0.75 ms; at night with many lights about 0.5 ms more |
-| `SetWeatherEffects` | `litRain`, `rainSplashes`, `waterDetail`; `streamWater` ([stream], 2026-10-19: 0.05 to 0.13 ms), `rainGround` ([rain ground], 2026-10-19: +0.13 to 0.16 ms while wet), `snowGround` ([snow ground], 2026-10-20: +0.2 to 0.3 ms while snow lies); proposed: `horizonWeather` | about +0.05 ms in rain, +0.04 by water; the horizon about +0.1 (0.21 from the strategic view in snow) |
+| `SetWeatherEffects` | `litRain`, `rainSplashes`, `waterDetail`; `streamWater` ([stream], 2026-10-19: 0.05 to 0.13 ms), `rainGround` ([rain ground], 2026-10-19: +0.13 to 0.16 ms while wet), `snowGround` ([snow ground], 2026-10-20: +0.2 to 0.3 ms while snow lies), `plantsUnderSnow` ([undersnow], 2026-10-21: no measurable cost); proposed: `horizonWeather` | about +0.05 ms in rain, +0.04 by water; the horizon about +0.1 (0.21 from the strategic view in snow) |
 | `SetGroundDetail` | `groundCover`, `battleScars`, `leafLight`, `deepTracks`, `wildlife`, `plantsReact` ([plants], 2026-10-18); `groundParallax` ([parallax], 2026-10-19: +0.14 to 0.17 ms zoomed in), `remasteredTarmacs` ([tarmac], 2026-10-19), `mudMask` ([ground mud], 2026-10-19: +0.03 ms over the mud from the game's height, nothing away from it), `markRelief` ([scars], 2026-10-20), `groundMatt` ([leftover], 2026-10-21: dry ground matt at grazing light, no cost) | +0.05 to 0.16 ms zoomed in, nothing far out; scars up to +0.56 ms with 2000 in view |
 | `SetFrameGeneration` | `frameGeneration` (a sixth setting, asked of the ui: "Frame Generation") | 1.1-1.4 ms a frame drawn; twice the frames shown |
 | `SetHiddenOutlines` | `hiddenOutlines` (readability, not light: its own setting, ON at first; proposed to the ui as "Hidden Unit Outlines") | 0.06-0.08 ms |

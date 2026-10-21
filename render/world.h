@@ -537,6 +537,12 @@ class World {
   // deeper in the wind's lee and hollows, thinner and patchier under trees and on steep slopes. Modern look with the weather;
   // off by default here, in the game's "Weather Effects" (world_picture.h).
   bool snowGround = false;
+  // [undersnow] The map's low plants under lying snow (under_snow.h, MeshRenderer::underSnow; Chris, 2026-10-21): its ferns,
+  // bushes, weeds and tufts placed as props stand in the same snow as the ground cover (GroundCover::snowDepth, with the
+  // snow ground's shelter where it is on): sunk by its depth, pressed and bowed by it, the lowest buried first, what stands
+  // out white where the ground round it is; the trees and rocks keep their snow. Modern look with the weather; off by default
+  // here, in the game's "Weather Effects" (world_picture.h).
+  bool plantsUnderSnow = false;
   // [leftover] Dry ground matt at grazing light (terrain.h, Terrain::mattGrazing): at dusk and dawn the sun's highlight on dry
   // ground fades as the sun sinks (the soil between the grass blades no longer shows a sheen like wet plastic); wet ground,
   // puddles and lying snow keep theirs. Modern look; off by default here, in the game's "Ground Detail" (world_picture.h).

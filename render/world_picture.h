@@ -189,6 +189,8 @@ class WorldPicture {
   //   And the lying snow (World::snowGround): where a map has snow materials, the snow drawn in them (drifted, packed where
   //   trodden, slushy at the thaw); on any map, shaded by what is round it (valleys, hollows, trees and rocks) and lying
   //   deeper or thinner by the wind, the trees and the slope; +0.2 to 0.3 ms while snow lies.
+  //   [undersnow] And the map's low plants under the lying snow (World::plantsUnderSnow): its ferns, bushes and weeds
+  //   sunk into the snow, bowed by it and dusted white, the lowest buried first.
   void SetWeatherEffects(bool on);
   // Ground detail: grass near the camera, pressed flat round units and buildings (World::groundCover); about
   //   +0.05 to 0.2 ms when zoomed in, nothing from afar; and battle scars (World::battleScars): the scorches and
