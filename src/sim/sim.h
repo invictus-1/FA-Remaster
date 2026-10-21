@@ -452,6 +452,10 @@ class Sim {
         }
   }
   void MarkUnitsMoved() { gridDirty_ = true; }
+  // The unit grid behind ForUnitsInRect made now if it is due (the searches' pre-pass, sim/hpath.h).
+  void EnsureUnitGrid() {
+    if (gridDirty_) RebuildUnitGrid();
+  }
   // The entity grid behind GetUnitsInRect / GetReclaimablesInRect (sim/entity_grid.h).
   EntityGrid& entityGrid();
   bool anyAttached = false;  // some unit rides a transport (sim/transport.cpp)

@@ -85,6 +85,20 @@ class HPathTables {
   void WorkAll(int armies);
   // Synchronous search (CanPathTo's direct probe, 500 units).
   bool SearchNow(PathTraveler* t, int budget);
+  // Multicore step 2a, before WorkAll: what the queued searches would make lazily, made now: the occupancy grids
+  // of their cluster maps and footprints, and with margin > 0 the data of the dirty or stale clusters within
+  // `margin` 32-clusters of each search's start-goal box (ClusterMap::ahead). Changes nothing a search computes or is
+  // charged. True when a queued search is blocked by units (the caller makes the unit grid then).
+  bool PrepareSearches(int margin);
+  // The heightfield vertices [vx0, vx1] x [vz0, vz1] changed (FlattenMapRect): data made ahead there is dropped
+  // (the clusters' own accounting is not touched: the original does not dirty them for it).
+  void TerrainChanged(int vx0, int vz0, int vx1, int vz1);
+  // MOHO64_PROFILE: the pre-pass's clusters (made ahead, taken by a search, dropped before), the clusters
+  // searches made themselves, and the pre-pass's time.
+  struct AheadCounts {
+    uint64_t made = 0, taken = 0, dropped = 0, lazy = 0, lazyInWork = 0;  // (lazyInWork: of lazy, in WorkAll)
+    double seconds = 0;
+  } aheadCounts;
   int ArmyPathcap() const;
 
   struct Cluster {
@@ -104,6 +118,11 @@ class HPathTables {
     // A cluster's data depends only on the occupancy grid, and every occupancy change dirties it again, so
     // making it when a search first reads it gives the same data as making it in the background.
     std::vector<uint8_t> stale[3];
+    // 1: the cluster is dirty or stale and lv holds its data made ahead (PrepareSearches), as Build / Make would
+    // make it now. Ready / Make take it in place of building (the accounting as before); DirtyRect and
+    // TerrainChanged drop it. (Searches never read a dirty or stale cluster's lv before building it, so lv may hold
+    // the new data early.)
+    std::vector<uint8_t> ahead[3];
     NamedFootprint fp;
     size_t bgWord = 0;     // background iterator: word of the top level's dirty bit array (map+0x8c)
     bool bgDone = false;   // nothing dirty left (map+0x88; DirtyRect clears it)
@@ -133,6 +152,10 @@ class HPathTables {
   };
 
   ClusterMap& Map(const NamedFootprint& fp);
+  ClusterMap* FindMap(const NamedFootprint& fp);  // (no new map: its place in mapOrder_ is the first search's)
+  bool TakeAhead(ClusterMap& m, int L, size_t i);  // the cluster's data made ahead, if any (dropped from ahead)
+  void MakeAhead(ClusterMap& m, int L, int cx, int cz);
+  void PrepareTraveler(const PathTraveler& t, ClusterMap* cm, int margin);
   bool Ready(ClusterMap& m, int L, int cx, int cz, int* budget, bool make = true);
   void Make(ClusterMap& m, int L, int cx, int cz);
   void Build1(ClusterMap& m, int cx, int cz);
@@ -156,6 +179,7 @@ class HPathTables {
   std::map<std::string, std::unique_ptr<ClusterMap>> maps_;
   std::vector<ClusterMap*> mapOrder_;
   std::map<int, ArmyQueue> queues_;
+  bool inWork_ = false;  // (WorkAll runs: for aheadCounts.lazyInWork)
 };
 
 // Octile distance in the original's float order (max + 0.41421354 * min).

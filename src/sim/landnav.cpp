@@ -50,9 +50,18 @@ struct LandNavState {
   double exec = 0, work = 0, deliver = 0, bg = 0;  // MOHO64_PROFILE: seconds, printed when the sim goes
   uint64_t n = 0;
   ~LandNavState() {
-    if (getenv("MOHO64_PROFILE"))
+    if (getenv("MOHO64_PROFILE")) {
       fprintf(stderr, "landnav profile: execute %.2f s, path work %.2f s, deliver %.2f s, background %.2f s (%llu ticks)\n",
               exec, work, deliver, bg, static_cast<unsigned long long>(n));
+      if (tables) {
+        const HPathTables::AheadCounts& a = tables->aheadCounts;
+        fprintf(stderr, "landnav profile: pre-pass %.2f s; clusters made ahead %llu (taken by searches %llu, dropped "
+                        "%llu), made by searches themselves %llu (%llu of them in the queues' work)\n",
+                a.seconds, static_cast<unsigned long long>(a.made), static_cast<unsigned long long>(a.taken),
+                static_cast<unsigned long long>(a.dropped), static_cast<unsigned long long>(a.lazy),
+                static_cast<unsigned long long>(a.lazyInWork));
+      }
+    }
   }
 };
 
@@ -1135,6 +1144,18 @@ void LandNavTickAll(Sim& sim) {
     if (n->problem) u->unitStates.insert("ProblemGettingToGoal");
   }
   HPathTables& T = Tables(sim);
+  // Multicore step 2a: what the searches would make lazily, made before the work loop (HPathTables::
+  // PrepareSearches; the unit grid for a search that units block: COGrid::UnitIsBlocked reads it). Neutral: the
+  // searches compute and are charged as without it. MOHO64_PATH_AHEAD=N (N > 0) also makes the data of the dirty or
+  // stale clusters within N 32-clusters of each search's start-goal box ahead; -1 leaves the pre-pass out.
+  static const int margin = getenv("MOHO64_PATH_AHEAD") ? std::atoi(getenv("MOHO64_PATH_AHEAD")) : 0;
+  static const bool ahead = margin >= 0;
+  const double prepBefore = T.aheadCounts.seconds;
+  if (ahead) {
+    const double p0 = prof ? NowS() : 0;
+    if (T.PrepareSearches(margin)) sim.EnsureUnitGrid();
+    if (prof) T.aheadCounts.seconds += NowS() - p0;
+  }
   double t1 = prof ? NowS() : 0;
   T.WorkAll(0);
   double t2 = prof ? NowS() : 0;
@@ -1152,7 +1173,7 @@ void LandNavTickAll(Sim& sim) {
   }
   if (prof) {
     double t3 = NowS();
-    ns.exec += t1 - t0;
+    ns.exec += t1 - t0 - (ahead ? T.aheadCounts.seconds - prepBefore : 0);  // (the pre-pass apart)
     ns.work += t2 - t1;
     ns.deliver += t3 - t2;
   }
@@ -1192,6 +1213,10 @@ int LandNavStatus(const Unit* u) {
 }
 
 void LandNavDirty(Sim& sim, int x0, int z0, int x1, int z1) { Tables(sim).DirtyRect(x0, z0, x1, z1); }
+
+void LandNavTerrainChanged(Sim& sim, int vx0, int vz0, int vx1, int vz1) {
+  if (sim.landNavState && sim.landNavState->tables) sim.landNavState->tables->TerrainChanged(vx0, vz0, vx1, vz1);
+}
 
 void LandNavForget(Sim& sim) { sim.landNavState.reset(); }
 

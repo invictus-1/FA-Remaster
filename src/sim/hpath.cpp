@@ -67,9 +67,20 @@ float PathOctile(int dx, int dz) {
 
 // ---- cluster maps ---------------------------------------------------------------------------
 
+namespace {
+std::string MapKey(const NamedFootprint& fp) {
+  return fp.name + '/' + std::to_string(fp.sizeX) + 'x' + std::to_string(fp.sizeZ) + '/' + std::to_string(fp.caps) +
+         '/' + std::to_string(fp.flags & 1);
+}
+}  // namespace
+
+HPathTables::ClusterMap* HPathTables::FindMap(const NamedFootprint& fp) {
+  auto it = maps_.find(MapKey(fp));
+  return it != maps_.end() ? it->second.get() : nullptr;
+}
+
 HPathTables::ClusterMap& HPathTables::Map(const NamedFootprint& fp) {
-  std::string key = fp.name + '/' + std::to_string(fp.sizeX) + 'x' + std::to_string(fp.sizeZ) + '/' +
-                    std::to_string(fp.caps) + '/' + std::to_string(fp.flags & 1);
+  std::string key = MapKey(fp);
   auto it = maps_.find(key);
   if (it != maps_.end()) {
     if (!it->second->grid) it->second->grid = nav_->Grid(it->second->fp);
@@ -89,6 +100,7 @@ HPathTables::ClusterMap& HPathTables::Map(const NamedFootprint& fp) {
     m->lv[L].assign(n, {});
     m->dirty[L].assign(n, 1);
     m->stale[L].assign(n, 0);
+    m->ahead[L].assign(n, 0);
   }
   ClusterMap* r = m.get();
   mapOrder_.push_back(r);
@@ -120,6 +132,10 @@ void HPathTables::DirtyRect(int x0, int z0, int x1, int z1) {
         for (int cx = ix0; cx < ix1; ++cx) {
           size_t i = static_cast<size_t>(cz) * m->wc[L] + cx;
           m->dirty[L][i] = 1;
+          if (m->ahead[L][i]) {  // (made from the occupancy before this change)
+            m->ahead[L][i] = 0;
+            ++aheadCounts.dropped;
+          }
         }
     }
   }
@@ -177,8 +193,10 @@ bool HPathTables::Ready(ClusterMap& m, int L, int cx, int cz, int* budget, bool 
         if (!Ready(m, 1, 4 * cx + k, 4 * cz + j, budget, make)) return false;
   if (make) {
     if (!m.grid) m.grid = nav_->Grid(m.fp);
-    if (L == 1) Build1(m, cx, cz);
-    else Build2(m, cx, cz, budget);
+    if (!TakeAhead(m, L, i)) {
+      if (L == 1) Build1(m, cx, cz);
+      else Build2(m, cx, cz, budget);
+    }
   }
   *budget -= 10;
   m.dirty[L][i] = 0;
@@ -197,9 +215,97 @@ void HPathTables::Make(ClusterMap& m, int L, int cx, int cz) {
         size_t si = static_cast<size_t>(sz) * m.wc[1] + sx;
         if (m.stale[1][si] && !m.dirty[1][si]) Make(m, 1, sx, sz);
       }
+  const size_t i = static_cast<size_t>(cz) * m.wc[L] + cx;
+  if (!TakeAhead(m, L, i)) {
+    if (L == 1) Build1(m, cx, cz);
+    else Build2(m, cx, cz, nullptr);
+  }
+  m.stale[L][i] = 0;
+}
+
+bool HPathTables::TakeAhead(ClusterMap& m, int L, size_t i) {
+  if (!m.ahead[L][i]) {
+    ++aheadCounts.lazy;
+    if (inWork_) ++aheadCounts.lazyInWork;
+    return false;
+  }
+  m.ahead[L][i] = 0;
+  ++aheadCounts.taken;
+  return true;
+}
+
+// The data of a dirty or stale cluster, made now into lv (ahead = 1). A 32-cluster's sub-clusters that are dirty or
+// stale are made first, as both of the serial ways do before Build2 reads them (Ready of a dirty 32-cluster readies
+// all 16; Make of a stale one makes its stale ones, and a stale 32-cluster has no dirty one: DirtyRect dirties both
+// levels over the same cells).
+void HPathTables::MakeAhead(ClusterMap& m, int L, int cx, int cz) {
+  if (cx < 0 || cz < 0 || cx >= m.wc[L] || cz >= m.hc[L]) return;
+  const size_t i = static_cast<size_t>(cz) * m.wc[L] + cx;
+  if (m.ahead[L][i] || !(m.dirty[L][i] || m.stale[L][i])) return;
+  if (!m.grid) m.grid = nav_->Grid(m.fp);
+  if (L == 2)
+    for (int j = 0; j < 4; ++j)
+      for (int k = 0; k < 4; ++k) MakeAhead(m, 1, 4 * cx + k, 4 * cz + j);
   if (L == 1) Build1(m, cx, cz);
   else Build2(m, cx, cz, nullptr);
-  m.stale[L][static_cast<size_t>(cz) * m.wc[L] + cx] = 0;
+  m.ahead[L][i] = 1;
+  ++aheadCounts.made;
+}
+
+// One queued search: its grids, and (margin > 0) the data of the dirty or stale 32-clusters, with their
+// sub-clusters, in the box around its start and its goal, `margin` 32-clusters wider on each side. (Measured, MP1 to
+// 7100: with margin 1 the searches found 55% of the clusters they built made ahead, 65% with 2; the rest lay
+// outside the box, and a third of what was made ahead was dirtied again before a search reached it. So cluster data
+// is better made by the search that first needs it, outside the accounting: ahead / TakeAhead are that split.)
+void HPathTables::PrepareTraveler(const PathTraveler& t, ClusterMap* cm, int margin) {
+  if (!cm) {
+    nav_->Grid(t.fp);  // (the map itself is the first search's to make: its place in mapOrder_; Map() makes it)
+    return;
+  }
+  if (!cm->grid) cm->grid = nav_->Grid(cm->fp);
+  if (margin <= 0) return;
+  const int x0 = std::min(t.anchor.x, t.goal[0]), x1 = std::max(t.anchor.x, t.goal[2]);
+  const int z0 = std::min(t.anchor.z, t.goal[1]), z1 = std::max(t.anchor.z, t.goal[3]);
+  const int cx0 = std::max(0, (x0 >> 5) - margin), cx1 = std::min(cm->wc[2] - 1, (x1 >> 5) + margin);
+  const int cz0 = std::max(0, (z0 >> 5) - margin), cz1 = std::min(cm->hc[2] - 1, (z1 >> 5) + margin);
+  for (int cz = cz0; cz <= cz1; ++cz)
+    for (int cx = cx0; cx <= cx1; ++cx) MakeAhead(*cm, 2, cx, cz);
+}
+
+bool HPathTables::PrepareSearches(int margin) {
+  bool units = false;
+  for (auto& [a, q] : queues_) {  // (the work loop's order: armies, then each queue's active search and the rest)
+    if (q.active) {
+      PrepareTraveler(*q.active->t, q.active->cm, margin);
+      units = units || q.active->t->mode != 0;
+    }
+    for (PathTraveler* t : q.waiting) {
+      PrepareTraveler(*t, FindMap(t->fp), margin);
+      units = units || t->mode != 0;
+    }
+  }
+  return units;
+}
+
+void HPathTables::TerrainChanged(int vx0, int vz0, int vx1, int vz1) {
+  for (ClusterMap* m : mapOrder_) {
+    // the origins whose footprint covers a changed vertex (PathGrid::TerrainChanged), then every 8-cluster whose
+    // 9x9 origins hold one of them, and their 32-clusters
+    const int ox0 = vx0 - m->sx, oz0 = vz0 - m->sz, ox1 = vx1, oz1 = vz1;
+    const int ix0 = std::max(0, (ox0 >> 3) - 1), ix1 = std::min(m->wc[1] - 1, ox1 >> 3);
+    const int iz0 = std::max(0, (oz0 >> 3) - 1), iz1 = std::min(m->hc[1] - 1, oz1 >> 3);
+    for (int L = 1; L <= 2; ++L) {
+      const int s = L == 1 ? 0 : 2;
+      for (int cz = iz0 >> s; cz <= (iz1 >> s) && cz < m->hc[L]; ++cz)
+        for (int cx = ix0 >> s; cx <= (ix1 >> s) && cx < m->wc[L]; ++cx) {
+          const size_t i = static_cast<size_t>(cz) * m->wc[L] + cx;
+          if (m->ahead[L][i]) {
+            m->ahead[L][i] = 0;
+            ++aheadCounts.dropped;
+          }
+        }
+    }
+  }
 }
 
 namespace {
@@ -728,6 +834,7 @@ void HPathTables::Cancel(PathTraveler* t) {
 
 // PathQueue::Work 0x765ed0 with path_ArmyBudget = 2500, per army (CArmyImpl::OnTick)
 void HPathTables::WorkAll(int /*armies*/) {
+  inWork_ = true;
   for (auto& [a, q] : queues_) {
     int budget = 2500;
     while (budget >= 1) {
@@ -747,6 +854,7 @@ void HPathTables::WorkAll(int /*armies*/) {
       q.active.reset();
     }
   }
+  inWork_ = false;
 }
 
 bool HPathTables::SearchNow(PathTraveler* t, int budget) {

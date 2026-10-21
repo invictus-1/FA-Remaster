@@ -26,6 +26,7 @@
 #include "sim/entity_grid.h"
 #include "sim/vecmath.h"
 #include "sim/intel.h"
+#include "sim/landnav.h"
 #include "sim/luautil.h"
 #include "sim/motion.h"
 #include "sim/navigation.h"
@@ -230,6 +231,7 @@ int l_FlattenMapRect(lua_State* L) {
   // vertex by vertex at 58, made cell (67, 450) too steep for a hover engineer; the original's path to (72, 451)
   // went round it, ours through it.)
   sim.navigation().TerrainChanged(x, z, x + sx, z + sz);
+  LandNavTerrainChanged(sim, x, z, x + sx, z + sz);  // (cluster data made ahead from the old heights)
   sec.To(prof::kSecFlatUnits);
   // A unit WITH a motion (u+0x4b0) found by the box below only gets motion+0x90 = 1 (0x74b350..0x74b35a): its next
   // motion tick works out its contacts (MotionTick 0x6b9e21) and CalcMoveLand / CalcMoveHover snap it to the ground

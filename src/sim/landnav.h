@@ -83,6 +83,9 @@ bool LandNavGoal(const Unit* u, Vec3* out);
 int LandNavStatus(const Unit* u);
 // Structures changed occupancy in cells [x0, x1) x [z0, z1).
 void LandNavDirty(Sim& sim, int x0, int z0, int x1, int z1);
+// The heightfield vertices [vx0, vx1] x [vz0, vz1] changed (FlattenMapRect): the path tables drop the cluster data
+// they made ahead there (HPathTables::TerrainChanged).
+void LandNavTerrainChanged(Sim& sim, int vx0, int vz0, int vx1, int vz1);
 // Can the unit's footprint stand at world (x, z)? (Unit::WontFitAt 0x62aa90, negated)
 bool UnitFitsAt(Sim& sim, const Unit* u, float x, float z);
 // FootprintFits at a cell (terrain and structures).
