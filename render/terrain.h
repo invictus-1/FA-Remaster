@@ -74,6 +74,32 @@ class Terrain {
   void PrepareWet() {
     if (rainGround && richGround && WetReady()) MorePipeline(1);
   }
+  // [snow ground] The lying snow drawn from the map's snow materials and shaded by what is around it (World::snowGround sets
+  // it each frame; the modern look while snow lies). Where the map's entry in remap.json holds "snow": {"fresh": m, "drift": m,
+  // "packed": m}, the snow's colour, small shapes, creases, roughness and relief (with the parallax) are the "fresh"
+  // material's at its real size in place of the one colour; "drift" where it lies thickest (the slopes facing away from
+  // `snowWind` and the ridges, blended in softly by the slope and the snow's depth); "packed" where it is trodden (deep
+  // tracks' troughs, the snow tracks); where it thins it breaks up by the ground's and its own height (the hollows first,
+  // the ground's stones showing through); at the thaw and in rain wet snow, darker and glossier, the hollows first. On any
+  // map, with or without the materials: the snow shaded by what is around it (its shelter, made once: the sky's light cut
+  // in valleys and hollows by the map's heights over some 80 world units, beside rocks and trees by the props, under the
+  // trees' crowns; ridges a little brighter), lying deeper on slopes away from the wind and in hollows, thinner and
+  // patchier under trees, on steep and windward slopes. Drawn by a pipeline of its own ("terrain, snow": GROUND_MORE and
+  // GROUND_SNOW; with GROUND_WET while the twins are drawn) over all the ground while snow lies; false, or no snow lying: as
+  // before.
+  bool snowGround = false;
+  float snowWind[2] = {0.915f, 0.403f};  // (the way the wind blows, x and z: World's)
+  // (each 0..2, 1 as tuned: how much the shelter cuts the sky's light, how much the trees' crowns take of the snow and its
+  // light, how high the wind's drifts stand, how deep they lie and how much of them is drifted; the viewer's --snow-ground-tune)
+  float snowTune[4] = {1, 1, 1, 1};
+  // [snow ground] The snow's shelter over the map, made the first time it is wanted while snow lies (it dispatches: between
+  // passes; World::Render): `props` (snow_ground.h: the map's props laid over the map at the shelter's size, World makes
+  // it). Made again when the mud mask comes or goes (it holds the mask's copy). False: it cannot be made (the snow is drawn
+  // as without the option).
+  bool SnowShelter(gfx::Texture props);
+  bool SnowShelterWanted();  // (whether it is to be made now: none yet, or the mud mask came or went)
+  // (the shelter's texels across and down, for World's raster of the props: two a world unit, at most 2048 each way)
+  void SnowShelterSize(int* width, int* height) const;
   // Where the kinds of ground lie, over the whole map at half its size (RGBA8: sand, grass, snow, hard ground; the
   // rest dirt and mud), by the layers' kinds blended by their masks. Made the first time it is asked for once a map
   // is loaded (it dispatches: between passes).
@@ -245,8 +271,9 @@ class Terrain {
   bool MudNear(float x, float z, float size) const;
   // [rain ground] per layer: its wet twin's albedo, normal and third map's files (Remaster; empty: none), how readily it
   // soaks, its repeat (world units); where they lie once read (WetReady, the first time it is wanted: the albedo's and
-  // third map's layers of materials_, made again with them after the layers' own third maps, the normal's of wetNormals_;
-  // -1 none); the layers' own third maps' paths (Load), for that
+  // third map's layers of materials_, made again with them after the layers' own third maps, the normal's of wetNormals_
+  // ([snow ground] which holds the snow's normals too, after the twins'); -1 none); the layers' own third maps' paths
+  // (Load), for that
   std::string wetFiles_[9][3];
   float wetSoak_[9] = {}, wetScale_[9] = {};
   int wetSlice_[9][3] = {};
@@ -254,6 +281,27 @@ class Terrain {
   bool wetTried_ = false, wetAny_ = false;
   std::vector<std::string> arhPaths_;
   bool WetReady();
+  // [snow ground] the map's snow materials (Remaster: its entry's "snow"; fresh, drift, packed), each its albedo, normal and
+  // third map's files and its real size (m); where they lie once read (SnowReady: the albedo's and the third map's layers
+  // of materials_, the normal's of wetNormals_; -1 none); the snow's repeat (world units) and relief
+  std::string snowFiles_[3][3];
+  float snowMetres_[3] = {};
+  int snowSlice_[3][3] = {};
+  bool snowTried_ = false, snowAny_ = false;
+  bool SnowReady();
+  float SnowSize(int k) const;
+  // [snow ground] [rain ground] materials_ made again with the layers' third maps, then the wet twins (`wet`) and the snow's
+  // materials (`snow`) after them, and wetNormals_ with their normals (both sets' slices found again); what it holds now
+  bool ReadExtras(bool wet, bool snow);
+  bool extrasWet_ = false, extrasSnow_ = false;
+  // [snow ground] the ground's pipelines with the snow (GROUND_SNOW; [1] with the wet twins too; each made the first time), the
+  // shelter, its pass and what it was made with
+  gfx::Pipeline snowPipeline_[2];
+  bool snowPipelineTried_[2] = {};
+  bool SnowPipeline(int wet);
+  gfx::Pipeline shelterPass_;
+  gfx::Texture shelter_;
+  bool shelterTried_ = false, shelterMud_ = false;
   // A remastered map's third map per layer (beside `<name>_albedo.dds` a `<name>_arh.dds`: red what
   // its creases let in of the sky's light, green how rough it is, blue how high it stands), all
   // nine as the layers of one texture; `material_[i]`: layer i has one.

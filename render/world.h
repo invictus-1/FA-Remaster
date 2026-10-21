@@ -509,6 +509,14 @@ class World {
   // materials, the ground goes over to them as the weather wets it, the hollows first, and back as it dries. Modern look with
   // the weather; off by default here, in the game's "Weather Effects" (world_picture.h).
   bool rainGround = false;
+  // [snow ground] The lying snow from the map's snow materials, shaded by what is round it (terrain.h, Terrain::snowGround;
+  // Chris, 2026-10-19 and 2026-10-20: "the map looks like a blanket"): where the map's entry names snow materials, the snow's
+  // colour, small shapes, creases and relief are theirs, drifted on slopes away from the wind and ridges, packed where it is
+  // trodden, breaking up by the ground's height where it thins, slushy at the thaw; on any map, the snow darker in valleys,
+  // hollows, under and beside trees and rocks (its shelter: the map's heights and props, made once the first time snow lies),
+  // deeper in the wind's lee and hollows, thinner and patchier under trees and on steep slopes. Modern look with the weather;
+  // off by default here, in the game's "Weather Effects" (world_picture.h).
+  bool snowGround = false;
   // [plants] Plants that react (plants.h, `plantLife`; Chris, 2026-10-18): grass and the plants laid over where units drive,
   // rising again over seconds; bushes, ferns, saplings and the like bending under them and springing back; the grass, the
   // plants and the undergrowth burnt black, then brown and lower where explosions and fires were, growing back over
@@ -886,6 +894,10 @@ class World {
   // (the ground cover's plants: the map's cover read; where its trees stand; where the plants grow, Terrain's)
   bool plantsReady_ = false;
   gfx::Texture treeMask_, coverA_, coverB_;
+  // [snow ground] the props as the snow's shelter sees them (snow_ground.h: made the first time snow lies with snowGround on)
+  gfx::Texture snowProps_;
+  bool snowPropsMade_ = false;
+  gfx::Texture SnowProps();
   bool reflectNow_ = false;  // (reflections by ray tracing this frame)
   bool lensSnap_ = false;    // (cinecam: the camera jumped this frame: the lens's focus at once)
   bool blastsNow_ = false, grassBlasts_ = false;  // (blasts' waves or dust under way this frame; their field over the grass)

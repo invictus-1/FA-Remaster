@@ -38,6 +38,16 @@ static float surfaceWetShare = 1;
 #ifdef SURFACE_TRACKS
 Texture2D tracksMap : register(t26);  // (the ground only) how much of the lying snow is trodden away at a place
 #endif
+// [snow ground] The lying snow's colour, its roughness, how much of its small shapes it smooths, and the colour of packed
+// snow. The ground's snow pipeline (terrain.cpp, GROUND_SNOW) gives its own, from the map's snow materials and what lies
+// round the place, before this block; everywhere else these are the constants they always were.
+#ifndef SNOW_COLOUR
+#define SNOW_COLOUR float3(0.50, 0.53, 0.58)
+#define SNOW_ROUGH 0.7
+#define SNOW_UP float3(0, 1, 0)
+#define SNOW_FLAT(lying, fallen) 0.5 * lying * saturate(fallen * 2 - 0.8)
+#define SNOW_PACKED float3(0.36, 0.40, 0.48)
+#endif
 Texture2DArray<float> lampShadowMaps : register(t27);
 Texture2DArray<float> shadowMaps : register(t28);
 TextureCube environmentSky : register(t29);
@@ -609,8 +619,25 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
     float3 snowAt = surfaceSnowOwn ? surfaceSnowPlace : world;
     float patch = CloudNoise(snowAt * 0.9) * 0.55 + CloudNoise(float3(snowAt.xz * 0.21, 5.3)) * 0.45;
     float takes = patch * 0.75 + saturate((N.y - 0.35) * 1.6) * 0.25;  // how readily it lies here
+#ifdef GROUND_SNOW
+    // [snow ground] (terrain.cpp) deeper on slopes away from the wind and in hollows, thinner and patchier under trees and
+    // on steep and windward slopes
+    fallen *= snowLie;
+    takes -= snowLess;
+#endif
     float bar = 1.02 - fallen * 1.15;
     float lying = smoothstep(bar, bar + 0.2, takes) * smoothstep(0.25, 0.5, N.y);
+#ifdef GROUND_SNOW
+    // [snow ground] where it thins: over a wider margin, mottled (thinner snow, islands and holes, so that a large bare patch
+    // does not read as cut out), and close by broken up by the ground's and its own height (the hollows first, the ground's
+    // stones showing through); its creases in place of the ground's
+    [branch] if (snowEdge.x >= 0) {
+      lying = smoothstep(bar - 0.15, bar + 0.35, takes) * smoothstep(0.25, 0.5, N.y);
+      lying = saturate(lying + (snowMottle - 0.5) * 3.2 * lying * (1 - lying));
+      lying = lerp(lying, saturate((snowEdge.x + lying * 1.6 - 1) / 0.6), snowEdge.y);
+    }
+    occlusion = lerp(occlusion, snowMatter.x, lying * snowSurface.w);
+#endif
 #ifdef SURFACE_TRACKS
     // where units have stood and driven the snow is trodden away, down to a dark wet ground
     [branch] if (tracksArea.z > 0.5 && lying > 0) {
@@ -621,6 +648,10 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
                        tracksMap.SampleLevel(samplerLinearClamp, at + float2(half.x, -half.y), 0).r + tracksMap.SampleLevel(samplerLinearClamp, at - float2(half.x, half.y), 0).r) * 0.25;
       albedo *= 1 - 0.15 * trodden * lying;
       lying *= 1 - 0.78 * trodden;  // (trodden snow, not bare earth: some of it stays)
+#ifdef GROUND_SNOW
+      lying *= (1 - 0.45 * trodden) / (1 - 0.78 * trodden);  // [snow ground] (more of it stays, packed: below)
+      snowTrodden = trodden;
+#endif
     }
 #endif
 #ifdef SURFACE_DEEP_TRACKS
@@ -641,15 +672,30 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
       trackTilt = (-deepSlope.xy + 0.8 * deepSlope.zw) * (0.1 * lying * deepTrack.z);
     }
 #endif
-    N = normalize(lerp(N, float3(0, 1, 0), 0.5 * lying * saturate(fallen * 2 - 0.8)));
-    albedo = lerp(albedo, float3(0.50, 0.53, 0.58), lying);
+    N = normalize(lerp(N, SNOW_UP, SNOW_FLAT(lying, fallen)));
+    albedo = lerp(albedo, SNOW_COLOUR, lying);
 #ifdef SURFACE_DEEP_TRACKS
     // (deep tracks: the trough's relief in the snow, and the snow packed down in it)
+#ifdef GROUND_SNOW
+    // [snow ground] (the snow tracks' trodden snow packed too; packed snow its own material's flatter shapes, under the
+    // trough's relief)
+    packed = max(packed, snowTrodden * 0.85);
+    N = normalize(lerp(N, snowPackedNormal, packed * lying * snowSurface.w));
+#endif
     if (any(trackTilt != 0)) N = normalize(N - float3(trackTilt.x, 0, trackTilt.y));
-    if (packed > 0) albedo = lerp(albedo, float3(0.36, 0.40, 0.48), packed * lying);
+    if (packed > 0) albedo = lerp(albedo, SNOW_PACKED, packed * lying);
 #endif
     metallic *= 1 - lying;
-    roughness = lerp(roughness, 0.7, lying);
+    roughness = lerp(roughness, SNOW_ROUGH, lying);
+#ifdef GROUND_SNOW
+    // [snow ground] packed snow its own material's roughness; wet snow at the thaw and in rain darker, greyer and glossier
+    // (the hollows first, terrain.cpp); the sky's light cut by what is round the place (its shelter)
+    roughness = lerp(roughness, snowPacked.w, packed * lying * snowSurface.w);
+    float slush = snowWet * lying;
+    albedo = lerp(albedo, dot(albedo, float3(0.3, 0.6, 0.1)) * float3(0.93, 0.98, 1.06), 0.35 * slush) * (1 - 0.22 * slush);
+    roughness = lerp(roughness, 0.28, slush);
+    occlusion *= lerp(snowBareSky, snowSky, lying);
+#endif
   }
   [branch] if (inspect.x > 0.5) {
     // a view for checking art: one of the surface's own numbers as a picture, as the screen would

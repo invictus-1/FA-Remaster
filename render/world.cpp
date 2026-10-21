@@ -14,6 +14,7 @@
 #include "effect_files.h"
 #include "remasters.h"
 #include "ground.h"
+#include "snow_ground.h"  // [snow ground]
 
 namespace render {
 
@@ -318,6 +319,9 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     plantsReady_ = false;
     if (treeMask_) device_->Destroy(treeMask_);
     treeMask_ = {};
+    if (snowProps_) device_->Destroy(snowProps_);  // [snow ground] (made again for this map's props when snow lies)
+    snowProps_ = {};
+    snowPropsMade_ = false;
     coverA_ = coverB_ = {};
     if (const JsonValue* cover = terrain.Cover()) {
       plantsReady_ = grass.SetPlants(*cover, &textures, kRemasteredTerrain);
@@ -601,6 +605,35 @@ void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation,
     for (size_t k = 0; takenBeam[i] && k < i; ++k) counted = counted || (takenBeam[k] && taken[k] == taken[i]);
     if (!counted) lampSquares_[taken[i]] += takenBeam[i] ? 1u : 0x10000u;
   }
+}
+
+// [snow ground] The map's props as the snow's shelter sees them (snow_ground.h), made the first time they are wanted: each
+// prop's footprint (its model's widest across, a tree's crown) and its height over the ground; nothing lower than a quarter
+// of a world unit, nor the streams' ribbons.
+gfx::Texture World::SnowProps() {
+  if (snowPropsMade_ || !haveMap_) return snowProps_;
+  snowPropsMade_ = true;
+  const auto start = std::chrono::steady_clock::now();
+  int w = 0, h = 0;
+  terrain.SnowShelterSize(&w, &h);
+  std::vector<SnowProp> list;
+  int trees = 0;
+  for (const PlacedProp& p : props_) {
+    if (!p.model || (!p.model->lods.empty() && p.model->lods[0].stream)) continue;
+    const float sx = Length(Vec3{p.world.m[0][0], p.world.m[1][0], p.world.m[2][0]});
+    const float sy = Length(Vec3{p.world.m[0][1], p.world.m[1][1], p.world.m[2][1]});
+    const float sz = Length(Vec3{p.world.m[0][2], p.world.m[1][2], p.world.m[2][2]});
+    const float height = p.model->boundsMax.y * sy;
+    if (height < 0.25f) continue;
+    const float radius = 0.5f * std::max((p.model->boundsMax.x - p.model->boundsMin.x) * sx, (p.model->boundsMax.z - p.model->boundsMin.z) * sz);
+    const bool tree = !p.model->lods.empty() && p.model->lods[0].sway > 0 && (p.model->boundsMax.y - p.model->boundsMin.y) * sy >= 1.5f;
+    trees += tree ? 1 : 0;
+    list.push_back({p.world.m[0][3], p.world.m[2][3], height, tree ? radius : radius * 0.8f, tree});
+  }
+  snowProps_ = SnowPropsRaster(device_, list, static_cast<float>(map.width), static_cast<float>(map.height), w, h, dust.wind);
+  const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+  printf("render: the snow's shelter: %zu props laid (%d trees), %dx%d, %.0f ms\n", list.size(), trees, w, h, ms);
+  return snowProps_;
 }
 
 float World::GroundHeight(float x, float z) const {
@@ -1114,6 +1147,9 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   if (terrain.mudMask != mudMask) coverA_ = coverB_ = {};  // [ground mud] (where plants grow made again: none on the mud)
   terrain.mudMask = mudMask;      // [ground mud] (the terrain draws it in the modern look only)
   terrain.rainGround = rainGround;  // [rain ground] (likewise)
+  terrain.snowGround = snowGround;  // [snow ground] (likewise, while snow lies; its drifts by the wind the dust drifts with)
+  terrain.snowWind[0] = dust.wind[0];
+  terrain.snowWind[1] = dust.wind[1];
   meshes.Begin();
   placedDraw.Begin();  // [pings] (the models of the CommandFeedback family taken this frame)
   energy.Begin();  // [energy shields]
@@ -2665,6 +2701,14 @@ void World::Render() {
   particles.Update(clock_, &view);
   ribbons.Update(clock_);
 
+  // [snow ground] the snow's shelter, made the first time snow lies with the option on (it dispatches: before the scene's pass)
+  // (the props' raster let go once it is made: made again, should the shelter be)
+  if (snowGround && look == Look::Modern && haveMap_ && timeOfDay >= 0 && snowLying > 0 && terrain.SnowShelterWanted()) {
+    terrain.SnowShelter(SnowProps());
+    if (snowProps_) device_->Destroy(snowProps_);
+    snowProps_ = {};
+    snowPropsMade_ = false;
+  }
   // the sun's shadow maps first, then the scene into its own picture, then that onto the window
   Stage("sun shadows");
   if (shadowed) {
