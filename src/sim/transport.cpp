@@ -896,15 +896,18 @@ int l_RemoveCommandCap(lua_State* L) {
   u->commandCaps = LiveCommandCaps(L, u) & ~CommandCapBit(L, luaL_checkstring(L, 2));
   return 0;
 }
-// (not read: taken from their names and FAF's use) RestoreCommandCaps: back to the blueprint's;
-// TestCommandCaps(cap): whether the unit has it now
+// RestoreCommandCaps: back to the blueprint's (not read: taken from its name and FAF's use). TestCommandCaps(cap)
+// 0x6c8a60: whether the unit's BLUEPRINT has it (0x6c8b38..0x6c8b4e: GetBlueprint, vt+0x1c, then bp+0x17c, the
+// General.CommandCaps mask), not the live caps that Add / RemoveCommandCap change, as TestToggleCaps reads the
+// blueprint's toggle caps (0x6c9168, bp+0x180)
 int l_RestoreCommandCaps(lua_State* L) {
   CheckObject<Unit>(L, 1)->commandCaps = -1;
   return 0;
 }
 int l_TestCommandCaps(lua_State* L) {
   Unit* u = CheckObject<Unit>(L, 1);
-  lua_pushboolean(L, (LiveCommandCaps(L, u) & CommandCapBit(L, luaL_checkstring(L, 2))) != 0);
+  const uint32_t bit = CommandCapBit(L, luaL_checkstring(L, 2));
+  lua_pushboolean(L, ((u->blueprint ? UnitCommandCaps(L, *u->blueprint) : 0u) & bit) != 0);
   return 1;
 }
 }  // namespace
