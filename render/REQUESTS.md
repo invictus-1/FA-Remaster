@@ -34,6 +34,65 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
+## 47. To the VISUALS track: from Chris's test run of 21 October (2026-10-21, not blocking)
+
+Chris played `Open-Game-Izanagi-Tour-Snow.bat` (SETONS_R, weather "cold"; log `_scratch\ui\game_tour_izanagi_snow.log`,
+replay `_scratch\ui\replay_tour_izanagi_snow.*`); his pictures are on his Desktop. His opening words: "massive improvement
+from before ... nothing crazy", and item 7: "The new nuke is fucking amazing when com dies." Yours (his words in quotes):
+1. Item 1 ("invis rocks.png", two red circles: the big rock formations on the cliff by the sea): "those are still
+   invisible behind either we remove or better integrate. I lean more on remove cause the small bundle of silver rocks
+   kinda fits though we could always repurpose those rocks else where". Asked: remove the circled formations on both
+   twins (keep the silver cluster between them), or move them where they sit well; tell the engine (props of SETONS_R).
+2. Item 4 ("2d plants.png"): "For the plants I like that they are 3d but it's still 2d is there a way to make them
+   actually real bushes and what not?" From above, the ferns and weeds read as crossed flat cards. Asked: real 3D
+   models for the ground cover's plants (bushes, ferns, weeds; a few each), each with three or four levels of detail
+   down to a card, in the cover json. The renderer makes the cover draw them as models with a seamless change of level
+   by distance (Chris's second ask: "at a distance they are low res like units then close up they are higher res so it
+   just doesn't appear"; pictures "First distance no plants.png" / "Second distanace plants.png").
+3. Item 5, the Izanagi: "The main front doesn't animate and close it just disappears and the main laser appears too we
+   need an animation of it opening and closing." And: "the Aoe on the guns/missiles is practicaslly non existant we
+   need some aoe on the weapons that fit the weapon type" (its blueprint's DamageRadius; the engine checks the sim
+   applies it). (Its shadow squares when it fires are the renderer's.)
+4. Item 8, the Mitsurugi battleship ("too strong of lights.png"): "Lights on Mitsurugi are a bit too powerful tone it down
+   a bit just for this unit since its overpowering at night." If its lamps' strength is in your data, lower it there
+   (the renderer will say where the number lives). "The Mitsurugi seems very inaccurate the battleship make it more
+   accurate. Specifically its 3 main battleship cannons." (its weapons' FiringRandomness / ballistics; the engine checks
+   the sim's aim). Its wakes are the renderer's.
+5. Item 11 ("og wakes 2.png"): "Mitsurugi Battleship shields don't leave after they are on it just stays as a blue hex
+   over the entire ship instead of acting like the Izanagi. Make the Mitsurugi shields, effects and the way it acts be
+   exactly like the Izanagi same in color." Asked: the battleship's shield set up as the Izanagi's (kind, mesh, colour,
+   effects); the renderer checks why its hex stays drawn.
+
+## 46. To the INTERFACE track: from Chris's test run of 21 October (2026-10-21, not blocking)
+
+Same run as 47. Yours (his words in quotes):
+1. Item 2: "Is there hotkeys for buildings and mexes as in I can set specific keys to auto open up a mex into my hand or
+   a landfactory for more faster placing." (keys the player binds to pick a structure to place; what the original and
+   FAF offer).
+2. Item 6 ("com upgrades.png", "t3 .png", about 7:50 in the replay): "Com when I upgrade for the 2 support drones that
+   help him build ... the drones don't appear in his build queue. They still build but nothing appears. T3 appears but
+   not t2 so if I click the t3 upgrade it acts like a upgrade bar for the other upgrades despite it being for t3. The
+   upgrade to t2 still happens just no icon." (the enhancement queue's display; ask the engine if the queue the views
+   carry lacks entries).
+3. Item 9: "ctrl + Alt + B should do the resource cheat like the og game and have the player is cheating as in player
+   name is cheating pop up." Item 10: "alt + T should teleport any unit or selection of units buildings legit anything I
+   have selected to the point on my cursor". (the original's debug keys; the sim's side is the engine's, see 45).
+
+## 45. To the ENGINE track: from Chris's test run of 21 October (2026-10-21, not blocking)
+
+Same run as 47. Yours, where the sim is concerned (his words in quotes):
+1. Items 9 and 10 with the interface (46.3): the resource cheat on Ctrl+Alt+B "like the og game" with the "<player> is
+   cheating" message, and Alt+T teleporting the whole selection to the cursor: the sim's side of each as the original
+   does it.
+2. Item 5: the Izanagi's "Aoe on the guns/missiles is practicaslly non existant": please check the sim applies its
+   weapons' DamageRadius as the blueprint says (visuals sets the numbers, 47.3).
+3. Item 8: "The Mitsurugi seems very inaccurate the battleship ... Specifically its 3 main battleship cannons": please
+   check the sim's ballistic aim and firing randomness for those weapons against the original's (visuals tunes the
+   blueprint, 47.4).
+4. Item 6 if the views lack it (46.2): the commander's enhancement queue (the drones' and the T2 upgrade's entries).
+5. Item 3: "mid playing the game froze for around 5-10 seconds right before it began to snow". The renderer measures its
+   side first (the snow ground's first load is the suspect) and tells you if part of it is the sim's.
+
 ## 44. To the VISUALS track: the map decals' normal maps in the game's form (2026-10-21, not blocking)
 
 Found by the renderer's marks helper (render 91e34e1, Chris's "weird shadows on map" and "odd shadows" pictures): SETONS_R's
