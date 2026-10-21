@@ -180,6 +180,7 @@ void SetGlobal(lua_State* L, const char* name, lua_CFunction f) {
 }
 
 void ReportStubCalls() {
+  std::lock_guard<std::mutex> g(StubMutex());
   for (auto& [name, n] : StubCounts()) Logf(LogLevel::Debug, "moho64: stub calls %6d %s", n, name.c_str());
 }
 

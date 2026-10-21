@@ -73,8 +73,10 @@ bool IsUnitStateName(const char* name) {  // the EUnitState names (Lua's IsUnitS
 }
 
 void Sim::RecorderOpen() {
-  const char* path = getenv("MOHO64_RECORD");
-  if (!path || !*path) return;
+  const char* env = getenv("MOHO64_RECORD");
+  if (!env || !*env) return;
+  const std::string file = std::string(env) + recordSuffix;
+  const char* path = file.c_str();
   rec_ = fopen(path, "wb");
   if (!rec_) {
     Logf(LogLevel::Warning, "moho64: cannot open the recorder file %s", path);

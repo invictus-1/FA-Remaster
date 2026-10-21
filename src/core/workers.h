@@ -42,7 +42,19 @@ struct ParCheck {
   uint64_t seed = 0x5eed;
 };
 
-int ThreadsFromEnvironment();       // MOHO64_THREADS (at least 1; 1 when unset)
+int ThreadsFromEnvironment();       // MOHO64_THREADS (at least 1; 1 when unset), or this thread's ThreadsOverride
+// While it lives, the pools made on this thread take n threads in place of MOHO64_THREADS (n <= 0: no override):
+// moho64 --together runs its second copy's sim with its own count.
+class ThreadsOverride {
+ public:
+  explicit ThreadsOverride(int n);
+  ~ThreadsOverride();
+  ThreadsOverride(const ThreadsOverride&) = delete;
+  ThreadsOverride& operator=(const ThreadsOverride&) = delete;
+
+ private:
+  int was_;
+};
 ParCheck ParCheckFromEnvironment();  // MOHO64_PAR_CHECK
 
 // The profiler's parallel view (MOHO64_PROFILE; docs/multicore.md 2), one per pool and so one per Sim (multicore

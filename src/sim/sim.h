@@ -473,6 +473,7 @@ class Sim {
   // The session's mod list as the lobby sent it (a replay's serialized mods): becomes
   // __active_mods in the rules and sim states. Empty: built from the mod uids instead.
   std::string sessionMods;
+  std::string recordSuffix;  // MOHO64_RECORD's file is <file><suffix> (moho64 --together: ".2" for the second copy)
   // The session's scenario info as it was launched (serialized Lua; what the interface's SessionGetScenarioInfo
   // returns). The scripts' own ScenarioInfo grows engine objects during the game and is not for handing out.
   std::string sessionScenario;

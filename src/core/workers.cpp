@@ -21,6 +21,7 @@ namespace moho {
 
 namespace {
 thread_local bool t_inTask = false;  // a ParallelFor task runs on this thread now
+thread_local int t_threads = 0;      // ThreadsOverride (0: none)
 
 struct TaskScope {
   bool was;
@@ -46,7 +47,13 @@ uint64_t SplitMix(uint64_t& s) {
 double Ms() { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 }  // namespace
 
+ThreadsOverride::ThreadsOverride(int n) : was_(t_threads) {
+  if (n > 0) t_threads = std::clamp(n, 1, 256);
+}
+ThreadsOverride::~ThreadsOverride() { t_threads = was_; }
+
 int ThreadsFromEnvironment() {
+  if (t_threads > 0) return t_threads;
   const char* v = std::getenv("MOHO64_THREADS");
   if (!v || !*v) return 1;
   int n = std::strcmp(v, "cores") == 0 ? 0 : std::atoi(v);

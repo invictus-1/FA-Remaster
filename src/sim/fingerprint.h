@@ -57,8 +57,9 @@ class Sim;
 
 class Fingerprint {
  public:
-  // From the environment (see above); nullptr when MOHO64_FINGERPRINT is not set.
-  static std::unique_ptr<Fingerprint> FromEnvironment();
+  // From the environment (see above); nullptr when MOHO64_FINGERPRINT is not set. The file is MOHO64_FINGERPRINT
+  // + suffix (moho64 --together: ".2" for its second copy).
+  static std::unique_ptr<Fingerprint> FromEnvironment(const std::string& suffix = std::string());
   ~Fingerprint();
   // The state after beat `beat` (0: after Start). False: the peer's line of this beat differs (the detail is
   // written; the host should stop).

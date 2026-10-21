@@ -268,9 +268,11 @@ std::string CommandText(const UnitCommand& c) {
 
 }  // namespace
 
-std::unique_ptr<Fingerprint> Fingerprint::FromEnvironment() {
-  const char* path = getenv("MOHO64_FINGERPRINT");
-  if (!path || !*path) return nullptr;
+std::unique_ptr<Fingerprint> Fingerprint::FromEnvironment(const std::string& suffix) {
+  const char* env = getenv("MOHO64_FINGERPRINT");
+  if (!env || !*env) return nullptr;
+  const std::string file = std::string(env) + suffix;
+  const char* path = file.c_str();
   auto f = std::unique_ptr<Fingerprint>(new Fingerprint);
   f->path_ = path;
   f->out_ = std::fopen(path, "wb");

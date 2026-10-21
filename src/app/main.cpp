@@ -4,7 +4,9 @@
 //   moho64 --init <init.lua> [--drive c=/host/dir] [--folder NAME=path] [--mods uids.txt]
 //          [--log out.log] [--check-lua] [--rules] [--quiet]
 //          [--sim <replay> | --session <game configuration .lua> [--seed N]] [--ticks N] [--view] [--orders file] [--sim-lua file]
-//          [--twice] [--focus N]
+//          [--twice | --together [--together-lag N] [--together-threads <n|cores>]] [--focus N]
+#include <algorithm>
+#include <atomic>
 #include <chrono>
 #ifdef MOHO64_CALLGRIND
 #include <valgrind/callgrind.h>
@@ -16,6 +18,7 @@
 #include <fstream>
 #include <map>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "core/crash.h"
@@ -80,6 +83,9 @@ struct Options {
   std::string simLua;   // --sim-lua file: a host Lua file run in the sim state after the ticks (debugging)
   std::vector<std::string> exec;  // --exec <lua>: run in a fresh rules state after mounting
   bool twice = false;   // --twice: play the session a second time in the same process (RunTimes)
+  bool together = false;  // --together: two copies of the session at once in the same process (RunTimes)
+  int togetherLag = 100;  // --together-lag N: the second copy starts when the first has played N beats
+  int togetherThreads = 0;  // --together-threads <n|cores>: the second copy's worker pool (0: as MOHO64_THREADS)
   // --focus N: the army the session looks through from its launch on (1-based; 0 or -1: none, an observer's view),
   // in place of the launch's own (a replay: none; a lobby game: the local player's army). Each player's copy of a
   // multiplayer game runs the simulation with its own focus army (the scripts' Sync and NoteFocusArmyChanged go by
@@ -93,6 +99,48 @@ struct Options {
   int spDiff = 2;
   int spFaction = 1;
 };
+
+// The game's file system as main mounts it (--together mounts a second one for its second copy).
+bool MountGame(const Options& o, Vfs& vfs, std::vector<std::string>* hookDirs) {
+  // The game's preferences file (sim/session.h kGamePrefsPath): this run's own, held in memory and mounted before
+  // the init file mounts the original's preferences folder at /preferences, so the rules never read the
+  // original's Game.prefs (in the lab: the PreGameData of the last game played in FAF); the folder's other files
+  // stay visible. No map folder until a session sets its own (RunTimes).
+  vfs.MountMemoryFile(kGamePrefsPath, PreGameDataPrefs(""));
+  if (!MountFromInitFile(o.init, o.folders, vfs, *hookDirs)) return false;
+  // --maps <folder> (may be given more than once): more map folders beside the game's own at /maps, as the
+  // interface host has it (a game played there on such a map can then be played back here)
+  for (const std::string& folder : o.moreMaps)
+    if (!vfs.Mount(folder, "/maps")) Logf(LogLevel::Warning, "moho64: --maps %s: no such folder", folder.c_str());
+  return true;
+}
+
+// Whether two files hold the same bytes; *at: the first byte they differ at (or the shorter one's length), *line: its
+// line (0-based; a fingerprint's line N is beat N).
+bool SameBytes(const std::string& a, const std::string& b, long long* at, long long* line) {
+  std::FILE* fa = std::fopen(a.c_str(), "rb");
+  std::FILE* fb = std::fopen(b.c_str(), "rb");
+  bool same = fa && fb;
+  long long n = 0;
+  *line = 0;
+  std::vector<char> ba(1 << 20), bb(1 << 20);
+  while (same) {
+    const size_t ra = std::fread(ba.data(), 1, ba.size(), fa), rb = std::fread(bb.data(), 1, bb.size(), fb);
+    const size_t m = std::min(ra, rb);
+    size_t i = 0;
+    while (i < m && ba[i] == bb[i]) {
+      if (ba[i] == '\n') ++*line;
+      ++i;
+    }
+    n += static_cast<long long>(i);
+    if (i < m || ra != rb) same = false;
+    else if (ra == 0) break;
+  }
+  if (fa) std::fclose(fa);
+  if (fb) std::fclose(fb);
+  *at = n;
+  return same;
+}
 
 // Compile every .lua file the game can see; report failures.
 int CheckLua(Vfs& vfs) {
@@ -364,13 +412,17 @@ void LogView(Sim& sim, size_t syncBeats, size_t syncBytes, const std::string& la
 
 // Run a session headless: `stream` is the replay's bytes (its command stream starts at the header's
 // streamOffset), or null for a session launched from a game configuration, which has no commands.
+// outSuffix: --together's name for this copy's record and fingerprint; beatsDone: the beats it has played, for the
+// other copy to wait on (RunTimes).
 int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookDirs,
-               const std::vector<std::string>& uids, const SessionDescription& session, const std::string* stream_) {
+               const std::vector<std::string>& uids, const SessionDescription& session, const std::string* stream_,
+               const std::string& outSuffix = std::string(), std::atomic<int>* beatsDone = nullptr) {
   const ReplayHeader* header = &session.header;
   static const std::string none;
   const std::string* data = stream_ ? stream_ : &none;
   Sim sim(&vfs, hookDirs, uids);
   sim.sessionMods = header->mods;
+  sim.recordSuffix = outSuffix;
   auto t0 = std::chrono::steady_clock::now();
   if (!sim.LoadRules()) return 1;
   auto t1 = std::chrono::steady_clock::now();
@@ -596,7 +648,7 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
   }
   // MOHO64_FINGERPRINT=<file>: a line per beat for comparing two copies of the game (sim/fingerprint.h); beat 0 is
   // the state Start left. With a peer, the first beat the two differ at ends the run.
-  std::unique_ptr<Fingerprint> fingerprint = ok ? Fingerprint::FromEnvironment() : nullptr;
+  std::unique_ptr<Fingerprint> fingerprint = ok ? Fingerprint::FromEnvironment(outSuffix) : nullptr;
   bool diverged = fingerprint && !fingerprint->Beat(sim, 0);
   // MOHO64_VIEW_READS=1 (a check): after every beat the reads of the simulation an interface makes between beats,
   // for every unit at once: UnitStateOf for each, ReclaimableAt at the first units, BuildSiteOf of one more unit
@@ -680,6 +732,7 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
     takeSync();
     takeHits();
     ++done;
+    if (beatsDone) beatsDone->store(done, std::memory_order_release);
     if (fingerprint && !fingerprint->Beat(sim, static_cast<uint32_t>(done + paused))) {
       diverged = true;
       break;
@@ -921,6 +974,61 @@ int RunTimes(const Options& o, Vfs& vfs, const std::vector<std::string>& hookDir
     Logf(LogLevel::Info, "moho64: --focus: the session looks through army %d", session.focusArmy == -1 ? -1 : session.focusArmy + 1);
   }
   int rc = 0;
+  if (o.together) {
+    // --together: two copies of the session at once, each on its own thread with its own file system (mounted
+    // again as main does), its record and fingerprint beside the first's (MOHO64_RECORD / MOHO64_FINGERPRINT +
+    // ".2", as --twice). --twice plays its second sim after the first is gone, so a variable two sims share passes
+    // it; here both are alive and beating at once, which multicore step 1 is about (docs/multicore.md). The second
+    // copy starts when the first has played --together-lag beats (default 100), so that the two set and read a
+    // variable they share at unrelated moments of their games (two copies in step might hide it; a precaution). No
+    // fingerprint peers, then (they would wait for each other): the two copies' files are compared at the end, exit
+    // code 4 when they differ, with the first beat they differ at (MOHO64_FINGERPRINT_DETAIL=<beat> then lists it).
+    // A shared variable shows only where it changes the game, and a race's beat varies: a steering-stage flag
+    // planted shared in a scratch build passed the modded Skirmish to 1500 and was caught on MP2 to 6000 in three
+    // runs out of three (beats 1920, 2167, 2757). Each copy is also worth comparing with the game played alone.
+    Vfs vfs2;
+    std::vector<std::string> hookDirs2;
+    if (!MountGame(o, vfs2, &hookDirs2)) return 1;
+    vfs2.SetMemoryFile(kGamePrefsPath, PreGameDataPrefs(mapFolder));
+    Logf(LogLevel::Info, "moho64: --together: two copies at once");
+    // (both copies on threads of their own, from the one RunSession call below: a record keeps the call chain of
+    // each draw, Sim::RecorderDraw, so the two records are the same bytes only from the same call site)
+    int rcs[2] = {0, 0};
+    std::atomic<int> firstBeats{0};
+    std::atomic<bool> firstEnded{false};
+    // (--together-threads: the second copy's sim makes its worker pool with that many threads, the first's with
+    // MOHO64_THREADS: one copy at n = 1 and the other at the machine's cores, docs/multicore.md 1.3)
+    auto copy = [&](int k) {
+      ThreadsOverride threads(k == 1 ? o.togetherThreads : 0);
+      if (k == 1) {
+        while (firstBeats.load(std::memory_order_acquire) < o.togetherLag && !firstEnded.load())
+          std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        Logf(LogLevel::Info, "moho64: --together: the second copy starts (the first at beat %d), %d thread(s)",
+             firstBeats.load(), ThreadsFromEnvironment());
+      }
+      rcs[k] = RunSession(o, k ? vfs2 : vfs, k ? hookDirs2 : hookDirs, uids, session, stream, k ? ".2" : "",
+                          k ? nullptr : &firstBeats);
+      if (k == 0) firstEnded = true;
+    };
+    std::thread first(copy, 0), second(copy, 1);
+    first.join();
+    second.join();
+    rc = rcs[0] | rcs[1];
+    for (const char* var : {"MOHO64_FINGERPRINT", "MOHO64_RECORD"})
+      if (const char* file = getenv(var); file && *file) {
+        long long at = 0, line = 0;
+        if (SameBytes(file, std::string(file) + ".2", &at, &line)) {
+          Logf(LogLevel::Info, "moho64: --together: %s: the two copies' files are the same (%lld bytes)", var, at);
+        } else {
+          Logf(LogLevel::Warning, "moho64: --together: %s: the two copies' files differ from byte %lld (line %lld)",
+               var, at, line);
+          std::fprintf(stderr, "moho64: --together: %s: the two copies' files differ from byte %lld (line %lld)\n",
+                       var, at, line);
+          rc |= 4;
+        }
+      }
+    return rc;
+  }
   for (int run = 0; run < (o.twice ? 2 : 1); ++run) {  // (one call site: the record's call chains stay the same)
     if (run == 1) {
       for (const char* var : {"MOHO64_RECORD", "MOHO64_FINGERPRINT"})
@@ -1180,6 +1288,12 @@ int main(int argc, char** argv) {
       std::printf("workers self-test: %d thread(s): %s\n", pool.Threads(), ok ? "ok" : "FAILED");
       return ok ? 0 : 1;
     }
+    else if (a == "--together") o.together = true;
+    else if (a == "--together-lag") o.togetherLag = std::atoi(next().c_str());
+    else if (a == "--together-threads") {
+      const std::string v = next();
+      o.togetherThreads = v == "cores" ? static_cast<int>(std::thread::hardware_concurrency()) : std::atoi(v.c_str());
+    }
     else if (a == "--focus") {
       o.focus = std::atoi(next().c_str());
       o.hasFocus = true;
@@ -1200,17 +1314,8 @@ int main(int argc, char** argv) {
     return 2;
   }
   Vfs vfs;
-  // The game's preferences file (sim/session.h kGamePrefsPath): this run's own, held in memory and mounted before
-  // the init file mounts the original's preferences folder at /preferences, so the rules never read the
-  // original's Game.prefs (in the lab: the PreGameData of the last game played in FAF); the folder's other files
-  // stay visible. No map folder until a session sets its own (RunTimes).
-  vfs.MountMemoryFile(kGamePrefsPath, PreGameDataPrefs(""));
   std::vector<std::string> hookDirs;
-  if (!MountFromInitFile(o.init, o.folders, vfs, hookDirs)) return 1;
-  // --maps <folder> (may be given more than once): more map folders beside the game's own at /maps, as the
-  // interface host has it (a game played there on such a map can then be played back here)
-  for (const std::string& folder : o.moreMaps)
-    if (!vfs.Mount(folder, "/maps")) Logf(LogLevel::Warning, "moho64: --maps %s: no such folder", folder.c_str());
+  if (!MountGame(o, vfs, &hookDirs)) return 1;
   Logf(LogLevel::Info, "moho64: %zu search paths, %zu files", vfs.MountCount(), vfs.FileCount());
   std::vector<std::string> uids;
   if (!o.modsFile.empty()) {
