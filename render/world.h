@@ -14,9 +14,11 @@
 // Between Begin and the next Begin the world also answers where things are on the screen and what
 // is under a point of it (Project, GroundAt, UnitAt, UnitsIn).
 #pragma once
+#include <chrono>  // [snowhitch]
 #include <cstdlib>
 #include <cstdint>
 #include <deque>
+#include <future>  // [snowhitch]
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -66,6 +68,7 @@
 #include "ribbons.h"
 #include "scmap.h"
 #include "seasons.h"  // [seasons]
+#include "snow_ground.h"  // [snowhitch] (SnowProp)
 #include "shadows.h"
 #include "smoke.h"
 #include "stream_water.h"  // [stream]
@@ -518,7 +521,11 @@ class World {
   // and the pipelines first wanted later in a game made the first frame their looks are on (the build sparks, the pads,
   // the ground cover left out of the ambient occlusion, the surf's spray, lit rain and rain's splashes, the wet ground:
   // PrepareAhead). What is made ahead is what its first use would have made, so the pictures are the same. On unless
-  // switched off (the viewer's --no-read-ahead).
+  // switched off (the viewer's --no-read-ahead). [snowhitch] (Chris, 2026-10-21: "froze for around 5-10 seconds right before
+  // it began to snow"): while the game's weather can snow (SnowAhead), the snow's too, the first frame (PrepareSnow: the
+  // ground's snow materials read with the wet ground's, the snow's pipelines, the shelter's props on a thread of their own);
+  // the pipelines not wanted yet (the snow's, the wet ground's, the low plants' under snow) made on the device's own thread
+  // (gfx.h, BeginBackgroundPipelines), so that neither the first frame nor the snow's waits for the driver.
   bool readAhead = true;
   // [ground mud] The map's painted mud (terrain.h, Terrain::mudMask; Chris and the visuals session, 2026-10-19): where the map's
   // remap.json entry names a mud mask (SETONS_R's stream banks), its mud material laid over the ground by it, wet and glossy in
@@ -941,6 +948,16 @@ class World {
   gfx::Texture snowProps_;
   bool snowPropsMade_ = false;
   gfx::Texture SnowProps();
+  // [snowhitch] What the snow wants made ahead of its first flake, while the game's weather can snow (SnowAhead: snow falling
+  // or lying, or the weather changing by itself in a climate whose spells bring snow): PrepareSnow, from PrepareAhead. The
+  // props' raster worked out on a thread of its own (the same texels: SnowPropsTexels) and made into snowProps_ when done.
+  bool SnowAhead() const;
+  void PrepareSnow();
+  std::vector<SnowProp> SnowPropList(int* trees) const;
+  std::future<std::vector<uint16_t>> snowPropsAhead_;
+  std::chrono::steady_clock::time_point snowPropsStart_;
+  int snowPropsTrees_ = 0, snowPropsCount_ = 0;
+  void TakeSnowPropsAhead(bool wait);
   bool reflectNow_ = false;  // (reflections by ray tracing this frame)
   bool lensSnap_ = false;    // (cinecam: the camera jumped this frame: the lens's focus at once)
   bool blastsNow_ = false, grassBlasts_ = false;  // (blasts' waves or dust under way this frame; their field over the grass)

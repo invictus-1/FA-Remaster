@@ -14,6 +14,7 @@
 //        a scoop on its windward side, a well under a tree's crown (`wind`: the way it blows, x and z).
 // The game's later changes to the props (a tree felled, a rock destroyed) are not followed: the map's props as it opens.
 #pragma once
+#include <cstdint>
 #include <vector>
 
 #include "gfx.h"
@@ -30,5 +31,11 @@ struct SnowProp {
 // The raster (RGBA16F, `width` x `height` over the map's `mapWidth` x `mapHeight` world units). None: no props, or it cannot be made.
 gfx::Texture SnowPropsRaster(gfx::Device* device, const std::vector<SnowProp>& props, float mapWidth, float mapHeight, int width, int height,
                              const float wind[2]);
+// [snowhitch] Its texels alone (four half floats each, rows from the map's z = 0; empty: no props), worked out over the
+// processor's cores (`spread`: Jobs) or on the calling thread alone (a thread of its own, ahead of the snow: World::SnowAhead);
+// the same texels either way. And the raster made from them (none: empty).
+std::vector<uint16_t> SnowPropsTexels(const std::vector<SnowProp>& props, float mapWidth, float mapHeight, int width, int height,
+                                      const float wind[2], bool spread);
+gfx::Texture SnowPropsTexture(gfx::Device* device, const std::vector<uint16_t>& texels, int width, int height);
 
 }  // namespace render

@@ -276,6 +276,15 @@ class Device {
   // cache, or no DXC, each is made at once, as outside a batch.)
   virtual void BeginPipelineBatch() {}
   virtual bool EndPipelineBatch(std::string* error) { (void)error; return true; }
+  // [snowhitch] Pipelines asked for between these two (what a game will want later: World::PrepareAhead's, the snow's before its
+  // first flake) are made on a thread of the device's own while the frames go on: their shaders compiled there into the shader
+  // cache where it lacks them, then the pipeline by the driver (on a new build up to two seconds each, which a frame would
+  // wait for). Their handles are given at once; the first frame that sets one takes it as made, or waits for it there (made
+  // then if its turn has not come): the picture is the same, only the waiting moves. One that cannot be made draws nothing
+  // (as in a batch; its messages said). Where a backend cannot (no shader cache, no DXC, or not written), each is made at
+  // once, as outside these.
+  virtual void BeginBackgroundPipelines() {}
+  virtual void EndBackgroundPipelines() {}
   virtual void Destroy(Buffer buffer) = 0;
   virtual void Destroy(Texture texture) = 0;
   virtual void Destroy(Pipeline pipeline) = 0;

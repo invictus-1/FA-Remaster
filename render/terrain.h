@@ -70,10 +70,18 @@ class Terrain {
   // mud, not the darkness). Modern look only, the GROUND_WET pipeline while the ground is wet.
   bool rainGround = false;
   // [hitches] The wet ground's pipeline (GROUND_WET) made now where the map has wet twins (World::readAhead: the first
-  // frame rainGround is on), not when the ground first gets wet in a game.
+  // frame rainGround is on), not when the ground first gets wet in a game; [snowhitch] and its matt variant with mattGrazing
+  // (the one the ground is drawn with then: 0.2 s kept, 2.3 s on a new build, at the first rain or after a thaw).
   void PrepareWet() {
-    if (rainGround && richGround && WetReady()) MorePipeline(1);
+    if (rainGround && richGround && WetReady() && MorePipeline(1) && mattGrazing) MattVariant(morePipeline_[1]);
   }
+  // [snowhitch] The lying snow made ready now, before the first flake (World::readAhead, each frame while the game's weather
+  // can snow: World::SnowAhead; Chris, 2026-10-21: "the game froze for around 5-10 seconds right before it began to snow",
+  // 7.7 s in the viewer): the snow materials read with the wet twins into the one set as the first snow read them (once:
+  // not a second set over the one the wet ground read the first frame), the ground's snow pipelines (dry, and with the wet
+  // twins: a thaw wets the snow) with their matt variants, the shelter's pass and the map's drift mask. What is made is what
+  // the snow's first frame would have made: the pictures are the same. Before PrepareWet in a frame.
+  void PrepareSnow();
   // [snow ground] The lying snow drawn from the map's snow materials and shaded by what is around it (World::snowGround sets
   // it each frame; the modern look while snow lies). Where the map's entry in remap.json holds "snow": {"fresh": m, "drift": m,
   // "packed": m}, the snow's colour, small shapes, creases, roughness and relief (with the parallax) are the "fresh"
@@ -326,6 +334,8 @@ class Terrain {
   gfx::Pipeline shelterPass_;
   gfx::Texture shelter_;
   bool shelterTried_ = false, shelterMud_ = false;
+  bool ShelterPass();  // [snowhitch] (made the first time: SnowShelter, PrepareSnow)
+  void ReadSnowMask();  // [snowhitch] (snowMask_ read the first time: SnowShelter, PrepareSnow)
   // [snow mask] the map's drift mask: its file (Remaster: the entry's "snow_drift_mask"), its texture (read the first time the
   // shelter is made with it; a mask that cannot be read: the shelter as without it)
   std::string snowMaskFile_;

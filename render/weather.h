@@ -44,6 +44,9 @@ float WeatherDraw(uint32_t seed, uint32_t a, uint32_t b);
 int WeatherKindCount();
 const char* WeatherKindName(int kind);
 WeatherNow WeatherKindOf(int kind);
+// [snowhitch] Whether WeatherAt's spells in that climate can bring snow (a kind with snow that the climate draws: the cold
+// one's), for what the snow wants made ahead of it (World::SnowAhead).
+bool ClimateSnows(Climate climate);
 // [seasons] Autumn's morning fog: how thick it lies at `hour` (0..24), 0..1, on top of what the weather draws: it
 // gathers before daybreak, is thickest from about six to eight and has burnt off by half past ten; how thick, by the
 // game's seed (every player of a game sees the same).

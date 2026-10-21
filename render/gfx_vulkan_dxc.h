@@ -61,6 +61,12 @@ struct ShaderJob {
 // and CompileDxil keep them; they then find them. (What fails here they compile again, and give its messages.)
 void PrewarmSpirv(const std::vector<ShaderJob>& jobs, const std::string& cacheDir);
 void PrewarmDxil(const std::vector<ShaderJob>& jobs, const std::string& cacheDir);
+// [snowhitch] A shader as CompileDxil would give it, taken from the cache alone, never compiled (false: the cache lacks it):
+// for a thread of the device's own (Device::BeginBackgroundPipelines), which compiles what the cache lacks by PrewarmDxil
+// (a compiler of its own) and must not use the one CompileDxil shares with the frames' thread.
+bool CachedDxil(const std::string& source, const char* entry, const char* stage, const std::string& cacheDir, std::vector<uint8_t>* out);
+// [snowhitch] The same for CompileSpirv's (read as it reads it), after PrewarmSpirv.
+bool CachedSpirv(const std::string& source, const char* entry, const char* stage, const std::string& cacheDir, SpirvShader* out);
 
 // A pipeline asked for in a batch (Device::BeginPipelineBatch) and not made yet: what it is to be made from, its
 // texts owned (the desc's views and names point into them). Both backends keep one in their pipeline's record.

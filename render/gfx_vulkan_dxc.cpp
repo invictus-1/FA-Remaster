@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cwchar>
+#include <functional>  // [snowhitch] (std::hash)
 #include <map>
 #include <set>
 #include <thread>
@@ -283,9 +284,10 @@ bool ReadWhole(const std::string& path, std::vector<uint8_t>* out) {
   return read;
 }
 
-// (under another name first: a half-written file is never read)
+// (under another name first: a half-written file is never read; [snowhitch] a name of the writing thread's own, as two threads
+// may keep the same shader at once: the frames' and the device's own, Device::BeginBackgroundPipelines)
 void WriteWhole(const std::string& path, const void* data, size_t size) {
-  const std::string part = path + ".part";
+  const std::string part = path + ".part" + std::to_string(std::hash<std::thread::id>{}(std::this_thread::get_id()) % 1000000007u);
   if (FILE* f = fopen(part.c_str(), "wb")) {
     const bool ok = fwrite(data, 1, size, f) == size;
     fclose(f);
@@ -457,5 +459,21 @@ bool CompileDxil(const std::string& source, const char* entry, const char* stage
 
 void PrewarmSpirv(const std::vector<ShaderJob>& jobs, const std::string& cacheDir) { Prewarm(jobs, cacheDir, true); }
 void PrewarmDxil(const std::vector<ShaderJob>& jobs, const std::string& cacheDir) { Prewarm(jobs, cacheDir, false); }
+
+bool CachedDxil(const std::string& source, const char* entry, const char* stage, const std::string& cacheDir, std::vector<uint8_t>* out) {  // [snowhitch]
+  const std::string cached = CacheFile(cacheDir, "dxc-dxil/1", source, DxilArguments(source, entry, stage), "dxil");
+  return !cached.empty() && ReadWhole(cached, out) && IsSigned(*out);
+}
+
+bool CachedSpirv(const std::string& source, const char* entry, const char* stage, const std::string& cacheDir, SpirvShader* out) {  // [snowhitch]
+  const std::vector<std::wstring> args = Arguments(entry, stage, source.find("RayQuery") != std::string::npos);
+  const std::string cached = CacheFile(cacheDir, "dxc-spirv/2", source, args, "spv");
+  std::vector<uint8_t> bytes;
+  if (cached.empty() || !ReadWhole(cached, &bytes)) return false;
+  std::vector<uint32_t> words(bytes.size() / 4);
+  std::memcpy(words.data(), bytes.data(), words.size() * 4);
+  *out = SpirvShader{};
+  return Reflect(words, out);
+}
 
 }  // namespace render::gfx
