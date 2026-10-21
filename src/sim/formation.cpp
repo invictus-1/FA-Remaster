@@ -881,7 +881,9 @@ Vec3 FormationVector(Sim& sim, Unit* u) {
     if (L && !IsAirUnit(L)) {
       Vec3 f = vm::Forward(L->orientation);
       float l = std::sqrt(f.x * f.x + f.z * f.z);
-      return l > 0 ? Vec3{f.x / l, 0, f.z / l} : Vec3{};
+      if (!(l > 0)) return Vec3{};
+      const float inv = 1.0f / l;  // the normalised copy 0x44f7e0 (0x6a8cf3): times 1 / length
+      return Vec3{f.x * inv, inv * 0.0f, inv * f.z};
     }
   }
   if (FormationIsForm(*u->form)) return u->form->fwd;

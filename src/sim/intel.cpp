@@ -203,11 +203,15 @@ ReconBlip* MakeBlip(Sim& sim, lua_State* L, Unit* u, bool fake = false) {
     const EntityIntel& ei = *u->intel;
     const uint32_t span = ei.jamMax > ei.jamMin ? ei.jamMax - ei.jamMin : 0;
     const uint32_t d = ei.jamMin + sim.IntRange(span);
-    float gx = static_cast<float>(sim.Gauss()), gz = static_cast<float>(sim.Gauss());
-    float len = std::sqrt(gx * gx + gz * gz);
-    if (len > 9.99999997e-07f) {
-      gx *= 1.0f / len;
-      gz *= 1.0f / len;
+    // the vector is (second draw, 0, first draw) (0x5bea35..0x5bea54), made unit length by the normalised copy
+    // 0x44f7e0 (0x5bea95: times 1 / length when the length is above 0, else zero)
+    const float g1 = static_cast<float>(sim.Gauss()), g2 = static_cast<float>(sim.Gauss());
+    float gx = g2, gz = g1;
+    const float len = std::sqrt(gx * gx + gz * gz);
+    if (len > 0.0f) {
+      const float inv = 1.0f / len;
+      gx = gx * inv;
+      gz = inv * gz;
     } else {
       gx = gz = 0;
     }
