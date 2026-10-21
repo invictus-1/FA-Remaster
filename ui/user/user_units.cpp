@@ -1475,10 +1475,32 @@ bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float 
   // of its own. INFERRED: which units count (here: buildings that are factories; a carrier moves
   // itself) and that every order of the world's clicks but a building order goes that way; where
   // the original's interface decides is not read.
-  std::vector<uint32_t> factories, others;
-  for (UserUnit* u : units)
+  // A Guard of a structure (SCommandModeData::HandleEvent's Guard case 0x82012f..0x820367, READ 2026-10-21): when the
+  // unit under the cursor has a blueprint and is in STRUCTURE (0x82018e), the selection is split by the category
+  // REBUILDER (SplitSelectionByRebuilderCategory 0x81e9e0): the others get the Guard of the unit, the REBUILDERs a
+  // Guard of its place (target type 2, no entity, the unit's position +0x84), both carrying the structure's blueprint
+  // (the issue data's +0x50) and both sent, the second also with no units in it (no stock unit is a REBUILDER: the
+  // lab's replays of the original hold 544 such pairs, the second without units). FAF's OnGuardIssued goes by that
+  // blueprint (ValidateAssist for a factory, AssistToCap for a structure). Any other Guard of a unit carries no
+  // blueprint (0x82036c).
+  const UserUnit* structure = nullptr;
+  if (type == CommandType::Guard && entity != 0xffffffffu) {
+    auto it = Store(L).units.find(entity);
+    if (it != Store(L).units.end() && !it->second->view.blueprint.empty() && InCategory(L, it->second.get(), "STRUCTURE"))
+      structure = it->second.get();
+  }
+  std::vector<uint32_t> factories, others, rebuilders;
+  std::vector<UserUnit*> guarding, rebuilding;  // (each order's units, as the script hears them)
+  for (UserUnit* u : units) {
+    if (structure && InCategory(L, u, "REBUILDER")) {
+      rebuilders.push_back(u->view.id), rebuilding.push_back(u);
+      continue;
+    }
+    guarding.push_back(u);
     (type != CommandType::BuildMobile && InCategory(L, u, "FACTORY") && InCategory(L, u, "STRUCTURE") ? factories : others)
         .push_back(u->view.id);
+  }
+  if (structure) d.blueprint = rally.blueprint = structure->view.blueprint;
   // (remembered until the queues show it: SiteMeetsOrdered; an order without units is in no queue)
   if (type == CommandType::BuildMobile && !blueprint.empty() && !units.empty()) {
     UnitStore::SentSite e;
@@ -1503,14 +1525,25 @@ bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float 
     if (!factories.empty()) Writer(L).IssueFactoryCommand(factories, startRally, clear);
     clear = false;
   }
-  if (!others.empty() || units.empty()) {  // (none at all: a building order with nothing selected, above)
+  // (none at all: a building order with nothing selected, above; a structure's Guard goes out also when only
+  // REBUILDERs are selected, as the original's two ISSUE_Command calls test nothing)
+  if (!others.empty() || units.empty() || (structure && factories.empty())) {
     const uint32_t id = Writer(L).IssueCommand(others, d, clear);
     UnitStore& store = Store(L);
     for (uint32_t unit : others) store.lastSent[unit] = {id, UserState::From(L)->syncCount};
     if (coordWith != 0xffffffffu) store.coordinatedOrder = id, store.coordinatedWith = coordWith;
   }
   if (!factories.empty()) Writer(L).IssueFactoryCommand(factories, rally, clear);
-  ReportCommandIssued(L, name, units, x, y, z, clear, blueprint, entity);
+  ReportCommandIssued(L, name, structure ? guarding : units, x, y, z, clear, structure ? d.blueprint : blueprint, entity);
+  if (structure) {  // (the second: the REBUILDERs' Guard of the structure's place, 0x82029e..0x820327)
+    StreamIssueData site = d;
+    site.target = StreamIssueData().target;
+    site.target.type = 2;
+    site.target.pos.x = x, site.target.pos.y = y, site.target.pos.z = z;
+    const uint32_t id = Writer(L).IssueCommand(rebuilders, site, clear);
+    for (uint32_t unit : rebuilders) Store(L).lastSent[unit] = {id, UserState::From(L)->syncCount};
+    ReportCommandIssued(L, name, rebuilding, x, y, z, clear, d.blueprint);
+  }
   return true;
 }
 }  // namespace
