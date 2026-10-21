@@ -2057,6 +2057,8 @@ the scmap, DecalLoad 0x89cdbb / 0x89cdd4). f = ren_DecalFadeFraction: 0.5 stock,
 every game's start. Today render/decals.cpp:457 fades over the last fifth (marked GUESS). Could render::World take
 `float decalFadeFraction = 0.5f;`? The host keeps the console's value (LookSettings::decalFadeFraction, ui de5820c)
 and would set it beside the other looks.
+**DONE** (render b457d63, docs/render-answers.md; wired 2026-10-21): World::decalFadeFraction from
+LookSettings::decalFadeFraction every frame.
 
 ### 34. A per-view LOD scale for the models' levels of detail (cam_SetLOD)
 From the interface chat, 2026-10-21. Not blocking.
@@ -2065,6 +2067,8 @@ The original's camera has a LOD scale (GeomCamera3::SetLODScale 0x470b90, set by
 0.70 on every world view's camera for Level of Detail "Extreme" (Chris's prefs have it), so the original picks the
 finer models from 1 / 0.7 farther out. The host now keeps each camera's scale (Camera::lodScale; the order lines'
 ETA texts already go by it). Could the picture take it per view (e.g. a lodScale beside the camera you are given)?
+**DONE** (render b457d63; wired 2026-10-21): render::Camera::lodScale from Camera::lodScale (WorldCamera::lodScale)
+on the game view, the cinematic views and the photos.
 
 ## To the visuals track
 

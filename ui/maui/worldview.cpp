@@ -923,6 +923,7 @@ class WorldView : public Control {
     w.heading = c->heading - kPi;
     w.pitch = PitchOf(c);
     w.fovY = FovYOf(c);
+    w.lodScale = c->lodScale;  // (cam_SetLOD's)
     return w;
   }
   // The camera as the picture is given it (EnsurePicture): the focus at the ground's height there.

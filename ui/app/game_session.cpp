@@ -107,6 +107,7 @@ struct GameSession::Picture : WorldSource {
     cam.heading = c.heading;
     cam.pitch = c.pitch;
     cam.fovY = c.fovY;
+    cam.lodScale = c.lodScale;  // (cam_SetLOD's: render 33 / 34, ui REQUESTS 34)
     return cam;
   }
   static WorldCamera FromRender(const render::Camera& c) {
@@ -116,6 +117,7 @@ struct GameSession::Picture : WorldSource {
     w.heading = c.heading;
     w.pitch = c.pitch;
     w.fovY = c.fovY;
+    w.lodScale = c.lodScale;
     return w;
   }
   // The bars and marks as the cinematic camera wants them (none while it shows), each set when it changes.
@@ -236,7 +238,9 @@ struct GameSession::Picture : WorldSource {
   float FocusAt(float x, float y) override { return picture.FocusAt(x, y); }
   bool StartPhoto(int width, int height) override {
     if (!photoOn || !cineGround || width <= 0 || height <= 0) return false;
-    return picture.StartPhoto(cine.View(cineGround), width, height, FrameMoment(), 0);  // (0: the renderer's supersampling)
+    render::Camera view = cine.View(cineGround);
+    view.lodScale = shownNow.lodScale;  // (the cinematic camera's views start at 1: the game camera's LOD scale)
+    return picture.StartPhoto(view, width, height, FrameMoment(), 0);  // (0: the renderer's supersampling)
   }
   float PhotoProgress() const override { return picture.PhotoProgress(); }
   bool TakeDonePhoto(std::vector<uint32_t>* pixels, int* width, int* height) override { return picture.TakeDonePhoto(pixels, width, height); }
@@ -256,7 +260,8 @@ struct GameSession::Picture : WorldSource {
   }
   bool TakePhoto(const WorldCamera& game, int width, int height, std::vector<uint32_t>* pixels, int* madeWidth, int* madeHeight) override {
     if (!cineGround) cineGround = picture.CineGround();
-    const render::Camera camera = cine.On() ? cine.View(cineGround) : ToRender(game);
+    render::Camera camera = cine.On() ? cine.View(cineGround) : ToRender(game);
+    camera.lodScale = game.lodScale;  // (the cinematic camera's views start at 1)
     return picture.TakePhoto(camera, width, height, FrameMoment(), pixels, madeWidth, madeHeight);
   }
   // The frame's moment, fixed by the first that asks this frame (the camera following a unit asks
@@ -284,6 +289,7 @@ struct GameSession::Picture : WorldSource {
     // (the cinematic camera's view while it shows; Shown is the game's camera once it has eased back)
     shownCine = CineShows() && cineGround;
     if (shownCine) cam = cine.Shown(cam, cineGround);
+    cam.lodScale = c.lodScale;  // (the cinematic camera's views start at 1: the game camera's LOD scale, cam_SetLOD)
     shownNow = cam;
     if (direct) {  // (drawn and shown with the interface by PresentToWindow)
       camera = cam, cameraW = width, cameraH = height;
@@ -464,6 +470,9 @@ struct GameSession::Picture : WorldSource {
       w->realExhausts = looks.battleEffects;  // (engines' exhausts as lit plumes, render 3e6ce2e: Chris's item 8)
       w->remasteredBuild = looks.battleEffects;  // (render 6b8109e: the build effects remade; with the remastered effects and the modern look)
       w->energyShields = looks.energyShields;
+      // (ren_DecalFadeFraction: the decals fade by distance as the original's CWldTerrainDecal::GetLODAlpha 0x89d400,
+      // render 33; 0.5 stock, 0.25 once FAF's gamemain.lua has set it)
+      w->decalFadeFraction = looks.decalFadeFraction;
       // (the Photographic Look, render ef7e1bb: on change only; Named sets the grade, the eye and lens keep theirs)
       if (!lookApplied || looks.photoLook != lookNow.photoLook) {
         w->photoLook.on = looks.photoLook != 0;

@@ -20,6 +20,9 @@ struct WorldCamera {
   float heading = 0;
   float pitch = 1.5707963f;
   float fovY = 0.9f;
+  // its LOD scale (the console's cam_SetLOD, GeomCamera3::SetLODScale 0x470b90: 1 at first; FAF sets 0.7 for the Level
+  // of Detail "Extreme"): the models' levels of detail and the decals' and effects' cutoffs go by it (render::Camera)
+  float lodScale = 1;
 };
 
 // What the interface adds to the world's picture: marks under the selected units, the building
