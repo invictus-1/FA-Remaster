@@ -16,6 +16,7 @@
 #include "script/script_state.h"
 #include "sim/blueprints.h"
 #include "sim/combat.h"
+#include "sim/enum_arg.h"
 #include "sim/script_bits.h"
 #include "sim/sim.h"
 #include "sim/units.h"
@@ -63,36 +64,13 @@ uint32_t BlueprintToggleCaps(Sim& sim, const BlueprintInfo& bp) {
   return caps;
 }
 
-// ERuleBPUnitToggleCaps lexical value ('|'-separated names or numbers, OR-ed); false if nothing parsed.
+// ERuleBPUnitToggleCaps' lexical value (Reflection::SetLexical 0x8d9670, sim/enum_arg.h: no prefix, names in any
+// case, numbers, '|'); false when a part is neither a name nor a number
 bool ParseToggleCaps(const char* s, uint32_t* out) {
-  uint32_t v = 0;
-  bool any = false;
-  while (*s) {
-    const char* e = strchr(s, '|');
-    size_t n = e ? static_cast<size_t>(e - s) : strlen(s);
-    bool hit = false;
-    for (int i = 0; i < 9; ++i)
-      if (strlen(kToggleNames[i]) == n && !strncasecmp(s, kToggleNames[i], n)) {
-        v |= 1u << i;
-        hit = any = true;
-      }
-    if (!hit && n) {
-      char buf[32];
-      size_t m = n < 31 ? n : 31;
-      memcpy(buf, s, m);
-      buf[m] = 0;
-      char* end = nullptr;
-      long x = strtol(buf, &end, 0);
-      if (end && *end == 0) {
-        v |= static_cast<uint32_t>(x);
-        any = true;
-      }
-    }
-    if (!e) break;
-    s = e + 1;
-  }
-  *out = v;
-  return any;
+  int v = 0;
+  if (!EnumLexical(kEnumToggleCaps, s, &v)) return false;
+  *out = static_cast<uint32_t>(v);
+  return true;
 }
 
 // value -> bit (value must be 1..256; bit = floor(log2(value)))
@@ -146,9 +124,8 @@ int l_ToggleScriptBit(lua_State* L) {
 template <int Op>  // 0 add, 1 remove
 int l_ChangeToggleCap(lua_State* L) {
   Unit* u = CheckObject<Unit>(L, 1);
-  const char* s = luaL_checkstring(L, 2);
-  uint32_t v = 0;
-  if (!ParseToggleCaps(s, &v)) return 0;
+  // (SCR_GetEnum 0x4d2550: 0x6c8cd3 / 0x6c8e73: a name it does not take raises "Invalid enum value")
+  const uint32_t v = static_cast<uint32_t>(EnumValue(L, kEnumToggleCaps, luaL_checkstring(L, 2)));
   uint32_t caps = UnitToggleCaps(*Sim::From(L), u);
   u->toggleCaps = Op == 0 ? (caps | v) : (caps & ~v);
   return 0;
@@ -162,9 +139,8 @@ int l_RestoreToggleCaps(lua_State* L) {
 
 int l_TestToggleCaps(lua_State* L) {
   Unit* u = CheckObject<Unit>(L, 1);
-  const char* s = luaL_checkstring(L, 2);
-  uint32_t v = 0;
-  ParseToggleCaps(s, &v);
+  // (SCR_GetEnum 0x4d2550: 0x6c9153)
+  const uint32_t v = static_cast<uint32_t>(EnumValue(L, kEnumToggleCaps, luaL_checkstring(L, 2)));
   lua_pushboolean(L, (BlueprintToggleCaps(*Sim::From(L), *u->blueprint) & v) != 0);
   return 1;
 }

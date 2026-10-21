@@ -29,6 +29,7 @@
 #include "sim/ai_platoon.h"
 #include "sim/blueprints.h"
 #include "sim/combat.h"
+#include "sim/enum_arg.h"
 #include "sim/intel.h"
 #include "sim/motion.h"
 #include "sim/navigation.h"
@@ -96,63 +97,7 @@ int AllianceWith(const Army* self, const Army* other) {
   return r == 2 ? kAlly : r == 0 ? kEnemy : kNeutral;
 }
 
-// SCR_GetEnum 0x4d2550 -> REnumType::SetLexical 0x8d9670 for the three enums these functions take: '|'-separated
-// parts, each with an optional (case-sensitive) prefix, a name (case-insensitive, the whole part) or a decimal
-// number; the values are or-ed. (Hex and octal numbers, which func_ParseNum 0x8d8fa0 also takes, are left out.)
-struct EnumName {
-  const char* name;
-  int value;
-};
-int EnumArg(lua_State* L, int idx, const char* prefix, const EnumName* names, int count) {
-  const char* s = lua_tostring(L, idx);
-  if (!s) luaL_typerror(L, idx, "string");
-  const size_t plen = std::strlen(prefix);
-  int v = 0;
-  const char* p = s;
-  for (;;) {
-    const char* bar = std::strchr(p, '|');
-    const char* end = bar ? bar : p + std::strlen(p);
-    const char* q = std::strncmp(p, prefix, plen) == 0 ? p + plen : p;
-    const size_t len = end > q ? static_cast<size_t>(end - q) : 0;
-    bool found = false;
-    for (int i = 0; i < count; ++i)
-      if (strncasecmp(q, names[i].name, len) == 0 && names[i].name[len] == 0) {
-        v |= names[i].value;
-        found = true;
-        break;
-      }
-    if (!found) {
-      bool neg = false;
-      const char* d = q;
-      if (d < end && *d == '-') {
-        neg = true;
-        ++d;
-      }
-      int num = 0;
-      bool ok = d < end;
-      for (; d < end; ++d) {
-        if (*d < '0' || *d > '9') {
-          ok = false;
-          break;
-        }
-        num = num * 10 + (*d - '0');
-      }
-      if (!ok) {
-        std::string msg = std::string("Invalid enum value ") + s + "\nValid Options are:\n";
-        for (int i = 0; i < count; ++i) msg += std::string("\n   ") + names[i].name;
-        luaL_error(L, "%s", msg.c_str());
-      }
-      v |= neg ? -num : num;
-    }
-    if (!bar) break;
-    p = bar + 1;
-  }
-  return v;
-}
-const EnumName kAllianceNames[] = {{"Neutral", 0}, {"Ally", 1}, {"Enemy", 2}};
-const EnumName kCompareNames[] = {{"Closest", 0}, {"Furthest", 1}, {"HighestValue", 2}, {"LeastDefended", 4}};
-const EnumName kSquadNames[] = {{"Unassigned", 0}, {"Attack", 1}, {"Artillery", 2}, {"Guard", 3},
-                                {"Support", 4},    {"Scout", 5}};
+// (the enum arguments: sim/enum_arg.h, SCR_GetEnum 0x4d2550)
 
 // func_GetCObj_EntityCategory 0x5575e0: an EntityCategory value or a gpg::BadRefCast error (its text inferred).
 std::vector<uint64_t> CategoryArg(lua_State* L, int idx) {
@@ -325,7 +270,7 @@ int l_SetGreaterOf(lua_State* L) {
 int l_FindClosestArmyWithBase(lua_State* L) {
   Args(L, "CAiBrain:FindClosestArmyWithBase()", 2, 2);
   AiBrain* b = B(L);
-  const int want = EnumArg(L, 2, "ALLIANCE_", kAllianceNames, 3);
+  const int want = EnumArgAt(L, 2, kEnumAlliance);
   Sim& sim = *S(L);
   const Vec3 c = CenterOfArmy(sim, b->army);
   float best = std::numeric_limits<float>::infinity();
@@ -724,9 +669,9 @@ int l_PickBestAttackVector(lua_State* L) {
   Args(L, "CAiBrain:PickBestAttackVector()", 6, 8);
   AiBrain* b = B(L);
   Platoon* p = CheckObject<Platoon>(L, 2);
-  const int squad = EnumArg(L, 3, "SQUADCLASS_", kSquadNames, 6);
-  const int alliance = EnumArg(L, 4, "ALLIANCE_", kAllianceNames, 3);
-  const int cmp = EnumArg(L, 5, "COMPARE_", kCompareNames, 4);
+  const int squad = EnumArgAt(L, 3, kEnumSquad);
+  const int alliance = EnumArgAt(L, 4, kEnumAlliance);
+  const int cmp = EnumArgAt(L, 5, kEnumCompare);
   const std::vector<uint64_t> cat = CategoryArg(L, 6);
   const char* module = nullptr;
   const char* fn = nullptr;

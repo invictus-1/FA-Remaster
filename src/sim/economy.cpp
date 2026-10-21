@@ -11,6 +11,7 @@
 #include "sim/ai_platoon.h"
 #include "sim/blueprints.h"
 #include "sim/build.h"
+#include "sim/enum_arg.h"
 #include "sim/sim.h"
 #include "sim/sim_cache.h"
 #include "sim/units.h"
@@ -493,9 +494,11 @@ void UnitEconomyTick(Sim& sim, Unit* u) {
 
 namespace {
 
-int ResourceArg(lua_State* L, int idx) {  // "ENERGY" / "MASS" (case ignored)
-  const char* t = luaL_checkstring(L, idx);
-  return (t[0] | 0x20) == 'm' ? kMass : kEnergy;
+// EEconResource by name (sim/enum_arg.h, SCR_GetEnum 0x4d2550: ECON_, ENERGY 0, MASS 1): "MASS", "mass", "ECON_MASS"
+// or "1"; anything the parse does not take raises "Invalid enum value" (ours took any string starting with m as
+// mass, any other as energy). A value other than 0 and 1 (a number, '|') indexes past the exe's pair: energy here.
+int ResourceArg(lua_State* L, int idx) {
+  return EnumValue(L, kEnumEcon, luaL_checkstring(L, idx)) == 1 ? kMass : kEnergy;
 }
 AiBrain* Brain(lua_State* L) { return CheckObject<AiBrain>(L, 1); }
 Unit* U(lua_State* L) { return CheckObject<Unit>(L, 1); }

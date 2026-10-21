@@ -35,6 +35,7 @@
 #include "sim/build.h"
 #include "sim/collision.h"
 #include "sim/entity_grid.h"
+#include "sim/enum_arg.h"
 #include "sim/landnav.h"
 #include "sim/navigation.h"
 #include "sim/intel.h"
@@ -3581,37 +3582,12 @@ int l_w_SetEnabled(lua_State* L) {
   lua_settop(L, 1);
   return 1;
 }
+// ELayer by name (sim/enum_arg.h, SCR_GetEnum 0x4d2550: 0x6da4a3; LAYER_, None 0, Land 1, Seabed 2, Sub 4, Water 8,
+// Air 16, Orbit 32, All 127): names in any case or-ed with '|', numbers; a part it does not take (also one with a
+// space in it) raises "Invalid enum value"
 int l_w_SetFireTargetLayerCaps(lua_State* L) {
   UnitWeapon* w = W(L);
-  const char* s = luaL_checkstring(L, 2);
-  int mask = 0;
-  std::string tok;
-  auto flush = [&]() {
-    if (tok.empty()) return;
-    std::string t = tok;
-    if (!strncasecmp(t.c_str(), "LAYER_", 6)) t = t.substr(6);
-    const char* names[] = {"None", "Land", "Seabed", "Sub", "Water", "Air", "Orbit", "All"};
-    const int bits[] = {0, 1, 2, 4, 8, 16, 32, 0x7f};
-    bool found = false;
-    for (int i = 0; i < 8; ++i)
-      if (!strcasecmp(t.c_str(), names[i])) {
-        mask |= bits[i];
-        found = true;
-      }
-    if (!found) {
-      char* end = nullptr;
-      long v = std::strtol(t.c_str(), &end, 10);
-      if (end && *end == 0) mask |= static_cast<int>(v);
-      else luaL_error(L, "Invalid enum value %s", tok.c_str());
-    }
-    tok.clear();
-  };
-  for (const char* p = s; *p; ++p) {
-    if (*p == '|') flush();
-    else if (*p != ' ') tok += *p;
-  }
-  flush();
-  w->layerCaps = mask;
+  w->layerCaps = EnumValue(L, kEnumLayer, luaL_checkstring(L, 2));
   return 0;
 }
 int l_w_SetTargetEntity(lua_State* L) {

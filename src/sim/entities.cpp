@@ -21,6 +21,7 @@
 #include "sim/blueprints.h"
 #include "sim/build.h"
 #include "sim/collision.h"
+#include "sim/enum_arg.h"
 #include "sim/combat.h"
 #include "sim/entity_grid.h"
 #include "sim/vecmath.h"
@@ -785,8 +786,10 @@ int l_SetDrawScale(lua_State* L) {
 template <int Which>
 int l_SetVizTo(lua_State* L) {
   Entity* e = E(L);
-  const char* s = lua_isstring(L, 2) ? lua_tostring(L, 2) : "";
-  e->viz[Which] = !strcmp(s, "Always") ? 1 : !strcmp(s, "Never") ? 2 : !strcmp(s, "Intel") ? 3 : 0;
+  // EVisibilityMode by name (sim/enum_arg.h, SCR_GetEnum 0x4d2550: 0x68d9d3 ..; VIZMODE_, Always 2, Never 1,
+  // Intel 4) in our view's numbers (1 'Always', 2 'Never', 3 'Intel'); another value (a number, '|') as 0
+  const int v = EnumArgAt(L, 2, kEnumVizMode);
+  e->viz[Which] = v == 2 ? 1 : v == 1 ? 2 : v == 4 ? 3 : 0;
   return 0;
 }
 // ---- texture scrollers (entity.h TextureScroller) ---------------------------------------------
@@ -966,22 +969,36 @@ int l_GetWeapon(lua_State* L) {
   return PushNew(L, u->weapons[i - 1]);
 }
 // Deviation 1 (docs/deviations.md): FAF's Unit.lua sets a unit state "Sacrificing" in OnStartSacrifice and
-// OnStopSacrifice. The original has no such state, so both callbacks stop at that line with "Invalid enum value"
-// and the sacrifice effects and the AI's events never happen. With Sim::fixes the name is taken as a state that
-// only scripts read.
-bool UnitStateNameOk(lua_State* L, const char* name) {
-  return IsUnitStateName(name) || (Sim::From(L)->fixes && !std::strcmp(name, "Sacrificing"));
-}
+// OnStopSacrifice. The original has no such state; its SetUnitState does nothing for the name (no error: see
+// below), so the two callbacks run on. With Sim::fixes the name is kept as a state that only scripts read.
+// EUnitState by name (sim/enum_arg.h: no case, "UNITSTATE_", numbers, '|'). IsUnitState 0x6c5980 goes through
+// SCR_GetEnum (0x6c5a53): a name the parse does not take raises "Invalid enum value". SetUnitState 0x6c6d30 calls
+// the parse itself (0x6c6e02) and does NOTHING for such a name (0x6c6e06 -> 0x6c6e64: no error); the state's bit
+// is 1 << value (0x6c6e2a, u+0x4a0). Ours keeps the states by their names: a value without a name (a number or
+// names or-ed) is no state here.
 int l_IsUnitState(lua_State* L) {
   const char* name = luaL_checkstring(L, 2);
-  if (!UnitStateNameOk(L, name)) return luaL_error(L, "Invalid enum value %s", name);
-  lua_pushboolean(L, U(L)->unitStates.count(name) > 0);
+  if (Sim::From(L)->fixes && !std::strcmp(name, "Sacrificing")) {  // (deviation 1)
+    lua_pushboolean(L, U(L)->unitStates.count(name) > 0);
+    return 1;
+  }
+  const char* state = EnumNameOf(kEnumUnitState, EnumValue(L, kEnumUnitState, name));
+  lua_pushboolean(L, state && U(L)->unitStates.count(state) > 0);
   return 1;
 }
 int l_SetUnitState(lua_State* L) {
   Unit* u = U(L);
-  std::string s = luaL_checkstring(L, 2);
-  if (!UnitStateNameOk(L, s.c_str())) return luaL_error(L, "Invalid enum value %s", s.c_str());
+  const char* name = luaL_checkstring(L, 2);
+  std::string s;
+  if (Sim::From(L)->fixes && !std::strcmp(name, "Sacrificing")) {  // (deviation 1)
+    s = name;
+  } else {
+    int v = 0;
+    if (!EnumLexical(kEnumUnitState, name, &v)) return 0;
+    const char* state = EnumNameOf(kEnumUnitState, v);
+    if (!state) return 0;
+    s = state;
+  }
   if (lua_toboolean(L, 3)) u->unitStates.insert(s);
   else u->unitStates.erase(s);
   return 0;

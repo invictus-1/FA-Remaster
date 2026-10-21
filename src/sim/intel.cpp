@@ -11,6 +11,7 @@
 #include "script/script_state.h"
 #include "sim/ai_threat.h"
 #include "sim/combat.h"
+#include "sim/enum_arg.h"
 #include "sim/luautil.h"
 #include "sim/sim.h"
 #include "sim/terrain.h"
@@ -61,67 +62,6 @@ struct ArmyIntel {
 std::vector<ArmyIntel> g_armies;
 std::vector<Entity*> g_sources;     // entities with intel handles
 std::vector<ReconBlip*> g_blips;    // live blip entities
-
-const char* const kIntelNames[14] = {"None", "Vision", "WaterVision", "Radar", "Sonar", "Omni", "RadarStealthField",
-                                     "SonarStealthField", "CloakField", "Jammer", "Spoof", "Cloak", "RadarStealth",
-                                     "SonarStealth"};
-// The engine's parse of a reflected enum's name (Reflection::SetLexical 0x8d9670, through 0x4d2550): the string
-// is cut at each '|' and the parts' values or'ed; a part loses a leading "INTEL_" (strncmp, the type's prefix
-// 0xe0d970, EIntelTypeInfo::AddEnums 0x50a460) and is then looked up WITHOUT case (_strnicmp, the whole name:
-// 0x8d9729..0x8d9744), else read as a number (func_ParseNum 0x8d8fa0: an optional '-', "0x" hex, a leading 0 octal,
-// else decimal). So 'vision', 'VISION', 'INTEL_Vision', '3' and 'Radar|Sonar' are all names it takes. (The same
-// parse as ai_threat.cpp's CheckThreatType and ai_brain.cpp's EnumArg; FAF's XRB3301 asks for 'vision'.)
-bool ParseEnumNumber(const char* p, const char* end, int* out) {  // func_ParseNum 0x8d8fa0
-  bool neg = false;
-  if (*p == '-') {
-    neg = true;
-    ++p;
-  }
-  int base = 10;
-  if (*p == '0') {
-    if (p[1] == 'x') {
-      base = 16;
-      p += 2;
-    } else {
-      base = 8;
-    }
-  }
-  int v = 0;
-  for (;;) {
-    const unsigned char c = static_cast<unsigned char>(*p);
-    int d;
-    if (static_cast<unsigned char>(c - '0') <= 9) d = c - '0';
-    else if (static_cast<unsigned char>(c - 'a') <= 0x19 || c == 'A') d = static_cast<signed char>(c) - 0x57;
-    else return false;  // (0x8d8ff4: of the capitals only 'A' passes, as the exe has it)
-    if (d >= base) return false;
-    v = base * v + d;
-    ++p;
-    if (*p == 0 || p == end) break;
-  }
-  *out = neg ? -v : v;
-  return true;
-}
-int IntelType(const char* s) {
-  int value = 0;
-  const char* p = s;
-  for (;;) {
-    const char* bar = std::strchr(p, '|');
-    const char* end = bar ? bar : p + std::strlen(p);
-    const char* q = std::strncmp(p, "INTEL_", 6) == 0 ? p + 6 : p;
-    const size_t n = static_cast<size_t>(end - q);
-    int v = -1;
-    for (int i = 0; i < 14; ++i)
-      if (strncasecmp(q, kIntelNames[i], n) == 0 && kIntelNames[i][n] == 0) {
-        v = i;
-        break;
-      }
-    if (v < 0 && !ParseEnumNumber(q, end, &v)) return -1;
-    value |= v;
-    if (!bar) break;
-    p = bar + 1;
-  }
-  return value;
-}
 
 Grid* GridFor(int army, int slot) {  // pos handle slots 1..5
   if (army < 0 || army >= static_cast<int>(g_armies.size())) return nullptr;
@@ -855,16 +795,8 @@ int l_FlushIntelInRect(lua_State* L) {
 // A kind the bindings act on: the exe indexes its circles and flags with whatever value the parse gave (0x68e1c6..),
 // out of 0..13 that is memory past its tables; ours does nothing for those
 bool KindOk(int t) { return t >= 0 && t <= 13; }
-int TypeArg(lua_State* L, int idx) {
-  const char* s = luaL_checkstring(L, idx);
-  int t = IntelType(s);
-  if (t < 0) {  // (0x4d2586..0x4d2677: the value and the type's names; the same text as CheckThreatType's)
-    std::string msg = std::string("Invalid enum value ") + s + "\nValid Options are:\n";
-    for (const char* n : kIntelNames) msg += std::string("\n   ") + n;
-    luaL_error(L, "%s", msg.c_str());
-  }
-  return t;
-}
+// EIntel by name (sim/enum_arg.h: no case, "INTEL_", numbers, '|'). FAF's XRB3301 asks for 'vision'.
+int TypeArg(lua_State* L, int idx) { return EnumValue(L, kEnumIntel, luaL_checkstring(L, idx)); }
 
 // InitIntel(army, type, [radius]) 0x68ea20
 int l_InitIntel(lua_State* L) {

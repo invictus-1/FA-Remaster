@@ -3,6 +3,7 @@
 #include "sim/prop_motor.h"
 #include "sim/landnav.h"
 #include "sim/sim.h"
+#include "sim/enum_arg.h"
 #include "sim/script_bits.h"
 #include "core/dmath.h"
 #include "sim/formation.h"
@@ -490,12 +491,12 @@ int l_IsNeutral(lua_State* L) {
   lua_pushboolean(L, Relation(L) == 1);
   return 1;
 }
+// EAlliance by name (sim/enum_arg.h, SCR_GetEnum 0x4d2550: 0x7096d6 / 0x709866) as our relation numbers (0 enemy,
+// 1 neutral, 2 ally). The exe stores any other value as it is, which then equals none of the three: taken as
+// neutral here.
 int ParseRelation(lua_State* L, int idx) {
-  const char* s = luaL_checkstring(L, idx);
-  if (!std::strcmp(s, "Ally")) return 2;
-  if (!std::strcmp(s, "Neutral")) return 1;
-  if (!std::strcmp(s, "Enemy")) return 0;
-  return luaL_error(L, "Unknown alliance type %s", s);
+  const int v = EnumValue(L, kEnumAlliance, luaL_checkstring(L, idx));
+  return v == 1 ? 2 : v == 2 ? 0 : 1;
 }
 int l_SetAlliance(lua_State* L) {
   Army* a = S(L)->GetArmy(L, 1);
@@ -617,31 +618,8 @@ bool IEquals(const std::string& a, const std::string& b) {
     if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i]))) return false;
   return true;
 }
-// ETriggerOperator enum parse (0x8d9670): case-insensitive, optional TRIGGER_ prefix, decimal, a|b
-int ParseTriggerOp(lua_State* L, const char* s) {
-  static const char* names[4] = {"GreaterThan", "GreaterThanOrEqual", "LessThan", "LessThanOrEqual"};
-  int v = 0;
-  std::string all = s ? s : "";
-  size_t pos = 0;
-  bool any = false;
-  while (pos <= all.size()) {
-    size_t bar = all.find('|', pos);
-    std::string t = all.substr(pos, bar == std::string::npos ? std::string::npos : bar - pos);
-    if (t.size() >= 8 && IEquals(t.substr(0, 8), "TRIGGER_")) t = t.substr(8);
-    int k = -1;
-    for (int i = 0; i < 4; ++i)
-      if (IEquals(t, names[i])) k = i;
-    if (k < 0 && !t.empty() && std::all_of(t.begin(), t.end(), [](char c) { return c >= '0' && c <= '9'; }))
-      k = std::atoi(t.c_str());
-    if (k < 0)
-      luaL_error(L, "Invalid enum value %s\nValid Options are:\n   GreaterThan\n   GreaterThanOrEqual\n   LessThan\n   LessThanOrEqual", s);
-    v |= k;
-    any = true;
-    if (bar == std::string::npos) break;
-    pos = bar + 1;
-  }
-  return any ? v : 0;
-}
+// ETriggerOperator by name (sim/enum_arg.h, SCR_GetEnum 0x4d2550: 0x587dc3)
+int ParseTriggerOp(lua_State* L, const char* s) { return EnumValue(L, kEnumTrigger, s); }
 // SetArmyStatsTrigger(statName, triggerName, compareType, value [, category]) 0x587c00
 int l_brain_SetArmyStatsTrigger(lua_State* L) {
   int n = lua_gettop(L);

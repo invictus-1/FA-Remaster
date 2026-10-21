@@ -17,6 +17,7 @@
 #include "sim/combat.h"
 #include "sim/commands.h"
 #include "sim/entity_grid.h"
+#include "sim/enum_arg.h"
 #include "sim/navigation.h"
 #include "sim/sim.h"
 #include "sim/sim_cache.h"
@@ -880,28 +881,19 @@ uint32_t LiveCommandCaps(lua_State* L, const Unit* u) {
 }
 
 namespace {
-// one RULEUCC_ name -> its bit (0: not a command cap)
-uint32_t CommandCapBit(const char* s) {
-  static const char* const names[] = {"RULEUCC_Move", "RULEUCC_Stop", "RULEUCC_Attack", "RULEUCC_Guard",
-                                      "RULEUCC_Patrol", "RULEUCC_RetaliateToggle", "RULEUCC_Repair",
-                                      "RULEUCC_Capture", "RULEUCC_Transport", "RULEUCC_CallTransport",
-                                      "RULEUCC_Nuke", "RULEUCC_Tactical", "RULEUCC_Teleport", "RULEUCC_Ferry",
-                                      "RULEUCC_SiloBuildTactical", "RULEUCC_SiloBuildNuke", "RULEUCC_Sacrifice",
-                                      "RULEUCC_Pause", "RULEUCC_Overcharge", "RULEUCC_Dive", "RULEUCC_Reclaim",
-                                      "RULEUCC_SpecialAction", "RULEUCC_Dock", "RULEUCC_Script"};
-  for (int i = 0; i < static_cast<int>(sizeof(names) / sizeof(names[0])); ++i)
-    if (s && !strcmp(s, names[i])) return 1u << i;
-  return 0;
-}
+// ERuleBPUnitCommandCaps by name (sim/enum_arg.h, SCR_GetEnum 0x4d2550: 0x6c86b3 / 0x6c8853 / 0x6c8b33): no
+// prefix, so "RULEUCC_Move" in any case, a number, or names or-ed with '|'; a name the parse does not take raises
+// "Invalid enum value" (ours gave 0 for it)
+uint32_t CommandCapBit(lua_State* L, const char* s) { return static_cast<uint32_t>(EnumValue(L, kEnumCommandCaps, s)); }
 // Unit:AddCommandCap(cap) 0x6c85e0: caps |= bit, sync flag (u+0xa2). RemoveCommandCap is its mirror.
 int l_AddCommandCap(lua_State* L) {
   Unit* u = CheckObject<Unit>(L, 1);
-  u->commandCaps = LiveCommandCaps(L, u) | CommandCapBit(luaL_checkstring(L, 2));
+  u->commandCaps = LiveCommandCaps(L, u) | CommandCapBit(L, luaL_checkstring(L, 2));
   return 0;
 }
 int l_RemoveCommandCap(lua_State* L) {
   Unit* u = CheckObject<Unit>(L, 1);
-  u->commandCaps = LiveCommandCaps(L, u) & ~CommandCapBit(luaL_checkstring(L, 2));
+  u->commandCaps = LiveCommandCaps(L, u) & ~CommandCapBit(L, luaL_checkstring(L, 2));
   return 0;
 }
 // (not read: taken from their names and FAF's use) RestoreCommandCaps: back to the blueprint's;
@@ -912,7 +904,7 @@ int l_RestoreCommandCaps(lua_State* L) {
 }
 int l_TestCommandCaps(lua_State* L) {
   Unit* u = CheckObject<Unit>(L, 1);
-  lua_pushboolean(L, (LiveCommandCaps(L, u) & CommandCapBit(luaL_checkstring(L, 2))) != 0);
+  lua_pushboolean(L, (LiveCommandCaps(L, u) & CommandCapBit(L, luaL_checkstring(L, 2))) != 0);
   return 1;
 }
 }  // namespace

@@ -24,6 +24,7 @@
 #include "core/log.h"
 #include "script/script_state.h"
 #include "sim/combat.h"
+#include "sim/enum_arg.h"
 #include "sim/luautil.h"
 #include "sim/motion.h"
 #include "sim/sim.h"
@@ -815,87 +816,10 @@ int l_CheckBlockingTerrain(lua_State* L) {
   return 1;
 }
 
-// EThreatType's names in AddEnums order (0x715590), without the prefix "THREATTYPE_".
-struct ThreatName {
-  const char* name;
-  int value;
-};
-const ThreatName kThreatNames[15] = {
-    {"Overall", 0},   {"OverallNotAssigned", 1}, {"StructuresNotMex", 3}, {"Structures", 2},  {"Naval", 4},
-    {"Air", 6},       {"Land", 5},               {"Experimental", 7},     {"Commander", 8},   {"Artillery", 9},
-    {"AntiAir", 10},  {"AntiSurface", 11},       {"AntiSub", 12},         {"Economy", 13},    {"Unknown", 14},
-};
-
-// func_ParseNum 0x8d8fa0 on [p, end): '-', then 0x.. hex, 0.. octal or decimal. (Its letter test accepts the
-// lower-case letters and, by a slip, 'A' alone as the digit 'A' - 0x57.)
-bool ParseNum(const char* p, const char* end, int* out) {
-  bool neg = false;
-  if (*p == '-') {
-    neg = true;
-    ++p;
-  }
-  int base = 10;
-  if (*p == '0') {
-    if (p[1] == 'x') {
-      base = 16;
-      p += 2;
-    } else {
-      base = 8;
-    }
-  }
-  int v = 0;
-  for (;;) {
-    const char c = *p;
-    int d;
-    if (static_cast<unsigned char>(c - '0') <= 9) d = c - '0';
-    else if (static_cast<unsigned char>(c - 'a') <= 25 || c == 'A') d = c - 0x57;
-    else return false;
-    if (d >= base) return false;
-    v = base * v + d;
-    ++p;
-    if (*p == 0 || p == end) break;
-  }
-  *out = neg ? -v : v;
-  return true;
-}
-
 }  // namespace
 
-// REnumType::SetLexical 0x8d9670: '|'-separated parts, each with an optional "THREATTYPE_" (case-sensitive), a
-// name (case-insensitive, the whole part) or a number; the values are or-ed.
-int CheckThreatType(lua_State* L, int idx) {
-  const char* s = lua_tostring(L, idx);
-  if (!s) luaL_typerror(L, idx, "string");
-  static const char kPrefix[] = "THREATTYPE_";
-  const size_t plen = sizeof kPrefix - 1;
-  int v = 0;
-  const char* p = s;
-  for (;;) {
-    const char* bar = std::strchr(p, '|');
-    const char* end = bar ? bar : p + std::strlen(p);
-    const char* q = std::strncmp(p, kPrefix, plen) == 0 ? p + plen : p;
-    const size_t len = end > q ? static_cast<size_t>(end - q) : 0;
-    bool found = false;
-    for (const ThreatName& t : kThreatNames)
-      if (strncasecmp(q, t.name, len) == 0 && t.name[len] == 0) {
-        v |= t.value;
-        found = true;
-        break;
-      }
-    if (!found) {
-      int num = 0;
-      if (!ParseNum(q, end, &num)) {
-        std::string msg = std::string("Invalid enum value ") + s + "\nValid Options are:\n";
-        for (const ThreatName& t : kThreatNames) msg += std::string("\n   ") + t.name;
-        luaL_error(L, "%s", msg.c_str());
-      }
-      v |= num;
-    }
-    if (!bar) break;
-    p = bar + 1;
-  }
-  return v;
-}
+// EThreatType by name (sim/enum_arg.h, SCR_GetEnum 0x4d2550)
+int CheckThreatType(lua_State* L, int idx) { return EnumArgAt(L, idx, kEnumThreatType); }
 
 void InitThreatMaps(Sim& sim) {
   g_maps.clear();

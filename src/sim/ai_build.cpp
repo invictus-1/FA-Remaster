@@ -41,6 +41,7 @@
 #include "sim/build.h"
 #include "sim/combat.h"
 #include "sim/commands.h"
+#include "sim/enum_arg.h"
 #include "sim/intel.h"
 #include "sim/landnav.h"
 #include "sim/sim.h"
@@ -123,18 +124,10 @@ const char* ObjString(lua_State* L, int idx) {
   return lua_tostring(L, idx);
 }
 
-// EAlliance (0x509e20: Neutral 0, Ally 1, Enemy 2) from SCR_GetEnum 0x4d2550 (the name, with or without the
-// "ALLIANCE_" prefix, case-insensitive; an unknown name raises "Invalid enum value").
-int AllianceEnumArg(lua_State* L, int idx) {
-  const char* s = StrArg(L, idx);
-  const char* v = s;
-  if (std::strlen(v) > 9 && strncmp(v, "ALLIANCE_", 9) == 0) v += 9;
-  if (EqualNoCase(v, "Neutral")) return 0;
-  if (EqualNoCase(v, "Ally")) return 1;
-  if (EqualNoCase(v, "Enemy")) return 2;
-  luaL_error(L, "Invalid enum value %s\n\nValid Options are:\n   Neutral\n   Ally\n   Enemy", s);
-  return 3;
-}
+// EAlliance (0x509e20: Neutral 0, Ally 1, Enemy 2) by name (sim/enum_arg.h, SCR_GetEnum 0x4d2550: 0x58a79b,
+// 0x58e367). (3 is also our "no alliance given"; a script that passes 3 or 'Ally|Enemy' gets that here, where the
+// exe compares 3 with GetAllianceWith and so counts no unit.)
+int AllianceEnumArg(lua_State* L, int idx) { return EnumValue(L, kEnumAlliance, StrArg(L, idx)); }
 // IArmy::GetAllianceWith 0x579430 as an EAlliance; an army is its own ally. (Our Army::alliance: 0 enemy, 1 neutral,
 // 2 ally.)
 int AllianceOf(const Army* a, const Army* b) {

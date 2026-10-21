@@ -22,6 +22,7 @@
 #include "sim/build.h"
 #include "sim/collision.h"
 #include "sim/economy.h"
+#include "sim/enum_arg.h"
 #include "sim/motion.h"
 #include "sim/navigation.h"
 #include "sim/replay.h"
@@ -2752,7 +2753,9 @@ int l_GetUnitsAroundPoint(lua_State* L) {
   Vec3 p;
   PosArg(L, 3, &p);
   float r = static_cast<float>(luaL_checknumber(L, 4));
-  std::string alliance = lua_isstring(L, 5) ? lua_tostring(L, 5) : "";
+  // the alliance with five arguments (0x58e5fc), an EAlliance by name (sim/enum_arg.h, SCR_GetEnum 0x58e65e:
+  // Neutral 0, Ally 1, Enemy 2; a nil or a name it does not take raises)
+  const int alliance = lua_gettop(L) == 5 ? EnumArgAt(L, 5, kEnumAlliance) : -1;
   Sim* sim = S(L);
   std::vector<Unit*> found;
   sim->ForUnitsInRect(p.x - r, p.z - r, p.x + r, p.z + r, [&](Unit* u) {
@@ -2761,13 +2764,12 @@ int l_GetUnitsAroundPoint(lua_State* L) {
     if (dx * dx + dz * dz > r * r) return;
     if (cat && !(u->blueprint && u->blueprint->entityIndex >= 0 && CategoryHas(cat, u->blueprint->entityIndex)))
       return;
-    if (!alliance.empty() && b->army && u->army) {
+    if (alliance >= 0 && b->army && u->army) {
       int rel = 1;
       if (u->army == b->army) rel = 2;
       else if (u->army->index - 1 < static_cast<int>(b->army->alliance.size())) rel = b->army->alliance[u->army->index - 1];
-      if (alliance == "Ally" && rel != 2) return;
-      if (alliance == "Enemy" && rel != 0) return;
-      if (alliance == "Neutral" && rel != 1) return;
+      // (our relation 0 enemy / 1 neutral / 2 ally as an EAlliance; any other value matches no unit)
+      if ((rel == 2 ? 1 : rel == 0 ? 2 : 0) != alliance) return;
     }
     found.push_back(u);
   });

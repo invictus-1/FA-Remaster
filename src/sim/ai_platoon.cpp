@@ -25,6 +25,7 @@
 #include "sim/blueprints.h"
 #include "sim/combat.h"
 #include "sim/commands.h"
+#include "sim/enum_arg.h"
 #include "sim/formation.h"
 #include "sim/intel.h"
 #include "sim/sim.h"
@@ -89,31 +90,13 @@ void Args(lua_State* L, const char* doc, int lo, int hi) {
   if (lo != hi && (n < lo || n > hi)) luaL_error(L, "%s\n  expected between %d and %d args, but got %d", doc, lo, hi, n);
 }
 
-// SCR_GetEnum 0x4d2550 -> REnumType::GetEnumValue 0x8d9670: the name without its prefix, case-insensitive
-// (__strnicmp); an unknown name raises "Invalid enum value".
-int SquadArg(lua_State* L, int idx) {
-  const char* s = lua_tostring(L, idx);
-  if (!s) luaL_typerror(L, idx, "string");
-  static const char* const kNames[] = {"Unassigned", "Attack", "Artillery", "Guard", "Support", "Scout"};
-  std::string v = s;
-  if (v.size() > 11 && strncmp(v.c_str(), "SQUADCLASS_", 11) == 0) v = v.substr(11);
-  for (int i = 0; i < 6; ++i)
-    if (EqualNoCase(v, kNames[i])) return i;
-  luaL_error(L, "Invalid enum value %s\n\nValid Options are:\n   Unassigned\n   Attack\n   Artillery\n   Guard\n"
-             "   Support\n   Scout", s);
-  return 0;
-}
-// EAlliance (0x509e20: Neutral 0, Ally 1, Enemy 2) as our relation numbers (0 enemy, 1 neutral, 2 ally).
+// The enum arguments (sim/enum_arg.h, SCR_GetEnum 0x4d2550): ESquadClass by its value; EAlliance (Neutral 0, Ally 1,
+// Enemy 2) as our relation numbers (0 enemy, 1 neutral, 2 ally), and any other value (a number, or names or-ed
+// with '|') as -1, which no relation equals (the exe compares the value itself with GetAllianceWith).
+int SquadArg(lua_State* L, int idx) { return EnumArgAt(L, idx, kEnumSquad); }
 int AllianceArg(lua_State* L, int idx) {
-  const char* s = lua_tostring(L, idx);
-  if (!s) luaL_typerror(L, idx, "string");
-  std::string v = s;
-  if (v.size() > 9 && strncmp(v.c_str(), "ALLIANCE_", 9) == 0) v = v.substr(9);
-  if (EqualNoCase(v, "Neutral")) return 1;
-  if (EqualNoCase(v, "Ally")) return 2;
-  if (EqualNoCase(v, "Enemy")) return 0;
-  luaL_error(L, "Invalid enum value %s\n\nValid Options are:\n   Neutral\n   Ally\n   Enemy", s);
-  return 0;
+  const int v = EnumArgAt(L, idx, kEnumAlliance);
+  return v == 0 ? 1 : v == 1 ? 2 : v == 2 ? 0 : -1;
 }
 // IArmy::GetAllianceWith 0x579430 in our numbers; the army itself is its own ally.
 int RelationTo(const Army* a, const Army* b) {
