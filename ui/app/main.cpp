@@ -359,6 +359,11 @@ int main(int argc, char** argv) {
       if (ownFolder.empty() && hostfs::IsDirectory(candidate + "/hook")) ownFolder = candidate;
     }
   }
+  // (The simulation and the interface's rules get the hook folders without this program's own: the sim's
+  // SetupSession imports /lua/ui/lobby/lobbyoptions.lua (simInit.lua 132), and our hook there made ~30 objects in
+  // the sim's state that a game's playback without this program does not make, shifting its object serials and
+  // with them its pairs() order (engine, 2026-10-21).)
+  const std::vector<std::string> gameHookDirs = cfg.hookDirs;
   if (!ownFolder.empty() && vfs.Mount(ownFolder, "/moho64ui")) cfg.hookDirs.push_back("/moho64ui/hook");
   else Logf(LogLevel::Warning, "moho64ui: this program's own files were not found (--own <folder>): the lobby has no day and weather options");
 #ifdef MOHO64UI_WORLD_PICTURE
@@ -408,7 +413,7 @@ int main(int argc, char** argv) {
 
   // A game launched from the lobby: the simulation starts from the game configuration and the host
   // runs its beats beside the interface's frames.
-  ui::GameSession session(&vfs, cfg.hookDirs);
+  ui::GameSession session(&vfs, gameHookDirs);
   session.sounds = &sounds;
   if (session_seed >= 0) session.seedGiven = true, session.seed = static_cast<uint32_t>(session_seed);
   session.fastForwardTo = fastForward;
