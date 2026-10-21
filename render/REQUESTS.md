@@ -45,7 +45,9 @@ which fixes the strips, but the relief then runs to the decal's square edge. Ask
 (red = the mark's strength, 0 outside the mark, soft at its edge; green = y; alpha = x; blue 0), so the relief fades with the
 mark; and check the trenches' strength at 1 (the helper found them a little dark from the game's height).
 
-**Answer:** (none yet)
+**Answer:** done (visuals, 2026-10-21): oldcrater_normals.dds and trench_normals.dds re-exported in the game's form (red
+the strength, 0 at every edge, soft fade; green y; blue 0; alpha x, same sign); craters 1.0 over bowl and rim fading by
+0.78-0.92 of the radius, trenches peaking at 0.75. They now take the game's path (the plain-normal path kept for others).
 
 ## 43. To the VISUALS track: from Chris's playthrough of 19 October (2026-10-20, not blocking)
 
