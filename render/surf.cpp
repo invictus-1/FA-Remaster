@@ -1003,6 +1003,11 @@ bool SurfTest::Init(const std::string& spec, Vec3 at, float radius, const std::f
     char b[160];
     snprintf(b, sizeof b, "%s%d of %s (%.1f a second)", describe_.empty() ? "" : ", ", placed, id.c_str(), speed);
     describe_ += b;
+    // [wakes] (each one's loop - its middle, radius, where on it it starts, which way it turns - for a camera on it)
+    for (size_t k = drivers_.size() - static_cast<size_t>(placed); k < drivers_.size(); ++k) {
+      snprintf(b, sizeof b, " [round %.1f,%.1f r %.2f from %.3f turn %+.0f]", drivers_[k].x, drivers_[k].z, drivers_[k].radius, drivers_[k].angle, drivers_[k].turn);
+      describe_ += b;
+    }
   }
   frame_.blueprints = &blueprints_;
   if (drivers_.empty() && error && error->empty()) *error = "no deep water near enough for a loop";

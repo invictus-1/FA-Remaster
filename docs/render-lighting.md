@@ -1983,6 +1983,55 @@ the ground's share (lighting.h, `SURFACE_SNOW 0.5` for every model) and nothing 
   cover's own depth (`CoverSnowDepth`) has no mottle with the snow materials, so on the mottled margin the cover and the
   plants may disagree (proposed: the same mottle in the cover); with plants that react off, the variant still multiplies a
   plant's sway by `PlantsUpright` (a plant tilted more than 25 degrees sways a little less under the snow).
+## The ships' wakes on every ship (Chris's test run of 2026-10-21, items 8 and 12; a helper's, for review) [wakes]
+
+Chris: "The wakes on the [mod battleship] aren't the new ones" and, of his two pictures of it from above (two white V
+streaks circled), "they are like white waves but very low res"; "all uef ships have it ... I know the [mod battleship]
+doesn't". (The mod is his private one: it is named nowhere in the repository.)
+- **What the streaks were**: not the game's emitters but the renderer's own foam (`wakes.h`): with the game's particles
+  hidden (`--hide particles`) they stay. Its shape is made for small hulls: arms that are a share (0.5 to 1) of the wake's
+  half width, which on a 28 units long, 7 wide hull (half width 2.5 growing to 6) are broad bands; foam patches of the
+  sky's value noise (`CloudNoise` 3.2 and 9 to the unit, squared), which magnified that much show as blocks; and a
+  wake of `min(1.8 x speed, 14) + half the hull` (18 units at 2.3 a second) laid along twelve places a third of a second
+  apart (9 units at that speed), so it stopped square where they ran out. The places were the stern's, which swings
+  sideways as a long hull steers, so the pieces kinked and folded into hard-edged shards. On a frigate or cruiser the
+  same code gives the crisp thin V Chris sees as the new wake.
+- **The remade wake** (`World::wakesRemade`, viewer `--wakes-remade`; modern look; the World's default off, so the regressions
+  are unchanged, and in the game ON in the Weather Effects bundle, `WorldPicture::SetWeatherEffects`; off, and in the
+  original look, the wake as before pixel for pixel): the same pieces and lighting, a shader of its own (`kRemadeShader`, made the
+  first frame it is wanted). The arms are lines of foam whose width is in world units (`0.1 + 0.22 x the half width`,
+  0.22 to 0.8), soft on both sides; the foam is broken into streaks of three sizes (0.55, 0.22, 0.09 units across, twice
+  as long along the way) that keep their place on the water (by the ship's odometer, `World::Moving::odometer`, handed
+  on in the pieces' `range.zw`, which the old shader never reads), each faded to its mean where it would be finer than
+  about two pixels; the interpolants are `centroid` (read beyond a piece's first end under MSAA they put a dark crack
+  across the wake). The wake is laid along where the ship's MIDDLE has been (`Wakes::AddPathRemade`), from 0.6 of its
+  half length behind it, places kept a third of a second and at least a tenth of the wake's length apart (so the
+  twelve reach its end behind a slow ship), and where the way kept is still shorter it runs on straight the last
+  piece's way and fades out. Small ships keep their look (the pictures below: a little cleaner); the large slow hull
+  gets two arms that leave its stern quarters and spread, fading.
+- **The game's own wake emitters on a mod ship**: `TerrainTypes.lua` gives every ship's `Display.MovementEffects.Water`
+  (BackWake, LeftFrontWake, RightFrontWake) the same emitters, which the visuals session remade (256 px textures) in the
+  UEF's folder only (`effects/emitters/uef/water_move_*`, `underwater_move_trail_01`). Which faction's file an effect
+  plays was the unit's by its id (`UnitFaction`: u/x/d/z and e/a/r/s), else its army's most common; a mod's unit with
+  an id of its own in an army with no game unit got none, so the game's 128 px files. Now `Effects::FactionOfUnit`
+  reads such a unit's blueprint (`ModelCache::Faction`: `General.FactionName`, else a faction among its `Categories`;
+  once a kind). Game units are found by their id as before.
+- **What a mod ship's blueprint must say** for all of it (the battleship says it all): `General.FactionName` (or the
+  faction among `Categories`) for its faction's remade effects; `Physics.MotionType` `RULEUMT_Water` (or
+  `RULEUMT_SurfacingSub`) for the bow spray (surf.h); `Display.MovementEffects.Water.Effects` with the types above on
+  bones its mesh has at the waterline (Front_Left_Wake, Front_Right_Wake, Back_Wake) for the game's own wake; a hull that
+  reaches below the waterline (the model's lowest point under 0) for the ripples. The renderer's own wake takes every
+  unit on the water moving faster than 0.4 a second, whatever its blueprint.
+- **Other factions**: their ships play the same emitters; the remade files are only in `uef/`. Copies in `aeon/`,
+  `cybran/`, `seraphim/` (or the files at the shared path, which every faction and an unknown one then take) give them
+  the same (the visuals session's files; nothing in the renderer). The renderer's own wake is every faction's already.
+- **Tests**: a viewer game with ships driven round loops (a sim hook in the helper's scratch; `--fixed-step`, new, makes
+  a live game's clock follow the frames so two builds' pictures are of the same beat); `--surf-test` ships (frame-counted
+  clock): with the option off, the base build against this one 0 px (game height and close); the effects stand
+  (`--fx-move` of the mod battleship) for the faction: only its churn's texture changes (the HD one).
+- **Open**: the ripples (`waterRipples`) treat a large hull as a small one (at most three bumps of radius 0.5 a side,
+  by how far it moved), so a slow large ship's ripple wake is faint; scaling the bumps by the hull's beam is a next
+  step if Chris wants it. The arms' width and the streaks' sizes are judgements.
 
 ## The options
 
@@ -2017,6 +2066,7 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `heatShimmer` | the air bends over fires, exhausts and fresh explosions | about 0.04-0.1 ms in a fight | |
 | `blastWaves`, `blastDust`, `blastDebris` | explosions press the grass flat and bend trees in a running ring, kick up dust, throw chunks that lie as rubble | about 0.03-0.09 ms in a fight | |
 | `waterRipples` | the water reacts: shells, ships, hover and wading units leave rings and wakes that spread and fade | about 0.04-0.05 ms near water (24 MB of the card's memory once on) | a map with water |
+| `wakesRemade` [wakes] | the ships' foam wakes hold for any hull: foam-line arms, streaks at the screen's resolution that stay on the water, laid along the middle's way and fading out (a large slow ship's no longer broad blocky bands cut off square) | +0.001 ms of the card at most with 28 ships moving at 1440p (the wakes' stage 0.003 -> 0.003 ms from the game's height, 0.004 -> 0.005 close up; lowest of 240 frames, two runs each), about +0.005 ms of the processor; the frame the same within noise (proposed for "Weather Effects": in it since 2026-10-21) | a map with water |
 | `winterWater` | while snow lies: a cold sea (dark slate, grey-green shallows, no snow under the water), slush and thin ice at the shores; a thaw takes it back | +0.005 to 0.03 ms (only with snow lying) | a time of day, a map with water |
 | `surf` | waves break on the shores and run up the beaches, burst on rocks throwing spray; ships throw bow spray; by the weather's wind (proposed for "Weather Effects") | +0.03 to 0.05 ms with a long coast in view, up to +0.10 close over a beach (8 MB once on) | a map with water |
 | `hiddenOutlines` (ON) | a thin line in the army's colour round a unit's part hidden behind trees, hills or buildings | 0.06-0.08 ms (200 tanks in a forest) | |

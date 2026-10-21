@@ -434,6 +434,11 @@ class World {
   // wading leave rings and wakes that spread, cross each other and die out. Modern look, a map with water; off by
   // default.
   bool waterRipples = false;
+  // [wakes] The ships' wakes remade (wakes.h; Chris's test run of 21 October): the foam behind every ship drawn so that it
+  // holds for a ship of any size and speed - arms that are lines of foam, streaks that keep their place on the water at
+  // the screen's resolution, a wake that runs out softly (the way kept behind a ship spaced by its wake's length, so a
+  // large slow ship's covers it). Modern look; off by default (then, and in the original look, the wake as before).
+  bool wakesRemade = false;
   // Winter water (winter_water.h): while snow lies (snowLying) the water goes over to a cold palette (deep water a dark
   // slate, the shallows a muted grey-green, the bed dimmer and colder), slush and thin ice gather along the shores, the
   // foam greys; and no snow lies under the water. It follows snowLying, so a thaw brings the summer water back. With no
@@ -879,6 +884,7 @@ class World {
     Vec3 trail[12];      // where it was, the newest first, one every third of a second of the game
     int trailCount = 0;
     double trailClock = 0;
+    float odometer = 0;  // [wakes] how far it has gone in all (the remade wake's foam keeps its place on the water by it)
   };
   std::unordered_map<uint32_t, Moving> moving_;
   // when each flash on a shield (a script's entity with such a mesh) was first seen, by the

@@ -298,6 +298,9 @@
 //           camera looks (radius 0.5, strength 1), to see and time them; --ripple-speed s: how fast the rings run
 //           (world units a second, 1.6); --ripple-half-life s: after how long they are half as high (0.8);
 //           --ripple-view n: the field's heights in place of the water (red up, blue down, full at 1 / n units)
+// --wakes-remade  [wakes] the ships' wakes remade (wakes.h, World::wakesRemade; modern look): arms that are lines of foam,
+//           streaks that keep their place on the water at the screen's resolution, a wake that runs out softly, for a ship
+//           of any size and speed (without it the wake as before)
 // --surf  surf and sea spray (surf.h, World::surf; modern look): waves run in to the map's shores, break into white water
 //           that runs up the beaches and drains back, burst on the rocks and throw spray up them; ships at speed throw
 //           spray off their bows; by the weather's wind (calm on a still day, most in a storm: --weather storm).
@@ -516,6 +519,9 @@
 //           --photo-look-compare name,name,name: for choosing, today's finish top left and up to three looks beside it,
 //           each a quarter of the same picture (with --photo --photo-scale 2: each the window's size)
 // --frames N stops after N frames; with --screenshot the last frame is saved (for automatic checks).
+// --fixed-step  [wakes] with --frames and a game (--session, --sim): the game's clock moves on a 60th of a second each frame
+//           (waiting for the simulation where it is behind), not by the wall's clock, so that a picture after many frames
+//           is of the same beat in every run (to compare two builds' pictures of a game in motion)
 //
 // Mouse: wheel zooms at the pointer, middle button drags the ground, right button turns and tilts.
 // Keys: W A S D or the arrows move, L switches the look, H the shadows, I the strategic icons, F12 saves a screenshot,
@@ -633,6 +639,8 @@ struct Options {
   bool waterDetail = false;             // --water-detail
   bool winterWater = false;             // --winter-water
   bool waterRipples = false;            // --water-ripples
+  bool wakesRemade = false;             // --wakes-remade [wakes]
+  bool fixedStep = false;               // --fixed-step [wakes]
   float rippleTest = 0, rippleTestRadius = 0.5f, rippleTestStrength = 1;  // --ripple-test
   float rippleSpeed = -1, rippleHalfLife = -1, rippleView = 0;  // --ripple-speed, --ripple-half-life, --ripple-view
   bool surf = false;                    // --surf
@@ -898,6 +906,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--water-detail") o->waterDetail = true;
     else if (a == "--winter-water") o->winterWater = true;
     else if (a == "--water-ripples") o->waterRipples = true;
+    else if (a == "--wakes-remade") o->wakesRemade = true;  // [wakes]
+    else if (a == "--fixed-step") o->fixedStep = true;  // [wakes]
     else if (a == "--surf") o->surf = true;
     else if (a == "--stream-water") o->streamWater = true;  // [stream]
     else if (a == "--ground-cover") o->groundCover = true;
@@ -1650,6 +1660,7 @@ int main(int argc, char** argv) {
   world.waterDetail = opt.waterDetail;
   world.winterWater = opt.winterWater;
   world.waterRipples = opt.waterRipples;
+  world.wakesRemade = opt.wakesRemade;  // [wakes]
   if (opt.rippleSpeed > 0) world.water.ripples.speed = opt.rippleSpeed;
   if (opt.rippleHalfLife > 0) world.water.ripples.halfLife = opt.rippleHalfLife;
   world.water.ripples.view = opt.rippleView;
@@ -2706,6 +2717,7 @@ int main(int argc, char** argv) {
     float dt = std::chrono::duration<float>(now - last).count();
     last = now;
     if (photoLeft > 0) dt = 0;  // (a photo's frames: the moment held)
+    if (opt.fixedStep && automatic) dt = 1.0f / 60.0f;  // [wakes] (--fixed-step: the game's clock by the frames, not the wall's)
 
     bool quit = false;
     if (automatic) events.clear();
@@ -2870,6 +2882,12 @@ int main(int argc, char** argv) {
     const bool playing = havePlay && (!haveLive || live.GetState() != LiveSim::State::Loading);
     if (playing) {
       if (!paused) playTick += static_cast<double>(dt) * 10 * playSpeed;
+      // [wakes] (--fixed-step: where the simulation is not yet at that beat, wait for it, so that each run shows the same beats)
+      if (opt.fixedStep && automatic && haveLive && !liveBusy)
+        for (int waited = 0; waited < 20000 && live.GetState() == LiveSim::State::Running && live.LastTick() < static_cast<uint32_t>(playTick) + 1; ++waited) {
+          live.RunTo(static_cast<uint32_t>(playTick) + 2);
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
       playTick = std::clamp(playTick, static_cast<double>(firstTick()), static_cast<double>(lastTick()));
       CpuTimes::Part("the game's beats blended");
       frameAt(playTick, &frame);

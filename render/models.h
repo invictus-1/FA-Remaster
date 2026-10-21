@@ -257,6 +257,13 @@ class ModelCache {
   const Model* RemasteredWreck(const std::string& blueprintId);
   // A unit's own look for its personal shield (from its blueprint file, read once; see PersonalShieldLook).
   const PersonalShieldLook& PersonalShield(const std::string& blueprintId);
+  // [wakes] Whose a unit is, for the faction's own effects in the remastered look (effect_files.h): by its id where
+  // that says it (UnitFaction: the game's own units, as before), else as its blueprint file names it -
+  // General.FactionName "UEF", "Aeon", "Cybran" or "Seraphim", else one of those among its Categories - so that a mod's
+  // unit with an id of its own, built like the game's (a ship whose blueprint says FactionName "UEF"), plays its
+  // faction's remastered effects (its wakes) whoever else its army has. Read once a kind; "" not known (then the army's,
+  // Effects::FactionOf).
+  const std::string& Faction(const std::string& blueprintId);
   // The capsule a personal shield lies on round a model (made once a model): along its longest side, its
   // section a superellipse (|x/a|^3.2 + |y/b|^3.2 = 1), rounded at both ends, a fifth of its smaller half
   // width off it all round; in the model's own units, so it is placed as the model is. Its one level is a
@@ -316,6 +323,7 @@ class ModelCache {
   TextureCache* textures_;
   std::unordered_map<std::string, std::unique_ptr<Model>> models_;
   std::unordered_map<std::string, PersonalShieldLook> personalShields_;  // by unit id
+  std::unordered_map<std::string, std::string> factions_;  // [wakes] by unit id (Faction)
   std::unordered_map<const Model*, std::unique_ptr<Model>> shells_;      // by the model they lie round
   std::unordered_map<std::string, std::string> unitPaths_;  // unit id -> its blueprint file
   // every mod's unit blueprint file by its name ("<id>_unit.bp"), the first in path order: one search of
