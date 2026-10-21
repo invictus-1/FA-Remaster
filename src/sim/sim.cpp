@@ -1713,6 +1713,82 @@ struct PhaseTimer {
   }
 };
 PhaseTimer g_prof;
+
+// MOHO64_PROFILE: one order's latency (Sim::ProfileTrackOrder): for each unit, the first beat its navigator has a path
+// (its search delivered, or a formation slot to follow) and the first beat it moved,
+// counted from the first beat after the order, with the wall time since the order (the beats' own compute: headless
+// runs as fast as it can; a game adds its 100 ms a beat).
+struct OrderLatency {
+  struct One {
+    uint32_t id = 0;
+    int pathBeat = -1, moveBeat = -1;
+    double pathMs = 0, moveMs = 0;
+  };
+  std::vector<One> units;
+  std::string what;
+  uint32_t fromTick = 0;
+  double t0 = 0;
+  bool active = false;
+
+  void Start(uint32_t tick, const std::vector<uint32_t>& ids, const std::string& w) {
+    units.clear();
+    for (uint32_t id : ids) units.push_back(One{id});
+    what = w;
+    fromTick = tick + 1;
+    t0 = prof::NowMs();
+    active = !units.empty();
+  }
+  static std::string Spread(std::vector<int> v) {
+    if (v.empty()) return "-";
+    std::sort(v.begin(), v.end());
+    auto at = [&](double p) { return v[std::min(v.size() - 1, static_cast<size_t>(p * static_cast<double>(v.size())))]; };
+    char b[64];
+    std::snprintf(b, sizeof b, "%d / %d / %d", at(0.5), at(0.95), v.back());
+    return b;
+  }
+  void Beat(Sim& sim) {
+    if (!active) return;
+    const double now = prof::NowMs();
+    const int beat = static_cast<int>(sim.tick() - fromTick) + 1;  // 1: the first beat after the order
+    size_t settled = 0, alive = 0;
+    for (One& o : units) {
+      Entity* e = sim.FindEntityById(o.id);
+      const Unit* u = e && e->kind == Entity::Kind::Unit ? static_cast<const Unit*>(e) : nullptr;
+      if (!u || u->dead || u->destroyQueued) {
+        ++settled;  // (gone: not waited for)
+        continue;
+      }
+      ++alive;
+      const LandNav* n = u->motion.nav.get();
+      // (a path: the search delivered and followed (states 4 and 5, landnav.cpp OnPath), or a formation slot to follow
+      // (state 6); state 3 is a search still waiting in the army's queue)
+      const bool path = n && !n->path.empty() && n->state >= 4;
+      const Vec3& d = u->motion.lastMove;
+      const bool moving = d.x * d.x + d.z * d.z > 1e-6f;
+      if (path && o.pathBeat < 0) o.pathBeat = beat, o.pathMs = now - t0;
+      if (moving && o.moveBeat < 0) o.moveBeat = beat, o.moveMs = now - t0;
+      if (o.pathBeat >= 0 && o.moveBeat >= 0) ++settled;
+    }
+    if (settled < units.size() && beat < 600) return;
+    std::vector<int> pb, mb;
+    int noPath = 0, noMove = 0, lastPath = 0, lastMove = 0;
+    double lastPathMs = 0, lastMoveMs = 0;
+    for (const One& o : units) {
+      if (o.pathBeat >= 0) pb.push_back(o.pathBeat), lastPath = std::max(lastPath, o.pathBeat), lastPathMs = std::max(lastPathMs, o.pathMs);
+      else ++noPath;
+      if (o.moveBeat >= 0) mb.push_back(o.moveBeat), lastMove = std::max(lastMove, o.moveBeat), lastMoveMs = std::max(lastMoveMs, o.moveMs);
+      else ++noMove;
+    }
+    Logf(LogLevel::Info,
+         "profile latency %s: %zu units (%zu alive at the end): every one with a path by beat %d (%.1f ms), every one "
+         "moving by beat %d (%.1f ms); per unit, the beat of its path p50 / p95 / last %s, of its first move %s; "
+         "without a path %d, never moved %d (beat 1 = the first after the order; ms = the beats' compute since the order)",
+         what.c_str(), units.size(), alive, lastPath, lastPathMs, lastMove, lastMoveMs, Spread(pb).c_str(),
+         Spread(mb).c_str(), noPath, noMove);
+    active = false;
+  }
+};
+OrderLatency g_latency;
 }  // namespace
 
 // Order (Sim::AdvanceBeat 0x749f40, engine-ref beat_order.md): the tick count, then per army the
@@ -2298,6 +2374,7 @@ void Sim::Tick() {
   frozen = endGame;    // Sync copies sim+0x8dc to sim+0x8dd
   g_prof.Lap(PhaseTimer::kDestroySync);
   g_prof.EndTick(tick_);
+  g_latency.Beat(*this);  // (MOHO64_PROFILE only: active after ProfileTrackOrder)
   g_prof.Report(tick_);
   static const bool stats = getenv("MOHO64_STATS") != nullptr;
   if (stats && tick_ % 600 == 0) {  // a quick health line per game minute
@@ -2314,6 +2391,10 @@ void Sim::Tick() {
     Logf(LogLevel::Info, "moho64 stats tick %u: units %d (aircraft %d, flying %d, dying %d), created %d, projectiles %zu", tick_,
          n, air, flying, dead, g_unitsCreated, projectiles.size());
   }
+}
+
+void Sim::ProfileTrackOrder(const std::vector<uint32_t>& ids, const std::string& what) {
+  if (prof::On()) g_latency.Start(tick_, ids, what);
 }
 
 // EntityDB::DoReserveId 0x684480: the lowest free serial, else a new one

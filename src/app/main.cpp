@@ -490,6 +490,7 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
   }
   CommandWriter writer(0);
   std::map<std::string, int> ordersUnhandled;
+  std::vector<std::pair<std::vector<uint32_t>, std::string>> tracked;  // (issuegroup under MOHO64_PROFILE)
   auto giveOrders = [&] {
     auto range = orders.equal_range(static_cast<uint32_t>(done + paused));
     for (auto it = range.first; it != range.second; ++it) {
@@ -511,6 +512,30 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
       else if (!std::strcmp(what, "focus")) {  // "<tick> focus <army, 1-based | -1>": the interface's SetFocusArmy
         int army = 0;
         if (std::sscanf(text, "%*s %d", &army) == 1) sim.RequestFocusArmy(army == -1 ? -1 : army - 1);
+      }
+      else if (!std::strcmp(what, "issuegroup")) {
+        // "<tick> issuegroup <type> <army, 1-based> <blueprint | *> <x> <y> <z> [queue]": one order to every unit of the
+        // army (of that blueprint) that stands finished, in id order, as a player's selection of them would give it
+        // (docs/benchmarks.md B8; under MOHO64_PROFILE its latency is logged, Sim::ProfileTrackOrder)
+        char bp[64] = "";
+        int army = 0;
+        if (std::sscanf(text, "%*s %d %d %63s %f %f %f %31s", &type, &army, bp, &x, &y, &z, tail) < 6) continue;
+        std::vector<uint32_t> units;
+        for (const Unit* u : sim.units())
+          if (u->army && u->army->index == army && !u->dead && !u->destroyQueued && !u->beingBuilt && u->blueprint &&
+              (!std::strcmp(bp, "*") || !strcasecmp(bp, u->blueprint->id.c_str())))
+            units.push_back(u->id);
+        std::sort(units.begin(), units.end());
+        StreamIssueData d;
+        d.type = type;
+        d.target.type = 2;
+        d.target.pos = {x, y, z};
+        uint32_t id = writer.IssueCommand(units, d, std::strcmp(tail, "queue") != 0);
+        Logf(LogLevel::Info, "orders: tick %u: command %#x type %d for %zu unit(s) of army %d", sim.tick(), id, type,
+             units.size(), army);
+        char w[96];
+        std::snprintf(w, sizeof w, "type %d, %zu units of army %d (%s)", type, units.size(), army, bp);
+        tracked.emplace_back(std::move(units), w);
       }
       else if (!std::strcmp(what, "issue")) {
         // (an entity target: "<tick> issue <type> <unit ids> @<entity id> [queue]")
@@ -536,6 +561,8 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
       }
     }
     if (!writer.empty() && !ApplyCommands(sim, writer.Take(), &ordersUnhandled)) Logf(LogLevel::Error, "orders: a message was malformed");
+    for (auto& [ids, w] : tracked) sim.ProfileTrackOrder(ids, w);
+    tracked.clear();
   };
   int hostFocus = sim.focusArmy;  // the host's own copy, as the interface keeps one
   auto takeSync = [&] {

@@ -396,6 +396,11 @@ class Sim {
   const std::map<uint32_t, Entity*>& entities() const { return entities_; }
   // Live units of all armies, by entity id (kept up to date on creation and destruction).
   const std::vector<Unit*>& units() const { return units_; }
+  // MOHO64_PROFILE: the order latency of docs/benchmarks.md B8. From the next beat on, each beat's end looks at these
+  // units until every one has a path and moves (or 600 beats have passed), then logs how many beats and ms that took
+  // (sim.cpp OrderLatency). A host calls it right after it gave them one order (src/app/main.cpp, the --orders verb
+  // issuegroup). It only reads the units.
+  void ProfileTrackOrder(const std::vector<uint32_t>& ids, const std::string& what);
   // The command stage (0x958) runs the units' command threads oldest first; a thread suspended on a
   // move and resumed by its navigator is re-linked at the stage's new end (beat_order.md 2.6).
   const std::vector<Unit*>& CommandOrder();
