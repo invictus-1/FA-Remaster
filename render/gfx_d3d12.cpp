@@ -39,8 +39,10 @@
 #include <thread>
 #include <unordered_map>
 
+#include "gfx_d3d12_pipelines.h"  // [hitches]
 #include "gfx_latency.h"
 #include "gfx_pacing.h"
+#include "hitch_log.h"  // [hitches]
 
 namespace render::gfx {
 
@@ -439,6 +441,8 @@ class D3D12Device final : public Device {
   int width_ = 0, height_ = 0;
   bool vsync_ = true, tearing_ = false, inFrame_ = false;
   bool dxil_ = false;  // shaders compiled by DXC (CreatePipeline)
+  double driverMs_ = 0;  // [hitches] the last MakePipeline's (MakeCompute's) time in the driver, and whether it was kept
+  bool driverKept_ = false;
   std::string adapterName_;
   std::string shaderCache_;  // the folder compiled shaders are kept in (empty: none)
   bool batching_ = false;    // pipelines asked for are made at EndPipelineBatch
@@ -451,6 +455,7 @@ class D3D12Device final : public Device {
   Com<IDXGIFactory4> factory_;
   Com<IDXGIAdapter3> adapter3_;  // (what the system counts of the card's memory this program uses)
   Com<ID3D12Device> device_;
+  D3D12PipelineStore pipelineStore_;  // [hitches] the driver's pipelines kept from run to run (gfx_d3d12_pipelines.h)
   Com<ID3D12InfoQueue> infoQueue_;
   Com<ID3D12CommandQueue> queue_;
   Com<IDXGISwapChain3> swapChain_;
@@ -597,6 +602,7 @@ class D3D12Device final : public Device {
 D3D12Device::~D3D12Device() {
   if (generating_) StopPresenter();
   if (queue_ && fence_) WaitIdle();
+  pipelineStore_.Save();  // [hitches] (the pipelines made since the map opened, for the next run)
   if (measureLatency) {
     latencyRecord_.Print(latency_ ? "Direct3D 12 (low latency)" : "Direct3D 12", vsync_ ? grid_.Period() * Interval() : 0, grid_.Period());
     fprintf(stderr, "render: Direct3D 12: the frame statistics asked for %ld times, not given %ld\n", statsAsked_, statsMissing_);
@@ -838,6 +844,9 @@ bool D3D12Device::Init(const DeviceDesc& desc, std::string* error) {
   if (FAILED(hr)) return fail("D3D12SerializeRootSignature", hr);
   hr = device_->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(), IID_PPV_ARGS(rootSignature_.Put()));
   if (FAILED(hr)) return fail("CreateRootSignature", hr);
+  // [hitches] (beside the shaders; not under the validation layer, --debug, where a pipeline not kept yet would be
+  // reported as an error by the library's "not found" answer)
+  pipelineStore_.Open(device_.Get(), desc.debug ? std::string() : shaderCache_, blob->GetBufferPointer(), blob->GetBufferSize());
 
   if (!CreateTargets()) return fail("creating the back and depth buffers", E_FAIL);
   return true;
@@ -1618,9 +1627,11 @@ Texture D3D12Device::CreateTexture(const TextureDesc& desc) {
   rd.Format = format;
   rd.SampleDesc.Count = 1;
   D3D12_HEAP_PROPERTIES hp = HeapProps(D3D12_HEAP_TYPE_DEFAULT);
+  const auto t0 = std::chrono::steady_clock::now();  // [hitches] (its parts' times, for the hitch log)
   HRESULT hr = device_->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
                                                 IID_PPV_ARGS(rec.resource.Put()));
   if (FAILED(hr)) return Complain("creating a texture", hr), Texture{};
+  const auto t1 = std::chrono::steady_clock::now();
 
   const UINT subresources = static_cast<UINT>(desc.mips * desc.layers);
   std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> layouts(subresources);
@@ -1632,6 +1643,7 @@ Texture D3D12Device::CreateTexture(const TextureDesc& desc) {
   ID3D12Resource* staging = nullptr;
   uint64_t stagedAt = 0;
   if (!BeginUpload() || !Stage(total, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT, &mapped, &staging, &stagedAt)) return Complain("uploading a texture", E_FAIL), Texture{};
+  const auto t2 = std::chrono::steady_clock::now();
   for (D3D12_PLACED_SUBRESOURCE_FOOTPRINT& l : layouts) l.Offset += stagedAt;  // (where the page has room)
   mapped -= stagedAt;
 
@@ -1662,6 +1674,15 @@ Texture D3D12Device::CreateTexture(const TextureDesc& desc) {
     fprintf(stderr, "render: a %dx%d texture with %d mips has too little data (%zu bytes)\n", desc.width, desc.height, desc.mips,
             desc.dataSize);
     return {};
+  }
+  if (HitchLog::on) {  // [hitches] (a texture that took long: its parts)
+    const auto t3 = std::chrono::steady_clock::now();
+    auto ms = [](auto x, auto y) { return std::chrono::duration<double, std::milli>(y - x).count(); };
+    if (ms(t0, t3) > 2) {
+      char text[160];
+      snprintf(text, sizeof text, "(the texture's resource %.1f ms, its upload room %.1f ms, its copy %.1f ms)", ms(t0, t1), ms(t1, t2), ms(t2, t3));
+      HitchLog::Add(text, ms(t0, t3), 9);
+    }
   }
   for (UINT sub = 0; sub < subresources; ++sub) {
     D3D12_TEXTURE_COPY_LOCATION to = {}, from = {};
@@ -2067,7 +2088,11 @@ bool D3D12Device::MakePipeline(const PipelineDesc& desc, PipelineRec* out, std::
   PipelineRec rec;
   rec.used = true;
   rec.topology = desc.topology == Topology::Lines ? D3D_PRIMITIVE_TOPOLOGY_LINELIST : D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-  HRESULT hr = device_->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(rec.state.Put()));
+  const auto driverStart = std::chrono::steady_clock::now();  // [hitches]
+  bool kept = false;  // [hitches] (made by the driver in an earlier run: gfx_d3d12_pipelines.h)
+  HRESULT hr = pipelineStore_.Graphics(device_.Get(), pd, rec.state.Put(), &kept);
+  driverMs_ = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - driverStart).count();
+  driverKept_ = kept;
   if (FAILED(hr)) {
     char buf[160];
     snprintf(buf, sizeof buf, "%s: CreateGraphicsPipelineState failed (0x%08lx)", desc.name, static_cast<unsigned long>(hr));
@@ -2101,7 +2126,11 @@ bool D3D12Device::MakeCompute(const ComputeDesc& desc, PipelineRec* out, std::st
   cd.CS = {cs->GetBufferPointer(), cs->GetBufferSize()};
   PipelineRec rec;
   rec.used = rec.compute = true;
-  HRESULT hr = device_->CreateComputePipelineState(&cd, IID_PPV_ARGS(rec.state.Put()));
+  bool kept = false;  // [hitches] (as MakePipeline's)
+  const auto driverStart = std::chrono::steady_clock::now();
+  HRESULT hr = pipelineStore_.Compute(device_.Get(), cd, rec.state.Put(), &kept);
+  driverMs_ = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - driverStart).count();
+  driverKept_ = kept;
   if (FAILED(hr)) {
     char buf[160];
     snprintf(buf, sizeof buf, "%s: CreateComputePipelineState failed (0x%08lx)", desc.name, static_cast<unsigned long>(hr));
@@ -2133,7 +2162,10 @@ Pipeline D3D12Device::CreatePipeline(const PipelineDesc& desc, std::string* erro
     rec.pending = PendingPipeline::Of(desc);
     return Keep(std::move(rec));
   }
+  HitchLog::Scope made("pipeline", desc.name);  // [hitches] (one made outside a batch: while the game runs)
+  driverMs_ = 0;
   if (!MakePipeline(desc, &rec, error)) return {};
+  if (HitchLog::on) made.Append(" (the driver " + std::to_string(static_cast<int>(driverMs_ + 0.5)) + " ms" + (driverKept_ ? ", kept" : "") + ")");
   return Keep(std::move(rec));
 }
 
@@ -2144,7 +2176,10 @@ Pipeline D3D12Device::CreateCompute(const ComputeDesc& desc, std::string* error)
     rec.pending = PendingPipeline::Of(desc);
     return Keep(std::move(rec));
   }
+  HitchLog::Scope made("compute pipeline", desc.name);  // [hitches]
+  driverMs_ = 0;
   if (!MakeCompute(desc, &rec, error)) return {};
+  if (HitchLog::on) made.Append(" (the driver " + std::to_string(static_cast<int>(driverMs_ + 0.5)) + " ms" + (driverKept_ ? ", kept" : "") + ")");
   return Keep(std::move(rec));
 }
 
@@ -2175,6 +2210,7 @@ bool D3D12Device::EndPipelineBatch(std::string* error) {
     std::string why;
     if (pipelines_[i].pending && !Realize(i, &why) && batchError_.empty()) batchError_ = why;
   }
+  pipelineStore_.Save();  // [hitches] (what the driver made of them kept for the next run, now: a game may end any way)
   if (batchError_.empty()) return true;
   if (error) *error = batchError_;
   return false;

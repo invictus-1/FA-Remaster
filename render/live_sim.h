@@ -51,6 +51,16 @@ class LiveSim {
     // map's middle, by the game's own callback as the interface's ping.lua sends it (SimCallback SpawnPing), the kinds
     // in turn (alert, move, attack, and a nuke's mesh). 0 = never.
     uint32_t pingAt = 0;
+    // [hitches] For tests of a new game: at its beat `at` army 1 is given a `from` (the cheats' CreateUnit, as the
+    // console's CreateUnit makes one) standing at x, z, and `after` beats later it is ordered to upgrade to `to` (by the
+    // simulation's IssueUpgrade, as an AI's script orders it). Each upgrade on its own.
+    struct Upgrade {
+      uint32_t at = 0, after = 30;
+      float x = 0, z = 0;
+      std::string from = "ueb0101", to = "ueb0201";
+      bool seen = false;  // (the upgrade stands there)
+    };
+    std::vector<Upgrade> upgrades;
   };
   enum class State { Loading, Running, Ended, Failed };
 
@@ -104,6 +114,7 @@ class LiveSim {
   void Enhance(int army, const std::string& enhancement);
   void Pause(int army);
   void Ping();  // [pings] (Setup::pingAt)
+  void UpgradeTest(uint32_t tick, Setup::Upgrade& test);  // [hitches] (Setup::upgrades)
   bool Load(std::string* error);
 
   Setup setup_;

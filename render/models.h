@@ -222,6 +222,16 @@ class ModelCache {
   void Prefetch(const std::vector<std::string>& unitIds);
   // The same for blueprint files (a map's props: "/env/evergreen/props/rocks/rock01_prop.bp").
   void PrefetchBlueprints(const std::vector<std::string>& blueprintPaths);
+  // [hitches] The next tier made ahead: a unit kind that has just appeared (`unitId`) whose blueprint names what it
+  // upgrades to (General.UpgradesTo: a T1 factory's T2) has that model made before the upgrade asks for it, without a
+  // frame waiting for it: the blueprint and then the model's files read on the textures' own thread (FetchLater), its
+  // textures made one a frame, then the model itself (AheadStep, once a frame). Made so, the model is the one the upgrade
+  // would have made (the same files and steps), only earlier.
+  void ReadAheadUpgrade(const std::string& unitId);
+  // One step of that a frame (at most one texture or one model made); true when it made something.
+  bool AheadStep();
+  int madeAhead = 0;  // [hitches] (models made ahead so far)
+  bool readAhead = false;  // [hitches] (set by the world each frame: World::readAhead; each unit model made asks ReadAheadUpgrade)
   // Is there a remastered model or material for this unit (a --preview folder, the lab's LabVisuals mod)?
   bool Remastered(const std::string& blueprintId) const;
   // The model of any blueprint file with a Display.Mesh ("/env/evergreen/props/rocks/rock01_prop.bp"),
@@ -285,6 +295,19 @@ class ModelCache {
   void Build(Model* m, const std::string& what, const std::string& base, std::vector<LodSource> sources, bool original, bool merged,
              const std::string& faction = std::string(), bool effect = false, const std::string& stem = std::string());
   std::unordered_map<std::string, DisplayEntry> display_;  // by unit id, or by a prop's blueprint path
+  // [hitches] A unit's model's files (its levels' meshes and textures, the remastered ones too: Prefetch's list); whether
+  // that model is made already
+  std::vector<std::string> UnitFiles(const std::string& unitId);
+  bool UnitMade(const std::string& unitId);
+  struct Ahead {           // [hitches] (ReadAheadUpgrade)
+    std::string of, path;  // the unit kind that appeared, its blueprint file
+    std::string to;        // what it upgrades to (once its blueprint is read)
+    std::vector<std::string> files;
+    int stage = 0;  // 0 its blueprint being read, 1 the next tier's files being read, 2 their textures made, 3 the model
+  };
+  std::vector<Ahead> ahead_;
+  std::vector<std::string> aheadSeen_;  // (the kinds asked about, each once)
+  bool makingAhead_ = false;
   gfx::Device* device_;
   const moho::Vfs* vfs_;
   TextureCache* textures_;

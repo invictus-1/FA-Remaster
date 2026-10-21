@@ -1,5 +1,6 @@
 // Textures by virtual path, each loaded once from the game's files.
 #pragma once
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -17,6 +18,7 @@ namespace render {
 class TextureCache {
  public:
   TextureCache(gfx::Device* device, const moho::Vfs* vfs);
+  ~TextureCache();  // [hitches] (stops FetchLater's thread)
 
   // The texture at a virtual path ("/env/evergreen2/layers/evgrass005_albedo.dds"). A missing or
   // unreadable file is reported once and gives `fallback`.
@@ -53,6 +55,15 @@ class TextureCache {
   std::optional<std::string> ReadFile(const std::string& path);
   // Lets go of what was read ahead and not taken.
   void DropFetched() { fetched_.clear(); }
+  // [hitches] Files read ahead without waiting: on a thread of their own, one after another, for what will be wanted in a
+  // while (the next tier of a structure that has appeared, the material of a remastered pad laid somewhere), so that its
+  // making later takes no reading. ReadFile takes them (waiting for the one being read, reading itself one still queued);
+  // what is here already as a texture, kept or asked for is left out. Arrived: 1 a file's bytes are here (or it is made
+  // already), 2 they were here and something has taken them since (a ReadFile of another's: read it again to have it),
+  // -1 it cannot be read, 0 still to come (or never asked for).
+  void FetchLater(const std::vector<std::string>& paths);
+  int Arrived(const std::string& path);
+  bool Made(const std::string& path) const;
 
   gfx::Texture White() const { return white_; }            // (1, 1, 1, 1)
   gfx::Texture Black() const { return black_; }            // (0, 0, 0, 0)
@@ -65,6 +76,8 @@ class TextureCache {
   const moho::Vfs* vfs_;
   std::unordered_map<std::string, gfx::Texture> cache_;
   std::unordered_map<std::string, std::string> fetched_;  // read ahead, not yet taken
+  struct Later;                   // [hitches] (FetchLater's queue and thread: textures.cpp)
+  std::unique_ptr<Later> later_;  // (made the first time it is asked for)
   gfx::Texture white_, black_, flatNormal_, greyCube_;
 };
 

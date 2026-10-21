@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "hitch_log.h"  // [hitches]
 #include "json.h"
 #include "lighting.h"
 #include "ray_scene.h"
@@ -397,6 +398,7 @@ bool Tarmacs::Load(Material& m) {
   if (m.failed) return false;
   const std::string tier = ultra && m.has8k ? "8k" : "4k";
   if (m.tier == tier) return true;
+  HitchLog::Scope made("remastered tarmac material", m.name + " " + tier);  // [hitches]
   const auto start = std::chrono::steady_clock::now();
   textures_->Fetch({m.base + "albedo_" + tier + ".dds", m.base + "normal_" + tier + ".dds", m.base + "arh_" + tier + ".dds"});  // (the three read side by side)
   m.albedo = textures_->Get(m.base + "albedo_" + tier + ".dds");
@@ -411,6 +413,36 @@ bool Tarmacs::Load(Material& m) {
   printf("render: remastered tarmacs: %s read (%s) in %.0f ms\n", m.name.c_str(), tier.c_str(),
          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
   return true;
+}
+
+// [hitches] (Want, Ahead: tarmacs.h)
+void Tarmacs::Want(int material) {
+  if (!readAhead || material < 0 || material >= static_cast<int>(materials_.size())) return;
+  Material& m = materials_[static_cast<size_t>(material)];
+  const std::string tier = TierOf(m);
+  if (m.failed || m.tier == tier || m.aheadTier == tier) return;
+  m.aheadTier = tier;
+  textures_->FetchLater({m.base + "albedo_" + tier + ".dds", m.base + "normal_" + tier + ".dds", m.base + "arh_" + tier + ".dds"});
+}
+
+void Tarmacs::Ahead() {
+  if (!readAhead) return;
+  if (!made_ && ReadTable()) Pipelines();  // (the first frame the pads are on: their pipelines)
+  for (Material& m : materials_) {
+    if (m.failed || m.aheadTier.empty() || m.tier == m.aheadTier || m.aheadTier != TierOf(m)) continue;
+    const std::string files[3] = {m.base + "albedo_" + m.aheadTier + ".dds", m.base + "normal_" + m.aheadTier + ".dds", m.base + "arh_" + m.aheadTier + ".dds"};
+    bool read = true;
+    for (const std::string& f : files) read = read && textures_->Arrived(f) != 0;
+    if (!read) continue;
+    for (const std::string& f : files)  // (one picture a frame, as Load gets it)
+      if (!textures_->Made(f) && textures_->Arrived(f) == 1) {
+        HitchLog::Scope made("remastered tarmac picture made ahead:", f);
+        textures_->Get(f, f == files[1] ? textures_->FlatNormal() : gfx::Texture{});
+        return;
+      }
+    Load(m);  // (its pictures made already: Load takes them as they are)
+    return;
+  }
 }
 
 bool Tarmacs::Pipelines() {

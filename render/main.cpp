@@ -67,6 +67,16 @@
 //           time for each (its own clock) and the processor's for preparing, recording and handing over;
 //           --timings-from n: the first n frames not counted (2: what they load; more for what builds up over time,
 //           movement dust)
+// --hitch-log [ms]  [hitches] every frame that took longer than ms from the last one's end (25 unless given), or loaded or
+//           made something for the first time, printed with its parts (the processor's, CpuTimes; the card's last known)
+//           and what was loaded or made in it, each with its time (hitch_log.h: models, textures, pipelines made outside
+//           the map's opening, a remastered tarmac's material, a beat of the simulation over 20 ms)
+// --no-read-ahead  [hitches] nothing a game will want later is made ahead (World::readAhead: the next tiers' models, the
+//           remastered pads' materials, the pipelines first wanted in a game), as before: each made at its first use
+// --upgrade-test <beat>,<x>,<z>[,<after>[,<from>,<to>]]  [hitches] with --session: at that beat army 1 is given a UEF land
+//           factory (ueb0101, or <from>) at x, z by the cheats' CreateUnit, and `after` beats later (30) it is ordered to
+//           upgrade to its T2 (ueb0201, or <to>) by the simulation's IssueUpgrade (to measure what the upgrade costs); may be
+//           given several times
 // --noicons, --icon-scale <n>  strategic icons: off, or n screen pixels for each of a symbol's (key I switches them)
 // --ao      ambient occlusion in the modern look: 0 off to 1 full (key O switches it)
 // --msaa    anti-aliasing: samples per pixel of the scene, 1 (off), 2, 4 (the default) or 8
@@ -485,6 +495,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <string>
 #include <thread>
@@ -493,6 +504,7 @@
 #include "ambient_occlusion.h"
 #include "bp_reader.h"
 #include "cpu_times.h"
+#include "hitch_log.h"  // [hitches]
 #include "fx_stand.h"
 #include "camera.h"
 #include "cinecam.h"
@@ -634,6 +646,7 @@ struct Options {
   bool rainGround = false;              // [rain ground] --rain-ground
   float parallaxTune[3] = {1, 20, 1};   // [parallax] --ground-parallax-tune
   bool remasteredTarmacs = false;       // [tarmac] --remastered-tarmacs
+  bool readAhead = true;                // [hitches] --no-read-ahead
   float tarmacRelief = -1;              // [tarmac] --tarmac-relief
   bool streamWater = false;             // [stream] --stream-water
   float streamTune[3] = {-1, -1, -1};   // [stream] --stream-water-tune (below 0: the default)
@@ -736,6 +749,8 @@ struct Options {
   int enhanceAt = 0, enhanceArmy = 1;            // --enhance
   int pauseAt = 0;                               // --pause-at
   int pingAt = 0;                                // [pings] --ping
+  double hitchLog = -1;                          // [hitches] --hitch-log (below 0: off)
+  std::vector<LiveSim::Setup::Upgrade> upgrades;  // [hitches] --upgrade-test
   bool minimapMeshes = false;                    // [pings] --minimap-meshes
   bool minimapResources = true;                  // [minimap deposits] --no-minimap-resources
   bool rangeFill = false;                        // [range fill] --range-fill
@@ -798,6 +813,10 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--plain-ground") o->richGround = false;
     else if (a == "--map-ends") o->worldBeyond = false;
     else if (a == "--timings") o->timings = true;
+    else if (a == "--hitch-log") {  // [hitches] [ms]
+      o->hitchLog = 25;
+      if (i + 1 < argc && (std::isdigit(static_cast<unsigned char>(argv[i + 1][0])) || argv[i + 1][0] == '.')) o->hitchLog = atof(argv[++i]);
+    }
     else if (a == "--fx-compare") o->fx.compare = true;
     else if (a == "--vulkan") o->vulkan = true;
     else if (a == "--fxc") o->fxc = true;
@@ -854,6 +873,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--no-mud-ruts") o->noMudRuts = true;  // [mud ruts]
     else if (a == "--ground-parallax") o->groundParallax = true;  // [parallax]
     else if (a == "--remastered-tarmacs") o->remasteredTarmacs = true;  // [tarmac]
+    else if (a == "--no-read-ahead") o->readAhead = false;  // [hitches]
     else if (a == "--mud-mask") o->mudMask = true;  // [ground mud]
     else if (a == "--rain-ground") o->rainGround = true;  // [rain ground]
     else if (a == "--plants-react") o->plantsReact = true;  // [plants]
@@ -1188,6 +1208,16 @@ bool ParseOptions(int argc, char** argv, Options* o) {
       }
     }
     else if (a == "--ping") o->pingAt = atoi(v);  // [pings] <beat>: every army pings near its commander then (a new game)
+    else if (a == "--upgrade-test") {  // [hitches] <beat>,<x>,<z>[,<after>[,<from>,<to>]]
+      char from[32] = "", to[32] = "";
+      int at = 0, after = 30;
+      LiveSim::Setup::Upgrade u;
+      if (sscanf(v, "%d,%f,%f,%d,%31[^,],%31s", &at, &u.x, &u.z, &after, from, to) < 3 || at <= 0) return false;
+      u.at = static_cast<uint32_t>(at);
+      u.after = static_cast<uint32_t>(std::max(after, 1));
+      if (from[0] && to[0]) u.from = from, u.to = to;
+      o->upgrades.push_back(u);
+    }
     else if (a == "--pause-at") o->pauseAt = atoi(v);  // <beat>: the commander of --enhance's army is paused then
     else if (a == "--enhance") {  // <beat>,<army>,<enhancement>: that army's commander is ordered to build it then
       char name[128] = "";
@@ -1437,6 +1467,7 @@ int main(int argc, char** argv) {
     setup.enhancement = opt.enhancement;
     setup.pauseAt = static_cast<uint32_t>(std::max(opt.pauseAt, 0));
     setup.pingAt = static_cast<uint32_t>(std::max(opt.pingAt, 0));  // [pings]
+    setup.upgrades = opt.upgrades;  // [hitches] --upgrade-test
     live.SetFocusArmy(opt.focus);
     picture.SetVulkan(opt.vulkan);
     picture.SetDebug(opt.debug);  // (photomode: the validation layer for the pixel interface's device too)
@@ -1609,6 +1640,7 @@ int main(int argc, char** argv) {
   world.terrain.parallaxReach = std::max(opt.parallaxTune[1], 1.0f);
   world.terrain.parallaxShadows = std::clamp(opt.parallaxTune[2], 0.0f, 1.0f);
   world.remasteredTarmacs = opt.remasteredTarmacs;  // [tarmac]
+  world.readAhead = opt.readAhead;  // [hitches]
   if (opt.tarmacRelief >= 0) world.decals.tarmacs.relief = opt.tarmacRelief;
   world.streamWater = opt.streamWater;  // [stream]
   if (opt.streamTune[0] >= 0) world.streams.depth = opt.streamTune[0];
@@ -2545,7 +2577,10 @@ int main(int argc, char** argv) {
   double titleTime = 0;
   int titleFrames = 0, frameCount = 0, shotNumber = 0;
   auto countedFrom = start;
-  CpuTimes::on = opt.timings;
+  CpuTimes::on = opt.timings || opt.hitchLog >= 0;  // ([hitches] the hitch log prints a long frame's parts)
+  HitchLog::mainThread = std::this_thread::get_id();
+  HitchLog::on = opt.hitchLog >= 0;  // [hitches] (from the first frame: what the map's opening made is not noted)
+  auto hitchLast = std::chrono::steady_clock::now();  // [hitches] (the last frame's end)
   int ripplesMade = 0;  // (--ripple-test)
   int noisesMade = 0;   // (--wildlife-noise)
   // (--wildlife-verbose: the flocks nearest the camera's point, and what they do)
@@ -3580,6 +3615,40 @@ int main(int argc, char** argv) {
       }
       for (const auto& part : CpuTimes::parts) timing.Add(std::string("cpu part: ") + part.first, part.second);
       ++timing.frames;
+    }
+    if (opt.hitchLog >= 0) {  // [hitches] --hitch-log: a frame that ran long, or loaded or made something
+      const auto end = std::chrono::steady_clock::now();
+      const double since = std::chrono::duration<double, std::milli>(end - hitchLast).count();
+      hitchLast = end;
+      std::vector<HitchLog::Note> notes = HitchLog::Take();
+      if (since > opt.hitchLog || !notes.empty()) {
+        std::vector<std::pair<const char*, double>> stages;
+        device->TakeTimes(&stages);
+        double gpu = 0;
+        for (const auto& s : stages) gpu += s.second;
+        printf("render: hitch-log: frame %d%s (beat %.1f, camera %.0f away): %.1f ms since the last; this frame's processor %.1f ms (%.1f recording the "
+               "drawing), the card %.1f ms (a frame or two before)\n",
+               frameCount, liveBusy ? " (running ahead)" : "", playTick, camera.distance, since,
+               std::chrono::duration<double, std::milli>(end - frameStart).count(), std::chrono::duration<double, std::milli>(renderEnd - renderStart).count(), gpu);
+        if (since > opt.hitchLog) {
+          for (const auto& p : CpuTimes::parts)
+            if (p.second >= 1) printf("render: hitch-log:   part %-50s %7.1f ms\n", p.first, p.second);
+          for (const auto& s : stages)
+            if (s.second >= 1) printf("render: hitch-log:   card %-50s %7.1f ms\n", s.first, s.second);
+        }
+        // (the notes in their order, a note's parts indented under it before it; a frame of very many: the longest)
+        double floor = -1;
+        if (notes.size() > 40) {
+          std::vector<double> times;
+          for (const HitchLog::Note& n : notes) times.push_back(n.ms);
+          std::nth_element(times.begin(), times.begin() + 39, times.end(), std::greater<double>());
+          floor = times[39];
+          printf("render: hitch-log:   (%zu notes, the 40 longest)\n", notes.size());
+        }
+        for (const HitchLog::Note& n : notes)
+          if (n.ms >= floor)
+            printf("render: hitch-log:   %*s%s %s: %.1f ms\n", 2 * n.depth, "", n.elsewhere ? "(elsewhere)" : "+", n.what.c_str(), n.ms);
+      }
     }
     CpuTimes::parts.clear();
     if (shoot && !capture.empty()) {

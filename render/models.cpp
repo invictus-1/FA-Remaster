@@ -12,6 +12,7 @@
 #include "bp_reader.h"
 #include "effect_files.h"
 #include "core/vfs.h"
+#include "hitch_log.h"  // [hitches]
 #include "unit_wear.h"
 
 namespace render {
@@ -308,11 +309,15 @@ void ModelCache::SetLook(const BlueprintLook& look) {
 
 const Model* ModelCache::Unit(const std::string& blueprintId, bool original) {
   std::string id = Lower(blueprintId);
+  const size_t before = models_.size();  // [hitches] (a model made now: what its kind upgrades to read ahead)
+  const Model* m = nullptr;
   if (!original) {
     auto listed = display_.find(id);
-    if (listed != display_.end()) return FromDisplay(id, id, listed->second, std::string());
+    if (listed != display_.end()) m = FromDisplay(id, id, listed->second, std::string());
   }
-  return Blueprint(UnitBlueprintPath(id), original);
+  if (!m) m = Blueprint(UnitBlueprintPath(id), original);
+  if (readAhead && !original && !makingAhead_ && models_.size() != before) ReadAheadUpgrade(id);  // [hitches]
+  return m;
 }
 
 const std::string& ModelCache::UnitBlueprintPath(const std::string& blueprintId) {
@@ -678,35 +683,124 @@ bool ModelCache::ReadSources(const std::string& path, std::vector<LodSource>* so
 void ModelCache::Prefetch(const std::vector<std::string>& unitIds) {
   std::vector<std::string> files;
   for (const std::string& unitId : unitIds) {
-    const std::string id = Lower(unitId);
-    std::vector<LodSource> sources;
-    auto listed = display_.find(id);
-    if (listed != display_.end()) {
-      if (models_.count("display:" + id)) continue;
-      sources = listed->second.lods;
-    } else {
-      const std::string& path = UnitBlueprintPath(id);
-      if (models_.count(path)) continue;
-      float scale = 1;
-      std::string error;
-      if (!ReadSources(path, &sources, &scale, &error)) continue;
-    }
-    for (const LodSource& s : sources)
-      for (const std::string* f : {&s.mesh, &s.albedo, &s.normals, &s.specular, &s.secondary})
-        if (!f->empty()) files.push_back(*f);
-    // (a remastered one's: its own meshes and textures, as Build looks for them; a shared mesh's
-    // remaster is found by Build itself)
-    const std::string preview = "/preview/" + id + "/";
-    if (vfs_->Exists(preview + id + "_lod0.scm")) {
-      for (int i = 0; i < 8 && vfs_->Exists(preview + id + "_lod" + std::to_string(i) + ".scm"); ++i)
-        files.push_back(preview + id + "_lod" + std::to_string(i) + ".scm");
-      for (const std::string& folder : {preview, preview + "textures/"})
-        for (const char* kind : {"albedo", "normal", "spec", "ao"}) files.push_back(folder + id + "_lab_" + kind + ".dds");
-    } else {
-      for (const char* kind : {"albedo", "normal", "spec", "ao"}) files.push_back("/mods/labvisuals/textures/" + id + "/" + id + "_lab_" + kind + ".dds");
-    }
+    const std::vector<std::string> own = UnitFiles(unitId);  // [hitches] (the list, as before, in UnitFiles)
+    files.insert(files.end(), own.begin(), own.end());
   }
   textures_->Fetch(files);
+}
+
+// (Prefetch's list of one unit's files; none when its model is made already)
+std::vector<std::string> ModelCache::UnitFiles(const std::string& unitId) {
+  std::vector<std::string> files;
+  const std::string id = Lower(unitId);
+  std::vector<LodSource> sources;
+  auto listed = display_.find(id);
+  if (listed != display_.end()) {
+    if (models_.count("display:" + id)) return files;
+    sources = listed->second.lods;
+  } else {
+    const std::string& path = UnitBlueprintPath(id);
+    if (models_.count(path)) return files;
+    float scale = 1;
+    std::string error;
+    if (!ReadSources(path, &sources, &scale, &error)) return files;
+  }
+  for (const LodSource& s : sources)
+    for (const std::string* f : {&s.mesh, &s.albedo, &s.normals, &s.specular, &s.secondary})
+      if (!f->empty()) files.push_back(*f);
+  // (a remastered one's: its own meshes and textures, as Build looks for them; a shared mesh's
+  // remaster is found by Build itself)
+  const std::string preview = "/preview/" + id + "/";
+  if (vfs_->Exists(preview + id + "_lod0.scm")) {
+    for (int i = 0; i < 8 && vfs_->Exists(preview + id + "_lod" + std::to_string(i) + ".scm"); ++i)
+      files.push_back(preview + id + "_lod" + std::to_string(i) + ".scm");
+    for (const std::string& folder : {preview, preview + "textures/"})
+      for (const char* kind : {"albedo", "normal", "spec", "ao"}) files.push_back(folder + id + "_lab_" + kind + ".dds");
+  } else {
+    for (const char* kind : {"albedo", "normal", "spec", "ao"}) files.push_back("/mods/labvisuals/textures/" + id + "/" + id + "_lab_" + kind + ".dds");
+  }
+  return files;
+}
+
+bool ModelCache::UnitMade(const std::string& unitId) {
+  const std::string id = Lower(unitId);
+  return display_.count(id) ? models_.count("display:" + id) > 0 : models_.count(UnitBlueprintPath(id)) > 0;
+}
+
+// [hitches] (ReadAheadUpgrade: the kind's blueprint read on the textures' thread; AheadStep goes on from there)
+void ModelCache::ReadAheadUpgrade(const std::string& unitId) {
+  const std::string id = Lower(unitId);
+  if (id.empty() || std::find(aheadSeen_.begin(), aheadSeen_.end(), id) != aheadSeen_.end()) return;
+  aheadSeen_.push_back(id);
+  Ahead a;
+  a.of = id;
+  a.path = UnitBlueprintPath(id);
+  textures_->FetchLater({a.path});
+  ahead_.push_back(std::move(a));
+}
+
+bool ModelCache::AheadStep() {
+  for (size_t k = 0; k < ahead_.size();) {
+    Ahead& a = ahead_[k];
+    bool drop = false;
+    if (a.stage == 0) {  // its blueprint: what it upgrades to
+      const int arrived = textures_->Arrived(a.path);
+      if (arrived == 0) {
+        ++k;
+        continue;
+      }
+      // (2: another has taken the bytes read ahead - movement dust, deep tracks and the surf read unit blueprints too -
+      // so it is read again here, a small file)
+      std::optional<std::string> text = arrived > 0 ? textures_->ReadFile(a.path) : std::nullopt;
+      BpValue bp;
+      if (text && ReadBlueprintFile(*text, &bp)) a.to = Lower(bp["General"]["UpgradesTo"].StringOr(std::string()));
+      bool known = a.to.empty() || UnitMade(a.to);
+      for (size_t j = 0; j < ahead_.size() && !known; ++j) known = j != k && ahead_[j].to == a.to;
+      if (known) {
+        drop = true;
+      } else {
+        a.files = UnitFiles(a.to);
+        textures_->FetchLater(a.files);
+        a.stage = 1;
+      }
+      if (HitchLog::on) HitchLog::Add("read ahead: " + a.of + (a.to.empty() ? std::string(" upgrades to nothing") : " upgrades to " + a.to + (known ? std::string(" (made or asked for already)") : ", " + std::to_string(a.files.size()) + " files asked for")), 0);
+    }
+    if (a.stage >= 1 && UnitMade(a.to)) drop = true;  // (the upgrade came first: made as it was wanted)
+    if (!drop && a.stage == 1) {  // its files read
+      bool all = true;
+      for (const std::string& f : a.files) all = all && textures_->Arrived(f) != 0;
+      if (!all) {
+        ++k;
+        continue;
+      }
+      a.stage = 2;
+    }
+    if (!drop && a.stage == 2) {  // its textures made, one a step (those read: the ones Build will find)
+      for (const std::string& f : a.files)
+        if (f.size() > 4 && f.compare(f.size() - 4, 4, ".dds") == 0 && !textures_->Made(f) && textures_->Arrived(f) == 1) {
+          textures_->Get(f);
+          return true;
+        }
+      a.stage = 3;
+    }
+    if (!drop && a.stage == 3) {  // the model itself, as the upgrade would make it
+      HitchLog::Scope made("model made ahead,", a.to + " (the next tier of " + a.of + ")");
+      if (!UnitMade(a.to)) {
+        makingAhead_ = true;  // (its own next tier is asked about when it appears in the game, not now)
+        Unit(a.to);
+        makingAhead_ = false;
+        ++madeAhead;
+      }
+      ahead_.erase(ahead_.begin() + static_cast<std::ptrdiff_t>(k));
+      return true;
+    }
+    if (drop) {
+      ahead_.erase(ahead_.begin() + static_cast<std::ptrdiff_t>(k));
+      continue;
+    }
+    ++k;
+  }
+  return false;
 }
 
 void ModelCache::PrefetchBlueprints(const std::vector<std::string>& blueprintPaths) {
@@ -740,6 +834,7 @@ void ModelCache::PrefetchBlueprints(const std::vector<std::string>& blueprintPat
 // blueprints (mods' changes are in them already; every texture has a name, there or not).
 void ModelCache::Build(Model* m, const std::string& what, const std::string& base, std::vector<LodSource> sources, bool original, bool merged,
                        const std::string& faction, bool effect, const std::string& stem) {
+  HitchLog::Scope made("model", stem.empty() ? what : what + " (" + stem + ")");  // [hitches]
   // A remastered model being tried out (the viewer's --preview): its folder, mounted at
   // /preview/<id>, replaces the meshes, and its LabPBR textures (there, or in textures/) replace the
   // blueprint's for every level. It brings as many levels as it has files (<id>_lod0.scm, _lod1, ...),
@@ -913,6 +1008,7 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
                kind == "normalmappedglow" || kind == "effect" || kind == "explosion") {
       lod.teamMask = false;  // rocks and other scenery
     }
+    HitchLog::Scope meshNote("mesh", s.mesh);  // [hitches] (its reading and making, up to its textures)
     auto mesh = s.mesh == skeletonMesh ? skeletonFile : textures_->ReadFile(s.mesh);
     std::string error;
     // (a unit's, for battle scars while they are on: the finest level small enough, else the coarsest; unit_wear.h)
@@ -929,6 +1025,7 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
       if (i == 0) return;
       continue;
     }
+    meshNote.End();  // [hitches]
     // a texture that is not there is simply not used (many props have no normal or specular
     // texture); one a blueprint file names itself and that is missing gets reported
     auto texture = [&](std::string name, bool named, gfx::Texture fallback, bool* remastered = nullptr, std::string* used = nullptr) {

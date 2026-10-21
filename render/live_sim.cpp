@@ -1,8 +1,10 @@
 #include "live_sim.h"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -12,6 +14,7 @@
 #include "core/hostfs.h"
 #include "core/log.h"
 #include "core/vfs.h"
+#include "hitch_log.h"  // [hitches]
 #include "script/lua.hpp"
 #include "script/mount.h"
 #include "script/script_state.h"
@@ -230,6 +233,58 @@ void LiveSim::Pause(int army) {
 // army - 1, Type, Location, Lifetime = 6, Mesh}: SimPing.lua makes the script entity with "/meshes/game/ping_" .. Mesh 2
 // above Location), from the army's own command source; the kinds in turn. The place: 30 from the unit toward the map's
 // middle, on the ground or the water there (as the mouse's place in the world is given).
+// [hitches] Setup::upgrades: the structure made for army 1 at its beat, and ordered to upgrade `after` beats later.
+void LiveSim::UpgradeTest(uint32_t tick, Setup::Upgrade& test) {
+  Engine& e = *engine_;
+  if (e.session.header.armies.empty() || tick < test.at) return;
+  auto named = [](const std::string& a, const std::string& b) {
+    return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) { return std::tolower(static_cast<unsigned char>(x)) == std::tolower(static_cast<unsigned char>(y)); });
+  };
+  moho::CommandWriter writer(e.session.header.armies[0].source);
+  if (tick == test.at) {
+    writer.CreateUnit(0, test.from, test.x, test.z, 0);
+    moho::ApplyCommands(*e.sim, writer.Take());
+    printf("render: --upgrade-test: a %s made for army 1 at %.1f, %.1f at beat %u\n", test.from.c_str(), test.x, test.z, tick);
+    return;
+  }
+  if (tick < test.at + test.after || test.seen) return;
+  // From `after` beats on, the order is given every other beat until the upgrade stands there (an army's AI, which
+  // may run the army's factories, gives them its own orders meanwhile), for at most ten seconds.
+  std::vector<moho::UnitView> units;
+  moho::UnitViews(*e.sim, &units);
+  const moho::UnitView* nearest = nullptr;
+  float best = 1e30f;
+  for (const moho::UnitView& u : units) {
+    const float dx = u.position[0] - test.x, dz = u.position[2] - test.z, d = dx * dx + dz * dz;
+    if (u.army != 1 || u.dead || d > 100) continue;
+    if (named(u.blueprint, test.to)) {
+      test.seen = true;
+      printf("render: --upgrade-test: beat %u: army 1's %s (entity %u) is there, %s, %.0f %% built\n", tick, u.blueprint.c_str(), u.id,
+             u.beingBuilt ? "being built" : "standing", u.fractionComplete * 100);
+      return;
+    }
+    if (!u.beingBuilt && named(u.blueprint, test.from) && d < best) best = d, nearest = &u;
+  }
+  if (tick > test.at + test.after + 100 || (tick - test.at - test.after) % 2) return;
+  if (!nearest) {
+    fprintf(stderr, "render: --upgrade-test: army 1 has no %s to upgrade at beat %u\n", test.from.c_str(), tick);
+    return;
+  }
+  // (by the simulation's own script functions, as an AI's script orders it: a new game's armies have no command source
+  // of a player's for the order the interface sends)
+  lua_State* L = e.sim->L();
+  const std::string code = "local u = GetUnitById('" + std::to_string(nearest->id) + "') if u and not u:IsDead() then IssueClearCommands({u}) IssueUpgrade({u}, '" +
+                           test.to + "') end";
+  if (!L || luaL_loadbuffer(L, code.data(), code.size(), "=upgrade-test") || lua_pcall(L, 0, 0, 0)) {
+    fprintf(stderr, "render: --upgrade-test: the order failed: %s\n", L && lua_isstring(L, -1) ? lua_tostring(L, -1) : "no script state");
+    if (L) lua_pop(L, 1);
+    return;
+  }
+  printf("render: --upgrade-test: beat %u: army 1's %s (entity %u) at %.1f, %.1f ordered to upgrade to %s (its first order was %d of %d)\n", tick,
+         nearest->blueprint.c_str(), nearest->id, nearest->position[0], nearest->position[2], test.to.c_str(), nearest->headCommand,
+         nearest->queueLength);
+}
+
 void LiveSim::Ping() {
   Engine& e = *engine_;
   std::vector<moho::UnitView> units;
@@ -326,12 +381,22 @@ void LiveSim::Run() {
       Pause(setup_.enhanceArmy);
     }
     if (!e.stream && setup_.pingAt && e.sim->tick() == setup_.pingAt) Ping();  // [pings] (a new game's only)
+    if (!e.stream)
+      for (Setup::Upgrade& u : setup_.upgrades) UpgradeTest(e.sim->tick(), u);  // [hitches] (a new game's only)
     const auto b0 = std::chrono::steady_clock::now();
     e.sim->Tick();
     const float ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - b0).count();
     average = average == 0 ? ms : average * 0.9f + ms * 0.1f;
+    const auto b1 = std::chrono::steady_clock::now();
     if (onBeat) onBeat(*e.sim);
     frames_.Beat(*e.sim);
+    if (HitchLog::on) {  // [hitches] a beat that took long, on the simulation's thread (the beat itself, and its copying out)
+      const float copy = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - b1).count();
+      if (ms + copy > 20) HitchLog::Add("simulation beat " + std::to_string(e.sim->tick()) + ": " + std::to_string(static_cast<int>(ms + 0.5f)) +
+                                            " ms the beat, " + std::to_string(static_cast<int>(copy + 0.5f)) + " ms copied out (the average beat " +
+                                            std::to_string(static_cast<int>(average + 0.5f)) + " ms)",
+                                        ms + copy);
+    }
     std::lock_guard<std::mutex> lock(mutex_);
     msPerTick_ = average;
   }

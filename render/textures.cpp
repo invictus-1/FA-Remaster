@@ -4,11 +4,17 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <condition_variable>
 #include <cstring>
+#include <deque>
+#include <mutex>
+#include <thread>
+#include <unordered_set>
 #include <vector>
 
 #include "core/vfs.h"
 #include "dds.h"
+#include "hitch_log.h"  // [hitches]
 #include "jobs.h"
 #include "linalg.h"
 
@@ -89,6 +95,101 @@ TextureCache::TextureCache(gfx::Device* device, const moho::Vfs* vfs) : device_(
   greyCube_ = device->CreateTexture(cube);
 }
 
+// [hitches] FetchLater's files: a queue read one after another by a thread of its own; what was read waits in `ready`
+// until ReadFile takes it, what cannot be read is kept in `failed`.
+struct TextureCache::Later {
+  std::mutex mutex;
+  std::condition_variable wake, done;
+  std::deque<std::string> queue;
+  std::string reading;  // (the file being read now)
+  std::unordered_map<std::string, std::string> ready;
+  std::unordered_set<std::string> failed;
+  std::unordered_set<std::string> taken;  // (read and taken by a ReadFile since, or read by another instead)
+  bool stop = false;
+  std::thread thread;
+  bool Knows(const std::string& key) const {
+    return ready.count(key) || failed.count(key) || reading == key || std::find(queue.begin(), queue.end(), key) != queue.end();
+  }
+  void Run(const moho::Vfs* vfs) {
+    std::unique_lock<std::mutex> lock(mutex);
+    for (;;) {
+      wake.wait(lock, [&] { return stop || !queue.empty(); });
+      if (stop) return;
+      reading = std::move(queue.front());
+      queue.pop_front();
+      const std::string key = reading;
+      lock.unlock();
+      // (the engine's file layer opens a file of its own for each read: reads may run beside the main thread's, as Fetch's)
+      std::optional<std::string> bytes = vfs->Exists(key) ? vfs->ReadFile(key) : std::nullopt;
+      lock.lock();
+      if (bytes) ready.emplace(key, std::move(*bytes));
+      else failed.insert(key);
+      reading.clear();
+      done.notify_all();
+    }
+  }
+  // The bytes of a file asked for (waiting while it is being read); none where it was never asked for, cannot be read,
+  // or is still queued (taken out of the queue: the caller reads it itself).
+  std::optional<std::string> Take(const std::string& key) {
+    std::unique_lock<std::mutex> lock(mutex);
+    done.wait(lock, [&] { return reading != key; });
+    auto it = ready.find(key);
+    if (it != ready.end()) {
+      std::optional<std::string> out(std::move(it->second));
+      ready.erase(it);
+      taken.insert(key);
+      return out;
+    }
+    auto q = std::find(queue.begin(), queue.end(), key);
+    if (q != queue.end()) {
+      queue.erase(q);
+      taken.insert(key);  // (read by the caller instead)
+    }
+    return std::nullopt;
+  }
+};
+
+TextureCache::~TextureCache() {
+  if (!later_) return;
+  {
+    std::lock_guard<std::mutex> lock(later_->mutex);
+    later_->stop = true;
+  }
+  later_->wake.notify_all();
+  if (later_->thread.joinable()) later_->thread.join();
+}
+
+void TextureCache::FetchLater(const std::vector<std::string>& paths) {
+  if (!later_) {
+    later_ = std::make_unique<Later>();
+    Later* later = later_.get();
+    const moho::Vfs* vfs = vfs_;
+    later_->thread = std::thread([later, vfs] { later->Run(vfs); });
+  }
+  bool any = false;
+  {
+    std::lock_guard<std::mutex> lock(later_->mutex);
+    for (const std::string& path : paths) {
+      std::string key = moho::Vfs::Normalize(path);
+      if (key.empty() || cache_.count(key) || fetched_.count(key) || later_->Knows(key)) continue;
+      later_->taken.erase(key);
+      later_->queue.push_back(std::move(key));
+      any = true;
+    }
+  }
+  if (any) later_->wake.notify_one();
+}
+
+int TextureCache::Arrived(const std::string& path) {
+  const std::string key = moho::Vfs::Normalize(path);
+  if (cache_.count(key) || fetched_.count(key)) return 1;
+  if (!later_) return 0;
+  std::lock_guard<std::mutex> lock(later_->mutex);
+  return later_->ready.count(key) ? 1 : later_->failed.count(key) ? -1 : later_->taken.count(key) ? 2 : 0;
+}
+
+bool TextureCache::Made(const std::string& path) const { return cache_.count(moho::Vfs::Normalize(path)) > 0; }
+
 gfx::Texture TextureCache::FromDds(std::string_view file, const char* what) { return Make(file, what, 0); }
 
 gfx::Texture TextureCache::Make(std::string_view file, const char* what, int drop) {
@@ -106,6 +207,7 @@ gfx::Texture TextureCache::Make(std::string_view file, const char* what, int dro
 }
 
 gfx::Texture TextureCache::Layers(const std::vector<std::string>& paths, std::vector<bool>* present) {
+  HitchLog::Scope made("texture set", paths.empty() ? std::string() : paths[0] + " and " + std::to_string(paths.size() - 1) + " more");  // [hitches]
   present->assign(paths.size(), false);
   DdsImage first;
   std::vector<uint8_t> all;
@@ -316,9 +418,19 @@ void TextureCache::Fetch(const std::vector<std::string>& paths) {
   for (const std::string& path : paths) {
     std::string key = moho::Vfs::Normalize(path);
     if (key.empty() || cache_.count(key) || fetched_.count(key) || std::find(wanted.begin(), wanted.end(), key) != wanted.end()) continue;
+    if (later_) {  // [hitches] (one FetchLater has read or is reading: ReadFile takes it; one still queued is read here)
+      std::lock_guard<std::mutex> lock(later_->mutex);
+      if (later_->ready.count(key) || later_->reading == key) continue;
+      auto q = std::find(later_->queue.begin(), later_->queue.end(), key);
+      if (q != later_->queue.end()) {
+        later_->queue.erase(q);
+        later_->taken.insert(key);  // (read here instead)
+      }
+    }
     wanted.push_back(std::move(key));
   }
   if (wanted.empty()) return;
+  HitchLog::Scope made("files read ahead:", std::to_string(wanted.size()));  // [hitches]
   // (the engine's file layer opens a file of its own for each read: reads may run side by side)
   std::vector<std::optional<std::string>> read(wanted.size());
   Jobs::Shared().Run(static_cast<int>(wanted.size()), [&](int i) {
@@ -332,7 +444,11 @@ void TextureCache::Fetch(const std::vector<std::string>& paths) {
 std::optional<std::string> TextureCache::ReadFile(const std::string& path) {
   const std::string key = moho::Vfs::Normalize(path);
   auto it = fetched_.find(key);
-  if (it == fetched_.end()) return vfs_->ReadFile(key);
+  if (it == fetched_.end()) {
+    if (later_)  // [hitches] (read ahead without waiting: FetchLater)
+      if (std::optional<std::string> got = later_->Take(key)) return got;
+    return vfs_->ReadFile(key);
+  }
   std::optional<std::string> out(std::move(it->second));
   fetched_.erase(it);
   return out;
@@ -344,8 +460,21 @@ gfx::Texture TextureCache::Get(const std::string& path, gfx::Texture fallback) {
   auto it = cache_.find(key);
   if (it != cache_.end()) return it->second ? it->second : fallback;
   gfx::Texture t;
-  if (auto file = ReadFile(key)) t = Make(*file, key.c_str(), detail);
-  else fprintf(stderr, "render: texture %s: file not found\n", key.c_str());
+  HitchLog::Scope made("texture", key);  // [hitches]
+  const size_t before = bytes;
+  const auto start = std::chrono::steady_clock::now();
+  if (auto file = ReadFile(key)) {
+    const auto read = std::chrono::steady_clock::now();
+    t = Make(*file, key.c_str(), detail);
+    if (HitchLog::on) {  // [hitches] (its size, and how much of its time was reading the file)
+      char size[64];
+      snprintf(size, sizeof size, " (%.1f MB, read in %.1f ms)", static_cast<double>(bytes - before) / 1048576.0,
+               std::chrono::duration<double, std::milli>(read - start).count());
+      made.Append(size);
+    }
+  } else {
+    fprintf(stderr, "render: texture %s: file not found\n", key.c_str());
+  }
   cache_.emplace(std::move(key), t);
   return t ? t : fallback;
 }
