@@ -3,6 +3,61 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## render 45: Chris's test run of 21 October, the engine's part — answered (the cheats built, 133671a; the rest not the sim's)
+
+Helper ct read each item in the exe. Only item 1 needed engine code.
+
+**1. Ctrl+Alt+B and Alt+T (the original's debug keys): the sim's side is built.**
+- **The keys.** FAF's `debugKeyMap` (defaultKeyMap.lua:161) has Alt-T = `debug_teleport` (`TeleportSelectedUnits`)
+  and Ctrl-Alt-B = `debug_blingbling` (`BlingBling`). lobby.lua:5805 adds them only when
+  `GameOptions.CheatsEnabled == 'true'`.
+- **BlingBling.** It is the console alias "DoSimCommand BlingBling" (0xbd3900). DoSimCommand 0x88e440 sends a
+  DebugCommand (type 20) with the text, the cursor's world point, the focus army (u8, -1 = 0xff) and the selected
+  ids. The sim runs it through ExecuteDebugCommand 0x749da0 -> 0x734870: names are looked up without case, and a
+  command not marked safe asks CheatsEnabled first. Refused, the rest of the text is dropped. Allowed, the sim prints
+  "<source>: BlingBling". BlingBling 0x64bbe0 then raises the army's own storage by 10000 energy and 10000 mass and
+  fills it; with no army it prints "No focus army.".
+- **"is cheating".** Sim::CheatsEnabled 0x747180 warns "<name> is trying to cheat!" when cheats are off. Either way
+  it puts the command source on a cheater list once. Sim::Sync writes `Sync.Cheaters = {source+1, ...,
+  CheatsEnabled = flag}`, and FAF's UserSync.lua:409 prints "<name> is cheating!" or "... is trying to cheat!" in
+  the console overlay. (The sim's own "is cheating!" log line needs sim_ReportCheats, which is off by default.)
+- **Teleport.** CON_TeleportSelectedUnits 0x833f90 is the interface's. For each selected unit or structure of the
+  focus army, it sends one WarpEntity (type 10) with the unit's own orientation and the cursor's x and z. Every
+  unit goes to the same point, with no offset. Sim::WarpEntity 0x748cd0 asks CheatsEnabled, then warps, and the
+  height is recomputed.
+- **Ours** (133671a): Sim::CheatsEnabled() with those side effects, at
+  every place the original asks it; Sync.Cheaters; DebugCommand decoded, with the sim's command table (BlingBling);
+  Sim::Print (TakePrints); and CommandWriter::WarpEntity / DebugCommand. Not built: the console parser's backslash
+  escape inside a quoted word.
+- **For the ui (46.3):**
+  - Bind the keys only when `CheatsEnabled == 'true'`.
+  - Ctrl+Alt+B: `Writer.DebugCommand("BlingBling", cursorX, cursorY, cursorZ, focusArmy /* -1 -> 0xff */,
+    selectedIds)`.
+  - Alt+T: for each selected unit of the focus army, structures included,
+    `Writer.WarpEntity(id, q.w, q.x, q.y, q.z, cursorX, cursorY, cursorZ)` with its current orientation (any y).
+  - Show the sim's prints, and let UserSync's `print` reach the screen as the console overlay does.
+
+**2. The Izanagi's area of effect: its blueprint.** DamageRadius was 0 on its guns and missiles, and FAF's
+Projectile.DoDamage calls DamageArea only above 0. Visuals' mod_r2 sets 2.5 / 2 / 1 / 0.5, and our DamageArea (as
+0x737680) hits units in each radius. Measured against 98 enemy tanks: 0.5 PD 431 hits, 1 Rippers 2912, 2 missiles
+320, 2.5 casemates 322.
+
+**3. The battleship's main cannons: its blueprint.** RackSlavedToTurret = true with the rack under the pitch bone
+applies the pitch twice. The original does the same (CSlaveManipulator::MoveManipulator 0x646140 rotates the rack by
+the pitch bone's local rotation), and so does ours. Against a stationary target at 100: mod_r2's flag false, 27 of 27
+shells hit; true, 0 of 27 (58.6 long); a stock Summit, 33 of 33.
+
+**4. The commander's enhancement queue: the interface's own queue copy.** Our views carry every order. In Chris's
+stream they are 4485 LeftPod + RightPod, 4947 AdvancedEngineering + T3Engineering, 4987 ResourceAllocation, each a
+Script order held until done. The original's ISSUE_Command 0x8b0180 sends the order and then at once changes the
+interface's own copy of each unit's queue (a clear 0x8b6e60, an add 0x8b6de0), before OnCommandIssued 0x83e770.
+UserUnit:GetCommandQueue reads that copy (0x8b6f60). Ours reads the sim's queue, a beat later, so FAF's
+IntegrateEnhancements (construction.lua:2328) sees too few Script orders and pops the front of its list: no drone
+icons, and T3 standing for the others. For the ui (46.2): keep a pending per-unit queue copy, changed at issue time
+before OnCommandIssued, as 0x8b0180 does.
+
+**5. The freeze before snow:** the renderer is measuring its side first.
+
 ## ui 46: keep the session's rules state for the interface — done (7e001be)
 
 As you sketched it, in `sim/sim.h`:
