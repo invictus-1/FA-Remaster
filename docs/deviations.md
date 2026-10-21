@@ -278,7 +278,44 @@ says `the rules are loaded again with the engine's script fixes`, about one seco
 - **Tested:** in the same runs as 7; the hook loads ("Hooked /lua/system/trashbag.lua") with no error in the B2
   session.
 
+### 10. The FAF AI's reclaim sums (2026-10-21)
+
+- **What is broken:** the reclaim grid of FAF's own AIs (`lua/AI/GridReclaim.lua`, set up by its turtle AI; not M28)
+  sums each cell's mass and energy over a weak table keyed by EntityId, in the table's own order
+  (`GridReclaim.UpdateCell`). A float sum in another order can come out one bit apart, and the AI compares these
+  totals. A destroyed prop the cell did not drop also counts until the collector clears it.
+- **What we do:** `data/fixes/hook/lua/AI/GridReclaim.lua` runs FAF's `UpdateCell` (its count and debug view), then
+  sums the two totals again in EntityId order without destroyed props.
+- **Why it is safe, what it changes:** the totals are FAF's, summed in a fixed order, and without the entries the
+  collector would have cleared anyway. They only matter in a game with that AI.
+- **Tested:**
+  - A played session with FAF's turtle AI against its adaptive AI (Winter Duel, B2's set-up with those two
+    personalities, 3,000 beats), normal against `MOHO64_GC_DUE=5` and `=13`: identical on all 3,001 beats.
+  - The hook loads ("Hooked /lua/ai/gridreclaim.lua") with no new error. The session logs FAF's own
+    `gridpresence.lua(168)` error twice, with and without the fixes alike.
+
 ## Looked broken, left alone
+
+### The other weak tables of the sim's scripts (2026-10-21, with 7-10)
+
+Every weak table in FAF 3839's sim-side scripts was read (lua.nx2, not the interface's), with every walk over it. The
+ones whose order or content could reach the game are fixed in 7-10. These cannot:
+- **`defaultcomponents.lua` 618 `VetInstigators`** (every unit): `VeterancyDispersal` gives each instigator its own
+  share (its damage over the total) and passes over destroyed ones. Each unit's experience is its own, whatever the
+  order.
+- **`StorageManagerBrainComponent` `UnitMassStorage` / `UnitEnergyStorage`:** the storage state's walk calls each
+  storage unit's own `On...StorageStateChange`, which only changes its blinking lights (an effect), and passes over
+  destroyed ones.
+- **`EffectUtilitiesOpti.lua` 75 `BuildBots`** (a Cybran builder's drones): fixed keys 1..n, a dead drone replaced
+  before use; walked in key order.
+- **`AI/GridBrain.lua` `EngineersReclaiming`, `AssignedScouts`, `AssignedAirScouts`:** only counted
+  (`table.getsize`).
+- **`aibrains/tasks/task.lua` `AcceptedBy`, `AcceptByEntities`:** made, never read.
+- **`aibrains/managers/` structure, factory and engineer managers:** not used in this FAF build (named only in type
+  annotations). Their walks only count, except the structure manager's `ComputeThreat` (a float sum), which would want
+  10's treatment if FAF starts using them.
+- **`lazyvar.lua`:** the interface's, not the sim's.
+- **`lua/tests/class_test.lua`:** a test.
 
 ### M28: `IsM28AIPersonality` on the civilian armies (m28conditions.lua:4291)
 
