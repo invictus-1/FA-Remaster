@@ -503,6 +503,11 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   the order lines and the construction panel's queue at once, before the game's script hears of it, until the beat it
   goes with has come back (user_units.cpp NoteIssued, ApplyQueueChanges). FAF's enhancement queue pairs its queued
   enhancements with the commander's Script orders by it. Test: `ui/tests/enhancement_queue.lua`.
+- The selection after each beat (READ 2026-10-21, CWldSession::CheckForNecessaryUIRefresh 0x8943e0, after the beat's
+  OnSync): its dead units leave it, a unit gone from the simulation leaves it without a word, and a selected unit that
+  asks for its panels to be made again (Entity:RequestRefreshUI, FAF's when an enhancement is fitted:
+  `UnitView::refreshUI`) has the script told once, with the same selection as old and new (FAF's isOldSelection), so
+  the construction panel, the orders and the unit view are made again. Test: `ui/tests/refresh_ui.lua`.
 - The in-game interface comes up on a running game. As in the original, a launched game gets a
   script state of its own (`/lua/SessionInit.lua`); the rules go into it through the engine's own
   functions (5,334 blueprints, the categories); the game script makes its world interface

@@ -159,6 +159,10 @@ struct UnitStore : UserState::Extra {
   float reclaimAt[3] = {0, 0, 0}, reclaimWithin = -1;
   bool reclaimAnswer = false;
   bool reporting = false;  // inside OnSelectionChanged
+  // The selection's size as SetSelection last left it (the session's +0x4ac, written at 0x896387): a unit gone from
+  // the simulation leaves the selection without a word (RefreshUserUnits), and CheckForNecessaryUIRefresh, after the
+  // beat's OnSync, finds the selection smaller than this.
+  size_t selectionSetSize = 0;
   std::unique_ptr<CommandWriter> writer;  // the player's orders since the last beat
   uint32_t queueFactory = 0xffffffffu;    // the factory whose queue the construction panel shows
   std::string queueKey;                   // that queue as it was last handed to the script
@@ -347,11 +351,20 @@ void ReportSelection(lua_State* L, const std::vector<UserUnit*>& before, const s
   lua_settop(L, top);
 }
 
-void SetSelection(lua_State* L, std::vector<UserUnit*> now) {
+// `always`: the script hears of it even when nothing changes (CheckForNecessaryUIRefresh). The original's
+// CWldSession::SetSelection (0x896140) tells its listeners every time, changed or not (0x896352 -> 0x8986f0, the
+// SelectionListener among them: 0x869060 calls OnSelectionChanged), and only the set of ids it hands the simulation
+// (0x8964cf) and UI_EndCommandMode (0x8964d1) wait for something added or removed (0x89638d); ours keeps its other
+// callers' old way (nothing when nothing changes).
+void SetSelection(lua_State* L, std::vector<UserUnit*> now, bool always = false) {
   UnitStore& store = Store(L);
-  if (now == store.selection) return;
+  if (now == store.selection && !always) {
+    store.selectionSetSize = store.selection.size();
+    return;
+  }
   std::vector<UserUnit*> before = store.selection;
   store.selection = std::move(now);
+  store.selectionSetSize = store.selection.size();  // (0x89637b .. 0x896387)
   ReportSelection(L, before, store.selection);
 }
 
@@ -5126,11 +5139,15 @@ void RefreshUserUnits(lua_State* L) {
       lua_settop(L, top);
     }
   }
-  // Units that are gone leave the selection (the script hears of it) and then the store.
-  std::vector<UserUnit*> kept;
-  for (UserUnit* u : store.selection)
-    if (!u->gone && !u->view.dead) kept.push_back(u);
-  SetSelection(L, kept);
+  // Units that are gone leave the selection without a word, then the store: the original's selection is a set of weak
+  // references, and an entity the beat's sync destroys is orphaned (CWldSession::DoBeat 0x894c00 .. 0x894c84) and,
+  // where the player sees it, deleted that beat (UserEntity::OrphanUpdate 0x8b9670 from 0x895635); its empty entry is
+  // dropped as the set is next walked (0x66a330 -> 0x66a550), so neither the old selection nor `removed` names it.
+  // The script hears of the smaller selection after OnSync (CheckForNecessaryUIRefresh); a dead unit leaves there too.
+  // (Not built: the original keeps the orphan of a unit the player does not see, an enemy's under the fog, and with it
+  // its place in the selection, until the player sees the place, 0x8b9694 .. 0x8b96a7; ours drops it at once.)
+  store.selection.erase(std::remove_if(store.selection.begin(), store.selection.end(), [](const UserUnit* u) { return u->gone; }),
+                        store.selection.end());
   for (auto& old : retired) old->UnbindLua();
   retired.clear();
   for (auto it = store.units.begin(); it != store.units.end();) {
@@ -5142,6 +5159,32 @@ void RefreshUserUnits(lua_State* L) {
     }
   }
   ReportQueueChange(L);
+}
+
+// CWldSession::CheckForNecessaryUIRefresh (FA exe 0x8943e0, READ 2026-10-21), once a beat, after the beat's OnSync()
+// (CWldSession::DoBeat runs OnSync at 0x8950a3, this at 0x89570a, near its end). Over the selection: a unit whose copy
+// of the entity's synced data asks for a refresh (UserEntity::RequiresUIRefresh, vt+0x2c 0x8b8530: byte +0x72, the
+// copy at +0x50 (UpdateEntityData 0x8b9038) of SSTIEntityVariableData +0x22, the simulation's entity+0x9a, set by
+// Entity:RequestRefreshUI 0x68bb60 and Entity::Kill 0x679ad8: UnitView::refreshUI) makes it refresh (0x89446e ..
+// 0x89447b); the units not dead (var data +0x21, entity+0x99, which Entity::Kill sets at 0x679ade: UnitView::dead;
+// 0x89447d) make the new selection. It is set (CWldSession::SetSelection, its script told even when nothing changes)
+// when one asked, when the selection is smaller than SetSelection left it (a unit gone: RefreshUserUnits), or when a
+// dead unit is left out (0x8944bc .. 0x8944e7). So the panels are made again (gamemain.OnSelectionChanged with the old
+// selection as the new one: FAF's isOldSelection) once in the beat whose sync carries the request, and only for a
+// selected unit (a sweep of the user side, 0x7e0000 .. 0x8d0000, finds no other read of +0x72 than 0x8b8530; the
+// other vt+0x2c calls looked at are on other classes or on UserUnit's +0x148 part).
+void CheckForNecessaryUIRefresh(lua_State* L) {
+  UserState* user = UserState::From(L);
+  if (!user->units) return;
+  UnitStore& store = Store(L);
+  bool refresh = false;
+  std::vector<UserUnit*> kept;
+  for (UserUnit* u : store.selection) {
+    if (u->view.refreshUI) refresh = true;
+    if (!u->view.dead) kept.push_back(u);
+  }
+  if (refresh || store.selection.size() < store.selectionSetSize || kept.size() < store.selection.size())
+    SetSelection(L, kept, true);
 }
 
 void RegisterUserUnitBindings(lua_State* L) {

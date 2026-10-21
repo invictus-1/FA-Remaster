@@ -635,6 +635,9 @@ void UserState::DeliverSync(const std::string& blob) {
   if (lua_isfunction(L, -1) && lua_pcall(L, 0, 0, top + 1) != 0)
     LogScriptError(lua_isstring(L, -1) ? lua_tostring(L, -1) : "(error object is not a string)");
   lua_settop(L, top + 1);
+  // The selection after the sync (CWldSession::DoBeat: OnSync() at 0x8950a3, CheckForNecessaryUIRefresh at 0x89570a):
+  // its dead units leave it, and a unit's request to make its panels again reaches the script (user_units.cpp).
+  CheckForNecessaryUIRefresh(L);
   // Then the beat itself: gamemain.OnBeat() runs what the panels registered to do every beat
   // (the original calls it by name, FA exe 0x83dd08). Inferred: that it follows the sync.
   if (gameInterface) {

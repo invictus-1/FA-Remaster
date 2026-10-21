@@ -276,8 +276,11 @@ int TakeSessionRequest();
 void RegisterSessionBindings(lua_State* L);
 // Units as the interface sees them, selection (user_units.cpp). RefreshUserUnits brings them up
 // to date with the simulation; InstallUnitCategoryFunctions goes after the rules are in the state.
+// CheckForNecessaryUIRefresh, after the beat's OnSync: the selection without its dead units, and the script told
+// (OnSelectionChanged) when a selected unit asked for its panels to be made again (UnitView::refreshUI).
 void RegisterUserUnitBindings(lua_State* L);
 void RefreshUserUnits(lua_State* L);
+void CheckForNecessaryUIRefresh(lua_State* L);
 // A command's id as the original hands it to scripts: a SIGNED int made a Lua number (a float). GetCommandQueue's "ID"
 // (FAF's patch: SetInteger, FA exe 0x129115c) and commandgraph.lua's OnCommandDragEnd(event, cmdId) (Call_ObjectInt,
 // 0x823f94). So an engine-made command's id 0x80000000 | index comes out negative and rounded to 24 bits, there too.

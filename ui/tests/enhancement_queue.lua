@@ -92,10 +92,9 @@ ForkThread(function()
     check("the left drone is fitted", EnhanceCommon.GetEnhancements(id).Back, "LeftPod")
     WaitSeconds(0.5)
     check("three orders left", orders(), "Script,Script,Script")
-    -- (the original makes the panel again when the unit's script asks, Unit:RequestRefreshUI; the engine has no such
-    -- call yet (asked of it): here the panel's own refresh stands in for it, twice as FAF's pairing drops from the front)
-    C.RefreshUI()
-    C.RefreshUI()
+    -- (nothing here makes the panel again: the unit's script asks for it (Unit.CreateEnhancement's RequestRefreshUI),
+    -- and the interface's check after the beat's sync tells gamemain.OnSelectionChanged, user_units.cpp
+    -- CheckForNecessaryUIRefresh; ui/tests/refresh_ui.lua checks that call itself)
     check("FAF's queue: the right drone, T2, T3", queued(), "RightPod,AdvancedEngineering,T3Engineering")
     check("the queue row shows them", row(), "RightPod,AdvancedEngineering,T3Engineering")
     LOG("TEST done: " .. failed .. " failed")
