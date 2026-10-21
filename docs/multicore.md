@@ -27,6 +27,12 @@ are [benchmarks.md](benchmarks.md). This page is how we go about it.
 
 ## 2. Tools first (step 0)
 
+**Status (2026-10-21):** the pool, the order check, the Lua-lock check and the parallel view are in main (4b90ba2,
+e9dc29c; `src/core/workers.h`), and twocopies has `--env-a` / `--env-b` (2d137d8). `moho64 --workers-selftest` passes
+at 1 and 32 threads in every order mode. No stage uses the pool yet, so n = 1, n = 32 and shuffle give the same
+bytes. The two-games-at-once check (`moho64 --together`, mp3) and the both-modes gate (mp2's draft) come next. Then
+the benchmark runner's baseline pass.
+
 - **A worker pool** in the engine: a fixed set of threads made once per Sim, a `parallel_for` over index ranges with
   per-worker scratch, no allocation in the hot path, and per-task timing for the profiler.
 - **An order check without threads:** `MOHO64_PAR_CHECK=shuffle` runs every parallel stage's tasks on one thread in a
