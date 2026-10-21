@@ -74,6 +74,58 @@ float3 WorldAt(float2 pixel, float depth) {
   return cameraPosition + (cameraRight.xyz * (ndc.x * cameraRight.w * cameraUp.w) + cameraUp.xyz * (ndc.y * cameraRight.w) - cameraBack.xyz) * away;
 }
 
+#ifdef MODERN_RELIEF
+// [scars] A normal decal with Decals::modernRelief (the modern look): the ground's own slope (from how its place changes
+// from pixel to pixel) tilted by the decal's, and the ground multiplied by how much more or less of the modern light the
+// tilted ground takes than the flat: the sun through its and the clouds' shadows, the sky's light from all sides and the
+// map's fill (ModernLight's diffuse part). With the sun down the sky's share keeps the change near 1; flat parts change
+// nothing. Under lying snow (options.y: -1 - the share of it that lies on the mark, as a picture's) the relief softens
+// as the snow fills it. options.w: 0 the game's (how much applies in red), 1 the visuals track's effects' own (two
+// channels, y up the picture), 2 a plain normal map (x in alpha, y in green; no share in red): both at full strength.
+// How much snow lies on a mark's place (0..1), `fallen` the snow over it (the weather's, times the share on the mark):
+// as ModernLight lays it on the ground, level ground first, in patches. (One place for it: when the ground's snow takes
+// a shelter or an amount of its own, the marks' relief should take the same here.)
+float MarkSnowLying(float3 world, float3 ground, float fallen) {
+  float patch = CloudNoise(world * 0.9) * 0.55 + CloudNoise(float3(world.xz * 0.21, 5.3)) * 0.45;
+  float takes = patch * 0.75 + saturate((ground.y - 0.35) * 1.6) * 0.25;
+  float bar = 1.02 - fallen * 1.15;
+  return smoothstep(bar, bar + 0.2, takes) * smoothstep(0.25, 0.5, ground.y);
+}
+float4 NormalDecalModern(float4 c, float4 options, float4 shape, float3 world) {
+  float3 ground = normalize(cross(ddy(world), ddx(world)));
+  if (ground.y < 0) ground = -ground;
+  float2 tilt = c.ag * 2 - 1;
+  float3 inDecal = float3(tilt.x, sqrt(saturate(1 - dot(tilt, tilt))), tilt.y);
+  float strength = c.r;
+  if (options.w > 0.5) {
+    if (options.w < 1.5) inDecal.z = -tilt.y;
+    strength = 1;
+  }
+  float3 turned = float3(inDecal.x * shape.z + inDecal.z * shape.w, inDecal.y, -inDecal.x * shape.w + inDecal.z * shape.z);
+  float3 tilted = normalize(ground + turned - float3(0, 1, 0));
+  // (where the snow lies on it - thick, it fills the relief but for a hint of it)
+  float snow = -1 - options.y;
+  [branch] if (weather.y > 0 && snow > 0) {
+    float fallen = weather.y * snow;
+    tilted = normalize(lerp(tilted, ground, MarkSnowLying(world, ground, fallen) * saturate(fallen * 1.5 - 0.2) * 0.75));
+  }
+  float3 sun = ToLinear(sunColor) * (lightMultiplier * modern.x * SunShadow(world, ground) * CloudShadow(world));
+  float3 fill = ToLinear(shadowFill) * 0.5;
+  float3 skyFlat, skyTilted;
+  [branch] if (skyZenith.w > 0.5) {  // the computed sky (sky.h)
+    skyFlat = SkyAmbient(ground);
+    skyTilted = SkyAmbient(tilted);
+  } else {
+    skyFlat = ToLinear(environmentSky.SampleLevel(samplerLinear, ground, 8).rgb);
+    skyTilted = ToLinear(environmentSky.SampleLevel(samplerLinear, tilted, 8).rgb);
+  }
+  float3 before = sun * saturate(dot(sunDirection, ground)) + (skyFlat + fill) * modern.y;
+  float3 after = sun * saturate(dot(sunDirection, tilted)) + (skyTilted + fill) * modern.y;
+  float3 change = clamp(after / max(before, 1e-5), 0.35, 2.5);
+  return float4(lerp(float3(1, 1, 1), change, saturate(strength * options.x)), 1);
+}
+#endif
+
 float4 PS(VOut i) : SV_Target {
   float depth = DepthAt(int2(i.position.xy));
   if (depth <= 0) discard;  // nothing drawn here
@@ -118,6 +170,9 @@ float4 PS(VOut i) : SV_Target {
     return c;
   }
   if (i.options.z > 1.5) {
+#ifdef MODERN_RELIEF
+    return NormalDecalModern(c, i.options, i.shape, world);  // [scars] (Decals::modernRelief)
+#else
     // a normal decal: the ground's own slope (from how its place changes from pixel to pixel)
     // tilted by the decal's, and the picture multiplied by how much more or less light that takes
     float3 ground = normalize(cross(ddy(world), ddx(world)));
@@ -135,6 +190,7 @@ float4 PS(VOut i) : SV_Target {
     float3 before = OriginalLight(dot(sunDirection, ground), shade), after = OriginalLight(dot(sunDirection, tilted), shade);
     float3 change = clamp(after / max(before, 0.03), 0.35, 2.5);
     return float4(lerp(float3(1, 1, 1), change, saturate(strength * i.options.x)), 1);
+#endif
   }
   if (i.options.z > 0.5) {  // a light: its glow times its ramp along its time, added
     if (look > 0.5) discard;  // the modern look has real lights for this (lights.h)
@@ -170,12 +226,81 @@ float4 PS(VOut i) : SV_Target {
 }
 )hlsl";
 
+// The decals' shader source ([scars] `relief`: with the normal decals lit as Decals::modernRelief says).
+std::string DecalSource(bool relief) {
+  // (how much of the lying snow a mark takes is the mark's own: see `snowLying`)
+  return std::string(relief ? "#define MODERN_RELIEF 1\n" : "") + (gSceneSamples > 1 ? "#define MSAA 1\n" : "") + "static float markSnow = 1;\n#define SURFACE_SNOW markSnow\n" +
+         kViewShaderBlock + RayShaders() + kLightingShaderBlock + HotMetal::ShaderBlock() + kShader;  // (RayShaders: the small lights' shadows by rays; hot metal: hot_metal.h)
+}
+
+// [scars] Whether a DDS picture's blue channel holds anything: the game's normal decals keep it empty (x in alpha, y in
+// green, how much applies in red); a plain normal map does not. Read from its first level's colour blocks (DXT1, DXT3,
+// DXT5: the two end colours of each, 5:6:5) or its pixels (32 bits, with masks); anything else: no.
+bool BlueInDds(const std::string& file) {
+  if (file.size() < 128 || file.compare(0, 4, "DDS ") != 0) return false;
+  auto u32 = [&](size_t at) {
+    return static_cast<uint32_t>(static_cast<unsigned char>(file[at])) | static_cast<uint32_t>(static_cast<unsigned char>(file[at + 1])) << 8 |
+           static_cast<uint32_t>(static_cast<unsigned char>(file[at + 2])) << 16 | static_cast<uint32_t>(static_cast<unsigned char>(file[at + 3])) << 24;
+  };
+  const uint32_t height = u32(12), width = u32(16), flags = u32(80), fourCC = u32(84), bits = u32(88), blueMask = u32(100);
+  const size_t blocks = static_cast<size_t>((width + 3) / 4) * ((height + 3) / 4);
+  int stride = 0;
+  if ((flags & 4) && fourCC == 0x31545844u) stride = 8;                                               // DXT1
+  else if ((flags & 4) && (fourCC == 0x33545844u || fourCC == 0x35545844u)) stride = 16;            // DXT3, DXT5
+  if (stride) {
+    for (size_t b = 0; b < blocks && 128 + (b + 1) * stride <= file.size(); ++b) {
+      const size_t at = 128 + b * stride + (stride - 8);
+      const uint32_t ends = u32(at);
+      if ((ends & 0x1f) > 1 || ((ends >> 16) & 0x1f) > 1) return true;  // (blue of either end colour, past rounding)
+    }
+    return false;
+  }
+  if ((flags & 0x40) && bits == 32 && blueMask) {
+    int shift = 0;
+    while (!((blueMask >> shift) & 1)) ++shift;
+    for (size_t p = 0; p < static_cast<size_t>(width) * height && 128 + (p + 1) * 4 <= file.size(); ++p)
+      if (((u32(128 + p * 4) & blueMask) >> shift) > 2) return true;
+  }
+  return false;
+}
+
 }  // namespace
 
+void Decals::SetModernRelief(bool on) {
+  modernRelief = on;
+  if (!on || reliefTried_) return;
+  reliefTried_ = true;
+  std::string error;
+  const std::string source = DecalSource(true);  // (kept while the pipeline is made: the description points into it)
+  gfx::PipelineDesc pd;
+  pd.name = "normal decals, modern relief";
+  pd.vertexSource = pd.pixelSource = source;
+  pd.attrs = {{"POSITION", 0, gfx::AttrType::Float3, 0}};
+  pd.stride = 12;
+  pd.cull = gfx::Cull::Front;
+  pd.depthTest = pd.depthWrite = false;
+  pd.depthTarget = false;
+  pd.blend = gfx::Blend::Multiply;
+  pd.colorFormat = kSceneFormat;
+  pd.samples = gSceneSamples;
+  pd.alphaWrite = false;
+  normalsModern_ = device_->CreatePipeline(pd, &error);
+  if (!normalsModern_) fprintf(stderr, "render: the marks' relief cannot be lit as the ground (%s)\n", error.c_str());
+}
+
+bool Decals::Plain(uint32_t texture) {
+  auto known = plainOf_.find(texture);
+  if (known != plainOf_.end()) return known->second;
+  bool plain = false;
+  auto file = normalFiles_.find(texture);
+  if (file != normalFiles_.end())
+    if (auto bytes = vfs_->ReadFile(file->second)) plain = BlueInDds(*bytes);
+  plainOf_[texture] = plain;
+  return plain;
+}
+
 bool Decals::Init(std::string* error) {
-  // (how much of the lying snow a mark takes is the mark's own: see `snowLying`)
-  std::string source = std::string(gSceneSamples > 1 ? "#define MSAA 1\n" : "") + "static float markSnow = 1;\n#define SURFACE_SNOW markSnow\n" + kViewShaderBlock +
-                       RayShaders() + kLightingShaderBlock + HotMetal::ShaderBlock() + kShader;  // (RayShaders: the small lights' shadows by rays; hot metal: hot_metal.h)
+  const std::string source = DecalSource(false);
   gfx::PipelineDesc pd;
   pd.name = "decals";
   pd.vertexSource = pd.pixelSource = source;
@@ -228,7 +353,7 @@ bool Decals::Init(std::string* error) {
   return static_cast<bool>(cube_);
 }
 
-gfx::Texture Decals::Resolve(const std::string& texture, gfx::Texture* relief, bool* ours) {
+gfx::Texture Decals::Resolve(const std::string& texture, gfx::Texture* relief, bool* ours, std::string* found) {
   if (relief) *relief = {};
   if (ours) *ours = false;
   if (texture.empty()) return {};
@@ -241,6 +366,7 @@ gfx::Texture Decals::Resolve(const std::string& texture, gfx::Texture* relief, b
       if (path.empty() && vfs_->Exists(std::string(folder) + texture + ".dds")) path = std::string(folder) + texture + ".dds";
   }
   if (path.empty()) return {};
+  if (found) *found = path;  // [scars] (the game's file, before the visuals track's takes its place)
   // the visuals track's picture of it, and the relief beside it ("x_albedo.dds", "x_normals.dds") where the game has
   // no normal decal of that name (where it has, its scripts lay that one as a decal of its own: the crater's
   // "crater01_normals" with "crater01_albedo"; it then reads the visuals track's, and the relief is not given twice)
@@ -283,7 +409,7 @@ bool Decals::Add(const std::string& texture, Vec3 centre, float sizeX, float siz
   }
   gfx::Texture relief;
   bool ours = false;
-  const gfx::Texture t = Resolve(texture, &relief, &ours);
+  const gfx::Texture t = Resolve(texture, &relief, &ours, &lastFile_);
   if (!t || sizeX == 0 || sizeZ == 0) return false;  // (a negative size mirrors it)
   if (groundHeight) {  // (given far from the ground, beyond what its box reaches: on the ground)
     const float ground = groundHeight(centre.x, centre.z);
@@ -331,6 +457,8 @@ void Decals::Remove(uint32_t id) {
 bool Decals::AddNormal(const std::string& texture, Vec3 centre, float sizeX, float sizeZ, float heading, float cutoff, double born, float seconds) {
   if (!Add(texture, centre, sizeX, sizeZ, heading, cutoff, born, seconds)) return false;
   decals_.back().normal = true;
+  // [scars] (its file, for modernRelief to read once whether it is a plain normal map; not the visuals track's own)
+  if (!decals_.back().ours) normalFiles_.emplace(decals_.back().texture.id, lastFile_);
   return true;
 }
 
@@ -426,6 +554,8 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
   visible_.clear();
   pads_.clear();  // [tarmac]
   const bool pads = remasteredTarmacs && !overWater;
+  const bool modernNormals = modernRelief && normalsModern_;  // [scars]
+  if (!overWater) plainNormals = 0;
   for (size_t which = 0; which < decals_.size() + marks_.size(); ++which) {
     const Decal& d = which < decals_.size() ? decals_[which] : marks_[which - decals_.size()];
     if (overWater && !d.water) continue;
@@ -472,6 +602,15 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
     if (!d.mark && !d.ramp && !d.normal) n.age = snowLying > 0 ? Clamp(snowFallen_ - d.snowAtBirth, 0, 1) : 1;
     // (a light's brightness; a picture's 1 with its own relief; a normal decal's 1 when it is the visuals track's)
     n.glow = d.ramp ? glow : d.normal ? (d.ours ? 1.0f : 0.0f) : d.relief && !d.mark && !d.water ? 1.0f : 0.0f;
+    // [scars] (modernRelief: a normal decal's age says how much of the lying snow covers it, as a picture's, from -1 down;
+    // a plain normal map's glow 2)
+    if (modernNormals && d.normal && !d.water && !d.mark && !d.ramp) {
+      n.age = -1 - (snowLying > 0 ? Clamp(snowFallen_ - d.snowAtBirth, 0, 1) : 1);
+      if (!d.ours && Plain(d.texture.id)) {
+        n.glow = 2;
+        ++plainNormals;
+      }
+    }
     visible_.push_back({d.texture.id, d.ramp.id, d.relief.id, d.water ? 4 : d.mark ? 3 : d.ramp ? 2 : d.normal ? 1 : 0, n, d.mapOwn});
     // hot metal: a fresh scorch's or crater's middle glows over it (not under water, where it would only steam)
     if (d.burn && hotMetal && heat && !overWater && !d.normal && !d.water && !d.mark && !d.ramp && d.centre.y > waterLevel) {
@@ -526,7 +665,7 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
     }
     if (bound != kind) {
       bound = kind;
-      device_->SetPipeline(kind == 5 ? hot_ : kind == 2 ? lights_ : kind == 1 ? normals_ : pipeline_);  // (marks blend as pictures do)
+      device_->SetPipeline(kind == 5 ? hot_ : kind == 2 ? lights_ : kind == 1 ? (modernNormals ? normalsModern_ : normals_) : pipeline_);  // (marks blend as pictures do; [scars] relief)
       device_->SetConstants(0, &view.constants, sizeof view.constants);
       device_->SetConstants(1, cameraConstants, sizeof cameraConstants);
       device_->SetTexture(1, sceneDepth);

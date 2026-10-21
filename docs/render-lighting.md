@@ -1346,7 +1346,8 @@ showers and icebergs are.
      each place was burnt and how fresh that is (e to the minus its age over 100 s, faded every half second of the
      game, so no clock is kept in half floats). Burns come from the game's blasts (`Blasts::Recent`, each once half a
      second after it, on the ground only: radius 0.6 + 1.6 x its size, a shell's singeing a little, a big one burning
-     through) and from the lasting fires that stand still on the ground (`Particles::HotEmitters`: a burning tree, a
+     through; [scars] 2026-10-20: 0.3 + 0.7 x its scorch's size, and no burn from a flash that is no explosion's: the
+     section "Marks on the ground that looked wrong") and from the lasting fires that stand still on the ground (`Particles::HotEmitters`: a burning tree, a
      wreck, napalm; the longer, the more). The grass and the plants turn black where it burnt through (the first one to
      four minutes; scorched brown at the edges and after), short as stubble, with sparks of embers for the first seconds;
      each blade and plant has its own share of a half burnt place, so an edge and a place growing back are burnt ones
@@ -1721,6 +1722,55 @@ wind's laying, drifts, depth, its edge) are for tuning.
   The shelter follows the map's props and heights as the map opened (a felled tree, a flattened building site keep their
   shade). The ray tracing scene's ground colours, the ground cover and units' own snow do not know the materials. Winter has
   no snow of its own yet.
+## Marks on the ground that looked wrong (Chris's playthrough, 2026-10-20; a helper's, for review) [scars]
+
+What Chris saw, what made it, and what changed. Pictures in the helper's folder `_scratch/render/helpers/scars/pics`
+(before on the left, after on the right).
+
+- **Dark see-through squares in snow, white rims and dark doubled rings on old craters at night.** A normal decal (a
+  crater's dent, the remastered Seton's trenches and old craters) multiplied the ground by (the light its tilted ground
+  takes) / (the light the flat ground takes), both by the original's formula, the flat one floored at 0.03. SETONS_R has
+  no sun ambience and the fill light follows the daylight: by night the flat light fell under the floor, so even flat
+  ground in a decal's square came out darker (down to 0.35), over the whole square wherever the decal applies; the
+  visuals track's remastered scorch and crater normals apply at full strength over their whole square, so every crater
+  of a battle showed its square, worst on snow; the slopes toward the moon clamped at 2.5 (white rims) and away at 0.35
+  (dark rings). **`World::markRelief`** (viewer `--mark-relief`; `Decals::modernRelief`; modern look; in the "Ground
+  Detail" bundle): the normal decals are drawn by a shader of their own (`MODERN_RELIEF`, made the first time it is on)
+  that takes the ratio of the modern light's Lambert part - the sun through its and the clouds' shadows, the sky's light
+  from all sides (`SkyAmbient` or the sky cube's blurriest level) and the map's fill - so flat ground changes nothing and
+  with the sun down the sky keeps the relief faint. Under lying snow a decal's relief softens as the snow fills it (as a
+  picture's mark: laid before the snow it lies under it, laid on it it shows until new snow covers it; a quarter of it
+  is left under thick snow). Off: the old shader, untouched.
+- **Dark straight strips beside the trenches by day ("weird shadows", "odd shadows" round a base), light strips in
+  snow.** The visuals track's SETONS_R decals (`trench_normals`, `oldcrater_normals`, DXT5) are plain normal maps: x in
+  alpha, y in green and again in red and blue. The game's normal decals keep in red how much of the tilt applies (0 at
+  the edges) and nothing in blue; read the game's way, the trench's red - its slope - applied the tilt fully on one side
+  of the line and not at all on the other: a sharp dark strip beside every trench segment of one heading. With
+  `markRelief`, a normal picture with colour in its blue channel (read once from its DDS's colour blocks) is taken as a
+  plain normal map at full strength: the trenches show both walls, the old craters their rims. The cleaner fix is the
+  visuals track's: red as a mask (0 outside the mark), as the game's own (for the renderer to ask).
+- **Black masses where wrecks and trees were reclaimed, and under walls being built (Chris's items 3 and 7).** Every
+  light flash a script made was taken for an explosion (`Blasts::FromFlash`), and plants that react burnt the ground
+  round each. The game flashes when a structure is begun (`StructureUnit.OnStartBeingBuilt`, 2 x its size), on every
+  prop that structure clears away, and when anything is reclaimed (`PlayReclaimEndEffects`: glow 4, 6 beats); in ten
+  minutes of an M28 game on SETONS_R 4139 of 5354 burns were reclaims (6.3 across, black for one to four minutes) and
+  398 were structures begun. Now a flash made on a living unit, on a prop (World::IsProp: standing, made in the game, or
+  with a change told just now or due) or a reclaim's own makes no blast at all (no burn, no wave, no dust); a shot's, a
+  dying unit's and an effect entity's (a nuke's, a death's) still do. The burnt area of that game: 155,000 square units
+  before, 2,100 after. And a unit's wreck that goes (reclaimed, or shot to pieces) takes its burn with it
+  (`PlantLife::Heal`): browner at once, thinning out by its patches, gone by about a minute and a quarter.
+- **Black marks too large for small missiles (Chris's item 14: the MML).** A burn took the blast's size, the largest of
+  its flash, scorch and impact, as radius 0.6 + 1.6 x size: a UEF missile's impact flash (glow 4, the same for every
+  missile of the kind) made an MML missile (damage radius 1, a scorch under 1 across) burn 6.3 across. Now a blast keeps
+  its scorch's size (the scorch or crater the script laid, or the one the game lays for the shot by its damage radius:
+  `Blast::scorch`) and a burn is 0.3 + 0.7 x that in radius (some 1.4 times the scorch's), a flash alone half its size:
+  the MML's burn is 1.8 across.
+- **Old burns on snow**: the burnt ground is snowed over once a burn is older than half a minute to two minutes, as
+  marks are; a fresh one has melted the snow and shows.
+
+Cost: `markRelief` +0.01 to 0.03 ms at 1440p (the options table); the burns' changes cost nothing (fewer burns are
+drawn). Off: pictures identical (regression 0 px on both backends, snow and rain too; SETONS_R by night and in snow
+with no options 0 px).
 
 ## The options
 
@@ -1769,6 +1819,7 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `plantsReact` | grass and bushes pressed over where units drive and springing back; ground, grass and plants burnt black, then brown, where blasts and fires were, growing back; felled trees still, burnt ones bare; felled trees fall smoothly | about 0.03 ms of its own in a fight (the field 0.010, the burnt ground 0.008, the grass +0.009), and the sun's maps 0.045 ms cheaper (what sways drawn together): the frame a little cheaper (16 MB for the burnt picture on SETONS_R) | |
 | `groundParallax` | close by, the remastered ground's stones stand up and its hollows sink as the eye passes (its materials' scanned relief), a low sun shading the hollows; nothing from the game's height (proposed for the "Ground Detail" setting) | +0.14 to 0.17 ms at zoom 10 to 5, +0.24 the cinematic camera low over the ground, nothing from the game's height | a remastered map (its materials' third maps) |
 | `mudMask` | the map's painted mud (stream banks): its mud material over the ground by the mask, wet and glossy with puddles in rain, paler and cracked dry; deep tracks press into it as mud, no plants on it (in "Ground Detail") | +0.03 ms from the game's height over the mud, +0.08 to 0.10 close by, nothing with no mud in view | a map whose remap.json entry names a "mud_mask" |
+| `markRelief` | [scars] the marks' relief lit as the ground: craters' and trenches' normal decals by the modern light (no dark squares and white rims by night), softened under lying snow, the remastered map's plain normal maps applied as such (no dark strip beside the trenches) (in "Ground Detail") | +0.01 to 0.03 ms at 1440p (the marks' pass: 0.055 -> 0.065 over SETONS_R's craters and trenches by day, 0.058 -> 0.084 over a battle's 64 marks by night; the lowest of two or three runs) | |
 | `rainGround` | the listed layers go over to their wet twins as the ground gets wet, the hollows first, and back as it dries (in "Weather Effects") | +0.13 to 0.16 ms while the ground is wet (SETONS_R's four twins), nothing dry | a time of day; a map whose entry has a "weather" rain block |
 | `snowGround` | the lying snow from the map's snow materials (drifted, packed where trodden, breaking up by the ground's height, slush at the thaw) and, on any map, shaded by what is round it (valleys, hollows, trees, rocks), deeper in the wind's lee, thinner under trees and on steep ground (in "Weather Effects") | +0.20 ms from the game's height while snow lies (+0.16 close with the relief, +0.28 with deep tracks), nothing without | a time of day; the materials where the map's entry has a "snow" block |
 
@@ -1790,7 +1841,7 @@ so there is less clutter). WorldPicture sets each bundle's options together, bef
 | `SetSoftShadows` | `softShadows`, `contactShadows` | about +0.37 ms |
 | `SetRayTracing` | `bounceLight`, `rayReflections`, `rayLightShadows` (reflections and the small lights' shadows from the next map) | about +0.75 ms; at night with many lights about 0.5 ms more |
 | `SetWeatherEffects` | `litRain`, `rainSplashes`, `waterDetail`; `streamWater` ([stream], 2026-10-19: 0.05 to 0.13 ms), `rainGround` ([rain ground], 2026-10-19: +0.13 to 0.16 ms while wet), `snowGround` ([snow ground], 2026-10-20: +0.2 to 0.3 ms while snow lies); proposed: `horizonWeather` | about +0.05 ms in rain, +0.04 by water; the horizon about +0.1 (0.21 from the strategic view in snow) |
-| `SetGroundDetail` | `groundCover`, `battleScars`, `leafLight`, `deepTracks`, `wildlife`, `plantsReact` ([plants], 2026-10-18); `groundParallax` ([parallax], 2026-10-19: +0.14 to 0.17 ms zoomed in), `remasteredTarmacs` ([tarmac], 2026-10-19), `mudMask` ([ground mud], 2026-10-19: +0.03 ms over the mud from the game's height, nothing away from it) | +0.05 to 0.16 ms zoomed in, nothing far out; scars up to +0.56 ms with 2000 in view |
+| `SetGroundDetail` | `groundCover`, `battleScars`, `leafLight`, `deepTracks`, `wildlife`, `plantsReact` ([plants], 2026-10-18); `groundParallax` ([parallax], 2026-10-19: +0.14 to 0.17 ms zoomed in), `remasteredTarmacs` ([tarmac], 2026-10-19), `mudMask` ([ground mud], 2026-10-19: +0.03 ms over the mud from the game's height, nothing away from it), `markRelief` ([scars], 2026-10-20) | +0.05 to 0.16 ms zoomed in, nothing far out; scars up to +0.56 ms with 2000 in view |
 | `SetFrameGeneration` | `frameGeneration` (a sixth setting, asked of the ui: "Frame Generation") | 1.1-1.4 ms a frame drawn; twice the frames shown |
 | `SetHiddenOutlines` | `hiddenOutlines` (readability, not light: its own setting, ON at first; proposed to the ui as "Hidden Unit Outlines") | 0.06-0.08 ms |
 

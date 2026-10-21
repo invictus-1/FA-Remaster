@@ -199,6 +199,8 @@ class WorldPicture {
   //   [plants]): grass and bushes pressed over where units drive and springing back, burnt where blasts and fires
   //   were and growing back, felled trees still, burnt ones bare. And a map's painted mud (World::mudMask): its
   //   banks muddy, glossy with puddles in rain, paler and cracked as they dry; up to +0.1 ms close by, only where mud is.
+  //   [scars] And the marks' relief lit as the ground (World::markRelief): craters and trenches keep their look by night
+  //   and soften under lying snow (no dark squares round the marks, no dark strips beside the trenches).
   void SetGroundDetail(bool on);
   // FSR 3 frame generation (World::frameGeneration): a picture made between each two frames and shown between
   // them, evenly apart, so twice the frames are shown, for a little more than half a frame's delay; the icons and

@@ -14,6 +14,7 @@
 #pragma once
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <string>
 #include <unordered_set>
 #include <unordered_map>
@@ -59,6 +60,9 @@ class Effects {
   void SetTracks(Tracks* tracks) { tracks_ = tracks; }
   // The blasts' list (blasts.h): told of every flash of light and every scorch or crater a script makes.
   void SetBlasts(Blasts* blasts) { blasts_ = blasts; }
+  // [scars] Whether an entity is a prop (a tree, a rock, a wreck: the world's scenery, standing or about to go): a flash
+  // made on one is no explosion (Explosion). None: not known.
+  std::function<bool(uint32_t)> isProp;
   // (buildfx) The remastered build look (build_effects.h): told of every build beam drawn and of the frame's units under
   // construction, while it is on.
   void SetBuild(BuildEffects* build) { build_ = build; }
@@ -112,6 +116,11 @@ class Effects {
   // shot where it does not see)? What hangs on such a one is not shown.
   // (by this frame's lists of shots and script entities: Update makes them first)
   bool Hidden(const Frame& frame, uint32_t entity) const;
+  // [scars] Is a flash of light made on that entity an explosion's (a blast, blasts.h)? A shot's (on its projectile, or
+  // on one already gone), a dying unit's, an effect entity's (a nuke's, a death's) are; one a script makes on a living
+  // unit (a structure begun, a unit being built, a teleport, a tractor claw's grip, a shield's discharge) or on a prop (one
+  // a new structure clears away, one reclaimed, a tree catching fire) is not: it burns nothing and pushes nothing.
+  bool Explosion(const FrameEffectEvent& event, const Frame& frame) const;
   // Whose effects an event makes in the remastered look ("uef", ...; "" none known). See the top.
   std::string FactionOf(const FrameEffectEvent& event, const Frame& frame);
   // The faction most of an army's units in the frame are (army from 0), worked out once a beat.

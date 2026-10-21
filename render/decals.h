@@ -15,6 +15,7 @@
 #include <cmath>
 #include <functional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "camera.h"
@@ -62,6 +63,20 @@ class Decals {
   // keeps the marks of the fighting on it. Set by the world each frame; scars laid while it was off keep the
   // game's time.
   bool battleScars = false;
+  // [scars] The marks' relief lit as the ground (World::markRelief, set by the world each frame; the modern look only;
+  // Chris, 2026-10-20): a normal decal (a crater's dent, a trench, a cliff's erosion) changes the ground's light by how
+  // much more or less of the modern light - the sun through its and the clouds' shadows, the sky from all sides - its
+  // tilted ground takes than the flat, so that with the sun down it stays near 1 (the original's formula, which has no
+  // sky, darkened a decal's whole square at night, down to 0.35, and lit its slopes toward the moon white: the dark
+  // squares in snow, the white rims and doubled rings of old craters by night). Under lying snow the relief softens as
+  // the snow fills it (as a picture's mark: laid before the snow it is under it, laid on it it shows until new snow
+  // covers it). A normal picture made as a plain normal map (colour in its blue channel: x in alpha, y in green and red,
+  // no share in red to say where it applies, as the remastered Seton's trenches and old craters are) applies at full
+  // strength, its flat parts changing nothing (read as the game's, its red - the slope - made one side of every trench
+  // a dark strip). Off: as before.
+  bool modernRelief = false;
+  void SetModernRelief(bool on);  // (each frame: its shader made the first time it is on)
+  int plainNormals = 0;           // (the last Draw: normal decals taken as plain normal maps)
   int mostScars = 2000;
   float scarWeathering = 600, scarFloor = 0.5f;
   int Scars() const { return scars_; }  // (scars there now, the ones fading out included)
@@ -181,7 +196,15 @@ class Decals {
   };
   // The picture a decal is named by (none: not there), and with `remastered` its relief where there is one.
   // `ours`: it is the visuals track's (a normal decal of theirs: two channels, y up the picture).
-  gfx::Texture Resolve(const std::string& texture, gfx::Texture* relief, bool* ours);
+  gfx::Texture Resolve(const std::string& texture, gfx::Texture* relief, bool* ours, std::string* found = nullptr);
+  // [scars] (modernRelief) the files of the normal decals' pictures (the game's, not the visuals track's), by texture;
+  // and whether each is a plain normal map (its blue channel not empty), read once, the first time it is wanted
+  std::unordered_map<uint32_t, std::string> normalFiles_;
+  std::string lastFile_;  // (the last Add's)
+  std::unordered_map<uint32_t, bool> plainOf_;
+  bool Plain(uint32_t texture);
+  gfx::Pipeline normalsModern_;
+  bool reliefTried_ = false;
   float snowFallen_ = 2;    // all the snow that ever fell, in coverings of a mark (it only grows)
   double snowClock_ = -1;   // when it was last moved on
   bool settled_ = false;    // false until the first frame: marks laid before it are the map's own, old

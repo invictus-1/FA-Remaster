@@ -37,6 +37,19 @@ bool Effects::Hidden(const Frame& frame, uint32_t entity) const {
   return false;
 }
 
+bool Effects::Explosion(const FrameEffectEvent& event, const Frame& frame) const {
+  // (what a reclaim ends with, /lua/EffectUtilitiesGeneric.lua PlayReclaimEndEffects: made on the thing reclaimed, which
+  // may be gone from the frame already - a unit reclaimed)
+  const std::vector<float>& n = event.numbers;
+  if (n.size() >= 2 && n[0] == 4 && n[1] == 6 && event.blueprint == "glow_02" && event.text == "ramp_flare_02") return false;
+  const uint32_t entity = event.entity;
+  if (entity == kNone) return true;
+  auto unit = std::lower_bound(frame.units.begin(), frame.units.end(), entity, [](const FrameUnit& u, uint32_t id) { return u.id < id; });
+  if (unit != frame.units.end() && unit->id == entity) return unit->dead;
+  if (projectileAt_.count(entity) || entityAt_.count(entity)) return true;
+  return !(isProp && isProp(entity));  // (a shot gone with its impact is in no list: an explosion)
+}
+
 bool Effects::AttachPoint(const Frame& frame, uint32_t entity, int bone, Vec3* position, Quat* orientation, const Model** remembered) {
   if (entity == kNone) return false;
   // a unit: the frame's units are in entity-id order
@@ -314,7 +327,9 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
     const std::vector<float>& n = event.numbers;
     // the modern look gets a light; the original look the glow on the ground the original draws
     if (n.size() >= 2 && !event.blueprint.empty() && !Hidden(frame, event.entity)) lights_->Flash("/textures/particles/" + event.text + ".dds", e.position, n[0], at, n[1] * 0.1f);
-    if (blasts_ && n.size() >= 2 && !Hidden(frame, event.entity)) blasts_->FromFlash(e.position, n[0], at, event.entity);  // (a blast, blasts.h)
+    // (a blast, blasts.h; [scars] not a light that is no explosion's: Chris, 2026-10-20, a black mass under every wall begun
+    // and wherever a wreck or a tree was reclaimed)
+    if (blasts_ && n.size() >= 2 && !Hidden(frame, event.entity) && Explosion(event, frame)) blasts_->FromFlash(e.position, n[0], at, event.entity);
     if (n.size() >= 2 && !event.blueprint.empty())
       decals_->AddLight("/textures/particles/" + event.blueprint + ".dds", "/textures/particles/" + event.text + ".dds", e.position, n[0], at, n[1] * 0.1f);
     return;

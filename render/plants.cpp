@@ -156,6 +156,14 @@ float4 VSFade(uint id : SV_VertexID) : SV_Position {
   return float4(id == 1 ? 3.0 : -1.0, id == 2 ? 3.0 : -1.0, 0, 1);
 }
 float4 PSFade(float4 position : SV_Position) : SV_Target { return float4(info.x, info.x * info.y, 1, 1); }
+// [scars] a wreck gone (PlantLife::Heal): what burnt round it multiplied down (how hard by `when`.x, how fresh x how hard
+// by `when`.y), fully within its radius, softly toward its edge
+float4 PSHeal(VOut i) : SV_Target {
+  float d = length(i.at - i.burn.xy) / max(i.burn.z, 0.05);
+  float w = 1 - smoothstep(0.8, 1.0, d);
+  if (w <= 0) discard;
+  return float4(lerp(1, i.when.x, w), lerp(1, i.when.y, w), 1, 1);
+}
 )hlsl";
 
 struct BurnConstants {
@@ -191,6 +199,13 @@ float4 PS(float4 position : SV_Position) : SV_Target {
   if (b.r < 0.02) discard;
   float mottle = CloudNoise(float3(world.xz * 2.7, 4.1)) * 0.65 + CloudNoise(float3(world.xz * 7.3, 1.7)) * 0.35;
   float4 look = PlantsBurnLookOf(b, saturate(mottle * 1.3 - 0.15));
+  // [scars] under lying snow what burnt more than a minute or so ago is snowed over (as a mark laid on the snow is, decals.h;
+  // Chris, 2026-10-20: black masses on the snow round a base); what burns now has melted it and shows
+  [branch] if (weather.y > 0) {
+    float fresh = b.g / b.r;
+    float age = fresh > 1e-4 ? -100 * log(min(fresh, 1)) : 1e3;
+    look.xy *= 1 - weather.y * smoothstep(30, 120, age);
+  }
   if (look.x + look.y < 0.01) discard;
   // (black with paler grey ash in patches where it burnt through; a dull burnt brown after)
   float ash = saturate(mottle * 2.2 - 1.0);
@@ -202,7 +217,7 @@ float4 PS(float4 position : SV_Position) : SV_Target {
 }  // namespace
 
 PlantLife::~PlantLife() {
-  for (gfx::Pipeline p : {pressPass_, burnSplat_, burnFade_, ground_})
+  for (gfx::Pipeline p : {pressPass_, burnSplat_, burnFade_, ground_, burnHeal_})
     if (p) device_->Destroy(p);
   for (gfx::Texture t : {press_[0], press_[1], burnt_})
     if (t) device_->Destroy(t);
@@ -243,6 +258,19 @@ bool PlantLife::Init() {
   pd.samples = gSceneSamples;
   pd.alphaWrite = false;
   if (burnFade_) ground_ = device_->CreatePipeline(pd, &error);
+  if (ground_) {  // [scars] (Heal's circles: as the burns are drawn, multiplying; without it a wreck's burn grows back as any)
+    gfx::PipelineDesc hd;
+    hd.name = "plants: burnt, a wreck gone";
+    hd.vertexSource = hd.pixelSource = burn;
+    hd.pixelEntry = "PSHeal";
+    hd.cull = gfx::Cull::None;
+    hd.depthTest = hd.depthWrite = false;
+    hd.depthTarget = false;
+    hd.blend = gfx::Blend::Multiply;
+    hd.colorFormat = gfx::Format::RG16F;
+    std::string healError;
+    burnHeal_ = device_->CreatePipeline(hd, &healError);
+  }
   gfx::TargetDesc td;
   td.storage = true;
   td.width = td.height = kPressSize;
@@ -271,6 +299,7 @@ void PlantLife::SetMap(float mapWidth, float mapHeight) {
   burns_.clear();
   fireAt_.clear();
   wrecks_.clear();
+  heals_.clear();  // [scars]
   lastClock_ = fadedAt_ = blastsSeen_ = -1;
   lastBurnt_ = -1e31;
   pressedAt_ = -1;
@@ -293,6 +322,13 @@ void PlantLife::AddWreck(float x, float z, float radius, double born) {
   AddBurn(x, z, 0.3f + 1.4f * std::min(radius, 12.0f), 0.85f, born);
 }
 
+void PlantLife::Heal(float x, float z, float radius, double when) {
+  if (radius <= 0 || heals_.size() >= 1024) return;
+  static const bool debug = getenv("MOHO64_DEBUG_BURNS") != nullptr;  // (as AddBurn's)
+  if (debug) printf("render: plants: a wreck gone at %.1f, %.1f: what burnt within %.2f goes, from %.1f s\n", x, z, radius, when);
+  heals_.push_back({x, z, radius, 1, when});
+}
+
 void PlantLife::WatchBlasts(const Blasts& blasts, double clock, const std::function<float(float, float)>& ground) {
   // (each new one once, half a second after it: a scorch and a flash of one explosion merge within that time)
   const double upTo = clock - 0.5;
@@ -304,11 +340,14 @@ void PlantLife::WatchBlasts(const Blasts& blasts, double clock, const std::funct
     if (b.born < 15) continue;
     // (on the ground: not a hit high on a unit, nor one in the air)
     if (ground && b.at.y - ground(b.at.x, b.at.z) > std::max(1.5f, 0.5f * b.size)) continue;
-    // larger than its scorch; a shell's small blast singes, a big one burns through. Past a size of 4 it grows little
-    // more than the scorch itself: a commander's warp-in mark (28 across) burnt a circle of 30 round every start
-    // position, and photos taken there came out black (2026-10-19)
-    const float reach = b.size <= 4 ? 0.6f + 1.6f * b.size : 7.0f + 0.3f * (b.size - 4);
-    AddBurn(b.at.x, b.at.z, std::min(reach, 30.0f), std::clamp(0.35f + 0.5f * b.size, 0.4f, 1.0f), b.born);
+    // [scars] as large as its scorch and a little more (its radius 0.3 + 0.7 x the scorch across: some 1.4 times the
+    // scorch's; the burn's ragged edge thins out over its outer half), sized by what made it - the scorch or crater the
+    // script laid, or the shot's damage radius - and not by the flash, whose glow is one size for every missile of a kind:
+    // an MML's missile (damage radius 1, a scorch under 1 across) burnt 6 across with its flash's size (Chris, 2026-10-20:
+    // "those missiles are small"). A flash alone (a shot without a radius): half its size. A shell's small blast singes,
+    // a big one burns through; a commander's warp-in mark burns nothing (no heat, and the first quarter-minute: above).
+    const float scorch = b.scorch > 0 ? b.scorch : 0.5f * b.size;
+    AddBurn(b.at.x, b.at.z, std::min(0.3f + 0.7f * scorch, 30.0f), std::clamp(0.35f + 0.5f * scorch, 0.4f, 1.0f), b.born);
   }
   blastsSeen_ = std::max(blastsSeen_, upTo);
 }
@@ -337,6 +376,7 @@ void PlantLife::Prepare(const View& view, const Camera& camera, const std::vecto
     burntFresh_ = true;
     pressValid_ = false;
     fadedAt_ = -1;
+    heals_.clear();  // [scars]
   }
   const float dt = lastClock_ >= 0 ? static_cast<float>(std::clamp(clock - lastClock_, 0.0, 0.5)) : 0.0f;
   lastClock_ = clock;
@@ -376,6 +416,23 @@ void PlantLife::Prepare(const View& view, const Camera& camera, const std::vecto
       device_->SetPipeline(burnFade_);
       device_->SetConstants(1, f, sizeof f);
       device_->Draw(3);
+      // [scars] where wrecks went (Heal): what burnt round them goes, how hard by e to the minus the time over a fifth
+      // of `healing`, how fresh twice as fast (it browns first, then thins out by its patches)
+      heals_.erase(std::remove_if(heals_.begin(), heals_.end(), [&](const Burn& h) { return clock - h.born > healing || h.born > clock + 1; }), heals_.end());
+      if (burnHeal_ && !heals_.empty()) {
+        const float hard = static_cast<float>(std::exp(-gone / std::max(0.2 * healing, 1.0))), fresh = static_cast<float>(std::exp(-gone / std::max(0.1 * healing, 1.0)));
+        const size_t n = std::min(heals_.size(), static_cast<size_t>(kBurnsADraw));
+        for (size_t i = 0; i < n; ++i) {
+          const Burn& h = heals_[i];
+          float* a = k->burns[i * 2];
+          a[0] = h.x, a[1] = h.z, a[2] = h.radius, a[3] = 1;
+          float* c = k->burns[i * 2 + 1];
+          c[0] = hard, c[1] = hard * fresh, c[2] = 0, c[3] = 0;
+        }
+        device_->SetPipeline(burnHeal_);
+        device_->SetConstants(1, k.get(), static_cast<uint32_t>(sizeof(float) * 4 * (1 + 2 * n)));
+        device_->Draw(static_cast<uint32_t>(n) * 6);
+      }
     }
     if (!burns_.empty()) device_->SetPipeline(burnSplat_);
     for (size_t from = 0; from < burns_.size(); from += kBurnsADraw) {
