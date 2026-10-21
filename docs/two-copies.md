@@ -297,6 +297,15 @@ Remedies proposed, not built:
    - `os.time` / `os.date` answer the session's start.
    - `os.getenv`, `execute`, `exit` and `tmpname` are not in the sim state at all.
 2. The smallest script fix for the callback case: build the map at `BeginSession`.
+3. The install path in every chunk name (found 2026-10-21 by the ui chat): Vfs::ChunkName is "@" + the mount's
+   display path + the file, so a game started with an absolute --init (c:/users/.../gamedata/lua.nx2) has longer
+   chunk names than one started from the lab folder (gamedata/lua.nx2): 35 bytes more per script loaded, so a Lua
+   heap 5-7 KB larger and the collector's moments elsewhere, with the state identical (pause_probe2: both forms
+   give the same state; with the same path forms the lua line matches too). Two players with different install
+   folders meet this in every game, as in the original (its chunk names are full disk paths). Remedy: the sim
+   state's chunk names as virtual paths (/lua/sim/Unit.lua); only error text changes, a deviation. For the
+   two-copies check and live-vs-playback compares today: start both copies from the same folder with the same
+   path forms.
 
 tostring() of objects: no script uses one as a key that is walked, sorts or compares by one, or parses an
 address back out. Every non-log use is SAFE (the three above, plus `table.hash`, which only gets strings).
