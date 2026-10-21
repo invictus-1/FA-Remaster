@@ -193,9 +193,9 @@ std::vector<Unit*> CommandableUnits(Sim& sim, const std::vector<uint32_t>& ids, 
     bool okay = true;
     if (Army* a = e->army) {
       if (a->outOfGame) okay = false;
-      else if (!(sim.commandSource != 0xff && HasSource(a, sim.commandSource))) okay = sim.cheats;
+      else if (!(sim.commandSource != 0xff && HasSource(a, sim.commandSource))) okay = sim.CheatsEnabled();
     } else {
-      okay = sim.cheats;
+      okay = sim.CheatsEnabled();  // 0x7493c2
     }
     if (!okay) {
       if (abortAll) *abortAll = true;
@@ -342,7 +342,7 @@ void CommandStream::Apply(Sim& sim, int type, const std::string& payload) {
       int army = in.U8();
       std::string bp = in.Str();
       float x = in.F32(), z = in.F32(), heading = in.F32();
-      if (!sim.cheats || army >= static_cast<int>(sim.armies().size())) break;
+      if (!sim.CheatsEnabled() || army >= static_cast<int>(sim.armies().size())) break;  // 0x748aae
       Army* a = sim.armies()[army].get();
       if (a->outOfGame) break;
       const BlueprintInfo* b = sim.blueprints().Find(bp);
@@ -355,7 +355,7 @@ void CommandStream::Apply(Sim& sim, int type, const std::string& payload) {
     case 8: {  // CreateProp 0x748c00 (cheats)
       std::string bp = in.Str();
       Vec3 p{in.F32(), in.F32(), in.F32()};
-      if (!sim.cheats) break;
+      if (!sim.CheatsEnabled()) break;  // 0x748c0c
       if (const BlueprintInfo* b = sim.blueprints().Find(bp)) sim.CreateProp(L, *b, p, Quat{}, {1, 1, 1});
       break;
     }
@@ -368,7 +368,7 @@ void CommandStream::Apply(Sim& sim, int type, const std::string& payload) {
       Entity* e = sim.FindEntityById(in.U32());
       float qw = in.F32(), qx = in.F32(), qy = in.F32(), qz = in.F32();
       Vec3 p{in.F32(), in.F32(), in.F32()};
-      if (!in.ok || !sim.cheats || !e) break;
+      if (!in.ok || !sim.CheatsEnabled() || !e) break;  // 0x748cd6, before the entity is looked up
       // through the entity's own Warp (0x748d3f: vt+0x44), as Lua's Warp: a unit's is Unit::Warp 0x6aa310, which
       // takes the layer of the new place (Entity::GetStartingLayer) and its height (CalcSpawnElevation). Seen: a
       // tactical missile launcher warped from land into the sea turns Seabed in that beat (Missiles, tick 707).
@@ -429,7 +429,7 @@ void CommandStream::Apply(Sim& sim, int type, const std::string& payload) {
       }
       if (!ValidateNewCommandId(sim, data.id, "IssueCommand")) break;
       std::vector<Unit*> units = CommandableUnits(sim, ids, nullptr);
-      if (data.type == static_cast<int>(CommandType::DestroySelf) && !sim.cheats) break;
+      if (data.type == static_cast<int>(CommandType::DestroySelf) && !sim.CheatsEnabled()) break;  // 0x74941c
       IssueFromStream(sim, units, data, clear != 0);
       break;
     }
@@ -528,13 +528,25 @@ void CommandStream::Apply(Sim& sim, int type, const std::string& payload) {
       if (!RemoveCommandFromUnit(sim, static_cast<Unit*>(e), *c)) unhandled("RemoveCommandFromQueue (factory queue)");
       break;
     }
-    case 20:
-      unhandled("DebugCommand");
+    case 20: {  // DebugCommand 0x6e4d80 -> Sim::ExecuteDebugCommand 0x749da0
+      std::string text = in.Str();
+      Vec3 mouse{in.F32(), in.F32(), in.F32()};
+      int army = in.U8();
+      std::vector<uint32_t> ids = in.IdSet();
+      if (!in.ok) break;
+      // the ids that are units, with no permission test (0x749e20..0x749e89)
+      std::vector<Unit*> units;
+      for (uint32_t id : ids) {
+        Entity* e = sim.FindEntityById(id);
+        if (e && e->kind == Entity::Kind::Unit) units.push_back(static_cast<Unit*>(e));
+      }
+      sim.ExecuteDebugCommand(L, text, mouse, army, units);
       break;
+    }
     case 21: {  // ExecuteLuaInSim 0x749a70: a global function's NAME and one argument (cheats)
       std::string fn = in.Str();
       std::string arg = in.Lua();
-      if (!sim.cheats) break;
+      if (!sim.CheatsEnabled()) break;  // 0x749a93
       int top = lua_gettop(L);
       lua_pushcfunction(L, ScriptTraceback);
       lua_getglobal(L, fn.c_str());

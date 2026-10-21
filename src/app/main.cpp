@@ -531,7 +531,9 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
   // --orders: lines "<tick> issue <command type number> <unit id>[,<unit id>...] [<x> <y> <z> | @<entity id>] [queue]",
   // "<tick> pause", "<tick> resume", "<tick> endgame", "<tick> callback <name>", "<tick> lua <one line of Lua run in
   // the sim state: a test building its case, not an order>", "<tick> focus <army 1-based | -1>" (the interface's
-  // focus army request: Sim::RequestFocusArmy); <tick> counts beats, paused ones included, and
+  // focus army request: Sim::RequestFocusArmy), "<tick> debug <army 1-based | -1> <sim console command>" (a
+  // DebugCommand: Ctrl-Alt-B is "BlingBling"), "<tick> warp <unit id> <x> <y> <z>" (a WarpEntity with the unit's
+  // own orientation: Alt-T); <tick> counts beats, paused ones included, and
   // the order is applied before the beat that follows; all as source 0. '#' starts a comment.
   std::multimap<uint32_t, std::string> orders;
   if (!o.orders.empty()) {
@@ -563,6 +565,19 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
         char key[64] = "", value[64] = "";
         unsigned long id = 0;
         if (std::sscanf(text, "%*s %lu %63s %63s", &id, key, value) == 3) writer.ProcessInfoPair(static_cast<uint32_t>(id), key, value);
+      }
+      else if (!std::strcmp(what, "debug")) {  // "<tick> debug <army, 1-based | -1> <text>": DoSimCommand <text>
+        int army = 0, at = 0;
+        if (std::sscanf(text, "%*s %d %n", &army, &at) >= 1 && at > 0)
+          writer.DebugCommand(text + at, 0, 0, 0, army == -1 ? -1 : army - 1, {});
+      }
+      else if (!std::strcmp(what, "warp")) {  // "<tick> warp <unit id> <x> <y> <z>": Alt-T's WarpEntity for one unit
+        unsigned long id = 0;
+        if (std::sscanf(text, "%*s %lu %f %f %f", &id, &x, &y, &z) == 4) {
+          const Entity* e = sim.FindEntityById(static_cast<uint32_t>(id));
+          const Quat q = e ? e->orientation : Quat{};
+          writer.WarpEntity(static_cast<uint32_t>(id), q.w, q.x, q.y, q.z, x, y, z);
+        }
       }
       else if (!std::strcmp(what, "focus")) {  // "<tick> focus <army, 1-based | -1>": the interface's SetFocusArmy
         int army = 0;
@@ -633,6 +648,9 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
       if (o.view && b.find("ScoreAccum") != std::string::npos)
         Logf(LogLevel::Info, "view: sync table %zu (tick %u, %zu bytes) carries ScoreAccum%s", syncBeats, sim.tick(), b.size(),
              b.find("StatsToSend") != std::string::npos ? " and StatsToSend" : "");
+      // the sources that met a cheat test (Sim::CheatsEnabled): FAF's UserSync.lua prints "<name> is cheating!"
+      if (o.view && b.find("Cheaters") != std::string::npos)
+        Logf(LogLevel::Info, "view: sync table %zu (tick %u) carries Cheaters", syncBeats, sim.tick());
       lastSync = std::move(b);
     }
     // --view: the print lines since the last take, each as the host's console would get it ([] around it, so that

@@ -32,6 +32,10 @@ class CommandWriter {
   void CreateUnit(int army0, const std::string& blueprint, float x, float z, float heading);  // cheats
   void CreateProp(const std::string& blueprint, float x, float y, float z);                   // cheats
   void DestroyEntity(uint32_t entity);
+  // Put the entity at (x, y, z) facing q (cheats; Sim::WarpEntity 0x748cd0). The original's Alt-T
+  // (CON_TeleportSelectedUnits 0x833f90) sends one per selected unit of the focus army: the unit's own orientation
+  // and the cursor's world point (its height from IUnit::CalcSpawnElevation; a unit's Warp takes its own anyway).
+  void WarpEntity(uint32_t entity, float qw, float qx, float qy, float qz, float x, float y, float z);
   // key / value as the interface sends them: ToggleScriptBit "<n>", SetFireState "<n>", SetAutoMode /
   // SetAutoSurfaceMode / SetRepeatQueue / SetPaused "true" | "false", CustomName "<text>".
   void ProcessInfoPair(uint32_t entity, const std::string& key, const std::string& value);
@@ -51,6 +55,10 @@ class CommandWriter {
   void ExecuteLuaInSim(const std::string& function, const std::string& luaValue);  // cheats
   // SimCallback: /lua/SimCallbacks.lua's DoCallback(name, data, units or nil).
   void LuaSimCallback(const std::string& name, const std::string& luaValue, const std::vector<uint32_t>& units);
+  // A sim console command, as the interface's "DoSimCommand <text>" (0x88e440) sends it: the text, the cursor's
+  // world point, the focus army (0-based; 0xff = none) and the selected units. "BlingBling" is Ctrl-Alt-B (cheats).
+  void DebugCommand(const std::string& text, float x, float y, float z, int focusArmy0,
+                    const std::vector<uint32_t>& units);
   void EndGame();
 
   bool empty() const { return body_.empty(); }

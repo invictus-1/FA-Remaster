@@ -111,6 +111,31 @@ void CommandWriter::DestroyEntity(uint32_t entity) {
   Message(9, o.d);
 }
 
+void CommandWriter::WarpEntity(uint32_t entity, float qw, float qx, float qy, float qz, float x, float y, float z) {
+  Out o;
+  o.U32(entity);
+  o.F32(qw);
+  o.F32(qx);
+  o.F32(qy);
+  o.F32(qz);
+  o.F32(x);
+  o.F32(y);
+  o.F32(z);
+  Message(10, o.d);
+}
+
+void CommandWriter::DebugCommand(const std::string& text, float x, float y, float z, int focusArmy0,
+                                 const std::vector<uint32_t>& units) {
+  Out o;
+  o.Str(text);
+  o.F32(x);
+  o.F32(y);
+  o.F32(z);
+  o.U8(focusArmy0 < 0 ? 0xff : focusArmy0);
+  o.IdSet(units);
+  Message(20, o.d);
+}
+
 void CommandWriter::ProcessInfoPair(uint32_t entity, const std::string& key, const std::string& value) {
   Out o;
   o.U32(entity);

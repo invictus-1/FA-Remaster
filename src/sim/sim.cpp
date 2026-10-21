@@ -24,6 +24,7 @@
 #include <fstream>
 #include <iterator>
 #include <map>
+#include <strings.h>
 
 #include "core/backtrace.h"
 #include "core/crash.h"
@@ -374,8 +375,10 @@ int l_GetSurfaceHeight(lua_State* L) {
   return 1;
 }
 
+// CheatsEnabled() 0x74b6a0: Sim::CheatsEnabled, so the call counts as a cheat test ("Logs the cheat attempt no
+// matter what")
 int l_CheatsEnabled(lua_State* L) {
-  lua_pushboolean(L, S(L)->cheats);
+  lua_pushboolean(L, S(L)->CheatsEnabled());
   return 1;
 }
 
@@ -1828,13 +1831,143 @@ bool Sim::OkayToMessWith(const Army* a) const {
   if (a->outOfGame) return false;  // army+0x1c0, even with cheats
   if (commandSource != 0xff && std::find(a->sources.begin(), a->sources.end(), commandSource) != a->sources.end())
     return true;
-  return cheats;  // CheatsEnabled() (also feeds the beat checksum in the original)
+  return CheatsEnabled();  // 0x747355 (also feeds the beat checksum in the original)
+}
+
+bool Sim::CheatsEnabled() const {
+  const bool known = commandSource != 0xff && commandSource < static_cast<int>(cmdSources.size());
+  if (!cheats)
+    Logf(LogLevel::Warning, "%s is trying to cheat!", known ? cmdSources[commandSource].name.c_str() : "???");
+  if (commandSource != 0xff && std::find(cheaters_.begin(), cheaters_.end(), commandSource) == cheaters_.end())
+    cheaters_.push_back(commandSource);
+  return cheats;
+}
+
+void Sim::Print(const std::string& line) {
+  if (collectPrints) prints_.push_back(line);
+  else Logf(LogLevel::Info, "%s", line.c_str());
+}
+
+namespace {
+
+// The sim's console commands (the table 0x10a63dc of CSimConCommand, ctor 0x734630: name, help, `safe` flag at
+// desc+8, handler vt+0). Only those the interface's keys send are built.
+struct SimConCommand {
+  const char* name;
+  bool safe;  // false: it needs CheatsEnabled
+  void (*run)(Sim& sim, lua_State* L, const std::vector<std::string>& args, Vec3 mouse, Army* army,
+              const std::vector<Unit*>& units);
+};
+
+// "BlingBling" ("Cash money yo"; Ctrl-Alt-B is the console alias "DoSimCommand BlingBling", 0xbd3900; its
+// CSimConCommand is made with safe = 0, 0xbd3936): Moho::Sim::BlingBling 0x64bbe0. No army: "No focus army." Else
+// the army's own storage (army vt+0x24 -> +0x50, the one CAiBrain:GiveStorage sets, 0x588599: ours brainStorage)
+// grows by 10000 energy and 10000 mass (0xe4f78c), taken out of and put back into the maximum (CEconStorage::Chng
+// 0x7732c0, -1 then +1: whole numbers), and then each stored amount grows by the whole new maximum (0x64ba60, the
+// 64-bit sums as floats; 0x64bc79..0x64bc96). Nothing caps it here: the next share-out keeps what fits.
+void SimConBlingBling(Sim& sim, lua_State*, const std::vector<std::string>&, Vec3, Army* army,
+                      const std::vector<Unit*>&) {
+  if (!army) {
+    sim.Print("No focus army.");
+    return;
+  }
+  ArmyEconomy& e = army->econ;
+  e.ChangeStorage(-1, e.brainStorage);
+  for (int i = 0; i < 2; ++i) e.brainStorage[i] += 10000.0f;
+  e.ChangeStorage(1, e.brainStorage);
+  for (int i = 0; i < 2; ++i) e.stored[i] += static_cast<float>(e.maxStorage[i]);
+}
+
+const SimConCommand kSimConCommands[] = {
+    {"BlingBling", false, SimConBlingBling},
+};
+
+// One command off the front of `text` (moho::CON_ParseCommand 0x41bff0): words split at spaces and tabs, a
+// double-quoted word kept whole, ';' ends the command, '#' or "//" ends the text. Returns false when no text is
+// left. (Simplified: the original's backslash-quote inside a quoted word is not built.)
+bool ParseConCommand(std::string& text, std::vector<std::string>& words) {
+  words.clear();
+  if (text.empty()) return false;
+  std::string word;
+  bool quoted = false, any = false;
+  size_t i = 0;
+  auto flush = [&]() {
+    if (any) words.push_back(word);
+    word.clear();
+    any = false;
+  };
+  for (; i < text.size(); ++i) {
+    const char c = text[i];
+    if (quoted) {
+      if (c == '"') {
+        quoted = false;
+        flush();
+      } else {
+        word.push_back(c);
+      }
+      continue;
+    }
+    if (c == '#' || (c == '/' && i + 1 < text.size() && text[i + 1] == '/')) {
+      i = text.size();
+      break;
+    }
+    if (c == ';') {
+      ++i;
+      break;
+    }
+    if (c == ' ' || c == '\t') {
+      flush();
+    } else if (c == '"' && !any) {
+      quoted = true;
+      any = true;
+    } else {
+      word.push_back(c);
+      any = true;
+    }
+  }
+  flush();
+  text.erase(0, i);
+  return true;
+}
+
+}  // namespace
+
+// Sim::ExecuteDebugCommand 0x749da0 -> func_TryParseSimCommand 0x734870: command after command, the first word is
+// looked up (case-insensitive, FindSimConExactOrEnd 0x735300 / _stricmp); unknown: "Unknown sim command '%s'
+// [invoked by %s]". A command that is not safe asks CheatsEnabled; refused, the rest of the text is dropped
+// (0x734972..0x7349ce); allowed, the sim prints "%s: %s" (the source's name and the command's words) before it
+// runs (0x7349cf..0x734a06).
+void Sim::ExecuteDebugCommand(lua_State* L, const std::string& text, Vec3 mouse, int army,
+                              const std::vector<Unit*>& units) {
+  Army* a = army >= 0 && army < static_cast<int>(armies_.size()) ? armies_[army].get() : nullptr;
+  const char* who = commandSource != 0xff && commandSource < static_cast<int>(cmdSources.size())
+                        ? cmdSources[commandSource].name.c_str()
+                        : "???";
+  std::string rest = text;
+  std::vector<std::string> words;
+  while (ParseConCommand(rest, words)) {
+    if (words.empty()) continue;
+    const SimConCommand* cmd = nullptr;
+    for (const SimConCommand& c : kSimConCommands)
+      if (!strcasecmp(c.name, words[0].c_str())) cmd = &c;
+    if (!cmd) {
+      Print("Unknown sim command '" + words[0] + "' [invoked by " + who + "]");
+      continue;
+    }
+    if (!cmd->safe) {
+      if (!CheatsEnabled()) return;
+      std::string line;
+      for (const std::string& w : words) line += (line.empty() ? "" : " ") + w;
+      Print(std::string(who) + ": " + line);
+    }
+    cmd->run(*this, L, words, mouse, a, units);
+  }
 }
 
 // The script part of Sim::Sync (0x747b11): the engine's own fields go into the scripts' global Sync (who paused
 // and how many pauses that source has left, the focus army's statistics), the table is handed over as bytes, and
-// the scripts' ResetSyncTable() empties it for the next beat. (Not built: Sync.Cheaters, the sources that used a
-// cheat this beat, and the statistics' Children: only the debug window /lua/debug/ArmyStats.lua reads them.)
+// the scripts' ResetSyncTable() empties it for the next beat. (Not built: the statistics' Children: only the debug
+// window /lua/debug/ArmyStats.lua reads them.)
 // keep: the bytes go to pendingSync_ for TakeSync (collectSync for a beat, always for the setup's Sync).
 void Sim::SyncStep(bool keep) {
   lua_State* L = state_->L();
@@ -1859,6 +1992,22 @@ void Sim::SyncStep(bool keep) {
       lua_pushnumber(L, tick_);
       lua_rawset(L, -3);
       lua_rawset(L, sync);
+    }
+    // Sync.Cheaters (0x747d5c..0x747e39): the sources that met CheatsEnabled since the last Sync, 1-based, and
+    // CheatsEnabled = the flag; the list is emptied. FAF's UserSync.lua prints "<names> is cheating!" (or "is trying
+    // to cheat!") from it.
+    if (!cheaters_.empty()) {
+      lua_pushstring(L, "Cheaters");
+      lua_newtable(L);
+      for (size_t i = 0; i < cheaters_.size(); ++i) {
+        lua_pushnumber(L, static_cast<float>(cheaters_[i] + 1));
+        lua_rawseti(L, -2, static_cast<int>(i + 1));
+      }
+      lua_pushstring(L, "CheatsEnabled");
+      lua_pushboolean(L, cheats);
+      lua_rawset(L, -3);
+      lua_rawset(L, sync);
+      cheaters_.clear();
     }
     if (keep) {
       pendingSync_.emplace_back();

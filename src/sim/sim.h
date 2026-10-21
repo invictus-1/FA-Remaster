@@ -499,6 +499,21 @@ class Sim {
   bool frozen = false;                // sim+0x8dd (= endGame after the next Sync): beats do nothing
   bool Paused() const { return frozen || (pauseOwner != -1 && !singleStep); }
   bool OkayToMessWith(const Army* a) const;  // 0x747320
+  // Sim::CheatsEnabled 0x747180: every cheat test of the sim goes through it (the stream's CreateUnit, CreateProp,
+  // WarpEntity, ExecuteLuaInSim, a DestroySelf order, a debug command that is not safe; OkayToMessWith when the
+  // source does not command the army; the scripts' CheatsEnabled() and OkayToMessWithArmy). With cheats off it
+  // warns "%s is trying to cheat!" (0x7471ea..0x74721f; with cheats on "%s is cheating!" only under the convar
+  // sim_ReportCheats, 0x10a63ed, off by default: not built), the name being the current command source's; then
+  // that source (when there is one, 0x747282) joins the cheaters (sim+0x8e8, each once), whom the next Sync hands
+  // to the interface as Sync.Cheaters (SyncStep). Returns the flag (sim+0x8e6, the launch's CheatsEnabled).
+  bool CheatsEnabled() const;
+  // A DebugCommand message (stream type 20; Sim::ExecuteDebugCommand 0x749da0): the interface's "DoSimCommand
+  // <text>" with its cursor's world point, its focus army (an index; out of range = none) and its selection.
+  void ExecuteDebugCommand(lua_State* L, const std::string& text, Vec3 mouse, int army,
+                           const std::vector<Unit*>& units);
+  // Sim::Printf 0x7462a0: one line for the interface's console (sim+0xa18, as print's lines; logged when no host
+  // takes them).
+  void Print(const std::string& line);
   // Stream-issued commands by their stream id (source << 24 | n); Lua-issued ones are in commandsById.
   std::map<uint32_t, std::weak_ptr<UnitCommand>> streamCommands;
   // Commands whose last unit let them go since the last Sync. The original deletes such a command in the Sync
@@ -571,6 +586,7 @@ class Sim {
   std::vector<Unit*> units_;
   std::vector<std::string> pendingSync_;
   std::vector<std::string> prints_;  // print's lines until TakePrints (the original's sim+0xa18)
+  mutable std::vector<int> cheaters_;  // sim+0x8e8: the sources that met CheatsEnabled since the last Sync
   void KeepPrint(const std::vector<std::string>& args);  // one print(...) call's lines onto prints_
   void SyncStep(bool keep);  // the script part of Sim::Sync; keep: its bytes go to pendingSync_
   std::atomic<int> requestedFocus_{-1};  // the pending focus army (SimDriver+0xb0); Start sets it to focusArmy
