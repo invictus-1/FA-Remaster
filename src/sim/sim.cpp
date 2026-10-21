@@ -1079,7 +1079,7 @@ bool Sim::Start(const ReplayHeader& replay) {
   bps_.fileExists = [vfs = vfs_](const std::string& path) { return vfs->Exists(path); };
   bps_.CopyToSim(rules_->L(), L);
   RegisterCategoryBindings(L, &bps_);
-  rules_.reset();  // the rules state is done
+  if (!keepRules) rules_.reset();  // the rules state is done (a host that asked keeps it: TakeRules)
 
   if (!state_->DoScript("/lua/simInit.lua")) return false;
 

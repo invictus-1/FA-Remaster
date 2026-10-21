@@ -131,6 +131,13 @@ class Sim {
   // A fix in the blueprints is for one of the game's mods (today the stock campaign mod, deviations.md 4): with
   // `fixes`, Start(SessionDescription) loads the rules again with the fix files.
   bool RulesFixesWanted() const;
+  // The rules state for a host's own state (ui REQUESTS 46). The original makes one RRuleGameRules per session
+  // (func_WorldSessionUserLoad 0x885de0, at 0x885e53) and exports it to the sim's state and to the interface's
+  // (0x885fe6). Set keepRules before Start: Start then leaves the rules state alive after copying the blueprints
+  // into the sim's state, and the host takes it with TakeRules once Start is done (nullptr when not kept or
+  // already taken), copies what it needs into its own state and frees it. Nothing of the sim's state is in it.
+  bool keepRules = false;
+  std::unique_ptr<ScriptState> TakeRules() { return std::move(rules_); }
   // Start the session described by a replay header (no commands are played yet).
   bool Start(const ReplayHeader& replay);
   // Start the session a lobby launch describes (sim/session.h): the same start, with the launch's focus army.
