@@ -1716,10 +1716,8 @@ wind's laying, drifts, depth, its edge) are for tuning.
   with the twins, the mask and the relief, and with the option on but no snow lying (clear; wet ground with the twins): all
   0 px. On, Vulkan against Direct3D 12 differ as much as without it (mean 1.87 against 1.96 of 255 in a snowy scene with every
   ground option on: the falling flakes). SETONS_Q reads its three Fab materials (pictures kept in scratch).
-- **Open**: the map's decals lay their own snow (decals.cpp, the constant colour and lighting.h's cover with their own
-  normals): where this snow is thinner (under trees, on scoured ground) or textured, a decal's square shows its old snow
-  over it; the decals want the same hooks (their pipeline reading the shelter, and the materials or at least their colour).
-  The shelter follows the map's props and heights as the map opened (a felled tree, a flattened building site keep their
+- **Open**: [decalsnow] 2026-10-21, done: the marks no longer lay a snow of their own while this snow lies (the section
+  "Marks on the ground that looked wrong", the last item). The shelter follows the map's props and heights as the map opened (a felled tree, a flattened building site keep their
   shade). The ray tracing scene's ground colours, the ground cover and units' own snow do not know the materials. Winter has
   no snow of its own yet.
 ## Marks on the ground that looked wrong (Chris's playthrough, 2026-10-20; a helper's, for review) [scars]
@@ -1767,6 +1765,20 @@ What Chris saw, what made it, and what changed. Pictures in the helper's folder 
   the MML's burn is 1.8 across.
 - **Old burns on snow**: the burnt ground is snowed over once a burn is older than half a minute to two minutes, as
   marks are; a fresh one has melted the snow and shows.
+- **Marks on the snow ground** ([decalsnow], 2026-10-21, a helper's): with `snowGround` the ground lays its snow from its
+  materials and its shelter, but a mark (a picture decal: a scorch, a crater, the map's old craters and trenches) still laid
+  the one constant snow colour with ModernLight's cover over its whole picture: brighter and smoother than the ground's
+  snow under trees, beside them and wherever the ground's is thinner or textured, a disc or a strip of the mark's shape.
+  Now, while the ground has laid its snow from the shelter this frame (`Terrain::SnowShelterLaid`), the marks are drawn by
+  pipelines of their own (`DECAL_SNOW_GROUND`: "decals, snow ground", and with `markRelief` "normal decals, modern relief,
+  snow ground"; made the first time, before the scene's pass) that lay no snow: a mark thins out by as much snow as lies
+  over it (its own share, as before: laid before the snow it is under it, laid on it it shows until new snow covers it),
+  so that the ground's own snow shows through, and the mark itself is lit bare. How much lies is reckoned as the ground's
+  pipeline reckons it (`MarkSnowLying`: the shelter at t6, the wind's way, `snowTune`, terrain.cpp's snowLie and snowLess,
+  with the materials the wider, mottled margin; not the break-up by the layers' heights close by, which only the ground
+  knows); the relief's softening under the snow (`markRelief`) takes the same. Without the snow ground, or with no snow
+  lying, the marks are drawn as before. Cost: nothing more (the marks' pass at 1440p with 300 scars and the map's marks in view, snow lying: 0.26 -> 0.23 ms by
+  the lowest of two runs; a mark under the snow lays nothing).
 
 Cost: `markRelief` +0.01 to 0.03 ms at 1440p (the options table); the burns' changes cost nothing (fewer burns are
 drawn). Off: pictures identical (regression 0 px on both backends, snow and rain too; SETONS_R by night and in snow

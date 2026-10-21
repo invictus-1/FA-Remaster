@@ -32,6 +32,11 @@ cbuffer DecalCamera : register(b1) {
   float4 cameraUp;     // w: aspect
   float4 cameraBack;   // w: near distance
   float4 mapInfo;      // x, y: 1 / the map's size; z: 1 = the map has water; w: the water's level
+#ifdef DECAL_SNOW_GROUND
+  float4 snowWind;     // [decalsnow] xy the way the wind blows (unit length); zw 1 / the map's size
+  float4 snowTune;     // [decalsnow] Terrain::snowTune
+  float4 snowMore;     // [decalsnow] x 1 = the snow's materials are drawn (the ground's wider, mottled margin)
+#endif
 };
 cbuffer Instances : register(b2) {
   Instance instances[1024];
@@ -41,6 +46,9 @@ Texture2D rampTexture : register(t2);
 Texture2D waterMap : register(t3);
 Texture2D waterRamp : register(t4);
 Texture2D reliefTexture : register(t5);  // a remastered picture's relief: x in alpha, y in green (BC5 read as the game's DXT5), y up the picture
+#ifdef DECAL_SNOW_GROUND
+Texture2D snowShelter : register(t6);  // [decalsnow] the snow ground's shelter (Terrain::SnowShelter): g sky, b crowns, a how it lies
+#endif
 #ifdef MSAA
 Texture2DMS<float> sceneDepth : register(t1);
 float DepthAt(int2 p) { return sceneDepth.Load(p, 0); }
@@ -74,6 +82,36 @@ float3 WorldAt(float2 pixel, float depth) {
   return cameraPosition + (cameraRight.xyz * (ndc.x * cameraRight.w * cameraUp.w) + cameraUp.xyz * (ndc.y * cameraRight.w) - cameraBack.xyz) * away;
 }
 
+#if defined(MODERN_RELIEF) || defined(DECAL_SNOW_GROUND)
+// How much snow lies on a mark's place (0..1), `fallen` the snow over it (the weather's, times the share on the mark),
+// `ground` the ground's own slope there: as ModernLight lays it on the ground, level ground first, in patches. [decalsnow]
+// With the snow ground (DECAL_SNOW_GROUND) as the ground's snow pipeline lays it: deeper in the lee and hollows, thinner
+// and patchier under trees, on steep, windward and scoured ground (terrain.cpp's SnowAround, its snowLie and snowLess: the
+// same numbers), and with the snow's materials over the ground's wider, mottled margin (lighting.h; the break-up by the
+// layers' heights close by is the ground's alone).
+float MarkSnowLying(float3 world, float3 ground, float fallen) {
+  float patch = CloudNoise(world * 0.9) * 0.55 + CloudNoise(float3(world.xz * 0.21, 5.3)) * 0.45;
+  float takes = patch * 0.75 + saturate((ground.y - 0.35) * 1.6) * 0.25;
+#ifdef DECAL_SNOW_GROUND
+  float4 shelter = snowShelter.SampleLevel(samplerLinearClamp, saturate(world.xz * snowWind.zw), 0);
+  float crowns = shelter.b, lay = shelter.a * 2 - 1;
+  float slope = length(ground.xz);
+  float lee = slope > 1e-3 ? dot(ground.xz / slope, snowWind.xy) * saturate(slope * 5) : 0;  // (1: facing away from the wind)
+  fallen *= (1 + 0.4 * lay * snowTune.w + 0.15 * lee) * (1 - 0.3 * crowns * snowTune.y);
+  takes -= 0.08 * crowns * snowTune.y + 0.25 * saturate((0.85 - ground.y) * 4) + 0.1 * saturate(-lee) + 0.3 * saturate(-lay) * snowTune.w;
+  float bar = 1.02 - fallen * 1.15;
+  [branch] if (snowMore.x > 0.5) {
+    float lying = smoothstep(bar - 0.15, bar + 0.35, takes) * smoothstep(0.25, 0.5, ground.y);
+    float mottle = CloudNoise(float3(world.xz * 0.45, 1.3)) * 0.6 + CloudNoise(float3(world.xz * 1.3, 4.7)) * 0.4;
+    return saturate(lying + (mottle - 0.5) * 3.2 * lying * (1 - lying));
+  }
+#else
+  float bar = 1.02 - fallen * 1.15;
+#endif
+  return smoothstep(bar, bar + 0.2, takes) * smoothstep(0.25, 0.5, ground.y);
+}
+#endif
+
 #ifdef MODERN_RELIEF
 // [scars] A normal decal with Decals::modernRelief (the modern look): the ground's own slope (from how its place changes
 // from pixel to pixel) tilted by the decal's, and the ground multiplied by how much more or less of the modern light the
@@ -82,15 +120,6 @@ float3 WorldAt(float2 pixel, float depth) {
 // nothing. Under lying snow (options.y: -1 - the share of it that lies on the mark, as a picture's) the relief softens
 // as the snow fills it. options.w: 0 the game's (how much applies in red), 1 the visuals track's effects' own (two
 // channels, y up the picture), 2 a plain normal map (x in alpha, y in green; no share in red): both at full strength.
-// How much snow lies on a mark's place (0..1), `fallen` the snow over it (the weather's, times the share on the mark):
-// as ModernLight lays it on the ground, level ground first, in patches. (One place for it: when the ground's snow takes
-// a shelter or an amount of its own, the marks' relief should take the same here.)
-float MarkSnowLying(float3 world, float3 ground, float fallen) {
-  float patch = CloudNoise(world * 0.9) * 0.55 + CloudNoise(float3(world.xz * 0.21, 5.3)) * 0.45;
-  float takes = patch * 0.75 + saturate((ground.y - 0.35) * 1.6) * 0.25;
-  float bar = 1.02 - fallen * 1.15;
-  return smoothstep(bar, bar + 0.2, takes) * smoothstep(0.25, 0.5, ground.y);
-}
 float4 NormalDecalModern(float4 c, float4 options, float4 shape, float3 world) {
   float3 ground = normalize(cross(ddy(world), ddx(world)));
   if (ground.y < 0) ground = -ground;
@@ -202,6 +231,9 @@ float4 PS(VOut i) : SV_Target {
   // lit as the ground it lies on: the ground's slope from how its place changes from pixel to pixel
   float3 N = normalize(cross(ddy(world), ddx(world)));
   if (N.y < 0) N = -N;
+#ifdef DECAL_SNOW_GROUND
+  const float3 groundSlope = N;  // [decalsnow]
+#endif
   if (i.options.w > 0.5) {  // a remastered picture's own relief, tilting the ground's slope as a normal decal does
     float2 t = reliefTexture.Sample(samplerAniso, local * 0.5 + 0.5).ag * 2 - 1;
     float3 inDecal = float3(t.x, sqrt(saturate(1 - dot(t, t))), -t.y);  // (its y up the picture: toward the decal's -z)
@@ -213,7 +245,17 @@ float4 PS(VOut i) : SV_Target {
   float4 tint = 0;
   if (mapInfo.z > 0.5) tint = waterRamp.Sample(samplerLinearClamp, float2(waterMap.Sample(samplerLinearClamp, world.xz * mapInfo.xy).g, 0.5));
   if (look > 0.5) {
+#ifdef DECAL_SNOW_GROUND
+    // [decalsnow] (Decals::snowGround) the snow that lies over the mark is the ground's own: the mark thins out by as much as
+    // lies there, and is lit bare
+    [branch] if (weather.y > 0 && i.options.y > 0) {
+      c.a *= 1 - MarkSnowLying(world, groundSlope, weather.y * i.options.y);
+      if (c.a <= 0.003) discard;
+    }
+    markSnow = 0;
+#else
     markSnow = i.options.y;  // (a mark laid on the snow shows on it until new snow covers it)
+#endif
     float3 lit = ModernLight(ToLinear(c.rgb), 0, 0.9, 1, 0, N, world, shadow);
 #ifdef MSAA
     return float4(lit, c.a);  // (the modern water colours what is under it itself)
@@ -226,10 +268,11 @@ float4 PS(VOut i) : SV_Target {
 }
 )hlsl";
 
-// The decals' shader source ([scars] `relief`: with the normal decals lit as Decals::modernRelief says).
-std::string DecalSource(bool relief) {
+// The decals' shader source ([scars] `relief`: with the normal decals lit as Decals::modernRelief says; [decalsnow] `snow`:
+// with the snow ground's, Decals::snowGround).
+std::string DecalSource(bool relief, bool snow = false) {
   // (how much of the lying snow a mark takes is the mark's own: see `snowLying`)
-  return std::string(relief ? "#define MODERN_RELIEF 1\n" : "") + (gSceneSamples > 1 ? "#define MSAA 1\n" : "") + "static float markSnow = 1;\n#define SURFACE_SNOW markSnow\n" +
+  return std::string(snow ? "#define DECAL_SNOW_GROUND 1\n" : "") + (relief ? "#define MODERN_RELIEF 1\n" : "") + (gSceneSamples > 1 ? "#define MSAA 1\n" : "") + "static float markSnow = 1;\n#define SURFACE_SNOW markSnow\n" +
          kViewShaderBlock + RayShaders() + kLightingShaderBlock + HotMetal::ShaderBlock() + kShader;  // (RayShaders: the small lights' shadows by rays; hot metal: hot_metal.h)
 }
 
@@ -286,6 +329,36 @@ void Decals::SetModernRelief(bool on) {
   pd.alphaWrite = false;
   normalsModern_ = device_->CreatePipeline(pd, &error);
   if (!normalsModern_) fprintf(stderr, "render: the marks' relief cannot be lit as the ground (%s)\n", error.c_str());
+}
+
+void Decals::PrepareSnowGround() {
+  // (the pictures' pipeline and the relief's, each with the snow ground's: DECAL_SNOW_GROUND)
+  auto make = [&](bool relief, gfx::Pipeline* out, const char* name) {
+    std::string error;
+    const std::string source = DecalSource(relief, true);  // (kept while the pipeline is made: the description points into it)
+    gfx::PipelineDesc pd;
+    pd.name = name;
+    pd.vertexSource = pd.pixelSource = source;
+    pd.attrs = {{"POSITION", 0, gfx::AttrType::Float3, 0}};
+    pd.stride = 12;
+    pd.cull = gfx::Cull::Front;
+    pd.depthTest = pd.depthWrite = false;
+    pd.depthTarget = false;
+    pd.blend = relief ? gfx::Blend::Multiply : gfx::Blend::Alpha;
+    pd.colorFormat = kSceneFormat;
+    pd.samples = gSceneSamples;
+    pd.alphaWrite = false;
+    *out = device_->CreatePipeline(pd, &error);
+    if (!*out) fprintf(stderr, "render: the marks cannot lay the snow ground's snow (%s)\n", error.c_str());
+  };
+  if (!snowTried_) {
+    snowTried_ = true;
+    make(false, &picturesSnow_, "decals, snow ground");
+  }
+  if (modernRelief && !reliefSnowTried_) {
+    reliefSnowTried_ = true;
+    make(true, &normalsModernSnow_, "normal decals, modern relief, snow ground");
+  }
 }
 
 bool Decals::Plain(uint32_t texture) {
@@ -646,6 +719,22 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
                                      up.x, up.y, up.z, static_cast<float>(view.width) / static_cast<float>(view.height),
                                      back.x, back.y, back.z, camera.zNear,
                                      water ? 1 / mapWidth_ : 0, water ? 1 / mapHeight_ : 0, water ? 1.0f : 0.0f, water ? waterLevel : 0.0f};
+  // [decalsnow] while the ground lays its snow from its shelter (snowGround): the pictures', and with modernRelief the relief's,
+  // pipelines with the snow ground's, their constants after the camera's (the wind's way and the map's size, the tuning, the
+  // materials), the shelter at t6. (Not on the water's drawing: its decals take no snow.)
+  const bool snowNow = snowGround.shelter && !overWater && snowGround.mapWidth > 0 && snowGround.mapHeight > 0;
+  const bool picturesSnow = snowNow && picturesSnow_, normalsSnow = snowNow && modernNormals && normalsModernSnow_;
+  float snowConstants[28] = {};
+  if (snowNow) {
+    std::copy(cameraConstants, cameraConstants + 16, snowConstants);
+    const float wind = std::sqrt(snowGround.wind[0] * snowGround.wind[0] + snowGround.wind[1] * snowGround.wind[1]);
+    snowConstants[16] = wind > 0 ? snowGround.wind[0] / wind : 0.0f;
+    snowConstants[17] = wind > 0 ? snowGround.wind[1] / wind : 0.0f;
+    snowConstants[18] = 1 / snowGround.mapWidth;
+    snowConstants[19] = 1 / snowGround.mapHeight;
+    std::copy(snowGround.tune, snowGround.tune + 4, snowConstants + 20);
+    snowConstants[24] = snowGround.materials ? 1.0f : 0.0f;
+  }
   int bound = -1;
   bool padsDone = !padsNow;  // [tarmac] (the pads drawn after the map's own pictures, before what was laid since)
   auto drawPads = [&]() {
@@ -665,9 +754,14 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
     }
     if (bound != kind) {
       bound = kind;
-      device_->SetPipeline(kind == 5 ? hot_ : kind == 2 ? lights_ : kind == 1 ? (modernNormals ? normalsModern_ : normals_) : pipeline_);  // (marks blend as pictures do; [scars] relief)
+      // (marks blend as pictures do; [scars] relief; [decalsnow] the snow ground's)
+      const bool snowBound = kind == 1 ? normalsSnow : kind != 2 && kind != 5 && picturesSnow;
+      device_->SetPipeline(kind == 5 ? hot_ : kind == 2 ? lights_ : kind == 1 ? (modernNormals ? (normalsSnow ? normalsModernSnow_ : normalsModern_) : normals_)
+                                                                             : picturesSnow ? picturesSnow_ : pipeline_);
       device_->SetConstants(0, &view.constants, sizeof view.constants);
-      device_->SetConstants(1, cameraConstants, sizeof cameraConstants);
+      if (snowBound) device_->SetConstants(1, snowConstants, sizeof snowConstants);
+      else device_->SetConstants(1, cameraConstants, sizeof cameraConstants);
+      if (snowBound) device_->SetTexture(6, snowGround.shelter);
       device_->SetTexture(1, sceneDepth);
       device_->SetTexture(3, water ? waterMap_ : textures_->Black());
       device_->SetTexture(4, water ? waterRamp_ : textures_->Black());
@@ -682,6 +776,7 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
     at += n;
   }
   if (!padsDone) drawPads();
+  if (snowNow) device_->SetTexture(6, {});  // [decalsnow]
 }
 
 }  // namespace render

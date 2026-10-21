@@ -2736,6 +2736,8 @@ void World::Render() {
     snowProps_ = {};
     snowPropsMade_ = false;
   }
+  // [decalsnow] the marks' pipelines that lay the same snow (made the first time, before the scene's pass)
+  if (snowGround && look == Look::Modern && haveMap_ && timeOfDay >= 0 && snowLying > 0) decals.PrepareSnowGround();
   // the sun's shadow maps first, then the scene into its own picture, then that onto the window
   Stage("sun shadows");
   if (shadowed) {
@@ -2825,6 +2827,13 @@ void World::Render() {
     terrain.Draw(view);
     Stage("marks on the ground");
     // decals on the ground, before anything stands on it: they read the ground's depth
+    // ([decalsnow] the snow the ground has just laid from its shelter, for the marks to lay the same)
+    decals.snowGround.shelter = terrain.SnowShelterLaid();
+    decals.snowGround.materials = terrain.SnowMaterialsLaid();
+    std::copy(terrain.snowWind, terrain.snowWind + 2, decals.snowGround.wind);
+    std::copy(terrain.snowTune, terrain.snowTune + 4, decals.snowGround.tune);
+    decals.snowGround.mapWidth = static_cast<float>(map.width);
+    decals.snowGround.mapHeight = static_cast<float>(map.height);
     if (decals.Count() && hide.find("decals") == std::string::npos) {
       post.BeginColorOnly();
       lights.Bind();
