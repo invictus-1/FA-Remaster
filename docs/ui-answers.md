@@ -25,7 +25,7 @@ Built as the original does them (read from the FA exe), tested, landing with ui 
    "<name>: BlingBling" and "<name> is cheating!" on screen. Alt+T (TeleportSelectedUnits 0x833f90): every selected
    unit of the player, buildings included, moved to the cursor. Alt+Delete destroys the selection. All need cheats on in
    the game options (test sim_commands.lua). As in FAF, the keys are bound in every game; without cheats the
-   simulation refuses and FAF says "<name> is trying to cheat!" (a choice for Chris if he wants them unbound then).
+   simulation refuses and FAF says "<name> is trying to cheat!" (Chris, 2026-10-21: "Keep FAF's way").
 
 ## render/REQUESTS.md 42: Chris's playthrough of 19 October, the interface's six items (2026-10-20)
 
