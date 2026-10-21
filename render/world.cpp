@@ -15,6 +15,7 @@
 #include "remasters.h"
 #include "ground.h"
 #include "snow_ground.h"  // [snow ground]
+#include "volfx_log.h"  // (MOHO64_DEBUG_VOLFX)
 
 namespace render {
 
@@ -227,6 +228,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
         centre.y = map.Height(Clamp(centre.x, 0, static_cast<float>(map.width)), Clamp(centre.z, 0, static_cast<float>(map.height)));
         const bool ok = d.type == 2 ? decals.AddNormal(d.textures[0], centre, d.scale.x, d.scale.z, heading, d.cutoffLod * options.decalRange)
                                     : decals.Add(d.textures[0], centre, d.scale.x, d.scale.z, heading, d.cutoffLod * options.decalRange);
+        if (ok && d.nearCutoffLod > 0) decals.SetNearCutoff(decals.LastAdded(), d.nearCutoffLod * options.decalRange);  // [decalfade]
         if (ok) ++laid;
       }
       printf("render: %d of the map's %zu decals laid\n", laid, map.decals.size());
@@ -637,6 +639,25 @@ gfx::Texture World::SnowProps() {
   return snowProps_;
 }
 
+// (volume explosions) An area's harm makes a blast's volume where it goes off on or near the ground or the water. Not a flak
+// burst high in the air: in two M28 games on SETONS_R every anti-air shell's harm went off 6.6 to 35 units over the ground
+// or the water under it, every other weapon's within 5 but for a few shells that met an aircraft. Not under the water:
+// below its surface, or a torpedo's or a depth charge's at all (the game's anti-navy shots all say so in their names,
+// TANAnglerTorpedo02, AANDepthCharge01, SANUallCavitationTorpedo01, ...; their harm goes off against a hull at the
+// waterline, most of it within half a unit of the surface). Nor a warp-in's clearing of its spot (IsTeleportEffect), nor
+// a fire burning on: a damage-over-time pulse (DefaultDamage.AreaDoTThread, a UEF bomber's napalm: ten pulses of 4 over
+// 3.6 s) is told with no weapon and no shot, and a little harm; a death weapon's, also told without them, does 1000 and more.
+bool World::AreaMakesVolume(const FrameHit& hit) const {
+  if (IsTeleportEffect(hit.projectile)) return false;
+  if (hit.weapon.empty() && hit.projectile.empty() && hit.amount < 50) return false;
+  const float x = hit.position[0], y = hit.position[1], z = hit.position[2];
+  if (y > GroundHeight(x, z) + 6) return false;
+  if (haveMap_ && map.water.present && y < map.water.elevation - 0.5f) return false;
+  std::string shot = hit.projectile;
+  for (char& c : shot) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  return shot.find("torpedo") == std::string::npos && shot.find("depthcharge") == std::string::npos;
+}
+
 float World::GroundHeight(float x, float z) const {
   if (!haveMap_) return 0;
   const float y = map.Height(x, z);
@@ -710,6 +731,15 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   particles.quality = effectsQuality;
   camera = cam;
   const Camera& placing = Placing();  // (photomode: a photo's tile places as the whole photo; else the camera itself)
+  {  // [decalfade] the decals' fade, measured from the camera the picture is placed by (decals.h, Decals::Lod)
+    Vec3 right, up, back;
+    placing.Axes(&right, &up, &back);
+    decals.fadeFraction = decalFadeFraction;
+    decals.lod.eye = placing.Eye();
+    decals.lod.forward = back * -1.0f;
+    decals.lod.widthPerDepth = 2 * std::tan(placing.fovY * 0.5f) * static_cast<float>(width) / static_cast<float>(std::max(height, 1));
+    decals.lod.scale = placing.lodScale > 0 ? placing.lodScale : 1.0f;
+  }
   time_ = time;
   clock_ = clock;
   barAnchors.clear();
@@ -1201,7 +1231,8 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       if (OutsidePlayable(d.position.x, d.position.z)) continue;  // (in the dark beyond the part that can be played)
       const float away = Length(d.position - view.eye), full = std::max(d.cutoff * depositIconFrom, 1.0f);
       const int k = 2.5f * perUnit / std::max(away, 1.0f) >= 16.0f * icons.Pixel() ? 1 : 0;
-      icons.AddUnder(d.hydrocarbon ? hydrocarbonIcon_[k] : massIcon_[k], d.position, Clamp((away - full * 0.8f) / (full * 0.2f), 0, 1));
+      const float measure = decals.Measure(d.position, view.eye);  // [decalfade] (as its mark's fade measures it)
+      icons.AddUnder(d.hydrocarbon ? hydrocarbonIcon_[k] : massIcon_[k], d.position, Clamp((measure - full * 0.8f) / (full * 0.2f), 0, 1));
     }
   }
   lights.Begin(clock);
@@ -1820,7 +1851,11 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
   WatchDeaths(frame, armyColors);  // (the debris of what has died: blastDebris)
   if (volumesOn_ && combat_.hitsKept)  // (volume explosions: harm to an area is a blast that large; a push is none)
     for (const FrameHit& h : combat_.hits)
-      if (h.radius > 0 && h.seen && !push(h.damageType)) volumes.OfferArea({h.position[0], h.position[1], h.position[2]}, h.radius, static_cast<double>(h.tick) * 0.1);
+      if (h.radius > 0 && h.seen && !push(h.damageType)) {
+        if (VolfxLog* log = VolfxLog::Get()) log->SetArea(h.weapon, h.projectile, h.damageType, h.amount);  // (MOHO64_DEBUG_VOLFX: what harmed it)
+        if (AreaMakesVolume(h)) volumes.OfferArea({h.position[0], h.position[1], h.position[2]}, h.radius, static_cast<double>(h.tick) * 0.1);
+        else if (VolfxLog* log = VolfxLog::Get()) log->Declined(false, h.radius);
+      }
   CpuTimes::Part("units seen first: their files read ahead");
   {  // (their models' files read on the worker threads, all together; the models are made below)
     std::vector<std::string> fresh;

@@ -35,6 +35,10 @@ class Blasts;
 class BuildEffects;
 class Exhausts;
 
+// Whether a blueprint's path is a warp-in's or a teleport's own effect (/effects/entities/UnitTeleport01..03: a commander's
+// warp-in, CommandUnit.lua, and a teleport): its light and its harm to the spot ('Fire', 'Disintegrate') are no explosion.
+bool IsTeleportEffect(const std::string& path);
+
 class Effects {
  public:
   Effects(Particles* particles, Ribbons* ribbons, Decals* decals, Lights* lights, ModelCache* models)
@@ -118,8 +122,9 @@ class Effects {
   bool Hidden(const Frame& frame, uint32_t entity) const;
   // [scars] Is a flash of light made on that entity an explosion's (a blast, blasts.h)? A shot's (on its projectile, or
   // on one already gone), a dying unit's, an effect entity's (a nuke's, a death's) are; one a script makes on a living
-  // unit (a structure begun, a unit being built, a teleport, a tractor claw's grip, a shield's discharge) or on a prop (one
-  // a new structure clears away, one reclaimed, a tree catching fire) is not: it burns nothing and pushes nothing.
+  // unit (a structure begun, a unit being built, a teleport, a tractor claw's grip, a shield's discharge), on a warp-in's or
+  // a teleport's own effect (UnitTeleport01..03) or on a prop (one a new structure clears away, one reclaimed, a tree
+  // catching fire) is not: it burns nothing, pushes nothing and makes no volume explosion.
   bool Explosion(const FrameEffectEvent& event, const Frame& frame) const;
   // Whose effects an event makes in the remastered look ("uef", ...; "" none known). See the top.
   std::string FactionOf(const FrameEffectEvent& event, const Frame& frame);

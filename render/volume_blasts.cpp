@@ -13,6 +13,7 @@
 #include "lighting.h"
 #include "lights.h"
 #include "textures.h"
+#include "volfx_log.h"  // (MOHO64_DEBUG_VOLFX)
 
 namespace render {
 namespace {
@@ -364,6 +365,7 @@ void VolumeBlasts::Start(Vec3 at, float radius, double born, bool nuke, float fl
     const double age = born - b.born;
     if (age > -1 && age < 30 && Length(at - b.at) < b.radius * 2.5f) {
       if (nuke && radius > b.radius && age < 5) b.radius = radius;  // (the harm's ring, when it says more)
+      if (VolfxLog* log = VolfxLog::Get()) log->Into(b.at, b.born, b.radius, true, false);  // (MOHO64_DEBUG_VOLFX)
       return;
     }
   }
@@ -379,6 +381,7 @@ void VolumeBlasts::Start(Vec3 at, float radius, double born, bool nuke, float fl
       b.flashSize = flashSize;
       b.ramp = ramp;
     }
+    if (VolfxLog* log = VolfxLog::Get()) log->Into(b.at, b.born, b.radius, b.nuke, false);  // (MOHO64_DEBUG_VOLFX)
     return;
   }
   if (blasts_.size() >= 64) {  // (a battle's worth: the oldest ordinary one gives way)
@@ -396,11 +399,13 @@ void VolumeBlasts::Start(Vec3 at, float radius, double born, bool nuke, float fl
   b.nuke = nuke;
   b.flashSize = flashSize;
   b.ramp = ramp;
+  if (VolfxLog* log = VolfxLog::Get()) log->Into(at, born, radius, nuke, true);  // (MOHO64_DEBUG_VOLFX)
   blasts_.push_back(b);
 }
 
 void VolumeBlasts::Offer(const std::string& ramp, Vec3 position, float size, double born, float seconds) {
   (void)seconds;
+  if (VolfxLog* log = VolfxLog::Get()) log->Offered(true, size, ramp, position, born);  // (MOHO64_DEBUG_VOLFX)
   if (size >= nukeFlash) {
     // (the game's strategic missiles flash 140 to 300 large and harm 40 round; a commander's tactical nuke 100 and 25)
     Start(position, size < 120 ? nukeRadius * 0.62f : nukeRadius, born, true, size, ramp);
@@ -410,6 +415,7 @@ void VolumeBlasts::Offer(const std::string& ramp, Vec3 position, float size, dou
 }
 
 void VolumeBlasts::OfferArea(Vec3 position, float radius, double born) {
+  if (VolfxLog* log = VolfxLog::Get()) log->Offered(false, radius, std::string(), position, born);  // (MOHO64_DEBUG_VOLFX)
   if (radius >= 20) {
     // (a nuke's ring: a nuke is known by its flash, which says when it went off and whose it is; its harm sizes it,
     // whether it comes before the flash or in its first second)
@@ -664,6 +670,7 @@ void VolumeBlasts::Place(Slot* slot, const Blast& b, Sequence* s, double clock) 
 
 bool VolumeBlasts::Update(double clock, const Camera& camera, const View& view) {
   clock_ = clock;
+  if (VolfxLog* log = VolfxLog::Get()) log->Tick(clock);  // (MOHO64_DEBUG_VOLFX: blasts old enough printed)
   drawn = 0;
   nukeDrawn = false;
   slotCount_ = 0;

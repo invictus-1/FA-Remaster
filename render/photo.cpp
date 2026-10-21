@@ -224,6 +224,7 @@ PhotoPlan PlanPhoto(const Camera& camera, int width, int height, int supersample
     t.camera.fovY = static_cast<float>(2 * std::atan(0.5 * p.tileHeight / tt.focal));
     t.camera.zNear = camera.zNear;
     t.camera.cinematic = camera.cinematic;
+    t.camera.lodScale = camera.lodScale;  // [lodscale] (the camera's LOD scale in every tile)
     t.focalShare = static_cast<float>(tt.focal / focal);
     // a drawn point (x, y) in the tile's picture, from the tile's own axes as the camera made of them has them
     Vec3 r, u, b;

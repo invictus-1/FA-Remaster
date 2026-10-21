@@ -13,6 +13,7 @@
 #include "core/vfs.h"
 #include "dds.h"
 #include "lighting.h"
+#include "volfx_log.h"  // (MOHO64_DEBUG_VOLFX)
 
 namespace render {
 namespace {
@@ -756,6 +757,7 @@ uint32_t Particles::Start(const std::string& blueprint, Vec3 position, const Qua
                           const std::string& faction) {
   const EmitterBlueprint* bp = Blueprint(blueprint, faction);
   if (!bp->ok) return 0;
+  if (VolfxLog* log = VolfxLog::Get()) log->Emitter(blueprint, *bp, position, scale, startedAt >= 0 ? startedAt : now_, volumesOn && bp->volumeReplaced);  // (MOHO64_DEBUG_VOLFX: volfx_log.h)
   if (volumesOn && bp->volumeReplaced) return 0;  // (volume explosions: its volume is drawn in its place)
   std::unique_ptr<Set>& set = sets_[bp];
   if (!set) {
@@ -1014,7 +1016,9 @@ void Particles::Update(double now, const View* view) {
     if (view && e.emitIfVisible && e.ticksDone < last) {
       const float margin = 8 * std::max(1.0f, e.scale);  // how far its particles may be from it and still be seen
       const Vec3 r{margin, margin, margin};
-      const bool tooFar = e.attached && e.lodCutoff > 0 && Length(e.position - view->eye) > e.lodCutoff;
+      // ([lodscale] its distance times the camera's LOD scale, as the original measures an emitter's cutoff by it:
+      // CEfxEmitter::CanSeeCam 0x65c420)
+      const bool tooFar = e.attached && e.lodCutoff > 0 && Length(e.position - view->eye) * view->lodScale > e.lodCutoff;
       if (tooFar || !view->BoxVisible(e.position - r, e.position + r)) {
         ++quietEmitters;
         if (e.blueprint->createIfVisible && e.ticksDone == 0) e.stopped = true;  // never seen: never there

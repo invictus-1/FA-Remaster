@@ -56,6 +56,30 @@ class Decals {
   // and new snowfall covers it in about a minute and a half of heavy fall; a mark that was there
   // before the snow lies under it like the ground.
   float snowLying = 0, snowing = 0;
+  // [decalfade] How a decal fades out with distance (ui's request 33; World::decalFadeFraction, set by the world each
+  // frame with `lod`). Negative (the viewer's default): as before - by its distance from the eye times the camera's LOD
+  // scale, drawn whole up to 0.8 of its cutoff and fading to nothing at it (a GUESS). 0..1: as the original's
+  // CWldTerrainDecal::GetLODAlpha (0x89d400), this being its ren_DecalFadeFraction (0.5 stock; FAF's gamemain.lua sets
+  // 0.25 at every game's start): measured as the original measures detail (Lod), a decal is drawn whole up to
+  // fadeFraction x its cutoff and fades evenly to nothing at the cutoff; one with a near cutoff (SetNearCutoff) instead
+  // comes in from nothing at fadeFraction x that to whole at it, and is left out beyond its cutoff.
+  float fadeFraction = -1;
+  // [decalfade] The original's measure of detail at a decal (with fadeFraction 0..1): the width of the world its view
+  // spans across at the decal's depth (GeomCamera3::Init 0x4705ed: through the near and the far plane's widths), times
+  // the camera's LOD scale (SetLODScale 0x470b90). From the camera the picture is placed by (photomode: the whole
+  // photo's): its eye, the way it looks, the world it spans across at a depth of 1 (2 tan(fovY / 2) x its aspect) and
+  // its LOD scale (Camera::lodScale; the distance as before is multiplied by it too).
+  struct Lod {
+    Vec3 eye, forward{0, 0, -1};
+    float widthPerDepth = 1, scale = 1;
+  } lod;
+  // [decalfade] A place's measure as the fade takes it (compared with a cutoff): as before, its distance from `eye`
+  // times the LOD scale; with fadeFraction 0..1, the original's (Lod). For what takes a decal's place from far up (the
+  // deposits' icons, world.cpp).
+  float Measure(Vec3 p, Vec3 eye) const;
+  // [decalfade] Gives the decal `id` (LastAdded) a near cutoff (the map's nearCutoffLOD; 0: none): with fadeFraction
+  // 0..1 it is then drawn only from that far on (above). As before (fadeFraction negative) it changes nothing.
+  void SetNearCutoff(uint32_t id, float nearCutoff);
   // The remastered effects look (World::effectsLook; set by the world each frame, so the map's own decals, laid
   // when it opens, stay the game's): a script's decal is read from the visuals track's own picture of it where it
   // has made one (/remastered, effect_files.h), and lit over the relief beside it where there is one (its
@@ -140,7 +164,7 @@ class Decals {
   // A decal: `texture` is a path, or a script's short name ("Scorch_generic_002_albedo": looked for
   // in /env/common/decals and /env/common/splats). `centre` is on the ground; `sizeX`, `sizeZ` its
   // whole extent in world units; `heading` turns it about the upright axis (radians).
-  // `cutoff`: farther from the camera than this it is not drawn (0: always).
+  // `cutoff`: farther from the camera than this it is not drawn (0: always; measured and faded as `fadeFraction` says).
   // `born`, `seconds`: when it was made and how long it stays (seconds <= 0: for good); it fades
   // out over its last five seconds, or over the second half of its time when that is shorter (a
   // tank's tread marks last a second). Returns false when the texture is not there.
@@ -209,7 +233,11 @@ class Decals {
     int tarmac = -1;        // [tarmac] a pad's picture: its name among tarmacKeys_ (-1: not a pad's)
     bool original = false;  // [tarmac] laid by the original effects (`addingOriginal`)
     bool mapOwn = false;    // [tarmac] one of the map's own (laid before the first frame)
+    float nearCutoff = 0;   // [decalfade] (SetNearCutoff)
   };
+  // [decalfade] How much of a decal its distance from the eye leaves (fadeFraction, lod): 0..1, or -1 where it is not
+  // drawn at all (beyond its cutoff).
+  float LodAlpha(const Decal& d, Vec3 eye) const;
   struct Instance {  // as the shader reads it
     float centre[3], halfHeight;
     float halfX, halfZ, cosHeading, sinHeading;

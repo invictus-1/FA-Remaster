@@ -6,6 +6,7 @@
 
 #include "core/vfs.h"
 #include "dds.h"
+#include "volfx_log.h"  // (MOHO64_DEBUG_VOLFX)
 
 namespace render {
 namespace {
@@ -152,9 +153,10 @@ const std::vector<Vec3>* Lights::Ramp(const std::string& path) {
   return &ramp;
 }
 
-void Lights::Flash(const std::string& ramp, Vec3 position, float size, double born, float seconds) {
+void Lights::Flash(const std::string& ramp, Vec3 position, float size, double born, float seconds, bool explosion) {
   if (size <= 0 || seconds <= 0) return;
-  if (onFlash) onFlash(ramp, position, size, born, seconds);  // (volume explosions)
+  if (onFlash && explosion) onFlash(ramp, position, size, born, seconds);  // (volume explosions)
+  else if (VolfxLog* log = VolfxLog::Get(); log && onFlash) log->Declined(true, size);  // (MOHO64_DEBUG_VOLFX)
   flashes_.push_back({Ramp(ramp), position, size, born, seconds});
 }
 

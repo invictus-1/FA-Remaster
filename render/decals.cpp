@@ -536,6 +536,49 @@ void Decals::Remove(uint32_t id) {
     }
 }
 
+// [decalfade]
+void Decals::SetNearCutoff(uint32_t id, float nearCutoff) {
+  for (auto it = decals_.rbegin(); it != decals_.rend(); ++it)
+    if (it->id == id) {
+      it->nearCutoff = std::max(nearCutoff, 0.0f);
+      return;
+    }
+}
+
+// [decalfade] (decals.h: fadeFraction, Lod)
+float Decals::Measure(Vec3 p, Vec3 eye) const {
+  if (fadeFraction < 0) return Length(p - eye) * lod.scale;  // (as before: the distance from the eye)
+  // as the original's: the world the view spans across at that depth, times the camera's LOD scale
+  return lod.scale * (lod.widthPerDepth * Dot(p - lod.eye, lod.forward));
+}
+
+float Decals::LodAlpha(const Decal& d, Vec3 eye) const {
+  if (fadeFraction < 0) {  // as before: by its distance from the eye, over the last fifth of its cutoff (a GUESS)
+    if (d.cutoff <= 0) return 1;
+    const float distance = Measure(d.centre, eye);
+    if (distance > d.cutoff) return -1;
+    return Clamp((d.cutoff - distance) / (d.cutoff * 0.2f), 0, 1);
+  }
+  // as the original's GetLODAlpha (0x89d400), whose caller (Render_FlatDecals 0x8003e0) measures at the decal's middle
+  // on the ground
+  const float f = Clamp(fadeFraction, 0, 1);
+  const float m = Measure(d.centre, eye);
+  if (d.nearCutoff > 0) {
+    // comes in from nothing at f x its near cutoff to whole at it; and is left out beyond its cutoff (the original's
+    // spatial query does that by the cutoff, CWldTerrainDecal::Update 0x89df2c and SpatialDB::CollectInView 0x5041e0,
+    // testing a whole cell's nearest corner: here the decal's middle, INFERRED)
+    if (d.cutoff > 0 && m > d.cutoff) return -1;
+    const float start = d.nearCutoff * f;
+    if (!(d.nearCutoff > start)) return m >= d.nearCutoff ? 1.0f : 0.0f;  // (f 1: no fade at all)
+    return (Clamp(m, start, d.nearCutoff) - start) / (d.nearCutoff - start);
+  }
+  if (d.cutoff <= 0) return 1;  // (no cutoff: always, as before; the original's formula gives no number there)
+  if (m >= d.cutoff) return -1;
+  const float start = d.cutoff * f;
+  if (!(d.cutoff > start)) return 1;  // (f 1: whole up to its cutoff)
+  return 1 - (Clamp(m, start, d.cutoff) - start) / (d.cutoff - start);
+}
+
 bool Decals::AddNormal(const std::string& texture, Vec3 centre, float sizeX, float sizeZ, float heading, float cutoff, double born, float seconds) {
   if (!Add(texture, centre, sizeX, sizeZ, heading, cutoff, born, seconds)) return false;
   decals_.back().normal = true;
@@ -580,7 +623,7 @@ int Decals::TarmacMaterial(const Decal& d) {
 }
 
 // [tarmac] A pad as Tarmacs draws it: over its material's extent, faded as the game's picture would be (its last seconds;
-// with `view`: also as it comes in over the last fifth of its distance, and not where the view does not see it).
+// with `view`: also as its distance fades it, LodAlpha, and not where the view does not see it).
 bool Decals::TarmacPad(const Decal& d, double now, const View* view, Tarmacs::Pad* pad) {
   const int material = TarmacMaterial(d);
   if (material < 0 || d.normal || now < d.born) return false;
@@ -590,11 +633,11 @@ bool Decals::TarmacPad(const Decal& d, double now, const View* view, Tarmacs::Pa
   if (view) {
     const float reach = std::max(std::fabs(halfX), std::fabs(halfZ)) * 1.5f;
     const Vec3 r{reach, reach * 0.7f + 1.5f, reach};
-    const float distance = Length(d.centre - view->eye);
-    if ((d.cutoff > 0 && distance > d.cutoff) || !view->BoxVisible(d.centre - r, d.centre + r)) return false;
-    if (d.cutoff > 0) alpha *= Clamp((d.cutoff - distance) / (d.cutoff * 0.2f), 0, 1);
+    const float lodAlpha = LodAlpha(d, view->eye);  // [decalfade]
+    if (lodAlpha < 0 || !view->BoxVisible(d.centre - r, d.centre + r)) return false;
+    alpha *= lodAlpha;
   }
-  if (alpha <= 0) return false;
+  if (alpha <= 0 || (fadeFraction >= 0 && alpha < 1.0f / 255)) return false;  // ([decalfade] as the original leaves it out)
   pad->centre = d.centre;
   pad->halfX = halfX;
   pad->halfZ = halfZ;
@@ -652,8 +695,8 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
     // the ground under a decal may rise and fall across it: the box is tall for its width
     const float halfHeight = reach * 0.7f + 1.5f;
     const Vec3 r{reach, halfHeight, reach};
-    const float distance = Length(d.centre - view.eye);
-    if (d.cutoff > 0 && distance > d.cutoff) continue;
+    const float lodAlpha = LodAlpha(d, view.eye);  // [decalfade] (-1: beyond its cutoff)
+    if (lodAlpha < 0) continue;
     if (!view.BoxVisible(d.centre - r, d.centre + r)) continue;
     if (now < d.born) continue;  // (a light whose beat the picture has not reached)
     float alpha = 1;
@@ -666,8 +709,10 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
     } else if (d.seconds > 0) {
       alpha = Clamp(static_cast<float>(d.born + static_cast<double>(d.seconds) - now) / std::min(5.0f, d.seconds * 0.5f), 0, 1);
     }
-    // it comes in over the last fifth of its distance (the original's DecalAlpha; how wide its fade is, is a GUESS)
-    if (d.cutoff > 0) alpha *= Clamp((d.cutoff - distance) / (d.cutoff * 0.2f), 0, 1);
+    // it comes in as its distance says (LodAlpha: as before over the last fifth of it, a GUESS; or as the original's
+    // GetLODAlpha, fadeFraction), and with the original's fade it is left out where the original leaves it out
+    alpha *= lodAlpha;
+    if (fadeFraction >= 0 && alpha < 1.0f / 255) continue;
     Instance n{};
     n.centre[0] = d.centre.x;
     n.centre[1] = d.centre.y;

@@ -114,6 +114,8 @@ class MeshRenderer {
   // pixels across.
   // A model built to the four-level standard (Model::levelPixels) is switched at the sizes its
   // levels were made for instead; its size is taken as three quarters of its bounding sphere's.
+  // [lodscale] Either way the size a level is chosen by is divided by the view's LOD scale (View::lodScale, the
+  // camera's: Camera::lodScale), as the original multiplies its measure of detail by it; the least size drawn is not.
   float trianglesPerPixel = 0.55f;
   // The quality setting: scales that wish. 1 is full quality; 0.5 suits a slower card; a very large
   // value forces every model's finest level.

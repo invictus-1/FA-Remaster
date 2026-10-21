@@ -60,9 +60,11 @@ class Lights {
                const Vec3* origin = nullptr);
   // A light that lives `seconds` from `born` and takes its colour and strength along that time from
   // a ramp texture (the scripts' "light particle": `size` is what the original draws its glow with;
-  // the light reaches a few times as far).
-  void Flash(const std::string& ramp, Vec3 position, float size, double born, float seconds);
-  // (volume explosions, volume_blasts.h) told of every flash as Flash is given it, while set: big ones are blasts
+  // the light reaches a few times as far). `explosion`: whether an explosion threw it (Effects::Explosion), not a script's
+  // light on a living unit or a prop.
+  void Flash(const std::string& ramp, Vec3 position, float size, double born, float seconds, bool explosion = true);
+  // (volume explosions, volume_blasts.h) told of every explosion's flash as Flash is given it, while set: big ones are
+  // blasts (a structure begun, a unit being built, a warp-in, a reclaim throw their flashes too, and are none)
   std::function<void(const std::string& ramp, Vec3 position, float size, double born, float seconds)> onFlash;
   // The colour a thing glows in whose particles take theirs from that ramp texture: the ramp's
   // strongest place (linear light), for the light a shot in flight throws.
