@@ -242,6 +242,20 @@ says `the rules are loaded again with the engine's script fixes`, about one seco
   - The hook loads ("Hooked /lua/aibrains/components/energymanagerbraincomponent.lua") with no error in a played B2
     session.
 
+### 8. The jammer manager's walk (2026-10-21)
+
+- **What is broken:** FAF's `JammerManagerBrainComponent.JammingToggleThread` (every brain) walks its jammers, a
+  weak table keyed by EntityId, in the table's own order. It forks a thread for each one due, and those threads switch
+  the jammers' intel off and on in that order. A destroyed jammer also stays in the table until the collector clears
+  it, so whether it still got a (useless) thread depended on the collector too. A different thread count changes the
+  object serials (see 6).
+- **What we do:** `data/fixes/hook/lua/aibrains/components/JammerManagerBrainComponent.lua`. The thread, copied (FAF's
+  MIT notice kept), walks in EntityId order and passes over a destroyed jammer, as FAF's does once the collector has
+  cleared it.
+- **Why it is safe, what it changes:** live jammers get exactly FAF's treatment; only the order, and the useless
+  thread for a dead one, change.
+- **Tested:** in the same runs as 7 (it is on in every one); the hook loads with no error in the B2 session.
+
 ## Looked broken, left alone
 
 ### M28: `IsM28AIPersonality` on the civilian armies (m28conditions.lua:4291)
