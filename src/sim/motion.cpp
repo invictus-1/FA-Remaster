@@ -427,7 +427,8 @@ Quat YawQuat(float fx, float fz) {
 }
 
 const MotionBlueprint& GetMotionBlueprint(lua_State* L, const BlueprintInfo& bp, const SimBlueprints& bps) {
-  static SimCache<std::map<const BlueprintInfo*, MotionBlueprint>> cache;  // (grid: the sim's navigation)
+  static const SimCache<std::map<const BlueprintInfo*, MotionBlueprint>> cacheSlot;  // (grid: the sim's navigation)
+  auto& cache = cacheSlot.For(*Sim::From(L));
   auto it = cache.find(&bp);
   if (it != cache.end()) return it->second;
   MotionBlueprint m;

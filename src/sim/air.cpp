@@ -323,9 +323,10 @@ struct Tiers {
   std::vector<int> tw, th;
   std::vector<std::vector<uint32_t>> hi;  // max sample of each tier cell
 };
-std::map<const TerrainMap*, Tiers>& TierCache() {
-  static SimCache<std::map<const TerrainMap*, Tiers>> c;  // (the map is the sim's, and changes as it is flattened)
-  return c;
+std::map<const TerrainMap*, Tiers>& TierCache(const Sim& sim) {
+  // (the map is the sim's, and changes as it is flattened)
+  static const SimCache<std::map<const TerrainMap*, Tiers>> slot;
+  return slot.For(sim);
 }
 int BitLen(unsigned v) {
   int n = 0;
@@ -360,8 +361,8 @@ uint32_t TierCell(const Tiers& t, const TerrainMap* map, int k, int i, int j) {
     }
   return m;
 }
-const Tiers& GetTiers(const TerrainMap* map) {
-  auto& c = TierCache();
+const Tiers& GetTiers(const Sim& sim, const TerrainMap* map) {
+  auto& c = TierCache(sim);
   auto it = c.find(map);
   if (it != c.end()) return it->second;
   Tiers& t = c[map];
@@ -382,14 +383,14 @@ const Tiers& GetTiers(const TerrainMap* map) {
 }
 
 // STIMap::LookAheadForMaxTerrain 0x62d620
-float LookAheadForMaxTerrain(const TerrainMap* map, const Vec3& pos, float radius, bool terrainOnly) {
+float LookAheadForMaxTerrain(const Sim& sim, const TerrainMap* map, const Vec3& pos, float radius, bool terrainOnly) {
   if (!map) return 0;
   if (1.0f > radius) {
     float h = Elevation(map, pos.x, pos.z);
     if (!terrainOnly && map->hasWater && map->waterElevation > h) h = map->waterElevation;
     return h;
   }
-  const Tiers& t = GetTiers(map);
+  const Tiers& t = GetTiers(sim, map);
   unsigned mn = static_cast<unsigned>(std::min(t.W - 1, t.H - 1));
   int levels = BitLen(mn - 1);
   int r = static_cast<int>(std::nearbyint(radius * 0.5f));
@@ -1658,12 +1659,12 @@ void CalcMoveAir(Sim& sim, Unit* u, Transform& T) {
     // terrain look-ahead, terrain height smoothing, vertical error
     float look = u->motion.speedMult * b.maxAirspeed * 5.0f;
     if (distH < look) look = distH;
-    float maxT = LookAheadForMaxTerrain(map, T.pos, look * 1.0f, b.flyInWater);
+    float maxT = LookAheadForMaxTerrain(sim, map, T.pos, look * 1.0f, b.flyInWater);
     float climb = maxT - T.pos.y;
     if (climb < 0.0f) climb = 0.0f;
     if (b.liftFactor < climb && 1.0f < look) {
       look = look * 0.5f;
-      float c2 = static_cast<float>(LookAheadForMaxTerrain(map, T.pos, look * 1.0f, b.flyInWater) * 1.5) - T.pos.y;
+      float c2 = static_cast<float>(LookAheadForMaxTerrain(sim, map, T.pos, look * 1.0f, b.flyInWater) * 1.5) - T.pos.y;
       if (c2 < 0.0f) c2 = 0.0f;
       float f = (look - c2) / look;
       if (0.2f >= f) f = 0.2f;
@@ -1881,7 +1882,8 @@ void CalcMoveBallistic(Sim& sim, Unit* u, Transform& T, float* scale) {
 // --------------------------------------------------------------------------------------------
 
 const AirBp& GetAirBp(lua_State* L, const BlueprintInfo& bp) {
-  static SimCache<std::unordered_map<const BlueprintInfo*, AirBp>> cache;
+  static const SimCache<std::unordered_map<const BlueprintInfo*, AirBp>> cacheSlot;
+  auto& cache = cacheSlot.For(*Sim::From(L));
   auto it = cache.find(&bp);
   if (it != cache.end()) return it->second;
   AirBp b;
@@ -2120,9 +2122,10 @@ void AirSetFacing(Unit* u, Vec3 dir) {
 
 // SetElevationRect 0x477e10 -> UpdateBounds(x0-1, z0-1, x1, z1): the samples [x0, x1] x [z0, z1] changed
 // (Sim::FlattenMapRect); every tier cell whose sample block meets the rectangle is recomputed.
-void AirTerrainChanged(const TerrainMap* map, int x0, int z0, int x1, int z1) {
-  auto it = TierCache().find(map);
-  if (it == TierCache().end()) return;
+void AirTerrainChanged(const Sim& sim, const TerrainMap* map, int x0, int z0, int x1, int z1) {
+  auto& c = TierCache(sim);
+  auto it = c.find(map);
+  if (it == c.end()) return;
   Tiers& t = it->second;
   for (int k = 1; k <= static_cast<int>(t.hi.size()); ++k) {
     int s = 1 << k, tw = t.tw[k - 1], th = t.th[k - 1];
@@ -2354,7 +2357,8 @@ struct PlatformBp {
   float mult = 1, repair = 20, energy = 2, mass = 0.5f;
 };
 const PlatformBp& GetPlatformBp(Sim& sim, const BlueprintInfo& bp) {
-  static SimCache<std::map<const BlueprintInfo*, PlatformBp>> cache;
+  static const SimCache<std::map<const BlueprintInfo*, PlatformBp>> cacheSlot;
+  auto& cache = cacheSlot.For(sim);
   auto it = cache.find(&bp);
   if (it != cache.end()) return it->second;
   PlatformBp r;

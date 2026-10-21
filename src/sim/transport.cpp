@@ -151,7 +151,8 @@ struct TransportBp {
   float mass = 0;  // AverageDensity*SizeZ*SizeY*SizeX (pickup order)
 };
 const TransportBp& GetTransportBp(lua_State* L, const BlueprintInfo& bp) {
-  static SimCache<std::unordered_map<const BlueprintInfo*, TransportBp>> cache;
+  static const SimCache<std::unordered_map<const BlueprintInfo*, TransportBp>> cacheSlot;
+  auto& cache = cacheSlot.For(*Sim::From(L));
   auto it = cache.find(&bp);
   if (it != cache.end()) return it->second;
   TransportBp b;
@@ -854,7 +855,8 @@ uint32_t CommandCapsOfValue(lua_State* L, int idx) {
 }
 
 uint32_t UnitCommandCaps(lua_State* L, const BlueprintInfo& bp) {
-  static SimCache<std::unordered_map<const BlueprintInfo*, uint32_t>> cache;
+  static const SimCache<std::unordered_map<const BlueprintInfo*, uint32_t>> cacheSlot;
+  auto& cache = cacheSlot.For(*Sim::From(L));
   auto it = cache.find(&bp);
   if (it != cache.end()) return it->second;
   uint32_t v = 0;

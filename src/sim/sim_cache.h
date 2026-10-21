@@ -1,60 +1,55 @@
 // A cache of what the engine reads from a sim's own objects: blueprint values keyed by the BlueprintInfo's address,
 // weapon values keyed by a blueprint table's address in the sim's Lua state, a category's members over the sim's
-// blueprint indices. Such a key means nothing once its sim is gone, and a later sim in the same process (the
-// interface's Relaunch: the first sim is destroyed, a second one made) may get the same addresses for other
-// blueprints, or for the same ones while the cached values point into the dead sim (a footprint's path grid). So
-// every SimCache is emptied when a sim ends (Sim::~Sim -> ClearSimCaches), and a game after a relaunch reads them
-// afresh, as in a new process.
+// blueprint indices, the air look-ahead pyramid of the sim's map. Such a key means nothing outside its sim, so each
+// sim keeps its own: a SimCache is a slot (one per site, numbered as the sites are first reached), and Sim::caches
+// holds that slot's container for the sim, made at its first use and gone with the sim.
 //
-//   static SimCache<std::map<const BlueprintInfo*, Data>> cache;  // used as the map itself
+//   static const SimCache<std::map<const BlueprintInfo*, Data>> cacheSlot;
+//   auto& cache = cacheSlot.For(sim);  // this sim's map
 //
-// (One sim at a time: two sims alive together would share and clear each other's entries.)
+// (Multicore step 1: the caches were process-wide statics, emptied when a sim ended, so two sims alive together
+// shared and cleared each other's entries.) The slots are a fixed array, so a sim's containers never move. Filling
+// one is not locked: a parallel stage may only read what the serial part of the beat has filled (docs/multicore.md).
 #pragma once
+#include <atomic>
 #include <cstddef>
-#include <functional>
-#include <mutex>
-#include <utility>
-#include <vector>
+#include <cstdio>
+#include <cstdlib>
+#include <memory>
 
 namespace moho {
 
+constexpr size_t kSimCacheSlots = 32;  // (16 sites today)
+
 namespace detail {
-struct SimCacheList {
-  std::mutex m;
-  std::vector<std::pair<const void*, std::function<void()>>> clears;  // (the cache, how to empty it)
-};
-inline SimCacheList& SimCaches() {
-  static SimCacheList l;
-  return l;
+inline size_t NewSimCacheSlot() {
+  static std::atomic<size_t> next{0};
+  const size_t s = next++;
+  if (s >= kSimCacheSlots) {
+    std::fprintf(stderr, "moho64: more SimCache sites than kSimCacheSlots (%zu): raise it in sim/sim_cache.h\n",
+                 kSimCacheSlots);
+    std::abort();
+  }
+  return s;
 }
 }  // namespace detail
 
-// Empty every SimCache (Sim::~Sim).
-inline void ClearSimCaches() {
-  detail::SimCacheList& l = detail::SimCaches();
-  std::lock_guard<std::mutex> g(l.m);
-  for (auto& c : l.clears) c.second();
-}
-
 template <class C>
-struct SimCache : C {
-  SimCache() {
-    detail::SimCacheList& l = detail::SimCaches();
-    std::lock_guard<std::mutex> g(l.m);
-    l.clears.emplace_back(this, [this] { this->clear(); });
-  }
-  // (a sim destroyed while the process exits must not reach a cache whose static has already gone)
-  ~SimCache() {
-    detail::SimCacheList& l = detail::SimCaches();
-    std::lock_guard<std::mutex> g(l.m);
-    for (size_t i = 0; i < l.clears.size(); ++i)
-      if (l.clears[i].first == this) {
-        l.clears.erase(l.clears.begin() + static_cast<std::ptrdiff_t>(i));
-        break;
-      }
-  }
+class SimCache {
+ public:
+  SimCache() : slot_(detail::NewSimCacheSlot()) {}
   SimCache(const SimCache&) = delete;
   SimCache& operator=(const SimCache&) = delete;
+  // This site's container in the sim (S: Sim, sim/sim.h), made at the first call.
+  template <class S>
+  C& For(const S& sim) const {
+    std::shared_ptr<void>& p = sim.caches[slot_];
+    if (!p) p = std::make_shared<C>();
+    return *static_cast<C*>(p.get());
+  }
+
+ private:
+  size_t slot_;
 };
 
 }  // namespace moho

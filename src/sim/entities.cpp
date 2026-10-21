@@ -223,7 +223,7 @@ int l_FlattenMapRect(lua_State* L) {
   sec.To(prof::kSecFlatDrawn);
   m->NoteHeightChange(x, z, x + sx, z + sz);  // (for the drawn ground: render request 25)
   sec.To(prof::kSecFlatAir);
-  AirTerrainChanged(m, x, z, x + sx, z + sz);
+  AirTerrainChanged(sim, m, x, z, x + sx, z + sz);
   sec.To(prof::kSecFlatPaths);
   // (the path grids keep each origin's terrain caps; the original's tests read them from the map as it is, so a
   // flattened rect changes passability at once. Seen: MP3 1985, the skirt of army 2's first land factory, flattened

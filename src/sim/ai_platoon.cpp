@@ -172,7 +172,8 @@ struct ThreatLevels {
   float v[4] = {0, 0, 0, 0};
 };
 const ThreatLevels& BlueprintThreat(Sim& sim, const BlueprintInfo* bp) {
-  static SimCache<std::map<const BlueprintInfo*, ThreatLevels>> cache;
+  static const SimCache<std::map<const BlueprintInfo*, ThreatLevels>> cacheSlot;
+  auto& cache = cacheSlot.For(sim);
   auto it = cache.find(bp);
   if (it != cache.end()) return it->second;
   ThreatLevels t;

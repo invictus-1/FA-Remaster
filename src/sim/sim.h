@@ -21,6 +21,7 @@
 #include "sim/economy.h"
 #include "sim/entity.h"
 #include "sim/replay.h"
+#include "sim/sim_cache.h"
 #include "sim/sim_view.h"
 #include "sim/skeleton.h"
 #include "sim/units.h"
@@ -531,6 +532,7 @@ class Sim {
   // Counts for the debug and stats lines (MOHO64_DEBUG_COMBAT, MOHO64_STATS); nothing in the simulation reads them
   uint64_t firesSeen = 0, projectilesMade = 0, impactsSeen = 0;
   int unitsCreated = 0;
+  mutable std::shared_ptr<void> caches[kSimCacheSlots];  // sim/sim_cache.h: each SimCache site's container
   // Keep an engine object alive for the session (objects scripts may still hold).
   ScriptObject* Own(std::unique_ptr<ScriptObject> o) {
     owned_.push_back(std::move(o));

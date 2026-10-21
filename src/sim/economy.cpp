@@ -275,11 +275,13 @@ ViewReadScope::ViewReadScope() { ++g_viewRead; }
 ViewReadScope::~ViewReadScope() { --g_viewRead; }
 
 const UnitBpData& GetUnitBpData(lua_State* L, const BlueprintInfo& bp) {
-  static SimCache<std::map<const BlueprintInfo*, UnitBpData>> cache;
+  static const SimCache<std::map<const BlueprintInfo*, UnitBpData>> cacheSlot;
+  auto& cache = cacheSlot.For(*Sim::From(L));
   auto it = cache.find(&bp);
   if (it != cache.end()) return it->second;
   // (a view's read of a blueprint the sim has not read yet: kept apart, ViewReadScope)
-  static SimCache<std::map<const BlueprintInfo*, UnitBpData>> viewCache;
+  static const SimCache<std::map<const BlueprintInfo*, UnitBpData>> viewCacheSlot;
+  auto& viewCache = viewCacheSlot.For(*Sim::From(L));
   if (g_viewRead)
     if (auto v = viewCache.find(&bp); v != viewCache.end()) return v->second;
   prof::SectionTimer sec(prof::kSecUnitBpData);  // (MOHO64_PROFILE_HITCH only)

@@ -859,7 +859,7 @@ Sim::~Sim() {
   AirForget(*this);
   FormationsForget(*this);
   MotorsForget(*this);
-  ClearSimCaches();  // what was read from this sim's blueprints and map (sim/sim_cache.h)
+  for (auto& c : caches) c.reset();  // what was read from this sim's blueprints and map (sim/sim_cache.h)
 }
 
 lua_State* Sim::L() const { return state_ ? state_->L() : nullptr; }

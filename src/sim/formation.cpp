@@ -861,7 +861,8 @@ std::shared_ptr<Formation> NewFormation(Sim& sim, const std::vector<Unit*>& unit
 
 // AI.GuardFormationName (ubp+0x470, default "GuardFormation")
 const std::string& GuardFormationName(Sim& sim, const Unit* g) {
-  static SimCache<std::map<const BlueprintInfo*, std::string>> cache;
+  static const SimCache<std::map<const BlueprintInfo*, std::string>> cacheSlot;
+  auto& cache = cacheSlot.For(sim);
   auto it = cache.find(g->blueprint);
   if (it != cache.end()) return it->second;
   std::string name = "GuardFormation";

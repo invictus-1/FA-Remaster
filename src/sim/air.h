@@ -145,7 +145,7 @@ void AirSetTargetNow(Sim& sim, Unit* u, Vec3 p, int layer);
 // a facing to arrive with, the layer.
 void AirSetTargetFacing(Sim& sim, Unit* u, Vec3 p, Vec3 dir, int layer);
 // The terrain samples [x0, x1] x [z0, z1] changed (FlattenMapRect): refresh the look-ahead min/max pyramid.
-void AirTerrainChanged(const TerrainMap* map, int x0, int z0, int x1, int z1);
+void AirTerrainChanged(const Sim& sim, const TerrainMap* map, int x0, int z0, int x1, int z1);
 // Unit::PrepareMove: a free landing spot near *pos (false: none found), its cell outside `excl` (x0, z0, x1, z1;
 // null or empty = none), rings `spacing` cells apart (0 = 2 x the squared footprint).
 bool AirPrepareMove(Sim& sim, Unit* u, Vec3* pos, const float* excl = nullptr, int spacing = 0);
