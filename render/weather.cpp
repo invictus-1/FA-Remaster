@@ -416,6 +416,22 @@ gfx::Pipeline Precipitation::MakeSplashes(std::string* error) {
   return device_->CreatePipeline(pd, error);
 }
 
+void Precipitation::PrepareSplashes() {  // [hitches] (as DrawSplashes makes them the first time)
+  if (splashTried_) return;
+  splashTried_ = true;
+  std::string why;
+  splashPipeline_ = MakeSplashes(&why);
+  if (!splashPipeline_) fprintf(stderr, "render: rain's splashes cannot be used (%s)\n", why.c_str());
+}
+
+void Precipitation::PrepareLit() {  // [hitches] (as Draw makes it the first time)
+  if (litTried_) return;
+  litTried_ = true;
+  std::string why;
+  litPipeline_ = Make(true, &why);
+  if (!litPipeline_) fprintf(stderr, "render: rain and snow lit where they fall cannot be used (%s)\n", why.c_str());
+}
+
 void Precipitation::DrawSplashes(const View& view, const Camera& camera, float rain, gfx::Texture sceneDepth) {
   if (rain <= 0 || view.height <= 0 || !sceneDepth) return;
   if (!splashTried_) {  // (made the first time they are wanted)

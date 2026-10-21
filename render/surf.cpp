@@ -850,10 +850,10 @@ void Surf::Burst(Spot& spot, float amount) {
   }
 }
 
-bool Surf::Init() {
-  if (shaderTried_) return shaderTried_ > 0;
-  shaderTried_ = -1;
-  std::string error;
+// [hitches] (the spray's pipeline, made once: by Init at the first spray, or earlier by PrepareSpray)
+bool Surf::SprayPipeline() {
+  if (pipelineTried_) return pipelineTried_ > 0;
+  pipelineTried_ = -1;
   const std::string source = std::string(gSceneSamples > 1 ? "#define MSAA 1\n" : "") + "#define SAMPLES " + std::to_string(gSceneSamples) + "\n" +
                              kViewShaderBlock + kLightingShaderBlock + kSprayShader;
   gfx::PipelineDesc pd;
@@ -866,7 +866,16 @@ bool Surf::Init() {
   pd.samples = gSceneSamples;
   pd.blend = gfx::Blend::Alpha;
   pd.alphaWrite = false;
-  pipeline_ = device_->CreatePipeline(pd, &error);
+  pipeline_ = device_->CreatePipeline(pd, &pipelineError_);
+  if (pipeline_) pipelineTried_ = 1;
+  return pipelineTried_ > 0;
+}
+
+bool Surf::Init() {
+  if (shaderTried_) return shaderTried_ > 0;
+  shaderTried_ = -1;
+  std::string error;
+  if (!SprayPipeline()) error = pipelineError_;  // [hitches] (made already where PrepareSpray was asked)
   gfx::BufferDesc bd;
   bd.kind = gfx::BufferKind::Shader;
   bd.stride = 16;

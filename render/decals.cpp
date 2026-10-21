@@ -431,6 +431,7 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
     if (overWater && !d.water) continue;
     // [tarmac] a pad the visuals track has a material for: drawn in it (Tarmacs), its "_normals" twin not at all
     if (pads && d.tarmac >= 0 && TarmacMaterial(d) >= 0) {
+      tarmacs.Want(TarmacMaterial(d));  // [hitches] (its material read ahead wherever the pad lies: Tarmacs::Want)
       Tarmacs::Pad pad;
       if (TarmacPad(d, now, &view, &pad)) pads_.push_back(pad);
       continue;

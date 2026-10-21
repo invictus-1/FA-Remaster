@@ -281,6 +281,25 @@ void AmbientOcclusion::Compute(const View& view, const Camera& camera, gfx::Text
 // [coverdark] The ground cover left out of the occlusion: its shaders made the first time it is wanted, its three
 // pictures at the view's size.
 bool AmbientOcclusion::CoverReady(const View& view) {
+  if (!CoverPipelines()) return false;  // [hitches] (made once: here or by PrepareCover)
+  if (view.width != coverWidth_ || view.height != coverHeight_ || !groundDepth_ || !coverDepth_ || !solidDepth_) {
+    for (gfx::Texture t : {groundDepth_, coverDepth_, solidDepth_})
+      if (t) device_->Destroy(t);
+    gfx::TargetDesc td;
+    td.width = view.width;
+    td.height = view.height;
+    td.format = gfx::Format::R32F;
+    groundDepth_ = device_->CreateTarget(td);
+    coverDepth_ = device_->CreateTarget(td);
+    solidDepth_ = device_->CreateTarget(td);
+    coverWidth_ = view.width;
+    coverHeight_ = view.height;
+  }
+  return groundDepth_ && coverDepth_ && solidDepth_;
+}
+
+// [hitches] (CoverReady's pipelines, made once: there, or earlier by PrepareCover)
+bool AmbientOcclusion::CoverPipelines() {
   if (coverMade_ < 0) return false;
   if (!coverMade_) {
     coverMade_ = -1;
@@ -315,20 +334,7 @@ bool AmbientOcclusion::CoverReady(const View& view) {
     }
     coverMade_ = 1;
   }
-  if (view.width != coverWidth_ || view.height != coverHeight_ || !groundDepth_ || !coverDepth_ || !solidDepth_) {
-    for (gfx::Texture t : {groundDepth_, coverDepth_, solidDepth_})
-      if (t) device_->Destroy(t);
-    gfx::TargetDesc td;
-    td.width = view.width;
-    td.height = view.height;
-    td.format = gfx::Format::R32F;
-    groundDepth_ = device_->CreateTarget(td);
-    coverDepth_ = device_->CreateTarget(td);
-    solidDepth_ = device_->CreateTarget(td);
-    coverWidth_ = view.width;
-    coverHeight_ = view.height;
-  }
-  return groundDepth_ && coverDepth_ && solidDepth_;
+  return true;
 }
 
 void AmbientOcclusion::CoverBefore(const View& view, gfx::Texture sceneDepth) {

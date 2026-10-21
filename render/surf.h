@@ -326,6 +326,11 @@ class Surf {
   // Before the scene's pass: spray thrown on the rocks where a wave arrives now, what is over let go of, the rest
   // handed to the card (its shader made the first time).
   void Prepare(const View& view);
+  // [hitches] The spray's pipeline made now (World::readAhead: once the surf is on), not at the first spray thrown (its
+  // buffer then, as before).
+  void PrepareSpray() {
+    if (on_ && !side_) SprayPipeline();
+  }
   // The spray, into the scene's colour alone (it tests the scene's depth itself): after the water, before the game's
   // own particles. `lit`: lit smoke is on (the small lights bound and the smoke's shadow there to read).
   void DrawSpray(const View& view, gfx::Texture sceneDepth, float zNear, bool lit);
@@ -428,6 +433,9 @@ class Surf {
   std::unordered_map<uint32_t, Ship> ships_;
   uint32_t seed_ = 0x2545f491u;
   int shaderTried_ = 0;  // 0 not yet, 1 made, -1 it cannot be
+  bool SprayPipeline();     // [hitches] (Init's pipeline, made once: PrepareSpray)
+  int pipelineTried_ = 0;   // (as shaderTried_)
+  std::string pipelineError_;
   gfx::Pipeline pipeline_;
   gfx::Buffer rows_;
   std::vector<float> rowData_;

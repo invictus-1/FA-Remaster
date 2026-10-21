@@ -81,6 +81,14 @@ class Tarmacs {
   // Between passes. None: no pad there (or it cannot be drawn).
   gfx::Texture ClearCover(const View& view, const float* area, const std::vector<Pad>& pads);
   int drawn = 0;  // in the last Draw
+  // [hitches] Read ahead (World::readAhead, set by the host each frame): a material's pictures are wanted as soon as a pad
+  // in it is laid anywhere (Want, from Decals: in view or not), read on the textures' own thread (FetchLater) and made one
+  // a frame (Ahead, once a frame), so that the first frame a pad of it is in view (zooming in to it) finds them made and
+  // does not read them then; and the pads' pipelines are made the first frame they are on, not at the first pad drawn.
+  // What is made is what Load would make at that first frame (the same pictures at the same tier).
+  bool readAhead = false;
+  void Want(int material);
+  void Ahead();
 
  private:
   struct Material {
@@ -90,7 +98,9 @@ class Tarmacs {
     gfx::Texture albedo, normal, arh;
     std::string tier;  // the tier read ("": not yet)
     bool failed = false;
+    std::string aheadTier;  // [hitches] (the tier read ahead, Want; "": not wanted)
   };
+  std::string TierOf(const Material& m) const { return ultra && m.has8k ? "8k" : "4k"; }  // [hitches] (Load's)
   bool ReadTable();
   bool Load(Material& m);
   bool Pipelines();

@@ -636,16 +636,16 @@ void BuildEffects::AddLights(Lights* lights, float night) {
   for (auto it = sources_.begin(); it != sources_.end();) it = clock_ - it->second.seen > 1.0 ? sources_.erase(it) : std::next(it);
 }
 
-bool BuildEffects::Ready() {
-  if (tried_) return tried_ > 0;
-  tried_ = -1;
-  std::string error;
+// [hitches] (the sparks' two pipelines, made once: by Ready at the first build, or earlier by PrepareSparks)
+bool BuildEffects::Pipelines() {
+  if (pipelinesMade_) return pipelinesMade_ > 0;
+  pipelinesMade_ = -1;
   const std::string msaa = gSceneSamples > 1 ? "#define MSAA 1\n" : "";
   const std::string step = msaa + kViewShaderBlock + kStep;
   gfx::ComputeDesc cd;
   cd.name = "build sparks: moved";
   cd.source = step;
-  step_ = device_->CreateCompute(cd, &error);
+  step_ = device_->CreateCompute(cd, &pipelinesError_);
   if (step_) {
     const std::string draw = msaa + kViewShaderBlock + kDraw;
     gfx::PipelineDesc pd;
@@ -658,8 +658,17 @@ bool BuildEffects::Ready() {
     pd.samples = gSceneSamples;
     pd.blend = gfx::Blend::Additive;
     pd.alphaWrite = false;
-    draw_ = device_->CreatePipeline(pd, &error);
+    draw_ = device_->CreatePipeline(pd, &pipelinesError_);
   }
+  if (draw_) pipelinesMade_ = 1;
+  return pipelinesMade_ > 0;
+}
+
+bool BuildEffects::Ready() {
+  if (tried_) return tried_ > 0;
+  tried_ = -1;
+  std::string error;
+  if (!Pipelines()) error = pipelinesError_;  // [hitches] (made already where PrepareSparks was asked)
   if (draw_) {
     gfx::TargetDesc td;
     td.storage = true;

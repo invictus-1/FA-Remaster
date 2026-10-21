@@ -1126,6 +1126,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   // (unitsfx) the real exhausts (exhausts.h): the effects hand this frame's engines' beams to them while they are on
   exhaustsNow_ = realExhausts && look == Look::Modern && !sidePicture;
   exhausts.Begin(clock, exhaustsNow_);
+  PrepareAhead();  // [hitches]
   // (icons and bars at the screen's size: the scene's view with the screen's numbers)
   screenView_ = view;
   if (temporalNow_) screenView_.SetMatrix(motion.Now());  // (icons, bars and what is picked: without the jitter)
@@ -1761,6 +1762,8 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       if (!id.empty() && std::find(fresh.begin(), fresh.end(), id) == fresh.end()) fresh.push_back(id);
     }
     if (!fresh.empty()) models.Prefetch(fresh);
+    if (readAhead)  // [hitches] (what each new kind upgrades to, made ahead: ModelCache::ReadAheadUpgrade)
+      for (const std::string& id : fresh) models.ReadAheadUpgrade(id);
   }
   CpuTimes::Part("units listed");
   {  // hits on personal shields: each the nearest unit with its shield up that the hit lies at (its
@@ -2333,6 +2336,24 @@ void World::PressUnit(const FrameUnit& u, const Frame& frame, const std::string&
     feet[footCount++] = position + Rotate(orientation, now + (next - now) * frame.blend);
   }
   trackField.AddUnit(u.id, path, position, orientation, (model->boundsMax - model->boundsMin) * model->scale, feet, footCount);
+}
+
+// [hitches] (readAhead, world.h) Each frame: the next tiers' models and the pads' materials a step on (at most a texture or
+// a model each), and the pipelines a game wants later made the first frame their looks are on (each made once: after
+// that these are checks alone). As each look draws, so its pipeline is made here: with the same settings.
+void World::PrepareAhead() {
+  decals.tarmacs.readAhead = readAhead;
+  models.readAhead = readAhead && haveMap_ && !sidePicture;
+  if (!readAhead || !haveMap_ || sidePicture) return;
+  models.AheadStep();
+  if (decals.remasteredTarmacs) decals.tarmacs.Ahead();
+  if (look != Look::Modern) return;
+  if (buildNow_) build.PrepareSparks();
+  if (groundCover && (ao.strength > 0 || contactShadows)) ao.PrepareCover();
+  if (surf && map.water.present) water.surf.PrepareSpray();
+  if (litRain) falling.PrepareLit();
+  if (rainSplashes) falling.PrepareSplashes();
+  if (rainGround) terrain.PrepareWet();
 }
 
 // [plants] Plants that react (plants.h): what stands on the ground near the camera presses them (every model drawn that

@@ -46,6 +46,9 @@ class AmbientOcclusion {
   // reach as far over the ground as the window's (in its own pixels the cap took a smaller disc, whose nearer samples
   // shade more: a photo's grass came out darker than the window's). 1 in the game's own frames: as before.
   float pixelScale = 1;
+  // [hitches] The ground cover's leaving out (CoverBefore): its pipelines made now (World::readAhead: the first frame the
+  // cover is on), not the first time the camera comes close enough for grass; its pictures then, as before.
+  bool PrepareCover() { return CoverPipelines(); }
 
  private:
   struct Constants {
@@ -62,6 +65,7 @@ class AmbientOcclusion {
   // ground's depth, the cover's and the scene's without it, each one 32-bit float a pixel at the view's size; kept /
   // marked this frame)
   bool CoverReady(const View& view);
+  bool CoverPipelines();  // [hitches] (CoverReady's pipelines: PrepareCover)
   gfx::Pipeline computeCover_, groundCopy_, coverMark_, coverSolid_;
   gfx::Texture groundDepth_, coverDepth_, solidDepth_;
   int coverMade_ = 0, coverWidth_ = 0, coverHeight_ = 0;

@@ -50,6 +50,7 @@ struct wl_surface;
 #include "third_party/vulkan/include/vulkan/vulkan_wayland.h"
 #include "third_party/vulkan/include/vulkan/vulkan_metal.h"
 #include <sys/stat.h>
+#include <unistd.h>  // [hitches] (getpid: the kept pipelines' file written under a name of its own first)
 #endif
 
 #include <algorithm>
@@ -73,6 +74,7 @@ struct wl_surface;
 #include "gfx_latency.h"
 #include "gfx_pacing.h"
 #include "gfx_vulkan_dxc.h"
+#include "hitch_log.h"  // [hitches]
 
 // (Vulkan's structures are begun with their type alone, the rest zero)
 #if defined(__clang__)
@@ -162,6 +164,9 @@ namespace {
   X(vkDestroyShaderModule)              \
   X(vkCreateGraphicsPipelines)          \
   X(vkCreateComputePipelines)           \
+  X(vkCreatePipelineCache)              \
+  X(vkDestroyPipelineCache)             \
+  X(vkGetPipelineCacheData)             \
   X(vkDestroyPipeline)                  \
   X(vkCreateQueryPool)                  \
   X(vkDestroyQueryPool)                 \
@@ -640,6 +645,14 @@ class VulkanDevice final : public Device {
   int width_ = 0, height_ = 0;
   bool vsync_ = true;
   std::string adapterName_, shaderCache_;
+  // [hitches] The driver's pipelines kept from run to run (pipelines-vulkan.bin beside the compiled shaders): measured on an
+  // RTX 4090 (2026-10-20), a large pipeline took 2.5 to 3.5 s the first time a new build of the program made it (the
+  // driver's own cache is kept by program) and 3 ms after; kept here, a new build finds them made. The file is the
+  // driver's (its header names the card and the driver's cache: another's is not given to it). Pictures are not changed.
+  VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;
+  bool pipelineCacheGrew_ = false;
+  void OpenPipelineCache();
+  void SavePipelineCache();
 
   VkInstance instance_ = VK_NULL_HANDLE;
   VkSurfaceKHR surface_ = VK_NULL_HANDLE;
@@ -916,6 +929,10 @@ VulkanDevice::~VulkanDevice() {
   FreeImage(&back_);
   FreeImage(&depth_);
   memory_.Release();
+  if (pipelineCache_) {  // [hitches] (the pipelines made since the map opened, for the next run)
+    SavePipelineCache();
+    vkDestroyPipelineCache(device_, pipelineCache_, nullptr);
+  }
   vkDestroyDevice(device_, nullptr);
   if (surface_) vkDestroySurfaceKHR(instance_, surface_, nullptr);
   if (instance_) vkDestroyInstance(instance_, nullptr);
@@ -1277,6 +1294,7 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
     VK_RAY_FUNCTIONS(VK_LOAD)
   }
 #undef VK_LOAD
+  OpenPipelineCache();  // [hitches]
   if (!core13) {  // (the same calls under their extensions' names)
 #define VK_LOAD_KHR(name) name = reinterpret_cast<PFN_##name>(vkGetDeviceProcAddr(device_, #name "KHR"));
     VK_LOAD_KHR(vkCmdBeginRendering)
@@ -2921,7 +2939,8 @@ bool VulkanDevice::MakePipeline(const PipelineDesc& desc, PipelineRec* out, std:
   rec.used = true;
   rec.layout = layout;
   rec.depth = desc.depthTarget;
-  const VkResult r = vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &pi, nullptr, &rec.pipeline);
+  const VkResult r = vkCreateGraphicsPipelines(device_, pipelineCache_, 1, &pi, nullptr, &rec.pipeline);  // [hitches] (the kept ones)
+  pipelineCacheGrew_ = pipelineCacheGrew_ || r == VK_SUCCESS;
   for (VkShaderModule m : modules)
     if (m) vkDestroyShaderModule(device_, m, nullptr);
   if (r != VK_SUCCESS) {
@@ -2975,7 +2994,8 @@ bool VulkanDevice::MakeCompute(const ComputeDesc& desc, PipelineRec* out, std::s
   PipelineRec rec;
   rec.used = rec.compute = true;
   rec.layout = layout;
-  const VkResult r = vkCreateComputePipelines(device_, VK_NULL_HANDLE, 1, &ci, nullptr, &rec.pipeline);
+  const VkResult r = vkCreateComputePipelines(device_, pipelineCache_, 1, &ci, nullptr, &rec.pipeline);  // [hitches] (the kept ones)
+  pipelineCacheGrew_ = pipelineCacheGrew_ || r == VK_SUCCESS;
   vkDestroyShaderModule(device_, module, nullptr);
   if (r != VK_SUCCESS) {
     if (error) *error = std::string(desc.name) + ": Vulkan made no compute pipeline: " + Result(r);
@@ -3005,6 +3025,7 @@ Pipeline VulkanDevice::CreatePipeline(const PipelineDesc& desc, std::string* err
     rec.pending = PendingPipeline::Of(desc);
     return Keep(rec);
   }
+  HitchLog::Scope made("pipeline", desc.name);  // [hitches] (one made outside a batch: while the game runs)
   if (!MakePipeline(desc, &rec, error)) return {};
   return Keep(rec);
 }
@@ -3016,6 +3037,7 @@ Pipeline VulkanDevice::CreateCompute(const ComputeDesc& desc, std::string* error
     rec.pending = PendingPipeline::Of(desc);
     return Keep(rec);
   }
+  HitchLog::Scope made("compute pipeline", desc.name);  // [hitches]
   if (!MakeCompute(desc, &rec, error)) return {};
   return Keep(rec);
 }
@@ -3047,9 +3069,64 @@ bool VulkanDevice::EndPipelineBatch(std::string* error) {
     std::string why;
     if (pipelines_[i].pending && !Realize(i, &why) && batchError_.empty()) batchError_ = why;
   }
+  SavePipelineCache();  // [hitches] (what the driver made of them kept for the next run, now: a game may end any way)
   if (batchError_.empty()) return true;
   if (error) *error = batchError_;
   return false;
+}
+
+// [hitches] (pipelineCache_) The kept file given to the driver where its header is this card's and this driver's cache's.
+void VulkanDevice::OpenPipelineCache() {
+  std::vector<uint8_t> data;
+  if (!shaderCache_.empty())
+    if (FILE* f = fopen((shaderCache_ + "/pipelines-vulkan.bin").c_str(), "rb")) {
+      fseek(f, 0, SEEK_END);
+      const long size = ftell(f);
+      fseek(f, 0, SEEK_SET);
+      if (size > 0 && size < (256L << 20)) {
+        data.resize(static_cast<size_t>(size));
+        if (fread(data.data(), 1, data.size(), f) != data.size()) data.clear();
+      }
+      fclose(f);
+    }
+  // (its header: its own size, version 1, the card's vendor and device, the driver's cache's UUID)
+  bool fits = data.size() >= 16 + VK_UUID_SIZE;
+  if (fits) {
+    uint32_t h[4];
+    std::memcpy(h, data.data(), sizeof h);
+    fits = h[0] >= 16 + VK_UUID_SIZE && h[1] == VK_PIPELINE_CACHE_HEADER_VERSION_ONE && h[2] == props_.vendorID && h[3] == props_.deviceID &&
+           std::memcmp(data.data() + 16, props_.pipelineCacheUUID, VK_UUID_SIZE) == 0;
+  }
+  if (!fits) data.clear();
+  VkPipelineCacheCreateInfo pc{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+  pc.initialDataSize = data.size();
+  pc.pInitialData = data.empty() ? nullptr : data.data();
+  if (vkCreatePipelineCache(device_, &pc, nullptr, &pipelineCache_) != VK_SUCCESS) pipelineCache_ = VK_NULL_HANDLE;
+}
+
+void VulkanDevice::SavePipelineCache() {
+  if (!pipelineCache_ || !pipelineCacheGrew_ || shaderCache_.empty()) return;
+  pipelineCacheGrew_ = false;
+  size_t size = 0;
+  if (vkGetPipelineCacheData(device_, pipelineCache_, &size, nullptr) != VK_SUCCESS || !size || size >= (256u << 20)) return;
+  std::vector<uint8_t> data(size);
+  if (vkGetPipelineCacheData(device_, pipelineCache_, &size, data.data()) != VK_SUCCESS) return;
+  // (written under another name first, then put in its place: a half-written file is never read)
+  const std::string path = shaderCache_ + "/pipelines-vulkan.bin";
+#if defined(_WIN32)
+  const std::string part = path + ".part" + std::to_string(GetCurrentProcessId());
+#else
+  const std::string part = path + ".part" + std::to_string(getpid());
+#endif
+  FILE* f = fopen(part.c_str(), "wb");
+  if (!f) return;
+  const bool ok = fwrite(data.data(), 1, size, f) == size;
+  fclose(f);
+#if defined(_WIN32)
+  if (!ok || !MoveFileExA(part.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING)) std::remove(part.c_str());
+#else
+  if (!ok || std::rename(part.c_str(), path.c_str()) != 0) std::remove(part.c_str());
+#endif
 }
 
 // --- the frame ---

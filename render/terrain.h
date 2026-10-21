@@ -69,6 +69,11 @@ class Terrain {
   // all ground (the visuals session makes each twin the colour of its dry layer as drawn: it changes the make-up, slick
   // mud, not the darkness). Modern look only, the GROUND_WET pipeline while the ground is wet.
   bool rainGround = false;
+  // [hitches] The wet ground's pipeline (GROUND_WET) made now where the map has wet twins (World::readAhead: the first
+  // frame rainGround is on), not when the ground first gets wet in a game.
+  void PrepareWet() {
+    if (rainGround && richGround && WetReady()) MorePipeline(1);
+  }
   // Where the kinds of ground lie, over the whole map at half its size (RGBA8: sand, grass, snow, hard ground; the
   // rest dirt and mud), by the layers' kinds blended by their masks. Made the first time it is asked for once a map
   // is loaded (it dispatches: between passes).

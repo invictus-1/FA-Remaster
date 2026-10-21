@@ -89,6 +89,9 @@ class BuildEffects {
   void Draw(const View& view, gfx::Texture sceneDepth, const Camera& camera);
   // Whether there are sparks that may be alive (else Simulate and Draw do nothing).
   bool Busy() const { return on_ && (spawnCount_ > 0 || clock_ < aliveUntil_); }
+  // [hitches] The sparks' pipelines made now (World::readAhead: the first frame the look is on), not at the first build
+  // seen; their storage is made at that first build, as before.
+  bool PrepareSparks() { return Pipelines(); }
 
   // Numbers of the last frame, for the viewer's report: beams listed, beam ends lit, sparks thrown.
   int beams = 0, lit = 0, thrown = 0;
@@ -133,6 +136,9 @@ class BuildEffects {
   int head_ = 0;  // where the next spark thrown goes in the state
   // the card's side: the state (place and age; velocity, kind and life) twice over, read one and written the other
   int tried_ = 0;  // 0 not yet, 1 made, -1 cannot be made
+  bool Pipelines();  // [hitches] (Ready's pipelines: step_ and draw_, made once; PrepareSparks)
+  int pipelinesMade_ = 0;  // (as tried_)
+  std::string pipelinesError_;
   gfx::Pipeline step_, draw_;
   gfx::Texture place_[2], motion_[2];
   int current_ = 0;

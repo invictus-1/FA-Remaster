@@ -61,6 +61,10 @@ class Precipitation {
   // Rain's splashes (World::rainSplashes): where rain meets what faces up and the picture shows it, small crowns that
   // rise and fade; found from `sceneDepth` (the scene's, read: a pass into the scene's colour alone).
   void DrawSplashes(const View& view, const Camera& camera, float rain, gfx::Texture sceneDepth);
+  // [hitches] The lit drops' and the splashes' shaders made now (World::readAhead: the first frame their looks are on),
+  // not when rain first falls in a game.
+  void PrepareLit();
+  void PrepareSplashes();
 
   // (photofix) A photo's frame (WorldPicture::StartPhoto) draws what falls as the window shows it: `pixelScale` of this
   // picture's pixels make one of the window's (a drop's width, its least length and a splash's least size are the

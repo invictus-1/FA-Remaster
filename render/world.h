@@ -491,6 +491,15 @@ class World {
   // original effects keep the game's pads, as do pads not remade yet. Modern look with the remastered effects; off by
   // default (proposed for the "Ground Detail" setting).
   bool remasteredTarmacs = false;
+  // [hitches] What a game will want later made ahead, so that no frame waits for it (Chris, 2026-10-19: "upgrading to t2 on
+  // uef factory causes momentary lag spike", "sometimes zooming in suddenly causes lag spikes"): the next tier of each
+  // structure kind as the kind appears (ModelCache::ReadAheadUpgrade: its files read on a thread, its textures and model
+  // made a little each frame), the remastered pads' materials as soon as a pad in them is laid anywhere (Tarmacs::Want),
+  // and the pipelines first wanted later in a game made the first frame their looks are on (the build sparks, the pads,
+  // the ground cover left out of the ambient occlusion, the surf's spray, lit rain and rain's splashes, the wet ground:
+  // PrepareAhead). What is made ahead is what its first use would have made, so the pictures are the same. On unless
+  // switched off (the viewer's --no-read-ahead).
+  bool readAhead = true;
   // [ground mud] The map's painted mud (terrain.h, Terrain::mudMask; Chris and the visuals session, 2026-10-19): where the map's
   // remap.json entry names a mud mask (SETONS_R's stream banks), its mud material laid over the ground by it, wet and glossy in
   // rain with puddles in it, drying paler and cracked; deep tracks press into it as mud, no plants grow on it. Modern look;
@@ -899,6 +908,7 @@ class World {
   bool plantsNow_ = false;  // [plants] (plants that react: on this frame, and ready)
   std::vector<Particles::Hot> plantFires_;  // [plants] (the lasting fires near the camera, this frame)
   void PreparePlants();     // [plants]
+  void PrepareAhead();      // [hitches] (readAhead)
   void SmoothProps(double clock);  // [plants] (props the game moves beat by beat, drawn between the beats)
   struct PropBeat {
     uint32_t tick = 0xffffffffu;  // (the beat it is drawn toward)
