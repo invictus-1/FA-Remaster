@@ -585,6 +585,12 @@ float3 LeafLight(float3 albedo, float through, float3 world, float shadow, float
 // Returns linear colour, unbounded.
 float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusion, float3 emission, float3 N, float3 world, float shadow) {
   shadow *= CloudShadow(world);  // (a computed sky's clouds)
+#ifdef GROUND_MATT
+  // [leftover] (the ground's shaders: Terrain::mattGrazing) how much of the sun's highlight the ground loses here: how low the
+  // sun stands over the ground's own slope (groundGraze, the ground's shader's), where it is dry (groundDry: the ground's own
+  // wet, a shore's band; below the weather's)
+  float matt = groundGraze * groundDry;
+#endif
   // the weather on the surface: wet is darker and shinier; snow lies on what faces up
   [branch] if (weather.x + weather.y > 0) {
     float upward = saturate(N.y * 1.5 - 0.2);
@@ -696,6 +702,9 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
     roughness = lerp(roughness, 0.28, slush);
     occlusion *= lerp(snowBareSky, snowSky, lying);
 #endif
+#ifdef GROUND_MATT
+    matt *= (1 - saturate(SURFACE_WET * 2)) * (1 - puddle) * (1 - lying);  // [leftover] (wet ground, still water and snow keep their gloss)
+#endif
   }
   [branch] if (inspect.x > 0.5) {
     // a view for checking art: one of the surface's own numbers as a picture, as the screen would
@@ -732,6 +741,13 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
   float k = a * 0.5;
   float Vis = 0.25 / ((nDotL * (1 - k) + k) * (nDotV * (1 - k) + k));
   float3 F = f0 + (1 - f0) * pow(1 - vDotH, 5);
+#ifdef GROUND_MATT
+  // [leftover] dry ground is matt at grazing light: a scan's roughness (soil some 0.5) says how glossy its grains are seen from
+  // above; with the sun skimming the ground, the light reaches only their tops and the clods' and blades' shade takes the
+  // rest, so the forward highlight that would read as wet plastic at dusk and dawn fades out (to a tenth with the sun on the
+  // horizon)
+  [branch] if (matt > 0) F *= 1 - 0.9 * matt;
+#endif
   float3 small = SmallLights(world, N, V, diffuseColor, f0, a2, k, nDotV);
   if (inspect.x > 6.5 && inspect.x < 7.5) return small;
   float3 sunRadiance = ToLinear(sunColor) * (lightMultiplier * modern.x);

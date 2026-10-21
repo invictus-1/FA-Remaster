@@ -88,6 +88,14 @@ class Terrain {
   // GROUND_SNOW; with GROUND_WET while the twins are drawn) over all the ground while snow lies; false, or no snow lying: as
   // before.
   bool snowGround = false;
+  // [leftover] Dry ground matt at grazing light (World::groundMatt sets it each frame; the modern look): the sun's (or the
+  // moon's) highlight on the ground fades as the light sinks toward the ground's own slope (from some 60 degrees over it: two
+  // thirds left at 35, two fifths at 25, a sixth at 12, a tenth on the horizon), where the ground is dry: a shore's wet band,
+  // rain-wet ground, puddles and lying snow keep theirs (lighting.h, GROUND_MATT). The scans' roughness (soil about 0.5, dry
+  // grass 0.7) is their grains' as seen from above; with a low light ahead of the eye it lit the soil between the grass blades
+  // with a broad sheen that read as wet plastic at dusk and dawn. Drawn by variants of the ground's pipelines (MattVariant);
+  // false: as before.
+  bool mattGrazing = false;
   float snowWind[2] = {0.915f, 0.403f};  // (the way the wind blows, x and z: World's)
   // (each 0..2, 1 as tuned: how much the shelter cuts the sky's light, how much the trees' crowns take of the snow and its
   // light, how high the wind's drifts stand, how deep they lie and how much of them is drifted; the viewer's --snow-ground-tune)
@@ -106,6 +114,9 @@ class Terrain {
   gfx::Texture SnowShelterLaid() const { return snowLaidNow_ ? shelter_ : gfx::Texture{}; }
   bool SnowMaterialsLaid() const { return snowLaidNow_ && snowMaterialsNow_; }
   bool SnowShelterWanted();  // (whether it is to be made now: none yet, or the mud mask came or went)
+  // [leftover] The shelter as made (none: not yet, or it cannot be), for what else lies under the snow as the ground's snow
+  // does (the ground cover, grass.h: GroundCover::snowShelter); with snowGround off, none.
+  gfx::Texture SnowShelterPicture() const { return snowGround ? shelter_ : gfx::Texture{}; }
   // (the shelter's texels across and down, for World's raster of the props: two a world unit, at most 2048 each way)
   void SnowShelterSize(int* width, int* height) const;
   // Where the kinds of ground lie, over the whole map at half its size (RGBA8: sand, grass, snow, hard ground; the
@@ -307,6 +318,11 @@ class Terrain {
   gfx::Pipeline snowPipeline_[2];
   bool snowPipelineTried_[2] = {};
   bool SnowPipeline(int wet);
+  // [leftover] (mattGrazing) each of the ground's pipelines' variant with GROUND_MATT, made the first time it is wanted: the
+  // plain, the parallax, the two mud, the two snow ones; the pipeline itself where its variant cannot be made
+  gfx::Pipeline mattPipeline_[6];
+  bool mattTried_[6] = {};
+  gfx::Pipeline MattVariant(gfx::Pipeline of);
   gfx::Pipeline shelterPass_;
   gfx::Texture shelter_;
   bool shelterTried_ = false, shelterMud_ = false;

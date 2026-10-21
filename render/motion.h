@@ -43,6 +43,9 @@ class Motion {
   // The view's matrix this frame and last frame, without the jitter.
   const Mat4& Now() const { return now_; }
   const Mat4& Before() const { return before_; }
+  // [leftover] The frame before's time (the view's clock), for what moves by the clock (what sways in the wind): this
+  // frame's own when there was no frame just before (a gap over a quarter of a second) or the clock stands still.
+  float TimeBefore() const { return timeBefore_; }
   float jitterX = 0, jitterY = 0;  // this frame's (Begin's)
 
  private:
@@ -53,6 +56,7 @@ class Motion {
   int width_ = 0, height_ = 0;
   Mat4 now_ = Mat4::Identity(), before_ = Mat4::Identity(), back_ = Mat4::Identity();  // back_: the shifted view's inverse
   bool haveBefore_ = false;
+  float timeBefore_ = 0, lastTime_ = -1e9f;  // [leftover]
 };
 
 }  // namespace render

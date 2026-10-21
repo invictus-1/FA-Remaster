@@ -899,6 +899,128 @@ float2 PS(VOut i) : SV_Target {
 }
 )hlsl";
 
+// [leftover] The motion of what sways (MeshRenderer::swayMotion): the trees and bushes the scene drew, again, each corner
+// where the scene's shader puts it (the wind's swing and gusts, a group's trees each on its own beat, the blasts' waves, the
+// plants pressed and burnt: kShader's VS, kept in step with it), writing where the same corner was the frame before: the
+// wind at that frame's time, what presses it and the blasts' waves as long ago less the frame's seconds (BlastPushBack:
+// blasts.cpp's BlastPush for a tree, kept in step with it). Holes are cut as the scene cut them (a leaf's coverage at a
+// half, a cut-out's alpha), so that what shows through a leaf keeps its own motion. Built with the blasts' waves and plants
+// that react in it, each left out by its constants when off (none in the waves' list; plants: motionWhen.z 0).
+const char kSwayMotionShader[] = R"hlsl(
+struct Instance {
+  float4 row0, row1, row2;
+  float4 color;
+  float4 bones;
+  float4 wear;
+};
+cbuffer Instances : register(b2) {
+  Instance instances[640];
+};
+cbuffer SwayMotion : register(b3) {
+  row_major float4x4 motionNow;     // this frame's view without the jitter
+  row_major float4x4 motionBefore;  // the frame before's
+  float4 motionWhen;  // x: the frame before's time; y: the seconds between the two; z: 1 = plants react
+  float4 kind;        // x: alpha not above this is cut away (MeshKind's)
+  float4 kind2;       // y: 1 = leaves
+  float4 kind3;       // x: how much it sways; y: 1 / its height in model units
+  float4 kind6;       // z: a group of trees: model units a step of where each tree stands (0: none)
+  float4 kind7, kind8;  // (plants.h) PlantLife::Constants, as the scene's pass had them
+};
+StructuredBuffer<float4> boneRows : register(t0, space1);
+Texture2D albedoMap : register(t0);
+
+struct VIn {
+  float3 position : POSITION;
+  float4 uv : TEXCOORD0;
+  uint4 bones : BLENDINDICES;
+};
+struct VOut {
+  float4 position : SV_Position;
+  float2 uv : TEXCOORD0;
+  float4 here : TEXCOORD1;
+  float4 then : TEXCOORD2;
+};
+
+// the blasts' push on what sways (as kBlastShaderBlock's BlastPush works it out for a tree) `back` seconds earlier than now:
+// each wave's age less that (one not yet begun then pushes nothing)
+float2 BlastPushBack(float2 xz, float back) {
+  float2 push = 0;
+  uint n = (uint)blastHead.x;
+  [loop] for (uint i = 0; i < n; ++i) {
+    float4 a = blastList[i * 3], b = blastList[i * 3 + 1];
+    float2 off = xz - a.xy;
+    float d = length(off);
+    float since = b.x - back - d / b.y;
+    if (d >= a.z || since <= 0) continue;
+    float x = d / a.z;
+    float fall = (1 - x) * (1 - x) * (1 + 2 * x);
+    float swing = saturate(since / 0.12) * exp(-since / 0.85) * cos(since * 4.2);
+    push += off * (b.w * fall * swing / max(d, 0.05));
+  }
+  return push;
+}
+
+// where the scene's shader puts a corner at time `t`, what presses it and the blasts' waves `back` seconds earlier than now
+float3 Swayed(VIn i, Instance n, float t, float back) {
+  float4 p = float4(i.position, 1);
+  [branch] if (n.bones.x >= 0) {
+    uint at = (uint)n.bones.x + i.bones.x * 3;
+    float4 b0 = boneRows[at], b1 = boneRows[at + 1], b2 = boneRows[at + 2];
+    p = float4(dot(b0, p), dot(b1, p), dot(b2, p), 1);
+  }
+  float3 world = float3(dot(n.row0, p), dot(n.row1, p), dot(n.row2, p));
+  float high = saturate(p.y * kind3.y);
+  float size = length(float3(n.row0.x, n.row1.x, n.row2.x)) / kind3.y;
+  float2 foot = float2(n.row0.w, n.row2.w);
+  float beat = dot(foot, float2(0.11, 0.07));
+  [branch] if (i.bones.w > 0 && kind6.z > 0 && look > 0.5) {
+    float2 own = (float2(i.bones.yz) - 128) * kind6.z;
+    foot = float2(dot(n.row0, float4(own.x, 0, own.y, 1)), dot(n.row2, float4(own.x, 0, own.y, 1)));
+    beat = dot(foot, float2(0.11, 0.07)) + (i.bones.w - 1) * (6.2831853 / 254);
+  }
+  float swing = sin(t * 1.3 + beat) * 0.6 + sin(t * 2.9 + beat * 1.7 + p.x * kind3.y * 4) * 0.4;
+  float gust = (0.35 + 0.9 * falling.x + 0.3 * falling.y) * (0.45 + 1.3 * CloudNoise(float3((foot - float2(0.915, 0.403) * (t * 7)) * 0.02, t * 0.07)));
+  float2 carried = float2(0.915, 0.403) * (swing * gust * kind3.x * high * high * size * 0.035);
+  if (motionWhen.z > 0.5) carried *= PlantsUpright(n.row1.y / max(length(float3(n.row0.y, n.row1.y, n.row2.y)), 1e-6));
+  world.xz += carried;
+  world.xz += (back > 0 ? BlastPushBack(foot, back) : BlastPush(foot, 1)) * (kind3.x * high * high * size);
+  [branch] if (motionWhen.z > 0.5 && size < 2.2 && kind8.z + kind8.w > 0.5) {
+    float3 root = float3(n.row0.w, n.row1.w, n.row2.w);
+    float4 pressed = PlantsPressAt(root.xz, kind7, kind8);
+    [branch] if (pressed.z > 0.01) {
+      float since = max(pressed.w / pressed.z - 0.3 - back, 0);
+      float over = 1.25 * pressed.z * exp(-since / 0.6) * cos(since * 2.4) * (0.45 + 0.55 * high);
+      float2 way = pressed.xy / pressed.z;
+      way = length(way) > 0.05 ? normalize(way) : float2(0.6, 0.8);
+      float rise = max(world.y - root.y, 0);
+      world.xz += way * (rise * sin(over));
+      world.y -= rise * (1 - cos(over));
+    }
+    float4 burnt = PlantsBurnLook(root.xz, kind7, kind8, CloudHash(float3(root.xz, 1.3)));
+    world.y -= max(world.y - root.y, 0) * (burnt.z * 0.45);
+  }
+  return world;
+}
+
+VOut VS(VIn i, uint instance : SV_InstanceID) {
+  Instance n = instances[instance];
+  float3 now = Swayed(i, n, time, 0), before = Swayed(i, n, motionWhen.x, motionWhen.y);
+  VOut o;
+  o.position = mul(viewProj, float4(now, 1));
+  o.uv = i.uv.xy;
+  o.here = mul(motionNow, float4(now, 1));
+  o.then = mul(motionBefore, float4(before, 1));
+  return o;
+}
+
+float2 PS(VOut i) : SV_Target {
+  float a = albedoMap.Sample(samplerAniso, i.uv).a;
+  if (kind2.y > 0.5) clip(saturate((a - kind.x) / max(fwidth(a), 1e-4) + 0.5) - 0.5);  // (a leaf's coverage, as the scene's)
+  else if (kind.x > 0) clip(a - kind.x);
+  return (i.then.xy / i.then.w - i.here.xy / i.here.w) * float2(0.5, -0.5);
+}
+)hlsl";
+
 }  // namespace
 
 bool MeshRenderer::Init(std::string* error) {
@@ -1051,6 +1173,7 @@ bool MeshRenderer::Init(std::string* error) {
 
 void MeshRenderer::Begin() {
   motionItems_.clear();
+  swayItems_.clear();  // [leftover]
   markedItems_.clear();  // (hidden outlines)
   marks_ = 0;
   markedSorted_ = false;
@@ -1406,9 +1529,22 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
   for (size_t k = 0; k < pieces_.size(); ++k) items_.insert(items_.end(), pieceItems_[k].begin(), pieceItems_[k].end());
   if (!shadowPass)
     for (const Item& item : items_) posedInstances += item.entry->posed ? 1 : 0;
-  if (motion && !shadowPass && !glass)  // (the keyed models the scene draws, for DrawMotion)
-    for (const Item& item : items_)
-      if (item.entry->key) motionItems_.push_back({item.lod, item.entry, item.bones});
+  if (motion && !shadowPass && !glass) {  // (the keyed models the scene draws, for DrawMotion; [leftover] and what sways, large enough)
+    const float least = blastConstants && blastConstantsSize ? swayMotionPixelsBlasts : swayMotionPixels;
+    for (const Item& item : items_) {
+      if (item.entry->key) {
+        motionItems_.push_back({item.lod, item.entry, item.bones});
+      } else if (swayMotion && item.lod->sway > 0) {
+        // (how tall one of its trees stands on the screen: its height in the world, as the shader's sway counts it, over the
+        // distance; a group of trees is one model, but each tree sways by its own height)
+        const float* r0 = item.entry->instance.row0;
+        const float* r1 = item.entry->instance.row1;
+        const float* r2 = item.entry->instance.row2;
+        const float tall = item.lod->swayHeight * std::sqrt(r0[0] * r0[0] + r1[0] * r1[0] + r2[0] * r2[0]);
+        if (tall * focal >= least * std::max(Length(Vec3{r0[3], r1[3], r2[3]} - view.eye), 0.01f)) swayItems_.push_back({item.lod, item.entry, item.bones});
+      }
+    }
+  }
   if (marks_ && !shadowPass && !glass)  // (hidden outlines: the marked models the scene draws, for DrawMarked)
     for (const Item& item : items_)
       if (item.entry->mark) markedItems_.push_back({item.lod, item.entry, item.bones});
@@ -1721,7 +1857,8 @@ bool MeshRenderer::PrepareBuild() {
   return true;
 }
 
-void MeshRenderer::DrawMotion(const View& view, const Mat4& now, const Mat4& before) {
+void MeshRenderer::DrawMotion(const View& view, const Mat4& now, const Mat4& before, float timeBefore) {
+  if (motion && swayMotion && !swayItems_.empty()) DrawSwayMotion(view, now, before, timeBefore);  // [leftover]
   if (!motion || motionItems_.empty() || !motionPipeline_) return;
   // by level, so that each level's instances go together
   std::stable_sort(motionItems_.begin(), motionItems_.end(), [](const MotionItem& a, const MotionItem& b) { return a.lod < b.lod; });
@@ -1749,6 +1886,77 @@ void MeshRenderer::DrawMotion(const View& view, const Mat4& now, const Mat4& bef
     device_->DrawIndexed(lod->indexCount, 0, 0, static_cast<uint32_t>(n));
     at += n;
   }
+}
+
+// [leftover] What sways, its motion (swayMotion; kSwayMotionShader): into DrawMotion's pass, by level.
+void MeshRenderer::DrawSwayMotion(const View& view, const Mat4& now, const Mat4& before, float timeBefore) {
+  if (!swayMotionTried_) {  // (made the first time: with the blasts' waves and plants that react in it, each off by its constants)
+    swayMotionTried_ = true;
+    const std::string source = std::string("#define PLANTS_PRESS t8\n#define PLANTS_BURN t9\n") + kViewShaderBlock + kBlastShaderBlock + kPlantsShaderBlock +
+                               kSwayMotionShader;
+    gfx::PipelineDesc md;
+    md.name = "models, what sways, motion";
+    md.vertexSource = md.pixelSource = source;
+    md.attrs = {{"POSITION", 0, gfx::AttrType::Float3, offsetof(ScmVertex, position)},
+                {"TEXCOORD", 0, gfx::AttrType::Float4, offsetof(ScmVertex, uv0)},
+                {"BLENDINDICES", 0, gfx::AttrType::UByte4, offsetof(ScmVertex, bones)}};
+    md.stride = sizeof(ScmVertex);
+    md.colorFormat = gfx::Format::RG16F;
+    md.cull = gfx::Cull::None;  // (leaves are seen from both sides)
+    md.depthWrite = false;
+    md.depthBias = 16;  // (as the keyed models' motion: the same placement compiled in another shader may land a hair farther)
+    std::string error;
+    swayMotionPipeline_ = device_->CreatePipeline(md, &error);
+    if (!swayMotionPipeline_) fprintf(stderr, "render: the motion of what sways cannot be drawn (%s)\n", error.c_str());
+  }
+  if (!swayMotionPipeline_) return;
+  // by level, so that each level's instances go together
+  std::stable_sort(swayItems_.begin(), swayItems_.end(), [](const MotionItem& a, const MotionItem& b) { return a.lod < b.lod; });
+  device_->SetPipeline(swayMotionPipeline_);
+  device_->SetShaderBuffer(boneBuffer_);
+  device_->SetConstants(0, &view.constants, sizeof view.constants);
+  // (the blasts' waves as the scene's pass had them, else none in their list; the plants' textures, black when they do not react)
+  const bool blasts = blastConstants && blastConstantsSize && blastsMade_ > 0;
+  static const float kNoBlasts[4] = {0, 0, 0, 0};
+  if (blasts) device_->SetConstants(1, blastConstants, blastConstantsSize);
+  else device_->SetConstants(1, kNoBlasts, sizeof kNoBlasts);
+  const bool plants = plantsConstants && plantsMade_ > 0;
+  device_->SetTexture(8, plants && plantsPress ? plantsPress : textures_->Black());
+  device_->SetTexture(9, plants && plantsBurnt ? plantsBurnt : textures_->Black());
+  struct {
+    Mat4 now, before;
+    float when[4];
+    float kind[4], kind2[4], kind3[4], kind6[4], kind7[4], kind8[4];
+  } k{now, before, {timeBefore, view.constants.time - timeBefore, plants ? 1.0f : 0.0f, 0}, {}, {}, {}, {}, {}, {}};
+  for (size_t at = 0; at < swayItems_.size();) {
+    const ModelLod* lod = swayItems_[at].lod;
+    size_t n = 0;
+    while (at + n < swayItems_.size() && swayItems_[at + n].lod == lod && n < kMaxInstances) {
+      const MotionItem& item = swayItems_[at + n];
+      batch_[n] = item.entry->instance;
+      batch_[n].bones[0] = item.bones;
+      ++n;
+    }
+    k.kind[0] = lod->alphaCut;
+    k.kind2[1] = lod->leaves ? 1.0f : 0.0f;
+    k.kind3[0] = lod->sway;
+    k.kind3[1] = 1 / lod->swayHeight;
+    k.kind6[2] = lod->treeStep;
+    if (plants) {  // (as DrawItems hands them: the game's trees neither pressed nor burnt by the picture)
+      std::copy(plantsConstants, plantsConstants + 4, k.kind7);
+      std::copy(plantsConstants + 4, plantsConstants + 8, k.kind8);
+      if (swayItems_[at].entry->model->simTree) k.kind8[2] = k.kind8[3] = 0;
+    }
+    device_->SetConstants(3, &k, sizeof k);
+    device_->SetTexture(0, lod->albedo);
+    device_->SetVertexBuffer(lod->vertices);
+    device_->SetIndexBuffer(lod->indices);
+    device_->SetConstants(2, batch_.data(), static_cast<uint32_t>(n * sizeof(Instance)));
+    device_->DrawIndexed(lod->indexCount, 0, 0, static_cast<uint32_t>(n));
+    at += n;
+  }
+  device_->SetTexture(8, {});
+  device_->SetTexture(9, {});
 }
 
 // Hidden outlines (hidden_outlines.h): the marked models the scene drew, again, as DrawMotion draws the keyed ones.

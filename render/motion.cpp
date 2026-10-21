@@ -138,6 +138,10 @@ void Motion::Begin(View* view, float x, float y, bool reset) {
   before_ = haveBefore_ && !reset ? now_ : plain;
   now_ = plain;
   haveBefore_ = true;
+  // [leftover] (the frame before's time, for what sways: none after a gap or with the clock standing still)
+  const float t = view->constants.time;
+  timeBefore_ = t - lastTime_ > 0 && t - lastTime_ <= 0.25f ? lastTime_ : t;
+  lastTime_ = t;
   // shifted by the jitter: in the picture's -1..1, x to the right, y up (a pixel's y runs down)
   Mat4 shift = Mat4::Identity();
   shift.m[0][3] = 2 * x / static_cast<float>(view->width);
@@ -177,7 +181,7 @@ void Motion::Build(const View& view, gfx::Texture depth, MeshRenderer* meshes) {
     pass.depth = depth;
     pass.clearColor = pass.clearDepth = false;
     device_->BeginPass(pass);
-    meshes->DrawMotion(view, now_, before_);
+    meshes->DrawMotion(view, now_, before_, timeBefore_);
   }
 }
 

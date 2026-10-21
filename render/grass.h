@@ -18,6 +18,7 @@
 #include "deep_tracks.h"
 #include "gfx.h"
 #include "json.h"
+#include "linalg.h"  // [leftover]
 #include "plants.h"  // [plants]
 #include "textures.h"
 #include "view.h"
@@ -70,6 +71,28 @@ class GroundCover {
   // (made by PreparePlants the first time it is wanted, after Init; the blasts' waves in them too).
   const PlantLife* plants = nullptr;
   bool PreparePlants();  // false: they cannot be made (then nothing reacts)
+
+  // [leftover] Motion (motion.h), for the temporal upscaler and frame generation: after Motion::Build, the blades, the tufts
+  // and the plants' cards Draw drew this frame, again, each corner where it was the frame before (the wind at `timeBefore`,
+  // Motion::TimeBefore; what pressed it then; the rest as now), by the views without the jitter (`now`, `before`: Motion::Now
+  // and Before), into `motion` over `depth` (the scene's, one sample a pixel), which it tests and does not write. It begins
+  // a pass of its own. Its shaders made the first time each is wanted.
+  void DrawMotion(const View& view, gfx::Texture motion, gfx::Texture depth, const Mat4& now, const Mat4& before, float timeBefore);
+  // Only with the camera at most this far from what it looks at (a cinematic camera: its eye this high over the ground):
+  // the wind moves a blade's tip by some hundredths of a world unit a second, which from farther is less than a tenth of a
+  // pixel a frame, left to the camera's part; drawing it again there would cost some 0.3 ms from the game's usual height.
+  float motionFarthest = 20;
+  // [leftover] Under lying snow (the view's weather.y; the modern look): the cover goes under it as it lies deeper, each blade,
+  // tuft and plant by its own height (the shorter first), what stands out of it bowed and dusted white on its upper side.
+  // How deep it lies is the light's lying share over the place (lighting.h) times how much lies, times `snowDepth` (world
+  // units, where all of it lies; 0: the cover as without snow, whitened by the light's snow as before); with the snow
+  // ground's shelter (`snowShelter`, Terrain::SnowShelterPicture; set by the host before Draw, none: not read) deeper in
+  // hollows and the wind's lee, thinner under the trees' crowns and on steep and windward ground, by `snowWind` (the way the
+  // wind blows, x and z) and `snowTune` (Terrain::snowTune: its y the crowns', its w the drifts' weight).
+  float snowDepth = 0.16f;
+  gfx::Texture snowShelter;
+  float snowWind[2] = {0.915f, 0.403f};
+  float snowTune[4] = {1, 1, 1, 1};
 
   // The plants on cards beside the blades (the visuals track's atlas for the map, Terrain::Cover: its cells, each
   // a plant drawn side on, its foot at the cell's bottom middle, its size in metres, how it sways, how many make a
@@ -137,6 +160,18 @@ class GroundCover {
   gfx::Pipeline reactingPipelines_[4];
   std::string reactingSources_[4];
   int reactingMade_ = 0;
+  // [leftover] the motion's pipelines: [k] the blades (k even) or the plants (odd), + 2 with the blasts' waves, + 4 plants that
+  // react (each the scene's own shader with MOTION, made the first time wanted); and what this frame's Draw drew with
+  std::string bladeSource_, plantSource_;
+  gfx::Pipeline motionPipelines_[8];
+  bool motionTried_[8] = {};
+  struct Drawn {
+    bool blades = false, plants = false, reacting = false, blasts = false;
+    gfx::Texture heights, cover, normals, densityA, densityB, blastField, cleared, bare, press, burnt, shelter;
+  } drawn_;
+  std::vector<float> drawnConstants_[2];  // (the blades' and the plants' constants as Draw handed them)
+  float away_ = 1e9f;                     // (Prepare's: the camera's distance, or a cinematic eye's height)
+  float snowConstants_[8] = {};           // (kCoverShared's CoverSnow, as Draw handed it)
   gfx::Device* device_;
   gfx::Pipeline pipeline_, trample_;
   gfx::Texture trampled_;  // (how flat the grass is pressed over its square: 1 flat)

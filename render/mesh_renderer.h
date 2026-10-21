@@ -81,7 +81,19 @@ class MeshRenderer {
   // Without motion this frame: last frame's places are kept (not forgotten) for the next frame that has it
   // (a frame drawn for something else in between: World::sidePicture).
   bool keepLast = false;
-  void DrawMotion(const View& view, const Mat4& now, const Mat4& before);
+  // [leftover] `swayMotion`: DrawMotion also draws what sways (trees, bushes: the scenery the scene drew whose level sways)
+  // where the wind, the blasts' waves and the plants that react put it this frame, writing where they had it the frame
+  // before: the wind at `timeBefore` (the frame before's time; Motion::TimeBefore), the blasts' waves and what pressed it as
+  // long before. False: as before (what
+  // sways moves with the camera's part alone, and smears under the temporal upscaler).
+  bool swayMotion = true;
+  // [leftover] Only what stands at least this many pixels tall on the screen (a tree's height, of a group's each tree's): the
+  // wind moves a tree's top by about a seventieth of its height, slowly, so a shorter one moves by less than a tenth of a
+  // pixel a frame at 60 a second (a twentieth in calm air), which the camera's part leaves unnoticed; while the blasts' waves
+  // are under way (blastConstants), which throw trees about fast, the second. (From the game's usual height all the trees in
+  // view cost some 0.14 ms.)
+  float swayMotionPixels = 128, swayMotionPixelsBlasts = 24;
+  void DrawMotion(const View& view, const Mat4& now, const Mat4& before, float timeBefore);
   // Hidden outlines (hidden_outlines.h): a mark (not 0) on the model just added, when it is `model` (Add left out
   // nothing); the scene's pass keeps what it draws of the marked models. DrawMarked, after the scene's passes, draws
   // that again (the same levels) by `view`, with the pipeline set and into the pass under way: those whose mark has
@@ -296,6 +308,10 @@ class MeshRenderer {
     float bones;
   };
   std::vector<MotionItem> motionItems_;  // what the scene's passes drew of the keyed models
+  std::vector<MotionItem> swayItems_;    // [leftover] and of what sways without a key (swayMotion)
+  gfx::Pipeline swayMotionPipeline_;     // [leftover] (made the first time it is wanted)
+  bool swayMotionTried_ = false;
+  void DrawSwayMotion(const View& view, const Mat4& now, const Mat4& before, float timeBefore);
   std::vector<MotionItem> markedItems_;  // (hidden outlines) what they drew of the marked models
   int marks_ = 0;                        // (hidden outlines) models marked this frame
   bool markedSorted_ = false;

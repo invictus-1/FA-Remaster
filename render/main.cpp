@@ -95,6 +95,11 @@
 //           mask in red, how much a pixel follows its frame alone): 1 shows it as colours, 2 shows the
 //           frame before carried to this frame by it (with a still scene it is this frame, but where something
 //           comes out from behind another), 3 what that misses of this frame (black where the motion is right)
+// --no-plant-motion  [leftover] what sways (trees, bushes) and the ground cover leave the motion to the camera's part, as
+//           before (World::plantMotion: on, they tell the temporal upscaler and frame generation how they move; to compare)
+// --ground-matt  [leftover] dry ground matt at grazing light (World::groundMatt; modern look): the sun's highlight on the
+//           ground fades as the sun sinks toward it (dusk and dawn), where the ground is dry; wet ground, puddles and
+//           lying snow keep theirs
 // --pan <dx,dz>  the camera's point moves that far every frame (world units): a moving camera that repeats
 // --clouds-3d  volumetric clouds (clouds.h, World::volumetricClouds; modern look, a time of day): the clouds as
 //           real volumes lit by the sun, in place of the sky's own layer (--clouds sets how much of the sky)
@@ -714,6 +719,8 @@ struct Options {
   std::string cloudZoomLook;             // --cloud-zoom-look
   std::string zoomPath;                 // --cam-zoom-path
   int motionView = 0;                   // --motion-view
+  bool plantMotion = true;              // [leftover] --no-plant-motion
+  bool groundMatt = false;              // [leftover] --ground-matt
   float pan[2] = {0, 0};                // --pan
   float airDust = -1, airSun = -1, airLamps = -1;  // --air-dust, --air-sun, --air-lamps (negative: the default)
   int airAcross = 0, airDeep = 0;       // --air-cells
@@ -874,6 +881,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--surf") o->surf = true;
     else if (a == "--stream-water") o->streamWater = true;  // [stream]
     else if (a == "--ground-cover") o->groundCover = true;
+    else if (a == "--no-plant-motion") o->plantMotion = false;  // [leftover]
+    else if (a == "--ground-matt") o->groundMatt = true;        // [leftover]
     else if (a == "--wildlife") o->wildlife = true;
     else if (a == "--horizon") o->horizon = true;  // [horizon]
     else if (a == "--shafts") o->shafts = true;  // [sunlight]
@@ -1736,6 +1745,8 @@ int main(int argc, char** argv) {
     }
   }
   world.motionView = opt.motionView;
+  world.plantMotion = opt.plantMotion;  // [leftover]
+  world.groundMatt = opt.groundMatt;    // [leftover]
   if (opt.airDust >= 0) world.air.dust = opt.airDust;
   if (opt.airSun >= 0) world.air.sunInAir = opt.airSun;
   if (opt.airLamps >= 0) world.air.lampsInAir = opt.airLamps;

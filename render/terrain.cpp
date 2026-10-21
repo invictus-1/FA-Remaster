@@ -1035,6 +1035,9 @@ float4 Ground(VOut i) {
       float wet = saturate(1 - (over + uneven) / shore.z) * saturate(over * 20 + 1);  // (not under the water: its own colours)
       albedo.rgb *= lerp(1, 0.6, wet);
       roughness = lerp(roughness, 0.22, wet * 0.85);
+#ifdef GROUND_MATT
+      groundDry = 1 - wet;  // [leftover] (mattGrazing: the wet band keeps its gloss)
+#endif
     }
 #endif
 #ifdef SURFACE_DEEP_TRACKS
@@ -1064,6 +1067,11 @@ float4 Ground(VOut i) {
 #ifdef GROUND_PARALLAX
     // [parallax] the relief's own high places' shadow; none where deep tracks have pressed the ground smooth
     shadow *= lerp(sunSeen, 1, saturate(deepTrack.x * 1.4) * deepTrack.z);
+#endif
+#ifdef GROUND_MATT
+    // [leftover] dry ground matt at grazing light (Terrain::mattGrazing; lighting.h): how low the sun stands over the
+    // ground's own slope (its small shapes left out: a grain facing the sun still has it low over the ground round it)
+    groundGraze = 1 - smoothstep(0.12, 0.9, dot(base, sunDirection));
 #endif
     float3 lit = ModernLight(ToLinear(albedo.rgb), 0, roughness, creases, ToLinear(glowing) * 2.5, N, i.world, shadow);
     // the under-water tint is mixed the way the original mixes it (in screen colours, relative to
@@ -1260,11 +1268,13 @@ static float3 snowPackedNormal = float3(0, 1, 0);
 // The ground's shader as the scene draws it. [parallax] `parallax`: with the relief close by (GROUND_PARALLAX), the
 // ground's parallax pipeline's; without it the source is as it always was. [ground mud] [rain ground] `more`: with the
 // mask's mud (GROUND_MORE; the modern look only), `wet`: and the wet twins (GROUND_WET). [snow ground] `snow`: and the lying
-// snow's own (GROUND_SNOW, with the other two).
-std::string GroundSource(bool parallax, bool more = false, bool wet = false, bool snow = false) {
+// snow's own (GROUND_SNOW, with the other two). [leftover] `matt`: dry ground matt at grazing light (GROUND_MATT,
+// Terrain::mattGrazing: a variant of each, MattVariant); without it the source is as it was.
+std::string GroundSource(bool parallax, bool more = false, bool wet = false, bool snow = false, bool matt = false) {
   // (the modern look has its own water: water.cpp)
   // (deep tracks: what the ground's shader read of them, for the lying snow and the puddles in ModernLight)
-  return std::string(snow ? kSnowStatics : "") + (wet ? "#define GROUND_WET 1\n" : "") + (more ? "#define GROUND_MORE 1\n" : "") +
+  return std::string(matt ? "#define GROUND_MATT 1\nstatic float groundGraze = 0;\nstatic float groundDry = 1;\n" : "") +  // [leftover] (lighting.h)
+         std::string(snow ? kSnowStatics : "") + (wet ? "#define GROUND_WET 1\n" : "") + (more ? "#define GROUND_MORE 1\n" : "") +
          (parallax ? "#define GROUND_PARALLAX 1\n" : "") +
          "#define MODERN_WATER 1\n" +
          "#define SURFACE_PUDDLES 1.0\n#define SURFACE_TRACKS 1\n" +
@@ -2608,6 +2618,29 @@ bool Terrain::MorePipeline(int wet) {
   return true;
 }
 
+// [leftover] The ground's pipeline `of`'s variant with dry ground matt at grazing light (GROUND_MATT; mattGrazing), made the
+// first time it is wanted; `of` itself where it is none of the ground's or its variant cannot be made.
+gfx::Pipeline Terrain::MattVariant(gfx::Pipeline of) {
+  const int k = !of ? -1 : of.id == pipeline_.id ? 0 : of.id == parallaxPipeline_.id ? 1 : of.id == morePipeline_[0].id ? 2 : of.id == morePipeline_[1].id ? 3
+              : of.id == snowPipeline_[0].id ? 4 : of.id == snowPipeline_[1].id ? 5 : -1;
+  if (k < 0) return of;
+  if (!mattTried_[k]) {
+    mattTried_[k] = true;
+    const std::string source = GroundSource(k != 0, k >= 2, k == 3 || k == 5, k >= 4, true);
+    gfx::PipelineDesc pd;
+    pd.name = "terrain, matt at grazing light";
+    pd.vertexSource = pd.pixelSource = source;
+    pd.attrs = {{"POSITION", 0, gfx::AttrType::Float2, 0}};
+    pd.stride = 8;
+    pd.colorFormat = kSceneFormat;
+    pd.samples = gSceneSamples;
+    std::string error;
+    mattPipeline_[k] = device_->CreatePipeline(pd, &error);
+    if (!mattPipeline_[k]) fprintf(stderr, "render: the ground cannot be drawn matt at grazing light: %s\n", error.c_str());
+  }
+  return mattPipeline_[k] ? mattPipeline_[k] : of;
+}
+
 void Terrain::Draw(const View& view, bool shadowPass) {
   if (!shadowPass) drawnPatches = drawnTriangles = 0;
   if (!map_ || levels_.empty()) return;
@@ -2739,7 +2772,10 @@ void Terrain::Draw(const View& view, bool shadowPass) {
   }
 
   const bool moreAll = more && !split;  // [ground mud] [rain ground] (all the ground by a GROUND_MORE pipeline)
-  device_->SetPipeline(shadowPass ? shadowPipeline_ : moreAll ? (snowLaid ? snowPipeline_[kind] : morePipeline_[kind]) : relief ? parallaxPipeline_ : pipeline_);
+  // [leftover] (dry ground matt at grazing light: the variant of whichever is drawn with; without it as before)
+  const bool matt = !shadowPass && modern && mattGrazing;
+  const gfx::Pipeline drawWith = shadowPass ? shadowPipeline_ : moreAll ? (snowLaid ? snowPipeline_[kind] : morePipeline_[kind]) : relief ? parallaxPipeline_ : pipeline_;
+  device_->SetPipeline(matt ? MattVariant(drawWith) : drawWith);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
   device_->SetConstants(1, &c, sizeof c);
   device_->SetTexture(0, heightTexture_);
@@ -2793,7 +2829,7 @@ void Terrain::Draw(const View& view, bool shadowPass) {
     };
     draw(0, far);
     if (far < count) {
-      device_->SetPipeline(morePipeline_[0]);
+      device_->SetPipeline(matt ? MattVariant(morePipeline_[0]) : morePipeline_[0]);  // [leftover] (matt)
       device_->SetTexture(4, mudMask_);
       device_->SetTexture(5, textures_->Black());
       draw(far, count);
