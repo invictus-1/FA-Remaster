@@ -1130,6 +1130,14 @@ thread after FinishLoad has waited for the worker, before beat 1, copy __bluepri
 into its own state (CopyToSim), and free it; nothing is made in the sim's state, and the copy matches the sim's by
 construction (the fixes' reload, ui REQUESTS 35, included). moho64ui_BlueprintFacts (ui de5820c) checks the two.
 
+### 47. Entity:RequestRefreshUI: a per-beat refresh flag in UnitView
+From the interface chat, 2026-10-21 (read by my helper). Not blocking.
+The original's Entity:RequestRefreshUI (0x68bb60) sets entity+0x9a (byte +0x22 of the var data at entity+0x78);
+Entity::Sync's writer 0x67a290 copies that block into the beat's sync, and Entity::Sync clears the flag at 0x67a10b;
+Entity::Kill sets it too (0x679ad8). Ours is a stub. FAF's scripts call it when an enhancement finishes, so the
+construction panel is remade (today it stays as it was until something else refreshes it). Could UnitView carry
+`bool refreshUI` for the beat it was set in? (The interface's reaction to it is ours to read.)
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
