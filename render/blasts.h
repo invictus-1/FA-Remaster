@@ -51,6 +51,10 @@ class Blasts {
     bool splash = false;  // no explosion: a piece of debris fallen into the water (debris.h); no wave, no dust
     bool hot = false;     // an explosion's heat made it (a flash of light, a shot's impact), not a scorch mark alone
                           // (a commander's warp-in lays a scorch 28 across without burning anything)
+    // [scars] how large its scorch is across (world units): the scorch or crater the script laid, or the one the game
+    // lays for a shot's impact by its weapon's damage radius (FromImpact); 0 when only a flash told of it. What burns
+    // round it is sized by this (plants.h), not by the flash, whose glow is the same for every missile of a kind.
+    float scorch = 0;
   };
   // What the game made (Effects): a flash of light of that glow size (CreateLightParticle's), a scorch or a crater of
   // that size across (a scar decal's: Decals::IsScar), at a place and a moment. Both of one explosion make one blast.
@@ -69,7 +73,7 @@ class Blasts {
   // only: this hears of every one. (The several hits of one area's damage, one a target, make one blast here.)
   void FromImpact(Vec3 at, float damageRadius, float damage, double born);
   // A blast of a size (world units) itself: the effects stand's --fx-blast; and a piece of debris falling into water.
-  void Add(Vec3 at, float size, double born, bool splash = false, bool hot = false);
+  void Add(Vec3 at, float size, double born, bool splash = false, bool hot = false, float scorch = 0);
   // The blasts of the last half minute (at most kKept), the oldest first.
   static constexpr size_t kKept = 512;
   const std::deque<Blast>& Recent() const { return recent_; }

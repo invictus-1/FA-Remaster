@@ -443,6 +443,11 @@ class World {
   // Battle scars (decals.h, Decals::battleScars): the scorches and craters of the fighting stay on the ground,
   // weathering, up to a most for cost. Off by default (the game's own times).
   bool battleScars = false;
+  // [scars] The marks' relief lit as the ground (decals.h, Decals::modernRelief; Chris, 2026-10-20): the normal decals
+  // (craters' dents, the remastered map's trenches and old craters) lit by the modern light, so that they keep their
+  // look by night (no dark squares, white rims, doubled rings), soften under lying snow, and the map's plain normal maps
+  // apply as such (no dark strip beside every trench). Modern look; off by default (the ground detail's).
+  bool markRelief = false;
   // Life in the world (wildlife.h, wildlifeDraw): flocks of birds over the woods and gulls over the shores, that scatter
   // when fighting comes near and settle again after a quiet while, and fireflies at dusk and by night along the woods'
   // edges and over grass. Purely for the eye. Modern look; off by default.
@@ -772,6 +777,11 @@ class World {
   void ListProp(PlacedProp* prop, uint32_t key, bool made);
   void UnlistProp(PlacedProp* prop, uint32_t key, bool made);
   std::deque<FramePropEvent> propEvents_;  // told, and not yet due
+  // [scars] the props whose changes were applied in the last seconds (entity id -> when), and whether an entity is a prop
+  // (standing, made in the game, or changed or gone just now or about to be: Effects::isProp)
+  std::unordered_map<uint32_t, double> recentProps_;
+  double recentPruned_ = 0;
+  bool IsProp(uint32_t id) const;
   // hot metal: on this frame (and the frame before); the made props held out of their groups while they glow; the
   // tint WreckHeat hands out; the bounding sphere of a placed model
   bool hotOn_ = false, hotBefore_ = false;

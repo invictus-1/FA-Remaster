@@ -163,6 +163,9 @@
 //           --scar-test n[,radius]: n of the game's scorches laid at random round where the camera starts (within
 //           radius, 40), as scripts lay them (a minute's time each), as if over the last twenty minutes: to see
 //           and time the build-up
+// --mark-relief  [scars] the marks' relief lit as the ground (World::markRelief, Decals::modernRelief; modern look): normal
+//           decals (craters, trenches) lit by the modern light, kept right by night, softened under lying snow, plain
+//           normal maps (the remastered map's own) applied as such
 // --blasts  what explosions do round them (blasts.h, debris.h; modern look): all three of --blast-waves (a ring runs out over
 //           the ground, pressing the grass and plants flat away from the blast and bending the trees, which spring back;
 //           World::blastWaves), --blast-dust (a bigger blast kicks a low ring of dust off the ground; World::blastDust) and
@@ -623,6 +626,7 @@ struct Options {
   float plantDensity = -1;              // --plant-density
   float plantTallest = -1;              // --plant-tallest
   bool battleScars = false;             // --battle-scars
+  bool markRelief = false;              // [scars] --mark-relief
   bool leafLight = false;               // --leaf-light
   bool blastWaves = false, blastDust = false, debris = false;  // --blasts, --blast-waves, --blast-dust, --debris
   int debrisMost = -1;                  // --debris-most
@@ -871,6 +875,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--sunlight") o->shafts = o->cloudDrift = true;  // [sunlight]
     else if (a == "--wildlife-verbose") o->wildlife = o->wildlifeVerbose = true;
     else if (a == "--battle-scars") o->battleScars = true;
+    else if (a == "--mark-relief") o->markRelief = true;  // [scars]
     else if (a == "--leaf-light") o->leafLight = true;
     else if (a == "--blasts") o->blastWaves = o->blastDust = o->debris = true;
     else if (a == "--blast-waves") o->blastWaves = true;
@@ -1638,6 +1643,7 @@ int main(int argc, char** argv) {
   if (opt.plantDensity >= 0) world.grass.plantDensity = opt.plantDensity;
   if (opt.plantTallest > 0) world.grass.plantTallest = opt.plantTallest;
   world.battleScars = opt.battleScars;
+  world.markRelief = opt.markRelief;  // [scars]
   world.leafLight = opt.leafLight;
   world.blastWaves = opt.blastWaves;
   world.blastDust = opt.blastDust;

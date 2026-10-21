@@ -58,6 +58,12 @@ class PlantLife {
   // A fresh wreck (its middle, its bounding radius; when it was made): its death burnt the ground round it. Told again
   // for the same place within half a minute (a wreck drawn frame after frame): once.
   void AddWreck(float x, float z, float radius, double born);
+  // [scars] A wreck gone (reclaimed, or shot to pieces) at (x, z) at `when`: what burnt within `radius` of it - its death's
+  // burn, its fires' - goes over the next minute or so (Chris, 2026-10-20: "stuff that has been reclaimed as in those
+  // black masses should leave after some time"): browner at once, then thinning out by its patches, gone by about
+  // a minute and a quarter (`healing` seconds: e to the minus the time over a fifth of it).
+  void Heal(float x, float z, float radius, double when);
+  float healing = 150;
   // A frame, before the scene's passes (it draws and dispatches): what presses this frame (`boxes`, 8 floats each: x, z of
   // the middle, its forward way's x, z (a unit vector), half its length, half its width, 0, 0: units standing on the
   // ground), the clock. The field round what `camera` looks at; nothing pressed when the camera is far.
@@ -91,6 +97,7 @@ class PlantLife {
   gfx::Device* device_;
   int tried_ = 0;  // 0 not yet, 1 made, -1 they cannot be
   gfx::Pipeline pressPass_, burnSplat_, burnFade_, ground_;
+  gfx::Pipeline burnHeal_;  // [scars] (Heal's circles: the burnt picture multiplied down in them)
   gfx::Texture press_[2], burnt_;
   int current_ = 0;
   bool pressValid_ = false;   // (the last field is there to read)
@@ -108,6 +115,7 @@ class PlantLife {
   std::vector<Burn> burns_;   // (to be drawn at the next Prepare)
   std::unordered_map<uint32_t, Vec3> fireAt_;  // (each fire's place the frame before: those that move burn nothing)
   std::vector<Burn> wrecks_;  // (the wrecks of the last half minute that burnt: AddWreck's)
+  std::vector<Burn> heals_;   // [scars] (Heal's, while under way: x, z, radius, -, when it began)
   float constants_[8] = {};
   bool ready_ = false;
 };

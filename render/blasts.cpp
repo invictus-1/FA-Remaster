@@ -245,7 +245,7 @@ bool Blasts::Init() {
   return true;
 }
 
-void Blasts::Add(Vec3 at, float size, double born, bool splash, bool hot) {
+void Blasts::Add(Vec3 at, float size, double born, bool splash, bool hot, float scorch) {
   // one explosion's scorch and flash (and the decal and splat a death may lay) are one blast: near in place and time
   for (auto it = recent_.rbegin(); it != recent_.rend() && !splash; ++it) {
     Blast& b = *it;
@@ -256,6 +256,7 @@ void Blasts::Add(Vec3 at, float size, double born, bool splash, bool hot) {
     b.size = std::max(b.size, size);
     b.born = std::min(b.born, born);
     b.hot = b.hot || hot;
+    b.scorch = std::max(b.scorch, scorch);  // [scars]
     return;
   }
   Blast b;
@@ -264,6 +265,7 @@ void Blasts::Add(Vec3 at, float size, double born, bool splash, bool hot) {
   b.born = born;
   b.splash = splash;
   b.hot = hot;
+  b.scorch = scorch;  // [scars]
   b.water = groundHeight && groundHeight(at.x, at.z) < waterLevel - 0.05f;
   recent_.push_back(b);
   if (fresh_.size() >= 256) fresh_.erase(fresh_.begin());
@@ -291,12 +293,12 @@ bool Blasts::FlashedOn(uint32_t entity, double since) const {
 
 void Blasts::FromScar(Vec3 at, float sizeX, float sizeZ, double born) {
   const float size = 0.5f * (std::fabs(sizeX) + std::fabs(sizeZ));
-  if (size >= 0.2f) Add(at, std::min(size, 60.0f), born);
+  if (size >= 0.2f) Add(at, std::min(size, 60.0f), born, false, false, size);
 }
 
 void Blasts::FromImpact(Vec3 at, float damageRadius, float damage, double born) {
   const float size = damageRadius > 0 ? 0.85f * damageRadius * std::clamp(0.01f * damage, 0.25f, 1.0f) : std::min(0.15f + damage / 800, 0.6f);
-  if (size >= 0.2f) Add(at, std::min(size, 60.0f), born, false, true);
+  if (size >= 0.2f) Add(at, std::min(size, 60.0f), born, false, true, size);
 }
 
 float Blasts::Reach(float size) const { return std::min(2.5f + 5 * size, 60.0f); }

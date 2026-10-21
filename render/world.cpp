@@ -118,6 +118,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
   effects.verbose = options.verbose;
   effects.SetTracks(&tracks);
   effects.SetBlasts(&blasts);
+  effects.isProp = [this](uint32_t id) { return IsProp(id); };  // [scars] (a flash made on a prop is no explosion)
   effects.SetBuild(&build);
   effects.SetExhausts(&exhausts);  // (unitsfx)
   tracks.deep = &trackField;  // (deep tracks: the prints go there while they are on)
@@ -700,6 +701,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   CpuTimes::Part("light, sky, weather set");
   particles.remastered = ribbons.remastered = decals.remastered = effectsLook == EffectsLook::Remastered;
   decals.battleScars = battleScars;
+  decals.SetModernRelief(markRelief && look == Look::Modern);  // [scars]
   // hot metal (hot_metal.h): this frame's, the modern look's only; the marks laid from now on glow while fresh
   hotOn_ = hotMetal && look == Look::Modern;
   decals.hotMetal = hotOn_;
@@ -1504,8 +1506,23 @@ const Model* World::PropModel(const std::string& given, const std::string& mesh)
   return named && named->ok ? named : models.Blueprint(blueprint);
 }
 
+bool World::IsProp(uint32_t id) const {
+  if (madeProps_.count(id) || recentProps_.count(id)) return true;
+  for (const FramePropEvent& e : propEvents_)
+    if (e.id == id) return true;
+  return false;
+}
+
 void World::ApplyPropEvent(const FramePropEvent& e) {
   const bool ofMap = e.mapIndex >= 0;
+  {  // [scars] (remembered a little while: a flash made on it in the same beat is no explosion, IsProp)
+    const double when = static_cast<double>(e.tick) * 0.1;
+    recentProps_[e.id] = when;
+    if (when > recentPruned_ + 5 || when < recentPruned_ - 5) {  // (those older than ten seconds forgotten, every five)
+      recentPruned_ = when;
+      for (auto it = recentProps_.begin(); it != recentProps_.end();) it = std::fabs(it->second - when) > 10 ? recentProps_.erase(it) : std::next(it);
+    }
+  }
   if (ofMap && static_cast<size_t>(e.mapIndex) >= props_.size()) return;
   // (out of its square's list first; it is listed again where it is now)
   if (ofMap) {
@@ -1515,6 +1532,16 @@ void World::ApplyPropEvent(const FramePropEvent& e) {
     if (had != madeProps_.end()) UnlistProp(&had->second, e.id, true);
   }
   if (e.kind == FramePropEvent::Destroy) {
+    if (!ofMap && plantsReact) {  // [scars] a unit's wreck gone (reclaimed, shot to pieces): what burnt round it goes (PlantLife::Heal)
+      auto had = madeProps_.find(e.id);
+      if (had != madeProps_.end() && had->second.unitWreck && had->second.model) {
+        Vec3 centre;
+        float radius;
+        Sphere(had->second.model, had->second.world, &centre, &radius);
+        // (its death's burn, AddWreck's, and a margin for its fires' burns about it)
+        plantLife.Heal(centre.x, centre.z, (0.3f + 1.4f * std::min(radius, 12.0f)) * 1.15f + 1.5f, static_cast<double>(e.tick) * 0.1);
+      }
+    }
     if (ofMap) props_[static_cast<size_t>(e.mapIndex)].model = nullptr;
     else madeProps_.erase(e.id);
     ++propsGone;
