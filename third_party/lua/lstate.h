@@ -24,11 +24,20 @@
 ** or when reading immutable fields from global objects
 ** (such as string values and udata values). 
 */
-/* moho64: the check that no parallel task touches a Lua state (src/core/workers.h): NULL unless the sim's worker
-   pool has workers or the order check is on; then every API entry (its lua_lock) asks whether a task is running. */
+/* moho64: the check that no parallel task touches a Lua state (src/core/workers.h): NULL until a sim's worker
+   pool has workers or the order check is on; then every API entry (its lua_lock) asks whether a task is running.
+   One pointer for the process: installed once (std::call_once, src/core/workers.cpp InstallLockCheck) by an
+   atomic store, and read here by a relaxed atomic load (a plain load on x86 and ARM, so lua_lock costs what it
+   did), so a second sim's pool installing it while another thread runs Lua is no data race. */
 extern void (*lua_gpg_lock_check)(lua_State *L);
+#if defined(__GNUC__) || defined(__clang__)
+#define lua_gpg_lock_check_now()	__atomic_load_n(&lua_gpg_lock_check, __ATOMIC_RELAXED)
+#else  /* MSVC: a volatile read of the aligned pointer is one atomic load */
+#define lua_gpg_lock_check_now()	(*(void (*volatile *)(lua_State *)) &lua_gpg_lock_check)
+#endif
 #ifndef lua_lock
-#define lua_lock(L)	((void) (lua_gpg_lock_check ? lua_gpg_lock_check(L) : (void) 0))
+#define lua_lock(L)	do { void (*lua_gpg_c_)(lua_State *) = lua_gpg_lock_check_now(); \
+                     if (lua_gpg_c_) lua_gpg_c_(L); } while (0)
 #endif
 
 #ifndef lua_unlock

@@ -37,6 +37,31 @@ void LockCheck(lua_State*) {
   std::abort();
 }
 
+// lua_gpg_lock_check is ONE pointer for the process, read by every lua_lock of every sim's Lua with a relaxed atomic
+// load (third_party/lua/lstate.h). It is stored once, the first time a pool needs it, by an atomic store of the same
+// kind: a second sim's pool never races a thread that runs Lua meanwhile. It stays installed: the check itself is
+// per thread (t_inTask), so it costs a sim without workers one call per API entry, and only after a pool armed it.
+using LockFn = void (*)(lua_State*);
+LockFn LoadLockCheck() {
+#if defined(__GNUC__) || defined(__clang__)
+  return __atomic_load_n(&lua_gpg_lock_check, __ATOMIC_RELAXED);
+#else
+  LockFn volatile* p = &lua_gpg_lock_check;  // (MSVC: a volatile access of the aligned pointer is atomic)
+  return *p;
+#endif
+}
+void InstallLockCheck() {
+  static std::once_flag once;
+  std::call_once(once, [] {
+#if defined(__GNUC__) || defined(__clang__)
+    __atomic_store_n(&lua_gpg_lock_check, &LockCheck, __ATOMIC_RELAXED);
+#else
+    LockFn volatile* p = &lua_gpg_lock_check;
+    *p = &LockCheck;
+#endif
+  });
+}
+
 uint64_t SplitMix(uint64_t& s) {
   uint64_t z = (s += 0x9e3779b97f4a7c15ull);
   z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ull;
@@ -120,7 +145,7 @@ std::string ParallelStats::Summary(double tickMs) const {
 
 WorkerPool::WorkerPool(int threads, ParCheck check) : threads_(std::max(1, threads)), check_(check) {
   stats_.resize(static_cast<size_t>(threads_));
-  if (threads_ > 1 || check_.mode != ParCheck::kOff) lua_gpg_lock_check = LockCheck;
+  if (threads_ > 1 || check_.mode != ParCheck::kOff) InstallLockCheck();
   if (check_.mode != ParCheck::kOff) return;  // (the order check runs every task on the calling thread)
   workers_.reserve(static_cast<size_t>(threads_ - 1));
   for (int i = 1; i < threads_; ++i) workers_.emplace_back([this, i] { WorkerMain(i); });
@@ -300,7 +325,7 @@ bool WorkerPool::SelfTest() {
   // MOHO64_WORKERS_SELFTEST_LUA=1: a task that calls the Lua API, which must stop the program (when the pool has
   // workers or the order check is on; see LockCheck)
   if (std::getenv("MOHO64_WORKERS_SELFTEST_LUA")) {
-    if (!lua_gpg_lock_check) {
+    if (!LoadLockCheck()) {
       Logf(LogLevel::Info, "workers: self-test: the Lua check is not armed (one thread, no order check): nothing to test");
       return ok;
     }
