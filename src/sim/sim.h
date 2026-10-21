@@ -513,6 +513,8 @@ class Sim {
   // Each system's own state, made by that system when it first needs it (multicore step 1: these were
   // process-wide variables in the systems' files, so two sims in one process shared them; docs/multicore.md)
   std::shared_ptr<struct IntelState> intelState;  // sim/intel.cpp: the armies' grids, the sources, the blips
+  std::shared_ptr<struct ThreatState> threatState;  // sim/ai_threat.cpp: the armies' threat maps
+  std::shared_ptr<struct BrainStates> brainState;   // sim/ai_brain.cpp: the brains' own state, by army
   // Keep an engine object alive for the session (objects scripts may still hold).
   ScriptObject* Own(std::unique_ptr<ScriptObject> o) {
     owned_.push_back(std::move(o));

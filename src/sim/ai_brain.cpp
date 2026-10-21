@@ -62,16 +62,34 @@ struct BrainState {
   // the no-rush circle's (army+0x1d0 the radius, +0x1d4 / +0x1d8 the offsets in x / z), for the view only
   float noRushRadius = 0, noRushOffX = 0, noRushOffZ = 0;
 };
-std::vector<BrainState> g_state;  // by 0-based army index
+}  // namespace
 
-BrainState& StateOf(const AiBrain* b) {
-  static BrainState none;
+// The armies' brain states, by 0-based army index (Sim::brainState). Multicore step 1: this was process-wide
+// (g_state).
+struct BrainStates {
+  std::vector<BrainState> v;
+  BrainState none;  // what StateOf hands out for a brain with no army (emptied each time)
+};
+
+namespace {
+
+std::vector<BrainState>& States(Sim& sim) {
+  if (!sim.brainState) sim.brainState = std::make_shared<BrainStates>();
+  return sim.brainState->v;
+}
+const std::vector<BrainState>& States(const Sim& sim) {
+  static const std::vector<BrainState> none;  // (no armies' states made: immutable)
+  return sim.brainState ? sim.brainState->v : none;
+}
+
+BrainState& StateOf(Sim& sim, const AiBrain* b) {
+  std::vector<BrainState>& v = States(sim);
   const int i = b && b->army ? b->army->index - 1 : -1;
-  if (i < 0 || static_cast<size_t>(i) >= g_state.size()) {
-    none = BrainState();
-    return none;
+  if (i < 0 || static_cast<size_t>(i) >= v.size()) {
+    sim.brainState->none = BrainState();
+    return sim.brainState->none;
   }
-  return g_state[static_cast<size_t>(i)];
+  return v[static_cast<size_t>(i)];
 }
 
 // "%s\n  expected %d args, but got %d" (0xe0a220) / "... between %d and %d args ..." (0xe0a270), with the
@@ -198,7 +216,7 @@ int l_IsOpponentAIRunning(lua_State* L) {
 // else changes nothing. Nothing in the engine reads it.
 int l_SetCurrentPlan(lua_State* L) {
   Args(L, "Set the current plan for this brain to run", 2, 2);
-  BrainState& st = StateOf(B(L));
+  BrainState& st = StateOf(*S(L), B(L));
   if (lua_type(L, 2) == LUA_TSTRING) st.plan = lua_tostring(L, 2);
   return 0;
 }
@@ -207,7 +225,7 @@ int l_SetCurrentPlan(lua_State* L) {
 int l_SetCurrentEnemy(lua_State* L) {
   Args(L, "Set the current enemy for this brain to attack", 2, 2);
   AiBrain* b = B(L);
-  BrainState& st = StateOf(b);
+  BrainState& st = StateOf(*S(L), b);
   if (lua_isnil(L, 2)) {
     st.enemy = nullptr;
   } else {
@@ -222,7 +240,7 @@ int l_SetCurrentEnemy(lua_State* L) {
 // GetCurrentEnemy 0x5867f0: the enemy army's brain, nil without one.
 int l_GetCurrentEnemy(lua_State* L) {
   Args(L, "Return this brain's current enemy", 1, 1);
-  PushArmyBrain(L, StateOf(B(L)).enemy);
+  PushArmyBrain(L, StateOf(*S(L), B(L)).enemy);
   return 1;
 }
 // GetNoRushTicks 0x591870: (float) army+0x1cc. The army's OnTick takes one off at its start while it is above 0
@@ -233,7 +251,7 @@ int l_GetCurrentEnemy(lua_State* L) {
 // negligible).
 int l_GetNoRushTicks(lua_State* L) {
   Args(L, "CAiBrain:GetNoRushTicks()", 1, 1);
-  const BrainState& st = StateOf(B(L));
+  const BrainState& st = StateOf(*S(L), B(L));
   const long long beats = S(L)->tick();
   long long v = st.noRushStart;
   if (v > 0) v = std::max<long long>(v - beats, 0);
@@ -357,7 +375,7 @@ void ProcessAttackVectors(Sim& sim, AiBrain* b, BrainState& st) {
 int l_SetUpAttackVectorsToArmy(lua_State* L) {
   Args(L, "CAiBrain:SetUpAttackVectorsToArmy()", 1, 2);
   AiBrain* b = B(L);
-  BrainState& st = StateOf(b);
+  BrainState& st = StateOf(*S(L), b);
   if (lua_gettop(L) > 1 && lua_type(L, 2) != LUA_TNIL) st.vectorCat = CategoryArg(L, 2);
   else st.vectorCat = StructureNotMobile(*S(L));
   ProcessAttackVectors(*S(L), b, st);
@@ -379,7 +397,7 @@ void PushVector(lua_State* L, const AttackVector& v) {
 // GetAttackVectors 0x58ede0: nil when there are none, else an array of them (AssignNewTable(L, n, 0), Insert).
 int l_GetAttackVectors(lua_State* L) {
   Args(L, "CAiBrain:GetAttackVectors()", 1, 1);
-  const std::vector<AttackVector> v = StateOf(B(L)).vectors;  // (0x585a40 copies them)
+  const std::vector<AttackVector> v = StateOf(*S(L), B(L)).vectors;  // (0x585a40 copies them)
   if (v.empty()) {
     lua_pushnil(L);
     return 1;
@@ -545,7 +563,7 @@ AttackVector PickBest(Sim& sim, lua_State* L, AiBrain* b, Platoon* p, int squadC
                       const std::vector<uint64_t>& cat, const char* module, const char* fn) {
   AttackVector best;  // (0xf3d21c: zeros)
   float bestVal = -1.0f;
-  BrainState& st = StateOf(b);
+  BrainState& st = StateOf(sim, b);
   Squad* squad = nullptr;
   for (auto& s : p->squads)
     if (s->cls == squadCls) {
@@ -719,7 +737,8 @@ int NoRushTicksOf(const char* s) {
 }  // namespace
 
 void InitBrainState(Sim& sim) {
-  g_state.assign(sim.armies().size(), BrainState());
+  std::vector<BrainState>& states = States(sim);
+  states.assign(sim.armies().size(), BrainState());
   lua_State* L = sim.L();
   if (!L) return;
   const int top = lua_gettop(L);
@@ -753,8 +772,8 @@ void InitBrainState(Sim& sim) {
   };
   float radius = 0.0f;
   if (option && !field("norushradius", &radius)) radius = 100.0f;  // 0xe4f744
-  for (size_t i = 0; i < g_state.size(); ++i) {
-    BrainState& st = g_state[i];
+  for (size_t i = 0; i < states.size(); ++i) {
+    BrainState& st = states[i];
     st.noRushStart = ticks;
     if (!option) continue;
     st.noRushRadius = radius;
@@ -768,8 +787,9 @@ void InitBrainState(Sim& sim) {
 }
 
 bool NoRushOf(const Sim& sim, int army, int* ticks, float* radius, float* offX, float* offZ) {
-  if (army < 0 || static_cast<size_t>(army) >= g_state.size()) return false;
-  const BrainState& st = g_state[static_cast<size_t>(army)];
+  const std::vector<BrainState>& states = States(sim);
+  if (army < 0 || static_cast<size_t>(army) >= states.size()) return false;
+  const BrainState& st = states[static_cast<size_t>(army)];
   long long v = st.noRushStart;  // as GetNoRushTicks counts it between beats
   if (v > 0) v = std::max<long long>(v - static_cast<long long>(sim.tick()), 0);
   *ticks = static_cast<int>(v);

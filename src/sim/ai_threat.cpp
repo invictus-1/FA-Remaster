@@ -82,8 +82,6 @@ struct InfluenceMap {
   std::vector<Cell> cells;        // +0x20: cz * W + cx
 };
 
-std::vector<InfluenceMap> g_maps;
-
 // What the update reads of a blueprint: RUnitBlueprint Defense (+0x420) AirThreatLevel +0x42c, SurfaceThreatLevel
 // +0x430, SubThreatLevel +0x434, EconomyThreatLevel +0x438 (RUnitBlueprintDefenseTypeInfo::AddFields 0x521ab0),
 // IsMobile (vtable slot 4, 0x51e460: Physics.MotionType != None) and Air.CanFly (+0x368).
@@ -94,13 +92,32 @@ struct ThreatBp {
   float air = 0, surface = 0, sub = 0, economy = 0;
   bool mobile = false, canFly = false;
 };
-std::map<const BlueprintInfo*, ThreatBp> g_bps;
+}  // namespace
+
+// The sim's threat maps and their blueprint cache (Sim::threatState). Multicore step 1: these were process-wide
+// (g_maps, g_bps).
+struct ThreatState {
+  std::vector<InfluenceMap> maps;
+  std::map<const BlueprintInfo*, ThreatBp> bps;
+};
+
+namespace {
+
+ThreatState& TS(Sim& sim) {
+  if (!sim.threatState) sim.threatState = std::make_shared<ThreatState>();
+  return *sim.threatState;
+}
+const ThreatState& TS(const Sim& sim) {
+  static const ThreatState none;  // (no maps made: immutable)
+  return sim.threatState ? *sim.threatState : none;
+}
 
 const ThreatBp& BpOf(Sim& sim, const BlueprintInfo* bp) {
   static const ThreatBp none;
   if (!bp) return none;
-  auto it = g_bps.find(bp);
-  if (it != g_bps.end()) return it->second;
+  std::map<const BlueprintInfo*, ThreatBp>& bps = TS(sim).bps;
+  auto it = bps.find(bp);
+  if (it != bps.end()) return it->second;
   ThreatBp t;
   lua_State* L = sim.L();
   if (L && bp->kind == BpKind::Unit) {
@@ -117,11 +134,16 @@ const ThreatBp& BpOf(Sim& sim, const BlueprintInfo* bp) {
     t.canFly = m.canFly;
     lua_settop(L, top);
   }
-  return g_bps.emplace(bp, t).first->second;
+  return bps.emplace(bp, t).first->second;
 }
 
-InfluenceMap* MapOf(int a) {
-  return a >= 0 && static_cast<size_t>(a) < g_maps.size() ? &g_maps[static_cast<size_t>(a)] : nullptr;
+InfluenceMap* MapOf(Sim& sim, int a) {
+  std::vector<InfluenceMap>& maps = TS(sim).maps;
+  return a >= 0 && static_cast<size_t>(a) < maps.size() ? &maps[static_cast<size_t>(a)] : nullptr;
+}
+const InfluenceMap* MapOf(const Sim& sim, int a) {
+  const std::vector<InfluenceMap>& maps = TS(sim).maps;
+  return a >= 0 && static_cast<size_t>(a) < maps.size() ? &maps[static_cast<size_t>(a)] : nullptr;
 }
 
 // The playable rect (STIMap +0x08..+0x14, ints; sim.h playableRect): the whole map until SetPlayableRect.
@@ -635,7 +657,7 @@ int ArmyArg(lua_State* L, int idx, const char* err) {
 
 AiBrain* BrainArg(lua_State* L) { return CheckObject<AiBrain>(L, 1); }
 InfluenceMap* BrainMap(lua_State* L, AiBrain* b) {
-  InfluenceMap* m = b->army ? MapOf(b->army->index - 1) : nullptr;
+  InfluenceMap* m = b->army ? MapOf(*S(L), b->army->index - 1) : nullptr;
   if (!m) luaL_error(L, "moho64: the brain's army has no threat map");
   return m;
 }
@@ -822,16 +844,17 @@ int l_CheckBlockingTerrain(lua_State* L) {
 int CheckThreatType(lua_State* L, int idx) { return EnumArgAt(L, idx, kEnumThreatType); }
 
 void InitThreatMaps(Sim& sim) {
-  g_maps.clear();
-  g_bps.clear();
+  ThreatState& ts = TS(sim);
+  ts.maps.clear();
+  ts.bps.clear();
   const TerrainMap* map = sim.map();
   const int mw = map ? map->width() : 0, mh = map ? map->height() : 0;
   // cell size (CArmyImpl ctor 0x6feb40): max(32, max(w, h) / 16), w and h = the heightfield's size - 1
   const int cs = std::max(32, std::max(mw, mh) / 16);
   const size_t n = sim.armies().size();
-  g_maps.resize(n);
+  ts.maps.resize(n);
   for (size_t a = 0; a < n; ++a) {
-    InfluenceMap& m = g_maps[a];
+    InfluenceMap& m = ts.maps[a];
     m.army = static_cast<int>(a);
     m.cs = cs;
     m.W = mw / cs;
@@ -843,24 +866,24 @@ void InitThreatMaps(Sim& sim) {
 }
 
 void ThreatInsertEntry(Sim& sim, int a, const ReconBlip* blip) {
-  InfluenceMap* m = MapOf(a);
+  InfluenceMap* m = MapOf(sim, a);
   if (m && blip) InsertEntry(sim, *m, blip->id, blip->position, blip->blueprint);
 }
 
 void ThreatUpdateBlipPosition(Sim& sim, int a, const ReconBlip* blip) {
-  InfluenceMap* m = MapOf(a);
+  InfluenceMap* m = MapOf(sim, a);
   if (m && blip) UpdateBlipPosition(sim, *m, blip->id, blip->position, blip->blueprint);
 }
 
 void ThreatRemoveEntry(Sim& sim, int a, uint32_t blipId) {
-  (void)sim;
-  if (InfluenceMap* m = MapOf(a)) RemoveEntry(*m, blipId);
+  if (InfluenceMap* m = MapOf(sim, a)) RemoveEntry(*m, blipId);
 }
 
 void ThreatMapBeat(Sim& sim) {
   const uint32_t slot = sim.tick() % 30u;
-  if (slot >= g_maps.size()) return;
-  InfluenceMap& m = g_maps[slot];
+  std::vector<InfluenceMap>& maps = TS(sim).maps;
+  if (slot >= maps.size()) return;
+  InfluenceMap& m = maps[slot];
   Update(sim, m);
   if (DebugThreat()) {
     size_t entries = 0;
@@ -891,18 +914,17 @@ void ThreatMapBeat(Sim& sim) {
 }
 
 float ThreatRect(const Sim& sim, int a, int cx, int cz, int rings, bool playableOnly, int type, int threatArmy) {
-  const InfluenceMap* m = MapOf(a);
+  const InfluenceMap* m = MapOf(sim, a);
   return m && !m->cells.empty() ? GetThreatRect(sim, *m, cx, cz, rings, playableOnly, type, threatArmy) : 0.0f;
 }
 
 int ThreatCellOf(const Sim& sim, int a, float x, float z) {
-  (void)sim;
-  const InfluenceMap* m = MapOf(a);
+  const InfluenceMap* m = MapOf(sim, a);
   return m ? VectorToCoords(*m, x, z) : 0;
 }
 
 float ThreatRectAt(const Sim& sim, int a, float x, float z, int rings, bool playableOnly, int type, int threatArmy) {
-  const InfluenceMap* m = MapOf(a);
+  const InfluenceMap* m = MapOf(sim, a);
   if (!m || m->cells.empty() || m->W <= 0) return 0.0f;
   const int cell = VectorToCoords(*m, x, z);
   return GetThreatRect(sim, *m, cell % m->W, cell / m->W, rings, playableOnly, type, threatArmy);
