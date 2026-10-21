@@ -669,6 +669,7 @@ struct CombatBpData {
   float maxAirspeed = 0, engageDistance = 0, predictAheadForBombDrop = 0;
   float guardScanRadius = 0, guardReturnRadius = 0, attackAngle = 0;
   bool needUnpack = false;
+  bool autoSurfaceToAttack = true;  // AI.AutoSurfaceToAttack (ubp+0x4cc; RUnitBlueprintAI ctor 0x51f89c: true)
   std::vector<std::string> targetBones;
   float sizeY = 1, sizeZ = 1;
   float intel[5] = {0, 0, 0, 0, 0};  // Vision, WaterVision, Radar, Sonar, Omni radii
@@ -698,6 +699,7 @@ static const CombatBpData& GetCombatBpData(Sim& sim, lua_State* L, const Bluepri
   d.guardReturnRadius = lu::Num(L, ai, "GuardReturnRadius", 50);
   d.attackAngle = lu::Num(L, ai, "AttackAngle", 0);
   d.needUnpack = lu::Bool(L, ai, "NeedUnpack");
+  d.autoSurfaceToAttack = lu::Bool(L, ai, "AutoSurfaceToAttack", true);
   int tb = lu::Sub(L, ai, "TargetBones");
   if (lua_istable(L, tb))
     for (int i = 1;; ++i) {
@@ -2510,6 +2512,20 @@ AiTarget CommandTarget(Sim& sim, const BuildTask& t) {
   if (t.goalId) {
     a.type = 1;
     a.entityId = t.goalId;
+    // A player's order holds the army's recon BLIP (the task's CAiTarget is a copy of the command's, 0x5f29fb), and
+    // the blip outlives its unit: once the unit is gone (purged) the blip stays until the armies' recon passes let
+    // go of it (DestroyIfUnused, intel.cpp), and while it exists the task has its target (HasTarget 0x5e2a10: a blip
+    // is not dead), at the blip's own place; no weapon can attack it (CanAttackTarget 0x6d57f0 asks GetEntity 0x5e2ce0,
+    // the blip's unit), and the target is LOST (EntityLost 0x5e2db0: GetEntity 0x5e2ce0, the blip's link to its unit, is null).
+    // Seen: MP1 7411, eleven of army 1's ships on a player's Attack of the blip 0x3040008c of army 4's structure
+    // 0x400066, replaced by its upgrade at 7410: in the original the six still chasing go on until the blip goes
+    // (7418), and the five in reach end at once (the lost branch, 0x5f3994: in reach of the last place); ours looked
+    // at the gone unit and ended all eleven at 7411.
+    if (t.targetViaBlip && t.targetBlipRef && !t.targetFakeId && !sim.FindEntity(t.goalId))
+      if (Entity* b = sim.FindEntity(t.targetBlipRef); b && b->kind == Entity::Kind::Blip) {
+        a.entityId = t.targetBlipRef;
+        return a;
+      }
     if (Entity* e = sim.FindEntity(t.goalId))
       if (e->kind == Entity::Kind::Unit) {
         Unit* tu = static_cast<Unit*>(e);
@@ -2645,6 +2661,12 @@ bool TaskHasTarget(Sim& sim, const AiTarget& t) {
 bool TaskTargetLost(Sim& sim, const AiTarget& t) {
   if (t.type != 1) return false;
   const Entity* e = TargetEntity(sim, t);
+  // a recon blip held as the target (CommandTarget, its unit gone): GetEntity is its unit, and no unit is lost too
+  // (0x5e2dc6: je 0x5e2dd6, al = 1)
+  if (e && e->kind == Entity::Kind::Blip) {
+    const Unit* s = static_cast<const ReconBlip*>(e)->source;
+    return !s || s->dead || !sim.FindEntity(EntityRef(s));
+  }
   return e && e->dead;
 }
 
@@ -2945,7 +2967,14 @@ int AttackStep(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
   UnitWeapon* w = oc ? oc : u->weapons.empty() ? nullptr : TargetWeapon(sim, u, target);
   bool direct = BpInCategory(sim, u->blueprint, "DIRECTFIRE");
   if (!TaskHasTarget(sim, target) && u->commands.size() >= 2) return -1;  // more orders: give up at once
-  if (!w && !d.coordinated && !direct) return -1;
+  // 0x5f3526..0x5f3611: no weapon for the target ends the task unless it is coordinated (+0x8d), the unit is
+  // DIRECTFIRE, or it is a sub under water that surfaces to attack (AI.AutoSurfaceToAttack, MotionType
+  // SurfacingSub (bp+0x290 == 5) and layer Sub (unit+0x120 == 4)). Seen: MP1 7411, army 1's Aeon sub 0x100056
+  // (uas0203) on the blip of a structure that its upgrade replaced: no weapon can take a blip without its unit
+  // (CanAttackTarget 0x6d57f0), and the original's sub keeps the Attack until the blip goes (7418).
+  const bool surfaceToAttack = CB(u).autoSurfaceToAttack && u->motion.bp &&
+                               u->motion.bp->motionType == kMotionSurfacingSub && u->layer == "Sub";
+  if (!w && !d.coordinated && !direct && !surfaceToAttack) return -1;
   // state 1's test (0x5f366e) is U.IsMobile (vt+0x30 = IUnit::IsMobile 0x6a4a10: the unit has a motion, u+0x4b0),
   // not the Immobile state: a heavy artillery standing unpacked takes the mobile branch (Update, then the chase),
   // and Update's first step packs it up (0x5f3020). (Seen: LAND, url0304 (unit 0x20) given a patrol's attack child
@@ -2967,6 +2996,14 @@ int AttackStep(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
         t.state = 4;
         return 0;
       }
+      // 0x5f3680..0x5f36f5: such a sub with no weapon for a target it has and has not lost must surface: only in
+      // the unit's auto-surface mode (Unit::IsAutoSurfaceMode 0x6a4a40, unit+0x291, vt+0x64; off unless the
+      // player's SetAutoSurfaceMode turns it on), else the task ends. Seen: MP1 7090, army 1's Aeon sub 0x1000b6
+      // (uas0203) ordered onto a land unit's blip: the original's order fails in the beat it is dispatched.
+      // (The surfacing itself, a move to the cell's surface layer (0x579300, 0x5a2cb0, layer 8, 0x60b890), is not
+      // built: in auto-surface mode the sub chases as any other unit.)
+      if (surfaceToAttack && !w && TaskHasTarget(sim, target) && !TaskTargetLost(sim, target) && !u->autoSurfaceMode)
+        return -1;
       AttackUpdate(sim, u, t, target);
       t.state = 3;
       return 0;
@@ -3148,6 +3185,7 @@ BuildTask* StartAttackTask(Sim& sim, Unit* u, const UnitCommand& c) {
   t->targetViaBlip = c.targetViaBlip;
   t->targetPastDeath = c.targetPastDeath;
   t->targetFakeId = c.targetFakeId;
+  t->targetBlipRef = c.targetBlipRef;
   t->site = c.pos;
   if (c.targetId)
     if (Entity* e = sim.FindEntity(c.targetId)) t->site = e->position;
