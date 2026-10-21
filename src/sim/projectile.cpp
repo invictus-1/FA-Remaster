@@ -522,31 +522,59 @@ void CheckCollision(Sim& sim, Projectile* p, Vec3 p0, Vec3 p1) {
   };
   if (p->collideSurface) {
     int crossing = 0;  // 1 entering, -1 leaving the water
-    float waterDist = std::numeric_limits<float>::infinity();
-    Vec3 waterPt;
+    // The crossing (0x69d2a8..0x69d4a8): the line from p0 along the step's unit direction (0x44f7e0 of p1 - p0:
+    // ((x*x + y*y) + z*z), above 0 times 1 / len, else zero; 0x69d36b) meets the plane (0, 1, 0, level) by
+    // 0x577540 (den = (d.y*1 + d.z*0) + 0*d.x, none at den == 0; t = (level - ((p0.x*0 + 1*p0.y) + 0*p0.z)) / den
+    // within -inf..+inf, so of either sign; the point p0 + d t, none when a part is NaN, 0x5657f0). waterT is that
+    // t (world units along the step), 0 when there is no point (0x69d2a8). A shell destroyed on water takes the
+    // point and the fraction t / (2 x the segment's half length) (0x69d455..0x69d466), or p0 and 0. The layer
+    // changes unless the terrain was recorded nearer than waterT (0x69db46..0x69db53). (Ours took the fraction of
+    // the step where y reached the level, only within [0, 1], and the terrain hit whether recorded or not.)
+    float waterT = 0.0f;
     if (m && m->hasWater) {
       if (!p->underwater && p1.y < w) crossing = 1;
       else if (p->underwater && p1.y > w) crossing = -1;
       if (crossing) {
-        float dy = p0.y - p1.y;
-        if (std::fabs(dy) > 1e-9f) {
-          float t = (p0.y - w) / dy;
-          if (t >= 0 && t <= 1) {
-            waterDist = t * len;
-            waterPt = Add(p0, Mul(seg, t));
+        const Vec3 dd{p1.x - p0.x, p1.y - p0.y, p1.z - p0.z};
+        const float dl = std::sqrt((dd.x * dd.x + dd.y * dd.y) + dd.z * dd.z);
+        Vec3 dir{0.0f, 0.0f, 0.0f};
+        if (dl > 0.0f) {
+          const float inv = 1.0f / dl;
+          dir = {dd.x * inv, inv * dd.y, inv * dd.z};
+        }
+        const float den = (dir.y * 1.0f + dir.z * 0.0f) + 0.0f * dir.x;
+        bool met = false;
+        Vec3 wp{};
+        if (den != 0.0f || std::isnan(den)) {
+          const float t = (w - ((p0.x * 0.0f + 1.0f * p0.y) + 0.0f * p0.z)) / den;
+          if (!std::isnan(t)) {
+            wp = {p0.x + t * dir.x, dir.y * t + p0.y, dir.z * t + p0.z};
+            met = !(std::isnan(wp.x) || std::isnan(wp.y) || std::isnan(wp.z));
+            if (met) waterT = t;
           }
         }
         if (p->destroyOnWater) {
-          if (waterDist < std::numeric_limits<float>::infinity()) record(waterDist, waterPt, 2, 0);
-          else record(0, p0, 2, 0);
+          if (met) {
+            p->hitPos = wp;
+            p->hitFraction = waterT / (StepSegmentExe(p0, p1).e * 2.0f);
+          } else {
+            p->hitPos = p0;
+            p->hitFraction = 0.0f;
+          }
+          p->impactType = 2;
+          p->hitEntity = 0;
         }
       }
     }
     float td;
     Vec3 th;
     bool terrain = TerrainSegmentHit(m, p0, p1, &td, &th);
-    if (terrain && (p->hitFraction < 0 || td < p->hitFraction * len)) record(td, th, 1, 0);
-    if (crossing && !(terrain && td <= waterDist)) {
+    bool terrainRecorded = false;
+    if (terrain && (p->hitFraction < 0 || td < p->hitFraction * len)) {
+      record(td, th, 1, 0);
+      terrainRecorded = true;
+    }
+    if (crossing && (!terrainRecorded || td > waterT)) {
       if (crossing == 1) {
         SetLayer(sim, p, "Water");
         p->underwater = true;
