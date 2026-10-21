@@ -3,6 +3,83 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 45: a unit's live intel words in UnitView, and the no-rush circle's data — done (98f3324, view only)
+
+Both are in `sim/sim_view.h`. The simulation is unchanged (the 13 + bench, MP2, MP3 and an MP1 cut are as before).
+
+The views read no Lua: the words are kept on the entity (`Entity::intelAttr`), and the no-rush values are read
+once, when the armies are made (`InitBrainState`, sim/ai_brain.cpp, beside NoRushOption). So nothing in a view
+pushes a string or allocates.
+
+**(a) `UnitView::intel[8]`: the unit's intel words, as the original's interface reads them.**
+
+The original keeps eight words per entity (`EntityAttributes`, entity+0x128; the user side reads its copy at
+UserEntity+0x100). Each word is a radius in the low 31 bits, with bit 31 = enabled. The order is NOT the one in the
+request:
+
+| word | kind | at the unit's creation |
+|---|---|---|
+| [0] | Vision | Intel.VisionRadius |
+| [1] | WaterVision | Intel.WaterVisionRadius |
+| [2] | Radar | Intel.RadarRadius |
+| [3] | Sonar | Intel.SonarRadius |
+| [4] | Omni | Intel.OmniRadius |
+| [5] | RadarStealth | Intel.RadarStealthFieldRadius |
+| [6] | SonarStealth | Intel.SonarStealthFieldRadius |
+| [7] | Cloak | Intel.CloakFieldRadius |
+
+- **At creation** (`EntityAttributes::Initialize` 0x6a46a0, from Unit::Unit 0x6a5786): each word is its blueprint
+  radius, with bit 31 set when the radius is not 0.
+- **Later changes** (only for the eight kinds above):
+  - `InitIntel` and `SetIntelRadius` change the radius and keep the bit (0x5bd470).
+  - `EnableIntel` sets the bit (0x68e209..0x68e25d) and `DisableIntel` clears it (0x68e4ac..0x68e500).
+  - The stealth and cloak words change through 'RadarStealth', 'SonarStealth' and 'Cloak'.
+  - The '...Field' kinds, Jammer and Spoof have no word.
+- **Jammer and spoof radii are not in the words.** The interface takes them from the blueprint
+  (Intel.JamRadius.Max, Intel.SpoofRadius.Max).
+
+How the original's interface uses the words (radius = word & 0x7fffffff; it does not look at the enabled bit):
+
+- **`UserUnit::GetIntelRanges` (0x8bfd70)** gives omni [4], radar [2] and sonar [3]. It gives nothing when the unit
+  has the live toggle cap 8 (RULEUTC_IntelToggle) and that toggle is on. In ours' terms that is
+  `UnitView::toggleCaps & 8` and `UnitStateView::scriptBits & 8`.
+- **`UserUnit::GetMaxCounterIntel` (0x8bfe50)** gives the largest of [7], [6], [5], the blueprint's
+  Intel.JamRadius.Max and Intel.SpoofRadius.Max. It gives nothing when toggle 4 (Jamming) or 0x20 (Stealth) is held
+  in the same way.
+
+Checked with `--view` on Seton's: a T1 radar given `SetIntelRadius('Radar', 77)` and `EnableIntel('Cloak')` shows
+`0x80000014 0xa 0x8000004d 0 0 0 0 0x80000000`. FAF's scripts had already disabled its WaterVision.
+
+**(b) The no-rush circle: `ArmyView::start[2]`, `noRushTicks`, `noRushRadius`, `noRushOffset[2]`.**
+
+The user side's army fields +0x1bc..+0x1d0 are a copy of the sim army's +0x1c4..+0x1d8:
+
+| user side | sim army | ArmyView | set by |
+|---|---|---|---|
+| +0x1bc, +0x1c0 | +0x1c4, +0x1c8 | `start[0]`, `start[1]` (x, z) | SetArmyStart / GenerateArmyStart |
+| +0x1c4 | +0x1cc | `noRushTicks` | the no-rush timer in beats now (the same number as CAiBrain:GetNoRushTicks) |
+| +0x1c8 | +0x1d0 | `noRushRadius` | ScenarioInfo.norushradius, 100 when the map gives none |
+| +0x1cc, +0x1d0 | +0x1d4, +0x1d8 | `noRushOffset[0]`, `noRushOffset[1]` | ScenarioInfo.norushoffsetX_<army name> and norushoffsetY_<army name>; both 0 unless both are given |
+
+- **When they are read.** The army's ctor reads the radius and the offsets (0x6ff47d..0x6ff643) only when
+  NoRushOption is given; otherwise they stay 0 here.
+- **How it is drawn.** `ExtractFocusArmyNoRushRange` (0x7ef1c0) draws the focus army's circle only while
+  noRushTicks > 0, around (start[0] + noRushOffset[0], 0, noRushOffset[1] + start[1]) with noRushRadius.
+- **Checked with `--view`** on Seton's with NoRushOption '10', at tick 20: ARMY_1 start 672.5 346.5, 5980 beats,
+  radius 70, offset 15 40; ARMY_2 offset -10 -40.
+
+**Two things seen on the way (not changed; for the lead):**
+
+- **Ours' `GetIntelRadius` reads the circles, not the words.**
+  - The original reads the words (0x68e94e), so on a unit 'RadarStealthField' gives 0 there and 'RadarStealth'
+    gives the field's radius.
+  - Ours does the reverse.
+  - Ours also gives 0 for a kind whose circle the unit does not have, where the original gives the word.
+- **The original looks up intel type names without case.**
+  - Its lookup is REnumType::GetEnumValue 0x8d9fd0 with _stricmp. Ours compares exactly (`IntelType`, strcmp), so
+    'vision' is an error in ours.
+  - FAF's own XRB3301 script calls `GetIntelRadius('vision')`.
+
 ## render 41: from Chris's playthrough of 19 October — answered (items 2, 3: the original's own; item 1: 13a6e16)
 
 **First: which build played them.** Chris played these games on build-ui as rebuilt at 14:51 that day (ui 80c6cd7).
