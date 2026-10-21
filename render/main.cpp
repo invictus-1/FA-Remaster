@@ -3503,6 +3503,7 @@ int main(int argc, char** argv) {
               (opt.enhancement.empty() || static_cast<int>(u.Army()) + 1 == opt.enhanceArmy)) {
             camera.target = {u.position[0], u.position[1], u.position[2]};
             camera.distance = 9;
+            printf("render: --find %s: at %.1f, %.1f\n", opt.find.c_str(), camera.target.x, camera.target.z);  // [padsnow] (for a --cam on it)
             break;
           }
       }

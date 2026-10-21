@@ -1779,6 +1779,15 @@ What Chris saw, what made it, and what changed. Pictures in the helper's folder 
   knows); the relief's softening under the snow (`markRelief`) takes the same. Without the snow ground, or with no snow
   lying, the marks are drawn as before. Cost: nothing more (the marks' pass at 1440p with 300 scars and the map's marks in view, snow lying: 0.26 -> 0.23 ms by
   the lowest of two runs; a mark under the snow lays nothing).
+- **Pads on the snow ground** ([padsnow], 2026-10-21, a helper's): the remastered tarmac pads (tarmacs.cpp,
+  `remasteredTarmacs`) laid the constant snow too, a square of it round every building. With the snow ground they are drawn
+  by a pipeline of their own ("remastered tarmacs, snow ground"; `Tarmacs::snowShelter` and `snow`, set by the decals from
+  theirs) that lays no snow: a pad thins out where the snow surely lies over it (`MarkSnowLying`, decals.cpp, now shared:
+  `kMarkSnowLying`; the upper half of its reckoning, 0.5 to 0.95, so that where the ground's snow thins and breaks up by its
+  layers' heights, which the pad cannot know, the pad shows its own slabs rather than bare earth: an apron kept clearer than
+  the field), and is lit bare. A pad laid before the snow, or covered since, is the ground's snow as on flat open ground; a
+  building laid on lying snow keeps its fresh pad until new snow covers it (about a minute and a half of heavy fall), as a
+  mark does. Without the snow ground, or no snow lying, the pads are drawn as before.
 
 Cost: `markRelief` +0.01 to 0.03 ms at 1440p (the options table); the burns' changes cost nothing (fewer burns are
 drawn). Off: pictures identical (regression 0 px on both backends, snow and rain too; SETONS_R by night and in snow

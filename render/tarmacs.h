@@ -68,6 +68,12 @@ class Tarmacs {
   gfx::Texture tracksMap;
   TrackFieldConstants field;
   bool ultra = false;
+  // [padsnow] The snow ground (decals.h, Decals::snowGround), set by the decals before Draw: while the ground lays its snow
+  // from its shelter, a pad lays none of its own: it thins out by as much snow as lies over it (its own share, as a mark's;
+  // reckoned as the ground reckons it: MarkSnowLying), so that the ground's snow shows through, and the pad is lit bare.
+  // `snow`: the decals' snow constants (the wind's way and the map's size, the tuning, the materials). No shelter: as before.
+  gfx::Texture snowShelter;
+  float snow[12] = {};
   float relief = 0.12f;  // world units of relief from lowest to highest at a pad's real size (viewer --tarmac-relief)
   float depth = 1;       // times this (the ground's parallaxDepth, --ground-parallax-tune's first)
 
@@ -111,6 +117,9 @@ class Tarmacs {
   std::vector<Material> materials_;
   int made_ = 0;  // the pipelines: 0 not made yet, 1 made, -1 they cannot be
   gfx::Pipeline pipeline_, cover_;
+  gfx::Pipeline snowPipeline_;  // [padsnow] (DECAL_SNOW_GROUND: made the first time the snow ground is given)
+  int snowMade_ = 0;
+  bool SnowPipeline();
   gfx::Texture coverField_;
   std::vector<float> batch_;
 };
