@@ -120,6 +120,21 @@ Mac", and every ray-traced effect keeps a fallback without it.
      before (`Air::Restart`, `Clouds::Restart`) where they took half a second to; the air's first frame then
      samples four places a cell. The photo mode's Clear shows the new light at once; photos keep their own
      histories. Viewer `--weather-jump frame,hours[,clouds]`, `--no-weather-cut`.
+   - Fixed (2026-10-21, airgrid): squares within squares and checkerboards of blocks a column of the volume wide over
+     the sea from far up (Chris's "Weird shapes on map": night, snow lying, the strategic zoom over SETONS_R's sea; at
+     dusk from a camera at 300 over land and sea alike). Where each column meets the ground (`AirOverGround`, Gather's
+     stretch above the ground and Sum's end of the column) was halved down seven times and taken as the middle of the
+     last stretch: on steps of a 128th of the cell, about a thousandth of the distance. From column to column it jumped
+     a step now and then: rings round the point under the eye, their radius squared growing evenly (a zone plate),
+     which the 160 columns sampled into a lattice of rings round other points, some 17 to 20 columns apart, with
+     checkerboards between. The mist's thin layer on the water (1.5 to 12 units thick) makes the misplaced sliver of
+     ground count. Now the halving keeps the heights over the ground at both ends and ends where the line through them
+     crosses it: exact over the water and flat ground. With five halvings the rings came four times coarser (the
+     check that this is the cause); the picture before minus after is that lattice and nothing else. Close in: within
+     1 in 255. Cost: no reading more; the volume's stage at 1440p, lowest of 270 frames, 0.062 ms before and 0.063 to
+     0.069 after (the card busy with other work: within the noise). Off: as before, pixel for pixel (regress3 both
+     backends, the weather regression). Left as it is: the mist's banks are value noise on a square grid of 17.5
+     units at its finest, which from far up shows as soft blocks in the formulas' mist as in the volume's.
    - Open: the lamp shafts' billboards (shafts.cpp) are still drawn with it on; in the fog weather the
      sky goes pale behind the volume (as real fog would make it), which is Chris's to judge.
 2. **Clouds and the sky**: clouds as volumes (noise volumes made once by compute shaders, marched at a

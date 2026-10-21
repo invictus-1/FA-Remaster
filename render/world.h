@@ -98,6 +98,10 @@ class World {
     std::string mapDecals;
     std::string decalFilter;         // only the map's decals whose texture's name holds this
     float decalTurn = 1, decalRange = 1;
+    // [proplift] the map's props stored below the ground drawn on it, as a game has them (FAF's Prop.lua lifts them as
+    // the game starts; a game's own moves come as the simulation's changes anyway): for a map seen without a game, so
+    // its picture shows the props where every game puts them. Off: as stored in the map file (as before)
+    bool propsAsGame = false;
     bool verbose = false;            // says what it loads
   };
 

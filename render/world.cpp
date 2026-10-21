@@ -249,6 +249,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     }
     step("props' files read");
     std::unordered_map<std::string, const Model*> kindModels;  // (each kind looked up once, not once a prop)
+    int lifted = 0;
     for (const MapProp& p : map.props) {
       auto known = kindModels.find(p.blueprint);
       const Model* model = known != kindModels.end() ? known->second : kindModels.emplace(p.blueprint, models.Blueprint(seasonal.Prop(p.blueprint))).first->second;
@@ -256,13 +257,25 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
         props_.push_back({nullptr, Mat4::Identity()});
         continue;
       }
+      // [proplift] (Options::propsAsGame) where the game has it: the props' script lifts a prop stored below the ground onto it as the game starts
+      // (/lua/sim/Prop.lua OnCreate, "terrain correction": below GetTerrainHeight it is warped up to it), so a map drawn
+      // without a game shows its props as every game does (a game's own move comes as the simulation's change all the same).
+      // Only one sunk by more than a twentieth of a unit: the editor stands props on the ground, and the last bits of its
+      // height and ours differ
+      float y = p.position.y;
+      const float ground = map.Height(Clamp(p.position.x, 0, static_cast<float>(map.width)), Clamp(p.position.z, 0, static_cast<float>(map.height)));
+      if (options.propsAsGame && y < ground - 0.05f) {
+        y = ground;
+        ++lifted;
+      }
       const Vec3 s = p.scale * model->scale;
       Mat4 world = {{{p.axisX.x * s.x, p.axisY.x * s.y, p.axisZ.x * s.z, p.position.x},
-                     {p.axisX.y * s.x, p.axisY.y * s.y, p.axisZ.y * s.z, p.position.y},
+                     {p.axisX.y * s.x, p.axisY.y * s.y, p.axisZ.y * s.z, y},
                      {p.axisX.z * s.x, p.axisY.z * s.y, p.axisZ.z * s.z, p.position.z},
                      {0, 0, 0, 1}}};
       props_.push_back({model, world});
     }
+    if (lifted > 0) printf("render: %d of the map's props stored below the ground, drawn on it as the game lifts them (Prop.lua)\n", lifted);
     step("props' models made");
     {  // [stream] the map's streams (stream_water.h): the props whose levels are a stream's water or its white water
       streams.Forget();

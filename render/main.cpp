@@ -35,6 +35,8 @@
 //           taken as its corner (for finding out what the map file means)
 // --decal-turn 1|-1, --decal-range <n>  which way a map decal's heading turns; a factor on the distance up
 //           to which the map's decals are drawn
+// --props-as-game  [proplift] the map's props stored below the ground drawn on it, where every game has them (FAF's
+//           Prop.lua lifts them as a game starts; World::Options::propsAsGame): for looking at a map without a game
 // --decal-fade <f>  [decalfade] the decals fade out with distance as the original's (World::decalFadeFraction): <f>
 //           is its ren_DecalFadeFraction, 0.5 the stock game's, 0.25 FAF's (without it: as before, the last fifth)
 // --lod-scale <s>  [lodscale] the camera's LOD scale (Camera::lodScale, the original's cam_SetLOD): 0.7 FAF's Level of
@@ -806,6 +808,7 @@ struct Options {
   int testLights = 0;  // --lights
   std::string mapDecals;  // --map-decals (empty: as the map's remap.json entry says, else normals)
   float decalTurn = 1, decalRange = 1;
+  bool propsAsGame = false;  // [proplift] --props-as-game
   float decalFade = -1, lodScale = 1;  // [decalfade] --decal-fade, [lodscale] --lod-scale
   std::string decalFilter;  // --decal-filter: only the map's decals whose texture's name holds this
   bool listBones = false;
@@ -838,6 +841,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--show") o->show = true;
     else if (a == "--bars") o->bars = true;  // life bars on from the start (key B switches them)
     else if (a == "--paused") o->paused = true;
+    else if (a == "--props-as-game") o->propsAsGame = true;  // [proplift]
     else if (a == "--noshadows") o->shadows = false;
     else if (a == "--no-lamp-shadows") o->lampShadows = false;
     else if (a == "--no-tracers") o->tracers = false;
@@ -1595,6 +1599,7 @@ int main(int argc, char** argv) {
     wo.decalFilter = opt.decalFilter;
     wo.decalTurn = opt.decalTurn;
     wo.decalRange = opt.decalRange;
+    wo.propsAsGame = opt.propsAsGame;  // [proplift]
     wo.verbose = opt.debug;
     world.textures.detail = opt.textureDetail;
     world.bloom = opt.bloom;

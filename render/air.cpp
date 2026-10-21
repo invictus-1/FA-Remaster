@@ -69,20 +69,28 @@ float AirGround(float2 xz) {
 }
 // How far along `ray` the stretch from `t0` to `t1` lies above the ground: `t1` when its far end does (a ridge it dips
 // under between them is not looked for), `t0` when its near end lies under it already, else where it meets the ground.
+// (airgrid) Halved down seven times, then taken where the line through the last two places' heights over the ground
+// crosses it: exact over the water and flat ground, and nearly so elsewhere. The halving alone put it on steps of a
+// 128th of the cell (the middle of the last stretch), which from a column to the next jumped by a step now and then: rings
+// round the point under the eye, closer and closer outward, that the volume's columns took up as a grid of squares
+// within squares (Chris's "Weird shapes on map", 2026-10-21: from far up over the sea at night in snow and fog).
 float AirOverGround(float3 ray, float t0, float t1) {
   if (airGround.x <= 0) return t1;
   float3 far = cameraPosition + ray * t1;
-  if (far.y >= AirGround(far.xz)) return t1;
+  float overHi = far.y - AirGround(far.xz);
+  if (overHi >= 0) return t1;
   float3 near = cameraPosition + ray * t0;
-  if (near.y < AirGround(near.xz)) return t0;
+  float overLo = near.y - AirGround(near.xz);
+  if (overLo < 0) return t0;
   float lo = t0, hi = t1;
   [unroll] for (int i = 0; i < 7; ++i) {
     float t = (lo + hi) * 0.5;
     float3 p = cameraPosition + ray * t;
-    if (p.y >= AirGround(p.xz)) lo = t;
-    else hi = t;
+    float over = p.y - AirGround(p.xz);
+    if (over >= 0) lo = t, overLo = over;
+    else hi = t, overHi = over;
   }
-  return (lo + hi) * 0.5;
+  return lerp(lo, hi, saturate(overLo / max(overLo - overHi, 1e-6)));
 }
 
 // How thick the air is at a place (the share of light lost per world unit): its own dust and the haze of
