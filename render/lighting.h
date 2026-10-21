@@ -580,8 +580,9 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
     float upward = saturate(N.y * 1.5 - 0.2);
     albedo *= 1 - 0.25 * SURFACE_WET;  // [unit dirt] (SURFACE_WET: weather.x but on units)
     // puddles: where the ground is level, in patches that grow as it gets wetter: still water, which
-    // mirrors the sky
-    float puddle = SURFACE_PUDDLES * smoothstep(0.90, 0.97, N.y) * smoothstep(1.24 - 0.45 * weather.x, 1.34 - 0.45 * weather.x, CloudNoise(float3(world.xz * 0.45, 3.7)) + CloudNoise(float3(world.xz * 1.7, 8.1)) * 0.35);
+    // mirrors the sky (Chris, 2026-10-20: mirroring, but "not so many puddles that the entire map is a mirror": some 8 %
+    // of level ground when soaked, a third of before, and none until it has rained a good while)
+    float puddle = SURFACE_PUDDLES * smoothstep(0.90, 0.97, N.y) * smoothstep(1.30 - 0.35 * weather.x, 1.40 - 0.35 * weather.x, CloudNoise(float3(world.xz * 0.45, 3.7)) + CloudNoise(float3(world.xz * 1.7, 8.1)) * 0.35);
 #ifdef SURFACE_DEEP_TRACKS
     puddle = max(puddle, deepWater);  // (deep tracks: water standing in the ruts of wet mud, as the ground's shader found)
 #endif
@@ -590,7 +591,7 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
       albedo *= 1 - 0.45 * puddle;
       roughness = lerp(roughness, 0.07, puddle);
     }
-    roughness = lerp(roughness, 0.6, SURFACE_WET * (0.35 + 0.5 * upward));  // [unit dirt] (SURFACE_WET)
+    roughness = lerp(roughness, 0.6, SURFACE_WET * (0.35 + 0.5 * upward) * (1 - puddle));  // [unit dirt] (SURFACE_WET; not over still water: the puddles keep their mirror, Chris 2026-10-20)
 #ifdef SURFACE_DEEP_TRACKS
     roughness = lerp(roughness, deepGloss.x, deepGloss.y * (1 - puddle));  // [mud ruts] (wet mud in the ruts keeps its own gloss, terrain.cpp; still water over it its own)
 #endif
