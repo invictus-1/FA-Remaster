@@ -1109,6 +1109,10 @@ UnitView carry them (8 words: radius + enabled for radar, sonar, omni, radar ste
 cloak field, jammer, spoof, as the sim holds them)?
 (b) The no-rush circle (0x7ef1c0: grey 0.2, inner 0.1 / 1, outer 1 / 2) needs the user army's no-rush place, radius,
 offsets and ticks (the army's +0x1bc..+0x1d0). Could the army's view carry them while the no-rush timer runs?
+**DONE** (engine 98f3324, docs/engine-answers.md "ui 45"; wired 2026-10-21): the intel rings read UnitView::intel
+(omni [4], radar [2], sonar [3]; counter-intel the largest of [7], [6], [5] and the blueprint's jam / spoof), and the
+no-rush circle is pass 5 from ArmyView (start + offsets, noRushRadius, while noRushTicks > 0). Test
+ui/tests/intel_live.lua (a support commander's omni ring 16 -> 80 after its sensor upgrade; the circle).
 
 ## To the renderer track
 

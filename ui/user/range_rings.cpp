@@ -33,8 +33,9 @@
 //   4. range_RenderHighlighted (0x10a640b): the same for the unit under the mouse (the session's rollover
 //      unit, session+0x4c0) when it is the focus army's, rollover colour (0x7ef420);
 //   5. the focus army's no-rush circle (ExtractFocusArmyNoRushRange 0x7ef1c0: the user army's +0x1bc..
-//      +0x1d0 while its no-rush ticks run, grey 0.2, inner 0.1 / 1, outer 1 / 2): NOT built here, the
-//      interface has no army's no-rush place, radius and time.
+//      +0x1d0 while its no-rush ticks run, around its start plus the offsets at height 0, grey 0.2, inner
+//      0.1 / 1, outer 1 / 2; the engine's ArmyView::start, noRushTicks, noRushRadius, noRushOffset, ui
+//      REQUESTS 45).
 //   Without a focus army (an observer) passes 2 to 5 have no units.
 // - What a filter's ring measures goes by its NAME (sBlueprintExtractors 0x7ed4b0; a name not there has
 //   no rings), of the unit as it is now (Extract, passes 2 to 4; the place the unit is drawn at this
@@ -54,7 +55,8 @@
 //     engineers and commanders (/lua/system/blueprints-units.lua sets StagingPlatformScanRadius =
 //     Economy.MaxBuildDistance + the footprint's size + 1 and adds OVERLAYMISC for them);
 //   - Radar, Sonar, Omni (0x7ecf40, 0x7ed090, 0x7ecdf0; Range 0x7ed000, 0x7ed150, 0x7eceb0): the unit's
-//     radii of that intel (slot 0x48, 0x8bfd70: none when the unit has the intel toggle,
+//     radii of that intel (slot 0x48, 0x8bfd70: its intel words, UserEntity+0x100, as the simulation last
+//     synced them, which SetIntelRadius changes: UnitView::intel; none when the unit has the intel toggle,
 //     RULEUTC_IntelToggle 8, and has it set, script bit 3); Range: the blueprint's Intel radii;
 //   - AllIntel (IntelExtractor 0x7ecc00): the greatest of the unit's omni, radar and sonar radii (Range
 //     0x7ecce0 adds RadarStealthFieldRadius; never asked, pass 1 leaves AllIntel out);
@@ -73,10 +75,8 @@
 //   (RangeFill): every group carries it to the renderer (RangeGroup::fill, render a8ac1f0).
 //
 // OURS where it differs, or not read:
-// - Radar, Sonar, Omni, AllIntel and CounterIntel take the BLUEPRINT's radii: the unit's own (its synced
-//   intel attributes, which SetIntelRadius changes) are not in the simulation's view of a unit yet; the
-//   toggles are followed. INFERRED: the toggle caps tested are the unit's as the scripts left them
-//   (UnitView::toggleCaps; the original reads them at +0x64 of what the unit's IUnit slot 0x44 gives).
+// - INFERRED: the toggle caps tested are the unit's as the scripts left them (UnitView::toggleCaps; the
+//   original reads them at +0x64 of what the unit's IUnit slot 0x44 gives).
 // - "In the camera's view" is the picture's list of the units whose middle lies in the view (WorldSource::
 //   UnitsIn; without a picture the camera's rough box, PlaceInCameraView); the original tests each
 //   entity's box against the view's frustum. INFERRED: a unit's weapon entries pair with the blueprint's
@@ -120,7 +120,7 @@ struct BlueprintRanges {
   bool overlayMisc = false;         // in OVERLAYMISC
   float shield = 0;                 // half of Defense.Shield.ShieldSize
   float misc = 0;                   // AI.StagingPlatformScanRadius, else AI.GuardScanRadius
-  float radar = 0, sonar = 0, omni = 0, radarStealthField = 0, sonarStealthField = 0, cloakField = 0;
+  float radar = 0, sonar = 0, omni = 0, radarStealthField = 0;  // (the Range form's: a unit's own come from its intel words)
   float jam = 0, spoof = 0;         // JamRadius.Max, SpoofRadius.Max
   bool sonarStealth = false, cloak = false;
   std::map<std::string, std::pair<float, float>> build;  // filter -> the Range form's inner, outer (outer 0: none)
@@ -303,8 +303,6 @@ const BlueprintRanges& RangesOf(lua_State* L, RangeStore& store, const std::stri
     r.sonar = Field(L, intel, "SonarRadius");
     r.omni = Field(L, intel, "OmniRadius");
     r.radarStealthField = Field(L, intel, "RadarStealthFieldRadius");
-    r.sonarStealthField = Field(L, intel, "SonarStealthFieldRadius");
-    r.cloakField = Field(L, intel, "CloakFieldRadius");
     r.jam = most("JamRadius");
     r.spoof = most("SpoofRadius");
     r.sonarStealth = Flag(L, intel, "SonarStealth");
@@ -369,15 +367,17 @@ bool Extract(lua_State* L, uint32_t id, const UnitView& u, const BlueprintRanges
     return WeaponReach(u, k, 5, inner, outer);
   }
   if (filter == "Miscellaneous") return (*outer = k.misc) > 0;
+  // (the unit's intel words, UnitView::intel: the radius in the low 31 bits, the enabled bit not looked at)
+  auto word = [&](int i) { return static_cast<float>(u.intel[i] & 0x7fffffffu); };
   if (filter == "Radar" || filter == "Sonar" || filter == "Omni" || filter == "AllIntel") {
-    if (toggled(8)) return false;
-    *outer = filter == "Radar" ? k.radar : filter == "Sonar" ? k.sonar : filter == "Omni" ? k.omni
-                                                                        : std::max({k.omni, k.radar, k.sonar});
+    if (toggled(8)) return false;  // (UserUnit::GetIntelRanges 0x8bfd70: omni [4], radar [2], sonar [3])
+    const float omni = word(4), radar = word(2), sonar = word(3);
+    *outer = filter == "Radar" ? radar : filter == "Sonar" ? sonar : filter == "Omni" ? omni : std::max({omni, radar, sonar});
     return *outer > 0;
   }
   if (filter == "CounterIntel") {
-    if (toggled(4) || toggled(0x20)) return false;
-    *outer = std::max({k.cloakField, k.sonarStealthField, k.radarStealthField, k.jam, k.spoof});
+    if (toggled(4) || toggled(0x20)) return false;  // (UserUnit::GetMaxCounterIntel 0x8bfe50)
+    *outer = std::max({word(7), word(6), word(5), k.jam, k.spoof});
     return *outer > 0;
   }
   return false;  // (no extractor of that name: no rings, 0x7eda40)
@@ -499,6 +499,21 @@ void Passes(lua_State* L, RangeStore& store, const RangeView& view, std::vector<
       for (size_t i = 0; i < entries.size(); ++i)
         if (!isCombo(entries[i]->first)) ringsOf("highlighted", i, entries[i]->second.rollover, one, nullptr, out);
     }
+  }
+  // 5. the focus army's no-rush circle while its timer runs (ExtractFocusArmyNoRushRange 0x7ef1c0, drawn at
+  // 0x7eebd7 .. 0x7eec43 with no switch of its own: grey 0.2 with glow 0.2, the Inner pair 0.1 / 1, the Outer 1 / 2)
+  static const std::string noRushName = "NoRush";
+  static const RangeFilter noRush = [] {
+    RangeFilter f;
+    f.normal = f.select = f.rollover = 0x33333333u;
+    f.inner[0] = 0.1f, f.inner[1] = 1, f.outer[0] = 1, f.outer[1] = 2;
+    return f;
+  }();
+  for (const ArmyView& a : ArmyViews(*sim)) {
+    if (a.index != own || a.noRushTicks <= 0) continue;
+    Pass p{"norush", &noRushName, &noRush, noRush.normal, {}};
+    p.rings.push_back({{a.start[0] + a.noRushOffset[0], 0, a.noRushOffset[1] + a.start[1]}, 0, a.noRushRadius, 0xffffffffu});
+    out->push_back(std::move(p));
   }
 }
 
