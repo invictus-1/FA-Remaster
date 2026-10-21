@@ -542,16 +542,21 @@ void UpdateSpeedThrough(Sim& sim, Unit* u) {
 // --------------------------------------------------------------------------------------------
 // Landing spots (Unit::PrepareMove for flyers; predicates of air_extra.md 3)
 
-struct Reservations {
+}  // namespace
+
+// The sim's landing-spot reservations, one byte per cell (Sim::airState). Multicore step 1: these were in a
+// process-wide map by the sim's address (ResMap).
+struct AirState {
   int w = 0, h = 0;
   std::vector<uint8_t> bits;
 };
-std::map<const Sim*, Reservations>& ResMap() {
-  static std::map<const Sim*, Reservations> m;
-  return m;
-}
+
+namespace {
+
+using Reservations = AirState;
 Reservations& Res(Sim& sim) {
-  Reservations& r = ResMap()[&sim];
+  if (!sim.airState) sim.airState = std::make_shared<AirState>();
+  Reservations& r = *sim.airState;
   if (r.bits.empty() && sim.map()) {
     r.w = sim.map()->width();
     r.h = sim.map()->height();
@@ -2579,6 +2584,6 @@ void RegisterAirBindings(lua_State* L) {
   SetMethod(L, "Unit", "RevertElevation", l_RevertElevation);
 }
 
-void AirForget(const Sim& sim) { ResMap().erase(&sim); }
+void AirForget(Sim& sim) { sim.airState.reset(); }
 
 }  // namespace moho

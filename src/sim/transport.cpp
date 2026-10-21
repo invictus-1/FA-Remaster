@@ -98,8 +98,9 @@ bool Dbg() {
 constexpr uint32_t kCapTransport = 0x100, kCapCallTransport = 0x200;
 
 Sim* S(lua_State* L) { return Sim::From(L); }
-lua_State* g_L = nullptr;  // the sim's state (a unit has no Lua object yet while it is created)
-lua_State* LS(const Entity* e) { return e->luaState() ? e->luaState() : g_L; }
+// The sim's state, from the entity's Lua object. (Multicore step 1: a process-wide g_L stood in for a unit's
+// state while it is created; TransportCreate, the only reader then, uses the sim's own.)
+lua_State* LS(const Entity* e) { return e->luaState(); }
 bool Alive(const Entity* e) { return e && !e->dead && !e->destroyQueued; }
 bool State(const Unit* u, const char* s) { return u->unitStates.count(s) != 0; }
 void SetState(Unit* u, const char* s, bool on) {
@@ -920,7 +921,8 @@ void TransportCreate(Sim& sim, Unit* u) {
   T->owner = u;
   T->isAirStaging = InCat(sim, u, "AIRSTAGINGPLATFORM") || InCat(sim, u, "PODSTAGINGPLATFORM");
   T->isTeleporter = InCat(sim, u, "TELEPORTATION");
-  int G = TBp(u).classGenericUpTo;
+  const TransportBp& tb = GetTransportBp(L, *u->blueprint);  // (u has no Lua object yet)
+  int G = tb.classGenericUpTo;
   if (u->skeleton) {
     for (int i = 0; i < u->skeleton->Count(); ++i) {
       const std::string& name = u->skeleton->bones()[static_cast<size_t>(i)].name;
@@ -937,7 +939,7 @@ void TransportCreate(Sim& sim, Unit* u) {
       else if (has("AttachSpecial")) T->special.push_back(p);
     }
   }
-  T->storageSlots = TBp(u).storageSlots;
+  T->storageSlots = tb.storageSlots;
   u->transport = T;
 }
 
@@ -3420,7 +3422,6 @@ int l_SetCreator(lua_State* L) {
 
 void RegisterTransportBindings(lua_State* L) {
   SetMethod(L, "Unit", "SetCreator", l_SetCreator);
-  g_L = L;
   SetMethod(L, "Unit", "AddCommandCap", l_AddCommandCap);
   SetMethod(L, "Unit", "RemoveCommandCap", l_RemoveCommandCap);
   SetMethod(L, "Unit", "RestoreCommandCaps", l_RestoreCommandCaps);

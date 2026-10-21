@@ -821,12 +821,20 @@ float FormationSpeed(Formation& F, Unit* u, float* mult, FormGroup* g) {
   return g->speed;
 }
 
-std::map<const Sim*, std::vector<std::weak_ptr<Formation>>>& RegistryMap() {
-  static std::map<const Sim*, std::vector<std::weak_ptr<Formation>>> m;
-  return m;
-}
+}  // namespace
 
-std::vector<std::weak_ptr<Formation>>& Registry(Sim& sim) { return RegistryMap()[&sim]; }
+// The sim's formations, in creation order (Sim::formationState). Multicore step 1: these were in a process-wide
+// map by the sim's address (RegistryMap).
+struct FormationState {
+  std::vector<std::weak_ptr<Formation>> registry;
+};
+
+namespace {
+
+std::vector<std::weak_ptr<Formation>>& Registry(Sim& sim) {
+  if (!sim.formationState) sim.formationState = std::make_shared<FormationState>();
+  return sim.formationState->registry;
+}
 
 // CAiFormationDBImpl::NewFormation 0x59c120 (+ SetScale)
 std::shared_ptr<Formation> NewFormation(Sim& sim, const std::vector<Unit*>& units, const std::string& name, float cx,
@@ -1154,6 +1162,6 @@ void UpdateInfoCache(Sim& sim, Unit* u) {
          F->groups[0].size(), F->groups[1].size(), g ? g->speed : -1.0f);
 }
 
-void FormationsForget(const Sim& sim) { RegistryMap().erase(&sim); }
+void FormationsForget(Sim& sim) { sim.formationState.reset(); }
 
 }  // namespace moho

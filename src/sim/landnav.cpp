@@ -41,9 +41,26 @@ bool Dbg() {
   return on;
 }
 
-std::map<const Sim*, std::unique_ptr<HPathTables>>& TablesMap() {
-  static std::map<const Sim*, std::unique_ptr<HPathTables>> m;
-  return m;
+}  // namespace
+
+// The sim's path tables and the land navigators' profile (Sim::landNavState). Multicore step 1: the tables were
+// in a process-wide map by the sim's address (TablesMap), the profile was process-wide (g_navProf).
+struct LandNavState {
+  std::unique_ptr<HPathTables> tables;
+  double exec = 0, work = 0, deliver = 0, bg = 0;  // MOHO64_PROFILE: seconds, printed when the sim goes
+  uint64_t n = 0;
+  ~LandNavState() {
+    if (getenv("MOHO64_PROFILE"))
+      fprintf(stderr, "landnav profile: execute %.2f s, path work %.2f s, deliver %.2f s, background %.2f s (%llu ticks)\n",
+              exec, work, deliver, bg, static_cast<unsigned long long>(n));
+  }
+};
+
+namespace {
+
+LandNavState& LNS(Sim& sim) {
+  if (!sim.landNavState) sim.landNavState = std::make_shared<LandNavState>();
+  return *sim.landNavState;
 }
 
 const MotionBlueprint& Bp(const Unit* u) { return *u->motion.bp; }
@@ -250,7 +267,7 @@ bool UnitClearTo(Sim& sim, Unit* u, const LandNav& n, const PathCell& p) {
 }
 
 HPathTables& Tables(Sim& sim) {
-  auto& m = TablesMap()[&sim];
+  std::unique_ptr<HPathTables>& m = LNS(sim).tables;
   if (!m) {
     const TerrainMap* map = sim.map();
     m = std::make_unique<HPathTables>(&sim.navigation(), map ? map->width() : 0, map ? map->height() : 0);
@@ -1092,22 +1109,14 @@ bool LandNavActive(const Unit* u) {
 }
 
 namespace {
-struct NavProf {
-  double exec = 0, work = 0, deliver = 0, bg = 0;
-  uint64_t n = 0;
-  ~NavProf() {
-    if (getenv("MOHO64_PROFILE"))
-      fprintf(stderr, "landnav profile: execute %.2f s, path work %.2f s, deliver %.2f s, background %.2f s (%llu ticks)\n",
-              exec, work, deliver, bg, static_cast<unsigned long long>(n));
-  }
-} g_navProf;
 double NowS() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 }  // namespace
 
 void LandNavTickAll(Sim& sim) {
   static const bool prof = getenv("MOHO64_PROFILE") != nullptr;
   double t0 = prof ? NowS() : 0;
-  ++g_navProf.n;
+  LandNavState& ns = LNS(sim);
+  ++ns.n;
   const std::vector<Unit*> all = sim.ArmyStageOrder();  // (brain+0xa8: creation order inside each army)
   for (size_t i = 0; i < all.size(); ++i) {
     Unit* u = all[i];
@@ -1120,9 +1129,9 @@ void LandNavTickAll(Sim& sim) {
       n->startedThisTick = false;
       n->prevPos = u->position;
     }
-    SteeringNavStageArmy(u->army ? u->army->index : 0);
+    SteeringNavStageArmy(sim, u->army ? u->army->index : 0);
     Execute(sim, u, *n);
-    SteeringNavStageArmy(0);
+    SteeringNavStageArmy(sim, 0);
     if (n->problem) u->unitStates.insert("ProblemGettingToGoal");
   }
   HPathTables& T = Tables(sim);
@@ -1143,9 +1152,9 @@ void LandNavTickAll(Sim& sim) {
   }
   if (prof) {
     double t3 = NowS();
-    g_navProf.exec += t1 - t0;
-    g_navProf.work += t2 - t1;
-    g_navProf.deliver += t3 - t2;
+    ns.exec += t1 - t0;
+    ns.work += t2 - t1;
+    ns.deliver += t3 - t2;
   }
 }
 
@@ -1155,7 +1164,7 @@ void LandNavBackground(Sim& sim) {
   static const bool prof = getenv("MOHO64_PROFILE") != nullptr;
   double t0 = prof ? NowS() : 0;
   Tables(sim).UpdateBackground(1000);
-  if (prof) g_navProf.bg += NowS() - t0;
+  if (prof) LNS(sim).bg += NowS() - t0;
 }
 
 // (both answers are COORDS_ToWorldPos 0x50b0f0 of a cell: its footprint centre at the height of the ground there,
@@ -1184,6 +1193,6 @@ int LandNavStatus(const Unit* u) {
 
 void LandNavDirty(Sim& sim, int x0, int z0, int x1, int z1) { Tables(sim).DirtyRect(x0, z0, x1, z1); }
 
-void LandNavForget(const Sim& sim) { TablesMap().erase(&sim); }
+void LandNavForget(Sim& sim) { sim.landNavState.reset(); }
 
 }  // namespace moho

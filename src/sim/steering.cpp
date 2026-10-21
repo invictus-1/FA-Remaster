@@ -631,9 +631,6 @@ bool Approaching(const Unit* A, const Unit* B, const Vec3& pA, const Vec3& vA, c
   return Dot(Sub(B->position, A->position), dv) < 0;
 }
 
-bool g_inSteeringStage = false;  // SteeringTickAll is running (see UnitMotion::colLateTick)
-int g_navStageArmy = 0;          // the army whose navigators run (SteeringNavStageArmy), 0 outside that stage
-
 // Predict 0x597800: X has the right of way, Y yields; the record goes to Y.
 void Predict(Sim& sim, Unit* X, Unit* Y) {
   UnitMotion& mx = X->motion;
@@ -675,7 +672,8 @@ void Predict(Sim& sim, Unit* X, Unit* Y) {
         // (written in the navigator stage: the original's steering of Y's army runs after it in this beat unless
         // Y's army comes before the navigator's)
         const int ya = Y->army ? Y->army->index : 0;
-        my.colLateTick = g_inSteeringStage || (g_navStageArmy > 0 && ya >= g_navStageArmy) ? 0xffffffffu : now;
+        my.colLateTick =
+            sim.inSteeringStage || (sim.navStageArmy > 0 && ya >= sim.navStageArmy) ? 0xffffffffu : now;
         static const long dbg = getenv("MOHO64_DEBUG_COL") ? atol(getenv("MOHO64_DEBUG_COL")) : -1;
         if (dbg >= 0 && (static_cast<long>(X->id) == dbg || static_cast<long>(Y->id) == dbg))
           Logf(LogLevel::Info, "col %u predict Y %u (point %zu of %zu, made %llu) X %u (point %zu of %zu, made %llu) at +%zu", now,
@@ -1045,17 +1043,17 @@ void SteeringCheckCollisions(Sim& sim, Unit* u) {
   if (HasSteering(u)) CheckCollisions(sim, u);
 }
 
-void SteeringNavStageArmy(int army) { g_navStageArmy = army; }
+void SteeringNavStageArmy(Sim& sim, int army) { sim.navStageArmy = army; }
 
 void SteeringTickAll(Sim& sim) {
   const std::vector<Unit*> all = sim.ArmyStageOrder();  // (brain+0xac: creation order inside each army)
-  g_inSteeringStage = true;
+  sim.inSteeringStage = true;
   for (size_t i = 0; i < all.size(); ++i) {
     Unit* u = all[i];
     if (u->destroyQueued) continue;
     SteeringTick(sim, u);
   }
-  g_inSteeringStage = false;
+  sim.inSteeringStage = false;
 }
 
 }  // namespace moho

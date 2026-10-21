@@ -519,6 +519,13 @@ class Sim {
   std::shared_ptr<struct AnimState> animState;       // sim/anim.cpp: the animators and the .sca files they read
   std::shared_ptr<struct EffectsState> effectsState;  // sim/effects.cpp: effect objects, the host's effect,
                                                       // sound and shake lists
+  std::shared_ptr<struct LandNavState> landNavState;  // sim/landnav.cpp: the path tables, the navigators' profile
+  std::shared_ptr<struct FormationState> formationState;  // sim/formation.cpp: the formations
+  std::shared_ptr<struct AirState> airState;          // sim/air.cpp: the landing-spot reservations
+  // sim/steering.cpp: the steering stage runs (UnitMotion::colLateTick); the army whose navigators run, 1-based,
+  // 0 outside that stage (SteeringNavStageArmy)
+  bool inSteeringStage = false;
+  int navStageArmy = 0;
   // Keep an engine object alive for the session (objects scripts may still hold).
   ScriptObject* Own(std::unique_ptr<ScriptObject> o) {
     owned_.push_back(std::move(o));

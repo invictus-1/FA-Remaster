@@ -187,7 +187,7 @@ void AirSetCarrierEvent(Unit* u, int e);
 // CUnitMotion::SetImmediateVelocity 0x6b9460: the body's velocity and orientation (a carrier launch).
 void AirSetImmediateVelocity(Sim& sim, Unit* u, Vec3 vel, Quat q);
 void RegisterAirBindings(lua_State* L);
-// Drops the sim's landing-spot reservations (Sim::~Sim: a later Sim may get the same address).
-void AirForget(const Sim& sim);
+// Drops the sim's landing-spot reservations (Sim::~Sim).
+void AirForget(Sim& sim);
 
 }  // namespace moho

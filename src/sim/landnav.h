@@ -89,8 +89,8 @@ bool UnitFitsAt(Sim& sim, const Unit* u, float x, float z);
 bool LandCellFits(Sim& sim, const Unit* u, int x, int z);
 // The path navigator follows its formation slot (state 6): the land navigator's FollowingLeader.
 bool LandNavFollowingSlot(const Unit* u);
-// Drops the sim's path tables (Sim::~Sim: a later Sim may get the same address, and the tables point into
-// this sim's navigation grids).
-void LandNavForget(const Sim& sim);
+// Drops the sim's path tables (Sim::~Sim: they point into this sim's navigation grids) and prints its profile
+// (MOHO64_PROFILE).
+void LandNavForget(Sim& sim);
 
 }  // namespace moho
