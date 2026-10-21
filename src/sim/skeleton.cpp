@@ -17,6 +17,54 @@ Quat QuatMul(const Quat& a, const Quat& b) {
           a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w, a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z};
 }
 
+void QuatFromRotationMatrixExe(const float M[3][3], float q[4]) {
+  const float trace = (M[0][0] + M[1][1]) + M[2][2];
+  if (trace > 0.0f) {
+    const float root = std::sqrt(trace + 1.0f);
+    q[0] = root * 0.5f;
+    const float k = 0.5f / root;
+    q[1] = (M[2][1] - M[1][2]) * k;
+    q[2] = (M[0][2] - M[2][0]) * k;
+    q[3] = (M[1][0] - M[0][1]) * k;
+  } else {
+    static const int next[3] = {1, 2, 0};
+    int a = 0;
+    if (M[1][1] > M[0][0]) a = 1;
+    if (M[2][2] > M[a][a]) a = 2;
+    const int b2 = next[a], c2 = next[b2];
+    const float root = std::sqrt(((M[a][a] - M[b2][b2]) - M[c2][c2]) + 1.0f);
+    q[a + 1] = root * 0.5f;
+    const float k = 0.5f / root;
+    q[0] = (M[c2][b2] - M[b2][c2]) * k;
+    q[b2 + 1] = (M[a][b2] + M[b2][a]) * k;
+    q[c2 + 1] = (M[a][c2] + M[c2][a]) * k;
+  }
+}
+
+Quat QuatFromAxesExe(const float A[9]) {
+  float M[3][3];
+  for (int r = 0; r < 3; ++r)
+    for (int c = 0; c < 3; ++c) M[c][r] = A[r * 3 + c];  // (0x4f0b10..0x4f0b2d)
+  float q[4];
+  QuatFromRotationMatrixExe(M, q);
+  return {q[1], q[2], q[3], q[0]};
+}
+
+void AxesFromQuatExe(const Quat& q, float A[9]) {
+  const float tw = q.w * 2.0f, ty = q.y * 2.0f, tz = q.z * 2.0f, tx = q.x * 2.0f;
+  const float tyy = ty * q.y, tzz = tz * q.z, tzx = tz * q.x, tyx = ty * q.x, txx = tx * q.x;
+  const float twx = tw * q.x, tzy = tz * q.y, twy = tw * q.y, twz = tw * q.z;
+  A[0] = 1.0f - (tzz + tyy);
+  A[1] = twz + tyx;
+  A[2] = tzx - twy;
+  A[3] = tyx - twz;
+  A[4] = 1.0f - (tzz + txx);
+  A[5] = tzy + twx;
+  A[6] = twy + tzx;
+  A[7] = tzy - twx;
+  A[8] = 1.0f - (tyy + txx);
+}
+
 Vec3 QuatRotate(const Quat& q, const Vec3& v) {
   // v + 2w(u x v) + 2u x (u x v), u = (x, y, z)
   float cx = q.y * v.z - q.z * v.y, cy = q.z * v.x - q.x * v.z, cz = q.x * v.y - q.y * v.x;
@@ -75,27 +123,7 @@ std::unique_ptr<Skeleton> Skeleton::FromScm(const std::string& d) {
         for (int c = 0; c < 3; ++c) M[c][r] = Read<float>(d, m + static_cast<size_t>(r * 4 + c) * 4);
       const Vec3 ip{Read<float>(d, m + 48), Read<float>(d, m + 52), Read<float>(d, m + 56)};
       float q[4];  // w, x, y, z
-      const float trace = (M[0][0] + M[1][1]) + M[2][2];
-      if (trace > 0.0f) {
-        const float root = std::sqrt(trace + 1.0f);
-        q[0] = root * 0.5f;
-        const float k = 0.5f / root;
-        q[1] = (M[2][1] - M[1][2]) * k;
-        q[2] = (M[0][2] - M[2][0]) * k;
-        q[3] = (M[1][0] - M[0][1]) * k;
-      } else {
-        static const int next[3] = {1, 2, 0};
-        int a = 0;
-        if (M[1][1] > M[0][0]) a = 1;
-        if (M[2][2] > M[a][a]) a = 2;
-        const int b2 = next[a], c2 = next[b2];
-        const float root = std::sqrt(((M[a][a] - M[b2][b2]) - M[c2][c2]) + 1.0f);
-        q[a + 1] = root * 0.5f;
-        const float k = 0.5f / root;
-        q[0] = (M[c2][b2] - M[b2][c2]) * k;
-        q[b2 + 1] = (M[a][b2] + M[b2][a]) * k;
-        q[c2 + 1] = (M[a][c2] + M[c2][a]) * k;
-      }
+      QuatFromRotationMatrixExe(M, q);
       // 0x46fbf0, the inverse: the conjugate, and the negated translation turned by it (0x452d40)
       const Quat iq{-0.0f - q[1], -0.0f - q[2], -0.0f - q[3], q[0]};
       b.entRot = iq;

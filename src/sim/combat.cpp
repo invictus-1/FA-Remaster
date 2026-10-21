@@ -2158,9 +2158,26 @@ void UnitAimTick(Sim& sim, Unit* u) {
     sv.erase(std::remove_if(sv.begin(), sv.end(), [](SlaveManipulator* m) { return !m->alive; }), sv.end());
     const auto& bones = u->skeleton->bones();
     const bool posed = u->poseQ.size() == bones.size();
+    // CSlaveManipulator::MoveManipulator 0x646140: the source bone's turn AWAY FROM ITS REST, through matrices: the
+    // axes (VAxes3 0x4ec590) of its rest rotation (the skeleton's, 0x63ee30 + 8) and of its local rotation in last
+    // beat's pose (+0x20), multiplied local x rest^T row by row (0x645ad0), back to a quaternion (0x4f0ae0). Ours
+    // took the source's whole local rotation, its rest with it: a bone slaved to a turret bone whose rest is turned
+    // carried that turn twice (FAF's RackSlavedToTurret racks: Experimental2's baa0001 Rapid_Muzzle01 on Rapid_Cannons,
+    // the muzzle's direction 3.5e-7 aside where the original's is 1.7e-7).
     for (SlaveManipulator* m : sv)
-      if (m->srcBone >= 0 && static_cast<size_t>(m->srcBone) < bones.size())
-        m->srcLocal = posed ? u->poseQ[static_cast<size_t>(m->srcBone)] : bones[static_cast<size_t>(m->srcBone)].localRot;
+      if (m->srcBone >= 0 && static_cast<size_t>(m->srcBone) < bones.size()) {
+        const size_t sb = static_cast<size_t>(m->srcBone);
+        float R[9], L[9];
+        AxesFromQuatExe(bones[sb].localRot, R);
+        AxesFromQuatExe(posed ? u->poseQ[sb] : bones[sb].localRot, L);
+        const float P[9] = {
+            (L[0] * R[0] + L[1] * R[1]) + L[2] * R[2], (R[4] * L[1] + R[5] * L[2]) + L[0] * R[3],
+            (R[7] * L[1] + R[8] * L[2]) + L[0] * R[6], (L[3] * R[0] + L[4] * R[1]) + L[5] * R[2],
+            (R[4] * L[4] + R[5] * L[5]) + L[3] * R[3], (R[7] * L[4] + R[8] * L[5]) + L[3] * R[6],
+            (L[6] * R[0] + R[1] * L[7]) + R[2] * L[8], (R[4] * L[7] + R[5] * L[8]) + R[3] * L[6],
+            (R[7] * L[7] + R[8] * L[8]) + L[6] * R[6]};
+        m->srcLocal = QuatFromAxesExe(P);
+      }
   }
   PoseReset(u);
   UnitAimTickManipulators(sim, u, anims);

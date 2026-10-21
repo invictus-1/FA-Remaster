@@ -61,5 +61,11 @@ class SkeletonCache {
 
 Quat QuatMul(const Quat& a, const Quat& b);
 Vec3 QuatRotate(const Quat& q, const Vec3& v);
+// Wm3's Quaternion::FromRotationMatrix as the exe has it (0x4f0cb0), in its order of operations: q = w, x, y, z.
+void QuatFromRotationMatrixExe(const float M[3][3], float q[4]);
+// func_MatrixToQuat_0 0x4f0ae0: a 3 x 3 of axes (VAxes3, rows) transposed, then 0x4f0cb0.
+Quat QuatFromAxesExe(const float A[9]);
+// Moho::VAxes3::VAxes3 0x4ec590: the quaternion's three axes as rows (row i = where basis vector i goes).
+void AxesFromQuatExe(const Quat& q, float A[9]);
 
 }  // namespace moho
