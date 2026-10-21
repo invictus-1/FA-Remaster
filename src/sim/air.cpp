@@ -919,7 +919,9 @@ struct Ctrl {
   Vec3 force, torque;
 };
 
-bool g_bodyDebug = false;  // MOHO64_DEBUG_BODY=<unit id>: the control's and the rotation step's values as bits
+// MOHO64_DEBUG_BODY=<unit id>: the control's and the rotation step's values as bits. Set for the unit being stepped
+// and read by its callees: per thread (multicore step 1), as each worker steps its own unit.
+thread_local bool g_bodyDebug = false;
 uint32_t FBits(float f) {
   uint32_t v;
   std::memcpy(&v, &f, 4);

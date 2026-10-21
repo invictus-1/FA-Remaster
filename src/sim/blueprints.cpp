@@ -17,7 +17,7 @@ namespace {
 
 const char* kRecordKey = "moho64.registered";
 const char kBpsKey = 0;
-int g_words = 1;  // 64-bit words per category set (fixed once blueprints are loaded)
+int g_lastWords = 1;  // the last blueprints copied in this process: only for CategoryWordCount() (ui/)
 
 std::string Lower(std::string s) {
   for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -112,8 +112,9 @@ struct Copier {
 };
 
 uint64_t* NewCat(lua_State* L) {
-  auto* w = static_cast<uint64_t*>(lua_newuserdata(L, sizeof(uint64_t) * g_words));
-  std::memset(w, 0, sizeof(uint64_t) * g_words);
+  const size_t n = static_cast<size_t>(SimBlueprints::From(L)->CategoryWords());
+  auto* w = static_cast<uint64_t*>(lua_newuserdata(L, sizeof(uint64_t) * n));
+  std::memset(w, 0, sizeof(uint64_t) * n);
   PushClassTable(L, "EntityCategory");
   lua_setmetatable(L, -2);
   return w;
@@ -150,19 +151,19 @@ int EntityIndexOf(lua_State* L, int idx) {
 int l_cat_add(lua_State* L) {
   const uint64_t *a = CheckCat(L, 1), *b = CheckCat(L, 2);
   uint64_t* r = NewCat(L);
-  for (int i = 0; i < g_words; ++i) r[i] = a[i] | b[i];
+  for (int i = 0, n = Bps(L)->CategoryWords(); i < n; ++i) r[i] = a[i] | b[i];
   return 1;
 }
 int l_cat_sub(lua_State* L) {
   const uint64_t *a = CheckCat(L, 1), *b = CheckCat(L, 2);
   uint64_t* r = NewCat(L);
-  for (int i = 0; i < g_words; ++i) r[i] = a[i] & ~b[i];
+  for (int i = 0, n = Bps(L)->CategoryWords(); i < n; ++i) r[i] = a[i] & ~b[i];
   return 1;
 }
 int l_cat_mul(lua_State* L) {
   const uint64_t *a = CheckCat(L, 1), *b = CheckCat(L, 2);
   uint64_t* r = NewCat(L);
-  for (int i = 0; i < g_words; ++i) r[i] = a[i] & b[i];
+  for (int i = 0, n = Bps(L)->CategoryWords(); i < n; ++i) r[i] = a[i] & b[i];
   return 1;
 }
 
@@ -180,7 +181,8 @@ int l_cat_mul(lua_State* L) {
 // "BUILTBYTIER3FACTORY CYBRAN MOBILE AIR ANTIGROUND", and no blueprint has ANTIGROUND) starts the strategic bomber
 // ura0304 it is told to build; ours read the unknown name as the empty category and dropped the order.
 void ParseNames(lua_State* L, const char* expr, std::vector<uint64_t>& out) {
-  out.assign(g_words, 0);
+  const int words = Bps(L)->CategoryWords();
+  out.assign(static_cast<size_t>(words), 0);
   auto& cats = Bps(L)->Categories();
   std::vector<uint64_t> piece, one;
   const char* p = expr;
@@ -197,7 +199,7 @@ void ParseNames(lua_State* L, const char* expr, std::vector<uint64_t>& out) {
       const char* s = q;
       while (q < pe && *q != ' ') ++q;
       const std::string name(s, q);
-      one.assign(g_words, 0);
+      one.assign(static_cast<size_t>(words), 0);
       bool found = false;
       if (auto it = cats.find(name); it != cats.end()) {
         for (int e : it->second) one[e >> 6] |= uint64_t(1) << (e & 63);
@@ -209,17 +211,18 @@ void ParseNames(lua_State* L, const char* expr, std::vector<uint64_t>& out) {
       if (!found) continue;
       if (!have) piece = one;
       else
-        for (int i = 0; i < g_words; ++i) piece[i] &= one[i];
+        for (int i = 0; i < words; ++i) piece[i] &= one[i];
       have = true;
     }
     if (have)
-      for (int i = 0; i < g_words; ++i) out[i] |= piece[i];
+      for (int i = 0; i < words; ++i) out[i] |= piece[i];
     p = pe;
   }
 }
 
 }  // namespace
-int CategoryWordCount() { return g_words; }
+int CategoryWordCount() { return g_lastWords; }
+int CategoryWordCount(lua_State* L) { return SimBlueprints::From(L)->CategoryWords(); }
 bool ParseCategory(lua_State* L, const char* expr, std::vector<uint64_t>& out) {
   ParseNames(L, expr, out);
   return true;
@@ -230,7 +233,7 @@ int l_ParseEntityCategory(lua_State* L) {
   std::vector<uint64_t> bits;
   ParseNames(L, s, bits);
   uint64_t* r = NewCat(L);
-  for (int i = 0; i < g_words; ++i) r[i] = bits[i];
+  for (int i = 0, n = Bps(L)->CategoryWords(); i < n; ++i) r[i] = bits[i];
   return 1;
 }
 
@@ -325,7 +328,7 @@ int l_EntityCategoryGetUnitList(lua_State* L) {
 int l_EntityCategoryEmpty(lua_State* L) {
   const uint64_t* c = CheckCat(L, 1);
   bool empty = true;
-  for (int i = 0; i < g_words; ++i) empty = empty && c[i] == 0;
+  for (int i = 0, n = Bps(L)->CategoryWords(); i < n; ++i) empty = empty && c[i] == 0;
   lua_pushboolean(L, empty);
   return 1;
 }
@@ -566,7 +569,8 @@ void SimBlueprints::CopyToSim(lua_State* rules, lua_State* sim) {
   lua_settop(rules, list - 1);        // the record list (and the sound set)
   for (const auto& bp : all_)
     if (bp.entityIndex >= 0) entities_[bp.entityIndex] = &bp;
-  g_words = std::max(1, (EntityCount() + 63) / 64);
+  words_ = std::max(1, (EntityCount() + 63) / 64);
+  g_lastWords = words_;
   // Categories the engine defines itself.
   for (const auto& bp : all_) {
     if (bp.kind == BpKind::Unit) {

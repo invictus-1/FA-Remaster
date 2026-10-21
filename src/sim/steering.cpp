@@ -331,7 +331,9 @@ void DoCollisionsFor(Sim& sim, Unit* self, const std::vector<Hit>& hits) {
 }  // namespace
 
 namespace {
-bool g_satDebug = false;
+// MOHO64_DEBUG_COL: the unit whose collisions are tested, read by BoxBox. Per thread (multicore step 1), as
+// g_bodyDebug.
+thread_local bool g_satDebug = false;
 // BoxBox 0x474830 (prop_collision.md 3.2): A = prop, B = unit. True with the minimum-overlap face normal (pointing
 // from the unit to the prop) and depth; an edge axis gives a zero normal and depth.
 bool BoxBoxSat(const Obb& A, const Obb& B, Vec3* normal, float* depth) {

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -57,6 +58,11 @@ class SimBlueprints {
   const BlueprintInfo* Find(const std::string& id) const;
   const BlueprintInfo* ByEntityIndex(int i) const { return entities_[i]; }
   int EntityCount() const { return static_cast<int>(entities_.size()); }
+  // 64-bit words in a category set over these blueprints (set by CopyToSim; multicore step 1: it was process-wide)
+  int CategoryWords() const { return words_; }
+  // The sound objects CopyToSim made from these blueprints, by handle (sim/bp_reflect.cpp; multicore step 1: the
+  // list was process-wide)
+  std::shared_ptr<struct SoundState> sounds;
   void PushTable(lua_State* L, const BlueprintInfo& bp) const { lua_rawgeti(L, LUA_REGISTRYINDEX, bp.ref); }
   size_t Count() const { return all_.size(); }
 
@@ -76,6 +82,7 @@ class SimBlueprints {
   std::vector<const BlueprintInfo*> entities_;
   std::unordered_map<std::string, size_t> byId_;  // lower-case id -> index in all_
   std::map<std::string, std::vector<int>> categories_;
+  int words_ = 1;
 };
 
 void RegisterCategoryBindings(lua_State* L, SimBlueprints* bps);
@@ -97,7 +104,10 @@ bool SoundNames(lua_State* L, int arg, std::string* bank, std::string* cue);
 uint64_t* PushCategory(lua_State* L);
 const uint64_t* ToCategory(lua_State* L, int idx);
 bool CategoryHas(const uint64_t* bits, int entityIndex);
-// Number of 64-bit words in a category set; parse an expression ("TECH1 LAND", "A + B", ...).
+// Number of 64-bit words in a category set of L's blueprints (SimBlueprints::From(L)); parse an expression
+// ("TECH1 LAND", "A + B", ...). The form without a state answers for the last blueprints copied in the process
+// (the interface's, ui/: it copies the session's blueprints after the sim, so the two agree); engine code uses L's.
+int CategoryWordCount(lua_State* L);
 int CategoryWordCount();
 bool ParseCategory(lua_State* L, const char* expr, std::vector<uint64_t>& out);
 

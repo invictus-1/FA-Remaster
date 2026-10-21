@@ -56,7 +56,6 @@ using namespace vm;
 
 // Shared with sim/damage.cpp and sim/projectile.cpp.
 namespace combat {
-uint64_t g_fires = 0, g_impacts = 0, g_projectiles = 0;
 int LayerBit(const std::string& l);
 int EntityLayerBit(const Entity* e);
 int Relation(const Army* a, const Army* b);
@@ -1708,7 +1707,7 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
 void FireNow(Sim& sim, UnitWeapon* w) {
   if (w->unit->stunned) return;
   WeaponCall(sim, w, "OnFire");
-  ++g_fires;
+  ++sim.firesSeen;
   ++w->shots;
   const float rof = RoF(w);
   w->fireClock = rof > 0 ? static_cast<int>(std::nearbyint(10.0f / rof)) : 0;
@@ -1766,8 +1765,9 @@ void WeaponsTick(Sim& sim) {
       if (!u->dead && !u->destroyQueued) ++alive;
     Logf(LogLevel::Debug, "moho64: tick %u units %d", sim.tick(), alive);
     Logf(LogLevel::Debug, "moho64: tick %u combat: weapons %d with target %d, fires %llu, projectiles %llu (live %zu), impacts %llu",
-         sim.tick(), weapons, withTarget, static_cast<unsigned long long>(g_fires),
-         static_cast<unsigned long long>(g_projectiles), sim.projectiles.size(), static_cast<unsigned long long>(g_impacts));
+         sim.tick(), weapons, withTarget, static_cast<unsigned long long>(sim.firesSeen),
+         static_cast<unsigned long long>(sim.projectilesMade), sim.projectiles.size(),
+         static_cast<unsigned long long>(sim.impactsSeen));
   }
   for (size_t i = 0; i < units.size(); ++i) {
     Unit* u = units[i];
@@ -3635,7 +3635,7 @@ int l_w_SetTargetingPriorities(lua_State* L) {
     lua_rawgeti(L, 2, i);
     const uint64_t* c = ToCategory(L, -1);
     if (!c) luaL_error(L, "attempt to get as UserData a %s value", lua_typename(L, lua_type(L, -1)));
-    w->priorities.emplace_back(c, c + CategoryWordCount());
+    w->priorities.emplace_back(c, c + CategoryWordCount(L));
     lua_pop(L, 1);
   }
   return 0;

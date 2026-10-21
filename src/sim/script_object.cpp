@@ -3,6 +3,7 @@
 
 #include <cstring>
 #include <map>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -71,13 +72,18 @@ const ClassInfo* FindClass(const char* cpp) {
   return nullptr;
 }
 
-std::map<std::string, int>& StubCounts() {
+std::map<std::string, int>& StubCounts() {  // (the process's: each stub logged once; under StubMutex)
   static std::map<std::string, int> m;
+  return m;
+}
+std::mutex& StubMutex() {
+  static std::mutex m;
   return m;
 }
 
 int l_Stub(lua_State* L) {
   const char* name = lua_tostring(L, lua_upvalueindex(1));
+  std::lock_guard<std::mutex> g(StubMutex());
   int& n = StubCounts()[name];
   if (n++ == 0) Logf(LogLevel::Debug, "moho64: stub %s", name);
   return 0;

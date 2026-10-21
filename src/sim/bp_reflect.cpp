@@ -158,28 +158,45 @@ void ApplyPath(lua_State* L, int t, const std::vector<std::string>& seg, size_t 
   lua_pop(L, 1);
 }
 
-std::vector<std::vector<std::string>>& SplitPaths() {
-  static std::vector<std::vector<std::string>> v;
-  if (v.empty())
+const std::vector<std::vector<std::string>>& SplitPaths() {
+  static const std::vector<std::vector<std::string>> v = [] {  // (built once, by the first caller of any thread)
+    std::vector<std::vector<std::string>> r;
     for (const auto& d : kDefaults) {
       std::vector<std::string> seg;
       std::string p = d.path;
       size_t a = 0;
       for (size_t b; (b = p.find('.', a)) != std::string::npos; a = b + 1) seg.push_back(p.substr(a, b - a));
       seg.push_back(p.substr(a));
-      v.push_back(seg);
+      r.push_back(seg);
     }
+    return r;
+  }();
   return v;
 }
 
 // ---- sounds ---------------------------------------------------------------------------------
-// A sound is an engine object: { Bank, Cue, LodCutoff } become an opaque handle.
-struct SoundParams {
-  std::string bank, cue, lodCutoff;
+// A sound is an engine object: { Bank, Cue, LodCutoff } become an opaque handle, an index into the list of the
+// state's blueprints (SimBlueprints::From(L): the sim's, or the interface's copy in its own state).
+}  // namespace
+
+// The sound objects made from one blueprint copy (SimBlueprints::sounds). Multicore step 1: the list was
+// process-wide (Sounds()), so every state's handles went on from the last one's and the list grew with each sim.
+struct SoundState {
+  struct Params {
+    std::string bank, cue, lodCutoff;
+  };
+  std::vector<Params> v;
 };
-std::vector<SoundParams>& Sounds() {
-  static std::vector<SoundParams> v;
-  return v;
+
+namespace {
+
+using SoundParams = SoundState::Params;
+// (only CopyToSim makes a handle, in a state whose blueprints it copies; SoundNames reads one only after testing
+// the class, so the state has them)
+std::vector<SoundParams>& Sounds(lua_State* L) {
+  SimBlueprints& bps = *SimBlueprints::From(L);
+  if (!bps.sounds) bps.sounds = std::make_shared<SoundState>();
+  return bps.sounds->v;
 }
 
 std::string Field(lua_State* L, int t, const char* k) {
@@ -195,9 +212,10 @@ std::string Field(lua_State* L, int t, const char* k) {
 void PushSound(lua_State* L, int t) {
   if (t < 0) t = lua_gettop(L) + t + 1;
   SoundParams sp{Field(L, t, "Bank"), Field(L, t, "Cue"), Field(L, t, "LodCutoff")};
-  Sounds().push_back(sp);
+  std::vector<SoundParams>& sounds = Sounds(L);
+  sounds.push_back(sp);
   auto* id = static_cast<int32_t*>(lua_newuserdata(L, sizeof(int32_t)));
-  *id = static_cast<int32_t>(Sounds().size() - 1);
+  *id = static_cast<int32_t>(sounds.size() - 1);
   PushClassTable(L, "Sound");
   lua_setmetatable(L, -2);
 }
@@ -208,9 +226,10 @@ int l_GetCueBank(lua_State* L) {
   std::string cue, bank;
   if (lua_type(L, 1) == LUA_TUSERDATA) {
     const int32_t id = *static_cast<const int32_t*>(lua_touserdata(L, 1));
-    if (id >= 0 && static_cast<size_t>(id) < Sounds().size()) {
-      cue = Sounds()[static_cast<size_t>(id)].cue;
-      bank = Sounds()[static_cast<size_t>(id)].bank;
+    const std::vector<SoundParams>& sounds = Sounds(L);
+    if (id >= 0 && static_cast<size_t>(id) < sounds.size()) {
+      cue = sounds[static_cast<size_t>(id)].cue;
+      bank = sounds[static_cast<size_t>(id)].bank;
     }
   } else if (lua_istable(L, 1)) {
     cue = Field(L, 1, "Cue");
@@ -234,9 +253,10 @@ bool SoundNames(lua_State* L, int arg, std::string* bank, std::string* cue) {
     }
     if (!isSound) return false;
     const int32_t id = *static_cast<const int32_t*>(lua_touserdata(L, arg));
-    if (id < 0 || static_cast<size_t>(id) >= Sounds().size()) return false;
-    *bank = Sounds()[static_cast<size_t>(id)].bank;
-    *cue = Sounds()[static_cast<size_t>(id)].cue;
+    const std::vector<SoundParams>& sounds = Sounds(L);
+    if (id < 0 || static_cast<size_t>(id) >= sounds.size()) return false;
+    *bank = sounds[static_cast<size_t>(id)].bank;
+    *cue = sounds[static_cast<size_t>(id)].cue;
     return true;
   }
   if (lua_istable(L, arg)) {
@@ -418,7 +438,7 @@ void CarryOverEngineFields(lua_State* L, int to, int from, BpKind kind) {
   if (to < 0) to = lua_gettop(L) + to + 1;
   if (from < 0) from = lua_gettop(L) + from + 1;
   lua_checkstack(L, 20);
-  auto& paths = SplitPaths();
+  const auto& paths = SplitPaths();
   for (size_t i = 0; i < sizeof kDefaults / sizeof kDefaults[0]; ++i)
     if (kDefaults[i].kind == kind) CarryPath(L, to, from, paths[i]);
   if (kind == BpKind::Unit)
@@ -437,7 +457,7 @@ void ReflectBlueprint(lua_State* L, int t, const BlueprintInfo& bp, const SimBlu
   if (t < 0) t = lua_gettop(L) + t + 1;
   lua_checkstack(L, 20);
   SetNumber(L, t, "BlueprintOrdinal", bp.ordinal);
-  auto& paths = SplitPaths();
+  const auto& paths = SplitPaths();
   for (size_t i = 0; i < sizeof kDefaults / sizeof kDefaults[0]; ++i)
     if (kDefaults[i].kind == bp.kind) ApplyPath(L, t, paths[i], 0, kDefaults[i]);
   DefaultString(L, t, "Description", "");

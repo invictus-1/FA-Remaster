@@ -80,7 +80,7 @@ Unit* FindUnitAny(Sim& sim, uint32_t id) {
 }
 
 const NamedFootprint& Footprint(const BlueprintInfo& bp) {
-  static NamedFootprint one{"", 1, 1, 1, 0, 0, 0, 0};
+  static const NamedFootprint one{"", 1, 1, 1, 0, 0, 0, 0};
   return bp.hasFootprint ? bp.footprint : one;
 }
 
@@ -4125,7 +4125,7 @@ int l_CreateResourceDeposit(lua_State* L) {
 }
 
 void CategoryBits(lua_State* L, int idx, std::vector<uint64_t>& out) {
-  out.assign(static_cast<size_t>(CategoryWordCount()), 0);
+  out.assign(static_cast<size_t>(CategoryWordCount(L)), 0);
   if (const uint64_t* c = ToCategory(L, idx))
     for (size_t i = 0; i < out.size(); ++i) out[i] = c[i];
 }
@@ -4151,7 +4151,7 @@ int l_UnitBuildRestriction(lua_State* L) {
 }
 int l_RestoreBuildRestrictions(lua_State* L) {
   Unit* u = U(L);
-  u->buildAllowed.assign(static_cast<size_t>(CategoryWordCount()), ~uint64_t(0));
+  u->buildAllowed.assign(static_cast<size_t>(CategoryWordCount(L)), ~uint64_t(0));
   return 0;
 }
 

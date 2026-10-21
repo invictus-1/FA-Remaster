@@ -651,7 +651,7 @@ int l_brain_SetArmyStatsTrigger(lua_State* L) {
   c.op = op;
   c.thr = thr;
   if (cat) {
-    c.category.assign(cat, cat + CategoryWordCount());
+    c.category.assign(cat, cat + CategoryWordCount(L));
     c.hasCategory = true;
   }
   t->conds.push_back(std::move(c));
@@ -1514,7 +1514,6 @@ void Sim::RebuildUnitGrid() {
   gridDirty_ = false;
 }
 
-static int g_unitsCreated = 0;
 const std::vector<Unit*>& Sim::CommandOrder() {
   if (cmdOrderDirty_) {
     cmdOrder_ = units_;
@@ -1574,7 +1573,7 @@ void Sim::ResumeCommandThread(Unit* u) {
   }
 }
 void Sim::AddUnitToLists(Unit* u) {
-  ++g_unitsCreated;
+  ++unitsCreated;
   gridDirty_ = true;
   u->cmdSeq = ++cmdSeqNext_;
   cmdOrderDirty_ = true;
@@ -1597,11 +1596,11 @@ void Sim::RemoveUnitFromLists(Unit* u) {
   if (u->army) EraseById(u->army->units, u);
 }
 
-namespace {
 // MOHO64_PROFILE=1: time spent per phase of the tick, logged every 1000 ticks (ms per tick, and the outermost Lua time
-// inside each phase, core/profile.h), and a summary at exit on stderr: the distribution of the tick's time (mean, p50,
-// p95, p99), ticks per second, the Lua share per phase and per source, the peak working set. Measuring only: reads
-// the clock and nothing of the simulation.
+// inside each phase, core/profile.h), and a summary on stderr when the sim goes: the distribution of the tick's time
+// (mean, p50, p95, p99), ticks per second, the Lua share per phase and per source, the peak working set. Measuring
+// only: reads the clock and nothing of the simulation. (Sim::phaseTimer; multicore step 1: it was process-wide,
+// g_prof, and summed every sim of the process.)
 struct PhaseTimer {
   enum Phase {
     kEconomy, kNavigators, kSteering, kWeapons, kCommands, kThreads, kEntityPass, kAnim, kProjectiles, kRecon,
@@ -1690,9 +1689,9 @@ struct PhaseTimer {
       fprintf(stderr, "profile: Lua source %-16s %8.2f s\n", prof::SourceName(s), prof::LuaMsTotal(s) / 1000.0);
   }
 };
-PhaseTimer g_prof;
 
-// MOHO64_PROFILE: one order's latency (Sim::ProfileTrackOrder): for each unit, the first beat its navigator has a path
+// MOHO64_PROFILE: one order's latency (Sim::ProfileTrackOrder; Sim::orderLatency, multicore step 1: it was
+// process-wide, g_latency): for each unit, the first beat its navigator has a path
 // (its search delivered, or a formation slot to follow) and the first beat it moved,
 // counted from the first beat after the order, with the wall time since the order (the beats' own compute: headless
 // runs as fast as it can; a game adds its 100 ms a beat).
@@ -1766,8 +1765,6 @@ struct OrderLatency {
     active = false;
   }
 };
-OrderLatency g_latency;
-}  // namespace
 
 // Order (Sim::AdvanceBeat 0x749f40, engine-ref beat_order.md): the tick count, then per army the
 // economy, navigators and path queues and weapons; then the three task stages: command threads
@@ -1980,7 +1977,9 @@ void Sim::Tick() {
   beatStarted_ = true;
   ++tick_;
   g_crashTick = tick_;  // (named by a crash's log line, core/crash.h)
-  g_prof.Start();
+  if (!phaseTimer) phaseTimer = std::make_shared<PhaseTimer>();
+  PhaseTimer& phases = *phaseTimer;
+  phases.Start();
   {  // debug: MOHO64_DEBUG_RNGSHIFT=<tick>:<n> discards n raw draws at the start of that tick. When the Lua
      // stream's counts match the oracle but its values do not from tick T on, the n that makes the probe's
      // rngl hash at T match is how many engine draws we miss before T.
@@ -2000,22 +1999,22 @@ void Sim::Tick() {
   // that army rather than between the armies' other stages changes nothing (inferred from what it reads).
   ThreatMapBeat(*this);
   threads_->WakeSignalled();  // (a thread whose event a stage signalled goes to the run order's end at that moment)
-  g_prof.Lap(PhaseTimer::kEconomy);
+  phases.Lap(PhaseTimer::kEconomy);
   LandNavTickAll(*this);
-  g_prof.Lap(PhaseTimer::kNavigators);
+  phases.Lap(PhaseTimer::kNavigators);
   // CArmyImpl::OnTick 0x6ffd70: the brain's stages in this order: navigators (brain+0xa8), steering (brain+0xac,
   // CAiSteeringImpl::OnTick 0x5d32b0), attackers and weapons (brain+0xb0); only then the sim's command stage. So
   // a waypoint the navigator set this beat already has its spline when a command task stops the unit in the same
   // beat, and the stop turns it into a brake spline (the unit slows down along its hull) instead of a coast.
   SteeringTickAll(*this);  // the steering stage (spline points, predicted collisions)
-  g_prof.Lap(PhaseTimer::kSteering);
+  phases.Lap(PhaseTimer::kSteering);
   WeaponsTick(*this);
   threads_->WakeSignalled();
-  g_prof.Lap(PhaseTimer::kWeapons);
+  phases.Lap(PhaseTimer::kWeapons);
   CommandStage(*this);  // stage 0x958 (arrivals from last beat's motion end their commands here)
-  g_prof.Lap(PhaseTimer::kCommands);
+  phases.Lap(PhaseTimer::kCommands);
   threads_->RunTick(tick_);  // stage 0x944: Lua threads
-  g_prof.Lap(PhaseTimer::kThreads);
+  phases.Lap(PhaseTimer::kThreads);
   std::vector<Unit*> motionOrder = MotionOrder();  // (a copy: a unit sent to the pass's end is appended to it)
   coordsPending = true;
   // The entity stage runs its tasks in creation order, units and collision beams alike, and a unit's task is its
@@ -2282,11 +2281,11 @@ void Sim::Tick() {
     attachedEntities.resize(keep);
   }
   MotorsTick(*this);  // the entity stage: props with a motor (falling trees, sinking)
-  g_prof.Lap(PhaseTimer::kEntityPass);
+  phases.Lap(PhaseTimer::kEntityPass);
   AnimTick(*this);
   threads_->WakeSignalled();
   gridDirty_ = true;
-  g_prof.Lap(PhaseTimer::kAnim);
+  phases.Lap(PhaseTimer::kAnim);
   // Projectiles move after every task stage (Sim::AdvanceBeat runs the three task stages first), so a shot
   // moves in the beat it was fired, and Lua sees the move next beat.
   ProjectilesTick(*this);
@@ -2306,9 +2305,9 @@ void Sim::Tick() {
       const char* pl = p->position.y > map_->waterElevation ? "Air" : "Water";
       if (u->layer != pl) SetAttachedUnitLayer(*this, u, pl);
     }
-  g_prof.Lap(PhaseTimer::kProjectiles);
+  phases.Lap(PhaseTimer::kProjectiles);
   ReconBeat(*this);  // army (tick % armies) updates its blips
-  g_prof.Lap(PhaseTimer::kRecon);
+  phases.Lap(PhaseTimer::kRecon);
   {
     // Step 11 (the formation DB) runs before step 13 (Entity::AdvanceCoords): motion only wrote each entity's
     // PENDING transform, so the formation update still sees every unit where it stood before this beat's
@@ -2328,9 +2327,9 @@ void Sim::Tick() {
       who[i]->orientation = moved[i].second;
     }
   }
-  g_prof.Lap(PhaseTimer::kFormations);
+  phases.Lap(PhaseTimer::kFormations);
   KillCleanupTick(*this);
-  g_prof.Lap(PhaseTimer::kKillCleanup);
+  phases.Lap(PhaseTimer::kKillCleanup);
   for (Unit* u : units_) u->motion.velCommitted = u->motion.lastMove;  // step 13: previous = committed = pending
   coordsPending = false;
   // (the same for a shell that did not move in this beat, its impact beat for one: its velocity, committed -
@@ -2342,7 +2341,7 @@ void Sim::Tick() {
   GridAdvanceCoords(*this);    // step 13: moved units take their (widened) cells in the entity grid
   MotorsAdvanceCoords(*this);  // and moved props theirs
   AdvanceIntelCoords(*this);  // moved intel sources move their circles
-  g_prof.Lap(PhaseTimer::kAdvanceCoords);
+  phases.Lap(PhaseTimer::kAdvanceCoords);
   ProcessDestroyQueue();
   QueueLateDestroys();
   ApplyFocusArmy();  // Sim::Sync's start: a requested focus army, NoteFocusArmyChanged
@@ -2350,10 +2349,10 @@ void Sim::Tick() {
   SyncStep(collectSync);
   singleStep = false;  // step 14 (sim+0x8e4 = 0)
   frozen = endGame;    // Sync copies sim+0x8dc to sim+0x8dd
-  g_prof.Lap(PhaseTimer::kDestroySync);
-  g_prof.EndTick(tick_);
-  g_latency.Beat(*this);  // (MOHO64_PROFILE only: active after ProfileTrackOrder)
-  g_prof.Report(tick_);
+  phases.Lap(PhaseTimer::kDestroySync);
+  phases.EndTick(tick_);
+  if (orderLatency) orderLatency->Beat(*this);  // (MOHO64_PROFILE only: made by ProfileTrackOrder)
+  phases.Report(tick_);
   static const bool stats = getenv("MOHO64_STATS") != nullptr;
   if (stats && tick_ % 600 == 0) {  // a quick health line per game minute
     int n = 0, air = 0, flying = 0, dead = 0;
@@ -2367,12 +2366,14 @@ void Sim::Tick() {
       }
     }
     Logf(LogLevel::Info, "moho64 stats tick %u: units %d (aircraft %d, flying %d, dying %d), created %d, projectiles %zu", tick_,
-         n, air, flying, dead, g_unitsCreated, projectiles.size());
+         n, air, flying, dead, unitsCreated, projectiles.size());
   }
 }
 
 void Sim::ProfileTrackOrder(const std::vector<uint32_t>& ids, const std::string& what) {
-  if (prof::On()) g_latency.Start(tick_, ids, what);
+  if (!prof::On()) return;
+  if (!orderLatency) orderLatency = std::make_shared<OrderLatency>();
+  orderLatency->Start(tick_, ids, what);
 }
 
 // EntityDB::DoReserveId 0x684480: the lowest free serial, else a new one

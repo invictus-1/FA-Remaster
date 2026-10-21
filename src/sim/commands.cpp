@@ -12,6 +12,7 @@
 #include <cstring>
 #include <limits>
 #include <map>
+#include <mutex>
 
 #include "core/backtrace.h"
 #include "core/crash.h"
@@ -1039,21 +1040,25 @@ void StartHead(Sim& sim, Unit* u) {
     // Not carried out yet: finish it at once so the scripts see an idle unit.
     // MOHO64_DEBUG_TASKS=1: every (command type, blueprint) this happens to, once, with the tick and the count
     // so far for the type
-    static std::map<int, int> notDone;
-    static std::set<std::pair<int, std::string>> notDoneFor;
-    static const bool dbgTasks = getenv("MOHO64_DEBUG_TASKS") != nullptr;
-    if (dbgTasks) {
-      const int n = ++notDone[static_cast<int>(c.type)];
-      const std::string bp = u->blueprint ? u->blueprint->id : "?";
-      if (notDoneFor.insert({static_cast<int>(c.type), bp}).second)
-        Logf(LogLevel::Info, "moho64: tick %u: command %s not carried out for %s (unit %#x, %s%s; x%d for the type)",
-             sim.tick(), kCommandNames[static_cast<int>(c.type)], bp.c_str(), u->id, mobile ? "mobile" : "immobile",
-             c.targetId ? ", entity target" : "", n);
+    {  // (the process's lists, to log each case once; the lock: two sims may run at once)
+      static std::mutex logMutex;
+      static std::map<int, int> notDone;
+      static std::set<std::pair<int, std::string>> notDoneFor;
+      static std::set<int> logged;
+      static const bool dbgTasks = getenv("MOHO64_DEBUG_TASKS") != nullptr;
+      std::lock_guard<std::mutex> logLock(logMutex);
+      if (dbgTasks) {
+        const int n = ++notDone[static_cast<int>(c.type)];
+        const std::string bp = u->blueprint ? u->blueprint->id : "?";
+        if (notDoneFor.insert({static_cast<int>(c.type), bp}).second)
+          Logf(LogLevel::Info, "moho64: tick %u: command %s not carried out for %s (unit %#x, %s%s; x%d for the type)",
+               sim.tick(), kCommandNames[static_cast<int>(c.type)], bp.c_str(), u->id, mobile ? "mobile" : "immobile",
+               c.targetId ? ", entity target" : "", n);
+      }
+      if (logged.insert(static_cast<int>(c.type)).second)
+        Logf(LogLevel::Debug, "moho64: command %s is not carried out yet (finished at once)",
+             kCommandNames[static_cast<int>(c.type)]);
     }
-    static std::set<int> logged;
-    if (logged.insert(static_cast<int>(c.type)).second)
-      Logf(LogLevel::Debug, "moho64: command %s is not carried out yet (finished at once)",
-           kCommandNames[static_cast<int>(c.type)]);
     PopHead(u);
   }
   SetMoving(u, false);

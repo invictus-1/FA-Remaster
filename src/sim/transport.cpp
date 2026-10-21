@@ -118,7 +118,7 @@ Unit* UnitRef(Sim& sim, uint32_t ref) {
   return e && e->kind == Entity::Kind::Unit && !e->destroyQueued ? static_cast<Unit*>(e) : nullptr;
 }
 const NamedFootprint& Fp(const Unit* u) {
-  static NamedFootprint one{"", 1, 1, 1, 0, 0, 0, 0};
+  static const NamedFootprint one{"", 1, 1, 1, 0, 0, 0, 0};
   return u->blueprint && u->blueprint->hasFootprint ? u->blueprint->footprint : one;
 }
 bool InCat(Sim& sim, const Unit* u, const char* c) { return BpInCategory(sim, u->blueprint, c); }

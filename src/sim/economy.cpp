@@ -307,7 +307,7 @@ const UnitBpData& GetUnitBpData(lua_State* L, const BlueprintInfo& bp) {
   d.sacrificeMult[kMass] = GetNum(L, ec, "SacrificeMassMult", 0);
   d.initialRallyX = GetNum(L, ec, "InitialRallyX", 0);
   d.initialRallyZ = GetNum(L, ec, "InitialRallyZ", 0);
-  d.buildable.assign(static_cast<size_t>(CategoryWordCount()), 0);
+  d.buildable.assign(static_cast<size_t>(CategoryWordCount(L)), 0);
   PushField(L, ec, "BuildableCategory");
   if (lua_istable(L, -1)) {
     for (int i = 1;; ++i) {
@@ -378,7 +378,7 @@ void UnitEconomyInit(lua_State* L, Unit* u) {
   u->bpData = &GetUnitBpData(L, *u->blueprint);
   u->buildRate = u->bpData->buildRate;
   u->regenRate = u->bpData->regenRate;
-  u->buildAllowed.assign(static_cast<size_t>(CategoryWordCount()), ~uint64_t(0));
+  u->buildAllowed.assign(static_cast<size_t>(CategoryWordCount(L)), ~uint64_t(0));
 }
 
 void UnitEconomyRelease(Unit* u) {

@@ -44,7 +44,6 @@ namespace moho {
 using namespace vm;
 
 namespace combat {
-extern uint64_t g_impacts, g_projectiles;
 bool IsEnemy(const Army* a, const Army* b);
 float WaterLevel(const Sim& sim);
 int CallMethodBool(Sim& sim, lua_State* L, ScriptObject* obj, const char* method, int nargs);
@@ -236,7 +235,7 @@ Projectile* Sim::CreateProjectile(lua_State* L, const BlueprintInfo& bp, Army* a
   owned_.push_back(std::move(owned));
   RegisterEntity(p);
   projectiles.push_back(p);
-  ++g_projectiles;
+  ++projectilesMade;
   lua_settop(L, top);
   CallMethod(L, p, "OnPreCreate", 0);
   // bounce limit: always one draw (0x69b540), Min + (u * (Max - Min)) >> 32
@@ -708,7 +707,7 @@ void Impact(Sim& sim, Projectile* p) {
   p->hitEntity = 0;
   p->impactType = 0;
   p->hitFraction = -1;
-  ++g_impacts;
+  ++sim.impactsSeen;
   lua_pushstring(L, ImpactTypeName(type));
   Entity* const met = e && !e->destroyQueued && e->HasLuaObject() ? e : nullptr;
   PushObject(L, met);
@@ -962,9 +961,8 @@ int l_weapon_CreateProjectile(lua_State* L) {
   if (!w->bp) InitUnitWeapon(L, w);
   Unit* u = w->unit;
   if (!w->projBp) {
-    static bool logged = false;
-    if (!logged) {
-      logged = true;
+    static std::atomic<bool> logged{false};  // (once a process)
+    if (!logged.exchange(true)) {
       Logf(LogLevel::Debug, "moho64: %s:%s:CreateProjectile: no projectile blueprint (instahit not implemented)",
            u->blueprint ? u->blueprint->id.c_str() : "?", w->label.c_str());
     }

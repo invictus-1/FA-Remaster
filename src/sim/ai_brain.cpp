@@ -121,7 +121,7 @@ int AllianceWith(const Army* self, const Army* other) {
 std::vector<uint64_t> CategoryArg(lua_State* L, int idx) {
   const uint64_t* c = ToCategory(L, idx);
   if (!c) luaL_error(L, "Expected an EntityCategory, got %s", lua_typename(L, lua_type(L, idx)));
-  return std::vector<uint64_t>(c, c + CategoryWordCount());
+  return std::vector<uint64_t>(c, c + CategoryWordCount(L));
 }
 bool InCat(const std::vector<uint64_t>& cat, const Unit* u) {
   const int e = u->blueprint ? u->blueprint->entityIndex : -1;
@@ -137,7 +137,7 @@ bool CatEmpty(const std::vector<uint64_t>& cat) {
 // rules vt+0x58 'STRUCTURE' minus rules vt+0x58 'MOBILE' (EntityCategory::Sub 0x557710): the default category of
 // SetUpAttackVectorsToArmy and CenterOfArmy.
 std::vector<uint64_t> StructureNotMobile(const Sim& sim) {
-  std::vector<uint64_t> c(static_cast<size_t>(CategoryWordCount()), 0);
+  std::vector<uint64_t> c(static_cast<size_t>(sim.blueprints().CategoryWords()), 0);
   const auto& cats = sim.blueprints().Categories();
   auto set = [&](const char* name, bool on) {
     auto it = cats.find(name);

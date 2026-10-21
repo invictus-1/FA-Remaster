@@ -526,6 +526,11 @@ class Sim {
   // 0 outside that stage (SteeringNavStageArmy)
   bool inSteeringStage = false;
   int navStageArmy = 0;
+  std::shared_ptr<struct PhaseTimer> phaseTimer;  // sim/sim.cpp: MOHO64_PROFILE's phase times (measuring only)
+  std::shared_ptr<struct OrderLatency> orderLatency;  // sim/sim.cpp: MOHO64_PROFILE's order latency (ProfileTrackOrder)
+  // Counts for the debug and stats lines (MOHO64_DEBUG_COMBAT, MOHO64_STATS); nothing in the simulation reads them
+  uint64_t firesSeen = 0, projectilesMade = 0, impactsSeen = 0;
+  int unitsCreated = 0;
   // Keep an engine object alive for the session (objects scripts may still hold).
   ScriptObject* Own(std::unique_ptr<ScriptObject> o) {
     owned_.push_back(std::move(o));

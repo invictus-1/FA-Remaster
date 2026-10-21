@@ -1224,7 +1224,7 @@ int l_SetPrioritizedTargetList(lua_State* L) {
       lua_rawgeti(L, 3, i);
       const uint64_t* c = ToCategory(L, -1);
       if (!c) luaL_error(L, "attempt to get as UserData a %s value", lua_typename(L, lua_type(L, -1)));
-      list.emplace_back(c, c + CategoryWordCount());
+      list.emplace_back(c, c + CategoryWordCount(L));
       lua_pop(L, 1);
     }
     if (Squad* s = SquadOf(p, cls)) s->priorities = std::move(list);
