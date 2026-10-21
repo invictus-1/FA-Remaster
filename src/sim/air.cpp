@@ -1428,11 +1428,12 @@ void CombatTactics(Sim& sim, Unit* u, const AiTarget& tgt, Vec3& out, const Vec3
         // (the target's committed orientation: as the beat began, also when it has turned already)
         QuatW q = ToW(E->shapeHeld ? E->shapeOri : E->orientation);
         Vec3 Fe{2 * (q.w * q.y + q.z * q.x), 2 * (q.z * q.y - q.w * q.x), 1 - 2 * (q.x * q.x + q.y * q.y)};
-        if ((Fe.x * fwd.x + Fe.y * fwd.y) + Fe.z * fwd.z > 0.0f) s = 2;
+        if ((Fe.x * fwd.x + Fe.z * fwd.z) + Fe.y * fwd.y > 0.0f) s = 2;  // (0x6bd35b..0x6bd387: x, z, then y)
       }
       return output();
     }
-    if (s == 2 && (dir3.x * fwd.x + dir3.y * fwd.y) + dir3.z * fwd.z >= 0.0f) return output();
+    // (0x6bd3c0..0x6bd3fa: summed x, z, then y; `!(0 > dot)`)
+    if (s == 2 && !(0.0f > (dir3.x * fwd.x + fwd.z * dir3.z) + fwd.y * dir3.y)) return output();
     uint32_t r1 = sim.NextUInt32();
     {
       static const bool dbgDraw = getenv("MOHO64_DEBUG_TACDRAW") != nullptr;  // who draws a new attack-run state

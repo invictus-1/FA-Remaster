@@ -386,9 +386,12 @@ void UpdateTracking(Sim& sim, Projectile* p, Quat& q, Vec3& v) {
       if (const Entity* bl = BlipOfTarget(sim, p->target))
         tv = Sub(bl->position, static_cast<const ReconBlip*>(bl)->prevPos);
     float k = 1 / (p->maxSpeed * 0.1f);
-    float t1 = Len(Sub(pos, aim)) * k;
+    // the squares summed x, z, y (0x69ca38..0x69ca52, 0x69cab9..0x69cad2)
+    const Vec3 d1 = Sub(pos, aim);
+    float t1 = std::sqrt((d1.x * d1.x + d1.z * d1.z) + d1.y * d1.y) * k;
     Vec3 P1 = Add(aim, Mul(tv, t1));
-    float t2 = Len(Sub(pos, P1)) * k;
+    const Vec3 d2 = Sub(pos, P1);
+    float t2 = std::sqrt((d2.x * d2.x + d2.z * d2.z) + d2.y * d2.y) * k;
     // MOHO64_DEBUG_TRACK=<projectile id>: the lead's inputs each beat
     static const long dbgTrack = getenv("MOHO64_DEBUG_TRACK") ? atol(getenv("MOHO64_DEBUG_TRACK")) : -1;
     if (dbgTrack >= 0 && static_cast<long>(p->id) == dbgTrack)
@@ -421,7 +424,8 @@ void UpdateTracking(Sim& sim, Projectile* p, Quat& q, Vec3& v) {
       }
       p->nextZigZag = sim.tick() + static_cast<uint32_t>(std::floor(F * 10));
     }
-    float s = std::min(Len(Sub(aim, pos)) / Z, 1.0f);
+    const Vec3 e = Sub(aim, pos);
+    float s = std::min(std::sqrt((e.x * e.x + e.z * e.z) + e.y * e.y) / Z, 1.0f);  // (0x69cd8c..0x69cda6)
     Vec3 n = Norm(d);
     float y0 = pos.y + n.y * p->maxSpeed;
     Vec3 a{pos.x + n.x * p->maxSpeed + p->zigOffset.x * s, y0 + p->zigOffset.y * s,
@@ -804,7 +808,8 @@ void MotionTick(Sim& sim, Projectile* p) {
         n = Norm({-hx, 1, -hz});
       }
       Vec3 vd = Mul(v, p->bounceDamp);
-      p->bouncedVel = Sub(vd, Mul(n, 2 * Dot(n, vd)));
+      // the reflection's dot summed y, z, x, then doubled (0x69c692..0x69c6b5)
+      p->bouncedVel = Sub(vd, Mul(n, ((n.y * vd.y + n.z * vd.z) + n.x * vd.x) * 2.0f));
       p->hitPos = Add(p->hitPos, Mul(Norm(Mul(v, -1)), 0.05f));
       p->hitFraction = -1;
       p->bouncePending = true;
@@ -1025,7 +1030,8 @@ int l_weapon_CreateProjectile(lua_State* L) {
   if (!p || p->destroyQueued) return PushProj(L, p);
   if (w->bp->muzzleVelocity != 0) {
     Vec3 tp = TargetPos(sim, w->target, false);
-    float dist = IsNaN(tp) ? 0 : Len(Sub(pos, tp));
+    const Vec3 dd = Sub(pos, tp);
+    float dist = IsNaN(tp) ? 0 : std::sqrt((dd.z * dd.z + dd.y * dd.y) + dd.x * dd.x);  // (0x6d68d7..0x6d68ee)
     float mv = w->bp->muzzleVelocity + (w->bp->muzzleVelocityRandom != 0 ? Gauss(sim) * w->bp->muzzleVelocityRandom : 0);
     if (!IsNaN(tp) && dist < w->bp->muzzleVelocityReduceDistance)
       mv *= std::sqrt(dist / w->bp->muzzleVelocityReduceDistance);
@@ -1085,7 +1091,8 @@ int l_GetVelocity(lua_State* L) {
   return 3;
 }
 int l_GetCurrentSpeed(lua_State* L) {
-  lua_pushnumber(L, Len(EntityVelocity(P(L))));
+  const Vec3 v = EntityVelocity(P(L));
+  lua_pushnumber(L, std::sqrt((v.z * v.z + v.y * v.y) + v.x * v.x));  // (0x6a2846..0x6a285d)
   return 1;
 }
 // A shell whose target entity no longer exists has no target position any more: the original hands the script

@@ -125,10 +125,19 @@ const Unit* MoreInLine(const Unit* A, const Unit* B) {
   fb.y = 0;
   fa = Norm(fa);
   fb = Norm(fb);
-  float a = Dot(Norm(Sub(B->position, A->position)), fa);
-  float b = Dot(Norm(Sub(A->position, B->position)), fb);
-  if (a <= 0 && b <= 0) return nullptr;
-  return a <= b ? A : B;
+  // each direction normalised with its squares summed z, y, x, times 1 / length (0x62ec20..0x62ec8f,
+  // 0x62ecef..0x62ed84; zero for no length); the dots summed y, z, x and z, y, x (0x62ed8f..0x62edd4)
+  auto unit = [](Vec3 d) {
+    const float l = std::sqrt((d.z * d.z + d.y * d.y) + d.x * d.x);
+    if (!(l > 0.0f)) return Vec3{};
+    const float i = 1.0f / l;
+    return Vec3{i * d.x, d.y * i, d.z * i};
+  };
+  const Vec3 u1 = unit(Sub(B->position, A->position)), u2 = unit(Sub(A->position, B->position));
+  float a = (u1.y * fa.y + u1.z * fa.z) + u1.x * fa.x;
+  float b = (u2.z * fb.z + u2.y * fb.y) + u2.x * fb.x;
+  if (!(0.0f < a) && !(0.0f < b)) return nullptr;
+  return a > b ? B : A;
 }
 
 }  // namespace
@@ -828,7 +837,9 @@ int Resolve(Sim& sim, Unit* Y) {
   Vec3 vXn = Norm(vX);
   static const long dbg = getenv("MOHO64_DEBUG_COL") ? atol(getenv("MOHO64_DEBUG_COL")) : -1;
   bool log = dbg >= 0 && (static_cast<long>(X->id) == dbg || static_cast<long>(Y->id) == dbg);
-  if (Dot(dYX, vXn) <= 0.707f) {  // Y is not in X's 45-degree forward cone: Y brakes and waits
+  // (the four dots here are summed y, z, x: 0x597393..0x5973bf, 0x597452..0x59747d, 0x59750e..0x597548,
+  // 0x597565..0x597580)
+  if (!((dYX.y * vXn.y + dYX.z * vXn.z) + dYX.x * vXn.x > 0.707f)) {  // Y is not in X's 45-degree forward cone: Y brakes and waits
     SetCol(Y, 4, Y->position);
     if (log) Logf(LogLevel::Info, "col %u resolve Y %u X %u: brake", sim.tick(), Y->id, X->id);
     return 1;
@@ -837,13 +848,13 @@ int Resolve(Sim& sim, Unit* Y) {
     bool ok = Naval(X) ? Naval(Y) : (!(FpFlags(X) & 1) || (FpFlags(Y) & 1));
     if (ok) SetCol(X, 5, X->position);  // X brakes hard
   }
-  bool facing = Dot(dYX, fwdY) < 0;  // Y points toward X
+  bool facing = 0.0f > (dYX.y * fwdY.y + dYX.z * fwdY.z) + dYX.x * fwdY.x;  // Y points toward X
   Vec3 B, s;
   if (Ymoving && facing) {
     Vec3 vYn = Norm(vY);
     Vec3 rX = Right(X->orientation);
-    if (Dot(rX, dYX) <= 0) rX = Scale(rX, -1);
-    float c = Dot(vYn, vXn);
+    if (!((rX.y * dYX.y + rX.z * dYX.z) + rX.x * dYX.x > 0.0f)) rX = Scale(rX, -1);
+    float c = (vYn.y * vXn.y + vYn.z * vXn.z) + vYn.x * vXn.x;
     if (c > 0.707f) {
       B = pY;
       s = Norm(Add(dYX, rX));

@@ -2581,7 +2581,7 @@ int TickPod(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
         AirSetTargetFacing(sim, u, lead, facing, 1);  // CUnitMotion 0x6b85e0(target, facing, 1): the motion itself
         AirSetLandHeight(u, pos.y);
         const float dx = pos.x - u->position.x, dy = pos.y - u->position.y, dz = pos.z - u->position.z;
-        if (0.5f > std::sqrt(dx * dx + dy * dy + dz * dz) || u->layer == "Land") {
+        if (0.5f > std::sqrt((dz * dz + dy * dy) + dx * dx) || u->layer == "Land") {  // (0x61e3cd..0x61e3d6)
           t.state = 3;
           continue;
         }

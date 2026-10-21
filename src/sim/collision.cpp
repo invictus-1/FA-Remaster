@@ -130,16 +130,20 @@ float BoxDist2(const WorldShape& s, Vec3 p) {
 }  // namespace
 
 bool SphereOverlap(const WorldShape& s, Vec3 c, float r) {
-  if (s.type == ShapeType::Sphere) {
+  if (s.type == ShapeType::Sphere) {  // CColPrimitive_Sphere::CollideSphere 0x4fe7a0: squares summed z, x, y
     float rr = s.r + r;
-    return Len2(Sub(c, s.c)) < rr * rr;
+    const float dx = c.x - s.c.x, dy = c.y - s.c.y, dz = c.z - s.c.z;
+    return rr * rr > (dz * dz + dx * dx) + dy * dy;
   }
   if (s.type == ShapeType::Box) return BoxDist2(s, c) < r * r;
   return false;
 }
 
 bool PointInShape(const WorldShape& s, Vec3 p) {
-  if (s.type == ShapeType::Sphere) return Len2(Sub(p, s.c)) < s.r * s.r;
+  if (s.type == ShapeType::Sphere) {  // CColPrimitive_Sphere::PointInShape 0x4feb60: squares summed x, z, y
+    const float dx = p.x - s.c.x, dy = p.y - s.c.y, dz = p.z - s.c.z;
+    return s.r * s.r > (dx * dx + dz * dz) + dy * dy;
+  }
   if (s.type == ShapeType::Box) {
     Vec3 m = Sub(p, s.c);
     return std::fabs(Dot(m, s.ax[0])) <= s.half.x && std::fabs(Dot(m, s.ax[1])) <= s.half.y &&

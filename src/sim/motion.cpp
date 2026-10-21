@@ -1190,7 +1190,8 @@ void Generate(Sim& sim, Unit* u, const Vec3& tgt, int mode, bool fresh) {
   float dist = std::sqrt(ex * ex + ez * ez);
   float dot = (D.x * ex + D.z * ez) / dist;  // the 3-D forward: shortened on a slope
   const Vec3& V = UnitVelocity(u);
-  float frac = b.maxSpeed > 0 ? std::sqrt(V.x * V.x + V.y * V.y + V.z * V.z) * 10.0f / b.maxSpeed : 0;
+  // (0x5b3381..0x5b33b6: the squares summed x, z, y)
+  float frac = b.maxSpeed > 0 ? std::sqrt((V.x * V.x + V.z * V.z) + V.y * V.y) * 10.0f / b.maxSpeed : 0;
   if (cont) {
     g.p = last.pos;
     g.vel = last.vel;
@@ -1217,7 +1218,7 @@ void Generate(Sim& sim, Unit* u, const Vec3& tgt, int mode, bool fresh) {
     // was one float step short, the gap lived on, and a side-step at 3396 then turned another unit the other way.)
     g.fx = l > 9.99999997e-07f ? D.x : 0;
     g.fz = l > 9.99999997e-07f ? D.z : 1;
-    ChooseStart(b, P, g, dot, frac, V.x * D.x + V.y * D.y + V.z * D.z < 0.0f);
+    ChooseStart(b, P, g, dot, frac, (V.z * D.z + V.y * D.y) + V.x * D.x < 0.0f);  // (0x5b34c5..0x5b34e9)
   }
   // the back-up flag is chosen when a batch starts (fresh, or continuing in state 5), from the real unit
   if (g.state == 5 && dist < b.backUpDistance && dot < -0.5f) g.reverse = true;
@@ -1465,13 +1466,14 @@ bool Coast(Unit* u, bool turned = false) {
   // level in the original; ours kept the impulse in m.accel and leant 0.07, 0.12, 0.17 over three beats.)
   m.accel = {};
   // v = the entity velocity (m+0x38 for a land unit, 3-D: a fresh spline point's terrain y counts too)
-  float v2 = (m.vel.x * m.vel.x + m.vel.y * m.vel.y) + m.vel.z * m.vel.z;
-  if (!turned && v2 < kStopSq) {
+  float v2 = (m.vel.x * m.vel.x + m.vel.y * m.vel.y) + m.vel.z * m.vel.z;  // LimitLengthTo 0x5d1e70's own sum
+  // the "nearly stopped" test sums y, z, x (0x6c27a8..0x6c27db)
+  if (!turned && kStopSq > (m.vel.y * m.vel.y + m.vel.z * m.vel.z) + m.vel.x * m.vel.x) {
     m.vel = {};
     m.prevPos = u->position;
     return false;
   }
-  float brake = (b.maxBrake > 0.0f ? b.maxBrake : b.maxAccel) * m.accMult * 0.01f;
+  float brake = (b.maxBrake > 0.0f ? b.maxBrake : b.maxAccel) * (m.accMult * 0.01f);  // (0x6c2845, then 0x6c2866)
   float bx = m.vel.x, by = m.vel.y, bz = m.vel.z;
   if (v2 > brake * brake) {
     float k = brake / std::sqrt(v2);
@@ -1945,7 +1947,7 @@ void MotionTick(Sim& sim, Unit* u) {
       const Quat q0 = u->orientation;
       const float bx0 = m.bx, bz0 = m.bz, fx0 = m.fx, fz0 = m.fz;
       const bool turned = ArrivalTurn(sim, u);
-      common = turned || (m.vel.x * m.vel.x + m.vel.y * m.vel.y) + m.vel.z * m.vel.z >= 1e-6f;
+      common = turned || !(kStopSq > (m.vel.y * m.vel.y + m.vel.z * m.vel.z) + m.vel.x * m.vel.x);  // (0x6c27a8..)
       Coast(u, turned);
       u->position = start;
       u->orientation = q0;
@@ -2021,7 +2023,7 @@ void MotionTick(Sim& sim, Unit* u) {
       // passing tank turned after its target on the third beat of the push. The formation's forward vector is only
       // taken while the navigator is idle, which ArrivalTurn tests itself.)
       bool turned = ArrivalTurn(sim, u);  // (also while it coasts to a stop)
-      common = turned || (m.vel.x * m.vel.x + m.vel.y * m.vel.y) + m.vel.z * m.vel.z >= 1e-6f;
+      common = turned || !(kStopSq > (m.vel.y * m.vel.y + m.vel.z * m.vel.z) + m.vel.x * m.vel.x);  // (0x6c27a8..)
       moved = Coast(u, turned);
       if (turned) {
         m.needSnap = true;

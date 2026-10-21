@@ -1282,7 +1282,7 @@ bool TerrainBlocked(Sim& sim, Unit* u, Vec3 target, int arc) {
   Vec3 h;
   if (arc == 0) return TerrainSegmentHit(m, a, b, &d, &h);
   Vec3 step = Mul(Sub(b, a), 0.25f);
-  float sl = Len(step);
+  float sl = std::sqrt((step.z * step.z + step.y * step.y) + step.x * step.x);  // (0x5d6740..0x5d6758)
   const float prof[4] = {0.707f, 0.293f, -0.293f, -0.707f};
   float k = arc == 1 ? 0.5f : 2.0f;
   Vec3 cur = a;
@@ -1395,7 +1395,12 @@ Unit* FindBestEnemy(Sim& sim, UnitWeapon* w, const std::vector<Unit*>& list, flo
     }
     if (TerrainBlocked(sim, u, ep, w->bp->ballisticArc)) continue;
     if (CB(u).needUnpack && s != 0) continue;
-    float score = useAngle ? Dot(Norm(Sub(P, ep)), fwd) : d2;
+    // the angle score: the normalised copy 0x44f7e0, then its dot with the forward summed y, z, x (0x5d7e53..0x5d7e88)
+    float score = d2;
+    if (useAngle) {
+      const Vec3 nv = Norm(Sub(P, ep));
+      score = (nv.y * fwd.y + nv.z * fwd.z) + nv.x * fwd.x;
+    }
     if (s != 0 && !w->bp->autoInitiateAttackCommand) score = useAngle ? score + 4 : score * 4;
     bool seen = a >= 0 && a < 16 && ((fake ? fake->rflags[a] : e->recon[a]) & 0x10);
     int prio = 9999;
@@ -1440,7 +1445,8 @@ bool LeashOrInvisible(Sim& sim, Unit* u) {
   if (BitsZero(leash)) return false;  // (0x5d8b5d..0x5d8b6d: memcmp 0x4f0a50 with the zero vector)
   float dx = u->position.x - leash.x, dy = u->position.y - leash.y, dz = u->position.z - leash.z;
   float r = CB(u).guardReturnRadius;
-  return dx * dx + dy * dy + dz * dz > r * r;
+  // the distance itself, the squares summed z, y, x (0x5d8bad..0x5d8bc6), the root 0x452fc0, against the radius
+  return std::sqrt((dz * dz + dy * dy) + dx * dx) > r;
 }
 
 void RelinkSuspendedAttackThread(Unit* u);  // (below AttackData)
@@ -1886,7 +1892,7 @@ Vec3 LeadConstantSpeed(float c, Vec3 M, Vec3 T, Vec3 V) {
   float s = Len(V);
   if (s < 0.001f) return T;
   Vec3 D = Sub(M, T);
-  float d = Len(D);
+  float d = std::sqrt((D.y * D.y + D.z * D.z) + D.x * D.x);  // (0x63135b..0x63137b)
   if (d * d < 1e-4f) return T;
   Vec3 dHat = Mul(D, 1 / d), vHat = Mul(V, 1 / s);
   // (0x63145f..0x6314e4: the dot product summed z, x, then y; the polynomial in x squared)
@@ -3006,7 +3012,8 @@ int AttackStep(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
       if (!d.trackMobile) return 1;
       Vec3 tp = TargetPos(sim, target, false);
       Vec3 dv = Sub(d.lastPos, tp);
-      if (Len(dv) <= (CanFlyU(u) ? 2.0f : 10.0f)) return 1;
+      // the squares summed z, y, x; comiss / jbe (0x5f3b37..): a NaN distance counts as not moved
+      if (!(std::sqrt((dv.z * dv.z + dv.y * dv.y) + dv.x * dv.x) > (CanFlyU(u) ? 2.0f : 10.0f))) return 1;
       Entity* e = sim.FindEntity(target.entityId);
       if (!e || e->dead || e->destroyQueued) return 1;
       if (!StandableFor(sim, u, tp)) return 1;  // UnitWontFitAt
@@ -3897,7 +3904,7 @@ void BuilderArmsTick(Sim& sim, Unit* u, const Vec3& priorPos, const Quat& priorO
       u->poseBaseOri = curOri;
     }
     Vec3 d = Sub(aim, p);
-    float len = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+    float len = std::sqrt((d.z * d.z + d.x * d.x) + d.y * d.y);  // (0x636756..0x63677c)
     a->stepDir = len > 0 ? Mul(d, 1.0f / len) : Vec3{};
   }
 }
