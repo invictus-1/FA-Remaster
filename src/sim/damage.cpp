@@ -521,7 +521,9 @@ void BeamCheck(Sim& sim, lua_State* L, CollisionBeam* b) {
   b->position = P;
   b->orientation = q;
   Vec3 dir = Forward(q);
-  float h = Lr * std::sqrt(dir.x * dir.x + dir.z * dir.z);
+  // the horizontal reach: the distance from P to the rounded end point P + dir * L (0x6d6cc2..0x6d6d07)
+  const float ex = P.x - (dir.x * Lr + P.x), ez = P.z - (P.z + dir.z * Lr);
+  float h = std::sqrt(ex * ex + ez * ez);
   float s = h > 0.001f ? std::min(Lr / h, 5.0f) : 1.0f;
   Vec3 E = Add(P, Mul(dir, s * Lr));
   // Every entity with a collision shape that the segment crosses (0x7229c0 asks the collision grid, whatever

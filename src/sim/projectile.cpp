@@ -207,8 +207,11 @@ Projectile* Sim::CreateProjectile(lua_State* L, const BlueprintInfo& bp, Army* a
   p->orientation = q;
   // spin
   float sg1 = static_cast<float>(Gauss()), sg2 = static_cast<float>(Gauss()), sg3 = static_cast<float>(Gauss());
-  Vec3 sd = Norm({sg1, sg2, sg3});
-  p->angVel = Mul(sd, Uniform(*this, b.rotVel, b.rotVelRange) * kPi / 180);
+  // GetAngularVelocity 0x51c8c0: the axis by Normalize 0x452af0 (0x51c8e5), the rate in degrees times 0.017453292
+  // in one multiply (0x51c950), not times pi over 180
+  Vec3 sd{sg1, sg2, sg3};
+  vm::NormalizeExe(sd);
+  p->angVel = Mul(sd, Uniform(*this, b.rotVel, b.rotVelRange) * 0.017453292f);
   p->turnRate = Uniform(*this, b.turnRate, b.turnRateRange);
   p->maxSpeed = Uniform(*this, b.maxSpeed, b.maxSpeedRange);
   p->accel = Uniform(*this, b.accel, b.accelRange);
@@ -250,7 +253,14 @@ Projectile* Sim::CreateProjectile(lua_State* L, const BlueprintInfo& bp, Army* a
         if (Entity* te = TargetEntity(*this, target); te && te->kind == Entity::Kind::Unit)
           T = PredictAhead(*this, static_cast<Unit*>(te), ahead, true);
       Vec3 dd{T.x - p->launcher->position.x, 0, T.z - p->launcher->position.z};
-      v = Mul(Norm(dd), Len(v));
+      // SetLength 0x5b1c90 of dd to |v| (0x69b71c..0x69b76a: one factor |v| / |dd|), then v += (dd - v) per part
+      // (0x69b76f..0x69b7c8), not quite dd itself
+      const float L = std::sqrt((v.x * v.x + v.y * v.y) + v.z * v.z);
+      if (const float l2 = (dd.x * dd.x + dd.y * dd.y) + dd.z * dd.z; l2 > 0.0f) {
+        const float k = L / std::sqrt(l2);
+        dd = {dd.x * k, k * dd.y, k * dd.z};
+      }
+      v = {v.x + (dd.x - v.x), (dd.y - v.y) + v.y, (dd.z - v.z) + v.z};
     }
     if (b.rotVelRange > 0) {
       v.x += static_cast<float>(FRand(-b.rotVelRange, b.rotVelRange));
@@ -749,9 +759,12 @@ void MotionTick(Sim& sim, Projectile* p) {
     if (p->destroyQueued) return;
     v = Add(v, Mul(Forward(q), p->accel * 0.1f));
   }
-  if (p->maxSpeed != 0) {
-    float l = Len(v);
-    if (l > p->maxSpeed) v = Mul(v, p->maxSpeed / l);
+  if (p->maxSpeed != 0) {  // LimitLengthTo 0x5d1e70 (0x69c183): scaled unless L^2 >= |v|^2 (a NaN scales too)
+    const float l2 = (v.x * v.x + v.y * v.y) + v.z * v.z;
+    if (!(p->maxSpeed * p->maxSpeed >= l2)) {
+      const float k = p->maxSpeed / std::sqrt(l2);
+      v = {v.x * k, v.y * k, k * v.z};
+    }
   }
   if (p->stayUpright) {  // 0x69c1b7: the look rotation 0x50b480 of the forward
     const Vec3 f = Forward(q);
@@ -1035,7 +1048,9 @@ int l_weapon_CreateProjectile(lua_State* L) {
     float mv = w->bp->muzzleVelocity + (w->bp->muzzleVelocityRandom != 0 ? Gauss(sim) * w->bp->muzzleVelocityRandom : 0);
     if (!IsNaN(tp) && dist < w->bp->muzzleVelocityReduceDistance)
       mv *= std::sqrt(dist / w->bp->muzzleVelocityReduceDistance);
-    p->velocity = Mul(Norm(p->velocity), mv);
+    Vec3 v = p->velocity;  // Normalize 0x452af0 (0x6d6912), then times the muzzle velocity
+    vm::NormalizeExe(v);
+    p->velocity = {v.x * mv, v.y * mv, mv * v.z};
   }
   if (w->bp->projectileLifetime > 0)
     p->expireTick = sim.tick() + static_cast<uint32_t>(std::nearbyint(w->bp->projectileLifetime * 10));
@@ -1247,7 +1262,10 @@ int l_SetVelocity(lua_State* L) {
   Projectile* p = P(L);
   int n = lua_gettop(L);
   if (n == 2) {
-    p->velocity = Mul(Norm(p->velocity), static_cast<float>(luaL_checknumber(L, 2)));
+    Vec3 v = p->velocity;  // Normalize 0x452af0 (0x6a2bc7), then times the speed
+    vm::NormalizeExe(v);
+    const float s = static_cast<float>(luaL_checknumber(L, 2));
+    p->velocity = {v.x * s, v.y * s, s * v.z};
   } else if (n == 4) {
     p->velocity = {static_cast<float>(luaL_checknumber(L, 2)), static_cast<float>(luaL_checknumber(L, 3)),
                    static_cast<float>(luaL_checknumber(L, 4))};
@@ -1271,7 +1289,12 @@ int l_SetVelocityRandomUpVector(lua_State* L) {
   float vz = sim.U01();
   Vec3 v{vx, vy, vz};
   const ProjBp& b = GetProjBp(sim, L, *p->blueprint);
-  p->velocity = b.maxSpeed > 0 ? Mul(Norm(v), b.maxSpeed) : Vec3{};
+  // SetLength 0x5b1c90 to MaxSpeed (0x6a3ead): one factor, no test on MaxSpeed
+  if (const float l2 = (v.x * v.x + v.y * v.y) + v.z * v.z; l2 > 0.0f) {
+    const float k = b.maxSpeed / std::sqrt(l2);
+    v = {v.x * k, k * v.y, k * v.z};
+  }
+  p->velocity = v;
   return 0;
 }
 int l_StayUnderwater(lua_State* L) {
