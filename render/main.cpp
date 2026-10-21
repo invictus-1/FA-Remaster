@@ -269,7 +269,9 @@
 // --frame-generation  FSR 3 frame generation (World::frameGeneration; needs --msaa 1 or --fsr3): a picture made
 //           between each two frames, shown between them (twice the frames shown); --capture-between: what
 //           --screenshot reads is the picture made between (gfx.h, Device::captureBetween), where there is one
-// --water-detail  wet shorelines and stronger caustics (World::waterDetail; modern look)
+// --water-detail  wet shorelines and stronger caustics (World::waterDetail; modern look); [shore] the sun's glint on the
+//           water softened by how much water a pixel covers (a calm sheen from far up), and with --surf the wet beach
+//           following the surf (wider and darker on exposed beaches, narrow in calm bays, a film after each wave)
 // --winter-water  winter water (winter_water.h, World::winterWater; modern look, a time of day): while snow lies the
 //           water goes over to a cold palette, slush and thin ice gather at the shores, no snow lies under the water
 //           (with --weather snow, or --snow-lying n to see it at that much snow, a thaw by smaller n)
@@ -286,7 +288,8 @@
 //           water times n (1); --surf-spray n: the spray times n (1); --surf-break n: the depth a wave breaks at, as a
 //           share of its height (2); --surf-test <unit>=<n>[,...]: that many ships of each driven round loops at their
 //           top speed over deep water near where the camera looks (within --surf-test-radius r, 60), with or without
-//           --surf; --surf-view n: in place of the water 1 the shore field, 2 the waves (Surf::view);
+//           --surf; --surf-view n: in place of the water 1 the shore field, 2 the waves, [shore] 3 (with
+//           --water-detail) over the beach the wetness the surf lays (red the film a wave left, green how wet) (Surf::view);
 //           MOHO64_DEBUG_SURF=1 (2: and the spray's counts every second), MOHO64_DEBUG_SURF_FIELD=<file.ppm>
 // --stream-water  [stream] streams as real water (stream_water.h, World::streamWater; modern look): a map's stream props
 //           (the visuals track's ribbons) drawn as water: deep and dark in the middle, the bed showing at the edges, a

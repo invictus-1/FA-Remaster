@@ -22,8 +22,9 @@
 //            foam where it meets what stands in it (rocks, units: the scene's depth against the water's, a ring of
 //            looks round each place) and streaks downstream of them
 //   light    the sky mirrored by the angle of view (and what the picture shows that way), the sun's glint on the
-//            ripples, the modern light through the sun's and the clouds' shadows, the lamps; the bright net of light
-//            on a shallow bed; in rain, rings where the drops fall and a roughened surface
+//            ripples ([shore] widened and dimmed by the ripples a pixel takes in, water_glint.h), the modern light
+//            through the sun's and the clouds' shadows, the lamps; the bright net of light on a shallow bed; in rain,
+//            rings where the drops fall and a roughened surface
 //   white    the white water ribbon: drawn by this pass too (in place of its alpha-tested, swaying model): foam carried
 //            downstream fast, its streaks from the ribbon's own texture, broken along and across, its sides ragged,
 //            lit as the stream is; drawn after the sea (World::Render), so that it can lie on the sea where the
@@ -38,7 +39,10 @@
 //   mouth    where a stream ends just above the sea (the remastered Seton's ends at the top of the beach, a step over
 //            the water: Chris, 2026-10-19), its water is carried on (StreamWater::Add, each prop as it is placed) down
 //            the ground the way it ran, spreading and thinning, white where it pours, until it is under the sea; and a
-//            fan of foam spreads from there over the sea's surface and thins out
+//            fan of foam spreads from there over the sea's surface and thins out. [shore] (2026-10-21: its white water
+//            showed hard parallel streaks from mid distance, and its foam dotted rows along the lip) Over its last units
+//            and the lip, the foam of both ribbons is froth churned up by the drop: clumps of three sizes laid in the
+//            world's own frame, not the ribbon's, carried downstream, thicker toward the lip, broken, no bands
 // What the props are (StreamWater::Add): a level whose blueprint ShaderName is "StreamWater" (the white water's
 // "StreamFoam") (models.cpp; drawn as "LabPBR" and "LabPBRAlpha" otherwise). Off: they are drawn as before.
 #pragma once
@@ -114,6 +118,9 @@ class StreamWater {
     // cascade's pools between its drops count as the cascade), -1 on a mouth's plume of foam on the sea, -2 on an outlet's
     // box (whose fields then say its place: Outlet)
     float more[4];
+    // [shore] x: how near the lip of a mouth (CarryOn): 1 at the water ribbon's end and on what is carried on past it into
+    // the sea, 0 from kLipReach upstream of it and on every stream that does not run into the sea; y, z, w unused
+    float lip[4];
   };
   // A model's ribbon on the processor (RibbonOf), and where its downstream end is (the last cross-section's banks).
   struct Ribbon {

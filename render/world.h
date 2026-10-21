@@ -417,8 +417,11 @@ class World {
   // small crowns that rise and fade. Modern look; off by default.
   bool rainSplashes = false;
   // Wet shorelines and caustics (terrain.cpp, water.cpp): the ground just above the water darker and shinier where
-  // the waves have wetted it, and the bright net of light on a shallow bed sharper and stronger. Modern look, a map
-  // with water; off by default.
+  // the waves have wetted it, and the bright net of light on a shallow bed sharper and stronger. [shore] And the sun's
+  // glint on the water widened and dimmed by how much water a pixel covers (water_glint.h: from far up a calm sheen, not
+  // single pixels twinkling); with the surf on, the wet beach follows the surf (surf.h, SurfWetAt; water.cpp, WetBeach:
+  // wider and darker where it runs up an exposed beach, narrow in a calm bay, a film glistening after each wave), the
+  // ground's own band by height narrowed meanwhile. Modern look, a map with water; off by default.
   bool waterDetail = false;
   // Ripples on the water (ripples.h; water.AddRipple): shells landing in the water, ships, hover units and units
   // wading leave rings and wakes that spread, cross each other and die out. Modern look, a map with water; off by

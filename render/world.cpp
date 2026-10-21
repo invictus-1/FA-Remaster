@@ -1099,7 +1099,10 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     const float gust = 1 + 2 * rough;
     const float wind[2] = {dust.wind[0] * gust, dust.wind[1] * gust};
     water.surf.Begin(time, surfOn, sidePicture, rough, wind, camera.Eye());
-    if (surfOn) water.PrepareSurf(waterRipples, winterWater);
+    if (surfOn) water.PrepareSurf(waterRipples, winterWater, waterDetail);  // ([shore] waterDetail: the wet beach's too)
+    // [shore] (wet shorelines) while the surf lays the beach's wetness (surf.h, SurfWetAt; water.cpp, WetBeach), the ground's
+    // own wet band by height is narrowed to what a calm bay keeps (0.3 over the water), as much as the surf is shown
+    if (c.shore[0] > 0.5) c.shore[2] -= (c.shore[2] - 0.3f) * water.surf.WetShare();
   }
   // [stream] streams as water (stream_water.h): their props left out of the models' drawing while the streams' pass draws them
   streamNow_ = streamWater && look == Look::Modern && haveMap_ && !sidePicture && streams.Any() && streams.Prepare();

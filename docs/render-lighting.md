@@ -1645,7 +1645,8 @@ inside an option the game's settings turn on (Atmosphere: `cloudZoom`, `lightSha
   wildlife.h/.cpp, main.cpp (the look lists).
 - Open: the sun's glitter on the sea (the water's glint, a power of 500) twinkles as single bright pixels from the
   strategic view where the sun's reflection lies, now on more of the far sea that the white bars hid (the water's own,
-  not touched: a glint softened by the pixel's size would be the fix); a lifted layer's clouds look larger from the
+  not touched: a glint softened by the pixel's size would be the fix; [shore] done 2026-10-21, see "The water and shore
+  leftovers" below); a lifted layer's clouds look larger from the
   strategic view (nearer the eye); the shower columns of the horizon's weather still reach 150 (horizon.cpp); the far
   sea is greyer than the near one on very wide windows (the land far off's haze: `hazeHeight=300` clears both from
   above); Chris to judge.
@@ -1801,6 +1802,63 @@ What Chris saw, what made it, and what changed. Pictures in the helper's folder 
 Cost: `markRelief` +0.01 to 0.03 ms at 1440p (the options table); the burns' changes cost nothing (fewer burns are
 drawn). Off: pictures identical (regression 0 px on both backends, snow and rain too; SETONS_R by night and in snow
 with no options 0 px).
+
+## The water and shore leftovers: the stream's mouth, the sea's glint from far up, the wet beach (2026-10-21; a helper's, for review)
+
+Three look fixes before Chris's test run, each inside an option the game has on; off, each leaves the picture as it was.
+- **The stream's mouth** (`World::streamWater`; stream_water.h/.cpp, `[shore]`). Where the stream pours over the beach's
+  lip into the sea, its white water showed hard parallel streaks from mid distance, and its foam dotted rows along the lip.
+  Found: the white water ribbon's streak picture is laid by its u, across a 2-unit mouth run, and the run's cross-sections
+  fan out, so the streaks lay as parallel bands kinked at every section (and along the quads' diagonals); the dotted rows
+  were the water ribbon's own foam lace, drawn out across where the stream runs fast and cut sharp (not the glint). Now
+  each vertex carries how near the lip it is (`Vertex::lip`, TEXCOORD4: 1 at the water ribbon's end and on what
+  `CarryOn` carries on past it, falling to 0 over 2.5 units upstream; 0 on every stream that does not run into the sea),
+  and over that stretch both ribbons' foam is froth churned up by the drop (`FrothAt`, `MouthFroth`): clumps of three
+  sizes laid in the world's own frame (no bands, no kinks), the middle one folded into a net of ridges (lace, not round
+  blots), carried downstream by the flow's two layers with their contrast kept even, changing slowly. The water's foam
+  gathers toward the lip (`much` + 0.45 lip²) and keeps its clumps from mid distance (its far-field mean later); the white
+  water's wide runs (half width over 0.35: the mouth's; the cascade's narrow runs keep their streaks, their code path
+  unchanged) cover 0.22 of the run upstream to 0.72 at the lip, thinning out over the last hand's breadth there only, and
+  from the game's height lie as the white they would cover, mottled, brightest at the lip. The streams' glint softened as
+  the sea's (below, from a pixel of 0.008 to 0.15 world units).
+- **The sea's glint from far up** (`World::waterDetail`; water_glint.h, water.cpp, `[shore]`). The modern water's glint is a
+  lobe of a power of 500, right for one facet; from the strategic view a pixel takes in many waves, so the few pixels whose
+  one normal mirrors the sun flashed on and off. `SoftGlint` widens the lobe by the slopes a pixel takes in
+  (n' = 1 / (1/500 + 4 s), s = 0.006 · smoothstep(0.08, 2.0, the water a pixel covers)) and scales it by (n' + 1)/501, so the
+  light it throws on the whole stays the same; and there the swell's long trains count among those slopes (their even
+  tilt under a widened lobe lay as ruled stripes of light). Below 0.08 world units a pixel (the game's usual height and
+  closer) the glint is computed exactly as before. Strategic view toward the sun (512,512,1400,65,180, 3 pm, 1600x900, 15
+  frames 1/15 s apart, the sea's crop): mean brightness 76.3 -> 77.3, mean frame-to-frame change 0.43 -> 0.07, the
+  brightest 0.1 % 201 -> 150: a calm sheen where the sun's mirror image lies.
+- **The wet beach** (`World::waterDetail` with `World::surf`; surf.h `SurfWetAt`, water.cpp `WetBeach`, world.cpp, `[shore]`).
+  The wet band was by height alone (0.8 over the water) all along the coast. The ground's pass has no free texture slot, so
+  the water's own pass lays it (it has the shore field, the stretches' timing and the run-up already): the surf's water
+  pipelines get a variant with the wet beach (`SURF_WET`, made while waterDetail is on; without it their source is as
+  before), whose sheet lies 1.5 higher again; ground above anything the water reaches takes a short path to `WetBeach`, as
+  does ground the water has just run back from. It darkens what the ground's pass drew: soaked up to where the bigger waves
+  of a set run (the run-up's top × 1.2), damp above that over a band (0.3 + 1.2 × exposure) × (0.85 + 0.3 × roughness) high,
+  so narrow in a calm bay and wide on an exposed beach, wider in a storm; the soaked sand's albedo × 0.6 in a bay to × 0.48 on
+  an exposed beach, the darker of it and the ground's own band; and the film each wave leaves on the sand it ran over (when
+  the run-up fell below the place, from SurfAt's own run-up curve, this wave's or the last's; under the water's level, bared
+  by a trough), draining to 1/e in a quarter of a period, with the sky in it and a GGX sheen of the sun (roughness 0.3 to
+  0.12). The damp sand above it is matt (it has drunk its water); the ground's own band by height (terrain.cpp, untouched)
+  is narrowed meanwhile from 0.8 to 0.3 (the view's `shore.z`, by `Surf::WetShare`: 0 until the surf's field is there, so
+  it fades in with it) and lights its own sheen. Only on the map's ground (a sample lying more than about 0.12 over the
+  field's ground, a unit, a tree, a rock, keeps its colour); a quarter less in rain, none under lying snow. `--surf-view 3` shows it
+  (red the film, green how wet).
+- **Off** (pixel-identical): regress3 against bisect/b197ac4, all eight lines 0 px; tools/regress_weather.sh against this
+  worktree's own base build (0c81623), all four 0 px; on SETONS_R, base against ours with none of the water options, and
+  with the surf and ripples on but waterDetail and the streams off (beach, inlet, strategic view, storm), 0 px in fresh
+  pairs (single runs of either exe differ from each other by up to 61 scattered pixels with the surf on: the surf's field
+  arrives on its thread at a frame that varies with the PC's load; pre-existing).
+- **Costs** (1440p, RTX 4090, the game's water options on, the lowest frame of the better of two runs, base -> ours): the
+  water 0.223 -> 0.233 ms at the mouth, 0.250 -> 0.255 over a beach from the game's height, 0.218 -> 0.233 close, 0.282
+  -> 0.288 in a storm, 0.287 -> 0.328 from the strategic view (the widened glint over all the far sea); the middle frames
+  0.02 to 0.09 ms more (a busy PC); the stream water as before (0.10 at the mouth) and its white water 0.016 -> 0.018;
+  the ground unchanged.
+- Open: the damp band is matt now where the old band by height was glossy all its width (only the ground's narrow band
+  and the film shine): Chris to judge; from the game's height the mouth's white water is a soft bright spill, not
+  clumps (they are finer than the pixels there).
 
 ## The options
 

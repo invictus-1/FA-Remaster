@@ -8,6 +8,7 @@
 
 #include "lighting.h"
 #include "ray_scene.h"
+#include "water_glint.h"
 
 namespace render {
 namespace {
@@ -47,6 +48,7 @@ struct VIn {
   float4 shape : TEXCOORD2;   // u; how far downstream; the half width; the drop per unit downstream
   float4 more : TEXCOORD3;    // [stream mouth] from its run's start, to its run's end; how far run on toward the sea (0..1); how steep its
                               // stretch is (the drop per unit over three units either side), -1 on a plume
+  float4 lip : TEXCOORD4;     // [shore] x how near a mouth's lip (1 at the water's end and past it, 0 from kLipReach upstream)
 };
 struct VOut {
   float4 position : SV_Position;
@@ -55,6 +57,7 @@ struct VOut {
   float3 along : TEXCOORD2;
   float4 shape : TEXCOORD3;  // x across from the middle (world units, toward u = 1); y how far downstream; z the half width; w the drop per unit
   float4 more : TEXCOORD4;   // [stream mouth] (as VIn's, the distances in world units)
+  float4 lip : TEXCOORD5;    // [shore] (as VIn's)
 };
 
 float3 Turned(float3 d) { return float3(dot(row0.xyz, d), dot(row1.xyz, d), dot(row2.xyz, d)); }
@@ -68,6 +71,7 @@ VOut VS(VIn v) {
     o.along = v.along;
     o.shape = v.shape;
     o.more = v.more;
+    o.lip = v.lip;
     return o;
   }
   float3 across = Turned(v.across), along = Turned(v.along);
@@ -86,6 +90,7 @@ VOut VS(VIn v) {
   o.along = along;
   o.shape = float4(side * (halfW + reach), v.shape.y * scale, halfW, v.shape.w);
   o.more = float4(v.more.xy * scale, v.more.zw);
+  o.lip = v.lip;
   return o;
 }
 
@@ -148,6 +153,31 @@ float StreamLace(float2 q, float grain) {
   if (shown.x > 0) n = CloudNoise(float3(q * float2(3.4, 1.4), t));
   if (shown.y > 0) m = CloudNoise(float3(float2(q.x * 0.8 - q.y * 0.6, q.x * 0.6 + q.y * 0.8) * float2(8.5, 3.6) + 17.0, t * 1.6));
   return lerp(0.5, n, shown.x) * 0.62 + lerp(0.5, m, shown.y) * 0.38;
+}
+
+// [shore] Froth where a stream pours over the lip of the beach into the sea (its mouth): clumps of foam of three sizes,
+// each turned against the last, laid in the world's own frame. (Laid by the ribbon's across and downstream, as the lace
+// and the white water's streaks are, they bend at every cross-section where a mouth fans out: kinked parallel bands; and
+// the lace drawn out across and cut sharp lay as dotted rows along the lip.) 0..1, about a half. p: world x, z; a size finer
+// than about two pixels is left at its mean.
+float FrothAt(float2 p, float grain, float t) {
+  float3 shown = saturate(1.5 - grain * float3(3.0, 7.0, 16.0) * 2);
+  float a = 0.5, b = 0.5, c = 0.5;
+  if (shown.x > 0) a = CloudNoise(float3(p * 3.0, t));
+  // (the finer two swirled a little by the coarse, the middle one folded into a net of ridges: lace, not round blots)
+  float2 r = p + (a - 0.5) * 0.25;
+  // (CloudNoise's |2n - 1| has a mean of 0.30: the ridges' mean a half again)
+  if (shown.y > 0) b = 0.894 - 1.3 * abs(CloudNoise(float3(float2(r.x * 0.8 - r.y * 0.6, r.x * 0.6 + r.y * 0.8) * 7.0 + 13.0, t * 1.5)) * 2 - 1);
+  if (shown.z > 0) c = CloudNoise(float3(float2(r.x * 0.28 + r.y * 0.96, -r.x * 0.96 + r.y * 0.28) * 16.0 + 29.0, t * 2.2));
+  return lerp(0.5, a, shown.x) * 0.45 + lerp(0.5, b, shown.y) * 0.33 + lerp(0.5, c, shown.z) * 0.22;
+}
+// The froth carried downstream (`along`) by the flow's two layers (FlowLayers' offsets and the first's share), as even in
+// its contrast whichever layer shows most (two layers half and half would be a greyer, softer froth).
+float MouthFroth(float3 world, float3 along, float2 offsets, float w, float grain) {
+  float2 flow = normalize(along.xz + 1e-6);
+  float t = time * 0.35;  // (its clumps change slowly as they go: carried, not boiling)
+  float f = FrothAt(world.xz - flow * offsets.x, grain, t) * w + FrothAt(world.xz - flow * offsets.y + float2(5.3, 2.9), grain, t + 3.1) * (1 - w);
+  return 0.5 + (f - 0.5) / max(sqrt(w * w + (1 - w) * (1 - w)), 0.5);
 }
 
 // The ripples' tilt (across, downstream) from the visuals track's ripple picture: its green the normal's lean down v, its
@@ -326,6 +356,10 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   float fast = saturate(slope * 3 + saturate((i.more.w - 0.15) * 2.5));
   float2 froth = float2(1 + 1.6 * fast, 1 + 0.2 * fast);
   float lace = StreamLace((q - float2(0, offsets.x)) * froth, grain) * w + StreamLace((q - float2(0, offsets.y)) * froth + float2(3.1, 7.7), grain) * (1 - w);
+  // [shore] (over a mouth's last units and its lip: froth churned up by the drop, MouthFroth, in place of the lace drawn out
+  // across, which lay in dotted rows along the lip from mid distance; it gathers toward the lip, where the water tumbles)
+  float lip = i.lip.x;
+  [branch] if (lip > 0) lace = lerp(lace, MouthFroth(i.world, alongDir, offsets, w, grain), saturate(lip * 2));
   float rough = saturate((slope - 0.05) * 2.5);
   // [stream mouth] (and where it runs into the sea: the surf's line, the sea's swell washing over it)
   float surf = seaInfo.x > -1e8 ? saturate(1 - (i.world.y - seaInfo.x) / 0.35) * saturate(i.more.z * 4) : 0;
@@ -335,7 +369,7 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   float spill = (1 - head) * (1 - head);
   float eases = saturate((i.more.w - slope) * 1.5);
   // (never all of it: white water is white in tufts and streaks, the water showing between)
-  float much = min(0.05 + rough * 0.45 + steep * 0.4 + spill * 0.7 + eases * 0.35 + wake * 0.3 + meet * 0.35 + surf * 0.7, 0.65);
+  float much = min(0.05 + rough * 0.45 + steep * 0.4 + spill * 0.7 + eases * 0.35 + wake * 0.3 + meet * 0.35 + surf * 0.7 + lip * lip * 0.45, 0.65);
   // (the lace lies about a half, a tenth either side: `much` 0.7 covers about half of it, 0.05 leaves specks)
   float cut = 0.75 - much * 0.35;
   float foam = smoothstep(cut - 0.05, cut + 0.05, lace) * (0.45 + 0.55 * much);
@@ -343,7 +377,9 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   // would cover near by, so that a cascade still reads as white water from above, not as dashes)
   // (mottled, so that from above it is a fall of white water and not paint)
   float mottled = 0.6 + 0.8 * (CloudNoise(float3(i.world.xz * 1.7, time * 0.6)) - 0.5) + 0.4 * (CloudNoise(float3(i.world.xz * 4.1 + 9.0, time * 1.1)) - 0.5);
-  foam = lerp(foam, saturate(0.5 + (0.5 - cut) / 0.2) * (0.45 + 0.55 * much) * mottled, saturate((grain - 0.015) / 0.05));
+  // ([shore] at a mouth only from farther: the froth's clumps still show from mid distance)
+  foam = lerp(foam, saturate(0.5 + (0.5 - cut) / 0.2) * (0.45 + 0.55 * much) * mottled,
+              saturate((grain - 0.015) / 0.05) * (1 - 0.75 * lip * saturate(1.5 - grain * 15)));
   color = lerp(color, (light + lamps) * 0.85, foam * 0.92);
   color += lamps * 0.35;
   color += light * (rings * 0.04);
@@ -388,8 +424,11 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   color = lerp(color, mirror, fresnel * (1 - foam));
   // [sunlight] (drifting cloud shadows) darker in a cloud's shadow, its mirror of the sky too, as the sea
   [branch] if (cloudDrift.x > 0.5) color *= 1 - cloudDrift.w * saturate((1 - CloudShadow(i.world)) / max(cloudDrift.y, 1e-3));
-  // the sun's (or the moon's) glint on the ripples
-  color += sunLight * (pow(saturate(dot(R, sunDirection)), 500) * 0.9 * shadow * (1 - foam));
+  // the sun's (or the moon's) glint on the ripples ([shore] widened and dimmed by the ripples a pixel takes in: none on a
+  // pixel of 0.008 world units, all on one of 0.15, the stream seen from the game's height: water_glint.h)
+  float glint = pow(saturate(dot(R, sunDirection)), 500);
+  [branch] if (grain > 0.008) glint = SoftGlint(dot(R, sunDirection), 500, grain, 0.008, 0.15, 0.006);  // (closer in exactly as before)
+  color += sunLight * (glint * 0.9 * shadow * (1 - foam));
   color = ThroughAirTo(color, i.world);
   [branch] if (streamLook.w > 0.5) {  // (a view for checking: its depth; or its speed, white water and what it meets)
     if (streamLook.w < 1.5) return float4(saturate(bedDepth * 2.5).xxx, 1);
@@ -477,7 +516,10 @@ float4 WhitePS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   float run = i.more.x + i.more.y;
   // (a cascade's runs fade over a fifth of each, 0.6 at most: fading over a third, each run read as a separate spot)
   float reach = max(plume ? run * 0.33 : min(0.6, run * 0.2), 0.05);
-  float ends = (plume ? 1 : saturate(i.more.x / reach)) * saturate(i.more.y / reach);  // (a plume is thick where it comes in)
+  // ([shore] a wide run, the mouth's, white right to the lip it pours over: its downstream end thins out over the last hand's
+  // breadth alone)
+  float wideRun = plume ? 0 : saturate((halfW - 0.35) * 2.5);
+  float ends = (plume ? 1 : saturate(i.more.x / reach)) * saturate(i.more.y / lerp(reach, 0.12, wideRun));  // (a plume is thick where it comes in)
   float a;
   if (plume) {
     // spreading over the sea from where the stream goes under it, thinning out as it goes (a lace, no streaks): thick
@@ -502,6 +544,21 @@ float4 WhitePS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
     // (from afar its streaks are at their mean: laid as the white they would cover, one fall of white water from above)
     float mottled = 0.55 + 0.9 * (CloudNoise(float3(i.world.xz * 2.3, time * 0.8)) - 0.5);
     a = lerp(a, 0.65 * sides * (0.55 + 0.45 * saturate(slope * 3)) * mottled, saturate((grain - 0.015) / 0.05));
+    // [shore] a wide run (the mouth's, where the stream pours over the lip of the beach into the sea): froth churned up by
+    // the drop (MouthFroth) in place of the streaks (on a run 2 units wide even short, broken streaks lay as hard parallel
+    // bands from mid distance, kinked where its cross-sections fan out): clumps carried downstream with holes between
+    // them, thicker toward the lip, where the water tumbles over it
+    [branch] if (wide > 0) {
+      float froth = MouthFroth(i.world, i.along, offsets, w, grain);
+      float toLip = saturate(1 - i.more.y / 1.6);
+      float cover = 0.22 + 0.5 * toLip * toLip;  // (the share of it that is white: the froth's spread is about 0.12)
+      float cutF = 0.5 + 0.33 * (0.5 - cover);
+      float white = smoothstep(cutF - 0.04, cutF + 0.06, froth) * (0.55 + 0.45 * smoothstep(cutF + 0.02, cutF + 0.16, froth));
+      // (from farther than its lace shows: the white it would cover, mottled, brightest at the lip; a spill of white water
+      // from the game's height, not a grey haze or a few round puffs)
+      white = lerp(white, cover * (0.6 + 0.8 * (mottled - 0.55)), saturate((grain - 0.04) / 0.1));
+      a = lerp(a, white * sides * (0.75 + 0.25 * saturate(slope * 3)), wide);
+    }
   }
   a *= ends * ends * (3 - 2 * ends);
   if (a <= 0.002) {
@@ -707,9 +764,14 @@ bool StreamWater::CarryOn(const Ribbon& ribbon, const Mat4& world, std::vector<V
   if (carried <= 0) return false;
   const Mat4 back = Inverse(world);
   const float halfEnd = ribbon.endHalf * scale;
-  // the ribbon's own last run now ends further on (its places within a run's length of the end)
+  // the ribbon's own last run now ends further on (its places within a run's length of the end); [shore] and over its last
+  // kLipReach the water nears the lip it pours over (the shader's froth, MouthFroth)
+  constexpr float kLipReach = 2.5f;
   for (Vertex& v : *vertices)
-    if (v.shape[1] >= ribbon.endS - (v.more[0] + v.more[1]) - 1e-3f) v.more[1] += carried / scale;
+    if (v.shape[1] >= ribbon.endS - (v.more[0] + v.more[1]) - 1e-3f) {
+      v.lip[0] = std::clamp(1 - v.more[1] * scale / kLipReach, 0.0f, 1.0f);
+      v.more[1] += carried / scale;
+    }
   uint32_t a0 = ribbon.endBank[0], a1 = ribbon.endBank[1];
   float last = groundHeight(middle.x, middle.z);
   for (float t = kStep; t <= carried + 1e-3f; t += kStep) {
@@ -731,6 +793,7 @@ bool StreamWater::CarryOn(const Ribbon& ribbon, const Mat4& world, std::vector<V
       v.more[1] = (carried - t) / scale;
       v.more[2] = t / carried;
       v.more[3] = e0.more[3];
+      v.lip[0] = 1;  // [shore] (past the lip)
       vertices->push_back(v);
     }
     last = g;
@@ -938,7 +1001,8 @@ const StreamWater::Ribbon* StreamWater::RibbonOf(const Model* model) {
 bool StreamWater::Prepare() {
   if (tried_) return water_ && outlet_ && white_;
   tried_ = true;
-  const std::string source = "#define SAMPLES " + std::to_string(gSceneSamples) + "\n" + kViewShaderBlock + RayShaders() + kLightingShaderBlock + kShader;
+  const std::string source =
+      "#define SAMPLES " + std::to_string(gSceneSamples) + "\n" + kViewShaderBlock + RayShaders() + kLightingShaderBlock + kGlintShaderBlock + kShader;
   gfx::PipelineDesc pd;
   pd.name = "stream water";
   pd.vertexSource = pd.pixelSource = source;
@@ -946,7 +1010,8 @@ bool StreamWater::Prepare() {
               {"TEXCOORD", 0, gfx::AttrType::Float3, offsetof(Vertex, across)},
               {"TEXCOORD", 1, gfx::AttrType::Float3, offsetof(Vertex, along)},
               {"TEXCOORD", 2, gfx::AttrType::Float4, offsetof(Vertex, shape)},
-              {"TEXCOORD", 3, gfx::AttrType::Float4, offsetof(Vertex, more)}};
+              {"TEXCOORD", 3, gfx::AttrType::Float4, offsetof(Vertex, more)},
+              {"TEXCOORD", 4, gfx::AttrType::Float4, offsetof(Vertex, lip)}};  // [shore]
   pd.stride = sizeof(Vertex);
   pd.cull = gfx::Cull::Back;  // (the ribbons hold both faces: the one facing up is drawn)
   pd.depthTest = false;
