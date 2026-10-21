@@ -57,6 +57,7 @@ class ThreadScheduler {
     uint32_t waitSeq = 0;     // when it began to wait (Signal: the last to begin goes first)
     bool inWaiters = false;   // listed in waiters_
     int profSource = -1;      // MOHO64_PROFILE: the Lua timer's source for this thread (core/profile.h)
+    std::string profLabel;    // MOHO64_PROFILE_HITCH: its function's file:line, for the beat breakdown
   };
   lua_State* L_;
   std::list<Thread> threads_;

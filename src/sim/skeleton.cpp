@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "core/log.h"
+#include "core/profile.h"
 #include "core/vfs.h"
 #include "sim/vecmath.h"
 
@@ -114,6 +115,7 @@ const Skeleton* SkeletonCache::Get(const std::string& meshFile) {
   std::string key = Lower(meshFile);
   auto it = cache_.find(key);
   if (it != cache_.end()) return it->second.get();
+  prof::SectionTimer sec(prof::kSecSkeletonRead);  // (MOHO64_PROFILE_HITCH only)
   std::unique_ptr<Skeleton> sk;
   if (auto data = vfs_->ReadFile(meshFile)) sk = Skeleton::FromScm(*data);
   const Skeleton* p = sk.get();

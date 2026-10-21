@@ -216,15 +216,20 @@ int l_FlattenMapRect(lua_State* L) {
   int x = static_cast<int>(luaL_checknumber(L, 1)), z = static_cast<int>(luaL_checknumber(L, 2));
   int sx = static_cast<int>(luaL_checknumber(L, 3)), sz = static_cast<int>(luaL_checknumber(L, 4));
   float h = static_cast<float>(luaL_checknumber(L, 5));
+  prof::SectionTimer sec(prof::kSecFlatHeights);  // (MOHO64_PROFILE_HITCH only: the parts' times, core/profile.h)
   for (int j = z; j <= std::min(z + sz, m->height()); ++j)
     for (int i = x; i <= std::min(x + sx, m->width()); ++i) m->SetHeightAt(i, j, h);
+  sec.To(prof::kSecFlatDrawn);
   m->NoteHeightChange(x, z, x + sx, z + sz);  // (for the drawn ground: render request 25)
+  sec.To(prof::kSecFlatAir);
   AirTerrainChanged(m, x, z, x + sx, z + sz);
+  sec.To(prof::kSecFlatPaths);
   // (the path grids keep each origin's terrain caps; the original's tests read them from the map as it is, so a
   // flattened rect changes passability at once. Seen: MP3 1985, the skirt of army 2's first land factory, flattened
   // vertex by vertex at 58, made cell (67, 450) too steep for a hover engineer; the original's path to (72, 451)
   // went round it, ours through it.)
   sim.navigation().TerrainChanged(x, z, x + sx, z + sz);
+  sec.To(prof::kSecFlatUnits);
   // A unit WITH a motion (u+0x4b0) found by the box below only gets motion+0x90 = 1 (0x74b350..0x74b35a): its next
   // motion tick works out its contacts (MotionTick 0x6b9e21) and CalcMoveLand / CalcMoveHover snap it to the ground
   // (0x6c31b7 / 0x6c2e9f) although it stands still. Seen (Economy 1804): FAF's FlattenGradientMapRect flattens an
@@ -1538,7 +1543,18 @@ bool Sim::CallMethod(lua_State* L, ScriptObject* obj, const char* method, int na
     else if (dynamic_cast<const AiBrain*>(obj)) src = prof::kCallBrain;
     prof::NextSource(src);
   }
+  std::string hitchLabel;  // MOHO64_PROFILE_HITCH: the callback's name in the beat breakdown (core/profile.h)
+  const bool hitchNested = prof::Hitch() && prof::Depth() > 0;
+  const double hitchT0 = prof::Hitch() ? prof::NowMs() : 0;
+  if (prof::Hitch()) {
+    hitchLabel = method;
+    if (const Entity* e = dynamic_cast<const Entity*>(obj); e && e->blueprint) hitchLabel += " " + e->blueprint->id;
+    else if (const UnitWeapon* w = dynamic_cast<const UnitWeapon*>(obj); w && w->unit && w->unit->blueprint)
+      hitchLabel += " (a weapon of " + w->unit->blueprint->id + ")";
+    if (!hitchNested) prof::NextLabel("callback " + hitchLabel);
+  }
   bool ok = lua_pcall(L, nargs + 1, 0, base + 1) == 0;
+  if (hitchNested) prof::AddCall(hitchLabel, prof::NowMs() - hitchT0);
   if (!ok) LogScriptError(lua_isstring(L, -1) ? lua_tostring(L, -1) : "(error object is not a string)");
   lua_settop(L, base);
   return ok;
@@ -1581,6 +1597,8 @@ uint8_t StartingLayer(Sim& sim, const BlueprintInfo& bp, const TerrainMap* map, 
 
 Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 pos, Quat q, bool complete,
                       Unit* builder, bool keepY, uint8_t wantLayer, bool ownHeading) {
+  prof::SectionTimer secAll(prof::kSecCreateUnit);  // (MOHO64_PROFILE_HITCH only: the parts' times, core/profile.h)
+  prof::SectionTimer sec(prof::kSecCuHeading);
   lua_checkstack(L, 40);
   int top = lua_gettop(L);
   if (ownHeading) {
@@ -1603,22 +1621,30 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   u->kind = Entity::Kind::Unit;
   u->blueprint = &bp;
   u->army = army;
+  sec.To(prof::kSecCuSkeleton);
   AttachSkeleton(L, u);
+  sec.To(prof::kSecCuId);
   u->id = ReserveId(army, 0);  // EntityDB::DoReserveId: the lowest free serial of the army's unit pool
   u->position = pos;
   u->orientation = q;
   u->lastPosition = pos;
+  sec.To(prof::kSecCuShape);
   RevertCollisionShape(L, u);
+  sec.To(-1);
   u->fractionComplete = complete ? 1.0f : 0.0f;
   u->beingBuilt = !complete;
   if (!complete) u->unitStates.insert("BeingBuilt");
   u->builderId = EntityRef(builder);
   u->lastMaterializeTick = tick_;
+  sec.To(prof::kSecCuEconomy);
   UnitEconomyInit(L, u);
+  sec.To(prof::kSecCuMotion);
   u->motion.bp = &GetMotionBlueprint(L, bp, bps_);
+  sec.To(-1);
   u->motion.surfaceNext = true;
   if (getenv("MOHO64_DEBUG_CREATE"))
     Logf(LogLevel::Info, "create %u unit %u bp %s pos %.2f %.2f motion %d", tick_, u->id, bp.id.c_str(), u->position.x, u->position.z, u->motion.bp->motionType);  // CUnitMotion ctor: m+0x90 = 1, so the first MotionTick processes contacts (0x6b7c9a)
+  sec.To(prof::kSecCuPlace);
   const uint8_t startLayer = StartingLayer(*this, bp, map_.get(), pos, wantLayer);
   if (complete && !builder && !keepY) {
     // IUnit::CalcSpawnElevation 0x541540 (ids_repair_placement.md 3.2): the given y is ignored. Land / Seabed:
@@ -1651,14 +1677,19 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   // Seen: Skirmish 969, M28's IsEngineerAvailable finds a finished mex in GetUnitsInRect of engineer 0x11's pgen
   // site (676.99, 349.99; the mex 0x3 at 680.5 has a 2.5-wide skirt, x from 679.25: cell 169) and makes it
   // available: one Lua Random more (m28factory.lua:273), and at 979 the two engineers stop to build closer.
+  sec.To(prof::kSecCuGrid);
   GridUpdate(*this, u, true);
+  sec.To(-1);
   // the constructor gives both poses the unit's transform (0x6a5c74, 0x6a5c82)
   u->poseBasePos = u->prevPoseBasePos = u->position;
   u->poseBaseOri = u->prevPoseBaseOri = u->orientation;
   u->poseSet = true;
+  sec.To(prof::kSecCuAirTransport);
   if (u->motion.bp->motionType == kMotionAir) AirInit(*this, u);
   TransportCreate(*this, u);
+  sec.To(prof::kSecCuIntel);
   CreateUnitIntel(*this, L, u);
+  sec.To(prof::kSecCuFields);
   {
     float h = dmath::Atan2(2 * (q.w * q.y + q.x * q.z), 1 - 2 * (q.y * q.y + q.x * q.x));
     u->motion.fx = dmath::Sin(h);
@@ -1688,6 +1719,7 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   if (army) army->unitCost += u->capCost;
 
   // Script object: an instance of the blueprint's class (UnitFactory __call).
+  sec.To(prof::kSecCuScript);  // (to the end: the lists, the occupancy and the callbacks too)
   PushScriptClass(L, bp, "/lua/sim/unit.lua", "Unit");
   int cls = lua_gettop(L);
   lua_pushcfunction(L, ScriptTraceback);

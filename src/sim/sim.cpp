@@ -1062,6 +1062,7 @@ bool Sim::Start(const ReplayHeader& replay) {
   lua_State* L = state_->L();
   state_->SetHookDirs(hookDirs_);
   if (fixes) state_->SetExtraHooks(FixesHooks());
+  prof::InstallLuaHooks(L);  // (MOHO64_PROFILE_HITCH only: the collector's timer, and the debug hooks if asked)
   lua_pushlightuserdata(L, const_cast<char*>(&kSimKey));
   lua_pushlightuserdata(L, this);
   lua_rawset(L, LUA_REGISTRYINDEX);
@@ -1632,6 +1633,7 @@ struct PhaseTimer {
                            "threads",     "entitypass",       "anim",     "projectiles", "recon",
                            "formations",  "killcleanup",      "advancecoords", "destroy+sync"};
   double total[kN] = {}, lua[kN] = {};        // since the last report
+  double beatMs[kN] = {}, beatLua[kN] = {};  // this beat's (MOHO64_PROFILE_HITCH)
   double runTotal[kN] = {}, runLua[kN] = {};  // the whole run
   double luaBetween = 0;                      // Lua between the ticks (the command stream, the host)
   std::vector<float> tickMs;
@@ -1649,12 +1651,31 @@ struct PhaseTimer {
     const double ms = std::chrono::duration<double, std::milli>(n - t).count(), l = prof::TakeLuaMs();
     total[i] += ms;
     runTotal[i] += ms;
+    beatMs[i] += ms;
+    beatLua[i] += l;
     lua[i] += l;
     runLua[i] += l;
     t = n;
   }
-  void EndTick() {
-    if (on) tickMs.push_back(std::chrono::duration<float, std::milli>(t - tickStart).count());
+  void EndTick(uint32_t tick) {
+    if (!on) return;
+    const float ms = std::chrono::duration<float, std::milli>(t - tickStart).count();
+    tickMs.push_back(ms);
+    if (prof::Hitch()) {  // MOHO64_PROFILE_HITCH: the beat's breakdown when it took long enough (core/profile.h)
+      bool hitch = false;
+      const std::string rest = prof::TakeBeatReport(tick, ms, &hitch);
+      if (hitch) {
+        std::string s;
+        char buf[96];
+        for (int i = 0; i < kN; ++i)
+          if (beatMs[i] >= 0.3) {
+            std::snprintf(buf, sizeof buf, " %s %.2f (lua %.2f)", names[i], beatMs[i], beatLua[i]);
+            s += buf;
+          }
+        Logf(LogLevel::Info, "profile hitch tick %u: %.2f ms; phases:%s\n%s", tick, ms, s.c_str(), rest.c_str());
+      }
+    }
+    for (int i = 0; i < kN; ++i) beatMs[i] = beatLua[i] = 0;
   }
   void Report(uint32_t tick) {
     if (!on || tick % 1000 != 0) return;
@@ -2274,7 +2295,7 @@ void Sim::Tick() {
   singleStep = false;  // step 14 (sim+0x8e4 = 0)
   frozen = endGame;    // Sync copies sim+0x8dc to sim+0x8dd
   g_prof.Lap(PhaseTimer::kDestroySync);
-  g_prof.EndTick();
+  g_prof.EndTick(tick_);
   g_prof.Report(tick_);
   static const bool stats = getenv("MOHO64_STATS") != nullptr;
   if (stats && tick_ % 600 == 0) {  // a quick health line per game minute

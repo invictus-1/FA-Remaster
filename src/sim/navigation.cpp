@@ -8,6 +8,7 @@
 #include <string>
 #include <queue>
 
+#include "core/profile.h"
 #include "sim/terrain.h"
 
 namespace moho {
@@ -149,6 +150,8 @@ const PathGrid* Navigation::Grid(const NamedFootprint& fp) {
          std::to_string(fp.flags & 1);
   auto it = grids_.find(key);
   if (it != grids_.end()) return it->second.get();
+  prof::SectionTimer sec(prof::kSecPathGridMade);  // (MOHO64_PROFILE_HITCH only: which grid, and its time)
+  const double hitchT0 = prof::Hitch() ? prof::NowMs() : 0;
   auto g = std::make_unique<PathGrid>(*map_, fp, blocking_.data());
   if (!occ_.empty())  // (the held cells as they are now: SetCells keeps each grid's counts after this)
     for (int z = 0; z < map_->height(); ++z)
@@ -159,6 +162,7 @@ const PathGrid* Navigation::Grid(const NamedFootprint& fp) {
       }
   const PathGrid* r = g.get();
   grids_[key] = std::move(g);
+  if (prof::Hitch()) prof::AddCall("path grid made " + key, prof::NowMs() - hitchT0);
   return r;
 }
 

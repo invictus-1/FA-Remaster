@@ -738,6 +738,8 @@ static void f_call (lua_State *L, void *ud) {
    touch the state. */
 void (*lua_gpg_prof_enter)(lua_State *L, int kind) = NULL;
 void (*lua_gpg_prof_exit)(lua_State *L) = NULL;
+/* (and a collection's start (0) and end (1): lgc.c luaC_collectgarbage; MOHO64_PROFILE_HITCH only) */
+void (*lua_gpg_prof_gc)(lua_State *L, int end) = NULL;
 
 LUA_API int lua_pcall (lua_State *L, int nargs, int nresults, int errfunc) {
   struct CallS c;

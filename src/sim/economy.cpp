@@ -6,6 +6,7 @@
 #include <map>
 
 #include "core/log.h"
+#include "core/profile.h"
 #include "script/script_state.h"
 #include "sim/ai_platoon.h"
 #include "sim/blueprints.h"
@@ -280,6 +281,7 @@ const UnitBpData& GetUnitBpData(lua_State* L, const BlueprintInfo& bp) {
   static SimCache<std::map<const BlueprintInfo*, UnitBpData>> viewCache;
   if (g_viewRead)
     if (auto v = viewCache.find(&bp); v != viewCache.end()) return v->second;
+  prof::SectionTimer sec(prof::kSecUnitBpData);  // (MOHO64_PROFILE_HITCH only)
   UnitBpData d;
   Sim* sim = S(L);
   int top = lua_gettop(L);

@@ -477,10 +477,14 @@ static void mark (lua_State *L) {
 }
 
 
+extern void (*lua_gpg_prof_gc)(lua_State *L, int end);  /* lapi.c (MOHO64_PROFILE_HITCH only) */
+
 void luaC_collectgarbage (lua_State *L) {
+  if (lua_gpg_prof_gc) lua_gpg_prof_gc(L, 0);
   mark(L);
   luaC_sweep(L, 0);
   checkSizes(L);
+  if (lua_gpg_prof_gc) lua_gpg_prof_gc(L, 1);
   luaC_callGCTM(L);
 }
 
