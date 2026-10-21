@@ -576,7 +576,12 @@ void BeamCheck(Sim& sim, lua_State* L, CollisionBeam* b) {
   if (best) {
     target = best;
     impactPos = bestHit;
+    // (0x6d6ea0..0x6d6fb5: the length is measured to the hit point on a shield (an id 0x4xxxxxxx, 0x6d6ec8), to
+    // a unit's bone -1, half its SizeY above its place (Entity vt+0x10 IsUnit, then vt+0x48 GetBoneWorldTransform
+    // with -1, 0x6d6f29), and to anything else's place (+0xac); ((x*x + y*y) + z*z), 0x452fc0. Ours measured a unit
+    // to its origin: the beam's end, bone 1, lay 0.005 to 0.07 further in than the original's (Naval's beam lines).)
     if (best->kind == Entity::Kind::Shield) D = Len(Sub(P, bestHit));
+    else if (best->kind == Entity::Kind::Unit) D = Len(Sub(P, UnitBoneMinus1(*static_cast<Unit*>(best), best->position)));
     else D = Len(Sub(P, best->position));
     type = ImpactTypeOf(sim, best, impactPos);
   }

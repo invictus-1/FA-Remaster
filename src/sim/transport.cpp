@@ -1098,7 +1098,7 @@ void AttachedUnitsTick(Sim& sim) {
     Vec3 bp;
     Quat bq;
     BoneWorld(p, u->parentBone, &bp, &bq);
-    if (u->parentBone == -1 && pu->motion.bp) bp = Add(bp, Vec3{0.0f, pu->motion.bp->sizeY * 0.5f, 0.0f});
+    if (u->parentBone == -1) bp = UnitBoneMinus1(*pu, bp);
     Vec3 np = bp;
     Quat nq = bq;
     AttachedTransform(u, bp, bq, &np, &nq);  // (any own bone: 0x67a020 normalises also for -2)

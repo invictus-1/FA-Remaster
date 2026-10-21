@@ -381,6 +381,15 @@ template <> struct ScriptTypeOf<Platoon> { static constexpr uint32_t bit = kType
 void EntityAdjustHealth(lua_State* L, Entity* e, Entity* instigator, float amount);
 // World position of an entity's bone at rest (-1: the entity itself).
 Vec3 EntityBonePosition(const Entity* e, int bone);
+// A unit's bone -1, Unit::GetBoneWorldTransform 0x6aa5c0 with bone -1 (0x6aa637..0x6aa705): half the blueprint's
+// SizeY (bp+0xb0 x 0.5, 0x6aa67c) straight above `at` (the unit's place, or the place of what it rides), in the
+// world's axes: the offset is the outer transform of the composition 0x549c20, so the unit's turn does not move it.
+// What hangs on a unit's bone -1 (a shield, a drone's guard dummy, a carried unit) and a collision beam's length
+// to a unit (CreateCollisionBeamHelper 0x6d6f30) are measured from it.
+inline Vec3 UnitBoneMinus1(const Unit& u, const Vec3& at) {
+  if (!u.motion.bp) return at;
+  return Vec3{at.x + 0.0f, at.y + u.motion.bp->sizeY * 0.5f, at.z + 0.0f};
+}
 // A unit under construction was finished (after OnStopBeingBuilt): adjacency (sim/build.cpp).
 void UnitFinishedBuilding(Sim& sim, lua_State* L, Unit* u);
 

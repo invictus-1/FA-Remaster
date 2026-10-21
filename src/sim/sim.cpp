@@ -2161,10 +2161,7 @@ void Sim::Tick() {
         // (Unit::GetBoneWorldTransform 0x6aa637 composes the offset as the outer transform): a drone's guard dummy,
         // AttachTo(drone, -1), rides there. (Seen: a UEF construction drone banking 0.004; the original's dummy
         // keeps the drone's x to the last digit, ours, turning the offset, slid 0.001 aside.)
-        if (u->parentBone == -1 && p->kind == Entity::Kind::Unit) {
-          const Unit* pu = static_cast<const Unit*>(p);
-          if (pu->motion.bp) bp = vm::Add(bp, Vec3{0.0f, pu->motion.bp->sizeY * 0.5f, 0.0f});
-        }
+        if (u->parentBone == -1 && p->kind == Entity::Kind::Unit) bp = UnitBoneMinus1(*static_cast<const Unit*>(p), bp);
         Vec3 np = bp;
         Quat nq = bq;
         // The unit hangs by its OWN bone (Entity::CalculateAttachedTransform 0x67a020: the parent bone's transform
@@ -2284,10 +2281,8 @@ void Sim::Tick() {
       // bone -1 of a unit is half its SizeY straight above its origin, in the world's axes (Unit::GetBoneWorldTransform
       // 0x6aa637): a shield bubble hangs on that (seen in the original: a Fatboy's shield centre is 1.5 above its
       // origin before the ShieldVerticalOffset)
-      if (e->attachBone == -1 && p->kind == Entity::Kind::Unit) {
-        const Unit* pu = static_cast<const Unit*>(p);
-        if (pu->motion.bp) e->position = vm::Add(e->position, Vec3{0.0f, pu->motion.bp->sizeY * 0.5f, 0.0f});
-      }
+      if (e->attachBone == -1 && p->kind == Entity::Kind::Unit)
+        e->position = UnitBoneMinus1(*static_cast<const Unit*>(p), e->position);
       // Entity:SetParentOffset 0x68c330: its transform relative to the bone (entity+0x19c: no rotation, the vector)
       if (e->attachOffset.x != 0 || e->attachOffset.y != 0 || e->attachOffset.z != 0)
         e->position = vm::Add(e->position, vm::RotateM(e->orientation, e->attachOffset));
