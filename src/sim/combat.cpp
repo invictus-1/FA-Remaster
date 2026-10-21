@@ -310,16 +310,23 @@ static bool TerrainLineHit(const TerrainMap* map, const Vec3& O, const Vec3& D, 
   return false;
 }
 
-// STIMap::Intersection 0x476f30 along the segment p0 -> p1, as Projectile::CheckCollision 0x69d4a8 asks it: the
-// segment as centre, unit direction and half length (0x4fe130), the line from its start over twice that length.
-bool TerrainSegmentHit(const TerrainMap* map, Vec3 p0, Vec3 p1, float* dist, Vec3* hit) {
-  if (!map) return false;
+// The segment p0 -> p1 as 0x4fe130 makes it: the half vector, its length (summed (y y + z z) + x x), the unit
+// direction (times 1 / that length) and the centre p0 + the half vector. False for no length.
+static bool MakeSegmentExe(Vec3 p0, Vec3 p1, Vec3* C, Vec3* D, float* ext) {
   const Vec3 hv{(p1.x - p0.x) * 0.5f, (p1.y - p0.y) * 0.5f, (p1.z - p0.z) * 0.5f};
-  const float ext = std::sqrt(hv.y * hv.y + hv.z * hv.z + hv.x * hv.x);
-  if (!(ext > 0.0f)) return false;
-  const float inv = 1.0f / ext;
-  const Vec3 D{inv * hv.x, hv.y * inv, hv.z * inv};
-  const Vec3 C{p0.x + hv.x, p0.y + hv.y, p0.z + hv.z};
+  *ext = std::sqrt(hv.y * hv.y + hv.z * hv.z + hv.x * hv.x);
+  if (!(*ext > 0.0f)) return false;
+  const float inv = 1.0f / *ext;
+  *D = {inv * hv.x, hv.y * inv, hv.z * inv};
+  *C = {p0.x + hv.x, p0.y + hv.y, p0.z + hv.z};
+  return true;
+}
+
+// STIMap::Intersection 0x476f30 along a segment given as centre C, direction D and half length ext: the line from
+// its start C - D ext over twice ext. (The segment forms below make (C, D, ext) by 0x4fe130; a collision beam makes
+// its own, CreateCollisionBeamHelper 0x6d6d47..0x6d6e0f.)
+bool TerrainSegmentHitCDE(const TerrainMap* map, Vec3 C, Vec3 D, float ext, float* dist, Vec3* hit) {
+  if (!map) return false;
   const Vec3 O{C.x - D.x * ext, C.y - D.y * ext, C.z - D.z * ext};
   float t;
   if (!TerrainLineHit(map, O, D, 0.0f, ext * 2.0f, &t)) return false;
@@ -328,18 +335,21 @@ bool TerrainSegmentHit(const TerrainMap* map, Vec3 p0, Vec3 p1, float* dist, Vec
   return true;
 }
 
+// STIMap::Intersection 0x476f30 along the segment p0 -> p1, as Projectile::CheckCollision 0x69d4a8 asks it: the
+// segment as centre, unit direction and half length (0x4fe130), the line from its start over twice that length.
+bool TerrainSegmentHit(const TerrainMap* map, Vec3 p0, Vec3 p1, float* dist, Vec3* hit) {
+  if (!map) return false;
+  Vec3 C, D;
+  float ext;
+  return MakeSegmentExe(p0, p1, &C, &D, &ext) && TerrainSegmentHitCDE(map, C, D, ext, dist, hit);
+}
+
 // STIMap::SurfaceIntersection 0x577bc0 on a map with water, when the terrain point is under the water or there is
 // none (0x577c8f): the same line (0x4fe130: start, unit direction, 0 .. twice the half length) against the water
 // plane n = (0, 1, 0), d = water (0x577c94..0x577cb3), by CColHitResult::PlaneIntersection 0x577540: n.D (summed
 // (D.y n.y + D.z n.z) + n.x D.x) zero is no hit; t = (d - ((O.x n.x + n.y O.y) + n.z O.z)) / n.D, no hit outside
 // [0, twice the half length]; the point O.x + t D.x, D.y t + O.y, D.z t + O.z.
-bool WaterPlaneSegmentHit(Vec3 p0, Vec3 p1, float water, float* dist, Vec3* hit) {
-  const Vec3 hv{(p1.x - p0.x) * 0.5f, (p1.y - p0.y) * 0.5f, (p1.z - p0.z) * 0.5f};
-  const float ext = std::sqrt(hv.y * hv.y + hv.z * hv.z + hv.x * hv.x);
-  if (!(ext > 0.0f)) return false;
-  const float inv = 1.0f / ext;
-  const Vec3 D{inv * hv.x, hv.y * inv, hv.z * inv};
-  const Vec3 C{p0.x + hv.x, p0.y + hv.y, p0.z + hv.z};
+bool WaterPlaneSegmentHitCDE(Vec3 C, Vec3 D, float ext, float water, float* dist, Vec3* hit) {
   const Vec3 O{C.x - D.x * ext, C.y - D.y * ext, C.z - D.z * ext};
   const float den = (D.y * 1.0f + D.z * 0.0f) + 0.0f * D.x;
   if (den == 0.0f) return false;
@@ -349,17 +359,16 @@ bool WaterPlaneSegmentHit(Vec3 p0, Vec3 p1, float water, float* dist, Vec3* hit)
   *hit = {O.x + t * D.x, D.y * t + O.y, D.z * t + O.z};
   return true;
 }
+bool WaterPlaneSegmentHit(Vec3 p0, Vec3 p1, float water, float* dist, Vec3* hit) {
+  Vec3 C, D;
+  float ext;
+  return MakeSegmentExe(p0, p1, &C, &D, &ext) && WaterPlaneSegmentHitCDE(C, D, ext, water, dist, hit);
+}
 
 // STIMap::SurfaceIntersection 0x577bc0's first test on a map with water (0x577bdf..0x577c47): when the line's near
 // end (O + D near, near 0, which is always above -inf, 0x10ad410) lies under the water (water > its y), that point
 // is the hit, at distance near, and neither the terrain nor the water plane is asked.
-bool SegmentStartUnderWater(Vec3 p0, Vec3 p1, float water, float* dist, Vec3* hit) {
-  const Vec3 hv{(p1.x - p0.x) * 0.5f, (p1.y - p0.y) * 0.5f, (p1.z - p0.z) * 0.5f};
-  const float ext = std::sqrt(hv.y * hv.y + hv.z * hv.z + hv.x * hv.x);
-  if (!(ext > 0.0f)) return false;
-  const float inv = 1.0f / ext;
-  const Vec3 D{inv * hv.x, hv.y * inv, hv.z * inv};
-  const Vec3 C{p0.x + hv.x, p0.y + hv.y, p0.z + hv.z};
+bool SegmentStartUnderWaterCDE(Vec3 C, Vec3 D, float ext, float water, float* dist, Vec3* hit) {
   const Vec3 O{C.x - D.x * ext, C.y - D.y * ext, C.z - D.z * ext};
   const float nearT = 0.0f;
   const Vec3 S{O.x + D.x * nearT, O.y + D.y * nearT, O.z + D.z * nearT};
@@ -367,6 +376,11 @@ bool SegmentStartUnderWater(Vec3 p0, Vec3 p1, float water, float* dist, Vec3* hi
   *dist = nearT;
   *hit = S;
   return true;
+}
+bool SegmentStartUnderWater(Vec3 p0, Vec3 p1, float water, float* dist, Vec3* hit) {
+  Vec3 C, D;
+  float ext;
+  return MakeSegmentExe(p0, p1, &C, &D, &ext) && SegmentStartUnderWaterCDE(C, D, ext, water, dist, hit);
 }
 
 Entity* TargetEntity(Sim& sim, const AiTarget& t) {

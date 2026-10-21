@@ -54,6 +54,9 @@ float WaterLevel(const Sim& sim);
 int CallMethodBool(Sim& sim, lua_State* L, ScriptObject* obj, const char* method, int nargs);
 bool CallMethodNumber(Sim& sim, lua_State* L, ScriptObject* obj, const char* method, int nargs, float* out);
 bool TerrainSegmentHit(const TerrainMap* map, Vec3 p0, Vec3 p1, float* dist, Vec3* hit);
+bool TerrainSegmentHitCDE(const TerrainMap* map, Vec3 C, Vec3 D, float ext, float* dist, Vec3* hit);
+bool WaterPlaneSegmentHitCDE(Vec3 C, Vec3 D, float ext, float water, float* dist, Vec3* hit);
+bool SegmentStartUnderWaterCDE(Vec3 C, Vec3 D, float ext, float water, float* dist, Vec3* hit);
 bool HasTarget(Sim& sim, const AiTarget& t);
 Entity* TargetEntity(Sim& sim, const AiTarget& t);
 const char* ImpactTypeName(int t);
@@ -525,7 +528,8 @@ void BeamCheck(Sim& sim, lua_State* L, CollisionBeam* b) {
   const float ex = P.x - (dir.x * Lr + P.x), ez = P.z - (P.z + dir.z * Lr);
   float h = std::sqrt(ex * ex + ez * ez);
   float s = h > 0.001f ? std::min(Lr / h, 5.0f) : 1.0f;
-  Vec3 E = Add(P, Mul(dir, s * Lr));
+  const float len = s * Lr;
+  Vec3 E = Add(P, Mul(dir, len));
   // Every entity with a collision shape that the segment crosses (0x7229c0 asks the collision grid, whatever
   // the entity is), then the choice among them (0x6d6a00): the script's OnCollisionCheckWeapon first (0x6dd5d0,
   // asked of the firing unit too), then allied aircraft, then the nearest, and last the firing unit is left out.
@@ -585,31 +589,43 @@ void BeamCheck(Sim& sim, lua_State* L, CollisionBeam* b) {
     else D = Len(Sub(P, best->position));
     type = ImpactTypeOf(sim, best, impactPos);
   }
-  // terrain and water
-  float td;
-  Vec3 th;
-  const TerrainMap* m = sim.map();
-  float tdist = std::numeric_limits<float>::infinity();
-  int ttype = 0;
-  if (TerrainSegmentHit(m, P, E, &td, &th)) {
-    tdist = td;
-    ttype = 1;
-  }
-  float wl = WaterLevel(sim);
-  if (m && m->hasWater && (P.y - wl) * (E.y - wl) < 0) {
-    float t = (P.y - wl) / (P.y - E.y);
-    float wd = t * Len(Sub(E, P));
-    if (wd < tdist) {
-      tdist = wd;
-      ttype = 2;
-      th = Add(P, Mul(Sub(E, P), t));
+  // The terrain and the water: STIMap::SurfaceIntersection 0x577bc0 along the beam's own segment (0x6d6d47..
+  // 0x6d6e0f: centre P + F (len / 2), direction F, the hull's forward column as it is, not normalised, half length
+  // len / 2; not 0x4fe130's segment of P -> E), from its start C - F len / 2 over len (0x6d6fbb..0x6d7095). As the
+  // ballistic fall asks it (air.cpp CalcMoveBallistic): on a map with water, a start under the water is the hit
+  // at distance 0 (0x577bdf..0x577c47); else the terrain's point (STIMap::Intersection 0x476f30) when there is no
+  // water or it is not under the water (0x577c7d..0x577c92: type 1), else the water plane by
+  // CColHitResult::PlaneIntersection 0x577540 (type 3). The beam takes it when its length so far is longer
+  // (0x6d70a7..0x6d70b7): the entity met is let go (0x6d70bc..0x6d70dc), type 3 is Water and type 1 Terrain
+  // (0x6d70e9..0x6d711b); a start under the water leaves the type as it was, and with none its point's type, by
+  // ENT_GetImpactType 0x67b240 without an entity: Underwater below the water, else Air. Ours took the terrain's
+  // point also under the water, along 0x4fe130's segment, and crossed the water by its own formula, t x |E - P|:
+  // Naval's and Economy's beam lines on water and terrain ended a last bit off the original's.
+  {
+    const TerrainMap* m = sim.map();
+    const bool water = m && m->hasWater;
+    const float wl = WaterLevel(sim);
+    const Vec3 SC{(dir.x * len) * 0.5f + P.x, P.y + (dir.y * len) * 0.5f, P.z + (dir.z * len) * 0.5f};
+    const float sext = len * 0.5f;
+    float sdist = 0.0f;
+    Vec3 sh{};
+    int stype = -1;  // (none; 0 the start under the water, 1 the terrain, 3 the water plane)
+    if (water && SegmentStartUnderWaterCDE(SC, dir, sext, wl, &sdist, &sh)) {
+      stype = 0;
+    } else {
+      const bool th = TerrainSegmentHitCDE(m, SC, dir, sext, &sdist, &sh);
+      if (th && (!water || sh.y >= wl)) stype = 1;
+      else if (water && WaterPlaneSegmentHitCDE(SC, dir, sext, wl, &sdist, &sh)) stype = 3;
     }
-  }
-  if (ttype && tdist < D) {
-    D = tdist;
-    target = nullptr;
-    impactPos = th;
-    type = ttype;
+    if (stype >= 0 && D > sdist) {
+      D = sdist;
+      const bool hadEntity = target != nullptr;
+      target = nullptr;
+      impactPos = sh;
+      if (stype == 3) type = 2;
+      else if (stype == 1) type = 1;
+      else if (!hadEntity) type = wl > sh.y ? 4 : 3;
+    }
   }
   b->length = D;
   {
