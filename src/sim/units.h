@@ -394,7 +394,7 @@ void RegisterEntityBindings(lua_State* L);
 // its own turn: cur / prev are its committed transform and the one before it (entity+0x9c / +0xb8).
 void TextureScrollerTick(Entity* e, const Vec3& curPos, const Quat& curOri, const Vec3& prevPos, const Quat& prevOri);
 void RegisterEffectBindings(lua_State* L);
-void ReleaseEffectObjects();
+void ReleaseEffectObjects(Sim& sim);
 // A script played a sound once on e (the sound object at stack index arg): listed for the host while
 // Sim::collectSounds is set (sim/effects.cpp).
 void RecordPlaySound(lua_State* L, const Entity* e, int arg);

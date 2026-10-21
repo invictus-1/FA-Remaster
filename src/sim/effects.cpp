@@ -68,10 +68,6 @@ const Factory kFactories[] = {
 const Factory kLightParticle = {"CreateLightParticle", nullptr, "ebannst", false};
 const Factory kLightParticleIntel = {"CreateLightParticleIntel", nullptr, "ebannst", false};
 
-std::vector<std::unique_ptr<EngineThing>>& Things() {
-  static std::vector<std::unique_ptr<EngineThing>> v;
-  return v;
-}
 
 // ---- the list for the host -------------------------------------------------------------------
 
@@ -85,10 +81,18 @@ struct EffectLog {
   std::vector<LiveEffect> live;
   uint32_t nextId = 0;
 };
-EffectLog& Fx() {
-  static EffectLog l;
-  return l;
-}
+}  // namespace
+
+// The sim's effect objects and what the host is told of effects, sounds and camera shakes (Sim::effectsState).
+// Multicore step 1: these were process-wide (Things(), Fx(), Snd(), Shakes()); a second sim's effect ids went on
+// from the first one's.
+struct EffectsState;
+EffectsState& ES(const Sim& sim);
+
+namespace {
+
+EffectLog& Fx(const Sim& sim);
+std::vector<std::unique_ptr<EngineThing>>& Things(const Sim& sim);
 bool Collecting(lua_State* L) {
   Sim* sim = Sim::From(L);
   return sim && sim->collectEffects;
@@ -132,7 +136,7 @@ void AddText(EffectEvent& ev, const char* s) {
 
 // A creating call: its arguments by the function's letters. Returns the new effect's id.
 uint32_t RecordCreate(lua_State* L, const Factory& f) {
-  EffectLog& fx = Fx();
+  EffectLog& fx = Fx(*Sim::From(L));
   EffectEvent ev;
   ev.kind = EffectEvent::Create;
   ev.id = ++fx.nextId;
@@ -180,8 +184,8 @@ uint32_t RecordCreate(lua_State* L, const Factory& f) {
   return fx.nextId;
 }
 // A method call on a listed effect: its numbers and strings in order.
-EffectEvent& RecordCall(uint32_t id, const char* name) {
-  EffectLog& fx = Fx();
+EffectEvent& RecordCall(lua_State* L, uint32_t id, const char* name) {
+  EffectLog& fx = Fx(*Sim::From(L));
   EffectEvent ev;
   ev.kind = EffectEvent::Call;
   ev.id = id;
@@ -191,8 +195,8 @@ EffectEvent& RecordCall(uint32_t id, const char* name) {
   fx.events.push_back(std::move(ev));
   return fx.events.back();
 }
-void RecordDestroy(uint32_t id) {
-  EffectLog& fx = Fx();
+void RecordDestroy(lua_State* L, uint32_t id) {
+  EffectLog& fx = Fx(*Sim::From(L));
   EffectEvent ev;
   ev.kind = EffectEvent::Destroy;
   ev.id = id;
@@ -212,7 +216,7 @@ int l_Factory(lua_State* L) {
   auto t = std::make_unique<EngineThing>(f.cls);
   if (f.args && Collecting(L)) t->effectId = RecordCreate(L, f);
   CreateObject(L, t.get(), f.cls);
-  Things().push_back(std::move(t));
+  Things(*Sim::From(L)).push_back(std::move(t));
   return 1;
 }
 int l_LightParticle(lua_State* L) {
@@ -224,13 +228,13 @@ int l_AttachBeamToEntity(lua_State* L) {
   auto* t = dynamic_cast<EngineThing*>(GetObject(L, 1));
   Entity* e = ToObject<Entity>(L, 2);
   if (t && t->effectId && Collecting(L)) {
-    EffectEvent& ev = RecordCall(t->effectId, "AttachBeamToEntity");
+    EffectEvent& ev = RecordCall(L, t->effectId, "AttachBeamToEntity");
     ev.bone = BoneOf(L, e, 3);
     ev.army = static_cast<int>(lua_tonumber(L, 4));
     if (e) {
       ev.entity = e->id;
       SetPosition(ev, e, ev.bone);
-      EffectLog& fx = Fx();
+      EffectLog& fx = Fx(*Sim::From(L));
       fx.where.back() = {EntityRef(e), ev.bone};
       fx.live.push_back({t->effectId, EntityRef(e)});
     }
@@ -262,7 +266,7 @@ int l_ChainStub(lua_State* L) {
     auto* t = dynamic_cast<EngineThing*>(GetObject(L, 1));
     if (t && t->effectId) {
       const int top = lua_gettop(L);
-      EffectEvent& ev = RecordCall(t->effectId, m);
+      EffectEvent& ev = RecordCall(L, t->effectId, m);
       for (int i = 2; i <= top; ++i) {
         if (lua_type(L, i) == LUA_TNUMBER) ev.numbers.push_back(static_cast<float>(lua_tonumber(L, i)));
         else if (lua_type(L, i) == LUA_TSTRING) AddText(ev, lua_tostring(L, i));
@@ -276,7 +280,7 @@ int l_ChainStub(lua_State* L) {
 int l_Destroy(lua_State* L) {
   if (ScriptObject* o = GetObject(L, 1)) {
     if (auto* t = dynamic_cast<EngineThing*>(o); t && t->effectId) {
-      RecordDestroy(t->effectId);
+      RecordDestroy(L, t->effectId);
       t->effectId = 0;
     }
     o->UnbindLua();
@@ -332,10 +336,7 @@ struct SoundLog {
   std::vector<SoundEvent> events;
   std::vector<std::pair<uint32_t, uint32_t>> loops;  // the entities with a loop on: reference, id
 };
-SoundLog& Snd() {
-  static SoundLog l;
-  return l;
-}
+SoundLog& Snd(const Sim& sim);
 bool CollectingSounds(lua_State* L) {
   Sim* sim = Sim::From(L);
   return sim && sim->collectSounds;
@@ -361,7 +362,7 @@ int l_e_SetAmbientSound(lua_State* L) {
   SoundEvent ev = SoundOn(e, SoundEvent::Loop);
   SoundNames(L, 2, &ev.bank, &ev.cue);
   SoundNames(L, 3, &ev.rumbleBank, &ev.rumbleCue);
-  SoundLog& s = Snd();
+  SoundLog& s = Snd(*Sim::From(L));
   const uint32_t ref = EntityRef(e);
   const bool on = !ev.cue.empty() || !ev.rumbleCue.empty();
   size_t at = 0;
@@ -378,7 +379,7 @@ void RecordPlaySound(lua_State* L, const Entity* e, int arg) {
   if (!e || !CollectingSounds(L)) return;
   SoundEvent ev = SoundOn(e, SoundEvent::Play);
   if (!SoundNames(L, arg, &ev.bank, &ev.cue)) return;
-  Snd().events.push_back(std::move(ev));
+  Snd(*Sim::From(L)).events.push_back(std::move(ev));
 }
 
 // ---- camera shakes for the host ---------------------------------------------------------------
@@ -386,10 +387,7 @@ void RecordPlaySound(lua_State* L, const Entity* e, int arg) {
 // one 28-byte record pushed on the sim's list (sim+0x9c8, func_ShakeCamera 0x692700): the entity's position
 // (+0xac) and the four numbers as given. The simulation does nothing else with it; the user side shakes.
 namespace {
-std::vector<ShakeEvent>& Shakes() {
-  static std::vector<ShakeEvent> l;
-  return l;
-}
+std::vector<ShakeEvent>& Shakes(const Sim& sim);
 int l_e_ShakeCamera(lua_State* L) {
   const int n = lua_gettop(L);
   if (n != 5)
@@ -409,18 +407,37 @@ int l_e_ShakeCamera(lua_State* L) {
   ev.maxShakeEpicenter = v[1];
   ev.minShakeAtRadius = v[2];
   ev.interval = v[3];
-  Shakes().push_back(ev);
+  Shakes(*sim).push_back(ev);
   return 0;
 }
 }  // namespace
 
-void ShakeEvents(const Sim& /*sim*/, std::vector<ShakeEvent>* out) {
+struct EffectsState {
+  std::vector<std::unique_ptr<EngineThing>> things;
+  EffectLog fx;
+  SoundLog snd;
+  std::vector<ShakeEvent> shakes;
+};
+EffectsState& ES(const Sim& sim) {
+  Sim& s = const_cast<Sim&>(sim);  // (the views come through a const sim; the lists are the sim's own)
+  if (!s.effectsState) s.effectsState = std::make_shared<EffectsState>();
+  return *s.effectsState;
+}
+
+namespace {
+std::vector<std::unique_ptr<EngineThing>>& Things(const Sim& sim) { return ES(sim).things; }
+EffectLog& Fx(const Sim& sim) { return ES(sim).fx; }
+SoundLog& Snd(const Sim& sim) { return ES(sim).snd; }
+std::vector<ShakeEvent>& Shakes(const Sim& sim) { return ES(sim).shakes; }
+}  // namespace
+
+void ShakeEvents(const Sim& sim, std::vector<ShakeEvent>* out) {
   out->clear();
-  out->swap(Shakes());
+  out->swap(Shakes(sim));
 }
 
 void SoundEvents(const Sim& sim, std::vector<SoundEvent>* out) {
-  SoundLog& s = Snd();
+  SoundLog& s = Snd(sim);
   // a loop ends with its entity
   size_t keep = 0;
   for (size_t i = 0; i < s.loops.size(); ++i) {
@@ -483,15 +500,13 @@ void RegisterEffectBindings(lua_State* L) {
   SetGlobal(L, "Warp", l_Warp);
 }
 
-void ReleaseEffectObjects() {
-  Things().clear();
-  Fx() = EffectLog();
-  Snd() = SoundLog();
-  Shakes().clear();
+void ReleaseEffectObjects(Sim& sim) {
+  if (sim.effectsState) Things(sim).clear();  // (the objects first, while the Lua state still exists)
+  sim.effectsState.reset();
 }
 
 void EffectEvents(const Sim& sim, std::vector<EffectEvent>* out) {
-  EffectLog& fx = Fx();
+  EffectLog& fx = Fx(sim);
   // where the things made this beat are now
   for (size_t i = 0; i < fx.events.size(); ++i) {
     if (fx.where2[i].first)

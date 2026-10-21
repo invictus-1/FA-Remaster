@@ -64,8 +64,26 @@ struct ScaAnim {
   }
 };
 
+class Animator;
+}  // namespace
+
+// The sim's animators and the animation files they read (Sim::animState). Multicore step 1: these were
+// process-wide (Animators()'s list, ReadSca's cache), so a second sim read the first one's files under the same
+// path, from another set of mods perhaps.
+struct AnimState {
+  std::vector<Animator*> animators;
+  std::map<std::string, ScaAnim> sca;  // by the path in lower case (the animators point into it)
+};
+
+namespace {
+
+AnimState& AS(Sim& sim) {
+  if (!sim.animState) sim.animState = std::make_shared<AnimState>();
+  return *sim.animState;
+}
+
 const ScaAnim& ReadSca(Sim& sim, const std::string& path) {
-  static std::map<std::string, ScaAnim> cache;
+  std::map<std::string, ScaAnim>& cache = AS(sim).sca;
   std::string key = path;
   for (auto& c : key) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
   auto it = cache.find(key);
@@ -138,10 +156,6 @@ class Animator : public ScriptObject {
   int EventState() const override { return triggered ? 1 : 0; }
 };
 
-std::vector<Animator*>& Animators() {
-  static std::vector<Animator*> v;
-  return v;
-}
 
 // 0x422940: the remainder with the divisor's sign
 float WrapTime(float t, float d) {
@@ -283,7 +297,7 @@ int l_CreateAnimator(lua_State* L) {
     a->unit->animators.push_back(a.get());
   }
   Animator* raw = a.get();
-  Animators().push_back(raw);
+  AS(*Sim::From(L)).animators.push_back(raw);
   CreateObject(L, raw, "CAnimationManipulator");
   Sim::From(L)->Own(std::move(a));
   return 1;
@@ -448,8 +462,7 @@ void AnimatorsUpdate(Sim& sim, Unit* u) {
 }
 
 void AnimTick(Sim& sim) {
-  (void)sim;
-  auto& v = Animators();
+  auto& v = AS(sim).animators;
   size_t w = 0;
   for (size_t i = 0; i < v.size(); ++i) {
     Animator* a = v[i];
@@ -468,7 +481,7 @@ void AnimTick(Sim& sim) {
   v.resize(w);
 }
 
-void ReleaseAnimators() { Animators().clear(); }
+void ReleaseAnimators(Sim& sim) { sim.animState.reset(); }
 
 void RegisterAnimBindings(lua_State* L) {
   SetGlobal(L, "CreateAnimator", l_CreateAnimator);

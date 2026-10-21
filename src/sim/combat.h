@@ -331,7 +331,7 @@ void AnimatorsUpdate(Sim& sim, Unit* u);
 // CUnitCommand::GetPosition 0x6e8a30's point without a formation (the target point of a unit target)
 Vec3 CommandPosGun(Sim& sim, const UnitCommand& c);
 void AnimTick(Sim& sim);
-void ReleaseAnimators();
+void ReleaseAnimators(Sim& sim);
 void RegisterAnimBindings(lua_State* L);
 
 }  // namespace moho

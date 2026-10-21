@@ -25,8 +25,20 @@ struct MotorSlot {
   uint32_t ref;  // EntityRef (the entity may be deleted)
   Motor* m;
 };
-std::vector<MotorSlot> g_motors;  // entities with a motor, in the order they got one
-std::vector<Entity*> g_moved;     // moved this beat (for the grid at step 13)
+}  // namespace
+
+// The sim's prop motors (Sim::motorState). Multicore step 1: these were process-wide (g_motors, g_moved).
+struct MotorState {
+  std::vector<MotorSlot> motors;  // entities with a motor, in the order they got one
+  std::vector<Entity*> moved;     // moved this beat (for the grid at step 13)
+};
+
+namespace {
+
+MotorState& MS(Sim& sim) {
+  if (!sim.motorState) sim.motorState = std::make_shared<MotorState>();
+  return *sim.motorState;
+}
 
 Sim* S(lua_State* L) { return Sim::From(L); }
 
@@ -38,13 +50,14 @@ float NormAngle(float x) {  // 0x62fb50
 }
 
 void SetMotor(Sim& sim, Entity* e, Motor* m) {
-  for (auto& s : g_motors)
+  std::vector<MotorSlot>& motors = MS(sim).motors;
+  for (auto& s : motors)
     if (s.ref == EntityRef(e)) {
       if (s.m) s.m->UnbindLua();  // the old motor is deleted
       s.m = m;
       return;
     }
-  g_motors.push_back({EntityRef(e), m});
+  motors.push_back({EntityRef(e), m});
 }
 
 Motor* NewMotor(lua_State* L, Entity* e, bool sink) {
@@ -181,25 +194,26 @@ void UpdateFall(Sim& sim, Entity* e, Motor& m) {
   }
   e->orientation = n;
   e->position = p;
-  g_moved.push_back(e);
+  MS(sim).moved.push_back(e);
 }
 
 }  // namespace
 
 void MotorsTick(Sim& sim) {
-  g_motors.erase(std::remove_if(g_motors.begin(), g_motors.end(),
+  MotorState& ms = MS(sim);
+  ms.motors.erase(std::remove_if(ms.motors.begin(), ms.motors.end(),
                                 [&](const MotorSlot& s) {
                                   Entity* e = sim.FindEntity(s.ref);
                                   return !e || e->destroyQueued;
                                 }),
-                 g_motors.end());
-  for (auto& s : g_motors) {
+                  ms.motors.end());
+  for (auto& s : ms.motors) {
     Entity* e = sim.FindEntity(s.ref);
     if (!s.m || e->attachParent) continue;
     if (e->kind == Entity::Kind::Unit || e->kind == Entity::Kind::Projectile || e->kind == Entity::Kind::Beam) continue;
     if (s.m->sink) {
       e->position.y += s.m->vy * 0.1f;
-      g_moved.push_back(e);
+      ms.moved.push_back(e);
     } else {
       UpdateFall(sim, e, *s.m);
     }
@@ -207,15 +221,13 @@ void MotorsTick(Sim& sim) {
 }
 
 void MotorsAdvanceCoords(Sim& sim) {
-  for (Entity* e : g_moved)
+  MotorState& ms = MS(sim);
+  for (Entity* e : ms.moved)
     if (!e->destroyQueued) GridUpdate(sim, e, false);
-  g_moved.clear();
+  ms.moved.clear();
 }
 
-void MotorsForget(const Sim&) {
-  g_motors.clear();
-  g_moved.clear();
-}
+void MotorsForget(Sim& sim) { sim.motorState.reset(); }
 
 void RegisterMotorBindings(lua_State* L) {
   SetMethod(L, "Entity", "FallDown", l_FallDown);

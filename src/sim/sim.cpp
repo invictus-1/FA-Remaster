@@ -849,8 +849,8 @@ Sim::Sim(Vfs* vfs, std::vector<std::string> hookDirs, std::vector<std::string> m
 Sim::~Sim() {
   if (rec_) fclose(rec_);
   owned_.clear();  // unbind every engine object while the Lua state still exists
-  ReleaseEffectObjects();
-  ReleaseAnimators();
+  ReleaseEffectObjects(*this);
+  ReleaseAnimators(*this);
   armies_.clear();
   threads_.reset();
   state_.reset();

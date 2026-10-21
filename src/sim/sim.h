@@ -515,6 +515,10 @@ class Sim {
   std::shared_ptr<struct IntelState> intelState;  // sim/intel.cpp: the armies' grids, the sources, the blips
   std::shared_ptr<struct ThreatState> threatState;  // sim/ai_threat.cpp: the armies' threat maps
   std::shared_ptr<struct BrainStates> brainState;   // sim/ai_brain.cpp: the brains' own state, by army
+  std::shared_ptr<struct MotorState> motorState;     // sim/prop_motor.cpp: the props' fall / sink motors
+  std::shared_ptr<struct AnimState> animState;       // sim/anim.cpp: the animators and the .sca files they read
+  std::shared_ptr<struct EffectsState> effectsState;  // sim/effects.cpp: effect objects, the host's effect,
+                                                      // sound and shake lists
   // Keep an engine object alive for the session (objects scripts may still hold).
   ScriptObject* Own(std::unique_ptr<ScriptObject> o) {
     owned_.push_back(std::move(o));

@@ -13,8 +13,7 @@ void RegisterMotorBindings(lua_State* L);
 void MotorsTick(Sim& sim);
 // Step 13: the moved entities take their new cells in the entity grid.
 void MotorsAdvanceCoords(Sim& sim);
-// Sim::~Sim: drops the motor list (entity handles and motors of that sim: a later sim's handles start again at 1,
-// and the first Whack of one of its props would unbind a dead sim's motor).
-void MotorsForget(const Sim& sim);
+// Sim::~Sim: drops the sim's motor list (its entity handles and motors).
+void MotorsForget(Sim& sim);
 
 }  // namespace moho
