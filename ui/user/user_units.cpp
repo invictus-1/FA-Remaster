@@ -201,6 +201,32 @@ struct UnitStore : UserState::Extra {
     uint64_t sync = 0;
   };
   std::map<uint32_t, Retype> retypes;
+  // The changes the interface's own copy of each unit's queues has taken from the orders it issued, which the
+  // simulation's queues do not show yet (READ 2026-10-21): ISSUE_Command (0x8b0180, its loop 0x8b0517..0x8b0588) and
+  // ISSUE_FactoryCommand (0x8b0730, 0x8b0a60..0x8b0ac8) give each unit's copy (the unit's slot 0x18, its own queue
+  // +0x3c8; slot 0x20, the factory's rally queue +0x3cc) a change stamped with the beat the order's message goes with
+  // (the sim driver's +0x24): with `clear` first a reset (0x8b6e60: the earlier changes are dropped, then {beat, 1});
+  // then {beat, 0, order, insert-before id} (0x8b6de0), unless the copy holds more than 500 orders and `clear` is
+  // not given (0x8b0540). The copy as read (0x8b6f60, GetCommandQueue 0x8c5480 and the rest) is the simulation's
+  // queue as last synced with every change still kept applied in order: 1 empties it, 0 appends the order or puts it
+  // before the order of that id (none there: not at all; 0x8b7081..0x8b72c6), 2 takes an order out (the removals,
+  // DropRemovedOrders). A change goes when the beat it was stamped with has come back (UserUnit::Tick 0x8c0a30 ->
+  // 0x8b7350: every change of a beat up to the synced one). So the order shows at once, before the game's script
+  // hears of it (OnCommandIssued, 0x8b0599): FAF's enhancement queue (enhancementqueue.lua) counts on it.
+  // `firstSync`: the user state's sync count from which the simulation's queues include the order (the next beat's,
+  // or the one after it while a beat runs on its thread: what is written then goes with the beat after it).
+  struct QueueChange {
+    uint32_t unit = 0xffffffffu;
+    bool factory = false;  // the factory's rally queue (IssueFactoryCommand), else the unit's own
+    bool reset = false;    // 1: empty the queue; else 0: the order goes in
+    CommandView order;
+    uint32_t insertBefore = 0xffffffffu;
+    uint64_t firstSync = 0;
+  };
+  std::vector<QueueChange> queueChanges;
+  // In a test run (TestFileWritesAllowed): the messages of the batches handed to the simulation, {type, payload},
+  // for moho64ui_SentMessages.
+  std::vector<std::pair<int, std::string>> sentForTests;
   // The last attack sent coordinated with another (AttackClick), for the tests (moho64ui_OrderGraph's coordinated).
   uint32_t coordinatedOrder = 0xffffffffu, coordinatedWith = 0xffffffffu;
   // The build template being placed (see BuildTemplate), and the units a script has added to
@@ -1199,12 +1225,98 @@ CommandWriter& Writer(lua_State* L) {
   return *store.writer;
 }
 
+namespace {
+// In a test run: the batch's messages ({u8 type, u16 length with the three header bytes, payload}, 0x6e417a), kept for
+// moho64ui_SentMessages (the last 400).
+void NoteSentForTests(UnitStore& store, const std::string& batch) {
+  size_t at = 0;
+  while (at + 3 <= batch.size()) {
+    const int type = static_cast<unsigned char>(batch[at]);
+    const size_t len = static_cast<unsigned char>(batch[at + 1]) | (static_cast<size_t>(static_cast<unsigned char>(batch[at + 2])) << 8);
+    if (len < 3 || at + len > batch.size()) break;
+    store.sentForTests.emplace_back(type, batch.substr(at + 3, len - 3));
+    at += len;
+  }
+  if (store.sentForTests.size() > 400) store.sentForTests.erase(store.sentForTests.begin(), store.sentForTests.end() - 400);
+}
+}  // namespace
+
 std::string TakeOrders(lua_State* L) {
   UserState* user = UserState::From(L);
   if (!user->units) return std::string();
   UnitStore& store = static_cast<UnitStore&>(*user->units);
-  return store.writer ? store.writer->Take() : std::string();
+  std::string batch = store.writer ? store.writer->Take() : std::string();
+  if (!batch.empty() && TestFileWritesAllowed()) NoteSentForTests(store, batch);
+  return batch;
 }
+
+namespace {
+// What an order issued now does to the interface's copy of its units' queues (UnitStore::QueueChange; ISSUE_Command
+// 0x8b0517..0x8b0588, ISSUE_FactoryCommand 0x8b0a60..0x8b0ac8): each unit's copy takes a reset when `clear` (the
+// earlier changes dropped) and the order, unless the copy holds more than 500 orders and `clear` is not given. The
+// order as the copy shows it: its id, type, blueprint and count, and its target's place (a place; a unit: where the
+// unit stands now, INFERRED as the simulation's view gives an order on a unit its place).
+void NoteIssued(lua_State* L, const std::vector<uint32_t>& ids, const StreamIssueData& d, uint32_t id, bool clear, bool factory) {
+  UserState* user = UserState::From(L);
+  UnitStore& store = Store(L);
+  CommandView order;
+  order.id = id;
+  order.type = d.type;
+  order.blueprint = d.blueprint;
+  order.count = d.count;
+  if (d.target.type == 2) {
+    order.hasPosition = true;
+    order.position[0] = d.target.pos.x, order.position[1] = d.target.pos.y, order.position[2] = d.target.pos.z;
+  } else if (d.target.type == 1) {
+    order.entity = d.target.entity;
+    auto it = store.units.find(d.target.entity);
+    if (it != store.units.end() && !it->second->gone) {
+      order.hasPosition = true;
+      for (int i = 0; i < 3; ++i) order.position[i] = it->second->view.position[i];
+    }
+  }
+  const uint64_t firstSync = user->syncCount + (user->config().beatRunning && user->config().beatRunning() ? 2 : 1);
+  for (uint32_t unit : ids) {
+    auto it = store.units.find(unit);
+    if (it == store.units.end() || it->second->gone) continue;
+    UnitStateView s;
+    if (!StateOf(L, it->second.get(), &s)) continue;
+    if (factory && !s.hasFactoryQueue) continue;  // (no rally queue: the unit's slot 0x20 gives none)
+    const size_t held = (factory ? s.factoryQueue : s.queue).size();
+    if (held > 500 && !clear) continue;
+    if (clear) {
+      auto& changes = store.queueChanges;
+      changes.erase(std::remove_if(changes.begin(), changes.end(),
+                                   [&](const UnitStore::QueueChange& c) { return c.unit == unit && c.factory == factory; }),
+                    changes.end());
+      UnitStore::QueueChange reset;
+      reset.unit = unit, reset.factory = factory, reset.reset = true, reset.firstSync = firstSync;
+      changes.push_back(reset);
+    }
+    UnitStore::QueueChange add;
+    add.unit = unit, add.factory = factory, add.order = order, add.firstSync = firstSync;
+    add.insertBefore = static_cast<uint32_t>(d.insertBefore);
+    store.queueChanges.push_back(add);
+  }
+  // (The original then marks its order lines to be made again, CWldSession::DirtyCommandGraph 0x8b05a5 -> 0x895f70:
+  // the graph's byte +0; where that byte is read, and so whether a waypoint hovered between the two clicks of a
+  // double click already sees the first click's order, is not traced. The lines here are made again with the next
+  // sync, as before, so the hovered attack of a coordinated double click stays the one hovered at the first click.)
+}
+
+// An order for units' own queues and one for factories' rally queues (the command stream's IssueCommand and
+// IssueFactoryCommand), noted in the interface's copy of their queues as the original's ISSUE_Command does.
+uint32_t IssueToUnits(lua_State* L, const std::vector<uint32_t>& ids, const StreamIssueData& d, bool clear) {
+  const uint32_t id = Writer(L).IssueCommand(ids, d, clear);
+  NoteIssued(L, ids, d, id, clear, false);
+  return id;
+}
+uint32_t IssueRallyToUnits(lua_State* L, const std::vector<uint32_t>& ids, const StreamIssueData& d, bool clear) {
+  const uint32_t id = Writer(L).IssueFactoryCommand(ids, d, clear);
+  NoteIssued(L, ids, d, id, clear, true);
+  return id;
+}
+}  // namespace
 
 void UserUnitIds(lua_State* L, bool selectedOnly, std::vector<uint32_t>* ids) {
   UserState* user = UserState::From(L);
@@ -1521,26 +1633,26 @@ bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float 
     start.target.pos.x = startRally.target.pos.x = mean[0];
     start.target.pos.y = startRally.target.pos.y = ground;
     start.target.pos.z = startRally.target.pos.z = mean[1];
-    if (!others.empty()) Writer(L).IssueCommand(others, start, clear);
-    if (!factories.empty()) Writer(L).IssueFactoryCommand(factories, startRally, clear);
+    if (!others.empty()) IssueToUnits(L, others, start, clear);
+    if (!factories.empty()) IssueRallyToUnits(L, factories, startRally, clear);
     clear = false;
   }
   // (none at all: a building order with nothing selected, above; a structure's Guard goes out also when only
   // REBUILDERs are selected, as the original's two ISSUE_Command calls test nothing)
   if (!others.empty() || units.empty() || (structure && factories.empty())) {
-    const uint32_t id = Writer(L).IssueCommand(others, d, clear);
+    const uint32_t id = IssueToUnits(L, others, d, clear);
     UnitStore& store = Store(L);
     for (uint32_t unit : others) store.lastSent[unit] = {id, UserState::From(L)->syncCount};
     if (coordWith != 0xffffffffu) store.coordinatedOrder = id, store.coordinatedWith = coordWith;
   }
-  if (!factories.empty()) Writer(L).IssueFactoryCommand(factories, rally, clear);
+  if (!factories.empty()) IssueRallyToUnits(L, factories, rally, clear);
   ReportCommandIssued(L, name, structure ? guarding : units, x, y, z, clear, structure ? d.blueprint : blueprint, entity);
   if (structure) {  // (the second: the REBUILDERs' Guard of the structure's place, 0x82029e..0x820327)
     StreamIssueData site = d;
     site.target = StreamIssueData().target;
     site.target.type = 2;
     site.target.pos.x = x, site.target.pos.y = y, site.target.pos.z = z;
-    const uint32_t id = Writer(L).IssueCommand(rebuilders, site, clear);
+    const uint32_t id = IssueToUnits(L, rebuilders, site, clear);
     for (uint32_t unit : rebuilders) Store(L).lastSent[unit] = {id, UserState::From(L)->syncCount};
     ReportCommandIssued(L, name, rebuilding, x, y, z, clear, d.blueprint);
   }
@@ -1639,7 +1751,7 @@ bool IssueScriptAt(lua_State* L, float x, float y, float z, bool clear) {
   d.target.type = 2;
   d.target.pos.x = x, d.target.pos.y = y, d.target.pos.z = z;
   SerializeLua(L, result, &d.lua);
-  Writer(L).IssueCommand(ids, d, clear);
+  IssueToUnits(L, ids, d, clear);
   ReportCommandIssued(L, "Script", units, x, y, z, clear, std::string(), 0xffffffffu, result);
   lua_settop(L, top);
   return true;
@@ -1673,7 +1785,7 @@ bool IssueAttackMoveAt(lua_State* L, float x, float y, float z, bool clear) {
   d.target.type = 2;
   d.target.pos.x = x, d.target.pos.y = y, d.target.pos.z = z;
   SerializeLua(L, top + 1, &d.lua);
-  Writer(L).IssueCommand(ids, d, clear);
+  IssueToUnits(L, ids, d, clear);
   ReportCommandIssued(L, "Script", units, x, y, z, clear, std::string(), 0xffffffffu, top + 1);
   lua_settop(L, top);
   return true;
@@ -1768,8 +1880,8 @@ bool IssueTransportOrderAt(lua_State* L, const std::string& order, uint32_t enti
   } else {
     return false;
   }
-  if (!others.empty()) Writer(L).IssueCommand(others, d, clear);
-  if (!factories.empty()) Writer(L).IssueFactoryCommand(factories, d, clear);
+  if (!others.empty()) IssueToUnits(L, others, d, clear);
+  if (!factories.empty()) IssueRallyToUnits(L, factories, d, clear);
   ReportCommandIssued(L, name, units, d.target.pos.x, d.target.pos.y, d.target.pos.z, clear, std::string(), entity);
   return true;
 }
@@ -2197,7 +2309,7 @@ bool IssuePlain(lua_State* L, const std::vector<UserUnit*>& list, const std::str
   // Scripts issue Stop without saying "clear" and expect the units to stop at once, so a Stop
   // empties the queue. (Inferred: where the original decides that.)
   if (type == CommandType::Stop) clear = true;
-  Writer(L).IssueCommand(ids, d, clear);
+  IssueToUnits(L, ids, d, clear);
   ReportCommandIssued(L, plain, units, 0, 0, 0, clear, blueprint, 0xffffffffu, params && lua_istable(L, params) ? params : 0, false);
   return true;
 }
@@ -2276,6 +2388,92 @@ int l_ExecLuaInSim(lua_State* L) {
   if (TheSim(L)) Writer(L).ExecuteLuaInSim(name, value);
   return 0;
 }
+
+// IUnit::CalcSpawnElevation 0x541540 as the interface's TeleportSelectedUnits calls it (READ): by the unit's layer
+// now (not the new place's), Land or Seabed: the terrain's height there (STIMap::GetElevation 0x44fb90); Water: the
+// water's (none on the map: -10000); Sub: that plus the unit's elevation; Air or Orbit: the surface there (GetSurface
+// 0x541a30: the terrain, or the water when the map has water above it) plus the unit's elevation; else 0. The
+// elevation is its attributes' +0x30 (IUnit slot 0x40, GetAttributes 0x8bef50: UserUnit+0x338); INFERRED: the
+// blueprint's Physics.Elevation, which they start from.
+float SpawnElevation(lua_State* L, const UserUnit* u, float x, float z) {
+  UserState* user = UserState::From(L);
+  const auto& height = user->config().groundHeight;
+  const float terrain = height ? height(x, z) : 0.0f;
+  const float water = user->hasWaterCopy ? user->waterElevationCopy : -10000.0f;
+  const int layer = u->view.layer;
+  if (layer & 3) return terrain;
+  if (layer & 8) return water;
+  float elevation = 0;
+  if (layer & (4 | 0x30)) {
+    PushBlueprint(L, u->view.blueprint);
+    if (lua_istable(L, -1)) {
+      lua_pushstring(L, "Physics");
+      lua_rawget(L, -2);
+      if (lua_istable(L, -1)) {
+        lua_pushstring(L, "Elevation");
+        lua_rawget(L, -2);
+        if (lua_isnumber(L, -1)) elevation = static_cast<float>(lua_tonumber(L, -1));
+        lua_pop(L, 1);
+      }
+      lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+  }
+  if (layer & 4) return water + elevation;
+  if (layer & 0x30) return (user->hasWaterCopy && water > terrain ? water : terrain) + elevation;
+  return 0;
+}
+}  // namespace
+
+// The console's DoSimCommand (FA exe 0x88e440, READ; the sim's console commands come to it through their aliases,
+// keymap.cpp): the command line goes to the simulation as the stream's DebugCommand (20) with every unit of the
+// selection (the session's +0x4a0, whoever owns them: no test of army or cheats here, the simulation's command
+// decides), the place of the world under the mouse (+0x4b4) and the focus army (+0x488, as one byte). The original
+// asks its sim driver for that (0x10c4f50 vtable +0x8c, SimDriver::ExecuteDebugCommand 0x73d1b0, which hands it to
+// the client, 0x6e7070, and wakes the simulation's thread). The units go as the client's WriteEntIdSet (0x6e7600)
+// writes the set they were gathered in (a BVIntSet, BVIntSet::Add 0x88e51a): their count, then the ids rising, each
+// once. Here no session or no live simulation: nothing (the console's caller has printed the "no session" line).
+void SendSimCommand(lua_State* L, const std::string& command) {
+  if (!TheSim(L)) return;
+  std::vector<uint32_t> ids;
+  for (const UserUnit* u : Store(L).selection)
+    if (!u->gone) ids.push_back(u->view.id);
+  std::sort(ids.begin(), ids.end());
+  ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+  float mouse[3] = {0, 0, 0};
+  MouseWorldPlace(L, mouse);
+  Writer(L).DebugCommand(command, mouse[0], mouse[1], mouse[2], FocusArmyNow(L), ids);
+}
+
+// The console's TeleportSelectedUnits (FA exe 0x833f90, READ): no session, the engine's "no session" line; else each
+// selected unit of the focus army (the unit's army +0x120 the session's army, 0x8340e2: an observer moves none) goes
+// to the place under the mouse (+0x4b4..+0x4bc) as the stream's WarpEntity (10; the sim driver's vtable +0x5c), turned
+// as it is (+0x74..+0x80), its height CalcSpawnElevation's for its layer (SpawnElevation). No cheat test here: the
+// simulation carries a warp out only with cheats on (0x748cd0).
+void TeleportSelectedUnits(lua_State* L) {
+  if (!UserState::From(L)->gameInterface) return ConsoleNoSession(L);
+  if (!TheSim(L)) return;
+  float mouse[3] = {0, 0, 0};
+  MouseWorldPlace(L, mouse);
+  const int army = FocusArmyNow(L);
+  for (const UserUnit* u : Store(L).selection) {
+    if (u->gone || army < 0 || u->view.army != army + 1) continue;
+    const float* q = u->view.orientation;  // (x, y, z, w; the message's transform has w first, 0x6e58c0)
+    Writer(L).WarpEntity(u->view.id, q[3], q[0], q[1], q[2], mouse[0], SpawnElevation(L, u, mouse[0], mouse[2]), mouse[2]);
+  }
+}
+
+// The console's KillSelectedUnits and DestroySelectedUnits (FA exe 0x833c70 / 0x833d60, READ): no session, the
+// engine's "no session" line; else the selection gets the order KillSelf (30) or DestroySelf (31), its queue cleared
+// first, through ISSUE_Command (0x8b05e0) as any order: here IssuePlain, the player's own units (the simulation wants
+// cheats for a DestroySelf, the command stream's IssueCommand 0x749290).
+void SelectionOrdersItself(lua_State* L, bool destroy) {
+  if (!UserState::From(L)->gameInterface) return ConsoleNoSession(L);
+  if (!TheSim(L)) return;
+  IssuePlain(L, Store(L).selection, destroy ? "DestroySelf" : "KillSelf", 0, true, std::string(), 1);
+}
+
+namespace {
 
 // A switch on every own unit of a list: the simulation is told by key and value.
 void InfoPair(lua_State* L, int listIdx, const char* key, const std::string& value) {
@@ -2429,7 +2627,7 @@ int l_IssueDockCommand(lua_State* L) {
     d.type = 39;  // Dock
     d.target.type = 1;
     d.target.entity = platform;
-    Writer(L).IssueCommand(ids, d, clear);
+    IssueToUnits(L, ids, d, clear);
   };
   if (!platforms.empty()) {
     std::sort(platforms.begin(), platforms.end(), [](const Platform& a, const Platform& b) {
@@ -2496,6 +2694,33 @@ int l_ToggleScriptBit(lua_State* L) {
 // What the panels show of a unit beyond where it is: its queue, what it works on, its switches
 // and meters. Asked of the simulation when a script asks, for the units it asks about.
 
+// The orders the interface issued that the simulation's queues do not show yet are in the unit's queues at once, as
+// the original's copy of them (UnitStore::queueChanges, NoteIssued): each change still kept applied in the order
+// made (0x8b7081..0x8b72c6), a reset empties the queue, an order goes at its end, or before the order of the id its
+// message names (none such there: it does not go in; an id whose top byte is 0xff names none). The changes whose
+// orders the simulation's queues include by now are dropped first (0x8b7350).
+void ApplyQueueChanges(lua_State* L, const UserUnit* u, UnitStateView* out) {
+  std::vector<UnitStore::QueueChange>& changes = Store(L).queueChanges;
+  if (changes.empty()) return;
+  const uint64_t sync = UserState::From(L)->syncCount;
+  changes.erase(std::remove_if(changes.begin(), changes.end(), [&](const UnitStore::QueueChange& c) { return c.firstSync <= sync; }),
+                changes.end());
+  for (const UnitStore::QueueChange& c : changes) {
+    if (c.unit != u->view.id) continue;
+    std::vector<CommandView>& q = c.factory ? out->factoryQueue : out->queue;
+    if (c.reset) {
+      q.clear();
+      continue;
+    }
+    if ((c.insertBefore >> 24) == 0xffu) {
+      q.push_back(c.order);
+      continue;
+    }
+    auto at = std::find_if(q.begin(), q.end(), [&](const CommandView& o) { return o.id == c.insertBefore; });
+    if (at != q.end()) q.insert(at, c.order);
+  }
+}
+
 // An order a Shift+Ctrl right click has taken out of the unit's queue is not in it from then on, as the original's
 // copy of the queue drops it at once (UnitStore::removals; 0x8b6ee0, further down "a waypoint under the mouse").
 void DropRemovedOrders(lua_State* L, const UserUnit* u, UnitStateView* out) {
@@ -2545,15 +2770,17 @@ void RetypeSentOrders(lua_State* L, UnitStateView* out) {
 
 // A unit's state changes only in a beat: it is kept until the next beat's sync comes (the panels
 // ask the same units every frame; each answer runs in the simulation's Lua), and while a beat runs
-// on its own thread the state from before it is the answer (no wait for the beat). Orders taken out
-// by their waypoints are left out of it (DropRemovedOrders), and orders the patrol conversion has
-// changed show their new type (RetypeSentOrders).
+// on its own thread the state from before it is the answer (no wait for the beat). Orders issued
+// since are in its queues at once (ApplyQueueChanges), orders taken out by their waypoints are left
+// out of them (DropRemovedOrders), and orders the patrol conversion has changed show their new type
+// (RetypeSentOrders).
 bool StateOf(lua_State* L, const UserUnit* u, UnitStateView* out) {
   if (!u || u->gone) return false;
   UserState* user = UserState::From(L);
   const bool beat = user->config().beatRunning && user->config().beatRunning();
   if (u->stateSync != ~0ull && (beat || u->stateSync == user->syncCount)) {
     *out = u->stateCopy;
+    ApplyQueueChanges(L, u, out);
     DropRemovedOrders(L, u, out);
     RetypeSentOrders(L, out);
     return true;
@@ -2561,6 +2788,7 @@ bool StateOf(lua_State* L, const UserUnit* u, UnitStateView* out) {
   Sim* sim = TheSim(L);
   if (!sim || !UnitStateOf(*sim, u->view.id, out)) return false;
   u->stateCopy = *out, u->stateSync = user->syncCount;
+  ApplyQueueChanges(L, u, out);
   DropRemovedOrders(L, u, out);
   RetypeSentOrders(L, out);
   return true;
@@ -4934,6 +5162,26 @@ void RegisterUserUnitBindings(lua_State* L) {
   SetGlobal(L, "GetRolloverInfo", l_GetRolloverInfo);
   lua_register(L, "moho64ui_ReclaimableAt", l_ReclaimableAtForTests);
   lua_register(L, "moho64ui_OrderGraph", l_OrderGraphForTests);
+  // moho64ui_SentMessages() -> the command stream's messages handed to the simulation since the last call (in a test
+  // run only: UnitStore::sentForTests), each {type = n, payload = its bytes as a string}, oldest first. The host's
+  // own function for tests.
+  lua_register(L, "moho64ui_SentMessages", [](lua_State* S) -> int {
+    UnitStore& store = Store(S);
+    lua_newtable(S);
+    int n = 0;
+    for (const auto& [type, payload] : store.sentForTests) {
+      lua_newtable(S);
+      lua_pushstring(S, "type");
+      lua_pushnumber(S, type);
+      lua_rawset(S, -3);
+      lua_pushstring(S, "payload");
+      lua_pushlstring(S, payload.data(), payload.size());
+      lua_rawset(S, -3);
+      lua_rawseti(S, -2, ++n);
+    }
+    store.sentForTests.clear();
+    return 1;
+  });
   SetGlobal(L, "GetArmyAvatars", l_GetArmyAvatars);
   SetGlobal(L, "GetIdleEngineers", l_GetIdleEngineers);
   SetGlobal(L, "GetIdleFactories", l_GetIdleFactories);

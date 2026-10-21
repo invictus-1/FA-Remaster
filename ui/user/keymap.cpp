@@ -828,6 +828,96 @@ std::vector<std::string> Words(const std::string& text) {
   return words;
 }
 
+// One command's words as the original's tokenizer makes them (CON_ParseCommand 0x41bff0, READ 2026-10-21): split at
+// blanks (space, tab); a word that begins with a double quote runs to the next double quote, blanks and all, and in
+// it a backslash before a double quote or a backslash is dropped (the character after it is kept as it is); a
+// backslash before a double quote at a word's start is dropped too (the quote is then part of the word); outside
+// quotes '#' or "//" ends the line (a comment) and ';' ends the command (the original runs what follows as the next
+// command, 0x41c2ed: not here, as Words above). A word still open at the end runs to there.
+std::vector<std::string> ConsoleWords(std::string s) {
+  std::vector<std::string> words;
+  bool quoted = false;
+  size_t start = std::string::npos, i = 0;
+  for (; i < s.size(); ++i) {
+    const char c = s[i];
+    const char next = i + 1 < s.size() ? s[i + 1] : '\0';
+    if (quoted) {
+      if (c == '"') {
+        words.push_back(s.substr(start, i - start));
+        start = std::string::npos;
+        quoted = false;
+      } else if (c == '\\' && (next == '"' || next == '\\')) {
+        s.erase(i, 1);  // (then the escaped character, now at i, is passed over)
+      }
+      continue;
+    }
+    if (c == '#' || c == ';' || (c == '/' && next == '/')) break;
+    if (c == ' ' || c == '\t') {
+      if (start != std::string::npos) words.push_back(s.substr(start, i - start));
+      start = std::string::npos;
+      continue;
+    }
+    if (start != std::string::npos) continue;
+    start = i;
+    if (c == '"') quoted = true, start = i + 1;
+    else if (c == '\\' && next == '"') s.erase(i, 1);
+  }
+  if (start != std::string::npos) words.push_back(s.substr(start, i - start));
+  return words;
+}
+
+// Words made into one command line again (CON_UnparseCommand 0x41c4d0, READ): one space between them; a word that is
+// empty, holds "//", or any of '#', ';', a blank or a double quote goes in double quotes, with a backslash before each
+// double quote and backslash in it (func_Stringify 0x41c400).
+std::string UnparseWords(const std::vector<std::string>& words, size_t from) {
+  std::string line;
+  for (size_t i = from; i < words.size(); ++i) {
+    const std::string& w = words[i];
+    if (i > from) line += ' ';
+    if (!w.empty() && w.find("//") == std::string::npos && w.find_first_of("#; \t\"") == std::string::npos) {
+      line += w;
+      continue;
+    }
+    line += '"';
+    for (char c : w) {
+      if (c == '"' || c == '\\') line += '\\';
+      line += c;
+    }
+    line += '"';
+  }
+  return line;
+}
+
+// The simulation's console commands as the interface's console knows them (READ 2026-10-21): each is a CConAlias
+// (its constructor 0x41e600, called from 75 static initializers, 0xbcb050 .. 0xbdc820) whose text is "DoSimCommand
+// <name>", in the registry under the same name. Its Execute (0x41e6a0) runs that text, with " " and the words given
+// after the name (CON_UnparseCommand) when there are any, as a console line (0x41cc90), so DoSimCommand sends it on.
+// The simulation has its own table of them (CSimConCommand 0x734630, the list 0x10a63dc): BlingBling, for one, is
+// both the alias here (0xbd3900, "Cash money yo") and the simulation's command (0xbd3930, its handler 0x64bbe0).
+const char* const kSimCommandAliases[] = {
+    "AI_RunOpponentAI", "AI_DebugArmyIndex", "AI_RenderDebugAttackVectors", "AI_RenderDebugPlayableRect",
+    "AI_DebugCollision", "AI_DebugIgnorePlayableRect", "path_MaxInstantWorkUnits",
+    "path_UnreachableTimeoutSearchSteps", "ReconFlush", "ai_SteeringAirTolerance", "WeaponTerrainBlockageTest",
+    "ai_InstaBuild", "ai_FreeBuild", "NeedRefuelThresholdRatio", "NeedRepairThresholdRatio", "SallyShears",
+    "BlingBling", "ZeroExtraStorage", "DamageUnit", "AddImpulse", "dbg", "AddBeam", "efx_NewEmitter",
+    "efx_AttachEmitter", "AddLightParticle", "NoDamage", "Purge", "tree_AccelFactor", "tree_SpringFactor",
+    "tree_DampFactor", "tree_UprootFactor", "sim_Gravity", "ShowRaisedPlatforms", "KillAll", "DestroyAll",
+    "RandomElevationOffset", "AirLookAheadMult", "DebugSetConsumptionActive", "DebugSetConsumptionInActive",
+    "DebugSetProductionActive", "DebugSetProductionInActive", "DebugAIStatesOn", "DebugAIStatesOff",
+    "AI_RenderBombDropZone", "path_ArmyBudget", "SetArmyColor", "imap_debug", "imap_debug_grid",
+    "imap_debug_path_graph", "imap_debug_grid_type", "imap_debug_grid_army", "sim_TestVarBool", "sim_TestVar",
+    "sim_TestVarUByte", "sim_TestVarFloat", "sim_TestVarStr", "sim_TestFunc", "SimLog", "SimWarn", "SimError",
+    "SimAssert", "SimCrash", "path_BackgroundUpdate", "path_BackgroundBudget", "sim_ChecksumPeriod",
+    "ScenarioMethod", "sim_DebugCrash", "SimLua", "DebugSetPlayableRect", "DebugDumpArmyStats", "DebugMoveCamera",
+    "TrackStats", "DumpUnits", "path_TimeoutPreview", "path_GeneratePreview",
+};
+// The alias of that name (the registry's lookup does not mind the case of letters), or nullptr.
+const char* SimCommandAlias(const std::string& upperName) {
+  for (const char* a : kSimCommandAliases)
+    if (Upper(a) == upperName) return a;
+  return nullptr;
+}
+
 // Console variables of the original's own machinery this host does not have (its resource prefetcher, its terrain
 // tessellator, its decal clipping, its device's pointer): accepted and kept as the original keeps them, with the
 // registry's spelling, kind and starting value, so that a value a script sets reads back. Nothing else looks at them.
@@ -1373,6 +1463,31 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
     }
     lua_settop(L, top);
     return;
+  }
+  // The simulation's console commands (READ 2026-10-21): an alias runs "DoSimCommand <its name>" with the words given
+  // after it (CConAlias::Execute 0x41e6a0); DoSimCommand (0x88e440) wants a command (without one: its usage,
+  // 0x88e6b0), then a simulation (the sim driver 0x10c4f50; none: the engine's "no session" line, 0x88e643), and
+  // sends the words after its own name made into a line again (CON_UnparseCommand) to the simulation with the
+  // selection, the place under the mouse and the focus army (SendSimCommand: the stream's DebugCommand). Whether it
+  // runs, and the cheats it wants, are the simulation's to judge.
+  {
+    const std::string key = Upper(name);
+    if (const char* alias = SimCommandAlias(key)) {
+      const std::vector<std::string> words = ConsoleWords(text);
+      std::string line = std::string("DoSimCommand ") + alias;
+      if (words.size() > 1) line += " " + UnparseWords(words, 1);
+      return RunConsoleCommand(L, line);
+    }
+    if (key == "DOSIMCOMMAND") {
+      const std::vector<std::string> words = ConsoleWords(text);
+      if (words.size() <= 1) return ConsolePrint(L, "usage: DoSimCommand command args...");
+      if (!UserState::From(L)->HasSim()) return ConsoleNoSession(L);
+      return SendSimCommand(L, UnparseWords(words, 1));
+    }
+    // The interface's own commands for the selected units (FA exe 0x833f90, 0x833c70, 0x833d60; user_units.cpp).
+    if (key == "TELEPORTSELECTEDUNITS") return TeleportSelectedUnits(L);
+    if (key == "KILLSELECTEDUNITS") return SelectionOrdersItself(L, false);
+    if (key == "DESTROYSELECTEDUNITS") return SelectionOrdersItself(L, true);
   }
   if (Upper(name) == "CON_ECHO") {  // (FA exe 0x41ee10: the words after it, a space between them)
     const std::vector<std::string> words = Words(rest);

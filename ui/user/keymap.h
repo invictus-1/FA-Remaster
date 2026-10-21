@@ -43,7 +43,8 @@ bool KeyIsDown(lua_State* L, int mauiCode);
 // Run a console command line. Built: UI_Lua <code> (the code runs in this state),
 // StartCommandMode <mode> <name>, UI_RenderUnitBars [true|false], UI_SelectByCategory,
 // UI_ExpandCurrentSelection, UI_MakeSelectionSet / UI_ApplySelectionSet <name>, the game speed's
-// WLD_ commands, the range rings' three variables, CON_Echo. Another of the original's commands is
+// WLD_ commands, the range rings' three variables, CON_Echo, DoSimCommand and the simulation's commands' aliases
+// (BlingBling, ScenarioMethod, dbg, ...), TeleportSelectedUnits, KillSelectedUnits, DestroySelectedUnits. Another of the original's commands is
 // logged once as not built; a name the original does not know prints `Unknown console command "x"`.
 void ExecuteConsoleCommand(lua_State* L, const std::string& text);
 

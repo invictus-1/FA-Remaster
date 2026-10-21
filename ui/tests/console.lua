@@ -192,6 +192,22 @@ ConExecute("remaster_photo")
 check("remaster_photo without a game", take(), noSession)
 ConExecute("remaster_photo_mode")
 check("remaster_photo_mode without a game", take(), noSession)
+-- the simulation's commands (their aliases run DoSimCommand, 0x41e6a0): its usage without a command (0x88e6b0), the
+-- engine's line without a simulation (0x88e643); the interface's own commands for the selected units the same
+ConExecute("DoSimCommand")
+check("DoSimCommand alone: its usage", take(), "usage: DoSimCommand command args...")
+ConExecute("DoSimCommand BlingBling")
+check("DoSimCommand without a game", take(), noSession)
+ConExecute("BlingBling")
+check("an alias of the simulation's (BlingBling) without a game", take(), noSession)
+ConExecute("nodamage")
+check("the aliases' names do not mind the case of letters (FAF's key: Nodamage)", take(), noSession)
+ConExecute("TeleportSelectedUnits")
+check("TeleportSelectedUnits without a game (0x833fbd)", take(), noSession)
+-- (KillSelectedUnits is left out here: FAF's ConExecute wrapper, userInit.lua 201, counts the selection for its
+-- moderator message before the command runs, and there is no selection's list without a game)
+ConExecute("DestroySelectedUnits")
+check("DestroySelectedUnits without a game", take(), noSession)
 
 -- lines from other threads, and the simulation's print: heard on the main thread's next frame
 moho64ui_ConsolePostFromThread("from a thread")

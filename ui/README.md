@@ -481,6 +481,28 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   FAF's commandmode.lua spawns the unit for the army chosen in the window (`SimCallback`
   CheatSpawnUnit, which the simulation's script carries out only with cheats on). Test:
   `ui/tests/playthrough_spawn.lua` (session_ai_cheats.lua; `-- /spawncase off` in session_ai.lua).
+- The simulation's console commands (read 2026-10-21): the 75 the interface knows by name (BlingBling, SallyShears,
+  NoDamage, KillAll, ScenarioMethod, dbg, AI_RunOpponentAI, SimLua and the rest) are the original's aliases of
+  `DoSimCommand <name>` (CConAlias 0x41e600 / 0x41e6a0); `DoSimCommand` (0x88e440) sends the command line, the words
+  after the name put together again as the original's CON_UnparseCommand does (in quotes where needed), to the
+  simulation as the command stream's DebugCommand (20; 0x6e7070) with every selected unit, the place under the mouse
+  and the focus army. Whether it runs (cheats), and what it does, is the simulation's. The interface's own
+  `TeleportSelectedUnits` (0x833f90; the debug key Alt-T) sends a WarpEntity (10) for each selected unit of the focus
+  army to the place under the mouse; `KillSelectedUnits` / `DestroySelectedUnits` (0x833c70 / 0x833d60; Alt-Delete)
+  give the selection KillSelf / DestroySelf, the queue cleared (`CommandWriter::DebugCommand`, `WarpEntity`,
+  `IssueCommand`). The simulation's side is the engine's (Sim::ExecuteDebugCommand, BlingBling, CheatsEnabled): its
+  print "<name>: BlingBling" and FAF's "<name> is cheating!" (its UserSync's print of the simulation's
+  `Sync.Cheaters`) come on the console and its echo on the screen. Tests: `ui/tests/sim_commands.lua` (session_ai_cheats.lua; `moho64ui_SentMessages()` gives the messages
+  handed to the simulation in a test run), ui/tests/console.lua (without a game).
+- FAF's hotbuild keys (`/lua/keymap/hotbuild.lua`, the Key Bindings dialog's Hotbuilding categories, its "Hotbuild
+  preset"): a key bound to one puts the building in hand, pressed again it goes on to the next of its group, Alt goes
+  back. All FAF's scripts; checked in `ui/tests/hotbuild.lua` (bound through the dialog's own functions, pressed,
+  placed on a deposit).
+- The interface's own copy of each unit's queues (READ 2026-10-21, ISSUE_Command 0x8b0180 / ISSUE_FactoryCommand
+  0x8b0730, the copy 0x8b6de0 / 0x8b6e60 / 0x8b6f60): an order issued is in the unit's queue for `GetCommandQueue`,
+  the order lines and the construction panel's queue at once, before the game's script hears of it, until the beat it
+  goes with has come back (user_units.cpp NoteIssued, ApplyQueueChanges). FAF's enhancement queue pairs its queued
+  enhancements with the commander's Script orders by it. Test: `ui/tests/enhancement_queue.lua`.
 - The in-game interface comes up on a running game. As in the original, a launched game gets a
   script state of its own (`/lua/SessionInit.lua`); the rules go into it through the engine's own
   functions (5,334 blueprints, the categories); the game script makes its world interface

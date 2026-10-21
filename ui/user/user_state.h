@@ -764,6 +764,11 @@ bool SiteMeetsOrdered(lua_State* L, const std::string& blueprint, const float po
 // the world view draws round them while a building is being placed. At most 600.
 void StructuresForWorld(lua_State* L, const float near[3], float within, std::vector<WorldGhost>* out);
 std::string TakeOrders(lua_State* L);
+// The console's commands that reach the simulation with the selection (user_units.cpp): DoSimCommand's message (the
+// command line as given), TeleportSelectedUnits, and KillSelectedUnits / DestroySelectedUnits (destroy).
+void SendSimCommand(lua_State* L, const std::string& command);
+void TeleportSelectedUnits(lua_State* L);
+void SelectionOrdersItself(lua_State* L, bool destroy);
 // The chat messages the script has sent since the last frame come back to it (session_bindings.cpp).
 void DeliverChat(lua_State* L);
 // For other parts of the engine side (user_units.cpp): the entity ids of all units the interface
