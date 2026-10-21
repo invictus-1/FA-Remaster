@@ -1701,6 +1701,15 @@ wind's laying, drifts, depth, its edge) are for tuning.
   mostly the sky's), lies deeper or thinner and patchier (under crowns, on steep, windward and scoured ground), and its
   drifts and scoops get a relief of up to 0.6 world units the sun shades. Bare ground takes some of the shade too, only as
   snow comes.
+- **A painted drift mask** ([snow mask], 2026-10-21; the visuals session's, made for it): where the map's entry names a
+  `"snow_drift_mask"` (BC4 over the whole map: 0.5 as elsewhere, above deeper, below scoured; SETONS_R's and SETONS_Q's
+  from the map's curvature at about 3 and 10 units, steep slopes and rock strata scoured, a drift band outside the woods,
+  wind-free), it is read the first time the shelter is made and added to the shelter's laying (`(m * 2 - 1)` times
+  `Terrain::snowMaskStrength`, 1; viewer `--snow-mask-strength n`, 0 without it), so the ground and the decals' snow
+  (which read the shelter) both take it. No mask, or strength 0: the shelter as before, to the pixel. On SETONS_R with all
+  the snow lying it shows mostly at the woods' edges, on crests and in the drift's place; with less lying (0.7) its scoured
+  places show the ground first. Its deeper half shows little where the wind's own laying is already at its most (open
+  ground in the lee of rises).
 - **Cost** (2560x1440, RTX 4090, SETONS_R in snow at 15:00, the ground's pass, the lowest of two runs; the PC busy with
   other work): from the game's height 0.397 -> 0.597 ms, mid (20) 0.416 -> 0.632, close (6) with the ground parallax 0.626
   -> 0.786, from the game's height with deep tracks and 12 units driving 0.420 -> 0.701, at the thaw with the twins (lying

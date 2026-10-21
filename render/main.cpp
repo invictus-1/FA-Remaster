@@ -217,7 +217,9 @@
 //           ridges, packed where it is trodden, breaking up by the ground's height where it thins, slush at the thaw); on any
 //           map, darker in valleys and hollows, under and beside trees and rocks, deeper in the wind's lee, thinner and
 //           patchier under trees and on steep slopes; --snow-ground-tune sky[,crowns[,relief[,drifts]]]: each times its own
-//           (1; 0 none); MOHO64_DEBUG_SNOW=1..6 shows the sky it gets, the crowns, the wind's laying, drifts, depth, edge
+//           (1; 0 none); MOHO64_DEBUG_SNOW=1..6 shows the sky it gets, the crowns, the wind's laying, drifts, depth, edge;
+//           --snow-mask-strength n  [snow mask] the map's painted drift mask (remap.json's "snow_drift_mask") n times as
+//           strong in the snow's laying (1 as made, 0 without it)
 // --plants-react  [plants] plants that react (plants.h, World::plantsReact; modern look): grass and plants laid over where units
 //           drive, rising again; bushes, ferns, saplings bending under them and springing back; grass, plants and undergrowth
 //           burnt black, then brown and short, where the game's blasts and lasting fires were, growing back over minutes
@@ -657,6 +659,7 @@ struct Options {
   bool rainGround = false;              // [rain ground] --rain-ground
   bool snowGround = false;              // [snow ground] --snow-ground
   float snowTune[4] = {1, 1, 1, 1};     // [snow ground] --snow-ground-tune
+  float snowMaskStrength = 1;           // [snow mask] --snow-mask-strength
   float parallaxTune[3] = {1, 20, 1};   // [parallax] --ground-parallax-tune
   bool remasteredTarmacs = false;       // [tarmac] --remastered-tarmacs
   bool readAhead = true;                // [hitches] --no-read-ahead
@@ -1061,6 +1064,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
       if (kind[0]) o->bushKind = kind;
     }
     else if (a == "--tarmac-relief") o->tarmacRelief = std::max(0.0f, static_cast<float>(atof(v)));  // [tarmac]
+    else if (a == "--snow-mask-strength") o->snowMaskStrength = std::max(0.0f, static_cast<float>(atof(v)));  // [snow mask]
     else if (a == "--snow-ground-tune") {  // [snow ground]
       if (sscanf(v, "%f,%f,%f,%f", &o->snowTune[0], &o->snowTune[1], &o->snowTune[2], &o->snowTune[3]) < 1) return false;
       o->snowGround = true;
@@ -1658,6 +1662,7 @@ int main(int argc, char** argv) {
   world.rainGround = opt.rainGround;  // [rain ground]
   world.snowGround = opt.snowGround;  // [snow ground]
   for (int k = 0; k < 4; ++k) world.terrain.snowTune[k] = std::clamp(opt.snowTune[k], 0.0f, 2.0f);
+  world.terrain.snowMaskStrength = std::min(opt.snowMaskStrength, 3.0f);  // [snow mask]
   world.terrain.parallaxDepth = std::max(opt.parallaxTune[0], 0.0f);
   world.terrain.parallaxReach = std::max(opt.parallaxTune[1], 1.0f);
   world.terrain.parallaxShadows = std::clamp(opt.parallaxTune[2], 0.0f, 1.0f);

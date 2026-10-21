@@ -92,6 +92,10 @@ class Terrain {
   // (each 0..2, 1 as tuned: how much the shelter cuts the sky's light, how much the trees' crowns take of the snow and its
   // light, how high the wind's drifts stand, how deep they lie and how much of them is drifted; the viewer's --snow-ground-tune)
   float snowTune[4] = {1, 1, 1, 1};
+  // [snow mask] How much the map's painted drift mask (remap.json's "snow_drift_mask", the visuals session's: 0.5 as
+  // elsewhere, above deeper, below scoured) moves the snow's laying in its shelter, added to the wind's and the props' own
+  // (1 as made; 0 none; the viewer's --snow-mask-strength). Taken when the shelter is made.
+  float snowMaskStrength = 1;
   // [snow ground] The snow's shelter over the map, made the first time it is wanted while snow lies (it dispatches: between
   // passes; World::Render): `props` (snow_ground.h: the map's props laid over the map at the shelter's size, World makes
   // it). Made again when the mud mask comes or goes (it holds the mask's copy). False: it cannot be made (the snow is drawn
@@ -306,6 +310,11 @@ class Terrain {
   gfx::Pipeline shelterPass_;
   gfx::Texture shelter_;
   bool shelterTried_ = false, shelterMud_ = false;
+  // [snow mask] the map's drift mask: its file (Remaster: the entry's "snow_drift_mask"), its texture (read the first time the
+  // shelter is made with it; a mask that cannot be read: the shelter as without it)
+  std::string snowMaskFile_;
+  gfx::Texture snowMask_;
+  bool snowMaskTried_ = false;
   bool snowLaidNow_ = false, snowMaterialsNow_ = false;  // [decalsnow] (the last scene drawing's: SnowShelterLaid)
   // A remastered map's third map per layer (beside `<name>_albedo.dds` a `<name>_arh.dds`: red what
   // its creases let in of the sky's light, green how rough it is, blue how high it stands), all
