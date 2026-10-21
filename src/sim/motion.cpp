@@ -918,6 +918,12 @@ struct StepParams {
 };
 
 // The limits a batch is generated with (read when the batch is made: u+0x594 is the formation cap).
+// The unit's top speed as the steering's parameters take it (u+0x594; see Params).
+float SteerTopSpeed(const UnitMotion& m) {
+  const MotionBlueprint& b = *m.bp;
+  return m.maxSpeedU594 > 0 ? m.maxSpeedU594 : (m.speedCap > 0 ? m.speedCap : b.maxSpeed * m.speedMult);
+}
+
 StepParams Params(const UnitMotion& m) {
   const MotionBlueprint& b = *m.bp;
   StepParams P;
@@ -930,8 +936,7 @@ StepParams Params(const UnitMotion& m) {
   // stage of the beat after a multiplier changed still finds the old value there. (Seen: a unit entering the
   // water, speed multiplier 0.9 from its layer change: the batch made the next beat tops at MaxSpeed x 0.9, the
   // one after it at MaxSpeed x 0.9 x 0.9.) Before the unit's first turn the live value stands in.
-  const float u594 =
-      m.maxSpeedU594 > 0 ? m.maxSpeedU594 : (m.speedCap > 0 ? m.speedCap : b.maxSpeed * m.speedMult);
+  const float u594 = SteerTopSpeed(m);
   P.maxF = std::min(b.maxSpeed, u594) * m.speedMult * 0.1f;
   P.maxR = std::min(b.maxSpeedReverse, u594) * m.speedMult * 0.1f;
   P.acc = b.maxAccel * m.accMult * 0.01f;
@@ -1268,12 +1273,21 @@ void Generate(Sim& sim, Unit* u, const Vec3& tgt, int mode, bool fresh) {
     before = PointOf(g);
     StepParams Pn = P;
     if (shallows) {
+      // (0x5b364b..0x5b36ea: the factor f (1, or h / deep but not below 0.5) multiplies the top speed handed to the
+      // steering's parameters 0x6990e0 (0x5b36ea: f x u+0x594, [esp+0x148] from 0x5b30c6), which cut it to the
+      // blueprint's MaxSpeed and MaxSpeedReverse and multiply by the speed multiplier and 0.1 (0x6991d5..0x699226):
+      // so the reverse cap is scaled too, and a MaxSpeed below f x u+0x594 is the cap whole. Ours scaled the
+      // finished forward cap, P.maxF x f, and left the reverse one.)
       const float deep = b.layerChangeOffset * 3.0f;
       const float h = sim.map()->TerrainHeight(g.p.x, g.p.z) - sim.map()->waterElevation;
+      float f = 1.0f;
       if (h > deep && 0.0f > h) {
-        const float f = h / deep;
-        Pn.maxF = P.maxF * (f > 0.5f ? f : 0.5f);
+        f = h / deep;
+        if (!(f > 0.5f)) f = 0.5f;
       }
+      const float top = f * SteerTopSpeed(m);
+      Pn.maxF = std::min(b.maxSpeed, top) * m.speedMult * 0.1f;
+      Pn.maxR = std::min(b.maxSpeedReverse, top) * m.speedMult * 0.1f;
     }
     if (!StepMove(b, Pn, m, g, tgt, mode)) break;
     g.p.y = PointHeight(sim, b, g.p.x, g.p.z, u->position.y);  // (0x5b40fd)
@@ -1287,7 +1301,8 @@ void Generate(Sim& sim, Unit* u, const Vec3& tgt, int mode, bool fresh) {
     }
     if (realAt) end = true;
     const int s0 = g.state;
-    if (!end && StepRules(sim, u, b, P, g, tgt, mode)) end = true;
+    // (the state rules' speed fraction is the point's: nspeed / its own forward cap, 0x5b3eec)
+    if (!end && StepRules(sim, u, b, Pn, g, tgt, mode)) end = true;
     if (dbgPts == static_cast<long>(u->id))
       fprintf(stderr, "  pt %d state %d->%d rev %d pos %.4f %.4f vel %.4f %.4f f %.4f %.4f end %d\n", n, s0, g.state,
               g.reverse ? 1 : 0, g.p.x, g.p.z, g.vel.x, g.vel.z, g.fx, g.fz, end ? 1 : 0);
