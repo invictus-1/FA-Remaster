@@ -182,15 +182,20 @@ void UpdateFall(Sim& sim, Entity* e, Motor& m) {
     p.y = static_cast<float>(static_cast<double>(p.y) + (static_cast<double>(target) - p.y) *
                                                             (static_cast<double>(m.theta) - 0.785398185f) * 1.27323949);
   }
+  // n = r * q in the exe's grouping (0x69548e..0x69553c), then 0x4edaa0 (0x69555c): ((w*w + x*x) + y*y) + z*z, above
+  // 1e-6 times 1 / len, else all zero. (Ours grouped x, y and z left to right from r.w, and kept n unnormalised
+  // at or below 1e-6.)
   Quat n;
-  n.w = r.w * q.w - r.x * q.x - r.y * q.y - r.z * q.z;
-  n.x = r.w * q.x + r.x * q.w + r.y * q.z - r.z * q.y;
-  n.y = r.w * q.y - r.x * q.z + r.y * q.w + r.z * q.x;
-  n.z = r.w * q.z + r.x * q.y - r.y * q.x + r.z * q.w;
-  float ql = std::sqrt(n.w * n.w + n.x * n.x + n.y * n.y + n.z * n.z);
-  if (ql > 1e-6f) {
-    float inv = 1.0f / ql;
+  n.w = ((q.w * r.w - r.x * q.x) - r.y * q.y) - r.z * q.z;
+  n.x = ((r.y * q.z + r.x * q.w) + q.x * r.w) - r.z * q.y;
+  n.y = ((r.z * q.x + r.y * q.w) + q.y * r.w) - r.x * q.z;
+  n.z = ((r.x * q.y + r.z * q.w) + q.z * r.w) - r.y * q.x;
+  const float ql = std::sqrt(((n.w * n.w + n.x * n.x) + n.y * n.y) + n.z * n.z);
+  if (ql > 9.99999997e-07f) {
+    const float inv = 1.0f / ql;
     n = Quat{n.x * inv, n.y * inv, n.z * inv, n.w * inv};
+  } else {
+    n = Quat{0.0f, 0.0f, 0.0f, 0.0f};
   }
   e->orientation = n;
   e->position = p;
