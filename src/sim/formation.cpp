@@ -889,7 +889,9 @@ Vec3 FormationVector(Sim& sim, Unit* u) {
   if (IsAirUnit(u) && u->formLeader) {
     Unit* L = UnitOf(sim, u->formLeader);
     if (L && !IsAirUnit(L)) {
-      Vec3 f = vm::Forward(L->orientation);
+      // the leader's COMMITTED facing: its vt+0x18 is IUnit::GetTransform 0x6a49c0 (unit+0xa4, entity+0x9c),
+      // 0x6a8cb7..0x6a8cc5, so a leader that has already moved in this beat is followed as the beat began with it
+      Vec3 f = vm::Forward(L->shapeHeld ? L->shapeOri : L->orientation);
       float l = std::sqrt(f.x * f.x + f.z * f.z);
       if (!(l > 0)) return Vec3{};
       const float inv = 1.0f / l;  // the normalised copy 0x44f7e0 (0x6a8cf3): times 1 / length
