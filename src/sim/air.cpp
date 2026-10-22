@@ -1228,7 +1228,12 @@ Ctrl ComputeAirControl(Sim& sim, Unit* u, const QuatW& tq, const Vec3& desired, 
   F.z = dv.z * b.kMove + nv.z * dampF;
   if (a.carrierEvent == 2) {  // 0x6beb89: landing on a carrier, within 40 of the focus entity
     if (const Entity* fe = u->focusId ? sim.FindEntity(u->focusId) : nullptr) {
-      float dz = u->position.z - fe->position.z, dx = u->position.x - fe->position.x;
+      // both COMMITTED: the unit's from vt+0x14 (IUnit::GetPosition 0x6a49b0, unit+0xb4), the carrier's at
+      // entity+0xac / +0xb4 (0x6bebc7..0x6bebdf), so a carrier that has already moved in this beat counts where the
+      // beat began with it
+      const Vec3& up = u->shapeHeld ? u->shapePos : u->position;
+      const Vec3& fp = fe->shapeHeld ? fe->shapePos : fe->position;
+      float dz = up.z - fp.z, dx = up.x - fp.x;
       if (std::sqrt(dz * dz + dx * dx) < 40.0f) {
         F.x = (nv.x * 2.0f + dv.x) * b.kMove;
         F.y = (nv.y * 1.25f + dv.y) * kLift;
