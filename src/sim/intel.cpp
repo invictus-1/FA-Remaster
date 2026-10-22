@@ -378,7 +378,20 @@ ReconBlip* FindOrCreateFake(Sim& sim, lua_State* L, int a, Unit* u) {
 // spot off the playable area (shrunk by the source's footprint) give it away (KnownFake)
 void UpdateFake(Sim& sim, lua_State* L, int a, ReconBlip* b) {
   uint8_t old = b->rflags[a] & 0x7f;
-  uint8_t flags = CanDetect(sim, a, b, b->position);
+  // At the fake's CURRENT transform (UpdateBlip 0x5c1d9c ReconCanDetect and 0x5c1eb4 IsWithin read blip+0xac).
+  // ReconBlip::Refresh 0x5bf810 (step 9; the ctor calls it too, 0x5bec49) sets the blip's pending transform to the
+  // source's pending one + the offset (0x5bf842..0x5bf8d6) and its current one to the source's current one (vt+0x18)
+  // + the offset (0x5bf8db..0x5bf962); the current one is the transform committed at the end of the last beat (step
+  // 13). So a moving jammer's fake is looked at one beat behind, as a unit is (ReconTick below). Seen: MP1 7982, army
+  // 5's frigate 0x50008e: its fake 0x305000fc leaves army 2's sight at 7992 in the original (probe mp1_8163: 7984,
+  // 7986, 7990, 7992 for armies 4, 6, 0, 2), at 7982 in ours; the last loss sets FAF's ResetJammer, so ours's jammer
+  // toggled a second early and made army 1's new fakes at 8161, not 8171.
+  Vec3 at = b->position;
+  if (const Unit* s = b->source) {
+    const Vec3& c = sim.coordsPending && s->lastPosTick == sim.tick() ? s->lastPosition : s->position;
+    at = Vec3{b->offset.x + c.x, b->offset.y + c.y, b->offset.z + c.z};
+  }
+  uint8_t flags = CanDetect(sim, a, b, at);
   flags |= old & 0x30;
   if (flags & 8) flags |= 0x30;
   const Army* us = sim.armies()[static_cast<size_t>(a)].get();
@@ -388,7 +401,7 @@ void UpdateFake(Sim& sim, lua_State* L, int a, ReconBlip* b) {
     float margin = 0;
     if (b->blueprint && b->blueprint->hasFootprint)
       margin = static_cast<float>(std::max(b->blueprint->footprint.sizeX, b->blueprint->footprint.sizeZ));
-    const Vec3& p = b->position;
+    const Vec3& p = at;  // (blip+0xac, 0x5c1eb4)
     if (sim.map() && !sim.IsWithin(p.x, p.z, margin, Sim::UseWholeMap(us))) flags |= 0x20;
   } else {
     flags |= 0x20;
