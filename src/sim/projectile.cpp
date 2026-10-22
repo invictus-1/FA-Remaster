@@ -343,7 +343,15 @@ void UpdateTracking(Sim& sim, Projectile* p, Quat& q, Vec3& v) {
   // (a unit whose Destroy is queued is still there until the end of the beat)
   const Entity* blipUnit = viaBlip && p->target.entityId ? sim.FindEntity(p->target.entityId) : nullptr;
   const Entity* blip = viaBlip && !blipUnit ? BlipOfTarget(sim, p->target) : nullptr;
-  const bool has = viaBlip ? (blipUnit != nullptr || blip != nullptr) : HasTarget(sim, p->target);
+  // A jammer's FAKE blip is the CAiTarget's entity itself (combat::TargetPos): HasTarget 0x5e2a10 asks the fake, so
+  // the target is gone once the armies have let go of it and it was destroyed (the jammer's death drops its fakes
+  // one army's recon at a time), however long the dead jammer's wreck stays. Seen: MP1 8288, army 6's torpedo
+  // 0x10600027 on a fake of army 5's frigate 0x50007c (dead at 8278, its fakes gone after army 7's recon at 8287):
+  // the original's shell has lost its target at 8288 and makes no zigzag draws at 8289; ours went on homing on the
+  // fake's last point because the wreck was there.
+  const bool has = p->target.type == 1 && p->target.fakeId ? HasTarget(sim, p->target)
+                   : viaBlip                                ? (blipUnit != nullptr || blip != nullptr)
+                                                            : HasTarget(sim, p->target);
   if (!has) {
     if (getenv("MOHO64_DEBUG_PROJ")) Logf(LogLevel::Info, "pdbg %u %u OnLostTarget", sim.tick(), p->id);
     sim.CallMethod(sim.L(), p, "OnLostTarget", 0);
