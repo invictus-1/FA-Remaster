@@ -488,9 +488,13 @@ Vec3 TargetPos(Sim& sim, const AiTarget& t, bool centre) {
     // (vt+0x1c, entity+0xac), and everything else falls to GetBoneWorldTransform(-1) whatever the flag says. Seen:
     // a missile 68 above a cruiser, its origin 1.96 from the ship (inside MinRadius 2) and its centre 2.31: the
     // original's missile defence fires.
-    if (e->kind == Entity::Kind::Projectile && e->blueprint)
-      return Add(e->position, RotateM(e->orientation, e->bpCenter));
-    return e->position;
+    // The transform it reads is the COMMITTED one, entity+0x9c / +0xac (the centre flag: +0xac..+0xb4,
+    // 0x5e2b44..0x5e2b55; else GetBoneWorldTransform vt+0x98, 0x5e2b6b -> 0x679ce0 on +0x9c), so a shell that has
+    // already stepped in this beat is aimed at where the beat began with it (ours: its held shape).
+    const Vec3& cp = e->shapeHeld ? e->shapePos : e->position;
+    const Quat& cq = e->shapeHeld ? e->shapeOri : e->orientation;
+    if (e->kind == Entity::Kind::Projectile && e->blueprint) return Add(cp, RotateM(cq, e->bpCenter));
+    return cp;
   }
   return NaNVec();
 }
