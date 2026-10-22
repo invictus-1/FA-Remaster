@@ -1108,14 +1108,19 @@ void WeaponImpactEvent(Sim& sim, UnitWeapon* w, int event) {
   }
   Unit* u = w->unit;
   // (each "did it move" is a memcmp of the position, entity +0xac, with the one before, +0xc8: 0x5d96a0, 0x5d96c9,
-  // 0x5d9727, 0x5d9758)
-  auto moved = [](const Entity* e) {
+  // 0x5d9727, 0x5d9758. Both are the COMMITTED transforms: "moved between the last two AdvanceCoords", also for an
+  // entity that has already taken its step in this beat. Then its committed position is what the step started
+  // from: a unit's lastPosition, the one before its prevLastPosition; a shell's prevPos, the one before
+  // prevPosBefore.)
+  auto moved = [&sim](const Entity* e) {
     if (e->kind == Entity::Kind::Unit) {
       const Unit* x = static_cast<const Unit*>(e);
+      if (x->lastPosTick == sim.tick()) return !SameBits(x->lastPosition, x->prevLastPosition);
       return !SameBits(x->position, x->lastPosition);
     }
     if (e->kind == Entity::Kind::Projectile) {
       const Projectile* x = static_cast<const Projectile*>(e);
+      if (x->prevPosTick == sim.tick()) return !SameBits(x->prevPos, x->prevPosBefore);
       return !SameBits(x->position, x->prevPos);
     }
     return false;

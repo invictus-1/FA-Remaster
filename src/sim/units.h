@@ -338,6 +338,8 @@ class Projectile : public Entity {
   // For a host that draws (ProjectileView::size); nothing in the simulation goes by it.
   Vec3 drawSize{1, 1, 1};
   Vec3 prevPos;
+  Vec3 prevPosBefore;         // prevPos before its last step (the committed position before the one its step began from)
+  uint32_t prevPosTick = 0;   // the beat that step set prevPos in
   Vec3 heldVel;  // its velocity as the beat began (taken before its own step: what another shell leads it by)
   uint32_t steppedTick = 0;  // the beat of its last step (ProjectileStep: once per beat, between the units)
   uint32_t queuedInStepTick = 0;  // the beat its own step queued its Destroy (an impact)

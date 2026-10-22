@@ -839,6 +839,8 @@ void MotionTick(Sim& sim, Projectile* p) {
     p->hitPos = p1;
     p->impactType = p->underwater ? 4 : 3;
   }
+  p->prevPosBefore = p->prevPos;
+  p->prevPosTick = sim.tick();
   p->prevPos = p0;
   p->velScale = 1;
   {
