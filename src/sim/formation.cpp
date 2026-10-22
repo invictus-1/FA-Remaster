@@ -357,12 +357,18 @@ void Rebuild(Formation& F) {
   ++F.rebuilds;
 }
 
+// The rebuild of a changed formation (its flag F+0x31c, set by AddUnit 0x56a2d8, SetScale 0x56a50f and
+// SetOrientation 0x56a637 / 0x56a673): only the ctor 0x5694b0 and the three slot queries that test the flag first
+// rebuild, vt+0x18 0x569cb0, vt+0x20 0x569f70 and Update vt+0x44 0x59ae80 (the formation DB at the beat's step 11);
+// vt+0x1c 0x569ea0 through vt+0x18 (0x569eda). The group lookup vt+0x14 0x5669a0, Contains vt+0x40 0x56a440, the
+// leader, the speed and the rest read the groups as they are. Nothing in a unit's turn (Unit::MotionTick 0x6a9010:
+// UpdateInfoCache 0x6a9810 calls vt+0x4c, +0x40, +0x14, +0x2c, +0x34, +0x24, +0x28, +0x50, +0x30) asks a rebuilding
+// one, so a formation changed in the command stage is rebuilt at step 11 at the latest, not in the entity pass.
 void EnsureBuilt(Formation& F) {
   if (F.dirty) Rebuild(F);
 }
 
 FormGroup* GroupOf(Formation& F, const Unit* u) {
-  EnsureBuilt(F);
   for (FormGroup& g : F.groups[LayerIndex(u)])
     if (g.nodes.count(u->id)) return &g;
   return nullptr;
@@ -403,8 +409,12 @@ Unit* GetLeader(Formation& F, Unit* u, FormGroup* g) {
   return GroupLeader(F, *g);
 }
 
-// vt+0x20 GetRawPosition
+// vt+0x20 GetRawPosition (rebuilds a changed formation first, 0x569f7d..0x569f9f)
 void RawPosition(Formation& F, Unit* u, FormGroup* g, float* x, float* z) {
+  if (F.dirty) {
+    Rebuild(F);
+    g = nullptr;  // (the groups are new)
+  }
   *x = u->position.x;
   *z = u->position.z;
   if (!g) g = GroupOf(F, u);
@@ -582,8 +592,13 @@ void AdjustPosition(Formation& F, Unit* u, float* px, float* pz) {
   *pz = u->position.z;
 }
 
-// vt+0x18 GetAdjustedPosition (cached per unit until the next rebuild)
+// vt+0x18 GetAdjustedPosition (cached per unit until the next rebuild; rebuilds a changed formation first,
+// 0x569cbe..0x569cdf)
 void AdjustedPosition(Formation& F, Unit* u, FormGroup* g, float* x, float* z) {
+  if (F.dirty) {
+    Rebuild(F);
+    g = nullptr;  // (the groups are new)
+  }
   auto it = F.adjusted.find(u->id);
   if (it != F.adjusted.end()) {
     *x = it->second.first;
