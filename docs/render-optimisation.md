@@ -308,3 +308,51 @@ picture answers the mouse and the keys sooner; on a busy PC a frame may now and 
 4.2 ms, not a whole 16.7 ms refresh), an idle card (other chats' viewers, replays and games ran on it all day),
 variable refresh (G-Sync, FreeSync), a window filling the screen (shown a refresh sooner: the deadline is then a
 refresh early, which costs that refresh but misses none), other cards and drivers, Linux and the Mac.
+
+## 10. The optimisation run (agreed with Chris, 2026-10-21)
+
+**The target.** Chris: "if we can push it beyond 60 into 120 then that is even better. Since 60 is the minimum while
+anything higher is the goal. Cause mods change things a lot too." And on 4K: "4k 120 for this game is possible so lets
+try and aim for it and past it." So: 60 frames a second is the floor, 120 and more the aim, at native 4K (FSR stays a
+player's option, not the default), with room left for mods. A frame's budget is about 8 ms on each side.
+
+**Where it stands** (render f842afd, every look the game has on, SETONS_R, an eight-army M28 game at minute 10, 1440p,
+RTX 4090, Ryzen 9 9950X3D; other chats' work on the card raised the middle zoom's typical frame):
+
+| View | Processor (the renderer's own work) | Card | Frames a second today |
+|---|---|---|---|
+| Middle zoom over a base (150) | 11.4 ms: listing 4.9, recording 6.0 | 10.0 ms lowest, up to 23 typical | 45 to 85 |
+| Whole map (900) | 12.8 ms: listing 4.6, recording 7.8 | 6.5 ms | 78 |
+
+On the card at the middle zoom: units and scenery 2.1-9.9 ms, sun shadows 0.5-2.0, ground 1.7, the ground cover
+0.2-1.4, the ray tracing scene 0.4-1.5, energy shields up to 1.4 while shown. At native 4K the card's share is about
+2.25 times these.
+
+**Spikes** (what a player feels, larger than any average): an upgrade starts with 30-36 ms of the simulation's beat
+(benchmark B9: 16 at once about half a second; half in FlattenSkirt's 81 FlattenMapRect calls a factory, each updating
+every path grid; half in M28's CheckIfSegmentsStillBuildable re-checking about 16,700 build places); Lua 5.0's full
+collections 96-195 ms; a new footprint kind's first path grid 21-144 ms; on the renderer's side a new unit kind's first
+model 50-145 ms, the ground cover's first time near the ground 30-200 ms, the game's first frame about 3 s; on the
+interface's, the minimap redrawn whole as the weather moves.
+
+**Chris's answers.**
+1. The order: the spikes first, then a steady 120, then tens of thousands of units, then loading and memory.
+2. M28's half of the upgrade's cost: our own M28 variant (its own folder, maudlin27 credited, CC BY-NC-SA, as CLAUDE.md
+   sets out), separate from the engine.
+3. 4K: native 120 and beyond is the aim.
+4. Measuring: all chats pause for about an hour now and then, so the benchmarks run on a quiet machine.
+
+**The renderer's part, in that order.**
+1. Spikes: every unit kind the armies can build read and made at the game's start (or on the worker threads before it
+   is first seen); the ground cover's first time made ahead; the first frame under a second later (loading).
+2. A steady 120: the drawing recorded on several cores (Direct3D 12 and Vulkan both allow it); trees and rocks kept on
+   the card and picked there (indirect draws, which also end the 3D plants' reserved room); the far sun-shadow cascades
+   not redrawn every frame; the ray tracing scene refitted, not rebuilt; units' and trees' far levels and impostors
+   with the visuals session.
+3. Tens of thousands of units: the units' visibility tests on the card too, with the engine's B3-B5 run in the viewer.
+4. Loading and memory: textures streamed in.
+
+**How it is measured.** A fixed set of scenes (a game's start, a base at middle zoom, the whole map late, a big battle,
+16 upgrades at once, the snow's start), at 1440p and 4K: the lowest and typical frame, the slowest 1 % and the count of
+frames over 8.3 / 16.7 ms, before and after each change, on a quiet machine. Lower hardware is estimated from this PC
+(a card like an RTX 3060 about three to four times slower, an ordinary six-core processor about 1.5 to 2 times).
