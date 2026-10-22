@@ -293,6 +293,10 @@ void MotionNavDone(Unit* u, bool succeeded);
 void SteeringTickAll(Sim& sim);
 // Place a unit on the ground/water at its current position (SnapToGround / SnapToWater).
 void SnapUnit(const Sim& sim, Unit* u);
+// The raised platform the unit stands on (motion+0x114), and that platform's height at (x, z) above its own
+// position (Unit::DistanceToOccupiedRect 0x62af70; 0 for a dead platform or outside its quads).
+const Unit* RaisedPlatform(const Sim& sim, const Unit* u);
+float PlatformHeight(const Unit* P, float x, float z);
 
 // Quaternion helpers shared with the probe-facing bindings.
 Quat YawQuat(float fx, float fz);

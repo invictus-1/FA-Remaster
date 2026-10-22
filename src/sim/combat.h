@@ -185,6 +185,26 @@ class CollisionManipulator : public ScriptObject {
 };
 void CollidersTick(Sim& sim, Unit* u);
 
+// CFootPlantManipulator (CreateFootPlantController(unit, foot, knee, hip, [straightLegs], [maxFootFall]) 0x639d00,
+// constructor 0x639380, MoveManipulator 0x6395f0): plants a leg's foot on the ground. FAF's
+// CreateFootFallManipulators makes one per Footfall bone set of a walker (every commander and support commander,
+// the walking bots), precedence 10. Each beat, in its place among the unit's manipulators, it lifts a foot that
+// the pose put below the ground (or the raised platform the unit stands on) to it: half by turning the hip about
+// its X axis (the knee turned back by as much), half by turning the knee. Ours had no such manipulator (a stub):
+// a standing commander's feet stayed at their rest pose, 3 and 6 mm from the original's (MP1, the Cybran
+// commander's target bones Left_Foot_B01 / Right_Foot_B01).
+class FootPlantManipulator : public ScriptObject {
+ public:
+  Unit* unit = nullptr;
+  int footBone = -1, kneeBone = -1, hipBone = -1;  // +0x88, +0x8c, +0x90 (its watched bones in that order, +0x60)
+  bool straightLegs = true;                         // +0x94
+  float maxFootFall = 0;                            // +0x98
+  float halfLeg = 0;                                // +0x9c: |foot y - hip y| / 2 in the pose it was made in
+  bool enabled = true, alive = true;                // (+0x4c)
+  int precedence = 0;                               // (+0x58)
+  uint32_t seq = 0;
+};
+
 // CRotateManipulator (CreateRotator 0x643d80, MoveManipulator 0x643860): turns one bone about a local axis
 // toward a goal, at a speed, or spinning down; applied to the pose every tick at its place among the unit's
 // manipulators (precedence 0 unless a script sets one: the UEF cruiser's spinning Phalanx barrel has 10, the

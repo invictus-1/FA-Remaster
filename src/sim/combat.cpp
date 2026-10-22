@@ -2147,7 +2147,7 @@ bool BuilderArmSlotStep(Sim& sim, Unit* u, BuilderArm* a);
 void UnitAimTick(Sim& sim, Unit* u) {
   const bool anims = !u->animators.empty();
   if (u->aimControllers.empty() && u->rotators.empty() && u->builderArms.empty() && u->sliders.empty() &&
-      u->slavers.empty() && !anims) {
+      u->slavers.empty() && u->footPlants.empty() && !anims) {
     if (!u->colliders.empty()) CollidersTick(sim, u);
     return;
   }
@@ -2220,6 +2220,80 @@ void AimReadLastPose(Sim& sim, Unit* u) {
   }
 }
 
+// The arc cosine the foot plant takes (Abramowitz and Stegun 4.4.45, in the exe's x87 order at PC_24: inline at
+// 0x639900..0x63996d, 0x639b20..0x639b7d, 0x639c4f..0x639c71), and 0x50ccf0's arc sine: pi / 2 (the float of
+// atan(1) x 4, halved: [0xfb7914]) less it.
+static float FootAcosExe(float c) {
+  const float r = std::sqrt(1.0f - c);
+  const float p = c * ((c * -0x1.32dc6p-6f + 0x1.302c4ep-4f) * c - 0x1.b26908p-3f);  // [0xe4f778], [0xe4f774], [0xe4f770]
+  return (p + 0x1.921b48p+0f) * r;                                                    // [0xe4f76c]
+}
+static float FootAsinExe(float c) { return 0x1.921fb6p+0f - FootAcosExe(c); }
+// Moho::EulerRollToQuat 0x570750 about (1, 0, 0): cos(a / 2), the axis times sin(a / 2)
+static Quat FootRollXExe(float a) {
+  const float h = a * 0.5f;
+  const float s = dmath::Sin(h);
+  return Quat{1.0f * s, s * 0.0f, s * 0.0f, dmath::Cos(h)};
+}
+// CFootPlantManipulator::MoveManipulator 0x6395f0, on this beat's pose as the manipulators before it left it
+static void FootPlantStep(Sim& sim, Unit* u, FootPlantManipulator* m) {
+  if (u->dead) return;  // 0x639615: the unit's IsDead (vt+0x28)
+  const int n = static_cast<int>(u->poseQ.size());
+  if (m->footBone < 0 || m->kneeBone < 0 || m->hipBone < 0 || m->footBone >= n || m->kneeBone >= n ||
+      m->hipBone >= n)
+    return;
+  // the hip's, the knee's and the foot's world transforms (0x54bec0), the hip's axes (VAxes3 0x4ec590)
+  Vec3 hipP, kneeP, footP;
+  Quat hipQ, q;
+  BoneWorld(u, m->hipBone, &hipP, &hipQ);
+  BoneWorld(u, m->kneeBone, &kneeP, &q);
+  BoneWorld(u, m->footBone, &footP, &q);
+  float A[9];
+  AxesFromQuatExe(hipQ, A);
+  // the ground under the foot (STIMap::GetElevation 0x44fb90), plus the height of the raised platform the unit
+  // stands on (motion+0x114: 0x62af70)
+  const TerrainMap* map = sim.map();
+  float g = map ? map->TerrainHeight(footP.x, footP.z) : 0.0f;
+  if (const Unit* P = RaisedPlatform(sim, u)) g = PlatformHeight(P, footP.x, footP.z) + g;
+  // 0x63984d..0x6398a2: the goal is the higher of that ground (or the ground + halfLeg, when lower) and the foot
+  // raised by MaxFootFall; half the way up goes to each turn
+  {
+    const float t1 = m->halfLeg + g;
+    if (!(t1 > g)) g = t1;
+    const float t2 = m->maxFootFall + footP.y;
+    if (t2 > g) g = t2;
+  }
+  const float d = (g - footP.y) * 0.5f;
+  // the thigh: from a drop of a = |hip y - knee y| over its length L1 to a - d (at most L1)
+  {
+    const float dz = kneeP.z - hipP.z, dx = kneeP.x - hipP.x, dy = kneeP.y - hipP.y;
+    const float L1 = std::sqrt((dz * dz + dy * dy) + dx * dx);
+    const float a = std::fabs(hipP.y - kneeP.y);
+    const float inv = 1.0f / L1;
+    const float A1 = FootAcosExe(inv * a);
+    const float amd = a - d;
+    const float b = L1 > amd ? amd : L1;
+    const float ang = FootAcosExe(inv * b) - A1;
+    PoseRotate(u, m->hipBone, FootRollXExe(-ang));  // 0x639a0f: the hip by -ang, 0x639a1c: the knee by ang
+    PoseRotate(u, m->kneeBone, FootRollXExe(ang));
+  }
+  // the shin, from where the turns put the knee and the foot: from a drop of e = |knee y - foot y| over its
+  // length L2 to e - d; a shin that leans forward along the hip's forward axis (A[6], A[8]) of a leg that is not
+  // straight (+0x94) takes the inline arc cosine, every other the arc sine of 0x50ccf0
+  BoneWorld(u, m->kneeBone, &kneeP, &q);
+  BoneWorld(u, m->footBone, &footP, &q);
+  const float dx = footP.x - kneeP.x, dz = footP.z - kneeP.z, dy = footP.y - kneeP.y;
+  const bool forward = (A[8] * dz + A[6] * dx) + dy * 0.0f > 0.0f && !m->straightLegs;
+  const float L2 = std::sqrt((dz * dz + dy * dy) + dx * dx);
+  const float e = std::fabs(kneeP.y - footP.y);
+  const float inv = 1.0f / L2;
+  const float emd = e - d;
+  const float b = L2 > emd ? emd : L2;
+  const float turn =
+      forward ? FootAcosExe(inv * b) - FootAcosExe(inv * e) : FootAsinExe(inv * b) - FootAsinExe(inv * e);
+  PoseRotate(u, m->kneeBone, FootRollXExe(-0.0f - turn));  // 0x639c3c
+}
+
 void UnitAimTickManipulators(Sim& sim, Unit* u, bool anims) {
   // The unit's manipulators, one list in the order of their precedence, the ones of equal precedence in the
   // order they were put there (CAniActor::UpdateManipulators 0x63aa80 walks the list 0x63ace0 keeps; the
@@ -2231,7 +2305,7 @@ void UnitAimTickManipulators(Sim& sim, Unit* u, bool anims) {
   struct Manip {
     int prec;
     uint32_t seq;
-    int kind;  // 0 animator, 1 rotator, 2 slaver, 3 slider, 4 builder arm, 5 aim controller
+    int kind;  // 0 animator, 1 rotator, 2 slaver, 3 slider, 4 builder arm, 5 aim controller, 6 foot plant
     void* p;
   };
   std::vector<Manip> order;
@@ -2253,6 +2327,11 @@ void UnitAimTickManipulators(Sim& sim, Unit* u, bool anims) {
   }
   for (BuilderArm* a : u->builderArms) order.push_back({a->precedence, a->seq, 4, a});
   for (AimController* c : u->aimControllers) order.push_back({c->precedence, c->seq, 5, c});
+  {
+    auto& v = u->footPlants;
+    v.erase(std::remove_if(v.begin(), v.end(), [](FootPlantManipulator* m) { return !m->alive; }), v.end());
+    for (FootPlantManipulator* m : v) order.push_back({m->precedence, m->seq, 6, m});
+  }
   std::sort(order.begin(), order.end(), [](const Manip& a, const Manip& b) {
     return a.prec != b.prec ? a.prec < b.prec : a.seq < b.seq;
   });
@@ -2298,6 +2377,11 @@ void UnitAimTickManipulators(Sim& sim, Unit* u, bool anims) {
     if (e.kind == 5) {
       AimController* c = static_cast<AimController*>(e.p);
       if (c->alive) MoveManipulator(sim, c);
+      continue;
+    }
+    if (e.kind == 6) {  // (UpdateManipulators 0x63ab1b: an enabled one only)
+      FootPlantManipulator* m = static_cast<FootPlantManipulator*>(e.p);
+      if (m->alive && m->enabled) FootPlantStep(sim, u, m);
       continue;
     }
     SlaveManipulator* m = static_cast<SlaveManipulator*>(e.p);  // CSlaveManipulator::MoveManipulator 0x646140
@@ -4457,6 +4541,59 @@ int l_slaver_Destroy(lua_State* L) {
   if (o) o->UnbindLua();
   return 0;
 }
+// CreateFootPlantController(unit, footBone, kneeBone, hipBone, [straightLegs = true], [maxFootFall = 0]) 0x639d00
+int l_CreateFootPlantController(lua_State* L) {
+  const int top = lua_gettop(L);
+  if (top < 4 || top > 6)
+    return luaL_error(L, "%s\n  expected between %d and %d args, but got %d", "CreateFootPlantController", 4, 6, top);
+  Unit* u = ToObject<Unit>(L, 1);
+  if (!u || !u->skeleton) return luaL_error(L, "Unit has no skeleton.");  // (0x639d9e: the unit's actor, +0x540)
+  auto m = std::make_unique<FootPlantManipulator>();
+  m->unit = u;
+  m->footBone = ResolveBoneArg(L, u, 2);
+  m->kneeBone = ResolveBoneArg(L, u, 3);
+  m->hipBone = ResolveBoneArg(L, u, 4);
+  if (top > 4) m->straightLegs = lua_toboolean(L, 5) != 0;
+  if (top > 5) m->maxFootFall = static_cast<float>(luaL_checknumber(L, 6));
+  // 0x6394f0..0x639593: half the foot's height above (or below) the hip, in the pose as it is now
+  if (m->footBone >= 0 && m->hipBone >= 0) {
+    Vec3 fp, hp;
+    Quat q;
+    BoneWorld(u, m->footBone, &fp, &q);
+    BoneWorld(u, m->hipBone, &hp, &q);
+    m->halfLeg = std::fabs(fp.y - hp.y) * 0.5f;
+  }
+  m->seq = S(L)->NextManipSeq();  // (0x63ace0: behind the others of precedence 0)
+  FootPlantManipulator* raw = m.get();
+  u->footPlants.push_back(raw);
+  CreateObject(L, raw, "CFootPlantManipulator");
+  S(L)->Own(std::move(m));
+  return 1;
+}
+FootPlantManipulator* CheckFootPlant(lua_State* L) { return CheckObject<FootPlantManipulator>(L, 1); }
+int l_foot_SetPrecedence(lua_State* L) {  // cfunc_IAniManipulatorSetPrecedenceL 0x63bb40
+  FootPlantManipulator* m = CheckFootPlant(L);
+  m->precedence = static_cast<int>(luaL_checknumber(L, 2));
+  m->seq = S(L)->NextManipSeq();
+  lua_settop(L, 1);
+  return 1;
+}
+int l_foot_Enable(lua_State* L) {
+  CheckFootPlant(L)->enabled = true;
+  lua_settop(L, 1);
+  return 1;
+}
+int l_foot_Disable(lua_State* L) {
+  CheckFootPlant(L)->enabled = false;
+  lua_settop(L, 1);
+  return 1;
+}
+int l_foot_Destroy(lua_State* L) {
+  ScriptObject* o = GetObject(L, 1);
+  if (auto* m = dynamic_cast<FootPlantManipulator*>(o)) m->alive = false;
+  if (o) o->UnbindLua();
+  return 0;
+}
 }  // namespace
 
 void RegisterCombatBindings(lua_State* L) {
@@ -4506,6 +4643,11 @@ void RegisterCombatBindings(lua_State* L) {
   SetMethod(L, "CSlaveManipulator", "Enable", l_slaver_Enable);
   SetMethod(L, "CSlaveManipulator", "Disable", l_slaver_Disable);
   SetMethod(L, "CSlaveManipulator", "Destroy", l_slaver_Destroy);
+  SetGlobal(L, "CreateFootPlantController", l_CreateFootPlantController);
+  SetMethod(L, "CFootPlantManipulator", "SetPrecedence", l_foot_SetPrecedence);
+  SetMethod(L, "CFootPlantManipulator", "Enable", l_foot_Enable);
+  SetMethod(L, "CFootPlantManipulator", "Disable", l_foot_Disable);
+  SetMethod(L, "CFootPlantManipulator", "Destroy", l_foot_Destroy);
   SetMethod(L, "CAimManipulator", "SetFiringArc", l_aim_SetFiringArc);
   SetMethod(L, "CAimManipulator", "SetResetPoseTime", l_aim_SetResetPoseTime);
   SetMethod(L, "CAimManipulator", "OnTarget", l_aim_OnTarget);
