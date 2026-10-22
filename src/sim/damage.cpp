@@ -593,7 +593,8 @@ void BeamCheck(Sim& sim, lua_State* L, CollisionBeam* b) {
     // to its origin: the beam's end, bone 1, lay 0.005 to 0.07 further in than the original's (Naval's beam lines).)
     if (best->kind == Entity::Kind::Shield) D = Len(Sub(P, bestHit));
     else if (best->kind == Entity::Kind::Unit) D = Len(Sub(P, UnitBoneMinus1(*static_cast<Unit*>(best), best->position)));
-    else D = Len(Sub(P, best->position));
+    else  // (its COMMITTED place, +0xac..+0xb4: 0x6d6f75..0x6d6f85; a shell that stepped earlier in this beat too)
+      D = Len(Sub(P, best->shapeHeld ? best->shapePos : best->position));
     type = ImpactTypeOf(sim, best, impactPos);
   }
   // The terrain and the water: STIMap::SurfaceIntersection 0x577bc0 along the beam's own segment (0x6d6d47..
