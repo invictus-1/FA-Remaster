@@ -1,22 +1,24 @@
 -- The replay timeline (ours: ui/data/lua/timeline.lua, the host's side ui/app/game_session.cpp and
 -- ui/user/replay_timeline.cpp). A multiplayer replay recorded in the original game (the lab's replays/mp folder, as
 -- mp_replay.lua) is started from the front end as the game's Replay dialog does (LaunchReplaySession) and watched:
--- the bar is there with the replay's length, the moments come in while they are looked for (the engine's scan; a
--- stand-in list until it is on main) with all six kinds and their hover texts, the fighting strip fills, a jump
--- forward (by the script and by a click on the track) lands at its beat, a jump back starts the replay over and lands
--- at its beat with the camera and the army watched kept, the X hides the bar, the handle shows near where it was, the
--- key (Ctrl-T) and the console bring it back, it is dragged to another place and docks, and it goes away with the
--- game's panels.
+-- the bar is there with the replay's length; the engine's scan (ScanReplayMoments, the whole 1v1: some 30 s, the
+-- watched replay held meanwhile) shows its progress, finds the replay's real length and its moments (by kind and army
+-- number: a commander's death, his army's defeat, the game's end) and the fighting; every kind of the eight has its
+-- marker look and text; a jump forward (by the script, by a click on the track) lands at its beat; a click on the
+-- commander's marker jumps to 5 s before his death and selects him; a jump back starts the replay over and lands at
+-- its beat with the camera and the army watched kept; docked at the bottom it sits above the game's bottom panels;
+-- the X hides the bar, the handle shows near where it was, the key (Ctrl-T) and the console bring it back, it is
+-- dragged to another place and docks, and it goes away with the game's panels.
 --   moho64ui --init <init.lua> --prefs <a copy> --stage frontend [--no-world] --lua ui/tests/timeline.lua
---            --game-lua ui/tests/timeline.lua --frames 40000 --log out.log [-- /timeline_end hover|hidden]
+--            --game-lua ui/tests/timeline.lua --frames 3000000 --log out.log [-- /timeline_end hover|hidden]
 -- (from Git Bash with MSYS_NO_PATHCONV=1 and C:/ paths: else its "/..." words are made into paths)
 -- The test ends the run itself (ExitApplication) after its last line. `/timeline_end` (the game's own command line,
 -- after "--") leaves the bar as it ends for a --screenshot: "hover" (the default: the mouse over a marker, its
 -- tooltip shown) or "hidden" (hidden by its X). The jump back restarts the replay: this file runs again in the new
 -- interface and goes on from the preferences' note (moho64ui_test_timeline_phase). The replay: MP_REPLAY_FILE if a
 -- wrapper sets it, or the game's command line's "/replay <file>", else the lab's 1v1 (beside a worktree in the lab);
--- where it is not there the test is skipped. Its players' names stay in the
--- lab: none of them is written here.
+-- where it is not there the test is skipped. Its players' names stay in the lab: none of them is written here (the
+-- checks go by army number and by what the scripts return).
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
 local file = rawget(_G, "MP_REPLAY_FILE") or (GetCommandLineArg("/replay", 1) or {})[1] or "../replays/mp/mp2_1v1_abhor_20261016.SCFAReplay"
 local failed = 0
@@ -119,14 +121,18 @@ end
 local function first()
     check("the game is a replay", SessionIsReplay(), true)
     check("the bar is made", WaitFor(function() return Timeline.State.created end, 300), true)
-    -- (from now on, each frame: whether the scan's progress and its first markers were seen while it ran)
-    local sawScanning, sawPartial = false, false
+    -- (the replay held while the scan plays its copy: the watched game stays near its start, for the jumps below)
+    SessionRequestPause()
+    -- (from now on, each frame: whether the scan's progress was shown while it ran, and the scanned part grew)
+    local sawScanning, grew, lastScanned, lastWidth = false, 0, -1, -1
     ForkThread(function()
         while true do
             local now = moho64ui_ReplayTimeline()
             if not now or not now.scanning then return end
             if string.find(Timeline.State.status, "^Scanning %d+%%$") then sawScanning = true end
-            if Timeline.State.markers > 0 then sawPartial = true end
+            local width = Timeline.Controls.scanned and Timeline.Controls.scanned.Width() or 0
+            if now.scanned > lastScanned and width > lastWidth and lastScanned >= 0 then grew = grew + 1 end
+            lastScanned, lastWidth = now.scanned, width
             WaitFrames(1)
         end
     end)
@@ -144,23 +150,55 @@ local function first()
     check("the key at first: Ctrl-T the timeline", tostring(moho64ui_KeyMapAction("Ctrl-T")), "remaster_timeline")
     check("its length on the bar", Timeline.Controls.length:GetText(), "/ " .. string.format("%d:%02d", math.floor(s.ticks / 600), math.mod(math.floor(s.ticks / 10), 60)))
 
-    -- the moments come in while they are looked for, the progress shown meanwhile
-    local done = WaitFor(function() return not moho64ui_ReplayTimeline().scanning end, 30000)
+    -- the moments come in while the engine's scan plays the replay a second time (ScanReplayMoments), the scanned part
+    -- of the track growing and the progress shown meanwhile
+    local beganAt = GameTick()
+    local done = WaitFor(function() return not moho64ui_ReplayTimeline().scanning end, 3000000)
     check("the scan finishes", done, true)
     check("its progress shown while it ran (\"Scanning n%\")", sawScanning, true)
-    check("markers appear while it scans", sawPartial, true)
+    check("and the scanned part of the track grew", grew > 2, true)
+    check("the watched replay held meanwhile", near(GameTick(), beganAt, 1), true)
+    SessionResume()
     WaitFrames(2)
     s = moho64ui_ReplayTimeline()
+    LOG(string.format("TEST note: scanned to game tick %d; the replay's length now %d (its stream's beats less the paused ones)", s.scanned, s.ticks))
+    check("played to its end: the length is the tick it ended at", s.ticks, s.scanned)
+    check("and the bar says so", Timeline.Controls.length:GetText(), "/ " .. string.format("%d:%02d", math.floor(s.ticks / 600), math.mod(math.floor(s.ticks / 10), 60)))
     local list = moho64ui_ReplayMoments(1)
     check("the moments", table.getn(list), s.moments)
     check("a marker for each", Timeline.State.markers, s.moments)
-    local seen = {}
-    for _, m in list do seen[m.kind] = (seen[m.kind] or 0) + 1 end
-    for _, kind in { "CommanderDied", "ExperimentalFinished", "ExperimentalDied", "ArmyDefeated", "NukeLaunched", "NukeLanded" } do
-        check("a moment of the kind " .. kind, (seen[kind] or 0) > 0, true)
+    local known = { CommanderDied = true, ExperimentalFinished = true, ExperimentalDied = true, ArmyDefeated = true,
+        NukeLaunched = true, NukeLanded = true, NukeIntercepted = true, GameEnded = true }
+    local seen, unknown, notes = {}, 0, {}
+    for _, m in list do
+        seen[m.kind] = m
+        if not known[m.kind] then unknown = unknown + 1 end
+        table.insert(notes, string.format("%s %d army %d", m.kind, m.tick, m.army))
+    end
+    LOG("TEST note: the moments: " .. table.concat(notes, ", "))
+    check("every moment of a kind the bar knows", unknown, 0)
+    -- the 1v1: one commander dies, his army is defeated, the game ends with the other army in
+    local cdr, out, ended = seen.CommanderDied, seen.ArmyDefeated, seen.GameEnded
+    check("a commander died, his army was defeated, the game ended", (cdr and out and ended) and true or false, true)
+    if cdr and out and ended then
+        check("the defeated army is the commander's, after his death", out.army == cdr.army and out.tick >= cdr.tick, true)
+        check("the game ended last, the other army still in", ended.army ~= cdr.army and ended.tick >= out.tick, true)
+        check("the commander's moment names his unit and its entity", cdr.unit ~= "" and cdr.entity ~= nil, true)
     end
     check("the status line is empty after the scan", Timeline.State.status, "")
-    check("the fighting: a 5 s bucket for every 50 beats scanned", s.buckets, math.floor(s.ticks / 50))
+    check("the fighting: a 5 s bucket for every 50 ticks played", s.buckets, math.ceil(s.ticks / 50))
+    local damage = 0
+    for _, b in moho64ui_ReplayFight(1) do damage = damage + b.damage end
+    check("and there was fighting", damage > 0, true)
+    -- every kind has its marker look and its text (made-up moments: army 1, a minute in)
+    for kind in known do
+        local text = Timeline.MomentText({ kind = kind, army = 1, tick = 600, unit = "url0402" })
+        check("the kind " .. kind .. ": a marker look and a text with its time", Timeline.MarkerLooks[kind] ~= nil and
+            string.find(text, " 1:00$") ~= nil, true)
+    end
+    check("an intercepted nuke says so", string.find(Timeline.MomentText({ kind = "NukeIntercepted", army = 1, tick = 600 }), " intercepted ") ~= nil, true)
+    check("the game's end says so", string.find(Timeline.MomentText({ kind = "GameEnded", army = 1, tick = 600 }), "^Game over, ") ~= nil, true)
+    check("a moment of no army says so", string.find(Timeline.MomentText({ kind = "NukeLanded", army = 0, tick = 600 }), "no army") ~= nil, true)
     local shown = 0
     for _, c in Timeline.Controls.markers do if not c:IsHidden() then shown = shown + 1 end end
     check("the markers are on the screen", shown, s.moments)
@@ -185,11 +223,6 @@ local function first()
     local want = "Commander of " .. GetArmiesTable().armiesTable[m.army].nickname .. " destroyed " ..
         string.format("%d:%02d", math.floor(m.tick / 600), math.mod(math.floor(m.tick / 10), 60))
     check("hovering the commander's marker says what and when (\"Commander of <army> destroyed m:ss\")", Timeline.State.hover, want)
-    local exp = markerOf("ExperimentalFinished")
-    x, y = middle(exp)
-    moho64ui_MouseMove(x, y)
-    WaitFrames(2)
-    check("and an experimental's says its name and army", string.find(tostring(Timeline.State.hover), " finished by ") ~= nil, true)
     moho64ui_MouseMove(10, 10)
     WaitFrames(2)
     check("away from the markers: no hover text", Timeline.State.hover, false)
@@ -218,6 +251,21 @@ local function first()
     LOG(string.format("TEST note: a click at the place of beat %d: at %d (one pixel is %.1f beats)", target, GameTick(), s.ticks / Timeline.Controls.track.Width()))
     check("it lands at the clicked beat", near(GameTick(), target, s.ticks / Timeline.Controls.track.Width() + 3), true)
     check("the thumb stands there", near(middle(Timeline.Controls.thumb), Timeline.XOfTick(GameTick()), 2), true)
+
+    -- a click on the commander's marker: the replay jumps to 5 s before his death, and he is selected
+    local cmk = markerOf("CommanderDied")
+    if cmk then
+        local cm = cmk.moment
+        click(middle(cmk))
+        check("a click on a marker jumps", waitJump(6000), true)
+        WaitFrames(2)
+        LOG(string.format("TEST note: the commander's marker (game tick %d): at %d", cm.tick, GameTick()))
+        check("to 5 s before its moment", near(GameTick(), cm.tick - 50, 3), true)
+        local sel = GetSelectedUnits() or {}
+        check("and selects its unit", table.getn(sel) == 1 and sel[1]:GetEntityId() == tostring(cm.entity), true)
+        SelectUnits({})
+        WaitFrames(2)
+    end
 
     -- a jump back: the replay starts over; the camera and the army watched are kept
     SetFocusArmy(1)

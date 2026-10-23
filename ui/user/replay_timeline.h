@@ -27,12 +27,15 @@ class ReplayTimelineSource {
   };
   struct Moment {
     int tick = 0;
-    std::string kind;  // "CommanderDied", "ExperimentalFinished", "ExperimentalDied", "ArmyDefeated", "NukeLaunched", "NukeLanded"
+    // "CommanderDied", "ExperimentalFinished", "ExperimentalDied", "ArmyDefeated", "NukeLaunched", "NukeLanded",
+    // "NukeIntercepted", "GameEnded" (the engine's Moment::Kind, sim/moments.h)
+    std::string kind;
     int army = -1;     // 0-based
     float pos[3] = {0, 0, 0};
     std::string unit;
+    uint32_t entity = 0xffffffff;  // the unit's or the missile's entity id; 0xffffffff none
   };
-  struct Fight {  // every army's fighting in those 5 s, summed
+  struct Fight {  // every army's fighting in those 5 s, summed (with the hits that have no army)
     int tick0 = 0;
     float damage = 0;
     int hits = 0, deaths = 0;

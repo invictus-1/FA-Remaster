@@ -1,7 +1,6 @@
 #include "app/game_session.h"
 
 #include "app/window.h"
-#include "app/replay_moments.h"
 
 #include <algorithm>
 #include <atomic>
@@ -27,6 +26,7 @@
 #include "sim/command_stream.h"
 #include "sim/command_writer.h"
 #include "sim/fingerprint.h"
+#include "sim/moments.h"
 #include "sim/replay.h"
 #include "sim/session.h"
 #include "sim/sim.h"
@@ -635,30 +635,25 @@ uint32_t ReplayBeats(const std::string& data, size_t at) {
   }
   return beats > 0xffffffffu ? 0xffffffffu : static_cast<uint32_t>(beats);
 }
-
-const char* KindName(Kind kind) {
-  switch (kind) {
-    case Kind::CommanderDied: return "CommanderDied";
-    case Kind::ExperimentalFinished: return "ExperimentalFinished";
-    case Kind::ExperimentalDied: return "ExperimentalDied";
-    case Kind::ArmyDefeated: return "ArmyDefeated";
-    case Kind::NukeLaunched: return "NukeLaunched";
-    case Kind::NukeLanded: return "NukeLanded";
-  }
-  return "?";
-}
 }  // namespace
 
-// The timeline's host side for one replay: its length, the moments' scan on its own thread (kept across a jump back,
-// which starts the same replay over), and the jumps.
+// The timeline's host side for one replay: its length, the moments' scan on its own thread (the engine's
+// ScanReplayMoments, sim/moments.h: kept across a jump back, which starts the same replay over), and the jumps.
 struct GameSession::Timeline : ReplayTimelineSource {
   GameSession* session = nullptr;
-  uint32_t ticks = 0;
-  Moments found;
+  mutable uint32_t ticks = 0;  // (the stream's beats; once the scan has played it to its end, the tick it ended at)
+  moho::Moments found;  // (the scan's: filled on its thread, under its lock)
   std::atomic<int> scanned{0};
   std::atomic<bool> cancel{false}, scanning{false};
   std::thread scan;
   std::string kept;  // (what the interface keeps across a jump back: TakeKept)
+  // This thread's copy of what the scan found (Moments::CopySince, the new part at each look): the moments, every
+  // list of fight buckets (fights[army], the last the hits without an army), and whether the last copy was the
+  // final one (the scan done: its last bucket summed to the end).
+  mutable std::vector<moho::Moment> moments;
+  mutable std::vector<std::vector<moho::FightBucket>> buckets;
+  mutable bool finalCopy = false;
+  int limit = 0;  // (the scan's ScanArgs::ticks: 0 the whole replay)
 
   ~Timeline() { Stop(); }
   void Stop() {
@@ -670,52 +665,68 @@ struct GameSession::Timeline : ReplayTimelineSource {
     if (!g.sim_) return 0;
     return g.BeatRunning() ? g.beatFrom_ : g.sim_->tick();  // (a beat on its thread: the one it started from)
   }
-  size_t BucketsLocked() const {  // (the buckets every army has)
-    if (found.fight.empty()) return 0;
-    size_t n = found.fight[0].size();
-    for (const auto& army : found.fight) n = std::min(n, army.size());
-    return n;
+  // What is new since the last look. While the scan runs its last bucket is still being summed: that one is asked
+  // for again each time (CopySince from its index), until a copy made after the scan's end.
+  void Refresh() const {
+    if (finalCopy) return;
+    size_t from = buckets.empty() ? 0 : buckets[0].size();
+    if (from > 0) --from;
+    for (auto& list : buckets) list.resize(std::min(list.size(), from));
+    const bool ended = !scanning;  // (read before the copy: a scan that has ended has appended all it will)
+    bool finished = false;
+    int last = 0;
+    found.CopySince(moments.size(), from, &moments, &buckets, &last, &finished);
+    finalCopy = finished || ended;
+    // The replay played to its end: its length is the game tick it ended at, the stream's beats less the paused ones
+    // (a paused beat leaves Sim::tick() as it is), which the seeks go by.
+    if (finished && last > 0 && (limit == 0 || last < limit) && static_cast<uint32_t>(last) != ticks) {
+      Logf(LogLevel::Info, "moho64ui: the replay ends at game tick %d (%u beats in its stream)", last, ticks);
+      ticks = static_cast<uint32_t>(last);
+    }
+  }
+  size_t DoneBuckets() const {  // (the buckets summed to their end: the last one only once the scan is done)
+    size_t n = buckets.empty() ? 0 : buckets[0].size();
+    for (const auto& list : buckets) n = std::min(n, list.size());
+    return finalCopy || n == 0 ? n : n - 1;
   }
   State Now() const override {
+    Refresh();
     State s;
     s.ticks = ticks;
     s.tick = TickNow();
     s.seekTo = session->seekTo_;
     s.scanning = scanning;
     s.scanned = static_cast<uint32_t>(scanned.load());
-    {
-      std::lock_guard<std::mutex> hold(found.lock);
-      s.moments = found.moments.size();
-      s.buckets = BucketsLocked();
-    }
+    s.moments = moments.size();
+    s.buckets = DoneBuckets();
     s.kept = !kept.empty();
     return s;
   }
   void MomentsFrom(size_t first, std::vector<ReplayTimelineSource::Moment>* out) const override {
     out->clear();
-    std::lock_guard<std::mutex> hold(found.lock);
-    for (size_t i = first; i < found.moments.size(); ++i) {
-      const ::moho::ui::Moment& f = found.moments[i];
+    for (size_t i = first; i < moments.size(); ++i) {
+      const moho::Moment& f = moments[i];
       ReplayTimelineSource::Moment m;
       m.tick = f.tick;
-      m.kind = KindName(f.kind);
+      m.kind = MomentKindName(f.kind);
       m.army = f.army;
       m.pos[0] = f.pos.x, m.pos[1] = f.pos.y, m.pos[2] = f.pos.z;
       m.unit = f.unit;
+      m.entity = f.entity;
       out->push_back(std::move(m));
     }
   }
+  // Every army's fighting in each 5 s summed, with the hits that have no army (fights[armies]).
   void FightFrom(size_t first, std::vector<Fight>* out) const override {
     out->clear();
-    std::lock_guard<std::mutex> hold(found.lock);
-    const size_t n = BucketsLocked();
+    const size_t n = DoneBuckets();
     for (size_t i = first; i < n; ++i) {
       Fight f;
-      f.tick0 = found.fight[0][i].tick0;
-      for (const auto& army : found.fight) {
-        f.damage += army[i].damage;
-        f.hits += army[i].hits;
-        f.deaths += army[i].deaths;
+      f.tick0 = buckets[0][i].tick0;
+      for (const auto& list : buckets) {
+        f.damage += list[i].damage;
+        f.hits += list[i].hits;
+        f.deaths += list[i].deaths;
       }
       out->push_back(f);
     }
@@ -752,9 +763,12 @@ struct GameSession::Timeline : ReplayTimelineSource {
 
 ReplayTimelineSource* GameSession::timeline() { return play_ && timeline_ ? timeline_.get() : nullptr; }
 
-// The replay's length, and its moments looked for from now on (the engine's ScanReplayMoments on a thread of its own;
-// a stand-in until that is on main: app/replay_moments.h). THE ONE PLACE that makes the scan's ScanArgs.
-void GameSession::StartMomentScan(const ReplayHeader& header, const std::string& file) {
+// The replay's length, and its moments looked for from now on: the engine's ScanReplayMoments (sim/moments.h) on a
+// thread of its own, playing the replay a second time in a Sim of its own, mounted as this program mounted the game
+// (scanInit, scanFolders, replayMaps), with the replay's mods and one worker. It goes at some 20 times the game's
+// speed for a 1v1 and some 7 for a 4v4 (engine, 2026-10-23): the bar fills over minutes. scanTicks: it stops there
+// (tests).
+void GameSession::StartMomentScan(const ReplayHeader& header, const std::string& file, const std::vector<std::string>& uids) {
   StopMomentScan();
   timeline_ = std::make_unique<Timeline>();
   Timeline& t = *timeline_;
@@ -762,22 +776,35 @@ void GameSession::StartMomentScan(const ReplayHeader& header, const std::string&
   t.ticks = ReplayBeats(playData_, header.streamOffset);
   Logf(LogLevel::Info, "moho64ui: the replay is %u beats long (%u:%02u); its moments are looked for", t.ticks, t.ticks / 600,
        (t.ticks / 10) % 60);
-  ScanArgs args;
-  args.header = header;
-  args.file = file;
-  args.ticks = t.ticks;
+  moho::ScanArgs args;
+  args.init = scanInit;
+  args.folders = scanFolders;
+  args.maps = replayMaps;
+  args.modUids = uids;
+  args.replay = file;
+  args.threads = 1;  // (the cores stay the watched game's)
+  args.ticks = scanTicks;
+  t.limit = scanTicks;
   t.scanning = true;
   t.scan = std::thread([&t, args] {
     const auto t0 = std::chrono::steady_clock::now();
-    const bool through = ScanReplayMoments(args, &t.found, &t.scanned, &t.cancel);
+    const bool through = moho::ScanReplayMoments(args, &t.found, &t.scanned, &t.cancel);
     size_t moments = 0;
+    int last = 0;
+    std::string error;
     {
-      std::lock_guard<std::mutex> hold(t.found.lock);
+      std::lock_guard<std::mutex> hold(t.found.mutex);
       moments = t.found.moments.size();
+      last = t.found.lastTick;
+      error = t.found.error;
     }
     t.scanning = false;
-    Logf(LogLevel::Info, "moho64ui: the replay's moments: %s, %zu found in %.1f s", through ? "scanned" : "the scan stopped", moments,
-         std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+    const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    if (!error.empty())
+      Logf(LogLevel::Warning, "moho64ui: the replay's moments could not be looked for: %s", error.c_str());
+    else
+      Logf(LogLevel::Info, "moho64ui: the replay's moments: %s at beat %d, %zu found in %.1f s (%.1f times the game's speed)",
+           through ? "scanned" : "the scan stopped", last, moments, secs, secs > 0 ? last / 10.0 / secs : 0.0);
   });
 }
 
@@ -1015,7 +1042,7 @@ bool GameSession::LaunchReplay(lua_State* L, const std::string& file, std::strin
   ReplayHeld() = false;  // (a new replay plays: no hold of a replay watched before)
   seekTo_ = 0;
   seekBack_ = false;
-  StartMomentScan(*h, file);
+  StartMomentScan(*h, file, uids);
   last_ = std::make_unique<SessionDescription>(session);
   lastUids_ = uids;
   lastWasReplay_ = true;

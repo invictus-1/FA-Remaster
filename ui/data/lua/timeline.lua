@@ -3,9 +3,9 @@
 -- bar of the game's own look (the in-game panels' frame, /game/panel/; the observer panel's slider thumb and its
 -- cyan time; the game's tooltips) shows the replay's length, where it is, the game's moments as markers (hover: what
 -- it was and when) and a thin strip of how much fighting there was in every 5 s. A click on the bar or a drag of its
--- thumb jumps there; a click on a marker jumps to 5 s before it. The bar's X button hides it (so only the game
--- shows), a small handle where it was (shown when the mouse comes near) or the key "Replay timeline" (Ctrl-T at
--- first: remaster_timeline) brings it back; dragged by its frame it docks at the bottom or the top of the screen or
+-- thumb jumps there; a click on a marker jumps to 5 s before it and selects its unit if it is one there then. The
+-- bar's X button hides it (so only the game shows), a small handle where it was (shown when the mouse comes near) or
+-- the key "Replay timeline" (Ctrl-T at first: remaster_timeline) brings it back; dragged by its frame it docks at the bottom or the top of the screen or
 -- stays where it is dropped. Docked at the bottom it sits above the game's bottom panels (the construction panel, the
 -- unit view), never over them, and moves up and down as they come, grow and go with a selection (Chris, 2026-10-23).
 -- Shown or not and its place are kept in the preferences (moho64ui_replay_timeline).
@@ -13,9 +13,10 @@
 -- key) and comes back with them.
 --
 -- The host keeps the replay (ui/app/game_session.cpp; its functions ui/user/replay_timeline.cpp): the length (the
--- replay stream's beats), the moments (the engine's scan on a thread of the host's; a stand-in list until the
--- engine's is on main) and the jumps (forward: the beats run ahead; back: the replay starts over, this interface is
--- made anew, and runs ahead). A jump back keeps the camera and the army watched through the restart
+-- replay stream's beats, then the tick it ends at), the moments (the engine's ScanReplayMoments, sim/moments.h, on a
+-- thread of the host's: it plays the replay a second time, some 7 to 40 times the game's speed, so the markers come
+-- in over a minute or minutes, the scanned part of the track lighter) and the jumps (forward: the beats run ahead;
+-- back: the replay starts over, this interface is made anew, and runs ahead). A jump back keeps the camera and the army watched through the restart
 -- (moho64ui_ReplaySeek's `keep`, moho64ui_ReplayTakeKept). gamemain's OnFirstUpdate (ui/data/hook) calls Create.
 
 local UIUtil = import("/lua/ui/uiutil.lua")
@@ -60,7 +61,8 @@ local my = {
     kept = false,          -- (a jump back's camera and army, put back when the jump is over)
     wasSeeking = false,
     placeX = 0.5, placeY = 0.8,  -- (a free place: the bar's middle, as shares of the screen)
-    laidOutWidth = false,
+    laidOutWidth = false, laidOutTicks = false,
+    selectAfter = false,  -- (a marker's unit, selected when its jump forward is over)
     floor = false,  -- (the top of the game's bottom panels, PanelsTop)
 }
 local kinds = {
@@ -70,8 +72,12 @@ local kinds = {
     ArmyDefeated = { icon = '/game/unit-over/icon-skull_bmp.dds', frame = 'ff8c8c8c', skin = true },
     NukeLaunched = { icon = '/game/orders/launch-nuke_btn_up.dds', frame = 'ffe0a020', skin = true },
     NukeLanded = { icon = '/game/orders/nuke_btn_up.dds', frame = 'ffd23c2c', skin = true },
+    NukeIntercepted = { icon = '/textures/ui/icons_strategic/structure_antimissile.dds', frame = 'ff3c8cd2' },
+    -- (FAF puts the armies still in out of the game too when it ends: the observer's icon, as the score panel's)
+    GameEnded = { icon = '/widgets/faction-icons-alpha_bmp/observer_ico.dds', frame = 'ffd8c060', skin = true },
 }
 
+MarkerLooks = kinds  -- (for the tests)
 
 local function TimeText(tick)
     local seconds = math.floor((tick or 0) / 10)
@@ -82,8 +88,9 @@ end
 
 local function ArmyName(army)
     local armies = GetArmiesTable().armiesTable
-    local a = armies and armies[army]
-    return a and (a.nickname or a.name) or ("army " .. tostring(army))
+    local a = army and army >= 1 and armies and armies[army]
+    if not a then return army and army >= 1 and ("army " .. army) or "no army" end
+    return a.nickname or a.name
 end
 local function ArmyColor(army)
     local armies = GetArmiesTable().armiesTable
@@ -108,6 +115,8 @@ function MomentText(m)
     elseif m.kind == 'ArmyDefeated' then what = who .. " defeated"
     elseif m.kind == 'NukeLaunched' then what = "Nuke launched by " .. who
     elseif m.kind == 'NukeLanded' then what = "Nuke of " .. who .. " landed"
+    elseif m.kind == 'NukeIntercepted' then what = "Nuke of " .. who .. " intercepted"
+    elseif m.kind == 'GameEnded' then what = "Game over, " .. who .. " still in"
     else what = tostring(m.kind) .. " (" .. who .. ")" end
     return what .. " " .. TimeText(m.tick)
 end
@@ -194,18 +203,34 @@ local function Place()
     my.bar.Bottom:Set(function() return my.bar.Top() + my.bar.Height() end)
 end
 
--- Seek: jump to a beat (a jump back keeps the camera and the army watched).
-function Seek(tick)
+-- Seek: jump to a beat (a jump back keeps the camera and the army watched). `select` (an entity id, a marker's unit):
+-- selected when the jump is over, if it is a unit there then.
+function Seek(tick, select)
     local now = moho64ui_ReplayTimeline()
     if not now then return false, "no replay plays" end
     tick = math.max(1, math.min(math.floor(tick), now.ticks))
     local keep = nil
     if tick < now.tick then
         local cam = GetCamera('WorldCamera')
-        keep = { camera = cam and cam:SaveSettings() or nil, focus = GetFocusArmy() }
+        keep = { camera = cam and cam:SaveSettings() or nil, focus = GetFocusArmy(), select = select }
+        my.selectAfter = false
+    else
+        my.selectAfter = select or false
     end
     State.lastSeek = tick
-    return moho64ui_ReplaySeek(tick, keep)
+    local ok, why = moho64ui_ReplaySeek(tick, keep)
+    if ok then my.wasSeeking = true end  -- (a short jump may be over before the next frame looks)
+    return ok, why
+end
+
+-- A marker's unit selected after its jump (a missile, or a unit not there, is not).
+local function SelectAfter(entity)
+    if not entity then return end
+    local unit = GetUnitById(tostring(entity))
+    if unit and not unit:IsDead() then
+        SelectUnits({ unit })
+        State.selected = entity
+    end
 end
 
 local function PutBack(k)
@@ -287,7 +312,7 @@ local function AddMarker(m)
             return true
         elseif event.Type == 'ButtonPress' and event.Modifiers.Left then
             HideTip()
-            Seek(m.tick - K.leadTicks)
+            Seek(m.tick - K.leadTicks, m.entity)
             return true
         end
         return false
@@ -316,13 +341,22 @@ local function LayoutColumns()
     local count = table.getn(my.columns)
     if count == 0 then return end
     local buckets = math.max(1, math.ceil((my.info.ticks or 0) / 50))
+    -- (the scale: the most fighting, but at most three times what the busiest tenth of the stretches holds, so one
+    -- huge blast, a commander's or a nuke's, leaves the rest of the strip readable; higher ones are cut at the top)
+    local values = {}
+    for i = 1, count do
+        if my.columnValue[i] > 0 then table.insert(values, my.columnValue[i]) end
+    end
+    table.sort(values)
+    local scale = my.columnMax
+    if table.getn(values) >= 10 then scale = math.min(scale, 3 * values[math.ceil(table.getn(values) * 0.9)]) end
     for i, c in my.columns do
         local x0 = XOfTick((i - 1) * buckets * 50 / count)
         local x1 = XOfTick(i * buckets * 50 / count)
         local dx = math.floor(x0) - my.bar.Left()
         c.Left:Set(function() return my.bar.Left() + dx end)
         c.Width:Set(math.max(1, math.floor(x1) - math.floor(x0) - 1))
-        local h = my.columnMax > 0 and math.sqrt(my.columnValue[i] / my.columnMax) * S(K.stripHeight) or 0
+        local h = scale > 0 and math.sqrt(math.min(1, my.columnValue[i] / scale)) * S(K.stripHeight) or 0
         h = math.floor(h + 0.5)
         if my.columnValue[i] > 0 and h < 1 then h = 1 end
         c.Height:Set(h)
@@ -386,8 +420,10 @@ local function Frame()
         if not State.visible then my.bar:Hide() end
     end
     local width = my.bar.Width()
-    if width ~= my.laidOutWidth then  -- (the screen's size changed: everything along the track again)
+    if width ~= my.laidOutWidth or now.ticks ~= my.laidOutTicks then  -- (the screen's size changed, or the replay's
+        -- length: the scan found it, the stream's beats less its paused ones; everything along the track again)
         my.laidOutWidth = width
+        my.laidOutTicks = now.ticks
         MakeColumns()
         AddFight({})
         local all = my.fight
@@ -431,9 +467,14 @@ local function Frame()
         c.status:SetText(status)
     end
     -- a jump back's camera: put back as the new interface comes, and again when the jump is over
-    if my.wasSeeking and not now.seeking and my.kept then
-        PutBack(my.kept)
-        my.kept = false
+    if my.wasSeeking and not now.seeking then
+        if my.kept then
+            PutBack(my.kept)
+            SelectAfter(my.kept.select)
+            my.kept = false
+        end
+        SelectAfter(my.selectAfter)
+        my.selectAfter = false
     end
     my.wasSeeking = now.seeking
     State.seeking = now.seeking
@@ -521,6 +562,16 @@ function Create()
         UIUtil.SkinnableFile('/game/panel/panel_brd_lm.dds'))
     frame:Surround(my.bar, 0, 0)
     frame.Depth:Set(function() return my.bar.Depth() end)
+    -- (the panel's own middle lets the world through; a darker ground under it keeps the markers and the strip legible
+    -- over a bright map, the world's rings and icons)
+    local ground = Bitmap(my.bar)
+    ground:SetSolidColor('b4080c0e')
+    ground.Left:Set(function() return my.bar.Left() - S(12) end)
+    ground.Right:Set(function() return my.bar.Right() + S(12) end)
+    ground.Top:Set(function() return my.bar.Top() - S(12) end)
+    ground.Bottom:Set(function() return my.bar.Bottom() + S(12) end)
+    ground.Depth:Set(function() return my.bar.Depth() end)
+    ground:DisableHitTest()
     local grab = Bitmap(my.bar)
     grab:SetSolidColor('00000000')
     grab.Left:Set(function() return my.bar.Left() - S(K.frameOut) end)

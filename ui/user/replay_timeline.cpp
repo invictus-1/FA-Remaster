@@ -59,7 +59,8 @@ int l_ReplayTimeline(lua_State* L) {
 }
 
 // moho64ui_ReplayMoments([first]) -> the moments from the first-th on (1 ..): {tick, kind, army (1-based, as the
-// scripts count armies), position {x, y, z}, unit (a blueprint id)}.
+// scripts count armies; 0 none), position {x, y, z}, unit (a blueprint id), entity (the unit's or the missile's
+// entity id, as GetUnitById takes it; nil for none)}.
 int l_ReplayMoments(lua_State* L) {
   ReplayTimelineSource* source = Source(L);
   if (!source) return 0;
@@ -80,6 +81,7 @@ int l_ReplayMoments(lua_State* L) {
     }
     lua_rawset(L, -3);
     SetString(L, "unit", m.unit);
+    if (m.entity != 0xffffffffu) SetNumber(L, "entity", m.entity);
     lua_rawseti(L, -2, static_cast<int>(i + 1));
   }
   return 1;

@@ -110,6 +110,7 @@ bool noWorld = false;             // --no-world: a launched game gets no picture
 std::string sessionIn;            // --session file: a recorded game configuration to start a game from at once
 std::string gameLuaFile;          // --game-lua file: a host Lua file run in a launched game's state once its interface is up
 long long session_seed = -1;      // --seed N: the random seed of a launched game (default: from the clock)
+int scanTicks = 0;              // --scan-ticks N: the replay timeline's scan stops at game tick N (tests; 0: the whole replay)
 uint32_t fastForward = 0;         // --fast-forward N: a game runs ahead to beat N as fast as it goes (for measurements)
 std::string replayOut;            // --replay-out <prefix>: each game's orders, beat by beat (GameSession::replayOut)
 std::string sessionFile;          // --session-out file: where a launched game's configuration is written
@@ -306,6 +307,7 @@ int main(int argc, char** argv) {
     else if (a == "--remasters-faf") fafRemastersFolders.push_back(next());
     else if (a == "--own") ownFolder = next();
     else if (a == "--seed") session_seed = static_cast<long long>(std::strtoull(next().c_str(), nullptr, 10));
+    else if (a == "--scan-ticks") scanTicks = std::atoi(next().c_str());
     else if (a == "--fast-forward") fastForward = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
     else if (a == "--replay-out") replayOut = next();
     else if (a == "--size") {
@@ -434,6 +436,9 @@ int main(int argc, char** argv) {
   session.replayOut = replayOut;
   session.replayTable = !sessionIn.empty() ? sessionIn : sessionFile;  // (a lobby game's table is written there)
   session.replayMaps = moreMaps;
+  session.scanInit = o.init;  // (the replay timeline's scan mounts the game as this program did)
+  session.scanFolders = o.folders;
+  session.scanTicks = scanTicks;
   cfg.launchSession = [&session](lua_State* L, int config, std::string* why) { return session.Launch(L, config, why); };
   cfg.launchSinglePlayer = [&session](lua_State* L, int info, std::string* why) { return session.LaunchSinglePlayer(L, info, why); };
   // The player's own files (replays, saved games) live beside the preferences file (special_files.cpp);
