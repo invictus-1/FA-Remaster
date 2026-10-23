@@ -761,7 +761,12 @@ void Impact(Sim& sim, Projectile* p) {
   p->hitFraction = -1;
   ++sim.impactsSeen;
   lua_pushstring(L, ImpactTypeName(type));
-  Entity* const met = e && !e->destroyQueued && e->HasLuaObject() ? e : nullptr;
+  // 0x69defa..0x69df24: the entity the hit recorded (the weak link +0x328) goes to OnImpact as long as the link
+  // holds, i.e. until the destroy queue has taken the entity (beat step 15); a Destroy queued earlier in this beat
+  // does not drop it. (Ours passed nil for an entity whose Destroy was queued. Seen: Naval 247, the Phalanx shell
+  // 0x10100232 hits the missile 0x1000002f, whose own Water impact earlier in the same pass destroyed it: the
+  // original's OnImpact gets "Projectile" and that missile, ours got nil; 12 Naval watch lines.)
+  Entity* const met = e && e->HasLuaObject() ? e : nullptr;
   PushObject(L, met);
   // a host's lists (render REQUESTS 36; reads only): the impact where the shell stands (its hit point), and the
   // shell as what the damage its OnImpact deals is from
