@@ -49,12 +49,15 @@ class PathGrid {
   // Can the footprint's origin cell be (x, z)? (terrain, and no structure in the way: OCCUPY_FootprintFits)
   bool Passable(int x, int z) const {
     if (x < 0 || z < 0 || x >= w_ || z >= h_) return false;
+    if (pendingAny_) ApplyTerrainChanges();
     size_t i = static_cast<size_t>(z) * w_ + x;
     return FitsCaps(cells_[i], ignoreStructures, blocked_[i] != 0, blockedWater_[i] != 0) != 0;
   }
   // Layers the terrain allows at (x, z): OCCUPY_MobileCheck's result (structures not counted).
   uint8_t Caps(int x, int z) const {
-    return (x >= 0 && z >= 0 && x < w_ && z < h_) ? cells_[static_cast<size_t>(z) * w_ + x] : 0;
+    if (x < 0 || z < 0 || x >= w_ || z >= h_) return 0;
+    if (pendingAny_) ApplyTerrainChanges();
+    return cells_[static_cast<size_t>(z) * w_ + x];
   }
   // How many held cells (of either grid) the footprint at origin (x, z) covers (FindPath's escape test).
   uint16_t Blocked(int x, int z) const {
@@ -73,15 +76,29 @@ class PathGrid {
   // origin whose footprint overlaps it.
   void Block(int x0, int z0, int x1, int z1, int delta, uint8_t occ);
   // The heightfield vertices [vx0, vx1] x [vz0, vz1] changed (FlattenMapRect): the terrain caps of every origin
-  // whose footprint covers one of them are taken again from the map as it is now.
-  void TerrainChanged(const TerrainMap& map, const bool* blockingTypes, int vx0, int vz0, int vx1, int vz1);
+  // whose footprint covers one of them are to be taken again from the map. They are taken when the grid is next read
+  // (Passable, Caps), from the map as it is then: a cell's caps are a function of the map alone (OCCUPY_MobileCheck
+  // over its footprint's vertices and their terrain types), so the cells read are the ones each call taking them at
+  // once gave. The rects of a run of calls with nothing reading in between are merged where they meet: FAF's
+  // FlattenGradientMapRect makes a factory's skirt with one call per vertex (81 for a land factory), and each of
+  // those took (sizeX + 1) x (sizeZ + 1) origins of every grid again. (Single-threaded reads only: a parallel stage
+  // that reads the grids calls ApplyTerrainChanges first.)
+  void TerrainChanged(int vx0, int vz0, int vx1, int vz1);
+  void ApplyTerrainChanges() const;
   int sizeX = 1, sizeZ = 1;
   bool ignoreStructures = false;  // the footprint's IgnoreStructures flag (Flags & 1)
 
  private:
   int w_ = 0, h_ = 0;
   NamedFootprint fp_;
-  std::vector<uint8_t> cells_;
+  const TerrainMap* map_ = nullptr;
+  const bool* blocking_ = nullptr;  // Navigation's blocking terrain types
+  struct Rect {
+    int x0, z0, x1, z1;  // origins [x0, x1] x [z0, z1]
+  };
+  mutable std::vector<Rect> pending_;  // origins whose caps are to be taken again (TerrainChanged)
+  mutable bool pendingAny_ = false;
+  mutable std::vector<uint8_t> cells_;
   std::vector<uint16_t> blocked_;       // land grid
   std::vector<uint16_t> blockedWater_;  // water grid
 };
@@ -97,9 +114,15 @@ class Navigation {
  public:
   explicit Navigation(const TerrainMap* map) : map_(map) { blocking_.fill(false); }
   void SetBlockingTerrainType(int code, bool blocking) {
+    for (auto& [key, g] : grids_) g->ApplyTerrainChanges();  // (what is pending was measured with the old types)
     if (code >= 0 && code < 256) blocking_[code] = blocking;
   }
   const PathGrid* Grid(const NamedFootprint& fp);
+  // Every grid's pending terrain changes taken now (PathGrid::TerrainChanged), on one thread: before a stage whose
+  // tasks read the grids in parallel, as Passable / Caps would otherwise write them from several threads.
+  void ApplyTerrainChanges() {
+    for (auto& [key, g] : grids_) g->ApplyTerrainChanges();
+  }
   bool IsBlockingType(int code) const { return code >= 0 && code < 256 && blocking_[code]; }
   // OCCUPY_MobileCheck 0x564ab0 at one origin cell (what Grid(fp)->Caps(x, z) holds), without making the grid.
   uint8_t MobileCaps(const NamedFootprint& fp, int x, int z) const;

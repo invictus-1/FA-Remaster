@@ -1156,6 +1156,7 @@ void LandNavTickAll(Sim& sim) {
     if (T.PrepareSearches(margin)) sim.EnsureUnitGrid();
     if (prof) T.aheadCounts.seconds += NowS() - p0;
   }
+  sim.navigation().ApplyTerrainChanges();  // (the path grids' deferred FlattenMapRect work, here on one thread)
   double t1 = prof ? NowS() : 0;
   T.WorkAll(0);
   double t2 = prof ? NowS() : 0;

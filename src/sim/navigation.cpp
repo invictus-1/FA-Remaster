@@ -45,6 +45,8 @@ static uint8_t MobileCheckCaps(const TerrainMap& map, const NamedFootprint& fp, 
 }
 
 PathGrid::PathGrid(const TerrainMap& map, const NamedFootprint& fp, const bool* blocking) {
+  map_ = &map;
+  blocking_ = blocking;
   w_ = map.width();
   h_ = map.height();
   cells_.assign(static_cast<size_t>(w_) * h_, 0);
@@ -58,17 +60,43 @@ PathGrid::PathGrid(const TerrainMap& map, const NamedFootprint& fp, const bool* 
     for (int x = 0; x < w_; ++x) cells_[static_cast<size_t>(z) * w_ + x] = MobileCheckCaps(map, fp, blocking, x, z);
 }
 
-void PathGrid::TerrainChanged(const TerrainMap& map, const bool* blocking, int vx0, int vz0, int vx1, int vz1) {
+void PathGrid::TerrainChanged(int vx0, int vz0, int vx1, int vz1) {
   // an origin (x, z) covers the vertices [x, x + sizeX] x [z, z + sizeZ]
-  const int x0 = std::max(0, vx0 - sizeX), z0 = std::max(0, vz0 - sizeZ);
-  const int x1 = std::min(w_ - 1, vx1), z1 = std::min(h_ - 1, vz1);
-  for (int z = z0; z <= z1; ++z)
-    for (int x = x0; x <= x1; ++x) cells_[static_cast<size_t>(z) * w_ + x] = MobileCheckCaps(map, fp_, blocking, x, z);
+  Rect r{std::max(0, vx0 - sizeX), std::max(0, vz0 - sizeZ), std::min(w_ - 1, vx1), std::min(h_ - 1, vz1)};
+  if (r.x0 > r.x1 || r.z0 > r.z1) return;
+  // merged with a pending rect it overlaps or touches when their bounding box holds no more origins than the two
+  // together (so a run of calls never takes more than the calls one by one; the box's extra origins, if any, take
+  // caps that are already theirs, as caps depend on the map alone)
+  auto area = [](const Rect& a) { return static_cast<long long>(a.x1 - a.x0 + 1) * (a.z1 - a.z0 + 1); };
+  for (size_t i = 0; i < pending_.size();) {
+    const Rect& p = pending_[i];
+    const Rect u{std::min(r.x0, p.x0), std::min(r.z0, p.z0), std::max(r.x1, p.x1), std::max(r.z1, p.z1)};
+    if (r.x0 <= p.x1 + 1 && p.x0 <= r.x1 + 1 && r.z0 <= p.z1 + 1 && p.z0 <= r.z1 + 1 && area(u) <= area(r) + area(p)) {
+      r = u;
+      pending_.erase(pending_.begin() + static_cast<std::ptrdiff_t>(i));
+      i = 0;  // (the grown rect may meet one it passed)
+    } else {
+      ++i;
+    }
+  }
+  pending_.push_back(r);
+  pendingAny_ = true;
+  if (pending_.size() > 16) ApplyTerrainChanges();  // (many separate places: take them now)
+}
+
+void PathGrid::ApplyTerrainChanges() const {
+  if (!pendingAny_) return;
+  for (const Rect& r : pending_)
+    for (int z = r.z0; z <= r.z1; ++z)
+      for (int x = r.x0; x <= r.x1; ++x)
+        cells_[static_cast<size_t>(z) * w_ + x] = MobileCheckCaps(*map_, fp_, blocking_, x, z);
+  pending_.clear();
+  pendingAny_ = false;
 }
 
 void Navigation::TerrainChanged(int vx0, int vz0, int vx1, int vz1) {
   if (!map_) return;
-  for (auto& [key, g] : grids_) g->TerrainChanged(*map_, blocking_.data(), vx0, vz0, vx1, vz1);
+  for (auto& [key, g] : grids_) g->TerrainChanged(vx0, vz0, vx1, vz1);
 }
 
 uint8_t Navigation::MobileCaps(const NamedFootprint& fp, int x, int z) const {
