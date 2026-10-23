@@ -4,6 +4,33 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To visuals, section 65: battle grime, visible damage, weather dirt (2026-10-23)
+
+These build on looks already in as first versions with drawn stand-ins: battle scars (marks where hits land, by
+weapon, three tiers, kept when repaired), wet and muddy units (darker and glossy in rain, mud on tracks and lower hulls
+from soft ground, dust on dry), snow that builds and comes off in combat, hot metal on wrecks. Your art replaces the
+stand-ins; the state and the switches stay.
+
+(a) **The mask: in the units' secondary texture, not a new one.** Today the renderer reads only its red channel (the
+crease shading, `_ao`). So: R crease shading as now; G where grime gathers (cavities, lower hull, tracks: 0 clean ..
+1 first to dirty); B the order damage shows (each texel's health threshold, 1 = shows first as health drops, 0 = only
+near death: one smooth reveal, no stages); A where weather dirt sits (mud splash height on running gear and lower hull,
+frost on sheltered edges and tops; "faces up" itself comes from the normal in the shader). Unit UVs (uv0), the same
+size as the AO now, linear (not sRGB), BC7. A unit without it: grime and frost by height and facing alone, as today.
+
+(b) **Shader layers over your BC7 albedo, not pre-blended stages.** Shared tiling sets (dust, caked mud, soot, frost,
+wet mud: albedo + normal + roughness each), one texture array for every unit, read in the unit's UVs at a scale per
+set; a unit's state and its mask decide how much of each. That keeps memory flat (no copies per stage or per unit),
+progression smooth, and lets each army's units differ. Damage is the one per-unit set: albedo (alpha = how hot, for the
+glow) + normal in the unit's own UVs, at half the base size (1K for a 2K unit), LOD0 and LOD1 only, revealed by B.
+
+(c) **The state is the renderer's; the engine is not needed.** Health and every hit come from the game already (the
+engine's per-beat hits and health, render request 36). Time in combat: from the hits a unit takes and deals and its own
+weapons firing. Dirt driven: from where it moves, over which ground layer, wet or dry. Rain and snow: the renderer's
+weather. Cost: no extra texture read for the mask; the grime sets one array read per layer in use; about 0.05-0.1 ms
+with 200 units in view, to be measured.
+
+
 ## To ui, REQUESTS 33 and 34: the decals' fade and a camera's LOD scale (2026-10-21)
 
 Done; both need one line each on your side. Read from the exe, our own reading (no FAF code).
