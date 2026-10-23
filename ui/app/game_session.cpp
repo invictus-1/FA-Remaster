@@ -1,6 +1,7 @@
 #include "app/game_session.h"
 
 #include "app/window.h"
+#include "app/replay_moments.h"
 
 #include <algorithm>
 #include <atomic>
@@ -8,6 +9,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <mutex>
 #include <thread>
@@ -42,6 +44,7 @@
 #include "sim/sim_view.h"
 #include "user/bindings.h"
 #include "user/keymap.h"
+#include "user/replay_timeline.h"
 #include "user/user_state.h"
 #include "sound/sound_system.h"
 
@@ -610,9 +613,190 @@ class GameSession::BeatWorker {
 #endif
 };
 
+// --- the replay timeline (ours, not the original's: Chris's approval of 2026-10-23; user/replay_timeline.h) ---
+
+namespace {
+// A replay's length in beats: its stream's Advances (sim/command_stream.cpp: messages {u8 type, u16 length with the
+// 3 bytes of the header, payload}; type 0 Advance, its payload the u32 count of beats, 1 in every replay seen), read
+// as CommandStream::ApplyUntilAdvance reads them.
+uint32_t ReplayBeats(const std::string& data, size_t at) {
+  uint64_t beats = 0;
+  while (at + 3 <= data.size()) {
+    const int type = static_cast<unsigned char>(data[at]);
+    size_t length = static_cast<unsigned char>(data[at + 1]) | (static_cast<size_t>(static_cast<unsigned char>(data[at + 2])) << 8);
+    if (length < 3) length = 3;
+    if (at + length > data.size()) break;
+    if (type == 0 && length >= 7) {
+      uint32_t n = 0;
+      std::memcpy(&n, data.data() + at + 3, 4);
+      beats += n;
+    }
+    at += length;
+  }
+  return beats > 0xffffffffu ? 0xffffffffu : static_cast<uint32_t>(beats);
+}
+
+const char* KindName(Kind kind) {
+  switch (kind) {
+    case Kind::CommanderDied: return "CommanderDied";
+    case Kind::ExperimentalFinished: return "ExperimentalFinished";
+    case Kind::ExperimentalDied: return "ExperimentalDied";
+    case Kind::ArmyDefeated: return "ArmyDefeated";
+    case Kind::NukeLaunched: return "NukeLaunched";
+    case Kind::NukeLanded: return "NukeLanded";
+  }
+  return "?";
+}
+}  // namespace
+
+// The timeline's host side for one replay: its length, the moments' scan on its own thread (kept across a jump back,
+// which starts the same replay over), and the jumps.
+struct GameSession::Timeline : ReplayTimelineSource {
+  GameSession* session = nullptr;
+  uint32_t ticks = 0;
+  Moments found;
+  std::atomic<int> scanned{0};
+  std::atomic<bool> cancel{false}, scanning{false};
+  std::thread scan;
+  std::string kept;  // (what the interface keeps across a jump back: TakeKept)
+
+  ~Timeline() { Stop(); }
+  void Stop() {
+    cancel = true;
+    if (scan.joinable()) scan.join();
+  }
+  uint32_t TickNow() const {
+    const GameSession& g = *session;
+    if (!g.sim_) return 0;
+    return g.BeatRunning() ? g.beatFrom_ : g.sim_->tick();  // (a beat on its thread: the one it started from)
+  }
+  size_t BucketsLocked() const {  // (the buckets every army has)
+    if (found.fight.empty()) return 0;
+    size_t n = found.fight[0].size();
+    for (const auto& army : found.fight) n = std::min(n, army.size());
+    return n;
+  }
+  State Now() const override {
+    State s;
+    s.ticks = ticks;
+    s.tick = TickNow();
+    s.seekTo = session->seekTo_;
+    s.scanning = scanning;
+    s.scanned = static_cast<uint32_t>(scanned.load());
+    {
+      std::lock_guard<std::mutex> hold(found.lock);
+      s.moments = found.moments.size();
+      s.buckets = BucketsLocked();
+    }
+    s.kept = !kept.empty();
+    return s;
+  }
+  void MomentsFrom(size_t first, std::vector<ReplayTimelineSource::Moment>* out) const override {
+    out->clear();
+    std::lock_guard<std::mutex> hold(found.lock);
+    for (size_t i = first; i < found.moments.size(); ++i) {
+      const ::moho::ui::Moment& f = found.moments[i];
+      ReplayTimelineSource::Moment m;
+      m.tick = f.tick;
+      m.kind = KindName(f.kind);
+      m.army = f.army;
+      m.pos[0] = f.pos.x, m.pos[1] = f.pos.y, m.pos[2] = f.pos.z;
+      m.unit = f.unit;
+      out->push_back(std::move(m));
+    }
+  }
+  void FightFrom(size_t first, std::vector<Fight>* out) const override {
+    out->clear();
+    std::lock_guard<std::mutex> hold(found.lock);
+    const size_t n = BucketsLocked();
+    for (size_t i = first; i < n; ++i) {
+      Fight f;
+      f.tick0 = found.fight[0][i].tick0;
+      for (const auto& army : found.fight) {
+        f.damage += army[i].damage;
+        f.hits += army[i].hits;
+        f.deaths += army[i].deaths;
+      }
+      out->push_back(f);
+    }
+  }
+  bool Seek(uint32_t tick, const std::string& keep, std::string* why) override {
+    GameSession& g = *session;
+    if (!g.sim_ || !g.play_ || g.Loading()) {
+      *why = "no replay plays";
+      return false;
+    }
+    if (ticks == 0) {
+      *why = "the replay has no beats";
+      return false;
+    }
+    tick = std::max(1u, std::min(tick, ticks));
+    const uint32_t now = TickNow();
+    if (tick == now) return true;
+    if (tick > now) {  // forward: the beats run ahead (Advance, CatchingUp)
+      g.seekTo_ = tick;
+      Logf(LogLevel::Info, "moho64ui: the replay timeline: forward from beat %u to beat %u", now, tick);
+      return true;
+    }
+    // back: the replay starts over (the host's restart between two frames, RestartSession's: Relaunch) and runs
+    // ahead to the beat
+    g.seekTo_ = tick;
+    g.seekBack_ = true;  // (not reached by this run of the replay: the next one runs ahead to it)
+    kept = keep;
+    RequestSessionRestart();
+    Logf(LogLevel::Info, "moho64ui: the replay timeline: back from beat %u to beat %u (the replay starts over)", now, tick);
+    return true;
+  }
+  std::string TakeKept() override { return std::move(kept); }
+};
+
+ReplayTimelineSource* GameSession::timeline() { return play_ && timeline_ ? timeline_.get() : nullptr; }
+
+// The replay's length, and its moments looked for from now on (the engine's ScanReplayMoments on a thread of its own;
+// a stand-in until that is on main: app/replay_moments.h). THE ONE PLACE that makes the scan's ScanArgs.
+void GameSession::StartMomentScan(const ReplayHeader& header, const std::string& file) {
+  StopMomentScan();
+  timeline_ = std::make_unique<Timeline>();
+  Timeline& t = *timeline_;
+  t.session = this;
+  t.ticks = ReplayBeats(playData_, header.streamOffset);
+  Logf(LogLevel::Info, "moho64ui: the replay is %u beats long (%u:%02u); its moments are looked for", t.ticks, t.ticks / 600,
+       (t.ticks / 10) % 60);
+  ScanArgs args;
+  args.header = header;
+  args.file = file;
+  args.ticks = t.ticks;
+  t.scanning = true;
+  t.scan = std::thread([&t, args] {
+    const auto t0 = std::chrono::steady_clock::now();
+    const bool through = ScanReplayMoments(args, &t.found, &t.scanned, &t.cancel);
+    size_t moments = 0;
+    {
+      std::lock_guard<std::mutex> hold(t.found.lock);
+      moments = t.found.moments.size();
+    }
+    t.scanning = false;
+    Logf(LogLevel::Info, "moho64ui: the replay's moments: %s, %zu found in %.1f s", through ? "scanned" : "the scan stopped", moments,
+         std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+  });
+}
+
+void GameSession::StopMomentScan() {
+  if (timeline_) timeline_->Stop();
+  timeline_.reset();
+}
+
+void GameSession::SeekReached() {
+  if (!seekTo_ || seekBack_ || !sim_ || BeatRunning()) return;
+  if (sim_->tick() < seekTo_ && !(play_ && play_->AtEnd())) return;
+  Logf(LogLevel::Info, "moho64ui: the replay timeline: at beat %u", sim_->tick());
+  seekTo_ = 0;
+}
+
 GameSession::GameSession(Vfs* vfs, std::vector<std::string> hookDirs) : vfs_(vfs), hookDirs_(std::move(hookDirs)) {}
 GameSession::~GameSession() {
   if (worker_) worker_->Wait();
+  StopMomentScan();
 }
 
 WorldSource* GameSession::world() const { return picture_.get(); }
@@ -829,6 +1013,9 @@ bool GameSession::LaunchReplay(lua_State* L, const std::string& file, std::strin
   PrepareSession(session, uids);
   play_ = std::make_unique<CommandStream>(playData_, h->streamOffset);
   ReplayHeld() = false;  // (a new replay plays: no hold of a replay watched before)
+  seekTo_ = 0;
+  seekBack_ = false;
+  StartMomentScan(*h, file);
   last_ = std::make_unique<SessionDescription>(session);
   lastUids_ = uids;
   lastWasReplay_ = true;
@@ -923,6 +1110,11 @@ void GameSession::End() {
   if (fp_) fp_->End(fpBeats_), fp_.reset();
   if (replay_) std::fclose(replay_), replay_ = nullptr;
   play_.reset();
+  if (!relaunching_) {  // (the replay closes: its moments' scan stops, a jump under way with it)
+    StopMomentScan();
+    seekTo_ = 0;
+    seekBack_ = false;
+  }
   if (sounds) sounds->StopWorld();
   onSync = nullptr;
   takeOrders = nullptr;
@@ -943,11 +1135,15 @@ bool GameSession::Relaunch(std::string* why) {
     *why = "no game was launched";
     return false;
   }
+  relaunching_ = lastWasReplay_;  // (a replay starting over keeps its timeline: its moments, a jump back under way)
   End();
+  relaunching_ = false;
   SessionDescription again = *last_;
   if (lastWasReplay_) {  // a replay starts over from its first beat, with its own seed
     PrepareSession(again, lastUids_);
     play_ = std::make_unique<CommandStream>(playData_, again.header.streamOffset);
+    seekBack_ = false;
+    if (seekTo_) Logf(LogLevel::Info, "moho64ui: the replay starts over and runs ahead to beat %u", seekTo_);
     return true;
   }
   if (!seedGiven) again.header.seed = static_cast<uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count());
@@ -1415,7 +1611,10 @@ bool GameSession::LoadInterfaceRules(lua_State* userState) {
   return true;
 }
 
-bool GameSession::CatchingUp() const { return sim_ && !BeatRunning() && sim_->tick() < fastForwardTo; }
+// (--fast-forward's beat, or the replay timeline's jump: seekTo_; a jump back waits for the restart)
+bool GameSession::CatchingUp() const {
+  return sim_ && !BeatRunning() && sim_->tick() < std::max(fastForwardTo, seekBack_ ? 0u : seekTo_);
+}
 
 void GameSession::AdvanceClock(double seconds) {
   due_ = std::min(1.0, due_ + seconds * std::pow(10.0, pace.rate / 10.0));  // (game time: the pace's rate, WLD_GetSimRate 0x88d0b0)
@@ -1471,9 +1670,10 @@ void GameSession::Advance(double seconds) {
     return;
   }
   if (beatToFinish_) FinishBeat();
+  SeekReached();
   const bool catchingUp = CatchingUp();
-  if (catchingUp) {  // (--fast-forward, for measurements: up to 50 beats a frame until that beat)
-    due_ = std::min<uint32_t>(fastForwardTo - sim_->tick(), 50) * 0.1 + 0.01;
+  if (catchingUp) {  // (--fast-forward, for measurements, or a jump of the replay timeline: up to 50 beats a frame until that beat)
+    due_ = std::min<uint32_t>(std::max(fastForwardTo, seekTo_) - sim_->tick(), 50) * 0.1 + 0.01;
   } else {
     AdvanceClock(seconds);  // (after a long stall, catch up by at most a second of beats)
   }
@@ -1486,7 +1686,8 @@ void GameSession::Advance(double seconds) {
     due_ -= 0.1;
     if (play_) {  // a replay: its own orders, beat by beat; the player's only pause and resume it
       if (takeOrders) ViewerControls(takeOrders());
-      if (ReplayHeld()) {  // (the viewer holds the replay: no beat runs, and the time held does not pile up)
+      if (ReplayHeld() && !catchingUp) {  // (the viewer holds the replay: no beat runs, and the time held does not pile
+                                           // up; a jump of the timeline runs on through it)
         due_ = 0;
         break;
       }
@@ -1531,6 +1732,7 @@ void GameSession::Advance(double seconds) {
     NoteBeat();
     DeliverBeatSync();
   }
+  SeekReached();
 }
 
 void GameSession::DeliverBeatSync() {
@@ -1652,7 +1854,8 @@ void GameSession::NoteBeatHere() {
   // The beat's camera shakes (the engine's ShakeEvents) go to the world's cameras.
   std::vector<ShakeEvent> shakes;
   ShakeEvents(*sim_, &shakes);
-  for (const ShakeEvent& e : shakes) PostCameraShake(e.position, e.radius, e.maxShakeEpicenter, e.minShakeAtRadius, e.interval);
+  if (!seekTo_)  // (not while the replay timeline jumps)
+    for (const ShakeEvent& e : shakes) PostCameraShake(e.position, e.radius, e.maxShakeEpicenter, e.minShakeAtRadius, e.interval);
 }
 
 // The world's sounds of the beat (the engine's SoundEvents): one-shots at their place, and the
@@ -1696,7 +1899,8 @@ void GameSession::PlayBeatSounds() {
            e.kind == SoundEvent::Play ? "play" : "loop", static_cast<unsigned>(e.entity), e.army, e.position[0], e.position[1],
            e.position[2], e.bank.c_str(), e.cue.c_str(), ours ? "ours" : seen(e.entity, e.position) ? "seen" : "not seen");
     if (e.kind == SoundEvent::Play) {
-      if (ours || seen(e.entity, e.position)) sounds->PlayAt(e.bank, e.cue, e.position);
+      // (not while the replay timeline jumps: up to 50 beats a frame; the running sounds below are still followed)
+      if (!seekTo_ && (ours || seen(e.entity, e.position))) sounds->PlayAt(e.bank, e.cue, e.position);
     } else if (ours) {
       sounds->SetLoop(e.entity, e.bank, e.cue, e.position);
     } else if (e.bank.empty() || e.cue.empty()) {  // another army's running sound ends

@@ -8,6 +8,7 @@
 // fuel, what is being built) answers with the plain case. SelectUnits tells the game script at
 // once (gamemain.OnSelectionChanged(old, new, added, removed), FA exe 0x869418).
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
@@ -3855,8 +3856,8 @@ void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<Wor
 // highlighted first, then selected, then the rest (the first leg handed keeps a pixel where legs
 // cross, the original's stencil; the renderer's answer to request 30).
 // The time left at each node (the ETA texts, 0x828610): WorkOutEtas, drawn by the world view.
-// Left out: the glow pass (only the bloom's mask), the path preview (ui_DrawPathPreview, never
-// on). (Dragging a node: further down.)
+// Left out: the glow pass (only the bloom's mask). The path preview (ui_DrawPathPreview, never on in the
+// original; ours an option): WorkOutPathPreview. (Dragging a node: further down.)
 namespace {
 
 // The kinds of orders the graph never draws (0x82632e: 1 << type against 0x2_d80000ea): Stop, Dive,
@@ -4229,6 +4230,18 @@ struct OrderGraphOut {
   std::vector<MarkOut> marks;
   std::vector<EtaOut> etas;
   WorldOrderSettings settings;
+  // The path preview (ui_DrawPathPreview; WorkOutPathPreview): its legs, the arrowhead's last, drawn before the
+  // order lines. `arrow`: the last leg is the arrowhead. `pathfinding`: ui_PathPreview asked for the path the
+  // simulation found (none here). `type`: the order whose record draws it; `unit`: the unit it starts from;
+  // `points`: the line's points as listed (before the ends are drawn in); `width`: the one width of all of it.
+  struct PreviewOut {
+    bool shown = false, arrow = false, pathfinding = false;
+    int type = 0;
+    uint32_t unit = 0xffffffffu;
+    std::vector<std::array<float, 3>> points;
+    float width = 0, w0 = 0, size = 0;  // (w0: w at the first point; size: max(SizeX, 3 w0) x 0.2)
+    std::vector<WorldOrderLeg> legs;
+  } preview;
 };
 
 // A colour times a colour, as the picture multiplies a texture by its vertex colour.
@@ -4271,7 +4284,201 @@ OrderGraph& HoldOrderGraph(lua_State* L, bool held) {
   return g;
 }
 
-void WorkOutOrderGraph(lua_State* L, bool shown, uint32_t rollover, OrderGraphOut* out) {
+// --- the path preview ---
+//
+// Read from the FA exe by a helper of the ui chat (2026-10-23; UICommandGraph.cpp). The original has it and never
+// turns it on; here it is the Interface tab's Path Preview (ours, off unless chosen; Chris, 2026-10-23: "try it
+// first ... I want to see it in action first").
+// - When: the command graph's drawing (0x829190, only while Shift is held: the world view's 0x86ed00 -> 0x85af40)
+//   calls 0x82a380 after the legs, the waypoints' icons and the queued buildings' ghosts, before the ETA texts, when
+//   the console's bool ui_DrawPathPreview (0x10a6443, "Turns on/off the arrow line"; 0 at start, nothing in the exe
+//   or the game's Lua sets it) is on, with the technique TCommandOther (primbatcher.fx: the texture times the vertex
+//   colour, alpha above 0, blended, no depth test, stencil Ref 2 NotEqual Replace: over the order lines, Ref 1, and
+//   within itself the first drawn keeps a pixel). Nothing without a focus army (session+0x488, its slot +0x3f0).
+// - Two kinds, by the bool ui_PathPreview (0x10a6448, "Turns on/off the pathfinding preview line"):
+//   - on: the points are the focus army's previewed path (the army's variable data +0xf8..+0xfc, a vector of path
+//     cells, each to the world by COORDS_ToWorldPos 0x50b0f0 with the footprint at +0x104: SizeX, SizeZ, caps), the
+//     footprint's SizeX the size below; fewer than two: nothing. The simulation fills it: the graph's update
+//     (0x828fb0, 0x829113) runs the console's "path_GeneratePreview end" while Shift is down (GetAsyncKeyState, the
+//     window in front) else "path_GeneratePreview start" (0x82916f), the alias of "DoSimCommand path_GeneratePreview"
+//     (0xbdc820); the sim's command (CSimConCommand 0xbdc850, handler 0x764cf0: "path preview for army %d", a unit
+//     of the command's (0x764b90), from its place or, with "end", the end of its orders (0x764c10) to the cursor's
+//     place, a PathPreviewFinder 0x7647e0 of the army, path_TimeoutPreview) finds it. NOT BUILT: our simulation has
+//     no path_GeneratePreview and its sync gives the interface no army path (an engine request); so this kind draws
+//     nothing here, as the original's does with an empty path, and the command is not sent (it would put a
+//     DebugCommand in the replay every frame).
+//   - off: the arrow line. Only while the session's cursor info says the cursor is in the world (+0x4b0; INFERRED:
+//     the mouse over the world view with ground under it, by the picture last drawn). Of the selected units (0x82a2b0) the one whose blueprint has a
+//     named footprint (bp+0x2fc, the pathfinder's; INFERRED ours: BlueprintInfo's footprint found by name, which
+//     DeriveUnit does for units that move on land or water) and is not being built (vt+0x34 IsBeingBuilt), the
+//     largest by SizeZ (bp+0xb4; a later one only when larger; none: nothing drawn); its Footprint.SizeX (bp+0xd8)
+//     the size below. Two points: the unit's place (IUnit::GetPosition, unit+0x84, as of the last beat), or while
+//     Shift is down (MAUI_KeyIsDown 0x132; always, as it is drawn only then) the place of the last order of its own
+//     queue (0x8b7320: the last non-empty entry of its copy, vt+0x18 = unit+0x3c8; 0x81cfd0: its target's place,
+//     CommandPlace; INFERRED: an order without a place leaves the unit's), then the cursor's place (+0x4b4).
+// - Drawn (both kinds): w0 = w(first point); size = max(SizeX, 3 w0) x 0.2; one width for all of it, W =
+//   (CalculateWaypointLineWidth(the selection's count) + 2 w0) x ui_WaypointLineScale (the game's Lua asked each
+//   time). The record (graph+4 + type x 0x54) is the order a click would give now: the right button's action
+//   (GetRightMouseButtonAction 0x81ec00 with the cursor info); when it is the end of a command mode (kind 7) the left
+//   button's (0x81f7b0); an order (kind 1): its RULEUCC bit (+4), else RULEUCC_Move; to a command type by
+//   UnitCommandCapToCommandType 0x821f50 (a bit it does not know, as RULEUCC_Script's: 0, the record of None). Its
+//   orderline_texture (none: a plain white, 0x4478c0, where the order lines leave such a leg out), its selected
+//   colour (+0x14) for every leg and the arrowhead, its uv aspect (+8) and anim rate (+0xc).
+//   Each point in turn (prev and cur both the first at the start): prevprev = prev, prev = cur, cur = the point, next
+//   the one after (the last: itself). At the last point, when the record has an arrowhead_texture (+0x4c), the leg
+//   prev -> cur is drawn in by W at BOTH ends (MakeSegment3fFromEndpoints 0x4fe130: centre +- (cur - prev) unit x
+//   (half its length - W)). The leg prev -> cur (0x827a00, the order lines' curve) with the tangents cur - prevprev
+//   and next - prev, each cut to ui_PathSmoothness (2) long (Catmull-Rom without the half). Then the arrowhead: a
+//   square of side 2W at cur turned by COORDS_Orient(-(cur - prev) unit) 0x50b480, its corners (+-W, 0, +-W + cap),
+//   cap = W / size x arrowhead_cap_offset (+0x40; the game's -0.1), U 1 at the front edge and 0 at the back, V 0..1
+//   across (0x82adb7..0x82b137), after a flush (the line's pixels go first).
+// Here the legs go to the renderer's order-line legs (WorldPicture::SetOrderLines), before the order lines' (the
+// first leg keeps a pixel, as Ref 2 NotEqual keeps the preview over the order lines; INFERRED close enough: the
+// original blends the preview over them, ours leaves the order line out under it; and the waypoints' icons, drawn
+// after every leg here, go over the preview, where the original draws it after them). Each leg's base width is set
+// so that the renderer's (base + 2 max(w(a), w(b))) x scale comes to W (w by the picture last drawn: within a frame's
+// camera move of the renderer's). The renderer's curve takes unit tangents times min(0.25 |b - a|, ui_CurveSmoothness
+// x width): the tangents' own length (ui_PathSmoothness) is not given (a straight line, the arrow line's, is
+// straight either way). The arrowhead: a straight leg of width 2W from cur - (W + cap) to cur + (W - cap) along the
+// leg's direction, its U from 1 to 2 (uv aspect 1; the texture repeats in U: the original's 0 to 1), with the record's
+// arrowhead_texture (orderline_arrow04: its tip at U 0.8, so INFERRED COORDS_Orient turns +Z onto the vector given:
+// the tip forward). The first point's leg to itself (no length: the original's curve there is a speck at most) is
+// left out.
+
+// A click's order (its RULEUCC name) as the record's command type (UnitCommandCapToCommandType 0x821f50, READ).
+int CommandTypeOfCap(const std::string& rule) {
+  static const std::pair<const char*, CommandType> kCaps[] = {
+      {"RULEUCC_Move", CommandType::Move}, {"RULEUCC_Stop", CommandType::Stop}, {"RULEUCC_Attack", CommandType::Attack},
+      {"RULEUCC_Guard", CommandType::Guard}, {"RULEUCC_Patrol", CommandType::Patrol}, {"RULEUCC_Repair", CommandType::Repair},
+      {"RULEUCC_Capture", CommandType::Capture}, {"RULEUCC_Transport", CommandType::TransportUnloadUnits},
+      {"RULEUCC_CallTransport", CommandType::TransportLoadUnits}, {"RULEUCC_Nuke", CommandType::Nuke},
+      {"RULEUCC_Tactical", CommandType::Tactical}, {"RULEUCC_Teleport", CommandType::Teleport}, {"RULEUCC_Ferry", CommandType::Ferry},
+      {"RULEUCC_SiloBuildTactical", CommandType::BuildSiloTactical}, {"RULEUCC_SiloBuildNuke", CommandType::BuildSiloNuke},
+      {"RULEUCC_Sacrifice", CommandType::Sacrifice}, {"RULEUCC_Pause", CommandType::Pause}, {"RULEUCC_Overcharge", CommandType::OverCharge},
+      {"RULEUCC_Dive", CommandType::Dive}, {"RULEUCC_Reclaim", CommandType::Reclaim}, {"RULEUCC_SpecialAction", CommandType::SpecialAction},
+  };
+  for (const auto& [name, type] : kCaps)
+    if (rule == name) return static_cast<int>(type);
+  return 0;  // (RULEUCC_RetaliateToggle, _Dock, _Script and others: none)
+}
+
+void WorkOutPathPreview(lua_State* L, OrderGraph& g, uint32_t rollover, const PathPreviewView& view,
+                        const std::function<int(const std::string&)>& texture, OrderGraphOut::PreviewOut* out) {
+  const CommandGraphVars& vars = GraphVars();
+  if (!vars.drawPathPreview || FocusArmyNow(L) < 0) return;
+  UnitStore& store = Store(L);
+  using Point = std::array<float, 3>;
+  std::vector<Point>& points = out->points;
+  float sizeX = 1;
+  if (vars.pathPreview) {
+    out->pathfinding = true;  // (the army's previewed path: not given to the interface, see above)
+    return;
+  }
+  if (!view.cursorInWorld) return;
+  // the selected unit it starts from (0x82a2b0)
+  SimBlueprints* bps = SimBlueprints::From(L);
+  UserUnit* unit = nullptr;
+  float largest = 0;
+  for (UserUnit* u : store.selection) {
+    if (u->gone) continue;
+    const BlueprintInfo* bp = bps ? BlueprintOf(bps, u) : nullptr;
+    if (!bp || !bp->hasFootprint || bp->footprint.name.empty() || u->view.beingBuilt) continue;
+    float sizeZ = 1;
+    const int top = lua_gettop(L);
+    PushBlueprint(L, u->view.blueprint);
+    if (lua_istable(L, -1)) {
+      lua_getfield(L, -1, "SizeZ");
+      if (lua_isnumber(L, -1)) sizeZ = static_cast<float>(lua_tonumber(L, -1));
+    }
+    lua_settop(L, top);
+    if (sizeZ > largest) largest = sizeZ, unit = u, sizeX = bp->footprint.sizeX;
+  }
+  if (!unit) return;
+  out->unit = unit->view.id;
+  Point start = {unit->view.position[0], unit->view.position[1], unit->view.position[2]};
+  if (KeyIsDown(L, 306)) {
+    UnitStateView s;
+    if (StateOf(L, unit, &s) && !s.queue.empty()) {
+      float at[3];
+      if (CommandPlace(L, store, s.queue.back(), at)) start = {at[0], at[1], at[2]};
+    }
+  }
+  points.push_back(start);
+  points.push_back({view.cursor[0], view.cursor[1], view.cursor[2]});
+
+  // the order a click would give now, and its record
+  std::string rule;
+  if (!view.mode.empty()) {
+    if (view.mode == "order") rule = view.name;  // (the right button ends the mode: the left button's, the mode's order)
+    else rule = "RULEUCC_Move";                  // (a building's or a ping's left action is no order, kind 1)
+  } else {
+    rule = RightClickOrder(L, rollover);
+    if (rule.empty() || rule == "RULEUCC_Invalid") rule = "RULEUCC_Move";  // (no order: kind 0, RULEUCC_Move)
+  }
+  out->type = CommandTypeOfCap(rule);
+  const OrderGraph::Record& r = g.records[static_cast<size_t>(out->type < static_cast<int>(g.records.size()) ? out->type : 0)];
+
+  // one width for all of it
+  auto pixelAt = [&](const Point& p) {
+    const float w = view.pixelAt ? view.pixelAt(p.data()) : 0.0f;
+    return w > 0 && std::isfinite(w) ? w : 0.0f;
+  };
+  const float w0 = pixelAt(points[0]);
+  const float size = 0.2f * std::max(sizeX, 3 * w0);
+  out->w0 = w0, out->size = size;
+  int count = 0;
+  for (const UserUnit* u : store.selection) count += u->gone ? 0 : 1;
+  const float scale = vars.waypointLineScale;
+  const float W = (WaypointLineWidth(L, &g, count) + 2 * w0) * scale;
+  out->width = W;
+  const int lineTexture = texture(r.lineTexture);  // (none: -1, drawn plain white)
+  const bool arrow = !r.arrowTexture.empty();
+  auto sub = [](const Point& a, const Point& b) { return Point{a[0] - b[0], a[1] - b[1], a[2] - b[2]}; };
+  auto length = [](const Point& v) { return std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); };
+  auto leg = [&](const Point& a, const Point& b, const Point& ta, const Point& tb, float width, int tex, float aspect, float rate) {
+    WorldOrderLeg l;
+    for (int i = 0; i < 3; ++i) l.a[i] = a[i], l.b[i] = b[i], l.ta[i] = ta[i], l.tb[i] = tb[i];
+    // (the renderer widens a leg by two pixels' worth at its nearer end: given so that it comes to `width`)
+    l.baseWidth = scale != 0 ? width / scale - 2 * std::max(pixelAt(a), pixelAt(b)) : 0.0f;
+    l.color = r.lineColor[1];
+    l.texture = tex, l.uvAspect = aspect, l.animRate = rate;
+    out->legs.push_back(l);
+  };
+  Point prevprev = points[0], prev = points[0], cur = points[0];
+  for (size_t i = 0; i < points.size(); ++i) {
+    prevprev = prev, prev = cur, cur = points[i];
+    const bool last = i + 1 == points.size();
+    const Point next = last ? cur : points[i + 1];
+    if (last && arrow) {  // (both ends drawn in by W, 0x82aafe)
+      const Point half = {(cur[0] - prev[0]) * 0.5f, (cur[1] - prev[1]) * 0.5f, (cur[2] - prev[2]) * 0.5f};
+      const float extent = length(half);
+      if (extent > 0) {
+        const Point centre = {prev[0] + half[0], prev[1] + half[1], prev[2] + half[2]};
+        const float k = (extent - W) / extent;
+        for (int j = 0; j < 3; ++j) cur[j] = centre[j] + half[j] * k, prev[j] = centre[j] - half[j] * k;
+      }
+    }
+    // the tangents, each at most ui_PathSmoothness long (here: their directions, unit length)
+    auto tangent = [&](Point t) {
+      const float n = length(t);
+      for (float& v : t) v = n > 0 ? v / n : 0.0f;
+      return t;
+    };
+    const Point chord = sub(cur, prev);
+    if (length(chord) > 1e-6f) leg(prev, cur, tangent(sub(cur, prevprev)), tangent(sub(next, prev)), W, lineTexture, r.uvAspect, r.animRate);
+    if (last && arrow && length(chord) > 1e-6f && size > 0) {
+      const Point dir = tangent(chord);
+      const float cap = W / size * r.capOffset;
+      const Point back = {cur[0] - dir[0] * (W + cap), cur[1] - dir[1] * (W + cap), cur[2] - dir[2] * (W + cap)};
+      const Point front = {cur[0] + dir[0] * (W - cap), cur[1] + dir[1] * (W - cap), cur[2] + dir[2] * (W - cap)};
+      leg(back, front, dir, dir, 2 * W, texture(r.arrowTexture), 1.0f, 0.0f);
+      out->arrow = true;
+    }
+  }
+  out->shown = !out->legs.empty();
+}
+
+void WorkOutOrderGraph(lua_State* L, bool shown, uint32_t rollover, OrderGraphOut* out, const PathPreviewView* preview = nullptr) {
   OrderGraph& g = HoldOrderGraph(L, shown);
   const CommandGraphVars& vars = GraphVars();
   out->settings.lineScale = vars.waypointLineScale;
@@ -4373,6 +4580,8 @@ void WorkOutOrderGraph(lua_State* L, bool shown, uint32_t rollover, OrderGraphOu
     e.eta.text = text;
     out->etas.push_back(std::move(e));
   }
+  // The path preview (ui_DrawPathPreview), drawn with the graph (0x82961c).
+  if (preview) WorkOutPathPreview(L, g, rollover, *preview, texture, &out->preview);
 }
 
 // moho64ui_OrderGraph([unit]) -> {shown, legs = {...}, marks = {...}, etas = {...}, textures, settings}: the order lines
@@ -4386,12 +4595,18 @@ void WorkOutOrderGraph(lua_State* L, bool shown, uint32_t rollover, OrderGraphOu
 // hovered: the id of the waypoint under the mouse's order (nil: none); dragged: the id of the order
 // whose waypoint is being dragged; coordinated: {order, with}, the last attack the interface sent
 // coordinated with another order (a double click on its waypoint) and that order's id (nil: none yet).
+// preview (nil: none drawn): the path preview in the main world view (ui_DrawPathPreview): order (the command's name
+// whose record draws it), unit (the entity id it starts from), points ({x, y, z} each, as listed), width (its one
+// width W), arrow (its last leg the arrowhead), pathfinding (ui_PathPreview), and legs as the order lines' (width:
+// the base width handed to the renderer, which with its own two pixels' worth comes to W; the arrowhead's to 2W).
 int l_OrderGraphForTests(lua_State* L) {
   uint32_t rollover = UnitUnderMouse(L);
   if (const UserUnit* u = ToUnit(L, 1)) rollover = u->view.id;
   const bool shown = KeyIsDown(L, 306);
   OrderGraphOut out;
-  WorkOutOrderGraph(L, shown, rollover, &out);
+  PathPreviewView preview;
+  const bool hasView = GraphVars().drawPathPreview && MainPathPreviewView(L, &preview);
+  WorkOutOrderGraph(L, shown, rollover, &out, hasView ? &preview : nullptr);
   const OrderGraph& g = Store(L).graph;
   auto vector = [&](const float v[3]) {
     lua_newtable(L);
@@ -4495,17 +4710,55 @@ int l_OrderGraphForTests(lua_State* L) {
   lua_pushnumber(L, out.settings.markMinPixels), field("minWaypointSize");
   lua_pushnumber(L, out.settings.markMaxPixels), field("maxWaypointSize");
   field("settings");
+  const OrderGraphOut::PreviewOut& pv = out.preview;
+  if (pv.shown || pv.pathfinding) {
+    lua_newtable(L);
+    const char* name = CommandName(static_cast<CommandType>(pv.type));
+    lua_pushstring(L, name ? name : "None"), field("order");
+    if (pv.unit != 0xffffffffu) lua_pushnumber(L, pv.unit), field("unit");
+    lua_newtable(L);
+    for (size_t i = 0; i < pv.points.size(); ++i) {
+      vector(pv.points[i].data());
+      lua_rawseti(L, -2, static_cast<int>(i) + 1);
+    }
+    field("points");
+    lua_pushnumber(L, pv.width), field("width");
+    lua_pushnumber(L, pv.w0), field("w0");
+    lua_pushnumber(L, pv.size), field("size");
+    lua_pushboolean(L, pv.arrow), field("arrow");
+    lua_pushboolean(L, pv.pathfinding), field("pathfinding");
+    lua_newtable(L);
+    for (size_t i = 0; i < pv.legs.size(); ++i) {
+      const WorldOrderLeg& l = pv.legs[i];
+      lua_newtable(L);
+      vector(l.a), field("a");
+      vector(l.b), field("b");
+      vector(l.ta), field("ta");
+      vector(l.tb), field("tb");
+      lua_pushnumber(L, l.baseWidth), field("width");
+      color(l.color), field("color");
+      if (l.texture >= 0) lua_pushstring(L, out.textures[static_cast<size_t>(l.texture)].c_str()), field("texture");
+      lua_pushnumber(L, l.uvAspect), field("uvAspect");
+      lua_pushnumber(L, l.animRate), field("animRate");
+      lua_rawseti(L, -2, static_cast<int>(i) + 1);
+    }
+    field("legs");
+    field("preview");
+  }
   return 1;
 }
 }  // namespace
 
-void OrderLinesForWorld(lua_State* L, bool shown, uint32_t rollover, WorldScene* scene, std::vector<OrderEta>* etas) {
+void OrderLinesForWorld(lua_State* L, bool shown, uint32_t rollover, WorldScene* scene, std::vector<OrderEta>* etas,
+                        const PathPreviewView* preview) {
   OrderGraphOut out;
-  WorkOutOrderGraph(L, shown, rollover, &out);
+  WorkOutOrderGraph(L, shown, rollover, &out, preview);
   scene->orderTextures = std::move(out.textures);
   scene->orderLegs.clear();
   scene->orderMarks.clear();
-  scene->orderLegs.reserve(out.legs.size());
+  scene->orderLegs.reserve(out.preview.legs.size() + out.legs.size());
+  // (the path preview's first: it keeps its pixels over the order lines, as its stencil Ref 2 NotEqual does)
+  for (const WorldOrderLeg& l : out.preview.legs) scene->orderLegs.push_back(l);
   for (const OrderGraphOut::LegOut& o : out.legs) scene->orderLegs.push_back(o.leg);
   scene->orderMarks.reserve(out.marks.size());
   for (const OrderGraphOut::MarkOut& m : out.marks) scene->orderMarks.push_back(m.mark);

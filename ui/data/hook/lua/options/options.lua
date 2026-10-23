@@ -580,6 +580,28 @@ table.insert(options.ui.items, {
     },
 })
 
+-- The original's path preview, which it has and never shows (Chris, 2026-10-23: "try it first ... I want to see it in
+-- action first"): while Shift is held, with the order lines, a line with an arrowhead from the largest selected unit
+-- (from its last order) to the place under the mouse, in the colour of the order a click there would give. The exe
+-- draws it when its console variable ui_DrawPathPreview is on, which nothing sets (ui/user/user_units.cpp
+-- WorkOutPathPreview). Interface tab, off unless chosen.
+table.insert(options.ui.items, {
+    title = "Path Preview",
+    key = 'remaster_path_preview',
+    tip = "While Shift is held, an arrow from your selected units' last order to the mouse, in the colour of the order a click there would give.",
+    type = 'toggle',
+    default = 0,
+    set = function(key, value, startup)
+        ConExecute("ui_DrawPathPreview " .. tostring(value))
+    end,
+    custom = {
+        states = {
+            { text = "<LOC _Off>", key = 0 },
+            { text = "<LOC _On>", key = 1 },
+        },
+    },
+})
+
 -- The game's own graphics settings drive the renderer (Fidelity, Shadow Fidelity, Anti-Aliasing,
 -- Level Of Detail, Texture Detail; ui/user/keymap.cpp) and mean what they say (Chris, 2026-10-15), so a player
 -- who has never chosen starts at the full look: their defaults are raised to the highest. The

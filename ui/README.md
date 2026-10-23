@@ -142,6 +142,28 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   again, the picture eases back to the game's camera (which stayed where it was), the pause and the panels as they
   were. `moho64ui_PhotoMode()`, `moho64ui_PhotoModeSet{...}`, `moho64ui_PhotoModeTake()`: the panel's and the tests'
   (`ui/tests/photomode.lua`).
+  The command palette (ours, not the original's: Chris, 2026-10-23): the key action "Command palette" (Ctrl-Shift-P
+  at first; Ctrl-K stays FAF's Self-Destruct) and the console's `remaster_palette [on|off]`, in the front end and in a game, not while a text box
+  has the focus. A search line near the top (`ui/data/lua/palette.lua`, of the game's own controls); typing filters,
+  as it is typed, the console's commands and variables (`moho64ui_ConsoleNames()`: the original's 435 and ours, a
+  variable's value beside it), every key action of the game's key map (the key it is bound to now beside it) and every
+  option of the Options dialog (its tab and value): the whole name, its beginning or a word's beginning first, then
+  the query's words at words' beginnings, anywhere, without separators, the words' first letters; of equal ones the
+  key actions, the options, the console's names. At most 12 rows; Up / Down, Enter, Tab completes a console name,
+  Escape or a click outside closes, its own key too (`keymap.cpp` KeyMapKeyDown lets that one key through its search
+  line's focus). A console name runs as the console runs it, what it prints stays in the palette's last line; a line
+  typed with words after a console name runs as typed; a key action closes the palette and runs as its key runs it;
+  an option opens the Options dialog (in the main menu through its own Options button) at its tab, scrolled to the
+  option, its title lit for a moment. Nothing typed: the entries run last. Tests: `ui/tests/palette.lua`.
+  The program's own key actions in every key map (Chris, 2026-10-23; `ui/data/hook/lua/keymap/keymapper.lua`, a hook):
+  each with its key (Ctrl-Alt-S statistics, Ctrl-Alt-C cinematic camera, Ctrl-Alt-F12 photo, Alt-P photo mode,
+  Ctrl-Shift-P command palette) comes into FAF's three presets (default, hotbuild, alternative) and into the player's
+  saved key map wherever that key is free there (not bound, and not the Shift / Alt version of a hotbuild key, which
+  the hotbuild modifiers take in a game); a taken key is left alone and the action stays unbound in that map. Added
+  where the map is read (GetDefaultKeyMap, GetUserKeyMap), never written by itself: the key binding screen saves the
+  map with them when it saves anyway, and then notes the own actions that map has seen (`UserKeyMapRemasterActions`
+  in the profile), so one the player unbound stays unbound and only a newer action comes in by itself. Tests:
+  `ui/tests/ownkeys.lua`.
   `--fast-forward N`: a game runs ahead to beat N as fast as it goes (for measurements; the
   window's frame times count from there), and the log gives the frame-to-frame times (middle,
   95%, 99%, longest).

@@ -342,6 +342,7 @@ int l_RestartSession(lua_State*) {
 }  // namespace
 
 bool ExitRequested() { return g_exitRequested; }
+void RequestSessionRestart() { g_sessionRequest = 2; }
 int TakeSessionRequest() {
   int request = g_sessionRequest;
   g_sessionRequest = 0;

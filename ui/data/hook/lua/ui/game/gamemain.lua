@@ -135,8 +135,13 @@ function RemasterFirstStartCheck()
         nil, nil, true, { escapeButton = 2, enterButton = 1, worldCover = false })
 end
 
+-- FA Remastered: the replay timeline (ours: /moho64ui/lua/timeline.lua), made while a replay plays once the game's
+-- screen is there (also after the timeline's jump back, which makes the interface anew).
 local RemasterGameOnFirstUpdate = OnFirstUpdate
 function OnFirstUpdate()
     RemasterGameOnFirstUpdate()
     ForkThread(RemasterFirstStartCheck)
+    if SessionIsReplay() and rawget(_G, 'moho64ui_ReplayTimeline') then
+        import("/moho64ui/lua/timeline.lua").Create()
+    end
 end

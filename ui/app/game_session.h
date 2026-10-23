@@ -29,6 +29,7 @@ class Vfs;
 
 namespace moho {
 struct SessionDescription;
+struct ReplayHeader;
 }
 
 namespace moho::ui {
@@ -36,6 +37,7 @@ namespace moho::ui {
 namespace sound {
 class SoundSystem;
 }
+class ReplayTimelineSource;
 
 class GameSession {
  public:
@@ -125,6 +127,13 @@ class GameSession {
   // the orders, beat by beat. False with the reason when it cannot start.
   bool LaunchReplay(lua_State* L, const std::string& file, std::string* why);
   bool playingReplay() const { return play_ != nullptr; }
+  // The replay timeline's host side (ours: user/replay_timeline.h) while a replay plays, for its interface; nullptr
+  // otherwise. The replay's length is its stream's Advances, counted when it opens; the moments are looked for on a
+  // thread of their own from then on (StartMomentScan: the engine's scan, a stand-in until it is on main), kept
+  // across a jump back and stopped when the replay closes. A jump forward runs the beats ahead as fast as they go
+  // (fastForwardTo, the world's sounds and shakes left out meanwhile); a jump back starts the replay over (a
+  // restart, RestartSession's way: the interface is made anew) and then runs ahead.
+  ReplayTimelineSource* timeline();
 
   // The game's window (the live host's; nullptr without one): the world's picture is made on it
   // and shown there by the renderer, the interface laid over it (PresentToWindow). With
@@ -261,6 +270,14 @@ class GameSession {
   std::unique_ptr<CommandStream> play_;
   bool lastWasReplay_ = false;
   std::string profile_;
+  struct Timeline;
+  std::unique_ptr<Timeline> timeline_;
+  uint32_t seekTo_ = 0;  // a jump of the timeline under way: the beat it goes to (0: none)
+  bool seekBack_ = false;  // (that jump goes back: it waits for the replay to start over, Relaunch)
+  bool relaunching_ = false;  // (End called by Relaunch: the replay goes on, its moments' scan with it)
+  void StartMomentScan(const ReplayHeader& header, const std::string& file);
+  void StopMomentScan();
+  void SeekReached();  // after beats: a jump that got there (or to the replay's end) is over
   void ReadLookOptions(lua_State* L, int options);  // the lobby's Remaster... options into skyNow_
   void StartReplayFile(const SessionDescription& session);
   void OpenPicture();

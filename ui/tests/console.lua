@@ -192,6 +192,8 @@ ConExecute("remaster_photo")
 check("remaster_photo without a game", take(), noSession)
 ConExecute("remaster_photo_mode")
 check("remaster_photo_mode without a game", take(), noSession)
+ConExecute("remaster_timeline")  -- (the replay timeline: ui/tests/timeline.lua)
+check("remaster_timeline without a game", take(), noSession)
 -- the simulation's commands (their aliases run DoSimCommand, 0x41e6a0): its usage without a command (0x88e6b0), the
 -- engine's line without a simulation (0x88e643); the interface's own commands for the selected units the same
 ConExecute("DoSimCommand")

@@ -20,6 +20,7 @@
 #include "maui/control.h"
 #include "script/script_state.h"
 #include "user/bindings.h"
+#include "user/replay_timeline.h"
 #include "user/user_state.h"
 
 namespace moho::ui {
@@ -304,13 +305,15 @@ const std::vector<const char*>& ConsoleNames() {
   static const std::vector<const char*> names = [] {
     std::vector<const char*> all = {
 #include "user/console_names.inc"
-        // ours (the Video options', the statistics overlay's, the cinematic camera's, the photo's and the photo mode's)
+        // ours (the Video options', the statistics overlay's, the cinematic camera's, the photo's, the photo mode's,
+        // the command palette's and the replay timeline's)
         "remaster_effects", "remaster_effects_quality", "remaster_frame_rate", "remaster_graphics_api", "remaster_look",
         "remaster_rich_ground", "remaster_snow_tracks", "remaster_stats", "remaster_temporal_upscale", "remaster_tracers", "remaster_upscale",
         "remaster_atmosphere", "remaster_soft_shadows", "remaster_ray_tracing", "remaster_weather_effects",
         "remaster_ground_detail", "remaster_frame_generation", "remaster_water_ripples", "remaster_lens", "remaster_cinecam",
         "remaster_photo", "remaster_battle_effects", "remaster_energy_shields", "remaster_hidden_outlines",
-        "remaster_photo_look", "remaster_low_latency", "remaster_photo_mode", "remaster_season", "remaster_color_vision"};
+        "remaster_photo_look", "remaster_low_latency", "remaster_photo_mode", "remaster_season", "remaster_color_vision",
+        "remaster_palette", "remaster_timeline"};
     std::sort(all.begin(), all.end(), ConNameLess);
     return all;
   }();
@@ -533,13 +536,34 @@ void CommandGraphShown(lua_State* L, bool show) {
   lua_settop(L, top);
 }
 
-// Whether a key map action is the photo mode's own switch (its console command remaster_photo_mode, with or without
-// a word after it).
-static bool IsPhotoModeAction(const std::string& action) {
+// Whether a key map action is the console command `upperName` (the photo mode's own switch remaster_photo_mode, the
+// command palette's remaster_palette), with or without a word after it.
+static bool IsActionOf(const std::string& action, const char* upperName) {
   const size_t a = action.find_first_not_of(" \t");
   if (a == std::string::npos) return false;
   const size_t b = action.find_first_of(" \t", a);
-  return Upper(action.substr(a, b == std::string::npos ? std::string::npos : b - a)) == "REMASTER_PHOTO_MODE";
+  return Upper(action.substr(a, b == std::string::npos ? std::string::npos : b - a)) == upperName;
+}
+static bool IsPhotoModeAction(const std::string& action) { return IsActionOf(action, "REMASTER_PHOTO_MODE"); }
+
+// Whether the command palette (ours: ui/data/lua/palette.lua, mounted at /moho64ui) is open: its State.open. Asked
+// only when the palette's own key is pressed while a control has the focus.
+static bool PaletteOpen(lua_State* L) {
+  const int top = lua_gettop(L);
+  bool open = false;
+  lua_getglobal(L, "import");
+  lua_pushstring(L, "/moho64ui/lua/palette.lua");
+  if (lua_pcall(L, 1, 1, 0) == 0 && lua_istable(L, -1)) {
+    lua_pushstring(L, "State");
+    lua_gettable(L, -2);
+    if (lua_istable(L, -1)) {
+      lua_pushstring(L, "open");
+      lua_gettable(L, -2);
+      open = lua_toboolean(L, -1) != 0;
+    }
+  }
+  lua_settop(L, top);
+  return open;
 }
 
 void KeyMapKeyDown(lua_State* L, int vk, bool shift, bool ctrl, bool alt, bool repeat) {
@@ -548,9 +572,18 @@ void KeyMapKeyDown(lua_State* L, int vk, bool shift, bool ctrl, bool alt, bool r
   map.down.insert(vk);
   // (306: Shift; not while the photo mode is open, whose Shift is its own: faster)
   if (vk == KeycodeMauiToMSW(306) && !wasDown && !PhotoModeOpen(L)) CommandGraphShown(L, true);
-  if (UserState::From(L)->ui().focus) return;
   uint32_t code = static_cast<uint32_t>(vk) | (shift ? kShift : 0) | (ctrl ? kCtrl : 0) | (alt ? kAlt : 0);
   auto it = map.actions.find(code);
+  if (UserState::From(L)->ui().focus) {
+    // A control with the keyboard focus keeps the key map away (a text box: the key is typed). One exception, ours:
+    // while the command palette is open (its search line has the focus) the key the player bound to it closes it
+    // again (Ctrl-Shift-P at first), as the photo mode's own key closes the photo mode.
+    if (it != map.actions.end() && !repeat && IsActionOf(it->second, "REMASTER_PALETTE") && PaletteOpen(L)) {
+      std::string action = it->second;
+      ExecuteConsoleCommand(L, action);
+    }
+    return;
+  }
   // While the photo mode is open no action of the key map runs but its own (Chris, 2026-10-19: "that way things don't
   // get messed up when in photomode"): the key the player bound "Photo mode" to closes it (Alt-P at first, or any
   // other: the key bindings dialog's), the photo mode's own keys fly its camera (PhotoModeKey), every other key does
@@ -1040,6 +1073,8 @@ ConVarNow ConVarOf(lua_State* L, const std::string& key) {
   else if (key == "UI_MAXWAYPOINTSIZE") set("ui_MaxWaypointSize", 'f', GraphVars().maxWaypointSize);
   else if (key == "UI_WAYPOINTLINESCALE") set("ui_WaypointLineScale", 'f', GraphVars().waypointLineScale);
   else if (key == "UI_MAXTEXTLOD") set("ui_MaxTextLOD", 'f', GraphVars().maxTextLod);
+  else if (key == "UI_DRAWPATHPREVIEW") set("ui_DrawPathPreview", 'b', GraphVars().drawPathPreview);
+  else if (key == "UI_PATHPREVIEW") set("ui_PathPreview", 'b', GraphVars().pathPreview);
   else if (const KeptConVar* kept = KeptConVarOf(key)) set(kept->name, kept->kind, kept->value);
   else RangeConVar(L, key, &v.name, &v.kind, &v.number);  // (the range rings': range_RenderSelected and the others)
   return v;
@@ -1124,6 +1159,10 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
   if (Upper(name) == "REMASTER_CINECAM") return CineCameraCommand(L, rest);
   if (Upper(name) == "REMASTER_PHOTO") return CinePhotoCommand(L);
   if (Upper(name) == "REMASTER_PHOTO_MODE") return PhotoModeCommand(L, rest);
+  // The command palette (ours: ui/data/lua/palette.lua): remaster_palette [on|off] (no word: it turns over), in the
+  // front end and in a game. Its key action "Command palette" (Ctrl-Shift-P at first) runs it.
+  if (Upper(name) == "REMASTER_PALETTE") return CallScript(L, "/moho64ui/lua/palette.lua", "Command", rest);
+  if (Upper(name) == "REMASTER_TIMELINE") return TimelineCommand(L, rest);  // the replay timeline (replay_timeline.cpp)
   // UI_ToggleGamePanels (FA exe 0x8349d0, READ: its whole body is import("/lua/ui/game/gamemain.lua").HideGameUI()
   // called without an argument, which turns the game's panels over; no session check of its own). FAF's UserSync runs
   // it for Sync.ToggleGamePanels.
@@ -1188,6 +1227,12 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
     if (key == "UI_MAXWAYPOINTSIZE") return set(graph.maxWaypointSize);
     if (key == "UI_WAYPOINTLINESCALE") return set(graph.waypointLineScale);
     if (key == "UI_MAXTEXTLOD") return set(graph.maxTextLod);
+    // (the path preview's bools, 0x10a6443 and 0x10a6448: none turns it over, else the word's "true" or a number)
+    auto flag = [&](bool& field) {
+      field = !given ? !field : (rest[at] != '0' && Upper(rest.substr(at)).rfind("FALSE", 0) != 0);
+    };
+    if (key == "UI_DRAWPATHPREVIEW") return flag(graph.drawPathPreview);
+    if (key == "UI_PATHPREVIEW") return flag(graph.pathPreview);
   }
   if (Upper(name) == "UI_FORCELIFBARSONENEMY") {  // (FA exe: byte 0x10a644a; a key toggles it, the option sets it)
     size_t a = rest.find_first_not_of(" \t");
@@ -1557,6 +1602,37 @@ void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
   RunConsoleCommand(L, name + (on ? " 1" : " 0"));
 }
 
+namespace {
+// moho64ui_ConsoleNames() -> every console name the host knows (ConsoleNames: the original's and ours), in the
+// registry's order, each as { name = <the registry's spelling>, kind = 'bool' | 'int' | 'uint32' | 'float' | 'string',
+// value = <its value now> }; kind and value only for the console variables this host keeps (ConVarOf), none for a
+// command or a variable not built. The host's own function, for the command palette (ui/data/lua/palette.lua).
+int l_ConsoleNames(lua_State* L) {
+  lua_newtable(L);
+  int n = 0;
+  for (const char* name : ConsoleNames()) {
+    lua_newtable(L);
+    lua_pushstring(L, "name");
+    lua_pushstring(L, name);
+    lua_rawset(L, -3);
+    const ConVarNow v = ConVarOf(L, Upper(name));
+    if (v.name) {
+      const char* kind = v.kind == 'b' ? "bool" : v.kind == 'i' ? "int" : v.kind == 'u' ? "uint32" : v.kind == 'f' ? "float" : "string";
+      lua_pushstring(L, "kind");
+      lua_pushstring(L, kind);
+      lua_rawset(L, -3);
+      lua_pushstring(L, "value");
+      if (v.kind == 'b') lua_pushboolean(L, v.number != 0);
+      else if (v.kind == 's') lua_pushstring(L, v.text.c_str());
+      else lua_pushnumber(L, v.number);
+      lua_rawset(L, -3);
+    }
+    lua_rawseti(L, -2, ++n);
+  }
+  return 1;
+}
+}  // namespace
+
 bool KeyIsDown(lua_State* L, int mauiCode) {
   UiManager& ui = UserState::From(L)->ui();
   if (!ui.windowInFront) return false;  // (WindowIsForeground 0x79cb10 first)
@@ -1608,6 +1684,7 @@ void RegisterKeyMapBindings(lua_State* L) {
   SetGlobal(L, "RemoveConsoleOutputReciever", l_RemoveConsoleOutputReciever);
   SetGlobal(L, "FlushEvents", l_FlushEvents);
   lua_register(L, "moho64ui_KeyMapAction", l_KeyMapAction);
+  lua_register(L, "moho64ui_ConsoleNames", l_ConsoleNames);
   lua_register(L, "moho64ui_Looks", l_LooksForTests);
   // moho64ui_RayTracingSupported() -> true or false once a picture of the renderer has opened and said whether
   // the graphics card can ray trace, nil before (the Video tab's Ray Tracing: one state, greyed, where it cannot).

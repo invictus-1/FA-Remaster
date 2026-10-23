@@ -662,6 +662,7 @@ int main(int argc, char** argv) {
     gameCfg.ownArmy = session.OwnArmy();
     gameCfg.world = session.world();
     gameCfg.pace = &session.pace;
+    gameCfg.timeline = session.timeline();  // (a replay's timeline; nullptr in a game played)
     game = std::make_unique<ui::UserState>(&vfs, gameCfg);
     bool up = session.LoadInterfaceRules(game->L());
     if (up) ui::InstallUnitCategoryFunctions(game->L());

@@ -13,6 +13,7 @@
 #include "script/script_state.h"
 #include "script/threads.h"
 #include "user/bindings.h"
+#include "user/replay_timeline.h"
 
 namespace moho::ui {
 
@@ -42,6 +43,7 @@ UserState::UserState(Vfs* vfs, Config config) : config_(std::move(config)) {
   RegisterKeyMapBindings(L);
   RegisterWorldViewBindings(L);
   RegisterSessionBindings(L);
+  RegisterTimelineBindings(L);
   RegisterSoundBindings(L);
   RegisterUserUnitBindings(L);
   RegisterRangeBindings(L);

@@ -1006,7 +1006,10 @@ class WorldView : public Control {
     // The order lines of every unit whose orders the interface holds while Shift is held, and the
     // marks at their waypoints: the original's command graph (user_units.cpp), the unit under the
     // mouse (selected or not: the session's rollover unit, session+0x4c0) highlighting its own.
-    OrderLinesForWorld(L, hasSim && shiftHeld, rollover, &scene, &orderEtas_);
+    // (and the path preview, when the console's ui_DrawPathPreview is on: the Interface tab's Path Preview)
+    PathPreviewView preview;
+    if (hasSim && shiftHeld && GraphVars().drawPathPreview) PathPreviewViewOf(L, &preview);
+    OrderLinesForWorld(L, hasSim && shiftHeld, rollover, &scene, &orderEtas_, &preview);
     lap("(the picture's scene: the order lines)");
     std::string mode, name;
     CommandMode(L, &mode, &name);
@@ -1645,6 +1648,25 @@ class WorldView : public Control {
     *sy = (r.y0 + r.y1) * 0.5f + (p[2] - c->focus[2]) * scale;
     *w = 1.0f / scale;
     return *sx >= r.x0 && *sx <= r.x1 && *sy >= r.y0 && *sy <= r.y1;
+  }
+  // What the path preview needs of this view (user_units.cpp): the cursor's place in the world, the command mode, and
+  // w(p), all by the picture last drawn (asked while the scene of the next is made: a fresh one would be drawn for
+  // the asking). The cursor in the world: INFERRED the mouse over this view with ground under it there (the cursor
+  // info's +0x4b0), its place as GetMouseWorldPos's (snapped onto a deposit while an extractor is placed).
+  void PathPreviewViewOf(lua_State* L, PathPreviewView* out) {
+    UiManager& ui = UserState::From(L)->ui();
+    WorldSource* source = UserState::From(L)->config().world;
+    Rect r;
+    GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
+    out->cursorInWorld = !miniMap && pixels_ && source && HitTest(ui.mouseX, ui.mouseY) &&
+                         source->GroundAt(ui.mouseX - r.x0, ui.mouseY - r.y0, out->cursor);
+    if (out->cursorInWorld) SnapToDeposit(L, out->cursor);
+    CommandMode(L, &out->mode, &out->name);
+    out->pixelAt = [this, L](const float p[3]) {
+      float sx = 0, sy = 0, w = 0;
+      ScreenOf(L, p, &sx, &sy, &w);
+      return w;
+    };
   }
   // The extractor's snap: while a building that goes on a deposit is placed, the place under the mouse jumps onto the
   // nearest deposit of its kind within reach. READ, the cursor update 0x86f520 at 0x86ffaf..0x8701db (FAF's exe; its
@@ -3417,6 +3439,13 @@ bool MouseWorldPlace(lua_State* L, float out[3]) {
   WorldView* v = CursorView(L);
   if (!v) return false;
   v->CursorPlace(L, ui.mouseX, ui.mouseY, out);
+  return true;
+}
+
+bool MainPathPreviewView(lua_State* L, PathPreviewView* out) {
+  WorldView* v = MainView(UserState::From(L)->ui().GetFrame(0));
+  if (!v) return false;
+  v->PathPreviewViewOf(L, out);
   return true;
 }
 

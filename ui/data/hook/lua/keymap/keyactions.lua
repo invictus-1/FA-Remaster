@@ -20,3 +20,16 @@ keyActions['remaster_photo_mode'] = {
     action = 'remaster_photo_mode',
     category = 'ui',
 }
+-- The command palette, open or closed (its panel /moho64ui/lua/palette.lua, the console command remaster_palette:
+-- ui/user/keymap.cpp): a search over the console's commands and variables, the key map's actions and the Options
+-- dialog's options; Esc or a click outside closes it too.
+keyActions['remaster_palette'] = {
+    action = 'remaster_palette',
+    category = 'ui',
+}
+-- The replay timeline, shown or hidden (ui/user/replay_timeline.cpp, its bar /moho64ui/lua/timeline.lua): the
+-- replay's length, its moments and jumps to any point; only while a replay plays.
+keyActions['remaster_timeline'] = {
+    action = 'remaster_timeline',
+    category = 'ui',
+}

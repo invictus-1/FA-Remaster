@@ -28,6 +28,7 @@ namespace moho::ui {
 
 class WorldSource;
 class BackdropSource;
+class ReplayTimelineSource;
 struct GamePace;
 struct WorldLine;
 struct WorldScene;
@@ -94,6 +95,9 @@ class UserState {
     WorldSource* world = nullptr;
     // The running game's pace (the host's); nullptr: there is no game.
     GamePace* pace = nullptr;
+    // The replay timeline's host side while a replay plays (the host's: its length, the moments, the jumps;
+    // user/replay_timeline.h); nullptr otherwise.
+    ReplayTimelineSource* timeline = nullptr;
     // What is shown where the front end plays its background film (the main menu's): a moving
     // picture of the host's; nullptr: nothing is shown there (the film itself is not decoded).
     BackdropSource* backdrop = nullptr;
@@ -272,6 +276,9 @@ bool ExitRequested();
 // A script has asked to leave the running game (ExitGame: back to the front end) or to start it
 // over (RestartSession): 1 or 2, once, then 0 again. The host acts on it between two frames.
 int TakeSessionRequest();
+// The host starts the running game over between two frames, as RestartSession() asks (the replay timeline's jump
+// back: replay_timeline.h).
+void RequestSessionRestart();
 // The world interface provider and a running session's facts (session_bindings.cpp).
 void RegisterSessionBindings(lua_State* L);
 // Units as the interface sees them, selection (user_units.cpp). RefreshUserUnits brings them up
@@ -531,7 +538,13 @@ CustomNameStyle& CustomNames();
 struct CommandGraphVars {
   int curveSegments = 20;          // ui_CurveSegments: the points of a leg's curve, less one
   float curveSmoothness = 50;      // ui_CurveSmoothness: how far the curve bends, in leg widths
-  float pathSmoothness = 2;        // ui_PathSmoothness (the path preview's; the preview is never on)
+  float pathSmoothness = 2;        // ui_PathSmoothness: the path preview's tangents are at most this long
+  // ui_DrawPathPreview (0x10a6443, "Turns on/off the arrow line"): the command graph's drawing draws the path
+  // preview (0x82a380); ui_PathPreview (0x10a6448, "Turns on/off the pathfinding preview line"): it draws the path
+  // the simulation found instead of the straight arrow line. Both off in the original, which nothing turns on; the
+  // Interface tab's Path Preview (ours) sets ui_DrawPathPreview.
+  bool drawPathPreview = false;
+  bool pathPreview = false;
   int maxNodeUnits = 1;            // ui_CommandGraphMaxNodeUnits: the most a leg counts for at a node
   float minWaypointSize = 7;       // ui_MinWaypointSize, pixels (half the mark's side)
   float maxWaypointSize = 100;     // ui_MaxWaypointSize
@@ -702,7 +715,19 @@ struct OrderEta {
 // orderTextures, orderLegs (highlighted first, then selected, then the rest), orderMarks and
 // orderSettings; empty lists when not shown. `rollover`: the unit under the mouse (0xffffffff: none).
 // `etas` (may be null): the time-left texts at the graph's nodes (OrderEta), for the world view to draw.
-void OrderLinesForWorld(lua_State* L, bool shown, uint32_t rollover, WorldScene* scene, std::vector<OrderEta>* etas = nullptr);
+// `preview` (may be null): what the path preview needs of the view the graph is drawn in (ui_DrawPathPreview,
+// user_units.cpp); its legs go before the order lines' in orderLegs.
+struct PathPreviewView {
+  bool cursorInWorld = false;     // the session's cursor info +0x4b0 (here: the mouse over the view, ground under it)
+  float cursor[3] = {0, 0, 0};    // the place of the world under the mouse (+0x4b4)
+  std::string mode, name;         // the script's command mode and its data's name (commandmode.GetCommandMode())
+  // the map units a pixel spans at a place in this view (the original's w(p), dot(cam+0x2a4, p) + cam+0x2b0)
+  std::function<float(const float p[3])> pixelAt;
+};
+void OrderLinesForWorld(lua_State* L, bool shown, uint32_t rollover, WorldScene* scene, std::vector<OrderEta>* etas = nullptr,
+                        const PathPreviewView* preview = nullptr);
+// The main world view's PathPreviewView (worldview.cpp; for the tests' moho64ui_OrderGraph); false: no such view.
+bool MainPathPreviewView(lua_State* L, PathPreviewView* out);
 // The waypoint under the mouse and dragging it, as the original's command graph and its UICommandDragger
 // (user_units.cpp). `screenOf`: where a place of the world is on the screen and how many map units a pixel is
 // there (false: not in view). UpdateHoveredWaypoint works out the waypoint under the mouse at (x, y) while
