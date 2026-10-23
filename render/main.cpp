@@ -72,7 +72,14 @@
 // --timings  at the end of the run, what a frame cost on average, stage by stage: the graphics card's
 //           time for each (its own clock) and the processor's for preparing, recording and handing over;
 //           --timings-from n: the first n frames not counted (2: what they load; more for what builds up over time,
-//           movement dust)
+//           movement dust); [rbench] then, frame by frame (frame_stats.h), the lowest, typical (median), slowest 1 % and
+//           0.1 % and longest frame and the frames over 8.3 and 16.7 ms, for the processor's own work (the waits for the
+//           card, the latency limiter and --fixed-step's simulation left out), the card's and the frame as shown (the
+//           simulation's wait left out), the longest frame's stages, and a line "render: --timings-stats: key=value ..."
+//           for scripts; --timings-csv <file> (turns --timings on): every counted frame a row, every stage a column
+//           (render/tools/bench_render.py, the renderer's benchmark set, reads them)
+// --fight-scan <beats>  [rbench] with a game: every that many beats (on the way to --tick too) where the most shots are
+//           in flight (as --find fight), printed: to find a battle's moment and place for a benchmark's camera
 // --hitch-log [ms]  [hitches] every frame that took longer than ms from the last one's end (25 unless given), or loaded or
 //           made something for the first time, printed with its parts (the processor's, CpuTimes; the card's last known)
 //           and what was loaded or made in it, each with its time (hitch_log.h: models, textures, pipelines made outside
@@ -551,6 +558,7 @@
 #include "bp_reader.h"
 #include "cpu_times.h"
 #include "hitch_log.h"  // [hitches]
+#include "frame_stats.h"  // [rbench]
 #include "fx_stand.h"
 #include "camera.h"
 #include "cinecam.h"
@@ -610,6 +618,8 @@ struct Options {
   bool worldBeyond = true;              // --map-ends
   bool timings = false;                 // --timings
   int timingsFrom = 2;                  // --timings-from
+  std::string timingsCsv;               // [rbench] --timings-csv
+  int fightScan = 0;                    // [rbench] --fight-scan
   FxStandSetup fx;                      // --fx, --fx-shot and their places
   bool fxAt = false, fxFrom = false, fxTo = false, fxRepeat = false;
   bool remasteredEffects = true;        // --effects-look original|remastered
@@ -1060,6 +1070,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     }
     else if (a == "--movement-dust-test") o->movementDustTest = v;
     else if (a == "--timings-from") o->timingsFrom = std::max(0, atoi(v));
+    else if (a == "--timings-csv") o->timingsCsv = v, o->timings = true;  // [rbench]
+    else if (a == "--fight-scan") o->fightScan = std::max(0, atoi(v));    // [rbench]
     else if (a == "--movement-dust-radius") o->movementDustRadius = std::max(1.0f, static_cast<float>(atof(v)));
     else if (a == "--fx-blast") o->fx.blast = std::max(0.0f, static_cast<float>(atof(v)));
     else if (a == "--blast-test") {
@@ -1420,6 +1432,26 @@ void DrawTestScene(DebugDraw& draw) {
   draw.Box({0, 1, 12}, {1, 1, 1}, 0xffe06040u);      // blue: +z, south
   draw.Box({0, 9, 0}, {0.5f, 3, 0.5f}, 0xff40c040u); // green: up
   draw.Box({-40, 4, -60}, {6, 4, 10}, 0xff60a0c0u);
+}
+
+// Where the most shots are in flight: the shot with the most others within 30 of it (what flies: the UEF's build slices
+// stand still), trying at most about 200 of them; that shot's index in *best and how many (-1: no shots) (--find fight,
+// [rbench] --fight-scan).
+int MostShotsNear(const Frame& frame, size_t* best) {
+  int most = -1;
+  for (size_t a = 0; a < frame.projectiles.size(); a += std::max<size_t>(frame.projectiles.size() / 200, 1)) {
+    int near = 0;
+    for (const FrameProjectile& b : frame.projectiles) {
+      const float dx = b.position[0] - frame.projectiles[a].position[0], dz = b.position[2] - frame.projectiles[a].position[2];
+      const float speed2 = b.velocity[0] * b.velocity[0] + b.velocity[1] * b.velocity[1] + b.velocity[2] * b.velocity[2];
+      if (dx * dx + dz * dz < 30 * 30 && speed2 > 25) ++near;
+    }
+    if (near > most) {
+      most = near;
+      *best = a;
+    }
+  }
+  return most;
 }
 
 }  // namespace
@@ -2746,11 +2778,16 @@ int main(int argc, char** argv) {
       sums.emplace_back(name, ms);
     }
   } timing;
+  FrameStats frameStats;  // [rbench] --timings frame by frame
+  auto statsLast = std::chrono::steady_clock::now();  // [rbench] (the last frame's end)
 
   for (;;) {
     // (the latency limiter, when on, waits here, just before the input is read: what is read is then as fresh as
     // the frame allows; off, it returns at once)
+    const auto limiterFrom = std::chrono::steady_clock::now();  // [rbench] (the waits, left out of the processor's own time)
     device->WaitForNextFrame();
+    const double limiterMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - limiterFrom).count();
+    double simulationWaitMs = 0;
     if (!window->Pump(&events)) break;
     if (opt.hitchEvery > 0 && frameCount > 0 && frameCount % opt.hitchEvery == 0) {  // (--hitch: a long frame)
       // (in whole microseconds: a time point of float nanoseconds would round to some milliseconds)
@@ -2928,15 +2965,37 @@ int main(int argc, char** argv) {
     if (playing) {
       if (!paused) playTick += static_cast<double>(dt) * 10 * playSpeed;
       // [wakes] (--fixed-step: where the simulation is not yet at that beat, wait for it, so that each run shows the same beats)
-      if (opt.fixedStep && automatic && haveLive && !liveBusy)
+      if (opt.fixedStep && automatic && haveLive && !liveBusy) {
+        const auto waitFrom = std::chrono::steady_clock::now();  // [rbench] (a test's wait, not the renderer's)
         for (int waited = 0; waited < 20000 && live.GetState() == LiveSim::State::Running && live.LastTick() < static_cast<uint32_t>(playTick) + 1; ++waited) {
           live.RunTo(static_cast<uint32_t>(playTick) + 2);
           std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
+        simulationWaitMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - waitFrom).count();
+      }
       playTick = std::clamp(playTick, static_cast<double>(firstTick()), static_cast<double>(lastTick()));
       CpuTimes::Part("the game's beats blended");
       frameAt(playTick, &frame);
       CpuTimes::Part(nullptr);
+      if (opt.fightScan > 0 && haveLive) {  // [rbench] --fight-scan: where the most shots fly, every so many beats
+        static int scanned = -1;
+        const int due = static_cast<int>(playTick) / opt.fightScan;
+        size_t best = 0;
+        if (due != scanned) {
+          scanned = due;
+          const int most = MostShotsNear(frame, &best);
+          if (most > 0) {
+            const FrameProjectile& p = frame.projectiles[best];
+            int units = 0, dying = 0;
+            for (const FrameUnit& u : frame.units) {
+              const float dx = u.position[0] - p.position[0], dz = u.position[2] - p.position[2];
+              if (dx * dx + dz * dz < 60 * 60) ++(u.dead ? dying : units);
+            }
+            printf("render: --fight-scan: beat %d: %d shots within 30 of %.0f, %.0f (%zu in flight, %zu beams; within 60: %d units, %d dying)\n",
+                   static_cast<int>(playTick), most, p.position[0], p.position[2], frame.projectiles.size(), frame.beams.size(), units, dying);
+          }
+        }
+      }
       if (haveLive && !framedLive && !opt.hasCam && !frame.units.empty()) {  // the first look at the game
         framedLive = true;
         lookAtUnits();
@@ -3575,19 +3634,7 @@ int main(int argc, char** argv) {
         if (best > -1e8f) printf("render: --find dying: one %.1f above the ground at %.0f, %.0f\n", best, camera.target.x, camera.target.z);
       } else if (opt.find == "fight") {  // where the most shots are in flight: the shot with the most others near it
         size_t best = 0;
-        int most = -1;
-        for (size_t a = 0; a < frame.projectiles.size(); a += std::max<size_t>(frame.projectiles.size() / 200, 1)) {
-          int near = 0;
-          for (const FrameProjectile& b : frame.projectiles) {
-            const float dx = b.position[0] - frame.projectiles[a].position[0], dz = b.position[2] - frame.projectiles[a].position[2];
-            const float speed2 = b.velocity[0] * b.velocity[0] + b.velocity[1] * b.velocity[1] + b.velocity[2] * b.velocity[2];
-            if (dx * dx + dz * dz < 30 * 30 && speed2 > 25) ++near;  // (what flies: the UEF's build slices stand still)
-          }
-          if (near > most) {
-            most = near;
-            best = a;
-          }
-        }
+        const int most = MostShotsNear(frame, &best);
         if (most > 0) {
           const FrameProjectile& p = frame.projectiles[best];
           camera.target = {p.position[0], world.HaveMap() ? world.GroundHeight(p.position[0], p.position[2]) : p.position[1], p.position[2]};
@@ -3731,26 +3778,45 @@ int main(int argc, char** argv) {
     if (opt.timings && !(automatic && liveBusy) && frameCount > opt.timingsFrom) {  // (the first frames load what they need)
       const auto ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
       const auto frameEnd = std::chrono::steady_clock::now();
-      timing.Add("cpu: waiting for a free frame", ms(frameStart, frameBegun));
-      timing.Add("cpu: the game's frame, units, effects listed", ms(frameBegun, renderStart));
-      timing.Add("cpu: drawing recorded", ms(renderStart, renderEnd));
-      timing.Add("cpu: handed over and shown", ms(renderEnd, frameEnd));
-      timing.Add("cpu: whole frame", ms(frameStart, frameEnd));
+      std::vector<std::pair<std::string, double>> row;  // [rbench] (this frame's stages, for frameStats)
+      const auto add = [&](const std::string& name, double t) {
+        timing.Add(name, t);
+        row.emplace_back(name, t);
+      };
+      add("cpu: waiting for a free frame", ms(frameStart, frameBegun));
+      add("cpu: the game's frame, units, effects listed", ms(frameBegun, renderStart));
+      add("cpu: drawing recorded", ms(renderStart, renderEnd));
+      add("cpu: handed over and shown", ms(renderEnd, frameEnd));
+      add("cpu: whole frame", ms(frameStart, frameEnd));
       timing.worst = std::max(timing.worst, ms(frameStart, frameEnd));
       std::vector<std::pair<const char*, double>> stages;
       device->TakeTimes(&stages);
       double gpu = 0;
       for (const auto& s : stages) {
-        timing.Add(std::string("gpu: ") + s.first, s.second);
+        add(std::string("gpu: ") + s.first, s.second);
         timing.AddGpu(s.first, s.second);
         gpu += s.second;
       }
       if (!stages.empty()) {
-        timing.Add("gpu: whole frame", gpu);
+        add("gpu: whole frame", gpu);
         timing.AddGpu("whole frame", gpu);
       }
-      for (const auto& part : CpuTimes::parts) timing.Add(std::string("cpu part: ") + part.first, part.second);
+      for (const auto& part : CpuTimes::parts) add(std::string("cpu part: ") + part.first, part.second);
       ++timing.frames;
+      FrameStats::Frame f;  // [rbench] the frame's record (frame_stats.h)
+      f.number = frameCount;
+      f.beat = havePlay ? playTick : 0;
+      f.camera = camera.distance;
+      f.interval = ms(statsLast, frameEnd);
+      f.simulation = simulationWaitMs;
+      f.limiter = limiterMs;
+      f.freeFrame = ms(frameStart, frameBegun);
+      f.card = stages.empty() ? -1 : gpu;
+      f.readBack = shoot;
+      frameStats.Add(f, row);
+      statsLast = frameEnd;
+    } else if (opt.timings) {
+      statsLast = std::chrono::steady_clock::now();  // [rbench]
     }
     if (opt.hitchLog >= 0) {  // [hitches] --hitch-log: a frame that ran long, or loaded or made something
       const auto end = std::chrono::steady_clock::now();
@@ -3886,6 +3952,13 @@ int main(int argc, char** argv) {
                timing.slowest);
         for (const auto& p : timing.slowestParts)
           if (p.second >= 1) printf("render: --timings:   %-48s %7.1f\n", p.first, p.second);
+      }
+      if (opt.timings && !frameStats.Empty()) {  // [rbench] frame by frame
+        frameStats.Print(device->Width(), device->Height());
+        if (!opt.timingsCsv.empty()) {
+          if (frameStats.WriteCsv(opt.timingsCsv)) printf("render: --timings-csv: wrote %s\n", opt.timingsCsv.c_str());
+          else fprintf(stderr, "render: --timings-csv: cannot write %s\n", opt.timingsCsv.c_str());
+        }
       }
       if (!opt.photo.empty()) {  // --photo: the same moment again at the photo's size, a few frames to settle first
         startPhoto(opt.photo, true);

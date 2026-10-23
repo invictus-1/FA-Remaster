@@ -72,8 +72,18 @@ class Win32Window final : public Window {
       if (error) *error = "CreateWindowEx failed";
       return false;
     }
-    if (!hidden) ShowWindow(hwnd_, background ? SW_SHOWNOACTIVATE : SW_SHOW);
     RECT c;
+    GetClientRect(hwnd_, &c);
+    if (c.right < width || c.bottom < height) {
+      // [rbench] Windows cuts a window to the screen's size and a frame: a client area as large as the screen (3840x2160 on
+      // a 4K screen, for the benchmarks) loses the title bar's height. Asked again with WM_GETMINMAXINFO letting it be as
+      // large as asked, it reaches past the screen's edge instead (the creation's own WM_GETMINMAXINFO comes before
+      // WM_NCCREATE, too early for that).
+      wantWidth_ = r.right - r.left;
+      wantHeight_ = r.bottom - r.top;
+      SetWindowPos(hwnd_, nullptr, 0, 0, wantWidth_, wantHeight_, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+    if (!hidden) ShowWindow(hwnd_, background ? SW_SHOWNOACTIVATE : SW_SHOW);
     GetClientRect(hwnd_, &c);
     width_ = c.right;
     height_ = c.bottom;
@@ -170,12 +180,21 @@ class Win32Window final : public Window {
       }
       case WM_ERASEBKGND:
         return 1;
+      case WM_GETMINMAXINFO:  // [rbench] (a window larger than the screen where it was asked for: Init)
+        if (wantWidth_ > 0) {
+          auto* m = reinterpret_cast<MINMAXINFO*>(lp);
+          if (m->ptMaxTrackSize.x < wantWidth_) m->ptMaxTrackSize.x = wantWidth_;
+          if (m->ptMaxTrackSize.y < wantHeight_) m->ptMaxTrackSize.y = wantHeight_;
+          return 0;
+        }
+        break;
     }
     return DefWindowProcW(hwnd, msg, wp, lp);
   }
 
   HWND hwnd_ = nullptr;
   int width_ = 0, height_ = 0;
+  int wantWidth_ = 0, wantHeight_ = 0;  // [rbench] (the window's outer size, where Windows cut it at first)
   int mouseX_ = 0, mouseY_ = 0;
   bool closed_ = false;
   bool keys_[kKeyCount] = {};
