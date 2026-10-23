@@ -1097,6 +1097,7 @@ class WorldView : public Control {
     WorldMeshesForWorld(L, &scene.meshes);
     UserDecalsForWorld(L, &scene.decals);
     IconColorsForWorld(L, &scene.iconColors);
+    ArmyColorsForWorld(L, &scene.armyColors);
     std::copy(UserState::From(L)->playableRect, UserState::From(L)->playableRect + 4, scene.playableRect);
     if (Camera* jumped = GetCameraObject(L, cameraName)) scene.cameraCut = jumped->cut, jumped->cut = false;
     lap("(the picture's scene: meshes)");

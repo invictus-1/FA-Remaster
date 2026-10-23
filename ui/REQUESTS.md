@@ -2106,6 +2106,20 @@ host draws one view (game_session.cpp Picture, one camera). Say the form you pre
 second WorldPicture sharing the device and the world) and what a second view costs at 1440p / 4K; the PiP could
 draw at a lower rate or size if that helps.
 
+### 36. The armies' colours as the player sees them: WorldPicture::SetArmyColors (Colour Vision, Chris 2026-10-23)
+From the interface chat, 2026-10-23. Not blocking. Chris approved colour-blind team colours: an Interface option
+"Colour Vision" (Off = the original's, Deuteranopia, Protanopia, Tritanopia, High Contrast) that changes only what
+the player SEES (the sim's army colours and replays stay identical). The interface side is built: the scripts'
+GetArmiesTable colours, the rollover's teamColor, the score board, and your icons and minimap through SetIconColors.
+What still shows the original colours: the unit models' team colour, lamps and death debris, which you take from the
+sim (SimFrames::ArmyColors() -> WorldPicture::Impl::armyColors, filled once in PrepareWorld). Could you add
+`WorldPicture::SetArmyColors(const std::vector<uint32_t>& argbByArmy)` (0xAARRGGBB, army counted from 0; an empty
+list = the sim's own colours again), used wherever armyColors is (AddFrame, WatchDeaths, the lamps, the minimap's
+"own"), callable before or after Open and any time after? I would call it whenever the option changes, with the same
+list I hand SetIconColors.
+DONE (render a75c106, main b9c3ed1): SetArmyColors; used: game_session.cpp hands ArmyColorsForWorld (Colour
+Vision's palette, else empty) whenever it changes; colorvision.lua checks it.
+
 ## To the visuals track
 
 ### 1. The rebuilt UEF commander for the stock commander too (UEL0001)

@@ -310,7 +310,7 @@ const std::vector<const char*>& ConsoleNames() {
         "remaster_atmosphere", "remaster_soft_shadows", "remaster_ray_tracing", "remaster_weather_effects",
         "remaster_ground_detail", "remaster_frame_generation", "remaster_water_ripples", "remaster_lens", "remaster_cinecam",
         "remaster_photo", "remaster_battle_effects", "remaster_energy_shields", "remaster_hidden_outlines",
-        "remaster_photo_look", "remaster_low_latency", "remaster_photo_mode", "remaster_season"};
+        "remaster_photo_look", "remaster_low_latency", "remaster_photo_mode", "remaster_season", "remaster_color_vision"};
     std::sort(all.begin(), all.end(), ConNameLess);
     return all;
   }();
@@ -394,6 +394,9 @@ int l_LooksForTests(lua_State* L) {
   lua_rawset(L, -3);
   lua_pushstring(L, "season");
   lua_pushnumber(L, looks.season);
+  lua_rawset(L, -3);
+  lua_pushstring(L, "colorVision");
+  lua_pushnumber(L, looks.colorVision);
   lua_rawset(L, -3);
   lua_pushstring(L, "minimapLod");
   lua_pushnumber(L, looks.minimapLod);
@@ -1286,6 +1289,15 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
                  : key == "REMASTER_HIDDEN_OUTLINES"  ? looks.hiddenOutlines
                                                       : looks.weatherEffects;
       if (!value.empty()) on = value[0] == '1' || Upper(value).rfind("ON", 0) == 0 || Upper(value).rfind("TRUE", 0) == 0;
+      return;
+    }
+    if (key == "REMASTER_COLOR_VISION") {  // (Colour Vision: 0 off, 1 deuteranopia, 2 protanopia, 3 tritanopia, 4 high contrast; or those words)
+      if (!value.empty()) {
+        const std::string v = Upper(value);
+        const int named = v == "OFF" ? 0 : v == "DEUTERANOPIA" ? 1 : v == "PROTANOPIA" ? 2 : v == "TRITANOPIA" ? 3 : v == "HIGHCONTRAST" ? 4 : -1;
+        const int n = named >= 0 ? named : std::atoi(value.c_str());
+        if (n >= 0 && n <= 4) looks.colorVision = n;
+      }
       return;
     }
     if (key == "REMASTER_PHOTO_LOOK") {  // (0 off, 1 natural, 2 film, 3 warm, 4 cold war; or those words)

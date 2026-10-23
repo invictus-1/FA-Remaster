@@ -166,6 +166,21 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   the original (its start-up runs `/lua/options/optionslogic.lua`'s `Apply`, FA exe 0x8c6cf0):
   that needed FAF's `SetInvertMidMouseButton` (its option "Invert pan direction with middle mouse
   button", now built).
+  Colour Vision (ours, the Interface tab; Chris, 2026-10-23): Off (the original's colours), Deuteranopia,
+  Protanopia (red-green), Tritanopia (blue-yellow), High Contrast (apart for all three at once). The
+  console's `remaster_color_vision 0..4` (`LookSettings::colorVision`). The armies' colours where the
+  player sees them come from a 16-slot palette of the kind, by army number, civilians pale grey
+  (`ColorVisionColor`, session_bindings.cpp): GetArmiesTable's `color` and `iconColor` (score board,
+  chat names, unit panel, enemy start markers; FAF's copy of that table renews every 4 s), a unit's
+  rollover `teamColor`, and the strategic icons, hidden-unit outlines and minimap through
+  `WorldPicture::SetIconColors` (while FAF's team colour button is off: its own colours win). The
+  score board's bars are recoloured at once (`RemasterRecolourScoreBoard` in the options hook). The
+  palettes are colours of published colour-blind-safe sets (Okabe-Ito, Paul Tol, IBM, Kelly) picked
+  and ordered by `ui/tools/colorvision_palettes.py` (Machado 2009 simulation, CIEDE2000; it prints the
+  distances). Only what is seen: the simulation keeps its army colours, and a marker ping (whose
+  colour goes into the simulation and the replay) still sends the army's own (our hook of
+  `/lua/ui/game/ping.lua`). The units' own paint stays the army's until the renderer takes army
+  colours from the host. Test `ui/tests/colorvision.lua`.
   Temporal Upscaling (FSR 3; the renderer's request 30, off by default): AMD's FSR 3 in place of FSR 1
   at Upscaling's share (at Upscaling "Off" it smooths the edges at the screen's own size). It needs one
   sample a pixel, so it takes Anti-Aliasing's place, from the next map loaded as that setting

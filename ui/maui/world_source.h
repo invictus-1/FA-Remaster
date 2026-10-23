@@ -126,6 +126,7 @@ struct WorldScene {
   // The strategic icons' colours by army counted from 0 (TeamColorMode); empty: the armies' own
   // (WorldPicture::SetIconColors, renderer request 26).
   std::vector<uint32_t> iconColors;
+  std::vector<uint32_t> armyColors;  // the units' own colours (Colour Vision; empty: the game's own)
   // The playable part of the map, x0, z0, x1, z1 (SyncPlayableRect; x1 <= x0: the whole map):
   // WorldPicture::SetPlayableRect (renderer request 27).
   float playableRect[4] = {0, 0, -1, -1};

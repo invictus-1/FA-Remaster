@@ -58,6 +58,7 @@ struct GameSession::Picture : WorldSource {
   LookSettings lookNow;      // the player's looks as last given to the picture
   bool lookApplied = false;
   std::vector<uint32_t> iconColorsNow;  // the icons' team colours as last given (empty: the armies' own)
+  std::vector<uint32_t> armyColorsNow;  // the units' own colours as last given (Colour Vision; empty: the game's)
   float playableNow[4] = {0, 0, -1, -1};  // the playable part as last given
   // The order lines and their settings as last given (SetOrderLines, SetOrderLineSettings).
   std::vector<std::string> orderTexturesNow;
@@ -414,6 +415,10 @@ struct GameSession::Picture : WorldSource {
       picture.SetPlayableRect(playableNow[0], playableNow[1], playableNow[2], playableNow[3]);
     }
     // The strategic icons' team colours (TeamColorMode), when they change.
+    if (scene.armyColors != armyColorsNow) {  // (render request 36)
+      armyColorsNow = scene.armyColors;
+      picture.SetArmyColors(armyColorsNow);
+    }
     if (scene.iconColors != iconColorsNow) {
       iconColorsNow = scene.iconColors;
       picture.SetIconColors(iconColorsNow);

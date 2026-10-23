@@ -426,6 +426,11 @@ struct LookSettings {
   // energyShields): shields that look like energy. Hidden Unit Outlines (WorldPicture::SetHiddenOutlines): units
   // seen behind trees and cliffs, only what the player may see, none in the Original look. All ON by default.
   bool battleEffects = true, energyShields = true, hiddenOutlines = true;
+  // Colour Vision (ours, the Interface tab; Chris, 2026-10-23): the armies' colours as the player SEES them replaced by
+  // a palette that stays apart for a kind of colour blindness: 0 Off (the original's colours), 1 Deuteranopia,
+  // 2 Protanopia, 3 Tritanopia, 4 High Contrast (session_bindings.cpp, ColorVisionColor). Only what is shown changes:
+  // the simulation keeps its army colours, so a replay is the same with it on or off.
+  int colorVision = 0;
   // cam_DefaultMiniLOD (the minimap's mesh level; FAF's minimap.lua and multifunction.lua set it from the profile's
   // "Disable meshes", disableMinimapMesh, ticked by default: ConExecute("cam_DefaultMiniLOD 0"), else "... 1.8"): not 0,
   // the minimap stamps the script's meshes (pings, beacons) under its icons (the renderer's SetMinimapMeshes, render
@@ -826,8 +831,10 @@ void EconomyMarks(lua_State* L, std::vector<EconomyMark>* out);
 // x, y, z, w); false when the interface has no such living unit (user_units.cpp).
 bool UnitPlace(lua_State* L, uint32_t id, float position[3], float orientation[4]);
 // The strategic icons' colours by army counted from 0 while TeamColorMode is on and there is a focus
-// army (empty: the armies' own colours; session_bindings.cpp).
+// army, else while Colour Vision is on (its palette's); empty: the armies' own colours (session_bindings.cpp).
 void IconColorsForWorld(lua_State* L, std::vector<uint32_t>* out);
+// The armies' colours on the units themselves for the picture (Colour Vision's palette, or empty: the game's own).
+void ArmyColorsForWorld(lua_State* L, std::vector<uint32_t>* out);
 // The player asks for the game to pause or to go on (user_units.cpp): written into the orders
 // like every command, so the simulation pauses with a beat (CWldSession::RequestPause / Resume,
 // FA exe 0x8942b0 / 0x894330).

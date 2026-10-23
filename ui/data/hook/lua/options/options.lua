@@ -535,6 +535,51 @@ for _, item in looks do
     table.insert(options.video.items, item)
 end
 
+-- Colour Vision (ours, the Interface tab; Chris, 2026-10-23): the armies' colours, where the player sees them, from a
+-- palette that stays apart for a kind of colour blindness (the host's GetArmiesTable colours, a unit's teamColor, the
+-- strategic icons and the minimap; ui/user/session_bindings.cpp, ColorVisionColor, has the palettes and their source).
+-- Off is the original's colours. Only what is seen: the simulation keeps its army colours (a marker ping still sends the
+-- army's own colour: our hook of /lua/ui/game/ping.lua), so a replay is the same either way. FAF's GetArmiesTable is
+-- a copy renewed every 4 seconds (/lua/ui/override/ArmiesTable.lua): what reads it (chat names, the unit panel) takes
+-- the new colours within that; the strategic icons and the minimap at once. The score board laid its colour bars when
+-- it was made: they are given the new colours here, at once (the host's own colours, not FAF's copy; not a defeated
+-- army's black, and not while the team colour button has them).
+function RemasterRecolourScoreBoard()  -- (also for the tests)
+    local score = __modules and __modules['/lua/ui/game/score.lua']
+    if not (score and score.controls and score.controls.armyLines and moho64ui_ColorVision and moho64ui_ArmyColors) then
+        return
+    end
+    local _, teamColors = moho64ui_ColorVision()
+    if teamColors then return end
+    for _, line in score.controls.armyLines do
+        local _, seen
+        if line.armyID and line.armyID > 0 then _, seen = moho64ui_ArmyColors(line.armyID) end
+        if line.color and not line.OOG and seen then
+            line.color:SetSolidColor(seen)
+        end
+    end
+end
+table.insert(options.ui.items, {
+    title = "Colour Vision",
+    key = 'remaster_color_vision',
+    tip = "The armies' colours from a palette that stays apart for colour blindness: on units' icons, the minimap, the score board, chat names and the unit panel. Deuteranopia and Protanopia are the red-green kinds, Tritanopia the blue-yellow one; High Contrast stays apart for all of them at once. Off: the game's own colours. Only your screen changes.",
+    type = 'toggle',
+    default = 0,
+    set = function(key, value, startup)
+        ConExecute("remaster_color_vision " .. tostring(value))
+        RemasterRecolourScoreBoard()
+    end,
+    custom = {
+        states = {
+            { text = "<LOC _Off>", key = 0 },
+            { text = "Deuteranopia (red-green)", key = 1 },
+            { text = "Protanopia (red-green)", key = 2 },
+            { text = "Tritanopia (blue-yellow)", key = 3 },
+            { text = "High Contrast", key = 4 },
+        },
+    },
+})
+
 -- The game's own graphics settings drive the renderer (Fidelity, Shadow Fidelity, Anti-Aliasing,
 -- Level Of Detail, Texture Detail; ui/user/keymap.cpp) and mean what they say (Chris, 2026-10-15), so a player
 -- who has never chosen starts at the full look: their defaults are raised to the highest. The

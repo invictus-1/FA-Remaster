@@ -278,8 +278,46 @@ std::string GameColor(lua_State* L, const char* list, int index) {
 }
 
 // GetArmiesTable(): {numArmies, focusArmy, armiesTable = {[army] = {name, nickname, faction, human,
-// An army's two colours as "aarrggbb" strings: the player's and the icons'.
-void ArmyColors(lua_State* L, const ArmyView& a, std::string* color, std::string* icon) {
+// Colour Vision (ours; LookSettings::colorVision, Chris 2026-10-23): for each kind (1 Deuteranopia, 2 Protanopia,
+// 3 Tritanopia, 4 High Contrast) the colours of the 16 army slots and the civilians'. Every colour is from a published
+// colour-blind-safe set (Okabe & Ito 2008; Paul Tol 2021, SRON/EPS/TN/09-002; the IBM Design Library's; Kelly 1965),
+// picked and ordered by ui/tools/colorvision_palettes.py: each slot the candidate farthest (CIEDE2000) from the slots
+// before it, as that kind of eye sees them (Machado, Oliveira and Fernandes 2009, severity 1.0) and as normal vision
+// does, the lesser of the two; High Contrast the least over normal vision and all three kinds. So the first two slots
+// are the most distinct pair, the first eight the best eight. The civilians take Tol's pale grey. The script prints the
+// distances; it writes this table with --cpp.
+struct VisionPalette {
+  uint32_t army[16];
+  uint32_t civilian;
+};
+const VisionPalette kVisionPalettes[4] = {
+    // Deuteranopia
+    {{0xfff0e442, 0xff785ef0, 0xff117733, 0xff99ddff, 0xff44bb99, 0xffaa3377, 0xff999933, 0xff77aadd, 0xffe69f00, 0xffcc79a7, 0xffcc3311, 0xffee3377, 0xffddcc77, 0xff4477aa, 0xff648fff, 0xff009988}, 0xffdddddd},
+    // Protanopia
+    {{0xfff0e442, 0xff785ef0, 0xffcc3311, 0xff44aa99, 0xffee3377, 0xff66ccee, 0xff999933, 0xffcc79a7, 0xffaa4499, 0xff648fff, 0xffccbb44, 0xffd55e00, 0xffee6677, 0xffee8866, 0xff4477aa, 0xffeedd88}, 0xffdddddd},
+    // Tritanopia
+    {{0xff44bb99, 0xffdc267f, 0xfff0e442, 0xff785ef0, 0xff117733, 0xff999933, 0xffe69f00, 0xff99ddff, 0xffaa4499, 0xff648fff, 0xff0077bb, 0xffcc79a7, 0xffee6677, 0xff009988, 0xffccbb44, 0xffffaabb}, 0xffdddddd},
+    // High Contrast
+    {{0xff648fff, 0xffffb000, 0xffbe0032, 0xff604e97, 0xffa1caf1, 0xffee3377, 0xffc2b280, 0xffcc79a7, 0xff008856, 0xff785ef0, 0xffee7733, 0xff009988, 0xff56b4e9, 0xfff0e442, 0xff0077bb, 0xff875692}, 0xffdddddd},
+};
+// The colour an army is shown in under Colour Vision, 0xAARRGGBB; 0 when it is Off. The palette's slot is the army's
+// number (army 1 the first slot, 17 the first again); a civilian army takes the civilians'. INFERRED (a choice of ours):
+// by the army's number, not by the lobby's colour, as the lobby's list holds 19 colours and no 19 stay apart for a
+// colour-blind eye; the game's armies are at most 16.
+uint32_t ColorVisionColor(const ArmyView& a, int mode) {
+  if (mode < 1 || mode > 4) return 0;
+  const VisionPalette& p = kVisionPalettes[mode - 1];
+  return a.civilian ? p.civilian : p.army[static_cast<size_t>(std::max(0, a.index - 1) % 16)];
+}
+uint32_t ColorVisionColor(const ArmyView& a) { return ColorVisionColor(a, Looks().colorVision); }
+std::string ColorText(uint32_t argb) {
+  char buf[16];
+  std::snprintf(buf, sizeof buf, "%08x", argb);
+  return buf;
+}
+
+// An army's two colours as "aarrggbb" strings, the player's and the icons', as the lobby or a script gave them.
+void ArmyColorsGiven(lua_State* L, const ArmyView& a, std::string* color, std::string* icon) {
   if (a.rgb[0] >= 0) {
     char buf[16];
     std::snprintf(buf, sizeof buf, "ff%02x%02x%02x", a.rgb[0] & 255, a.rgb[1] & 255, a.rgb[2] & 255);
@@ -291,6 +329,14 @@ void ArmyColors(lua_State* L, const ArmyView& a, std::string* color, std::string
   if (color->empty()) *color = *icon;
   if (icon->empty()) *icon = *color;
   if (color->empty()) *color = *icon = "ff808080";
+}
+// An army's two colours as the player sees them: as given, or both Colour Vision's for it while that is on.
+void ArmyColors(lua_State* L, const ArmyView& a, std::string* color, std::string* icon) {
+  if (const uint32_t seen = ColorVisionColor(a)) {
+    *color = *icon = ColorText(seen);
+    return;
+  }
+  ArmyColorsGiven(L, a, color, icon);
 }
 
 // civilian, color, iconColor, showScore, outOfGame, authorizedCommandSources}}}. Field names as the
@@ -672,7 +718,18 @@ void SetGameSpeedTo(lua_State* L, int rate) {
 void IconColorsForWorld(lua_State* L, std::vector<uint32_t>* out) {
   UserState* user = UserState::From(L);
   const int focus = user->economyCopied ? user->focusArmyCopy : -1;
-  if (!user->teamColors || focus < 0 || user->armiesCopy.empty()) return;
+  if (user->armiesCopy.empty()) return;
+  if ((!user->teamColors || focus < 0) && Looks().colorVision != 0) {
+    // Colour Vision (ours): every army's icons in its palette colour, as GetArmiesTable gives the scripts. (The team
+    // colour button, where it is on, keeps its own colours: the player chose those in its window.)
+    int count = 0;
+    for (const ArmyView& a : user->armiesCopy) count = std::max(count, a.index);
+    out->assign(static_cast<size_t>(count), 0xff808080u);
+    for (const ArmyView& a : user->armiesCopy)
+      if (a.index >= 1) (*out)[static_cast<size_t>(a.index - 1)] = ColorVisionColor(a);
+    return;
+  }
+  if (!user->teamColors || focus < 0) return;
   // The original's own colours (struct_TeamColors 0x85b2a0, from /lua/gameColors.lua's
   // GameColors.TeamColorMode), for an army FAF's list leaves out.
   uint32_t own[4] = {0xff4169e1u, 0xff006400u, 0xffe80a0au, 0xffdaa520u};  // Self, Ally, Enemy, Neutral
@@ -712,6 +769,20 @@ void IconColorsForWorld(lua_State* L, std::vector<uint32_t>* out) {
   }
 }
 
+// The armies' colours on the units themselves (the models' team colour, lamps, debris, the minimap's units:
+// WorldPicture::SetArmyColors, render request 36): Colour Vision's palette while it is on, else empty (the game's
+// own). Unlike the icons, FAF's team colour button does not reach the models (in the original it recolours the
+// strategic icons only).
+void ArmyColorsForWorld(lua_State* L, std::vector<uint32_t>* out) {
+  UserState* user = UserState::From(L);
+  if (user->armiesCopy.empty() || Looks().colorVision == 0) return;
+  int count = 0;
+  for (const ArmyView& a : user->armiesCopy) count = std::max(count, a.index);
+  out->assign(static_cast<size_t>(count), 0xff808080u);
+  for (const ArmyView& a : user->armiesCopy)
+    if (a.index >= 1) (*out)[static_cast<size_t>(a.index - 1)] = ColorVisionColor(a);
+}
+
 void RegisterSessionBindings(lua_State* L) {
   SetGlobal(L, "InternalCreateWldUIProvider", l_InternalCreateWldUIProvider);
   SetMethod(L, "CLuaWldUIProvider", "Destroy", l_ProviderDestroy);
@@ -728,6 +799,17 @@ void RegisterSessionBindings(lua_State* L) {
   SetGlobal(L, "IsObserver", l_IsObserver);
   SetGlobal(L, "TeamColorMode", l_TeamColorMode);
   SetGlobal(L, "SetFocusArmy", l_SetFocusArmy);
+  // moho64ui_ModelColors() -> the units' own colours by army as handed over now (empty: the game's own); for tests.
+  lua_register(L, "moho64ui_ModelColors", [](lua_State* L) -> int {
+    std::vector<uint32_t> colors;
+    ArmyColorsForWorld(L, &colors);
+    lua_newtable(L);
+    for (size_t i = 0; i < colors.size(); ++i) {
+      lua_pushnumber(L, static_cast<double>(colors[i]));
+      lua_rawseti(L, -2, static_cast<int>(i + 1));
+    }
+    return 1;
+  });
   // moho64ui_IconColors() -> the icons' colours by army as handed over now (empty: the armies'
   // own); the host's own function for tests.
   lua_register(L, "moho64ui_IconColors", [](lua_State* L) -> int {
@@ -739,6 +821,39 @@ void RegisterSessionBindings(lua_State* L) {
       lua_rawseti(L, -2, static_cast<int>(i + 1));
     }
     return 1;
+  });
+  // moho64ui_ArmyColors(army [, kind]) -> the army's colour as given (the lobby's or a script's) and as the player
+  // sees it (Colour Vision's while it is on, else the same; with `kind`, 1 .. 4, that kind's colour for the army
+  // whatever is chosen now), "aarrggbb"; nil for no such army (army counted from 1). Our hook of
+  // /lua/ui/game/ping.lua sends the given one to the simulation (a marker ping's colour is stored there and so in the
+  // replay), and shows the seen one.
+  lua_register(L, "moho64ui_ArmyColors", [](lua_State* L) -> int {
+    const int army = static_cast<int>(luaL_checknumber(L, 1));
+    UserState* user = UserState::From(L);
+    Sim* sim = user->economyCopied ? nullptr : TheSim(L);  // (the beat's copies, as GetArmiesTable)
+    if (!user->economyCopied && !sim) return 0;
+    for (const ArmyView& a : user->economyCopied ? user->armiesCopy : ArmyViews(*sim)) {
+      if (a.index != army) continue;
+      std::string given[2];  // (no commas: lua_register is a macro)
+      std::string seen[2];
+      ArmyColorsGiven(L, a, &given[0], &given[1]);
+      ArmyColors(L, a, &seen[0], &seen[1]);
+      if (lua_isnumber(L, 2)) {
+        const uint32_t kind = ColorVisionColor(a, static_cast<int>(lua_tonumber(L, 2)));
+        seen[0] = kind ? ColorText(kind) : given[0];
+      }
+      lua_pushstring(L, given[0].c_str());
+      lua_pushstring(L, seen[0].c_str());
+      return 2;
+    }
+    return 0;
+  });
+  // moho64ui_ColorVision() -> Colour Vision's kind now (0 Off .. 4 High Contrast) and whether the team colour button
+  // (TeamColorMode) is on; for our options hook and the tests.
+  lua_register(L, "moho64ui_ColorVision", [](lua_State* L) -> int {
+    lua_pushnumber(L, Looks().colorVision);
+    lua_pushboolean(L, UserState::From(L)->teamColors);
+    return 2;
   });
   SetGlobal(L, "GameTick", l_GameTick);
   SetGlobal(L, "GetGameTimeSeconds", l_GetGameTimeSeconds);
