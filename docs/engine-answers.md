@@ -3,6 +3,24 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## renderer (by message): a shell flying far off the map — the original does the same
+
+In the M28 game on SETONS_R (seed 7), one shot flew east off the map for minutes (x 1454 -> 2633 at z 423, beats
+8000-9900). The original has no map-edge test for projectiles either; only the shell's lifetime ends it. What helper
+cp read:
+- Projectile::MotionTick 0x69bdd0, Entity::TaskTick 0x679c40 and AdvanceCoords 0x678f10 have no bounds test.
+  STIMap::IsWithin 0x62ca60 has no projectile caller, and Entity::IsInBounds 0x62cb60 is only used by
+  Unit::FindPlatform.
+- CheckCollision 0x69d1d0 tests terrain through ClipSegmentToWorld 0x4776e0, which clips to the map, so a shell
+  outside the map never hits the ground. The water plane 0x577540 is unbounded but only counts for DestroyOnWater
+  shells.
+- The lifetime ends it (0x69c508..0x69c56a) as an Air or Underwater impact, and FAF's OnImpactDestroy removes it.
+  Weapons' ProjectileLifetime runs long: 120 s for T3 artillery, 150 s for the Scathis and Salvation, 1000 s for the
+  Mavor. So a missed long-range shot really does fly on that long.
+Ours matches this (combat.cpp TerrainLineHit clips like 0x4776e0, and projectile.cpp's lifetime matches 0x69c508).
+Nothing to change in the sim. Whether to draw such a shell at all is the renderer's call (the map-surround land past
+the edges is planned last).
+
 ## ui 48: the replay timeline (moments and seeking) — answered, the scan function to follow
 
 **1. A second Sim beside the one being watched is safe.** `moho64 --together` (src/app/main.cpp) already does exactly
