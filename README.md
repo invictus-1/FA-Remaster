@@ -417,7 +417,11 @@ the same way, in its own code, so that FAF's scripts and replays run as they do 
 
 **M28AI.** The engine is tested with the M28 AI by maudlin27 (github.com/maudlin27/M28AI), run as a
 mod from the player's own mods folder. M28AI is licensed CC BY-NC-SA 4.0 (attribution, non-commercial,
-share-alike). It is not bundled with FA Remastered, and no M28 code is in this repository.
+share-alike). The engine is MIT; `mods/m28-variant/` is a modified version of M28AI by maudlin27
+(https://github.com/maudlin27/M28AI), under CC BY-NC-SA 4.0, non-commercial. It is a separate component
+with its own licence (M28's LICENSE, unchanged, is in that folder, and its README lists every change); it
+makes the same decisions as M28AI, only faster. No M28 code is in the engine or any other part of this
+repository.
 
 Supreme Commander and Forged Alliance are trademarks of their owners.
 
