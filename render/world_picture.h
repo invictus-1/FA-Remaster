@@ -276,6 +276,11 @@ class WorldPicture {
   // the armies' own: the game's "team colour" button (TeamColorMode). Only the icons change (the minimap's
   // too); the models keep their army's colour; a blip not yet known stays grey. Empty: the armies' own.
   void SetIconColors(const std::vector<uint32_t>& argbByArmy);
+  // The armies' colours as the player sees them (by army from 0, 0xAARRGGBB), in place of the game's own: the
+  // interface's "Colour Vision" (colours for colour-blind players). Everything the picture colours by army takes them:
+  // the models' team colour, their lamps and glow, their death debris, the minimap's units. The simulation and the
+  // recordings keep the game's own. Empty: the game's own again. Any time; from the next frame.
+  void SetArmyColors(const std::vector<uint32_t>& argbByArmy);
   // The part of the map that can be played now (the campaign's: ScenarioFramework.SetPlayableArea, the
   // user side's SyncPlayableRect), in world units, x0 < x1 and z0 < z1; the whole map at first, and
   // again when x1 <= x0. Outside it nothing of the game is shown: no unit, no strategic icon, no bar,

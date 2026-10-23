@@ -98,6 +98,8 @@ struct WorldPicture::Impl {
   Season season = Season::Summer;      // [seasons] SetSeason
   bool weather = false, dayOff = false;
   std::vector<Vec3> armyColors;
+  std::vector<Vec3> simArmyColors;       // (the game's own, as the simulation gives them)
+  std::vector<Vec3> armyColorsOverride;  // SetArmyColors (empty: the game's own)
   std::vector<FrameEffectEvent> events;
   std::vector<uint8_t> capture;
   std::vector<uint32_t> pixels;
@@ -523,7 +525,8 @@ void WorldPicture::PrepareWorld(const Camera& camera, int width, int height, dou
   const auto t0 = std::chrono::steady_clock::now();
   // (photomode: a photo's frame is drawn at its own size into the device's photo window; the window keeps its size)
   if (!m.photoFrame && (m.device->Width() != width || m.device->Height() != height)) m.device->Resize(width, height);
-  if (m.armyColors.empty()) m.armyColors = m.frames.ArmyColors();
+  if (m.simArmyColors.empty()) m.simArmyColors = m.frames.ArmyColors();
+  m.armyColors = m.armyColorsOverride.empty() ? m.simArmyColors : m.armyColorsOverride;
   m.world->focusArmy = m.focusArmy > 0 ? m.focusArmy - 1 : -1;
   m.world->alliedArmies = m.allies;
   m.world->lifeBarsOnEnemies = m.lifeBarsOnEnemies;
@@ -757,6 +760,13 @@ void WorldPicture::SetWorldShown(bool on) { impl_->worldShown = on; }
 void WorldPicture::SetIconColors(const std::vector<uint32_t>& argbByArmy) {
   if (!impl_->world) return;
   std::vector<Vec3>& out = impl_->world->iconColors;
+  out.clear();
+  for (uint32_t c : argbByArmy)
+    out.push_back({static_cast<float>((c >> 16) & 0xff) / 255.0f, static_cast<float>((c >> 8) & 0xff) / 255.0f, static_cast<float>(c & 0xff) / 255.0f});
+}
+
+void WorldPicture::SetArmyColors(const std::vector<uint32_t>& argbByArmy) {
+  std::vector<Vec3>& out = impl_->armyColorsOverride;
   out.clear();
   for (uint32_t c : argbByArmy)
     out.push_back({static_cast<float>((c >> 16) & 0xff) / 255.0f, static_cast<float>((c >> 8) & 0xff) / 255.0f, static_cast<float>(c & 0xff) / 255.0f});
