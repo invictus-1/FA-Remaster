@@ -328,12 +328,14 @@ class Memory {
   }
   ~Memory() { Release(); }
   void Release() {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);  // [spikes]
     for (Block& b : blocks_)
       if (b.memory) vkFreeMemory(device_, b.memory, nullptr);
     blocks_.clear();
   }
   // the blocks taken of the card's own memory, in bytes
   uint64_t DeviceLocalBytes() const {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);  // [spikes]
     uint64_t sum = 0;
     for (const Block& b : blocks_)
       if (b.memory && (props_.memoryTypes[b.type].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) sum += b.size;
@@ -344,7 +346,10 @@ class Memory {
       if ((bits & (1u << i)) && (props_.memoryTypes[i].propertyFlags & want) == want) return i;
     return UINT32_MAX;
   }
+  // [spikes] Get and Free under a lock of its own: a worker's PrepareTexture / PrepareBuffer (gfx.h) takes memory beside the
+  // frames' thread
   bool Get(const VkMemoryRequirements& req, VkMemoryPropertyFlags want, bool linear, Allocation* out) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     const uint32_t type = Type(req.memoryTypeBits, want);
     if (type == UINT32_MAX) return false;
     for (size_t i = 0; i < blocks_.size(); ++i) {
@@ -390,6 +395,7 @@ class Memory {
     return Get(req, want, linear, out);
   }
   void Free(const Allocation& a) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);  // [spikes]
     if (a.block < 0 || static_cast<size_t>(a.block) >= blocks_.size()) return;
     Block& b = blocks_[static_cast<size_t>(a.block)];
     b.free.push_back({a.offset, a.size});
@@ -423,6 +429,7 @@ class Memory {
   VkPhysicalDeviceMemoryProperties props_{};
   bool deviceAddresses_ = false;
   std::vector<Block> blocks_;
+  mutable std::recursive_mutex mutex_;  // [spikes]
 };
 
 struct BufferRec {
@@ -526,6 +533,11 @@ class VulkanDevice final : public Device {
   bool EndPipelineBatch(std::string* error) override;
   void BeginBackgroundPipelines() override { backgroundAsked_ = !shaderCache_.empty(); }  // [snowhitch]
   void EndBackgroundPipelines() override { backgroundAsked_ = false; }
+  std::unique_ptr<Prepared> PrepareTexture(const TextureDesc& desc) override;  // [spikes]
+  Texture FinishTexture(std::unique_ptr<Prepared> prepared) override;
+  std::unique_ptr<Prepared> PrepareBuffer(const BufferDesc& desc) override;
+  Buffer FinishBuffer(std::unique_ptr<Prepared> prepared) override;
+  void DropPrepared(TextureRec* texture, BufferRec* buffer, VkBuffer staging, const Allocation& stagingMemory);  // (one never finished)
   void Destroy(Buffer buffer) override;
   void Destroy(Texture texture) override;
   void Destroy(Pipeline pipeline) override;
@@ -2576,6 +2588,183 @@ Texture VulkanDevice::CreateTexture(const TextureDesc& desc) {
   }
   textures_[index] = rec;
   return {index};
+}
+
+// [spikes] The halves of CreateTexture and of a static CreateBuffer (gfx.h, PrepareTexture). Prepare, on any thread: the
+// image (or buffer), its memory and its view made, and the caller's data copied into a staging buffer of its own (the device
+// is free for these; the memory's blocks are shared out under their own lock, Memory). Finish, on the frames' thread: the
+// copy and the layouts recorded into the open upload batch, as CreateTexture's are, and the handle. One never finished is
+// let go of at once (nothing of the card's work has it).
+namespace {
+struct PreparedVk final : Device::Prepared {
+  VulkanDevice* device = nullptr;
+  bool texture = false;
+  TextureRec tex;
+  BufferRec buf;
+  VkBuffer staging = VK_NULL_HANDLE;
+  Allocation stagingMemory;
+  std::vector<VkBufferImageCopy> copies;
+  VkDeviceSize bytes = 0;
+  bool finished = false;
+  ~PreparedVk() override {
+    if (!finished && device) device->DropPrepared(texture ? &tex : nullptr, texture ? nullptr : &buf, staging, stagingMemory);
+  }
+};
+}  // namespace
+
+void VulkanDevice::DropPrepared(TextureRec* texture, BufferRec* buffer, VkBuffer staging, const Allocation& stagingMemory) {
+  if (texture) {
+    if (texture->view) vkDestroyImageView(device_, texture->view, nullptr);
+    if (texture->image) vkDestroyImage(device_, texture->image, nullptr);
+    if (texture->memory.memory) memory_.Free(texture->memory);
+  }
+  if (buffer) {
+    if (buffer->buffer) vkDestroyBuffer(device_, buffer->buffer, nullptr);
+    if (buffer->memory.memory) memory_.Free(buffer->memory);
+  }
+  if (staging) vkDestroyBuffer(device_, staging, nullptr);
+  if (stagingMemory.memory) memory_.Free(stagingMemory);
+}
+
+std::unique_ptr<Device::Prepared> VulkanDevice::PrepareTexture(const TextureDesc& desc) {
+  const VkFormat format = ToVk(desc.format);
+  if (format == VK_FORMAT_UNDEFINED || desc.width <= 0 || desc.height <= 0 || desc.mips <= 0 || desc.layers <= 0 || !desc.data) return nullptr;
+  auto p = std::make_unique<PreparedVk>();
+  p->device = this;
+  p->texture = true;
+  TextureRec& rec = p->tex;  // (as CreateTexture's)
+  rec.used = true;
+  rec.width = desc.width;
+  rec.height = desc.height;
+  rec.layers = desc.layers;
+  rec.mips = desc.mips;
+  rec.format = format;
+  rec.pixelBytes = IsBlockCompressed(desc.format) ? 0 : BytesPerPixelOrBlock(desc.format);
+  VkImageCreateInfo ii{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+  ii.flags = desc.cube && desc.layers == 6 ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0;
+  ii.imageType = VK_IMAGE_TYPE_2D;
+  ii.format = format;
+  ii.extent = {static_cast<uint32_t>(desc.width), static_cast<uint32_t>(desc.height), 1};
+  ii.mipLevels = static_cast<uint32_t>(desc.mips);
+  ii.arrayLayers = static_cast<uint32_t>(desc.layers);
+  ii.samples = VK_SAMPLE_COUNT_1_BIT;
+  ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+  ii.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+  if (vkCreateImage(device_, &ii, nullptr, &rec.image) != VK_SUCCESS) return nullptr;
+  VkMemoryRequirements req;
+  vkGetImageMemoryRequirements(device_, rec.image, &req);
+  if (!memory_.Get(req, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, false, &rec.memory)) return nullptr;
+  vkBindImageMemory(device_, rec.image, rec.memory.memory, rec.memory.offset);
+  VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+  vi.image = rec.image;
+  vi.viewType = desc.cube && desc.layers == 6 ? VK_IMAGE_VIEW_TYPE_CUBE : desc.layers > 1 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
+  vi.format = format;
+  if (desc.format == Format::A8) vi.components = {VK_COMPONENT_SWIZZLE_ZERO, VK_COMPONENT_SWIZZLE_ZERO, VK_COMPONENT_SWIZZLE_ZERO, VK_COMPONENT_SWIZZLE_R};
+  if (desc.format == Format::BC5) vi.components = {VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_G, VK_COMPONENT_SWIZZLE_ZERO, VK_COMPONENT_SWIZZLE_R};
+  vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, static_cast<uint32_t>(desc.mips), 0, static_cast<uint32_t>(desc.layers)};
+  if (vkCreateImageView(device_, &vi, nullptr, &rec.view) != VK_SUCCESS) return nullptr;
+  const bool blocks = IsBlockCompressed(desc.format);
+  const size_t unit = static_cast<size_t>(BytesPerPixelOrBlock(desc.format));
+  size_t at = 0, read = 0;
+  for (int layer = 0; layer < desc.layers; ++layer)
+    for (int mip = 0; mip < desc.mips; ++mip) {
+      const size_t w = static_cast<size_t>(std::max(1, desc.width >> mip)), h = static_cast<size_t>(std::max(1, desc.height >> mip));
+      const size_t bytes = (blocks ? (w + 3) / 4 * ((h + 3) / 4) : w * h) * unit;
+      read += bytes;
+      if (read > desc.dataSize) {
+        fprintf(stderr, "render: a %dx%d texture with %d mips has too little data (%zu bytes)\n", desc.width, desc.height, desc.mips, desc.dataSize);
+        return nullptr;
+      }
+      VkBufferImageCopy c{};
+      c.bufferOffset = at;
+      c.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, static_cast<uint32_t>(mip), static_cast<uint32_t>(layer), 1};
+      c.imageExtent = {static_cast<uint32_t>(w), static_cast<uint32_t>(h), 1};
+      p->copies.push_back(c);
+      at += bytes;
+      at = (at + 15) & ~size_t{15};
+    }
+  if (!StagingBuffer(std::max<size_t>(at, 16), &p->staging, &p->stagingMemory)) return nullptr;
+  const uint8_t* src = static_cast<const uint8_t*>(desc.data);
+  size_t k = 0;
+  for (int layer = 0; layer < desc.layers; ++layer)
+    for (int mip = 0; mip < desc.mips; ++mip, ++k) {
+      const size_t w = static_cast<size_t>(std::max(1, desc.width >> mip)), h = static_cast<size_t>(std::max(1, desc.height >> mip));
+      const size_t bytes = (blocks ? (w + 3) / 4 * ((h + 3) / 4) : w * h) * unit;
+      std::memcpy(p->stagingMemory.mapped + p->copies[k].bufferOffset, src, bytes);
+      src += bytes;
+    }
+  p->bytes = at;
+  return p;
+}
+
+Texture VulkanDevice::FinishTexture(std::unique_ptr<Prepared> prepared) {
+  auto* p = dynamic_cast<PreparedVk*>(prepared.get());
+  if (!p) return Device::FinishTexture(std::move(prepared));  // (one kept whole: CreateTexture)
+  if (!p->texture) return {};
+  TextureRec& rec = p->tex;
+  VkCommandBuffer cmd = UploadCommands();
+  Barrier(cmd, rec.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
+  vkCmdCopyBufferToImage(cmd, p->staging, rec.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, static_cast<uint32_t>(p->copies.size()), p->copies.data());
+  Barrier(cmd, rec.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
+  rec.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+  p->finished = true;
+  KeepStaging(p->staging, p->stagingMemory, p->bytes);
+  uint32_t index;
+  if (!freeTextures_.empty()) {
+    index = freeTextures_.back();
+    freeTextures_.pop_back();
+  } else {
+    index = static_cast<uint32_t>(textures_.size());
+    textures_.emplace_back();
+  }
+  textures_[index] = rec;
+  return {index};
+}
+
+std::unique_ptr<Device::Prepared> VulkanDevice::PrepareBuffer(const BufferDesc& desc) {
+  if (desc.dynamic || !desc.data || !desc.size) return nullptr;
+  auto p = std::make_unique<PreparedVk>();
+  p->device = this;
+  BufferRec& rec = p->buf;  // (as CreateBuffer's static path)
+  rec.used = true;
+  rec.kind = desc.kind;
+  rec.stride = desc.stride;
+  rec.size = desc.size;
+  VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+  bci.size = (static_cast<VkDeviceSize>(desc.size) + 3) & ~VkDeviceSize{3};
+  bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+              (desc.kind == BufferKind::Index ? VK_BUFFER_USAGE_INDEX_BUFFER_BIT : desc.kind == BufferKind::Vertex ? VK_BUFFER_USAGE_VERTEX_BUFFER_BIT : 0);
+  if (rayTracing_ && desc.kind != BufferKind::Shader)
+    bci.usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
+  if (vkCreateBuffer(device_, &bci, nullptr, &rec.buffer) != VK_SUCCESS) return nullptr;
+  VkMemoryRequirements req;
+  vkGetBufferMemoryRequirements(device_, rec.buffer, &req);
+  if (!memory_.Get(req, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, true, &rec.memory)) return nullptr;
+  vkBindBufferMemory(device_, rec.buffer, rec.memory.memory, rec.memory.offset);
+  if (!StagingBuffer(desc.size, &p->staging, &p->stagingMemory)) return nullptr;
+  std::memcpy(p->stagingMemory.mapped, desc.data, desc.size);
+  p->bytes = desc.size;
+  return p;
+}
+
+Buffer VulkanDevice::FinishBuffer(std::unique_ptr<Prepared> prepared) {
+  auto* p = dynamic_cast<PreparedVk*>(prepared.get());
+  if (!p) return Device::FinishBuffer(std::move(prepared));  // (one kept whole: CreateBuffer)
+  if (p->texture) return {};
+  VkBufferCopy copy{0, 0, p->bytes};
+  vkCmdCopyBuffer(UploadCommands(), p->staging, p->buf.buffer, 1, &copy);
+  p->finished = true;
+  KeepStaging(p->staging, p->stagingMemory, p->bytes);
+  uint32_t index;
+  if (!freeBuffers_.empty()) {
+    index = freeBuffers_.back();
+    freeBuffers_.pop_back();
+    buffers_[index] = p->buf;
+  } else {
+    index = static_cast<uint32_t>(buffers_.size());
+    buffers_.push_back(p->buf);
+  }
+  return {index + 1};
 }
 
 void VulkanDevice::UpdateTexture(Texture texture, int x, int y, int width, int height, const void* data, uint32_t pitch) {

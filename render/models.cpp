@@ -6,8 +6,13 @@
 #include <cstdlib>
 #include <cstddef>
 #include <cstring>
+#include <condition_variable>
+#include <deque>
 #include <fstream>
+#include <mutex>
 #include <optional>
+#include <thread>
+#include <unordered_set>
 
 #include "bp_reader.h"
 #include "effect_files.h"
@@ -155,10 +160,29 @@ void MakePaintSpots(const char* vertices, int64_t vertexCount, const char* indic
   }
 }
 
+}  // namespace
+
+// [spikes] A mesh made ahead (ModelCache::MakeAhead, on the meshes' thread): what LoadScm made of its file with the inputs
+// Build will give it, its two buffers prepared on the device (PrepareBuffer), finished when Build takes it (TakeScm).
+struct ScmAhead {
+  bool ok = false, missing = false;  // (missing: no such file)
+  std::string error;
+  ModelLod lod;  // (its counts and its trees' step; no buffers)
+  Vec3 boundsMin, boundsMax;
+  std::vector<Model::BoneBox> boneBoxes;
+  std::shared_ptr<const HitShape> hitShape;
+  std::vector<Vec3> paintSpots;
+  std::unique_ptr<gfx::Device::Prepared> vertices, indices;
+  size_t bytes = 0;  // (what its prepared buffers hold)
+};
+
+namespace {
+
+// `ahead` ([spikes]): the buffers prepared into it, not made (on any thread; Build finishes them, TakeScm)
 bool LoadScm(gfx::Device* device, const std::string& file, const std::vector<ModelBone>& skeleton, ModelLod* lod, Vec3* boundsMin,
              Vec3* boundsMax, std::string* error, std::vector<Model::BoneBox>* boneBoxes = nullptr,
              std::shared_ptr<const HitShape>* hitShape = nullptr, int64_t hitShapeMost = 0, bool trees = false,
-             std::vector<Vec3>* paintSpots = nullptr) {
+             std::vector<Vec3>* paintSpots = nullptr, ScmAhead* ahead = nullptr) {
   auto fail = [&](const char* what) {
     *error = what;
     return false;
@@ -233,18 +257,57 @@ bool LoadScm(gfx::Device* device, const std::string& file, const std::vector<Mod
   vb.stride = sizeof(ScmVertex);
   vb.size = static_cast<uint32_t>(vertexCount * static_cast<int64_t>(sizeof(ScmVertex)));
   vb.data = vertices;
-  lod->vertices = device->CreateBuffer(vb);
   gfx::BufferDesc ib;
   ib.kind = gfx::BufferKind::Index;
   ib.stride = static_cast<uint32_t>(indexBytes);
   ib.size = static_cast<uint32_t>(indexCount * indexBytes);
   ib.data = file.data() + indexOffset;
-  lod->indices = device->CreateBuffer(ib);
   lod->indexCount = static_cast<uint32_t>(indexCount);
   lod->vertexCount = static_cast<uint32_t>(vertexCount);
   lod->indexBytes = static_cast<uint32_t>(indexBytes);
+  if (ahead) {  // [spikes] (made ahead: the buffers prepared, here, off the frames' thread)
+    ahead->vertices = device->PrepareBuffer(vb);
+    ahead->indices = device->PrepareBuffer(ib);
+    ahead->bytes = static_cast<size_t>(vb.size) + ib.size;
+    if (!ahead->vertices || !ahead->indices) return fail("the device refused the mesh");
+    return true;
+  }
+  lod->vertices = device->CreateBuffer(vb);
+  lod->indices = device->CreateBuffer(ib);
   if (!lod->vertices || !lod->indices) return fail("the device refused the mesh");
   return true;
+}
+
+// [spikes] Build's shader name of a level as the kind it is drawn as (Build, and the meshes made ahead): the first game's
+// names, which many blueprints still carry, as today's techniques (the original program's own table, docs/engine-answers.md,
+// render 17; no name at all is "Unit"), and a stream's water and white water as LabPBR and LabPBRAlpha (`stream` 1 or 2).
+std::string DrawnKind(std::string kind, int* stream) {
+  static const char* const kOld[][2] = {
+      {"tmeshnolighting", "flat"}, {"tmeshnonormals", "vertexnormal"}, {"tmeshalpha", "normalmappedalpha"},
+      {"tmeshglow", "normalmappedglow"}, {"tmeshterrain", "normalmappedterrain"}, {"simple", "unit"},
+      {"team", "unit"}, {"tmeshalphaglowfade", "unitbuild"}, {"tmeshmetalbuild", "aeonbuild"},
+      {"tmeshshield", "shield"}, {"tmeshzfill", "shieldfill"}, {"tmeshadd", "effect"},
+      {"tmeshexplosion", "explosion"}, {"tmeshcloud", "cloud"}, {"tmeshoutercloud", "outercloud"},
+      {"tmeshempnuke", "nukeemp"}, {"tmeshquantumnuke", "nukequantum"}, {"tmeshtemporalbubble", "temporalbubble"}};
+  for (const auto& old : kOld)
+    if (kind == old[0]) {
+      kind = old[1];
+      break;
+    }
+  if (kind.empty()) kind = "unit";
+  *stream = 0;
+  if (kind == "streamwater") *stream = 1, kind = "labpbr";
+  else if (kind == "streamfoam") *stream = 2, kind = "labpbralpha";
+  return kind;
+}
+
+// [spikes] (the inputs a level's LoadScm is given, as one key: what a mesh made ahead is taken by)
+std::string ScmKey(const std::string& mesh, const std::vector<ModelBone>& skeleton, bool first, bool shape, int64_t most, bool trees, bool spots) {
+  std::string key = mesh;
+  key += '|';
+  for (const ModelBone& b : skeleton) key += b.name + ',';
+  key += '|' + std::to_string(first) + std::to_string(shape) + std::to_string(trees) + std::to_string(spots) + '|' + std::to_string(most);
+  return key;
 }
 
 std::string Lower(std::string s) {
@@ -376,8 +439,45 @@ const Model* ModelCache::FromDisplay(const std::string& key, const std::string& 
   if (it != models_.end()) return it->second.get();
   Model* m = models_.emplace(name, std::make_unique<Model>()).first->second.get();
   m->scale = entry.scale > 0 ? entry.scale : 1;
+  // [spikes] A prop's look as the simulation has it that names the very files its blueprint file does (a map's props once
+  // the game has begun: every kind of them had its model made from its .bp file as the map opened, and was made again
+  // from the simulation's looks in the game's first frames, a hundred models of the map in one frame): the model made
+  // from the file taken as it is (what Build makes of the same files: the same buffers and textures), its levels numbered
+  // anew as Build would number them, the rest as this way makes it (no simTree, as before).
+  if (!effect && faction.empty() && !key.empty() && key[0] == '/') {
+    auto from = builtFrom_.find(key);
+    auto made = models_.find(key);
+    if (from != builtFrom_.end() && made != models_.end() && made->second && made->second->ok && from->second.scale == m->scale &&
+        made->second->lods.size() == entry.lods.size() && SameSources(from->second.sources, entry.lods)) {
+      *m = *made->second;
+      m->simTree = false;
+      // (its levels numbered anew, as Build numbers them: the model renderer draws a level's instances together by the
+      // level itself, sorted by these numbers, so two copies under one number would be drawn one instance at a time)
+      for (size_t i = 0; i < m->lods.size(); ++i) {
+        m->lods[i].serial = NextLodSerial();
+        m->lods[i].cutoff = entry.lods[i].cutoff;  // (the simulation's distances, often its own: FAF sets the props'; not drawn by)
+      }
+      ++madeAlike;
+      if (HitchLog::on) HitchLog::Add("same model as its file's: " + key, 0);
+      return m;
+    }
+  }
   Build(m, key, base, entry.lods, false, true, faction, effect);
   return m;
+}
+
+// [spikes] (FromDisplay) the levels name the same files, shaders and treads (paths as the file system takes them; their
+// distances may differ, which Build only keeps: ModelLod::cutoff)
+bool ModelCache::SameSources(const std::vector<LodSource>& a, const std::vector<LodSource>& b) {
+  if (a.size() != b.size()) return false;
+  auto same = [](const std::string& x, const std::string& y) { return x == y || moho::Vfs::Normalize(x) == moho::Vfs::Normalize(y); };
+  for (size_t i = 0; i < a.size(); ++i) {
+    const LodSource &x = a[i], &y = b[i];
+    if (x.scrolling != y.scrolling || x.shader != y.shader || !same(x.mesh, y.mesh) || !same(x.albedo, y.albedo) ||
+        !same(x.normals, y.normals) || !same(x.specular, y.specular) || !same(x.secondary, y.secondary))
+      return false;
+  }
+  return true;
 }
 
 const Model* ModelCache::Mesh(const std::string& meshPath, const std::string& albedoPath, const std::string& shader, float uniformScale) {
@@ -640,6 +740,10 @@ const Model* ModelCache::Blueprint(const std::string& blueprintPath, bool origin
     return m;
   }
   Build(m, path, base, sources, original, false, faction, effect);
+  // [spikes] (what it was made from, for the simulation's look of it that names the same: FromDisplay. Not where the lab's
+  // LabVisuals textures stand in for the finest level's, which a look from the simulation does not take)
+  if (!original && faction.empty() && !effect && m->ok && !vfs_->Exists("/mods/labvisuals/textures/" + base + "/" + base + "_lab_albedo.dds"))
+    builtFrom_[path] = {sources, m->scale};
   // [plants] (the game's trees: Model::simTree)
   if (auto text = vfs_->ReadFile(path)) {
     BpValue bp;
@@ -759,7 +863,328 @@ void ModelCache::ReadAheadUpgrade(const std::string& unitId) {
   ahead_.push_back(std::move(a));
 }
 
+// [spikes] (MakeAhead: each kind straight to its files, stage 1)
+void ModelCache::MakeAhead(const std::vector<std::string>& unitIds) {
+  for (const std::string& unitId : unitIds) {
+    const std::string id = Lower(unitId);
+    if (id.empty() || UnitMade(id)) continue;
+    bool asked = false;
+    for (const Ahead& a : ahead_) asked = asked || a.to == id;
+    if (asked) continue;
+    Ahead a;
+    a.to = id;
+    AskFiles(&a);
+    if (a.files.empty()) continue;  // (nothing to draw: no model to make)
+    ahead_.push_back(std::move(a));
+  }
+}
+
+// [spikes] A kind's files as its model's making will want them (Build): of UnitFiles' list those that are there, less the
+// remastered textures Build would not take (the lab's LabVisuals ones where the simulation's looks name the textures; a
+// remastered model's textures beside its meshes where it has a textures folder), and a remastered kind's own wreck's
+// (RemasteredWreck). Its textures are made ahead, and its meshes (MeshJob, the meshes' own thread).
+void ModelCache::AskFiles(Ahead* a) {
+  const std::string& id = a->to;
+  std::vector<std::string> listed = UnitFiles(id);
+  const std::string preview = "/preview/" + id + "/";
+  const bool merged = display_.count(id) > 0;
+  const bool texturesFolder = vfs_->Exists(preview + "textures/" + id + "_lab_albedo.dds");
+  a->wreck = !listed.empty() && !models_.count("wreck:" + id) && vfs_->Exists(preview + id + "_wreck_lod0.scm");
+  if (a->wreck) {
+    for (int i = 0; i < 8 && vfs_->Exists(preview + id + "_wreck_lod" + std::to_string(i) + ".scm"); ++i)
+      listed.push_back(preview + id + "_wreck_lod" + std::to_string(i) + ".scm");
+    for (const char* kind : {"albedo", "normal", "spec", "ao"})
+      listed.push_back(preview + (vfs_->Exists(preview + "textures/" + id + "_wreck_lab_albedo.dds") ? "textures/" : "") + id + "_wreck_lab_" + kind + ".dds");
+  }
+  std::vector<std::string> textures, others;
+  for (std::string& f : listed) {
+    const std::string n = moho::Vfs::Normalize(f);
+    if (n.empty() || std::find(textures.begin(), textures.end(), n) != textures.end() || std::find(others.begin(), others.end(), n) != others.end()) continue;
+    if (merged && n.compare(0, 20, "/mods/labvisuals/tex") == 0) continue;
+    if (texturesFolder && n.compare(0, preview.size(), preview) == 0 && n.find('/', preview.size()) == std::string::npos &&
+        n.find("/" + id + "_lab_") != std::string::npos)
+      continue;
+    if (!vfs_->Exists(n)) continue;
+    (n.size() > 4 && n.compare(n.size() - 4, 4, ".dds") == 0 ? textures : others).push_back(n);
+  }
+  textures_->MakeAhead(textures);
+  a->files = std::move(textures);
+  a->files.insert(a->files.end(), others.begin(), others.end());  // (its meshes: made ahead below, not read here)
+  a->stage = 1;
+  if (a->files.empty()) return;
+  // its meshes made ahead on the meshes' thread, as Build will make them: the kind's (from the simulation's looks where
+  // they name it, else from its blueprint file), then its own wreck's (RemasteredWreck's sources)
+  MeshJob job;
+  job.what = id;
+  job.base = id;
+  job.hitShapes = hitShapes;
+  auto look = display_.find(id);
+  if (look != display_.end()) {
+    job.sources = look->second.lods;
+  } else {
+    job.blueprint = UnitBlueprintPath(id);
+    job.what = job.blueprint;  // (Build's `what` for a model from a blueprint file: its path)
+    const size_t slash = job.what.rfind('/');
+    job.base = job.what.substr(slash + 1);
+    const size_t under = job.base.rfind('_');
+    job.base = under == std::string::npos ? job.base.substr(0, job.base.rfind('.')) : job.base.substr(0, under);
+  }
+  a->meshesOf = job.what;
+  AskMeshes(std::move(job));
+  if (a->wreck) {
+    MeshJob wreck;
+    wreck.what = "wreck:" + id;
+    wreck.base = id;
+    wreck.stem = id + "_wreck";
+    wreck.blueprint = UnitBlueprintPath(id);
+    wreck.first = "/preview/" + id + "/" + id + "_wreck_lod0.scm";  // (as RemasteredWreck names it)
+    AskMeshes(std::move(wreck));
+  }
+}
+
+// [spikes] (AheadStep) an asked-for kind done with: what was made ahead for it and not taken let go of
+void ModelCache::FinishAhead(size_t k) {
+  DropMeshes(ahead_[k].meshesOf);
+  if (ahead_[k].wreck) DropMeshes("wreck:" + ahead_[k].to);
+  ahead_.erase(ahead_.begin() + static_cast<std::ptrdiff_t>(k));
+}
+
+// [spikes] The meshes made ahead (MeshJob): one thread of the cache's own works the jobs in the order asked; what it made is
+// kept by each mesh's inputs (ScmKey) until Build takes it or the kind is done with (DropMeshes). It stays at most a quarter
+// of a gigabyte of prepared buffers ahead of what is taken.
+struct ModelCache::MeshesAhead {
+  mutable std::mutex mutex;
+  std::condition_variable wake;
+  std::deque<MeshJob> queue;
+  std::unordered_map<std::string, int> pending;  // (jobs queued or being worked on, by their `what`)
+  std::unordered_set<std::string> dropped;       // (dropped while being worked on: let go of when done)
+  struct Kept {
+    std::string what;
+    std::unique_ptr<ScmAhead> scm;
+  };
+  std::unordered_map<std::string, Kept> scms;  // (by ScmKey)
+  std::unordered_map<std::string, std::pair<std::string, std::vector<ModelBone>>> bones;  // (by skeleton mesh: whose, its bones)
+  std::unordered_map<std::string, std::vector<std::string>> textures;  // (a wreck's blueprint's textures, by `what`)
+  size_t held = 0;  // (the bytes of the buffers prepared and not taken)
+  static constexpr size_t kMostHeld = 256u << 20;
+  bool stop = false;
+  std::thread thread;
+};
+
+ModelCache::ModelCache(gfx::Device* device, const moho::Vfs* vfs, TextureCache* textures) : device_(device), vfs_(vfs), textures_(textures) {}
+
+ModelCache::~ModelCache() {
+  if (!meshesAhead_) return;
+  {
+    std::lock_guard<std::mutex> lock(meshesAhead_->mutex);
+    meshesAhead_->stop = true;
+  }
+  meshesAhead_->wake.notify_all();
+  if (meshesAhead_->thread.joinable()) meshesAhead_->thread.join();
+  meshesAhead_.reset();  // (what was prepared and not taken let go of, while the device is there)
+}
+
+void ModelCache::AskMeshes(MeshJob job) {
+  if (!meshesAhead_) {
+    meshesAhead_ = std::make_unique<MeshesAhead>();
+    meshesAhead_->thread = std::thread([this] { MeshesRun(); });
+  }
+  {
+    std::lock_guard<std::mutex> lock(meshesAhead_->mutex);
+    ++meshesAhead_->pending[job.what];
+    meshesAhead_->dropped.erase(job.what);
+    meshesAhead_->queue.push_back(std::move(job));
+  }
+  meshesAhead_->wake.notify_all();
+}
+
+bool ModelCache::MeshesPending(const std::string& what) const {
+  if (!meshesAhead_) return false;
+  std::lock_guard<std::mutex> lock(meshesAhead_->mutex);
+  return meshesAhead_->pending.count(what) > 0;
+}
+
+std::unique_ptr<ScmAhead> ModelCache::TakeScm(const std::string& key) {
+  std::lock_guard<std::mutex> lock(meshesAhead_->mutex);
+  auto it = meshesAhead_->scms.find(key);
+  if (it == meshesAhead_->scms.end()) return nullptr;
+  std::unique_ptr<ScmAhead> scm = std::move(it->second.scm);
+  meshesAhead_->scms.erase(it);
+  meshesAhead_->held -= std::min(meshesAhead_->held, scm->bytes);
+  meshesAhead_->wake.notify_all();
+  return scm;
+}
+
+bool ModelCache::TakeBones(const std::string& skeletonMesh, std::vector<ModelBone>* out) {
+  if (skeletonMesh.empty()) return false;
+  std::lock_guard<std::mutex> lock(meshesAhead_->mutex);
+  auto it = meshesAhead_->bones.find(skeletonMesh);
+  if (it == meshesAhead_->bones.end()) return false;
+  *out = std::move(it->second.second);
+  meshesAhead_->bones.erase(it);
+  return true;
+}
+
+std::vector<std::string> ModelCache::MeshesTextures(const std::string& what) {
+  std::vector<std::string> out;
+  if (!meshesAhead_) return out;
+  std::lock_guard<std::mutex> lock(meshesAhead_->mutex);
+  auto it = meshesAhead_->textures.find(what);
+  if (it == meshesAhead_->textures.end()) return out;
+  out = std::move(it->second);
+  meshesAhead_->textures.erase(it);
+  return out;
+}
+
+void ModelCache::DropMeshes(const std::string& what) {
+  if (!meshesAhead_ || what.empty()) return;
+  std::vector<std::unique_ptr<ScmAhead>> gone;  // (let go of outside the lock: declared first, destroyed last)
+  std::lock_guard<std::mutex> lock(meshesAhead_->mutex);
+  MeshesAhead& h = *meshesAhead_;
+  for (auto it = h.queue.begin(); it != h.queue.end();) {
+    if (it->what != what) {
+      ++it;
+      continue;
+    }
+    if (--h.pending[what] <= 0) h.pending.erase(what);
+    it = h.queue.erase(it);
+  }
+  if (h.pending.count(what)) h.dropped.insert(what);  // (being worked on)
+  for (auto it = h.scms.begin(); it != h.scms.end();) {
+    if (it->second.what != what) {
+      ++it;
+      continue;
+    }
+    h.held -= std::min(h.held, it->second.scm->bytes);
+    gone.push_back(std::move(it->second.scm));
+    it = h.scms.erase(it);
+  }
+  for (auto it = h.bones.begin(); it != h.bones.end();) it = it->second.first == what ? h.bones.erase(it) : std::next(it);
+  h.textures.erase(what);
+  h.wake.notify_all();
+}
+
+void ModelCache::MeshesRun() {
+  MeshesAhead& h = *meshesAhead_;
+  std::unique_lock<std::mutex> lock(h.mutex);
+  for (;;) {
+    h.wake.wait(lock, [&] { return h.stop || (!h.queue.empty() && h.held < MeshesAhead::kMostHeld); });
+    if (h.stop) return;
+    MeshJob job = std::move(h.queue.front());
+    h.queue.pop_front();
+    lock.unlock();
+    MeshesWork(job);
+    lock.lock();
+    if (--h.pending[job.what] <= 0) h.pending.erase(job.what);
+  }
+}
+
+// (on the meshes' thread: Build's reading and LoadScm calls for one model, with the inputs Build will give them)
+void ModelCache::MeshesWork(const MeshJob& job) {
+  HitchLog::Scope note("meshes made ahead,", job.what);  // [hitches] (on the meshes' thread: no frame waits for it)
+  auto read = [&](const std::string& path) -> std::optional<std::string> {
+    const std::string key = moho::Vfs::Normalize(path);
+    if (key.empty()) return std::nullopt;
+    return vfs_->ReadFile(key);
+  };
+  std::vector<LodSource> sources = job.sources;
+  std::vector<std::string> wreckTextures;
+  if (!job.blueprint.empty()) {
+    float scale = 1;
+    std::string error;
+    const bool listed = ReadSources(job.blueprint, &sources, &scale, &error);
+    if (!job.first.empty()) {  // (a remastered wreck: RemasteredWreck's sources)
+      if (!listed || sources.empty()) sources.assign(1, LodSource{});
+      sources[0].mesh = job.first;
+      // (the textures its blueprint names, which Build gets before the wreck's own replace them: made ahead too)
+      for (const LodSource& s : sources)
+        for (const std::string* f : {&s.albedo, &s.normals, &s.specular, &s.secondary})
+          if (!f->empty() && vfs_->Exists(*f)) wreckTextures.push_back(*f);
+    } else if (!listed) {
+      sources.clear();
+    }
+  }
+  std::vector<std::pair<std::string, std::unique_ptr<ScmAhead>>> made;
+  std::vector<ModelBone> bones;
+  BuildPlan plan = PlanBuild(job.base, std::move(sources), false, job.stem);
+  std::optional<std::string> skeletonFile = plan.skeletonMesh.empty() ? std::nullopt : read(plan.skeletonMesh);
+  if (skeletonFile) ReadScmBones(*skeletonFile, &bones);
+  const bool unit = job.stem.empty() && (job.what.find('/') == std::string::npos ||
+                                         (job.what.size() > 8 && job.what.compare(job.what.size() - 8, 8, "_unit.bp") == 0));
+  bool firstSways = false, shaped = false;
+  for (size_t i = 0; i < plan.sources.size(); ++i) {
+    const LodSource& s = plan.sources[i];
+    int stream = 0;
+    const std::string kind = DrawnKind(Lower(s.shader), &stream);
+    const bool ownSway = kind.compare(0, 10, "undulating") == 0 || kind == "labpbralpha";
+    if (i == 0) firstSways = ownSway;
+    const bool sways = ownSway || (i > 0 && firstSways);
+    const bool first = i == 0;
+    const bool shape = job.hitShapes && unit && !shaped;
+    const int64_t most = i + 1 == plan.sources.size() ? INT64_MAX : kHitShapeTriangles;
+    const bool spots = unit && first;
+    auto scm = std::make_unique<ScmAhead>();
+    std::optional<std::string> file = s.mesh == plan.skeletonMesh ? skeletonFile : read(s.mesh);
+    if (!file) {
+      scm->missing = true;
+    } else {
+      scm->ok = LoadScm(device_, *file, bones, &scm->lod, first ? &scm->boundsMin : nullptr, first ? &scm->boundsMax : nullptr, &scm->error,
+                        first ? &scm->boneBoxes : nullptr, shape ? &scm->hitShape : nullptr, most, sways, spots ? &scm->paintSpots : nullptr,
+                        scm.get());
+    }
+    if (scm->ok && shape && scm->hitShape) shaped = true;
+    const bool stop = i == 0 && !scm->ok;  // (Build makes nothing more of a model whose finest level failed)
+    made.emplace_back(ScmKey(s.mesh, bones, first, shape, most, sways, spots), std::move(scm));
+    if (stop) break;
+  }
+  std::vector<std::unique_ptr<ScmAhead>> gone;  // (dropped meanwhile: let go of outside the lock, destroyed after it)
+  std::lock_guard<std::mutex> lock(meshesAhead_->mutex);
+  MeshesAhead& h = *meshesAhead_;
+  if (h.dropped.count(job.what)) {
+    for (auto& m : made) gone.push_back(std::move(m.second));
+    if (h.pending[job.what] <= 1) h.dropped.erase(job.what);
+    return;
+  }
+  for (auto& m : made) {
+    if (h.scms.count(m.first)) continue;  // (another kind's job made the same already: the first is kept)
+    h.held += m.second->bytes;
+    h.scms.emplace(m.first, MeshesAhead::Kept{job.what, std::move(m.second)});
+  }
+  if (skeletonFile && !plan.skeletonMesh.empty() && !h.bones.count(plan.skeletonMesh))
+    h.bones.emplace(plan.skeletonMesh, std::make_pair(job.what, std::move(bones)));
+  if (!wreckTextures.empty()) h.textures[job.what] = std::move(wreckTextures);
+}
+
+// [spikes] Build's choice of files (its old own code, unchanged): the skeleton is that of the mesh the blueprint names, which
+// is what the simulation poses; the remaster is looked for under the blueprint's own name first, then under the name of
+// the mesh it draws (several projectiles draw one projectile's mesh by their MeshName - the cruise missiles Cruise01's -
+// and take its remaster, at their own scale; visuals section 23); a remastered model brings as many levels as it has files
+// (<file>_lod0.scm, _lod1, ...), whatever the blueprint lists.
+ModelCache::BuildPlan ModelCache::PlanBuild(const std::string& base, std::vector<LodSource> sources, bool original, const std::string& stem) const {
+  BuildPlan p;
+  p.skeletonMesh = sources.empty() ? std::string() : sources[0].mesh;
+  p.own = base;
+  if (!original && !vfs_->Exists("/preview/" + base + "/" + base + "_lod0.scm") && !p.skeletonMesh.empty()) {
+    std::string mesh = Lower(p.skeletonMesh.substr(p.skeletonMesh.rfind('/') + 1));
+    const size_t lod = mesh.rfind("_lod0.scm");
+    mesh = lod != std::string::npos ? mesh.substr(0, lod) : mesh.substr(0, mesh.rfind('.'));
+    if (!mesh.empty() && mesh != base && vfs_->Exists("/preview/" + mesh + "/" + mesh + "_lod0.scm")) p.own = mesh;
+  }
+  p.preview = "/preview/" + p.own + "/";
+  p.file = stem.empty() ? p.own : stem;  // (the files' own name in the folder: a wreck's is "<id>_wreck")
+  p.previewed = !original && vfs_->Exists(p.preview + p.file + "_lod0.scm");
+  if (p.previewed) {
+    size_t count = 1;
+    while (count < 8 && vfs_->Exists(p.preview + p.file + "_lod" + std::to_string(count) + ".scm")) ++count;
+    sources.resize(count, sources.empty() ? LodSource{} : sources.back());
+    for (size_t i = 0; i < count; ++i) sources[i].mesh = p.preview + p.file + "_lod" + std::to_string(i) + ".scm";
+  }
+  p.sources = std::move(sources);
+  return p;
+}
+
 bool ModelCache::AheadStep() {
+  auto dds = [](const std::string& f) { return f.size() > 4 && f.compare(f.size() - 4, 4, ".dds") == 0; };
   for (size_t k = 0; k < ahead_.size();) {
     Ahead& a = ahead_[k];
     bool drop = false;
@@ -776,46 +1201,62 @@ bool ModelCache::AheadStep() {
       if (text && ReadBlueprintFile(*text, &bp)) a.to = Lower(bp["General"]["UpgradesTo"].StringOr(std::string()));
       bool known = a.to.empty() || UnitMade(a.to);
       for (size_t j = 0; j < ahead_.size() && !known; ++j) known = j != k && ahead_[j].to == a.to;
-      if (known) {
-        drop = true;
-      } else {
-        a.files = UnitFiles(a.to);
-        textures_->FetchLater(a.files);
-        a.stage = 1;
+      if (!known) {
+        AskFiles(&a);  // [spikes] (its textures made ahead off the frames' thread, the rest read ahead)
+        known = a.files.empty();
       }
-      if (HitchLog::on) HitchLog::Add("read ahead: " + a.of + (a.to.empty() ? std::string(" upgrades to nothing") : " upgrades to " + a.to + (known ? std::string(" (made or asked for already)") : ", " + std::to_string(a.files.size()) + " files asked for")), 0);
+      drop = known;
+      if (HitchLog::on) HitchLog::Add("read ahead: " + a.of + (a.to.empty() ? std::string(" upgrades to nothing") : " upgrades to " + a.to + (drop ? std::string(" (made or asked for already)") : ", " + std::to_string(a.files.size()) + " files asked for")), 0);
     }
-    if (a.stage >= 1 && UnitMade(a.to)) drop = true;  // (the upgrade came first: made as it was wanted)
-    if (!drop && a.stage == 1) {  // its files read
-      bool all = true;
-      for (const std::string& f : a.files) all = all && textures_->Arrived(f) != 0;
+    // (its first use came first: made as it was wanted; one with a wreck of its own goes on for that)
+    if (!drop && a.stage >= 1 && a.stage <= 3 && !a.wreck && UnitMade(a.to)) drop = true;
+    if (!drop && a.stage == 1) {  // [spikes] its textures made and its meshes prepared (off the frames' thread)
+      const std::string wreck = "wreck:" + a.to;
+      bool all = !MeshesPending(a.meshesOf) && !(a.wreck && MeshesPending(wreck));
+      if (all && a.wreck && !a.wreckAsked) {  // (the textures its wreck's blueprint names, found by the meshes' thread)
+        a.wreckAsked = true;
+        a.wreckFiles = MeshesTextures(wreck);
+        textures_->MakeAhead(a.wreckFiles);
+      }
+      for (const std::string& f : a.files) all = all && (!dds(f) || !textures_->Ahead(f));
+      for (const std::string& f : a.wreckFiles) all = all && !textures_->Ahead(f);
       if (!all) {
         ++k;
         continue;
       }
-      a.stage = 2;
-    }
-    if (!drop && a.stage == 2) {  // its textures made, one a step (those read: the ones Build will find)
-      for (const std::string& f : a.files)
-        if (f.size() > 4 && f.compare(f.size() - 4, 4, ".dds") == 0 && !textures_->Made(f) && textures_->Arrived(f) == 1) {
-          textures_->Get(f);
-          return true;
-        }
       a.stage = 3;
     }
-    if (!drop && a.stage == 3) {  // the model itself, as the upgrade would make it
-      HitchLog::Scope made("model made ahead,", a.to + " (the next tier of " + a.of + ")");
+    if (!drop && a.stage == 3) {  // the model itself, as its first use would make it
+      bool made = false;
       if (!UnitMade(a.to)) {
+        HitchLog::Scope note("model made ahead,", a.of.empty() ? a.to : a.to + " (the next tier of " + a.of + ")");
         makingAhead_ = true;  // (its own next tier is asked about when it appears in the game, not now)
         Unit(a.to);
         makingAhead_ = false;
         ++madeAhead;
+        made = true;
       }
-      ahead_.erase(ahead_.begin() + static_cast<std::ptrdiff_t>(k));
-      return true;
+      if (a.wreck) {
+        a.stage = 4;  // (its wreck at the next step)
+        if (made) return true;
+      } else {
+        FinishAhead(k);
+        if (made) return true;
+        continue;
+      }
+    }
+    if (!drop && a.stage == 4) {  // [spikes] a remastered kind's own wreck, as the first of them to die would make it
+      const bool made = !models_.count("wreck:" + a.to);
+      if (made) {
+        HitchLog::Scope note("model made ahead, the wreck of", a.to);
+        RemasteredWreck(a.to);
+      }
+      FinishAhead(k);
+      if (made) return true;
+      continue;
     }
     if (drop) {
-      ahead_.erase(ahead_.begin() + static_cast<std::ptrdiff_t>(k));
+      FinishAhead(k);
       continue;
     }
     ++k;
@@ -859,23 +1300,22 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
   // /preview/<id>, replaces the meshes, and its LabPBR textures (there, or in textures/) replace the
   // blueprint's for every level. It brings as many levels as it has files (<id>_lod0.scm, _lod1, ...),
   // whatever the blueprint lists. The scale stays the blueprint's.
-  // the skeleton is that of the mesh the blueprint names, which is what the simulation poses
-  std::string skeletonMesh = sources.empty() ? std::string() : sources[0].mesh;
-  auto skeletonFile = skeletonMesh.empty() ? std::nullopt : textures_->ReadFile(skeletonMesh);
-  if (skeletonFile) ReadScmBones(*skeletonFile, &m->bones);
-  // (the remaster is looked for under the blueprint's own name first, then under the name of the
-  // mesh it draws: several projectiles draw one projectile's mesh by their MeshName - the cruise
-  // missiles Cruise01's - and take its remaster, at their own scale; visuals section 23)
-  std::string own = base;
-  if (!original && !vfs_->Exists("/preview/" + base + "/" + base + "_lod0.scm") && !skeletonMesh.empty()) {
-    std::string mesh = Lower(skeletonMesh.substr(skeletonMesh.rfind('/') + 1));
-    const size_t lod = mesh.rfind("_lod0.scm");
-    mesh = lod != std::string::npos ? mesh.substr(0, lod) : mesh.substr(0, mesh.rfind('.'));
-    if (!mesh.empty() && mesh != base && vfs_->Exists("/preview/" + mesh + "/" + mesh + "_lod0.scm")) own = mesh;
+  // the skeleton is that of the mesh the blueprint names, which is what the simulation poses ([spikes] its plan: PlanBuild)
+  BuildPlan plan = PlanBuild(base, std::move(sources), original, stem);
+  const std::string& skeletonMesh = plan.skeletonMesh;
+  std::optional<std::string> skeletonFile;
+  bool skeletonRead = false;
+  // [spikes] (made ahead: the skeleton's bones, read on the meshes' thread; else its file read here)
+  if (!meshesAhead_ || !TakeBones(skeletonMesh, &m->bones)) {
+    skeletonFile = skeletonMesh.empty() ? std::nullopt : textures_->ReadFile(skeletonMesh);
+    skeletonRead = true;
+    if (skeletonFile) ReadScmBones(*skeletonFile, &m->bones);
   }
-  const std::string preview = "/preview/" + own + "/";
-  const std::string file = stem.empty() ? own : stem;  // (the files' own name in the folder: a wreck's is "<id>_wreck")
-  const bool previewed = !original && vfs_->Exists(preview + file + "_lod0.scm");
+  const std::string& own = plan.own;
+  const std::string& preview = plan.preview;
+  const std::string& file = plan.file;  // (the files' own name in the folder: a wreck's is "<id>_wreck")
+  const bool previewed = plan.previewed;
+  sources = std::move(plan.sources);
   // a remastered unit's lamps: a list beside its meshes (docs/render-unit-lights.md); a wreck has none
   if (!original && stem.empty()) {
     const std::string file = previewed ? preview + own + "_lights.bp" : "/mods/labvisuals/textures/" + base + "/" + base + "_lights.bp";
@@ -915,12 +1355,6 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
       m->lights.push_back(light);
     }
   }
-  if (previewed) {
-    size_t count = 1;
-    while (count < 8 && vfs_->Exists(preview + file + "_lod" + std::to_string(count) + ".scm")) ++count;
-    sources.resize(count, sources.empty() ? LodSource{} : sources.back());
-    for (size_t i = 0; i < count; ++i) sources[i].mesh = preview + file + "_lod" + std::to_string(i) + ".scm";
-  }
   for (size_t i = 0; i < sources.size(); ++i) {
     const LodSource& s = sources[i];
     ModelLod lod;
@@ -939,25 +1373,11 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
                                              "tmeshexplosion", "effect", "tmeshadd", "nukeuef", "shieldseraphim"};
       for (const char* name : kRgbOnly) lod.rgbOnly = lod.rgbOnly || kind == name;
     }
-    {
-      static const char* const kOld[][2] = {
-          {"tmeshnolighting", "flat"}, {"tmeshnonormals", "vertexnormal"}, {"tmeshalpha", "normalmappedalpha"},
-          {"tmeshglow", "normalmappedglow"}, {"tmeshterrain", "normalmappedterrain"}, {"simple", "unit"},
-          {"team", "unit"}, {"tmeshalphaglowfade", "unitbuild"}, {"tmeshmetalbuild", "aeonbuild"},
-          {"tmeshshield", "shield"}, {"tmeshzfill", "shieldfill"}, {"tmeshadd", "effect"},
-          {"tmeshexplosion", "explosion"}, {"tmeshcloud", "cloud"}, {"tmeshoutercloud", "outercloud"},
-          {"tmeshempnuke", "nukeemp"}, {"tmeshquantumnuke", "nukequantum"}, {"tmeshtemporalbubble", "temporalbubble"}};
-      for (const auto& old : kOld)
-        if (kind == old[0]) {
-          kind = old[1];
-          break;
-        }
-      if (kind.empty()) kind = "unit";
-    }
-    {  // [stream] a stream's water and its white water (stream_water.h): by their own shader names (the visuals track's
-       // stream props), drawn as LabPBR and LabPBRAlpha while World::streamWater is off
-      if (kind == "streamwater") lod.stream = 1, kind = "labpbr";
-      else if (kind == "streamfoam") lod.stream = 2, kind = "labpbralpha";
+    {  // (the first game's names as today's; [stream] a stream's water and its white water, stream_water.h: by their own shader
+       // names, the visuals track's stream props, drawn as LabPBR and LabPBRAlpha while World::streamWater is off: DrawnKind)
+      int stream = 0;
+      kind = DrawnKind(kind, &stream);
+      lod.stream = static_cast<decltype(lod.stream)>(stream);
       if (lod.stream) lod.streamMesh = s.mesh;
     }
     if (kind.compare(0, 4, "aeon") == 0) lod.faction = 1;
@@ -1030,7 +1450,6 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
       lod.teamMask = false;  // rocks and other scenery
     }
     HitchLog::Scope meshNote("mesh", s.mesh);  // [hitches] (its reading and making, up to its textures)
-    auto mesh = s.mesh == skeletonMesh ? skeletonFile : textures_->ReadFile(s.mesh);
     std::string error;
     // (a unit's, for battle scars while they are on: the finest level small enough, else the coarsest; unit_wear.h)
     const bool unit = !effect && stem.empty() && (what.find('/') == std::string::npos ||
@@ -1038,14 +1457,44 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
     std::shared_ptr<const HitShape>* shape = hitShapes && unit && !m->hitShape ? &m->hitShape : nullptr;
     // (what sways, below: its trees of a group told apart, each to sway on its own; ModelLod::treeStep)
     const bool sways = kind.compare(0, 10, "undulating") == 0 || kind == "labpbralpha" || (!m->lods.empty() && m->lods[0].sway > 0);
-    if (!mesh || !LoadScm(device_, *mesh, m->bones, &lod, m->lods.empty() ? &m->boundsMin : nullptr, m->lods.empty() ? &m->boundsMax : nullptr, &error,
-                          m->lods.empty() ? &m->boneBoxes : nullptr, shape, i + 1 == sources.size() ? INT64_MAX : kHitShapeTriangles, sways,
-                          unit && m->lods.empty() ? &m->paintSpots : nullptr)) {
+    const bool first = m->lods.empty();
+    const int64_t most = i + 1 == sources.size() ? INT64_MAX : kHitShapeTriangles;
+    // [spikes] made ahead with these very inputs (MakeAhead, on the meshes' thread): its buffers finished here, nothing read
+    std::unique_ptr<ScmAhead> pre = meshesAhead_ ? TakeScm(ScmKey(s.mesh, m->bones, first, shape != nullptr, most, sways, unit && first)) : nullptr;
+    bool there = true, loaded = false;
+    if (pre) {
+      there = !pre->missing;
+      error = pre->error;
+      if (pre->ok) {
+        lod.indexCount = pre->lod.indexCount;
+        lod.vertexCount = pre->lod.vertexCount;
+        lod.indexBytes = pre->lod.indexBytes;
+        lod.treeStep = pre->lod.treeStep;
+        lod.vertices = device_->FinishBuffer(std::move(pre->vertices));
+        lod.indices = device_->FinishBuffer(std::move(pre->indices));
+        loaded = lod.vertices && lod.indices;
+        if (!loaded) error = "the device refused the mesh";
+        if (loaded && first) m->boundsMin = pre->boundsMin, m->boundsMax = pre->boundsMax, m->boneBoxes = std::move(pre->boneBoxes);
+        if (loaded && shape) *shape = std::move(pre->hitShape);
+        if (loaded && unit && first) m->paintSpots = std::move(pre->paintSpots);
+      }
+    } else {
+      if (s.mesh == skeletonMesh && !skeletonRead) {  // ([spikes] the skeleton's bones were made ahead, this level was not)
+        skeletonFile = textures_->ReadFile(skeletonMesh);
+        skeletonRead = true;
+      }
+      auto mesh = s.mesh == skeletonMesh ? skeletonFile : textures_->ReadFile(s.mesh);
+      there = mesh.has_value();
+      loaded = mesh && LoadScm(device_, *mesh, m->bones, &lod, first ? &m->boundsMin : nullptr, first ? &m->boundsMax : nullptr, &error,
+                               first ? &m->boneBoxes : nullptr, shape, most, sways, unit && first ? &m->paintSpots : nullptr);
+    }
+    if (!loaded) {
       // a missing coarser level is common: the finer ones then stand in
-      if (i == 0 || mesh) fprintf(stderr, "render: model %s: mesh %s: %s\n", what.c_str(), s.mesh.c_str(), mesh ? error.c_str() : "file not found");
+      if (i == 0 || there) fprintf(stderr, "render: model %s: mesh %s: %s\n", what.c_str(), s.mesh.c_str(), there ? error.c_str() : "file not found");
       if (i == 0) return;
       continue;
     }
+    if (pre) meshNote.Append(" (made ahead)");  // [spikes]
     meshNote.End();  // [hitches]
     // a texture that is not there is simply not used (many props have no normal or specular
     // texture); one a blueprint file names itself and that is missing gets reported

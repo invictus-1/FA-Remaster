@@ -119,6 +119,11 @@ class World {
   // How the blueprints look as the simulation has them (a running game hands this over once it has
   // started): models and strategic icons then take their names from it instead of from .bp files.
   void SetLooks(const std::vector<BlueprintLook>& looks);
+  // [spikes] (readAhead) Unit kinds an army may build (SimFrames::TakeBuildable, from the simulation's own test), made ahead
+  // before any of them is first drawn: their textures off the frames' thread, then their models, one a frame
+  // (ModelCache::MakeAhead). A host that runs a game hands them over each frame, after SetLooks. Nothing without a map, or
+  // with readAhead off.
+  void MakeAhead(const std::vector<std::string>& unitIds);
   // The lamps of a unit drawn this frame (a remastered unit's list of lights): lit while the light
   // of the computed sky is low, each where its bone is. AddFrame calls it for a game's units; a
   // host that adds models itself calls it beside `meshes.Add`.
@@ -994,6 +999,18 @@ class World {
   std::vector<Particles::Hot> plantFires_;  // [plants] (the lasting fires near the camera, this frame)
   void PreparePlants();     // [plants]
   void PrepareAhead();      // [hitches] (readAhead)
+  bool effectsAhead_ = false;  // [spikes] (the effects' pictures asked for ahead: SetLooks, once a game)
+  // [spikes] (SetLooks, MakeAhead) what is made ahead is asked for half a second into the game (kAheadAfterFrames frames after
+  // the simulation's looks came), not during its first frames; until then it waits here
+  static constexpr int kAheadAfterFrames = 30;
+  int aheadFrames_ = kAheadAfterFrames;
+  std::vector<std::string> aheadPads_, aheadKinds_, aheadPictures_;
+  bool AheadBegun();
+  // Room on the card for what is made ahead (it holds 1-2.3 GB more by minute ten): asked of the card every 60 frames
+  // (gfx MemoryBudget); while the card's use is within a gigabyte of 85 % of what the system grants this program, nothing
+  // more is asked for ahead, and what would have been is made at its first use, as before. True where the card does not say.
+  bool aheadRoom_ = true;
+  int aheadRoomFrames_ = 0;
   void SmoothProps(double clock);  // [plants] (props the game moves beat by beat, drawn between the beats)
   struct PropBeat {
     uint32_t tick = 0xffffffffu;  // (the beat it is drawn toward)

@@ -141,6 +141,7 @@ struct ModelLod {
 };
 
 struct HitShape;  // (unit_wear.h)
+struct ScmAhead;  // [spikes] (models.cpp: a mesh made ahead)
 
 struct Model {
   bool ok = false;
@@ -209,7 +210,8 @@ struct PersonalShieldLook {
 
 class ModelCache {
  public:
-  ModelCache(gfx::Device* device, const moho::Vfs* vfs, TextureCache* textures) : device_(device), vfs_(vfs), textures_(textures) {}
+  ModelCache(gfx::Device* device, const moho::Vfs* vfs, TextureCache* textures);  // ([spikes] in models.cpp: meshesAhead_)
+  ~ModelCache();  // [spikes] (stops the meshes' thread of MakeAhead)
 
   // The model of a unit blueprint id ("uel0201"). Never null: a unit whose files cannot be read gets
   // a model with ok == false (reported once).
@@ -228,9 +230,20 @@ class ModelCache {
   // textures made one a frame, then the model itself (AheadStep, once a frame). Made so, the model is the one the upgrade
   // would have made (the same files and steps), only earlier.
   void ReadAheadUpgrade(const std::string& unitId);
-  // One step of that a frame (at most one texture or one model made); true when it made something.
+  // [spikes] Unit kinds made ahead before any of them is first drawn (what an army may build: World::MakeAhead, from the
+  // simulation's own test, SimFrames::WatchBuildable): each kind's textures, listed as Prefetch lists them, made ahead off
+  // the frames' thread (TextureCache::MakeAhead), and its meshes read and made on a thread of the cache's own, their
+  // buffers prepared (MeshJob: what Build's own steps would make of them); once all are there its model is made
+  // (AheadStep): what is left of that is its buffers finished and its textures taken. Then a remastered kind's own wreck
+  // (RemasteredWreck) the same way. A kind made or asked about already is left out. (ReadAheadUpgrade's next tiers go the
+  // same way since.)
+  void MakeAhead(const std::vector<std::string>& unitIds);
+  // One step of these (at most one model made); true when it made something. (World::PrepareAhead calls it again while
+  // it makes something and a millisecond of the frame is not used up.)
   bool AheadStep();
+  size_t AheadLeft() const { return ahead_.size(); }  // [spikes] (kinds asked for and not made yet)
   int madeAhead = 0;  // [hitches] (models made ahead so far)
+  int madeAlike = 0;  // [spikes] (models from the simulation's looks taken from the same files' model: FromDisplay)
   bool readAhead = false;  // [hitches] (set by the world each frame: World::readAhead; each unit model made asks ReadAheadUpgrade)
   // Is there a remastered model or material for this unit (a --preview folder, the lab's LabVisuals mod)?
   bool Remastered(const std::string& blueprintId) const;
@@ -295,6 +308,37 @@ class ModelCache {
     float scale = 1;
     std::vector<LodSource> lods;
   };
+  // [spikes] (Build's own choice of files, made the same way on the meshes' thread for a kind made ahead: PlanBuild) the
+  // mesh whose bones are the skeleton, the remastered model's folder and the name of its files there (a wreck's is
+  // "<id>_wreck"), whether it has one, and the levels' sources with its meshes in place
+  struct BuildPlan {
+    std::string skeletonMesh, own, preview, file;
+    bool previewed = false;
+    std::vector<LodSource> sources;
+  };
+  BuildPlan PlanBuild(const std::string& base, std::vector<LodSource> sources, bool original, const std::string& stem) const;
+  // [spikes] A kind's meshes made ahead on a thread of the cache's own (MakeAhead): what Build's LoadScm calls would make of
+  // its levels' files with the very inputs Build will give them (its plan, its skeleton, each level's flags), their buffers
+  // prepared on the device; Build takes each by those inputs (a key of them all) and finishes its buffers, and makes any it
+  // does not find as before. `what`, `base`, `stem`: as Build's. The levels' sources are `sources`, or where `blueprint` is
+  // named those ReadSources reads from it (a remastered wreck's: with its first mesh `first`, as RemasteredWreck has them).
+  // A wreck's textures named by its blueprint are listed for the frames' thread to make ahead (MeshesTextures).
+  struct MeshJob {
+    std::string what, base, stem;
+    std::vector<LodSource> sources;
+    std::string blueprint, first;
+    bool hitShapes = false;
+  };
+  struct MeshesAhead;                      // (models.cpp: the thread, its jobs, what it made)
+  std::unique_ptr<MeshesAhead> meshesAhead_;
+  void AskMeshes(MeshJob job);             // (these on the frames' thread)
+  bool MeshesPending(const std::string& what) const;
+  std::unique_ptr<ScmAhead> TakeScm(const std::string& key);
+  bool TakeBones(const std::string& skeletonMesh, std::vector<ModelBone>* out);
+  std::vector<std::string> MeshesTextures(const std::string& what);  // (taken: asked once)
+  void DropMeshes(const std::string& what);  // (what was made for it and not taken let go of; a job not begun dropped)
+  void MeshesRun();                          // (the meshes' thread)
+  void MeshesWork(const MeshJob& job);
   const Model* FromDisplay(const std::string& key, const std::string& base, const DisplayEntry& entry, const std::string& faction,
                            bool effect = false);
   // A blueprint file's levels: their file names, and the model's scale. False when it has none to draw.
@@ -309,12 +353,27 @@ class ModelCache {
   // that model is made already
   std::vector<std::string> UnitFiles(const std::string& unitId);
   bool UnitMade(const std::string& unitId);
-  struct Ahead {           // [hitches] (ReadAheadUpgrade)
-    std::string of, path;  // the unit kind that appeared, its blueprint file
-    std::string to;        // what it upgrades to (once its blueprint is read)
+  struct Ahead {           // [hitches] (ReadAheadUpgrade; [spikes] MakeAhead)
+    std::string of, path;  // the unit kind that appeared, its blueprint file (empty: asked for itself, MakeAhead)
+    std::string to;        // what it upgrades to (once its blueprint is read), or the kind asked for
     std::vector<std::string> files;
-    int stage = 0;  // 0 its blueprint being read, 1 the next tier's files being read, 2 their textures made, 3 the model
+    // 0 its blueprint being read, 1 the kind's textures and meshes being made (off the frames' thread), 3 the model,
+    // 4 a remastered kind's own wreck (its files asked for with the kind's)
+    int stage = 0;
+    bool wreck = false;  // [spikes] (it has a remastered wreck of its own: made after the model)
+    bool wreckAsked = false;              // [spikes] (its wreck's textures named by its blueprint asked for: wreckFiles)
+    std::vector<std::string> wreckFiles;
+    std::string meshesOf;                 // [spikes] (its meshes' job's `what`: MeshJob)
   };
+  void AskFiles(Ahead* a);  // [spikes] (a kind's files: its textures made ahead, its meshes too (MeshJob); stage 1)
+  void FinishAhead(size_t k);  // [spikes] (ahead_[k] done with: erased, what was made for it let go of)
+  // [spikes] (FromDisplay) the levels and scale a model from a blueprint file was made from, by its path
+  struct BuiltFrom {
+    std::vector<LodSource> sources;
+    float scale = 1;
+  };
+  std::unordered_map<std::string, BuiltFrom> builtFrom_;
+  static bool SameSources(const std::vector<LodSource>& a, const std::vector<LodSource>& b);
   std::vector<Ahead> ahead_;
   std::vector<std::string> aheadSeen_;  // (the kinds asked about, each once)
   bool makingAhead_ = false;

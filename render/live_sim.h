@@ -95,6 +95,9 @@ class LiveSim {
   void TakeCombat(FrameCombat* out) { frames_.TakeCombat(out); }
   // How the blueprints look as the simulation has them, once the game has started; handed over once.
   void TakeLooks(std::vector<BlueprintLook>* out) { frames_.TakeLooks(out); }
+  // [spikes] What the armies may build, for the renderer to make ahead (SimFrames::WatchBuildable, TakeBuildable).
+  void WatchBuildable(bool on) { frames_.WatchBuildable(on); }
+  void TakeBuildable(std::vector<std::string>* out) { frames_.TakeBuildable(out); }
   // The army the picture is for (from 1; 0: none, everything shows): see SimFrames::SetFocusArmy.
   void SetFocusArmy(int army) { frames_.SetFocusArmy(army); }
   // The grid of what the focus army sees (SimFrames::SetSightGrid, TakeSight).

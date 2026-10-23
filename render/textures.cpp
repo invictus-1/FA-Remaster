@@ -149,7 +149,178 @@ struct TextureCache::Later {
   }
 };
 
+// [spikes] MakeAhead's jobs: asked for on the frames' thread, worked on by two threads of their own (the file, the image, the
+// device's PrepareTexture), finished on the frames' thread (MakeAheadStep, or a Get that wants one).
+struct TextureCache::Making {
+  struct Job {
+    std::string key;
+    int detail = 0;
+    std::optional<std::string> bytes;  // (what Fetch had read already, handed over when asked)
+    Later* fetching = nullptr;         // (FetchLater has it or is reading it: taken from there)
+    bool begun = false, done = false;
+    bool missing = false;              // (no such file)
+    std::string error;                 // (its image could not be read, or the device refused it)
+    std::unique_ptr<gfx::Device::Prepared> prepared;
+    size_t dataSize = 0;
+  };
+  mutable std::mutex mutex;
+  std::condition_variable wake, done;
+  std::deque<Job*> queue, later;                              // (not begun, in the order asked; `later` once `queue` is done)
+  std::unordered_map<std::string, std::unique_ptr<Job>> jobs;  // (asked for, not finished)
+  std::deque<std::string> order;                              // (the keys in the order asked: finished in it)
+  bool stop = false;
+  std::vector<std::thread> threads;
+  void Run(const moho::Vfs* vfs, gfx::Device* device) {
+    std::unique_lock<std::mutex> lock(mutex);
+    for (;;) {
+      wake.wait(lock, [&] { return stop || !queue.empty() || !later.empty(); });
+      if (stop) return;
+      std::deque<Job*>& from = queue.empty() ? later : queue;
+      Job* job = from.front();
+      from.pop_front();
+      job->begun = true;
+      lock.unlock();
+      std::optional<std::string> file = std::move(job->bytes);
+      if (!file && job->fetching) file = job->fetching->Take(job->key);
+      if (!file) file = vfs->Exists(job->key) ? vfs->ReadFile(job->key) : std::nullopt;
+      if (!file) {
+        job->missing = true;
+      } else {
+        DdsImage image;
+        if (!ParseDds(*file, &image, &job->error)) {
+          if (job->error.empty()) job->error = "not a picture";
+        } else {
+          DropLargest(&image, job->detail);
+          job->dataSize = image.dataSize;
+          job->prepared = device->PrepareTexture(image.Desc());
+          if (!job->prepared) job->error = "the device refused it";
+        }
+      }
+      file.reset();
+      lock.lock();
+      job->done = true;
+      done.notify_all();
+    }
+  }
+};
+
+void TextureCache::MakeAhead(const std::vector<std::string>& paths, bool later) {
+  if (!making_) {
+    making_ = std::make_unique<Making>();
+    Making* m = making_.get();
+    const moho::Vfs* vfs = vfs_;
+    gfx::Device* device = device_;
+    for (int i = 0; i < 2; ++i) m->threads.emplace_back([m, vfs, device] { m->Run(vfs, device); });
+  }
+  bool any = false;
+  {
+    std::lock_guard<std::mutex> lock(making_->mutex);
+    for (const std::string& path : paths) {
+      std::string key = moho::Vfs::Normalize(path);
+      if (key.empty() || cache_.count(key) || making_->jobs.count(key)) continue;
+      auto job = std::make_unique<Making::Job>();
+      job->key = key;
+      job->detail = detail;
+      auto fetched = fetched_.find(key);
+      if (fetched != fetched_.end()) {  // (read already by Fetch: handed over)
+        job->bytes = std::move(fetched->second);
+        fetched_.erase(fetched);
+      } else if (later_) {
+        std::lock_guard<std::mutex> lockLater(later_->mutex);
+        if (later_->Knows(key)) job->fetching = later_.get();
+      }
+      (later ? making_->later : making_->queue).push_back(job.get());
+      making_->order.push_back(key);
+      making_->jobs.emplace(std::move(key), std::move(job));
+      any = true;
+    }
+  }
+  if (any) making_->wake.notify_all();
+}
+
+// (a job done: its texture made from what the threads prepared, into the cache; messages as Get's own; the job let go of.
+// The caller holds no lock; the job must be done.)
+gfx::Texture TextureCache::FinishAhead(const std::string& key) {
+  std::unique_ptr<Making::Job> job;
+  {
+    std::lock_guard<std::mutex> lock(making_->mutex);
+    auto it = making_->jobs.find(key);
+    if (it == making_->jobs.end() || !it->second->done) return {};
+    job = std::move(it->second);
+    making_->jobs.erase(it);
+  }
+  gfx::Texture t;
+  if (job->missing) {
+    fprintf(stderr, "render: texture %s: file not found\n", key.c_str());
+  } else if (!job->error.empty() && !job->prepared) {
+    fprintf(stderr, "render: texture %s: %s\n", key.c_str(), job->error.c_str());
+  } else {
+    const auto start = std::chrono::steady_clock::now();
+    t = device_->FinishTexture(std::move(job->prepared));
+    if (HitchLog::on) {  // (one that took long: named, its device's parts under it)
+      const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+      if (ms > 1) HitchLog::Add("texture finished " + key, ms, 1);
+    }
+    if (!t) fprintf(stderr, "render: texture %s: the device refused it\n", key.c_str());
+    else bytes += job->dataSize, madeAheadBytes += job->dataSize;
+  }
+  ++madeAhead;
+  cache_.emplace(key, t);
+  return t;
+}
+
+int TextureCache::MakeAheadStep(double budgetMs) {
+  if (!making_) return 0;
+  const auto start = std::chrono::steady_clock::now();
+  int finished = 0;
+  for (;;) {
+    std::string key;
+    {
+      std::lock_guard<std::mutex> lock(making_->mutex);
+      // (the first done in the order asked; one taken by a Get meanwhile is gone from the jobs)
+      while (!making_->order.empty() && !making_->jobs.count(making_->order.front())) making_->order.pop_front();
+      for (auto it = making_->order.begin(); it != making_->order.end(); ++it) {
+        auto job = making_->jobs.find(*it);
+        if (job == making_->jobs.end() || !job->second->done) continue;
+        key = *it;
+        making_->order.erase(it);
+        break;
+      }
+      if (key.empty()) break;
+    }
+    FinishAhead(key);
+    ++finished;
+    if (std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() >= budgetMs) break;
+  }
+  if (finished && HitchLog::on)
+    HitchLog::Add("textures made ahead: " + std::to_string(finished) + " finished, " + std::to_string(AheadLeft()) + " to come",
+                  std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+  return finished;
+}
+
+bool TextureCache::Ahead(const std::string& path) const {
+  if (!making_) return false;
+  std::lock_guard<std::mutex> lock(making_->mutex);
+  return making_->jobs.count(moho::Vfs::Normalize(path)) > 0;
+}
+
+size_t TextureCache::AheadLeft() const {
+  if (!making_) return 0;
+  std::lock_guard<std::mutex> lock(making_->mutex);
+  return making_->jobs.size();
+}
+
 TextureCache::~TextureCache() {
+  if (making_) {  // [spikes] (its threads stopped first: a job may be taking a file from FetchLater's)
+    {
+      std::lock_guard<std::mutex> lock(making_->mutex);
+      making_->stop = true;
+    }
+    making_->wake.notify_all();
+    for (std::thread& t : making_->threads)
+      if (t.joinable()) t.join();
+    making_.reset();  // (what was prepared and not finished let go of, while the device is there)
+  }
   if (!later_) return;
   {
     std::lock_guard<std::mutex> lock(later_->mutex);
@@ -171,7 +342,7 @@ void TextureCache::FetchLater(const std::vector<std::string>& paths) {
     std::lock_guard<std::mutex> lock(later_->mutex);
     for (const std::string& path : paths) {
       std::string key = moho::Vfs::Normalize(path);
-      if (key.empty() || cache_.count(key) || fetched_.count(key) || later_->Knows(key)) continue;
+      if (key.empty() || cache_.count(key) || fetched_.count(key) || later_->Knows(key) || (making_ && Ahead(key))) continue;  // ([spikes] Ahead)
       later_->taken.erase(key);
       later_->queue.push_back(std::move(key));
       any = true;
@@ -431,6 +602,7 @@ void TextureCache::Fetch(const std::vector<std::string>& paths) {
   for (const std::string& path : paths) {
     std::string key = moho::Vfs::Normalize(path);
     if (key.empty() || cache_.count(key) || fetched_.count(key) || std::find(wanted.begin(), wanted.end(), key) != wanted.end()) continue;
+    if (making_ && Ahead(key)) continue;  // [spikes] (being made ahead: its own threads read it)
     if (later_) {  // [hitches] (one FetchLater has read or is reading: ReadFile takes it; one still queued is read here)
       std::lock_guard<std::mutex> lock(later_->mutex);
       if (later_->ready.count(key) || later_->reading == key) continue;
@@ -472,6 +644,27 @@ gfx::Texture TextureCache::Get(const std::string& path, gfx::Texture fallback) {
   std::string key = moho::Vfs::Normalize(path);
   auto it = cache_.find(key);
   if (it != cache_.end()) return it->second ? it->second : fallback;
+  if (making_) {  // [spikes] asked for ahead (MakeAhead): waited for and finished here; one not begun is made here as below
+    std::unique_lock<std::mutex> lock(making_->mutex);
+    auto job = making_->jobs.find(key);
+    if (job != making_->jobs.end() && !job->second->begun) {
+      Making::Job* j = job->second.get();
+      for (std::deque<Making::Job*>* q : {&making_->queue, &making_->later}) {
+        auto at = std::find(q->begin(), q->end(), j);
+        if (at != q->end()) q->erase(at);
+      }
+      std::optional<std::string> given = std::move(j->bytes);
+      making_->jobs.erase(job);
+      lock.unlock();
+      if (given) fetched_.emplace(key, std::move(*given));  // (what it was handed: ReadFile below takes it)
+    } else if (job != making_->jobs.end()) {
+      HitchLog::Scope waited("texture made ahead, waited for:", key);
+      making_->done.wait(lock, [&] { return job->second->done; });
+      lock.unlock();
+      const gfx::Texture t = FinishAhead(key);
+      return t ? t : fallback;
+    }
+  }
   gfx::Texture t;
   HitchLog::Scope made("texture", key);  // [hitches]
   const size_t before = bytes;

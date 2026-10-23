@@ -449,7 +449,8 @@ void Tarmacs::Want(int material) {
   const std::string tier = TierOf(m);
   if (m.failed || m.tier == tier || m.aheadTier == tier) return;
   m.aheadTier = tier;
-  textures_->FetchLater({m.base + "albedo_" + tier + ".dds", m.base + "normal_" + tier + ".dds", m.base + "arh_" + tier + ".dds"});
+  // [spikes] (made ahead off the frames' thread, TextureCache::MakeAhead: was read ahead and made here one a frame, 5-8 ms each)
+  textures_->MakeAhead({m.base + "albedo_" + tier + ".dds", m.base + "normal_" + tier + ".dds", m.base + "arh_" + tier + ".dds"});
 }
 
 void Tarmacs::Ahead() {
@@ -458,15 +459,9 @@ void Tarmacs::Ahead() {
   for (Material& m : materials_) {
     if (m.failed || m.aheadTier.empty() || m.tier == m.aheadTier || m.aheadTier != TierOf(m)) continue;
     const std::string files[3] = {m.base + "albedo_" + m.aheadTier + ".dds", m.base + "normal_" + m.aheadTier + ".dds", m.base + "arh_" + m.aheadTier + ".dds"};
-    bool read = true;
-    for (const std::string& f : files) read = read && textures_->Arrived(f) != 0;
-    if (!read) continue;
-    for (const std::string& f : files)  // (one picture a frame, as Load gets it)
-      if (!textures_->Made(f) && textures_->Arrived(f) == 1) {
-        HitchLog::Scope made("remastered tarmac picture made ahead:", f);
-        textures_->Get(f, f == files[1] ? textures_->FlatNormal() : gfx::Texture{});
-        return;
-      }
+    bool made = true;  // [spikes] (its pictures made ahead, off the frames' thread: Want)
+    for (const std::string& f : files) made = made && !textures_->Ahead(f);
+    if (!made) continue;
     Load(m);  // (its pictures made already: Load takes them as they are)
     return;
   }

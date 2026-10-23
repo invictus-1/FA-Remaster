@@ -180,6 +180,11 @@
 //           (WorldPicture::SetMinimapMeshes: the pings', the interface's marks', stamped as the original draws them)
 // --no-minimap-resources  [minimap deposits] with --picture: the minimap without the deposits' icons (DrawMinimap's
 //           resourceIcons false, FAF's default for its minimap; without this they are laid at every call)
+// --minimap-test <n>[,<size>[,old]]  [spikes] with --picture --picture-window: the interface's frames as its host makes them (the
+//           world into the window, then the minimap at size x size, 300 unless given), n frames with the weather as it is,
+//           then n with the weather moved between every two (the minimap's ground drawn anew each time); each frame's time
+//           printed, the minimap after the last written beside the --picture file (_minimaptest.png); `old`: its ground drawn
+//           the way it was before (WorldPicture::minimapByResize), to compare
 // --range-fill  [range fill] with --ranges: the red group filled inside its lines (the original's range_Fill)
 // --no-hidden-outlines  no outlines of units hidden behind trees, cliffs and buildings (World::hiddenOutlines,
 //           hidden_outlines.h: on unless this is given, in the modern look); --hidden-outlines: on (as at first)
@@ -822,7 +827,9 @@ struct Options {
   std::vector<LiveSim::Setup::Upgrade> upgrades;  // [hitches] --upgrade-test
   bool minimapMeshes = false;                    // [pings] --minimap-meshes
   bool minimapResources = true;                  // [minimap deposits] --no-minimap-resources
-  bool rangeFill = false;                        // [range fill] --range-fill
+  int minimapTest = 0, minimapTestSize = 300;    // [spikes] --minimap-test
+  bool minimapTestOld = false;
+  bool rangeFill = false;                       // [range fill] --range-fill
   std::string enhancement;
   float soften = -1;                    // --soften
   std::vector<std::string> border;      // --border
@@ -1301,6 +1308,11 @@ bool ParseOptions(int argc, char** argv, Options* o) {
       }
     }
     else if (a == "--ping") o->pingAt = atoi(v);  // [pings] <beat>: every army pings near its commander then (a new game)
+    else if (a == "--minimap-test") {  // [spikes] <n>[,<size>]
+      if (sscanf(v, "%d,%d", &o->minimapTest, &o->minimapTestSize) < 1 || o->minimapTest <= 0) return false;
+      o->minimapTestOld = std::string(v).find(",old") != std::string::npos;
+      o->minimapTestSize = std::clamp(o->minimapTestSize, 16, 2048);
+    }
     else if (a == "--upgrade-test") {  // [hitches] <beat>,<x>,<z>[,<after>[,<from>,<to>]]
       char from[32] = "", to[32] = "";
       int at = 0, after = 30;
@@ -2949,6 +2961,12 @@ int main(int argc, char** argv) {
         int cells = 0;
         if (live.TakeSight(&seen, &cells)) world.sight.Set(seen, cells);
       }
+      if (liveReported) {  // [spikes] what the armies may build, made ahead (World::MakeAhead; asked of the simulation while readAhead is on)
+        live.WatchBuildable(world.readAhead);
+        std::vector<std::string> buildable;
+        live.TakeBuildable(&buildable);
+        if (!buildable.empty()) world.MakeAhead(buildable);
+      }
       // the simulation is asked to stay two beats ahead of what is shown, so there are always two to blend
       if (state == LiveSim::State::Running) live.RunTo(static_cast<uint32_t>(playTick) + 2);
       // --tick: run ahead to that tick as fast as the simulation goes, showing its newest beat on the way
@@ -3046,6 +3064,50 @@ int main(int argc, char** argv) {
         }
         printf("render: --picture-window: %.2f ms a frame (vertical sync off), the whole layer handed over each time\n",
                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / 30);
+      }
+      if (opt.minimapTest > 0) {  // [spikes] --minimap-test: the host's frames, the world then the minimap, the weather still, then moving
+        const int size = opt.minimapTestSize;
+        picture.minimapByResize = opt.minimapTestOld;
+        World* pw = picture.world();
+        std::vector<double> still, moved;
+        double worstStill = 0, worstMoved = 0;
+        for (int i = 0; i < 2 * opt.minimapTest; ++i) {
+          const bool moving = i >= opt.minimapTest;
+          const auto t0 = std::chrono::steady_clock::now();
+          picture.WaitForNextFrame();
+          picture.SetInterfaceLayer(layer.data(), w, h, w, 0, 0, 0, 0);
+          picture.DrawToWindow(camera, w, h, playTick + 1);
+          const auto t1 = std::chrono::steady_clock::now();
+          // (moving: the clouds a quarter more on every other call, so that the weather's number the minimap goes by moves by
+          // more than it redraws for between every two; put back after, for the world's next frame)
+          const float clouds = pw ? pw->cloudCover : 0;
+          if (moving && pw && (i & 1)) pw->cloudCover = clouds + 0.25f;
+          picture.DrawMinimap(size, size, opt.minimapResources);
+          if (pw) pw->cloudCover = clouds;
+          const auto t2 = std::chrono::steady_clock::now();
+          const double whole = std::chrono::duration<double, std::milli>(t2 - t0).count();
+          const double mini = std::chrono::duration<double, std::milli>(t2 - t1).count();
+          printf("render: --minimap-test: frame %d (%s): %.2f ms, the minimap %.2f ms of it\n", i, moving ? "weather moving" : "weather still", whole, mini);
+          (moving ? moved : still).push_back(whole);
+          (moving ? worstMoved : worstStill) = std::max(moving ? worstMoved : worstStill, whole);
+        }
+        auto median = [](std::vector<double> v) {
+          if (v.empty()) return 0.0;
+          std::nth_element(v.begin(), v.begin() + static_cast<std::ptrdiff_t>(v.size() / 2), v.end());
+          return v[v.size() / 2];
+        };
+        printf("render: --minimap-test: %dx%d minimap; a frame with the weather still %.2f ms (the median; longest %.2f), with it moving %.2f "
+               "(longest %.2f)\n", size, size, median(still), worstStill, median(moved), worstMoved);
+        const std::vector<uint32_t>& mini = picture.DrawMinimap(size, size, opt.minimapResources);
+        std::vector<uint8_t> bytes(mini.size() * 4);
+        for (size_t k = 0; k < mini.size(); ++k) {
+          bytes[k * 4] = static_cast<uint8_t>(mini[k] >> 16);
+          bytes[k * 4 + 1] = static_cast<uint8_t>(mini[k] >> 8);
+          bytes[k * 4 + 2] = static_cast<uint8_t>(mini[k]);
+          bytes[k * 4 + 3] = 255;
+        }
+        const std::string path = opt.picture.substr(0, opt.picture.rfind('.')) + "_minimaptest.png";
+        printf("render: --minimap-test: the minimap %s\n", WritePng(path, bytes.data(), size, size) ? path.c_str() : "could not be written");
       }
       break;
     }
@@ -3846,6 +3908,17 @@ int main(int argc, char** argv) {
           std::nth_element(times.begin(), times.begin() + 39, times.end(), std::greater<double>());
           floor = times[39];
           printf("render: hitch-log:   (%zu notes, the 40 longest)\n", notes.size());
+          // [spikes] (and all of them at the top, in sums by their first word: what the frame's many small ones add up to)
+          std::vector<std::pair<std::string, std::pair<int, double>>> sums;
+          for (const HitchLog::Note& n : notes) {
+            if (n.depth != 0) continue;
+            const std::string kind = (n.elsewhere ? "elsewhere: " : "") + n.what.substr(0, n.what.find(' '));
+            auto it = std::find_if(sums.begin(), sums.end(), [&](const auto& s) { return s.first == kind; });
+            if (it == sums.end()) it = sums.insert(sums.end(), {kind, {0, 0.0}});
+            ++it->second.first;
+            it->second.second += n.ms;
+          }
+          for (const auto& s : sums) printf("render: hitch-log:   (in all: %d %s, %.1f ms)\n", s.second.first, s.first.c_str(), s.second.second);
         }
         for (const HitchLog::Note& n : notes)
           if (n.ms >= floor)
@@ -3881,6 +3954,10 @@ int main(int argc, char** argv) {
       if (lights.mergedMost) printf(" (at most %d merged in a frame where squares were crowded)", lights.mergedMost);  // [unitfx]
       if (world.hotMetal) printf("; hot metal: %d glowing, %d lit, %d smoking", world.heat.glowing, world.heat.lit, world.heat.smoking);
       printf("; textures %.0f MB", static_cast<double>(world.textures.bytes) / (1 << 20));
+      if (world.textures.madeAhead || world.models.madeAhead || world.models.madeAlike)  // [spikes]
+        printf(" (made ahead: %d textures, %.0f MB of them; %d models, %d asked for and not made; %d models of the simulation's looks the same as their files')",
+               world.textures.madeAhead, static_cast<double>(world.textures.madeAheadBytes) / (1 << 20), world.models.madeAhead,
+               static_cast<int>(world.models.AheadLeft()), world.models.madeAlike);
       if (haveLive) printf("; scenery: %d changes, %d gone, %d made in the game standing, %d props of %d squares gone through; %zu script entities", world.propsChanged, world.propsGone, world.MadeProps(), world.propsAdded, world.propCellsSeen, frame.entities.size());
       if (haveLive) printf("; %d hits, %d impacts taken (%d, %d shown)", world.hitsTaken, world.impactsTaken, world.hitsShown, world.impactsShown);
       if (world.waterRipples) printf("; water ripples: %d splashes added, %d still swinging", world.water.ripples.Added(), world.water.ripples.Live());
