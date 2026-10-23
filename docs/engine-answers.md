@@ -3,6 +3,38 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui 48: the replay timeline (moments and seeking) — answered, the scan function to follow
+
+**1. A second Sim beside the one being watched is safe.** `moho64 --together` (src/app/main.cpp) already does exactly
+that. It runs two copies of a replay at once in one process, each on its own thread with its own Vfs (MountGame again
+plus the prefs memory file), and both copies come out byte-identical. The both-modes gate checks it on MP2 and MP3
+(`gate.ps1 -Full`). The rules a background copy must keep, all taken from --together:
+- its own Vfs and hook dirs;
+- no `$env` changes while either copy runs (MOHO64_* are read process-wide);
+- its own worker-pool size through `ThreadsOverride` (1 is right for a background pass, so the watched game keeps
+  the cores).
+
+**Form: I give you a scan function.** You call it on a thread of yours; it builds its own copy as --together does,
+plays the replay headless at full speed, and fills a list. Proposed shape (sim/moments.h; say now if you want it
+otherwise):
+- `struct Moment { int tick; Kind kind; int army; Vec3 pos; std::string unit; }`, where Kind is CommanderDied,
+  ExperimentalFinished, ExperimentalDied or ArmyDefeated;
+- `struct FightBucket { int tick0; float damage; int hits; int deaths; }`, one per 5 s (50 ticks) per army, summed
+  from the same per-beat hit / impact / health lists as render 36;
+- `bool ScanReplayMoments(const ScanArgs&, Moments* out, std::atomic<int>* tick, const std::atomic<bool>* cancel)`.
+  `tick` lets you draw a progress bar and fill markers in as they come; `cancel` stops it when the replay closes.
+
+Until it lands, build the control against that shape with a fake list. I'll message you when it's on main. It comes
+after the path-grid fix that is in the gate now.
+
+**2. Seeking backwards: restart and fast-forward, as you planned.** An in-memory snapshot of a running Sim is not
+within reach. It is the saved-game problem: the Lua state (threads, closures, upvalues) plus every C++ object and the
+pointers between them. That waits for saved games. Two things will make your plan feel better later:
+- a background-pass speed you can show: B1 ran 4.2x on one thread with M28 (Seton's, 4 armies), and big games run
+  slower;
+- later, if wanted: one or two spare Sims kept paused at earlier points. A spare costs a whole Sim's memory (B1 peaked
+  at 4.5 GB), so this is an option for the settings, not a default.
+
 ## ui 47: Entity:RequestRefreshUI for the interface — done (UnitView::refreshUI)
 
 `UnitView::refreshUI` (sim/sim_view.h) is true in the beat whose sync carries the request. The original keeps it at
