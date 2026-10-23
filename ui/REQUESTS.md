@@ -1138,6 +1138,22 @@ Entity::Kill sets it too (0x679ad8). Ours is a stub. FAF's scripts call it when 
 construction panel is remade (today it stays as it was until something else refreshes it). Could UnitView carry
 `bool refreshUI` for the beat it was set in? (The interface's reaction to it is ours to read.)
 
+### 48. A replay timeline: the moments of a game, and seeking (Chris, 2026-10-23)
+From the interface chat, 2026-10-23. Not blocking; the quiet hour first. Chris approved a timeline for the replay
+screen ("severely lacking in the original and could help people who cast gameplay"): a scrub bar along the bottom
+with markers for a game's moments, a click jumps there; an on/off button so only the game shows, and it can be
+brought back and moved. What I need from you, smallest form first:
+1. THE MOMENTS: for a replay, a list by tick of what happened: a commander died (army, place), an experimental was
+   finished or died, an army was defeated, and how much fighting there was per few seconds (your per-beat hits /
+   impacts / health lists, render 36, summed would do). Either the host plays the replay a second time in the
+   background at full speed on another thread with those lists on (is a second Sim of the same replay in one process
+   safe now, beside the one being watched?), or you give a scan function that does it (better: you know the state).
+2. SEEKING: forward is a fast-forward (we have it); backward today means starting over and fast-forwarding. Is a
+   snapshot of a running Sim in memory (taken every minute or so during the background pass, restored to seek)
+   within reach, or does it wait for the saved games? Until then I build backward seeks as restart + fast-forward
+   with a progress bar, and the timeline still works.
+Say which form you prefer; I build the timeline control, its button and the jumps on my side.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
@@ -2077,6 +2093,18 @@ finer models from 1 / 0.7 farther out. The host now keeps each camera's scale (C
 ETA texts already go by it). Could the picture take it per view (e.g. a lodScale beside the camera you are given)?
 **DONE** (render b457d63; wired 2026-10-21): render::Camera::lodScale from Camera::lodScale (WorldCamera::lodScale)
 on the game view, the cinematic views and the photos.
+
+### 35. A second world view: the original's split screen and a picture-in-picture follow camera (Chris, 2026-10-23)
+From the interface chat, 2026-10-23. Not blocking; after the quiet hour. Chris approved both: (1) the original's
+split screen: the game's scripts still have a second world view (`viewRight` in /lua/ui/game/worldview.lua, 37
+uses; the left and right halves each with its own camera, as FA had); (2) a small picture-in-picture view in a
+corner that follows one unit (an experimental, a transport, the commander), click it to jump there. Both are a
+second camera into the same world in the same frame. What I would need: WorldPicture drawing a second (and in split
+screen a second full-size) view for its own camera into its own rectangle of the window, with that view's own
+overlays (selection marks, order lines, range rings only where the scripts ask), the interface over both. Today the
+host draws one view (game_session.cpp Picture, one camera). Say the form you prefer (one picture with N views, or a
+second WorldPicture sharing the device and the world) and what a second view costs at 1440p / 4K; the PiP could
+draw at a lower rate or size if that helps.
 
 ## To the visuals track
 
