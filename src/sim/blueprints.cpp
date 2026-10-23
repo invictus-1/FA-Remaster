@@ -376,6 +376,11 @@ const BlueprintInfo* SimBlueprints::Find(const std::string& id) const {
   return it == byId_.end() ? nullptr : &all_[it->second];
 }
 
+const EffectBlueprint* SimBlueprints::FindEffect(const std::string& id) const {
+  auto it = effects_.find(Lower(id));
+  return it == effects_.end() ? nullptr : &it->second;
+}
+
 // SpecFootprints { {Name=, SizeX=, SizeZ=, Caps=, MinWaterDepth=, MaxWaterDepth=, MaxSlope=, Flags=}, ... }:
 // kept in order; a repeated name is ignored with a warning (as the original).
 void SimBlueprints::ReadFootprints(lua_State* L, int list) {
@@ -456,6 +461,20 @@ void SimBlueprints::CopyToSim(lua_State* rules, lua_State* sim) {
     lua_rawgeti(rules, -1, 1);
     BpKind kind = KindFromName(lua_tostring(rules, -1));
     lua_pop(rules, 1);
+    if (kind == BpKind::Emitter || kind == BpKind::TrailEmitter || kind == BpKind::Beam) {
+      // read from the rules state only (the sim state gets nothing of them); registered again: the later one
+      lua_rawgeti(rules, -1, 2);
+      lua_pushstring(rules, "BlueprintId");
+      lua_rawget(rules, -2);
+      const std::string id = lua_isstring(rules, -1) ? Lower(lua_tostring(rules, -1)) : "";
+      lua_pop(rules, 1);
+      lua_pushstring(rules, "Lifetime");
+      lua_rawget(rules, -2);
+      const float life = lua_type(rules, -1) == LUA_TNUMBER ? static_cast<float>(lua_tonumber(rules, -1))
+                                                            : (kind == BpKind::Beam ? 1.0f : 0.0f);
+      lua_pop(rules, 2);
+      if (!id.empty()) effects_[id] = EffectBlueprint{kind, life};
+    }
     if (kind != BpKind::Unit && kind != BpKind::Projectile && kind != BpKind::Prop && kind != BpKind::Mesh) {
       lua_pop(rules, 1);
       continue;

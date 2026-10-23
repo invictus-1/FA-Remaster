@@ -2153,6 +2153,7 @@ void Sim::PausedBeat() {
   // AdvanceBeat steps 15-19 run on paused beats too (beat_order.md 1), then Sim::Sync (EntityDB purge)
   if (rec_) RecorderBeat();
   ProcessDestroyQueue();
+  EffectsEndOfBeat(*this);  // steps 16-17: the destroyed effects and the expired decals are deleted
   QueueLateDestroys();
   ApplyFocusArmy();  // Sim::Sync's start
   UpdateIdPools();
@@ -2498,6 +2499,7 @@ void Sim::Tick() {
   phases.Lap(PhaseTimer::kProjectiles);
   ReconBeat(*this);  // army (tick % armies) updates its blips
   phases.Lap(PhaseTimer::kRecon);
+  EffectsTick(*this);  // step 11: the effect manager (sim+0x8c0 vt+0x34, 0x74a1ab), before the formation DB
   {
     // Step 11 (the formation DB) runs before step 13 (Entity::AdvanceCoords): motion only wrote each entity's
     // PENDING transform, so the formation update still sees every unit where it stood before this beat's
@@ -2533,6 +2535,7 @@ void Sim::Tick() {
   AdvanceIntelCoords(*this);  // moved intel sources move their circles
   phases.Lap(PhaseTimer::kAdvanceCoords);
   ProcessDestroyQueue();
+  EffectsEndOfBeat(*this);  // steps 16-17: the destroyed effects and the expired decals are deleted
   QueueLateDestroys();
   ApplyFocusArmy();  // Sim::Sync's start: a requested focus army, NoteFocusArmyChanged
   UpdateIdPools();  // EntityDb::Purge (Sim::Sync)
@@ -2555,8 +2558,12 @@ void Sim::Tick() {
         if (u->layer == "Air") ++flying;
       }
     }
-    Logf(LogLevel::Info, "moho64 stats tick %u: units %d (aircraft %d, flying %d, dying %d), created %d, projectiles %zu", tick_,
-         n, air, flying, dead, unitsCreated, projectiles.size());
+    size_t things = 0, fxLive = 0, decals = 0, heap = 0, threshold = 0;
+    EffectObjectCounts(*this, &things, &fxLive, &decals);
+    lua_gpg_gcbytes(state_->L(), &heap, &threshold);
+    Logf(LogLevel::Info, "moho64 stats tick %u: units %d (aircraft %d, flying %d, dying %d), created %d, projectiles %zu; "
+         "lua heap %zu KB (collector threshold %zu KB), effect/decal/manipulator objects %zu (effects %zu, decals to expire %zu)",
+         tick_, n, air, flying, dead, unitsCreated, projectiles.size(), heap >> 10, threshold >> 10, things, fxLive, decals);
   }
 }
 

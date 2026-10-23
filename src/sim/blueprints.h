@@ -44,6 +44,16 @@ struct BlueprintInfo {
 };
 
 
+// An effect blueprint (Emitter, TrailEmitter, Beam). The engine keeps these in the rules (RRuleGameRules::
+// GetEmitterBlueprint 0x52aef0, GetTrailBlueprint 0x52b090, GetBeamBlueprint 0x52afc0), not in the sim's
+// __blueprints; the effect manager reads only their Lifetime (sim/effects.cpp). Without the field, the blueprint
+// ctors' defaults: emitter 0 (REmitterBlueprint +0x23c, 0x50ea7e), trail 0 (RTrailBlueprint +0x28, 0x50edae), beam 1
+// (RBeamBlueprint +0x2c, 0x50ef1a).
+struct EffectBlueprint {
+  BpKind kind;
+  float lifetime;
+};
+
 class SimBlueprints {
  public:
   // false: keep the script tables as they are (to regenerate defaults with tools/gen_bp_defaults.py)
@@ -56,6 +66,8 @@ class SimBlueprints {
   void CopyToSim(lua_State* rules, lua_State* sim);
 
   const BlueprintInfo* Find(const std::string& id) const;
+  // An effect blueprint by its id (lower case, as Find), or nullptr.
+  const EffectBlueprint* FindEffect(const std::string& id) const;
   const BlueprintInfo* ByEntityIndex(int i) const { return entities_[i]; }
   int EntityCount() const { return static_cast<int>(entities_.size()); }
   // 64-bit words in a category set over these blueprints (set by CopyToSim; multicore step 1: it was process-wide)
@@ -81,6 +93,7 @@ class SimBlueprints {
   std::vector<BlueprintInfo> all_;
   std::vector<const BlueprintInfo*> entities_;
   std::unordered_map<std::string, size_t> byId_;  // lower-case id -> index in all_
+  std::unordered_map<std::string, EffectBlueprint> effects_;  // lower-case id -> effect blueprint (read by CopyToSim)
   std::map<std::string, std::vector<int>> categories_;
   int words_ = 1;
 };
