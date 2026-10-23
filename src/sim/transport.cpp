@@ -647,9 +647,8 @@ bool FootprintFitsHere(Sim& sim, const Unit* cu) {
   const NamedFootprint& fp = Fp(cu);
   int cx = static_cast<int>(std::nearbyint(cu->position.x - fp.sizeX * 0.5f));
   int cz = static_cast<int>(std::nearbyint(cu->position.z - fp.sizeZ * 0.5f));
-  const PathGrid* g = sim.navigation().Grid(fp);
-  if (!g) return true;
-  int caps = g->Caps(cx, cz);
+  if (!sim.navigation().HasMap()) return true;
+  int caps = sim.navigation().CellCaps(fp, cx, cz);  // (Grid(fp)->Caps without making the grid)
   caps = sim.navigation().FootprintFits(static_cast<uint8_t>(caps), fp, cx, cz);
   return caps != 0;
 }

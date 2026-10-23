@@ -669,8 +669,7 @@ bool CanLandAt(Sim& sim, Unit* u, int cx, int cz, const Vec3& w, int S, int caps
   char key[96];
   std::snprintf(key, sizeof key, "__air_land_%d_%d_%a_%a", S, caps, fp.maxSlope, fp.minWaterDepth);
   fp.name = key;
-  const PathGrid* g = sim.navigation().Grid(fp);
-  int c = g ? g->Caps(cx, cz) : 0;
+  int c = sim.navigation().CellCaps(fp, cx, cz);  // (Grid(fp)->Caps without making the grid)
   if (u->layer == "Water") c &= ~kSub;
   c = FitsCaps(static_cast<uint8_t>(c), (fp.flags & 1) != 0, sim.navigation().AnyStructureIn(cx, cz, cx + S, cz + S, kOccLand),
                sim.navigation().AnyStructureIn(cx, cz, cx + S, cz + S, kOccWater));
@@ -756,8 +755,7 @@ bool GroundSpotOkImpl(Sim& sim, Unit* u, const NamedFootprint& fp, int cx, int c
     *why = "outside";
     return false;
   }
-  const PathGrid* g = sim.navigation().Grid(fp);
-  int c = g ? g->Caps(cx, cz) : 0;
+  int c = sim.navigation().CellCaps(fp, cx, cz);  // (Grid(fp)->Caps without making the grid)
   if (u->layer == "Water") c &= ~kSub;
   c = sim.navigation().FootprintFits(static_cast<uint8_t>(c), fp, cx, cz);
   if (!c) {
@@ -2159,8 +2157,7 @@ void GroundFreeRect(Sim& sim, Unit* u) { GroundFreeRectImpl(sim, u); }
 bool GroundCanReserveRect(Sim& sim, Unit* u, const int r[4]) { return GroundCanReserve(sim, u, r); }
 bool GroundCellFits(Sim& sim, Unit* u, int cx, int cz) {  // as GroundSpotOkImpl's "caps" test
   const NamedFootprint& fp = UnitFootprint(u);
-  const PathGrid* g = sim.navigation().Grid(fp);
-  int c = g ? g->Caps(cx, cz) : 0;
+  int c = sim.navigation().CellCaps(fp, cx, cz);  // (Grid(fp)->Caps without making the grid)
   if (u->layer == "Water") c &= ~kSub;
   c = sim.navigation().FootprintFits(static_cast<uint8_t>(c), fp, cx, cz);
   return c != 0;

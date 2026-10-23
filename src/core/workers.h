@@ -56,6 +56,9 @@ class ThreadsOverride {
   int was_;
 };
 ParCheck ParCheckFromEnvironment();  // MOHO64_PAR_CHECK
+// A ParallelFor task runs on this thread now (on a worker, or on the calling thread inside ParallelFor): work that could
+// split itself over the pool (a path grid's build) does not start another stage from inside one.
+bool InParallelTask();
 
 // The profiler's parallel view (MOHO64_PROFILE; docs/multicore.md 2), one per pool and so one per Sim (multicore
 // step 1: no process-wide state). Per stage: its calls, its wall time, its tasks' summed busy time, the speed-up

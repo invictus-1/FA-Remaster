@@ -8,7 +8,9 @@
 #include <string>
 #include <queue>
 
+#include "core/log.h"
 #include "core/profile.h"
+#include "core/workers.h"
 #include "sim/terrain.h"
 
 namespace moho {
@@ -44,9 +46,174 @@ static uint8_t MobileCheckCaps(const TerrainMap& map, const NamedFootprint& fp, 
   return caps;
 }
 
-PathGrid::PathGrid(const TerrainMap& map, const NamedFootprint& fp, const bool* blocking) {
+// MobileCheckCapsRect's buffers, kept between calls: a run of small rects (the deferred terrain changes) allocates
+// nothing once they have grown.
+struct GridScratch {
+  template <class T>
+  struct Bufs {
+    std::vector<T> rows, a, b;
+  };
+  std::vector<uint16_t> hv, lo, hi;
+  std::vector<uint8_t> bl, anyBlocked;
+  std::vector<float> dx, dz, stepX, stepZ;
+  Bufs<uint16_t> b16;
+  Bufs<uint8_t> b8;
+  Bufs<float> bf;
+};
+
+namespace {
+template <class T>
+void Grow(std::vector<T>& v, size_t n) {
+  if (v.size() < n) v.resize(n);  // (never shrinks: the buffers keep their largest size)
+}
+
+// out[i * step] = op over in[i * step .. (i + k - 1) * step] for i in [0, n - k]: the window's min or max by doubling
+// (a[i] holds op over [i, i + len); the last step's two windows overlap, which an idempotent op allows), exact
+// whatever the order, as min / max of exact values are.
+template <class T, class Op>
+void Window1D(const T* in, int n, int k, size_t step, T* out, std::vector<T>& a, std::vector<T>& b, Op op) {
+  Grow(a, static_cast<size_t>(n));
+  Grow(b, static_cast<size_t>(n));
+  for (int i = 0; i < n; ++i) a[i] = in[i * step];
+  int len = 1;
+  while (len * 2 <= k) {
+    for (int i = 0; i + 2 * len <= n; ++i) b[i] = op(a[i], a[i + len]);
+    a.swap(b);
+    len *= 2;
+  }
+  for (int i = 0; i + k <= n; ++i) out[i * step] = op(a[i], a[i + k - len]);
+}
+
+// The window [x, x + kx) x [z, z + kz) of a W x H array (row stride W), for every (x, z) whose window lies inside:
+// out is (W - kx + 1) x (H - kz + 1), row stride W - kx + 1. Rows first, then columns.
+template <class T, class Op>
+void Window2D(const T* in, int W, int H, int kx, int kz, std::vector<T>& out, GridScratch::Bufs<T>& bufs, Op op) {
+  const int OW = W - kx + 1, OH = H - kz + 1;
+  Grow(bufs.rows, static_cast<size_t>(OW) * H);
+  for (int z = 0; z < H; ++z)
+    Window1D(in + static_cast<size_t>(z) * W, W, kx, 1, &bufs.rows[static_cast<size_t>(z) * OW], bufs.a, bufs.b, op);
+  Grow(out, static_cast<size_t>(OW) * OH);
+  for (int x = 0; x < OW; ++x) Window1D(&bufs.rows[x], H, kz, static_cast<size_t>(OW), &out[x], bufs.a, bufs.b, op);
+}
+
+// MOHO64_DEBUG_GRIDCHECK=1: every grid built and every rect of terrain changes taken is compared, cell by cell, with
+// MobileCheckCaps (the proof that MobileCheckCapsRect is exact), and CellCaps counts its lookups per key; both are
+// logged when the Navigation goes. Off (the default): nothing is checked or counted.
+bool GridCheck() {
+  static const bool on = [] {
+    const char* v = std::getenv("MOHO64_DEBUG_GRIDCHECK");
+    return v && *v && *v != '0';
+  }();
+  return on;
+}
+struct GridCheckCounts {
+  uint64_t grids = 0, rects = 0, cells = 0, diffs = 0;
+};
+GridCheckCounts g_check;  // (the debug switch only; written on the sim's own thread)
+
+void CheckCells(const TerrainMap& map, const NamedFootprint& fp, const bool* blocking, int x0, int z0, int x1, int z1,
+                const uint8_t* cells, const char* what) {
+  const int w = map.width();
+  uint64_t diffs = 0;
+  for (int z = z0; z <= z1; ++z)
+    for (int x = x0; x <= x1; ++x) {
+      const uint8_t want = MobileCheckCaps(map, fp, blocking, x, z), got = cells[static_cast<size_t>(z) * w + x];
+      ++g_check.cells;
+      if (want == got) continue;
+      if (++diffs <= 5)
+        Logf(LogLevel::Info, "gridcheck: DIFF %s %s/%dx%d/%d at (%d, %d): fast %d, MobileCheckCaps %d", what,
+             fp.name.c_str(), fp.sizeX, fp.sizeZ, fp.caps, x, z, got, want);
+    }
+  g_check.diffs += diffs;
+}
+}  // namespace
+
+// MobileCheckCaps for every origin of [ox0, ox1] x [oz0, oz1] (inclusive; clamped to the map) into cells (row stride
+// = the map's width), the same values bit for bit, at a cost per origin that hardly grows with the footprint (mp2's
+// prototype, 2026-10-21, _scratch\engine\keep_20261021\mp2b\patches\grid_fast_core_excerpt.cpp). MobileCheckCaps'
+// tests over the footprint's (sizeX + 1) x (sizeZ + 1) vertices are each a window's min or max, taken separably
+// (rows, then columns):
+// - the lowest and the highest height: the min / max of the raw values, scaled as HeightAt scales them afterwards
+//   (raw -> raw * scale is monotonic, so the min of the scaled values is the scaled min: the same float);
+// - a blocking terrain type at any covered cell: the max of 0 / 1;
+// - the largest step between neighbours along x (cells x .. x + sizeX - 1, rows z .. z + sizeZ) and along z: the max
+//   of the same fabs(HeightAt - HeightAt) floats MobileCheckCaps takes; it starts its max at 0, as here.
+// Then the same tests on the same floats. An origin whose footprint does not fit inside the map is 0.
+static void MobileCheckCapsRect(const TerrainMap& map, const NamedFootprint& fp, const bool* blocking, int ox0, int oz0,
+                                int ox1, int oz1, uint8_t* cells, GridScratch& s) {
+  const int w = map.width(), h = map.height();
+  const int sx = std::max<int>(1, fp.sizeX), sz = std::max<int>(1, fp.sizeZ);
+  ox0 = std::max(ox0, 0);
+  oz0 = std::max(oz0, 0);
+  ox1 = std::min(ox1, w - 1);
+  oz1 = std::min(oz1, h - 1);
+  if (ox1 < ox0 || oz1 < oz0) return;
+  // the origins that can hold the footprint: x + sx <= w - 1, z + sz <= h - 1 (MobileCheckCaps' first test)
+  const int ax1 = std::min(ox1, w - 1 - sx), az1 = std::min(oz1, h - 1 - sz);
+  for (int z = oz0; z <= oz1; ++z)
+    for (int x = (z <= az1 ? std::max(ox0, ax1 + 1) : ox0); x <= ox1; ++x) cells[static_cast<size_t>(z) * w + x] = 0;
+  if (ax1 < ox0 || az1 < oz0) return;
+  const int nx = ax1 - ox0 + 1, nz = az1 - oz0 + 1;
+  const int VX = nx + sx, VZ = nz + sz;  // the vertices (and the cells, for the types) the windows cover
+  const uint16_t* raw = map.heightData();
+  const size_t rs = static_cast<size_t>(w) + 1;  // the heightfield's row stride
+  const float scale = map.heightScale();
+  const size_t nv = static_cast<size_t>(VX) * VZ;
+  Grow(s.hv, nv);
+  Grow(s.bl, nv);
+  for (int j = 0; j < VZ; ++j) {
+    const uint16_t* row = raw + static_cast<size_t>(oz0 + j) * rs + ox0;
+    uint16_t* hv = &s.hv[static_cast<size_t>(j) * VX];
+    uint8_t* bl = &s.bl[static_cast<size_t>(j) * VX];
+    for (int i = 0; i < VX; ++i) {
+      hv[i] = row[i];
+      bl[i] = blocking && blocking[map.TerrainType(ox0 + i, oz0 + j)] ? 1 : 0;
+    }
+  }
+  const auto mn16 = [](uint16_t a, uint16_t b) { return std::min(a, b); };
+  const auto mx16 = [](uint16_t a, uint16_t b) { return std::max(a, b); };
+  const auto mx8 = [](uint8_t a, uint8_t b) { return std::max(a, b); };
+  const auto mxf = [](float a, float b) { return std::max(a, b); };
+  Window2D(s.hv.data(), VX, VZ, sx + 1, sz + 1, s.lo, s.b16, mn16);
+  Window2D(s.hv.data(), VX, VZ, sx + 1, sz + 1, s.hi, s.b16, mx16);
+  Window2D(s.bl.data(), VX, VZ, sx + 1, sz + 1, s.anyBlocked, s.b8, mx8);
+  if ((fp.caps & 3) && fp.maxSlope != 0.0f) {
+    auto Hf = [&](int i, int j) { return raw[static_cast<size_t>(oz0 + j) * rs + ox0 + i] * scale; };  // HeightAt
+    Grow(s.dx, static_cast<size_t>(VX - 1) * VZ);
+    Grow(s.dz, static_cast<size_t>(VX) * (VZ - 1));
+    for (int j = 0; j < VZ; ++j)
+      for (int i = 0; i + 1 < VX; ++i) s.dx[static_cast<size_t>(j) * (VX - 1) + i] = std::fabs(Hf(i + 1, j) - Hf(i, j));
+    for (int j = 0; j + 1 < VZ; ++j)
+      for (int i = 0; i < VX; ++i) s.dz[static_cast<size_t>(j) * VX + i] = std::fabs(Hf(i, j + 1) - Hf(i, j));
+    Window2D(s.dx.data(), VX - 1, VZ, sx, sz + 1, s.stepX, s.bf, mxf);  // cx in [x, x + sx), cz in [z, z + sz]
+    Window2D(s.dz.data(), VX, VZ - 1, sx + 1, sz, s.stepZ, s.bf, mxf);  // cx in [x, x + sx], cz in [z, z + sz)
+  }
+  const float water = map.hasWater ? map.waterElevation : -10000.0f;
+  for (int j = 0; j < nz; ++j) {
+    uint8_t* out = cells + static_cast<size_t>(oz0 + j) * w + ox0;
+    for (int i = 0; i < nx; ++i) {
+      const size_t k = static_cast<size_t>(j) * nx + i;
+      uint8_t caps = 0;
+      if (!s.anyBlocked[k]) {
+        const float lo = s.lo[k] * scale, hi = s.hi[k] * scale;
+        caps = fp.caps;
+        if (water - hi < fp.minWaterDepth) caps &= 0xf1;  // as MobileCheckCaps
+        if (water - lo > fp.maxWaterDepth) caps &= 0xfc;
+        if ((caps & 3) && fp.maxSlope != 0.0f) {
+          const float step = std::max(0.0f, std::max(s.stepX[k], s.stepZ[k]));
+          if (fp.maxSlope < step) caps &= 0xfc;
+        }
+      }
+      out[i] = caps;
+    }
+  }
+}
+
+PathGrid::PathGrid(const TerrainMap& map, const NamedFootprint& fp, const bool* blocking, GridScratch* scratch,
+                   WorkerPool* pool) {
   map_ = &map;
   blocking_ = blocking;
+  scratch_ = scratch;
   w_ = map.width();
   h_ = map.height();
   cells_.assign(static_cast<size_t>(w_) * h_, 0);
@@ -56,8 +223,27 @@ PathGrid::PathGrid(const TerrainMap& map, const NamedFootprint& fp, const bool* 
   fp_ = fp;
   sizeX = std::max<int>(1, fp.sizeX);
   sizeZ = std::max<int>(1, fp.sizeZ);
-  for (int z = 0; z < h_; ++z)
-    for (int x = 0; x < w_; ++x) cells_[static_cast<size_t>(z) * w_ + x] = MobileCheckCaps(map, fp, blocking, x, z);
+  // In bands of rows: each band is MobileCheckCapsRect over its own origins (its windows read sizeZ vertex rows past
+  // its end), so every cell is the same whichever thread takes its band, and however many threads there are.
+  constexpr int kBand = 64;
+  const size_t bands = static_cast<size_t>((h_ + kBand - 1) / kBand);
+  auto band = [&](size_t b, GridScratch& s) {
+    const int z0 = static_cast<int>(b) * kBand;
+    MobileCheckCapsRect(map, fp, blocking, 0, z0, w_ - 1, std::min(h_ - 1, z0 + kBand - 1), cells_.data(), s);
+  };
+  if (pool && !InParallelTask()) {
+    std::vector<GridScratch> per(static_cast<size_t>(pool->Threads()));  // (each worker slot's own buffers)
+    pool->ParallelFor("path grid build", bands, 1, [&](size_t b, size_t e, int worker) {
+      for (size_t i = b; i < e; ++i) band(i, per[static_cast<size_t>(worker)]);
+    });
+  } else {
+    GridScratch local;
+    for (size_t i = 0; i < bands; ++i) band(i, scratch ? *scratch : local);
+  }
+  if (GridCheck()) {
+    ++g_check.grids;
+    CheckCells(map, fp, blocking, 0, 0, w_ - 1, h_ - 1, cells_.data(), "grid");
+  }
 }
 
 void PathGrid::TerrainChanged(int vx0, int vz0, int vx1, int vz1) {
@@ -86,10 +272,15 @@ void PathGrid::TerrainChanged(int vx0, int vz0, int vx1, int vz1) {
 
 void PathGrid::ApplyTerrainChanges() const {
   if (!pendingAny_) return;
-  for (const Rect& r : pending_)
-    for (int z = r.z0; z <= r.z1; ++z)
-      for (int x = r.x0; x <= r.x1; ++x)
-        cells_[static_cast<size_t>(z) * w_ + x] = MobileCheckCaps(*map_, fp_, blocking_, x, z);
+  GridScratch local;  // (only when the grid was made without Navigation's buffers)
+  GridScratch& s = scratch_ ? *scratch_ : local;
+  for (const Rect& r : pending_) {
+    MobileCheckCapsRect(*map_, fp_, blocking_, r.x0, r.z0, r.x1, r.z1, cells_.data(), s);
+    if (GridCheck()) {
+      ++g_check.rects;
+      CheckCells(*map_, fp_, blocking_, r.x0, r.z0, r.x1, r.z1, cells_.data(), "rect");
+    }
+  }
   pending_.clear();
   pendingAny_ = false;
 }
@@ -101,6 +292,43 @@ void Navigation::TerrainChanged(int vx0, int vz0, int vx1, int vz1) {
 
 uint8_t Navigation::MobileCaps(const NamedFootprint& fp, int x, int z) const {
   return map_ ? MobileCheckCaps(*map_, fp, blocking_.data(), x, z) : 0;
+}
+
+namespace {
+std::string GridKey(const NamedFootprint& fp) {
+  std::string key = fp.name;
+  key += '/' + std::to_string(fp.sizeX) + 'x' + std::to_string(fp.sizeZ) + '/' + std::to_string(fp.caps) + '/' +
+         std::to_string(fp.flags & 1);
+  return key;
+}
+}  // namespace
+
+Navigation::Navigation(const TerrainMap* map) : map_(map), scratch_(std::make_unique<GridScratch>()) {
+  blocking_.fill(false);
+}
+
+Navigation::~Navigation() {
+  if (!GridCheck()) return;
+  for (const auto& [key, n] : cellCounts_)
+    Logf(LogLevel::Info, "gridcheck: lookups %s %llu (on its grid %llu, without %llu)%s", key.c_str(),
+         static_cast<unsigned long long>(n.first + n.second), static_cast<unsigned long long>(n.first),
+         static_cast<unsigned long long>(n.second), grids_.count(key) ? ", grid made" : "");
+  Logf(LogLevel::Info, "gridcheck: %llu grids, %llu rects, %llu cells compared, %llu diffs",
+       static_cast<unsigned long long>(g_check.grids), static_cast<unsigned long long>(g_check.rects),
+       static_cast<unsigned long long>(g_check.cells), static_cast<unsigned long long>(g_check.diffs));
+  std::fprintf(stderr, "gridcheck: %llu grids, %llu rects, %llu cells compared, %llu diffs\n",
+               static_cast<unsigned long long>(g_check.grids), static_cast<unsigned long long>(g_check.rects),
+               static_cast<unsigned long long>(g_check.cells), static_cast<unsigned long long>(g_check.diffs));
+}
+
+uint8_t Navigation::CellCaps(const NamedFootprint& fp, int x, int z) {
+  if (!map_) return 0;
+  const std::string key = GridKey(fp);
+  auto it = grids_.find(key);
+  if (GridCheck()) ++(it != grids_.end() ? cellCounts_[key].first : cellCounts_[key].second);
+  if (it != grids_.end()) return it->second->Caps(x, z);
+  const NamedFootprint& first = cellFp_.try_emplace(key, fp).first->second;
+  return MobileCheckCaps(*map_, first, blocking_.data(), x, z);
 }
 
 void PathGrid::Block(int x0, int z0, int x1, int z1, int delta, uint8_t occ) {
@@ -173,14 +401,16 @@ bool Navigation::AnyStructureIn(int x0, int z0, int x1, int z1, uint8_t occ) con
 
 const PathGrid* Navigation::Grid(const NamedFootprint& fp) {
   if (!map_) return nullptr;
-  std::string key = fp.name;
-  key += '/' + std::to_string(fp.sizeX) + 'x' + std::to_string(fp.sizeZ) + '/' + std::to_string(fp.caps) + '/' +
-         std::to_string(fp.flags & 1);
+  const std::string key = GridKey(fp);
   auto it = grids_.find(key);
   if (it != grids_.end()) return it->second.get();
   prof::SectionTimer sec(prof::kSecPathGridMade);  // (MOHO64_PROFILE_HITCH only: which grid, and its time)
   const double hitchT0 = prof::Hitch() ? prof::NowMs() : 0;
-  auto g = std::make_unique<PathGrid>(*map_, fp, blocking_.data());
+  // (a key CellCaps answered first: the grid is made from the footprint it was first asked with, as that first call
+  // would have made it)
+  auto first = cellFp_.find(key);
+  const NamedFootprint& from = first != cellFp_.end() ? first->second : fp;
+  auto g = std::make_unique<PathGrid>(*map_, from, blocking_.data(), scratch_.get(), pool_);
   if (!occ_.empty())  // (the held cells as they are now: SetCells keeps each grid's counts after this)
     for (int z = 0; z < map_->height(); ++z)
       for (int x = 0; x < map_->width(); ++x) {
@@ -190,6 +420,7 @@ const PathGrid* Navigation::Grid(const NamedFootprint& fp) {
       }
   const PathGrid* r = g.get();
   grids_[key] = std::move(g);
+  if (first != cellFp_.end()) cellFp_.erase(first);
   if (prof::Hitch()) prof::AddCall("path grid made " + key, prof::NowMs() - hitchT0);
   return r;
 }

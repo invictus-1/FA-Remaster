@@ -24,6 +24,8 @@
 namespace moho {
 
 class TerrainMap;
+class WorkerPool;
+struct GridScratch;  // MobileCheckCapsRect's buffers (navigation.cpp)
 
 // Layer bits as in /lua/footprints.lua.
 enum : uint8_t { kLayerLand = 1, kLayerSeabed = 2, kLayerSub = 4, kLayerWater = 8, kLayerAir = 16 };
@@ -43,7 +45,10 @@ inline uint8_t FitsCaps(uint8_t caps, bool ignoreStructures, bool landHeld, bool
 
 class PathGrid {
  public:
-  PathGrid(const TerrainMap& map, const NamedFootprint& fp, const bool* blockingTypes);
+  // Every cell's caps taken at once by MobileCheckCapsRect (navigation.cpp), in bands of rows on `pool` when one is
+  // given and this is not inside a parallel stage. `scratch`: the buffers its later terrain changes use (Navigation's).
+  PathGrid(const TerrainMap& map, const NamedFootprint& fp, const bool* blockingTypes, GridScratch* scratch = nullptr,
+           WorkerPool* pool = nullptr);
   int width() const { return w_; }
   int height() const { return h_; }
   // Can the footprint's origin cell be (x, z)? (terrain, and no structure in the way: OCCUPY_FootprintFits)
@@ -93,6 +98,7 @@ class PathGrid {
   NamedFootprint fp_;
   const TerrainMap* map_ = nullptr;
   const bool* blocking_ = nullptr;  // Navigation's blocking terrain types
+  GridScratch* scratch_ = nullptr;  // Navigation's (ApplyTerrainChanges runs on one thread)
   struct Rect {
     int x0, z0, x1, z1;  // origins [x0, x1] x [z0, z1]
   };
@@ -112,7 +118,11 @@ struct OccupiedRect {
 
 class Navigation {
  public:
-  explicit Navigation(const TerrainMap* map) : map_(map) { blocking_.fill(false); }
+  explicit Navigation(const TerrainMap* map);
+  ~Navigation();
+  // The sim's worker pool: a new grid's build splits into bands of rows on it (PathGrid's ctor).
+  void SetWorkers(WorkerPool* pool) { pool_ = pool; }
+  bool HasMap() const { return map_ != nullptr; }
   void SetBlockingTerrainType(int code, bool blocking) {
     for (auto& [key, g] : grids_) g->ApplyTerrainChanges();  // (what is pending was measured with the old types)
     if (code >= 0 && code < 256) blocking_[code] = blocking;
@@ -126,6 +136,14 @@ class Navigation {
   bool IsBlockingType(int code) const { return code >= 0 && code < 256 && blocking_[code]; }
   // OCCUPY_MobileCheck 0x564ab0 at one origin cell (what Grid(fp)->Caps(x, z) holds), without making the grid.
   uint8_t MobileCaps(const NamedFootprint& fp, int x, int z) const;
+  // Grid(fp)->Caps(x, z) for a single cell, without making the grid: the grid's cell when the footprint's grid
+  // exists, else MobileCheckCaps there, from the footprint the grid would be made from (the first one to ask for its
+  // key: Grid() then makes it from that one, as it would have been made at that first call). A grid holds
+  // MobileCheckCaps of the map as it is now (its pending terrain changes are taken at the read), so the answer is
+  // the grid's whichever way. For the single-cell readers (StartingLayer, a flyer's landing and ground spots,
+  // a transport's drop): a footprint without a named one (a structure's own, an air landing's S x S) cost a whole
+  // grid at its first such read (141-1240 ms, mp2 2026-10-21).
+  uint8_t CellCaps(const NamedFootprint& fp, int x, int z);
   // Waypoints from `from` to `to` (world positions; the footprint's centre). The last waypoint is
   // `to`, or the nearest reachable cell to it. Returns false when no path exists at all.
   bool FindPath(const NamedFootprint& fp, const Vec3& from, const Vec3& to, std::vector<Vec3>* out);
@@ -159,6 +177,10 @@ class Navigation {
   const TerrainMap* map_;
   std::array<bool, 256> blocking_;
   std::map<std::string, std::unique_ptr<PathGrid>> grids_;
+  std::map<std::string, NamedFootprint> cellFp_;  // CellCaps: the footprint each grid-less key was first asked with
+  WorkerPool* pool_ = nullptr;
+  std::unique_ptr<GridScratch> scratch_;  // the grids' terrain changes (one thread)
+  std::map<std::string, std::pair<uint64_t, uint64_t>> cellCounts_;  // MOHO64_DEBUG_GRIDCHECK: CellCaps (grid, none)
   std::vector<OccupiedRect> structures_;
   std::vector<uint8_t> occ_;       // land grid: the occupancy bit of each map cell
   std::vector<uint8_t> occWater_;  // water grid

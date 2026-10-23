@@ -77,6 +77,8 @@ ThreadsOverride::ThreadsOverride(int n) : was_(t_threads) {
 }
 ThreadsOverride::~ThreadsOverride() { t_threads = was_; }
 
+bool InParallelTask() { return t_inTask; }
+
 int ThreadsFromEnvironment() {
   if (t_threads > 0) return t_threads;
   const char* v = std::getenv("MOHO64_THREADS");

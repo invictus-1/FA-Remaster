@@ -2637,6 +2637,7 @@ EntityGrid& Sim::entityGrid() {
 Navigation& Sim::navigation() {
   if (!nav_) {
     nav_ = std::make_unique<Navigation>(map_.get());
+    nav_->SetWorkers(workers_.get());  // (a new path grid builds in bands on the pool)
     // blocking terrain types (TerrainTypes.lua: Blocking = true)
     lua_State* L = state_->L();
     int top = lua_gettop(L);

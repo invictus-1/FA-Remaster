@@ -1591,10 +1591,7 @@ uint8_t StartingLayer(Sim& sim, const BlueprintInfo& bp, const TerrainMap* map, 
   int cx = static_cast<int16_t>(std::lrintf(p.x - static_cast<float>(fp.sizeX) * 0.5f));
   int cz = static_cast<int16_t>(std::lrintf(p.z - static_cast<float>(fp.sizeZ) * 0.5f));
   uint8_t caps = 0;
-  if (fp.caps & 0xf) {
-    const PathGrid* g = sim.navigation().Grid(fp);
-    caps = g ? g->Caps(cx, cz) : 0;
-  }
+  if (fp.caps & 0xf) caps = sim.navigation().CellCaps(fp, cx, cz);  // (Grid(fp)->Caps without making the grid)
   if (map && cx >= 0 && cz >= 0 && cx + fp.sizeX <= map->width() && cz + fp.sizeZ <= map->height())
     caps |= fp.caps & 0x30;  // the terrain never takes the Air / Orbit bits away
   if (want & caps) return want;
