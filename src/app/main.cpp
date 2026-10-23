@@ -5,6 +5,8 @@
 //          [--log out.log] [--check-lua] [--rules] [--quiet]
 //          [--sim <replay> | --session <game configuration .lua> [--seed N]] [--ticks N] [--view] [--orders file] [--sim-lua file]
 //          [--twice | --together [--together-lag N] [--together-threads <n|cores>]] [--focus N]
+//   moho64 --init <init.lua> [--mods uids.txt] [--maps folder] --scan-moments <replay> [--scan-out file] [--ticks N]
+//          [--scan-off] [--scan-threads N] [--scan-cancel-at tick]
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -34,6 +36,7 @@
 #include "sim/command_stream.h"
 #include "sim/command_writer.h"
 #include "sim/fingerprint.h"
+#include "sim/moments.h"
 #include "sim/session.h"
 #include "sim/sim_view.h"
 #include "sim/sim.h"
@@ -98,6 +101,16 @@ struct Options {
   std::string spMap;
   int spDiff = 2;
   int spFaction = 1;
+  // --scan-moments <replay>: the replay timeline's scan (sim/moments.h) run as the interface would run it, on a
+  // thread of its own, its moments written as JSON lines (to --scan-out <file>, else stdout) as they come in, then
+  // the fight buckets. --scan-off plays the scan's copy without looking (a check: its MOHO64_FINGERPRINT + ".scan"
+  // must be the same as the looking one's), --scan-threads N its worker pool (default 1), --scan-cancel-at T sets
+  // the cancel flag once the scan reports tick T (a check of the cancel); --ticks N stops it after N ticks.
+  std::string scanReplay;
+  std::string scanOut;
+  bool scanOff = false;
+  int scanThreads = 1;
+  int scanCancelAt = 0;
 };
 
 // The game's file system as main mounts it (--together mounts a second one for its second copy).
@@ -1256,6 +1269,96 @@ int RunSinglePlayer(const Options& o, Vfs& vfs, const std::vector<std::string>& 
   return RunTimes(o, vfs, hookDirs, uids, session, nullptr);
 }
 
+// --scan-moments: ScanReplayMoments on a thread of its own, as the interface runs it beside the game it shows; this
+// thread reads the moments while the scan goes on (Moments::CopySince: the new ones since the last look) and writes
+// each as a JSON line (armies 0-based, as Moment::army; -1 none):
+//   {"tick":5123,"kind":"CommanderDied","army":1,"pos":[312.5,18.2,401.0],"unit":"uel0001","id":"0x200000"}
+// and at the end one line per fight bucket that saw anything:
+//   {"fight":{"army":1,"tick0":5100,"damage":1834.5,"hits":212,"deaths":7}}
+// then a summary on stderr.
+int RunScan(const Options& o, const std::vector<std::string>& uids) {
+  ScanArgs args;
+  args.init = o.init;
+  args.folders = o.folders;
+  args.maps = o.moreMaps;
+  args.modUids = uids;
+  args.replay = o.scanReplay;
+  args.threads = o.scanThreads;
+  args.ticks = o.ticks;
+  args.observe = !o.scanOff;
+  args.fingerprint = true;
+  std::FILE* f = o.scanOut.empty() ? stdout : std::fopen(o.scanOut.c_str(), "wb");
+  if (!f) {
+    std::fprintf(stderr, "moho64: cannot write %s\n", o.scanOut.c_str());
+    return 1;
+  }
+  Moments m;
+  std::atomic<int> tick{0};
+  std::atomic<bool> cancel{false}, running{true};
+  bool ok = false;
+  const auto t0 = std::chrono::steady_clock::now();
+  std::thread scan([&] {
+    ok = ScanReplayMoments(args, &m, &tick, &cancel);
+    running = false;
+  });
+  size_t shown = 0, held = 0;
+  // the buckets as a reader keeps them, taken while the scan runs: the last one taken is taken again (it may still
+  // have been filling); at the end they must be the scan's own
+  std::vector<std::vector<FightBucket>> copied;
+  auto show = [&] {
+    std::vector<Moment> fresh;
+    const size_t from = held ? held - 1 : 0;
+    for (std::vector<FightBucket>& list : copied)
+      if (list.size() > from) list.resize(from);
+    held = m.CopySince(shown, from, &fresh, &copied);
+    shown += fresh.size();
+    for (const Moment& x : fresh) {
+      char id[32] = "";
+      if (x.entity != 0xffffffffu) std::snprintf(id, sizeof id, ",\"id\":\"%#x\"", x.entity);
+      std::fprintf(f, "{\"tick\":%d,\"kind\":\"%s\",\"army\":%d,\"pos\":[%.1f,%.1f,%.1f],\"unit\":\"%s\"%s}\n", x.tick,
+                   MomentKindName(x.kind), x.army, x.pos.x, x.pos.y, x.pos.z, x.unit.c_str(), id);
+    }
+    std::fflush(f);
+  };
+  while (running.load()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    if (o.scanCancelAt > 0 && tick.load() >= o.scanCancelAt) cancel = true;
+    show();
+  }
+  scan.join();
+  show();
+  bool copiesAgree = copied.size() == m.fights.size();
+  for (size_t a = 0; copiesAgree && a < copied.size(); ++a) {
+    copiesAgree = copied[a].size() == m.fights[a].size();
+    for (size_t b = 0; copiesAgree && b < copied[a].size(); ++b)
+      copiesAgree = copied[a][b].tick0 == m.fights[a][b].tick0 && copied[a][b].damage == m.fights[a][b].damage &&
+                    copied[a][b].hits == m.fights[a][b].hits && copied[a][b].deaths == m.fights[a][b].deaths;
+  }
+  size_t buckets = 0;
+  float damage = 0;
+  long long hits = 0, deaths = 0;
+  for (size_t a = 0; a < m.fights.size(); ++a)
+    for (const FightBucket& b : m.fights[a]) {
+      damage += b.damage;
+      hits += b.hits;
+      deaths += b.deaths;
+      if (!b.hits && !b.deaths) continue;
+      ++buckets;
+      std::fprintf(f, "{\"fight\":{\"army\":%d,\"tick0\":%d,\"damage\":%.1f,\"hits\":%d,\"deaths\":%d}}\n",
+                   a < static_cast<size_t>(m.armies) ? static_cast<int>(a) : -1, b.tick0,
+                   b.damage, b.hits, b.deaths);
+    }
+  if (f != stdout) std::fclose(f);
+  const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+  std::fprintf(stderr,
+               "moho64: --scan-moments: %s at tick %d in %.1f s (%.1fx game speed); %zu moments, %zu fight buckets with "
+               "something (%lld hits, %.0f damage, %lld deaths); the buckets copied while it ran %s%s%s\n",
+               ok ? "done" : m.error.empty() ? "cancelled" : "FAILED", m.lastTick, secs,
+               secs > 0 ? m.lastTick / 10.0 / secs : 0.0, m.moments.size(), buckets, hits, damage, deaths,
+               copiesAgree ? "agree" : "DIFFER", m.error.empty() ? "" : ": ", m.error.c_str());
+  return (ok || (o.scanCancelAt > 0 && m.error.empty())) && copiesAgree ? 0 : 1;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1316,6 +1419,11 @@ int main(int argc, char** argv) {
       o.focus = std::atoi(next().c_str());
       o.hasFocus = true;
     }
+    else if (a == "--scan-moments") o.scanReplay = next();
+    else if (a == "--scan-out") o.scanOut = next();
+    else if (a == "--scan-off") o.scanOff = true;
+    else if (a == "--scan-threads") o.scanThreads = std::atoi(next().c_str());
+    else if (a == "--scan-cancel-at") o.scanCancelAt = std::atoi(next().c_str());
     else if (a == "/map") o.spMap = next();
     else if (a == "/diff") o.spDiff = std::atoi(next().c_str());
     else if (a == "/faction") o.spFaction = std::atoi(next().c_str());
@@ -1356,5 +1464,6 @@ int main(int argc, char** argv) {
   if (!o.replay.empty()) rc |= RunSim(o, vfs, hookDirs, uids);
   if (!o.session.empty()) rc |= RunGameConfig(o, vfs, hookDirs, uids);
   if (!o.spMap.empty()) rc |= RunSinglePlayer(o, vfs, hookDirs, uids);
+  if (!o.scanReplay.empty()) rc |= RunScan(o, uids);
   return rc;
 }
