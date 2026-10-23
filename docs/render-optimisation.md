@@ -356,3 +356,23 @@ interface's, the minimap redrawn whole as the weather moves.
 16 upgrades at once, the snow's start), at 1440p and 4K: the lowest and typical frame, the slowest 1 % and the count of
 frames over 8.3 / 16.7 ms, before and after each change, on a quiet machine. Lower hardware is estimated from this PC
 (a card like an RTX 3060 about three to four times slower, an ordinary six-core processor about 1.5 to 2 times).
+
+**The quiet baseline (2026-10-23 12:09-12:41, render dc4feb0, nothing else running: CPU 5 %, card 19 % before).**
+The set R1-R6 (the benchmark helper's tool, `render/tools/bench_render.py` once merged; results in the lab's
+`_scratch/render/helpers/rbench/runs/2026-10-23_quiet_baseline/results.md`). Typical (median) frame, slowest 1 %,
+frames over 8.3 ms, and which side holds it:
+
+| Scene | 1440p: typical / 1 % / >8.3 | 4K: typical / 1 % / >8.3 | Held by |
+|---|---|---|---|
+| R1 start (600 frames) | 8.5 / 32.8 / 362 | 12.8 / 30.7 / 557 | first frames: frame 2 = 252 ms (1440p), "scenery listed" 207 ms (the first tree groups' models) |
+| R2 base, middle zoom, min 10 | 9.1 / 12.7 / 985 | 14.8 / 19.5 / 1139 | processor 9.0 (1440p); card 14.5 (4K); one 47 ms frame: a new unit kind made inside "effects" (35 ms) |
+| R3 whole map late | 14.8 / 19.5 / 1139 | 15.6 / 19.9 / 1139 | the processor (14.8 / 15.5; the card 7.3 / 13.8): listing the scenery |
+| R4 big battle | 12.1 / 16.6 / 1139 | 14.0 / 19.1 / 1139 | the processor (12.0 / 13.8; card 8.3 / 14.2) |
+| R5 16 upgrades | 8.0 / 10.7 / 313 | 15.4 / 17.3 / 1133 | card at 4K (15.2); one 40-50 ms frame: a new building model made inside "effects" |
+| R6 snow's start | 5.6 / 7.0 / 4 | 11.0 / 13.9 / 1436 | card at 4K (10.8); no spike (the snow freeze is gone) |
+
+What it says: (1) the spikes left are first-time models made in the frame (R1 frame 2, R2/R5's "effects" frames):
+the spikes helper's work; (2) a steady 120 at 1440p is held by the processor in mid and late games (9-15 ms: listing
+the scenery and units, recording): the step-2 work (recording on several cores, scenery picked on the card); (3) at
+native 4K the card is at 11-15 ms in every busy scene: the card's share of step 2 (cascades not redrawn every frame,
+the ray tracing scene refitted, far levels).
