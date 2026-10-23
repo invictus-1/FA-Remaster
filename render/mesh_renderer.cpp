@@ -18,6 +18,7 @@
 #include "plants.h"  // [plants]
 #include "ray_scene.h"
 #include "under_snow.h"  // [undersnow]
+#include "unit_grime.h"  // [grime]
 #include "unit_wear.h"
 
 namespace render {
@@ -408,7 +409,7 @@ float4 Shade(VOut i, bool front) {
   if (inspect.x > 8.5 && inspect.x < 9.5 && look > 0.5) {
     // a view for checking art: which level of detail each model is drawn at: white the finest,
     // then yellow, orange, red, violet; shaded a little by which way the surface faces
-    float level = kind5.z;
+    float level = floor(kind5.z);  // [grime] (its quarters say which wear art the level has)
     float3 mark = level < 0.5 ? float3(1, 1, 1) : level < 1.5 ? float3(1, 0.9, 0.25) : level < 2.5 ? float3(1, 0.55, 0.15) : level < 3.5 ? float3(1, 0.2, 0.15) : float3(0.7, 0.3, 1);
     return float4(mark * (0.45 + 0.55 * saturate(normalize(i.normal).y * 0.5 + 0.5)) * (modern.x * lightMultiplier) * 0.6, 1);
   }
@@ -578,7 +579,8 @@ float4 Shade(VOut i, bool front) {
   float4 albedo = albedoMap.Sample(samplerAniso, i.uv.xy);
   float2 nxy = normalsMap.Sample(samplerAniso, i.uv.zw).ga * 2 - 1;
   float4 spec = specularMap.Sample(samplerAniso, i.uv.xy);
-  float occlusion = secondaryMap.Sample(samplerAniso, i.uv.xy).r;
+  float4 secondary = secondaryMap.Sample(samplerAniso, i.uv.xy);  // [grime] (all of it: a unit's masks, unit_grime.h)
+  float occlusion = secondary.r;
   if (kind2.z > 0.5) spec = float4(0, 0.85, 0, kind2.y > 0.5 ? 0.35 : 0);  // rough, no metal; leaves let some light through
   // holes: cut where the alpha is not above the mark; leaves get a soft edge a pixel wide instead,
   // which the samples of a pixel turn into a smooth one (alpha to coverage)
@@ -784,12 +786,21 @@ float4 Shade(VOut i, bool front) {
 #else
     if (kind2.y > 0.5 && leaves.x > 0.5) emission += LeafLight(base, LeafThrough(N, toCamera), i.world, shadow, spec.a);
 #endif
+    // [grime] battle grime, weather dirt and visible damage (unit_grime.h; World::unitGrime, unitDamage): its rows after its
+    // marks and its dirt's (a half in the wear's y says they are there); its masks in its secondary texture where its level
+    // has them (a quarter in kind5.z), where the dirt's fresh mud lies too
+    float4 grimeGrad = float4(ddx(i.uv.xy), ddy(i.uv.xy));
+    grimeSplash = GrimeHasMasks(kind5.z) ? secondary.a : -1;
+    [branch] if (frac(i.wear.y) > 0.4 && i.wear.x >= 0 && !building && kind4.x < 0.5 && kind2.w < 0.5 && kind.y < 0.5)
+      GrimeSurface(boneRows, (uint)(i.wear.x + 0.5) + (uint)i.wear.y * 3 + (frac(i.wear.y * 2) > 0.1 ? 3 : 0), i.uv.xy, grimeGrad, secondary, kind5.z,
+                   occlusion, i.rest, normalize(i.restNormal), i.world, teamMask, i.color.rgb, falling.w > 0 ? falling.w : 1, normalize(i.tangent),
+                   normalize(i.binormal), vertexNormal, base, metallic, roughness, emission, N);
     // battle scars (unit_wear.h, World::unitScars): its marks and its wear over all, on a finished unit's lit surface
-    [branch] if ((i.wear.y > 0.5 || i.wear.z > 0.001) && !building && kind4.x < 0.5 && kind2.w < 0.5 && kind.y < 0.5)
+    [branch] if ((i.wear.y > 0.9 || i.wear.z > 0.001) && !building && kind4.x < 0.5 && kind2.w < 0.5 && kind.y < 0.5)
       WearSurface(boneRows, i.wear, i.rest, normalize(i.restNormal), i.world, teamMask, falling.w > 0 ? falling.w : 1, base, metallic, roughness, emission, N);
     // [unit dirt] wet and muddy units (unit_wear.h, World::unitDirt): its own wetness, mud and dust, in the rows after its
-    // marks (a quarter in the wear's y says they are there)
-    [branch] if (frac(i.wear.y) > 0.1 && i.wear.x >= 0 && !building && kind4.x < 0.5 && kind2.w < 0.5 && kind.y < 0.5)
+    // marks (a quarter in the wear's y says they are there; [grime] a half is the grime's)
+    [branch] if (frac(i.wear.y * 2) > 0.1 && i.wear.x >= 0 && !building && kind4.x < 0.5 && kind2.w < 0.5 && kind.y < 0.5)
       DirtSurface(boneRows, (uint)(i.wear.x + 0.5) + (uint)i.wear.y * 3, i.rest, normalize(i.restNormal), i.world, teamMask, base, metallic, roughness, N);
     // snow on units (World::unitSnow): its own share of what lies, none on what glows (engines, hot parts)
     [branch] if (i.wear.w >= 0) {
@@ -1105,13 +1116,13 @@ float2 PS(VOut i) : SV_Target {
 bool MeshRenderer::Init(std::string* error) {
   // (units and props take half the lying snow the ground takes: they must still be told apart)
   // ([unit dirt] SURFACE_OWN_WET: a unit's own wetness may stand in for the weather's, lighting.h)
-  std::string source = std::string("#define SURFACE_SNOW 0.5\n#define SURFACE_OWN_WET 1\n") + kViewShaderBlock + RayShaders() + kLightingShaderBlock + kWearShaderBlock + HotMetal::ShaderBlock() + kShader;  // (hot metal: hot_metal.h)
+  std::string source = std::string("#define SURFACE_SNOW 0.5\n#define SURFACE_OWN_WET 1\n") + kViewShaderBlock + RayShaders() + kLightingShaderBlock + kGrimeShaderBlock + kWearShaderBlock + HotMetal::ShaderBlock() + kShader;  // (hot metal: hot_metal.h)
   // (the same with the blasts' waves, for what sways while blasts are under way: PrepareBlasts makes them)
   blastSource_ = std::string("#define BLASTS 1\n#define SURFACE_SNOW 0.5\n#define SURFACE_OWN_WET 1\n") + kViewShaderBlock + RayShaders() + kLightingShaderBlock +
-                 kBlastShaderBlock + kWearShaderBlock + HotMetal::ShaderBlock() + kShader;
+                 kBlastShaderBlock + kGrimeShaderBlock + kWearShaderBlock + HotMetal::ShaderBlock() + kShader;
   // [plants] (the same with plants that react, the blasts' waves in them too: PreparePlants makes them; its textures at t8, t9)
   plantsSource_ = std::string("#define BLASTS 1\n#define PLANTS 1\n#define PLANTS_PRESS t8\n#define PLANTS_BURN t9\n#define SURFACE_SNOW 0.5\n#define SURFACE_OWN_WET 1\n") +
-                  kViewShaderBlock + RayShaders() + kLightingShaderBlock + kBlastShaderBlock + kPlantsShaderBlock + kWearShaderBlock +
+                  kViewShaderBlock + RayShaders() + kLightingShaderBlock + kBlastShaderBlock + kPlantsShaderBlock + kGrimeShaderBlock + kWearShaderBlock +
                   HotMetal::ShaderBlock() + kShader;
   // [plants] (the sun's maps: bent, not burnt; the game's burnt trees with their needles gone by a variant of their own)
   plantsShadowSource_ = "#define PLANTS_SHADOW 1\n" + plantsSource_;
@@ -1119,12 +1130,12 @@ bool MeshRenderer::Init(std::string* error) {
   // [undersnow] (the same as the plants' with the low plants under lying snow, under_snow.h: PrepareUnderSnow makes them; the
   // blasts' waves and plants that react in them, each off by its constants when off; the sun's maps bent, not burnt)
   snowSource_ = std::string("#define BLASTS 1\n#define PLANTS 1\n#define PLANTS_PRESS t8\n#define PLANTS_BURN t9\n#define SURFACE_SNOW 0.5\n#define SURFACE_OWN_WET 1\n#define UNDER_SNOW 1\n") +
-                kViewShaderBlock + RayShaders() + kLightingShaderBlock + kBlastShaderBlock + kPlantsShaderBlock + kWearShaderBlock +
+                kViewShaderBlock + RayShaders() + kLightingShaderBlock + kBlastShaderBlock + kPlantsShaderBlock + kGrimeShaderBlock + kWearShaderBlock +
                 HotMetal::ShaderBlock() + kUnderSnowShaderBlock + kShader;
   snowShadowSource_ = "#define PLANTS_SHADOW 1\n" + snowSource_;
   // (buildfx: the same with the remastered build look, for while it is on: PrepareBuild makes them)
   buildSource_ = std::string("#define REMASTERED_BUILD 1\n#define SURFACE_SNOW 0.5\n#define SURFACE_OWN_WET 1\n") + kViewShaderBlock + RayShaders() + kLightingShaderBlock +
-                 kWearShaderBlock + HotMetal::ShaderBlock() + kBuildShaderBlock + kShader;
+                 kGrimeShaderBlock + kWearShaderBlock + HotMetal::ShaderBlock() + kBuildShaderBlock + kShader;
   int kept = 0;
   auto keep = [&](gfx::Pipeline p, const gfx::PipelineDesc& d) {
     bending_[kept++] = {p, d, {}};
@@ -1530,13 +1541,15 @@ void MeshRenderer::Wear(const WearLook& look) {
   if (entries_.empty()) return;
   Entry& e = entries_.back();
   e.instance.wear[1] = static_cast<float>(look.count) + (look.dirt ? 0.25f : 0.0f);  // [unit dirt] (a quarter: its dirt's rows follow the marks)
+  if (look.grime) e.instance.wear[1] += 0.5f, grimeWanted_ = true;  // [grime] (a half: its grime's rows follow those)
   e.instance.wear[2] = look.general;
   e.instance.wear[3] = look.snow;
-  const int rows = look.count * 3 + (look.dirt ? kDirtRows : 0);
+  const int rows = look.count * 3 + (look.dirt ? kDirtRows : 0) + (look.grime ? kGrimeRows : 0);  // ([grime])
   if (rows > 0) {
     wears_.push_back({entries_.size() - 1, rows, wearRows_.size(), -1});
     wearRows_.insert(wearRows_.end(), look.rows, look.rows + look.count * 3);
     if (look.dirt) wearRows_.insert(wearRows_.end(), look.dirtRows, look.dirtRows + kDirtRows);  // [unit dirt]
+    if (look.grime) wearRows_.insert(wearRows_.end(), look.grimeRows, look.grimeRows + kGrimeRows);  // [grime]
   }
 }
 
@@ -1798,6 +1811,9 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
       for (size_t f = 0; f < 4; ++f) shieldPatternOf_[f] = shieldPatterns_ && present[f];
     }
     if (shieldPatterns_) device_->SetTexture(7, shieldPatterns_);
+    // [grime] the units' shared grime layers (unit_grime.h), made the first time a unit wears grime
+    if (grimeWanted_ && !grimeLayers_) grimeLayers_ = MakeGrimeLayers(device_, textures_);
+    if (grimeLayers_) device_->SetTexture(24, grimeLayers_);
   }
 
   // (the scene's solid models: their depth first, then in full; a level of a look of its own - see-
@@ -1872,6 +1888,7 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
     }
     kind[16] = haveInsectLookup_ ? 1.0f : 0.0f;
     kind[18] = static_cast<float>(lod - items_[at].entry->model->lods.data());  // (which level this is, for the checking view)
+    kind[18] += (lod->wearMasks ? 0.25f : 0.0f) + (lod->damageAlbedo ? 0.5f : 0.0f);  // [grime] (its wear art: unit_grime.h)
     kind[17] = haveSeraphimFalloff_ ? 1.0f : 0.0f;
     kind[19] = !shadowPass && lod->faction >= 0 && lod->faction < 4 && shieldPatternOf_[lod->faction] ? 1.0f : 0.0f;
     kind[20] = lod->scrolling ? 1.0f : 0.0f;
@@ -1890,6 +1907,8 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
       device_->SetTexture(1, lod->normals);
       device_->SetTexture(2, lod->specular);
       device_->SetTexture(4, lod->secondary);
+      device_->SetTexture(22, lod->damageAlbedo);  // [grime] (none but on a unit with its damage set)
+      device_->SetTexture(23, lod->damageNormal);
     }
     device_->SetVertexBuffer(lod->vertices);
     device_->SetIndexBuffer(lod->indices);

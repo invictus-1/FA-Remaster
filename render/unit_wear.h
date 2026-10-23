@@ -46,6 +46,9 @@
 //     and washes it off. Dry sand, and dry dirt, give dust instead: a pale dusty coat, more low down and on what faces
 //     up, washed off by rain. Hover units and aircraft take none (they get wet).
 // A unit fresh from the factory is clean and dry; one there from the start is as wet as the ground.
+//
+// [grime] Battle grime, weather dirt and visible damage (World::unitGrime, unitDamage): unit_grime.h says what they are.
+// Their state is each unit's here (Unit's grime fields), moved on by Watch and Dirt; their look three rows after the dirt's.
 #pragma once
 #include <array>
 #include <cstdint>
@@ -112,8 +115,18 @@ struct WearLook {
   //      dust is sand's (0 dirt's .. 1), a number of its own (0..1)
   bool dirt = false;
   Vec4 dirtRows[3];
+  // [grime] its battle grime, weather dirt and visible damage (unit_grime.h; World::unitGrime, unitDamage): three rows after
+  // its marks and its dirt's (kGrimeRows), as the shader's GrimeSurface reads them:
+  //   0: how much dust, caked mud and soot it has gathered (0..1 each), how much frost lies on it;
+  //   1: how wet it is, how much mud the rain has splashed on it (0..1), its health (a share of its most; -1: no damage
+  //      shown), its health some seconds ago (what was lost since glows where it is hot);
+  //   2: its lowest point and 1 / its height (world units, its own frame at rest), from what order of the damage on mended
+  //      damage stays as trophies (above 1: none), a number of its own (0..1)
+  bool grime = false;
+  Vec4 grimeRows[3];
 };
 inline constexpr int kDirtRows = 3;
+inline constexpr int kGrimeRows = 3;  // [grime]
 
 class UnitWear {
  public:
@@ -235,6 +248,21 @@ class UnitWear {
   // of the clock.
   std::string DirtSummary() const;
 
+  // [grime] Battle grime, weather dirt and visible damage (unit_grime.h says what each is). Whether they are on (World
+  // sets them each frame, as scars, snow, dirt): `grime` the grime and the weather's dirt, `damage` the damage shown by
+  // health. Their state is each unit's, beside its marks and its dirt: Watch (each beat: its fighting, its health) and
+  // Dirt (each frame: what it drives over, the weather; World runs it for the grime too) move it on.
+  bool grime = false, damage = false;
+  // How much snow lies (World's snowLying with a time of day; else none): frost on the units; how wet the ground is (World's
+  // wet): a unit's wetness where the dirt has not worked out its own.
+  float frostLying = 0, groundWet = 0;
+  // A unit's grime and damage told straight (the viewer's --grime-test, for its placed units): its dust, caked mud and soot
+  // (0..1), its health now, the lowest it has lived through and some seconds ago (shares of its most), how much mud the
+  // rain has splashed on it.
+  void SetGrime(uint32_t id, const Model* model, float dust, float caked, float soot, float health, float lowest, float recent, float splash, double clock);
+  // For the log: the units' grime on average.
+  std::string GrimeSummary() const;
+
  private:
   struct Mark {
     Vec3 at, way;  // on the model at rest, world units; the shot's way there
@@ -273,6 +301,13 @@ class UnitWear {
     float dirtSpeed = 0;     // world units a second, smoothed
     Vec3 lo, hi;             // its model's box at rest, world units (its own frame)
     bool box = false;        // (lo, hi known)
+    // [grime] (unit_grime.h)
+    float gDust = 0, gCaked = 0, gSoot = 0;  // its battle grime, 0..1 each
+    float combat = 0;        // how hard it has fought lately, 0..1 (fades in some half a minute)
+    float splash = 0;        // mud the rain has splashed on its lower body, 0..1
+    float lowest = 1;        // the lowest share of its health it has lived through
+    float recent = -1;       // its health's share some seconds ago (never below its health now; -1: not yet seen built)
+    bool grimeTold = false;  // (SetGrime's: kept as told)
   };
   static int TierOf(float taken) { return taken <= 0 ? 0 : taken < 0.35f ? 1 : taken < 1.0f ? 2 : 3; }
   void AddMark(Unit& u, Vec3 rest, Vec3 way, Kind kind, float share, float damage, double clock);
@@ -297,6 +332,7 @@ class UnitWear {
   bool startGiven_ = false;
   int MovesOf(const std::string& blueprint);
   void DirtRows(uint32_t id, const Unit& u, WearLook* w) const;
+  void GrimeRows(uint32_t id, const Unit& u, WearLook* w) const;  // [grime]
 };
 
 // The model shader's part (mesh_renderer.cpp, modern look): a unit's marks and wear over all on its surface,

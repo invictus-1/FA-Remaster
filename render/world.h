@@ -607,6 +607,12 @@ class World {
   // changes that many times faster (the viewer's --unit-dirt-pace, to look at them).
   bool unitDirt = false;
   float unitDirtPace = 1;
+  // [grime] Battle grime and weather dirt on units, and their damage shown by their health (unit_grime.h): dust, caked mud
+  // and soot gathering as a unit fights and drives, mud splashed up it in rain, frost on it where snow lies (unitGrime);
+  // dents, burns and torn plates showing as its health drops, hot where fresh, patched as it is repaired (unitDamage). With
+  // the visuals session's art where a unit has it (its masks and damage set, ModelCache::wearArt), else by its shape.
+  // Modern look; off by default (proposed: with the Battle Effects).
+  bool unitGrime = false, unitDamage = false;
   UnitWear wear;
   // A game's beat for them: AddFrame calls it; a host that draws units itself (the effects stand) calls it with its
   // frame first. Only the first call for a beat counts (the dirt's: every call, by the clock).
@@ -617,7 +623,9 @@ class World {
     wear.scars = unitScars;
     wear.snow = unitSnow;
     wear.dirt = unitDirt;  // [unit dirt]
-    return look == Look::Modern && (unitScars || unitSnow || unitDirt) ? wear.Look(id, clock_, drawn) : nullptr;
+    wear.grime = unitGrime, wear.damage = unitDamage;  // [grime] (and the weather on them: frost, wet)
+    wear.frostLying = timeOfDay >= 0 ? snowLying : 0.0f, wear.groundWet = timeOfDay >= 0 ? wet : 0.0f;
+    return look == Look::Modern && (unitScars || unitSnow || unitDirt || unitGrime || unitDamage) ? wear.Look(id, clock_, drawn) : nullptr;
   }
   // Units seen behind trees and cliffs (hidden_outlines.h; docs/render-lighting.md, item 15): where a unit the player
   // may see (his own, an ally's, an enemy's in sight; never one in the fog of war, nor a building only remembered) is

@@ -2172,3 +2172,40 @@ to grey "Ray tracing" out where it would do nothing (on the Mac always). Viewer:
 atmosphere,soft-shadows,ray-tracing,weather-effects` draws through them as the game does. Tried from far out
 over a whole map, as the game's camera often is, which the close-up checks had not covered: it found the
 contact shadows' and the far haze's faults fixed above. Which ones go in the game's settings is Chris's word; the ui chat then puts them there.
+
+## Battle grime, visible damage and weather dirt on units (first version, 2026-10-23; a helper's, for review)
+
+Chris's "100% yes" to the visuals session's section 65; the form agreed in render-answers ("To visuals, section 65") and
+her first art in section 66 (UEL0001). Two options, modern look, off by default (proposed for the Battle Effects
+setting): `World::unitGrime` (viewer `--unit-grime`: battle grime and the weather's dirt) and `World::unitDamage`
+(`--unit-damage`: damage shown by health). `render/unit_grime.h/.cpp` (the stand-in layers, the shader's
+`GrimeSurface`); the state is each unit's in `UnitWear` (unit_wear.h), beside its marks and its dirt, one state and one
+shader path with them:
+- **Grime:** dust, caked mud and soot gather the longer a unit fights (hits taken, its own firing, blasts near it:
+  `UnitWear::Watch`, a beat) and drives (mud or soft wet ground a crust, dry dirt and sand a coat: `UnitWear::Dirt`,
+  which World now also runs for the grime). Rain washes dust off in minutes, soot and the crust slowly; repair leaves
+  it. The first versions' own grime patches (the scars' "wear over all") give way to it where it lies (`grimeTaken`).
+- **Weather dirt:** in rain mud splashes up the lower body from soft ground (more as it drives), drying on and flaking
+  off over a quarter of an hour, and the crust goes dark and glossy; where snow lies, frost on tops and in the
+  sheltered creases up high (none on a unit hot from fighting or burning). The fresh mud of `--unit-dirt` lies by the
+  masks' A where a unit has them (`grimeSplash`).
+- **Damage:** a texel of the damage set shows where the masks' B (the damage order) is above the unit's health, over a
+  soft edge (whole: none; none left: all); what was lost in the last seconds glows where the set's alpha says hot;
+  repaired, it goes as health comes back, and the first three tenths of the worst it lived through stay as patched
+  trophies (dents filled to a third, fresh paint).
+- **The art:** the masks in the unit's secondary texture (`<ID>_lab_masks.dds`, read in place of `_lab_ao` while an
+  option is on: no texture read more), the damage set `<ID>_lab_damage_albedo.dds` / `_damage_normal.dds`, the shared
+  tiling layers as one array at t24 (`<root>/_unitgrime/export/moho64/<set>_albedo.dds` and `_normal.dds`, sets dust,
+  mud, soot, frost, wetmud; procedural stand-ins until all ten are there). A unit without masks: grime and frost by its
+  height, facing and crease shading, the damage order a noise; without a damage set, scorched and scuffed paint with
+  bare metal and hot spots. `ModelLod::wearMasks`, `damageAlbedo`, `damageNormal`; a level's kind5.z carries a quarter
+  for the masks and a half for the damage set; the grime's three rows follow the marks and the dirt's (a half in the
+  instance's wear.y).
+- Viewer tests: `--wear-art <id>=<folder>` (the visuals session's trial layout), `--grime-test
+  dust,caked,soot[,health[,lowest[,recent[,splash]]]]` for placed units.
+- Cost (200 remastered commanders framed at the game's height, grime 0.5 and half health, lowest of 300 frames): the
+  units' pass +0.09 ms at 2560 x 1440 and +0.16 at 3840 x 2160. Open: with hidden outlines on, the outlines' masks
+  stage rises from 0.11 to 0.9 ms at 1440p (0.24 to 0.71 at 4K) whenever units carry grime, and the same with the first
+  version's `--unit-dirt` alone (1.02 ms): not this look's own work (damage alone does not do it), to be looked into.
+- Off: nothing of it runs and no art is loaded; regress3 0 px both backends; scars, snow and dirt on, grime off: 0 px
+  against render 841530e.

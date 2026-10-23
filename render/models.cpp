@@ -840,6 +840,8 @@ std::vector<std::string> ModelCache::UnitFiles(const std::string& unitId) {
       files.push_back(preview + id + "_lod" + std::to_string(i) + ".scm");
     for (const std::string& folder : {preview, preview + "textures/"})
       for (const char* kind : {"albedo", "normal", "spec", "ao"}) files.push_back(folder + id + "_lab_" + kind + ".dds");
+    if (wearArt)  // [grime] (its wear art, where Build takes it)
+      for (const char* kind : {"masks", "damage_albedo", "damage_normal"}) files.push_back(preview + "textures/" + id + "_lab_" + kind + ".dds");
   } else {
     for (const char* kind : {"albedo", "normal", "spec", "ao"}) files.push_back("/mods/labvisuals/textures/" + id + "/" + id + "_lab_" + kind + ".dds");
   }
@@ -1539,6 +1541,28 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
       lod.secondary = vfs_->Exists(lab + "ao.dds") ? textures_->Get(lab + "ao.dds", textures_->White()) : textures_->White();
       lod.labPbr = true;
       lod.shaderName = "LabPBR";
+    }
+    // [grime] its wear art (ModelCache::wearArt), for every level of a remastered unit (they share their textures' layout):
+    // the masks in place of the crease shading's texture (their red is the same), and its damage set
+    if (wearArt && previewed && stem.empty() && !lab.empty() && lod.labPbr) {
+      const bool tried = std::find(wearArtTrial.begin(), wearArtTrial.end(), own) != wearArtTrial.end();
+      auto art = [&](const char* named, const std::string& trialName) {
+        const std::string trial = "/wear-art/" + own + "/" + trialName;
+        return tried && vfs_->Exists(trial) ? trial : vfs_->Exists(lab + named) ? lab + named : std::string();
+      };
+      const std::string masks = art("masks.dds", "masks/" + file + "_ao_masks.dds");
+      const std::string damage = art("damage_albedo.dds", "damage/" + file + "_damage_albedo.dds");
+      const std::string damageNormal = art("damage_normal.dds", "damage/" + file + "_damage_normal.dds");
+      if (!masks.empty()) {
+        lod.secondary = textures_->Get(masks, lod.secondary);
+        lod.wearMasks = true;
+      }
+      if (!damage.empty() && !damageNormal.empty()) {
+        lod.damageAlbedo = textures_->Get(damage);
+        lod.damageNormal = textures_->Get(damageNormal);
+      }
+      if (i == 0 && (lod.wearMasks || lod.damageAlbedo))
+        printf("render: %s: wear art%s%s\n", what.c_str(), lod.wearMasks ? ", masks " : "", lod.wearMasks ? masks.c_str() : "");
     }
     if (!lod.labPbr && !lod.specular) lod.specular = textures_->Black();
     if (kind.compare(0, 10, "undulating") == 0 || kind == "labpbralpha") lod.sway = 1;

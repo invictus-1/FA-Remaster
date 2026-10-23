@@ -1843,8 +1843,10 @@ void World::WatchWear(const Frame& frame) {
   wear.scars = unitScars;
   wear.snow = unitSnow;
   wear.dirt = unitDirt;  // [unit dirt]
+  wear.grime = unitGrime, wear.damage = unitDamage;  // [grime]
   if (unitScars) models.hitShapes = true;  // (models loaded from now on keep their triangles for where hits lie)
-  if (look != Look::Modern || !(unitScars || unitSnow || unitDirt)) return;
+  if (unitGrime || unitDamage) models.wearArt = true;  // [grime] (and their wear art: unit_grime.h)
+  if (look != Look::Modern || !(unitScars || unitSnow || unitDirt || unitGrime || unitDamage)) return;
   const bool weather = timeOfDay >= 0;  // (the weather is only there with a time of day)
   auto modelOf = [&](uint32_t blueprint, bool make) -> const Model* {
     if (!frame.blueprints || blueprint >= frame.blueprints->size() || (*frame.blueprints)[blueprint].empty()) return nullptr;
@@ -1853,8 +1855,9 @@ void World::WatchWear(const Frame& frame) {
     const Model* m = Known(unitModels_, blueprint, frame.blueprints->size(), [&] { return models.Unit((*frame.blueprints)[blueprint]); });
     return m && m->ok ? m : nullptr;
   };
-  if (unitScars || unitSnow) wear.Watch(frame, clock_, weather ? snow : 0.0f, weather ? snowLying : 0.0f, modelOf);
-  if (unitDirt) {  // [unit dirt] each unit's wetness, mud and dust, by the ground under it and the weather (unit_wear.h)
+  wear.frostLying = weather ? snowLying : 0.0f, wear.groundWet = weather ? wet : 0.0f;  // [grime]
+  if (unitScars || unitSnow || unitGrime || unitDamage) wear.Watch(frame, clock_, weather ? snow : 0.0f, weather ? snowLying : 0.0f, modelOf);
+  if (unitDirt || unitGrime) {  // [unit dirt] each unit's wetness, mud and dust, by the ground under it and the weather (unit_wear.h; [grime] its grime's too)
     if (!wear.HasGround() && haveMap_) {
       float kinds[10][6];
       for (int i = 0; i < 10; ++i) std::copy(terrain.LayerKind(i), terrain.LayerKind(i) + 6, kinds[i]);
@@ -2056,13 +2059,13 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       it = list.empty() ? shieldHits_.erase(it) : std::next(it);
     }
   }
-  if (unitScars || unitSnow || unitDirt) {  // (battle scars and snow on units: what hit whom this beat; unit_wear.h; [unit dirt])
+  if (unitScars || unitSnow || unitDirt || unitGrime || unitDamage) {  // (battle scars and snow on units: what hit whom this beat; unit_wear.h; [unit dirt]; [grime])
     CpuTimes::Part("units' battle scars, snow and dirt watched");  // ([groundfix] the dirt's too)
     // what the simulation says hit a unit or its shield (REQUESTS 36): the marks where and by what; where it says so,
     // health drops with no hit told make none (reclaim, a script's SetHealth)
     wear.exactHits = combat_.hitsKept;
     for (const FrameHit& h : combat_.hits) {
-      if ((h.targetKind != 0 && h.targetKind != 1) || !(unitScars || unitSnow)) continue;  // [unit dirt] (the dirt takes no hits)
+      if ((h.targetKind != 0 && h.targetKind != 1) || !(unitScars || unitSnow || unitGrime || unitDamage)) continue;  // [unit dirt] (the dirt takes no hits)
       UnitWear::HitEvent e;
       e.tick = h.tick;
       e.unit = h.target;
