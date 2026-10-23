@@ -69,6 +69,17 @@ class SimFrames {
   std::vector<Vec3> ArmyColors() const;
   // The session's seed (the same for every player of a game and in its replay); 0 until ReadArmies.
   uint32_t Seed() const;
+  // [spikes] What the armies can build, for a host that makes unit kinds ahead of their first drawing (World::MakeAhead,
+  // World::readAhead). While on, after each beat every unit kind there for the first time (any army's, whether the focus
+  // army sees it or not) is asked, by one unit of it, which unit blueprints it may build now - the simulation's own test
+  // for a build order (UnitMayBuild: its blueprint's BuildableCategory less its own and its army's restrictions) - and once
+  // more by the first unit of it that is finished (what a building's script restricts once it stands); every kind named
+  // for the first time is kept, a kind itself before what it builds. And every 10th beat one kind that builds is asked
+  // again, in turn (a commander's restrictions lifted by an upgrade). TakeBuildable hands them over in that order and
+  // empties the list. Each asking takes the simulation's thread a fraction of a millisecond (every unit blueprint of the
+  // game asked about: 1,356 with Chris's mods). Off at first.
+  void WatchBuildable(bool on) { watchBuildable_.store(on); }
+  void TakeBuildable(std::vector<std::string>* out);
 
  private:
   struct Beat_ {
@@ -107,6 +118,9 @@ class SimFrames {
   std::unordered_map<uint32_t, size_t> healthWaiting_;  // an entity's place in combat_.health
   std::unordered_map<uint32_t, uint32_t> shellSince_, shellSinceNext_;  // projectiles: the beat each was first seen (the simulation's thread only)
   std::vector<std::string> namesForFrames_;     // the drawing side's copy of names_ (what Frame::blueprints points at)
+  std::atomic<bool> watchBuildable_{false};    // [spikes] (WatchBuildable)
+  std::vector<std::string> buildable_;         // [spikes] not yet taken
+  void AskBuildable(const moho::Sim& sim);     // [spikes] (after a beat, on the simulation's thread)
 };
 
 }  // namespace render

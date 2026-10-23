@@ -64,6 +64,22 @@ class TextureCache {
   void FetchLater(const std::vector<std::string>& paths);
   int Arrived(const std::string& path);
   bool Made(const std::string& path) const;
+  // [spikes] Textures made ahead off the frames' thread, so that no frame waits for them (a unit kind an army may build, the
+  // remastered scorches, the particles' pictures): each path's file read (or taken from what Fetch or FetchLater read), its
+  // image parsed and cut to the texture detail setting, and the device's slow half of its making done (gfx.h,
+  // PrepareTexture: its resource made and its images copied for the card), on two threads of the cache's own, in the
+  // order asked. MakeAheadStep, on the frames' thread once a frame, finishes those done (FinishTexture: a handle and the
+  // copies recorded, a small part of a Get's time), for at most `budgetMs` (one at least). A Get of one asked for and not
+  // finished waits for it there, or makes it itself when it has not been begun: each is the texture Get would have made of
+  // that path (the same file, the same detail and steps), only earlier. A path made, failed or asked for already is left
+  // out. Ahead: asked for and not finished. AheadLeft: how many are.
+  // `later`: after all asked for without it (what is wanted only once a battle begins: the scorches, the particles).
+  void MakeAhead(const std::vector<std::string>& paths, bool later = false);
+  int MakeAheadStep(double budgetMs);
+  bool Ahead(const std::string& path) const;
+  size_t AheadLeft() const;
+  int madeAhead = 0;            // [spikes] (finished so far)
+  size_t madeAheadBytes = 0;    // (what they hold on the card)
 
   gfx::Texture White() const { return white_; }            // (1, 1, 1, 1)
   gfx::Texture Black() const { return black_; }            // (0, 0, 0, 0)
@@ -78,6 +94,9 @@ class TextureCache {
   std::unordered_map<std::string, std::string> fetched_;  // read ahead, not yet taken
   struct Later;                   // [hitches] (FetchLater's queue and thread: textures.cpp)
   std::unique_ptr<Later> later_;  // (made the first time it is asked for)
+  struct Making;                    // [spikes] (MakeAhead's jobs and threads: textures.cpp)
+  std::unique_ptr<Making> making_;  // (made the first time it is asked for)
+  gfx::Texture FinishAhead(const std::string& key);  // [spikes] (a job done: its texture into the cache)
   gfx::Texture white_, black_, flatNormal_, greyCube_;
 };
 

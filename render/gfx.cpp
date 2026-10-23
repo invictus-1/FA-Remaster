@@ -18,6 +18,47 @@ int BytesPerPixelOrBlock(Format f) {
   }
 }
 
+// [spikes] (Device::PrepareTexture and the like, for a backend without halves of its own: the description and its data
+// kept, Create* called with them at the finish)
+namespace {
+struct KeptTexture final : Device::Prepared {
+  TextureDesc desc;
+  std::vector<uint8_t> data;
+};
+struct KeptBuffer final : Device::Prepared {
+  BufferDesc desc;
+  std::vector<uint8_t> data;
+};
+}  // namespace
+
+std::unique_ptr<Device::Prepared> Device::PrepareTexture(const TextureDesc& desc) {
+  if (!desc.data || !desc.dataSize) return nullptr;
+  auto kept = std::make_unique<KeptTexture>();
+  kept->desc = desc;
+  kept->data.assign(static_cast<const uint8_t*>(desc.data), static_cast<const uint8_t*>(desc.data) + desc.dataSize);
+  kept->desc.data = kept->data.data();
+  return kept;
+}
+
+Texture Device::FinishTexture(std::unique_ptr<Prepared> prepared) {
+  auto* kept = dynamic_cast<KeptTexture*>(prepared.get());
+  return kept ? CreateTexture(kept->desc) : Texture{};
+}
+
+std::unique_ptr<Device::Prepared> Device::PrepareBuffer(const BufferDesc& desc) {
+  if (desc.dynamic || !desc.data || !desc.size) return nullptr;
+  auto kept = std::make_unique<KeptBuffer>();
+  kept->desc = desc;
+  kept->data.assign(static_cast<const uint8_t*>(desc.data), static_cast<const uint8_t*>(desc.data) + desc.size);
+  kept->desc.data = kept->data.data();
+  return kept;
+}
+
+Buffer Device::FinishBuffer(std::unique_ptr<Prepared> prepared) {
+  auto* kept = dynamic_cast<KeptBuffer*>(prepared.get());
+  return kept ? CreateBuffer(kept->desc) : Buffer{};
+}
+
 std::unique_ptr<Device> CreateVulkanDevice(const DeviceDesc& desc, std::string* error);  // gfx_vulkan.cpp
 #if defined(_WIN32)
 std::unique_ptr<Device> CreateD3D12Device(const DeviceDesc& desc, std::string* error);  // gfx_d3d12.cpp

@@ -423,6 +423,55 @@ void World::SetLooks(const std::vector<BlueprintLook>& looks) {
     ++units;
   }
   if (!looks.empty()) printf("render: %zu blueprints' looks from the simulation (%d of them units)\n", looks.size(), units);
+  // [spikes] (readAhead) a game has begun: the pictures its battles will want made ahead, after the armies' own kinds (what
+  // they build is asked for each frame from now, MakeAhead): the visuals track's scorches and craters and its particles'
+  // pictures, where the remastered effects are on, and the game's particles' pictures that have no remastered twin (the
+  // original effects: all of them). Each made as its first use would make it; they hold about a third of a gigabyte of the
+  // card with the remastered effects. (Measured on SETONS_R, Chris's mods: 37 + 82 + 745 files.)
+  if (!looks.empty() && readAhead && haveMap_ && !effectsAhead_) {
+    effectsAhead_ = true;
+    const bool remastered = effectsLook == EffectsLook::Remastered;
+    std::vector<std::string> files;
+    if (remastered)
+      for (const char* folder : {"/remastered/env/common/decals", "/remastered/textures/particles"})
+        for (std::string& f : vfs_->FindFiles(folder, "*.dds")) files.push_back(std::move(f));
+    for (std::string& f : vfs_->FindFiles("/textures/particles", "*.dds"))
+      if (!remastered || EffectFile(*vfs_, f, true) == f) files.push_back(std::move(f));  // (no remastered twin)
+    // (and before the armies' kinds, the game's own pads' pictures, laid under the first buildings: a few megabytes)
+    std::vector<std::string> pads = vfs_->FindFiles("/env/common/decals/tarmacs", "*.dds");
+    printf("render: %zu of the effects' pictures and %zu of the pads' to be made ahead\n", files.size(), pads.size());
+    // (asked for once the game's first frames are over, AheadBegun: those make the map's own props and units, and the
+    // threads making ahead slowed them)
+    aheadPads_ = std::move(pads);
+    aheadPictures_ = std::move(files);
+    aheadFrames_ = 0;
+  }
+}
+
+// [spikes] (PrepareAhead) the game's first frames over: what was asked for meanwhile asked for now; true from then on
+bool World::AheadBegun() {
+  if (!effectsAhead_ || aheadFrames_ >= kAheadAfterFrames) return true;
+  if (++aheadFrames_ < kAheadAfterFrames) return false;
+  if (aheadRoom_) {  // (no room on the card: left to their first use, as before)
+    textures.MakeAhead(aheadPads_);
+    models.MakeAhead(aheadKinds_);
+    textures.MakeAhead(aheadPictures_, true);
+  }
+  aheadPads_.clear();
+  aheadKinds_.clear();
+  aheadPictures_.clear();
+  return true;
+}
+
+// [spikes] (readAhead) the kinds an army may build, made ahead (ModelCache::MakeAhead)
+void World::MakeAhead(const std::vector<std::string>& unitIds) {
+  if (!readAhead || !haveMap_ || sidePicture || unitIds.empty()) return;
+  if (!aheadRoom_) return;  // (no room on the card: made at its first use, as before)
+  if (effectsAhead_ && aheadFrames_ < kAheadAfterFrames) {  // (the game's first frames: asked for after them, AheadBegun)
+    aheadKinds_.insert(aheadKinds_.end(), unitIds.begin(), unitIds.end());
+    return;
+  }
+  models.MakeAhead(unitIds);
 }
 
 void World::LoadBrackets() {
@@ -2543,7 +2592,17 @@ void World::PrepareAhead() {
   decals.tarmacs.readAhead = readAhead;
   models.readAhead = readAhead && haveMap_ && !sidePicture;
   if (!readAhead || !haveMap_ || sidePicture) return;
-  models.AheadStep();
+  if (aheadRoomFrames_++ % 60 == 0) {  // (room on the card for what is made ahead: aheadRoom_)
+    uint64_t budget = 0, used = 0;
+    aheadRoom_ = !device_->MemoryBudget(&budget, &used) || budget == 0 || used + (uint64_t{1} << 30) < budget / 100 * 85;
+  }
+  AheadBegun();  // [spikes]
+  textures.MakeAheadStep(1.0);  // [spikes] (what was made ahead off the frames' thread, finished: about a millisecond at most)
+  {  // [spikes] (the kinds made ahead: models made while they take less than a millisecond in all, one at least)
+    const auto start = std::chrono::steady_clock::now();
+    while (models.AheadStep() && std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() < 1.0) {
+    }
+  }
   if (decals.remasteredTarmacs) decals.tarmacs.Ahead();
   if (look != Look::Modern) return;
   if (buildNow_) build.PrepareSparks();

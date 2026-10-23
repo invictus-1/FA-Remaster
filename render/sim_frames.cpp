@@ -4,6 +4,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <unordered_map>
+#include <unordered_set>
+#include <chrono>  // [spikes]
+
+#include "hitch_log.h"  // [spikes]
 
 #include "core/vfs.h"
 #include "sim/sim.h"
@@ -73,6 +77,13 @@ struct SimFrames::Scratch {
   std::vector<moho::PropEvent> props;
   std::unordered_map<uint32_t, uint32_t> poseOf;  // unit id -> index in poses, this beat
   std::unordered_map<std::string, uint32_t> nameIndex;
+  // [spikes] (AskBuildable, the simulation's thread only) every unit blueprint of the game; the kinds asked by a unit of
+  // them, and by a finished one; the kinds named so far; the kinds that build something, in the order found, and the next
+  // of them to ask again
+  std::vector<std::string> unitIds;
+  std::unordered_set<std::string> asked, askedFinished, named;
+  std::vector<std::string> builders;
+  size_t nextBuilder = 0;
 };
 
 SimFrames::SimFrames() : scratch_(std::make_unique<Scratch>()) { names_.push_back(""); }
@@ -99,6 +110,9 @@ void SimFrames::ReadArmies(const moho::Sim& sim, const moho::Vfs& vfs) {
   // how the blueprints look (src/sim/sim_view.h, BlueprintDisplays)
   std::vector<moho::BlueprintDisplay> displays;
   moho::BlueprintDisplays(sim, &displays);
+  scratch_->unitIds.clear();  // [spikes] (the unit blueprints AskBuildable asks about)
+  for (const moho::BlueprintDisplay& d : displays)
+    if (d.kind == 0 && !d.id.empty()) scratch_->unitIds.push_back(d.id);
   std::vector<BlueprintLook> looks;
   looks.reserve(displays.size());
   for (moho::BlueprintDisplay& d : displays) {
@@ -157,6 +171,52 @@ uint32_t SimFrames::Seed() const {
   return seed_;
 }
 
+// [spikes] (WatchBuildable) After a beat: the kinds there for the first time asked what they may build, then a finished one
+// of each, and one that builds asked again every 10th beat.
+void SimFrames::AskBuildable(const moho::Sim& sim) {
+  Scratch& e = *scratch_;
+  const auto start = std::chrono::steady_clock::now();
+  int asked = 0;
+  std::vector<std::string> found;
+  auto ask = [&](const moho::UnitView& u) {
+    ++asked;
+    if (e.named.insert(u.blueprint).second) found.push_back(u.blueprint);
+    bool builds = false;
+    for (const std::string& id : e.unitIds) {
+      if (!moho::UnitMayBuild(sim, u.id, id)) continue;
+      builds = true;
+      if (e.named.insert(id).second) found.push_back(id);
+    }
+    if (builds && std::find(e.builders.begin(), e.builders.end(), u.blueprint) == e.builders.end()) e.builders.push_back(u.blueprint);
+  };
+  for (const moho::UnitView& u : e.views) {
+    if (u.blueprint.empty() || u.dead) continue;
+    if (e.asked.insert(u.blueprint).second) ask(u);
+    else if (!u.beingBuilt && e.askedFinished.insert(u.blueprint).second) ask(u);
+  }
+  if (!e.builders.empty() && sim.tick() % 10 == 0) {  // (one that builds, again, by a unit of it there now)
+    const std::string kind = e.builders[e.nextBuilder++ % e.builders.size()];
+    for (const moho::UnitView& u : e.views)
+      if (u.blueprint == kind && !u.dead && !u.beingBuilt) {
+        ask(u);
+        break;
+      }
+  }
+  if (HitchLog::on && asked) {  // (its cost on the simulation's thread, in the hitch log: elsewhere)
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    if (ms > 1) HitchLog::Add("what the armies may build asked: " + std::to_string(asked) + " kinds, " + std::to_string(found.size()) + " new", ms);
+  }
+  if (found.empty()) return;
+  std::lock_guard<std::mutex> lock(mutex_);
+  buildable_.insert(buildable_.end(), found.begin(), found.end());
+}
+
+void SimFrames::TakeBuildable(std::vector<std::string>* out) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  out->clear();
+  out->swap(buildable_);
+}
+
 void SimFrames::TakeLooks(std::vector<BlueprintLook>* out) {
   std::lock_guard<std::mutex> lock(mutex_);
   out->clear();
@@ -167,6 +227,7 @@ void SimFrames::TakeLooks(std::vector<BlueprintLook>* out) {
 void SimFrames::Beat(const moho::Sim& sim) {
   Scratch& e = *scratch_;
   moho::UnitViews(sim, &e.views);
+  if (watchBuildable_.load()) AskBuildable(sim);  // [spikes]
   moho::UnitPoses(sim, &e.poses);
   moho::HiddenBones(sim, &e.hidden);
   moho::ProjectileViews(sim, &e.projectiles);

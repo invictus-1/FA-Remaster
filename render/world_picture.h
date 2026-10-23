@@ -399,6 +399,9 @@ class WorldPicture {
   // ui_StrategicIconScale 1: icons.playerScale); the kept ground never has them. True unless given: the deposits' icons
   // show as they did before this switch (the viewer's --picture).
   const std::vector<uint32_t>& DrawMinimap(int width, int height, bool resourceIcons = true);
+  // [spikes] (measurements only: the viewer's --minimap-test) the minimap's ground drawn anew the old way, into the window
+  // resized to the minimap's size and back, instead of into the device's picture of its own (SetPhotoWindow). Off.
+  bool minimapByResize = false;
   // [pings] The meshes on the minimap, FAF's minimap option "Disable meshes" (Prefs disableMinimapMesh; its scripts
   // set cam_DefaultMiniLOD to 0 for it, 1.8 without it: hand `on` = that value is not 0). Off, as FAF has it until the
   // player unticks the option: no meshes. On: what the original then draws of the meshes by their technique's

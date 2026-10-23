@@ -307,6 +307,10 @@ class D3D12Device final : public Device {
   bool EndPipelineBatch(std::string* error) override;
   void BeginBackgroundPipelines() override { backgroundAsked_ = dxil_ && !shaderCache_.empty(); }  // [snowhitch]
   void EndBackgroundPipelines() override { backgroundAsked_ = false; }
+  std::unique_ptr<Prepared> PrepareTexture(const TextureDesc& desc) override;  // [spikes]
+  Texture FinishTexture(std::unique_ptr<Prepared> prepared) override;
+  std::unique_ptr<Prepared> PrepareBuffer(const BufferDesc& desc) override;
+  Buffer FinishBuffer(std::unique_ptr<Prepared> prepared) override;
   void Destroy(Buffer buffer) override;
   void Destroy(Texture texture) override;
   void Destroy(Pipeline pipeline) override;
@@ -493,6 +497,14 @@ class D3D12Device final : public Device {
   Com<ID3D12CommandAllocator> uploadAllocators_[kUploadBatches];
   uint64_t uploadFences_[kUploadBatches] = {};
   std::vector<Com<ID3D12Resource>> uploadStaging_[kUploadBatches];
+  // [spikes] (BeginUpload) a batch's upload buffers of their own (KeepStaging: what was made ahead brings one each) let go of
+  // on a thread of their own: letting go of a few dozen took the frame 5-17 ms
+  std::mutex releaseMutex_;
+  std::condition_variable releaseWake_;
+  std::vector<Com<ID3D12Resource>> releasing_;
+  bool releaseStop_ = false;
+  std::thread releaser_;
+  void LetGo(std::vector<Com<ID3D12Resource>>* staging);
   std::vector<StagePage> stagePages_[kUploadBatches];
   size_t stagePage_ = 0;
   uint64_t stageOffset_ = 0;
@@ -635,6 +647,12 @@ D3D12Device::~D3D12Device() {
   }
   backgroundWake_.notify_all();
   if (backgroundThread_.joinable()) backgroundThread_.join();
+  {  // [spikes] (the upload buffers' releaser: what it holds let go of first)
+    std::lock_guard<std::mutex> lock(releaseMutex_);
+    releaseStop_ = true;
+  }
+  releaseWake_.notify_all();
+  if (releaser_.joinable()) releaser_.join();
   if (generating_) StopPresenter();
   if (queue_ && fence_) WaitIdle();
   pipelineStore_.Save();  // [hitches] (the pipelines made since the map opened, for the next run)
@@ -1431,16 +1449,57 @@ bool D3D12Device::BeginUpload() {
   if (uploadOpen_) return true;
   // (the batch's allocator and staging copies are free again once the card is done with its last use)
   const int k = uploadBatch_;
+  const auto t0 = std::chrono::steady_clock::now();  // [spikes] (a batch reopened that took long: its parts, in the hitch log)
   WaitFence(uploadFences_[k]);
-  uploadStaging_[k].clear();
-  // (its pages free again: two kept for the next uploads, the rest let go of; a map's loading may take many)
+  const auto t1 = std::chrono::steady_clock::now();
+  // (its pages free again: two kept for the next uploads, the rest let go of; a map's loading may take many. [spikes] Those
+  // let go of, with the batch's upload buffers of their own, on the releaser's thread: was uploadStaging_[k].clear() and
+  // the pages' resize here, 5-90 ms in a frame)
+  for (size_t i = 2; i < stagePages_[k].size(); ++i) uploadStaging_[k].push_back(std::move(stagePages_[k][i].resource));
   if (stagePages_[k].size() > 2) stagePages_[k].resize(2);
+  const size_t letGo = uploadStaging_[k].size();
+  LetGo(&uploadStaging_[k]);
   stagePage_ = 0;
   stageOffset_ = 0;
+  const auto t2 = std::chrono::steady_clock::now();
   if (FAILED(uploadAllocators_[k]->Reset()) || FAILED(uploadList_->Reset(uploadAllocators_[k].Get(), nullptr))) return false;
+  if (HitchLog::on) {
+    const auto t3 = std::chrono::steady_clock::now();
+    auto ms = [](auto x, auto y) { return std::chrono::duration<double, std::milli>(y - x).count(); };
+    if (ms(t0, t3) > 1) {
+      char text[200];
+      snprintf(text, sizeof text, "(the upload batch reopened: the card waited for %.1f ms, %zu upload buffers handed on in %.1f ms, its list reset in %.1f ms)",
+               ms(t0, t1), letGo, ms(t1, t2), ms(t2, t3));
+      HitchLog::Add(text, ms(t0, t3), 9);
+    }
+  }
   uploadOpen_ = true;
   uploadBytes_ = 0;
   return true;
+}
+
+// [spikes] (BeginUpload: the card is done with them) handed to the releaser's thread, started the first time
+void D3D12Device::LetGo(std::vector<Com<ID3D12Resource>>* staging) {
+  if (staging->empty()) return;
+  {
+    std::lock_guard<std::mutex> lock(releaseMutex_);
+    for (Com<ID3D12Resource>& r : *staging) releasing_.push_back(std::move(r));
+    if (!releaser_.joinable())
+      releaser_ = std::thread([this] {
+        std::unique_lock<std::mutex> lock(releaseMutex_);
+        for (;;) {
+          releaseWake_.wait(lock, [&] { return releaseStop_ || !releasing_.empty(); });
+          std::vector<Com<ID3D12Resource>> now;
+          now.swap(releasing_);
+          lock.unlock();
+          now.clear();
+          lock.lock();
+          if (releaseStop_ && releasing_.empty()) return;
+        }
+      });
+  }
+  staging->clear();
+  releaseWake_.notify_all();
 }
 
 void D3D12Device::KeepStaging(Com<ID3D12Resource> staging, uint64_t bytes) {
@@ -1535,9 +1594,18 @@ void D3D12Device::FreeRange(int block, uint64_t offset, uint64_t size) {
 
 void D3D12Device::FlushUploads() {
   if (!uploadOpen_) return;
+  const auto t0 = std::chrono::steady_clock::now();  // [spikes] (one that took long, in the hitch log)
   uploadList_->Close();
   ID3D12CommandList* lists[] = {uploadList_.Get()};
   queue_->ExecuteCommandLists(1, lists);
+  if (HitchLog::on) {
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    if (ms > 1) {
+      char text[120];
+      snprintf(text, sizeof text, "(the uploads sent: %.0f MB)", static_cast<double>(uploadBytes_) / (1 << 20));
+      HitchLog::Add(text, ms, 9);
+    }
+  }
   const uint64_t v = fenceNext_++;
   queue_->Signal(fence_.Get(), v);
   uploadFences_[uploadBatch_] = v;
@@ -1761,6 +1829,196 @@ Texture D3D12Device::CreateTexture(const TextureDesc& desc) {
     textures_.push_back(std::move(rec));
   }
   return {index};
+}
+
+// [spikes] The halves of CreateTexture and of a static CreateBuffer (gfx.h, PrepareTexture). Prepare, on any thread: what
+// they make before their copies are recorded - a texture's resource, and its images laid out at the footprints' pitches in
+// an upload buffer of its own; a buffer's contents in an upload buffer of its own (the device is free-threaded for these;
+// nothing of the device's own lists, pages or tables is touched). Finish, on the frames' thread: the handle, the copies
+// recorded into the open upload batch (sent ahead of the next frame's work, as CreateTexture's are), the texture's view;
+// the upload buffer kept with the batch until the card is done with it (KeepStaging).
+namespace {
+struct PreparedTexture12 final : Device::Prepared {
+  Com<ID3D12Resource> resource, staging;
+  std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> layouts;
+  uint64_t total = 0;
+  DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+  Format kind = Format::Unknown;
+  int mips = 1, layers = 1;
+  bool cube = false;
+};
+struct PreparedBuffer12 final : Device::Prepared {
+  Com<ID3D12Resource> staging;
+  BufferDesc desc;  // (its data not kept: it is in the upload buffer)
+};
+}  // namespace
+
+std::unique_ptr<Device::Prepared> D3D12Device::PrepareTexture(const TextureDesc& desc) {
+  const DXGI_FORMAT format = ToDxgi(desc.format);
+  if (format == DXGI_FORMAT_UNKNOWN || desc.width <= 0 || desc.height <= 0 || desc.mips <= 0 || desc.layers <= 0 || !desc.data) return nullptr;
+  auto p = std::make_unique<PreparedTexture12>();
+  p->format = format;
+  p->kind = desc.format;
+  p->mips = desc.mips;
+  p->layers = desc.layers;
+  p->cube = desc.cube;
+  D3D12_RESOURCE_DESC rd = {};
+  rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+  rd.Width = static_cast<UINT64>(desc.width);
+  rd.Height = static_cast<UINT>(desc.height);
+  rd.DepthOrArraySize = static_cast<UINT16>(desc.layers);
+  rd.MipLevels = static_cast<UINT16>(desc.mips);
+  rd.Format = format;
+  rd.SampleDesc.Count = 1;
+  D3D12_HEAP_PROPERTIES hp = HeapProps(D3D12_HEAP_TYPE_DEFAULT);
+  HRESULT hr = device_->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(p->resource.Put()));
+  if (FAILED(hr)) return Complain("creating a texture", hr), nullptr;
+  const UINT subresources = static_cast<UINT>(desc.mips * desc.layers);
+  p->layouts.resize(subresources);
+  std::vector<UINT> rows(subresources);
+  std::vector<UINT64> rowBytes(subresources);
+  device_->GetCopyableFootprints(&rd, 0, subresources, 0, p->layouts.data(), rows.data(), rowBytes.data(), &p->total);
+  D3D12_HEAP_PROPERTIES up = HeapProps(D3D12_HEAP_TYPE_UPLOAD);
+  D3D12_RESOURCE_DESC bd = BufferResourceDesc(std::max<uint64_t>(p->total, 256));
+  hr = device_->CreateCommittedResource(&up, D3D12_HEAP_FLAG_NONE, &bd, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(p->staging.Put()));
+  if (FAILED(hr)) return Complain("allocating a texture's upload buffer", hr), nullptr;
+  uint8_t* mapped = nullptr;
+  const D3D12_RANGE none = {0, 0};
+  if (FAILED(p->staging->Map(0, &none, reinterpret_cast<void**>(&mapped)))) return Complain("mapping a texture's upload buffer", E_FAIL), nullptr;
+  // (as CreateTexture: the caller's images are tightly packed; the upload buffer wants each row at the footprint's pitch)
+  const bool blocks = IsBlockCompressed(desc.format);
+  const size_t unit = static_cast<size_t>(BytesPerPixelOrBlock(desc.format));
+  const uint8_t* src = static_cast<const uint8_t*>(desc.data);
+  const uint8_t* srcEnd = src + desc.dataSize;
+  for (int layer = 0; layer < desc.layers; ++layer)
+    for (int mip = 0; mip < desc.mips; ++mip) {
+      const UINT sub = static_cast<UINT>(layer * desc.mips + mip);
+      const size_t w = static_cast<size_t>(std::max(1, desc.width >> mip)), h = static_cast<size_t>(std::max(1, desc.height >> mip));
+      const size_t srcRow = (blocks ? (w + 3) / 4 : w) * unit;
+      const size_t srcRows = blocks ? (h + 3) / 4 : h;
+      if (src + srcRow * srcRows > srcEnd) {
+        p->staging->Unmap(0, nullptr);
+        fprintf(stderr, "render: a %dx%d texture with %d mips has too little data (%zu bytes)\n", desc.width, desc.height, desc.mips, desc.dataSize);
+        return nullptr;
+      }
+      uint8_t* dst = mapped + p->layouts[sub].Offset;
+      const size_t copy = std::min<size_t>(srcRow, static_cast<size_t>(rowBytes[sub]));
+      for (size_t y = 0; y < std::min<size_t>(srcRows, rows[sub]); ++y)
+        std::memcpy(dst + y * p->layouts[sub].Footprint.RowPitch, src + y * srcRow, copy);
+      src += srcRow * srcRows;
+    }
+  p->staging->Unmap(0, nullptr);
+  return p;
+}
+
+Texture D3D12Device::FinishTexture(std::unique_ptr<Prepared> prepared) {
+  auto* p = dynamic_cast<PreparedTexture12*>(prepared.get());
+  if (!p) return Device::FinishTexture(std::move(prepared));  // (one kept whole: CreateTexture)
+  if (!p->resource || !p->staging) return {};
+  const auto t0 = std::chrono::steady_clock::now();  // [spikes] (one that took long: its parts, in the hitch log)
+  if (!BeginUpload()) return Complain("uploading a texture", E_FAIL), Texture{};
+  const uint32_t index = NewTextureIndex();
+  if (!index) return {};
+  const auto t1 = std::chrono::steady_clock::now();
+  for (UINT sub = 0; sub < static_cast<UINT>(p->layouts.size()); ++sub) {
+    D3D12_TEXTURE_COPY_LOCATION to = {}, from = {};
+    to.pResource = p->resource.Get();
+    to.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    to.SubresourceIndex = sub;
+    from.pResource = p->staging.Get();
+    from.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    from.PlacedFootprint = p->layouts[sub];
+    uploadList_->CopyTextureRegion(&to, 0, 0, 0, &from, nullptr);
+  }
+  D3D12_RESOURCE_BARRIER b = Transition(p->resource.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
+                                        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+  uploadList_->ResourceBarrier(1, &b);
+  D3D12_SHADER_RESOURCE_VIEW_DESC view = {};  // (as CreateTexture's)
+  view.Format = p->format;
+  view.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+  if (p->kind == Format::BC5)
+    view.Shader4ComponentMapping = D3D12_ENCODE_SHADER_4_COMPONENT_MAPPING(
+        D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_0, D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_1,
+        D3D12_SHADER_COMPONENT_MAPPING_FORCE_VALUE_0, D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_0);
+  if (p->cube && p->layers == 6) {
+    view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
+    view.TextureCube.MipLevels = static_cast<UINT>(p->mips);
+  } else if (p->layers > 1) {
+    view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+    view.Texture2DArray.MipLevels = static_cast<UINT>(p->mips);
+    view.Texture2DArray.ArraySize = static_cast<UINT>(p->layers);
+  } else {
+    view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    view.Texture2D.MipLevels = static_cast<UINT>(p->mips);
+  }
+  const auto t2 = std::chrono::steady_clock::now();
+  device_->CreateShaderResourceView(p->resource.Get(), &view, StagingHandle(index));
+  TextureRec rec;
+  rec.used = true;
+  rec.pixelBytes = IsBlockCompressed(p->kind) ? 0 : BytesPerPixelOrBlock(p->kind);
+  rec.resource = std::move(p->resource);
+  textures_[index] = std::move(rec);
+  const auto t3 = std::chrono::steady_clock::now();
+  KeepStaging(std::move(p->staging), p->total);  // (let go of once the card is done with this batch; a large one sent at once)
+  if (HitchLog::on) {
+    const auto t4 = std::chrono::steady_clock::now();
+    auto ms = [](auto x, auto y) { return std::chrono::duration<double, std::milli>(y - x).count(); };
+    if (ms(t0, t4) > 2) {
+      char text[200];
+      snprintf(text, sizeof text, "(finished: its batch and slot %.1f ms, its copies %.1f ms, its view %.1f ms, its upload buffer kept %.1f ms)", ms(t0, t1),
+               ms(t1, t2), ms(t2, t3), ms(t3, t4));
+      HitchLog::Add(text, ms(t0, t4), 9);
+    }
+  }
+  return {index};
+}
+
+std::unique_ptr<Device::Prepared> D3D12Device::PrepareBuffer(const BufferDesc& desc) {
+  if (desc.dynamic || !desc.data || !desc.size) return nullptr;
+  auto p = std::make_unique<PreparedBuffer12>();
+  p->desc = desc;
+  p->desc.data = nullptr;
+  D3D12_HEAP_PROPERTIES up = HeapProps(D3D12_HEAP_TYPE_UPLOAD);
+  D3D12_RESOURCE_DESC bd = BufferResourceDesc(desc.size);
+  HRESULT hr = device_->CreateCommittedResource(&up, D3D12_HEAP_FLAG_NONE, &bd, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(p->staging.Put()));
+  if (FAILED(hr)) return Complain("allocating a buffer's upload buffer", hr), nullptr;
+  void* mapped = nullptr;
+  const D3D12_RANGE none = {0, 0};
+  if (FAILED(p->staging->Map(0, &none, &mapped))) return Complain("mapping a buffer's upload buffer", E_FAIL), nullptr;
+  std::memcpy(mapped, desc.data, desc.size);
+  p->staging->Unmap(0, nullptr);
+  return p;
+}
+
+Buffer D3D12Device::FinishBuffer(std::unique_ptr<Prepared> prepared) {
+  auto* p = dynamic_cast<PreparedBuffer12*>(prepared.get());
+  if (!p) return Device::FinishBuffer(std::move(prepared));  // (one kept whole: CreateBuffer)
+  if (!p->staging) return {};
+  // (as CreateBuffer's static path, copied from the buffer's own upload buffer in place of the batch's pages)
+  BufferRec rec;
+  rec.used = true;
+  rec.kind = p->desc.kind;
+  rec.stride = p->desc.stride;
+  rec.size = p->desc.size;
+  if (!CutBlock(p->desc.size, &rec.block, &rec.offset)) return {};
+  if (!BeginUpload()) {
+    FreeRange(rec.block, rec.offset, p->desc.size);
+    return Complain("uploading a buffer", E_FAIL), Buffer{};
+  }
+  BufferBlock& b = blocks_[static_cast<size_t>(rec.block)];
+  uploadList_->CopyBufferRegion(b.resource.Get(), rec.offset, p->staging.Get(), 0, p->desc.size);
+  rec.gpu = b.gpu + rec.offset;
+  uint32_t index;
+  if (!freeBuffers_.empty()) {
+    index = freeBuffers_.back();
+    freeBuffers_.pop_back();
+    buffers_[index] = std::move(rec);
+  } else {
+    index = static_cast<uint32_t>(buffers_.size());
+    buffers_.push_back(std::move(rec));
+  }
+  KeepStaging(std::move(p->staging), p->desc.size);
+  return {index + 1};
 }
 
 uint32_t D3D12Device::NewTextureIndex() {  // 0: no room

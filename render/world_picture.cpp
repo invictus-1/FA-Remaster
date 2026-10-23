@@ -552,6 +552,11 @@ void WorldPicture::PrepareWorld(const Camera& camera, int width, int height, dou
     m.frames.TakeLooks(&looks);
     if (!looks.empty()) m.world->SetLooks(looks);
     if (const uint32_t seed = m.frames.Seed()) m.world->weatherSeed = seed;  // the same weather for every player
+    // [spikes] what the armies may build, made ahead (World::MakeAhead; asked of the simulation while readAhead is on)
+    m.frames.WatchBuildable(m.world->readAhead);
+    std::vector<std::string> buildable;
+    m.frames.TakeBuildable(&buildable);
+    if (!buildable.empty()) m.world->MakeAhead(buildable);
     std::vector<uint8_t> seen;  // what the focus army sees, when it has been worked out anew
     int cells = 0;
     if (m.frames.TakeSight(&seen, &cells)) {
@@ -888,7 +893,11 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height, bo
     c.pitch = 3.14159265f / 2;
     c.fovY = 0.05f;
     c.distance = (z1 - z0) * 0.5f / std::tan(c.fovY * 0.5f);
-    m.device->Resize(width, height);
+    // [spikes] drawn into the device's picture of its own at the minimap's size (SetPhotoWindow), not into the window
+    // resized to it: the window was resized twice for every redraw (to the minimap's size and back for the next frame),
+    // each time waiting for the card and making the swap chain's buffers anew. Where the device cannot, as before.
+    const bool own = !minimapByResize && !m.photo.on && m.device->SetPhotoWindow(width, height);  // (a photo's own frames use it: then as before)
+    if (!own) m.device->Resize(width, height);
     const bool icons = w.iconsOn, shadows = w.shadowsOn, deposits = w.depositIcons;
     std::vector<World::Ghost> ghosts;
     std::vector<World::Line> lines;
@@ -912,7 +921,8 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height, bo
     m.device->BeginFrame(clear);
     w.Begin(c, width, height, 0, m.lastTick * 0.1);
     w.Render();
-    m.device->EndFrame(&m.capture, !m.HostShows());  // (in the host's window: read back, not shown)
+    m.device->EndFrame(&m.capture, !own && !m.HostShows());  // (in the host's window: read back, not shown)
+    if (own) m.device->SetPhotoWindow(0, 0);  // [spikes] (the window again for the next frame; the picture kept for the next redraw)
     m.depthIsWindow = false;
     w.iconsOn = icons;
     w.depositIcons = deposits;

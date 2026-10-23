@@ -90,8 +90,8 @@ class Tarmacs {
   gfx::Texture ClearCover(const View& view, const float* area, const std::vector<Pad>& pads, gfx::Texture into = {}, int intoSize = 0);
   int drawn = 0;  // in the last Draw
   // [hitches] Read ahead (World::readAhead, set by the host each frame): a material's pictures are wanted as soon as a pad
-  // in it is laid anywhere (Want, from Decals: in view or not), read on the textures' own thread (FetchLater) and made one
-  // a frame (Ahead, once a frame), so that the first frame a pad of it is in view (zooming in to it) finds them made and
+  // in it is laid anywhere (Want, from Decals: in view or not), made off the frames' thread ([spikes] TextureCache::MakeAhead;
+  // Ahead, once a frame, takes them once all three are done), so that the first frame a pad of it is in view finds them made and
   // does not read them then; and the pads' pipelines are made the first frame they are on, not at the first pad drawn.
   // What is made is what Load would make at that first frame (the same pictures at the same tier).
   bool readAhead = false;

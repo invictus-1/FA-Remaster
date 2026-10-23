@@ -285,6 +285,24 @@ class Device {
   // once, as outside these.
   virtual void BeginBackgroundPipelines() {}
   virtual void EndBackgroundPipelines() {}
+  // [spikes] A texture, or a static buffer, made in two halves, so that what takes time is off the frames' thread:
+  // PrepareTexture / PrepareBuffer may be called on ANY thread (a worker's: TextureCache::MakeAhead, ModelCache's meshes
+  // made ahead) and do the slow part - Direct3D 12: the texture's resource made and its images copied into an upload
+  // buffer of its own; Vulkan: the image and its memory made and the images copied into a staging buffer of its own;
+  // FinishTexture / FinishBuffer, on the frames' thread (where CreateTexture is called, and never inside a frame's pass
+  // that reads it), give it its handle and record the copy onto the card: a small part of CreateTexture's time. What
+  // they make is what CreateTexture / CreateBuffer would make of the same description (the same formats, levels, views
+  // and contents), only its slow part done elsewhere and earlier. A prepared one that is never finished is let go of when
+  // its object is. Null from Prepare*: the description is not one Create* would take (then Create* is told so too).
+  // Where a backend has no halves of its own (this default), Prepare keeps a copy of the description and its data, and
+  // Finish calls Create* with it.
+  struct Prepared {
+    virtual ~Prepared() = default;
+  };
+  virtual std::unique_ptr<Prepared> PrepareTexture(const TextureDesc& desc);
+  virtual Texture FinishTexture(std::unique_ptr<Prepared> prepared);
+  virtual std::unique_ptr<Prepared> PrepareBuffer(const BufferDesc& desc);  // (static buffers only)
+  virtual Buffer FinishBuffer(std::unique_ptr<Prepared> prepared);
   virtual void Destroy(Buffer buffer) = 0;
   virtual void Destroy(Texture texture) = 0;
   virtual void Destroy(Pipeline pipeline) = 0;
