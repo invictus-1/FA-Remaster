@@ -49,6 +49,8 @@ class Wakes {
   // Into the scene's pass, after the water.
   void Draw(const View& view);
   int Count() const { return static_cast<int>(wakes_.size()); }
+  // [lift] The ocean whose lifted waves the wakes ride (ocean.h; World sets it each frame; none: they lie flat, as before).
+  const class Ocean* ride = nullptr;
 
  private:
   struct Wake {
@@ -59,6 +61,8 @@ class Wakes {
   gfx::Pipeline remadePipeline_;  // [wakes]
   bool remade_ = false;           // [wakes]
   bool remadeTried_ = false;      // [wakes] (its pipeline asked for once)
+  gfx::Pipeline ridePipeline_[2];          // [lift] (riding the waves: the wake before, the remade one)
+  bool rideTried_[2] = {false, false};
   std::vector<Wake> wakes_;
 };
 

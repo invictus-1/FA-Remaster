@@ -329,6 +329,16 @@
 //           --surf; --surf-view n: in place of the water 1 the shore field, 2 the waves, [shore] 3 (with
 //           --water-detail) over the beach the wetness the surf lays (red the film a wave left, green how wet) (Surf::view);
 //           MOHO64_DEBUG_SURF=1 (2: and the spray's counts every second), MOHO64_DEBUG_SURF_FIELD=<file.ppm>
+// --ocean  [ocean] a real ocean (ocean.h, World::oceanWaves; modern look): the water's waves worked out on the card from a
+//           wind sea's spectrum with a little swell (an FFT ocean, three squares of waves), in place of the four scrolling
+//           wave pictures: whitecaps where crests fold and their foam drifting downwind in streaks, the sun's glitter clean
+//           at every distance, a glow through crests lit from behind; as rough as the weather (--surf-rough r sets it, 0
+//           still .. 1 a storm), calmer on lakes, in bays and over shallows; the sheet stays flat. --ocean-lift: [lift] and
+//           waves that lift the surface (World::oceanLift: the water drawn as a grid following the camera, lifted by the
+//           same waves; none over the shallows; ships and hover units ride them in the picture alone; the wakes too).
+//           Tuning: --ocean-height n (the waves' height times n, 1), --ocean-tilt n (the slopes drawn n times as steep, 1.5;
+//           from above twice that), --ocean-glint n (0.8), --ocean-foam n, --ocean-glow n (1); --ocean-view n: in place of the
+//           water 1 the slopes, 2 the foam's field, 3 the slopes' spread, 4 the height, 5 the Jacobian (red: it foams)
 // --stream-water  [stream] streams as real water (stream_water.h, World::streamWater; modern look): a map's stream props
 //           (the visuals track's ribbons) drawn as water: deep and dark in the middle, the bed showing at the edges, a
 //           soft wet shore, ripples and foam carried downstream (faster where it drops, white round rocks and behind
@@ -666,6 +676,10 @@ struct Options {
   float rippleSpeed = -1, rippleHalfLife = -1, rippleView = 0;  // --ripple-speed, --ripple-half-life, --ripple-view
   bool surf = false;                    // --surf
   float surfRough = -1, surfStrength = -1, surfSpray = -1, surfBreak = -1;  // --surf-rough, --surf-strength, --surf-spray, --surf-break
+  bool oceanWaves = false;                                     // [ocean] --ocean
+  bool oceanLift = false;                                      // [lift] --ocean-lift
+  float oceanHeight = 1, oceanGlint = 0.8f, oceanFoam = 1, oceanGlow = 1, oceanTilt = 1.5f;  // --ocean-height, -glint, -foam, -glow, -tilt
+  int oceanView = 0;                                           // --ocean-view
   std::string surfTest;                 // --surf-test
   float surfTestRadius = 60;            // --surf-test-radius
   int surfView = 0;                     // --surf-view
@@ -934,6 +948,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--wakes-remade") o->wakesRemade = true;  // [wakes]
     else if (a == "--fixed-step") o->fixedStep = true;  // [wakes]
     else if (a == "--surf") o->surf = true;
+    else if (a == "--ocean") o->oceanWaves = true;  // [ocean]
+    else if (a == "--ocean-lift") o->oceanWaves = o->oceanLift = true;  // [lift]
     else if (a == "--stream-water") o->streamWater = true;  // [stream]
     else if (a == "--ground-cover") o->groundCover = true;
     else if (a == "--plants-far") o->plantsFar = true;      // [plantlod]
@@ -1111,6 +1127,12 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--ripple-half-life") o->rippleHalfLife = static_cast<float>(atof(v));
     else if (a == "--ripple-view") o->rippleView = static_cast<float>(atof(v));
     else if (a == "--surf-rough") o->surfRough = std::clamp(static_cast<float>(atof(v)), 0.0f, 1.0f);
+    else if (a == "--ocean-height") o->oceanHeight = std::clamp(static_cast<float>(atof(v)), 0.0f, 4.0f);
+    else if (a == "--ocean-glint") o->oceanGlint = std::clamp(static_cast<float>(atof(v)), 0.0f, 10.0f);
+    else if (a == "--ocean-foam") o->oceanFoam = std::clamp(static_cast<float>(atof(v)), 0.0f, 10.0f);
+    else if (a == "--ocean-glow") o->oceanGlow = std::clamp(static_cast<float>(atof(v)), 0.0f, 10.0f);
+    else if (a == "--ocean-view") o->oceanView = atoi(v);
+    else if (a == "--ocean-tilt") o->oceanTilt = std::clamp(static_cast<float>(atof(v)), 0.0f, 6.0f);
     else if (a == "--surf-strength") o->surfStrength = std::max(0.0f, static_cast<float>(atof(v)));
     else if (a == "--surf-spray") o->surfSpray = std::max(0.0f, static_cast<float>(atof(v)));
     else if (a == "--surf-break") o->surfBreak = std::max(0.1f, static_cast<float>(atof(v)));
@@ -1722,6 +1744,14 @@ int main(int argc, char** argv) {
   world.water.ripples.view = opt.rippleView;
   world.surf = opt.surf;
   world.surfRoughness = opt.surfRough;
+  world.oceanWaves = opt.oceanWaves;  // [ocean]
+  world.oceanLift = opt.oceanLift;    // [lift]
+  world.water.ocean.heightScale = opt.oceanHeight;
+  world.water.ocean.glint = opt.oceanGlint;
+  world.water.ocean.foamStrength = opt.oceanFoam;
+  world.water.ocean.glow = opt.oceanGlow;
+  world.water.ocean.view = opt.oceanView;
+  world.water.ocean.tilt = opt.oceanTilt;
   if (opt.surfStrength >= 0) world.water.surf.strength = opt.surfStrength;
   if (opt.surfSpray >= 0) world.water.surf.sprayStrength = opt.surfSpray;
   if (opt.surfBreak > 0) world.water.surf.breakDepth = opt.surfBreak;

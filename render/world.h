@@ -456,6 +456,20 @@ class World {
   // sea is, 0 (still) .. 1 (a storm), for a host that sets it itself; -1: by the weather. Modern look, a map with water;
   // off by default (proposed for the game's "Weather Effects").
   bool surf = false;
+  // [ocean] A real ocean (ocean.h, water.ocean; Chris, 2026-10-23): the modern water's waves worked out on the card from a
+  // wind sea's spectrum with a little long swell (an FFT ocean: three squares of waves from long to short), in place of the
+  // four scrolling wave pictures: the waves' slopes, their whitecaps where crests fold (foam that drifts downwind and draws
+  // out into streaks), the sun's glitter clean at every distance, a glow through the crests lit from behind. As rough as
+  // the weather's wind (the surf's measure: calm, rain, a storm; `surfRoughness` for a host that sets it), calmer on lakes,
+  // in bays and over shallows. The sheet stays flat: everything on the water works as before. Modern look, a map with
+  // water; off by default (proposed for the game's "Weather Effects", or a "Water" quality of its own).
+  bool oceanWaves = false;
+  // [lift] Waves that lift the surface (ocean.h; with oceanWaves): the water drawn as a grid that follows the camera, lifted
+  // and shifted by the same waves (knee-high on a small unit in a storm, less in a calm and in bays, none over the
+  // shallows, where the surf and the beach keep the flat sheet's waterline); ships and hover units ride them in the picture
+  // alone (they rise, fall, pitch and roll with the long waves under them: the game's water stays flat, picking and weapons
+  // as they were). Off by default.
+  bool oceanLift = false;
   float surfRoughness = -1;
   // Ground cover near the camera (grass.h): grass blades on grassy ground, coloured from it, swaying in the wind,
   // low and gone with the distance (nothing when the camera is far). Modern look; off by default.

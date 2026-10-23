@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cstdio>
 
+#include "ocean.h"
+
 namespace render {
 namespace {
 
@@ -31,8 +33,16 @@ VOut VS(uint id : SV_VertexID) {
   uint corner = id % 6;
   float2 uv = corner == 0 ? float2(-1, 0) : corner == 1 ? float2(1, 0) : corner == 2 ? float2(1, 1)
             : corner == 3 ? float2(-1, 0) : corner == 4 ? float2(1, 1) : float2(-1, 1);
+#if RIDE
+  // [lift] (on lifted waves, ocean.h: each piece drawn as four along its length, so that it can follow them)
+  w = wakes[id / 24];
+  uv.y = (float((id / 6) % 4) + uv.y) * 0.25;
+#endif
   VOut o;
   o.world = lerp(w.from.xyz, w.to.xyz, uv.y) + lerp(w.sideFrom.xyz, w.sideTo.xyz, uv.y) * (uv.x * lerp(w.from.w, w.to.w, uv.y));
+#if RIDE
+  o.world = OceanRide(o.world);  // [lift] (riding the waves, as the water's grid does)
+#endif
   o.position = mul(viewProj, float4(o.world, 1));
   o.at = float3(uv.x, lerp(w.range.x, w.range.y, uv.y), w.sideFrom.w);
   return o;
@@ -86,9 +96,17 @@ VOut VS(uint id : SV_VertexID) {
   uint corner = id % 6;
   float2 uv = corner == 0 ? float2(-1, 0) : corner == 1 ? float2(1, 0) : corner == 2 ? float2(1, 1)
             : corner == 3 ? float2(-1, 0) : corner == 4 ? float2(1, 1) : float2(-1, 1);
+#if RIDE
+  // [lift] (on lifted waves, ocean.h: each piece drawn as four along its length, so that it can follow them)
+  w = wakes[id / 24];
+  uv.y = (float((id / 6) % 4) + uv.y) * 0.25;
+#endif
   VOut o;
   float halfW = lerp(w.from.w, w.to.w, uv.y);
   o.world = lerp(w.from.xyz, w.to.xyz, uv.y) + lerp(w.sideFrom.xyz, w.sideTo.xyz, uv.y) * (uv.x * halfW);
+#if RIDE
+  o.world = OceanRide(o.world);  // [lift] (riding the waves, as the water's grid does)
+#endif
   o.position = mul(viewProj, float4(o.world, 1));
   o.at = float4(uv.x, lerp(w.range.x, w.range.y, uv.y), w.sideFrom.w, halfW);
   o.gone = lerp(w.range.z, w.range.w, uv.y);
@@ -264,13 +282,41 @@ void Wakes::Draw(const View& view) {
       remade_ = false;
     }
   }
-  device_->SetPipeline(remade_ && remadePipeline_ ? remadePipeline_ : pipeline_);
+  // [lift] on waves that lift the surface (ocean.h): the variant that rides them (made the first time it is wanted)
+  const bool remade = remade_ && remadePipeline_;
+  gfx::Pipeline riding;
+  if (ride && ride->Lifted()) {
+    const int k = remade ? 1 : 0;
+    if (!rideTried_[k]) {
+      rideTried_[k] = true;
+      std::string error;
+      const std::string source = std::string("#define RIDE 1\n") + kViewShaderBlock + kOceanRideShaderBlock + (remade ? kRemadeShader : kShader);
+      gfx::PipelineDesc pd;
+      pd.name = remade ? "wakes remade, riding the waves" : "wakes, riding the waves";
+      pd.vertexSource = pd.pixelSource = source;
+      pd.cull = gfx::Cull::None;
+      pd.depthWrite = false;
+      pd.blend = gfx::Blend::Alpha;
+      pd.colorFormat = kSceneFormat;
+      pd.samples = gSceneSamples;
+      pd.alphaWrite = false;
+      ridePipeline_[k] = device_->CreatePipeline(pd, &error);
+      if (!ridePipeline_[k]) fprintf(stderr, "render: the wakes cannot ride the waves: %s\n", error.c_str());
+    }
+    riding = ridePipeline_[k];
+  }
+  device_->SetPipeline(riding ? riding : remade ? remadePipeline_ : pipeline_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
+  if (riding) {
+    device_->SetConstants(3, ride->RideConstants(), ride->RideConstantsSize());
+    ride->BindRide();
+  }
   for (size_t at = 0; at < wakes_.size(); at += kBatch) {
     const size_t n = std::min(kBatch, wakes_.size() - at);
     device_->SetConstants(2, wakes_.data() + at, static_cast<uint32_t>(n * sizeof(Wake)));
-    device_->Draw(static_cast<uint32_t>(n * 6));
+    device_->Draw(static_cast<uint32_t>(n * (riding ? 24 : 6)));
   }
+  if (riding) ride->UnbindRide();
 }
 
 }  // namespace render
