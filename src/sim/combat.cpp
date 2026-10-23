@@ -2638,6 +2638,30 @@ void KillCleanupTick(Sim& sim) {
   }
 }
 
+// ~CAniActor 0x63a930 walks the actor's manipulator list (actor+0x10) and deletes each one (vt[0] with 1);
+// IAniManipulator's dtor 0x62fc70 ends in ~CScriptEvent 0x4c94c0 -> ~CScriptObject 0x4c7340, which clears the Lua
+// object (IsDestroyed true from then on). A thread waiting on one (WaitFor) is resumed: CWaitForTask::Execute 0x4ca660
+// finds the event's weak pointer null and returns -1 (ThreadScheduler::StillWaiting: an unbound object ends the wait).
+// The animators are on the same actor (sim/anim.cpp keeps them in u->animators; one that lost its Lua side is gone).
+// (Aim controllers went with the weapons, ReleaseUnitCombat.)
+void EndUnitManipulators(Unit* u) {
+  auto end = [](auto& v) {
+    for (auto* m : v) {
+      m->alive = false;
+      m->UnbindLua();
+    }
+    v.clear();
+  };
+  end(u->rotators);
+  end(u->sliders);
+  end(u->slavers);
+  end(u->colliders);
+  end(u->footPlants);
+  end(u->builderArms);
+  for (ScriptObject* a : u->animators) a->UnbindLua();
+  u->animators.clear();
+}
+
 void ReleaseUnitCombat(Sim& sim, Unit* u) {
   DestroyWeapons(sim, u);
   for (AimController* c : u->aimControllers) {

@@ -204,6 +204,17 @@ void UpdateFall(Sim& sim, Entity* e, Motor& m) {
 
 }  // namespace
 
+void MotorsEntityPurged(Sim& sim, const Entity* e) {
+  if (!sim.motorState) return;
+  std::vector<MotorSlot>& motors = MS(sim).motors;
+  for (size_t i = 0; i < motors.size(); ++i)
+    if (motors[i].ref == EntityRef(e)) {
+      if (motors[i].m) motors[i].m->UnbindLua();
+      motors.erase(motors.begin() + static_cast<std::ptrdiff_t>(i));
+      return;
+    }
+}
+
 void MotorsTick(Sim& sim) {
   MotorState& ms = MS(sim);
   ms.motors.erase(std::remove_if(ms.motors.begin(), ms.motors.end(),

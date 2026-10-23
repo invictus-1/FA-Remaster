@@ -13,6 +13,9 @@ void RegisterMotorBindings(lua_State* L);
 void MotorsTick(Sim& sim);
 // Step 13: the moved entities take their new cells in the entity grid.
 void MotorsAdvanceCoords(Sim& sim);
+// The entity is deleted (EntityDb::Purge): ~Entity deletes its motor (0x678620, entity+0x26c), whose Lua table loses
+// its object.
+void MotorsEntityPurged(Sim& sim, const class Entity* e);
 // Sim::~Sim: drops the sim's motor list (its entity handles and motors).
 void MotorsForget(Sim& sim);
 
