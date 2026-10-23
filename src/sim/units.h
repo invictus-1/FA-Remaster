@@ -407,6 +407,13 @@ void RegisterEntityBindings(lua_State* L);
 void TextureScrollerTick(Entity* e, const Vec3& curPos, const Quat& curOri, const Vec3& prevPos, const Quat& prevOri);
 void RegisterEffectBindings(lua_State* L);
 void ReleaseEffectObjects(Sim& sim);
+// The effect manager's tick (AdvanceBeat step 11) and the end of the beat (steps 16-17 and the manipulators of purged
+// units): what ends the objects the effect and manipulator factories made (sim/effects.cpp).
+void EffectsTick(Sim& sim);
+void EffectsEndOfBeat(Sim& sim);
+// For MOHO64_STATS: the factories' objects not yet deleted, the effect manager's active effects, the decals queued to
+// expire.
+void EffectObjectCounts(const Sim& sim, size_t* objects, size_t* effects, size_t* decals);
 // A script played a sound once on e (the sound object at stack index arg): listed for the host while
 // Sim::collectSounds is set (sim/effects.cpp).
 void RecordPlaySound(lua_State* L, const Entity* e, int arg);
