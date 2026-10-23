@@ -5,6 +5,7 @@
 
 #include "camera.h"
 #include "gfx.h"
+#include "ocean.h"
 #include "ripples.h"
 #include "scmap.h"
 #include "surf.h"
@@ -15,7 +16,7 @@ namespace render {
 
 class Water {
  public:
-  Water(gfx::Device* device, TextureCache* textures) : ripples(device), surf(device), device_(device), textures_(textures) {}
+  Water(gfx::Device* device, TextureCache* textures) : ripples(device), surf(device), ocean(device), device_(device), textures_(textures) {}
 
   // Ripples on the modern look's water (ripples.h; World::waterRipples): a splash at (x, z), `radius` world units
   // across its middle (a shell's about 0.5), `strength` 1 for a usual shell, up to about 4 for a blast: rings run
@@ -37,6 +38,11 @@ class Water {
   // ripples' field or without it, and the winter ones while winter water is on); the spray by `surf` itself.
   Surf surf;
   void PrepareSurf(bool ripples, bool winter, bool wet = false);  // ([shore] wet: World::waterDetail's wet beach, SURF_WET)
+  // [ocean] The wind sea worked out on the card (ocean.h; World::oceanWaves): the water draws with its ocean pipelines while
+  // ocean.Active(), each variant (with the ripples' field or not, winter, the surf, the wet beach) made by PrepareOcean the
+  // first time the options on now may want it (World::Begin, each frame the option is on).
+  Ocean ocean;
+  void PrepareOcean(bool ripples, bool winter, bool surf, bool wet, bool lift);
 
   // `map` must stay alive while the water is used. Maps without water load fine and draw nothing.
   bool Load(const MapData* map, std::string* error);
@@ -52,7 +58,8 @@ class Water {
   TextureCache* textures_;
   const MapData* map_ = nullptr;
   void DrawWith(const View& view, const Camera* camera, gfx::Texture behind, gfx::Texture sceneDepth);
-  gfx::Pipeline ModernPipeline(bool ripples, std::string* error, bool winter = false, bool surf = false, bool wet = false);
+  gfx::Pipeline ModernPipeline(bool ripples, std::string* error, bool winter = false, bool surf = false, bool wet = false, bool ocean = false,
+                               bool lift = false);
   gfx::Pipeline pipeline_, modern_;
   gfx::Pipeline modernRipples_;  // (the modern water reading the ripples' field: made the first time it is wanted)
   bool ripplesTried_ = false;
@@ -60,6 +67,10 @@ class Water {
   bool winterTried_[2] = {false, false};
   gfx::Pipeline modernSurf_[8];  // [surf] (by 1 the ripples' field, 2 winter, [shore] 4 the wet beach; each made the first time wanted)
   bool surfTried_[8] = {false, false, false, false, false, false, false, false};
+  // [ocean] (by 1 the ripples' field, 2 winter, 4 the surf, 8 the wet beach, [lift] 16 lifted; each made the first time wanted)
+  gfx::Pipeline oceanPipes_[32];
+  bool oceanTried_[32] = {};
+  gfx::Pipeline OceanPipeline(int key);
   gfx::Buffer vertices_;
   gfx::Texture waterMap_, waves_[4], sky_;
 };
