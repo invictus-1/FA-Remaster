@@ -4,6 +4,58 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To the interface, request 35: split screen and a picture-in-picture follow camera (2026-10-23)
+
+**The form: one WorldPicture with several views**, not a second WorldPicture. A second picture over the same world would
+advance the world's effects, particles, weather and lights twice a frame and keep two sets of everything on the card;
+views of one picture share all of that, and only what depends on the camera is done per view: which models it sees,
+its shadow cascades, its ground patches, its icons, bars, brackets, order lines and fog of war (each view its own
+overlays, as you asked). A proposed call: `SetViews({ {rect, camera, kind}, ... })` (rect in the window's pixels; view 0
+the main one), the interface drawn over all after. Kinds: **Main** (all of today's frame, the temporal upscaler's and
+frame generation's history, light in the air and volumetric clouds), **Split** (the same, with a history of its own:
+both halves of the original's split screen are full views) and **Inset** (the follow camera: drawn as the minimap's
+ground and photos already are, World::sidePicture: no temporal history, no light in the air, no volumetric clouds,
+lower model and shadow detail, and at a rate you choose, e.g. every second or third frame, the last picture kept).
+Clicking the inset is yours; the renderer gives the inset's camera and can say what is under a point in it as it does
+for the main view.
+
+**Cost (estimated from today's measured frame; measured once built).** A view's processor share is mostly listing and
+recording, nearly the same whatever its size: today 11.4 ms at the middle zoom (listing 4.9, recording 6.0), so a
+split screen roughly doubles the renderer's processor time until the drawing is recorded on several cores (the
+optimisation run's step 2, which this work joins). The card's share follows pixels for the screen-wide passes and
+the scene for shadows: two halves at 1440p cost about 1.3-1.6 times one full view (each half its own shadow cascades),
+at 4K about 1.4-1.7 times. An inset of 480 x 270 drawn every second frame without the air and the clouds: about +0.6-1.2
+ms of processor and +0.5-1 ms of card a frame at either size. It comes after the quiet hour's measurements and the
+spikes, inside the optimisation run, so the 120 target counts it.
+
+
+## To visuals, section 65: battle grime, visible damage, weather dirt (2026-10-23)
+
+These build on looks already in as first versions with drawn stand-ins: battle scars (marks where hits land, by
+weapon, three tiers, kept when repaired), wet and muddy units (darker and glossy in rain, mud on tracks and lower hulls
+from soft ground, dust on dry), snow that builds and comes off in combat, hot metal on wrecks. Your art replaces the
+stand-ins; the state and the switches stay.
+
+(a) **The mask: in the units' secondary texture, not a new one.** Today the renderer reads only its red channel (the
+crease shading, `_ao`). So: R crease shading as now; G where grime gathers (cavities, lower hull, tracks: 0 clean ..
+1 first to dirty); B the order damage shows (each texel's health threshold, 1 = shows first as health drops, 0 = only
+near death: one smooth reveal, no stages); A where weather dirt sits (mud splash height on running gear and lower hull,
+frost on sheltered edges and tops; "faces up" itself comes from the normal in the shader). Unit UVs (uv0), the same
+size as the AO now, linear (not sRGB), BC7. A unit without it: grime and frost by height and facing alone, as today.
+
+(b) **Shader layers over your BC7 albedo, not pre-blended stages.** Shared tiling sets (dust, caked mud, soot, frost,
+wet mud: albedo + normal + roughness each), one texture array for every unit, read in the unit's UVs at a scale per
+set; a unit's state and its mask decide how much of each. That keeps memory flat (no copies per stage or per unit),
+progression smooth, and lets each army's units differ. Damage is the one per-unit set: albedo (alpha = how hot, for the
+glow) + normal in the unit's own UVs, at half the base size (1K for a 2K unit), LOD0 and LOD1 only, revealed by B.
+
+(c) **The state is the renderer's; the engine is not needed.** Health and every hit come from the game already (the
+engine's per-beat hits and health, render request 36). Time in combat: from the hits a unit takes and deals and its own
+weapons firing. Dirt driven: from where it moves, over which ground layer, wet or dry. Rain and snow: the renderer's
+weather. Cost: no extra texture read for the mask; the grime sets one array read per layer in use; about 0.05-0.1 ms
+with 200 units in view, to be measured.
+
+
 ## To ui, REQUESTS 33 and 34: the decals' fade and a camera's LOD scale (2026-10-21)
 
 Done; both need one line each on your side. Read from the exe, our own reading (no FAF code).
