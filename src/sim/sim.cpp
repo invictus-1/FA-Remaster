@@ -1469,6 +1469,8 @@ void Sim::ProcessDestroyQueue() {
       // without a kill at 3826; the player's interface reused the three ids at 3953, 3960 and 3964 (it reuses an id
       // only after the sync has said its order is gone), while ours still held them on the destroyed factory.
       ClearFactoryCommandQueue(u);
+      // ~Unit deletes its animation actor (0x6a714c): the manipulators on it go
+      EndUnitManipulators(u);
       // ~Unit's ReleaseOccupyGround 0x6a7ab0 (0x6a6de3) comes after its queue is cleared (0x6a6c66): a failed upgrade's
       // dtor re-occupies the builder's cells first (sim/build.cpp), and a builder that still counts as occupying ground
       // then frees them
@@ -1490,6 +1492,7 @@ void Sim::ProcessDestroyQueue() {
   // ~Entity in EntityDb::Purge: every kind gives its id back, recon blips too (the player's orders name blips
   // by id, and a new unit's blip takes the lowest free serial of its army's blip pool)
   for (Entity* e : done) ReleaseId(e->id);
+  for (Entity* e : done) MotorsEntityPurged(*this, e);  // ~Entity deletes the entity's motor (0x678620)
   static const bool dbg = getenv("MOHO64_DEBUG_DESTROY") != nullptr;
   for (Entity* e : done) {
     if (dbg && e->kind == Entity::Kind::Unit && e->HasLuaObject()) {

@@ -278,6 +278,9 @@ void BeamTick(Sim& sim, class CollisionBeam* b);  // one collision beam's beat
 void WeaponsTick(Sim& sim);
 // A unit leaves the world.
 void ReleaseUnitCombat(Sim& sim, Unit* u);
+// The unit is deleted (EntityDb::Purge, after the destroy queue): ~Unit deletes its CAniActor (0x6a714c ->
+// ~CAniActor 0x63a930), and with it every manipulator on the actor; each one's Lua table loses its object then.
+void EndUnitManipulators(Unit* u);
 
 // Attack commands (CUnitAttackTargetTask), run as the unit's command task.
 BuildTask* StartAttackTask(Sim& sim, Unit* u, const UnitCommand& c);

@@ -10,7 +10,6 @@
 #include <cstring>
 #include <list>
 #include <map>
-#include <set>
 #include <string>
 
 #include "core/log.h"
@@ -37,7 +36,6 @@ class EngineThing : public ScriptObject {
   FxKind fx = FxKind::None;
   bool attached = false;     // CEffectImpl+0x14c (SetEntity 0x6592d0 / SetBone 0x659280 set it)
   bool beamUpdate = true;    // CEfxBeam+0x294: Update 0x654f30 still runs (the ctors 0x6547c0 / 0x654a70 set it)
-  bool noBlueprint = false;  // the factory's blueprint does not exist: the original made nothing (see l_Factory)
   bool ending = false;       // on the manager's destroyed list (+0x10): deleted at the beat's step 16
   bool freed = false;        // unbound; the object itself goes at the end of the beat
   uint32_t entity = 0;       // what it hangs on (EntityRef; CEffectImpl+0x120); a manipulator's unit
@@ -284,6 +282,31 @@ int l_Factory(lua_State* L) {
   const Factory& f = kFactories[static_cast<size_t>(lua_tonumber(L, lua_upvalueindex(1)))];
   Sim* sim = Sim::From(L);
   ThingLists& tl = Lists(*sim);
+  // The blueprint first: without it the original makes nothing. An emitter's or trail's manager Create* logs a warning
+  // and returns null, and the function returns no value, nil (CreateEmitterAtEntity 0x65e731 / cfunc 0x66f860; the
+  // other emitters 0x65e2ac, 0x65e416, 0x65e5a6, 0x65e8c6; CreateTrail 0x672176). A beam function raises "Unknown
+  // beam kind" before it makes anything (cfunc_CreateBeamEmitterL 0x6565a8; 0x6567b8, 0x656bab, 0x656efb).
+  const EffectBlueprint* bp = nullptr;
+  if (f.bp) {
+    const int arg = static_cast<int>(std::strchr(f.args, 's') - f.args) + 1;
+    const char* name = lua_type(L, arg) == LUA_TSTRING ? lua_tostring(L, arg) : "";
+    const BpKind want = f.fx == FxKind::Emitter ? BpKind::Emitter : f.fx == FxKind::Trail ? BpKind::TrailEmitter : BpKind::Beam;
+    bp = sim->blueprints().FindEffect(name);
+    if (!bp || bp->kind != want) {
+      static const bool dbg = getenv("MOHO64_DEBUG_FXBP") != nullptr;  // where (the Lua stack), each time
+      if (dbg) {
+        luaL_where(L, 1);
+        Logf(LogLevel::Info, "fxbp: tick %u %s: no %s blueprint %s (%s)", sim->tick(), f.name,
+             f.fx == FxKind::Emitter ? "emitter" : f.fx == FxKind::Trail ? "trail" : "beam", name, lua_tostring(L, -1));
+        lua_pop(L, 1);
+      }
+      if (f.fx == FxKind::Beam) return luaL_error(L, "Unknown beam kind: %s", name);
+      Logf(LogLevel::Warning, f.fx == FxKind::Trail ? "Failed to create trail as you passed in an invalid blueprint name %s."
+                                                    : "Failed to create emitter as you passed in an invalid blueprint name %s.",
+           name);
+      return 0;
+    }
+  }
   auto t = std::make_unique<EngineThing>(f.cls);
   t->seq = ++tl.nextSeq;
   if (f.args && Collecting(L)) t->effectId = RecordCreate(L, f);
@@ -293,26 +316,7 @@ int l_Factory(lua_State* L) {
     t->fx = f.fx;
     t->attached = f.attached;
     if (f.attached && f.args && f.args[0] == 'e') t->entity = EntityRef(ToObject<Entity>(L, 1));
-    if (f.bp) {
-      const char* where = std::strchr(f.args, 's');
-      const int arg = static_cast<int>(where - f.args) + 1;
-      const BpKind want = f.fx == FxKind::Emitter ? BpKind::Emitter : f.fx == FxKind::Trail ? BpKind::TrailEmitter : BpKind::Beam;
-      const EffectBlueprint* bp = lua_type(L, arg) == LUA_TSTRING ? sim->blueprints().FindEffect(lua_tostring(L, arg)) : nullptr;
-      if (bp && bp->kind == want) {
-        t->lifetime = bp->lifetime;
-      } else {
-        // The original makes nothing for a blueprint it does not have: it logs a warning and the function returns
-        // nil (CreateEmitterAtEntity 0x65e731, cfunc 0x66f860). Ours still returns an object (scripts chain calls
-        // on it); it ends at the manager's first tick, the nearest to nil a returned object can come.
-        t->noBlueprint = true;
-        static const bool dbg = getenv("MOHO64_DEBUG_FXBP") != nullptr;  // which names are not found (once each)
-        static std::set<std::string> told;
-        if (dbg && told.insert(lua_type(L, arg) == LUA_TSTRING ? lua_tostring(L, arg) : "(no name)").second)
-          Logf(LogLevel::Info, "fxbp: tick %u %s: no %s blueprint %s", sim->tick(), f.name,
-               f.fx == FxKind::Emitter ? "emitter" : f.fx == FxKind::Trail ? "trail" : "beam",
-               lua_type(L, arg) == LUA_TSTRING ? lua_tostring(L, arg) : "(no name)");
-      }
-    }
+    if (bp) t->lifetime = bp->lifetime;
     // (A blueprint not drawn at the current fidelity is destroyed at once, 0x65e7ea / 0x65616e. Only LowFidelity
     // is ever false in the game's and mods' emitters, so no effect ends that way at medium or high fidelity, which
     // this simulation stands for.)
@@ -705,10 +709,6 @@ void EffectsTick(Sim& sim) {
   for (size_t i = 0; i < tl.effects.size(); ++i) {
     EngineThing* t = tl.effects[i];
     if (t->ending || t->freed) continue;  // (on the destroyed list, which Tick does not walk)
-    if (t->noBlueprint) {
-      EndEffect(tl, t);
-      continue;
-    }
     switch (t->fx) {
       case FxKind::Emitter:
         if (t->lifetime >= 0.0f && t->tickCount >= t->lifetime) EndEffect(tl, t);
