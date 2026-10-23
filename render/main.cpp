@@ -285,6 +285,15 @@
 //           and every unit of a game or a test (--tracks-test, --fx-move) starting with it; --rain-stops s: the rain
 //           (or snow) stops s seconds into the run, to watch things dry; --fx-follow: with --fx-move and --cam, the
 //           camera follows the driven unit all the same, at --cam's distance, pitch and heading (to look at it close)
+// --unit-grime  [grime] battle grime and weather dirt on units (unit_grime.h, World::unitGrime; modern look): dust, caked mud
+//           and soot gathering as a unit fights and drives, mud splashed up its lower body in rain, frost where snow lies;
+//           --unit-damage  [grime] damage shown by health (World::unitDamage): dents, burns and torn plates as it drops, hot
+//           where fresh, patched as it is repaired. With the visuals session's art where a unit has it (its _lab_masks and
+//           _lab_damage textures), else by its shape. --wear-art <unit id>=<folder>: that unit's art from a trial folder in
+//           the visuals session's layout (masks/<ID>_ao_masks.dds, damage/<ID>_damage_albedo.dds and _normal.dds);
+//           --grime-test dust,caked,soot[,health[,lowest[,recent[,splash]]]]: each placed unit (--place) given that much
+//           grime (0..1 each) and that health (a share; 1), the lowest it lived through (as its health) and its health
+//           some seconds ago (as its health: above it, what was lost glows), and mud splashed by rain (0)
 // --hot-metal  fresh wrecks glow where they broke and on their thin parts and cool over a minute or two, fresh scorches
 //           and craters glow in the middle, cooling wrecks smoulder (World::hotMetal, hot_metal.h; modern look);
 //           --wreck-test n[,unit]: n wrecks of that unit (uel0201) laid in a square round where the camera starts, as a
@@ -751,6 +760,9 @@ struct Options {
   bool weatherCuts = true;              // (airfix) --no-weather-cut
   bool fxFollow = false;                // --fx-follow
   std::string wearTest;                 // --wear-test
+  bool unitGrime = false, unitDamage = false;  // [grime] --unit-grime, --unit-damage
+  std::string grimeTest;                       // [grime] --grime-test
+  std::vector<std::string> wearArt;            // [grime] --wear-art
   bool hiddenOutlines = true;           // --no-hidden-outlines, --hidden-outlines
   bool hotMetal = false;                // --hot-metal
   int wreckTest = 0;                    // --wreck-test
@@ -986,6 +998,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--unit-scars") o->unitScars = true;
     else if (a == "--unit-snow") o->unitSnow = true;
     else if (a == "--unit-dirt") o->unitDirt = true;  // [unit dirt]
+    else if (a == "--unit-grime") o->unitGrime = true;  // [grime]
+    else if (a == "--unit-damage") o->unitDamage = true;  // [grime]
     else if (a == "--fx-follow") o->fxFollow = true;  // [unit dirt]
     else if (a == "--hidden-outlines") o->hiddenOutlines = true;
     else if (a == "--no-hidden-outlines") o->hiddenOutlines = false;
@@ -1183,6 +1197,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
       }
     }
     else if (a == "--wear-test") o->wearTest = v;
+    else if (a == "--grime-test") o->grimeTest = v;      // [grime]
+    else if (a == "--wear-art") o->wearArt.push_back(v);  // [grime]
     else if (a == "--unit-dirt-pace") o->unitDirtPace = std::max(0.0f, static_cast<float>(atof(v)));  // [unit dirt]
     else if (a == "--dirt-test") o->dirtTest = v, o->unitDirt = true;                                 // [unit dirt]
     else if (a == "--rain-stops") o->rainStops = static_cast<float>(atof(v));                          // [unit dirt]
@@ -1452,6 +1468,14 @@ void MountGameFiles(const Options& o, moho::Vfs* vfs) {
     const size_t eq = p.find('=');
     if (eq == std::string::npos || !vfs->Mount(p.substr(eq + 1), "/preview/" + p.substr(0, eq)))
       fprintf(stderr, "render: --preview %s: expected <unit id>=<existing folder>\n", p.c_str());
+  }
+  // [grime] --wear-art <unit id>=<folder>: a unit's wear art from a trial folder (ModelCache::wearArtTrial)
+  for (const std::string& p : o.wearArt) {
+    const size_t eq = p.find('=');
+    std::string id = p.substr(0, eq);
+    for (char& c : id) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (eq == std::string::npos || !vfs->Mount(p.substr(eq + 1), "/wear-art/" + id))
+      fprintf(stderr, "render: --wear-art %s: expected <unit id>=<existing folder>\n", p.c_str());
   }
 }
 
@@ -1855,6 +1879,14 @@ int main(int argc, char** argv) {
   world.unitSnow = opt.unitSnow;
   world.unitDirt = opt.unitDirt;  // [unit dirt]
   world.unitDirtPace = opt.unitDirtPace;
+  world.unitGrime = opt.unitGrime;  // [grime]
+  world.unitDamage = opt.unitDamage;
+  world.models.wearArt = opt.unitGrime || opt.unitDamage;  // (units' models take their wear art: unit_grime.h)
+  for (const std::string& p : opt.wearArt) {
+    std::string id = p.substr(0, p.find('='));
+    for (char& c : id) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    world.models.wearArtTrial.push_back(id);
+  }
   world.hiddenOutlines = opt.hiddenOutlines;
   world.hotMetal = opt.hotMetal;
   if (opt.hotLights >= 0) world.heat.mostLights = opt.hotLights;
@@ -2619,6 +2651,21 @@ int main(int argc, char** argv) {
     }
     printf("render: --dirt-test: wet %.2f, mud %.2f (wet %.2f), dust %.2f (sand %.2f), front %.2f%s on %zu units\n", v[0], v[1], v[2], v[3], v[4], v[5],
            v[6] > 0.5f ? ", walking" : "", placedUnits.size());
+  }
+  if (!opt.grimeTest.empty()) {  // [grime] --grime-test: each placed unit given that much grime and that health
+    float v[7] = {0, 0, 0, 1, -1, -1, 0};
+    std::string all = opt.grimeTest;
+    for (int k = 0; k < 7 && !all.empty(); ++k) {
+      const size_t comma = all.find(',');
+      v[k] = static_cast<float>(atof(all.substr(0, comma).c_str()));
+      all = comma == std::string::npos ? std::string() : all.substr(comma + 1);
+    }
+    if (v[4] < 0) v[4] = v[3];
+    if (v[5] < 0) v[5] = v[3];
+    for (size_t n = 0; n < placedUnits.size(); ++n)
+      world.wear.SetGrime(0x40000000u | static_cast<uint32_t>(n), placedUnits[n].model, v[0], v[1], v[2], v[3], v[4], v[5], v[6], 0.0);
+    printf("render: --grime-test: dust %.2f, caked mud %.2f, soot %.2f, health %.2f (lowest %.2f, some seconds ago %.2f), splashed %.2f on %zu units\n", v[0],
+           v[1], v[2], v[3], v[4], v[5], v[6], placedUnits.size());
   }
   if (opt.wreckTest > 0) {  // --wreck-test: wrecks laid round where the camera starts as a game makes them, just made
     std::string id = opt.wreckUnit;
@@ -4000,6 +4047,7 @@ int main(int argc, char** argv) {
                world.wildlifeDraw.firefliesTried, world.wildlifeDraw.heard, world.wildlifeDraw.scares);
       if (opt.focus > 0) printf("; %d buildings remembered, %zu of them gone", world.RememberedCount(), world.rememberedGone.size());
       if (opt.unitDirt) printf("; unit dirt: %s", world.wear.DirtSummary().c_str());  // [unit dirt]
+      if (opt.unitGrime || opt.unitDamage) printf("; unit grime: %s", world.wear.GrimeSummary().c_str());  // [grime]
       if (opt.unitScars || opt.unitSnow)  // (battle scars: what the hits were found by; unit_wear.h)
         printf("; wear: %d units known, hits %d told, %d by shots seen to stop, %d by beams, %d by blasts near, %d unseen; %d marks made, %d heals",
                world.wear.known(), world.wear.toldHits, world.wear.shotHits, world.wear.beamHits, world.wear.blastHits, world.wear.unseenHits,

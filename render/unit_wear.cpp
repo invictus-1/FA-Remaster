@@ -586,8 +586,9 @@ void UnitWear::Watch(const Frame& frame, double clock, float snowing, float snow
     auto known = shots_.find(p.id);
     if (known == shots_.end()) {
       known = shots_.emplace(p.id, frame.tick).first;
-      // a new shot: the unit whose box it leaves (its muzzle's) fires it, and its snow shakes off
-      if (!p.stopped && snow)
+      // a new shot: the unit whose box it leaves (its muzzle's) fires it, and its snow shakes off ([grime] its firing is
+      // fighting: soot and dust)
+      if (!p.stopped && (snow || grime))
         if (Here* h = unitAt(at, 2.5f)) h->firing += kindOf(p.blueprint) == Explosive ? 2.5f : 1.0f;
     }
     known->second = (known->second & 0x80000000u) | frame.tick;
@@ -603,7 +604,7 @@ void UnitWear::Watch(const Frame& frame, double clock, float snowing, float snow
     const Vec3 from{b.start[0], b.start[1], b.start[2]}, to{b.end[0], b.end[1], b.end[2]};
     const Vec3 way = Length(to - from) > 1e-3f ? Normalize(to - from) : Vec3{0, -1, 0};
     if (Here* h = unitAt(to, 0.6f)) struck.push_back({h, to, way, Energy, true});
-    if (snow)
+    if (snow || grime)  // ([grime] as a shot's)
       if (Here* h = unitAt(from, 1.0f)) h->firing += 0.2f;  // (a beam's unit: its heat)
   }
   if (frame.beams.size() + frame.projectiles.size() == 0 && shots_.size() > 20000) shots_.clear();
@@ -723,6 +724,33 @@ void UnitWear::Watch(const Frame& frame, double clock, float snowing, float snow
         u.snow -= dt / (left < 0.25f ? 6.0f : 15.0f);
       }
     }
+    // [grime] its fighting (hits taken, its own firing, blasts near it) gathers soot and dust; its health for the damage shown
+    if ((grime || damage) && !u.grimeTold) {
+      const float lost = u.health >= 0 && f.maxHealth > 0 ? std::max(u.health - f.health, 0.0f) / most : 0.0f;
+      if (grime && u.built) {
+        float near = 0;  // (blasts round it, the nearer the more; a blast's earth thrown up is dust, its smoke soot)
+        for (const Blast& b : blasts) {
+          if (b.kind != Explosive && b.kind != Fire) continue;
+          const float reach = 3 + h.radius * 1.5f, d = Length(b.at - h.centre);
+          if (d < reach) near += 1 - d / reach;
+        }
+        u.combat = std::clamp(u.combat - dt / 30 + lost * 3 + h.firing * 0.04f + near * 0.15f, 0.0f, 1.0f);
+        // (some four minutes of hard fighting to its most soot, a little more for dust; every blast near adds its own)
+        u.gSoot = std::min(1.0f, u.gSoot + dt * u.combat * 0.004f + near * 0.02f + lost * 0.25f + dt * u.burn * 0.01f);
+        u.gDust = std::min(1.0f, u.gDust + dt * u.combat * 0.003f + near * 0.015f);
+      }
+      if (damage) {
+        const float share = std::clamp(f.health / most, 0.0f, 1.0f);
+        if (!u.built || u.recent < 0) {  // (being built: its health grows with the work, no damage)
+          u.lowest = u.built ? share : 1.0f;
+          u.recent = u.built ? share : -1.0f;
+        } else {
+          u.lowest = std::min(u.lowest, share);
+          // (what it lost glows for some seconds where the damage set says it is hot: from its health then down to now)
+          u.recent = share >= u.recent ? share : u.recent + (share - u.recent) * (1 - std::exp(-dt / 2.5f));
+        }
+      }
+    }
     u.health = f.health;
     u.most = f.maxHealth;
     // its speed
@@ -803,8 +831,79 @@ const WearLook* UnitWear::Look(uint32_t id, double clock, const Model* drawn) {
   // [unit dirt] its own wetness, mud and dust (once worked out and its model's box known)
   w.dirt = dirt && u.dirty && u.box;
   if (w.dirt) DirtRows(id, u, &w);
-  if (w.count == 0 && w.general <= 0 && w.snow < 0 && !w.dirt) return nullptr;
+  // [grime] its grime, weather dirt and damage (its box from its model where the dirt has not found it)
+  if ((grime || damage) && !u.box && u.model && u.model->ok) {
+    u.lo = u.model->boundsMin * u.model->scale;
+    u.hi = u.model->boundsMax * u.model->scale;
+    u.box = true;
+  }
+  w.grime = false;
+  if ((grime || damage) && u.box) GrimeRows(id, u, &w);
+  if (w.count == 0 && w.general <= 0 && w.snow < 0 && !w.dirt && !w.grime) return nullptr;
   return &w;
+}
+
+// [grime] (unit_wear.h, WearLook::grimeRows; unit_grime.h says what each is)
+void UnitWear::GrimeRows(uint32_t id, const Unit& u, WearLook* w) const {
+  const float height = std::max(u.hi.y - u.lo.y, 0.05f);
+  const float dust = grime ? u.gDust : 0.0f, caked = grime ? u.gCaked : 0.0f, soot = grime ? u.gSoot : 0.0f;
+  const float splash = grime ? u.splash : 0.0f;
+  // frost where snow lies (its own share of it with the snow on units), none on a unit hot from fighting or burning
+  const float frost = grime ? std::clamp(frostLying, 0.0f, 1.0f) * (snow ? u.snow : 1.0f) * (1 - 0.8f * u.combat) * (1 - u.burn) : 0.0f;
+  const float wet = grime ? (u.dirty ? u.wet : std::clamp(groundWet, 0.0f, 1.0f)) : 0.0f;
+  // its health shown (a unit being built shows none); what was mended stays as trophies: the first three tenths of the
+  // worst damage it lived through, patched (from that order of the damage on), where it is whole again above it
+  float share = -1, recent = -1, mend = 2;
+  if (damage && u.most > 0 && u.recent >= 0) {
+    share = std::clamp(u.health / u.most, 0.0f, 1.0f);
+    recent = std::max(u.recent, share);
+    if (u.lowest < share - 0.02f) mend = 1 - (1 - u.lowest) * 0.3f;
+  }
+  const bool shows = dust + caked + soot + frost + splash > 0.002f || (share >= 0 && (share < 0.999f || mend <= 1));
+  if (!shows) return;
+  w->grime = true;
+  w->grimeRows[0] = {dust, caked, soot, frost};
+  w->grimeRows[1] = {wet, splash, share, recent};
+  w->grimeRows[2] = {u.lo.y, 1 / height, mend, Hash01(id, 0x6e1au)};
+}
+
+void UnitWear::SetGrime(uint32_t id, const Model* model, float dust, float caked, float soot, float health, float lowest, float recent, float splash,
+                        double clock) {
+  Unit& u = units_[id];
+  u.model = model;
+  u.seen = clock;
+  u.grimeTold = true;
+  u.gDust = std::clamp(dust, 0.0f, 1.0f);
+  u.gCaked = std::clamp(caked, 0.0f, 1.0f);
+  u.gSoot = std::clamp(soot, 0.0f, 1.0f);
+  u.splash = std::clamp(splash, 0.0f, 1.0f);
+  u.most = 1;
+  u.health = std::clamp(health, 0.0f, 1.0f);
+  u.lowest = std::clamp(std::min(lowest, u.health), 0.0f, 1.0f);
+  u.recent = std::max(recent, u.health);
+  u.box = model && model->ok;
+  if (u.box) {
+    u.lo = model->boundsMin * model->scale;
+    u.hi = model->boundsMax * model->scale;
+  }
+}
+
+std::string UnitWear::GrimeSummary() const {
+  int n = 0, hurt = 0;
+  double dust = 0, caked = 0, soot = 0, splash = 0, combat = 0;
+  for (const auto& [id, u] : units_) {
+    ++n;
+    dust += u.gDust;
+    caked += u.gCaked;
+    soot += u.gSoot;
+    splash += u.splash;
+    combat += u.combat;
+    if (u.most > 0 && u.health < u.most * 0.999f) ++hurt;
+  }
+  char b[200];
+  snprintf(b, sizeof b, "%d units, dust %.3f, caked mud %.3f, soot %.3f, splashed %.3f, fighting %.3f, %d hurt", n, n ? dust / n : 0.0,
+           n ? caked / n : 0.0, n ? soot / n : 0.0, n ? splash / n : 0.0, n ? combat / n : 0.0, hurt);
+  return b;
 }
 
 // [unit dirt] (unit_wear.h says what it does)
@@ -857,6 +956,7 @@ void UnitWear::Dirt(const Frame& frame, double clock, const DirtWeather& weather
       u.dirty = true;
       u.wet = built ? groundWet : 0.0f;
       u.mud = u.mudWet = u.dust = u.sandy = u.front = 0;
+      if (!u.grimeTold) u.gDust = u.gCaked = u.gSoot = u.splash = u.combat = 0;  // [grime] (clean from the factory too)
       if (startGiven_ && built) {  // (--dirt-test: as told)
         u.wet = start_[0], u.mud = start_[1], u.mudWet = start_[2], u.dust = start_[3], u.sandy = start_[4], u.front = start_[5];
       }
@@ -916,6 +1016,25 @@ void UnitWear::Dirt(const Frame& frame, double clock, const DirtWeather& weather
         u.sandy = (u.sandy * u.dust + (dusts > 0 ? sand / dusts : 0) * dgain) / std::max(u.dust + dgain, 1e-4f);
         u.dust = std::min(1.0f, u.dust + dgain);
       }
+      if (grime && !u.grimeTold) {  // [grime] what it drives through leaves its grime, slowly: a crust of mud, a coat of dust
+        u.gCaked = std::min(1.0f, u.gCaked + gain * 0.06f + dgain * 0.02f);  // (some five minutes of fast driving through mud)
+        u.gDust = std::min(1.0f, u.gDust + dgain * 0.12f);                   // (some three and a half through dry dirt)
+      }
+    }
+    // [grime] weather dirt: rain splashes mud from soft ground onto its lower body (the more as it drives), drying on and
+    // flaking off over a quarter of an hour; rain washes dust off in minutes, soot and caked mud slowly; water at once
+    if (grime && !u.grimeTold) {
+      if (rain > 0 && onGround && !underWater) {
+        float k[6];
+        GroundAt(at.x, at.z, k);
+        const float soft = std::clamp(k[1] + k[4] + 0.3f * k[3], 0.0f, 1.0f);
+        u.splash = std::min(1.0f, u.splash + dt * rain * soft * (0.15f + 0.85f * std::min(v / 3, 1.0f)) / 90);
+      } else {
+        u.splash = std::max(0.0f, u.splash - dt / 900 * (1 + sun) - (underWater ? dt * 0.2f : 0.0f));
+      }
+      u.gDust = std::max(0.0f, u.gDust - dt * (rain / 240 + (underWater ? 0.05f : 0.0f)));
+      u.gSoot = std::max(0.0f, u.gSoot - dt * (rain / 1500 + (underWater ? 0.01f : 0.0f)));
+      u.gCaked = std::max(0.0f, u.gCaked - dt * (rain / 3000 + (underWater ? 0.01f : 0.0f)));
     }
     // its mud dries in some two and a half minutes (faster in sun), and in rain is wet again; dry it cracks and flakes
     // off over some six minutes (the faster as it drives), rain washes it off in a minute and a half, water at once
@@ -1096,7 +1215,7 @@ void WearSurface(StructuredBuffer<float4> rows, float4 wear, float3 p, float3 n,
   float g = wear.z;
   [branch] if (g > 0.001) {
     float patches = CloudNoise(p * 1.1 + 17.3);  // (one noise each for the patches and the chips: the costliest part)
-    float grime = saturate((patches - 0.45) * 2.2) * saturate(g * 0.35) * keep;
+    float grime = saturate((patches - 0.45) * 2.2) * saturate(g * 0.35) * keep * (grimeTaken ? 0 : 1);  // [grime] (its own grime instead)
     base *= 1 - 0.3 * grime;
     roughness = lerp(roughness, 0.86, 0.5 * grime);
     metallic *= 1 - 0.35 * grime;
@@ -1108,7 +1227,7 @@ void WearSurface(StructuredBuffer<float4> rows, float4 wear, float3 p, float3 n,
     metallic = lerp(metallic, 0.85, chips);
     roughness = lerp(roughness, 0.55, chips);
   }
-  uint first = (uint)(wear.x + 0.5), count = (uint)(wear.y + 0.5);
+  uint first = (uint)(wear.x + 0.5), count = (uint)wear.y;  // ([unit dirt], [grime]: its quarters say what rows follow the marks)
   // which marks lie near enough here (none reaches farther than 2.2 radii): four at a time, their rows read together
   // (read one after another, the waits for them were most of what the marks cost)
   uint near = 0;
@@ -1347,6 +1466,7 @@ void DirtSurface(StructuredBuffer<float4> rows, uint at, float3 p, float3 n, flo
     float drop = (1 - smoothstep(radius - pixel * 21, radius + pixel * 21, length(q - centre))) * step(hc, over * 0.55) * saturate(4 - pixel * 70);
     float thrown = saturate(blot + drop) * (1 - band);
     float muddy = saturate(band + thrown);
+    muddy *= grimeSplash < 0 ? 1 : saturate(0.3 + grimeSplash * 1.5);  // [grime] (where the unit's masks say weather dirt sits)
     [branch] if (muddy > 0.001) {
       // how wet it is here: what was thrown over its edge and its thin edge dry first, the thick crust last
       float damp = saturate(mudWet * 1.7 - (1 - thick) * 0.7 - thrown * 0.35);

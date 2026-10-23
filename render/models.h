@@ -63,6 +63,11 @@ struct ModelLod {
   uint32_t indexBytes = 2;   // each index's size, 2 or 4 bytes (the ray tracing scene reads them: ray_scene.h)
   gfx::Texture albedo, normals, specular;
   gfx::Texture secondary;  // remastered units: ambient occlusion in red
+  // [grime] A remastered unit's wear art (unit_grime.h; loaded while ModelCache::wearArt is set): `wearMasks`, its secondary
+  // is the masks texture (<ID>_lab_masks.dds: R the same crease shading, G where grime gathers, B the order damage shows, A
+  // where weather dirt sits); its damage set (<ID>_lab_damage_albedo.dds, colour with heat in alpha; _damage_normal.dds).
+  bool wearMasks = false;
+  gfx::Texture damageAlbedo, damageNormal;
   // Remastered units ("LabPBR"): the specular texture holds the material itself - red: metal,
   // green: roughness, blue: glow, alpha: team colour mask. Otherwise it is the original's spec-team
   // texture (red: reflection, green: highlight, blue: glow, alpha: team colour mask), which the
@@ -292,6 +297,12 @@ class ModelCache {
   // Units' models loaded while this is set keep a shape of their triangles for battle scars (Model::hitShape,
   // unit_wear.h; World sets it with unitScars).
   bool hitShapes = false;
+  // [grime] Units' models loaded while this is set take their wear art (ModelLod::wearMasks, damageAlbedo, damageNormal;
+  // World sets it with unitGrime or unitDamage): from the unit's textures beside its _lab_ ones, or, for a unit named in
+  // `wearArtTrial` (its id, lower case), from the trial folder mounted at /wear-art/<id> (masks/<ID>_ao_masks.dds,
+  // damage/<ID>_damage_albedo.dds and _normal.dds: the visuals session's trial layout; the viewer's --wear-art).
+  bool wearArt = false;
+  std::vector<std::string> wearArtTrial;
   // [unit lamps] Every remastered unit's lamps this many times the strength its list gives each (1; the viewer's
   // --lamp-scale, set before models are made: to try a factor before a unit's list is changed, docs/render-unit-lights.md).
   float lampScale = 1;

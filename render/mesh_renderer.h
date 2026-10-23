@@ -307,6 +307,8 @@ class MeshRenderer {
     int64_t at;
   };
   std::vector<WearRows> wears_;
+  gfx::Texture grimeLayers_;  // [grime] the units' shared grime layers (unit_grime.h), made once a unit wears grime
+  bool grimeWanted_ = false;
   std::vector<Vec4> wearRows_;
   bool prepared_ = false;
 

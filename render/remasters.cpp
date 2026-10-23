@@ -24,6 +24,18 @@ int MountRemasters(moho::Vfs* vfs, const std::string& root, bool effectsDespiteH
         printf("render: remastered ground from %s%s\n", ground.c_str(), hold ? " (despite its HOLD)" : "");
     }
   }
+  {  // [grime] the units' shared grime layers (unit_grime.h): one folder of the sets' files
+    const std::string grime = root + "/_unitgrime/export/moho64";
+    if (moho::hostfs::IsDirectory(grime)) {
+      bool hold = false;
+      for (const std::string& file : moho::hostfs::ListDirectory(grime)) {
+        std::string low = file;
+        for (char& c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (low == "hold") hold = true;
+      }
+      if (!hold && vfs->Mount(grime, kRemasteredUnitGrime)) printf("render: units' grime layers from %s\n", grime.c_str());
+    }
+  }
   {  // the remastered effects (effect_files.h): one folder with the game's paths below it
     const std::string effects = root + "/_effects/export/moho64";
     bool hold = false;

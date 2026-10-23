@@ -23,5 +23,7 @@ namespace render {
 int MountRemasters(moho::Vfs* vfs, const std::string& root, bool effectsDespiteHold = false, bool terrainDespiteHold = false);
 // Where the remastered ground is mounted (Terrain reads its remap.json there).
 inline constexpr const char* kRemasteredTerrain = "/remastered-terrain";
+// [grime] Where the units' shared grime layers are mounted (unit_grime.h): <root>/_unitgrime/export/moho64, unless it holds a HOLD.
+inline constexpr const char* kRemasteredUnitGrime = "/remastered-unitgrime";
 
 }  // namespace render
