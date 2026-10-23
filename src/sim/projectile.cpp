@@ -52,6 +52,7 @@ bool HasTarget(Sim& sim, const AiTarget& t);
 Vec3 TargetPos(Sim& sim, const AiTarget& t, bool centre);
 Vec3 TargetPosBeatStart(Sim& sim, const AiTarget& t);
 Entity* TargetEntity(Sim& sim, const AiTarget& t);
+Vec3 BlipPointUnitGone(Sim& sim, const Entity* b);
 
 const char* ImpactTypeName(int t) {
   static const char* const names[] = {"Unknown", "Terrain", "Water", "Air", "Underwater", "Projectile",
@@ -358,7 +359,8 @@ void UpdateTracking(Sim& sim, Projectile* p, Quat& q, Vec3& v) {
     p->trackTarget = false;
     if (!p->homeLastPos) return;
   } else if (blip) {
-    p->lastTargetPos = blip->position;
+    // (0x69c90a..0x69c919: GetTargetPosGun with the centre flag clear, so the blip's GetTargetPoint 0x5bf5f0)
+    p->lastTargetPos = BlipPointUnitGone(sim, blip);
   } else {
     // A target WITHOUT an aim bone is taken from the entity's own transform, and an entity that already took its
     // step in this beat still stands, for the original, where the beat began (its transform is committed in step
@@ -1171,7 +1173,7 @@ int l_GetCurrentTargetPosition(lua_State* L) {
   Projectile* p = P(L);
   if (TargetGone(*S(L), p->target)) {
     if (const Entity* blip = BlipOfTarget(*S(L), p->target)) {  // (the blip the unit left behind, for a few beats)
-      PushVec(L, blip->position);
+      PushVec(L, BlipPointUnitGone(*S(L), blip));  // (0x6a1797: GetTargetPosGun, centre flag clear)
       return 1;
     }
     const float nan = std::numeric_limits<float>::quiet_NaN();

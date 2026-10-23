@@ -1427,8 +1427,13 @@ int TickCall(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d, const BuildT
       }
       case 3: {
         if (d.k > 1.0f) {
-          float tt = static_cast<float>(
-              0.5 + 0.5 * dmath::Cos(static_cast<float>(static_cast<double>(d.k) * 3.1415927 * 0.1)));
+          // 0x600099..0x6000b8 on the x87 at precision control 24: (k x pi [0xdff088, the float 3.14159274]) x 0.1
+          // [0xe4f714, the float 0.100000001], each product rounded to float; fcos wide; x 0.5 and + 0.5 each rounded
+          // to float. (Ours took k x pi x 0.1 in double, rounded once: an angle an ulp off now and then. Seen: the
+          // Transports replay, 493, cargo 0xe's beam-up: y 19.4951286 for the original's 19.4951267 and its
+          // orientation off, one beat only.)
+          const float ang = (d.k * 3.14159274f) * 0.1f;
+          const float tt = dmath::Cos(ang) * 0.5f + 0.5f;
           Vec3 bp;
           Quat bq;
           GetAttachBoneTransform(O, u, &bp, &bq);

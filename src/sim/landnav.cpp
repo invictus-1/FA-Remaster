@@ -745,13 +745,17 @@ int FollowSlot(Sim& sim, Unit* u, LandNav& n) {
   return 0;
 }
 
+// SetCurrentPosition 0x5ae210: the cell the unit stands in (+0x24), by the size of the path-finder's footprint
+// (+0x124 only). Called by UpdateCurrentPosition and by SetGoal (0x5a415d).
+void SetCurrentPosition(Unit* u, LandNav& n) {
+  const NamedFootprint& f = PathFinderFootprint(u);
+  n.cur = {static_cast<int>(std::nearbyint(u->position.x - std::max<int>(1, f.sizeX) * 0.5f)),
+           static_cast<int>(std::nearbyint(u->position.z - std::max<int>(1, f.sizeZ) * 0.5f))};
+}
+
 // UpdateCurrentPosition 0x5ae2d0
 void UpdateCurrentPosition(Sim& sim, Unit* u, LandNav& n) {
-  {  // SetCurrentPosition 0x5ae210: the size of the path-finder's footprint (+0x124 only)
-    const NamedFootprint& f = PathFinderFootprint(u);
-    n.cur = {static_cast<int>(std::nearbyint(u->position.x - std::max<int>(1, f.sizeX) * 0.5f)),
-             static_cast<int>(std::nearbyint(u->position.z - std::max<int>(1, f.sizeZ) * 0.5f))};
-  }
+  SetCurrentPosition(u, n);
   if (n.thinkDelay > 0) {
     if (--n.thinkDelay == 0) RequestPath(sim, u, n, n.requestMode);
     n.target = n.cur;  // (0x5ae37f) the target is the own cell
@@ -1072,6 +1076,14 @@ void LandNavSetGoalRect(Sim& sim, Unit* u, int x0, int z0, int x1, int z1, bool 
   }
   // BeginThinking 0x5adba0: a formation member waits its path delay
   n.thinkDelay = u->unitStates.count("TransportLoading") ? 1 : FormationPathDelay(sim, u);
+  // 0x5a4147..0x5a4165: after ResetPathState (the target := the cell of the last SetCurrentPosition) and
+  // ConfigureGoal, SetGoal sets the status to 1 and calls SetCurrentPosition 0x5ae210 with the unit's position of now,
+  // then BeginThinking. So the cell is the unit's own also while the navigator is idle and nothing executes it, and
+  // the next goal's ResetPathState hands it to the target. Ours had the cell of the last Execute. Seen (watch lines,
+  // "wn"): an idle navigator's GetCurrentTargetPos 0x5ad8b0 answers the target cell; MP1 4592, army 7's 0x700027
+  // gets a goal in the cell it stands in (657) while its last Execute's cell was 658: the move ends at once, and the
+  // original's target from 4593 on is (351, 657), ours stayed (351, 658); 243 of MP1's 270 differing wn lines.
+  SetCurrentPosition(u, n);
   n.startedThisTick = true;
   n.prevPos = u->position;
   u->unitStates.erase("ProblemGettingToGoal");

@@ -1658,7 +1658,9 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
     Logf(LogLevel::Info, "create %u unit %u bp %s pos %.2f %.2f motion %d", tick_, u->id, bp.id.c_str(), u->position.x, u->position.z, u->motion.bp->motionType);  // CUnitMotion ctor: m+0x90 = 1, so the first MotionTick processes contacts (0x6b7c9a)
   sec.To(prof::kSecCuPlace);
   const uint8_t startLayer = StartingLayer(*this, bp, map_.get(), pos, wantLayer);
-  if (complete && !builder && !keepY) {
+  if (!keepY) {
+    // (the construction params' +0x25 == 0, 0x6a5b73: also a factory's unit that cannot fly, see TickFactoryBuild;
+    // a mobile build and an upgrade keep the height)
     // IUnit::CalcSpawnElevation 0x541540 (ids_repair_placement.md 3.2): the given y is ignored. Land / Seabed:
     // the terrain; Water: the water; Sub: the water + the unit's elevation; Air: flyers appear at their height
     const TerrainMap* m = map_.get();

@@ -75,6 +75,7 @@ struct UnitBpData {
   float regenRate = 0, maxHealth = 1;
   bool initialAutoMode = false;  // AI.InitialAutoMode (bp+0x48d)
   float sizeX = 1, sizeY = 1, sizeZ = 1, collisionOffsetY = 0;
+  float collisionOffsetX = 0, collisionOffsetZ = 0;
   std::vector<uint64_t> buildable;  // Economy.BuildableCategory (union of the expressions)
   std::string buildRestriction;     // Physics.BuildRestriction
   int buildOnLayerCaps = 1;         // Physics.BuildOnLayerCaps (layer bits)

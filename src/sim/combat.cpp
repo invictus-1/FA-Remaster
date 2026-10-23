@@ -450,6 +450,22 @@ static Vec3 UnitTargetPoint(const Unit* u, int bone) {
 }
 
 namespace combat {
+// ReconBlip::GetTargetPoint 0x5bf5f0 (vt+0x98) of a blip whose unit (+0x270) is gone (0x5bf666..0x5bf6d3): its own
+// GetBoneWorldTransform with bone -1 (vt+0x48 = Entity's 0x679ce0, read in the blip vtable 0xe1d824: the blueprint
+// (+0x6c, the unit's) centre (CollisionOffsetX, SizeY x 0.5 + CollisionOffsetY, CollisionOffsetZ) turned by its
+// committed orientation, plus its committed position, 0x679d19..0x679dc5), and then SizeY x 0.5 + CollisionOffsetY
+// once more on the height. So the half height goes on twice. Seen: MP3 2451, the Cybran bomber's cluster bomblets
+// 0x10100007..0x1010000c on the unit 0x20001e, which died then: the original's GetCurrentTargetPosition (65.8188324,
+// 70.757225, 438.194519), 0.35 above the blip; ours the blip's own place (65.8221512, 70.4072571, 438.194946).
+// (A CZAR's blip gives its own place: SizeY 3, CollisionOffsetY -1.5.)
+Vec3 BlipPointUnitGone(Sim& sim, const Entity* b) {
+  if (!b->blueprint) return b->position;
+  const UnitBpData& d = GetUnitBpData(sim.L(), *b->blueprint);
+  const Vec3 c{d.collisionOffsetX, d.sizeY * 0.5f + d.collisionOffsetY, d.collisionOffsetZ};
+  const Vec3 p = Add(b->position, RotateM(b->orientation, c));
+  return Vec3{p.x, p.y + (d.collisionOffsetY + d.sizeY * 0.5f), p.z};
+}
+
 // GetTargetPosGun 0x5e2a90
 Vec3 TargetPos(Sim& sim, const AiTarget& t, bool centre) {
   if (t.type == 2) return t.pos;
@@ -471,10 +487,7 @@ Vec3 TargetPos(Sim& sim, const AiTarget& t, bool centre) {
           const Vec3 tp = UnitTargetPoint(src, t.aimBone);
           return Vec3{fb->offset.x + tp.x, fb->offset.y + tp.y, fb->offset.z + tp.z};
         }
-        if (f->blueprint) {
-          const UnitBpData& d = GetUnitBpData(sim.L(), *f->blueprint);
-          return Vec3{f->position.x, f->position.y + (d.sizeY * 0.5f + d.collisionOffsetY), f->position.z};
-        }
+        if (f->blueprint) return BlipPointUnitGone(sim, f);
       }
       return f->position;
     }

@@ -1310,7 +1310,11 @@ int TickMobileBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
         EndWalk(u);
       }
       if (!t.bp || !UnitCanBuild(u, *t.bp)) return kTaskFailed;
-      t.site = SnapStructurePosition(sim, *t.bp, t.site);
+      // (No snap here: the site was snapped by the task's ctor 0x5f6749, the command's OnEvent 0x5f8222 or the
+      // guard's DispatchMobileBuildTask 0x6139de, each with the ground as it was then. Seen: MP1 3171, the Seraphim
+      // commander 0x300000, guarding, starts the pgen 0x300009 that its engineer made at 3170; the making flattened
+      // the ground at (99.5, 908.5) from 25.7050781 to 25.6875, and ours, snapping again here, aimed the build arm
+      // 0.0176 lower than the original: the arm's pitch goal -0.3197 for -0.3161, the muzzle 2e-5 aside until 3177.)
       if (Entity* p = FindSiteProp(sim, L, u, t)) {  // 0x5f6ea0: clear the site first
         BuildTask* c = NewChild(sim, CommandType::Reclaim, "Reclaim");
         c->goalId = EntityRef(p);
@@ -1406,7 +1410,9 @@ int TickMobileBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
       }
       float h = dmath::Atan2(u->position.x - t.site.x, u->position.z - t.site.z);  // (structures face the builder? kept level)
       (void)h;
-      Unit* nu = sim.CreateUnit(L, *t.bp, u->army, t.site, Quat{}, false, u);
+      // (SUnitConstructionParams 0x585ab0 from 0x5f7ca9: the layer is the builder's (+0x120), not 0, so +0x25 = 1:
+      // the site's height is kept)
+      Unit* nu = sim.CreateUnit(L, *t.bp, u->army, t.site, Quat{}, false, u, true);
       if (Entity* w = t.rebuildWreck ? sim.FindEntity(t.rebuildWreck) : nullptr)  // the rebuilt wreck goes
         if (!w->destroyQueued) sim.QueueDestroy(w);
       t.rebuildWreck = 0;
@@ -1496,8 +1502,15 @@ int TickFactoryBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
         return wait(50);
       }
       // (the params of 0x5f54d0: no orientation given, so the unit's own heading; the script attaches it to the
-      // factory's build bone in OnStartBuild)
-      Unit* nu = sim.CreateUnit(L, *t.bp, u->army, u->position, Quat{}, false, u, false, 0, true);
+      // factory's build bone in OnStartBuild.) The layer asked for (0x5fa8e5..0x5fa8f3, passed in edx) is 1 for a
+      // blueprint with Air.CanFly (ubp+0x368), else 0, and 0x5f54d0 sets +0x25 (keep the height) only for a layer
+      // asked for (0x5f551e, 0x5f552d): so the Unit ctor puts every other unit at CalcSpawnElevation 0x541540 of its
+      // starting layer (0x6a5be7), a submarine at the water + its Physics.Elevation, not at the factory's height.
+      // Seen (watch lines, "wn" / "ww" of a unit's first beat): Skirmish 1565, army 5's xss0203 0x500022 from the
+      // naval factory 0x50001c at (458, 17.5, 851) stands at y 15 in the original until the build bone takes it at
+      // the beat's end; ours at 17.5. (Ours keeps the height of a flyer as before; its layer request is not taken.)
+      const bool flyer = GetMotionBlueprint(L, *t.bp, sim.blueprints()).canFly;
+      Unit* nu = sim.CreateUnit(L, *t.bp, u->army, u->position, Quat{}, false, u, flyer, 0, true);
       if (!nu || !Alive(nu)) return wait(10);
       nu->fireState = u->fireState;
       SetFocus(sim, L, u, nu, t);
@@ -1560,8 +1573,9 @@ int TickUpgrade(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
         return kTaskRunning;
       }
       u->unitStates.insert("NoCost");  // (0x5f89c3, before the unit is made; cleared by the task's dtor 0x5f855a)
-      // (0x5f8a11: the params of 0x5f54d0 as the factory's, so the new unit is not given the old one's orientation)
-      Unit* nu = sim.CreateUnit(L, *t.bp, u->army, u->position, Quat{}, false, u, false, 0, true);
+      // (0x5f8a11: the params of 0x5f54d0 as the factory's, so the new unit is not given the old one's orientation;
+      // the layer asked for is the old unit's (+0x120, 0x5f89f1), so +0x25 = 1: its height is kept)
+      Unit* nu = sim.CreateUnit(L, *t.bp, u->army, u->position, Quat{}, false, u, true, 0, true);
       if (!nu || !Alive(nu)) {
         u->unitStates.erase("Upgrading");
         return kTaskFailed;
@@ -3224,7 +3238,7 @@ int TickGuard(Sim& sim, lua_State* L, Unit* U, BuildTask& t) {
         GuardAbort(U);
         child = NewChild(sim, CommandType::BuildMobile, "MobileBuild");
         child->bp = bp;
-        child->site = site;
+        child->site = SnapStructurePosition(sim, *bp, site);  // DispatchMobileBuildTask 0x6139de, the ctor 0x5f6749
         break;
       }
       // ResolveGuardedReclaimFocusEntity 0x612e80: G's focus is Unit::GetFocusEntity 0x585b10, the weak link +0x4d0,
@@ -3301,6 +3315,7 @@ BuildTask* StartBuildTask(Sim& sim, Unit* u, const UnitCommand& c) {
     case CommandType::BuildMobile:
       t->order = "MobileBuild";
       t->bp = sim.blueprints().Find(c.blueprintId);
+      if (t->bp) t->site = SnapStructurePosition(sim, *t->bp, t->site);  // the ctor 0x5f6749 (COORDS_ToWorldPos 0x50b0f0)
       break;
     case CommandType::BuildFactory:
       t->order = "FactoryBuild";
@@ -3758,7 +3773,8 @@ void MobileBuildCommandEvent(Sim& sim, Unit* u, BuildTask& t, const UnitCommand&
     t.rebuildWreck = 0;
     if (!Alive(u)) return;
   }
-  t.site = cmd.targetId ? CommandPosGun(sim, cmd) : cmd.pos;  // (state 0 snaps it to the footprint)
+  t.site = cmd.targetId ? CommandPosGun(sim, cmd) : cmd.pos;
+  if (t.bp) t.site = SnapStructurePosition(sim, *t.bp, t.site);  // 0x5f8222
   t.state = 0;
   t.waitUntil = 0;
 }

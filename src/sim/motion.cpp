@@ -2159,10 +2159,14 @@ void MotionTick(Sim& sim, Unit* u) {
 
 const Vec3& UnitVelocity(const Unit* u) {
   const UnitMotion& m = u->motion;
-  const bool land = m.bp && m.bp->mobile() && m.bp->motionType != kMotionAir && u->layer != "Air" && !m.ballistic;
+  const bool land = m.bp && m.bp->mobile() && u->layer != "Air" && !m.ballistic;
   // Unit::GetVelocity 0x6a9c90: with a motion and off the Air layer the motion's velocity; else the entity's
   // (committed position - previous position) x scale (0x678dc0), which changes in AdvanceCoords only: a flyer
-  // that already moved this beat still reports last beat's displacement
+  // that already moved this beat still reports last beat's displacement. The test is the layer only (0x6a9c9a:
+  // +0x118 against 0x10), not the motion type: an aircraft on the Land layer reports its motion's velocity, (0, 0, 0)
+  // for one that flies (m+0x38 is not kept for it). Seen: MP1 4915, army 5's Seraphim transport 0x400067 sets down
+  // for a tick; its AA turrets' aim (the muzzle in last beat's pose moved on by GetVelocity, Aim 0x6317b0) took the
+  // displacement, and from 4916 their heading and pitch were up to 0.05 off the original's.
   return land ? m.vel : m.velCommitted;
 }
 
