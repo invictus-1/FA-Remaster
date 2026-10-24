@@ -3620,6 +3620,10 @@ void VulkanDevice::BeginFrame(const float clearColor[4]) {
 
 void VulkanDevice::BeginPass(const PassDesc& pass) {
   if (!inFrame_) return;
+  if (pass.window && viewColor_) {  // [views] a view's own picture in place of the window (SetViewWindow)
+    BeginPass(ViewWindowPass(pass));
+    return;
+  }
   EndRendering();
   ReleaseGeneral();  // (what dispatches wrote, readable by the pass's draws)
   VkCommandBuffer cmd = frames_[cur_].cmd;

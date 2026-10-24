@@ -393,6 +393,16 @@ class Device {
   // photo of its size; (-1, -1): off and the picture let go of. Between frames. False where the picture cannot be made
   // (then it is off).
   virtual bool SetPhotoWindow(int width, int height) { return width <= 0 || height <= 0; }
+  // [views] Within a frame: the passes into the window from here on draw into these targets instead (an RGBA8 colour
+  // target and a D32 depth target of one size; the viewport theirs), until set to none (both empty) again - the window's
+  // passes then go to the window. For a picture with several views (WorldPicture::SetViews): each view's frame drawn
+  // into a picture of its own, as if that were the window, and laid into the window after. Each backend's BeginPass
+  // turns such a pass into one into these targets (ViewWindowPass).
+  void SetViewWindow(Texture color, Texture depth) {
+    viewColor_ = color;
+    viewDepth_ = depth;
+  }
+  bool ViewWindowOn() const { return static_cast<bool>(viewColor_); }
   // The latency limiter ("Low Latency", a player's option; off as at first): the camera, the cursor's feedback and
   // the interface answer the mouse and the keys sooner. With it on, the frames waiting to be shown are kept to one
   // (Direct3D 12: the swap chain made with its frame latency waitable object, at a frame latency of 1; Vulkan: the
@@ -448,6 +458,16 @@ class Device {
 
  protected:
   int draws_ = 0, drawsLast_ = 0;  // (each backend counts its draws, and turns them over at EndFrame)
+  // [views] SetViewWindow's targets, and a pass into the window made a pass into them
+  Texture viewColor_, viewDepth_;
+  PassDesc ViewWindowPass(const PassDesc& pass) const {
+    PassDesc p = pass;
+    p.window = false;
+    p.color = viewColor_;
+    p.depth = viewDepth_;
+    p.depthLayer = 0;
+    return p;
+  }
 };
 
 }  // namespace render::gfx

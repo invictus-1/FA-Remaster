@@ -321,6 +321,20 @@ class MeshRenderer {
   };
   std::unordered_map<uint32_t, LastPlace> last_, lastNext_;
   std::vector<float> lastRows_, lastRowsNext_, rowsCopy_;
+
+ public:
+  // [views] The places and bones motion keeps of the frame before, for one view of a picture with several (views.h): each
+  // view's own, swapped in around its frame (the models it lists are not another view's).
+  struct Before {
+    std::unordered_map<uint32_t, LastPlace> last;
+    std::vector<float> rows;
+  };
+  void SwapBefore(Before& b) {
+    last_.swap(b.last);
+    lastRows_.swap(b.rows);
+  }
+
+ private:
   // for each of entries_: where its bones of the frame before lie in this frame's bone buffer (-1: at
   // rest), and whether it is known at all (-2: not)
   std::vector<int> lastBonesAt_;

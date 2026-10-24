@@ -2945,6 +2945,10 @@ void D3D12Device::Resolve(Texture from, Texture to) {
 
 void D3D12Device::BeginPass(const PassDesc& pass) {
   if (!inFrame_) return;
+  if (pass.window && viewColor_) {  // [views] a view's own picture in place of the window (SetViewWindow)
+    BeginPass(ViewWindowPass(pass));
+    return;
+  }
   ReleaseUnordered();  // (what dispatches wrote, readable by the pass's draws)
   if (pass.window && PhotoNow()) {  // (photomode) a photo's frame: its picture and depth in place of the window's
     BindPhotoWindow(pass.clearColor, pass.clearValue, pass.clearDepth);

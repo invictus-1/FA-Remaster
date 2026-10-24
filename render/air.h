@@ -15,6 +15,7 @@
 // in place of the haze and mist formulas; so do particles, trails and the water. The lamps' beams
 // show in it with their shadows: the billboards of shafts.h are left out while it is on.
 #pragma once
+#include <utility>  // [views] (std::swap)
 #include <cstdint>
 #include <string>
 
@@ -71,6 +72,14 @@ class Air {
   // ground known, the cells go on under it as before), the map's width and height, the water's level (-1e9: none).
   float heightUnit = 0, mapWidth = 0, mapHeight = 0, waterLevel = -1e9f;
 
+  // [views] What it keeps for one view (its pictures at that view's size, what it keeps of the frames before) swapped
+  // with another's, so each of a picture's views has its own (views.h, ViewSide); its pipelines and settings stay.
+  void SwapView(Air& o) {
+    std::swap(cells_, o.cells_), std::swap(summed_, o.summed_), std::swap(width_, o.width_), std::swap(height_, o.height_);
+    std::swap(depth_, o.depth_), std::swap(now_, o.now_), std::swap(frame_, o.frame_), std::swap(built_, o.built_);
+    std::swap(haveLast_, o.haveLast_), std::swap(counted_, o.counted_), std::swap(lastViewProj_, o.lastViewProj_);
+    std::swap(lastEye_, o.lastEye_), std::swap(lastNearest_, o.lastNearest_), std::swap(lastFarthest_, o.lastFarthest_);
+  }
  private:
   bool Size(int width, int height);
 

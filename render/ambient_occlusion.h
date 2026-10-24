@@ -7,6 +7,8 @@
 // sun's direct light is dimmed with the rest), which is the usual trade for doing it without a
 // separate depth pass.
 #pragma once
+#include <utility>  // [views] (std::swap)
+#include <initializer_list>  // [views]
 #include <string>
 
 #include "camera.h"
@@ -50,6 +52,24 @@ class AmbientOcclusion {
   // cover is on), not the first time the camera comes close enough for grass; its pictures then, as before.
   bool PrepareCover() { return CoverPipelines(); }
 
+  // [views] What it keeps for one view (its pictures at that view's size, what it keeps of the frames before) swapped
+  // with another's, so each of a picture's views has its own (views.h, ViewSide); its pipelines and settings stay.
+  void SwapView(AmbientOcclusion& o) {
+    std::swap(target_, o.target_), std::swap(width_, o.width_), std::swap(height_, o.height_);
+    std::swap(groundDepth_, o.groundDepth_), std::swap(coverDepth_, o.coverDepth_), std::swap(solidDepth_, o.solidDepth_);
+    std::swap(coverWidth_, o.coverWidth_), std::swap(coverHeight_, o.coverHeight_), std::swap(coverKept_, o.coverKept_);
+    std::swap(coverNow_, o.coverNow_);
+  }
+  // [views] A view's own (views.h, ViewSide) let go of: the pictures SwapView swaps, destroyed (a class without a
+  // destructor of its own: the world's are let go of with the device).
+  void ReleaseView() {
+    for (gfx::Texture* t : {&target_, &groundDepth_, &coverDepth_, &solidDepth_})
+      if (*t) {
+        device_->Destroy(*t);
+        *t = {};
+      }
+    width_ = height_ = coverWidth_ = coverHeight_ = 0;
+  }
  private:
   struct Constants {
     float tanHalfFov, aspect, zNear, radius;

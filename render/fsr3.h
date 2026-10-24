@@ -8,6 +8,7 @@
 // Its passes run as compute shaders through gfx.h, on Direct3D 12 and Vulkan alike. They need DXC
 // (shader model 6): with Direct3D's own compiler only, Init fails and the host keeps FSR 1.
 #pragma once
+#include <utility>  // [views] (std::swap)
 
 #include <string>
 
@@ -47,6 +48,9 @@ class Fsr3 {
   // wants it: Halton (2, 3) over a number of phases that grows with the upscaling.
   static void Jitter(int index, int renderWidth, int displayWidth, float* x, float* y);
 
+  // [views] What it keeps for one view (its pictures at that view's size, what it keeps of the frames before) swapped
+  // with another's, so each of a picture's views has its own (views.h, ViewSide); its pipelines and settings stay.
+  void SwapView(Fsr3& o) { std::swap(impl_, o.impl_); }
  private:
   gfx::Device* device_;
   struct Impl;

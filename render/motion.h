@@ -9,6 +9,7 @@
 // The offsets leave the jitter out (FSR's way): last frame's place minus this frame's, in the picture's
 // 0..1 (u right, v down), in RG16F at the size drawn.
 #pragma once
+#include <utility>  // [views] (std::swap)
 
 #include <string>
 
@@ -48,6 +49,14 @@ class Motion {
   float TimeBefore() const { return timeBefore_; }
   float jitterX = 0, jitterY = 0;  // this frame's (Begin's)
 
+  // [views] What it keeps for one view (its pictures at that view's size, what it keeps of the frames before) swapped
+  // with another's, so each of a picture's views has its own (views.h, ViewSide); its pipelines and settings stay.
+  void SwapView(Motion& o) {
+    std::swap(motion_, o.motion_), std::swap(shown_, o.shown_), std::swap(lastColor_, o.lastColor_);
+    std::swap(haveLastColor_, o.haveLastColor_), std::swap(width_, o.width_), std::swap(height_, o.height_);
+    std::swap(now_, o.now_), std::swap(before_, o.before_), std::swap(back_, o.back_), std::swap(haveBefore_, o.haveBefore_);
+    std::swap(timeBefore_, o.timeBefore_), std::swap(lastTime_, o.lastTime_), std::swap(jitterX, o.jitterX), std::swap(jitterY, o.jitterY);
+  }
  private:
   gfx::Device* device_;
   gfx::Pipeline camera_, colours_, carry_, copy_, error_;
