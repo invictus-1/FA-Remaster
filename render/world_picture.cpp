@@ -93,8 +93,9 @@ struct WorldPicture::Impl {
     bool rayReflections;
   };
   Bundles BundlesNow() const { return {atmosphere, softShadows, rayTracing, weatherEffects, groundDetail, frameGeneration, hiddenOutlines, rayReflections}; }
-  void ApplyBundles() {  // (onto the world, where there is one)
-    if (world) ApplyBundlesTo(*world, BundlesNow());
+  bool holdLooks = false;  // [ui 39] HoldLooks
+  void ApplyBundles() {  // (onto the world, where there is one; [ui 39] not while they are held for the next map)
+    if (world && !holdLooks) ApplyBundlesTo(*world, BundlesNow());
   }
   static void ApplyBundlesTo(World& w, const Bundles& b) {
     if (b.atmosphere >= 0) w.volumetricFog = w.volumetricClouds = w.skyTables = w.cloudZoom = w.beyondLand = b.atmosphere > 0;
@@ -399,7 +400,7 @@ float4 PS(float4 at : SV_Position) : SV_Target {
   m.world = std::make_unique<World>(m.device.get(), vfs);
   m.world->textures.detail = m.textureDetail;
   m.world->season = m.season;  // [seasons] (taken in as the map opens)
-  m.ApplyBundles();  // (the lighting options, as set before Open)
+  Impl::ApplyBundlesTo(*m.world, m.BundlesNow());  // (the lighting options, as set before Open; held or not)
   if (!m.world->Open(mapPath, World::Options{}, error)) return false;
   m.frames.SetSightGrid(static_cast<float>(m.world->map.width), static_cast<float>(m.world->map.height));
   return true;
@@ -435,6 +436,11 @@ bool WorldPicture::BeginMap(const std::string& mapPath, std::function<void(World
   });
   m.load = std::move(load);
   return true;
+}
+
+void WorldPicture::HoldLooks(bool on) {
+  impl_->holdLooks = on;
+  if (!on) impl_->ApplyBundles();
 }
 
 bool WorldPicture::MapReady() const {
@@ -499,6 +505,7 @@ bool WorldPicture::SwapMap() {
     w.orders.markMinPixels = old->orders.markMinPixels;
     w.orders.markMaxPixels = old->orders.markMaxPixels;
   }
+  m.holdLooks = false;  // [ui 39] (the looks held for this map: laid on now)
   m.ApplyBundles();  // (as set now: they may have changed while it opened)
   w.lens = m.lens;
   m.ForgetWorld();

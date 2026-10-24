@@ -89,6 +89,12 @@ class WorldPicture {
   // A world Open made itself (Open with a map) is let go of on this thread at once, and what it made on the card stays
   // there until the picture goes (its parts do not let go of what they made): open such a picture without a map.
   bool SwapMap();
+  // [ui 39] While on, the lighting bundles' Set* calls (SetAtmosphere, SetSoftShadows, SetRayTracing, SetRayReflections,
+  // SetWeatherEffects, SetGroundDetail, SetFrameGeneration, SetHiddenOutlines) are kept for the next map and not laid on
+  // the world shown: give a game's looks with it on, then BeginMap, so that the map opens and is warmed with them (its
+  // shaders and pipelines made while it opens) and the world shown meanwhile (the menu's, hidden) is left as it is.
+  // SwapMap lays them on and ends it; HoldLooks(false) ends it too, laying them on the world shown then.
+  void HoldLooks(bool on);
   // The map begun is not wanted: let go of once its opening is done (that goes on, over the next frames); another may
   // be begun at once.
   void CancelMap();

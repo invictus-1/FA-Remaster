@@ -44,14 +44,15 @@ int LoadTest(const moho::Vfs& vfs, const LoadTestSetup& s) {
   picture.SetVsync(s.vsync);
   picture.SetLoadBudget(s.budgetMs);
   if (s.timeOfDay >= 0) picture.SetDayAndWeather(s.timeOfDay, 0, false);
-  if (!s.settings.empty()) {
-    const std::string set = "," + s.settings + ",";
+  auto looks = [&](const std::string& settings) {
+    const std::string set = "," + settings + ",";
     picture.SetAtmosphere(set.find(",atmosphere,") != std::string::npos);
     picture.SetSoftShadows(set.find(",soft-shadows,") != std::string::npos);
     picture.SetRayTracing(set.find(",ray-tracing,") != std::string::npos);
     picture.SetWeatherEffects(set.find(",weather-effects,") != std::string::npos);
     picture.SetGroundDetail(set.find(",ground-detail,") != std::string::npos);
-  }
+  };
+  if (!s.settings.empty()) looks(s.settings);
   if (s.hitchLog >= 0) {  // (what the frames' thread makes, noted; a long frame printed with it)
     HitchLog::mainThread = std::this_thread::get_id();
     HitchLog::on = true;
@@ -164,6 +165,13 @@ int LoadTest(const moho::Vfs& vfs, const LoadTestSetup& s) {
   int failed = 0;
   for (size_t k = 0; k < phases.size(); ++k) {
     const std::string& map = phases[k].first;
+    // [ui 39] (--load-game-looks: <map> with its own looks, the others with --settings'; given before BeginMap, held, or
+    // after the swap, as the interface did)
+    const std::string* mapLooks = s.gameLooks.empty() ? nullptr : map == s.mapB ? &s.gameLooks : &s.settings;
+    if (mapLooks && s.holdLooks) {
+      picture.HoldLooks(true);
+      looks(*mapLooks);
+    }
     const Clock::time_point begun = Clock::now();
     if (!picture.BeginMap(map)) {
       fprintf(stderr, "render: --load-test: BeginMap(%s) refused\n", map.c_str());
@@ -204,6 +212,7 @@ int LoadTest(const moho::Vfs& vfs, const LoadTestSetup& s) {
       fprintf(stderr, "render: --load-test: SwapMap(%s) refused\n", map.c_str());
       return 1;
     }
+    if (mapLooks && !s.holdLooks) looks(*mapLooks);  // [ui 39]
     const double swapMs = Ms(swapping, Clock::now());
     const double first = frame(false);  // (the new world's first three frames)
     const double second = frame(false), third = frame(false);
