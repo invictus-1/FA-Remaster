@@ -61,6 +61,10 @@
 //           once the game is where --tick asks, the world is drawn through it into that file, its
 //           answers about the screen are printed (and the life bars' anchors checked and marked in
 //           magenta, where custom names go), and the viewer ends
+// --views split|inset[:<unit id>]  [views] with --picture: several views in one picture (WorldPicture::SetViews, views.h;
+//           views_test.h): the window split in two halves (the right a second camera), or a follow camera behind a unit
+//           (480x270, every 2nd frame) over the game's; pictures beside the --picture file, the picking calls and the times
+//           printed (one view against the views), and the viewer ends. With --picture-window: drawn into the window.
 // --photo-test  with --picture (photomode): the photo mode's pieces through the pixel interface (photo_test.h): the free
 //           camera flown by a script of inputs, moments of the picture's own, focus by a pixel, a shallow-focus photo, one
 //           picture against tiles, and photos of 1, 2 and 4 times the window's size timed at each of --photo-test-sizes
@@ -619,6 +623,7 @@
 #include "models.h"
 #include "particles.h"
 #include "photo_test.h"
+#include "views_test.h"  // [views]
 #include "png.h"
 #include "post.h"
 #include "live_sim.h"
@@ -893,6 +898,7 @@ struct Options {
   std::vector<std::string> beam, trail;  // --beam, --trail: shown for a look at them
   std::string hide;    // --hide: kinds of effect left out
   std::string picture; // --picture
+  std::string views;    // [views] --views
   std::string settings; // --settings
   int testLights = 0;  // --lights
   std::string mapDecals;  // --map-decals (empty: as the map's remap.json entry says, else normals)
@@ -1233,6 +1239,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--load-backdrop") o->loadBackdrop = atoi(v);  // [backdrop]
     else if (a == "--load-budget") o->loadBudget = static_cast<float>(atof(v));  // [bgload]
     else if (a == "--load-cycles") o->loadCycles = std::max(1, atoi(v));  // [bgload]
+    else if (a == "--views") o->views = v;  // [views]
     else if (a == "--photo-cases") o->photoCases = v, o->photoTest = true;  // (photofix)
     else if (a == "--photo-test-sizes") {  // (photomode)
       o->photoTestSizes.clear();
@@ -3141,6 +3148,16 @@ int main(int argc, char** argv) {
       }
     }
 
+    if (!opt.picture.empty() && !opt.views.empty() && playing && !liveBusy && frameCount >= 3) {  // [views] --views
+      ViewsTestSetup vs;
+      vs.base = opt.picture.substr(0, opt.picture.rfind('.'));
+      vs.mode = opt.views;
+      vs.window = opt.pictureWindow && pictureWindow;
+      vs.width = vs.window ? pictureWindow->Width() : opt.width;
+      vs.height = vs.window ? pictureWindow->Height() : opt.height;
+      ViewsTest(picture, camera, playTick + 1, frame, vs);
+      break;
+    }
     if (!opt.picture.empty() && opt.photoTest && playing && !liveBusy && frameCount >= 3) {
       // (photomode) --photo-test: the photo mode's pieces through the pixel interface (or, with --picture-window, the
       // window's)

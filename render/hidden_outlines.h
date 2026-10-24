@@ -25,6 +25,7 @@
 // its frames between from (Post::KeepFinished), so they are never smeared along what hides the unit; they are
 // taken from the frame after, as the icons are.
 #pragma once
+#include <utility>  // [views] (std::swap)
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -91,6 +92,11 @@ class HiddenOutlines {
   int marked = 0;
   bool drawn = false;
 
+  // [views] What it keeps for one view (its pictures at that view's size, what it keeps of the frames before) swapped
+  // with another's, so each of a picture's views has its own (views.h, ViewSide); its pipelines and settings stay.
+  void SwapView(HiddenOutlines& o) {
+    std::swap(masks_, o.masks_), std::swap(depth_, o.depth_), std::swap(width_, o.width_), std::swap(height_, o.height_);
+  }
  private:
   gfx::Device* device_;
   gfx::Pipeline mask_, lay_;

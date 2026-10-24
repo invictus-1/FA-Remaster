@@ -12,6 +12,8 @@
 // that is laid over the scene: over the land before anything stands on it, over the water after
 // the water is drawn.
 #pragma once
+#include <utility>  // [views] (std::swap)
+#include <initializer_list>  // [views]
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -67,6 +69,22 @@ class Ranges {
 
   int drawnRings = 0;
 
+  // [views] What it keeps for one view (its pictures at that view's size, what it keeps of the frames before) swapped
+  // with another's, so each of a picture's views has its own (views.h, ViewSide); its pipelines and settings stay.
+  void SwapView(Ranges& o) {
+    std::swap(maskTarget_, o.maskTarget_), std::swap(lines_, o.lines_), std::swap(linesBefore_, o.linesBefore_);
+    std::swap(width_, o.width_), std::swap(height_, o.height_), std::swap(built_, o.built_);
+  }
+  // [views] A view's own (views.h, ViewSide) let go of: the pictures SwapView swaps, destroyed (a class without a
+  // destructor of its own: the world's are let go of with the device).
+  void ReleaseView() {
+    for (gfx::Texture* t : {&maskTarget_, &lines_, &linesBefore_})
+      if (*t) {
+        device_->Destroy(*t);
+        *t = {};
+      }
+    width_ = height_ = 0;
+  }
  private:
   void CameraConstants(const View& view, const Camera& camera, float* out) const;
   gfx::Device* device_;

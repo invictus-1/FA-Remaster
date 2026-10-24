@@ -91,6 +91,8 @@ class Vfs;
 
 namespace render {
 
+struct ViewSide;  // [views] (views.h)
+
 class World {
  public:
   struct Options {
@@ -722,6 +724,16 @@ class World {
   // no motion, no light in the air and no volumetric clouds, and what they keep of the frames before is left
   // for the game's next frame.
   bool sidePicture = false;
+  // [views] A view of the frame besides the first (WorldPicture::SetViews, views.h): the same moment drawn again from
+  // another camera, after the first view's Begin, AddFrame and Render, with the same time and clock. Nothing of the world
+  // moves on a second time in it: what the first view's frame moved on, pressed, threw or kept round its camera is drawn
+  // as it is (the deep tracks' field, the ripples', the ocean's foam, the plants' press, the build sparks, the hot wrecks'
+  // smoke; the read-ahead). What a view keeps of its own frames before (the temporal upscaler, motion, the light in the
+  // air, the volumetric clouds, the bounce light's probes) and its pictures at its size are its own, swapped in by
+  // SwapView around its frame. With sidePicture too: an inset, drawn as a side picture is (no temporal history, no light
+  // in the air, no volumetric clouds), with the interface's marks in it (order lines, hidden outlines) as a view's.
+  bool extraView = false;
+  void SwapView(ViewSide& side);  // [views] (views.cpp: the view's own parts in, the ones in the world out; again: back)
   // (cinecam) A frame drawn for a photo (WorldPicture::TakePhoto, the viewer's --photo): the world as the game's
   // frame draws it, at the photo's size and the scene's own (no FSR), but without what keeps frames before for the
   // game's next (the temporal upscaler, motion, frame generation's picture), and with nothing of the interface laid

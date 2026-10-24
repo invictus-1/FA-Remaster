@@ -502,6 +502,58 @@ class WorldPicture {
   // The height of what one stands on at a place of the map (ground or water surface).
   float GroundHeight(float x, float z) const;
 
+  // --- [views] several views in one picture (the interface's request 35; views.h) ---
+  // A split screen (the original's, FAF's worldview viewRight: both halves full views) and a picture-in-picture follow
+  // camera, drawn by this one picture: its effects, particles, weather and lights move on once a frame, and each view has
+  // the models it sees, its own shadow cascades, ground, and the interface's marks in it (strategic icons, life bars,
+  // brackets, order lines, hidden outlines, the fog of war as the focus army sees it, as set for the picture). The
+  // interface is laid over all the views after (SetInterfaceLayer: the whole window). Draw and DrawToWindow draw them.
+  //   Main:  the first view (view 0), as every frame is drawn without views: the temporal upscaler's and frame
+  //          generation's history, light in the air, volumetric clouds. Its camera is the one Draw / DrawToWindow are
+  //          given (its `camera` here is not used).
+  //   Split: a full view with all of that, its own history (temporal upscaler, motion, light in the air, volumetric
+  //          clouds, the bounce light's probes) and pictures at its size. While a Split view is set, frame generation is
+  //          off (a picture made between two frames would smear across the line between the views; it comes back when
+  //          the split screen goes); with Main and Inset views alone it stays on: an inset is laid into the window with the
+  //          interface, after the picture frame generation makes the in-between from (so an inset never smears).
+  //   Inset: the follow camera, drawn as the minimap's ground and photos are (World::sidePicture): no temporal history, no
+  //          light in the air, no volumetric clouds, the models' detail at `detail` of the main view's, every `every`th
+  //          frame (1: every frame), its last picture laid in between.
+  // In a view besides the first nothing of the world moves on a second time: what is worked out round the camera once a
+  // frame (the deep tracks' field, the ripples' and the ocean's foam fields, the plants pressed and burnt, the build
+  // sparks, the hot wrecks' smoke) follows view 0's camera and is drawn in the others where it reaches (World::extraView).
+  struct ViewRect {
+    int x = 0, y = 0, width = 0, height = 0;  // in the window's pixels, (0, 0) its top left
+  };
+  enum class ViewKind { Main, Split, Inset };
+  struct PictureView {
+    ViewRect rect;
+    Camera camera;
+    ViewKind kind = ViewKind::Main;
+    int every = 2;       // Inset: drawn every that many frames
+    float detail = 0.5f; // Inset: the models' and their shadows' detail, a share of the main view's
+  };
+  // The views, from the next frame on, view 0 first (the main one; its kind is taken as Main), the rest drawn over it in
+  // their order (an inset after the views it lies over). A host whose cameras move gives them every frame (a copy of the
+  // list, cheap). Empty, or one view filling the window: one view, as at first (the picture exactly as without views). A
+  // view's history is kept by its place in the list while its kind stays; its pictures are let go of when it goes.
+  void SetViews(const std::vector<PictureView>& views);
+  int ViewCount() const;  // (1 without views)
+  // The view at a point of the window (the last drawn over it first: an inset before what it lies over); -1: none.
+  int ViewAt(float x, float y) const;
+  // A view's place and camera as last drawn (view 0's: the camera last given to Draw / DrawToWindow).
+  ViewRect ViewPlace(int view) const;
+  Camera ViewCamera(int view) const;
+  // The picking calls for a view, x and y in that view's own pixels (0, 0 its top left; a window point less the view's
+  // place), by its frame last drawn. View 0's are Project, GroundAt, UnitAt and UnitsIn themselves (which answer for view 0
+  // in its own pixels: the window's while it fills the window, as at first). The units found are those the picture lists
+  // for every view (what the focus army knows), wherever the view looks.
+  bool ViewProject(int view, Vec3 world, float* x, float* y) const;
+  bool ViewGroundAt(int view, float x, float y, Vec3* hit) const;
+  uint32_t ViewUnitAt(int view, float x, float y) const;
+  void ViewUnitsIn(int view, float x0, float y0, float x1, float y1, std::vector<uint32_t>* out) const;
+  // (ViewLifeBarAnchors: below, with LifeBarAnchors)
+
   // --- the cinematic camera (cinecam.h), for watching replays and taking pictures ---
   // Draw and DrawToWindow take its camera as any other (CineCamera::View, Camera::cinematic set): the world is then
   // drawn as seen from within it (the sun's shadows along the view out to the distance, the grass ahead of the eye).
@@ -630,12 +682,16 @@ class WorldPicture {
   };
   const Stats& LastStats() const;
   void LifeBarAnchors(const Camera& camera, int width, int height, double tick, std::vector<LifeBarAnchor>* out);
+  // [views] A view's life bars' anchors (LifeBarAnchors' points) as its last frame drew them, in its own pixels (view 0's:
+  // as LifeBarAnchors last gave them, of the frame then about to be drawn; the others' a frame late).
+  void ViewLifeBarAnchors(int view, std::vector<LifeBarAnchor>* out) const;
 
  private:
   void RenderWorld(const Camera& camera, int width, int height, double tick);
   void PrepareWorld(const Camera& camera, int width, int height, double tick);  // (RenderWorld up to the drawing)
   void TakeStats(float endMs);  // (after a frame has ended)
   void PhotoStep();             // (photomode: one frame of the photo being made)
+  void DrawViews(int width, int height);  // [views] (RenderWorld: the views besides the first, and all laid into the window)
   void ShowHeld(int width, int height);  // (photomode: the window as it was when the photo began, the interface over it)
   struct Impl;
   std::unique_ptr<Impl> impl_;

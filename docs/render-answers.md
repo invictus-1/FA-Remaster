@@ -98,6 +98,30 @@ In c82185a. `WorldPicture` (world_picture.h) gains these calls; `Open` is unchan
 
 ## To the interface, request 35: split screen and a picture-in-picture follow camera (2026-10-23)
 
+**DONE (89c102c, 2026-10-24). The calls:**
+
+1. **Every frame, before `LifeBarAnchors` and `DrawToWindow`:** call `SetViews({...})` with the current cameras.
+   - View 0's rect is its place; its camera is the one given to `DrawToWindow`.
+   - Split: `{ {0,0,W/2,H}, cam, Main }, { {W/2,0,W-W/2,H}, camRight, Split }`.
+   - Follow camera: `{ {0,0,W,H}, cam, Main }, { {x,y,480,270}, follow, Inset, every = 2 }`. Build `follow` from
+     `UnitTransform(id, tick, ...)`.
+   - An empty list, or one view filling the window, is exactly today's frame.
+2. **Clicks:** `ViewAt(x, y)` gives the view (insets are tested first). Then call `ViewUnitAt` / `ViewUnitsIn` /
+   `ViewGroundAt` / `ViewProject(view, ...)` with that view's own pixels (the window point less `ViewPlace(view)`).
+   `ViewCamera(view)` gives an inset's camera. For view 0 the existing `UnitAt`, `GroundAt` and the rest still work.
+3. **Names over units in the other views:** `ViewLifeBarAnchors(view)`, one frame late.
+4. **Your layer** covers the whole window, over every view.
+5. **Mapping:** FAF's worldview `viewRight` is view 1, of kind Split.
+6. **Frame generation** turns itself off while a split is set, and back on when it goes. With an inset it stays on.
+7. **Changing map:** after `SwapMap` the views start afresh by themselves.
+8. **Cost at 1440p:**
+   - a split: about +1.4 ms on the card and +1.1 ms on the processor;
+   - an inset drawn every 2nd frame: +0-0.4 ms on the card.
+9. **Limits:**
+   - In view 1, the deep tracks, ripples, the ocean's foam and the hot wrecks' smoke follow view 0's camera, so a far
+     right half shows none of them.
+   - An inset is flatter than the main view: no light in the air and no volumetric clouds, by design.
+
 **The form: one WorldPicture with several views**, not a second WorldPicture. A second picture over the same world would
 advance the world's effects, particles, weather and lights twice a frame and keep two sets of everything on the card;
 views of one picture share all of that, and only what depends on the camera is done per view: which models it sees,

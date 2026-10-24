@@ -17,6 +17,7 @@
 // Every lit surface of the modern look reads the eight probes round it (view.h, BounceAt) in place of the sky's
 // fitted light, which stays outside the grid. Where the device has no ray tracing nothing of it runs.
 #pragma once
+#include <utility>  // [views] (std::swap)
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -52,6 +53,16 @@ class BounceLight {
   float keep = 0.97f;                      // what a probe keeps of what it held each frame
   float reach = 300;                       // how far a ray looks (world units)
 
+  // [views] What it keeps for one view (its pictures at that view's size, what it keeps of the frames before) swapped
+  // with another's, so each of a picture's views has its own (views.h, ViewSide); its pipelines and settings stay.
+  void SwapView(BounceLight& o) {
+    std::swap(trace_, o.trace_), std::swap(light_, o.light_), std::swap(sight_, o.sight_), std::swap(lightBorder_, o.lightBorder_);
+    std::swap(sightBorder_, o.sightBorder_), std::swap(keep_, o.keep_), std::swap(rays_, o.rays_);
+    std::swap(lightAtlas_, o.lightAtlas_), std::swap(sightAtlas_, o.sightAtlas_), std::swap(columns_, o.columns_);
+    std::swap(identities_, o.identities_), std::swap(heights_, o.heights_), std::swap(firstX_, o.firstX_);
+    std::swap(firstZ_, o.firstZ_), std::swap(level_, o.level_), std::swap(frame_, o.frame_), std::swap(placed_, o.placed_);
+    std::swap(spacing, o.spacing);
+  }
  private:
   gfx::Device* device_;
   gfx::Pipeline trace_, light_, sight_, lightBorder_, sightBorder_, keep_;
