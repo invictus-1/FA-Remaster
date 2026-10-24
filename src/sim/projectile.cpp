@@ -411,6 +411,13 @@ void UpdateTracking(Sim& sim, Projectile* p, Quat& q, Vec3& v) {
     if (viaBlip)
       if (const Entity* bl = BlipOfTarget(sim, p->target))
         tv = Sub(bl->position, static_cast<const ReconBlip*>(bl)->prevPos);
+    // The same for a blip that IS the target's entity: a shell Lua turned onto a blip (Projectile:SetNewTarget with
+    // the weapon's current target, FAF's RetargetThread). Seen (probe mp1_9616): MP1, army 4's torpedo 0x10400004,
+    // retargeted at 9586 onto army 5's blip 0x30500112 of the destroyer 0x5000df: the original leads it by the
+    // blip's move, ours led by nothing (EntityVelocity has no blip) and from 9608 on stood 1.2 off in x and 1.3 in y;
+    // it struck the destroyer's hull at 9615 where the original's struck at 9618.
+    if (te->kind == Entity::Kind::Blip)
+      tv = Sub(te->position, static_cast<const ReconBlip*>(te)->prevPos);
     float k = 1 / (p->maxSpeed * 0.1f);
     // the squares summed x, z, y (0x69ca38..0x69ca52, 0x69cab9..0x69cad2)
     const Vec3 d1 = Sub(pos, aim);

@@ -806,7 +806,15 @@ bool LandBallisticTick(Sim& sim, Unit* u) {
       // ... and the motion goes to state 3 (CalcMoveBallistic 0x6c0b89..0x6c0be8: IsDead, vt+0x28, then OnImpact,
       // then motion+0x78 = 3; alive: 0, 0x6c0bf9): MotionTick moves it no more (UnitMotion::atRest)
       m.atRest = true;
-    } else {
+    } else if (!(layer == "Water" && m.bp &&
+                 (m.bp->motionType == kMotionWater || m.bp->motionType == kMotionSurfacingSub ||
+                  m.bp->motionType == kMotionAmphibiousFloating))) {
+      // A unit that comes down in the Water layer and moves by CalcMoveWater 0x6c3480 (AmphibiousFloating, Water,
+      // SurfacingSub) is not set on the water the beat after: that calculation snaps only a unit that moved, dives
+      // or still carries a dive pitch (0x6c3523), never on motion+0x90, and the landing (0x6c0997..0x6c0c15) asks
+      // nothing else. So it floats on with the tilt it fell with. Seen: MP1 9639, army 2's Cybran engineer 0x2000b6
+      // (url0105), dropped at 9627, lands on the sea and keeps its quaternion (-0.0279, -0.6332, -0.0228, 0.7732);
+      // ours levelled it at 9640.
       m.needSnap = true;
     }
     sim.MarkUnitsMoved();
