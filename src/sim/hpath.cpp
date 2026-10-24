@@ -9,6 +9,7 @@
 #include <cstring>
 #include <limits>
 
+#include "core/workers.h"
 #include "sim/navigation.h"
 #include "sim/units.h"
 
@@ -101,6 +102,7 @@ HPathTables::ClusterMap& HPathTables::Map(const NamedFootprint& fp) {
     m->dirty[L].assign(n, 1);
     m->stale[L].assign(n, 0);
     m->ahead[L].assign(n, 0);
+    m->picked[L].assign(n, 0);
   }
   ClusterMap* r = m.get();
   mapOrder_.push_back(r);
@@ -133,6 +135,30 @@ void HPathTables::DirtyRect(int x0, int z0, int x1, int z1) {
           size_t i = static_cast<size_t>(cz) * m->wc[L] + cx;
           m->dirty[L][i] = 1;
           if (m->ahead[L][i]) {  // (made from the occupancy before this change)
+            m->ahead[L][i] = 0;
+            ++aheadCounts.dropped;
+          }
+        }
+    }
+    // Data made ahead is dropped wherever the change can reach a cluster's data, which is wider than the rect the
+    // original dirties above (that rect is the original's, ClusterMap::DirtyRect 0x8e3620, and stays as it is: it
+    // decides what is rebuilt and charged). A cluster's data is a function of its origins' passability, and the
+    // origins whose footprint [o, o + size) overlaps the changed cells [x0, x1) are [x0 - size + 1, x1 - 1]
+    // (PathGrid::Block); the dirty rect reaches only 1-2 cells left of (above) x0 (z0), so a footprint wider than
+    // that changes origins of 8-clusters it leaves clean or stale. A clean one keeps its data either way (it is not
+    // rebuilt, here or in the original). A stale one's data is made when a search first reads it, from the grid as
+    // it is then, which holds this change; data made ahead before the change would not, and a search would take it.
+    // So the drop covers every 8-cluster holding an origin in that range, and its 32-cluster. (Seen: MP1 differed at
+    // 12449 with MOHO64_PATH_AHEAD=2, the serial step 2a and the pooled one alike; identical with this drop.)
+    const int ox0 = x0 - m->sx + 1, ox1 = x1 - 1, oz0 = z0 - m->sz + 1, oz1 = z1 - 1;
+    const int jx0 = std::max(0, (ox0 >> 3) - 1), jx1 = std::min(m->wc[1] - 1, ox1 >> 3);
+    const int jz0 = std::max(0, (oz0 >> 3) - 1), jz1 = std::min(m->hc[1] - 1, oz1 >> 3);
+    for (int L = 1; L <= 2; ++L) {
+      const int sh = L == 1 ? 0 : 2;
+      for (int cz = jz0 >> sh; cz <= (jz1 >> sh) && cz < m->hc[L]; ++cz)
+        for (int cx = jx0 >> sh; cx <= (jx1 >> sh) && cx < m->wc[L]; ++cx) {
+          const size_t i = static_cast<size_t>(cz) * m->wc[L] + cx;
+          if (m->ahead[L][i]) {
             m->ahead[L][i] = 0;
             ++aheadCounts.dropped;
           }
@@ -269,19 +295,71 @@ void HPathTables::PrepareTraveler(const PathTraveler& t, ClusterMap* cm, int mar
   const int cx0 = std::max(0, (x0 >> 5) - margin), cx1 = std::min(cm->wc[2] - 1, (x1 >> 5) + margin);
   const int cz0 = std::max(0, (z0 >> 5) - margin), cz1 = std::min(cm->hc[2] - 1, (z1 >> 5) + margin);
   for (int cz = cz0; cz <= cz1; ++cz)
-    for (int cx = cx0; cx <= cx1; ++cx) MakeAhead(*cm, 2, cx, cz);
+    for (int cx = cx0; cx <= cx1; ++cx) PickAhead(*cm, 2, cx, cz);
 }
 
-bool HPathTables::PrepareSearches(int margin) {
+void HPathTables::PickAhead(ClusterMap& m, int L, int cx, int cz) {
+  if (cx < 0 || cz < 0 || cx >= m.wc[L] || cz >= m.hc[L]) return;
+  const size_t i = static_cast<size_t>(cz) * m.wc[L] + cx;
+  if (m.ahead[L][i] || m.picked[L][i] || !(m.dirty[L][i] || m.stale[L][i])) return;
+  if (!m.grid) m.grid = nav_->Grid(m.fp);  // (made here, on this thread: the builds only read it)
+  if (L == 2)
+    for (int j = 0; j < 4; ++j)
+      for (int k = 0; k < 4; ++k) PickAhead(m, 1, 4 * cx + k, 4 * cz + j);
+  m.picked[L][i] = 1;
+  pick_[L].push_back({&m, cx, cz, i});
+}
+
+bool HPathTables::PrepareSearches(int margin, bool all, WorkerPool* pool) {
   bool units = false;
+  pick_[1].clear();
+  pick_[2].clear();
+  std::vector<ClusterMap*> searched;  // (the cluster maps with a search, in the work loop's order: for `all`)
+  auto note = [&](ClusterMap* cm) {
+    if (cm && std::find(searched.begin(), searched.end(), cm) == searched.end()) searched.push_back(cm);
+  };
   for (auto& [a, q] : queues_) {  // (the work loop's order: armies, then each queue's active search and the rest)
     if (q.active) {
       PrepareTraveler(*q.active->t, q.active->cm, margin);
+      note(q.active->cm);
       units = units || q.active->t->mode != 0;
     }
     for (PathTraveler* t : q.waiting) {
-      PrepareTraveler(*t, FindMap(t->fp), margin);
+      ClusterMap* cm = FindMap(t->fp);
+      PrepareTraveler(*t, cm, margin);
+      note(cm);
       units = units || t->mode != 0;
+    }
+  }
+  if (all)
+    for (ClusterMap* m : searched) {
+      for (int cz = 0; cz < m->hc[2]; ++cz)
+        for (int cx = 0; cx < m->wc[2]; ++cx)
+          if (m->stale[2][static_cast<size_t>(cz) * m->wc[2] + cx]) PickAhead(*m, 2, cx, cz);
+      for (int cz = 0; cz < m->hc[1]; ++cz)
+        for (int cx = 0; cx < m->wc[1]; ++cx)
+          if (m->stale[1][static_cast<size_t>(cz) * m->wc[1] + cx]) PickAhead(*m, 1, cx, cz);
+    }
+  // The data: each cluster's is a function of its map's occupancy grid (an 8-cluster) or of its 8-clusters' data (a
+  // 32-cluster) alone, written to its own lv entry; so the 8-clusters first, then the 32-clusters, each list in any
+  // order and on any thread (MakeAhead's data, the same as a search would make: data made ahead is dropped by any
+  // occupancy or terrain change before it is read).
+  for (int L = 1; L <= 2; ++L) {
+    std::vector<AheadItem>& list = pick_[L];
+    if (list.empty()) continue;
+    auto build = [&](size_t b, size_t e, int /*worker*/) {
+      for (size_t k = b; k < e; ++k) {
+        const AheadItem& it = list[k];
+        if (L == 1) Build1(*it.m, it.cx, it.cz);
+        else Build2(*it.m, it.cx, it.cz, nullptr);
+      }
+    };
+    if (pool) pool->ParallelFor(L == 1 ? "path clusters ahead (8)" : "path clusters ahead (32)", list.size(), L == 1 ? 4 : 1, build);
+    else build(0, list.size(), 0);
+    for (const AheadItem& it : list) {
+      it.m->picked[L][it.i] = 0;
+      it.m->ahead[L][it.i] = 1;
+      ++aheadCounts.made;
     }
   }
   return units;

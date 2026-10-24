@@ -14,10 +14,12 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <limits>
 #include <map>
 
 #include "core/log.h"
+#include "core/workers.h"
 #include "sim/navigation.h"
 #include "sim/sim.h"
 #include "sim/terrain.h"
@@ -1174,15 +1176,27 @@ void LandNavTickAll(Sim& sim) {
   // PrepareSearches; the unit grid for a search that units block: COGrid::UnitIsBlocked reads it). Neutral: the
   // searches compute and are charged as without it. MOHO64_PATH_AHEAD=N (N > 0) also makes the data of the dirty or
   // stale clusters within N 32-clusters of each search's start-goal box ahead; -1 leaves the pre-pass out.
-  static const int margin = getenv("MOHO64_PATH_AHEAD") ? std::atoi(getenv("MOHO64_PATH_AHEAD")) : 0;
-  static const bool ahead = margin >= 0;
+  // MOHO64_PATH_AHEAD=all[:N] makes the data of every stale cluster of the cluster maps that have a search (paid by
+  // the background, its data not made yet), and that of the dirty or stale clusters within N (default 1) of each
+  // search's box. The data is made on the worker pool (HPathTables::PrepareSearches). "0" or "off": only the grids.
+  // Unset: "all" when the sim's pool has workers (the navigators' spike beats, 25-150 ms on the 8-army SETONS_R
+  // session, were bursts of stale clusters made inside one beat's searches; on the pool they cost about 2.4 ms of
+  // worker time a beat there), and only the grids at 1 thread (one thread would make them all itself).
+  static const char* aheadEnv = getenv("MOHO64_PATH_AHEAD");
+  static const bool envOff = aheadEnv && !std::strcmp(aheadEnv, "off");
+  const bool aheadAll = aheadEnv ? !std::strncmp(aheadEnv, "all", 3) : sim.workers().Threads() > 1;
+  const int margin = aheadAll ? ((aheadEnv && aheadEnv[3] == ':') ? std::atoi(aheadEnv + 4) : 1)
+                              : ((aheadEnv && !envOff) ? std::atoi(aheadEnv) : 0);
+  const bool ahead = aheadAll || margin >= 0;
+  // (the path grids' deferred FlattenMapRect work, here on one thread: before the pre-pass, whose cluster data reads
+  // the grids on the worker pool; a grid's cells are a function of the map, so taking them now reads the same)
+  sim.navigation().ApplyTerrainChanges();
   const double prepBefore = T.aheadCounts.seconds;
   if (ahead) {
     const double p0 = prof ? NowS() : 0;
-    if (T.PrepareSearches(margin)) sim.EnsureUnitGrid();
+    if (T.PrepareSearches(margin, aheadAll, &sim.workers())) sim.EnsureUnitGrid();
     if (prof) T.aheadCounts.seconds += NowS() - p0;
   }
-  sim.navigation().ApplyTerrainChanges();  // (the path grids' deferred FlattenMapRect work, here on one thread)
   double t1 = prof ? NowS() : 0;
   T.WorkAll(0);
   double t2 = prof ? NowS() : 0;
