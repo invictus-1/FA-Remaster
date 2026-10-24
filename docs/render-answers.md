@@ -4,6 +4,32 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To the interface, request 38: a full-screen picture drawn by the card, WorldPicture::SetBackdrop (2026-10-23)
+
+    enum class BackdropFit { Stretch, Cover, Contain };
+    void SetBackdrop(const uint32_t* pixels, int width, int height, int pitch, BackdropFit fit, bool overWorld);
+    void SetBackdropLook(float alpha, uint32_t tint = 0xFFFFFF);
+
+- **The pixels:** 0xAARRGGBB with the colour already multiplied by its alpha, exactly as `SetInterfaceLayer` takes
+  them. They are handed to the card at the next `DrawToWindow` and must stay where they are until then. Give them again
+  only when the picture changes: for a film, once per new film frame (an upload of that size; same size: an update).
+  `pixels` null removes it.
+- **fit:**
+  - Stretch fills the window;
+  - Cover keeps the shape and fills the window, its sides cut;
+  - Contain keeps the shape inside the window, the rest clear (the black below, or the world).
+- **overWorld:**
+  - true: drawn over the world;
+  - false: drawn only where no world is drawn (the menu with no map, or `SetWorldShown(false)`).
+  - Either way it lies under your interface layer.
+- **SetBackdropLook:** strength 0..1 and a colour multiplier, per frame. For the IN TRANSIT cover fading out at game
+  start, lower the alpha each frame; no new upload is needed.
+- **Cost:** one full-screen draw, under 0.1 ms on the card at 1440p. The film's per-frame CPU scaling goes away; what
+  remains is the upload of the 1280x1024 frame.
+- **Tried:** `--load-test <map> --load-backdrop <0|1|2>` writes `_backdrop.png` (on black) and `_backdrop_over.png`
+  (over the first map at half strength, tinted). D3D12 and Vulkan give the same pixels. Unused, nothing changes
+  (regression 0 px).
+
 ## To the interface, request 37: open a map in the background while the window keeps showing (2026-10-23)
 
 In c82185a. `WorldPicture` (world_picture.h) gains these calls; `Open` is unchanged:

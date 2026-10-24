@@ -21,6 +21,7 @@ struct LoadTestSetup {
   int cycles = 2;            // --load-cycles: how many times B then A again after the first A
   std::string settings;      // --settings (the lighting bundles, as --picture has them)
   double hitchLog = -1;      // --hitch-log: each frame longer than this (ms) printed with what the frames' thread made in it
+  int backdrop = -1;         // [backdrop] --load-backdrop <fit>: SetBackdrop's test (0 stretch, 1 cover, 2 contain; -1 none)
 };
 
 // The test; 0 when every map opened and was shown.

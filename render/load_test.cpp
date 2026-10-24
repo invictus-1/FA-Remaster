@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <thread>
 #include <cstdio>
 #include <vector>
@@ -128,6 +129,28 @@ int LoadTest(const moho::Vfs& vfs, const LoadTestSetup& s) {
   printf("render: --load-test: %s shown: frames %.2f ms (the median), longest %.2f ms, card %.0f MB\n", s.openFirst ? s.mapA.c_str() : "the interface alone",
          median, longest, Mb(picture.LastStats().cardBytes));
 
+  // [backdrop] --load-backdrop: a made-up picture the loading film's size (1280x1024: bands of colour, a ring in the
+  // middle, its edge marked) on the black of no world, then over the first map at half strength, tinted, its frames
+  // timed; written as _backdrop.png and _backdrop_over.png
+  const int bw = 1280, bh = 1024;
+  std::vector<uint32_t> testPicture;
+  const auto fit = static_cast<WorldPicture::BackdropFit>(std::clamp(s.backdrop, 0, 2));
+  if (s.backdrop >= 0) {
+    testPicture.resize(static_cast<size_t>(bw) * bh);
+    for (int y = 0; y < bh; ++y)
+      for (int x = 0; x < bw; ++x) {
+        const float dx = static_cast<float>(x - bw / 2), dy = static_cast<float>(y - bh / 2);
+        const float r = std::sqrt(dx * dx + dy * dy);
+        uint32_t c = 0xFF000000u | (static_cast<uint32_t>(x * 255 / bw) << 16) | (static_cast<uint32_t>(y * 255 / bh) << 8) | 0x40u;
+        if (std::fabs(r - 300) < 12 || x < 8 || y < 8 || x >= bw - 8 || y >= bh - 8) c = 0xFFFFFFFFu;
+        testPicture[static_cast<size_t>(y) * bw + x] = c;
+      }
+    picture.SetBackdrop(testPicture.data(), bw, bh, bw, fit, false);
+    settle(60, &median, &longest);
+    printf("render: --load-test: the backdrop (fit %d) on no world: frames %.2f ms (the median), longest %.2f ms\n", s.backdrop, median, longest);
+    write("backdrop");
+  }
+
   if (s.openFirst) {  // (the map Open opened, settled as the others are, for comparing with the same map opened behind)
     settle(240, &median, &longest);
     write("a");
@@ -196,6 +219,15 @@ int LoadTest(const moho::Vfs& vfs, const LoadTestSetup& s) {
            map.c_str(), beginMs, readyMs / 1000.0, n.openSeconds, n.asks, n.serviceMs, n.longestServiceMs, t.size(), loadMedian, loadLongest, over,
            swapMs, n.warmFrames, n.warmLongestMs, first, second, third, after, median, longest, Mb(before), Mb(peak), Mb(picture.LastStats().cardBytes));
     if (!phases[k].second.empty()) write(phases[k].second.c_str());
+    if (s.backdrop >= 0 && k == 0) {  // [backdrop] (the backdrop under, unseen with the world drawn; then over it)
+      picture.SetBackdrop(testPicture.data(), bw, bh, bw, fit, true);
+      picture.SetBackdropLook(0.5f, 0xFFC080);
+      settle(60, &median, &longest);
+      printf("render: --load-test: the backdrop over %s at half strength: frames %.2f ms (the median), longest %.2f ms\n", map.c_str(), median, longest);
+      write("backdrop_over");
+      picture.SetBackdrop(nullptr, 0, 0, 0, fit, false);
+      picture.SetBackdropLook(1);
+    }
   }
   return failed ? 1 : 0;
 }

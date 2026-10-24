@@ -56,6 +56,15 @@ struct WorldPicture::Impl {
   int layerMadeWidth = 0, layerMadeHeight = 0;  // (the texture's)
   const uint32_t* layerPixels = nullptr;
   int layerPitch = 0, dirtyX = 0, dirtyY = 0, dirtyW = 0, dirtyH = 0;
+  // [backdrop] the host's picture over the whole window (SetBackdrop, SetBackdropLook)
+  gfx::Texture backdrop;
+  gfx::Pipeline backdropPipeline;
+  int backdropWidth = 0, backdropHeight = 0, backdropMadeWidth = 0, backdropMadeHeight = 0, backdropPitch = 0;
+  const uint32_t* backdropPixels = nullptr;  // (a new picture to hand to the card)
+  bool backdropOn = false, backdropOverWorld = false;
+  WorldPicture::BackdropFit backdropFit = WorldPicture::BackdropFit::Stretch;
+  float backdropAlpha = 1;
+  uint32_t backdropTint = 0xFFFFFF;
   bool vsync = true;
   bool lowLatency = false;             // SetLowLatency
   bool vulkan = false;                 // SetVulkan
@@ -200,6 +209,7 @@ struct WorldPicture::Impl {
   bool depthIsWindow = false;   // (the scene's depth is the main picture's, as last drawn: FocusAt reads it)
   std::unique_ptr<PhotoFocus> focus;
   void LayInterface(int width, int height);  // (the host's interface over what is in the window, DrawToWindow)
+  void LayBackdrop(int width, int height, bool worldDrawn);  // [backdrop] (under the interface, DrawToWindow)
   // [bgload] the map being opened behind the world shown (BeginMap): its own device in front of this picture's, the
   // world, the thread opening it, and how it went
   struct Load {
@@ -333,6 +343,30 @@ float4 PS(float4 at : SV_Position) : SV_Target { return layer.Load(int3(at.xy, 0
     pd.colorFormat = gfx::Format::RGBA8;
     m.layerPipeline = m.device->CreatePipeline(pd, error);
     if (!m.layerPipeline) return false;
+    // [backdrop] the host's picture over the window: its place in the picture from the screen's (`fit`'s scale about
+    // the middle; outside it, clear), filtered, its strength and tint
+    static const char kBackdrop[] = R"hlsl(
+Texture2D picture : register(t0);
+SamplerState samplerLinearClamp : register(s1);
+cbuffer Backdrop : register(b1) {
+  float4 place;  // xy: the picture's share of the window across each way (fit); zw: 1 / the window's size
+  float4 tint;   // rgb: the colour it is multiplied by, times its strength; a: its strength
+};
+float4 VS(uint id : SV_VertexID) : SV_Position {
+  float2 p = float2((id << 1) & 2, id & 2);
+  return float4(p * float2(2, -2) + float2(-1, 1), 0, 1);
+}
+float4 PS(float4 at : SV_Position) : SV_Target {
+  float2 uv = 0.5 + (at.xy * place.zw - 0.5) * place.xy;
+  if (any(uv < 0) || any(uv > 1)) return 0;
+  return picture.SampleLevel(samplerLinearClamp, uv, 0) * tint;
+}
+)hlsl";
+    gfx::PipelineDesc bd = pd;
+    bd.name = "the host's picture over the window";
+    bd.vertexSource = bd.pixelSource = kBackdrop;
+    m.backdropPipeline = m.device->CreatePipeline(bd, error);
+    if (!m.backdropPipeline) return false;
   }
   // (in the host's window with no map: no world at all, only the interface shown - the menu's)
   if (m.HostShows() && mapPath.empty()) return true;
@@ -733,6 +767,7 @@ void WorldPicture::DrawToWindow(const Camera& camera, int width, int height, dou
     const float black[4] = {0, 0, 0, 1};
     m.device->BeginFrame(black);
   }
+  m.LayBackdrop(width, height, m.world && m.worldShown);  // [backdrop]
   m.LayInterface(width, height);
   const auto ending = std::chrono::steady_clock::now();
   m.device->EndFrame(m.checkCapture, true);
@@ -781,6 +816,67 @@ void WorldPicture::Impl::LayInterface(int width, int height) {
 }
 
 void WorldPicture::CaptureNextWindowFrame(std::vector<uint8_t>* out) { impl_->checkCapture = out; }
+
+void WorldPicture::SetBackdrop(const uint32_t* pixels, int width, int height, int pitch, BackdropFit fit, bool overWorld) {
+  Impl& m = *impl_;
+  m.backdropOn = pixels && width > 0 && height > 0;
+  m.backdropPixels = m.backdropOn ? pixels : nullptr;
+  m.backdropWidth = width;
+  m.backdropHeight = height;
+  m.backdropPitch = pitch > 0 ? pitch : width;
+  m.backdropFit = fit;
+  m.backdropOverWorld = overWorld;
+}
+
+void WorldPicture::SetBackdropLook(float alpha, uint32_t tint) {
+  impl_->backdropAlpha = std::clamp(alpha, 0.0f, 1.0f);
+  impl_->backdropTint = tint;
+}
+
+// [backdrop] The host's picture over the window (SetBackdrop): a new one handed to the card (its texture made anew at a
+// new size), then drawn where it is to be seen.
+void WorldPicture::Impl::LayBackdrop(int width, int height, bool worldDrawn) {
+  Impl& m = *this;
+  if (!m.backdropOn || !m.backdropPipeline) return;
+  if (m.backdropPixels) {
+    if (!m.backdrop || m.backdropMadeWidth != m.backdropWidth || m.backdropMadeHeight != m.backdropHeight) {
+      if (m.backdrop) m.device->Destroy(m.backdrop);
+      gfx::TextureDesc td;
+      td.width = m.backdropWidth;
+      td.height = m.backdropHeight;
+      td.format = gfx::Format::BGRA8;  // (0xAARRGGBB as bytes in memory: blue, green, red, alpha)
+      std::vector<uint32_t> rows;  // (the rows packed, where the host's are further apart)
+      if (m.backdropPitch != m.backdropWidth) {
+        rows.resize(static_cast<size_t>(m.backdropWidth) * static_cast<size_t>(m.backdropHeight));
+        for (int y = 0; y < m.backdropHeight; ++y)
+          std::copy_n(m.backdropPixels + static_cast<size_t>(y) * static_cast<size_t>(m.backdropPitch), m.backdropWidth,
+                      rows.data() + static_cast<size_t>(y) * static_cast<size_t>(m.backdropWidth));
+      }
+      td.data = rows.empty() ? static_cast<const void*>(m.backdropPixels) : rows.data();
+      td.dataSize = static_cast<size_t>(m.backdropWidth) * static_cast<size_t>(m.backdropHeight) * 4;
+      m.backdrop = m.device->CreateTexture(td);
+      m.backdropMadeWidth = m.backdropWidth;
+      m.backdropMadeHeight = m.backdropHeight;
+    } else {
+      m.device->UpdateTexture(m.backdrop, 0, 0, m.backdropWidth, m.backdropHeight, m.backdropPixels, static_cast<uint32_t>(m.backdropPitch) * 4);
+    }
+    m.backdropPixels = nullptr;
+  }
+  if (!m.backdrop || (worldDrawn && !m.backdropOverWorld) || m.backdropAlpha <= 0) return;
+  // (fit: the picture's share of the window across each way, about the middle; k = the window's shape / the picture's)
+  const float k = (static_cast<float>(width) / static_cast<float>(height)) / (static_cast<float>(m.backdropWidth) / static_cast<float>(m.backdropHeight));
+  float sx = 1, sy = 1;
+  if (m.backdropFit == WorldPicture::BackdropFit::Cover) (k < 1 ? sx : sy) = k < 1 ? k : 1 / k;
+  else if (m.backdropFit == WorldPicture::BackdropFit::Contain) (k < 1 ? sy : sx) = k < 1 ? 1 / k : k;
+  const float a = m.backdropAlpha;
+  const float constants[8] = {sx, sy, 1.0f / static_cast<float>(width), 1.0f / static_cast<float>(height),
+                              static_cast<float>((m.backdropTint >> 16) & 255) / 255 * a, static_cast<float>((m.backdropTint >> 8) & 255) / 255 * a,
+                              static_cast<float>(m.backdropTint & 255) / 255 * a, a};
+  m.device->SetPipeline(m.backdropPipeline);
+  m.device->SetConstants(1, constants, sizeof constants);
+  m.device->SetTexture(0, m.backdrop);
+  m.device->Draw(3);
+}
 
 // The world as `camera` sees it into the device's frame (begun here, ended by the caller).
 void WorldPicture::LifeBarAnchors(const Camera& camera, int width, int height, double tick, std::vector<LifeBarAnchor>* out) {

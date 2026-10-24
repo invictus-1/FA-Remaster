@@ -140,6 +140,18 @@ class WorldPicture {
   // has changed since the last call: all of it the first time and after a change of size; w or h 0:
   // nothing has. The pixels must stay where they are until that DrawToWindow.
   void SetInterfaceLayer(const uint32_t* pixels, int width, int height, int pitch, int x, int y, int w, int h);
+  // [backdrop] A picture over the whole window drawn by the card (the loading screen's film, the "IN TRANSIT" cover;
+  // the interface's request 38): `width` x `height` pixels 0xAARRGGBB with the colour already multiplied by its alpha,
+  // as SetInterfaceLayer's, `pitch` pixels from one row to the next. Handed to the card by the next DrawToWindow (the
+  // pixels must stay where they are until then); give it again only when the picture changes (a film: each new frame).
+  // `fit`: stretched to the window, or its shape kept, covering the window (its sides cut) or inside it (the rest
+  // clear). Drawn under the interface: over the world (`overWorld`), or only where no world is drawn (the menu's
+  // black, or SetWorldShown off). pixels null: none any more.
+  enum class BackdropFit { Stretch, Cover, Contain };
+  void SetBackdrop(const uint32_t* pixels, int width, int height, int pitch, BackdropFit fit, bool overWorld);
+  // [backdrop] How strongly it shows (0: not at all .. 1) and a colour it is multiplied by (0xRRGGBB), from the next
+  // DrawToWindow on (a cover fading out: a smaller alpha each frame). 1 and white unless set.
+  void SetBackdropLook(float alpha, uint32_t tint = 0xFFFFFF);
   // The world as Draw draws it, the interface over it, shown in the window.
   void DrawToWindow(const Camera& camera, int width, int height, double tick);
   // DrawToWindow waits for the screen's refresh (vertical sync, as at first) or not.

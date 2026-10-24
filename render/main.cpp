@@ -51,7 +51,9 @@
 //           times (2 unless given); the frames' times meanwhile, the times to ready, the swaps' frames and the card's memory
 //           printed, the first of each written as <name>_a.png, _b.png, _a2.png by --screenshot <name>.png. With --novsync
 //           for the frames' own times; --size, --vulkan, --time-of-day and --settings as for --picture. --load-test-open: the
-//           first map by Open itself (the way before). --load-budget <ms>: SetLoadBudget (2 unless given)
+//           first map by Open itself (the way before). --load-budget <ms>: SetLoadBudget (2 unless given).
+//           --load-backdrop <fit>: [backdrop] WorldPicture::SetBackdrop tried first (0 stretch, 1 cover, 2 contain): a
+//           made-up picture on the black of no world (_backdrop.png), and over the first map at half strength (_backdrop_over.png)
 // --picture-window  with --picture: the interface's way without a read-back: the picture drawn into a window of
 //           its own with a made-up interface layer over it (UseWindow, SetInterfaceLayer, DrawToWindow), read
 //           back once for the file
@@ -817,6 +819,7 @@ struct Options {
   bool windowCycle = false;             // --window-cycle
   std::string loadTest;                 // [bgload] --load-test
   bool loadTestOpen = false;            // [bgload] --load-test-open
+  int loadBackdrop = -1;                // [backdrop] --load-backdrop
   float loadBudget = 2;                 // [bgload] --load-budget
   int loadCycles = 2;                   // [bgload] --load-cycles
   float effectsQuality = 1;             // --effects-quality
@@ -1227,6 +1230,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--fx-decal-size") o->fx.decalSize = std::max(0.1f, static_cast<float>(atof(v)));
     else if (a == "--picture") o->picture = v;
     else if (a == "--load-test") o->loadTest = v;  // [bgload]
+    else if (a == "--load-backdrop") o->loadBackdrop = atoi(v);  // [backdrop]
     else if (a == "--load-budget") o->loadBudget = static_cast<float>(atof(v));  // [bgload]
     else if (a == "--load-cycles") o->loadCycles = std::max(1, atoi(v));  // [bgload]
     else if (a == "--photo-cases") o->photoCases = v, o->photoTest = true;  // (photofix)
@@ -1612,6 +1616,7 @@ int main(int argc, char** argv) {
     t.cycles = opt.loadCycles;
     t.settings = opt.settings;
     t.hitchLog = opt.hitchLog;
+    t.backdrop = opt.loadBackdrop;
     return LoadTest(vfs, t);
   }
   if (opt.windowCycle) {  // --window-cycle
