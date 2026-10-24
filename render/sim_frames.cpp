@@ -333,13 +333,10 @@ void SimFrames::Beat(const moho::Sim& sim) {
   const int focus = focus_.load();
   // what the focus army sees over the map, every fifth beat (and once more, empty, when there is no such army any more)
   {
-    float mapWidth, mapHeight;
     int cells;
     bool wasOn;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      mapWidth = sightWidth_;
-      mapHeight = sightHeight_;
       cells = sightCells_;
       wasOn = sightWasOn_;
     }
@@ -354,18 +351,17 @@ void SimFrames::Beat(const moho::Sim& sim) {
         sightEverOf_ = focus;
       }
       size_t seenNow = 0;
-      for (int z = 0; z < cells; ++z)
-        for (int x = 0; x < cells; ++x) {
-          const float at[3] = {(static_cast<float>(x) + 0.5f) * mapWidth / static_cast<float>(cells), 0, (static_cast<float>(z) + 0.5f) * mapHeight / static_cast<float>(cells)};
-          const size_t i = static_cast<size_t>(z) * static_cast<size_t>(cells) + static_cast<size_t>(x);
-          // (asked as of something on the water's surface: sight is the same as on land there, and
-          // sonar is told too)
-          const uint32_t recon = moho::ReconAt(sim, focus, at, 1);
-          const bool now = (recon & moho::kReconSeenNow) != 0;
-          seenNow += now;
-          sightWork_[i] = static_cast<uint8_t>((now ? kSightNow : 0) | ((recon & (moho::kReconRadar | moho::kReconOmni)) ? kSightRadar : 0) |
-                                               ((recon & moho::kReconSonar) ? kSightSonar : 0));
-        }
+      // (every cell's ReconAt at its centre at once, the engine's ReconGrid: the same bits, about a tenth of the time;
+      // asked as of something on the water's surface: sight is the same as on land there, and sonar is told too)
+      moho::ReconGrid(sim, focus, cells, cells, &sightRecon_, 1);
+      if (sightRecon_.size() != count) sightRecon_.assign(count, 0);  // (no map: nothing seen)
+      for (size_t i = 0; i < count; ++i) {
+        const uint32_t recon = sightRecon_[i];
+        const bool now = (recon & moho::kReconSeenNow) != 0;
+        seenNow += now;
+        sightWork_[i] = static_cast<uint8_t>((now ? kSightNow : 0) | ((recon & (moho::kReconRadar | moho::kReconOmni)) ? kSightRadar : 0) |
+                                             ((recon & moho::kReconSonar) ? kSightSonar : 0));
+      }
       // A look in which EVERY place is seen does not count as having seen the map: that is a
       // script's doing, not exploring (the M28 AI gives its commanders sight of the whole map for a
       // few beats at the start, and an ally's sight is the army's own: docs/engine-answers.md,
