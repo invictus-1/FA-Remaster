@@ -1805,6 +1805,16 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   CallMethod(L, u, "OnPreCreate", 0);
   u->layer = LayerName(startLayer);
   u->createLayer = startLayer;
+  {  // CalcMoveWater 0x6c3480 (any layer but Land and Seabed, no hover, no flyer) sets a unit on the water only when it
+     // moved, dives or still pitches (0x6c34b0 / 0x6c3523): no creation snap there (as NotifyDetached, build.cpp).
+     // Seen: MP1 9085, the stream's GiveUnitsToPlayer hands army 7's surfacing Seraphim destroyer 0x700034 (Sub,
+     // MovingUp, y 17.0, pitched) to army 1 as 0x1000c8, made where it was: the original's stays at y 17.0, pitched,
+     // until it moves; ours set it at its depth (15.5) and levelled it in its first motion step.
+    const MotionBlueprint* mb = u->motion.bp;
+    if (mb && mb->motionType != kMotionNone && !mb->canFly && mb->motionType != kMotionHover && startLayer != kLayerLand &&
+        startLayer != kLayerSeabed)
+      u->motion.needSnap = false;
+  }
   lua_pushstring(L, u->layer.c_str());
   lua_pushstring(L, "None");
   CallMethod(L, u, "OnLayerChange", 2);

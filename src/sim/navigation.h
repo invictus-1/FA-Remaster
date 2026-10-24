@@ -52,11 +52,14 @@ class PathGrid {
   int width() const { return w_; }
   int height() const { return h_; }
   // Can the footprint's origin cell be (x, z)? (terrain, and no structure in the way: OCCUPY_FootprintFits)
-  bool Passable(int x, int z) const {
+  // `drop`: layer bits taken from the terrain caps before the structures are counted (the path navigator's Reach
+  // drops Sub for a unit on the Water layer, 0x5af566 / 0x720bfa).
+  bool Passable(int x, int z, uint8_t drop = 0) const {
     if (x < 0 || z < 0 || x >= w_ || z >= h_) return false;
     if (pendingAny_) ApplyTerrainChanges();
     size_t i = static_cast<size_t>(z) * w_ + x;
-    return FitsCaps(cells_[i], ignoreStructures, blocked_[i] != 0, blockedWater_[i] != 0) != 0;
+    return FitsCaps(static_cast<uint8_t>(cells_[i] & ~drop), ignoreStructures, blocked_[i] != 0,
+                    blockedWater_[i] != 0) != 0;
   }
   // Layers the terrain allows at (x, z): OCCUPY_MobileCheck's result (structures not counted).
   uint8_t Caps(int x, int z) const {

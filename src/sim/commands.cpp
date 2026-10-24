@@ -256,6 +256,8 @@ bool RefusesUpgradeAgain(Sim& sim, const Unit* u, const std::string& bpId) {
 
 }  // namespace
 
+void EndMoveTaskReservation(Unit* u) { EndMoveTaskRect(u); }
+
 uint32_t AssignEngineCommandId(Sim& sim, const std::shared_ptr<UnitCommand>& c) {
   // MOHO64_DEBUG_CMDID=1: every engine id taken ("cmdid alloc <tick> <index> slot <s> from <frames>") and given back
   // ("cmdid free <tick> <index> slot <s>"), to set beside a probe of CCommandDb::AddIssueData 0x6e0db0 /
@@ -2093,6 +2095,30 @@ std::shared_ptr<UnitCommand> IssuePodAssist(Sim& sim, Unit* u) {
   return c;
 }
 
+// A land navigator's AbortMove 0x5a3750 called on a unit from outside its own move task (Lua's navigator:AbortMove,
+// a transport's load ending, a ferry calling its cargo): the stop, and the event its move task listens to.
+void NavigatorAbortMove(Sim& sim, Unit* u) {
+  // AbortMove 0x5a3750 (through vt+0x10 from 0x5a5cfd): MakeIdle, then broadcast(Aborted = 1); a move task listening
+  // (navigator listener 0x618bb0) takes Failed and resumes its thread, re-linked at the run list's end, whichever
+  // stage the call comes from. Seen (probe mp1_1958): a stream AbortNavigation aborts MP1 army 1's engineer
+  // 0x10000e's guard walk at 1957. In the original its repair of the factory's unit then ends a beat after that of
+  // its neighbour 0x10001e (2152 / 2151), ours the other way round without the re-link (thread order inferred).
+  // Only a move task under way listens: a navigator with no goal (a UEF pod's AssistCommander aborted by
+  // ConstructionUnit:OnPrepareArmToBuild, Upgrades 3216) wakes nobody.
+  const bool wake = u->motion.hasGoal && !u->motion.arrived && !u->motion.failed &&
+                    NavEventWakesCommandThread(u);  // (asked before the goal is gone)
+  MotionStop(u);
+  // The land navigator's event 1 (0x5a378e -> 0x5a6c50, sent when MakeIdle found it busy) is "failed" to a plain
+  // move task: its listener 0x618bb0 maps events 0 and 1 to result 2 (0x618bc2; 2 = success, 0x618bd2), and the
+  // task's TaskTick then ends the order like a failed arrival. Ours only woke the thread, so a Move aborted from Lua
+  // stayed in the queue with no goal. Seen: MP1 8627, the stream's AbortNavigation (FAF SimCallbacks.lua 655,
+  // abort-navigation.lua 45) on army 1's engineers 0x100010 / 0x100011 / 0x1000a6 ... under plain Moves: the
+  // original's queues are empty at 8628, ours kept Move x1 [Moving]. (CAiNavigatorAir::AbortMove 0x5a4f00 sends no
+  // such event.)
+  if (wake && !u->task && !u->motion.air && IsAlive(u)) u->motion.failed = true;
+  if (wake && IsAlive(u)) sim.ResumeCommandThread(u);
+}
+
 namespace {
 
 // Issue<Type>(units, position or entity target)
@@ -2639,17 +2665,7 @@ int l_nav_SetDestUnit(lua_State* L) {
 int l_nav_AbortMove(lua_State* L) {
   Unit* u = N(L)->unit;
   if (!IsAlive(u)) return 0;
-  // AbortMove 0x5a3750 (through vt+0x10 from 0x5a5cfd): MakeIdle, then broadcast(Aborted = 1); a move task listening
-  // (navigator listener 0x618bb0) takes Failed and resumes its thread, re-linked at the run list's end, whichever
-  // stage the call comes from. Seen (probe mp1_1958): a stream AbortNavigation aborts MP1 army 1's engineer
-  // 0x10000e's guard walk at 1957. In the original its repair of the factory's unit then ends a beat after that of
-  // its neighbour 0x10001e (2152 / 2151), ours the other way round without the re-link (thread order inferred).
-  // Only a move task under way listens: a navigator with no goal (a UEF pod's AssistCommander aborted by
-  // ConstructionUnit:OnPrepareArmToBuild, Upgrades 3216) wakes nobody.
-  const bool wake = u->motion.hasGoal && !u->motion.arrived && !u->motion.failed &&
-                    NavEventWakesCommandThread(u);  // (asked before the goal is gone)
-  MotionStop(u);
-  if (wake && IsAlive(u)) Sim::From(L)->ResumeCommandThread(u);
+  NavigatorAbortMove(*Sim::From(L), u);
   return 0;
 }
 // CAiNavigatorAir (air_nav.md 4.1, 4.6): GetStatus 0x5a37a0 = nav+0x64 (2 from SetGoal / SetDestUnit until the

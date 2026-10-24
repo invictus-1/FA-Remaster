@@ -1293,6 +1293,7 @@ int TickLoad(Sim& sim, Unit* T, BuildTask& t, TransportTaskData& d) {
           if (T->motion.hasGoal) return kTaskRunning;
           d.moving = false;
           SetState(T, "Moving", false);  // its dtor clears it
+          EndMoveTaskReservation(T);              // ... and frees its landing spot (0x618700)
           // ... and aborts the navigator: CUnitMoveTask's destructor 0x618700 does so whenever the queue is not
           // being cleared for a new order (queue+0x1c is 0 then, and its table 0x618998 says "abort" for 0), so
           // the motion is stopped at the point one second ahead (CAiNavigatorAir::AbortMove 0x5a4f00). Seen: a
@@ -1339,7 +1340,11 @@ void EndLoad(Sim& sim, Unit* T, TransportTaskData& d) {
       if (d.counter > 300) RemovePickupUnit(sim, *T->transport, u, true);
       if (u->transportedBy != EntityRef(T)) {
         if (d.counter <= 300) RemovePickupUnit(sim, *T->transport, u, true);
-        if (u->motion.hasGoal) MotionStop(u);
+        // the dtor 0x624cc0 calls the unit's navigator AbortMove (unit+0x54c vt+0x10, 0x624db5..0x624dc4): a plain
+        // Move the unit walks meanwhile fails with it (event 1). Seen: MP1 8684, army 7's transport 0x700003 loading
+        // three T3 engineers (0x700056, 0x700095, 0x700098) gets an unload with clear; they had left it for a player's
+        // Move at 8678: the original's Moves end at 8685, ours went on with no goal.
+        if (u->motion.hasGoal) NavigatorAbortMove(sim, u);
       }
     }
   }
@@ -1349,9 +1354,13 @@ void EndLoad(Sim& sim, Unit* T, TransportTaskData& d) {
 
 int TickCall(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d, const BuildTask* owner) {
   Unit* T = UnitRef(sim, d.transport);
-  if (u->dead || !u->motion.bp || !T || T->dead || !T->transport) return kTaskFailed;
-  if (t.state != 0 && !State(T, "TransportLoading")) return kTaskFailed;
+  if (u->dead || !u->motion.bp) return kTaskFailed;
+  // A wait (the task's answer 9 or 2) is the thread asleep: the transport's tests come when it wakes. Seen: MP1 9288,
+  // army 5's transport 0x5000ab dies while its cargo, the engineer 0x500076, waits in state 0 (asked at 9285): the
+  // original's call ends at 9294 (9285 + 9), ours at once (9289).
   if (t.waitUntil > sim.tick()) return kTaskRunning;
+  if (!T || T->dead || !T->transport) return kTaskFailed;
+  if (t.state != 0 && !State(T, "TransportLoading")) return kTaskFailed;
   TransportObj& O = *T->transport;
   for (int guard = 0; guard < 4; ++guard) {
     switch (t.state) {
@@ -1537,6 +1546,7 @@ int TickUnload(Sim& sim, Unit* T, BuildTask& t, TransportTaskData& d) {
           if (T->motion.hasGoal) return kTaskRunning;
           d.moving = false;
           SetState(T, "Moving", false);  // its dtor clears it
+          EndMoveTaskReservation(T);              // ... and frees its landing spot (0x618700)
         }
         if (O.isAirStaging) {  // launch (air_staging.md 3.2): everyone off, a queue-clearing Move
           std::vector<Unit*> D = TransportDetachAll(sim, O, false);
@@ -1627,6 +1637,7 @@ bool RunChild(Sim& sim, Unit* u, BuildTask& parent, TransportTaskData& d) {
     if (u->motion.hasGoal) return true;
     d.childMove = false;
     SetState(u, "Moving", false);  // its dtor clears it
+    EndMoveTaskReservation(u);  // ... and frees its landing spot (0x618700)
     // ... and, the move task having ended by itself, calls the navigator's AbortMove (0x618700: queue+0x1c is
     // 0 and the table 0x618998 says "abort" for 0): an aircraft's motion target becomes the point one second
     // ahead and its drive-through flag goes, until the ferry task gives it the next leg
@@ -3058,6 +3069,7 @@ void EndTransportTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
       if (d.moving) {
         d.moving = false;
         u->unitStates.erase("Moving");
+        EndMoveTaskReservation(u);
         if (!u->clearKeepsMove && u->motion.bp && u->motion.bp->mobile()) MotionStop(u);
       }
       SetState(u, "TransportUnloading", false);

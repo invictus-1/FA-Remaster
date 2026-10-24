@@ -584,7 +584,8 @@ bool HPathTables::CanTraverse(const Search& s, const PathCell& n) const {
   if (t.ignoreStructures) {
     if (!g || !g->Caps(n.x, n.z)) return false;
   } else if (t.startStandable) {
-    if (!g || !g->Passable(n.x, n.z)) return false;
+    // (0x5aa7ba..0x5aa7fc: OCCUPY_MobileCheck's caps without Sub for a unit on the Water layer, as Reach takes them)
+    if (!g || !g->Passable(n.x, n.z, t.dropSub ? kLayerSub : 0)) return false;
   }
   if (t.mode != 0 && PathUnitBlocked(t.unit, n.x, n.z, t.mode == 3 ? 2 : 1)) return false;
   return true;
