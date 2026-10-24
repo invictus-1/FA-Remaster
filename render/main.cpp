@@ -45,6 +45,13 @@
 // --window-cycle  with --map and --screenshot <name>.png: one window shown by a menu's picture (the interface
 //           alone), then a game's (the map), then a menu's again, each closed before the next opens on it, as
 //           the interface does; what each showed is written as <name>_menu1.png, _game.png, _menu2.png
+// --load-test <map>  [bgload] with --map: one window's picture going from map to map as the interface's will
+//           (WorldPicture::BeginMap, MapReady, SwapMap): opened without a map (the interface alone at once), --map opened
+//           behind and shown, <map> opened behind it while it is drawn and shown, --map again, and so --load-cycles <n>
+//           times (2 unless given); the frames' times meanwhile, the times to ready, the swaps' frames and the card's memory
+//           printed, the first of each written as <name>_a.png, _b.png, _a2.png by --screenshot <name>.png. With --novsync
+//           for the frames' own times; --size, --vulkan, --time-of-day and --settings as for --picture. --load-test-open: the
+//           first map by Open itself (the way before). --load-budget <ms>: SetLoadBudget (2 unless given)
 // --picture-window  with --picture: the interface's way without a read-back: the picture drawn into a window of
 //           its own with a made-up interface layer over it (UseWindow, SetInterfaceLayer, DrawToWindow), read
 //           back once for the file
@@ -623,6 +630,7 @@
 #include "window.h"
 #include "world.h"
 #include "world_picture.h"
+#include "load_test.h"  // [bgload]
 
 using namespace render;
 
@@ -806,6 +814,10 @@ struct Options {
   std::string photoCases;               // (photofix) --photo-cases
   std::vector<std::pair<int, int>> photoTestSizes = {{2560, 1440}, {3840, 2160}};  // --photo-test-sizes
   bool windowCycle = false;             // --window-cycle
+  std::string loadTest;                 // [bgload] --load-test
+  bool loadTestOpen = false;            // [bgload] --load-test-open
+  float loadBudget = 2;                 // [bgload] --load-budget
+  int loadCycles = 2;                   // [bgload] --load-cycles
   float effectsQuality = 1;             // --effects-quality
   float upscale = 1;                    // --fsr
   float wet = 0;                        // --wet
@@ -1031,6 +1043,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--picture-window") o->pictureWindow = true;
     else if (a == "--photo-test") o->photoTest = true;  // (photomode)
     else if (a == "--window-cycle") o->windowCycle = true;
+    else if (a == "--load-test-open") o->loadTestOpen = true;  // [bgload]
     else if (a == "--prepass") o->prepass = true;
     else if (a == "--no-prepass") o->prepass = false;
     else if (a == "--no-ground-changes") o->groundChanges = false;
@@ -1212,6 +1225,9 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     }
     else if (a == "--fx-decal-size") o->fx.decalSize = std::max(0.1f, static_cast<float>(atof(v)));
     else if (a == "--picture") o->picture = v;
+    else if (a == "--load-test") o->loadTest = v;  // [bgload]
+    else if (a == "--load-budget") o->loadBudget = static_cast<float>(atof(v));  // [bgload]
+    else if (a == "--load-cycles") o->loadCycles = std::max(1, atoi(v));  // [bgload]
     else if (a == "--photo-cases") o->photoCases = v, o->photoTest = true;  // (photofix)
     else if (a == "--photo-test-sizes") {  // (photomode)
       o->photoTestSizes.clear();
@@ -1580,6 +1596,23 @@ int main(int argc, char** argv) {
   MountGameFiles(opt, &vfs);
   if (vfs.MountCount()) printf("render: %zu archives and folders, %zu files\n", vfs.MountCount(), vfs.FileCount());
   // --sim: the simulation itself plays the replay, on its own thread; it starts loading at once
+  if (!opt.loadTest.empty()) {  // [bgload] --load-test
+    LoadTestSetup t;
+    t.mapA = opt.map;
+    t.mapB = opt.loadTest;
+    t.width = opt.width;
+    t.height = opt.height;
+    t.vulkan = opt.vulkan;
+    t.vsync = opt.vsync;
+    t.pictures = opt.screenshot;
+    t.timeOfDay = opt.timeOfDay;
+    t.openFirst = opt.loadTestOpen;
+    t.budgetMs = opt.loadBudget;
+    t.cycles = opt.loadCycles;
+    t.settings = opt.settings;
+    t.hitchLog = opt.hitchLog;
+    return LoadTest(vfs, t);
+  }
   if (opt.windowCycle) {  // --window-cycle
     std::string error;
     auto window = Window::Create("FA Remastered (window cycle)", opt.width, opt.height, &error, true, false);

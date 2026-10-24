@@ -53,6 +53,60 @@ class WorldPicture {
   // After UseWindow: the device draws into the host's window instead (no invisible window).
   bool Open(const moho::Vfs* vfs, const std::string& mapPath, std::string* error);
 
+  // --- [bgload] a map opened behind the one shown (the interface's request 37) ---
+  // A picture that goes from map to map (the menu's, a game's, the menu's again) is opened once on the host's window
+  // without a map (UseWindow, Open with an empty map path: it shows the interface at once) and given each map with
+  // BeginMap; the window keeps showing what it has (the world shown, or the interface alone) while the next map opens.
+  // On an open picture: starts opening `mapPath` as a second world, on a thread of its own and on this picture's device,
+  // while the frames go on as before. What takes time of its textures and buffers is done on that thread; what has to be
+  // done on the frames' thread (the device's own tables) is done by DrawToWindow (and Draw) after each frame, at most
+  // SetLoadBudget's time a frame; its pipelines are made on the device's own thread. It takes the picture's settings as
+  // Open would (texture detail, season, the lighting bundles; ray tracing's shaders by SetRayTracing /
+  // SetRayReflections as they are now); `before`, where given, is called with the new world on the loading thread
+  // before it opens (it touches that world alone), for switches of its own a host sets before a map opens. False: no
+  // device yet, a map is being opened behind already (CancelMap first), or no map given.
+  bool BeginMap(const std::string& mapPath, std::function<void(World&)> before = {});
+  // The map begun is open, its pipelines made, and it has been drawn once or twice unseen by the camera it will first be
+  // shown by (warm frames: one at most after each frame of the world shown; what its first frame makes is made in them,
+  // so the first of them is as long as that first frame would be - its pictures made at the window's size, measured
+  // 0.5-1.7 s at 4K with every look on - and the later ones about a frame of it): SwapMap would show it from the next
+  // frame, and that frame is an ordinary one.
+  bool MapReady() const;
+  // The camera the map begun will first be shown by (the game's camera at its start), for its warm frames; at first one
+  // over the map's middle. Any time before it is ready.
+  void SetLoadCamera(const Camera& camera);
+  // The map begun could not be opened (`error`: why); CancelMap lets go of it.
+  bool MapFailed(std::string* error = nullptr) const;
+  // Once MapReady: the map begun is the world shown from the next frame on (and world() is it). The world shown before
+  // is let go of on a thread of its own, and what it held on the card over the next frames, a share each frame (the
+  // menu's world does not stand in the game's memory). What the picture keeps of the world shown begins afresh with it:
+  // the beats (SimFrames: GameStarted and Beat come after SwapMap; not while Beat may be running), the minimap's ground,
+  // what the focus army sees. Kept: every setting of the picture's own (Set* above and below; the focus army), and the
+  // world's switches WorldPicture sets (SetLifeBars, SetWorkBars, SetUnexplored, SetStrategicIcons, SetSelectionMarks,
+  // SetOrderLineSettings); the lists of what the interface shows in the world (selection, hover, shapes, ranges, meshes,
+  // decals, ghosts, borders, the playable part) begin empty, as for a new map. Switches a host sets on world() itself are
+  // set again on the new one (or in BeginMap's `before`). False, nothing done: not ready, or a photo is being made.
+  // A world Open made itself (Open with a map) is let go of on this thread at once, and what it made on the card stays
+  // there until the picture goes (its parts do not let go of what they made): open such a picture without a map.
+  bool SwapMap();
+  // The map begun is not wanted: let go of once its opening is done (that goes on, over the next frames); another may
+  // be begun at once.
+  void CancelMap();
+  // At most this long of each frame (milliseconds, after its EndFrame) goes to what a map opening behind, or a world
+  // being let go of, asks of the frames' thread (2 at first; at least one ask a frame is always done).
+  void SetLoadBudget(float ms);
+  // What the last map opened behind took: seconds from BeginMap until it was open (Open on its thread) and until it was
+  // ready (MapReady first true, as seen by a frame's service), the asks done on the frames' thread and their time (the
+  // longest share of one frame, all together), its warm frames and the longest of them.
+  struct LoadNumbers {
+    double openSeconds = 0, readySeconds = 0;
+    long asks = 0;
+    double longestServiceMs = 0, serviceMs = 0;
+    int warmFrames = 0;
+    double warmLongestMs = 0;  // (the longest warm frame, ms)
+  };
+  LoadNumbers LastLoadNumbers() const;
+
   // --- the picture straight into the host's window (the way without a read-back) ---
   // With UseWindow and an empty map path, Open makes no world: DrawToWindow then shows the interface
   // alone (the menu's screens; its moving background drawn by another WorldPicture into the layer).

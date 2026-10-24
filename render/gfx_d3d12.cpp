@@ -307,6 +307,16 @@ class D3D12Device final : public Device {
   bool EndPipelineBatch(std::string* error) override;
   void BeginBackgroundPipelines() override { backgroundAsked_ = dxil_ && !shaderCache_.empty(); }  // [snowhitch]
   void EndBackgroundPipelines() override { backgroundAsked_ = false; }
+  int BackgroundPipelinesWaiting() override {  // [bgload]
+    std::lock_guard<std::mutex> lock(backgroundMutex_);
+    return static_cast<int>(backgroundQueue_.size()) + backgroundMaking_;
+  }
+  bool PipelineReady(Pipeline pipeline) override {  // [bgload]
+    const PipelineRec* rec = Find(pipeline);
+    if (!rec || !rec->background) return true;
+    std::lock_guard<std::mutex> lock(backgroundMutex_);
+    return rec->background->stage == BackgroundPipeline::Made || rec->background->stage == BackgroundPipeline::NotMade;
+  }
   std::unique_ptr<Prepared> PrepareTexture(const TextureDesc& desc) override;  // [spikes]
   Texture FinishTexture(std::unique_ptr<Prepared> prepared) override;
   std::unique_ptr<Prepared> PrepareBuffer(const BufferDesc& desc) override;
@@ -480,6 +490,7 @@ class D3D12Device final : public Device {
   std::mutex backgroundMutex_;
   std::condition_variable backgroundWake_, backgroundDone_;
   std::deque<std::shared_ptr<BackgroundPipeline>> backgroundQueue_;
+  int backgroundMaking_ = 0;  // [bgload] (the one being made now: 1)
   bool backgroundStop_ = false;
   std::shared_ptr<BackgroundPipeline> AskBackground(std::shared_ptr<PendingPipeline> what);
   void BackgroundWork();
@@ -502,9 +513,14 @@ class D3D12Device final : public Device {
   std::mutex releaseMutex_;
   std::condition_variable releaseWake_;
   std::vector<Com<ID3D12Resource>> releasing_;
+  std::vector<Com<IUnknown>> releasingAny_;  // [bgload] (a frame slot's garbage: LetGo below)
   bool releaseStop_ = false;
   std::thread releaser_;
   void LetGo(std::vector<Com<ID3D12Resource>>* staging);
+  // [bgload] what a frame slot let go of (Retire), done with now, handed to the same thread: a world let go of leaves
+  // a gigabyte and more there, which took the frame that found it 100-200 ms to let go of
+  void LetGo(std::vector<Com<IUnknown>>* garbage);
+  void StartReleaser();
   std::vector<StagePage> stagePages_[kUploadBatches];
   size_t stagePage_ = 0;
   uint64_t stageOffset_ = 0;
@@ -1484,22 +1500,42 @@ void D3D12Device::LetGo(std::vector<Com<ID3D12Resource>>* staging) {
   {
     std::lock_guard<std::mutex> lock(releaseMutex_);
     for (Com<ID3D12Resource>& r : *staging) releasing_.push_back(std::move(r));
-    if (!releaser_.joinable())
-      releaser_ = std::thread([this] {
-        std::unique_lock<std::mutex> lock(releaseMutex_);
-        for (;;) {
-          releaseWake_.wait(lock, [&] { return releaseStop_ || !releasing_.empty(); });
-          std::vector<Com<ID3D12Resource>> now;
-          now.swap(releasing_);
-          lock.unlock();
-          now.clear();
-          lock.lock();
-          if (releaseStop_ && releasing_.empty()) return;
-        }
-      });
+    StartReleaser();
   }
   staging->clear();
   releaseWake_.notify_all();
+}
+
+// [bgload] (BeginFrame: the slot's frame is done on the card)
+void D3D12Device::LetGo(std::vector<Com<IUnknown>>* garbage) {
+  if (garbage->empty()) return;
+  {
+    std::lock_guard<std::mutex> lock(releaseMutex_);
+    for (Com<IUnknown>& r : *garbage) releasingAny_.push_back(std::move(r));
+    StartReleaser();
+  }
+  garbage->clear();
+  releaseWake_.notify_all();
+}
+
+// (under releaseMutex_) the releaser's thread, started the first time
+void D3D12Device::StartReleaser() {
+  if (releaser_.joinable()) return;
+  releaser_ = std::thread([this] {
+    std::unique_lock<std::mutex> lock(releaseMutex_);
+    for (;;) {
+      releaseWake_.wait(lock, [&] { return releaseStop_ || !releasing_.empty() || !releasingAny_.empty(); });
+      std::vector<Com<ID3D12Resource>> now;
+      std::vector<Com<IUnknown>> nowAny;  // [bgload]
+      now.swap(releasing_);
+      nowAny.swap(releasingAny_);
+      lock.unlock();
+      now.clear();
+      nowAny.clear();
+      lock.lock();
+      if (releaseStop_ && releasing_.empty() && releasingAny_.empty()) return;
+    }
+  });
 }
 
 void D3D12Device::KeepStaging(Com<ID3D12Resource> staging, uint64_t bytes) {
@@ -2558,6 +2594,7 @@ void D3D12Device::BackgroundWork() {
       job = backgroundQueue_.front();
       backgroundQueue_.pop_front();
       job->stage = BackgroundPipeline::Making;
+      backgroundMaking_ = 1;  // [bgload]
     }
     const PendingPipeline& what = *job->what;
     HitchLog::Scope made(what.compute ? "compute pipeline made ahead" : "pipeline made ahead", what.name);  // [hitches] (elsewhere)
@@ -2570,6 +2607,7 @@ void D3D12Device::BackgroundWork() {
     made.End();
     {
       std::lock_guard<std::mutex> lock(backgroundMutex_);
+      backgroundMaking_ = 0;  // [bgload]
       job->made = std::move(rec);
       job->why = why;
       job->stage = ok ? BackgroundPipeline::Made : BackgroundPipeline::NotMade;
@@ -2721,7 +2759,7 @@ void D3D12Device::BeginFrame(const float clearColor[4]) {
     }
   }
   f.marks.clear();
-  f.garbage.clear();
+  LetGo(&f.garbage);  // [bgload] (was f.garbage.clear(): on the releaser's thread now)
   for (const auto& r : f.freedRanges) FreeRange(static_cast<int>(r[0]), r[1], r[2]);
   f.freedRanges.clear();
   f.page = f.offset = 0;

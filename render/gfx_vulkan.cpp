@@ -533,6 +533,16 @@ class VulkanDevice final : public Device {
   bool EndPipelineBatch(std::string* error) override;
   void BeginBackgroundPipelines() override { backgroundAsked_ = !shaderCache_.empty(); }  // [snowhitch]
   void EndBackgroundPipelines() override { backgroundAsked_ = false; }
+  int BackgroundPipelinesWaiting() override {  // [bgload]
+    std::lock_guard<std::mutex> lock(backgroundMutex_);
+    return static_cast<int>(backgroundQueue_.size()) + backgroundMaking_;
+  }
+  bool PipelineReady(Pipeline pipeline) override {  // [bgload]
+    const PipelineRec* rec = Find(pipeline);
+    if (!rec || !rec->background) return true;
+    std::lock_guard<std::mutex> lock(backgroundMutex_);
+    return rec->background->stage == BackgroundPipeline::Made || rec->background->stage == BackgroundPipeline::NotMade;
+  }
   std::unique_ptr<Prepared> PrepareTexture(const TextureDesc& desc) override;  // [spikes]
   Texture FinishTexture(std::unique_ptr<Prepared> prepared) override;
   std::unique_ptr<Prepared> PrepareBuffer(const BufferDesc& desc) override;
@@ -852,6 +862,7 @@ class VulkanDevice final : public Device {
   std::mutex backgroundMutex_, layoutsMutex_;
   std::condition_variable backgroundWake_, backgroundDone_;
   std::deque<std::shared_ptr<BackgroundPipeline>> backgroundQueue_;
+  int backgroundMaking_ = 0;  // [bgload] (the one being made now: 1)
   bool backgroundStop_ = false;
   std::shared_ptr<BackgroundPipeline> AskBackground(std::shared_ptr<PendingPipeline> what);
   void BackgroundWork();
@@ -3350,6 +3361,7 @@ void VulkanDevice::BackgroundWork() {
       job = backgroundQueue_.front();
       backgroundQueue_.pop_front();
       job->stage = BackgroundPipeline::Making;
+      backgroundMaking_ = 1;  // [bgload]
     }
     const PendingPipeline& what = *job->what;
     HitchLog::Scope made(what.compute ? "compute pipeline made ahead" : "pipeline made ahead", what.name);  // [hitches] (elsewhere)
@@ -3359,6 +3371,7 @@ void VulkanDevice::BackgroundWork() {
     made.End();
     {
       std::lock_guard<std::mutex> lock(backgroundMutex_);
+      backgroundMaking_ = 0;  // [bgload]
       job->made = rec;
       job->why = why;
       job->stage = ok ? BackgroundPipeline::Made : BackgroundPipeline::NotMade;

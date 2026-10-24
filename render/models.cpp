@@ -1,5 +1,7 @@
 #include "models.h"
 
+#include <atomic>  // [bgload]
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -105,7 +107,7 @@ void TagTrees(const std::vector<ModelBone>& bones, std::string* bytes, ModelLod*
 // lists its own bones in another order, its vertices are renumbered by the bones' names.
 // `trees`: a level of what sways: its trees of a group are told apart first (TagTrees).
 uint32_t NextLodSerial() {
-  static uint32_t made = 0;
+  static std::atomic<uint32_t> made{0};  // [bgload] (worlds opened on threads of their own count on it too)
   return ++made;
 }
 
