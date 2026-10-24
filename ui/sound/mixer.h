@@ -1,6 +1,7 @@
 // Mixing: every sound that plays is a voice; the mixer adds the voices up into one stereo stream
 // for the sound device. Our own: the original hands this to its sound library.
 #pragma once
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
@@ -8,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "sound/mapped_file.h"
 #include "sound/xact.h"
 
 namespace moho::ui::sound {
@@ -37,12 +39,33 @@ class WaveData {
   int64_t frames = 0;
   // `count` frames from `frame` on into `out`; past the end, silence.
   virtual void Read(int64_t frame, int count, int16_t* out) = 0;
+  // Whether it may be read now without waiting for the disk (a MappedWave: its first part touched).
+  virtual bool Ready() const { return true; }
 };
 // Held in memory (the short sounds).
 class MemoryWave : public WaveData {
  public:
   std::vector<int16_t> samples;
   void Read(int64_t frame, int count, int16_t* out) override;
+};
+// A wave of a wave bank mapped into memory (MappedFile): read where it lies in the file's mapping.
+// Its bytes come from the disk as they are first touched: that is done on the sound system's own
+// thread (SoundSystem::TouchWave), which makes it Ready once its first part is in, so the mixer,
+// which reads with its lock held, never waits for the disk.
+class MappedWave : public WaveData {
+ public:
+  MappedWave(std::shared_ptr<const MappedFile> file, size_t offset, size_t bytes) : file_(std::move(file)), offset_(offset), bytes_(bytes) {}
+  void Read(int64_t frame, int count, int16_t* out) override;
+  bool Ready() const override { return ready_.load(std::memory_order_acquire); }
+  void SetReady() { ready_.store(true, std::memory_order_release); }
+  const uint8_t* bytes() const { return file_->data() + offset_; }
+  size_t size() const { return bytes_; }
+  bool mapped() const { return file_->mapped(); }
+
+ private:
+  std::shared_ptr<const MappedFile> file_;
+  size_t offset_ = 0, bytes_ = 0;
+  std::atomic<bool> ready_{false};
 };
 // Read from its file as it plays (the music: tens of megabytes a piece).
 class FileWave : public WaveData {
@@ -79,6 +102,8 @@ class Mixer {
   void FadeOut(int voice, float ms);
   void StopAll();
   bool Alive(int voice);
+  // Whether a voice's wave may be read now (WaveData::Ready); true for a voice that is no more.
+  bool Ready(int voice);
   // A voice's place among the listener's ears: a factor for the left and one for the right, on
   // top of its own loudness (a sound of the world, as the listener moves; 1 and 1 at first).
   void Place(int voice, float left, float right);

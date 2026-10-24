@@ -25,6 +25,13 @@ void MemoryWave::Read(int64_t frame, int count, int16_t* out) {
   if (have < count) std::memset(out + have * channels, 0, static_cast<size_t>((count - have) * channels) * sizeof(int16_t));
 }
 
+void MappedWave::Read(int64_t frame, int count, int16_t* out) {
+  int64_t have = std::max<int64_t>(0, std::min<int64_t>(count, frames - frame));
+  if (frame < 0) have = 0;
+  if (have > 0) std::memcpy(out, bytes() + frame * channels * 2, static_cast<size_t>(have * channels) * sizeof(int16_t));
+  if (have < count) std::memset(out + have * channels, 0, static_cast<size_t>((count - have) * channels) * sizeof(int16_t));
+}
+
 FileWave::FileWave(const std::string& hostPath, uint64_t offset) : offset_(offset) { file_ = std::fopen(hostPath.c_str(), "rb"); }
 FileWave::~FileWave() {
   if (file_) std::fclose(file_);
@@ -149,6 +156,13 @@ bool Mixer::Alive(int voice) {
   return false;
 }
 
+bool Mixer::Ready(int voice) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  for (const Voice& v : voices_)
+    if (v.id == voice) return !v.wave || v.wave->Ready();
+  return true;
+}
+
 int Mixer::CountOf(int category, int* oldest) {
   std::lock_guard<std::mutex> lock(mutex_);
   int n = 0;
@@ -196,6 +210,10 @@ void Mixer::Mix(int16_t* out, int frames) {
   sum_.assign(static_cast<size_t>(frames) * 2, 0.0f);
   for (Voice& v : voices_) {
     if (!v.started) continue;
+    if (!v.wave->Ready()) {  // (its first part not in memory yet: it starts once it is, a frame or so later)
+      if (v.fadeStep > 0 || v.releasing >= 0) v.wave.reset();  // stopped before it sounded
+      continue;
+    }
     size_t cat = static_cast<size_t>(v.category);
     if (v.category >= 0 && cat < paused_.size() && paused_[cat]) continue;
     float gain = v.gain * (v.category >= 0 && cat < gains_.size() ? gains_[cat] : 1.0f) / 32768.0f;

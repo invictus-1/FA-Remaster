@@ -2,10 +2,12 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <thread>
 
 #include "core/log.h"
 #include "core/vfs.h"
@@ -43,13 +45,29 @@ SoundSystem::SoundSystem(const Vfs* vfs) : vfs_(vfs) {
   userVolume_.assign(categories_.size(), 1.0f);
   paused_.assign(categories_.size(), false);
   UpdateCategories();
+  // The game's banks, as the original's sound manager takes them when it starts (see at LoadFolder).
+  const auto t0 = std::chrono::steady_clock::now();
+  LoadFolder("/sounds");
+  Logf(LogLevel::Info, "moho64ui: sound: %zu sound banks read, %d wave banks mapped (%.0f MB of files), %d streamed, %d read whole, in %.1f ms",
+       banks_.size(), banksMapped_, static_cast<double>(bytesMapped_) / (1 << 20), banksStreamed_, banksReadWhole_,
+       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
 }
 
 SoundSystem::~SoundSystem() {
   device_.reset();  // its thread first
-  if (played_)
+  {
+    std::lock_guard<std::mutex> lock(touchMutex_);
+    touchQuit_ = true;
+  }
+  touchWake_.notify_all();
+  if (toucher_.joinable()) toucher_.join();
+  if (played_) {
     Logf(LogLevel::Info, "moho64ui: sound: %d cues played, %.1f s of sound mixed", played_,
          static_cast<double>(mixer_.framesMixed()) / Mixer::kRate);
+    const BankStats b = bankStats();
+    Logf(LogLevel::Info, "moho64ui: sound: %d wave banks mapped (%.0f MB of files), %d streamed, %d read whole (%.1f MB); waves touched: %.1f MB on the thread, %.1f MB here",
+         b.mapped, b.mappedMB, b.streamed, b.readWhole, b.readWholeMB, b.touchedMB, b.touchedHereMB);
+  }
 }
 
 // A bank's file: among the game's sounds, or among the voices of the language.
@@ -60,7 +78,17 @@ std::string SoundSystem::Find(const std::string& file) const {
   return vfs_->Exists(voice) ? voice : path;
 }
 
-void SoundSystem::SetLanguage(const std::string& name) { language_ = Lower(name); }
+// The voices' banks of the language, taken anew (the original makes their engine anew at every call,
+// see at LoadFolder; here only when the language is another than the one taken).
+void SoundSystem::SetLanguage(const std::string& name) {
+  const std::string language = Lower(name);
+  if (language == language_ && voicesTaken_) return;
+  for (auto it = banks_.begin(); it != banks_.end();) it = it->second->voice ? banks_.erase(it) : std::next(it);
+  for (auto it = waveBanks_.begin(); it != waveBanks_.end();) it = it->second->voice ? waveBanks_.erase(it) : std::next(it);
+  language_ = language;
+  voicesTaken_ = true;
+  LoadFolder("/sounds/voice/" + language_);
+}
 bool SoundSystem::HasLanguage(const std::string& name) const {
   const std::string folder = "/sounds/voice/" + Lower(name);
   return vfs_->IsFolder(folder) || !vfs_->FindFiles(folder, "*").empty();
@@ -71,21 +99,58 @@ uint32_t SoundSystem::Random() {
   return seed_;
 }
 
+// The banks are taken as the original's sound engine takes them (FA exe): when its sound manager
+// starts (CUserSoundManager::CUserSoundManager 0x8aa800, its engine for "/sounds" made at
+// 0x8aa8e5), and for the voices when the language is set (AudioSetLanguage 0x8ae070: an engine for
+// "/sounds/voice/<language>", 0x8ae171..0x8ae1b2, the old one shut down first). Making an engine
+// (AudioEngine::AudioEngine 0x4d9410, at 0x4d96c0, func_LoadSoundPath 0x4da500) goes over every
+// *.xwb of its folder (the pattern at 0x4da559), asks each whether it is made for streaming
+// (0x4da5cb), and makes it a streaming bank (RWaveBankResStreaming) or one in memory
+// (RWaveBankResInMemory, whose Load 0x4dab70 MAPS the file into memory, DISK_MemoryMapFile at
+// 0x4dabe6, and hands the mapping to the sound library, its vtable +0x28 at 0x4dac72); then it
+// reads every *.xsb (0x4da755). So no bank is ever missing when a cue plays, and no wave's bytes
+// are read before a sound plays them; the sound library's own thread then reads them from the
+// mapping. Here the same, the banks mapped (MappedFile; where a file cannot be mapped it is read
+// whole); a wave's bytes are touched on the sound system's own thread (TouchWave), not on the
+// frame. (The original's engine for "/tutorials", 0x8ae1d4, is not made here: no cue of the
+// game's scripts was seen to need it.) A bank asked for that was not taken at the start (a voice
+// before the language is set) is still looked for at its first use.
+void SoundSystem::LoadFolder(const std::string& folder) {
+  const std::string prefix = Vfs::Normalize(folder) + "/";
+  for (const char* pattern : {"*.xsb", "*.xwb"}) {
+    const bool waves = std::strcmp(pattern, "*.xwb") == 0;
+    for (const std::string& path : vfs_->FindFiles(folder, pattern)) {
+      if (path.compare(0, prefix.size(), prefix) != 0 || path.find('/', prefix.size()) != std::string::npos) continue;
+      const std::string key = path.substr(prefix.size(), path.size() - prefix.size() - 4);
+      // (one that is not read is forgotten again, without a word: a cue of it then looks for it and
+      // says why, as before; the game's XCA..XCS.xsb, with no wave banks of their own, are such)
+      if (!waves && !banks_.count(key) && !LoadBank(key, path, true)->ok) banks_.erase(key);
+      if (waves && !waveBanks_.count(key) && !LoadWaveBank(key, path, true)->ok) waveBanks_.erase(key);
+    }
+  }
+}
+
 SoundSystem::Bank* SoundSystem::GetBank(const std::string& name) {
   std::string key = Lower(name);
   auto it = banks_.find(key);
   if (it != banks_.end()) return it->second->ok ? it->second.get() : nullptr;
+  Bank* bank = LoadBank(key, Find(key + ".xsb"));
+  return bank->ok ? bank : nullptr;
+}
+
+SoundSystem::Bank* SoundSystem::LoadBank(const std::string& key, const std::string& path, bool quiet) {
   auto& bank = banks_[key];
   bank = std::make_unique<Bank>();
-  std::string path = Find(key + ".xsb"), error;
+  bank->voice = path.compare(0, 14, "/sounds/voice/") == 0;
+  std::string error;
   auto data = vfs_->ReadFile(path);
   if (!data) {
-    Logf(LogLevel::Warning, "moho64ui: sound: no sound bank %s", path.c_str());
-    return nullptr;
+    if (!quiet) Logf(LogLevel::Warning, "moho64ui: sound: no sound bank %s", path.c_str());
+    return bank.get();
   }
   if (!ParseSoundBank(reinterpret_cast<const uint8_t*>(data->data()), data->size(), &bank->info, &error)) {
-    Logf(LogLevel::Warning, "moho64ui: sound: %s: %s", path.c_str(), error.c_str());
-    return nullptr;
+    if (!quiet) Logf(LogLevel::Warning, "moho64ui: sound: %s: %s", path.c_str(), error.c_str());
+    return bank.get();
   }
   bank->ok = true;
   return bank.get();
@@ -95,41 +160,39 @@ SoundSystem::WaveBank* SoundSystem::GetWaveBank(const std::string& name) {
   std::string key = Lower(name);
   auto it = waveBanks_.find(key);
   if (it != waveBanks_.end()) return it->second->ok ? it->second.get() : nullptr;
+  WaveBank* bank = LoadWaveBank(key, Find(key + ".xwb"));
+  return bank->ok ? bank : nullptr;
+}
+
+// A wave bank mapped (see at LoadFolder). One made for streaming is read from its file as it plays,
+// as before: when it is larger than 4 MB (a smaller one is held as the others are).
+SoundSystem::WaveBank* SoundSystem::LoadWaveBank(const std::string& key, const std::string& path, bool quiet) {
   auto& bank = waveBanks_[key];
   bank = std::make_unique<WaveBank>();
-  std::string path = Find(key + ".xwb");
+  bank->voice = path.compare(0, 14, "/sounds/voice/") == 0;
   auto info = vfs_->GetFileInfo(path);
   if (!info) {
-    Logf(LogLevel::Warning, "moho64ui: sound: no wave bank %s", path.c_str());
-    return nullptr;
+    if (!quiet) Logf(LogLevel::Warning, "moho64ui: sound: no wave bank %s", path.c_str());
+    return bank.get();
   }
-  // A small bank is taken whole. A large one: its head first; whole only if it is not made for
-  // streaming.
   std::string host = HostPath(vfs_, path);
-  std::string head;
-  if (info->size > (4u << 20)) {
-    if (std::FILE* f = std::fopen(host.c_str(), "rb")) {
-      head.resize(1u << 20);
-      head.resize(std::fread(head.data(), 1, head.size(), f));
-      std::fclose(f);
-    }
-  }
-  if (head.empty()) {
+  std::shared_ptr<const MappedFile> file = host.empty() ? nullptr : MappedFile::Open(host);
+  if (!file) {  // (not a file of the disk of its own, or no mapping: read whole)
     auto data = vfs_->ReadFile(path);
-    if (!data) return nullptr;
-    bank->data = std::move(*data);
+    if (!data) return bank.get();
+    file = MappedFile::FromBytes(std::move(*data));
   }
-  const std::string& first = head.empty() ? bank->data : head;
-  if (!ParseWaveBank(reinterpret_cast<const uint8_t*>(first.data()), first.size(), &bank->info)) {
-    Logf(LogLevel::Warning, "moho64ui: sound: %s is not read (another layout)", path.c_str());
-    return nullptr;
+  if (!ParseWaveBank(file->data(), file->size(), &bank->info)) {
+    if (!quiet) Logf(LogLevel::Warning, "moho64ui: sound: %s is not read (another layout)", path.c_str());
+    return bank.get();
   }
-  if (bank->info.streaming && !head.empty()) {
+  if (bank->info.streaming && file->mapped() && file->size() > (4u << 20)) {
     bank->hostPath = host;
-  } else if (bank->data.empty()) {
-    auto data = vfs_->ReadFile(path);
-    if (!data) return nullptr;
-    bank->data = std::move(*data);
+    ++banksStreamed_;
+  } else {
+    if (file->mapped()) ++banksMapped_, bytesMapped_ += static_cast<int64_t>(file->size());
+    else ++banksReadWhole_, bytesReadWhole_ += static_cast<int64_t>(file->size());
+    bank->file = std::move(file);
   }
   bank->ok = true;
   return bank.get();
@@ -153,13 +216,86 @@ std::shared_ptr<WaveData> SoundSystem::GetWave(WaveBank* bank, int index) {
   }
   auto it = bank->waves.find(index);
   if (it != bank->waves.end()) return it->second;
-  if (e.offset + e.length > bank->data.size()) return nullptr;
-  auto wave = std::make_shared<MemoryWave>();
+  if (!bank->file || e.offset + e.length > bank->file->size()) return nullptr;
+  auto wave = std::make_shared<MappedWave>(bank->file, e.offset, static_cast<size_t>(frames * e.channels * 2));
   wave->channels = e.channels, wave->rate = e.rate, wave->frames = frames;
-  wave->samples.resize(static_cast<size_t>(frames * e.channels));
-  std::memcpy(wave->samples.data(), bank->data.data() + e.offset, wave->samples.size() * sizeof(int16_t));
   bank->waves[index] = wave;
+  if (!wave->mapped()) {
+    wave->SetReady();
+  } else if (touchOnThread_) {  // (brought in on the thread; the mixer takes it once its first part is in)
+    {
+      std::lock_guard<std::mutex> lock(touchMutex_);
+      touchQueue_.push_back(wave);
+      if (!toucher_.joinable()) toucher_ = std::thread([this] { TouchLoop(); });
+    }
+    touchWake_.notify_one();
+  } else {
+    bytesTouchedHere_ += static_cast<int64_t>(TouchWave(*wave));
+  }
   return wave;
+}
+
+// A wave's pages brought in from the disk, one read in each 4 KB; ready to be mixed once its first
+// 256 KB are in (ours: the mixer reads a few KB at a time, far slower than these come in). Gives
+// the bytes touched.
+size_t SoundSystem::TouchWave(MappedWave& wave) {
+  const volatile uint8_t* p = wave.bytes();
+  const size_t n = wave.size(), kPage = 4096, kFirst = 256u << 10;
+  unsigned sum = 0;
+  for (size_t at = 0; at < n; at += kPage) {
+    sum += p[at];
+    if (at >= kFirst && !wave.Ready()) wave.SetReady();
+  }
+  if (n) sum += p[n - 1];
+  wave.SetReady();
+  static volatile unsigned sink;
+  sink = sum;
+  return n;
+}
+
+void SoundSystem::TouchLoop() {
+  for (;;) {
+    std::shared_ptr<MappedWave> wave;
+    {
+      std::unique_lock<std::mutex> lock(touchMutex_);
+      touchWake_.wait(lock, [&] { return touchQuit_ || !touchQueue_.empty(); });
+      if (touchQuit_) return;
+      wave = std::move(touchQueue_.front());
+      touchQueue_.pop_front();
+      touchBusy_ = true;
+    }
+    bytesTouched_ += static_cast<int64_t>(TouchWave(*wave));
+    {
+      std::lock_guard<std::mutex> lock(touchMutex_);
+      touchBusy_ = false;
+    }
+    touchDone_.notify_all();
+  }
+}
+
+void SoundSystem::WaitForTouches() {
+  std::unique_lock<std::mutex> lock(touchMutex_);
+  touchDone_.wait(lock, [&] { return touchQueue_.empty() && !touchBusy_; });
+}
+
+SoundSystem::BankStats SoundSystem::bankStats() const {
+  BankStats b;
+  const double mb = 1.0 / (1 << 20);
+  b.mapped = banksMapped_, b.streamed = banksStreamed_, b.readWhole = banksReadWhole_;
+  b.mappedMB = static_cast<double>(bytesMapped_) * mb, b.readWholeMB = static_cast<double>(bytesReadWhole_) * mb;
+  b.touchedMB = static_cast<double>(bytesTouched_.load()) * mb, b.touchedHereMB = static_cast<double>(bytesTouchedHere_) * mb;
+  b.longestPlayMs = longestPlayMs_;
+  return b;
+}
+
+// (SoundIsPrepared: the original's is false while the sound library still prepares the cue,
+// 0x8ab400; here while one of its waves is not yet in memory, see TouchWave.)
+bool SoundSystem::Prepared(int handle) {
+  auto it = handles_.find(handle);
+  if (it == handles_.end()) return true;
+  for (int v : it->second)
+    if (!mixer_.Ready(v)) return false;
+  return true;
 }
 
 int SoundSystem::Play(const std::string& bankName, const std::string& cueName, bool prepareOnly) {
@@ -248,6 +384,11 @@ float SoundSystem::Heard(const std::vector<uint32_t>& curves, const float positi
 }
 
 int SoundSystem::PlayCue(const std::string& bankName, const std::string& cueName, bool prepareOnly, const float* position) {
+  struct Timed {  // (the longest a cue's play took here: bankStats)
+    SoundSystem* s;
+    std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+    ~Timed() { s->longestPlayMs_ = std::max(s->longestPlayMs_, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count()); }
+  } timed{this};
   auto complain = [&](const char* what) {
     std::string key = Lower(bankName) + "/" + Lower(cueName);
     if (!complained_[key]) Logf(LogLevel::Warning, "moho64ui: sound: %s (bank %s, cue %s)", what, bankName.c_str(), cueName.c_str());

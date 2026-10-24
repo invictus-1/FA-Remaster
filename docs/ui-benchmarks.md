@@ -17,6 +17,28 @@ uel0201 for the player beside the commander, all selected by category, 20 s stea
 and a move order by a right click. `MOHO64UI_BINDING_PROFILE=1` logs the costliest engine functions the scripts
 called (time and calls).
 
+## 2026-10-23: the sound's wave banks mapped into memory (helper "banks", on 01d2b7c)
+
+The first cue of a wave bank read the whole .xwb on the frame (13-15 MB for a faction's land, air or buildings). Now
+every bank of /sounds is mapped into memory when the sound starts, as the original's sound engine does
+(sound_system.cpp, at LoadFolder), and a wave's bytes are brought in from the disk on the sound system's own thread
+the first time a cue plays it; the mixer takes the wave once its first part is in.
+
+| | Before | After |
+|---|---|---|
+| a bank's first use on the frame, headless, 8 faction banks (warm file cache) | 15-22 ms each | 0.01-0.08 ms |
+| the same with the wave's bytes touched on the frame (the runs without a window) | - | 0.05-0.8 ms, one 30.8 ms (a wave not in the file cache) |
+| the same, cold (the hitches helper's numbers) | 13-163 ms | (only the wave, on the thread) |
+| lab 4v4 replay, 3840x2160, frames whose sounds part was over 10 ms | 9 (13.9-31.7 ms) | 0 (longest 2.7 ms) |
+| the same at 1920x1080 | 9 (longest 34.6 ms) | 0 (longest 2.6 ms) |
+| the program's start: the banks taken | - | 25-78 ms (89 sound banks read, 78 wave banks mapped: 406 MB of files) |
+| memory of the waves in the 4v4 | the banks read whole (a first try: 310 MB) | 17.7 MB of waves touched (the system's file cache) |
+
+The 4v4: `LaunchReplaySession` of `replays/mp/mp1_4v4_scmp009_20261016.SCFAReplay` from the front end,
+`--fast-forward 6000 --no-sound`, 2400 frames, `MOHO64UI_LONG_FRAMES=16`; the parts counted are "(beat: its
+sounds)". The machine was busy with other sessions' runs, more during the "before" runs (whole frames vary; the
+sounds parts are what is compared).
+
 ## 2026-10-23: the interface's hitches, menu to game at 4K (helper "hitches", on 5b6b332)
 
 Scenario: the lab's 4v4 replay (`replays/mp/mp1_4v4_scmp009_20261016.SCFAReplay`) launched from the main menu

@@ -6,14 +6,20 @@
 // (from the game's SupCom.xgs) and one the player sets (SetVolume), and stand inside each other:
 // "Global" holds all, "Interface" holds "Unit Select", and so on.
 //
-// Banks are read from /sounds of the game's file system when a cue of theirs is first asked for.
-// A wave bank made for streaming (the music) is read from its file as it plays; the others are
-// taken into memory whole.
+// The banks of /sounds of the game's file system (and of the voices' folder of the language) are
+// taken when the sound system starts, as the original's (sound_system.cpp, at LoadFolder): the
+// sound banks read, the wave banks mapped into memory; a wave bank made for streaming (the music)
+// is read from its file as it plays.
 #pragma once
+#include <atomic>
+#include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "sound/device.h"
@@ -50,6 +56,8 @@ class SoundSystem {
   void Stop(int handle, bool immediate);
   void StopAll();
   bool Playing(int handle);
+  // False while a wave of the cue is not yet in memory to be read (SoundIsPrepared).
+  bool Prepared(int handle);
   // Where a playing cue's first voice is set among the ears (its loudness by its curves and the
   // duck, on top of its own); false when it plays no more. (For tests.)
   bool Placement(int handle, float* left, float* right);
@@ -94,21 +102,45 @@ class SoundSystem {
   int played() const { return played_; }
   const std::string& lastWave() const { return lastWave_; }
 
+  // --- the waves' bytes ---
+  // A wave of a mapped bank is touched (its pages brought from the disk) the first time a cue plays
+  // it: with touching on a thread on (a live window), on the sound system's own thread, the wave
+  // ready to be mixed once its first part is in; off (the tests, without a window), there and then.
+  void SetTouchOnThread(bool on) { touchOnThread_ = on; }
+  bool touchOnThread() const { return touchOnThread_; }
+  void WaitForTouches();  // (tests: until the thread has touched all it was given)
+  // For tests and the log: the wave banks mapped and their files' megabytes, those streamed, those
+  // read whole instead (a file that could not be mapped), the megabytes of waves touched on the
+  // thread and on the calling thread, and the longest a cue's play took on the calling thread.
+  struct BankStats {
+    int mapped = 0, streamed = 0, readWhole = 0;
+    double mappedMB = 0, readWholeMB = 0, touchedMB = 0, touchedHereMB = 0, longestPlayMs = 0;
+  };
+  BankStats bankStats() const;
+  void ResetLongestPlay() { longestPlayMs_ = 0; }
+
  private:
   struct WaveBank {
     WaveBankInfo info;
     std::string hostPath;                         // streaming: the file it is read from
-    std::string data;                             // else: the whole file
+    std::shared_ptr<const MappedFile> file;       // else: the file, mapped (or read whole)
     std::map<int, std::shared_ptr<WaveData>> waves;  // those used so far (in memory ones)
     bool ok = false;
+    bool voice = false;                           // of the voices' folder of the language
   };
   struct Bank {
     SoundBankInfo info;
     bool ok = false;
+    bool voice = false;
   };
   Bank* GetBank(const std::string& name);
   WaveBank* GetWaveBank(const std::string& name);
+  Bank* LoadBank(const std::string& key, const std::string& path, bool quiet = false);
+  WaveBank* LoadWaveBank(const std::string& key, const std::string& path, bool quiet = false);
+  void LoadFolder(const std::string& folder);  // every bank of a folder (not of folders in it) not taken yet
   std::shared_ptr<WaveData> GetWave(WaveBank* bank, int index);
+  size_t TouchWave(MappedWave& wave);  // (its pages brought in; ready after its first part; bytes touched)
+  void TouchLoop();
   struct Placed {  // a playing sound of the world
     float position[3] = {0, 0, 0};
     std::vector<uint32_t> curves;
@@ -161,6 +193,19 @@ class SoundSystem {
   std::string lastWave_;
   std::string language_ = "us";
   uint32_t seed_ = 0x2545f491u;
+
+  bool touchOnThread_ = false;
+  bool voicesTaken_ = false;  // the voices' banks of language_ taken (SetLanguage)
+  double longestPlayMs_ = 0;
+  int banksMapped_ = 0, banksStreamed_ = 0, banksReadWhole_ = 0;
+  int64_t bytesMapped_ = 0, bytesReadWhole_ = 0, bytesTouchedHere_ = 0;
+  std::atomic<int64_t> bytesTouched_{0};
+  // The thread that touches the waves' pages (made at the first wave given), and its line of waves.
+  std::thread toucher_;
+  std::mutex touchMutex_;
+  std::condition_variable touchWake_, touchDone_;
+  std::deque<std::shared_ptr<MappedWave>> touchQueue_;
+  bool touchQuit_ = false, touchBusy_ = false;
 };
 
 }  // namespace moho::ui::sound

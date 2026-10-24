@@ -88,9 +88,12 @@ int l_PlayVoice(lua_State* L) { return Play(L, lua_toboolean(L, 3) != 0, lua_tob
 // never ducks.
 int l_PlayTutorialVO(lua_State* L) { return Play(L, lua_toboolean(L, 2) != 0); }
 
+// SoundIsPrepared(handle) (FA exe 0x8ad300): false while the sound library still prepares the cue
+// (its state, 0x8ab400); here while one of its waves is not yet in memory (sound_system.h).
 int l_SoundIsPrepared(lua_State* L) {
-  ToHandle(L, 1);
-  lua_pushboolean(L, 1);  // nothing is loaded in the background here
+  const int handle = ToHandle(L, 1);
+  sound::SoundSystem* s = System(L);
+  lua_pushboolean(L, !s || s->Prepared(handle));
   return 1;
 }
 int l_StartSound(lua_State* L) {
@@ -162,6 +165,40 @@ int l_SoundInfo(lua_State* L) {
   lua_rawset(L, -3);
   return 1;
 }
+// moho64ui_SoundBanks([onThread]) -> {onThread = whether waves are touched on the sound system's
+// thread, mapped = wave banks mapped, mappedMB = their files' megabytes, streamed = those streamed,
+// readWhole = those read whole (a file that could not be mapped), touchedMB / touchedHereMB = the
+// megabytes of waves touched on the thread / here, longestPlayMs = the longest a cue's play took
+// here since the last call with an argument}. With an argument, touching on the thread is switched
+// on or off first (tests).
+int l_SoundBanks(lua_State* L) {
+  sound::SoundSystem* s = System(L);
+  if (s && !lua_isnone(L, 1)) s->SetTouchOnThread(lua_toboolean(L, 1) != 0), s->ResetLongestPlay();
+  const sound::SoundSystem::BankStats b = s ? s->bankStats() : sound::SoundSystem::BankStats{};
+  lua_newtable(L);
+  auto field = [&](const char* name, double value) {
+    lua_pushstring(L, name);
+    lua_pushnumber(L, value);
+    lua_rawset(L, -3);
+  };
+  lua_pushstring(L, "onThread");
+  lua_pushboolean(L, s && s->touchOnThread());
+  lua_rawset(L, -3);
+  field("mapped", b.mapped);
+  field("mappedMB", b.mappedMB);
+  field("streamed", b.streamed);
+  field("readWhole", b.readWhole);
+  field("touchedMB", b.touchedMB);
+  field("touchedHereMB", b.touchedHereMB);
+  field("longestPlayMs", b.longestPlayMs);
+  return 1;
+}
+// moho64ui_SoundBanksRead(): waits until the sound system's thread has touched every wave it was
+// given (tests: a run without a window goes far quicker than the disk).
+int l_SoundBanksRead(lua_State* L) {
+  if (sound::SoundSystem* s = System(L)) s->WaitForTouches();
+  return 0;
+}
 // moho64ui_SoundListener(eyeX, eyeY, eyeZ, focusX, focusY, focusZ, zoom): where the world's sounds
 // are heard from (a game tells this itself, from its camera); the screen's right is the map's east.
 int l_SoundListener(lua_State* L) {
@@ -200,11 +237,14 @@ bool g_testFileWrites = false;
 // here and now. For runs without a sound device: it moves the sounds on as a device would. With a
 // file's name the sound is added to that file as it is (16 bits, stereo, 48000 a second), to be
 // compared with the game's sound data; only in a run with a test script (TestFileWritesAllowed).
+// The waves given to the sound system's thread are touched first (as a device's mixing, far behind
+// the frames of a run without a window, would find them).
 int l_SoundMix(lua_State* L) {
   sound::SoundSystem* s = System(L);
   int frames = static_cast<int>(luaL_checknumber(L, 1) * sound::Mixer::kRate / 1000.0);
   int peak = 0;
   if (s && frames > 0) {
+    s->WaitForTouches();
     std::vector<int16_t> out(static_cast<size_t>(frames) * 2);
     s->mixer().Mix(out.data(), frames);
     for (int16_t v : out) peak = std::max(peak, v < 0 ? -static_cast<int>(v) : static_cast<int>(v));
@@ -258,6 +298,8 @@ void RegisterSoundBindings(lua_State* L) {
   SetGlobal(L, "DisableWorldSounds", l_Nothing);
   SetGlobal(L, "EnableWorldSounds", l_Nothing);
   lua_register(L, "moho64ui_SoundInfo", l_SoundInfo);
+  lua_register(L, "moho64ui_SoundBanks", l_SoundBanks);
+  lua_register(L, "moho64ui_SoundBanksRead", l_SoundBanksRead);
   lua_register(L, "moho64ui_SoundListener", l_SoundListener);
   lua_register(L, "moho64ui_SoundAt", l_SoundAt);
   lua_register(L, "moho64ui_SoundVoices", l_SoundVoices);
