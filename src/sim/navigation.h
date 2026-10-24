@@ -90,6 +90,7 @@ class PathGrid {
   // that reads the grids calls ApplyTerrainChanges first.)
   void TerrainChanged(int vx0, int vz0, int vx1, int vz1);
   void ApplyTerrainChanges() const;
+  const NamedFootprint& footprint() const { return fp_; }  // the footprint it was made from
   int sizeX = 1, sizeZ = 1;
   bool ignoreStructures = false;  // the footprint's IgnoreStructures flag (Flags & 1)
 
@@ -136,14 +137,18 @@ class Navigation {
   bool IsBlockingType(int code) const { return code >= 0 && code < 256 && blocking_[code]; }
   // OCCUPY_MobileCheck 0x564ab0 at one origin cell (what Grid(fp)->Caps(x, z) holds), without making the grid.
   uint8_t MobileCaps(const NamedFootprint& fp, int x, int z) const;
-  // Grid(fp)->Caps(x, z) for a single cell, without making the grid: the grid's cell when the footprint's grid
-  // exists, else MobileCheckCaps there, from the footprint the grid would be made from (the first one to ask for its
-  // key: Grid() then makes it from that one, as it would have been made at that first call). A grid holds
-  // MobileCheckCaps of the map as it is now (its pending terrain changes are taken at the read), so the answer is
-  // the grid's whichever way. For the single-cell readers (StartingLayer, a flyer's landing and ground spots,
-  // a transport's drop): a footprint without a named one (a structure's own, an air landing's S x S) cost a whole
-  // grid at its first such read (141-1240 ms, mp2 2026-10-21).
-  uint8_t CellCaps(const NamedFootprint& fp, int x, int z);
+  // The terrain caps of one cell for the asking footprint itself, as the original reads them at its single-cell
+  // tests (no cache: the entity's own footprint, Entity::GetFootprint 0x678880, on the live map), without making a
+  // grid. A grid's key holds name, size, caps and IgnoreStructures but not MaxSlope / MinWaterDepth /
+  // MaxWaterDepth, which differ between structures of one key (e.g. /2x2/8/0: the torpedo launchers' MinWaterDepth
+  // 1.5, xrb2308's 2): so the grid of the key is read only when it was made from the same three values (it holds
+  // MobileCheckCaps of the map as it is now: its pending terrain changes are taken at the read), else
+  // MobileCheckCaps here. callerCapsAll: the caller is OCCUPY_FootprintFits 0x7209e0 with caps -1 (StartingLayer
+  // 0x62adca, a transport's drop 0x720aa0): a footprint of size 1 (max(SizeX, SizeZ) == 1) then goes to OCCUPY_Filter
+  // 0x720920, whose terrain caps are STIMap::OccupancyCapsOfFootprintAt 0x564df0 (one cell's type), not
+  // OCCUPY_MobileCheck 0x564ab0. (A footprint without a named one, a structure's own or an air landing's S x S,
+  // cost a whole grid at its first such read: 141-1240 ms, mp2 2026-10-21.)
+  uint8_t CellCaps(const NamedFootprint& fp, int x, int z, bool callerCapsAll = false);
   // Waypoints from `from` to `to` (world positions; the footprint's centre). The last waypoint is
   // `to`, or the nearest reachable cell to it. Returns false when no path exists at all.
   bool FindPath(const NamedFootprint& fp, const Vec3& from, const Vec3& to, std::vector<Vec3>* out);
@@ -177,7 +182,6 @@ class Navigation {
   const TerrainMap* map_;
   std::array<bool, 256> blocking_;
   std::map<std::string, std::unique_ptr<PathGrid>> grids_;
-  std::map<std::string, NamedFootprint> cellFp_;  // CellCaps: the footprint each grid-less key was first asked with
   WorkerPool* pool_ = nullptr;
   std::unique_ptr<GridScratch> scratch_;  // the grids' terrain changes (one thread)
   std::map<std::string, std::pair<uint64_t, uint64_t>> cellCounts_;  // MOHO64_DEBUG_GRIDCHECK: CellCaps (grid, none)

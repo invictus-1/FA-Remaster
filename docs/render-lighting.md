@@ -1065,6 +1065,15 @@ work is not starved of the processor).
    the first frame makes its three targets (screen-sized: two RGBA8, one D32; 44 MB at 1440p; +7 ms once). Off:
    pictures identical (regression 0 px on both backends); on, the regression's scenes (nothing hides the
    commander) are identical too; in the original look nothing changes.
+   Fixed 2026-10-23: the masks' shader read a draw's instances by their layout before the units' wear (five rows of
+   four, 768 a draw; six rows and 640 since the battle scars, render b4991b9, made beside the outlines and merged four
+   minutes before them). So every instance after a draw's first was read askew: five of every six took rows of their
+   neighbours for their place, and most of a crowd's hidden units got no outline (a lone unit, the first of its draw,
+   always had its own); where units carry dirt or grime, the wear's row numbers (in the thousands) landed in those
+   places and made huge triangles across the screen, which is what made the masks dearer with grime or mud (200
+   commanders at 1440p: 0.9 to 1.4 ms, now 0.09). The masks' shader has the scene's layout now, and MeshRenderer::DrawMarked
+   asserts it. The costs above were measured with the fault (the masks drew less than they should); with all 200
+   commanders drawn the masks take 0.093 ms at 1440p (0.080 with the fault).
 16. **Dust, spray and contrails**: vehicles raise dust on dry ground, hover units throw spray, high aircraft draw
    contrails. After items 2 and 3 (shared particles and dust). First version done 2026-10-18 (`World::movementDust`,
    viewer `--movement-dust`; `render/movement_dust.h/.cpp`, docs/render-dust.md has the whole of it): puffs behind
@@ -2033,6 +2042,57 @@ doesn't". (The mod is his private one: it is named nowhere in the repository.)
   by how far it moved), so a slow large ship's ripple wake is faint; scaling the bumps by the hull's beam is a next
   step if Chris wants it. The arms' width and the streaks' sizes are judgements.
 
+## A real ocean: an FFT sea, then waves that lift the surface (first version, 2026-10-23; a helper's, for review) [ocean] [lift]
+
+Chris, 2026-10-23, of github.com/Noniv/web-ocean (MIT, WebGPU): "real ocean vs heres ground but blue"; today's sea stays
+the fallback ("legit perfect"), and the new one keeps its colours (the depth colours he chose), its refraction and its
+reflections. Ideas from web-ocean's README (its techniques: a Tessendorf FFT sea, JONSWAP with Donelan-Banner spreading
+plus a swell, cascades, LEAN glitter, foam in camera-centred maps that drift and streak, CDLOD); every line written anew.
+
+- **Step 1, the sea's waves** (`World::oceanWaves`, viewer `--ocean`; `ocean.h/.cpp`, the water's OCEAN variant): three
+  squares of 256 x 256 waves (180, 41 and 9.7 world units: the swell and the long waves, the middle, the short; each holds
+  its own band of lengths, from its 8th harmonic of the next one's size down) worked out each frame by inverse FFTs in
+  compute shaders (radix 2 in shared memory, a row of 256 at a time, then the columns: four complex sums each, two real
+  fields packed in each). The spectrum: JONSWAP (gamma 3.3) round a peak by how rough the sea is, spread by Donelan and
+  Banner, plus a narrow swell 35 degrees off the wind; each wave at a deep sea's speed (g 1.9 in world units: the old
+  swell's pace), rounded so the sea repeats only after 512 s (float phases stay exact). Heights low for readability (the
+  significant height 0.05 still .. 0.25 storm), the waves as steep as a real sea's (a full sea 1/40, a storm's young sea
+  1/22): short waves, a storm's about two frigates long. Choppy (the crests sharpened by the sideways shift, 0.75..1.1).
+  Each square gives its slopes and their squares, the shift, the height and the shift's derivatives, with mip levels made
+  by averaging (LEAN: the moments average as they are), read by the water anisotropically at the pixel's footprint: the
+  mean slope tilts the surface (drawn 1.5 x as steep, from above twice that again, as the old swell was overdone), the
+  slopes' spread widens the sun's glitter (`OceanGlint`: a Gaussian of slopes, Smith's masking, Fresnel; sparkles near,
+  a broad soft path far off and from high up, no twinkling pixels). Gust patches (80 units, drifting downwind) roughen
+  and calm the short waves. Whitecaps where the surface folds (its Jacobian, the three squares' derivatives summed, lower
+  than its mean by 3.4 standard deviations in a calm .. 1.6 in a storm; the deviation from the slopes' mean square on the
+  processor), laid into a foam field round the camera (1024 x 1024, cells about 1.5 pixels, kept in whole cells) that
+  fades (1.5 s calm .. 3.5 s storm), drifts downwind and draws out into streaks; drawn through streak noise along the
+  wind laid over the old lace. A glow through crests toward a low sun. As rough as the surf's sea (the weather: 0.15 +
+  0.85 rain + 0.3 snow; `surfRoughness`), eased over some seconds; calmer on lakes (the map's waviness), in bays (with
+  the surf: its exposure) and over shallows. The sheet stays flat: everything on the water works as before.
+- **Step 2, waves that lift the surface** (`World::oceanLift`, viewer `--ocean-lift`, on top of step 1): the water drawn as
+  a grid following the camera (CDLOD: a quadtree from a root over the water and the world beyond, leaf patches of 4 units
+  in 32 x 32 cells, each level's range 3 of its patches' sides, vertices sliding onto the coarser grid from 0.75 to 0.97 of
+  the range, quarters drawn at their parent's resolution sliding at the next level too: no cracks, no pops, and the
+  patches keep their places on the water, so no swimming), frustum-culled, the farthest drawn first and each patch's
+  triangles in one of eight orders from the far side (the water tests no depth of its own: the nearer face is drawn
+  last). Each vertex shifted and lifted by the same field (read at about its cell's level), how much by the water: none
+  up to a depth of 0.6, all from 3.6 (the shallows, the waterline, the surf, the run-up and the wet beach keep the flat
+  sheet's ways), less on lakes. Ships and hover units on the water ride it in the picture alone (`Ocean::BobAt`: the
+  640 strongest long waves summed on the processor as the card has them, under a Gaussian footprint of a third of the
+  hull, so a big ship pitches less; world.cpp moves the drawn hull, its shell, outline and lamps, not its place, picking,
+  icon, bars or wake). The wakes ride it too (wakes.cpp RIDE: each piece in four along its length). The ripples, the foam
+  and the whitecaps are in the water's own shader and ride it already.
+- **Costs** (RTX 4090, SETONS_R open sea, game camera 60 away, lowest of 300 frames, a busy PC): the field and the foam
+  0.066 ms (rows 0.023, columns 0.012, levels 0.015, foam 0.014); the water's pass 0.45 (today) -> 0.50 (ocean) -> 0.57 ms
+  (lifted) at 1440p; 4K: see the report table below. Memory: about 21 MB (three squares: the transforms' 32-bit sums, the fields and their levels; the foam's
+  two 1024 x 1024 R16F).
+- **Open**: decals laid on the water (the campaign's objective areas), floating debris and the horizon's floes lie at the
+  flat level (a parallax of the waves' height, at most about 0.25 in a storm); lakes are not told apart by the processor's
+  bobbing (a hover unit on a lake bobs as at sea); the game's own wake emitters at the hull's bones follow the game's
+  place (a hull that rises 0.1 leaves its bow spray 0.1 lower). Readability in a storm: the busy sea competes with small
+  ships from far up; the foam's and the slopes' strength are tunable (`--ocean-foam`, `--ocean-tilt`).
+
 ## The options
 
 Each is off by default (but `hiddenOutlines`, on: Chris's word, item 15) and, off, leaves the picture as it was, pixel
@@ -2069,6 +2129,8 @@ on an RTX 4090 (Seton's, Direct3D 12; Vulkan about the same), from the sections 
 | `wakesRemade` [wakes] | the ships' foam wakes hold for any hull: foam-line arms, streaks at the screen's resolution that stay on the water, laid along the middle's way and fading out (a large slow ship's no longer broad blocky bands cut off square) | +0.001 ms of the card at most with 28 ships moving at 1440p (the wakes' stage 0.003 -> 0.003 ms from the game's height, 0.004 -> 0.005 close up; lowest of 240 frames, two runs each), about +0.005 ms of the processor; the frame the same within noise (proposed for "Weather Effects": in it since 2026-10-21) | a map with water |
 | `winterWater` | while snow lies: a cold sea (dark slate, grey-green shallows, no snow under the water), slush and thin ice at the shores; a thaw takes it back | +0.005 to 0.03 ms (only with snow lying) | a time of day, a map with water |
 | `surf` | waves break on the shores and run up the beaches, burst on rocks throwing spray; ships throw bow spray; by the weather's wind (proposed for "Weather Effects") | +0.03 to 0.05 ms with a long coast in view, up to +0.10 close over a beach (8 MB once on) | a map with water |
+| `oceanWaves` [ocean] | a real ocean's waves on the modern water: an FFT wind sea with swell (three squares), whitecaps where crests fold and their foam drifting in streaks, the sun's glitter clean at every distance (LEAN), a glow through backlit crests; by the weather; the sheet flat (proposed: the "Weather Effects" bundle, or a "Water" setting of its own: Classic / Ocean / Ocean with waves) | the field 0.07 ms; the water's pass +0.05 ms at 1440p (21 MB once on) | a map with water |
+| `oceanLift` [lift] | with `oceanWaves`: the waves lift the surface (a CDLOD grid following the camera; none over the shallows); ships and hover units rise, fall, pitch and roll with them in the picture alone; the wakes ride them | the water's pass a further +0.07 ms at 1440p; bobbing about 0.01-0.02 ms of the processor a ship (estimated: 640 waves summed) | `oceanWaves` |
 | `hiddenOutlines` (ON) | a thin line in the army's colour round a unit's part hidden behind trees, hills or buildings | 0.06-0.08 ms (200 tanks in a forest) | |
 | `wildlife` | flocks of birds over the woods and gulls over the shores, scattered by fighting; fireflies at dusk and by night ((2026-10-20) in loose groups where they live, far fewer) | about 0.02 ms (proposed for the "Ground Detail" setting) | a map with trees or shores |
 | `movementDust` | vehicles raise dust on dry ground, hover units throw spray, high aircraft draw contrails | about 0.07 ms with 60 units moving, 0.22 close up | |
@@ -2119,3 +2181,41 @@ to grey "Ray tracing" out where it would do nothing (on the Mac always). Viewer:
 atmosphere,soft-shadows,ray-tracing,weather-effects` draws through them as the game does. Tried from far out
 over a whole map, as the game's camera often is, which the close-up checks had not covered: it found the
 contact shadows' and the far haze's faults fixed above. Which ones go in the game's settings is Chris's word; the ui chat then puts them there.
+
+## Battle grime, visible damage and weather dirt on units (first version, 2026-10-23; a helper's, for review)
+
+Chris's "100% yes" to the visuals session's section 65; the form agreed in render-answers ("To visuals, section 65") and
+her first art in section 66 (UEL0001). Two options, modern look, off by default (proposed for the Battle Effects
+setting): `World::unitGrime` (viewer `--unit-grime`: battle grime and the weather's dirt) and `World::unitDamage`
+(`--unit-damage`: damage shown by health). `render/unit_grime.h/.cpp` (the stand-in layers, the shader's
+`GrimeSurface`); the state is each unit's in `UnitWear` (unit_wear.h), beside its marks and its dirt, one state and one
+shader path with them:
+- **Grime:** dust, caked mud and soot gather the longer a unit fights (hits taken, its own firing, blasts near it:
+  `UnitWear::Watch`, a beat) and drives (mud or soft wet ground a crust, dry dirt and sand a coat: `UnitWear::Dirt`,
+  which World now also runs for the grime). Rain washes dust off in minutes, soot and the crust slowly; repair leaves
+  it. The first versions' own grime patches (the scars' "wear over all") give way to it where it lies (`grimeTaken`).
+- **Weather dirt:** in rain mud splashes up the lower body from soft ground (more as it drives), drying on and flaking
+  off over a quarter of an hour, and the crust goes dark and glossy; where snow lies, frost on tops and in the
+  sheltered creases up high (none on a unit hot from fighting or burning). The fresh mud of `--unit-dirt` lies by the
+  masks' A where a unit has them (`grimeSplash`).
+- **Damage:** a texel of the damage set shows where the masks' B (the damage order) is above the unit's health, over a
+  soft edge (whole: none; none left: all); what was lost in the last seconds glows where the set's alpha says hot;
+  repaired, it goes as health comes back, and the first three tenths of the worst it lived through stay as patched
+  trophies (dents filled to a third, fresh paint).
+- **The art:** the masks in the unit's secondary texture (`<ID>_lab_masks.dds`, read in place of `_lab_ao` while an
+  option is on: no texture read more), the damage set `<ID>_lab_damage_albedo.dds` / `_damage_normal.dds`, the shared
+  tiling layers as one array at t24 (`<root>/_unitgrime/export/moho64/<set>_albedo.dds` and `_normal.dds`, sets dust,
+  mud, soot, frost, wetmud; procedural stand-ins until all ten are there). A unit without masks: grime and frost by its
+  height, facing and crease shading, the damage order a noise; without a damage set, scorched and scuffed paint with
+  bare metal and hot spots. `ModelLod::wearMasks`, `damageAlbedo`, `damageNormal`; a level's kind5.z carries a quarter
+  for the masks and a half for the damage set; the grime's three rows follow the marks and the dirt's (a half in the
+  instance's wear.y).
+- Viewer tests: `--wear-art <id>=<folder>` (the visuals session's trial layout), `--grime-test
+  dust,caked,soot[,health[,lowest[,recent[,splash]]]]` for placed units.
+- Cost (200 remastered commanders framed at the game's height, grime 0.5 and half health, lowest of 300 frames): the
+  units' pass +0.09 ms at 2560 x 1440 and +0.16 at 3840 x 2160. (The hidden outlines' masks stage rose from 0.11 to 0.9 ms
+  at 1440p whenever units carried grime or dirt: not this look's work but the masks' shader reading the instances askew,
+  their wear rows' numbers landing in their places; fixed 2026-10-23, look 15 above. With grime on, the masks now cost
+  what they cost without it.)
+- Off: nothing of it runs and no art is loaded; regress3 0 px both backends; scars, snow and dirt on, grime off: 0 px
+  against render 841530e.

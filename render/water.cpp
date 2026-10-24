@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include "lighting.h"
+#include "ocean.h"
 #include "ray_scene.h"
 #include "surf.h"
 #include "water_glint.h"
@@ -160,6 +161,46 @@ static const float kGlintFrom = 0.08, kGlintTo = 2.0, kGlintSlopes = 0.006;
 static const float kSurfWetRise = 1.5;
 #endif
 
+#if LIFT
+// [lift] (ocean.h, World::oceanLift) The water as the camera's grid, lifted by the waves: each vertex of a patch (`corner`
+// 0..1 across it) slid onto the coarser grid as far as its distance says (CDLOD: at a patch's own level, and, for a
+// quarter drawn at its parent's resolution, at the next), then shifted and lifted by the ocean's field as much as the
+// water there lets it (OceanLiftShare: none over the shallows, where the flat sheet's waterline, the surf and the beach
+// stay as they were). `rest`: where on the still sheet the point rests (x, z), and how much it is lifted.
+struct VOut {
+  float4 position : SV_Position;
+  float3 world : TEXCOORD0;
+  float3 rest : TEXCOORD1;
+};
+
+VOut VS(float2 corner : POSITION, uint instance : SV_InstanceID) {
+  VOut o;
+  float4 node = gridNodes[instance];
+  int level = int(node.w);
+  float cells = gridInfo.x;
+  float2 at = node.xy + corner * node.z;
+  float away = length(float3(at.x, surfaceColor.w, at.y) - cameraPosition);
+  float2 cell = corner * cells;
+  cell -= frac(cell * 0.5) * 2 * saturate((away - gridLods[level].x) * gridLods[level].y);
+  cell -= frac(cell * 0.25) * 4 * saturate((away - gridLods[min(level + 1, 15)].x) * gridLods[min(level + 1, 15)].y);
+  float2 x0 = node.xy + cell * (node.z / cells);
+  float share = OceanLiftShare(x0, surfaceColor.w, mapSize.xy, waterMap.SampleLevel(samplerLinearClamp, MirrorUv(x0 * mapSize.zw), 0).r);
+  float3 d = 0;
+  [branch] if (share > 0) d = OceanDisplacement(x0, node.z / cells) * share;
+  // (where it is not lifted the sheet lies as high as the flat one does: the swell's crests, the run-up, the wet beach)
+  float rise = kRise;
+#if SURF
+  rise += kSurfRise;
+#if SURF_WET
+  rise += kSurfWetRise;
+#endif
+#endif
+  o.world = float3(x0.x + d.x, surfaceColor.w + d.y + rise * (1 - share), x0.y + d.z);
+  o.rest = float3(x0, share);
+  o.position = mul(viewProj, float4(o.world, 1));
+  return o;
+}
+#else
 struct VOut {
   float4 position : SV_Position;
   float3 world : TEXCOORD0;
@@ -182,6 +223,7 @@ VOut VS(float2 corner : POSITION) {
   o.position = mul(viewProj, float4(o.world, 1));
   return o;
 }
+#endif
 
 // The swell: four trains of waves crossing the water, longer ones faster. x: the height; y, z: how
 // it slopes along x and z. grain: how much water one pixel covers (world units): a train whose
@@ -297,11 +339,16 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   // [surf] the sheet lies higher by kSurfRise, for the run-up; all else is worked out where it lies without the surf (so
   // that the water away from the shores is as without it): the place moved down the line of sight to that height, and
   // its depth on the screen with it
+#if LIFT
+  float unlifted = 1 - i.rest.z;  // [lift] (the sheet lies higher only where it is not lifted)
+#else
+  float unlifted = 1;
+#endif
 #if SURF_WET
   // ([shore] with World::waterDetail higher again by kSurfWetRise, for WetBeach)
-  i.world += normalize(i.world - cameraPosition) * (kSurfWetRise / max(normalize(cameraPosition - i.world).y, 1e-3));
+  i.world += normalize(i.world - cameraPosition) * (kSurfWetRise * unlifted / max(normalize(cameraPosition - i.world).y, 1e-3));
 #endif
-  i.world += normalize(i.world - cameraPosition) * (kSurfRise / max(normalize(cameraPosition - i.world).y, 1e-3));
+  i.world += normalize(i.world - cameraPosition) * (kSurfRise * unlifted / max(normalize(cameraPosition - i.world).y, 1e-3));
   float4 sheet = mul(viewProj, float4(i.world, 1));
   i.position.z = sheet.z / sheet.w;
 #if SURF_WET
@@ -315,10 +362,39 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
 #endif
 #endif
 
+#if LIFT
+  float2 xz = i.rest.xy;  // [lift] (what lies on the water rides it: read where the point rests on the still sheet)
+#else
   float2 xz = i.world.xz;
+#endif
   float4 water = waterMap.Sample(samplerLinearClamp, MirrorUv(xz * mapSize.zw));  // r: waviness, a: no crests
   float3 toPixel = normalize(i.world - cameraPosition);
   float distance = length(i.world - cameraPosition);
+#if OCEAN
+  // [ocean] (ocean.h, World::oceanWaves) the waves of the wind sea and the swell worked out on the card, in place of the four
+  // scrolling wave pictures and the swell's four trains: their mean slope over what the pixel takes in tilts the surface,
+  // their spread widens the sun's glint (below); calmer on lakes (the map's waviness), in bays (with the surf: how exposed
+  // the shore before it is) and over shallows
+  float grain = max(length(ddx(xz)), length(ddy(xz)));  // (the water one pixel covers)
+  float oceanCalm = (0.35 + 0.65 * water.r) * saturate((surfaceColor.w - WorldAt(i.position.xy, depthBehind).y) / 2.5 + 0.15);
+#if SURF
+  oceanCalm *= lerp(0.4, 1, surfField.SampleLevel(samplerLinearClamp, (xz - surfArea.xy) * surfArea.zw, 0).a);
+#endif
+  OceanHere ocean = OceanAt(xz, ddx(xz), ddy(xz), oceanCalm, oceanLook2.z * lerp(1.0, 2.0, saturate(-toPixel.y * 2.5)));
+  [branch] if (oceanLook.w > 0.5) {  // (a view for checking, Ocean::view)
+    if (oceanLook.w < 1.5) return float4(saturate(ocean.slope * 4 + 0.5), 0, 1);
+    if (oceanLook.w < 2.5) return float4(saturate(ocean.foam), saturate(ocean.foam), saturate(ocean.foam) * 0.5 + 0.2, 1);
+    if (oceanLook.w < 3.5) return float4(saturate(sqrt(ocean.spread.xy) * 5), 0, 1);
+    if (oceanLook.w > 4.5) {  // (5: the Jacobian, red where it folds below the foam's threshold, green 1 .. black 0)
+      float J = (1 + ocean.fold.x) * (1 + ocean.fold.y) - ocean.fold.z * ocean.fold.z;
+      return float4(J < oceanLook3.x ? 1 : 0, saturate(J - 0.5), 0, 1);
+    }
+    return float4(saturate(ocean.height * 8), 0.1, saturate(-ocean.height * 8), 1);
+  }
+  float crest = 0;
+  float3 N = normalize(float3(-ocean.slope.x, 1, -ocean.slope.y));
+  float3 swell = float3(ocean.height, 0, 0);
+#else
   float4 sum = waves[0].Sample(samplerLinear, (xz + movement[0].xy * time) * normalRepeat.x)
              + waves[1].Sample(samplerLinear, (xz + movement[1].xy * time) * normalRepeat.y)
              + waves[2].Sample(samplerLinear, (xz + movement[2].xy * time) * normalRepeat.z)
@@ -334,6 +410,7 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   // the horizon, where the water is seen at a low angle, the waves show by themselves, and overdone
   // they stood as ruled stripes across the far sea)
   N = normalize(N + float3(-swell.y, 0, -swell.z) * lerp(1.0, 2.5, saturate(-toPixel.y * 2.5)));
+#endif
   // near the eye: fine ripples, two sizes of them crossing, which the game's wave textures are too
   // coarse to show (Chris, 2026-10-13: "if you go up close it looks very pixelated"). Each size is
   // left out where it would be finer than about two pixels.
@@ -441,6 +518,9 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   level += surf.lift;  // [surf] (the waves near the shore and their run-up)
 #endif
 #endif
+#if LIFT
+  level *= 1 - i.rest.z;  // [lift] (where the surface is lifted it is where it lies)
+#endif
   float deep = i.world.y + level - bed.y;
 #if SURF_WET
   // [shore] (ground the water has run back from just now: the beach the surf wets, with World::waterDetail)
@@ -520,7 +600,11 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   // swell's crests and near the eye; from far up the sea is one blue - Chris, 2026-10-13: "too
   // sparkly ... the white should blend in more")
   float open = saturate(1 - much * 8);
+#if OCEAN
+  float wisps = 0;  // [ocean] (its own whitecaps and their streaks instead: below)
+#else
   float wisps = 0.3 * saturate(swell.x * 9 + 0.3) * saturate(1.2 - distance / 150);
+#endif
   float foam = smoothstep(1.05 - much * 1.1 - 0.04 * open, 1.30 - much * 1.1 + 0.14 * open, lace + 0.42) * (0.55 + 0.45 * edge) * lerp(1, wisps, open);
   float fronts = pow(saturate(sin(deep * 20 - time * 1.5 + lace * 3.0) * 0.5 + 0.5), 5) * edge;
 #if SURF
@@ -529,6 +613,23 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   foam = saturate(foam + fronts * smoothstep(0.42, 0.66, lace) * 0.55 + crest * saturate(swell.x * 14 + 0.25));
 #if RIPPLES
   foam = saturate(foam + rippleFoam * smoothstep(0.35, 0.7, lace) * 0.35);
+#endif
+#if OCEAN
+  // [ocean] the whitecaps where the waves fold, and the foam they leave drifting downwind in streaks (the ocean's foam
+  // field), broken up by the lace: thick and white where fresh, thinning to lace as it fades
+  {
+    // (streaks: noise drawn out five times along the wind, of two sizes, each left at its mean where finer than about two
+    // pixels, laid over the lace)
+    float2 way = oceanWind.xy, q = float2(dot(xz, float2(-way.y, way.x)), dot(xz, way));
+    float2 shownStreak = saturate(1.5 - grain * float2(2.2, 5.3) * 2);
+    float streak = lerp(0.5, CloudNoise(float3(q.x * 2.2, q.y * 0.44, 1.7)), shownStreak.x) * 0.6 +
+                   lerp(0.5, CloudNoise(float3(q.x * 5.3, q.y * 1.06, 4.1)), shownStreak.y) * 0.4;
+    float pattern = lerp(lace, streak, 0.6);
+    // (fresh, thick foam white all over; as it fades, only the streaks' ridges)
+    float white = ocean.foam * oceanLook.z;
+    float caps = smoothstep(0.87 - white * 0.6, 0.96 - white * 0.6, pattern + 0.25) * saturate(white * 2);
+    foam = saturate(foam + caps * 0.9);
+  }
 #endif
 #if SURF
   // [surf] its white water, broken by the lace; thinned where something stands in it higher than the map's ground (a
@@ -546,6 +647,20 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   color += lamps * 0.35;
   color += light * (rings * 0.04);
 
+#if OCEAN
+  // [ocean] the glow through the crests: looking toward a low sun, the light that comes through the thin tops of the waves
+  // (the higher above the sea's mean a crest stands, the more), tinted by the water it passes through
+  {
+    float2 sunWay = normalize(sunDirection.xz + 1e-5), lookWay = normalize(toPixel.xz + 1e-5);
+    float toward = saturate(dot(lookWay, sunWay));
+    float up = saturate(ocean.height / max(oceanLook2.x * 0.6, 1e-3));
+    // (seen from the side, through the crest's face turned toward the eye; from above none shows)
+    float face = saturate(dot(N.xz, -lookWay) * 6);
+    float glow = oceanLook.y * toward * toward * toward * up * up * face * saturate(1 - -toPixel.y * 2) * saturate(1.2 - sunDirection.y * 1.5) *
+                 saturate(sunDirection.y * 6) * shadow;
+    color += float3(0.027, 0.672, 0.604) * sunLight * (glow * 0.35 * (1 - foam));
+  }
+#endif
   // the mirror: the sky, and what the picture shows that way
   float3 R = reflect(toPixel, N);
   R.y = max(R.y, 0.02);
@@ -613,6 +728,11 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   [branch] if (cloudDrift.x > 0.5) color *= 1 - cloudDrift.w * saturate((1 - CloudShadow(i.world)) / max(cloudDrift.y, 1e-3));
   // the sun's (or the moon's) glint ([shore] with World::waterDetail: widened and dimmed by the waves a pixel takes in,
   // water_glint.h: from far up a calm sheen where the sun's mirror image lies, not single pixels twinkling)
+#if OCEAN
+  // [ocean] the sun's glitter off the waves' facets, by how their slopes spread over what the pixel takes in (ocean.h,
+  // OceanGlint: sparkles close up, a soft broad path of light far off), about the surface's own lean
+  color += sunLight * (OceanGlint(-toPixel, sunDirection, -N.xz / max(N.y, 0.05), ocean.spread) * oceanLook3.y * shadow * (1 - foam));
+#else
   [branch] if (shore.x > 0.5 && grain > kGlintFrom) {  // (closer in exactly as before)
     // (the swell's long trains, which a pixel far off still shows, counted among the slopes it takes in there: their even
     // tilt, mirrored by a widened lobe, lay as ruled stripes of light across the far sea)
@@ -624,6 +744,7 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   } else {
     color += sunLight * (pow(saturate(dot(R, sunDirection)), 500) * 0.9 * shadow * (1 - foam));
   }
+#endif
   // at its very edge the water thins out to nothing over what is behind it
   color = lerp(behind.SampleLevel(samplerLinearClamp, uv, 0).rgb, ThroughAirTo(color, i.world), saturate(deep / 0.035));
   return float4(BeyondMap(color, i.world), 1);
@@ -650,19 +771,23 @@ constexpr float kRippleTilt = 2.0f, kRippleFoamSlope = 0.8f, kRippleWaterline = 
 
 }  // namespace
 
-gfx::Pipeline Water::ModernPipeline(bool ripples, std::string* error, bool winter, bool surf, bool wet) {
+gfx::Pipeline Water::ModernPipeline(bool ripples, std::string* error, bool winter, bool surf, bool wet, bool ocean, bool lift) {
   // (the modern look's water reads the scene's depth: several samples a pixel, or one. Without ripples, winter and the
   // surf its source is the same as it ever was, but for [shore] the glint's block, water_glint.h, read only with
   // World::waterDetail.)
   std::string modern = std::string(ripples ? "#define RIPPLES 1\n" : "") + (winter ? "#define WINTER 1\n" : "") + (surf ? "#define SURF 1\n" : "") +
                        (surf && wet ? "#define SURF_WET 1\n" : "") +  // [shore]
+                       (ocean ? "#define OCEAN 1\n" : "") +           // [ocean]
+                       (ocean && lift ? "#define LIFT 1\n" : "") +    // [lift]
                        "#define SAMPLES " + std::to_string(gSceneSamples) + "\n" + kViewShaderBlock + RayShaders() + kLightingShaderBlock +
-                       kGlintShaderBlock + (winter ? kWinterWaterShaderBlock : "") + (surf ? kSurfShaderBlock : "") + kModernShader;
+                       kGlintShaderBlock + (winter ? kWinterWaterShaderBlock : "") + (surf ? kSurfShaderBlock : "") + (ocean ? kOceanShaderBlock : "") +
+                       kModernShader;
   gfx::PipelineDesc pd;
   pd.name = winter ? (ripples ? "water, modern, ripples, winter" : "water, modern, winter") : ripples ? "water, modern, ripples" : "water, modern";
   if (surf) pd.name = winter ? (ripples ? "water, modern, ripples, winter, surf" : "water, modern, winter, surf") : ripples ? "water, modern, ripples, surf" : "water, modern, surf";
   if (surf && wet) pd.name = winter ? (ripples ? "water, modern, ripples, winter, surf, wet beach" : "water, modern, winter, surf, wet beach")
                              : ripples ? "water, modern, ripples, surf, wet beach" : "water, modern, surf, wet beach";  // [shore]
+  if (ocean) pd.name = lift ? "water, modern, ocean, lifted" : "water, modern, ocean";  // [ocean] (OceanPipeline says which variant)
   pd.vertexSource = pd.pixelSource = modern;
   pd.attrs = {{"POSITION", 0, gfx::AttrType::Float2, 0}};
   pd.stride = 8;
@@ -700,6 +825,28 @@ void Water::PrepareSurf(bool ripples, bool winter, bool wet) {
   }
 }
 
+// [ocean] The ocean's variant of the modern water (key: 1 the ripples' field, 2 winter, 4 the surf, 8 the wet beach, [lift]
+// 16 lifted by the waves), made the first time it is wanted.
+gfx::Pipeline Water::OceanPipeline(int key) {
+  if (!oceanTried_[key]) {
+    oceanTried_[key] = true;
+    std::string why;
+    oceanPipes_[key] = ModernPipeline((key & 1) != 0, &why, (key & 2) != 0, (key & 4) != 0, (key & 8) != 0, true, (key & 16) != 0);
+    if (!oceanPipes_[key]) fprintf(stderr, "render: the water cannot show the ocean (variant %d: %s)\n", key, why.c_str());
+  }
+  return oceanPipes_[key];
+}
+
+void Water::PrepareOcean(bool ripples, bool winter, bool surf, bool wet, bool lift) {
+  if (!map_ || !map_->water.present || !modern_) return;
+  // (the variants the options on now may want: with the ripples' field or without it, in winter or not, with the surf;
+  // [lift] lifted, or flat while the lift is off)
+  for (int k = 0; k < 32; ++k) {
+    if (((k & 1) != 0 && !ripples) || ((k & 2) != 0 && !winter) || ((k & 4) != 0 && !surf) || ((k & 8) != 0 && !(surf && wet)) || ((k & 16) != 0) != lift) continue;
+    OceanPipeline(k);
+  }
+}
+
 void Water::PrepareWinter(bool ripples) {
   if (!map_ || !map_->water.present || !modern_) return;
   const int k = ripples ? 1 : 0;
@@ -714,6 +861,7 @@ bool Water::Load(const MapData* map, std::string* error) {
   map_ = map;
   ripples.SetMap(map);
   surf.SetMap(map);
+  ocean.SetMap(map);  // [ocean]
   if (!map->water.present) return true;
   if (!pipeline_) {
     std::string source = std::string(kViewShaderBlock) + kLightingShaderBlock + kShader;
@@ -810,9 +958,18 @@ void Water::DrawWith(const View& view, const Camera* camera, gfx::Texture behind
   if (modern && surf.Active()) PrepareSurf(rippling, wintry, wet);
   const gfx::Pipeline surfing = modern && surf.Active() ? modernSurf_[(rippling ? 1 : 0) | (wintry ? 2 : 0) | (wet ? 4 : 0)] : gfx::Pipeline{};
   if (surfing) surf.Constants(c.surfArea, c.surfLook, c.surfLook2, c.surfLook3);
-  device_->SetPipeline(surfing ? surfing : winter ? winter : rippling ? modernRipples_ : modern ? modern_ : pipeline_);
+  // [ocean] with the ocean on (ocean.h): its variant of the same kind, its constants and its field
+  const bool lifted = modern && ocean.Lifted();  // [lift]
+  const gfx::Pipeline oceanic = modern && ocean.Active() ? OceanPipeline((rippling ? 1 : 0) | (wintry ? 2 : 0) | (surfing ? 4 : 0) | (surfing && wet ? 8 : 0) |
+                                                                         (lifted ? 16 : 0))
+                                                         : gfx::Pipeline{};
+  device_->SetPipeline(oceanic ? oceanic : surfing ? surfing : winter ? winter : rippling ? modernRipples_ : modern ? modern_ : pipeline_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
   device_->SetConstants(1, &c, static_cast<uint32_t>(surfing ? sizeof c : rippling ? offsetof(WaterConstants, surfArea) : offsetof(WaterConstants, rippleArea)));
+  if (oceanic) {
+    device_->SetConstants(2, ocean.ShaderConstants(), ocean.ShaderConstantsSize());
+    ocean.Bind();
+  }
   if (modern) {
     device_->SetTexture(6, behind);
     device_->SetTexture(7, sceneDepth);
@@ -822,10 +979,15 @@ void Water::DrawWith(const View& view, const Camera* camera, gfx::Texture behind
   device_->SetTexture(0, waterMap_);
   for (int i = 0; i < 4; ++i) device_->SetTexture(1 + i, waves_[i]);
   device_->SetTexture(5, sky_);
-  device_->SetVertexBuffer(vertices_);
-  device_->Draw(6);
+  if (oceanic && lifted) {
+    ocean.DrawGrid();  // [lift] (the camera's grid, lifted by the waves)
+  } else {
+    device_->SetVertexBuffer(vertices_);
+    device_->Draw(6);
+  }
   if (rippling) device_->SetTexture(8, {});  // (the field is written again next frame: not left bound)
   if (surfing) device_->SetTexture(kSurfFieldSlot, {});
+  if (oceanic) ocean.Unbind();  // [ocean] (its field too)
 }
 
 }  // namespace render

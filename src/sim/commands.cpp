@@ -2029,10 +2029,18 @@ void IssueClearCommandsTo(Sim& sim, Unit* u, bool stopAttacker) {
   // repair's or reclaim's walking child: CUnitMoveTask::~CUnitMoveTask 0x618886 -> AbortMove), there is no second:
   // the probe saw one AbortMove -> NavigatorMakeIdle -> SetWaypoints(0, 0) -> Update(3) chain under
   // IssueClearCommands (0x6f19eb) for Skirmish 2949's engineer 0x2f, cleared on its Repair.
+  // Nor is a cargo's call for its transport: CUnitCallTransport's dtor 0x5ff7f0..0x5ff961 (the two state bits, the
+  // beam-up's OnStopTransportBeamUp and NotifyDetached 0x6b9570, the transport's RemovePickupUnit through vt+0x14)
+  // reaches neither the navigator nor CUnitMotion::Stop; only its walk's CUnitMoveTask dtor aborts (EndCall, counted
+  // by stopCount). Seen: Skirmish 2946, army 1's hover artillery 0x100049 (xsl0103), braking since M28 cleared its
+  // Move at 2945 and gave it a TransportLoadUnits, is cleared and given it again (the call dispatched at 2946, no walk
+  // yet): the original's brake goes on (q.w 0.0916819796 at 2946), ours made a new one (0.0913212597) and its tilt
+  // and place were off from there (58 Skirmish ww lines).
+  const bool callSelf = !u->commands.empty() && u->headState == kRunning && TransportCallTask(u);
   const uint32_t stops = u->motion.stopCount;
   ForgetUnitCommands(u);
   if (!stopped && !idle && !undispatched && !loadMove && !loadWaits && !guardSelf && !patrolSelf && !buildSelf &&
-      u->motion.stopCount == stops)
+      !callSelf && u->motion.stopCount == stops)
     MotionStop(u);
   SetMoving(u, false);
   if (moveAsleep) sim.ResumeCommandThread(u);
@@ -2570,9 +2578,11 @@ static bool UnitHasNavigator(const Unit* u) {
   return u->motion.bp && u->motion.bp->motionType >= kMotionLand && u->motion.bp->motionType <= kMotionAmphibiousFloating;
 }
 
+// cfunc_UnitGetNavigatorL 0x6cc350: unit+0x54c's Lua object, nil when there is none (0x6cc3e0) - also after
+// KillCleanup / ~Unit deleted it (EndNavigatorObject).
 int l_GetNavigator(lua_State* L) {
   Unit* u = U(L);
-  if (!UnitHasNavigator(u)) {
+  if (!UnitHasNavigator(u) || u->navigatorGone) {
     lua_pushnil(L);
     return 1;
   }
@@ -2589,6 +2599,17 @@ int l_GetNavigator(lua_State* L) {
 }
 
 NavigatorObject* N(lua_State* L) { return CheckObject<NavigatorObject>(L, 1); }
+}  // namespace
+
+// The unit's navigator is deleted (Unit::KillCleanup 0x6a8804..0x6a881a: unit+0x54c deleted (vt[0] with 1) and set to
+// null; ~Unit 0x6a6cdb for a unit destroyed without a kill): its Lua table loses its object (IsDestroyed; its methods
+// error "Game object has been destroyed") and GetNavigator() answers nil from then on.
+void EndNavigatorObject(Unit* u) {
+  u->navigatorGone = true;
+  if (u->navigator) u->navigator->UnbindLua();
+}
+
+namespace {
 
 int l_nav_SetGoal(lua_State* L) {
   NavigatorObject* n = N(L);

@@ -142,6 +142,18 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
       *error = "map " + mapPath + ": " + why;
       return false;
     }
+    // the map's render-only props, where it has them (scmap.h, LoadDecor): after its own, so the simulation's prop numbers
+    // still name the same ones
+    if (mapPath.size() > 6 && mapPath.compare(mapPath.size() - 6, 6, ".scmap") == 0) {
+      const std::string decorPath = mapPath.substr(0, mapPath.size() - 6) + "_decor.bin";
+      if (auto decor = vfs_->ReadFile(decorPath)) {
+        const size_t before = map.props.size();
+        if (LoadDecor(*decor, &map.props, &why))
+          printf("render: %zu render-only props from %s\n", map.props.size() - before, decorPath.c_str());
+        else
+          fprintf(stderr, "render: %s: %s (not drawn)\n", decorPath.c_str(), why.c_str());
+      }
+    }
     step("map file");
     terrain.mapPath = mapPath;  // (by which the remastered ground's remap.json is looked up)
     terrain.season = season;    // [seasons] (its materials, cover and mud read for it; its props below)
@@ -1267,6 +1279,15 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     // own wet band by height is narrowed to what a calm bay keeps (0.3 over the water), as much as the surf is shown
     if (c.shore[0] > 0.5) c.shore[2] -= (c.shore[2] - 0.3f) * water.surf.WetShare();
   }
+  {  // [ocean] the wind sea (ocean.h): as rough as the surf's sea (the weather's wind), the wind's way the weather's; the
+     // water's ocean pipelines made while it is on
+    const bool oceanOn = oceanWaves && look == Look::Modern && haveMap_ && map.water.present;
+    const bool weatherOn = timeOfDay >= 0 && look == Look::Modern;
+    const float rough = surfRoughness >= 0 ? surfRoughness : weatherOn ? std::clamp(0.15f + 0.85f * rain + 0.3f * snow, 0.0f, 1.0f) : 0.15f;
+    water.ocean.Begin(time, oceanOn, sidePicture, rough, dust.wind);
+    water.ocean.lift = oceanOn && oceanLift;  // [lift]
+    if (oceanOn) water.PrepareOcean(waterRipples, winterWater, surf, waterDetail, oceanLift);
+  }
   // [stream] streams as water (stream_water.h): their props left out of the models' drawing while the streams' pass draws them
   streamNow_ = streamWater && look == Look::Modern && haveMap_ && !sidePicture && streams.Any() && streams.Prepare();
   meshes.divertStream = streamNow_;
@@ -1834,8 +1855,10 @@ void World::WatchWear(const Frame& frame) {
   wear.scars = unitScars;
   wear.snow = unitSnow;
   wear.dirt = unitDirt;  // [unit dirt]
+  wear.grime = unitGrime, wear.damage = unitDamage;  // [grime]
   if (unitScars) models.hitShapes = true;  // (models loaded from now on keep their triangles for where hits lie)
-  if (look != Look::Modern || !(unitScars || unitSnow || unitDirt)) return;
+  if (unitGrime || unitDamage) models.wearArt = true;  // [grime] (and their wear art: unit_grime.h)
+  if (look != Look::Modern || !(unitScars || unitSnow || unitDirt || unitGrime || unitDamage)) return;
   const bool weather = timeOfDay >= 0;  // (the weather is only there with a time of day)
   auto modelOf = [&](uint32_t blueprint, bool make) -> const Model* {
     if (!frame.blueprints || blueprint >= frame.blueprints->size() || (*frame.blueprints)[blueprint].empty()) return nullptr;
@@ -1844,8 +1867,9 @@ void World::WatchWear(const Frame& frame) {
     const Model* m = Known(unitModels_, blueprint, frame.blueprints->size(), [&] { return models.Unit((*frame.blueprints)[blueprint]); });
     return m && m->ok ? m : nullptr;
   };
-  if (unitScars || unitSnow) wear.Watch(frame, clock_, weather ? snow : 0.0f, weather ? snowLying : 0.0f, modelOf);
-  if (unitDirt) {  // [unit dirt] each unit's wetness, mud and dust, by the ground under it and the weather (unit_wear.h)
+  wear.frostLying = weather ? snowLying : 0.0f, wear.groundWet = weather ? wet : 0.0f;  // [grime]
+  if (unitScars || unitSnow || unitGrime || unitDamage) wear.Watch(frame, clock_, weather ? snow : 0.0f, weather ? snowLying : 0.0f, modelOf);
+  if (unitDirt || unitGrime) {  // [unit dirt] each unit's wetness, mud and dust, by the ground under it and the weather (unit_wear.h; [grime] its grime's too)
     if (!wear.HasGround() && haveMap_) {
       float kinds[10][6];
       for (int i = 0; i < 10; ++i) std::copy(terrain.LayerKind(i), terrain.LayerKind(i) + 6, kinds[i]);
@@ -2047,13 +2071,13 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       it = list.empty() ? shieldHits_.erase(it) : std::next(it);
     }
   }
-  if (unitScars || unitSnow || unitDirt) {  // (battle scars and snow on units: what hit whom this beat; unit_wear.h; [unit dirt])
+  if (unitScars || unitSnow || unitDirt || unitGrime || unitDamage) {  // (battle scars and snow on units: what hit whom this beat; unit_wear.h; [unit dirt]; [grime])
     CpuTimes::Part("units' battle scars, snow and dirt watched");  // ([groundfix] the dirt's too)
     // what the simulation says hit a unit or its shield (REQUESTS 36): the marks where and by what; where it says so,
     // health drops with no hit told make none (reclaim, a script's SetHealth)
     wear.exactHits = combat_.hitsKept;
     for (const FrameHit& h : combat_.hits) {
-      if ((h.targetKind != 0 && h.targetKind != 1) || !(unitScars || unitSnow)) continue;  // [unit dirt] (the dirt takes no hits)
+      if ((h.targetKind != 0 && h.targetKind != 1) || !(unitScars || unitSnow || unitGrime || unitDamage)) continue;  // [unit dirt] (the dirt takes no hits)
       UnitWear::HitEvent e;
       e.tick = h.tick;
       e.unit = h.target;
@@ -2238,6 +2262,25 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       }
       // (deep tracks: what drives or walks on the ground presses it, as the army sees it go)
       if (deepNow_ && !u.dead && u.Seen() && fractionComplete >= 1) PressUnit(u, frame, blueprint, model, position, orientation);
+      // [lift] what floats rides the waves in the picture alone (ocean.h, Ocean::BobAt; World::oceanLift): a ship or a hover
+      // unit on the water rises and falls with the long waves under it and pitches and rolls with their slopes; its place in
+      // the game, its picking, its icon, its life bar and its wake stay where the game has it
+      Vec3 drawAt = position;
+      Quat drawTurn = orientation;
+      if (water.ocean.Lifted() && !sidePicture && !building && !u.dead && haveMap_ && std::fabs(position.y - map.water.elevation) < 0.5f) {
+        const Vec3 size = (model->boundsMax - model->boundsMin) * model->scale;
+        Ocean::Bob bob;
+        if (water.ocean.BobAt(position.x, position.z, std::max({size.x, size.z, 0.5f}), &bob) && (bob.rise != 0 || bob.slopeX != 0 || bob.slopeZ != 0)) {
+          drawAt.y += bob.rise;
+          // (turned from straight up to the surface's normal under it)
+          const Vec3 n = Normalize(Vec3{-bob.slopeX, 1, -bob.slopeZ});
+          const Vec3 axis = Cross(Vec3{0, 1, 0}, n);
+          Quat tilt{axis.x, axis.y, axis.z, 1 + n.y};
+          const float l = std::sqrt(tilt.x * tilt.x + tilt.y * tilt.y + tilt.z * tilt.z + tilt.w * tilt.w);
+          tilt = {tilt.x / l, tilt.y / l, tilt.z / l, tilt.w / l};
+          drawTurn = Mul(tilt, orientation);
+        }
+      }
       Pose pose;
       pose.now = frame.bones.data() + u.firstBone;
       pose.nowCount = u.boneCount;
@@ -2281,10 +2324,10 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
           const Vec3 on = OnShell(*shell, h.at);  // (where the shot met the game's shield, onto the shell)
           shellHits_.push_back({on.x, on.y, on.z, static_cast<float>(age)});
         }
-        if (!shellHits_.empty()) meshes.AddShell(shell, Mat4::FromTRS(position, orientation, model->scale), shellHits_);
+        if (!shellHits_.empty()) meshes.AddShell(shell, Mat4::FromTRS(drawAt, drawTurn, model->scale), shellHits_);
       }
       // (and its treads' scroll, where its mesh's treads scroll and its shield's hit does not take the place)
-      meshes.Add(model, Mat4::FromTRS(position, orientation, model->scale), color, built, asRemembered ? nullptr : &pose, hitAt,
+      meshes.Add(model, Mat4::FromTRS(drawAt, drawTurn, model->scale), color, built, asRemembered ? nullptr : &pose, hitAt,
                  model->scrolls && !hitAt ? u.treads : nullptr, u.id + 1);
       // (its battle scars and snow: unit_wear.h; [groundfix] its dirt from the first frame it is drawn: its box from the
       // model drawn, which WatchWear, before the models are made, finds only from the next frame)
@@ -2292,8 +2335,8 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       // (its outline where it is hidden, hidden_outlines.h: only what the player may see of it now - his own, an ally's,
       // an enemy's in sight - and finished; never a building drawn as it was remembered)
       if (outlinesNow_ && u.Seen() && !asRemembered && fractionComplete >= 1 && !allHidden)
-        MarkOutline(model, position, IconColor(u.Army(), color), building, u.id, u.blueprint < iconKinds_.size() ? iconKinds_[u.blueprint] : nullptr);
-      if (u.fractionComplete >= 1 && u.Seen()) AddLamps(model, position, orientation, &pose, &color);
+        MarkOutline(model, drawAt, IconColor(u.Army(), color), building, u.id, u.blueprint < iconKinds_.size() ? iconKinds_[u.blueprint] : nullptr);
+      if (u.fractionComplete >= 1 && u.Seen()) AddLamps(model, drawAt, drawTurn, &pose, &color);  // ([lift] riding the waves with it)
       // (movement dust: what the army sees moving raises dust, spray or contrails)
       if (dustNow_ && u.Seen() && !asRemembered && fractionComplete >= 1) dust.AddUnit(u.id, blueprint, model, position, orientation);
       // ([surf] a ship at speed throws spray off its bow)
@@ -2926,6 +2969,10 @@ void World::Render() {
     lights.Bind();  // (what the rays meet takes the small lights too)
     bounce.Update(view, rays, terrain.NormalMap(), terrain.GroundColours(), sky_);
   }
+  if (water.ocean.On()) {  // [ocean] the wind sea worked out for this frame, its foam moved on (it dispatches: before the scene's pass)
+    Stage("ocean");
+    water.ocean.Update(camera, view, terrain.HeightTexture(), terrain.HeightUnit());
+  }
   if (water.ripples.On()) {  // ripples on the water: their field moved on (it dispatches: before the scene's pass)
     Stage("water ripples");
     water.ripples.Update(camera, view.height, terrain.HeightTexture(), terrain.HeightUnit());
@@ -3304,6 +3351,7 @@ void World::Render() {
     placedDraw.Draw(view, placed, lights.night, PlacedMeshes::DepthPull(camera.zNear, placing.distance));
   Stage("wakes, beams, trails");
   // beams and trails, then particles: over everything solid and the water, by the scene's depth
+  wakes.ride = water.ocean.Lifted() ? &water.ocean : nullptr;  // [lift] (the wakes ride the lifted waves)
   wakes.Draw(view);
   ribbons.pixelScale = photoPixel;  // (photofix: a photo's frame as the window shows it)
   if (hide.find("bands") == std::string::npos) ribbons.Draw(view);

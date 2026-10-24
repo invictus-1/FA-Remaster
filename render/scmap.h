@@ -91,4 +91,15 @@ struct MapData {
 // False with a reason in `error` when the file is not a map this reader understands.
 bool LoadMap(std::string_view file, MapData* out, std::string* error);
 
+// A map's render-only props (decor): the purely decorative props of a map (plants, small rocks, branches: no reclaim,
+// nothing that blocks), kept out of the .scmap so that the simulation never makes them (on SETONS_R 43,326 of its
+// 55,172), in a file beside the map, "<map's path without .scmap>_decor.bin", drawn exactly as the map's own props.
+// Appended to `out` AFTER the map's props, so a simulation's prop numbers (the .scmap's order) still name the same ones;
+// nothing the simulation reads ever comes from them. Little-endian:
+//   char magic[8] = "MDECOR1\0"; uint32 version (1); uint32 blueprints; uint32 entries;
+//   blueprints times: uint16 length, that many bytes (a blueprint path as the .scmap names props: "/maps/x/env/fern_prop.bp");
+//   entries times (64 bytes): uint32 blueprint index; float position[3]; float axisX[3], axisY[3], axisZ[3]; float scale[3]
+//   (the .scmap's own fields for a prop).
+bool LoadDecor(std::string_view file, std::vector<MapProp>* out, std::string* error);
+
 }  // namespace render

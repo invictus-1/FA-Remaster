@@ -65,6 +65,8 @@ class Entity : public ScriptObject {
   // entity+0x258: the ONE Lua vector Entity:GetPosition() hands out (registry reference, made by the first call)
   int positionRef = LUA_NOREF;
   lua_State* positionState = nullptr;
+  // GetPosition's table is let go (at the purge, as ~Entity 0x678635 destroys the LuaObject at entity+0x258)
+  void ReleaseScriptPosition();
   float scale[3] = {1, 1, 1};
   // What a host that draws the game is told of the entity (sim/sim_view.h); the simulation reads none of it:
   // Entity:SetMesh's mesh blueprint ("" = its own blueprint's), Entity:SetDrawScale, and SetVizToFocusPlayer /

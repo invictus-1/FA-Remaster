@@ -1471,6 +1471,8 @@ void Sim::ProcessDestroyQueue() {
       ClearFactoryCommandQueue(u);
       // ~Unit deletes its animation actor (0x6a714c): the manipulators on it go
       EndUnitManipulators(u);
+      // ~Unit deletes the navigator (unit+0x54c, 0x6a6cdb) when no kill did (Unit::KillCleanup 0x6a8804)
+      EndNavigatorObject(u);
       // ~Unit's ReleaseOccupyGround 0x6a7ab0 (0x6a6de3) comes after its queue is cleared (0x6a6c66): a failed upgrade's
       // dtor re-occupies the builder's cells first (sim/build.cpp), and a builder that still counts as occupying ground
       // then frees them
@@ -1493,6 +1495,10 @@ void Sim::ProcessDestroyQueue() {
   // by id, and a new unit's blip takes the lowest free serial of its army's blip pool)
   for (Entity* e : done) ReleaseId(e->id);
   for (Entity* e : done) MotorsEntityPurged(*this, e);  // ~Entity deletes the entity's motor (0x678620)
+  for (Entity* e : done) DropObjectValues(L, e);  // the values scripts set on it (entities.cpp kAttrs, stats) go with it
+  // ... and then the LuaObject GetPosition keeps (entity+0x258, 0x678635): the one vector table every GetPosition()
+  // returned is no longer held by the engine (a script that kept it still has it)
+  for (Entity* e : done) e->ReleaseScriptPosition();
   static const bool dbg = getenv("MOHO64_DEBUG_DESTROY") != nullptr;
   for (Entity* e : done) {
     if (dbg && e->kind == Entity::Kind::Unit && e->HasLuaObject()) {

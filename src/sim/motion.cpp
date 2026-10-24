@@ -31,6 +31,7 @@
 namespace moho {
 Quat LookQuat(float dx, float dy, float dz);  // (below; UpdateLayer's blend needs it)
 namespace {
+void SnapToWaterExe(Sim& sim, Unit* u);  // (below; UpdateLayer's blend needs it)
 
 constexpr float kDegToRadTenth = 0.001745329238474369f;  // TurnRate (deg/s) -> rad per tick
 constexpr float kStopSq = 9.999999974752427e-07f;        // |v|^2 below this: at rest
@@ -208,10 +209,13 @@ void UpdateLayer(Sim& sim, Unit* u) {
       SnapUnit(sim, u);
       m.snapTerrain = false;
     } else {
-      // (outline in the spec: level, at the water's height + the depth, not nearer than 0.25 to the bottom)
-      u->orientation = LookQuat(m.bx, 0.0f, m.bz);
-      const float water = map->hasWater ? map->waterElevation : -10000.0f;
-      u->position.y = std::max(water + m.depth, map->TerrainHeight(p0.x, p0.z) + 0.25f);
+      // SnapToWater 0x6c1cb0 of the transform as it is (0x6c381b..0x6c382a): CalcRollHack 0x6c1350, the height,
+      // and COORDS_Tilt 0x50b820 turning the transform's OWN up axis onto the roll's (the shortest arc), not a
+      // level look along the facing. Seen: Naval 803, the Salem 0x45 (urs0201) walks into the sea tilted by the
+      // beach; the blend's end orientation of ours, LookQuat(facing), had another roll part, and the blended
+      // orientation's z was 1 ulp off the original's from the blend's second beat (805) to its end; its two guns'
+      // directions with it (117 watch lines).
+      SnapToWaterExe(sim, u);
     }
     m.blendToPos = u->position;
     m.blendToOri = u->orientation;
@@ -528,6 +532,27 @@ float PlatformHeight(const Unit* P, float x, float z) {
 namespace {
 void AlignUp(Quat& q, Vec3 n);
 Vec3 RollHack(Unit* u);
+
+// SnapToWater 0x6c1cb0 on the unit's transform: at water + depth, but never closer than 0.25 to the bottom; a
+// submerged unit stays under the surface and its depth follows the bottom.
+// SnapToWater's first call is CalcRollHack 0x6c1350 (0x6c1cea), its last COORDS_Tilt 0x50b820 (0x6c1e06): the
+// transform's up axis is turned onto the roll's and the dive's up vector (level (0, 1, 0) for a ship that
+// neither rolls nor dives). Seen: a surfacing T2 submarine standing still (Subs, unit 8 at 1136-1205) pitched
+// its bow up by up to 19 degrees, and down when it dived again (1231-1300); ours stayed level.
+void SnapToWaterExe(Sim& sim, Unit* u) {
+  const TerrainMap* map = sim.map();
+  UnitMotion& m = u->motion;
+  const Vec3 up = RollHack(u);
+  const float water = map->hasWater ? map->waterElevation : -10000.0f;
+  float y = map->TerrainHeight(u->position.x, u->position.z) + 0.25f;
+  if (water + m.depth > y) y = water + m.depth;
+  if (0.0f > m.depth) {
+    if (y > water) y = water;
+    m.depth = y - water;
+  }
+  u->position.y = y;
+  AlignUp(u->orientation, up);
+}
 }
 
 void SnapUnit(const Sim& csim, Unit* u) {
@@ -555,23 +580,7 @@ void SnapUnit(const Sim& csim, Unit* u) {
                           b.motionType == kMotionAmphibiousFloating) &&
                          !u->motion.snapTerrain && u->layer != "Land" && u->layer != "Seabed";
   if (waterCalc) {
-    // SnapToWater 0x6c1cb0: at water + depth, but never closer than 0.25 to the bottom; a submerged unit stays
-    // under the surface and its depth follows the bottom
-    UnitMotion& m = u->motion;
-    // SnapToWater's first call is CalcRollHack 0x6c1350 (0x6c1cea), its last COORDS_Tilt 0x50b820 (0x6c1e06): the
-    // transform's up axis is turned onto the roll's and the dive's up vector (level (0, 1, 0) for a ship that
-    // neither rolls nor dives). Seen: a surfacing T2 submarine standing still (Subs, unit 8 at 1136-1205) pitched
-    // its bow up by up to 19 degrees, and down when it dived again (1231-1300); ours stayed level.
-    const Vec3 up = RollHack(u);
-    const float water = map->hasWater ? map->waterElevation : -10000.0f;
-    float y = map->TerrainHeight(u->position.x, u->position.z) + 0.25f;
-    if (water + m.depth > y) y = water + m.depth;
-    if (0.0f > m.depth) {
-      if (y > water) y = water;
-      m.depth = y - water;
-    }
-    u->position.y = y;
-    AlignUp(u->orientation, up);
+    SnapToWaterExe(sim, u);
     return;
   }
   if (b.motionType == kMotionAir) return;

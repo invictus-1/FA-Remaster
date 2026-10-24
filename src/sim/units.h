@@ -121,6 +121,7 @@ class Unit : public Entity {
   bool navIgnoreFormation = false;  // CAiNavigatorLand::IgnoreFormation (nav+0x60) set by the attack task
   Vec3 leashPos;                    // u+0x4e8: where an engagement started (patrol) / the guard reference; zero: none
   NavigatorObject* navigator = nullptr;               // Lua's GetNavigator() object (owned by the sim)
+  bool navigatorGone = false;  // unit+0x54c deleted (KillCleanup 0x6a8804 / ~Unit 0x6a6cdb): GetNavigator() is nil
   bool immobile = false;
   // entity+0x11c / +0x11d (unit+0x124 / +0x125): the unit stands and paths with its AltFootprint (UnitFootprint,
   // sim/motion.h). +0x124 is the navigator's: UpdateWaterFavorAltFootprintMode 0x5adc70 sets it for a FAVORSWATER
@@ -401,6 +402,8 @@ void UnitFinishedBuilding(Sim& sim, lua_State* L, Unit* u);
 void SetObjectValue(lua_State* L, ScriptObject* obj, const char* key, int valueIdx);
 void PushObjectValue(lua_State* L, ScriptObject* obj, const char* key);  // nil if unset
 void PeekObjectValue(lua_State* L, ScriptObject* obj, const char* key);  // the same for a host's view: makes nothing
+// The object is deleted: its values go with it (the original keeps them in the object itself). Makes nothing.
+void DropObjectValues(lua_State* L, ScriptObject* obj);
 
 void RegisterEntityBindings(lua_State* L);
 // The entity's texture scroller's step (entity.h TextureScroller; CTextureScroller::Tick 0x777730), first thing in

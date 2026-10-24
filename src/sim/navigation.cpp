@@ -321,14 +321,44 @@ Navigation::~Navigation() {
                static_cast<unsigned long long>(g_check.cells), static_cast<unsigned long long>(g_check.diffs));
 }
 
-uint8_t Navigation::CellCaps(const NamedFootprint& fp, int x, int z) {
+// STIMap::OccupancyCapsOfFootprintAt 0x564df0 (read 2026-10-23): OCCUPY_MobileCheck's tests on the one cell (x, z)
+// whatever the footprint's size: the cell must be x < width, z < height (0x564e02..0x564e15: the heightfield's
+// vertex count - 1); the type of that one cell only (0x577f20: map+0x1434[type]); the lowest / highest of its four
+// vertices; the largest of its four edge steps (raw, 0x564f1c..0x564f52), scaled as the heights are. MinWaterDepth,
+// MaxWaterDepth and MaxSlope as MobileCheck.
+static uint8_t SingleCellCaps(const TerrainMap& map, const NamedFootprint& fp, const bool* blocking, int x, int z) {
+  const int w = map.width(), h = map.height();
+  if (static_cast<unsigned>(x) >= static_cast<unsigned>(w) || static_cast<unsigned>(z) >= static_cast<unsigned>(h))
+    return 0;
+  if (blocking && blocking[map.TerrainType(x, z)]) return 0;
+  const float water = map.hasWater ? map.waterElevation : -10000.0f;
+  const uint16_t* raw = map.heightData();
+  const size_t rs = static_cast<size_t>(w) + 1, i = static_cast<size_t>(z) * rs + x;
+  const int a = raw[i], b = raw[i + 1], c = raw[i + rs], d = raw[i + rs + 1];
+  const int lo = std::min(std::min(a, b), std::min(c, d)), hi = std::max(std::max(a, b), std::max(c, d));
+  const float scale = map.heightScale();
+  uint8_t caps = fp.caps;
+  if (water - hi * scale < fp.minWaterDepth) caps &= 0xf1;
+  if (water - lo * scale > fp.maxWaterDepth) caps &= 0xfc;
+  if ((caps & 3) && fp.maxSlope != 0.0f) {
+    const int step = std::max(std::max(std::abs(d - c), std::abs(d - b)), std::max(std::abs(c - a), std::abs(b - a)));
+    if (fp.maxSlope < step * scale) caps &= 0xfc;
+  }
+  return caps;
+}
+
+uint8_t Navigation::CellCaps(const NamedFootprint& fp, int x, int z, bool callerCapsAll) {
   if (!map_) return 0;
+  if (callerCapsAll && std::max(fp.sizeX, fp.sizeZ) == 1) return SingleCellCaps(*map_, fp, blocking_.data(), x, z);
   const std::string key = GridKey(fp);
   auto it = grids_.find(key);
   if (GridCheck()) ++(it != grids_.end() ? cellCounts_[key].first : cellCounts_[key].second);
-  if (it != grids_.end()) return it->second->Caps(x, z);
-  const NamedFootprint& first = cellFp_.try_emplace(key, fp).first->second;
-  return MobileCheckCaps(*map_, first, blocking_.data(), x, z);
+  if (it != grids_.end()) {
+    const NamedFootprint& g = it->second->footprint();
+    if (g.maxSlope == fp.maxSlope && g.minWaterDepth == fp.minWaterDepth && g.maxWaterDepth == fp.maxWaterDepth)
+      return it->second->Caps(x, z);
+  }
+  return MobileCheckCaps(*map_, fp, blocking_.data(), x, z);
 }
 
 void PathGrid::Block(int x0, int z0, int x1, int z1, int delta, uint8_t occ) {
@@ -406,11 +436,7 @@ const PathGrid* Navigation::Grid(const NamedFootprint& fp) {
   if (it != grids_.end()) return it->second.get();
   prof::SectionTimer sec(prof::kSecPathGridMade);  // (MOHO64_PROFILE_HITCH only: which grid, and its time)
   const double hitchT0 = prof::Hitch() ? prof::NowMs() : 0;
-  // (a key CellCaps answered first: the grid is made from the footprint it was first asked with, as that first call
-  // would have made it)
-  auto first = cellFp_.find(key);
-  const NamedFootprint& from = first != cellFp_.end() ? first->second : fp;
-  auto g = std::make_unique<PathGrid>(*map_, from, blocking_.data(), scratch_.get(), pool_);
+  auto g = std::make_unique<PathGrid>(*map_, fp, blocking_.data(), scratch_.get(), pool_);
   if (!occ_.empty())  // (the held cells as they are now: SetCells keeps each grid's counts after this)
     for (int z = 0; z < map_->height(); ++z)
       for (int x = 0; x < map_->width(); ++x) {
@@ -420,7 +446,6 @@ const PathGrid* Navigation::Grid(const NamedFootprint& fp) {
       }
   const PathGrid* r = g.get();
   grids_[key] = std::move(g);
-  if (first != cellFp_.end()) cellFp_.erase(first);
   if (prof::Hitch()) prof::AddCall("path grid made " + key, prof::NowMs() - hitchT0);
   return r;
 }
