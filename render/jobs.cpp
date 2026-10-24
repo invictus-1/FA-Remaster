@@ -37,6 +37,7 @@ void Jobs::Run(int pieces, const std::function<void(int)>& piece) {
     done_.store(0);
     busy_ = static_cast<int>(threads_.size());
     ++round_;
+    roundNow_.store(round_, std::memory_order_release);  // [mcrec] (for the workers still waiting awake)
   }
   wake_.notify_all();
   // (the caller takes pieces too)
@@ -56,6 +57,12 @@ void Jobs::Work() {
   for (;;) {
     const std::function<void(int)>* piece;
     int pieces;
+    // [mcrec] a short while awake before sleeping: a frame hands over its jobs one soon after another (each pass's models
+    // tested, then recorded), and a worker woken from its sleep comes tens of microseconds late, much of a small job
+    {
+      const auto until = std::chrono::steady_clock::now() + std::chrono::microseconds(awakeMicroseconds);
+      while (roundNow_.load(std::memory_order_acquire) == seen && std::chrono::steady_clock::now() < until) Pause();
+    }
     {
       std::unique_lock<std::mutex> lock(mutex_);
       wake_.wait(lock, [&] { return stopping_ || round_ != seen; });

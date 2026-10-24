@@ -146,8 +146,14 @@ class LoadingDevice final : public gfx::Device {
   uint64_t MemoryInUse() override { return real_->MemoryInUse(); }
   bool MemoryBudget(uint64_t* budget, uint64_t* used) override { return real_->MemoryBudget(budget, used); }
   int BackgroundPipelinesWaiting() override { return real_->BackgroundPipelinesWaiting(); }
-  // (when the device's multi-core recording, [mcrec], is merged: its ParallelRecorders, BeginParallel, Parallel and
-  // EndParallel handed on here too, as SetPipeline is; else a world opened behind would draw on one core)
+  // [mcrec] draws recorded on several threads: the device's own, once the world is drawn; none while it warms (its draws
+  // then come here, where SetPipeline leaves out what is not made yet) or before (a world being opened draws nothing)
+  int ParallelRecorders() const override {
+    return warming_ || mode_.load(std::memory_order_acquire) != kLive ? 0 : real_->ParallelRecorders();
+  }
+  bool BeginParallel(int count) override { return ParallelRecorders() > 0 && real_->BeginParallel(count); }
+  gfx::Recorder* Parallel(int index) override { return real_->Parallel(index); }
+  void EndParallel() override { real_->EndParallel(); }
 
  private:
   enum Mode { kLoading, kLive, kLeaving };

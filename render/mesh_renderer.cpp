@@ -1750,7 +1750,8 @@ void MeshRenderer::Consider(const Cull& c, Entry& e, const View& view, bool shad
     if (shadowPass && lod->blend) return;
     if (shadowPass && lod->noShadow) return;  // (a shader of the original's that casts none)
     // (near: so large on screen that its leaves and parts lie over each other on many pixels)
-    out->push_back({lod, &e, e.posed && e.rows >= 0 ? static_cast<float>(e.rows) : -1.0f, pixels >= kPrepassPixels});
+    const bool near = pixels >= kPrepassPixels;
+    out->push_back({lod, &e, e.posed && e.rows >= 0 ? static_cast<float>(e.rows) : -1.0f, near, SortKey(lod, e.model, near)});
   }
 }
 
@@ -1773,11 +1774,9 @@ void MeshRenderer::SortItems() {
     });
     return;
   }
-  auto key = [&](const Item& item) {
-    const bool sunk = sinks(item);  // [undersnow]
-    return (static_cast<uint64_t>(item.lod->blend ? 1 : 0) << 34) | (static_cast<uint64_t>(reacts(item.lod) || sunk ? 1 : 0) << 33) |
-           (static_cast<uint64_t>(sunk ? 1 : 0) << 32) | (static_cast<uint64_t>(item.lod->serial) << 1) | (item.near ? 0u : 1u);
-  };
+  // [mcrec] (each item's key worked out where it was found, Consider: SortKey; going to every item's level and model for it
+  // in each of the sort's steps was most of the sort's time)
+  auto key = [](const Item& item) { return item.key; };
   // (only the bits that differ between the items need sorting)
   uint64_t all = 0, any = 0, first = key(items_[0]);
   for (const Item& item : items_) {
@@ -1809,6 +1808,16 @@ void MeshRenderer::SortItems() {
     std::swap(from, to);
   }
   if (from != &items_) items_.swap(sorting_);
+}
+
+// [mcrec] What SortItems sorts an item by: blended last; then what reacts or sinks under the snow after the rest, and what
+// sinks after what only reacts; then by mesh (its level's serial number), the large on screen first.
+uint64_t MeshRenderer::SortKey(const ModelLod* lod, const Model* model, bool near) const {
+  const bool plants = plantsConstants && plantsMade_ > 0;
+  const bool reacts = plants && (lod->sway > 0 || (lod->wreck && lod->leaves));  // [plants]
+  const bool sunk = Sinks(lod, model);                                             // [undersnow]
+  return (static_cast<uint64_t>(lod->blend ? 1 : 0) << 34) | (static_cast<uint64_t>(reacts || sunk ? 1 : 0) << 33) |
+         (static_cast<uint64_t>(sunk ? 1 : 0) << 32) | (static_cast<uint64_t>(lod->serial) << 1) | (near ? 0u : 1u);
 }
 
 // Draws items_: by mesh, each mesh's instances together.
@@ -1876,24 +1885,109 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
 
   // (the scene's solid models: their depth first, then in full; a level of a look of its own - see-
   // through, unlit, a shield, a frame of light - is drawn in full alone)
-  const bool prepass = depthPrepass && !shadowPass && !glass && prepass_ && prepassLeaves_;
-  auto plain = [](const ModelLod* l) {
-    return !l->blend && !l->glass && !l->impact && !l->unlit && !l->nuke && !l->fades && !l->shield && !l->frame;
-  };
-  for (int round = prepass ? 0 : 1; round < 2; ++round) {
-  const bool depthOnly = round == 0;
-  int drawing = -1;  // which pipeline is set: 0 the plain one (or the shadows'), 1 leaves, 2 blended, ...
-  for (size_t at = 0; at < items_.size();) {
+  RunSetup s;
+  s.shadowPass = shadowPass;
+  s.glass = glass;
+  s.prepass = depthPrepass && !shadowPass && !glass && prepass_ && prepassLeaves_;
+  s.blasts = blasts;
+  s.plants = plants;
+  s.snowing = snowing;
+  std::copy(snowK, snowK + 12, s.snowK);
+  // [mcrec] the pass's draws, in their order: each mesh's instances in draws of up to kMaxInstances, the depth round's first
+  // (in the depth round only what is large on screen, where leaves and parts lie over each other; for what is small,
+  // drawing it twice costs more than the shading it saves)
+  runs_.clear();
+  for (int round = s.prepass ? 0 : 1; round < 2; ++round) {
+    const bool depthOnly = round == 0;
+    for (size_t at = 0; at < items_.size();) {
+      const ModelLod* lod = items_[at].lod;
+      const bool near = items_[at].near;
+      if (depthOnly && !(Plain(lod) && near)) {  // (not in the depth round)
+        while (at < items_.size() && items_[at].lod == lod && items_[at].near == near) ++at;
+        continue;
+      }
+      size_t n = 0;
+      while (at + n < items_.size() && items_[at + n].lod == lod && items_[at + n].near == near && n < kMaxInstances) ++n;
+      runs_.push_back({static_cast<uint32_t>(at), static_cast<uint32_t>(n), depthOnly});
+      at += n;
+    }
+  }
+  // [mcrec] recorded on several threads, in stretches of the draws in their order, one recorder each (gfx.h, BeginParallel:
+  // each starts from what was set above, and every draw sets what it reads beyond that); or here, one after the other
+  RunCounts counts;
+  int stretches = Stretches();
+  // (cut where each stretch has about its share of the work: a draw's own, and its instances' copy; none left empty, so
+  // that the last recorder is the one that drew last)
+  size_t cut[kMostStretches + 1] = {};
+  if (stretches > 1) {
+    double total = 0;
+    for (const Run& r : runs_) total += kRunWeight + r.n;
+    double sum = 0;
+    int k = 1;
+    for (size_t i = 0; i + 1 < runs_.size() && k < stretches; ++i) {
+      sum += kRunWeight + runs_[i].n;
+      if (sum >= total * k / stretches) cut[k++] = i + 1;
+    }
+    stretches = k;
+    cut[k] = runs_.size();
+  }
+  if (stretches <= 1 || !device_->BeginParallel(stretches)) {
+    RecordRuns(*device_, s, 0, runs_.size(), batch_, &counts);
+  } else {
+    static bool told = false;  // (once: that it does)
+    if (!told) printf("render: a pass's draws recorded on %d threads at once (%s)\n", stretches, device_->BackendName());
+    told = true;
+    if (chunkBatches_.size() < static_cast<size_t>(stretches)) chunkBatches_.resize(static_cast<size_t>(stretches));
+    RunCounts each[kMostStretches];
+    Jobs::Shared().Run(stretches, [&](int i) {
+      std::vector<Instance>& batch = chunkBatches_[static_cast<size_t>(i)];
+      if (batch.size() < kMaxInstances) batch.resize(kMaxInstances);
+      RecordRuns(*device_->Parallel(i), s, cut[i], cut[i + 1], batch, &each[i]);
+    });
+    device_->EndParallel();
+    for (int i = 0; i < stretches; ++i) {
+      counts.instances += each[i].instances;
+      counts.triangles += each[i].triangles;
+      counts.shadowTriangles += each[i].shadowTriangles;
+    }
+  }
+  shadowTriangles += counts.shadowTriangles;
+  drawnInstances += counts.instances;
+  drawnTriangles += counts.triangles;
+}
+
+// [mcrec] How many stretches a pass's draws are recorded in: one for every kStretchWeight of work, at most as many as there
+// are threads to record them (the jobs pool's workers and the thread drawing) and recorders (1: one, as before).
+int MeshRenderer::Stretches() const {
+  if (recordThreads == 1 || runs_.size() < 2) return 1;
+  const int threads = recordThreads > 0 ? recordThreads : Jobs::Shared().Workers() + 1;
+  const int most = std::min({threads, device_->ParallelRecorders(), kMostStretches});
+  if (most <= 1) return 1;
+  double total = 0;
+  for (const Run& r : runs_) total += kRunWeight + r.n;
+  return std::clamp(static_cast<int>(total / kStretchWeight), 1, most);
+}
+
+// The levels drawn as the plain shading draws them (the depth round lays theirs first, depthPrepass).
+bool MeshRenderer::Plain(const ModelLod* l) {
+  return !l->blend && !l->glass && !l->impact && !l->unlit && !l->nuke && !l->fades && !l->shield && !l->frame;
+}
+
+// [mcrec] Draws runs_[from, end) into `to`: the device itself or one of its recorders (gfx.h, Recorder), with `batch` for the
+// instances' copy. The same calls either way.
+template <class R>
+void MeshRenderer::RecordRuns(R& to, const RunSetup& s, size_t from, size_t end, std::vector<Instance>& batch, RunCounts* counts) const {
+  const bool shadowPass = s.shadowPass, glass = s.glass, blasts = s.blasts, plants = s.plants, snowing = s.snowing;
+  int drawing = -1;  // which pipeline is set: 0 the plain one (or the shadows'), 1 leaves, 2 blended, ... (none at a round's start)
+  for (size_t r = from; r < end; ++r) {
+    const Run& run = runs_[r];
+    const bool depthOnly = run.depthOnly;
+    if (r > from && depthOnly != runs_[r - 1].depthOnly) drawing = -1;
+    const size_t at = run.at, n = run.n;
     const ModelLod* lod = items_[at].lod;
     const bool near = items_[at].near;
-    // (in the depth round only what is large on screen, where leaves and parts lie over each other;
-    // for what is small, drawing it twice costs more than the shading it saves)
-    const bool early = plain(lod) && near;
-    if (depthOnly && !early) {  // (not in the depth round)
-      while (at < items_.size() && items_[at].lod == lod && items_[at].near == near) ++at;
-      continue;
-    }
-    const bool laid = prepass && !depthOnly && early;  // (its depth laid in the round before)
+    const bool early = Plain(lod) && near;
+    const bool laid = s.prepass && !depthOnly && early;  // (its depth laid in the round before)
     const int wanted = depthOnly ? (lod->leaves ? 7 : 6)
                        : laid ? (lod->leaves ? 9 : 8)
                        : shadowPass ? 0 : glass ? (lod->impact == 1 || lod->shell ? 5 : lod->nuke == 1 ? (lod->rgbOnly ? 11 : 4) : lod->rgbOnly ? 10 : 3)
@@ -1920,14 +2014,12 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
       if (!bends && !reacts && remasteredBuild && buildMade_ > 0)  // (buildfx: the remastered build look's variant)
         for (const BuildVariant& b : buildVariants_)
           if (b.original.id == p.id && b.variant) p = b.variant;
-      device_->SetPipeline(p);
+      to.SetPipeline(p);
       drawing = wanted + variant;
     }
-    size_t n = 0;
-    while (at + n < items_.size() && items_[at + n].lod == lod && items_[at + n].near == near && n < kMaxInstances) {
-      batch_[n] = items_[at + n].entry->instance;
-      batch_[n].bones[0] = items_[at + n].bones;
-      ++n;
+    for (size_t i = 0; i < n; ++i) {
+      batch[i] = items_[at + i].entry->instance;
+      batch[i].bones[0] = items_[at + i].bones;
     }
     float kind[44] = {lod->alphaCut, lod->shell ? 12.0f : lod->impact ? 9.0f + static_cast<float>(lod->impact) : lod->unlit ? 6.0f + static_cast<float>(lod->unlit) : lod->nuke ? 4.0f + static_cast<float>(lod->nuke) : lod->fades ? 4.0f : lod->shield ? 3.0f : lod->frame ? 2.0f : lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f,
                             static_cast<float>(lod->faction), lod->leaves ? 1.0f : 0.0f, lod->plainMaterial ? 1.0f : 0.0f, lod->border ? 1.0f : 0.0f,
@@ -1958,31 +2050,29 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
       if (items_[at].entry->model->simTree) kind[30] = kind[31] = 0;
       if (shadowPass) kind[30] = 0;  // (shadows: bent as the plants are, but not burnt: it would cost the sun's maps too much)
     }
-    if (sinks) std::copy(snowK, snowK + 12, kind + 32);  // [undersnow] (kind9..11; kind7, kind8 nought when nothing reacts)
-    device_->SetConstants(3, kind, static_cast<uint32_t>(sizeof(float) * (sinks ? 44 : reacts ? 32 : 24)));
-    device_->SetTexture(0, lod->albedo);
+    if (sinks) std::copy(s.snowK, s.snowK + 12, kind + 32);  // [undersnow] (kind9..11; kind7, kind8 nought when nothing reacts)
+    to.SetConstants(3, kind, static_cast<uint32_t>(sizeof(float) * (sinks ? 44 : reacts ? 32 : 24)));
+    to.SetTexture(0, lod->albedo);
     if (!shadowPass) {
-      device_->SetTexture(1, lod->normals);
-      device_->SetTexture(2, lod->specular);
-      device_->SetTexture(4, lod->secondary);
-      device_->SetTexture(22, lod->damageAlbedo);  // [grime] (none but on a unit with its damage set)
-      device_->SetTexture(23, lod->damageNormal);
+      to.SetTexture(1, lod->normals);
+      to.SetTexture(2, lod->specular);
+      to.SetTexture(4, lod->secondary);
+      to.SetTexture(22, lod->damageAlbedo);  // [grime] (none but on a unit with its damage set)
+      to.SetTexture(23, lod->damageNormal);
     }
-    device_->SetVertexBuffer(lod->vertices);
-    device_->SetIndexBuffer(lod->indices);
+    to.SetVertexBuffer(lod->vertices);
+    to.SetIndexBuffer(lod->indices);
     // only the instances drawn are handed over: the shader reads no further into its array
-    device_->SetConstants(2, batch_.data(), static_cast<uint32_t>(n * sizeof(Instance)));
-    device_->DrawIndexed(lod->indexCount, 0, 0, static_cast<uint32_t>(n));
+    to.SetConstants(2, batch.data(), static_cast<uint32_t>(n * sizeof(Instance)));
+    to.DrawIndexed(lod->indexCount, 0, 0, static_cast<uint32_t>(n));
     const int triangles = static_cast<int>(n) * static_cast<int>(lod->indexCount / 3);
     if (depthOnly) {
     } else if (shadowPass) {
-      shadowTriangles += triangles;
+      counts->shadowTriangles += triangles;
     } else {
-      drawnInstances += static_cast<int>(n);
-      drawnTriangles += triangles;
+      counts->instances += static_cast<int>(n);
+      counts->triangles += triangles;
     }
-    at += n;
-  }
   }
 }
 

@@ -6,6 +6,7 @@
 #include <cstring>
 #include <string>
 
+#include "jobs.h"  // [mcrec]
 #include "linalg.h"
 #include "mesh_renderer.h"
 #include "models.h"
@@ -316,55 +317,97 @@ void RayScene::Build(const MeshRenderer& meshes) {
     if (water_) add(water_, identity, identity + 4, identity + 8, 0, 2, 0, 0, 0x02);
   }
   bool averaged = false;
-  meshes.ForEachAdded([&](const Model* model, const float* r0, const float* r1, const float* r2, const float* color, bool scenery) {
-    if (!model) return;
-    // its coarsest solid level (a tree's coarsest is a card that faces the camera: the one before it)
-    const ModelLod* chosen = nullptr;
-    for (auto l = model->lods.rbegin(); l != model->lods.rend() && !chosen; ++l)
-      if (Solid(*l) && l->vertices && l->indices && l->vertexCount && l->indexCount) chosen = &*l;
-    if (!chosen) return;
-    if (chosen->stream && meshes.divertStream) return;  // [stream] (a stream drawn as water: stream_water.h; no ribbon to cast)
-    const ModelLod& lod = *chosen;
-    auto it = levels_.find(lod.serial);
-    if (it == levels_.end()) {  // (a level seen the first time: its structure, and its colour worked out)
-      Level level;
-      gfx::GeometryPart part;
-      part.vertices = lod.vertices;
-      part.positionOffset = offsetof(ScmVertex, position);
-      part.vertexCount = lod.vertexCount;
-      part.indices = lod.indices;
-      part.indexCount = lod.indexCount;
-      part.opaque = !(lod.alphaCut > 0 || lod.leaves);  // (leaves: taken by chance, the shaders' TakesLeaf)
-      level.structure = device_->CreateGeometry(&part, 1);
-      level.leaves = !part.opaque;
-      level.colour = std::min<uint32_t>(nextColour_++, kColoursWide * kColoursHigh - 1);
-      if (lod.albedo) {
-        const uint32_t entry[4] = {level.colour, lod.alphaCut > 0 || lod.leaves ? 1u : 0u, 0, 0};
-        device_->SetPipeline(average_);
-        device_->SetConstants(1, entry, sizeof entry);
-        device_->SetTexture(0, lod.albedo);
-        device_->SetTexture(1, lod.specular);
-        device_->SetStorage(0, colours_);
-        device_->Dispatch(1);
-        averaged = true;
-        // a solid level's triangles, each with its colour and the way it faces, while the table has room (leaves
-        // keep their one colour: a ray takes their triangles by chance); worked out below, after the colours
-        const uint32_t count = lod.indexCount / 3;
-        if (level.structure && !level.leaves && count && nextTriangle_ + count <= kTableEntries) {
-          newTables_.push_back({&lod, nextTriangle_, count});
-          level.table = nextTriangle_ + 1;
-          nextTriangle_ += count;
-        } else if (level.structure && !level.leaves && count && !tableFull_) {
-          tableFull_ = true;
-          fprintf(stderr, "render: the rays' triangle table is full (%u triangles): levels seen from now on keep one colour\n",
-                  nextTriangle_);
+  // [mcrec] the models: on several threads, what each is (its coarsest solid level, the level's record where it has one); the
+  // levels seen the first time made here, in the list's order (their colours, triangle tables and structures as one loop
+  // would make them); then each model laid at its place in the list, on several threads again
+  const size_t pieces = meshes.AddedPieces();
+  if (seen_.size() < pieces) seen_.resize(pieces);
+  Jobs::Shared().Run(static_cast<int>(pieces), [&](int k) {
+    std::vector<Seen>& out = seen_[static_cast<size_t>(k)];
+    out.clear();
+    meshes.ForEachAddedIn(static_cast<size_t>(k), [&](const Model* model, const float* r0, const float* r1, const float* r2, const float* color, bool scenery) {
+      if (!model) return;
+      // its coarsest solid level (a tree's coarsest is a card that faces the camera: the one before it)
+      const ModelLod* chosen = nullptr;
+      for (auto l = model->lods.rbegin(); l != model->lods.rend() && !chosen; ++l)
+        if (Solid(*l) && l->vertices && l->indices && l->vertexCount && l->indexCount) chosen = &*l;
+      if (!chosen) return;
+      if (chosen->stream && meshes.divertStream) return;  // [stream] (a stream drawn as water: stream_water.h; no ribbon to cast)
+      const auto known = levels_.find(chosen->serial);  // (only read here: nothing is made while the threads look)
+      out.push_back({chosen, known == levels_.end() ? nullptr : &known->second, r0, r1, r2, color, scenery});
+    });
+  });
+  for (size_t k = 0; k < pieces; ++k)
+    for (Seen& seen : seen_[k]) {
+      if (seen.level) continue;
+      const ModelLod& lod = *seen.lod;
+      auto it = levels_.find(lod.serial);
+      if (it == levels_.end()) {  // (a level seen the first time: its structure, and its colour worked out)
+        Level level;
+        gfx::GeometryPart part;
+        part.vertices = lod.vertices;
+        part.positionOffset = offsetof(ScmVertex, position);
+        part.vertexCount = lod.vertexCount;
+        part.indices = lod.indices;
+        part.indexCount = lod.indexCount;
+        part.opaque = !(lod.alphaCut > 0 || lod.leaves);  // (leaves: taken by chance, the shaders' TakesLeaf)
+        level.structure = device_->CreateGeometry(&part, 1);
+        level.leaves = !part.opaque;
+        level.colour = std::min<uint32_t>(nextColour_++, kColoursWide * kColoursHigh - 1);
+        if (lod.albedo) {
+          const uint32_t entry[4] = {level.colour, lod.alphaCut > 0 || lod.leaves ? 1u : 0u, 0, 0};
+          device_->SetPipeline(average_);
+          device_->SetConstants(1, entry, sizeof entry);
+          device_->SetTexture(0, lod.albedo);
+          device_->SetTexture(1, lod.specular);
+          device_->SetStorage(0, colours_);
+          device_->Dispatch(1);
+          averaged = true;
+          // a solid level's triangles, each with its colour and the way it faces, while the table has room (leaves
+          // keep their one colour: a ray takes their triangles by chance); worked out below, after the colours
+          const uint32_t count = lod.indexCount / 3;
+          if (level.structure && !level.leaves && count && nextTriangle_ + count <= kTableEntries) {
+            newTables_.push_back({&lod, nextTriangle_, count});
+            level.table = nextTriangle_ + 1;
+            nextTriangle_ += count;
+          } else if (level.structure && !level.leaves && count && !tableFull_) {
+            tableFull_ = true;
+            fprintf(stderr, "render: the rays' triangle table is full (%u triangles): levels seen from now on keep one colour\n",
+                    nextTriangle_);
+          }
         }
+        it = levels_.emplace(lod.serial, level).first;
       }
-      it = levels_.emplace(lod.serial, level).first;
+      seen.level = &it->second;  // (a map's records stay where they are as it grows)
     }
-    if (it->second.structure)
-      add(it->second.structure, r0, r1, r2, it->second.colour, (scenery ? 4u : 0u) | (it->second.leaves ? 8u : 0u), scenery ? 0u : Pack(color),
-          it->second.table, it->second.leaves ? 0x11 : 0x05);
+  seenAt_.resize(pieces + 1);
+  size_t total = instances_.size();
+  for (size_t k = 0; k < pieces; ++k) {
+    seenAt_[k] = total;
+    for (const Seen& seen : seen_[k]) total += seen.level->structure ? 1 : 0;
+  }
+  seenAt_[pieces] = total;
+  instances_.resize(total);
+  info_.resize(total * 4);
+  Jobs::Shared().Run(static_cast<int>(pieces), [&](int k) {
+    size_t i = seenAt_[static_cast<size_t>(k)];
+    for (const Seen& seen : seen_[static_cast<size_t>(k)]) {
+      const Level& level = *seen.level;
+      if (!level.structure) continue;
+      gfx::SceneInstance& o = instances_[i];
+      std::memcpy(o.transform, seen.row0, 4 * sizeof(float));
+      std::memcpy(o.transform + 4, seen.row1, 4 * sizeof(float));
+      std::memcpy(o.transform + 8, seen.row2, 4 * sizeof(float));
+      o.geometry = level.structure;
+      o.id = static_cast<uint32_t>(i);
+      o.mask = level.leaves ? 0x11 : 0x05;
+      uint32_t* to = info_.data() + i * 4;
+      to[0] = level.colour;
+      to[1] = (seen.scenery ? 4u : 0u) | (level.leaves ? 8u : 0u);
+      to[2] = seen.scenery ? 0u : Pack(seen.color);
+      to[3] = level.table;
+      ++i;
+    }
   });
   if (!newTables_.empty()) {  // the triangles of the levels seen the first time, each level's into its part of the table
     device_->SetPipeline(triangles_);

@@ -437,6 +437,11 @@
 // --no-shader-cache  every shader compiled anew, none kept (DeviceDesc::shaderCache "-"), to measure compiling
 // --shader-cache <dir>  the compiled shaders kept in that folder (an empty one: to measure a first start)
 // --no-prepass  the large models' depth is not laid first (MeshRenderer::depthPrepass, on by default), to measure it
+// --record-threads <n>  [mcrec] the units' and scenery's draws of a pass recorded on at most n threads at once
+//           (MeshRenderer::recordThreads, gfx.h's Device::BeginParallel; the same picture): 0 (the default) as many as
+//           the processor gives (the jobs pool's workers and the frames' thread), 1 all on the frames' thread, as before
+// --jobs-awake <us>  [mcrec] how long the jobs pool's workers wait awake for the next job before they sleep (Jobs::
+//           awakeMicroseconds; 0, the default: they sleep at once, as before), to measure it
 // --no-ground-changes  the ground stays as the map file has it where the game lays it flat under structures (to compare)
 // --no-bloom  no glow (World::bloom off: the modern look's glow and the original look's bloom, the game's Bloom Render)
 // --fsr3    AMD's FSR 3 (fsr3.h, World::temporalUpscale) in place of FSR 1: the scene drawn a little shifted every
@@ -617,6 +622,7 @@
 #include "framegen_check.h"
 #include "ground.h"
 #include "icons.h"
+#include "jobs.h"  // [mcrec] (--jobs-awake)
 #include "lights.h"
 #include "linalg.h"
 #include "mesh_renderer.h"
@@ -666,6 +672,8 @@ struct Options {
   bool fxAt = false, fxFrom = false, fxTo = false, fxRepeat = false;
   bool remasteredEffects = true;        // --effects-look original|remastered
   bool prepass = true;                  // --no-prepass
+  int recordThreads = 0;                // --record-threads [mcrec]
+  int jobsAwake = -1;                   // --jobs-awake [mcrec] (-1: Jobs' own)
   bool groundChanges = true;            // --no-ground-changes
   bool bloom = true;                    // --no-bloom
   bool vulkan = false;                  // --vulkan
@@ -1285,6 +1293,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--fx") o->fx.fx = v;
     else if (a == "--effects-quality") o->effectsQuality = static_cast<float>(atof(v));
     else if (a == "--shadow-size") o->shadowSize = atoi(v);
+    else if (a == "--record-threads") o->recordThreads = std::max(atoi(v), 0);  // [mcrec]
+    else if (a == "--jobs-awake") o->jobsAwake = std::max(atoi(v), 0);  // [mcrec]
     else if (a == "--texture-detail") o->textureDetail = std::clamp(atoi(v), 0, 2);
     else if (a == "--fsr3-bias") o->fsr3Bias = static_cast<float>(atof(v));
     else if (a == "--fsr") {  // FSR 1's modes, or the share itself
@@ -2005,6 +2015,8 @@ int main(int argc, char** argv) {
   world.temporalMipBias = opt.fsr3Bias;
   world.shadowSize = opt.shadowSize;
   world.meshes.depthPrepass = opt.prepass;
+  world.meshes.recordThreads = opt.recordThreads;  // [mcrec]
+  if (opt.jobsAwake >= 0) Jobs::awakeMicroseconds = opt.jobsAwake;
   world.frame = opt.frame;
   world.beyondHaze = opt.beyondHaze;
   world.beyondLand = opt.beyondLand;  // (beyondland)

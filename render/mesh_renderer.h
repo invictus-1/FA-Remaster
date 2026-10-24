@@ -1,6 +1,7 @@
 // Draws models: every frame the caller lists what is in the world (a model, where, in which colour);
 // each pass then draws what of that list it can see, sorted by mesh, each mesh's instances together.
 #pragma once
+#include <algorithm>  // [mcrec] (ForEachAddedIn)
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -132,6 +133,11 @@ class MeshRenderer {
   // after shading what cuts holes, and it saved nothing. Small models are left out: drawing them twice
   // cost more than it spared.) Viewer --no-prepass: off.
   bool depthPrepass = true;
+  // [mcrec] A pass's draws recorded on several threads at once (gfx.h, Device::BeginParallel): its draws in their order cut
+  // into stretches, one a thread, each about the same work, none under a few dozen draws. At most this many threads (0:
+  // the jobs pool's workers and the thread drawing, jobs.h; 1: all on the thread drawing, as before). The same picture
+  // either way. Viewer --record-threads.
+  int recordThreads = 0;
   // The blasts' waves (blasts.h, World::blastWaves), set by the world each frame (null: none): what sways in the wind
   // (trees, the undergrowth) bends away from a blast as its wave passes, and sways back. The constants as the
   // blasts' block reads them (Blasts::Constants, ConstantsSize), bound at register b1 for every pass. What sways is
@@ -194,6 +200,23 @@ class MeshRenderer {
         for (const Entry& e : groups_[g].entries) f(e.model, e.instance.row0, e.instance.row1, e.instance.row2, e.instance.color, true);
     for (const Entry& e : entries_) f(e.model, e.instance.row0, e.instance.row1, e.instance.row2, e.instance.color, e.scenery);
   }
+  // [mcrec] The same list in pieces, for going through it on several threads: AddedPieces() of them in the list's order
+  // (each listed group, then the frame's own list in stretches of kPieceModels); ForEachAddedIn(k, f) goes through the k-th.
+  size_t AddedPieces() const { return groupsListed_.size() + (entries_.size() + kPieceModels - 1) / kPieceModels; }
+  template <class F>
+  void ForEachAddedIn(size_t piece, F&& f) const {
+    if (piece < groupsListed_.size()) {
+      const uint32_t g = groupsListed_[piece];
+      if (g < groups_.size())
+        for (const Entry& e : groups_[g].entries) f(e.model, e.instance.row0, e.instance.row1, e.instance.row2, e.instance.color, true);
+      return;
+    }
+    const size_t from = (piece - groupsListed_.size()) * kPieceModels, to = std::min(from + kPieceModels, entries_.size());
+    for (size_t i = from; i < to; ++i) {
+      const Entry& e = entries_[i];
+      f(e.model, e.instance.row0, e.instance.row1, e.instance.row2, e.instance.color, e.scenery);
+    }
+  }
 
  private:
   struct Instance {
@@ -239,7 +262,9 @@ class MeshRenderer {
     Entry* entry;
     float bones;  // Instance::bones.x for this pass
     bool near;    // large on screen (depthPrepass: only these have their depth laid first)
+    uint64_t key = 0;  // [mcrec] what SortItems sorts it by (SortKey), worked out where it is found, on the testing threads
   };
+  uint64_t SortKey(const ModelLod* lod, const Model* model, bool near) const;
   gfx::Device* device_;
   TextureCache* textures_;
   gfx::Pipeline pipeline_, blended_, leaves_, shadow_, glass_, dome_, adding_;
@@ -285,6 +310,29 @@ class MeshRenderer {
   void DrawItems(const View& view, gfx::Texture environment, bool shadowPass, bool glass);
   std::vector<Item> items_;
   std::vector<Instance> batch_;
+  // [mcrec] DrawItems' draws: each a run of items_ (one level's instances, up to the shader's array), in the order drawn
+  // (the depth round's first); recorded on several threads in stretches (recordThreads), each stretch with its own copy
+  // of the instances; what DrawItems worked out for all of them, and what they drew
+  struct Run {
+    uint32_t at, n;
+    bool depthOnly;
+  };
+  std::vector<Run> runs_;
+  std::vector<std::vector<Instance>> chunkBatches_;
+  static constexpr int kMostStretches = 16;
+  static constexpr double kRunWeight = 64;        // (a draw's own work, as many instances' copies)
+  static constexpr double kStretchWeight = 3000;  // (a stretch's least work: about 40 draws)
+  struct RunSetup {
+    bool shadowPass = false, glass = false, prepass = false, blasts = false, plants = false, snowing = false;
+    float snowK[12] = {};
+  };
+  struct RunCounts {
+    int instances = 0, triangles = 0, shadowTriangles = 0;
+  };
+  int Stretches() const;
+  static bool Plain(const ModelLod* l);
+  template <class R>
+  void RecordRuns(R& to, const RunSetup& s, size_t from, size_t end, std::vector<Instance>& batch, RunCounts* counts) const;
   // Bones: for every posed model a pass has seen, three rows of four numbers per bone: the matrix
   // that takes a vertex of the model at rest to where the bone has carried it (in the model's own
   // space). They are written straight into the frame's copy of one buffer all passes read (rowsOut_,
