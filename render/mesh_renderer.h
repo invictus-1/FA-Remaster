@@ -2,10 +2,12 @@
 // each pass then draws what of that list it can see, sorted by mesh, each mesh's instances together.
 #pragma once
 #include <algorithm>  // [mcrec] (ForEachAddedIn)
+#include <memory>     // [gpuscenery]
 #include <string>
 #include <unordered_map>
 #include <vector>
 
+#include "card_scenery.h"  // [gpuscenery]
 #include "frame.h"
 #include "gfx.h"
 #include "models.h"
@@ -14,6 +16,7 @@
 #include "view.h"
 
 namespace render {
+
 
 // A unit's pose between two beats: its bones that are not at rest at the beat shown and at the one
 // after it (each list in rising bone order), and how far the moment drawn is from one to the other.
@@ -29,6 +32,7 @@ struct Pose {
 class MeshRenderer {
  public:
   MeshRenderer(gfx::Device* device, TextureCache* textures) : device_(device), textures_(textures) {}
+  ~MeshRenderer();
   bool Init(std::string* error);
 
   // Empties the list.
@@ -60,6 +64,19 @@ class MeshRenderer {
   void ClearGroup(uint32_t group);
   void AddToGroup(uint32_t group, const Model* model, const Mat4& world);
   void ListGroup(uint32_t group) { groupsListed_.push_back(group); }
+  // [gpuscenery] Where the world lists a group among the others, always in the same order (World: its square's number):
+  // the card draws a level's props of all groups in that order, as the processor's list has them (cardScenery).
+  void SetGroupOrder(uint32_t group, uint32_t order) {
+    if (group < groups_.size() && groups_[group].order != order) groups_[group].order = order, groups_[group].cardDirty = true;
+  }
+  // [gpuscenery] The still scenery kept on the card and picked there (card_scenery.h; viewer --card-scenery; off as at
+  // first): the groups' props that the card takes are tested, given their levels and listed for the camera's pass, the sun's
+  // cascades and the camera's motion of what sways by three compute passes, and drawn by indirect draws, one a level's
+  // list; the processor records only those draws. The same picture but where a level is chosen a hair differently in the
+  // card's rounding. Where the device cannot (Device::IndirectDraws), and until its shaders' variants are made, as before.
+  bool cardScenery = false;
+  bool CardNow() const { return cardNow_; }  // (the card picked this frame's scenery)
+  float CardPickMs() const;                   // (what its picking took the processor, averaged)
   // After the frame's last Add and before its first Draw: builds the bones of every posed model
   // that one of the frame's views (the camera's, the shadow cascades') will draw, and hands them
   // to the shaders once for all passes.
@@ -263,6 +280,7 @@ class MeshRenderer {
     float bones;  // Instance::bones.x for this pass
     bool near;    // large on screen (depthPrepass: only these have their depth laid first)
     uint64_t key = 0;  // [mcrec] what SortItems sorts it by (SortKey), worked out where it is found, on the testing threads
+    int32_t card = -1;  // [gpuscenery] a list the card picked (its draw in CardScenery::Draws of the pass), not one model
   };
   uint64_t SortKey(const ModelLod* lod, const Model* model, bool near) const;
   gfx::Device* device_;
@@ -289,6 +307,12 @@ class MeshRenderer {
     // the box round all of their bounding spheres: a pass that does not see it passes the group over
     // whole (what each of them would have been tested for one by one)
     Vec3 lo{1e30f, 1e30f, 1e30f}, hi{-1e30f, -1e30f, -1e30f};
+    // [gpuscenery] its place in the world's order (SetGroupOrder); whether it has changed since the card was given it; and
+    // those of its props the card does not take (drawn by the processor while the card draws the rest)
+    uint32_t order = 0xffffffffu;
+    bool cardDirty = true;
+    std::vector<Entry> rest;
+    std::vector<Cull> restCulls;
   };
   std::vector<Group> groups_;
   std::vector<uint32_t> groupsListed_;
@@ -316,6 +340,7 @@ class MeshRenderer {
   struct Run {
     uint32_t at, n;
     bool depthOnly;
+    int32_t card = -1;  // [gpuscenery] (the card's list: an indirect draw)
   };
   std::vector<Run> runs_;
   std::vector<std::vector<Instance>> chunkBatches_;
@@ -325,6 +350,7 @@ class MeshRenderer {
   struct RunSetup {
     bool shadowPass = false, glass = false, prepass = false, blasts = false, plants = false, snowing = false;
     float snowK[12] = {};
+    int cardPass = -1;  // [gpuscenery] (the card's pass the card runs are of)
   };
   struct RunCounts {
     int instances = 0, triangles = 0, shadowTriangles = 0;
@@ -439,6 +465,34 @@ class MeshRenderer {
   std::vector<BuildVariant> buildVariants_;
   std::string buildSource_;
   int buildMade_ = 0;  // (0 not yet, 1 made, -1 they cannot be made)
+
+  // [gpuscenery] The still scenery on the card (cardScenery; card_scenery.h): its record of the groups and its passes, whether
+  // it picked this frame's, the views it picked for (the camera's first, then the cascades', in Prepare's order) and the
+  // camera's motion of what sways among them (-1: none), an entry for each of its models (what a draw's model is read
+  // from), and the frame's number
+  std::unique_ptr<CardScenery> card_;
+  bool cardNow_ = false;
+  std::vector<const View*> cardViews_;
+  int cardSway_ = -1;
+  std::vector<Entry> cardEntries_;
+  uint64_t cardFrame_ = 0;
+  bool CardPrepare(const std::vector<const View*>& views);
+  int CardPassOf(const View& view) const;
+  // its variants of the models' pipelines (each pipeline's id and its variant reading the card's instances), their
+  // sources, which variants the last check found wanted (blasts', plants', snow's, build's, sway motion's), and whether they
+  // were all made then (false: not all yet, or one could not be)
+  std::vector<std::pair<uint32_t, gfx::Pipeline>> cardOf_;
+  std::string cardSources_[10];
+  gfx::PipelineDesc swayMotionDesc_, swaySnowMotionDesc_;
+  int cardWanted_ = -1;
+  bool cardReady_ = false, cardFailed_ = false;
+  std::string baseSource_;
+  bool CardPipelines();
+  gfx::Pipeline CardOf(gfx::Pipeline p) const {
+    for (const auto& c : cardOf_)
+      if (c.first == p.id) return c.second;
+    return {};
+  }
 };
 
 }  // namespace render

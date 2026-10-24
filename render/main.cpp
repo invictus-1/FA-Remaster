@@ -58,7 +58,8 @@
 //           --settings'; given after each swap, or with --load-hold before each BeginMap (WorldPicture::HoldLooks)
 //           --load-session <game config>: [session] <map> is that game's, opened behind while the game loads (LiveSim),
 //           shown once both are ready, then run at 10 beats a second; --load-session-prepare: WorldPicture::PrepareSession
-//           first (the session's models made behind). Needs --init (as --session). --load-day-after: --time-of-day given
+//           first (the session's models made behind). Needs --init (as --session).
+// --staging-reserve <MB>  [vkpresent] (checks) Vulkan's staging reserve in place of min(1 GB, the computer's memory / 16). --load-day-after: --time-of-day given
 //           to <map> only after its swap (and none to the others), as the interface gives a game's day today; with
 //           --load-day, given to its warm frames before (WorldPicture::SetLoadDayAndWeather).
 // --picture-window  with --picture: the interface's way without a read-back: the picture drawn into a window of
@@ -446,9 +447,18 @@
 // --no-shader-cache  every shader compiled anew, none kept (DeviceDesc::shaderCache "-"), to measure compiling
 // --shader-cache <dir>  the compiled shaders kept in that folder (an empty one: to measure a first start)
 // --no-prepass  the large models' depth is not laid first (MeshRenderer::depthPrepass, on by default), to measure it
+// --no-shadow-fit, --shadow-fit  [cardcost] the sun's shadow maps draw every caster in each cascade's square (as before),
+//           or only what can cast a shadow onto what the camera sees (World::shadowFit, the default; the same picture)
+// --shadow-keep <n>  [cardcost] the sun's far shadow cascades drawn anew every n-th frame, in turn, kept in between while
+//           they serve (World::shadowKeep, shadows.h's Shadows::keepEvery); 0 or 1: every frame (the default)
+// --no-ray-refit, --ray-refit  [cardcost] the ray tracing scene built anew every frame (as before), or refitted where only
+//           where things stand changed (World::rayRefit, the default; ray_scene.h's RayScene::refit; the same picture)
 // --record-threads <n>  [mcrec] the units' and scenery's draws of a pass recorded on at most n threads at once
 //           (MeshRenderer::recordThreads, gfx.h's Device::BeginParallel; the same picture): 0 (the default) as many as
 //           the processor gives (the jobs pool's workers and the frames' thread), 1 all on the frames' thread, as before
+// --card-scenery  [gpuscenery] the still scenery kept on the card and picked there each frame by compute passes, drawn by
+//           indirect draws (MeshRenderer::cardScenery, card_scenery.h; off by default): the processor no longer tests
+//           and lists the map's trees and rocks for the camera's pass and the sun's cascades
 // --jobs-awake <us>  [mcrec] how long the jobs pool's workers wait awake for the next job before they sleep (Jobs::
 //           awakeMicroseconds; 0, the default: they sleep at once, as before), to measure it
 // --no-ground-changes  the ground stays as the map file has it where the game lays it flat under structures (to compare)
@@ -681,8 +691,12 @@ struct Options {
   bool fxAt = false, fxFrom = false, fxTo = false, fxRepeat = false;
   bool remasteredEffects = true;        // --effects-look original|remastered
   bool prepass = true;                  // --no-prepass
+  int shadowFit = -1;                   // [cardcost] --shadow-fit 1, --no-shadow-fit 0 (-1: World's own)
+  int rayRefit = -1;                    // [cardcost] --ray-refit 1, --no-ray-refit 0 (-1: World's own)
+  int shadowKeep = -1;                  // [cardcost] --shadow-keep (-1: World's own)
   int recordThreads = 0;                // --record-threads [mcrec]
   int jobsAwake = -1;                   // --jobs-awake [mcrec] (-1: Jobs' own)
+  bool cardScenery = false;             // --card-scenery [gpuscenery]
   bool groundChanges = true;            // --no-ground-changes
   bool bloom = true;                    // --no-bloom
   bool vulkan = false;                  // --vulkan
@@ -1085,6 +1099,11 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--load-day") o->loadDay = true;  // [session]
     else if (a == "--prepass") o->prepass = true;
     else if (a == "--no-prepass") o->prepass = false;
+    else if (a == "--shadow-fit") o->shadowFit = 1;  // [cardcost]
+    else if (a == "--no-shadow-fit") o->shadowFit = 0;
+    else if (a == "--ray-refit") o->rayRefit = 1;
+    else if (a == "--no-ray-refit") o->rayRefit = 0;
+    else if (a == "--card-scenery") o->cardScenery = true;  // [gpuscenery]
     else if (a == "--no-ground-changes") o->groundChanges = false;
     else if (a == "--no-bloom") o->bloom = false;
     else if (a == "--no-frame") o->frame = false;
@@ -1268,6 +1287,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--load-backdrop") o->loadBackdrop = atoi(v);  // [backdrop]
     else if (a == "--load-game-looks") o->loadGameLooks = v;  // [ui 39]
     else if (a == "--load-session") o->loadSession = v;  // [session]
+    else if (a == "--staging-reserve") gfx::gStagingReserveMB = atoi(v);  // [vkpresent]
     else if (a == "--load-budget") o->loadBudget = static_cast<float>(atof(v));  // [bgload]
     else if (a == "--load-cycles") o->loadCycles = std::max(1, atoi(v));  // [bgload]
     else if (a == "--views") o->views = v;  // [views]
@@ -1316,6 +1336,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--fx") o->fx.fx = v;
     else if (a == "--effects-quality") o->effectsQuality = static_cast<float>(atof(v));
     else if (a == "--shadow-size") o->shadowSize = atoi(v);
+    else if (a == "--shadow-keep") o->shadowKeep = std::max(0, atoi(v));  // [cardcost]
     else if (a == "--record-threads") o->recordThreads = std::max(atoi(v), 0);  // [mcrec]
     else if (a == "--jobs-awake") o->jobsAwake = std::max(atoi(v), 0);  // [mcrec]
     else if (a == "--texture-detail") o->textureDetail = std::clamp(atoi(v), 0, 2);
@@ -2051,7 +2072,12 @@ int main(int argc, char** argv) {
   world.temporalMipBias = opt.fsr3Bias;
   world.shadowSize = opt.shadowSize;
   world.meshes.depthPrepass = opt.prepass;
+  if (opt.shadowFit >= 0) world.shadowFit = opt.shadowFit > 0;  // [cardcost]
+  if (opt.rayRefit >= 0) world.rayRefit = opt.rayRefit > 0;
+  if (opt.shadowKeep >= 0) world.shadowKeep = opt.shadowKeep;
   world.meshes.recordThreads = opt.recordThreads;  // [mcrec]
+  world.meshes.cardScenery = opt.cardScenery;      // [gpuscenery]
+  world.grass.indirectModels = opt.cardScenery;    // [gpuscenery] (the 3D plants' draws by their lists' counts)
   if (opt.jobsAwake >= 0) Jobs::awakeMicroseconds = opt.jobsAwake;
   world.frame = opt.frame;
   world.beyondHaze = opt.beyondHaze;

@@ -87,6 +87,10 @@ class SimFrames {
   // [session] The props' events of the simulation taken before its first beat (WorldPicture::PrepareSession: what the game
   // makes of the map's props as it starts): handed back, ahead of its own, by the next Beat. Taken from `events`.
   void HoldPropEvents(std::vector<moho::PropEvent>* events);
+  // [session] ReadArmies' result taken from another (`from`, which read the same game before its first beat: PrepareSession's)
+  // in place of reading the game again: the armies' colours, the session's seed, the unit blueprints AskBuildable asks
+  // about; not the blueprints' looks (TakeLooks gives none: the world was given them as the session was prepared).
+  void AdoptArmies(SimFrames& from);
 
  private:
   struct Beat_ {

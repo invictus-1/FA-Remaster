@@ -417,6 +417,16 @@ void LoadingDevice::BuildScene(gfx::Structure* scene, const gfx::SceneInstance* 
     NotNow("BuildScene");
   }
 }
+bool LoadingDevice::RefitScene(gfx::Structure* scene, const gfx::SceneInstance* instances, uint32_t count, bool rebuild) {  // [cardcost]
+  if (Recording() || !Direct()) return false;
+  const uint32_t before = scene ? scene->id : 0;
+  if (!real_->RefitScene(scene, instances, count, rebuild)) return false;
+  if (scene && scene->id != before) {  // (as BuildScene's)
+    Gone(kStructures, before);
+    Made(kStructures, scene->id);
+  }
+  return true;
+}
 void LoadingDevice::SetScene(int slot, gfx::Structure scene) {
   if (Recording()) {  // [warmtarget] (the scene built in this frame: its handle as it is when replayed)
     Call k{rec_.built && scene.id == rec_.builtWas ? kSetSceneBuilt : kSetScene};

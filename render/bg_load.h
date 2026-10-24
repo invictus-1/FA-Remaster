@@ -138,6 +138,8 @@ class LoadingDevice final : public gfx::Device {
   void SizeGeometry(Prepared* prepared) override { real_->SizeGeometry(prepared); }
   gfx::Structure FinishGeometry(std::unique_ptr<Prepared> prepared) override;
   void BuildScene(gfx::Structure* scene, const gfx::SceneInstance* instances, uint32_t count) override;
+  // [cardcost] (live: the real device's; recording or not now: false, so that BuildScene takes it)
+  bool RefitScene(gfx::Structure* scene, const gfx::SceneInstance* instances, uint32_t count, bool rebuild) override;
   void SetScene(int slot, gfx::Structure scene) override;
   void Destroy(gfx::Structure structure) override;
   void BeginFrame(const float clearColor[4]) override;
@@ -211,6 +213,15 @@ class LoadingDevice final : public gfx::Device {
   bool BeginParallel(int count) override { return ParallelRecorders() > 0 && real_->BeginParallel(count); }
   gfx::Recorder* Parallel(int index) override { return real_->Parallel(index); }
   void EndParallel() override { real_->EndParallel(); }
+  // [gpuscenery] the card's own work (card buffers, indirect draws): the device's own once the world is drawn; none while it
+  // warms or before (MeshRenderer::cardScenery then draws the scenery as before)
+  bool IndirectDraws() const override { return !warming_ && mode_.load(std::memory_order_acquire) == kLive && real_->IndirectDraws(); }
+  void UpdateBufferRange(gfx::Buffer buffer, uint32_t offset, const void* data, uint32_t size) override {
+    if (IndirectDraws()) real_->UpdateBufferRange(buffer, offset, data, size);
+  }
+  void DrawIndexedIndirect(gfx::Buffer arguments, uint32_t offset) override {
+    if (IndirectDraws() && !skipping_) real_->DrawIndexedIndirect(arguments, offset);
+  }
 
  private:
   enum Mode { kLoading, kLive, kLeaving };

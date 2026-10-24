@@ -237,6 +237,13 @@ class RayScene {
   // has it (World::MakeSessionModels: on a map's loading thread, where the driver's sizing of it is done off the frames'
   // thread, gfx.h DescribeGeometry); Build takes it from here the first time it sees that level. Not while Build runs.
   void PrepareModel(const Model* model);
+  // [cardcost] The scene refitted where only where things stand has changed since the frame before (gfx.h, RefitScene):
+  // the models' own structures are kept already; the scene over them is then refitted in place instead of built again,
+  // and built again at least every `refitEvery` frames (a refitted tree serves the rays the worse the more has moved).
+  // The same picture. World::rayRefit (viewer --no-ray-refit). How many frames were refitted and built so (for the log).
+  bool refit = false;
+  int refitEvery = 30;
+  uint64_t refitted = 0, rebuilt = 0;
   gfx::Structure Scene() const { return scene_; }
   gfx::Texture Colours() const { return colours_; }
   gfx::Buffer InstanceData() const { return instanceData_; }
@@ -288,6 +295,8 @@ class RayScene {
   uint32_t nextColour_ = 0;
   std::vector<gfx::SceneInstance> instances_;
   std::vector<uint32_t> info_;  // four for each instance (InstanceData)
+  uint64_t refitSameness_ = 0;  // [cardcost] (the instances' structures in their order, as last built or refitted)
+  int refitAge_ = 0;            // (frames refitted since it was built)
   // [mcrec] Build's models found on several threads, a piece of MeshRenderer's list each (ForEachAddedIn): each its level and
   // where it stands (its level's record none where the level is seen the first time: made after, in the list's order);
   // where each piece's instances begin
