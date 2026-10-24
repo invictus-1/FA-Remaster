@@ -73,6 +73,9 @@ class Clouds {
   // shaders of their own, made the first frame `ringsWanted` (so that without a ring the clouds are as they were).
   float ringX = 0, ringZ = 0, ringRadius = 0, ringWidth = 1, ringStrength = 0;
   bool ringsWanted = false;
+  // [session] Those shaders made now (in the background where the caller asks for it: World::PrepareAhead, while the
+  // volume explosions are on): the first frame with clouds after a game's start made them (the driver 55 ms at 4K).
+  void PrepareRings();
 
   // (cloudzoom) Zooming out through the clouds (cloud_zoom.h, World::cloudZoom), set by the world before Build each
   // frame. While `on` and the eye is no more than 40 under the layer, the layer stays where it is (it no longer keeps

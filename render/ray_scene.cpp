@@ -293,6 +293,23 @@ void RayScene::SetGround(const MapData& map, int step) {
   }
 }
 
+// [session] (ray_scene.h)
+void RayScene::PrepareModel(const Model* model) {
+  if (!available_ || !model) return;
+  const ModelLod* chosen = nullptr;  // (as Build chooses: its coarsest solid level)
+  for (auto l = model->lods.rbegin(); l != model->lods.rend() && !chosen; ++l)
+    if (Solid(*l) && l->vertices && l->indices && l->vertexCount && l->indexCount) chosen = &*l;
+  if (!chosen || levels_.count(chosen->serial) || premade_.count(chosen->serial)) return;
+  gfx::GeometryPart part;
+  part.vertices = chosen->vertices;
+  part.positionOffset = offsetof(ScmVertex, position);
+  part.vertexCount = chosen->vertexCount;
+  part.indices = chosen->indices;
+  part.indexCount = chosen->indexCount;
+  part.opaque = !(chosen->alphaCut > 0 || chosen->leaves);
+  if (gfx::Structure made = device_->CreateGeometry(&part, 1)) premade_[chosen->serial] = made;
+}
+
 void RayScene::Build(const MeshRenderer& meshes) {
   if (!available_) return;
   instances_.clear();
@@ -351,7 +368,13 @@ void RayScene::Build(const MeshRenderer& meshes) {
         part.indices = lod.indices;
         part.indexCount = lod.indexCount;
         part.opaque = !(lod.alphaCut > 0 || lod.leaves);  // (leaves: taken by chance, the shaders' TakesLeaf)
-        level.structure = device_->CreateGeometry(&part, 1);
+        const auto pre = premade_.find(lod.serial);  // [session] (made ahead: PrepareModel)
+        if (pre != premade_.end()) {
+          level.structure = pre->second;
+          premade_.erase(pre);
+        } else {
+          level.structure = device_->CreateGeometry(&part, 1);
+        }
         level.leaves = !part.opaque;
         level.colour = std::min<uint32_t>(nextColour_++, kColoursWide * kColoursHigh - 1);
         if (lod.albedo) {

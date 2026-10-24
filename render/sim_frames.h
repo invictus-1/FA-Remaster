@@ -18,6 +18,7 @@
 namespace moho {
 class Sim;
 class Vfs;
+struct PropEvent;
 }  // namespace moho
 
 namespace render {
@@ -80,6 +81,12 @@ class SimFrames {
   // game asked about: 1,356 with Chris's mods). Off at first.
   void WatchBuildable(bool on) { watchBuildable_.store(on); }
   void TakeBuildable(std::vector<std::string>* out);
+  // [session] How every blueprint looks as the simulation has it (what ReadArmies keeps for TakeLooks), and the unit
+  // blueprints' ids among them. On the simulation's thread (or with no beat running).
+  static std::vector<BlueprintLook> LooksOf(const moho::Sim& sim, std::vector<std::string>* unitIds);
+  // [session] The props' events of the simulation taken before its first beat (WorldPicture::PrepareSession: what the game
+  // makes of the map's props as it starts): handed back, ahead of its own, by the next Beat. Taken from `events`.
+  void HoldPropEvents(std::vector<moho::PropEvent>* events);
 
  private:
   struct Beat_ {

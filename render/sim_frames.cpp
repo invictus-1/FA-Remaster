@@ -5,6 +5,7 @@
 #include <cstring>
 #include <unordered_map>
 #include <unordered_set>
+#include <iterator>  // [session]
 #include <chrono>  // [spikes]
 
 #include "hitch_log.h"  // [spikes]
@@ -75,6 +76,7 @@ struct SimFrames::Scratch {
   std::vector<moho::EffectEvent> effects;
   std::vector<moho::EntityView> entities;
   std::vector<moho::PropEvent> props;
+  std::vector<moho::PropEvent> heldProps;  // [session] (HoldPropEvents: the next beat's, ahead of its own)
   std::unordered_map<uint32_t, uint32_t> poseOf;  // unit id -> index in poses, this beat
   std::unordered_map<std::string, uint32_t> nameIndex;
   // [spikes] (AskBuildable, the simulation's thread only) every unit blueprint of the game; the kinds asked by a unit of
@@ -107,12 +109,21 @@ void SimFrames::ReadArmies(const moho::Sim& sim, const moho::Vfs& vfs) {
     else if (a.civilian) c = {0.87f, 0.72f, 0.53f};  // the list's CivilianArmyColor, "BurlyWood"
     colors.push_back(c);
   }
-  // how the blueprints look (src/sim/sim_view.h, BlueprintDisplays)
+  // how the blueprints look (src/sim/sim_view.h, BlueprintDisplays); [spikes] the unit blueprints AskBuildable asks about
+  std::vector<BlueprintLook> looks = LooksOf(sim, &scratch_->unitIds);
+  std::lock_guard<std::mutex> lock(mutex_);
+  armyColors_ = std::move(colors);
+  looks_ = std::move(looks);
+  seed_ = moho::SessionSeed(sim);
+}
+
+// [session] (sim_frames.h) ReadArmies' looks, as a function of their own
+std::vector<BlueprintLook> SimFrames::LooksOf(const moho::Sim& sim, std::vector<std::string>* unitIds) {
   std::vector<moho::BlueprintDisplay> displays;
   moho::BlueprintDisplays(sim, &displays);
-  scratch_->unitIds.clear();  // [spikes] (the unit blueprints AskBuildable asks about)
+  unitIds->clear();
   for (const moho::BlueprintDisplay& d : displays)
-    if (d.kind == 0 && !d.id.empty()) scratch_->unitIds.push_back(d.id);
+    if (d.kind == 0 && !d.id.empty()) unitIds->push_back(d.id);
   std::vector<BlueprintLook> looks;
   looks.reserve(displays.size());
   for (moho::BlueprintDisplay& d : displays) {
@@ -144,10 +155,13 @@ void SimFrames::ReadArmies(const moho::Sim& sim, const moho::Vfs& vfs) {
     look.lifeBarOffset = d.lifeBarOffset;
     looks.push_back(std::move(look));
   }
-  std::lock_guard<std::mutex> lock(mutex_);
-  armyColors_ = std::move(colors);
-  looks_ = std::move(looks);
-  seed_ = moho::SessionSeed(sim);
+  return looks;
+}
+
+void SimFrames::HoldPropEvents(std::vector<moho::PropEvent>* events) {
+  std::vector<moho::PropEvent>& held = scratch_->heldProps;
+  held.insert(held.end(), std::make_move_iterator(events->begin()), std::make_move_iterator(events->end()));
+  events->clear();
 }
 
 void SimFrames::SetSightGrid(float mapWidth, float mapHeight, int cells) {
@@ -506,6 +520,10 @@ void SimFrames::Beat(const moho::Sim& sim) {
   }
   // how the scenery changed (the engine's list is emptied by taking it, which is why the simulation is not const here)
   moho::PropEvents(const_cast<moho::Sim&>(sim), &e.props);
+  if (!e.heldProps.empty()) {  // [session] (taken before the first beat: ahead of this beat's own)
+    e.props.insert(e.props.begin(), std::make_move_iterator(e.heldProps.begin()), std::make_move_iterator(e.heldProps.end()));
+    e.heldProps.clear();
+  }
   std::vector<FramePropEvent> propEvents;
   propEvents.reserve(e.props.size());
   for (moho::PropEvent& v : e.props) {

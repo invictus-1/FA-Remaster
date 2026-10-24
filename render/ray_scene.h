@@ -218,6 +218,7 @@ inline std::string RayShaders() { return (gRayShadersHere >= 0 ? gRayShadersHere
 class MeshRenderer;
 struct MapData;
 struct ModelLod;
+struct Model;  // [session]
 
 class RayScene {
  public:
@@ -232,6 +233,10 @@ class RayScene {
   // Every frame, between passes, once the models of the frame are added and prepared: the scene of them and
   // the ground (it dispatches, for models seen the first time, and builds the scene).
   void Build(const MeshRenderer& meshes);
+  // [session] A model's structure (its coarsest solid level's, as Build takes it) made now, ahead of the frame that first
+  // has it (World::MakeSessionModels: on a map's loading thread, where the driver's sizing of it is done off the frames'
+  // thread, gfx.h DescribeGeometry); Build takes it from here the first time it sees that level. Not while Build runs.
+  void PrepareModel(const Model* model);
   gfx::Structure Scene() const { return scene_; }
   gfx::Texture Colours() const { return colours_; }
   gfx::Buffer InstanceData() const { return instanceData_; }
@@ -279,6 +284,7 @@ class RayScene {
   int pictureWidth_ = 0, pictureHeight_ = 0;
   gfx::Buffer instanceData_;
   std::unordered_map<uint32_t, Level> levels_;  // by ModelLod::serial
+  std::unordered_map<uint32_t, gfx::Structure> premade_;  // [session] (PrepareModel's, by ModelLod::serial: Build takes them)
   uint32_t nextColour_ = 0;
   std::vector<gfx::SceneInstance> instances_;
   std::vector<uint32_t> info_;  // four for each instance (InstanceData)

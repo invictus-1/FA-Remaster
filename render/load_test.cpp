@@ -8,8 +8,14 @@
 #include <cstdio>
 #include <vector>
 
+#include <condition_variable>  // [session]
+#include <functional>
+#include <memory>
+#include <mutex>
+
 #include "cpu_times.h"
 #include "hitch_log.h"
+#include "live_sim.h"  // [session]
 #include "png.h"
 #include "window.h"
 #include "world.h"
@@ -43,7 +49,7 @@ int LoadTest(const moho::Vfs& vfs, const LoadTestSetup& s) {
   picture.UseWindow(window->Handle());
   picture.SetVsync(s.vsync);
   picture.SetLoadBudget(s.budgetMs);
-  if (s.timeOfDay >= 0) picture.SetDayAndWeather(s.timeOfDay, 0, false);
+  if (s.timeOfDay >= 0 && !s.dayAfterSwap) picture.SetDayAndWeather(s.timeOfDay, 0, false);
   auto looks = [&](const std::string& settings) {
     const std::string set = "," + settings + ",";
     picture.SetAtmosphere(set.find(",atmosphere,") != std::string::npos);
@@ -66,6 +72,14 @@ int LoadTest(const moho::Vfs& vfs, const LoadTestSetup& s) {
   printf("render: --load-test: the picture open (%s) after %.0f ms, %dx%d, vsync %s, a budget of %.1f ms a frame\n",
          s.openFirst ? s.mapA.c_str() : "no map", Ms(started, Clock::now()), w, h, s.vsync ? "on" : "off", s.budgetMs);
 
+  // [session] the game loading beside a map opened behind (--load-session): its simulation's start held (onStarted waits)
+  // until the map is shown; then its beats asked for at 10 a second (perFrame)
+  std::unique_ptr<LiveSim> live;
+  std::mutex simLock;
+  std::condition_variable simCv;
+  const moho::Sim* simStarted = nullptr;
+  bool simReleased = false;
+  std::function<void()> perFrame;
   // one frame: the camera over the middle of the map shown, the interface over it; the time since the frame before
   double tick = 0;
   bool layerGiven = false;
@@ -81,6 +95,7 @@ int LoadTest(const moho::Vfs& vfs, const LoadTestSetup& s) {
     cam.distance = std::max(60.0f, 0.35f * std::min(mw, mh));
     cam.pitch = 0.75f;
     cam.heading = 0.4f;  // (held: the pictures of one map, opened either way, comparable pixel for pixel)
+    if (perFrame) perFrame();  // [session] (the game's beats asked for)
     picture.SetInterfaceLayer(layer.data(), w, h, w, 0, 0, layerGiven ? 0 : w, layerGiven ? 0 : h);
     layerGiven = true;
     if (capture) picture.CaptureNextWindowFrame(&shown);
@@ -172,17 +187,57 @@ int LoadTest(const moho::Vfs& vfs, const LoadTestSetup& s) {
       picture.HoldLooks(true);
       looks(*mapLooks);
     }
+    bool sessionHere = false, prepared = false;  // [session]
+    if (!s.session.empty() && map == s.mapB && !live) {
+      LiveSim::Setup ls;
+      ls.initFile = s.initFile;
+      ls.session = s.session;
+      ls.modUids = s.modUids;
+      ls.seed = s.seed;
+      ls.maps = s.maps;
+      live = std::make_unique<LiveSim>();
+      std::string why;
+      if (!live->Open(ls, &why)) {
+        fprintf(stderr, "render: --load-test: the session: %s\n", why.c_str());
+        return 1;
+      }
+      live->onStarted = [&](const moho::Sim& sim) {  // (the simulation's thread: held until the map is shown)
+        std::unique_lock<std::mutex> lock(simLock);
+        simStarted = &sim;
+        simCv.notify_all();
+        simCv.wait(lock, [&] { return simReleased; });
+      };
+      live->onBeat = [&](const moho::Sim& sim) { picture.Beat(sim); };
+      live->Start();
+      sessionHere = true;
+      printf("render: --load-test: the session %s loads beside %s\n", s.session.c_str(), map.c_str());
+    }
+    auto simWaiting = [&] {  // (the session's simulation not started yet)
+      if (!sessionHere) return false;
+      std::lock_guard<std::mutex> lock(simLock);
+      return simStarted == nullptr;
+    };
     const Clock::time_point begun = Clock::now();
     if (!picture.BeginMap(map)) {
       fprintf(stderr, "render: --load-test: BeginMap(%s) refused\n", map.c_str());
       return 1;
     }
     const double beginMs = Ms(begun, Clock::now());
+    if (s.dayAfterSwap && s.timeOfDay >= 0 && map == s.mapB && s.loadDay) picture.SetLoadDayAndWeather(s.timeOfDay, 0, false);  // [session]
     // the frames while it opens behind
     std::vector<double> t;
     long long peak = 0;
     bool fail = false;
-    while (!picture.MapReady()) {
+    for (;;) {
+      if (sessionHere && !prepared && s.prepareSession && !simWaiting()) {  // [session] (the game loaded: handed over, as the interface would)
+        prepared = true;
+        if (!picture.PrepareSession(*simStarted)) fprintf(stderr, "render: --load-test: PrepareSession refused\n");
+      }
+      if (picture.MapReady() && !simWaiting()) break;
+      if (sessionHere && live->GetState() == LiveSim::State::Failed) {
+        fprintf(stderr, "render: --load-test: the session failed: %s\n", live->Problem().c_str());
+        return 1;
+      }
       if (picture.MapFailed(&error)) {
         fprintf(stderr, "render: --load-test: %s could not be opened: %s\n", map.c_str(), error.c_str());
         picture.CancelMap();
@@ -213,6 +268,17 @@ int LoadTest(const moho::Vfs& vfs, const LoadTestSetup& s) {
       return 1;
     }
     if (mapLooks && !s.holdLooks) looks(*mapLooks);  // [ui 39]
+    if (s.dayAfterSwap && s.timeOfDay >= 0) picture.SetDayAndWeather(map == s.mapB ? s.timeOfDay : -1, 0, false);  // [session]
+    if (sessionHere) {  // [session] (the game started on the picture, its first beat let go, its beats asked for from now)
+      picture.GameStarted(*simStarted);
+      {
+        std::lock_guard<std::mutex> lock(simLock);
+        simReleased = true;
+      }
+      simCv.notify_all();
+      const Clock::time_point shown = Clock::now();
+      perFrame = [&live, shown] { live->RunTo(1 + static_cast<uint32_t>(Ms(shown, Clock::now()) / 100.0)); };
+    }
     const double swapMs = Ms(swapping, Clock::now());
     const double first = frame(false);  // (the new world's first three frames)
     const double second = frame(false), third = frame(false);
@@ -228,6 +294,15 @@ int LoadTest(const moho::Vfs& vfs, const LoadTestSetup& s) {
            map.c_str(), beginMs, readyMs / 1000.0, n.openSeconds, n.asks, n.serviceMs, n.longestServiceMs, t.size(), loadMedian, loadLongest, over,
            swapMs, n.warmFrames, n.warmLongestMs, first, second, third, after, median, longest, Mb(before), Mb(peak), Mb(picture.LastStats().cardBytes));
     if (!phases[k].second.empty()) write(phases[k].second.c_str());
+    if (sessionHere) {  // [session] (the game stopped before the next map: its beats are this map's)
+      perFrame = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(simLock);
+        simReleased = true;
+      }
+      simCv.notify_all();
+      live.reset();
+    }
     if (s.backdrop >= 0 && k == 0) {  // [backdrop] (the backdrop under, unseen with the world drawn; then over it)
       picture.SetBackdrop(testPicture.data(), bw, bh, bw, fit, true);
       picture.SetBackdropLook(0.5f, 0xFFC080);

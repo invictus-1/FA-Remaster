@@ -14,6 +14,7 @@
 // Between Begin and the next Begin the world also answers where things are on the screen and what
 // is under a point of it (Project, GroundAt, UnitAt, UnitsIn).
 #pragma once
+#include <atomic>  // [session]
 #include <chrono>  // [snowhitch]
 #include <cstdlib>
 #include <cstdint>
@@ -127,6 +128,12 @@ class World {
   // (ModelCache::MakeAhead). A host that runs a game hands them over each frame, after SetLooks. Nothing without a map, or
   // with readAhead off.
   void MakeAhead(const std::vector<std::string>& unitIds);
+  // [session] The models a game's first frames would make, made now, on the calling thread (a map opened behind:
+  // WorldPicture::PrepareSession, on its own thread before the world is shown): these unit kinds' (as the simulation's
+  // looks have them: SetLooks first) and the props' as the simulation makes them (blueprint, and the mesh a script set or
+  // empty: PropModel). Stops early while `stop` is set.
+  void MakeSessionModels(const std::vector<std::string>& unitIds, const std::vector<std::pair<std::string, std::string>>& props,
+                         const std::atomic<bool>* stop);
   // The lamps of a unit drawn this frame (a remastered unit's list of lights): lit while the light
   // of the computed sky is low, each where its bone is. AddFrame calls it for a game's units; a
   // host that adds models itself calls it beside `meshes.Add`.
