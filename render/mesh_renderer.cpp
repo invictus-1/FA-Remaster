@@ -2166,6 +2166,8 @@ void MeshRenderer::DrawSwayMotion(const View& view, const Mat4& now, const Mat4&
 
 // Hidden outlines (hidden_outlines.h): the marked models the scene drew, again, as DrawMotion draws the keyed ones.
 void MeshRenderer::DrawMarked(const View& view, uint32_t mask, uint32_t want) {
+  // (hidden_outlines.cpp's mask shader reads these instances by its own copy of their layout: six rows of four, 640 a draw)
+  static_assert(sizeof(Instance) == 6 * 16 && kMaxInstances == 640, "hidden_outlines.cpp's kMaskShader must read instances as they are laid out here");
   if (markedItems_.empty()) return;
   if (!markedSorted_) {  // by level, so that each level's instances go together (once a frame)
     std::stable_sort(markedItems_.begin(), markedItems_.end(), [](const MotionItem& a, const MotionItem& b) { return a.lod < b.lod; });

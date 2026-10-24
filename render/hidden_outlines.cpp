@@ -15,13 +15,17 @@ namespace {
 // instance's colour holds its four bytes, MeshRenderer::DrawMarked) and whether its surface there lies behind the
 // scene's depth.
 const char kMaskShader[] = R"hlsl(
+// (as MeshRenderer's Instance and its shaders' have it, wear and all, 640 a draw: DrawMarked hands its instances as the
+// scene's pass does. With the wear left out the instances after the first were read askew, five of every six of them with
+// another's rows: drawn out of place, as huge triangles across the screen where a unit's wear rows lay in its matrix)
 struct Instance {
   float4 row0, row1, row2;
   float4 color;  // the mark's bytes, 0..255: palette index, which unit, strength, layer
   float4 bones;
+  float4 wear;   // (not read here)
 };
 cbuffer Instances : register(b2) {
-  Instance instances[768];
+  Instance instances[640];
 };
 cbuffer Masks : register(b1) {
   float4 scene;   // x, y: the scene's pixels for one of the screen's; z, w: the scene's size in pixels
