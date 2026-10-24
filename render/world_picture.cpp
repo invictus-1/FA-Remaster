@@ -3,6 +3,8 @@
 #include <algorithm>
 
 #include <atomic>
+#include <condition_variable>  // [warmtarget]
+#include <mutex>
 #include <new>  // [bgload] (the beats begun afresh: SwapMap)
 #include <chrono>
 #include <cmath>
@@ -10,6 +12,7 @@
 
 #include "bg_load.h"  // [bgload]
 #include "card_memory.h"  // (photofix2)
+#include "cpu_times.h"  // [warmtarget]
 #include "core/vfs.h"
 #include "dds.h"  // [minimap deposits]
 #include "ground.h"
@@ -93,8 +96,9 @@ struct WorldPicture::Impl {
     bool rayReflections;
   };
   Bundles BundlesNow() const { return {atmosphere, softShadows, rayTracing, weatherEffects, groundDetail, frameGeneration, hiddenOutlines, rayReflections}; }
-  void ApplyBundles() {  // (onto the world, where there is one)
-    if (world) ApplyBundlesTo(*world, BundlesNow());
+  bool holdLooks = false;  // [ui 39] HoldLooks
+  void ApplyBundles() {  // (onto the world, where there is one; [ui 39] not while they are held for the next map)
+    if (world && !holdLooks) ApplyBundlesTo(*world, BundlesNow());
   }
   static void ApplyBundlesTo(World& w, const Bundles& b) {
     if (b.atmosphere >= 0) w.volumetricFog = w.volumetricClouds = w.skyTables = w.cloudZoom = w.beyondLand = b.atmosphere > 0;
@@ -250,6 +254,29 @@ struct WorldPicture::Impl {
     bool warmed = false, cameraGiven = false;
     Camera camera;
     double warmLongestMs = 0;
+    // [warmtarget] Its warm frames are recorded on its loading thread (LoadingDevice::BeginRecording) and made on the frames'
+    // thread (Replay): the frames' thread asks for one with what it is to be drawn with (`setup`, the picture's settings as
+    // they are then), the loading thread records it, the frames' thread makes it between two of its frames, and asks for the
+    // next until one is warm. Under `warmLock`: `warm`, `setup`, `warmed` (written), `abandon`.
+    struct WarmSetup {
+      Camera camera;
+      bool cameraGiven = false;
+      int width = 0, height = 0;
+      Bundles bundles{};
+      int focusArmy = 0;
+      uint64_t allies = 0;
+      bool lifeBarsOnEnemies = false, remasteredEffects = true, temporalUpscale = false, weather = false;
+      float effectsQuality = 1, upscale = 1, dayStart = -1;
+      Lens lens;
+    };
+    enum class Warm { Idle, Asked, Recorded };
+    Warm warm = Warm::Idle;
+    WarmSetup setup;
+    bool abandon = false;  // (not wanted any more: the loading thread records no more)
+    bool scenesBuilt = false;  // (the recording's scene builds made in a frame before its own: WarmFrame)
+    std::mutex warmLock;
+    std::condition_variable warmCv;
+    std::atomic<bool> openDone{false};  // (Open has returned on the loading thread: `ok`, `error` and `opened` are set)
   };
   std::unique_ptr<Load> load;
   std::vector<std::unique_ptr<Load>> cancelled;  // (CancelMap: being opened still, let go of once open)
@@ -267,6 +294,9 @@ struct WorldPicture::Impl {
   void LetGo(std::unique_ptr<World> old, std::unique_ptr<LoadingDevice> oldDevice);
   void ForgetWorld();                     // (the picture's own of the world shown, begun afresh for another)
   void WarmFrame(Load& l);                // (the map opened behind drawn once unseen: MapReady waits for it)
+  void AskWarm(Load& l);                  // [warmtarget] (the frames' thread: a warm frame asked of the loading thread)
+  static void WarmBehind(Load& l);        // [warmtarget] (the loading thread: the warm frames asked for, recorded)
+  static void Abandon(Load& l);           // [warmtarget] (a load not wanted: its loading thread records no more)
   float loadBudgetMs = 2;                 // (WorldPicture::SetLoadBudget)
   ~Impl() {
     if (photo.worker.joinable()) photo.worker.join();
@@ -399,7 +429,7 @@ float4 PS(float4 at : SV_Position) : SV_Target {
   m.world = std::make_unique<World>(m.device.get(), vfs);
   m.world->textures.detail = m.textureDetail;
   m.world->season = m.season;  // [seasons] (taken in as the map opens)
-  m.ApplyBundles();  // (the lighting options, as set before Open)
+  Impl::ApplyBundlesTo(*m.world, m.BundlesNow());  // (the lighting options, as set before Open; held or not)
   if (!m.world->Open(mapPath, World::Options{}, error)) return false;
   m.frames.SetSightGrid(static_cast<float>(m.world->map.width), static_cast<float>(m.world->map.height));
   return true;
@@ -431,10 +461,17 @@ bool WorldPicture::BeginMap(const std::string& mapPath, std::function<void(World
     l->ok = w.Open(l->path, World::Options{}, &error);
     l->error = std::move(error);
     l->opened = SteadySeconds();
+    l->openDone.store(true, std::memory_order_release);
+    if (l->ok) Impl::WarmBehind(*l);  // [warmtarget] (its warm frames recorded here, as the frames' thread asks for them)
     l->finished.store(true, std::memory_order_release);
   });
   m.load = std::move(load);
   return true;
+}
+
+void WorldPicture::HoldLooks(bool on) {
+  impl_->holdLooks = on;
+  if (!on) impl_->ApplyBundles();
 }
 
 bool WorldPicture::MapReady() const {
@@ -455,6 +492,7 @@ void WorldPicture::CancelMap() {
   Impl& m = *impl_;
   if (!m.load) return;
   m.load->cancelled = true;
+  Impl::Abandon(*m.load);  // [warmtarget]
   m.cancelled.push_back(std::move(m.load));  // (let go of by ServiceLoads once its opening is done; another may begin now)
 }
 
@@ -499,6 +537,7 @@ bool WorldPicture::SwapMap() {
     w.orders.markMinPixels = old->orders.markMinPixels;
     w.orders.markMaxPixels = old->orders.markMaxPixels;
   }
+  m.holdLooks = false;  // [ui 39] (the looks held for this map: laid on now)
   m.ApplyBundles();  // (as set now: they may have changed while it opened)
   w.lens = m.lens;
   m.ForgetWorld();
@@ -515,55 +554,138 @@ void WorldPicture::SetLoadCamera(const Camera& camera) {
 // The map opened behind drawn once, unseen, between two frames of the world shown: into the device's photo picture at
 // the window's size, as a photo is (World::photo: nothing of the window's frames before or after touched, no frame
 // generation), by the camera it will first be shown by, with the picture's settings as its frames will have them. What
-// its first frame makes is made here (the ground cover's and the ground's pictures, the shadows' maps, ...); its pipelines
+// its first frame makes is made in it (the ground cover's and the ground's pictures, the shadows' maps, ...); its pipelines
 // are asked for in the background and what they draw left out meanwhile (LoadingDevice::SetWarming), and it is drawn
 // again once they are made, until a warm frame asks for none and finds all made (at most 8). Then it is ready.
-void WorldPicture::Impl::WarmFrame(Load& l) {
+// [warmtarget] The world's part of it (Begin and Render) runs on the loading thread, recorded (WarmBehind): what it makes
+// for the first time is made the way the world's opening makes it (the slow halves there, the rest asked of this thread a
+// share each frame); this thread then makes the frame from the recording (LoadingDevice::Replay), the calls' own time.
+
+// The frames' thread: the next warm frame asked of the loading thread, with the picture's settings as PrepareWorld gives
+// them to the world shown (with l.warmLock held).
+void WorldPicture::Impl::AskWarm(Load& l) {
+  Load::WarmSetup& s = l.setup;
+  s.camera = l.camera;
+  s.cameraGiven = l.cameraGiven;
+  s.width = device->Width();
+  s.height = device->Height();
+  s.bundles = BundlesNow();
+  s.focusArmy = focusArmy;
+  s.allies = allies;
+  s.lifeBarsOnEnemies = lifeBarsOnEnemies;
+  s.remasteredEffects = remasteredEffects;
+  s.effectsQuality = effectsQuality;
+  s.upscale = upscale;
+  s.temporalUpscale = temporalUpscale;
+  s.lens = lens;
+  s.dayStart = dayStart;
+  s.weather = weather;
+  l.warm = Load::Warm::Asked;
+  // (the device's photo picture made now, at the window's size, and kept for the warm frame: its two pictures took a 4K
+  // warm frame 2.4 ms more; between frames, and not while a photo is being made, as ServiceLoads asks)
+  if (!prepared && l.warmFrames == 0 && device->SetPhotoWindow(s.width, s.height)) device->SetPhotoWindow(0, 0);
+}
+
+// The loading thread, once the map is open: each warm frame the frames' thread asks for, recorded (the world is this
+// thread's alone until it is shown), until one is warm or the load is not wanted.
+void WorldPicture::Impl::WarmBehind(Load& l) {
+  CpuTimes::elsewhere = true;  // (its parts are not the frames' thread's)
   World& w = *l.world;
-  const int width = device->Width(), height = device->Height();
+  for (;;) {
+    Load::WarmSetup s;
+    {
+      std::unique_lock<std::mutex> lock(l.warmLock);
+      l.warmCv.wait(lock, [&] { return l.warm == Load::Warm::Asked || l.warmed || l.abandon; });
+      if (l.warmed || l.abandon) return;
+      s = l.setup;
+    }
+    Camera camera = s.camera;
+    if (!s.cameraGiven) {  // (over the map's middle, as a game's camera starts)
+      camera = Camera{};
+      camera.target = {static_cast<float>(w.map.width) * 0.5f, 0, static_cast<float>(w.map.height) * 0.5f};
+      camera.target.y = w.GroundHeight(camera.target.x, camera.target.z);
+      camera.distance = std::max(60.0f, 0.35f * static_cast<float>(std::min(w.map.width, w.map.height)));
+    }
+    ApplyBundlesTo(w, s.bundles);
+    w.focusArmy = s.focusArmy > 0 ? s.focusArmy - 1 : -1;
+    w.alliedArmies = s.allies;
+    w.lifeBarsOnEnemies = s.lifeBarsOnEnemies;
+    w.effectsLook = s.remasteredEffects ? World::EffectsLook::Remastered : World::EffectsLook::Original;
+    w.effectsQuality = s.effectsQuality;
+    w.upscale = s.upscale;
+    w.temporalUpscale = s.temporalUpscale;
+    w.lens = s.lens;
+    if (s.dayStart >= 0) {
+      w.timeOfDay = s.dayStart;
+      w.weatherAuto = s.weather;
+    }
+    l.device->BeginRecording();
+    w.photo = true;
+    w.Begin(camera, s.width, s.height, 0, 0);
+    w.Render();
+    w.photo = false;
+    w.cameraCut = true;  // (its first frame shown keeps nothing of these)
+    l.device->EndRecording();
+    {
+      std::lock_guard<std::mutex> lock(l.warmLock);
+      l.warm = Load::Warm::Recorded;
+    }
+  }
+}
+
+void WorldPicture::Impl::Abandon(Load& l) {
+  {
+    std::lock_guard<std::mutex> lock(l.warmLock);
+    l.abandon = true;
+  }
+  l.warmCv.notify_all();
+}
+
+// The frames' thread, between frames: the warm frame recorded behind, made.
+void WorldPicture::Impl::WarmFrame(Load& l) {
   const double t0 = SteadySeconds();
+  const int width = l.setup.width, height = l.setup.height;  // (as it was recorded; written by this thread alone)
+  bool warmed = false;
+  // (the first: its ray-traced scene built in a frame of its own - 5 ms of a 4K warm frame on Direct3D 12 -, the warm frame
+  // itself the next, where building it again is quick)
+  if (!l.scenesBuilt && l.device->RecordedScenes()) {
+    l.scenesBuilt = true;
+    const float clear[4] = {0, 0, 0, 1};
+    if (device->SetPhotoWindow(width, height)) {
+      device->BeginFrame(clear);
+      l.device->ReplayScenes();
+      device->EndFrame(nullptr, false);
+      device->SetPhotoWindow(0, 0);
+      depthIsWindow = false;
+      l.warmLongestMs = std::max(l.warmLongestMs, (SteadySeconds() - t0) * 1000.0);  // (counted with the warm frames)
+      return;
+    }
+  }
+  l.scenesBuilt = true;
   if (!device->SetPhotoWindow(width, height)) {  // (the device cannot: shown unwarmed)
-    l.warmed = true;
-    return;
+    l.device->DropRecording();
+    warmed = true;
+  } else {
+    l.device->SetWarming(true);
+    const float clear[4] = {0.05f, 0.06f, 0.08f, 1};
+    device->BeginFrame(clear);
+    l.device->Replay();
+    device->EndFrame(nullptr, false);
+    l.device->SetWarming(false);
+    int asked = 0, notMade = 0;
+    l.device->TakeWarmth(&asked, &notMade);
+    ++l.warmFrames;
+    warmed = (asked == 0 && notMade == 0) || l.warmFrames >= 8;
+    device->SetPhotoWindow(warmed ? -1 : 0, warmed ? -1 : 0);  // (its picture let go of after the last)
+    depthIsWindow = false;  // (the scene's depth there is the warm frame's: FocusAt reads the world shown's)
+    l.warmLongestMs = std::max(l.warmLongestMs, (SteadySeconds() - t0) * 1000.0);
   }
-  Camera camera = l.camera;
-  if (!l.cameraGiven) {  // (over the map's middle, as a game's camera starts)
-    camera = Camera{};
-    camera.target = {static_cast<float>(w.map.width) * 0.5f, 0, static_cast<float>(w.map.height) * 0.5f};
-    camera.target.y = w.GroundHeight(camera.target.x, camera.target.z);
-    camera.distance = std::max(60.0f, 0.35f * static_cast<float>(std::min(w.map.width, w.map.height)));
+  {
+    std::lock_guard<std::mutex> lock(l.warmLock);
+    l.warmed = warmed;
+    l.warm = Load::Warm::Idle;  // (the next asked for by the next ServiceLoads, where it is not warm yet)
   }
-  // (the picture's settings, as PrepareWorld gives them to the world shown)
-  ApplyBundlesTo(w, BundlesNow());
-  w.focusArmy = focusArmy > 0 ? focusArmy - 1 : -1;
-  w.alliedArmies = allies;
-  w.lifeBarsOnEnemies = lifeBarsOnEnemies;
-  w.effectsLook = remasteredEffects ? World::EffectsLook::Remastered : World::EffectsLook::Original;
-  w.effectsQuality = effectsQuality;
-  w.upscale = upscale;
-  w.temporalUpscale = temporalUpscale;
-  w.lens = lens;
-  if (dayStart >= 0) {
-    w.timeOfDay = dayStart;
-    w.weatherAuto = weather;
-  }
-  l.device->SetWarming(true);
-  w.photo = true;
-  const float clear[4] = {0.05f, 0.06f, 0.08f, 1};
-  device->BeginFrame(clear);
-  w.Begin(camera, width, height, 0, 0);
-  w.Render();
-  device->EndFrame(nullptr, false);
-  w.photo = false;
-  w.cameraCut = true;  // (its first frame shown keeps nothing of these)
-  l.device->SetWarming(false);
-  int asked = 0, notMade = 0;
-  l.device->TakeWarmth(&asked, &notMade);
-  ++l.warmFrames;
-  l.warmed = (asked == 0 && notMade == 0) || l.warmFrames >= 8;
-  device->SetPhotoWindow(l.warmed ? -1 : 0, l.warmed ? -1 : 0);  // (its picture let go of after the last)
-  depthIsWindow = false;  // (the scene's depth there is the warm frame's: FocusAt reads the world shown's)
-  l.warmLongestMs = std::max(l.warmLongestMs, (SteadySeconds() - t0) * 1000.0);
+  l.warmCv.notify_all();
 }
 
 // The picture's own of the world shown, begun afresh for another (SwapMap).
@@ -627,15 +749,25 @@ void WorldPicture::Impl::ServiceLoads(double budgetMs) {
   if (load) {
     left -= load->device->Service(share());
     // open: drawn once or twice unseen (warm frames, one a frame at most), once the pipelines it has asked for are made
-    if (load->finished.load(std::memory_order_acquire) && load->ok && !load->warmed && !unbounded && !load->device->Waiting() && !photo.on &&
-        !prepared && device->BackgroundPipelinesWaiting() == 0)
-      WarmFrame(*load);
+    // ([warmtarget] each recorded on the loading thread first: asked for here, made here once recorded)
+    if (load->openDone.load(std::memory_order_acquire) && load->ok && !load->warmed && !unbounded && !photo.on) {
+      std::unique_lock<std::mutex> lock(load->warmLock);
+      if (load->warm == Load::Warm::Idle) {
+        AskWarm(*load);
+        lock.unlock();
+        load->warmCv.notify_all();
+      } else if (load->warm == Load::Warm::Recorded && !load->device->Waiting() && !prepared && device->BackgroundPipelinesWaiting() == 0) {
+        lock.unlock();
+        WarmFrame(*load);
+      }
+    }
     if (load->finished.load(std::memory_order_acquire) && !load->ready && load->ok && load->warmed && !load->device->Waiting() &&
         device->BackgroundPipelinesWaiting() == 0)
       load->ready = SteadySeconds();
   }
   for (size_t i = 0; i < cancelled.size();) {  // (maps not wanted: their opening finished, then let go of)
     Load& c = *cancelled[i];
+    Abandon(c);  // [warmtarget] (its loading thread records no more warm frames)
     if (!unbounded && left <= 0 && c.device->Waiting()) break;
     left -= c.device->Service(share());
     if (c.finished.load(std::memory_order_acquire)) {

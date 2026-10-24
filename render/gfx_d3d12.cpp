@@ -332,6 +332,10 @@ class D3D12Device final : public Device {
   Texture FinishTexture(std::unique_ptr<Prepared> prepared) override;
   std::unique_ptr<Prepared> PrepareBuffer(const BufferDesc& desc) override;
   Buffer FinishBuffer(std::unique_ptr<Prepared> prepared) override;
+  std::unique_ptr<Prepared> PrepareTarget(const TargetDesc& desc) override;  // [warmtarget]
+  Texture FinishTarget(std::unique_ptr<Prepared> prepared) override;
+  HRESULT TargetResource(const TargetDesc& desc, Com<ID3D12Resource>* out);  // (any thread)
+  Texture MakeTarget(const TargetDesc& desc, Com<ID3D12Resource> made);  // (CreateTarget; `made`: its resource, PrepareTarget's)
   void Destroy(Buffer buffer) override;
   void Destroy(Texture texture) override;
   void Destroy(Pipeline pipeline) override;
@@ -356,6 +360,9 @@ class D3D12Device final : public Device {
   void EndFrame(std::vector<uint8_t>* capture, bool present) override;
   bool RayTracing() const override { return rayTracing_; }
   Structure CreateGeometry(const GeometryPart* parts, int count) override;
+  std::unique_ptr<Prepared> DescribeGeometry(const GeometryPart* parts, int count) override;  // [warmtarget]
+  void SizeGeometry(Prepared* prepared) override;
+  Structure FinishGeometry(std::unique_ptr<Prepared> prepared) override;
   void BuildScene(Structure* scene, const SceneInstance* instances, uint32_t count) override;
   void SetScene(int slot, Structure scene) override;
   void Destroy(Structure structure) override;
@@ -2242,7 +2249,75 @@ uint32_t D3D12Device::NewTextureIndex() {  // 0: no room
   return static_cast<uint32_t>(textures_.size() - 1);
 }
 
-Texture D3D12Device::CreateTarget(const TargetDesc& desc) {
+Texture D3D12Device::CreateTarget(const TargetDesc& desc) { return MakeTarget(desc, {}); }
+
+// [warmtarget] A target's resource, as CreateTarget makes it: on any thread (the device is free-threaded for this; nothing of
+// its own lists, slots or tables is touched). The slow part of a target at the window's size.
+HRESULT D3D12Device::TargetResource(const TargetDesc& desc, Com<ID3D12Resource>* out) {
+  D3D12_HEAP_PROPERTIES hp = HeapProps(D3D12_HEAP_TYPE_DEFAULT);
+  D3D12_RESOURCE_DESC rd = {};
+  if (desc.storage) {
+    const bool volume = desc.depth > 1;
+    rd.Dimension = volume ? D3D12_RESOURCE_DIMENSION_TEXTURE3D : D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    rd.Width = static_cast<UINT64>(desc.width);
+    rd.Height = static_cast<UINT>(desc.height);
+    rd.DepthOrArraySize = static_cast<UINT16>(volume ? desc.depth : 1);
+    rd.MipLevels = static_cast<UINT16>(desc.mips);
+    rd.Format = ToDxgi(desc.format);
+    rd.SampleDesc.Count = 1;
+    rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+    return device_->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
+                                            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr,
+                                            IID_PPV_ARGS(out->Put()));
+  }
+  const bool depth = desc.format == Format::D32;
+  const DXGI_FORMAT format = depth ? DXGI_FORMAT_D32_FLOAT : ToDxgi(desc.format);
+  const int samples = desc.samples == 2 || desc.samples == 4 || desc.samples == 8 ? desc.samples : 1;
+  rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+  rd.Width = static_cast<UINT64>(desc.width);
+  rd.Height = static_cast<UINT>(desc.height);
+  rd.DepthOrArraySize = static_cast<UINT16>(desc.layers);
+  rd.MipLevels = 1;
+  rd.Format = depth ? DXGI_FORMAT_R32_TYPELESS : format;
+  rd.SampleDesc.Count = static_cast<UINT>(samples);
+  rd.Flags = depth ? D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL : D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+  D3D12_CLEAR_VALUE clear = {};
+  clear.Format = format;
+  if (!depth) std::memcpy(clear.Color, desc.clearValue, sizeof clear.Color);
+  return device_->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
+                                          D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, &clear,
+                                          IID_PPV_ARGS(out->Put()));
+}
+
+// [warmtarget] The halves of CreateTarget (gfx.h, PrepareTarget): its resource made on the calling thread; its slots, views
+// and handle on the frames' thread. A description CreateTarget would refuse is refused by Prepare too (null: Create then).
+namespace {
+struct PreparedTarget12 final : Device::Prepared {
+  TargetDesc desc;
+  Com<ID3D12Resource> resource;
+};
+}  // namespace
+
+std::unique_ptr<Device::Prepared> D3D12Device::PrepareTarget(const TargetDesc& desc) {
+  if (desc.width <= 0 || desc.height <= 0) return nullptr;
+  if (desc.storage) {
+    if (ToDxgi(desc.format) == DXGI_FORMAT_UNKNOWN || desc.depth <= 0 || desc.layers != 1 || desc.samples > 1 || desc.mips <= 0) return nullptr;
+  } else if ((desc.format != Format::D32 && ToDxgi(desc.format) == DXGI_FORMAT_UNKNOWN) || IsBlockCompressed(desc.format) || desc.layers <= 0) {
+    return nullptr;
+  }
+  auto p = std::make_unique<PreparedTarget12>();
+  p->desc = desc;
+  if (FAILED(TargetResource(desc, &p->resource))) return nullptr;  // (CreateTarget then: it says why)
+  return p;
+}
+
+Texture D3D12Device::FinishTarget(std::unique_ptr<Prepared> prepared) {
+  auto* p = dynamic_cast<PreparedTarget12*>(prepared.get());
+  if (!p) return Device::FinishTarget(std::move(prepared));  // (one kept whole: CreateTarget)
+  return MakeTarget(p->desc, std::move(p->resource));
+}
+
+Texture D3D12Device::MakeTarget(const TargetDesc& desc, Com<ID3D12Resource> made) {
   if (desc.storage) {  // written by compute shaders: no render-target view, a storage view for each level
     const DXGI_FORMAT format = ToDxgi(desc.format);
     const bool volume = desc.depth > 1;
@@ -2278,19 +2353,9 @@ Texture D3D12Device::CreateTarget(const TargetDesc& desc) {
     rec.mips = desc.mips;
     rec.format = format;
     rec.uav = first;
-    D3D12_RESOURCE_DESC rd = {};
-    rd.Dimension = volume ? D3D12_RESOURCE_DIMENSION_TEXTURE3D : D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    rd.Width = static_cast<UINT64>(desc.width);
-    rd.Height = static_cast<UINT>(desc.height);
-    rd.DepthOrArraySize = static_cast<UINT16>(volume ? desc.depth : 1);
-    rd.MipLevels = static_cast<UINT16>(desc.mips);
-    rd.Format = format;
-    rd.SampleDesc.Count = 1;
-    rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-    D3D12_HEAP_PROPERTIES hp = HeapProps(D3D12_HEAP_TYPE_DEFAULT);
-    HRESULT hr = device_->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
-                                                  D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                                                  nullptr, IID_PPV_ARGS(rec.resource.Put()));
+    HRESULT hr = S_OK;  // [warmtarget] (its resource: made here, or by PrepareTarget on another thread)
+    if (made) rec.resource = std::move(made);
+    else hr = TargetResource(desc, &rec.resource);
     if (FAILED(hr)) {
       freeUav_.emplace_back(first, count);
       return Complain("creating a storage target", hr), Texture{};
@@ -2368,23 +2433,10 @@ Texture D3D12Device::CreateTarget(const TargetDesc& desc) {
     return {};
   }
 
-  D3D12_RESOURCE_DESC rd = {};
-  rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-  rd.Width = static_cast<UINT64>(desc.width);
-  rd.Height = static_cast<UINT>(desc.height);
-  rd.DepthOrArraySize = static_cast<UINT16>(desc.layers);
-  rd.MipLevels = 1;
-  rd.Format = depth ? DXGI_FORMAT_R32_TYPELESS : format;
-  rd.SampleDesc.Count = static_cast<UINT>(samples);
-  rd.Flags = depth ? D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL : D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
   rec.samples = samples;
-  D3D12_CLEAR_VALUE clear = {};
-  clear.Format = format;
-  if (!depth) std::memcpy(clear.Color, desc.clearValue, sizeof clear.Color);
-  D3D12_HEAP_PROPERTIES hp = HeapProps(D3D12_HEAP_TYPE_DEFAULT);
-  HRESULT hr = device_->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
-                                                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                                                &clear, IID_PPV_ARGS(rec.resource.Put()));
+  HRESULT hr = S_OK;  // [warmtarget] (its resource: made here, or by PrepareTarget on another thread)
+  if (made) rec.resource = std::move(made);
+  else hr = TargetResource(desc, &rec.resource);
   if (FAILED(hr)) return Complain("creating a render target", hr), Texture{};
 
   D3D12_SHADER_RESOURCE_VIEW_DESC srv = {};
@@ -3380,12 +3432,29 @@ static uint64_t RayAligned(uint64_t n) {
 }
 
 Structure D3D12Device::CreateGeometry(const GeometryPart* parts, int count) {
-  if (!rayTracing_ || !parts || count <= 0) return {};
+  std::unique_ptr<Prepared> p = DescribeGeometry(parts, count);  // [warmtarget] (the three steps, one after the other)
+  SizeGeometry(p.get());
+  return FinishGeometry(std::move(p));
+}
+
+// [warmtarget] The steps of CreateGeometry (gfx.h, DescribeGeometry): the parts as the driver takes them (their buffers'
+// places, from the device's tables: the frames' thread); the driver's sizes and the structure's buffer (any thread: the
+// device is free-threaded for these); its handle, and its build queued for the next BuildScene (the frames' thread).
+namespace {
+struct PreparedGeometry12 final : Device::Prepared {
   StructureRec rec;
+  bool ok = false;  // (described, and sized)
+};
+}  // namespace
+
+std::unique_ptr<Device::Prepared> D3D12Device::DescribeGeometry(const GeometryPart* parts, int count) {
+  auto prepared = std::make_unique<PreparedGeometry12>();
+  if (!rayTracing_ || !parts || count <= 0) return prepared;
+  StructureRec& rec = prepared->rec;
   for (int i = 0; i < count; ++i) {
     const GeometryPart& p = parts[i];
     const BufferRec* v = Find(p.vertices);
-    if (!v || v->dynamic || v->kind != BufferKind::Vertex || !p.vertexCount) return {};
+    if (!v || v->dynamic || v->kind != BufferKind::Vertex || !p.vertexCount) return prepared;
     D3D12_RAYTRACING_GEOMETRY_DESC g = {};
     g.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
     g.Flags = p.opaque ? D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE : D3D12_RAYTRACING_GEOMETRY_FLAG_NONE;
@@ -3395,13 +3464,22 @@ Structure D3D12Device::CreateGeometry(const GeometryPart* parts, int count) {
     g.Triangles.VertexCount = p.vertexCount;
     if (p.indices) {
       const BufferRec* ix = Find(p.indices);
-      if (!ix || ix->dynamic || ix->kind != BufferKind::Index || !p.indexCount) return {};
+      if (!ix || ix->dynamic || ix->kind != BufferKind::Index || !p.indexCount) return prepared;
       g.Triangles.IndexBuffer = ix->gpu + static_cast<uint64_t>(p.firstIndex) * ix->stride;
       g.Triangles.IndexFormat = ix->stride == 2 ? DXGI_FORMAT_R16_UINT : DXGI_FORMAT_R32_UINT;
       g.Triangles.IndexCount = p.indexCount;
     }
     rec.parts.push_back(g);
   }
+  prepared->ok = true;
+  return prepared;
+}
+
+void D3D12Device::SizeGeometry(Prepared* prepared) {
+  auto* p = dynamic_cast<PreparedGeometry12*>(prepared);
+  if (!p || !p->ok) return;
+  p->ok = false;
+  StructureRec& rec = p->rec;
   D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS in = {};
   in.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
   in.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
@@ -3410,11 +3488,18 @@ Structure D3D12Device::CreateGeometry(const GeometryPart* parts, int count) {
   in.pGeometryDescs = rec.parts.data();
   D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO info = {};
   device5_->GetRaytracingAccelerationStructurePrebuildInfo(&in, &info);
-  if (!info.ResultDataMaxSizeInBytes) return {};
+  if (!info.ResultDataMaxSizeInBytes) return;
   rec.size = RayAligned(info.ResultDataMaxSizeInBytes);
   rec.scratch = RayAligned(std::max<uint64_t>(info.ScratchDataSizeInBytes, 1));
   rec.buffer = RayBuffer(rec.size, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
-  if (!rec.buffer) return {};
+  p->ok = static_cast<bool>(rec.buffer);
+}
+
+Structure D3D12Device::FinishGeometry(std::unique_ptr<Prepared> prepared) {
+  auto* p = dynamic_cast<PreparedGeometry12*>(prepared.get());
+  if (!p) return Device::FinishGeometry(std::move(prepared));  // (one kept whole: CreateGeometry)
+  if (!p->ok) return {};
+  StructureRec rec = std::move(p->rec);
   rec.used = true;
   uint32_t index;
   if (!freeStructures_.empty()) {

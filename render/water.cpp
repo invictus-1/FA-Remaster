@@ -586,13 +586,16 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   WinterColours(through, under, kept, hidden, own);  // (winter water: the cold palette, by how far winter has come)
 #endif
 #if LIFT
-  // [hulls] what stands in the open sea off its bed (a ship's hull below its waterline, a rock) is hidden by the water before
-  // it within a hand's breadth, going over to the colour the sea round it shows (the bed's rule above hides a hull just under
-  // the surface hardly at all: a pale, clear strip of water along its bottom edge read as a ship floating on the water)
+  // [hulls] a riding ship's hull below its waterline is hidden by the water before it within a hand's breadth, going over to
+  // the colour the sea round it shows (the bed's rule above hides a hull just under the surface hardly at all: a pale, clear
+  // strip of water along its bottom edge read as a ship floating on the water). Only by a riding hull's waterline (the
+  // hulls' list, OceanHullAt): a submarine under the surface, or a rock, keeps the bed's rule, seen through the water as
+  // in the original
   OceanHullNear hull = OceanHullAt(xz);
   {
     float ground = OceanGround(bedBent.xz, mapSize.xy);
-    float standing = saturate((bedBent.y - ground - 0.5) / 0.4) * saturate((surfaceColor.w - ground - 0.6) / 1.5);
+    float standing = saturate((bedBent.y - ground - 0.5) / 0.4) * saturate((surfaceColor.w - ground - 0.6) / 1.5) *
+                     saturate(1 - OceanHullAt(bedBent.xz).away / 0.3);  // (what lies behind the water is a riding hull's)
     float murk = standing * (1 - exp(-through / 0.12));
     hidden = lerp(hidden, 1, murk);
     own = lerp(own, lerp(float3(0.027, 0.672, 0.604), float3(0.001, 0.019, 0.058), 0.97), standing);

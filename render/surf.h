@@ -524,7 +524,8 @@ class Surf {
 // game's frame (World::AddFrame draws them; their wakes, ripples and bow spray as a game's ships'), at their top speed.
 class SurfTest {
  public:
-  // `spec`: "ues0103=2,ues0201=1" (blueprint ids and how many), round `at` within `radius`; `depth`: the water's depth
+  // `spec`: "ues0103=2,ues0201=1" (blueprint ids and how many; "ues0203=2@1.5": those 1.5 under the water, as a
+  // submerged unit, in the Sub layer), round `at` within `radius`; `depth`: the water's depth
   // at a place (more than 1.5 all round a loop for it to be used). False with the reason when none can be driven.
   bool Init(const std::string& spec, Vec3 at, float radius, const std::function<bool(const std::string&, BpValue*)>& readBlueprint,
             const std::function<float(float, float)>& depth, float waterLevel, std::string* error);
@@ -535,6 +536,7 @@ class SurfTest {
   struct Driver {
     uint32_t blueprint = 0;
     float x = 0, z = 0, radius = 10, speed = 5, angle = 0, turn = 1;
+    float below = 0;  // (how far under the water's surface: a submerged unit's; 0 on it)
   };
   std::vector<std::string> blueprints_;
   std::vector<Driver> drivers_;

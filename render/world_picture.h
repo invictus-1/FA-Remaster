@@ -67,10 +67,12 @@ class WorldPicture {
   // device yet, a map is being opened behind already (CancelMap first), or no map given.
   bool BeginMap(const std::string& mapPath, std::function<void(World&)> before = {});
   // The map begun is open, its pipelines made, and it has been drawn once or twice unseen by the camera it will first be
-  // shown by (warm frames: one at most after each frame of the world shown; what its first frame makes is made in them,
-  // so the first of them is as long as that first frame would be - its pictures made at the window's size, measured
-  // 0.5-1.7 s at 4K with every look on - and the later ones about a frame of it): SwapMap would show it from the next
-  // frame, and that frame is an ordinary one.
+  // shown by (warm frames: one at most after each frame of the world shown; what its first frame makes is made in them):
+  // SwapMap would show it from the next frame, and that frame is an ordinary one. ([warmtarget] Each warm frame is
+  // recorded on the map's loading thread - what its first frame makes for the first time, its pictures at the window's
+  // size, textures and tables, made there as the opening's are, the rest asked of the frames' thread within
+  // SetLoadBudget's time a frame - and then made on the frames' thread from the recording: a few milliseconds of it,
+  // where one warm frame took it up to 1.7 s before.)
   bool MapReady() const;
   // The camera the map begun will first be shown by (the game's camera at its start), for its warm frames; at first one
   // over the map's middle. Any time before it is ready.
@@ -89,6 +91,12 @@ class WorldPicture {
   // A world Open made itself (Open with a map) is let go of on this thread at once, and what it made on the card stays
   // there until the picture goes (its parts do not let go of what they made): open such a picture without a map.
   bool SwapMap();
+  // [ui 39] While on, the lighting bundles' Set* calls (SetAtmosphere, SetSoftShadows, SetRayTracing, SetRayReflections,
+  // SetWeatherEffects, SetGroundDetail, SetFrameGeneration, SetHiddenOutlines) are kept for the next map and not laid on
+  // the world shown: give a game's looks with it on, then BeginMap, so that the map opens and is warmed with them (its
+  // shaders and pipelines made while it opens) and the world shown meanwhile (the menu's, hidden) is left as it is.
+  // SwapMap lays them on and ends it; HoldLooks(false) ends it too, laying them on the world shown then.
+  void HoldLooks(bool on);
   // The map begun is not wanted: let go of once its opening is done (that goes on, over the next frames); another may
   // be begun at once.
   void CancelMap();

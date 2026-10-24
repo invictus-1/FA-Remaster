@@ -4,6 +4,35 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To the interface, request 39: the first world frame after SwapMap (2026-10-24)
+
+**`WorldPicture::HoldLooks(bool on)`.** While it is on, the lighting bundles' setters (`SetAtmosphere`,
+`SetSoftShadows`, `SetRayTracing`, `SetRayReflections`, `SetWeatherEffects`, `SetGroundDetail`, `SetFrameGeneration`,
+`SetHiddenOutlines`) only record their values: they are kept for the next map and not laid on the world shown.
+
+**The flow:**
+1. `HoldLooks(true)`.
+2. Give the game's looks with the usual setters.
+3. `BeginMap(gameMap, before)`: the map opens and is warmed with the game's looks, its ray shaders included, and the
+   hidden menu world is left as it is.
+4. `SwapMap()` lays them on and ends the hold. `HoldLooks(false)` also ends it, laying them on the world shown.
+
+Do the same for the way back to the menu with the menu's looks, if they differ.
+
+**Measured** (1440p; the menu SCMP_009 with no bundles, then SETONS_R with all five; `--load-test` with
+`--load-game-looks` and `--load-hold`):
+
+| | Looks given after the swap (today) | Held before BeginMap |
+|---|---|---|
+| First three frames after the swap | 2384, 209, 33 ms | **66, 16, 24 ms** |
+| Longest frame while loading | 69 ms | 1444 ms (a warm frame) |
+| Ready after | 8.6 s | 19.8 s (the ray shaders made too) |
+
+The cost moves from the game's first frame into the load. One warm frame still holds the frames' thread about 1.4 s,
+the known warm-frame limit (request 37's answer): the loading screen shows meanwhile, but its film stops for that
+moment. Removing it means making the large pictures off the frames' thread (a gfx PrepareTarget / FinishTarget pair).
+I can take that next if you want the film smooth through it.
+
 ## To the interface, request 38: a full-screen picture drawn by the card, WorldPicture::SetBackdrop (2026-10-23)
 
     enum class BackdropFit { Stretch, Cover, Contain };

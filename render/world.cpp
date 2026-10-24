@@ -1040,7 +1040,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     c.leaves[1] = 0.6f;
   }
   // reflections by ray tracing (where the shaders were built for it)
-  reflectNow_ = rayReflections && gRayShaders && look == Look::Modern && haveMap_ && !sidePicture && RaysReady();
+  reflectNow_ = rayReflections && RayShadersOn() && look == Look::Modern && haveMap_ && !sidePicture && RaysReady();
   if (reflectNow_) {
     c.rayEffects[0] = 1;
     c.rayEffects[1] = 1000;
@@ -1048,7 +1048,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     c.rayEffects[3] = static_cast<float>(map.height);
   }
   // the small lights' shadows by rays (where the shaders were built for it)
-  lightRaysNow_ = rayLightShadows && gRayShaders && look == Look::Modern && haveMap_ && !sidePicture && RaysReady();
+  lightRaysNow_ = rayLightShadows && RayShadersOn() && look == Look::Modern && haveMap_ && !sidePicture && RaysReady();
   if (lightRaysNow_) {
     c.rayLights[0] = 1;
     c.rayLights[1] = static_cast<float>(std::max(rayLightRays, 1));

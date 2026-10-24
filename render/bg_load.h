@@ -15,6 +15,7 @@
 // go of what they made on the device when they are destroyed (when a world went, its device went with it): the
 // LoadingDevice keeps count of what its world made and has not let go of, and lets go of all of it once the world is gone
 // (DestroyLeft), in the same shares, so that worlds opened one after another on one device do not fill its memory.
+// [warmtarget] Targets likewise: their memory made on the calling thread (gfx.h, PrepareTarget), the rest asked.
 //
 // Calls that belong inside a frame (passes, draws, updates of buffers and textures, ...) are not to be made while the
 // world is being opened; one made then is told on the error output and not made.
@@ -23,8 +24,10 @@
 #include <condition_variable>
 #include <deque>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "gfx.h"
@@ -68,6 +71,31 @@ class LoadingDevice final : public gfx::Device {
     *notMadeSet = warmMissed_;
     warmAsked_ = warmMissed_ = 0;
   }
+  // [warmtarget] A warm frame recorded on the loading thread and made on the frames' thread. What a world's first frame
+  // makes for the first time (its pictures at the window's size, the textures it reads first then, its pipelines, its
+  // tables) took the frames' thread up to 1.4 s in one warm frame; recorded, the world's Begin and Render run on the loading
+  // thread instead, so that what they make goes the way of everything a world opening makes (the slow halves on that
+  // thread, the rest asked of the frames' thread a share each frame), while the calls that belong in a frame (passes,
+  // pipelines and what they read, draws, dispatches, updates, the scene's build, what is let go of meanwhile) are kept here,
+  // in their order, with copies of what they hand over. Replay, inside a frame the frames' thread has begun, then makes
+  // them as the world would have made them there, through this device as a warm frame's (SetWarming): the frame on the card
+  // is the one a warm frame drawn there would be, and the frames' thread spends only the calls' own time on it.
+  // BeginRecording / EndRecording on the loading thread (the world's, which no other thread touches meanwhile); Replay on
+  // the frames' thread once EndRecording has returned (the caller hands it over); a recording not replayed is let go of
+  // with DropRecording (what it would have let go of stays made: DestroyLeft finds it).
+  void BeginRecording();
+  void EndRecording();
+  void Replay();
+  void DropRecording();
+  // The scene's builds of the recording alone (its ray-traced structures, built the first time: 5 ms of a 4K warm frame on
+  // Direct3D 12), inside a frame of their own before the one that replays it all (which builds the scene again, quickly).
+  // False: the recording builds none (nothing done).
+  bool ReplayScenes();
+  bool RecordedScenes() const {
+    for (const Call& k : rec_.calls)
+      if (k.op == kBuildScene) return true;
+    return false;
+  }
   // What was asked of the frames' thread: how many asks, the longest Service and all of them together, milliseconds.
   struct Numbers {
     long asks = 0;
@@ -99,11 +127,16 @@ class LoadingDevice final : public gfx::Device {
   gfx::Texture FinishTexture(std::unique_ptr<Prepared> prepared) override;
   std::unique_ptr<Prepared> PrepareBuffer(const gfx::BufferDesc& desc) override { return real_->PrepareBuffer(desc); }
   gfx::Buffer FinishBuffer(std::unique_ptr<Prepared> prepared) override;
+  std::unique_ptr<Prepared> PrepareTarget(const gfx::TargetDesc& desc) override { return real_->PrepareTarget(desc); }  // [warmtarget]
+  gfx::Texture FinishTarget(std::unique_ptr<Prepared> prepared) override;
   void Destroy(gfx::Buffer buffer) override;
   void Destroy(gfx::Texture texture) override;
   void Destroy(gfx::Pipeline pipeline) override;
   bool RayTracing() const override { return real_->RayTracing(); }
   gfx::Structure CreateGeometry(const gfx::GeometryPart* parts, int count) override;
+  std::unique_ptr<Prepared> DescribeGeometry(const gfx::GeometryPart* parts, int count) override;  // [warmtarget]
+  void SizeGeometry(Prepared* prepared) override { real_->SizeGeometry(prepared); }
+  gfx::Structure FinishGeometry(std::unique_ptr<Prepared> prepared) override;
   void BuildScene(gfx::Structure* scene, const gfx::SceneInstance* instances, uint32_t count) override;
   void SetScene(int slot, gfx::Structure scene) override;
   void Destroy(gfx::Structure structure) override;
@@ -111,6 +144,7 @@ class LoadingDevice final : public gfx::Device {
   void BeginPass(const gfx::PassDesc& pass) override;
   void Resolve(gfx::Texture from, gfx::Texture to) override;
   void SetPipeline(gfx::Pipeline pipeline) override {
+    if (Recording()) return Keep(kSetPipeline, pipeline.id);  // [warmtarget]
     if (warming_ && !real_->PipelineReady(pipeline)) {  // (a warm frame: not waited for; what it draws left out)
       skipping_ = true;
       ++warmMissed_;
@@ -119,17 +153,37 @@ class LoadingDevice final : public gfx::Device {
     skipping_ = false;
     real_->SetPipeline(pipeline);
   }
-  void SetConstants(int slot, const void* data, uint32_t size) override { real_->SetConstants(slot, data, size); }
-  void SetTexture(int slot, gfx::Texture texture) override { real_->SetTexture(slot, texture); }
-  void SetStorage(int slot, gfx::Texture texture, int mip) override { real_->SetStorage(slot, texture, mip); }
+  void SetConstants(int slot, const void* data, uint32_t size) override {
+    if (Recording()) return KeepBytes(kSetConstants, static_cast<uint32_t>(slot), data, size);  // [warmtarget]
+    real_->SetConstants(slot, data, size);
+  }
+  void SetTexture(int slot, gfx::Texture texture) override {
+    if (Recording()) return Keep(kSetTexture, static_cast<uint32_t>(slot), texture.id);  // [warmtarget]
+    real_->SetTexture(slot, texture);
+  }
+  void SetStorage(int slot, gfx::Texture texture, int mip) override {
+    if (Recording()) return Keep(kSetStorage, static_cast<uint32_t>(slot), texture.id, static_cast<uint32_t>(mip));  // [warmtarget]
+    real_->SetStorage(slot, texture, mip);
+  }
   void Dispatch(uint32_t x, uint32_t y, uint32_t z) override;
-  void SetVertexBuffer(gfx::Buffer buffer) override { real_->SetVertexBuffer(buffer); }
-  void SetIndexBuffer(gfx::Buffer buffer) override { real_->SetIndexBuffer(buffer); }
-  void SetShaderBuffer(gfx::Buffer buffer, int slot) override { real_->SetShaderBuffer(buffer, slot); }
+  void SetVertexBuffer(gfx::Buffer buffer) override {
+    if (Recording()) return Keep(kSetVertexBuffer, buffer.id);  // [warmtarget]
+    real_->SetVertexBuffer(buffer);
+  }
+  void SetIndexBuffer(gfx::Buffer buffer) override {
+    if (Recording()) return Keep(kSetIndexBuffer, buffer.id);  // [warmtarget]
+    real_->SetIndexBuffer(buffer);
+  }
+  void SetShaderBuffer(gfx::Buffer buffer, int slot) override {
+    if (Recording()) return Keep(kSetShaderBuffer, buffer.id, static_cast<uint32_t>(slot));  // [warmtarget]
+    real_->SetShaderBuffer(buffer, slot);
+  }
   void Draw(uint32_t vertexCount, uint32_t firstVertex, uint32_t instances) override {
+    if (Recording()) return Keep(kDraw, vertexCount, firstVertex, instances);  // [warmtarget]
     if (!skipping_) real_->Draw(vertexCount, firstVertex, instances);
   }
   void DrawIndexed(uint32_t indexCount, uint32_t firstIndex, int32_t baseVertex, uint32_t instances) override {
+    if (Recording()) return Keep(kDrawIndexed, indexCount, firstIndex, instances, baseVertex);  // [warmtarget]
     if (!skipping_) real_->DrawIndexed(indexCount, firstIndex, baseVertex, instances);
   }
   void EndFrame(std::vector<uint8_t>* capture, bool present) override;
@@ -141,7 +195,10 @@ class LoadingDevice final : public gfx::Device {
   bool SetLatencyLimiter(bool on) override;
   bool LatencyLimiter() const override { return real_->LatencyLimiter(); }
   void WaitForNextFrame() override;
-  void Mark(const char* name) override { real_->Mark(name); }
+  void Mark(const char* name) override {
+    if (Recording()) return KeepMark(name);  // [warmtarget]
+    real_->Mark(name);
+  }
   void TakeTimes(std::vector<std::pair<const char*, double>>* out) override;
   uint64_t MemoryInUse() override { return real_->MemoryInUse(); }
   bool MemoryBudget(uint64_t* budget, uint64_t* used) override { return real_->MemoryBudget(budget, used); }
@@ -187,6 +244,49 @@ class LoadingDevice final : public gfx::Device {
   std::unordered_set<uint32_t> made_[4];  // buffers, textures, pipelines, structures
   std::unordered_set<std::string> told_;
   Numbers numbers_;
+
+  // [warmtarget] the warm frame being recorded (BeginRecording) or waiting for Replay: each call kept, with what it hands
+  // over copied into `bytes` (constants, contents, rectangles), the passes and the scene's instances beside
+  enum Op : uint8_t {
+    kSetPipeline, kSetConstants, kSetTexture, kSetStorage, kDispatch, kSetVertexBuffer, kSetIndexBuffer, kSetShaderBuffer, kDraw,
+    kDrawIndexed, kBeginPass, kResolve, kMark, kUpdateBuffer, kWriteBuffer, kUpdateTexture, kBuildScene, kSetScene, kSetSceneBuilt,
+    kDestroyBuffer, kDestroyTexture, kDestroyPipeline, kDestroyStructure
+  };
+  struct Call {
+    Op op;
+    int32_t e = 0;
+    uint32_t a = 0, b = 0, c = 0, d = 0;
+    size_t at = 0;      // (where its bytes, pass, instances or written room are)
+    uint32_t size = 0;  // (how many bytes, or instances)
+    const char* name = nullptr;
+    gfx::Structure* scene = nullptr;  // (BuildScene's, and SetScene's of the scene built: made or made anew when replayed)
+  };
+  struct Kept {
+    std::vector<Call> calls;
+    std::vector<uint8_t> bytes;
+    std::vector<std::unique_ptr<uint8_t[]>> written;  // (WriteBuffer's room: where the world writes, until the frame's end)
+    std::vector<gfx::PassDesc> passes;
+    std::vector<gfx::SceneInstance> instances;
+    gfx::Structure* built = nullptr;  // (the scene built last, and its handle when it was: SetScene of it is of the one built)
+    uint32_t builtWas = 0;
+    int pipelinesAsked = 0;
+  };
+  // Whether this call is to be kept (a warm frame being recorded, and this the loading thread).
+  bool Recording() const { return recording_.load(std::memory_order_relaxed) && std::this_thread::get_id() != frames_; }
+  void Keep(Op op, uint32_t a = 0, uint32_t b = 0, uint32_t c = 0, int32_t e = 0) {
+    Call k{op};
+    k.a = a, k.b = b, k.c = c, k.e = e;
+    rec_.calls.push_back(k);
+  }
+  void KeepBytes(Op op, uint32_t a, const void* data, size_t size, uint32_t b = 0, uint32_t c = 0, uint32_t d = 0, int32_t e = 0);
+  void KeepMark(const char* name) {
+    Call k{kMark};
+    k.name = name;
+    rec_.calls.push_back(k);
+  }
+  std::atomic<bool> recording_{false};
+  Kept rec_;
+  std::unordered_map<uint32_t, int> pixelBytes_;  // (the bytes a pixel takes of each texture made here: UpdateTexture's copy; under kept_)
 };
 
 }  // namespace render
