@@ -82,9 +82,10 @@ bool noSound = false;             // --no-sound: a live window without the sound
 bool directWindow = true;
 // --window-capture <prefix>: what the window shows, read back by the renderer (checking):
 // <prefix>_game.png 300 frames into a game, <prefix>_menu.png 300 frames after it is left,
-// <prefix>_loading.png 90 frames into a launch's loading screen.
+// <prefix>_loading.png 90 frames into a launch's loading screen, <prefix>_front.png 300 frames
+// into the first front end (MOHO64UI_CAPTURE_FRAME: the game's and the first front end's frame).
 std::string windowCapture;
-int capturedFrames = 0, menuFrames = 0, loadingFrames = 0;
+int capturedFrames = 0, menuFrames = 0, loadingFrames = 0, frontFrames = 0;
 bool gameSeen = false;
 bool fullScreen = false;          // --fullscreen: the live window fills the main screen, without a frame
 bool modeGiven = false;           // --fullscreen or --size: the command line chose the display mode (DisplayMode)
@@ -460,17 +461,20 @@ int main(int argc, char** argv) {
   if ((wantBackdrop == 1 || (wantBackdrop < 0 && windowed)) && sessionIn.empty() && !noWorld) {
     backdrop = std::make_unique<ui::Backdrop>(&vfs, "/maps/SCMP_009/SCMP_009.scmap");
     cfg.backdrop = backdrop.get();
+    session.menuBackdrop = backdrop.get();
   }
   session.releaseWorlds = [&backdrop]() {
     if (backdrop) backdrop->Stop();
   };
   // The scene's samples (the player's Anti-Aliasing) are set before any world is made, and
   // afterwards only while none lives: the background begins once they are known.
+  // (In a live window shown by the renderer the background is drawn by the window's own picture, the
+  // game's way: GameSession::PresentToWindow.)
   auto beginBackdrop = [&backdrop]() {
 #ifdef MOHO64UI_WORLD_PICTURE
     render::gSceneSamples = ui::Looks().SceneSamples();
 #endif
-    if (backdrop) backdrop->Begin(ui::Looks().vulkan, ui::Looks().textureDetail);
+    if (backdrop) backdrop->Begin(ui::Looks().vulkan, ui::Looks().textureDetail, windowed && directWindow);
   };
   // The front end's state. A new one is made when a game is left (the original makes a new state
   // for every change between front end and game, FA exe 0x885de0).
@@ -602,9 +606,11 @@ int main(int argc, char** argv) {
   // A new front end, its main menu up (after a game is left, or when a launch did not load).
   auto freshFrontEnd = [&]() {
     if ((wantBackdrop == 1 || (wantBackdrop < 0 && windowed)) && !noWorld) {
+      session.menuBackdrop = nullptr;
       backdrop.reset();
       backdrop = std::make_unique<ui::Backdrop>(&vfs, "/maps/SCMP_009/SCMP_009.scmap");
       cfg.backdrop = backdrop.get();
+      session.menuBackdrop = backdrop.get();
       beginBackdrop();  // (the game's picture is gone: the samples may follow the option again)
     }
     auto fresh = std::make_unique<ui::UserState>(&vfs, cfg);
@@ -746,6 +752,7 @@ int main(int argc, char** argv) {
       hooks.opened = [&](void* handle) {
         session.window = handle;
         session.OpenPictureIfDue();  // (a launched table's game: its picture opens now, the window still hidden)
+        session.OpenMenuPicture();   // (else the menus' picture with their background's map, the same way)
       };
       hooks.direct = [&]() { return session.DrawsToWindow(); };
       hooks.present = [&](const ui::SoftwareTarget& layer, const ui::IntRect& changed) { session.PresentToWindow(layer, changed); };
@@ -773,8 +780,10 @@ int main(int argc, char** argv) {
                            leaveOrRestart();
                            startGameInterface();
                            if (!windowCapture.empty() && session.DrawsToWindow()) {
-                             // (MOHO64UI_CAPTURE_FRAME: the game's frame it is taken at, 300 unless given)
+                             // (MOHO64UI_CAPTURE_FRAME: the game's frame it is taken at, 300 unless given; the
+                             // first front end's too, before any game)
                              static const int captureAt = std::getenv("MOHO64UI_CAPTURE_FRAME") ? std::atoi(std::getenv("MOHO64UI_CAPTURE_FRAME")) : 300;
+                             if (!game && !gameSeen && !session.Loading() && ++frontFrames == captureAt) session.CaptureWindow(windowCapture + "_front.png");
                              if (game && ++capturedFrames == captureAt) session.CaptureWindow(windowCapture + "_game.png"), gameSeen = true;
                              if (!game && gameSeen && ++menuFrames == 300) session.CaptureWindow(windowCapture + "_menu.png");
                              if (!game && session.Loading() && ++loadingFrames == 90) session.CaptureWindow(windowCapture + "_loading.png");
@@ -802,7 +811,7 @@ int main(int argc, char** argv) {
   if (dumpUi) shown->ui().Dump();
   if (!screenshot.empty()) {  // draw the head once and save the picture
     ui::SoftwareTarget target(width, height);
-    if (backdrop && !game) {  // the background's first picture takes a moment: ask for it, then wait
+    if (backdrop && !game && !backdrop->Direct()) {  // the background's first picture takes a moment: ask for it, then wait
       shown->ui().Render(shown->L(), target, 0);
       backdrop->WaitUntilReady(30.0);
       target.Clear(0xff000000u);

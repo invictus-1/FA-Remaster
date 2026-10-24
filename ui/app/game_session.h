@@ -38,6 +38,7 @@ namespace sound {
 class SoundSystem;
 }
 class ReplayTimelineSource;
+class Backdrop;
 
 class GameSession {
  public:
@@ -147,6 +148,15 @@ class GameSession {
   void* window = nullptr;
   bool waitForWindow = false;
   void OpenPictureIfDue();
+  // The front end's background (app/backdrop.h; nullptr: none): while it is begun the direct way
+  // and not stopped, the window's picture without a game is opened with its map and shows it under
+  // the menus, from the camera it gives each frame the movie showed (Backdrop::TakeView); else
+  // black under the interface (a picture made while none is asked for has no world; one with the
+  // map is kept, as through the loading screen, until the game's picture takes the window).
+  // OpenMenuPicture opens it now (the window still hidden at the start: reading the map takes a
+  // moment); PresentToWindow opens it when due otherwise (after a game).
+  Backdrop* menuBackdrop = nullptr;
+  void OpenMenuPicture();
   bool DrawsToWindow() const;
   // The frame drawn and shown: the world, `target` (the interface, premultiplied ARGB, the
   // window's size, transparent where the world shows) over it. `changed`: the part of `target`
@@ -297,11 +307,13 @@ class GameSession {
   std::vector<std::string> setupSync_;
   struct Picture;
   std::unique_ptr<Picture> picture_;
-  // Without a game, on the window: the renderer's picture without a world, which shows the
-  // interface (the menus, their moving background's pixels in it) over black. One picture per
+  // Without a game, on the window: the renderer's picture of the menus' background's map
+  // (menuBackdrop), or without a world, which shows the interface over black. One picture per
   // window at a time: it goes before a game's opens and comes back after the game.
   struct MenuPicture;
   std::unique_ptr<MenuPicture> menuPicture_;
+  std::string failedMenuMap_;  // (a background's map that would not open: not tried again)
+  MenuPicture* EnsureMenuPicture();  // (the one menuBackdrop asks for: made anew when it asks for another)
   int commandSource_ = 0;
   int pictureFocus_ = -2;    // the focus army the picture was last given (0-based; -2: none yet)
   std::string sessionMods_;  // the session's mods as the engine keeps them (serialized Lua)

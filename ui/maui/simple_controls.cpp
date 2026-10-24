@@ -1,4 +1,5 @@
 // Border, Histogram and Movie.
+#include <algorithm>
 #include <cctype>
 #include <cstdint>
 #include <string>
@@ -237,7 +238,21 @@ class Movie : public Control {
       BackdropSource* backdrop = UserState::From(L)->config().backdrop;
       if (!backdrop) return;
       int w = static_cast<int>(r.x1 - r.x0), h = static_cast<int>(r.y1 - r.y0);
-      if (const uint32_t* pixels = backdrop->Latest(w, h)) target.DrawPixels(pixels, w, h, static_cast<int>(r.x0), static_cast<int>(r.y0));
+      const int x = static_cast<int>(r.x0), y = static_cast<int>(r.y0);
+      if (backdrop->DrawsToWindow()) {
+        // (The window's picture shows the map under the interface: the movie's part is left to it
+        // but for the veil, and the window round the movie black, as it shows without a world.)
+        const int veil = backdrop->Show(r.x0, r.y0, r.x1, r.y1);
+        const float W = static_cast<float>(target.Width()), H = static_cast<float>(target.Height());
+        const float x0 = static_cast<float>(x), y0 = static_cast<float>(y), x1 = static_cast<float>(x + w), y1 = static_cast<float>(y + h);
+        if (y0 > 0) target.FillRect({0, 0, W, y0}, 0xff000000u);
+        if (y1 < H) target.FillRect({0, y1, W, H}, 0xff000000u);
+        if (x0 > 0) target.FillRect({0, y0, x0, y1}, 0xff000000u);
+        if (x1 < W) target.FillRect({x1, y0, W, y1}, 0xff000000u);
+        if (veil > 0) target.FillRect({x0, y0, x1, y1}, static_cast<uint32_t>(std::min(veil, 255)) << 24);
+        return;
+      }
+      if (const uint32_t* pixels = backdrop->Latest(w, h)) target.DrawPixels(pixels, w, h, x, y);
       return;
     }
     const Image& picture = decoder.Picture();

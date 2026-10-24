@@ -170,6 +170,16 @@ class BackdropSource {
  public:
   virtual ~BackdropSource() = default;
   virtual const uint32_t* Latest(int width, int height) = 0;
+  // The way without a read-back (the game's way, WorldSource::DrawsToWindow): true when the window's
+  // own picture shows the map under the interface. The movie then gives no pixels: each frame it
+  // shows, it calls Show with its rectangle (the window's picture is fitted to it) and draws the
+  // veil Show answers over it (black of that alpha, 0..255: the picture darker than the world is,
+  // and coming in from black), and black where the window lies outside it.
+  virtual bool DrawsToWindow() const { return false; }
+  virtual int Show(float x0, float y0, float x1, float y1) {
+    (void)x0, (void)y0, (void)x1, (void)y1;
+    return 255;
+  }
 };
 
 class WorldSource {

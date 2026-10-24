@@ -1,5 +1,6 @@
 #include "app/game_session.h"
 
+#include "app/backdrop.h"
 #include "app/window.h"
 
 #include <algorithm>
@@ -1332,6 +1333,7 @@ bool GameSession::FinishLoad(std::string* why) {
 #ifdef MOHO64UI_WORLD_PICTURE
 struct GameSession::MenuPicture {
   render::WorldPicture picture;
+  std::string map;  // the background's map it was opened with ("": none, no world)
   bool vsync = true;
   bool lowLatency = false;  // (as the renderer's picture starts: SetLowLatency)
   int layerW = 0, layerH = 0;  // the interface layer's size as last given (0: none yet)
@@ -1405,33 +1407,79 @@ void GameSession::WaitForNextFrame() {
 #endif
 }
 
+// The window's picture without a game: with the map the menus' background asks for, else none.
+GameSession::MenuPicture* GameSession::EnsureMenuPicture() {
+#ifdef MOHO64UI_WORLD_PICTURE
+  if (!window || picture_) return nullptr;
+  std::string map;  // (the one the background asks for)
+  if (menuBackdrop && menuBackdrop->Direct() && menuBackdrop->map() != failedMenuMap_) map = menuBackdrop->map();
+  // (The picture there is kept while none is asked for: with a map it then shows black under the
+  // interface, as for the loading screen once the background has stopped, until the game's picture
+  // takes the window and it goes; it is made anew only for another map.)
+  if (menuPicture_ && (map.empty() || menuPicture_->map == map)) return menuPicture_.get();
+  const auto t0 = std::chrono::steady_clock::now();
+  menuPicture_.reset();  // (one picture per window: the one before goes first)
+  auto menu = std::make_unique<MenuPicture>();
+  menu->picture.SetVulkan(Looks().vulkan);
+  menu->picture.SetLowLatency(menu->lowLatency = Pacing().lowLatency);  // (the Video tab's Low Latency, before Open)
+  if (!map.empty()) menu->picture.SetTextureDetail(Looks().textureDetail);  // (as the background's own picture: Backdrop::Run)
+  UseGameWindow(menu->picture, window);
+  std::string error;
+  if (!menu->picture.Open(vfs_, map, &error)) {
+    if (map.empty()) {
+      Logf(LogLevel::Warning, "moho64ui: the window's menu picture did not open: %s", error.c_str());
+      return nullptr;
+    }
+    Logf(LogLevel::Warning, "moho64ui: the menu's background: %s cannot be shown (%s)", map.c_str(), error.c_str());
+    failedMenuMap_ = map;
+    menu.reset();
+    return EnsureMenuPicture();  // (without a world)
+  }
+  Looks().rayTracingSupported = menu->picture.RayTracingSupported() ? 1 : 0;  // (the Video tab's Ray Tracing)
+  const double took = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+  if (!map.empty()) {
+    Backdrop::Dress(menu->picture);
+    Logf(LogLevel::Info, "moho64ui: the menu's background: %s, in the window's picture, ready after %.1f s", map.c_str(), took);
+  } else {
+    Logf(LogLevel::Info, "moho64ui: the window's menu picture (no world) opened in %.2f s", took);
+  }
+  menu->map = map;
+  menuPicture_ = std::move(menu);
+  return menuPicture_.get();
+#else
+  return nullptr;
+#endif
+}
+
+void GameSession::OpenMenuPicture() { EnsureMenuPicture(); }
+
 void GameSession::PresentToWindow(const SoftwareTarget& target, const IntRect& changed) {
 #ifdef MOHO64UI_WORLD_PICTURE
   if (!window) return;
-  if (!picture_) {  // no game: the menu's picture, the interface alone over black
-    if (!menuPicture_) {
-      auto menu = std::make_unique<MenuPicture>();
-      menu->picture.SetVulkan(Looks().vulkan);
-      menu->picture.SetLowLatency(menu->lowLatency = Pacing().lowLatency);  // (the Video tab's Low Latency, before Open)
-      UseGameWindow(menu->picture, window);
-      std::string error;
-      if (!menu->picture.Open(vfs_, "", &error)) {
-        Logf(LogLevel::Warning, "moho64ui: the window's menu picture did not open: %s", error.c_str());
-        return;
-      }
-      Looks().rayTracingSupported = menu->picture.RayTracingSupported() ? 1 : 0;  // (the Video tab's Ray Tracing)
-      menuPicture_ = std::move(menu);
-    }
-    MenuPicture& menu = *menuPicture_;
+  if (!picture_) {  // no game: the menu's picture, the interface over its background's map or over black
+    MenuPicture* shown = EnsureMenuPicture();
+    if (!shown) return;
+    MenuPicture& menu = *shown;
     const int w = target.Width(), h = target.Height();
     GiveLayer(menu.picture, target, changed, &menu.layerW, &menu.layerH);
     const bool vsync = Pacing().verticalSync;
     if (vsync != menu.vsync) menu.picture.SetVsync(vsync), menu.vsync = vsync;
     const bool lowLatency = Pacing().lowLatency;
     if (lowLatency != menu.lowLatency) menu.picture.SetLowLatency(lowLatency), menu.lowLatency = lowLatency;
+    // (The background's map where the movie showed this frame; else black under the interface.)
+    render::Camera camera;
+    double tick = 0;
+    const bool world = !menu.map.empty() && menuBackdrop && menuBackdrop->TakeView(menu.picture, w, h, &camera, &tick);
+    if (!menu.map.empty()) menu.picture.SetWorldShown(world);
     std::vector<uint8_t> rgba;
     if (!captureTo_.empty()) menu.picture.CaptureNextWindowFrame(&rgba);
-    menu.picture.DrawToWindow(render::Camera(), w, h, 0.0);
+    const auto t0 = std::chrono::steady_clock::now();
+    menu.picture.DrawToWindow(camera, w, h, tick);
+    if (world) {
+      FrameTimes& times = Times();
+      times.worldDraw += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+      ++times.worldDraws;
+    }
     if (!captureTo_.empty()) SaveWindowCapture(rgba, w, h, captureTo_), captureTo_.clear();
     return;
   }

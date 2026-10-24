@@ -2120,6 +2120,28 @@ list I hand SetIconColors.
 DONE (render a75c106, main b9c3ed1): SetArmyColors; used: game_session.cpp hands ArmyColorsForWorld (Colour
 Vision's palette, else empty) whenever it changes; colorvision.lua checks it.
 
+### 37. A map loaded on an open window picture in the background (the menu's map; optimisation run)
+From the interface chat, 2026-10-23. Not blocking. The front end now draws like the game (helper menu4k): the
+window's picture draws the menu's map (SCMP_009) straight into the window and the interface goes over it on the card;
+the main menu at native 4K went from 16.1 ms a frame to 4.2 ms (the screen's 240), the interface's drawing 13.4 ms ->
+0.55 ms. Two waits are left, both because WorldPicture::Open makes the device and the world together and the window
+holds one swap chain: (1) leaving a game, the menu shows after ~0.9 s, the last game frame standing meanwhile (the
+picture reopens on the menu's map); (2) at the start with a cold shader cache, the window stays hidden while the map
+opens. Could the window's picture load a map in the background while it keeps showing what it has, something like
+`WorldPicture::OpenWorld(map)` (or `LoadMapAsync` + `IsMapReady` + `SwapToLoadedMap`), so the host opens the menu's map
+while the game's last frame or the loading screen still shows, and swaps when it is ready? The loading screen could
+use the same: the game's map loaded while the loading screen draws (today the host opens the game's picture after the
+load).
+
+### 38. A full-screen picture drawn by the card: WorldPicture::SetBackdrop (loading film, IN TRANSIT cover)
+From the interface chat, 2026-10-23. Not blocking; the renderer offered it. Big pictures the interface stretches over
+the whole screen (the loading screen's faction film 1280x1024 at 25 fps, the "IN TRANSIT" cover fading at game start)
+are scaled on the processor today (made cheap by the hitch helper: painted in bands on 8 threads, texels kept; a film
+frame still ~6-8 ms at 4K). Proposed by the renderer: `WorldPicture::SetBackdrop(rgba, width, height, fit)` drawn by
+the card under or over the world as the host chooses, uploaded once per new picture and stretched each frame (a film:
+a new upload per film frame), its alpha / tint settable per frame (the cover fades), so the host's CPU scaling of
+those goes. The host keeps drawing everything else; the interface's own controls stay over it.
+
 ## To the visuals track
 
 ### 1. The rebuilt UEF commander for the stock commander too (UEL0001)

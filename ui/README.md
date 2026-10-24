@@ -78,12 +78,14 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   the picture itself (its swap chain on the window, true vertical sync): the world is drawn on
   the card and the interface, drawn by this program over a transparent background (premultiplied
   ARGB), is laid over it there (`WorldPicture::SetInterfaceLayer` / `DrawToWindow`); without a
-  game a picture without a world shows the menus the same way, and one picture at a time holds
-  the window (the menu's goes before a game's opens). A launched table's picture opens while the
-  window is still hidden. Measured in a game on the rebuilt Seton's: 13.4 ms a frame at
+  game the menus are shown the same way by a picture of their background's map (below), or by
+  one without a world, and one picture at a time holds the window (the menu's goes before a
+  game's opens). A launched table's picture opens while the window is still hidden, and so does
+  the menus' at the start. Measured in a game on the rebuilt Seton's: 13.4 ms a frame at
   1600x900 (15.4 the old way), 16.1 ms at 3840x2160 (43.1). `--gdi`: the old way (the world's
   picture read back, everything copied to the window). `--window-capture <prefix>`: what the
-  window shows, read back, as `<prefix>_game.png` and, after a game is left, `<prefix>_menu.png`.
+  window shows, read back, as `<prefix>_game.png` and, after a game is left, `<prefix>_menu.png`;
+  the first front end's as `<prefix>_front.png` (at `MOHO64UI_CAPTURE_FRAME`, 300 unless given).
   The interface is drawn only where it changed (`draw/recorder.h`: a frame's drawing is
   recorded, compared with the last frame's, and only the 32-pixel tiles where it differs are
   drawn again, as a full redraw would draw them; only that part goes to the renderer):
@@ -776,20 +778,30 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
 - The front end's new background (ours, not the original's): where the main menu's script plays
   its background film (`/movies/main_menu.sfd`, a Movie control under everything else), the host
   shows the game's own world instead: the renderer's picture of Seton's Clutch in the evening
-  light, the camera going once round the middle of the map in five minutes, low over the shores.
-  The picture is made on a thread of its own with a graphics device of its own
-  (`app/backdrop.*`), so the menu never waits for it: the Movie control takes the newest finished
-  picture each frame (`BackdropSource` in `maui/world_source.h`), darkened so the menu's own signs
-  stand out, and coming in from black over a second and a half (again whenever the menu comes
-  back from another screen: while nobody shows it, no picture is made). Reading the map takes
-  some seconds: until this run's first picture is there, the menu shows the first picture of the
-  run before, kept as a file in the system's folder for temporary files
-  (`moho64ui_backdrop_<width>x<height>.raw`); the camera starts at the same place every time, so
-  the moving picture takes over from it. Without such a file the background is black as before.
-  It ends when a game starts. Only that one film is replaced; with the game's option for the
+  light, the camera going once round the middle of the map in five minutes, low over the shores,
+  darkened so the menu's own signs stand out, and coming in from black over a second and a half
+  whenever the menu comes back from another screen (`app/backdrop.*`, `BackdropSource` in
+  `maui/world_source.h`). In the live window it is shown the game's way: the window's own picture
+  is opened with the map (`GameSession::PresentToWindow`; at the start before the window shows,
+  after a game when the front end comes back, about a second) and draws it straight into the
+  window, the interface laid over it; the Movie control gives no pixels, only its rectangle, a
+  black veil over it (the darkening) and black round it, so the menus are painted only where they
+  change (the main menu at 3840x2160: 16.1 -> 4.2 ms a frame, the interface's drawing 13.4 ->
+  0.6 ms; before, its moving picture made every frame whole). While another screen is up the
+  window's picture shows black under the interface; it keeps the map through the loading screen
+  and goes when the game's picture opens. In a run without a window that asks for it (and with
+  `--gdi`) the picture is made on a thread of its own with a graphics device of its own, so the
+  menu never waits for it: the Movie control takes the newest finished picture each frame (while
+  nobody shows it, no picture is made). Reading the map takes some seconds: until this run's
+  first picture is there, the menu shows the first picture of the run before, kept as a file in
+  the system's folder for temporary files (`moho64ui_backdrop_<width>x<height>.raw`); the camera
+  starts at the same place every time, so the moving picture takes over from it. Without such a
+  file the background is black as before. It ends when a game starts. Only that one film is replaced; with the game's option for the
   menu's background film off, the script makes no such control and nothing is shown. The film
   itself is still not decoded. `MOHO64UI_BACKDROP_AT=<seconds>` starts that far along the
-  camera's way (for pictures of it).
+  camera's way (for pictures of it), `MOHO64UI_BACKDROP_HOLD=1` keeps it there (to compare
+  pictures). Test: `ui/tests/menu_backdrop.lua` (a live window: the main menu, a full screen and
+  back, the lobby, a game launched from it and left).
 - Life bars over units, ON by default as in the original (the renderer's own bars:
   `WorldPicture::SetLifeBars`; its work bars and pause marks are on apart from them): the console
   command `UI_RenderUnitBars`, which the game's key map binds to Alt-L ("toggle_lifebars"). The
