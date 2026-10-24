@@ -885,8 +885,8 @@ void RegisterCoreBindings(ScriptState& state) {
 // - exp (0x919d50): x * log2(e) rounded to float, split at the nearest integer, f2xm1, then 1 + that rounded to
 //   float again, fscale.
 // sin, cos, tan, atan, atan2, log and log10 are one wide instruction each, stored as a float: the correctly
-// rounded value. pow goes to the library's double version (0xa8e0e0 -> 0xaa93c0 with exceptions masked), sqrt is
-// fsqrt, mod is fprem, deg and rad multiply by a float constant.
+// rounded value. pow (0x919cb0 -> 0xa8e0e0) takes the x87 branch like acos (the same dispatcher; see moho_lua_pow),
+// sqrt is fsqrt, mod is fprem, deg and rad multiply by a float constant.
 extern "C" {
 // acos / asin (the CRT's x87 cores _CIacos 0xa8dd28 / _CIasin 0xa8de78): a NaN stays as it is, outside [-1, 1]
 // (and +-inf) the x87 indefinite -QNaN (0xa8ddaa: fld [0xf3f200]), +-1 exactly as dmath's ends
@@ -905,6 +905,52 @@ float moho_lua_asin(float x) {
   if (x != x) return x;
   if (x > 1.0f || x < -1.0f) return LuaIndefinite();
   return moho::dmath::Asin(x);
+}
+// pow (math_pow 0x919cb0 -> 0xa8e0e0): the same dispatcher as acos (0xa8dcd0), so the x87 branch 0xa8e11b ->
+// 0xa8e13d, with the control word through 0xaa7bd5 (the precision bits kept: 24 on the sim thread). For a finite
+// x > 0: fyl2x (z = y log2 x, wide), then 2^z by 0xaa7bc0: n = frndint(z), f = n - z rounded to 24 bits (fsubr) and
+// negated, f2xm1 (wide), 1 + that rounded to 24 bits (fld1 faddp), fscale by n. So the result is 2^n times a
+// 24-bit 2^f, often a unit in the last place away from the correctly rounded power: a square is off in about 4 of
+// 100 (Naval, tick 436: a Seraphim tactical missile's glide turn rate, FAF's AverageSpeedOverDistance squares its
+// speed 14.764708 to 217.9966, not 217.99658, and SetTurnRate gets 88.6820068 where ours had 88.6819992).
+// x < 0: an integer y (0xa8e302: y == frndint(y); odd when y/2 is not) takes |x| and negates for odd y, any other y
+// gives the indefinite -QNaN (0xa8e2f2: fld [0xf3f200]). x = +-0 (0xa8e273): y = 0 gives 1; y < 0 gives inf
+// (0xf3f3a0), y > 0 gives 0, negative when x is -0 and y odd. A NaN in either (0xa8e1d4 / 0xa8e1f0: faddp) gives a
+// NaN. The infinities go to a helper (0xaaa18b) not ported: the C library's pow stands in for it.
+// Ours takes z = y log2 x as a double-double (fma), close enough to the wide fyl2x that the two 24-bit roundings
+// come out the same (20000 random arguments against an 80-bit model: no difference).
+float moho_lua_pow(float x, float y) {
+  if (x != x || y != y) return x + y;
+  if (std::isinf(x) || std::isinf(y)) return static_cast<float>(std::pow(static_cast<double>(x), static_cast<double>(y)));
+  const double yd = y;
+  auto parity = [](double v) {  // 0xa8e302: 0 not an integer, 1 odd, 2 even
+    if (std::nearbyint(v) != v) return 0;
+    const double h = v * 0.5;
+    return std::nearbyint(h) != h ? 1 : 2;
+  };
+  bool negate = false;
+  if (x == 0.0f) {
+    if (y == 0.0f) return 1.0f;
+    const bool neg = std::signbit(x) && parity(yd) == 1;
+    const float r = y < 0.0f ? HUGE_VALF : 0.0f;
+    return neg ? -r : r;
+  }
+  if (x < 0.0f) {
+    const int k = parity(yd);
+    if (k == 0) return LuaIndefinite();
+    negate = (k == 1);
+  }
+  const double L = std::log2(std::fabs(static_cast<double>(x)));
+  const double hi = yd * L;
+  const double lo = std::fma(yd, L, -hi);
+  double n = std::nearbyint(hi);  // frndint of the wide z = hi + lo
+  if (hi - n == 0.5 && lo > 0.0) n += 1.0;  // (a tie in hi only: the wide z lies past it)
+  else if (hi - n == -0.5 && lo < 0.0) n -= 1.0;
+  const float f = static_cast<float>((hi - n) + lo);              // fsubr at PC_24 (and fchs)
+  const float one = static_cast<float>(std::exp2(static_cast<double>(f)));  // f2xm1, fld1 faddp at PC_24
+  const double e = n > 4096.0 ? 4096.0 : (n < -4096.0 ? -4096.0 : n);
+  const float r = static_cast<float>(std::ldexp(static_cast<double>(one), static_cast<int>(e)));  // fscale, fstp
+  return negate ? -r : r;
 }
 float moho_lua_exp(float x) {
   if (!(x == x)) return x;

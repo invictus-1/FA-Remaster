@@ -697,6 +697,13 @@ int TickPatrol(Sim& sim, Unit* u, BuildTask& t) {
       c = MakeRepairChild(sim, u, ru, false);
     } else {
       p.tried.push_back(EntityRef(r));
+      // the reclaim branch builds a CAiTarget of the entity first (0x61c2e1..0x61c30b: 0x5c3a90 into +0xc8, then
+      // UpdateTarget 0x5d55b0 from 0x61c2f9, then IssueReclaimTask 0x61ef60 with it): one Unit::PickTargetPoint draw
+      // for a unit with AI.TargetBones (none for a prop), the value unused; the repair branch makes none (0x61c2ac..
+      // 0x61c2bb: CUnitRepairTask::new 0x5f9e50 with the unit). Seen (probe mp1_9304): MP1 9304, the original draws
+      // 0x6aaf94 for army 1's ship 0x1000d2 from the patrol task's UpdateTarget (caller 0x61c2fe) in the command
+      // stage; ours drew nothing there and the stream ran one draw behind.
+      TargetPointDraw(sim, r);
       c = MakeReclaimChild(sim, u, r);
     }
     u->dispatchResult = 0;  // (its CCommandTask ctor clears the parent's result, 0x5f095f)

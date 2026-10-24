@@ -1034,8 +1034,14 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
       float rate = std::max(1.0f, time * 10.0f);
       c.reclaimStep = 1.0f / rate;
       if (energy < 0 || mass < 0) return kTaskFailed;
-      c.reclaimPerTick[kEnergy] = energy / rate;
-      c.reclaimPerTick[kMass] = mass / rate;
+      // 0x61fc44..0x61fc9e: the step is 1 / rate (stored negated, x -1.0f), and each per-tick amount is the cost
+      // TIMES that step (mulss xmm3), not the cost / rate. Seen: MP3 526, army 3's engineer 0x200002 reclaims a rock
+      // worth 37.5 mass over 7.5 ticks: the original books 5.0000005 a tick (37.5 x 0.13333334), ours booked 5.0; the
+      // army's mass income 5.29999971 vs 5.29999924 from 527, its stored mass and its factories' build rates a few
+      // ulps apart from there (MP3 3281: a Seraphim tank's build fraction 3.8e-7 behind, its factory slider and the
+      // gun's muzzle in the watch lines one float step off now and then).
+      c.reclaimPerTick[kEnergy] = energy * c.reclaimStep;
+      c.reclaimPerTick[kMass] = mass * c.reclaimStep;
       u->unitStates.insert("Reclaiming");
       u->focusId = EntityRef(e);
       if (e->maxHealth > 0) e->fractionComplete = std::min(e->fractionComplete, e->health / e->maxHealth);

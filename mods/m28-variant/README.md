@@ -51,5 +51,10 @@ the original M28AI v326 and with this variant in FA Remastered and comparing the
      The original is kept as `IsTableEmptyOriginal`.
    - `FunctionProfiler` (`lua/AI/M28Profiler.lua`, about 96 million calls an hour) returns at once when no debug or
      profiling switch is on (the rest of it does nothing then).
+4. **The zone of a position** (2026-10-24, `lua/AI/M28Map.lua`): `GetPlateauAndLandZoneReferenceFromPosition` and
+   `GetClosestPlateauOrZeroAndZoneToPosition` asked FAF's navigational mesh for the hover label of the position's
+   segment on every call (about 14 million times an hour, a walk down FAF's quadtree in Lua). The label of each
+   segment is now kept and asked again only when the mesh is generated anew or the segment size or playable area
+   change. `bVariantVerifyHoverLabel` is a test switch (off) that asks the mesh as well and logs any difference.
 
 Every change in the Lua files is marked with a comment that starts "FA Remastered variant".
