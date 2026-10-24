@@ -2,6 +2,8 @@
 // the last pass puts that on the window - unchanged for the original look, or mapped from the modern
 // look's open-ended linear light to what a screen can show.
 #pragma once
+#include <utility>  // [views] (std::swap)
+#include <initializer_list>  // [views]
 #include <functional>
 #include <string>
 
@@ -82,6 +84,35 @@ class Post {
     int blurCount = 2;
   } originalBloom;
 
+  // [views] What it keeps for one view (its pictures at that view's size, what it keeps of the frames before) swapped
+  // with another's, so each of a picture's views has its own (views.h, ViewSide); its pipelines and settings stay.
+  void SwapView(Post& o) {
+    std::swap(finished_, o.finished_), std::swap(finishedWidth_, o.finishedWidth_), std::swap(finishedHeight_, o.finishedHeight_);
+    std::swap(ldr_, o.ldr_), std::swap(color_, o.color_), std::swap(depth_, o.depth_), std::swap(drawn_, o.drawn_);
+    std::swap(behind_, o.behind_), std::swap(glowSteps_, o.glowSteps_), std::swap(glowWidth_, o.glowWidth_);
+    std::swap(glowHeight_, o.glowHeight_), std::swap(bloom_, o.bloom_), std::swap(bloomWidth_, o.bloomWidth_);
+    std::swap(bloomHeight_, o.bloomHeight_), std::swap(width_, o.width_), std::swap(height_, o.height_);
+    std::swap(finishWidth_, o.finishWidth_), std::swap(finishHeight_, o.finishHeight_), std::swap(opaque_, o.opaque_);
+    std::swap(reactive_, o.reactive_), std::swap(upscaled_, o.upscaled_), std::swap(upscaledWidth_, o.upscaledWidth_);
+    std::swap(upscaledHeight_, o.upscaledHeight_), std::swap(upscaledNow_, o.upscaledNow_), std::swap(keptOpaque_, o.keptOpaque_);
+    std::swap(photoFinish, o.photoFinish);
+  }
+  // [views] A view's own (views.h, ViewSide) let go of: the pictures SwapView swaps, destroyed (a class without a
+  // destructor of its own: the world's are let go of with the device).
+  void ReleaseView() {
+    for (gfx::Texture* t : {&finished_, &ldr_, &color_, &depth_, &drawn_, &behind_, &bloom_[0], &bloom_[1], &opaque_, &reactive_, &upscaled_})
+      if (*t) {
+        device_->Destroy(*t);
+        *t = {};
+      }
+    for (gfx::Texture& t : glowSteps_)
+      if (t) {
+        device_->Destroy(t);
+        t = {};
+      }
+    width_ = height_ = finishWidth_ = finishHeight_ = finishedWidth_ = finishedHeight_ = bloomWidth_ = bloomHeight_ = 0;
+    upscaledWidth_ = upscaledHeight_ = 0;
+  }
  private:
   gfx::Device* device_;
   gfx::Pipeline pipeline_, toTarget_;  // the last pass into the window, or (before FSR) into ldr_

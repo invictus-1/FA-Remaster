@@ -335,6 +335,9 @@ class Ocean {
   // were always told no, so nothing bobbed), the long waves those of the frame before.
   bool Riding() const { return on_ && !side_ && lift && haveWater_ && !bobNow_.empty(); }
   void DrawGrid();
+  // [views] For a view of the frame besides the first (World::extraView), after the first's Update: the field and the foam
+  // as that left them, only the lifted grid's patches placed anew for this view (Update places them for the first).
+  void PlaceGridFor(const Camera& camera, const View& view);
   int Patches() const { return static_cast<int>(nodes_.size()); }
   // [lift] For what is drawn on the water after it (kOceanRideShaderBlock): its constants (b3) and its textures bound.
   const void* RideConstants() const { return ride_; }

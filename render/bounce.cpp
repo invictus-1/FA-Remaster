@@ -104,10 +104,11 @@ static const uint kInside = 6, kTile = 8;
   uint2 at = tile * kTile + 1 + local;
 #ifdef SIGHT
   float2 now = weight > 0 ? sum.xy / weight : float2(map.w, map.w * map.w);
-  atlas[at] = lerp(now, atlas[at], keep);
+  atlas[at] = fresh ? now : lerp(now, atlas[at], keep);  // [views] (fresh: what the atlas held not read at all - a new
+  // atlas holds whatever the card's memory held, on Vulkan, and lerp's 0 times a NaN is a NaN)
 #else
   float3 now = weight > 0 ? sum / weight : 0;
-  atlas[at] = float4(lerp(now, atlas[at].rgb, keep), outside);
+  atlas[at] = float4(fresh ? now : lerp(now, atlas[at].rgb, keep), outside);  // [views] (as above)
 #endif
 }
 )hlsl";

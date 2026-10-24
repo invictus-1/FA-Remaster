@@ -786,6 +786,16 @@ void Ocean::Select(float x, float z, int level, const View& view, Vec3 eye, floa
   }
 }
 
+void Ocean::PlaceGridFor(const Camera& camera, const View& view) {  // [views]
+  if (!Lifted()) return;
+  nodes_.clear();
+  PlaceGrid(view, view.constants.beyond[2] > 0 ? 1 / view.constants.beyond[2] : 0.0f);
+  Vec3 right, up, back;
+  camera.Axes(&right, &up, &back);
+  const bool alongX = std::fabs(back.x) > std::fabs(back.z);
+  gridOrder_ = (alongX ? 4 : 0) | (back.x < 0 ? 2 : 0) | (back.z < 0 ? 1 : 0);
+}
+
 void Ocean::DrawGrid() {
   if (!Lifted()) return;
   const int count = static_cast<int>(nodes_.size());

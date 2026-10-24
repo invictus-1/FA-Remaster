@@ -15,6 +15,7 @@
 // (cloudzoom) Unless the zoom through them is on (`zoom`, cloud_zoom.h): then the eye rises into and above the
 // layer, and the clouds below it are laid over the ground, thinned so the map stays readable.
 #pragma once
+#include <utility>  // [views] (std::swap)
 
 #include <algorithm>
 #include <cstdint>
@@ -102,6 +103,14 @@ class Clouds {
   // The layer's underside as the march has it for an eye at that height (the lightning's flash is put in it).
   float Underside(float eyeY) const { return zoom.on && marchZoom_ && eyeY > base - 40 ? base : std::max(base, eyeY + 40); }
 
+  // [views] What it keeps for one view (its pictures at that view's size, what it keeps of the frames before) swapped
+  // with another's, so each of a picture's views has its own (views.h, ViewSide); its pipelines and settings stay.
+  void SwapView(Clouds& o) {
+    std::swap(marched_, o.marched_), std::swap(width_, o.width_), std::swap(height_, o.height_), std::swap(now_, o.now_);
+    std::swap(frame_, o.frame_), std::swap(haveLast_, o.haveLast_), std::swap(lastViewProj_, o.lastViewProj_);
+    std::swap(lastEye_, o.lastEye_), std::swap(zoomedNow_, o.zoomedNow_), std::swap(coverAt_, o.coverAt_);
+    std::swap(prepared_, o.prepared_), std::swap(built_, o.built_);
+  }
  private:
   bool Size(int width, int height);
   gfx::Device* device_;

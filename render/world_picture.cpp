@@ -19,6 +19,7 @@
 #include "sim/terrain.h"
 #include "sim_frames.h"
 #include "window.h"
+#include "views.h"  // [views]
 #include "world.h"
 
 #if defined(_WIN32)
@@ -207,6 +208,28 @@ struct WorldPicture::Impl {
   void NoteLight();
   static constexpr int kSteadyFrames = 150;  // (the probes then hold 1 % of before: 0.97 ^ 150)
   bool depthIsWindow = false;   // (the scene's depth is the main picture's, as last drawn: FocusAt reads it)
+  // [views] SetViews: the views; each view's own parts and picture (views.h; [0]: view 0's picture where it does not fill
+  // the window, its parts unused), the kind each was made for; the lay of the pictures into the window; frames drawn with
+  // views (an inset's turn); this frame's: views drawn (PrepareWorld), the game's frame added, and the window's size
+  std::vector<WorldPicture::PictureView> views;
+  std::vector<std::unique_ptr<ViewSide>> sides;
+  std::vector<WorldPicture::ViewKind> sideKinds;
+  std::unique_ptr<ViewLayer> viewLayer;
+  bool viewLayerTried = false, viewLayerOk = false;
+  uint64_t viewFrames = 0;
+  bool viewsNow = false, playingNow = false, framegenHeld = false;
+  int viewsWidth = 0, viewsHeight = 0;
+  // (the numbers of all views' models together, for LastStats)
+  bool viewsCounted = false;
+  int viewModels = 0;
+  long long viewTriangles = 0, viewShadowTriangles = 0, viewGroundTriangles = 0;
+  bool Fills(const WorldPicture::ViewRect& r, int width, int height) const { return r.x <= 0 && r.y <= 0 && r.x + r.width >= width && r.y + r.height >= height; }
+  bool ViewsOn(int width, int height) const { return views.size() > 1 || (views.size() == 1 && !Fills(views[0].rect, width, height)); }
+  bool SplitOn() const {
+    for (size_t i = 1; i < views.size(); ++i)
+      if (views[i].kind == WorldPicture::ViewKind::Split) return true;
+    return false;
+  }
   std::unique_ptr<PhotoFocus> focus;
   void LayInterface(int width, int height);  // (the host's interface over what is in the window, DrawToWindow)
   void LayBackdrop(int width, int height, bool worldDrawn);  // [backdrop] (under the interface, DrawToWindow)
@@ -545,6 +568,10 @@ void WorldPicture::Impl::WarmFrame(Load& l) {
 
 // The picture's own of the world shown, begun afresh for another (SwapMap).
 void WorldPicture::Impl::ForgetWorld() {
+  // [views] (the views' own pictures and what they kept of their frames are the world before's: let go of while it is
+  // still there, through its device, and made afresh for the world now shown)
+  sides.clear();
+  sideKinds.clear();
   frames.~SimFrames();  // (the beats of the game before: none; it holds a lock, so it is made anew in its place)
   new (&frames) SimFrames();
   frames.SetFocusArmy(focusArmy);
@@ -896,7 +923,10 @@ void WorldPicture::RenderWorld(const Camera& camera, int width, int height, doub
   if (!m.prepared) PrepareWorld(camera, width, height, tick);
   m.prepared = false;
   const auto t0 = std::chrono::steady_clock::now();
-  if (m.worldShown) m.world->Render();
+  if (m.worldShown) {
+    if (m.viewsNow) DrawViews(width, height);  // [views]
+    else m.world->Render();
+  }
   m.stats.drawMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
 }
 
@@ -923,6 +953,12 @@ void WorldPicture::TakeStats(float endMs) {
     s.triangles = m.world->meshes.drawnTriangles;
     s.shadowTriangles = m.world->meshes.shadowTriangles;
     s.groundTriangles = m.world->terrain.drawnTriangles;
+    if (m.viewsCounted) {  // [views] (all the views' together)
+      s.models = m.viewModels;
+      s.triangles = m.viewTriangles;
+      s.shadowTriangles = m.viewShadowTriangles;
+      s.groundTriangles = m.viewGroundTriangles;
+    }
     s.particles = m.world->particles.liveParticles;
     s.emitters = m.world->particles.liveEmitters;
     s.textureBytes = static_cast<long long>(m.world->textures.bytes);
@@ -999,7 +1035,20 @@ void WorldPicture::PrepareWorld(const Camera& camera, int width, int height, dou
   m.device->BeginFrame(m.worldShown ? clear : black);
   const auto t2 = std::chrono::steady_clock::now();
   m.stats.waitMs = std::chrono::duration<float, std::milli>(t2 - t1).count();
-  m.world->Begin(camera, width, height, static_cast<float>(shown * 0.1), shown * 0.1);
+  // [views] with views, view 0 at its own place's size (where it does not fill the window: drawn into a picture of its own),
+  // and frame generation off while a split screen is on (its picture made between would smear across the views' line)
+  m.viewsNow = !m.photoFrame && !m.world->photo && m.ViewsOn(width, height);
+  m.playingNow = playing;
+  m.viewsCounted = false;
+  int beginWidth = width, beginHeight = height;
+  if (m.viewsNow && !m.Fills(m.views[0].rect, width, height)) {
+    beginWidth = std::max(m.views[0].rect.width, 16);
+    beginHeight = std::max(m.views[0].rect.height, 16);
+  }
+  m.framegenHeld = m.viewsNow && m.SplitOn() && m.world->frameGeneration;
+  if (m.framegenHeld) m.world->frameGeneration = false;
+  m.world->Begin(camera, beginWidth, beginHeight, static_cast<float>(shown * 0.1), shown * 0.1);
+  if (m.framegenHeld) m.world->frameGeneration = true;
   if (!m.photoFrame && !m.world->photo && !m.world->sidePicture) m.NoteLight();  // (photofix: a frame of the window's)
   if (playing) {
     m.frames.TakeEffectEvents(&m.events);
@@ -2067,6 +2116,230 @@ bool WorldPicture::TakeDonePhoto(std::vector<uint32_t>* pixels, int* width, int*
   if (width) *width = p.plan.width;
   if (height) *height = p.plan.height;
   return !pixels->empty();
+}
+
+
+// --- [views] several views in one picture (world_picture.h, views.h) ---
+
+void WorldPicture::SetViews(const std::vector<PictureView>& views) {
+  Impl& m = *impl_;
+  m.views = views;
+  if (!m.views.empty()) m.views[0].kind = ViewKind::Main;
+  // (a view gone lets go of its pictures; one of another kind starts afresh)
+  if (m.sides.size() > m.views.size()) {
+    m.sides.resize(m.views.size());
+    m.sideKinds.resize(m.views.size());
+  }
+  for (size_t i = 0; i < m.sides.size(); ++i)
+    if (m.sides[i] && m.sideKinds[i] != m.views[i].kind) m.sides[i].reset();
+}
+
+int WorldPicture::ViewCount() const { return std::max(static_cast<int>(impl_->views.size()), 1); }
+
+int WorldPicture::ViewAt(float x, float y) const {
+  const Impl& m = *impl_;
+  if (m.views.empty()) return x >= 0 && y >= 0 ? 0 : -1;
+  for (int i = static_cast<int>(m.views.size()) - 1; i >= 0; --i) {
+    const ViewRect& r = m.views[static_cast<size_t>(i)].rect;
+    if (x >= static_cast<float>(r.x) && y >= static_cast<float>(r.y) && x < static_cast<float>(r.x + r.width) && y < static_cast<float>(r.y + r.height)) return i;
+  }
+  return -1;
+}
+
+WorldPicture::ViewRect WorldPicture::ViewPlace(int view) const {
+  const Impl& m = *impl_;
+  if (view >= 0 && static_cast<size_t>(view) < m.views.size()) return m.views[static_cast<size_t>(view)].rect;
+  ViewRect r;
+  if (view == 0 && m.world) r.width = m.world->ScreenWidth(), r.height = m.world->ScreenHeight();
+  return r;
+}
+
+Camera WorldPicture::ViewCamera(int view) const {
+  const Impl& m = *impl_;
+  if (view > 0 && static_cast<size_t>(view) < m.sides.size() && m.sides[static_cast<size_t>(view)] && m.sides[static_cast<size_t>(view)]->drawn)
+    return m.sides[static_cast<size_t>(view)]->camera;
+  return m.world ? m.world->camera : Camera{};
+}
+
+// (a view's picking: the world's camera, views and screen size those of the view's last frame for the call, and back)
+template <typename Ask>
+static auto AskView(World* world, const ViewSide* side, Ask ask) {
+  const World::Picking main = world->KeepPicking();
+  world->RestorePicking({side->camera, side->view, side->screenView, side->screenWidth, side->screenHeight});
+  auto answer = ask();
+  world->RestorePicking(main);
+  return answer;
+}
+
+static const ViewSide* DrawnSide(const std::vector<std::unique_ptr<ViewSide>>& sides, int view) {
+  if (view <= 0 || static_cast<size_t>(view) >= sides.size() || !sides[static_cast<size_t>(view)] || !sides[static_cast<size_t>(view)]->drawn) return nullptr;
+  return sides[static_cast<size_t>(view)].get();
+}
+
+bool WorldPicture::ViewProject(int view, Vec3 p, float* x, float* y) const {
+  World* w = impl_->world.get();
+  if (!w) return false;
+  if (view == 0) return w->Project(p, x, y);
+  const ViewSide* s = DrawnSide(impl_->sides, view);
+  return s && AskView(w, s, [&] { return w->Project(p, x, y); });
+}
+
+bool WorldPicture::ViewGroundAt(int view, float x, float y, Vec3* hit) const {
+  World* w = impl_->world.get();
+  if (!w) return false;
+  if (view == 0) return w->GroundAt(x, y, hit);
+  const ViewSide* s = DrawnSide(impl_->sides, view);
+  return s && AskView(w, s, [&] { return w->GroundAt(x, y, hit); });
+}
+
+uint32_t WorldPicture::ViewUnitAt(int view, float x, float y) const {
+  World* w = impl_->world.get();
+  if (!w) return 0xffffffffu;
+  if (view == 0) return w->UnitAt(x, y);
+  const ViewSide* s = DrawnSide(impl_->sides, view);
+  return s ? AskView(w, s, [&] { return w->UnitAt(x, y); }) : 0xffffffffu;
+}
+
+void WorldPicture::ViewUnitsIn(int view, float x0, float y0, float x1, float y1, std::vector<uint32_t>* out) const {
+  out->clear();
+  World* w = impl_->world.get();
+  if (!w) return;
+  if (view == 0) return w->UnitsIn(x0, y0, x1, y1, out);
+  if (const ViewSide* s = DrawnSide(impl_->sides, view))
+    AskView(w, s, [&] {
+      w->UnitsIn(x0, y0, x1, y1, out);
+      return 0;
+    });
+}
+
+void WorldPicture::ViewLifeBarAnchors(int view, std::vector<LifeBarAnchor>* out) const {
+  out->clear();
+  const World* w = impl_->world.get();
+  if (!w) return;
+  const std::vector<World::BarAnchor>* anchors = &w->barAnchors;
+  if (view != 0) {
+    const ViewSide* s = DrawnSide(impl_->sides, view);
+    if (!s) return;
+    anchors = &s->barAnchors;
+  }
+  out->reserve(anchors->size());
+  for (const World::BarAnchor& a : *anchors) out->push_back({a.unit, a.x, a.y});
+}
+
+// The frame with views (RenderWorld; PrepareWorld has begun view 0 and added the game's frame): view 0 rendered, into the
+// window where it fills it, else into its own picture; then each other view's frame, the same moment from its camera, into
+// its own picture (World::extraView, its parts swapped in: World::SwapView); then the pictures laid into the window, in
+// the window's pass, for the host's interface to be laid over.
+void WorldPicture::DrawViews(int width, int height) {
+  Impl& m = *impl_;
+  World& w = *m.world;
+  if (!m.viewLayerTried) {
+    m.viewLayerTried = true;
+    m.viewLayer = std::make_unique<ViewLayer>(m.device.get());
+    std::string why;
+    m.viewLayerOk = m.viewLayer->Init(&why);
+    if (!m.viewLayerOk) fprintf(stderr, "render: views: their pictures cannot be laid into the window (%s); view 0 alone\n", why.c_str());
+  }
+  if (!m.viewLayerOk) {
+    w.Render();
+    return;
+  }
+  m.viewsWidth = width;
+  m.viewsHeight = height;
+  if (m.sides.size() < m.views.size()) {
+    m.sides.resize(m.views.size());
+    m.sideKinds.resize(m.views.size());
+  }
+  auto side = [&](size_t i) -> ViewSide& {
+    if (!m.sides[i]) {
+      // ([bgload] made through the device the world shown was made with, as the pictures it swaps with the world's are: a
+      // world opened behind keeps count of what its device made, and lets go of what is left when it goes)
+      m.sides[i] = std::make_unique<ViewSide>(m.worldDevice ? static_cast<gfx::Device*>(m.worldDevice.get()) : m.device.get());
+      m.sideKinds[i] = m.views[i].kind;
+    }
+    return *m.sides[i];
+  };
+  auto count = [&](bool first) {  // (the models of all the views together, for LastStats)
+    if (first) m.viewModels = 0, m.viewTriangles = m.viewShadowTriangles = m.viewGroundTriangles = 0;
+    m.viewModels += w.meshes.drawnInstances;
+    m.viewTriangles += w.meshes.drawnTriangles;
+    m.viewShadowTriangles += w.meshes.shadowTriangles;
+    m.viewGroundTriangles += w.terrain.drawnTriangles;
+  };
+  // view 0
+  const bool fills = m.Fills(m.views[0].rect, width, height);
+  if (fills) {
+    w.Render();
+  } else {
+    ViewSide& s = side(0);
+    if (s.Size(m.views[0].rect.width, m.views[0].rect.height)) {
+      m.device->SetViewWindow(s.color, s.depth);
+      w.Render();
+      m.device->SetViewWindow({}, {});
+      s.drawn = true;
+    } else {
+      w.Render();  // (no picture of its own could be made: into the window, at its size)
+    }
+  }
+  count(true);
+  // the others, the same moment from their cameras
+  const double shown = m.lastTick;
+  for (size_t i = 1; i < m.views.size(); ++i) {
+    const PictureView& v = m.views[i];
+    const bool inset = v.kind == ViewKind::Inset;
+    ViewSide& s = side(i);
+    const int vw = std::max(v.rect.width, 16), vh = std::max(v.rect.height, 16);
+    // (an inset drawn every few frames: in its turn, the insets' turns spread over the frames; its last picture between)
+    const uint64_t every = static_cast<uint64_t>(std::max(v.every, 1));
+    if (inset && s.drawn && s.width == vw && s.height == vh && (m.viewFrames + i) % every != 0) continue;
+    if (!s.Size(vw, vh)) continue;
+    const float upscale = w.upscale, detail = w.meshes.detail, shadowDetail = w.meshes.shadowDetail;
+    w.extraView = true;
+    w.sidePicture = inset;
+    if (inset) {
+      w.upscale = 1;  // (at its own size: no FSR 1)
+      w.meshes.detail = detail * std::clamp(v.detail, 0.05f, 1.0f);
+      w.meshes.shadowDetail = shadowDetail * std::clamp(v.detail, 0.05f, 1.0f);
+    }
+    w.SwapView(s);
+    // (nothing of the view before bound, as at a frame's start: what reads a slot before this view binds it - the sky's
+    // view from the eye, the shadow maps, the light in the air - would read the view before's, and the view look other
+    // than its camera drawn alone)
+    for (int slot = 0; slot < 44; ++slot) m.device->SetTexture(slot, {});
+    for (int slot = 0; slot < 16; ++slot) m.device->SetStorage(slot, {});
+    m.device->SetScene(kRaySceneSlot, {});
+    m.device->SetViewWindow(s.color, s.depth);
+    m.device->Mark("another view");
+    w.Begin(v.camera, vw, vh, static_cast<float>(shown * 0.1), shown * 0.1);
+    if (m.playingNow) {
+      w.effects.Update(shown, m.frame);  // (the effects' lists for this frame again: beams' lights, bands, build beams, drives)
+      w.AddFrame(m.frame, m.armyColors);
+    }
+    w.Render();
+    m.device->SetViewWindow({}, {});
+    count(false);
+    w.SwapView(s);
+    w.extraView = false;
+    w.sidePicture = false;
+    w.upscale = upscale;
+    w.meshes.detail = detail;
+    w.meshes.shadowDetail = shadowDetail;
+    s.drawn = true;
+  }
+  m.viewsCounted = true;
+  ++m.viewFrames;
+  // the pictures into the window, in their order (what fills the window is there already)
+  gfx::PassDesc back;
+  back.window = true;
+  back.clearColor = false;
+  m.device->BeginPass(back);
+  for (size_t i = 0; i < m.views.size(); ++i) {
+    if (i == 0 && fills) continue;
+    const ViewSide* s = m.sides[i].get();
+    if (!s || !s->drawn) continue;
+    const ViewRect& r = m.views[i].rect;
+    m.viewLayer->Lay(s->color, r.x, r.y, s->width, s->height, width, height);
+  }
 }
 
 }  // namespace render

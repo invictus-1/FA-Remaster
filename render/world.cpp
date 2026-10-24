@@ -889,7 +889,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   hotOn_ = hotMetal && look == Look::Modern;
   decals.hotMetal = hotOn_;
   decals.heat = &heat;
-  if (hotOn_ && !sidePicture) heat.Begin(clock);
+  if (hotOn_ && !sidePicture && !extraView) heat.Begin(clock);  // [views] (a view besides the first: the first's glows kept)
   particles.quality = effectsQuality;
   camera = cam;
   const Camera& placing = Placing();  // (photomode: a photo's tile places as the whole photo; else the camera itself)
@@ -928,6 +928,8 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   // (cinecam: a photo's frame makes none and keeps none, and leaves the device as it is)
   if (photo) {
     framegenNow_ = framegenReady_ = false;
+  } else if (extraView) {  // [views] (frame generation is the first view's: what it keeps of this frame stays)
+    framegenNow_ = false;
   } else if (!sidePicture) {
     const bool wanted = frameGeneration && gSceneSamples == 1 && motionView <= 0;
     if (wanted && framegenState_ == 0) {
@@ -947,7 +949,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     framegenNow_ = framegenAsked_ && device_->FrameGenerating() && device_->WindowPicture();
     framegenReady_ = false;
   }
-  if (!sidePicture && !photo) {
+  if (!sidePicture && !photo && !extraView) {  // [views] (a view besides the first: the first's time between frames)
     const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
     frameSeconds_ = lastFrameAt_ > 0 ? static_cast<float>(std::clamp(now - lastFrameAt_, 0.001, 0.25)) : 1 / 60.0f;
     lastFrameAt_ = now;
@@ -1071,7 +1073,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   wakes.Begin(wakesRemade && look == Look::Modern);  // [wakes]
   {  // ripples on the water (their pipelines made the first frame they are on, not at the game's first splash)
     const bool ripplesOn = waterRipples && look == Look::Modern && haveMap_ && map.water.present;
-    water.ripples.Begin(clock_, ripplesOn, sidePicture);
+    if (!extraView) water.ripples.Begin(clock_, ripplesOn, sidePicture);  // [views] (moved on once a frame, by the first view)
     if (ripplesOn) water.PrepareRipples();
     // (winter water's pipeline made while the option is on, before the first snow needs it)
     if (winterWater && look == Look::Modern && haveMap_ && map.water.present) water.PrepareWinter(ripplesOn);
@@ -1249,7 +1251,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
                    static_cast<float>(map.width), static_cast<float>(map.height), terrain.HeightUnit(),
                    map.water.present ? map.water.elevation : -1e9f);
   }
-  if (!sidePicture && !photo) {  // (airfix) a weather cut (World::weatherCut): the moment or the weather jumped since the window's last frame
+  if (!sidePicture && !photo && !extraView) {  // (airfix) a weather cut (World::weatherCut): the moment or the weather jumped since the window's last frame
     const bool lit = timeOfDay >= 0 && look == Look::Modern;
     const float now[7] = {lit ? timeOfDay : -1.0f, cloudCover, rain, snow, fog, wet, lit ? mistNow : 0.0f};
     bool jumped = false;
@@ -1309,7 +1311,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     const bool oceanOn = oceanWaves && look == Look::Modern && haveMap_ && map.water.present;
     const bool weatherOn = timeOfDay >= 0 && look == Look::Modern;
     const float rough = surfRoughness >= 0 ? surfRoughness : weatherOn ? std::clamp(0.15f + 0.85f * rain + 0.3f * snow, 0.0f, 1.0f) : 0.15f;
-    water.ocean.Begin(time, oceanOn, sidePicture, rough, dust.wind);
+    if (!extraView) water.ocean.Begin(time, oceanOn, sidePicture, rough, dust.wind);  // [views] (a view besides the first: the first's sea)
     water.ocean.lift = oceanOn && oceanLift;  // [lift]
     if (!sidePicture) effects.drawnMoves = water.ocean.Riding();  // [whitecaps] (the effects on a riding hull's bones ride with it)
     if (oceanOn) water.PrepareOcean(waterRipples, winterWater, surf, waterDetail, oceanLift);
@@ -1325,7 +1327,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   CpuTimes::Part("tracks, icons, deposits begun");
 
   // the tracks in lying snow: read by the ground while snow lies
-  tracks.Begin();
+  if (!extraView) tracks.Begin();  // [views] (pressed once a frame, by the first view)
   // (deep tracks in their place, when on: their field made the first time)
   // (a frame for something else, the minimap's ground: without them, the field left as it is for the game's frames)
   deepNow_ = false;
@@ -1337,7 +1339,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     }
     deepNow_ = trackField.Ready();
   }
-  if (!sidePicture) {
+  if (!sidePicture && !extraView) {  // [views] (the field stays round the first view's camera)
     trackField.on = deepNow_;
     trackField.Begin(placing.target, clock);
   }
@@ -1378,7 +1380,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   // (unitsfx) the real exhausts (exhausts.h): the effects hand this frame's engines' beams to them while they are on
   exhaustsNow_ = realExhausts && look == Look::Modern && !sidePicture;
   exhausts.Begin(clock, exhaustsNow_);
-  PrepareAhead();  // [hitches]
+  if (!extraView) PrepareAhead();  // [hitches] ([views] once a frame)
   // (icons and bars at the screen's size: the scene's view with the screen's numbers)
   screenView_ = view;
   if (temporalNow_) screenView_.SetMatrix(motion.Now());  // (icons, bars and what is picked: without the jitter)
@@ -1392,7 +1394,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   }
   icons.Begin(screenView_);
   // units seen behind what hides them (hidden_outlines.h): marked as they are listed, this frame's
-  outlinesNow_ = hiddenOutlines && look == Look::Modern && !sidePicture && !photo && !camera.cinematic;  // (cinecam: no outlines on photos or a cinematic camera, as no icons)
+  outlinesNow_ = hiddenOutlines && look == Look::Modern && (!sidePicture || extraView) && !photo && !camera.cinematic;  // ([views] every view's)  // (cinecam: no outlines on photos or a cinematic camera, as no icons)
   outlines.Begin(screenWidth_, screenHeight_);
   // the resource deposits' icons, from where their marks on the ground are no longer drawn (cinecam: not for a
   // cinematic camera, which sees far over the ground: they would stand along the horizon)
@@ -1465,7 +1467,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     const float age = static_cast<float>(clock_ - p.born), seconds = heat.WreckSeconds(radius);
     heatTint_ = HotMetal::Tint(age, seconds);
     meshes.Add(p.model, p.world, {1, 1, 1}, 1, nullptr, &heatTint_);
-    if (!sidePicture) heat.Glowing(id, centre, radius, age, seconds, true);
+    if (!sidePicture && !extraView) heat.Glowing(id, centre, radius, age, seconds, true);
   }
   // the world beyond the map's edge has the map's trees and rocks too: each stands again in the
   // mirrored copies of the map the ground out there is made of, turned as its mirror image is
@@ -1990,7 +1992,7 @@ const Vec3* World::WreckHeat(uint32_t key, const Model* model, const Mat4& at) {
   Sphere(model, at, &centre, &radius);
   const float age = static_cast<float>(clock_ - heat.FirstSeen(key)), seconds = heat.WreckSeconds(radius);
   if (age >= seconds || UnderWater(centre, radius)) return nullptr;
-  if (!sidePicture) heat.Glowing((uint64_t{1} << 40) | key, centre, radius, age, seconds, true);
+  if (!sidePicture && !extraView) heat.Glowing((uint64_t{1} << 40) | key, centre, radius, age, seconds, true);
   heatTint_ = HotMetal::Tint(age, seconds);
   return &heatTint_;
 }
@@ -2148,7 +2150,8 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
         if (const WearLook* w = WearOf(u.id)) meshes.Wear(*w);  // (its scars go down with it)
         ++dyingDrawn;
         // (ripples: a ship going down, a plane coming down into the water)
-        water.ripples.AddHull(u.id, {u.position[0], u.position[1], u.position[2]}, Quat{u.orientation[0], u.orientation[1], u.orientation[2], u.orientation[3]},
+        if (!extraView)  // [views] (the ripples are told once a frame, by the first view)
+          water.ripples.AddHull(u.id, {u.position[0], u.position[1], u.position[2]}, Quat{u.orientation[0], u.orientation[1], u.orientation[2], u.orientation[3]},
                               body->boundsMin * body->scale, body->boundsMax * body->scale);
       }
       continue;
@@ -2282,7 +2285,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     } else if (model && model->ok) {
       // (it treads the lying snow where it stands: what is on the ground and seen; a track must not
       // give away a unit the army does not see)
-      if (snowLying > 0 && haveMap_ && !u.dead && u.Seen() && position.y - GroundHeight(position.x, position.z) < 1.0f && !deepNow_) {
+      if (snowLying > 0 && haveMap_ && !u.dead && u.Seen() && position.y - GroundHeight(position.x, position.z) < 1.0f && !deepNow_ && !extraView) {
         const Vec3 size = (model->boundsMax - model->boundsMin) * model->scale;
         tracks.Add(u.id, position, std::clamp(std::max(size.x, size.z) * 0.42f, 0.35f, 12.0f));
       }
@@ -2355,7 +2358,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       // ([surf] a ship at speed throws spray off its bow)
       if (surfNow_ && u.Seen() && !asRemembered && fractionComplete >= 1) water.surf.AddShip(u.id, blueprint, model, position, orientation);
       // ripples where it floats, hovers or wades in the water (what the army sees)
-      if (u.Seen() && !asRemembered) water.ripples.AddHull(u.id, position, orientation, model->boundsMin * model->scale, model->boundsMax * model->scale);
+      if (u.Seen() && !asRemembered && !extraView) water.ripples.AddHull(u.id, position, orientation, model->boundsMin * model->scale, model->boundsMax * model->scale);
       // a wake, when it goes on the water: by how far it has come since the frame before
       if (haveMap_ && map.water.present && u.Seen() && std::fabs(position.y - map.water.elevation) < 0.4f) {
         Moving& m = moving_[u.id];
@@ -2467,7 +2470,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     });
     // (ripples: its splash where it lands in the water, or goes down through it)
     const float shotSize = model && model->ok ? Length(model->boundsMax - model->boundsMin) * 0.5f * model->scale : 0.0f;
-    water.ripples.AddShot(p.id, position, p.stopped, shotSize);
+    if (!extraView) water.ripples.AddShot(p.id, position, p.stopped, shotSize);  // [views]
     if (!waterShots.empty())
       if (auto it = waterShots.find(p.id); it != waterShots.end()) it->second = shotSize;
     if (debrisShells && !p.original && model && model->ok &&
@@ -2792,11 +2795,14 @@ void World::Render() {
   Stage("snow tracks");
   // (the tracks' picture first: its own pass; deep tracks' field in its place while they are on, the kinds of ground
   // made the first time: it dispatches)
+  // ([views] a view besides the first draws with the tracks the first one's frame pressed: none pressed again)
   if (deepNow_) {
-    Stage("deep tracks");
-    const bool weatherOn = timeOfDay >= 0;
-    trackField.Draw(weatherOn ? snow : 0, weatherOn ? rain : 0, terrain.GroundKinds());
-  } else {
+    if (!extraView) {
+      Stage("deep tracks");
+      const bool weatherOn = timeOfDay >= 0;
+      trackField.Draw(weatherOn ? snow : 0, weatherOn ? rain : 0, terrain.GroundKinds());
+    }
+  } else if (!extraView) {
     if (!sidePicture) trackField.Draw(0, 0, {});  // (off: nothing kept meanwhile)
     if (haveMap_) tracks.Draw(tracksCovering_, snowLying <= 0 || look != Look::Modern || timeOfDay < 0);
   }
@@ -2865,10 +2871,11 @@ void World::Render() {
   }
   // hot metal (hot_metal.h): the hottest few wrecks' and craters' faint light, the cooling wrecks' thin smoke
   if (hotOn_ && !sidePicture) {
-    decals.ForEachHot(clock_, [&](Vec3 centre, float across, float age, float seconds, uint32_t id) {
-      heat.Glowing((uint64_t{2} << 40) | id, centre, across * 0.25f, age, seconds, false);
-    });
-    heat.End(&lights, &particles, placing.target, lights.night);
+    if (!extraView)  // [views] (a view besides the first: the first's glows, their lights alone; the smoke is the first's)
+      decals.ForEachHot(clock_, [&](Vec3 centre, float across, float age, float seconds, uint32_t id) {
+        heat.Glowing((uint64_t{2} << 40) | id, centre, across * 0.25f, age, seconds, false);
+      });
+    heat.End(&lights, extraView ? nullptr : &particles, placing.target, lights.night);
   }
   // (volume explosions) which are drawn this frame, their light while hot, a nuke's flash and the ground's glow under it;
   // its ring through the clouds
@@ -2930,7 +2937,7 @@ void World::Render() {
     CpuTimes::Part("bones posed");
     meshes.Prepare(views);
   }
-  PreparePlants();  // [plants] (plants that react: what presses and burns them; it draws and dispatches, before the scene's pass)
+  if (!extraView) PreparePlants();  // [plants] ([views] the first view's press and burns kept for the others) (plants that react: what presses and burns them; it draws and dispatches, before the scene's pass)
   if ((rayView || bounceNow_ || reflectNow_ || lightRaysNow_) && RaysReady()) {  // the ray tracing scene, from the models just prepared
     Stage("ray tracing scene");
     rays.Build(meshes);
@@ -3000,11 +3007,12 @@ void World::Render() {
     lights.Bind();  // (what the rays meet takes the small lights too)
     bounce.Update(view, rays, terrain.NormalMap(), terrain.GroundColours(), sky_);
   }
-  if (water.ocean.On()) {  // [ocean] the wind sea worked out for this frame, its foam moved on (it dispatches: before the scene's pass)
+  if (extraView) water.ocean.PlaceGridFor(camera, view);  // [views] (the first view's sea, its grid for this view)
+  if (water.ocean.On() && !extraView) {  // [ocean] ([views] worked out once a frame, by the first view) the wind sea worked out for this frame, its foam moved on (it dispatches: before the scene's pass)
     Stage("ocean");
     water.ocean.Update(camera, view, terrain.HeightTexture(), terrain.HeightUnit());
   }
-  if (water.ripples.On()) {  // ripples on the water: their field moved on (it dispatches: before the scene's pass)
+  if (water.ripples.On() && !extraView) {  // ripples on the water ([views] once a frame): their field moved on (it dispatches: before the scene's pass)
     Stage("water ripples");
     water.ripples.Update(camera, view.height, terrain.HeightTexture(), terrain.HeightUnit());
   }
@@ -3392,7 +3400,7 @@ void World::Render() {
     Stage("wildlife: fireflies");
     wildlifeDraw.DrawFireflies(view);
   }
-  if (buildNow_ && build.Busy()) {  // (buildfx: the build sparks moved on, bouncing off the scene's depth: it dispatches)
+  if (buildNow_ && build.Busy() && !extraView) {  // ([views] once a frame) (buildfx: the build sparks moved on, bouncing off the scene's depth: it dispatches)
     Stage("build sparks");
     build.Simulate(view, camera, post.Depth(), terrain.HeightTexture(), terrain.HeightUnit(), static_cast<float>(map.width),
                    static_cast<float>(map.height), haveMap_ && map.water.present ? map.water.elevation : -1e9f);
@@ -3534,7 +3542,7 @@ void World::Render() {
     Stage("finishing at the screen's size (exposure, bloom)");
   }
   // (cinecam) the lens's depth of field, on the finished light, before the glow and the tone curve (Post::beforeFinish)
-  if (lens.on && lens.strength > 0.001f && !sidePicture && !dof.Failed()) {
+  if (lens.on && lens.strength > 0.001f && !sidePicture && !extraView && !dof.Failed()) {  // ([views] the first view's alone)
     dof.waterLevel = haveMap_ && map.water.present ? map.water.elevation : -1e9f;
     post.beforeFinish = [this](gfx::Texture picture, int width, int height, gfx::Texture depth, int depthWidth, int depthHeight) {
       return dof.Apply(lens, camera, picture, width, height, depth, depthWidth, depthHeight, frameSeconds_, lensSnap_);
@@ -3550,7 +3558,7 @@ void World::Render() {
   post.photoFinish = nullptr;
   if (photoLook.on && look == Look::Modern && !photoFinish.Failed()) {
     // (photofix: a photo whose moment the window had not settled into yet meters its own frames, the eye set at once)
-    photoFinish.Set(photoLook, photoMeter ? 1 / 60.0f : sidePicture || photo ? 0.0f : frameSeconds_,
+    photoFinish.Set(photoLook, photoMeter ? 1 / 60.0f : sidePicture || photo || extraView ? 0.0f : frameSeconds_,  // ([views] the first view's eye)
                     photoMeter || (lensSnap_ && !photo) || !photoLookBefore, !sidePicture && !photoTiled);
     post.photoFinish = &photoFinish;
   }
@@ -3575,7 +3583,7 @@ void World::Render() {
     Stage("hidden outlines");
     outlines.Draw();
   }
-  if (!sidePicture && !photo && (!orders.legs.empty() || !orders.marks.empty())) {  // the order lines, over the world, under the icons
+  if ((!sidePicture || extraView) && !photo && (!orders.legs.empty() || !orders.marks.empty())) {  // ([views] in every view)  // the order lines, over the world, under the icons
     Stage("order lines");
     orders.Draw(screenView_, clock_ * 10);
   }
