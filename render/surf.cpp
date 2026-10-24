@@ -976,6 +976,8 @@ bool SurfTest::Init(const std::string& spec, Vec3 at, float radius, const std::f
     std::string id = item.substr(0, eq);
     for (char& ch : id) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
     const int count = eq == std::string::npos ? 1 : atoi(item.c_str() + eq + 1);
+    const size_t at_ = item.find('@');
+    const float below = at_ == std::string::npos ? 0.0f : std::max(0.0f, static_cast<float>(atof(item.c_str() + at_ + 1)));
     BpValue bp;
     if (id.empty() || count <= 0 || !readBlueprint || !readBlueprint(id, &bp)) {
       if (error) *error += (error->empty() ? "" : "; ") + id + " cannot be read";
@@ -997,6 +999,7 @@ bool SurfTest::Init(const std::string& spec, Vec3 at, float radius, const std::f
       }
       if (!found) continue;
       d.speed = speed;
+      d.below = below;
       d.angle = next() * 6.2831853f;
       d.turn = next() < 0.5f ? 1.0f : -1.0f;
       drivers_.push_back(d);
@@ -1022,7 +1025,7 @@ const Frame& SurfTest::Update(double clock) {
     const Driver& d = drivers_[k];
     // (where it is on its loop follows from the clock alone)
     const float angle = d.angle + d.turn * d.speed / d.radius * static_cast<float>(clock);
-    const Vec3 p{d.x + std::cos(angle) * d.radius, level_, d.z + std::sin(angle) * d.radius};
+    const Vec3 p{d.x + std::cos(angle) * d.radius, level_ - d.below, d.z + std::sin(angle) * d.radius};
     const float heading = std::atan2(-std::sin(angle) * d.turn, std::cos(angle) * d.turn);  // (a model's front is its +z)
     FrameUnit u;
     u.id = static_cast<uint32_t>(5001 + k);
@@ -1031,7 +1034,7 @@ const Frame& SurfTest::Update(double clock) {
     u.orientation[1] = std::sin(heading * 0.5f);
     u.orientation[3] = std::cos(heading * 0.5f);
     u.health = u.maxHealth = 1;
-    u.layer = 8;
+    u.layer = d.below > 0 ? 4 : 8;  // (Sub under the water, else Water)
     frame_.units.push_back(u);
   }
   return frame_;
