@@ -138,6 +138,8 @@ class LoadingDevice final : public gfx::Device {
   void SizeGeometry(Prepared* prepared) override { real_->SizeGeometry(prepared); }
   gfx::Structure FinishGeometry(std::unique_ptr<Prepared> prepared) override;
   void BuildScene(gfx::Structure* scene, const gfx::SceneInstance* instances, uint32_t count) override;
+  // [cardcost] (live: the real device's; recording or not now: false, so that BuildScene takes it)
+  bool RefitScene(gfx::Structure* scene, const gfx::SceneInstance* instances, uint32_t count, bool rebuild) override;
   void SetScene(int slot, gfx::Structure scene) override;
   void Destroy(gfx::Structure structure) override;
   void BeginFrame(const float clearColor[4]) override;

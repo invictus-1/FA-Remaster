@@ -358,6 +358,12 @@ class Device {
   // time. Between passes (it ends the pass under way, as Dispatch does); what comes after reads it. `scene`
   // is made the first time and grows as needed.
   virtual void BuildScene(Structure*, const SceneInstance*, uint32_t) {}
+  // [cardcost] BuildScene's, built so that later frames can refit it: with `rebuild` false, a scene last made here and
+  // built over as many instances as now (those whose structure is made) is refitted in place instead (the instances'
+  // matrices, masks, ids and structures may all differ; the tree over them stays as it was built, so it serves the rays
+  // the worse the more they have moved since: rebuild now and then). The same rays meet the same things either way.
+  // False where the device cannot (nothing done; BuildScene then).
+  virtual bool RefitScene(Structure*, const SceneInstance*, uint32_t, bool) { return false; }
   // A scene's structure for the shaders, in a texture slot (none: empty).
   virtual void SetScene(int, Structure) {}
   virtual void Destroy(Structure) {}

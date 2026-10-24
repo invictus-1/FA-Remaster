@@ -186,6 +186,9 @@ static_assert(RayScene::kInstanceRows == 128 && RayScene::kTableRow == 256, "kRa
 }  // namespace
 
 RayScene::~RayScene() {
+  if (refitted + rebuilt > 0)  // [cardcost] (refit)
+    fprintf(stderr, "render: the ray tracing scene: %llu frames refitted, %llu built to be refitted\n",
+            static_cast<unsigned long long>(refitted), static_cast<unsigned long long>(rebuilt));
   for (auto& [serial, level] : levels_) device_->Destroy(level.structure);
   for (gfx::Structure s : {scene_, ground_, water_}) device_->Destroy(s);
   for (gfx::Buffer b : {groundVertices_, groundIndices_, waterVertices_, instanceData_}) device_->Destroy(b);
@@ -468,6 +471,20 @@ void RayScene::Build(const MeshRenderer& meshes) {
     device_->Dispatch((count[0] + 63) / 64, 1, 1);
     device_->SetStorage(0, {});
     device_->SetTexture(0, {});
+  }
+  // [cardcost] (refit) refitted where the frame's instances are the frame before's, each of the same structure in the same
+  // place in the list (only where they stand and their masks may differ: units moving, turning, being built), and
+  // built again at least every refitEvery frames; built where they are not (something came or went)
+  if (refit) {
+    uint64_t sameness = 1469598103934665603ull ^ instances_.size();
+    for (const gfx::SceneInstance& s : instances_) sameness = (sameness ^ s.geometry.id) * 1099511628211ull;
+    const bool rebuild = sameness != refitSameness_ || ++refitAge_ >= std::max(refitEvery, 1);
+    if (device_->RefitScene(&scene_, instances_.data(), static_cast<uint32_t>(instances_.size()), rebuild)) {
+      refitSameness_ = sameness;
+      if (rebuild) refitAge_ = 0, ++rebuilt; else ++refitted;
+      return;
+    }
+    refitSameness_ = 0;
   }
   device_->BuildScene(&scene_, instances_.data(), static_cast<uint32_t>(instances_.size()));
 }

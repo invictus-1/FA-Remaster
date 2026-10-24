@@ -578,6 +578,8 @@ struct StructureRec {
   std::vector<VkAccelerationStructureGeometryKHR> parts;
   std::vector<uint32_t> triangles;
   VkDeviceSize scratch = 0;
+  // [cardcost] a scene built to be refitted (RefitScene): over how many instances (refitted only over as many); -1 not
+  uint64_t refitCount = ~uint64_t{0};
 };
 
 struct Page {
@@ -642,6 +644,8 @@ class VulkanDevice final : public Device {
   bool RayTracing() const override { return rayTracing_; }
   Structure CreateGeometry(const GeometryPart* parts, int count) override;
   void BuildScene(Structure* scene, const SceneInstance* instances, uint32_t count) override;
+  bool RefitScene(Structure* scene, const SceneInstance* instances, uint32_t count, bool rebuild) override;  // [cardcost]
+  bool MakeScene(Structure* scene, const SceneInstance* instances, uint32_t count, int how);                 // [cardcost]
   void SetScene(int slot, Structure scene) override;
   void Destroy(Structure structure) override;
   void BeginFrame(const float clearColor[4]) override;
@@ -4632,14 +4636,23 @@ void VulkanDevice::BuildGeometry() {
   RayBarrier(build, written, build | kRayShaders, both);  // (for the scene's build, and the shaders after)
 }
 
-void VulkanDevice::BuildScene(Structure* scene, const SceneInstance* instances, uint32_t count) {
-  if (!rayTracing_ || !inFrame_ || !scene) return;
+void VulkanDevice::BuildScene(Structure* scene, const SceneInstance* instances, uint32_t count) { MakeScene(scene, instances, count, 0); }
+
+// [cardcost] (gfx.h) Built to be refitted, and refitted in place where it was so built over as many instances as now.
+bool VulkanDevice::RefitScene(Structure* scene, const SceneInstance* instances, uint32_t count, bool rebuild) {
+  return MakeScene(scene, instances, count, rebuild ? 1 : 2);
+}
+
+// The scene's structure over the instances: `how` 0 built (BuildScene), 1 built so that it can be refitted, 2 refitted in
+// place where it was so built over as many instances (else built so). True where it was made (built or refitted).
+bool VulkanDevice::MakeScene(Structure* scene, const SceneInstance* instances, uint32_t count, int how) {
+  if (!rayTracing_ || !inFrame_ || !scene) return false;
   EndRendering();
   ReleasePassTargets();  // (the pass under way ends)
   BuildGeometry();
   // the instances, in this frame's memory
   const Span s = Allocate(sizeof(VkAccelerationStructureInstanceKHR) * std::max<uint32_t>(count, 1), 16);
-  if (!s.cpu) return;
+  if (!s.cpu) return false;
   uint32_t n = 0;
   for (uint32_t i = 0; i < count; ++i) {
     const StructureRec* g = instances ? Find(instances[i].geometry) : nullptr;
@@ -4658,12 +4671,29 @@ void VulkanDevice::BuildScene(Structure* scene, const SceneInstance* instances, 
   VkAccelerationStructureBuildGeometryInfoKHR in{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
   in.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
   in.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR;
+  if (how > 0) in.flags |= VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;  // [cardcost]
   in.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
   in.geometryCount = 1;
   in.pGeometries = &geometry;
   VkAccelerationStructureBuildSizesInfoKHR info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
   vkGetAccelerationStructureBuildSizesKHR(device_, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &in, &n, &info);
   StructureRec* rec = Find(*scene);
+  constexpr VkPipelineStageFlags2 build = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+  // [cardcost] refitted in place: the structure as it was built (to be refitted, over as many instances), its tree kept
+  if (how == 2 && rec && rec->scene && rec->structure && rec->refitCount == n &&
+      GrowScratch(Aligned(std::max<VkDeviceSize>(info.updateScratchSize, 1), scratchAlign_))) {
+    RayBarrier(kRayShaders, 0, build, VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR | VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+    in.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;
+    in.srcAccelerationStructure = in.dstAccelerationStructure = rec->structure;
+    in.scratchData.deviceAddress = scratchAddress_;
+    VkAccelerationStructureBuildRangeInfoKHR range{};
+    range.primitiveCount = n;
+    const VkAccelerationStructureBuildRangeInfoKHR* ranges = &range;
+    vkCmdBuildAccelerationStructuresKHR(frames_[cur_].cmd, 1, &in, &ranges);
+    RayBarrier(build, VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR, build | kRayShaders,
+               VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR);
+    return true;
+  }
   if (!rec) {  // (the first time: the scene's record)
     StructureRec r;
     r.used = r.scene = true;
@@ -4679,19 +4709,19 @@ void VulkanDevice::BuildScene(Structure* scene, const SceneInstance* instances, 
     *scene = {index + 1};
     rec = &structures_[index];
   }
-  if (!rec->scene) return;
+  if (!rec->scene) return false;
+  rec->refitCount = ~uint64_t{0};  // [cardcost] (built now: refitted later only where built so, below)
   const VkDeviceSize need = Aligned(std::max<VkDeviceSize>(info.accelerationStructureSize, 256), 256);
   if (rec->size < need) {  // (made, or grown by a half more than it needs: a structure anew, which sets name anew)
     RetireStructure(rec);
-    if (!MakeStructure(rec, VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR, Aligned(need + need / 2, 256))) return;
+    if (!MakeStructure(rec, VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR, Aligned(need + need / 2, 256))) return false;
     setDirty_ = true;
   }
   if (!GrowScratch(Aligned(std::max<VkDeviceSize>(info.buildScratchSize, 1), scratchAlign_))) {
     RetireStructure(rec);  // (not built: none, rather than one a shader must not read)
     setDirty_ = true;
-    return;
+    return false;
   }
-  constexpr VkPipelineStageFlags2 build = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
   // (what shaders read of it before, finished first; what the build writes, for the builds and shaders after)
   RayBarrier(kRayShaders, 0, build, VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR);
   in.dstAccelerationStructure = rec->structure;
@@ -4702,6 +4732,8 @@ void VulkanDevice::BuildScene(Structure* scene, const SceneInstance* instances, 
   vkCmdBuildAccelerationStructuresKHR(frames_[cur_].cmd, 1, &in, &ranges);
   RayBarrier(build, VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR, build | kRayShaders,
              VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR);
+  if (how > 0) rec->refitCount = n;  // [cardcost]
+  return true;
 }
 
 void VulkanDevice::SetScene(int slot, Structure scene) {

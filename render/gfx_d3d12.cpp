@@ -240,6 +240,8 @@ struct StructureRec {
   uint32_t texture = 0;
   std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> parts;
   uint64_t scratch = 0;
+  // [cardcost] a scene built to be refitted (RefitScene): over how many instances (refitted only over as many); -1 not
+  uint64_t refitCount = ~uint64_t{0};
 };
 
 struct TableKey {
@@ -364,6 +366,8 @@ class D3D12Device final : public Device {
   void SizeGeometry(Prepared* prepared) override;
   Structure FinishGeometry(std::unique_ptr<Prepared> prepared) override;
   void BuildScene(Structure* scene, const SceneInstance* instances, uint32_t count) override;
+  bool RefitScene(Structure* scene, const SceneInstance* instances, uint32_t count, bool rebuild) override;  // [cardcost]
+  bool MakeScene(Structure* scene, const SceneInstance* instances, uint32_t count, int how);                 // [cardcost]
   void SetScene(int slot, Structure scene) override;
   void Destroy(Structure structure) override;
   bool SetFrameGeneration(std::function<bool()> make) override;
@@ -3552,13 +3556,22 @@ void D3D12Device::BuildGeometry() {
   list_->ResourceBarrier(1, &wait);
 }
 
-void D3D12Device::BuildScene(Structure* scene, const SceneInstance* instances, uint32_t count) {
-  if (!rayTracing_ || !inFrame_ || !scene) return;
+void D3D12Device::BuildScene(Structure* scene, const SceneInstance* instances, uint32_t count) { MakeScene(scene, instances, count, 0); }
+
+// [cardcost] (gfx.h) Built to be refitted, and refitted in place where it was so built over as many instances as now.
+bool D3D12Device::RefitScene(Structure* scene, const SceneInstance* instances, uint32_t count, bool rebuild) {
+  return MakeScene(scene, instances, count, rebuild ? 1 : 2);
+}
+
+// The scene's structure over the instances: `how` 0 built (BuildScene), 1 built so that it can be refitted, 2 refitted in
+// place where it was so built over as many instances (else built so). True where it was made (built or refitted).
+bool D3D12Device::MakeScene(Structure* scene, const SceneInstance* instances, uint32_t count, int how) {
+  if (!rayTracing_ || !inFrame_ || !scene) return false;
   ReleasePassTargets();  // (the pass under way ends)
   BuildGeometry();
   // the instances, in this frame's upload memory
   const Span s = Allocate(sizeof(D3D12_RAYTRACING_INSTANCE_DESC) * std::max<uint32_t>(count, 1), D3D12_RAYTRACING_INSTANCE_DESCS_BYTE_ALIGNMENT);
-  if (!s.cpu) return;
+  if (!s.cpu) return false;
   auto* out = reinterpret_cast<D3D12_RAYTRACING_INSTANCE_DESC*>(s.cpu);
   uint32_t n = 0;
   for (uint32_t i = 0; i < count; ++i) {
@@ -3574,15 +3587,32 @@ void D3D12Device::BuildScene(Structure* scene, const SceneInstance* instances, u
   D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS in = {};
   in.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
   in.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD;
+  if (how > 0) in.Flags |= D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE;  // [cardcost]
   in.NumDescs = n;
   in.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
   in.InstanceDescs = s.gpu;
   D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO info = {};
   device5_->GetRaytracingAccelerationStructurePrebuildInfo(&in, &info);
   StructureRec* rec = Find(*scene);
+  // [cardcost] refitted in place: the structure as it was built (to be refitted, over as many instances), its tree kept
+  if (how == 2 && rec && rec->scene && rec->buffer && rec->refitCount == n &&
+      GrowScratch(RayAligned(std::max<uint64_t>(info.UpdateScratchDataSizeInBytes, 1)))) {
+    D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC b = {};
+    b.DestAccelerationStructureData = b.SourceAccelerationStructureData = rec->buffer->GetGPUVirtualAddress();
+    b.Inputs = in;
+    b.Inputs.Flags |= D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE;
+    b.ScratchAccelerationStructureData = scratch_->GetGPUVirtualAddress();
+    list4_->BuildRaytracingAccelerationStructure(&b, 0, nullptr);
+    D3D12_RESOURCE_BARRIER wait = {};
+    wait.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    list_->ResourceBarrier(1, &wait);
+    computeRoot_ = false;
+    texturesDirty_ = true;
+    return true;
+  }
   if (!rec) {  // (the first time: the scene's record, and its view's slot among the textures')
     const uint32_t texture = NewTextureIndex();
-    if (!texture) return;
+    if (!texture) return false;
     textures_[texture] = TextureRec{};
     textures_[texture].used = true;
     StructureRec r;
@@ -3600,14 +3630,15 @@ void D3D12Device::BuildScene(Structure* scene, const SceneInstance* instances, u
     *scene = {index + 1};
     rec = &structures_[index];
   }
-  if (!rec->scene) return;
+  if (!rec->scene) return false;
+  rec->refitCount = ~uint64_t{0};  // [cardcost] (built now: refitted later only where built so, below)
   const uint64_t need = RayAligned(std::max<uint64_t>(info.ResultDataMaxSizeInBytes, 256));
   if (rec->size < need) {  // (made, or grown by a half more than it needs)
     if (rec->buffer) Retire(rec->buffer.Get());
     const uint64_t room = RayAligned(need + need / 2);
     rec->buffer = RayBuffer(room, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
     rec->size = rec->buffer ? room : 0;
-    if (!rec->buffer) return;
+    if (!rec->buffer) return false;
     D3D12_SHADER_RESOURCE_VIEW_DESC v = {};
     v.ViewDimension = D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE;
     v.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
@@ -3616,7 +3647,7 @@ void D3D12Device::BuildScene(Structure* scene, const SceneInstance* instances, u
     frames_[cur_].tables.clear();  // (tables made this frame hold its view as it was)
     texturesDirty_ = true;
   }
-  if (!GrowScratch(RayAligned(std::max<uint64_t>(info.ScratchDataSizeInBytes, 1)))) return;
+  if (!GrowScratch(RayAligned(std::max<uint64_t>(info.ScratchDataSizeInBytes, 1)))) return false;
   D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC b = {};
   b.DestAccelerationStructureData = rec->buffer->GetGPUVirtualAddress();
   b.Inputs = in;
@@ -3628,6 +3659,8 @@ void D3D12Device::BuildScene(Structure* scene, const SceneInstance* instances, u
   // (what was set before is set again: the roots, the textures' table)
   computeRoot_ = false;
   texturesDirty_ = true;
+  if (how > 0) rec->refitCount = n;  // [cardcost]
+  return true;
 }
 
 void D3D12Device::SetScene(int slot, Structure scene) {
