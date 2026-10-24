@@ -2614,6 +2614,7 @@ void DestroyWeapons(Sim& sim, Unit* u) {
   for (UnitWeapon* w : u->weapons) {
     w->target = AiTarget{};
     w->UnbindLua();
+    DropObjectValues(sim.L(), w);  // (its Set<X> values went with the weapon object)
   }
 }
 }  // namespace
@@ -2640,6 +2641,7 @@ void KillCleanupTick(Sim& sim) {
     // drove on.
     UnitMotion& m = u->motion;
     AirNavigatorGone(u);  // (an aircraft's navigator: its status, for the escorts that follow it)
+    EndNavigatorObject(u);  // (the navigator's Lua side goes with it)
     m.spline.clear();
     m.splineIdx = 0;
     m.hasSpline = false;
@@ -3644,9 +3646,11 @@ namespace {
 
 Unit* U(lua_State* L) { return CheckObject<Unit>(L, 1); }
 
+// GetTargetEntity 0x6c4bc0: the attacker's (unit+0x544) desired target (vt+0x24), nil without an attacker
+// (0x6c4c48..0x6c4c50), as after Unit::KillCleanup 0x6a8790 deleted it (ours: combatGone).
 int l_GetTargetEntity(lua_State* L) {
   Unit* u = U(L);
-  Entity* e = TargetEntity(*S(L), u->desiredTarget);
+  Entity* e = u->combatGone ? nullptr : TargetEntity(*S(L), u->desiredTarget);
   if (e) PushObject(L, e);
   else lua_pushnil(L);
   return 1;

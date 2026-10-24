@@ -114,6 +114,8 @@ void EndTransportTask(Sim& sim, Unit* u, BuildTask& t, bool success);
 bool TransportLoadMoving(const Unit* u);
 // The head task is a load with no landing move of its own running (waiting for its cargo at the pickup point).
 bool TransportLoadWaiting(const Unit* u);
+// The head task is a cargo's call for a transport (CUnitCallTransport 0x5ffc70).
+bool TransportCallTask(const Unit* u);
 
 // Per tick after all units moved: attached units follow their parents (transport cargo gets the
 // full attach transform and the parent's layer; orphaned cargo starts to fall).

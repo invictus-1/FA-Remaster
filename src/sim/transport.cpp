@@ -648,7 +648,7 @@ bool FootprintFitsHere(Sim& sim, const Unit* cu) {
   int cx = static_cast<int>(std::nearbyint(cu->position.x - fp.sizeX * 0.5f));
   int cz = static_cast<int>(std::nearbyint(cu->position.z - fp.sizeZ * 0.5f));
   if (!sim.navigation().HasMap()) return true;
-  int caps = sim.navigation().CellCaps(fp, cx, cz);  // (Grid(fp)->Caps without making the grid)
+  int caps = sim.navigation().CellCaps(fp, cx, cz, true);  // (FootprintFits with caps -1, 0x720aa0)
   caps = sim.navigation().FootprintFits(static_cast<uint8_t>(caps), fp, cx, cz);
   return caps != 0;
 }
@@ -1496,7 +1496,12 @@ void EndCall(Sim& sim, Unit* u, TransportTaskData& d) {
   // alone. Seen: MP2 8281, army 1's Pillar 0x1000d4 under way on a Move is told to board transport 0x10003f at 8278
   // (clear: the Move's dtor keeps the motion, table 0x618998); its call fails in state 1 at 8281, before any walk
   // (both engines end the order in that beat) and the original drives on along the old path at 2.44; ours braked.
-  if (walking && u->motion.hasGoal && !u->clearKeepsMove) MotionStop(u);
+  // The walk's dtor aborts with no goal test (0x618884), so also when the load's dtor has stopped the walker
+  // already: AbortMove on the idle navigator -> MakeIdle -> SetWaypoints(0, 0) builds the brake spline afresh from
+  // the speed and facing of now. Seen: Skirmish 1616, that engineer 0x200022: stopped at 1615 by the transport's load
+  // dtor 0x624dbf, its call ends at 1616 and the walk's dtor brakes again; the original's 1616 point is the fresh
+  // brake's (z 423.774933), ours went on along the first brake (423.774902).
+  if (walking && !u->clearKeepsMove) MotionStop(u);
 }
 
 // --- unload (CUnitUnloadUnits 0x625ee0 / 0x626390) ---------------------------------------------
@@ -3027,6 +3032,10 @@ bool TransportLoadMoving(const Unit* u) {
 bool TransportLoadWaiting(const Unit* u) {
   const BuildTask* t = u->task;
   return t && t->tdata && t->tdata->kind == 1 && !t->tdata->moving;
+}
+bool TransportCallTask(const Unit* u) {
+  const BuildTask* t = u->task;
+  return t && t->tdata && t->tdata->kind == kCall;
 }
 
 void EndTransportTask(Sim& sim, Unit* u, BuildTask& t, bool success) {

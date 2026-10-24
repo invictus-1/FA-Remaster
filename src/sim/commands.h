@@ -224,6 +224,8 @@ void EndPatrol(Sim& sim, Unit* u, BuildTask& t);
 void ReleaseCommand(Unit* u, UnitCommand& c);
 // A unit is going away: drop its commands.
 void ForgetUnitCommands(Unit* u);
+// The unit's navigator object is deleted (KillCleanup / ~Unit): sim/commands.cpp.
+void EndNavigatorObject(Unit* u);
 // Whether the navigator's event (Succeeded / Failed) wakes the unit's command thread (a move task listens).
 bool NavEventWakesCommandThread(const Unit* u);
 void RegisterCommandBindings(lua_State* L);

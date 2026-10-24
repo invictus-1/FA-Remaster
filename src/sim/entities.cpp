@@ -465,8 +465,11 @@ int l_IsKind(lua_State* L) {
 
 }  // namespace
 
-Entity::~Entity() {
+Entity::~Entity() { ReleaseScriptPosition(); }
+
+void Entity::ReleaseScriptPosition() {
   if (positionRef != LUA_NOREF && positionState) luaL_unref(positionState, LUA_REGISTRYINDEX, positionRef);
+  positionRef = LUA_NOREF;
 }
 
 // CTextureScroller::Tick 0x777730 (switch on the type, 0x777746; type 0 and anything above 3 do nothing).
@@ -965,14 +968,27 @@ int l_GetCurrentLayer(lua_State* L) {
   lua_pushstring(L, U(L)->layer.c_str());
   return 1;
 }
+// The weapons are the attacker's (unit+0x544). Unit::KillCleanup 0x6a8790, the beat after a kill, deletes the attacker
+// and sets +0x544 to null (0x6a87d4..0x6a87ea); ours keeps the weapon records and marks the unit combatGone
+// (combat.cpp, DestroyWeapons). GetWeaponCount 0x6c4a70 then gives 0 (0x6c4af8..0x6c4b0b: no attacker -> 0, else the
+// attacker's count, vt+0x18), and GetWeapon 0x6c4880 raises "Invalid weapon index %d; must be between 1 and %d
+// (inclusive)" (0xe2af74, 0x6c4968..0x6c498c) for any index past the count, so a dead unit has no weapons for Lua.
+// Seen: MP1 8715 (after its compare stops at 8391), a player's WeaponPriorities callback (lua/WeaponPriorities.lua)
+// names an urs0203 that is dead in ours (alive in the original's recording); ours gave its 3 weapon slots and
+// GetWeapon(1) a nil (the Lua object had gone with DestroyWeapons), the callback stopped at
+// weapon:SetTargetingPriorities and the ships after it kept their old priorities. With the attacker gone the count is
+// 0, the script's "weaponCount > 0" skips the dead unit and the rest are set. The same for
+// ScenarioFramework.GetAllowedOffMapTime (wep:GetCurrentTarget on a dead unit's weapon, MP1 10201).
+int UnitWeaponCount(const Unit* u) { return u->combatGone ? 0 : static_cast<int>(u->weapons.size()); }
 int l_GetWeaponCount(lua_State* L) {
-  lua_pushnumber(L, static_cast<lua_Number>(U(L)->weapons.size()));
+  lua_pushnumber(L, static_cast<lua_Number>(UnitWeaponCount(U(L))));
   return 1;
 }
 int l_GetWeapon(lua_State* L) {
   Unit* u = U(L);
   int i = static_cast<int>(luaL_checknumber(L, 2));
-  if (i < 1 || i > static_cast<int>(u->weapons.size())) return luaL_error(L, "GetWeapon: index %d out of range", i);
+  const int n = UnitWeaponCount(u);
+  if (i < 1 || i > n) return luaL_error(L, "Invalid weapon index %d; must be between 1 and %d (inclusive)", i, n);
   return PushNew(L, u->weapons[i - 1]);
 }
 // FAF's Unit.lua sets a unit state "Sacrificing" in OnStartSacrifice and OnStopSacrifice. The original has no such
@@ -1247,6 +1263,23 @@ void PushObjectValue(lua_State* L, ScriptObject* obj, const char* key) {
   lua_pushstring(L, key);
   lua_rawget(L, -2);
   lua_remove(L, -2);
+}
+
+// (rawset of nil only on a key that is there: a new key would grow the table)
+void DropObjectValues(lua_State* L, ScriptObject* obj) {
+  lua_gpg_rawgetstr(L, LUA_REGISTRYINDEX, kValuesKey);
+  if (lua_istable(L, -1)) {
+    lua_pushlightuserdata(L, obj);
+    lua_rawget(L, -2);
+    const bool had = !lua_isnil(L, -1);
+    lua_pop(L, 1);
+    if (had) {
+      lua_pushlightuserdata(L, obj);
+      lua_pushnil(L);
+      lua_rawset(L, -3);
+    }
+  }
+  lua_pop(L, 1);
 }
 
 // The same for a host's view (sim/sim_view.cpp), which must make and check nothing in the state (lua_gpg_rawgetstr).
@@ -1591,7 +1624,7 @@ uint8_t StartingLayer(Sim& sim, const BlueprintInfo& bp, const TerrainMap* map, 
   int cx = static_cast<int16_t>(std::lrintf(p.x - static_cast<float>(fp.sizeX) * 0.5f));
   int cz = static_cast<int16_t>(std::lrintf(p.z - static_cast<float>(fp.sizeZ) * 0.5f));
   uint8_t caps = 0;
-  if (fp.caps & 0xf) caps = sim.navigation().CellCaps(fp, cx, cz);  // (Grid(fp)->Caps without making the grid)
+  if (fp.caps & 0xf) caps = sim.navigation().CellCaps(fp, cx, cz, true);  // (FootprintFits with caps -1, 0x62adca)
   if (map && cx >= 0 && cz >= 0 && cx + fp.sizeX <= map->width() && cz + fp.sizeZ <= map->height())
     caps |= fp.caps & 0x30;  // the terrain never takes the Air / Orbit bits away
   if (want & caps) return want;
