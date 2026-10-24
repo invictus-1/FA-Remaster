@@ -39,6 +39,7 @@ class SoundSystem;
 }
 class ReplayTimelineSource;
 class Backdrop;
+class CardBackdrop;
 
 class GameSession {
  public:
@@ -149,15 +150,22 @@ class GameSession {
   bool waitForWindow = false;
   void OpenPictureIfDue();
   // The front end's background (app/backdrop.h; nullptr: none): while it is begun the direct way
-  // and not stopped, the window's picture without a game is opened with its map and shows it under
-  // the menus, from the camera it gives each frame the movie showed (Backdrop::TakeView); else
-  // black under the interface (a picture made while none is asked for has no world; one with the
-  // map is kept, as through the loading screen, until the game's picture takes the window).
-  // OpenMenuPicture opens it now (the window still hidden at the start: reading the map takes a
-  // moment); PresentToWindow opens it when due otherwise (after a game).
+  // and not stopped, the window's picture without a game shows its map under the menus, from the
+  // camera it gives each frame the movie showed (Backdrop::TakeView); else black under the
+  // interface (the map is kept, as through the loading screen, until the game's is swapped in).
+  // The window has ONE picture of the renderer's (render request 37): OpenWindowPicture makes it
+  // at the start, before the window shows, without a map (the interface shows at once), and begins
+  // the background's map behind it; every map after (a game's, the menus' again) is opened behind
+  // the one shown while the window goes on showing frames, and swapped in when ready.
   Backdrop* menuBackdrop = nullptr;
-  void OpenMenuPicture();
+  void OpenWindowPicture();
   bool DrawsToWindow() const;
+  // Where the interface's controls hand a picture over the whole window to the graphics card (the
+  // loading screen's film, the "IN TRANSIT" cover: maui/world_source.h, render request 38), for
+  // UserState::Config::cardBackdrop; InterfaceRendered once a frame after the interface's drawing
+  // (what it handed over is the frame's).
+  CardBackdrop* cardBackdrop();
+  void InterfaceRendered();
   // The frame drawn and shown: the world, `target` (the interface, premultiplied ARGB, the
   // window's size, transparent where the world shows) over it. `changed`: the part of `target`
   // drawn anew since the last call (a picture new or of another size takes all of it).
@@ -305,15 +313,22 @@ class GameSession {
   std::vector<std::string> modUids_;
   std::vector<std::string> pendingSync_;
   std::vector<std::string> setupSync_;
+  // The window's one picture (see OpenWindowPicture; nullptr: none yet, no window, or it would not
+  // open: windowPictureFailed_), and the game's world source over it or over a picture of its own
+  // (Picture: declared after it, as it goes first).
+  struct WindowPicture;
+  std::unique_ptr<WindowPicture> windowPicture_;
+  bool windowPictureFailed_ = false;
+  bool EnsureWindowPicture(bool remake);
+  void BeginWindowMap(bool game, const std::string& map);  // (the game's map or the menus' background's, behind)
+  void ServeWindowMap();
+  void GiveBackdrop(WindowPicture& wp);
+  struct CardSink;
+  std::unique_ptr<CardSink> card_;
   struct Picture;
   std::unique_ptr<Picture> picture_;
-  // Without a game, on the window: the renderer's picture of the menus' background's map
-  // (menuBackdrop), or without a world, which shows the interface over black. One picture per
-  // window at a time: it goes before a game's opens and comes back after the game.
-  struct MenuPicture;
-  std::unique_ptr<MenuPicture> menuPicture_;
+  void DressGamePicture(Picture& pic);
   std::string failedMenuMap_;  // (a background's map that would not open: not tried again)
-  MenuPicture* EnsureMenuPicture();  // (the one menuBackdrop asks for: made anew when it asks for another)
   int commandSource_ = 0;
   int pictureFocus_ = -2;    // the focus army the picture was last given (0-based; -2: none yet)
   std::string sessionMods_;  // the session's mods as the engine keeps them (serialized Lua)

@@ -61,6 +61,10 @@ class Bitmap : public Control {
       target.DrawImageTiled(img, src, dst, tint);
       return;
     }
+    // (Over the whole window as the first thing drawn, FAF's "IN TRANSIT" cover fading at a game's start: drawn by
+    // the graphics card where the renderer's picture shows the window, its fade without a new upload; ours, ui
+    // REQUESTS 38.)
+    if (!turnedX && !turnedY && OfferToCard(L, target, dst, img, src, alpha)) return;
     if (turnedX) std::swap(src.x0, src.x1);
     if (turnedY) std::swap(src.y0, src.y1);
     target.DrawImage(img, src, dst, tint);

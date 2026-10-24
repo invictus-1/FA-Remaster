@@ -45,6 +45,8 @@ class RecordingTarget : public DrawTarget {
   void DrawImageTiled(const Image& image, const Rect& src, const Rect& dst, uint32_t color) override;
   void DrawGlyph(const GlyphMask& glyph, int x, int y, uint32_t color) override;
   void DrawPixels(const uint32_t* pixels, int width, int height, int x, int y) override;
+  bool Blank() const override { return commands_.empty(); }
+  void DropBelow() override { commands_.clear(); }
   std::vector<DrawCommand>& commands() { return commands_; }
 
  private:

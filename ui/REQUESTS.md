@@ -2144,6 +2144,21 @@ frame still ~6-8 ms at 4K). Proposed by the renderer: `WorldPicture::SetBackdrop
 the card under or over the world as the host chooses, uploaded once per new picture and stretched each frame (a film:
 a new upload per film frame), its alpha / tint settable per frame (the cover fades), so the host's CPU scaling of
 those goes. The host keeps drawing everything else; the interface's own controls stay over it.
+DONE (render, on main since fc25aea): 37 BeginMap / MapReady / MapFailed / SwapMap / CancelMap, 38 SetBackdrop /
+SetBackdropLook. Used (ui, 2026-10-24, helper maps): one picture per window (GameSession::WindowPicture); the menu's
+map and each game's map opened behind what shows; the loading film and the IN TRANSIT cover handed to the card
+(CardBackdrop). Leaving a game 1.0-1.3 s -> 0.15-0.24 s, the end-of-load frame 1.2-1.4 s -> 0.33-0.38 s.
+
+### 39. The first world frame after SwapMap: 1.3-1.6 s on a fresh device (the game's looks)
+From the interface chat, 2026-10-24. Not blocking; optimisation run. Since 37 is wired, the game's map is opened and
+warmed behind the loading screen, yet the first frame after SwapMap still takes 1.3-1.6 s (1080p and 4K, warm shader
+cache; the next 0.22-0.24 s); a restart's first frame is 134 ms, so it looks like what the player's picture-level looks
+need (lighting bundles, ray tracing's shaders) being made then. The host cannot warm with them: the warm frames and
+SwapMap use the picture's current looks, and applying the game's looks before the swap hits the hidden menu world at
+once (7.4 s in one loading-screen frame at 1080p; ray tracing alone 125 ms). Could BeginMap take the new world's own
+picture-level looks for its opening and warm frames (or: a world hidden by SetWorldShown(false) prepares nothing, so the
+host may set the game's looks early)? Also: SetLoadCamera is not given today (the start camera is known only after the
+game's scripts run), so warm frames look at the map's middle; say if that matters for what gets warmed.
 
 ## To the visuals track
 

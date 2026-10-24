@@ -781,15 +781,17 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   light, the camera going once round the middle of the map in five minutes, low over the shores,
   darkened so the menu's own signs stand out, and coming in from black over a second and a half
   whenever the menu comes back from another screen (`app/backdrop.*`, `BackdropSource` in
-  `maui/world_source.h`). In the live window it is shown the game's way: the window's own picture
-  is opened with the map (`GameSession::PresentToWindow`; at the start before the window shows,
-  after a game when the front end comes back, about a second) and draws it straight into the
-  window, the interface laid over it; the Movie control gives no pixels, only its rectangle, a
+  `maui/world_source.h`). In the live window it is shown the game's way: the window has one
+  picture of the renderer's, made at the start without a map (the interface shows at once), and
+  every map is opened behind the one it shows and swapped in when ready (render request 37,
+  `GameSession::WindowPicture`): the menu's map at the start and after a game (the menu over black
+  meanwhile, the map then coming in from black over a second and a half), each game's while its
+  loading screen plays. It draws the map straight into the window, the interface laid over it; the Movie control gives no pixels, only its rectangle, a
   black veil over it (the darkening) and black round it, so the menus are painted only where they
   change (the main menu at 3840x2160: 16.1 -> 4.2 ms a frame, the interface's drawing 13.4 ->
   0.6 ms; before, its moving picture made every frame whole). While another screen is up the
   window's picture shows black under the interface; it keeps the map through the loading screen
-  and goes when the game's picture opens. In a run without a window that asks for it (and with
+  until the game's map is swapped in. In a run without a window that asks for it (and with
   `--gdi`) the picture is made on a thread of its own with a graphics device of its own, so the
   menu never waits for it: the Movie control takes the newest finished picture each frame (while
   nobody shows it, no picture is made). Reading the map takes some seconds: until this run's
@@ -1174,8 +1176,16 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   `UpdateLoadingDialog` is never called, as in the original. A load that fails goes back to a new
   front end, as the original's "map failed" does. Before this the window stood still for about
   9 s on the lobby. Now the loading screen plays for the whole load (in a window, about 670 frames
-  in 7.5 s), and one frame of about 2 s is left at its end (the world's picture and the
-  interface's rules). Headless runs (the tests) wait for the load at once, and the loading screen
+  in 7.5 s), and one frame of about 2 s was left at its end (the world's picture and the
+  interface's rules). Since 2026-10-24 the game's map opens behind the window's picture while the
+  loading screen plays (render request 37; the load waits for both), and the loading screen's film
+  and FAF's "IN TRANSIT" cover are drawn by the graphics card under the interface (render request
+  38: `CardBackdrop` in `maui/world_source.h`, `OfferToCard` in `maui/control.h`; the cover only
+  while nothing of the interface lies under it, or while it hides all of that); at 3840x2160 the
+  frame at the load's end went from 1.2 s to 0.35 s (the game's state and its rules), leaving a
+  game from 1.0-1.2 s to 0.16-0.24 s, the loading screen's frames from about 11 ms of work to 4.
+  Left: the game's first frame of the world, 1.3-1.6 s on a fresh device (the renderer making what
+  the player's looks ask for). Headless runs (the tests) wait for the load at once, and the loading screen
   gets exactly one frame before the game, so its scripts run in every test
   (`ui/tests/loading.lua`: WorldIsLoading from the launch call, SetupUI and StartGameUI in the front
   end's state the frame after, the pointer hidden by FAF's StartLoadingDialog).

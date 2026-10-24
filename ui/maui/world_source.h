@@ -12,6 +12,9 @@
 
 namespace moho::ui {
 
+struct Image;
+struct IntRect;
+
 // The camera as the interface keeps it: the place it looks at, how far away it is, heading and
 // pitch in radians (pitch pi/2 looks straight down), the upright field of view in radians.
 struct WorldCamera {
@@ -180,6 +183,20 @@ class BackdropSource {
     (void)x0, (void)y0, (void)x1, (void)y1;
     return 255;
   }
+};
+
+// A picture over the whole window drawn by the graphics card, under the interface (the renderer's
+// WorldPicture::SetBackdrop, ui REQUESTS 38): the loading screen's faction film and FAF's "IN TRANSIT" cover at the
+// game's start, which the software target would otherwise stretch over every pixel of the window each frame. The
+// host's (GameSession), while the renderer's picture shows the window; a control that draws such a picture over the
+// whole window as the first thing of a frame (nothing of the interface under it: DrawTarget::Blank) offers it here
+// and, taken, draws nothing of it itself. Ours, not the original's (its device draws every quad on the card anyway).
+class CardBackdrop {
+ public:
+  virtual ~CardBackdrop() = default;
+  // `image`'s texels `src` (whole ones, inside it) stretched over the whole window at `alpha` (0..1, the control's),
+  // for this frame. False: not taken (no picture of the renderer's shows the window): the control draws it itself.
+  virtual bool Take(const Image& image, const IntRect& src, float alpha) = 0;
 };
 
 class WorldSource {

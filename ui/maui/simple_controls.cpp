@@ -258,6 +258,10 @@ class Movie : public Control {
     }
     const Image& picture = decoder.Picture();
     if (!picture.valid()) return;
+    // (The loading screen's film over the whole window: drawn by the graphics card where the renderer's picture shows
+    // the window, ui REQUESTS 38; the film's frame is handed over only when it is a new one.)
+    const Rect all{0, 0, static_cast<float>(picture.width), static_cast<float>(picture.height)};
+    if (OfferToCard(L, target, r, picture, all, alpha)) return;
     target.DrawImage(picture, {0, 0, static_cast<float>(picture.width), static_cast<float>(picture.height)}, r, WithAlpha(0xffffffffu, alpha));
   }
   void MakeVars(lua_State* L) {

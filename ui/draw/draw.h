@@ -66,6 +66,12 @@ class DrawTarget {
   // A block of width * height opaque pixels (0xAARRGGBB, rows from the top; alpha is not looked
   // at), its top-left pixel at (x, y): the world's picture under the controls.
   virtual void DrawPixels(const uint32_t* pixels, int width, int height, int x, int y) = 0;
+  // Nothing has been drawn into the frame yet (a control drawing now lies under nothing of the interface). Only a
+  // target that knows says so (the recorder, draw/recorder.h); the others: false.
+  virtual bool Blank() const { return false; }
+  // What has been drawn into the frame so far is hidden by what is drawn now (an opaque picture over all of it, given
+  // to the graphics card: maui/control.h OfferToCard): left out. Only a target that can say so (the recorder).
+  virtual void DropBelow() {}
 };
 
 // The software backend: draws into its own pixel buffer.

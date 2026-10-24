@@ -293,5 +293,12 @@ const std::string& SlowestControlDrawn(double* ms);
 
 // The parent argument of an Internal* creation function (stack index 2): must be a living control.
 Control* CheckParent(lua_State* L);
+// A picture a control would stretch over `dst` (its texels `src`, whole ones) at `alpha`, handed to the graphics card
+// instead (UserState::Config::cardBackdrop, maui/world_source.h) in a game's interface state (the loading screen's
+// too) when `dst` is the whole of `target` and nothing of the interface has been drawn under it this frame
+// (DrawTarget::Blank), or all of that is hidden by it (opaque, at full strength: DrawTarget::DropBelow): the loading
+// screen's film, the "IN TRANSIT" cover. True: taken (the control draws nothing of it); false: the control draws it
+// itself. Ours, not the original's.
+bool OfferToCard(lua_State* L, DrawTarget& target, const Rect& dst, const Image& image, const Rect& src, float alpha);
 
 }  // namespace moho::ui

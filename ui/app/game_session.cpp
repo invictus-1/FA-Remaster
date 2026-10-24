@@ -54,10 +54,100 @@ namespace moho::ui {
 // The commit this program was built from (build_ui.py writes it into the build folder's build_commit.cpp).
 extern const char kBuildCommit[];
 
+#ifdef MOHO64UI_WORLD_PICTURE
+namespace {
+// The player's looks that are the world's own switches (the Options menu's Video tab), on `w`: each frame on the
+// world shown (Picture::SetScene), and on a game's world before it opens behind the window's picture (BeginWindowMap's
+// `before`: what its opening and its unseen first frames make is then made for them). `photoLook`: the Photographic
+// Look's grade set too (on a change only: Named sets the grade, the eye and lens keep theirs).
+void WorldLooks(render::World& w, const LookSettings& looks, bool photoLook) {
+  w.look = looks.originalLook ? render::Look::Original : render::Look::Modern;  // (the player's "Look")
+  w.ribbons.tracers = looks.tracers;
+  w.terrain.richGround = looks.richGround && looks.fidelity >= 1;  // (Fidelity Low: plain ground)
+  w.ao.strength = looks.fidelity >= 1 ? 1.0f : 0.0f;
+  w.shadowsOn = looks.shadows >= 1;
+  w.lampShadows = looks.shadows >= 3;
+  w.shadowSize = looks.shadows <= 1 ? 1024 : looks.shadows == 2 ? 2048 : 4096;  // (the renderer's offer)
+  w.meshes.detail = looks.meshDetail;
+  w.tracks.on = looks.snowTracks;
+  w.icons.playerScale = looks.iconScale;
+  w.icons.always = looks.iconsAlways;
+  w.bloom = looks.bloom;
+  w.bloomIntensity = looks.bloomIntensity;
+  w.waterRipples = looks.waterRipples;  // (Water Ripples: the renderer's World::waterRipples)
+  // (Battle Effects: the renderer's bundle as agreed on 2026-10-18; Energy Shields: its own)
+  w.blastWaves = w.blastDust = w.blastDebris = looks.battleEffects;
+  w.litSmoke = w.smokeShadows = w.heatShimmer = looks.battleEffects;
+  w.unitScars = looks.battleEffects;
+  // (render e8a4d56: wrecks and craters that glow and cool; dust, spray and contrails; explosions as lit volumes
+  // and the nuke's set piece, which without the volume art still throws the blasts' light and the nuke's flash)
+  w.hotMetal = w.movementDust = w.volumeExplosions = looks.battleEffects;
+  w.realExhausts = looks.battleEffects;  // (engines' exhausts as lit plumes, render 3e6ce2e: Chris's item 8)
+  w.remasteredBuild = looks.battleEffects;  // (render 6b8109e: the build effects remade; with the remastered effects and the modern look)
+  w.energyShields = looks.energyShields;
+  // (ren_DecalFadeFraction: the decals fade by distance as the original's CWldTerrainDecal::GetLODAlpha 0x89d400,
+  // render 33; 0.5 stock, 0.25 once FAF's gamemain.lua has set it)
+  w.decalFadeFraction = looks.decalFadeFraction;
+  // (the Photographic Look, render ef7e1bb: on change only; Named sets the grade, the eye and lens keep theirs)
+  if (photoLook) {
+    w.photoLook.on = looks.photoLook != 0;
+    static const char* const kNames[5] = {"", "plain", "film", "warm", "coldwar"};
+    if (w.photoLook.on) w.photoLook.Named(kNames[looks.photoLook]);
+  }
+}
+// The player's looks that are the picture's own switches, all of them (Picture::SetScene gives each when it changes).
+void PictureLooks(render::WorldPicture& p, const LookSettings& looks) {
+  p.SetRemasteredEffects(looks.remasteredEffects);
+  p.SetEffectsQuality(looks.effectsQuality);
+  p.SetUpscale(looks.upscale);
+  p.SetTemporalUpscale(looks.temporalUpscale);
+  p.SetAtmosphere(looks.atmosphere);
+  p.SetSoftShadows(looks.softShadows);
+  p.SetRayTracing(looks.rayTracing);
+  p.SetWeatherEffects(looks.weatherEffects);
+  p.SetGroundDetail(looks.groundDetail);
+  p.SetFrameGeneration(looks.frameGeneration);
+  p.SetHiddenOutlines(looks.hiddenOutlines);
+  p.SetMinimapMeshes(looks.minimapLod != 0);
+}
+// A game's sky on its world (GameSession::Sky): the map's edge, and a kind of weather that stays set with the values
+// the renderer's own kinds have (render/weather.cpp, kKinds) and with what that weather has done to the ground by now
+// (weather that changes by itself is the renderer's, by the game's seed and clock: WorldPicture::SetDayAndWeather).
+void SkyOnWorld(render::World& w, const std::string& edge, float startHour, const std::string& kind) {
+  // The map's edge, one of the two looks (the renderer's answer to ui request 20: all three
+  // switches set, as their defaults are neither look).
+  const bool frame = edge == "frame";
+  w.worldBeyond = !frame;
+  w.frame = frame;
+  w.beyondHaze = false;
+  if (startHour < 0) return;
+  struct Kind {
+    const char* name;
+    float clouds, rain, snow, fog;
+  };
+  static const Kind kKinds[] = {{"none", 0.35f, 0, 0, 0},     {"clear", 0.10f, 0, 0, 0},      {"cloudy", 0.65f, 0, 0, 0},
+                                {"overcast", 0.92f, 0, 0, 0.1f}, {"rain", 0.85f, 0.5f, 0, 0},  {"storm", 1.0f, 1.0f, 0, 0.25f},
+                                {"fog", 0.5f, 0, 0, 1.0f},    {"snow", 0.9f, 0, 0.8f, 0.1f}};
+  w.climate = kind == "cold" ? render::Climate::Cold : kind == "dry" ? render::Climate::Dry : render::Climate::Temperate;
+  for (const Kind& k : kKinds) {
+    if (kind != k.name) continue;
+    w.cloudCover = k.clouds, w.rain = k.rain, w.snow = k.snow, w.fog = k.fog;
+    w.wet = k.rain > 0 ? 1.0f : 0.0f;
+    w.snowLying = k.snow > 0 ? 1.0f : 0.0f;
+  }
+}
+bool WeatherByItself(const std::string& kind) { return kind == "changing" || kind == "cold" || kind == "dry"; }
+}  // namespace
+#endif
+
 // The renderer's world picture behind the interface's WorldSource.
 struct GameSession::Picture : WorldSource {
 #ifdef MOHO64UI_WORLD_PICTURE
-  render::WorldPicture picture;
+  // The renderer's picture: the window's (GameSession::WindowPicture, which shows the menus' map and each game's in
+  // turn: render request 37), or one of its own (a run without the window's picture: read back each frame).
+  std::unique_ptr<render::WorldPicture> own;
+  render::WorldPicture& picture;
+  explicit Picture(render::WorldPicture* shared) : own(shared ? nullptr : std::make_unique<render::WorldPicture>()), picture(shared ? *shared : *own) {}
   GameSession* session = nullptr;
   LookSettings lookNow;      // the player's looks as last given to the picture
   bool lookApplied = false;
@@ -75,9 +165,6 @@ struct GameSession::Picture : WorldSource {
   bool direct = false;
   render::Camera camera;
   int cameraW = 0, cameraH = 0;
-  bool vsync = true;
-  bool lowLatency = false;  // (as the renderer's picture starts: SetLowLatency)
-  int layerW = 0, layerH = 0;  // the interface layer's size as last given (0: none yet)
   // The moment the frame shows, once fixed this frame by LifeBarAnchors (PresentToWindow takes
   // the same, so the bars it draws are those the anchors were of).
   double moment = 0;
@@ -454,41 +541,7 @@ struct GameSession::Picture : WorldSource {
     if (!lookApplied || looks.groundDetail != lookNow.groundDetail) picture.SetGroundDetail(looks.groundDetail);  // (request 33)
     if (!lookApplied || looks.frameGeneration != lookNow.frameGeneration) picture.SetFrameGeneration(looks.frameGeneration);  // (34)
     ApplyLens();  // (Cinematic Lens Blur: only while the cinematic camera shows)
-    if (render::World* w = picture.world()) {
-      w->look = looks.originalLook ? render::Look::Original : render::Look::Modern;  // (the player's "Look")
-      w->ribbons.tracers = looks.tracers;
-      w->terrain.richGround = looks.richGround && looks.fidelity >= 1;  // (Fidelity Low: plain ground)
-      w->ao.strength = looks.fidelity >= 1 ? 1.0f : 0.0f;
-      w->shadowsOn = looks.shadows >= 1;
-      w->lampShadows = looks.shadows >= 3;
-      w->shadowSize = looks.shadows <= 1 ? 1024 : looks.shadows == 2 ? 2048 : 4096;  // (the renderer's offer)
-      w->meshes.detail = looks.meshDetail;
-      w->tracks.on = looks.snowTracks;
-      w->icons.playerScale = looks.iconScale;
-      w->icons.always = looks.iconsAlways;
-      w->bloom = looks.bloom;
-      w->bloomIntensity = looks.bloomIntensity;
-      w->waterRipples = looks.waterRipples;  // (Water Ripples: the renderer's World::waterRipples)
-      // (Battle Effects: the renderer's bundle as agreed on 2026-10-18; Energy Shields: its own)
-      w->blastWaves = w->blastDust = w->blastDebris = looks.battleEffects;
-      w->litSmoke = w->smokeShadows = w->heatShimmer = looks.battleEffects;
-      w->unitScars = looks.battleEffects;
-      // (render e8a4d56: wrecks and craters that glow and cool; dust, spray and contrails; explosions as lit volumes
-      // and the nuke's set piece, which without the volume art still throws the blasts' light and the nuke's flash)
-      w->hotMetal = w->movementDust = w->volumeExplosions = looks.battleEffects;
-      w->realExhausts = looks.battleEffects;  // (engines' exhausts as lit plumes, render 3e6ce2e: Chris's item 8)
-      w->remasteredBuild = looks.battleEffects;  // (render 6b8109e: the build effects remade; with the remastered effects and the modern look)
-      w->energyShields = looks.energyShields;
-      // (ren_DecalFadeFraction: the decals fade by distance as the original's CWldTerrainDecal::GetLODAlpha 0x89d400,
-      // render 33; 0.5 stock, 0.25 once FAF's gamemain.lua has set it)
-      w->decalFadeFraction = looks.decalFadeFraction;
-      // (the Photographic Look, render ef7e1bb: on change only; Named sets the grade, the eye and lens keep theirs)
-      if (!lookApplied || looks.photoLook != lookNow.photoLook) {
-        w->photoLook.on = looks.photoLook != 0;
-        static const char* const kNames[5] = {"", "plain", "film", "warm", "coldwar"};
-        if (w->photoLook.on) w->photoLook.Named(kNames[looks.photoLook]);
-      }
-    }
+    if (render::World* w = picture.world()) WorldLooks(*w, looks, !lookApplied || looks.photoLook != lookNow.photoLook);
     if (!lookApplied || looks.hiddenOutlines != lookNow.hiddenOutlines) picture.SetHiddenOutlines(looks.hiddenOutlines);
     // (the minimap stamps the script's meshes while cam_DefaultMiniLOD is not 0: render 4a061d2)
     if (!lookApplied || (looks.minimapLod != 0) != (lookNow.minimapLod != 0)) picture.SetMinimapMeshes(looks.minimapLod != 0);
@@ -534,6 +587,91 @@ struct GameSession::Picture : WorldSource {
   void UnitsIn(float, float, float, float, std::vector<uint32_t>*) override {}
 #endif
 };
+
+#ifdef MOHO64UI_WORLD_PICTURE
+namespace {
+// The interface layer to the renderer: only its changed part, but all of it the first time and
+// after a change of size (as SetInterfaceLayer asks).
+void GiveLayer(render::WorldPicture& picture, const SoftwareTarget& target, const IntRect& changed, int* layerW, int* layerH) {
+  const int w = target.Width(), h = target.Height();
+  IntRect part = changed.Intersect(IntRect{0, 0, w, h});
+  if (*layerW != w || *layerH != h) part = IntRect{0, 0, w, h}, *layerW = w, *layerH = h;
+  if (part.empty()) part = IntRect{};
+  picture.SetInterfaceLayer(target.pixels().data(), w, h, w, part.x0, part.y0, part.x1 - part.x0, part.y1 - part.y0);
+}
+// What a game or the menus before left set on the window's picture that is the picture's own, not its world's (the
+// world's own lists begin empty with each swap: render-answers.md, request 37), put back as a picture starts:
+// the army it is for, what that army knows, the colours, the day, the lens, the cinematics' switches. `looks`: the
+// player's looks too, as a picture starts (the menus' background keeps the look it always had; a game's own
+// looks are given again by its first frame, Picture::SetScene).
+void StartAfresh(render::WorldPicture& p, bool looks) {
+  p.SetFocusArmy(0);
+  p.SetUnexplored(false);
+  p.SetAllies({});
+  p.SetLifeBarsOnEnemies(false);
+  p.SetIconColors({});
+  p.SetArmyColors({});
+  p.SetDayAndWeather(-1, 0, false);
+  p.SetLens(render::Lens{});
+  p.ClearPhotoMoment();
+  p.SetHover(0xffffffffu, 0);
+  p.SetLifeBars(false);
+  p.SetWorkBars(true);
+  p.SetStrategicIcons(true);
+  p.SetSelectionMarks(true);
+  if (!looks) return;
+  // (each as a picture starts: world_picture.h; the lighting bundles off are the world's own switches as at first)
+  p.SetRemasteredEffects(true);
+  p.SetEffectsQuality(1);
+  p.SetUpscale(1);
+  p.SetTemporalUpscale(false);
+  p.SetAtmosphere(false);
+  p.SetSoftShadows(false);
+  p.SetRayTracing(false);
+  p.SetWeatherEffects(false);
+  p.SetGroundDetail(false);
+  p.SetFrameGeneration(false);
+  p.SetHiddenOutlines(true);
+  p.SetMinimapMeshes(false);
+}
+}  // namespace
+
+// The window's one picture of the renderer's (the renderer's answer to ui request 37, docs/render-answers.md "To the
+// interface, request 37"): made once on the window without a map (Open with none: the interface shows at once, on a
+// cold shader cache too) and given every map behind the one it shows (BeginMap): the menus' background's, each
+// game's, the menus' again; the window goes on showing frames while the next map opens, which is swapped in when
+// ready (SwapMap; the renderer draws it unseen first, so the first frame after is an ordinary one). Before, each of
+// those opened a picture of its own on the window on the main thread: a game's 1.2-2.4 s inside FinishLoad, the
+// menus' about 0.9 s after a game (the last frame standing), the window hidden at the start until the menus' map
+// was open.
+struct GameSession::WindowPicture {
+  render::WorldPicture picture;
+  bool vulkan = false;  // what it was made with: the player's Graphics API, the scene's samples (gSceneSamples)
+  int samples = 0;
+  // The world shown, and the map opening behind (Menu or Game; None: none).
+  enum class Kind { None, Menu, Game, Left };  // (Left: the world of a game that is over, not shown)
+  Kind shows = Kind::None;
+  std::string shownMap;
+  Kind pending = Kind::None;
+  std::string pendingMap;
+  std::chrono::steady_clock::time_point begun{};
+  std::string failedGameMap;  // (a game's map the picture could not open: not tried again for that launch)
+  bool vsync = true;
+  bool lowLatency = false;     // (as the renderer's picture starts: SetLowLatency)
+  int layerW = 0, layerH = 0;  // the interface layer's size as last given (0: none yet)
+  // The picture over the window drawn by the card (SetBackdrop): none, the interface's (CardSink: the loading
+  // screen's film, the "IN TRANSIT" cover), or black fading out over the menus' map just swapped in (it comes in
+  // from black, as the read-back way's background does, rather than at once after the seconds of black).
+  enum class Over { None, Card, Fade };
+  Over over = Over::None;
+  float overAlpha = 1;
+  std::chrono::steady_clock::time_point fadeFrom{};
+  bool fading = false;
+  uint32_t black = 0xff000000u;
+};
+#else
+struct GameSession::WindowPicture {};
+#endif
 
 // The beats' own thread: one job at a time (a beat, or a launch's load), asked for and waited on
 // from the main thread.
@@ -1147,6 +1285,20 @@ void GameSession::End() {
   onSync = nullptr;
   takeOrders = nullptr;
   picture_.reset();
+#ifdef MOHO64UI_WORLD_PICTURE
+  // The window's picture stays: the game's world in it is not shown any more (the interface over black) until the
+  // next map is swapped in (the menus' background's, or the game started over's); one still opening for a launch
+  // that is dropped is let go of.
+  if (windowPicture_) {
+    using Kind = WindowPicture::Kind;
+    WindowPicture& wp = *windowPicture_;
+    if (wp.pending == Kind::Game) {
+      wp.picture.CancelMap(), wp.pending = Kind::None;
+      if (wp.shows == Kind::Menu) StartAfresh(wp.picture, true);  // (the menus' map stays: its looks as they were)
+    }
+    if (wp.shows == Kind::Game) wp.shows = Kind::Left;
+  }
+#endif
   sim_.reset();
   interfaceBlueprints_.reset();
   rules_.reset();
@@ -1239,13 +1391,28 @@ void GameSession::BeginLoad() {
     loadStartSeconds_ = secs(t1, std::chrono::steady_clock::now());
     loadOk_ = true;
   });
+  // Meanwhile the game's map opens behind the window's picture (render request 37), the loading screen drawn over
+  // what it shows; FinishLoad swaps it in.
+#ifdef MOHO64UI_WORLD_PICTURE
+  if (windowPicture_) windowPicture_->failedGameMap.clear();
+#endif
+  if (wantPicture && window) BeginWindowMap(true, loadSession_->header.map);
 }
 
 std::string GameSession::LoadingMapFolder() const {
   return loadSession_ ? SessionMapFolder(loadSession_->header) : std::string();  // (the engine's: sim/session.h)
 }
 
-bool GameSession::LoadDone() const { return load_ == Load::Running && !BeatRunning(); }
+bool GameSession::LoadDone() const {
+  if (load_ != Load::Running || BeatRunning()) return false;
+#ifdef MOHO64UI_WORLD_PICTURE
+  // (and the game's map opened behind the window's picture: the loading screen shows until both are there)
+  if (windowPicture_ && windowPicture_->pending == WindowPicture::Kind::Game && !windowPicture_->picture.MapReady() &&
+      !windowPicture_->picture.MapFailed())
+    return false;
+#endif
+  return true;
+}
 
 // The load is through (the original's last DoLoading frame, 0x88c000): the session runs.
 bool GameSession::FinishLoad(std::string* why) {
@@ -1336,31 +1503,69 @@ bool GameSession::FinishLoad(std::string* why) {
 }
 
 #ifdef MOHO64UI_WORLD_PICTURE
-struct GameSession::MenuPicture {
-  render::WorldPicture picture;
-  std::string map;  // the background's map it was opened with ("": none, no world)
-  bool vsync = true;
-  bool lowLatency = false;  // (as the renderer's picture starts: SetLowLatency)
-  int layerW = 0, layerH = 0;  // the interface layer's size as last given (0: none yet)
+// The interface's full-window picture for the card (maui/world_source.h, CardBackdrop): taken in a frame's drawing,
+// its texels copied (premultiplied, as the renderer takes them) only when it is another picture than the one held,
+// and handed to the window's picture when the frame is shown (GameSession::GiveBackdrop).
+struct GameSession::CardSink : CardBackdrop {
+  GameSession* session = nullptr;
+  bool taken = false, wanted = false;  // this frame's drawing took one; the frame being shown has one
+  float takenAlpha = 1, wantedAlpha = 1;
+  uint64_t heldSerial = 0;  // the picture held (its Image::serial and texels)
+  IntRect heldSrc;
+  std::vector<uint32_t> pixels;
+  int width = 0, height = 0;
+  bool fresh = false;  // held but not handed to the card yet
+  int loggedW = 0, loggedH = 0;  // (the size last named in the log)
+  bool Take(const Image& image, const IntRect& src, float alpha) override {
+    if (!session->windowPicture_) return false;
+    taken = true;
+    takenAlpha = static_cast<float>(WithAlpha(0xff000000u, alpha) >> 24) / 255.0f;  // (the software way's steps)
+    if (image.serial == heldSerial && src.x0 == heldSrc.x0 && src.y0 == heldSrc.y0 && src.x1 == heldSrc.x1 && src.y1 == heldSrc.y1 &&
+        !pixels.empty())
+      return true;
+    heldSerial = image.serial, heldSrc = src;
+    width = src.x1 - src.x0, height = src.y1 - src.y0;
+    pixels.resize(static_cast<size_t>(width) * static_cast<size_t>(height));
+    for (int y = 0; y < height; ++y) {
+      const uint32_t* from = image.pixels.data() + static_cast<size_t>(src.y0 + y) * static_cast<size_t>(image.width) + src.x0;
+      uint32_t* to = pixels.data() + static_cast<size_t>(y) * static_cast<size_t>(width);
+      for (int x = 0; x < width; ++x) {
+        const uint32_t p = from[x], a = p >> 24;
+        if (a == 255) {
+          to[x] = p;
+        } else {
+          const uint32_t rb = ((p & 0x00ff00ffu) * a + 0x00800080u) >> 8 & 0x00ff00ffu, g = ((p & 0x0000ff00u) * a + 0x00008000u) >> 8 & 0x0000ff00u;
+          to[x] = a << 24 | rb | g;
+        }
+      }
+    }
+    fresh = true;
+    if (width != loggedW || height != loggedH)
+      Logf(LogLevel::Info, "moho64ui: a picture over the whole window (%dx%d) is drawn by the graphics card, under the interface", width, height);
+    loggedW = width, loggedH = height;
+    return true;
+  }
 };
-namespace {
-// The interface layer to the renderer: only its changed part, but all of it the first time and
-// after a change of size (as SetInterfaceLayer asks).
-void GiveLayer(render::WorldPicture& picture, const SoftwareTarget& target, const IntRect& changed, int* layerW, int* layerH) {
-  const int w = target.Width(), h = target.Height();
-  IntRect part = changed.Intersect(IntRect{0, 0, w, h});
-  if (*layerW != w || *layerH != h) part = IntRect{0, 0, w, h}, *layerW = w, *layerH = h;
-  if (part.empty()) part = IntRect{};
-  picture.SetInterfaceLayer(target.pixels().data(), w, h, w, part.x0, part.y0, part.x1 - part.x0, part.y1 - part.y0);
+
+CardBackdrop* GameSession::cardBackdrop() {
+  if (!card_) card_ = std::make_unique<CardSink>(), card_->session = this;
+  return card_.get();
 }
-}  // namespace
+
+void GameSession::InterfaceRendered() {
+  if (!card_) return;
+  card_->wanted = card_->taken, card_->wantedAlpha = card_->takenAlpha;
+  card_->taken = false;
+}
 #else
-struct GameSession::MenuPicture {};
+struct GameSession::CardSink {};
+CardBackdrop* GameSession::cardBackdrop() { return nullptr; }
+void GameSession::InterfaceRendered() {}
 #endif
 
 bool GameSession::DrawsToWindow() const {
 #ifdef MOHO64UI_WORLD_PICTURE
-  return window != nullptr && (!picture_ || picture_->direct);
+  return window != nullptr && windowPicture_ != nullptr;
 #else
   return false;
 #endif
@@ -1403,118 +1608,226 @@ void UseGameWindow(render::WorldPicture& picture, void* window) {
 
 void GameSession::WaitForNextFrame() {
 #ifdef MOHO64UI_WORLD_PICTURE
-  // (the picture about to be shown: the game's on its window, else the menu's; with Low Latency off it returns at once)
-  if (picture_) {
-    if (picture_->direct) picture_->picture.WaitForNextFrame();
-  } else if (menuPicture_) {
-    menuPicture_->picture.WaitForNextFrame();
-  }
+  // (the window's picture; with Low Latency off it returns at once)
+  if (windowPicture_) windowPicture_->picture.WaitForNextFrame();
 #endif
 }
 
-// The window's picture without a game: with the map the menus' background asks for, else none.
-GameSession::MenuPicture* GameSession::EnsureMenuPicture() {
+// The window's picture, made when there is none yet; with `remake` (a map is begun) made anew too when the player's
+// Graphics API or anti-aliasing has changed and no game's world shows in it (those are taken when the device and a
+// world's pipelines are made: gSceneSamples must not change while a world lives, render/world.h; as before, a change
+// shows from the next map). False: no window, or it would not open (the interface is then shown the software way, as
+// with --gdi).
+bool GameSession::EnsureWindowPicture(bool remake) {
 #ifdef MOHO64UI_WORLD_PICTURE
-  if (!window || picture_) return nullptr;
-  std::string map;  // (the one the background asks for)
-  if (menuBackdrop && menuBackdrop->Direct() && menuBackdrop->map() != failedMenuMap_) map = menuBackdrop->map();
-  // (The picture there is kept while none is asked for: with a map it then shows black under the
-  // interface, as for the loading screen once the background has stopped, until the game's picture
-  // takes the window and it goes; it is made anew only for another map.)
-  if (menuPicture_ && (map.empty() || menuPicture_->map == map)) return menuPicture_.get();
+  if (!window || windowPictureFailed_) return false;
+  const bool vulkan = Looks().vulkan;
+  const int samples = Looks().SceneSamples();
+  if (windowPicture_) {
+    const WindowPicture& now = *windowPicture_;
+    if (!remake || (now.vulkan == vulkan && now.samples == samples) || now.shows == WindowPicture::Kind::Game) return true;
+    Logf(LogLevel::Info, "moho64ui: the window's picture is made anew (the Graphics API or the anti-aliasing has changed)");
+    windowPicture_.reset();
+    if (card_) card_->fresh = !card_->pixels.empty();  // (the new picture has none of it)
+  }
   const auto t0 = std::chrono::steady_clock::now();
-  menuPicture_.reset();  // (one picture per window: the one before goes first)
-  auto menu = std::make_unique<MenuPicture>();
-  menu->picture.SetVulkan(Looks().vulkan);
-  menu->picture.SetLowLatency(menu->lowLatency = Pacing().lowLatency);  // (the Video tab's Low Latency, before Open)
-  if (!map.empty()) menu->picture.SetTextureDetail(Looks().textureDetail);  // (as the background's own picture: Backdrop::Run)
-  UseGameWindow(menu->picture, window);
+  if (render::gSceneSamples != samples) {  // (no world lives now: the menus' background's own picture ends too)
+    if (releaseWorlds) releaseWorlds();
+    render::gSceneSamples = samples;
+  }
+  auto made = std::make_unique<WindowPicture>();
+  made->vulkan = vulkan, made->samples = samples;
+  made->picture.SetVulkan(vulkan);                                  // (the player's Graphics API)
+  made->picture.SetLowLatency(made->lowLatency = Pacing().lowLatency);  // (the Video tab's Low Latency, before Open)
+  UseGameWindow(made->picture, window);
   std::string error;
-  if (!menu->picture.Open(vfs_, map, &error)) {
-    if (map.empty()) {
-      Logf(LogLevel::Warning, "moho64ui: the window's menu picture did not open: %s", error.c_str());
-      return nullptr;
-    }
-    Logf(LogLevel::Warning, "moho64ui: the menu's background: %s cannot be shown (%s)", map.c_str(), error.c_str());
-    failedMenuMap_ = map;
-    menu.reset();
-    return EnsureMenuPicture();  // (without a world)
+  if (!made->picture.Open(vfs_, "", &error)) {
+    Logf(LogLevel::Warning, "moho64ui: the window's picture did not open (%s): the interface is shown without the renderer", error.c_str());
+    windowPictureFailed_ = true;
+    return false;
   }
-  Looks().rayTracingSupported = menu->picture.RayTracingSupported() ? 1 : 0;  // (the Video tab's Ray Tracing)
-  const double took = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-  if (!map.empty()) {
-    Backdrop::Dress(menu->picture);
-    Logf(LogLevel::Info, "moho64ui: the menu's background: %s, in the window's picture, ready after %.1f s", map.c_str(), took);
-  } else {
-    Logf(LogLevel::Info, "moho64ui: the window's menu picture (no world) opened in %.2f s", took);
-  }
-  menu->map = map;
-  menuPicture_ = std::move(menu);
-  return menuPicture_.get();
+  Looks().rayTracingSupported = made->picture.RayTracingSupported() ? 1 : 0;  // (the Video tab's Ray Tracing)
+  windowPicture_ = std::move(made);
+  Logf(LogLevel::Info, "moho64ui: the window's picture (no map yet) opened in %.2f s",
+       std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+  return true;
 #else
-  return nullptr;
+  return false;
 #endif
 }
 
-void GameSession::OpenMenuPicture() { EnsureMenuPicture(); }
+// A map opened behind the one the window's picture shows: the menus' background's, or the game being loaded's. One
+// at a time: another begun before is let go of.
+void GameSession::BeginWindowMap(bool game, const std::string& map) {
+#ifdef MOHO64UI_WORLD_PICTURE
+  using Kind = WindowPicture::Kind;
+  if (map.empty() || !EnsureWindowPicture(true)) return;
+  WindowPicture& wp = *windowPicture_;
+  const Kind kind = game ? Kind::Game : Kind::Menu;
+  if (wp.pending == kind && wp.pendingMap == map) return;
+  if (wp.pending != Kind::None) wp.picture.CancelMap(), wp.pending = Kind::None;
+  render::WorldPicture& p = wp.picture;
+  // What the map's opening takes from the picture (as Open did): the texture detail, the season, ray tracing's shaders.
+  std::function<void(render::World&)> before;
+  if (game) {
+    // The player's looks and the game's sky, so that the map opens for them: the world's own switches on the loading
+    // thread before it opens (BeginMap's `before`; the renderer: "use `before` for anything read at open, such as the
+    // look"), the picture's own (the lighting bundles, ray tracing's shaders) only for the moment BeginMap takes them
+    // (they apply at once to the world shown too, which then made what they ask for in one frame of the loading
+    // screen: 7.4 s at 1080p with every look on; ray tracing alone some 125 ms). Then the world shown (not shown:
+    // the loading screen) has the looks a picture starts with again, and the game's first frame gives the player's
+    // (Picture::SetScene), as before.
+    const LookSettings looks = Looks();
+    p.SetTextureDetail(looks.textureDetail);  // (the game's Texture Detail)
+    p.SetSeason(looks.season == 1 ? render::Season::Autumn : render::Season::Summer);  // (the Video tab's Season)
+    PictureLooks(p, looks);  // (ray tracing too: the surfaces' shaders made for reflections as the map opens, render request 31)
+    const Sky sky = skyNow_;
+    before = [looks, sky](render::World& w) {
+      WorldLooks(w, looks, true);
+      SkyOnWorld(w, sky.edge, sky.startHour, sky.weather);
+    };
+  } else {
+    // (the menus' background as it always was: the picture's looks as a picture starts, the summer, the player's
+    // Texture Detail as the background's own picture had it: Backdrop::Run)
+    StartAfresh(p, true);
+    p.SetSeason(render::Season::Summer);
+    p.SetTextureDetail(Looks().textureDetail);
+  }
+  const bool begun = p.BeginMap(map, before);
+  if (game) StartAfresh(p, true);  // (see above)
+  if (!begun) {
+    Logf(LogLevel::Warning, "moho64ui: the window's picture cannot open %s behind", map.c_str());
+    if (!game) failedMenuMap_ = map;
+    return;
+  }
+  wp.pending = kind, wp.pendingMap = map;
+  wp.begun = std::chrono::steady_clock::now();
+  Logf(LogLevel::Info, "moho64ui: the window's picture opens %s behind (%s)", map.c_str(), game ? "the game's map" : "the menus' background");
+#else
+  (void)game, (void)map;
+#endif
+}
+
+// The window's picture at the program's start, before the window shows (its device, no map: the interface shows at
+// once), and the menus' background's map begun behind it when the background asks for one.
+void GameSession::OpenWindowPicture() {
+#ifdef MOHO64UI_WORLD_PICTURE
+  if (!EnsureWindowPicture(false)) return;
+  if (!picture_ && load_ == Load::None && menuBackdrop && menuBackdrop->Direct() && menuBackdrop->map() != failedMenuMap_)
+    BeginWindowMap(false, menuBackdrop->map());
+#endif
+}
+
+#ifdef MOHO64UI_WORLD_PICTURE
+// Once a frame, before it is drawn: the map opening behind the window's picture looked after (one that failed let go
+// of; the menus' one swapped in once ready: a game's waits for its simulation, FinishLoad); the menus' background's
+// map begun when it asks for one the picture neither shows nor opens.
+void GameSession::ServeWindowMap() {
+  using Kind = WindowPicture::Kind;
+  if (!picture_ && load_ == Load::None && menuBackdrop && menuBackdrop->Direct() && menuBackdrop->map() != failedMenuMap_) {
+    const std::string& want = menuBackdrop->map();
+    const WindowPicture& wp = *windowPicture_;
+    if (!(wp.shows == Kind::Menu && wp.shownMap == want) && !(wp.pending == Kind::Menu && wp.pendingMap == want)) BeginWindowMap(false, want);
+  }
+  if (!windowPicture_) return;  // (made anew and failed)
+  WindowPicture& wp = *windowPicture_;
+  if (wp.pending == Kind::None) return;
+  std::string error;
+  if (wp.picture.MapFailed(&error)) {
+    Logf(LogLevel::Warning, "moho64ui: %s cannot be shown (%s)", wp.pendingMap.c_str(), error.c_str());
+    (wp.pending == Kind::Menu ? failedMenuMap_ : wp.failedGameMap) = wp.pendingMap;
+    wp.picture.CancelMap();
+    wp.pending = Kind::None;
+    return;
+  }
+  if (wp.pending != Kind::Menu || !wp.picture.MapReady() || !wp.picture.SwapMap()) return;
+  wp.shows = Kind::Menu, wp.shownMap = wp.pendingMap;
+  wp.pending = Kind::None;
+  Backdrop::Dress(wp.picture);
+  wp.fading = true, wp.fadeFrom = std::chrono::steady_clock::now();
+  const render::WorldPicture::LoadNumbers n = wp.picture.LastLoadNumbers();
+  Logf(LogLevel::Info,
+       "moho64ui: the menu's background: %s, in the window's picture, ready after %.1f s (open %.1f s; the frames' share %.0f ms, at most %.1f ms in "
+       "one; %d warm frames, the longest %.0f ms)",
+       wp.shownMap.c_str(), std::chrono::duration<double>(std::chrono::steady_clock::now() - wp.begun).count(), n.openSeconds, n.serviceMs,
+       n.longestServiceMs, n.warmFrames, n.warmLongestMs);
+}
+
+// The picture over the window the card draws this frame (WindowPicture::Over): the interface's when its drawing gave
+// one (CardSink), else the menus' map coming in from black, else none.
+void GameSession::GiveBackdrop(WindowPicture& wp) {
+  using Over = WindowPicture::Over;
+  render::WorldPicture& p = wp.picture;
+  float alpha = 1;
+  Over over = Over::None;
+  if (card_ && card_->wanted && !card_->pixels.empty()) {
+    over = Over::Card, alpha = card_->wantedAlpha;
+  } else if (wp.fading) {
+    const double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - wp.fadeFrom).count() / 1.5;  // (as Backdrop::Show's)
+    if (t >= 1) wp.fading = false;
+    else over = Over::Fade, alpha = static_cast<float>(1.0 - t);
+  }
+  if (over == Over::Card && (card_->fresh || wp.over != Over::Card)) {
+    p.SetBackdrop(card_->pixels.data(), card_->width, card_->height, card_->width, render::WorldPicture::BackdropFit::Stretch, true);
+    card_->fresh = false;
+  } else if (over == Over::Fade && wp.over != Over::Fade) {
+    p.SetBackdrop(&wp.black, 1, 1, 1, render::WorldPicture::BackdropFit::Stretch, true);
+  } else if (over == Over::None && wp.over != Over::None) {
+    p.SetBackdrop(nullptr, 0, 0, 0, render::WorldPicture::BackdropFit::Stretch, true);
+  }
+  if (over != Over::None && (alpha != wp.overAlpha || wp.over != over)) p.SetBackdropLook(alpha), wp.overAlpha = alpha;
+  wp.over = over;
+}
+#endif
 
 void GameSession::PresentToWindow(const SoftwareTarget& target, const IntRect& changed) {
 #ifdef MOHO64UI_WORLD_PICTURE
-  if (!window) return;
-  if (!picture_) {  // no game: the menu's picture, the interface over its background's map or over black
-    MenuPicture* shown = EnsureMenuPicture();
-    if (!shown) return;
-    MenuPicture& menu = *shown;
-    const int w = target.Width(), h = target.Height();
-    GiveLayer(menu.picture, target, changed, &menu.layerW, &menu.layerH);
-    const bool vsync = Pacing().verticalSync;
-    if (vsync != menu.vsync) menu.picture.SetVsync(vsync), menu.vsync = vsync;
-    const bool lowLatency = Pacing().lowLatency;
-    if (lowLatency != menu.lowLatency) menu.picture.SetLowLatency(lowLatency), menu.lowLatency = lowLatency;
-    // (The background's map where the movie showed this frame; else black under the interface.)
+  using Kind = WindowPicture::Kind;
+  if (!window || !EnsureWindowPicture(false)) return;
+  ServeWindowMap();
+  if (!windowPicture_) return;
+  WindowPicture& wp = *windowPicture_;
+  const int w = target.Width(), h = target.Height();
+  // (The renderer unions the changed parts until its next frame.)
+  GiveLayer(wp.picture, target, changed, &wp.layerW, &wp.layerH);
+  const bool vsync = Pacing().verticalSync;
+  if (vsync != wp.vsync) wp.picture.SetVsync(vsync), wp.vsync = vsync;
+  const bool lowLatency = Pacing().lowLatency;
+  if (lowLatency != wp.lowLatency) wp.picture.SetLowLatency(lowLatency), wp.lowLatency = lowLatency;
+  GiveBackdrop(wp);
+  std::vector<uint8_t> rgba;
+  if (!captureTo_.empty()) wp.picture.CaptureNextWindowFrame(&rgba);
+  const auto t0 = std::chrono::steady_clock::now();
+  FrameTimes& times = Times();
+  if (picture_ && picture_->direct) {  // a game: its world from the world view's camera
+    Picture& pic = *picture_;
+    const double moment = pic.momentFixed ? pic.moment : PictureTick();  // (the one the anchors were of)
+    pic.momentFixed = false;
+    if (pic.cameraW > 0) {
+      wp.picture.DrawToWindow(pic.camera, w, h, moment);
+      // (the first-start graphics check's measurement: the card's time of the newest frame it has finished)
+      if (FrameCost().fakeMs < 0) FrameCost().Note(wp.picture.LastStats().gpuMs);
+    }
+    // (The picture shows moment - 1, between the beats round it: past the newest beat it stands still.)
+    if (sim_) {
+      const uint32_t newest = BeatRunning() ? beatFrom_ : sim_->tick();
+      if (moment - 1.0 > static_cast<double>(newest) + 1e-6) ++times.heldPictures;
+    }
+    times.worldDraw += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    ++times.worldDraws;
+  } else {
+    // No game: the menus' background's map where its movie showed this frame (Backdrop::TakeView); else black under
+    // the interface (the loading screen, the lobby, a game's world that is over while the menus' map opens).
     render::Camera camera;
     double tick = 0;
-    const bool world = !menu.map.empty() && menuBackdrop && menuBackdrop->TakeView(menu.picture, w, h, &camera, &tick);
-    if (!menu.map.empty()) menu.picture.SetWorldShown(world);
-    std::vector<uint8_t> rgba;
-    if (!captureTo_.empty()) menu.picture.CaptureNextWindowFrame(&rgba);
-    const auto t0 = std::chrono::steady_clock::now();
-    menu.picture.DrawToWindow(camera, w, h, tick);
+    const bool world = wp.shows == Kind::Menu && menuBackdrop && menuBackdrop->TakeView(wp.picture, w, h, &camera, &tick);
+    if (wp.shows != Kind::None) wp.picture.SetWorldShown(world);
+    wp.picture.DrawToWindow(camera, w, h, tick);
     if (world) {
-      FrameTimes& times = Times();
       times.worldDraw += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
       ++times.worldDraws;
     }
-    if (!captureTo_.empty()) SaveWindowCapture(rgba, w, h, captureTo_), captureTo_.clear();
-    return;
   }
-  if (!picture_->direct) return;
-  Picture& pic = *picture_;
-  const int w = target.Width(), h = target.Height();
-  // (The renderer unions the changed parts until its next frame.)
-  GiveLayer(pic.picture, target, changed, &pic.layerW, &pic.layerH);
-  const bool vsync = Pacing().verticalSync;
-  if (vsync != pic.vsync) pic.picture.SetVsync(vsync), pic.vsync = vsync;
-  const bool lowLatency = Pacing().lowLatency;
-  if (lowLatency != pic.lowLatency) pic.picture.SetLowLatency(lowLatency), pic.lowLatency = lowLatency;
-  std::vector<uint8_t> rgba;
-  if (!captureTo_.empty()) pic.picture.CaptureNextWindowFrame(&rgba);
-  const auto t0 = std::chrono::steady_clock::now();
-  const double moment = pic.momentFixed ? pic.moment : PictureTick();  // (the one the anchors were of)
-  pic.momentFixed = false;
-  if (pic.cameraW > 0) {
-    pic.picture.DrawToWindow(pic.camera, w, h, moment);
-    // (the first-start graphics check's measurement: the card's time of the newest frame it has finished)
-    if (FrameCost().fakeMs < 0) FrameCost().Note(pic.picture.LastStats().gpuMs);
-  }
-  FrameTimes& times = Times();
-  // (The picture shows moment - 1, between the beats round it: past the newest beat it stands still.)
-  if (sim_) {
-    const uint32_t newest = BeatRunning() ? beatFrom_ : sim_->tick();
-    if (moment - 1.0 > static_cast<double>(newest) + 1e-6) ++times.heldPictures;
-  }
-  times.worldDraw += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-  ++times.worldDraws;
   if (!captureTo_.empty()) SaveWindowCapture(rgba, w, h, captureTo_), captureTo_.clear();
 #else
   (void)target;
@@ -1532,81 +1845,101 @@ void GameSession::CaptureWindow(const std::string& path) {
 
 void GameSession::OpenPictureIfDue() {
   if (!pictureDue_ || !window || !sim_) return;
+#ifdef MOHO64UI_WORLD_PICTURE
+  // (the window's picture opening the game's map behind: swapped in once ready, with no beat running)
+  if (windowPicture_ && windowPicture_->pending == WindowPicture::Kind::Game && windowPicture_->pendingMap == map_ &&
+      (!windowPicture_->picture.MapReady() || BeatRunning()))
+    return;
+#endif
   pictureDue_ = false;
   WaitForWorker();  // (GameStarted reads the simulation)
   OpenPicture();
 }
 
+#ifdef MOHO64UI_WORLD_PICTURE
+// A game's picture made ready: the edge of the map, the day and the weather, the simulation's start, the army it is for.
+void GameSession::DressGamePicture(Picture& pic) {
+  pic.picture.GameStarted(*sim_);
+  // The picture is the player's: other armies' units show as the player's army knows them.
+  pic.picture.SetFocusArmy(sim_->focusArmy + 1);
+  pictureFocus_ = sim_->focusArmy;
+  if (render::World* w = pic.picture.world()) SkyOnWorld(*w, skyNow_.edge, skyNow_.startHour, skyNow_.weather);
+  Logf(LogLevel::Info, "moho64ui: session: the map's edge: %s",
+       skyNow_.edge == "frame" ? "the original's frame of machinery" : "no machinery, the land beyond");
+  if (skyNow_.startHour >= 0) {
+    pic.picture.SetDayAndWeather(skyNow_.startHour, skyNow_.dayLengthSeconds, WeatherByItself(skyNow_.weather));
+    Logf(LogLevel::Info, "moho64ui: session: the day starts at %.2f h, a day takes %.0f game seconds, weather \"%s\"",
+         skyNow_.startHour, skyNow_.dayLengthSeconds, skyNow_.weather.c_str());
+  }
+  pic.picture.Beat(*sim_);
+}
+#endif
+
 void GameSession::OpenPicture() {
 #ifdef MOHO64UI_WORLD_PICTURE
   auto secs = [](auto a, auto b) { return std::chrono::duration<double>(b - a).count(); };
-  {
-    auto t3 = std::chrono::steady_clock::now();
-    auto pic = std::make_unique<Picture>();
+  const auto t3 = std::chrono::steady_clock::now();
+  if (windowPicture_) {
+    // On the game's window: its picture shows the game's map, opened behind while the loading screen showed
+    // (BeginLoad; LoadDone waited for it). The renderer shows it there itself, the interface laid over it, without
+    // reading it back (PresentToWindow).
+    using Kind = WindowPicture::Kind;
+    WindowPicture& wp = *windowPicture_;
+    if (wp.pending != Kind::Game || wp.pendingMap != map_) {  // (not begun: a game loaded before the window was there)
+      if (wp.failedGameMap == map_) {
+        Logf(LogLevel::Warning, "moho64ui: session: no picture of the world: its map could not be opened");
+        return;
+      }
+      BeginWindowMap(true, map_);
+      pictureDue_ = windowPicture_ && windowPicture_->pending == Kind::Game;
+      return;
+    }
+    if (!wp.picture.MapReady() || !wp.picture.SwapMap()) {
+      Logf(LogLevel::Warning, "moho64ui: session: no picture of the world: its map was not ready");
+      wp.picture.CancelMap();
+      wp.pending = Kind::None;
+      return;
+    }
+    wp.shows = Kind::Game, wp.shownMap = map_;
+    wp.pending = Kind::None;
+    wp.fading = false;
+    auto pic = std::make_unique<Picture>(&wp.picture);
     pic->session = this;
-    // (On the game's window when it has one: the renderer shows the picture there itself, the
-    // interface laid over it, without reading it back; see PresentToWindow.)
-    menuPicture_.reset();  // (one picture per window: the menu's goes first)
-    if (render::gSceneSamples != Looks().SceneSamples()) {  // (the player's anti-aliasing, or 1 under FSR 3: taken when a picture is made)
-      if (releaseWorlds) releaseWorlds();
-      render::gSceneSamples = Looks().SceneSamples();
-    }
-    pic->picture.SetVulkan(Looks().vulkan);  // (the player's Graphics API)
-    pic->picture.SetTextureDetail(Looks().textureDetail);  // (the game's Texture Detail)
-    pic->picture.SetLowLatency(pic->lowLatency = Pacing().lowLatency);  // (the Video tab's Low Latency)
-    pic->picture.SetSeason(Looks().season == 1 ? render::Season::Autumn : render::Season::Summer);  // (the Video tab's Season)
-    // (Ray Tracing before Open: the surfaces' shaders are made for reflections when the map opens; the
-    // renderer's request 31 follow-up. The first frame's looks block sets it again, harmlessly.)
-    pic->picture.SetRayTracing(Looks().rayTracing);
-    if (window) UseGameWindow(pic->picture, window), pic->direct = true;
-    std::string error;
-    if (pic->picture.Open(vfs_, map_, &error)) {
-      Looks().rayTracingSupported = pic->picture.RayTracingSupported() ? 1 : 0;  // (the Video tab's Ray Tracing)
-      pic->picture.GameStarted(*sim_);
-      // The picture is the player's: other armies' units show as the player's army knows them.
-      pic->picture.SetFocusArmy(sim_->focusArmy + 1);
-      pictureFocus_ = sim_->focusArmy;
-      // The map's edge, one of the two looks (the renderer's answer to ui request 20: all three
-      // switches set, as their defaults are neither look).
-      if (render::World* w = pic->picture.world()) {
-        const bool frame = skyNow_.edge == "frame";
-        w->worldBeyond = !frame;
-        w->frame = frame;
-        w->beyondHaze = false;
-        Logf(LogLevel::Info, "moho64ui: session: the map's edge: %s", frame ? "the original's frame of machinery" : "no machinery, the land beyond");
-      }
-      if (skyNow_.startHour >= 0) {
-        // Weather that changes by itself is the renderer's (by the game's seed and clock); one
-        // kind that stays is set on its world here, with the values its own kinds have
-        // (render/weather.cpp, kKinds), and with what that weather has done to the ground by now.
-        struct Kind {
-          const char* name;
-          float clouds, rain, snow, fog;
-        };
-        static const Kind kKinds[] = {{"none", 0.35f, 0, 0, 0},     {"clear", 0.10f, 0, 0, 0},      {"cloudy", 0.65f, 0, 0, 0},
-                                      {"overcast", 0.92f, 0, 0, 0.1f}, {"rain", 0.85f, 0.5f, 0, 0},  {"storm", 1.0f, 1.0f, 0, 0.25f},
-                                      {"fog", 0.5f, 0, 0, 1.0f},    {"snow", 0.9f, 0, 0.8f, 0.1f}};
-        const std::string& kind = skyNow_.weather;
-        const bool byItself = kind == "changing" || kind == "cold" || kind == "dry";
-        pic->picture.SetDayAndWeather(skyNow_.startHour, skyNow_.dayLengthSeconds, byItself);
-        if (render::World* w = pic->picture.world()) {
-          w->climate = kind == "cold" ? render::Climate::Cold : kind == "dry" ? render::Climate::Dry : render::Climate::Temperate;
-          for (const Kind& k : kKinds) {
-            if (kind != k.name) continue;
-            w->cloudCover = k.clouds, w->rain = k.rain, w->snow = k.snow, w->fog = k.fog;
-            w->wet = k.rain > 0 ? 1.0f : 0.0f;
-            w->snowLying = k.snow > 0 ? 1.0f : 0.0f;
-          }
-        }
-        Logf(LogLevel::Info, "moho64ui: session: the day starts at %.2f h, a day takes %.0f game seconds, weather \"%s\"",
-             skyNow_.startHour, skyNow_.dayLengthSeconds, kind.c_str());
-      }
-      pic->picture.Beat(*sim_);
-      picture_ = std::move(pic);
-      Logf(LogLevel::Info, "moho64ui: session: the world's picture is open, %.2f s", secs(t3, std::chrono::steady_clock::now()));
-    } else {
-      Logf(LogLevel::Warning, "moho64ui: session: no picture of the world: %s", error.c_str());
-    }
+    pic->direct = true;
+    StartAfresh(wp.picture, false);  // (the per-game settings: the menus' or the game before's go)
+    wp.picture.SetWorldShown(true);  // (the loading screen had it off; the game's own switch comes with its first frame)
+    DressGamePicture(*pic);
+    picture_ = std::move(pic);
+    const render::WorldPicture::LoadNumbers n = wp.picture.LastLoadNumbers();
+    Logf(LogLevel::Info,
+         "moho64ui: session: the world's picture is shown, %.3f s (its map opened behind the loading screen: ready %.1f s after it was begun, "
+         "open %.1f s; the frames' share %.0f ms, at most %.1f ms in one; %d warm frames, the longest %.0f ms)",
+         secs(t3, std::chrono::steady_clock::now()), n.readySeconds, n.openSeconds, n.serviceMs, n.longestServiceMs, n.warmFrames, n.warmLongestMs);
+    return;
+  }
+  // Without the window's picture (a run without a window, or its picture would not open): a picture of the game's own,
+  // read back each frame.
+  auto pic = std::make_unique<Picture>(nullptr);
+  pic->session = this;
+  if (render::gSceneSamples != Looks().SceneSamples()) {  // (the player's anti-aliasing, or 1 under FSR 3: taken when a picture is made)
+    if (releaseWorlds) releaseWorlds();
+    render::gSceneSamples = Looks().SceneSamples();
+  }
+  pic->picture.SetVulkan(Looks().vulkan);  // (the player's Graphics API)
+  pic->picture.SetTextureDetail(Looks().textureDetail);  // (the game's Texture Detail)
+  pic->picture.SetLowLatency(Pacing().lowLatency);  // (the Video tab's Low Latency)
+  pic->picture.SetSeason(Looks().season == 1 ? render::Season::Autumn : render::Season::Summer);  // (the Video tab's Season)
+  // (Ray Tracing before Open: the surfaces' shaders are made for reflections when the map opens; the
+  // renderer's request 31 follow-up. The first frame's looks block sets it again, harmlessly.)
+  pic->picture.SetRayTracing(Looks().rayTracing);
+  std::string error;
+  if (pic->picture.Open(vfs_, map_, &error)) {
+    Looks().rayTracingSupported = pic->picture.RayTracingSupported() ? 1 : 0;  // (the Video tab's Ray Tracing)
+    DressGamePicture(*pic);
+    picture_ = std::move(pic);
+    Logf(LogLevel::Info, "moho64ui: session: the world's picture is open, %.2f s", secs(t3, std::chrono::steady_clock::now()));
+  } else {
+    Logf(LogLevel::Warning, "moho64ui: session: no picture of the world: %s", error.c_str());
   }
 #endif
 }
@@ -1712,7 +2045,7 @@ void GameSession::WaitForWorker() {
 
 void GameSession::StatsLines(std::vector<std::string>* lines) const {
 #ifdef MOHO64UI_WORLD_PICTURE
-  const render::WorldPicture* picture = picture_ ? &picture_->picture : menuPicture_ ? &menuPicture_->picture : nullptr;
+  const render::WorldPicture* picture = windowPicture_ ? &windowPicture_->picture : picture_ ? &picture_->picture : nullptr;
   if (!picture) return;
   const render::WorldPicture::Stats& s = picture->LastStats();
   char buf[256];

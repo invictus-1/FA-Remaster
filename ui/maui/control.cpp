@@ -1,8 +1,10 @@
 #include "maui/control.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include "core/log.h"
+#include "maui/world_source.h"
 #include "script/script_state.h"
 #include "user/bindings.h"
 #include "user/user_state.h"
@@ -350,6 +352,49 @@ void RegisterControlBindings(lua_State* L) {
   // Not built yet: the 3D mesh control and the map preview.
   SetGlobal(L, "InternalCreateMesh", l_InternalCreatePlain<kMesh>);
   SetGlobal(L, "InternalCreateMapPreview", l_InternalCreatePlain<kMapPreview>);
+}
+
+bool OfferToCard(lua_State* L, DrawTarget& target, const Rect& dst, const Image& image, const Rect& src, float alpha) {
+  // (only in a game's interface state, the loading screen's included: the pictures the request was for; the front
+  // end's own backgrounds are painted only where they change anyway)
+  UserState* user = UserState::From(L);
+  CardBackdrop* card = user->config().cardBackdrop;
+  if (!card || !image.valid() || user->uiState() != "game") return false;
+  const float W = static_cast<float>(target.Width()), H = static_cast<float>(target.Height());
+  auto near = [](float a, float b) { return std::fabs(a - b) < 0.5f; };
+  if (!near(dst.x0, 0) || !near(dst.y0, 0) || !near(dst.x1, W) || !near(dst.y1, H)) return false;
+  // (whole texels, inside the picture, left to right and top to bottom: else the software way's own sampling)
+  IntRect texels{static_cast<int>(std::lround(src.x0)), static_cast<int>(std::lround(src.y0)), static_cast<int>(std::lround(src.x1)),
+                 static_cast<int>(std::lround(src.y1))};
+  if (std::fabs(src.x0 - static_cast<float>(texels.x0)) > 1e-3f || std::fabs(src.y0 - static_cast<float>(texels.y0)) > 1e-3f ||
+      std::fabs(src.x1 - static_cast<float>(texels.x1)) > 1e-3f || std::fabs(src.y1 - static_cast<float>(texels.y1)) > 1e-3f)
+    return false;
+  if (texels.empty() || texels.x0 < 0 || texels.y0 < 0 || texels.x1 > image.width || texels.y1 > image.height) return false;
+  if (!target.Blank()) {
+    // Something of the interface lies under it (FAF's "IN TRANSIT" cover lies over the game's panels): it goes to the
+    // card only while it hides all of that, opaque at full strength; what lies under it is then not drawn at all
+    // (DrawTarget::DropBelow). While it fades, the software way draws it, between what lies under and over it.
+    if (WithAlpha(0xff000000u, alpha) >> 24 != 255) return false;
+    static uint64_t checkedSerial = 0;  // (the last picture looked at, and whether those texels were all opaque)
+    static IntRect checkedTexels;
+    static bool checkedOpaque = false;
+    if (image.serial != checkedSerial || texels.x0 != checkedTexels.x0 || texels.y0 != checkedTexels.y0 || texels.x1 != checkedTexels.x1 ||
+        texels.y1 != checkedTexels.y1) {
+      checkedSerial = image.serial, checkedTexels = texels, checkedOpaque = true;
+      for (int y = texels.y0; y < texels.y1 && checkedOpaque; ++y) {
+        const uint32_t* row = image.pixels.data() + static_cast<size_t>(y) * static_cast<size_t>(image.width);
+        for (int x = texels.x0; x < texels.x1; ++x)
+          if (row[x] >> 24 != 255) {
+            checkedOpaque = false;
+            break;
+          }
+      }
+    }
+    if (!checkedOpaque || !card->Take(image, texels, alpha)) return false;
+    target.DropBelow();
+    return true;
+  }
+  return card->Take(image, texels, alpha);
 }
 
 }  // namespace moho::ui

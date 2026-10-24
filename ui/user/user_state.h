@@ -28,6 +28,7 @@ namespace moho::ui {
 
 class WorldSource;
 class BackdropSource;
+class CardBackdrop;
 class ReplayTimelineSource;
 struct GamePace;
 struct WorldLine;
@@ -101,6 +102,9 @@ class UserState {
     // What is shown where the front end plays its background film (the main menu's): a moving
     // picture of the host's; nullptr: nothing is shown there (the film itself is not decoded).
     BackdropSource* backdrop = nullptr;
+    // Where a picture over the whole window may be drawn by the graphics card (the loading screen's film, the
+    // "IN TRANSIT" cover; maui/world_source.h); nullptr: the controls draw them themselves.
+    CardBackdrop* cardBackdrop = nullptr;
     // What plays the sounds the scripts ask for (the host's, one for all states); nullptr: nothing does.
     sound::SoundSystem* sound = nullptr;
   };

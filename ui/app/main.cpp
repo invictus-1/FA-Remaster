@@ -462,6 +462,7 @@ int main(int argc, char** argv) {
   cfg.currentReplay = [&session]() { return session.currentReplay; };
   cfg.worldLoading = [&session]() { return session.Loading(); };
   cfg.liveClock = windowed;  // (a test run's clock goes in fixed frame steps)
+  cfg.cardBackdrop = session.cardBackdrop();  // (the loading screen's film and the "IN TRANSIT" cover, where the window's picture shows)
 
   // The front end's background: the world's picture of a map behind the main menu, on a thread
   // of its own. In a live window unless told otherwise; not when a game starts at once.
@@ -478,9 +479,11 @@ int main(int argc, char** argv) {
   // afterwards only while none lives: the background begins once they are known.
   // (In a live window shown by the renderer the background is drawn by the window's own picture, the
   // game's way: GameSession::PresentToWindow.)
-  auto beginBackdrop = [&backdrop]() {
+  auto beginBackdrop = [&backdrop, &session]() {
 #ifdef MOHO64UI_WORLD_PICTURE
-    render::gSceneSamples = ui::Looks().SceneSamples();
+    // (Not while the window's picture lives: its worlds keep the samples they were made with; it is made anew for
+    // other ones when no game's world shows in it, GameSession::EnsureWindowPicture.)
+    if (!session.DrawsToWindow()) render::gSceneSamples = ui::Looks().SceneSamples();
 #endif
     if (backdrop) backdrop->Begin(ui::Looks().vulkan, ui::Looks().textureDetail, windowed && directWindow);
   };
@@ -778,8 +781,8 @@ int main(int argc, char** argv) {
     if (directWindow) {
       hooks.opened = [&](void* handle) {
         session.window = handle;
-        session.OpenPictureIfDue();  // (a launched table's game: its picture opens now, the window still hidden)
-        session.OpenMenuPicture();   // (else the menus' picture with their background's map, the same way)
+        session.OpenWindowPicture();  // (the window's picture, the window still hidden: the menus' map begun behind it)
+        session.OpenPictureIfDue();   // (a game loaded before the window: its map begun behind it too)
       };
       hooks.direct = [&]() { return session.DrawsToWindow(); };
       hooks.present = [&](const ui::SoftwareTarget& layer, const ui::IntRect& changed) { session.PresentToWindow(layer, changed); };
@@ -807,6 +810,7 @@ int main(int argc, char** argv) {
                              f();
                              longFrames.Note(what, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
                            };
+                           session.InterfaceRendered();  // (what the interface's drawing handed to the card is this frame's)
                            timed("(host: the picture opened)", [&] { session.OpenPictureIfDue(); });
                            if (session.Loading()) ++loadingDrawn;
                            timed("(host: the sounds)", [&] {
