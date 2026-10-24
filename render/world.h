@@ -135,6 +135,8 @@ class World {
   // `color`: its strategic icon's; `building`: a structure (it hides the units behind it); `kind`: its strategic
   // icon (null: none), which the outline gives way to as it comes in with the distance.
   void MarkOutline(const Model* model, Vec3 position, Vec3 color, bool building, uint32_t id, const StrategicIcons::Kind* kind);
+  // [whitecaps] Where a unit floating at `position` turned `orientation` is drawn on the lifted waves ([lift] BobAt; world.cpp).
+  bool RideWaves(const Model* model, Vec3* position, Quat* orientation) const;
   // The unit under the mouse, marked with brackets of a kind: 1 the player's own or an ally's,
   // 2 an enemy's, 3 anyone else's; 0: none. (A selected unit has its own brackets.)
   uint32_t hover = 0xffffffffu;

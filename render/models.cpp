@@ -1,5 +1,7 @@
 #include "models.h"
 
+#include <atomic>  // [bgload]
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -105,7 +107,7 @@ void TagTrees(const std::vector<ModelBone>& bones, std::string* bytes, ModelLod*
 // lists its own bones in another order, its vertices are renumbered by the bones' names.
 // `trees`: a level of what sways: its trees of a group are told apart first (TagTrees).
 uint32_t NextLodSerial() {
-  static uint32_t made = 0;
+  static std::atomic<uint32_t> made{0};  // [bgload] (worlds opened on threads of their own count on it too)
   return ++made;
 }
 
@@ -1357,12 +1359,24 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
       m->lights.push_back(light);
     }
   }
+  // a remastered unit's treads (its folder's <file>_treads.bp, Treads { Scrolling = true, Height = true }): whether they
+  // scroll on the strips at the foot of its texture as the original's do, on every level (they share the texture), and
+  // whether its albedo's alpha holds their height there ([treads] the eye looks into the grooves: ModelLod::treadDepth)
+  bool ownTreadsScroll = false, ownTreadsHeight = false;
+  if (previewed && stem.empty()) {
+    const std::string treads = preview + file + "_treads.bp";
+    auto text = vfs_->Exists(treads) ? vfs_->ReadFile(treads) : std::nullopt;
+    BpValue t;
+    if (text && !ReadBlueprintFile(*text, &t)) fprintf(stderr, "render: %s: cannot be read\n", treads.c_str());
+    ownTreadsScroll = t["Scrolling"].kind == BpValue::Bool && t["Scrolling"].boolean;
+    ownTreadsHeight = ownTreadsScroll && t["Height"].kind == BpValue::Bool && t["Height"].boolean;
+  }
   for (size_t i = 0; i < sources.size(); ++i) {
     const LodSource& s = sources[i];
     ModelLod lod;
     lod.serial = NextLodSerial();
     lod.cutoff = s.cutoff;
-    lod.scrolling = s.scrolling && !previewed;
+    lod.scrolling = previewed ? ownTreadsScroll : s.scrolling;
     if (lod.scrolling) m->scrolls = true;
     lod.shaderName = s.shader;
     // (the first game's names, which many blueprints still carry, mean today's techniques: the
@@ -1564,6 +1578,8 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
       if (i == 0 && (lod.wearMasks || lod.damageAlbedo))
         printf("render: %s: wear art%s%s\n", what.c_str(), lod.wearMasks ? ", masks " : "", lod.wearMasks ? masks.c_str() : "");
     }
+    // [treads] (not the Seraphim's, whose albedo's alpha is their team colour)
+    if (ownTreadsHeight && treadDepth > 0 && lod.labPbr && lod.faction != 3) lod.treadDepth = treadDepth;
     if (!lod.labPbr && !lod.specular) lod.specular = textures_->Black();
     if (kind.compare(0, 10, "undulating") == 0 || kind == "labpbralpha") lod.sway = 1;
     lod.plainMaterial = lod.labPbr && !lod.specular;

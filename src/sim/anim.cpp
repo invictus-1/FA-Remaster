@@ -164,7 +164,7 @@ float WrapTime(float t, float d) {
   return r;
 }
 
-// The time step of ManipulatorUpdate 0x63fdd0 (returns false: the unit is being built, nothing runs)
+// The time step of ManipulatorUpdate 0x63fdd0
 void Advance(Animator* a) {
   float rate = a->rate;
   Unit* u = a->alignToMotion ? a->unit : nullptr;
@@ -444,7 +444,13 @@ void AnimatorStep(Sim& sim, Unit* u, ScriptObject* o) {
     a->UpdateTriggered();
     return;
   }
-  if (u->beingBuilt) return;
+  // (No being-built test: ManipulatorUpdate 0x63fdd0 asks its unit only for the transform, the velocity and the
+  // blueprint (vt+0x18 / +0x3c / +0x1c, an alignToMotion or directional animator), and Unit::MotionTick calls
+  // CAniActor::UpdateManipulators at 0x6a90d5 whatever the unit's state; it is the aim controller that stops while
+  // its unit is being built, 0x630df3 vt+0x34. Seen: MP1 8365, army 6's shield generator 0x600034 (uab4202) killed
+  // at 97 % built; FAF's PlayAnimationThread made its death animator in that beat and the original ran it in the
+  // four beats the unit still showed BeingBuilt, so FAF's death-explosion loop (CreateTimedStuctureUnitExplosion,
+  // while GetAnimationFraction() < 1) ended at 8391; ours started it four beats late and drew four more times.)
   const float before = a->time;
   Advance(a);
   if (dbgUnit >= 0 && static_cast<long>(u->id) == dbgUnit)

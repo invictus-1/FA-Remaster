@@ -1423,7 +1423,12 @@ int TickMobileBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
       (void)h;
       // (SUnitConstructionParams 0x585ab0 from 0x5f7ca9: the layer is the builder's (+0x120), not 0, so +0x25 = 1:
       // the site's height is kept)
-      Unit* nu = sim.CreateUnit(L, *t.bp, u->army, t.site, Quat{}, false, u, true);
+      // ... and that layer (+0x28) is the wanted one, GetStartingLayer takes it when the footprint allows it. Seen: MP1
+      // 8769, army 7's hover T3 engineer 0x700099 (layer Water) builds the Seraphim mobile sonar 0x700039 (xsb3202,
+      // SurfacingSub) at (293, 622): the original's starts on the Water layer at the surface (y 17.5), ours chose Sub.
+      const std::string& bl = u->layer;
+      const uint8_t want = bl == "Land" ? 1 : bl == "Seabed" ? 2 : bl == "Sub" ? 4 : bl == "Water" ? 8 : bl == "Air" ? 0x10 : 0;
+      Unit* nu = sim.CreateUnit(L, *t.bp, u->army, t.site, Quat{}, false, u, true, want);
       if (Entity* w = t.rebuildWreck ? sim.FindEntity(t.rebuildWreck) : nullptr)  // the rebuilt wreck goes
         if (!w->destroyQueued) sim.QueueDestroy(w);
       t.rebuildWreck = 0;

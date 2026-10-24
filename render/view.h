@@ -16,6 +16,9 @@ inline int gSceneSamples = 4;
 // for reflections (World::rayReflections). As gSceneSamples, set before the world is made; only where the device
 // has ray tracing.
 inline bool gRayShaders = false;
+// [bgload] For one thread, in place of gRayShaders (-1: gRayShaders): a world opened on a thread of its own behind the one
+// drawn (WorldPicture::BeginMap) builds its shaders by its own choice while the drawn world keeps its.
+inline thread_local int gRayShadersHere = -1;
 // Texture registers every scene shader may read; the frame code binds them, the renderers leave them alone.
 inline constexpr int kLampShadowSlot = 27;   // the lamps' shadow maps (lights.h), one array layer per lamp
 inline constexpr int kShadowMapSlot = 28;    // the sun's shadow maps, one array layer per cascade

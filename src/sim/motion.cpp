@@ -858,7 +858,12 @@ bool StandableAt(Sim& sim, const Unit* u, float x, float z) {
   if (!g) return true;
   int cx, cz;
   GoalCell(UnitFootprint(u), x, z, &cx, &cz);
-  return g->Passable(cx, cz);
+  // (0x62ab3f..0x62ab7f: OCCUPY_MobileCheck's caps without Sub for a unit on the Water layer, as Reach and the path
+  // finder take them (landnav.cpp FitsReach). Seen (probe mp1_8660): MP1 8660, army 4's Seraphim destroyer 0x40004e
+  // (SurfacingSub4x4) turning back toward (590, 280): its batch's look-ahead from point 5 reaches the cells of the
+  // floating structure 0x4000cd (xsb4201); the original's point 6 brakes (state 4: speed 0.2940 -> 0.2427), ours,
+  // keeping Sub, drove on in state 7 (0.2604).)
+  return g->Passable(cx, cz, u->layer == "Water" ? kLayerSub : 0);
 }
 
 // The spline's look-ahead point (CAiPathSpline::Generate 0x5b2ff0): the new point plus the step

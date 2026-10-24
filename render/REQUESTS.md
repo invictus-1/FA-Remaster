@@ -43,6 +43,10 @@ addressed to the interface track (a fifth lighting setting, Ground Detail; open)
 gives (radar, sonar, omni, seen: kReconRadar / Sonar / Omni / SeenNow), the army's allies worked out once instead of per
 point, so the picture stays identical. The renderer switches SimFrames to it when it lands.
 
+**DONE** (engine 05e22bc: `ReconGrid(sim, army, w, h, &out, water)` in sim/sim_view.h; 256x256 in 0.6-0.8 ms, was 3-8 ms).
+**Used** in 26f80bd: SimFrames' sight grid asks it with water = 1. The fog-of-war pictures differ from before by less than
+the run-to-run noise.
+
 ## 47. To the VISUALS track: from Chris's test run of 21 October (2026-10-21, not blocking)
 
 Chris played `Open-Game-Izanagi-Tour-Snow.bat` (SETONS_R, weather "cold"; log `_scratch\ui\game_tour_izanagi_snow.log`,

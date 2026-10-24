@@ -94,6 +94,19 @@ bool Fits(Sim& sim, const Unit* u, const PathCell& c) {
   return !g || g->Passable(c.x, c.z);
 }
 
+// The fit test of Reach 0x5af4e0 (manhattan <= 1: 0x5af53a..0x5af576) and of its corridor's trace 0x720b50
+// (0x720bae..0x720c0e): OCCUPY_MobileCheck's caps for the unit's footprint, without Sub when the unit is on the
+// Water layer (unit+0x120 == 8), then OCCUPY_FootprintFits 0x7209e0. So a surfacing sub on the surface goes round a
+// structure in the water instead of under it. Seen: MP1 8634, army 4's Seraphim destroyer 0x40004e (xss0201,
+// SurfacingSub4x4, layer Water) looks 20 cells ahead from (596,278) to (577,279), past the floating structures
+// 0x4000cd (xsb4201, being built, (578.5, 282.5)) and 0x400092 (xsb2104, (587.5, 282.5)): the original's look-ahead
+// fails and it turns for (576,276) (its course from 8637 aims at (578, 278)); ours kept Sub, found the way clear and
+// held on to (536,284).
+bool FitsReach(Sim& sim, const Unit* u, const PathCell& c) {
+  const PathGrid* g = Grid(sim, u);
+  return !g || g->Passable(c.x, c.z, u->layer == "Water" ? kLayerSub : 0);
+}
+
 float Dist(const PathCell& a, const PathCell& b) {
   float dx = static_cast<float>(a.x - b.x), dz = static_cast<float>(a.z - b.z);
   return std::sqrt(dx * dx + dz * dz);
@@ -114,7 +127,7 @@ bool Trace(Sim& sim, const Unit* u, const PathCell& a, const PathCell& b, float 
   int cx = static_cast<int>(std::floor(sx)), cz = static_cast<int>(std::floor(sz));
   for (;;) {
     PathCell c{cx ^ mx, cz ^ mz};
-    if (!Fits(sim, u, c)) return false;
+    if (!FitsReach(sim, u, c)) return false;
     int nx = cx + 1, nz = cz + 1;
     float tx = (static_cast<float>(nx) - ex) * dz, tz = (static_cast<float>(nz) - ez) * dx;
     if (tz > tx) cx = nx;
@@ -133,7 +146,7 @@ bool Corridor(Sim& sim, const Unit* u, const PathCell& a, const PathCell& b) {
 
 // Reach 0x5af4e0
 bool Reach(Sim& sim, const Unit* u, const PathCell& a, const PathCell& b) {
-  if (Manhattan(a, b) <= 1) return Fits(sim, u, b);
+  if (Manhattan(a, b) <= 1) return FitsReach(sim, u, b);
   return Corridor(sim, u, a, b);
 }
 
@@ -322,6 +335,7 @@ void QueueSearch(Sim& sim, Unit* u, LandNav& n) {
   t.armyIndex = u->army ? u->army->index : 0;
   PathCell c = CellOf(u, u->position.x, u->position.z);
   t.startStandable = Fits(sim, u, c);
+  t.dropSub = u->layer == "Water";  // CanTraverseCell 0x5aa788 / 0x5aa7ea (FitsReach)
   const TerrainMap* map = sim.map();
   int w = map ? map->width() : 0, h = map ? map->height() : 0;
   // 0x5aa348: +0x74 the army's whole-map flag (vt+0xb8); +0x75 the unit's position with a margin of the footprint
@@ -346,7 +360,7 @@ void SetFinderGoal(Sim& sim, Unit* u, LandNav& n, const int* g) {
   t.goalReachable = false;
   for (int x = g[0]; x <= g[2] && !t.goalReachable; ++x)
     for (int z = g[1]; z <= g[3]; ++z)
-      if ((x == g[0] || x == g[2] || z == g[1] || z == g[3]) && Fits(sim, u, {x, z})) {
+      if ((x == g[0] || x == g[2] || z == g[1] || z == g[3]) && FitsReach(sim, u, {x, z})) {  // (0x5aa1c7: Sub off on Water)
         t.goalReachable = true;
         break;
       }
@@ -473,7 +487,7 @@ void RequestContinuation(Sim& sim, Unit* u, LandNav& n, int mode) {
     return;
   }
   // 0x5aecb1: Reach(path[0], path[0]) / UnitClear(path[0], path[0]): the point itself, not the way to it
-  while (n.path.size() > 1 && (!Fits(sim, u, n.path[0]) ||
+  while (n.path.size() > 1 && (!FitsReach(sim, u, n.path[0]) ||
                                UnitInWay(sim, u, n.path[0], n.path[0], n.attackVariant ? 2 : 1) ||
                                Manhattan(n.path[0], n.cur) < 2))
     Pop(n, 1);
@@ -557,7 +571,7 @@ void OnPath(Sim& sim, Unit* u, LandNav& n) {
   } else {
     if (!n.path.empty() && k < 3) {
       // OnEvent 0x5af0e0: Reach(path[0], path[0]) = the footprint fits at path[0] (manhattan 0)
-      if (!Fits(sim, u, n.path[0]) || UnitInWay(sim, u, n.path[0], n.path[0], n.attackVariant ? 2 : 1)) {
+      if (!FitsReach(sim, u, n.path[0]) || UnitInWay(sim, u, n.path[0], n.path[0], n.attackVariant ? 2 : 1)) {
         if (n.retries < 3) RetryRule(sim, u, n);
         else n.state = 1;
         return;

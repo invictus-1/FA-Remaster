@@ -53,6 +53,7 @@ struct PathTraveler {
   int inner[4] = {0, 0, 0, 0};  // excluded rect
   bool goalReachable = true;    // some cell on the goal ring fits
   bool startStandable = true;
+  bool dropSub = false;  // the unit is on the Water layer: the cell tests take Sub from its caps (0x5aa788)
   bool ignoreStructures = false;  // CanPathTo
   int mode = 0;                   // 0 none, 1/2 units block, 3 attack variant
   std::deque<std::array<int, 4>> boxes;  // recent start boxes (mode != 0), newest last

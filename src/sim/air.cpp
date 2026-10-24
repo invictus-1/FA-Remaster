@@ -2072,6 +2072,19 @@ void AirSetGoal(Sim& sim, Unit* u, Vec3 goal, uint32_t tick, int layer, bool lan
     goal = {cx + b.footprintX * 0.5f, 0.0f, cz + b.footprintZ * 0.5f};
     goal.y = cellHeight(goal.x, goal.z);
     PrepareMove(sim, u, &goal);
+    // ... and the ctor reserves the footprint's rect at the spot found (0x618613..0x618631: 0x50b010, ReserveOgridRect
+    // 0x6ab6f0, +0x92 = 1) until the move task ends, as for a factory's rally Move (commands.cpp): the ctor's
+    // PrepareMove branch (0x6184c5..) is the same for both. So a second transport sent to the same place finds the
+    // first one's landing spot taken and goes to the ring two footprints out. Seen: MP1 8638, army 7's transport
+    // 0x700003 (xsa0104) starts its unload at (292.52, 621.39): the original lands at (298.5, 627.5), as 0x700019's
+    // landing spot (291.5, 622.5) holds the cell; ours, holding nothing, took (292.5, 621.5). And 8685: both get one
+    // unload point, the original puts them on two spots of the ring.
+    const NamedFootprint& fp = UnitFootprint(u);
+    const int rx = static_cast<int>(std::nearbyint(goal.x - fp.sizeX * 0.5f));
+    const int rz = static_cast<int>(std::nearbyint(goal.z - fp.sizeZ * 0.5f));
+    const int r[4] = {rx, rz, rx + fp.sizeX, rz + fp.sizeZ};
+    GroundReserveRectImpl(sim, u, r);
+    u->moveTaskReserved = true;
   }
   int cx = static_cast<int>(std::nearbyint(goal.x - b.footprintX * 0.5f));
   int cz = static_cast<int>(std::nearbyint(goal.z - b.footprintZ * 0.5f));

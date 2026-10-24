@@ -224,10 +224,15 @@ void EndPatrol(Sim& sim, Unit* u, BuildTask& t);
 void ReleaseCommand(Unit* u, UnitCommand& c);
 // A unit is going away: drop its commands.
 void ForgetUnitCommands(Unit* u);
+// CUnitMoveTask's dtor 0x618700: the o-grid rect its ctor reserved (+0x92) is freed (FreeOgridRect 0x6ab760)
+void EndMoveTaskReservation(Unit* u);
 // The unit's navigator object is deleted (KillCleanup / ~Unit): sim/commands.cpp.
 void EndNavigatorObject(Unit* u);
 // Whether the navigator's event (Succeeded / Failed) wakes the unit's command thread (a move task listens).
 bool NavEventWakesCommandThread(const Unit* u);
+// AbortMove 0x5a3750 on u's land navigator from outside its move task: MotionStop, and a listening plain move task
+// fails (event 1), its thread woken
+void NavigatorAbortMove(Sim& sim, Unit* u);
 void RegisterCommandBindings(lua_State* L);
 // func_GetUnitList 0x6eee40, the unit list of every Issue* (IssueFactoryRallyPoint, IssueTransport*, ... included):
 // a value that is no table is the error "Invalid unit set in <binding>; ...". i = 1 .. GetCount (ObjectCount, read

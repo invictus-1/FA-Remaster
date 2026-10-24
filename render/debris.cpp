@@ -442,7 +442,7 @@ void Debris::StopTrail(Chunk* c) {
 
 void Debris::Sink(Chunk* c, double clock) {
   c->sank = clock;
-  c->at.y = std::min(c->at.y, waterLevel);
+  c->at.y = std::min(c->at.y, waterLevel + (waterRise ? waterRise(c->at.x, c->at.z) : 0.0f));  // ([whitecaps] the lifted waves')
   c->velocity = {c->velocity.x * 0.25f, -0.3f, c->velocity.z * 0.25f};
   c->spin = c->spin * 0.3f;
   StopTrail(c);
@@ -709,8 +709,10 @@ void Debris::Update(double clock, Vec3 eye, MeshRenderer* meshes, Blasts* splash
         break;
       }
       const float ground = Ground(c.at.x, c.at.z);
-      if (ground < waterLevel && c.at.y < waterLevel) {  // into the water: a splash, and it sinks
-        if (splashes) splashes->Add({c.at.x, waterLevel, c.at.z}, c.size, clock, true);
+      // ([whitecaps] the surface where the lifted waves have it)
+      const float surface = ground < waterLevel && waterRise ? waterLevel + waterRise(c.at.x, c.at.z) : waterLevel;
+      if (ground < waterLevel && c.at.y < surface) {  // into the water: a splash, and it sinks
+        if (splashes) splashes->Add({c.at.x, surface, c.at.z}, c.size, clock, true);
         Sink(&c, clock);
         break;
       }

@@ -34,7 +34,7 @@ class SimFrames {
   // and projectile says what that army knows of it (FrameUnit::recon). 0: no one army, as at first.
   void SetFocusArmy(int army) { focus_.store(army); }
   // The map's size, for the grid of what the focus army sees (TakeSight): `cells` x `cells` places
-  // over the whole map, asked of the engine's ReconAt every fifth beat. Without it there is no grid.
+  // over the whole map, asked of the engine's ReconGrid every fifth beat. Without it there is no grid.
   void SetSightGrid(float mapWidth, float mapHeight, int cells = 256);
   // What the focus army sees, when that has been worked out anew since the last call: for every
   // place the bits of `SightBits` (frame.h), row by row from z = 0. An empty grid: there is no
@@ -104,6 +104,7 @@ class SimFrames {
   float sightWidth_ = 0, sightHeight_ = 0;  // (set before the game runs)
   int sightCells_ = 0;
   std::vector<uint8_t> sight_, sightWork_;
+  std::vector<uint8_t> sightRecon_;  // (the engine's ReconGrid's answer, the simulation's thread)
   std::vector<uint8_t> sightEver_;  // what the focus army has seen at some time (the simulation's thread only)
   int sightEverOf_ = 0;
   bool sightNew_ = false, sightWasOn_ = false;
