@@ -300,6 +300,8 @@
 //           and every unit of a game or a test (--tracks-test, --fx-move) starting with it; --rain-stops s: the rain
 //           (or snow) stops s seconds into the run, to watch things dry; --fx-follow: with --fx-move and --cam, the
 //           camera follows the driven unit all the same, at --cam's distance, pitch and heading (to look at it close)
+//           --fx-view distance,pitch,angle: [fxview] with any --fx-* stand, the camera on its first unit, that far, that
+//           pitch (degrees), turned that many degrees from the way the unit faces: a side view stays a side view as it turns
 // --unit-grime  [grime] battle grime and weather dirt on units (unit_grime.h, World::unitGrime; modern look): dust, caked mud
 //           and soot gathering as a unit fights and drives, mud splashed up its lower body in rain, frost where snow lies;
 //           --unit-damage  [grime] damage shown by health (World::unitDamage): dents, burns and torn plates as it drops, hot
@@ -787,6 +789,8 @@ struct Options {
   float jumpHours = 12, jumpClouds = -1;
   bool weatherCuts = true;              // (airfix) --no-weather-cut
   bool fxFollow = false;                // --fx-follow
+  float fxView[3] = {0, 0, 0};          // [fxview] --fx-view distance,pitch,angle
+  bool hasFxView = false;
   std::string wearTest;                 // --wear-test
   bool unitGrime = false, unitDamage = false;  // [grime] --unit-grime, --unit-damage
   std::string grimeTest;                       // [grime] --grime-test
@@ -1441,7 +1445,10 @@ bool ParseOptions(int argc, char** argv, Options* o) {
       o->hasAt = true;
     }
     else if (a == "--map") o->map = v;
-    else if (a == "--cam") {
+    else if (a == "--fx-view") {  // [fxview]
+      if (sscanf(v, "%f,%f,%f", &o->fxView[0], &o->fxView[1], &o->fxView[2]) != 3) return false;
+      o->hasFxView = true;
+    } else if (a == "--cam") {
       if (sscanf(v, "%f,%f,%f,%f,%f", &o->cam[0], &o->cam[1], &o->cam[2], &o->cam[3], &o->cam[4]) != 5) return false;
       o->hasCam = true;
     } else if (a == "--cine-cam") {
@@ -3531,6 +3538,13 @@ int main(int argc, char** argv) {
     {  // --fx-move: the camera follows the driven units (where the stand had them last frame)
       Vec3 at;
       if (fxStand && (!opt.hasCam || opt.fxFollow) && fxStand->Focus(&at)) camera.target = at;  // ([unit dirt] --fx-follow)
+      float facing = 0;
+      if (fxStand && opt.hasFxView && fxStand->FirstUnit(&at, &facing)) {  // [fxview] on the stand's unit, turned with it
+        camera.target = at;
+        camera.distance = opt.fxView[0];
+        camera.pitch = opt.fxView[1] * 3.14159265f / 180;
+        camera.heading = facing + opt.fxView[2] * 3.14159265f / 180;
+      }
     }
     if (!zoomPath.keys.empty() && haveMap)  // (cloudzoom) --cam-zoom-path: the zoom, lean and field of view at this time
       zoomPath.Apply(time, static_cast<float>(map.width), static_cast<float>(map.height),

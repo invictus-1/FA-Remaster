@@ -137,6 +137,9 @@ class FxStand {
   // Where the driven units are (--fx-move: between the two sides'), for the camera to follow; false
   // when there are none.
   bool Focus(Vec3* at) const;
+  // [fxview] The first unit of the stand (not a wreck), whatever it does (driven, firing, building): where it is and
+  // which way it faces (radians from north, as Camera::heading turns); false when there is none.
+  bool FirstUnit(Vec3* at, float* facing) const;
 
  private:
   struct Side {

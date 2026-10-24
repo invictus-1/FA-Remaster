@@ -118,6 +118,9 @@ struct WorldPicture::Impl {
     if (b.weatherEffects >= 0) w.snowGround = b.weatherEffects > 0;  // [snow ground] (with the weather effects)
     if (b.weatherEffects >= 0) w.plantsUnderSnow = b.weatherEffects > 0;  // [undersnow] (with the weather effects)
     if (b.weatherEffects >= 0) w.wakesRemade = b.weatherEffects > 0;  // [wakes] (the ships' wakes remade: with the weather effects)
+    // [ocean] the real ocean: its waves, whitecaps and glitter, the sea lifted by them and what floats riding it (Chris, 23-24
+    // October: yes; with the weather effects, as the surf and the wakes)
+    if (b.weatherEffects >= 0) w.oceanWaves = w.oceanLift = b.weatherEffects > 0;
     if (b.frameGeneration >= 0) w.frameGeneration = b.frameGeneration > 0;
     if (b.hiddenOutlines >= 0) w.hiddenOutlines = b.hiddenOutlines > 0;
   }

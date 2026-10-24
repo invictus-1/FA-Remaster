@@ -283,7 +283,13 @@ Projectile* Sim::CreateProjectile(lua_State* L, const BlueprintInfo& bp, Army* a
     QueueDestroy(p);
     return p;
   }
-  if (Entity* te = TargetEntity(*this, target)) {
+  // The layer test runs only for a shell that tracks from birth (0x69bb52: +0x2aa clear jumps to 0x69bbe9, past it);
+  // +0x318 is written nowhere else (the ctor's clear 0x69b359 and this set 0x69bbb1 are its only writers), so a shell
+  // whose tracking Lua turns on later never flies on to the last point once its target is gone. Seen: MP1 9446, army
+  // 6's torpedo bomber 0x600048 (uaa0204) dropped aantorpedo03 (TrackTarget = false; ATorpedoCluster tracks from
+  // water entry) at 0x5000a4, which died at 9446: the original's three torpedoes make no zigzag draws after their
+  // OnLostTarget; ours went on homing (9 FRand).
+  if (Entity* te = p->trackTarget ? TargetEntity(*this, target) : nullptr) {
     // 0x69bb6e..0x69bbb1: the layer is the target ENTITY's own (+0x118), whatever it is: a shell in the air is in
     // layer Air as an aircraft is (the ctor 0x69bca6), so a missile fired at a missile does not fly on to the last
     // place it saw when its target is gone. Seen (Naval, 616-623): an Aeon cruiser's RedirectMissile shot

@@ -395,6 +395,18 @@ bool FxStand::Focus(Vec3* at) const {
   return true;
 }
 
+bool FxStand::FirstUnit(Vec3* at, float* facing) const {
+  if (!entities_) return false;
+  for (const FxEntities::Body& b : entities_->Bodies()) {
+    if (b.wreck) continue;
+    *at = b.position;
+    const Vec3 forward = Rotate(b.turn, Vec3{0, 0, 1});  // (a model's front is its +z)
+    *facing = std::atan2(forward.x, forward.z);
+    return true;
+  }
+  return false;
+}
+
 std::string FxStand::Describe() const {
   std::string s;
   auto list = [&](const char* what, const std::vector<std::string>& v) {
