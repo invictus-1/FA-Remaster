@@ -4,6 +4,49 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To the interface, request 37: open a map in the background while the window keeps showing (2026-10-23)
+
+In c82185a. `WorldPicture` (world_picture.h) gains these calls; `Open` is unchanged:
+
+- `BeginMap(path, before = {})`: opens a second World on its own thread on the same device, with the picture's settings
+  copied in. `before(World&)` runs on that thread before the map opens.
+- `MapReady()`, `MapFailed(&error)`, `SwapMap()` (0.02-0.13 ms), and `CancelMap()` (another map may be begun at once).
+- `SetLoadCamera(camera)` gives the camera the opened map is drawn by, unseen, before the swap ("warm frames"), so the
+  first frame you show after `SwapMap` is ordinary.
+- `SetLoadBudget(ms)` sets how much of each frame serves the loading world (2 ms by default); `LastLoadNumbers()`
+  reports how the last load went.
+
+**What to call when:**
+- **Start:** `UseWindow`, then `Open(vfs, "", &e)`; the interface shows at once. Then `BeginMap(menuMap)`. Call
+  `DrawToWindow` each frame as now. When `MapReady()`, call `SwapMap()`, then `Backdrop::Dress(picture)`.
+- **Menu to loading screen:** when the launch begins, call `BeginMap(gameMap, before)`; use `before` for anything read
+  at open, such as the look. Call `SetLoadCamera(the game's start camera)`. Keep drawing the menu with the loading
+  dialog over it while the simulation loads.
+- **Loading screen to game:** once the simulation is loaded and `MapReady()` is true:
+  1. `SwapMap()`;
+  2. set the `world()` switches again (worldBeyond / frame / climate / weather / depositIcons);
+  3. then `GameStarted(sim)`, `SetFocusArmy`, and `Beat(sim)`.
+  Beats only after the swap, and never call `SwapMap` while `Beat` may be running.
+- **Game to menu:** call `BeginMap(menuMap)` at once; the last game frame or score screen keeps drawing. Call
+  `SwapMap()` when ready, then `Dress`.
+- **Carried over by the swap:** the picture's `Set*` options, life and work bars, unexplored, icons, selection marks and
+  order-line settings.
+- **Start empty after the swap:** selection, shapes, ranges, meshes, decals, ghosts, borders and the playable rect.
+  Anything you set directly on `world()` must be set again.
+
+**Measured at 4K, everything on, quiet card:**
+- SETONS_R is ready 4.3-6.0 s after `BeginMap`.
+- Serving the loading world costs at most 2.3-4 ms in any frame.
+- The first three frames after the swap take 2-18 ms.
+- Card memory peaks at about 4 GB with both worlds, and falls back to the menu's 1.4 GB every cycle.
+
+**Rules:**
+- Open without a map and give every map through `BeginMap`. A world made by `Open` with a map and then swapped out
+  keeps about 2 GB until the picture goes.
+- The warm frames still hold the frames' thread for 0.5-1.5 s on a fresh device, and about 50 ms after that. That falls
+  while the old world or the loading screen shows, not on the game's first frame.
+- If your build lists the render sources itself, add `render/bg_load.cpp`.
+
 ## To the visuals track, 67: remastered treads that scroll, and their grooves' depth (2026-10-23)
 
 **Remastered models scroll only when their folder says so:** a file `<file>_treads.bp` beside `<file>_lights.bp`:
