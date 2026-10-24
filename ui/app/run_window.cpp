@@ -16,6 +16,9 @@
 #include "maui/font.h"
 #include "script/script_state.h"
 #include "user/user_state.h"
+#ifdef MOHO64UI_WORLD_PICTURE
+#include "render/hitch_log.h"
+#endif
 
 namespace moho::ui {
 namespace {
@@ -179,6 +182,11 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
   // MOHO64UI_LONG_FRAMES (user_state.h): this frame's parts, for the log of a long one.
   LongFrameLog& longFrames = LongFrames();
   longFrames.notes.clear();  // (what ran before the window: not a frame's)
+#ifdef MOHO64UI_WORLD_PICTURE
+  // With it, the renderer's own log of what its frames' thread made and how long (render/hitch_log.h): its notes of
+  // a long frame go into that frame's line ("render: ..."), so the renderer sees what to move off the frame.
+  if (longFrames.thresholdMs > 0) render::HitchLog::mainThread = std::this_thread::get_id(), render::HitchLog::on = true;
+#endif
   struct Parts {
     double wait = 0, input = 0, scripts = 0, drawing = 0, host = 0, showing = 0, world = 0, recording = 0;
   } parts;
@@ -322,6 +330,15 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
         worldBefore = Times().worldDraw;
         const double beatGc = BeatThreadGcMs() - beatGcBefore;
         beatGcBefore += beatGc;
+#ifdef MOHO64UI_WORLD_PICTURE
+        // (the renderer's notes since the last frame: on this thread and outermost only, as its parts are inside them)
+        std::vector<render::HitchLog::Note> renderNotes = render::HitchLog::Take();
+        if (ms > longFrames.thresholdMs) {
+          static std::set<std::string> renderNames;  // (kept for the log: names that stay)
+          for (const render::HitchLog::Note& n : renderNotes)
+            if (!n.elsewhere && n.depth == 0) longFrames.Note(renderNames.insert("render: " + n.what).first->c_str(), n.ms);
+        }
+#endif
         if (ms > longFrames.thresholdMs) {
           // The frame's parts; "before": from the last frame's showing to this one's start (the pace's wait).
           std::string line;
