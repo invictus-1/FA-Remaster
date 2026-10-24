@@ -568,6 +568,17 @@ void MoveTaskWalk(Sim& sim, Unit* u, const Vec3& goal) {
     AirSpeedThroughEvent(sim, u);  // the ctor's end (0x6186a1): Unit::UpdateSpeedThroughStatus 0x6ac940
     return;
   }
+  // NewMoveTask 0x6190a0 hands the navigator the goal it was given first (vt+8 at 0x6190c9, before the ctor), and the
+  // ctor's override then sets its own (0x6185f3). The first SetGoal's SetCurrentPosition 0x5a415d renews the cell,
+  // and the second's ResetPathState takes that cell for the target. (Without the override both goals are the same
+  // and the second returns at once, 0x5a3edc.) Seen (probe cp_wnpatrol, MP1): at 3156 army 7's patrolling engineer
+  // 0x700027 gets SetGoal (362, 636) from 0x6190cb, then (356, 602) from 0x6185f5; the first moved its cell from
+  // (343, 655) to (343, 654), so its target at the new goal is (343, 654); ours, with only the second, kept (343, 655)
+  // (watch line wn 3156; the same at 3630 for army 0's 0x3c / 0x44 / 0x46 / 0x49).
+  if (!u->motion.air && u->motion.bp->motionType != kMotionAir) {
+    const bool through = u->motion.nav && u->motion.nav->speedThroughGoal;  // (SetGoal keeps the request)
+    LandNavSetGoal(sim, u, goal, through);
+  }
   const UnitCommand& c = *u->commands.front();
   const Entity* te = c.targetId ? sim.FindEntity(c.targetId) : nullptr;
   const Vec3 tp = te ? te->position : c.pos;

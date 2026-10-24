@@ -7,6 +7,8 @@
 #ifndef lstate_h
 #define lstate_h
 
+#include <stddef.h>
+
 #include "lua.h"
 
 #include "lobject.h"
@@ -145,7 +147,13 @@ typedef struct global_State {
   TString *cobjkey;
   unsigned int randseed;  /* math.random's state, per lua_State (lmathlib.c) */
   lu_hash nextserial;  /* serial of the next table, udata, function or thread (lobject.h) */
+  /* moho64: the incremental collector's state (lgcinc.c); NULL = the classic collector (lgc.c). It is the last
+  ** field, and the state's own size as `nblocks' counts it stops before it (luaE_gsize), so a classic state counts
+  ** exactly the bytes it counted before the field existed. */
+  struct GCInc *inc;
 } global_State;
+
+#define luaE_gsize	(offsetof(global_State, inc))
 
 
 /*

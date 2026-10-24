@@ -12,6 +12,7 @@
 #include "lua.h"
 
 #include "lmem.h"
+#include "lgc.h"
 #include "lobject.h"
 #include "lstate.h"
 #include "lstring.h"
@@ -53,7 +54,7 @@ static TString *newlstr (lua_State *L, const char *str, size_t l, lu_hash h) {
   stringtable *tb;
   ts->tsv.len = l;
   ts->tsv.hash = h;
-  ts->tsv.marked = 0;
+  ts->tsv.marked = G(L)->inc ? luaC_newmark(L, 0) : 0;
   ts->tsv.tt = LUA_TSTRING;
   ts->tsv.reserved = 0;
   memcpy(ts+1, str, l*sizeof(char));
@@ -112,7 +113,7 @@ TString *luaS_gpg_find (lua_State *L, const char *str, size_t l) {
 Udata *luaS_newudata (lua_State *L, size_t s) {
   Udata *u;
   u = cast(Udata *, luaM_malloc(L, sizeudata(s)));
-  u->uv.marked = (1<<1);  /* is not finalized */
+  u->uv.marked = G(L)->inc ? luaC_newmark(L, 1) : (1<<1);  /* is not finalized */
   u->uv.tt = LUA_TUSERDATA;
   u->uv.len = s;
   u->uv.serial = G(L)->nextserial++;

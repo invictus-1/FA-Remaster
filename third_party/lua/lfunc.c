@@ -71,7 +71,7 @@ void luaF_close (lua_State *L, StkId level) {
     setobj(&p->value, p->v);  /* save current value (write barrier) */
     p->v = &p->value;  /* now current value lives here */
     L->openupval = p->next;  /* remove from `open' list */
-    luaC_link(L, valtogco(p), LUA_TUPVAL);
+    luaC_linkupval(L, valtogco(p));  /* (moho64: luaC_link in a classic state) */
   }
 }
 

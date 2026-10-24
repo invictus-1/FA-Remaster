@@ -478,8 +478,13 @@ static void mark (lua_State *L) {
 
 
 extern void (*lua_gpg_prof_gc)(lua_State *L, int end);  /* lapi.c (MOHO64_PROFILE_HITCH only) */
+void luaC_incemergency (lua_State *L);  /* lgcinc.c */
 
 void luaC_collectgarbage (lua_State *L) {
+  if (G(L)->inc) {  /* moho64: an incremental state collects only through lgcinc.c */
+    luaC_incemergency(L);
+    return;
+  }
   if (lua_gpg_prof_gc) lua_gpg_prof_gc(L, 0);
   mark(L);
   luaC_sweep(L, 0);
@@ -492,7 +497,7 @@ void luaC_collectgarbage (lua_State *L) {
 void luaC_link (lua_State *L, GCObject *o, lu_byte tt) {
   o->gch.next = G(L)->rootgc;
   G(L)->rootgc = o;
-  o->gch.marked = 0;
+  o->gch.marked = G(L)->inc ? luaC_newmark(L, 0) : 0;
   o->gch.tt = tt;
 }
 

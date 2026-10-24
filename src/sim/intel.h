@@ -63,6 +63,8 @@ bool ArmyHasBlip(const Unit* u, int a);
 // What army index a's intel grids say of a point now (bits: 1 radar, 2 sonar, 4 omni, 8 vision). water: 0 land or
 // air, 1 the water's surface, 2 under water.
 uint32_t ReconAtPoint(const Sim& sim, int a, Vec3 p, int water);
+// ... at the centre of every cell of a w x h grid over the map, row by row (sim_view.h ReconGrid)
+void ReconGridPoints(const Sim& sim, int a, int w, int h, int water, std::vector<uint8_t>* out);
 // ... and of an entity: 0xF for the army's own and its allies', a unit's held recon flags (Unit::recon), the
 // point's answer for anything else.
 uint32_t ReconOfEntity(const Sim& sim, int a, const Entity* e);

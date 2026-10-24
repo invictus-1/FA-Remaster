@@ -110,7 +110,8 @@ static void f_luaopen (lua_State *L, void *ud) {
   setnilvalue(gkey(g->dummynode));
   setnilvalue(gval(g->dummynode));
   g->dummynode->next = NULL;
-  g->nblocks = sizeof(lua_State) + sizeof(global_State);
+  g->inc = NULL;  /* the classic collector until lua_gpg_setgcmode */
+  g->nblocks = sizeof(lua_State) + luaE_gsize;
   stack_init(L, L);  /* init stack */
   /* create default meta table with a dummy table, and then close the loop */
   defaultmeta(L)->tt = LUA_TTABLE;
@@ -164,7 +165,8 @@ static void close_state (lua_State *L) {
   }
   freestack(L, L);
   if (G(L)) {
-    lua_assert(G(L)->nblocks == sizeof(lua_State) + sizeof(global_State));
+    lua_assert(G(L)->nblocks == sizeof(lua_State) + luaE_gsize);
+    luaC_incfree(L);
     luaM_freelem(NULL, G(L));
   }
   freestate(NULL, L);

@@ -650,7 +650,13 @@ void CheckCollision(Sim& sim, Projectile* p, Vec3 p0, Vec3 p1) {
     }
     Unit* launcherUnit = p->launcher && p->launcher->kind == Entity::Kind::Unit ? static_cast<Unit*>(p->launcher) : nullptr;
     if (len >= 0.01f) {
-      Vec3 a = Sub(p0, Mul(seg, 0.01f)), b2 = Add(p1, Mul(seg, 0.01f));
+      // 0x69da62..0x69dae7: the step lengthened by k at both ends, k = [0xe4f950] = 0.0100000007 (the float above
+      // 0.01; the length test before it, 0x69d831, is [0xdfeb80] = 0.00999999978). The entity line test meets the
+      // segment a -> b, so its hit point follows a's and b's last bits. Seen (probe cp_hitpoint, Experimental2 356):
+      // the original's a.x 732.661194 and b.x 733.511047 for the shell 0x10000024 (ours with 0.01f: 732.661255,
+      // 733.510986), and its hit on the unit 0x100004 at x 733.422546 (ours 733.422485).
+      const float k = 0.0100000007f;
+      Vec3 a = Sub(p0, Mul(seg, k)), b2 = Add(p1, Mul(seg, k));
       std::vector<Entity*> cands;
       if (sim.entityGrid().ready()) {
         // 0x69db05: ONE query of the entity grid for everything with a collision primitive, GetEntityCollisionsInLine

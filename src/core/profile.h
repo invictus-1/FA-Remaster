@@ -53,7 +53,7 @@ void InstallLuaTimer();  // sets the Lua hooks; the calling thread is the one me
 void NextSource(int s);  // the source of the next outermost Lua call
 double TakeLuaMs();      // outermost Lua time since the last call (for the phase laps)
 double LuaMsTotal(int s);  // the whole run's Lua time of one source
-void ResetLuaTotals();    // forget what was counted so far (the start-up's Lua)
+void ResetLuaTotals();    // forget what was counted so far (the start-up's Lua, and the beat breakdown's counts)
 
 double PeakWorkingSetMB();  // the process's peak working set so far (0 where unknown)
 

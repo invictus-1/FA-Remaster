@@ -31,9 +31,9 @@ Sim* S(lua_State* L) { return Sim::From(L); }
 struct Grid {
   int cs = 4, W = 0, H = 0;
   std::vector<int8_t> c;
-  bool Visible(Vec3 p) const {
-    int x = static_cast<int>(std::floor(p.x * (1.0f / static_cast<float>(cs))));
-    int z = static_cast<int>(std::floor(p.z * (1.0f / static_cast<float>(cs))));
+  bool Visible(Vec3 p) const { return At(Cell(p.x), Cell(p.z)); }
+  int Cell(float v) const { return static_cast<int>(std::floor(v * (1.0f / static_cast<float>(cs)))); }  // of x or z
+  bool At(int x, int z) const {
     if (x < 0 || z < 0 || x >= W || z >= H) return false;
     return c[static_cast<size_t>(z) * W + x] != 0;
   }
@@ -558,6 +558,29 @@ void ReconTick(Sim& sim, lua_State* L, int a) {
 
 bool ArmyHasBlip(const Unit* u, int a) { return a >= 0 && a < 16 && (u->recon[a] & kReconInUse) != 0; }
 
+namespace {
+// What one army's grids say of a point (ReconAtPoint's rules below; vis(grid): the grid is set there).
+template <class Vis>
+uint8_t GridsSay(const ArmyIntel& db, int water, const Vis& vis) {
+  uint8_t f = 0;
+  if (!db.fog || !db.g[0]) f = 8;
+  else if (water == 2 ? (db.g[1] && vis(*db.g[1])) : vis(*db.g[0])) f = 8;
+  if (water != 0 && db.g[3] && vis(*db.g[3])) f |= 2;
+  if (water != 2 && db.g[2] && vis(*db.g[2])) f |= 1;
+  if (db.g[4] && vis(*db.g[4])) f |= 4;
+  return f;
+}
+// ... and what the army's own counter-intel fields take from f (its own and its allies' bits together)
+template <class Vis>
+uint8_t CounterIntel(const ArmyIntel& db, uint8_t f, const Vis& vis) {
+  if (f == 0 || (f & 4)) return f;
+  if (db.g[5] && vis(*db.g[5])) f &= static_cast<uint8_t>(~1);
+  if (db.g[6] && vis(*db.g[6])) f &= static_cast<uint8_t>(~2);
+  if (db.g[7] && vis(*db.g[7])) f &= static_cast<uint8_t>(~8);
+  return f;
+}
+}  // namespace
+
 // For a host: what army a's grids (its own and its allies', with its counter-intel fields) say of a point now.
 // The grid rules of CanDetect without an entity: `water` 0 = something on land or in the air, 1 = on the water's
 // surface (sonar counts too), 2 = under water (water vision instead of vision, sonar, no radar).
@@ -567,25 +590,85 @@ uint32_t ReconAtPoint(const Sim& sim, int a, Vec3 p, int water) {
   if (a < 0 || static_cast<size_t>(a) >= armies.size() || static_cast<size_t>(a) >= dbs.size()) return 0;
   const TerrainMap* m = sim.map();
   if (m && (p.x < 0 || p.z < 0 || p.x > m->width() || p.z > m->height())) return 0;
-  auto of = [&](const ArmyIntel& db) {
-    uint8_t f = 0;
-    if (!db.fog || !db.g[0]) f = 8;
-    else if (water == 2 ? (db.g[1] && db.g[1]->Visible(p)) : db.g[0]->Visible(p)) f = 8;
-    if (water != 0 && db.g[3] && db.g[3]->Visible(p)) f |= 2;
-    if (water != 2 && db.g[2] && db.g[2]->Visible(p)) f |= 1;
-    if (db.g[4] && db.g[4]->Visible(p)) f |= 4;
-    return f;
-  };
+  auto vis = [&](const Grid& g) { return g.Visible(p); };
   const Army* us = armies[static_cast<size_t>(a)].get();
   const ArmyIntel& db = dbs[static_cast<size_t>(a)];
-  uint8_t f = of(db);
+  uint8_t f = GridsSay(db, water, vis);
   for (size_t j = 0; j < armies.size() && j < dbs.size(); ++j)
-    if (static_cast<int>(j) != a && combat::Relation(armies[j].get(), us) == 2) f |= of(dbs[j]);
-  if (f == 0 || (f & 4)) return f;
-  if (db.g[5] && db.g[5]->Visible(p)) f &= static_cast<uint8_t>(~1);
-  if (db.g[6] && db.g[6]->Visible(p)) f &= static_cast<uint8_t>(~2);
-  if (db.g[7] && db.g[7]->Visible(p)) f &= static_cast<uint8_t>(~8);
-  return f;
+    if (static_cast<int>(j) != a && combat::Relation(armies[j].get(), us) == 2) f |= GridsSay(dbs[j], water, vis);
+  return CounterIntel(db, f, vis);
+}
+
+// ReconAtPoint at the centre of every cell of a w x h grid over the map, as w x h calls would give it (sim_view.h
+// ReconGrid; render REQUESTS 38: the picture's sight grid, 65,536 calls every fifth beat). The same rules on the
+// same floats, taken grid by grid instead of point by point: the army's allies are worked out once, each intel
+// grid's cell of every column and row once (Grid::Cell of the same x or z that Visible takes), and each grid then
+// adds its bit to the cells where it is set. The bits are ORed over the armies as ReconAtPoint ORs them, and the
+// counter-intel fields clear theirs only where the result is neither 0 nor on omni, as there.
+void ReconGridPoints(const Sim& sim, int a, int w, int h, int water, std::vector<uint8_t>* out) {
+  out->clear();
+  const TerrainMap* m = sim.map();
+  if (!m || w < 1 || h < 1) return;
+  const size_t uw = static_cast<size_t>(w), n = uw * static_cast<size_t>(h);
+  out->assign(n, 0);
+  const auto& armies = sim.armies();
+  const std::vector<ArmyIntel>& dbs = IS(sim).armies;
+  if (a < 0 || static_cast<size_t>(a) >= armies.size() || static_cast<size_t>(a) >= dbs.size()) return;
+  const Army* us = armies[static_cast<size_t>(a)].get();
+  const ArmyIntel& db = dbs[static_cast<size_t>(a)];
+  std::vector<const ArmyIntel*> seeing{&db};  // the army, then its allies in army order
+  for (size_t j = 0; j < armies.size() && j < dbs.size(); ++j)
+    if (static_cast<int>(j) != a && combat::Relation(armies[j].get(), us) == 2) seeing.push_back(&dbs[j]);
+  const float mw = static_cast<float>(m->width()), mh = static_cast<float>(m->height());
+  std::vector<float> px(uw), pz(static_cast<size_t>(h));
+  for (int x = 0; x < w; ++x) px[static_cast<size_t>(x)] = (static_cast<float>(x) + 0.5f) * mw / static_cast<float>(w);
+  for (int z = 0; z < h; ++z) pz[static_cast<size_t>(z)] = (static_cast<float>(z) + 0.5f) * mh / static_cast<float>(h);
+  // each column's and row's cell, per cell size (a game's grids share one or two sizes)
+  struct Cells {
+    std::vector<int> x, z;
+  };
+  std::map<int, Cells> bySize;
+  auto cellsOf = [&](const Grid& g) -> const Cells& {
+    auto it = bySize.find(g.cs);
+    if (it != bySize.end()) return it->second;
+    Cells& c = bySize[g.cs];
+    for (float v : px) c.x.push_back(g.Cell(v));
+    for (float v : pz) c.z.push_back(g.Cell(v));
+    return c;
+  };
+  uint8_t* o = out->data();
+  auto set = [&](const Grid& g, uint8_t bit) {  // bit into every cell where g is set
+    const Cells& c = cellsOf(g);
+    for (size_t z = 0; z < static_cast<size_t>(h); ++z)
+      for (size_t x = 0; x < uw; ++x)
+        if (g.At(c.x[x], c.z[z])) o[z * uw + x] |= bit;
+  };
+  for (const ArmyIntel* d : seeing) {  // GridsSay, a grid at a time
+    if (!d->fog || !d->g[0]) {
+      for (size_t i = 0; i < n; ++i) o[i] |= 8;
+    } else if (water == 2) {
+      if (d->g[1]) set(*d->g[1], 8);
+    } else {
+      set(*d->g[0], 8);
+    }
+    if (water != 0 && d->g[3]) set(*d->g[3], 2);
+    if (water != 2 && d->g[2]) set(*d->g[2], 1);
+    if (d->g[4]) set(*d->g[4], 4);
+  }
+  for (int k = 5; k <= 7; ++k) {  // CounterIntel: RCI takes radar, SCI sonar, VCI vision
+    if (!db.g[k]) continue;
+    const Grid& g = *db.g[k];
+    const Cells& c = cellsOf(g);
+    const uint8_t keep = static_cast<uint8_t>(~(k == 5 ? 1 : k == 6 ? 2 : 8));
+    for (size_t z = 0; z < static_cast<size_t>(h); ++z)
+      for (size_t x = 0; x < uw; ++x) {
+        uint8_t& f = o[z * uw + x];
+        if (f != 0 && !(f & 4) && g.At(c.x[x], c.z[z])) f &= keep;
+      }
+  }
+  for (size_t z = 0; z < static_cast<size_t>(h); ++z)  // (0 outside the map, as ReconAtPoint)
+    for (size_t x = 0; x < uw; ++x)
+      if (pz[z] < 0 || px[x] < 0 || px[x] > m->width() || pz[z] > m->height()) o[z * uw + x] = 0;
 }
 
 uint32_t ReconOfEntity(const Sim& sim, int a, const Entity* e) {

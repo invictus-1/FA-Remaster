@@ -194,6 +194,7 @@ void luaV_settable (lua_State *L, const TObject *t, TObject *key, StkId val) {
       if (!ttisnil(oldval) ||  /* result is no nil? */
           (tm = fasttm(L, h->metatable, TM_NEWINDEX)) == NULL) { /* or no TM? */
         setobj2t(oldval, val);  /* write barrier */
+        luaC_barriert(L, h);
         return;
       }
       /* else will try the tag method */
@@ -619,6 +620,7 @@ StkId luaV_execute (lua_State *L) {
       vmcase(OP_SETUPVAL) {
         int b = GETARG_B(i);
         setobj(cl->upvals[b]->v, ra);  /* write barrier */
+        luaC_barrierf(L, valtogco(cl->upvals[b]), ra);
         vmbreak;
       }
       vmcase(OP_SETTABLE) {
@@ -638,6 +640,7 @@ StkId luaV_execute (lua_State *L) {
           if (slot && slot != &luaO_nilobject && (!ttisnil(slot) || h->metatable == NULL)) {
             h->flags = 0;
             setobj2t(slot, RKC(i));
+            luaC_barriert(L, h);
             vmbreak;
           }
         }
@@ -912,6 +915,7 @@ StkId luaV_execute (lua_State *L) {
         bc &= ~(LFIELDS_PER_FLUSH-1);  /* bc = bc - bc%FPF */
         for (; n > 0; n--)
           setobj2t(luaH_setnum(L, h, bc+n), ra+n);  /* write barrier */
+          luaC_barriert(L, h);
         vmbreak;
       }
       vmcase(OP_CLOSE) {

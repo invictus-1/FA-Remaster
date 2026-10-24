@@ -200,6 +200,8 @@ LUA_API void lua_replace (lua_State *L, int idx) {
   lua_lock(L);
   api_checknelems(L, 1);
   setobj(luaA_index(L, idx), L->top - 1);  /* write barrier */
+  if (idx < LUA_GLOBALSINDEX)  /* a C closure's upvalue (the stack, globals and registry slots are roots) */
+    luaC_barrierv(L, L->top - 1);
   L->top--;
   lua_unlock(L);
 }
@@ -640,6 +642,7 @@ LUA_API void lua_rawset (lua_State *L, int idx) {
   t = luaA_index(L, idx);
   api_check(L, ttistable(t));
   setobj2t(luaH_set(L, hvalue(t), L->top-2), L->top-1);  /* write barrier */
+  luaC_barriert(L, hvalue(t));
   L->top -= 2;
   lua_unlock(L);
 }
@@ -652,6 +655,7 @@ LUA_API void lua_rawseti (lua_State *L, int idx, int n) {
   o = luaA_index(L, idx);
   api_check(L, ttistable(o));
   setobj2t(luaH_setnum(L, hvalue(o), n), L->top-1);  /* write barrier */
+  luaC_barriert(L, hvalue(o));
   L->top--;
   lua_unlock(L);
 }
@@ -668,10 +672,12 @@ LUA_API int lua_setmetatable (lua_State *L, int objindex) {
   switch (ttype(obj)) {
     case LUA_TTABLE: {
       hvalue(obj)->metatable = hvalue(mt);  /* write barrier */
+      luaC_barrierfo(L, gcvalue(obj), valtogco(hvalue(mt)));
       break;
     }
     case LUA_TUSERDATA: {
       uvalue(obj)->uv.metatable = hvalue(mt);  /* write barrier */
+      luaC_barrierfo(L, gcvalue(obj), valtogco(hvalue(mt)));
       break;
     }
     default: {
@@ -696,6 +702,7 @@ LUA_API int lua_setfenv (lua_State *L, int idx) {
   if (isLfunction(o)) {
     res = 1;
     clvalue(o)->l.g = *(L->top);
+    luaC_barrierf(L, gcvalue(o), L->top);
   }
   lua_unlock(L);
   return res;
@@ -1004,6 +1011,7 @@ LUA_API const char *lua_setupvalue (lua_State *L, int funcindex, int n) {
   if (name) {
     L->top--;
     setobj(val, L->top);  /* write barrier */
+    luaC_barrierv(L, L->top);  /* (a C closure's slot or a Lua closure's UpVal: the value is marked) */
   }
   lua_unlock(L);
   return name;

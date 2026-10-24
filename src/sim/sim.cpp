@@ -1062,6 +1062,9 @@ bool Sim::Start(const ReplayHeader& replay) {
   // Sim Lua state
   state_ = std::make_unique<ScriptState>(ScriptState::Kind::Sim, vfs_);
   lua_State* L = state_->L();
+  // The collector (third_party/lua/lgcinc.c, gc_design.md): Lua 5.0's classic one. (The incremental one, behind
+  // the fixes, comes in stage 2.)
+  lua_gpg_setgcmode(L, 0);
   state_->SetHookDirs(hookDirs_);
   if (fixes) state_->SetExtraHooks(FixesHooks());
   prof::InstallLuaHooks(L);  // (MOHO64_PROFILE_HITCH only: the collector's timer, and the debug hooks if asked)
@@ -2167,6 +2170,7 @@ void Sim::PausedBeat() {
   ApplyFocusArmy();  // Sim::Sync's start
   UpdateIdPools();
   SyncStep(collectSync);
+  lua_gpg_gcstep(state_->L());  // the incremental collector's step (nothing with the classic one)
   frozen = endGame;  // Sync copies sim+0x8dc to sim+0x8dd
 }
 
@@ -2476,6 +2480,14 @@ void Sim::Tick() {
       // Entity:SetParentOffset 0x68c330: its transform relative to the bone (entity+0x19c: no rotation, the vector)
       if (e->attachOffset.x != 0 || e->attachOffset.y != 0 || e->attachOffset.z != 0)
         e->position = vm::Add(e->position, vm::RotateM(e->orientation, e->attachOffset));
+      // Entity::TaskTick 0x679c40 takes it through CalculateAttachedTransform 0x67a020, whose last step is the
+      // quaternion's normalise 0x4edaa0 (0x67a08f; the position was turned with the quaternion before it), as for an
+      // attached unit (AttachedTransform) and a beam. Seen: Naval 169, FAF's external factory chain on the Cybran
+      // carrier 0x32 (defaultcomponents.lua 891-903: a plain Entity on the carrier's bone, the anchor unit ZXA0003
+      // 0x33 on it at -1, the factory urs0303ef 0x34 on that): the carrier turns and both units' orientation was one
+      // float step off the original's from then on (y 0.15643461 for 0.156434625), the plain entity having taken the
+      // bone's quaternion unnormalised.
+      e->orientation = vm::NormalizeQuatExe(e->orientation);
       attachedEntities[keep++] = attachedEntities[i];
     }
     attachedEntities.resize(keep);
@@ -2549,6 +2561,7 @@ void Sim::Tick() {
   ApplyFocusArmy();  // Sim::Sync's start: a requested focus army, NoteFocusArmyChanged
   UpdateIdPools();  // EntityDb::Purge (Sim::Sync)
   SyncStep(collectSync);
+  lua_gpg_gcstep(state_->L());  // the incremental collector's step, the beat's last work (nothing with the classic one)
   singleStep = false;  // step 14 (sim+0x8e4 = 0)
   frozen = endGame;    // Sync copies sim+0x8dc to sim+0x8dd
   phases.Lap(PhaseTimer::kDestroySync);

@@ -40,6 +40,7 @@
 #include "sim/session.h"
 #include "sim/sim_view.h"
 #include "sim/sim.h"
+#include "sim/terrain.h"
 
 using namespace moho;
 
@@ -769,6 +770,40 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
       break;
     }
     viewReads(false);
+    // MOHO64_DEBUG_RECONGRID=<n> (render REQUESTS 38): at beat 1 and every 600th, for every army and each water
+    // kind, ReconGrid's n x n grid against n x n ReconAt calls at the same points (the renderer's sight grid's
+    // floats): the cells that differ, and the time of both
+    static const int rgCells = getenv("MOHO64_DEBUG_RECONGRID") ? std::atoi(getenv("MOHO64_DEBUG_RECONGRID")) : 0;
+    if (rgCells > 0 && sim.map() && (sim.tick() == 1 || sim.tick() % 600 == 0)) {
+      const float mw = static_cast<float>(sim.map()->width()), mh = static_cast<float>(sim.map()->height());
+      std::vector<uint8_t> grid;
+      for (int army = 1; army <= static_cast<int>(sim.armies().size()); ++army)
+        for (int water = 0; water <= 2; ++water) {
+          const auto t0 = std::chrono::steady_clock::now();
+          ReconGrid(sim, army, rgCells, rgCells, &grid, water);
+          const auto t1 = std::chrono::steady_clock::now();
+          size_t differ = 0, set = 0;
+          uint32_t orBits = 0;
+          for (int z = 0; z < rgCells; ++z)
+            for (int x = 0; x < rgCells; ++x) {
+              const float at[3] = {(static_cast<float>(x) + 0.5f) * mw / static_cast<float>(rgCells), 0,
+                                   (static_cast<float>(z) + 0.5f) * mh / static_cast<float>(rgCells)};
+              const uint32_t r = ReconAt(sim, army, at, water);
+              const uint8_t g = grid[static_cast<size_t>(z) * static_cast<size_t>(rgCells) + static_cast<size_t>(x)];
+              if (r != g) {
+                if (differ++ < 3)
+                  Logf(LogLevel::Info, "recongrid: tick %u army %d water %d cell %d,%d: ReconAt %u, ReconGrid %u", sim.tick(),
+                       army, water, x, z, r, g);
+              }
+              set += r != 0;
+              orBits |= r;
+            }
+          const auto t2 = std::chrono::steady_clock::now();
+          Logf(LogLevel::Info, "recongrid: tick %u army %d water %d: %d x %d cells, %zu differ (%zu set, bits %#x); ReconGrid %.3f ms, "
+               "the calls %.3f ms", sim.tick(), army, water, rgCells, rgCells, differ, set, orBits,
+               std::chrono::duration<double, std::milli>(t1 - t0).count(), std::chrono::duration<double, std::milli>(t2 - t1).count());
+        }
+    }
     if (o.view) {  // the live frame's extras: the most seen at one beat, and one sample of each
       std::vector<UnitPose> poses;
       std::vector<ProjectileView> shots;

@@ -494,6 +494,24 @@ Vec3 TargetPos(Sim& sim, const AiTarget& t, bool centre) {
     Entity* e = TargetEntity(sim, t);
     if (!e) return NaNVec();
     if (e->kind == Entity::Kind::Unit) return centre ? e->position : UnitTargetPoint(static_cast<Unit*>(e), t.aimBone);
+    // A recon blip as the target's entity (Projectile:SetNewTarget with a blip: FAF's RetargetThread hands a homing
+    // shell its weapon's current target, which can be a blip): the blip is no unit (vt+0x10 0x5bdb10 gives null), so
+    // 0x5e2b27 asks vt+0x1c (the blip itself): with the centre flag its own place (0x5e2b44, +0xac); else
+    // ReconBlip::GetTargetPoint 0x5bf5f0 (vt+0x98): its unit's target point for the CAiTarget's pick (Unit::
+    // GetTargetPoint 0x6ab340) moved by the blip's offset (+0x27c), or with the unit gone its own transform's centre
+    // plus the half height again (BlipPointUnitGone). Seen: Experimental2 823, the torpedo 0x1000002d (tananglertorpedo02)
+    // retargeted onto the blip 0x30100000 of the UEF Atlantis 0x100000: the original's target point is y 18.535 (the
+    // unit's target point), ours the blip's place, 17.5 (24 watch lines).
+    if (e->kind == Entity::Kind::Blip) {
+      if (centre) return e->position;
+      const ReconBlip* b = static_cast<const ReconBlip*>(e);
+      const Unit* src = b->source && sim.FindEntity(EntityRef(b->source)) ? b->source : nullptr;
+      if (src) {
+        const Vec3 tp = UnitTargetPoint(src, t.aimBone);
+        return Vec3{b->offset.x + tp.x, b->offset.y + tp.y, b->offset.z + tp.z};
+      }
+      return BlipPointUnitGone(sim, e);
+    }
     // A shell as a target (an anti-torpedo's, a missile defence's): its bone -1 too, the centre its blueprint
     // gives (half its SizeY above its origin: 0.5 with the default size), turned with the shell. Seen in the
     // original's shell lines: an anti-torpedo steers at a point 0.5 from the torpedo's origin, along its up axis.

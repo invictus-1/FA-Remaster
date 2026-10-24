@@ -148,6 +148,15 @@ double LuaMsTotal(int s) { return s >= 0 && s < kSources ? g_bySource[s] : 0.0; 
 void ResetLuaTotals() {
   g_sinceTake = 0;
   for (double& v : g_bySource) v = 0;
+  // ... and the beat breakdown's counts: the start-up's sections, calls, samples and call times are not the
+  // first beat's (they were listed in beat 1's hitch report: a "CreateUnit (all) x51", calls of 28 s)
+  for (double& v : g_beatBySource) v = 0;
+  for (double& v : g_secMs) v = 0;
+  for (int& v : g_secN) v = 0;
+  g_beatCalls.clear();
+  g_samples.clear();
+  g_sampleTotal = 0;
+  g_fnTime.clear();
 }
 
 double PeakWorkingSetMB() {

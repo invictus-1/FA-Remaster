@@ -468,6 +468,10 @@ enum ReconBits : uint32_t {
 // Of a place: what the army's intel grids say there now. water: 0 = for something on land or in the air, 1 = on
 // the water's surface (sonar counts), 2 = under water. 0 outside the map. Without fog of war everything is seen.
 uint32_t ReconAt(const Sim& sim, int army, const float position[3], int water = 0);
+// Of every cell of a w x h grid laid over the map: ReconAt at each cell's centre, ((x + 0.5) * map width / w, 0,
+// (z + 0.5) * map height / h) in floats: the same bits as w x h calls of it (render REQUESTS 38), faster. *out
+// holds w * h values, row z after row z, x from 0 within a row; empty without a map or for w or h below 1.
+void ReconGrid(const Sim& sim, int army, int w, int h, std::vector<uint8_t>* out, int water = 0);
 // Of an entity. A unit of the army or of an ally: radar, sonar, omni and seen, all set. Another army's unit:
 // the flags the army's recon holds on it (its blip), which is what the simulation's own weapons and scripts go
 // by; they are renewed when the army's recon runs (armies take turns, one a beat), so they can be a few beats

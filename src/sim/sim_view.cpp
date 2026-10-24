@@ -576,6 +576,9 @@ uint32_t SessionSeed(const Sim& sim) { return sim.sessionSeed(); }
 uint32_t ReconAt(const Sim& sim, int army, const float position[3], int water) {
   return ReconAtPoint(sim, army - 1, Vec3{position[0], position[1], position[2]}, water);
 }
+void ReconGrid(const Sim& sim, int army, int w, int h, std::vector<uint8_t>* out, int water) {
+  ReconGridPoints(sim, army - 1, w, h, water, out);
+}
 uint32_t ReconOf(const Sim& sim, int army, uint32_t entityId) {
   const Entity* e = sim.FindEntityById(entityId);
   return e && !e->destroyQueued ? ReconOfEntity(sim, army - 1, e) : 0;

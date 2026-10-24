@@ -423,6 +423,7 @@ static TObject *newkey (lua_State *L, Table *t, const TObject *key) {
     }
   }
   setobj2t(gkey(mp), key);  /* write barrier */
+  luaC_barriert(L, t);
   lua_assert(ttisnil(gval(mp)));
   for (;;) {  /* correct `firstfree' */
     if (ttisnil(gkey(t->firstfree)))
