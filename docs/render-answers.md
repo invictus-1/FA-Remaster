@@ -4,6 +4,98 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To the interface, request 38: a full-screen picture drawn by the card, WorldPicture::SetBackdrop (2026-10-23)
+
+    enum class BackdropFit { Stretch, Cover, Contain };
+    void SetBackdrop(const uint32_t* pixels, int width, int height, int pitch, BackdropFit fit, bool overWorld);
+    void SetBackdropLook(float alpha, uint32_t tint = 0xFFFFFF);
+
+- **The pixels:** 0xAARRGGBB with the colour already multiplied by its alpha, exactly as `SetInterfaceLayer` takes
+  them. They are handed to the card at the next `DrawToWindow` and must stay where they are until then. Give them again
+  only when the picture changes: for a film, once per new film frame (an upload of that size; same size: an update).
+  `pixels` null removes it.
+- **fit:**
+  - Stretch fills the window;
+  - Cover keeps the shape and fills the window, its sides cut;
+  - Contain keeps the shape inside the window, the rest clear (the black below, or the world).
+- **overWorld:**
+  - true: drawn over the world;
+  - false: drawn only where no world is drawn (the menu with no map, or `SetWorldShown(false)`).
+  - Either way it lies under your interface layer.
+- **SetBackdropLook:** strength 0..1 and a colour multiplier, per frame. For the IN TRANSIT cover fading out at game
+  start, lower the alpha each frame; no new upload is needed.
+- **Cost:** one full-screen draw, under 0.1 ms on the card at 1440p. The film's per-frame CPU scaling goes away; what
+  remains is the upload of the 1280x1024 frame.
+- **Tried:** `--load-test <map> --load-backdrop <0|1|2>` writes `_backdrop.png` (on black) and `_backdrop_over.png`
+  (over the first map at half strength, tinted). D3D12 and Vulkan give the same pixels. Unused, nothing changes
+  (regression 0 px).
+
+## To the interface, request 37: open a map in the background while the window keeps showing (2026-10-23)
+
+In c82185a. `WorldPicture` (world_picture.h) gains these calls; `Open` is unchanged:
+
+- `BeginMap(path, before = {})`: opens a second World on its own thread on the same device, with the picture's settings
+  copied in. `before(World&)` runs on that thread before the map opens.
+- `MapReady()`, `MapFailed(&error)`, `SwapMap()` (0.02-0.13 ms), and `CancelMap()` (another map may be begun at once).
+- `SetLoadCamera(camera)` gives the camera the opened map is drawn by, unseen, before the swap ("warm frames"), so the
+  first frame you show after `SwapMap` is ordinary.
+- `SetLoadBudget(ms)` sets how much of each frame serves the loading world (2 ms by default); `LastLoadNumbers()`
+  reports how the last load went.
+
+**What to call when:**
+- **Start:** `UseWindow`, then `Open(vfs, "", &e)`; the interface shows at once. Then `BeginMap(menuMap)`. Call
+  `DrawToWindow` each frame as now. When `MapReady()`, call `SwapMap()`, then `Backdrop::Dress(picture)`.
+- **Menu to loading screen:** when the launch begins, call `BeginMap(gameMap, before)`; use `before` for anything read
+  at open, such as the look. Call `SetLoadCamera(the game's start camera)`. Keep drawing the menu with the loading
+  dialog over it while the simulation loads.
+- **Loading screen to game:** once the simulation is loaded and `MapReady()` is true:
+  1. `SwapMap()`;
+  2. set the `world()` switches again (worldBeyond / frame / climate / weather / depositIcons);
+  3. then `GameStarted(sim)`, `SetFocusArmy`, and `Beat(sim)`.
+  Beats only after the swap, and never call `SwapMap` while `Beat` may be running.
+- **Game to menu:** call `BeginMap(menuMap)` at once; the last game frame or score screen keeps drawing. Call
+  `SwapMap()` when ready, then `Dress`.
+- **Carried over by the swap:** the picture's `Set*` options, life and work bars, unexplored, icons, selection marks and
+  order-line settings.
+- **Start empty after the swap:** selection, shapes, ranges, meshes, decals, ghosts, borders and the playable rect.
+  Anything you set directly on `world()` must be set again.
+
+**Measured at 4K, everything on, quiet card:**
+- SETONS_R is ready 4.3-6.0 s after `BeginMap`.
+- Serving the loading world costs at most 2.3-4 ms in any frame.
+- The first three frames after the swap take 2-18 ms.
+- Card memory peaks at about 4 GB with both worlds, and falls back to the menu's 1.4 GB every cycle.
+
+**Rules:**
+- Open without a map and give every map through `BeginMap`. A world made by `Open` with a map and then swapped out
+  keeps about 2 GB until the picture goes.
+- The warm frames still hold the frames' thread for 0.5-1.5 s on a fresh device, and about 50 ms after that. That falls
+  while the old world or the loading screen shows, not on the game's first frame.
+- If your build lists the render sources itself, add `render/bg_load.cpp`.
+
+## To the visuals track, 67: remastered treads that scroll, and their grooves' depth (2026-10-23)
+
+**Remastered models scroll only when their folder says so:** a file `<file>_treads.bp` beside `<file>_lights.bp`:
+
+    Treads { Scrolling = true, Height = true }
+
+- **Scrolling = true:** the strips at the foot of the texture scroll as the original's do, on every level, since the
+  levels share one texture. v above 0.95 moves by the first tread's amount, 0.90-0.95 by the second's.
+- **No file:** nothing scrolls, as before.
+- **Height = true** (only with Scrolling, never on a Seraphim unit, whose albedo alpha is its team colour): the albedo's
+  alpha on those strips holds the treads' height, 1 the surface and 0 a groove's floor. In the modern look the eye then
+  looks into the grooves:
+  - a parallax march over that height, its frame taken from the screen's derivatives, so any belt layout works;
+  - the shift kept inside the pixel's strip;
+  - walls and floors darker the deeper the ray goes.
+- **Depth:** the viewer's `--tread-depth`, in world units, default 0.007; 0 shows the treads flat as painted.
+- **Checked on UEL0101:**
+  - the belts sit at v 0.952-0.998 and both drums take the first tread's scroll;
+  - at 45 degrees the blocks show their near walls;
+  - very low views hide much of the grooves, as deep grooves would.
+- **Cost:** only pixels on those strips of such units pay, between 4 and 32 extra reads of the albedo. Every other
+  draw is unchanged (regression 0 px on both backends).
+
 ## To the interface, request 35: split screen and a picture-in-picture follow camera (2026-10-23)
 
 **The form: one WorldPicture with several views**, not a second WorldPicture. A second picture over the same world would

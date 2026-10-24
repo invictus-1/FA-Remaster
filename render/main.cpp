@@ -45,6 +45,15 @@
 // --window-cycle  with --map and --screenshot <name>.png: one window shown by a menu's picture (the interface
 //           alone), then a game's (the map), then a menu's again, each closed before the next opens on it, as
 //           the interface does; what each showed is written as <name>_menu1.png, _game.png, _menu2.png
+// --load-test <map>  [bgload] with --map: one window's picture going from map to map as the interface's will
+//           (WorldPicture::BeginMap, MapReady, SwapMap): opened without a map (the interface alone at once), --map opened
+//           behind and shown, <map> opened behind it while it is drawn and shown, --map again, and so --load-cycles <n>
+//           times (2 unless given); the frames' times meanwhile, the times to ready, the swaps' frames and the card's memory
+//           printed, the first of each written as <name>_a.png, _b.png, _a2.png by --screenshot <name>.png. With --novsync
+//           for the frames' own times; --size, --vulkan, --time-of-day and --settings as for --picture. --load-test-open: the
+//           first map by Open itself (the way before). --load-budget <ms>: SetLoadBudget (2 unless given).
+//           --load-backdrop <fit>: [backdrop] WorldPicture::SetBackdrop tried first (0 stretch, 1 cover, 2 contain): a
+//           made-up picture on the black of no world (_backdrop.png), and over the first map at half strength (_backdrop_over.png)
 // --picture-window  with --picture: the interface's way without a read-back: the picture drawn into a window of
 //           its own with a made-up interface layer over it (UseWindow, SetInterfaceLayer, DrawToWindow), read
 //           back once for the file
@@ -294,6 +303,8 @@
 //           --grime-test dust,caked,soot[,health[,lowest[,recent[,splash]]]]: each placed unit (--place) given that much
 //           grime (0..1 each) and that health (a share; 1), the lowest it lived through (as its health) and its health
 //           some seconds ago (as its health: above it, what was lost glows), and mud splashed by rain (0)
+// --tread-depth d  [treads] a remastered unit's treads, where its folder gives their height (<file>_treads.bp), seen with
+//           grooves d world units deep (ModelCache::treadDepth; modern look; 0.007, 0: flat as painted)
 // --hot-metal  fresh wrecks glow where they broke and on their thin parts and cool over a minute or two, fresh scorches
 //           and craters glow in the middle, cooling wrecks smoulder (World::hotMetal, hot_metal.h; modern look);
 //           --wreck-test n[,unit]: n wrecks of that unit (uel0201) laid in a square round where the camera starts, as a
@@ -347,7 +358,8 @@
 //           same waves; none over the shallows; ships and hover units ride them in the picture alone; the wakes too).
 //           Tuning: --ocean-height n (the waves' height times n, 1), --ocean-tilt n (the slopes drawn n times as steep, 1.5;
 //           from above twice that), --ocean-glint n (0.8), --ocean-foam n, --ocean-glow n (1); --ocean-view n: in place of the
-//           water 1 the slopes, 2 the foam's field, 3 the slopes' spread, 4 the height, 5 the Jacobian (red: it foams)
+//           water 1 the slopes, 2 the foam's field, 3 the slopes' spread, 4 the height, 5 the Jacobian (red: it foams),
+//           6 [whitecaps] the whitecaps' parts (red the crest breaking now, green the fresh foam, blue the residue)
 // --stream-water  [stream] streams as real water (stream_water.h, World::streamWater; modern look): a map's stream props
 //           (the visuals track's ribbons) drawn as water: deep and dark in the middle, the bed showing at the edges, a
 //           soft wet shore, ripples and foam carried downstream (faster where it drops, white round rocks and behind
@@ -621,6 +633,7 @@
 #include "window.h"
 #include "world.h"
 #include "world_picture.h"
+#include "load_test.h"  // [bgload]
 
 using namespace render;
 
@@ -763,6 +776,7 @@ struct Options {
   bool unitGrime = false, unitDamage = false;  // [grime] --unit-grime, --unit-damage
   std::string grimeTest;                       // [grime] --grime-test
   std::vector<std::string> wearArt;            // [grime] --wear-art
+  float treadDepth = 0.007f;                   // [treads] --tread-depth
   bool hiddenOutlines = true;           // --no-hidden-outlines, --hidden-outlines
   bool hotMetal = false;                // --hot-metal
   int wreckTest = 0;                    // --wreck-test
@@ -803,6 +817,11 @@ struct Options {
   std::string photoCases;               // (photofix) --photo-cases
   std::vector<std::pair<int, int>> photoTestSizes = {{2560, 1440}, {3840, 2160}};  // --photo-test-sizes
   bool windowCycle = false;             // --window-cycle
+  std::string loadTest;                 // [bgload] --load-test
+  bool loadTestOpen = false;            // [bgload] --load-test-open
+  int loadBackdrop = -1;                // [backdrop] --load-backdrop
+  float loadBudget = 2;                 // [bgload] --load-budget
+  int loadCycles = 2;                   // [bgload] --load-cycles
   float effectsQuality = 1;             // --effects-quality
   float upscale = 1;                    // --fsr
   float wet = 0;                        // --wet
@@ -1028,6 +1047,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--picture-window") o->pictureWindow = true;
     else if (a == "--photo-test") o->photoTest = true;  // (photomode)
     else if (a == "--window-cycle") o->windowCycle = true;
+    else if (a == "--load-test-open") o->loadTestOpen = true;  // [bgload]
     else if (a == "--prepass") o->prepass = true;
     else if (a == "--no-prepass") o->prepass = false;
     else if (a == "--no-ground-changes") o->groundChanges = false;
@@ -1199,6 +1219,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--wear-test") o->wearTest = v;
     else if (a == "--grime-test") o->grimeTest = v;      // [grime]
     else if (a == "--wear-art") o->wearArt.push_back(v);  // [grime]
+    else if (a == "--tread-depth") o->treadDepth = std::max(0.0f, static_cast<float>(atof(v)));  // [treads]
     else if (a == "--unit-dirt-pace") o->unitDirtPace = std::max(0.0f, static_cast<float>(atof(v)));  // [unit dirt]
     else if (a == "--dirt-test") o->dirtTest = v, o->unitDirt = true;                                 // [unit dirt]
     else if (a == "--rain-stops") o->rainStops = static_cast<float>(atof(v));                          // [unit dirt]
@@ -1208,6 +1229,10 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     }
     else if (a == "--fx-decal-size") o->fx.decalSize = std::max(0.1f, static_cast<float>(atof(v)));
     else if (a == "--picture") o->picture = v;
+    else if (a == "--load-test") o->loadTest = v;  // [bgload]
+    else if (a == "--load-backdrop") o->loadBackdrop = atoi(v);  // [backdrop]
+    else if (a == "--load-budget") o->loadBudget = static_cast<float>(atof(v));  // [bgload]
+    else if (a == "--load-cycles") o->loadCycles = std::max(1, atoi(v));  // [bgload]
     else if (a == "--photo-cases") o->photoCases = v, o->photoTest = true;  // (photofix)
     else if (a == "--photo-test-sizes") {  // (photomode)
       o->photoTestSizes.clear();
@@ -1576,6 +1601,24 @@ int main(int argc, char** argv) {
   MountGameFiles(opt, &vfs);
   if (vfs.MountCount()) printf("render: %zu archives and folders, %zu files\n", vfs.MountCount(), vfs.FileCount());
   // --sim: the simulation itself plays the replay, on its own thread; it starts loading at once
+  if (!opt.loadTest.empty()) {  // [bgload] --load-test
+    LoadTestSetup t;
+    t.mapA = opt.map;
+    t.mapB = opt.loadTest;
+    t.width = opt.width;
+    t.height = opt.height;
+    t.vulkan = opt.vulkan;
+    t.vsync = opt.vsync;
+    t.pictures = opt.screenshot;
+    t.timeOfDay = opt.timeOfDay;
+    t.openFirst = opt.loadTestOpen;
+    t.budgetMs = opt.loadBudget;
+    t.cycles = opt.loadCycles;
+    t.settings = opt.settings;
+    t.hitchLog = opt.hitchLog;
+    t.backdrop = opt.loadBackdrop;
+    return LoadTest(vfs, t);
+  }
   if (opt.windowCycle) {  // --window-cycle
     std::string error;
     auto window = Window::Create("FA Remastered (window cycle)", opt.width, opt.height, &error, true, false);
@@ -1882,6 +1925,7 @@ int main(int argc, char** argv) {
   world.unitGrime = opt.unitGrime;  // [grime]
   world.unitDamage = opt.unitDamage;
   world.models.wearArt = opt.unitGrime || opt.unitDamage;  // (units' models take their wear art: unit_grime.h)
+  world.models.treadDepth = opt.treadDepth;                 // [treads]
   for (const std::string& p : opt.wearArt) {
     std::string id = p.substr(0, p.find('='));
     for (char& c : id) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));

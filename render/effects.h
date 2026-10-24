@@ -68,6 +68,12 @@ class Effects {
   // [scars] Whether an entity is a prop (a tree, a rock, a wreck: the world's scenery, standing or about to go): a flash
   // made on one is no explosion (Explosion). None: not known.
   std::function<bool(uint32_t)> isProp;
+  // [whitecaps] Where a unit is drawn, when the picture moves it from the game's place (a ship riding the lifted waves:
+  // ocean.h, World::RideWaves): given the unit (its blueprint's name, the frame's unit, its model) and the game's place and
+  // turn, those it is drawn at (true), so that what hangs on its bones (its bow spray, its wake's emitters) follows the hull
+  // drawn. None: the game's place.
+  std::function<bool(const std::string&, const FrameUnit&, const Model*, Vec3*, Quat*)> drawnAt;
+  bool drawnMoves = false;  // [whitecaps] (whether drawnAt is to be asked: the waves lift the sea; set each frame)
   // (buildfx) The remastered build look (build_effects.h): told of every build beam drawn and of the frame's units under
   // construction, while it is on.
   void SetBuild(BuildEffects* build) { build_ = build; }

@@ -212,7 +212,8 @@ float3 RayLitAt(float3 p, float3 n, float3 albedo, uint seed, uint mostLights) {
 
 // What a lit surface's shader starts with after the view's block: with gRayShaders, RAYS and the block above (else
 // nothing), so that lighting.h's ray-traced parts are built in.
-inline std::string RayShaders() { return gRayShaders ? std::string("#define RAYS 1\n") + kRayShaderBlock : std::string(); }
+// ([bgload] gRayShadersHere: a world opened behind the drawn one, on its own thread, by its own choice)
+inline std::string RayShaders() { return (gRayShadersHere >= 0 ? gRayShadersHere > 0 : gRayShaders) ? std::string("#define RAYS 1\n") + kRayShaderBlock : std::string(); }
 
 class MeshRenderer;
 struct MapData;

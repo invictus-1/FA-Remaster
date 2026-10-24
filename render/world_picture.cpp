@@ -3,15 +3,18 @@
 #include <algorithm>
 
 #include <atomic>
+#include <new>  // [bgload] (the beats begun afresh: SwapMap)
 #include <chrono>
 #include <cmath>
 #include <thread>
 
+#include "bg_load.h"  // [bgload]
 #include "card_memory.h"  // (photofix2)
 #include "core/vfs.h"
 #include "dds.h"  // [minimap deposits]
 #include "ground.h"
 #include "gfx.h"
+#include "hitch_log.h"  // [bgload]
 #include "photo.h"
 #include "sim/terrain.h"
 #include "sim_frames.h"
@@ -43,6 +46,9 @@ struct WorldPicture::Impl {
   bool HostShows() const { return hostWindow || hostSurface; }  // (the picture is shown in the host's window)
   int hostWidth = 0, hostHeight = 0;
   std::unique_ptr<gfx::Device> device;
+  // [bgload] the device the world shown was made with, where it was opened behind (BeginMap; null: Open made it on the
+  // device itself). Before `world`, so that it outlives it.
+  std::unique_ptr<LoadingDevice> worldDevice;
   // the host's interface over the world (SetInterfaceLayer)
   gfx::Texture layer;
   gfx::Pipeline layerPipeline;
@@ -50,6 +56,15 @@ struct WorldPicture::Impl {
   int layerMadeWidth = 0, layerMadeHeight = 0;  // (the texture's)
   const uint32_t* layerPixels = nullptr;
   int layerPitch = 0, dirtyX = 0, dirtyY = 0, dirtyW = 0, dirtyH = 0;
+  // [backdrop] the host's picture over the whole window (SetBackdrop, SetBackdropLook)
+  gfx::Texture backdrop;
+  gfx::Pipeline backdropPipeline;
+  int backdropWidth = 0, backdropHeight = 0, backdropMadeWidth = 0, backdropMadeHeight = 0, backdropPitch = 0;
+  const uint32_t* backdropPixels = nullptr;  // (a new picture to hand to the card)
+  bool backdropOn = false, backdropOverWorld = false;
+  WorldPicture::BackdropFit backdropFit = WorldPicture::BackdropFit::Stretch;
+  float backdropAlpha = 1;
+  uint32_t backdropTint = 0xFFFFFF;
   bool vsync = true;
   bool lowLatency = false;             // SetLowLatency
   bool vulkan = false;                 // SetVulkan
@@ -71,27 +86,35 @@ struct WorldPicture::Impl {
   // (the world's own switches left as they are), else off or on
   int atmosphere = -1, softShadows = -1, rayTracing = -1, weatherEffects = -1, groundDetail = -1, frameGeneration = -1;
   int hiddenOutlines = -1;             // SetHiddenOutlines (-1: the world's own, on)
+  // [bgload] the bundles' values as set now, and set on a world (also on one being opened behind on its own thread: BeginMap)
+  struct Bundles {
+    int atmosphere, softShadows, rayTracing, weatherEffects, groundDetail, frameGeneration, hiddenOutlines;
+    bool rayReflections;
+  };
+  Bundles BundlesNow() const { return {atmosphere, softShadows, rayTracing, weatherEffects, groundDetail, frameGeneration, hiddenOutlines, rayReflections}; }
   void ApplyBundles() {  // (onto the world, where there is one)
-    if (!world) return;
-    if (atmosphere >= 0) world->volumetricFog = world->volumetricClouds = world->skyTables = world->cloudZoom = world->beyondLand = atmosphere > 0;
-    if (atmosphere >= 0) world->lightShafts = world->driftingShadows = atmosphere > 0;  // [sunlight] (proposed: with the atmosphere)
-    if (softShadows >= 0) world->softShadows = world->contactShadows = softShadows > 0;
-    if (rayTracing >= 0) world->bounceLight = world->rayLightShadows = rayTracing > 0;
-    world->rayReflections = rayReflections;
-    if (weatherEffects >= 0) world->litRain = world->rainSplashes = world->waterDetail = world->unitSnow = world->unitDirt = world->surf = weatherEffects > 0;
-    if (weatherEffects >= 0) world->horizonWeather = weatherEffects > 0;  // [horizon] (proposed: with the weather effects)
-    if (weatherEffects >= 0) world->streamWater = weatherEffects > 0;  // [stream] (streams as water: with the weather effects)
-    if (groundDetail >= 0) world->groundCover = world->battleScars = world->leafLight = world->deepTracks = world->wildlife = world->plantsReact = world->groundParallax = world->remasteredTarmacs = groundDetail > 0;  // ([plants]: plantsReact; the ground parallax)
-    if (groundDetail >= 0) world->mudMask = groundDetail > 0;  // [ground mud] (with the ground detail)
-    if (groundDetail >= 0) world->markRelief = groundDetail > 0;  // [scars] (the marks' relief lit as the ground: with the ground detail)
-    if (groundDetail >= 0) world->groundMatt = groundDetail > 0;  // [leftover] (with the ground detail)
-    if (groundDetail >= 0) world->plantsFar = world->plantsRound = world->plantModels = groundDetail > 0;  // [plantlod] (with the ground detail)
-    if (weatherEffects >= 0) world->rainGround = weatherEffects > 0;  // [rain ground] (with the weather effects)
-    if (weatherEffects >= 0) world->snowGround = weatherEffects > 0;  // [snow ground] (with the weather effects)
-    if (weatherEffects >= 0) world->plantsUnderSnow = weatherEffects > 0;  // [undersnow] (with the weather effects)
-    if (weatherEffects >= 0) world->wakesRemade = weatherEffects > 0;  // [wakes] (the ships' wakes remade: with the weather effects)
-    if (frameGeneration >= 0) world->frameGeneration = frameGeneration > 0;
-    if (hiddenOutlines >= 0) world->hiddenOutlines = hiddenOutlines > 0;
+    if (world) ApplyBundlesTo(*world, BundlesNow());
+  }
+  static void ApplyBundlesTo(World& w, const Bundles& b) {
+    if (b.atmosphere >= 0) w.volumetricFog = w.volumetricClouds = w.skyTables = w.cloudZoom = w.beyondLand = b.atmosphere > 0;
+    if (b.atmosphere >= 0) w.lightShafts = w.driftingShadows = b.atmosphere > 0;  // [sunlight] (proposed: with the atmosphere)
+    if (b.softShadows >= 0) w.softShadows = w.contactShadows = b.softShadows > 0;
+    if (b.rayTracing >= 0) w.bounceLight = w.rayLightShadows = b.rayTracing > 0;
+    w.rayReflections = b.rayReflections;
+    if (b.weatherEffects >= 0) w.litRain = w.rainSplashes = w.waterDetail = w.unitSnow = w.unitDirt = w.surf = b.weatherEffects > 0;
+    if (b.weatherEffects >= 0) w.horizonWeather = b.weatherEffects > 0;  // [horizon] (proposed: with the weather effects)
+    if (b.weatherEffects >= 0) w.streamWater = b.weatherEffects > 0;  // [stream] (streams as water: with the weather effects)
+    if (b.groundDetail >= 0) w.groundCover = w.battleScars = w.leafLight = w.deepTracks = w.wildlife = w.plantsReact = w.groundParallax = w.remasteredTarmacs = b.groundDetail > 0;  // ([plants]: plantsReact; the ground parallax)
+    if (b.groundDetail >= 0) w.mudMask = b.groundDetail > 0;  // [ground mud] (with the ground detail)
+    if (b.groundDetail >= 0) w.markRelief = b.groundDetail > 0;  // [scars] (the marks' relief lit as the ground: with the ground detail)
+    if (b.groundDetail >= 0) w.groundMatt = b.groundDetail > 0;  // [leftover] (with the ground detail)
+    if (b.groundDetail >= 0) w.plantsFar = w.plantsRound = w.plantModels = b.groundDetail > 0;  // [plantlod] (with the ground detail)
+    if (b.weatherEffects >= 0) w.rainGround = b.weatherEffects > 0;  // [rain ground] (with the weather effects)
+    if (b.weatherEffects >= 0) w.snowGround = b.weatherEffects > 0;  // [snow ground] (with the weather effects)
+    if (b.weatherEffects >= 0) w.plantsUnderSnow = b.weatherEffects > 0;  // [undersnow] (with the weather effects)
+    if (b.weatherEffects >= 0) w.wakesRemade = b.weatherEffects > 0;  // [wakes] (the ships' wakes remade: with the weather effects)
+    if (b.frameGeneration >= 0) w.frameGeneration = b.frameGeneration > 0;
+    if (b.hiddenOutlines >= 0) w.hiddenOutlines = b.hiddenOutlines > 0;
   }
   Lens lens;                           // SetLens (cinecam)
   int textureDetail = 0;               // SetTextureDetail
@@ -186,8 +209,50 @@ struct WorldPicture::Impl {
   bool depthIsWindow = false;   // (the scene's depth is the main picture's, as last drawn: FocusAt reads it)
   std::unique_ptr<PhotoFocus> focus;
   void LayInterface(int width, int height);  // (the host's interface over what is in the window, DrawToWindow)
+  void LayBackdrop(int width, int height, bool worldDrawn);  // [backdrop] (under the interface, DrawToWindow)
+  // [bgload] the map being opened behind the world shown (BeginMap): its own device in front of this picture's, the
+  // world, the thread opening it, and how it went
+  struct Load {
+    std::string path;
+    std::unique_ptr<LoadingDevice> device;
+    std::unique_ptr<World> world;
+    std::thread thread;
+    std::atomic<bool> finished{false};
+    bool ok = false, cancelled = false, rays = false;
+    std::string error;
+    double began = 0, opened = 0, ready = 0;  // (steady seconds)
+    // its warm frames (WarmFrame): how many, whether done, the camera they are drawn by (SetLoadCamera; else over the
+    // map's middle), the longest of them (ms)
+    int warmFrames = 0;
+    bool warmed = false, cameraGiven = false;
+    Camera camera;
+    double warmLongestMs = 0;
+  };
+  std::unique_ptr<Load> load;
+  std::vector<std::unique_ptr<Load>> cancelled;  // (CancelMap: being opened still, let go of once open)
+  // [bgload] worlds no longer shown, being let go of on a thread of their own, then what they left on the device
+  struct Going {
+    std::unique_ptr<LoadingDevice> device;
+    std::unique_ptr<World> world;
+    std::thread thread;
+    std::atomic<bool> finished{false};
+    bool leftAsked = false;
+  };
+  std::vector<std::unique_ptr<Going>> going;
+  WorldPicture::LoadNumbers loadNumbers;  // (the last map opened behind)
+  void ServiceLoads(double budgetMs);     // [bgload] (between frames)
+  void LetGo(std::unique_ptr<World> old, std::unique_ptr<LoadingDevice> oldDevice);
+  void ForgetWorld();                     // (the picture's own of the world shown, begun afresh for another)
+  void WarmFrame(Load& l);                // (the map opened behind drawn once unseen: MapReady waits for it)
+  float loadBudgetMs = 2;                 // (WorldPicture::SetLoadBudget)
   ~Impl() {
     if (photo.worker.joinable()) photo.worker.join();
+    // [bgload] what is opening, finished (its asks done here) and let go of, with every world going, before the device goes
+    if (load) cancelled.push_back(std::move(load));
+    while (!cancelled.empty() || !going.empty()) {
+      ServiceLoads(-1);
+      if (!cancelled.empty() || !going.empty()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
   }
 };
 
@@ -278,6 +343,30 @@ float4 PS(float4 at : SV_Position) : SV_Target { return layer.Load(int3(at.xy, 0
     pd.colorFormat = gfx::Format::RGBA8;
     m.layerPipeline = m.device->CreatePipeline(pd, error);
     if (!m.layerPipeline) return false;
+    // [backdrop] the host's picture over the window: its place in the picture from the screen's (`fit`'s scale about
+    // the middle; outside it, clear), filtered, its strength and tint
+    static const char kBackdrop[] = R"hlsl(
+Texture2D picture : register(t0);
+SamplerState samplerLinearClamp : register(s1);
+cbuffer Backdrop : register(b1) {
+  float4 place;  // xy: the picture's share of the window across each way (fit); zw: 1 / the window's size
+  float4 tint;   // rgb: the colour it is multiplied by, times its strength; a: its strength
+};
+float4 VS(uint id : SV_VertexID) : SV_Position {
+  float2 p = float2((id << 1) & 2, id & 2);
+  return float4(p * float2(2, -2) + float2(-1, 1), 0, 1);
+}
+float4 PS(float4 at : SV_Position) : SV_Target {
+  float2 uv = 0.5 + (at.xy * place.zw - 0.5) * place.xy;
+  if (any(uv < 0) || any(uv > 1)) return 0;
+  return picture.SampleLevel(samplerLinearClamp, uv, 0) * tint;
+}
+)hlsl";
+    gfx::PipelineDesc bd = pd;
+    bd.name = "the host's picture over the window";
+    bd.vertexSource = bd.pixelSource = kBackdrop;
+    m.backdropPipeline = m.device->CreatePipeline(bd, error);
+    if (!m.backdropPipeline) return false;
   }
   // (in the host's window with no map: no world at all, only the interface shown - the menu's)
   if (m.HostShows() && mapPath.empty()) return true;
@@ -293,6 +382,260 @@ float4 PS(float4 at : SV_Position) : SV_Target { return layer.Load(int3(at.xy, 0
   return true;
 }
 
+// --- [bgload] a map opened behind the one shown ---
+
+bool WorldPicture::BeginMap(const std::string& mapPath, std::function<void(World&)> before) {
+  Impl& m = *impl_;
+  if (!m.device || !m.vfs || m.load || mapPath.empty()) return false;
+  auto load = std::make_unique<Impl::Load>();
+  load->path = mapPath;
+  load->began = SteadySeconds();
+  // (its surfaces' shaders built to trace rays as Open would build them now; the world shown keeps its own: gRayShadersHere)
+  load->rays = (m.rayReflections || m.rayTracing > 0) && m.device->RayTracing();
+  load->device = std::make_unique<LoadingDevice>(m.device.get());
+  Impl::Load* l = load.get();
+  // (all of it on the loading thread, the world's making too: its parts' making took half a second on the frames' thread;
+  // `before` there as well; the picture's settings as they are now)
+  l->thread = std::thread([l, vfs = m.vfs, detail = m.textureDetail, season = m.season, bundles = m.BundlesNow(), before = std::move(before)] {
+    gRayShadersHere = l->rays ? 1 : 0;
+    l->world = std::make_unique<World>(l->device.get(), vfs);
+    World& w = *l->world;
+    w.textures.detail = detail;
+    w.season = season;
+    Impl::ApplyBundlesTo(w, bundles);  // (the lighting options, as set when it was begun)
+    if (before) before(w);
+    std::string error;
+    l->ok = w.Open(l->path, World::Options{}, &error);
+    l->error = std::move(error);
+    l->opened = SteadySeconds();
+    l->finished.store(true, std::memory_order_release);
+  });
+  m.load = std::move(load);
+  return true;
+}
+
+bool WorldPicture::MapReady() const {
+  const Impl& m = *impl_;
+  const Impl::Load* l = m.load.get();
+  return l && !l->cancelled && l->finished.load(std::memory_order_acquire) && l->ok && l->warmed && !l->device->Waiting() &&
+         m.device->BackgroundPipelinesWaiting() == 0;
+}
+
+bool WorldPicture::MapFailed(std::string* error) const {
+  const Impl::Load* l = impl_->load.get();
+  if (!l || !l->finished.load(std::memory_order_acquire) || l->ok) return false;
+  if (error) *error = l->error;
+  return true;
+}
+
+void WorldPicture::CancelMap() {
+  Impl& m = *impl_;
+  if (!m.load) return;
+  m.load->cancelled = true;
+  m.cancelled.push_back(std::move(m.load));  // (let go of by ServiceLoads once its opening is done; another may begin now)
+}
+
+void WorldPicture::SetLoadBudget(float ms) { impl_->loadBudgetMs = std::max(ms, 0.0f); }
+
+WorldPicture::LoadNumbers WorldPicture::LastLoadNumbers() const { return impl_->loadNumbers; }
+
+bool WorldPicture::SwapMap() {
+  Impl& m = *impl_;
+  if (!MapReady() || m.photo.on) return false;
+  if (m.prepared) {  // (a frame LifeBarAnchors began for the next Draw: ended unseen; that Draw prepares the new world's)
+    m.device->EndFrame(nullptr, false);
+    m.prepared = false;
+  }
+  std::unique_ptr<Impl::Load> load = std::move(m.load);
+  load->thread.join();
+  if (!load->ready) load->ready = SteadySeconds();
+  const LoadingDevice::Numbers n = load->device->TakeNumbers();
+  m.loadNumbers.openSeconds = load->opened - load->began;
+  m.loadNumbers.readySeconds = load->ready - load->began;
+  m.loadNumbers.asks = n.asks;
+  m.loadNumbers.longestServiceMs = n.longestMs;
+  m.loadNumbers.serviceMs = n.totalMs;
+  m.loadNumbers.warmFrames = load->warmFrames;
+  m.loadNumbers.warmLongestMs = load->warmLongestMs;
+  std::unique_ptr<World> old = std::move(m.world);
+  std::unique_ptr<LoadingDevice> oldDevice = std::move(m.worldDevice);
+  m.world = std::move(load->world);
+  m.worldDevice = std::move(load->device);
+  m.worldDevice->Live();
+  gRayShaders = load->rays;  // (the frames' thread's, for the world shown now: World::Begin, what it builds later)
+  World& w = *m.world;
+  if (old) {  // the world's switches WorldPicture sets, as they were
+    w.lifeBars = old->lifeBars;
+    w.workBars = old->workBars;
+    w.unexplored = old->unexplored;
+    w.iconsOn = old->iconsOn;
+    w.selectionMarks = old->selectionMarks;
+    w.orders.lineScale = old->orders.lineScale;
+    w.orders.curveSmoothness = old->orders.curveSmoothness;
+    w.orders.curveSegments = old->orders.curveSegments;
+    w.orders.markMinPixels = old->orders.markMinPixels;
+    w.orders.markMaxPixels = old->orders.markMaxPixels;
+  }
+  m.ApplyBundles();  // (as set now: they may have changed while it opened)
+  w.lens = m.lens;
+  m.ForgetWorld();
+  m.LetGo(std::move(old), std::move(oldDevice));
+  return true;
+}
+
+void WorldPicture::SetLoadCamera(const Camera& camera) {
+  if (!impl_->load) return;
+  impl_->load->camera = camera;
+  impl_->load->cameraGiven = true;
+}
+
+// The map opened behind drawn once, unseen, between two frames of the world shown: into the device's photo picture at
+// the window's size, as a photo is (World::photo: nothing of the window's frames before or after touched, no frame
+// generation), by the camera it will first be shown by, with the picture's settings as its frames will have them. What
+// its first frame makes is made here (the ground cover's and the ground's pictures, the shadows' maps, ...); its pipelines
+// are asked for in the background and what they draw left out meanwhile (LoadingDevice::SetWarming), and it is drawn
+// again once they are made, until a warm frame asks for none and finds all made (at most 8). Then it is ready.
+void WorldPicture::Impl::WarmFrame(Load& l) {
+  World& w = *l.world;
+  const int width = device->Width(), height = device->Height();
+  const double t0 = SteadySeconds();
+  if (!device->SetPhotoWindow(width, height)) {  // (the device cannot: shown unwarmed)
+    l.warmed = true;
+    return;
+  }
+  Camera camera = l.camera;
+  if (!l.cameraGiven) {  // (over the map's middle, as a game's camera starts)
+    camera = Camera{};
+    camera.target = {static_cast<float>(w.map.width) * 0.5f, 0, static_cast<float>(w.map.height) * 0.5f};
+    camera.target.y = w.GroundHeight(camera.target.x, camera.target.z);
+    camera.distance = std::max(60.0f, 0.35f * static_cast<float>(std::min(w.map.width, w.map.height)));
+  }
+  // (the picture's settings, as PrepareWorld gives them to the world shown)
+  ApplyBundlesTo(w, BundlesNow());
+  w.focusArmy = focusArmy > 0 ? focusArmy - 1 : -1;
+  w.alliedArmies = allies;
+  w.lifeBarsOnEnemies = lifeBarsOnEnemies;
+  w.effectsLook = remasteredEffects ? World::EffectsLook::Remastered : World::EffectsLook::Original;
+  w.effectsQuality = effectsQuality;
+  w.upscale = upscale;
+  w.temporalUpscale = temporalUpscale;
+  w.lens = lens;
+  if (dayStart >= 0) {
+    w.timeOfDay = dayStart;
+    w.weatherAuto = weather;
+  }
+  l.device->SetWarming(true);
+  w.photo = true;
+  const float clear[4] = {0.05f, 0.06f, 0.08f, 1};
+  device->BeginFrame(clear);
+  w.Begin(camera, width, height, 0, 0);
+  w.Render();
+  device->EndFrame(nullptr, false);
+  w.photo = false;
+  w.cameraCut = true;  // (its first frame shown keeps nothing of these)
+  l.device->SetWarming(false);
+  int asked = 0, notMade = 0;
+  l.device->TakeWarmth(&asked, &notMade);
+  ++l.warmFrames;
+  l.warmed = (asked == 0 && notMade == 0) || l.warmFrames >= 8;
+  device->SetPhotoWindow(l.warmed ? -1 : 0, l.warmed ? -1 : 0);  // (its picture let go of after the last)
+  depthIsWindow = false;  // (the scene's depth there is the warm frame's: FocusAt reads the world shown's)
+  l.warmLongestMs = std::max(l.warmLongestMs, (SteadySeconds() - t0) * 1000.0);
+}
+
+// The picture's own of the world shown, begun afresh for another (SwapMap).
+void WorldPicture::Impl::ForgetWorld() {
+  frames.~SimFrames();  // (the beats of the game before: none; it holds a lock, so it is made anew in its place)
+  new (&frames) SimFrames();
+  frames.SetFocusArmy(focusArmy);
+  if (world) frames.SetSightGrid(static_cast<float>(world->map.width), static_cast<float>(world->map.height));
+  frame = Frame{};
+  events.clear();
+  simArmyColors.clear();
+  armyColors.clear();
+  lastTick = 0;
+  mapGround.clear();
+  mapPixels.clear();
+  mapWidth = mapHeight = 0;
+  mapHour = mapWeather = -100;
+  std::fill(mapRect, mapRect + 4, 0.0f);
+  seen.clear();
+  seenCells = 0;
+  iconKinds.clear();  // (the old world's icons')
+  depthIsWindow = false;
+  lightKnown = false;
+  lightSteady = 0;
+}
+
+// A world no longer shown: one opened behind (its own device in front) destroyed on a thread of its own, what it asks of
+// the device done between frames (ServiceLoads), then what it left there let go of; one Open made, here and now, as when
+// a picture went.
+void WorldPicture::Impl::LetGo(std::unique_ptr<World> old, std::unique_ptr<LoadingDevice> oldDevice) {
+  if (!old) return;
+  if (!oldDevice) {
+    old.reset();
+    return;
+  }
+  oldDevice->Leave();
+  auto g = std::make_unique<Going>();
+  g->device = std::move(oldDevice);
+  g->world = std::move(old);
+  Going* p = g.get();
+  p->thread = std::thread([p] {
+    p->world.reset();
+    p->finished.store(true, std::memory_order_release);
+  });
+  going.push_back(std::move(g));
+}
+
+// Between frames (after EndFrame): what the map opening behind and the worlds being let go of ask of the frames' thread,
+// for at most `budgetMs` (negative: all there is now); a map not wanted, let go of once it is open; a world gone, what it
+// left on the device let go of, and then its device.
+void WorldPicture::Impl::ServiceLoads(double budgetMs) {
+  if (!load && cancelled.empty() && going.empty()) return;
+  HitchLog::Scope noted("what a map opening behind (or a world going) asked of the frames' thread");  // [hitches]
+  const bool unbounded = budgetMs < 0;
+  double left = budgetMs;
+  auto share = [&] { return unbounded ? -1.0 : std::max(left, 0.0); };
+  if (load) {
+    left -= load->device->Service(share());
+    // open: drawn once or twice unseen (warm frames, one a frame at most), once the pipelines it has asked for are made
+    if (load->finished.load(std::memory_order_acquire) && load->ok && !load->warmed && !unbounded && !load->device->Waiting() && !photo.on &&
+        !prepared && device->BackgroundPipelinesWaiting() == 0)
+      WarmFrame(*load);
+    if (load->finished.load(std::memory_order_acquire) && !load->ready && load->ok && load->warmed && !load->device->Waiting() &&
+        device->BackgroundPipelinesWaiting() == 0)
+      load->ready = SteadySeconds();
+  }
+  for (size_t i = 0; i < cancelled.size();) {  // (maps not wanted: their opening finished, then let go of)
+    Load& c = *cancelled[i];
+    if (!unbounded && left <= 0 && c.device->Waiting()) break;
+    left -= c.device->Service(share());
+    if (c.finished.load(std::memory_order_acquire)) {
+      c.thread.join();
+      LetGo(std::move(c.world), std::move(c.device));
+      cancelled.erase(cancelled.begin() + static_cast<std::ptrdiff_t>(i));
+      continue;
+    }
+    ++i;
+  }
+  for (size_t i = 0; i < going.size();) {
+    Going& g = *going[i];
+    if (!unbounded && left <= 0 && g.device->Waiting()) break;  // (the next frame's turn; one ask a frame went to the map above)
+    left -= g.device->Service(share());
+    if (!g.leftAsked && g.finished.load(std::memory_order_acquire)) {
+      g.thread.join();
+      g.device->DestroyLeft();
+      g.leftAsked = true;
+    }
+    if (g.leftAsked && !g.device->Waiting()) {
+      going.erase(going.begin() + static_cast<std::ptrdiff_t>(i));
+      continue;
+    }
+    ++i;
+  }
+}
+
 void WorldPicture::GameStarted(const moho::Sim& sim) { impl_->frames.ReadArmies(sim, *impl_->vfs); }
 
 void WorldPicture::Beat(const moho::Sim& sim) { impl_->frames.Beat(sim); }
@@ -303,10 +646,12 @@ const std::vector<uint32_t>& WorldPicture::Draw(const Camera& camera, int width,
   height = std::max(height, 16);
   if (!m.world) {
     m.pixels.assign(static_cast<size_t>(width) * static_cast<size_t>(height), 0xff000000u);
+    m.ServiceLoads(m.loadBudgetMs);  // [bgload]
     return m.pixels;
   }
   if (m.photo.on) {  // (photomode) a frame of the photo being made; the world held as last drawn
     PhotoStep();
+    m.ServiceLoads(m.loadBudgetMs);  // [bgload]
     return m.pixels;
   }
   RenderWorld(camera, width, height, tick);
@@ -320,6 +665,7 @@ const std::vector<uint32_t>& WorldPicture::Draw(const Camera& camera, int width,
   const size_t count = std::min(m.pixels.size(), m.capture.size() / 4);
   const uint8_t* p = m.capture.data();
   for (size_t i = 0; i < count; ++i, p += 4) m.pixels[i] = 0xff000000u | static_cast<uint32_t>(p[0]) << 16 | static_cast<uint32_t>(p[1]) << 8 | p[2];
+  m.ServiceLoads(m.loadBudgetMs);  // [bgload] (what a map opening behind asks of this thread, between frames)
   return m.pixels;
 }
 
@@ -410,6 +756,7 @@ void WorldPicture::DrawToWindow(const Camera& camera, int width, int height, dou
       PhotoStep();
     }
     ShowHeld(width, height);
+    m.ServiceLoads(m.loadBudgetMs);  // [bgload]
     return;
   }
   if (m.world) {
@@ -420,11 +767,13 @@ void WorldPicture::DrawToWindow(const Camera& camera, int width, int height, dou
     const float black[4] = {0, 0, 0, 1};
     m.device->BeginFrame(black);
   }
+  m.LayBackdrop(width, height, m.world && m.worldShown);  // [backdrop]
   m.LayInterface(width, height);
   const auto ending = std::chrono::steady_clock::now();
   m.device->EndFrame(m.checkCapture, true);
   m.checkCapture = nullptr;
   if (m.world) TakeStats(std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - ending).count());
+  m.ServiceLoads(m.loadBudgetMs);  // [bgload] (what a map opening behind asks of this thread, between frames)
 }
 
 // The host's interface over what is in the window: its texture made anew at a new size, and what has changed in it
@@ -467,6 +816,67 @@ void WorldPicture::Impl::LayInterface(int width, int height) {
 }
 
 void WorldPicture::CaptureNextWindowFrame(std::vector<uint8_t>* out) { impl_->checkCapture = out; }
+
+void WorldPicture::SetBackdrop(const uint32_t* pixels, int width, int height, int pitch, BackdropFit fit, bool overWorld) {
+  Impl& m = *impl_;
+  m.backdropOn = pixels && width > 0 && height > 0;
+  m.backdropPixels = m.backdropOn ? pixels : nullptr;
+  m.backdropWidth = width;
+  m.backdropHeight = height;
+  m.backdropPitch = pitch > 0 ? pitch : width;
+  m.backdropFit = fit;
+  m.backdropOverWorld = overWorld;
+}
+
+void WorldPicture::SetBackdropLook(float alpha, uint32_t tint) {
+  impl_->backdropAlpha = std::clamp(alpha, 0.0f, 1.0f);
+  impl_->backdropTint = tint;
+}
+
+// [backdrop] The host's picture over the window (SetBackdrop): a new one handed to the card (its texture made anew at a
+// new size), then drawn where it is to be seen.
+void WorldPicture::Impl::LayBackdrop(int width, int height, bool worldDrawn) {
+  Impl& m = *this;
+  if (!m.backdropOn || !m.backdropPipeline) return;
+  if (m.backdropPixels) {
+    if (!m.backdrop || m.backdropMadeWidth != m.backdropWidth || m.backdropMadeHeight != m.backdropHeight) {
+      if (m.backdrop) m.device->Destroy(m.backdrop);
+      gfx::TextureDesc td;
+      td.width = m.backdropWidth;
+      td.height = m.backdropHeight;
+      td.format = gfx::Format::BGRA8;  // (0xAARRGGBB as bytes in memory: blue, green, red, alpha)
+      std::vector<uint32_t> rows;  // (the rows packed, where the host's are further apart)
+      if (m.backdropPitch != m.backdropWidth) {
+        rows.resize(static_cast<size_t>(m.backdropWidth) * static_cast<size_t>(m.backdropHeight));
+        for (int y = 0; y < m.backdropHeight; ++y)
+          std::copy_n(m.backdropPixels + static_cast<size_t>(y) * static_cast<size_t>(m.backdropPitch), m.backdropWidth,
+                      rows.data() + static_cast<size_t>(y) * static_cast<size_t>(m.backdropWidth));
+      }
+      td.data = rows.empty() ? static_cast<const void*>(m.backdropPixels) : rows.data();
+      td.dataSize = static_cast<size_t>(m.backdropWidth) * static_cast<size_t>(m.backdropHeight) * 4;
+      m.backdrop = m.device->CreateTexture(td);
+      m.backdropMadeWidth = m.backdropWidth;
+      m.backdropMadeHeight = m.backdropHeight;
+    } else {
+      m.device->UpdateTexture(m.backdrop, 0, 0, m.backdropWidth, m.backdropHeight, m.backdropPixels, static_cast<uint32_t>(m.backdropPitch) * 4);
+    }
+    m.backdropPixels = nullptr;
+  }
+  if (!m.backdrop || (worldDrawn && !m.backdropOverWorld) || m.backdropAlpha <= 0) return;
+  // (fit: the picture's share of the window across each way, about the middle; k = the window's shape / the picture's)
+  const float k = (static_cast<float>(width) / static_cast<float>(height)) / (static_cast<float>(m.backdropWidth) / static_cast<float>(m.backdropHeight));
+  float sx = 1, sy = 1;
+  if (m.backdropFit == WorldPicture::BackdropFit::Cover) (k < 1 ? sx : sy) = k < 1 ? k : 1 / k;
+  else if (m.backdropFit == WorldPicture::BackdropFit::Contain) (k < 1 ? sy : sx) = k < 1 ? 1 / k : k;
+  const float a = m.backdropAlpha;
+  const float constants[8] = {sx, sy, 1.0f / static_cast<float>(width), 1.0f / static_cast<float>(height),
+                              static_cast<float>((m.backdropTint >> 16) & 255) / 255 * a, static_cast<float>((m.backdropTint >> 8) & 255) / 255 * a,
+                              static_cast<float>(m.backdropTint & 255) / 255 * a, a};
+  m.device->SetPipeline(m.backdropPipeline);
+  m.device->SetConstants(1, constants, sizeof constants);
+  m.device->SetTexture(0, m.backdrop);
+  m.device->Draw(3);
+}
 
 // The world as `camera` sees it into the device's frame (begun here, ended by the caller).
 void WorldPicture::LifeBarAnchors(const Camera& camera, int width, int height, double tick, std::vector<LifeBarAnchor>* out) {

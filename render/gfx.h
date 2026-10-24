@@ -285,6 +285,15 @@ class Device {
   // once, as outside these.
   virtual void BeginBackgroundPipelines() {}
   virtual void EndBackgroundPipelines() {}
+  // [bgload] The pipelines asked for in the background that the device's own thread has not made yet (queued, or being
+  // made): a world opened behind the one drawn is ready when none of its are left (WorldPicture::MapReady). Any thread.
+  virtual int BackgroundPipelinesWaiting() { return 0; }
+  // [bgload] Whether a pipeline is made: one asked for in the background and not made yet by the device's own thread is
+  // not (setting it would wait for it, or make it then); any other is. The frames' thread.
+  virtual bool PipelineReady(Pipeline pipeline) {
+    (void)pipeline;
+    return true;
+  }
   // [spikes] A texture, or a static buffer, made in two halves, so that what takes time is off the frames' thread:
   // PrepareTexture / PrepareBuffer may be called on ANY thread (a worker's: TextureCache::MakeAhead, ModelCache's meshes
   // made ahead) and do the slow part - Direct3D 12: the texture's resource made and its images copied into an upload

@@ -73,9 +73,12 @@ struct ModelLod {
   // texture (red: reflection, green: highlight, blue: glow, alpha: team colour mask), which the
   // modern lighting has to translate.
   bool labPbr = false;
-  // its texture's treads scroll (the mesh blueprint's Scrolling; never on a remastered mesh, whose
-  // texture is laid out its own way)
+  // its texture's treads scroll (the mesh blueprint's Scrolling; on a remastered mesh, whose texture is laid out its own
+  // way, only where its folder says so: <file>_treads.bp, Treads { Scrolling = true })
   bool scrolling = false;
+  // [treads] world units a groove of its treads is deep, where its albedo's alpha holds their height on the strips that
+  // scroll (a remastered mesh's Treads { Height = true }; ModelCache::treadDepth; 0: none): the eye looks into the grooves
+  float treadDepth = 0;
   bool plainMaterial = false;  // a remastered level without that texture: rough, no metal, no glow
   float cutoff = 0;        // the blueprint's LODCutoff: the distance the ORIGINAL game uses this level up to.
                            // This renderer chooses levels by size on screen instead (mesh_renderer.h).
@@ -303,6 +306,9 @@ class ModelCache {
   // damage/<ID>_damage_albedo.dds and _normal.dds: the visuals session's trial layout; the viewer's --wear-art).
   bool wearArt = false;
   std::vector<std::string> wearArtTrial;
+  // [treads] Remastered units' models loaded while this is above 0 look into their treads' grooves where their folder
+  // gives the treads' height (ModelLod::treadDepth: this many world units deep; the viewer's --tread-depth).
+  float treadDepth = 0;
   // [unit lamps] Every remastered unit's lamps this many times the strength its list gives each (1; the viewer's
   // --lamp-scale, set before models are made: to try a factor before a unit's list is changed, docs/render-unit-lights.md).
   float lampScale = 1;

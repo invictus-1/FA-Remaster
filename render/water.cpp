@@ -385,6 +385,10 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
     if (oceanLook.w < 1.5) return float4(saturate(ocean.slope * 4 + 0.5), 0, 1);
     if (oceanLook.w < 2.5) return float4(saturate(ocean.foam), saturate(ocean.foam), saturate(ocean.foam) * 0.5 + 0.2, 1);
     if (oceanLook.w < 3.5) return float4(saturate(sqrt(ocean.spread.xy) * 5), 0, 1);
+    if (oceanLook.w > 5.5) {  // ([whitecaps] 6: the whitecaps' parts, red the crest, green the fresh foam, blue the residue)
+      OceanCaps c = OceanWhitecapsParts(ocean, xz, ddx(xz), ddy(xz), Lace(xz, grain));
+      return float4(c.crest, c.laid, c.residue, 1);
+    }
     if (oceanLook.w > 4.5) {  // (5: the Jacobian, red where it folds below the foam's threshold, green 1 .. black 0)
       float J = (1 + ocean.fold.x) * (1 + ocean.fold.y) - ocean.fold.z * ocean.fold.z;
       return float4(J < oceanLook3.x ? 1 : 0, saturate(J - 0.5), 0, 1);
@@ -615,21 +619,9 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   foam = saturate(foam + rippleFoam * smoothstep(0.35, 0.7, lace) * 0.35);
 #endif
 #if OCEAN
-  // [ocean] the whitecaps where the waves fold, and the foam they leave drifting downwind in streaks (the ocean's foam
-  // field), broken up by the lace: thick and white where fresh, thinning to lace as it fades
-  {
-    // (streaks: noise drawn out five times along the wind, of two sizes, each left at its mean where finer than about two
-    // pixels, laid over the lace)
-    float2 way = oceanWind.xy, q = float2(dot(xz, float2(-way.y, way.x)), dot(xz, way));
-    float2 shownStreak = saturate(1.5 - grain * float2(2.2, 5.3) * 2);
-    float streak = lerp(0.5, CloudNoise(float3(q.x * 2.2, q.y * 0.44, 1.7)), shownStreak.x) * 0.6 +
-                   lerp(0.5, CloudNoise(float3(q.x * 5.3, q.y * 1.06, 4.1)), shownStreak.y) * 0.4;
-    float pattern = lerp(lace, streak, 0.6);
-    // (fresh, thick foam white all over; as it fades, only the streaks' ridges)
-    float white = ocean.foam * oceanLook.z;
-    float caps = smoothstep(0.87 - white * 0.6, 0.96 - white * 0.6, pattern + 0.25) * saturate(white * 2);
-    foam = saturate(foam + caps * 0.9);
-  }
+  // [ocean] the whitecaps where the waves fold, and the foam they leave drifting downwind ([whitecaps] ocean.h,
+  // OceanWhitecaps: the crest's hard edge, the fresh foam, the residue torn into streaks and lace; laid over below)
+  float2 caps = OceanWhitecaps(ocean, xz, ddx(xz), ddy(xz), lace);
 #endif
 #if SURF
   // [surf] its white water, broken by the lace; thinned where something stands in it higher than the map's ground (a
@@ -643,6 +635,17 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   color = lerp(color, ice.albedo * (light + lamps), ice.cover);
 #else
   color = lerp(color, (light + lamps) * 0.85, foam * 0.94);
+#endif
+#if OCEAN
+  // [whitecaps] (white where fresh, greyer as it ages; nothing mirrored and no glint where it lies). Lit as the matt white it
+  // is, by the whole of the sun on the wave's face under it (the water's own light takes the sun at 0.6: its body
+  // scatters less of it back), so that a crest's side toward the sun stands out bright and its lee side greyer.
+  {
+    float3 face = normalize(float3(-ocean.slope.x, 1, -ocean.slope.y));
+    float3 capsLight = skyLight + sunLight * (saturate(dot(face, sunDirection)) * shadow) + lamps;
+    color = lerp(color, capsLight * caps.y, caps.x);
+  }
+  foam = 1 - (1 - foam) * (1 - caps.x);
 #endif
   color += lamps * 0.35;
   color += light * (rings * 0.04);

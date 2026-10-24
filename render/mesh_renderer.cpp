@@ -103,7 +103,8 @@ cbuffer MeshKind : register(b3) {
                 // often its texture repeats, how fast it slides, from what age it fades)
   float4 kind5; // x: 1 = the Cybran's highlight lookup is there; y: 1 = the Seraphim's mirror ramp is there;
                 // w: 1 = the visuals track's lattice for this faction's personal shields is there (shieldPatterns)
-  float4 kind6; // x: 1 = its texture's treads scroll (ModelLod::scrolling: the original's anim.w); y: 1 = no glow in the
+  float4 kind6; // x: 1 = its texture's treads scroll (ModelLod::scrolling: the original's anim.w), 2 + d: and its albedo's
+                // alpha holds their height there, d world units deep (ModelLod::treadDepth); y: 1 = no glow in the
                 // frame's alpha (ModelLod::rgbOnly: the original writes its colour alone); z: what sways, a group of
                 // trees: model units a step of where each tree stands (ModelLod::treeStep; 0: none); w: the scene's
                 // samples a pixel (NearFade)
@@ -362,6 +363,40 @@ bool PlantsBurntAway(float4 albedo, float3 shape, float4 burnt) {
 }
 #endif
 
+// [treads] Where a remastered unit's treads lie on the strips at the foot of its texture with their height in its albedo's
+// alpha (1 the surface, 0 a groove's floor; ModelLod::treadDepth), the eye looks into their grooves: the ray from the eye
+// walked down into the height (a step every 2 texels the shift crosses, 4 to 32, then between the last two), the texture's
+// place shifted to where it meets it. The surface's frame from the screen's derivatives (g: the texture place's, dp1 and
+// dp2: the world place's), so that any layout of the strips reads right; the shift kept inside the strip the pixel is on.
+// `depth`: world units a groove.
+// Gives the shift (xy) and how far down the ray went (z: 0 the surface, 1 a groove's floor; walls and floors darker).
+float3 TreadShift(float2 uv, float4 g, float3 dp1, float3 dp2, float3 N, float3 toCamera, float depth) {
+  float3 p2 = cross(dp2, N), p1 = cross(N, dp1);
+  float det = dot(N, cross(dp1, dp2));
+  float vn = dot(toCamera, N);
+  if (abs(det) < 1e-14 || vn < 0.05) return float3(0, 0, 1 - albedoMap.SampleGrad(samplerAniso, uv, g.xy, g.zw).a);
+  float3 gu = (p2 * g.x + p1 * g.z) / det, gv = (p2 * g.y + p1 * g.w) / det;  // (u's and v's gradients over the surface)
+  float3 walk = -(toCamera - N * vn) / max(vn, 0.25) * depth;  // (along the surface, down to a groove's floor)
+  float2 full = float2(dot(gu, walk), dot(gv, walk));
+  float lo = uv.y > 0.95 ? 0.95 : 0.90;
+  float2 band = float2(lo + 0.0005, lo + 0.0495);
+  full.y = clamp(uv.y + full.y, band.x, band.y) - uv.y;
+  float2 size;
+  albedoMap.GetDimensions(size.x, size.y);
+  const float steps = clamp(ceil(length(full * size) * 0.5), 4, 32);
+  float d = 0, below = 1 - albedoMap.SampleGrad(samplerAniso, uv, g.xy, g.zw).a;
+  float lastD = 0, lastBelow = below;
+  [loop] for (int k = 0; k < 32 && k < steps && d < below; ++k) {
+    lastD = d;
+    lastBelow = below;
+    d += 1 / steps;
+    below = 1 - albedoMap.SampleGrad(samplerAniso, uv + full * d, g.xy, g.zw).a;
+  }
+  float over = lastBelow - lastD, under = d - below;  // (the ray above the height at the last step, below it at this one)
+  float reached = lerp(lastD, d, saturate(over / max(over + under, 1e-5)));
+  return float3(full * reached, reached);
+}
+
 // shadow maps: depth only, with foliage's holes (and nothing where a unit is not built yet)
 void ShadowPS(VOut i) {
   if (kind.x > 0) clip(albedoMap.Sample(samplerLinear, i.uv.xy).a - kind.x);
@@ -576,10 +611,33 @@ float4 Shade(VOut i, bool front) {
     float3 light = lerp(float3(0.08, 0.42, 0.95), float3(0.45, 0.8, 1.0), wire) * (falling.w > 0 ? falling.w : 1);
     return float4(look > 0.5 ? light * (0.6 + 1.2 * wire) : light, saturate(0.28 * cloud + 0.35 * wire));
   }
-  float4 albedo = albedoMap.Sample(samplerAniso, i.uv.xy);
-  float2 nxy = normalsMap.Sample(samplerAniso, i.uv.zw).ga * 2 - 1;
-  float4 spec = specularMap.Sample(samplerAniso, i.uv.xy);
-  float4 secondary = secondaryMap.Sample(samplerAniso, i.uv.xy);  // [grime] (all of it: a unit's masks, unit_grime.h)
+  float4 albedo, spec, secondary;
+  float2 nxy;
+  float2 treadShift = 0;
+  float treadDown = 0;
+  [branch] if (kind6.x > 1.5 && look > 0.5) {  // [treads] (the whole draw's: a remastered unit's treads with their height)
+    float4 g = float4(ddx(i.uv.xy), ddy(i.uv.xy));
+    float3 dp1 = ddx(i.world), dp2 = ddy(i.world);
+    [branch] if (i.uv.y > 0.90) {
+      float3 t = TreadShift(i.uv.xy, g, dp1, dp2, normalize(i.normal), normalize(cameraPosition - i.world), kind6.x - 2);
+      treadShift = t.xy;
+      treadDown = t.z;
+    }
+    i.uv += treadShift.xyxy;
+    albedo = albedoMap.SampleGrad(samplerAniso, i.uv.xy, g.xy, g.zw);
+    nxy = normalsMap.SampleGrad(samplerAniso, i.uv.zw, g.xy, g.zw).ga * 2 - 1;
+    spec = specularMap.SampleGrad(samplerAniso, i.uv.xy, g.xy, g.zw);
+    secondary = secondaryMap.SampleGrad(samplerAniso, i.uv.xy, g.xy, g.zw);
+    if (i.uv.y > 0.90) {
+      albedo.a = 1;  // (its height, not a hole or a glow)
+      albedo.rgb *= 1 - 0.6 * treadDown;  // (down in a groove, less light reaches: its walls and floor darker)
+    }
+  } else {
+    albedo = albedoMap.Sample(samplerAniso, i.uv.xy);
+    nxy = normalsMap.Sample(samplerAniso, i.uv.zw).ga * 2 - 1;
+    spec = specularMap.Sample(samplerAniso, i.uv.xy);
+    secondary = secondaryMap.Sample(samplerAniso, i.uv.xy);  // [grime] (all of it: a unit's masks, unit_grime.h)
+  }
   float occlusion = secondary.r;
   if (kind2.z > 0.5) spec = float4(0, 0.85, 0, kind2.y > 0.5 ? 0.35 : 0);  // rough, no metal; leaves let some light through
   // holes: cut where the alpha is not above the mark; leaves get a soft edge a pixel wide instead,
@@ -789,7 +847,7 @@ float4 Shade(VOut i, bool front) {
     // [grime] battle grime, weather dirt and visible damage (unit_grime.h; World::unitGrime, unitDamage): its rows after its
     // marks and its dirt's (a half in the wear's y says they are there); its masks in its secondary texture where its level
     // has them (a quarter in kind5.z), where the dirt's fresh mud lies too
-    float4 grimeGrad = float4(ddx(i.uv.xy), ddy(i.uv.xy));
+    float4 grimeGrad = float4(ddx(i.uv.xy - treadShift), ddy(i.uv.xy - treadShift));  // ([treads] the surface's own, unshifted)
     grimeSplash = GrimeHasMasks(kind5.z) ? secondary.a : -1;
     [branch] if (frac(i.wear.y) > 0.4 && i.wear.x >= 0 && !building && kind4.x < 0.5 && kind2.w < 0.5 && kind.y < 0.5)
       GrimeSurface(boneRows, (uint)(i.wear.x + 0.5) + (uint)i.wear.y * 3 + (frac(i.wear.y * 2) > 0.1 ? 3 : 0), i.uv.xy, grimeGrad, secondary, kind5.z,
@@ -1891,7 +1949,7 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
     kind[18] += (lod->wearMasks ? 0.25f : 0.0f) + (lod->damageAlbedo ? 0.5f : 0.0f);  // [grime] (its wear art: unit_grime.h)
     kind[17] = haveSeraphimFalloff_ ? 1.0f : 0.0f;
     kind[19] = !shadowPass && lod->faction >= 0 && lod->faction < 4 && shieldPatternOf_[lod->faction] ? 1.0f : 0.0f;
-    kind[20] = lod->scrolling ? 1.0f : 0.0f;
+    kind[20] = lod->scrolling ? (lod->treadDepth > 0 ? 2 + lod->treadDepth : 1.0f) : 0.0f;  // [treads] (2 + their grooves' depth)
     kind[21] = lod->rgbOnly ? 1.0f : 0.0f;
     kind[22] = lod->sway > 0 ? lod->treeStep : 0.0f;  // [foliage] (a group's trees, each on its own beat)
     kind[23] = static_cast<float>(gSceneSamples);     // [foliage] (NearFade: leaves fade by their coverage)

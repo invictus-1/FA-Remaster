@@ -8,6 +8,7 @@
 #include "core/vfs.h"
 #include "effect_files.h"
 #include "lighting.h"
+#include "ocean.h"
 #include "ray_scene.h"
 
 namespace render {
@@ -188,7 +189,11 @@ float4 PS(VOut i) : SV_Target {
     if (under != (i.options.z > 4.5)) discard;
     if (under) {
       float3 ray = world - cameraPosition;
+#if RIDE
+      world = OceanRideRest(cameraPosition, normalize(ray));  // [whitecaps] (on the lifted waves: where it rests on the still water)
+#else
       world = cameraPosition + ray * ((mapInfo.w - cameraPosition.y) / min(ray.y, -1e-4));
+#endif
     }
   }
   float3 d = world - i.centre.xyz;
@@ -279,10 +284,12 @@ float4 PS(VOut i) : SV_Target {
 
 // The decals' shader source ([scars] `relief`: with the normal decals lit as Decals::modernRelief says; [decalsnow] `snow`:
 // with the snow ground's, Decals::snowGround).
-std::string DecalSource(bool relief, bool snow = false) {
+std::string DecalSource(bool relief, bool snow = false, bool ride = false) {
   // (how much of the lying snow a mark takes is the mark's own: see `snowLying`)
+  // ([whitecaps] ride: the pictures on the water laid on the lifted waves, ocean.h's kOceanRideShaderBlock)
   return std::string(snow ? "#define DECAL_SNOW_GROUND 1\n" : "") + (relief ? "#define MODERN_RELIEF 1\n" : "") + (gSceneSamples > 1 ? "#define MSAA 1\n" : "") + "static float markSnow = 1;\n#define SURFACE_SNOW markSnow\n" +
-         kViewShaderBlock + RayShaders() + kLightingShaderBlock + HotMetal::ShaderBlock() + kShaderHead + kMarkSnowLying + kShaderTail;  // (RayShaders: the small lights' shadows by rays; hot metal: hot_metal.h)
+         (ride ? "#define RIDE 1\n" : "") + kViewShaderBlock + (ride ? kOceanRideShaderBlock : "") + RayShaders() + kLightingShaderBlock + HotMetal::ShaderBlock() +
+         kShaderHead + kMarkSnowLying + kShaderTail;  // (RayShaders: the small lights' shadows by rays; hot metal: hot_metal.h)
 }
 
 // [scars] Whether a DDS picture's blue channel holds anything: the game's normal decals keep it empty (x in alpha, y in
@@ -792,6 +799,31 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
   // ([padsnow] the pads lay it as the marks do: Tarmacs::snowShelter)
   tarmacs.snowShelter = snowNow ? snowGround.shelter : gfx::Texture{};
   if (snowNow) std::copy(snowConstants + 16, snowConstants + 28, tarmacs.snow);
+  // [whitecaps] the pictures on the water, on the lifted waves (World::oceanLift): their pipeline that rides them (made the
+  // first time it is wanted)
+  bool riding = false;
+  if (overWater && ride) {
+    if (!rideTried_) {
+      rideTried_ = true;
+      const std::string source = DecalSource(false, false, true);
+      gfx::PipelineDesc pd;
+      pd.name = "decals on the water, riding the waves";
+      pd.vertexSource = pd.pixelSource = source;
+      pd.attrs = {{"POSITION", 0, gfx::AttrType::Float3, 0}};
+      pd.stride = 12;
+      pd.cull = gfx::Cull::Front;
+      pd.depthTest = pd.depthWrite = false;
+      pd.depthTarget = false;
+      pd.blend = gfx::Blend::Alpha;
+      pd.colorFormat = kSceneFormat;
+      pd.samples = gSceneSamples;
+      pd.alphaWrite = false;
+      std::string error;
+      waterRide_ = device_->CreatePipeline(pd, &error);
+      if (!waterRide_) fprintf(stderr, "render: the pictures on the water cannot ride the waves (%s)\n", error.c_str());
+    }
+    riding = waterRide_.id != 0;
+  }
   int bound = -1;
   bool padsDone = !padsNow;  // [tarmac] (the pads drawn after the map's own pictures, before what was laid since)
   auto drawPads = [&]() {
@@ -814,7 +846,11 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
       // (marks blend as pictures do; [scars] relief; [decalsnow] the snow ground's)
       const bool snowBound = kind == 1 ? normalsSnow : kind != 2 && kind != 5 && picturesSnow;
       device_->SetPipeline(kind == 5 ? hot_ : kind == 2 ? lights_ : kind == 1 ? (modernNormals ? (normalsSnow ? normalsModernSnow_ : normalsModern_) : normals_)
-                                                                             : picturesSnow ? picturesSnow_ : pipeline_);
+                           : riding ? waterRide_ : picturesSnow ? picturesSnow_ : pipeline_);
+      if (riding) {  // [whitecaps] (the lifted waves' field and constants)
+        device_->SetConstants(3, ride->RideConstants(), ride->RideConstantsSize());
+        ride->BindRide();
+      }
       device_->SetConstants(0, &view.constants, sizeof view.constants);
       if (snowBound) device_->SetConstants(1, snowConstants, sizeof snowConstants);
       else device_->SetConstants(1, cameraConstants, sizeof cameraConstants);
@@ -834,6 +870,7 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
   }
   if (!padsDone) drawPads();
   if (snowNow) device_->SetTexture(6, {});  // [decalsnow]
+  if (riding) ride->UnbindRide();  // [whitecaps]
 }
 
 }  // namespace render

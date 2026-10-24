@@ -63,11 +63,12 @@ cbuffer Ocean : register(b2) {
   float4 oceanLook;        // x the glint's least spread of slopes (squared); y the glow through the crests; z the foam's strength; w a view for checking
   float4 oceanLook2;       // x the sea's significant height (world units); y the foam far off (a share); z the slopes' tilt times (from above: twice); w [lift] 1 = the surface lifted
   float4 oceanLook3;       // x the Jacobian below which the surface foams; y the glint's strength (1)
+  float4 oceanLook4;       // [whitecaps] xy how far the foam has drifted (world units, within 4096: its pattern drifts with it)
 };
 Texture2D oceanSlope[3] : register(t10);  // the slopes along x and z, and their squares (mip levels: their means)
 Texture2D oceanDisp[3] : register(t13);   // the sideways shift along x, the height, the shift along z; w the slopes' product
 Texture2D oceanFold[3] : register(t16);   // the shift's derivatives: d shift x / dx, d shift z / dz, d shift x / dz
-Texture2D<float> oceanFoam : register(t19);  // the foam's field
+Texture2D<float2> oceanFoam : register(t19);  // the foam's field ([whitecaps] x how much, y how fresh)
 #if LIFT
 // [lift] The grid (Ocean::DrawGrid): its patches and the levels of detail.
 cbuffer OceanGrid : register(b3) {
@@ -113,6 +114,7 @@ struct OceanHere {
   float2 shift;     // the surface's sideways shift
   float3 fold;      // the shift's derivatives (xx, zz, xz)
   float foam;       // the foam's field here (0 none .. 1 and more)
+  float fresh;      // [whitecaps] how fresh that foam is (0 old .. 1 its crest breaking now)
 };
 
 // The sea at a place (world x, z) for a pixel whose footprint is dxdx, dxdy (the place's change across the pixel, ddx and
@@ -136,15 +138,16 @@ OceanHere OceanAt(float2 xz, float2 dxdx, float2 dxdy, float calm, float tilt) {
     o.spread += float3(max(s.z - s.x * s.x, 0), max(s.w - s.y * s.y, 0), d.w - s.x * s.y) * (shown * shown * tilt * tilt);
     o.height += d.y * shown;
     o.shift += d.xz * shown;
-    // (the shift's derivatives only for the view for checking the Jacobian, 5: the foam's field has what they make)
-    [branch] if (oceanLook.w > 4.5) o.fold += oceanFold[c].SampleGrad(samplerAniso, uv, gx, gy).xyz * shown;
+    // ([whitecaps] the shift's derivatives: the crests breaking now, where the surface folds at this pixel)
+    o.fold += oceanFold[c].SampleGrad(samplerAniso, uv, gx, gy).xyz * shown;
   }
   // the foam: the field's where it lies (fading out toward its edges), beyond it the sea's mean share of white
   float2 at = (xz - oceanFoamArea.xy) * oceanFoamArea.z;
   float2 inside = min(at, 1 - at);
   float there = saturate(min(inside.x, inside.y) * 12);
-  float field = there > 0 ? oceanFoam.SampleLevel(samplerLinearClamp, at, 0) : 0;
-  o.foam = lerp(oceanLook2.y, field, there) * calm;
+  float2 field = there > 0 ? oceanFoam.SampleLevel(samplerLinearClamp, at, 0) : 0;
+  o.foam = lerp(oceanLook2.y, field.x, there) * calm;
+  o.fresh = field.y * there;
   return o;
 }
 
@@ -173,6 +176,74 @@ float OceanGlint(float3 V, float3 L, float2 slope, float3 spread) {
   float ll = al < 1.6 ? (1 - 1.259 * al + 0.396 * al * al) / (3.535 * al + 2.181 * al * al) : 0;
   float G = 1 / (1 + lv + ll);
   return min(3.14159 * p * F * G / (4 * h2 * h2 * V.y), 60);
+}
+
+// [whitecaps] The whitecaps on the sea at a place (world x, z, its footprint dxdx, dxdy as OceanAt's) from what OceanAt read
+// there and the foam's lace (water.cpp, Lace): x how much of the pixel is white, y how bright that foam is (times the light
+// on the water). Three parts, as a breaking sea has them:
+// - the crest breaking now: where the surface folds at the pixel itself (its Jacobian, from the field's derivatives at the
+//   pixel's footprint), a hard edge along the crest's line, torn by the pattern below; solid white;
+// - the fresh foam it has just laid (the field's y, fading within a second): solid but for the pattern's deepest gaps;
+// - the residue (the field's x, fading over seconds): the pattern cut at a level that rises as the foam thins, so that the
+//   patch tears into streaks along the wind and thins into lace, greyer and more see-through the older it is.
+// The pattern: ridged noise of three sizes drawn out five times along the wind (filaments 0.13 .. 0.9 world units across),
+// drifting with the foam, over the lace. Each size finer than about a pixel and a half is left at its mean, and the cut is
+// softened by as much as the sizes left out would vary: there a pixel shows the share of white its footprint holds, as a
+// photograph's would, never a white smear nor salted points (far off and from high up the foam lies dim and grey).
+// (the parts, also for the view for checking, 6: OceanWhitecapsParts)
+struct OceanCaps {
+  float crest;    // the crest breaking now (0..1 of the pixel)
+  float laid;     // the fresh foam
+  float residue;  // the residue
+  float young;    // how fresh the foam is (0 old .. 1 breaking now)
+  float thick;    // how far inside its patch the pixel lies (0 at its torn edge .. 1 its thick middle)
+};
+OceanCaps OceanWhitecapsParts(OceanHere o, float2 xz, float2 dxdx, float2 dxdy, float lace) {
+  OceanCaps caps;
+  float2 way = oceanWind.xy;
+  float2 p = xz - oceanLook4.xy;  // (drifting with the foam's field)
+  float2 q = float2(dot(p, float2(-way.y, way.x)), dot(p, way));  // across the wind, along it
+  float grain = max(length(dxdx), length(dxdy));
+  const float3 size = float3(1.1, 2.9, 7.7);  // (cycles a world unit across the wind; a fifth of that along it)
+  const float3 weight = float3(0.45, 0.33, 0.22);
+  float3 shown = saturate(1.5 - grain * size * 2);
+  float3 ridge = 0.73;  // (the ridges' mean)
+  [unroll] for (int k = 0; k < 3; ++k) {  // (no branch: the cut's softness reads the pattern's change across pixels)
+    float n = CloudNoise(float3(q.x * size[k], q.y * size[k] * 0.2, 2.3 + 3.1 * k));
+    ridge[k] = lerp(0.73, 1 - abs(2 * n - 1), shown[k]);
+  }
+  // (spread to a mean of a half and a deviation of 0.2: the sum's own are about 0.66 and 0.083, from a model of the noise)
+  float pattern = (dot(ridge, weight) * 0.7 + lace * 0.3 - 0.66) * 2.4 + 0.5;
+  // (how much the pattern would vary that does not show at this pixel: the cut softened by it)
+  float hidden = 0.2 * sqrt(dot(weight * weight, 1 - shown * shown) / 0.357);
+  float soft = max(max(fwidth(pattern) * 0.8, hidden * 2), 0.012);
+  float strength = oceanLook.z;
+  float cover = o.foam * strength, fresh = saturate(o.fresh * strength);
+  // (the share of white about the foam's own share there: the cut at that share of the pattern's spread; none where there
+  // is no foam)
+  // (the residue never all white: holes in it even where it lies thick, lace as it thins; the fresh foam nearly whole)
+  float overResidue = pattern - (0.9 - 0.65 * saturate(cover * 2.2)), overLaid = pattern - (0.9 - 0.72 * saturate(fresh * 1.6));
+  caps.residue = smoothstep(-soft, soft, overResidue) * saturate(cover * 6);
+  caps.laid = smoothstep(-soft, soft, overLaid) * saturate(fresh * 6);
+  caps.thick = saturate(max(overResidue, overLaid) / max(0.45, soft * 2));
+  // (the crest: the fold's edge torn by the pattern, cut as sharply as the pixel allows; only where the field lays foam
+  // now, so that the short waves' folds finer than its cells do not salt the sea with white points)
+  // (a hard edge: no grey half-white where the fold is shallow)
+  float J = (1 + o.fold.x) * (1 + o.fold.y) - o.fold.z * o.fold.z + (pattern - 0.5) * 0.2;
+  caps.crest = saturate((oceanLook3.x + 0.03 - J) / max(fwidth(J), 0.004) + 0.5) * smoothstep(0.1, 0.35, fresh);
+  caps.young = max(caps.crest, fresh);
+  return caps;
+}
+float2 OceanWhitecaps(OceanHere o, float2 xz, float2 dxdx, float2 dxdy, float lace) {
+  OceanCaps c = OceanWhitecapsParts(o, xz, dxdx, dxdy, lace);
+  // (thin at a patch's torn edge, the water showing through, thick and brighter in its middle; the residue thinner,
+  // see-through and grey; far off and from high up all of it dimmer and less, so that the units on the sea read over it:
+  // from a pixel of some 0.06 world units on, to half by 0.26)
+  float far = saturate((max(length(dxdx), length(dxdy)) - 0.06) / 0.2);
+  float body = lerp(0.6, 1, c.thick);
+  float white = max(max(c.crest, c.laid * body), c.residue * body * lerp(0.8, 1, c.young)) * lerp(1, 0.5, far);
+  float bright = lerp(0.5, 0.95, c.young) * lerp(0.8, 1.05, max(c.thick, c.crest));
+  return float2(white, bright * lerp(1, 0.75, far));
 }
 )hlsl";
 
@@ -205,6 +276,21 @@ float3 OceanRide(float3 world) {
   }
   return world + shift * share;
 }
+// [whitecaps] Where a line of sight from `eye` along `dir` (looking down) meets the lifted surface, as the place on the still
+// water whose lifted point it is: what lies on the water (Decals::AddWater's pictures) is read there and so rides the waves
+// as the water's own foam does. (The place found again from the lift there three times: the lift changes slowly over a
+// place, and its shift is small against the waves' lengths.)
+float3 OceanRideRest(float3 eye, float3 dir) {
+  float level = rideMap.w;
+  float down = min(dir.y, -1e-4);
+  float2 rest = eye.xz + dir.xz * ((level - eye.y) / down);
+  [unroll] for (int k = 0; k < 3; ++k) {
+    float3 at = float3(rest.x, level, rest.y);
+    float3 moved = OceanRide(at) - at;
+    rest = eye.xz + dir.xz * ((level + moved.y - eye.y) / down) - moved.xz;
+  }
+  return float3(rest.x, level, rest.y);
+}
 )hlsl";
 
 class Ocean {
@@ -235,12 +321,19 @@ class Ocean {
   void Unbind();
   // Makes the compute pipelines and the targets, the first time; whether they are there.
   bool Ready();
+  // [whitecaps] Makes (asks for) the compute pipelines alone, the first time (World::PrepareAhead: on the device's own thread
+  // while the ocean is off, so that switching it on never waits for the driver); whether they are there.
+  bool PreparePipelines();
 
   // [lift] Waves that lift the surface (World::oceanLift: set each frame before Update). Lifted(): the water draws the grid
   // this frame (its pipeline built with LIFT): DrawGrid binds the grid's buffers, constants (b3) and the ground's heights
   // (t20) and draws its patches, the water's pipeline and its other constants and textures set.
   bool lift = false;
   bool Lifted() const { return active_ && lift && !nodes_.empty(); }
+  // [whitecaps] Whether what floats rides the waves this frame (BobAt answers): from the frame's Begin on (Lifted() is only
+  // known from Update on, and the units are drawn, the effects moved and the debris moved before it: they asked Lifted() and
+  // were always told no, so nothing bobbed), the long waves those of the frame before.
+  bool Riding() const { return on_ && !side_ && lift && haveWater_ && !bobNow_.empty(); }
   void DrawGrid();
   int Patches() const { return static_cast<int>(nodes_.size()); }
   // [lift] For what is drawn on the water after it (kOceanRideShaderBlock): its constants (b3) and its textures bound.
@@ -265,7 +358,7 @@ class Ocean {
   // shows of the waves).
   float tilt = 1.5f;
   // A view for checking (viewer --ocean-view n): the water shows 1 the slopes (red x, green z), 2 the foam field, 3 the
-  // slopes' spread, 4 the height (red up, blue down); 0 off.
+  // slopes' spread, 4 the height (red up, blue down), 5 the Jacobian, 6 [whitecaps] the whitecaps' parts; 0 off.
   int view = 0;
 
   // The sea as it is now, for the log: how rough (eased), its significant wave height, the peak's length, the foam field's
@@ -290,6 +383,7 @@ class Ocean {
     float look[4];
     float look2[4];
     float look3[4];
+    float look4[4];  // [whitecaps]
   };
   void Spectrum();  // the spectrum's numbers for this frame, from rough_ and the wind (sim_)
   // [lift] The grid's patches for this view (the quadtree walked from its root, farthest first), and the ordering of a
@@ -304,6 +398,8 @@ class Ocean {
   bool haveWater_ = false;
   float level_ = 0;
   bool tried_ = false, made_ = false;
+  bool pipesTried_ = false;  // [whitecaps] (PreparePipelines)
+  std::string pipesError_;
   gfx::Pipeline rows_, columns_, mipsNear_, mipsFar_, foam_;
   gfx::Texture rowOut_[kCascades][2];   // the row pass's four complex sums (two a texel), RGBA32F
   gfx::Texture base_[kCascades][3];     // the column pass's slope, shift and fold (no levels)
@@ -317,6 +413,7 @@ class Ocean {
   float wind_[2] = {0.915f, 0.403f};
   float foamCell_ = 0;
   int foamX_ = 0, foamZ_ = 0;
+  double driftX_ = 0, driftZ_ = 0;  // [whitecaps] how far the foam has drifted since the field began (world units)
   float foamArea_[4] = {0, 0, 0, 0};
   float sim_[16] = {};  // (the compute passes' spectrum numbers: Spectrum)
   double seaAlpha_ = 0, swellAlpha_ = 0, wp_ = 1;
@@ -346,9 +443,24 @@ class Ocean {
   // when the sea changed (keptRough_, keptWind_)
   struct BobWave {
     float kx, kz, w;
-    float a0r, a0i, a1r, a1i;  // h0(k) and conj(h0(-k))
+    float a0r, a0i, a1r, a1i;  // h0(k) and conj(h0(-k)), without their amplitudes
+    float amp = 0, ampOpp = 0;  // [whitecaps] their amplitudes (as the sea's numbers were in ampSim_)
+    int square = 0;
   };
   std::vector<BobWave> bobWaves_;
+  // [whitecaps] the set chosen again a few rows of candidates a frame (KeepBobWaves), from the sea's numbers as they were
+  struct BobPick {
+    struct Candidate {
+      float energy;
+      int c, n, m;
+    };
+    bool running = false;
+    float sim[16] = {};
+    std::vector<Candidate> found;
+    int square = 0, row = 0;
+  };
+  BobPick pick_;
+  float ampSim_[16] = {};
   struct BobNow {
     float kx, kz, hr, hi;  // the wave now: h(k, t)
   };
