@@ -282,6 +282,17 @@ class RayScene {
   uint32_t nextColour_ = 0;
   std::vector<gfx::SceneInstance> instances_;
   std::vector<uint32_t> info_;  // four for each instance (InstanceData)
+  // [mcrec] Build's models found on several threads, a piece of MeshRenderer's list each (ForEachAddedIn): each its level and
+  // where it stands (its level's record none where the level is seen the first time: made after, in the list's order);
+  // where each piece's instances begin
+  struct Seen {
+    const ModelLod* lod;
+    const Level* level;
+    const float *row0, *row1, *row2, *color;
+    bool scenery;
+  };
+  std::vector<std::vector<Seen>> seen_;
+  std::vector<size_t> seenAt_;
 };
 
 }  // namespace render

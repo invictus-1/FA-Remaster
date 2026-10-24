@@ -242,6 +242,22 @@ struct DeviceDesc {
   bool oldShaderCompiler = false;
 };
 
+// [mcrec] Draws recorded on another thread (Device::BeginParallel): a recorder takes the draw calls alone, with the same
+// meanings as the device's own below. Everything else (passes, dispatches, marks, buffers' and textures' updates, what
+// is made or let go of) stays with the device, on the frames' thread.
+class Recorder {
+ public:
+  virtual ~Recorder() = default;
+  virtual void SetPipeline(Pipeline pipeline) = 0;  // (a drawing pipeline; a compute one is passed over)
+  virtual void SetConstants(int slot, const void* data, uint32_t size) = 0;
+  virtual void SetTexture(int slot, Texture texture) = 0;
+  virtual void SetVertexBuffer(Buffer buffer) = 0;
+  virtual void SetIndexBuffer(Buffer buffer) = 0;
+  virtual void SetShaderBuffer(Buffer buffer, int slot = 0) = 0;
+  virtual void Draw(uint32_t vertexCount, uint32_t firstVertex = 0, uint32_t instances = 1) = 0;
+  virtual void DrawIndexed(uint32_t indexCount, uint32_t firstIndex = 0, int32_t baseVertex = 0, uint32_t instances = 1) = 0;
+};
+
 class Device {
  public:
   static std::unique_ptr<Device> Create(const DeviceDesc& desc, std::string* error);
@@ -453,6 +469,27 @@ class Device {
     (void)used;
     return false;
   }
+  // [mcrec] A pass's draws recorded on several threads at once (Recorder above). Within a pass (after BeginFrame or
+  // BeginPass, before the next pass, Resolve or Dispatch), BeginParallel(n) hands out n recorders (n from 1 to
+  // ParallelRecorders()), each set up as the device is set now (its drawing pipeline, constants, textures, shader buffers,
+  // vertex and index buffers, the pass's targets); Parallel(i) is the i-th, which one thread at a time records into (all n
+  // at once, on n threads). EndParallel puts what they recorded into the frame in their order, 0 to n-1, after what the
+  // device recorded before BeginParallel and before what it records after, and leaves the device set as the last recorder
+  // left it (what that one set; the rest as before BeginParallel). Between the two nothing else of the device is called.
+  // The picture is the one the same calls made on the device one after the other give, where each recorder's draws set
+  // all they read beyond what was set before BeginParallel (each recorder starts from that, not from where the one before
+  // it ended). ParallelRecorders 0 (this default): the device cannot; BeginParallel is then false, and the caller draws on
+  // the device itself.
+  virtual int ParallelRecorders() const { return 0; }
+  virtual bool BeginParallel(int count) {
+    (void)count;
+    return false;
+  }
+  virtual Recorder* Parallel(int index) {
+    (void)index;
+    return nullptr;
+  }
+  virtual void EndParallel() {}
   // The draw calls of the last frame ended (EndFrame).
   int DrawCallsLastFrame() const { return drawsLast_; }
 

@@ -82,6 +82,7 @@
 #include "plants.h"  // [plants]
 #include "ranges.h"
 #include "wakes.h"
+#include "hull_wash.h"  // [hulls]
 #include "water.h"
 #include "wildlife.h"
 
@@ -138,7 +139,13 @@ class World {
   // icon (null: none), which the outline gives way to as it comes in with the distance.
   void MarkOutline(const Model* model, Vec3 position, Vec3 color, bool building, uint32_t id, const StrategicIcons::Kind* kind);
   // [whitecaps] Where a unit floating at `position` turned `orientation` is drawn on the lifted waves ([lift] BobAt; world.cpp).
-  bool RideWaves(const Model* model, Vec3* position, Quat* orientation) const;
+  // [hulls] A ship (its place at the water's level itself, not a hover unit above it) sits a little down in the sea, as deep as
+  // a hull of its beam draws (RideWaves' own comment); `rode`: the bob it rode, `sunk`: how far it was sunk (null: not told).
+  bool RideWaves(const Model* model, Vec3* position, Quat* orientation, Ocean::Bob* rode = nullptr, float* sunk = nullptr) const;
+  // [hulls] A ship RideWaves sank into the lifted sea, listed for where the waves meet its hull (Ocean::AddHull: the water's
+  // white wash round it and the hull under the surface hidden; hull_wash.h): `id` the same from frame to frame (its speed is
+  // worked out from where it was), its model, its place and turn in the game (not the drawn ones), the bob it rode.
+  void ListHull(uint32_t id, const Model* model, Vec3 position, const Quat& orientation, const Ocean::Bob& rode);
   // The unit under the mouse, marked with brackets of a kind: 1 the player's own or an ally's,
   // 2 an enemy's, 3 anyone else's; 0: none. (A selected unit has its own brackets.)
   uint32_t hover = 0xffffffffu;
@@ -813,6 +820,15 @@ class World {
   DeepTracks trackField;  // deep tracks (deepTracks): the field of where the ground is pressed
   PlantLife plantLife;    // [plants] (plantsReact) where the plants are pressed and burnt
   Wakes wakes;            // the foam behind what moves on the water
+  HullWash hullWash;      // [hulls] the waves meeting the ships' hulls on the lifted sea (hull_wash.h)
+  // [hulls] (ListHull's: each hull's place and clock of the frame before, its speed eased, the frame it was last listed)
+  struct HullSeen {
+    Vec3 place;
+    double clock = -1;
+    float speed = 0;
+    uint32_t stamp = 0;
+  };
+  std::unordered_map<uint32_t, HullSeen> hullsSeen_;
   Ranges ranges;          // range rings, each group as one outline (set ranges.groups)
   PlacedMeshes placedDraw;  // what of `placed` is not an ordinary lit model
   OrderLines orders;        // the order lines while Shift is held (order_lines.h: the host sets orders.legs, marks)

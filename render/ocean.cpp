@@ -448,6 +448,7 @@ bool Ocean::Ready() {
 void Ocean::Begin(double time, bool on, bool side, float rough, const float wind[2]) {
   side_ = side;
   active_ = false;
+  hulls_.clear();  // [hulls] (listed anew each frame: AddHull)
   if (side) return;  // (a picture for something else: the field as it is)
   if (!on || !haveWater_) {
     on_ = false;
@@ -635,6 +636,22 @@ void Ocean::Update(const Camera& camera, const View& view, gfx::Texture heights,
   constants_.look4[1] = static_cast<float>(std::fmod(driftZ_, kDriftRepeat));
   constants_.look4[2] = 0;
   constants_.look4[3] = 0;
+  // [hulls] the hulls nearest the eye (AddHull), for where the waves meet them
+  hullCount_ = 0;
+  if (lift && !hulls_.empty()) {
+    const Vec3 eye = camera.Eye();
+    for (Hull& h : hulls_) h.away = (h.x - eye.x) * (h.x - eye.x) + (h.z - eye.z) * (h.z - eye.z);
+    const size_t kept = std::min(hulls_.size(), static_cast<size_t>(kHulls));
+    std::partial_sort(hulls_.begin(), hulls_.begin() + kept, hulls_.end(), [](const Hull& a, const Hull& b) { return a.away < b.away; });
+    for (size_t i = 0; i < kept; ++i) {
+      const Hull& h = hulls_[i];
+      float* row = constants_.hulls[i * 3];  // (its three rows, one after the other)
+      const float rows[12] = {h.x, h.z, h.fx, h.fz, h.halfLength, h.halfBeam, h.speed, 0, h.waterline, h.slopeX, h.slopeZ, 0};
+      std::memcpy(row, rows, sizeof rows);
+    }
+    hullCount_ = static_cast<int>(kept);
+  }
+  constants_.look4[2] = static_cast<float>(hullCount_);
   active_ = true;
   // [lift] the grid's patches for this view, and the long waves the processor keeps for what floats
   if (lift && MakeGrid()) {
@@ -948,6 +965,12 @@ void Ocean::KeepBobWaves() {
     const float h0r = b.a0r * b.amp, h0i = b.a0i * b.amp, h1r = b.a1r * b.ampOpp, h1i = b.a1i * b.ampOpp;
     bobNow_[i] = {b.kx, b.kz, h0r * ce - h0i * se + h1r * ce + h1i * se, h0r * se + h0i * ce + h1i * ce - h1r * se};
   }
+}
+
+void Ocean::AddHull(float x, float z, float forwardX, float forwardZ, float halfLength, float halfBeam, float speed, const Bob& bob) {
+  const float l = std::sqrt(forwardX * forwardX + forwardZ * forwardZ);
+  if (!Riding() || l < 1e-5f || halfLength <= 0 || halfBeam <= 0) return;
+  hulls_.push_back({x, z, forwardX / l, forwardZ / l, halfLength, halfBeam, speed, level_ + bob.rise, bob.slopeX, bob.slopeZ, 0});
 }
 
 bool Ocean::BobAt(float x, float z, float size, Bob* out) const {

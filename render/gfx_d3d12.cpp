@@ -265,6 +265,17 @@ struct FrameSlot {
   std::vector<Com<IUnknown>> garbage;
   std::vector<std::array<uint64_t, 3>> freedRanges;  // static buffers let go of: block, offset, size
   std::vector<const char*> marks;  // the stages whose times this frame's queries take
+  // [mcrec] recording on several threads (Device::BeginParallel): the allocators of the frame's further lists (its own
+  // list again after each parallel section, and the recorders'), taken in turn each frame; each recorder's pages of
+  // upload memory and its texture sets (by the recorder's number)
+  std::vector<Com<ID3D12CommandAllocator>> moreAllocators;
+  size_t moreUsed = 0;
+  struct RecorderRoom {
+    std::vector<Page> pages;
+    size_t page = 0, offset = 0;
+    std::unordered_map<TableKey, uint32_t, TableHash> tables;
+  };
+  std::vector<RecorderRoom> recorders;
 };
 
 // Static buffers are cut from large blocks (making a resource of their own for each was most of a
@@ -356,8 +367,58 @@ class D3D12Device final : public Device {
   bool SetLatencyLimiter(bool on) override;
   bool LatencyLimiter() const override { return latency_; }
   void WaitForNextFrame() override;
+  // [mcrec] recording on several threads (gfx.h)
+  int ParallelRecorders() const override { return kMostRecorders; }
+  bool BeginParallel(int count) override;
+  Recorder* Parallel(int index) override;
+  void EndParallel() override;
 
  private:
+  // [mcrec] Recording on several threads. The frame's commands are then several lists, handed to the card together in
+  // their order at EndFrame (order_): the frame's own list up to a parallel section, each recorder's list, the frame's
+  // own list again (one of moreLists_, set up as the last recorder left things), and so on. A recorder records into a list
+  // of its own, with its own pages of upload memory for its constants and its own texture sets in the frame's share of
+  // the shader-visible heap (taken from the share by `parallelDescriptors_`, as many recorders may take at once).
+  static constexpr int kMostRecorders = 16;
+  static constexpr size_t kRecorderPageSize = 2u << 20;
+  // What the draws are given, as a list has it set now: the frame's own (the device's) or a recorder's.
+  struct DrawSet {
+    ID3D12PipelineState* pipeline = nullptr;  // (kept alive by the record or by Retire until the frame is done)
+    bool compute = false;
+    D3D_PRIMITIVE_TOPOLOGY topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    D3D12_GPU_VIRTUAL_ADDRESS constants[kCbSlots] = {}, buffers[2] = {};
+    TableKey textures;
+    bool vertices = false, indices = false;
+    D3D12_VERTEX_BUFFER_VIEW vertexView{};
+    D3D12_INDEX_BUFFER_VIEW indexView{};
+  };
+  class ParallelRecorder;
+  std::vector<std::unique_ptr<ParallelRecorder>> recorders_;
+  std::vector<Com<ID3D12GraphicsCommandList>> moreLists_;   // (lists may be reset once handed over: shared by the slots)
+  std::vector<Com<ID3D12GraphicsCommandList4>> moreLists4_;  // (the same, for ray tracing's builds)
+  size_t moreListsUsed_ = 0;
+  Com<ID3D12GraphicsCommandList> firstList_;
+  Com<ID3D12GraphicsCommandList4> firstList4_;
+  std::vector<ID3D12CommandList*> order_;
+  int parallel_ = 0;  // recorders handed out by BeginParallel (0: none)
+  std::atomic<uint32_t> parallelDescriptors_{0};
+  std::mutex parallelMutex_;  // (a pipeline not made yet that a recorder sets: made under it)
+  std::atomic<bool> warnedParallel_{false};
+  ID3D12GraphicsCommandList* afterList_ = nullptr;  // (the frame's own list after the section under way, made ready)
+  ID3D12GraphicsCommandList4* afterList4_ = nullptr;
+  D3D12_GPU_DESCRIPTOR_HANDLE RecorderTable(int index, const TableKey& key);
+  // what the frame's own list has set besides the draws' state (the pass's targets and viewport), and what it has set of
+  // the draws' (the pipeline, the vertex and index buffers), to set again on a list after a section
+  UINT targetCount_ = 0;
+  D3D12_CPU_DESCRIPTOR_HANDLE targetRtv_{}, targetDsv_{};
+  bool targetDepth_ = false;
+  int viewportWidth_ = 0, viewportHeight_ = 0;
+  DrawSet set_;  // (its pipeline, topology, vertex and index views; the rest is in constantsAt_, buffersAt_, boundTextures_)
+  void SetTargets(UINT count, const D3D12_CPU_DESCRIPTOR_HANDLE* rtv, const D3D12_CPU_DESCRIPTOR_HANDLE* dsv);
+  bool NextList(ID3D12GraphicsCommandList** list, ID3D12GraphicsCommandList4** list4);
+  void SetUp(ID3D12GraphicsCommandList* list, const DrawSet& s);
+  Span AllocateIn(std::vector<Page>& pages, size_t& page, size_t& offset, size_t pageSize, size_t size, size_t align);
+
   // (photomode) SetPhotoWindow: the picture and the depth a frame draws its window into while it is on, their size;
   // binding them as the window's pass (BeginFrame, BeginPass)
   Texture photoColor_, photoDepth_;
@@ -656,6 +717,109 @@ class D3D12Device final : public Device {
   LatencyCost cost_;  // (the measure's: what the limiter's own work and waits took)
 };
 
+// [mcrec] Recording on several threads (gfx.h, BeginParallel). A recorder: the device's draw calls into a list of its own,
+// with what they set kept in a DrawSet of its own (as the device keeps its own in constantsAt_, buffersAt_, boundTextures_
+// and set_), its constants in pages of its own and its texture sets in the frame's share of the heap.
+class D3D12Device::ParallelRecorder final : public Recorder {
+ public:
+  ParallelRecorder(D3D12Device* device, int index) : d_(device), index_(index) {}
+  void Start(ID3D12GraphicsCommandList* list, const DrawSet& set) {
+    list_ = list;
+    set_ = set;
+    dirty_ = true;
+    draws_ = 0;
+  }
+  void SetPipeline(Pipeline pipeline) override {
+    ID3D12PipelineState* state = nullptr;
+    D3D_PRIMITIVE_TOPOLOGY topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    {  // (one not made yet is made here, as the device's own SetPipeline makes it: the pipelines' records under the lock)
+      std::lock_guard<std::mutex> lock(d_->parallelMutex_);
+      PipelineRec* rec = d_->Find(pipeline);
+      if (rec && rec->pending) {
+        std::string why;
+        if (!d_->Realize(pipeline.id - 1, &why) && d_->batchError_.empty()) d_->batchError_ = why;
+        rec = d_->Find(pipeline);
+      }
+      if (rec && rec->background) {
+        d_->TakeBackground(pipeline.id - 1);
+        rec = d_->Find(pipeline);
+      }
+      if (!rec || !rec->state || rec->compute) return;
+      state = rec->state.Get();
+      topology = rec->topology;
+    }
+    list_->SetPipelineState(state);
+    list_->IASetPrimitiveTopology(topology);
+    set_.pipeline = state;
+    set_.compute = false;
+    set_.topology = topology;
+  }
+  void SetConstants(int slot, const void* data, uint32_t size) override {
+    if (slot < 0 || slot >= kCbSlots || !size) return;
+    const uint32_t padded = (size + 255u) & ~255u;
+    FrameSlot::RecorderRoom& room = d_->frames_[d_->cur_].recorders[static_cast<size_t>(index_)];
+    const Span s = d_->AllocateIn(room.pages, room.page, room.offset, kRecorderPageSize, padded, 256);
+    if (!s.cpu) return;
+    std::memcpy(s.cpu, data, size);
+    list_->SetGraphicsRootConstantBufferView(static_cast<UINT>(slot), s.gpu);
+    set_.constants[slot] = s.gpu;
+  }
+  void SetTexture(int slot, Texture texture) override {
+    if (slot < 0 || slot >= kTexSlots) return;
+    const uint32_t id = d_->Find(texture) ? texture.id : 0;
+    if (set_.textures.t[static_cast<size_t>(slot)] == id) return;
+    set_.textures.t[static_cast<size_t>(slot)] = id;
+    dirty_ = true;
+  }
+  void SetVertexBuffer(Buffer buffer) override {
+    const BufferRec* rec = d_->Find(buffer);
+    if (!rec || rec->kind != BufferKind::Vertex || (rec->dynamic && rec->frame != d_->frameNumber_)) return;
+    const D3D12_VERTEX_BUFFER_VIEW view = {rec->gpu, rec->size, rec->stride};
+    list_->IASetVertexBuffers(0, 1, &view);
+    set_.vertices = true;
+    set_.vertexView = view;
+  }
+  void SetIndexBuffer(Buffer buffer) override {
+    const BufferRec* rec = d_->Find(buffer);
+    if (!rec || rec->kind != BufferKind::Index || (rec->dynamic && rec->frame != d_->frameNumber_)) return;
+    const D3D12_INDEX_BUFFER_VIEW view = {rec->gpu, rec->size, rec->stride == 2 ? DXGI_FORMAT_R16_UINT : DXGI_FORMAT_R32_UINT};
+    list_->IASetIndexBuffer(&view);
+    set_.indices = true;
+    set_.indexView = view;
+  }
+  void SetShaderBuffer(Buffer buffer, int slot) override {
+    const BufferRec* rec = d_->Find(buffer);
+    if (!rec || slot < 0 || slot > 1) return;
+    if (rec->dynamic ? rec->kind != BufferKind::Shader || rec->frame != d_->frameNumber_ : !rec->gpu) return;
+    list_->SetGraphicsRootShaderResourceView(static_cast<UINT>(kCbSlots + 1 + slot), rec->gpu);
+    set_.buffers[slot] = rec->gpu;
+  }
+  void Draw(uint32_t vertexCount, uint32_t firstVertex, uint32_t instances) override {
+    ++draws_;
+    Bind();
+    list_->DrawInstanced(vertexCount, instances, firstVertex, 0);
+  }
+  void DrawIndexed(uint32_t indexCount, uint32_t firstIndex, int32_t baseVertex, uint32_t instances) override {
+    ++draws_;
+    Bind();
+    list_->DrawIndexedInstanced(indexCount, instances, firstIndex, baseVertex, 0);
+  }
+
+  ID3D12GraphicsCommandList* list_ = nullptr;
+  DrawSet set_;
+  int draws_ = 0;
+
+ private:
+  void Bind() {
+    if (!dirty_) return;
+    dirty_ = false;
+    list_->SetGraphicsRootDescriptorTable(kCbSlots, d_->RecorderTable(index_, set_.textures));
+  }
+  D3D12Device* d_;
+  int index_;
+  bool dirty_ = true;
+};
+
 D3D12Device::~D3D12Device() {
   {  // [snowhitch] the thread making pipelines ahead: what it is making finished, the rest left
     std::lock_guard<std::mutex> lock(backgroundMutex_);
@@ -825,6 +989,8 @@ bool D3D12Device::Init(const DeviceDesc& desc, std::string* error) {
                   SUCCEEDED(list_->QueryInterface(IID_PPV_ARGS(list4_.Put())));
   }
   list_->Close();
+  firstList_ = list_;  // [mcrec]
+  firstList4_ = list4_;
   hr = device_->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, uploadAllocators_[0].Get(), nullptr, IID_PPV_ARGS(uploadList_.Put()));
   if (FAILED(hr)) return fail("CreateCommandList", hr);
   uploadList_->Close();
@@ -1660,20 +1826,25 @@ void D3D12Device::Retire(IUnknown* object) {
 
 Span D3D12Device::Allocate(size_t size, size_t align) {
   FrameSlot& f = frames_[cur_];
+  return AllocateIn(f.pages, f.page, f.offset, kPageSize, size, align);
+}
+
+// [mcrec] (the frame's own pages, or a recorder's: Allocate's work, on any thread for a recorder's)
+Span D3D12Device::AllocateIn(std::vector<Page>& pages, size_t& page, size_t& offset, size_t pageSize, size_t size, size_t align) {
   for (;;) {
-    if (f.page < f.pages.size()) {
-      Page& p = f.pages[f.page];
-      size_t at = (f.offset + align - 1) / align * align;
+    if (page < pages.size()) {
+      Page& p = pages[page];
+      size_t at = (offset + align - 1) / align * align;
       if (at + size <= p.size) {
-        f.offset = at + size;
+        offset = at + size;
         return {p.cpu + at, p.gpu + at, p.resource.Get(), at};
       }
-      ++f.page;
-      f.offset = 0;
+      ++page;
+      offset = 0;
       continue;
     }
     Page p;
-    p.size = std::max(kPageSize, (size + 65535) / 65536 * 65536);
+    p.size = std::max(pageSize, (size + 65535) / 65536 * 65536);
     D3D12_HEAP_PROPERTIES hp = HeapProps(D3D12_HEAP_TYPE_UPLOAD);
     D3D12_RESOURCE_DESC rd = BufferResourceDesc(p.size);
     HRESULT hr = device_->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
@@ -1686,7 +1857,7 @@ Span D3D12Device::Allocate(size_t size, size_t align) {
     }
     p.cpu = static_cast<uint8_t*>(mapped);
     p.gpu = p.resource->GetGPUVirtualAddress();
-    f.pages.push_back(std::move(p));
+    pages.push_back(std::move(p));
   }
 }
 
@@ -2768,6 +2939,20 @@ void D3D12Device::BeginFrame(const float clearColor[4]) {
   ++frameNumber_;
   inFrame_ = true;
   f.allocator->Reset();
+  {  // [mcrec] the frame's first list is its own list again; the slot's further allocators and the recorders' room anew
+    for (size_t i = 0; i < f.moreUsed; ++i) f.moreAllocators[i]->Reset();
+    f.moreUsed = 0;
+    for (FrameSlot::RecorderRoom& r : f.recorders) {
+      r.page = r.offset = 0;
+      r.tables.clear();
+    }
+    moreListsUsed_ = 0;
+    order_.clear();
+    parallel_ = 0;
+    set_ = DrawSet{};
+    list_ = firstList_;
+    list4_ = firstList4_;
+  }
   list_->Reset(f.allocator.Get(), nullptr);
   if (latency_ && latencyQueries_) list_->EndQuery(latencyQueries_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, static_cast<UINT>(2 * cur_));
 
@@ -2810,7 +2995,7 @@ void D3D12Device::BeginFrame(const float clearColor[4]) {
   }
   list_->ClearRenderTargetView(rtv, clearColor, 0, nullptr);
   list_->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);
-  list_->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
+  SetTargets(1, &rtv, &dsv);
   SetViewport(viewWidth, viewHeight);
   list_->SetGraphicsRootSignature(rootSignature_.Get());
   ID3D12DescriptorHeap* heaps[] = {ringHeap_.Get()};
@@ -2829,7 +3014,18 @@ void D3D12Device::BeginFrame(const float clearColor[4]) {
   computePipeline_ = computeRoot_ = dispatched_ = false;
 }
 
+// [mcrec] (the pass's targets, kept to be set again on the lists after a parallel section)
+void D3D12Device::SetTargets(UINT count, const D3D12_CPU_DESCRIPTOR_HANDLE* rtv, const D3D12_CPU_DESCRIPTOR_HANDLE* dsv) {
+  list_->OMSetRenderTargets(count, rtv, FALSE, dsv);
+  targetCount_ = count;
+  targetRtv_ = count ? *rtv : D3D12_CPU_DESCRIPTOR_HANDLE{};
+  targetDepth_ = dsv != nullptr;
+  targetDsv_ = dsv ? *dsv : D3D12_CPU_DESCRIPTOR_HANDLE{};
+}
+
 void D3D12Device::SetViewport(int width, int height) {
+  viewportWidth_ = width;  // [mcrec]
+  viewportHeight_ = height;
   D3D12_VIEWPORT vp = {0, 0, static_cast<float>(width), static_cast<float>(height), 0, 1};
   D3D12_RECT scissor = {0, 0, width, height};
   list_->RSSetViewports(1, &vp);
@@ -2890,7 +3086,7 @@ void D3D12Device::BindPhotoWindow(bool clearColor, const float clearValue[4], bo
   passColor_ = photoColor_.id;
   passDepth_ = photoDepth_.id;
   const D3D12_CPU_DESCRIPTOR_HANDLE rtv = RtvHandle(color->view), dsv = DsvHandle(depth->view);
-  list_->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
+  SetTargets(1, &rtv, &dsv);
   if (clearColor) list_->ClearRenderTargetView(rtv, clearValue, 0, nullptr);
   if (clearDepth) list_->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);
   SetViewport(photoWidth_, photoHeight_);
@@ -2976,7 +3172,7 @@ void D3D12Device::BeginPass(const PassDesc& pass) {
     } else {
       ReleasePassTargets();
     }
-    list_->OMSetRenderTargets(1, &rtv, FALSE, &dsvStart_);
+    SetTargets(1, &rtv, &dsvStart_);
     if (pass.clearColor) list_->ClearRenderTargetView(rtv, pass.clearValue, 0, nullptr);
     if (pass.clearDepth) list_->ClearDepthStencilView(dsvStart_, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);
     SetViewport(width_, height_);
@@ -3008,7 +3204,7 @@ void D3D12Device::BeginPass(const PassDesc& pass) {
   passDepth_ = pass.depth.id;
   D3D12_CPU_DESCRIPTOR_HANDLE dsv = depth ? DsvHandle(depth->view + static_cast<uint32_t>(pass.depthLayer)) : D3D12_CPU_DESCRIPTOR_HANDLE{};
   D3D12_CPU_DESCRIPTOR_HANDLE rtv = color ? RtvHandle(color->view) : D3D12_CPU_DESCRIPTOR_HANDLE{};
-  list_->OMSetRenderTargets(color ? 1 : 0, color ? &rtv : nullptr, FALSE, depth ? &dsv : nullptr);
+  SetTargets(color ? 1 : 0, color ? &rtv : nullptr, depth ? &dsv : nullptr);
   if (color && pass.clearColor) list_->ClearRenderTargetView(rtv, pass.clearValue, 0, nullptr);
   if (depth && pass.clearDepth) list_->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);
   const TextureRec* sized = depth ? depth : color;
@@ -3030,6 +3226,9 @@ void D3D12Device::SetPipeline(Pipeline pipeline) {
   list_->SetPipelineState(rec->state.Get());
   computePipeline_ = rec->compute;
   if (!rec->compute) list_->IASetPrimitiveTopology(rec->topology);
+  set_.pipeline = rec->state.Get();  // [mcrec]
+  set_.compute = rec->compute;
+  if (!rec->compute) set_.topology = rec->topology;
 }
 
 void D3D12Device::SetConstants(int slot, const void* data, uint32_t size) {
@@ -3378,6 +3577,8 @@ void D3D12Device::SetVertexBuffer(Buffer buffer) {
   if (!rec || rec->kind != BufferKind::Vertex || (rec->dynamic && rec->frame != frameNumber_)) return;
   D3D12_VERTEX_BUFFER_VIEW view = {rec->gpu, rec->size, rec->stride};
   list_->IASetVertexBuffers(0, 1, &view);
+  set_.vertices = true;  // [mcrec]
+  set_.vertexView = view;
 }
 
 void D3D12Device::SetIndexBuffer(Buffer buffer) {
@@ -3385,6 +3586,8 @@ void D3D12Device::SetIndexBuffer(Buffer buffer) {
   if (!rec || rec->kind != BufferKind::Index || (rec->dynamic && rec->frame != frameNumber_)) return;
   D3D12_INDEX_BUFFER_VIEW view = {rec->gpu, rec->size, rec->stride == 2 ? DXGI_FORMAT_R16_UINT : DXGI_FORMAT_R32_UINT};
   list_->IASetIndexBuffer(&view);
+  set_.indices = true;  // [mcrec]
+  set_.indexView = view;
 }
 
 void D3D12Device::SetShaderBuffer(Buffer buffer, int slot) {
@@ -3539,8 +3742,9 @@ void D3D12Device::EndFrame(std::vector<uint8_t>* capture, bool present) {
   }
   list_->Close();
   FlushUploads();  // (what this frame draws with is on the card before it)
-  ID3D12CommandList* lists[] = {list_.Get()};
-  queue_->ExecuteCommandLists(1, lists);
+  order_.push_back(list_.Get());  // [mcrec] (with the lists of the parallel sections before it, in their order)
+  queue_->ExecuteCommandLists(static_cast<UINT>(order_.size()), order_.data());
+  order_.clear();
   if (latency_ || measureLatency) latencySlots_[cur_].handed = Now();
   if (present && !window && !photo) {
     HRESULT hr = swapChain_->Present(vsync_ ? Interval() : 0, !vsync_ && tearing_ ? DXGI_PRESENT_ALLOW_TEARING : 0);
@@ -3599,6 +3803,153 @@ void D3D12Device::Mark(const char* name) {
 }
 
 void D3D12Device::TakeTimes(std::vector<std::pair<const char*, double>>* out) { *out = lastTimes_; }
+
+
+// A recorder's texture set in the frame's share of the shader-visible heap (as TextureTable makes the device's own): made
+// once a frame for each set it binds, its room taken from the share by many recorders at once.
+D3D12_GPU_DESCRIPTOR_HANDLE D3D12Device::RecorderTable(int index, const TableKey& key) {
+  FrameSlot& f = frames_[cur_];
+  std::unordered_map<TableKey, uint32_t, TableHash>& tables = f.recorders[static_cast<size_t>(index)].tables;
+  const uint32_t share = kRingDescriptors / kFrames;
+  const uint32_t base = share * static_cast<uint32_t>(cur_);
+  uint32_t at;
+  auto it = tables.find(key);
+  if (it != tables.end()) {
+    at = it->second;
+  } else {
+    uint32_t used = parallelDescriptors_.fetch_add(kTexSlots);
+    if (used + kTexSlots > share) {  // (the share is full: as the device's own, from its start again)
+      if (!warnedParallel_.exchange(true)) fprintf(stderr, "render: Direct3D 12: more than %u texture sets in one frame\n", share / kTexSlots);
+      used = 0;
+    }
+    at = base + used;
+    for (int i = 0; i < kTexSlots; ++i) {
+      D3D12_CPU_DESCRIPTOR_HANDLE to = ringCpuStart_;
+      to.ptr += static_cast<SIZE_T>(at + static_cast<uint32_t>(i)) * srvStep_;
+      device_->CopyDescriptorsSimple(1, to, StagingHandle(key.t[static_cast<size_t>(i)]), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    }
+    tables.emplace(key, at);
+  }
+  D3D12_GPU_DESCRIPTOR_HANDLE table = ringGpuStart_;
+  table.ptr += static_cast<UINT64>(at) * srvStep_;
+  return table;
+}
+
+// The next of the frame's further lists, recording (its allocator the slot's next).
+bool D3D12Device::NextList(ID3D12GraphicsCommandList** list, ID3D12GraphicsCommandList4** list4) {
+  FrameSlot& f = frames_[cur_];
+  if (f.moreUsed == f.moreAllocators.size()) {
+    Com<ID3D12CommandAllocator> a;
+    if (FAILED(device_->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(a.Put())))) return false;
+    f.moreAllocators.push_back(std::move(a));
+  }
+  ID3D12CommandAllocator* allocator = f.moreAllocators[f.moreUsed].Get();
+  if (moreListsUsed_ == moreLists_.size()) {
+    Com<ID3D12GraphicsCommandList> l;
+    if (FAILED(device_->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator, nullptr, IID_PPV_ARGS(l.Put())))) return false;
+    Com<ID3D12GraphicsCommandList4> l4;
+    if (rayTracing_ && FAILED(l->QueryInterface(IID_PPV_ARGS(l4.Put())))) return false;
+    moreLists_.push_back(std::move(l));  // (made recording)
+    moreLists4_.push_back(std::move(l4));
+  } else if (FAILED(moreLists_[moreListsUsed_]->Reset(allocator, nullptr))) {
+    return false;
+  }
+  *list = moreLists_[moreListsUsed_].Get();
+  *list4 = moreLists4_[moreListsUsed_].Get();
+  ++moreListsUsed_;
+  ++f.moreUsed;
+  return true;
+}
+
+// A list made ready to go on where the frame's own list is: the root signature, the heap, the pass's targets and viewport,
+// and what the draws are given (the texture table is bound by the first draw).
+void D3D12Device::SetUp(ID3D12GraphicsCommandList* list, const DrawSet& s) {
+  list->SetGraphicsRootSignature(rootSignature_.Get());
+  ID3D12DescriptorHeap* heaps[] = {ringHeap_.Get()};
+  list->SetDescriptorHeaps(1, heaps);
+  list->OMSetRenderTargets(targetCount_, targetCount_ ? &targetRtv_ : nullptr, FALSE, targetDepth_ ? &targetDsv_ : nullptr);
+  const D3D12_VIEWPORT vp = {0, 0, static_cast<float>(viewportWidth_), static_cast<float>(viewportHeight_), 0, 1};
+  const D3D12_RECT scissor = {0, 0, viewportWidth_, viewportHeight_};
+  list->RSSetViewports(1, &vp);
+  list->RSSetScissorRects(1, &scissor);
+  if (s.pipeline) list->SetPipelineState(s.pipeline);
+  list->IASetPrimitiveTopology(s.topology);
+  for (int i = 0; i < kCbSlots; ++i)
+    if (s.constants[i]) list->SetGraphicsRootConstantBufferView(static_cast<UINT>(i), s.constants[i]);
+  for (int i = 0; i < 2; ++i)
+    if (s.buffers[i]) list->SetGraphicsRootShaderResourceView(static_cast<UINT>(kCbSlots + 1 + i), s.buffers[i]);
+  if (s.vertices) list->IASetVertexBuffers(0, 1, &s.vertexView);
+  if (s.indices) list->IASetIndexBuffer(&s.indexView);
+}
+
+bool D3D12Device::BeginParallel(int count) {
+  if (!inFrame_ || parallel_ || count < 1 || count > kMostRecorders) return false;
+  FrameSlot& f = frames_[cur_];
+  // the lists first: the recorders' and the frame's own after them (none handed out when one cannot be made)
+  ID3D12GraphicsCommandList* lists[kMostRecorders + 1];
+  ID3D12GraphicsCommandList4* lists4[kMostRecorders + 1];
+  for (int i = 0; i <= count; ++i)
+    if (!NextList(&lists[i], &lists4[i])) {
+      Complain("making a command list for a recorder", E_FAIL);
+      for (int k = 0; k < i; ++k) lists[k]->Close();  // (never handed to the card: reset again next time)
+      return false;
+    }
+  while (recorders_.size() < static_cast<size_t>(count)) recorders_.push_back(std::make_unique<ParallelRecorder>(this, static_cast<int>(recorders_.size())));
+  if (f.recorders.size() < static_cast<size_t>(count)) f.recorders.resize(static_cast<size_t>(count));
+  // what the draws are given now, the recorders' start
+  DrawSet now = set_;
+  std::copy(std::begin(constantsAt_), std::end(constantsAt_), now.constants);
+  now.buffers[0] = buffersAt_[0];
+  now.buffers[1] = buffersAt_[1];
+  now.textures = boundTextures_;
+  list_->Close();
+  order_.push_back(list_.Get());
+  for (int i = 0; i < count; ++i) {
+    SetUp(lists[i], now);
+    recorders_[static_cast<size_t>(i)]->Start(lists[i], now);
+  }
+  afterList_ = lists[count];
+  afterList4_ = lists4[count];
+  parallelDescriptors_.store(f.descriptorsUsed);
+  parallel_ = count;
+  return true;
+}
+
+Recorder* D3D12Device::Parallel(int index) {
+  return index >= 0 && index < parallel_ ? recorders_[static_cast<size_t>(index)].get() : nullptr;
+}
+
+void D3D12Device::EndParallel() {
+  if (!parallel_) return;
+  for (int i = 0; i < parallel_; ++i) {
+    ParallelRecorder& r = *recorders_[static_cast<size_t>(i)];
+    r.list_->Close();
+    order_.push_back(r.list_);
+    draws_ += r.draws_;
+  }
+  // the frame's own list again, set as the last recorder left things
+  const DrawSet& last = recorders_[static_cast<size_t>(parallel_ - 1)]->set_;
+  set_ = last;
+  std::copy(std::begin(last.constants), std::end(last.constants), constantsAt_);
+  buffersAt_[0] = last.buffers[0];
+  buffersAt_[1] = last.buffers[1];
+  boundTextures_ = last.textures;
+  texturesDirty_ = true;
+  computePipeline_ = last.compute;
+  computeRoot_ = false;
+  const uint32_t share = kRingDescriptors / kFrames;
+  frames_[cur_].descriptorsUsed = std::min(parallelDescriptors_.load(), share);
+  for (size_t i = 0; i < moreLists_.size(); ++i)  // (the Com that keeps it: list_ is always one)
+    if (moreLists_[i].Get() == afterList_) {
+      list_ = moreLists_[i];
+      list4_ = moreLists4_[i];
+      break;
+    }
+  SetUp(list_.Get(), set_);
+  afterList_ = nullptr;
+  afterList4_ = nullptr;
+  parallel_ = 0;
+}
 
 uint64_t D3D12Device::MemoryInUse() {
   DXGI_QUERY_VIDEO_MEMORY_INFO info = {};

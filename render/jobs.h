@@ -5,11 +5,15 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <functional>
 #include <mutex>
 #include <thread>
 #include <vector>
+#if defined(_M_X64) || defined(__x86_64__)
+#include <immintrin.h>  // [mcrec] (_mm_pause)
+#endif
 
 namespace render {
 
@@ -19,6 +23,11 @@ class Jobs {
   // less two (the caller's and the simulation's), at most `kMostWorkers`.
   static Jobs& Shared();
   static constexpr int kMostWorkers = 8;
+  // [mcrec] How long a worker waits awake after a job for the next before it sleeps, in microseconds (a frame hands over
+  // its jobs one soon after another; one woken from its sleep comes tens of microseconds late). 0 (the default): it sleeps
+  // at once, as before (50 measured no better on a loaded PC, 2026-10-23; to be measured again on a quiet one). Viewer
+  // --jobs-awake.
+  inline static int awakeMicroseconds = 0;
   ~Jobs();
 
   int Workers() const { return static_cast<int>(threads_.size()); }
@@ -37,6 +46,15 @@ class Jobs {
   uint64_t round_ = 0;  // which job the workers are on (a new job: one more)
   std::atomic<int> next_{0}, done_{0};
   int busy_ = 0;  // workers still in the current job
+  // [mcrec] the job's number for the workers that wait awake a while after a job (awakeMicroseconds) before they sleep
+  std::atomic<uint64_t> roundNow_{0};
+  static void Pause() {
+#if defined(_M_X64) || defined(__x86_64__)
+    _mm_pause();
+#else
+    std::this_thread::yield();
+#endif
+  }
   bool stopping_ = false;
   std::atomic<bool> inUse_{false};  // a job is running
 };

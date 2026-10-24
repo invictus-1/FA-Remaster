@@ -184,6 +184,7 @@ namespace {
   X(vkCmdBindIndexBuffer)               \
   X(vkCmdDraw)                          \
   X(vkCmdDrawIndexed)                   \
+  X(vkCmdExecuteCommands)               \
   X(vkCmdDispatch)                      \
   X(vkCmdBlitImage)                     \
   X(vkCmdCopyImageToBuffer)             \
@@ -582,6 +583,11 @@ class VulkanDevice final : public Device {
   bool SetLatencyLimiter(bool on) override;
   bool LatencyLimiter() const override { return latency_; }
   void WaitForNextFrame() override;
+  // [mcrec] recording on several threads (gfx.h)
+  int ParallelRecorders() const override { return kMostRecorders; }
+  bool BeginParallel(int count) override;
+  Recorder* Parallel(int index) override;
+  void EndParallel() override;
 
  private:
   // (photomode) SetPhotoWindow: the picture and the depth a frame draws its window into while it is on, their size; a
@@ -642,7 +648,7 @@ class VulkanDevice final : public Device {
   void Barrier(VkCommandBuffer cmd, VkImage image, VkImageLayout from, VkImageLayout to, VkImageAspectFlags aspect);
   void Transition(TextureRec* t, VkImageLayout to);
   void EndRendering();
-  void StartRendering(bool withDepth);
+  void StartRendering(bool withDepth, bool secondary = false);  // ([mcrec] secondary: for recorders' command buffers alone)
   void ReleasePassTargets();
   void ReleaseGeneral();  // the storage targets dispatches wrote, readable again (outside a pass)
   bool PrepareDraw();
@@ -790,6 +796,21 @@ class VulkanDevice final : public Device {
   TextureRec dummy_[5];  // what an empty texture slot shows when the card has no null descriptors (by SpirvImage::Kind, to Volume)
   VkBuffer dummyBuffer_ = VK_NULL_HANDLE;  // and an empty shader buffer slot
 
+  // [mcrec] A recorder's room in one frame slot (Device::BeginParallel; made the first time it is wanted, kept, and reset
+  // with the slot): its secondary command buffers (one each parallel section), its descriptor pools (another made when
+  // one is full), its sets by what they hold, and its pages of constants, each with its set, as the frame's own.
+  struct RecorderRoom {
+    VkCommandPool pool = VK_NULL_HANDLE;
+    std::vector<VkCommandBuffer> cmds;
+    size_t cmdsUsed = 0;
+    std::vector<VkDescriptorPool> descriptors;
+    size_t descriptorsUsed = 0;
+    std::unordered_map<std::string, VkDescriptorSet> sets;
+    std::vector<Page> constantPages;
+    std::vector<VkDescriptorSet> constantSets;
+    size_t constantPage = SIZE_MAX;
+    VkDeviceSize constantsUsed = 0;
+  };
   struct Frame {
     VkCommandPool pool = VK_NULL_HANDLE;
     VkCommandBuffer cmd = VK_NULL_HANDLE;
@@ -810,6 +831,7 @@ class VulkanDevice final : public Device {
     Garbage garbage;  // let go of when this frame is done
     Garbage later;    // let go of outside a frame: after the next frame of this slot (its uploads included)
     std::vector<const char*> marks;
+    std::vector<RecorderRoom> recorders;  // [mcrec] (by the recorder's number)
   };
   Frame frames_[kFrames];
   int cur_ = 0;
@@ -837,6 +859,37 @@ class VulkanDevice final : public Device {
   std::vector<uint8_t> constants_[kCbSlots];  // what each slot was last given (copied on when a page is full)
   bool setDirty_ = true;
   VkPipeline pipeline_ = VK_NULL_HANDLE;
+  // [mcrec] Recording on several threads (gfx.h, BeginParallel): each recorder records into a secondary command buffer of its
+  // own, which EndParallel runs from the frame's own in their order, in a drawing into the pass's attachments of its own
+  // (VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT), between the frame's own drawings before and after it. What the
+  // frame's own command buffer has bound of the vertex and index buffers (bound again after a section, and on each
+  // recorder's).
+  static constexpr int kMostRecorders = 16;
+  static constexpr VkDeviceSize kRecorderConstantPage = 2u << 20;
+  class ParallelRecorder;
+  std::vector<std::unique_ptr<ParallelRecorder>> recorders_;
+  int parallel_ = 0;            // recorders handed out by BeginParallel (0: none)
+  bool parallelDepth_ = false;  // (the section's drawing has the pass's depth)
+  std::mutex parallelMutex_;    // (a pipeline not made yet that a recorder sets: made under it)
+  std::atomic<bool> warnedParallel_{false};
+  struct VertexBound {
+    VkBuffer buffer = VK_NULL_HANDLE;
+    VkDeviceSize offset = 0;
+  } vertexBound_;
+  struct IndexBound {
+    VkBuffer buffer = VK_NULL_HANDLE;
+    VkDeviceSize offset = 0;
+    VkIndexType type = VK_INDEX_TYPE_UINT16;
+  } indexBound_;
+  // a draws' set of what is bound (by `textures`, `buffers` and the layout), made from `allocate` the first time (`sets`
+  // keeps them by what they hold): the frame's own, or a recorder's
+  VkDescriptorSet MakeDrawSet(const Layout* layout, const uint32_t* textures, const BoundBuffer* buffers,
+                              const std::function<VkDescriptorSet(VkDescriptorSetLayout)>& allocate,
+                              std::unordered_map<std::string, VkDescriptorSet>& sets);
+  VkDescriptorSet RecorderSet(RecorderRoom& room, VkDescriptorSetLayout layout);
+  bool NextRecorderPage(RecorderRoom& room, ParallelRecorder& r);
+  void RecorderConstants(RecorderRoom& room, ParallelRecorder& r, int slot, const void* data, uint32_t size);
+  bool RecorderPrepare(ParallelRecorder& r);
   // compute: the pipeline set last and its layout, the storage targets bound (texture, level), those in
   // the general layout, and whether the last thing recorded was a dispatch (the next waits for its writes)
   VkPipeline computePipeline_ = VK_NULL_HANDLE;
@@ -909,6 +962,103 @@ class VulkanDevice final : public Device {
   VkDeviceSize readbackSize_ = 0;
 };
 
+// [mcrec] Recording on several threads (gfx.h, BeginParallel). A recorder: the device's draw calls into a secondary command
+// buffer of its own, with what they bind kept as the device keeps its own (boundTextures_, boundBuffers_, pipeline_,
+// layout_, constantOffsets_, constants_), its sets and constants in its own room of the frame slot (RecorderRoom).
+class VulkanDevice::ParallelRecorder final : public Recorder {
+ public:
+  ParallelRecorder(VulkanDevice* device, int index) : d_(device), index_(index) {}
+  void SetPipeline(Pipeline pipeline) override {
+    VkPipeline made = VK_NULL_HANDLE;
+    const void* layout = nullptr;
+    bool depth = true;
+    {  // (one not made yet is made here, as the device's own SetPipeline makes it: the pipelines' records under the lock)
+      std::lock_guard<std::mutex> lock(d_->parallelMutex_);
+      PipelineRec* rec = d_->Find(pipeline);
+      if (rec && rec->pending) {
+        std::string why;
+        if (!d_->Realize(pipeline.id - 1, &why) && d_->batchError_.empty()) d_->batchError_ = why;
+        rec = d_->Find(pipeline);
+      }
+      if (rec && rec->background) {
+        d_->TakeBackground(pipeline.id - 1);
+        rec = d_->Find(pipeline);
+      }
+      if (!rec || !rec->pipeline || rec->compute) return;
+      made = rec->pipeline;
+      layout = rec->layout;
+      depth = rec->depth;
+    }
+    pipeline_ = made;
+    pipelineDepth_ = depth;
+    if (layout != layout_) {
+      layout_ = static_cast<const Layout*>(layout);
+      setDirty_ = true;
+    }
+    vkCmdBindPipeline(cmd_, VK_PIPELINE_BIND_POINT_GRAPHICS, made);
+  }
+  void SetConstants(int slot, const void* data, uint32_t size) override {
+    d_->RecorderConstants(d_->frames_[d_->cur_].recorders[static_cast<size_t>(index_)], *this, slot, data, size);
+  }
+  void SetTexture(int slot, Texture texture) override {
+    if (slot < 0 || slot >= kTexSlots) return;
+    const uint32_t id = d_->Find(texture) ? texture.id : 0;
+    if (boundTextures_[slot] == id) return;
+    boundTextures_[slot] = id;
+    setDirty_ = true;
+  }
+  void SetVertexBuffer(Buffer buffer) override {
+    const BufferRec* rec = d_->Find(buffer);
+    if (!rec || rec->kind != BufferKind::Vertex || (rec->dynamic && rec->frame != d_->frameNumber_)) return;
+    vkCmdBindVertexBuffers(cmd_, 0, 1, &rec->buffer, &rec->offset);
+    vertexBound_ = {rec->buffer, rec->offset};
+  }
+  void SetIndexBuffer(Buffer buffer) override {
+    const BufferRec* rec = d_->Find(buffer);
+    if (!rec || rec->kind != BufferKind::Index || (rec->dynamic && rec->frame != d_->frameNumber_)) return;
+    const VkIndexType type = rec->stride == 2 ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
+    vkCmdBindIndexBuffer(cmd_, rec->buffer, rec->offset, type);
+    indexBound_ = {rec->buffer, rec->offset, type};
+  }
+  void SetShaderBuffer(Buffer buffer, int slot) override {
+    const BufferRec* rec = d_->Find(buffer);
+    if (!rec || slot < 0 || slot > 1) return;
+    if (rec->dynamic) {
+      if (rec->kind != BufferKind::Shader || rec->frame != d_->frameNumber_) return;
+      boundBuffers_[slot] = {rec->buffer, rec->offset, rec->size};
+    } else {
+      if (!rec->buffer) return;
+      boundBuffers_[slot] = {rec->buffer, 0, (static_cast<VkDeviceSize>(rec->size) + 3) & ~VkDeviceSize{3}};
+    }
+    setDirty_ = true;
+  }
+  void Draw(uint32_t vertexCount, uint32_t firstVertex, uint32_t instances) override {
+    if (!d_->RecorderPrepare(*this)) return;
+    ++draws_;
+    vkCmdDraw(cmd_, vertexCount, instances, firstVertex, 0);
+  }
+  void DrawIndexed(uint32_t indexCount, uint32_t firstIndex, int32_t baseVertex, uint32_t instances) override {
+    if (!d_->RecorderPrepare(*this)) return;
+    ++draws_;
+    vkCmdDrawIndexed(cmd_, indexCount, instances, firstIndex, baseVertex, 0);
+  }
+
+  VulkanDevice* d_;
+  int index_;
+  VkCommandBuffer cmd_ = VK_NULL_HANDLE;
+  uint32_t boundTextures_[kTexSlots] = {};
+  BoundBuffer boundBuffers_[2];
+  VkPipeline pipeline_ = VK_NULL_HANDLE;
+  const Layout* layout_ = nullptr;
+  bool pipelineDepth_ = true;
+  uint32_t constantOffsets_[kCbSlots] = {};
+  std::vector<uint8_t> constants_[kCbSlots];
+  bool setDirty_ = true;
+  VertexBound vertexBound_;
+  IndexBound indexBound_;
+  int draws_ = 0;
+};
+
 VulkanDevice::~VulkanDevice() {
   {  // [snowhitch] the thread making pipelines ahead: what it is making finished, the rest left
     std::lock_guard<std::mutex> lock(backgroundMutex_);
@@ -943,6 +1093,11 @@ VulkanDevice::~VulkanDevice() {
     Collect(f.later);
     for (Page& p : f.pages) vkDestroyBuffer(device_, p.buffer, nullptr);
     for (Page& p : f.constantPages) vkDestroyBuffer(device_, p.buffer, nullptr);
+    for (RecorderRoom& r : f.recorders) {  // [mcrec]
+      for (Page& p : r.constantPages) vkDestroyBuffer(device_, p.buffer, nullptr);
+      for (VkDescriptorPool p : r.descriptors) vkDestroyDescriptorPool(device_, p, nullptr);
+      if (r.pool) vkDestroyCommandPool(device_, r.pool, nullptr);
+    }
     if (f.descriptors) vkDestroyDescriptorPool(device_, f.descriptors, nullptr);
     if (f.pool) vkDestroyCommandPool(device_, f.pool, nullptr);
     if (f.done) vkDestroyFence(device_, f.done, nullptr);
@@ -3567,6 +3722,19 @@ void VulkanDevice::BeginFrame(const float clearColor[4]) {
   }
   vkResetFences(device_, 1, &f.done);
   vkResetCommandPool(device_, f.pool, 0);
+  for (RecorderRoom& r : f.recorders) {  // [mcrec] (the recorders' room in this slot anew)
+    if (r.pool) vkResetCommandPool(device_, r.pool, 0);
+    r.cmdsUsed = 0;
+    for (VkDescriptorPool p : r.descriptors) vkResetDescriptorPool(device_, p, 0);
+    r.descriptorsUsed = 0;
+    r.sets.clear();
+    r.constantSets.clear();
+    r.constantPage = SIZE_MAX;
+    r.constantsUsed = 0;
+  }
+  parallel_ = 0;
+  vertexBound_ = {};
+  indexBound_ = {};
   // the frame's memory: its pages and constants from the start, its descriptor sets anew
   f.page = 0;
   f.offset = 0;
@@ -3718,7 +3886,7 @@ void VulkanDevice::BeginPass(const PassDesc& pass) {
 // Begins drawing into the pass's attachments: the first time with the pass's clears; again (after a copy
 // in the pass's middle, or with or without its depth for a pipeline that wants the other) keeping what is
 // there.
-void VulkanDevice::StartRendering(bool withDepth) {
+void VulkanDevice::StartRendering(bool withDepth, bool secondary) {
   EndRendering();
   VkCommandBuffer cmd = frames_[cur_].cmd;
   withDepth = withDepth && passDepthView_ != VK_NULL_HANDLE;
@@ -3753,10 +3921,12 @@ void VulkanDevice::StartRendering(bool withDepth) {
   ri.colorAttachmentCount = passColorView_ ? 1 : 0;
   ri.pColorAttachments = passColorView_ ? &color : nullptr;
   ri.pDepthAttachment = withDepth ? &depth : nullptr;
+  if (secondary) ri.flags = VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT;  // [mcrec] (the recorders' command buffers alone)
   vkCmdBeginRendering(cmd, &ri);
   rendering_ = true;
   renderingDepth_ = withDepth;
   passStarted_ = true;
+  if (secondary) return;  // (each recorder sets its own viewport)
   VkViewport vp{0, 0, static_cast<float>(passWidth_), static_cast<float>(passHeight_), 0, 1};
   vkCmdSetViewport(cmd, 0, 1, &vp);
   VkRect2D sc{{0, 0}, {static_cast<uint32_t>(passWidth_), static_cast<uint32_t>(passHeight_)}};
@@ -3899,12 +4069,14 @@ void VulkanDevice::SetVertexBuffer(Buffer buffer) {
   BufferRec* rec = Find(buffer);
   if (!rec || rec->kind != BufferKind::Vertex || (rec->dynamic && rec->frame != frameNumber_) || !inFrame_) return;
   vkCmdBindVertexBuffers(frames_[cur_].cmd, 0, 1, &rec->buffer, &rec->offset);
+  vertexBound_ = {rec->buffer, rec->offset};  // [mcrec]
 }
 
 void VulkanDevice::SetIndexBuffer(Buffer buffer) {
   BufferRec* rec = Find(buffer);
   if (!rec || rec->kind != BufferKind::Index || (rec->dynamic && rec->frame != frameNumber_) || !inFrame_) return;
   vkCmdBindIndexBuffer(frames_[cur_].cmd, rec->buffer, rec->offset, rec->stride == 2 ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32);
+  indexBound_ = {rec->buffer, rec->offset, rec->stride == 2 ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32};  // [mcrec]
 }
 
 void VulkanDevice::SetShaderBuffer(Buffer buffer, int slot) {
@@ -4350,6 +4522,84 @@ void VulkanDevice::Destroy(Structure structure) {
 
 // The textures' and buffers' set for what is bound now (made once a frame for each combination), and the
 // constants' offsets.
+// [mcrec] (PrepareDraw's, and a recorder's: the set the draws read of what is bound, made the first time from `allocate`)
+VkDescriptorSet VulkanDevice::MakeDrawSet(const Layout* layout, const uint32_t* textures, const BoundBuffer* bound,
+                                          const std::function<VkDescriptorSet(VkDescriptorSetLayout)>& allocate,
+                                          std::unordered_map<std::string, VkDescriptorSet>& sets) {
+  // what the set holds, by the layout, the views and the buffers themselves (a handle's number may be
+  // used again)
+  VkImageView views[kTexSlots];
+  for (int i = 0; i < kTexSlots; ++i) views[i] = textures[i] ? textures_[textures[i]].view : VK_NULL_HANDLE;
+  if (!nullDescriptors_)
+    for (const auto& image : layout->images)
+      for (uint32_t k = 0; k < image.count; ++k)
+        if (!views[image.binding - kTexBinding + k] && image.kind <= SpirvImage::Volume) views[image.binding - kTexBinding + k] = dummy_[image.kind].view;
+  // (and the scenes, in the slots where the shaders declare one: the structure itself, which a scene grown
+  // has anew)
+  VkAccelerationStructureKHR scenes[kTexSlots] = {};
+  for (const auto& image : layout->images)
+    if (image.kind == SpirvImage::Scene)
+      for (uint32_t k = 0; k < image.count; ++k) scenes[image.binding - kTexBinding + k] = SceneIn(static_cast<int>(image.binding - kTexBinding + k));
+  BoundBuffer buffers[2] = {bound[0], bound[1]};
+  for (BoundBuffer& b : buffers)
+    if (!b.buffer && !nullDescriptors_) b = {dummyBuffer_, 0, 256};
+  std::string key(reinterpret_cast<const char*>(&layout), sizeof layout);
+  for (const auto& image : layout->images)
+    if (image.kind == SpirvImage::Scene) key.append(reinterpret_cast<const char*>(&scenes[image.binding - kTexBinding]), image.count * sizeof(VkAccelerationStructureKHR));
+    else key.append(reinterpret_cast<const char*>(&views[image.binding - kTexBinding]), image.count * sizeof(VkImageView));
+  for (const BoundBuffer& b : buffers) {
+    key.append(reinterpret_cast<const char*>(&b.buffer), sizeof b.buffer);
+    key.append(reinterpret_cast<const char*>(&b.offset), sizeof b.offset);
+    key.append(reinterpret_cast<const char*>(&b.size), sizeof b.size);
+  }
+  VkDescriptorSet set;
+  auto known = sets.find(key);
+  if (known != sets.end()) {
+    set = known->second;
+  } else {
+    set = allocate(layout->set);
+    if (!set) return VK_NULL_HANDLE;
+    VkDescriptorImageInfo images[kTexSlots];
+    VkDescriptorBufferInfo infos[2];
+    VkWriteDescriptorSet writes[kTexSlots + 2];
+    VkWriteDescriptorSetAccelerationStructureKHR sceneWrites[kTexSlots];
+    uint32_t n = 0;
+    for (const auto& image : layout->images) {  // (an array's elements written together)
+      const uint32_t first = image.binding - kTexBinding;
+      writes[n] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+      writes[n].dstSet = set;
+      writes[n].dstBinding = image.binding;
+      writes[n].descriptorCount = image.count;
+      if (image.kind == SpirvImage::Scene) {
+        sceneWrites[n] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR};
+        sceneWrites[n].accelerationStructureCount = image.count;
+        sceneWrites[n].pAccelerationStructures = &scenes[first];
+        writes[n].pNext = &sceneWrites[n];
+        writes[n].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+      } else {
+        for (uint32_t k = 0; k < image.count; ++k) images[first + k] = {VK_NULL_HANDLE, views[first + k], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        writes[n].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        writes[n].pImageInfo = &images[first];
+      }
+      ++n;
+    }
+    for (int i = 0; i < 2; ++i) {
+      const BoundBuffer& b = buffers[i];
+      infos[i] = {b.buffer, b.buffer ? b.offset : 0, b.buffer ? b.size : VK_WHOLE_SIZE};
+      writes[n] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+      writes[n].dstSet = set;
+      writes[n].dstBinding = kBufferBinding + static_cast<uint32_t>(i);
+      writes[n].descriptorCount = 1;
+      writes[n].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+      writes[n].pBufferInfo = &infos[i];
+      ++n;
+    }
+    vkUpdateDescriptorSets(device_, n, writes, 0, nullptr);
+    sets.emplace(std::move(key), set);
+  }
+  return set;
+}
+
 bool VulkanDevice::PrepareDraw() {
   if (!inFrame_ || !rendering_ || !pipeline_ || !layout_) return false;
   Frame& f = frames_[cur_];
@@ -4358,84 +4608,19 @@ bool VulkanDevice::PrepareDraw() {
   if (pipelineDepth_ != renderingDepth_ && passDepthView_) StartRendering(pipelineDepth_);
   VkCommandBuffer cmd = f.cmd;
   if (setDirty_) {
-    // what the set holds, by the layout, the views and the buffers themselves (a handle's number may be
-    // used again)
-    VkImageView views[kTexSlots];
-    for (int i = 0; i < kTexSlots; ++i) views[i] = boundTextures_[i] ? textures_[boundTextures_[i]].view : VK_NULL_HANDLE;
-    if (!nullDescriptors_)
-      for (const auto& image : layout_->images)
-        for (uint32_t k = 0; k < image.count; ++k)
-          if (!views[image.binding - kTexBinding + k] && image.kind <= SpirvImage::Volume) views[image.binding - kTexBinding + k] = dummy_[image.kind].view;
-    // (and the scenes, in the slots where the shaders declare one: the structure itself, which a scene grown
-    // has anew)
-    VkAccelerationStructureKHR scenes[kTexSlots] = {};
-    for (const auto& image : layout_->images)
-      if (image.kind == SpirvImage::Scene)
-        for (uint32_t k = 0; k < image.count; ++k) scenes[image.binding - kTexBinding + k] = SceneIn(static_cast<int>(image.binding - kTexBinding + k));
-    BoundBuffer buffers[2] = {boundBuffers_[0], boundBuffers_[1]};
-    for (BoundBuffer& b : buffers)
-      if (!b.buffer && !nullDescriptors_) b = {dummyBuffer_, 0, 256};
-    std::string key(reinterpret_cast<const char*>(&layout_), sizeof layout_);
-    for (const auto& image : layout_->images)
-      if (image.kind == SpirvImage::Scene) key.append(reinterpret_cast<const char*>(&scenes[image.binding - kTexBinding]), image.count * sizeof(VkAccelerationStructureKHR));
-      else key.append(reinterpret_cast<const char*>(&views[image.binding - kTexBinding]), image.count * sizeof(VkImageView));
-    for (const BoundBuffer& b : buffers) {
-      key.append(reinterpret_cast<const char*>(&b.buffer), sizeof b.buffer);
-      key.append(reinterpret_cast<const char*>(&b.offset), sizeof b.offset);
-      key.append(reinterpret_cast<const char*>(&b.size), sizeof b.size);
-    }
-    VkDescriptorSet set;
-    auto known = f.sets.find(key);
-    if (known != f.sets.end()) {
-      set = known->second;
-    } else {
+    const VkDescriptorSet set = MakeDrawSet(layout_, boundTextures_, boundBuffers_, [&](VkDescriptorSetLayout setLayout) {
+      VkDescriptorSet made = VK_NULL_HANDLE;
       VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
       ai.descriptorPool = f.descriptors;
       ai.descriptorSetCount = 1;
-      ai.pSetLayouts = &layout_->set;
-      if (vkAllocateDescriptorSets(device_, &ai, &set) != VK_SUCCESS) {
-        static bool told = false;
-        if (!told) fprintf(stderr, "render: Vulkan: out of descriptor sets this frame\n");
-        told = true;
-        return false;
-      }
-      VkDescriptorImageInfo images[kTexSlots];
-      VkDescriptorBufferInfo infos[2];
-      VkWriteDescriptorSet writes[kTexSlots + 2];
-      VkWriteDescriptorSetAccelerationStructureKHR sceneWrites[kTexSlots];
-      uint32_t n = 0;
-      for (const auto& image : layout_->images) {  // (an array's elements written together)
-        const uint32_t first = image.binding - kTexBinding;
-        writes[n] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        writes[n].dstSet = set;
-        writes[n].dstBinding = image.binding;
-        writes[n].descriptorCount = image.count;
-        if (image.kind == SpirvImage::Scene) {
-          sceneWrites[n] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR};
-          sceneWrites[n].accelerationStructureCount = image.count;
-          sceneWrites[n].pAccelerationStructures = &scenes[first];
-          writes[n].pNext = &sceneWrites[n];
-          writes[n].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-        } else {
-          for (uint32_t k = 0; k < image.count; ++k) images[first + k] = {VK_NULL_HANDLE, views[first + k], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-          writes[n].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-          writes[n].pImageInfo = &images[first];
-        }
-        ++n;
-      }
-      for (int i = 0; i < 2; ++i) {
-        const BoundBuffer& b = buffers[i];
-        infos[i] = {b.buffer, b.buffer ? b.offset : 0, b.buffer ? b.size : VK_WHOLE_SIZE};
-        writes[n] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        writes[n].dstSet = set;
-        writes[n].dstBinding = kBufferBinding + static_cast<uint32_t>(i);
-        writes[n].descriptorCount = 1;
-        writes[n].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        writes[n].pBufferInfo = &infos[i];
-        ++n;
-      }
-      vkUpdateDescriptorSets(device_, n, writes, 0, nullptr);
-      f.sets.emplace(std::move(key), set);
+      ai.pSetLayouts = &setLayout;
+      return vkAllocateDescriptorSets(device_, &ai, &made) == VK_SUCCESS ? made : VK_NULL_HANDLE;
+    }, f.sets);  // [mcrec] (MakeDrawSet: the set's making shared with the recorders)
+    if (!set) {
+      static bool told = false;
+      if (!told) fprintf(stderr, "render: Vulkan: out of descriptor sets this frame\n");
+      told = true;
+      return false;
     }
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_->pipeline, 0, 1, &set, 0, nullptr);
     setDirty_ = false;
@@ -4443,6 +4628,260 @@ bool VulkanDevice::PrepareDraw() {
   if (f.constantPage >= f.constantSets.size()) return false;
   vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_->pipeline, 1, 1, &f.constantSets[f.constantPage], kCbSlots, constantOffsets_);
   return true;
+}
+
+// [mcrec] A set from a recorder's own descriptor pools: another pool made when the last is full.
+VkDescriptorSet VulkanDevice::RecorderSet(RecorderRoom& room, VkDescriptorSetLayout layout) {
+  for (;;) {
+    if (room.descriptorsUsed < room.descriptors.size()) {
+      VkDescriptorSet set = VK_NULL_HANDLE;
+      VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+      ai.descriptorPool = room.descriptors[room.descriptorsUsed];
+      ai.descriptorSetCount = 1;
+      ai.pSetLayouts = &layout;
+      if (vkAllocateDescriptorSets(device_, &ai, &set) == VK_SUCCESS) return set;
+      ++room.descriptorsUsed;  // (full: the next)
+      continue;
+    }
+    // (as the frame's own pool, a quarter of its size; the fixed samplers count against it too)
+    constexpr uint32_t kSets = 2048;
+    VkDescriptorPoolSize sizes[5] = {{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, kSets * kTexSlots},
+                                     {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kSets * 2},
+                                     {VK_DESCRIPTOR_TYPE_SAMPLER, kSets * 6},
+                                     {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 64 * kCbSlots},
+                                     {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, kSets}};
+    VkDescriptorPoolCreateInfo dpi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    dpi.maxSets = kSets + 64;
+    dpi.poolSizeCount = rayTracing_ ? 5 : 4;
+    dpi.pPoolSizes = sizes;
+    VkDescriptorPool pool = VK_NULL_HANDLE;
+    if (vkCreateDescriptorPool(device_, &dpi, nullptr, &pool) != VK_SUCCESS) return VK_NULL_HANDLE;
+    room.descriptors.push_back(pool);
+  }
+}
+
+// [mcrec] A recorder's next page of constants (as NextConstantPage, in its own room, its pages smaller), what its slots were
+// last given copied onto it.
+bool VulkanDevice::NextRecorderPage(RecorderRoom& room, ParallelRecorder& r) {
+  const size_t next = room.constantPage == SIZE_MAX ? 0 : room.constantPage + 1;
+  const VkDeviceSize range = std::min<VkDeviceSize>(kUniformRange, props_.limits.maxUniformBufferRange);
+  if (next >= room.constantPages.size()) {
+    Page p;
+    p.size = kRecorderConstantPage;
+    VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bci.size = p.size;
+    bci.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    if (vkCreateBuffer(device_, &bci, nullptr, &p.buffer) != VK_SUCCESS) return false;
+    VkMemoryRequirements req;
+    vkGetBufferMemoryRequirements(device_, p.buffer, &req);
+    if (!memory_.Get(req, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, true, &p.memory)) {
+      vkDestroyBuffer(device_, p.buffer, nullptr);
+      return false;
+    }
+    vkBindBufferMemory(device_, p.buffer, p.memory.memory, p.memory.offset);
+    room.constantPages.push_back(p);
+  }
+  while (room.constantSets.size() <= next) {
+    const VkDescriptorSet set = RecorderSet(room, constantsLayout_);
+    if (!set) return false;
+    const Page& p = room.constantPages[room.constantSets.size()];
+    VkDescriptorBufferInfo infos[kCbSlots];
+    VkWriteDescriptorSet writes[kCbSlots];
+    for (int i = 0; i < kCbSlots; ++i) {
+      infos[i] = {p.buffer, 0, range};
+      writes[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+      writes[i].dstSet = set;
+      writes[i].dstBinding = static_cast<uint32_t>(i);
+      writes[i].descriptorCount = 1;
+      writes[i].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+      writes[i].pBufferInfo = &infos[i];
+    }
+    vkUpdateDescriptorSets(device_, kCbSlots, writes, 0, nullptr);
+    room.constantSets.push_back(set);
+  }
+  room.constantPage = next;
+  room.constantsUsed = 0;
+  const VkDeviceSize align = std::max<VkDeviceSize>(256, props_.limits.minUniformBufferOffsetAlignment);
+  const Page& p = room.constantPages[next];
+  for (int slot = 0; slot < kCbSlots; ++slot) {
+    r.constantOffsets_[slot] = 0;
+    if (r.constants_[slot].empty()) continue;
+    const VkDeviceSize at = (room.constantsUsed + align - 1) / align * align;
+    std::memcpy(p.memory.mapped + at, r.constants_[slot].data(), r.constants_[slot].size());
+    room.constantsUsed = at + r.constants_[slot].size();
+    r.constantOffsets_[slot] = static_cast<uint32_t>(at);
+  }
+  return true;
+}
+
+// [mcrec] A recorder's SetConstants (as the device's own, in its own room).
+void VulkanDevice::RecorderConstants(RecorderRoom& room, ParallelRecorder& r, int slot, const void* data, uint32_t size) {
+  if (slot < 0 || slot >= kCbSlots || !size) return;
+  const VkDeviceSize range = std::min<VkDeviceSize>(kUniformRange, props_.limits.maxUniformBufferRange);
+  if (size > range) return;
+  const VkDeviceSize align = std::max<VkDeviceSize>(256, props_.limits.minUniformBufferOffsetAlignment);
+  VkDeviceSize at = (room.constantsUsed + align - 1) / align * align;
+  if (room.constantPage >= room.constantPages.size() || at + range > kRecorderConstantPage) {  // (none yet, or full: the next)
+    r.constants_[slot].clear();
+    if (!NextRecorderPage(room, r)) return;
+    at = (room.constantsUsed + align - 1) / align * align;
+  }
+  std::memcpy(room.constantPages[room.constantPage].memory.mapped + at, data, size);
+  room.constantsUsed = at + size;
+  r.constantOffsets_[slot] = static_cast<uint32_t>(at);
+  r.constants_[slot].assign(static_cast<const uint8_t*>(data), static_cast<const uint8_t*>(data) + size);
+}
+
+// [mcrec] A recorder's PrepareDraw: its set of what is bound, and its constants' set at their offsets. (Its drawing cannot be
+// begun again without the pass's depth, as the frame's own can: a pipeline drawn without depth into a pass with it is
+// passed over, and said once.)
+bool VulkanDevice::RecorderPrepare(ParallelRecorder& r) {
+  if (!r.pipeline_ || !r.layout_) return false;
+  if (r.pipelineDepth_ != parallelDepth_ && passDepthView_) {
+    if (!warnedParallel_.exchange(true))
+      fprintf(stderr, "render: Vulkan: a recorder's pipeline drawn %s the pass's depth: passed over\n", r.pipelineDepth_ ? "with" : "without");
+    return false;
+  }
+  RecorderRoom& room = frames_[cur_].recorders[static_cast<size_t>(r.index_)];
+  if (r.setDirty_) {
+    const VkDescriptorSet set = MakeDrawSet(r.layout_, r.boundTextures_, r.boundBuffers_,
+                                            [&](VkDescriptorSetLayout setLayout) { return RecorderSet(room, setLayout); }, room.sets);
+    if (!set) {
+      static std::atomic<bool> told{false};
+      if (!told.exchange(true)) fprintf(stderr, "render: Vulkan: a recorder is out of descriptor sets\n");
+      return false;
+    }
+    vkCmdBindDescriptorSets(r.cmd_, VK_PIPELINE_BIND_POINT_GRAPHICS, r.layout_->pipeline, 0, 1, &set, 0, nullptr);
+    r.setDirty_ = false;
+  }
+  if (room.constantPage >= room.constantSets.size()) return false;
+  vkCmdBindDescriptorSets(r.cmd_, VK_PIPELINE_BIND_POINT_GRAPHICS, r.layout_->pipeline, 1, 1, &room.constantSets[room.constantPage], kCbSlots,
+                          r.constantOffsets_);
+  return true;
+}
+
+bool VulkanDevice::BeginParallel(int count) {
+  if (!inFrame_ || parallel_ || count < 1 || count > kMostRecorders || (!passColorView_ && !passDepthView_)) return false;
+  Frame& f = frames_[cur_];
+  if (f.recorders.size() < static_cast<size_t>(count)) f.recorders.resize(static_cast<size_t>(count));
+  while (recorders_.size() < static_cast<size_t>(count)) recorders_.push_back(std::make_unique<ParallelRecorder>(this, static_cast<int>(recorders_.size())));
+  // each its secondary command buffer (none handed out when one cannot be made)
+  VkCommandBuffer cmds[kMostRecorders];
+  for (int i = 0; i < count; ++i) {
+    RecorderRoom& room = f.recorders[static_cast<size_t>(i)];
+    if (!room.pool) {
+      VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+      pci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+      pci.queueFamilyIndex = queueFamily_;
+      if (vkCreateCommandPool(device_, &pci, nullptr, &room.pool) != VK_SUCCESS) return false;
+    }
+    if (room.cmdsUsed == room.cmds.size()) {
+      VkCommandBuffer cmd = VK_NULL_HANDLE;
+      VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+      cai.commandPool = room.pool;
+      cai.level = VK_COMMAND_BUFFER_LEVEL_SECONDARY;
+      cai.commandBufferCount = 1;
+      if (vkAllocateCommandBuffers(device_, &cai, &cmd) != VK_SUCCESS) return false;
+      room.cmds.push_back(cmd);
+    }
+    cmds[i] = room.cmds[room.cmdsUsed];
+  }
+  // what they draw into: the pass's attachments, as the drawing EndParallel begins for them has them
+  parallelDepth_ = passDepthView_ != VK_NULL_HANDLE;
+  const VkFormat colorFormat = !passColorView_ ? VK_FORMAT_UNDEFINED : passColor_ && passColor_ < textures_.size() ? textures_[passColor_].format : swapFormat_;
+  const int samples = passColor_ && passColor_ < textures_.size() ? textures_[passColor_].samples
+                      : passDepth_ && passDepth_ < textures_.size() ? textures_[passDepth_].samples : 1;
+  VkCommandBufferInheritanceRenderingInfo rendering{VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_RENDERING_INFO};
+  rendering.colorAttachmentCount = passColorView_ ? 1 : 0;
+  rendering.pColorAttachmentFormats = &colorFormat;
+  rendering.depthAttachmentFormat = parallelDepth_ ? kDepthFormat : VK_FORMAT_UNDEFINED;
+  rendering.rasterizationSamples = static_cast<VkSampleCountFlagBits>(samples);
+  VkCommandBufferInheritanceInfo inheritance{VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO};
+  inheritance.pNext = &rendering;
+  VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+  bi.flags = VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT | VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  bi.pInheritanceInfo = &inheritance;
+  const VkViewport vp{0, 0, static_cast<float>(passWidth_), static_cast<float>(passHeight_), 0, 1};
+  const VkRect2D sc{{0, 0}, {static_cast<uint32_t>(passWidth_), static_cast<uint32_t>(passHeight_)}};
+  for (int i = 0; i < count; ++i) {
+    RecorderRoom& room = f.recorders[static_cast<size_t>(i)];
+    ParallelRecorder& r = *recorders_[static_cast<size_t>(i)];
+    ++room.cmdsUsed;
+    r.cmd_ = cmds[i];
+    vkBeginCommandBuffer(r.cmd_, &bi);
+    vkCmdSetViewport(r.cmd_, 0, 1, &vp);
+    vkCmdSetScissor(r.cmd_, 0, 1, &sc);
+    // (set up as the device is now)
+    std::copy(std::begin(boundTextures_), std::end(boundTextures_), r.boundTextures_);
+    r.boundBuffers_[0] = boundBuffers_[0];
+    r.boundBuffers_[1] = boundBuffers_[1];
+    r.pipeline_ = pipeline_;
+    r.layout_ = layout_;
+    r.pipelineDepth_ = pipelineDepth_;
+    r.setDirty_ = true;
+    r.draws_ = 0;
+    if (pipeline_) vkCmdBindPipeline(r.cmd_, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
+    r.vertexBound_ = vertexBound_;
+    r.indexBound_ = indexBound_;
+    if (vertexBound_.buffer) vkCmdBindVertexBuffers(r.cmd_, 0, 1, &vertexBound_.buffer, &vertexBound_.offset);
+    if (indexBound_.buffer) vkCmdBindIndexBuffer(r.cmd_, indexBound_.buffer, indexBound_.offset, indexBound_.type);
+    // (the constants as the slots were last given, onto its own page)
+    for (int slot = 0; slot < kCbSlots; ++slot) r.constants_[slot] = constants_[slot];
+    if (room.constantPage >= room.constantPages.size()) {
+      NextRecorderPage(room, r);
+    } else {
+      for (int slot = 0; slot < kCbSlots; ++slot) {
+        if (r.constants_[slot].empty()) continue;
+        const std::vector<uint8_t> given = r.constants_[slot];
+        RecorderConstants(room, r, slot, given.data(), static_cast<uint32_t>(given.size()));
+      }
+    }
+  }
+  parallel_ = count;
+  return true;
+}
+
+Recorder* VulkanDevice::Parallel(int index) {
+  return index >= 0 && index < parallel_ ? recorders_[static_cast<size_t>(index)].get() : nullptr;
+}
+
+void VulkanDevice::EndParallel() {
+  if (!parallel_) return;
+  Frame& f = frames_[cur_];
+  VkCommandBuffer cmds[kMostRecorders];
+  for (int i = 0; i < parallel_; ++i) {
+    ParallelRecorder& r = *recorders_[static_cast<size_t>(i)];
+    vkEndCommandBuffer(r.cmd_);
+    cmds[i] = r.cmd_;
+    draws_ += r.draws_;
+  }
+  // a drawing into the pass's attachments of their own (its clears, if the pass had not begun yet), then the frame's own again
+  EndRendering();
+  StartRendering(parallelDepth_, true);
+  vkCmdExecuteCommands(f.cmd, static_cast<uint32_t>(parallel_), cmds);
+  EndRendering();
+  // the device set as the last recorder left it, bound again on the frame's own command buffer (a secondary's leaves nothing)
+  ParallelRecorder& last = *recorders_[static_cast<size_t>(parallel_ - 1)];
+  std::copy(std::begin(last.boundTextures_), std::end(last.boundTextures_), boundTextures_);
+  boundBuffers_[0] = last.boundBuffers_[0];
+  boundBuffers_[1] = last.boundBuffers_[1];
+  pipeline_ = last.pipeline_;
+  layout_ = last.layout_;
+  pipelineDepth_ = last.pipelineDepth_;
+  vertexBound_ = last.vertexBound_;
+  indexBound_ = last.indexBound_;
+  setDirty_ = true;
+  parallel_ = 0;
+  StartRendering(parallelDepth_);
+  if (pipeline_) vkCmdBindPipeline(f.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
+  if (computePipeline_) vkCmdBindPipeline(f.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline_);
+  if (vertexBound_.buffer) vkCmdBindVertexBuffers(f.cmd, 0, 1, &vertexBound_.buffer, &vertexBound_.offset);
+  if (indexBound_.buffer) vkCmdBindIndexBuffer(f.cmd, indexBound_.buffer, indexBound_.offset, indexBound_.type);
+  for (int slot = 0; slot < kCbSlots; ++slot) {
+    if (last.constants_[slot].empty()) continue;
+    const std::vector<uint8_t> given = last.constants_[slot];
+    SetConstants(slot, given.data(), static_cast<uint32_t>(given.size()));
+  }
 }
 
 void VulkanDevice::Draw(uint32_t vertexCount, uint32_t firstVertex, uint32_t instances) {
