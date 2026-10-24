@@ -1675,6 +1675,7 @@ struct PhaseTimer {
     if (!on) return;
     const float ms = std::chrono::duration<float, std::milli>(t - tickStart).count();
     tickMs.push_back(ms);
+    if (tickMs.size() % 3000 == 0) prof::DumpLuaTotals();  // (MOHO64_PROFILE_LUATOTAL only)
     if (prof::Hitch()) {  // MOHO64_PROFILE_HITCH: the beat's breakdown when it took long enough (core/profile.h)
       bool hitch = false;
       const std::string rest = prof::TakeBeatReport(tick, ms, &hitch);
@@ -1726,6 +1727,7 @@ struct PhaseTimer {
               runTotal[i] > 0 ? 100.0 * runLua[i] / runTotal[i] : 0.0);
     for (int s = 0; s < prof::kSources; ++s)
       fprintf(stderr, "profile: Lua source %-16s %8.2f s\n", prof::SourceName(s), prof::LuaMsTotal(s) / 1000.0);
+    prof::DumpLuaTotals();
     if (parallel) fputs(parallel->Summary(sum).c_str(), stderr);  // (the parallel stages, core/workers.h; empty when none ran)
   }
 };

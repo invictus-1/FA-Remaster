@@ -110,6 +110,8 @@ class SectionTimer {
 // The debug hooks on a sim Lua state or script thread (MOHO64_PROFILE_LUASAMPLE / _LUACALLS), and the collector's
 // timer: only when Hitch(); the hooks only when their variable is set.
 void InstallLuaHooks(lua_State* L);
+// MOHO64_PROFILE_LUATOTAL=<file>: write the whole run's Lua by function (see profile.cpp)
+void DumpLuaTotals();
 
 // The beat's lines after its phases (sim.cpp), when beatMs is at least the threshold (*hitch); clears the beat's counts.
 std::string TakeBeatReport(uint32_t tick, double beatMs, bool* hitch);

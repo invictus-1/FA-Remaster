@@ -50,6 +50,7 @@ std::map<std::string, int> g_samples;  // MOHO64_PROFILE_LUASAMPLE: per function
 int g_sampleTotal = 0;
 std::map<lua_State*, std::vector<std::pair<double, std::string>>> g_callStacks;  // MOHO64_PROFILE_LUACALLS
 std::map<std::string, std::pair<double, int>> g_fnTime;  // per function: inclusive ms, calls
+double g_totLastT = 0;  // MOHO64_PROFILE_LUATOTAL: the time of the last sample or Lua entry
 
 void Enter(lua_State*, int kind) {
   if (std::this_thread::get_id() != g_owner) return;
@@ -61,6 +62,7 @@ void Enter(lua_State*, int kind) {
     g_nextLabel.clear();
   }
   g_t0 = Clock::now();
+  g_totLastT = NowMs();  // (MOHO64_PROFILE_LUATOTAL: the time before this entry is not Lua's)
 }
 
 void Exit(lua_State*) {
@@ -114,7 +116,97 @@ void CallHook(lua_State* L, lua_Debug* ar) {
     st.pop_back();
   }
 }
+
+// ---- MOHO64_PROFILE_LUATOTAL=<file> (with MOHO64_PROFILE): the whole run's Lua by function (measuring only) ----
+// MOHO64_PROFILE_LUATOTAL_MODE=time (default): a count hook every MOHO64_PROFILE_LUATOTAL_N (default 2000) VM
+// instructions; the wall time since the previous sample (or since Lua was entered) is given to the running Lua function
+// (self: it includes the engine functions it called in between) and to every function on the stack once (total).
+// MOHO64_PROFILE_LUATOTAL_MODE=calls: a call hook counting the calls of every Lua and C function. Written at the end of
+// the run and every 3000 beats.
+struct TotKey {
+  const void* src;
+  int line;
+  bool operator<(const TotKey& o) const { return src != o.src ? src < o.src : line < o.line; }
+};
+struct TotVal {
+  double self = 0, incl = 0;
+  uint64_t samples = 0, calls = 0;
+  std::string name;
+};
+std::map<TotKey, TotVal> g_tot;
+double g_totSampledMs = 0;
+uint64_t g_totSamples = 0;
+const char* TotFile() {
+  static const char* f = On() ? std::getenv("MOHO64_PROFILE_LUATOTAL") : nullptr;
+  return f;
+}
+bool TotCalls() {
+  static const bool c = std::getenv("MOHO64_PROFILE_LUATOTAL_MODE") && std::string(std::getenv("MOHO64_PROFILE_LUATOTAL_MODE")) == "calls";
+  return c;
+}
+TotVal& TotEntry(lua_State* L, lua_Debug* d, bool needInfo) {
+  if (needInfo) lua_getinfo(L, "S", d);
+  TotKey k{d->source, d->linedefined};
+  if (d->what && d->what[0] == 'C') {  // C functions: by their pointer
+    lua_getinfo(L, "f", d);
+    k = TotKey{reinterpret_cast<const void*>(lua_tocfunction(L, -1)), -1};
+    lua_pop(L, 1);
+  }
+  TotVal& v = g_tot[k];
+  if (v.name.empty()) {
+    lua_getinfo(L, "n", d);
+    v.name = std::string(d->name ? d->name : "?") + " " + (k.line == -1 ? std::string("[C]") : std::string(d->short_src) + ":" + std::to_string(d->linedefined));
+  }
+  return v;
+}
+void TotHook(lua_State* L, lua_Debug* ar) {
+  if (std::this_thread::get_id() != g_owner) return;
+  if (ar->event == LUA_HOOKCALL) {
+    ++TotEntry(L, ar, true).calls;
+    return;
+  }
+  if (ar->event != LUA_HOOKCOUNT) return;
+  const double now = NowMs();
+  double dt = now - g_totLastT;
+  g_totLastT = now;
+  if (dt < 0 || dt > 100) dt = 0;  // (a gap with no Lua: not counted)
+  g_totSampledMs += dt;
+  ++g_totSamples;
+  std::vector<TotVal*> seen;
+  lua_Debug d;
+  bool first = true;
+  for (int lv = 0; lv < 60 && lua_getstack(L, lv, &d); ++lv) {
+    lua_getinfo(L, "S", &d);
+    if (d.what && d.what[0] == 'C') continue;
+    TotVal& v = TotEntry(L, &d, false);
+    if (first) {
+      v.self += dt;
+      ++v.samples;
+      first = false;
+    }
+    if (std::find(seen.begin(), seen.end(), &v) == seen.end()) {
+      seen.push_back(&v);
+      v.incl += dt;
+    }
+  }
+}
 }  // namespace
+
+void DumpLuaTotals() {
+  if (!TotFile() || g_tot.empty()) return;
+  FILE* f = std::fopen(TotFile(), "w");
+  if (!f) return;
+  std::vector<const TotVal*> v;
+  for (auto& [k, e] : g_tot) v.push_back(&e);
+  std::stable_sort(v.begin(), v.end(), [](const TotVal* a, const TotVal* b) { return a->self != b->self ? a->self > b->self : a->calls > b->calls; });
+  std::fprintf(f, "# mode %s; samples %llu, sampled %.1f s of Lua\n# self_ms\ttotal_ms\tsamples\tcalls\tfunction\n",
+               TotCalls() ? "calls" : "time", static_cast<unsigned long long>(g_totSamples), g_totSampledMs / 1000.0);
+  for (const TotVal* e : v)
+    std::fprintf(f, "%.1f\t%.1f\t%llu\t%llu\t%s\n", e->self, e->incl, static_cast<unsigned long long>(e->samples),
+                 static_cast<unsigned long long>(e->calls), e->name.c_str());
+  std::fclose(f);
+}
+
 
 bool On() {
   static const bool on = std::getenv("MOHO64_PROFILE") != nullptr;
@@ -201,6 +293,12 @@ void SectionTimer::To(int s) {
 }
 
 void InstallLuaHooks(lua_State* L) {
+  if (TotFile()) {  // (MOHO64_PROFILE_LUATOTAL: instead of the beat's hooks)
+    static const int n = std::getenv("MOHO64_PROFILE_LUATOTAL_N") ? std::atoi(std::getenv("MOHO64_PROFILE_LUATOTAL_N")) : 2000;
+    if (TotCalls()) lua_sethook(L, TotHook, LUA_MASKCALL, 0);
+    else lua_sethook(L, TotHook, LUA_MASKCOUNT, n);
+    return;
+  }
   if (!Hitch()) return;
   lua_gpg_prof_gc = GcHook;
   static const int sample = std::getenv("MOHO64_PROFILE_LUASAMPLE") ? std::atoi(std::getenv("MOHO64_PROFILE_LUASAMPLE")) : 0;

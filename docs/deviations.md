@@ -294,6 +294,11 @@ says `the rules are loaded again with the engine's script fixes`, about one seco
   totals. A destroyed prop the cell did not drop also counts until the collector clears it.
 - **What we do:** `data/fixes/hook/lua/AI/GridReclaim.lua` runs FAF's `UpdateCell` (its count and debug view), then
   sums the two totals again in EntityId order without destroyed props.
+  The EntityId order (2026-10-23): each id's digits left-padded with zeros to 12 places (worked out once per id) are
+  in that order under Lua's own string order; a cell keeps its sorted ids from its last update, drops the ones gone
+  and merges in the new ones, sorted in C. The first version's comparator (`tostring` and `string.len` per
+  comparison, every id sorted at every update) was 187 million calls and 16% of the Lua of a one-hour M28 game (B1).
+  Anything that is not a plain digit string, or two ids with the same text, take that comparator still.
 - **Why it is safe, what it changes:** the totals are FAF's, summed in a fixed order, and without the entries the
   collector would have cleared anyway. They only matter in a game with that AI.
 - **Tested:**

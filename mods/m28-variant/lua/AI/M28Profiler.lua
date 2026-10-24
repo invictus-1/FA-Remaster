@@ -50,6 +50,7 @@ bActiveMemoryProfiler = false
 --bTestProfiler = false
 
 function FunctionProfiler(sFunctionRef, sStartOrEndRef)
+    if not(bGlobalDebugOverride == true or bFunctionCallDebugOverride or M28Config.M28RunProfiling) then return end --FA Remastered variant: with no debug or profiling switch on, the rest does nothing; leave at once
     --sStartOrEndRef: refProfilerStart or refProfilerEnd (0 or 1)
     local bDebugMessages = false if bGlobalDebugOverride == true or bFunctionCallDebugOverride then   bDebugMessages = true end
     if bDebugMessages == true then LOG('FunctionProfiler: Function '..sFunctionRef..'; sStartOrEndRef='..sStartOrEndRef) end
