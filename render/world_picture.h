@@ -67,10 +67,12 @@ class WorldPicture {
   // device yet, a map is being opened behind already (CancelMap first), or no map given.
   bool BeginMap(const std::string& mapPath, std::function<void(World&)> before = {});
   // The map begun is open, its pipelines made, and it has been drawn once or twice unseen by the camera it will first be
-  // shown by (warm frames: one at most after each frame of the world shown; what its first frame makes is made in them,
-  // so the first of them is as long as that first frame would be - its pictures made at the window's size, measured
-  // 0.5-1.7 s at 4K with every look on - and the later ones about a frame of it): SwapMap would show it from the next
-  // frame, and that frame is an ordinary one.
+  // shown by (warm frames: one at most after each frame of the world shown; what its first frame makes is made in them):
+  // SwapMap would show it from the next frame, and that frame is an ordinary one. ([warmtarget] Each warm frame is
+  // recorded on the map's loading thread - what its first frame makes for the first time, its pictures at the window's
+  // size, textures and tables, made there as the opening's are, the rest asked of the frames' thread within
+  // SetLoadBudget's time a frame - and then made on the frames' thread from the recording: a few milliseconds of it,
+  // where one warm frame took it up to 1.7 s before.)
   bool MapReady() const;
   // The camera the map begun will first be shown by (the game's camera at its start), for its warm frames; at first one
   // over the map's middle. Any time before it is ready.
