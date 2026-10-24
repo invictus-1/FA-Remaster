@@ -2105,6 +2105,9 @@ overlays (selection marks, order lines, range rings only where the scripts ask),
 host draws one view (game_session.cpp Picture, one camera). Say the form you prefer (one picture with N views, or a
 second WorldPicture sharing the device and the world) and what a second view costs at 1440p / 4K; the PiP could
 draw at a lower rate or size if that helps.
+DONE (render 89c102c, answer ab9d583, "35" in docs/render-answers.md): SetViews every frame, ViewAt + the View*
+picking calls, ViewLifeBarAnchors; FAF's viewRight = view 1 of kind Split; views reset on SwapMap. Wiring next,
+after 37 / 38 land.
 
 ### 36. The armies' colours as the player sees them: WorldPicture::SetArmyColors (Colour Vision, Chris 2026-10-23)
 From the interface chat, 2026-10-23. Not blocking. Chris approved colour-blind team colours: an Interface option
