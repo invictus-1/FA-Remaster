@@ -33,3 +33,9 @@ keyActions['remaster_timeline'] = {
     action = 'remaster_timeline',
     category = 'ui',
 }
+-- The follow camera, open or closed (its frame /moho64ui/lua/followcam.lua, its camera ui/maui/worldview.cpp): a small
+-- picture in a corner that follows the first selected unit; a left click on it jumps the main camera there.
+keyActions['remaster_follow_cam'] = {
+    action = 'remaster_follow_cam',
+    category = 'camera',
+}

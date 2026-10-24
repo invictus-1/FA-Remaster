@@ -375,6 +375,53 @@ struct GameSession::Picture : WorldSource {
     out->reserve(anchors.size());
     for (const auto& a : anchors) out->push_back({a.unit, a.x, a.y});
   }
+  // [views] (WorldSource::SetViews: the renderer's WorldPicture::SetViews, render-answers "request 35") The views as
+  // last given, each to the renderer when they change; one view (an empty list): the picture as it always was. With
+  // views the world view's Draw comes with the window's size (cameraW x cameraH: what LifeBarAnchors and the frame are
+  // prepared with), and view 0 is drawn at its own place's size.
+  std::vector<WorldViewSpec> viewsNow;
+  bool SetViews(const std::vector<WorldViewSpec>& views, int windowW, int windowH) override {
+    (void)windowW, (void)windowH;
+    if (views == viewsNow) return false;
+    viewsNow = views;
+    std::vector<render::WorldPicture::PictureView> list;
+    list.reserve(views.size());
+    for (const WorldViewSpec& v : views) {
+      render::WorldPicture::PictureView p;
+      p.rect = {v.x, v.y, v.width, v.height};
+      p.camera = ToRender(v.camera);
+      p.kind = v.kind == WorldViewSpec::Kind::Split   ? render::WorldPicture::ViewKind::Split
+               : v.kind == WorldViewSpec::Kind::Inset ? render::WorldPicture::ViewKind::Inset
+                                                      : render::WorldPicture::ViewKind::Main;
+      p.every = std::max(v.every, 1);
+      list.push_back(p);
+    }
+    picture.SetViews(list);
+    return true;
+  }
+  int ViewAt(float x, float y) override { return picture.ViewAt(x, y); }
+  bool ViewProject(int view, const float world[3], float* x, float* y) override {
+    return picture.ViewProject(view, {world[0], world[1], world[2]}, x, y);
+  }
+  bool ViewGroundAt(int view, float x, float y, float world[3]) override {
+    render::Vec3 hit;
+    if (!picture.ViewGroundAt(view, x, y, &hit)) return false;
+    world[0] = hit.x, world[1] = hit.y, world[2] = hit.z;
+    return true;
+  }
+  uint32_t ViewUnitAt(int view, float x, float y) override { return picture.ViewUnitAt(view, x, y); }
+  void ViewUnitsIn(int view, float x0, float y0, float x1, float y1, std::vector<uint32_t>* out) override {
+    picture.ViewUnitsIn(view, x0, y0, x1, y1, out);
+  }
+  void ViewLifeBarAnchors(int view, std::vector<BarAnchor>* out) override {
+    if (view == 0) return LifeBarAnchors(out);
+    out->clear();
+    if (!direct || !session) return;  // (as LifeBarAnchors: the window's picture only)
+    std::vector<render::WorldPicture::LifeBarAnchor> anchors;
+    picture.ViewLifeBarAnchors(view, &anchors);
+    out->reserve(anchors.size());
+    for (const auto& a : anchors) out->push_back({a.unit, a.x, a.y});
+  }
 
   const uint32_t* Draw(const WorldCamera& c, int width, int height) override {
     render::Camera cam = ToRender(c);
@@ -1820,6 +1867,8 @@ void GameSession::PresentToWindow(const SoftwareTarget& target, const IntRect& c
     // the interface (the loading screen, the lobby, a game's world that is over while the menus' map opens).
     render::Camera camera;
     double tick = 0;
+    // ([views] a game's split screen or follow camera gone with its game: one view again, also before its world goes)
+    if (wp.picture.ViewCount() > 1) wp.picture.SetViews({});
     const bool world = wp.shows == Kind::Menu && menuBackdrop && menuBackdrop->TakeView(wp.picture, w, h, &camera, &tick);
     if (wp.shows != Kind::None) wp.picture.SetWorldShown(world);
     wp.picture.DrawToWindow(camera, w, h, tick);

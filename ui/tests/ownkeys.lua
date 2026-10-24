@@ -23,6 +23,7 @@ local own = {
     { key = 'Alt-P', action = 'remaster_photo_mode' },
     { key = 'Ctrl-Shift-P', action = 'remaster_palette' },
     { key = 'Ctrl-T', action = 'remaster_timeline' },
+    { key = 'Ctrl-Alt-V', action = 'remaster_follow_cam' },
 }
 local function copy(t)
     local out = {}

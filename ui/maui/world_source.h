@@ -199,9 +199,52 @@ class CardBackdrop {
   virtual bool Take(const Image& image, const IntRect& src, float alpha) = 0;
 };
 
+// [views] One view of the world in the picture besides the main one (the renderer's WorldPicture::SetViews, ui
+// REQUESTS 35, render-answers "request 35"): its place in the window's pixels, its camera, and its kind: the main view
+// (view 0, the world view of the camera "WorldCamera"), a second world view of the original's split screen (FAF's
+// worldview.lua viewRight, the camera "WorldCamera2": a full view of its own) or the follow camera's picture in a
+// corner (ours: drawn every `every`th frame, flatter). The world view control gathers them (maui/worldview.cpp,
+// GatherViews).
+struct WorldViewSpec {
+  enum class Kind { Main, Split, Inset };
+  int x = 0, y = 0, width = 0, height = 0;
+  WorldCamera camera;
+  Kind kind = Kind::Main;
+  int every = 2;  // (an inset: drawn every that many frames)
+  bool operator==(const WorldViewSpec& o) const {
+    return x == o.x && y == o.y && width == o.width && height == o.height && kind == o.kind && every == o.every &&
+           camera.target[0] == o.camera.target[0] && camera.target[1] == o.camera.target[1] && camera.target[2] == o.camera.target[2] &&
+           camera.distance == o.camera.distance && camera.heading == o.camera.heading && camera.pitch == o.camera.pitch &&
+           camera.fovY == o.camera.fovY && camera.lodScale == o.camera.lodScale;
+  }
+};
+
 class WorldSource {
  public:
   virtual ~WorldSource() = default;
+  // [views] The views of the next pictures, view 0 (the main one) first, in the window of `windowW` x `windowH`; empty:
+  // one view, the picture as it always was. Given every time the main view's picture is made sure of; true when they
+  // differ from the views last given (the picture then is not the same). With views the main view's Draw is given the
+  // window's size (the views' pictures are laid into the window's) and the picture's answers for view 0 are in its own
+  // pixels. A source without views (no renderer) ignores them.
+  virtual bool SetViews(const std::vector<WorldViewSpec>& views, int windowW, int windowH) {
+    (void)views, (void)windowW, (void)windowH;
+    return false;
+  }
+  // The view at a point of the window (an inset before what it lies over); -1: none. Without views: 0.
+  virtual int ViewAt(float x, float y) {
+    (void)x, (void)y;
+    return 0;
+  }
+  // The answers of Project, GroundAt, UnitAt, UnitsIn and LifeBarAnchors for a view, x and y in its own pixels (a
+  // window point less its place), by its frame last drawn. View 0's are those functions themselves.
+  virtual bool ViewProject(int view, const float world[3], float* x, float* y) { return view == 0 && Project(world, x, y); }
+  virtual bool ViewGroundAt(int view, float x, float y, float world[3]) { return view == 0 && GroundAt(x, y, world); }
+  virtual uint32_t ViewUnitAt(int view, float x, float y) { return view == 0 ? UnitAt(x, y) : 0xffffffffu; }
+  virtual void ViewUnitsIn(int view, float x0, float y0, float x1, float y1, std::vector<uint32_t>* out) {
+    if (view == 0) UnitsIn(x0, y0, x1, y1, out);
+    else out->clear();
+  }
   // What the next pictures show beside the world itself; it stays until it is set again.
   virtual void SetScene(const WorldScene& scene) = 0;
   // True when the world is shown in the window by the renderer itself (the interface laid over
@@ -234,6 +277,11 @@ class WorldSource {
     float x, y;
   };
   virtual void LifeBarAnchors(std::vector<BarAnchor>* out) { out->clear(); }
+  // [views] A view's (its own pixels; another view's are a frame late: the renderer's ViewLifeBarAnchors).
+  virtual void ViewLifeBarAnchors(int view, std::vector<BarAnchor>* out) {
+    if (view == 0) LifeBarAnchors(out);
+    else out->clear();
+  }
   // A unit's place and turn as the coming frame shows it (orientation a quaternion x, y, z, w), for
   // the camera following units (renderer request 28); false: not known here (the camera then takes
   // the last beat's).

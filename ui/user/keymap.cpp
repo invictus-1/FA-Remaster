@@ -306,14 +306,14 @@ const std::vector<const char*>& ConsoleNames() {
     std::vector<const char*> all = {
 #include "user/console_names.inc"
         // ours (the Video options', the statistics overlay's, the cinematic camera's, the photo's, the photo mode's,
-        // the command palette's and the replay timeline's)
+        // the command palette's, the replay timeline's and the follow camera's)
         "remaster_effects", "remaster_effects_quality", "remaster_frame_rate", "remaster_graphics_api", "remaster_look",
         "remaster_rich_ground", "remaster_snow_tracks", "remaster_stats", "remaster_temporal_upscale", "remaster_tracers", "remaster_upscale",
         "remaster_atmosphere", "remaster_soft_shadows", "remaster_ray_tracing", "remaster_weather_effects",
         "remaster_ground_detail", "remaster_frame_generation", "remaster_water_ripples", "remaster_lens", "remaster_cinecam",
         "remaster_photo", "remaster_battle_effects", "remaster_energy_shields", "remaster_hidden_outlines",
         "remaster_photo_look", "remaster_low_latency", "remaster_photo_mode", "remaster_season", "remaster_color_vision",
-        "remaster_palette", "remaster_timeline"};
+        "remaster_palette", "remaster_timeline", "remaster_follow_cam"};
     std::sort(all.begin(), all.end(), ConNameLess);
     return all;
   }();
@@ -1163,6 +1163,12 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
   // front end and in a game. Its key action "Command palette" (Ctrl-Shift-P at first) runs it.
   if (Upper(name) == "REMASTER_PALETTE") return CallScript(L, "/moho64ui/lua/palette.lua", "Command", rest);
   if (Upper(name) == "REMASTER_TIMELINE") return TimelineCommand(L, rest);  // the replay timeline (replay_timeline.cpp)
+  // The follow camera (ours: ui/data/lua/followcam.lua, its camera maui/worldview.cpp): remaster_follow_cam [on|off]
+  // (no word: it turns over), in a game or a replay. Its key action "Follow camera" (Ctrl-Alt-V at first) runs it.
+  if (Upper(name) == "REMASTER_FOLLOW_CAM") {
+    if (!UserState::From(L)->gameInterface) return ConsoleNoSession(L);
+    return CallScript(L, "/moho64ui/lua/followcam.lua", "Command", rest);
+  }
   // UI_ToggleGamePanels (FA exe 0x8349d0, READ: its whole body is import("/lua/ui/game/gamemain.lua").HideGameUI()
   // called without an argument, which turns the game's panels over; no session check of its own). FAF's UserSync runs
   // it for Sync.ToggleGamePanels.

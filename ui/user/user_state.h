@@ -178,6 +178,20 @@ class UserState {
     bool taking = false;
   };
   PhotoModeState photoMode;
+  // The follow camera (ours, Chris's approval of 2026-10-23: worldview.cpp FollowCamFrame, its frame
+  // /moho64ui/lua/followcam.lua): on, the unit it follows (an entity id), where its picture lies in the window (x, y,
+  // width, height; shown: its frame is on the screen), the unit's place and heading as last seen (`seen`: there is one),
+  // the interface clock when the unit was lost (-1 while it is there), and the camera made from it each frame.
+  struct FollowCamState {
+    bool on = false, shown = false, seen = false;
+    uint32_t unit = 0xffffffffu;
+    int rect[4] = {0, 0, 0, 0};
+    float place[3] = {0, 0, 0};
+    float yaw = 0, distance = 30, lift = 2;
+    double lostAt = -1;
+    float camera[6] = {0, 0, 0, 0, 0, 0};  // target x, y, z, distance, heading, pitch (WorldCamera's)
+  };
+  FollowCamState followCam;
 
   // One frame: the clock moves on by `seconds`; controls that asked for it get OnFrame; then the
   // script threads that are due run. (The order of those two within a frame is inferred.)

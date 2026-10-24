@@ -867,6 +867,11 @@ PhotoModeSettings& PhotoSettings() {
 
 class WorldView;
 WorldView* MainView(Control* c);  // further down: the first world view that is not a minimap
+// [views] Each gathering of the picture's views (WorldView::GatherViews) counts one; a view's own count says whether
+// it was among the last ones gathered.
+uint32_t g_viewsGathered = 0;
+int g_insetView = -1;                     // (the follow camera's number among them as last gathered; -1: none)
+std::vector<WorldViewSpec> g_viewsGiven;  // (the views as last gathered: moho64ui_Views)
 
 class WorldView : public Control {
  public:
@@ -899,6 +904,118 @@ class WorldView : public Control {
   uint32_t pictureFrame_ = 0xffffffffu;
   WorldCamera pictureCamera_;
   float pictureLodScale_ = 1;  // its camera's LOD scale then (Camera::lodScale)
+  // [views] The split screen (the original's: FAF's borders.SplitMapGroup makes a second world view, viewRight, of the
+  // camera "WorldCamera2", beside the main one) and the follow camera's picture (ours) are views of ONE picture of the
+  // renderer (WorldPicture::SetViews; render-answers "request 35"): the main view's EnsurePicture gathers them all each
+  // time (GatherViews) and gives them to the source before its picture is made sure of; another world view's picture
+  // is the main view's (its EnsurePicture makes sure of that one), and what it asks of the picture goes to its own view
+  // (the Src* calls below, in its own pixels). As the original: each CUIWorldView draws the world and the session's
+  // marks through its own camera in its own rectangle (CUIWorldView::DoRender 0x86ef40 sets its camera's viewport from
+  // its Left, Top, Width and Height, +0x48 .. +0xac, when they change; CUIWorldView::Render 0x86ee00 draws the strategic
+  // icons, the deposits', the projectiles' icons and arcs, the meshes, the command splats and the economy overlay with
+  // the camera at +4). INFERRED: one picture with views where the original renders each view on its own.
+  // `viewIndex_`: this view's number among the views (0: the main one, or the picture has one view); `viewsGathered_`:
+  // the gathering it was in (g_viewsGathered).
+  int viewIndex_ = 0;
+  uint32_t viewsGathered_ = 0;
+  // (the main view) its picture with views is the window's (the views' pictures laid into it): drawn at the window's top
+  // left, compositeW_ x compositeH_ (a picture read back: without the renderer's window)
+  bool composite_ = false;
+  int compositeW_ = 0, compositeH_ = 0;
+  int ViewNumber() const { return viewsGathered_ == g_viewsGathered ? viewIndex_ : 0; }
+  bool SrcProject(WorldSource* s, const float p[3], float* x, float* y) const {
+    const int v = ViewNumber();
+    return v > 0 ? s->ViewProject(v, p, x, y) : s->Project(p, x, y);
+  }
+  bool SrcGroundAt(WorldSource* s, float x, float y, float world[3]) const {
+    const int v = ViewNumber();
+    return v > 0 ? s->ViewGroundAt(v, x, y, world) : s->GroundAt(x, y, world);
+  }
+  uint32_t SrcUnitAt(WorldSource* s, float x, float y) const {
+    const int v = ViewNumber();
+    return v > 0 ? s->ViewUnitAt(v, x, y) : s->UnitAt(x, y);
+  }
+  void SrcUnitsIn(WorldSource* s, float x0, float y0, float x1, float y1, std::vector<uint32_t>* out) const {
+    const int v = ViewNumber();
+    if (v > 0) s->ViewUnitsIn(v, x0, y0, x1, y1, out);
+    else s->UnitsIn(x0, y0, x1, y1, out);
+  }
+  // The views of the picture (on the main view, this one): this one first, then every other world view of the first
+  // head that shows (not a minimap, not hidden: the split screen's right one) in the order of the control tree, each a
+  // Split view at its own rectangle with its own camera; then the follow camera's picture while it is on and its frame
+  // shows (FollowCamFrame). Empty when this view is the only one: the picture as it always was. `views` gets the world
+  // views in their order.
+  std::vector<WorldViewSpec> GatherViews(lua_State* L, std::vector<WorldView*>* views) {
+    UserState* user = UserState::From(L);
+    views->assign(1, this);
+    CollectOthers(user->ui().GetFrame(0), views);
+    ++g_viewsGathered;
+    viewIndex_ = 0, viewsGathered_ = g_viewsGathered;
+    const UserState::FollowCamState& f = user->followCam;
+    const bool inset = f.on && f.shown && f.seen && f.rect[2] > 0 && f.rect[3] > 0;
+    std::vector<WorldViewSpec> specs;
+    g_insetView = -1;
+    g_viewsGiven.clear();
+    if (views->size() == 1 && !inset) return specs;
+    for (size_t i = 0; i < views->size(); ++i) {
+      WorldView* v = (*views)[i];
+      v->viewIndex_ = static_cast<int>(i), v->viewsGathered_ = g_viewsGathered;
+      Rect r;
+      v->GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
+      WorldViewSpec s;
+      s.x = static_cast<int>(r.x0), s.y = static_cast<int>(r.y0);
+      s.width = std::max(1, static_cast<int>(r.x1 - r.x0)), s.height = std::max(1, static_cast<int>(r.y1 - r.y0));
+      s.camera = v->PictureCameraFor(L);
+      s.kind = i == 0 ? WorldViewSpec::Kind::Main : WorldViewSpec::Kind::Split;
+      specs.push_back(s);
+    }
+    if (inset) {
+      WorldViewSpec s;
+      s.x = f.rect[0], s.y = f.rect[1], s.width = f.rect[2], s.height = f.rect[3];
+      for (int i = 0; i < 3; ++i) s.camera.target[i] = f.camera[i];
+      s.camera.distance = f.camera[3], s.camera.heading = f.camera[4], s.camera.pitch = f.camera[5];
+      s.camera.fovY = kFollowFovY;
+      s.camera.lodScale = GetCameraObject(L, cameraName)->lodScale;
+      s.kind = WorldViewSpec::Kind::Inset;
+      s.every = 2;
+      g_insetView = static_cast<int>(specs.size());
+      specs.push_back(s);
+    }
+    g_viewsGiven = specs;
+    return specs;
+  }
+  static constexpr float kFollowFovY = 0.75f;  // (the follow camera's upright field of view, radians: ours)
+  void CollectOthers(Control* c, std::vector<WorldView*>* views) {
+    if (!c || c->dead() || c->IsHidden()) return;
+    if (WorldView* v = dynamic_cast<WorldView*>(c))
+      if (v != this && !v->miniMap) views->push_back(v);
+    for (Control* k : c->children()) CollectOthers(k, views);
+  }
+  // After the main view's picture was made (`views` and `specs` as GatherViews gave them, drawn at `drawW` x `drawH`):
+  // what the other views know of their part of it.
+  void NoteViewsDrawn(lua_State* L, const std::vector<WorldView*>& views, const std::vector<WorldViewSpec>& specs, int drawW, int drawH) {
+    composite_ = !specs.empty();
+    compositeW_ = drawW, compositeH_ = drawH;
+    for (size_t i = 1; i < views.size() && i < specs.size(); ++i) {
+      WorldView* v = views[i];
+      v->pixels_ = pixels_;  // (a picture there is: the main view's draws it)
+      v->pictureW_ = specs[i].width, v->pictureH_ = specs[i].height;
+      v->pictureFrame_ = UserState::From(L)->frame();
+      v->pictureCamera_ = specs[i].camera;
+      v->pictureLodScale_ = specs[i].camera.lodScale;
+      v->sceneMade_ = true;
+    }
+  }
+  // The world view the mouse is over among the picture's (the main view's scene: the unit under the mouse, the building
+  // being placed there, the path preview's cursor): `flag` by the views' mouse-over flag (the hover, as the original's
+  // frame update of the view with the mouse in), else by their rectangles; null over none.
+  WorldView* PointedView(lua_State* L, const std::vector<WorldView*>& views, bool flag) const {
+    const UiManager& ui = UserState::From(L)->ui();
+    for (WorldView* v : views)
+      if (flag ? v->mouseIn : v->HitTest(ui.mouseX, ui.mouseY)) return v;
+    return nullptr;
+  }
+
   // The time-left texts at the order lines' nodes as the scene was last made (OrderLinesForWorld).
   std::vector<OrderEta> orderEtas_;
   // The buildings being placed under the mouse as the scene was last made (for tests: moho64ui_BuildGhosts).
@@ -939,11 +1056,21 @@ class WorldView : public Control {
     UserState* user = UserState::From(L);
     WorldSource* source = user->config().world;
     if (!source || miniMap) return false;
+    // [views] Another world view than the main one (the split screen's right): its picture is the main view's, which
+    // draws it as one of its views (GatherViews); none while it is not among them.
+    WorldView* main = MainView(user->ui().GetFrame(0));
+    if (main && main != this) return main->EnsurePicture(L) && ViewNumber() > 0 && pixels_ != nullptr;
     Rect r;
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
     int w = static_cast<int>(r.x1 - r.x0), h = static_cast<int>(r.y1 - r.y0);
     if (w <= 0 || h <= 0) return false;
     WorldCamera cam = PictureCameraFor(L);
+    // [views] The picture's views as they are now, given to the source first (it says whether they changed); with
+    // views the picture is drawn at the window's size, each view's at its place in it.
+    std::vector<WorldView*> views;
+    const std::vector<WorldViewSpec> specs = GatherViews(L, &views);
+    const bool viewsChanged = source->SetViews(specs, user->ui().width(), user->ui().height());
+    const int drawW = specs.empty() ? w : std::max(1, user->ui().width()), drawH = specs.empty() ? h : std::max(1, user->ui().height());
     // The simulation itself only for building sites (outlines, the ghost under the mouse): it waits
     // for a beat running on its thread, so only then (UserState::LiveSim).
     const bool hasSim = user->HasSim();
@@ -952,7 +1079,7 @@ class WorldView : public Control {
       if (!simNow) simNow = user->LiveSim("the picture's scene: building sites");
       return *simNow;
     };
-    bool same = pixels_ && pictureFrame_ == user->frame() && w == pictureW_ && h == pictureH_ &&
+    bool same = pixels_ && !viewsChanged && pictureFrame_ == user->frame() && w == pictureW_ && h == pictureH_ &&
                 cam.distance == pictureCamera_.distance && cam.heading == pictureCamera_.heading && cam.pitch == pictureCamera_.pitch &&
                 cam.target[0] == pictureCamera_.target[0] && cam.target[2] == pictureCamera_.target[2];
     if (same) return true;
@@ -960,9 +1087,10 @@ class WorldView : public Control {
     // marks and order lines, the rings, the mark under the mouse: at most a beat old, and they
     // would ask the simulation); only the camera is new.
     if (sceneMade_ && user->config().beatRunning && user->config().beatRunning()) {
-      pixels_ = source->Draw(cam, w, h);
+      pixels_ = source->Draw(cam, drawW, drawH);
       pictureW_ = w, pictureH_ = h, pictureFrame_ = user->frame(), pictureCamera_ = cam;
       if (const Camera* shown = GetCameraObject(L, cameraName)) pictureLodScale_ = shown->lodScale;
+      NoteViewsDrawn(L, views, specs, drawW, drawH);
       return pixels_ != nullptr;
     }
     // (Its parts are timed under their own names in the binding profile.)
@@ -994,11 +1122,15 @@ class WorldView : public Control {
     scene.lifeBarsOnEnemies = user->lifeBarsOnEnemies;
     scene.resourceIcons = resources;  // (this view's EnableResourceRendering)
     // The unit under the mouse gets its mark (by the picture before this one), unless the script
-    // has switched highlighting off or the mouse is over something else.
+    // has switched highlighting off or the mouse is over something else. ([views] in whichever of the picture's world
+    // views the mouse is: the marks are the picture's, in every view.)
     UiManager& mouse = user->ui();
     uint32_t rollover = 0xffffffffu;
-    if (highlight && pixels_ && Looks().selectTolerance >= 0 && mouseIn) {
-      uint32_t under = source->UnitAt(mouse.mouseX - r.x0, mouse.mouseY - r.y0);
+    WorldView* hovered = PointedView(L, views, true);
+    if (hovered && hovered->highlight && pixels_ && Looks().selectTolerance >= 0) {
+      Rect hr;
+      hovered->GetRect(&hr.x0, &hr.y0, &hr.x1, &hr.y1);
+      uint32_t under = hovered->SrcUnitAt(source, mouse.mouseX - hr.x0, mouse.mouseY - hr.y0);
       int kind = under != 0xffffffffu ? HoverKindOf(L, under) : 0;
       if (kind) scene.hover = under, scene.hoverKind = kind;
       rollover = HoverOf(L, under);
@@ -1036,10 +1168,18 @@ class WorldView : public Control {
       // its green over the blue for a building that is still someone's order)
       for (const WorldGhost& g : ordered) SiteOutline(L, sim(), g, 0xff10d010u, &scene.lines);
     }
-    if (building && pixels_ && HitTest(ui.mouseX, ui.mouseY)) {
+    // ([views] the ground under the mouse in whichever of the picture's world views it is)
+    WorldView* pointed = PointedView(L, views, false);
+    auto groundUnderMouse = [&](float at[3]) {
+      if (!pointed) return false;
+      Rect pr;
+      pointed->GetRect(&pr.x0, &pr.y0, &pr.x1, &pr.y1);
+      return pointed->SrcGroundAt(source, ui.mouseX - pr.x0, ui.mouseY - pr.y0, at);
+    };
+    if (building && pixels_ && pointed) {
       float at[3];
       WorldGhost ghost;
-      if (source->GroundAt(ui.mouseX - r.x0, ui.mouseY - r.y0, at)) {
+      if (groundUnderMouse(at)) {
         SnapToDeposit(L, at);  // (an extractor's place jumps onto the deposit near the mouse, as the cursor's does)
         if (buildDrag_ && name == buildName_) {  // the left button is held: the row so far
           BuildRow(L, sim(), name, buildFrom_, at, &scene.ghosts, buildShift_);
@@ -1086,11 +1226,17 @@ class WorldView : public Control {
       const float farthest = MaxZoom(c);
       rings.zoomShare = farthest > 0 ? c->zoom / farthest : 1;
       rings.playable = std::max(x1 - x0, z1 - z0);
-      rings.placing = building && pixels_ && HitTest(ui.mouseX, ui.mouseY) &&
-                      source->GroundAt(ui.mouseX - r.x0, ui.mouseY - r.y0, rings.mouse);
+      rings.placing = building && pixels_ && groundUnderMouse(rings.mouse);
       if (rings.placing) rings.blueprint = name;
-      rings.unitsInView = [source, w, h](std::vector<uint32_t>* ids) {
+      // ([views] the units in every world view of the picture, each once)
+      rings.unitsInView = [source, w, h, &views, &specs](std::vector<uint32_t>* ids) {
         source->UnitsIn(0, 0, static_cast<float>(w), static_cast<float>(h), ids);
+        std::vector<uint32_t> more;
+        for (size_t i = 1; i < views.size() && i < specs.size(); ++i) {
+          views[i]->SrcUnitsIn(source, 0, 0, static_cast<float>(specs[i].width), static_cast<float>(specs[i].height), &more);
+          for (uint32_t id : more)
+            if (std::find(ids->begin(), ids->end(), id) == ids->end()) ids->push_back(id);
+        }
         return true;
       };
       RangeRingsForWorld(L, rings, &scene.ranges);
@@ -1106,10 +1252,11 @@ class WorldView : public Control {
     lap("(the picture's scene: meshes)");
     source->SetScene(scene);
     lap("(the picture's scene: SetScene)");
-    pixels_ = source->Draw(cam, w, h);
+    pixels_ = source->Draw(cam, drawW, drawH);
     lap("(the picture's scene: Draw)");
     pictureW_ = w, pictureH_ = h, pictureFrame_ = user->frame(), pictureCamera_ = cam;
     if (const Camera* shown = GetCameraObject(L, cameraName)) pictureLodScale_ = shown->lodScale;
+    NoteViewsDrawn(L, views, specs, drawW, drawH);
     sceneMade_ = true;
     return pixels_ != nullptr;
   }
@@ -1139,16 +1286,19 @@ class WorldView : public Control {
   // What DrawOrderEtas draws now (the view's rectangle r): also what moho64ui_OrderEtas reports.
   void OrderEtasToDraw(lua_State* L, const Rect& r, std::vector<DrawnEta>* out) {
     out->clear();
-    if (miniMap || orderEtas_.empty()) return;
+    // ([views] the main view's, which made the scene: the same nodes in every world view, each at its own place)
+    const WorldView* main = ViewNumber() > 0 ? MainView(UserState::From(L)->ui().GetFrame(0)) : this;
+    const std::vector<OrderEta>& etas = main ? main->orderEtas_ : orderEtas_;
+    if (miniMap || etas.empty()) return;
     WorldSource* source = UserState::From(L)->config().world;
     if (!source || !pixels_ || !DisplayEtaOption(L)) return;
     const FontMetrics m = GetFontMetrics(kEtaFont, kEtaFontSize);
     const float most = GraphVars().maxTextLod;
-    for (const OrderEta& e : orderEtas_) {
+    for (const OrderEta& e : etas) {
       if (e.state == 0 && LodAt(e.position) >= most) continue;  // (0x82870a: comiss, jae)
       const float corner[3] = {e.position[0] + e.size, e.position[1], e.position[2] - e.size};
       float x = 0, y = 0;
-      if (!source->Project(corner, &x, &y)) continue;
+      if (!SrcProject(source, corner, &x, &y)) continue;
       out->push_back({e.text, r.x0 + std::nearbyint(x + 1.0f), r.y0 + std::nearbyint(y - (m.descent + 1.0f)), e.state});
     }
   }
@@ -1213,7 +1363,7 @@ class WorldView : public Control {
     const bool names = style.on && AnyCustomNames(L), sets = style.setsOn && AnySelectionSets(L);
     if (!names && !sets) return;  // (else nothing is asked of the picture)
     std::vector<WorldSource::BarAnchor> anchors;
-    UserState::From(L)->config().world->LifeBarAnchors(&anchors);
+    UserState::From(L)->config().world->ViewLifeBarAnchors(ViewNumber(), &anchors);  // ([views] this view's own)
     const FontMetrics m = GetFontMetrics(style.font, style.size);
     auto line = [&](const std::string& text, float px, float py, uint32_t color, float* left, float* top) {
       const float w = StringAdvance(style.font, style.size, text);
@@ -1310,7 +1460,7 @@ class WorldView : public Control {
     target.SetClip(r);
     for (const EconomyMark& mark : marks) {
       float x = 0, y = 0;
-      if (!source->Project(mark.position, &x, &y)) continue;
+      if (!SrcProject(source, mark.position, &x, &y)) continue;
       x += r.x0, y += r.y0;
       if (x < r.x0 - 64 || x > r.x1 + 64 || y < r.y0 - 64 || y > r.y1 + 64) continue;  // (in the camera's view only)
       const std::string energy = format(mark.energy, true), mass = format(mark.mass, false);
@@ -1417,19 +1567,36 @@ class WorldView : public Control {
     Rect r;
     if (MinimapRect(L, &r)) {
       int w = static_cast<int>(r.x1 - r.x0), h = static_cast<int>(r.y1 - r.y0);
-      float corners[4][3];
-      const bool outline = MainViewCorners(L, corners);
+      // [views] every world view's outline: with the split screen both cameras' (the original's cartographic drawing,
+      // WRenViewport::RenderCartographic 0x7f8ba0, outlines the camera of each world view of its head that is not itself
+      // cartographic, the loop 0x7f8fa0 .. 0x7f8fed -> RenderCameraOutline 0x7f98a0)
+      struct Outline {
+        float corners[4][3];
+      };
+      std::vector<Outline> outlines;
+      if (WorldView* main = MainView(UserState::From(L)->ui().GetFrame(0))) {
+        std::vector<WorldView*> shown(1, main);
+        main->CollectOthers(UserState::From(L)->ui().GetFrame(0), &shown);
+        for (WorldView* v : shown) {
+          Outline o;
+          if (ViewCorners(L, v, o.corners)) outlines.push_back(o);
+        }
+      }
       if (const uint32_t* pixels = UserState::From(L)->config().world->DrawMinimap(w, h, resources)) {
         target.DrawPixels(pixels, w, h, static_cast<int>(r.x0), static_cast<int>(r.y0));
         minimapW_ = w, minimapH_ = h;
       }
-      if (outline) DrawMainViewOutline(L, target, r, corners);
+      for (const Outline& o : outlines) DrawMainViewOutline(L, target, r, o.corners);
       return;
     }
     if (!EnsurePicture(L)) return;
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
-    if (!UserState::From(L)->config().world->DrawsToWindow())  // (else the renderer lays the world under the interface)
-      target.DrawPixels(pixels_, pictureW_, pictureH_, static_cast<int>(r.x0), static_cast<int>(r.y0));
+    // (else the renderer lays the world under the interface; [views] another world view's part is in the main view's
+    // picture, which then is the window's: the views laid into it at their places)
+    if (!UserState::From(L)->config().world->DrawsToWindow() && ViewNumber() == 0) {
+      if (composite_) target.DrawPixels(pixels_, compositeW_, compositeH_, 0, 0);
+      else target.DrawPixels(pixels_, pictureW_, pictureH_, static_cast<int>(r.x0), static_cast<int>(r.y0));
+    }
     if (!UserState::From(L)->photoMode.open) {  // (none of the interface's texts over the world in the photo mode)
       DrawOrderEtas(L, target, r);
       DrawCustomNames(L, target, r);
@@ -1450,21 +1617,19 @@ class WorldView : public Control {
     // (The marks of the orders' waypoints are the picture's now: WorldScene::orderMarks.)
   }
 
-  // On a minimap: the outline of the ground the main view shows, its four corners joined (a
-  // trapezoid when the camera leans), as the original draws it. The corners are the places under
-  // the main view's corners by the picture it last drew: asked BEFORE the minimap's own picture
-  // is made (its first drawing leaves the picture's camera as the minimap's). False until the
-  // main view has a picture, or when a corner looks at the sky.
-  bool MainViewCorners(lua_State* L, float world[4][3]) {
-    UserState* user = UserState::From(L);
-    WorldView* main = MainView(user->ui().GetFrame(0));
-    WorldSource* source = user->config().world;
+  // On a minimap: the outline of the ground a world view shows (the main one; with the split screen each), its four
+  // corners joined (a trapezoid when the camera leans), as the original draws it. The corners are the places under the
+  // view's corners by the picture it last drew: asked BEFORE the minimap's own picture is made (its first drawing
+  // leaves the picture's camera as the minimap's). False until the view has a picture, or when a corner looks at the
+  // sky.
+  bool ViewCorners(lua_State* L, const WorldView* main, float world[4][3]) {
+    WorldSource* source = UserState::From(L)->config().world;
     if (!main || !source || !main->pixels_) return false;
     Rect v;
     main->GetRect(&v.x0, &v.y0, &v.x1, &v.y1);
     const float corners[4][2] = {{0, 0}, {v.x1 - v.x0 - 1, 0}, {v.x1 - v.x0 - 1, v.y1 - v.y0 - 1}, {0, v.y1 - v.y0 - 1}};
     for (int i = 0; i < 4; ++i)
-      if (!source->GroundAt(corners[i][0], corners[i][1], world[i])) return false;
+      if (!main->SrcGroundAt(source, corners[i][0], corners[i][1], world[i])) return false;
     return true;
   }
   void DrawMainViewOutline(lua_State* L, DrawTarget& target, const Rect& map, const float world[4][3]) {
@@ -1505,7 +1670,7 @@ class WorldView : public Control {
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
     if (EnsurePicture(L)) {
       float x = 0, y = 0;
-      if (UserState::From(L)->config().world->Project(world, &x, &y)) *sx = r.x0 + x, *sy = r.y0 + y;
+      if (SrcProject(UserState::From(L)->config().world, world, &x, &y)) *sx = r.x0 + x, *sy = r.y0 + y;
       else *sx = *sy = -100000.0f;  // behind the camera: nowhere on screen
       return;
     }
@@ -1531,7 +1696,7 @@ class WorldView : public Control {
       return;
     }
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
-    if (((!fresh && PictureIsCurrent(L)) || EnsurePicture(L)) && UserState::From(L)->config().world->GroundAt(sx - r.x0, sy - r.y0, world)) return;
+    if (((!fresh && PictureIsCurrent(L)) || EnsurePicture(L)) && SrcGroundAt(UserState::From(L)->config().world, sx - r.x0, sy - r.y0, world)) return;
     float scale = c->zoom > 0 && r.y1 > r.y0 ? (r.y1 - r.y0) / (2.0f * EyeDistance(c) * std::tan(FovYOf(c) * 0.5f)) : 1;
     world[0] = c->focus[0] + (sx - (r.x0 + r.x1) * 0.5f) / scale;
     world[2] = c->focus[2] + (sy - (r.y0 + r.y1) * 0.5f) / scale;
@@ -1632,7 +1797,7 @@ class WorldView : public Control {
     WorldSource* source = UserState::From(L)->config().world;
     if (pixels_ && source && pictureH_ > 0) {
       float x = 0, y = 0;
-      if (!source->Project(p, &x, &y)) return false;
+      if (!SrcProject(source, p, &x, &y)) return false;
       const WorldCamera& c = pictureCamera_;
       const float back[3] = {std::sin(c.heading) * std::cos(c.pitch), std::sin(c.pitch), std::cos(c.heading) * std::cos(c.pitch)};
       float depth = 0;
@@ -1659,7 +1824,7 @@ class WorldView : public Control {
     Rect r;
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
     out->cursorInWorld = !miniMap && pixels_ && source && HitTest(ui.mouseX, ui.mouseY) &&
-                         source->GroundAt(ui.mouseX - r.x0, ui.mouseY - r.y0, out->cursor);
+                         SrcGroundAt(source, ui.mouseX - r.x0, ui.mouseY - r.y0, out->cursor);
     if (out->cursorInWorld) SnapToDeposit(L, out->cursor);
     CommandMode(L, &out->mode, &out->name);
     out->pixelAt = [this, L](const float p[3]) {
@@ -1780,12 +1945,31 @@ class WorldView : public Control {
   // A world view taken away while one of its waypoints is dragged: the drag ends as if cancelled. INFERRED: the
   // original's dragger is an object of its own that outlives the view (it holds the camera); here the view is the
   // dragger, and its going would leave the graph held with the node at the mouse.
+  // The view's camera goes with it: the original's view makes its own camera (CUIWorldView's constructor,
+  // RCamManager::CreateCamera 0x86e7a1, always a new CameraImpl) and deletes it (~CUIWorldView 0x86eb71), so a view
+  // made again under the name starts from a fresh camera (FAF's split screen: WorldCamera2 starts afresh on every
+  // split; worldview.lua's CreateMainWorldView keeps WorldCamera's place itself, SaveSettings / RestoreSettings).
+  // Here the cameras are kept by name: the name's camera goes unless another view still shows it. INFERRED: when.
+  // The original deletes it with the control at the frame's end, after the script made the new views; here it goes
+  // at the script's Destroy, so the new view of the name makes a new one at once (the same end: the restored main
+  // camera, a fresh WorldCamera2).
   void Destroy(lua_State* L) override {
     if (waypointDrag_) {
       waypointDrag_ = false;
       CancelWaypointDrag(L);
     }
     Control::Destroy(L);
+    UserState* user = UserState::From(L);
+    if (!ShowsCamera(user->ui().GetFrame(0), cameraName, this)) user->cameras.erase(cameraName);
+  }
+  // A living world view other than `except` under `c` with the camera `name`.
+  static bool ShowsCamera(Control* c, const std::string& name, const WorldView* except) {
+    if (!c || c->dead()) return false;
+    if (const WorldView* v = dynamic_cast<const WorldView*>(c))
+      if (v != except && v->cameraName == name) return true;
+    for (Control* k : c->children())
+      if (ShowsCamera(k, name, except)) return true;
+    return false;
   }
   // A dragger posted over this one (UICommandDragger::DragCancel 0x824290): the waypoint back to its order's place.
   void DragCancel(lua_State* L) override {
@@ -2100,7 +2284,7 @@ class WorldView : public Control {
     if (EnsurePicture(L)) {
       Rect r;
       GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
-      UserState::From(L)->config().world->UnitsIn(x0 - r.x0, y0 - r.y0, x1 - r.x0, y1 - r.y0, ids);
+      SrcUnitsIn(UserState::From(L)->config().world, x0 - r.x0, y0 - r.y0, x1 - r.x0, y1 - r.y0, ids);
       return;
     }
     std::vector<uint32_t> all;
@@ -2128,7 +2312,7 @@ class WorldView : public Control {
     }
     Rect r;
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
-    return HoverOf(L, UserState::From(L)->config().world->UnitAt(sx - r.x0, sy - r.y0));
+    return HoverOf(L, SrcUnitAt(UserState::From(L)->config().world, sx - r.x0, sy - r.y0));
   }
 
   // So many pixels of the view, in map units at the place the camera looks at.
@@ -3636,6 +3820,225 @@ int l_CameraShakeForTests(lua_State* L) {
 }
 }  // namespace
 
+// --- the follow camera (ours, not the original's: Chris's approval of 2026-10-23) ---
+// A small picture in a corner of the screen that follows one unit (an experimental, a transport, the commander): the
+// renderer's inset view (WorldPicture::SetViews, ViewKind::Inset: drawn every 2nd frame, flatter than the main view;
+// render-answers "request 35"), one of the picture's views (WorldView::GatherViews). Its frame, the unit's name and its
+// clicks are the script's (/moho64ui/lua/followcam.lua: the console's remaster_follow_cam, the key "Follow camera",
+// Ctrl-Alt-V at first: a left click jumps the main camera to the unit, a right click or the key again closes it). Here
+// the camera: each frame (AdvanceCameras) behind the unit where the coming frame shows it (WorldSource::UnitTransform),
+// looking the way it faces, its heading eased (a unit that turns at once would swing the picture round), at a
+// distance by the unit's size; once the unit is gone (it died: the picture no longer has it) the camera stays where it
+// was, on the wreck, for kFollowLinger seconds of the interface's clock and the follow camera closes. INFERRED (ours):
+// the distance, the height, the lean, the field of view (WorldView::kFollowFovY) and the ease.
+namespace {
+constexpr double kFollowLinger = 3.0;
+constexpr float kFollowPitch = 0.45f;  // (radians above the horizon)
+
+// The unit's size from its blueprint (SizeX, SizeY, SizeZ; 1 where it gives none): the camera's distance and height.
+void FollowCamSize(lua_State* L, const std::string& blueprint, UserState::FollowCamState* f) {
+  std::string id = blueprint;
+  for (char& ch : id) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+  float size[3] = {1, 1, 1};
+  const int top = lua_gettop(L);
+  lua_getglobal(L, "__blueprints");
+  if (lua_istable(L, -1)) {
+    lua_pushstring(L, id.c_str());
+    lua_rawget(L, -2);
+    if (lua_istable(L, -1)) {
+      const char* names[3] = {"SizeX", "SizeY", "SizeZ"};
+      for (int i = 0; i < 3; ++i) {
+        lua_pushstring(L, names[i]);
+        lua_rawget(L, -2);
+        if (lua_isnumber(L, -1)) size[i] = std::max(0.1f, static_cast<float>(lua_tonumber(L, -1)));
+        lua_pop(L, 1);
+      }
+    }
+  }
+  lua_settop(L, top);
+  const float largest = std::max(size[0], std::max(size[1], size[2]));
+  f->distance = std::clamp(10.0f + 3.5f * largest, 16.0f, 150.0f);
+  f->lift = size[1] * 0.5f;
+}
+
+void FollowCamFrame(lua_State* L, float seconds) {
+  UserState* user = UserState::From(L);
+  UserState::FollowCamState& f = user->followCam;
+  if (!f.on) return;
+  WorldSource* source = user->config().world;
+  float p[3], q[4];
+  if (source && source->UnitTransform(f.unit, p, q)) {
+    float yaw = 0, pitch = 0;
+    YawPitchOf(q, &yaw, &pitch);
+    if (!f.seen) {
+      f.yaw = yaw;
+    } else {  // (eased: two thirds of the way in about a quarter of a second)
+      const float to = NearestAngle(f.yaw, yaw);
+      f.yaw += (to - f.yaw) * (1.0f - std::exp(-4.0f * std::max(0.0f, seconds)));
+      while (f.yaw > kPi) f.yaw -= 2 * kPi;
+      while (f.yaw < -kPi) f.yaw += 2 * kPi;
+    }
+    for (int i = 0; i < 3; ++i) f.place[i] = p[i];
+    f.seen = true;
+    f.lostAt = -1;
+  } else {
+    if (f.lostAt < 0) f.lostAt = user->clockNow();
+    if (user->clockNow() - f.lostAt >= kFollowLinger) {
+      Logf(LogLevel::Info, "moho64ui: the follow camera closes: unit %u is gone", f.unit);
+      f.on = f.seen = false;
+      return;
+    }
+  }
+  if (!f.seen) return;
+  f.camera[0] = f.place[0], f.camera[1] = f.place[1] + f.lift, f.camera[2] = f.place[2];
+  f.camera[3] = f.distance;
+  f.camera[4] = f.yaw - kPi;  // (WorldCamera's heading: the eye behind the unit, looking the way it faces)
+  f.camera[5] = kFollowPitch;
+}
+
+// moho64ui_FollowCamSet(entity) -> true, or false and why: the follow camera on that unit (its entity id, a number or
+// the string GetEntityId gives); nil: off. (The follow camera's script, followcam.lua.)
+int l_FollowCamSet(lua_State* L) {
+  UserState* user = UserState::From(L);
+  UserState::FollowCamState& f = user->followCam;
+  auto refuse = [&](const char* why) {
+    lua_pushboolean(L, 0);
+    lua_pushstring(L, why);
+    return 2;
+  };
+  if (lua_isnoneornil(L, 1)) {
+    if (f.on) Logf(LogLevel::Info, "moho64ui: the follow camera is closed");
+    f.on = f.seen = false;
+    f.unit = 0xffffffffu;
+    lua_pushboolean(L, 1);
+    return 1;
+  }
+  if (!lua_isnumber(L, 1)) return refuse("no unit given");
+  const uint32_t id = static_cast<uint32_t>(lua_tonumber(L, 1));
+  if (!user->config().world) return refuse("there is no picture of the world");
+  std::string blueprint;
+  float place[3];
+  int army = 0;
+  if (!UserUnitFacts(L, id, &blueprint, place, &army)) return refuse("there is no such unit");
+  f.on = true, f.seen = false;
+  f.unit = id;
+  f.lostAt = -1;
+  FollowCamSize(L, blueprint, &f);
+  FollowCamFrame(L, 0);  // (its camera now: the views gathered before the next frame have it)
+  Logf(LogLevel::Info, "moho64ui: the follow camera follows unit %u (%s), %.0f away", id, blueprint.c_str(), f.distance);
+  lua_pushboolean(L, 1);
+  return 1;
+}
+// moho64ui_FollowCamPlace(left, top, width, height, shown): where the follow camera's picture lies in the window (the
+// inside of its frame, whole pixels) and whether its frame is on the screen now (not while the game's panels are put
+// away: the photo mode, the player's key).
+int l_FollowCamPlace(lua_State* L) {
+  UserState::FollowCamState& f = UserState::From(L)->followCam;
+  for (int i = 0; i < 4; ++i) f.rect[i] = static_cast<int>(std::floor(lua_tonumber(L, i + 1)));
+  f.shown = lua_toboolean(L, 5) != 0;
+  return 0;
+}
+// moho64ui_FollowCamState() -> {on, unit, seen, lost (seconds since the unit was lost; nil while it is there), place =
+// {x, y, z} (where it was last seen), rect = {x, y, w, h}, shown, view (the picture's view it is drawn as, from 0; nil:
+// none), camera = {target = {x, y, z}, distance, heading, pitch}}.
+int l_FollowCamState(lua_State* L) {
+  UserState* user = UserState::From(L);
+  const UserState::FollowCamState& f = user->followCam;
+  lua_newtable(L);
+  auto field = [&](const char* key, auto push) {
+    lua_pushstring(L, key);
+    push();
+    lua_rawset(L, -3);
+  };
+  field("on", [&] { lua_pushboolean(L, f.on); });
+  field("unit", [&] { lua_pushnumber(L, f.unit); });
+  field("seen", [&] { lua_pushboolean(L, f.seen); });
+  if (f.on && f.lostAt >= 0) field("lost", [&] { lua_pushnumber(L, user->clockNow() - f.lostAt); });
+  field("place", [&] { PushVector(L, f.place[0], f.place[1], f.place[2]); });
+  field("rect", [&] {
+    lua_newtable(L);
+    for (int i = 0; i < 4; ++i) {
+      lua_pushnumber(L, f.rect[i]);
+      lua_rawseti(L, -2, i + 1);
+    }
+  });
+  field("shown", [&] { lua_pushboolean(L, f.shown); });
+  if (g_insetView >= 0) field("view", [&] { lua_pushnumber(L, g_insetView); });
+  field("camera", [&] {
+    lua_newtable(L);
+    lua_pushstring(L, "target");
+    PushVector(L, f.camera[0], f.camera[1], f.camera[2]);
+    lua_rawset(L, -3);
+    const char* names[3] = {"distance", "heading", "pitch"};
+    for (int i = 0; i < 3; ++i) {
+      lua_pushstring(L, names[i]);
+      lua_pushnumber(L, f.camera[3 + i]);
+      lua_rawset(L, -3);
+    }
+  });
+  return 1;
+}
+// moho64ui_FollowCamJump() -> true: the main view's camera looks at the followed unit's place at once, as a left
+// press on the minimap moves it (TargetLocation: its zoom and turn kept, following stops); false while the follow
+// camera has no place.
+int l_FollowCamJump(lua_State* L) {
+  UserState* user = UserState::From(L);
+  const UserState::FollowCamState& f = user->followCam;
+  WorldView* v = MainView(user->ui().GetFrame(0));
+  if (!f.on || !f.seen || !v) {
+    lua_pushboolean(L, 0);
+    return 1;
+  }
+  Camera* c = GetCameraObject(L, v->cameraName);
+  TakeCameraBack(L, c);
+  TargetLocation(c, f.place);
+  c->cut = true;
+  lua_pushboolean(L, 1);
+  return 1;
+}
+// moho64ui_Views() -> {{x, y, width, height, kind = "main" | "split" | "inset", camera = {target, distance, heading,
+// pitch}}, ...}: the picture's views as the main view last gathered them (made sure of first, as a drawn frame does);
+// empty: one view. moho64ui_ViewAt(x, y): the picture's view at a point of the window (-1: none). (For the tests.)
+int l_ViewsForTests(lua_State* L) {
+  UserState* user = UserState::From(L);
+  if (WorldView* v = MainView(user->ui().GetFrame(0))) v->EnsurePicture(L);
+  lua_newtable(L);
+  int n = 0;
+  for (const WorldViewSpec& s : g_viewsGiven) {
+    lua_newtable(L);
+    const std::pair<const char*, float> numbers[4] = {{"x", static_cast<float>(s.x)}, {"y", static_cast<float>(s.y)},
+                                                      {"width", static_cast<float>(s.width)}, {"height", static_cast<float>(s.height)}};
+    for (const auto& [key, value] : numbers) {
+      lua_pushstring(L, key);
+      lua_pushnumber(L, value);
+      lua_rawset(L, -3);
+    }
+    lua_pushstring(L, "kind");
+    lua_pushstring(L, s.kind == WorldViewSpec::Kind::Main ? "main" : s.kind == WorldViewSpec::Kind::Split ? "split" : "inset");
+    lua_rawset(L, -3);
+    lua_pushstring(L, "camera");
+    lua_newtable(L);
+    lua_pushstring(L, "target");
+    PushVector(L, s.camera.target[0], s.camera.target[1], s.camera.target[2]);
+    lua_rawset(L, -3);
+    const std::pair<const char*, float> cam[3] = {{"distance", s.camera.distance}, {"heading", s.camera.heading}, {"pitch", s.camera.pitch}};
+    for (const auto& [key, value] : cam) {
+      lua_pushstring(L, key);
+      lua_pushnumber(L, value);
+      lua_rawset(L, -3);
+    }
+    lua_rawset(L, -3);
+    lua_rawseti(L, -2, ++n);
+  }
+  return 1;
+}
+int l_ViewAtForTests(lua_State* L) {
+  WorldSource* source = UserState::From(L)->config().world;
+  lua_pushnumber(L, source ? source->ViewAt(static_cast<float>(lua_tonumber(L, 1)), static_cast<float>(lua_tonumber(L, 2))) : -1);
+  return 1;
+}
+}  // namespace
+
 void AdvanceCameras(lua_State* L, float seconds) {
   UserState* user = UserState::From(L);
   for (auto& entry : user->cameras) AdvanceCamera(L, static_cast<Camera*>(entry.second.get()), seconds);
@@ -3650,6 +4053,8 @@ void AdvanceCameras(lua_State* L, float seconds) {
     ShakeStep(c, seconds);
   }
   g_pendingShakes.clear();
+  // The follow camera's (ours): behind its unit where the coming frame shows it, before the views are gathered.
+  FollowCamFrame(L, seconds);
   // The photo mode's frame (ours): what the player holds goes to the free camera before its frame below.
   PhotoModeFrame(L, seconds);
   // The cinematic camera's frame (what it follows, its easing back; ours): after the cameras, so that a hand-back
@@ -3734,6 +4139,12 @@ void RegisterWorldViewBindings(lua_State* L) {
   lua_register(L, "moho64ui_PhotoModeSet", l_PhotoModeSet);
   lua_register(L, "moho64ui_PhotoModeTake", l_PhotoModeTake);
   lua_register(L, "moho64ui_PngInfo", l_PngInfoForTests);
+  lua_register(L, "moho64ui_FollowCamSet", l_FollowCamSet);
+  lua_register(L, "moho64ui_FollowCamPlace", l_FollowCamPlace);
+  lua_register(L, "moho64ui_FollowCamState", l_FollowCamState);
+  lua_register(L, "moho64ui_FollowCamJump", l_FollowCamJump);
+  lua_register(L, "moho64ui_Views", l_ViewsForTests);
+  lua_register(L, "moho64ui_ViewAt", l_ViewAtForTests);
   SetGlobal(L, "SetInvertMidMouseButton", l_SetInvertMidMouseButton);
   SetGlobal(L, "GetMouseScreenPos", l_GetMouseScreenPos);
   SetGlobal(L, "CreatePrefetchSet", l_CreatePrefetchSet);

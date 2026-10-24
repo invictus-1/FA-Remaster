@@ -17,6 +17,7 @@ RemasterOwnKeys = {
     { key = 'Alt-P', action = 'remaster_photo_mode' },
     { key = 'Ctrl-Shift-P', action = 'remaster_palette' },  -- (the command palette; Chris: Ctrl-K stays Self-Destruct)
     { key = 'Ctrl-T', action = 'remaster_timeline' },  -- (the replay timeline, shown or hidden; only while a replay plays)
+    { key = 'Ctrl-Alt-V', action = 'remaster_follow_cam' },  -- (the follow camera; the hotbuild and alternative maps' debug key there)
 }
 local remasterSeenKey = 'UserKeyMapRemasterActions'
 local remasterHotbuild = { hotbuilding = true, hotbuildingAlternative = true, hotbuildingExtra = true }
