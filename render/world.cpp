@@ -481,6 +481,22 @@ bool World::AheadBegun() {
   return true;
 }
 
+// [session] (world.h)
+void World::MakeSessionModels(const std::vector<std::string>& unitIds, const std::vector<std::pair<std::string, std::string>>& props,
+                              const std::atomic<bool>* stop) {
+  const bool rayed = (rayReflections || rayLightShadows) && RaysReady();  // (their ray-traced structures too, where rays are used)
+  for (const std::string& id : unitIds) {
+    if (stop && stop->load(std::memory_order_acquire)) return;
+    const Model* m = models.Unit(id);
+    if (rayed) rays.PrepareModel(m);
+  }
+  for (const auto& p : props) {
+    if (stop && stop->load(std::memory_order_acquire)) return;
+    const Model* m = PropModel(p.first, p.second);
+    if (rayed) rays.PrepareModel(m);
+  }
+}
+
 // [spikes] (readAhead) the kinds an army may build, made ahead (ModelCache::MakeAhead)
 void World::MakeAhead(const std::vector<std::string>& unitIds) {
   if (!readAhead || !haveMap_ || sidePicture || unitIds.empty()) return;
@@ -2709,6 +2725,16 @@ void World::PrepareAhead() {
   }
   if (decals.remasteredTarmacs) decals.tarmacs.Ahead();
   if (look != Look::Modern) return;
+  // [session] what the sky and the weather make the first frame they are on (a game's sky comes with its time of day, which
+  // the map's warm frames may not have had): the clouds' shaders with a nuke's ring, the weather on the horizon, the light
+  // shafts; made on the device's own thread while not wanted yet (each once: after that these return at once)
+  {
+    device_->BeginBackgroundPipelines();
+    if (volumetricClouds && volumeExplosions) clouds.PrepareRings();
+    if (horizonWeather && terrain.beyondReach > 0) horizon.PrepareAhead();
+    if (lightShafts && volumetricFog) sunlight.PrepareAhead();
+    device_->EndBackgroundPipelines();
+  }
   if (buildNow_) build.PrepareSparks();
   if (groundCover && (ao.strength > 0 || contactShadows)) ao.PrepareCover();
   if (groundCover && grassMade_ && plantsFar) grass.PrepareAhead(plantsReact);  // [plantlod] (the 3D plants' and the far cover's)

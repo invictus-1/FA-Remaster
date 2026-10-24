@@ -56,6 +56,11 @@
 //           made-up picture on the black of no world (_backdrop.png), and over the first map at half strength (_backdrop_over.png).
 //           --load-game-looks <bundles>: [ui 39] <map> with these lighting bundles (--settings' form), the others with
 //           --settings'; given after each swap, or with --load-hold before each BeginMap (WorldPicture::HoldLooks)
+//           --load-session <game config>: [session] <map> is that game's, opened behind while the game loads (LiveSim),
+//           shown once both are ready, then run at 10 beats a second; --load-session-prepare: WorldPicture::PrepareSession
+//           first (the session's models made behind). Needs --init (as --session). --load-day-after: --time-of-day given
+//           to <map> only after its swap (and none to the others), as the interface gives a game's day today; with
+//           --load-day, given to its warm frames before (WorldPicture::SetLoadDayAndWeather).
 // --picture-window  with --picture: the interface's way without a read-back: the picture drawn into a window of
 //           its own with a made-up interface layer over it (UseWindow, SetInterfaceLayer, DrawToWindow), read
 //           back once for the file
@@ -841,6 +846,10 @@ struct Options {
   int loadBackdrop = -1;                // [backdrop] --load-backdrop
   std::string loadGameLooks;            // [ui 39] --load-game-looks
   bool loadHold = false;                // [ui 39] --load-hold
+  std::string loadSession;              // [session] --load-session
+  bool loadSessionPrepare = false;      // [session] --load-session-prepare
+  bool loadDayAfter = false;            // [session] --load-day-after
+  bool loadDay = false;                 // [session] --load-day
   float loadBudget = 2;                 // [bgload] --load-budget
   int loadCycles = 2;                   // [bgload] --load-cycles
   float effectsQuality = 1;             // --effects-quality
@@ -1071,6 +1080,9 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--window-cycle") o->windowCycle = true;
     else if (a == "--load-test-open") o->loadTestOpen = true;  // [bgload]
     else if (a == "--load-hold") o->loadHold = true;  // [ui 39]
+    else if (a == "--load-session-prepare") o->loadSessionPrepare = true;  // [session]
+    else if (a == "--load-day-after") o->loadDayAfter = true;  // [session]
+    else if (a == "--load-day") o->loadDay = true;  // [session]
     else if (a == "--prepass") o->prepass = true;
     else if (a == "--no-prepass") o->prepass = false;
     else if (a == "--no-ground-changes") o->groundChanges = false;
@@ -1255,6 +1267,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--load-test") o->loadTest = v;  // [bgload]
     else if (a == "--load-backdrop") o->loadBackdrop = atoi(v);  // [backdrop]
     else if (a == "--load-game-looks") o->loadGameLooks = v;  // [ui 39]
+    else if (a == "--load-session") o->loadSession = v;  // [session]
     else if (a == "--load-budget") o->loadBudget = static_cast<float>(atof(v));  // [bgload]
     else if (a == "--load-cycles") o->loadCycles = std::max(1, atoi(v));  // [bgload]
     else if (a == "--views") o->views = v;  // [views]
@@ -1649,6 +1662,14 @@ int main(int argc, char** argv) {
     t.backdrop = opt.loadBackdrop;
     t.gameLooks = opt.loadGameLooks;
     t.holdLooks = opt.loadHold;
+    t.session = opt.loadSession;  // [session]
+    t.prepareSession = opt.loadSessionPrepare;
+    t.dayAfterSwap = opt.loadDayAfter;
+    t.loadDay = opt.loadDay;
+    t.initFile = opt.init;
+    t.modUids = opt.modUids;
+    t.maps = opt.maps;
+    t.seed = opt.seed;
     return LoadTest(vfs, t);
   }
   if (opt.windowCycle) {  // --window-cycle

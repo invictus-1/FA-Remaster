@@ -80,6 +80,10 @@ class Horizon {
   float iceNow = 0, fogNow = 0;
   int showersNow = 0, bergsNow = 0;
 
+  // [session] Its pipelines and its noise made now (World::PrepareAhead: in the background, while the weather on the horizon
+  // is on and none is shown yet): the first frame with weather after a game's start made them (2 ms each at 4K).
+  void PrepareAhead() { Make(); }
+
  private:
   bool Make();
   gfx::Device* device_;

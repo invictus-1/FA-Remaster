@@ -77,6 +77,11 @@ class WorldPicture {
   // The camera the map begun will first be shown by (the game's camera at its start), for its warm frames; at first one
   // over the map's middle. Any time before it is ready.
   void SetLoadCamera(const Camera& camera);
+  // [session] The day and the weather the map begun will first be shown with (SetDayAndWeather's, as the game's will be
+  // given after SwapMap), for its warm frames: the sky, the clouds, the light shafts and the weather on the horizon are
+  // made for that hour there, and not in the game's first frame (450 ms at 4K with the day given only after the swap).
+  // The world shown meanwhile keeps the picture's own. Any time before it is ready; SetDayAndWeather after SwapMap as now.
+  void SetLoadDayAndWeather(float startHour, float dayLengthSeconds, bool weather);
   // The map begun could not be opened (`error`: why); CancelMap lets go of it.
   bool MapFailed(std::string* error = nullptr) const;
   // Once MapReady: the map begun is the world shown from the next frame on (and world() is it). The world shown before
@@ -176,6 +181,15 @@ class WorldPicture {
   // For checking: the next DrawToWindow also reads what it shows back into `out` (RGBA bytes).
   void CaptureNextWindowFrame(std::vector<uint8_t>* out);
   void GameStarted(const moho::Sim& sim);
+  // [session] The game's session handed to the map being opened behind, before SwapMap: once the host's simulation is
+  // loaded and before its first beat (no beat running: it reads the simulation now). The models the game's first frames
+  // would make (78 ms in a skirmish's second frame at 4K) are made on a thread of their own once the map is open and
+  // warmed: the kinds of the units there at the start and what each of them may build (as SimFrames::WatchBuildable
+  // asks), and the props the simulation makes as it starts (the map's, and those its scripts add: the deposits), all as
+  // the simulation's looks have them. MapReady waits for them. The props' events it takes from the simulation go back with
+  // the first beat after SwapMap (Beat), or with the next beat of the world shown where the map is cancelled. False,
+  // nothing done: no map being opened behind (or it failed), or a session handed to it already.
+  bool PrepareSession(const moho::Sim& sim);
   void Beat(const moho::Sim& sim);
 
   // The world as `camera` sees it, `width` x `height` pixels, each 0xAARRGGBB, row by row from the

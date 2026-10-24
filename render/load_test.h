@@ -2,7 +2,9 @@
 // (WorldPicture::BeginMap / MapReady / SwapMap), with its frame times, times to ready, the swaps' frames and the card's
 // memory printed, and what it showed written as pictures.
 #pragma once
+#include <cstdint>
 #include <string>
+#include <vector>
 
 namespace moho {
 class Vfs;
@@ -24,6 +26,16 @@ struct LoadTestSetup {
   int backdrop = -1;         // [backdrop] --load-backdrop <fit>: SetBackdrop's test (0 stretch, 1 cover, 2 contain; -1 none)
   std::string gameLooks;     // [ui 39] --load-game-looks: the lighting bundles of <map> (--settings' form); the others --settings'
   bool holdLooks = false;    // [ui 39] --load-hold: each map's looks given before its BeginMap (HoldLooks), else after its swap
+  // [session] --load-session <game configuration>: <map> (the session's) opened behind while that game loads beside it (a
+  // LiveSim, as the interface's game loads behind its loading screen), shown once both are ready (its first beat held until
+  // then), then run at 10 beats a second; with --load-session-prepare, WorldPicture::PrepareSession first. --init, --maps,
+  // --mod-uids and --seed as for --session.
+  std::string session, initFile, modUids;
+  std::vector<std::string> maps;
+  uint32_t seed = 0;
+  bool prepareSession = false;
+  bool loadDay = false;       // [session] --load-day: with --load-day-after, the day given to its warm frames (SetLoadDayAndWeather)
+  bool dayAfterSwap = false;  // [session] --load-day-after: --time-of-day given to <map> only after its swap (the interface's way today)
 };
 
 // The test; 0 when every map opened and was shown.

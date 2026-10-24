@@ -351,10 +351,50 @@ class Memory {
   }
   // [spikes] Get and Free under a lock of its own: a worker's PrepareTexture / PrepareBuffer (gfx.h) takes memory beside the
   // frames' thread
-  bool Get(const VkMemoryRequirements& req, VkMemoryPropertyFlags want, bool linear, Allocation* out) {
+  // [vkpresent] `mayWait` (a thread other than the frames', its staging): where the blocks there are have no room, it waits
+  // a while for what the upload batches let go of (Free) before it takes a new block. A new block of the processor's memory
+  // (host-visible) had the system commit and clear it: 256 MB took 130-260 ms, and the frames' thread's present waited for
+  // all of it (measured: a block taken on another thread, then written, held vkQueuePresentKHR as long; some allocations
+  // alone did). The staging a map opening behind wants then comes out of blocks taken before the first frame (Reserve).
+  bool Get(const VkMemoryRequirements& req, VkMemoryPropertyFlags want, bool linear, Allocation* out, bool mayWait = false) {
     std::unique_lock<std::recursive_mutex> lock(mutex_);
     const uint32_t type = Type(req.memoryTypeBits, want);
     if (type == UINT32_MAX) return false;
+    const auto waitUntil = std::chrono::steady_clock::now() + std::chrono::milliseconds(kRoomWaitMs);
+    for (;;) {
+      if (Take(req, type, linear, out)) return true;
+      if (!mayWait || req.size > kBlock || std::chrono::steady_clock::now() >= waitUntil) break;
+      roomFreed_.wait_until(lock, waitUntil);
+    }
+    if (mayWait && req.size <= kBlock && !toldFull_) {  // (said once: the reserve too small for what was in flight)
+      toldFull_ = true;
+      fprintf(stderr, "render: Vulkan: no room in the staging's memory for %d ms; a block more taken (a frame may wait for it)\n", kRoomWaitMs);
+    }
+    return MakeBlock(req, type, linear, out, lock);
+  }
+  // [vkpresent] Before the first frame: `count` blocks of the memory `want` names for buffers of `memoryTypeBits` (the
+  // staging's), written once so that the system commits them now and not while frames are shown. Kept for the program's life.
+  void Reserve(uint32_t memoryTypeBits, VkMemoryPropertyFlags want, bool linear, int count) {
+    const uint32_t type = Type(memoryTypeBits, want);
+    if (type == UINT32_MAX) return;
+    std::unique_lock<std::recursive_mutex> lock(mutex_);
+    for (int i = 0; i < count; ++i) {
+      VkMemoryRequirements req{};
+      req.size = kBlock;
+      req.alignment = 256;
+      req.memoryTypeBits = 1u << type;
+      Allocation a;
+      if (!MakeBlock(req, type, linear, &a, lock)) return;
+      if (a.mapped) std::memset(a.mapped, 0, static_cast<size_t>(a.size));
+      GiveBack(a, lock);
+    }
+  }
+
+ private:
+  static constexpr VkDeviceSize kBlock = 256ull << 20;  // (a block's usual size)
+  static constexpr int kRoomWaitMs = 2000;  // [vkpresent] (Get's longest wait for room, then a new block)
+  // A piece of a block of `type` for `req` (with the lock held).
+  bool Take(const VkMemoryRequirements& req, uint32_t type, bool linear, Allocation* out) {
     for (size_t i = 0; i < blocks_.size(); ++i) {
       Block& b = blocks_[i];
       if (b.type != type || b.linear != linear) continue;
@@ -372,8 +412,10 @@ class Memory {
         return true;
       }
     }
-    // a new block: 256 MB, or the size asked for when larger
-    constexpr VkDeviceSize kBlock = 256ull << 20;
+    return false;
+  }
+  // A new block (256 MB, or the size asked for when larger), and `req`'s piece of it (`lock` held on entry and return).
+  bool MakeBlock(const VkMemoryRequirements& req, uint32_t type, bool linear, Allocation* out, std::unique_lock<std::recursive_mutex>& lock) {
     Block b;
     b.type = type;
     b.linear = linear;
@@ -387,7 +429,10 @@ class Memory {
     VkMemoryAllocateFlagsInfo flags{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO};
     flags.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
     if (linear && deviceAddresses_) mai.pNext = &flags;
-    if (vkAllocateMemory(device_, &mai, nullptr, &b.memory) != VK_SUCCESS) return false;
+    if (vkAllocateMemory(device_, &mai, nullptr, &b.memory) != VK_SUCCESS) {
+      lock.lock();
+      return false;
+    }
     if (props_.memoryTypes[type].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) {
       void* p = nullptr;
       vkMapMemory(device_, b.memory, 0, b.size, 0, &p);
@@ -399,11 +444,20 @@ class Memory {
     const auto empty = std::find_if(blocks_.begin(), blocks_.end(), [](const Block& e) { return !e.memory; });
     if (empty != blocks_.end()) *empty = std::move(b);
     else blocks_.push_back(std::move(b));
-    return Get(req, want, linear, out);
+    return Take(req, type, linear, out);
   }
+
+ public:
   void Free(const Allocation& a) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);  // [spikes]
+    std::unique_lock<std::recursive_mutex> lock(mutex_);  // [spikes]
+    GiveBack(a, lock);
+  }
+
+ private:
+  // (Free's, with the lock held)
+  void GiveBack(const Allocation& a, std::unique_lock<std::recursive_mutex>&) {
     if (a.block < 0 || static_cast<size_t>(a.block) >= blocks_.size()) return;
+    roomFreed_.notify_all();  // [vkpresent] (a Get waiting for room looks again)
     Block& b = blocks_[static_cast<size_t>(a.block)];
     b.free.push_back({a.offset, a.size});
     // (neighbours joined again, so that the block does not crumble)
@@ -452,6 +506,8 @@ class Memory {
   bool deviceAddresses_ = false;
   std::vector<Block> blocks_;
   mutable std::recursive_mutex mutex_;  // [spikes]
+  std::condition_variable_any roomFreed_;  // [vkpresent] (Free: a Get waiting for room looks again)
+  bool toldFull_ = false;
   struct Freeing {  // [warmtarget] (a large block being given back; under mutex_)
     std::thread thread;
     std::shared_ptr<std::atomic<bool>> done;
@@ -735,6 +791,12 @@ class VulkanDevice final : public Device {
   uint32_t queueFamily_ = 0;
   VkQueue queue_ = VK_NULL_HANDLE;
   Memory memory_;
+  // [vkpresent] the thread the device was made on (the frames'), and the staging's blocks taken before the first frame (4 of 256
+  // MB, taken and written in about 85 ms: a SETONS_R opened behind had at most 521 MB of staging in flight, its 4K ground layers
+  // 363 MB at once, with RecycleUploads; before, a first load took three or four such blocks while frames were shown and kept them)
+  std::thread::id framesThread_;
+  static constexpr int kStagingReserve = 4;
+  void RecycleUploads();
   bool nullDescriptors_ = false;
   // (photofix2) VK_EXT_memory_budget, where the driver has it: the card's budget for this program (MemoryBudget)
   bool memoryBudget_ = false;
@@ -1564,6 +1626,19 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
   vkGetDeviceQueue(device_, queueFamily_, 0, &queue_);
   if (presentFamily_ != UINT32_MAX) vkGetDeviceQueue(device_, presentFamily_, presentFamily_ == queueFamily_ ? 1 : 0, &presentQueue_);
   memory_.Init(device_, memoryProps, rayTracing_);
+  framesThread_ = std::this_thread::get_id();  // [vkpresent]
+  {  // [vkpresent] the staging's memory taken and committed now, before the first frame (Memory::Get, `mayWait`)
+    VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bci.size = 16;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    VkBuffer probe = VK_NULL_HANDLE;
+    if (vkCreateBuffer(device_, &bci, nullptr, &probe) == VK_SUCCESS) {
+      VkMemoryRequirements req;
+      vkGetBufferMemoryRequirements(device_, probe, &req);
+      vkDestroyBuffer(device_, probe, nullptr);
+      memory_.Reserve(req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, true, kStagingReserve);
+    }
+  }
 
   // the six fixed samplers (as Direct3D 12's static samplers: s0 anisotropic wrap, s1 linear clamp, s2 point
   // clamp, s3 linear wrap, s4 point wrap, s5 the shadow maps' comparison)
@@ -2595,7 +2670,10 @@ bool VulkanDevice::StagingBuffer(VkDeviceSize size, VkBuffer* buffer, Allocation
   if (vkCreateBuffer(device_, &bci, nullptr, buffer) != VK_SUCCESS) return false;
   VkMemoryRequirements req;
   vkGetBufferMemoryRequirements(device_, *buffer, &req);
-  if (!memory_.Get(req, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, true, memory)) {
+  // [vkpresent] (off the frames' thread - a map opening behind, a worker making ahead - it waits for room in the blocks there
+  // are rather than take a new one while frames are shown)
+  if (!memory_.Get(req, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, true, memory,
+                   std::this_thread::get_id() != framesThread_)) {
     vkDestroyBuffer(device_, *buffer, nullptr);
     return false;
   }
@@ -2607,6 +2685,20 @@ void VulkanDevice::KeepStaging(VkBuffer buffer, const Allocation& memory, VkDevi
   uploads_[upload_].staging.push_back({buffer, memory});
   uploadBytes_ += bytes;
   if (uploadBytes_ > (256ull << 20)) FlushUploads();  // (a map loading: sent on, so copies do not pile up)
+}
+
+// [vkpresent] The staging of the upload batches the card has done, let go of now (else only when the batch's turn came round
+// again, four batches later): a map opening behind waits for that room (StagingBuffer) rather than take more memory.
+void VulkanDevice::RecycleUploads() {
+  for (int i = 0; i < kUploadBatches; ++i) {
+    Upload& u = uploads_[i];
+    if (u.staging.empty() || (i == upload_ && uploadOpen_) || vkGetFenceStatus(device_, u.done) != VK_SUCCESS) continue;
+    for (auto& s : u.staging) {
+      vkDestroyBuffer(device_, s.first, nullptr);
+      memory_.Free(s.second);
+    }
+    u.staging.clear();
+  }
 }
 
 void VulkanDevice::FlushUploads() {
@@ -2939,10 +3031,13 @@ Texture VulkanDevice::FinishTexture(std::unique_ptr<Prepared> prepared) {
   Barrier(cmd, rec.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
   rec.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
   p->finished = true;
-  // (each kept with the batch its copy is in: the first KeepStaging may send the batch on, and the rest then go with the next,
-  // which the card does after it)
+  // (all kept with the batch their copies are in, and that sent on after, where it has grown large: [vkpresent] a staging
+  // buffer kept with the next batch was let go of as soon as that batch's slot was taken again, its copy maybe not done yet)
+  for (const PreparedVk::More& m : p->more) {
+    uploads_[upload_].staging.push_back({m.staging, m.memory});
+    uploadBytes_ += m.bytes;
+  }
   KeepStaging(p->staging, p->stagingMemory, p->bytes);
-  for (const PreparedVk::More& m : p->more) KeepStaging(m.staging, m.memory, m.bytes);
   uint32_t index;
   if (!freeTextures_.empty()) {
     index = freeTextures_.back();
@@ -3793,6 +3888,7 @@ void VulkanDevice::BeginFrame(const float clearColor[4]) {
   if (latency_ && !generating_ && !earlyAcquired_ && !imageHeld_ && !PhotoNow()) LimitFrames(false);  // (not for a photo's frames)
   Frame& f = frames_[cur_];
   vkWaitForFences(device_, 1, &f.done, VK_TRUE, UINT64_MAX);
+  RecycleUploads();  // [vkpresent]
   if (generating_) WaitPresented(cur_);  // (the presenter no longer waits on this slot's fence)
   if (latency_ && latencySlots_[cur_].timed) TakeWork();  // (as Direct3D 12's: the slot's frame before, done now)
   if (latency_ || measureLatency) {  // (this frame's input read: the host's last WaitForNextFrame, else now)

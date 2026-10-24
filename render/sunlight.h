@@ -116,6 +116,10 @@ class Sunlight {
   // Into the scene's colour (Post::BeginColorOnly), after March: the band's light, brought up to the picture's size.
   void Lay(const View& view, gfx::Texture sceneDepth);
 
+  // [session] The shafts' pipelines made now (World::PrepareAhead: in the background while they are on and not drawn yet,
+  // before the day comes: a game's first frame with a time of day made them).
+  void PrepareAhead() { Make(); }
+
  private:
   bool Make();
   bool Size(int width, int height);

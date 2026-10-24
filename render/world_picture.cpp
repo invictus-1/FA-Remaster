@@ -5,6 +5,8 @@
 #include <atomic>
 #include <condition_variable>  // [warmtarget]
 #include <mutex>
+#include <set>  // [session]
+#include <unordered_set>
 #include <new>  // [bgload] (the beats begun afresh: SwapMap)
 #include <chrono>
 #include <cmath>
@@ -19,6 +21,7 @@
 #include "gfx.h"
 #include "hitch_log.h"  // [bgload]
 #include "photo.h"
+#include "sim/sim_view.h"  // [session]
 #include "sim/terrain.h"
 #include "sim_frames.h"
 #include "window.h"
@@ -257,6 +260,8 @@ struct WorldPicture::Impl {
     bool warmed = false, cameraGiven = false;
     Camera camera;
     double warmLongestMs = 0;
+    float loadDay = -1;  // [session] (SetLoadDayAndWeather: the warm frames' hour, and its weather; -1: the picture's own)
+    bool loadWeather = false;
     // [warmtarget] Its warm frames are recorded on its loading thread (LoadingDevice::BeginRecording) and made on the frames'
     // thread (Replay): the frames' thread asks for one with what it is to be drawn with (`setup`, the picture's settings as
     // they are then), the loading thread records it, the frames' thread makes it between two of its frames, and asks for the
@@ -280,7 +285,11 @@ struct WorldPicture::Impl {
     std::mutex warmLock;
     std::condition_variable warmCv;
     std::atomic<bool> openDone{false};  // (Open has returned on the loading thread: `ok`, `error` and `opened` are set)
+    // [session] (PrepareSession) the session's models made on a thread of their own once the loading thread is done
+    std::thread session;
+    std::atomic<bool> sessionDone{true}, stopSession{false};
   };
+  std::vector<moho::PropEvent> heldProps;  // [session] (PrepareSession: the simulation's props' events, for the next beat)
   std::unique_ptr<Load> load;
   std::vector<std::unique_ptr<Load>> cancelled;  // (CancelMap: being opened still, let go of once open)
   // [bgload] worlds no longer shown, being let go of on a thread of their own, then what they left on the device
@@ -481,7 +490,7 @@ bool WorldPicture::MapReady() const {
   const Impl& m = *impl_;
   const Impl::Load* l = m.load.get();
   return l && !l->cancelled && l->finished.load(std::memory_order_acquire) && l->ok && l->warmed && !l->device->Waiting() &&
-         m.device->BackgroundPipelinesWaiting() == 0;
+         m.device->BackgroundPipelinesWaiting() == 0 && l->sessionDone.load(std::memory_order_acquire);  // ([session])
 }
 
 bool WorldPicture::MapFailed(std::string* error) const {
@@ -496,6 +505,7 @@ void WorldPicture::CancelMap() {
   if (!m.load) return;
   m.load->cancelled = true;
   Impl::Abandon(*m.load);  // [warmtarget]
+  if (!m.heldProps.empty()) m.frames.HoldPropEvents(&m.heldProps);  // [session] (the world shown's next beat has them)
   m.cancelled.push_back(std::move(m.load));  // (let go of by ServiceLoads once its opening is done; another may begin now)
 }
 
@@ -512,6 +522,7 @@ bool WorldPicture::SwapMap() {
   }
   std::unique_ptr<Impl::Load> load = std::move(m.load);
   load->thread.join();
+  if (load->session.joinable()) load->session.join();  // [session] (done: MapReady)
   if (!load->ready) load->ready = SteadySeconds();
   const LoadingDevice::Numbers n = load->device->TakeNumbers();
   m.loadNumbers.openSeconds = load->opened - load->began;
@@ -544,8 +555,16 @@ bool WorldPicture::SwapMap() {
   m.ApplyBundles();  // (as set now: they may have changed while it opened)
   w.lens = m.lens;
   m.ForgetWorld();
+  if (!m.heldProps.empty()) m.frames.HoldPropEvents(&m.heldProps);  // [session] (the simulation's first props: the first beat's)
   m.LetGo(std::move(old), std::move(oldDevice));
   return true;
+}
+
+void WorldPicture::SetLoadDayAndWeather(float startHour, float dayLengthSeconds, bool weather) {  // [session]
+  (void)dayLengthSeconds;  // (the warm frames are drawn at the day's start)
+  if (!impl_->load) return;
+  impl_->load->loadDay = startHour;
+  impl_->load->loadWeather = weather;
 }
 
 void WorldPicture::SetLoadCamera(const Camera& camera) {
@@ -581,8 +600,8 @@ void WorldPicture::Impl::AskWarm(Load& l) {
   s.upscale = upscale;
   s.temporalUpscale = temporalUpscale;
   s.lens = lens;
-  s.dayStart = dayStart;
-  s.weather = weather;
+  s.dayStart = l.loadDay >= 0 ? l.loadDay : dayStart;  // ([session] the game's, where given)
+  s.weather = l.loadDay >= 0 ? l.loadWeather : weather;
   l.warm = Load::Warm::Asked;
   // (the device's photo picture made now, at the window's size, and kept for the warm frame: its two pictures took a 4K
   // warm frame 2.4 ms more; between frames, and not while a photo is being made, as ServiceLoads asks)
@@ -641,6 +660,7 @@ void WorldPicture::Impl::Abandon(Load& l) {
     std::lock_guard<std::mutex> lock(l.warmLock);
     l.abandon = true;
   }
+  l.stopSession.store(true, std::memory_order_release);  // [session]
   l.warmCv.notify_all();
 }
 
@@ -765,7 +785,7 @@ void WorldPicture::Impl::ServiceLoads(double budgetMs) {
       }
     }
     if (load->finished.load(std::memory_order_acquire) && !load->ready && load->ok && load->warmed && !load->device->Waiting() &&
-        device->BackgroundPipelinesWaiting() == 0)
+        device->BackgroundPipelinesWaiting() == 0 && load->sessionDone.load(std::memory_order_acquire))  // ([session])
       load->ready = SteadySeconds();
   }
   for (size_t i = 0; i < cancelled.size();) {  // (maps not wanted: their opening finished, then let go of)
@@ -773,8 +793,9 @@ void WorldPicture::Impl::ServiceLoads(double budgetMs) {
     Abandon(c);  // [warmtarget] (its loading thread records no more warm frames)
     if (!unbounded && left <= 0 && c.device->Waiting()) break;
     left -= c.device->Service(share());
-    if (c.finished.load(std::memory_order_acquire)) {
+    if (c.finished.load(std::memory_order_acquire) && c.sessionDone.load(std::memory_order_acquire)) {  // ([session] its own too)
       c.thread.join();
+      if (c.session.joinable()) c.session.join();
       LetGo(std::move(c.world), std::move(c.device));
       cancelled.erase(cancelled.begin() + static_cast<std::ptrdiff_t>(i));
       continue;
@@ -799,6 +820,61 @@ void WorldPicture::Impl::ServiceLoads(double budgetMs) {
 }
 
 void WorldPicture::GameStarted(const moho::Sim& sim) { impl_->frames.ReadArmies(sim, *impl_->vfs); }
+
+// [session] (world_picture.h) What is read of the simulation is read here, on the host's thread; the models are made on a
+// thread of the session's own, once the loading thread is done with the world (opened and warmed), through the map's own
+// device (what that asks of the frames' thread served by ServiceLoads, as the opening's is).
+bool WorldPicture::PrepareSession(const moho::Sim& sim) {
+  Impl& m = *impl_;
+  Impl::Load* l = m.load.get();
+  if (!l || l->cancelled || l->session.joinable() || (l->finished.load(std::memory_order_acquire) && !l->ok)) return false;
+  const double t0 = SteadySeconds();
+  std::vector<std::string> unitIds;
+  std::vector<BlueprintLook> looks = SimFrames::LooksOf(sim, &unitIds);
+  // the units there at the start, and what each kind of them may build (SimFrames::AskBuildable's question)
+  std::vector<moho::UnitView> units;
+  moho::UnitViews(sim, &units);
+  std::vector<std::string> kinds;
+  std::unordered_set<std::string> named, asked;
+  for (const moho::UnitView& u : units)
+    if (!u.dead && !u.blueprint.empty() && named.insert(u.blueprint).second) kinds.push_back(u.blueprint);
+  for (const moho::UnitView& u : units) {
+    if (u.dead || u.blueprint.empty() || !asked.insert(u.blueprint).second) continue;
+    for (const std::string& id : unitIds)
+      if (!named.count(id) && moho::UnitMayBuild(sim, u.id, id)) {
+        named.insert(id);
+        kinds.push_back(id);
+      }
+  }
+  // the props the simulation made as it started (the map's own, and what its scripts added): their events taken (the
+  // engine's list is emptied by taking it) and handed back with the first beat (SwapMap: HoldPropEvents)
+  std::vector<moho::PropEvent> events;
+  moho::PropEvents(const_cast<moho::Sim&>(sim), &events);
+  std::vector<std::pair<std::string, std::string>> props;
+  std::set<std::pair<std::string, std::string>> seen;
+  for (const moho::PropEvent& e : events)
+    if (e.kind != moho::PropEvent::Destroy && !e.blueprint.empty() && seen.insert({e.blueprint, e.mesh}).second) props.push_back({e.blueprint, e.mesh});
+  m.heldProps.insert(m.heldProps.end(), std::make_move_iterator(events.begin()), std::make_move_iterator(events.end()));
+  printf("render: the session handed to the map opening behind: %zu unit kinds (%zu units there), %zu props' kinds (read in %.1f ms)\n", kinds.size(),
+         units.size(), props.size(), (SteadySeconds() - t0) * 1000.0);
+  l->sessionDone.store(false, std::memory_order_release);
+  l->session = std::thread([l, looks = std::move(looks), kinds = std::move(kinds), props = std::move(props)] {
+    CpuTimes::elsewhere = true;  // (as the loading thread's)
+    gRayShadersHere = l->rays ? 1 : 0;
+    // (the world is the loading thread's until it is done: opened, and its warm frames recorded)
+    while (!l->finished.load(std::memory_order_acquire) && !l->stopSession.load(std::memory_order_acquire))
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    if (l->ok && !l->stopSession.load(std::memory_order_acquire)) {
+      const double t = SteadySeconds();
+      World& w = *l->world;
+      w.SetLooks(looks);
+      w.MakeSessionModels(kinds, props, &l->stopSession);
+      printf("render: the session's models made behind in %.2f s\n", SteadySeconds() - t);
+    }
+    l->sessionDone.store(true, std::memory_order_release);
+  });
+  return true;
+}
 
 void WorldPicture::Beat(const moho::Sim& sim) { impl_->frames.Beat(sim); }
 

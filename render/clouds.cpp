@@ -340,6 +340,25 @@ void Clouds::Skip(View* view) {
   std::fill(std::begin(view->constants.cloudShadow), std::end(view->constants.cloudShadow), 0.0f);
 }
 
+// [session] (clouds.h) the shaders with a nuke's ring
+void Clouds::PrepareRings() {
+  if (ringsTried_ || !march_) return;
+  {
+    ringsTried_ = true;
+    std::string error;
+    const std::string source = std::string("#define RING 1\n") + (gSceneSamples > 1 ? "#define MSAA 1\n" : "") + kViewShaderBlock + kShader;
+    gfx::ComputeDesc cd;
+    cd.source = source;
+    cd.name = "clouds: their shadows, a nuke's ring";
+    cd.entry = "ShadowMarch";
+    ringShadowMarch_ = device_->CreateCompute(cd, &error);
+    cd.name = "clouds: marched, a nuke's ring";
+    cd.entry = "March";
+    if (ringShadowMarch_) ringMarch_ = device_->CreateCompute(cd, &error);
+    if (!ringMarch_) fprintf(stderr, "render: clouds: a nuke's ring cannot be drawn (%s)\n", error.c_str());
+  }
+}
+
 void Clouds::Prepare(View* view, const Camera& camera, bool on) {
   prepared_ = built_ = false;
   ViewConstants& c = view->constants;
@@ -373,20 +392,7 @@ void Clouds::Prepare(View* view, const Camera& camera, bool on) {
     device_->SetStorage(0, {});
     noiseMade_ = true;
   }
-  if (ringsWanted && !ringsTried_) {  // (volume explosions: the shaders with a nuke's ring, the first frame they may be wanted)
-    ringsTried_ = true;
-    std::string error;
-    const std::string source = std::string("#define RING 1\n") + (gSceneSamples > 1 ? "#define MSAA 1\n" : "") + kViewShaderBlock + kShader;
-    gfx::ComputeDesc cd;
-    cd.source = source;
-    cd.name = "clouds: their shadows, a nuke's ring";
-    cd.entry = "ShadowMarch";
-    ringShadowMarch_ = device_->CreateCompute(cd, &error);
-    cd.name = "clouds: marched, a nuke's ring";
-    cd.entry = "March";
-    if (ringShadowMarch_) ringMarch_ = device_->CreateCompute(cd, &error);
-    if (!ringMarch_) fprintf(stderr, "render: clouds: a nuke's ring cannot be drawn (%s)\n", error.c_str());
-  }
+  if (ringsWanted) PrepareRings();  // (volume explosions: the shaders with a nuke's ring, the first frame they may be wanted)
   const Vec3 eye = camera.Eye();
   coverAt_[0] = eye.x;
   coverAt_[1] = eye.z;
