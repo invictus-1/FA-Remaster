@@ -1401,6 +1401,7 @@ void GameSession::PrepareSession(const SessionDescription& session, const std::v
   loadSim_->sessionMods = h.mods;
   loadUids_ = uids;
   loadOk_ = false;
+  loadPrepared_ = false;
   loadWhy_.clear();
   load_ = Load::Due;
 }
@@ -1453,6 +1454,22 @@ void GameSession::BeginLoad() {
 
 std::string GameSession::LoadingMapFolder() const {
   return loadSession_ ? SessionMapFolder(loadSession_->header) : std::string();  // (the engine's: sim/session.h)
+}
+
+// The renderer's request-39 follow-up (render/world_picture.h, PrepareSession): once the loading thread is through and
+// before the session's first beat, the map opening behind gets the simulation, so that the models of the units there
+// at the start and of what they may build, and the props the simulation made, are made on its thread while the
+// loading screen still shows (MapReady, and so LoadDone, waits for them), not in the game's first frames (78 ms in a
+// skirmish's second frame at 4K). Its rule: a picture handed a session is beaten only once swapped in (a map let go of
+// is never beaten: LetGoOfGameMap).
+void GameSession::ServeLoad() {
+#ifdef MOHO64UI_WORLD_PICTURE
+  if (load_ != Load::Running || loadPrepared_ || BeatRunning() || !loadOk_ || !loadSim_) return;
+  if (!windowPicture_ || windowPicture_->pending != WindowPicture::Kind::Game) return;
+  loadPrepared_ = true;
+  if (windowPicture_->picture.PrepareSession(*loadSim_))
+    Logf(LogLevel::Info, "moho64ui: the game's map opening behind makes the simulation's models ahead");
+#endif
 }
 
 bool GameSession::LoadDone() const {
@@ -1748,6 +1765,10 @@ void GameSession::BeginWindowMap(bool game, const std::string& map) {
     p.SetTextureDetail(Looks().textureDetail);
   }
   const bool begun = p.BeginMap(map, before);
+  // (the game's hour and weather for the warm frames: the sky, clouds and light shafts made for them while it opens,
+  // not in the game's first frame; SetDayAndWeather follows after the swap as before: DressGamePicture)
+  if (begun && game && skyNow_.startHour >= 0)
+    p.SetLoadDayAndWeather(skyNow_.startHour, skyNow_.dayLengthSeconds, WeatherByItself(skyNow_.weather));
   if (!begun && game) StartAfresh(p, true), p.HoldLooks(false);  // (the held looks give way: LetGoOfGameMap)
   if (!begun) {
     Logf(LogLevel::Warning, "moho64ui: the window's picture cannot open %s behind", map.c_str());

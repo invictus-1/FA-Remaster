@@ -189,6 +189,8 @@ class GameSession {
   std::string LoadingMapFolder() const;
   bool Loading() const { return load_ != Load::None; }
   void BeginLoad();
+  // Once a frame while a launch loads: the loaded simulation handed to the game's map opening behind (ServeLoad).
+  void ServeLoad();
   bool LoadDone() const;
   bool FinishLoad(std::string* why);
   Sim* sim() const { return sim_.get(); }
@@ -359,6 +361,7 @@ class GameSession {
   std::unique_ptr<Sim> loadSim_;
   std::vector<std::string> loadUids_;
   bool loadOk_ = false;
+  bool loadPrepared_ = false;  // (the loaded simulation handed to the map opening behind: ServeLoad)
   std::string loadWhy_;
   double loadRulesSeconds_ = 0, loadStartSeconds_ = 0;
   void PrepareSession(const SessionDescription& session, const std::vector<std::string>& uids);

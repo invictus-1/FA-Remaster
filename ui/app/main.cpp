@@ -652,6 +652,7 @@ int main(int argc, char** argv) {
       if (!windowed) session.WaitForWorker();
       return;
     }
+    session.ServeLoad();
     if (!session.Loading() || !session.LoadDone()) return;
     // (MOHO64UI_LONG_FRAMES: the start's parts, for the log of its long frame)
     auto lap = [t = std::chrono::steady_clock::now()](const char* what) mutable {
