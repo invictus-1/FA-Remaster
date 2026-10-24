@@ -36,6 +36,7 @@ Backdrop::~Backdrop() { Stop(); }
 void Backdrop::Stop() {
   running_ = false;
   if (thread_.joinable()) thread_.join();
+  if (stillLoader_.joinable()) stillLoader_.join();
   std::lock_guard<std::mutex> lock(mutex_);
   ready_.clear(), shown_.clear();
   readyW_ = readyH_ = shownW_ = shownH_ = 0;
@@ -47,12 +48,17 @@ const uint32_t* Backdrop::Latest(int width, int height) {
   wantW_ = width, wantH_ = height;
   asked_ = std::chrono::steady_clock::now();
   if (readyW_ == width && readyH_ == height && readyCount_ != shownCount_) {
-    shown_ = ready_;
+    shown_.swap(ready_);  // (the thread makes its next picture in the one shown before)
     shownW_ = readyW_, shownH_ = readyH_, shownCount_ = readyCount_;
   }
   if (shownW_ == width && shownH_ == height && !shown_.empty()) return shown_.data();
   if (liveSeen_) return nullptr;  // (between two showings of this run: black, then the picture comes in)
-  if (stillTriedW_ != width || stillTriedH_ != height) LoadStill(width, height);
+  if ((stillTriedW_ != width || stillTriedH_ != height) && !stillLoading_) {
+    stillTriedW_ = width, stillTriedH_ = height;
+    stillLoading_ = true;
+    if (stillLoader_.joinable()) stillLoader_.join();  // (the one before is done)
+    stillLoader_ = std::thread([this, width, height] { LoadStill(width, height); });
+  }
   if (stillW_ != width || stillH_ != height) return nullptr;
   if (!stillShown_) Logf(LogLevel::Info, "moho64ui: the menu's background: the kept picture is shown until the map is read");
   stillShown_ = true;
@@ -152,15 +158,24 @@ std::filesystem::path StillFile(int width, int height) {
 }
 }  // namespace
 
-// The kept picture: two 32-bit numbers (width, height), then the pixels.
+// The kept picture: two 32-bit numbers (width, height), then the pixels. (On the loader's thread; what it read is
+// handed over under the lock.)
 void Backdrop::LoadStill(int width, int height) {
-  stillTriedW_ = width, stillTriedH_ = height;
+  std::vector<uint32_t> pixels;
+  bool read = false;
+  {
+    std::ifstream in(StillFile(width, height), std::ios::binary);
+    int32_t size[2] = {0, 0};
+    if (in.read(reinterpret_cast<char*>(size), sizeof size) && size[0] == width && size[1] == height) {
+      pixels.resize(static_cast<size_t>(width) * static_cast<size_t>(height));
+      read = static_cast<bool>(in.read(reinterpret_cast<char*>(pixels.data()), static_cast<std::streamsize>(pixels.size() * 4)));
+    }
+  }
+  std::lock_guard<std::mutex> lock(mutex_);
+  stillLoading_ = false;
   stillW_ = stillH_ = 0;
-  std::ifstream in(StillFile(width, height), std::ios::binary);
-  int32_t size[2] = {0, 0};
-  if (!in.read(reinterpret_cast<char*>(size), sizeof size) || size[0] != width || size[1] != height) return;
-  still_.resize(static_cast<size_t>(width) * static_cast<size_t>(height));
-  if (!in.read(reinterpret_cast<char*>(still_.data()), static_cast<std::streamsize>(still_.size() * 4))) return;
+  if (!read) return;
+  still_.swap(pixels);
   stillW_ = width, stillH_ = height;
 }
 
@@ -211,6 +226,7 @@ void Backdrop::Run() {
   const auto start = Clock::now();
   bool resting = true;     // nobody was asking
   auto shownSince = start; // when the pictures began (again): they come in from black
+  std::vector<uint32_t> work;  // the next picture, made outside the lock, then swapped with ready_
   while (running_) {
     auto frameStart = Clock::now();
     int w = 0, h = 0;
@@ -247,26 +263,31 @@ void Backdrop::Run() {
       // its first second and a half.
       float in = static_cast<float>(std::min(1.0, std::chrono::duration<double>(frameStart - shownSince).count() / 1.5));
       uint32_t k = static_cast<uint32_t>(200.0f * in);  // of 256
-      std::lock_guard<std::mutex> lock(mutex_);
-      ready_.resize(pixels.size());
+      work.resize(pixels.size());
       for (size_t i = 0; i < pixels.size(); ++i) {
         uint32_t p = pixels[i];
         uint32_t rb = ((p & 0x00ff00ffu) * k >> 8) & 0x00ff00ffu, g = ((p & 0x0000ff00u) * k >> 8) & 0x0000ff00u;
-        ready_[i] = 0xff000000u | rb | g;
+        work[i] = 0xff000000u | rb | g;
       }
-      readyW_ = w, readyH_ = h;
-      ++readyCount_;
-      // This run's first picture, at full strength, is kept for the next start.
-      if (!liveSeen_ && !stillSaved_ && t < 2.0 && along == 0) {
+      bool keepIt = false;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        ready_.swap(work);
+        readyW_ = w, readyH_ = h;
+        ++readyCount_;
+        keepIt = !liveSeen_ && !stillSaved_ && t < 2.0 && along == 0;
+        if (keepIt) stillSaved_ = true;
+        liveSeen_ = true;
+      }
+      // This run's first picture, at full strength, is kept for the next start (written outside the lock).
+      if (keepIt) {
         std::vector<uint32_t> keep(pixels.size());
         for (size_t i = 0; i < pixels.size(); ++i) {
           uint32_t p = pixels[i];
           keep[i] = 0xff000000u | (((p & 0x00ff00ffu) * 200u >> 8) & 0x00ff00ffu) | (((p & 0x0000ff00u) * 200u >> 8) & 0x0000ff00u);
         }
         SaveStill(keep, w, h);
-        stillSaved_ = true;
       }
-      liveSeen_ = true;
     }
     std::this_thread::sleep_until(frameStart + std::chrono::milliseconds(33));  // thirty a second is plenty
   }

@@ -3,6 +3,8 @@
 #include <chrono>
 #include <cstdlib>
 #include <memory>
+#include <set>
+#include <string>
 #include <thread>
 
 #include "app/window.h"
@@ -150,6 +152,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
   };
   using Clock = std::chrono::steady_clock;
   auto last = Clock::now(), start = last;
+  const auto runStart = last;  // (the long-frame log's times: from the window's first frame)
   const int refresh = Window::RefreshRate();
   Logf(LogLevel::Info, "moho64ui: window: the screen shows %d pictures a second", refresh);
   double drawSeconds = 0, presentSeconds = 0, frameSeconds = 0, renderSeconds = 0, hostSeconds = 0;
@@ -173,7 +176,16 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
   auto lastShown = Clock::now();
   auto uiLast = last;  // the interface's last step (frames shown during a beat leave it out)
   PerfStats stats;     // (shown when the console's remaster_stats is on)
+  // MOHO64UI_LONG_FRAMES (user_state.h): this frame's parts, for the log of a long one.
+  LongFrameLog& longFrames = LongFrames();
+  longFrames.notes.clear();  // (what ran before the window: not a frame's)
+  struct Parts {
+    double wait = 0, input = 0, scripts = 0, drawing = 0, host = 0, showing = 0, world = 0, recording = 0;
+  } parts;
+  double worldBefore = Times().worldDraw, beatGcBefore = BeatThreadGcMs();
+  auto msSince = [](Clock::time_point a) { return std::chrono::duration<double, std::milli>(Clock::now() - a).count(); };
   while ((maxFrames == 0 || frames < maxFrames) && !ExitRequested()) {
+    const auto loopTop = Clock::now();
     // While the game's beat runs on its own thread (game_session.h, BeatRunning), a frame only
     // shows the world, moving on between the beats, with the interface as it stands: no input, no
     // step of the interface, nothing that touches the simulation. Those come in the next frame
@@ -181,8 +193,11 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     const bool busy = hooks.busy && hooks.busy();
     // (Low Latency: the wait for the frame's time comes before the input is read, so that what is read is fresh.)
     if (hooks.waitForFrame) hooks.waitForFrame();
+    parts.wait = msSince(loopTop);
+    const auto pumpAt = Clock::now();
     if (!busy && !window.Pump()) break;
     auto now = Clock::now();
+    parts.input = std::chrono::duration<double, std::milli>(now - pumpAt).count();
     const bool direct = hooks.direct && hooks.direct() && hooks.present;
     if (busy) {
       if (direct) {
@@ -240,7 +255,19 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
       if (incremental) {
         recorder.Begin(target->Width(), target->Height());
         user.ui().Render(user.L(), recorder, 0);
+        parts.recording = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+        if (longFrames.thresholdMs > 0) {
+          double slowMs = 0;
+          const std::string& slow = SlowestControlDrawn(&slowMs);
+          static std::set<std::string> drawnNames;  // (kept for the log: names that stay)
+          if (!slow.empty()) longFrames.Note(drawnNames.insert(slow).first->c_str(), slowMs);
+        }
+        painter.timeCommands = longFrames.thresholdMs > 0;
         changed = painter.Paint(recorder.commands(), *target, clearColor, hostDrawn);
+        if (!painter.slowest.empty()) {  // (kept for the log: a name that stays)
+          static std::set<std::string> names;
+          longFrames.Note(names.insert(painter.slowest).first->c_str(), painter.slowestMs);
+        }
         if (dirtyCheck) {
           IntRect box;
           const long long differ = painter.Check(*target, &box);
@@ -271,6 +298,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
       drawSeconds += std::chrono::duration<double>(Clock::now() - t0).count();
       auto ms = [](Clock::time_point a, Clock::time_point b) { return std::chrono::duration<double>(b - a).count() * 1000.0; };
       stats.NoteParts(ms(now, t0), ms(t0, te), ms(te, tp), ms(tp, Clock::now()));
+      parts.scripts = ms(now, t0), parts.drawing = ms(t0, te), parts.host = ms(te, tp), parts.showing = ms(tp, Clock::now());
       ++frames;
     }
     if (hooks.catchingUp && hooks.catchingUp()) steadyFrames = 0;
@@ -289,6 +317,32 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
       const double ms = std::chrono::duration<double>(shownAt - lastShown).count() * 1000.0;
       if (frames > statsFrom) frameMs.push_back(static_cast<float>(ms));
       stats.NoteFrame(ms);
+      if (longFrames.thresholdMs > 0) {
+        parts.world = (Times().worldDraw - worldBefore) * 1000.0;
+        worldBefore = Times().worldDraw;
+        const double beatGc = BeatThreadGcMs() - beatGcBefore;
+        beatGcBefore += beatGc;
+        if (ms > longFrames.thresholdMs) {
+          // The frame's parts; "before": from the last frame's showing to this one's start (the pace's wait).
+          std::string line;
+          char buf[240];
+          std::snprintf(buf, sizeof buf, "moho64ui: long frame %d (%.1f s): %.1f ms: before %.1f, wait %.1f, input %.1f, scripts %.1f, drawing %.1f (recording %.1f), host %.1f, showing %.1f (the world's picture %.1f)",
+                        frames, std::chrono::duration<double>(shownAt - runStart).count(), ms,
+                        std::chrono::duration<double, std::milli>(loopTop - lastShown).count(), parts.wait, parts.input, parts.scripts,
+                        parts.drawing, parts.recording, parts.host, parts.showing, parts.world);
+          line = buf;
+          if (beatGc > 0) std::snprintf(buf, sizeof buf, "; a Lua collection on the beats' thread %.1f ms", beatGc), line += buf;
+          // what ran long in it, the longest first (an engine function includes what it called)
+          std::stable_sort(longFrames.notes.begin(), longFrames.notes.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+          for (size_t i = 0; i < longFrames.notes.size() && i < 12; ++i) {
+            std::snprintf(buf, sizeof buf, "%s%s %.1f", i ? ", " : "; in it: ", longFrames.notes[i].first, longFrames.notes[i].second);
+            line += buf;
+          }
+          Logf(LogLevel::Info, "%s", line.c_str());
+        }
+        longFrames.notes.clear();
+        parts = Parts{};
+      }
       lastShown = shownAt;
     }
     // The frame rate the player's options ask for (the game's Video tab: Vertical Sync, on as

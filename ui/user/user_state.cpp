@@ -1,8 +1,12 @@
 #include "user/user_state.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <set>
+#include <string>
+#include <thread>
 
 #include "user/keymap.h"
 
@@ -15,9 +19,60 @@
 #include "user/bindings.h"
 #include "user/replay_timeline.h"
 
+extern "C" {
+extern void (*lua_gpg_prof_gc)(lua_State* L, int end);  // (third_party/lua/lgc.c: around a collection's mark and sweep)
+}
+
 namespace moho::ui {
 
+namespace {
+// The long-frame log's watch on the Lua collections (MOHO64UI_LONG_FRAMES): whose state collected, and for how long.
+std::vector<const UserState*> g_liveStates;  // (the window's thread's)
+std::thread::id g_windowThread;
+void (*g_gcHookBefore)(lua_State*, int) = nullptr;  // (the engine's profile's, MOHO64_PROFILE_HITCH, when it was there first)
+std::atomic<long long> g_beatThreadGcUs{0};
+double NowMs() { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+void LongFrameGcHook(lua_State* L, int end) {
+  if (g_gcHookBefore) g_gcHookBefore(L, end);
+  thread_local double began = 0;
+  if (!end) {
+    began = NowMs();
+    return;
+  }
+  const double ms = NowMs() - began;
+  if (std::this_thread::get_id() != g_windowThread) {
+    g_beatThreadGcUs += static_cast<long long>(ms * 1000.0);
+    return;
+  }
+  const auto* owner = static_cast<const UserState*>(lua_getextra(L, 1));
+  const bool ours = std::find(g_liveStates.begin(), g_liveStates.end(), owner) != g_liveStates.end();
+  // (with the heap left after it, in MB: the size of the next one's work)
+  static std::set<std::string> names;
+  const std::string name = std::string(ours ? "(a Lua collection: the interface's state, " : "(a Lua collection: the simulation's state, ") +
+                           std::to_string(lua_getgccount(L) / 1024) + " MB left)";
+  LongFrames().Note(names.insert(name).first->c_str(), ms);
+}
+}  // namespace
+
+LongFrameLog& LongFrames() {
+  static LongFrameLog log = [] {
+    LongFrameLog l;
+    if (const char* v = std::getenv("MOHO64UI_LONG_FRAMES")) {
+      l.thresholdMs = std::atof(v) > 0 ? std::atof(v) : 16.0;
+      g_windowThread = std::this_thread::get_id();
+      g_gcHookBefore = lua_gpg_prof_gc;
+      lua_gpg_prof_gc = LongFrameGcHook;
+      Logf(LogLevel::Info, "moho64ui: frames longer than %.1f ms are logged (MOHO64UI_LONG_FRAMES)", l.thresholdMs);
+    }
+    return l;
+  }();
+  return log;
+}
+double BeatThreadGcMs() { return static_cast<double>(g_beatThreadGcUs.load()) / 1000.0; }
+
 UserState::UserState(Vfs* vfs, Config config) : config_(std::move(config)) {
+  LongFrames();  // (the long-frame log's hooks, on the window's thread)
+  g_liveStates.push_back(this);
   state_ = std::make_unique<ScriptState>(ScriptState::Kind::User, vfs);
   state_->SetHookDirs(config_.hookDirs);
   lua_State* L = state_->L();
@@ -57,6 +112,7 @@ UserState::UserState(Vfs* vfs, Config config) : config_(std::move(config)) {
 }
 
 UserState::~UserState() {
+  g_liveStates.erase(std::remove(g_liveStates.begin(), g_liveStates.end(), this), g_liveStates.end());
   units.reset();
   ranges.reset();
   worldMeshes.reset();  // (its meshes let go of their Lua tables: before the state closes; a crash at the end of a run before)

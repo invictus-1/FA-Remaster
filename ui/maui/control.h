@@ -287,6 +287,9 @@ void RegisterWorldViewBindings(lua_State* L);      // worldview.cpp: the world v
 void AdvanceCameras(lua_State* L, float seconds);  // worldview.cpp: one frame of every camera (its zoom glides)
 // With MOHO64UI_DRAW_PROFILE set: where drawing the interface went, by kind of control (ui_manager.cpp).
 void LogDrawProfile();
+// With MOHO64UI_LONG_FRAMES set: the control whose Draw took longest in the last UiManager::Render ("" when none took
+// 0.5 ms), described (its class and what it shows), and its time.
+const std::string& SlowestControlDrawn(double* ms);
 
 // The parent argument of an Internal* creation function (stack index 2): must be a living control.
 Control* CheckParent(lua_State* L);

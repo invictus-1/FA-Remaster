@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -307,10 +308,33 @@ int l_Movie_InternalSet(lua_State* L) {
     }
   }
   int w = 0, h = 0;
-  auto data = ScriptState::From(L)->vfs()->ReadFile(c->file);
   if (c->IsMenuFilm()) {
-    if (data && MpegVideoInfo(*data, &w, &h, &c->frameRate)) c->loaded = true;
-  } else if (data && c->decoder.Open(std::move(*data))) {
+    // (Not decoded: only its size and frame rate are read, from its first video header. The file is 42 MB and read
+    // whole: what was read is kept for the program's run, so the main menu coming back after a game does not read it
+    // again, a 30-50 ms frame at 4K. This program's own; only about time.)
+    struct FilmInfo {
+      bool valid = false;
+      int w = 0, h = 0;
+      float fps = 0;
+    };
+    static std::map<std::string, FilmInfo> films;
+    const std::string key = Vfs::Normalize(c->file);
+    auto it = films.find(key);
+    if (it == films.end()) {
+      FilmInfo info;
+      if (auto data = ScriptState::From(L)->vfs()->ReadFile(c->file)) info.valid = MpegVideoInfo(*data, &info.w, &info.h, &info.fps);
+      it = films.emplace(key, info).first;
+    }
+    if (it->second.valid) w = it->second.w, h = it->second.h, c->frameRate = it->second.fps, c->loaded = true;
+    if (c->loaded) {
+      c->movieWidth.Set(static_cast<float>(w));
+      c->movieHeight.Set(static_cast<float>(h));
+    }
+    lua_pushboolean(L, c->loaded);
+    return 1;
+  }
+  auto data = ScriptState::From(L)->vfs()->ReadFile(c->file);
+  if (data && c->decoder.Open(std::move(*data))) {
     c->loaded = true;
     w = c->decoder.Width(), h = c->decoder.Height();
     c->frameRate = static_cast<float>(c->decoder.FrameRate());

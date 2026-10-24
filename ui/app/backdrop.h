@@ -84,10 +84,12 @@ class Backdrop : public BackdropSource {
   std::mutex mutex_;
   int wantW_ = 0, wantH_ = 0;      // the size asked for
   std::chrono::steady_clock::time_point asked_{};  // when it was last asked for
+  // (The pictures change hands by swapping, never copied under the lock: a 4K picture is 32 MB, and the menu's
+  // frame waits for the lock.)
   std::vector<uint32_t> ready_;    // the newest finished picture
   int readyW_ = 0, readyH_ = 0;
   uint64_t readyCount_ = 0;
-  std::vector<uint32_t> shown_;    // the caller's copy of it
+  std::vector<uint32_t> shown_;    // the caller's: the last ready picture taken
   int shownW_ = 0, shownH_ = 0;
   uint64_t shownCount_ = 0;
   // The kept first picture of an earlier run (see above): read once for the size asked, shown
@@ -96,6 +98,9 @@ class Backdrop : public BackdropSource {
   int stillW_ = 0, stillH_ = 0;
   int stillTriedW_ = 0, stillTriedH_ = 0;
   bool stillShown_ = false, liveSeen_ = false, stillSaved_ = false;
+  // The kept picture is read on a thread of its own (32 MB at 4K: some 50 ms), the background black meanwhile.
+  std::thread stillLoader_;
+  bool stillLoading_ = false;  // (under mutex_)
   void LoadStill(int width, int height);
   void SaveStill(const std::vector<uint32_t>& pixels, int width, int height);
   // The direct way's showing (Show, TakeView; the interface's thread alone).

@@ -601,6 +601,20 @@ struct FrameTimes {
   int beats = 0;
 };
 FrameTimes& Times();
+// MOHO64UI_LONG_FRAMES=<ms> (16 when it is not a number): each frame of a live window longer than that from the one
+// before is logged with the parts of the frame (run_window.cpp) and what ran long in it: an engine function the
+// scripts called (the binding profile is on with it), a part of the host's step (main.cpp), a Lua collection of the
+// interface's state or the simulation's (lua_gpg_prof_gc). A tool for finding the hitches; only the window's thread
+// notes (a collection on the beats' thread is counted apart: BeatThreadGcMs).
+struct LongFrameLog {
+  double thresholdMs = 0;  // 0: off
+  std::vector<std::pair<const char*, double>> notes;  // this frame's: what (a name that stays), ms
+  void Note(const char* what, double ms) {
+    if (thresholdMs > 0 && ms >= 0.5) notes.emplace_back(what, ms);
+  }
+};
+LongFrameLog& LongFrames();
+double BeatThreadGcMs();  // the Lua collections on the beats' thread so far, in ms (with MOHO64UI_LONG_FRAMES)
 // The graphics card's time per frame of a game's world picture, for the first-start graphics check (this program's
 // own, not the original's: ui/data/hook/lua/ui/game/gamemain.lua; Chris, 2026-10-18: "if the PC can't hold 60 fps,
 // turn ray tracing off first, then step the preset down"). The game's script starts a measurement

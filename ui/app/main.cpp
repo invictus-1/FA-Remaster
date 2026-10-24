@@ -642,9 +642,17 @@ int main(int argc, char** argv) {
       return;
     }
     if (!session.Loading() || !session.LoadDone()) return;
+    // (MOHO64UI_LONG_FRAMES: the start's parts, for the log of its long frame)
+    auto lap = [t = std::chrono::steady_clock::now()](const char* what) mutable {
+      const auto now = std::chrono::steady_clock::now();
+      ui::LongFrames().Note(what, std::chrono::duration<double, std::milli>(now - t).count());
+      t = now;
+    };
     {
       std::string why;
-      if (!session.FinishLoad(&why)) {  // (the original: "map %s failed. aborting session.", back to the front end)
+      const bool finished = session.FinishLoad(&why);
+      lap("(start: the session's load finished)");
+      if (!finished) {  // (the original: "map %s failed. aborting session.", back to the front end)
         Logf(LogLevel::Error, "moho64ui: the game did not load: %s; back to the front end", why.c_str());
         if (!sessionIn.empty() || !commandLineMap.empty()) ok = false;  // (the run's own game: its exit code says so)
         session.End();
@@ -655,8 +663,10 @@ int main(int argc, char** argv) {
            std::chrono::duration<double>(std::chrono::steady_clock::now() - loadingSince).count(), loadingDrawn);
     }
     front->EndLoadingScreen();  // (the game's own state takes over: DoInitializing 0x88c4ad)
+    lap("(start: the loading screen gone)");
     session.WaitForWorker();  // (no Lua state is made while a beat runs: the engine's rule)
     if (backdrop) backdrop->Stop();  // the game has its own picture of the world
+    lap("(start: the beat waited for, the menu's background stopped)");
     // (A new state is made for the size the head has NOW: the window may have been resized.)
     cfg.width = shown->ui().width(), cfg.height = shown->ui().height();
     ui::UserState::Config gameCfg = cfg;
@@ -677,7 +687,13 @@ int main(int argc, char** argv) {
     game = std::make_unique<ui::UserState>(&vfs, gameCfg);
     bool up = session.LoadInterfaceRules(game->L());
     if (up) ui::InstallUnitCategoryFunctions(game->L());
-    up = up && game->Boot() && game->StartMainScript() && game->StartGame();
+    lap("(start: the game's state made, its rules)");
+    up = up && game->Boot();
+    lap("(start: SessionInit.lua)");
+    up = up && game->StartMainScript();
+    lap("(start: SetupUI)");
+    up = up && game->StartGame();
+    lap("(start: StartGameUI)");
     // The setup's own sync first (the original's beat 0: before the game's screen; the campaign's
     // Sync.CampaignMode is in it, which the screen's making reads), then beat 1.
     if (up) {
@@ -686,6 +702,7 @@ int main(int argc, char** argv) {
       for (const std::string& sync : setup) game->DeliverSync(sync);
     }
     session.RunFirstBeat();
+    lap("(start: the setup's sync, the first beat)");
     Logf(up ? LogLevel::Info : LogLevel::Error, "moho64ui: the in-game interface %s", up ? "is up" : "did not come up");
     shown = game.get();
     if (up) {
@@ -697,7 +714,9 @@ int main(int argc, char** argv) {
       // asks the main world view, which CreateGameInterface makes). The setup's own sync went
       // to the scripts above, before the screen (TakeSetupSync).
       game->GameLoaded();
+      lap("(start: CreateGameInterface)");
       for (const std::string& sync : session.TakePendingSync()) game->DeliverSync(sync);
+      lap("(start: the first beat's sync)");
       if (!gameLuaFile.empty()) {  // a Lua file of your own, run in the game's state (tests, looking around)
         if (auto code = hostfs::ReadFile(gameLuaFile)) game->RunString(*code, "@" + gameLuaFile);
         else Logf(LogLevel::Error, "cannot read %s", gameLuaFile.c_str());
@@ -772,13 +791,23 @@ int main(int argc, char** argv) {
     hooks.statsLines = [&](std::vector<std::string>* lines) { session.StatsLines(lines); };
     done = ui::RunWindow([&]() -> ui::UserState& { return *shown; }, width, height, o.frames,
                          [&](double seconds, ui::SoftwareTarget& target) {
-                           session.OpenPictureIfDue();
+                           // (MOHO64UI_LONG_FRAMES: the host step's parts, for the log of a long frame)
+                           ui::LongFrameLog& longFrames = ui::LongFrames();
+                           auto timed = [&](const char* what, auto&& f) {
+                             if (longFrames.thresholdMs <= 0) return f();
+                             const auto t0 = std::chrono::steady_clock::now();
+                             f();
+                             longFrames.Note(what, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+                           };
+                           timed("(host: the picture opened)", [&] { session.OpenPictureIfDue(); });
                            if (session.Loading()) ++loadingDrawn;
-                           listen();
-                           sounds.Update(static_cast<float>(seconds));
+                           timed("(host: the sounds)", [&] {
+                             listen();
+                             sounds.Update(static_cast<float>(seconds));
+                           });
                            if (!game && !session.Loading()) session.WaitForWorker(), session.DrawStatus(target);  // the host's notice, until the game's interface is there
-                           leaveOrRestart();
-                           startGameInterface();
+                           timed("(host: leave or restart)", [&] { leaveOrRestart(); });
+                           timed("(host: the loading screen or the game's interface started)", [&] { startGameInterface(); });
                            if (!windowCapture.empty() && session.DrawsToWindow()) {
                              // (MOHO64UI_CAPTURE_FRAME: the game's frame it is taken at, 300 unless given; the
                              // first front end's too, before any game)
@@ -790,7 +819,7 @@ int main(int argc, char** argv) {
                            }
                            // LAST: a beat it starts on its own thread runs beside nothing more of
                            // this frame that touches the simulation (only the picture is shown).
-                           session.Advance(seconds);
+                           timed("(host: the game's beats)", [&] { session.Advance(seconds); });
                          },
                          fullScreen, hooks);
     session.WaitForBeat();  // (a beat still on its thread at the end: done before anything looks at the game again)

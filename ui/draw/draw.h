@@ -72,6 +72,14 @@ class DrawTarget {
 class SoftwareTarget : public DrawTarget {
  public:
   SoftwareTarget(int width, int height);
+  // A view of `shared`'s pixels with a clip and a touched box of its own (no pixels of its own: pixels() is empty).
+  // Views drawing into rows apart may run on threads side by side (draw/recorder.cpp: a big repaint in bands).
+  struct ViewOf {
+    SoftwareTarget& shared;
+  };
+  explicit SoftwareTarget(ViewOf view);
+  SoftwareTarget(const SoftwareTarget&) = delete;
+  SoftwareTarget& operator=(const SoftwareTarget&) = delete;
   int Width() const override { return width_; }
   int Height() const override { return height_; }
   void SetClip(const Rect& r) override;
@@ -100,8 +108,13 @@ class SoftwareTarget : public DrawTarget {
   int width_, height_;
   int cx0_, cy0_, cx1_, cy1_;  // clip, in whole pixels
   std::vector<uint32_t> pixels_;
+  uint32_t* px_;  // the pixels drawn into: pixels_'s, or the shared target's for a view
   IntRect touched_;
 };
+
+// A new frame of drawing begins (IncrementalPainter::Paint): a big stretched picture drawn again in a later frame
+// keeps its filtered texels (draw/software.cpp).
+void NextDrawFrame();
 
 // Pixels (0xAARRGGBB rows from the top; alpha not looked at) saved as a PNG, RGB, the pixels stored uncompressed
 // (the zlib here is its inflate side only): what SoftwareTarget::SavePng writes, for a block of any size.

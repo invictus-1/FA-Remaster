@@ -1321,8 +1321,13 @@ bool GameSession::FinishLoad(std::string* why) {
   if (wantPicture) {
     // (A window that is still to come: the picture opens on it in its first frame,
     // OpenPictureIfDue.)
-    if (waitForWindow && !window) pictureDue_ = true;
-    else OpenPicture();
+    if (waitForWindow && !window) {
+      pictureDue_ = true;
+    } else {
+      const auto t0 = std::chrono::steady_clock::now();
+      OpenPicture();
+      LongFrames().Note("(start: the world's picture opened)", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+    }
   }
   if (play_)
     Logf(LogLevel::Info, "moho64ui: the replay is played %s",
@@ -1811,10 +1816,17 @@ void GameSession::Advance(double seconds) {
 }
 
 void GameSession::DeliverBeatSync() {
-  for (std::string& sync : sim_->TakeSync()) {
+  using Clock = std::chrono::steady_clock;
+  auto ms = [](Clock::time_point a) { return std::chrono::duration<double, std::milli>(Clock::now() - a).count(); };
+  auto t0 = Clock::now();
+  std::vector<std::string> syncs = sim_->TakeSync();
+  LongFrames().Note("(beat: the simulation's sync taken)", ms(t0));
+  t0 = Clock::now();
+  for (std::string& sync : syncs) {
     if (onSync) onSync(sync);
     else pendingSync_.push_back(std::move(sync));
   }
+  LongFrames().Note("(beat: the sync given to the interface's scripts)", ms(t0));
   PostPrints(*sim_);
 }
 
@@ -1855,11 +1867,14 @@ void GameSession::FinishBeat() {
   // (A beat starts only in a frame: one frame's time more, or it starts up to a frame late.)
   lead_ = std::min(0.08, leadBeats_ + lastFrameSeconds_ * speed);
   static const bool beatLog = std::getenv("MOHO64UI_BEAT_LOG") != nullptr;
+  const auto tHere = std::chrono::steady_clock::now();
   if (beatLog)
     Logf(LogLevel::Info, "moho64ui: beat %u on its thread: %.1f ms (sim %.1f, picture %.1f); next starts %.1f ms early; held so far %d",
          sim_->tick(), (workerSimSeconds_ + workerPictureSeconds_) * 1000.0, workerSimSeconds_ * 1000.0,
          workerPictureSeconds_ * 1000.0, lead_ / speed * 1000.0, times.heldPictures);
   NoteBeatHere();
+  LongFrames().Note("(beat: after it, here: heights, allies, sounds, shakes)",
+                    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tHere).count());
   DeliverBeatSync();
 }
 
@@ -1911,8 +1926,10 @@ void GameSession::NotePictureBeat() {
 }
 
 void GameSession::NoteBeatHere() {
+  const auto th = std::chrono::steady_clock::now();
   CopyHeights();
   CopyAllies();
+  LongFrames().Note("(beat: the heights and allies copied)", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - th).count());
 #ifdef MOHO64UI_WORLD_PICTURE
   // A new focus army (SetFocusArmy; the engine applies it at a beat's Sync): the picture looks
   // through it from now on (its fog, its remembered buildings; 0: an observer's, no fog); the
@@ -1926,6 +1943,7 @@ void GameSession::NoteBeatHere() {
   const auto tsnd = std::chrono::steady_clock::now();
   PlayBeatSounds();
   Times().soundBeats += std::chrono::duration<double>(std::chrono::steady_clock::now() - tsnd).count();
+  LongFrames().Note("(beat: its sounds)", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tsnd).count());
   // The beat's camera shakes (the engine's ShakeEvents) go to the world's cameras.
   std::vector<ShakeEvent> shakes;
   ShakeEvents(*sim_, &shakes);

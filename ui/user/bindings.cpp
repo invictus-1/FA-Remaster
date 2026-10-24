@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "core/log.h"
+#include "user/user_state.h"
 
 namespace moho::ui {
 namespace {
@@ -169,8 +170,10 @@ std::map<std::string, BindingCost>& BindingCosts() {
   static std::map<std::string, BindingCost> costs;  // (a map: the records stay where they are)
   return costs;
 }
-bool Profiling() {  // (MOHO64UI_BEAT_LOG too: its waits are logged with the function that waited)
-  static const bool on = std::getenv("MOHO64UI_BINDING_PROFILE") != nullptr || std::getenv("MOHO64UI_BEAT_LOG") != nullptr;
+bool Profiling() {  // (MOHO64UI_BEAT_LOG too: its waits are logged with the function that waited; MOHO64UI_LONG_FRAMES: a
+                    // long frame names the functions that ran long in it)
+  static const bool on = std::getenv("MOHO64UI_BINDING_PROFILE") != nullptr || std::getenv("MOHO64UI_BEAT_LOG") != nullptr ||
+                         std::getenv("MOHO64UI_LONG_FRAMES") != nullptr;
   return on;
 }
 int TimedBinding(lua_State* L) {
@@ -180,7 +183,9 @@ int TimedBinding(lua_State* L) {
   g_bindingNow = cost->name;
   const auto t0 = std::chrono::steady_clock::now();
   const int results = f(L);  // (an error leaves the call uncounted)
-  cost->seconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+  const double took = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+  cost->seconds += took;
+  LongFrames().Note(cost->name, took * 1000.0);
   ++cost->calls;
   g_bindingNow = outer;
   return results;
@@ -201,6 +206,7 @@ void AddProfileCost(const char* part, double seconds) {
   if (!Profiling()) return;
   BindingCost& cost = BindingCosts()[part];
   cost.seconds += seconds;
+  LongFrames().Note(BindingCosts().find(part)->first.c_str(), seconds * 1000.0);
   ++cost.calls;
 }
 

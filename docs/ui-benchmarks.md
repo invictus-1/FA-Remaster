@@ -17,6 +17,26 @@ uel0201 for the player beside the commander, all selected by category, 20 s stea
 and a move order by a right click. `MOHO64UI_BINDING_PROFILE=1` logs the costliest engine functions the scripts
 called (time and calls).
 
+## 2026-10-23: the interface's hitches, menu to game at 4K (helper "hitches", on 5b6b332)
+
+Scenario: the lab's 4v4 replay (`replays/mp/mp1_4v4_scmp009_20261016.SCFAReplay`) launched from the main menu
+(`LaunchReplaySession`), a 3840x2160 window, 7200 frames from the menu through the loading screen into the game,
+`MOHO64UI_LONG_FRAMES=16` (new: every frame over 16 ms logged with its parts and what ran long in it). The machine
+was busy (other sessions' runs), so single frames vary; the counts below are each a hitch's own.
+
+| Where | Before | After |
+|---|---|---|
+| main menu, the background's first live picture | 116-166 ms (its 32 MB kept picture written, and each picture converted, under the lock the menu's frame waits for) | none over 16 ms |
+| main menu, first frame (the kept picture read) | 54 ms of it | read on a thread |
+| loading screen at 4K (the faction's film) | 12 frames in 2.9 s, each 133-150 ms (the film stretched in software 115-127 ms, decoded 15-22 ms) | 160-250 frames; a film picture's frame about 20 ms (painted 8, decoded on a thread) |
+| the "IN TRANSIT" cover fading at the game's start | 12 frames of 165-200 ms over 2 s | none over 16 ms (painted 22 ms with bands alone; its filtered picture kept: under 2 ms) |
+| leaving a game to the menu | the menu film's 42 MB read again (30-55 ms) | its size kept from the first read |
+
+What did it: a big repaint painted in bands of rows on up to 8 threads (`MOHO64UI_PAINT_THREADS`, draw/recorder.cpp);
+the stretched-picture filter four channels at a time (SSE2, the same bytes) with its per-row and per-column work done
+once; a big stretched picture drawn whole in two frames running keeps its filtered texels (only blended after); the
+menu background's pictures swapped, not copied, outside its lock; big films decoded a frame ahead on a thread.
+
 ## 2026-10-16: scenario L at 2560x1440 (d1df774 era)
 
 Frame to frame 4.16 / 4.92 / 5.68 / 6.52 ms (middle / 95% / 99% / longest), none over 20 ms; the interface's

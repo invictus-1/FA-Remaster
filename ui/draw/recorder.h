@@ -11,6 +11,7 @@
 // minimap, a movie) changes under the same address every frame: it always counts as changed.
 #pragma once
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include "draw/draw.h"
@@ -58,6 +59,12 @@ void Replay(const DrawCommand& c, SoftwareTarget& target, const IntRect& region)
 
 class IncrementalPainter {
  public:
+  // For the long-frame log (MOHO64UI_LONG_FRAMES): each Paint times its commands (on this thread's band) and keeps
+  // the slowest, described in `slowest` ("" when none took timeSlowerThan ms).
+  bool timeCommands = false;
+  double timeSlowerThan = 0.5;
+  std::string slowest;
+  double slowestMs = 0;
   // Paint `now` into `target` where it differs from the list painted last (and over `alsoDirty`,
   // pixels someone else drew there); the rest of `target` is left as it is. The first time, after
   // Invalidate, and when the target's size or the clear colour is another: all of it. Returns the

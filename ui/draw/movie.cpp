@@ -37,10 +37,44 @@ int SofdecFrames(const std::string& d) {
 }  // namespace
 
 MovieDecoder::~MovieDecoder() {
+  if (worker_.joinable()) {
+    {
+      std::lock_guard<std::mutex> lock(lock_);
+      quit_ = true;
+    }
+    wake_.notify_all();
+    worker_.join();
+  }
   if (plm_) plm_destroy(plm_);
 }
 
+void MovieDecoder::Worker() {
+  std::unique_lock<std::mutex> lock(lock_);
+  for (;;) {
+    wake_.wait(lock, [this] { return stepDue_ || quit_; });
+    if (quit_) return;
+    stepDue_ = false;
+    const double seconds = stepSeconds_;
+    lock.unlock();
+    plm_decode(plm_, seconds);  // (its pictures to decoded_: OnPicture)
+    lock.lock();
+    stepping_ = false;
+    wake_.notify_all();
+  }
+}
+
+void MovieDecoder::Collect() {
+  if (!worker_.joinable()) return;
+  std::unique_lock<std::mutex> lock(lock_);
+  wake_.wait(lock, [this] { return !stepping_; });
+  // (A picture decoded since: its serial is newer, NewImageSerial counting up. After the swap decoded_ holds the
+  // older one, which the next decoded picture overwrites with a newer serial.)
+  if (decoded_.valid() && decoded_.serial > picture_.serial) std::swap(picture_, decoded_);
+}
+
 bool MovieDecoder::Open(std::string bytes) {
+  Collect();
+  ahead_ = false;
   if (plm_) plm_destroy(plm_), plm_ = nullptr;
   bytes_ = std::move(bytes);
   if (bytes_.empty()) return false;
@@ -55,9 +89,13 @@ bool MovieDecoder::Open(std::string bytes) {
   frameRate_ = plm_get_framerate(plm_);
   duration_ = plm_get_duration(plm_);
   frames_ = SofdecFrames(bytes_);
-  plm_set_video_decode_callback(plm_, OnPicture, &picture_);
   // The first picture at once, so the control shows something before its first step.
   if (plm_frame_t* first = plm_decode_video(plm_)) OnPicture(plm_, first, &picture_);
+  ahead_ = static_cast<long long>(width_) * height_ >= kAheadPixels;
+  plm_set_video_decode_callback(plm_, OnPicture, ahead_ ? &decoded_ : &picture_);
+  if (ahead_) {
+    if (!worker_.joinable()) worker_ = std::thread([this] { Worker(); });
+  }
   return true;
 }
 
@@ -66,17 +104,31 @@ int MovieDecoder::Frames() const { return frames_ >= 0 ? frames_ : static_cast<i
 bool MovieDecoder::Advance(double seconds) {
   if (!plm_ || seconds <= 0) return false;
   const uint64_t before = picture_.serial;
-  plm_decode(plm_, seconds);
+  if (ahead_) {
+    Collect();
+    {
+      std::lock_guard<std::mutex> lock(lock_);
+      stepSeconds_ = seconds, stepDue_ = true, stepping_ = true;
+    }
+    wake_.notify_all();
+  } else {
+    plm_decode(plm_, seconds);
+  }
   return picture_.serial != before;
 }
 
-bool MovieDecoder::Ended() const { return !plm_ || plm_has_ended(plm_); }
+bool MovieDecoder::Ended() {
+  Collect();
+  return !plm_ || plm_has_ended(plm_);
+}
 
 void MovieDecoder::SetLoop(bool loop) {
+  Collect();
   if (plm_) plm_set_loop(plm_, loop ? 1 : 0);
 }
 
 void MovieDecoder::Rewind() {
+  Collect();
   if (plm_) plm_rewind(plm_);
 }
 

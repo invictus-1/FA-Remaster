@@ -159,6 +159,8 @@ std::map<std::string, DrawCost>& DrawCosts() {
   return costs;
 }
 long long g_renders = 0;
+std::string g_slowestDrawn;  // (SlowestControlDrawn)
+double g_slowestDrawnMs = 0;
 
 // The controls' drawing with every colour's alpha multiplied by a factor (SetUIControlsAlpha: the
 // original sets its batcher's AlphaMultiplier for the interface's pass, 0x84d512, and its shader
@@ -216,9 +218,24 @@ void UiManager::Render(lua_State* L, DrawTarget& target, int head) {
     DrawCost& sorting = DrawCosts()["(collecting and sorting the controls)"];
     sorting.seconds += std::chrono::duration<double>(Clock::now() - t0).count(), sorting.draws += static_cast<long long>(all.size());
   }
+  static const bool timeEach = std::getenv("MOHO64UI_LONG_FRAMES") != nullptr;
+  g_slowestDrawn.clear(), g_slowestDrawnMs = 0;
   auto draw = [&](Control* c) {
     if (c->dead()) return;  // (a script run by an earlier Draw may have destroyed it)
     SetLazyVarContext(c);
+    if (timeEach) {
+      const auto a = Clock::now();
+      c->Draw(L, target);
+      const double ms = std::chrono::duration<double, std::milli>(Clock::now() - a).count();
+      if (ms >= 0.5 && ms > g_slowestDrawnMs && !c->dead()) {
+        g_slowestDrawnMs = ms;
+        g_slowestDrawn = std::string("(drawing a ") + c->ClassName() + ": ";
+        c->Describe(g_slowestDrawn);
+        if (g_slowestDrawn.size() > 140) g_slowestDrawn.resize(140);
+        g_slowestDrawn += ")";
+      }
+      return;
+    }
     if (!profile) {
       c->Draw(L, target);
       return;
@@ -257,6 +274,11 @@ void UiManager::Render(lua_State* L, DrawTarget& target, int head) {
     for (auto& [depth, c] : order)
       if (!c->IsWorldView() && (c->renderPass & pass)) draw(c);
   SetLazyVarContext(nullptr);
+}
+
+const std::string& SlowestControlDrawn(double* ms) {
+  *ms = g_slowestDrawnMs;
+  return g_slowestDrawn;
 }
 
 void LogDrawProfile() {

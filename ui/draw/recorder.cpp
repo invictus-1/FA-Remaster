@@ -1,8 +1,13 @@
 #include "draw/recorder.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <string>
+#include <thread>
 #include <unordered_map>
 
 namespace moho::ui {
@@ -33,6 +38,36 @@ uint64_t HashOf(const DrawCommand& c) {
 IntRect PixelsOf(const Rect& r) { return IntRect{FirstPixel(r.x0), FirstPixel(r.y0), FirstPixel(r.x1), FirstPixel(r.y1)}; }
 
 constexpr int kTile = 32;  // the dirty parts are counted in tiles of this many pixels square
+
+// A big repaint (the whole screen when most of it changed: a full-screen picture fading, the loading screen's film, a
+// window at 4K) is painted in bands of rows side by side, one thread each: every pixel comes out as one thread would
+// make it, since a pixel depends only on the commands and their own rectangles. This program's own (the original
+// draws its interface on the card); only about time. MOHO64UI_PAINT_THREADS=n: at most n (1: on this thread alone).
+int PaintThreads() {
+  static const int n = [] {
+    if (const char* v = std::getenv("MOHO64UI_PAINT_THREADS")) return std::max(1, std::atoi(v));
+    const int cores = static_cast<int>(std::thread::hardware_concurrency());
+    return std::clamp(cores / 2, 1, 8);  // (the beats, the world's picture and the sounds have threads of their own)
+  }();
+  return n;
+}
+constexpr long long kBandPixels = 256 * 1024;  // a band's least share: below it the threads cost more than they save
+
+// (`slowest`: when given, each command is timed and the slowest kept there with its time)
+void PaintRegion(const std::vector<DrawCommand>& commands, SoftwareTarget& target, const IntRect& r, uint32_t clearColor,
+                 std::pair<const DrawCommand*, double>* slowest = nullptr) {
+  target.ClearRect(r, clearColor);
+  if (!slowest) {
+    for (const DrawCommand& c : commands) Replay(c, target, r);
+    return;
+  }
+  for (const DrawCommand& c : commands) {
+    const auto t0 = std::chrono::steady_clock::now();
+    Replay(c, target, r);
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    if (ms > slowest->second) *slowest = {&c, ms};
+  }
+}
 
 }  // namespace
 
@@ -115,6 +150,7 @@ void Replay(const DrawCommand& c, SoftwareTarget& target, const IntRect& region)
 
 IntRect IncrementalPainter::Paint(std::vector<DrawCommand>& now, SoftwareTarget& target, uint32_t clearColor,
                                   const IntRect& alsoDirty) {
+  NextDrawFrame();
   const int W = target.Width(), H = target.Height();
   const IntRect whole{0, 0, W, H};
   // Each command's key: its own hash with the one before it (a change of order counts too).
@@ -193,13 +229,39 @@ IntRect IncrementalPainter::Paint(std::vector<DrawCommand>& now, SoftwareTarget&
   if (full) regions.assign(1, whole);
 
   IntRect changed;
+  std::pair<const DrawCommand*, double> slow{nullptr, 0.0};
+  auto* timing = timeCommands ? &slow : nullptr;
   for (const IntRect& r : regions) {
-    target.ClearRect(r, clearColor);
-    for (const DrawCommand& c : now) Replay(c, target, r);
+    const int bands = static_cast<int>(std::min<long long>({PaintThreads(), r.area() / kBandPixels, r.y1 - r.y0}));
+    if (bands <= 1) {
+      PaintRegion(now, target, r, clearColor, timing);
+    } else {
+      std::vector<std::thread> threads;
+      threads.reserve(static_cast<size_t>(bands - 1));
+      auto band = [&](int i) {
+        const int rows = r.y1 - r.y0;
+        const IntRect part{r.x0, r.y0 + rows * i / bands, r.x1, r.y0 + rows * (i + 1) / bands};
+        SoftwareTarget view(SoftwareTarget::ViewOf{target});  // (its own clip: the rows are this thread's alone)
+        PaintRegion(now, view, part, clearColor, i == 0 ? timing : nullptr);
+      };
+      for (int i = 1; i < bands; ++i) threads.emplace_back(band, i);
+      band(0);
+      for (std::thread& t : threads) t.join();
+    }
     changed = changed.Union(r);
     pixelsPainted += r.area();
   }
   target.ClearClip();
+  slowest.clear(), slowestMs = 0;
+  if (slow.first && slow.second >= timeSlowerThan) {
+    static const char* kKinds[] = {"fill", "image", "tiled image", "glyph", "pixels"};
+    const DrawCommand& c = *slow.first;
+    const std::string from = c.image ? ", from " + std::to_string(c.image->width) + "x" + std::to_string(c.image->height) : "";
+    char buf[200];
+    std::snprintf(buf, sizeof buf, "(painting: %s %dx%d at %d,%d%s, of %zu regions)", kKinds[static_cast<int>(c.kind)], c.bounds.x1 - c.bounds.x0,
+                  c.bounds.y1 - c.bounds.y0, c.bounds.x0, c.bounds.y0, from.c_str(), regions.size());
+    slowest = buf, slowestMs = slow.second;
+  }
   ++frames;
   if (full) ++fullFrames;
   last_.swap(now);
