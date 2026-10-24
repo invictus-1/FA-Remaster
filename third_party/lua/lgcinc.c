@@ -28,8 +28,11 @@ LUA_API int lua_gpg_setgcmode (lua_State *L, int mode) {
 }
 
 
-LUA_API void lua_gpg_gcstep (lua_State *L) {
-  if (G(L)->inc == NULL) return;  /* classic: collections happen where the threshold falls */
+LUA_API void lua_gpg_gcstep (lua_State *L, int point) {
+  if (G(L)->inc == NULL) {  /* classic: the original's AdvanceBeat step 19, a full collection every 70 ticks */
+    if (point) lua_setgcthreshold(L, 0);
+    return;
+  }
 }
 
 

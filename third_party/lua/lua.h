@@ -222,10 +222,11 @@ LUA_API int   lua_getgccount (lua_State *L);
 LUA_API unsigned int lua_getnextserial (lua_State *L);  /* moho64: objects with a serial made so far */
 LUA_API void  lua_gpg_gcbytes (lua_State *L, size_t *inuse, size_t *threshold);  /* moho64: only reads */
 /* moho64 (lgcinc.c): the state's collector, chosen once right after lua_open: 0 classic (the default), 1 incremental.
-** Returns 1 if the state now runs that collector. lua_gpg_gcstep: the incremental collector's step, at the end of a
-** beat only; nothing in a classic state. */
+** Returns 1 if the state now runs that collector. lua_gpg_gcstep: the collector's work at the end of a beat (the
+** original's AdvanceBeat step 19): a classic state collects fully when `point' is set (the game tick is a multiple of
+** 70); an incremental state takes its step. */
 LUA_API int   lua_gpg_setgcmode (lua_State *L, int mode);
-LUA_API void  lua_gpg_gcstep (lua_State *L);
+LUA_API void  lua_gpg_gcstep (lua_State *L, int point);
 LUA_API void  lua_gpg_gcdue (lua_State *L);  /* moho64: a check's tool (a collection due at the next check) */
 LUA_API void  lua_setgcthreshold (lua_State *L, int newthreshold);
 

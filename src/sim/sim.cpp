@@ -2168,11 +2168,16 @@ void Sim::PausedBeat() {
   if (rec_) RecorderBeat();
   ProcessDestroyQueue();
   EffectsEndOfBeat(*this);  // steps 16-17: the destroyed effects and the expired decals are deleted
+  // AdvanceBeat step 19 (0x74a5cc..0x74a5f2), the beat's last work, before Sim::Sync: on every game tick that is a
+  // multiple of 70, lua_setgcthreshold(L, 0) (0x90d670), so a full collection (luaC_collectgarbage 0x915d90) unless
+  // the GC lock G+0x28 is held (only debug commands and save loading take it). It runs on paused beats too, whose tick
+  // does not move. Nearly all of the original's collections are these (FINDINGS 2026-10-08: the threshold is twice
+  // the heap afterwards, and 70 ticks never double it). The incremental collector (lgcinc.c) steps here instead.
+  lua_gpg_gcstep(state_->L(), tick_ % 70 == 0);
   QueueLateDestroys();
   ApplyFocusArmy();  // Sim::Sync's start
   UpdateIdPools();
   SyncStep(collectSync);
-  lua_gpg_gcstep(state_->L());  // the incremental collector's step (nothing with the classic one)
   frozen = endGame;  // Sync copies sim+0x8dc to sim+0x8dd
 }
 
@@ -2559,11 +2564,20 @@ void Sim::Tick() {
   phases.Lap(PhaseTimer::kAdvanceCoords);
   ProcessDestroyQueue();
   EffectsEndOfBeat(*this);  // steps 16-17: the destroyed effects and the expired decals are deleted
+  // AdvanceBeat step 19 (0x74a5cc..0x74a5f2), the beat's last work, before Sim::Sync: on every game tick that is a
+  // multiple of 70, lua_setgcthreshold(L, 0) (0x90d670), so a full collection (luaC_collectgarbage 0x915d90) unless
+  // the GC lock G+0x28 is held (only debug commands and save loading take it). It runs on paused beats too, whose tick
+  // does not move. Nearly all of the original's collections are these (FINDINGS 2026-10-08: the threshold is twice
+  // the heap afterwards, and 70 ticks never double it). The incremental collector (lgcinc.c) steps here instead.
+  // Seen (oracle probe e1_mp2_10645, 2026-10-24): in MP2 the order of the energy manager's weak-table walk at 10505
+  // follows when the collector last ran; at 10645 two shields' meshes take their entity ids in that order. The
+  // original attaches 0x50100053 to 0x100170 and 0x50100054 to 0x100196; without this step ours had them the other
+  // way round, with it ours matches.
+  lua_gpg_gcstep(state_->L(), tick_ % 70 == 0);
   QueueLateDestroys();
   ApplyFocusArmy();  // Sim::Sync's start: a requested focus army, NoteFocusArmyChanged
   UpdateIdPools();  // EntityDb::Purge (Sim::Sync)
   SyncStep(collectSync);
-  lua_gpg_gcstep(state_->L());  // the incremental collector's step, the beat's last work (nothing with the classic one)
   singleStep = false;  // step 14 (sim+0x8e4 = 0)
   frozen = endGame;    // Sync copies sim+0x8dc to sim+0x8dd
   phases.Lap(PhaseTimer::kDestroySync);
