@@ -4,6 +4,29 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To the visuals track, 67: remastered treads that scroll, and their grooves' depth (2026-10-23)
+
+**Remastered models scroll only when their folder says so:** a file `<file>_treads.bp` beside `<file>_lights.bp`:
+
+    Treads { Scrolling = true, Height = true }
+
+- **Scrolling = true:** the strips at the foot of the texture scroll as the original's do, on every level, since the
+  levels share one texture. v above 0.95 moves by the first tread's amount, 0.90-0.95 by the second's.
+- **No file:** nothing scrolls, as before.
+- **Height = true** (only with Scrolling, never on a Seraphim unit, whose albedo alpha is its team colour): the albedo's
+  alpha on those strips holds the treads' height, 1 the surface and 0 a groove's floor. In the modern look the eye then
+  looks into the grooves:
+  - a parallax march over that height, its frame taken from the screen's derivatives, so any belt layout works;
+  - the shift kept inside the pixel's strip;
+  - walls and floors darker the deeper the ray goes.
+- **Depth:** the viewer's `--tread-depth`, in world units, default 0.007; 0 shows the treads flat as painted.
+- **Checked on UEL0101:**
+  - the belts sit at v 0.952-0.998 and both drums take the first tread's scroll;
+  - at 45 degrees the blocks show their near walls;
+  - very low views hide much of the grooves, as deep grooves would.
+- **Cost:** only pixels on those strips of such units pay, between 4 and 32 extra reads of the albedo. Every other
+  draw is unchanged (regression 0 px on both backends).
+
 ## To the interface, request 35: split screen and a picture-in-picture follow camera (2026-10-23)
 
 **The form: one WorldPicture with several views**, not a second WorldPicture. A second picture over the same world would

@@ -294,6 +294,8 @@
 //           --grime-test dust,caked,soot[,health[,lowest[,recent[,splash]]]]: each placed unit (--place) given that much
 //           grime (0..1 each) and that health (a share; 1), the lowest it lived through (as its health) and its health
 //           some seconds ago (as its health: above it, what was lost glows), and mud splashed by rain (0)
+// --tread-depth d  [treads] a remastered unit's treads, where its folder gives their height (<file>_treads.bp), seen with
+//           grooves d world units deep (ModelCache::treadDepth; modern look; 0.007, 0: flat as painted)
 // --hot-metal  fresh wrecks glow where they broke and on their thin parts and cool over a minute or two, fresh scorches
 //           and craters glow in the middle, cooling wrecks smoulder (World::hotMetal, hot_metal.h; modern look);
 //           --wreck-test n[,unit]: n wrecks of that unit (uel0201) laid in a square round where the camera starts, as a
@@ -763,6 +765,7 @@ struct Options {
   bool unitGrime = false, unitDamage = false;  // [grime] --unit-grime, --unit-damage
   std::string grimeTest;                       // [grime] --grime-test
   std::vector<std::string> wearArt;            // [grime] --wear-art
+  float treadDepth = 0.007f;                   // [treads] --tread-depth
   bool hiddenOutlines = true;           // --no-hidden-outlines, --hidden-outlines
   bool hotMetal = false;                // --hot-metal
   int wreckTest = 0;                    // --wreck-test
@@ -1199,6 +1202,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--wear-test") o->wearTest = v;
     else if (a == "--grime-test") o->grimeTest = v;      // [grime]
     else if (a == "--wear-art") o->wearArt.push_back(v);  // [grime]
+    else if (a == "--tread-depth") o->treadDepth = std::max(0.0f, static_cast<float>(atof(v)));  // [treads]
     else if (a == "--unit-dirt-pace") o->unitDirtPace = std::max(0.0f, static_cast<float>(atof(v)));  // [unit dirt]
     else if (a == "--dirt-test") o->dirtTest = v, o->unitDirt = true;                                 // [unit dirt]
     else if (a == "--rain-stops") o->rainStops = static_cast<float>(atof(v));                          // [unit dirt]
@@ -1882,6 +1886,7 @@ int main(int argc, char** argv) {
   world.unitGrime = opt.unitGrime;  // [grime]
   world.unitDamage = opt.unitDamage;
   world.models.wearArt = opt.unitGrime || opt.unitDamage;  // (units' models take their wear art: unit_grime.h)
+  world.models.treadDepth = opt.treadDepth;                 // [treads]
   for (const std::string& p : opt.wearArt) {
     std::string id = p.substr(0, p.find('='));
     for (char& c : id) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
