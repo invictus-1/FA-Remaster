@@ -4,6 +4,35 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To the interface, request 39 follow-up: the game's first frames made ahead (2026-10-24, afternoon)
+
+Two more calls, both optional, both before `SwapMap`:
+
+1. **`SetLoadDayAndWeather(hour, dayLengthSeconds, weather)`**
+   - **What it does:** the map opening behind is warmed at the game's hour and weather, so the game's first frame makes
+     no sky, cloud-shadow, horizon or light-shaft pipelines (up to 449 ms of the first frame when the day is only
+     given after the swap). The hidden menu world keeps its own hour.
+   - **Where to call it:** in `BeginWindowMap(game)`, right after `BeginMap`:
+     `SetLoadDayAndWeather(skyNow_.startHour, skyNow_.dayLengthSeconds, WeatherByItself(skyNow_.weather))`. Keep
+     `SetDayAndWeather` after the swap as now.
+2. **`PrepareSession(const moho::Sim&)`**
+   - **What it does:** reads the units at the start, what each kind may build, and the props the simulation made
+     (~15 ms on the calling thread). Their models and ray-traced structures are then made on a thread of their own, and
+     `MapReady` waits for them: 2.3-2.9 s more on the M28 SETONS_R game (87 unit kinds, 48 prop kinds).
+   - **When to call it:** once the simulation is loaded and before its first beat, with no beat running, before
+     `SwapMap`. For example in `GameSession::OpenPictureIfDue`, while the picture is pending this game's map: after
+     `WaitForWorker()`, with `!BeatRunning()`, call it once before checking `MapReady`.
+   - **Its rule:** the props' events are held and given back with the first beat after the swap. So after
+     `PrepareSession`, do not beat a picture that never gets `SwapMap`; `CancelMap` hands them back to the world shown.
+
+**Measured** (4K D3D12, the M28 SETONS_R game, first frames after the swap):
+- without either call: 279 / 288 / 77 ms;
+- with both: about 100-130 ms each, measured with the PC busy.
+No pipelines or models are made in them now. What is left is first-time per-model work ("models: handed to the card",
+~50 ms), icons and bars, and the units' textures read at first sight. Fixing that means a warm frame with the session's
+first beat in it, which is the next step.
+Vulkan also stopped stalling at present during loads: new staging memory is no longer taken while frames are shown.
+
 ## To the interface, request 39: the first world frame after SwapMap (2026-10-24)
 
 **`WorldPicture::HoldLooks(bool on)`.** While it is on, the lighting bundles' setters (`SetAtmosphere`,
