@@ -2159,6 +2159,10 @@ once (7.4 s in one loading-screen frame at 1080p; ray tracing alone 125 ms). Cou
 picture-level looks for its opening and warm frames (or: a world hidden by SetWorldShown(false) prepares nothing, so the
 host may set the game's looks early)? Also: SetLoadCamera is not given today (the start camera is known only after the
 game's scripts run), so warm frames look at the map's middle; say if that matters for what gets warmed.
+DONE (render 2bcddc2 HoldLooks, and the warm frames recorded on the map's loading thread; on main d2877ba). Used
+(ui, 2026-10-24): HoldLooks(true) + the game's looks before BeginMap, SwapMap lays them on; a game map let go of
+(dropped, failed, not ready) gives way to the starting looks (LetGoOfGameMap). 4K: first world frame + next
+1615 + 242 ms -> 351 + 138 ms; warm frames during the load at most 8 ms (the film stays smooth).
 
 ## To the visuals track
 

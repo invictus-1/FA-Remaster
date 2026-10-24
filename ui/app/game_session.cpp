@@ -667,7 +667,8 @@ void StartAfresh(render::WorldPicture& p, bool looks) {
   p.SetStrategicIcons(true);
   p.SetSelectionMarks(true);
   if (!looks) return;
-  // (each as a picture starts: world_picture.h; the lighting bundles off are the world's own switches as at first)
+  // (each as a picture starts: world_picture.h; the lighting bundles off are the world's own switches as at first;
+  // while the picture holds looks for a map opening behind, the bundles' are only kept: WorldPicture::HoldLooks)
   p.SetRemasteredEffects(true);
   p.SetEffectsQuality(1);
   p.SetUpscale(1);
@@ -680,6 +681,13 @@ void StartAfresh(render::WorldPicture& p, bool looks) {
   p.SetFrameGeneration(false);
   p.SetHiddenOutlines(true);
   p.SetMinimapMeshes(false);
+}
+// A game's map opening behind let go of (dropped, failed, not ready): the looks held for it give way to the ones a
+// picture starts with, laid on the world shown (the menus', which has them; or a game's being left).
+void LetGoOfGameMap(render::WorldPicture& p) {
+  p.CancelMap();
+  StartAfresh(p, true);
+  p.HoldLooks(false);
 }
 }  // namespace
 
@@ -1339,10 +1347,7 @@ void GameSession::End() {
   if (windowPicture_) {
     using Kind = WindowPicture::Kind;
     WindowPicture& wp = *windowPicture_;
-    if (wp.pending == Kind::Game) {
-      wp.picture.CancelMap(), wp.pending = Kind::None;
-      if (wp.shows == Kind::Menu) StartAfresh(wp.picture, true);  // (the menus' map stays: its looks as they were)
-    }
+    if (wp.pending == Kind::Game) LetGoOfGameMap(wp.picture), wp.pending = Kind::None;  // (the menus' map, if it shows, keeps its looks)
     if (wp.shows == Kind::Game) wp.shows = Kind::Left;
   }
 #endif
@@ -1712,21 +1717,23 @@ void GameSession::BeginWindowMap(bool game, const std::string& map) {
   WindowPicture& wp = *windowPicture_;
   const Kind kind = game ? Kind::Game : Kind::Menu;
   if (wp.pending == kind && wp.pendingMap == map) return;
-  if (wp.pending != Kind::None) wp.picture.CancelMap(), wp.pending = Kind::None;
+  if (wp.pending == Kind::Game) LetGoOfGameMap(wp.picture);
+  else if (wp.pending != Kind::None) wp.picture.CancelMap();
+  wp.pending = Kind::None;
   render::WorldPicture& p = wp.picture;
   // What the map's opening takes from the picture (as Open did): the texture detail, the season, ray tracing's shaders.
   std::function<void(render::World&)> before;
   if (game) {
     // The player's looks and the game's sky, so that the map opens for them: the world's own switches on the loading
     // thread before it opens (BeginMap's `before`; the renderer: "use `before` for anything read at open, such as the
-    // look"), the picture's own (the lighting bundles, ray tracing's shaders) only for the moment BeginMap takes them
-    // (they apply at once to the world shown too, which then made what they ask for in one frame of the loading
-    // screen: 7.4 s at 1080p with every look on; ray tracing alone some 125 ms). Then the world shown (not shown:
-    // the loading screen) has the looks a picture starts with again, and the game's first frame gives the player's
-    // (Picture::SetScene), as before.
+    // look"), the picture's own held (WorldPicture::HoldLooks, render request 39): the map opens and is warmed with the
+    // lighting bundles and ray tracing's shaders, the world shown meanwhile (the menus', hidden behind the loading
+    // screen) is left as it is (laid on it, they made what they ask for in one frame: 7.4 s at 1080p with every look
+    // on), and SwapMap lays them on: the game's first frame no longer makes them (1.3-1.6 s before).
     const LookSettings looks = Looks();
     p.SetTextureDetail(looks.textureDetail);  // (the game's Texture Detail)
     p.SetSeason(looks.season == 1 ? render::Season::Autumn : render::Season::Summer);  // (the Video tab's Season)
+    p.HoldLooks(true);
     PictureLooks(p, looks);  // (ray tracing too: the surfaces' shaders made for reflections as the map opens, render request 31)
     const Sky sky = skyNow_;
     before = [looks, sky](render::World& w) {
@@ -1741,7 +1748,7 @@ void GameSession::BeginWindowMap(bool game, const std::string& map) {
     p.SetTextureDetail(Looks().textureDetail);
   }
   const bool begun = p.BeginMap(map, before);
-  if (game) StartAfresh(p, true);  // (see above)
+  if (!begun && game) StartAfresh(p, true), p.HoldLooks(false);  // (the held looks give way: LetGoOfGameMap)
   if (!begun) {
     Logf(LogLevel::Warning, "moho64ui: the window's picture cannot open %s behind", map.c_str());
     if (!game) failedMenuMap_ = map;
@@ -1783,7 +1790,8 @@ void GameSession::ServeWindowMap() {
   if (wp.picture.MapFailed(&error)) {
     Logf(LogLevel::Warning, "moho64ui: %s cannot be shown (%s)", wp.pendingMap.c_str(), error.c_str());
     (wp.pending == Kind::Menu ? failedMenuMap_ : wp.failedGameMap) = wp.pendingMap;
-    wp.picture.CancelMap();
+    if (wp.pending == Kind::Game) LetGoOfGameMap(wp.picture);
+    else wp.picture.CancelMap();
     wp.pending = Kind::None;
     return;
   }
@@ -1945,7 +1953,7 @@ void GameSession::OpenPicture() {
     }
     if (!wp.picture.MapReady() || !wp.picture.SwapMap()) {
       Logf(LogLevel::Warning, "moho64ui: session: no picture of the world: its map was not ready");
-      wp.picture.CancelMap();
+      LetGoOfGameMap(wp.picture);
       wp.pending = Kind::None;
       return;
     }
