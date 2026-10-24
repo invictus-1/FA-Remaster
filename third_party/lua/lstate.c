@@ -222,6 +222,7 @@ LUA_API void lua_close (lua_State *L) {
   lua_lock(L);
   L = G(L)->mainthread;  /* only the main thread can be closed */
   luaF_close(L, L->stack);  /* close all upvalues for this thread */
+  luaC_incleave(L);  /* moho64: an incremental state's marks back to lgc.c's, for the closing below */
   luaC_separateudata(L);  /* separate udata that have GC metamethods */
   L->errfunc = 0;  /* no error function during GC metamethods */
   do {  /* repeat until no more errors */

@@ -864,6 +864,10 @@ LUA_API void lua_gpg_gcbytes (lua_State *L, size_t *inuse, size_t *threshold) {
 /* moho64, for a check only (src/app/main.cpp MOHO64_GC_DUE): the collector's threshold set to the heap, so
 ** that a collection is due at the state's next check, without checking here (lua_setgcthreshold checks). */
 LUA_API void lua_gpg_gcdue (lua_State *L) {
+  if (G(L)->inc) {  /* the incremental collector: the cycle is finished at the next step */
+    luaC_incdue(L);
+    return;
+  }
   G(L)->GCthreshold = G(L)->nblocks;
 }
 
@@ -877,6 +881,11 @@ LUA_API int lua_getgccount (lua_State *L) {
 
 LUA_API void lua_setgcthreshold (lua_State *L, int newthreshold) {
   lua_lock(L);
+  if (G(L)->inc) {  /* moho64: collectgarbage() in an incremental state finishes the cycle now */
+    luaC_incfull(L);
+    lua_unlock(L);
+    return;
+  }
   if (cast(lu_mem, newthreshold) > GCscalel(MAX_LUMEM))
     G(L)->GCthreshold = MAX_LUMEM;
   else

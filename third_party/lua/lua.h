@@ -224,9 +224,15 @@ LUA_API void  lua_gpg_gcbytes (lua_State *L, size_t *inuse, size_t *threshold); 
 /* moho64 (lgcinc.c): the state's collector, chosen once right after lua_open: 0 classic (the default), 1 incremental.
 ** Returns 1 if the state now runs that collector. lua_gpg_gcstep: the collector's work at the end of a beat (the
 ** original's AdvanceBeat step 19): a classic state collects fully when `point' is set (the game tick is a multiple of
-** 70); an incremental state takes its step. */
+** 70); an incremental state takes its step, and its atomic step only when `point' is set. */
 LUA_API int   lua_gpg_setgcmode (lua_State *L, int mode);
 LUA_API void  lua_gpg_gcstep (lua_State *L, int point);
+/* moho64: the incremental collector's counts (all 0 in a classic state). Units: objects traversed or swept. */
+typedef struct lua_GCStats {
+  int incremental, state;
+  size_t objects, estimate, cycles, lastunits, maxunits, lastatomic, maxatomic, verifyfails;
+} lua_GCStats;
+LUA_API void  lua_gpg_gcstats (lua_State *L, lua_GCStats *s);
 LUA_API void  lua_gpg_gcdue (lua_State *L);  /* moho64: a check's tool (a collection due at the next check) */
 LUA_API void  lua_setgcthreshold (lua_State *L, int newthreshold);
 

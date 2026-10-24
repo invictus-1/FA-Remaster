@@ -1062,9 +1062,15 @@ bool Sim::Start(const ReplayHeader& replay) {
   // Sim Lua state
   state_ = std::make_unique<ScriptState>(ScriptState::Kind::Sim, vfs_);
   lua_State* L = state_->L();
-  // The collector (third_party/lua/lgcinc.c, gc_design.md): Lua 5.0's classic one. (The incremental one, behind
-  // the fixes, comes in stage 2.)
-  lua_gpg_setgcmode(L, 0);
+  // The collector (third_party/lua/lgcinc.c, gc_design.md). With the fixes the incremental one: stepped only at the
+  // beat's end, by object counts, so its moments are the same on every machine and a collection never stops a beat
+  // for long. Without them Lua 5.0's classic one, exactly the collector the original's replays were compared with.
+  // MOHO64_GC=classic / incremental overrides.
+  {
+    bool incremental = fixes;
+    if (const char* m = getenv("MOHO64_GC")) incremental = !std::strcmp(m, "incremental");
+    lua_gpg_setgcmode(L, incremental ? 1 : 0);
+  }
   state_->SetHookDirs(hookDirs_);
   if (fixes) state_->SetExtraHooks(FixesHooks());
   prof::InstallLuaHooks(L);  // (MOHO64_PROFILE_HITCH only: the collector's timer, and the debug hooks if asked)
@@ -2620,6 +2626,13 @@ void Sim::Tick() {
     Logf(LogLevel::Info, "moho64 stats tick %u: units %d (aircraft %d, flying %d, dying %d), created %d, projectiles %zu; "
          "lua heap %zu KB (collector threshold %zu KB), effect/decal/manipulator objects %zu (effects %zu, decals to expire %zu)",
          tick_, n, air, flying, dead, unitsCreated, projectiles.size(), heap >> 10, threshold >> 10, things, fxLive, decals);
+    lua_GCStats gs;
+    lua_gpg_gcstats(state_->L(), &gs);
+    if (gs.incremental)
+      Logf(LogLevel::Info, "moho64 stats tick %u: incremental collector: objects %zu (alive after the last cycle %zu), "
+           "cycles %zu, last step %zu units (largest %zu), last atomic %zu units (largest %zu), verify failures %zu",
+           tick_, gs.objects, gs.estimate, gs.cycles, gs.lastunits, gs.maxunits, gs.lastatomic, gs.maxatomic,
+           gs.verifyfails);
   }
 }
 

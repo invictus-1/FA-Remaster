@@ -64,7 +64,8 @@ static TString *newlstr (lua_State *L, const char *str, size_t l, lu_hash h) {
   ts->tsv.next = tb->hash[h];  /* chain new entry */
   tb->hash[h] = valtogco(ts);
   tb->nuse++;
-  if (tb->nuse > cast(ls_nstr, tb->size) && tb->size <= MAX_INT/2)
+  if (tb->nuse > cast(ls_nstr, tb->size) && tb->size <= MAX_INT/2 &&
+      !(G(L)->inc && luaC_incsweepingstrings(L)))  /* moho64: not while the incremental sweep walks the buckets */
     luaS_resize(L, tb->size*2);  /* too crowded */
   return ts;
 }
@@ -81,8 +82,10 @@ TString *luaS_newlstr (lua_State *L, const char *str, size_t l) {
        o != NULL;
        o = o->gch.next) {
     TString *ts = gcotots(o);
-    if (ts->tsv.len == l && (memcmp(str, getstr(ts), l) == 0))
+    if (ts->tsv.len == l && (memcmp(str, getstr(ts), l) == 0)) {
+      if (G(L)->inc) luaC_increvive(L, o);  /* moho64: found dead while the strings are swept: alive again */
       return ts;
+    }
   }
   return newlstr(L, str, l, h);  /* not found */
 }
