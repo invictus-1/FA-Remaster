@@ -142,6 +142,18 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
       *error = "map " + mapPath + ": " + why;
       return false;
     }
+    // the map's render-only props, where it has them (scmap.h, LoadDecor): after its own, so the simulation's prop numbers
+    // still name the same ones
+    if (mapPath.size() > 6 && mapPath.compare(mapPath.size() - 6, 6, ".scmap") == 0) {
+      const std::string decorPath = mapPath.substr(0, mapPath.size() - 6) + "_decor.bin";
+      if (auto decor = vfs_->ReadFile(decorPath)) {
+        const size_t before = map.props.size();
+        if (LoadDecor(*decor, &map.props, &why))
+          printf("render: %zu render-only props from %s\n", map.props.size() - before, decorPath.c_str());
+        else
+          fprintf(stderr, "render: %s: %s (not drawn)\n", decorPath.c_str(), why.c_str());
+      }
+    }
     step("map file");
     terrain.mapPath = mapPath;  // (by which the remastered ground's remap.json is looked up)
     terrain.season = season;    // [seasons] (its materials, cover and mud read for it; its props below)
