@@ -61,6 +61,7 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       trackField(device, &textures),
       plantLife(device),  // [plants]
       wakes(device),
+      hullWash(device),  // [hulls]
       ranges(device),
       placedDraw(device, &models),
       orders(device, &textures),
@@ -559,12 +560,49 @@ void World::AddBrackets(int kind, Vec3 position, const Quat& orientation, const 
 // on the water rises and falls with the long waves under it and pitches and rolls with their slopes. [whitecaps] Its hull,
 // shell, outline and lamps (the unit's drawing) and what hangs on its bones (Effects::drawnAt) are moved so. Not a building
 // nor a dead unit (the callers say). False: left where the game has it.
-bool World::RideWaves(const Model* model, Vec3* position, Quat* orientation) const {
+// [hulls] A ship sits a little down in the sea (Chris, 2026-10-23: "floating on the water vs in the water"). The game puts a
+// ship's place, its model's origin, at the water's level, and the models are made so (the original's water is a flat sheet
+// it may see through): most of their hulls reach only a little under the origin (UES0103 0.14 world units, its flat bottom
+// 0.09, against a hull side of about 0.43 to the deck), so that on the lifted waves the hull showed its whole side down to
+// its bottom edge. Sunk until it draws as much as a hull of its beam does (0.35 of the beam to its keel, as a frigate's or a
+// cruiser's: UES0103 0.08 down, UES0201 0.15, UES0302 0.5), never deeper than its hull already reaches (a hull made deep, as
+// a battleship's, keeps nearly its own); never a unit above the water's level (a hover unit) nor one below it.
+static float HullSink(const Model* model) {
+  const float keel = std::max(-model->boundsMin.y * model->scale, 0.0f);
+  const float beam = (model->boundsMax.x - model->boundsMin.x) * model->scale;
+  return std::clamp(0.35f * beam - keel, 0.0f, keel);
+}
+
+void World::ListHull(uint32_t id, const Model* model, Vec3 position, const Quat& orientation, const Ocean::Bob& rode) {
+  // (its speed from where it was the frames before, eased)
+  HullSeen& seen = hullsSeen_[id];
+  const double dt = clock_ - seen.clock;
+  if (dt > 1e-4 && dt < 1.0) seen.speed += (Length(Vec3{position.x - seen.place.x, 0, position.z - seen.place.z}) / static_cast<float>(dt) - seen.speed) * 0.2f;
+  else if (dt != 0) seen.speed = 0;
+  if (dt != 0) {
+    seen.place = position;
+    seen.clock = clock_;
+  }
+  seen.stamp = frameStamp_;
+  const Vec3 middle = position + Rotate(orientation, (model->boundsMin + model->boundsMax) * (0.5f * model->scale));
+  const Vec3 forward = Rotate(orientation, {0, 0, 1});
+  water.ocean.AddHull(middle.x, middle.z, forward.x, forward.z, (model->boundsMax.z - model->boundsMin.z) * 0.46f * model->scale,
+                      (model->boundsMax.x - model->boundsMin.x) * 0.46f * model->scale, seen.speed, rode);
+  // (those not seen for a while forgotten)
+  if (hullsSeen_.size() > 256)
+    for (auto it = hullsSeen_.begin(); it != hullsSeen_.end();) it = frameStamp_ - it->second.stamp > 600 ? hullsSeen_.erase(it) : std::next(it);
+}
+
+bool World::RideWaves(const Model* model, Vec3* position, Quat* orientation, Ocean::Bob* rode, float* sunk) const {
   if (!model || !model->ok || !water.ocean.Riding() || !haveMap_ || std::fabs(position->y - map.water.elevation) >= 0.5f) return false;
   const Vec3 size = (model->boundsMax - model->boundsMin) * model->scale;
   Ocean::Bob bob;
   if (!water.ocean.BobAt(position->x, position->z, std::max({size.x, size.z, 0.5f}), &bob) || (bob.rise == 0 && bob.slopeX == 0 && bob.slopeZ == 0)) return false;
-  position->y += bob.rise;
+  // [hulls] (a ship, at the water's level itself: a little down in the sea)
+  const float sink = std::fabs(position->y - map.water.elevation) < 0.02f ? HullSink(model) : 0.0f;
+  position->y += bob.rise - sink;
+  if (rode) *rode = bob;
+  if (sunk) *sunk = sink;
   // (turned from straight up to the surface's normal under it)
   const Vec3 n = Normalize(Vec3{-bob.slopeX, 1, -bob.slopeZ});
   const Vec3 axis = Cross(Vec3{0, 1, 0}, n);
@@ -2296,7 +2334,9 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       // the game, its picking, its icon, its life bar and its wake stay where the game has it
       Vec3 drawAt = position;
       Quat drawTurn = orientation;
-      if (!sidePicture && !building && !u.dead) RideWaves(model, &drawAt, &drawTurn);  // ([whitecaps] the effects on its bones too)
+      Ocean::Bob rode;  // [hulls]
+      float sunk = 0;
+      const bool riding = !sidePicture && !building && !u.dead && RideWaves(model, &drawAt, &drawTurn, &rode, &sunk);  // ([whitecaps] the effects on its bones too)
       Pose pose;
       pose.now = frame.bones.data() + u.firstBone;
       pose.nowCount = u.boneCount;
@@ -2356,7 +2396,9 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       // (movement dust: what the army sees moving raises dust, spray or contrails)
       if (dustNow_ && u.Seen() && !asRemembered && fractionComplete >= 1) dust.AddUnit(u.id, blueprint, model, position, orientation);
       // ([surf] a ship at speed throws spray off its bow)
-      if (surfNow_ && u.Seen() && !asRemembered && fractionComplete >= 1) water.surf.AddShip(u.id, blueprint, model, position, orientation);
+      // ([hulls] riding the lifted waves: off the sea where it meets the bow)
+      if (surfNow_ && u.Seen() && !asRemembered && fractionComplete >= 1)
+        water.surf.AddShip(u.id, blueprint, model, position, orientation, riding ? rode.rise : 0.0f, riding ? rode.slopeX : 0.0f, riding ? rode.slopeZ : 0.0f);
       // ripples where it floats, hovers or wades in the water (what the army sees)
       if (u.Seen() && !asRemembered && !extraView) water.ripples.AddHull(u.id, position, orientation, model->boundsMin * model->scale, model->boundsMax * model->scale);
       // a wake, when it goes on the water: by how far it has come since the frame before
@@ -2401,6 +2443,9 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
           else wakes.Add(stern, level, length, halfX * 0.7f, strength);
         }
       }
+      // [hulls] a ship sunk a little into the lifted sea: where the waves meet its hull (the water's shader: the white water
+      // round it, its hull under the surface hidden by the sea; ocean.h, Ocean::AddHull), its waterline as its box's
+      if (riding && sunk > 0 && u.Seen() && fractionComplete >= 1) ListHull(u.id, model, position, orientation, rode);
       centre = position + Rotate(orientation, (model->boundsMin + model->boundsMax) * (0.5f * model->scale));
       radius = Length(model->boundsMax - model->boundsMin) * 0.5f * model->scale;
     } else {  // not known what it is, or its files cannot be read: a box in the army's colour
@@ -3313,6 +3358,9 @@ void World::Render() {
       device_->SetTexture(kShadowMapSlot, shadows.Map());
       device_->SetTexture(kLampShadowSlot, lights.ShadowMap());
       water.DrawModern(view, camera, post.Behind(), post.Depth());
+      // [hulls] (what the waves leave on the ships' hulls above the water: hull_wash.h; only with the lifted ocean and its hulls)
+      hullWash.Draw(view, camera, post.Depth(), water.ocean, terrain.HeightTexture(), terrain.HeightUnit(), static_cast<float>(map.width),
+                    static_cast<float>(map.height), map.water.elevation);
       post.ContinueScene();
       lights.Bind();
     } else {

@@ -834,7 +834,18 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
       Pose pose;
       pose.now = pose.next = b.bones.data();
       pose.nowCount = pose.nextCount = b.bones.size();
-      const Mat4 at = Mat4::FromTRS(b.position, b.turn, b.scale);
+      Mat4 at = Mat4::FromTRS(b.position, b.turn, b.scale);
+      // [hulls] (a ship on the lifted waves rides them, sunk a little into the sea, as a game's: World::RideWaves, ListHull)
+      if (!b.wreck && !b.original && b.built >= 1) {
+        Vec3 drawAt = b.position;
+        Quat drawTurn = b.turn;
+        Ocean::Bob rode;
+        float sunk = 0;
+        if (world.RideWaves(model, &drawAt, &drawTurn, &rode, &sunk)) {
+          at = Mat4::FromTRS(drawAt, drawTurn, b.scale);
+          if (sunk > 0) world.ListHull(b.id, model, b.position, b.turn, rode);
+        }
+      }
       // (hot metal: a fresh wreck's heat, World::hotMetal; the original side's stays as the game has it)
       const Vec3* heat = b.wreck && !b.original ? world.WreckHeat(b.id, model, at) : nullptr;
       // [plants] (plants that react: a fresh wreck's death burnt the ground round it, as a game's wreck does, World::ApplyPropEvent)

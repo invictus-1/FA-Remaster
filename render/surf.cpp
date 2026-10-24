@@ -732,7 +732,8 @@ void Surf::Throw(const Puff& p) {
   while (puffs_.size() > static_cast<size_t>(kMostPuffs)) puffs_.pop_front();  // (the oldest let go first)
 }
 
-void Surf::AddShip(uint32_t id, const std::string& blueprint, const Model* model, Vec3 position, const Quat& orientation) {
+void Surf::AddShip(uint32_t id, const std::string& blueprint, const Model* model, Vec3 position, const Quat& orientation, float rise, float slopeX,
+                   float slopeZ) {
   if (!on_ || side_ || !model || !model->ok || blueprint.empty() || sprayStrength <= 0) return;
   if (std::fabs(position.y - level_) > 0.6f) return;  // (not on the water: under it, or in the air)
   const Kind& kind = KindOf(blueprint);
@@ -762,7 +763,8 @@ void Surf::AddShip(uint32_t id, const std::string& blueprint, const Model* model
   forward.y = 0;
   forward = Length(forward) > 1e-4f ? Normalize(forward) : Vec3{0, 0, 1};
   const Vec3 side{forward.z, 0, -forward.x};
-  const Vec3 bow = Vec3{position.x, level_ + 0.04f, position.z} + forward * (hi.z * 0.88f);
+  Vec3 bow = Vec3{position.x, level_ + 0.04f, position.z} + forward * (hi.z * 0.88f);
+  bow.y += rise + slopeX * (bow.x - position.x) + slopeZ * (bow.z - position.z);  // [hulls] (on the lifted waves: where they meet the bow)
   const float rough = std::max(rough_, 0.0f);
   const float fast = Smooth(0.25f, 1.0f, share);
   // a sheet of spray off each side of the bow (a pair at a time), more the faster it goes and the rougher the sea

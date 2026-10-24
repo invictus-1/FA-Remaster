@@ -388,8 +388,10 @@ class Surf {
   // storm: the weather's wind); `wind` the wind near the ground (world units a second, x and z: the spray drifts with
   // it); `eye` where the camera is.
   void Begin(float time, bool on, bool side, float rough, const float wind[2], Vec3 eye);
-  // A unit drawn this frame (alive, built, seen): a ship at speed throws spray off its bow.
-  void AddShip(uint32_t id, const std::string& blueprint, const Model* model, Vec3 position, const Quat& orientation);
+  // A unit drawn this frame (alive, built, seen): a ship at speed throws spray off its bow. [hulls] `rise`, `slopeX`, `slopeZ`:
+  // the lifted waves it rides (World::RideWaves; 0 on the flat sheet): the spray leaves the sea where it meets the bow.
+  void AddShip(uint32_t id, const std::string& blueprint, const Model* model, Vec3 position, const Quat& orientation, float rise = 0,
+               float slopeX = 0, float slopeZ = 0);
   // Before the scene's pass: spray thrown on the rocks where a wave arrives now, what is over let go of, the rest
   // handed to the card (its shader made the first time).
   void Prepare(const View& view);

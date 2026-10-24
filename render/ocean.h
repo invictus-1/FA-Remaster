@@ -63,7 +63,9 @@ cbuffer Ocean : register(b2) {
   float4 oceanLook;        // x the glint's least spread of slopes (squared); y the glow through the crests; z the foam's strength; w a view for checking
   float4 oceanLook2;       // x the sea's significant height (world units); y the foam far off (a share); z the slopes' tilt times (from above: twice); w [lift] 1 = the surface lifted
   float4 oceanLook3;       // x the Jacobian below which the surface foams; y the glint's strength (1)
-  float4 oceanLook4;       // [whitecaps] xy how far the foam has drifted (world units, within 4096: its pattern drifts with it)
+  float4 oceanLook4;       // [whitecaps] xy how far the foam has drifted (world units, within 4096: its pattern drifts with it); z [hulls] how many hulls
+  float4 oceanHulls[72];   // [hulls] what floats in the sea (Ocean::AddHull), three rows each: x, z its middle, its way (x, z); its waterline's
+                           // half length and half beam, its speed, -; its waterline's height there, the slopes it rides (dh/dx, dh/dz), -
 };
 Texture2D oceanSlope[3] : register(t10);  // the slopes along x and z, and their squares (mip levels: their means)
 Texture2D oceanDisp[3] : register(t13);   // the sideways shift along x, the height, the shift along z; w the slopes' product
@@ -148,6 +150,51 @@ OceanHere OceanAt(float2 xz, float2 dxdx, float2 dxdy, float calm, float tilt) {
   float2 field = there > 0 ? oceanFoam.SampleLevel(samplerLinearClamp, at, 0) : 0;
   o.foam = lerp(oceanLook2.y, field.x, there) * calm;
   o.fresh = field.y * there;
+  return o;
+}
+
+// [hulls] The nearest hull floating in the sea to a place on it (Ocean::AddHull: the ships riding the lifted waves): `away` how
+// far the place lies outside its waterline (world units; below 0 inside it), `along` where along it (-1 its stern .. 1 its
+// bow), `speed` its speed (world units a second), `waterline` the height its waterline stands at, carried on to the place
+// (the hull pitches and rolls with the long waves: the slopes it rides), `beam` its half beam, `outward` the way out of the hull
+// there (x, z, length 1: its side's outward way, the bow's forward). The waterline's shape: an
+// ellipse toward the bow, fuller toward the stern (a transom), its distance measured to first order (the shape's value over
+// how fast it changes), close enough near the hull, where alone it is wanted. None (away very large) without hulls.
+struct OceanHullNear {
+  float away, along, speed, waterline, beam;
+  float2 outward;
+};
+OceanHullNear OceanHullAt(float2 xz) {
+  OceanHullNear o;
+  o.away = 1e6;
+  o.along = 0;
+  o.speed = 0;
+  o.waterline = 0;
+  o.beam = 1;
+  o.outward = float2(1, 0);
+  int count = int(oceanLook4.z);
+  for (int h = 0; h < count; ++h) {
+    float4 a = oceanHulls[h * 3], b = oceanHulls[h * 3 + 1];
+    float2 d = xz - a.xy;
+    float u = dot(d, a.zw), v = dot(d, float2(-a.w, a.z));
+    if (abs(u) > b.x + 3 || abs(v) > b.y + 3) continue;  // (well away from it)
+    float p = u > 0 ? 2 : 4;
+    float2 q = abs(float2(u / b.x, v / b.y)) + 1e-5;
+    float2 qp = pow(q, p);
+    float f = pow(qp.x + qp.y, 1 / p);
+    float2 grad = pow(q, p - 1) / float2(b.x, b.y) * pow(f, 1 - p);
+    float away = (f - 1) / max(length(grad), 1e-4);
+    if (away < o.away) {
+      float4 c = oceanHulls[h * 3 + 2];
+      o.away = away;
+      o.along = clamp(u / b.x, -1, 1);
+      o.speed = b.z;
+      o.waterline = c.x + dot(c.yz, d);
+      o.beam = b.y;
+      float2 g = normalize(grad * sign(float2(u, v)) + 1e-6);
+      o.outward = a.zw * g.x + float2(-a.w, a.z) * g.y;
+    }
+  }
   return o;
 }
 
@@ -353,6 +400,14 @@ class Ocean {
     float rise = 0, slopeX = 0, slopeZ = 0;
   };
   bool BobAt(float x, float z, float size, Bob* out) const;
+  // [hulls] A hull floating in the sea this frame (World: each ship riding the waves, World::RideWaves), for where the waves
+  // meet it (the water's shader: the white water round it, the hull below the surface hidden by the sea): `x`, `z` the
+  // middle of its waterline, `forwardX`, `forwardZ` its way (any length), its waterline's half length and half beam, its
+  // speed (world units a second), the bob it rides (its waterline's height is the water's level plus its rise). Listed
+  // anew each frame from Begin on; the kHulls nearest the eye go to the shader (Update).
+  void AddHull(float x, float z, float forwardX, float forwardZ, float halfLength, float halfBeam, float speed, const Bob& bob);
+  static constexpr int kHulls = 24;
+  int Hulls() const { return hullCount_; }  // (those the shader was told of this frame)
 
   // Tuning (viewer --ocean-*): the waves' height times (1), how rough the sea is whatever the weather (-1: by it), the
   // glint's (0.8: the glitter a little under a sea's own, nearer today's water), the foam's and the glow's strength (1).
@@ -387,7 +442,14 @@ class Ocean {
     float look2[4];
     float look3[4];
     float look4[4];  // [whitecaps]
+    float hulls[kHulls * 3][4];  // [hulls] (AddHull's, the nearest)
   };
+  // [hulls] the hulls listed this frame (AddHull), and how many the shader was told of
+  struct Hull {
+    float x, z, fx, fz, halfLength, halfBeam, speed, waterline, slopeX, slopeZ, away;
+  };
+  std::vector<Hull> hulls_;
+  int hullCount_ = 0;
   void Spectrum();  // the spectrum's numbers for this frame, from rough_ and the wind (sim_)
   // [lift] The grid's patches for this view (the quadtree walked from its root, farthest first), and the ordering of a
   // patch's triangles back to front.

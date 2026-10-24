@@ -585,14 +585,40 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
 #if WINTER
   WinterColours(through, under, kept, hidden, own);  // (winter water: the cold palette, by how far winter has come)
 #endif
+#if LIFT
+  // [hulls] what stands in the open sea off its bed (a ship's hull below its waterline, a rock) is hidden by the water before
+  // it within a hand's breadth, going over to the colour the sea round it shows (the bed's rule above hides a hull just under
+  // the surface hardly at all: a pale, clear strip of water along its bottom edge read as a ship floating on the water)
+  OceanHullNear hull = OceanHullAt(xz);
+  {
+    float ground = OceanGround(bedBent.xz, mapSize.xy);
+    float standing = saturate((bedBent.y - ground - 0.5) / 0.4) * saturate((surfaceColor.w - ground - 0.6) / 1.5);
+    float murk = standing * (1 - exp(-through / 0.12));
+    hidden = lerp(hidden, 1, murk);
+    own = lerp(own, lerp(float3(0.027, 0.672, 0.604), float3(0.001, 0.019, 0.058), 0.97), standing);
+  }
+#endif
   float3 color = lerp(under * kept, own * (light + lamps) * 0.6, hidden);
 
   // foam: at the shore and round what stands in the water. Thick at the waterline and thinning to
   // lace over the first half unit of depth; fronts of it run in toward the land, broken by the
   // same lace; and the waves' crests
   float edge = saturate(1 - deep / 0.5);
+#if LIFT
+  // [hulls] (none of this even band, nor its fronts, along a hull in the open sea: its own wash, below, rides with the waves;
+  // a still pad of white the hull's width read as the hull floating on it)
+  float openHull;
+  {
+    float ground = OceanGround(bed.xz, mapSize.xy);
+    openHull = saturate((bed.y - ground - 0.5) / 0.4) * saturate((surfaceColor.w - ground - 0.6) / 1.5);
+    edge *= 1 - openHull;
+  }
+#endif
   // (how much of the lace is foam: nearly all of it only in the last hand's breadth of water)
   float much = edge * edge * edge * 0.6 + saturate(1 - deep / 0.05) * 0.3;
+#if LIFT
+  much *= 1 - openHull;  // [hulls]
+#endif
 #if SURF
   // [coast] at the map's own shores the surf's waves draw the white water (surf.h, SurfAt): of this even band along the
   // waterline only what the last wave left stays (surf.lap: little where the water is calm or sheltered); round what
@@ -646,6 +672,34 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
     color = lerp(color, capsLight * caps.y, caps.x);
   }
   foam = 1 - (1 - foam) * (1 - caps.x);
+#endif
+#if LIFT
+  // [hulls] where the waves meet a hull (Ocean::AddHull): a broken white wash along its waterline, wider and whiter where the
+  // water stands higher against the hull just now (a short wave running along it, the bob's long waves being the hull's own
+  // rise), the rougher the sea, and at its bow the faster it goes; torn by the lace, lit as the whitecaps
+  [branch] if (hull.away < 1.5) {
+    float rough = oceanWind.z;
+    float excess = saturate((i.world.y - hull.waterline) / max(oceanLook2.x * 0.2, 0.02));
+    float run = saturate(hull.speed / 4);
+    float bow = saturate(hull.along * 2.5 - 1.5);
+    float width = (0.025 + 0.06 * rough + 0.04 * run + 0.10 * bow * run) * (1 + 1.2 * excess);
+    float d = max(hull.away, 0) / width;
+    float body = 1 - smoothstep(0.2, 1, d);
+    // (torn finer than the lace: a noise drifting along with the water, its grain about a tenth of a unit, left at its mean
+    // where a pixel takes in more)
+    float fine = CloudNoise(float3(xz * 9 + oceanWind.xy * time * 0.6, time * 0.8));
+    fine = lerp(0.5, fine, saturate(1.5 - grain * 18));
+    float torn = smoothstep(0.5, 0.72, lace * 0.5 + fine * 0.5 + 0.18 * (1 - d) - 0.08 + 0.15 * excess);
+    // (most where the waves run against it, its side toward the wind's sea, and at its bow under way; least in its lee and
+    // at its stern, where its wake takes over)
+    float windward = saturate(-dot(hull.outward, oceanWind.xy) * 1.5 + 0.2);
+    float stern = saturate(-hull.along * 2.5 - 1.5);
+    float wash = body * torn * saturate(0.2 + 0.6 * rough * windward + 0.8 * bow * run + 0.5 * excess) * (1 - 0.7 * stern);
+    float3 face = normalize(float3(-ocean.slope.x, 1, -ocean.slope.y));
+    float3 washLight = skyLight + sunLight * (saturate(dot(face, sunDirection)) * shadow) + lamps;
+    color = lerp(color, washLight * 0.9, wash * 0.95);
+    foam = max(foam, wash);
+  }
 #endif
   color += lamps * 0.35;
   color += light * (rings * 0.04);
