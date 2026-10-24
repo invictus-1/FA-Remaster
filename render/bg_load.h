@@ -213,6 +213,15 @@ class LoadingDevice final : public gfx::Device {
   bool BeginParallel(int count) override { return ParallelRecorders() > 0 && real_->BeginParallel(count); }
   gfx::Recorder* Parallel(int index) override { return real_->Parallel(index); }
   void EndParallel() override { real_->EndParallel(); }
+  // [gpuscenery] the card's own work (card buffers, indirect draws): the device's own once the world is drawn; none while it
+  // warms or before (MeshRenderer::cardScenery then draws the scenery as before)
+  bool IndirectDraws() const override { return !warming_ && mode_.load(std::memory_order_acquire) == kLive && real_->IndirectDraws(); }
+  void UpdateBufferRange(gfx::Buffer buffer, uint32_t offset, const void* data, uint32_t size) override {
+    if (IndirectDraws()) real_->UpdateBufferRange(buffer, offset, data, size);
+  }
+  void DrawIndexedIndirect(gfx::Buffer arguments, uint32_t offset) override {
+    if (IndirectDraws() && !skipping_) real_->DrawIndexedIndirect(arguments, offset);
+  }
 
  private:
   enum Mode { kLoading, kLive, kLeaving };

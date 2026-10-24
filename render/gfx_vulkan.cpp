@@ -51,6 +51,9 @@ struct wl_surface;
 #include "third_party/vulkan/include/vulkan/vulkan_metal.h"
 #include <sys/stat.h>
 #include <unistd.h>  // [hitches] (getpid: the kept pipelines' file written under a name of its own first)
+#if defined(__APPLE__)
+#include <sys/sysctl.h>  // [vkpresent] (the computer's memory: hw.memsize)
+#endif
 #endif
 
 #include <algorithm>
@@ -184,6 +187,7 @@ namespace {
   X(vkCmdBindIndexBuffer)               \
   X(vkCmdDraw)                          \
   X(vkCmdDrawIndexed)                   \
+  X(vkCmdDrawIndexedIndirect)           \
   X(vkCmdExecuteCommands)               \
   X(vkCmdDispatch)                      \
   X(vkCmdBlitImage)                     \
@@ -661,6 +665,10 @@ class VulkanDevice final : public Device {
   void Dispatch(uint32_t x, uint32_t y, uint32_t z) override;
   void Draw(uint32_t vertexCount, uint32_t firstVertex, uint32_t instances) override;
   void DrawIndexed(uint32_t indexCount, uint32_t firstIndex, int32_t baseVertex, uint32_t instances) override;
+  // [gpuscenery] card buffers and indirect draws (gfx.h)
+  bool IndirectDraws() const override { return true; }
+  void UpdateBufferRange(Buffer buffer, uint32_t offset, const void* data, uint32_t size) override;
+  void DrawIndexedIndirect(Buffer arguments, uint32_t offset) override;
   void EndFrame(std::vector<uint8_t>* capture, bool present) override;
   void Mark(const char* name) override;
   uint64_t MemoryInUse() override { return memory_.DeviceLocalBytes(); }
@@ -799,7 +807,9 @@ class VulkanDevice final : public Device {
   // MB, taken and written in about 85 ms: a SETONS_R opened behind had at most 521 MB of staging in flight, its 4K ground layers
   // 363 MB at once, with RecycleUploads; before, a first load took three or four such blocks while frames were shown and kept them)
   std::thread::id framesThread_;
-  static constexpr int kStagingReserve = 4;
+  // [vkpresent] (the engine, 2026-10-24: a sixteenth of the computer's memory at most, so that 8 and 16 GB machines - Linux,
+  // a Mac's shared memory - keep theirs: 8 GB 512 MB, 16 GB and more 1 GB; a load with less waits for room a little longer)
+  static int StagingReserveBlocks();
   void RecycleUploads();
   bool nullDescriptors_ = false;
   // (photofix2) VK_EXT_memory_budget, where the driver has it: the card's budget for this program (MemoryBudget)
@@ -994,6 +1004,12 @@ class VulkanDevice final : public Device {
   std::pair<uint32_t, int> boundStorage_[kStorageSlots] = {};
   std::vector<uint32_t> general_;
   bool dispatched_ = false;
+  // [gpuscenery] the card buffers made (ids), and whether a dispatch since the last pass began may have written one (the
+  // next pass's draws then wait for it); a barrier over all memory, from `from` to `to` (stages and accesses)
+  std::vector<uint32_t> cardBuffers_;
+  bool cardWritten_ = false;
+  bool CardBound(int slot) const;
+  void CardBarrier(VkPipelineStageFlags2 from, VkAccessFlags2 fromAccess, VkPipelineStageFlags2 to, VkAccessFlags2 toAccess);
 
   std::vector<BufferRec> buffers_;     // id = index + 1
   std::vector<TextureRec> textures_;   // id = index; 0 is none
@@ -1138,6 +1154,13 @@ class VulkanDevice::ParallelRecorder final : public Recorder {
     if (!d_->RecorderPrepare(*this)) return;
     ++draws_;
     vkCmdDrawIndexed(cmd_, indexCount, instances, firstIndex, baseVertex, 0);
+  }
+  void DrawIndexedIndirect(Buffer arguments, uint32_t offset) override {  // [gpuscenery]
+    const BufferRec* rec = d_->Find(arguments);
+    if (!rec || rec->kind != BufferKind::Card || (offset & 3u) || static_cast<uint64_t>(offset) + 20 > rec->size) return;
+    if (!d_->RecorderPrepare(*this)) return;
+    ++draws_;
+    vkCmdDrawIndexedIndirect(cmd_, rec->buffer, offset, 1, 20);
   }
 
   VulkanDevice* d_;
@@ -1640,7 +1663,7 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
       VkMemoryRequirements req;
       vkGetBufferMemoryRequirements(device_, probe, &req);
       vkDestroyBuffer(device_, probe, nullptr);
-      memory_.Reserve(req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, true, kStagingReserve);
+      memory_.Reserve(req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, true, StagingReserveBlocks());
     }
   }
 
@@ -2691,6 +2714,36 @@ void VulkanDevice::KeepStaging(VkBuffer buffer, const Allocation& memory, VkDevi
   if (uploadBytes_ > (256ull << 20)) FlushUploads();  // (a map loading: sent on, so copies do not pile up)
 }
 
+// [vkpresent] The computer's memory in bytes (0: not known).
+static uint64_t SystemMemoryBytes() {
+#if defined(_WIN32)
+  MEMORYSTATUSEX m{};
+  m.dwLength = sizeof m;
+  return GlobalMemoryStatusEx(&m) ? static_cast<uint64_t>(m.ullTotalPhys) : 0;
+#elif defined(__APPLE__)
+  uint64_t bytes = 0;
+  size_t size = sizeof bytes;
+  return sysctlbyname("hw.memsize", &bytes, &size, nullptr, 0) == 0 ? bytes : 0;
+#else
+  const long pages = sysconf(_SC_PHYS_PAGES), page = sysconf(_SC_PAGE_SIZE);
+  return pages > 0 && page > 0 ? static_cast<uint64_t>(pages) * static_cast<uint64_t>(page) : 0;
+#endif
+}
+
+// [vkpresent] The staging's reserve, in blocks of 256 MB: min(1 GB, the computer's memory / 16), at least one (two where
+// the memory is not known); gStagingReserveMB (checks: the viewer's --staging-reserve) in place of that where set.
+int VulkanDevice::StagingReserveBlocks() {
+  constexpr uint64_t kBlockBytes = 256ull << 20;
+  uint64_t bytes = gStagingReserveMB > 0 ? static_cast<uint64_t>(gStagingReserveMB) << 20 : 0;
+  if (!bytes) {
+    const uint64_t system = SystemMemoryBytes();
+    bytes = system ? std::min<uint64_t>(4 * kBlockBytes, system / 16) : 2 * kBlockBytes;
+  }
+  const int blocks = static_cast<int>(std::max<uint64_t>(1, (bytes + kBlockBytes / 2) / kBlockBytes));
+  printf("render: Vulkan: the staging's reserve %d MB\n", blocks * 256);
+  return blocks;
+}
+
 // [vkpresent] The staging of the upload batches the card has done, let go of now (else only when the batch's turn came round
 // again, four batches later): a map opening behind waits for that room (StagingBuffer) rather than take more memory.
 void VulkanDevice::RecycleUploads() {
@@ -2727,7 +2780,33 @@ Buffer VulkanDevice::CreateBuffer(const BufferDesc& desc) {
   rec.kind = desc.kind;
   rec.dynamic = desc.dynamic;
   rec.stride = desc.stride;
-  if (!desc.dynamic) {
+  if (desc.kind == BufferKind::Card) {  // [gpuscenery] the card's own: written by dispatches and copies, read as indirect arguments
+    if (desc.dynamic || !desc.size || (desc.size & 15u)) return {};
+    rec.size = desc.size;
+    VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bci.size = desc.size;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+    if (vkCreateBuffer(device_, &bci, nullptr, &rec.buffer) != VK_SUCCESS) return {};
+    VkMemoryRequirements req;
+    vkGetBufferMemoryRequirements(device_, rec.buffer, &req);
+    if (!memory_.Get(req, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, true, &rec.memory)) {
+      vkDestroyBuffer(device_, rec.buffer, nullptr);
+      return {};
+    }
+    vkBindBufferMemory(device_, rec.buffer, rec.memory.memory, rec.memory.offset);
+    VkBuffer staging;
+    Allocation stagingMemory;
+    if (!StagingBuffer(desc.size, &staging, &stagingMemory)) {
+      vkDestroyBuffer(device_, rec.buffer, nullptr);
+      memory_.Free(rec.memory);
+      return {};
+    }
+    if (desc.data) std::memcpy(stagingMemory.mapped, desc.data, desc.size);
+    else std::memset(stagingMemory.mapped, 0, desc.size);
+    VkBufferCopy copy{0, 0, desc.size};
+    vkCmdCopyBuffer(UploadCommands(), staging, rec.buffer, 1, &copy);
+    KeepStaging(staging, stagingMemory, desc.size);
+  } else if (!desc.dynamic) {
     if (!desc.data || !desc.size) return {};
     rec.size = desc.size;
     VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
@@ -2766,7 +2845,59 @@ Buffer VulkanDevice::CreateBuffer(const BufferDesc& desc) {
     index = static_cast<uint32_t>(buffers_.size());
     buffers_.push_back(rec);
   }
+  if (desc.kind == BufferKind::Card) cardBuffers_.push_back(index + 1);  // [gpuscenery]
   return {index + 1};
+}
+
+// [gpuscenery] Whether a shader buffer's slot holds a card buffer.
+bool VulkanDevice::CardBound(int slot) const {
+  const VkBuffer bound = boundBuffers_[slot].buffer;
+  if (!bound) return false;
+  for (uint32_t id : cardBuffers_)
+    if (id <= buffers_.size() && buffers_[id - 1].used && buffers_[id - 1].buffer == bound) return true;
+  return false;
+}
+
+void VulkanDevice::CardBarrier(VkPipelineStageFlags2 from, VkAccessFlags2 fromAccess, VkPipelineStageFlags2 to, VkAccessFlags2 toAccess) {
+  VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+  mb.srcStageMask = from;
+  mb.srcAccessMask = fromAccess;
+  mb.dstStageMask = to;
+  mb.dstAccessMask = toAccess;
+  VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+  di.memoryBarrierCount = 1;
+  di.pMemoryBarriers = &mb;
+  vkCmdPipelineBarrier2(frames_[cur_].cmd, &di);
+}
+
+void VulkanDevice::UpdateBufferRange(Buffer buffer, uint32_t offset, const void* data, uint32_t size) {
+  BufferRec* rec = Find(buffer);
+  if (!rec || rec->kind != BufferKind::Card || !inFrame_ || parallel_ || !data || !size || ((offset | size) & 3u) ||
+      static_cast<uint64_t>(offset) + size > rec->size)
+    return;
+  Span s = Allocate(size, 16);
+  if (!s.cpu) return;
+  std::memcpy(s.cpu, data, size);
+  // (a copy cannot lie inside a pass: the pass is left and begun again after it, keeping what it drew; what read or wrote
+  // the buffer before is done first, and what reads it after waits for the copy)
+  const bool wasRendering = rendering_;
+  const bool hadDepth = renderingDepth_;
+  EndRendering();
+  CardBarrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_2_COPY_BIT,
+              VK_ACCESS_2_TRANSFER_WRITE_BIT);
+  VkBufferCopy copy{s.offset, offset, size};
+  vkCmdCopyBuffer(frames_[cur_].cmd, s.buffer, rec->buffer, 1, &copy);
+  CardBarrier(VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+              VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+  if (wasRendering) StartRendering(hadDepth);
+}
+
+void VulkanDevice::DrawIndexedIndirect(Buffer arguments, uint32_t offset) {
+  const BufferRec* rec = Find(arguments);
+  if (!rec || rec->kind != BufferKind::Card || (offset & 3u) || static_cast<uint64_t>(offset) + 20 > rec->size) return;
+  if (!PrepareDraw()) return;
+  ++draws_;
+  vkCmdDrawIndexedIndirect(frames_[cur_].cmd, rec->buffer, offset, 1, 20);
 }
 
 void VulkanDevice::UpdateBuffer(Buffer buffer, const void* data, uint32_t size) {
@@ -3313,6 +3444,7 @@ void VulkanDevice::Destroy(Buffer buffer) {
     Bin().buffers.push_back(rec->buffer);
     Bin().memory.push_back(rec->memory);
   }
+  if (rec->kind == BufferKind::Card) cardBuffers_.erase(std::remove(cardBuffers_.begin(), cardBuffers_.end(), buffer.id), cardBuffers_.end());  // [gpuscenery]
   *rec = BufferRec{};
   freeBuffers_.push_back(buffer.id - 1);
 }
@@ -3880,6 +4012,11 @@ void VulkanDevice::ReleasePassTargets() {
 
 void VulkanDevice::ReleaseGeneral() {
   dispatched_ = false;
+  if (cardWritten_) {  // [gpuscenery] (what dispatches wrote of card buffers, there for the draws: as indirect arguments too)
+    CardBarrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
+    cardWritten_ = false;
+  }
   for (uint32_t id : general_)
     if (id < textures_.size() && textures_[id].used) Transition(&textures_[id], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
   general_.clear();
@@ -4335,6 +4472,12 @@ void VulkanDevice::Dispatch(uint32_t x, uint32_t y, uint32_t z) {
       general_.erase(std::remove(general_.begin(), general_.end(), id), general_.end());
     }
   }
+  // [gpuscenery] a card buffer in a shader buffer's slot may be written: what read or wrote it before (draws of a pass, a
+  // copy) done first, and what comes after waits for this dispatch (below)
+  const bool cards = CardBound(0) || CardBound(1);
+  if (cards && !dispatched_)
+    CardBarrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
   if (dispatched_) {  // (the dispatch before wrote: finished before this one reads or writes)
     VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
     mb.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
@@ -4429,6 +4572,7 @@ void VulkanDevice::Dispatch(uint32_t x, uint32_t y, uint32_t z) {
   vkCmdBindDescriptorSets(f.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, computeLayout_->pipeline, 1, 1, &f.constantSets[f.constantPage], kCbSlots, constantOffsets_);
   vkCmdDispatch(f.cmd, x, y, z);
   dispatched_ = true;
+  if (cards) cardWritten_ = true;  // [gpuscenery]
 }
 
 // --- ray tracing ---

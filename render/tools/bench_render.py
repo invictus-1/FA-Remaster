@@ -21,6 +21,8 @@ Use (from Git Bash, the lab's Python):
                                                         into <folder>/A_old and B_new, then compared: <folder>/compare.md)
   (run and ab begin with one short R1 run that is not counted, warmup_R1_<size>.log: the first viewer after a while reads
   the game's files from the disk and was 20 % slower; --no-warm-up leaves it out)
+  (run --args=..., ab --old-args=... / --new-args=... ("=" before an argument that begins with "--"): viewer arguments of a
+  side's own, so that the same exe can be measured with an option off and on)
   py -I bench_render.py table <run folder>             (the table again from a run's logs)
   py -I bench_render.py compare <run A> <run B> [--out <file.md>]
   py -I bench_render.py list                            (the scenes and their viewer arguments)
@@ -200,11 +202,16 @@ def exe_identity(exe):
     return info
 
 
+# [gpuscenery] viewer arguments of a side's own, by its run folder (run --args, ab --old-args / --new-args): the same exe
+# measured with an option off and on
+EXTRA = {}
+
+
 def scene_args(name, size, folder, stats, shader_cache, base=None, frames=None):
     what, args, scene_frames, skip = SCENES[name]
     base = base or "%s_%s" % (name, size)
     frames = frames or scene_frames
-    a = list(LOOKS) + list(args)
+    a = list(LOOKS) + list(args) + list(EXTRA.get(os.path.abspath(folder).replace("\\", "/"), []))
     a += ["--size", size, "--novsync", "--frames", str(frames), "--timings", "--timings-from", str(skip),
           "--hitch-log", str(HITCH_MS), "--screenshot", folder + "/" + base + ".png"]
     if stats:
@@ -628,6 +635,8 @@ def prepare_side(exe, folder, label, scenes, sizes, a):
     if not stats:
         meta.append("NOTE: this viewer has no frame-by-frame numbers (--timings-csv): averages only")
     meta += ["scenes: %s; sizes: %s; repeats: %d; shader cache: %s" % (",".join(scenes), ",".join(sizes), a.repeat, a.shader_cache)]
+    if EXTRA.get(folder):
+        meta.append("its own viewer arguments: %s" % " ".join(EXTRA[folder]))
     if not a.dry_run:
         os.makedirs(folder, exist_ok=True)
         # (a folder with runs in it already, filled further: its meta.txt continued, not overwritten)
@@ -698,6 +707,8 @@ def scenes_sizes(a):
 def cmd_run(a):
     scenes, sizes = scenes_sizes(a)
     folder = a.out or (LAB + "/_scratch/render/bench/" + now_stamp() + ("_" + a.label if a.label else ""))
+    if a.args:
+        EXTRA[os.path.abspath(folder).replace("\\", "/")] = a.args.split()
     run_sides([prepare_side(a.exe, folder, a.label, scenes, sizes, a)], scenes, sizes, a)
 
 
@@ -705,6 +716,9 @@ def cmd_ab(a):
     """Old and new exe, scene by scene in turn, into <out>/A_old and <out>/B_new, then compared (<out>/compare.md)."""
     scenes, sizes = scenes_sizes(a)
     out = a.out or (LAB + "/_scratch/render/bench/" + now_stamp() + "_ab" + ("_" + a.label if a.label else ""))
+    for side, args in (("/A_old", a.old_args), ("/B_new", a.new_args)):
+        if args:
+            EXTRA[os.path.abspath(out + side).replace("\\", "/")] = args.split()
     sides = [prepare_side(a.old, out + "/A_old", ((a.label or "") + " old").strip(), scenes, sizes, a),
              prepare_side(a.new, out + "/B_new", ((a.label or "") + " new").strip(), scenes, sizes, a)]
     run_sides(sides, scenes, sizes, a)
@@ -870,6 +884,7 @@ def main():
     r.add_argument("--shader-cache", choices=["warm", "cold"], default="warm")
     r.add_argument("--dry-run", action="store_true")
     r.add_argument("--no-warm-up", action="store_true")
+    r.add_argument("--args", help="viewer arguments added to every run (one string)")
     b = sub.add_parser("ab")
     b.add_argument("--old", required=True)
     b.add_argument("--new", required=True)
@@ -879,6 +894,8 @@ def main():
     b.add_argument("--shader-cache", choices=["warm", "cold"], default="warm")
     b.add_argument("--dry-run", action="store_true")
     b.add_argument("--no-warm-up", action="store_true")
+    b.add_argument("--old-args", help="viewer arguments added to the old side's runs (one string)")
+    b.add_argument("--new-args", help="viewer arguments added to the new side's runs (one string)")
     t = sub.add_parser("table")
     t.add_argument("folder")
     c = sub.add_parser("compare")

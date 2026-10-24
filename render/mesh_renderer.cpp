@@ -12,6 +12,7 @@
 
 #include "blasts.h"
 #include "build_effects.h"
+#include "card_scenery.h"  // [gpuscenery]
 #include "effect_files.h"
 #include "hot_metal.h"
 #include "lighting.h"
@@ -82,10 +83,32 @@ struct Instance {
   float4 bones;
   float4 wear;  // battle scars and snow (unit_wear.h): x where its marks begin in the bone buffer, y how many, z its wear over all, w its snow (-1: the weather's)
 };
+#ifdef CARD_SCENERY
+// [gpuscenery] the still scenery picked on the card (card_scenery.h): this draw is one level's list there. The card's buffer
+// in the bones' place (scenery stands at rest and wears no marks: nothing of bones is read), its slots eight rows a prop
+// (the instance's six first), and this draw's record: its arguments, then where its list begins.
+cbuffer CardDraw : register(b2) {
+  uint4 cardDraw;  // x: the word its record begins at in the card's buffer
+};
+StructuredBuffer<float4> boneRows : register(t0, space1);
+uint CardWord(uint w) { return asuint(boneRows[w >> 2][w & 3]); }
+Instance CardInstance(uint instance) {
+  uint slot = CardWord(CardWord(cardDraw.x + 5) + instance) * 8;
+  Instance n;
+  n.row0 = boneRows[slot];
+  n.row1 = boneRows[slot + 1];
+  n.row2 = boneRows[slot + 2];
+  n.color = boneRows[slot + 3];
+  n.bones = boneRows[slot + 4];
+  n.wear = boneRows[slot + 5];
+  return n;
+}
+#else
 cbuffer Instances : register(b2) {
   Instance instances[640];
 };
 StructuredBuffer<float4> boneRows : register(t0, space1);
+#endif
 cbuffer MeshKind : register(b3) {
   float4 kind;  // x: alpha not above this is cut away (-1: glass, seen through by its alpha and glow), y: 1 = lit by the mesh's normals only (2: a frame of light,
                 // 3: a shield's bubble, 4: a slab that fades, 5: a nuke's ball of fire, 6: a nuke's sliding
@@ -160,7 +183,11 @@ struct VOut {
 };
 
 VOut VS(VIn i, uint instance : SV_InstanceID) {
+#ifdef CARD_SCENERY
+  Instance n = CardInstance(instance);  // [gpuscenery]
+#else
   Instance n = instances[instance];
+#endif
   float4 p = float4(i.position, 1);
   float3 normal = i.normal, tangent = i.tangent, binormal = i.binormal;
   [branch] if (n.bones.x >= 0) {  // (a real branch: a model at rest must not read the buffer at all)
@@ -1033,9 +1060,29 @@ struct Instance {
   float4 bones;
   float4 wear;
 };
+#ifdef CARD_SCENERY
+// [gpuscenery] (as kShader's: one level's list on the card, card_scenery.h)
+cbuffer CardDraw : register(b2) {
+  uint4 cardDraw;
+};
+StructuredBuffer<float4> boneRows : register(t0, space1);
+uint CardWord(uint w) { return asuint(boneRows[w >> 2][w & 3]); }
+Instance CardInstance(uint instance) {
+  uint slot = CardWord(CardWord(cardDraw.x + 5) + instance) * 8;
+  Instance n;
+  n.row0 = boneRows[slot];
+  n.row1 = boneRows[slot + 1];
+  n.row2 = boneRows[slot + 2];
+  n.color = boneRows[slot + 3];
+  n.bones = boneRows[slot + 4];
+  n.wear = boneRows[slot + 5];
+  return n;
+}
+#else
 cbuffer Instances : register(b2) {
   Instance instances[640];
 };
+#endif
 cbuffer SwayMotion : register(b3) {
   row_major float4x4 motionNow;     // this frame's view without the jitter
   row_major float4x4 motionBefore;  // the frame before's
@@ -1049,7 +1096,9 @@ cbuffer SwayMotion : register(b3) {
   float4 kind9, kind10, kind11;  // [undersnow] (under_snow.h) the lying snow over the low plants, as the scene's pass had it
 #endif
 };
+#ifndef CARD_SCENERY
 StructuredBuffer<float4> boneRows : register(t0, space1);
+#endif
 Texture2D albedoMap : register(t0);
 
 struct VIn {
@@ -1126,7 +1175,11 @@ float3 Swayed(VIn i, Instance n, float t, float back) {
 }
 
 VOut VS(VIn i, uint instance : SV_InstanceID) {
+#ifdef CARD_SCENERY
+  Instance n = CardInstance(instance);  // [gpuscenery]
+#else
   Instance n = instances[instance];
+#endif
   float3 now = Swayed(i, n, time, 0), before = Swayed(i, n, motionWhen.x, motionWhen.y);
   VOut o;
 #ifdef UNDER_SNOW
@@ -1194,6 +1247,13 @@ bool MeshRenderer::Init(std::string* error) {
   // (buildfx: the same with the remastered build look, for while it is on: PrepareBuild makes them)
   buildSource_ = std::string("#define REMASTERED_BUILD 1\n#define SURFACE_SNOW 0.5\n#define SURFACE_OWN_WET 1\n") + kViewShaderBlock + RayShaders() + kLightingShaderBlock +
                  kGrimeShaderBlock + kWearShaderBlock + HotMetal::ShaderBlock() + kBuildShaderBlock + kShader;
+  {  // [gpuscenery] the same, reading each instance from the card's lists (card_scenery.h): made when cardScenery is first on
+    const std::string card = "#define CARD_SCENERY 1\n";
+    baseSource_ = source;
+    const std::string* of[8] = {&baseSource_, &blastSource_, &plantsSource_, &plantsShadowSource_, &plantsShadowBurntSource_,
+                                &snowSource_, &snowShadowSource_, &buildSource_};
+    for (int k = 0; k < 8; ++k) cardSources_[k] = card + *of[k];
+  }
   int kept = 0;
   auto keep = [&](gfx::Pipeline p, const gfx::PipelineDesc& d) {
     bending_[kept++] = {p, d, {}};
@@ -1494,6 +1554,12 @@ void MeshRenderer::Prepare(const std::vector<const View*>& views) {
     last_.clear();
     lastRows_.clear();
   }
+  // [gpuscenery] the still scenery picked on the card for the frame's passes (it dispatches: between passes, as Prepare is)
+  cardNow_ = false;
+  if (cardScenery && !views.empty()) {
+    CpuTimes::Part("scenery picked on the card");
+    cardNow_ = CardPrepare(views);
+  }
   CpuTimes::Part(outer);
   prepared_ = true;
   const float ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
@@ -1620,6 +1686,9 @@ void MeshRenderer::ClearGroup(uint32_t group) {
   Group& g = groups_[group];
   g.entries.clear();
   g.culls.clear();
+  g.cardDirty = true;  // [gpuscenery] (given to the card anew when next listed)
+  g.rest.clear();
+  g.restCulls.clear();
   g.lo = {1e30f, 1e30f, 1e30f};
   g.hi = {-1e30f, -1e30f, -1e30f};
 }
@@ -1630,6 +1699,7 @@ void MeshRenderer::AddToGroup(uint32_t group, const Model* model, const Mat4& wo
   e.scenery = true;
   e.flags |= kScenery;
   Group& g = groups_[group];
+  g.cardDirty = true;  // [gpuscenery]
   g.entries.push_back(e);
   g.culls.push_back({e.centre, e.radius, e.sizeRadius, e.flags});
   g.lo = {std::min(g.lo.x, e.centre.x - e.radius), std::min(g.lo.y, e.centre.y - e.radius), std::min(g.lo.z, e.centre.z - e.radius)};
@@ -1661,10 +1731,14 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
   auto cut = [&](const Cull* culls, Entry* entries, size_t count) {
     for (size_t at = 0; at < count; at += kPieceModels) pieces_.push_back({culls + at, entries + at, std::min(kPieceModels, count - at)});
   };
+  // [gpuscenery] a pass the card picked for: of the groups only what the card does not take is tested here
+  const int cardPass = cardNow_ && !glass && part != 2 ? CardPassOf(view) : -1;
   if (part != 2)
     for (uint32_t g : groupsListed_) {
       Group& group = groups_[g];
-      if (group.culls.empty()) continue;
+      const std::vector<Cull>& groupCulls = cardPass >= 0 ? group.restCulls : group.culls;  // [gpuscenery]
+      std::vector<Entry>& groupEntries = cardPass >= 0 ? group.rest : group.entries;
+      if (groupCulls.empty()) continue;
       // (a group this pass does not see is passed over whole: its box holds every member's sphere, so
       // each member would fail the same test, Consider's, on its own)
       if (!view.BoxVisible(group.lo, group.hi)) continue;
@@ -1672,7 +1746,7 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
       const float radius = Length(group.hi - group.lo) * 0.5f;
       if (shadowPass && view.CoveredByNearer(centre, radius)) continue;
       if (view.reach > 0 && Length(centre - view.reachFrom) - radius > view.reach) continue;
-      cut(group.culls.data(), group.entries.data(), group.culls.size());
+      cut(groupCulls.data(), groupEntries.data(), groupCulls.size());
     }
   cut(culls_.data(), entries_.data(), culls_.size());
   if (pieceItems_.size() < pieces_.size()) pieceItems_.resize(pieces_.size());
@@ -1682,12 +1756,21 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
     out.clear();
     for (size_t i = 0; i < p.count; ++i) Consider(p.culls[i], p.entries[i], view, shadowPass, glass, part, needed, focal, smallest, wish, &out);
   });
+  if (cardPass >= 0) {  // [gpuscenery] the card's lists first (so that, sorted, each level's list comes before the frame's own)
+    const std::vector<CardScenery::Draw>& draws = card_->Draws(cardPass);
+    for (size_t i = 0; i < draws.size(); ++i) {
+      const CardScenery::Draw& d = draws[i];
+      Entry* e = &cardEntries_[d.model_];
+      items_.push_back({d.lod, e, -1.0f, d.near, SortKey(d.lod, d.model, d.near), static_cast<int32_t>(i)});
+    }
+  }
   for (size_t k = 0; k < pieces_.size(); ++k) items_.insert(items_.end(), pieceItems_[k].begin(), pieceItems_[k].end());
   if (!shadowPass)
     for (const Item& item : items_) posedInstances += item.entry->posed ? 1 : 0;
   if (motion && !shadowPass && !glass) {  // (the keyed models the scene draws, for DrawMotion; [leftover] and what sways, large enough)
     const float least = blastConstants && blastConstantsSize ? swayMotionPixelsBlasts : swayMotionPixels;
     for (const Item& item : items_) {
+      if (item.card >= 0) continue;  // [gpuscenery] (the card lists what sways itself: its sway pass, DrawSwayMotion)
       if (item.entry->key) {
         motionItems_.push_back({item.lod, item.entry, item.bones});
       } else if (swayMotion && item.lod->sway > 0) {
@@ -1893,6 +1976,8 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
   s.plants = plants;
   s.snowing = snowing;
   std::copy(snowK, snowK + 12, s.snowK);
+  s.cardPass = cardNow_ && !glass ? CardPassOf(view) : -1;  // [gpuscenery]
+  bool anyCard = false;
   // [mcrec] the pass's draws, in their order: each mesh's instances in draws of up to kMaxInstances, the depth round's first
   // (in the depth round only what is large on screen, where leaves and parts lie over each other; for what is small,
   // drawing it twice costs more than the shading it saves)
@@ -1906,8 +1991,14 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
         while (at < items_.size() && items_[at].lod == lod && items_[at].near == near) ++at;
         continue;
       }
+      if (items_[at].card >= 0) {  // [gpuscenery] (one of the card's lists: a draw of its own)
+        if (s.cardPass >= 0) runs_.push_back({static_cast<uint32_t>(at), 1, depthOnly, items_[at].card});
+        anyCard = anyCard || s.cardPass >= 0;
+        ++at;
+        continue;
+      }
       size_t n = 0;
-      while (at + n < items_.size() && items_[at + n].lod == lod && items_[at + n].near == near && n < kMaxInstances) ++n;
+      while (at + n < items_.size() && items_[at + n].lod == lod && items_[at + n].near == near && items_[at + n].card < 0 && n < kMaxInstances) ++n;
       runs_.push_back({static_cast<uint32_t>(at), static_cast<uint32_t>(n), depthOnly});
       at += n;
     }
@@ -1954,6 +2045,7 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
   shadowTriangles += counts.shadowTriangles;
   drawnInstances += counts.instances;
   drawnTriangles += counts.triangles;
+  if (anyCard) device_->SetShaderBuffer(boneBuffer_);  // [gpuscenery] (the bones again in their slot, as before the card's draws)
 }
 
 // [mcrec] How many stretches a pass's draws are recorded in: one for every kStretchWeight of work, at most as many as there
@@ -1979,9 +2071,11 @@ template <class R>
 void MeshRenderer::RecordRuns(R& to, const RunSetup& s, size_t from, size_t end, std::vector<Instance>& batch, RunCounts* counts) const {
   const bool shadowPass = s.shadowPass, glass = s.glass, blasts = s.blasts, plants = s.plants, snowing = s.snowing;
   int drawing = -1;  // which pipeline is set: 0 the plain one (or the shadows'), 1 leaves, 2 blended, ... (none at a round's start)
+  bool cardBound = false;  // [gpuscenery] the card's buffer in the bones' slot (each stretch begins with the bones there)
   for (size_t r = from; r < end; ++r) {
     const Run& run = runs_[r];
     const bool depthOnly = run.depthOnly;
+    const bool card = run.card >= 0;  // [gpuscenery]
     if (r > from && depthOnly != runs_[r - 1].depthOnly) drawing = -1;
     const size_t at = run.at, n = run.n;
     const ModelLod* lod = items_[at].lod;
@@ -1996,7 +2090,7 @@ void MeshRenderer::RecordRuns(R& to, const RunSetup& s, size_t from, size_t end,
     const bool reacts = plants && (lod->sway > 0 || (lod->wreck && lod->leaves));  // [plants] (and the game's burnt trees)
     const bool charred = reacts && shadowPass && lod->wreck;  // [plants] (a burnt tree's shadow: its own variant)
     const bool sinks = snowing && Sinks(lod, items_[at].entry->model);  // [undersnow] (a low plant under lying snow)
-    const int variant = sinks ? 400 : charred ? 300 : reacts ? 200 : bends ? 100 : 0;
+    const int variant = (sinks ? 400 : charred ? 300 : reacts ? 200 : bends ? 100 : 0) + (card ? 1000 : 0);
     if (wanted + variant != drawing) {
       gfx::Pipeline p = wanted == 11 ? domeRgb_ : wanted == 10 ? glassRgb_ : wanted == 9 ? laidLeaves_ : wanted == 8 ? laid_ : wanted == 7 ? prepassLeaves_ :
                         wanted == 6 ? prepass_ : wanted == 5 ? adding_ : wanted == 4 ? dome_ : wanted == 3 ? glass_ : wanted == 2 ? blended_ :
@@ -2014,13 +2108,23 @@ void MeshRenderer::RecordRuns(R& to, const RunSetup& s, size_t from, size_t end,
       if (!bends && !reacts && remasteredBuild && buildMade_ > 0)  // (buildfx: the remastered build look's variant)
         for (const BuildVariant& b : buildVariants_)
           if (b.original.id == p.id && b.variant) p = b.variant;
+      if (card) p = CardOf(p);  // [gpuscenery] (the same, reading its instances from the card's list)
+      if (card && !p) {  // ([gpuscenery] none made: CardPipelines says the card is not ready then, so never; drawn by nothing rather than the wrong one)
+        drawing = -1;
+        continue;
+      }
       to.SetPipeline(p);
       drawing = wanted + variant;
     }
-    for (size_t i = 0; i < n; ++i) {
-      batch[i] = items_[at + i].entry->instance;
-      batch[i].bones[0] = items_[at + i].bones;
+    if (card != cardBound) {  // [gpuscenery]
+      to.SetShaderBuffer(card ? card_->Buffer() : boneBuffer_, 0);
+      cardBound = card;
     }
+    if (!card)
+      for (size_t i = 0; i < n; ++i) {
+        batch[i] = items_[at + i].entry->instance;
+        batch[i].bones[0] = items_[at + i].bones;
+      }
     float kind[44] = {lod->alphaCut, lod->shell ? 12.0f : lod->impact ? 9.0f + static_cast<float>(lod->impact) : lod->unlit ? 6.0f + static_cast<float>(lod->unlit) : lod->nuke ? 4.0f + static_cast<float>(lod->nuke) : lod->fades ? 4.0f : lod->shield ? 3.0f : lod->frame ? 2.0f : lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f,
                             static_cast<float>(lod->faction), lod->leaves ? 1.0f : 0.0f, lod->plainMaterial ? 1.0f : 0.0f, lod->border ? 1.0f : 0.0f,
                             lod->sway, 1 / lod->swayHeight, 0, 1,
@@ -2062,6 +2166,13 @@ void MeshRenderer::RecordRuns(R& to, const RunSetup& s, size_t from, size_t end,
     }
     to.SetVertexBuffer(lod->vertices);
     to.SetIndexBuffer(lod->indices);
+    if (card) {  // [gpuscenery] the card's list: as many as the card found, its record's arguments
+      const uint32_t record = card_->Draws(s.cardPass)[static_cast<size_t>(run.card)].record;
+      const uint32_t pick[4] = {record / 4, 0, 0, 0};
+      to.SetConstants(2, pick, sizeof pick);
+      to.DrawIndexedIndirect(card_->Buffer(), record);
+      continue;
+    }
     // only the instances drawn are handed over: the shader reads no further into its array
     to.SetConstants(2, batch.data(), static_cast<uint32_t>(n * sizeof(Instance)));
     to.DrawIndexed(lod->indexCount, 0, 0, static_cast<uint32_t>(n));
@@ -2149,6 +2260,8 @@ bool MeshRenderer::PrepareUnderSnow() {
   md.depthWrite = false;
   md.depthBias = 16;
   std::string error;
+  cardSources_[9] = "#define CARD_SCENERY 1\n" + source;  // [gpuscenery] (its variant for the card's lists)
+  swaySnowMotionDesc_ = md;
   swaySnowMotionPipeline_ = device_->CreatePipeline(md, &error);
   if (!swaySnowMotionPipeline_) fprintf(stderr, "render: the motion of the low plants under the snow cannot be drawn (%s)\n", error.c_str());
   snowMade_ = 1;
@@ -2186,7 +2299,8 @@ bool MeshRenderer::PrepareBuild() {
 }
 
 void MeshRenderer::DrawMotion(const View& view, const Mat4& now, const Mat4& before, float timeBefore) {
-  if (motion && swayMotion && !swayItems_.empty()) DrawSwayMotion(view, now, before, timeBefore);  // [leftover]
+  const bool cardSway = cardNow_ && cardSway_ >= 0 && !card_->Draws(cardSway_).empty();  // [gpuscenery]
+  if (motion && swayMotion && (!swayItems_.empty() || cardSway)) DrawSwayMotion(view, now, before, timeBefore);  // [leftover]
   if (!motion || motionItems_.empty() || !motionPipeline_) return;
   // by level, so that each level's instances go together
   std::stable_sort(motionItems_.begin(), motionItems_.end(), [](const MotionItem& a, const MotionItem& b) { return a.lod < b.lod; });
@@ -2234,6 +2348,8 @@ void MeshRenderer::DrawSwayMotion(const View& view, const Mat4& now, const Mat4&
     md.depthWrite = false;
     md.depthBias = 16;  // (as the keyed models' motion: the same placement compiled in another shader may land a hair farther)
     std::string error;
+    cardSources_[8] = "#define CARD_SCENERY 1\n" + source;  // [gpuscenery] (its variant for the card's lists)
+    swayMotionDesc_ = md;
     swayMotionPipeline_ = device_->CreatePipeline(md, &error);
     if (!swayMotionPipeline_) fprintf(stderr, "render: the motion of what sways cannot be drawn (%s)\n", error.c_str());
   }
@@ -2264,6 +2380,28 @@ void MeshRenderer::DrawSwayMotion(const View& view, const Mat4& now, const Mat4&
     device_->SetTexture(11, underSnow.groundNormals ? underSnow.groundNormals : textures_->FlatNormal());
     UnderSnowConstants(k.snow);
   }
+  // a level's constants and what it reads (its albedo, its mesh)
+  auto level = [&](const ModelLod* lod, const Model* of, bool sinks) {
+    // (under the snow the plants' own sway as the scene's variant has it: PlantsUpright always, the rest off by kind8)
+    k.when[2] = plants || sinks ? 1.0f : 0.0f;
+    k.kind[0] = lod->alphaCut;
+    k.kind2[1] = lod->leaves ? 1.0f : 0.0f;
+    k.kind3[0] = lod->sway;
+    k.kind3[1] = 1 / lod->swayHeight;
+    // [undersnow] (the model's lowest point and its whole height, as the scene's MeshKind has them)
+    k.kind3[2] = of->boundsMin.y;
+    k.kind3[3] = 1 / std::max(of->boundsMax.y - of->boundsMin.y, 1e-3f);
+    k.kind6[2] = lod->treeStep;
+    if (plants) {  // (as DrawItems hands them: the game's trees neither pressed nor burnt by the picture)
+      std::copy(plantsConstants, plantsConstants + 4, k.kind7);
+      std::copy(plantsConstants + 4, plantsConstants + 8, k.kind8);
+      if (of->simTree) k.kind8[2] = k.kind8[3] = 0;
+    }
+    device_->SetConstants(3, &k, sizeof k);
+    device_->SetTexture(0, lod->albedo);
+    device_->SetVertexBuffer(lod->vertices);
+    device_->SetIndexBuffer(lod->indices);
+  };
   bool sinking = false;
   for (size_t at = 0; at < swayItems_.size();) {
     const ModelLod* lod = swayItems_[at].lod;
@@ -2279,30 +2417,29 @@ void MeshRenderer::DrawSwayMotion(const View& view, const Mat4& now, const Mat4&
       device_->SetPipeline(sinks ? swaySnowMotionPipeline_ : swayMotionPipeline_);
       sinking = sinks;
     }
-    // (under the snow the plants' own sway as the scene's variant has it: PlantsUpright always, the rest off by kind8)
-    k.when[2] = plants || sinks ? 1.0f : 0.0f;
-    k.kind[0] = lod->alphaCut;
-    k.kind2[1] = lod->leaves ? 1.0f : 0.0f;
-    k.kind3[0] = lod->sway;
-    k.kind3[1] = 1 / lod->swayHeight;
-    {  // [undersnow] (the model's lowest point and its whole height, as the scene's MeshKind has them)
-      const Model* of = swayItems_[at].entry->model;
-      k.kind3[2] = of->boundsMin.y;
-      k.kind3[3] = 1 / std::max(of->boundsMax.y - of->boundsMin.y, 1e-3f);
-    }
-    k.kind6[2] = lod->treeStep;
-    if (plants) {  // (as DrawItems hands them: the game's trees neither pressed nor burnt by the picture)
-      std::copy(plantsConstants, plantsConstants + 4, k.kind7);
-      std::copy(plantsConstants + 4, plantsConstants + 8, k.kind8);
-      if (swayItems_[at].entry->model->simTree) k.kind8[2] = k.kind8[3] = 0;
-    }
-    device_->SetConstants(3, &k, sizeof k);
-    device_->SetTexture(0, lod->albedo);
-    device_->SetVertexBuffer(lod->vertices);
-    device_->SetIndexBuffer(lod->indices);
+    level(lod, swayItems_[at].entry->model, sinks);
     device_->SetConstants(2, batch_.data(), static_cast<uint32_t>(n * sizeof(Instance)));
     device_->DrawIndexed(lod->indexCount, 0, 0, static_cast<uint32_t>(n));
     at += n;
+  }
+  // [gpuscenery] and the card's lists of what sways (its sway pass: the same test, on the card), by their variants
+  if (cardNow_ && cardSway_ >= 0 && !card_->Draws(cardSway_).empty()) {
+    device_->SetShaderBuffer(card_->Buffer());
+    int set = -1;
+    for (const CardScenery::Draw& d : card_->Draws(cardSway_)) {
+      const bool sinks = snowing && Sinks(d.lod, d.model);
+      const gfx::Pipeline p = CardOf(sinks ? swaySnowMotionPipeline_ : swayMotionPipeline_);
+      if (!p) continue;
+      if (set != (sinks ? 1 : 0)) {
+        device_->SetPipeline(p);
+        set = sinks ? 1 : 0;
+      }
+      level(d.lod, d.model, sinks);
+      const uint32_t pick[4] = {d.record / 4, 0, 0, 0};
+      device_->SetConstants(2, pick, sizeof pick);
+      device_->DrawIndexedIndirect(card_->Buffer(), d.record);
+    }
+    device_->SetShaderBuffer(boneBuffer_);
   }
   device_->SetTexture(8, {});
   device_->SetTexture(9, {});
@@ -2341,6 +2478,132 @@ void MeshRenderer::DrawMarked(const View& view, uint32_t mask, uint32_t want) {
     device_->SetConstants(2, batch_.data(), static_cast<uint32_t>(n * sizeof(Instance)));
     device_->DrawIndexed(lod->indexCount, 0, 0, static_cast<uint32_t>(n));
   }
+}
+
+// [gpuscenery] The still scenery on the card (card_scenery.h).
+MeshRenderer::~MeshRenderer() = default;  // (CardScenery is whole here)
+
+float MeshRenderer::CardPickMs() const { return card_ ? card_->pickMs : 0.0f; }
+
+// Which of the card's passes a view is (the one Prepare was given; not the sway motion's), or -1.
+int MeshRenderer::CardPassOf(const View& view) const {
+  for (size_t i = 0; i < cardViews_.size(); ++i)
+    if (cardViews_[i] == &view && static_cast<int>(i) != cardSway_) return static_cast<int>(i);
+  return -1;
+}
+
+// The groups listed that changed since, given to the card anew (each its props the card does not take kept for the
+// processor), and the frame's passes picked: the camera's (Prepare's first view), the sun's cascades (those after it with
+// no lamp's reach), and the camera's motion of what sways when motion is on. False: the processor draws the scenery.
+bool MeshRenderer::CardPrepare(const std::vector<const View*>& views) {
+  static_assert(sizeof(Instance) == 24 * sizeof(float), "card_scenery.h reads an instance as 24 floats");
+  if (!device_->IndirectDraws()) return false;
+  if (!card_) card_ = std::make_unique<CardScenery>(device_);
+  if (!CardPipelines()) return false;
+  ++cardFrame_;
+  std::vector<CardScenery::Member> members;
+  std::vector<uint32_t> left;
+  for (uint32_t g : groupsListed_) {
+    if (g >= groups_.size()) continue;
+    Group& group = groups_[g];
+    if (!group.cardDirty && card_->Has(g)) continue;
+    members.clear();
+    for (const Entry& e : group.entries)
+      members.push_back({e.model, reinterpret_cast<const float*>(&e.instance), e.centre, e.radius, e.sizeRadius});
+    card_->SetGroup(g, group.order, members.data(), members.size(), &left);
+    group.rest.clear();
+    group.restCulls.clear();
+    for (uint32_t i : left) {
+      group.rest.push_back(group.entries[i]);
+      group.restCulls.push_back(group.culls[i]);
+    }
+    group.cardDirty = false;
+  }
+  cardViews_.clear();
+  cardSway_ = -1;
+  CardScenery::Pass passes[CardScenery::kMostViews];
+  int n = 0;
+  auto set = [&](const View* v, bool shadow, bool sway) {
+    CardScenery::Pass& p = passes[n++];
+    p.view = v;
+    p.shadow = shadow;
+    p.sway = sway;
+    p.smallest = shadow ? shadowMinPixels : minPixels;
+    p.wish = trianglesPerPixel * detail * (shadow ? shadowDetail : 1.0f) * 0.7854f;  // (as Draw's)
+    p.standard = std::sqrt(detail * (shadow ? shadowDetail : 1.0f));                // (as Consider's)
+    p.swayPixels = blastConstants && blastConstantsSize ? swayMotionPixelsBlasts : swayMotionPixels;
+    cardViews_.push_back(v);
+  };
+  for (size_t i = 0; i < views.size() && n < CardScenery::kMostViews - 1; ++i)
+    if (views[i]->reach <= 0 && !views[i]->hasCarrier) set(views[i], i > 0, false);
+  if (n && motion && swayMotion && cardViews_[0] == views[0]) {
+    cardSway_ = n;
+    set(views[0], false, true);
+  }
+  if (!card_->Pick(groupsListed_, passes, n, divertStream, cardFrame_)) return false;
+  static bool told = false;  // (once: from when)
+  if (!told)
+    printf("render: the scenery picked on the card from its frame %llu: %zu props of %zu models, %zu lists, %d passes (%s)\n",
+           static_cast<unsigned long long>(cardFrame_), card_->Props(), card_->Models(), card_->Lists(), n, device_->BackendName());
+  told = true;
+  while (cardEntries_.size() < card_->Models()) {  // (an entry for each of its models: what a draw's model is read from)
+    Entry e{};
+    e.model = card_->ModelAt(cardEntries_.size());
+    e.scenery = true;
+    e.flags = kScenery;
+    cardEntries_.push_back(e);
+  }
+  return true;
+}
+
+// The variants of the models' pipelines that read the card's lists: of each the world has made (the plain ones, and those
+// of the blasts' waves, plants that react, the snow, the remastered build look, the motion of what sways), asked for on the
+// device's own thread when the set grows; true once all are made.
+bool MeshRenderer::CardPipelines() {
+  const int wanted = (blastsMade_ > 0 ? 1 : 0) | (plantsMade_ > 0 ? 2 : 0) | (snowMade_ > 0 ? 4 : 0) | (buildMade_ > 0 ? 8 : 0) |
+                     (swayMotionPipeline_ ? 16 : 0) | (swaySnowMotionPipeline_ ? 32 : 0);
+  if (wanted != cardWanted_ && !cardFailed_) {
+    cardWanted_ = wanted;
+    cardReady_ = false;
+    std::string error;
+    device_->BeginBackgroundPipelines();
+    auto want = [&](gfx::Pipeline original, const gfx::PipelineDesc& desc, const std::string& source) {
+      if (!original || cardFailed_ || CardOf(original)) return;
+      gfx::PipelineDesc d = desc;
+      d.vertexSource = d.pixelSource = source;
+      const gfx::Pipeline p = device_->CreatePipeline(d, &error);
+      if (!p) {
+        fprintf(stderr, "render: the scenery on the card cannot be drawn (%s); the processor picks it\n", error.c_str());
+        cardFailed_ = true;
+        return;
+      }
+      cardOf_.push_back({original.id, p});
+    };
+    for (const Bending& b : bending_) {
+      if (!b.original) continue;
+      const bool shadow = b.original.id == shadow_.id;
+      want(b.original, b.desc, cardSources_[0]);
+      want(b.bending, b.desc, cardSources_[1]);
+      want(b.plants, b.desc, cardSources_[shadow ? 3 : 2]);
+      want(b.plantsBurnt, b.desc, cardSources_[4]);
+      want(b.snow, b.desc, cardSources_[shadow ? 6 : 5]);
+    }
+    for (const BuildVariant& v : buildVariants_) {  // (those of the pipelines that draw scenery: not the glass')
+      bool scenery = false;
+      for (const Bending& b : bending_) scenery = scenery || (b.original && b.original.id == v.original.id);
+      if (scenery) want(v.variant, v.desc, cardSources_[7]);
+    }
+    want(swayMotionPipeline_, swayMotionDesc_, cardSources_[8]);
+    want(swaySnowMotionPipeline_, swaySnowMotionDesc_, cardSources_[9]);
+    device_->EndBackgroundPipelines();
+  }
+  if (cardFailed_) return false;
+  if (!cardReady_) {
+    for (const auto& c : cardOf_)
+      if (!device_->PipelineReady(c.second)) return false;
+    cardReady_ = true;
+  }
+  return true;
 }
 
 }  // namespace render

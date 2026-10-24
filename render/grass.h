@@ -158,6 +158,11 @@ class GroundCover {
   // on; World::plantModels): with plantsFar on, the plants of a card that has a model drawn as that model at the level
   // its size on screen asks for, the card below the last. Off (or no models in the cover): cards as before.
   bool plantModels = false;
+  // [gpuscenery] The 3D plants drawn by indirect draws (gfx.h, Device::IndirectDraws; with MeshRenderer::cardScenery, the
+  // viewer's --card-scenery): each kind's level as many instances as its placing put in its list, read by the card, in
+  // place of the room guessed for it on the processor (the list's whole room then: no plant of a full list is left a card,
+  // and none past the count is put nowhere). Off, as at first: the room guessed, each draw that many.
+  bool indirectModels = false;
   PlantLodTune plantLod;  // [plantlod] (its sizes on screen; plant_lod.h)
   // [plantlod] The ground's heights for the tiles (once a map is opened: the heightfield's points, (width + 1) x (height
   // + 1), and world units of a step of them), and the water's level (none under it).
@@ -275,6 +280,10 @@ class GroundCover {
   bool modelsLoaded_ = false;
   void LoadPlantModels();
   void MakeModelPlace();
+  // [gpuscenery] (indirectModels) the lists' draws written on the card after the placing, and whether they were this frame
+  gfx::Pipeline modelArgs_;
+  gfx::Buffer modelArgsBuffer_;
+  bool modelArgsTried_ = false, modelArgsNow_ = false;
   struct Far {
     gfx::Texture cover, densityA, densityB;
     float mapWidth = 0, mapHeight = 0, waterLevel = -1e9f;

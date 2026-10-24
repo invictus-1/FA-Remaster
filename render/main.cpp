@@ -58,7 +58,8 @@
 //           --settings'; given after each swap, or with --load-hold before each BeginMap (WorldPicture::HoldLooks)
 //           --load-session <game config>: [session] <map> is that game's, opened behind while the game loads (LiveSim),
 //           shown once both are ready, then run at 10 beats a second; --load-session-prepare: WorldPicture::PrepareSession
-//           first (the session's models made behind). Needs --init (as --session). --load-day-after: --time-of-day given
+//           first (the session's models made behind). Needs --init (as --session).
+// --staging-reserve <MB>  [vkpresent] (checks) Vulkan's staging reserve in place of min(1 GB, the computer's memory / 16). --load-day-after: --time-of-day given
 //           to <map> only after its swap (and none to the others), as the interface gives a game's day today; with
 //           --load-day, given to its warm frames before (WorldPicture::SetLoadDayAndWeather).
 // --picture-window  with --picture: the interface's way without a read-back: the picture drawn into a window of
@@ -455,6 +456,9 @@
 // --record-threads <n>  [mcrec] the units' and scenery's draws of a pass recorded on at most n threads at once
 //           (MeshRenderer::recordThreads, gfx.h's Device::BeginParallel; the same picture): 0 (the default) as many as
 //           the processor gives (the jobs pool's workers and the frames' thread), 1 all on the frames' thread, as before
+// --card-scenery  [gpuscenery] the still scenery kept on the card and picked there each frame by compute passes, drawn by
+//           indirect draws (MeshRenderer::cardScenery, card_scenery.h; off by default): the processor no longer tests
+//           and lists the map's trees and rocks for the camera's pass and the sun's cascades
 // --jobs-awake <us>  [mcrec] how long the jobs pool's workers wait awake for the next job before they sleep (Jobs::
 //           awakeMicroseconds; 0, the default: they sleep at once, as before), to measure it
 // --no-ground-changes  the ground stays as the map file has it where the game lays it flat under structures (to compare)
@@ -692,6 +696,7 @@ struct Options {
   int shadowKeep = -1;                  // [cardcost] --shadow-keep (-1: World's own)
   int recordThreads = 0;                // --record-threads [mcrec]
   int jobsAwake = -1;                   // --jobs-awake [mcrec] (-1: Jobs' own)
+  bool cardScenery = false;             // --card-scenery [gpuscenery]
   bool groundChanges = true;            // --no-ground-changes
   bool bloom = true;                    // --no-bloom
   bool vulkan = false;                  // --vulkan
@@ -1098,6 +1103,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--no-shadow-fit") o->shadowFit = 0;
     else if (a == "--ray-refit") o->rayRefit = 1;
     else if (a == "--no-ray-refit") o->rayRefit = 0;
+    else if (a == "--card-scenery") o->cardScenery = true;  // [gpuscenery]
     else if (a == "--no-ground-changes") o->groundChanges = false;
     else if (a == "--no-bloom") o->bloom = false;
     else if (a == "--no-frame") o->frame = false;
@@ -1281,6 +1287,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--load-backdrop") o->loadBackdrop = atoi(v);  // [backdrop]
     else if (a == "--load-game-looks") o->loadGameLooks = v;  // [ui 39]
     else if (a == "--load-session") o->loadSession = v;  // [session]
+    else if (a == "--staging-reserve") gfx::gStagingReserveMB = atoi(v);  // [vkpresent]
     else if (a == "--load-budget") o->loadBudget = static_cast<float>(atof(v));  // [bgload]
     else if (a == "--load-cycles") o->loadCycles = std::max(1, atoi(v));  // [bgload]
     else if (a == "--views") o->views = v;  // [views]
@@ -2069,6 +2076,8 @@ int main(int argc, char** argv) {
   if (opt.rayRefit >= 0) world.rayRefit = opt.rayRefit > 0;
   if (opt.shadowKeep >= 0) world.shadowKeep = opt.shadowKeep;
   world.meshes.recordThreads = opt.recordThreads;  // [mcrec]
+  world.meshes.cardScenery = opt.cardScenery;      // [gpuscenery]
+  world.grass.indirectModels = opt.cardScenery;    // [gpuscenery] (the 3D plants' draws by their lists' counts)
   if (opt.jobsAwake >= 0) Jobs::awakeMicroseconds = opt.jobsAwake;
   world.frame = opt.frame;
   world.beyondHaze = opt.beyondHaze;

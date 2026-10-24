@@ -288,8 +288,17 @@ struct WorldPicture::Impl {
     // [session] (PrepareSession) the session's models made on a thread of their own once the loading thread is done
     std::thread session;
     std::atomic<bool> sessionDone{true}, stopSession{false};
+    // [session] the session's first beat, as the game's first frame will have it (a SimFrames of its own: the frame points into
+    // its names), its props' events and the armies' colours: the warm frames after its models are drawn with it (WarmBehind's
+    // `withBeat`), so that what its units and props make the first time they are drawn is made unseen
+    std::unique_ptr<SimFrames> beatFrames;
+    std::unique_ptr<Frame> beat;
+    std::vector<FramePropEvent> beatProps;
+    std::vector<Vec3> beatColors;
+    int roundFrames = 0;  // (the warm frames of this round: WarmFrame's; at most 8)
   };
   std::vector<moho::PropEvent> heldProps;  // [session] (PrepareSession: the simulation's props' events, for the next beat)
+  std::unique_ptr<SimFrames> sessionArmies;  // [session] (PrepareSession's reading of the game: GameStarted takes it, AdoptArmies)
   std::unique_ptr<Load> load;
   std::vector<std::unique_ptr<Load>> cancelled;  // (CancelMap: being opened still, let go of once open)
   // [bgload] worlds no longer shown, being let go of on a thread of their own, then what they left on the device
@@ -307,7 +316,7 @@ struct WorldPicture::Impl {
   void ForgetWorld();                     // (the picture's own of the world shown, begun afresh for another)
   void WarmFrame(Load& l);                // (the map opened behind drawn once unseen: MapReady waits for it)
   void AskWarm(Load& l);                  // [warmtarget] (the frames' thread: a warm frame asked of the loading thread)
-  static void WarmBehind(Load& l);        // [warmtarget] (the loading thread: the warm frames asked for, recorded)
+  static void WarmBehind(Load& l, bool withBeat = false);  // [warmtarget] (the loading thread: the warm frames asked for, recorded)
   static void Abandon(Load& l);           // [warmtarget] (a load not wanted: its loading thread records no more)
   float loadBudgetMs = 2;                 // (WorldPicture::SetLoadBudget)
   ~Impl() {
@@ -505,6 +514,7 @@ void WorldPicture::CancelMap() {
   if (!m.load) return;
   m.load->cancelled = true;
   Impl::Abandon(*m.load);  // [warmtarget]
+  m.sessionArmies.reset();  // [session]
   if (!m.heldProps.empty()) m.frames.HoldPropEvents(&m.heldProps);  // [session] (the world shown's next beat has them)
   m.cancelled.push_back(std::move(m.load));  // (let go of by ServiceLoads once its opening is done; another may begin now)
 }
@@ -556,6 +566,7 @@ bool WorldPicture::SwapMap() {
   w.lens = m.lens;
   m.ForgetWorld();
   if (!m.heldProps.empty()) m.frames.HoldPropEvents(&m.heldProps);  // [session] (the simulation's first props: the first beat's)
+  m.sessionArmies = std::move(load->beatFrames);  // [session] (the game read already: GameStarted takes it)
   m.LetGo(std::move(old), std::move(oldDevice));
   return true;
 }
@@ -610,9 +621,11 @@ void WorldPicture::Impl::AskWarm(Load& l) {
 
 // The loading thread, once the map is open: each warm frame the frames' thread asks for, recorded (the world is this
 // thread's alone until it is shown), until one is warm or the load is not wanted.
-void WorldPicture::Impl::WarmBehind(Load& l) {
+void WorldPicture::Impl::WarmBehind(Load& l, bool withBeat) {
   CpuTimes::elsewhere = true;  // (its parts are not the frames' thread's)
   World& w = *l.world;
+  // [session] (withBeat: the session's first beat drawn in them; its props laid first, as the game's first beat lays them)
+  if (withBeat && !l.beatProps.empty()) w.AddPropEvents(l.beatProps);
   for (;;) {
     Load::WarmSetup s;
     {
@@ -644,7 +657,12 @@ void WorldPicture::Impl::WarmBehind(Load& l) {
     l.device->BeginRecording();
     w.photo = true;
     w.Begin(camera, s.width, s.height, 0, 0);
+    if (withBeat && l.beat) {  // [session]
+      w.warmAll = true;
+      w.AddFrame(*l.beat, l.beatColors);
+    }
     w.Render();
+    w.warmAll = false;
     w.photo = false;
     w.cameraCut = true;  // (its first frame shown keeps nothing of these)
     l.device->EndRecording();
@@ -698,7 +716,8 @@ void WorldPicture::Impl::WarmFrame(Load& l) {
     int asked = 0, notMade = 0;
     l.device->TakeWarmth(&asked, &notMade);
     ++l.warmFrames;
-    warmed = (asked == 0 && notMade == 0) || l.warmFrames >= 8;
+    ++l.roundFrames;  // ([session] a round of its own after the session's models)
+    warmed = (asked == 0 && notMade == 0) || l.roundFrames >= 8;
     device->SetPhotoWindow(warmed ? -1 : 0, warmed ? -1 : 0);  // (its picture let go of after the last)
     depthIsWindow = false;  // (the scene's depth there is the warm frame's: FocusAt reads the world shown's)
     l.warmLongestMs = std::max(l.warmLongestMs, (SteadySeconds() - t0) * 1000.0);
@@ -819,7 +838,15 @@ void WorldPicture::Impl::ServiceLoads(double budgetMs) {
   }
 }
 
-void WorldPicture::GameStarted(const moho::Sim& sim) { impl_->frames.ReadArmies(sim, *impl_->vfs); }
+void WorldPicture::GameStarted(const moho::Sim& sim) {
+  Impl& m = *impl_;
+  if (m.sessionArmies) {  // [session] (read as the session was prepared, before its first beat: 16 ms at the swap otherwise)
+    m.frames.AdoptArmies(*m.sessionArmies);
+    m.sessionArmies.reset();
+    return;
+  }
+  m.frames.ReadArmies(sim, *m.vfs);
+}
 
 // [session] (world_picture.h) What is read of the simulation is read here, on the host's thread; the models are made on a
 // thread of the session's own, once the loading thread is done with the world (opened and warmed), through the map's own
@@ -854,10 +881,28 @@ bool WorldPicture::PrepareSession(const moho::Sim& sim) {
   std::set<std::pair<std::string, std::string>> seen;
   for (const moho::PropEvent& e : events)
     if (e.kind != moho::PropEvent::Destroy && !e.blueprint.empty() && seen.insert({e.blueprint, e.mesh}).second) props.push_back({e.blueprint, e.mesh});
+  // the session's first beat, as the game's first frame will show it (the warm frames after the models draw it)
+  auto beatFrames = std::make_unique<SimFrames>();
+  auto beat = std::make_unique<Frame>();
+  std::vector<FramePropEvent> beatProps;
+  {
+    beatFrames->SetFocusArmy(m.focusArmy);
+    beatFrames->ReadArmies(sim, *m.vfs);
+    std::vector<moho::PropEvent> copy = events;
+    beatFrames->HoldPropEvents(&copy);
+    beatFrames->Beat(sim);
+    if (!beatFrames->FrameAt(static_cast<double>(beatFrames->FirstTick()), beat.get())) beat.reset();
+    beatFrames->TakePropEvents(&beatProps);
+  }
+  const std::vector<Vec3> beatColors = m.armyColorsOverride.empty() ? beatFrames->ArmyColors() : m.armyColorsOverride;
   m.heldProps.insert(m.heldProps.end(), std::make_move_iterator(events.begin()), std::make_move_iterator(events.end()));
   printf("render: the session handed to the map opening behind: %zu unit kinds (%zu units there), %zu props' kinds (read in %.1f ms)\n", kinds.size(),
          units.size(), props.size(), (SteadySeconds() - t0) * 1000.0);
   l->sessionDone.store(false, std::memory_order_release);
+  l->beatFrames = std::move(beatFrames);  // (the session thread's from here: read once the loading thread is done)
+  l->beat = std::move(beat);
+  l->beatProps = std::move(beatProps);
+  l->beatColors = beatColors;
   l->session = std::thread([l, looks = std::move(looks), kinds = std::move(kinds), props = std::move(props)] {
     CpuTimes::elsewhere = true;  // (as the loading thread's)
     gRayShadersHere = l->rays ? 1 : 0;
@@ -870,6 +915,27 @@ bool WorldPicture::PrepareSession(const moho::Sim& sim) {
       w.SetLooks(looks);
       w.MakeSessionModels(kinds, props, &l->stopSession);
       printf("render: the session's models made behind in %.2f s\n", SteadySeconds() - t);
+      // the warm frames again, with the session's first beat: its units and props drawn unseen once (their first-time work,
+      // icons and bars, scars watched, textures at first sight), recorded here as the loading thread recorded them
+      if (l->beat && !l->stopSession.load(std::memory_order_acquire)) {
+        const double t2 = SteadySeconds();
+        {
+          std::lock_guard<std::mutex> lock(l->warmLock);
+          l->roundFrames = 0;
+          l->scenesBuilt = false;  // (the units' structures built in a frame of their own first)
+          l->warmed = false;
+          l->warm = Impl::Load::Warm::Idle;
+        }
+        // (the game's weather, as the picture's frames give it from the session's seed: its climate, its snow and what the
+        // snow puts in the props' place)
+        if (const uint32_t seed = l->beatFrames->Seed()) w.weatherSeed = seed;
+        Impl::WarmBehind(*l, true);
+        printf("render: the session's first beat drawn unseen in %.2f s\n", SteadySeconds() - t2);
+      }
+      // (what was kept of the beat let go of here, not by SwapMap on the frames' thread: the map's props' events are tens of
+      // thousands)
+      l->beat.reset();  // (beatFrames kept: GameStarted takes its reading of the game)
+      std::vector<FramePropEvent>().swap(l->beatProps);
     }
     l->sessionDone.store(true, std::memory_order_release);
   });

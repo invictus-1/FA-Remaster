@@ -129,7 +129,8 @@ DxcCompiler3* Compiler(std::string* error) {
 }
 
 // The renderer's registers on Vulkan's descriptor sets (gfx_vulkan.cpp lays them out the same way):
-// set 0: t0-t43 at 16-59, t0-t1 of space1 at 60-61, s0-s5 at 64-69, a compute shader's u0-u15 at 80-95;
+// set 0: t0-t43 at 16-59, t0-t1 of space1 at 60-61 (and a compute shader's u0-u1 of space1 there too: card buffers it
+// writes), s0-s5 at 64-69, a compute shader's u0-u15 at 80-95;
 // set 1: b0-b3 at 0-3.
 // The shader model: 6.0, every card's driver of the last years takes it; 6.5 for a shader that traces rays
 // (RayQuery).
@@ -160,8 +161,12 @@ std::vector<std::wstring> Arguments(const char* entry, const char* stage, bool r
   for (int i = 0; i < 44; ++i) bind(L"t" + std::to_wstring(i), 0, 16 + i, 0);
   for (int i = 0; i < 2; ++i) bind(L"t" + std::to_wstring(i), 1, 60 + i, 0);
   for (int i = 0; i < 6; ++i) bind(L"s" + std::to_wstring(i), 0, 64 + i, 0);
-  if (std::strcmp(stage, "cs") == 0)  // (only compute shaders write; the others' arguments stay as they were)
+  if (std::strcmp(stage, "cs") == 0) {  // (only compute shaders write; the others' arguments stay as they were)
     for (int i = 0; i < 16; ++i) bind(L"u" + std::to_wstring(i), 0, 80 + i, 0);
+    // [gpuscenery] a card buffer written in a shader buffer's slot (gfx.h, BufferKind::Card): u0-u1 of space1, the same
+    // storage buffers as t0-t1 of space1
+    for (int i = 0; i < 2; ++i) bind(L"u" + std::to_wstring(i), 1, 60 + i, 0);
+  }
   return a;
 }
 

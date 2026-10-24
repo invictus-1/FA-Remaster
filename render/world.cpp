@@ -1453,7 +1453,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   }
   icons.Begin(screenView_);
   // units seen behind what hides them (hidden_outlines.h): marked as they are listed, this frame's
-  outlinesNow_ = hiddenOutlines && look == Look::Modern && (!sidePicture || extraView) && !photo && !camera.cinematic;  // ([views] every view's)  // (cinecam: no outlines on photos or a cinematic camera, as no icons)
+  outlinesNow_ = hiddenOutlines && look == Look::Modern && (!sidePicture || extraView) && (!photo || warmAll) && !camera.cinematic;  // ([session] warmAll)  // ([views] every view's)  // (cinecam: no outlines on photos or a cinematic camera, as no icons)
   outlines.Begin(screenWidth_, screenHeight_);
   // the resource deposits' icons, from where their marks on the ground are no longer drawn (cinecam: not for a
   // cinematic camera, which sees far over the ground: they would stand along the horizon)
@@ -1500,7 +1500,10 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
         if (!view.BoxVisible(lo, hi)) continue;
         ++propCellsSeen;
         // (its group with the model renderer, filled anew when a prop of it has changed)
-        if (cell.group == 0xffffffffu) cell.group = meshes.AddGroup();
+        if (cell.group == 0xffffffffu) {
+          cell.group = meshes.AddGroup();
+          meshes.SetGroupOrder(cell.group, static_cast<uint32_t>(cz * propCellsX_ + cx));  // [gpuscenery] (the order it is listed in)
+        }
         if (cell.changed) {
           meshes.ClearGroup(cell.group);
           for (uint32_t i : cell.ofMap) meshes.AddToGroup(cell.group, props_[i].model, props_[i].world);
@@ -3673,7 +3676,7 @@ void World::Render() {
   Stage("icons, bars");
   // (cinecam: no strategic symbols for a cinematic camera: every unit far off toward the horizon would stand there as one)
   icons.showSymbols = iconsOn && !camera.cinematic;
-  if (!photo) icons.Draw();  // on the finished picture, as the original draws them (and the life bars; cinecam: none on a photo)
+  if (!photo || warmAll) icons.Draw();  // on the finished picture, as the original draws them (and the life bars; cinecam: none on a photo; [session] warmAll)
   TakeMomentOut();  // (photomode: between frames the game's own hour and weather again)
   CpuTimes::Part(nullptr);
 }

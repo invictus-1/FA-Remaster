@@ -80,6 +80,7 @@ int LoadTest(const moho::Vfs& vfs, const LoadTestSetup& s) {
   const moho::Sim* simStarted = nullptr;
   bool simReleased = false;
   std::function<void()> perFrame;
+  bool warmView = false;  // [session] (a session's map shown by the warm frames' own camera: what they drew is what is shown)
   // one frame: the camera over the middle of the map shown, the interface over it; the time since the frame before
   double tick = 0;
   bool layerGiven = false;
@@ -96,6 +97,7 @@ int LoadTest(const moho::Vfs& vfs, const LoadTestSetup& s) {
     cam.pitch = 0.75f;
     cam.heading = 0.4f;  // (held: the pictures of one map, opened either way, comparable pixel for pixel)
     if (perFrame) perFrame();  // [session] (the game's beats asked for)
+    if (warmView) cam.pitch = 1.0f, cam.heading = 0;  // [session] (WorldPicture's warm frames' camera where none is given)
     picture.SetInterfaceLayer(layer.data(), w, h, w, 0, 0, layerGiven ? 0 : w, layerGiven ? 0 : h);
     layerGiven = true;
     if (capture) picture.CaptureNextWindowFrame(&shown);
@@ -278,6 +280,7 @@ int LoadTest(const moho::Vfs& vfs, const LoadTestSetup& s) {
       simCv.notify_all();
       const Clock::time_point shown = Clock::now();
       perFrame = [&live, shown] { live->RunTo(1 + static_cast<uint32_t>(Ms(shown, Clock::now()) / 100.0)); };
+      warmView = true;
     }
     const double swapMs = Ms(swapping, Clock::now());
     const double first = frame(false);  // (the new world's first three frames)
@@ -296,6 +299,7 @@ int LoadTest(const moho::Vfs& vfs, const LoadTestSetup& s) {
     if (!phases[k].second.empty()) write(phases[k].second.c_str());
     if (sessionHere) {  // [session] (the game stopped before the next map: its beats are this map's)
       perFrame = nullptr;
+      warmView = false;
       {
         std::lock_guard<std::mutex> lock(simLock);
         simReleased = true;

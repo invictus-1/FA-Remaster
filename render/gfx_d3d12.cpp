@@ -191,7 +191,14 @@ struct BufferRec {
   uint64_t offset = 0;                 // static: where in it
   D3D12_GPU_VIRTUAL_ADDRESS gpu = 0;   // static: its place in the block; dynamic: this frame's span
   uint64_t frame = 0;                  // dynamic: the frame its contents belong to
+  // [gpuscenery] a card buffer (BufferKind::Card): its own resource, which dispatches may write, and the state it is in now
+  // (a buffer is back in the common state after each frame's lists are run)
+  Com<ID3D12Resource> card;
+  D3D12_RESOURCE_STATES state = D3D12_RESOURCE_STATE_COMMON;
 };
+// [gpuscenery] what a card buffer is read in: by draws and dispatches through its t register, and as indirect draws' arguments
+constexpr D3D12_RESOURCE_STATES kCardReadable =
+    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
 
 struct TextureRec {
   bool used = false;
@@ -359,6 +366,10 @@ class D3D12Device final : public Device {
   void Dispatch(uint32_t x, uint32_t y, uint32_t z) override;
   void Draw(uint32_t vertexCount, uint32_t firstVertex, uint32_t instances) override;
   void DrawIndexed(uint32_t indexCount, uint32_t firstIndex, int32_t baseVertex, uint32_t instances) override;
+  // [gpuscenery] card buffers and indirect draws (gfx.h)
+  bool IndirectDraws() const override { return static_cast<bool>(drawIndexedSignature_); }
+  void UpdateBufferRange(Buffer buffer, uint32_t offset, const void* data, uint32_t size) override;
+  void DrawIndexedIndirect(Buffer arguments, uint32_t offset) override;
   void EndFrame(std::vector<uint8_t>* capture, bool present) override;
   bool RayTracing() const override { return rayTracing_; }
   Structure CreateGeometry(const GeometryPart* parts, int count) override;
@@ -648,6 +659,14 @@ class D3D12Device final : public Device {
   bool computeRoot_ = false;      // the compute root signature set this frame
   bool dispatched_ = false;       // the last thing recorded was a dispatch (the next waits for its writes)
 
+  // [gpuscenery] card buffers (gfx.h, BufferKind::Card): those made (ids), indirect draws' signature (none: the card cannot);
+  // a card buffer moved into `to` (barriers gathered into `out`, or recorded at once when null); and all of them made
+  // readable again (before a pass, at the frame's end)
+  std::vector<uint32_t> cardBuffers_;
+  Com<ID3D12CommandSignature> drawIndexedSignature_;
+  void CardState(BufferRec& rec, D3D12_RESOURCE_STATES to, std::vector<D3D12_RESOURCE_BARRIER>* out = nullptr);
+  void CardsReadable();
+
   // ray tracing (DXR 1.1: inline ray queries with shader model 6.5)
   bool rayTracing_ = false;
   Com<ID3D12Device5> device5_;
@@ -814,6 +833,13 @@ class D3D12Device::ParallelRecorder final : public Recorder {
     ++draws_;
     Bind();
     list_->DrawIndexedInstanced(indexCount, instances, firstIndex, baseVertex, 0);
+  }
+  void DrawIndexedIndirect(Buffer arguments, uint32_t offset) override {  // [gpuscenery]
+    const BufferRec* rec = d_->Find(arguments);
+    if (!rec || !rec->card || !d_->drawIndexedSignature_ || (offset & 3u) || offset + 20 > rec->size) return;
+    ++draws_;
+    Bind();
+    list_->ExecuteIndirect(d_->drawIndexedSignature_.Get(), 1, rec->card.Get(), offset, nullptr, 0);
   }
 
   ID3D12GraphicsCommandList* list_ = nullptr;
@@ -1031,7 +1057,7 @@ bool D3D12Device::Init(const DeviceDesc& desc, std::string* error) {
   D3D12_DESCRIPTOR_RANGE storageRange = {};  // (compute shaders' u0..u15)
   storageRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
   storageRange.NumDescriptors = kStorageSlots;
-  D3D12_ROOT_PARAMETER params[kCbSlots + 4] = {};
+  D3D12_ROOT_PARAMETER params[kCbSlots + 6] = {};
   for (int i = 0; i < kCbSlots; ++i) {
     params[i].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     params[i].Descriptor.ShaderRegister = static_cast<UINT>(i);
@@ -1052,6 +1078,14 @@ bool D3D12Device::Init(const DeviceDesc& desc, std::string* error) {
   params[kCbSlots + 3].DescriptorTable.NumDescriptorRanges = 1;
   params[kCbSlots + 3].DescriptorTable.pDescriptorRanges = &storageRange;
   params[kCbSlots + 3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+  // [gpuscenery] the two shader buffers' slots written by compute shaders when they hold card buffers (u0, u1 of space1):
+  // root descriptors too
+  for (int i = 0; i < 2; ++i) {
+    params[kCbSlots + 4 + i].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
+    params[kCbSlots + 4 + i].Descriptor.ShaderRegister = static_cast<UINT>(i);
+    params[kCbSlots + 4 + i].Descriptor.RegisterSpace = 1;
+    params[kCbSlots + 4 + i].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+  }
   D3D12_STATIC_SAMPLER_DESC samplers[6] = {};
   // s5: for shadow maps. Compares against the stored (reversed) depth: 1 where the given depth is
   // nearer to the light or equal; blends the four nearest results. Outside the map: lit.
@@ -1080,7 +1114,7 @@ bool D3D12Device::Init(const DeviceDesc& desc, std::string* error) {
     samplers[i].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
   }
   D3D12_ROOT_SIGNATURE_DESC rd = {};
-  rd.NumParameters = kCbSlots + 4;
+  rd.NumParameters = kCbSlots + 6;
   rd.pParameters = params;
   rd.NumStaticSamplers = 6;
   rd.pStaticSamplers = samplers;
@@ -1093,6 +1127,15 @@ bool D3D12Device::Init(const DeviceDesc& desc, std::string* error) {
   // [hitches] (beside the shaders; not under the validation layer, --debug, where a pipeline not kept yet would be
   // reported as an error by the library's "not found" answer)
   pipelineStore_.Open(device_.Get(), desc.debug ? std::string() : shaderCache_, blob->GetBufferPointer(), blob->GetBufferSize());
+  {  // [gpuscenery] indirect draws: one indexed draw's five arguments (none where the driver will not: IndirectDraws false)
+    D3D12_INDIRECT_ARGUMENT_DESC arg = {};
+    arg.Type = D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED;
+    D3D12_COMMAND_SIGNATURE_DESC sd = {};
+    sd.ByteStride = sizeof(D3D12_DRAW_INDEXED_ARGUMENTS);
+    sd.NumArgumentDescs = 1;
+    sd.pArgumentDescs = &arg;
+    if (FAILED(device_->CreateCommandSignature(&sd, nullptr, IID_PPV_ARGS(drawIndexedSignature_.Put())))) drawIndexedSignature_ = {};
+  }
 
   if (!CreateTargets()) return fail("creating the back and depth buffers", E_FAIL);
   return true;
@@ -1878,7 +1921,23 @@ Buffer D3D12Device::CreateBuffer(const BufferDesc& desc) {
   rec.kind = desc.kind;
   rec.dynamic = desc.dynamic;
   rec.stride = desc.stride;
-  if (!desc.dynamic) {
+  if (desc.kind == BufferKind::Card) {  // [gpuscenery] a resource of its own, which dispatches may write
+    if (desc.dynamic || !desc.size || (desc.size & 15u) || !drawIndexedSignature_) return {};
+    rec.size = desc.size;
+    D3D12_HEAP_PROPERTIES hp = HeapProps(D3D12_HEAP_TYPE_DEFAULT);
+    D3D12_RESOURCE_DESC rd = BufferResourceDesc(desc.size);
+    rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+    HRESULT hr = device_->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(rec.card.Put()));
+    if (FAILED(hr)) return Complain("making a card buffer", hr), Buffer{};
+    uint8_t* cpu = nullptr;
+    ID3D12Resource* page = nullptr;
+    uint64_t from = 0;
+    if (!BeginUpload() || !Stage(desc.size, 16, &cpu, &page, &from)) return Complain("uploading a card buffer", E_FAIL), Buffer{};
+    if (desc.data) std::memcpy(cpu, desc.data, desc.size);
+    else std::memset(cpu, 0, desc.size);
+    uploadList_->CopyBufferRegion(rec.card.Get(), 0, page, from, desc.size);  // (from the common state: promoted, and back after)
+    rec.gpu = rec.card->GetGPUVirtualAddress();
+  } else if (!desc.dynamic) {
     if (!desc.data || !desc.size) return {};
     rec.size = desc.size;
     uint8_t* cpu = nullptr;
@@ -1904,7 +1963,43 @@ Buffer D3D12Device::CreateBuffer(const BufferDesc& desc) {
     index = static_cast<uint32_t>(buffers_.size());
     buffers_.push_back(std::move(rec));
   }
+  if (desc.kind == BufferKind::Card) cardBuffers_.push_back(index + 1);  // [gpuscenery]
   return {index + 1};
+}
+
+// [gpuscenery] A card buffer from the state it is in to `to` (nothing when it is there already).
+void D3D12Device::CardState(BufferRec& rec, D3D12_RESOURCE_STATES to, std::vector<D3D12_RESOURCE_BARRIER>* out) {
+  if (!rec.card || rec.state == to) return;
+  const D3D12_RESOURCE_BARRIER b = Transition(rec.card.Get(), rec.state, to);
+  if (out) out->push_back(b);
+  else list_->ResourceBarrier(1, &b);
+  rec.state = to;
+}
+
+void D3D12Device::CardsReadable() {
+  std::vector<D3D12_RESOURCE_BARRIER> barriers;
+  for (uint32_t id : cardBuffers_)
+    if (BufferRec* rec = Find(Buffer{id})) CardState(*rec, kCardReadable, &barriers);
+  if (!barriers.empty()) list_->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
+}
+
+void D3D12Device::UpdateBufferRange(Buffer buffer, uint32_t offset, const void* data, uint32_t size) {
+  BufferRec* rec = Find(buffer);
+  if (!rec || !rec->card || !inFrame_ || parallel_ || !data || !size || ((offset | size) & 3u) || static_cast<uint64_t>(offset) + size > rec->size) return;
+  const Span s = Allocate(size, 16);
+  if (!s.cpu) return;
+  std::memcpy(s.cpu, data, size);
+  CardState(*rec, D3D12_RESOURCE_STATE_COPY_DEST);
+  list_->CopyBufferRegion(rec->card.Get(), offset, s.resource, s.offset, size);
+  CardState(*rec, kCardReadable);  // (read by what comes next: a dispatch moves it on to be written)
+}
+
+void D3D12Device::DrawIndexedIndirect(Buffer arguments, uint32_t offset) {
+  const BufferRec* rec = Find(arguments);
+  if (!rec || !rec->card || !drawIndexedSignature_ || (offset & 3u) || static_cast<uint64_t>(offset) + 20 > rec->size) return;
+  ++draws_;
+  BindTextures();
+  list_->ExecuteIndirect(drawIndexedSignature_.Get(), 1, rec->card.Get(), offset, nullptr, 0);
 }
 
 void D3D12Device::UpdateBuffer(Buffer buffer, const void* data, uint32_t size) {
@@ -2912,6 +3007,10 @@ void D3D12Device::Destroy(Buffer buffer) {
   BufferRec* rec = Find(buffer);
   if (!rec) return;
   if (rec->block >= 0) frames_[cur_].freedRanges.push_back({static_cast<uint64_t>(rec->block), rec->offset, rec->size});
+  if (rec->card) {  // [gpuscenery] (let go of once the frames that use it are done)
+    Retire(rec->card.Get());
+    cardBuffers_.erase(std::remove(cardBuffers_.begin(), cardBuffers_.end(), buffer.id), cardBuffers_.end());
+  }
   *rec = BufferRec{};
   freeBuffers_.push_back(buffer.id - 1);
 }
@@ -3009,8 +3108,11 @@ void D3D12Device::BeginFrame(const float clearColor[4]) {
     list_ = firstList_;
     list4_ = firstList4_;
   }
+  for (uint32_t id : cardBuffers_)  // [gpuscenery] (buffers are back in the common state once a frame's lists have run)
+    if (BufferRec* rec = Find(Buffer{id})) rec->state = D3D12_RESOURCE_STATE_COMMON;
   list_->Reset(f.allocator.Get(), nullptr);
   if (latency_ && latencyQueries_) list_->EndQuery(latencyQueries_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, static_cast<UINT>(2 * cur_));
+  if (!cardBuffers_.empty()) CardsReadable();  // [gpuscenery] (readable by the frame's first draws)
 
   D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtvStart_, dsv = dsvStart_;
   int viewWidth = width_, viewHeight = height_;
@@ -3163,6 +3265,7 @@ void D3D12Device::ReleasePassTargets() {
 
 void D3D12Device::ReleaseUnordered() {
   dispatched_ = false;
+  if (!cardBuffers_.empty()) CardsReadable();  // [gpuscenery] (what dispatches wrote of card buffers, readable by the draws)
   if (unordered_.empty()) return;
   std::vector<D3D12_RESOURCE_BARRIER> barriers;
   for (uint32_t id : unordered_) {
@@ -3372,6 +3475,16 @@ void D3D12Device::Dispatch(uint32_t x, uint32_t y, uint32_t z) {
     t.unordered = false;
     unordered_.erase(std::remove(unordered_.begin(), unordered_.end(), id), unordered_.end());
   }
+  // [gpuscenery] the card buffers in the shader buffers' slots: written (u0, u1 of space1), so in the unordered-access state
+  BufferRec* cards[2] = {};
+  for (uint32_t id : cardBuffers_) {
+    BufferRec* rec = Find(Buffer{id});
+    if (!rec) continue;
+    for (int i = 0; i < 2; ++i)
+      if (buffersAt_[i] && buffersAt_[i] == rec->gpu) cards[i] = rec;
+  }
+  for (BufferRec* rec : cards)
+    if (rec) CardState(*rec, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, &barriers);
   if (dispatched_) {
     D3D12_RESOURCE_BARRIER b = {};
     b.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;  // (every storage target: the dispatch before has written all of them)
@@ -3386,6 +3499,8 @@ void D3D12Device::Dispatch(uint32_t x, uint32_t y, uint32_t z) {
     if (constantsAt_[i]) list_->SetComputeRootConstantBufferView(static_cast<UINT>(i), constantsAt_[i]);
   for (int i = 0; i < 2; ++i)
     if (buffersAt_[i]) list_->SetComputeRootShaderResourceView(static_cast<UINT>(kCbSlots + 1 + i), buffersAt_[i]);
+  for (int i = 0; i < 2; ++i)  // [gpuscenery]
+    if (cards[i]) list_->SetComputeRootUnorderedAccessView(static_cast<UINT>(kCbSlots + 4 + i), cards[i]->gpu);
   list_->SetComputeRootDescriptorTable(kCbSlots, TextureTable());
   {  // the storage views, copied into this frame's share of the shader-visible heap
     FrameSlot& f = frames_[cur_];

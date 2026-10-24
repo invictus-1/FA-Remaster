@@ -376,3 +376,16 @@ the spikes helper's work; (2) a steady 120 at 1440p is held by the processor in 
 the scenery and units, recording): the step-2 work (recording on several cores, scenery picked on the card); (3) at
 native 4K the card is at 11-15 ms in every busy scene: the card's share of step 2 (cascades not redrawn every frame,
 the ray tracing scene refitted, far levels).
+
+**Step 2: trees and rocks kept on the card and picked there (2026-10-24; viewer --card-scenery, MeshRenderer::cardScenery,
+off by default; render/card_scenery.h).** The model renderer's groups of still scenery live in a buffer on the card,
+rewritten only where a group changes; three compute passes pick for the camera, the sun's cascades and the camera's
+motion of what sways at once (sphere against the planes, size on screen, level as Consider chooses it, near and far
+lists in the processor's own order), and each level's list is one indirect draw (gfx.h: BufferKind::Card,
+DrawIndexedIndirect, both backends). The 3D plants' draws take their lists' real counts the same way (GroundCover::
+indirectModels: the end of their reserved room). The lamps' shadows, glass and what a frame adds itself stay as before.
+Off: regression 0 px; on: SETONS_R stills 0 px on both backends, the game scenes within their run-to-run noise.
+Quiet window (2026-10-24 15:12-16:12, the same exe off vs on, typical): the models' processor stages (tested, sorted,
+handed, and the picking) R3 1440p 1.82 -> 1.08 ms, R3 4K 2.39 -> 1.22, R2 1.98 -> 1.72; close up no gain (R1 1.37 ->
+1.41, R4 1.30 -> 1.49: few props in view, the picking's 0.1-0.2 ms and the empty lists' draws); the card's picking
+0.02-0.07 ms. Processor typical R3 4K 15.66 -> 14.95.

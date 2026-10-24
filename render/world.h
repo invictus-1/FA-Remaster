@@ -767,6 +767,10 @@ class World {
   // game's next (the temporal upscaler, motion, frame generation's picture), and with nothing of the interface laid
   // over it (icons, bars, order lines). What else of the interface is in the world the host takes out itself.
   bool photo = false;
+  // [session] A warm frame of a map opened behind with the game's first beat (WorldPicture::PrepareSession): drawn as the game's
+  // frames are, its icons, life bars and hidden outlines too, though a photo's frame (so that what they make the first time is
+  // made unseen). Off at first.
+  bool warmAll = false;
   // (photomode) A frame drawn for a tile of a photo (WorldPicture::StartPhoto, photo.h): the photo's own camera, round
   // which what is placed for the camera is placed in every tile of it (the sun's and the lamps' shadows, the grass, the
   // rain's box, the bounce light's probes, the smoke's shadow, lightning, deep tracks, the hot things' lights), so that
