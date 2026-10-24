@@ -76,6 +76,12 @@ UserState::UserState(Vfs* vfs, Config config) : config_(std::move(config)) {
   state_ = std::make_unique<ScriptState>(ScriptState::Kind::User, vfs);
   state_->SetHookDirs(config_.hookDirs);
   lua_State* L = state_->L();
+  // The engine's incremental collector (third_party/lua/lgcinc.c), stepped once a frame (Frame): Lua 5.0's own
+  // collector stops the frame for a whole collection, 22-38 ms at 4K in a 4v4 every 30-40 s. Ours, not the
+  // original's (it forces a full one every 5 s, IUIManager::UpdateFrameRate 0x84d267). MOHO64UI_GC=classic keeps
+  // 5.0's (to compare).
+  const char* gcMode = std::getenv("MOHO64UI_GC");
+  incrementalGc_ = !(gcMode && std::string(gcMode) == "classic") && lua_gpg_setgcmode(L, 1) == 1;
   lua_setextra(L, 1, this);
   threads_ = std::make_unique<ThreadScheduler>(L);
   ui_ = std::make_unique<UiManager>();
@@ -263,6 +269,9 @@ void UserState::Frame(double seconds) {
   DeliverChat(state_->L());
   DeliverConsoleLines(state_->L());  // (the console's lines from other threads: user/keymap.cpp)
   threads_->RunTick(frame_);
+  // (the collector's step: every frame, menus and loading screens too, as an incremental state no longer collects by
+  // itself; `point' always, the interface's collections need not fall on the game's beats)
+  if (incrementalGc_) lua_gpg_gcstep(state_->L(), 1);
 }
 
 }  // namespace moho::ui

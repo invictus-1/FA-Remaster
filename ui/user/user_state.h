@@ -256,6 +256,7 @@ class UserState {
   std::unique_ptr<ThreadScheduler> threads_;
   std::unique_ptr<UiManager> ui_;
   double now_ = 0;
+  bool incrementalGc_ = false;  // its Lua state runs the incremental collector, stepped in Frame
   double frameBegan_ = 0;  // (steady clock seconds when this frame began: clockNow)
   uint32_t frame_ = 0;
   std::string uiState_ = "none";
