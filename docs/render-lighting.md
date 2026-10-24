@@ -1065,6 +1065,15 @@ work is not starved of the processor).
    the first frame makes its three targets (screen-sized: two RGBA8, one D32; 44 MB at 1440p; +7 ms once). Off:
    pictures identical (regression 0 px on both backends); on, the regression's scenes (nothing hides the
    commander) are identical too; in the original look nothing changes.
+   Fixed 2026-10-23: the masks' shader read a draw's instances by their layout before the units' wear (five rows of
+   four, 768 a draw; six rows and 640 since the battle scars, render b4991b9, made beside the outlines and merged four
+   minutes before them). So every instance after a draw's first was read askew: five of every six took rows of their
+   neighbours for their place, and most of a crowd's hidden units got no outline (a lone unit, the first of its draw,
+   always had its own); where units carry dirt or grime, the wear's row numbers (in the thousands) landed in those
+   places and made huge triangles across the screen, which is what made the masks dearer with grime or mud (200
+   commanders at 1440p: 0.9 to 1.4 ms, now 0.09). The masks' shader has the scene's layout now, and MeshRenderer::DrawMarked
+   asserts it. The costs above were measured with the fault (the masks drew less than they should); with all 200
+   commanders drawn the masks take 0.093 ms at 1440p (0.080 with the fault).
 16. **Dust, spray and contrails**: vehicles raise dust on dry ground, hover units throw spray, high aircraft draw
    contrails. After items 2 and 3 (shared particles and dust). First version done 2026-10-18 (`World::movementDust`,
    viewer `--movement-dust`; `render/movement_dust.h/.cpp`, docs/render-dust.md has the whole of it): puffs behind
@@ -2204,8 +2213,9 @@ shader path with them:
 - Viewer tests: `--wear-art <id>=<folder>` (the visuals session's trial layout), `--grime-test
   dust,caked,soot[,health[,lowest[,recent[,splash]]]]` for placed units.
 - Cost (200 remastered commanders framed at the game's height, grime 0.5 and half health, lowest of 300 frames): the
-  units' pass +0.09 ms at 2560 x 1440 and +0.16 at 3840 x 2160. Open: with hidden outlines on, the outlines' masks
-  stage rises from 0.11 to 0.9 ms at 1440p (0.24 to 0.71 at 4K) whenever units carry grime, and the same with the first
-  version's `--unit-dirt` alone (1.02 ms): not this look's own work (damage alone does not do it), to be looked into.
+  units' pass +0.09 ms at 2560 x 1440 and +0.16 at 3840 x 2160. (The hidden outlines' masks stage rose from 0.11 to 0.9 ms
+  at 1440p whenever units carried grime or dirt: not this look's work but the masks' shader reading the instances askew,
+  their wear rows' numbers landing in their places; fixed 2026-10-23, look 15 above. With grime on, the masks now cost
+  what they cost without it.)
 - Off: nothing of it runs and no art is loaded; regress3 0 px both backends; scars, snow and dirt on, grime off: 0 px
   against render 841530e.

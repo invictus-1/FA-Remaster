@@ -34,6 +34,15 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
+## 48. To the ENGINE track: a bulk ReconGrid for the renderer's sight grid (2026-10-23, not blocking; the engine's offer)
+
+**Who asks:** the renderer (the engine's helper spk found it: the renderer's sight grid calls ReconAt 65,536 times every
+5th beat, 9-12 ms of that beat, in SimFrames::Beat).
+
+**What:** a read-only `ReconGrid(sim, army, width, height, cells)` in sim_view that fills a grid of the same bits ReconAt
+gives (radar, sonar, omni, seen: kReconRadar / Sonar / Omni / SeenNow), the army's allies worked out once instead of per
+point, so the picture stays identical. The renderer switches SimFrames to it when it lands.
+
 ## 47. To the VISUALS track: from Chris's test run of 21 October (2026-10-21, not blocking)
 
 Chris played `Open-Game-Izanagi-Tour-Snow.bat` (SETONS_R, weather "cold"; log `_scratch\ui\game_tour_izanagi_snow.log`,

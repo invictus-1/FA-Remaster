@@ -276,4 +276,53 @@ bool LoadMap(std::string_view file, MapData* out, std::string* error) {
   return true;
 }
 
+bool LoadDecor(std::string_view file, std::vector<MapProp>* out, std::string* error) {
+  size_t at = 0;
+  bool ok = true;
+  auto take = [&](void* to, size_t n) {
+    if (!ok || at + n > file.size()) {
+      ok = false;
+      return;
+    }
+    std::memcpy(to, file.data() + at, n);
+    at += n;
+  };
+  char magic[8] = {};
+  uint32_t version = 0, kinds = 0, entries = 0;
+  take(magic, 8);
+  take(&version, 4);
+  take(&kinds, 4);
+  take(&entries, 4);
+  if (!ok || std::memcmp(magic, "MDECOR1", 8) != 0) return *error = "not a decor file", false;
+  if (version != 1) return *error = "decor version " + std::to_string(version) + " (1 is read)", false;
+  std::vector<std::string> names(kinds);
+  for (std::string& n : names) {
+    uint16_t length = 0;
+    take(&length, 2);
+    if (!ok || at + length > file.size()) return *error = "truncated blueprint names", false;
+    n.assign(file.data() + at, length);
+    at += length;
+  }
+  if (at + static_cast<size_t>(entries) * 64 > file.size()) return *error = "truncated entries", false;
+  std::vector<MapProp> read;  // (all or none: a bad entry leaves `out` as it was)
+  read.reserve(entries);
+  for (uint32_t i = 0; i < entries; ++i) {
+    uint32_t kind = 0;
+    float f[15];
+    take(&kind, 4);
+    take(f, sizeof f);
+    if (kind >= names.size()) return *error = "an entry names blueprint " + std::to_string(kind) + " of " + std::to_string(names.size()), false;
+    MapProp p;
+    p.blueprint = names[kind];
+    p.position = {f[0], f[1], f[2]};
+    p.axisX = {f[3], f[4], f[5]};
+    p.axisY = {f[6], f[7], f[8]};
+    p.axisZ = {f[9], f[10], f[11]};
+    p.scale = {f[12], f[13], f[14]};
+    read.push_back(std::move(p));
+  }
+  out->insert(out->end(), std::make_move_iterator(read.begin()), std::make_move_iterator(read.end()));
+  return true;
+}
+
 }  // namespace render
