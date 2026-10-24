@@ -290,7 +290,11 @@ function ErrorHandler(sErrorMessage, bWarningNotError, bIgnoreCount, iIntervalOv
 end
 
 
-function IsTableEmpty(tTable, bEmptyIfNonTableWithValue, iOptionalCycleCount)
+--FA Remastered variant: IsTableEmpty below gives the same answers as the original (kept as IsTableEmptyOriginal), with
+--less work: next and type as upvalues, the walk with next itself (the order of pairs), the cycle-count test once
+--before the walk (the original makes it at every entry, before anything else, so its first entry decides), and a
+--value that is not a table answered on the spot (the original's call for it, IsTableEmpty(v, false), is false).
+function IsTableEmptyOriginal(tTable, bEmptyIfNonTableWithValue, iOptionalCycleCount)
     --bEmptyIfNonTableWithValue - Optional, defaults to true
     --E.g. if passed oUnit to a function that was expecting a table, then setting bEmptyIfNonTableWithValue = false means it will register the table isn't nil
 
@@ -299,10 +303,37 @@ function IsTableEmpty(tTable, bEmptyIfNonTableWithValue, iOptionalCycleCount)
         else
             for i1, v1 in pairs(tTable) do
                 if iOptionalCycleCount and iOptionalCycleCount >= 5 then return false --If table has this many entries then assume it isnt empty
-                elseif IsTableEmpty(v1, false, (iOptionalCycleCount or 0) + 1) == false then return false end
+                elseif IsTableEmptyOriginal(v1, false, (iOptionalCycleCount or 0) + 1) == false then return false end
             end
             return true
         end
+    else
+        if tTable == nil then return true
+        else
+            if bEmptyIfNonTableWithValue == nil then return true --tried to simplify this with return (bEmptyIfNonTableWithValue or true) but it caused errors
+            else return bEmptyIfNonTableWithValue
+            end
+        end
+    end
+end
+
+local VariantType = type
+local VariantNext = next
+function IsTableEmpty(tTable, bEmptyIfNonTableWithValue, iOptionalCycleCount)
+    --bEmptyIfNonTableWithValue - Optional, defaults to true
+    --E.g. if passed oUnit to a function that was expecting a table, then setting bEmptyIfNonTableWithValue = false means it will register the table isn't nil
+
+    if VariantType(tTable) == "table" then
+        local k, v1 = VariantNext(tTable)
+        if k == nil then return true end
+        if iOptionalCycleCount and iOptionalCycleCount >= 5 then return false end --If table has this many entries then assume it isnt empty
+        local iNextCycleCount = (iOptionalCycleCount or 0) + 1
+        repeat
+            if VariantType(v1) ~= "table" then return false end
+            if IsTableEmpty(v1, false, iNextCycleCount) == false then return false end
+            k, v1 = VariantNext(tTable, k)
+        until k == nil
+        return true
     else
         if tTable == nil then return true
         else

@@ -45,5 +45,11 @@ the original M28AI v326 and with this variant in FA Remastered and comparing the
    - `lua/AI/M28Engineer.lua`: a new build-location blacklist entry sets a mark.
    - `M28VariantBuildCache.bVerify` is a test switch (off): it re-runs every skipped check and logs any that would
      now fail.
+3. **Cheaper small helpers** (2026-10-23, after a profile of a one-hour game):
+   - `IsTableEmpty` (`lua/AI/M28Utilities.lua`, about 165 million calls an hour): the same answers, with less work
+     (no `pairs` call, `type` / `next` kept as upvalues, a value that is not a table answered without a call).
+     The original is kept as `IsTableEmptyOriginal`.
+   - `FunctionProfiler` (`lua/AI/M28Profiler.lua`, about 96 million calls an hour) returns at once when no debug or
+     profiling switch is on (the rest of it does nothing then).
 
 Every change in the Lua files is marked with a comment that starts "FA Remastered variant".
