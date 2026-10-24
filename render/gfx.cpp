@@ -29,7 +29,35 @@ struct KeptBuffer final : Device::Prepared {
   BufferDesc desc;
   std::vector<uint8_t> data;
 };
+struct KeptTarget final : Device::Prepared {  // [warmtarget]
+  TargetDesc desc;
+};
+struct KeptGeometry final : Device::Prepared {  // [warmtarget]
+  std::vector<GeometryPart> parts;
+};
 }  // namespace
+
+std::unique_ptr<Device::Prepared> Device::DescribeGeometry(const GeometryPart* parts, int count) {  // [warmtarget]
+  auto kept = std::make_unique<KeptGeometry>();
+  if (parts && count > 0) kept->parts.assign(parts, parts + count);
+  return kept;
+}
+
+Structure Device::FinishGeometry(std::unique_ptr<Prepared> prepared) {
+  auto* kept = dynamic_cast<KeptGeometry*>(prepared.get());
+  return kept ? CreateGeometry(kept->parts.data(), static_cast<int>(kept->parts.size())) : Structure{};
+}
+
+std::unique_ptr<Device::Prepared> Device::PrepareTarget(const TargetDesc& desc) {  // [warmtarget]
+  auto kept = std::make_unique<KeptTarget>();
+  kept->desc = desc;
+  return kept;
+}
+
+Texture Device::FinishTarget(std::unique_ptr<Prepared> prepared) {
+  auto* kept = dynamic_cast<KeptTarget*>(prepared.get());
+  return kept ? CreateTarget(kept->desc) : Texture{};
+}
 
 std::unique_ptr<Device::Prepared> Device::PrepareTexture(const TextureDesc& desc) {
   if (!desc.data || !desc.dataSize) return nullptr;

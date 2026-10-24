@@ -53,7 +53,9 @@
 //           for the frames' own times; --size, --vulkan, --time-of-day and --settings as for --picture. --load-test-open: the
 //           first map by Open itself (the way before). --load-budget <ms>: SetLoadBudget (2 unless given).
 //           --load-backdrop <fit>: [backdrop] WorldPicture::SetBackdrop tried first (0 stretch, 1 cover, 2 contain): a
-//           made-up picture on the black of no world (_backdrop.png), and over the first map at half strength (_backdrop_over.png)
+//           made-up picture on the black of no world (_backdrop.png), and over the first map at half strength (_backdrop_over.png).
+//           --load-game-looks <bundles>: [ui 39] <map> with these lighting bundles (--settings' form), the others with
+//           --settings'; given after each swap, or with --load-hold before each BeginMap (WorldPicture::HoldLooks)
 // --picture-window  with --picture: the interface's way without a read-back: the picture drawn into a window of
 //           its own with a made-up interface layer over it (UseWindow, SetInterfaceLayer, DrawToWindow), read
 //           back once for the file
@@ -833,6 +835,8 @@ struct Options {
   std::string loadTest;                 // [bgload] --load-test
   bool loadTestOpen = false;            // [bgload] --load-test-open
   int loadBackdrop = -1;                // [backdrop] --load-backdrop
+  std::string loadGameLooks;            // [ui 39] --load-game-looks
+  bool loadHold = false;                // [ui 39] --load-hold
   float loadBudget = 2;                 // [bgload] --load-budget
   int loadCycles = 2;                   // [bgload] --load-cycles
   float effectsQuality = 1;             // --effects-quality
@@ -1062,6 +1066,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--photo-test") o->photoTest = true;  // (photomode)
     else if (a == "--window-cycle") o->windowCycle = true;
     else if (a == "--load-test-open") o->loadTestOpen = true;  // [bgload]
+    else if (a == "--load-hold") o->loadHold = true;  // [ui 39]
     else if (a == "--prepass") o->prepass = true;
     else if (a == "--no-prepass") o->prepass = false;
     else if (a == "--no-ground-changes") o->groundChanges = false;
@@ -1245,6 +1250,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--picture") o->picture = v;
     else if (a == "--load-test") o->loadTest = v;  // [bgload]
     else if (a == "--load-backdrop") o->loadBackdrop = atoi(v);  // [backdrop]
+    else if (a == "--load-game-looks") o->loadGameLooks = v;  // [ui 39]
     else if (a == "--load-budget") o->loadBudget = static_cast<float>(atof(v));  // [bgload]
     else if (a == "--load-cycles") o->loadCycles = std::max(1, atoi(v));  // [bgload]
     else if (a == "--views") o->views = v;  // [views]
@@ -1634,6 +1640,8 @@ int main(int argc, char** argv) {
     t.settings = opt.settings;
     t.hitchLog = opt.hitchLog;
     t.backdrop = opt.loadBackdrop;
+    t.gameLooks = opt.loadGameLooks;
+    t.holdLooks = opt.loadHold;
     return LoadTest(vfs, t);
   }
   if (opt.windowCycle) {  // --window-cycle

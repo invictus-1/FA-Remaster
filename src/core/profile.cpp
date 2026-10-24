@@ -134,6 +134,7 @@ struct TotVal {
   std::string name;
 };
 std::map<TotKey, TotVal> g_tot;
+std::map<std::pair<const TotVal*, const TotVal*>, double> g_totEdges;  // (caller, callee): the time with that call on the stack
 double g_totSampledMs = 0;
 uint64_t g_totSamples = 0;
 const char* TotFile() {
@@ -173,8 +174,10 @@ void TotHook(lua_State* L, lua_Debug* ar) {
   g_totSampledMs += dt;
   ++g_totSamples;
   std::vector<TotVal*> seen;
+  std::vector<std::pair<const TotVal*, const TotVal*>> seenEdges;
   lua_Debug d;
   bool first = true;
+  TotVal* callee = nullptr;
   for (int lv = 0; lv < 60 && lua_getstack(L, lv, &d); ++lv) {
     lua_getinfo(L, "S", &d);
     if (d.what && d.what[0] == 'C') continue;
@@ -188,6 +191,14 @@ void TotHook(lua_State* L, lua_Debug* ar) {
       seen.push_back(&v);
       v.incl += dt;
     }
+    if (callee) {
+      const std::pair<const TotVal*, const TotVal*> e{&v, callee};
+      if (std::find(seenEdges.begin(), seenEdges.end(), e) == seenEdges.end()) {
+        seenEdges.push_back(e);
+        g_totEdges[e] += dt;
+      }
+    }
+    callee = &v;
   }
 }
 }  // namespace
@@ -204,6 +215,12 @@ void DumpLuaTotals() {
   for (const TotVal* e : v)
     std::fprintf(f, "%.1f\t%.1f\t%llu\t%llu\t%s\n", e->self, e->incl, static_cast<unsigned long long>(e->samples),
                  static_cast<unsigned long long>(e->calls), e->name.c_str());
+  std::fprintf(f, "# edges: caller -> callee, ms with that call on the stack (top 5000)\n");
+  std::vector<std::pair<double, std::pair<const TotVal*, const TotVal*>>> ev;
+  for (auto& [k, ms] : g_totEdges) ev.emplace_back(ms, k);
+  std::stable_sort(ev.begin(), ev.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+  for (size_t i = 0; i < ev.size() && i < 5000; ++i)
+    std::fprintf(f, "E\t%.1f\t%s\t->\t%s\n", ev[i].first, ev[i].second.first->name.c_str(), ev[i].second.second->name.c_str());
   std::fclose(f);
 }
 

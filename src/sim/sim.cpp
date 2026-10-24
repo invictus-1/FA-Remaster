@@ -2398,6 +2398,24 @@ void Sim::Tick() {
     } else if (u->parentId) {
       AttachParentGone(*this, u);  // (the transform stays for this beat; the motion takes the unit from the next)
       u->motion.vel = {};
+      // ... but the motion's MoveTo of this beat still brings the quaternion back to unit length (0x4edaa0): with the
+      // link gone the unit is no longer attached (CUnitMotion::MotionTick 0x6b9d26: vt+0x34 false), so the full
+      // motion tick runs and ends in MoveTo, from where it stands. Seen: Naval 448 and 553, wrecks 0x1b and 0x4e on
+      // FAF's sinker when the shell is gone at the sea floor: the original's four parts one float step smaller,
+      // exactly ours normalised, the place the same.
+      if (u->motion.bp && u->motion.bp->mobile() && !u->beingBuilt && u->motion.bp->motionType != kMotionAir) {
+        Quat& q = u->orientation;
+        const float len = std::sqrt(((q.w * q.w + q.x * q.x) + q.y * q.y) + q.z * q.z);
+        if (len > 9.99999997e-07f) {
+          const float inv = 1.0f / len;
+          q.w *= inv;
+          q.x *= inv;
+          q.y *= inv;
+          q.z *= inv;
+        } else {
+          q = Quat{0.0f, 0.0f, 0.0f, 0.0f};
+        }
+      }
     } else {
       MotionTick(*this, u);
       // CUnitMotion::MoveTo 0x6b92e0 (after every CalcMove*) first brings the transform's quaternion back to unit

@@ -328,6 +328,14 @@ class Device {
   virtual Texture FinishTexture(std::unique_ptr<Prepared> prepared);
   virtual std::unique_ptr<Prepared> PrepareBuffer(const BufferDesc& desc);  // (static buffers only)
   virtual Buffer FinishBuffer(std::unique_ptr<Prepared> prepared);
+  // [warmtarget] A target made in two halves, as a texture is above: PrepareTarget on ANY thread makes its memory (Direct3D
+  // 12: its resource; Vulkan: its image, memory and views), the slow part of a target at the window's size (tens of
+  // milliseconds for the largest); FinishTarget on the frames' thread (where CreateTarget is called, between frames or
+  // before the passes that use it) gives it its handle and what the device's own tables keep of it. What they make is
+  // what CreateTarget makes of the same description. Null from PrepareTarget: CreateTarget is to be called instead (it says
+  // why where it fails). The default keeps the description, and FinishTarget calls CreateTarget with it.
+  virtual std::unique_ptr<Prepared> PrepareTarget(const TargetDesc& desc);
+  virtual Texture FinishTarget(std::unique_ptr<Prepared> prepared);
   virtual void Destroy(Buffer buffer) = 0;
   virtual void Destroy(Texture texture) = 0;
   virtual void Destroy(Pipeline pipeline) = 0;
@@ -337,6 +345,15 @@ class Device {
   // A geometry structure over `count` parts, built on the card at the next BuildScene (its buffers must
   // stay until then). None where it cannot be made.
   virtual Structure CreateGeometry(const GeometryPart*, int) { return {}; }
+  // [warmtarget] The same in three steps, so that the driver's sizing of a large one (40 ms for the ground's on Direct3D 12)
+  // is off the frames' thread: DescribeGeometry on the frames' thread (it reads the device's own tables of buffers: quick;
+  // the parts' buffers as CreateGeometry wants them), SizeGeometry on ANY thread (the driver's sizes and the structure's
+  // memory: the slow part), FinishGeometry on the frames' thread (its handle; built at the next BuildScene, as
+  // CreateGeometry's). What they make is what CreateGeometry makes of the same parts. The default keeps the parts,
+  // sizes nothing, and FinishGeometry calls CreateGeometry with them.
+  virtual std::unique_ptr<Prepared> DescribeGeometry(const GeometryPart* parts, int count);
+  virtual void SizeGeometry(Prepared* prepared) { (void)prepared; }
+  virtual Structure FinishGeometry(std::unique_ptr<Prepared> prepared);
   // The scene's structure over these instances, built again now, after the geometry made since the last
   // time. Between passes (it ends the pass under way, as Dispatch does); what comes after reads it. `scene`
   // is made the first time and grows as needed.

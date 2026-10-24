@@ -791,6 +791,55 @@ function GetWaterZoneFromPosition(tPosition)
     return tWaterZoneBySegment[iSegmentX][iSegmentZ]
 end
 
+--FA Remastered variant (not in the original M28AI): the hover label of each pathing segment's midpoint, kept per segment.
+--GetPlateauAndLandZoneReferenceFromPosition and GetClosestPlateauOrZeroAndZoneToPosition asked
+--NavUtils.GetLabel(refPathingTypeHover, GetPositionFromPathingSegments(iSegmentX, iSegmentZ)) on every call (about 14
+--million times in a one-hour game). That label depends only on the segment's x and z, the segment size, the playable
+--area and FAF's navigational mesh, whose labels are set only while it is generated (NavGenerator.Generate, which
+--starts again with new NavGrids and NavLeaves tables). So the label is kept per segment while those are the same,
+--and asked again otherwise. With anything other than FAF's NavUtils, or a mesh not generated, it is asked every time.
+bVariantVerifyHoverLabel = false --Test switch (never on in a game that is played): also ask NavUtils.GetLabel, and LOG any difference
+iVariantHoverLabelMismatches = 0
+local VariantNavGenerator --FAF's /lua/sim/navgenerator.lua when NavUtils is FAF's (false otherwise; nil until first used)
+local tVariantHoverLabelBySegment = {} --[x][z] = label, or false for none
+local tVariantHoverLabelKey = {} --what the kept labels hold for: {NavGrids, NavLeaves, segment size, playable area x, z}
+
+function VariantHoverLabelOfSegment(iSegmentX, iSegmentZ)
+    if VariantNavGenerator == nil then
+        VariantNavGenerator = false
+        if NavUtils and rawget(NavUtils, 'DetailedPathTo') and NavUtils == import('/lua/sim/navutils.lua') then
+            VariantNavGenerator = import('/lua/sim/navgenerator.lua')
+        end
+    end
+    if not(VariantNavGenerator) or not(VariantNavGenerator.IsGenerated()) then
+        return NavUtils.GetLabel(refPathingTypeHover, GetPositionFromPathingSegments(iSegmentX, iSegmentZ))
+    end
+    local tKey = tVariantHoverLabelKey
+    local NavGrids, NavLeaves = VariantNavGenerator.NavGrids, VariantNavGenerator.NavLeaves
+    if tKey[1] ~= NavGrids or tKey[2] ~= NavLeaves or tKey[3] ~= iLandZoneSegmentSize or tKey[4] ~= rMapPotentialPlayableArea[1] or tKey[5] ~= rMapPotentialPlayableArea[2] then
+        tVariantHoverLabelKey = {NavGrids, NavLeaves, iLandZoneSegmentSize, rMapPotentialPlayableArea[1], rMapPotentialPlayableArea[2]}
+        tVariantHoverLabelBySegment = {}
+    end
+    local tColumn = tVariantHoverLabelBySegment[iSegmentX]
+    local iLabel = tColumn and tColumn[iSegmentZ]
+    if iLabel == nil then
+        iLabel = NavUtils.GetLabel(refPathingTypeHover, GetPositionFromPathingSegments(iSegmentX, iSegmentZ)) or false
+        if not(tColumn) then
+            tColumn = {}
+            tVariantHoverLabelBySegment[iSegmentX] = tColumn
+        end
+        tColumn[iSegmentZ] = iLabel
+    elseif bVariantVerifyHoverLabel then
+        local iLive = NavUtils.GetLabel(refPathingTypeHover, GetPositionFromPathingSegments(iSegmentX, iSegmentZ)) or false
+        if not(iLive == iLabel) then
+            iVariantHoverLabelMismatches = iVariantHoverLabelMismatches + 1
+            LOG('M28 variant VERIFY HOVER LABEL MISMATCH: segment X'..iSegmentX..'Z'..iSegmentZ..' kept '..tostring(iLabel)..' live '..tostring(iLive)..'; mismatches '..iVariantHoverLabelMismatches)
+        end
+    end
+    if iLabel == false then return nil end
+    return iLabel
+end
+
 ---@param tPosition table
 ---@param bOptionalShouldBePathable boolean
 ---@return number, number
@@ -802,7 +851,7 @@ function GetPlateauAndLandZoneReferenceFromPosition(tPosition, bOptionalShouldBe
 
     --Get the plateau reference and the land segment X and Z references:
     local iSegmentX, iSegmentZ = GetPathingSegmentFromPosition(tPosition)
-    local iPlateau = NavUtils.GetLabel(refPathingTypeHover, GetPositionFromPathingSegments(iSegmentX, iSegmentZ))
+    local iPlateau = VariantHoverLabelOfSegment(iSegmentX, iSegmentZ) --FA Remastered variant: was NavUtils.GetLabel(refPathingTypeHover, GetPositionFromPathingSegments(iSegmentX, iSegmentZ))
     local iLandZone
 
     if (iPlateau or 0) <= 0 or not(tAllPlateaus[iPlateau]) then
@@ -910,7 +959,7 @@ function GetClosestPlateauOrZeroAndZoneToPosition(tPosition)
         M28Profiler.FunctionProfiler(sFunctionRef, M28Profiler.refProfilerEnd)
         return tNearestPlateauOrZeroAndZoneSegmentOverride[iSegmentX][iSegmentZ][1], tNearestPlateauOrZeroAndZoneSegmentOverride[iSegmentX][iSegmentZ][2]
     else
-        local iPlateau = NavUtils.GetLabel(refPathingTypeHover, GetPositionFromPathingSegments(iSegmentX, iSegmentZ))
+        local iPlateau = VariantHoverLabelOfSegment(iSegmentX, iSegmentZ) --FA Remastered variant: was NavUtils.GetLabel(refPathingTypeHover, GetPositionFromPathingSegments(iSegmentX, iSegmentZ))
         local iLandZone = tLandZoneBySegment[iSegmentX][iSegmentZ]
         local tLZData
         if iLandZone and iPlateau then tLZData = tAllPlateaus[iPlateau][subrefPlateauLandZones][iLandZone] end

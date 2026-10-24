@@ -22,6 +22,8 @@ struct LoadTestSetup {
   std::string settings;      // --settings (the lighting bundles, as --picture has them)
   double hitchLog = -1;      // --hitch-log: each frame longer than this (ms) printed with what the frames' thread made in it
   int backdrop = -1;         // [backdrop] --load-backdrop <fit>: SetBackdrop's test (0 stretch, 1 cover, 2 contain; -1 none)
+  std::string gameLooks;     // [ui 39] --load-game-looks: the lighting bundles of <map> (--settings' form); the others --settings'
+  bool holdLooks = false;    // [ui 39] --load-hold: each map's looks given before its BeginMap (HoldLooks), else after its swap
 };
 
 // The test; 0 when every map opened and was shown.

@@ -14,10 +14,13 @@ namespace render {
 struct CpuTimes {
   inline static bool on = false;
   inline static std::vector<std::pair<const char*, double>> parts;  // name (a string literal), ms
+  // [warmtarget] A thread other than the main one that runs a frame's code (a warm frame recorded on a world's loading
+  // thread, WorldPicture::BeginMap) sets this on itself: its parts are not measured (the lists are the main thread's).
+  inline static thread_local bool elsewhere = false;
 
   static const char* Current() { return current_; }  // (to go back to it after parts of one's own)
   static void Part(const char* name) {
-    if (!on) return;
+    if (!on || elsewhere) return;
     const auto now = std::chrono::steady_clock::now();
     if (current_) Add(current_, std::chrono::duration<double, std::milli>(now - since_).count());
     current_ = name;

@@ -60,6 +60,7 @@ static int math_tan (lua_State *L) {
 extern float moho_lua_acos(float x);
 extern float moho_lua_asin(float x);
 extern float moho_lua_exp(float x);
+extern float moho_lua_pow(float x, float y);
 
 static int math_asin (lua_State *L) {
   lua_pushnumber(L, moho_lua_asin(luaL_checknumber(L, 1)));
@@ -102,7 +103,8 @@ static int math_sqrt (lua_State *L) {
 }
 
 static int math_pow (lua_State *L) {
-  lua_pushnumber(L, pow(luaL_checknumber(L, 1), luaL_checknumber(L, 2)));
+  lua_Number x = luaL_checknumber(L, 1);
+  lua_pushnumber(L, moho_lua_pow(x, luaL_checknumber(L, 2)));
   return 1;
 }
 
