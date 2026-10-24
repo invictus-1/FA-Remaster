@@ -158,9 +158,25 @@ std::vector<BlueprintLook> SimFrames::LooksOf(const moho::Sim& sim, std::vector<
   return looks;
 }
 
+void SimFrames::AdoptArmies(SimFrames& from) {  // [session]
+  std::vector<Vec3> colors;
+  uint32_t seed = 0;
+  {
+    std::lock_guard<std::mutex> lock(from.mutex_);
+    colors = std::move(from.armyColors_);
+    seed = from.seed_;
+  }
+  scratch_->unitIds = std::move(from.scratch_->unitIds);
+  std::lock_guard<std::mutex> lock(mutex_);
+  armyColors_ = std::move(colors);
+  looks_.clear();
+  seed_ = seed;
+}
+
 void SimFrames::HoldPropEvents(std::vector<moho::PropEvent>* events) {
   std::vector<moho::PropEvent>& held = scratch_->heldProps;
-  held.insert(held.end(), std::make_move_iterator(events->begin()), std::make_move_iterator(events->end()));
+  if (held.empty()) held.swap(*events);  // ([session] the map's props, tens of thousands: taken whole)
+  else held.insert(held.end(), std::make_move_iterator(events->begin()), std::make_move_iterator(events->end()));
   events->clear();
 }
 

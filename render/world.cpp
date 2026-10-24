@@ -182,6 +182,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     volumes.Clear();  // (volume explosions: none of the map before)
     temporalBefore_ = false;  // (the temporal upscaler: nothing of the map before is used)
     raysGround_ = false;  // (the ray tracing scene's ground: made again when it is next wanted)
+    shadows.Forget();     // [cardcost] (no far cascade of the map before is kept)
     tracks.SetMap(static_cast<float>(map.width), static_cast<float>(map.height));
     trackField.SetMap(static_cast<float>(map.width), static_cast<float>(map.height));
     trackField.waterLevel = map.water.present ? map.water.elevation : -1e9f;
@@ -1376,6 +1377,10 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   CpuTimes::Part("sun shadows placed");
   if (haveMap_ && shadowsOn) {
     if (shadows.Size() != shadowSize) shadows.SetSize(shadowSize);
+    shadows.fitCasters = shadowFit;  // [cardcost] (nothing the camera sees lies much below the ground's lowest point)
+    shadows.fitFloor = terrain.Lowest() - 32;
+    // [cardcost] (the far cascades kept only in the game's own frames: a frame for something else draws into the same maps)
+    shadows.keepEvery = shadowKeep >= 2 && !sidePicture && !extraView && !photo && !photoTiled ? shadowKeep : 0;
     shadows.Place(placing, lightDirection, &view);
   }
   CpuTimes::Part("tracks, icons, deposits begun");
@@ -1448,7 +1453,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   }
   icons.Begin(screenView_);
   // units seen behind what hides them (hidden_outlines.h): marked as they are listed, this frame's
-  outlinesNow_ = hiddenOutlines && look == Look::Modern && (!sidePicture || extraView) && !photo && !camera.cinematic;  // ([views] every view's)  // (cinecam: no outlines on photos or a cinematic camera, as no icons)
+  outlinesNow_ = hiddenOutlines && look == Look::Modern && (!sidePicture || extraView) && (!photo || warmAll) && !camera.cinematic;  // ([session] warmAll)  // ([views] every view's)  // (cinecam: no outlines on photos or a cinematic camera, as no icons)
   outlines.Begin(screenWidth_, screenHeight_);
   // the resource deposits' icons, from where their marks on the ground are no longer drawn (cinecam: not for a
   // cinematic camera, which sees far over the ground: they would stand along the horizon)
@@ -1495,7 +1500,10 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
         if (!view.BoxVisible(lo, hi)) continue;
         ++propCellsSeen;
         // (its group with the model renderer, filled anew when a prop of it has changed)
-        if (cell.group == 0xffffffffu) cell.group = meshes.AddGroup();
+        if (cell.group == 0xffffffffu) {
+          cell.group = meshes.AddGroup();
+          meshes.SetGroupOrder(cell.group, static_cast<uint32_t>(cz * propCellsX_ + cx));  // [gpuscenery] (the order it is listed in)
+        }
         if (cell.changed) {
           meshes.ClearGroup(cell.group);
           for (uint32_t i : cell.ofMap) meshes.AddToGroup(cell.group, props_[i].model, props_[i].world);
@@ -3003,7 +3011,8 @@ void World::Render() {
   {  // the bones of posed models, once for all the frame's passes
     std::vector<const View*> views{&view};
     if (shadowed)
-      for (int i = 0; i < shadows.Count(); ++i) views.push_back(&shadows.CascadeView(i));
+      for (int i = 0; i < shadows.Count(); ++i)
+        if (shadows.Draws(i)) views.push_back(&shadows.CascadeView(i));  // ([cardcost] a far cascade kept: not drawn)
     for (int i = 0; i < lampShadowsDrawn; ++i) views.push_back(&lights.ShadowView(i));
     CpuTimes::Part("bones posed");
     meshes.Prepare(views);
@@ -3011,6 +3020,7 @@ void World::Render() {
   if (!extraView) PreparePlants();  // [plants] ([views] the first view's press and burns kept for the others) (plants that react: what presses and burns them; it draws and dispatches, before the scene's pass)
   if ((rayView || bounceNow_ || reflectNow_ || lightRaysNow_) && RaysReady()) {  // the ray tracing scene, from the models just prepared
     Stage("ray tracing scene");
+    rays.refit = rayRefit;  // [cardcost]
     rays.Build(meshes);
     terrain.GroundColours();  // (made the first time here: it dispatches, so not in a pass)
   }
@@ -3150,10 +3160,12 @@ void World::Render() {
   Stage("sun shadows");
   if (shadowed) {
     for (int i = 0; i < shadows.Count(); ++i) {
+      if (!shadows.Draws(i)) continue;  // [cardcost] (a far cascade kept from a frame before: shadows.h, keepEvery)
       device_->BeginPass(shadows.Pass(i));
       terrain.Draw(shadows.CascadeView(i), true);
       meshes.Draw(shadows.CascadeView(i), environment_, true);
       if (wildlifeNow_) wildlifeDraw.DrawBirds(shadows.CascadeView(i), true);  // (the birds' shadows)
+      shadows.Drawn(i);  // [cardcost]
     }
   }
   // the lamps' shadow maps: units and scenery as each lamp sees them
@@ -3664,7 +3676,7 @@ void World::Render() {
   Stage("icons, bars");
   // (cinecam: no strategic symbols for a cinematic camera: every unit far off toward the horizon would stand there as one)
   icons.showSymbols = iconsOn && !camera.cinematic;
-  if (!photo) icons.Draw();  // on the finished picture, as the original draws them (and the life bars; cinecam: none on a photo)
+  if (!photo || warmAll) icons.Draw();  // on the finished picture, as the original draws them (and the life bars; cinecam: none on a photo; [session] warmAll)
   TakeMomentOut();  // (photomode: between frames the game's own hour and weather again)
   CpuTimes::Part(nullptr);
 }

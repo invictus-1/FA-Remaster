@@ -85,7 +85,14 @@ int BytesPerPixelOrBlock(Format f);  // per pixel, or per 4x4 block for the BC f
 
 // Shader: data a shader reads (SetShaderBuffer); dynamic only. (A static Vertex or Index buffer can be read by
 // shaders too: SetShaderBuffer.)
-enum class BufferKind : uint8_t { Vertex, Index, Shader };
+// [gpuscenery] Card: a static buffer the card itself writes (Device::IndirectDraws; card_scenery.h): its `size` bytes (a
+// multiple of 16) given at creation (`data`, or zeros where it is null), then changed only by compute shaders and by
+// UpdateBufferRange. SetShaderBuffer binds it as any static buffer: draws and dispatches read it at t0 / t1 of space1
+// (StructuredBuffer, ByteAddressBuffer), and a compute shader WRITES it at the same slot's u register of space1,
+// `RWByteAddressBuffer name : register(u0, space1)` (or u1; a dispatch reads such a buffer through that alone, not through
+// its t register too). Indirect draws take their arguments from it (DrawIndexedIndirect). What a dispatch writes, the
+// dispatches and passes after it read, as with storage targets.
+enum class BufferKind : uint8_t { Vertex, Index, Shader, Card };
 struct BufferDesc {
   BufferKind kind = BufferKind::Vertex;
   uint32_t size = 0;    // bytes (dynamic: unused)
@@ -256,7 +263,11 @@ class Recorder {
   virtual void SetShaderBuffer(Buffer buffer, int slot = 0) = 0;
   virtual void Draw(uint32_t vertexCount, uint32_t firstVertex = 0, uint32_t instances = 1) = 0;
   virtual void DrawIndexed(uint32_t indexCount, uint32_t firstIndex = 0, int32_t baseVertex = 0, uint32_t instances = 1) = 0;
+  virtual void DrawIndexedIndirect(Buffer arguments, uint32_t offset) = 0;  // [gpuscenery] (Device's)
 };
+
+// [vkpresent] (checks: the viewer's --staging-reserve) Vulkan's staging reserve in MB in place of its own reckoning (0: its own)
+inline int gStagingReserveMB = 0;
 
 class Device {
  public:
@@ -358,6 +369,12 @@ class Device {
   // time. Between passes (it ends the pass under way, as Dispatch does); what comes after reads it. `scene`
   // is made the first time and grows as needed.
   virtual void BuildScene(Structure*, const SceneInstance*, uint32_t) {}
+  // [cardcost] BuildScene's, built so that later frames can refit it: with `rebuild` false, a scene last made here and
+  // built over as many instances as now (those whose structure is made) is refitted in place instead (the instances'
+  // matrices, masks, ids and structures may all differ; the tree over them stays as it was built, so it serves the rays
+  // the worse the more they have moved since: rebuild now and then). The same rays meet the same things either way.
+  // False where the device cannot (nothing done; BuildScene then).
+  virtual bool RefitScene(Structure*, const SceneInstance*, uint32_t, bool) { return false; }
   // A scene's structure for the shaders, in a texture slot (none: empty).
   virtual void SetScene(int, Structure) {}
   virtual void Destroy(Structure) {}
@@ -396,6 +413,19 @@ class Device {
   virtual void Draw(uint32_t vertexCount, uint32_t firstVertex = 0, uint32_t instances = 1) = 0;
   virtual void DrawIndexed(uint32_t indexCount, uint32_t firstIndex = 0, int32_t baseVertex = 0,
                            uint32_t instances = 1) = 0;
+  // [gpuscenery] Work the card gives itself (BufferKind::Card above). IndirectDraws: whether the device has card buffers and
+  // the two calls below (false: CreateBuffer makes no card buffer, and the calls do nothing). UpdateBufferRange: `size`
+  // bytes of a card buffer from `offset` (multiples of 4) replaced by `data`, within a frame, outside a parallel section,
+  // before the dispatches and draws after it read them (a copy on the card; a pass under way goes on after it).
+  // DrawIndexedIndirect: DrawIndexed with its arguments read by the card, when it draws, from a card buffer at `offset` (a
+  // multiple of 4): five 32-bit numbers, as Direct3D 12's D3D12_DRAW_INDEXED_ARGUMENTS and Vulkan's
+  // VkDrawIndexedIndirectCommand have them: the index count, the instances (0: nothing drawn), the first index, the base
+  // vertex and the first instance, which must be 0 (SV_InstanceID counts from 0 on both backends).
+  virtual bool IndirectDraws() const { return false; }
+  virtual void UpdateBufferRange(Buffer buffer, uint32_t offset, const void* data, uint32_t size) {
+    (void)buffer, (void)offset, (void)data, (void)size;
+  }
+  virtual void DrawIndexedIndirect(Buffer arguments, uint32_t offset) { (void)arguments, (void)offset; }
   // Presents the frame. With `capture`, also reads the finished image back: width * height * 4 bytes,
   // RGBA, top row first.
   // `present` false: the frame is drawn (and read back with `capture`) but not shown; the next frame

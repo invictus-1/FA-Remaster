@@ -326,6 +326,20 @@ class World {
   bool lampShadows = true;
   // The sun's shadow maps' size in texels (2048 at first; 4096 sharper, 1024 and 512 for slower cards).
   int shadowSize = kShadowMapSize;
+  // [cardcost] The sun's shadow maps draw only what can cast a shadow onto what the camera sees (shadows.h, Shadows::
+  // fitCasters): the same picture, what lies outside the view as the sun sees it left out (most of the far cascades'
+  // ground and trees at the game's usual heights). On by default; viewer --no-shadow-fit: off (every caster in a
+  // cascade's square, as before).
+  bool shadowFit = true;
+  // [cardcost] The ray tracing scene refitted, not built again, where only where things stand changed since the frame
+  // before (ray_scene.h, RayScene::refit; built again every 30 frames and whenever something came or went): the same
+  // picture. On by default; viewer --no-ray-refit: off (built every frame, as before).
+  bool rayRefit = true;
+  // [cardcost] The sun's far shadow cascades drawn anew only every n-th frame, in turn, and kept in between while they
+  // still serve (shadows.h, Shadows::keepEvery; the nearest every frame). The ground and the trees cast the same shadows;
+  // a unit moving far off casts where it stood a frame or so before. 0 (or 1): every cascade every frame. Viewer
+  // --shadow-keep <n>.
+  int shadowKeep = 0;
   // The icons on mass and hydrocarbon deposits from far up, where the marks on the ground are no
   // longer drawn (the original's "resource icons", its pictures). `depositIconFrom`: at how many
   // times a mark's own cutoff distance its icon is fully there (it comes in from 0.8 of that).
@@ -753,6 +767,10 @@ class World {
   // game's next (the temporal upscaler, motion, frame generation's picture), and with nothing of the interface laid
   // over it (icons, bars, order lines). What else of the interface is in the world the host takes out itself.
   bool photo = false;
+  // [session] A warm frame of a map opened behind with the game's first beat (WorldPicture::PrepareSession): drawn as the game's
+  // frames are, its icons, life bars and hidden outlines too, though a photo's frame (so that what they make the first time is
+  // made unseen). Off at first.
+  bool warmAll = false;
   // (photomode) A frame drawn for a tile of a photo (WorldPicture::StartPhoto, photo.h): the photo's own camera, round
   // which what is placed for the camera is placed in every tile of it (the sun's and the lamps' shadows, the grass, the
   // rain's box, the bounce light's probes, the smoke's shadow, lightning, deep tracks, the hot things' lights), so that

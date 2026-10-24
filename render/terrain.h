@@ -162,6 +162,13 @@ class Terrain {
   // (decals lying under water take the same tint).
   gfx::Texture WaterMap() const { return waterMap_; }
   gfx::Texture WaterRamp() const { return waterRamp_; }
+  // [cardcost] The ground's lowest point now (world height; the coarsest nodes' lowest): -1e9 before a map is loaded.
+  float Lowest() const {
+    if (levels_.empty() || levels_.back().lo.empty()) return -1e9f;
+    float lowest = levels_.back().lo[0];
+    for (float lo : levels_.back().lo) lowest = lo < lowest ? lo : lowest;
+    return lowest;
+  }
   // Numbers from the last Draw.
   int drawnPatches = 0;
   int drawnTriangles = 0;

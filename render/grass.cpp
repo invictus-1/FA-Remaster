@@ -1594,6 +1594,10 @@ void GroundCover::DrawFarPlants(PlantConstants* p, int variant, bool motion) {
       device_->SetConstants(1, p, sizeof(PlantConstants));
       device_->SetVertexBuffer(m.levels[l].vertices);
       device_->SetIndexBuffer(m.levels[l].indices);
+      if (modelArgsNow_) {  // [gpuscenery] (as many as its list holds: not counted here)
+        device_->DrawIndexedIndirect(modelArgsBuffer_, static_cast<uint32_t>(bucket) * 32u);
+        continue;
+      }
       device_->DrawIndexed(m.levels[l].indexCount, 0, 0, room);
       if (!motion) drawnModels += static_cast<int>(room);
     }
@@ -1681,7 +1685,38 @@ void GroundCover::LoadPlantModels() {
 }
 
 // [plantlod] The models' placing's two compute pipelines, made the first time wanted (PrepareFar, PrepareAhead).
+// [gpuscenery] (indirectModels) Each kind's level's draw from its list's count (as many as fit its room), on the card: an
+// indexed draw's five arguments, eight words a list (gfx.h, DrawIndexedIndirect).
+static const char kModelArgsShader[] = R"hlsl(
+Texture2D<uint> placedCounters : register(t0);
+RWByteAddressBuffer modelArgs : register(u0, space1);
+cbuffer ModelArgs : register(b2) {
+  uint4 argIndices[8];  // per kind * 4 + level: its mesh's indices
+  uint4 argRoom[8];     // and its list's room
+};
+[numthreads(32, 1, 1)] void ArgsCS(uint3 id : SV_DispatchThreadID) {
+  uint b = id.x;
+  uint n = min(placedCounters.Load(int3(b, 0, 0)), argRoom[b / 4][b % 4]);
+  modelArgs.Store4(b * 32, uint4(argIndices[b / 4][b % 4], n, 0, 0));
+  modelArgs.Store(b * 32 + 16, 0u);
+}
+)hlsl";
+
 void GroundCover::MakeModelPlace() {
+  if (indirectModels && !modelArgsTried_ && device_->IndirectDraws()) {  // [gpuscenery]
+    modelArgsTried_ = true;
+    std::string error;
+    gfx::ComputeDesc cd;
+    cd.name = "ground cover: plant models' draws";
+    cd.source = kModelArgsShader;
+    cd.entry = "ArgsCS";
+    modelArgs_ = device_->CreateCompute(cd, &error);
+    gfx::BufferDesc bd;
+    bd.kind = gfx::BufferKind::Card;
+    bd.size = PlantModels::kMostKinds * PlantModels::kLevels * 32;
+    if (modelArgs_) modelArgsBuffer_ = device_->CreateBuffer(bd);
+    if (!modelArgsBuffer_) fprintf(stderr, "render: the ground cover's 3D plants cannot be drawn indirectly (%s)\n", error.c_str());
+  }
   if (modelPlaceTried_) return;
   {
     modelPlaceTried_ = true;
@@ -1883,6 +1918,11 @@ void GroundCover::PlaceFar(const View& view, const Camera& camera, gfx::Texture 
     for (int b = 0; b < PlantModels::kMostKinds * PlantModels::kLevels; ++b)
       if (want[b] > 0) room_[b] = static_cast<uint32_t>(std::min<double>(PlantModels::kMostInBucket, want[b] * 1.3 + 32));
   }
+  // [gpuscenery] (drawn by the lists' own counts: each list that may have plants its whole room)
+  modelArgsNow_ = indirectModels && modelArgs_ && modelArgsBuffer_ && device_->IndirectDraws();
+  if (modelArgsNow_)
+    for (uint32_t& r : room_)
+      if (r) r = PlantModels::kMostInBucket;
   if (!modelTileBuffer_) {
     gfx::BufferDesc bd;
     bd.kind = gfx::BufferKind::Shader;
@@ -1921,6 +1961,24 @@ void GroundCover::PlaceFar(const View& view, const Camera& camera, gfx::Texture 
   device_->Dispatch(static_cast<uint32_t>(modelTiles) * 4u, 1, 1);
   for (int s = 0; s < 3; ++s) device_->SetStorage(s, {});
   for (int t : {0, 4, 5, 11, 12, 21}) device_->SetTexture(t, {});
+  if (modelArgsNow_) {  // [gpuscenery] each list's draw from its count
+    struct {
+      uint32_t indices[8][4];
+      uint32_t room[8][4];
+    } args = {};
+    for (size_t kind = 0; kind < models_->kinds.size() && kind < static_cast<size_t>(PlantModels::kMostKinds); ++kind)
+      for (int l = 0; l < models_->kinds[kind].levelCount && l < PlantModels::kLevels; ++l) {
+        const size_t b = kind * PlantModels::kLevels + static_cast<size_t>(l);
+        args.indices[b / 4][b % 4] = models_->kinds[kind].levels[l].indexCount;
+        args.room[b / 4][b % 4] = room_[b];
+      }
+    device_->SetPipeline(modelArgs_);
+    device_->SetConstants(2, &args, sizeof args);
+    device_->SetTexture(0, models_->Counters());
+    device_->SetShaderBuffer(modelArgsBuffer_, 0);
+    device_->Dispatch(1, 1, 1);
+    device_->SetTexture(0, {});
+  }
   modelsPlaced_ = true;
 }
 
