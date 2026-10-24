@@ -356,7 +356,8 @@
 //           same waves; none over the shallows; ships and hover units ride them in the picture alone; the wakes too).
 //           Tuning: --ocean-height n (the waves' height times n, 1), --ocean-tilt n (the slopes drawn n times as steep, 1.5;
 //           from above twice that), --ocean-glint n (0.8), --ocean-foam n, --ocean-glow n (1); --ocean-view n: in place of the
-//           water 1 the slopes, 2 the foam's field, 3 the slopes' spread, 4 the height, 5 the Jacobian (red: it foams)
+//           water 1 the slopes, 2 the foam's field, 3 the slopes' spread, 4 the height, 5 the Jacobian (red: it foams),
+//           6 [whitecaps] the whitecaps' parts (red the crest breaking now, green the fresh foam, blue the residue)
 // --stream-water  [stream] streams as real water (stream_water.h, World::streamWater; modern look): a map's stream props
 //           (the visuals track's ribbons) drawn as water: deep and dark in the middle, the bed showing at the edges, a
 //           soft wet shore, ripples and foam carried downstream (faster where it drops, white round rocks and behind

@@ -39,6 +39,9 @@ extern const char kMarkSnowLying[];
 
 class Decals {
  public:
+  // [whitecaps] The ocean whose lifted waves the pictures on the water ride (ocean.h; World sets it each frame; none: they lie
+  // at the water's level, as before).
+  const class Ocean* ride = nullptr;
   // The resource deposits a game has marked on the ground (the script's splats mass_marker and
   // hydrocarbon_marker): where, which, and from how far the mark is drawn (its cutoff). For the
   // icons that take the marks' place from far up (world.cpp).
@@ -269,6 +272,8 @@ class Decals {
   const moho::Vfs* vfs_;
   TextureCache* textures_;
   gfx::Pipeline pipeline_, lights_, normals_;
+  gfx::Pipeline waterRide_;  // [whitecaps] (the pictures on the water riding the lifted waves: made the first time)
+  bool rideTried_ = false;
   gfx::Pipeline hot_;  // (hot metal: a fresh mark's glow, added, its alpha left alone)
   gfx::Buffer cube_;
   gfx::Texture waterMap_, waterRamp_;

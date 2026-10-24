@@ -66,18 +66,24 @@ bool Effects::AttachPoint(const Frame& frame, uint32_t entity, int bone, Vec3* p
   // a unit: the frame's units are in entity-id order
   auto unit = std::lower_bound(frame.units.begin(), frame.units.end(), entity, [](const FrameUnit& u, uint32_t id) { return u.id < id; });
   if (unit != frame.units.end() && unit->id == entity) {
-    const Vec3 unitPosition = V(unit->position);
-    const Quat unitOrientation = Q(unit->orientation);
+    Vec3 unitPosition = V(unit->position);
+    Quat unitOrientation = Q(unit->orientation);
+    const Model* model = remembered ? *remembered : nullptr;
+    const std::string& blueprint = (*frame.blueprints)[unit->blueprint];
+    auto loadModel = [&] {
+      if (model) return;
+      model = blueprint.empty() ? nullptr : models_->Unit(blueprint);
+      if (remembered) *remembered = model;
+    };
+    if (drawnMoves && drawnAt) {  // [whitecaps] (where the picture draws it: a ship riding the lifted waves)
+      loadModel();
+      drawnAt(blueprint, *unit, model, &unitPosition, &unitOrientation);
+    }
     *position = unitPosition;
     *orientation = unitOrientation;
     if (bone < 0) return true;
     // the bone in the unit's frame: its pose between the two beats, or where it stands at rest
-    const Model* model = remembered ? *remembered : nullptr;
-    if (!model) {
-      const std::string& blueprint = (*frame.blueprints)[unit->blueprint];
-      model = blueprint.empty() ? nullptr : models_->Unit(blueprint);
-      if (remembered) *remembered = model;
-    }
+    loadModel();
     if (!model || !model->ok || static_cast<size_t>(bone) >= model->bones.size()) return true;
     const ModelBone& rest = model->bones[static_cast<size_t>(bone)];
     auto posed = [&](uint32_t first, uint32_t count, Vec3* p, Quat* q) {

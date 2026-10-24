@@ -40,6 +40,11 @@ float Choppiness(float rough) { return 0.75f + 0.35f * rough; }
 // foams: only the very steepest crests of a gentle sea (well under one in a thousand of its places), a storm's many (some
 // one in ten).
 float FoamDeviations(float rough) { return 3.4f - 1.8f * rough; }
+// [whitecaps] How long foam stays fresh after its crest has broken (seconds to fall to 1/e): bright and solid while the crest
+// breaks and just after, then the residue, greyer and broken.
+constexpr float kFreshLife = 0.45f;
+// [whitecaps] The foam's drift told to the water's shader within this (world units): its pattern drifts with the field.
+constexpr double kDriftRepeat = 4096;
 
 // The JONSWAP wind sea's spectrum over the waves' angular frequency w (alpha 1): a peak at wp, sharpened (gamma 3.3).
 // The same formula is the shader's (kSimShader, Jonswap): keep the two alike.
@@ -81,6 +86,7 @@ cbuffer OceanSim : register(b1) {
   float4 foamMake; // x the Jacobian it foams below; y how fast; z the water's level; w the ground's height unit
   float4 lengths;  // x, y, z 1 / each square's length; w the map's width
   float4 mapInfo;  // x, y the map's width and height
+  float4 foamMore; // [whitecaps] xy the field's shift since the last frame in whole cells (foamOld.w 0); z the share of the fresh foam kept this frame
 };
 static const float kPi = 3.14159265;
 SamplerState samplerLinearClamp : register(s1);  // (the fixed samplers, gfx.h)
@@ -309,16 +315,20 @@ void Reduce(uint2 t, uint2 corner, uint first) {
 }
 )hlsl";
 
-// The foam's field: what was here a frame ago, drifted downwind and drawn out along the wind into streaks, a little less
-// of it; and new foam where the surface folds now (the squares' shift derivatives added up: the Jacobian), none where the
-// water is shallow.
+// The foam's field: what was here a frame ago, a little less of it; and new foam where the surface folds now (the squares'
+// shift derivatives added up: the Jacobian), none where the water is shallow. [whitecaps] Two numbers a cell: x how much
+// foam lies there (it fades over seconds: the residue), y how fresh it is (it fades within a second of the crest's
+// breaking). The field drifts downwind with the water in WHOLE cells (Ocean::Update keeps the drift's remainder, which the
+// water's shader adds when it reads the field), so that it is copied cell for cell from frame to frame: read between its
+// cells each frame, as it was, it blurred a little more every frame, and a storm's foam, living some seconds, spread into
+// soft blobs some ten cells across. Only when the field's cell changes (the camera's distance) is it read between them.
 const char kFoam[] = R"hlsl(
-Texture2D<float> foamIn : register(t0);
+Texture2D<float2> foamIn : register(t0);
 Texture2D fold0 : register(t1);
 Texture2D fold1 : register(t2);
 Texture2D fold2 : register(t3);
 Texture2D<float> heights : register(t4);
-RWTexture2D<float> foamOut : register(u0);
+RWTexture2D<float2> foamOut : register(u0);
 float GroundAt(float2 xz) {
   float2 p = clamp(xz, 0, mapInfo.xy);
   float2 f = floor(p);
@@ -329,17 +339,17 @@ float GroundAt(float2 xz) {
   float d = heights.Load(int3(min(c + int2(0, 1), most), 0)), e = heights.Load(int3(min(c + int2(1, 1), most), 0));
   return lerp(lerp(a, b, t.x), lerp(d, e, t.x), t.y) * foamMake.w;
 }
-float FoamWas(float2 world) {
-  float2 at = (world - foamOld.xy) * foamOld.z;
-  if (foamOld.w > 0.5 || any(at < 0) || any(at > 1)) return 0;
-  return foamIn.SampleLevel(samplerLinearClamp, at, 0);
-}
 [numthreads(8, 8, 1)] void Foam(uint3 id : SV_DispatchThreadID) {
   if (any(id.xy >= uint(foamNew.w))) return;
   float2 world = foamNew.xy + (float2(id.xy) + 0.5) * foamNew.z;
-  float2 from = world - foamMove.xy;
-  float2 along = normalize(sea.xy) * (foamNew.z * 0.7);
-  float old = FoamWas(from) * 0.5 + (FoamWas(from - along) + FoamWas(from + along)) * 0.25;
+  float2 old = 0;
+  if (foamOld.w < 0.5) {  // (the same cells: the one it drifted from, whole)
+    int2 c = int2(id.xy) + int2(foamMore.xy);
+    if (all(c >= 0) && all(c < int(foamNew.w))) old = foamIn.Load(int3(c, 0));
+  } else if (foamOld.w < 1.5) {  // (another cell size: read between the old field's cells, once)
+    float2 at = (world - foamMove.xy - foamOld.xy) * foamOld.z;
+    if (all(at >= 0) && all(at <= 1)) old = foamIn.SampleLevel(samplerLinearClamp, at, 0);
+  }
   // (each square read at the level its texels are about a cell: finer folds than a cell are averaged in)
   float3 f = 0;
   float l0 = log2(max(foamNew.z * lengths.x * 256, 1)), l1 = log2(max(foamNew.z * lengths.y * 256, 1)), l2 = log2(max(foamNew.z * lengths.z * 256, 1));
@@ -349,7 +359,8 @@ float FoamWas(float2 world) {
   float J = (1 + f.x) * (1 + f.y) - f.z * f.z;
   float depth = foamMake.z - GroundAt(world);
   float make = saturate((foamMake.x - J) * foamMake.y) * saturate((depth - 0.3) / 1.5);
-  foamOut[id.xy] = min(old * foamMove.z + make * foamMove.w * 3, 1.2);
+  // (a crest breaking for a third of a second lays a full cover, and keeps it fresh while it breaks)
+  foamOut[id.xy] = float2(min(old.x * foamMove.z + make * foamMove.w * 3, 1.2), min(old.y * foamMore.z + make * foamMove.w * 6, 1));
 }
 )hlsl";
 
@@ -357,6 +368,7 @@ struct SimConstants {
   float band[4], sea[4], swell[4], clock[4];
   float foamNew[4], foamOld[4], foamMove[4], foamMake[4];
   float lengths[4], mapInfo[4];
+  float foamMore[4];  // [whitecaps]
 };
 
 float BandFrom(int c) { return c == 0 ? 1e-6f : 2 * kPi * kBandHarmonic / kCascadeLength[c]; }
@@ -381,23 +393,30 @@ void Ocean::SetMap(const MapData* map) {
   foamFresh_ = true;
 }
 
-bool Ocean::Ready() {
-  if (tried_) return made_;
-  tried_ = true;
-  std::string error;
+bool Ocean::PreparePipelines() {
+  if (pipesTried_) return foam_.id != 0;
+  pipesTried_ = true;
   auto make = [&](const char* name, const char* entry, const char* body) {
     gfx::ComputeDesc cd;
     const std::string source = std::string(kSimCommon) + body;
     cd.source = source;
     cd.name = name;
     cd.entry = entry;
-    return device_->CreateCompute(cd, &error);
+    return device_->CreateCompute(cd, &pipesError_);
   };
   rows_ = make("ocean: rows", "Rows", kRows);
   if (rows_) columns_ = make("ocean: columns", "Columns", kColumns);
   if (columns_) mipsNear_ = make("ocean: levels near", "MipsNear", kMips);
   if (mipsNear_) mipsFar_ = make("ocean: levels far", "MipsFar", kMips);
   if (mipsFar_) foam_ = make("ocean: foam", "Foam", kFoam);
+  return foam_.id != 0;
+}
+
+bool Ocean::Ready() {
+  if (tried_) return made_;
+  tried_ = true;
+  std::string error;
+  if (!PreparePipelines()) error = pipesError_;
   if (foam_) {
     made_ = true;
     gfx::TargetDesc td;
@@ -418,7 +437,7 @@ bool Ocean::Ready() {
     }
     td.mips = 1;
     td.width = td.height = kFoamCells;
-    td.format = gfx::Format::R16F;
+    td.format = gfx::Format::RG16F;  // [whitecaps] (how much, how fresh)
     for (int k = 0; k < 2 && made_; ++k) made_ = made_ && (foamMap_[k] = device_->CreateTarget(td));
     if (!made_) error = "its storage targets cannot be made";
   }
@@ -535,16 +554,25 @@ void Ocean::Update(const Camera& camera, const View& view, gfx::Texture heights,
   const float want = std::clamp(pixel * 1.5f, 0.04f, 2.0f);
   while (want > cell * 1.3f && cell < 2.0f) cell *= 2;
   while (want < cell * 0.55f && cell > 0.04f) cell *= 0.5f;
-  const int ox = static_cast<int>(std::floor(camera.target.x / cell)) - kFoamCells / 2, oz = static_cast<int>(std::floor(camera.target.z / cell)) - kFoamCells / 2;
-  const float x0 = static_cast<float>(ox) * cell, z0 = static_cast<float>(oz) * cell, side = static_cast<float>(kFoamCells) * cell;
   const double dt = lastTime_ >= 0 ? std::clamp(time_ - lastTime_, 0.0, 0.25) : 0.0;
   lastTime_ = time_;
   const float r = rough_;
   const float drift = (0.12f + 0.25f * r) * static_cast<float>(dt);
-  const float life = 1.5f + 2.0f * r;  // (seconds to fall to 1/e)
+  // [whitecaps] the field drifts with the water: its cells lie from the drift so far on, in whole cells round what the
+  // camera looks at (so that it is copied cell for cell from frame to frame, kFoam)
+  if (foamFresh_) driftX_ = driftZ_ = 0;
+  driftX_ += wind_[0] * drift;
+  driftZ_ += wind_[1] * drift;
+  const int ox = static_cast<int>(std::floor((camera.target.x - driftX_) / cell)) - kFoamCells / 2,
+            oz = static_cast<int>(std::floor((camera.target.z - driftZ_) / cell)) - kFoamCells / 2;
+  const float x0 = static_cast<float>(ox * static_cast<double>(cell) + driftX_), z0 = static_cast<float>(oz * static_cast<double>(cell) + driftZ_),
+              side = static_cast<float>(kFoamCells) * cell;
+  const float life = 2.0f + 3.5f * r;  // (seconds to fall to 1/e; [whitecaps] longer, as its residue thins to lace: was 1.5 + 2 r)
+  const bool sameCells = !foamFresh_ && cell == foamCell_;
   const float foamNew[4] = {x0, z0, cell, static_cast<float>(kFoamCells)};
-  const float foamOld[4] = {foamArea_[0], foamArea_[1], foamArea_[2], foamFresh_ ? 1.0f : 0.0f};
+  const float foamOld[4] = {foamArea_[0], foamArea_[1], foamArea_[2], foamFresh_ ? 2.0f : sameCells ? 0.0f : 1.0f};
   const float foamMove[4] = {wind_[0] * drift, wind_[1] * drift, static_cast<float>(std::exp(-dt / life)), static_cast<float>(dt)};
+  const float foamMore[4] = {static_cast<float>(ox - foamX_), static_cast<float>(oz - foamZ_), static_cast<float>(std::exp(-dt / kFreshLife)), 0};
   // (the Jacobian's spread: about the choppiness times the root of the slopes' mean square, of the waves the field's cells
   // hold, longer than about two cells)
   const double kCut = kPi / (2 * cell);
@@ -559,6 +587,7 @@ void Ocean::Update(const Camera& camera, const View& view, gfx::Texture heights,
   std::memcpy(k.foamOld, foamOld, sizeof foamOld);
   std::memcpy(k.foamMove, foamMove, sizeof foamMove);
   std::memcpy(k.foamMake, foamMake, sizeof foamMake);
+  std::memcpy(k.foamMore, foamMore, sizeof foamMore);
   device_->Mark("ocean: foam");
   device_->SetPipeline(foam_);
   device_->SetConstants(1, &k, sizeof k);
@@ -601,6 +630,11 @@ void Ocean::Update(const Camera& camera, const View& view, gfx::Texture heights,
   constants_.look2[3] = lift ? 1.0f : 0.0f;
   constants_.look3[0] = foamThreshold_;
   constants_.look3[1] = glint;
+  // [whitecaps] how far the foam has drifted (its pattern drifts with it; within kDriftRepeat, so that it stays exact)
+  constants_.look4[0] = static_cast<float>(std::fmod(driftX_, kDriftRepeat));
+  constants_.look4[1] = static_cast<float>(std::fmod(driftZ_, kDriftRepeat));
+  constants_.look4[2] = 0;
+  constants_.look4[3] = 0;
   active_ = true;
   // [lift] the grid's patches for this view, and the long waves the processor keeps for what floats
   if (lift && MakeGrid()) {
@@ -792,91 +826,123 @@ float Spreading(float theta, float w, float wp) {
   return beta / (2 * std::tanh(beta * kPi)) / (ch * ch);
 }
 float Angle(float kx, float kz, float wx, float wz) { return std::atan2(kx * wz - kz * wx, kx * wx + kz * wz); }
+
+// The amplitude of the card's wave of wave vector (kx, kz) in a square whose cell of wave numbers is dk, for the sea's
+// numbers `sim` (Spectrum's); its frequency into *w (as the shader's Wave: keep them alike).
+float BobAmplitude(const float* sim, float kx, float kz, float dk, float* w) {
+  const float wp = sim[6], seaAlpha = sim[7], ws = sim[10], swellAlpha = sim[11];
+  const float seaX = sim[4], seaZ = sim[5], swellX = sim[8], swellZ = sim[9];
+  const float w0 = sim[15];
+  const float kl = std::sqrt(kx * kx + kz * kz);
+  *w = 0;
+  if (kl <= 0) return 0.0f;
+  const float wf = std::sqrt(kGravity * kl);
+  const float toK = kGravity / (2 * wf) / kl;
+  const float s = seaAlpha * static_cast<float>(Jonswap(wf, wp)) * Spreading(Angle(kx, kz, seaX, seaZ), wf, wp);
+  const float t = Angle(kx, kz, swellX, swellZ), ct = std::cos(t);
+  const float ss = std::fabs(t) < kPi * 0.5f ? swellAlpha * static_cast<float>(SwellShape(wf, ws)) * std::pow(ct * ct, 24.0f) * 2.764f : 0;
+  *w = std::max(std::floor(wf / w0 + 0.5f), 1.0f) * w0;
+  return std::sqrt(std::max(s + ss, 0.0f) * toK * dk * dk * 0.25f);
+}
+// [whitecaps] (the waves looked at for the set: the largest square's, and the middle one's longer than about a ship, 1.5
+// world units; each square's a square of rows of wave numbers)
+constexpr float kBobShortest = 2 * kPi / 1.5f;
+int BobReach(int c) { return static_cast<int>(std::ceil(std::min(BandTo(c), kBobShortest) / (2 * kPi / kCascadeLength[c]))); }
+// [whitecaps] Rows of candidates looked at a frame while the set is chosen again (Ocean::KeepBobWaves): all of them at once
+// took 2.2 ms (a storm's sea easing to calm), 24 rows about 0.25 ms, the last frame's choosing about 0.4: a new set in about
+// six frames.
+constexpr int kBobRowsAFrame = 24;
 }  // namespace
 
 void Ocean::KeepBobWaves() {
-  // the sea as the card has it now (Spectrum's numbers)
-  const float wp = sim_[6], seaAlpha = sim_[7], ws = sim_[10], swellAlpha = sim_[11];
-  const float seaX = sim_[4], seaZ = sim_[5], swellX = sim_[8], swellZ = sim_[9];
-  const float w0 = sim_[15];
-  auto amplitude = [&](float kx, float kz, float dk, float* w) {
-    const float kl = std::sqrt(kx * kx + kz * kz);
-    *w = 0;
-    if (kl <= 0) return 0.0f;
-    float wf = std::sqrt(kGravity * kl);
-    const float toK = kGravity / (2 * wf) / kl;
-    const float s = seaAlpha * static_cast<float>(Jonswap(wf, wp)) * Spreading(Angle(kx, kz, seaX, seaZ), wf, wp);
-    const float t = Angle(kx, kz, swellX, swellZ), ct = std::cos(t);
-    const float ss = std::fabs(t) < kPi * 0.5f ? swellAlpha * static_cast<float>(SwellShape(wf, ws)) * std::pow(ct * ct, 24.0f) * 2.764f : 0;
-    *w = std::max(std::floor(wf / w0 + 0.5f), 1.0f) * w0;
-    return std::sqrt(std::max(s + ss, 0.0f) * toK * dk * dk * 0.25f);
-  };
-  // the set of waves: chosen again (the strongest) when the sea has changed much since; their heights each frame
-  const bool again = bobWaves_.empty() || std::fabs(rough_ - keptRough_) > 0.08f || std::fabs(heightScale - keptHeight_) > 1e-3f ||
-                     wind_[0] * keptWind_[0] + wind_[1] * keptWind_[1] < 0.985f;
-  if (again) {
+  // [whitecaps] The set of waves is chosen again (the strongest) when the sea has changed much since: from the sea's numbers
+  // as they were when the choosing began, a few rows of candidates a frame (it took 2.2 ms at once, a spike in the frame a
+  // storm came up), the old set kept until the new one is whole. The first set (the waves just switched on, or the map
+  // new) at once: there is none to keep.
+  const bool changed = std::fabs(rough_ - keptRough_) > 0.08f || std::fabs(heightScale - keptHeight_) > 1e-3f ||
+                       wind_[0] * keptWind_[0] + wind_[1] * keptWind_[1] < 0.985f;
+  if ((bobWaves_.empty() || changed) && !pick_.running) {
     keptRough_ = rough_;
     keptHeight_ = heightScale;
     keptWind_[0] = wind_[0];
     keptWind_[1] = wind_[1];
-    struct Candidate {
-      float energy;
-      int c, n, m;
-    };
-    std::vector<Candidate> found;
-    // the largest square's waves, and the middle one's longer than about a ship (1.5 world units)
-    const float kMost = 2 * kPi / 1.5f;
-    for (int c = 0; c < 2; ++c) {
-      const float dk = 2 * kPi / kCascadeLength[c];
-      const float from = BandFrom(c), to = std::min(BandTo(c), kMost);
-      const int reach = static_cast<int>(std::ceil(to / dk));
-      for (int qm = -reach; qm <= reach; ++qm)
-        for (int qn = -reach; qn <= reach; ++qn) {
-          const float kx = static_cast<float>(qn) * dk, kz = static_cast<float>(qm) * dk, kl = std::sqrt(kx * kx + kz * kz);
-          if (kl < from || kl >= to || kl <= 0) continue;
-          float w;
-          const float a = amplitude(kx, kz, dk, &w), b = amplitude(-kx, -kz, dk, &w);
-          found.push_back({a * a + b * b, c, qn, qm});
-        }
-    }
-    const size_t keep = std::min(found.size(), static_cast<size_t>(kBobWaves));
-    std::partial_sort(found.begin(), found.begin() + static_cast<long>(keep), found.end(), [](const Candidate& a, const Candidate& b) { return a.energy > b.energy; });
-    bobWaves_.clear();
-    for (size_t i = 0; i < keep; ++i) {
-      const Candidate& f = found[i];
-      const float dk = 2 * kPi / kCascadeLength[f.c];
-      BobWave b{};
-      b.kx = static_cast<float>(f.n) * dk;
-      b.kz = static_cast<float>(f.m) * dk;
-      const uint32_t n = static_cast<uint32_t>(f.n & 255), m = static_cast<uint32_t>(f.m & 255);
-      const uint32_t no = (256 - n) & 255, mo = (256 - m) & 255;
-      Gauss(n, m, static_cast<uint32_t>(f.c), &b.a0r, &b.a0i);
-      Gauss(no, mo, static_cast<uint32_t>(f.c), &b.a1r, &b.a1i);
-      b.a1i = -b.a1i;  // (conj)
-      b.w = static_cast<float>(f.c);  // (the square, until the amplitudes below)
-      bobWaves_.push_back(b);
-    }
-    // (the noise, without the amplitudes: those each frame)
+    pick_.running = true;
+    std::memcpy(pick_.sim, sim_, sizeof pick_.sim);
+    pick_.found.clear();
+    pick_.square = 0;
+    pick_.row = -BobReach(0);
   }
-  // each frame: the amplitudes as the sea is now, and the waves turned on to the clock
+  if (pick_.running) {
+    int rows = bobWaves_.empty() ? 1 << 30 : kBobRowsAFrame;
+    while (rows-- > 0 && pick_.square < 2) {
+      const int c = pick_.square, reach = BobReach(c);
+      const float dk = 2 * kPi / kCascadeLength[c];
+      const float from = BandFrom(c), to = std::min(BandTo(c), kBobShortest);
+      const int qm = pick_.row;
+      for (int qn = -reach; qn <= reach; ++qn) {
+        const float kx = static_cast<float>(qn) * dk, kz = static_cast<float>(qm) * dk, kl = std::sqrt(kx * kx + kz * kz);
+        if (kl < from || kl >= to || kl <= 0) continue;
+        float w;
+        const float a = BobAmplitude(pick_.sim, kx, kz, dk, &w), b = BobAmplitude(pick_.sim, -kx, -kz, dk, &w);
+        pick_.found.push_back({a * a + b * b, c, qn, qm});
+      }
+      if (++pick_.row > reach) {
+        ++pick_.square;
+        if (pick_.square < 2) pick_.row = -BobReach(pick_.square);
+      }
+    }
+    if (pick_.square >= 2) {  // (whole: the strongest kept)
+      pick_.running = false;
+      std::vector<BobPick::Candidate>& found = pick_.found;
+      const size_t keep = std::min(found.size(), static_cast<size_t>(kBobWaves));
+      std::partial_sort(found.begin(), found.begin() + static_cast<long>(keep), found.end(),
+                        [](const BobPick::Candidate& x, const BobPick::Candidate& y) { return x.energy > y.energy; });
+      bobWaves_.clear();
+      for (size_t i = 0; i < keep; ++i) {
+        const BobPick::Candidate& f = found[i];
+        const float dk = 2 * kPi / kCascadeLength[f.c];
+        BobWave b{};
+        b.kx = static_cast<float>(f.n) * dk;
+        b.kz = static_cast<float>(f.m) * dk;
+        b.square = f.c;
+        const uint32_t n = static_cast<uint32_t>(f.n & 255), m = static_cast<uint32_t>(f.m & 255);
+        const uint32_t no = (256 - n) & 255, mo = (256 - m) & 255;
+        Gauss(n, m, static_cast<uint32_t>(f.c), &b.a0r, &b.a0i);
+        Gauss(no, mo, static_cast<uint32_t>(f.c), &b.a1r, &b.a1i);
+        b.a1i = -b.a1i;  // (conj)
+        bobWaves_.push_back(b);
+      }
+      ampSim_[6] = -1;  // (their amplitudes worked out below)
+    }
+  }
+  // the amplitudes as the sea is now ([whitecaps] worked out again only when its numbers have moved by more than one in a
+  // hundred: as the sea eases toward a new roughness they move a little each frame, and the 1280 amplitudes took some
+  // 0.2 ms a frame), and the waves turned on to the clock each frame
+  auto moved = [](float x, float y) { return std::fabs(x - y) > 0.01f * std::max(std::fabs(x), std::fabs(y)); };
+  if (moved(sim_[6], ampSim_[6]) || moved(sim_[7], ampSim_[7]) || moved(sim_[11], ampSim_[11]) || moved(sim_[4], ampSim_[4]) ||
+      moved(sim_[5], ampSim_[5])) {
+    std::memcpy(ampSim_, sim_, sizeof ampSim_);
+    for (BobWave& b : bobWaves_) {
+      const float dk = 2 * kPi / kCascadeLength[b.square];
+      float wo;
+      b.amp = BobAmplitude(sim_, b.kx, b.kz, dk, &b.w);
+      b.ampOpp = BobAmplitude(sim_, -b.kx, -b.kz, dk, &wo);
+    }
+  }
   const float t = sim_[12];
   bobNow_.resize(bobWaves_.size());
   for (size_t i = 0; i < bobWaves_.size(); ++i) {
     const BobWave& b = bobWaves_[i];
-    const int c = static_cast<int>(b.w);
-    const float dk = 2 * kPi / kCascadeLength[c];
-    float w, wo;
-    const float a = amplitude(b.kx, b.kz, dk, &w), ao = amplitude(-b.kx, -b.kz, dk, &wo);
-    const float ph = w * t, ce = std::cos(ph), se = std::sin(ph);
+    const float ph = b.w * t, ce = std::cos(ph), se = std::sin(ph);
     // h = h0 e^(i w t) + conj(h0(-k)) e^(-i w t)
-    const float h0r = b.a0r * a, h0i = b.a0i * a, h1r = b.a1r * ao, h1i = b.a1i * ao;
+    const float h0r = b.a0r * b.amp, h0i = b.a0i * b.amp, h1r = b.a1r * b.ampOpp, h1i = b.a1i * b.ampOpp;
     bobNow_[i] = {b.kx, b.kz, h0r * ce - h0i * se + h1r * ce + h1i * se, h0r * se + h0i * ce + h1i * ce - h1r * se};
   }
 }
 
 bool Ocean::BobAt(float x, float z, float size, Bob* out) const {
   *out = Bob{};
-  if (!Lifted() || !map_ || bobNow_.empty()) return false;
+  if (!Riding() || !map_) return false;  // ([whitecaps] was Lifted(): never so where it was asked)
   // (as OceanLiftShare: none over shallow water; lakes are not told apart here)
   const float depth = level_ - map_->Height(std::clamp(x, 0.0f, mapW_), std::clamp(z, 0.0f, mapH_));
   const float share = std::clamp((depth - 0.6f) / 3.0f, 0.0f, 1.0f);

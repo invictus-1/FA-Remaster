@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "lighting.h"
+#include "ocean.h"
 #include "weather.h"
 
 namespace render {
@@ -293,7 +294,13 @@ float FloesOf(float2 xz, float size, uint salt, float share, float grain, out in
 }
 
 float4 PS(FloeOut i) : SV_Target {
+#if RIDE
+  // [whitecaps] (on the lifted waves, World::oceanLift: the floes read where the line of sight meets the lifted surface, as
+  // the place on the still water it rests on: they ride the waves; the sheet's depth stays the still water's)
+  float2 xz = OceanRideRest(cameraPosition, normalize(i.world - cameraPosition)).xz;
+#else
   float2 xz = i.world.xz;
+#endif
   float outside = HzOutside(xz);
   float grain = max(length(ddx(xz)), length(ddy(xz)));
   float ice = 0, shade = 0.5, edge = 1;
@@ -619,6 +626,9 @@ bool Horizon::Make() {
   tried_ = true;
   const std::string head = std::string(gSceneSamples > 1 ? "#define MSAA 1\n" : "#define MSAA 0\n") + "#define SAMPLES " + std::to_string(gSceneSamples) + "\n" +
                            kViewShaderBlock + kLightingShaderBlock + kCommon;
+  // [whitecaps] (the floes' variant that rides the lifted waves: made the first time it is wanted, DrawOnWater)
+  floeRideSource_ = std::string("#define MSAA ") + (gSceneSamples > 1 ? "1" : "0") + "\n#define SAMPLES " + std::to_string(gSceneSamples) + "\n#define RIDE 1\n" +
+                    kViewShaderBlock + kOceanRideShaderBlock + kLightingShaderBlock + kCommon + kFloes;
   std::string why;
   auto make = [&](const char* name, const std::string& source, bool depth, bool opaque, gfx::Pipeline* out) {
     gfx::PipelineDesc pd;
@@ -818,11 +828,34 @@ void Horizon::DrawSolid(const View& view) {
 
 void Horizon::DrawOnWater(const View& view) {
   if (!made_ || !onWater_) return;
-  device_->SetPipeline(floePipeline_);
+  // [whitecaps] on the lifted waves (ride, World::oceanLift): the floes' variant that rides them (made the first time)
+  if (ride && !floeRideTried_) {
+    floeRideTried_ = true;
+    gfx::PipelineDesc pd;
+    pd.name = "horizon: floes, riding the waves";
+    pd.vertexSource = pd.pixelSource = floeRideSource_;
+    pd.cull = gfx::Cull::None;
+    pd.depthTarget = pd.depthTest = true;
+    pd.depthWrite = false;
+    pd.blend = gfx::Blend::Premultiplied;
+    pd.colorFormat = kSceneFormat;
+    pd.samples = gSceneSamples;
+    pd.alphaWrite = false;
+    std::string why;
+    floeRide_ = device_->CreatePipeline(pd, &why);
+    if (!floeRide_) fprintf(stderr, "render: the weather on the horizon: the floes cannot ride the waves (%s)\n", why.c_str());
+  }
+  const bool riding = ride && floeRide_;
+  device_->SetPipeline(riding ? floeRide_ : floePipeline_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
   device_->SetConstants(1, &k_, sizeof k_);
   device_->SetTexture(0, noise_);
+  if (riding) {
+    device_->SetConstants(3, ride->RideConstants(), ride->RideConstantsSize());
+    ride->BindRide();
+  }
   device_->Draw(24);
+  if (riding) ride->UnbindRide();
 }
 
 void Horizon::DrawInAir(const View& view, gfx::Texture sceneDepth, gfx::Texture heights, float heightUnit) {

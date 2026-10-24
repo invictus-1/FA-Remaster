@@ -2087,11 +2087,41 @@ plus a swell, cascades, LEAN glitter, foam in camera-centred maps that drift and
   0.066 ms (rows 0.023, columns 0.012, levels 0.015, foam 0.014); the water's pass 0.45 (today) -> 0.50 (ocean) -> 0.57 ms
   (lifted) at 1440p; 4K: see the report table below. Memory: about 21 MB (three squares: the transforms' 32-bit sums, the fields and their levels; the foam's
   two 1024 x 1024 R16F).
-- **Open**: decals laid on the water (the campaign's objective areas), floating debris and the horizon's floes lie at the
-  flat level (a parallax of the waves' height, at most about 0.25 in a storm); lakes are not told apart by the processor's
-  bobbing (a hover unit on a lake bobs as at sea); the game's own wake emitters at the hull's bones follow the game's
-  place (a hull that rises 0.1 leaves its bow spray 0.1 lower). Readability in a storm: the busy sea competes with small
-  ships from far up; the foam's and the slopes' strength are tunable (`--ocean-foam`, `--ocean-tilt`).
+- **Open** (as first delivered; [whitecaps] below says what is done): decals laid on the water (the campaign's objective
+  areas), floating debris and the horizon's floes lie at the flat level (a parallax of the waves' height, at most about
+  0.25 in a storm); lakes are not told apart by the processor's bobbing (a hover unit on a lake bobs as at sea); the game's
+  own wake emitters at the hull's bones follow the game's place (a hull that rises 0.1 leaves its bow spray 0.1 lower).
+  Readability in a storm: the busy sea competes with small ships from far up; the foam's and the slopes' strength are
+  tunable (`--ocean-foam`, `--ocean-tilt`).
+- **[whitecaps] Crisper storm whitecaps, and the loose ends** (2026-10-23, a helper's, for review):
+  - *Why the storm's whitecaps were soft blobs*: the foam's field was read between its cells every frame (it drifts a
+    fraction of a cell a frame) and blurred along the wind every frame; over a storm's foam life (some 200 frames) that
+    spread each patch over some ten cells. Now the field drifts with the water in whole cells (the remainder added where
+    the water reads it) and is copied cell for cell: it stays as sharp as it was laid (read between cells only when the
+    camera's distance changes its cell). It holds two numbers: how much foam (fading over seconds, now 2 + 3.5 x the
+    roughness seconds to 1/e, was 1.5 + 2 x) and how fresh (fading in 0.45 s).
+  - *How they are drawn* (`OceanWhitecaps`, ocean.h): the crest breaking now where the surface folds at the pixel itself
+    (its Jacobian from the field's derivatives at the pixel's footprint), cut as hard as the pixel allows and torn by
+    the pattern, only where the field lays foam now (so the short waves' finer folds never salt the sea); the fresh foam
+    nearly whole; the residue cut from a pattern (ridged noise of three sizes, 0.13 .. 0.9 units across, drawn out five
+    times along the wind, drifting with the foam, over the lace) at a level that rises as it thins, so a patch tears into
+    streaks downwind and thins into lace, holed even where thick, see-through and greyer as it ages. Lit as the matt white
+    it is (the whole sun on the wave's face, not the water's 0.6), thicker and brighter in a patch's middle. Each size of
+    the pattern finer than about a pixel and a half is left at its mean and the cut softened by what it would vary: a
+    pixel shows its footprint's share of white, never a smear nor white points; past pixels of some 0.06 world units
+    the foam is dimmer and less (half by pixels of 0.26), so units read over it from high up. `--ocean-view 6` shows the three parts.
+  - *Loose ends*: what hangs on a riding hull's bones (its bow spray, its wake emitters) follows the hull drawn
+    (`Effects::drawnAt`, `World::RideWaves`); the bob set chosen again a few rows a frame instead of at once; the
+    pictures on the water (`Decals::ride`), the horizon's floes (`Horizon::ride`) and the debris's splash and sinking
+    (`Debris::waterRise`) on the lifted surface; the ocean's pipelines made on the device's own thread while it is off.
+    Found on the way: `Ocean::Lifted()` is known only from the ocean's Update on, after the units are drawn, so nothing had
+    bobbed; what floats now asks `Ocean::Riding()` (known from the frame's Begin, the long waves of the frame before).
+  - *Costs* (RTX 4090, storm, game camera 60 away, lifted, lowest of 300 frames, two runs, a busy PC): the foam's pass
+    the same (0.013 ms); the water's pass 0.68 -> 0.76 ms at 1440p, 1.39 -> 1.55 at 4K; the processor's frame about 0.1 ms
+    less (the bob set's amplitudes kept: 0.18 -> 0.015 ms a frame; choosing the set again 2.2 ms at once -> about 0.25 a
+    frame for some six frames, 0.4 the last).
+  - *Not changed*: the 1-pixel dark line along the map's edge over the sea is the classic edge's own line (the same with
+    the ocean off; none with `beyondLand`, as the game has it with its atmosphere setting).
 
 ## The options
 

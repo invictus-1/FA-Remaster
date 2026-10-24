@@ -115,6 +115,9 @@ class Debris {
   // The map (World::Open): the ground's height (not the water's), the water's level (none: very low), its size.
   std::function<float(float, float)> groundHeight;
   float waterLevel = -1e9f;
+  // [whitecaps] How far the lifted waves (World::oceanLift) stand over the water's level at a place in the picture (none: 0,
+  // the still water): a piece meets the water, splashes and begins to sink where the waves have the surface.
+  std::function<float(float, float)> waterRise;
   float mapWidth = 0, mapHeight = 0;
   int mostRubble = 1500;  // rubble kept lying; past it the oldest sinks away
   // how long rubble lies before it sinks away (seconds; 0: until there is more than mostRubble). The world keeps it

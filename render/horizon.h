@@ -35,6 +35,8 @@ namespace render {
 
 class Horizon {
  public:
+  // [whitecaps] The ocean whose lifted waves the floes ride (ocean.h; World sets it each frame; none: on the still water).
+  const class Ocean* ride = nullptr;
   explicit Horizon(gfx::Device* device) : device_(device) {}
 
   // What the weather is this frame, as the world has it (World::Begin).
@@ -83,6 +85,9 @@ class Horizon {
   gfx::Device* device_;
   bool tried_ = false, made_ = false;
   gfx::Pipeline bergPipeline_, floePipeline_, bankPipeline_, showerPipeline_;
+  gfx::Pipeline floeRide_;  // [whitecaps] (the floes riding the lifted waves: made the first time)
+  bool floeRideTried_ = false;
+  std::string floeRideSource_;
   gfx::Texture noise_;  // a tiling noise (two channels) the banks, the floes' outlines and the showers' streaks read
   static constexpr int kMostShowers = 16, kMostBergs = 16;
   struct Constants {

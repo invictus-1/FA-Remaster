@@ -121,6 +121,11 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
   effects.SetTracks(&tracks);
   effects.SetBlasts(&blasts);
   effects.isProp = [this](uint32_t id) { return IsProp(id); };  // [scars] (a flash made on a prop is no explosion)
+  // [whitecaps] (what hangs on a ship's bones follows its hull riding the lifted waves: as the unit's drawing, RideWaves)
+  effects.drawnAt = [this](const std::string& blueprint, const FrameUnit& u, const Model* model, Vec3* position, Quat* orientation) {
+    const bool building = blueprint.size() > 2 && (blueprint[2] == 'b' || blueprint[2] == 'B');
+    return !building && !u.dead && RideWaves(model, position, orientation);
+  };
   effects.SetBuild(&build);
   effects.SetExhausts(&exhausts);  // (unitsfx)
   tracks.deep = &trackField;  // (deep tracks: the prints go there while they are on)
@@ -548,6 +553,26 @@ void World::AddBrackets(int kind, Vec3 position, const Quat& orientation, const 
     const Vec3 at = position + Rotate(orientation, {sx * hx, 0, sz * hz});
     decals.AddMark(brackets_[kind][c], at, piece, piece, heading);
   }
+}
+
+// [lift] What floats rides the waves in the picture alone (ocean.h, Ocean::BobAt; World::oceanLift): a ship or a hover unit
+// on the water rises and falls with the long waves under it and pitches and rolls with their slopes. [whitecaps] Its hull,
+// shell, outline and lamps (the unit's drawing) and what hangs on its bones (Effects::drawnAt) are moved so. Not a building
+// nor a dead unit (the callers say). False: left where the game has it.
+bool World::RideWaves(const Model* model, Vec3* position, Quat* orientation) const {
+  if (!model || !model->ok || !water.ocean.Riding() || !haveMap_ || std::fabs(position->y - map.water.elevation) >= 0.5f) return false;
+  const Vec3 size = (model->boundsMax - model->boundsMin) * model->scale;
+  Ocean::Bob bob;
+  if (!water.ocean.BobAt(position->x, position->z, std::max({size.x, size.z, 0.5f}), &bob) || (bob.rise == 0 && bob.slopeX == 0 && bob.slopeZ == 0)) return false;
+  position->y += bob.rise;
+  // (turned from straight up to the surface's normal under it)
+  const Vec3 n = Normalize(Vec3{-bob.slopeX, 1, -bob.slopeZ});
+  const Vec3 axis = Cross(Vec3{0, 1, 0}, n);
+  Quat tilt{axis.x, axis.y, axis.z, 1 + n.y};
+  const float l = std::sqrt(tilt.x * tilt.x + tilt.y * tilt.y + tilt.z * tilt.z + tilt.w * tilt.w);
+  tilt = {tilt.x / l, tilt.y / l, tilt.z / l, tilt.w / l};
+  *orientation = Mul(tilt, *orientation);
+  return true;
 }
 
 void World::MarkOutline(const Model* model, Vec3 position, Vec3 color, bool building, uint32_t id, const StrategicIcons::Kind* kind) {
@@ -1286,6 +1311,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     const float rough = surfRoughness >= 0 ? surfRoughness : weatherOn ? std::clamp(0.15f + 0.85f * rain + 0.3f * snow, 0.0f, 1.0f) : 0.15f;
     water.ocean.Begin(time, oceanOn, sidePicture, rough, dust.wind);
     water.ocean.lift = oceanOn && oceanLift;  // [lift]
+    if (!sidePicture) effects.drawnMoves = water.ocean.Riding();  // [whitecaps] (the effects on a riding hull's bones ride with it)
     if (oceanOn) water.PrepareOcean(waterRipples, winterWater, surf, waterDetail, oceanLift);
   }
   // [stream] streams as water (stream_water.h): their props left out of the models' drawing while the streams' pass draws them
@@ -2267,20 +2293,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       // the game, its picking, its icon, its life bar and its wake stay where the game has it
       Vec3 drawAt = position;
       Quat drawTurn = orientation;
-      if (water.ocean.Lifted() && !sidePicture && !building && !u.dead && haveMap_ && std::fabs(position.y - map.water.elevation) < 0.5f) {
-        const Vec3 size = (model->boundsMax - model->boundsMin) * model->scale;
-        Ocean::Bob bob;
-        if (water.ocean.BobAt(position.x, position.z, std::max({size.x, size.z, 0.5f}), &bob) && (bob.rise != 0 || bob.slopeX != 0 || bob.slopeZ != 0)) {
-          drawAt.y += bob.rise;
-          // (turned from straight up to the surface's normal under it)
-          const Vec3 n = Normalize(Vec3{-bob.slopeX, 1, -bob.slopeZ});
-          const Vec3 axis = Cross(Vec3{0, 1, 0}, n);
-          Quat tilt{axis.x, axis.y, axis.z, 1 + n.y};
-          const float l = std::sqrt(tilt.x * tilt.x + tilt.y * tilt.y + tilt.z * tilt.z + tilt.w * tilt.w);
-          tilt = {tilt.x / l, tilt.y / l, tilt.z / l, tilt.w / l};
-          drawTurn = Mul(tilt, orientation);
-        }
-      }
+      if (!sidePicture && !building && !u.dead) RideWaves(model, &drawAt, &drawTurn);  // ([whitecaps] the effects on its bones too)
       Pose pose;
       pose.now = frame.bones.data() + u.firstBone;
       pose.nowCount = u.boneCount;
@@ -2669,6 +2682,15 @@ void World::PrepareAhead() {
     terrain.PrepareWet();
     if (!now) device_->EndBackgroundPipelines();
   }
+  // [whitecaps] the ocean's (World::oceanWaves, ocean.h): its compute pipelines and the water's ocean variants for the options
+  // on now, made on the device's own thread while it is off, so that switching it on never pauses for the driver (at once,
+  // World::Begin, while it is on). Nothing else of it is made while it is off (its fields, its foam: at its first frame).
+  if (map.water.present && !oceanWaves) {
+    device_->BeginBackgroundPipelines();
+    water.ocean.PreparePipelines();
+    water.PrepareOcean(waterRipples, winterWater, surf, waterDetail, oceanLift);
+    device_->EndBackgroundPipelines();
+  }
   // [snowhitch] the low plants under the snow ([undersnow]: the models' nine pipelines with UNDER_SNOW, made the first frame the
   // option is on with a time of day, as World::Render makes them): likewise on the device's own thread while no snow lies
   if (plantsUnderSnow && timeOfDay >= 0) {
@@ -2889,6 +2911,15 @@ void World::Render() {
     debris.rubbleLasts = battleScars ? 0.0f : 120.0f;  // (kept as the scorches are)
     debris.hot = hotOn_;            // (fresh pieces' torn faces glow with hot metal on)
     debris.smoke = &particles;      // (the biggest trail smoke)
+    // [whitecaps] (on the lifted waves: where they have the surface, as what floats rides them, Ocean::BobAt)
+    if (water.ocean.Riding()) {
+      debris.waterRise = [this](float x, float z) {
+        Ocean::Bob bob;
+        return water.ocean.BobAt(x, z, 0.3f, &bob) ? bob.rise : 0.0f;
+      };
+    } else {
+      debris.waterRise = nullptr;
+    }
     debris.Update(clock_, view.eye, &meshes, &blasts);
   }
   {  // the bones of posed models, once for all the frame's passes
@@ -3294,6 +3325,7 @@ void World::Render() {
     if (decals.AnyWater() && map.water.present && hide.find("decals") == std::string::npos) {
       post.BeginColorOnly();
       lights.Bind();
+      decals.ride = water.ocean.Lifted() ? &water.ocean : nullptr;  // [whitecaps] (on the lifted waves)
       decals.Draw(view, camera, post.Depth(), clock_, true);
       post.ContinueScene();
       lights.Bind();
@@ -3306,6 +3338,7 @@ void World::Render() {
     }
     if (horizonNow_) {  // [horizon] on the far sea: the floes and the clouds' shadows, then the fog banks and the showers
       Stage("horizon: on the water");
+      horizon.ride = water.ocean.Lifted() ? &water.ocean : nullptr;  // [whitecaps] (the floes on the lifted waves)
       horizon.DrawOnWater(view);
       Stage("horizon: in the air");
       post.BeginColorOnly();
