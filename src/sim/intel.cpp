@@ -234,7 +234,8 @@ ReconBlip* MakeBlip(Sim& sim, lua_State* L, Unit* u, bool fake = false) {
   b->army = u->army;
   b->id = sim.ReserveId(u->army, 0x3);
   b->fake = fake;
-  if (getenv("MOHO64_DEBUG_BLIP"))
+  static const bool dbgBlip = getenv("MOHO64_DEBUG_BLIP") != nullptr;  // (read once)
+  if (dbgBlip)
     Logf(LogLevel::Info, "blip %u id %#x of unit %#x%s", sim.tick(), b->id, u->id, fake ? " (fake)" : "");
   if (fake && u->intel) {
     const EntityIntel& ei = *u->intel;
@@ -366,7 +367,8 @@ ReconBlip* FindOrCreateFake(Sim& sim, lua_State* L, int a, Unit* u) {
   if (!b) {
     b = MakeBlip(sim, L, u, true);
     u->fakeBlips.push_back(b);
-    if (getenv("MOHO64_DEBUG_JAM"))
+    static const bool dbgJam = getenv("MOHO64_DEBUG_JAM") != nullptr;  // (read once)
+    if (dbgJam)
       Logf(LogLevel::Info, "jamnew %u army %d unit %u %s fake %u at %.2f %.2f", sim.tick(), a, u->id,
            u->blueprint ? u->blueprint->id.c_str() : "?", b->id, b->position.x, b->position.z);
   }
@@ -496,12 +498,16 @@ void ReconTick(Sim& sim, lua_State* L, int a) {
     for (uint32_t i = kept; i < jam; ++i) pending.push_back({u, f, true});
   };
   const Army* us = sim.armies()[static_cast<size_t>(a)].get();
+  const std::vector<bool>& visibleToRecon = BpCategoryMask(sim, "VISIBLETORECON");  // (BpInCategory, once)
   for (const auto& army : sim.armies()) {
     if (army.get() == us) continue;
     std::vector<Unit*> list = army->units;
     for (Unit* u : list) {
       if (u->destroyQueued) continue;
-      if (!BpInCategory(sim, u->blueprint, "VISIBLETORECON")) continue;
+      const BlueprintInfo* ubp = u->blueprint;
+      if (!ubp || ubp->entityIndex < 0 || static_cast<size_t>(ubp->entityIndex) >= visibleToRecon.size() ||
+          !visibleToRecon[static_cast<size_t>(ubp->entityIndex)])
+        continue;
       // ReconCanDetect at IUnit::GetPosition (0x5c10cb -> 0x6a49b0, entity+0xac): the transform committed at the end of
       // the last beat. Recon runs before Entity::AdvanceCoords (step 13), so a unit that has had its turn of this
       // beat's motion is looked at where it stood when the beat began. Seen: MP2 2305, army 0's Cybran build drone
@@ -513,7 +519,8 @@ void ReconTick(Sim& sim, lua_State* L, int a) {
       if (f && !inUse) {
         pending.push_back({u, f, false});
       } else if (f) {
-        if (getenv("MOHO64_DEBUG_JAM") && FlagOn(u, 9))
+        static const bool dbgJam = getenv("MOHO64_DEBUG_JAM") != nullptr;  // (read once)
+        if (dbgJam && FlagOn(u, 9))
           Logf(LogLevel::Info, "jamdbg %u army %d unit %u flags %d", sim.tick(), a, u->id, f);
         updateBlips(u, f);
       } else if (inUse) {

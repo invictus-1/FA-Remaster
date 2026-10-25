@@ -56,5 +56,20 @@ the original M28AI v326 and with this variant in FA Remastered and comparing the
    segment on every call (about 14 million times an hour, a walk down FAF's quadtree in Lua). The label of each
    segment is now kept and asked again only when the mesh is generated anew or the segment size or playable area
    change. `bVariantVerifyHoverLabel` is a test switch (off) that asks the mesh as well and logs any difference.
+5. **The engine's own helpers** (2026-10-24). FA Remastered, in a game with its script fixes on, offers a few
+   generic helpers of its own in the global table `Remastered` (the engine's code, not M28's). Where one gives exactly
+   the answers of a small M28 function, the variant uses it; on any other engine (`Remastered` missing) the Lua
+   function stays. `bVariantVerifyNative` (`lua/AI/M28Utilities.lua`) is a test switch (off) that runs both and logs
+   any difference.
+   - `IsTableEmpty` (`lua/AI/M28Utilities.lua`): `Remastered.MakeDeepEmptyCheck(5)`, the same deep check.
+   - `FunctionProfiler` (`lua/AI/M28Profiler.lua`): `Remastered.Noop` while no debug or profiling switch is on (the
+     Lua function does nothing then); `VariantRefreshProfiler` puts the Lua one back when the variant turns a switch
+     on. `bVariantVerifyNoop` is its test switch (off).
+   - `GetDistanceBetweenPositions` (`lua/AI/M28Utilities.lua`): `Remastered.VDist2Pos`, the same VDist2 of the same
+     four reads.
+6. **The walk along a shot** (2026-10-24, `IsLineBlocked` in `lua/AI/M28Logic.lua`, Lua only): the angle, its sine
+   and cosine and the shot's slope are worked out once per call instead of at every step, and no table is made per
+   step; each step does the same arithmetic in the same order. The original walk runs when debug messages are on, and
+   with `M28Utilities.bVariantVerifyNative` both run and any difference is logged.
 
 Every change in the Lua files is marked with a comment that starts "FA Remastered variant".

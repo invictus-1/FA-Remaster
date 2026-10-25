@@ -164,7 +164,8 @@ void UnitToggleScriptBit(Sim& sim, Unit* u, long bit) {
   bool clear = (u->scriptBits & m) != 0;
   if (clear) u->scriptBits &= ~m;
   else u->scriptBits |= m;
-  if (getenv("MOHO64_DEBUG_BITS")) {  // who toggles: tick, unit, bit, new value, the Lua callers
+  static const bool dbgBits = getenv("MOHO64_DEBUG_BITS") != nullptr;  // (read once)
+  if (dbgBits) {  // who toggles: tick, unit, bit, new value, the Lua callers
     lua_State* L = sim.L();
     std::string tb;
     lua_Debug ar;

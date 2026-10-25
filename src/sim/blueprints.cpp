@@ -110,11 +110,21 @@ struct Copier {
   }
 };
 
+// PushClassTable(L, "EntityCategory") (sim/script_object.cpp: moho[the class's Lua name], which for this class is
+// "EntityCategory" itself), without looking the class up: the category functions push it on every call.
+void PushCategoryClass(lua_State* L) {
+  lua_pushlstring(L, "moho", 4);
+  lua_rawget(L, LUA_GLOBALSINDEX);
+  lua_pushlstring(L, "EntityCategory", 14);
+  lua_rawget(L, -2);
+  lua_remove(L, -2);
+}
+
 uint64_t* NewCat(lua_State* L) {
   const size_t n = static_cast<size_t>(SimBlueprints::From(L)->CategoryWords());
   auto* w = static_cast<uint64_t*>(lua_newuserdata(L, sizeof(uint64_t) * n));
   std::memset(w, 0, sizeof(uint64_t) * n);
-  PushClassTable(L, "EntityCategory");
+  PushCategoryClass(L);
   lua_setmetatable(L, -2);
   return w;
 }
@@ -339,7 +349,7 @@ uint64_t* PushCategory(lua_State* L) { return NewCat(L); }
 const uint64_t* ToCategory(lua_State* L, int idx) {
   if (lua_type(L, idx) != LUA_TUSERDATA) return nullptr;
   if (!lua_getmetatable(L, idx)) return nullptr;
-  PushClassTable(L, "EntityCategory");
+  PushCategoryClass(L);
   bool ok = lua_rawequal(L, -1, -2);
   lua_pop(L, 2);
   return ok ? static_cast<const uint64_t*>(lua_touserdata(L, idx)) : nullptr;
@@ -373,6 +383,12 @@ SimBlueprints* SimBlueprints::From(lua_State* L) { return static_cast<SimBluepri
 
 const BlueprintInfo* SimBlueprints::Find(const std::string& id) const {
   auto it = byId_.find(Lower(id));
+  return it == byId_.end() ? nullptr : &all_[it->second];
+}
+const BlueprintInfo* SimBlueprints::Find(const char* id) const {  // (as Find(std::string(id)), one copy)
+  std::string s(id);
+  for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  auto it = byId_.find(s);
   return it == byId_.end() ? nullptr : &all_[it->second];
 }
 

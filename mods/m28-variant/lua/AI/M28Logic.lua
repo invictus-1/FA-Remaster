@@ -83,6 +83,55 @@ function GetDirectFireWeaponPosition(oFiringUnit)
     return tShotStartPosition
 end
 
+--FA Remastered variant: IsLineBlocked's walk along the shot, without debug messages. The original works out, at
+--every step, the angle from start to end, its radians, their sine and cosine and the shot's sine, from the same
+--positions each time, and makes a table for the point; these are worked out once here, with the same functions, and
+--each step does the same arithmetic in the same order (iXAdj = sin * step, iZAdj = -(cos * step), start + adj, the
+--surface height there, or the terrain height for antinavy), so every comparison sees the same numbers. Returns the
+--step at which the shot is blocked, or false. VariantFirstBlockedPointOriginal is the original's walk unchanged
+--(debug messages left out), for the test switch M28Utilities.bVariantVerifyNative.
+function VariantFirstBlockedPoint(tShotStartPosition, tShotEndPosition, iAngleInRadians, iEndPoint, bStartHigherThanEnd, bAntiNavy)
+    local iTheta = M28Utilities.ConvertAngleToRadians(M28Utilities.GetAngleFromAToB(tShotStartPosition, tShotEndPosition))
+    local iSinTheta = math.sin(iTheta)
+    local iCosTheta = math.cos(iTheta)
+    local iSinShot = math.sin(iAngleInRadians)
+    local iStartX = tShotStartPosition[1]
+    local iStartY = tShotStartPosition[2]
+    local iStartZ = tShotStartPosition[3]
+    local VariantGetHeight = GetSurfaceHeight
+    if bAntiNavy then VariantGetHeight = GetTerrainHeight end
+    local iXAdj, iZAdj, iHeight, iShotHeightAtPoint
+    for iPointToTarget = 1, iEndPoint do
+        iXAdj = iSinTheta * iPointToTarget
+        iZAdj = -(iCosTheta * iPointToTarget)
+        iHeight = VariantGetHeight(iStartX + iXAdj, iStartZ + iZAdj)
+        if bStartHigherThanEnd then iShotHeightAtPoint = iStartY - iSinShot * iPointToTarget
+        else iShotHeightAtPoint = iStartY + iSinShot * iPointToTarget
+        end
+        if iShotHeightAtPoint <= iHeight and (iShotHeightAtPoint < iHeight or not(bAntiNavy)) then
+            if not(iPointToTarget == iEndPoint and iShotHeightAtPoint == iHeight) then return iPointToTarget end
+        end
+    end
+    return false
+end
+
+function VariantFirstBlockedPointOriginal(tShotStartPosition, tShotEndPosition, iAngleInRadians, iEndPoint, bStartHigherThanEnd, bAntiNavy)
+    local tTerrainPositionAtPoint, iShotHeightAtPoint
+    for iPointToTarget = 1, iEndPoint do
+        tTerrainPositionAtPoint = M28Utilities.MoveInDirection(tShotStartPosition, M28Utilities.GetAngleFromAToB(tShotStartPosition, tShotEndPosition), iPointToTarget, false,              bAntiNavy,              false)
+        if bStartHigherThanEnd then iShotHeightAtPoint = tShotStartPosition[2] - math.sin(iAngleInRadians) * iPointToTarget
+        else iShotHeightAtPoint = tShotStartPosition[2] + math.sin(iAngleInRadians) * iPointToTarget
+        end
+        if iShotHeightAtPoint <= tTerrainPositionAtPoint[2] and (iShotHeightAtPoint < tTerrainPositionAtPoint[2] or not(bAntiNavy)) then
+            if not(iPointToTarget == iEndPoint and iShotHeightAtPoint == tTerrainPositionAtPoint[2]) then return iPointToTarget end
+        end
+    end
+    return false
+end
+
+iVariantVerifyLineChecks = 0
+iVariantVerifyLineMismatches = 0
+
 function IsLineBlocked(aiBrain, tShotStartPosition, tShotEndPosition, iAOE, bReturnDistanceThatBlocked, bAntiNavy)
     --If iAOE is specified then will end once reach the iAOE range
     --(aiBrain included as argument as want to retry CheckBlockingTerrain in the future)
@@ -106,6 +155,26 @@ function IsLineBlocked(aiBrain, tShotStartPosition, tShotEndPosition, iAOE, bRet
         local iShotHeightAtPoint
         if bDebugMessages == true then LOG(sFunctionRef..': About to check if at any point on path shot will be lower than terrain; iAngle='..M28Utilities.ConvertAngleToRadians(iAngleInRadians)..'; startshot height='..tShotStartPosition[2]..'; target height='..tShotEndPosition[2]..'; iFlatDistance='..iFlatDistance..'; bAntiNavy='..tostring(bAntiNavy or false)) end
         local iEndPoint = math.max(1, math.floor(iFlatDistance - (iAOE or 0)))
+        if not(bDebugMessages == true) then --FA Remastered variant: the same walk, its fixed parts worked out once
+            local iBlockedPoint = VariantFirstBlockedPoint(tShotStartPosition, tShotEndPosition, iAngleInRadians, iEndPoint, bStartHigherThanEnd, bAntiNavy)
+            if M28Utilities.bVariantVerifyNative then
+                local iOriginalPoint = VariantFirstBlockedPointOriginal(tShotStartPosition, tShotEndPosition, iAngleInRadians, iEndPoint, bStartHigherThanEnd, bAntiNavy)
+                iVariantVerifyLineChecks = iVariantVerifyLineChecks + 1
+                if not(iOriginalPoint == iBlockedPoint) then
+                    iVariantVerifyLineMismatches = iVariantVerifyLineMismatches + 1
+                    LOG('VERIFY MISMATCH IsLineBlocked original='..tostring(iOriginalPoint)..' variant='..tostring(iBlockedPoint)..' mismatches='..iVariantVerifyLineMismatches)
+                end
+                if math.mod(iVariantVerifyLineChecks, 50000) == 0 then LOG('VERIFY IsLineBlocked checks='..iVariantVerifyLineChecks..' mismatches='..iVariantVerifyLineMismatches) end
+                iBlockedPoint = iOriginalPoint
+            end
+            if iBlockedPoint then
+                bShotIsBlocked = true
+                if bReturnDistanceThatBlocked then
+                    M28Profiler.FunctionProfiler(sFunctionRef, M28Profiler.refProfilerEnd)
+                    return iBlockedPoint
+                end
+            end
+        else
         for iPointToTarget = 1, iEndPoint do
             --math.min(math.floor(iFlatDistance), math.max(math.floor(iStartDistance or 1),1)), math.floor(iFlatDistance) do
             --MoveTowardsTarget(tStartPos, tTargetPos, iDistanceToTravel, iAngle)
@@ -137,6 +206,7 @@ function IsLineBlocked(aiBrain, tShotStartPosition, tShotEndPosition, iAOE, bRet
                 end
             end
         end
+        end --FA Remastered variant: (the original walk, with debug messages)
     else bShotIsBlocked = false
     end
     M28Profiler.FunctionProfiler(sFunctionRef, M28Profiler.refProfilerEnd)

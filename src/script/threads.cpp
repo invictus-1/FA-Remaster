@@ -166,6 +166,7 @@ void ThreadScheduler::Fork(lua_State* caller, int fn, int nargs) {
   // another number for its Goal and its next turn came at 4889 instead of 4885.
   WakeSignalled();
   threads_.push_back(t);
+  byCo_[co] = &threads_.back();
 }
 
 void ThreadScheduler::PushCurrent(lua_State* L) {
@@ -212,22 +213,19 @@ bool ThreadScheduler::StillWaiting(Thread& t) {
 }
 
 bool ThreadScheduler::Kill(lua_State* co) {
-  for (auto& t : threads_)
-    if (t.co == co) {
-      t.dead = true;
-      return true;
-    }
-  return false;
+  const auto it = byCo_.find(co);
+  if (it == byCo_.end()) return false;
+  it->second->dead = true;
+  return true;
 }
 
 bool ThreadScheduler::Resume(lua_State* co) {
-  for (auto& t : threads_)
-    if (t.co == co && t.suspended) {
-      t.suspended = false;
-      t.wakeTick = tick_ + 1;
-      return true;
-    }
-  return false;
+  const auto it = byCo_.find(co);
+  if (it == byCo_.end() || !it->second->suspended) return false;
+  Thread& t = *it->second;
+  t.suspended = false;
+  t.wakeTick = tick_ + 1;
+  return true;
 }
 
 void ThreadScheduler::Step(Thread& t) {
@@ -396,6 +394,7 @@ void ThreadScheduler::RunTick(uint32_t tick) {
     }
     if (t.dead) {
       Release(t);
+      byCo_.erase(t.co);
       it = threads_.erase(it);
     } else {
       ++it;

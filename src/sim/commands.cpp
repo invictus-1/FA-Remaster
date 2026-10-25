@@ -1611,6 +1611,7 @@ void SetCommandEntityTarget(UnitCommand& c, Entity* e) {
 }  // namespace
 
 void SetCommandTargetFromStream(Sim& sim, UnitCommand& c, const StreamTarget& t) {
+  static const bool dbgBlip = getenv("MOHO64_DEBUG_BLIP") != nullptr;  // (read once)
   c.targetId = 0;
   c.targetPoint = -1;
   c.targetViaBlip = false;
@@ -1620,7 +1621,7 @@ void SetCommandTargetFromStream(Sim& sim, UnitCommand& c, const StreamTarget& t)
     if (Entity* e = sim.FindEntityById(t.entity)) {
       c.targetPoint = TargetPointDraw(sim, e);  // CAiTarget::UpdateTarget: a unit / unit blip draws
       SetCommandEntityTarget(c, e);
-    } else if (getenv("MOHO64_DEBUG_BLIP")) {
+    } else if (dbgBlip) {
       Logf(LogLevel::Info, "command %u: target entity %#x does not exist", sim.tick(), t.entity);
     }
   } else if (t.type == 2) {
@@ -2079,7 +2080,8 @@ std::shared_ptr<UnitCommand> IssueAutoAttack(Sim& sim, Unit* u, Entity* target, 
   c->targetPoint = TargetPointDraw(sim, target);
   c->issueTargetType = 1;
   c->issueTargetEntity = target->id;
-  if (getenv("MOHO64_DEBUG_AUTOATTACK"))
+  static const bool dbgAutoAttack = getenv("MOHO64_DEBUG_AUTOATTACK") != nullptr;  // (read once)
+  if (dbgAutoAttack)
     Logf(LogLevel::Info, "autoattack %u unit %u -> %u target point %d", sim.tick(), u->id, target->id, c->targetPoint);
   if (!u->commands.empty()) {
     ForgetUnitCommands(u);

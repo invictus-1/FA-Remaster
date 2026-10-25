@@ -18,6 +18,7 @@
 #include <cstring>
 #include <map>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -78,7 +79,9 @@ struct Cell {
 struct InfluenceMap {
   int army = -1;                  // +0x00 (0-based index)
   int W = 0, H = 0, cs = 32;      // +0x08, +0x0c, +0x10
-  std::map<uint32_t, int> cellOf;  // +0x14: blip id -> cell index
+  // +0x14: blip id -> cell index (the original's is a map; ours is only looked up, inserted and erased, never
+  // walked, so a hash gives the same answers)
+  std::unordered_map<uint32_t, int> cellOf;
   std::vector<Cell> cells;        // +0x20: cz * W + cx
 };
 

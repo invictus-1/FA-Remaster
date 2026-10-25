@@ -13,7 +13,15 @@ const char* kBoxMeta = "moho64.cobject";
 
 void RegisterObjectHandle(lua_State* L) {
   luaL_newmetatable(L, kBoxMeta);
+  // (the registry keeps the table for the state's life, so its address stays good; host pointer 3 is free: 0 the
+  // ScriptState, 1 the Sim, 2 the SimBlueprints)
+  lua_setextra(L, 3, const_cast<void*>(lua_topointer(L, -1)));
   lua_pop(L, 1);
+}
+
+bool IsObjectHandleMeta(lua_State* L, int idx) {
+  const void* meta = lua_getextra(L, 3);
+  return meta && lua_type(L, idx) == LUA_TTABLE && lua_topointer(L, idx) == meta;
 }
 
 ScriptObject::~ScriptObject() { UnbindLua(); }

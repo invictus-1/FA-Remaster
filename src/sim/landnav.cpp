@@ -636,8 +636,18 @@ bool TryAdvance(Sim& sim, Unit* u, LandNav& n) {
     bool ok1 = Reach(sim, u, n.cur, n.path[i]);
     // (0x5af946: for a neighbouring cell UnitClear 0x5af670 gets the cell twice, which is the test of the cell
     // itself, not of the way from the current cell to it; further cells get the line from the unit's position)
-    bool ok2 = Manhattan(n.path[i], n.cur) <= 1 ? !UnitInWay(sim, u, n.path[i], n.path[i], n.attackVariant ? 2 : 1)
-                                                : UnitClearTo(sim, u, n, n.path[i]);
+    // The original makes the unit test whatever Reach found (0x5af900 Reach, then 0x5af95d / 0x5af965), but reads it
+    // only with Reach's (0x5af96a..0x5af973: both, or neither and the fits / poke rule below), and the test changes
+    // nothing. So it is made only when Reach held; else the unit grid is made due here as the test would have made it
+    // (ForUnitsInRect), so later queries see the grid of the same moment. (B1 on 7a9f107: a crowd of pushed tanks
+    // tried up to 11 path points a beat, most of them far points Reach refused, each with a line test over hundreds
+    // of cells: 13.3 M UnitClearTo, navigators' execute 625 s against 128 s.)
+    bool ok2 = false;
+    if (ok1)
+      ok2 = Manhattan(n.path[i], n.cur) <= 1 ? !UnitInWay(sim, u, n.path[i], n.path[i], n.attackVariant ? 2 : 1)
+                                            : UnitClearTo(sim, u, n, n.path[i]);
+    else
+      sim.EnsureUnitGrid();
     if (Dbg())
       Logf(LogLevel::Info, "nav: tick %u unit %u advance? i %d (%d,%d) from (%d,%d) reach %d clear %d fits %d lo %d hi %d",
            sim.tick(), u->id, i, n.path[i].x, n.path[i].z, n.cur.x, n.cur.z, ok1 ? 1 : 0, ok2 ? 1 : 0, n.fits ? 1 : 0, lo, hi);

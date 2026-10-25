@@ -259,6 +259,9 @@ Vec3 EntityVelocity(const Entity* e);
 void BoneWorld(const Entity* e, int bone, Vec3* pos, Quat* rot);
 // Whether the blueprint is in a named category (BENIGN, COMMAND, ...).
 bool BpInCategory(Sim& sim, const BlueprintInfo* bp, const char* name);
+// BpInCategory's answer for every blueprint index at once (the same cached vector; the reference stays good for
+// the sim's life): BpInCategory(bp) == bp && bp->entityIndex >= 0 && index < size && mask[index].
+const std::vector<bool>& BpCategoryMask(Sim& sim, const char* name);
 
 // Called when a unit's weapon was created (after its OnCreate).
 void InitUnitWeapon(lua_State* L, UnitWeapon* w);

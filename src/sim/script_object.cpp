@@ -5,6 +5,8 @@
 #include <map>
 #include <mutex>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include "core/log.h"
@@ -67,9 +69,14 @@ const BindingName kBindings[] = {
 };
 
 const ClassInfo* FindClass(const char* cpp) {
-  for (const auto& c : kClasses)
-    if (std::strcmp(c.cpp, cpp) == 0) return &c;
-  return nullptr;
+  // (the first of kClasses with that name, as the walk of the list found it; made once, read only after)
+  static const std::unordered_map<std::string_view, const ClassInfo*> byName = [] {
+    std::unordered_map<std::string_view, const ClassInfo*> m;
+    for (const auto& c : kClasses) m.emplace(c.cpp, &c);
+    return m;
+  }();
+  const auto it = byName.find(cpp);
+  return it == byName.end() ? nullptr : it->second;
 }
 
 std::map<std::string, int>& StubCounts() {  // (the process's: each stub logged once; under StubMutex)

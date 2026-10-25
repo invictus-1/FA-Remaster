@@ -66,6 +66,7 @@ class SimBlueprints {
   void CopyToSim(lua_State* rules, lua_State* sim);
 
   const BlueprintInfo* Find(const std::string& id) const;
+  const BlueprintInfo* Find(const char* id) const;
   // An effect blueprint by its id (lower case, as Find), or nullptr.
   const EffectBlueprint* FindEffect(const std::string& id) const;
   const BlueprintInfo* ByEntityIndex(int i) const { return entities_[i]; }

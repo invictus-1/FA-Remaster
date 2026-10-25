@@ -172,6 +172,9 @@ struct UnitMotion {
   uint32_t colTick = 0xffffffffu;
   Vec3 sideStep;           // st+0x84
   bool surfaceNext = false;  // m+0x90: process contacts next tick (set by AddImpulse)
+  // This beat's MotionTick ended without CUnitMotion::MoveTo 0x6b92e0 (so without its normalising of the quaternion):
+  // state 3 at rest (0x6ba1ca), or held, immobile / stunned, unless a layer blend frame is applied (0x6ba00d..0x6ba065)
+  bool noMoveTo = false;
   // m+0x178: what the last contact pass found under the unit's box (EntityRefs; emptied when a pass starts, also one
   // that stops early), and m+0x114: the raised platform the last search picked from it (SnapToGround stands on it)
   std::vector<uint32_t> contacts;

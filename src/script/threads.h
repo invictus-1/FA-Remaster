@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <list>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "script/lua.hpp"
@@ -61,6 +62,11 @@ class ThreadScheduler {
   };
   lua_State* L_;
   std::list<Thread> threads_;
+  // Each listed thread by its coroutine, for Kill and Resume (they walked the list: 30-40 us a call against tens of
+  // thousands of threads). A coroutine is in the list at most once: its entry holds a registry reference to it
+  // until the entry is erased, so its lua_State cannot be collected and reused meanwhile. (std::list keeps the
+  // nodes in place through splice, so the pointers stay good until the erase.)
+  std::unordered_map<lua_State*, Thread*> byCo_;
   // the threads that have had a WaitFor event since WakeSignalled last looked (a few at a time, against thousands of
   // threads): WakeSignalled, now called at every Fork, walks the whole list only when one of them is signalled
   std::vector<Thread*> waiters_;

@@ -548,6 +548,25 @@ LUA_API void lua_gpg_rawgetstr (lua_State *L, int idx, const char *k) {
 }
 
 
+LUA_API void lua_gpg_checkgc (lua_State *L) {
+  lua_lock(L);
+  luaC_checkGC(L);
+  lua_unlock(L);
+}
+
+
+LUA_API void lua_gpg_setnum3 (lua_State *L, int idx, lua_Number a, lua_Number b, lua_Number c) {
+  Table *t;
+  lua_lock(L);
+  t = hvalue(luaA_index(L, idx));
+  setnvalue(luaH_setnum(L, t, 1), a);
+  setnvalue(luaH_setnum(L, t, 2), b);
+  setnvalue(luaH_setnum(L, t, 3), c);
+  luaC_barriert(L, t);
+  lua_unlock(L);
+}
+
+
 LUA_API void lua_rawgeti (lua_State *L, int idx, int n) {
   StkId o;
   lua_lock(L);

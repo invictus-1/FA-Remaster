@@ -1047,7 +1047,17 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
       c.reclaimPerTick[kMass] = mass * c.reclaimStep;
       u->unitStates.insert("Reclaiming");
       u->focusId = EntityRef(e);
-      if (e->maxHealth > 0) e->fractionComplete = std::min(e->fractionComplete, e->health / e->maxHealth);
+      // 0x61fccd..0x61fd41: m = min(fraction, health / MaxHealth) (0x4178c0), then 0x678e20 with the CHANGE m - fraction:
+      // fraction + (m - fraction), clamped to [0, 1], nothing when the change is 0. Two roundings, so a damaged wreck
+      // starts one float step above health / MaxHealth now and then. Seen: MP1 3907, army 5's 0x400000 on wreck
+      // 0x2ff00006 (health 63 of 153): 1 + (0.411764711 - 1) = 0.411764741; its last step at 3910 pays 4.8322506
+      // mass (ours 4.8322492), the army's mass income 8.93225002 vs 8.93224812 at 3911. MP2 5832, wreck 0x2ff00553
+      // (4 / 27): the same.
+      if (e->maxHealth > 0) {
+        const float m = std::min(e->fractionComplete, e->health / e->maxHealth);
+        const float d = m - e->fractionComplete;
+        if (d != 0.0f) e->fractionComplete = std::clamp(e->fractionComplete + d, 0.0f, 1.0f);
+      }
       c.state = 4;
       return kTaskRunning;
     }
@@ -1063,7 +1073,17 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
         PushObject(L, e);
         sim.CallMethod(L, u, "OnStartReclaim", 1);
       }
-      if (u->paused) return kTaskRunning;
+      // The task has no pause test of its own (no unit+0x2a0 read in 0x61f000). FAF's patch at the prop step
+      // (0x61ff7b -> 0x1291916, undone at 0x620071 -> 0x129196f) does, for a PROP: with the builder paused the
+      // step is -1e-8 (0xb22bcc77) and both per-tick amounts 0 for that beat, so a paused engineer's prop still
+      // loses one float step or so a beat and pays nothing. Seen: Skirmish 2963-2971, army 5's engineer 0x40000d
+      // paused on a rock (804262534) at 0.25 left: the original's fraction 9 steps lower when it resumes, its last
+      // step at 2974 pays 4.9999886 energy (ours 5.0), the army's energy income 55.9999886 vs 56 at 2975. (A UNIT
+      // target while paused: ours keeps returning here; not read.)
+      const bool pausedProp = u->paused && !tu;
+      if (u->paused && !pausedProp) return kTaskRunning;
+      const float step = pausedProp ? 9.99999994e-09f : c.reclaimStep;  // (the patch's -1e-8, sign as ours)
+      const float perTick[2] = {pausedProp ? 0.0f : c.reclaimPerTick[0], pausedProp ? 0.0f : c.reclaimPerTick[1]};
       float k = u->request ? u->request->LimitingRate() : 1.0f;
       float old = e->fractionComplete;
       float f;
@@ -1089,15 +1109,15 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
         // 1.0714 E 0.1071 M, ours paid 0.2009 E 0.0201 M, 0.1875 = 3/16 times less again (inferred: its group had 3
         // of 16 steps left when it split, and ours had brought the group's health down with its fraction, so the
         // script's ReclaimLeft was 0.1875 x 0.1875). Its ally army 5 gets half of army 3's overflowing energy.
-        f = std::clamp(old - c.reclaimStep * k, 0.0f, 1.0f);
+        f = std::clamp(old - step * k, 0.0f, 1.0f);
         e->fractionComplete = f;
       }
       float taken = old - f;
       u->workProgress = 1.0f - f;
-      if (u->army && c.reclaimStep > 0) {
-        float q = taken / c.reclaimStep;
+      if (u->army && step > 0) {
+        float q = taken / step;
         for (int i = 0; i < 2; ++i) {
-          float got = q * c.reclaimPerTick[i];
+          float got = q * perTick[i];
           u->army->econ.income[i] += got;
           u->army->econ.reclaimed[i] += got;
         }

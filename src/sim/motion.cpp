@@ -1912,8 +1912,10 @@ void MotionTick(Sim& sim, Unit* u) {
   // where a dead unit's fall ends (CalcMoveBallistic 0x6c0bdc, LandBallisticTick). Seen: MP1 6056, army 4's nine
   // dead xsl0103 (hover artillery killed with their transport) land in the water: the original's stay as they came
   // down, tilted, at 17.5; ours went on as dead hovers, wobbled and were set level on the water (17.61) at 6057.
+  m.noMoveTo = false;
   if (m.atRest) {
     m.lastMove = {};
+    m.noMoveTo = true;
     return;
   }
   if (m.ballistic) {  // dropped from a transport: falls (also when dead)
@@ -1982,6 +1984,8 @@ void MotionTick(Sim& sim, Unit* u) {
       if (!held || m.layerBlend != 0.0f) {
         u->position = np;
         u->orientation = nq;
+      } else {
+        m.noMoveTo = true;
       }
       m.lastMove = {u->position.x - start.x, u->position.y - start.y, u->position.z - start.z};
       if (!u->beingBuilt) ProcessCommonMotionState(sim, u, false);
@@ -2012,6 +2016,7 @@ void MotionTick(Sim& sim, Unit* u) {
       m.fz = fz0;
       m.prevPos = start;
       m.lastMove = {};
+      m.noMoveTo = true;
       if (!u->beingBuilt) ProcessCommonMotionState(sim, u, common);
       return;
     }

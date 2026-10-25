@@ -360,7 +360,8 @@ void UpdateTracking(Sim& sim, Projectile* p, Quat& q, Vec3& v) {
                    : viaBlip                                ? (blipUnit != nullptr || blip != nullptr)
                                                             : HasTarget(sim, p->target);
   if (!has) {
-    if (getenv("MOHO64_DEBUG_PROJ")) Logf(LogLevel::Info, "pdbg %u %u OnLostTarget", sim.tick(), p->id);
+    static const bool dbgProj = getenv("MOHO64_DEBUG_PROJ") != nullptr;  // (read once)
+    if (dbgProj) Logf(LogLevel::Info, "pdbg %u %u OnLostTarget", sim.tick(), p->id);
     sim.CallMethod(sim.L(), p, "OnLostTarget", 0);
     p->trackTarget = false;
     if (!p->homeLastPos) return;
@@ -447,7 +448,8 @@ void UpdateTracking(Sim& sim, Projectile* p, Quat& q, Vec3& v) {
       float oy = static_cast<float>(sim.FRand(-Z, Z));
       float oz = static_cast<float>(sim.FRand(-Z, Z));
       p->zigOffset = {ox, oy, oz};
-      if (getenv("MOHO64_DEBUG_PROJ")) {
+      static const bool dbgProj = getenv("MOHO64_DEBUG_PROJ") != nullptr;  // (read once)
+      if (dbgProj) {
         const Entity* e0 = p->target.entityId ? sim.FindEntity(p->target.entityId) : nullptr;
         const Unit* tu = e0 && e0->kind == Entity::Kind::Unit ? static_cast<const Unit*>(e0) : nullptr;
         Logf(LogLevel::Info, "pdbg %u %u zigzag (launcher %u, target unit %d%s, dead %d destroy queued %d)", sim.tick(),
@@ -1268,7 +1270,8 @@ int l_SetDestroyOnWater(lua_State* L) {
 }
 int l_SetLifetime(lua_State* L) {
   Projectile* p = P(L);
-  if (getenv("MOHO64_DEBUG_PROJ"))
+  static const bool dbgProj = getenv("MOHO64_DEBUG_PROJ") != nullptr;  // (read once)
+  if (dbgProj)
     Logf(LogLevel::Info, "pdbg %u %u SetLifetime %.3f (was until %u)", S(L)->tick(), p->id, lua_tonumber(L, 2), p->expireTick);
   p->expireTick = S(L)->tick() + static_cast<uint32_t>(std::max(0.0, static_cast<double>(std::nearbyint(luaL_checknumber(L, 2) * 10))));
   return Self(L);
@@ -1292,7 +1295,8 @@ int l_SetNewTarget(lua_State* L) {
   // (a draw when it is a unit with target bones). FAF's Projectile.RetargetThread comes here a beat after a
   // homing shell lost its target, with what its weapon aims at now: one draw per torpedo of a salvo.
   p->target.aimBone = TargetPointBone(*S(L), e);
-  if (getenv("MOHO64_DEBUG_PROJ")) {  // who gives a shell a new target, and from which script line
+  static const bool dbgProj = getenv("MOHO64_DEBUG_PROJ") != nullptr;  // (read once)
+  if (dbgProj) {  // who gives a shell a new target, and from which script line
     luaL_where(L, 1);
     const std::string at1 = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
     luaL_where(L, 2);

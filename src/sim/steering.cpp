@@ -514,7 +514,10 @@ void ProcessSurfaceCollision(Sim& sim, Unit* u) {
       hz += std::fabs(box.ax[i].z) * hs[i];
     }
   }
-  std::vector<Entity*> cand;
+  // (the candidates live in a buffer kept from call to call: they are all read before DoCollisionsFor, the only
+  // step here that can lead to another unit's ProcessSurfaceCollision)
+  static thread_local std::vector<Entity*> cand;
+  cand.clear();
   Vec3 amn, amx;
   if (withProps) {
     BoxAabb(box, &amn, &amx);

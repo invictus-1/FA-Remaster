@@ -33,6 +33,7 @@
 #include "core/profile.h"
 #include "core/workers.h"
 #include "core/vfs.h"
+#include "script/fastlib.h"
 #include "script/script_state.h"
 #include "script/threads.h"
 #include "sim/commands.h"
@@ -465,7 +466,8 @@ int l_Random(lua_State* L) {
     if (lua_getstack(L, 1, &ar) && lua_getinfo(L, "Sl", &ar))
       Logf(LogLevel::Info, "rnglua %u %s:%d n%d %g %g", sim->tick(), ar.short_src, ar.currentline, n,
            n >= 1 ? lua_tonumber(L, 1) : 0.0, n >= 2 ? lua_tonumber(L, 2) : 0.0);
-    if (getenv("MOHO64_DEBUG_RNGTB")) {
+    static const bool dbgRngTb = getenv("MOHO64_DEBUG_RNGTB") != nullptr;  // (read once)
+    if (dbgRngTb) {
       std::string tb;
       for (int lv = 1; lv < 24 && lua_getstack(L, lv, &ar); ++lv)
         if (lua_getinfo(L, "Sl", &ar)) tb += std::string(" < ") + ar.short_src + ":" + std::to_string(ar.currentline);
@@ -1105,6 +1107,9 @@ bool Sim::Start(const ReplayHeader& replay) {
   RegisterThreatBindings(L);
   RegisterBrainBindings(L);
   RegisterAiBuildBindings(L);
+  // The engine's own generic helpers (script/fastlib.h), only with the fixes: a playback of the original's replays
+  // keeps the original's globals.
+  if (fixes) RegisterRemasteredLib(L);
   SetModsGlobal(*state_);
   // The user layer's language (prefs 'options_overrides.language', default '') - set by the engine.
   lua_pushstring(L, "");
@@ -1393,6 +1398,7 @@ void Sim::SignalEvent(const ScriptObject* o) {
 void Sim::QueueDestroy(Entity* e) {
   if (e->destroyQueued) return;
   e->destroyQueued = true;
+  ++destroysQueued_;
   destroyQueue_.push_back(e);
 }
 
@@ -1429,6 +1435,7 @@ void Sim::ProcessDestroyQueue() {
     }
     CallMethod(L, e, "OnDestroy", 0);
     entities_.erase(e->handle);
+    if (e->handle < byHandle_.size()) byHandle_[e->handle] = nullptr;
     byId_.erase(e->id);
     if (e->kind != Entity::Kind::Projectile) goneIds_[e->handle] = e->id;
     ReleaseEntityIntel(*this, e);
@@ -2408,8 +2415,9 @@ void Sim::Tick() {
       // link gone the unit is no longer attached (CUnitMotion::MotionTick 0x6b9d26: vt+0x34 false), so the full
       // motion tick runs and ends in MoveTo, from where it stands. Seen: Naval 448 and 553, wrecks 0x1b and 0x4e on
       // FAF's sinker when the shell is gone at the sea floor: the original's four parts one float step smaller,
-      // exactly ours normalised, the place the same.
-      if (u->motion.bp && u->motion.bp->mobile() && !u->beingBuilt && u->motion.bp->motionType != kMotionAir) {
+      // exactly ours normalised, the place the same. Aircraft too (their motion's MoveTo, AirMotionTick's, does the
+      // same): AIR 406 and 437, dead aircraft 0x17 and 0x100010 on the sinker shell, the same one step.
+      if (u->motion.bp && u->motion.bp->mobile() && !u->beingBuilt) {
         Quat& q = u->orientation;
         const float len = std::sqrt(((q.w * q.w + q.x * q.x) + q.y * q.y) + q.z * q.z);
         if (len > 9.99999997e-07f) {
@@ -2428,7 +2436,11 @@ void Sim::Tick() {
       // length (0x4edaa0). Without it a hovering unit's orientation, re-tilted from itself every beat, creeps off.
       // (Not for aircraft: AirMotionTick has done its own MoveTo; a third normalising after the rotation step's and
       // that one moves the last bits back: Transports replay, tick 63.)
-      if (u->motion.bp && u->motion.bp->mobile() && !u->beingBuilt && u->motion.bp->motionType != kMotionAir) {
+      // (Not where the motion tick ended without MoveTo: a unit held immobile or stunned, 0x6ba00d..0x6ba055, or at
+      // rest, 0x6ba1ca. Seen: LAND 1642, 1646, 1653, three units standing held (0x25, 0x21, 0x8): the original's
+      // quaternion stays as it was; ours, normalised every beat, went back and forth between two last bits.)
+      if (u->motion.bp && u->motion.bp->mobile() && !u->beingBuilt && u->motion.bp->motionType != kMotionAir &&
+          !u->motion.noMoveTo) {
         Quat& q = u->orientation;
         const float len = std::sqrt(((q.w * q.w + q.x * q.x) + q.y * q.y) + q.z * q.z);
         if (len > 9.99999997e-07f) {

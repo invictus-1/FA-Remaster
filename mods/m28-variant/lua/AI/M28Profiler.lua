@@ -149,6 +149,38 @@ function FunctionProfiler(sFunctionRef, sStartOrEndRef)
     end
 end
 
+--FA Remastered variant: with no debug or profiling switch on, FunctionProfiler above does nothing (it leaves at once),
+--so on FA Remastered with its script fixes on it is the engine's Remastered.Noop instead (a C call, a third of the cost
+--of a Lua one). VariantRefreshProfiler puts the Lua function back as soon as a switch is on: it runs at load and right
+--after each place in the variant that sets one (M28Overseer's tick checker). Every caller reads
+--M28Profiler.FunctionProfiler at each call, so the change takes effect at once. bVariantVerifyNoop (a test switch,
+--off) installs a Lua stand-in that logs a call made while a switch is on and Noop still installed.
+FunctionProfilerLua = FunctionProfiler
+bVariantVerifyNoop = false
+iVariantVerifyNoopCalls = 0
+iVariantVerifyNoopMismatches = 0
+function VariantRefreshProfiler()
+    local tNative = rawget(_G, 'Remastered')
+    if tNative and tNative.Noop and not(bGlobalDebugOverride == true or bFunctionCallDebugOverride or M28Config.M28RunProfiling) then
+        if bVariantVerifyNoop then
+            FunctionProfiler = function(sFunctionRef, sStartOrEndRef)
+                iVariantVerifyNoopCalls = iVariantVerifyNoopCalls + 1
+                if bGlobalDebugOverride == true or bFunctionCallDebugOverride or M28Config.M28RunProfiling then
+                    iVariantVerifyNoopMismatches = iVariantVerifyNoopMismatches + 1
+                    LOG('VERIFY MISMATCH FunctionProfiler: a switch is on while Noop is installed, mismatches='..iVariantVerifyNoopMismatches)
+                    return FunctionProfilerLua(sFunctionRef, sStartOrEndRef)
+                end
+                if math.mod(iVariantVerifyNoopCalls, 10000000) == 0 then LOG('VERIFY FunctionProfiler calls='..iVariantVerifyNoopCalls..' mismatches='..iVariantVerifyNoopMismatches) end
+            end
+        else
+            FunctionProfiler = tNative.Noop
+        end
+    else
+        FunctionProfiler = FunctionProfilerLua
+    end
+end
+VariantRefreshProfiler()
+
 function ProfilerActualTimePerTick()
     if M28Config.M28RunProfiling and not(bActiveProfiler) then
         bActiveProfiler = true

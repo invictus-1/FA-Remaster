@@ -8,8 +8,10 @@
 // "<blueprint dir>/<name>_script.lua" with class TypeClass, else the kind's default
 // (/lua/sim/unit.lua Unit, /lua/sim/prop.lua Prop, /lua/sim/projectile.lua Projectile).
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #include "core/backtrace.h"
 #include "core/dmath.h"
@@ -602,11 +604,7 @@ int l_GetPosition(lua_State* L) {  // (bone?) the entity's or a bone's world pos
     return 1;
   }
   lua_rawgeti(L, LUA_REGISTRYINDEX, e->positionRef);
-  const float v[3] = {sp.x, sp.y, sp.z};
-  for (int i = 0; i < 3; ++i) {
-    lua_pushnumber(L, v[i]);
-    lua_rawseti(L, -2, i + 1);
-  }
+  lua_gpg_setnum3(L, -1, sp.x, sp.y, sp.z);  // (t[1], t[2], t[3] as three pushnumber + rawseti: the same stores)
   return 1;
 }
 int l_GetPositionXYZ(lua_State* L) {
@@ -696,7 +694,8 @@ int l_BeenDestroyed(lua_State* L) {
   return 1;
 }
 int l_Destroy(lua_State* L) {
-  if (getenv("MOHO64_DEBUG_DESTROY")) {
+  static const bool dbgDestroy = getenv("MOHO64_DEBUG_DESTROY") != nullptr;  // (read once)
+  if (dbgDestroy) {
     Entity* de = ToObject<Entity>(L, 1);
     lua_Debug ar;
     std::string tb;
@@ -999,10 +998,45 @@ int l_GetWeapon(lua_State* L) {
 // the parse itself (0x6c6e02) and does NOTHING for such a name (0x6c6e06 -> 0x6c6e64: no error); the state's bit
 // is 1 << value (0x6c6e2a, u+0x4a0). Ours keeps the states by their names: a value without a name (a number or
 // names or-ed) is no state here.
+// The state a name asks for, as EnumNameOf(kEnumUnitState, EnumValue(name)) gives it, as an index into
+// kUnitStateNames (-1: none). The parse (a scan of 45 names without case) is remembered per name: a small table by
+// the string's address, each entry checked against its own copy of the text (so a string that was collected and
+// whose address now holds another one is parsed again). A name the parse refuses is never remembered: EnumValue
+// raises its error as before. Per thread (two sims of one process run side by side).
+int UnitStateIndex(lua_State* L, const char* name) {
+  struct Entry {
+    const char* at = nullptr;
+    std::string text;
+    int index = -1;
+  };
+  static thread_local Entry cache[64];
+  Entry& c = cache[(reinterpret_cast<uintptr_t>(name) >> 4) & 63];
+  if (c.at == name && c.text == name) return c.index;
+  const char* state = EnumNameOf(kEnumUnitState, EnumValue(L, kEnumUnitState, name));
+  int index = -1;
+  for (int i = 0; state && i < kEnumUnitState.count; ++i)
+    if (kEnumUnitState.names[i].name == state) {
+      index = i;
+      break;
+    }
+  c.at = name;
+  c.text = name;
+  c.index = index;
+  return index;
+}
+// The names as std::strings, made once: unitStates.count(name) without a temporary string per call.
+const std::string& UnitStateString(int index) {
+  static const std::vector<std::string> names = [] {
+    std::vector<std::string> v;
+    for (int i = 0; i < kEnumUnitState.count; ++i) v.emplace_back(kEnumUnitState.names[i].name);
+    return v;
+  }();
+  return names[static_cast<size_t>(index)];
+}
 int l_IsUnitState(lua_State* L) {
   const char* name = luaL_checkstring(L, 2);
-  const char* state = EnumNameOf(kEnumUnitState, EnumValue(L, kEnumUnitState, name));
-  lua_pushboolean(L, state && U(L)->unitStates.count(state) > 0);
+  const int index = UnitStateIndex(L, name);  // (before U(L): a bad name's error comes first, as before)
+  lua_pushboolean(L, index >= 0 && U(L)->unitStates.count(UnitStateString(index)) > 0);
   return 1;
 }
 int l_SetUnitState(lua_State* L) {
@@ -1608,11 +1642,6 @@ bool Sim::CallMethod(lua_State* L, ScriptObject* obj, const char* method, int na
   return ok;
 }
 
-Entity* Sim::FindEntity(uint32_t id) const {
-  auto it = entities_.find(id);  // a handle (EntityRef)
-  return it == entities_.end() ? nullptr : it->second;
-}
-
 namespace {
 // The layer a unit starts on (Entity::GetStartingLayer 0x62ad30; `want` = the construction params' layer, 0 =
 // choose). The footprint's caps decide, not the motion type: an EXPERIMENTAL aircraft starts on Land (it appears on
@@ -1688,7 +1717,8 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   u->motion.bp = &GetMotionBlueprint(L, bp, bps_);
   sec.To(-1);
   u->motion.surfaceNext = true;
-  if (getenv("MOHO64_DEBUG_CREATE"))
+  static const bool dbgCreate = getenv("MOHO64_DEBUG_CREATE") != nullptr;  // (read once)
+  if (dbgCreate)
     Logf(LogLevel::Info, "create %u unit %u bp %s pos %.2f %.2f motion %d", tick_, u->id, bp.id.c_str(), u->position.x, u->position.z, u->motion.bp->motionType);  // CUnitMotion ctor: m+0x90 = 1, so the first MotionTick processes contacts (0x6b7c9a)
   sec.To(prof::kSecCuPlace);
   const uint8_t startLayer = StartingLayer(*this, bp, map_.get(), pos, wantLayer);

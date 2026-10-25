@@ -637,8 +637,7 @@ void PoseRotate(Entity* e, int bone, const Quat& q) {
   l = ComposeQ(l, q);
 }
 
-bool BpInCategory(Sim& sim, const BlueprintInfo* bp, const char* name) {
-  if (!bp || bp->entityIndex < 0) return false;
+const std::vector<bool>& BpCategoryMask(Sim& sim, const char* name) {
   static const SimCache<std::map<std::string, std::vector<bool>>> cacheSlot;  // (over the sim's blueprint indices)
   auto& cache = cacheSlot.For(sim);
   auto it = cache.find(name);
@@ -650,7 +649,13 @@ bool BpInCategory(Sim& sim, const BlueprintInfo* bp, const char* name) {
         if (i >= 0 && static_cast<size_t>(i) < bits.size()) bits[static_cast<size_t>(i)] = true;
     it = cache.emplace(name, std::move(bits)).first;
   }
-  return static_cast<size_t>(bp->entityIndex) < it->second.size() && it->second[static_cast<size_t>(bp->entityIndex)];
+  return it->second;
+}
+
+bool BpInCategory(Sim& sim, const BlueprintInfo* bp, const char* name) {
+  if (!bp || bp->entityIndex < 0) return false;
+  const std::vector<bool>& m = BpCategoryMask(sim, name);
+  return static_cast<size_t>(bp->entityIndex) < m.size() && m[static_cast<size_t>(bp->entityIndex)];
 }
 
 // ---- blueprint data --------------------------------------------------------------------------------
@@ -2370,9 +2375,22 @@ void UnitAimTickManipulators(Sim& sim, Unit* u, bool anims) {
     int kind;  // 0 animator, 1 rotator, 2 slaver, 3 slider, 4 builder arm, 5 aim controller, 6 foot plant
     void* p;
   };
-  std::vector<Manip> order;
+  // (The list is made for every unit with manipulators every beat: it lives in a buffer kept from call to call. A
+  // manipulator's step may run Lua (a builder arm's tracking callback), so a call made from inside it takes the next
+  // buffer, and one nested deeper than the pool its own.)
+  static thread_local std::vector<Manip> pool[4];
+  static thread_local int depth = 0;
+  std::vector<Manip> own;
+  std::vector<Manip>& order = depth < 4 ? pool[depth] : own;
+  order.clear();
+  struct Nest {
+    int& d;
+    explicit Nest(int& x) : d(x) { ++d; }
+    ~Nest() { --d; }
+  } nest(depth);
   if (anims) {
-    std::vector<AnimatorRef> al;
+    static thread_local std::vector<AnimatorRef> al;  // (filled and read here, before any step runs)
+    al.clear();
     AnimatorsCollect(sim, u, &al);
     for (const AnimatorRef& r : al) order.push_back({r.precedence, r.seq, 0, r.a});
   }
@@ -2394,9 +2412,11 @@ void UnitAimTickManipulators(Sim& sim, Unit* u, bool anims) {
     v.erase(std::remove_if(v.begin(), v.end(), [](FootPlantManipulator* m) { return !m->alive; }), v.end());
     for (FootPlantManipulator* m : v) order.push_back({m->precedence, m->seq, 6, m});
   }
-  std::sort(order.begin(), order.end(), [](const Manip& a, const Manip& b) {
-    return a.prec != b.prec ? a.prec < b.prec : a.seq < b.seq;
-  });
+  const auto before = [](const Manip& a, const Manip& b) { return a.prec != b.prec ? a.prec < b.prec : a.seq < b.seq; };
+  // (a list already in strict order is what the sort would give: most units' manipulators were made in order)
+  bool strict = true;
+  for (size_t i = 1; i < order.size() && strict; ++i) strict = before(order[i - 1], order[i]);
+  if (!strict) std::sort(order.begin(), order.end(), before);
   // (a manipulator that becomes signalled in its step wakes its waiting threads there and then: Sim::SignalEvent)
   for (const Manip& e : order) {
     if (e.kind == 0) {
@@ -3036,7 +3056,8 @@ void AttackUpdate(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
       UnitWeapon* fw = TargetWeapon(sim, u, target);
       float ax = 0, az = 0;
       const bool adj = fw && FormationAdjustedOfForm(*fc, u, &ax, &az);
-      if (getenv("MOHO64_DEBUG_FORM"))
+      static const bool dbgForm = getenv("MOHO64_DEBUG_FORM") != nullptr;  // (read once)
+      if (dbgForm)
         Logf(LogLevel::Info, "attack form %u unit %u track %d has %d lastPos %.3f %.3f weapon %d adjusted %d %.3f %.3f",
              sim.tick(), u->id, d.trackMobile ? 1 : 0, has ? 1 : 0, d.lastPos.x, d.lastPos.z, fw ? 1 : 0, adj ? 1 : 0, ax, az);
       if (adj) {

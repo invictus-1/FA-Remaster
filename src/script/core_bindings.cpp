@@ -13,6 +13,8 @@
 #include "core/hostfs.h"
 #include "core/log.h"
 #include "core/vfs.h"
+#include "script/fastlib.h"
+#include "script/script_handle.h"
 #include "script/script_state.h"
 
 namespace moho {
@@ -505,9 +507,9 @@ int l_Rect(lua_State* L) {
 }
 
 int l_VDist2(lua_State* L) {
-  float dx = luaL_checknumber(L, 1) - luaL_checknumber(L, 3);
-  float dy = luaL_checknumber(L, 2) - luaL_checknumber(L, 4);
-  lua_pushnumber(L, std::sqrt(dx * dx + dy * dy));
+  const lua_Number x1 = luaL_checknumber(L, 1), y1 = luaL_checknumber(L, 2);
+  const lua_Number x2 = luaL_checknumber(L, 3), y2 = luaL_checknumber(L, 4);
+  lua_pushnumber(L, VDist2Of(x1, y1, x2, y2));
   return 1;
 }
 int l_VDist2Sq(lua_State* L) {
@@ -718,12 +720,15 @@ int l_IsDestroyed(lua_State* L) {
   if (lua_istable(L, 1)) lua_rawgetcobject(L, 1);
   else lua_pushvalue(L, 1);
   if (lua_type(L, -1) == LUA_TUSERDATA && lua_getmetatable(L, -1)) {
-    luaL_getmetatable(L, "moho64.cobject");  // the handle's metatable (script_handle.cpp)
-    if (lua_rawequal(L, -1, -2)) {
-      void** box = static_cast<void**>(lua_touserdata(L, -3));
+    // Is it the handle's metatable (script_handle.cpp)? This was lua_rawequal with luaL_getmetatable(L,
+    // "moho64.cobject"), a string pushed (looked up) at every call; now the table's address. lua_gpg_checkgc keeps
+    // the collector's check that the string's push made, so a collection still falls at the same call.
+    lua_gpg_checkgc(L);
+    if (IsObjectHandleMeta(L, -1)) {
+      void** box = static_cast<void**>(lua_touserdata(L, -2));
       destroyed = !box || !*box;
     }
-    lua_pop(L, 2);
+    lua_pop(L, 1);
   }
   lua_pop(L, 1);
   lua_pushboolean(L, destroyed);

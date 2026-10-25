@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <vector>
 
 #include "sim/entity_grid.h"
@@ -19,6 +20,12 @@ struct Motor : ScriptObject {
   bool broken = false;
   float vy = 0;
   Entity* owner = nullptr;
+  // UpdateFall at a fixed point: the last call changed neither theta, omega nor heading and returned before the
+  // transform (the turn left to make was within 1e-4). It is a function of these and the entity's orientation
+  // alone, so with all of them bit for bit the same the call would do the same nothing again.
+  bool settled = false;
+  uint32_t settledBits[4] = {};  // theta, omega, heading, broken
+  Quat settledOri;
 };
 
 struct MotorSlot {
@@ -30,6 +37,10 @@ struct MotorSlot {
 // The sim's prop motors (Sim::motorState). Multicore step 1: these were process-wide (g_motors, g_moved).
 struct MotorState {
   std::vector<MotorSlot> motors;  // entities with a motor, in the order they got one
+  // MotorsTick's erase pass drops the motors whose entity is gone or destroy-queued: it can find one only after a
+  // motor was added or another entity was queued for destruction (Sim::DestroysQueued) since it last ran.
+  bool added = false;
+  uint64_t destroysSeen = ~uint64_t(0);
   std::vector<Entity*> moved;     // moved this beat (for the grid at step 13)
 };
 
@@ -58,6 +69,7 @@ void SetMotor(Sim& sim, Entity* e, Motor* m) {
       return;
     }
   motors.push_back({EntityRef(e), m});
+  MS(sim).added = true;
 }
 
 Motor* NewMotor(lua_State* L, Entity* e, bool sink) {
@@ -116,7 +128,22 @@ int l_SinkAway(lua_State* L) {
   return 1;
 }
 
+uint32_t FloatBits(float f) {
+  uint32_t u;
+  std::memcpy(&u, &f, sizeof u);
+  return u;
+}
+bool SameOri(const Quat& a, const Quat& b) {
+  return FloatBits(a.x) == FloatBits(b.x) && FloatBits(a.y) == FloatBits(b.y) && FloatBits(a.z) == FloatBits(b.z) &&
+         FloatBits(a.w) == FloatBits(b.w);
+}
+
 void UpdateFall(Sim& sim, Entity* e, Motor& m) {
+  const uint32_t in[4] = {FloatBits(m.theta), FloatBits(m.omega), FloatBits(m.heading), m.broken ? 1u : 0u};
+  if (m.settled && in[0] == m.settledBits[0] && in[1] == m.settledBits[1] && in[2] == m.settledBits[2] &&
+      in[3] == m.settledBits[3] && SameOri(e->orientation, m.settledOri))
+    return;
+  m.settled = false;
   if (m.broken) {
     m.omega = m.omega + 0.1f * m.theta;
     m.theta = m.theta + m.omega;
@@ -164,7 +191,14 @@ void UpdateFall(Sim& sim, Entity* e, Motor& m) {
     r = Quat{0, k * uz, -k * uy, 0};
   }
   float dw = std::fabs(r.w) - 1.0f;
-  if (std::fabs(dw) <= 9.99999975e-05f) return;
+  if (std::fabs(dw) <= 9.99999975e-05f) {
+    if (FloatBits(m.theta) == in[0] && FloatBits(m.omega) == in[1] && FloatBits(m.heading) == in[2]) {
+      m.settled = true;
+      for (int k = 0; k < 4; ++k) m.settledBits[k] = in[k];
+      m.settledOri = e->orientation;
+    }
+    return;
+  }
   Vec3 p = e->position;
   if (m.broken && m.theta > 0.785398185f && sim.map()) {
     float yT = sim.map()->TerrainHeight(p.x, p.z);
@@ -217,12 +251,16 @@ void MotorsEntityPurged(Sim& sim, const Entity* e) {
 
 void MotorsTick(Sim& sim) {
   MotorState& ms = MS(sim);
-  ms.motors.erase(std::remove_if(ms.motors.begin(), ms.motors.end(),
-                                [&](const MotorSlot& s) {
-                                  Entity* e = sim.FindEntity(s.ref);
-                                  return !e || e->destroyQueued;
-                                }),
-                  ms.motors.end());
+  if (ms.added || ms.destroysSeen != sim.DestroysQueued()) {
+    ms.added = false;
+    ms.destroysSeen = sim.DestroysQueued();
+    ms.motors.erase(std::remove_if(ms.motors.begin(), ms.motors.end(),
+                                  [&](const MotorSlot& s) {
+                                    Entity* e = sim.FindEntity(s.ref);
+                                    return !e || e->destroyQueued;
+                                  }),
+                    ms.motors.end());
+  }
   for (auto& s : ms.motors) {
     Entity* e = sim.FindEntity(s.ref);
     if (!s.m || e->attachParent) continue;

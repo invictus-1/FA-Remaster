@@ -61,6 +61,12 @@ struct PathTraveler {
   bool useWholeMap = false, insidePlayable = true;
   bool pending = false;
   int armyIndex = 0;
+  // The army queue it waits in (an intrusive list, as the original's: QueueSearch 0x5aa318..0x5aa345 unlinks the
+  // finder's node, +0x4, and links it at the tail of the queue at +0x2c), or whose active search is its own.
+  PathTraveler* qPrev = nullptr;
+  PathTraveler* qNext = nullptr;
+  bool queued = false, searching = false;
+  int queuedIn = 0, searchingIn = 0;  // (the queues_ keys)
   // the delivered path (start cell first) and whether the goal was reached
   std::vector<PathCell> result;
   bool accepted = false;
@@ -167,9 +173,12 @@ class HPathTables {
     int expansions = 0, cap = 0;
   };
   struct ArmyQueue {
-    std::deque<PathTraveler*> waiting;  // oldest first
+    PathTraveler* head = nullptr;  // the waiting travelers, oldest first (PathTraveler::qNext)
+    PathTraveler* tail = nullptr;
     std::unique_ptr<Search> active;
   };
+  static void Link(ArmyQueue& q, int key, PathTraveler* t);
+  static void Unlink(ArmyQueue& q, PathTraveler* t);
 
   ClusterMap& Map(const NamedFootprint& fp);
   ClusterMap* FindMap(const NamedFootprint& fp);  // (no new map: its place in mapOrder_ is the first search's)

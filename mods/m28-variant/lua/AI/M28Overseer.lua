@@ -3493,6 +3493,7 @@ function DebugCheckProfiling(bJustShowTickCount)
             if not(bSetHook) and not(bJustShowTickCount) and GetGameTimeSeconds() >= iTimeInSecondsToStartDetailedDebug then
                 bSetHook = true
                 M28Profiler.bFunctionCallDebugOverride = true
+                M28Profiler.VariantRefreshProfiler() --FA Remastered variant: a switch is on, the Lua FunctionProfiler again
                 --M28Profiler.bGlobalDebugOverride = true --Only enable this if want more detail as it will make things really slow
                 debug.sethook(M28Profiler.OutputRecentFunctionCalls, "c", 200)
                 LOG(sFunctionRef..': Have started the main hook of function calls')

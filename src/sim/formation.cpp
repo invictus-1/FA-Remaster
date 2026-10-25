@@ -964,7 +964,8 @@ int FormationScriptIndex(lua_State* L, const std::string& name, const std::vecto
       }
     }
   }
-  if (getenv("MOHO64_DEBUG_FORM")) Logf(LogLevel::Info, "form index %s -> %d (type %d)", name.c_str(), idx, FormationType(units));
+  static const bool dbgForm = getenv("MOHO64_DEBUG_FORM") != nullptr;  // (read once)
+  if (dbgForm) Logf(LogLevel::Info, "form index %s -> %d (type %d)", name.c_str(), idx, FormationType(units));
   lua_settop(L, top);
   return idx;
 }
@@ -1001,7 +1002,8 @@ void GenerateFormation(Sim& sim, UnitCommand& c, Unit* u) {
   auto F = NewFormation(sim, units, name, pos.x, pos.z, c.formQw, c.formQx, c.formQy, c.formQz,
                         static_cast<int>(c.type), c.formScale);
   c.form = F;
-  if (getenv("MOHO64_DEBUG_FORM"))
+  static const bool dbgForm = getenv("MOHO64_DEBUG_FORM") != nullptr;  // (read once)
+  if (dbgForm)
     for (int k = 0; k < 2; ++k)
       for (auto& g : F->groups[k])
         for (auto& [id, n] : g.nodes)

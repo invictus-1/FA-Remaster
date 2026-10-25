@@ -377,6 +377,8 @@ class Sim {
   void RegisterEntity(Entity* e) {
     e->handle = nextHandle_++;
     entities_[e->handle] = e;
+    if (byHandle_.size() <= e->handle) byHandle_.resize(static_cast<size_t>(e->handle) + 1, nullptr);
+    byHandle_[e->handle] = e;
     byId_[e->id] = e;
   }
   Entity* FindEntityById(uint32_t id) const {
@@ -399,7 +401,8 @@ class Sim {
   // _c_CreateEntity / _c_CreateShield: bind a script-made table to a new engine entity.
   Entity* AdoptScriptEntity(lua_State* L, int tableIdx, int specIdx, bool shield);
   Platoon* CreatePlatoon(lua_State* L, Army* army, const std::string& name, const std::string& plan);
-  Entity* FindEntity(uint32_t id) const;
+  // By handle (EntityRef): byHandle_, which holds what entities_ holds, at the handle's index.
+  Entity* FindEntity(uint32_t id) const { return id < byHandle_.size() ? byHandle_[id] : nullptr; }
   void QueueDestroy(Entity* e);  // Entity:Destroy(): OnDestroy and removal happen at the end of the tick
   void RequestRefreshUI(Entity* e);  // Entity:RequestRefreshUI / Entity::Kill (entity.h refreshUI; ui REQUESTS 47)
   // For what dies with a command object (a ferry beacon): the original deletes an emptied command only after
@@ -408,6 +411,10 @@ class Sim {
   const std::map<uint32_t, Entity*>& entities() const { return entities_; }
   // Live units of all armies, by entity id (kept up to date on creation and destruction).
   const std::vector<Unit*>& units() const { return units_; }
+  // How many entities QueueDestroy has queued so far (it only counts up). Destroy is the only way an entity
+  // leaves the world, and destroyQueued is never cleared, so while this number stands no entity has become
+  // destroy-queued or gone (prop_motor.cpp MotorsTick).
+  uint64_t DestroysQueued() const { return destroysQueued_; }
   // MOHO64_PROFILE: the order latency of docs/benchmarks.md B8. From the next beat on, each beat's end looks at these
   // units until every one has a path and moves (or 600 beats have passed), then logs how many beats and ms that took
   // (sim.cpp OrderLatency). A host calls it right after it gave them one order (src/app/main.cpp, the --orders verb
@@ -583,7 +590,10 @@ class Sim {
   bool hasGauss_ = false;
   uint32_t tick_ = 0;
   std::vector<std::unique_ptr<ScriptObject>> owned_;
-  std::map<uint32_t, Entity*> entities_;
+  std::map<uint32_t, Entity*> entities_;  // by handle, in handle order (the fingerprint walks it)
+  // The same by handle as an array (handles are given out one after another from 1 and never again): FindEntity
+  // without the map's search (265 M calls in B1, ~280 ns each in the map). A removed entity's slot is null.
+  std::vector<Entity*> byHandle_;
   std::vector<Unit*> units_;
   std::vector<std::string> pendingSync_;
   std::vector<std::string> prints_;  // print's lines until TakePrints (the original's sim+0xa18)
@@ -621,13 +631,14 @@ class Sim {
     int head = 0, tail = 1;
   };
   std::map<uint32_t, IdPool> idPools_;  // key: id & 0xFFF00000
-  std::map<uint32_t, Entity*> byId_;
+  std::unordered_map<uint32_t, Entity*> byId_;  // (only looked up, set and erased, never walked: a hash)
   std::unordered_map<uint32_t, uint32_t> goneIds_;  // handle -> id of a removed entity (IdOfRef)
   uint32_t nextHandle_ = 1;
   void AddUnitToLists(Unit* u);
   void RemoveUnitFromLists(Unit* u);
   uint32_t propSerial_ = 0;
   std::vector<Entity*> destroyQueue_;
+  uint64_t destroysQueued_ = 0;  // (DestroysQueued)
   void ProcessDestroyQueue();
   std::vector<uint32_t> refreshPending_, refreshSynced_;  // entity handles (EntityRef) with refreshUI / refreshUISynced set
   std::vector<uint32_t> lateDestroy_;  // entity references (QueueDestroyAfterBeat)

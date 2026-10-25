@@ -344,6 +344,34 @@ function IsTableEmpty(tTable, bEmptyIfNonTableWithValue, iOptionalCycleCount)
     end
 end
 
+--FA Remastered variant: on FA Remastered with its script fixes on, the engine has the same check built in
+--(Remastered.MakeDeepEmptyCheck, the same answers: an AND over the entries read raw, so no order can change it), and
+--IsTableEmpty is that, called directly. On any other engine the Lua function above stays. bVariantVerifyNative (a test
+--switch, off) runs both on every call, uses the Lua answer and logs any difference.
+bVariantVerifyNative = false
+iVariantVerifyNativeChecks = 0
+iVariantVerifyNativeMismatches = 0
+tVariantNative = rawget(_G, 'Remastered') or false
+if tVariantNative and tVariantNative.MakeDeepEmptyCheck then
+    local VariantNativeIsTableEmpty = tVariantNative.MakeDeepEmptyCheck(5)
+    if bVariantVerifyNative then
+        local VariantLuaIsTableEmpty = IsTableEmpty
+        IsTableEmpty = function(...) --(the caller's own arguments, as many as it passed: an argument not passed is not a nil one for a C function)
+            local bLua = VariantLuaIsTableEmpty(unpack(arg))
+            local bNative = VariantNativeIsTableEmpty(unpack(arg))
+            iVariantVerifyNativeChecks = iVariantVerifyNativeChecks + 1
+            if not(bLua == bNative) then
+                iVariantVerifyNativeMismatches = iVariantVerifyNativeMismatches + 1
+                LOG('VERIFY MISMATCH IsTableEmpty lua='..tostring(bLua)..' native='..tostring(bNative)..' arguments='..arg.n..' mismatches='..iVariantVerifyNativeMismatches)
+            end
+            if math.mod(iVariantVerifyNativeChecks, 1000000) == 0 then LOG('VERIFY IsTableEmpty checks='..iVariantVerifyNativeChecks..' mismatches='..iVariantVerifyNativeMismatches) end
+            return bLua
+        end
+    else
+        IsTableEmpty = VariantNativeIsTableEmpty
+    end
+end
+
 function ForkedDrawRectangle(rRect, iColour, iDisplayCount)
     --Only call via cork thread
     --Draws lines around rRect; rRect should be a rect table, with keys x0, x1, y0, y1
@@ -539,6 +567,29 @@ end
 function GetDistanceBetweenPositions(tPosition1, tPosition2)
     --Done for convenience and to reduce risk of human error if were to use vdist2 directly; returns the distance in a straight line (ignoring pathing) between 2 positions
     return VDist2(tPosition1[1], tPosition1[3], tPosition2[1], tPosition2[3])
+end
+--FA Remastered variant: on FA Remastered with its script fixes on, the engine's Remastered.VDist2Pos is the same
+--VDist2 of the same four reads, in one C call. (With bVariantVerifyNative both run and any difference is logged.)
+iVariantVerifyDistChecks = 0
+iVariantVerifyDistMismatches = 0
+if tVariantNative and tVariantNative.VDist2Pos then
+    if bVariantVerifyNative then
+        local VariantLuaDistance = GetDistanceBetweenPositions
+        local VariantNativeDistance = tVariantNative.VDist2Pos
+        GetDistanceBetweenPositions = function(tPosition1, tPosition2)
+            local iLua = VariantLuaDistance(tPosition1, tPosition2)
+            local iNative = VariantNativeDistance(tPosition1, tPosition2)
+            iVariantVerifyDistChecks = iVariantVerifyDistChecks + 1
+            if not(iLua == iNative) and not(iLua ~= iLua and iNative ~= iNative) then
+                iVariantVerifyDistMismatches = iVariantVerifyDistMismatches + 1
+                LOG('VERIFY MISMATCH GetDistanceBetweenPositions lua='..iLua..' native='..iNative..' mismatches='..iVariantVerifyDistMismatches)
+            end
+            if math.mod(iVariantVerifyDistChecks, 1000000) == 0 then LOG('VERIFY GetDistanceBetweenPositions checks='..iVariantVerifyDistChecks..' mismatches='..iVariantVerifyDistMismatches) end
+            return iLua
+        end
+    else
+        GetDistanceBetweenPositions = tVariantNative.VDist2Pos
+    end
 end
 
 function GetRoughDistanceBetweenPositions(tPosition1, tPosition2)

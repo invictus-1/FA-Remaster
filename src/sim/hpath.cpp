@@ -324,7 +324,7 @@ bool HPathTables::PrepareSearches(int margin, bool all, WorkerPool* pool) {
       note(q.active->cm);
       units = units || q.active->t->mode != 0;
     }
-    for (PathTraveler* t : q.waiting) {
+    for (PathTraveler* t = q.head; t; t = t->qNext) {
       ClusterMap* cm = FindMap(t->fp);
       PrepareTraveler(*t, cm, margin);
       note(cm);
@@ -923,17 +923,41 @@ void HPathTables::Finish(Search& s, bool accepted) {
   t->delivered = true;
 }
 
+void HPathTables::Link(ArmyQueue& q, int key, PathTraveler* t) {
+  t->qPrev = q.tail;
+  t->qNext = nullptr;
+  (q.tail ? q.tail->qNext : q.head) = t;
+  q.tail = t;
+  t->queued = true;
+  t->queuedIn = key;
+}
+
+void HPathTables::Unlink(ArmyQueue& q, PathTraveler* t) {
+  (t->qPrev ? t->qPrev->qNext : q.head) = t->qNext;
+  (t->qNext ? t->qNext->qPrev : q.tail) = t->qPrev;
+  t->qPrev = t->qNext = nullptr;
+  t->queued = false;
+}
+
 void HPathTables::Queue(PathTraveler* t) {
   Cancel(t);
   t->pending = true;
   t->delivered = false;
-  queues_[t->armyIndex].waiting.push_back(t);
+  Link(queues_[t->armyIndex], t->armyIndex, t);
 }
 
+// The traveler leaves the queue it waits in, or its search is dropped (the search state goes; the unlink is O(1),
+// as the original's list node). A traveler is in at most one queue: Queue cancels first.
 void HPathTables::Cancel(PathTraveler* t) {
-  for (auto& [a, q] : queues_) {
-    q.waiting.erase(std::remove(q.waiting.begin(), q.waiting.end(), t), q.waiting.end());
-    if (q.active && q.active->t == t) q.active.reset();
+  if (t->queued) {
+    auto it = queues_.find(t->queuedIn);
+    if (it != queues_.end()) Unlink(it->second, t);
+    t->queued = false;
+  }
+  if (t->searching) {
+    auto it = queues_.find(t->searchingIn);
+    if (it != queues_.end() && it->second.active && it->second.active->t == t) it->second.active.reset();
+    t->searching = false;
   }
   t->pending = false;
 }
@@ -945,10 +969,12 @@ void HPathTables::WorkAll(int /*armies*/) {
     int budget = 2500;
     while (budget >= 1) {
       if (!q.active) {
-        if (q.waiting.empty()) break;
+        if (!q.head) break;
         q.active = std::make_unique<Search>();
-        PathTraveler* t = q.waiting.front();
-        q.waiting.pop_front();
+        PathTraveler* t = q.head;
+        Unlink(q, t);
+        t->searching = true;
+        t->searchingIn = a;
         Begin(*q.active, t);
       }
       int before = budget;
@@ -957,6 +983,7 @@ void HPathTables::WorkAll(int /*armies*/) {
       if (dbg) fprintf(stderr, "hpath: army %d work %d -> %d (r=%d)\n", a, before, budget, r);
       if (r == 2) break;
       Finish(*q.active, r == 1);
+      q.active->t->searching = false;
       q.active.reset();
     }
   }

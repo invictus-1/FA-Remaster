@@ -44,6 +44,10 @@ class ScriptObject {
 // Once per Lua state, before the first BindObject: the handle's metatable ("moho64.cobject", which
 // IsDestroyed looks for).
 void RegisterObjectHandle(lua_State* L);
+// Whether the value at idx is that metatable (as lua_rawequal with luaL_getmetatable(L, "moho64.cobject"), without
+// making the name's string or touching the heap: the table's address, kept by RegisterObjectHandle in the state's
+// host pointer 3; false before RegisterObjectHandle, as the nil the name gave then).
+bool IsObjectHandleMeta(lua_State* L, int idx);
 
 // Make the table at `idx` the Lua side of `obj` (sets its `_c_object`).
 void BindObject(lua_State* L, int idx, ScriptObject* obj);
