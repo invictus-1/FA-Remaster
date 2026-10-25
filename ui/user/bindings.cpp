@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "core/log.h"
+#include "script/script_handle.h"
 #include "user/user_state.h"
 
 namespace moho::ui {
@@ -117,8 +118,10 @@ void PushUserClassTable(lua_State* L, const char* cppClass) {
 }
 
 void RegisterUserClasses(lua_State* L) {
-  luaL_newmetatable(L, "moho64.cobject");  // the `_c_object` handle's metatable (IsDestroyed looks for it)
-  lua_pop(L, 1);
+  // The `_c_object` handle's metatable, made as the engine makes it (script_handle.cpp): IsDestroyed knows it by the
+  // address RegisterObjectHandle keeps (engine 5397f39); made here by hand it was not known, and every destroyed
+  // control read as alive (FAF's main menu's veil then took the lobby's clicks).
+  RegisterObjectHandle(L);
   lua_pushstring(L, "moho");
   lua_newtable(L);
   int moho = lua_gettop(L);
