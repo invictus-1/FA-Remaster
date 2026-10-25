@@ -5,9 +5,12 @@
 // content, not its name: FAF's one .tga (a cursor) and mods' .bmp icons, some of them named .dds,
 // are read so here too. JPEG (nine mods' icons in the mods manager) through stb_image (Chris's OK,
 // 2026-10-19; ui/third_party/stb/README.md).
+#include <condition_variable>
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <mutex>
+#include <set>
 #include <vector>
 
 #include <zlib.h>
@@ -420,12 +423,60 @@ bool DecodeImage(const std::string& data, Image& out) {
   return DecodeDds(data, out) || DecodePng(data, out) || DecodeBmp(data, out) || DecodeJpeg(data, out) || DecodeTga(data, out);
 }
 
+namespace {
+// The images decoded ahead (DecodeTexturesAhead), by normalized file name, until LoadTexture takes them.
+struct TexturesAhead {
+  std::mutex lock;
+  std::condition_variable decoded;
+  std::map<std::string, Image> images;
+  std::set<std::string> decoding;  // (being decoded now)
+  std::set<std::string> asked;     // (LoadTexture has asked for them: not decoded ahead any more)
+};
+TexturesAhead& Ahead() {
+  static TexturesAhead ahead;
+  return ahead;
+}
+}  // namespace
+
+void DecodeTexturesAhead(const Vfs* vfs, const std::vector<std::string>& vpaths) {
+  TexturesAhead& ahead = Ahead();
+  for (const std::string& vpath : vpaths) {
+    const std::string key = Vfs::Normalize(vpath);
+    {
+      std::lock_guard<std::mutex> lock(ahead.lock);
+      if (ahead.asked.count(key) || ahead.images.count(key)) continue;
+      ahead.decoding.insert(key);
+    }
+    Image img;
+    auto data = vfs->ReadFile(key);
+    const bool ok = data && DecodeImage(*data, img);
+    {
+      std::lock_guard<std::mutex> lock(ahead.lock);
+      ahead.decoding.erase(key);
+      if (ok) ahead.images.emplace(key, std::move(img));
+    }
+    ahead.decoded.notify_all();
+  }
+}
+
 const Image& LoadTexture(const Vfs* vfs, const std::string& vpath) {
   static std::map<std::string, Image> cache;
   std::string key = Vfs::Normalize(vpath);
   auto it = cache.find(key);
   if (it != cache.end()) return it->second;
   Image img;
+  {  // (decoded ahead: taken; being decoded: waited for)
+    TexturesAhead& ahead = Ahead();
+    std::unique_lock<std::mutex> lock(ahead.lock);
+    ahead.asked.insert(key);
+    ahead.decoded.wait(lock, [&] { return !ahead.decoding.count(key); });
+    auto kept = ahead.images.find(key);
+    if (kept != ahead.images.end()) {
+      img = std::move(kept->second);
+      ahead.images.erase(kept);
+      return cache.emplace(key, std::move(img)).first->second;
+    }
+  }
   auto data = vfs->ReadFile(key);
   if (!data || !DecodeImage(*data, img)) {
     if (data) Logf(LogLevel::Debug, "moho64ui: texture format not read yet: %s", vpath.c_str());

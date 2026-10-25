@@ -15,6 +15,8 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <iterator>
 #include <map>
 #include <string>
 #include <thread>
@@ -28,6 +30,7 @@
 
 #include "app/backdrop.h"
 #include "app/game_session.h"
+#include "app/interface_scripts.h"
 #include "app/window.h"
 #include "core/crash.h"
 #include "core/hostfs.h"
@@ -399,6 +402,14 @@ int main(int argc, char** argv) {
     ~JoinedThread() { Join(); }
   } texturePrefetch;
   texturePrefetch.thread = std::thread([&vfs] { ui::PrefetchTextureSizes(&vfs); });
+  // The skirmish lobby's faction paintings decoded ahead on another (FAF's lobby.lua RefreshLobbyBackground: one of
+  // them over the whole lobby with the profile's LobbyBackground at 1, its default; the player's faction's first, the
+  // others when he changes it), 8 MB each (draw.h DecodeTexturesAhead; ours, only about time). Joined where the sizes'
+  // is.
+  JoinedThread paintingsAhead;
+  paintingsAhead.thread = std::thread([&vfs] {
+    ui::DecodeTexturesAhead(&vfs, vfs.FindFiles("/textures/ui/common/BACKGROUND/faction", "faction-background-paint_*_bmp.dds"));
+  });
   if (!o.modsFile.empty()) {
     std::ifstream f(o.modsFile);
     std::string line;
@@ -655,8 +666,25 @@ int main(int argc, char** argv) {
   struct Prepared {
     std::unique_ptr<ui::UserState> state;
     bool up = false;
-    double stateMs = 0, rulesMs = 0, bootMs = 0, aheadMs = 0;  // (its parts' times, for the log)
+    double stateMs = 0, rulesMs = 0, bootMs = 0, aheadMs = 0, compiledMs = 0, coversMs = 0;  // (its parts' times, for the log)
+    int compiled = 0, covers = 0;  // (the game screen's scripts compiled ahead, the covers decoded)
   } prepared;
+  // The game's interface is started over two frames or more in the window (ours, only about time;
+  // MOHO64UI_START_ONE_FRAME=1: in one, as before): in the first its state is taken, SetupUI, StartGameUI, the setup's sync and the first beat
+  // begun (on the beats' thread), the loading screen still shown; in the next the loading screen goes and the game's
+  // screen is made (StopLoadingDialog, CreateGameInterface) and beat 1's sync given. The original's order is kept
+  // (DoInitializing 0x88c3f0: StartGameUI 0x88c4ad, the setup's beat 0x88c507, StopLoadingDialog 0x88c577,
+  // CreateGameInterface 0x88c5cd), with a frame between its beat and StopLoadingDialog: the game's state runs no frame
+  // in between (it is not shown: none of its script threads, input or syncs), the beats are held (HoldBeats), and the
+  // front end's loading screen draws on, as it drew while the world loaded. The second half comes once the first beat
+  // is through (1-2 frames at 4K: its tick and the simulation's collection, 15-25 ms, no longer in a frame). (The
+  // loading screen's tips' thread asks WorldIsLoading, false from the load's end: it may end a frame sooner. INFERRED:
+  // nothing else of FAF's loading screen or gamemain.lua waits on those frames.) Without a window both halves run in
+  // one frame.
+  std::unique_ptr<ui::UserState> starting;  // between the two: the game's state, its screen not made yet
+  bool startingUp = false;
+  bool startUp = false;  // (the game's state came up so far: its boot, SetupUI, StartGameUI)
+  std::function<void()> finishGameInterface;
   // A session's state made and booted (the loading thread's work, or this thread's when it did not do it): its rules,
   // the category functions in front of the engine's, then /lua/SessionInit.lua.
   auto makeGameState = [&vfs, &session](ui::UserState::Config gameCfg, Sim* sim, const std::vector<std::string>& uids,
@@ -686,6 +714,7 @@ int main(int argc, char** argv) {
       cfg.width = shown->ui().width(), cfg.height = shown->ui().height();
       ui::SavePreferencesOf(front->L());  // (DoPreload writes the preferences first: the game's state reads them)
       texturePrefetch.Join();  // (long done: nothing else reads the file system's list while it changes)
+      paintingsAhead.Join();
       vfs.SetMemoryFile(kGamePrefsPath, ui::PreGameDataText(front->L(), session.LoadingMapFolder()));  // (the rules read it)
       if (!front->StartLoadingScreen()) Logf(LogLevel::Warning, "moho64ui: the loading screen did not come up");
       // The game's state is made on the loading thread once the simulation has started (its configuration as this
@@ -697,14 +726,26 @@ int main(int argc, char** argv) {
         gameCfg.bootScript = "/lua/SessionInit.lua";
         gameCfg.launchSession = nullptr;
         gameCfg.launchReplay = nullptr;  // (a replay starts from the front end)
-        session.prepareInterface = [&prepared, makeGameState, gameCfg](Sim* sim, const std::vector<std::string>& uids,
-                                                                       const std::string& sessionMods) {
+        session.prepareInterface = [&prepared, &vfs, makeGameState, gameCfg](Sim* sim, const std::vector<std::string>& uids,
+                                                                             const std::string& sessionMods) {
           makeGameState(gameCfg, sim, uids, sessionMods, &prepared);
-          // Also here, ahead of the frame the load ends in (ours, only about time): the state's collection of what its
-          // making left (the rules' copy: a full collection of some 35 MB fell inside that frame, 8-17 ms).
-          const auto t0 = std::chrono::steady_clock::now();
+          // Also here, ahead of the frame the load ends in (ours, only about time): the game screen's scripts compiled
+          // (interface_scripts.h), then the state's collection of what its making left (the rules' copy: a full
+          // collection of some 35 MB fell inside that frame, 8-17 ms).
+          auto t0 = std::chrono::steady_clock::now();
+          if (prepared.state && prepared.up)
+            prepared.compiled = prepared.state->PrecompileScripts(ui::kGameInterfaceScripts, std::size(ui::kGameInterfaceScripts));
+          prepared.compiledMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+          t0 = std::chrono::steady_clock::now();
           if (prepared.state) lua_setgcthreshold(prepared.state->L(), 0);
           prepared.aheadMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+          // And the factions' "IN TRANSIT" covers decoded (FAF's StopLoadingDialog lays the profile's LoadingFaction's
+          // over the screen, gamemain.lua: 4-6 ms in the game's first frame at 4K; draw.h DecodeTexturesAhead).
+          t0 = std::chrono::steady_clock::now();
+          const std::vector<std::string> covers = vfs.FindFiles("/textures/ui/common", "*_load.dds");
+          ui::DecodeTexturesAhead(&vfs, covers);
+          prepared.covers = static_cast<int>(covers.size());
+          prepared.coversMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
         };
       } else {
         session.prepareInterface = nullptr;
@@ -712,6 +753,10 @@ int main(int argc, char** argv) {
       session.BeginLoad();
       loadingDrawn = 0, loadingSince = std::chrono::steady_clock::now();
       if (!windowed) session.WaitForWorker();
+      return;
+    }
+    if (startingUp) {  // (the second half once the first beat is through: a frame or two, the loading screen shown)
+      if (!session.BeatRunning()) finishGameInterface();
       return;
     }
     session.ServeLoad();
@@ -737,8 +782,6 @@ int main(int argc, char** argv) {
       Logf(LogLevel::Info, "moho64ui: the world loaded in %.2f s; the loading screen drew %d frames meanwhile",
            std::chrono::duration<double>(std::chrono::steady_clock::now() - loadingSince).count(), loadingDrawn);
     }
-    front->EndLoadingScreen();  // (the game's own state takes over: DoInitializing 0x88c4ad)
-    lap("(start: the loading screen gone)");
     session.WaitForWorker();  // (no Lua state is made while a beat runs: the engine's rule)
     if (backdrop) backdrop->Stop();  // the game has its own picture of the world
     lap("(start: the beat waited for, the menu's background stopped)");
@@ -761,9 +804,10 @@ int main(int argc, char** argv) {
     gameCfg.timeline = session.timeline();  // (a replay's timeline; nullptr in a game played)
     if (prepared.state) {  // (made on the loading thread: given the session's links)
       Logf(LogLevel::Info,
-           "moho64ui: the game's state was made on the loading thread: the state %.0f ms, its rules %.0f ms, %s %.0f ms (then a "
-           "collection, %.0f ms)",
-           prepared.stateMs, prepared.rulesMs, gameCfg.bootScript.c_str(), prepared.bootMs, prepared.aheadMs);
+           "moho64ui: the game's state was made on the loading thread: the state %.0f ms, its rules %.0f ms, %s %.0f ms (then %d "
+           "of the game screen's scripts compiled, %.0f ms; a collection, %.0f ms; %d covers decoded, %.0f ms)",
+           prepared.stateMs, prepared.rulesMs, gameCfg.bootScript.c_str(), prepared.bootMs, prepared.compiled, prepared.compiledMs,
+           prepared.aheadMs, prepared.covers, prepared.coversMs);
       prepared.state->LinkSession(gameCfg);
       lap("(start: the game's state taken)");
     } else {
@@ -771,22 +815,53 @@ int main(int argc, char** argv) {
       prepared.state->LinkSession(gameCfg);
       lap("(start: the game's state made here, its rules, SessionInit.lua)");
     }
-    game = std::move(prepared.state);
-    bool up = prepared.up;
+    starting = std::move(prepared.state);
+    startUp = prepared.up;
     prepared = Prepared{};
-    up = up && game->StartMainScript();
+    startUp = startUp && starting->StartMainScript();
     lap("(start: SetupUI)");
-    up = up && game->StartGame();
+    startUp = startUp && starting->StartGame();
     lap("(start: StartGameUI)");
     // The setup's own sync first (the original's beat 0: before the game's screen; the campaign's
     // Sync.CampaignMode is in it, which the screen's making reads), then beat 1.
-    if (up) {
+    if (startUp) {
       const std::vector<std::string> setup = session.TakeSetupSync();
       Logf(LogLevel::Debug, "moho64ui: the setup's sync: %zu table(s), before the game's screen", setup.size());
-      for (const std::string& sync : setup) game->DeliverSync(sync);
+      for (const std::string& sync : setup) starting->DeliverSync(sync);
+    }
+    static const bool oneFrame = std::getenv("MOHO64UI_START_ONE_FRAME") != nullptr;
+    if (windowed && !oneFrame) {  // (the game's screen in the next frame: see `starting')
+      session.StartFirstBeat();
+      lap("(start: the setup's sync, the first beat begun)");
+      session.HoldBeats(true);
+      startingUp = true;
+      return;
     }
     session.RunFirstBeat();
     lap("(start: the setup's sync, the first beat)");
+    finishGameInterface();
+  };
+  // (the second half of startGameInterface)
+  finishGameInterface = [&]() {
+    auto lap = [t = std::chrono::steady_clock::now()](const char* what) mutable {
+      const auto now = std::chrono::steady_clock::now();
+      ui::LongFrames().Note(what, std::chrono::duration<double, std::milli>(now - t).count());
+      t = now;
+    };
+    if (startingUp) {
+      session.FinishFirstBeat();
+      session.HoldBeats(false);
+      startingUp = false;
+      lap("(start: the first beat waited for)");
+    }
+    // The front end's loading screen goes here, just before the game's StopLoadingDialog (0x88c577). Ours, INFERRED:
+    // that it stays up until then (through SetupUI, StartGameUI and the setup's beat of the game's own state, and the
+    // frames between the two halves); the original runs those in one DoInitializing step, so its one frame shows no
+    // difference.
+    front->EndLoadingScreen();
+    lap("(start: the loading screen gone)");
+    game = std::move(starting);
+    const bool up = startUp;
     Logf(up ? LogLevel::Info : LogLevel::Error, "moho64ui: the in-game interface %s", up ? "is up" : "did not come up");
     shown = game.get();
     if (up) {
@@ -799,6 +874,7 @@ int main(int argc, char** argv) {
       // to the scripts above, before the screen (TakeSetupSync).
       game->GameLoaded();
       lap("(start: CreateGameInterface)");
+      game->DropPrecompiledScripts();
       for (const std::string& sync : session.TakePendingSync()) game->DeliverSync(sync);
       lap("(start: the first beat's sync)");
       if (!gameLuaFile.empty()) {  // a Lua file of your own, run in the game's state (tests, looking around)
@@ -814,7 +890,7 @@ int main(int argc, char** argv) {
   // end comes up with its main menu, as after the program's start. Starting over: the same
   // launch again; its interface comes up as it did the first time.
   auto leaveOrRestart = [&]() {
-    if (session.Loading()) return;  // (asked while a launch loads: kept until its game runs)
+    if (session.Loading() || startingUp) return;  // (asked while a launch loads: kept until its game runs)
     int request = ui::TakeSessionRequest();
     if (!request || !session.running()) return;
     session.WaitForWorker();  // (the game's state goes and a new one may come: not while a beat runs)
@@ -890,7 +966,7 @@ int main(int argc, char** argv) {
                              listen();
                              sounds.Update(static_cast<float>(seconds));
                            });
-                           if (!game && !session.Loading()) session.WaitForWorker(), session.DrawStatus(target);  // the host's notice, until the game's interface is there
+                           if (!game && !session.Loading() && !startingUp) session.WaitForWorker(), session.DrawStatus(target);  // the host's notice, until the game's interface is there
                            timed("(host: leave or restart)", [&] { leaveOrRestart(); });
                            timed("(host: the loading screen or the game's interface started)", [&] { startGameInterface(); });
                            if (!windowCapture.empty() && session.DrawsToWindow()) {

@@ -54,13 +54,20 @@ void Frame::PurgeDeleted() {
   for (Control* c : dead) delete c;  // the Lua table stays; it reads as destroyed from here on
 }
 
-// Inferred: the largest Depth among the frame's living controls.
+// The largest Depth among the frame's living controls (CMauiFrame::GetTopmostDepth 0x796680: its controls depth
+// first, DepthFirstSuccessor 0x786ea0, each one's Depth (+0xc0) read as CScriptLazyVar_float::GetValue 0x783840 reads
+// it: the value kept in the LazyVar, evaluated only when there is none; LazyVar::Get). Inferred: the start at 0 (the
+// original's is a float of its .bss, 0x10bced8) and the frame's own Depth among them.
 float Frame::TopmostDepth() const {
   std::vector<Control*> all;
   Collect(const_cast<Frame*>(this), all);
-  float best = 0.0f, d;
+  float best = 0.0f;
   for (Control* c : all)
-    if (!c->dead() && c->depth.TryGet(&d)) best = std::max(best, d);
+    if (!c->dead() && c->depth.valid()) {
+      SetLazyVarContext(c);
+      best = std::max(best, c->depth.Get());
+    }
+  SetLazyVarContext(nullptr);
   return best;
 }
 

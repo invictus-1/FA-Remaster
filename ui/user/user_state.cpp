@@ -59,6 +59,43 @@ void LongFrameGcHook(lua_State* L, int end) {
                            std::to_string(lua_getgccount(L) / 1024) + " MB left)";
   LongFrames().Note(names.insert(name).first->c_str(), ms);
 }
+
+// The chunks compiled ahead (UserState::PrecompileScripts): a registry table, file name -> its chunk.
+const char kPrecompiledKey = 0;
+// doscript(name [, env]) of the interface's states: the engine's own (src/script/core_bindings.cpp l_doscript: the
+// file and its hooks as one chunk, LoadScriptWithHooks, its environment set, run), except that a chunk compiled ahead
+// for that name is taken (once) instead of being compiled here. The same C function frame either way (a script's
+// traceback is unchanged). import.lua keeps doscript as a local when it is first run, so this is in place before the
+// state's first script (UserState's constructor).
+int DoscriptAhead(lua_State* L) {
+  const char* name = luaL_checkstring(L, 1);
+  const bool hasEnv = lua_istable(L, 2);
+  bool kept = false;
+  lua_pushlightuserdata(L, const_cast<char*>(&kPrecompiledKey));
+  lua_rawget(L, LUA_REGISTRYINDEX);
+  if (lua_istable(L, -1)) {
+    lua_pushstring(L, name);
+    lua_rawget(L, -2);
+    if (lua_isfunction(L, -1)) {
+      kept = true;
+      lua_pushstring(L, name);
+      lua_pushnil(L);
+      lua_rawset(L, -4);  // (taken: a second doscript of the file compiles it again, as before)
+      lua_remove(L, -2);
+    } else {
+      lua_pop(L, 2);
+    }
+  } else {
+    lua_pop(L, 1);
+  }
+  if (!kept && LoadScriptWithHooks(L, name) != 0) return lua_error(L);
+  if (hasEnv) {
+    lua_pushvalue(L, 2);
+    lua_setfenv(L, -2);
+  }
+  lua_call(L, 0, 0);
+  return 0;
+}
 }  // namespace
 
 LongFrameLog& LongFrames() {
@@ -123,6 +160,7 @@ UserState::UserState(Vfs* vfs, Config config) : config_(std::move(config)) {
   RegisterRangeBindings(L);
   RegisterWorldMeshBindings(L);
   RegisterMapPreviewBindings(L);
+  lua_register(L, "doscript", DoscriptAhead);  // (the engine's, with the chunks compiled ahead: PrecompileScripts)
   InitFonts(vfs);
   if (!config_.prefsFile.empty()) LoadPrefs(L, config_.prefsFile);
   // Hooks of the active mods apply to the scripts of this state as well. (The original's front end
@@ -201,6 +239,40 @@ bool UserState::RunString(const std::string& code, const std::string& chunkName)
 void UserState::SetHeadSize(int width, int height) {
   config_.width = width, config_.height = height;
   ui_->Resize(width, height);
+}
+
+int UserState::PrecompileScripts(const char* const* names, size_t count) {
+  lua_State* L = state_->L();
+  const int top = lua_gettop(L);
+  lua_pushlightuserdata(L, const_cast<char*>(&kPrecompiledKey));
+  lua_rawget(L, LUA_REGISTRYINDEX);
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    lua_newtable(L);
+    lua_pushlightuserdata(L, const_cast<char*>(&kPrecompiledKey));
+    lua_pushvalue(L, -2);
+    lua_rawset(L, LUA_REGISTRYINDEX);
+  }
+  int kept = 0;
+  for (size_t i = 0; i < count; ++i) {
+    if (LoadScriptWithHooks(L, names[i]) != 0) {  // (left to doscript: its error comes where it came before)
+      lua_pop(L, 1);
+      continue;
+    }
+    lua_pushstring(L, names[i]);
+    lua_insert(L, -2);
+    lua_rawset(L, -3);
+    ++kept;
+  }
+  lua_settop(L, top);
+  return kept;
+}
+
+void UserState::DropPrecompiledScripts() {
+  lua_State* L = state_->L();
+  lua_pushlightuserdata(L, const_cast<char*>(&kPrecompiledKey));
+  lua_pushnil(L);
+  lua_rawset(L, LUA_REGISTRYINDEX);
 }
 
 void UserState::LinkSession(const Config& links) {

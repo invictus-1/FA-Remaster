@@ -17,6 +17,50 @@ uel0201 for the player beside the commander, all selected by category, 20 s stea
 and a move order by a right click. `MOHO64UI_BINDING_PROFILE=1` logs the costliest engine functions the scripts
 called (time and calls).
 
+## 2026-10-25: the last long frames of a launch at 4K (helper "stutters3", on a1060c5)
+
+Scenario: as below (the lead's measuring script, a 3840x2160 window, D3D12, `MOHO64UI_LONG_FRAMES=16`, 9000 frames),
+BASE and the change one after the other, twice (2026-10-25 morning; earlier pairs the evening before agree). The
+machine was busy (other sessions' engine runs): BASE's own numbers vary 30-50 % between runs.
+
+| Where | Before | After |
+|---|---|---|
+| the frame the load ends in | 131-167 ms (CreateGameInterface 84-106, the setup's sync and the first beat 25-36) | two frames, 31-32 and 36-38 ms (CreateGameInterface 33-35; the first one SetupUI, StartGameUI, the setup's sync) |
+| the lobby's first frame: the faction painting's first draw | 96-118 ms (its decode) | gone from the frame (decoded ahead; its copy to the card ~3.5 ms) |
+| the game's first frame: the "IN TRANSIT" cover's first draw | 4-6 ms (its decode) | gone (decoded ahead) |
+| CLobby:HostGame | 167-169 ms | 135-188 ms (unchanged: FAF's lobby scripts) |
+
+What did it:
+- The files the game's screen imports (134 of FAF's /lua/ files, the list in ui/app/interface_scripts.h) are compiled
+  on the loading thread into the game's state after SessionInit.lua; the state's `doscript` (the engine's own,
+  line for line) takes such a chunk once instead of reading and compiling the file again. CreateGameInterface
+  loaded 137 files (1.6 MB) and their reading and compiling were 38-49 ms of its ~71 ms on a quiet run.
+- In a window the start runs in two halves: SetupUI, StartGameUI, the setup's sync and beat 1 begun on the beats'
+  thread in one frame (the loading screen still up); once that beat is through (a frame or two), the loading screen
+  goes and StopLoadingDialog and CreateGameInterface run (the original's order, DoInitializing 0x88c3f0, a frame or
+  two between its beat and StopLoadingDialog). The first beat's simulation collection (10-14 ms) is off the frames.
+- The lobby's faction paintings (5 files, ~8 MB each) are decoded on a thread from the program's start, the factions'
+  covers (4 files) on the loading thread (`DecodeTexturesAhead`, draw/draw.h).
+- GetTopmostDepth reads each control's Depth as the original does (0x796680, LazyVar reading 0x783840: the value
+  kept, evaluated only when there is none); no measurable change (5.5 ms in HostGame, the depths are new there).
+
+Steady state, the 4v4 replay (mp1) at 3840x2160 (`perf.lua`, `--fast-forward 6000 --frames 30000`, every frame of at
+least 1 ms logged; BASE and the change back to back, then the final build once more): the frames are the world
+picture's (the renderer's "showing" was the largest part of all but 2-11 of the ~17,700-23,700 frames over 16 ms of
+the ~28,700 counted; middle 18-23 ms a frame, 17-21 ms of it the world's picture). The interface's own parts a frame:
+scripts 0.7-0.8 ms, drawing 1.2-1.4, host 0.8-1.2 (BASE and the change alike). Of the 11 frames in BASE whose largest
+part was the interface's, 3 were the window's input (17-72 ms in the system's message pump) and 8 the scripts, all of
+them waiting for a beat on its own thread that held a 35-57 ms collection of the simulation's Lua state, for chat: `SessionSendChatMessage` (947 calls in the run: FAF's scripts send in a replay too) asked the
+simulation only whether there is one, and the delivery asked it for the sender's name. Both now take that from the
+session's state and the last beat's copy: in the ~290 frames with such a collection on the beats' thread the scripts'
+part was at most 35-50 ms before, 4.8 ms after; no frame over 16 ms is the interface's but 2 (a beat's sounds
+after a beat, 20 ms, once; a drawing of 26 ms once).
+
+Left: HostGame's frame (FAF's lobby scripts: InternalCreateBitmap x2639 20-26 ms, SetText x392 10, InternalCreateGroup
+x963 6.5, Hide x607 5, mostly the scripts' own lazy variables and callbacks inside them; a full Lua collection 18-27 ms;
+the map preview's first read 15 ms); leaving a game (one frame of 150-370 ms); the game's first frame's scripts (15-19
+ms, its threads' first tick).
+
 ## 2026-10-24: the interface's long frames left at 4K (helper "stutters2", on 1994b04)
 
 Scenario: the lead's measuring script (main menu 8 s, Skirmish, Launch Game, the loading screen, the game 8 s, back to

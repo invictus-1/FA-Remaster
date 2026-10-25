@@ -382,9 +382,10 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   a profile in the preferences the game's own profile dialog comes up instead.
 - Read from the original executable and followed: the constructor's order, `OnInit`, `SetHidden` /
   `OnHide`, hit testing, the frame update, destruction and its deferred delete, root frame set-up,
-  LazyVar creation and reading, texture size with its border. Inferred from the scripts' use and
-  marked so in the source: `SetParent`, keyboard focus callbacks, `GetTopmostDepth`, the order of
-  control updates and script threads within a frame.
+  LazyVar creation and reading, texture size with its border, `GetTopmostDepth` (each control's
+  Depth read as LazyVar reading does, 0x796680; read 2026-10-25). Inferred from the scripts' use and
+  marked so in the source: `SetParent`, keyboard focus callbacks, the order of control updates and
+  script threads within a frame.
 - Text measures are the original's on Windows: the same GDI font (family name, height = -size,
   antialiased), its text metrics for ascent / descent / leading, and each character's width from
   the same DrawText call, summed without kerning (`maui/font.*`). The game's `/fonts/*.ttf` are
@@ -1067,7 +1068,8 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   `SessionSendChatMessage` brings a message back to the sender's own script on the next frame
   when it is among the receivers (`gamemain.ReceiveChat`): the game's chat lines, its pings and
   its pause notices are all sent so and show by their own echo. One client, the player's own;
-  written from the scripts' use.
+  written from the scripts' use. Neither the sending nor the delivery waits for a beat running on
+  its own thread (the sender's name is the focus army's player from the last beat's copy).
   BUILD TEMPLATES (`GenerateBuildTemplateFromSelection`, `GetActiveBuildTemplate`,
   `SetActiveBuildTemplate`, `ClearBuildTemplates`; `ui/user/user_units.cpp`, the placing in
   `ui/maui/worldview.cpp` TemplateSites): the selected buildings become a template, to scripts
@@ -1175,10 +1177,19 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   loader" task does (func_WorldSessionUserLoad 0x885de0: the session's Lua state 0x885ec9, its
   functions registered 0x885f37..0x885f8a, the rules exported 0x885ff2, SessionInit.lua 0x88603e;
   read 2026-10-24; `GameSession::prepareInterface`, `MOHO64UI_STATE_HERE=1` makes it on the main
-  thread as before). Once the load is through, the main thread takes that state (its session's
-  links: `UserState::LinkSession`), the loading screen's controls go, and `SetupUI`,
-  `StartGameUI`, the setup's beat, `StopLoadingDialog` and `CreateGameInterface` follow
-  (DoInitializing 0x88c3f0).
+  thread as before), and then the files the game's screen imports are compiled in it
+  (`UserState::PrecompileScripts`, the list in app/interface_scripts.h; the state's `doscript` is
+  the engine's and takes such a chunk once instead of compiling the file again) and the factions'
+  "IN TRANSIT" covers decoded. Once the load is through, the main thread takes that state (its
+  session's links: `UserState::LinkSession`), and `SetupUI`, `StartGameUI`, the setup's beat,
+  `StopLoadingDialog` and `CreateGameInterface` follow in the original's order (DoInitializing
+  0x88c3f0: 0x88c4ad, 0x88c507, 0x88c577, 0x88c5cd), the loading screen's controls going just
+  before `StopLoadingDialog`. In a window (ours, only about time; `MOHO64UI_START_ONE_FRAME=1`:
+  one frame as before) this is two halves: the first ends with beat 1 begun on the beats' thread,
+  the loading screen staying up; the second, once that beat is through (a frame or two later),
+  makes the game's screen. Between them the game's state runs no frame and no beat runs
+  (`GameSession::HoldBeats`); INFERRED that nothing of FAF's loading screen depends on those
+  frames.
   `UpdateLoadingDialog` is never called, as in the original. A load that fails goes back to a new
   front end, as the original's "map failed" does. Before this the window stood still for about
   9 s on the lobby. Now the loading screen plays for the whole load (in a window, about 670 frames
@@ -1194,7 +1205,9 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   state moved to the loading thread as above, the interface's texture sizes are read ahead on a
   thread of their own from the program's start (`PrefetchTextureSizes`, maui/texture_info.h), and
   the frame at the load's end holds only the scripts the original's main thread runs there: at
-  3840x2160 it went from 0.35-0.46 s to 84-92 ms (most of it CreateGameInterface).
+  3840x2160 it went from 0.35-0.46 s to 84-92 ms (most of it CreateGameInterface). Since
+  2026-10-25 (docs/ui-benchmarks.md, "the last long frames of a launch") the scripts compiled
+  ahead and the two halves above leave two frames of 22-40 ms there (CreateGameInterface 21-35 ms).
   Left: the game's first frame of the world, 1.3-1.6 s on a fresh device (the renderer making what
   the player's looks ask for). Headless runs (the tests) wait for the load at once, and the loading screen
   gets exactly one frame before the game, so its scripts run in every test

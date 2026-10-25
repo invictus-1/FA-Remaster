@@ -221,6 +221,17 @@ class GameSession {
   // Run the simulation's first beat now if it has not run yet: the interface is made for a game
   // that is under way, and the first beat's sync table tells it the playable area and more.
   void RunFirstBeat();
+  // The same, its tick (and the picture's copy of it) on the beats' thread (ours, only about time: the window's frame
+  // the game's interface starts in no longer waits for it); FinishFirstBeat waits for it and does the rest here (its
+  // record, its sounds, its sync kept for TakePendingSync). With no beats' thread: RunFirstBeat.
+  void StartFirstBeat();
+  void FinishFirstBeat();
+  // While the game's interface is being started over two frames or more (main.cpp): no beat runs and no time is
+  // counted for the beats (the original starts its beats only after DoInitializing, 0x88c3f0), and the window shows the
+  // loading screen as before the load's end (black under the interface: the game's world view is not made yet, so its
+  // picture has no camera). Off again: the world is shown (as OpenPicture left it).
+  void HoldBeats(bool on);
+  bool BeatsHeld() const { return holdBeats_; }
   // The player's orders since the last beat, as the command stream's bytes; asked before each beat.
   std::function<std::string()> takeOrders;
   // Ends the other worlds alive (the menu's background), asked before the scene's samples change
@@ -279,6 +290,8 @@ class GameSession {
   class BeatWorker;
   std::unique_ptr<BeatWorker> worker_;
   bool beatToFinish_ = false;  // a beat ran on the worker: its sounds and sync are still to come
+  bool firstBeatToFinish_ = false;  // the first beat ran on the worker (StartFirstBeat)
+  bool holdBeats_ = false;          // (HoldBeats)
   uint32_t beatFrom_ = 0;      // the tick the running beat started from
   double workerSimSeconds_ = 0, workerPictureSeconds_ = 0;  // (written there; read here after it)
   // How early (in game seconds) a beat starts on its thread: about as long as the last one took,

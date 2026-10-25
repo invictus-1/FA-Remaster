@@ -526,7 +526,7 @@ int l_GetSessionClients(lua_State* L) {
 // everyone. Here there is one client, the player's own (number 1): the message comes back to
 // it on the next frame. Written from the scripts' use; the original's code is not read.
 int l_SessionSendChatMessage(lua_State* L) {
-  if (!TheSim(L)) return 0;
+  if (!UserState::From(L)->HasSim()) return 0;  // (a session's state; the simulation itself is not asked: no wait for a beat)
   const int msg = lua_gettop(L) >= 2 ? 2 : 1;
   if (!lua_istable(L, msg) && !lua_isstring(L, msg)) return 0;
   bool toSelf = msg == 1;
@@ -568,14 +568,20 @@ void DeliverChat(lua_State* L) {
     lua_settop(L, top);
     return;
   }
-  Sim* sim = UserState::From(L)->LiveSim("chat");  // (only when there is chat: it may wait for a beat)
+  // The sender's name: the focus army's player, from the last beat's copy (CopyFromSimulation, the same list; the
+  // focus army changes only at a beat's sync), so that chat never waits for a beat running on its own thread (40-57 ms
+  // at 4K in the 4v4 replay, a sim's collection in that beat); before the first copy it is asked of the simulation.
+  UserState* user = UserState::From(L);
+  std::string name = user->focusNickname;
+  if (!user->economyCopied) {
+    Sim* sim = user->LiveSim("chat");
+    for (const ArmyView& a : ArmyViews(*sim))
+      if (a.index == sim->focusArmy + 1) name = a.nickname;
+  }
   const int list = lua_gettop(L);
   lua_pushstring(L, "moho64ui_chat");  // (a fresh list: a handler may send again)
   lua_pushnil(L);
   lua_rawset(L, LUA_REGISTRYINDEX);
-  std::string name;
-  for (const ArmyView& a : ArmyViews(*sim))
-    if (a.index == sim->focusArmy + 1) name = a.nickname;
   const int n = luaL_getn(L, list);
   for (int i = 1; i <= n; ++i) {
     lua_getglobal(L, "import");

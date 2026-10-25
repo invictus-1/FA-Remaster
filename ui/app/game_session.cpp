@@ -1888,7 +1888,7 @@ void GameSession::PresentToWindow(const SoftwareTarget& target, const IntRect& c
   if (!captureTo_.empty()) wp.picture.CaptureNextWindowFrame(&rgba);
   const auto t0 = std::chrono::steady_clock::now();
   FrameTimes& times = Times();
-  if (picture_ && picture_->direct) {  // a game: its world from the world view's camera
+  if (picture_ && picture_->direct && !holdBeats_) {  // a game: its world from the world view's camera
     Picture& pic = *picture_;
     const double moment = pic.momentFixed ? pic.moment : PictureTick();  // (the one the anchors were of)
     pic.momentFixed = false;
@@ -2167,7 +2167,7 @@ void GameSession::StatsLines(std::vector<std::string>* lines) const {
 }
 
 void GameSession::Advance(double seconds) {
-  if (!sim_) return;
+  if (!sim_ || holdBeats_) return;
   // (a test run's made-up time of the card, moho64ui_SetFrameCostForTests: every frame of a game counts, also without
   // a window)
   if (FrameCost().fakeMs >= 0) FrameCost().Note(FrameCost().fakeMs);
@@ -2461,6 +2461,44 @@ void GameSession::RunFirstBeat() {
   Record(CommandWriter::AdvanceMessage(1));
   FingerprintBeat();
   NoteBeat();
+  for (std::string& sync : sim_->TakeSync()) {
+    if (onSync) onSync(sync);
+    else pendingSync_.push_back(std::move(sync));
+  }
+  PostPrints(*sim_);
+}
+
+void GameSession::StartFirstBeat() {
+  if (!beatsOnThread) return RunFirstBeat();
+  if (worker_) worker_->Wait();
+  if (!sim_ || sim_->tick() != 0) return;
+  if (play_ && !play_->AtEnd()) play_->ApplyUntilAdvance(*sim_);  // (as RunFirstBeat)
+  if (fp_ && !play_) fp_->Beat(*sim_, 0);
+  if (!worker_) worker_ = std::make_unique<BeatWorker>();
+  firstBeatToFinish_ = true;
+  worker_->Start([this] {
+    sim_->Tick();
+    NotePictureBeat();
+  });
+}
+
+void GameSession::HoldBeats(bool on) {
+  const bool was = holdBeats_;
+  holdBeats_ = on;
+#ifdef MOHO64UI_WORLD_PICTURE
+  if (was && !on && windowPicture_ && windowPicture_->shows == WindowPicture::Kind::Game) windowPicture_->picture.SetWorldShown(true);
+#else
+  (void)was;
+#endif
+}
+
+void GameSession::FinishFirstBeat() {
+  if (!firstBeatToFinish_) return;
+  worker_->Wait();
+  firstBeatToFinish_ = false;
+  Record(CommandWriter::AdvanceMessage(1));  // (the rest of RunFirstBeat, in its order)
+  FingerprintBeat();
+  NoteBeatHere();
   for (std::string& sync : sim_->TakeSync()) {
     if (onSync) onSync(sync);
     else pendingSync_.push_back(std::move(sync));

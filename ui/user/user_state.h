@@ -214,6 +214,13 @@ class UserState {
   // commandSource, ownArmy, world, pace and timeline, and its head size (the window may have been resized meanwhile).
   // Until then it has only the simulation itself (liveSim, for its bindings), which it may look at on that thread.
   void LinkSession(const Config& links);
+  // Scripts compiled ahead (ours, only about time): each named file is made into its chunk now, as the engine's
+  // doscript would make it later (LoadScriptWithHooks: the file, its hooks, as one chunk), and kept; this state's
+  // doscript takes a kept chunk instead of compiling the file again, once. Used on the loading thread for the files the
+  // game's screen imports (CreateGameInterface: ~35 of its ~70 ms at 4K were the files' reading and compiling). A file
+  // that cannot be made is left to doscript (its error comes where it came before). Returns how many are kept.
+  int PrecompileScripts(const char* const* names, size_t count);
+  void DropPrecompiledScripts();  // (the kept chunks not taken go)
   // The running simulation, once no beat runs on its own thread (it waits for one that does; the
   // engine's rule: nothing of this state may look at the simulation while it ticks). Every look
   // from this state goes through here. `where`: for the count of waits (MOHO64UI_BEAT_LOG).

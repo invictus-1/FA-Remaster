@@ -131,6 +131,11 @@ bool SavePngPixels(const std::string& hostPath, const uint32_t* pixels, int widt
 const Image& LoadTexture(const Vfs* vfs, const std::string& vpath);
 // Decode a texture file's bytes (the formats LoadTexture reads). False when they cannot be read.
 bool DecodeImage(const std::string& data, Image& out);
+// Texture files decoded ahead on the calling thread (ours, only about time: the skirmish lobby's faction painting,
+// 1900x1080, took 57-72 ms of its first frame). LoadTexture takes such an image when it first asks for its file (it
+// waits for one being decoded at that moment; one not begun yet it decodes itself, and it is no longer done here).
+// Decoded and never asked for, an image is kept until the program ends.
+void DecodeTexturesAhead(const Vfs* vfs, const std::vector<std::string>& vpaths);
 
 // A colour as scripts give it: "AARRGGBB" or "RRGGBB" in hex (any case), or a colour name.
 // What cannot be read is opaque white.
