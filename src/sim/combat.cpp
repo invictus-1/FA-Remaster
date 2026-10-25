@@ -1564,6 +1564,27 @@ Unit* FindBestEnemy(Sim& sim, UnitWeapon* w, const std::vector<Unit*>& list, flo
 }
 
 UnitWeapon* PrimaryWeapon(Unit* u) { return u->weapons.empty() ? nullptr : u->weapons[0]; }
+// CAiAttackerImpl::IsTooClose 0x5d7210: nothing for a unit being built; else every weapon in order that can attack
+// the target (CanAttackTarget 0x6d5720) is asked its status (0x6d5d80): an enabled one with the target in its
+// solution (0) ends it at once with no; one too close (1) makes the answer yes unless a later enabled weapon has it
+// in its solution. Seen: MP1 10373, army 6's five Aeon gunships (uaa0203) begin an Attack on army 7's 0x70003e (on
+// the seabed) out of range: the original asks each of their weapons here (one PickTargetPointAboveWater draw each,
+// AboveWaterTargetsOnly), ours asked only the target weapon's status (no draw).
+bool AttackerTooClose(Sim& sim, Unit* u, const AiTarget& t) {
+  if (u->beingBuilt) return false;
+  bool tooClose = false;
+  for (UnitWeapon* w : u->weapons) {
+    if (!w->bp || !CanAttackTarget(sim, w, t)) continue;
+    const int st = TargetStatus(sim, w, t);
+    if (st == 0) {
+      if (w->enabled) return false;
+    } else if (st == 1) {
+      tooClose = true;
+    }
+  }
+  return tooClose;
+}
+
 // GetTargetWeapon 0x5d6dc0
 UnitWeapon* TargetWeapon(Sim& sim, Unit* u, const AiTarget& t) {
   for (UnitWeapon* w : u->weapons)
@@ -3323,7 +3344,10 @@ int AttackStep(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
         }
         return -2;  // suspended; the navigator keeps driving until the weapon reports
       }
-      if (w && TargetStatus(sim, w, target) == 1) {
+      // 0x5f3a7e..0x5f3a95: the attacker's IsTooClose (vt+0x54, 0x5d7210) decides, over ALL its weapons, not the
+      // target weapon's own status (see AttackerTooClose); its CanAttackTarget calls draw for a weapon with
+      // AboveWaterTargetsOnly / BelowWaterTargetsOnly on a target on the seabed.
+      if (!u->weapons.empty() && AttackerTooClose(sim, u, target)) {
         t.state = 2;
         return 1;
       }

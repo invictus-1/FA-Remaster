@@ -467,6 +467,9 @@ class Sim {
   // The entity grid behind GetUnitsInRect / GetReclaimablesInRect (sim/entity_grid.h).
   EntityGrid& entityGrid();
   bool anyAttached = false;  // some unit rides a transport (sim/transport.cpp)
+  // FAF's exe global 0x1292b54 (SetNavigatorPersonalPosMaxDistance): the land path navigator's look-ahead limit in
+  // cells (TryAdvanceTargetPoint 0x5af8d5); 50 until a script sets it (FAF's simInit: 9999). One per sim here.
+  float navPersonalPosMaxDistance = 50.0f;
   uint32_t cargoFollowTick = 0;  // the beat whose cargo has taken its attach bones' transforms (AttachedUnitsTick)
   // Call obj:method(args...) for the nargs values on L's stack; logs script errors.
   // (Every function taking a lua_State works on the caller's state: it may be a thread.)

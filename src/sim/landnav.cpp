@@ -31,11 +31,15 @@ namespace moho {
 namespace {
 
 constexpr float kInf = std::numeric_limits<float>::infinity();
-// TryAdvance's distance limit: the exe reads FAF's constant 0x1292b54 (50.0 in the file), but the
-// oracle probe shows targets 86 cells ahead being taken (2026-10-09). MOHO64_NAV_LOOK overrides.
-float LookAhead() {
-  static const float v = getenv("MOHO64_NAV_LOOK") ? static_cast<float>(atof(getenv("MOHO64_NAV_LOOK"))) : 1e9f;
-  return v;
+// TryAdvance's distance limit (0x5af8c7..0x5af8df): the path point's distance from the current cell in cells,
+// sqrt(dx^2 + dz^2) on the x87 (fild, fmul, faddp, fsqrt), against FAF's exe global 0x1292b54, a float, default 50.0,
+// which FAF's simInit.lua (589-590) sets to 9999 through SetNavigatorPersonalPosMaxDistance (setter 0x128cf27:
+// luaL_optnumber(L, 1, 50.0), fstp). That is why the oracle took targets 86 cells ahead (2026-10-09). Sim::
+// navPersonalPosMaxDistance holds it per sim; the distance is taken in double (exact for the squares; its sqrt
+// compares with the limit as the x87's does). MOHO64_NAV_LOOK overrides.
+float LookAhead(const Sim& sim) {
+  static const char* e = getenv("MOHO64_NAV_LOOK");
+  return e ? static_cast<float>(atof(e)) : sim.navPersonalPosMaxDistance;
 }
 
 bool Dbg() {
@@ -549,9 +553,11 @@ void OnPath(Sim& sim, Unit* u, LandNav& n) {
     if (!InGoal(n, last)) {
       n.problem = true;
       u->unitStates.insert("ProblemGettingToGoal");
-      // the goal centre is appended when the footprint fits there (OnEvent 0x5aeeb0, pathfinding.md 4.4)
+      // the goal centre is appended when the footprint fits there (OnEvent 0x5aeeb0, pathfinding.md 4.4): the test is
+      // Reach(centre, centre) (0x5af2d5..0x5af30b, Reach 0x5af4e0), so a unit on the Water layer takes it without Sub
+      // (FitsReach), not the caps -1 test
       PathCell c{(n.goal[0] + n.goal[2]) / 2, (n.goal[1] + n.goal[3]) / 2};
-      if (Fits(sim, u, c)) n.path.push_back(c);
+      if (Reach(sim, u, c, c)) n.path.push_back(c);
     }
     n.state = 5;
     n.wait = 0;
@@ -632,7 +638,8 @@ bool TryAdvance(Sim& sim, Unit* u, LandNav& n) {
   if (n.fits) hi = std::min(size - 1, std::max(10, lo));
   else hi = std::min(size - 1, 1);
   for (int i = hi; i >= lo; --i) {
-    if (!(Dist(n.path[i], n.cur) < LookAhead() || i == lo)) continue;
+    const double ddx = n.path[i].x - n.cur.x, ddz = n.path[i].z - n.cur.z;
+    if (!(std::sqrt(ddx * ddx + ddz * ddz) < LookAhead(sim) || i == lo)) continue;
     bool ok1 = Reach(sim, u, n.cur, n.path[i]);
     // (0x5af946: for a neighbouring cell UnitClear 0x5af670 gets the cell twice, which is the test of the cell
     // itself, not of the way from the current cell to it; further cells get the line from the unit's position)

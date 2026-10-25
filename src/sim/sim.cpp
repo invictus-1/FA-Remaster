@@ -254,6 +254,13 @@ int l_SetArmyAIPersonality(lua_State* L) {
   return 0;
 }
 
+// SetNavigatorPersonalPosMaxDistance(d) (FAF's exe, setter 0x128cf27): luaL_optnumber(L, 1, 50.0) into the float
+// global 0x1292b54; returns nothing
+int l_SetNavigatorPersonalPosMaxDistance(lua_State* L) {
+  S(L)->navPersonalPosMaxDistance = static_cast<float>(luaL_optnumber(L, 1, 50.0));
+  return 0;
+}
+
 int l_GetGameTick(lua_State* L) {
   lua_pushnumber(L, S(L)->tick());
   return 1;
@@ -776,6 +783,7 @@ void RegisterSimBindings(lua_State* L) {
   SetGlobal(L, "SetArmyAIPersonality", l_SetArmyAIPersonality);
   SetGlobal(L, "GetCueBank", l_GetCueBank);
   SetGlobal(L, "GetGameTick", l_GetGameTick);
+  SetGlobal(L, "SetNavigatorPersonalPosMaxDistance", l_SetNavigatorPersonalPosMaxDistance);
   SetGlobal(L, "GetGameTimeSeconds", l_GetGameTimeSeconds);
   SetGlobal(L, "GetSystemTimeSecondsOnlyForProfileUse", l_GetSystemTimeSecondsOnlyForProfileUse);
   SetGlobal(L, "GetMapSize", l_GetMapSize);
@@ -2412,8 +2420,8 @@ void Sim::Tick() {
       AttachParentGone(*this, u);  // (the transform stays for this beat; the motion takes the unit from the next)
       u->motion.vel = {};
       // ... but the motion's MoveTo of this beat still brings the quaternion back to unit length (0x4edaa0): with the
-      // link gone the unit is no longer attached (CUnitMotion::MotionTick 0x6b9d26: vt+0x34 false), so the full
-      // motion tick runs and ends in MoveTo, from where it stands. Seen: Naval 448 and 553, wrecks 0x1b and 0x4e on
+      // link gone the unit is no longer held as attached, so its motion tick runs and ends in MoveTo, from where it
+      // stands (inferred from the data below; 0x6b9d26's vt+0x34 is IsBeingBuilt, u+0xa0, not an attach test). Seen: Naval 448 and 553, wrecks 0x1b and 0x4e on
       // FAF's sinker when the shell is gone at the sea floor: the original's four parts one float step smaller,
       // exactly ours normalised, the place the same. Aircraft too (their motion's MoveTo, AirMotionTick's, does the
       // same): AIR 406 and 437, dead aircraft 0x17 and 0x100010 on the sinker shell, the same one step.
