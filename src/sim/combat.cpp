@@ -990,7 +990,16 @@ bool CanFire(Sim& sim, UnitWeapon* w) {
 
 int TargetPointDraw(Sim& sim, Entity* e) {
   if (!e) return -1;
-  if (e->kind == Entity::Kind::Blip) e = static_cast<ReconBlip*>(e)->source;
+  if (e->kind == Entity::Kind::Blip) {
+    // CAiTarget::PickTargetPoint 0x5e28f0 asks a blip for its unit through the blip's weak link +0x270 (0x5bf4b0),
+    // which the unit's destruction cleared: a blip left over from a destroyed unit gives -1 and no draw. (Ours
+    // keeps the blip's source pointer for the blip's memory; destroyQueued stands for the link's end, as in
+    // SetCommandEntityTarget.) Seen: MP1 9800, army 6's Attack on the blip 0x30500077 of army 5's 0x500090
+    // (destroyed earlier): the original makes no 0x6aaf94 draw for it, ours made one.
+    const Entity* src = static_cast<ReconBlip*>(e)->source;
+    if (!src || src->destroyQueued) return -1;
+    e = static_cast<ReconBlip*>(e)->source;
+  }
   if (!e || e->kind != Entity::Kind::Unit) return -1;
   const CombatBpData& cb = CB(static_cast<Unit*>(e));
   if (cb.targetBones.empty()) return -1;
