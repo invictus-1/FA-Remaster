@@ -864,6 +864,7 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
       if (b.wreck && !b.original && world.plantsReact) world.plantLife.AddWreck(b.position.x, b.position.z, 0.5f * Length(model->boundsMax - model->boundsMin) * b.scale, now);
       world.meshes.Add(model, at, {0.2f, 0.45f, 1.0f}, b.built, &pose, heat);
       world.water.ripples.AddHull(b.id, b.position, b.turn, model->boundsMin * b.scale, model->boundsMax * b.scale);  // (ripples where it is in the water)
+      world.water.AddAfloat(b.position, b.turn, model->boundsMin * b.scale, model->boundsMax * b.scale);  // [floatfoam] (no foam slab under its floats)
       if (!b.wreck)
         if (const WearLook* w = world.WearOf(b.id, model)) world.meshes.Wear(*w);  // (its battle scars and snow; [unit dirt] its dirt)
       if (!b.wreck && world.blastDebris) world.debris.Warm(model);  // [groundfix] (where its paint glows, read ahead for its death's debris)

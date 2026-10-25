@@ -33,6 +33,23 @@ float DepthAt(int2 p) { return sceneDepth.Load(p, 0); }
 Texture2D<float> sceneDepth : register(t0);
 float DepthAt(int2 p) { return sceneDepth.Load(int3(p, 0)); }
 #endif
+// [shadowmask] The sun's shadow on the ground from its mask (sun_mask.h; lighting.h, SunMaskAt), where this pixel shows the
+// ground the mask was worked out for (its depth within aoMask.x of the ground's: the scene's first sample is not the pixel's
+// middle), else as the surfaces work it out (the shaders built without AO_SUN_MASK: as before).
+#ifdef AO_SUN_MASK
+Texture2D<float> aoMaskDepth : register(t1);
+cbuffer AoMask : register(b2) {
+  float4 aoMask;  // x how near this pixel's depth must be to the ground's (a share of it); y, z the mask's words a row, rows
+};
+float AoSun(float3 world, float3 normal, int2 p) {
+  float m = SunMaskAt(uint2(p), uint(aoMask.y), uint(aoMask.z));
+  float d = aoMaskDepth.Load(int3(p, 0)), own = DepthAt(p);
+  [branch] if (m >= 0 && abs(d - own) <= aoMask.x * own) return m * SmokeShadow(world);
+  return SunShadow(world, normal);
+}
+#else
+#define AoSun(world, normal, p) SunShadow(world, normal)
+#endif
 
 struct VOut {
   float4 position : SV_Position;
@@ -97,7 +114,7 @@ float4 PS(VOut i) : SV_Target {
   [branch] if (contact > 0) {
     float3 world = cameraPosition + axisRight.xyz * P.x + axisUp.xyz * P.y + axisBack.xyz * P.z;
     float3 worldN = normalize(axisRight.xyz * N.x + axisUp.xyz * N.y + axisBack.xyz * N.z);
-    [branch] if (dot(N, sunInView.xyz) > 0 && SunShadow(world, worldN) > 0.5) {
+    [branch] if (dot(N, sunInView.xyz) > 0 && AoSun(world, worldN, p) > 0.5) {
       const int steps = 12;
       float start = (turn[(p.x & 3) + 4 * (p.y & 3)] + 0.5) / 16;
       for (int k = 0; k < steps; ++k) {
@@ -271,11 +288,52 @@ void AmbientOcclusion::Compute(const View& view, const Camera& camera, gfx::Text
   pass.color = target_;
   pass.clearColor = false;  // every pixel is written
   device_->BeginPass(pass);
-  device_->SetPipeline(cover ? computeCover_ : compute_);  // ([coverdark] one sample a pixel)
+  // [shadowmask] (with the sun's shadow mask this frame, the variants that read it: made the first time)
+  const bool mask = sunMask && sunMaskDepth && contactShadows > 0 && MaskPipelines() && sunMaskWords > 0;
+  device_->SetPipeline(mask ? (cover ? computeCoverMask_ : computeMask_) : cover ? computeCover_ : compute_);  // ([coverdark] one sample a pixel)
   device_->SetConstants(0, &view.constants, sizeof view.constants);
   device_->SetConstants(1, &constants_, sizeof constants_);
   device_->SetTexture(0, sceneDepth);
+  if (mask) {
+    const float k[4] = {sunMaskTolerance, static_cast<float>(sunMaskWords), static_cast<float>(sunMaskHeight), 0};
+    device_->SetConstants(2, k, sizeof k);
+    device_->SetTexture(1, sunMaskDepth);
+    device_->SetShaderBuffer(sunMask, 0);
+  }
   device_->Draw(3);
+  if (mask) device_->SetTexture(1, {});
+}
+
+// [shadowmask] The occlusion's variants that read the sun's shadow mask (AO_SUN_MASK): the scene's, and with one sample a pixel
+// the ground cover's (as compute_ and computeCover_ are), made the first time the mask is there.
+bool AmbientOcclusion::MaskPipelines() {
+  if (maskMade_) return maskMade_ > 0;
+  maskMade_ = -1;
+  std::string error;
+  gfx::PipelineDesc pd;
+  pd.name = "ambient occlusion, the sun's shadow mask";
+  pd.cull = gfx::Cull::None;
+  pd.depthTest = pd.depthWrite = false;
+  pd.depthTarget = false;
+  pd.colorFormat = gfx::Format::RGBA16F;
+  const std::string head = "#define AO_SUN_MASK 1\n#define SUN_MASK_BUFFER 1\n";
+  const std::string scene = head + (gSceneSamples > 1 ? "#define MSAA 1\n" : "") + kViewShaderBlock + kLightingShaderBlock + kCompute;
+  pd.vertexSource = pd.pixelSource = scene;
+  computeMask_ = device_->CreatePipeline(pd, &error);
+  if (computeMask_ && gSceneSamples > 1) {
+    const std::string single = head + kViewShaderBlock + kLightingShaderBlock + kCompute;
+    pd.name = "ambient occlusion, the ground cover left out, the sun's shadow mask";
+    pd.vertexSource = pd.pixelSource = single;
+    computeCoverMask_ = device_->CreatePipeline(pd, &error);
+  } else {
+    computeCoverMask_ = computeMask_;
+  }
+  if (!computeMask_ || !computeCoverMask_) {
+    fprintf(stderr, "render: the ambient occlusion cannot read the sun's shadow mask (%s)\n", error.c_str());
+    return false;
+  }
+  maskMade_ = 1;
+  return true;
 }
 
 // [coverdark] The ground cover left out of the occlusion: its shaders made the first time it is wanted, its three

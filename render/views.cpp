@@ -7,7 +7,7 @@
 namespace render {
 
 ViewSide::ViewSide(gfx::Device* d)
-    : device(d), post(d), ao(d), upscaler(d), ranges(d), outlines(d), fsr3(d), motion(d), air(d), clouds(d), bounce(d) {}
+    : device(d), post(d), ao(d), upscaler(d), ranges(d), outlines(d), fsr3(d), motion(d), air(d), clouds(d), bounce(d), sunMask(d) {}
 
 ViewSide::~ViewSide() {
   // (what has no destructor of its own lets go of its pictures here; the rest by their destructors)
@@ -15,6 +15,7 @@ ViewSide::~ViewSide() {
   ao.ReleaseView();
   upscaler.ReleaseView();
   ranges.ReleaseView();
+  sunMask.ReleaseView();  // [shadowmask]
   for (gfx::Texture t : {color, depth})
     if (t) device->Destroy(t);
 }
@@ -52,6 +53,7 @@ void World::SwapView(ViewSide& s) {
   air.SwapView(s.air);
   clouds.SwapView(s.clouds);
   bounce.SwapView(s.bounce);
+  sunMask.SwapView(s.sunMask);  // [shadowmask]
   meshes.SwapBefore(s.before);
   std::swap(camera, s.camera);
   std::swap(view, s.view);

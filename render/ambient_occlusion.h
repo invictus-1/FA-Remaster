@@ -43,6 +43,14 @@ class AmbientOcclusion {
   // shadow maps. How dark (0: none), and how far it looks (world units).
   float contactShadows = 0;
   float contactLength = 1.0f;
+  // [shadowmask] The sun's shadow on the ground worked out once a pixel (sun_mask.h), for the contact shadows' test of where the
+  // sun reaches, where a pixel shows the ground: the mask (SunMask::Rows, its words a row and rows) and the ground's depth it
+  // was worked out from (SunMask::Depth); none: each pixel works it out, as before. How near a pixel's depth (the scene's first
+  // sample) must be to the ground's, a share of it. Set by the world each frame.
+  gfx::Buffer sunMask;
+  gfx::Texture sunMaskDepth;
+  int sunMaskWords = 0, sunMaskHeight = 0;
+  float sunMaskTolerance = 2e-3f;
   // (photofix2) A photo's frame drawn larger than the window: this many of its pixels make one of the window's. How far
   // a pixel looks is at most 48 of the window's pixels (and nothing under 1.5 of them), so that a photo's surroundings
   // reach as far over the ground as the window's (in its own pixels the cap took a smaller disc, whose nearer samples
@@ -85,6 +93,9 @@ class AmbientOcclusion {
   // ground's depth, the cover's and the scene's without it, each one 32-bit float a pixel at the view's size; kept /
   // marked this frame)
   bool CoverReady(const View& view);
+  bool MaskPipelines();  // [shadowmask]
+  gfx::Pipeline computeMask_, computeCoverMask_;
+  int maskMade_ = 0;
   bool CoverPipelines();  // [hitches] (CoverReady's pipelines: PrepareCover)
   gfx::Pipeline computeCover_, groundCopy_, coverMark_, coverSolid_;
   gfx::Texture groundDepth_, coverDepth_, solidDepth_;

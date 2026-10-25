@@ -16,6 +16,10 @@
 namespace render {
 namespace {
 
+constexpr int kWaterGroundSlot = 20;  // [floatfoam] t20: the map's heights (the lifted water's OceanGround reads them there too)
+constexpr int kWaterAfloatSlot = 3;   // [floatfoam] b3: what floats (the lifted water's grid has its own constants there)
+constexpr size_t kAfloatMost = 64;    // [floatfoam] (the nearest to the eye; as the shader's WaterAfloat holds)
+
 // What the original's water computes per pixel, written anew:
 //   normal   = the four scrolling wave normal maps added up, flattened where the map says so
 //   under    = what is below the surface, tinted toward the surface colour by depth
@@ -123,6 +127,7 @@ cbuffer WaterConstants : register(b1) {
   float4 cameraRight;     // w: tan(half the field of view)
   float4 cameraUp;        // w: aspect
   float4 cameraBack;      // w: near distance
+  float4 groundInfo;      // [floatfoam] x the ground's height unit (0: the ground's heights not bound, Water::SetGround)
 #if RIPPLES || SURF
   float4 rippleArea;      // the ripples' field (ripples.h): x, y its first cell's corner (world x, z); z 1 / its side; w a cell's size
   float4 rippleLook;      // x how much its slopes tilt the surface; y the slope from which its crests foam; z how much of its height the waterline takes
@@ -266,6 +271,52 @@ float3 WorldAt(float2 pixel, float depth) {
   float2 ndc = float2(pixel.x * viewport.z * 2 - 1, 1 - pixel.y * viewport.w * 2);
   return cameraPosition + (cameraRight.xyz * (ndc.x * cameraRight.w * cameraUp.w) + cameraUp.xyz * (ndc.y * cameraRight.w) - cameraBack.xyz) * away;
 }
+
+#if !LIFT
+// [floatfoam] The map's ground (Terrain::HeightTexture, one a grid point; Water::SetGround), for telling what stands off it
+// in the water. (The lifted water reads it as OceanGround, ocean.h.)
+Texture2D<float> waterGround : register(t20);
+// The highest of the four grid points round a place (one fetch): never below the ground the terrain draws there, so that
+// a steep shore or a rock of the map's own falling into deep water is not taken for something standing off the ground.
+float GroundTop(float2 xz) {
+  float2 p = clamp(xz, 0, mapSize.xy);
+  float4 g = waterGround.GatherRed(samplerPointClamp, (floor(p) + 1) / (mapSize.xy + 1));
+  return max(max(g.x, g.y), max(g.z, g.w)) * groundInfo.x;
+}
+static const float kThroughOver = 0.12, kThroughNear = 0.1;  // (ThroughSurface's test)
+// What floats on the water (Water::AddAfloat): the units in the water, each a box round its model seen from above (rows of
+// two: its middle x, z and its way forward x, z; its half length and half beam, a margin added). Never more than kAfloatMost.
+cbuffer WaterAfloat : register(b3) {
+  float4 afloatCount;      // x how many
+  float4 afloat[2 * 64];
+};
+// Whether a place lies under something floating: 1 inside one of the boxes, 0 outside them all (soft over the last tenth).
+float UnderAfloat(float2 xz) {
+  float under = 0;
+  int count = int(afloatCount.x);
+  for (int k = 0; k < count; ++k) {
+    float4 a = afloat[k * 2], b = afloat[k * 2 + 1];
+    float2 d = xz - a.xy;
+    float2 outside = abs(float2(dot(d, a.zw), dot(d, float2(-a.w, a.z)))) - b.xy;
+    under = max(under, saturate(1 - max(outside.x, outside.y) / 0.1));
+  }
+  return under;
+}
+// Whether what lies behind the water at `bed` goes up through the surface right there, as a hull's side does at its
+// waterline: the place straight above it, a hand's breadth over the water's level, is on what the eye sees there (the
+// scene about as far from the eye as that place). Over a float under the water it is open (the scene there lies
+// farther: the float under it), or hidden by what stands nearer (the hull over the float). 1 it does, 0 it does not.
+// (Off the screen: taken as going up.)
+float ThroughSurface(float3 bed, float level) {
+  float3 place = float3(bed.x, level + kThroughOver, bed.z);
+  float4 clip = mul(viewProj, float4(place, 1));
+  if (clip.w <= 1e-4) return 1;
+  float2 at = (clip.xy / clip.w * float2(0.5, -0.5) + 0.5) * viewport.xy;
+  if (any(at < 0) || any(at >= viewport.xy)) return 1;
+  float d = length(WorldAt(at, SCENE_DEPTH(int2(at), 0)) - cameraPosition) - length(place - cameraPosition);
+  return saturate(1 - abs(d + 0.03) / kThroughNear);
+}
+#endif
 
 #if SURF_WET
 // [shore] (World::waterDetail with the surf: SURF_WET) The beach just above the water as the surf wets it (surf.h, SurfWetAt), at the
@@ -616,12 +667,27 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
     openHull = saturate((bed.y - ground - 0.5) / 0.4) * saturate((surfaceColor.w - ground - 0.6) / 1.5);
     edge *= 1 - openHull;
   }
+#else
+  // [floatfoam] (nor where what lies behind the water stands well off the map's ground in water deep enough to float in:
+  // the floats under an amphibious unit afloat, a hand's breadth under the surface, read as a shore all over and showed as
+  // flat white blocks. Only under what floats, the units in the water (Water::AddAfloat): a rock keeps its band, and so
+  // does a shore of the map's own, the ground there being as high as what shows; a unit wading ashore keeps it too, the
+  // water being shallow there)
+  float openHull = 0;
+  [branch] if (edge > 0 && afloatCount.x > 0 && groundInfo.x > 0) {
+    openHull = UnderAfloat(bed.xz);
+    [branch] if (openHull > 0) {
+      float ground = GroundTop(bed.xz);
+      openHull *= saturate((bed.y - ground - 0.5) / 0.4) * saturate((surfaceColor.w - ground - 0.6) / 1.5);
+      // (a hull going up through the surface keeps the thin line of foam along its waterline: its last hand's breadth)
+      [branch] if (openHull > 0) openHull *= 1 - ThroughSurface(bed, surfaceColor.w) * saturate(1.5 - deep / 0.1);
+    }
+    edge *= 1 - openHull;
+  }
 #endif
   // (how much of the lace is foam: nearly all of it only in the last hand's breadth of water)
   float much = edge * edge * edge * 0.6 + saturate(1 - deep / 0.05) * 0.3;
-#if LIFT
-  much *= 1 - openHull;  // [hulls]
-#endif
+  much *= 1 - openHull;  // [hulls] ([floatfoam] and what floats on the still water)
 #if SURF
   // [coast] at the map's own shores the surf's waves draw the white water (surf.h, SurfAt): of this even band along the
   // waterline only what the last wave left stays (surf.lap: little where the water is calm or sheltered); round what
@@ -821,6 +887,7 @@ struct WaterConstants {
   float normalRepeat[4];
   float movement[4][4];
   float cameraRight[4], cameraUp[4], cameraBack[4];  // (the modern water's)
+  float groundInfo[4];                                // [floatfoam] (the modern water's: x the ground's height unit, 0 none)
   float rippleArea[4], rippleLook[4];                // (the modern water's with ripples: given only to it)
   float surfArea[4], surfLook[4], surfLook2[4], surfLook3[4];  // [surf] (the modern water's with the surf: given only to it)
 };
@@ -957,6 +1024,21 @@ bool Water::Load(const MapData* map, std::string* error) {
 
 void Water::Draw(const View& view) { DrawWith(view, nullptr, {}, {}); }
 
+void Water::AddAfloat(Vec3 position, const Quat& orientation, Vec3 lo, Vec3 hi) {
+  if (!map_ || !map_->water.present) return;
+  const float level = map_->water.elevation;
+  // (in the water: reaching down to it, and not deep under it; and over water deep enough to float in)
+  if (position.y + lo.y > level + 0.3f || position.y + hi.y < level - 1.0f) return;
+  const Vec3 middle = position + Rotate(orientation, (lo + hi) * 0.5f);
+  if (map_->Height(middle.x, middle.z) > level - 0.6f) return;
+  Vec3 forward = Rotate(orientation, {0, 0, 1});
+  forward.y = 0;
+  forward = Length(forward) > 1e-3f ? Normalize(forward) : Vec3{0, 0, 1};
+  // (its box seen from above, a little wider: what hangs under it, its floats, lies within its model's bounds)
+  constexpr float kMargin = 0.2f;
+  afloat_.push_back({middle.x, middle.z, forward.x, forward.z, (hi.z - lo.z) * 0.5f + kMargin, (hi.x - lo.x) * 0.5f + kMargin, 0});
+}
+
 void Water::DrawModern(const View& view, const Camera& camera, gfx::Texture behind, gfx::Texture sceneDepth) { DrawWith(view, &camera, behind, sceneDepth); }
 
 void Water::DrawWith(const View& view, const Camera* camera, gfx::Texture behind, gfx::Texture sceneDepth) {
@@ -999,6 +1081,7 @@ void Water::DrawWith(const View& view, const Camera* camera, gfx::Texture behind
                             up.x, up.y, up.z, static_cast<float>(view.width) / static_cast<float>(std::max(view.height, 1)),
                             back.x, back.y, back.z, camera->zNear};
     std::memcpy(c.cameraRight, axes, sizeof axes);
+    if (ground_) c.groundInfo[0] = groundUnit_;  // [floatfoam]
   }
   // with ripples on the water this frame (ripples.h): the modern water that reads their field
   if (modern && ripples.Active()) PrepareRipples();
@@ -1031,8 +1114,25 @@ void Water::DrawWith(const View& view, const Camera* camera, gfx::Texture behind
     ocean.Bind();
   }
   if (modern) {
+    // [floatfoam] what floats, the nearest to the eye first (the lifted water's grid sets its own constants there)
+    float afloat[4 + 8 * kAfloatMost] = {};
+    const Vec3 eye = camera->Eye();
+    for (Afloat& a : afloat_) a.away = (a.x - eye.x) * (a.x - eye.x) + (a.z - eye.z) * (a.z - eye.z);
+    const size_t count = std::min(afloat_.size(), kAfloatMost);
+    std::partial_sort(afloat_.begin(), afloat_.begin() + static_cast<std::ptrdiff_t>(count), afloat_.end(),
+                      [](const Afloat& a, const Afloat& b) { return a.away < b.away; });
+    afloat[0] = static_cast<float>(count);
+    for (size_t k = 0; k < count; ++k) {
+      const Afloat& a = afloat_[k];
+      const float row[8] = {a.x, a.z, a.forwardX, a.forwardZ, a.halfLength, a.halfBeam, 0, 0};
+      std::memcpy(afloat + 4 + 8 * k, row, sizeof row);
+    }
+    device_->SetConstants(kWaterAfloatSlot, afloat, static_cast<uint32_t>(sizeof(float) * (4 + 8 * count)));
+  }
+  if (modern) {
     device_->SetTexture(6, behind);
     device_->SetTexture(7, sceneDepth);
+    if (ground_) device_->SetTexture(kWaterGroundSlot, ground_);  // [floatfoam]
   }
   if (surfing) device_->SetTexture(kSurfFieldSlot, surf.Field());
   if (rippling) device_->SetTexture(8, ripples.Surface());
@@ -1048,6 +1148,7 @@ void Water::DrawWith(const View& view, const Camera* camera, gfx::Texture behind
   if (rippling) device_->SetTexture(8, {});  // (the field is written again next frame: not left bound)
   if (surfing) device_->SetTexture(kSurfFieldSlot, {});
   if (oceanic) ocean.Unbind();  // [ocean] (its field too)
+  if (modern && ground_) device_->SetTexture(kWaterGroundSlot, {});  // [floatfoam]
 }
 
 }  // namespace render

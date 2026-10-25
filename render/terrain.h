@@ -139,8 +139,13 @@ class Terrain {
 
   // Builds everything for a map. `map` must stay alive while the terrain is used.
   bool Load(const MapData* map, std::string* error);
-  // Into the scene, or (`shadowPass`) into a shadow map, where only depth is written.
-  void Draw(const View& view, bool shadowPass = false);
+  // Into the scene, or (`shadowPass`) into a shadow map, where only depth is written. [shadowmask] `beyondToo`: a depth
+  // pass with the ground beyond the map's edge too, as the scene has it (the camera's depth for the sun's shadow mask,
+  // sun_mask.h).
+  void Draw(const View& view, bool shadowPass = false, bool beyondToo = false);
+  // [shadowmask] The sun's shadow mask as the ground reads it (sun_mask.h, SunMask::Rows): bound at the shader buffers' slot 0
+  // for the scene's pass while set (the world sets it each frame; none: not bound, the mask not read).
+  gfx::Buffer sunMaskRows;
   // The map's heights of the grid points [x0, x1] x [z0, z1] have changed (the simulation laid the
   // ground under a structure flat): drawn so from now on. Within a frame.
   void HeightsChanged(int x0, int z0, int x1, int z1);

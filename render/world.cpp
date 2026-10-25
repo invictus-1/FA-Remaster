@@ -35,6 +35,7 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       draw(device),
       ao(device),
       post(device),
+      sunMask(device),  // [shadowmask]
       air(device),
       rays(device),
       bounce(device),
@@ -1129,6 +1130,8 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   {  // ripples on the water (their pipelines made the first frame they are on, not at the game's first splash)
     const bool ripplesOn = waterRipples && look == Look::Modern && haveMap_ && map.water.present;
     if (!extraView) water.ripples.Begin(clock_, ripplesOn, sidePicture);  // [views] (moved on once a frame, by the first view)
+    if (!sidePicture) water.ClearAfloat();  // [floatfoam] (what floats listed anew for each view, AddFrame; a side picture drawn
+                                            // without its own AddFrame keeps the frame's)
     if (ripplesOn) water.PrepareRipples();
     // (winter water's pipeline made while the option is on, before the first snow needs it)
     if (winterWater && look == Look::Modern && haveMap_ && map.water.present) water.PrepareWinter(ripplesOn);
@@ -2425,6 +2428,8 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
         water.surf.AddShip(u.id, blueprint, model, position, orientation, riding ? rode.rise : 0.0f, riding ? rode.slopeX : 0.0f, riding ? rode.slopeZ : 0.0f);
       // ripples where it floats, hovers or wades in the water (what the army sees)
       if (u.Seen() && !asRemembered && !extraView) water.ripples.AddHull(u.id, position, orientation, model->boundsMin * model->scale, model->boundsMax * model->scale);
+      // [floatfoam] (what floats, for the modern water: no foam slab under its floats)
+      if (u.Seen() && !asRemembered) water.AddAfloat(position, orientation, model->boundsMin * model->scale, model->boundsMax * model->scale);
       // a wake, when it goes on the water: by how far it has come since the frame before
       if (haveMap_ && map.water.present && u.Seen() && std::fabs(position.y - map.water.elevation) < 0.4f) {
         Moving& m = moving_[u.id];
@@ -3231,6 +3236,22 @@ void World::Render() {
     skyTable = skyDraw.BuildTables(view, skyLight);
   }
   if (!skyTable) view.constants.skyTable[0] = 0;  // (where it cannot be built: the fitted sky, as without it)
+  // [shadowmask] the sun's shadow on the ground worked out once a visible pixel (sun_mask.h): the ground's depth alone (with
+  // what lies beyond the map's edge), and the mask from it, which the ground's pass and the contact shadows read
+  view.constants.shadowMask[0] = 0;
+  terrain.sunMaskRows = {};
+  if (shadowMask && shadowed && look == Look::Modern && !sidePicture && sunMask.Size(view.width, view.height)) {
+    Stage("sun shadow mask: the ground's depth");
+    device_->BeginPass(sunMask.DepthPass());
+    terrain.Draw(view, true, true);
+    Stage("sun shadow mask");
+    device_->SetTexture(kShadowMapSlot, shadows.Map());
+    sunMask.groundNormals = terrain.NormalMap();
+    sunMask.groundSize[0] = static_cast<float>(map.width);
+    sunMask.groundSize[1] = static_cast<float>(map.height);
+    sunMask.Compute(&view);
+    terrain.sunMaskRows = sunMask.Rows();
+  }
   const float clear[4] = {0.05f, 0.06f, 0.08f, 1};
   post.BeginScene(view.width, view.height, clear);
   device_->SetTexture(kShadowMapSlot, shadows.Map());
@@ -3347,6 +3368,14 @@ void World::Render() {
       Stage("horizon: icebergs");
       horizon.DrawSolid(view);
     }
+    // [shadowmask] (the ground's pass has read the mask; of what comes after only the contact shadows do, where they see the
+    // ground: AmbientOcclusion::sunMask)
+    view.constants.shadowMask[0] = 0;
+    ao.sunMask = terrain.sunMaskRows;
+    ao.sunMaskDepth = terrain.sunMaskRows ? sunMask.Depth() : gfx::Texture{};
+    ao.sunMaskWords = sunMask.Words();
+    ao.sunMaskHeight = sunMask.Height();
+    terrain.sunMaskRows = {};
     // ambient occlusion: from the depth of everything solid, laid over it before the water
     Stage("ambient occlusion");
     ao.contactShadows = contactShadows ? 0.8f : 0.0f;
@@ -3395,6 +3424,7 @@ void World::Render() {
       lights.Bind();
       device_->SetTexture(kShadowMapSlot, shadows.Map());
       device_->SetTexture(kLampShadowSlot, lights.ShadowMap());
+      water.SetGround(terrain.HeightTexture(), terrain.HeightUnit());  // [floatfoam] (no foam slab under what floats)
       water.DrawModern(view, camera, post.Behind(), post.Depth());
       // [hulls] (what the waves leave on the ships' hulls above the water: hull_wash.h; only with the lifted ocean and its hulls)
       hullWash.Draw(view, camera, post.Depth(), water.ocean, terrain.HeightTexture(), terrain.HeightUnit(), static_cast<float>(map.width),
