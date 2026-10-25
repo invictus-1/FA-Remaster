@@ -687,7 +687,14 @@ bool HPathTables::CanTraverse(const Search& s, const PathCell& n) const {
   const bool alt = t.unit && (t.unit->altFootprintNav || t.unit->altFootprintForced);
   const PathGrid* g = t.fitGrid[alt ? 1 : 0] ? t.fitGrid[alt ? 1 : 0] : s.cm->grid;
   if (t.ignoreStructures) {
-    if (!g || !g->Caps(n.x, n.z)) return false;
+    // 0x5aa738..0x5aa7b1 (CanPathTo's search, +0x16): OCCUPY_MobileCheck's caps for a copy of the footprint with
+    // IgnoreStructures set (flags |= 1, 0x5aa74f..0x5aa75f), Sub off for a unit on the Water layer (0x5aa788), then
+    // OCCUPY_FootprintFits 0x7209e0 on them: the land structures do not count, the water ones do (its Water test is
+    // not gated by IgnoreStructures). It returns there: no unit test.
+    if (!g) return false;
+    uint8_t caps = g->Caps(n.x, n.z);
+    if (t.dropSub) caps &= static_cast<uint8_t>(~kLayerSub);
+    return FitsCaps(caps, true, false, g->BlockedWater(n.x, n.z)) != 0;
   } else if (t.startStandable) {
     // (0x5aa7ba..0x5aa7fc: OCCUPY_MobileCheck's caps without Sub for a unit on the Water layer, as Reach takes them)
     if (!g || !g->Passable(n.x, n.z, t.dropSub ? kLayerSub : 0)) return false;
