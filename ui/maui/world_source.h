@@ -27,6 +27,11 @@ struct WorldCamera {
   // of Detail "Extreme"): the models' levels of detail and the decals' and effects' cutoffs go by it (render::Camera)
   float lodScale = 1;
 };
+// The camera a game's world view starts with (maui/worldview.cpp, as the original's CameraImpl::Reset 0x7a80a0: over
+// the playable ground's middle, north up, as far out as it goes) for a map of `mapW` x `mapH` with that playable rect
+// (x0, z0, x1, z1; whole map when empty), a view of that `aspect`, its focus at `groundY`. FAF's game shows it for its
+// first second (gamemain.lua StartupSequence waits 1 s, then zooms onto the commander): the renderer warms with it.
+WorldCamera StartWorldCamera(float mapW, float mapH, const int playable[4], float aspect, float groundY);
 
 // What the interface adds to the world's picture: marks under the selected units, the building
 // being placed (a ghost, green where it can stand and red where not), the lines of orders.

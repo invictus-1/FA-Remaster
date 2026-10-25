@@ -209,11 +209,15 @@ bool MapSize(lua_State* L, float* w, float* h) {
   return ok;
 }
 
+void PlaceOn(Camera* c, float w, float h);
 void Place(lua_State* L, Camera* c) {
   if (c->placed) return;
   float w = 512, h = 512;
   if (!MapSize(L, &w, &h)) return;
-  // As the original's Reset (FA exe 0x7a80a0): over the map's middle, north up, as far out as it goes.
+  PlaceOn(c, w, h);
+}
+// As the original's Reset (FA exe 0x7a80a0): over the map's middle, north up, as far out as it goes.
+void PlaceOn(Camera* c, float w, float h) {
   c->placed = true;
   c->mapW = w, c->mapH = h;
   float x0, z0, x1, z1;  // (over the playable ground's middle, once there is one)
@@ -232,6 +236,19 @@ void Place(lua_State* L, Camera* c) {
   c->pitchAdjust = 0;
   c->focusFromScript = false;
   c->toHeading = kPi, c->toPitch = kFarPitch * kDegrees;
+}
+
+// The camera as a view of the world (WorldView::CameraFor; the picture's camera).
+WorldCamera ViewOf(const Camera* c) {
+  WorldCamera w;
+  // (a blast's shake shifts the whole view: ShakeCamera below)
+  for (int i = 0; i < 3; ++i) w.target[i] = c->focus[i] + c->shakeOffset[i];
+  w.distance = EyeDistance(c);
+  w.heading = c->heading - kPi;
+  w.pitch = PitchOf(c);
+  w.fovY = FovYOf(c);
+  w.lodScale = c->lodScale;  // (cam_SetLOD's)
+  return w;
 }
 
 // Turning by hand (FA exe 0x7a6ce0): the heading by dx, the lean by dy, both at cam_SpinSpeed (360
@@ -1033,15 +1050,7 @@ class WorldView : public Control {
   WorldCamera CameraFor(lua_State* L) {
     Camera* c = GetCameraObject(L, cameraName);
     TakeAspect(c);
-    WorldCamera w;
-    // (a blast's shake shifts the whole view: ShakeCamera below)
-    for (int i = 0; i < 3; ++i) w.target[i] = c->focus[i] + c->shakeOffset[i];
-    w.distance = EyeDistance(c);
-    w.heading = c->heading - kPi;
-    w.pitch = PitchOf(c);
-    w.fovY = FovYOf(c);
-    w.lodScale = c->lodScale;  // (cam_SetLOD's)
-    return w;
+    return ViewOf(c);
   }
   // The camera as the picture is given it (EnsurePicture): the focus at the ground's height there.
   WorldCamera PictureCameraFor(lua_State* L) {
@@ -2974,6 +2983,16 @@ int l_GetDepositsAroundPoint(lua_State* L) {
   return 1;
 }
 }  // namespace
+WorldCamera StartWorldCamera(float mapW, float mapH, const int playable[4], float aspect, float groundY) {
+  Camera c;  // (a fresh camera as a world view gets one, placed as the original's Reset: Place)
+  if (playable && playable[2] > playable[0] && playable[3] > playable[1])
+    for (int i = 0; i < 4; ++i) c.play[i] = static_cast<float>(playable[i]);
+  c.aspect = aspect > 0 ? aspect : c.aspect;
+  PlaceOn(&c, mapW, mapH);
+  WorldCamera w = ViewOf(&c);
+  w.target[1] = groundY;
+  return w;
+}
 bool ScreenToWorld(lua_State* L, float x, float y, float out[3]) {
   WorldView* v = MainView(UserState::From(L)->ui().GetFrame(0));
   if (!v) return false;

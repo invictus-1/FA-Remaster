@@ -712,6 +712,7 @@ struct GameSession::WindowPicture {
   std::chrono::steady_clock::time_point begun{};
   std::string failedGameMap;  // (a game's map the picture could not open: not tried again for that launch)
   bool vsync = true;
+  int drawnW = 0, drawnH = 0;  // (the window's size as last drawn: the start camera's aspect, ServeLoad)
   bool lowLatency = false;     // (as the renderer's picture starts: SetLowLatency)
   int layerW = 0, layerH = 0;  // the interface layer's size as last given (0: none yet)
   // The picture over the window drawn by the card (SetBackdrop): none, the interface's (CardSink: the loading
@@ -1470,6 +1471,15 @@ void GameSession::ServeLoad() {
   if (load_ != Load::Running || loadPrepared_ || BeatRunning() || !loadOk_ || !loadSim_) return;
   if (!windowPicture_ || windowPicture_->pending != WindowPicture::Kind::Game) return;
   loadPrepared_ = true;
+  // (and the camera the game will first be seen by, the whole map from above for its first second, for the warm
+  // frames: the renderer's own is a nearer one over the map's middle)
+  if (const TerrainMap* map = loadSim_->map()) {
+    const float mw = static_cast<float>(map->width()), mh = static_cast<float>(map->height());
+    const WindowPicture& wp = *windowPicture_;
+    const float aspect = wp.drawnH > 0 ? static_cast<float>(wp.drawnW) / static_cast<float>(wp.drawnH) : 16.0f / 9.0f;
+    const WorldCamera start = StartWorldCamera(mw, mh, loadSim_->playableRect, aspect, map->SurfaceHeight(mw * 0.5f, mh * 0.5f));
+    windowPicture_->picture.SetLoadCamera(Picture::ToRender(start));
+  }
   if (windowPicture_->picture.PrepareSession(*loadSim_))
     Logf(LogLevel::Info, "moho64ui: the game's map opening behind makes the simulation's models ahead");
 #endif
@@ -1884,6 +1894,7 @@ void GameSession::PresentToWindow(const SoftwareTarget& target, const IntRect& c
     pic.momentFixed = false;
     if (pic.cameraW > 0) {
       wp.picture.DrawToWindow(pic.camera, w, h, moment);
+      wp.drawnW = w, wp.drawnH = h;
       // (the first-start graphics check's measurement: the card's time of the newest frame it has finished)
       if (FrameCost().fakeMs < 0) FrameCost().Note(wp.picture.LastStats().gpuMs);
     }
@@ -1904,6 +1915,7 @@ void GameSession::PresentToWindow(const SoftwareTarget& target, const IntRect& c
     const bool world = wp.shows == Kind::Menu && menuBackdrop && menuBackdrop->TakeView(wp.picture, w, h, &camera, &tick);
     if (wp.shows != Kind::None) wp.picture.SetWorldShown(world);
     wp.picture.DrawToWindow(camera, w, h, tick);
+    wp.drawnW = w, wp.drawnH = h;
     if (world) {
       times.worldDraw += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
       ++times.worldDraws;
