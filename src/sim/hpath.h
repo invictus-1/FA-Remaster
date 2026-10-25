@@ -33,6 +33,7 @@ class Sim;
 class Unit;
 class PathGrid;
 class Navigation;
+class WorkerPool;
 
 struct PathCell {
   int x = 0, z = 0;
@@ -88,9 +89,12 @@ class HPathTables {
   bool SearchNow(PathTraveler* t, int budget);
   // Multicore step 2a, before WorkAll: what the queued searches would make lazily, made now: the occupancy grids
   // of their cluster maps and footprints, and with margin > 0 the data of the dirty or stale clusters within
-  // `margin` 32-clusters of each search's start-goal box (ClusterMap::ahead). Changes nothing a search computes or is
-  // charged. True when a queued search is blocked by units (the caller makes the unit grid then).
-  bool PrepareSearches(int margin);
+  // `margin` 32-clusters of each search's start-goal box (ClusterMap::ahead); with `all` also the data of every
+  // stale cluster of the cluster maps that have a search (paid by the background, its data not made yet). The data
+  // is made on `pool` (null: here): the 8-clusters, then the 32-clusters. Changes nothing a search computes or is
+  // charged. True when a queued search is blocked by units (the caller makes the unit grid then). The grids must
+  // have no pending terrain changes (Navigation::ApplyTerrainChanges first): the stage reads them on several threads.
+  bool PrepareSearches(int margin, bool all = false, WorkerPool* pool = nullptr);
   // The heightfield vertices [vx0, vx1] x [vz0, vz1] changed (FlattenMapRect): data made ahead there is dropped
   // (the clusters' own accounting is not touched: the original does not dirty them for it).
   void TerrainChanged(int vx0, int vz0, int vx1, int vz1);
@@ -124,6 +128,7 @@ class HPathTables {
     // TerrainChanged drop it. (Searches never read a dirty or stale cluster's lv before building it, so lv may hold
     // the new data early.)
     std::vector<uint8_t> ahead[3];
+    std::vector<uint8_t> picked[3];  // (PrepareSearches: on its list of clusters to make; cleared when made)
     NamedFootprint fp;
     size_t bgWord = 0;     // background iterator: word of the top level's dirty bit array (map+0x8c)
     bool bgDone = false;   // nothing dirty left (map+0x88; DirtyRect clears it)
@@ -156,7 +161,16 @@ class HPathTables {
   ClusterMap* FindMap(const NamedFootprint& fp);  // (no new map: its place in mapOrder_ is the first search's)
   bool TakeAhead(ClusterMap& m, int L, size_t i);  // the cluster's data made ahead, if any (dropped from ahead)
   void MakeAhead(ClusterMap& m, int L, int cx, int cz);
+  // PrepareSearches' list: the cluster and, for a 32-cluster, its dirty or stale 8-clusters, as MakeAhead would make
+  // them (not those made ahead already or listed).
+  void PickAhead(ClusterMap& m, int L, int cx, int cz);
   void PrepareTraveler(const PathTraveler& t, ClusterMap* cm, int margin);
+  struct AheadItem {
+    ClusterMap* m;
+    int cx, cz;
+    size_t i;
+  };
+  std::vector<AheadItem> pick_[3];  // (PrepareSearches' lists by level, kept between beats for their capacity)
   bool Ready(ClusterMap& m, int L, int cx, int cz, int* budget, bool make = true);
   void Make(ClusterMap& m, int L, int cx, int cz);
   void Build1(ClusterMap& m, int cx, int cz);
