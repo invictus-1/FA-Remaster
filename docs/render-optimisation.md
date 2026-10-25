@@ -389,3 +389,26 @@ Quiet window (2026-10-24 15:12-16:12, the same exe off vs on, typical): the mode
 handed, and the picking) R3 1440p 1.82 -> 1.08 ms, R3 4K 2.39 -> 1.22, R2 1.98 -> 1.72; close up no gain (R1 1.37 ->
 1.41, R4 1.30 -> 1.49: few props in view, the picking's 0.1-0.2 ms and the empty lists' draws); the card's picking
 0.02-0.07 ms. Processor typical R3 4K 15.66 -> 14.95.
+
+**Step 2, the card at 4K (2026-10-24; World::shadowFit, World::rayRefit on; --shadow-keep off).** Each sun cascade draws
+only what can shadow the camera's view; the ray-traced scene's top level is refitted in place when only where things
+stand has changed (gfx.h RefitScene; rebuilt every 30 frames and when anything comes or goes). Quiet window (14:34-15:09,
+4K, median): the ray scene -0.15..0.22 ms (40-60 %), sun shadows -0.08..0.10 ms: about -0.25 ms of card a frame. Sun
+shadows cost only 0.4-1.0 ms at 4K on a quiet card. Far cascades kept between frames (--shadow-keep 2) save 0.1-0.2 ms
+more but show the sun's sweep a frame late at a low sun: off.
+What the 4K card spends now (top stages, median ms): R2 units and scenery 5.3, ground 4.1, water 1.0; R3 ground 3.9,
+units and scenery 3.6, water 1.7; R5 units and scenery 5.2, ground 3.5, ambient occlusion 1.2; R6 ground 3.2, units and
+scenery 2.6, water 2.1. One look left out at a time (R5, R6): soft shadows 1.7-4.4 ms in all (a 16-tap search and 16
+taps on every shaded surface, the ground's hidden pixels too), ray reflections up to 1.2, bounce light up to 1.0, contact
+shadows 0.67, ground parallax nothing measurable.
+**Next, the card's biggest lever:** the sun's shadow worked out once a visible pixel after a depth pass (not in every
+surface's shader, not on the ground under units), then cheaper soft shadows (fewer taps smoothed by the temporal
+upscaler, an early out where the search finds the place fully lit or shadowed), ambient and contact shadows at half
+resolution, ray reflections only on glossy surfaces.
+
+**The game's first frames (2026-10-24; WorldPicture HoldLooks, PrepareSession, SetLoadDayAndWeather).** A map opened
+behind the screen is warmed on its loading thread with the game's looks, hour and first beat, and the session's models
+made ahead; the first three frames after the switch at 4K D3D12 (M28 SETONS_R): 2384 / 209 / 33 ms (10-23) -> 20-32 ms,
+the same as the frames after them. The loading screen's film no longer stops (the longest frame while a map loads ~25
+ms). Vulkan: present waited 130-260 ms on new host-visible staging memory; a reserve of min(1 GB, RAM / 16) is taken at
+the start.
