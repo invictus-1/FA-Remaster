@@ -74,6 +74,7 @@
 #include "smoke.h"
 #include "stream_water.h"  // [stream]
 #include "sunlight.h"  // [sunlight]
+#include "sun_mask.h"  // [shadowmask]
 #include "terrain.h"
 #include "textures.h"
 #include "unit_wear.h"
@@ -414,6 +415,13 @@ class World {
   DebugDraw draw;
   AmbientOcclusion ao;
   Post post;
+  // [shadowmask] The sun's shadow on the ground worked out once a visible pixel (sun_mask.h): before the scene, the ground's
+  // depth drawn into a target of its own and the shadow maps' share of the sun worked out for each pixel from it, which the
+  // ground's pass and the contact shadows read instead of working it out (the rest keep their own). Modern look; off by
+  // default (viewer --shadow-mask). The same picture but where a shadow's soft edge is on the ground: there the place a
+  // pixel's shadow is looked up at comes from the depth, not from the ground's own shader (another draw of its noise).
+  bool shadowMask = false;
+  SunMask sunMask;
   // Light in the air (air.h; the lighting upgrade, docs/render-lighting.md): a volume of the air's light
   // over the view, in place of the haze and mist formulas, the sun's shafts and the lamps' beams in it
   // with their shadows. Modern look only. Off by default (Chris, 2026-10-16: each new look a player's

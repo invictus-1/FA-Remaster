@@ -136,6 +136,33 @@ float SmokeShadow(float3 world) {
 // The sun's shadow on a place: the shadow maps', and the smoke's where it casts one.
 float SunShadow(float3 world, float3 normal) { return SunShadowMaps(world, normal) * SmokeShadow(world); }
 
+// [shadowmask] The sun's shadow worked out once a visible pixel of the ground (sun_mask.h, World::shadowMask): the shadow maps'
+// share of it, as SunShadowMaps works it out for the ground the camera sees there, or below 0 where the mask leaves it to
+// the surface (no ground there, or the depth not smooth round the pixel: a crest, a crease, the ground's edge, where the
+// scene's samples of a pixel may lie on other ground than its middle). Kept as two halves to a word, a row of the picture
+// after another (the ground's texture registers are all taken): a shader that reads it says SUN_MASK_BUFFER before this block
+// and has the shader buffer at slot 0 for it. `words`: a row's words, `rows` the rows (out of them: -1).
+#ifdef SUN_MASK_BUFFER
+ByteAddressBuffer sunMaskRows : register(t0, space1);
+float SunMaskAt(uint2 p, uint words, uint rows) {
+  [branch] if ((p.x >> 1) >= words || p.y >= rows) return -1;
+  uint w = sunMaskRows.Load((p.y * words + (p.x >> 1)) * 4);
+  return f16tof32((p.x & 1) ? (w >> 16) : (w & 0xffff));
+}
+#endif
+// The ground's shader: the mask where it serves (the view's shadowMask.x on), else the ground's own SunShadow, as without it.
+// `position`: the pixel shader's SV_Position.
+float SunShadowSeen(float3 world, float3 normal, float4 position) {
+#ifdef SUN_MASK_BUFFER
+  [branch] if (shadowMask.x > 0.5) {
+    float m = SunMaskAt(uint2(position.xy), uint(shadowMask.z), uint(shadowMask.w));
+    [branch] if (m >= 0) return m * SmokeShadow(world);
+    [branch] if (shadowMask.x > 1.5) return 0.5;  // (checks, SunMask::check: where it is left to the ground, half)
+  }
+#endif
+  return SunShadow(world, normal);
+}
+
 // Which of the sun's shadow maps a place is looked up in (0 the nearest and sharpest; -1: none).
 int SunCascade(float3 world) {
   if (shadowsOn < 0.5) return -1;

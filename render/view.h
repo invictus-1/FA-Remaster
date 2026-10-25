@@ -187,6 +187,10 @@ struct ViewConstants {
   // not the horizon's haze: x 1 = on (a map with water, a time of day); y the sea's level; z the haze it is lost in by 1/e
   // (world units), w the height over the sea that haze thins to 1/e over (the land far off's, BeyondLand::haze, hazeHeight).
   float beyondSea[4];
+  // [shadowmask] The sun's shadow on the ground worked out once a visible pixel (sun_mask.h, World::shadowMask): x 1 = the
+  // ground's pass reads it (lighting.h, SunShadowSeen; 2: and checks it, SunMask::check); y unused; z the mask's words a row;
+  // w its rows. 0: as without it.
+  float shadowMask[4];
 };
 
 // The same block, as HLSL source: shaders start with it.
@@ -244,6 +248,7 @@ cbuffer View : register(b0) {
   float4 shaftLow;        // [sunlight] the low haze: x its height; y its forward scattering; z the shafts' pass's reach for it
   float4 driftPicture;    // [sunlight] the drifting shadows' picture: x, y its middle; z 1 / its width; w 1 = drawn this frame
   float4 beyondSea;       // (sky) the far sea from above: x 1 = on; y the sea's level; z its haze's 1/e distance; w the haze's thinning height
+  float4 shadowMask;      // [shadowmask] the sun's shadow mask on the ground: x 1 = the ground reads it; z its words a row; w its rows
 };
 // (every texture read with Sample takes the temporal upscaler's bias: textures with levels - the art's - are
 // read as finely as the screen's size wants; pictures drawn by the renderer have one level and do not change)

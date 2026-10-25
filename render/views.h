@@ -62,6 +62,7 @@ struct ViewSide {
   Air air;
   Clouds clouds;
   BounceLight bounce;
+  SunMask sunMask;  // [shadowmask]
   MeshRenderer::Before before;
 
   // the world's numbers of a view (World's private members of those names)

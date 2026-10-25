@@ -2,6 +2,7 @@
 // high-quality water is, as far as this stage can (see water.cpp for what is still missing).
 #pragma once
 #include <string>
+#include <vector>
 
 #include "camera.h"
 #include "gfx.h"
@@ -52,6 +53,19 @@ class Water {
   // picture as it was before the water (`behind`, one sample a pixel) and the scene's depth to read.
   // Without several samples a pixel it draws as Draw does.
   void DrawModern(const View& view, const Camera& camera, gfx::Texture behind, gfx::Texture sceneDepth);
+  // [floatfoam] The map's ground for the modern water (Terrain::HeightTexture and HeightUnit; before DrawModern): its foam
+  // along the waterline is left out under what floats (AddAfloat) where what lies behind the water stands well off the
+  // ground in water deep enough to float in (the floats of an amphibious unit afloat, a hand's breadth under the surface,
+  // showed as flat white blocks). None: the foam as before.
+  void SetGround(gfx::Texture heights, float heightUnit) {
+    ground_ = heights;
+    groundUnit_ = heightUnit;
+  }
+  // [floatfoam] What floats, for that: the units (World::AddFrame, each unit seen: its place, its turn and its model's bounds,
+  // scaled), those in the water over water deep enough to float in kept; listed anew for each view (World::Begin:
+  // ClearAfloat), the nearest 64 to the eye used. The foam is left out only under them, so that a rock keeps its band.
+  void ClearAfloat() { afloat_.clear(); }
+  void AddAfloat(Vec3 position, const Quat& orientation, Vec3 lo, Vec3 hi);
 
  private:
   gfx::Device* device_;
@@ -73,6 +87,12 @@ class Water {
   gfx::Pipeline OceanPipeline(int key);
   gfx::Buffer vertices_;
   gfx::Texture waterMap_, waves_[4], sky_;
+  gfx::Texture ground_;  // [floatfoam] (SetGround)
+  float groundUnit_ = 0;
+  struct Afloat {  // [floatfoam] (AddAfloat: its box's middle, its way forward, its half length and half beam; how far from the eye)
+    float x, z, forwardX, forwardZ, halfLength, halfBeam, away;
+  };
+  std::vector<Afloat> afloat_;
 };
 
 }  // namespace render

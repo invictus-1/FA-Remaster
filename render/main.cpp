@@ -147,6 +147,14 @@
 //           the lean and the field of view following it as the original's camera does; heading and point as --cam gives
 // --soft-shadows [size]  soft shadows (World::softShadows; modern look): the sun's shadows blurred the more the
 //           farther from what casts them; `size` how much wider per world unit (0.02 at first; a number is optional)
+// --shadow-mask [check]  [shadowmask] the sun's shadow on the ground worked out once a visible pixel (World::shadowMask,
+//           sun_mask.h; modern look): before the scene the ground's depth alone, and from it the shadow maps' share of the
+//           sun for each pixel, which the ground's pass and the contact shadows read instead of working it out. `check`:
+//           where it leaves the shadow to the ground, the sun half (see it with --inspect shadow)
+// --shadow-mask-share  [shadowmask] --shadow-mask, and (with soft shadows) the search for what casts a shadow shared by
+//           each 2 x 2 pixels: a quarter of its taps (SunMask::shareSearch)
+// --shadow-mask-smooth <share>  [shadowmask] how smooth the ground's depth must be round a pixel for the mask to serve there
+//           (SunMask::smoothness, 0.002)
 // --ray-reflections  reflections by ray tracing (World::rayReflections; the shaders built for it, gRayShaders; where the
 //           device has ray tracing): smooth surfaces mirror what their rays meet
 // --ray-light-shadows [rays|all]  the small lights' shadows by rays (World::rayLightShadows; the shaders built for it, as
@@ -711,6 +719,9 @@ struct Options {
   bool framegenCheck = false;           // --framegen-check
   bool air = false;                     // --air
   bool softShadows = false;             // --soft-shadows
+  int shadowMask = 0;                   // [shadowmask] --shadow-mask (2: check)
+  float shadowMaskSmooth = -1;          // [shadowmask] --shadow-mask-smooth (-1: SunMask's own)
+  bool shadowMaskShare = false;         // [shadowmask] --shadow-mask-share
   bool contactShadows = false;          // --contact-shadows
   bool skyTables = false;               // --sky-tables
   bool rayView = false;                 // --ray-view
@@ -1081,6 +1092,11 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--terrain-despite-hold") o->terrainDespiteHold = true;
     else if (a == "--no-falling-leaves") o->fallingLeaves = false;  // [seasons]
     else if (a == "--ground-ultra") o->groundUltra = true;
+    else if (a == "--shadow-mask-share") o->shadowMaskShare = true, o->shadowMask = std::max(o->shadowMask, 1);  // [shadowmask]
+    else if (a == "--shadow-mask") {  // [shadowmask]
+      o->shadowMask = std::max(o->shadowMask, 1);
+      if (i + 1 < argc && std::string(argv[i + 1]) == "check") o->shadowMask = 2, ++i;
+    }
     else if (a == "--soft-shadows") {
       o->softShadows = true;
       if (i + 1 < argc && (std::isdigit(static_cast<unsigned char>(argv[i + 1][0])) || argv[i + 1][0] == '.')) o->sunSize = static_cast<float>(atof(argv[++i]));
@@ -1339,6 +1355,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--fx") o->fx.fx = v;
     else if (a == "--effects-quality") o->effectsQuality = static_cast<float>(atof(v));
     else if (a == "--shadow-size") o->shadowSize = atoi(v);
+    else if (a == "--shadow-mask-smooth") o->shadowMaskSmooth = static_cast<float>(atof(v));  // [shadowmask]
     else if (a == "--shadow-keep") o->shadowKeep = std::max(0, atoi(v));  // [cardcost]
     else if (a == "--record-threads") o->recordThreads = std::max(atoi(v), 0);  // [mcrec]
     else if (a == "--jobs-awake") o->jobsAwake = std::max(atoi(v), 0);  // [mcrec]
@@ -1862,6 +1879,10 @@ int main(int argc, char** argv) {
   world.lampShadows = opt.lampShadows;
   world.volumetricFog = opt.air;
   world.softShadows = opt.softShadows;
+  world.shadowMask = opt.shadowMask > 0;  // [shadowmask]
+  world.sunMask.check = opt.shadowMask > 1;
+  world.sunMask.shareSearch = opt.shadowMaskShare;
+  if (opt.shadowMaskSmooth >= 0) world.sunMask.smoothness = opt.shadowMaskSmooth;
   world.contactShadows = opt.contactShadows;
   world.skyTables = opt.skyTables;
   world.rayView = opt.rayView;
@@ -3800,6 +3821,7 @@ int main(int argc, char** argv) {
       meshes.Add(u.model, Mat4::FromTRS(u.position, Quat{}, u.model->scale), kArmyColors[0], opt.shielded ? 3.0f : opt.built, posed ? &pose : nullptr);
       if (const WearLook* w = world.WearOf(0x40000000u | static_cast<uint32_t>(&u - placedUnits.data()))) meshes.Wear(*w);  // (--wear-test)
       world.AddLamps(u.model, u.position, Quat{}, posed ? &pose : nullptr, &kArmyColors[0]);
+      world.water.AddAfloat(u.position, Quat{}, u.model->boundsMin * u.model->scale, u.model->boundsMax * u.model->scale);  // [floatfoam]
       world.MarkOutline(u.model, u.position, kArmyColors[0], u.building, static_cast<uint32_t>(&u - placedUnits.data()), u.icon);  // (as the player's own)
       icons.Add(u.icon, u.position, kArmyColors[0]);
     }

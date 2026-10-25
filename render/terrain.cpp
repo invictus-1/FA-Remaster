@@ -1009,7 +1009,7 @@ float4 Ground(VOut i) {
   float depth = waterMap.Sample(samplerLinearClamp, uv).g;
   float4 ramp = waterRamp.Sample(samplerLinearClamp, float2(depth, 0.5));
 #endif
-  float shadow = SunShadow(i.world, base);
+  float shadow = SunShadowSeen(i.world, base, i.position);  // [shadowmask] (lighting.h: the mask's where it serves, else SunShadow)
   // how shiny the ground is: the plain look keeps it in the albedo's alpha inverted, the XP look as it is
   float gloss = lerp(1 - albedo.a, albedo.a, xp);
 
@@ -1276,7 +1276,7 @@ std::string GroundSource(bool parallax, bool more = false, bool wet = false, boo
   return std::string(matt ? "#define GROUND_MATT 1\nstatic float groundGraze = 0;\nstatic float groundDry = 1;\n" : "") +  // [leftover] (lighting.h)
          std::string(snow ? kSnowStatics : "") + (wet ? "#define GROUND_WET 1\n" : "") + (more ? "#define GROUND_MORE 1\n" : "") +
          (parallax ? "#define GROUND_PARALLAX 1\n" : "") +
-         "#define MODERN_WATER 1\n" +
+         "#define MODERN_WATER 1\n#define SUN_MASK_BUFFER 1\n" +  // [shadowmask] (lighting.h: the sun's shadow mask, from a buffer)
          "#define SURFACE_PUDDLES 1.0\n#define SURFACE_TRACKS 1\n" +
          "#define SURFACE_DEEP_TRACKS 1\nstatic float4 deepTrack = 0;\nstatic float4 deepSlope = 0;\nstatic float deepWater = 0;\n" +
          "static float2 deepGloss = 0;\n" +  // [mud ruts] (the mud's roughness and share, MudInRuts)
@@ -2665,7 +2665,7 @@ gfx::Pipeline Terrain::MattVariant(gfx::Pipeline of) {
   return mattPipeline_[k] ? mattPipeline_[k] : of;
 }
 
-void Terrain::Draw(const View& view, bool shadowPass) {
+void Terrain::Draw(const View& view, bool shadowPass, bool beyondToo) {
   if (!shadowPass) drawnPatches = drawnTriangles = 0;
   if (!map_ || levels_.empty()) return;
 
@@ -2684,7 +2684,7 @@ void Terrain::Draw(const View& view, bool shadowPass) {
   const Level& T = levels_[static_cast<size_t>(top)];
   // the map, and (not into shadow maps) the eight copies of it round it that the ground beyond
   // its edge is made of
-  const int round = beyondReach > 0 && !shadowPass ? 1 : 0;
+  const int round = beyondReach > 0 && (!shadowPass || beyondToo) ? 1 : 0;
   for (tileZ_ = -round; tileZ_ <= round; ++tileZ_)
     for (tileX_ = -round; tileX_ <= round; ++tileX_)
       for (int iz = 0; iz < T.nz; ++iz)
@@ -2820,6 +2820,7 @@ void Terrain::Draw(const View& view, bool shadowPass) {
     device_->SetTexture(26, tracksMap ? tracksMap : textures_->Black());
     if (mud || (more && mudLaid))
       for (int k = 0; k < 3; ++k) device_->SetTexture(kMudSlot + k, mud_[k]);  // [mud ruts] ([ground mud] the mask's mud too)
+    if (sunMaskRows) device_->SetShaderBuffer(sunMaskRows, 0);  // [shadowmask] (lighting.h, SUN_MASK_BUFFER)
   }
   device_->SetVertexBuffer(gridVertices_);
   device_->SetIndexBuffer(gridIndices_);
