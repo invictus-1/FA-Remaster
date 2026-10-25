@@ -307,7 +307,9 @@
 //           (or snow) stops s seconds into the run, to watch things dry; --fx-follow: with --fx-move and --cam, the
 //           camera follows the driven unit all the same, at --cam's distance, pitch and heading (to look at it close)
 //           --fx-view distance,pitch,angle: [fxview] with any --fx-* stand, the camera on its first unit, that far, that
-//           pitch (degrees), turned that many degrees from the way the unit faces: a side view stays a side view as it turns
+//           pitch (degrees), turned that many degrees from the way the unit faces: a side view stays a side view as it turns.
+//           --follow-unit <blueprint id>: [follow] in a game (--sim, --session), --fx-view's camera on the first living unit of
+//           that blueprint the game has, from when it has one (the camera as --cam gave it until then)
 // --unit-grime  [grime] battle grime and weather dirt on units (unit_grime.h, World::unitGrime; modern look): dust, caked mud
 //           and soot gathering as a unit fights and drives, mud splashed up its lower body in rain, frost where snow lies;
 //           --unit-damage  [grime] damage shown by health (World::unitDamage): dents, burns and torn plates as it drops, hot
@@ -809,6 +811,7 @@ struct Options {
   bool weatherCuts = true;              // (airfix) --no-weather-cut
   bool fxFollow = false;                // --fx-follow
   float fxView[3] = {0, 0, 0};          // [fxview] --fx-view distance,pitch,angle
+  std::string followUnit;               // [follow] --follow-unit <blueprint id>
   bool hasFxView = false;
   std::string wearTest;                 // --wear-test
   bool unitGrime = false, unitDamage = false;  // [grime] --unit-grime, --unit-damage
@@ -1479,7 +1482,10 @@ bool ParseOptions(int argc, char** argv, Options* o) {
       o->hasAt = true;
     }
     else if (a == "--map") o->map = v;
-    else if (a == "--fx-view") {  // [fxview]
+    else if (a == "--follow-unit") {  // [follow]
+      o->followUnit = v;
+      for (char& c : o->followUnit) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    } else if (a == "--fx-view") {  // [fxview]
       if (sscanf(v, "%f,%f,%f", &o->fxView[0], &o->fxView[1], &o->fxView[2]) != 3) return false;
       o->hasFxView = true;
     } else if (a == "--cam") {
@@ -3214,6 +3220,22 @@ int main(int argc, char** argv) {
             printf("render: --fight-scan: beat %d: %d shots within 30 of %.0f, %.0f (%zu in flight, %zu beams; within 60: %d units, %d dying)\n",
                    static_cast<int>(playTick), most, p.position[0], p.position[2], frame.projectiles.size(), frame.beams.size(), units, dying);
           }
+        }
+      }
+      if (!opt.followUnit.empty() && opt.hasFxView && frame.blueprints) {  // [follow] the camera on a game's unit, turned with it
+        for (const FrameUnit& u : frame.units) {
+          if (u.blueprint >= frame.blueprints->size() || u.health <= 0 || u.fractionComplete < 1) continue;  // (finished and alive)
+          std::string name = (*frame.blueprints)[u.blueprint];
+          for (char& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+          if (name.find(opt.followUnit) == std::string::npos) continue;
+          const Quat q{u.orientation[0], u.orientation[1], u.orientation[2], u.orientation[3]};
+          const Vec3 forward = Rotate(q, Vec3{0, 0, 1});
+          camera.target = {u.position[0], u.position[1], u.position[2]};
+          camera.distance = opt.fxView[0];
+          camera.pitch = opt.fxView[1] * 3.14159265f / 180;
+          camera.heading = std::atan2(forward.x, forward.z) + opt.fxView[2] * 3.14159265f / 180;
+          framedLive = true;
+          break;
         }
       }
       if (haveLive && !framedLive && !opt.hasCam && !frame.units.empty()) {  // the first look at the game
