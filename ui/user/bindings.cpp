@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <mutex>
 #include <set>
 #include <string>
 #include <vector>
@@ -72,6 +73,9 @@ std::string Qualified(const char* cls, const char* name) {
   return *cls ? std::string(cls) + ":" + name : std::string(name);
 }
 
+// The lists below are the process's, every user state's: a session's state is made, and its first scripts run, on
+// the loading thread while the front end's state runs on the main thread (main.cpp). Their lock: g_listsLock.
+std::mutex g_listsLock;
 std::map<std::string, int>& StubCounts() {
   static std::map<std::string, int> m;
   return m;
@@ -80,11 +84,19 @@ std::set<std::string>& Built() {
   static std::set<std::string> s;
   return s;
 }
+void MarkBuilt(const std::string& name) {
+  std::lock_guard<std::mutex> lock(g_listsLock);
+  Built().insert(name);
+}
 
 int l_Stub(lua_State* L) {
   const char* name = lua_tostring(L, lua_upvalueindex(1));
-  int& n = StubCounts()[name];
-  if (n++ == 0) Logf(LogLevel::Debug, "moho64ui: stub %s", name);
+  int n;
+  {
+    std::lock_guard<std::mutex> lock(g_listsLock);
+    n = StubCounts()[name]++;
+  }
+  if (n == 0) Logf(LogLevel::Debug, "moho64ui: stub %s", name);
   return 0;
 }
 
@@ -148,7 +160,7 @@ void RegisterUserClasses(lua_State* L) {
     bool exists = !lua_isnil(L, -1);  // the functions every state has (LOG, doscript, ForkThread, ...)
     lua_pop(L, 1);
     if (exists) {
-      Built().insert(b.name);
+      MarkBuilt(b.name);
       continue;
     }
     lua_pushstring(L, b.name);
@@ -165,7 +177,7 @@ struct BindingCost {
   double seconds = 0;
   const char* name = "";  // (its key in BindingCosts: the map's keys stay where they are)
 };
-const char* g_bindingNow = "";  // the engine function running now (for UserState::LiveSim's log)
+thread_local const char* g_bindingNow = "";  // the engine function running now (for UserState::LiveSim's log)
 std::map<std::string, BindingCost>& BindingCosts() {
   static std::map<std::string, BindingCost> costs;  // (a map: the records stay where they are)
   return costs;
@@ -178,6 +190,7 @@ bool Profiling() {  // (MOHO64UI_BEAT_LOG too: its waits are logged with the fun
 }
 int TimedBinding(lua_State* L) {
   auto f = reinterpret_cast<lua_CFunction>(lua_touserdata(L, lua_upvalueindex(1)));
+  if (!OnMainThread()) return f(L);  // (a session's state on the loading thread: not counted, the counts are the frames')
   auto* cost = static_cast<BindingCost*>(lua_touserdata(L, lua_upvalueindex(2)));
   const char* outer = g_bindingNow;
   g_bindingNow = cost->name;
@@ -192,10 +205,15 @@ int TimedBinding(lua_State* L) {
 }
 void PushBinding(lua_State* L, const std::string& name, lua_CFunction f) {
   if (!Profiling()) return lua_pushcfunction(L, f);
-  auto& entry = *BindingCosts().try_emplace(name).first;
-  entry.second.name = entry.first.c_str();
+  BindingCost* cost;
+  {
+    std::lock_guard<std::mutex> lock(g_listsLock);
+    auto& entry = *BindingCosts().try_emplace(name).first;
+    entry.second.name = entry.first.c_str();
+    cost = &entry.second;
+  }
   lua_pushlightuserdata(L, reinterpret_cast<void*>(f));
-  lua_pushlightuserdata(L, &entry.second);
+  lua_pushlightuserdata(L, cost);
   lua_pushcclosure(L, TimedBinding, 2);
 }
 }  // namespace
@@ -203,18 +221,19 @@ void PushBinding(lua_State* L, const std::string& name, lua_CFunction f) {
 bool BindingProfileOn() { return Profiling(); }
 const char* CurrentBindingName() { return g_bindingNow; }
 void AddProfileCost(const char* part, double seconds) {
-  if (!Profiling()) return;
-  BindingCost& cost = BindingCosts()[part];
-  cost.seconds += seconds;
-  LongFrames().Note(BindingCosts().find(part)->first.c_str(), seconds * 1000.0);
-  ++cost.calls;
+  if (!Profiling() || !OnMainThread()) return;
+  std::lock_guard<std::mutex> lock(g_listsLock);
+  auto& entry = *BindingCosts().try_emplace(part).first;
+  entry.second.seconds += seconds;
+  LongFrames().Note(entry.first.c_str(), seconds * 1000.0);
+  ++entry.second.calls;
 }
 
 void SetGlobal(lua_State* L, const char* name, lua_CFunction f) {
   lua_pushstring(L, name);
   PushBinding(L, name, f);
   lua_rawset(L, LUA_GLOBALSINDEX);
-  Built().insert(name);
+  MarkBuilt(name);
 }
 
 void SetMethod(lua_State* L, const char* cppClass, const char* name, lua_CFunction f) {
@@ -223,7 +242,7 @@ void SetMethod(lua_State* L, const char* cppClass, const char* name, lua_CFuncti
   PushBinding(L, Qualified(cppClass, name), f);
   lua_rawset(L, -3);
   lua_pop(L, 1);
-  Built().insert(Qualified(cppClass, name));
+  MarkBuilt(Qualified(cppClass, name));
 }
 
 void ReportStubCalls() {
@@ -242,11 +261,15 @@ void ReportStubCalls() {
 
 void NoteRealGlobals(lua_State* L) {
   for (const auto& b : kBindings) {
-    if (*b.cls || Built().count(b.name)) continue;
+    if (*b.cls) continue;
+    {
+      std::lock_guard<std::mutex> lock(g_listsLock);
+      if (Built().count(b.name)) continue;
+    }
     lua_pushstring(L, b.name);
     lua_rawget(L, LUA_GLOBALSINDEX);
-    if (lua_iscfunction(L, -1) && lua_tocfunction(L, -1) != l_Stub) Built().insert(b.name);
-    else if (lua_isfunction(L, -1) && !lua_iscfunction(L, -1)) Built().insert(b.name);  // (a script's own)
+    if (lua_iscfunction(L, -1) && lua_tocfunction(L, -1) != l_Stub) MarkBuilt(b.name);
+    else if (lua_isfunction(L, -1) && !lua_iscfunction(L, -1)) MarkBuilt(b.name);  // (a script's own)
     lua_pop(L, 1);
   }
   // A category's operators are its metatable's, the core's (not moho.EntityCategory's stubs).
@@ -258,7 +281,7 @@ void NoteRealGlobals(lua_State* L) {
     for (const char* op : {"__add", "__mul", "__sub"}) {
       lua_pushstring(L, op);
       lua_rawget(L, -2);
-      if (lua_isfunction(L, -1)) Built().insert(std::string("EntityCategory:") + op);
+      if (lua_isfunction(L, -1)) MarkBuilt(std::string("EntityCategory:") + op);
       lua_pop(L, 1);
     }
   }

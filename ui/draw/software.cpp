@@ -43,6 +43,37 @@ inline void Blend(uint32_t& dst, uint32_t r, uint32_t g, uint32_t b, uint32_t a)
 // The whole pixels whose centres lie in [a, b).
 inline int FirstPixel(float a) { return static_cast<int>(std::ceil(a - 0.5f)); }
 
+#if defined(__SSE2__)
+// Blend and Mul for two pixels at a time, their channels (B, G, R, A) in 16-bit lanes: the same integers as one at a
+// time. Mul16's (x + 1 + (x >> 8)) >> 8 is x / 255 for every x = a * b + 127 of bytes a, b (checked for all 65536
+// pairs), and Blend's special cases come out of its general sum (a source alpha of 0 leaves the pixel, 255 replaces
+// it), which never passes 255. This program's own, only about time: a picture fading over the whole window at 4K.
+inline __m128i Mul16(__m128i a, __m128i b) {
+  const __m128i x = _mm_add_epi16(_mm_mullo_epi16(a, b), _mm_set1_epi16(127));
+  return _mm_srli_epi16(_mm_add_epi16(_mm_add_epi16(x, _mm_set1_epi16(1)), _mm_srli_epi16(x, 8)), 8);
+}
+inline __m128i Blend16(__m128i dst, __m128i src) {
+  const __m128i alphaLanes = _mm_set_epi16(-1, 0, 0, 0, -1, 0, 0, 0);
+  const __m128i a = _mm_shufflehi_epi16(_mm_shufflelo_epi16(src, 0xff), 0xff);  // each pixel's alpha in its four lanes
+  // (the colours times the alpha, the alpha itself as it is: Blend's oa = a + Mul(A(dst), 255 - a))
+  const __m128i f = _mm_or_si128(_mm_andnot_si128(alphaLanes, a), _mm_and_si128(alphaLanes, _mm_set1_epi16(255)));
+  return _mm_add_epi16(Mul16(src, f), Mul16(dst, _mm_sub_epi16(_mm_set1_epi16(255), a)));
+}
+// Four source pixels (0xAARRGGBB) over four of `row`, each times `color`'s channels unless `plain`.
+inline void Blend4(uint32_t* row, const uint32_t* src, __m128i color16, bool plain) {
+  const __m128i z = _mm_setzero_si128();
+  const __m128i d = _mm_loadu_si128(reinterpret_cast<const __m128i*>(row));
+  const __m128i t = _mm_loadu_si128(reinterpret_cast<const __m128i*>(src));
+  __m128i tl = _mm_unpacklo_epi8(t, z), th = _mm_unpackhi_epi8(t, z);
+  if (!plain) tl = Mul16(tl, color16), th = Mul16(th, color16);
+  const __m128i lo = Blend16(_mm_unpacklo_epi8(d, z), tl), hi = Blend16(_mm_unpackhi_epi8(d, z), th);
+  _mm_storeu_si128(reinterpret_cast<__m128i*>(row), _mm_packus_epi16(lo, hi));
+}
+inline __m128i Lanes16(uint32_t color) {  // a colour's channels in the lanes of two pixels
+  return _mm_unpacklo_epi8(_mm_set1_epi32(static_cast<int>(color)), _mm_setzero_si128());
+}
+#endif
+
 struct Name {
   const char* name;
   uint32_t color;
@@ -139,9 +170,25 @@ void SoftwareTarget::FillRect(const Rect& d, uint32_t color) {
   uint32_t a = A(color), r = R(color), g = G(color), b = B(color);
   if (a == 0) return;
   Touch(x0, y0, x1, y1);
+#if defined(__SSE2__)
+  const __m128i src = Lanes16(color);  // (four at a time: the same bytes as Blend)
+#endif
   for (int y = y0; y < y1; ++y) {
     uint32_t* row = &px_[static_cast<size_t>(y) * static_cast<size_t>(width_)];
-    for (int x = x0; x < x1; ++x) Blend(row[x], r, g, b, a);
+    int x = x0;
+#if defined(__SSE2__)
+    if (a == 255) {
+      std::fill(row + x0, row + std::max(x0, x1), 0xff000000u | r << 16 | g << 8 | b);
+      continue;
+    }
+    const __m128i z = _mm_setzero_si128();
+    for (; x + 4 <= x1; x += 4) {
+      const __m128i d = _mm_loadu_si128(reinterpret_cast<const __m128i*>(row + x));
+      const __m128i lo = Blend16(_mm_unpacklo_epi8(d, z), src), hi = Blend16(_mm_unpackhi_epi8(d, z), src);
+      _mm_storeu_si128(reinterpret_cast<__m128i*>(row + x), _mm_packus_epi16(lo, hi));
+    }
+#endif
+    for (; x < x1; ++x) Blend(row[x], r, g, b, a);
   }
 }
 
@@ -360,7 +407,12 @@ void SoftwareTarget::DrawImage(const Image& img, const Rect& s, const Rect& d, u
           if (!Filtered(rowA, rowB, columns[static_cast<size_t>(i)], wy, &texels[i])) texels[i] = 0;
         made = 1;
       }
-      for (int x = x0; x < x1; ++x) {
+      int x = x0;
+#if defined(__SSE2__)
+      const __m128i color16 = Lanes16(color);  // (four at a time: the same bytes as below)
+      for (; x + 4 <= x1; x += 4) Blend4(row + x, texels + (x - kept->x0), color16, plain);
+#endif
+      for (; x < x1; ++x) {
         const uint32_t t = texels[x - kept->x0];  // (0 where the filter found nothing: blends as nothing)
         uint32_t ta = A(t), tr = R(t), tg = G(t), tb = B(t);
         if (!plain) ta = Mul(ta, ca), tr = Mul(tr, cr), tg = Mul(tg, cg), tb = Mul(tb, cb);

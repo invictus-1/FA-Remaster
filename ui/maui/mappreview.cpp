@@ -1,7 +1,10 @@
 // MapPreview: a map's small picture, from a texture file or from the picture a map file carries.
 #include <cstdint>
 #include <cstring>
+#include <mutex>
+#include <optional>
 #include <string>
+#include <vector>
 
 #include "core/log.h"
 #include "core/vfs.h"
@@ -67,6 +70,22 @@ int l_SetTexture(lua_State* L) {
   return 1;
 }
 
+// The pictures taken from map files so far, by the file as it was (its size and time), the newest first: the lobby
+// asks for the same map's picture again and again (the map and its background, each time the lobby is opened), and
+// each time the whole map file was read for it, 10-12 ms. This program's own, only about time.
+struct KeptPreview {
+  std::string name;
+  uint64_t size = 0;
+  int64_t time = 0;
+  Image image;
+};
+std::mutex g_keptPreviewsLock;
+std::vector<KeptPreview>& KeptPreviews() {
+  static std::vector<KeptPreview> kept;
+  return kept;
+}
+constexpr size_t kKeptPreviews = 8;
+
 // bool MapPreview:SetTextureFromMap(map_name): the picture stored at the start of a .scmap file:
 // "Map\x1a", five 4-byte values, six more bytes, then the picture's length and the picture (a .dds).
 int l_SetTextureFromMap(lua_State* L) {
@@ -74,13 +93,31 @@ int l_SetTextureFromMap(lua_State* L) {
   bool ok = false;
   if (lua_type(L, 2) == LUA_TSTRING) {
     std::string name = lua_tostring(L, 2);
-    auto data = ScriptState::From(L)->vfs()->ReadFile(name);
+    const Vfs* vfs = ScriptState::From(L)->vfs();
+    const auto info = vfs->GetFileInfo(name);
+    {
+      std::lock_guard<std::mutex> lock(g_keptPreviewsLock);
+      for (const KeptPreview& k : KeptPreviews())
+        if (info && k.name == name && k.size == info->size && k.time == info->writeTime) {
+          c->Set(k.image, name);
+          ok = true;
+          break;
+        }
+    }
+    std::optional<std::string> data;
+    if (!ok) data = vfs->ReadFile(name);
     const size_t at = 4 + 20 + 6;
     if (data && data->size() > at + 4 && data->compare(0, 4, "Map\x1a") == 0) {
       uint32_t len;
       std::memcpy(&len, data->data() + at, 4);
       Image img;
       if (len > 0 && at + 4 + len <= data->size() && DecodeImage(data->substr(at + 4, len), img)) {
+        if (info) {
+          std::lock_guard<std::mutex> lock(g_keptPreviewsLock);
+          std::vector<KeptPreview>& kept = KeptPreviews();
+          kept.insert(kept.begin(), KeptPreview{name, info->size, info->writeTime, img});
+          if (kept.size() > kKeptPreviews) kept.pop_back();
+        }
         c->Set(std::move(img), name);
         ok = true;
       }

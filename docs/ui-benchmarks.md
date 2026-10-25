@@ -17,6 +17,39 @@ uel0201 for the player beside the commander, all selected by category, 20 s stea
 and a move order by a right click. `MOHO64UI_BINDING_PROFILE=1` logs the costliest engine functions the scripts
 called (time and calls).
 
+## 2026-10-24: the interface's long frames left at 4K (helper "stutters2", on 1994b04)
+
+Scenario: the lead's measuring script (main menu 8 s, Skirmish, Launch Game, the loading screen, the game 8 s, back to
+the menu), a 3840x2160 and a 1920x1080 window, D3D12, `MOHO64UI_LONG_FRAMES=16`, 9000 frames; BASE and the change run
+one after the other, twice at 4K. The machine was busy (other sessions' runs): single frames vary, frames whose time
+went to the window's input or the world's picture are not the interface's and are left out of the counts. "Frames
+over 16 ms": those whose own work (without the pace's wait) was over 16 ms.
+
+| Where | Before | After |
+|---|---|---|
+| the frame the load ends in, 4K | 347-459 ms (the game's state and its rules 254, CreateGameInterface 103, SessionInit.lua 64, Lua collections 19) | 84-92 ms (CreateGameInterface 56-62) |
+| the same, 1080p | 345 ms | 87 ms |
+| the lobby's opening, 4K | 30-32 frames of 16-38 ms (the faction painting and full-window fills painted again every frame) | none |
+| the "IN TRANSIT" cover fading, 4K | 10-33 frames of 16-42 ms | 2: its first two (the filtered picture, before it is kept) |
+| CLobby:HostGame, 4K | 165-233 ms | 131-150 ms |
+
+What did it:
+- The game's interface state is made on the loading thread right after the simulation's start, its rules copied
+  into it and /lua/SessionInit.lua run there, as the original's "Map loader" task does (func_WorldSessionUserLoad
+  0x885de0); a full Lua collection there too. On the loading thread it takes 180-250 ms of the load (the state 12-18,
+  its rules 160-180, SessionInit.lua 50-60, the collection 11-19), unseen behind the loading screen.
+- The interface's texture sizes are read ahead on a thread of their own from the program's start
+  (maui/texture_info.h): CMauiBitmap:SetNewTexture inside CreateGameInterface 30.7 ms -> 2 ms (265 calls), inside
+  HostGame 32-37 ms -> 5.5 ms (1882 calls); a map file's preview picture is kept (the lobby read the whole .scmap per
+  call).
+- The lobby's faction painting goes to the graphics card (OfferToCard in the front end too): it lay over the main
+  menu's veil and a full-window fill fading in, which made every frame of the lobby's opening a full repaint.
+- The kept stretched picture's blend and the fills four pixels at a time (SSE2, the same bytes as before: checked
+  against the plain code on 160 million cases): the cover's band 5-9 ms -> 1-2 ms.
+
+Left: CreateGameInterface itself (FAF's scripts, 56-62 ms at 4K on the busy machine); HostGame's frame (FAF's lobby
+scripts, 130-150 ms, and the faction painting's first decode, 57-72 ms); the cover's first two frames.
+
 ## 2026-10-23: the sound's wave banks mapped into memory (helper "banks", on 01d2b7c)
 
 The first cue of a wave bank read the whole .xwb on the frame (13-15 MB for a faction's land, air or buildings). Now

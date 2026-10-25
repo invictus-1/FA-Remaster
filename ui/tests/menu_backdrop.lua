@@ -82,7 +82,7 @@ ForkThread(function()
     if changelog.IsOpen() then changelog.CloseChangelogDialog() WaitFrames(3) end
     SetFrontEndData('menu_backdrop_test', {failed = failed})
     if GUI and GUI.launchGameButton then clickOn(GUI.launchGameButton) end
-    WaitSeconds(2)
+    WaitSeconds(15)  -- (the front end's script runs on while the game loads behind the loading screen: 2-8 s)
     check("Launch Game starts the game", false, true)
     LOG("TEST done: " .. failed .. " failed (in the front end)")
 end)

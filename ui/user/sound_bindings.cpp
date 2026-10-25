@@ -131,7 +131,13 @@ int l_PauseSound(lua_State* L) {
   return 0;
 }
 int l_AudioSetLanguage(lua_State* L) {
-  if (sound::SoundSystem* s = System(L)) s->SetLanguage(luaL_checkstring(L, 1));
+  // (a session's state runs /lua/SessionInit.lua on the loading thread, which sets it: there the main thread's next
+  // frame sets it, the sounds being that thread's)
+  sound::SoundSystem* s = System(L);
+  if (!s) return 0;
+  const std::string language = luaL_checkstring(L, 1);
+  if (OnMainThread()) s->SetLanguage(language);
+  else s->AskLanguage(language);
   return 0;
 }
 // HasLocalizedVO(language): whether the game has spoken voices in that language, which is

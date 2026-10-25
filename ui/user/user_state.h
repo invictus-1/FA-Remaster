@@ -11,6 +11,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "script/lua.hpp"
@@ -208,6 +209,11 @@ class UserState {
   // The head's size, also before the main script makes the root frames (the display mode the
   // player's option chose at the start).
   void SetHeadSize(int width, int height);
+  // A session's state made on the loading thread (main.cpp: with the simulation, before the load is through) gets
+  // the session's links when it is handed over: `links`' waitForBeat, groundHeight, beatRunning, gameTime,
+  // commandSource, ownArmy, world, pace and timeline, and its head size (the window may have been resized meanwhile).
+  // Until then it has only the simulation itself (liveSim, for its bindings), which it may look at on that thread.
+  void LinkSession(const Config& links);
   // The running simulation, once no beat runs on its own thread (it waits for one that does; the
   // engine's rule: nothing of this state may look at the simulation while it ticks). Every look
   // from this state goes through here. `where`: for the count of waits (MOHO64UI_BEAT_LOG).
@@ -624,15 +630,21 @@ FrameTimes& Times();
 // before is logged with the parts of the frame (run_window.cpp) and what ran long in it: an engine function the
 // scripts called (the binding profile is on with it), a part of the host's step (main.cpp), a Lua collection of the
 // interface's state or the simulation's (lua_gpg_prof_gc). A tool for finding the hitches; only the window's thread
-// notes (a collection on the beats' thread is counted apart: BeatThreadGcMs).
+// notes (a collection on the beats' thread is counted apart: BeatThreadGcMs; what a game's state made on the loading
+// thread does there is left out).
 struct LongFrameLog {
   double thresholdMs = 0;  // 0: off
+  std::thread::id thread;  // the window's
   std::vector<std::pair<const char*, double>> notes;  // this frame's: what (a name that stays), ms
   void Note(const char* what, double ms) {
-    if (thresholdMs > 0 && ms >= 0.5) notes.emplace_back(what, ms);
+    if (thresholdMs > 0 && ms >= 0.5 && std::this_thread::get_id() == thread) notes.emplace_back(what, ms);
   }
 };
 LongFrameLog& LongFrames();
+// Whether this is the program's main thread (the one the first user state was made on: the front end's); a session's
+// state is made on the loading thread (main.cpp), and what its scripts do there that touches what the main thread
+// owns waits for it or is left out (the sound system's language, the profile's counts).
+bool OnMainThread();
 double BeatThreadGcMs();  // the Lua collections on the beats' thread so far, in ms (with MOHO64UI_LONG_FRAMES)
 // The graphics card's time per frame of a game's world picture, for the first-start graphics check (this program's
 // own, not the original's: ui/data/hook/lua/ui/game/gamemain.lua; Chris, 2026-10-18: "if the PC can't hold 60 fps,

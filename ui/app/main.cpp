@@ -34,6 +34,7 @@
 #include "core/log.h"
 #include "core/vfs.h"
 #include "maui/control.h"
+#include "maui/texture_info.h"
 #ifdef MOHO64UI_WORLD_PICTURE
 #include "render/remasters.h"
 #include "render/view.h"
@@ -387,6 +388,17 @@ int main(int argc, char** argv) {
 #endif
   Logf(LogLevel::Info, "moho64ui: %zu search paths, %zu files", vfs.MountCount(), vfs.FileCount());
   Logf(LogLevel::Info, "moho64ui: built from commit %s", ui::kBuildCommit);
+  // The interface's texture sizes taken ahead, on a thread of their own (maui/texture_info.h; ours, only about time):
+  // waited for before a launch changes the game's preferences file in the file system (startGameInterface), and at
+  // the end.
+  struct JoinedThread {
+    std::thread thread;
+    void Join() {
+      if (thread.joinable()) thread.join();
+    }
+    ~JoinedThread() { Join(); }
+  } texturePrefetch;
+  texturePrefetch.thread = std::thread([&vfs] { ui::PrefetchTextureSizes(&vfs); });
   if (!o.modsFile.empty()) {
     std::ifstream f(o.modsFile);
     std::string line;
@@ -634,6 +646,34 @@ int main(int argc, char** argv) {
   };
   int loadingDrawn = 0;  // frames the loading screen drew while the world loaded (the window's)
   auto loadingSince = std::chrono::steady_clock::now();
+  // The game's state as the loading thread made it (GameSession::prepareInterface): made, its rules in it and
+  // /lua/SessionInit.lua run, as the original's "Map loader" task does them (func_WorldSessionUserLoad 0x885de0: the
+  // session's user Lua state 0x885ec9, its functions registered 0x885f37..0x885f8a, the rules exported into it
+  // 0x885ff2, SessionInit.lua 0x88603e), so that the frame the load ends in runs only the scripts the original runs on
+  // its main thread (DoInitializing 0x88c3f0: StartGameUI 0x88c4ad, the setup's beat 0x88c507, StopLoadingDialog,
+  // CreateGameInterface). Written there, read here after the worker's wait (FinishLoad).
+  struct Prepared {
+    std::unique_ptr<ui::UserState> state;
+    bool up = false;
+    double stateMs = 0, rulesMs = 0, bootMs = 0, aheadMs = 0;  // (its parts' times, for the log)
+  } prepared;
+  // A session's state made and booted (the loading thread's work, or this thread's when it did not do it): its rules,
+  // the category functions in front of the engine's, then /lua/SessionInit.lua.
+  auto makeGameState = [&vfs, &session](ui::UserState::Config gameCfg, Sim* sim, const std::vector<std::string>& uids,
+                                        const std::string& sessionMods, Prepared* out) {
+    using Clock = std::chrono::steady_clock;
+    auto ms = [](Clock::time_point a, Clock::time_point b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
+    const auto t0 = Clock::now();
+    gameCfg.modUids = uids;
+    gameCfg.liveSim = sim;  // (its bindings are those of a session's state; the rest of the session's links come at the hand-over)
+    out->state = std::make_unique<ui::UserState>(&vfs, gameCfg);
+    const auto t1 = Clock::now();
+    bool up = session.LoadInterfaceRules(out->state->L(), sim, uids, sessionMods);
+    if (up) ui::InstallUnitCategoryFunctions(out->state->L());
+    const auto t2 = Clock::now();
+    out->up = up && out->state->Boot();
+    out->stateMs = ms(t0, t1), out->rulesMs = ms(t1, t2), out->bootMs = ms(t2, Clock::now());
+  };
   auto startGameInterface = [&]() {
     if (game) return;
     // A launch loads the original's way (its session states, WLD_Frame 0x88cae0): the
@@ -645,8 +685,30 @@ int main(int argc, char** argv) {
       if (backdrop) backdrop->Stop();  // (nothing else draws a world while one loads)
       cfg.width = shown->ui().width(), cfg.height = shown->ui().height();
       ui::SavePreferencesOf(front->L());  // (DoPreload writes the preferences first: the game's state reads them)
+      texturePrefetch.Join();  // (long done: nothing else reads the file system's list while it changes)
       vfs.SetMemoryFile(kGamePrefsPath, ui::PreGameDataText(front->L(), session.LoadingMapFolder()));  // (the rules read it)
       if (!front->StartLoadingScreen()) Logf(LogLevel::Warning, "moho64ui: the loading screen did not come up");
+      // The game's state is made on the loading thread once the simulation has started (its configuration as this
+      // thread's now: a copy, nothing of this thread's is touched there). MOHO64UI_STATE_HERE=1: on this thread at the
+      // end of the load, as before.
+      prepared = Prepared{};
+      if (std::getenv("MOHO64UI_STATE_HERE") == nullptr) {
+        ui::UserState::Config gameCfg = cfg;
+        gameCfg.bootScript = "/lua/SessionInit.lua";
+        gameCfg.launchSession = nullptr;
+        gameCfg.launchReplay = nullptr;  // (a replay starts from the front end)
+        session.prepareInterface = [&prepared, makeGameState, gameCfg](Sim* sim, const std::vector<std::string>& uids,
+                                                                       const std::string& sessionMods) {
+          makeGameState(gameCfg, sim, uids, sessionMods, &prepared);
+          // Also here, ahead of the frame the load ends in (ours, only about time): the state's collection of what its
+          // making left (the rules' copy: a full collection of some 35 MB fell inside that frame, 8-17 ms).
+          const auto t0 = std::chrono::steady_clock::now();
+          if (prepared.state) lua_setgcthreshold(prepared.state->L(), 0);
+          prepared.aheadMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        };
+      } else {
+        session.prepareInterface = nullptr;
+      }
       session.BeginLoad();
       loadingDrawn = 0, loadingSince = std::chrono::steady_clock::now();
       if (!windowed) session.WaitForWorker();
@@ -666,6 +728,7 @@ int main(int argc, char** argv) {
       lap("(start: the session's load finished)");
       if (!finished) {  // (the original: "map %s failed. aborting session.", back to the front end)
         Logf(LogLevel::Error, "moho64ui: the game did not load: %s; back to the front end", why.c_str());
+        prepared = Prepared{};  // (made before the session's end: its categories are the session's)
         if (!sessionIn.empty() || !commandLineMap.empty()) ok = false;  // (the run's own game: its exit code says so)
         session.End();
         freshFrontEnd();
@@ -696,12 +759,21 @@ int main(int argc, char** argv) {
     gameCfg.world = session.world();
     gameCfg.pace = &session.pace;
     gameCfg.timeline = session.timeline();  // (a replay's timeline; nullptr in a game played)
-    game = std::make_unique<ui::UserState>(&vfs, gameCfg);
-    bool up = session.LoadInterfaceRules(game->L());
-    if (up) ui::InstallUnitCategoryFunctions(game->L());
-    lap("(start: the game's state made, its rules)");
-    up = up && game->Boot();
-    lap("(start: SessionInit.lua)");
+    if (prepared.state) {  // (made on the loading thread: given the session's links)
+      Logf(LogLevel::Info,
+           "moho64ui: the game's state was made on the loading thread: the state %.0f ms, its rules %.0f ms, %s %.0f ms (then a "
+           "collection, %.0f ms)",
+           prepared.stateMs, prepared.rulesMs, gameCfg.bootScript.c_str(), prepared.bootMs, prepared.aheadMs);
+      prepared.state->LinkSession(gameCfg);
+      lap("(start: the game's state taken)");
+    } else {
+      makeGameState(gameCfg, session.sim(), session.modUids(), session.sessionMods(), &prepared);
+      prepared.state->LinkSession(gameCfg);
+      lap("(start: the game's state made here, its rules, SessionInit.lua)");
+    }
+    game = std::move(prepared.state);
+    bool up = prepared.up;
+    prepared = Prepared{};
     up = up && game->StartMainScript();
     lap("(start: SetupUI)");
     up = up && game->StartGame();

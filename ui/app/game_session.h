@@ -196,10 +196,18 @@ class GameSession {
   Sim* sim() const { return sim_.get(); }
   // The session's mods by uid, in order.
   const std::vector<std::string>& modUids() const { return modUids_; }
+  const std::string& sessionMods() const { return sessionMods_; }  // (the engine's serialized list)
   // Put the game's rules into the Lua state a session's interface runs in: the blueprints as
   // `__blueprints`, the unit categories and the category functions, the way the simulation's own
-  // state has them, copied from the session's one rules state, the simulation's own load (Sim::TakeRules).
-  bool LoadInterfaceRules(lua_State* userState);
+  // state has them, copied from the session's one rules state, the simulation's own load (Sim::TakeRules
+  // of `sim`; the session's mods `uids` and `sessionMods`, the engine's serialized list, for rules of its own when the
+  // simulation kept none). On the loading thread (prepareInterface), or on this one after the load.
+  bool LoadInterfaceRules(lua_State* userState, Sim* sim, const std::vector<std::string>& uids, const std::string& sessionMods);
+  // The interface's own state for the session, made by the host on the loading thread right after the simulation's
+  // start (BeginLoad's work, before LoadDone), as the original's "Map loader" task makes it (func_WorldSessionUserLoad
+  // 0x885de0): the loading simulation, the session's mod uids and its serialized mods. What it makes is the host's,
+  // handed over through the worker's wait (FinishLoad). Unset: nothing is made there.
+  std::function<void(Sim* sim, const std::vector<std::string>& uids, const std::string& sessionMods)> prepareInterface;
   const SimBlueprints* interfaceBlueprints() const { return interfaceBlueprints_.get(); }
   // Called with each beat's sync tables (the simulation's bytes) once set. Until then the tables
   // are kept, oldest first, for TakePendingSync: the first beats tell the interface things once only.
@@ -334,7 +342,6 @@ class GameSession {
   int commandSource_ = 0;
   int pictureFocus_ = -2;    // the focus army the picture was last given (0-based; -2: none yet)
   std::string sessionMods_;  // the session's mods as the engine keeps them (serialized Lua)
-  std::unique_ptr<ScriptState> rules_;
   std::unique_ptr<SimBlueprints> interfaceBlueprints_;
   std::string map_;
   size_t armies_ = 0;

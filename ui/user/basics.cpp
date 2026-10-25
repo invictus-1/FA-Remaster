@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <ctime>
 #include <map>
+#include <mutex>
 #include <random>
 #include <string>
 #include <vector>
@@ -114,6 +115,7 @@ std::map<std::string, FrontEndValue>& FrontEndStore() {  // by the key as text (
   static std::map<std::string, FrontEndValue> store;
   return store;
 }
+std::mutex g_frontEndLock;  // (a session's state runs its first scripts on the loading thread, beside the front end's)
 FrontEndValue ReadFrontEndValue(lua_State* L, int idx, int depth) {
   FrontEndValue v;
   idx = idx < 0 ? lua_gettop(L) + idx + 1 : idx;
@@ -160,16 +162,23 @@ int l_SetFrontEndData(lua_State* L) {
   luaL_checkany(L, 1);
   lua_settop(L, 2);
   const std::string key = FrontEndKey(L, 1);
-  if (lua_isnil(L, 2)) FrontEndStore().erase(key);
-  else FrontEndStore()[key] = ReadFrontEndValue(L, 2, 0);
+  FrontEndValue value = lua_isnil(L, 2) ? FrontEndValue{} : ReadFrontEndValue(L, 2, 0);
+  std::lock_guard<std::mutex> lock(g_frontEndLock);
+  if (value.type == LUA_TNIL) FrontEndStore().erase(key);
+  else FrontEndStore()[key] = std::move(value);
   return 0;
 }
 
 int l_GetFrontEndData(lua_State* L) {
   luaL_checkany(L, 1);
-  auto it = FrontEndStore().find(FrontEndKey(L, 1));
-  if (it == FrontEndStore().end()) lua_pushnil(L);
-  else PushFrontEndValue(L, it->second);
+  const std::string key = FrontEndKey(L, 1);
+  FrontEndValue value;
+  {
+    std::lock_guard<std::mutex> lock(g_frontEndLock);
+    auto it = FrontEndStore().find(key);
+    if (it != FrontEndStore().end()) value = it->second;
+  }
+  PushFrontEndValue(L, value);
   return 1;
 }
 
@@ -187,14 +196,19 @@ int32_t RandomArg(lua_State* L, int i) {
   if (!(f > -2147483904.0f && f < 2147483648.0f)) return INT32_MIN;  // MSVC cvttss2si: NaN / out of range
   return static_cast<int32_t>(f);
 }
-int l_Random(lua_State* L) {
+uint32_t RandomDraw() {  // (every user state's one generator: a session's may draw on the loading thread)
   static std::mt19937 rng(static_cast<uint32_t>(std::time(nullptr)) ^
                           static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                               std::chrono::steady_clock::now().time_since_epoch()).count()));
+  static std::mutex lock;
+  std::lock_guard<std::mutex> hold(lock);
+  return static_cast<uint32_t>(rng());
+}
+int l_Random(lua_State* L) {
   const int n = lua_gettop(L);
   if (n > 2) return luaL_error(L, "%s\n  expected between %d and %d args, but got %d", "Random", 0, 2, n);
   if (n == 0) {
-    lua_pushnumber(L, static_cast<lua_Number>(static_cast<float>(rng()) * 0x1p-32f));
+    lua_pushnumber(L, static_cast<lua_Number>(static_cast<float>(RandomDraw()) * 0x1p-32f));
     return 1;
   }
   uint32_t lo = 1, span;
@@ -205,7 +219,7 @@ int l_Random(lua_State* L) {
     lo = static_cast<uint32_t>(RandomArg(L, 1));
     span = hp1 - lo;
   }
-  const uint32_t r = static_cast<uint32_t>((static_cast<uint64_t>(rng()) * span) >> 32) + lo;
+  const uint32_t r = static_cast<uint32_t>((static_cast<uint64_t>(RandomDraw()) * span) >> 32) + lo;
   lua_pushnumber(L, static_cast<lua_Number>(static_cast<float>(static_cast<int32_t>(r))));
   return 1;
 }

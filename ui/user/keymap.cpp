@@ -1675,7 +1675,9 @@ void FrameCostMeter::Note(float gpuMs) {
 }
 
 void RegisterKeyMapBindings(lua_State* L) {
-  g_consoleThread = std::this_thread::get_id();  // (the user state is made on the main thread)
+  // (the main thread: the first user state's, the front end's; a session's is made on the loading thread)
+  std::thread::id none;
+  g_consoleThread.compare_exchange_strong(none, std::this_thread::get_id());
   SetGlobal(L, "print", l_print);
   SetGlobal(L, "IN_AddKeyMapTable", l_AddKeyMapTable);
   SetGlobal(L, "IN_RemoveKeyMapTable", l_RemoveKeyMapTable);

@@ -89,6 +89,10 @@ void SoundSystem::SetLanguage(const std::string& name) {
   voicesTaken_ = true;
   LoadFolder("/sounds/voice/" + language_);
 }
+void SoundSystem::AskLanguage(const std::string& name) {
+  std::lock_guard<std::mutex> lock(askedLock_);
+  asked_ = name, languageAsked_ = true;
+}
 bool SoundSystem::HasLanguage(const std::string& name) const {
   const std::string folder = "/sounds/voice/" + Lower(name);
   return vfs_->IsFolder(folder) || !vfs_->FindFiles(folder, "*").empty();
@@ -737,6 +741,15 @@ void SoundSystem::PopDuck(bool all) {
 // go, so the duck comes back from the next frame. A push while it comes back starts it down again
 // from nothing, and a pop while it goes down starts it back from full: so the original.
 void SoundSystem::Update(float seconds) {
+  {
+    std::unique_lock<std::mutex> lock(askedLock_);
+    if (languageAsked_) {
+      const std::string language = std::move(asked_);
+      languageAsked_ = false;
+      lock.unlock();
+      SetLanguage(language);
+    }
+  }
   if (duckState_ != 0) {
     duckTime_ = std::min(duckTime_ + std::max(0.0f, seconds), duckLength_);
     const float v = duckTime_ / duckLength_;

@@ -2,6 +2,8 @@
 
 #include <cstdint>
 #include <map>
+#include <mutex>
+#include <string>
 
 #include "core/log.h"
 #include "core/vfs.h"
@@ -62,25 +64,52 @@ bool Parse(const std::string& d, int* w, int* h) {
   return false;
 }
 
+
+struct SizeEntry {
+  bool ok;
+  int w, h;
+};
+// (the files' sizes, every state's: the loading thread fills it ahead, PrefetchGameTextureSizes)
+std::mutex g_sizesLock;
+std::map<std::string, SizeEntry>& Sizes() {
+  static std::map<std::string, SizeEntry> cache;
+  return cache;
+}
 }  // namespace
 
 bool TextureSize(const Vfs* vfs, const std::string& vpath, int* width, int* height) {
-  struct Entry {
-    bool ok;
-    int w, h;
-  };
-  static std::map<std::string, Entry> cache;
   std::string key = Vfs::Normalize(vpath);
-  auto it = cache.find(key);
-  if (it == cache.end()) {
-    Entry e{false, 0, 0};
+  SizeEntry e{false, 0, 0};
+  bool known = false;
+  {
+    std::lock_guard<std::mutex> lock(g_sizesLock);
+    auto it = Sizes().find(key);
+    if (it != Sizes().end()) e = it->second, known = true;
+  }
+  if (!known) {
     if (auto data = vfs->ReadFile(key)) e.ok = Parse(*data, &e.w, &e.h);
     if (!e.ok) Logf(LogLevel::Info, "Unable to load texture from file: %s", vpath.c_str());
-    it = cache.emplace(key, e).first;
+    std::lock_guard<std::mutex> lock(g_sizesLock);
+    Sizes().emplace(key, e);
   }
-  *width = it->second.w;
-  *height = it->second.h;
-  return it->second.ok;
+  *width = e.w;
+  *height = e.h;
+  return e.ok;
+}
+
+void PrefetchTextureSizes(const Vfs* vfs) {
+  for (const std::string& file : vfs->FindFiles("/textures/ui", "*.dds")) {
+    const std::string key = Vfs::Normalize(file);
+    {
+      std::lock_guard<std::mutex> lock(g_sizesLock);
+      if (Sizes().count(key)) continue;
+    }
+    SizeEntry e{false, 0, 0};
+    if (auto data = vfs->ReadFile(key)) e.ok = Parse(*data, &e.w, &e.h);
+    if (!e.ok) continue;
+    std::lock_guard<std::mutex> lock(g_sizesLock);
+    Sizes().emplace(key, e);
+  }
 }
 
 }  // namespace moho::ui

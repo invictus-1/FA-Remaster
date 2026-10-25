@@ -187,7 +187,8 @@ class BackdropSource {
 
 // A picture over the whole window drawn by the graphics card, under the interface (the renderer's
 // WorldPicture::SetBackdrop, ui REQUESTS 38): the loading screen's faction film and FAF's "IN TRANSIT" cover at the
-// game's start, which the software target would otherwise stretch over every pixel of the window each frame. The
+// game's start, and the front end's backgrounds (the lobby's faction painting), which the software target would
+// otherwise stretch over every pixel of the window each frame. The
 // host's (GameSession), while the renderer's picture shows the window; a control that draws such a picture over the
 // whole window as the first thing of a frame (nothing of the interface under it: DrawTarget::Blank) offers it here
 // and, taken, draws nothing of it itself. Ours, not the original's (its device draws every quad on the card anyway).

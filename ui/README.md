@@ -1170,9 +1170,15 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   is FAF's faction movie, "IN TRANSIT" and the loading tips while `WorldIsLoading()` says so. The
   simulation's rules and its start then run on the worker thread, as the original's background
   loader and its Sim thread do, while the front end goes on drawing. Nothing else is made on the
-  main thread meanwhile. Once the load is through, the game's own state is made (its rules,
-  `/lua/SessionInit.lua`, `SetupUI`, `StartGameUI`), the loading screen's controls go, and the
-  setup's beat, `StopLoadingDialog` and `CreateGameInterface` follow (DoInitializing 0x88c3f0).
+  main thread meanwhile. After the simulation's start, on that same thread, the game's own state is
+  made, its rules copied into it and `/lua/SessionInit.lua` run in it, as the original's "Map
+  loader" task does (func_WorldSessionUserLoad 0x885de0: the session's Lua state 0x885ec9, its
+  functions registered 0x885f37..0x885f8a, the rules exported 0x885ff2, SessionInit.lua 0x88603e;
+  read 2026-10-24; `GameSession::prepareInterface`, `MOHO64UI_STATE_HERE=1` makes it on the main
+  thread as before). Once the load is through, the main thread takes that state (its session's
+  links: `UserState::LinkSession`), the loading screen's controls go, and `SetupUI`,
+  `StartGameUI`, the setup's beat, `StopLoadingDialog` and `CreateGameInterface` follow
+  (DoInitializing 0x88c3f0).
   `UpdateLoadingDialog` is never called, as in the original. A load that fails goes back to a new
   front end, as the original's "map failed" does. Before this the window stood still for about
   9 s on the lobby. Now the loading screen plays for the whole load (in a window, about 670 frames
@@ -1184,6 +1190,11 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   while nothing of the interface lies under it, or while it hides all of that); at 3840x2160 the
   frame at the load's end went from 1.2 s to 0.35 s (the game's state and its rules), leaving a
   game from 1.0-1.2 s to 0.16-0.24 s, the loading screen's frames from about 11 ms of work to 4.
+  Later the same day (docs/ui-benchmarks.md, "the interface's long frames left at 4K") the game's
+  state moved to the loading thread as above, the interface's texture sizes are read ahead on a
+  thread of their own from the program's start (`PrefetchTextureSizes`, maui/texture_info.h), and
+  the frame at the load's end holds only the scripts the original's main thread runs there: at
+  3840x2160 it went from 0.35-0.46 s to 84-92 ms (most of it CreateGameInterface).
   Left: the game's first frame of the world, 1.3-1.6 s on a fresh device (the renderer making what
   the player's looks ask for). Headless runs (the tests) wait for the load at once, and the loading screen
   gets exactly one frame before the game, so its scripts run in every test

@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <mutex>
 #include <set>
 #include <string>
 #include <thread>
@@ -27,8 +28,10 @@ namespace moho::ui {
 
 namespace {
 // The long-frame log's watch on the Lua collections (MOHO64UI_LONG_FRAMES): whose state collected, and for how long.
-std::vector<const UserState*> g_liveStates;  // (the window's thread's)
+std::vector<const UserState*> g_liveStates;  // (a session's state is made on the loading thread: g_liveStatesLock)
+std::mutex g_liveStatesLock;
 std::thread::id g_windowThread;
+std::atomic<std::thread::id> g_mainThread;  // (OnMainThread: the first user state's)
 void (*g_gcHookBefore)(lua_State*, int) = nullptr;  // (the engine's profile's, MOHO64_PROFILE_HITCH, when it was there first)
 std::atomic<long long> g_beatThreadGcUs{0};
 double NowMs() { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
@@ -45,7 +48,11 @@ void LongFrameGcHook(lua_State* L, int end) {
     return;
   }
   const auto* owner = static_cast<const UserState*>(lua_getextra(L, 1));
-  const bool ours = std::find(g_liveStates.begin(), g_liveStates.end(), owner) != g_liveStates.end();
+  bool ours;
+  {
+    std::lock_guard<std::mutex> lock(g_liveStatesLock);
+    ours = std::find(g_liveStates.begin(), g_liveStates.end(), owner) != g_liveStates.end();
+  }
   // (with the heap left after it, in MB: the size of the next one's work)
   static std::set<std::string> names;
   const std::string name = std::string(ours ? "(a Lua collection: the interface's state, " : "(a Lua collection: the simulation's state, ") +
@@ -59,7 +66,7 @@ LongFrameLog& LongFrames() {
     LongFrameLog l;
     if (const char* v = std::getenv("MOHO64UI_LONG_FRAMES")) {
       l.thresholdMs = std::atof(v) > 0 ? std::atof(v) : 16.0;
-      g_windowThread = std::this_thread::get_id();
+      l.thread = g_windowThread = std::this_thread::get_id();
       g_gcHookBefore = lua_gpg_prof_gc;
       lua_gpg_prof_gc = LongFrameGcHook;
       Logf(LogLevel::Info, "moho64ui: frames longer than %.1f ms are logged (MOHO64UI_LONG_FRAMES)", l.thresholdMs);
@@ -69,10 +76,16 @@ LongFrameLog& LongFrames() {
   return log;
 }
 double BeatThreadGcMs() { return static_cast<double>(g_beatThreadGcUs.load()) / 1000.0; }
+bool OnMainThread() { return std::this_thread::get_id() == g_mainThread.load(); }
 
 UserState::UserState(Vfs* vfs, Config config) : config_(std::move(config)) {
-  LongFrames();  // (the long-frame log's hooks, on the window's thread)
-  g_liveStates.push_back(this);
+  std::thread::id none;
+  g_mainThread.compare_exchange_strong(none, std::this_thread::get_id());  // (the first: the front end's, on the main thread)
+  LongFrames();  // (the long-frame log's hooks, on the window's thread: made with the first state)
+  {
+    std::lock_guard<std::mutex> lock(g_liveStatesLock);
+    g_liveStates.push_back(this);
+  }
   state_ = std::make_unique<ScriptState>(ScriptState::Kind::User, vfs);
   state_->SetHookDirs(config_.hookDirs);
   lua_State* L = state_->L();
@@ -118,7 +131,10 @@ UserState::UserState(Vfs* vfs, Config config) : config_(std::move(config)) {
 }
 
 UserState::~UserState() {
-  g_liveStates.erase(std::remove(g_liveStates.begin(), g_liveStates.end(), this), g_liveStates.end());
+  {
+    std::lock_guard<std::mutex> lock(g_liveStatesLock);
+    g_liveStates.erase(std::remove(g_liveStates.begin(), g_liveStates.end(), this), g_liveStates.end());
+  }
   units.reset();
   ranges.reset();
   worldMeshes.reset();  // (its meshes let go of their Lua tables: before the state closes; a crash at the end of a run before)
@@ -185,6 +201,19 @@ bool UserState::RunString(const std::string& code, const std::string& chunkName)
 void UserState::SetHeadSize(int width, int height) {
   config_.width = width, config_.height = height;
   ui_->Resize(width, height);
+}
+
+void UserState::LinkSession(const Config& links) {
+  config_.waitForBeat = links.waitForBeat;
+  config_.groundHeight = links.groundHeight;
+  config_.beatRunning = links.beatRunning;
+  config_.gameTime = links.gameTime;
+  config_.commandSource = links.commandSource;
+  config_.ownArmy = links.ownArmy;
+  config_.world = links.world;
+  config_.pace = links.pace;
+  config_.timeline = links.timeline;
+  SetHeadSize(links.width, links.height);
 }
 
 bool UserState::StartMainScript() {

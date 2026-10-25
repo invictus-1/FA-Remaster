@@ -90,6 +90,9 @@ class SoundSystem {
 
   // The language of the voices (AudioSetLanguage): their banks are in /sounds/voice/<language>.
   void SetLanguage(const std::string& name);
+  // The same asked from another thread than the one that plays (a session's first scripts run on the loading thread:
+  // app/main.cpp): kept, and set by the next Update.
+  void AskLanguage(const std::string& name);
   // Whether the game has voices in a language (the folder /sounds/voice/<language>).
   bool HasLanguage(const std::string& name) const;
 
@@ -196,6 +199,9 @@ class SoundSystem {
 
   bool touchOnThread_ = false;
   bool voicesTaken_ = false;  // the voices' banks of language_ taken (SetLanguage)
+  std::mutex askedLock_;      // (AskLanguage's)
+  std::string asked_;
+  bool languageAsked_ = false;
   double longestPlayMs_ = 0;
   int banksMapped_ = 0, banksStreamed_ = 0, banksReadWhole_ = 0;
   int64_t bytesMapped_ = 0, bytesReadWhole_ = 0, bytesTouchedHere_ = 0;

@@ -1353,7 +1353,6 @@ void GameSession::End() {
 #endif
   sim_.reset();
   interfaceBlueprints_.reset();
-  rules_.reset();
   pendingSync_.clear();
   setupSync_.clear();
   foreignLoops_.clear();
@@ -1443,6 +1442,10 @@ void GameSession::BeginLoad() {
     loadRulesSeconds_ = secs(t0, t1);
     loadStartSeconds_ = secs(t1, std::chrono::steady_clock::now());
     loadOk_ = true;
+    // Then the interface's own state for the session, here too (the original's "Map loader" task, after its rules:
+    // the session's user Lua state made, 0x885ec9, its functions registered, 0x885f37..0x885f8a, the rules exported
+    // into it, 0x885ff2, and /lua/SessionInit.lua run in it, 0x88603e); the main thread only takes it (FinishLoad).
+    if (prepareInterface) prepareInterface(sim, loadUids_, loadSession_->header.mods);
   });
   // Meanwhile the game's map opens behind the window's picture (render request 37), the loading screen drawn over
   // what it shows; FinishLoad swaps it in.
@@ -2058,29 +2061,29 @@ int l_BlueprintFactsForTests(lua_State* L) {
 }
 }  // namespace
 
-bool GameSession::LoadInterfaceRules(lua_State* userState) {
+bool GameSession::LoadInterfaceRules(lua_State* userState, Sim* sim, const std::vector<std::string>& uids, const std::string& sessionMods) {
   auto t0 = std::chrono::steady_clock::now();
   // The session's one rules state, as the original's one RRuleGameRules per session exported into both states
   // (func_WorldSessionUserLoad 0x885e53 / 0x885fe6, Sim::Sim 0x743c05): the simulation's own load, kept for this copy
   // (Sim::keepRules, set in BeginLoad; engine 7e001be, ui REQUESTS 46), its blueprints the sim's own, the engine's
   // fixes included. Only a simulation that did not keep it has the rules loaded here once more.
-  rules_ = sim_ ? sim_->TakeRules() : nullptr;
-  const bool shared = rules_ != nullptr;
+  std::unique_ptr<ScriptState> rules = sim ? sim->TakeRules() : nullptr;
+  const bool shared = rules != nullptr;
   if (!shared) {
-    rules_ = std::make_unique<ScriptState>(ScriptState::Kind::Rules, vfs_);
-    rules_->SetHookDirs(hookDirs_);
+    rules = std::make_unique<ScriptState>(ScriptState::Kind::Rules, vfs_);
+    rules->SetHookDirs(hookDirs_);
     // The engine's script fixes for blueprints, as the simulation's own rules have them (a fix for one
     // of the game's mods: the campaign mod's weapons merged by label, fix 4), so that the interface's
     // copy matches the simulation's (ui REQUESTS 35). (The session has started: its fixes are final.)
-    if (sim_ && sim_->fixes && sim_->RulesFixesWanted()) Sim::JoinFixesHooks(*rules_);
-    SimBlueprints::StartRecording(*rules_);
-    lua_State* R = rules_->L();
-    if (!sessionMods_.empty() && PushSerializedLua(R, sessionMods_) && lua_istable(R, -1)) lua_setglobal(R, "__active_mods");
-    else SetActiveMods(*rules_, modUids_);
+    if (sim && sim->fixes && sim->RulesFixesWanted()) Sim::JoinFixesHooks(*rules);
+    SimBlueprints::StartRecording(*rules);
+    lua_State* R = rules->L();
+    if (!sessionMods.empty() && PushSerializedLua(R, sessionMods) && lua_istable(R, -1)) lua_setglobal(R, "__active_mods");
+    else SetActiveMods(*rules, uids);
     lua_settop(R, 0);
-    if (!rules_->DoScript("/lua/ruleinit.lua")) return false;
+    if (!rules->DoScript("/lua/ruleinit.lua")) return false;
   }
-  lua_State* R = rules_->L();
+  lua_State* R = rules->L();
   const auto t1 = std::chrono::steady_clock::now();
   interfaceBlueprints_ = std::make_unique<SimBlueprints>();
   interfaceBlueprints_->fileExists = [vfs = vfs_](const std::string& path) { return vfs->Exists(path); };
@@ -2090,7 +2093,7 @@ bool GameSession::LoadInterfaceRules(lua_State* userState) {
   lua_pushcclosure(userState, l_BlueprintFactsForTests, 1);
   lua_setglobal(userState, "moho64ui_BlueprintFacts");
   NoteRealGlobals(userState);
-  rules_.reset();  // (the copy needs nothing of it afterwards)
+  rules.reset();  // (the copy needs nothing of it afterwards)
   const auto t2 = std::chrono::steady_clock::now();
   if (shared)
     Logf(LogLevel::Info, "moho64ui: session: %zu blueprints in the interface's state, copied from the session's rules in %.2f s",

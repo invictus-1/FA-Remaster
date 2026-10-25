@@ -355,11 +355,12 @@ void RegisterControlBindings(lua_State* L) {
 }
 
 bool OfferToCard(lua_State* L, DrawTarget& target, const Rect& dst, const Image& image, const Rect& src, float alpha) {
-  // (only in a game's interface state, the loading screen's included: the pictures the request was for; the front
-  // end's own backgrounds are painted only where they change anyway)
+  // (a game's interface state, the loading screen's included: the pictures the request was for; and the front end's
+  // backgrounds: the lobby's faction painting, stretched over the window, was painted again on every frame of the
+  // lobby's opening, as a fill fading in under it changed the whole window)
   UserState* user = UserState::From(L);
   CardBackdrop* card = user->config().cardBackdrop;
-  if (!card || !image.valid() || user->uiState() != "game") return false;
+  if (!card || !image.valid()) return false;
   const float W = static_cast<float>(target.Width()), H = static_cast<float>(target.Height());
   auto near = [](float a, float b) { return std::fabs(a - b) < 0.5f; };
   if (!near(dst.x0, 0) || !near(dst.y0, 0) || !near(dst.x1, W) || !near(dst.y1, H)) return false;
@@ -371,9 +372,10 @@ bool OfferToCard(lua_State* L, DrawTarget& target, const Rect& dst, const Image&
     return false;
   if (texels.empty() || texels.x0 < 0 || texels.y0 < 0 || texels.x1 > image.width || texels.y1 > image.height) return false;
   if (!target.Blank()) {
-    // Something of the interface lies under it (FAF's "IN TRANSIT" cover lies over the game's panels): it goes to the
-    // card only while it hides all of that, opaque at full strength; what lies under it is then not drawn at all
-    // (DrawTarget::DropBelow). While it fades, the software way draws it, between what lies under and over it.
+    // Something of the interface lies under it (FAF's "IN TRANSIT" cover lies over the game's panels; the lobby's
+    // painting over the main menu's veil and a fill fading in under it): it goes to the card only while it hides all of
+    // that, opaque at full strength; what lies under it is then not drawn at all (DrawTarget::DropBelow). While it
+    // fades, the software way draws it, between what lies under and over it.
     if (WithAlpha(0xff000000u, alpha) >> 24 != 255) return false;
     static uint64_t checkedSerial = 0;  // (the last picture looked at, and whether those texels were all opaque)
     static IntRect checkedTexels;
