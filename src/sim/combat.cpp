@@ -1220,6 +1220,10 @@ int ShotEvent(Sim& sim, int impactType, const AiTarget& t, const Entity* hit, bo
   return 1;
 }
 
+namespace {
+UnitWeapon* TargetWeapon(Sim& sim, Unit* u, const AiTarget& t);  // (below)
+}  // namespace
+
 // UnitWeapon::SetTarget 0x6d5f30
 static void SetTarget(Sim& sim, UnitWeapon* w, const AiTarget& nt) {
   if (w->target == nt) return;
@@ -1239,6 +1243,15 @@ static void SetTarget(Sim& sim, UnitWeapon* w, const AiTarget& nt) {
     const Unit* tu = static_cast<const Unit*>(e);
     w->target.blipId = w->target.fakeId ? w->target.fakeId : tu->blip ? EntityRef(tu->blip) : 0;
   }
+  // 0x6d5fce..0x6d6006: the unit's attacker is asked which of its weapons takes the new target
+  // (CAiAttackerImpl::GetTargetWeapon 0x5d6dc0, vt+0x38: nothing for a unit being built, else the first weapon in
+  // order whose CanAttackTarget 0x6d5720 says yes; with none, GetPrimaryWeapon): only that weapon's change goes to
+  // the unit's target blip (unit+0x4d8 / +0x68e, not modelled). The asking itself draws: CanAttackTarget of a
+  // weapon with AboveWaterTargetsOnly / BelowWaterTargetsOnly on a target on the seabed picks one of its target
+  // points (Targetable). Seen (probe mp1_10366): MP1 10366, army 6's destroyer 0x60009d (uas0201): its Torpedo1
+  // takes 0x70003e (on the seabed); between the UpdateTarget pick and the aim spot the original draws in
+  // PickTargetPointAboveWater from 0x6d55fb (the FrontTurret, weapon 0, asked first); ours drew nothing there.
+  if (w->unit && !w->unit->beingBuilt) (void)TargetWeapon(sim, w->unit, nt);
   PickNewTargetAimSpot(sim, w);
   // 0x6d6131: the weapon's UNIT joins the target's shooters (once), unless the target is dead or going
   if (e && !e->dead && !e->destroyQueued && w->unit) {

@@ -219,6 +219,7 @@ int l_FlattenMapRect(lua_State* L) {
   int sx = static_cast<int>(luaL_checknumber(L, 3)), sz = static_cast<int>(luaL_checknumber(L, 4));
   float h = static_cast<float>(luaL_checknumber(L, 5));
   prof::SectionTimer sec(prof::kSecFlatHeights);  // (MOHO64_PROFILE_HITCH only: the parts' times, core/profile.h)
+  LandNavBeforeTerrain(sim, x, z, x + sx, z + sz);  // (cluster data the background paid for: from the old heights)
   for (int j = z; j <= std::min(z + sz, m->height()); ++j)
     for (int i = x; i <= std::min(x + sx, m->width()); ++i) m->SetHeightAt(i, j, h);
   sec.To(prof::kSecFlatDrawn);

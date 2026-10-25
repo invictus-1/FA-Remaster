@@ -98,6 +98,20 @@ class HPathTables {
   // The heightfield vertices [vx0, vx1] x [vz0, vz1] changed (FlattenMapRect): data made ahead there is dropped
   // (the clusters' own accounting is not touched: the original does not dirty them for it).
   void TerrainChanged(int vx0, int vz0, int vx1, int vz1);
+  // Called BEFORE the occupancy grids change for the origins [ox0, ox1] x [oz0, oz1] of a map whose footprint is
+  // sx x sz (cells: the origins whose footprint covers them; heights: TerrainChanged's origins): every 8-cluster
+  // whose 9x9 origin bitmap holds one of them and that the background has paid for (stale) gets its data made now,
+  // from the grid as it still is; a dirty one made ahead drops that data. The original makes a cluster's data when
+  // it pays for it (WorkOnCluster 0x8e37d0: the bitmap fetch through the grid's vtable 0x8e388f and the build at
+  // once), and a change that does not dirty a cluster leaves its data as it was: DirtyRect 0x8e3620 widens the rect
+  // by the footprint only on its far side (x1 + sx + 1), so an origin left of or below a new structure, whose
+  // footprint now overlaps it, keeps its old bit in a cluster built before. Seen (probe mp1_9785c): MP1 9752, army
+  // 6's cruiser 0x600016 (Water6x6) searches past the naval factory 0x60005e (placed at 9287, cells (939,557)-(943,570),
+  // so origins x 934..942 blocked): the original's g at (928,564) is 26.414 + 35.3137 from (960,572), class 0, as its
+  // 8-clusters at x 928..936 were built before 9287; ours made them at 9752 with the factory in and took the class-1
+  // detour 41.718, so its path ran via (928,572).
+  void BeforeOccupancyChange(int cx0, int cz0, int cx1, int cz1);  // cells [cx0, cx1) x [cz0, cz1)
+  void BeforeTerrainChange(int vx0, int vz0, int vx1, int vz1);    // vertices [vx0, vx1] x [vz0, vz1]
   // MOHO64_PROFILE: the pre-pass's clusters (made ahead, taken by a search, dropped before), the clusters
   // searches made themselves, and the pre-pass's time.
   struct AheadCounts {
@@ -173,6 +187,7 @@ class HPathTables {
   std::vector<AheadItem> pick_[3];  // (PrepareSearches' lists by level, kept between beats for their capacity)
   bool Ready(ClusterMap& m, int L, int cx, int cz, int* budget, bool make = true);
   void Make(ClusterMap& m, int L, int cx, int cz);
+  void MakeStaleOrigins(ClusterMap& m, int ox0, int oz0, int ox1, int oz1);  // (BeforeOccupancyChange)
   void Build1(ClusterMap& m, int cx, int cz);
   void Build2(ClusterMap& m, int cx, int cz, int* budget);
   void Begin(Search& s, PathTraveler* t);

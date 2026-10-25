@@ -83,6 +83,10 @@ bool LandNavGoal(const Unit* u, Vec3* out);
 int LandNavStatus(const Unit* u);
 // Structures changed occupancy in cells [x0, x1) x [z0, z1).
 void LandNavDirty(Sim& sim, int x0, int z0, int x1, int z1);
+// Before the occupancy (cells [x0, x1) x [z0, z1)) or the heights (vertices [vx0, vx1] x [vz0, vz1]) change: the
+// cluster data the background paid for is made from the grids as they still are (HPathTables::BeforeOccupancyChange).
+void LandNavBeforeOccupancy(Sim& sim, int x0, int z0, int x1, int z1);
+void LandNavBeforeTerrain(Sim& sim, int vx0, int vz0, int vx1, int vz1);
 // The heightfield vertices [vx0, vx1] x [vz0, vz1] changed (FlattenMapRect): the path tables drop the cluster data
 // they made ahead there (HPathTables::TerrainChanged).
 void LandNavTerrainChanged(Sim& sim, int vx0, int vz0, int vx1, int vz1);

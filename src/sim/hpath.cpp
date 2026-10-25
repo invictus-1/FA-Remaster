@@ -365,6 +365,33 @@ bool HPathTables::PrepareSearches(int margin, bool all, WorkerPool* pool) {
   return units;
 }
 
+void HPathTables::MakeStaleOrigins(ClusterMap& m, int ox0, int oz0, int ox1, int oz1) {
+  // the 8-clusters whose origins [8 cx, 8 cx + 8] x [8 cz, 8 cz + 8] (Build1's 9x9 bitmap) meet the rect
+  const int ix0 = std::max(0, (ox0 >> 3) - 1), ix1 = std::min(m.wc[1] - 1, ox1 >> 3);
+  const int iz0 = std::max(0, (oz0 >> 3) - 1), iz1 = std::min(m.hc[1] - 1, oz1 >> 3);
+  for (int cz = iz0; cz <= iz1; ++cz)
+    for (int cx = ix0; cx <= ix1; ++cx) {
+      if (8 * cx > ox1 || 8 * cx + 8 < ox0 || 8 * cz > oz1 || 8 * cz + 8 < oz0) continue;
+      const size_t i = static_cast<size_t>(cz) * m.wc[1] + cx;
+      if (m.dirty[1][i]) {
+        if (m.ahead[1][i]) {  // (made from the grid before this change; the original builds it later, from the new one)
+          m.ahead[1][i] = 0;
+          ++aheadCounts.dropped;
+        }
+      } else if (m.stale[1][i]) {
+        Make(m, 1, cx, cz);
+      }
+    }
+}
+
+void HPathTables::BeforeOccupancyChange(int cx0, int cz0, int cx1, int cz1) {
+  for (ClusterMap* m : mapOrder_) MakeStaleOrigins(*m, cx0 - m->sx + 1, cz0 - m->sz + 1, cx1 - 1, cz1 - 1);
+}
+
+void HPathTables::BeforeTerrainChange(int vx0, int vz0, int vx1, int vz1) {
+  for (ClusterMap* m : mapOrder_) MakeStaleOrigins(*m, vx0 - m->sx, vz0 - m->sz, vx1, vz1);
+}
+
 void HPathTables::TerrainChanged(int vx0, int vz0, int vx1, int vz1) {
   for (ClusterMap* m : mapOrder_) {
     // the origins whose footprint covers a changed vertex (PathGrid::TerrainChanged), then every 8-cluster whose

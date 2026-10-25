@@ -320,6 +320,7 @@ void ExecuteOccupyGround(Sim& sim, Unit* u) {
   if (!u->bpData || !u->bpData->structure || !u->blueprint) return;
   const NamedFootprint& fp = Footprint(*u->blueprint);
   int ox = RoundEven(u->position.x - fp.sizeX * 0.5f), oz = RoundEven(u->position.z - fp.sizeZ * 0.5f);
+  LandNavBeforeOccupancy(sim, ox, oz, ox + fp.sizeX, oz + fp.sizeZ);
   sim.navigation().AddStructure(EntityRef(u), ox, oz, ox + fp.sizeX, oz + fp.sizeZ, fp.caps);
   LandNavDirty(sim, ox, oz, ox + fp.sizeX, oz + fp.sizeZ);
 }
@@ -341,6 +342,7 @@ void ReleaseStructure(Sim& sim, Unit* u) {
   if (!u->bpData || !u->bpData->structure) return;
   for (const auto& r : sim.navigation().Structures())
     if (r.entity == EntityRef(u)) {
+      LandNavBeforeOccupancy(sim, r.x0, r.z0, r.x1, r.z1);
       LandNavDirty(sim, r.x0, r.z0, r.x1, r.z1);
       break;
     }
@@ -365,6 +367,7 @@ void PropOccupancy(Sim& sim, Prop* p, const Vec3& pos, bool occupy) {
   // (cells 152..154 x 565..569), its first target stops at (156, 568); ours went through it to (154, 566).
   if (p->occCaps & 15) {
     const int r[4] = {x0, z0, x0 + sx, z0 + sz};
+    LandNavBeforeOccupancy(sim, r[0], r[1], r[2], r[3]);
     if (occupy) sim.navigation().AddStructure(EntityRef(p), r[0], r[1], r[2], r[3], p->occCaps);
     else sim.navigation().RemoveStructure(EntityRef(p), r);
     // (Seen, MP3 2988 (probe mp3_boulder): two des_boulder01 rocks share cells, 0x2ff0196b on (263,250)-(266,254) and

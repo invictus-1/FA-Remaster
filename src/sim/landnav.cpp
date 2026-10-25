@@ -1254,6 +1254,12 @@ int LandNavStatus(const Unit* u) {
 }
 
 void LandNavDirty(Sim& sim, int x0, int z0, int x1, int z1) { Tables(sim).DirtyRect(x0, z0, x1, z1); }
+void LandNavBeforeOccupancy(Sim& sim, int x0, int z0, int x1, int z1) {
+  if (sim.landNavState && sim.landNavState->tables) sim.landNavState->tables->BeforeOccupancyChange(x0, z0, x1, z1);
+}
+void LandNavBeforeTerrain(Sim& sim, int vx0, int vz0, int vx1, int vz1) {
+  if (sim.landNavState && sim.landNavState->tables) sim.landNavState->tables->BeforeTerrainChange(vx0, vz0, vx1, vz1);
+}
 
 void LandNavTerrainChanged(Sim& sim, int vx0, int vz0, int vx1, int vz1) {
   if (sim.landNavState && sim.landNavState->tables) sim.landNavState->tables->TerrainChanged(vx0, vz0, vx1, vz1);
