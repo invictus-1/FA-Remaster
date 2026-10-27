@@ -983,11 +983,15 @@ void SetAttachedUnitLayer(Sim& sim, Unit* u, const std::string& layer) { SetUnit
 
 // Where a unit attached by its own bone stands: the parent bone's world transform (Pp, Pq) x the inverse of the
 // unit's own bone transform. Cp / Cq (optional): that own bone transform, for traces.
-void AttachedTransform(Unit* u, const Vec3& Pp, const Quat& Pq, Vec3* outPos, Quat* outQ, Vec3* outCp, Quat* outCq) {
+void AttachedTransform(Unit* u, const Vec3& Pp, const Quat& Pq, Vec3* outPos, Quat* outQ, Vec3* outCp, Quat* outCq,
+                       const Vec3* inCp, const Quat* inCq) {
   Vec3 Cp;
   Quat Cq;
   BoneLocal(u, u->ownBone, &Cp, &Cq);
-  if (u->skeleton && u->ownBone >= 0 && u->ownBone < u->skeleton->Count()) {
+  if (inCp && inCq) {  // (the own bone's transform as an earlier step of this beat took it)
+    Cp = *inCp;
+    Cq = *inCq;
+  } else if (u->skeleton && u->ownBone >= 0 && u->ownBone < u->skeleton->Count()) {
     // Unit::GetBoneLocalTransform 0x6aa440 does not read the bone's model-space transform from the skeleton:
     // it takes the bone's composite in the WORLD (from the pose) and multiplies by the inverse of the pose's
     // world transform (0x46fbf0, then 0x549c20). The result is the same transform with other last bits, and
@@ -1108,9 +1112,21 @@ void AttachedUnitsTick(Sim& sim) {
     if (u->parentBone == -1) bp = UnitBoneMinus1(*pu, bp);
     Vec3 np = bp;
     Quat nq = bq;
-    AttachedTransform(u, bp, bq, &np, &nq);  // (any own bone: 0x67a020 normalises also for -2)
+    // The original makes this child's transform once, after its parent's (Entity::TaskTick 0x679c40), with its own
+    // bone's local transform (Unit::GetBoneLocalTransform 0x6aa440, from its pose of before this beat) as it was
+    // then. Ours placed it once already in the main pass, which changed its transform: that bone transform is
+    // taken from that pass, not made again. Seen: Missiles 428, the guard dummies (zxa0003) of six UEF pods
+    // docking: the original's child bone (1 - 6e-8, 8.43e-8, -7.3e-11, -1.3e-10) = ours' main pass; made again,
+    // the quaternion's small parts came out otherwise (probe cp_dummy).
+    const bool same = u->attachCTick == sim.tick();
+    AttachedTransform(u, bp, bq, &np, &nq, nullptr, nullptr, same ? &u->attachCp : nullptr,
+                      same ? &u->attachCq : nullptr);  // (any own bone: 0x67a020 normalises also for -2)
     u->position = np;
     u->orientation = nq;
+    if (same && u->poseSet) {  // (its pose of this beat is built on that one transform, as the original's)
+      u->poseBasePos = np;
+      u->poseBaseOri = nq;
+    }
     if (np.x != before.x || np.y != before.y || np.z != before.z) u->lastMoveTick = sim.tick();
   }
   sim.MarkUnitsMoved();

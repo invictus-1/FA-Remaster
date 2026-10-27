@@ -2403,6 +2403,9 @@ void Sim::Tick() {
           Vec3 cp;
           Quat cq;
           AttachedTransform(u, bp, bq, &np, &nq, &cp, &cq);
+          u->attachCp = cp;  // (for AttachedUnitsTick's second placing of a child of cargo in this beat)
+          u->attachCq = cq;
+          u->attachCTick = tick_;
           static const long dbgAtt2 = getenv("MOHO64_DEBUG_ATTACHED") ? atol(getenv("MOHO64_DEBUG_ATTACHED")) : -1;
           if (dbgAtt2 >= 0 && static_cast<long>(u->id) == dbgAtt2)
             Logf(LogLevel::Info,

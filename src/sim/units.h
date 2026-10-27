@@ -208,6 +208,9 @@ class Unit : public Entity {
   // orderedParent: the parent this has been settled for).
   uint64_t motSeq = 0;
   uint32_t orderHandle = 0, orderedParent = 0;
+  Vec3 attachCp;  // the own bone's local transform the attach of beat attachCTick took (AttachedUnitsTick)
+  Quat attachCq;
+  uint32_t attachCTick = 0;
   // Its place in the sim's dirty-entity list sim+0xa5c (node Entity+0x60; Sim::DirtyOrder): linked when it is made
   // (Entity ctor 0x677c2d), moved to the list's newest end by every SetHealth (0x679a3c..0x679a6b, no test). The
   // transform's own link (SetPendingTransform 0x678ed9) only links an entity that is not on the list.
