@@ -32,6 +32,9 @@ ForkThread(function()
         LOG("TEST done: 0 failed")
         return
     end
+    -- (no mod switched on in the profile first: menu.prefs, the tests' base, is Chris's, and a mod he switched on
+    -- would be listed first and switched off by the click)
+    SetPreference("active_mods", {})
     local handed
     local ok, err = pcall(import("/lua/ui/lobby/modsmanager.lua").CreateDialog, GetFrame(0), true, {}, function(simMods, uiMods)
         handed = {}

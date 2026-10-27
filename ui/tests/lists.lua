@@ -194,4 +194,119 @@ check("ShowItem makes a row that is not shown the first shown row, as far as the
 picks:AbandonKeyboardFocus()
 picks:Destroy()
 
+-- the mouse-over row's colours: a list that sets four colours, as the game's drop-downs do (combo.lua), shows
+-- the row under the mouse in the constructor's mouse-over colours (FA exe 0x799340: band ff202020, text ffa0a0a0)
+local hov = ItemList(root, "hoverlist")
+hov:SetFont("Arial", 14)
+hov.Left:Set(600) hov.Top:Set(600) hov.Width:Set(200) hov.Height:Set(row * 4)
+hov.Depth:Set(500)
+hov:SetColors("ffc0c0c0", "Black", "ffc0c0c0", "Black")
+hov:ShowMouseoverItem(true)
+for i = 0, 5 do hov:AddItem("item " .. i) end
+local function hovY(r) return 600 + row * r + 2 end
+check("the list's background before the mouse comes", moho64ui_PixelAt(795, hovY(1)), "ff000000")
+moho64ui_MouseMove(650, hovY(1))
+check("the row under the mouse gets the mouse-over band", moho64ui_PixelAt(795, hovY(1)), "ff202020")
+check("the other rows keep the background", moho64ui_PixelAt(795, hovY(2)), "ff000000")
+hov:SetColors(nil, nil, nil, nil, "ffffffff", "ff3060a0")
+check("SetColors' mouse-over background colours the band", moho64ui_PixelAt(795, hovY(1)), "ff3060a0")
+moho64ui_MouseMove(10, 900)
+check("no band once the mouse has left", moho64ui_PixelAt(795, hovY(1)), "ff000000")
+hov:Destroy()
+local plain = ItemList(root, "plainlist")
+plain:SetFont("Arial", 14)
+plain.Left:Set(600) plain.Top:Set(600) plain.Width:Set(200) plain.Height:Set(row * 4)
+plain:AddItem("one") plain:AddItem("two")
+plain:SetSelection(1)
+check("a list without colours: the constructor's background", moho64ui_PixelAt(795, hovY(0)), "ff000000")
+check("and its selected row's band (ff808080)", moho64ui_PixelAt(795, hovY(1)), "ff808080")
+plain:Destroy()
+
+-- a button event's KeyCode is the button's number (FA exe 0x979560): 1 left, 2 middle, 3 right
+local pad = Group(root, "keypad")
+pad.Left:Set(1500) pad.Top:Set(100) pad.Width:Set(50) pad.Height:Set(50) pad.Depth:Set(500)
+local codes = {}
+pad.HandleEvent = function(self, event)
+    if event.Type == "ButtonPress" or event.Type == "ButtonRelease" then table.insert(codes, tostring(event.KeyCode)) end
+    return true
+end
+for _, b in { "Left", "Middle", "Right" } do
+    moho64ui_MouseButton(b, true, 1520, 120)
+    moho64ui_MouseButton(b, false, 1520, 120)
+end
+check("the buttons' KeyCodes", table.concat(codes, " "), "1 1 2 2 3 3")
+pad:Destroy()
+
+-- the scroll bar (FA exe 0x7a11c0, 0x7a1410): a press on its thumb drags it, a press beside the thumb turns a
+-- page; the game's option dialog lays it out so: a grid of rows with UIUtil's bar beside it (options.lua)
+local UIUtil = import("/lua/ui/uiutil.lua")
+local Grid = import("/lua/maui/grid.lua").Grid
+local grid = Grid(root, 300, 34)
+grid.Left:Set(1000) grid.Top:Set(200) grid.Width:Set(300)
+grid.Height:Set(function() return grid._itemHeight * 10 end)
+grid.Depth:Set(600)
+grid:AppendCols(1, true)
+for i = 1, 30 do
+    grid:AppendRows(1, true)
+    local cell = Group(grid)
+    cell.Width:Set(300) cell.Height:Set(34)
+    grid:SetItem(cell, 1, i, true)
+end
+grid:EndBatch()
+local sb = UIUtil.CreateVertScrollbarFor(grid, -4)
+local x = math.floor((sb.Left() + sb.Right()) / 2)
+local sbTop, len = sb.Top(), sb.Bottom() - sb.Top()
+check("the grid scrolls: 30 rows, 10 shown", tostring(grid:IsScrollable("Vert")) .. " " .. (function() local a, b, c, d = grid:GetScrollValues("Vert") return a .. "," .. b .. "," .. c .. "," .. d end)(), "true 0,30,0,10")
+check("the bar's middle is the bar itself", moho64ui_ControlAt(x, sbTop + len / 2) == sb, true)
+-- the thumb covers rows 0..10 of 30: a third of the bar from its top
+local at = math.floor(sbTop + len * 5 / 30)
+local way = math.floor(len * 9.5 / 30)
+moho64ui_MouseButton("Left", true, x, at)
+moho64ui_MouseMove(x, at + way)
+-- ScrollSetTop(first visible at the press (0) + 30 / bar length * the way); FAF's grid counts its top from 1
+check("dragging the thumb sets the grid's top", grid._top["Vert"], math.floor(30 * way / len))
+moho64ui_MouseMove(x, at + len)
+check("dragged past the end: the grid's last page", grid._top["Vert"], 21)
+moho64ui_MouseMove(x, at - len)
+check("dragged back past the start: the first row", grid._top["Vert"], 1)
+moho64ui_MouseMove(x, at + way)
+moho64ui_MouseButton("Left", false, x, at + way)
+local after = grid._top["Vert"]
+moho64ui_MouseMove(x, sbTop + len - 2)
+check("after the release the mouse moves the thumb no more", grid._top["Vert"], after)
+-- beside the thumb: a page on or back
+grid:ScrollSetTop("Vert", 1)
+moho64ui_MouseButton("Left", true, x, sbTop + len - 2)
+moho64ui_MouseButton("Left", false, x, sbTop + len - 2)
+check("a press below the thumb: a page on", grid._top["Vert"], 11)
+moho64ui_MouseButton("Left", true, x, sbTop + 2)
+moho64ui_MouseButton("Left", false, x, sbTop + 2)
+check("a press above the thumb: a page back", grid._top["Vert"], 1)
+moho64ui_MouseButton("Right", true, x, sbTop + len - 2)
+moho64ui_MouseButton("Right", false, x, sbTop + len - 2)
+check("the right button does nothing", grid._top["Vert"], 1)
+moho64ui_MouseWheel(x, sbTop + len / 2, -1)
+check("the wheel over the bar: a line on", grid._top["Vert"], 2)
+sb:Destroy()
+grid:Destroy()
+
+-- an item list's thumb: the list's first shown row follows it
+local long = ItemList(root, "longlist")
+long:SetFont("Arial", 14)
+long.Left:Set(600) long.Top:Set(300) long.Width:Set(200) long.Height:Set(row * 5)
+long.Depth:Set(600)
+for i = 0, 19 do long:AddItem("line " .. i) end
+local lsb = UIUtil.CreateVertScrollbarFor(long)
+local lx = math.floor((lsb.Left() + lsb.Right()) / 2)
+local lTop, lLen = lsb.Top(), lsb.Bottom() - lsb.Top()
+local lAt = math.floor(lTop + lLen * 2 / 20)
+local lWay = math.floor(lLen * 6.3 / 20)
+moho64ui_MouseButton("Left", true, lx, lAt)
+moho64ui_MouseMove(lx, lAt + lWay)
+local _, _, lt = string.find(moho64ui_Describe(long), "top (%d+)")
+check("dragging an item list's thumb scrolls the list", tonumber(lt), math.floor(20 * lWay / lLen + 0.5))
+moho64ui_MouseButton("Left", false, lx, lAt + lWay)
+lsb:Destroy()
+long:Destroy()
+
 LOG("TEST done: " .. failed .. " failed")

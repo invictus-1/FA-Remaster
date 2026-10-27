@@ -247,7 +247,7 @@ ForkThread(function()
             released = true
             self:Destroy()
         end
-        PostDragger(GetFrame(0), 301, other)
+        PostDragger(GetFrame(0), 1, other)  -- the left button's KeyCode
         g = moho64ui_OrderGraph()
         check("another dragger posted over it: the drag is cancelled", g.dragged, nil)
         check("the waypoint back at its order's place at once", near((legTo(g, id2) or {}).b, o2.position, 0.5), true)

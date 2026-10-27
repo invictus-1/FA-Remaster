@@ -25,6 +25,9 @@ class ItemList : public Control {
   // down by the font's height (the external leading stays out, so bands of neighbouring rows do
   // not touch); then the shown rows' text on their baselines (Top + i * row height + ascent),
   // limited to the control's width, where the mouse-over colour goes before the selected one.
+  // Every colour is drawn as it is (no colour counts as "not set": the list starts with the
+  // constructor's, 0x799340), so a list that sets only four colours, as the game's drop-downs do
+  // (combo.lua), still shows the mouse-over row in the constructor's ff202020 / ffa0a0a0.
   // Checked against a screenshot of the original's map list: same rows, same band. The original
   // makes its solid colours as 16-bit textures (the band's 7f a8 a4 shows as 7b aa a5 there);
   // that rounding is left out.
@@ -35,24 +38,22 @@ class ItemList : public Control {
     FontMetrics m = GetFontMetrics(family, size);
     float row = m.height + m.externalLeading;
     int lines = LinesVisible();
-    auto set = [](const std::string& c) { return !c.empty() && c != "0"; };
-    auto band = [&](int index, const std::string& color) {
-      if (index < this->top || index >= this->top + lines || !set(color)) return;
+    auto band = [&](int index, uint32_t color) {
+      if (index < this->top || index >= this->top + lines) return;
       float y = r.y0 + static_cast<float>(index - this->top) * row;
-      target.FillRect(Rect{r.x0, y, r.x1, y + m.height}, WithAlpha(ParseColor(color), alpha));
+      target.FillRect(Rect{r.x0, y, r.x1, y + m.height}, WithAlpha(color, alpha));
     };
-    if (set(colors[1])) target.FillRect(r, WithAlpha(ParseColor(colors[1]), alpha));
+    target.FillRect(r, WithAlpha(colors[1], alpha));
     if (showMouseover) band(mouseover, colors[5]);
     if (showSelection) band(selection, colors[3]);
     target.SetClip(r);
     for (int i = 0; i < lines && this->top + i < Count(); ++i) {
       int index = this->top + i;
       float y = r.y0 + static_cast<float>(i) * row;
-      const std::string* fg = &colors[0];
-      if (showMouseover && index == mouseover) { if (set(colors[4])) fg = &colors[4]; }
-      else if (showSelection && index == selection) { if (set(colors[2])) fg = &colors[2]; }
-      DrawString(target, family, size, items[static_cast<size_t>(index)], r.x0, y + m.ascent,
-                 WithAlpha(fg->empty() ? 0xffffffffu : ParseColor(*fg), alpha));
+      uint32_t fg = colors[0];
+      if (showMouseover && index == mouseover) fg = colors[4];
+      else if (showSelection && index == selection) fg = colors[2];
+      DrawString(target, family, size, items[static_cast<size_t>(index)], r.x0, y + m.ascent, WithAlpha(fg, alpha));
     }
     target.ClearClip();
   }
@@ -63,7 +64,9 @@ class ItemList : public Control {
   int top = 0;  // the first row shown
   std::string family;
   int size = 0;
-  std::string colors[6];  // foreground, background, selected fg/bg, mouseover fg/bg
+  // foreground, background, selected fg/bg, mouseover fg/bg (+0x120..+0x134), as the constructor
+  // (FA exe 0x799340) sets them
+  uint32_t colors[6] = {0xff808080u, 0xff000000u, 0xff000000u, 0xff808080u, 0xffa0a0a0u, 0xff202020u};
   bool showSelection = true, showMouseover = false;
 
   int Count() const { return static_cast<int>(items.size()); }
@@ -239,11 +242,14 @@ int l_SetNewFont(lua_State* L) {
 }
 
 // SetNewColors(foreground, background, selected_foreground, selected_background, mouseover_foreground,
-// mouseover_background): nil keeps a colour
+// mouseover_background) (FA exe 0x79adb0): seven arguments; a nil one keeps its colour.
 int l_SetNewColors(lua_State* L) {
   ItemList* c = Self(L);
   for (int i = 0; i < 6; ++i)
-    if (!lua_isnil(L, 2 + i) && lua_gettop(L) >= 2 + i) c->colors[i] = lua_tostring(L, 2 + i) ? lua_tostring(L, 2 + i) : "";
+    if (lua_gettop(L) >= 2 + i && !lua_isnil(L, 2 + i)) {
+      const char* text = lua_tostring(L, 2 + i);
+      c->colors[i] = ParseColor(text ? text : "");
+    }
   return 0;
 }
 

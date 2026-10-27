@@ -209,9 +209,12 @@ Control* TopmostIn(Control* root, float x, float y) {
 
 namespace {
 
-// The key codes of the mouse buttons as events carry them: 301, 302 and 304, wxWidgets' order (READ:
-// the EMauiKeyCode names at 0x79cd90, MKEY_BACK .., which IsKeyDown takes, follow that list).
-int ButtonKeyCode(const UiEvent& e) { return e.left ? 301 : e.right ? 302 : e.middle ? 304 : 0; }
+// The KeyCode of a button event: the button's number, 1 left, 2 middle, 3 right (READ: the mouse handler,
+// 0x7a4c03 and 0x7a4e85, puts the window event's button there, 0x979560: the first of the buttons 1..3 the
+// event is about; the scrollbar takes a press only with KeyCode 1, 0x7a11e1, and FAF's scripts skip a movie on
+// "a mouse click" by KeyCode 1 or 3, credits.lua; that 2 is the middle one is INFERRED from the window
+// library's numbering). The names IsKeyDown takes (LBUTTON 301, RBUTTON 302, MBUTTON 304) are another list.
+int ButtonKeyCode(const UiEvent& e) { return e.left ? 1 : e.middle ? 2 : e.right ? 3 : 0; }
 
 // Push the active dragger's table; false (nothing pushed) when there is none or it was destroyed.
 bool PushDragger(lua_State* L, UiManager& ui) {

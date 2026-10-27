@@ -398,8 +398,8 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   original's order (one list ordered by Depth, hidden ones left out); Bitmap and Text follow the
   original's placement (texture stretched over the rectangle without its border ring; the text
   baseline and centring rules; drop shadow one pixel right and down). Glyphs are made the
-  original's way through GDI. Textures: .dds (DXT1/3/5 and uncompressed) and .png (FAF's newer interface pictures; checked against a reference decoder on the game's files: mean difference 0.04 of 255). The item list draws
-  as read from the original; the edit field, border and scrollbar draw by inference, marked in
+  original's way through GDI. Textures: .dds (DXT1/3/5 and uncompressed) and .png (FAF's newer interface pictures; checked against a reference decoder on the game's files: mean difference 0.04 of 255). The item list and the
+  scrollbar draw as read from the original; the edit field and border draw by inference, marked in
   the source, and agree with the screenshots where those show them.
 - Checked against the original: a lossless screenshot of the original game's main menu (3840x2160,
   the game's UI scale at 150%) compared with our picture of the same set-up. Every part compared
@@ -447,7 +447,11 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   keyboard is connected.
 - The item list's own events (read from the original): the row under the mouse
   (`OnMouseoverItem`), a press or double click on a row (`OnClick`, `OnDoubleClick`), the wheel,
-  and the keys that move the selection (`OnKeySelect`). With them the game's drop-down lists
+  and the keys that move the selection (`OnKeySelect`); its colours start as the original's
+  constructor sets them, so the drop-downs (which set four) show the mouse-over row. The scrollbar
+  (read, FA exe 0x7a11c0 / 0x7a1410): a left press on the thumb drags it, beside the thumb a page
+  on or back, the wheel a line. A button event's `KeyCode` is the button's number (1 left, 2
+  middle, 3 right), as the original's. With them the game's drop-down lists
   work: in the lobby a slot's list opens and picking "AI: Normal" puts an AI opponent into the
   slot. The game's mods manager (FAF's `modsmanager.lua`, opened from the lobby's Game Options)
   needs nothing more of the engine: it lists the mods found in the mods folders with their icons
