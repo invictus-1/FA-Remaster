@@ -477,9 +477,9 @@ function RecordGroundThreatForLandZone(tLZData, tLZTeamData, iTeam, iPlateau, iL
         tLZTeamData[M28Map.subrefbDangerousEnemiesInThisLZ] = false
         tLZTeamData[M28Map.subrefThreatEnemyStructureTotalMass] = 0
     else
-        local tMobileUnits = EntityCategoryFilterDown(categories.MOBILE - M28UnitInfo.refCategoryScathis, tLZTeamData[M28Map.subrefTEnemyUnits])
-        local tStructures = EntityCategoryFilterDown(M28UnitInfo.refCategoryStructure + M28UnitInfo.refCategoryScathis, tLZTeamData[M28Map.subrefTEnemyUnits])
-        local tEnemiesExclShieldsAndFixedArti = EntityCategoryFilterDown(categories.MOBILE - M28UnitInfo.refCategoryMobileLandShield + categories.DIRECTFIRE, tLZTeamData[M28Map.subrefTEnemyUnits]) --(shield value gets added later based on the threat excl shields)
+        local tMobileUnits = EntityCategoryFilterDown(M28Utilities.VariantCategoryChain('Land480', M28Utilities.bVariantVerifyNative and function() return categories.MOBILE - M28UnitInfo.refCategoryScathis end, '-', categories.MOBILE, M28UnitInfo.refCategoryScathis), tLZTeamData[M28Map.subrefTEnemyUnits]) --FA Remastered variant: category kept per call site (M28Utilities.VariantCategoryChain)
+        local tStructures = EntityCategoryFilterDown(M28Utilities.VariantCategoryChain('Land481', M28Utilities.bVariantVerifyNative and function() return M28UnitInfo.refCategoryStructure + M28UnitInfo.refCategoryScathis end, '+', M28UnitInfo.refCategoryStructure, M28UnitInfo.refCategoryScathis), tLZTeamData[M28Map.subrefTEnemyUnits]) --FA Remastered variant: category kept per call site (M28Utilities.VariantCategoryChain)
+        local tEnemiesExclShieldsAndFixedArti = EntityCategoryFilterDown(M28Utilities.VariantCategoryChain('Land482', M28Utilities.bVariantVerifyNative and function() return categories.MOBILE - M28UnitInfo.refCategoryMobileLandShield + categories.DIRECTFIRE end, '-+', categories.MOBILE, M28UnitInfo.refCategoryMobileLandShield, categories.DIRECTFIRE), tLZTeamData[M28Map.subrefTEnemyUnits]) --(shield value gets added later based on the threat excl shields) --FA Remastered variant: category kept per call site (M28Utilities.VariantCategoryChain)
         local bHaveDangerousEnemies = false
         tLZTeamData[M28Map.subrefTThreatEnemyCombatTotal] = M28UnitInfo.GetCombatThreatRating(tEnemiesExclShieldsAndFixedArti, true)
 
@@ -504,7 +504,7 @@ function RecordGroundThreatForLandZone(tLZData, tLZTeamData, iTeam, iPlateau, iL
         tLZTeamData[M28Map.subrefThreatEnemyDFStructures] = 0
 
         --Increase structure value for under construction experimentals
-        local tExperimentals = EntityCategoryFilterDown(categories.EXPERIMENTAL * categories.MOBILE, tLZTeamData[M28Map.subrefTEnemyUnits])
+        local tExperimentals = EntityCategoryFilterDown(M28Utilities.VariantCategoryChain('Land507', M28Utilities.bVariantVerifyNative and function() return categories.EXPERIMENTAL * categories.MOBILE end, '*', categories.EXPERIMENTAL, categories.MOBILE), tLZTeamData[M28Map.subrefTEnemyUnits]) --FA Remastered variant: category kept per call site (M28Utilities.VariantCategoryChain)
         if M28Utilities.IsTableEmpty(tExperimentals) == false then
             for iUnit, oUnit in tExperimentals do
                 if oUnit:GetFractionComplete() < 1 then
@@ -576,7 +576,7 @@ function RecordGroundThreatForLandZone(tLZData, tLZTeamData, iTeam, iPlateau, iL
         tLZTeamData[M28Map.subrefbDangerousEnemiesInThisLZ] = bHaveDangerousEnemies
 
         --Increase enemy threats for shield values
-        local tShields = EntityCategoryFilterDown(M28UnitInfo.refCategoryFixedShield + M28UnitInfo.refCategoryMobileLandShield, tLZTeamData[M28Map.subrefTEnemyUnits])
+        local tShields = EntityCategoryFilterDown(M28Utilities.VariantCategoryChain('Land579', M28Utilities.bVariantVerifyNative and function() return M28UnitInfo.refCategoryFixedShield + M28UnitInfo.refCategoryMobileLandShield end, '+', M28UnitInfo.refCategoryFixedShield, M28UnitInfo.refCategoryMobileLandShield), tLZTeamData[M28Map.subrefTEnemyUnits]) --FA Remastered variant: category kept per call site (M28Utilities.VariantCategoryChain)
         if M28Utilities.IsTableEmpty(tShields) == false then
             local iCurShield, iMaxShield
             local iThreatFactor
@@ -1167,7 +1167,7 @@ function ManageLandZoneScouts(tLZData, tLZTeamData, iTeam, iPlateau, iLandZone, 
                                             if EntityCategoryContains(M28UnitInfo.refCategoryEngineer, oUnit.UnitId) then
                                                 iCurDist = iCurDist - (oUnit:GetBlueprint().Economy.MaxBuildDistance or 0)
                                             elseif (oUnit[M28UnitInfo.refiDFRange] or 0) > 0 then
-                                                if EntityCategoryContains(M28UnitInfo.refCategoryLandScout - M28UnitInfo.refCategoryCombatScout, oUnit.UnitId) and iCurDist < oUnit[M28UnitInfo.refiDFRange] + 2 and (not(bFriendlyCombatInAdjZone) or M28UnitInfo.GetUnitHealthPercent(oScout) < 0.5) then
+                                                if EntityCategoryContains(M28Utilities.VariantCategoryChain('Land1170', M28Utilities.bVariantVerifyNative and function() return M28UnitInfo.refCategoryLandScout - M28UnitInfo.refCategoryCombatScout end, '-', M28UnitInfo.refCategoryLandScout, M28UnitInfo.refCategoryCombatScout), oUnit.UnitId) and iCurDist < oUnit[M28UnitInfo.refiDFRange] + 2 and (not(bFriendlyCombatInAdjZone) or M28UnitInfo.GetUnitHealthPercent(oScout) < 0.5) then --FA Remastered variant: category kept per call site (M28Utilities.VariantCategoryChain)
                                                     --This means we should be far less likely to run from UEF and Aeon land scouts if we arent yet in range of them (and sometimes even if we are slightly in range)
                                                     iCurDist = iCurDist - (oUnit[M28UnitInfo.refiDFRange] or 0)
                                                 else
@@ -1677,7 +1677,7 @@ function RecordClosestAdjacentEnemiesAndGetBestEnemyRange(tLZData, tLZTeamData, 
             if bDebugMessages == true then LOG(sFunctionRef..': Considering adjacent LZ, Enemy mobile DF for this LZ='..tAltLZTeamData[M28Map.subrefLZThreatEnemyBestMobileDFRange]..'; Mobile structure range='..tAltLZTeamData[M28Map.subrefLZThreatEnemyBestStructureDFRange]..'; Mobile indirect='..tAltLZTeamData[M28Map.subrefLZThreatEnemyBestMobileIndirectRange]..'; iThresholdToAlwaysIncludeInDFRange='..(iThresholdToAlwaysIncludeInDFRange or 'nil')) end
             if M28Utilities.IsTableEmpty(tAltLZTeamData[M28Map.subrefTEnemyUnits]) == false and tAltLZTeamData[M28Map.subrefTThreatEnemyCombatTotal] >= 10 then
                 for iUnit, oUnit in tAltLZTeamData[M28Map.subrefTEnemyUnits] do
-                    if M28UnitInfo.IsUnitValid(oUnit) and oUnit[M28UnitInfo.refiDFRange] > 0 and not(EntityCategoryContains(M28UnitInfo.refCategoryLandScout * categories.TECH1 - categories.SERAPHIM, oUnit.UnitId)) then
+                    if M28UnitInfo.IsUnitValid(oUnit) and oUnit[M28UnitInfo.refiDFRange] > 0 and not(EntityCategoryContains(M28Utilities.VariantCategoryChain('Land1680', M28Utilities.bVariantVerifyNative and function() return M28UnitInfo.refCategoryLandScout * categories.TECH1 - categories.SERAPHIM end, '-', M28Utilities.VariantCategoryChain('Land1680a', false, '*', M28UnitInfo.refCategoryLandScout, categories.TECH1), categories.SERAPHIM), oUnit.UnitId)) then --FA Remastered variant: category kept per call site (M28Utilities.VariantCategoryChain)
                         --Ignore selens that are cloaked
                         if oUnit.UnitId == 'xsl0101' and M28UnitInfo.GetUnitSpeed(oUnit) < 0.2 and not(M28UnitInfo.CanSeeUnit(aiBrain, oUnit, false)) then
                             if bDebugMessages == true then LOG(sFunctionRef..': Will ignore cloaked enemy selen') end
@@ -1786,7 +1786,7 @@ function RecordClosestAdjacentEnemiesAndGetBestEnemyRange(tLZData, tLZTeamData, 
         --Add all units from this zone into reftoNearestDFEnemies
         if M28Utilities.IsTableEmpty(tLZTeamData[M28Map.subrefTEnemyUnits]) == false and tLZTeamData[M28Map.subrefTThreatEnemyCombatTotal] then
             for iUnit, oUnit in tLZTeamData[M28Map.subrefTEnemyUnits] do
-                if oUnit[M28UnitInfo.refiDFRange] > 0 and not(EntityCategoryContains(M28UnitInfo.refCategoryLandScout - categories.SERAPHIM, oUnit.UnitId)) then
+                if oUnit[M28UnitInfo.refiDFRange] > 0 and not(EntityCategoryContains(M28Utilities.VariantCategoryChain('Land1789', M28Utilities.bVariantVerifyNative and function() return M28UnitInfo.refCategoryLandScout - categories.SERAPHIM end, '-', M28UnitInfo.refCategoryLandScout, categories.SERAPHIM), oUnit.UnitId)) then --FA Remastered variant: category kept per call site (M28Utilities.VariantCategoryChain)
                     table.insert(tLZTeamData[M28Map.reftoNearestDFEnemies], oUnit)
                 end
             end
@@ -6128,7 +6128,7 @@ function ManageCombatUnitsInLandZone(tLZData, tLZTeamData, iTeam, iPlateau, iLan
                     if tWZTeamData[M28Map.subrefTThreatEnemyCombatTotal] > 0 or tWZTeamData[M28Map.subrefiThreatEnemyGroundAA] > 0 then
                         for iUnit, oUnit in tWZTeamData[M28Map.subrefTEnemyUnits] do
                             if bDebugMessages == true then LOG(sFunctionRef..': Considering whether to add oUnit='..oUnit.UnitId..M28UnitInfo.GetUnitLifetimeCount(oUnit)..'; to nearest enemy to midpoint; Is it valid='..tostring(M28UnitInfo.IsUnitValid(oUnit))..'; Is it underwater='..tostring(M28UnitInfo.IsUnitUnderwater(oUnit))..'; iClosestDist='..iClosestDist) end
-                            if M28UnitInfo.IsUnitValid(oUnit) and not(M28UnitInfo.IsUnitUnderwater(oUnit)) and not(EntityCategoryContains(M28UnitInfo.refCategoryEngineer + M28UnitInfo.refCategoryMex + M28UnitInfo.refCategoryHydro + M28UnitInfo.refCategoryLandScout, oUnit.UnitId)) then
+                            if M28UnitInfo.IsUnitValid(oUnit) and not(M28UnitInfo.IsUnitUnderwater(oUnit)) and not(EntityCategoryContains(M28Utilities.VariantCategoryChain('Land6131', M28Utilities.bVariantVerifyNative and function() return M28UnitInfo.refCategoryEngineer + M28UnitInfo.refCategoryMex + M28UnitInfo.refCategoryHydro + M28UnitInfo.refCategoryLandScout end, '+++', M28UnitInfo.refCategoryEngineer, M28UnitInfo.refCategoryMex, M28UnitInfo.refCategoryHydro, M28UnitInfo.refCategoryLandScout), oUnit.UnitId)) then --FA Remastered variant: category kept per call site (M28Utilities.VariantCategoryChain)
                                 --Do based on dist to zone midpoint instead of closest friendly base, since it coudl be really far away from this zone (but closer to our base)
                                 iCurDist = M28Utilities.GetDistanceBetweenPositions(tLZData[M28Map.subrefMidpoint], oUnit[M28UnitInfo.reftLastKnownPositionByTeam][iTeam])
                                 if iCurDist < iClosestDist then
@@ -12036,7 +12036,7 @@ function ManageSpecificLandZone(aiBrain, iTeam, iPlateau, iLandZone)
                         end
                     end
                     if oUnit:GetFractionComplete() >= 1 then
-                        if EntityCategoryContains(categories.MOBILE - M28UnitInfo.refCategoryScathis, oUnit.UnitId) then
+                        if EntityCategoryContains(M28Utilities.VariantCategoryChain('Land12039', M28Utilities.bVariantVerifyNative and function() return categories.MOBILE - M28UnitInfo.refCategoryScathis end, '-', categories.MOBILE, M28UnitInfo.refCategoryScathis), oUnit.UnitId) then --FA Remastered variant: category kept per call site (M28Utilities.VariantCategoryChain)
                             if EntityCategoryContains(M28UnitInfo.refCategoryEngineer, oUnit.UnitId) then
                                 table.insert(tEngineers, oUnit)
                                 bLandZoneOrAdjHasUnitsWantingScout = true
@@ -12096,7 +12096,7 @@ function ManageSpecificLandZone(aiBrain, iTeam, iPlateau, iLandZone)
                                         table.insert(tSACUs, oUnit)
                                     end
                                 end
-                            elseif EntityCategoryContains(M28UnitInfo.refCategoryMAA + M28UnitInfo.refCategoryMobileLand - categories.COMMAND, oUnit.UnitId) or (oUnit[M28UnitInfo.refiCombatRange] > 0 and EntityCategoryContains(M28UnitInfo.refCategoryAmphibious * categories.MOBILE - categories.AIR, oUnit.UnitId)) then
+                            elseif EntityCategoryContains(M28Utilities.VariantCategoryChain('Land12099', M28Utilities.bVariantVerifyNative and function() return M28UnitInfo.refCategoryMAA + M28UnitInfo.refCategoryMobileLand - categories.COMMAND end, '+-', M28UnitInfo.refCategoryMAA, M28UnitInfo.refCategoryMobileLand, categories.COMMAND), oUnit.UnitId) or (oUnit[M28UnitInfo.refiCombatRange] > 0 and EntityCategoryContains(M28Utilities.VariantCategoryChain('Land12099_2', M28Utilities.bVariantVerifyNative and function() return M28UnitInfo.refCategoryAmphibious * categories.MOBILE - categories.AIR end, '-', M28Utilities.VariantCategoryChain('Land12099_2a', false, '*', M28UnitInfo.refCategoryAmphibious, categories.MOBILE), categories.AIR), oUnit.UnitId)) then --FA Remastered variant: category kept per call site (M28Utilities.VariantCategoryChain)
                                 --Tanks, skirmishers, and indirect fire units - handled by main combat unit manager
                                 bIncludeUnit = false
                                 bLandZoneOrAdjHasUnitsWantingScout = true
@@ -12275,7 +12275,7 @@ function ManageSpecificLandZone(aiBrain, iTeam, iPlateau, iLandZone)
                                                     if bDebugMessages == true then LOG(sFunctionRef..': Want mobile stealth for unit') end
                                                     table.insert(tLZTeamData[M28Map.reftoLZUnitsWantingMobileStealth], oUnit)
                                                 end
-                                            elseif iUnitMassCost >= iMobileStealthMassThreshold and EntityCategoryContains(M28UnitInfo.refCategorySkirmisher + M28UnitInfo.refCategoryIndirect + M28UnitInfo.refCategoryAbsolver - categories.TECH1, oUnit.UnitId) then
+                                            elseif iUnitMassCost >= iMobileStealthMassThreshold and EntityCategoryContains(M28Utilities.VariantCategoryChain('Land12278', M28Utilities.bVariantVerifyNative and function() return M28UnitInfo.refCategorySkirmisher + M28UnitInfo.refCategoryIndirect + M28UnitInfo.refCategoryAbsolver - categories.TECH1 end, '++-', M28UnitInfo.refCategorySkirmisher, M28UnitInfo.refCategoryIndirect, M28UnitInfo.refCategoryAbsolver, categories.TECH1), oUnit.UnitId) then --FA Remastered variant: category kept per call site (M28Utilities.VariantCategoryChain)
                                                 --Only say we want a mobile stealth if the unit doesnt have one assigned
                                                 iMobileStealthLowerThresholdCount = iMobileStealthLowerThresholdCount + 1
 
@@ -12634,7 +12634,7 @@ function ManageSpecificLandZone(aiBrain, iTeam, iPlateau, iLandZone)
                     if tLZTeamData[M28Map.subrefLZThreatEnemyMobileDFTotal] > 0 or tLZTeamData[M28Map.subrefLZThreatEnemyMobileIndirectTotal] > 0 then bWantDFSupport = true end
                     --If havent flagged for any support but enemy has units in this LZ (presumably non-combat) and we have no combat units, then flag for support
                     if not(bWantIndirectSupport) and not(bWantDFSupport) and tLZTeamData[M28Map.subrefLZThreatAllyMobileDFTotal] == 0 and tLZTeamData[M28Map.subrefLZThreatAllyMobileIndirectTotal] == 0 and M28Utilities.IsTableEmpty(tLZTeamData[M28Map.subrefTEnemyUnits]) == false then
-                        if M28Utilities.IsTableEmpty(EntityCategoryFilterDown(categories.MOBILE * categories.LAND, tLZTeamData[M28Map.subrefTEnemyUnits])) == false then
+                        if M28Utilities.IsTableEmpty(EntityCategoryFilterDown(M28Utilities.VariantCategoryChain('Land12637', M28Utilities.bVariantVerifyNative and function() return categories.MOBILE * categories.LAND end, '*', categories.MOBILE, categories.LAND), tLZTeamData[M28Map.subrefTEnemyUnits])) == false then --FA Remastered variant: category kept per call site (M28Utilities.VariantCategoryChain)
                             bWantDFSupport = true
                         elseif M28Utilities.IsTableEmpty(EntityCategoryFilterDown(categories.STRUCTURE, tLZTeamData[M28Map.subrefTEnemyUnits])) == false then
                             if bDebugMessages == true then

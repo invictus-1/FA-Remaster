@@ -1047,7 +1047,7 @@ function GetAvailableLowFuelAndInUseAirUnits(iTeam, iAirSubteam, iCategory, bRec
 
                                         bSendUnitForRefueling = false
                                         --Consider if want to send unit to refuel
-                                        if not(EntityCategoryContains(categories.CANNOTUSEAIRSTAGING + categories.EXPERIMENTAL, oUnit.UnitId)) then
+                                        if not(EntityCategoryContains(M28Utilities.VariantCategoryChain('Air1050', M28Utilities.bVariantVerifyNative and function() return categories.CANNOTUSEAIRSTAGING + categories.EXPERIMENTAL end, '+', categories.CANNOTUSEAIRSTAGING, categories.EXPERIMENTAL), oUnit.UnitId)) then --FA Remastered variant: category kept per call site (M28Utilities.VariantCategoryChain)
                                             if oUnit[M28UnitInfo.refbProjectilesMeanShouldRefuel] then
                                                 bSendUnitForRefueling = true
                                                 if bDebugMessages == true then LOG(sFunctionRef..': Unit is expecting to take damage from projectiles so will send for refueling') end
@@ -3204,9 +3204,9 @@ end
 
 function GetUnitAirStagingSize(oUnit)
     --Manually confirmed - ambassador takes up 4 spaces, janus, inties and asf take up 1, broadswords and solace take up 2 spaces
-    if EntityCategoryContains(categories.TECH3 * M28UnitInfo.refCategoryBomber, oUnit.UnitId) then
+    if EntityCategoryContains(M28Utilities.VariantCategoryChain('Air3207', M28Utilities.bVariantVerifyNative and function() return categories.TECH3 * M28UnitInfo.refCategoryBomber end, '*', categories.TECH3, M28UnitInfo.refCategoryBomber), oUnit.UnitId) then --FA Remastered variant: category kept per call site (M28Utilities.VariantCategoryChain)
         return 4
-    elseif EntityCategoryContains(categories.TECH3 - M28UnitInfo.refCategoryAirAA, oUnit.UnitId) then
+    elseif EntityCategoryContains(M28Utilities.VariantCategoryChain('Air3209', M28Utilities.bVariantVerifyNative and function() return categories.TECH3 - M28UnitInfo.refCategoryAirAA end, '-', categories.TECH3, M28UnitInfo.refCategoryAirAA), oUnit.UnitId) then --FA Remastered variant: category kept per call site (M28Utilities.VariantCategoryChain)
         return 2
     else return 1
     end

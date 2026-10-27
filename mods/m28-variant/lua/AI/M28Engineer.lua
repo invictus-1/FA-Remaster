@@ -5006,7 +5006,7 @@ function FilterToAvailableEngineersByTech(tEngineers, bInCoreZone, tLZData, tLZT
     local iActualEnemySearchRange
     local iActualEnemyCategorySearch
     local iEasyEnemyCategorySearch = M28UnitInfo.refCategoryStructure
-    local iNormalEnemyCategorySearch = M28UnitInfo.refCategoryStructure + M28UnitInfo.refCategoryMobileLand + M28UnitInfo.refCategoryNavalSurface + M28UnitInfo.refCategorySubmarine
+    local iNormalEnemyCategorySearch = M28Utilities.VariantCategoryChain('Engineer5009', M28Utilities.bVariantVerifyNative and function() return M28UnitInfo.refCategoryStructure + M28UnitInfo.refCategoryMobileLand + M28UnitInfo.refCategoryNavalSurface + M28UnitInfo.refCategorySubmarine end, '+++', M28UnitInfo.refCategoryStructure, M28UnitInfo.refCategoryMobileLand, M28UnitInfo.refCategoryNavalSurface, M28UnitInfo.refCategorySubmarine) --FA Remastered variant: category kept per call site (M28Utilities.VariantCategoryChain)
     local bCheckLRThreats = false
 
     if tLZTeamData[M28Map.subrefiNearbyEnemyLongRangeDFThreat] > 0 and M28Utilities.IsTableEmpty(tLZTeamData[M28Map.subrefoNearbyEnemyLongRangeDFThreats]) == false and iEnemyUnitSearchRange < 100 then bCheckLRThreats = true end
@@ -5233,7 +5233,7 @@ function FilterToAvailableEngineersByTech(tEngineers, bInCoreZone, tLZData, tLZT
                                                                 end
                                                             end
                                                             --Ignore land scouts and similar unthreatening units
-                                                            if iCurUnitRange > 0 and not(EntityCategoryContains(M28UnitInfo.refCategoryLandScout - categories.SERAPHIM, oUnit.UnitId)) then
+                                                            if iCurUnitRange > 0 and not(EntityCategoryContains(M28Utilities.VariantCategoryChain('Engineer5236', M28Utilities.bVariantVerifyNative and function() return M28UnitInfo.refCategoryLandScout - categories.SERAPHIM end, '-', M28UnitInfo.refCategoryLandScout, categories.SERAPHIM), oUnit.UnitId)) then --FA Remastered variant: category kept per call site (M28Utilities.VariantCategoryChain)
                                                                 iCurDistUntilInRange = iCurDistToEnemy - iCurUnitRange
                                                                 if EntityCategoryContains(categories.MOBILE, oUnit.UnitId) then
                                                                     if iCurDistUntilInRange < iClosestDistUntilInRangeOfMobileEnemy then
@@ -19364,7 +19364,7 @@ end--]]
             if tLZTeamData[M28Map.subrefbEnemiesInThisOrAdjacentLZ] then iCatToSearch = iCatToSearch + M28UnitInfo.refCategoryPD + M28UnitInfo.refCategoryFixedT2Arti end
             if tLZTeamData[M28Map.refiEnemyAirToGroundThreat] > 0 then iCatToSearch = iCatToSearch + M28UnitInfo.refCategoryStructureAA end
         else
-            iCatToSearch = M28UnitInfo.refCategoryStructure + categories.EXPERIMENTAL * categories.BUILTBYTIER3ENGINEER
+            iCatToSearch = M28Utilities.VariantCategoryChain('Engineer19367', M28Utilities.bVariantVerifyNative and function() return M28UnitInfo.refCategoryStructure + categories.EXPERIMENTAL * categories.BUILTBYTIER3ENGINEER end, '+', M28UnitInfo.refCategoryStructure, M28Utilities.VariantCategoryChain('Engineer19367b', false, '*', categories.EXPERIMENTAL, categories.BUILTBYTIER3ENGINEER)) --FA Remastered variant: category kept per call site (M28Utilities.VariantCategoryChain)
         end
         local tBuildings = EntityCategoryFilterDown(iCatToSearch, tLZTeamData[M28Map.subreftoLZOrWZAlliedUnits])
         if M28Utilities.IsTableEmpty(tBuildings) == false then

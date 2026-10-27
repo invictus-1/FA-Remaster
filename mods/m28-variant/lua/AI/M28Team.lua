@@ -2291,7 +2291,7 @@ function AssignUnitToLandZoneOrPond(aiBrain, oUnit, bAlreadyUpdatedPosition, bAl
                 end
 
 
-                if bIgnore or EntityCategoryContains(M28UnitInfo.refCategoryWall + categories.UNSELECTABLE + categories.UNTARGETABLE + categories.BENIGN, oUnit.UnitId) then
+                if bIgnore or EntityCategoryContains(M28Utilities.VariantCategoryChain('Team2294', M28Utilities.bVariantVerifyNative and function() return M28UnitInfo.refCategoryWall + categories.UNSELECTABLE + categories.UNTARGETABLE + categories.BENIGN end, '+++', M28UnitInfo.refCategoryWall, categories.UNSELECTABLE, categories.UNTARGETABLE, categories.BENIGN), oUnit.UnitId) then --FA Remastered variant: category kept per call site (M28Utilities.VariantCategoryChain)
                     --Do nothing
                     if bDebugMessages == true then LOG(sFunctionRef..': Unit is insignificant so will ignore, Unit='..oUnit.UnitId..M28UnitInfo.GetUnitLifetimeCount(oUnit)..'; Is civilian brain='..tostring(M28Conditions.IsCivilianBrain(oUnit:GetAIBrain()))..'; Build cost mass='..(oUnit[M28UnitInfo.refiUnitMassCost] or 'nil')) end
                     --Civilian units hopefully show up here - consider adding to table of units to reclaim; owever dont reclaim if can build from a factory as we might want to capture it instead

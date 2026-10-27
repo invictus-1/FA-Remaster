@@ -372,6 +372,59 @@ if tVariantNative and tVariantNative.MakeDeepEmptyCheck then
     end
 end
 
+--FA Remastered variant: category expressions kept per call site. Many checks build the same category from the same
+--categories every time they run (for example `categories.MOBILE - refCategoryScathis` for every unit of a list), and
+--each +, - or * is an engine call that makes a new category object. VariantCategoryChain(sSite, fVerify, sOps, a, b,
+--...) gives the category a sOps[1] b sOps[2] c ... folded from the left, which is Lua's own order for a chain of +
+--and - (a product inside such a chain is given as a chain of its own, as an operand); it keeps the result, with its
+--operands, under the call site's own key sSite, and while the same operand objects come again it hands back the kept
+--one. (`==` on two categories: the same object, as the engine's category class has no __eq; an engine whose class had
+--one comparing the bits would give equal bits, so the same result again.) The category operators only read their
+--operands and make a new object, and every use of a kept one only reads it (EntityCategoryContains / FilterDown,
+--GetUnitsAroundPoint), so every answer is the same. With bVariantVerifyNative each site also passes fVerify, its own
+--expression as written before (a function, made only then), and any difference in the bits is logged.
+iVariantVerifyCategoryChecks = 0
+iVariantVerifyCategoryMismatches = 0
+tVariantCategorySites = {}
+function VariantCategoryOp(sOp, a, b)
+    if sOp == '+' then return a + b
+    elseif sOp == '-' then return a - b
+    else return a * b
+    end
+end
+function VariantCategoryChain(sSite, fVerify, sOps, a, b, c, d, e, f, g, h)
+    local tSite = tVariantCategorySites[sSite]
+    if not(tSite) then
+        tSite = {}
+        tVariantCategorySites[sSite] = tSite
+    end
+    local n = tSite.n
+    local r
+    if n and tSite[1] == a and tSite[2] == b and (n < 3 or tSite[3] == c) and (n < 4 or tSite[4] == d) and (n < 5 or tSite[5] == e) and (n < 6 or tSite[6] == f) and (n < 7 or tSite[7] == g) and (n < 8 or tSite[8] == h) then
+        r = tSite.r
+    else
+        local tOperands = {a, b, c, d, e, f, g, h}
+        r = a
+        for iOp = 1, string.len(sOps) do
+            r = VariantCategoryOp(string.sub(sOps, iOp, iOp), r, tOperands[iOp + 1])
+        end
+        n = string.len(sOps) + 1
+        for i = 1, n do tSite[i] = tOperands[i] end
+        tSite.n = n
+        tSite.r = r
+    end
+    if fVerify then
+        local rWritten = fVerify()
+        iVariantVerifyCategoryChecks = iVariantVerifyCategoryChecks + 1
+        if not(EntityCategoryEmpty(rWritten - r)) or not(EntityCategoryEmpty(r - rWritten)) then
+            iVariantVerifyCategoryMismatches = iVariantVerifyCategoryMismatches + 1
+            LOG('VERIFY MISMATCH category chain '..sSite..' '..sOps..' mismatches='..iVariantVerifyCategoryMismatches)
+        end
+        if math.mod(iVariantVerifyCategoryChecks, 1000000) == 0 then LOG('VERIFY category chain checks='..iVariantVerifyCategoryChecks..' mismatches='..iVariantVerifyCategoryMismatches) end
+    end
+    return r
+end
+
 function ForkedDrawRectangle(rRect, iColour, iDisplayCount)
     --Only call via cork thread
     --Draws lines around rRect; rRect should be a rect table, with keys x0, x1, y0, y1

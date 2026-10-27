@@ -71,5 +71,11 @@ the original M28AI v326 and with this variant in FA Remastered and comparing the
    and cosine and the shot's slope are worked out once per call instead of at every step, and no table is made per
    step; each step does the same arithmetic in the same order. The original walk runs when debug messages are on, and
    with `M28Utilities.bVariantVerifyNative` both run and any difference is logged.
+7. **Categories kept per call site** (2026-10-25, Lua only): 35 places that build the same category from the same
+   categories every time they run (for example `categories.MOBILE - refCategoryScathis` for every unit of a list;
+   about 14 of the 16 million category operations of a one-hour game) now go through
+   `M28Utilities.VariantCategoryChain`, which builds the category once and gives it again while its parts are the same
+   objects. Each place still evaluates in the same order and gives the same category. With
+   `M28Utilities.bVariantVerifyNative` each place also builds its expression as written and logs any difference.
 
 Every change in the Lua files is marked with a comment that starts "FA Remastered variant".

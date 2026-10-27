@@ -3585,7 +3585,7 @@ function OnDetectedBy(oUnitDetected, iBrainIndex)
                     end
                 end
                 --Update highest enemy ground unti health
-                if M28Map.bFirstM28TeamHasBeenInitialised and M28UnitInfo.IsUnitValid(oUnitDetected) and EntityCategoryContains(M28UnitInfo.refCategoryLandCombat - categories.COMMAND - categories.SUBCOMMANDER - M28UnitInfo.refCategoryLandScout, oUnitDetected.UnitId) then
+                if M28Map.bFirstM28TeamHasBeenInitialised and M28UnitInfo.IsUnitValid(oUnitDetected) and EntityCategoryContains(M28Utilities.VariantCategoryChain('Events3588', M28Utilities.bVariantVerifyNative and function() return M28UnitInfo.refCategoryLandCombat - categories.COMMAND - categories.SUBCOMMANDER - M28UnitInfo.refCategoryLandScout end, '---', M28UnitInfo.refCategoryLandCombat, categories.COMMAND, categories.SUBCOMMANDER, M28UnitInfo.refCategoryLandScout), oUnitDetected.UnitId) then --FA Remastered variant: category kept per call site (M28Utilities.VariantCategoryChain)
                     local iCurShield, iMaxShield = M28UnitInfo.GetCurrentAndMaximumShield(oUnitDetected)
                     local iMaxHealth = oUnitDetected:GetMaxHealth() + iMaxShield
                     if iMaxHealth > (M28Team.tTeamData[aiBrain.M28Team][M28Team.refiEnemyHighestMobileLandHealth] or 0) and M28Map.bWaterZoneInitialCreation then

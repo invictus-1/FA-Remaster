@@ -36,7 +36,7 @@ function GetDirectFireWeaponPosition(oFiringUnit)
 
     local oBPFiringUnit = oFiringUnit:GetBlueprint()
     local tShotStartPosition
-    if EntityCategoryContains(categories.DIRECTFIRE + M28UnitInfo.refCategoryFatboy, oBPFiringUnit.BlueprintId) == true then
+    if EntityCategoryContains(M28Utilities.VariantCategoryChain('Logic39', M28Utilities.bVariantVerifyNative and function() return categories.DIRECTFIRE + M28UnitInfo.refCategoryFatboy end, '+', categories.DIRECTFIRE, M28UnitInfo.refCategoryFatboy), oBPFiringUnit.BlueprintId) == true then --FA Remastered variant: category kept per call site (M28Utilities.VariantCategoryChain)
         local bIsACU = EntityCategoryContains(categories.COMMAND, oBPFiringUnit.BlueprintId)
 
         local sFiringBone
