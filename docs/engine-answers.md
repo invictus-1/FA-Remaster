@@ -3,6 +3,19 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## renderer (Chris's item 10, LIST_2026-10-25): the Seraphim T3 battleship sits on the water in the sim
+
+Chris's game 2 was played back on 2b8886d, and its fingerprint matched his .fp. Every xss0302 (14 ships, 3645 samples
+every 20 beats, all in the Water layer) has sim Y exactly at the water surface (17.5): 0.00000 above it whether
+sailing or standing, and +0.00379 only on its naval factory's build spot before it sails off. The sim never puts it
+below the surface. That is the original's rule: SnapToWater 0x6c1cb0 (picked by CalcMoveWater for any non-Land layer,
+0x6c3564) gives Y = max(water + depth [esi+0x5c], terrain(x, z) + 0.25 [0xe4f6ec]), and depth is 0 for a surface
+ship (Physics.Elevation sets it only in the Sub layer, and it is 0 for xss0302 anyway). Blueprint: RULEUMT_Water,
+LayerChangeOffsetHeight -0.1, SizeY 2.8. So the hull's reference point is at the water line, and "almost under
+water" comes from the picture: the mesh's origin or offset, the bob, or the water plane's height. For later, not
+this case: the original adds a raised platform's height under a unit (0x6c1d14..0x6c1d9d), which ours' SnapToWaterExe
+does not; it matters only for a ship standing on a platform. (helper hic)
+
 ## renderer (by message): a shell flying far off the map — the original does the same
 
 In the M28 game on SETONS_R (seed 7), one shot flew east off the map for minutes (x 1454 -> 2633 at z 423, beats
