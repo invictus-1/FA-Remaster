@@ -21,7 +21,14 @@ void RegisterObjectHandle(lua_State* L) {
 
 bool IsObjectHandleMeta(lua_State* L, int idx) {
   const void* meta = lua_getextra(L, 3);
-  return meta && lua_type(L, idx) == LUA_TTABLE && lua_topointer(L, idx) == meta;
+  if (meta) return lua_type(L, idx) == LUA_TTABLE && lua_topointer(L, idx) == meta;
+  // a state whose host made the metatable by hand (luaL_newmetatable, no RegisterObjectHandle): looked up by name,
+  // as before 5397f39 (the interface's states had every destroyed control answer IsDestroyed false, ui 2026-10-25)
+  if (idx < 0 && idx > LUA_REGISTRYINDEX) idx = lua_gettop(L) + idx + 1;
+  luaL_getmetatable(L, kBoxMeta);
+  const bool same = lua_rawequal(L, idx, -1) != 0;
+  lua_pop(L, 1);
+  return same;
 }
 
 ScriptObject::~ScriptObject() { UnbindLua(); }
