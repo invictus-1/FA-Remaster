@@ -103,6 +103,7 @@ HPathTables::ClusterMap& HPathTables::Map(const NamedFootprint& fp) {
     m->stale[L].assign(n, 0);
     m->ahead[L].assign(n, 0);
     m->picked[L].assign(n, 0);
+    m->dirtiedAt[L].assign(n, 0);
   }
   ClusterMap* r = m.get();
   mapOrder_.push_back(r);
@@ -134,6 +135,7 @@ void HPathTables::DirtyRect(int x0, int z0, int x1, int z1) {
         for (int cx = ix0; cx < ix1; ++cx) {
           size_t i = static_cast<size_t>(cz) * m->wc[L] + cx;
           m->dirty[L][i] = 1;
+          m->dirtiedAt[L][i] = prepBeat_ + 1;
           if (m->ahead[L][i]) {  // (made from the occupancy before this change)
             m->ahead[L][i] = 0;
             ++aheadCounts.dropped;
@@ -310,7 +312,8 @@ void HPathTables::PickAhead(ClusterMap& m, int L, int cx, int cz) {
   pick_[L].push_back({&m, cx, cz, i});
 }
 
-bool HPathTables::PrepareSearches(int margin, bool all, WorkerPool* pool) {
+bool HPathTables::PrepareSearches(int margin, bool all, WorkerPool* pool, int cool) {
+  ++prepBeat_;
   bool units = false;
   pick_[1].clear();
   pick_[2].clear();
@@ -331,14 +334,27 @@ bool HPathTables::PrepareSearches(int margin, bool all, WorkerPool* pool) {
       units = units || t->mode != 0;
     }
   }
+  // The sweep leaves out what an occupancy change dirtied lately: where structures go up, the next change dirties
+  // the same clusters again, and data made ahead there was mostly dropped unread. (Measured, the 8-army SETONS_R
+  // session at 32 threads: the sweep made 229k clusters, 21% of them read by a search, most dropped 6-100 beats
+  // after they were made. Leaving out those dirtied within 200 beats: 88k made, the navigators' spike beats as
+  // many and as short (0 of 25 ms or more, 1-2 of 10 ms or more, the longest 18-21 ms), 37% less worker time.)
+  auto cooling = [&](const ClusterMap& m, int L, size_t i) {
+    const uint32_t d = m.dirtiedAt[L][i];
+    return cool > 0 && d != 0 && prepBeat_ - (d - 1) < static_cast<uint32_t>(cool);
+  };
   if (all)
     for (ClusterMap* m : searched) {
       for (int cz = 0; cz < m->hc[2]; ++cz)
-        for (int cx = 0; cx < m->wc[2]; ++cx)
-          if (m->stale[2][static_cast<size_t>(cz) * m->wc[2] + cx]) PickAhead(*m, 2, cx, cz);
+        for (int cx = 0; cx < m->wc[2]; ++cx) {
+          const size_t i = static_cast<size_t>(cz) * m->wc[2] + cx;
+          if (m->stale[2][i] && !cooling(*m, 2, i)) PickAhead(*m, 2, cx, cz);
+        }
       for (int cz = 0; cz < m->hc[1]; ++cz)
-        for (int cx = 0; cx < m->wc[1]; ++cx)
-          if (m->stale[1][static_cast<size_t>(cz) * m->wc[1] + cx]) PickAhead(*m, 1, cx, cz);
+        for (int cx = 0; cx < m->wc[1]; ++cx) {
+          const size_t i = static_cast<size_t>(cz) * m->wc[1] + cx;
+          if (m->stale[1][i] && !cooling(*m, 1, i)) PickAhead(*m, 1, cx, cz);
+        }
     }
   // The data: each cluster's is a function of its map's occupancy grid (an 8-cluster) or of its 8-clusters' data (a
   // 32-cluster) alone, written to its own lv entry; so the 8-clusters first, then the 32-clusters, each list in any

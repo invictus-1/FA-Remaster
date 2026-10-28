@@ -1219,7 +1219,10 @@ void LandNavTickAll(Sim& sim) {
   const double prepBefore = T.aheadCounts.seconds;
   if (ahead) {
     const double p0 = prof ? NowS() : 0;
-    if (T.PrepareSearches(margin, aheadAll, &sim.workers())) sim.EnsureUnitGrid();
+    // MOHO64_PATH_AHEAD_COOL=N: with "all", the stale clusters dirtied within the last N beats are left to the
+    // searches (HPathTables::PrepareSearches; default 200, 0: none)
+    static const int cool = getenv("MOHO64_PATH_AHEAD_COOL") ? std::atoi(getenv("MOHO64_PATH_AHEAD_COOL")) : 200;
+    if (T.PrepareSearches(margin, aheadAll, &sim.workers(), cool)) sim.EnsureUnitGrid();
     if (prof) T.aheadCounts.seconds += NowS() - p0;
   }
   double t1 = prof ? NowS() : 0;

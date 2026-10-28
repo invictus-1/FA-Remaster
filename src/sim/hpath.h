@@ -100,7 +100,9 @@ class HPathTables {
   // is made on `pool` (null: here): the 8-clusters, then the 32-clusters. Changes nothing a search computes or is
   // charged. True when a queued search is blocked by units (the caller makes the unit grid then). The grids must
   // have no pending terrain changes (Navigation::ApplyTerrainChanges first): the stage reads them on several threads.
-  bool PrepareSearches(int margin, bool all = false, WorkerPool* pool = nullptr);
+  // `cool` (with `all`): the sweep of stale clusters leaves out those DirtyRect dirtied within the last `cool` calls
+  // (beats); 0: none left out.
+  bool PrepareSearches(int margin, bool all = false, WorkerPool* pool = nullptr, int cool = 0);
   // The heightfield vertices [vx0, vx1] x [vz0, vz1] changed (FlattenMapRect): data made ahead there is dropped
   // (the clusters' own accounting is not touched: the original does not dirty them for it).
   void TerrainChanged(int vx0, int vz0, int vx1, int vz1);
@@ -149,6 +151,8 @@ class HPathTables {
     // the new data early.)
     std::vector<uint8_t> ahead[3];
     std::vector<uint8_t> picked[3];  // (PrepareSearches: on its list of clusters to make; cleared when made)
+    // PrepareSearches' count (prepBeat_) + 1 when DirtyRect last dirtied the cluster; 0: never since the map was made
+    std::vector<uint32_t> dirtiedAt[3];
     NamedFootprint fp;
     size_t bgWord = 0;     // background iterator: word of the top level's dirty bit array (map+0x8c)
     bool bgDone = false;   // nothing dirty left (map+0x88; DirtyRect clears it)
@@ -194,6 +198,7 @@ class HPathTables {
     size_t i;
   };
   std::vector<AheadItem> pick_[3];  // (PrepareSearches' lists by level, kept between beats for their capacity)
+  uint32_t prepBeat_ = 0;           // PrepareSearches' calls (one a beat): the clock of ClusterMap::dirtiedAt
   bool Ready(ClusterMap& m, int L, int cx, int cz, int* budget, bool make = true);
   void Make(ClusterMap& m, int L, int cx, int cz);
   void MakeStaleOrigins(ClusterMap& m, int ox0, int oz0, int ox1, int oz1);  // (BeforeOccupancyChange)
