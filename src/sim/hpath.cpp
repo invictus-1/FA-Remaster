@@ -335,10 +335,12 @@ bool HPathTables::PrepareSearches(int margin, bool all, WorkerPool* pool, int co
     }
   }
   // The sweep leaves out what an occupancy change dirtied lately: where structures go up, the next change dirties
-  // the same clusters again, and data made ahead there was mostly dropped unread. (Measured, the 8-army SETONS_R
-  // session at 32 threads: the sweep made 229k clusters, 21% of them read by a search, most dropped 6-100 beats
-  // after they were made. Leaving out those dirtied within 200 beats: 88k made, the navigators' spike beats as
-  // many and as short (0 of 25 ms or more, 1-2 of 10 ms or more, the longest 18-21 ms), 37% less worker time.)
+  // the same clusters again, and data made ahead there was mostly dropped unread. (Measured at 32 threads on a quiet
+  // machine, 2026-10-28, cooldown 0 -> 200. The 8-army SETONS_R session, two rounds: made ahead 336k -> 229k
+  // (dropped 188k -> 91k), worker time 20.8 -> 13.4 s, tick time 55.8 -> 54.0 s, navigators 4.35 -> 4.11 s, the
+  // navigators' spike beats as few and shorter (0 of 25 ms or more, 2 -> 1 of 10 ms or more, the longest 18 -> 15 ms).
+  // B1, the pair side by side: made ahead 2.56 M -> 1.48 M, worker time 74 -> 44 s, but the searches make more
+  // themselves (115k -> 227k, path work 63.0 -> 67.1 s): tick time and navigators about the same, 758 / 106-108 s.)
   auto cooling = [&](const ClusterMap& m, int L, size_t i) {
     const uint32_t d = m.dirtiedAt[L][i];
     return cool > 0 && d != 0 && prepBeat_ - (d - 1) < static_cast<uint32_t>(cool);
