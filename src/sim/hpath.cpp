@@ -799,7 +799,7 @@ void HPathTables::Begin(Search& s, PathTraveler* t) {
   st.state = 1;
   st.heapPos = 0;
   s.nodes.push_back(st);
-  s.index[Key(st.c.x, st.c.z)] = 0;
+  s.index.Set(Key(st.c.x, st.c.z), 0);
   s.heap.push_back({st.h, 0});
   s.best = 0;
   s.bestH = st.h;  // (the oracle probe: an unreachable goal next to the start gives the path [start])
@@ -901,8 +901,8 @@ int HPathTables::WorkOnce(Search& s, int* budget) {
     if (!s.heap.empty()) HeapDown(s, 0);
     for (const auto& [m, cost] : nb) {
       float g = s.nodes[ni].g + cost;
-      auto it = s.index.find(Key(m.x, m.z));
-      if (it == s.index.end()) {
+      const int at = s.index.Find(Key(m.x, m.z));
+      if (at < 0) {
         Node n;
         n.c = m;
         n.h = Heuristic(*s.t, m);
@@ -916,11 +916,11 @@ int HPathTables::WorkOnce(Search& s, int* budget) {
         n.heapPos = static_cast<int>(s.heap.size());
         int idx = static_cast<int>(s.nodes.size());
         s.nodes.push_back(n);
-        s.index[Key(m.x, m.z)] = idx;
+        s.index.Set(Key(m.x, m.z), idx);
         s.heap.push_back({n.h + g, idx});
         HeapUp(s, n.heapPos);
       } else {
-        Node& n = s.nodes[it->second];
+        Node& n = s.nodes[at];
         if (n.state == 1 && g < n.g) {
           n.g = g;
           n.parent = ni;
@@ -981,7 +981,8 @@ void HPathTables::Cancel(PathTraveler* t) {
   }
   if (t->searching) {
     auto it = queues_.find(t->searchingIn);
-    if (it != queues_.end() && it->second.active && it->second.active->t == t) it->second.active.reset();
+    if (it != queues_.end() && it->second.active && it->second.active->t == t)
+      it->second.spare = std::move(it->second.active);
     t->searching = false;
   }
   t->pending = false;
@@ -995,7 +996,7 @@ void HPathTables::WorkAll(int /*armies*/) {
     while (budget >= 1) {
       if (!q.active) {
         if (!q.head) break;
-        q.active = std::make_unique<Search>();
+        q.active = q.spare ? std::move(q.spare) : std::make_unique<Search>();
         PathTraveler* t = q.head;
         Unlink(q, t);
         t->searching = true;
@@ -1009,7 +1010,7 @@ void HPathTables::WorkAll(int /*armies*/) {
       if (r == 2) break;
       Finish(*q.active, r == 1);
       q.active->t->searching = false;
-      q.active.reset();
+      q.spare = std::move(q.active);
     }
   }
   inWork_ = false;

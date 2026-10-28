@@ -16,6 +16,7 @@
 //   expansion, 10 per cluster rebuilt on demand); a search may span ticks. Searches are capped at
 //   the army pathcap (by map size), or 1000 expansions when no cell around the goal fits.
 #pragma once
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <deque>
@@ -166,11 +167,73 @@ class HPathTables {
     int heapPos = -1;
     uint8_t state = 0;  // 1 open, 2 closed
   };
+  // A search's cell -> node index: open addressing with linear probing, an entry counting only with the table's
+  // current generation, so that clear() is one increment. (It replaced a std::unordered_map, whose allocation per
+  // node and hashing were ~11 s of B1's path searches at cores. The index is only found, set and cleared, never
+  // walked, so nothing depends on its order.)
+  class CellIndex {
+   public:
+    void clear() {
+      count_ = 0;
+      if (++gen_ == 0) {  // (wrapped: every old stamp could match again)
+        std::fill(gens_.begin(), gens_.end(), 0u);
+        gen_ = 1;
+      }
+    }
+    int Find(uint32_t key) const {
+      if (gens_.empty()) return -1;
+      for (size_t i = Slot(key);; i = (i + 1) & mask_) {
+        if (gens_[i] != gen_) return -1;
+        if (keys_[i] == key) return vals_[i];
+      }
+    }
+    void Set(uint32_t key, int val) {
+      if ((count_ + 1) * 2 > gens_.size()) Grow();
+      for (size_t i = Slot(key);; i = (i + 1) & mask_) {
+        if (gens_[i] != gen_) {
+          gens_[i] = gen_;
+          keys_[i] = key;
+          vals_[i] = val;
+          ++count_;
+          return;
+        }
+        if (keys_[i] == key) {
+          vals_[i] = val;
+          return;
+        }
+      }
+    }
+
+   private:
+    size_t Slot(uint32_t key) const { return (key * 0x9E3779B1u) >> shift_ & mask_; }
+    void Grow() {
+      std::vector<uint32_t> oldKeys = std::move(keys_), oldGens = std::move(gens_);
+      std::vector<int> oldVals = std::move(vals_);
+      const size_t n = oldGens.empty() ? 1024 : oldGens.size() * 2;
+      int bits = 0;
+      while ((size_t{1} << bits) < n) ++bits;
+      shift_ = 32 - bits;
+      mask_ = n - 1;
+      keys_.assign(n, 0);
+      vals_.assign(n, 0);
+      gens_.assign(n, 0);
+      const uint32_t g = gen_;
+      gen_ = 1;
+      count_ = 0;
+      for (size_t i = 0; i < oldGens.size(); ++i)
+        if (oldGens[i] == g) Set(oldKeys[i], oldVals[i]);
+    }
+    std::vector<uint32_t> keys_, gens_;
+    std::vector<int> vals_;
+    uint32_t gen_ = 1;
+    size_t count_ = 0, mask_ = 0;
+    int shift_ = 32;
+  };
   struct Search {
     PathTraveler* t = nullptr;
     ClusterMap* cm = nullptr;
     std::vector<Node> nodes;
-    std::unordered_map<uint32_t, int> index;
+    CellIndex index;
     std::vector<std::pair<float, int>> heap;
     int best = 0;
     float bestH = 0;
@@ -180,6 +243,7 @@ class HPathTables {
     PathTraveler* head = nullptr;  // the waiting travelers, oldest first (PathTraveler::qNext)
     PathTraveler* tail = nullptr;
     std::unique_ptr<Search> active;
+    std::unique_ptr<Search> spare;  // (the last finished search, made again by Begin: its vectors keep their capacity)
   };
   static void Link(ArmyQueue& q, int key, PathTraveler* t);
   static void Unlink(ArmyQueue& q, PathTraveler* t);
