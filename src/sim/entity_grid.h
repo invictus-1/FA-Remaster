@@ -27,6 +27,10 @@ class EntityGrid {
   // Here the mask also has 4: shells (0x400) and 8: the rest of the third list (0x800), which a cell gives after
   // its units and props (0x4fd000).
   void GatherBox(float x0, float z0, float x1, float z1, int mask, std::vector<Entity*>* out);
+  // The units of GatherBox's cells (mask 1), each once, without the marks GatherBox writes, so that the parallel path
+  // searches may ask it at the same time: a list entry counts only in the first cell where the unit's own span meets the
+  // rect's cells. The order is not GatherBox's (for callers that ask whether any of them passes a test).
+  void GatherUnitsBox(float x0, float z0, float x1, float z1, std::vector<Entity*>* out) const;
   // The cells a segment passes, from its start to its end, and in each cell the third list (shells, shields,
   // script entities: what has a collision primitive and is no unit and no prop) and then the units; props are not
   // asked. Each entity once, where it is first met. (COGrid's line query 0x4fd200, behind

@@ -173,7 +173,7 @@ bool PathUnitBlocked(Unit* u, int x, int z, int flags) {
   bool blocked = false;
   const Unit* by = nullptr;
   Vec3 byMn{}, byMx{};
-  sim.ForUnitsInRect(x0 - 8, z0 - 8, x1 + 8, z1 + 8, [&](Unit* e) {
+  auto visit = [&](Unit* e) {
     if (blocked || e == u) return;
     // (the gather asks the entity grid first: a unit is found only in the cells the grid has it in, its span as of
     // the last AdvanceCoords, skirt-wide (Unit::UpdateCollision; GridFindsInBox, as the formation's spot test), not
@@ -210,7 +210,23 @@ bool PathUnitBlocked(Unit* u, int x, int z, int flags) {
     float cx = (x1 + x0) * 0.5f, cz = (z1 + z0) * 0.5f;
     float hx = static_cast<float>(Fp(u).sizeX) * 0.5f, hz = static_cast<float>(Fp(u).sizeZ) * 0.5f;
     if (ShapeOverlapsAABox(s, Vec3{cx - hx, -1000.0f, cz - hz}, Vec3{cx + hx, 1000.0f, cz + hz})) blocked = true;
-  });
+  };
+  if (sim.entityGrid().ready()) {
+    // 0x721c00 -> 0x722df0 (mask 0x100): the candidates are the units in the entity grid's lists of the square's
+    // cells (each once), not the units by their centres around it. (Counted on B1, 36000 beats: the path searches ask
+    // 160 M squares; 8.8 units per square had their centres within 8 of it, 1.2 are in its cells.) The position grid
+    // behind ForUnitsInRect, which this used to make here when it was due, is still made here, at the same moment for
+    // its other askers.
+    sim.EnsureUnitGrid();
+    static thread_local std::vector<Entity*> cand;
+    sim.entityGrid().GatherUnitsBox(x0, z0, x1, z1, &cand);
+    for (Entity* c : cand) {
+      visit(static_cast<Unit*>(c));
+      if (blocked) break;
+    }
+  } else {
+    sim.ForUnitsInRect(x0 - 8, z0 - 8, x1 + 8, z1 + 8, visit);
+  }
   static const long dbgClear = getenv("MOHO64_DEBUG_CLEAR") ? atol(getenv("MOHO64_DEBUG_CLEAR")) : -1;
   if (blocked && dbgClear == static_cast<long>(u->id))
     Logf(LogLevel::Info, "clear %u unit %u cell (%d,%d) flags %d: blocked by unit %u at %.4f %.4f, box x %.5f..%.5f z %.5f..%.5f",

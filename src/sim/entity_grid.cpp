@@ -131,6 +131,32 @@ void EntityGrid::GatherBox(float x0, float z0, float x1, float z1, int mask, std
   for (Entity* e : *out) e->gridMark = false;
 }
 
+void EntityGrid::GatherUnitsBox(float x0, float z0, float x1, float z1, std::vector<Entity*>* out) const {
+  out->clear();
+  if (!w_) return;
+  auto span = [](float lo, float hi, int* c0, int* n) {  // (as GatherBox: func_AABoxToRect 0x4fcbe0)
+    int f = static_cast<int>(std::floor(lo)), c = static_cast<int>(std::ceil(hi));
+    *c0 = std::clamp(f >> 2, 0, 0xffff);
+    *n = std::clamp(((c + 3) >> 2) - *c0, 0, 0xffff - *c0);
+  };
+  int cx0, cz0, w, h;
+  span(x0, x1, &cx0, &w);
+  span(z0, z1, &cz0, &h);
+  int cols = std::min(w, w_ - cx0), rows = std::min(h, h_ - cz0);
+  for (int r = 0; r < rows; ++r)
+    for (int c = 0; c < cols; ++c) {
+      const int cx = cx0 + c, cz = cz0 + r;
+      const auto& l = lists_[0][static_cast<size_t>(cz) * w_ + cx];
+      for (auto it = l.rbegin(); it != l.rend(); ++it) {
+        const Entity* e = *it;
+        // (an entry another cell's index wrapped onto (Cell) is taken here only if this happens to be that cell; it
+        // lies outside the unit's span, and the callers' GridFindsInBox turns it away)
+        if (cx != std::max<int>(e->gridX0, cx0) || cz != std::max<int>(e->gridZ0, cz0)) continue;
+        out->push_back(*it);
+      }
+    }
+}
+
 void EntityGrid::GatherLine(float fromX, float fromZ, float toX, float toZ, std::vector<Entity*>* out) {
   out->clear();
   if (!w_) return;
