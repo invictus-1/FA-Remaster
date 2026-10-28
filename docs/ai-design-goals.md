@@ -86,3 +86,11 @@ A design talk with Chris, using these goals and ai-study-m28.md section 7.5's op
      a fitting share of its attention and forces to that area.
    - Wanted if possible: more detailed pings, e.g. "attack the ACU", "attack with an experimental", "assist my force".
      These need new ping types in the interface (ui chat).
+6. **Detailed pings by a radial menu:** hold the ping key and drag toward an option (Attack, Assist, Defend, Attack
+   ACU, Experimental here, Expand here, Retreat, ...). The AI reads the ping's type and what lies under it.
+7. **Difficulty names:** Recruit, Veteran, Commander, Supreme Commander.
+8. **Testing:** headless matches against M28 and FAF's AI on SETONS_R with fixed seeds, scored on wins, on how it
+   fights (no fleeing from weaker forces, pushes when ahead) and on its cost per tick; then Chris plays it and judges
+   the feel.
+9. **Timing:** start now, with dedicated helpers, beside the 4v4 and multicore work; the ui adds the ping menu when it
+   has time.
