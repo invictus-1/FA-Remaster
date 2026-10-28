@@ -260,47 +260,62 @@ bool UnitInLine(Sim& sim, Unit* u, float ax, float az, float bx, float bz, int f
   const Vec3 axes[3] = {side, {0.0f, 1.0f, 0.0f}, {fx, 0.0f, fz}};
   const float half[3] = {hw, 1000.0f, len * 0.5f};
   bool blocked = false;
-  const float reach = hw + 16.0f;  // (candidates come by their centre: far enough for the biggest hulls)
   // the line box's own bounds (0x721de9: 0x4fe2d0, its corners' aligned box), for the entity grid (0x4fcbe0) and the
   // AABB test
   Vec3 boxMn, boxMx;
   OrientedBoxAabb(centre, axes, half, &boxMn, &boxMx);
-  sim.ForUnitsInRect(std::min(ax, bx) - reach, std::min(az, bz) - reach, std::max(ax, bx) + reach,
-                     std::max(az, bz) + reach, [&](Unit* e) {
-                       if (blocked || e == u) return;
-                       // CollectEntitiesInBox 0x721dc0 takes its candidates from the grid's lists for the box's cells
-                       // (0x722df0), where a unit is registered by its span as of the last AdvanceCoords, skirt-wide
-                       // (GridFindsInBox, as PathUnitBlocked and the spot test), not by its box's own cells; then the
-                       // AABB test against the entity's (0x721ea0..0x721ee6, touching passes)
-                       // (The checks run cheapest first: the grid's span and the unit filters before the collision
-                       // shape is made and its primitive tested. All are reads and a unit is in the way only when it
-                       // passes all of them, so the answer is the same. Counted on B1: of the units the grid finds,
-                       // 7 in 8 fail the filters, and their primitive tests were most of the navigator's execute
-                       // time, 51.6 -> 32.3 s.)
-                       if (!GridFindsInBox(sim, e, boxMn.x, boxMn.z, boxMx.x, boxMx.z)) return;
-                       if (e->layer == "Air" || e->layer == "Sub" || SameFormationLayer(u, e) ||
-                           !BlocksFor(u, e, flags))
-                         return;
-                       WorldShape s;
-                       if (!GetWorldShape(e, &s)) return;
-                       Vec3 mn, mx;
-                       ShapeBounds(s, &mn, &mx);
-                       if (boxMn.x > mx.x || mn.x > boxMx.x || boxMn.y > mx.y || mn.y > boxMx.y || boxMn.z > mx.z ||
-                           mn.z > boxMx.z)
-                         return;
-                       // (CollectEntitiesInBox's primitive test: a box goes through BoxBox 0x474830, whose interval
-                       // arithmetic is not the plain separation test's to the last bit. Seen: Skirmish 3095, army 4's
-                       // 0x40001b checking its line to (610, 192) past 0x40002e, 4.7e-5 apart by the plain test: the
-                       // original finds it in the way and takes (610, 193); ours took (610, 192), 2 degrees aside.)
-                       if (s.type == ShapeType::Box ? !BoxPrimitiveMeetsBox(s, centre, axes, half)
-                                                    : !ShapeOverlapsOBox(s, centre, axes, half))
-                         return;
-                       blocked = true;
-                       static const long dbgClear = getenv("MOHO64_DEBUG_CLEAR") ? atol(getenv("MOHO64_DEBUG_CLEAR")) : -1;
-                       if (dbgClear == static_cast<long>(u->id))
-                         Logf(LogLevel::Info, "clear %u unit %u line (%.4f,%.4f)-(%.4f,%.4f) half width %.4f: unit %u at %.4f %.4f in the way",
-                              sim.tick(), u->id, ax, az, bx, bz, hw, e->id, e->position.x, e->position.z);
-                     });
+  auto visit = [&](Unit* e) {
+    if (blocked || e == u) return;
+    // CollectEntitiesInBox 0x721dc0 takes its candidates from the grid's lists for the box's cells
+    // (0x722df0), where a unit is registered by its span as of the last AdvanceCoords, skirt-wide
+    // (GridFindsInBox, as PathUnitBlocked and the spot test), not by its box's own cells; then the
+    // AABB test against the entity's (0x721ea0..0x721ee6, touching passes)
+    // (The checks run cheapest first: the grid's span and the unit filters before the collision
+    // shape is made and its primitive tested. All are reads and a unit is in the way only when it
+    // passes all of them, so the answer is the same. Counted on B1: of the units the grid finds,
+    // 7 in 8 fail the filters, and their primitive tests were most of the navigator's execute
+    // time, 51.6 -> 32.3 s.)
+    if (!GridFindsInBox(sim, e, boxMn.x, boxMn.z, boxMx.x, boxMx.z)) return;
+    if (e->layer == "Air" || e->layer == "Sub" || SameFormationLayer(u, e) ||
+        !BlocksFor(u, e, flags))
+      return;
+    WorldShape s;
+    if (!GetWorldShape(e, &s)) return;
+    Vec3 mn, mx;
+    ShapeBounds(s, &mn, &mx);
+    if (boxMn.x > mx.x || mn.x > boxMx.x || boxMn.y > mx.y || mn.y > boxMx.y || boxMn.z > mx.z ||
+        mn.z > boxMx.z)
+      return;
+    // (CollectEntitiesInBox's primitive test: a box goes through BoxBox 0x474830, whose interval
+    // arithmetic is not the plain separation test's to the last bit. Seen: Skirmish 3095, army 4's
+    // 0x40001b checking its line to (610, 192) past 0x40002e, 4.7e-5 apart by the plain test: the
+    // original finds it in the way and takes (610, 193); ours took (610, 192), 2 degrees aside.)
+    if (s.type == ShapeType::Box ? !BoxPrimitiveMeetsBox(s, centre, axes, half)
+                                 : !ShapeOverlapsOBox(s, centre, axes, half))
+      return;
+    blocked = true;
+    static const long dbgClear = getenv("MOHO64_DEBUG_CLEAR") ? atol(getenv("MOHO64_DEBUG_CLEAR")) : -1;
+    if (dbgClear == static_cast<long>(u->id))
+      Logf(LogLevel::Info, "clear %u unit %u line (%.4f,%.4f)-(%.4f,%.4f) half width %.4f: unit %u at %.4f %.4f in the way",
+           sim.tick(), u->id, ax, az, bx, bz, hw, e->id, e->position.x, e->position.z);
+  };
+  if (sim.entityGrid().ready()) {
+    // CollectEntitiesInBox 0x721dc0 (mask 0x100 from LineBlocked 0x7218aa): the candidates are the units in the entity
+    // grid's lists of the line box's cells (0x722df0), each once, not the units by their centres around the line.
+    // (Counted on B1, 36000 beats: TryAdvance's lines visited 33 units each by centre, 11 are in the box's cells.) The
+    // position grid behind ForUnitsInRect, which this used to make here when it was due, is still made here.
+    sim.EnsureUnitGrid();
+    static thread_local std::vector<Entity*> cand;
+    sim.entityGrid().GatherUnitsBox(boxMn.x, boxMn.z, boxMx.x, boxMx.z, &cand);
+    for (Entity* c : cand) {
+      visit(static_cast<Unit*>(c));
+      if (blocked) break;
+    }
+  } else {
+    const float reach = hw + 16.0f;  // (no grid: candidates by their centre, far enough for the biggest hulls)
+    sim.ForUnitsInRect(std::min(ax, bx) - reach, std::min(az, bz) - reach, std::max(ax, bx) + reach,
+                       std::max(az, bz) + reach, visit);
+  }
   return blocked;
 }
 bool UnitInWay(Sim& sim, Unit* u, const PathCell& a, const PathCell& b, int flags) {
