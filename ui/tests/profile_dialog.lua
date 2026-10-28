@@ -17,13 +17,17 @@ end
 local UIUtil = import("/lua/ui/uiutil.lua")
 local Prefs = import("/lua/user/prefs.lua")
 
--- the buttons the dialogs make, by their label's key (the last made of each)
+-- the buttons the dialogs make, by their label's key (a click goes to the newest one still there)
 -- (UIUtil.QuickDialog's are CreateButtonWithDropshadow's: the module's functions call each other through its table)
 local buttons = {}
 local function Recording(make)
     return function(parent, filename, label, ...)
         local b = make(parent, filename, label, unpack(arg))
-        if type(label) == 'string' then buttons[string.gsub(label, "^<LOC ([^>]*)>.*$", "%1")] = b end
+        if type(label) == 'string' then
+            local key = string.gsub(label, "^<LOC ([^>]*)>.*$", "%1")
+            buttons[key] = buttons[key] or {}
+            table.insert(buttons[key], b)
+        end
         return b
     end
 end
@@ -39,8 +43,11 @@ local function ClickAt(x, y)
     WaitFrames(2)
 end
 local function Click(key)
-    local b = buttons[key]
-    if not b or IsDestroyed(b) then
+    local b
+    for _, one in buttons[key] or {} do
+        if not IsDestroyed(one) then b = one end
+    end
+    if not b then
         failed = failed + 1
         LOG("TEST FAIL no button " .. key)
         return
