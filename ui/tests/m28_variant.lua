@@ -1,6 +1,6 @@
 -- M28AI in the mods is our variant (ui/app/main.cpp m28Variant, ui/data/hook/lua/mods.lua): the repository's
--- mods/m28-variant is mounted, the original M28AI left out, and a player's original M28 among his active mods is
--- taken as the variant. Needs the original M28AI in the mods folders (skips cleanly without).
+-- mods/m28-variant is mounted, the original M28AI beside it but not selectable (for the replays of games played with
+-- it), and a player's original M28 among his active mods is taken as the variant. Needs the original M28AI in the mods folders (skips cleanly without).
 --   moho64ui --init <init.lua> --our-mods mods --stage setup --lua ui/tests/m28_variant.lua --frames 8 --log out.log
 --   ... --m28 original ...     (the other way round: no variant among the mods, the original there)
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
@@ -36,7 +36,9 @@ ForkThread(function()
     else
         check("the variant is among the mods", variant ~= nil, true)
         check("from /mods/m28-variant", variant and string.lower(variant.location or ""), "/mods/m28-variant")
-        check("the original M28AI is left out", original, nil)
+        check("the original M28AI stays on disk (its replays)", original ~= nil, true)
+        check("but it is not selectable", original and Mods.AllSelectableMods()[original], nil)
+        check("the variant is selectable", Mods.AllSelectableMods()[variantUid] ~= nil, true)
         SetPreference("active_mods", {["fnewm028-v326-55b4-92b6-64398e7ge43f"] = true, ["some-other-mod"] = true})
         local selected = Mods.GetSelectedMods()
         check("an active original M28 is taken as the variant", selected[variantUid], true)

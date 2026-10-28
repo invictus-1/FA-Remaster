@@ -146,7 +146,7 @@ class GameSession {
   std::string scanInit;
   std::map<std::string, std::string> scanFolders;
   // (what the host mounted after the init file, as (host folder, mount point), and the init file's folders it left
-  // out: the M28 variant in place of the original, main.cpp m28Variant; engine REQUESTS 49)
+  // out: the M28 variant beside the original, main.cpp m28Variant; none left out today; engine REQUESTS 49)
   std::vector<std::pair<std::string, std::string>> scanMounts;
   std::vector<std::string> scanSkips;
   int scanTicks = 0;
@@ -379,9 +379,12 @@ class GameSession {
   void Record(const std::string& bytes);
   // The recorded game's fingerprint beside its record (<replayOut>.fp: the engine's sim/fingerprint.h, one line per
   // beat, paused ones included, beat 0 after Start), so that a playback can name the first beat it leaves the
-  // game at (tools/twocopies.py --compare). Only for a live game with --replay-out.
+  // game at (tools/twocopies.py --compare). Only for a live game with --replay-out, or a replay played back with
+  // MOHO64_FINGERPRINT set (fpPlayback_).
   std::shared_ptr<Fingerprint> fp_;
   uint32_t fpBeats_ = 0;
+  bool fpPlayback_ = false;
+  bool Fingerprinting() const { return fp_ && sim_ && (!play_ || fpPlayback_); }
   void FingerprintBeat();
   // The last launch, for Relaunch.
   std::unique_ptr<SessionDescription> last_;

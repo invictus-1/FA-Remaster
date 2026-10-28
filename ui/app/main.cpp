@@ -113,20 +113,15 @@ ui::GameSession::Sky sky;
 std::vector<std::string> moreMaps, remastersFolders, fafRemastersFolders;
 std::string ownFolder;
 // M28AI in the lobby: our variant (the repository's mods/m28-variant, maudlin27's AI made faster, the same decisions:
-// its README) in place of the original v326, which is then left out of the mods (the engine, Chris's item 20: his
-// lobby ran the original, so the AI's speed-ups did nothing for him). The player's M28 in his active mods becomes the
-// variant (ui/data/hook/lua/mods.lua). --m28 original: the original, without the variant (for checks).
-// --our-mods <folder>: the folder holding m28-variant; without it, beside the program or in its source tree.
+// its README) in place of the original v326 (the engine, Chris's item 20: his lobby ran the original, so the AI's
+// speed-ups did nothing for him). The original stays mounted, not selectable, so that a replay of a game played with
+// it plays with it (a replay names its mods by uid; without the original's files it ran with no M28 at all and left
+// the game at beat 10, 2026-10-28); the player's M28 in his active mods becomes the variant (both in
+// ui/data/hook/lua/mods.lua). --m28 original: the original, without the variant (for checks). --our-mods <folder>:
+// the folder holding m28-variant; without it, beside the program or in its source tree.
 bool originalM28 = false;
 std::string ourMods;
-std::string m28Variant;           // the variant's folder when it is used (else empty)
-std::vector<std::string> m28Left;  // the init file's folders of the original left out (for the replay scan)
-constexpr const char* kOriginalM28Uid = "fnewm028-";  // (every version's uid begins so: fnewm028-v326-...)
-// A folder the init file mounts as a mod that is the original M28AI (its mod_info's uid)
-bool IsOriginalM28(const std::string& dir) {
-  auto info = hostfs::ReadFile(dir + "/mod_info.lua");
-  return info && info->find(std::string("uid = \"") + kOriginalM28Uid) != std::string::npos;
-}
+std::string m28Variant;  // the variant's folder when it is used (else empty)
 bool noWorld = false;             // --no-world: a launched game gets no picture of the world (no graphics device is opened)
 std::string sessionIn;            // --session file: a recorded game configuration to start a game from at once
 std::string gameLuaFile;          // --game-lua file: a host Lua file run in a launched game's state once its interface is up
@@ -241,9 +236,6 @@ bool RunInit(const Options& o, Vfs& vfs, std::vector<std::string>& hookDirs, std
         if (n == "." || n == "..") continue;
         vfs.Mount(base + "/" + n, mp);
       }
-    } else if (!m28Variant.empty() && Vfs::Normalize(mp).rfind("/mods/", 0) == 0 && IsOriginalM28(mdir)) {
-      Logf(LogLevel::Info, "moho64ui: the original M28AI (%s) is left out: the lobby's M28 is our variant", hostfs::DisplayPath(mdir).c_str());
-      m28Left.push_back(mdir);
     } else {
       vfs.Mount(mdir, mp);
     }
@@ -513,7 +505,6 @@ int main(int argc, char** argv) {
   session.scanInit = o.init;  // (the replay timeline's scan mounts the game as this program did)
   session.scanFolders = o.folders;
   if (!m28Variant.empty()) session.scanMounts.push_back({m28Variant, "/mods/m28-variant"});
-  session.scanSkips = m28Left;
   session.scanTicks = scanTicks;
   cfg.launchSession = [&session](lua_State* L, int config, std::string* why) { return session.Launch(L, config, why); };
   cfg.launchSinglePlayer = [&session](lua_State* L, int info, std::string* why) { return session.LaunchSinglePlayer(L, info, why); };

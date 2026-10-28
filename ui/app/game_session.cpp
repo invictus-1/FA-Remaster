@@ -1585,6 +1585,15 @@ bool GameSession::FinishLoad(std::string* why) {
 #endif
     fpBeats_ = 0;
   }
+  // A replay played back with MOHO64_FINGERPRINT set: its fingerprint there too, line for line as the recorded game's
+  // .fp (a measurement with the hashing's cost in it, and a check of the playback against the game; ours)
+  fpPlayback_ = false;
+  if (play_ && std::getenv("MOHO64_FINGERPRINT")) {
+    if (fp_) fp_->End(fpBeats_), fp_.reset();
+    fp_ = std::shared_ptr<Fingerprint>(Fingerprint::FromEnvironment().release());
+    fpBeats_ = 0;
+    fpPlayback_ = fp_ != nullptr;
+  }
   pace.rate = session.gameSpeed;
   pace.adjustable = session.adjustableSpeed;
   pictureDue_ = false;
@@ -2223,11 +2232,13 @@ void GameSession::Advance(double seconds) {
       if (!play_->AtEnd() && play_->ApplyUntilAdvance(*sim_)) {
         if (sim_->Paused()) {
           sim_->PausedBeat();
+          FingerprintBeat();
         } else if (onThread) {
           StartBeatOnThread();
           return;
         } else {
           TimedTick();
+          FingerprintBeat();
         }
       } else {
         continue;  // the replay is over: the game stands where it ended
@@ -2301,7 +2312,7 @@ void GameSession::StartBeatOnThread() {
 
 // After a beat on the thread: its times, its sounds and shakes, and its sync for the interface.
 void GameSession::FingerprintBeat() {  // (after each beat of a recorded live game: its line in <replayOut>.fp)
-  if (fp_ && !play_ && sim_) fp_->Beat(*sim_, ++fpBeats_);
+  if (Fingerprinting()) fp_->Beat(*sim_, ++fpBeats_);
 }
 
 void GameSession::FinishBeat() {
@@ -2481,7 +2492,7 @@ void GameSession::RunFirstBeat() {
   if (!sim_ || sim_->tick() != 0) return;
   // (A replay's first beat is its stream's first: what came before the first Advance, then it.)
   if (play_ && !play_->AtEnd()) play_->ApplyUntilAdvance(*sim_);
-  if (fp_ && !play_) fp_->Beat(*sim_, 0);  // (beat 0: the state Start left)
+  if (Fingerprinting()) fp_->Beat(*sim_, 0);  // (beat 0: the state Start left)
   sim_->Tick();
   Record(CommandWriter::AdvanceMessage(1));
   FingerprintBeat();
@@ -2498,7 +2509,7 @@ void GameSession::StartFirstBeat() {
   if (worker_) worker_->Wait();
   if (!sim_ || sim_->tick() != 0) return;
   if (play_ && !play_->AtEnd()) play_->ApplyUntilAdvance(*sim_);  // (as RunFirstBeat)
-  if (fp_ && !play_) fp_->Beat(*sim_, 0);
+  if (Fingerprinting()) fp_->Beat(*sim_, 0);
   if (!worker_) worker_ = std::make_unique<BeatWorker>();
   firstBeatToFinish_ = true;
   worker_->Start([this] {

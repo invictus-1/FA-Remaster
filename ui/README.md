@@ -297,8 +297,10 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   menu's background. `--own <folder>`: this program's own files (`ui/data`); without it they are
   looked for beside the program (`data`) and in the source tree (`../ui/data`).
 - M28AI is our variant (the repository's `mods/m28-variant`: maudlin27's M28AI, CC BY-NC-SA 4.0, made faster with the
-  same decisions; its README): it is mounted at `/mods/m28-variant`, the original M28AI's folder is left out, and an
-  active original M28 in the player's mods is taken as the variant (`ui/data/hook/lua/mods.lua`). `--m28 original`:
+  same decisions; its README): it is mounted at `/mods/m28-variant`, the original M28AI stays mounted for the replays
+  of games played with it but is not selectable, and an active original M28 in the player's mods is taken as the
+  variant (`ui/data/hook/lua/mods.lua`). A replay played back with `MOHO64_FINGERPRINT` set writes that file, line for
+  line as the recorded game's `.fp` (`--replay-out`). `--m28 original`:
   the original, without the variant. `--our-mods <folder>`: the folder holding `m28-variant`; without it, `mods`
   beside the program and `../mods` (the source tree). A game in a window runs its simulation on the machine's cores
   (`MOHO64_THREADS`, when set, decides; runs without a window keep 1).
