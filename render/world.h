@@ -659,6 +659,9 @@ class World {
   // weakens, and its light falls on what is inside it. Drawn by `energy` (at the end of the class) in place of the
   // plain bubble (not for the effects stand's original side). Modern look; off by default.
   bool energyShields = false;
+  // [lampcolour] (Chris, 2026-10-28) a unit's own faint glow (its lamps of kind 'hull') in its army's colour (true, as
+  // before), or in its faction's own, the colour its lamps' file gives (UEF blue whatever its army's colour)
+  bool lampsTeamColour = true;
   // Battle scars on units (unit_wear.h): each unit keeps marks of the hits it survived, of the kind of what hit it,
   // in three tiers by all the damage it has taken, mended (not gone) as it is repaired. Modern look; off by default.
   // Snow on units (unit_wear.h): each unit holds its own share of the lying snow, which builds up while it stands

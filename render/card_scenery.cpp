@@ -243,10 +243,21 @@ void CardScenery::SetGroup(uint32_t group, uint32_t order, const Member* members
   // its slots: where it was while it fits there, else room of its own at the end (the card's buffer made again, larger,
   // when that is past its room)
   if (n > g.room) {
-    g.room = n + std::max<uint32_t>(8, n / 4);
-    g.first = slotsUsed_;
-    slotsUsed_ += g.room;
-    if (slotsUsed_ > slotRoom_) rebuild_ = true;
+    // [cardroom] (the room it leaves is free for another: what is held is laid out anew before the card reads it again)
+    if (g.room) freeSlots_.push_back({g.first, g.room});
+    const uint32_t room = n + std::max<uint32_t>(8, n / 4);
+    auto fits = std::find_if(freeSlots_.begin(), freeSlots_.end(), [room](const std::pair<uint32_t, uint32_t>& f) { return f.second >= room; });
+    if (fits != freeSlots_.end()) {
+      g.first = fits->first;
+      fits->first += room;
+      fits->second -= room;
+      if (fits->second == 0) freeSlots_.erase(fits);
+    } else {
+      g.first = slotsUsed_;
+      slotsUsed_ += room;
+      if (slotsUsed_ > slotRoom_) rebuild_ = true;
+    }
+    g.room = room;
     if (g.held) layoutDirty_ = true;
   }
   if (slots_.size() < static_cast<size_t>(g.first + g.room) * kSlotWords) slots_.resize(static_cast<size_t>(g.first + g.room) * kSlotWords);
@@ -304,6 +315,7 @@ bool CardScenery::Layout(uint64_t frame) {
     slots_.swap(packed);
     slotsUsed_ = at;
     slotRoom_ = std::max<uint32_t>(4096, at + at / 2);
+    freeSlots_.clear();  // [cardroom]
     slots_.resize(static_cast<size_t>(slotRoom_) * kSlotWords);
     dirtySlots_.clear();
   }
