@@ -751,13 +751,14 @@ void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation,
     // the unit's own glow: in its army's colour (as light, its strongest part 1), so that one sees
     // at night whose it is
     Vec3 tint = light.color;
-    // ([lampcolour] or in its faction's own, its file's colour: taken the same way, a colour as a screen shows it into light
-    // and as strong as the army's would be; as it was, its own pale blue read near white and faint - the interface's check)
-    if (light.hull && (lampsTeamColour ? armyColor != nullptr : true)) {
-      const Vec3 own = lampsTeamColour ? *armyColor : light.color;
-      tint = {std::pow(std::max(own.x, 0.0f), 2.2f), std::pow(std::max(own.y, 0.0f), 2.2f), std::pow(std::max(own.z, 0.0f), 2.2f)};
+    if (light.hull && armyColor && lampsTeamColour) {
+      tint = {std::pow(std::max(armyColor->x, 0.0f), 2.2f), std::pow(std::max(armyColor->y, 0.0f), 2.2f), std::pow(std::max(armyColor->z, 0.0f), 2.2f)};
       // (a fifth weaker than at first: Chris, 2026-10-13, "the red glow which is the army color is a bit strong")
       tint = tint * (0.8f / std::max({tint.x, tint.y, tint.z, 0.05f}));
+    } else if (light.hull && !lampsTeamColour) {
+      // ([lampcolour] its faction's own: its file's colour as its other lamps take it, half as strong again - blue on the
+      // ground's browns shows far less than the army's red does (the interface's checks in a night game))
+      tint = light.color * 1.5f;
     }
     if (light.cone > 0) {
       const Vec3 along = Rotate(orientation, Rotate(boneTurn, light.direction));
