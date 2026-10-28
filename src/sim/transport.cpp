@@ -1994,15 +1994,14 @@ Vec3 AttachFacing(const TransportObj& O, const Unit* cu) {  // GetAttachFacing (
   Vec3 lp;
   Quat lr;
   const Unit* tu = O.owner;
-  if (r->transportBone >= 0 && tu->skeleton && tu->poseQ.size() == tu->skeleton->bones().size()) {
-    // the bone's rotation in the unit's frame as this beat's pose has it (see GetAttachBonePosition)
-    Vec3 wp;
-    Quat wq;
-    BoneWorld(tu, r->transportBone, &wp, &wq);
-    lr = ComposeQ(Conj(tu->poseSet ? tu->poseBaseOri : tu->orientation), wq);
-  } else {
-    BoneLocal(tu, r->transportBone, &lp, &lr);
-  }
+  // CAiTransportImpl::TransportGetAttachFacing 0x5e7ad0: the bone's local transform from vt+0x4c (Unit::
+  // GetBoneLocalTransform 0x6aa440, as GetAttachBonePosition), its z axis (VAxes3 0x4ec590) flattened. Ours took the
+  // skeleton's rest rotation for a unit without a pose: the same direction, other last bits. Seen: MP1, the air
+  // staging platform under army 1's ASF 0x8e: ours' facing (-1.3e-14, -0.0039, -1), now (+1.4e-15, ..): its x sign
+  // put the aim's atan2 in CalcWingedOrientation at -pi instead of +pi, and the yaw step at 8069 came out other in
+  // its last bits (probe cp_asfbody: the torque into the angular step 0x6978d0 3e-6 off, the quaternion's small w
+  // 49 steps; now both equal).
+  if (!BoneLocalExe(tu, r->transportBone, &lp, &lr)) BoneLocal(tu, r->transportBone, &lp, &lr);
   Vec3 f = Forward(lr);
   f.y = 0;
   // turned by the transport through the quaternion's matrix (0x452d40, 0x5e7b41), then the normalised copy 0x44f7e0
