@@ -40,9 +40,17 @@ void ScriptObject::UnbindLua() {
   ref_ = LUA_NOREF;
 }
 
+namespace {
+uint32_t g_rebinds = 0;  // (ObjectRebinds)
+}  // namespace
+uint32_t ObjectRebinds() { return g_rebinds; }
+
 void BindObject(lua_State* L, int idx, ScriptObject* obj) {
   if (idx < 0) idx = lua_gettop(L) + idx + 1;
   obj->UnbindLua();
+  lua_rawgetcobject(L, idx);  // (a table that already has a box: the scheduler's kept boxes are looked up again)
+  if (!lua_isnil(L, -1)) ++g_rebinds;
+  lua_pop(L, 1);
   void** box = static_cast<void**>(lua_newuserdata(L, sizeof(void*)));
   *box = obj;
   luaL_getmetatable(L, kBoxMeta);

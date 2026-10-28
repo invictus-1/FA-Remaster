@@ -51,6 +51,11 @@ bool IsObjectHandleMeta(lua_State* L, int idx);
 
 // Make the table at `idx` the Lua side of `obj` (sets its `_c_object`).
 void BindObject(lua_State* L, int idx, ScriptObject* obj);
+// How many times BindObject has replaced a table's `_c_object` (a table bound a second time). A `_c_object` box
+// taken from a table stays that table's box until then: no script writes the field (FAF, its mods, M28: only the
+// engine's BindObject does), and the box lives as long as the table holds it. The thread scheduler keeps each waiting
+// thread's box and reads the object through it while this count is the same.
+uint32_t ObjectRebinds();
 // Push the object's table (nil if it has none).
 void PushObject(lua_State* L, ScriptObject* obj);
 

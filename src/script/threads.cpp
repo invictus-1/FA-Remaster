@@ -93,8 +93,11 @@ int l_WaitFor(lua_State* L) {
   ScriptObject* o = GetObject(L, 1);
   if (o && o->EventState() == 1) return 0;
   if (o && o->EventState() == 0) {
+    lua_rawgetcobject(L, 1);  // (the table's box: GetObject above read the object through it)
+    void** box = static_cast<void**>(lua_touserdata(L, -1));
+    lua_pop(L, 1);
     lua_pushvalue(L, 1);
-    s->WaitCurrentOn(luaL_ref(L, LUA_REGISTRYINDEX));
+    s->WaitCurrentOn(luaL_ref(L, LUA_REGISTRYINDEX), box);
     lua_settop(L, 0);
     lua_pushnumber(L, 2);
     return lua_yield(L, 1);
@@ -194,10 +197,12 @@ void ThreadScheduler::Release(Thread& t) {
   t.waitRef = LUA_NOREF;
 }
 
-void ThreadScheduler::WaitCurrentOn(int ref) {
+void ThreadScheduler::WaitCurrentOn(int ref, void** box) {
   if (!current_) return;
   if (current_->waitRef != LUA_NOREF) luaL_unref(L_, LUA_REGISTRYINDEX, current_->waitRef);
   current_->waitRef = ref;
+  current_->waitBox = box;
+  current_->waitEpoch = ObjectRebinds();
   current_->waitSeq = ++waitCount_;
   if (!current_->inWaiters) {
     current_->inWaiters = true;
@@ -205,11 +210,22 @@ void ThreadScheduler::WaitCurrentOn(int ref) {
   }
 }
 
-bool ThreadScheduler::StillWaiting(Thread& t) {
-  if (t.waitRef == LUA_NOREF) return false;
+// The object behind a waiting thread's event: GetObject of the table its registry reference holds. While no table
+// has been bound a second time since the thread began to wait (ObjectRebinds), that table's `_c_object` is still the
+// box it had then, and the box holds the object or nullptr once it is destroyed (UnbindLua): read through it, without
+// the registry and the table (WakeSignalled looks at every waiter at every ForkThread: ~35 ns each that way, 23 ms of
+// the 500 ms beat in which a whole army was handed over in Chris's game 2, 10375 forks against ~62 waiters).
+ScriptObject* ThreadScheduler::WaitObject(const Thread& t) {
+  if (t.waitBox && t.waitEpoch == ObjectRebinds()) return static_cast<ScriptObject*>(*t.waitBox);
   lua_rawgeti(L_, LUA_REGISTRYINDEX, t.waitRef);
   ScriptObject* o = GetObject(L_, -1);
   lua_pop(L_, 1);
+  return o;
+}
+
+bool ThreadScheduler::StillWaiting(Thread& t) {
+  if (t.waitRef == LUA_NOREF) return false;
+  ScriptObject* o = WaitObject(t);
   if (o && o->EventState() == 0) return true;
   luaL_unref(L_, LUA_REGISTRYINDEX, t.waitRef);
   t.waitRef = LUA_NOREF;
@@ -312,9 +328,7 @@ void ThreadScheduler::WakeSignalled() {
         continue;
       }
       if (!any && !w->dead && w != current_) {
-        lua_rawgeti(L_, LUA_REGISTRYINDEX, w->waitRef);
-        ScriptObject* o = GetObject(L_, -1);
-        lua_pop(L_, 1);
+        ScriptObject* o = WaitObject(*w);
         any = !(o && o->EventState() == 0);  // = !StillWaiting, without its clean-up
       }
       ++i;
@@ -349,9 +363,7 @@ void ThreadScheduler::Signal(const ScriptObject* o) {
   std::vector<Thread*> hit;
   for (Thread* w : waiters_) {
     if (w->dead || w == current_ || w->waitRef == LUA_NOREF) continue;
-    lua_rawgeti(L_, LUA_REGISTRYINDEX, w->waitRef);
-    const ScriptObject* p = GetObject(L_, -1);
-    lua_pop(L_, 1);
+    const ScriptObject* p = WaitObject(*w);
     if (p == o) hit.push_back(w);
   }
   if (hit.empty()) return;

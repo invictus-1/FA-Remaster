@@ -30,7 +30,7 @@ class ThreadScheduler {
   bool Resume(lua_State* co);            // wake a suspended thread
   void SuspendCurrent() { if (current_) current_->suspended = true; }
   // WaitFor: the running thread waits until the event (registry ref) is signalled.
-  void WaitCurrentOn(int ref);
+  void WaitCurrentOn(int ref, void** box);
   // The threads whose event has been signalled since the last call go to the END of the run order, where the
   // original's wake links them (0x409420). Called between the beat's stages, when a pass begins and before a
   // new thread joins the list (Fork).
@@ -56,6 +56,8 @@ class ThreadScheduler {
     bool again = false;       // yielded 0: run again in this dispatch
     int waitRef = LUA_NOREF;  // WaitFor(event)
     uint32_t waitSeq = 0;     // when it began to wait (Signal: the last to begin goes first)
+    void** waitBox = nullptr;  // the event's `_c_object` box, while ObjectRebinds() is waitEpoch (WaitObject)
+    uint32_t waitEpoch = 0;
     bool inWaiters = false;   // listed in waiters_
     int profSource = -1;      // MOHO64_PROFILE: the Lua timer's source for this thread (core/profile.h)
     std::string profLabel;    // MOHO64_PROFILE_HITCH: its function's file:line, for the beat breakdown
@@ -76,6 +78,7 @@ class ThreadScheduler {
 
   void Step(Thread& t);
   bool StillWaiting(Thread& t);
+  ScriptObject* WaitObject(const Thread& t);  // GetObject of the event's table, through the kept box when it holds
   void Release(Thread& t);
 };
 
