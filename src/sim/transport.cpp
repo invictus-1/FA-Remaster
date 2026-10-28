@@ -412,25 +412,26 @@ bool GetPickupUnitPos(const TransportObj& T, const Unit* cu, int* cx, int* cz) {
   *cz = static_cast<int>(std::nearbyint(p.z - fp.sizeZ * 0.5f));
   return true;
 }
+bool BoneLocalExe(const Unit* u, int bone, Vec3* Cp, Quat* Cq);  // (below: Unit::GetBoneLocalTransform 0x6aa440)
 Vec3 GetAttachBonePosition(const TransportObj& T, const Unit* cu) {
   const TransportReservation* r = GetReservedBone(T, cu);
   if (!r) return {};
   // tu.pos + rotate(tu.quat, the bone's place in the unit's frame): the bone as this beat's POSE has it (a
-  // support commander's drone spot rides on its animated back), carried on the unit's transform of now
+  // support commander's drone spot rides on its animated back), carried on the unit's transform of now.
+  // CAiTransportImpl::TransportGetAttachBonePosition 0x5e7950: the bone's local transform from vt+0x4c
+  // (Unit::GetBoneLocalTransform 0x6aa440: the posed bone in the world times the inverse of the pose's transform),
+  // turned by vt+0x18 (the orientation) through MultQuadVec 0x452d40 (0x5e79b7), plus vt+0x14 (the position). Ours
+  // took the local place as conj(q) (world - base), or the skeleton's rest place for a unit without a pose, and
+  // turned it with the plain quaternion rotate: the same point, other last bits. Seen: MP1 8065, army 1's ASF 0x8e
+  // (uaa0303) coming down on an air staging platform: its land height (the bone's y) one float step above the
+  // original's (the elevation offset of its 'A' records 0.900003433 vs 0.900001526 from 8065, and the desired
+  // velocity's y one step with it); with this, all its 'A' records equal.
   const Unit* tu = T.owner;
   Vec3 lp;
   Quat lr;
-  if (r->transportBone >= 0 && tu->skeleton && tu->poseQ.size() == tu->skeleton->bones().size()) {
-    Vec3 wp;
-    Quat wq;
-    BoneWorld(tu, r->transportBone, &wp, &wq);
-    const Vec3 basePos = tu->poseSet ? tu->poseBasePos : tu->position;
-    const Quat baseOri = tu->poseSet ? tu->poseBaseOri : tu->orientation;
-    lp = Rotate(Conj(baseOri), Sub(wp, basePos));
-  } else {
-    BoneLocal(tu, r->transportBone, &lp, &lr);
-  }
-  return Add(tu->position, Rotate(tu->orientation, lp));
+  if (!BoneLocalExe(tu, r->transportBone, &lp, &lr)) BoneLocal(tu, r->transportBone, &lp, &lr);
+  const Vec3 rv = RotateM(tu->orientation, lp);
+  return {tu->position.x + rv.x, tu->position.y + rv.y, tu->position.z + rv.z};
 }
 bool GetAttachPosition(const TransportObj& T, const Unit* cu, int* cx, int* cz) {
   if (!GetReservedBone(T, cu)) return false;
@@ -979,6 +980,27 @@ void AttachParentGone(Sim& sim, Unit* u) {
 // ---------------------------------------------------------------------------------------------
 // Attached units each tick (Entity::TaskTick: the attach transform; CUnitMotion Attached state)
 
+// Unit::GetBoneLocalTransform 0x6aa440 (Entity vt+0x4c) for a bone of the skeleton: it does not read the bone's
+// model-space transform from the skeleton: it takes the bone's composite in the WORLD (from the pose) and multiplies
+// by the inverse of the pose's world transform (0x46fbf0, then 0x549c20). The result is the same transform with
+// other last bits, and they change with where the unit is. False for a bone outside the skeleton.
+namespace {
+bool BoneLocalExe(const Unit* u, int bone, Vec3* Cp, Quat* Cq) {
+  if (!u->skeleton || bone < 0 || bone >= u->skeleton->Count()) return false;
+  Vec3 Wp;
+  Quat Wq;
+  BoneWorld(u, bone, &Wp, &Wq);
+  const Quat bq = u->poseSet ? u->poseBaseOri : u->orientation;
+  const Vec3 bp = u->poseSet ? u->poseBasePos : u->position;
+  const Quat iq{-0.0f - bq.x, -0.0f - bq.y, -0.0f - bq.z, bq.w};
+  const Vec3 ip = RotateM(iq, Vec3{-0.0f - bp.x, -0.0f - bp.y, -0.0f - bp.z});
+  *Cq = ComposeQ(iq, Wq);
+  const Vec3 r = RotateM(iq, Wp);
+  *Cp = {ip.x + r.x, ip.y + r.y, ip.z + r.z};
+  return true;
+}
+}  // namespace
+
 void SetAttachedUnitLayer(Sim& sim, Unit* u, const std::string& layer) { SetUnitLayer(sim, u, layer); }
 
 // Where a unit attached by its own bone stands: the parent bone's world transform (Pp, Pq) x the inverse of the
@@ -991,21 +1013,8 @@ void AttachedTransform(Unit* u, const Vec3& Pp, const Quat& Pq, Vec3* outPos, Qu
   if (inCp && inCq) {  // (the own bone's transform as an earlier step of this beat took it)
     Cp = *inCp;
     Cq = *inCq;
-  } else if (u->skeleton && u->ownBone >= 0 && u->ownBone < u->skeleton->Count()) {
-    // Unit::GetBoneLocalTransform 0x6aa440 does not read the bone's model-space transform from the skeleton:
-    // it takes the bone's composite in the WORLD (from the pose) and multiplies by the inverse of the pose's
-    // world transform (0x46fbf0, then 0x549c20). The result is the same transform with other last bits, and
-    // they change with where the unit is.
-    Vec3 Wp;
-    Quat Wq;
-    BoneWorld(u, u->ownBone, &Wp, &Wq);
-    const Quat bq = u->poseSet ? u->poseBaseOri : u->orientation;
-    const Vec3 bp = u->poseSet ? u->poseBasePos : u->position;
-    const Quat iq{-0.0f - bq.x, -0.0f - bq.y, -0.0f - bq.z, bq.w};
-    const Vec3 ip = RotateM(iq, Vec3{-0.0f - bp.x, -0.0f - bp.y, -0.0f - bp.z});
-    Cq = ComposeQ(iq, Wq);
-    const Vec3 r = RotateM(iq, Wp);
-    Cp = {ip.x + r.x, ip.y + r.y, ip.z + r.z};
+  } else {
+    BoneLocalExe(u, u->ownBone, &Cp, &Cq);  // (Unit::GetBoneLocalTransform 0x6aa440)
   }
   // Entity::CalculateAttachedTransform 0x67a020: (the parent bone's world transform x the attach offset,
   // 0x549c20; the offset is the identity here, which leaves the bone's transform as it is) x the inverse of
