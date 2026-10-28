@@ -64,6 +64,12 @@ bool PushValue(lua_State* L, Reader& r, int depth) {
     case 2: lua_pushnil(L); return true;
     case 3: lua_pushboolean(L, r.U8() != 0); return r.ok;
     case 4: {
+      // Each open level keeps its table and the key being read on the stack (two slots a level, one more for the
+      // innermost value), and the stream allows 64 levels: about 9 nested tables already fill the LUA_MINSTACK (20)
+      // slots the caller is given. Without room made here a deep table in a player's SimCallback or order data wrote
+      // past the stack (as the ui's GetPreference copy did, 2026-10-27). lua_checkstack only moves ci->top while the
+      // stack has room; it fails only past LUA_MAXCSTACK (2048), which 64 levels cannot reach.
+      if (!lua_checkstack(L, 3)) return false;
       lua_newtable(L);
       while (r.ok && r.p < r.d.size() && r.d[r.p] != 5) {
         if (!PushValue(L, r, depth + 1)) return false;

@@ -140,6 +140,10 @@ void ThreadScheduler::Fork(lua_State* caller, int fn, int nargs) {
   prof::InstallLuaHooks(co);  // (MOHO64_PROFILE_LUASAMPLE / _LUACALLS only: Lua 5.0's threads inherit no hook)
   lua_pushvalue(caller, -1);
   int ref = luaL_ref(caller, LUA_REGISTRYINDEX);
+  // A new thread is given LUA_MINSTACK (20) slots (lua_newthread: stack_init); the function and its arguments go
+  // there before the first resume, so a fork with more than 19 arguments pushed past it. (Room for 37 is there
+  // already, so this moves ci->top only and allocates nothing below that.)
+  lua_checkstack(co, nargs + 1);
   for (int i = 0; i <= nargs; ++i) {
     lua_pushvalue(caller, fn + i);
     lua_xmove(caller, co, 1);
