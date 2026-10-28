@@ -101,3 +101,5 @@ A design talk with Chris, using these goals and ai-study-m28.md section 7.5's op
     knowledge is the tuning layer: once the battle estimate exists, the computed rating of every unit is printed
     side by side, Chris corrects the ones that feel wrong (a multiplier per unit) and adds "A beats B" overrides for
     matchups he knows.
+    Chris's addition: a short readable label per unit for the tuning list, tier + domain letter + value, e.g. "T1G 1.0"
+    (G ground, A air, N naval, S structure, X experimental), so a list of ~400 units is quick to scan and correct.
