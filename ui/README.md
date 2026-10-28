@@ -304,6 +304,21 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   the original, without the variant. `--our-mods <folder>`: the folder holding `m28-variant`; without it, `mods`
   beside the program and `../mods` (the source tree). A game in a window runs its simulation on the machine's cores
   (`MOHO64_THREADS`, when set, decides; runs without a window keep 1).
+- The first beats behind the loading screen (ours, a host deviation; Chris, 2026-10-28, "move M28's work into the
+  load", the engine's request in `docs/engine-answers.md`): a lobby's game without prebuilt units (`PrebuiltUnits` not
+  "On") in a window runs beats 2..29 behind the loading screen, unpaced, their syncs given to the scripts in order when
+  the game's screen is made, normal pacing from beat 30. FAF hides the commander and blocks its queue until tick 30
+  (`CommanderWarpDelay`), so nothing to see or do is passed over, and the AIs' slow start (M28's nav mesh at tick 10,
+  its map setup at 16 / 17 / 21) falls in the load. Not for a campaign's operation (its opening runs from beat 1)
+  nor a replay. `MOHO64UI_AHEAD=0` turns it off, `=1` also without a window (tests: `ui/tests/ahead_start.lua`).
+  WHAT DIFFERS: the interface's first orders (SetCommandSource and Resume, sent in the game screen's first frame)
+  reach the record at beat 30 instead of beat 2, so two recordings of the same session, one with and one without it,
+  differ in those bytes and in the fingerprint's `sim` field (command source, pause owner) in beats 2..29, and are
+  identical from beat 30 (checked on Chris's game 2, 10 armies with M28). A game so recorded replays exactly from its
+  own stream. FAF's opening (gamemain `StartupSequence`: a second's look, then the glide to the commander, tries to
+  select it until tick 50) is ours for such a game (`ui/data/hook/lua/ui/game/gamemain.lua`, keyed on
+  `moho64ui_aheadTick`, set by the host): the glide at once, ending as the warp-in begins, the tries until 50 ticks
+  after the screen came.
 - `--backdrop` / `--no-backdrop`: the main menu's moving background (see Status). By itself it is
   on in a live window and off in a run without one.
 - `--stage` says how far to go: `userinit` runs `/lua/userInit.lua`, `setup` adds the root frame and

@@ -3,6 +3,18 @@
 Answers to the other tracks' requests to the interface (CLAUDE.md: "the layer asked answers in a file of its own").
 The requests themselves are in the asking track's file; each answer names it.
 
+## engine-answers.md 524f3d0: Chris's "Move M28's work into load": the first beats inside the loading screen (2026-10-28)
+
+Built as asked (b6fccab): a lobby's game without prebuilt units, in a window, runs beats 2..29 behind the loading
+screen on the beats' thread, unpaced; their syncs reach the scripts in order when the game's screen is made; normal
+pacing from beat 30 (`GameSession::Aheadable` / `RunAhead`, main.cpp's start sequence). Left out: a campaign's
+operation (LaunchSinglePlayer) and replays. `MOHO64UI_AHEAD=0` off, `=1` also headless. Two things the user layer
+changes, both agreed with the engine: the interface's first orders (SetCommandSource, Resume) land at beat 30 instead
+of 2 (game 2's session: only the fingerprint's `sim` field differs, in beats 2..29; written as a host deviation in
+ui/README.md), and FAF's StartupSequence is ours for such a game (the glide to the commander at once, ending as the
+warp-in begins; tries to select it until 50 ticks after the screen). Test: `ui/tests/ahead_start.lua` (suite job
+ahead_start: the screen at tick 29, the glide at once, the commander selected after its warp-in).
+
 ## Findings/LIST_2026-10-25 (Chris's snapshot test): the interface's items 14-19 and 8, and item 20's host part (2026-10-27)
 
 Each read from the FA exe, tested, landing together on main.
