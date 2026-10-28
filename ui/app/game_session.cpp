@@ -2397,7 +2397,12 @@ void GameSession::FinishBeat() {
   const double took = (workerSimSeconds_ + workerPictureSeconds_ + workerFingerprintSeconds_ + workerSoundSeconds_) * speed;
   leadBeats_ = std::max(took * 1.3, leadBeats_ * 0.9);
   // (A beat starts only in a frame: one frame's time more, or it starts up to a frame late.)
-  lead_ = std::min(0.1, leadBeats_ + lastFrameSeconds_ * speed);
+  // MOHO64UI_LEAD_BEATS=2 (on trial, 2026-10-28): up to two beats, so a heavy beat may begin as soon as the last is
+  // through, though the picture has not reached it (in the late game at 4K the frames take 30-40 ms and a beat
+  // began a frame late about once a beat); the picture then shows up to two beats behind the newest, and orders wait
+  // up to a beat longer, in a heavy game only (the lead is learnt as before).
+  static const double maxLead = std::getenv("MOHO64UI_LEAD_BEATS") && std::atoi(std::getenv("MOHO64UI_LEAD_BEATS")) >= 2 ? 0.2 : 0.1;
+  lead_ = std::min(maxLead, leadBeats_ + lastFrameSeconds_ * speed);
   static const bool beatLog = std::getenv("MOHO64UI_BEAT_LOG") != nullptr;
   const auto tHere = std::chrono::steady_clock::now();
   if (beatLog)
