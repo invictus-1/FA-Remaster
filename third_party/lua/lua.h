@@ -177,6 +177,10 @@ LUA_API void  lua_gpg_checkgc (lua_State *L);
 /* moho64: t[1], t[2], t[3] = a, b, c (raw), as three lua_pushnumber + lua_rawseti would (the same luaH_setnum, the
 ** table's write barrier). */
 LUA_API void  lua_gpg_setnum3 (lua_State *L, int idx, lua_Number a, lua_Number b, lua_Number c);
+/* moho64: luaL_getn / luaL_setn on the table itself, with the same steps (lapi.c; -2 / 0: the sizes table is
+** missing, lauxlib makes it). */
+LUA_API int   lua_gpg_getn (lua_State *L, int idx, int sizesref);
+LUA_API int   lua_gpg_setn (lua_State *L, int idx, int n, int sizesref);
 /* moho64 extensions: per-state host pointers (O(1), no registry lookup) and a raw get of the
 ** table field "_c_object" with the pre-interned key (engine objects' handles). */
 LUA_API void *lua_getextra (lua_State *L, int i);

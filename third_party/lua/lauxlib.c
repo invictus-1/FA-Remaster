@@ -282,6 +282,10 @@ static void getsizes (lua_State *L) {
 
 void luaL_setn (lua_State *L, int t, int n) {
   t = abs_index(L, t);
+  /* moho64: the steps below, made on the table itself (lapi.c lua_gpg_setn); here only when the `sizes' table is
+     still to be made (lua_gpg_setn did the `n' test, as the lines it stands for) */
+  if (lua_gpg_setn(L, t, n, ARRAYSIZE_REF)) return;
+#if 0
   lua_pushliteral(L, "n");
   lua_rawget(L, t);
   if (checkint(L, 1) >= 0) {  /* is there a numeric field `n'? */
@@ -289,7 +293,9 @@ void luaL_setn (lua_State *L, int t, int n) {
     lua_pushnumber(L, (lua_Number)n);
     lua_rawset(L, t);
   }
-  else {  /* use `sizes' */
+  else
+#endif
+  {  /* use `sizes' */
     getsizes(L);
     lua_pushvalue(L, t);
     lua_pushnumber(L, (lua_Number)n);
@@ -302,9 +308,14 @@ void luaL_setn (lua_State *L, int t, int n) {
 int luaL_getn (lua_State *L, int t) {
   int n;
   t = abs_index(L, t);
+  /* moho64: the steps below, made on the table itself (lapi.c lua_gpg_getn); here only when the `sizes' table is
+     still to be made (lua_gpg_getn did the `n' test, as the lines it stands for) */
+  if ((n = lua_gpg_getn(L, t, ARRAYSIZE_REF)) != -2) return n;
+#if 0
   lua_pushliteral(L, "n");  /* try t.n */
   lua_rawget(L, t);
   if ((n = checkint(L, 1)) >= 0) return n;
+#endif
   getsizes(L);  /* else try sizes[t] */
   lua_pushvalue(L, t);
   lua_rawget(L, -2);

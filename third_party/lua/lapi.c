@@ -555,6 +555,94 @@ LUA_API void lua_gpg_checkgc (lua_State *L) {
 }
 
 
+/*
+** moho64: luaL_getn / luaL_setn (lauxlib.c) made here on the table itself instead of through ten API calls each
+** (table.insert: 412 ns, table.getn: 348 ns a call in a one-hour game; ~25 M calls). The same steps in the same order
+** with the same effects: each lua_pushliteral(L, "n") is its luaC_checkGC and luaS_newlstr; every value the API steps
+** would have put on the stack is written to the same slot above the top (those slots are read by nobody, but a
+** later collection inside the caller's frame marks them: the same objects stay reachable for the same time); the
+** numbers are read as checkint reads them (lua_tonumber, then lua_isnumber: a numeric string counts); the count is
+** the same walk (t[1], t[2], ... raw, until a nil) on the array part and then the hash part. The registry's `sizes'
+** table (ARRAYSIZE_REF) missing, they answer -2 / 0 and leave the rest to lauxlib's own code, which makes it there.
+*/
+static int gpg_checkint (const TObject *o) {  /* lauxlib.c checkint */
+  TObject tmp;
+  lua_Number x = 0;
+  int isnum = 0;
+  if (ttisnumber(o)) { x = nvalue(o); isnum = 1; }
+  else if ((o = luaV_tonumber(o, &tmp)) != NULL) { x = nvalue(o); isnum = 1; }
+  {
+    int n = (int)x;
+    if (n == 0 && !isnum) n = -1;
+    return n;
+  }
+}
+
+/* t.n as luaL_getn / luaL_setn ask for it (lua_pushliteral(L, "n"); lua_rawget(L, t)): the value is left in s */
+static void gpg_getfield_n (lua_State *L, int idx) {
+  StkId s;
+  Table *h;
+  luaC_checkGC(L);
+  s = L->top;
+  setsvalue2s(s, luaS_newliteral(L, "n"));
+  h = hvalue(luaA_index(L, idx));
+  setobj2s(s, luaH_getstr(h, tsvalue(s)));
+}
+
+/* luaL_getn's lookups and count; -2: the sizes table is missing (its first slot holds the nil the API read) */
+LUA_API int lua_gpg_getn (lua_State *L, int idx, int sizesref) {
+  StkId s;
+  Table *h;
+  int n;
+  lua_lock(L);
+  gpg_getfield_n(L, idx);
+  s = L->top;
+  if ((n = gpg_checkint(s)) >= 0) { lua_unlock(L); return n; }
+  setobj2s(s, luaH_getnum(hvalue(registry(L)), sizesref));  /* getsizes: lua_rawgeti(registry, ref) */
+  if (ttisnil(s)) { lua_unlock(L); return -2; }
+  setobj2s(s + 1, luaA_index(L, idx));  /* lua_pushvalue(L, t); lua_rawget(L, -2) */
+  setobj2s(s + 1, luaH_get(hvalue(s), s + 1));
+  if ((n = gpg_checkint(s + 1)) >= 0) { lua_unlock(L); return n; }
+  h = hvalue(luaA_index(L, idx));
+  for (n = 1; ; n++) {  /* lua_rawgeti(L, t, n) until nil: luaH_getnum (array part, then hash part) */
+    const TObject *e = (n <= h->sizearray) ? &h->array[n - 1] : luaH_getnum(h, n);
+    if (ttisnil(e)) break;
+  }
+  setnilvalue(s);  /* (the last lua_rawgeti's nil) */
+  lua_unlock(L);
+  return n - 1;
+}
+
+/* luaL_setn's steps; 0: the sizes table is missing and nothing past getsizes' first read was done */
+LUA_API int lua_gpg_setn (lua_State *L, int idx, int n, int sizesref) {
+  StkId s;
+  Table *h;
+  lua_lock(L);
+  gpg_getfield_n(L, idx);
+  s = L->top;
+  if (gpg_checkint(s) >= 0) {  /* t.n = n: lua_pushliteral(L, "n"); lua_pushnumber(L, n); lua_rawset(L, t) */
+    luaC_checkGC(L);
+    s = L->top;
+    setsvalue2s(s, luaS_newliteral(L, "n"));
+    setnvalue(s + 1, (lua_Number)n);
+    h = hvalue(luaA_index(L, idx));
+    setobj2t(luaH_set(L, h, s), s + 1);
+    luaC_barriert(L, h);
+    lua_unlock(L);
+    return 1;
+  }
+  setobj2s(s, luaH_getnum(hvalue(registry(L)), sizesref));  /* getsizes */
+  if (ttisnil(s)) { lua_unlock(L); return 0; }
+  setobj2s(s + 1, luaA_index(L, idx));  /* sizes[t] = n: lua_pushvalue(L, t); lua_pushnumber(L, n); lua_rawset(L, -3) */
+  setnvalue(s + 2, (lua_Number)n);
+  h = hvalue(s);
+  setobj2t(luaH_set(L, h, s + 1), s + 2);
+  luaC_barriert(L, h);
+  lua_unlock(L);
+  return 1;
+}
+
+
 LUA_API void lua_gpg_setnum3 (lua_State *L, int idx, lua_Number a, lua_Number b, lua_Number c) {
   Table *t;
   lua_lock(L);
