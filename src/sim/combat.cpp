@@ -2444,7 +2444,7 @@ static void ThrustStep(Unit* u, ThrustManipulator* m) {
   float yawTorque = 0.0f;
   if (u->motion.air) {
     f = u->motion.air->ctrlForce;
-    yawTorque = u->motion.air->ctrlTorque.y;
+    yawTorque = u->motion.air->torque108.y;
   }
   // 0x64a8ee: the turn about (0, 1, 0) by the yaw torque (EulerRollToQuat 0x570750: cos(a / 2), the axis x sin(a / 2))
   const float h = yawTorque * 0.5f;

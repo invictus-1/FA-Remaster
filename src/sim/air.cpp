@@ -1273,7 +1273,8 @@ Ctrl ComputeAirControl(Sim& sim, Unit* u, const QuatW& tq, const Vec3& desired, 
   c.force = {(F.x - 0.0f) * m, (F.y - kGravityY) * m, (F.z - 0.0f) * m};
   c.torque = MultQuadVec(q, Vec3{T.x / pb.invI[0], T.y / pb.invI[1], T.z / pb.invI[2]});
   a.ctrlForce = c.force;  // m+0xfc (0x6bedf4..0x6bee10)
-  a.ctrlTorque = T;       // m+0x108 (0x6bee1e..0x6bee3c)
+  a.torque108 = T;        // m+0x108 (0x6bee1e..0x6bee3c)
+  a.spinFromDeath = false;
   if (g_bodyDebug) {
     const float k[5] = {kTurn, kRoll, b.kTurnDamping, b.kRollDamping, static_cast<float>(mode)};
     BodyDebugVec("k", k, 5);
@@ -1601,7 +1602,8 @@ void CalcMoveAir(Sim& sim, Unit* u, Transform& T) {
       uint32_t x = sim.NextUInt32();
       r[i] = dmath::MulU32(x, ai - (-0.0f - ai)) * 2.3283064365386963e-10f + (-0.0f - ai);  // x87 at PC_24
     }
-    a.spinTorque = MultQuadVec(body.q, Vec3{r[0] / body.invI[0], r[1] / body.invI[1], r[2] / body.invI[2]});
+    a.torque108 = MultQuadVec(body.q, Vec3{r[0] / body.invI[0], r[1] / body.invI[1], r[2] / body.invI[2]});
+    a.spinFromDeath = true;
   } else {
     Vec3 facing;
     if (distH > b.startTurnDistance && a.carrierEvent != 2) {
@@ -1836,9 +1838,15 @@ void CalcMoveBallistic(Sim& sim, Unit* u, Transform& T, float* scale) {
   Vec3 v2{0.0f * c + v.x, v.y + kGravityY * c, v.z + 0.0f * c};
   Vec3 P0 = T.pos, P1{P0.x + v2.x, P0.y + v2.y, P0.z + v2.z};
   *scale = 1.0f;
-  if (!IsZeroBits(a.spinTorque)) {
+  {
+    static const bool dbg = getenv("MOHO64_DEBUG_BALLISTIC") != nullptr;
+    if (dbg)
+      Logf(LogLevel::Info, "ballistic %u unit %u dead %d from death %d torque108 %.9g %.9g %.9g", sim.tick(), u->id,
+           u->dead ? 1 : 0, a.spinFromDeath ? 1 : 0, a.torque108.x, a.torque108.y, a.torque108.z);
+  }
+  if (!IsZeroBits(a.torque108)) {  // (0x6c03be: also a torque the flight left there)
     BodyLinear(body, Vec3{}, 0.1f);
-    BodyAngular(body, a.spinTorque, 0.1f);
+    BodyAngular(body, a.torque108, 0.1f);
     T.q = body.q;
   }
   float water = WaterOrNone(map);
