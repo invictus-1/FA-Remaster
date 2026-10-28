@@ -260,7 +260,8 @@ int l_LaunchGame(lua_State* L) {
   std::string text;
   WriteLiteral(L, 2, 0, &text);
   lua_settop(L, 2);
-  const std::string& file = UserState::From(L)->config().sessionFile;
+  const auto& config = UserState::From(L)->config();
+  const std::string file = config.sessionFileNow ? config.sessionFileNow() : config.sessionFile;
   const auto& launch = UserState::From(L)->config().launchSession;
   Logf(LogLevel::Info, "moho64ui: CLobby:LaunchGame: game configuration (%zu bytes)%s%s", text.size(),
        file.empty() ? " follows" : " written to ", file.c_str());

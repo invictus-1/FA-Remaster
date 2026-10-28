@@ -112,6 +112,20 @@ ui::GameSession::Sky sky;
 // (ui/data); without it they are looked for beside the program.
 std::vector<std::string> moreMaps, remastersFolders, fafRemastersFolders;
 std::string ownFolder;
+// M28AI in the lobby: our variant (the repository's mods/m28-variant, maudlin27's AI made faster, the same decisions:
+// its README) in place of the original v326, which is then left out of the mods (the engine, Chris's item 20: his
+// lobby ran the original, so the AI's speed-ups did nothing for him). The player's M28 in his active mods becomes the
+// variant (ui/data/hook/lua/mods.lua). --m28 original: the original, without the variant (for checks).
+// --our-mods <folder>: the folder holding m28-variant; without it, beside the program or in its source tree.
+bool originalM28 = false;
+std::string ourMods;
+std::string m28Variant;           // the variant's folder when it is used (else empty)
+constexpr const char* kOriginalM28Uid = "fnewm028-";  // (every version's uid begins so: fnewm028-v326-...)
+// A folder the init file mounts as a mod that is the original M28AI (its mod_info's uid)
+bool IsOriginalM28(const std::string& dir) {
+  auto info = hostfs::ReadFile(dir + "/mod_info.lua");
+  return info && info->find(std::string("uid = \"") + kOriginalM28Uid) != std::string::npos;
+}
 bool noWorld = false;             // --no-world: a launched game gets no picture of the world (no graphics device is opened)
 std::string sessionIn;            // --session file: a recorded game configuration to start a game from at once
 std::string gameLuaFile;          // --game-lua file: a host Lua file run in a launched game's state once its interface is up
@@ -226,6 +240,8 @@ bool RunInit(const Options& o, Vfs& vfs, std::vector<std::string>& hookDirs, std
         if (n == "." || n == "..") continue;
         vfs.Mount(base + "/" + n, mp);
       }
+    } else if (!m28Variant.empty() && Vfs::Normalize(mp).rfind("/mods/", 0) == 0 && IsOriginalM28(mdir)) {
+      Logf(LogLevel::Info, "moho64ui: the original M28AI (%s) is left out: the lobby's M28 is our variant", hostfs::DisplayPath(mdir).c_str());
     } else {
       vfs.Mount(mdir, mp);
     }
@@ -312,6 +328,8 @@ int main(int argc, char** argv) {
     else if (a == "--remasters") remastersFolders.push_back(next());
     else if (a == "--remasters-faf") fafRemastersFolders.push_back(next());
     else if (a == "--own") ownFolder = next();
+    else if (a == "--our-mods") ourMods = next();
+    else if (a == "--m28") originalM28 = next() == "original";
     else if (a == "--seed") session_seed = static_cast<long long>(std::strtoull(next().c_str(), nullptr, 10));
     else if (a == "--scan-ticks") scanTicks = std::atoi(next().c_str());
     else if (a == "--fast-forward") fastForward = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
@@ -357,7 +375,23 @@ int main(int argc, char** argv) {
   // each launch (PreGameDataText). The engine's shared piece (sim/session.h kGamePrefsPath; ui REQUESTS 40).
   if (!vfs.MountMemoryFile(kGamePrefsPath, "PreGameData = {\n}\n"))
     Logf(LogLevel::Warning, "moho64ui: the game's own %s could not be mounted", kGamePrefsPath);
+  if (!originalM28) {  // (see m28Variant)
+    std::vector<std::string> candidates;
+    if (!ourMods.empty()) candidates.push_back(ourMods);
+    std::string dir = hostfs::ProgramFolder();
+    if (dir.empty()) dir = ".";
+    candidates.push_back(dir + "/mods");
+    candidates.push_back(dir + "/../mods");
+    for (const std::string& c : candidates)
+      if (m28Variant.empty() && hostfs::IsFile(c + "/m28-variant/mod_info.lua")) m28Variant = c + "/m28-variant";
+  }
   if (!RunInit(o, vfs, cfg.hookDirs, cfg.protocols)) return 1;
+  if (!m28Variant.empty()) {
+    if (vfs.Mount(m28Variant, "/mods/m28-variant"))
+      Logf(LogLevel::Info, "moho64ui: M28AI is our variant: %s", hostfs::DisplayPath(m28Variant).c_str());
+    else
+      Logf(LogLevel::Warning, "moho64ui: %s could not be mounted", m28Variant.c_str());
+  }
   for (const std::string& folder : moreMaps) {
     if (!vfs.Mount(folder, "/maps")) Logf(LogLevel::Warning, "moho64ui: --maps %s: no such folder", folder.c_str());
   }
@@ -440,7 +474,8 @@ int main(int argc, char** argv) {
   const bool firstStart = cfg.prefsFile.empty() || !hostfs::IsFile(cfg.prefsFile);
   // A recorded game needs its launch table kept too: a game launched from the lobby writes it
   // beside the record unless a place of its own was named.
-  if (sessionFile.empty() && !replayOut.empty()) sessionFile = replayOut + ".session.lua";
+  const bool tableBesideRecord = sessionFile.empty() && !replayOut.empty();
+  if (tableBesideRecord) sessionFile = replayOut + ".session.lua";
   cfg.sessionFile = sessionFile;
 
   // The game's sounds, for the front end's state and a game's alike. Only a live window plays
@@ -464,9 +499,14 @@ int main(int argc, char** argv) {
   session.fastForwardTo = fastForward;
   session.wantPicture = !noWorld;
   session.waitForWindow = windowed && directWindow;  // (a launched table's picture opens on the window)
+  // A game in a window: its simulation on all the machine's cores (the engine, Chris's item 20: his snapshot games ran
+  // one thread, as MOHO64_THREADS was unset; the result is the same beat for beat). MOHO64_THREADS, when set, decides.
+  if (windowed && !std::getenv("MOHO64_THREADS")) session.simThreads = static_cast<int>(std::thread::hardware_concurrency());  // (0 if unknown: as unset)
   session.sky = sky;
   session.replayOut = replayOut;
   session.replayTable = !sessionIn.empty() ? sessionIn : sessionFile;  // (a lobby game's table is written there)
+  session.numberTables = tableBesideRecord && sessionIn.empty();  // (the second game's beside its own record)
+  if (session.numberTables) cfg.sessionFileNow = [&session] { return session.TableFile(); };
   session.replayMaps = moreMaps;
   session.scanInit = o.init;  // (the replay timeline's scan mounts the game as this program did)
   session.scanFolders = o.folders;

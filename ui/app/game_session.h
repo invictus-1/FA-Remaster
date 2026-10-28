@@ -114,6 +114,11 @@ class GameSession {
   std::string replayOut;
   std::string replayTable;
   std::vector<std::string> replayMaps;
+  // The lobby's table beside the record (`<prefix>.session.lua`, no --session-out): the second game of the run gets its
+  // own, `<prefix>.2.session.lua` as its record (a restart's is copied from the game before). TableFile(): the file the
+  // next game's table goes to.
+  bool numberTables = false;
+  std::string TableFile() const;
 
   // The game's own replays, the original's way: every game played is written as it runs to
   // `<userDir>/replays/<profile>/LastGame.SCFAReplay` (the session's header, then the command
@@ -254,6 +259,9 @@ class GameSession {
   // touches the simulation (the interface's scripts and input, orders, sounds, sync) waits until
   // it is done: while BeatRunning(), the window only shows frames.
   bool beatsOnThread = false;
+  // The simulation's worker pool (core/workers.h ThreadsOverride, when the Sim is made): 0 leaves it to MOHO64_THREADS
+  // (1 when unset: the headless tests' way, many at once). A game in a window takes the machine's cores (main.cpp).
+  int simThreads = 0;
   bool BeatRunning() const;
   // While a beat runs there: the time that passes (the picture's moment moves on; no beat starts).
   void AdvanceClock(double seconds);
@@ -293,7 +301,7 @@ class GameSession {
   bool firstBeatToFinish_ = false;  // the first beat ran on the worker (StartFirstBeat)
   bool holdBeats_ = false;          // (HoldBeats)
   uint32_t beatFrom_ = 0;      // the tick the running beat started from
-  double workerSimSeconds_ = 0, workerPictureSeconds_ = 0;  // (written there; read here after it)
+  double workerSimSeconds_ = 0, workerPictureSeconds_ = 0, workerFingerprintSeconds_ = 0;  // (written there; read here after it)
   // How early (in game seconds) a beat starts on its thread: about as long as the last one took,
   // so the next beat is there when the picture's moment reaches it (the picture never waits).
   double lead_ = 0;
@@ -362,6 +370,8 @@ class GameSession {
   double due_ = 0;  // seconds of beats not run yet
   std::FILE* stream_ = nullptr;  // the game's record (replayOut), open while a game runs
   int recorded_ = 0;             // games recorded in this run
+  std::string lastTable_;        // the table file of the game recorded last
+  bool tableAgain_ = false;      // the game starting is a restart (Relaunch): its table is the last one
   void Record(const std::string& bytes);
   // The recorded game's fingerprint beside its record (<replayOut>.fp: the engine's sim/fingerprint.h, one line per
   // beat, paused ones included, beat 0 after Start), so that a playback can name the first beat it leaves the

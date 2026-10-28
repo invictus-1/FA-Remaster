@@ -1154,6 +1154,17 @@ brought back and moved. What I need from you, smallest form first:
    with a progress bar, and the timeline still works.
 Say which form you prefer; I build the timeline control, its button and the jumps on my side.
 
+### 49. The replay scan's mods: extra mounts after the init (the M28 variant)
+From the interface chat, 2026-10-27. Not blocking. Since item 20 (your answer of 2026-10-27) the lobby's M28 is our
+variant: moho64ui mounts the repository's `mods/m28-variant` at `/mods/m28-variant` after the init file and leaves
+the original M28AI's folder out (`ui/app/main.cpp`, m28Variant; `--m28 original` the other way round). The replay
+timeline's scan (`ScanReplayMoments`, sim/moments.h) mounts the game from `ScanArgs::init` / `folders` / `maps`
+only, so a game recorded with the variant scans without its AI mod.
+- **Smallest form:** `std::vector<std::pair<std::string, std::string>> ScanArgs::mounts` (host folder, mount point),
+  mounted after the init file's paths and the maps, in order; I fill it with what the host mounted.
+- **Nice to have:** `ScanArgs::skipMounts` (host folders the init lists that are left out), so the scan also leaves
+  the original M28AI out as the host does. Without it both are there, which works as long as the uid picks the mod.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface

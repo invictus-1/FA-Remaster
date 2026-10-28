@@ -52,6 +52,7 @@ class UserState {
     std::vector<std::string> gameArgs;  // the game's own command line, as GetCommandLineArg sees it
     std::string prefsFile;              // our preferences file (main.cpp: --prefs or the default); empty = memory only
     std::string sessionFile;            // where a launched game's configuration is written; empty = to the log
+    std::function<std::string()> sessionFileNow;  // the same for the game launched now, when set (one file per game)
     // Starts a session from the game configuration table at stack index `config` when the lobby
     // launches a game; false with the reason for the script's LaunchFailed. Unset: nothing starts.
     std::function<bool(lua_State* L, int config, std::string* why)> launchSession;

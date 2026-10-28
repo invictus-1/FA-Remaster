@@ -21,6 +21,7 @@
 #include "core/hostfs.h"
 #include "core/log.h"
 #include "core/vfs.h"
+#include "core/workers.h"
 #include "maui/font.h"
 #include "script/script_state.h"
 #include "sim/blueprints.h"
@@ -1380,7 +1381,13 @@ bool GameSession::Relaunch(std::string* why) {
   }
   if (!seedGiven) again.header.seed = static_cast<uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count());
   PrepareSession(again, lastUids_);
+  tableAgain_ = true;  // (no lobby writes this game's table: the record's start copies the last one)
   return true;
+}
+
+std::string GameSession::TableFile() const {
+  if (!numberTables || recorded_ == 0) return replayTable;
+  return replayOut + "." + std::to_string(recorded_ + 1) + ".session.lua";
 }
 
 // The simulation's print lines of a beat, to the game's console (the original: Sim::Printf 0x7462a0 keeps them,
@@ -1397,7 +1404,10 @@ void GameSession::PrepareSession(const SessionDescription& session, const std::v
   Logf(LogLevel::Info, "moho64ui: session %s: %zu armies, %zu command sources, focus army %d, seed %u, %zu mods",
        h.map.c_str(), h.armies.size(), h.sources.size(), session.focusArmy + 1, h.seed, uids.size());
   loadSession_ = std::make_unique<SessionDescription>(session);
-  loadSim_ = std::make_unique<Sim>(vfs_, hookDirs_, uids);
+  {
+    ThreadsOverride threads(simThreads);  // (the pool is made with the Sim)
+    loadSim_ = std::make_unique<Sim>(vfs_, hookDirs_, uids);
+  }
   loadSim_->sessionMods = h.mods;
   loadUids_ = uids;
   loadOk_ = false;
@@ -1535,6 +1545,15 @@ bool GameSession::FinishLoad(std::string* why) {
   if (stream_) std::fclose(stream_), stream_ = nullptr;
   if (!replayOut.empty()) {  // the game's record: see the header
     const std::string base = replayOut + (recorded_ ? "." + std::to_string(recorded_ + 1) : "");
+    const std::string table = TableFile();
+    // (a restart: no lobby wrote this game's table; it is the game before's)
+    if (tableAgain_ && table != lastTable_ && !lastTable_.empty()) {
+      std::optional<std::string> text = hostfs::ReadFile(lastTable_);
+      if (!text || !hostfs::WriteFile(table, *text))
+        Logf(LogLevel::Warning, "moho64ui: cannot copy %s to %s", lastTable_.c_str(), table.c_str());
+    }
+    lastTable_ = table;
+    tableAgain_ = false;
     ++recorded_;
     stream_ = std::fopen((base + ".stream").c_str(), "wb");
     if (!stream_) Logf(LogLevel::Warning, "moho64ui: cannot write %s.stream", base.c_str());
@@ -1542,7 +1561,7 @@ bool GameSession::FinishLoad(std::string* why) {
     if (std::FILE* f = std::fopen((base + ".seed").c_str(), "wb")) {
       std::fprintf(f, "seed %u\nmap %s\narmies %zu\nfocus army %d\n", h.seed, h.map.c_str(), h.armies.size(), session.focusArmy + 1);
       std::fprintf(f, "build %s\n", kBuildCommit);  // (the commit this program was built from: the engine's playback picks its build by it)
-      if (!replayTable.empty()) std::fprintf(f, "session %s\n", replayTable.c_str());
+      if (!table.empty()) std::fprintf(f, "session %s\n", table.c_str());
       for (const std::string& folder : replayMaps) std::fprintf(f, "maps %s\n", folder.c_str());
       std::fclose(f);
     }
@@ -2268,8 +2287,13 @@ void GameSession::StartBeatOnThread() {
     sim_->Tick();
     const auto tp = Clock::now();
     NotePictureBeat();
+    const auto tf = Clock::now();
+    // (the recorded game's fingerprint here too: it only reads the simulation, ~10 ms a beat in a big game, and so
+    // stays off the frames (the engine, Chris's item 20))
+    FingerprintBeat();
     workerSimSeconds_ = std::chrono::duration<double>(tp - ts).count();
-    workerPictureSeconds_ = std::chrono::duration<double>(Clock::now() - tp).count();
+    workerPictureSeconds_ = std::chrono::duration<double>(tf - tp).count();
+    workerFingerprintSeconds_ = std::chrono::duration<double>(Clock::now() - tf).count();
   });
 }
 
@@ -2280,7 +2304,6 @@ void GameSession::FingerprintBeat() {  // (after each beat of a recorded live ga
 
 void GameSession::FinishBeat() {
   beatToFinish_ = false;
-  FingerprintBeat();  // (the beat that ran on its own thread, done now)
   FrameTimes& times = Times();
   times.simBeats += workerSimSeconds_;
   times.pictureBeats += workerPictureSeconds_;
@@ -2288,7 +2311,7 @@ void GameSession::FinishBeat() {
   // The next beat starts this much early: the longest of the last beats, with some room (beats
   // vary; the old estimate fades slowly), at most most of a beat.
   const double speed = std::pow(10.0, pace.rate / 10.0);
-  const double took = (workerSimSeconds_ + workerPictureSeconds_) * speed;
+  const double took = (workerSimSeconds_ + workerPictureSeconds_ + workerFingerprintSeconds_) * speed;
   leadBeats_ = std::max(took * 1.3, leadBeats_ * 0.9);
   // (A beat starts only in a frame: one frame's time more, or it starts up to a frame late.)
   lead_ = std::min(0.08, leadBeats_ + lastFrameSeconds_ * speed);
@@ -2479,6 +2502,7 @@ void GameSession::StartFirstBeat() {
   worker_->Start([this] {
     sim_->Tick();
     NotePictureBeat();
+    FingerprintBeat();  // (as StartBeatOnThread)
   });
 }
 
@@ -2496,8 +2520,7 @@ void GameSession::FinishFirstBeat() {
   if (!firstBeatToFinish_) return;
   worker_->Wait();
   firstBeatToFinish_ = false;
-  Record(CommandWriter::AdvanceMessage(1));  // (the rest of RunFirstBeat, in its order)
-  FingerprintBeat();
+  Record(CommandWriter::AdvanceMessage(1));  // (the rest of RunFirstBeat, in its order; its fingerprint ran on the thread)
   NoteBeatHere();
   for (std::string& sync : sim_->TakeSync()) {
     if (onSync) onSync(sync);
