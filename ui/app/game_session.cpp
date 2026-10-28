@@ -86,6 +86,7 @@ void WorldLooks(render::World& w, const LookSettings& looks, bool photoLook) {
   w.realExhausts = looks.battleEffects;  // (engines' exhausts as lit plumes, render 3e6ce2e: Chris's item 8)
   w.remasteredBuild = looks.battleEffects;  // (render 6b8109e: the build effects remade; with the remastered effects and the modern look)
   w.energyShields = looks.energyShields;
+  w.lampsTeamColour = looks.lampsTeamColour;  // (Unit Glow Colour: team or faction, render 1fd45da)
   // (ren_DecalFadeFraction: the decals fade by distance as the original's CWldTerrainDecal::GetLODAlpha 0x89d400,
   // render 33; 0.5 stock, 0.25 once FAF's gamemain.lua has set it)
   w.decalFadeFraction = looks.decalFadeFraction;
@@ -2406,9 +2407,13 @@ void GameSession::FinishBeat() {
   NoteBeatHere();
   LongFrames().Note("(beat: after it, here: heights, allies, sounds, shakes)",
                     std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tHere).count());
-  TakeBeatSync();  // (given once the next beat is begun: Advance, GiveBeatSync)
-  static const bool syncBefore = std::getenv("MOHO64UI_SYNC_BEFORE") != nullptr;
-  if (syncBefore) GiveBeatSync();
+  TakeBeatSync();
+  // The sync goes to the interface's scripts here, before the next beat may begin: given while that beat ran, the
+  // scripts' sync handlers waited on it (they ask the simulation: UserState::LiveSim), 3.7 -> 66.9 ms a beat at
+  // 4,000 units (measured 2026-10-28, docs/ui-benchmarks.md). MOHO64UI_SYNC_AFTER=1: after it is begun (Advance,
+  // GiveBeatSync), to measure that again.
+  static const bool syncAfter = std::getenv("MOHO64UI_SYNC_AFTER") != nullptr;
+  if (!syncAfter) GiveBeatSync();
 }
 
 // The player's orders while a replay plays: only his pause and resume count (the messages
