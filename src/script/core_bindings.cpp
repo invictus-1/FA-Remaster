@@ -711,19 +711,15 @@ bool DecodeColor(const char* text, uint32_t* argb) {
   return true;
 }
 
-namespace {
-
-// IsDestroyed(obj) (FA exe 0x4c7b10): true unless obj (or its _c_object) is the handle of a live
-// engine object. Nil, plain tables and other values count as destroyed.
-int l_IsDestroyed(lua_State* L) {
+bool IsDestroyedValue(lua_State* L, int idx, bool checkGc) {
   bool destroyed = true;
-  if (lua_istable(L, 1)) lua_rawgetcobject(L, 1);
-  else lua_pushvalue(L, 1);
+  if (lua_istable(L, idx)) lua_rawgetcobject(L, idx);
+  else lua_pushvalue(L, idx);
   if (lua_type(L, -1) == LUA_TUSERDATA && lua_getmetatable(L, -1)) {
     // Is it the handle's metatable (script_handle.cpp)? This was lua_rawequal with luaL_getmetatable(L,
     // "moho64.cobject"), a string pushed (looked up) at every call; now the table's address. lua_gpg_checkgc keeps
     // the collector's check that the string's push made, so a collection still falls at the same call.
-    lua_gpg_checkgc(L);
+    if (checkGc) lua_gpg_checkgc(L);
     if (IsObjectHandleMeta(L, -1)) {
       void** box = static_cast<void**>(lua_touserdata(L, -2));
       destroyed = !box || !*box;
@@ -731,7 +727,15 @@ int l_IsDestroyed(lua_State* L) {
     lua_pop(L, 1);
   }
   lua_pop(L, 1);
-  lua_pushboolean(L, destroyed);
+  return destroyed;
+}
+
+namespace {
+
+// IsDestroyed(obj) (FA exe 0x4c7b10): true unless obj (or its _c_object) is the handle of a live
+// engine object. Nil, plain tables and other values count as destroyed.
+int l_IsDestroyed(lua_State* L) {
+  lua_pushboolean(L, IsDestroyedValue(L, 1, true));
   return 1;
 }
 

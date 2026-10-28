@@ -78,4 +78,12 @@ the original M28AI v326 and with this variant in FA Remastered and comparing the
    objects. Each place still evaluates in the same order and gives the same category. With
    `M28Utilities.bVariantVerifyNative` each place also builds its expression as written and logs any difference.
 
+8. **The leaf of FAF's navigational mesh** (2026-10-28). Every label question to FAF's navigational mesh (Jip's
+   `/lua/sim/navgenerator.lua`, MIT), and the mesh's own generation, ends in `NavGrid.FindLeafXZ`, a walk down a
+   quadtree in Lua (about 2.5 million times in the first seconds of a game against M28: the mesh at 1 s, M28's map
+   setup at 1.6 to 2.1 s). The engine does that walk: `Remastered.MakeNavGridLeafXZ`, the same reads and arithmetic
+   as FAF's two Lua functions, which it calls itself for anything unusual. `M28Utilities.VariantSwapNavGridLeaf` puts
+   it in the NavGrid class, only when the two functions are FAF's own (that file, those lines) and NavUtils is
+   FAF's. With `M28Utilities.bVariantVerifyNative` both run on every call and any difference is logged.
+
 Every change in the Lua files is marked with a comment that starts "FA Remastered variant".

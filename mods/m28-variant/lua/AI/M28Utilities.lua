@@ -372,6 +372,49 @@ if tVariantNative and tVariantNative.MakeDeepEmptyCheck then
     end
 end
 
+--FA Remastered variant: the leaf of FAF's navigational mesh at a point (Jip's /lua/sim/navgenerator.lua: NavGrid.FindLeafXZ
+--and the CompressedLabelTree.FindLeafXZ it ends in) is found by the engine (Remastered.MakeNavGridLeafXZ, the same
+--reads and arithmetic as those two Lua functions, which it calls itself for anything unusual). Every label and
+--leaf question goes through it (NavUtils.GetLabel / GetTerrainLabel, the mesh's own generation), about 2.5 million
+--times at the start of a game: the map setup at the first seconds. Only when the two functions are FAF's own (that
+--file, those lines), with NavUtils being FAF's. bVariantVerifyNative runs both on every call, uses the Lua answer and
+--logs any difference.
+iVariantVerifyLeafChecks = 0
+iVariantVerifyLeafMismatches = 0
+local function VariantIsFAFNavGeneratorOwn(f, iLine)
+    if type(f) ~= 'function' then return false end
+    local tInfo = debug.getinfo(f, 'S')
+    return tInfo and tInfo.linedefined == iLine and type(tInfo.source) == 'string' and string.find(string.gsub(string.lower(tInfo.source), string.char(92), '/'), '/lua/sim/navgenerator.lua', 1, true) ~= nil --(the source names the file with backslashes or slashes)
+end
+--Puts the engine's leaf search in the NavGrid class of tModule (FAF's navgenerator.lua module); true if it did.
+function VariantSwapNavGridLeaf(tModule)
+    if not(tVariantNative and tVariantNative.MakeNavGridLeafXZ and NavUtils and rawget(NavUtils, 'DetailedPathTo') and NavUtils == import('/lua/sim/navutils.lua')) then return false end
+    local tGridClass, tTreeClass = rawget(tModule, 'NavGrid'), rawget(tModule, 'CompressedLabelTree')
+    local fGridLeaf = type(tGridClass) == 'table' and rawget(tGridClass, 'FindLeafXZ')
+    local fTreeLeaf = type(tTreeClass) == 'table' and rawget(tTreeClass, 'FindLeafXZ')
+    if not(VariantIsFAFNavGeneratorOwn(fGridLeaf, 296) and VariantIsFAFNavGeneratorOwn(fTreeLeaf, 1002)) then return false end
+    local VariantNativeGridLeaf = tVariantNative.MakeNavGridLeafXZ(fGridLeaf, fTreeLeaf)
+    if bVariantVerifyNative then
+        rawset(tGridClass, 'FindLeafXZ', function(self, x, z)
+            local oLua = fGridLeaf(self, x, z)
+            local oNative = VariantNativeGridLeaf(self, x, z)
+            iVariantVerifyLeafChecks = iVariantVerifyLeafChecks + 1
+            if not(rawequal(oLua, oNative)) then
+                iVariantVerifyLeafMismatches = iVariantVerifyLeafMismatches + 1
+                LOG('VERIFY MISMATCH NavGrid leaf x='..tostring(x)..' z='..tostring(z)..' mismatches='..iVariantVerifyLeafMismatches)
+            end
+            if math.mod(iVariantVerifyLeafChecks, 1000000) == 0 then LOG('VERIFY NavGrid leaf checks='..iVariantVerifyLeafChecks..' mismatches='..iVariantVerifyLeafMismatches) end
+            return oLua
+        end)
+    else
+        rawset(tGridClass, 'FindLeafXZ', VariantNativeGridLeaf)
+    end
+    return true
+end
+if NavUtils and rawget(NavUtils, 'DetailedPathTo') and NavUtils == import('/lua/sim/navutils.lua') then
+    VariantSwapNavGridLeaf(import('/lua/sim/navgenerator.lua'))
+end
+
 --FA Remastered variant: category expressions kept per call site. Many checks build the same category from the same
 --categories every time they run (for example `categories.MOBILE - refCategoryScathis` for every unit of a list), and
 --each +, - or * is an engine call that makes a new category object. VariantCategoryChain(sSite, fVerify, sOps, a, b,

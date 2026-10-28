@@ -99,6 +99,156 @@ int l_VDist2Pos(lua_State* L) {
   return 1;
 }
 
+// --- From FAF's /lua/sim/NavGenerator.lua (gamedata lua.nx2), whose header says, and which applies to the two
+// --- functions l_NavGridLeafXZ follows:
+//
+// Copyright (c) 2022  Willem 'Jip' Wijnia
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+//
+// The leaf of a navigational grid at a point: FAF's navigational mesh (Jip's /lua/sim/navgenerator.lua, MIT), its
+// NavGrid.FindLeafXZ(self, x, z) and the CompressedLabelTree.FindLeafXZ(self, bx, bz, size, x, z) it ends in, as
+// those two Lua functions do it:
+//   grid:  if x > 0 and z > 0 then size = self.TreeSize; trees = self.Trees; bx = floor(x / size); bz = floor(z /
+//          size); labelTree = trees[bz][bx]; if labelTree then return labelTree:FindLeafXZ(bx * size, bz * size, size,
+//          x, z) end end; return nil
+//   tree:  if x < bx or bx + size < x or z < bz or bz + size < z then return nil end; a descent from instance =
+//          self[1] while type(instance) ~= 'table': hc = 0.5 * hc; hx = iox + hc; hz = ioz + hc; then self[instance],
+//          self[instance + 1] (iox = hx), self[instance + 2] (ioz = hz) or self[instance + 3] (both) by lz < hz and
+//          lx < hx; the leaf (or whatever non-number ends the walk) is the answer.
+// Every read goes through lua_gettable where the Lua indexes (metamethods, and the GPG default metatables of nil and
+// numbers, as the VM's); float arithmetic in the VM's type and order. Wherever the Lua would do something else (a
+// coordinate, TreeSize or tree slot that is not a number, a tree whose FindLeafXZ is not the one given, a `type'
+// that is not the base library's in the tree function's environment), the Lua function itself is called with the
+// same arguments, so its answer and its error are the Lua's own (the reads have no side effects to repeat).
+// Upvalues: 1 the Lua NavGrid.FindLeafXZ, 2 the Lua CompressedLabelTree.FindLeafXZ, 3 the base library's `type'.
+int l_NavGridLeafXZ(lua_State* L) {
+  lua_settop(L, 3);
+  const auto callLua = [L](int fn, int first, int n) {  // fn(args first..first+n-1): its results (one) are the answer
+    lua_pushvalue(L, lua_upvalueindex(fn));
+    for (int i = 0; i < n; ++i) lua_pushvalue(L, first + i);
+    lua_call(L, n, 1);
+    return 1;
+  };
+  if (lua_type(L, 2) != LUA_TNUMBER || lua_type(L, 3) != LUA_TNUMBER) return callLua(1, 1, 3);
+  const lua_Number x = lua_tonumber(L, 2), z = lua_tonumber(L, 3);
+  if (!(0 < x) || !(0 < z)) {  // (`x > 0 and z > 0': OP_LT 0 < x, then 0 < z)
+    lua_pushnil(L);
+    return 1;
+  }
+  lua_pushstring(L, "TreeSize");
+  lua_gettable(L, 1);  // 4: size
+  lua_pushstring(L, "Trees");
+  lua_gettable(L, 1);  // 5: trees
+  if (lua_type(L, 4) != LUA_TNUMBER) {
+    lua_settop(L, 3);
+    return callLua(1, 1, 3);
+  }
+  const lua_Number size = lua_tonumber(L, 4);
+  const lua_Number bx = static_cast<lua_Number>(std::floor(x / size));  // (MathFloor = math.floor: floor of the float)
+  const lua_Number bz = static_cast<lua_Number>(std::floor(z / size));
+  lua_pushnumber(L, bz);
+  lua_gettable(L, 5);  // 6: trees[bz]
+  lua_pushnumber(L, bx);
+  lua_gettable(L, 6);  // 7: labelTree
+  if (!lua_toboolean(L, 7)) {
+    lua_pushnil(L);
+    return 1;
+  }
+  const lua_Number tbx = bx * size, tbz = bz * size;
+  lua_pushnumber(L, tbx);  // 8..12: the tree call's arguments after self (bx * size, bz * size, size, x, z)
+  lua_pushnumber(L, tbz);
+  lua_pushnumber(L, size);
+  lua_pushnumber(L, x);
+  lua_pushnumber(L, z);
+  lua_pushstring(L, "FindLeafXZ");
+  lua_gettable(L, 7);  // 13: labelTree.FindLeafXZ (the `:' call's method)
+  const bool ownTree = lua_rawequal(L, 13, lua_upvalueindex(2)) && lua_type(L, 7) == LUA_TTABLE;
+  if (ownTree) {  // the tree function's own `type' (its environment's global, read at each call)
+    lua_getfenv(L, lua_upvalueindex(2));
+    lua_pushstring(L, "type");
+    lua_gettable(L, -2);
+    const bool baseType = lua_rawequal(L, -1, lua_upvalueindex(3)) != 0;
+    lua_pop(L, 2);
+    if (baseType) {
+      if (x < tbx || tbx + size < x || z < tbz || tbz + size < z) {
+        lua_pushnil(L);
+        return 1;
+      }
+      lua_Number iox = 0, ioz = 0, hc = size;
+      const lua_Number lx = x - tbx, lz = z - tbz;
+      lua_pushnumber(L, 1);
+      lua_gettable(L, 7);  // 14: instance = self[1]
+      while (lua_type(L, 14) != LUA_TTABLE) {
+        if (lua_type(L, 14) != LUA_TNUMBER) {  // (not a number: the Lua's own walk, from the start, decides)
+          lua_pushvalue(L, lua_upvalueindex(2));
+          for (int i = 7; i <= 12; ++i) lua_pushvalue(L, i);  // labelTree, bx * size, bz * size, size, x, z
+          lua_call(L, 6, 1);
+          return 1;
+        }
+        const lua_Number instance = lua_tonumber(L, 14);
+        hc = static_cast<lua_Number>(0.5f) * hc;
+        const lua_Number hx = iox + hc, hz = ioz + hc;
+        lua_Number key;
+        if (lz < hz) {
+          if (lx < hx) {
+            key = instance;
+          } else {
+            key = instance + 1;
+            iox = hx;
+          }
+        } else {
+          if (lx < hx) {
+            key = instance + 2;
+            ioz = hz;
+          } else {
+            key = instance + 3;
+            iox = hx;
+            ioz = hz;
+          }
+        }
+        lua_pushnumber(L, key);
+        lua_gettable(L, 7);
+        lua_replace(L, 14);
+      }
+      return 1;  // the leaf (stack top)
+    }
+  }
+  // labelTree:FindLeafXZ(...) through whatever FindLeafXZ it has: `return' passes its results on
+  lua_settop(L, 13);
+  lua_insert(L, 7);  // 7: the method, 8: labelTree, 9..13: arguments
+  lua_call(L, 6, 1);
+  return 1;
+}
+
+// Remastered.MakeNavGridLeafXZ(gridFindLeafXZ, treeFindLeafXZ): l_NavGridLeafXZ over FAF's two Lua functions (and the
+// base library's `type' as it is now), for a script to put in NavGrid's place.
+int l_MakeNavGridLeafXZ(lua_State* L) {
+  luaL_checktype(L, 1, LUA_TFUNCTION);
+  luaL_checktype(L, 2, LUA_TFUNCTION);
+  lua_settop(L, 2);
+  lua_pushstring(L, "type");
+  lua_rawget(L, LUA_GLOBALSINDEX);
+  lua_pushcclosure(L, l_NavGridLeafXZ, 3);
+  return 1;
+}
+
 }  // namespace
 
 void RegisterRemasteredLib(lua_State* L) {
@@ -117,6 +267,10 @@ void RegisterRemasteredLib(lua_State* L) {
   lua_pushstring(L, "VDist2Pos");
   lua_pushcfunction(L, l_VDist2Pos);
   lua_rawset(L, -3);
+  lua_pushstring(L, "MakeNavGridLeafXZ");
+  lua_pushcfunction(L, l_MakeNavGridLeafXZ);
+  lua_rawset(L, -3);
+  RegisterRemasteredReclaim(L);
   lua_rawset(L, LUA_GLOBALSINDEX);
 }
 

@@ -126,7 +126,8 @@ do
         return ids, m
     end
 
-    GridReclaim.UpdateCell = function(self, cell)
+    -- FAF's UpdateCell, then the re-sum in EntityId order
+    local function LuaUpdateCell(self, cell)
         FAFUpdateCell(self, cell)
         local reclaims = cell.Reclaim
         local ids, count = OrderedIds(cell, reclaims)
@@ -141,5 +142,42 @@ do
         end
         cell.TotalMass = totalMass
         cell.TotalEnergy = totalEnergy
+    end
+
+    -- The engine's helper (script/fastlib_reclaim.cpp) does the same in C: FAF's count and the re-sum. Not while FAF's
+    -- debug view is on (its UpdateCell reports the cell then), and not for a cell it leaves to the Lua (it returns
+    -- nothing: an id or a value it does not take). VerifyNative (a test switch, never on in a game that is played):
+    -- the Lua runs too, its results are kept, and any difference is logged.
+    local VerifyNative = false
+    local VerifyCount, VerifyMismatches = 0, 0
+    local Native = rawget(_G, 'Remastered')
+    local NativeCellTotals = Native and Native.ReclaimCellTotals
+
+    GridReclaim.UpdateCell = function(self, cell)
+        if NativeCellTotals and not Debug then
+            local count, totalMass, totalEnergy = NativeCellTotals(cell.Reclaim)
+            if count then
+                if VerifyNative then
+                    LuaUpdateCell(self, cell)
+                    VerifyCount = VerifyCount + 1
+                    if cell.TotalMass ~= totalMass or cell.TotalEnergy ~= totalEnergy or cell.ReclaimCount ~= count then
+                        VerifyMismatches = VerifyMismatches + 1
+                        LOG('GridReclaim VERIFY MISMATCH: cell ' .. tostring(cell.X) .. ' ' .. tostring(cell.Z) .. ' lua ' ..
+                            tostring(cell.ReclaimCount) .. ' ' .. tostring(cell.TotalMass) .. ' ' .. tostring(cell.TotalEnergy) ..
+                            ' native ' .. tostring(count) .. ' ' .. tostring(totalMass) .. ' ' .. tostring(totalEnergy))
+                    end
+                    if math.mod(VerifyCount, 5000) == 0 then
+                        LOG('GridReclaim VERIFY: ' .. VerifyCount .. ' cells, ' .. VerifyMismatches .. ' mismatches')
+                    end
+                    return
+                end
+                -- FAF's UpdateCell's three writes, in its order; the totals are the re-sum's
+                cell.TotalMass = totalMass
+                cell.TotalEnergy = totalEnergy
+                cell.ReclaimCount = count
+                return
+            end
+        end
+        LuaUpdateCell(self, cell)
     end
 end
