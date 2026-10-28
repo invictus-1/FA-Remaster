@@ -250,6 +250,8 @@ local function first()
     check("a click on the track jumps there", waitJump(3000), true)
     LOG(string.format("TEST note: a click at the place of beat %d: at %d (one pixel is %.1f beats)", target, GameTick(), s.ticks / Timeline.Controls.track.Width()))
     check("it lands at the clicked beat", near(GameTick(), target, s.ticks / Timeline.Controls.track.Width() + 3), true)
+    -- (the thumb follows in the bar's OnFrame, which comes after the script threads, as in the original's app frame)
+    WaitFrames(1)
     check("the thumb stands there", near(middle(Timeline.Controls.thumb), Timeline.XOfTick(GameTick()), 2), true)
 
     -- a click on the commander's marker: the replay jumps to 5 s before his death, and he is selected
