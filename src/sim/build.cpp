@@ -1404,7 +1404,12 @@ int TickMobileBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
         // walk ended, took (952, 723) and drove north past the builders.
       }
       if (!InBuildRange(u, *t.bp, t.site)) return kTaskFailed;  // no re-move
-      StopMoving(u);
+      // (no stop here: CUnitMobileBuildTask's state 1 0x5f778a..0x5f78db tests the range (0x5f782d) and the site
+      // (0x5f784f), aims the arm (0x5f78bf), steps the state and sets Building (0x5f78ce); the navigator is not asked.
+      // A goal left from the order before goes on. Seen: MP1 10711, army 0's Aeon engineer 0x57 (hover) starts a
+      // storage of FAF's RingWithStorages where it stands, with its reclaim walk's goal still on: ours stopped it,
+      // the brake point turned its hull to the brake heading and its wobble tilt went 1e-6 off the original's, which
+      // grew until army 0's 0x2 took another way round it at 10797.)
       {  // aim the build arm at the middle of the structure (0x5f78bf)
         const UnitBpData& sd = GetUnitBpData(L, *t.bp);
         SetArmAimTarget(sim, u, Vec3{t.site.x, t.site.y + sd.sizeY * 0.5f + sd.collisionOffsetY, t.site.z});
