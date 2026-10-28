@@ -88,7 +88,7 @@ float3 WorldAt(float2 pixel, float depth) {
 }  // namespace
 
 // ([padsnow] the decals' shader is the head above, this, and the tail below, in that order: the pads' takes this too)
-const char kMarkSnowLying[] = R"hlsl(#if defined(MODERN_RELIEF) || defined(DECAL_SNOW_GROUND)
+const char kMarkSnowLying[] = R"hlsl(
 // How much snow lies on a mark's place (0..1), `fallen` the snow over it (the weather's, times the share on the mark),
 // `ground` the ground's own slope there: as ModernLight lays it on the ground, level ground first, in patches. [decalsnow]
 // With the snow ground (DECAL_SNOW_GROUND) as the ground's snow pipeline lays it: deeper in the lee and hollows, thinner
@@ -116,7 +116,12 @@ float MarkSnowLying(float3 world, float3 ground, float fallen) {
 #endif
   return smoothstep(bar, bar + 0.2, takes) * smoothstep(0.25, 0.5, ground.y);
 }
-#endif
+// [snowfix] How deep a normal decal lies under the snow (0..1; options.y: -1 - the share of the lying snow on it): in the modern
+// look, as the snow fills it. Its relief is then read from a softer level of its picture and laid back toward the ground's
+// own slope (MarkSnowLying), so that the map's craters and trenches read through deep snow as soft hollows, not sharp rings.
+float NormalDecalBuried(float4 options) {
+  return look > 0.5 && weather.y > 0 ? saturate(weather.y * (-1 - options.y) * 1.5 - 0.2) : 0;
+}
 )hlsl";
 
 namespace {
@@ -143,11 +148,9 @@ float4 NormalDecalModern(float4 c, float4 options, float4 shape, float3 world) {
   float3 turned = float3(inDecal.x * shape.z + inDecal.z * shape.w, inDecal.y, -inDecal.x * shape.w + inDecal.z * shape.z);
   float3 tilted = normalize(ground + turned - float3(0, 1, 0));
   // (where the snow lies on it - thick, it fills the relief but for a hint of it)
-  float snow = -1 - options.y;
-  [branch] if (weather.y > 0 && snow > 0) {
-    float fallen = weather.y * snow;
-    tilted = normalize(lerp(tilted, ground, MarkSnowLying(world, ground, fallen) * saturate(fallen * 1.5 - 0.2) * 0.75));
-  }
+  // ([snowfix] filled all but a tenth, its relief read softer: PS)
+  float buried = NormalDecalBuried(options);
+  [branch] if (buried > 0) tilted = normalize(lerp(tilted, ground, MarkSnowLying(world, ground, weather.y * (-1 - options.y)) * buried * 0.9));
   float3 sun = ToLinear(sunColor) * (lightMultiplier * modern.x * SunShadow(world, ground) * CloudShadow(world));
   float3 fill = ToLinear(shadowFill) * 0.5;
   float3 skyFlat, skyTilted;
@@ -213,6 +216,11 @@ float4 PS(VOut i) : SV_Target {
     return c;
   }
   if (i.options.z > 1.5) {
+    // [snowfix] (under lying snow: its relief from a softer level of its picture, NormalDecalBuried)
+    float buried = NormalDecalBuried(i.options);
+    // (with the place's steps worked out here, outside the branch, and made that many times larger)
+    float2 at = local * 0.5 + 0.5, stepX = ddx(at), stepY = ddy(at);
+    [branch] if (buried > 0) c = decalTexture.SampleGrad(samplerAniso, at, stepX * exp2(3.5 * buried), stepY * exp2(3.5 * buried));
 #ifdef MODERN_RELIEF
     return NormalDecalModern(c, i.options, i.shape, world);  // [scars] (Decals::modernRelief)
 #else
@@ -229,6 +237,8 @@ float4 PS(VOut i) : SV_Target {
     }
     float3 turned = float3(inDecal.x * i.shape.z + inDecal.z * i.shape.w, inDecal.y, -inDecal.x * i.shape.w + inDecal.z * i.shape.z);
     float3 tilted = normalize(ground + turned - float3(0, 1, 0));
+    // [snowfix] (in the modern look under lying snow: filled all but a tenth, as the modern relief's)
+    [branch] if (buried > 0) tilted = normalize(lerp(tilted, ground, MarkSnowLying(world, ground, weather.y * (-1 - i.options.y)) * buried * 0.9));
     float shade = SunShadow(world, ground);
     float3 before = OriginalLight(dot(sunDirection, ground), shade), after = OriginalLight(dot(sunDirection, tilted), shade);
     float3 change = clamp(after / max(before, 0.03), 0.35, 2.5);
@@ -250,6 +260,14 @@ float4 PS(VOut i) : SV_Target {
 #endif
   if (i.options.w > 0.5) {  // a remastered picture's own relief, tilting the ground's slope as a normal decal does
     float2 t = reliefTexture.Sample(samplerAniso, local * 0.5 + 0.5).ag * 2 - 1;
+#ifndef DECAL_SNOW_GROUND
+    // [snowfix] (in the modern look the snow over a picture is laid by ModernLight, which keeps half of any relief: its own
+    // relief filled as a normal decal's is, by as much as lies on it; with the snow ground the picture itself thins out instead)
+    [branch] if (look > 0.5 && weather.y > 0 && i.options.y > 0) {
+      float fallen = weather.y * i.options.y;
+      t *= 1 - 0.9 * MarkSnowLying(world, N, fallen) * saturate(fallen * 1.5 - 0.2);
+    }
+#endif
     float3 inDecal = float3(t.x, sqrt(saturate(1 - dot(t, t))), -t.y);  // (its y up the picture: toward the decal's -z)
     float3 turned = float3(inDecal.x * i.shape.z + inDecal.z * i.shape.w, inDecal.y, -inDecal.x * i.shape.w + inDecal.z * i.shape.z);
     N = normalize(N + turned - float3(0, 1, 0));
@@ -738,8 +756,9 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
     n.glow = d.ramp ? glow : d.normal ? (d.ours ? 1.0f : 0.0f) : d.relief && !d.mark && !d.water ? 1.0f : 0.0f;
     // [scars] (modernRelief: a normal decal's age says how much of the lying snow covers it, as a picture's, from -1 down;
     // a plain normal map's glow 2)
+    // ([snowfix] every normal decal's: the plain ones' relief is filled under the snow too, NormalDecalBuried)
+    if (d.normal && !d.water && !d.mark && !d.ramp) n.age = -1 - (snowLying > 0 ? Clamp(snowFallen_ - d.snowAtBirth, 0, 1) : 1);
     if (modernNormals && d.normal && !d.water && !d.mark && !d.ramp) {
-      n.age = -1 - (snowLying > 0 ? Clamp(snowFallen_ - d.snowAtBirth, 0, 1) : 1);
       if (!d.ours && Plain(d.texture.id)) {
         n.glow = 2;
         ++plainNormals;

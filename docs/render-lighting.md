@@ -2249,3 +2249,46 @@ shader path with them:
   what they cost without it.)
 - Off: nothing of it runs and no art is loaded; regress3 0 px both backends; scars, snow and dirt on, grime off: 0 px
   against render 841530e.
+
+## The snow on SETONS_R fixed up, a thin stage as it builds up, and units' own prints in the deep tracks (2026-10-27; a helper's, for review) [snowfix] [snowthin] [hdprints]
+
+Chris, 2026-10-27: "lets just fix the snow up real quick"; the visuals session's section 69 and 69.1 (her A/B films at the
+cameras 520,560,160,55,200 and 672,346,70,40,35).
+- **The honeycomb under the snow was the map's trenches** (and the sharp rings its craters): SETONS_R lays 40 pieces of
+  `trench_normals` (7.9 units square) in zigzag rows, headings alternating 1.90 / 2.82, and 130 `oldcrater_normals`; under snow
+  only their relief shows, and the zigzags read as cells about ten units across. `--map-decals off` or `albedo` takes both
+  away, `normals` keeps both. The normal decals' plain path (without `--mark-relief`) had no snow at all; the modern relief's
+  kept a quarter of the relief at full snow. Now (decals.cpp, `NormalDecalBuried`) every normal decal is told how much of the
+  lying snow lies on it (the map's own: all of it; a crater laid in a game: what has fallen since), and in the modern look its
+  relief is read from a softer level of its picture (up to 3.5 levels) and laid back toward the ground's slope by nine
+  tenths of what lies there: deep snow over a crater is a soft hollow, a trench a hint. A picture's own relief (the visuals
+  session's crater pictures) is filled the same way where ModernLight lays the snow on it. Without snow, or in the original
+  look, nothing changes.
+- **The streaks on the shore banks with `--snow-ground`**: the snow ground took the ground's slope from the map's normal map,
+  which on SETONS_R holds fine diagonal ripples about a unit apart; the wind's lee and the steep thinning turned them into
+  stripes of bare ground, the layers' pictures (laid from straight above) showing between them stretched down the bank. The
+  snow ground now takes its slope from the heights a unit and a half to either side (`SnowAround`), and where a face steeper
+  than some 37 degrees (all of it from some 57) goes bare as snow comes, it shows the layers' colours on the whole, colder and
+  darker as frozen earth and rock, in slow patches, with its own slope and not the stretched small shapes (terrain.cpp, before
+  `SnowMakeUp`). The bare shore strip itself is the drift mask's scouring (steep and crest ground: about -1 of the wind's
+  laying there) on top of the renderer's own steep term: by design, but strong; for the visuals session to judge.
+- **The cover's tufts**: the ground cover is sunk as render 8ea9e65 made it (the same picture with and without
+  `--ground-cover` in lying snow at the films' cameras and at 25 units). What reads as tufts and smeared bushes standing
+  through the snow are the scoured patches (as above, and the props' windward scoops) with the soft, wide margin the snow has
+  from afar; the thin stage below breaks that margin up into the real scan's patches.
+- **The thin stage** [snowthin]: the map's `"snow"` entry may name `"thin": <material>` and `"thin_cover": <one-channel
+  picture>` (1 where its snow lies, 0 where the ground shows; tiling with the material, at its real size). The cover is read
+  into the snow's normals' set (t5; a BC4 picture in a BC5 set has its channel put in both: TextureCache::Layers), its layer
+  and repeat in `snowSlice[3]`; where the snow lies partly (its wider, mottled margin) it lies where the cover is over what is
+  still bare of it (1 - how much lies), in place of the heights' break-up, whole once it all lies. The material's own pictures
+  are not drawn: the snow is the fresh one's over the map's own ground.
+- **Units' own prints** [hdprints]: a remastered unit's folder may hold `<ID>_prints.bp`, `Prints { Tread = { Texture, Width,
+  Length }, Tyre = { ... }, Foot = { Texture, Size = { x, z } } }` (sizes in world units; pictures one channel, white deepest,
+  their top the unit's front; a name without a folder in the unit's folder): read with its model (Model::prints). With deep
+  tracks on: a walker's footprints laid by its scripts (CreateSplatOnBone) take its Foot picture at its own size where the
+  script lays them; a walker that lays none presses its Foot where its feet are set down, turned with the foot (the foot
+  bone's turn from its rest); a vehicle with a Tread (else a Tyre) presses it along its way every frame, end to end, a quarter
+  of the picture a piece (a bend followed four times as closely as by whole pieces, the pattern unbroken), in place of the two
+  bands and of the tread prints its scripts lay (laid where the scripts lay them, a fifth of a second apart, they followed a
+  bend in long chords). The picture's red is the depth (the game's alpha is the shape); the berm is the field's own, as
+  before. Deep tracks off: nothing is read or pressed.

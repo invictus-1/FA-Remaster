@@ -496,11 +496,27 @@ float3 BeyondBack(float3 d) {
   [branch] if (beyondSea.x > 0.5) back = BeyondSea(d, back);  // (sky) from above, the far sea (view.h)
   return back;
 }
+// [weather] What the air between the eye and `world` adds to what is seen there (rgb) and what of that comes through (a),
+// as ThroughAirTo lays them (view.h).
+float4 AirOver(float3 world) {
+  [branch] if (air.x > 0.5) return AirAt(world);
+  float hazed = weather.z > 0 ? min(1 - exp(-length(world - cameraPosition) * weather.z), weather.w) : 0;
+  float lost = MistLost(world);
+  return float4(AirColor() * (hazed * (1 - lost)) + MistColor() * lost, (1 - hazed) * (1 - lost));
+}
 // The world beyond the map's edge: ground or water there, a shade dimmer just outside (the
 // playable ground ends here) and lost in the distance farther out: it goes over into what the
 // sky's pass shows in that direction, so the land has no rim. On the map: the colour as it is.
+// [weather] The dimming and the line along the edge are the ground's, not the air's before it: what the air adds (fog, mist,
+// the haze) is taken off first and laid again after, as on the map (they darkened the fog past the edge: seams down the
+// strategic view at the map's sides, Chris's snapshot test, 2026-10-25).
 float3 BeyondFar(float3 color, float3 world, float outside, float pixel) {
   float t = saturate(outside * beyond.z);
+  float3 airAdds = 0;
+  [branch] if (air.x > 0.5 || weather.z > 0 || mist.x > 0) {
+    airAdds = AirOver(world).rgb;
+    color = max(color - airAdds, 0);
+  }
   // without the haze (beyond.w < 0): the land stays clear and is lost only in the last tenth of
   // the way, where it meets the horizon
   if (beyond.w < 0) t = saturate((t - 0.9) * 10);
@@ -523,6 +539,7 @@ float3 BeyondFar(float3 color, float3 world, float outside, float pixel) {
     color = lerp(color, dot(color, float3(0.3, 0.6, 0.1)), 0.35 * near) * lerp(1, abs(beyond.w), near);
     if (pixel > 0) color *= 1 - 0.7 * saturate(1 - outside / max(pixel * 1.6, 1e-4));
   }
+  color += airAdds;  // ([weather] the air before it again)
   [branch] if (beyondSea.x > 0.5 && t <= 0) return color;  // ((sky) the far sea is dearer: what it is lost in only where it is)
   return lerp(color, BeyondBack(normalize(world - cameraPosition)), t * t * (3 - 2 * t));
 }
@@ -671,7 +688,11 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
     [branch] if (snowEdge.x >= 0) {
       lying = smoothstep(bar - 0.15, bar + 0.35, takes) * smoothstep(0.25, 0.5, N.y);
       lying = saturate(lying + (snowMottle - 0.5) * 3.2 * lying * (1 - lying));
-      lying = lerp(lying, saturate((snowEdge.x + lying * 1.6 - 1) / 0.6), snowEdge.y);
+      // ([snowthin] with the map's thin snow's cover: as it builds up the snow lies where the cover is over what is still bare
+      // of it (1 - how much lies), in the real scan's patches over the map's own ground, and whole once it all lies; without
+      // it, broken up by the ground's and its own heights)
+      float edged = snowCover >= 0 ? smoothstep(-0.08, 0.08, snowCover - (1 - lying) * 1.1) : saturate((snowEdge.x + lying * 1.6 - 1) / 0.6);
+      lying = lerp(lying, edged, snowEdge.y);
     }
     occlusion = lerp(occlusion, snowMatter.x, lying * snowSurface.w);
 #endif

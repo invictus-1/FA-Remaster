@@ -149,6 +149,13 @@ struct WorldPicture::Impl {
   // the minimap: the ground as drawn once, the camera it was drawn with, and the picture handed out
   std::vector<uint32_t> mapGround, mapPixels;
   float mapHour = -100, mapWeather = -100;  // the light the ground was drawn in
+  // [weather] The ground drawn anew and left on the card (Device::CaptureLater): taken from it at a later call, the ground
+  // drawn before shown until then. Drawn anew as the hour and the weather move, the minimap waited for the card each time
+  // (the main frame's work and its own: some 8 ms of a 4K frame, the frame after slowed too): a hitch at a rain's start
+  // (the clouds' cover jumped), every few seconds while the ground got wet or a fog came, every quarter of an hour of the
+  // game's day (Chris's snapshot test, 2026-10-25, "Rain pops in at once with a small hitch").
+  bool mapWaiting = false;
+  void GroundFromCapture(int width, int height);
   float mapX0 = 0, mapY0 = 0, mapX1 = 1, mapY1 = 1;  // where the map's corners (0, 0) and (width, height) are on it
   std::vector<uint8_t> seen;  // what the focus army sees (SimFrames::TakeSight); empty: no focus army
   int seenCells = 0;
@@ -1612,6 +1619,25 @@ void WorldPicture::MapSize(float* width, float* height) const {
   *height = impl_->world ? static_cast<float>(impl_->world->map.height) : 0;
 }
 
+// The minimap's ground from the picture read back (`capture`).
+void WorldPicture::Impl::GroundFromCapture(int width, int height) {
+  mapGround.resize(static_cast<size_t>(width) * static_cast<size_t>(height));
+  const size_t count = std::min(mapGround.size(), capture.size() / 4);
+  const uint8_t* p = capture.data();
+  // a map is read, not looked at: its ground is brought up to a middling brightness whatever the
+  // hour (never dimmed, at most four times as bright), and its dark end lifted a little, so that
+  // land and water can be told apart at night and under the fog of war too
+  double sum = 0;
+  for (size_t i = 0; i < count; ++i) sum += 0.2126 * p[i * 4] + 0.7152 * p[i * 4 + 1] + 0.0722 * p[i * 4 + 2];
+  const float mean = count ? static_cast<float>(sum / static_cast<double>(count)) : 96.0f;
+  const float gain = std::clamp(96.0f / std::max(mean, 1.0f), 1.0f, 4.0f);
+  uint8_t lifted[256];
+  for (int v = 0; v < 256; ++v)
+    lifted[v] = static_cast<uint8_t>(std::min(255.0f, 255.0f * std::pow(std::min(static_cast<float>(v) * gain / 255.0f, 1.0f), 0.8f)) + 0.5f);
+  for (size_t i = 0; i < count; ++i, p += 4)
+    mapGround[i] = 0xff000000u | static_cast<uint32_t>(lifted[p[0]]) << 16 | static_cast<uint32_t>(lifted[p[1]]) << 8 | lifted[p[2]];
+}
+
 const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height, bool resourceIcons) {
   Impl& m = *impl_;
   width = std::max(width, 16);
@@ -1625,6 +1651,13 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height, bo
   // the ground is drawn anew when the light has changed: the hour by a quarter, or the weather
   const float hourNow = w.timeOfDay < 0 ? -1 : w.timeOfDay;
   const float weatherNow = w.timeOfDay < 0 ? 0 : w.cloudCover + w.wet * 2 + w.snowLying * 4 + w.fog * 8;
+  // [weather] the ground drawn anew before and left on the card: taken once the card is done with it (lost: drawn again)
+  if (m.mapWaiting) {
+    const int taken = m.device->TakeCapture(&m.capture);
+    if (taken != 0) m.mapWaiting = false;
+    if (taken > 0 && m.mapWidth == width && m.mapHeight == height) m.GroundFromCapture(width, height);
+    if (taken < 0) m.mapHour = -100;
+  }
   if (m.mapWidth != width || m.mapHeight != height || m.mapGround.empty() || std::fabs(hourNow - m.mapHour) > 0.25f ||
       std::fabs(weatherNow - m.mapWeather) > 0.2f || !std::equal(m.mapRect, m.mapRect + 4, w.playable)) {
     m.mapHour = hourNow;
@@ -1647,6 +1680,10 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height, bo
     // resized to it: the window was resized twice for every redraw (to the minimap's size and back for the next frame),
     // each time waiting for the card and making the swap chain's buffers anew. Where the device cannot, as before.
     const bool own = !minimapByResize && !m.photo.on && m.device->SetPhotoWindow(width, height);  // (a photo's own frames use it: then as before)
+    // [weather] read back later, the ground drawn before shown meanwhile: when there is one of this size
+    const bool later = own && !minimapWaits && !m.mapGround.empty() && m.mapWidth == width && m.mapHeight == height && m.device->CapturesLater();
+    m.mapWaiting = false;
+    if (later) m.device->CaptureLater(true);
     if (!own) m.device->Resize(width, height);
     const bool icons = w.iconsOn, shadows = w.shadowsOn, deposits = w.depositIcons;
     std::vector<World::Ghost> ghosts;
@@ -1691,21 +1728,8 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height, bo
     m.mapHeight = height;
     MinimapProject({0, c.target.y, 0}, &m.mapX0, &m.mapY0);
     MinimapProject({mw, c.target.y, mh}, &m.mapX1, &m.mapY1);
-    m.mapGround.resize(static_cast<size_t>(width) * static_cast<size_t>(height));
-    const size_t count = std::min(m.mapGround.size(), m.capture.size() / 4);
-    const uint8_t* p = m.capture.data();
-    // a map is read, not looked at: its ground is brought up to a middling brightness whatever the
-    // hour (never dimmed, at most four times as bright), and its dark end lifted a little, so that
-    // land and water can be told apart at night and under the fog of war too
-    double sum = 0;
-    for (size_t i = 0; i < count; ++i) sum += 0.2126 * p[i * 4] + 0.7152 * p[i * 4 + 1] + 0.0722 * p[i * 4 + 2];
-    const float mean = count ? static_cast<float>(sum / static_cast<double>(count)) : 96.0f;
-    const float gain = std::clamp(96.0f / std::max(mean, 1.0f), 1.0f, 4.0f);
-    uint8_t lifted[256];
-    for (int v = 0; v < 256; ++v)
-      lifted[v] = static_cast<uint8_t>(std::min(255.0f, 255.0f * std::pow(std::min(static_cast<float>(v) * gain / 255.0f, 1.0f), 0.8f)) + 0.5f);
-    for (size_t i = 0; i < count; ++i, p += 4)
-      m.mapGround[i] = 0xff000000u | static_cast<uint32_t>(lifted[p[0]]) << 16 | static_cast<uint32_t>(lifted[p[1]]) << 8 | lifted[p[2]];
+    if (later) m.mapWaiting = true;  // [weather] (taken at a later call)
+    else m.GroundFromCapture(width, height);
   }
   m.mapPixels = m.mapGround;
   // what the focus army does not see is darker, but less so than in the main picture: 11/16 of its

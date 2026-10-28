@@ -30,7 +30,8 @@ enum class Climate { Temperate, Cold, Dry, Autumn };
 // whoever asks with the same two gets the same weather, so every player of a game sees the same,
 // a replay shows what the game showed, and nothing needs to be kept or sent. Time is cut into
 // spells of `spell` seconds; each spell has one kind of weather, drawn by the seed (the first is
-// always fair), and the last quarter of a spell goes over into the next.
+// always fair), and the last 45 % of a spell goes over into the next ([onset]: rain or snow coming, the clouds gather
+// first and it begins once they have; going, it eases off first and the clouds break up after).
 WeatherNow WeatherAt(uint32_t seed, double seconds, Climate climate = Climate::Temperate, float spell = 300);
 // A storm's lightning alone: how bright its flash is at that moment, for rain that hard.
 // `stroke`: which stroke it is (a number of its own for every stroke of a game), for whoever draws

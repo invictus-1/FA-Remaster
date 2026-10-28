@@ -1421,6 +1421,37 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
     ownTreadsScroll = t["Scrolling"].kind == BpValue::Bool && t["Scrolling"].boolean;
     ownTreadsHeight = ownTreadsScroll && t["Height"].kind == BpValue::Bool && t["Height"].boolean;
   }
+  // [hdprints] its own ground prints for the deep tracks (its folder's <file>_prints.bp: Model::prints); a picture named
+  // without a folder lies in the unit's folder
+  if (previewed && stem.empty()) {
+    const std::string printsFile = preview + file + "_prints.bp";
+    auto text = vfs_->Exists(printsFile) ? vfs_->ReadFile(printsFile) : std::nullopt;
+    BpValue t;
+    if (text && !ReadBlueprintFile(*text, &t)) fprintf(stderr, "render: %s: cannot be read\n", printsFile.c_str());
+    auto print = [&](const char* kind, Model::Print* out) {
+      const BpValue& e = t[kind];
+      const std::string name = e["Texture"].StringOr(std::string());
+      if (name.empty()) return;
+      float w = static_cast<float>(e["Width"].NumberOr(0)), l = static_cast<float>(e["Length"].NumberOr(0));
+      const BpValue& size = e["Size"];
+      if (size.items.size() >= 2) w = static_cast<float>(size.Item(0).NumberOr(0)), l = static_cast<float>(size.Item(1).NumberOr(0));
+      if (w <= 0 || l <= 0) {
+        fprintf(stderr, "render: %s: %s has no size (not used)\n", printsFile.c_str(), kind);
+        return;
+      }
+      out->texture = name[0] == '/' ? name : preview + name;
+      out->width = w, out->length = l;
+      if (!vfs_->Exists(out->texture)) {
+        fprintf(stderr, "render: %s: %s's picture %s is not there (not used)\n", printsFile.c_str(), kind, out->texture.c_str());
+        *out = Model::Print{};
+      }
+    };
+    if (text) {
+      print("Tread", &m->prints.tread);
+      print("Tyre", &m->prints.tyre);
+      print("Foot", &m->prints.foot);
+    }
+  }
   for (size_t i = 0; i < sources.size(); ++i) {
     const LodSource& s = sources[i];
     ModelLod lod;

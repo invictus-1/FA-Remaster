@@ -1040,6 +1040,11 @@ float World::GroundHeight(float x, float z) const {
   return map.water.present ? std::max(y, map.water.elevation) : y;
 }
 
+// [onset] How far rain or snow falling this hard has set in (0..1): all of it from an eighth of the most. What it does at
+// once - the sky's cover it brings, the ground getting wet or snowy, the mist it keeps off - grows with it from the first
+// drop instead of all at once (as it falls gradually now, weather.cpp's WeatherAt); the same as before from an eighth on.
+static float SetIn(float falling) { return std::clamp(falling * 8, 0.0f, 1.0f); }
+
 // The game's weather moved on to this frame (with a time of day, the modern look): what it is by itself, and what it has
 // done to surfaces by now. The time since the last frame's.
 float World::AdvanceWeather(float time, double clock) {
@@ -1055,10 +1060,10 @@ float World::AdvanceWeather(float time, double clock) {
   }
   const float dt = weatherTime_ < 0 ? 0 : std::clamp(time - weatherTime_, 0.0f, 0.5f);
   weatherTime_ = time;
-  wet = std::clamp(wet + (rain > 0 ? dt / 15 : -dt / 120), 0.0f, 1.0f);
+  wet = std::clamp(wet + dt / 15 * SetIn(rain) - dt / 120 * (1 - SetIn(rain)), 0.0f, 1.0f);  // ([onset] by how far it has set in)
   // (snow builds up over two and a half minutes of snowfall and is gone in five; while it melts,
   // the ground it leaves is wet)
-  snowLying = std::clamp(snowLying + (snow > 0 ? dt / 150 : -dt / 300), 0.0f, 1.0f);
+  snowLying = std::clamp(snowLying + dt / 150 * SetIn(snow) - dt / 300 * (1 - SetIn(snow)), 0.0f, 1.0f);  // ([onset])
   if (snow <= 0 && snowLying > 0) wet = std::max(wet, std::min(snowLying * 3, 1.0f));
   return dt;
 }
@@ -1336,7 +1341,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     tracksCovering_ = snow > 0 ? dt * snow / 90 : 0;
     decals.snowLying = snowLying;
     decals.snowing = snow;
-    const float cover = std::max({cloudCover, rain > 0 ? 0.8f + 0.2f * rain : 0.0f, snow > 0 ? 0.75f + 0.2f * snow : 0.0f, fog * 0.6f});
+    const float cover = std::max({cloudCover, SetIn(rain) * (0.8f + 0.2f * rain), SetIn(snow) * (0.75f + 0.2f * snow), fog * 0.6f});  // ([onset])
     skyLight = SkyAt(timeOfDay, cover, skyTables && look == Look::Modern);
     Vec3 bolt{0, 0, 0};
     if (flash > 0) {  // lightning: for a moment the clouds light everything (less to an eye opened for the night)
@@ -1416,8 +1421,15 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     c.weather[1] = snowLying;
     // (rain and snow thicken the air a little; the air never hides all of a far thing, or the
     // whole map seen from high up would be gone)
-    c.weather[2] = 0.0035f * fog + 0.0007f * rain + 0.0010f * snow;
-    c.weather[3] = 0.55f + 0.3f * fog;
+    // [weather] (Chris's snapshot test, 2026-10-25: "Foggy weather: too heavy, the map hard to see, odd light. Wanted: toned
+    // down and low, near the ground, not the whole map") With the low fog (World::lowFog), fog past the quarter the rain's and
+    // snow's murk brings (a storm's, a snowfall's, an overcast day's: those as they were) goes mostly into a layer that hugs
+    // the ground and the water, the mist's (below: deeper than the mist, thickest over the water and in the hollows, thin
+    // over the hills), and only a little of it into the air all over: from far up the map shows through it.
+    const float fogAll = lowFog ? std::min(fog, 0.25f) + 0.15f * std::max(fog - 0.25f, 0.0f) : fog;
+    const float fogLow = lowFog ? std::max(fog - 0.25f, 0.0f) / 0.75f : 0.0f;
+    c.weather[2] = 0.0035f * fogAll + 0.0007f * rain + 0.0010f * snow;
+    c.weather[3] = 0.55f + 0.3f * fogAll;
     distantLand.thickAir = c.weather[2];  // (beyondland: the weather's own, before a cinematic camera's least)
     // (cinecam) a cinematic camera low over the land sees far toward the horizon: some of the air's haze then, even
     // in clear weather, so that the distance lies back as it does outdoors
@@ -1434,15 +1446,20 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       const float h = timeOfDay;
       const float byHour = h < 12 ? (0.3f + 0.7f * rise(4, 5.5f, h)) * (1 - rise(7, 9.5f, h)) : 0.3f * rise(19, 21, h);
       // ([seasons] more in autumn)
-      mistNow = byHour * (climateNow == Climate::Dry ? 0.25f : climateNow == Climate::Autumn ? 1.3f : 1.0f) + 0.5f * fog + (rain > 0 ? 0.0f : 0.4f * wet);
-      mistNow = std::clamp(mistNow * (1 - 0.5f * rain), 0.0f, 1.0f) * (snow > 0 ? 0.0f : 1.0f);
+      mistNow = byHour * (climateNow == Climate::Dry ? 0.25f : climateNow == Climate::Autumn ? 1.3f : 1.0f) + 0.5f * (lowFog ? std::min(fog, 0.25f) : fog) + 0.4f * wet * (1 - SetIn(rain));  // ([onset]; [weather] the low fog's below)
+      mistNow = std::clamp(mistNow * (1 - 0.5f * rain), 0.0f, 1.0f) * (1 - SetIn(snow));
     }
-    if (haveMap_ && mistNow > 0) {
+    // [weather] the low fog in the mist's layer: up to 1.2 mists more, the layer three times as deep at its thickest (it fills
+    // the hollows and leaves the hilltops), what it may hide of a far thing a little more
+    const float fogLayer = fogLow * 1.2f * (1 - SetIn(snow));
+    if (haveMap_ && mistNow + fogLayer > 0) {
       // (seen straight down through all of it at its floor, in the middle of a bank, full mist hides a third)
-      c.mist[0] = 0.23f * mistNow / mistDepth_;
+      const float depth = mistDepth_ * (1 + 2 * fogLow);
+      c.mist[0] = 0.23f * (mistNow + fogLayer) / depth;
       c.mist[1] = mistFloor_;
-      c.mist[2] = 1 / mistDepth_;
-      c.mist[3] = 0.6f;
+      c.mist[2] = 1 / depth;
+      c.mist[3] = 0.6f + 0.2f * fogLow;
+      c.mistMore[0] = 0.75f * fogLayer / (mistNow + fogLayer);  // (the low fog's share of the layer: its banks more even)
     }
     SetSky(skyLight, &c);
     if (skyTables && look == Look::Modern) {  // the sky from tables: what reads the computed sky reads its view (view.h, ComputedSky)
@@ -2141,7 +2158,7 @@ void World::WatchWear(const Frame& frame) {
       w.wet = wet;
       w.snowLying = snowLying;
       // (the sun on it: by day, as much as the clouds let through)
-      const float cover = std::max({cloudCover, rain > 0 ? 0.8f + 0.2f * rain : 0.0f, snow > 0 ? 0.75f : 0.0f, fog * 0.6f});
+      const float cover = std::max({cloudCover, SetIn(rain) * (0.8f + 0.2f * rain), SetIn(snow) * 0.75f, fog * 0.6f});  // ([onset])
       w.sun = std::clamp(skyLight.daylight, 0.0f, 1.0f) * (1 - std::clamp(cover, 0.0f, 1.0f));
     } else {
       w.sun = 0.6f;  // (the map's own light: a fair day)
@@ -2872,17 +2889,24 @@ void World::PressUnit(const FrameUnit& u, const Frame& frame, const std::string&
   // (a walker by the bones that stand for its feet, where its pose has them)
   const std::string path = models.UnitBlueprintPath(blueprint);
   Vec3 feet[8];
+  float turns[8] = {};  // [hdprints] (how far each foot is turned from the unit's way, from its rest: its own sole turned with it)
   int footCount = 0;
   for (uint32_t b : trackField.FootBones(model, path)) {
     // (at rest, unless the pose moves it; the way from this beat's pose to the next's, as the model is drawn)
     Vec3 now = model->bones[b].position * model->scale, next = now;
+    Quat turned = model->bones[b].rotation;
     for (uint32_t i = u.firstBone; i < u.firstBone + u.boneCount && i < frame.bones.size(); ++i)
-      if (frame.bones[i].bone == b) now = next = {frame.bones[i].position[0], frame.bones[i].position[1], frame.bones[i].position[2]};
+      if (frame.bones[i].bone == b) {
+        now = next = {frame.bones[i].position[0], frame.bones[i].position[1], frame.bones[i].position[2]};
+        turned = {frame.bones[i].orientation[0], frame.bones[i].orientation[1], frame.bones[i].orientation[2], frame.bones[i].orientation[3]};
+      }
     for (uint32_t i = u.nextFirstBone; i < u.nextFirstBone + u.nextBoneCount && i < frame.bones.size(); ++i)
       if (frame.bones[i].bone == b) next = {frame.bones[i].position[0], frame.bones[i].position[1], frame.bones[i].position[2]};
+    const Vec3 way = Rotate(Mul(turned, Conjugate(model->bones[b].rotation)), Vec3{0, 0, 1});
+    turns[footCount] = std::fabs(way.x) + std::fabs(way.z) > 1e-3f ? std::atan2(way.x, way.z) : 0.0f;
     feet[footCount++] = position + Rotate(orientation, now + (next - now) * frame.blend);
   }
-  trackField.AddUnit(u.id, path, position, orientation, (model->boundsMax - model->boundsMin) * model->scale, feet, footCount);
+  trackField.AddUnit(u.id, path, position, orientation, (model->boundsMax - model->boundsMin) * model->scale, feet, footCount, model, turns);
 }
 
 // [hitches] (readAhead, world.h) Each frame: the next tiers' models and the pads' materials a step on (at most a texture or

@@ -326,6 +326,12 @@ class Terrain {
   std::string snowFiles_[3][3];
   float snowMetres_[3] = {};
   int snowSlice_[3][3] = {};
+  // [snowthin] the map's thin snow's cover (remap.json's snow "thin_cover", tiling with its "thin" material): where the snow
+  // lies first as it builds up (1) and where the ground shows longest (0); its file, its repeat's real size (metres), and
+  // its layer of wetNormals_ (-1: none)
+  std::string thinCoverFile_;
+  float thinMetres_ = 0;
+  int thinSlice_ = -1;
   bool snowTried_ = false, snowAny_ = false;
   bool SnowReady();
   float SnowSize(int k) const;
