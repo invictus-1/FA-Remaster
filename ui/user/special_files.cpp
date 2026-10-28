@@ -193,27 +193,59 @@ int l_GetSpecialFileInfo(lua_State* L) {
   return 1;
 }
 
-// RemoveSpecialFile(profile, name, type): the player deleted it in the game's file dialog, which
-// asks "Are you sure you want to move this file to the recycle bin?": so it goes to the recycle
-// bin (Windows' own, where it can be put back; elsewhere a "recycled" folder beside the kind's).
-int l_RemoveSpecialFile(lua_State* L) {
-  const std::string file = FileOf(L, 1);
-  if (!hostfs::IsFile(file)) return 0;
+// A file or folder of the player's to the recycle bin (Windows' own, where it can be put back: the
+// original's DISK_Recycle 0x45a7a0, SHFileOperationW FO_DELETE with flags 0x454; elsewhere into
+// `recycled`, a folder beside the kinds' folders, under the same name, a number added if taken).
+void Recycle(const std::string& path, const char* who) {
 #ifdef _WIN32
-  std::wstring from = PathOf(file).wstring();
+  std::wstring from = PathOf(path).wstring();
   std::replace(from.begin(), from.end(), L'/', L'\\');
   from.push_back(L'\0');  // (the list of names ends in two zeros)
   SHFILEOPSTRUCTW op{};
   op.wFunc = FO_DELETE;
   op.pFrom = from.c_str();
   op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI;
-  if (SHFileOperationW(&op) != 0) Logf(LogLevel::Warning, "moho64ui: RemoveSpecialFile: %s could not go to the recycle bin", file.c_str());
+  if (SHFileOperationW(&op) != 0) Logf(LogLevel::Warning, "moho64ui: %s: %s could not go to the recycle bin", who, path.c_str());
 #else
   std::error_code ec;
-  const fs::path to = PathOf(file).parent_path().parent_path().parent_path() / "recycled";
+  const fs::path p = PathOf(path);
+  const fs::path to = p.parent_path().parent_path().parent_path() / "recycled";
   fs::create_directories(to, ec);
-  fs::rename(PathOf(file), to / PathOf(file).filename(), ec);
+  fs::path target = to / p.filename();
+  for (int i = 2; fs::exists(target, ec); ++i) target = to / (TextOf(p.filename()) + " " + std::to_string(i));
+  fs::rename(p, target, ec);
+  if (ec) Logf(LogLevel::Warning, "moho64ui: %s: %s could not go to %s", who, path.c_str(), TextOf(to).c_str());
 #endif
+}
+
+// RemoveSpecialFile(profile, name, type): the player deleted it in the game's file dialog, which
+// asks "Are you sure you want to move this file to the recycle bin?": so it goes to the recycle
+// bin.
+int l_RemoveSpecialFile(lua_State* L) {
+  const std::string file = FileOf(L, 1);
+  if (!hostfs::IsFile(file)) return 0;
+  Recycle(file, "RemoveSpecialFile");
+  return 0;
+}
+
+// RemoveProfileDirectories(profile) (FA exe 0x845e70, read 2026-10-28): the profile dialog's "move all the save game
+// and replay files associated with this profile to the recycle bin?": replays/<profile> and savegames/<profile> go
+// there (the original makes each path twice and recycles all four, the second of each finding nothing). Ours: a name
+// that is empty or holds a path's separator or "..", which the dialog's creation never lets through
+// (filepicker.IsFilenameInvalid), recycles nothing, so that no other folder can go.
+int l_RemoveProfileDirectories(lua_State* L) {
+  if (lua_gettop(L) != 1)
+    return luaL_error(L, "%s\n  expected %d args, but got %d", "RemoveProfileDirectories(string profile)", 1, lua_gettop(L));
+  const std::string profile = luaL_checkstring(L, 1);
+  if (profile.empty() || profile.find_first_of("/\\:") != std::string::npos || profile.find("..") != std::string::npos) {
+    Logf(LogLevel::Warning, "moho64ui: RemoveProfileDirectories: \"%s\" is not a profile's folder name; nothing removed", profile.c_str());
+    return 0;
+  }
+  const char* extension = nullptr;
+  for (const char* type : {"Replay", "SaveGame"}) {
+    const std::string dir = FolderOf(L, type, &extension) + profile;
+    if (hostfs::IsDirectory(dir)) Recycle(dir, "RemoveProfileDirectories");
+  }
   return 0;
 }
 
@@ -302,6 +334,7 @@ void RegisterSpecialFileBindings(lua_State* L) {
   SetGlobal(L, "GetSpecialFilePath", l_GetSpecialFilePath);
   SetGlobal(L, "GetSpecialFileInfo", l_GetSpecialFileInfo);
   SetGlobal(L, "RemoveSpecialFile", l_RemoveSpecialFile);
+  SetGlobal(L, "RemoveProfileDirectories", l_RemoveProfileDirectories);
   SetGlobal(L, "CopyCurrentReplay", l_CopyCurrentReplay);
   SetGlobal(L, "LaunchReplaySession", l_LaunchReplaySession);
   SetGlobal(L, "LoadSavedGame", l_LoadSavedGame);
