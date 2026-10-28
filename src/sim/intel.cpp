@@ -942,15 +942,32 @@ int l_InitIntel(lua_State* L) {
   if (t >= 1 && t <= 8) {
     IntelHandle& h = ei.h[t];
     Viz(IS(*S(L)), h, t, -1);
-    h = IntelHandle{};
+    h = IntelHandle{};  // (the handle ctor 0x76d810: at 0, 0, 0, lastTick 0, disabled)
     h.exists = true;
     h.radius = R;
     h.army = ArmyIdx(army);
-    h.pos = SourcePos(e);
   } else if (t == 9 || t == 11 || t == 12 || t == 13) {
     ei.has[t] = true;
   } else {
     Logf(LogLevel::Warning, "Unknown intel type %i", t);
+  }
+  // 0x68ecaf..0x68ece1: then every handle of the entity (the new one too) takes UpdatePos 0x76f1e0 (the 6-tick one,
+  // not the exact one) at the entity's COMMITTED place, +0xac as it is (no 1 up, unlike AdvanceCoords' ForceUpdate):
+  // the new handle, disabled, only stores it; an enabled one re-rasters if it moved far enough or its clock ran out.
+  // The committed place is where the beat before left the entity; a beam's moves with its weapon's muzzle only at
+  // the beat's end. Seen: MP1 10501, army 4's Seraphim destroyer 0x40004e's BackTurret beam hits an army-1 unit,
+  // FAF's CollisionBeam.ShowBeamSource gives army 1 a radius-2 vision circle there (InitIntel + EnableIntel) each
+  // check; ours put it at the muzzle of this beat (179.83, 328.97: vision cell (89, 164), 0x40004e's own), not the
+  // committed one of 10500 (180.34, 329.05: cell (90, 164)), so army 1's recon beat 10501 made a blip of 0x40004e,
+  // army 1's destroyer 0x10002e listed it at 10508 (GetBlipsInRange) and its FrontTurret took it at 10514. The
+  // original's rebuild at 10508 (probe mp1_10514b: same tick, same reach 78.75) listed only 0x2000e0, 0x200127.
+  {
+    Vec3 c = e->shapeHeld ? e->shapePos : e->position;
+    if (e->kind == Entity::Kind::Unit) {
+      const Unit* u = static_cast<const Unit*>(e);
+      c = sim.coordsPending && u->lastPosTick == sim.tick() ? u->lastPosition : u->position;
+    }
+    for (int s = 1; s <= 8; ++s) UpdatePos(IS(sim), ei.h[s], s, c, sim.tick(), false);
   }
   return 0;
 }
