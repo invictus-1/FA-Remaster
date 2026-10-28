@@ -17,6 +17,33 @@ uel0201 for the player beside the commander, all selected by category, 20 s stea
 and a move order by a right click. `MOHO64UI_BINDING_PROFILE=1` logs the costliest engine functions the scripts
 called (time and calls).
 
+## 2026-10-28 afternoon: the late game again, after the host changes (on 1026ec5)
+
+The morning's game again (its table and seed 1392934588, no orders), the same full-screen 4K window and switches,
+on main 1026ec5 (engine batches 22 and 23 + the beat's sounds decided on the beats' thread, the lead up to a whole
+beat, the sync to the scripts still before the next beat): fast-forwarded to tick 21000, then real time to 27000.
+Script `_scratch/ui/measure_1028/run_late.sh`, compared with `compare.py` over the same ticks. The game is the
+morning's until beat 21695 (the fingerprints), then the engine's batches make it its own.
+
+| ticks 21001-27000 | morning (9f12685) | afternoon (1026ec5) |
+|---|---|---|
+| sim per beat, mean / 95% | 47.3 / 62.5 ms | 45.5 / 61.1 ms |
+| with the picture's copy, mean / 95% | 59.4 / 75.8 ms | 56.8 / 73.4 ms |
+| beats of 100 ms or more (longest) | 9 (117 ms) | 70 (248 ms) |
+| the beat's work on the window's thread, mean | 11.5 ms (sounds 6.7, sync 4.7) | 6.8 ms (sounds 2.0, sync 4.7) |
+| frames held by the simulation | 11,225 (187 per 100 beats) | 7,203 (120 per 100 beats) |
+| long frames (33 ms+) a second | 16.0, all the world's picture | 16.4, all but 12 the world's picture |
+
+- Held frames a third fewer; the window's thread's share of a beat 11.5 -> 6.8 ms.
+- A first try at noon gave the sync to the scripts once the next beat was begun: the scripts' sync handlers then
+  waited on that beat (3.7 -> 66.9 ms a beat, held 33 -> 84 per 100 beats over 21001-22300); undone (227a351).
+- Still held about one frame a beat: the frames take 30-40 ms in the late game (the world's picture), and a beat
+  begins only in a frame and only once the picture has reached the newest beat, so it often begins a frame late.
+  Next idea (not done): let a heavy beat begin as soon as the last is through, up to two beats ahead of the picture
+  (the renderer keeps six), the lead learnt as now; orders then wait up to a beat longer in a heavy game only.
+- The afternoon's long beats come every 10 ticks (one game second) from about tick 25000, ~200 ms each: the
+  simulation's (its own game by then), for the engine to look at.
+
 ## 2026-10-28: a live 45-minute game at native 4K, as Chris plays now (the engine's item 20 follow-up)
 
 Build: main 9f12685 (engine batch 21: the collector's spikes gone) + the first beats behind the loading screen
