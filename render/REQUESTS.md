@@ -34,7 +34,7 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
-## 50. To the INTERFACE track: a setting for the units' lamp colour (2026-10-28, not blocking)
+## 50. To the INTERFACE track: a setting for the units' lamp colour (2026-10-28, not blocking) - DONE
 
 **What:** a setting in the game's options (with the other looks, under the lighting or the units' looks): "Unit glow colour"
 with two choices, "Team colour" (the default, as today) and "Faction colour". It sets `World::lampsTeamColour` (true = team,
@@ -45,7 +45,9 @@ false = faction), as `game_session.cpp` sets the other looks (`w.energyShields =
 players will want that. It is only the unit's own faint glow (its 'hull' lamps); headlights and the rest keep their
 colours. Render 1fd45da.
 
-**Answer:** (none yet)
+**Answer:** done in main 57b43fc (docs/ui-answers.md): "Unit Glow Colour" in the Remastered tab after Hidden Unit
+Outlines (in no preset), Team colour (default) / Faction colour; console `remaster_lamp_colour team|faction`, live in a running
+game. The renderer's side checked in a night M28 game (render 1fd45da: the red army's glow gone on faction colour).
 
 ## 49. To the ENGINE track: thrust controllers (CreateThrustController) for the aircraft's tilting engines (2026-10-28, not blocking)
 
