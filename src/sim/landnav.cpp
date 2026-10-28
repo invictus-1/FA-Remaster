@@ -175,21 +175,16 @@ bool PathUnitBlocked(Unit* u, int x, int z, int flags) {
   Vec3 byMn{}, byMx{};
   sim.ForUnitsInRect(x0 - 8, z0 - 8, x1 + 8, z1 + 8, [&](Unit* e) {
     if (blocked || e == u) return;
-    WorldShape s;
-    if (!GetWorldShape(e, &s)) return;
-    Vec3 mn, mx;
-    ShapeBounds(s, &mn, &mx);
-    if (x0 > mx.x || mn.x > x1 || -1000.0f > mx.y || mn.y > 1000.0f || z0 > mx.z || mn.z > z1) return;
     // (the gather asks the entity grid first: a unit is found only in the cells the grid has it in, its span as of
     // the last AdvanceCoords, skirt-wide (Unit::UpdateCollision; GridFindsInBox, as the formation's spot test), not
     // its collision box's own cells. Seen (probe mp1_5397): MP1 beat 5397, army 0's engineer 0x1b on a Repair walk
     // tries (827,225) from (819,228); 0x4c, repairing at (828.46, 224.79), has a box from x 828.0 exactly but is
     // registered from cell 206 (x 827.9 skirt-wide): the original finds it touching the square, tries (826,225) next
     // and takes it; ours left 0x4c out (the box alone starts in cell 207) and took (827,225), 2.5 degrees aside.)
+    // (The checks run cheapest first: the grid's span and the unit filters before the collision shape is made and
+    // tested. All are reads and a unit blocks only when it passes all of them, so the answer and the blocking unit are
+    // the same.)
     if (!GridFindsInBox(sim, e, x0, z0, x1, z1)) return;
-    by = e;
-    byMn = mn;
-    byMx = mx;
     // 0x721488: a Land-layer unit counts for an IgnoreStructures footprint only when its own has the flag;
     // Air and Sub layer units never count
     if (e->layer == "Land") {
@@ -198,6 +193,14 @@ bool PathUnitBlocked(Unit* u, int x, int z, int flags) {
       return;
     }
     if (SameFormationLayer(u, e) || !BlocksFor(u, e, flags)) return;
+    WorldShape s;
+    if (!GetWorldShape(e, &s)) return;
+    Vec3 mn, mx;
+    ShapeBounds(s, &mn, &mx);
+    if (x0 > mx.x || mn.x > x1 || -1000.0f > mx.y || mn.y > 1000.0f || z0 > mx.z || mn.z > z1) return;
+    by = e;
+    byMn = mn;
+    byMx = mx;
     // 0x721540: a unit whose footprint is at most 1 blocks outright; a bigger one only when its collision
     // primitive meets the box (square centre, half extents = the path-finder's footprint / 2, 1000) (0x67a9d0)
     if (std::max(Fp(e).sizeX, Fp(e).sizeZ) <= 1) {
@@ -249,15 +252,23 @@ bool UnitInLine(Sim& sim, Unit* u, float ax, float az, float bx, float bz, int f
   sim.ForUnitsInRect(std::min(ax, bx) - reach, std::min(az, bz) - reach, std::max(ax, bx) + reach,
                      std::max(az, bz) + reach, [&](Unit* e) {
                        if (blocked || e == u) return;
-                       WorldShape s;
-                       if (!GetWorldShape(e, &s)) return;
-                       Vec3 mn, mx;
-                       ShapeBounds(s, &mn, &mx);
                        // CollectEntitiesInBox 0x721dc0 takes its candidates from the grid's lists for the box's cells
                        // (0x722df0), where a unit is registered by its span as of the last AdvanceCoords, skirt-wide
                        // (GridFindsInBox, as PathUnitBlocked and the spot test), not by its box's own cells; then the
                        // AABB test against the entity's (0x721ea0..0x721ee6, touching passes)
+                       // (The checks run cheapest first: the grid's span and the unit filters before the collision
+                       // shape is made and its primitive tested. All are reads and a unit is in the way only when it
+                       // passes all of them, so the answer is the same. Counted on B1: of the units the grid finds,
+                       // 7 in 8 fail the filters, and their primitive tests were most of the navigator's execute
+                       // time, 51.6 -> 32.3 s.)
                        if (!GridFindsInBox(sim, e, boxMn.x, boxMn.z, boxMx.x, boxMx.z)) return;
+                       if (e->layer == "Air" || e->layer == "Sub" || SameFormationLayer(u, e) ||
+                           !BlocksFor(u, e, flags))
+                         return;
+                       WorldShape s;
+                       if (!GetWorldShape(e, &s)) return;
+                       Vec3 mn, mx;
+                       ShapeBounds(s, &mn, &mx);
                        if (boxMn.x > mx.x || mn.x > boxMx.x || boxMn.y > mx.y || mn.y > boxMx.y || boxMn.z > mx.z ||
                            mn.z > boxMx.z)
                          return;
@@ -267,9 +278,6 @@ bool UnitInLine(Sim& sim, Unit* u, float ax, float az, float bx, float bz, int f
                        // original finds it in the way and takes (610, 193); ours took (610, 192), 2 degrees aside.)
                        if (s.type == ShapeType::Box ? !BoxPrimitiveMeetsBox(s, centre, axes, half)
                                                     : !ShapeOverlapsOBox(s, centre, axes, half))
-                         return;
-                       if (e->layer == "Air" || e->layer == "Sub" || SameFormationLayer(u, e) ||
-                           !BlocksFor(u, e, flags))
                          return;
                        blocked = true;
                        static const long dbgClear = getenv("MOHO64_DEBUG_CLEAR") ? atol(getenv("MOHO64_DEBUG_CLEAR")) : -1;
