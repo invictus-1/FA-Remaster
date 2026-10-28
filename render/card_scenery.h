@@ -138,6 +138,9 @@ class CardScenery {
   std::vector<GroupRec> groups_;
   std::vector<uint32_t> slots_;  // the slots on the processor (32 words a prop), as on the card
   uint32_t slotsUsed_ = 0, slotRoom_ = 0;  // slots handed out, and the room the card's buffer has for them
+  // [cardroom] slots a group has moved out of (it grew past its room: a wreck added to its square), (first, count), taken
+  // again by the next group that needs room; packed away when the slots are packed anew
+  std::vector<std::pair<uint32_t, uint32_t>> freeSlots_;
   std::vector<std::pair<uint32_t, uint32_t>> dirtySlots_;  // slot ranges written since the last upload (first, count)
   bool layoutDirty_ = true, rebuild_ = true;
   uint64_t lastSweep_ = 0;
