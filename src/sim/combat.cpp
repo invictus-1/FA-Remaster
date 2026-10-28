@@ -3870,9 +3870,20 @@ int l_w_GetCurrentTarget(lua_State* L) {
   Entity* e = w->target.type == 1 ? S(L)->FindEntity(w->target.entityId) : nullptr;
   if (e && w->target.viaBlip && e->kind == Entity::Kind::Unit) {  // the blip its army holds of the unit
     Unit* tu = static_cast<Unit*>(e);
-    Entity* fake = w->target.fakeId ? S(L)->FindEntity(w->target.fakeId) : nullptr;
-    if (fake && fake->HasLuaObject()) e = fake;  // (one of the jammer's fakes)
-    else if (tu->blip && static_cast<Entity*>(tu->blip)->HasLuaObject()) e = tu->blip;
+    if (w->target.fakeId) {
+      // cfunc_UnitWeaponGetCurrentTargetL 0x6d9390 pushes the CAiTarget's entity, the weak pointer at weapon+0xd0
+      // (0x6d9418..0x6d943d), or nil when it is empty (0x6d9456): for one of a jammer's FAKE blips that is the fake
+      // itself, and once the fake is destroyed nothing, not the unit's real blip. Seen: MP1 10611, army 6's three
+      // torpedoes 0x10600000 / 05 / 21 (aantorpedo01 from 0x60000f, homing on a fake of army 5's jammer frigate
+      // 0x5000b1) lose their target when the last army lets go of the fakes (probe mp1_10612: the jammer off from
+      // 10601 in both, the shells' targets empty at 10611); FAF's Projectile.RetargetThread asks the weapon's
+      // GetCurrentTarget at 10612: nil in the original (SetLifetime, no draw), ours gave the frigate's real blip and
+      // SetNewTarget drew three target points.
+      Entity* fake = S(L)->FindEntity(w->target.fakeId);
+      e = fake;  // (a fake queued for destruction is still there until the end of the beat)
+    } else if (tu->blip && static_cast<Entity*>(tu->blip)->HasLuaObject()) {
+      e = tu->blip;
+    }
   }
   if (e && e->HasLuaObject()) PushObject(L, e);
   else lua_pushnil(L);
