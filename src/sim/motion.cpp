@@ -1931,6 +1931,14 @@ void MotionTick(Sim& sim, Unit* u) {
   if (!m.bp || !m.bp->mobile() || u->dead) {
     m.lastMove = {};
     if (m.bp && m.bp->mobile() && u->dead) ProcessCommonMotionState(sim, u, false);  // (CalcMoveLand 0x6c3212)
+    // MotionTick 0x6b9d10 has no IsDead test: a dead unit takes the held test like a live one (0x6b9eb5 / 0x6b9f10:
+    // vt+0x3c(1) Immobile, u+0x29c stunned) and, held, ends on 0x6ba00d without MoveTo (no blend frame) or on
+    // 0x6b8f30, so its quaternion is not brought back to unit length. Seen (probe cp_deadmotion2, MP2): 0x100056
+    // (uel0104, dead 8031) and 0x10007b beside it (uel0201, dead 8055) both have u+0x29c = 29 at 8032, 0x10007b 29
+    // again in the beat after its death; neither reaches MoveTo after death: the original's quaternion stays as it
+    // was; ours, normalised every beat, went back and forth between two last bits. (Dead units with no stun do reach
+    // MoveTo on their transform, probe cp_deadmotion: MP2 0xd3 flips like ours.)
+    if (u->dead && (u->immobile || u->unitStates.count("Immobile") > 0 || u->stunned)) m.noMoveTo = true;
     return;
   }
   Vec3 start = u->position;
