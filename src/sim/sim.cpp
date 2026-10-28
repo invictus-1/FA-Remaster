@@ -2367,6 +2367,21 @@ void Sim::Tick() {
     // beat after its own turn (a Loyalist's death stun) is held for (int)(seconds * 10) of its turns, and its weapons,
     // which run before the entity stage, fire again in the beat after the count reached 0.
     if (u->stunned > 0) --u->stunned;
+    // CUnitMotion::MotionTick 0x6b9e88..0x6ba10c, motion state 1 (attached, NotifyAttached 0x6b94bf): the velocity
+    // (m+0x38) and the acceleration (m+0x44) are zeroed and the motion's last position (m+0x2c) becomes the unit's
+    // committed position (vt+0x14: where the beat began), every beat while it hangs. NotifyDetached 0x6b9570 leaves
+    // m+0x2c alone, so a unit let go keeps the place of the beat before its last attached one, and its first spline
+    // point after the fall is measured from there (vel = point - m+0x2c). Seen: MP1 10646, army 1's engineers
+    // 0x100010 / 0x100043 / 0x100095 / 0x1000bd, dropped by their transport at 10634 into the sea: the original's
+    // first point gives (0.1743, -3.216, -0.038) from the 10632 place (357.6565, 20.716, 500.2433); ours measured it from
+    // a place far away (152.63, 23.95, 591.72, where it last walked) and got (205.2, -6.45, -91.5), which tilted
+    // the hull.
+    if (u->parentId && u->motion.bp && u->motion.bp->mobile() && !u->beingBuilt) {
+      u->motion.vel = {};
+      u->motion.accel = {};
+      u->motion.prevPos = u->lastPosition;
+      u->motion.prevPosSet = true;
+    }
     if (u->parentId && u->attachFull) {  // transport cargo: after every unit moved
       if (!u->beingBuilt) FuelTick(*this, u);  // CUnitMotion::ProcessFuelLevels (attached units too)
       UnitEconomyTick(*this, u);
