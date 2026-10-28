@@ -730,18 +730,39 @@ void CheckCollision(Sim& sim, Projectile* p, Vec3 p0, Vec3 p1) {
         }
       }
     } else {
+      // A step shorter than [0xdfeb80] = 0.00999999978 (0x69d831..0x69d9ef): no line test, but the sphere of radius
+      // [0xdfec20] = 1 around the committed place p0 (+0xac) goes to COGrid::ForAllEntitiesIterator 0x721fb0 with the
+      // mask 0xd00 (units, shells, the rest of the third list; no props): the entity-grid cells under the sphere's
+      // box (AABoxToRect 0x4fcbe0), in grid order, each entity with a collision primitive (+0x178) whose sphere test
+      // (vt+0x20) passes (R is 1, below the 3.0 of the cube shortcut). The candidates are asked in that order: the
+      // launcher's unit (vt+0x10 of the candidate, +8, against the weak link +0x278) and the shell itself are
+      // passed over, and while no hit stands (+0x2a4 < 0) OnCollisionCheck (func_OnCollisionCheck 0x69f6b0); the
+      // first yes is the hit at fraction 0 and p0 (0x69d984..0x69d9d0) and the check ends there. Nothing skips a
+      // destroy-queued entity. Seen (MP1 10888 / 10889): army 1's torpedoes 0x1010000a and 0x10100053
+      // (aantorpedo03, slowed to 0.05 by OnEnterWater's SetVelocity(0)) lie 0.6 and 0.9 below and off the end of
+      // army 2's ship 0x2000e5, whose centre is 2.3 and 3.0 away; the original took the ship (AdjustHealth -150 at
+      // 10889 and 10890, probe mp1_10889). Ours asked only the units whose CENTRE lay within 1 of p0, by id, and so
+      // never the ship.
       std::vector<Entity*> cands;
-      sim.ForUnitsInRect(p0.x - 1, p0.z - 1, p0.x + 1, p0.z + 1, [&](Unit* u) { cands.push_back(u); });
-      std::sort(cands.begin(), cands.end(), [](const Entity* x, const Entity* y) { return x->id < y->id; });
-      for (Projectile* o : sim.projectiles)
-        if (o != p) cands.push_back(o);
-      for (ShieldEntity* sh : sim.shields) cands.push_back(sh);
-      for (Entity* se : sim.scriptEntities)
-        if (se->kind == Entity::Kind::Entity && se->shape.type != ShapeType::None) cands.push_back(se);
+      if (sim.entityGrid().ready()) {
+        sim.entityGrid().GatherBox(p0.x - 1.0f, p0.z - 1.0f, p0.x + 1.0f, p0.z + 1.0f, 1 | 4 | 8, &cands);
+      } else {
+        // (no map, no grid: by kind)
+        sim.ForUnitsInRect(p0.x - 1, p0.z - 1, p0.x + 1, p0.z + 1, [&](Unit* u) { cands.push_back(u); });
+        std::sort(cands.begin(), cands.end(), [](const Entity* x, const Entity* y) { return x->id < y->id; });
+        for (Projectile* o : sim.projectiles)
+          if (o != p) cands.push_back(o);
+        for (ShieldEntity* sh : sim.shields) cands.push_back(sh);
+        for (Entity* se : sim.scriptEntities)
+          if (se->kind == Entity::Kind::Entity && se->shape.type != ShapeType::None) cands.push_back(se);
+      }
       for (Entity* e : cands) {
-        if (e->destroyQueued || e == p || (p->launcher && e == p->launcher)) continue;
         WorldShape ws;
         if (!GetWorldShape(e, &ws) || !SphereOverlap(ws, p0, 1.0f)) continue;
+        // 0x69d905..0x69d930: the candidate's unit part against the launcher; a candidate that is no unit gives
+        // null, so with no launcher at all every such candidate is passed over too
+        const Entity* asUnit = e->kind == Entity::Kind::Unit ? e : nullptr;
+        if (asUnit == p->launcher || e == p) continue;
         if (p->hitFraction >= 0) break;
         PushObject(L, p);
         if (CallMethodBool(sim, L, e, "OnCollisionCheck", 1) == 1) {
