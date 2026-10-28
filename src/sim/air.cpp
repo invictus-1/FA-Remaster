@@ -1272,6 +1272,8 @@ Ctrl ComputeAirControl(Sim& sim, Unit* u, const QuatW& tq, const Vec3& desired, 
   float m = pb.mass;
   c.force = {(F.x - 0.0f) * m, (F.y - kGravityY) * m, (F.z - 0.0f) * m};
   c.torque = MultQuadVec(q, Vec3{T.x / pb.invI[0], T.y / pb.invI[1], T.z / pb.invI[2]});
+  a.ctrlForce = c.force;  // m+0xfc (0x6bedf4..0x6bee10)
+  a.ctrlTorque = T;       // m+0x108 (0x6bee1e..0x6bee3c)
   if (g_bodyDebug) {
     const float k[5] = {kTurn, kRoll, b.kTurnDamping, b.kRollDamping, static_cast<float>(mode)};
     BodyDebugVec("k", k, 5);

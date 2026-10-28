@@ -2235,7 +2235,7 @@ bool BuilderArmSlotStep(Sim& sim, Unit* u, BuilderArm* a);
 void UnitAimTick(Sim& sim, Unit* u) {
   const bool anims = !u->animators.empty();
   if (u->aimControllers.empty() && u->rotators.empty() && u->builderArms.empty() && u->sliders.empty() &&
-      u->slavers.empty() && u->footPlants.empty() && !anims) {
+      u->slavers.empty() && u->footPlants.empty() && u->thrusters.empty() && !anims) {
     if (!u->colliders.empty()) CollidersTick(sim, u);
     return;
   }
@@ -2382,6 +2382,110 @@ static void FootPlantStep(Sim& sim, Unit* u, FootPlantManipulator* m) {
   PoseRotate(u, m->kneeBone, FootRollXExe(-0.0f - turn));  // 0x639c3c
 }
 
+// The shortest arc 0x50cb50 that turns the unit vector a onto b: h = a + b normalised (0x452af0), w = a.h,
+// xyz = a x h. Opposite vectors (w exactly 0, 0x50cbde..0x50cbed) give half a turn about an axis across a: from
+// x and z when |a.x| >= |a.y|, else from y and z, times 1 / sqrt (0x50d150).
+static Quat ThrustArcExe(const Vec3& a, const Vec3& b) {
+  Vec3 h{a.x + b.x, b.y + a.y, b.z + a.z};
+  vm::NormalizeExe(h);
+  Quat r;
+  r.w = (a.z * h.z + a.x * h.x) + a.y * h.y;
+  if (r.w != 0.0f) {
+    r.x = a.y * h.z - a.z * h.y;
+    r.y = a.z * h.x - a.x * h.z;
+    r.z = a.x * h.y - a.y * h.x;
+  } else if (std::fabs(a.x) >= std::fabs(a.y)) {  // 0x50cc65 fcompi, jb (unordered: the y branch)
+    const float s = 1.0f / std::sqrt(a.x * a.x + a.z * a.z);
+    r.x = -(s * a.z);
+    r.y = 0.0f;
+    r.z = s * a.x;
+  } else {
+    const float s = 1.0f / std::sqrt(a.y * a.y + a.z * a.z);
+    r.x = 0.0f;
+    r.y = s * a.z;
+    r.z = -(s * a.y);
+  }
+  return r;
+}
+// 0x4eb830: from c toward t by at most the angle `rate`. d = conj(c) x t (0x4eb833..0x4eb942); 0x4eb740 caps it (only
+// when rate / 2 is below pi / 2, and only when |d.xyz| is above the sine of rate / 2: then d = (cos, the axis x sin,
+// the sine negated when d.w < 0)); a capped d gives c x d (0x4eb966..0x4eba48, not normalised), an uncapped one t
+// itself (0x4eba55).
+static Quat ThrustRateStepExe(const Quat& c, const Quat& t, float rate) {
+  const float cx = -0.0f - c.x, cy = -0.0f - c.y, cz = -0.0f - c.z;
+  Quat d;
+  d.w = ((t.w * c.w - t.x * cx) - t.y * cy) - t.z * cz;
+  d.x = ((t.z * cy + t.x * c.w) + t.w * cx) - t.y * cz;
+  d.y = ((t.y * c.w + t.x * cz) + t.w * cy) - t.z * cx;
+  d.z = ((t.z * c.w + t.y * cx) + t.w * cz) - t.x * cy;
+  const float half = std::fabs(rate * 0.5f);
+  if (half >= 1.57079637f) return t;  // [0xe4f7a0] (0x4eb760 fcomi, jb: unordered goes on)
+  float s = dmath::Sin(half);
+  const float len2 = (d.z * d.z + d.x * d.x) + d.y * d.y;
+  if (!(len2 > s * s)) return t;
+  if (0.0f > d.w) s = -0.0f - s;
+  Vec3 n{d.x, d.y, d.z};
+  vm::NormalizeExe(n);
+  d = {n.x * s, n.y * s, n.z * s, dmath::Cos(half)};
+  Quat o;
+  o.w = ((c.w * d.w - c.x * d.x) - c.y * d.y) - c.z * d.z;
+  o.x = ((c.y * d.z + c.x * d.w) + c.w * d.x) - c.z * d.y;
+  o.y = ((c.z * d.x + c.y * d.w) + c.w * d.y) - c.x * d.z;
+  o.z = ((c.z * d.w + c.x * d.y) + c.w * d.z) - c.y * d.x;
+  return o;
+}
+// CThrustManipulator::MoveManipulator 0x64a800, on this beat's pose as the manipulators before it left it
+static void ThrustStep(Unit* u, ThrustManipulator* m) {
+  if (u->dead) return;  // 0x64a825: the unit's IsDead (vt+0x28)
+  if (m->bone < 0 || static_cast<size_t>(m->bone) >= u->poseQ.size()) return;
+  // the motion's last control force (m+0xfc) and the yaw torque (m+0x10c): only the flight writes them; any other
+  // motion keeps the ctor's zeros (0x6b7d6d)
+  Vec3 f{}, d{};
+  float yawTorque = 0.0f;
+  if (u->motion.air) {
+    f = u->motion.air->ctrlForce;
+    yawTorque = u->motion.air->ctrlTorque.y;
+  }
+  // 0x64a8ee: the turn about (0, 1, 0) by the yaw torque (EulerRollToQuat 0x570750: cos(a / 2), the axis x sin(a / 2))
+  const float h = yawTorque * 0.5f;
+  const float sh = dmath::Sin(h);
+  const Quat yaw{0.0f * sh, 1.0f * sh, 0.0f * sh, dmath::Cos(h)};
+  // 0x64a917..0x64a96b: the bone's world position (GetBoneWorldTransform, vt+0x48 of unit+8: the pose built on this
+  // beat's pending transform) less the unit's committed position (IUnit::GetTransform 0x6a49c0, u+0xa4: the
+  // transform the beat began with)
+  Vec3 bp;
+  Quat bq;
+  BoneWorld(u, m->bone, &bp, &bq);
+  const Vec3& up = u->shapeHeld ? u->shapePos : u->position;
+  d = {bp.x - up.x, bp.y - up.y, bp.z - up.z};
+  // 0x64a971..0x64a9cc: the force plus (the offset turned less the offset) x turnMult
+  const Vec3 r = vm::RotateM(yaw, d);
+  Vec3 v{(r.x - d.x) * m->turnMult + f.x, (r.y - d.y) * m->turnMult + f.y, (r.z - d.z) * m->turnMult + f.z};
+  // 0x64a9d2..0x64aa1c: into the bone's frame (the conjugate of its composite rotation 0x54bec0)
+  const Vec3 l = vm::RotateM(Quat{-0.0f - bq.x, -0.0f - bq.y, -0.0f - bq.z, bq.w}, v);
+  // 0x64aa21..0x64aab5: each axis capped below by capMin, then above by capMax
+  Vec3 c;
+  {
+    const float x1 = m->capMin.x > l.x ? m->capMin.x : l.x;
+    c.x = m->capMax.x > x1 ? x1 : m->capMax.x;
+    const float y1 = m->capMin.y > l.y ? m->capMin.y : l.y;
+    c.y = m->capMax.y > y1 ? y1 : m->capMax.y;
+    const float z1 = m->capMin.z > l.z ? m->capMin.z : l.z;
+    c.z = m->capMax.z > z1 ? z1 : m->capMax.z;
+  }
+  vm::NormalizeExe(c);  // 0x64aab9
+  // 0x64aad3: the arc from the bone's forward axis to there; 0x64aaf4: last beat's turn toward it by at most
+  // turnSpeed; 0x64ab02: the bone's local rotation x that (CAniPoseBone::Rotate 0x54bc00); kept for the next beat
+  const Quat goal = ThrustArcExe(m->fwd, c);
+  const Quat o = ThrustRateStepExe(m->cur, goal, m->turnSpeed);
+  PoseRotate(u, m->bone, o);
+  m->cur = o;
+  static const long dbg = getenv("MOHO64_DEBUG_THRUST") ? atol(getenv("MOHO64_DEBUG_THRUST")) : -2;
+  if (dbg == -1 || static_cast<long>(u->id) == dbg)
+    Logf(LogLevel::Info, "thrust unit %u bone %d f %.9g %.9g %.9g yawT %.9g l %.9g %.9g %.9g c %.9g %.9g %.9g turn %.9g %.9g %.9g %.9g",
+         u->id, m->bone, f.x, f.y, f.z, yawTorque, l.x, l.y, l.z, c.x, c.y, c.z, o.x, o.y, o.z, o.w);
+}
+
 void UnitAimTickManipulators(Sim& sim, Unit* u, bool anims) {
   // The unit's manipulators, one list in the order of their precedence, the ones of equal precedence in the
   // order they were put there (CAniActor::UpdateManipulators 0x63aa80 walks the list 0x63ace0 keeps; the
@@ -2393,7 +2497,7 @@ void UnitAimTickManipulators(Sim& sim, Unit* u, bool anims) {
   struct Manip {
     int prec;
     uint32_t seq;
-    int kind;  // 0 animator, 1 rotator, 2 slaver, 3 slider, 4 builder arm, 5 aim controller, 6 foot plant
+    int kind;  // 0 animator, 1 rotator, 2 slaver, 3 slider, 4 builder arm, 5 aim controller, 6 foot plant, 7 thrust
     void* p;
   };
   // (The list is made for every unit with manipulators every beat: it lives in a buffer kept from call to call. A
@@ -2432,6 +2536,11 @@ void UnitAimTickManipulators(Sim& sim, Unit* u, bool anims) {
     auto& v = u->footPlants;
     v.erase(std::remove_if(v.begin(), v.end(), [](FootPlantManipulator* m) { return !m->alive; }), v.end());
     for (FootPlantManipulator* m : v) order.push_back({m->precedence, m->seq, 6, m});
+  }
+  {
+    auto& v = u->thrusters;
+    v.erase(std::remove_if(v.begin(), v.end(), [](ThrustManipulator* m) { return !m->alive; }), v.end());
+    for (ThrustManipulator* m : v) order.push_back({m->precedence, m->seq, 7, m});
   }
   const auto before = [](const Manip& a, const Manip& b) { return a.prec != b.prec ? a.prec < b.prec : a.seq < b.seq; };
   // (a list already in strict order is what the sort would give: most units' manipulators were made in order)
@@ -2485,6 +2594,11 @@ void UnitAimTickManipulators(Sim& sim, Unit* u, bool anims) {
     if (e.kind == 6) {  // (UpdateManipulators 0x63ab1b: an enabled one only)
       FootPlantManipulator* m = static_cast<FootPlantManipulator*>(e.p);
       if (m->alive && m->enabled) FootPlantStep(sim, u, m);
+      continue;
+    }
+    if (e.kind == 7) {  // (UpdateManipulators 0x63ab1b: an enabled one only)
+      ThrustManipulator* m = static_cast<ThrustManipulator*>(e.p);
+      if (m->alive && m->enabled) ThrustStep(u, m);
       continue;
     }
     SlaveManipulator* m = static_cast<SlaveManipulator*>(e.p);  // CSlaveManipulator::MoveManipulator 0x646140
@@ -2753,6 +2867,7 @@ void EndUnitManipulators(Unit* u) {
   end(u->slavers);
   end(u->colliders);
   end(u->footPlants);
+  end(u->thrusters);
   end(u->builderArms);
   for (ScriptObject* a : u->animators) a->UnbindLua();
   u->animators.clear();
@@ -4740,6 +4855,75 @@ int l_foot_Destroy(lua_State* L) {
   if (o) o->UnbindLua();
   return 0;
 }
+// CreateThrustController(unit, label, thrustBone) 0x64abc0
+int l_CreateThrustController(lua_State* L) {
+  const int top = lua_gettop(L);
+  if (top != 3)
+    return luaL_error(L, "%s\n  expected %d args, but got %d", "CreateThrustController(unit, label, thrustBone)", 3, top);
+  Unit* u = ToObject<Unit>(L, 1);
+  luaL_checkstring(L, 2);  // the label (+0x88): kept by the exe, read by nothing
+  if (!u || !u->skeleton) return luaL_error(L, "Unit has no skeleton.");  // (0x64ac7a: the unit's actor, +0x540)
+  auto m = std::make_unique<ThrustManipulator>();
+  m->unit = u;
+  m->bone = ResolveBoneArg(L, u, 3);  // (CAniActor::ResolveBoneIndex 0x63ad40; the ctor's AddWatchBone 0x63b6d0)
+  // the ctor 0x64a683..0x64a71d: the bone's forward axis from its local rotation in the pose as it is now (+0x20 of the
+  // pose bone), and the first turn: the arc from that axis to (0, 1, 0) (0x50cb50)
+  if (m->bone >= 0) {
+    const size_t b = static_cast<size_t>(m->bone);
+    const Quat& q = u->poseQ.size() == u->skeleton->bones().size() ? u->poseQ[b] : u->skeleton->bones()[b].localRot;
+    m->fwd = {(q.w * q.y + q.z * q.x) * 2.0f, (q.z * q.y - q.w * q.x) * 2.0f, 1.0f - (q.y * q.y + q.x * q.x) * 2.0f};
+  }
+  m->cur = ThrustArcExe(m->fwd, Vec3{0.0f, 1.0f, 0.0f});
+  m->seq = S(L)->NextManipSeq();  // (IAniManipulator's ctor 0x63b640, precedence 0: behind the others of precedence 0)
+  ThrustManipulator* raw = m.get();
+  u->thrusters.push_back(raw);
+  CreateObject(L, raw, "CThrustManipulator");
+  S(L)->Own(std::move(m));
+  return 1;
+}
+ThrustManipulator* CheckThrust(lua_State* L) { return CheckObject<ThrustManipulator>(L, 1); }
+// ThrustManipulator:SetThrustingParam(xCapMin, xCapMax, yCapMin, yCapMax, zCapMin, zCapMax, turnForceMult, turnSpeed)
+// 0x64ad90: +0xac..+0xb4 the three minima, +0xb8..+0xc0 the maxima, +0xc4, +0xc8; returns nothing (0x64b098), so
+// a chained CreateThrustController(...):SetThrustingParam(...) hands its caller nil.
+int l_thrust_SetThrustingParam(lua_State* L) {
+  const int top = lua_gettop(L);
+  if (top != 9)
+    return luaL_error(L, "%s\n  expected %d args, but got %d",
+                      "ThrustManipulator:SetThrustingParam(xCapMin, xCapMax, yCapMin, yCapMax, zCapMin, zCapMax, "
+                      "turnForceMult, turnSpeed)",
+                      9, top);
+  ThrustManipulator* m = CheckThrust(L);
+  float a[8];
+  for (int i = 0; i < 8; ++i) a[i] = static_cast<float>(luaL_checknumber(L, i + 2));
+  m->capMin = {a[0], a[2], a[4]};
+  m->capMax = {a[1], a[3], a[5]};
+  m->turnMult = a[6];
+  m->turnSpeed = a[7];
+  return 0;
+}
+int l_thrust_SetPrecedence(lua_State* L) {  // cfunc_IAniManipulatorSetPrecedenceL 0x63bb40
+  ThrustManipulator* m = CheckThrust(L);
+  m->precedence = static_cast<int>(luaL_checknumber(L, 2));
+  m->seq = S(L)->NextManipSeq();
+  lua_settop(L, 1);
+  return 1;
+}
+int l_thrust_Enable(lua_State* L) {
+  CheckThrust(L)->enabled = true;
+  lua_settop(L, 1);
+  return 1;
+}
+int l_thrust_Disable(lua_State* L) {
+  CheckThrust(L)->enabled = false;
+  lua_settop(L, 1);
+  return 1;
+}
+int l_thrust_Destroy(lua_State* L) {
+  ScriptObject* o = GetObject(L, 1);
+  if (auto* m = dynamic_cast<ThrustManipulator*>(o)) m->alive = false;
+  if (o) o->UnbindLua();
+  return 0;
+}
 }  // namespace
 
 void RegisterCombatBindings(lua_State* L) {
@@ -4794,6 +4978,12 @@ void RegisterCombatBindings(lua_State* L) {
   SetMethod(L, "CFootPlantManipulator", "Enable", l_foot_Enable);
   SetMethod(L, "CFootPlantManipulator", "Disable", l_foot_Disable);
   SetMethod(L, "CFootPlantManipulator", "Destroy", l_foot_Destroy);
+  SetGlobal(L, "CreateThrustController", l_CreateThrustController);
+  SetMethod(L, "CThrustManipulator", "SetThrustingParam", l_thrust_SetThrustingParam);
+  SetMethod(L, "CThrustManipulator", "SetPrecedence", l_thrust_SetPrecedence);
+  SetMethod(L, "CThrustManipulator", "Enable", l_thrust_Enable);
+  SetMethod(L, "CThrustManipulator", "Disable", l_thrust_Disable);
+  SetMethod(L, "CThrustManipulator", "Destroy", l_thrust_Destroy);
   SetMethod(L, "CAimManipulator", "SetFiringArc", l_aim_SetFiringArc);
   SetMethod(L, "CAimManipulator", "SetResetPoseTime", l_aim_SetResetPoseTime);
   SetMethod(L, "CAimManipulator", "OnTarget", l_aim_OnTarget);

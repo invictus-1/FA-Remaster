@@ -100,6 +100,11 @@ struct AirMotion {
   int combatCounter = 0;     // m+0xa8
   uint32_t idleTick = 0;     // m+0xac
   Vec3 prevVel;              // m+0xb4
+  // ComputeAirControl's last force and body torque (0x6bedee..0x6bee3c: m+0xfc..+0x104 the force, gravity's share
+  // and the mass in it; m+0x108..+0x110 T, before the division by the inertia). Nothing in the flight reads them
+  // back; the thrust controllers do (CThrustManipulator::MoveManipulator 0x64a879, 0x64a8c2). (The exe's dead branch
+  // writes its spin torque over the same m+0x108, 0x6bf39c: ours keeps that apart, in spinTorque.)
+  Vec3 ctrlForce, ctrlTorque;
   Vec3 spinTorque;           // m+0x108 (dead aircraft)
   int landRect[4] = {0, 0, 0, 0};  // reserved landing cells (x0, z0, x1, z1)
   float elevationAttr = 0;   // attributes elevation (SetElevation)
