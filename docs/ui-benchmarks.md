@@ -17,6 +17,11 @@ uel0201 for the player beside the commander, all selected by category, 20 s stea
 and a move order by a right click. `MOHO64UI_BINDING_PROFILE=1` logs the costliest engine functions the scripts
 called (time and calls).
 
+**A caveat for all of 2026-10-28's numbers (the engine, that evening):** the 9950X3D has two CCDs, one with the 3D
+V-cache; a moho64 run on the other ran ~40% slower in every phase. None of today's runs was pinned (Windows placed the
+threads), so a difference between two runs may partly be where they ran. From the next pair on: pinned to logical
+processors 0-15, or the CCD logged.
+
 ## 2026-10-28 afternoon: the late game again, after the host changes (on 1026ec5)
 
 The morning's game again (its table and seed 1392934588, no orders), the same full-screen 4K window and switches,
