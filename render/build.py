@@ -72,8 +72,9 @@ def main():
     for n in ZLIB:
         add(os.path.join(ROOT, "third_party", "zlib", n + ".c"), std_c + includes, False)
     # The engine's files keep the engine's floating-point flags: the simulation must compute the same
-    # here as in the engine's own program. Their warnings belong to the engine's build, not this one.
-    for d in ("core", "script", "sim"):
+    # here as in the engine's own program. Their warnings belong to the engine's build, not this one. (src/ai: the engine's
+    # own AI, from its batch 25 on; none there before, and glob finds nothing)
+    for d in ("core", "script", "sim", "ai"):
         for f in sorted(glob.glob(os.path.join(ROOT, "src", d, "*.cpp"))):
             add(f, ["-std=c++20", "-w", "-ffp-contract=off", "-fno-fast-math", *includes], True)
     for f in sorted(glob.glob(os.path.join(ROOT, "render", "*.cpp"))):
