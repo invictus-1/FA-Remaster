@@ -3,6 +3,53 @@
 Answers to the other tracks' requests to the interface (CLAUDE.md: "the layer asked answers in a file of its own").
 The requests themselves are in the asking track's file; each answer names it.
 
+## engine (by message, docs/ai-design-goals.md 39f16fe): pings our own AI understands, given by a radial menu (2026-10-28, a design, not built yet)
+
+How a ping travels today (FAF, read): the interface's `/lua/ui/game/ping.lua` DoPing sends
+`SimCallback({Func = 'SpawnPing', Args = data})`, data being FAF's SyncPingData: `Owner` (army from 0), `Location`,
+`Type` ('Alert' | 'Move' | 'Attack' | 'Marker'), `Lifetime`, `Mesh`, `Ring`, `ArrowColor`, `Sound`, and for a marker
+`Marker`, `Name`, `Color`. The simulation's `/lua/SimPing.lua` SpawnPing (one ping a second per army: PingLimit 1,
+PingTimeout 1 s) makes the ping's mesh, syncs it to the players (Sync.Ping), and calls every ALLIED brain:
+`brain:DoPingCallbacks(data)`, and `brain:DoAIPing(data)` when the pinger is not an AI. So a ping is a sim callback:
+in the command stream, the same for every player, and in the replay.
+
+The radial pings, as I would build them (ours; nothing new on the wire but two fields):
+- The same callback and table, so FAF's own code (meshes, rings, the arrows at the screen's edge, sounds, the limit,
+  markers) and other mods keep working: `Type` stays one of FAF's four, picked for its look: Attack and Attack ACU
+  'Attack' (red), Assist and Defend 'Move' (blue), Experimental here, Expand here and Retreat 'Alert' (yellow).
+- Two fields more in `data`: `Intent` = 'attack' | 'assist' | 'defend' | 'attack_acu' | 'experimental' | 'expand' |
+  'retreat' (the AI's word for it), and `Target` = the entity id of the unit under the cursor when the ping key went
+  down, if there was one (an ally's unit for assist / defend, an enemy's for attack / attack_acu). The place is where
+  the key went down, not where the drag ends.
+- The AI reads them in its brain's DoAIPing / DoPingCallbacks (an allied human's ping: `data.Intent`, `data.Location`,
+  `data.Target`). THE SIM SIDE MUST CHECK `Target`: callback arguments come from a player's machine, so a Target that
+  is no entity, or one the pinger's army cannot see now, is dropped (the ping stays a place). Pings without `Intent`
+  (FAF's own four keys, an old replay) mean what they mean today.
+- The menu: a key action of ours, rebindable (which key by default is Chris's to say; FAF's ping keys stay too).
+  Holding it opens a ring of wedges round the cursor, the world held where the key went down; dragging toward a
+  wedge lights it, letting go sends it, letting go in the middle or Escape sends nothing. The ping shows to the allies
+  as FAF's does, with the intent's name under it (ours, as a marker's name is shown).
+- Not for observers or in a replay (as FAF's DoPing). Teacher mode and the lobby (AI type, Recruit / Veteran /
+  Commander / Supreme Commander, personality, teacher mode, cheats) come later, with the AI's options known.
+
+docs/ai-architecture.md section 8, the interface's other open points (my proposals):
+1. Personality: the slot's AI key carries type and skill only, as FAF's aitypes lists do (four entries, Recruit ..
+   Supreme Commander, each with a cheating twin like M28's "cheat" keys), so the slot's one drop-down stays short.
+   Personality is a per-slot option of ours beside it (default Random), kept in the slot's PlayerOptions as
+   `RemasterPersonality`; PlayerOptions reach the simulation as ScenarioInfo.ArmySetup[army], so the AI reads it
+   there, and Random is drawn in the simulation from the game's seed (the same for every player and in the replay).
+   Teacher mode likewise a per-slot option, `RemasterTeacher`.
+3. Allied announcements: FAF's own `AIChatBrainComponent` (lua/aibrains/components/ChatBrainComponent.lua):
+   `brain:SendChatToAllies(text, args, location)` writes to `Sync.ChatMessages`; every player's interface shows the
+   line to the AI's allies only, `args` are formatted on the receiving side (`<LOC>` texts in each player's
+   language), and `location` (a Position or an Area) gives the line FAF's camera icon that moves the view there:
+   "attacking here" can be clicked. Nothing new is needed in the interface; I check that our host shows such lines
+   (and their camera icon) when the first announcement exists.
+8. `data/ai/` as a FAF-style mod folder: no, from the host's side. As the base AI it should always be there, not
+   switched on in the mods manager; the host mounts it as it mounts its own data (ui/data) and the engine's fixes,
+   and its lobby entries come through a hook of aitypes. A mod folder would only matter for playing it inside FAF
+   itself, which the ship model leaves out (docs/engine-distribution.md 3.1).
+
 ## engine-answers.md 524f3d0: Chris's "Move M28's work into load": the first beats inside the loading screen (2026-10-28)
 
 Built as asked (b6fccab): a lobby's game without prebuilt units, in a window, runs beats 2..29 behind the loading
