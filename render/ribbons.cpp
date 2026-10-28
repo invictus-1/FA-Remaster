@@ -335,6 +335,24 @@ void Ribbons::Band(Batch* batch, const View& view, Vec3 a, Vec3 b, float halfA, 
     // u runs across the band: the texture's u, and for a trail the ramp's v
     return Vertex{{p.x, p.y, p.z}, {u + uv[0], uv[1]}, {ramp[0], batch->kind->trail ? u : ramp[1]}, color};
   };
+  // (a trail fades away close to the eye: a few of its widths off a wide one - a contrail - is haze one is in, not a band
+  // across the picture (the unit check saw the game's contrails as a thick beige band in a low camera); a thin shot's trail
+  // only right at the eye. By how it is laid over what is behind: its alpha, its added light, or both)
+  if (batch->kind->trail && batch->kind->blend != 1) {
+    auto fade = [&](uint32_t c, Vec3 p, float half) {
+      const float d = Length(view.eye - p), lo = half * 6, hi = half * 24;
+      float k = std::clamp((d - lo) / std::max(hi - lo, 1e-4f), 0.0f, 1.0f);
+      k = k * k * (3 - 2 * k);
+      if (k >= 1) return c;
+      auto scale = [k](uint32_t v) { return static_cast<uint32_t>(static_cast<float>(v) * k + 0.5f); };
+      uint32_t r = c & 0xff, g = (c >> 8) & 0xff, bl = (c >> 16) & 0xff, al = c >> 24;
+      if (batch->kind->blend != 0) r = scale(r), g = scale(g), bl = scale(bl);  // (what adds its light, or is premultiplied)
+      if (batch->kind->blend != 2) al = scale(al);
+      return r | (g << 8) | (bl << 16) | (al << 24);
+    };
+    colorA = fade(colorA, a, std::fabs(halfA));
+    colorB = fade(colorB, b, std::fabs(halfB));
+  }
   const Vertex a0 = vertex(a - sideA, 0, uvA, rampA, colorA), a1 = vertex(a + sideA, 1, uvA, rampA, colorA);
   const Vertex b0 = vertex(b - sideB, 0, uvB, rampB, colorB), b1 = vertex(b + sideB, 1, uvB, rampB, colorB);
   for (const Vertex& v : {a0, a1, b1, a0, b1, b0}) batch->vertices.push_back(v);
