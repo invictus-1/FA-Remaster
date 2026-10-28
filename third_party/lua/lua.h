@@ -237,6 +237,7 @@ LUA_API void  lua_gpg_gcstep (lua_State *L, int point);
 typedef struct lua_GCStats {
   int incremental, state;
   size_t objects, estimate, cycles, lastunits, maxunits, lastatomic, maxatomic, verifyfails;
+  size_t lastregray, maxregray, lastrebacks, maxrebacks;  /* the atomic step's re-traversal of tables written since */
 } lua_GCStats;
 LUA_API void  lua_gpg_gcstats (lua_State *L, lua_GCStats *s);
 LUA_API void  lua_gpg_gcdue (lua_State *L);  /* moho64: a check's tool (a collection due at the next check) */

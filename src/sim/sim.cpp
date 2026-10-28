@@ -1399,6 +1399,35 @@ void Sim::CreateMapProps() {
   if (missing) Logf(LogLevel::Debug, "moho64: %d map props have no blueprint", missing);
 }
 
+// The collector's work at the beat's end (lgcinc.c): the classic collector's full collection on every 70th tick,
+// the incremental collector's step otherwise. MOHO64_STATS: its wall time per beat (measuring only).
+namespace {
+struct GcTimes {
+  double max600 = 0, maxAll = 0, sum = 0;
+  uint64_t n = 0, over[5] = {};  // beats over 2, 5, 10, 20, 50 ms
+};
+GcTimes g_gcTimes;
+}  // namespace
+
+void Sim::CollectorStep() {
+  static const bool stats = getenv("MOHO64_STATS") != nullptr;
+  if (!stats) {
+    lua_gpg_gcstep(state_->L(), tick_ % 70 == 0);
+    return;
+  }
+  const double t0 = prof::NowMs();
+  lua_gpg_gcstep(state_->L(), tick_ % 70 == 0);
+  const double ms = prof::NowMs() - t0;
+  GcTimes& g = g_gcTimes;
+  g.max600 = std::max(g.max600, ms);
+  g.maxAll = std::max(g.maxAll, ms);
+  g.sum += ms;
+  ++g.n;
+  const double lim[5] = {2, 5, 10, 20, 50};
+  for (int i = 0; i < 5; ++i)
+    if (ms > lim[i]) ++g.over[i];
+}
+
 void Sim::SignalEvent(const ScriptObject* o) {
   if (threads_) threads_->Signal(o);
 }
@@ -2194,7 +2223,7 @@ void Sim::PausedBeat() {
   // the GC lock G+0x28 is held (only debug commands and save loading take it). It runs on paused beats too, whose tick
   // does not move. Nearly all of the original's collections are these (FINDINGS 2026-10-08: the threshold is twice
   // the heap afterwards, and 70 ticks never double it). The incremental collector (lgcinc.c) steps here instead.
-  lua_gpg_gcstep(state_->L(), tick_ % 70 == 0);
+  CollectorStep();
   QueueLateDestroys();
   ApplyFocusArmy();  // Sim::Sync's start
   UpdateIdPools();
@@ -2620,7 +2649,7 @@ void Sim::Tick() {
   // follows when the collector last ran; at 10645 two shields' meshes take their entity ids in that order. The
   // original attaches 0x50100053 to 0x100170 and 0x50100054 to 0x100196; without this step ours had them the other
   // way round, with it ours matches.
-  lua_gpg_gcstep(state_->L(), tick_ % 70 == 0);
+  CollectorStep();
   QueueLateDestroys();
   ApplyFocusArmy();  // Sim::Sync's start: a requested focus army, NoteFocusArmyChanged
   UpdateIdPools();  // EntityDb::Purge (Sim::Sync)
@@ -2649,13 +2678,22 @@ void Sim::Tick() {
     Logf(LogLevel::Info, "moho64 stats tick %u: units %d (aircraft %d, flying %d, dying %d), created %d, projectiles %zu; "
          "lua heap %zu KB (collector threshold %zu KB), effect/decal/manipulator objects %zu (effects %zu, decals to expire %zu)",
          tick_, n, air, flying, dead, unitsCreated, projectiles.size(), heap >> 10, threshold >> 10, things, fxLive, decals);
+    {
+      GcTimes& g = g_gcTimes;
+      Logf(LogLevel::Info, "moho64 stats tick %u: collector at the beat's end: longest %.2f ms (last 600 beats) / %.2f ms (all), "
+           "mean %.3f ms, beats over 2/5/10/20/50 ms: %llu/%llu/%llu/%llu/%llu", tick_, g.max600, g.maxAll,
+           g.n ? g.sum / static_cast<double>(g.n) : 0.0, (unsigned long long)g.over[0], (unsigned long long)g.over[1],
+           (unsigned long long)g.over[2], (unsigned long long)g.over[3], (unsigned long long)g.over[4]);
+      g.max600 = 0;
+    }
     lua_GCStats gs;
     lua_gpg_gcstats(state_->L(), &gs);
     if (gs.incremental)
       Logf(LogLevel::Info, "moho64 stats tick %u: incremental collector: objects %zu (alive after the last cycle %zu), "
-           "cycles %zu, last step %zu units (largest %zu), last atomic %zu units (largest %zu), verify failures %zu",
+           "cycles %zu, last step %zu units (largest %zu), last atomic %zu units (largest %zu; of it re-graying %zu units "
+           "for %zu written tables, largest %zu / %zu), verify failures %zu",
            tick_, gs.objects, gs.estimate, gs.cycles, gs.lastunits, gs.maxunits, gs.lastatomic, gs.maxatomic,
-           gs.verifyfails);
+           gs.lastregray, gs.lastrebacks, gs.maxregray, gs.maxrebacks, gs.verifyfails);
   }
 }
 

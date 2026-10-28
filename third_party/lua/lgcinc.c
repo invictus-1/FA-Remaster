@@ -12,6 +12,10 @@
 **   clearing, kept as they are); it is stepped only at the end of a beat (lua_gpg_gcstep), never in the middle of a
 **   script except in an emergency; and its budget and trigger count OBJECTS, never bytes or time, so that every
 **   machine and platform collects at the same moments (gc_design.md).
+**   From Lua 5.2's DESIGN (same authors and licence): tables written since their traversal are traversed again
+**   before the atomic step, not only at it (regraytables). Ours, not Lua's: weak tables are listed in an array
+**   (weakv) and are otherwise tables like any other (black, barriers), so that the atomic step only checks their mode
+**   and clears them; and finalisers (__gc) are not run (the sim's scripts have none; the sweep reports one).
 **
 ** The colours (the `marked' byte, incremental states only):
 **   bit 0 / bit 1   white 0 / white 1 (the current white is the one new objects get; the other one, after an
@@ -21,11 +25,13 @@
 **   bit 3           tables: weak keys; udata: finalized
 **   bit 4           tables: weak values
 **   bit 5           fixed (never collected: reserved words, metamethod names, the memory error message)
+**   bit 6           tables: in this cycle's weak array
 */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define lgcinc_c
 
@@ -50,6 +56,7 @@
 #define FINALIZED	(1<<3)
 #define VALUEWEAK	(1<<4)
 #define FIXED		(1<<5)
+#define WEAKLISTED	(1<<6)  /* tables: in this cycle's weak array (cleared by the sweep) */
 #define CLASSICFIX	(1<<4)  /* lstring.h luaS_fix in a classic state */
 
 enum { GCSpause, GCSpropagate, GCSsweepstring, GCSsweep };
@@ -62,18 +69,26 @@ typedef struct GCInc {
   GCObject **sweepud;     /* ... and of rootudata */
   GCObject *gray;         /* gray tables, closures, threads and protos to traverse */
   GCObject *grayagain;    /* threads, and black tables written since (re-traversed at the atomic step) */
-  GCObject *weak;         /* weak tables traversed (kept gray; cleared at the atomic step) */
+  GCObject **weakv;       /* the weak tables traversed in this cycle, once each (cleared at the atomic step); an
+                          ** array, so that a weak table's gclist serves the gray lists as any table's does */
+  size_t nweak, capweak;
   lu_mem nobjects;        /* collectable objects in the heap, garbage included (strings and open upvalues too) */
   lu_mem made;            /* objects made since the last step */
   lu_mem estimate;        /* objects alive at the last atomic step (those then counted, less those its sweep freed) */
+  lu_mem prevestimate;    /* ... and at the one before (the `hard' limit counts from the larger) */
   lu_mem atatomic, freed; /* the count at the atomic step; what the sweep has freed since */
   lu_mem debt;            /* units a capped step left over */
   int pause, stepmul, minstep, maxstep, hard;  /* the tuning (gc_design.md 4); MOHO64_GC_* at the switch */
   lu_mem ceiling;         /* the emergency's absolute object count */
   int finishnow;          /* finish the cycle at the next step (collectgarbage, MOHO64_GC_DUE) */
+  int loading;            /* no beat has run yet: while the scripts load, a full cycle each time the objects double */
+  lu_mem rebacks;         /* tables a barrier turned gray again in this cycle (statistics) */
   int verify;             /* MOHO64_GC_VERIFY: check at every atomic step that nothing reachable is white */
   /* statistics (lua_gpg_gcstats) */
   lu_mem cycles, lastunits, maxunits, lastatomic, maxatomic, verifyfails, gcobjects;
+  lu_mem lastregray, maxregray, lastrebacks, maxrebacks;  /* the atomic step's grayagain part: units, tables */
+  int phases;             /* MOHO64_GC_PHASES: time and slots of each part of the atomic step, on stderr (statistics) */
+  lu_mem visits;          /* table and stack slots looked at (statistics, MOHO64_GC_PHASES) */
 } GCInc;
 
 #define G_(L)		G(L)
@@ -120,7 +135,20 @@ static void reallymark (global_State *g, GCObject *o) {
   }
 }
 
-/* a table: as lgc.c's traversetable (weak modes the same); a weak table stays gray, on the weak list */
+static void weakpush (GCInc *inc, GCObject *o) {
+  if (inc->nweak == inc->capweak) {
+    size_t cap = inc->capweak ? inc->capweak * 2 : 1024;
+    GCObject **v = (GCObject **)realloc(inc->weakv, cap * sizeof(GCObject *));  /* (outside Lua's byte count) */
+    if (v == NULL) { fprintf(stderr, "moho64 gc: out of memory for the weak tables\n"); abort(); }
+    inc->weakv = v;
+    inc->capweak = cap;
+  }
+  inc->weakv[inc->nweak++] = o;
+}
+
+/* a table: as lgc.c's traversetable (weak modes the same). A weak table is also entered in the weak array (once a
+** cycle; cleared at the atomic step) and otherwise is a table like any other: it turns black, and a write turns it
+** gray again (luaC_incbarriert), so that its strong part is traversed again before the atomic step, or at it. */
 static lu_mem traversetable (global_State *g, Table *h) {
   GCInc *inc = g->inc;
   int i;
@@ -134,8 +162,10 @@ static lu_mem traversetable (global_State *g, Table *h) {
     weakvalue = (strchr(svalue(mode), 'v') != NULL);
     if (weakkey || weakvalue) {
       h->marked |= cast(lu_byte, (weakkey ? KEYWEAK : 0) | (weakvalue ? VALUEWEAK : 0));
-      h->gclist = inc->weak;
-      inc->weak = valtogco(h);
+      if (!(h->marked & WEAKLISTED)) {
+        h->marked |= WEAKLISTED;
+        weakpush(inc, valtogco(h));
+      }
     }
   }
   if (!weakvalue) {
@@ -150,7 +180,8 @@ static lu_mem traversetable (global_State *g, Table *h) {
       if (!weakvalue) markobj(g, gval(n));
     }
   }
-  if (!(weakkey || weakvalue)) gray2black(valtogco(h));
+  gray2black(valtogco(h));
+  inc->visits += (lu_mem)(h->sizearray + sizenode(h));
   return 1 + (lu_mem)(h->sizearray + sizenode(h)) / 16;
 }
 
@@ -193,6 +224,7 @@ static lu_mem traversethread (lua_State *L, global_State *g, lua_State *th, int 
   for (ci = th->base_ci; ci <= th->ci; ci++)
     if (!(ci->state & CI_C) && lim < ci->top) lim = ci->top;
   for (o = th->stack; o < th->top; o++) markobj(g, o);
+  g->inc->visits += (lu_mem)(lim - th->stack) + 1;
   if (atomic) {
     for (; o <= lim; o++) setnilvalue(o);
     {  /* lgc.c checkstacksizes */
@@ -261,10 +293,12 @@ static void removekey (Node *n) {
   if (iscollectable(gkey(n))) setttype(gkey(n), LUA_TNONE);  /* dead key */
 }
 
-static void clearweak (GCObject *l) {
-  while (l) {
-    Table *h = gcotoh(l);
+static void clearweak (GCInc *inc) {
+  size_t k;
+  for (k = 0; k < inc->nweak; k++) {
+    Table *h = gcotoh(inc->weakv[k]);
     int i;
+    if (!(h->marked & (KEYWEAK | VALUEWEAK))) continue;  /* (no longer weak: traversed again at the atomic step) */
     if (h->marked & VALUEWEAK) {
       i = h->sizearray;
       while (i--) {
@@ -279,9 +313,8 @@ static void clearweak (GCObject *l) {
       if (((h->marked & KEYWEAK) && !valmarked(gkey(n))) || ((h->marked & VALUEWEAK) && !valmarked(gval(n))))
         removekey(n);
     }
-    gray2black(l);  /* done with it for this cycle */
-    l = h->gclist;
   }
+  inc->nweak = 0;
 }
 
 
@@ -290,6 +323,7 @@ static void clearweak (GCObject *l) {
 void luaC_incbarriert (lua_State *L, struct Table *t) {
   GCInc *inc = INC(L);
   if (inc->state == GCSpropagate && isblack(valtogco(t))) {
+    inc->rebacks++;
     black2gray(valtogco(t));
     t->gclist = inc->grayagain;
     inc->grayagain = valtogco(t);
@@ -319,7 +353,12 @@ lu_byte luaC_newmark (lua_State *L, lu_byte udata) {
   UNUSED(udata);
   inc->nobjects++;
   inc->made++;
-  if (inc->nobjects >= inc->ceiling) G(L)->GCthreshold = 0;  /* the emergency, at the next luaC_checkGC */
+  if (inc->nobjects >= inc->ceiling ||  /* the emergency, at the next luaC_checkGC */
+      (inc->loading && inc->nobjects >= 2 * inc->estimate))  /* (loading: as classic's threshold, twice what is
+                                                                ** alive, by count; never by `pause', which a check
+                                                                ** may set to 100: then every new object would start
+                                                                ** a cycle) */
+    G(L)->GCthreshold = 0;
   return inc->currentwhite;
 }
 
@@ -346,13 +385,16 @@ static GCObject **sweeplist (lua_State *L, GCObject **p, lu_mem count, lu_mem *d
   while ((curr = *p) != NULL && *done < count) {
     (*done)++;
     if (isdead(g, curr)) {
+      if (curr->gch.tt == LUA_TUSERDATA && !(curr->gch.marked & FINALIZED) &&
+          fasttm(L, gcotou(curr)->uv.metatable, TM_GC) != NULL)  /* (its metatable: swept later, with rootgc) */
+        fprintf(stderr, "moho64 gc: a userdata with __gc: its finaliser is not run by the incremental collector\n");
       *p = curr->gch.next;
       g->inc->nobjects--;
       g->inc->freed++;
       freeobj(L, curr);
     }
     else {
-      if (curr->gch.tt == LUA_TTABLE) curr->gch.marked &= cast(lu_byte, ~(KEYWEAK | VALUEWEAK));
+      if (curr->gch.tt == LUA_TTABLE) curr->gch.marked &= cast(lu_byte, ~(KEYWEAK | VALUEWEAK | WEAKLISTED));
       makewhite(g, curr);
       p = &curr->gch.next;
     }
@@ -485,46 +527,108 @@ static lu_mem verify (lua_State *L, global_State *g) {
 
 /* ---- the cycle ---- */
 
+/* a table's weak mode now, as traversetable reads it (KEYWEAK | VALUEWEAK) */
+static int weakmode (global_State *g, Table *h) {
+  const TObject *mode = gfasttm(g, h->metatable, TM_MODE);
+  int m = 0;
+  if (mode && ttisstring(mode)) {
+    if (strchr(svalue(mode), 'k') != NULL) m |= KEYWEAK;
+    if (strchr(svalue(mode), 'v') != NULL) m |= VALUEWEAK;
+  }
+  return m;
+}
+
 static void startcycle (lua_State *L, global_State *g) {
   GCInc *inc = g->inc;
-  inc->gray = inc->grayagain = inc->weak = NULL;
+  inc->gray = inc->grayagain = NULL;
+  inc->nweak = 0;
   markroots(L, g, 0);
   inc->state = GCSpropagate;
 }
 
-/* lgc.c's order: weak values cleared, udata that need finalizing separated and marked (none in practice: no __gc
-** in the sim's scripts), then the keys; then the white flips and the sweep begins */
+/* MOHO64_GC_PHASES (statistics only): wall time in microseconds, units and slots looked at, per part */
+#define NPH 8
+typedef struct Phases { double t0; double us[NPH]; lu_mem vis[NPH], un[NPH], n[NPH]; int k; } Phases;
+static double nowus (void) {
+  struct timespec ts;
+  timespec_get(&ts, TIME_UTC);
+  return (double)ts.tv_sec * 1e6 + (double)ts.tv_nsec / 1e3;
+}
+static void ph_begin (GCInc *inc, Phases *p) {
+  memset(p, 0, sizeof *p);
+  if (inc->phases) { inc->visits = 0; p->t0 = nowus(); }
+}
+static void ph_mark (GCInc *inc, Phases *p, lu_mem units, lu_mem n) {
+  if (inc->phases && p->k < NPH - 1) {
+    double t = nowus();
+    p->us[p->k] = t - p->t0; p->vis[p->k] = inc->visits; p->un[p->k] = units; p->n[p->k] = n;
+    p->t0 = t; inc->visits = 0; p->k++;
+  }
+}
+
+/* The atomic step: what is still gray, the roots, then grayagain (the threads, and the tables written since the last
+** pre-pass); the weak tables whose mode changed are traversed again; then lgc.c's clearing of the weak tables (udata
+** with a __gc: none in the sim's scripts, reported by the sweep); then the white flips and the sweep begins.
+** B1 (Seton's, M28 armies; 2.6 M objects, 56 k weak tables): ~7 k units, ~10 ms, of it the clearing ~6 ms. */
 static lu_mem atomic (lua_State *L, global_State *g) {
   GCInc *inc = g->inc;
-  lu_mem u = 0;
-  GCObject *w;
-  u += propagateall(L, g, 1);  /* (an emergency: what is still gray) */
-  u += markroots(L, g, 1);
-  u += propagateall(L, g, 1);
+  lu_mem u = 0, pu;
+  Phases ph;
+  ph_begin(inc, &ph);
+  pu = propagateall(L, g, 1);  /* (an emergency: what is still gray) */
+  u += pu;
+  ph_mark(inc, &ph, pu, 0);
+  pu = markroots(L, g, 1);
+  pu += propagateall(L, g, 1);
+  u += pu;
+  ph_mark(inc, &ph, pu, 0);
+  if (inc->phases) {  /* (statistics: the threads and the tables on grayagain) */
+    GCObject *o = inc->grayagain;
+    while (o) {
+      if (o->gch.tt == LUA_TTABLE) { ph.vis[NPH-1]++; o = gcotoh(o)->gclist; }
+      else { ph.n[NPH-1]++; o = gcototh(o)->gclist; }
+    }
+  }
   inc->gray = inc->grayagain;  /* threads, and tables written since they were traversed */
   inc->grayagain = NULL;
-  u += propagateall(L, g, 1);
-  w = inc->weak;  /* weak tables: their strong parts once more (writes since), then they are cleared */
-  inc->weak = NULL;
-  while (w) {
-    GCObject *next = gcotoh(w)->gclist;
-    inc->gray = w;
-    gcotoh(w)->gclist = NULL;
-    u += propagateall(L, g, 1);
-    w = next;
+  {
+    lu_mem r = propagateall(L, g, 1);
+    u += r;
+    inc->lastregray = r;
+    if (r > inc->maxregray) inc->maxregray = r;
+    inc->lastrebacks = inc->rebacks;
+    if (inc->rebacks > inc->maxrebacks) inc->maxrebacks = inc->rebacks;
+    inc->rebacks = 0;
+    ph_mark(inc, &ph, r, 0);
   }
-  u += propagateall(L, g, 1);
-  {  /* udata with a __gc: lgc.c's separation, then marked so that they survive this cycle */
-    GCObject *ud;
-    for (ud = g->rootudata; ud; ud = ud->gch.next)
-      if (iswhite(ud) && !(ud->gch.marked & FINALIZED) &&
-          fasttm(L, gcotou(ud)->uv.metatable, TM_GC) != NULL) {
-        fprintf(stderr, "moho64 gc: a userdata with __gc: its finaliser is not run by the incremental collector\n");
-        ud->gch.marked |= FINALIZED;
+  {  /* weak tables: those written since their traversal were traversed again with the gray tables above; one
+     ** whose mode changed since (a new metatable, or a __mode written) is traversed again now, its mode read again */
+    size_t k;
+    Table *lastmt = NULL;
+    int lastm = -1;
+    for (k = 0; k < inc->nweak; k++) {
+      Table *h = gcotoh(inc->weakv[k]);
+      int m;
+      if (h->metatable == lastmt && lastm >= 0) m = lastm;  /* (most share a few metatables, unchanged meanwhile) */
+      else { m = weakmode(g, h); lastmt = h->metatable; lastm = m; }
+      if (m != (h->marked & (KEYWEAK | VALUEWEAK))) {
+        black2gray(valtogco(h));
+        h->gclist = inc->gray;
+        inc->gray = valtogco(h);
+        u += propagateall(L, g, 1);
       }
+    }
+    ph_mark(inc, &ph, 0, inc->nweak);
   }
-  clearweak(inc->weak);
-  inc->weak = NULL;
+  /* (udata with a __gc: none in the sim's scripts; the sweep reports one, see sweeplist) */
+  ph_mark(inc, &ph, 0, 0);
+  if (inc->phases) {  /* (statistics: the slots clearweak looks at) */
+    size_t k;
+    for (k = 0; k < inc->nweak; k++)
+      inc->visits += (lu_mem)(gcotoh(inc->weakv[k])->sizearray + sizenode(gcotoh(inc->weakv[k])));
+  }
+  clearweak(inc);
+  ph_mark(inc, &ph, 0, 0);
   /* (the check: after the clearing, which marks the strings a weak table keeps; before the flip) */
   if (inc->verify) {
     lu_mem bad = verify(L, g);
@@ -539,7 +643,46 @@ static lu_mem atomic (lua_State *L, global_State *g) {
   inc->sweepgc = &g->rootgc;
   inc->sweepud = &g->rootudata;
   inc->state = GCSsweepstring;
+  if (inc->phases)
+    fprintf(stderr, "moho64 gc phases: cycle %lu objects %lu units %lu threads %lu written-tables %lu |"
+            " left %.0fus %lu/%lu | roots %.0fus %lu/%lu | grayagain %.0fus %lu/%lu | weak(%lu) %.0fus %lu/%lu |"
+            " udata %.0fus | clear %.0fus %lu\n",
+            (unsigned long)inc->cycles, (unsigned long)inc->nobjects, (unsigned long)u, (unsigned long)ph.n[NPH-1],
+            (unsigned long)ph.vis[NPH-1],
+            ph.us[0], (unsigned long)ph.un[0], (unsigned long)ph.vis[0],
+            ph.us[1], (unsigned long)ph.un[1], (unsigned long)ph.vis[1],
+            ph.us[2], (unsigned long)ph.un[2], (unsigned long)ph.vis[2],
+            (unsigned long)ph.n[3], ph.us[3], (unsigned long)ph.un[3], (unsigned long)ph.vis[3],
+            ph.us[4], ph.us[5], (unsigned long)ph.vis[5]);
   return u;
+}
+
+/* The tables a barrier turned gray again go back on the gray list now, not at the atomic step (Lua 5.2's
+** design re-traverses them early too): then the atomic step re-traverses only what was written in its own beat. A
+** script AI writes the same big tables every beat (M28's maps and zone tables: B1, up to 170 k of the atomic step's
+** 210 k units). Threads stay on grayagain: their stacks are re-traversed at the atomic step in any case.
+** Returns the number of tables moved. */
+static int regraytables (GCInc *inc) {
+  GCObject *o = inc->grayagain, *threads = NULL;
+  int n = 0;
+  while (o) {
+    GCObject *next;
+    if (o->gch.tt == LUA_TTABLE) {
+      next = gcotoh(o)->gclist;
+      gcotoh(o)->gclist = inc->gray;
+      inc->gray = o;
+      n++;
+    }
+    else {
+      lua_State *th = gcototh(o);
+      next = th->gclist;
+      th->gclist = threads;
+      threads = o;
+    }
+    o = next;
+  }
+  inc->grayagain = threads;
+  return n;
 }
 
 /* one piece of work; returns its units (0: the marking is done and waits for an atomic point) */
@@ -548,6 +691,7 @@ static lu_mem singlestep (lua_State *L, global_State *g, lu_mem budget, int poin
   switch (inc->state) {
     case GCSpropagate: {
       if (inc->gray) return propagateone(L, g, 0);
+      if (regraytables(inc)) return 1;  /* (then traversed by the next steps) */
       if (!point) return 0;  /* the atomic step only on the original's collection beats (tick % 70 == 0) */
       {
         lu_mem u = atomic(L, g);
@@ -578,6 +722,7 @@ static lu_mem singlestep (lua_State *L, global_State *g, lu_mem budget, int poin
         checksizes(L);
         /* (not the count now: what was made during the sweep is not known to be alive, and counting it would raise
         ** every later trigger, as Lua 5.1's estimate also leaves it out) */
+        inc->prevestimate = inc->estimate;
         inc->estimate = inc->atatomic - inc->freed;
         inc->cycles++;
         inc->state = GCSpause;
@@ -616,12 +761,13 @@ LUA_API int lua_gpg_setgcmode (lua_State *L, int mode) {
   if (!inc) return 0;
   inc->currentwhite = WHITE0;
   inc->pause = envint("MOHO64_GC_PAUSE", 200);
-  inc->stepmul = envint("MOHO64_GC_STEPMUL", 200);
+  inc->stepmul = envint("MOHO64_GC_STEPMUL", 1000);  /* (B1 at 9000: 200 left the heap at 699 MB, 1000 at 325 MB) */
   inc->minstep = envint("MOHO64_GC_MINSTEP", 2000);
-  inc->maxstep = envint("MOHO64_GC_MAXSTEP", 100000);
+  inc->maxstep = envint("MOHO64_GC_MAXSTEP", 60000);  /* (B1: a marking unit ~0.13 us, a sweep unit ~0.08 us) */
   inc->hard = envint("MOHO64_GC_HARD", 400);
   inc->ceiling = (lu_mem)envint("MOHO64_GC_CEILING", 64 << 20);
   inc->verify = envint("MOHO64_GC_VERIFY", 0);
+  inc->phases = envint("MOHO64_GC_PHASES", 0);
   g->inc = inc;
   /* every object so far (made by lua_open and the libraries) takes the current white; lgc.c's fixed strings stay
   ** fixed; udata keep lgc.c's "finalized" (its bit 1 clear) */
@@ -636,7 +782,8 @@ LUA_API int lua_gpg_setgcmode (lua_State *L, int mode) {
       inc->nobjects++;
     }
   g->mainthread->marked = cast(lu_byte, BLACK | FIXED);
-  inc->estimate = inc->nobjects;
+  inc->estimate = inc->prevestimate = inc->nobjects;
+  inc->loading = 1;
   inc->state = GCSpause;
   g->GCthreshold = MAX_LUMEM;  /* luaC_checkGC never fires but for the emergency (luaC_newmark) */
   return 1;
@@ -648,17 +795,23 @@ LUA_API int lua_gpg_setgcmode (lua_State *L, int mode) {
 **   `maxstep' (the rest carried as debt).
 ** - The atomic step runs only on a point beat (tick % 70 == 0), the first one after the marking is done: weak entries
 **   then vanish only on beats where the original also collected. The sweep follows over the next beats.
-** - Asked to finish (collectgarbage, MOHO64_GC_DUE) or past `hard' %: the marking is finished now, and the cycle is
-**   completed at the next point beat. Only the memory emergency (luaC_incemergency) completes a cycle elsewhere. */
+** - The step that runs the atomic step ends with it (the sweep starts at the next beat).
+** - Past `hard' % (of the larger of the last two estimates): the marking is behind; the budget is 4 x `maxstep' until
+**   the cycle ends (no cycle at once: B1's one mid-game such cycle cost 104 ms).
+** - Asked to finish (collectgarbage, MOHO64_GC_DUE): the marking is finished now, and the cycle is completed at the
+**   next point beat. Only the memory emergency (luaC_incemergency) completes a cycle elsewhere. */
 LUA_API void lua_gpg_gcstep (lua_State *L, int point) {
   global_State *g = G(L);
   GCInc *inc = g->inc;
-  lu_mem want, budget, done = 0;
-  int worked = 0, urgent;
+  lu_mem want, budget, done = 0, hardbase;
+  int worked = 0, urgent, behind, st0 = 0;
+  lu_mem cyc0 = 0;
+  double t0 = 0;
   if (inc == NULL) {  /* classic: the original's AdvanceBeat step 19, a full collection every 70 ticks */
     if (point) lua_setgcthreshold(L, 0);
     return;
   }
+  inc->loading = 0;
   want = inc->made * (lu_mem)inc->stepmul / 100;
   if (want < (lu_mem)inc->minstep) want = (lu_mem)inc->minstep;
   want += inc->debt;
@@ -675,7 +828,12 @@ LUA_API void lua_gpg_gcstep (lua_State *L, int point) {
   }
   if (lua_gpg_prof_gc) lua_gpg_prof_gc(L, 0);
   worked = 1;
-  urgent = inc->finishnow || inc->nobjects >= inc->estimate / 100 * (lu_mem)inc->hard;
+  st0 = inc->state;
+  cyc0 = inc->cycles;
+  if (inc->phases) t0 = nowus();
+  hardbase = inc->estimate > inc->prevestimate ? inc->estimate : inc->prevestimate;
+  urgent = inc->finishnow;
+  behind = !urgent && inc->nobjects >= hardbase / 100 * (lu_mem)inc->hard;
   if (urgent && point) {
     done = finishcycle(L, g);  /* the rest of the cycle now */
     inc->finishnow = 0;
@@ -683,15 +841,25 @@ LUA_API void lua_gpg_gcstep (lua_State *L, int point) {
   }
   else {
     if (urgent) budget = (lu_mem)-1;  /* the marking now; the atomic step at the next point */
+    else if (behind) budget = 4 * (lu_mem)inc->maxstep;
     while (done < budget && inc->state != GCSpause) {
+      int before = inc->state;
       lu_mem u = singlestep(L, g, budget - done, point);
       if (u == 0) break;  /* marked; waiting for a point beat */
       done += u;
+      if (before == GCSpropagate && inc->state != GCSpropagate) break;  /* the atomic step: enough for one beat */
     }
-    if (inc->state == GCSpause || urgent) inc->debt = 0;
+    if (inc->state == GCSpause || urgent || behind) inc->debt = 0;
   }
   inc->lastunits = done;
   if (done > inc->maxunits) inc->maxunits = done;
+  if (inc->phases) {  /* (statistics: a step over 5 ms) */
+    double us = nowus() - t0;
+    if (us > 5000)
+      fprintf(stderr, "moho64 gc step: %.0fus units %lu budget %lu state %d->%d point %d urgent %d cycle-ended %d\n",
+              us, (unsigned long)done, (unsigned long)budget, st0, inc->state, point, urgent ? 1 : behind ? 2 : 0,
+              inc->cycles != cyc0);
+  }
   if (worked && lua_gpg_prof_gc) lua_gpg_prof_gc(L, 1);
 }
 
@@ -725,12 +893,13 @@ void luaC_incleave (lua_State *L) {
   for (i = 0; i < g->strt.size; i++)
     for (o = g->strt.hash[i]; o; o = o->gch.next) o->gch.marked = cast(lu_byte, (o->gch.marked & FIXED) ? CLASSICFIX : 0);
   g->mainthread->marked = 0;
+  free(g->inc->weakv);
   free(g->inc);
   g->inc = NULL;
 }
 
 void luaC_incfree (lua_State *L) {
-  if (G(L)->inc) free(G(L)->inc);
+  if (G(L)->inc) { free(G(L)->inc->weakv); free(G(L)->inc); }
   G(L)->inc = NULL;
 }
 
@@ -756,4 +925,8 @@ LUA_API void lua_gpg_gcstats (lua_State *L, lua_GCStats *s) {
   s->lastatomic = inc->lastatomic;
   s->maxatomic = inc->maxatomic;
   s->verifyfails = inc->verifyfails;
+  s->lastregray = inc->lastregray;
+  s->maxregray = inc->maxregray;
+  s->lastrebacks = inc->lastrebacks;
+  s->maxrebacks = inc->maxrebacks;
 }

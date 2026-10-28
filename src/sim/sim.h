@@ -603,6 +603,7 @@ class Sim {
   mutable std::vector<int> cheaters_;  // sim+0x8e8: the sources that met CheatsEnabled since the last Sync
   void KeepPrint(const std::vector<std::string>& args);  // one print(...) call's lines onto prints_
   void SyncStep(bool keep);  // the script part of Sim::Sync; keep: its bytes go to pendingSync_
+  void CollectorStep();  // the Lua collector's work at the beat's end (AdvanceBeat step 19; sim.cpp)
   std::atomic<int> requestedFocus_{-1};  // the pending focus army (SimDriver+0xb0); Start sets it to focusArmy
   void ApplyFocusArmy();  // the start of Sim::Sync: a pending focus army takes effect
   void SetupSync();  // the end of Start: the setup's own Sync, the original's "beat 0" (always kept)
