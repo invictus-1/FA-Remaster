@@ -1504,6 +1504,8 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
       if (kind.find("aeon") != std::string::npos) lod.shieldTint = {0.35f, 1.0f, 0.75f};
       else if (kind.find("cybran") != std::string::npos) lod.shieldTint = {1.0f, 0.2f, 0.12f};
       else if (kind.find("seraphim") != std::string::npos) lod.shieldTint = {0.95f, 0.85f, 0.55f};
+      // [ogshield] whose kind of shield, for the original look's own way of drawing each (mesh_renderer.cpp)
+      lod.faction = kind.find("aeon") != std::string::npos ? 1 : kind.find("cybran") != std::string::npos ? 2 : kind.find("seraphim") != std::string::npos ? 3 : 0;
     } else if (kind == "uefbuildcube") {  // the UEF's box of light round what it builds
       lod.blend = lod.frame = lod.glass = true;
       lod.teamMask = false;
