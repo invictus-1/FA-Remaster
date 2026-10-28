@@ -308,6 +308,27 @@ class GameSession {
   };
   std::map<uint32_t, ForeignLoop> foreignLoops_;
   std::set<uint32_t> heardLoops_;
+  // A beat's sounds in two halves (2026-10-28, the late game's 6-7 ms a beat off the window's thread): what to play,
+  // which running sounds start, stop or move, decided from the simulation (on the beats' thread right after the beat,
+  // or here), then done in the sound system here. loopEntities_ / seekingAtBeat_: the sound system's running
+  // sounds and the timeline's jump as they were when the beat began (the beats' thread does not ask the sound system).
+  struct SoundAction {
+    enum Kind : uint8_t { Play, Loop, Move } kind = Play;
+    uint32_t entity = 0;
+    std::string bank, cue;
+    float position[3] = {0, 0, 0};
+  };
+  void DecideBeatSounds(std::vector<SoundAction>* out);
+  void ApplyBeatSounds(const std::vector<SoundAction>& actions);
+  std::vector<SoundAction> beatSounds_;
+  bool beatSoundsDecided_ = false;
+  std::vector<uint32_t> loopEntities_;
+  bool seekingAtBeat_ = false;
+  // A beat's syncs taken (TakeBeatSync, before the next beat may start) and given to the interface's scripts
+  // (GiveBeatSync, after it has started: MOHO64UI_SYNC_BEFORE=1 gives them before, as until 2026-10-28).
+  std::vector<std::string> syncsToGive_;
+  void TakeBeatSync();
+  void GiveBeatSync();
   void NoteBeat();  // a beat has run: the picture hears of it, then the sounds and shakes
   void NotePictureBeat();  // the picture's copy of the beat (on the beats' thread, or here)
   void NoteBeatHere();     // the beat's sounds and camera shakes (always here, after the beat)
@@ -322,7 +343,7 @@ class GameSession {
   uint32_t aheadTo_ = 0;            // (RunAhead: the tick the beats run to behind the loading screen; 0 when none)
   uint32_t aheadRanTo_ = 0;         // (AheadRanTo)
   uint32_t beatFrom_ = 0;      // the tick the running beat started from
-  double workerSimSeconds_ = 0, workerPictureSeconds_ = 0, workerFingerprintSeconds_ = 0;  // (written there; read here after it)
+  double workerSimSeconds_ = 0, workerPictureSeconds_ = 0, workerFingerprintSeconds_ = 0, workerSoundSeconds_ = 0;  // (written there; read here after it)
   // How early (in game seconds) a beat starts on its thread: about as long as the last one took,
   // so the next beat is there when the picture's moment reaches it (the picture never waits).
   double lead_ = 0;

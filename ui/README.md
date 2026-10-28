@@ -99,7 +99,12 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   (the ground's heights, the economy, focus army, tick, armies, a unit's state until the next
   sync, the hover info, the cursor's order, the picture's scene), so in busy games almost nothing
   waits (`MOHO64UI_BEAT_LOG=1` names each wait and the engine function it came from). Orders,
-  sounds and sync come after the beat. `MOHO64UI_SHOW_ONLY_DURING_BEATS=1`: frames during a beat
+  sounds and sync come after the beat. Since 2026-10-28 (the late game's held frames at 4K, `docs/ui-benchmarks.md`)
+  the beat's sounds are decided on the beats' thread too (what to play, which running sounds start, stop or follow
+  their units: read from the simulation; the window's thread only plays them), its sync is taken before the next
+  beat may start and given to the scripts once that beat is begun (ours; `MOHO64UI_SYNC_BEFORE=1`: before it, as
+  until then), and a beat may start up to a whole beat early (was 80 ms; the picture keeps six beats).
+  `MOHO64UI_SHOW_ONLY_DURING_BEATS=1`: frames during a beat
   only show the picture; `MOHO64UI_BEATS_HERE=1`: the beats on the main thread, as at first.
   Measured in the renderer's eight-army M28 game at beat 6000 (1600x900): the interface's drawing
   8.18 -> 0.48 ms a frame; frame to frame 4.17 / 4.25 / 5.05 / 5.88 ms (middle / 95% / 99% /

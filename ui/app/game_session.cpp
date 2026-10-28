@@ -1370,6 +1370,8 @@ void GameSession::End() {
   setupSync_.clear();
   foreignLoops_.clear();
   heardLoops_.clear();
+  syncsToGive_.clear();
+  beatSounds_.clear(), beatSoundsDecided_ = false;
   due_ = 0;
   pace = GamePace();
 }
@@ -2169,6 +2171,7 @@ void GameSession::AdvanceClock(double seconds) {
 void GameSession::WaitForBeat() {
   if (worker_) worker_->Wait();
   if (beatToFinish_) FinishBeat();
+  GiveBeatSync();
 }
 
 void GameSession::WaitForWorker() {
@@ -2287,13 +2290,13 @@ void GameSession::Advance(double seconds) {
       // (and the beats' early start learnt afresh: those beats' times, M28's start among them, would have it start
       // each beat at the most for seconds, the interface waiting on the beats meanwhile; measured on the 4K live game)
       leadBeats_ = 0, lead_ = 0;
+      GiveBeatSync();  // (the last of them with the others, for the game's screen)
       return;
     }
     due_ = 0.1;  // (exactly one beat below: on the thread it returns once begun)
-    const double lead = lead_;
     lead_ = 0;
     RunDueBeats(false);
-    lead_ = lead;
+    GiveBeatSync();
     return;
   }
   if (holdBeats_) return;
@@ -2312,23 +2315,36 @@ void GameSession::Advance(double seconds) {
   } else {
     AdvanceClock(seconds);  // (after a long stall, catch up by at most a second of beats)
   }
-  if (RunDueBeats(catchingUp)) return;
+  const bool begun = RunDueBeats(catchingUp);
+  GiveBeatSync();  // (the last beat's sync, now that the next may be running: TakeBeatSync)
+  if (begun) return;
   SeekReached();
 }
 
 void GameSession::DeliverBeatSync() {
-  using Clock = std::chrono::steady_clock;
-  auto ms = [](Clock::time_point a) { return std::chrono::duration<double, std::milli>(Clock::now() - a).count(); };
-  auto t0 = Clock::now();
-  std::vector<std::string> syncs = sim_->TakeSync();
-  LongFrames().Note("(beat: the simulation's sync taken)", ms(t0));
-  t0 = Clock::now();
+  TakeBeatSync();
+  GiveBeatSync();
+}
+
+// (the simulation's part: before the next beat may start; after any syncs not given yet, in order)
+void GameSession::TakeBeatSync() {
+  const auto t0 = std::chrono::steady_clock::now();
+  for (std::string& sync : sim_->TakeSync()) syncsToGive_.push_back(std::move(sync));
+  PostPrints(*sim_);
+  LongFrames().Note("(beat: the simulation's sync taken)", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+}
+
+// (the interface's scripts' part: the next beat may run meanwhile)
+void GameSession::GiveBeatSync() {
+  if (syncsToGive_.empty()) return;
+  const auto t0 = std::chrono::steady_clock::now();
+  std::vector<std::string> syncs;
+  syncs.swap(syncsToGive_);
   for (std::string& sync : syncs) {
     if (onSync) onSync(sync);
     else pendingSync_.push_back(std::move(sync));
   }
-  LongFrames().Note("(beat: the sync given to the interface's scripts)", ms(t0));
-  PostPrints(*sim_);
+  LongFrames().Note("(beat: the sync given to the interface's scripts)", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
 }
 
 // The tick and the picture's copy of it on the beats' thread (the renderer's viewer does the same:
@@ -2337,7 +2353,10 @@ void GameSession::StartBeatOnThread() {
   beatFrom_ = sim_->tick();
   if (!worker_) worker_ = std::make_unique<BeatWorker>();
   beatToFinish_ = true;
-  worker_->Start([this] {
+  // (what the beats' thread needs of this one's for the beat's sounds: see DecideBeatSounds)
+  const bool decideSounds = sounds != nullptr;
+  if (decideSounds) loopEntities_ = sounds->LoopEntities(), seekingAtBeat_ = seekTo_ != 0;
+  worker_->Start([this, decideSounds] {
     using Clock = std::chrono::steady_clock;
     const auto ts = Clock::now();
     sim_->Tick();
@@ -2349,7 +2368,12 @@ void GameSession::StartBeatOnThread() {
     FingerprintBeat();
     workerSimSeconds_ = std::chrono::duration<double>(tp - ts).count();
     workerPictureSeconds_ = std::chrono::duration<double>(tf - tp).count();
-    workerFingerprintSeconds_ = std::chrono::duration<double>(Clock::now() - tf).count();
+    const auto ts2 = Clock::now();
+    workerFingerprintSeconds_ = std::chrono::duration<double>(ts2 - tf).count();
+    // (and the beat's sounds decided: they read the simulation, ~6-7 ms a beat late in a big game, so they too stay
+    // off the frames; played here at FinishBeat)
+    if (decideSounds) DecideBeatSounds(&beatSounds_), beatSoundsDecided_ = true;
+    workerSoundSeconds_ = std::chrono::duration<double>(Clock::now() - ts2).count();
   });
 }
 
@@ -2365,12 +2389,14 @@ void GameSession::FinishBeat() {
   times.pictureBeats += workerPictureSeconds_;
   ++times.beats;
   // The next beat starts this much early: the longest of the last beats, with some room (beats
-  // vary; the old estimate fades slowly), at most most of a beat.
+  // vary; the old estimate fades slowly), at most a whole beat (2026-10-28: was 80 ms; the late game's chain of a beat,
+  // 76 ms on the beats' thread at 95% and its share here, held the world a frame or two a beat at that; the picture
+  // keeps six beats, render/sim_frames.cpp, so it may show two behind the newest).
   const double speed = std::pow(10.0, pace.rate / 10.0);
-  const double took = (workerSimSeconds_ + workerPictureSeconds_ + workerFingerprintSeconds_) * speed;
+  const double took = (workerSimSeconds_ + workerPictureSeconds_ + workerFingerprintSeconds_ + workerSoundSeconds_) * speed;
   leadBeats_ = std::max(took * 1.3, leadBeats_ * 0.9);
   // (A beat starts only in a frame: one frame's time more, or it starts up to a frame late.)
-  lead_ = std::min(0.08, leadBeats_ + lastFrameSeconds_ * speed);
+  lead_ = std::min(0.1, leadBeats_ + lastFrameSeconds_ * speed);
   static const bool beatLog = std::getenv("MOHO64UI_BEAT_LOG") != nullptr;
   const auto tHere = std::chrono::steady_clock::now();
   if (beatLog)
@@ -2380,7 +2406,9 @@ void GameSession::FinishBeat() {
   NoteBeatHere();
   LongFrames().Note("(beat: after it, here: heights, allies, sounds, shakes)",
                     std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tHere).count());
-  DeliverBeatSync();
+  TakeBeatSync();  // (given once the next beat is begun: Advance, GiveBeatSync)
+  static const bool syncBefore = std::getenv("MOHO64UI_SYNC_BEFORE") != nullptr;
+  if (syncBefore) GiveBeatSync();
 }
 
 // The player's orders while a replay plays: only his pause and resume count (the messages
@@ -2446,7 +2474,12 @@ void GameSession::NoteBeatHere() {
 #endif
   if (sim_ && sim_->L()) Times().simLuaKB = static_cast<double>(lua_getgccount(sim_->L()));
   const auto tsnd = std::chrono::steady_clock::now();
-  PlayBeatSounds();
+  if (beatSoundsDecided_) {  // (decided on the beats' thread)
+    ApplyBeatSounds(beatSounds_);
+    beatSounds_.clear(), beatSoundsDecided_ = false;
+  } else {
+    PlayBeatSounds();
+  }
   Times().soundBeats += std::chrono::duration<double>(std::chrono::steady_clock::now() - tsnd).count();
   LongFrames().Note("(beat: its sounds)", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tsnd).count());
   // The beat's camera shakes (the engine's ShakeEvents) go to the world's cameras.
@@ -2466,9 +2499,26 @@ void GameSession::NoteBeatHere() {
 // the original's sound manager does with unseen units is not read.)
 void GameSession::PlayBeatSounds() {
   if (!sounds) return;
+  loopEntities_ = sounds->LoopEntities();
+  seekingAtBeat_ = seekTo_ != 0;
+  std::vector<SoundAction> actions;
+  DecideBeatSounds(&actions);
+  ApplyBeatSounds(actions);
+}
+
+// (the simulation is read, the sound system is not: on the beats' thread right after the beat, or here)
+void GameSession::DecideBeatSounds(std::vector<SoundAction>* out) {
+  out->clear();
   std::vector<SoundEvent> events;
   SoundEvents(*sim_, &events);
-  if (events.empty() && foreignLoops_.empty() && !sounds->HasLoops()) return;
+  if (events.empty() && foreignLoops_.empty() && loopEntities_.empty()) return;
+  auto act = [out](SoundAction::Kind kind, uint32_t entity, const std::string& bank, const std::string& cue, const float place[3]) {
+    SoundAction a;
+    a.kind = kind, a.entity = entity, a.bank = bank, a.cue = cue;
+    for (int i = 0; i < 3; ++i) a.position[i] = place[i];
+    out->push_back(std::move(a));
+  };
+  static const std::string none;
   const int focus = sim_->focusArmy + 1;
   std::vector<bool> friendly;  // by army - 1
   for (const ArmyView& a : ArmyViews(*sim_)) {
@@ -2490,6 +2540,7 @@ void GameSession::PlayBeatSounds() {
     return (recon & kReconSeenNow) != 0;
   };
   const bool log = std::getenv("MOHO64UI_SOUND_LOG") != nullptr;
+  std::vector<uint32_t> startedHere;  // (our running sounds started in this beat: moved with their units below too)
   for (const SoundEvent& e : events) {
     bool ours = isFriendly(e.army);
     if (log)
@@ -2498,35 +2549,49 @@ void GameSession::PlayBeatSounds() {
            e.position[2], e.bank.c_str(), e.cue.c_str(), ours ? "ours" : seen(e.entity, e.position) ? "seen" : "not seen");
     if (e.kind == SoundEvent::Play) {
       // (not while the replay timeline jumps: up to 50 beats a frame; the running sounds below are still followed)
-      if (!seekTo_ && (ours || seen(e.entity, e.position))) sounds->PlayAt(e.bank, e.cue, e.position);
+      if (!seekingAtBeat_ && (ours || seen(e.entity, e.position))) act(SoundAction::Play, e.entity, e.bank, e.cue, e.position);
     } else if (ours) {
-      sounds->SetLoop(e.entity, e.bank, e.cue, e.position);
+      act(SoundAction::Loop, e.entity, e.bank, e.cue, e.position);
+      if (!e.bank.empty() && !e.cue.empty()) startedHere.push_back(e.entity);
     } else if (e.bank.empty() || e.cue.empty()) {  // another army's running sound ends
       foreignLoops_.erase(e.entity);
-      if (heardLoops_.erase(e.entity)) sounds->SetLoop(e.entity, "", "", e.position);
+      if (heardLoops_.erase(e.entity)) act(SoundAction::Loop, e.entity, none, none, e.position);
     } else {
       ForeignLoop& loop = foreignLoops_[e.entity];
-      if (heardLoops_.erase(e.entity)) sounds->SetLoop(e.entity, "", "", e.position);  // it changes: start again below
+      if (heardLoops_.erase(e.entity)) act(SoundAction::Loop, e.entity, none, none, e.position);  // it changes: start again below
       loop.bank = e.bank, loop.cue = e.cue;
       for (int i = 0; i < 3; ++i) loop.position[i] = e.position[i];
     }
   }
-  // Running sounds follow their units; another army's start and end as it comes into sight and leaves it.
+  // Running sounds follow their units (those the sound system had when the beat began, and ours started in it);
+  // another army's start and end as it comes into sight and leaves it.
+  std::sort(startedHere.begin(), startedHere.end());
   for (const UnitView& u : units) {
     auto it = foreignLoops_.find(u.id);
     if (it != foreignLoops_.end())
       for (int i = 0; i < 3; ++i) it->second.position[i] = u.position[i];
-    sounds->MoveLoop(u.id, u.position);
+    if (std::binary_search(loopEntities_.begin(), loopEntities_.end(), u.id) || std::binary_search(startedHere.begin(), startedHere.end(), u.id))
+      act(SoundAction::Move, u.id, none, none, u.position);
   }
   for (auto& entry : foreignLoops_) {
     bool hear = seen(entry.first, entry.second.position), heard = heardLoops_.count(entry.first) != 0;
     if (hear && !heard) {
-      sounds->SetLoop(entry.first, entry.second.bank, entry.second.cue, entry.second.position);
+      act(SoundAction::Loop, entry.first, entry.second.bank, entry.second.cue, entry.second.position);
       heardLoops_.insert(entry.first);
     } else if (!hear && heard) {
-      sounds->SetLoop(entry.first, "", "", entry.second.position);
+      act(SoundAction::Loop, entry.first, none, none, entry.second.position);
       heardLoops_.erase(entry.first);
     }
+  }
+}
+
+// (the sound system, on this thread, in the order decided)
+void GameSession::ApplyBeatSounds(const std::vector<SoundAction>& actions) {
+  if (!sounds) return;
+  for (const SoundAction& a : actions) {
+    if (a.kind == SoundAction::Play) sounds->PlayAt(a.bank, a.cue, a.position);
+    else if (a.kind == SoundAction::Loop) sounds->SetLoop(a.entity, a.bank, a.cue, a.position);
+    else sounds->MoveLoop(a.entity, a.position);
   }
 }
 
