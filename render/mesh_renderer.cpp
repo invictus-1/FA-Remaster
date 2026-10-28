@@ -1558,7 +1558,8 @@ void MeshRenderer::Prepare(const std::vector<const View*>& views) {
   cardNow_ = false;
   if (cardScenery && !views.empty()) {
     CpuTimes::Part("scenery picked on the card");
-    cardNow_ = CardPrepare(views);
+    if (CardPays()) cardNow_ = CardPrepare(views);  // [step2b] (cardByNeed: only where it pays)
+    else CardKeep();
   }
   CpuTimes::Part(outer);
   prepared_ = true;
@@ -2501,24 +2502,7 @@ bool MeshRenderer::CardPrepare(const std::vector<const View*>& views) {
   if (!card_) card_ = std::make_unique<CardScenery>(device_);
   if (!CardPipelines()) return false;
   ++cardFrame_;
-  std::vector<CardScenery::Member> members;
-  std::vector<uint32_t> left;
-  for (uint32_t g : groupsListed_) {
-    if (g >= groups_.size()) continue;
-    Group& group = groups_[g];
-    if (!group.cardDirty && card_->Has(g)) continue;
-    members.clear();
-    for (const Entry& e : group.entries)
-      members.push_back({e.model, reinterpret_cast<const float*>(&e.instance), e.centre, e.radius, e.sizeRadius});
-    card_->SetGroup(g, group.order, members.data(), members.size(), &left);
-    group.rest.clear();
-    group.restCulls.clear();
-    for (uint32_t i : left) {
-      group.rest.push_back(group.entries[i]);
-      group.restCulls.push_back(group.culls[i]);
-    }
-    group.cardDirty = false;
-  }
+  CardGive();
   cardViews_.clear();
   cardSway_ = -1;
   CardScenery::Pass passes[CardScenery::kMostViews];
@@ -2554,6 +2538,60 @@ bool MeshRenderer::CardPrepare(const std::vector<const View*>& views) {
     cardEntries_.push_back(e);
   }
   return true;
+}
+
+// [step2b] The groups listed that changed since they were last given to the card, given anew (each its props the card does
+// not take kept for the processor).
+void MeshRenderer::CardGive() {
+  std::vector<CardScenery::Member> members;
+  std::vector<uint32_t> left;
+  for (uint32_t g : groupsListed_) {
+    if (g >= groups_.size()) continue;
+    Group& group = groups_[g];
+    if (!group.cardDirty && card_->Has(g)) continue;
+    members.clear();
+    for (const Entry& e : group.entries)
+      members.push_back({e.model, reinterpret_cast<const float*>(&e.instance), e.centre, e.radius, e.sizeRadius});
+    card_->SetGroup(g, group.order, members.data(), members.size(), &left);
+    group.rest.clear();
+    group.restCulls.clear();
+    for (uint32_t i : left) {
+      group.rest.push_back(group.entries[i]);
+      group.restCulls.push_back(group.culls[i]);
+    }
+    group.cardDirty = false;
+  }
+}
+
+// [step2b] Whether the card picks this frame's scenery (cardByNeed): by the props of the groups listed, with the frames in a
+// row each way (cardOnFrames, cardOffFrames) before it changes, so that a camera at the edge of the two does not switch to
+// and fro. Without cardByNeed: always.
+bool MeshRenderer::CardPays() {
+  size_t props = 0;
+  for (uint32_t g : groupsListed_)
+    if (g < groups_.size()) props += groups_[g].entries.size();
+  cardListedProps = props;
+  if (!cardByNeed) return true;
+  const bool other = cardPays_ ? props < static_cast<size_t>(std::max(cardOffProps, 0)) : props >= static_cast<size_t>(std::max(cardOnProps, 0));
+  cardTurn_ = other ? cardTurn_ + 1 : 0;
+  if (cardTurn_ >= std::max(cardPays_ ? cardOffFrames : cardOnFrames, 1)) {
+    cardPays_ = !cardPays_;
+    cardTurn_ = 0;
+    if (++cardSwitches_ <= 20)
+      printf("render: the scenery picked by the %s from here (%zu props listed)%s\n", cardPays_ ? "card" : "processor", props,
+             cardSwitches_ == 20 ? "; no more of these" : "");
+  }
+  return cardPays_;
+}
+
+// [step2b] A frame the card does not pick for (cardByNeed): what it will need kept ready all the same, the variants of the
+// pipelines asked for in the background and the groups that changed given to it, so that the first frame it picks again
+// has no more to do than any other.
+void MeshRenderer::CardKeep() {
+  if (!device_->IndirectDraws()) return;
+  if (!card_) card_ = std::make_unique<CardScenery>(device_);
+  CardPipelines();
+  CardGive();
 }
 
 // The variants of the models' pipelines that read the card's lists: of each the world has made (the plain ones, and those

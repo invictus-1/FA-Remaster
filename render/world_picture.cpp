@@ -110,6 +110,7 @@ struct WorldPicture::Impl {
     // [shadowmask] (the sun's shadow on the ground worked out once a visible pixel, its search shared in 2 x 2 pixels:
     // with the soft shadows, which it makes cheaper: -0.9..2.2 ms of the card at 4K, the same picture but for the penumbra's noise)
     if (b.softShadows >= 0) w.shadowMask = w.sunMask.shareSearch = b.softShadows > 0;
+    if (b.softShadows >= 0) w.halfOcclusion = b.softShadows > 0;  // [step2b] (the AO and contact shadows at half size)
     if (b.rayTracing >= 0) w.bounceLight = w.rayLightShadows = b.rayTracing > 0;
     w.rayReflections = b.rayReflections;
     if (b.weatherEffects >= 0) w.litRain = w.rainSplashes = w.waterDetail = w.unitSnow = w.unitDirt = w.surf = b.weatherEffects > 0;

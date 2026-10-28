@@ -70,8 +70,37 @@ float3 ViewPosition(int2 p) {
   return float3(ndc.x * tanHalfFov * aspect * away, ndc.y * tanHalfFov * away, -away);
 }
 
+#ifdef AO_HALF
+// [step2b] At half the view's size (AmbientOcclusion::half): a pixel here stands for two by two of the view's and works
+// out the occlusion of one of them, the nearest, or (every other pixel, as a chessboard) the farthest, so that near an
+// edge both what is in front and what is behind are worked out somewhere close by (Upsample picks among them by depth).
+int2 FullPixel(int2 h) {
+  int2 last = int2(viewport.xy) - 1, b = h * 2;
+  const int2 corner[4] = {int2(0, 0), int2(1, 0), int2(0, 1), int2(1, 1)};
+  bool farthest = ((h.x + h.y) & 1) != 0;
+  int2 best = min(b, last);
+  float bestDepth = DepthAt(best);
+  [unroll] for (int k = 1; k < 4; ++k) {
+    int2 q = min(b + corner[k], last);
+    float d = DepthAt(q);  // (zNear / distance: more is nearer)
+    if (farthest ? d < bestDepth : d > bestDepth) {
+      bestDepth = d;
+      best = q;
+    }
+  }
+  return best;
+}
+#endif
+
 float4 PS(VOut i) : SV_Target {
+#ifdef AO_HALF
+  // ([step2b] the spiral turned by this pixel's place at half size: Upsample's four by four of them hold all sixteen turns)
+  int2 tp = int2(i.position.xy);
+  int2 p = FullPixel(tp);
+#else
   int2 p = int2(i.position.xy);
+  int2 tp = p;
+#endif
   float3 P = ViewPosition(p);
   float away = -P.z;
   // (blue 1 in both: lit, no contact shadow; 0 there darkened everything far off once contact shadows were on)
@@ -95,7 +124,7 @@ float4 PS(VOut i) : SV_Target {
   if (dot(N, P) > 0) N = -N;  // toward the camera
 
   static const float turn[16] = {0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5};
-  float angle = turn[(p.x & 3) + 4 * (p.y & 3)] * (6.2831853 / 16.0);
+  float angle = turn[(tp.x & 3) + 4 * (tp.y & 3)] * (6.2831853 / 16.0);
   const int count = 12;
   float sum = 0;
   float bias = 0.03 + 0.002 * away;
@@ -116,7 +145,7 @@ float4 PS(VOut i) : SV_Target {
     float3 worldN = normalize(axisRight.xyz * N.x + axisUp.xyz * N.y + axisBack.xyz * N.z);
     [branch] if (dot(N, sunInView.xyz) > 0 && AoSun(world, worldN, p) > 0.5) {
       const int steps = 12;
-      float start = (turn[(p.x & 3) + 4 * (p.y & 3)] + 0.5) / 16;
+      float start = (turn[(tp.x & 3) + 4 * (tp.y & 3)] + 0.5) / 16;
       for (int k = 0; k < steps; ++k) {
         float3 q = P + N * (0.02 + 0.001 * away) + sunInView.xyz * (contactLength * (k + start) / steps);
         float2 ndc = q.xy / (-q.z * tanHalfFov * float2(aspect, 1));
@@ -168,6 +197,81 @@ float4 PS(VOut i) : SV_Target {
     }
   float openness = weight > 0 ? sum / weight : 1;
   float k = lerp(1, openness, saturate(strength)) * lerp(1, weight > 0 ? lit / weight : 1, saturate(contact));
+  return float4(k, k, k, 1);
+}
+)hlsl";
+
+// [step2b] Upsample (the occlusion at half size, AmbientOcclusion::half): for each of the view's pixels, by its own depth,
+// the average of the four by four half-size pixels round it that lie at its distance (as Apply leaves out those at another:
+// a unit's occlusion stays off the ground behind it); none at its distance (a thin thing, an antenna, that no half-size
+// pixel took), the one nearest in distance. Its own pass (it reads the scene's depth); written as what multiplies the
+// scene, which ApplyHalf then lays over it.
+const char kUpsample[] = R"hlsl(
+cbuffer Ao : register(b1) {
+  float tanHalfFov, aspect, zNear, radius;
+  float strength, contact, contactLength, pixelScale;
+};
+#ifdef MSAA
+Texture2DMS<float> sceneDepth : register(t0);
+float DepthAt(int2 p) { return sceneDepth.Load(p, 0); }
+#else
+Texture2D<float> sceneDepth : register(t0);
+float DepthAt(int2 p) { return sceneDepth.Load(int3(p, 0)); }
+#endif
+Texture2D halfOcclusion : register(t1);
+
+struct VOut {
+  float4 position : SV_Position;
+};
+VOut VS(uint id : SV_VertexID) {
+  VOut o;
+  float2 uv = float2((id << 1) & 2, id & 2);
+  o.position = float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);
+  return o;
+}
+
+float4 PS(VOut i) : SV_Target {
+  int2 p = int2(i.position.xy);
+  float d = DepthAt(p);
+  float here = d > 0 ? zNear / d : 1e6;
+  int2 last = (int2(viewport.xy) + 1) / 2 - 1;
+  int2 base = ((p - 1) >> 1) - 1;  // (the four by four whose middle is nearest this pixel's)
+  float sum = 0, lit = 0, weight = 0, nearest = 1e30;
+  float2 alone = float2(1, 1);
+  for (int y = 0; y < 4; ++y)
+    for (int x = 0; x < 4; ++x) {
+      float3 s = halfOcclusion.Load(int3(clamp(base + int2(x, y), int2(0, 0), last), 0)).rgb;
+      float gap = abs(s.g - here);
+      float w = gap < 0.03 * here + 0.05 ? 1 : 0;
+      sum += s.r * w;
+      lit += s.b * w;
+      weight += w;
+      if (gap < nearest) {
+        nearest = gap;
+        alone = s.rb;
+      }
+    }
+  float openness = weight > 0 ? sum / weight : alone.x;
+  float shade = weight > 0 ? lit / weight : alone.y;
+  float k = lerp(1, openness, saturate(strength)) * lerp(1, shade, saturate(contact));
+  return float4(k, k, k, 1);
+}
+)hlsl";
+
+// [step2b] ApplyHalf: Upsample's picture laid over the scene's (drawn with Multiply).
+const char kApplyHalf[] = R"hlsl(
+Texture2D occlusion : register(t0);
+struct VOut {
+  float4 position : SV_Position;
+};
+VOut VS(uint id : SV_VertexID) {
+  VOut o;
+  float2 uv = float2((id << 1) & 2, id & 2);
+  o.position = float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);
+  return o;
+}
+float4 PS(VOut i) : SV_Target {
+  float k = occlusion.Load(int3(int2(i.position.xy), 0)).r;
   return float4(k, k, k, 1);
 }
 )hlsl";
@@ -284,13 +388,29 @@ void AmbientOcclusion::Compute(const View& view, const Camera& camera, gfx::Text
     std::copy(axes[2], axes[2] + 4, constants_.axisBack);
   }
 
+  // [step2b] at half the view's size (its picture made at that size), then brought to the view's (Upsample, below)
+  halfNow_ = half && HalfPipelines();
+  if (halfNow_ && (halfWidth_ != (view.width + 1) / 2 || halfHeight_ != (view.height + 1) / 2 || !halfTarget_)) {
+    if (halfTarget_) device_->Destroy(halfTarget_);
+    gfx::TargetDesc td;
+    td.width = (view.width + 1) / 2;
+    td.height = (view.height + 1) / 2;
+    td.format = gfx::Format::RGBA16F;
+    td.clearValue[0] = 1;
+    halfTarget_ = device_->CreateTarget(td);
+    halfWidth_ = td.width;
+    halfHeight_ = td.height;
+    if (!halfTarget_) halfNow_ = false, halfWidth_ = halfHeight_ = 0;
+  }
+
   gfx::PassDesc pass;
-  pass.color = target_;
+  pass.color = halfNow_ ? halfTarget_ : target_;  // ([step2b])
   pass.clearColor = false;  // every pixel is written
   device_->BeginPass(pass);
   // [shadowmask] (with the sun's shadow mask this frame, the variants that read it: made the first time)
   const bool mask = sunMask && sunMaskDepth && contactShadows > 0 && MaskPipelines() && sunMaskWords > 0;
-  device_->SetPipeline(mask ? (cover ? computeCoverMask_ : computeMask_) : cover ? computeCover_ : compute_);  // ([coverdark] one sample a pixel)
+  if (halfNow_) device_->SetPipeline(halfCompute_[(mask ? 2 : 0) + (cover ? 1 : 0)]);  // [step2b]
+  else device_->SetPipeline(mask ? (cover ? computeCoverMask_ : computeMask_) : cover ? computeCover_ : compute_);  // ([coverdark] one sample a pixel)
   device_->SetConstants(0, &view.constants, sizeof view.constants);
   device_->SetConstants(1, &constants_, sizeof constants_);
   device_->SetTexture(0, sceneDepth);
@@ -302,6 +422,82 @@ void AmbientOcclusion::Compute(const View& view, const Camera& camera, gfx::Text
   }
   device_->Draw(3);
   if (mask) device_->SetTexture(1, {});
+  if (halfNow_) {  // [step2b] the half size's picture brought to the view's by the depth the occlusion was worked out from
+    gfx::PassDesc up;
+    up.color = target_;
+    up.clearColor = false;  // every pixel is written
+    device_->BeginPass(up);
+    device_->SetPipeline(cover ? upsampleCover_ : upsample_);
+    device_->SetConstants(0, &view.constants, sizeof view.constants);
+    device_->SetConstants(1, &constants_, sizeof constants_);
+    device_->SetTexture(0, sceneDepth);
+    device_->SetTexture(1, halfTarget_);
+    device_->Draw(3);
+    device_->SetTexture(1, {});
+  }
+}
+
+// [step2b] The pipelines of the occlusion at half size (half): its four variants (the scene's depth or the one without the
+// ground cover, each with or without the sun's shadow mask), the upsampling for each depth and the apply, made at once the
+// first time (PrepareHalf, or the first frame it is on).
+bool AmbientOcclusion::HalfPipelines() {
+  if (halfMade_) return halfMade_ > 0;
+  halfMade_ = -1;
+  std::string error;
+  const std::string samples = gSceneSamples > 1 ? "#define MSAA 1\n" : "";
+  const std::string maskHead = "#define AO_SUN_MASK 1\n#define SUN_MASK_BUFFER 1\n";
+  gfx::PipelineDesc pd;
+  pd.cull = gfx::Cull::None;
+  pd.depthTest = pd.depthWrite = false;
+  pd.depthTarget = false;
+  pd.colorFormat = gfx::Format::RGBA16F;
+  bool ok = true;
+  for (int k = 0; k < 4 && ok; ++k) {
+    const bool mask = k >= 2, cover = (k & 1) != 0;
+    if (cover && gSceneSamples <= 1) {  // (one sample a pixel already: the cover's depth reads as the scene's)
+      halfCompute_[k] = halfCompute_[k - 1];
+      continue;
+    }
+    const std::string source = std::string("#define AO_HALF 1\n") + (mask ? maskHead : "") + (cover ? "" : samples) + kViewShaderBlock +
+                               kLightingShaderBlock + kCompute;
+    pd.name = mask ? (cover ? "ambient occlusion at half size, the ground cover left out, the sun's shadow mask"
+                            : "ambient occlusion at half size, the sun's shadow mask")
+                   : (cover ? "ambient occlusion at half size, the ground cover left out" : "ambient occlusion at half size");
+    pd.vertexSource = pd.pixelSource = source;
+    halfCompute_[k] = device_->CreatePipeline(pd, &error);
+    ok = static_cast<bool>(halfCompute_[k]);
+  }
+  if (ok) {
+    const std::string scene = samples + kViewShaderBlock + kUpsample;
+    pd.name = "ambient occlusion brought to the view's size";
+    pd.vertexSource = pd.pixelSource = scene;
+    upsample_ = device_->CreatePipeline(pd, &error);
+    if (upsample_ && gSceneSamples > 1) {
+      const std::string single = std::string(kViewShaderBlock) + kUpsample;
+      pd.name = "ambient occlusion brought to the view's size, the ground cover left out";
+      pd.vertexSource = pd.pixelSource = single;
+      upsampleCover_ = device_->CreatePipeline(pd, &error);
+    } else {
+      upsampleCover_ = upsample_;
+    }
+    ok = upsample_ && upsampleCover_;
+  }
+  if (ok) {
+    pd.name = "ambient occlusion at half size, applied";
+    pd.vertexSource = pd.pixelSource = kApplyHalf;
+    pd.depthTarget = true;  // it draws into the scene's pass, which has its depth buffer bound
+    pd.colorFormat = kSceneFormat;
+    pd.samples = gSceneSamples;
+    pd.blend = gfx::Blend::Multiply;
+    applyHalf_ = device_->CreatePipeline(pd, &error);
+    ok = static_cast<bool>(applyHalf_);
+  }
+  if (!ok) {
+    fprintf(stderr, "render: the ambient occlusion cannot be worked out at half size (%s); every pixel as before\n", error.c_str());
+    return false;
+  }
+  halfMade_ = 1;
+  return true;
 }
 
 // [shadowmask] The occlusion's variants that read the sun's shadow mask (AO_SUN_MASK): the scene's, and with one sample a pixel
@@ -428,7 +624,7 @@ void AmbientOcclusion::CoverAfter(const View& view, gfx::Texture sceneDepth) {
 }
 
 void AmbientOcclusion::Apply(const View& view) {
-  device_->SetPipeline(apply_);
+  device_->SetPipeline(halfNow_ ? applyHalf_ : apply_);  // ([step2b] the upsampled picture as it is)
   device_->SetConstants(0, &view.constants, sizeof view.constants);
   device_->SetConstants(1, &constants_, sizeof constants_);
   device_->SetTexture(0, target_);
