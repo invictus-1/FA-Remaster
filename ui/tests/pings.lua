@@ -40,6 +40,30 @@ local function lastSynced(kind)
     end
 end
 
+-- The arrow each ping makes in the main view (the view's CreateCameraIndicator: offscreenmarkerindicator.lua, made in
+-- the ping's script thread, laid over the whole view until its first OnFrame places it at the view's edge or hides it):
+-- when it was made, when its first OnFrame ran, and its rectangle's width (Right - Left: its Width stays the bitmap's)
+-- and state after that. The original runs the script
+-- threads before the controls' OnFrame and draws after both (CScApp::Main 0x8d1470), so the arrow is never drawn over
+-- the whole view (Chris's snapshot test, 2026-10-25: "Pings flash full screen for a moment").
+local made = {}
+local OSM = import("/lua/ui/game/offscreenmarkerindicator.lua")
+local makeIndicator = OSM.CreateOffScreenMarkerIndicatorFromPreset
+OSM.CreateOffScreenMarkerIndicatorFromPreset = function(parent, worldView, target, preset)
+    local ind = makeIndicator(parent, worldView, target, preset)
+    local rec = {at = CurrentTime(), target = target, fullWidth = ind.Right() - ind.Left(), viewWidth = worldView.Width()}
+    table.insert(made, rec)
+    local onFrame = ind.OnFrame
+    ind.OnFrame = function(self, delta)
+        onFrame(self, delta)
+        if not rec.firstFrame then
+            rec.firstFrame = CurrentTime()
+            rec.width, rec.hidden = self.Right() - self.Left(), self:IsHidden()
+        end
+    end
+    return ind
+end
+
 local view, mini
 -- the rings a ping made in a view (FAF's PingRing: a Bitmap of the view with the ping's data), and its arrow (the
 -- view's CreateCameraIndicator: an off-screen indicator with the ping's place as its target)
@@ -156,6 +180,18 @@ ForkThread(function()
         check("its texture", m and moho64ui_Describe(m), "bitmap /textures/ui/common/game/marker/ring_yellow02-blur.dds")
         check("and it fades as it grows", m and m:GetAlpha() < 1 and m:GetAlpha() > 0 and m.Height() > 0, true)
         check("the main view's arrow to it", table.getn(arrows(view, alert)), 1)
+        local rec
+        for _, k in made do
+            if k.target == alert.Location then rec = k end
+        end
+        LOG(string.format("TEST note: the arrow made at %.4f s, spanning %d (the view %d), its first OnFrame at %s, then spanning %s, hidden %s",
+            rec and rec.at or -1, rec and rec.fullWidth or -1, rec and rec.viewWidth or -1, tostring(rec and rec.firstFrame),
+            tostring(rec and rec.width), tostring(rec and rec.hidden)))
+        check("the arrow is made over the whole view (FAF's script lays it out so until its first OnFrame)",
+            rec ~= nil and rec.fullWidth == rec.viewWidth, true)
+        check("its first OnFrame runs in the frame it was made, before that frame is drawn (no flash over the screen)",
+            rec ~= nil and rec.firstFrame == rec.at, true)
+        check("and after it the arrow no longer covers the view", rec ~= nil and (rec.hidden or rec.width < rec.viewWidth / 2), true)
         local e1 = meshAt("alert_marker", alert.Location)
         WaitSeconds(0.35)
         local e2 = meshAt("alert_marker", alert.Location)

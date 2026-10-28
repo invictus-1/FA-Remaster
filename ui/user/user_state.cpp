@@ -365,11 +365,22 @@ void UserState::Frame(double seconds) {
   frameBegan_ = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
   ++frame_;
   AdvanceTickFraction(seconds);  // (the game's clock first, as the original's SessionFrame)
-  ui_->Update(state_->L(), static_cast<float>(seconds));
+  // The original's frame (CScApp::Main 0x8d1470, READ): WLD_Frame (0x8d1af6: the session's frame, its beats and their
+  // OnSync), the cameras (RCamManager::Frame 0x8d1b52), the user Lua state's script threads (its CTaskStage, the
+  // global 0x10a6340 that the user state's init 0x8c6659 sets, run by 0x409ac0 at 0x8d1b5d), the sounds, then the
+  // controls' frame updates, their OnFrame (CUIManager slot 5, IUIManager::UpdateFrameRate 0x84d160, at 0x8d1bb1:
+  // each root frame's CMauiFrame::Frame 0x7965a0), and only then the window is redrawn (CD3DDevice::Refresh 0x42e9e0
+  // at 0x8d1c2e). So a control a script thread makes has had its first OnFrame before it is first drawn. FAF's ping
+  // arrow (offscreenmarkerindicator.lua: a button laid over the whole world view until its first OnFrame places it
+  // at the view's edge or hides it) flashed over the whole screen for a frame when the threads ran after the frame
+  // updates (Chris's snapshot test, 2026-10-25, item 15). Our beats and their OnSync come after the frame is drawn
+  // (GameSession::Advance), which is the same cycle. INFERRED: the chat and the console's lines where the session's
+  // frame hands them over, before the threads.
   AdvanceCameras(state_->L(), static_cast<float>(seconds));
   DeliverChat(state_->L());
   DeliverConsoleLines(state_->L());  // (the console's lines from other threads: user/keymap.cpp)
   threads_->RunTick(frame_);
+  ui_->Update(state_->L(), static_cast<float>(seconds));
   // (the collector's step: every frame, menus and loading screens too, as an incremental state no longer collects by
   // itself; `point' always, the interface's collections need not fall on the game's beats)
   if (incrementalGc_) lua_gpg_gcstep(state_->L(), 1);

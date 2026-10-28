@@ -114,7 +114,9 @@ g:Hide()  -- hidden controls still get frame updates
 log = {}
 ForkThread(function()
     WaitFrames(3)
-    check("OnFrame runs once per frame, hidden or not", frames, 3)
+    -- (the thread first runs in the first frame and WaitFrames(3) wakes it two frames on; a frame runs the script
+    -- threads before the controls' OnFrame, as the original's CScApp::Main 0x8d1470 does: two OnFrames between)
+    check("OnFrame runs once per frame, hidden or not", frames, 2)
     check("topmost depth", root:GetTopmostDepth(), 3)
     g:Destroy()
     check("destroy order: the control first, then its children", table.concat(log, ", "), "bitmap destroy, text destroy")
