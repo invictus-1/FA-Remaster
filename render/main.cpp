@@ -433,6 +433,9 @@
 // --sky-tables  the sky from tables of the atmosphere (sky.h, World::skyTables; modern look, a time of day): light
 //           scattered many times over and the planet's shadow
 // --contact-shadows  contact shadows (World::contactShadows; modern look): small shadows the sun's maps cannot hold
+// --ao-half, --no-ao-half  [step2b] the ambient occlusion and the contact shadows worked out at half the view's width and
+//           height, brought to its size by the depth (World::halfOcclusion, AmbientOcclusion::half; the game's), or at
+//           every pixel, as before
 // --air     light in the air (air.h, World::volumetricFog; modern look): the air's own light in a volume over
 //           the view, the sun's shafts and the lamps' beams in it. Tuning: --air-dust <thickness per world unit>,
 //           --air-sun <strength>, --air-lamps <strength>, --air-cells <across>,<deep>
@@ -467,8 +470,10 @@
 //           (MeshRenderer::recordThreads, gfx.h's Device::BeginParallel; the same picture): 0 (the default) as many as
 //           the processor gives (the jobs pool's workers and the frames' thread), 1 all on the frames' thread, as before
 // --card-scenery  [gpuscenery] the still scenery kept on the card and picked there each frame by compute passes, drawn by
-//           indirect draws (MeshRenderer::cardScenery, card_scenery.h; off by default): the processor no longer tests
-//           and lists the map's trees and rocks for the camera's pass and the sun's cascades
+//           indirect draws (MeshRenderer::cardScenery, card_scenery.h): the processor no longer tests and lists the map's
+//           trees and rocks for the camera's pass and the sun's cascades. [step2b] By default only where it pays (World::
+//           cardScenery 1: by the props in view, MeshRenderer::cardByNeed); --card-scenery: every frame (to measure);
+//           --no-card-scenery: never (the processor picks it, as at first). The same picture in all three.
 // --jobs-awake <us>  [mcrec] how long the jobs pool's workers wait awake for the next job before they sleep (Jobs::
 //           awakeMicroseconds; 0, the default: they sleep at once, as before), to measure it
 // --no-ground-changes  the ground stays as the map file has it where the game lays it flat under structures (to compare)
@@ -706,7 +711,7 @@ struct Options {
   int shadowKeep = -1;                  // [cardcost] --shadow-keep (-1: World's own)
   int recordThreads = 0;                // --record-threads [mcrec]
   int jobsAwake = -1;                   // --jobs-awake [mcrec] (-1: Jobs' own)
-  bool cardScenery = false;             // --card-scenery [gpuscenery]
+  int cardScenery = -1;                 // --card-scenery 2, --no-card-scenery 0 [gpuscenery] [step2b] (-1: World's own)
   bool groundChanges = true;            // --no-ground-changes
   bool bloom = true;                    // --no-bloom
   bool vulkan = false;                  // --vulkan
@@ -723,6 +728,7 @@ struct Options {
   float shadowMaskSmooth = -1;          // [shadowmask] --shadow-mask-smooth (-1: SunMask's own)
   bool shadowMaskShare = false;         // [shadowmask] --shadow-mask-share
   bool contactShadows = false;          // --contact-shadows
+  int halfOcclusion = -1;               // --ao-half 1, --no-ao-half 0 [step2b] (-1: World's own)
   bool skyTables = false;               // --sky-tables
   bool rayView = false;                 // --ray-view
   bool bounce = false;                  // --bounce
@@ -1012,6 +1018,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--air") o->air = true;
     else if (a == "--no-weather-cut") o->weatherCuts = false;  // (airfix)
     else if (a == "--contact-shadows") o->contactShadows = true;
+    else if (a == "--ao-half") o->halfOcclusion = 1;  // [step2b]
+    else if (a == "--no-ao-half") o->halfOcclusion = 0;
     else if (a == "--sky-tables") o->skyTables = true;
     else if (a == "--ray-view") o->rayView = true;
     else if (a == "--bounce") o->bounce = true;
@@ -1122,7 +1130,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--no-shadow-fit") o->shadowFit = 0;
     else if (a == "--ray-refit") o->rayRefit = 1;
     else if (a == "--no-ray-refit") o->rayRefit = 0;
-    else if (a == "--card-scenery") o->cardScenery = true;  // [gpuscenery]
+    else if (a == "--card-scenery") o->cardScenery = 2;  // [gpuscenery]
+    else if (a == "--no-card-scenery") o->cardScenery = 0;  // [step2b]
     else if (a == "--no-ground-changes") o->groundChanges = false;
     else if (a == "--no-bloom") o->bloom = false;
     else if (a == "--no-frame") o->frame = false;
@@ -1884,6 +1893,7 @@ int main(int argc, char** argv) {
   world.sunMask.shareSearch = opt.shadowMaskShare;
   if (opt.shadowMaskSmooth >= 0) world.sunMask.smoothness = opt.shadowMaskSmooth;
   world.contactShadows = opt.contactShadows;
+  if (opt.halfOcclusion >= 0) world.halfOcclusion = opt.halfOcclusion > 0;  // [step2b]
   world.skyTables = opt.skyTables;
   world.rayView = opt.rayView;
   world.bounceLight = opt.bounce;
@@ -2103,8 +2113,7 @@ int main(int argc, char** argv) {
   if (opt.rayRefit >= 0) world.rayRefit = opt.rayRefit > 0;
   if (opt.shadowKeep >= 0) world.shadowKeep = opt.shadowKeep;
   world.meshes.recordThreads = opt.recordThreads;  // [mcrec]
-  world.meshes.cardScenery = opt.cardScenery;      // [gpuscenery]
-  world.grass.indirectModels = opt.cardScenery;    // [gpuscenery] (the 3D plants' draws by their lists' counts)
+  if (opt.cardScenery >= 0) world.cardScenery = opt.cardScenery;  // [gpuscenery] [step2b] (World passes it on each frame)
   if (opt.jobsAwake >= 0) Jobs::awakeMicroseconds = opt.jobsAwake;
   world.frame = opt.frame;
   world.beyondHaze = opt.beyondHaze;
@@ -4223,6 +4232,8 @@ int main(int argc, char** argv) {
                static_cast<int>(world.models.AheadLeft()), world.models.madeAlike);
       if (haveLive) printf("; scenery: %d changes, %d gone, %d made in the game standing, %d props of %d squares gone through; %zu script entities", world.propsChanged, world.propsGone, world.MadeProps(), world.propsAdded, world.propCellsSeen, frame.entities.size());
       if (haveLive) printf("; %d hits, %d impacts taken (%d, %d shown)", world.hitsTaken, world.impactsTaken, world.hitsShown, world.impactsShown);
+      if (meshes.cardScenery)  // [step2b]
+        printf("; scenery picked by the %s (%zu props listed)", meshes.CardNow() ? "card" : "processor", meshes.cardListedProps);
       if (world.waterRipples) printf("; water ripples: %d splashes added, %d still swinging", world.water.ripples.Added(), world.water.ripples.Live());
       if (world.surf)
         printf("; surf: field in %.0f ms, %d spray spots, %d bursts, %d ships throwing spray, %d puffs kept, %d drawn", world.water.surf.fieldMs,

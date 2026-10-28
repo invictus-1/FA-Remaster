@@ -336,6 +336,11 @@ class World {
   // before (ray_scene.h, RayScene::refit; built again every 30 frames and whenever something came or went): the same
   // picture. On by default; viewer --no-ray-refit: off (built every frame, as before).
   bool rayRefit = true;
+  // [step2b] The still scenery kept on the card and picked there (MeshRenderer::cardScenery, card_scenery.h; the 3D plants'
+  // draws by their lists' counts with it, GroundCover::indirectModels): 0 never (the processor picks it, as at first); 1
+  // where it pays (MeshRenderer::cardByNeed: by the props in view, the default); 2 every frame (viewer --card-scenery, to
+  // measure). The same picture in all three. Viewer --no-card-scenery: 0.
+  int cardScenery = 1;
   // [cardcost] The sun's far shadow cascades drawn anew only every n-th frame, in turn, and kept in between while they
   // still serve (shadows.h, Shadows::keepEvery; the nearest every frame). The ground and the trees cast the same shadows;
   // a unit moving far off casts where it stood a frame or so before. 0 (or 1): every cascade every frame. Viewer
@@ -721,6 +726,11 @@ class World {
   // too small for the sun's shadow maps, from a short march toward the sun along the scene's depth.
   // Modern look; off by default.
   bool contactShadows = false;
+  // [step2b] The ambient occlusion and the contact shadows worked out at half the view's width and height and brought to
+  // its size by the depth (ambient_occlusion.h, AmbientOcclusion::half): a quarter of their work, the picture within a few
+  // levels of every pixel's (4K: 1.1 -> 0.5 ms of card). Off by default here (every pixel, as before); in the game's
+  // "Soft Shadows" bundle (world_picture.cpp); viewer --ao-half.
+  bool halfOcclusion = false;
   // Motion (motion.h): where each pixel was the frame before, for the temporal upscaler; it needs the
   // scene drawn with one sample a pixel (gSceneSamples 1). `motionView`: a view for checking it (1 the
   // motion as colours, 2 the frame before carried to this one; Motion::Check; 5 the temporal upscaler's

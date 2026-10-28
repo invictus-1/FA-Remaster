@@ -2,6 +2,7 @@
 // each pass then draws what of that list it can see, sorted by mesh, each mesh's instances together.
 #pragma once
 #include <algorithm>  // [mcrec] (ForEachAddedIn)
+#include <utility>    // [step2b] (std::swap)
 #include <memory>     // [gpuscenery]
 #include <string>
 #include <unordered_map>
@@ -75,6 +76,14 @@ class MeshRenderer {
   // list; the processor records only those draws. The same picture but where a level is chosen a hair differently in the
   // card's rounding. Where the device cannot (Device::IndirectDraws), and until its shaders' variants are made, as before.
   bool cardScenery = false;
+  // [step2b] The card's picking only where it pays (cardScenery on): with few props in view (a close camera) the processor's
+  // own tests cost less than the picking's fixed part and the draws of lists that turn out empty, with the whole map in
+  // view much more. Each frame counts the props of the groups listed; the card picks from the cardOnFrames-th frame in a
+  // row with at least cardOnProps, the processor again from the cardOffFrames-th in a row with fewer than cardOffProps.
+  // Both draw the same picture, so the switch, made between frames, shows nothing. Off: the card picks every frame.
+  bool cardByNeed = false;
+  int cardOnProps = 28000, cardOffProps = 22000, cardOnFrames = 4, cardOffFrames = 30;
+  size_t cardListedProps = 0;  // (the last frame's count)
   bool CardNow() const { return cardNow_; }  // (the card picked this frame's scenery)
   float CardPickMs() const;                   // (what its picking took the processor, averaged)
   // After the frame's last Add and before its first Draw: builds the bones of every posed model
@@ -402,10 +411,13 @@ class MeshRenderer {
   struct Before {
     std::unordered_map<uint32_t, LastPlace> last;
     std::vector<float> rows;
+    bool cardOn = false;  // [step2b] (cardByNeed's choice and its count of frames toward the other: each view its own)
+    int cardTurn = 0;
   };
   void SwapBefore(Before& b) {
     last_.swap(b.last);
     lastRows_.swap(b.rows);
+    std::swap(cardPays_, b.cardOn), std::swap(cardTurn_, b.cardTurn);  // [step2b]
   }
 
  private:
@@ -478,6 +490,13 @@ class MeshRenderer {
   uint64_t cardFrame_ = 0;
   bool CardPrepare(const std::vector<const View*>& views);
   int CardPassOf(const View& view) const;
+  // [step2b] (cardByNeed: whether the card picks this frame, and the frames in a row that asked for the other; the groups
+  // that changed given to the card while it does not pick, so that the frame it picks again has only its own to give)
+  bool cardPays_ = false;
+  int cardTurn_ = 0, cardSwitches_ = 0;
+  bool CardPays();
+  void CardKeep();
+  void CardGive();
   // its variants of the models' pipelines (each pipeline's id and its variant reading the card's instances), their
   // sources, which variants the last check found wanted (blasts', plants', snow's, build's, sway motion's), and whether they
   // were all made then (false: not all yet, or one could not be)

@@ -1377,6 +1377,11 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   // [stream] streams as water (stream_water.h): their props left out of the models' drawing while the streams' pass draws them
   streamNow_ = streamWater && look == Look::Modern && haveMap_ && !sidePicture && streams.Any() && streams.Prepare();
   meshes.divertStream = streamNow_;
+  // [step2b] the still scenery picked on the card: where it pays, or every frame (and the 3D plants' draws by their lists'
+  // counts with it)
+  meshes.cardScenery = cardScenery > 0;
+  meshes.cardByNeed = cardScenery == 1;
+  grass.indirectModels = cardScenery > 0;
   CpuTimes::Part("sun shadows placed");
   if (haveMap_ && shadowsOn) {
     if (shadows.Size() != shadowSize) shadows.SetSize(shadowSize);
@@ -2750,6 +2755,7 @@ void World::PrepareAhead() {
   }
   if (buildNow_) build.PrepareSparks();
   if (groundCover && (ao.strength > 0 || contactShadows)) ao.PrepareCover();
+  if (halfOcclusion && (ao.strength > 0 || contactShadows)) ao.PrepareHalf();  // [step2b]
   if (groundCover && grassMade_ && plantsFar) grass.PrepareAhead(plantsReact);  // [plantlod] (the 3D plants' and the far cover's)
   if (surf && map.water.present) water.surf.PrepareSpray();
   if (litRain) falling.PrepareLit();
@@ -3380,6 +3386,7 @@ void World::Render() {
     Stage("ambient occlusion");
     ao.contactShadows = contactShadows ? 0.8f : 0.0f;
     ao.pixelScale = photoPixel;  // (photofix2: a photo's frame reaches as far as the window's)
+    ao.half = halfOcclusion;     // [step2b]
     if (look == Look::Modern && (ao.strength > 0 || ao.contactShadows > 0)) {
       ao.Compute(view, camera, post.Depth());
       post.ContinueScene();

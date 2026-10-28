@@ -59,6 +59,12 @@ class AmbientOcclusion {
   // [hitches] The ground cover's leaving out (CoverBefore): its pipelines made now (World::readAhead: the first frame the
   // cover is on), not the first time the camera comes close enough for grass; its pictures then, as before.
   bool PrepareCover() { return CoverPipelines(); }
+  // [step2b] The occlusion and the contact shadows worked out at half the view's width and height (a quarter of the
+  // pixels: each of them for one of its two by two, kCompute's FullPixel), then brought to the view's size by its depth
+  // (kUpsample: of the four by four round a pixel those at its distance), so that a unit's edge against the ground keeps
+  // each side its own. Off: every pixel worked out, as before. PrepareHalf: its pipelines made ahead (World::readAhead).
+  bool half = false;
+  bool PrepareHalf() { return HalfPipelines(); }
 
   // [views] What it keeps for one view (its pictures at that view's size, what it keeps of the frames before) swapped
   // with another's, so each of a picture's views has its own (views.h, ViewSide); its pipelines and settings stay.
@@ -67,16 +73,18 @@ class AmbientOcclusion {
     std::swap(groundDepth_, o.groundDepth_), std::swap(coverDepth_, o.coverDepth_), std::swap(solidDepth_, o.solidDepth_);
     std::swap(coverWidth_, o.coverWidth_), std::swap(coverHeight_, o.coverHeight_), std::swap(coverKept_, o.coverKept_);
     std::swap(coverNow_, o.coverNow_);
+    std::swap(halfTarget_, o.halfTarget_), std::swap(halfWidth_, o.halfWidth_), std::swap(halfHeight_, o.halfHeight_);  // [step2b]
+    std::swap(halfNow_, o.halfNow_);
   }
   // [views] A view's own (views.h, ViewSide) let go of: the pictures SwapView swaps, destroyed (a class without a
   // destructor of its own: the world's are let go of with the device).
   void ReleaseView() {
-    for (gfx::Texture* t : {&target_, &groundDepth_, &coverDepth_, &solidDepth_})
+    for (gfx::Texture* t : {&target_, &groundDepth_, &coverDepth_, &solidDepth_, &halfTarget_})  // ([step2b] halfTarget_)
       if (*t) {
         device_->Destroy(*t);
         *t = {};
       }
-    width_ = height_ = coverWidth_ = coverHeight_ = 0;
+    width_ = height_ = coverWidth_ = coverHeight_ = halfWidth_ = halfHeight_ = 0;
   }
  private:
   struct Constants {
@@ -101,6 +109,15 @@ class AmbientOcclusion {
   gfx::Texture groundDepth_, coverDepth_, solidDepth_;
   int coverMade_ = 0, coverWidth_ = 0, coverHeight_ = 0;
   bool coverKept_ = false, coverNow_ = false;
+  // [step2b] (half: its pipelines, made the first time it is wanted, -1 they cannot be: the occlusion at half size as
+  // compute_, computeMask_, computeCover_, computeCoverMask_ are; the upsampling reading the scene's depth and the depth with
+  // the ground cover taken out; the apply; its picture at half the view's size and that size;
+  // whether this frame's Compute made it)
+  bool HalfPipelines();
+  gfx::Pipeline halfCompute_[4], upsample_, upsampleCover_, applyHalf_;
+  gfx::Texture halfTarget_;
+  int halfMade_ = 0, halfWidth_ = 0, halfHeight_ = 0;
+  bool halfNow_ = false;
 };
 
 }  // namespace render
