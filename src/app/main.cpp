@@ -5,6 +5,7 @@
 //          [--log out.log] [--check-lua] [--rules] [--quiet]
 //          [--sim <replay> | --session <game configuration .lua> [--seed N]] [--ticks N] [--view] [--orders file] [--sim-lua file]
 //          [--twice | --together [--together-lag N] [--together-threads <n|cores>]] [--focus N]
+//          [--then-session <game configuration .lua>]
 //   moho64 --init <init.lua> [--mods uids.txt] [--maps folder] --scan-moments <replay> [--scan-out file] [--ticks N]
 //          [--scan-off] [--scan-threads N] [--scan-cancel-at tick] [--scan-mount <folder> <mount point>]...
 //          [--scan-skip <folder>]...
@@ -88,6 +89,11 @@ struct Options {
   std::string simLua;   // --sim-lua file: a host Lua file run in the sim state after the ticks (debugging)
   std::vector<std::string> exec;  // --exec <lua>: run in a fresh rules state after mounting
   bool twice = false;   // --twice: play the session a second time in the same process (RunTimes)
+  // --then-session <file>: after the --session game, a second game from this configuration in the same process (same
+  // seed, file system, --ticks and --orders), as the interface plays its next game; its record and fingerprint get
+  // ".then". For what one game leaves behind for the next, e.g. our own AI's scripts (src/ai/scripts.h) only in the
+  // game that has it.
+  std::string thenSession;
   bool together = false;  // --together: two copies of the session at once in the same process (RunTimes)
   int togetherLag = 100;  // --together-lag N: the second copy starts when the first has played N beats
   int togetherThreads = 0;  // --together-threads <n|cores>: the second copy's worker pool (0: as MOHO64_THREADS)
@@ -1138,27 +1144,28 @@ int RunSim(const Options& o, Vfs& vfs, const std::vector<std::string>& hookDirs,
 // --session <file>: the game configuration a lobby hands over at Launch (`GameConfig = { ... }`), started the
 // way CLobby::LaunchGame starts it (sim/session.h). The mods are the configuration's GameMods unless --mods
 // names a list.
-int RunGameConfig(const Options& o, Vfs& vfs, const std::vector<std::string>& hookDirs,
-                  std::vector<std::string> uids) {
-  SessionDescription session;
+// The session a game configuration file describes, and (without --mods) its GameMods' uids into `uids`.
+bool LoadGameConfig(const Options& o, const std::string& file, Vfs& vfs, const std::vector<std::string>& hookDirs,
+                    SessionDescription* out, std::vector<std::string>* uids) {
+  SessionDescription& session = *out;
   {
     ScriptState st(ScriptState::Kind::User, &vfs);
     st.SetHookDirs(hookDirs);
     lua_State* L = st.L();
     std::string err;
-    if (!PushGameConfigFile(L, o.session, &err)) {
+    if (!PushGameConfigFile(L, file, &err)) {
       Logf(LogLevel::Error, "moho64: %s", err.c_str());
-      return 1;
+      return false;
     }
     LaunchParams params;
     params.seed = o.hasSeed ? o.seed
                             : static_cast<uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count());
     if (!SessionFromGameConfig(L, -1, params, &session, &err)) {
       Logf(LogLevel::Error, "moho64: launch failed: %s", err.c_str());
-      return 1;
+      return false;
     }
     if (o.modsFile.empty()) {
-      uids.clear();
+      uids->clear();
       lua_getfield(L, -1, "GameMods");
       for (int i = 1; lua_istable(L, -1); ++i) {
         lua_rawgeti(L, -1, i);
@@ -1167,7 +1174,7 @@ int RunGameConfig(const Options& o, Vfs& vfs, const std::vector<std::string>& ho
           break;
         }
         lua_getfield(L, -1, "uid");
-        if (lua_isstring(L, -1)) uids.push_back(lua_tostring(L, -1));
+        if (lua_isstring(L, -1)) uids->push_back(lua_tostring(L, -1));
         lua_pop(L, 2);
       }
     }
@@ -1175,6 +1182,13 @@ int RunGameConfig(const Options& o, Vfs& vfs, const std::vector<std::string>& ho
   const ReplayHeader& h = session.header;
   Logf(LogLevel::Info, "moho64: session %s: %zu armies, %zu command sources, focus army %d, seed %u, cheats %s",
        h.map.c_str(), h.armies.size(), h.sources.size(), session.focusArmy + 1, h.seed, h.cheats ? "on" : "off");
+  return true;
+}
+
+int RunGameConfig(const Options& o, Vfs& vfs, const std::vector<std::string>& hookDirs,
+                  std::vector<std::string> uids) {
+  SessionDescription session;
+  if (!LoadGameConfig(o, o.session, vfs, hookDirs, &session, &uids)) return 1;
   // --stream: the orders of a game that was played from this table (the interface host's --replay-out: every
   // batch it applied, an Advance per beat), played back here. The session is still a played one, not a replay.
   if (!o.stream.empty()) {
@@ -1186,7 +1200,24 @@ int RunGameConfig(const Options& o, Vfs& vfs, const std::vector<std::string>& ho
     Logf(LogLevel::Info, "moho64: playing the command stream %s (%zu bytes)", o.stream.c_str(), bytes->size());
     return RunTimes(o, vfs, hookDirs, uids, session, &*bytes);
   }
-  return RunTimes(o, vfs, hookDirs, uids, session, nullptr);
+  int rc = RunTimes(o, vfs, hookDirs, uids, session, nullptr);
+  if (!o.thenSession.empty()) {  // --then-session: the next game, after the first Sim is gone
+    std::vector<std::string> uids2 = uids;
+    SessionDescription next;
+    if (!LoadGameConfig(o, o.thenSession, vfs, hookDirs, &next, &uids2)) return rc | 1;
+    for (const char* var : {"MOHO64_RECORD", "MOHO64_FINGERPRINT"})
+      if (const char* rec = getenv(var); rec && *rec) {
+        const std::string then = std::string(rec) + ".then";
+#ifdef _WIN32
+        _putenv_s(var, then.c_str());
+#else
+        setenv(var, then.c_str(), 1);
+#endif
+      }
+    Logf(LogLevel::Info, "moho64: --then-session: the next game, %s", o.thenSession.c_str());
+    rc |= RunTimes(o, vfs, hookDirs, uids2, next, nullptr);
+  }
+  return rc;
 }
 
 // /map: the table FAF's SinglePlayerLaunch.lua builds for a campaign scenario (StartCommandLineSession 365-393 and
@@ -1439,6 +1470,7 @@ int main(int argc, char** argv) {
     else if (a == "--sim-lua") o.simLua = next();
     else if (a == "--raw-blueprints") SimBlueprints::reflect = false;
     else if (a == "--twice") o.twice = true;
+    else if (a == "--then-session") o.thenSession = next();
     else if (a == "--workers-selftest") {  // the worker pool's own check (core/workers.h), with MOHO64_THREADS / _PAR_CHECK
       WorkerPool pool(ThreadsFromEnvironment(), ParCheckFromEnvironment());
       SimFpScope fp;  // (as a sim entry does: the calling thread takes tasks too)

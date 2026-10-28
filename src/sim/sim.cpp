@@ -33,6 +33,8 @@
 #include "core/profile.h"
 #include "core/workers.h"
 #include "core/vfs.h"
+#include "ai/map_analysis.h"
+#include "ai/scripts.h"
 #include "script/fastlib.h"
 #include "script/script_state.h"
 #include "script/threads.h"
@@ -1054,6 +1056,7 @@ bool Sim::Start(const ReplayHeader& replay) {
   // Map
   {
     std::string mapPath = replay.map;
+    mapFile = mapPath;
     auto data = vfs_->ReadFile(mapPath);
     map_ = std::make_unique<TerrainMap>();
     std::string err;
@@ -1165,6 +1168,7 @@ bool Sim::Start(const ReplayHeader& replay) {
   lap("map props");
   if (!CallGlobal("BeginSession", 0)) return false;
   lap("BeginSession");
+  ai::AfterSessionStart(*this);  // our own AI's map analysis, in a session with our AI (or MOHO64_AI_MAPDUMP)
   SetupSync();  // the original's "beat 0" Sync, before any beat
   return true;
 }
@@ -1256,6 +1260,15 @@ bool Sim::CreateArmies(const ReplayHeader& replay) {
     armies_.push_back(std::move(army));
   }
   lua_settop(L, saveArmies - 1);
+  // Our own AI, only when an army plays it (docs/ai-architecture.md 4.1): its scripts from data/ai into this state
+  // alone (src/ai/scripts.h; nothing is mounted, so the host's file system and its next game never see them) and its
+  // Lua functions (src/ai/map_analysis.h, Remastered.AI*). Every other session's Lua state stays exactly as it was
+  // (no extra objects for the collector to count). Before the brains: OnCreateArmyBrain imports
+  // /lua/aibrains/index.lua, which data/ai hooks with our lobby keys.
+  if (fixes && ai::SessionHasOurAi(*this)) {
+    ai::JoinOurAiScripts(*state_);
+    ai::RegisterMapBindings(L);
+  }
   // The lobby's unit cap: the CArmyImpl ctor (0x6ff2ed) takes Options.UnitCap only when it is a string
   // (LuaObject::IsString 0x907370: the type itself, not a number), as atol; 500 when it is none or atol gives 0.
   // (A campaign's options have none: its armies start at 500.)

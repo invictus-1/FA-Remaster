@@ -57,7 +57,7 @@ def main():
     for n in ("adler32", "crc32", "inffast", "inflate", "inftrees", "zutil"):
         add(os.path.join(ROOT, "third_party", "zlib", n + ".c"), std_c + zlib_inc, False)
     cxxflags = ["-std=c++20", "-I", os.path.join(ROOT, "src")] + lua_inc + zlib_inc
-    for d in ("core", "script", "sim"):
+    for d in ("core", "script", "sim", "ai"):
         for f in sorted(glob.glob(os.path.join(ROOT, "src", d, "*.cpp"))):
             add(f, cxxflags, True)
     add(os.path.join(ROOT, "src", "app", "main.cpp"), cxxflags, True)

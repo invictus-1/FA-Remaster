@@ -6,6 +6,7 @@
 #include <functional>
 #include <map>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "script/lua.hpp"
@@ -48,6 +49,17 @@ class ScriptState {
   };
   void SetExtraHooks(std::map<std::string, ExtraHook> hooks) { extraHooks_ = std::move(hooks); }
   const std::map<std::string, ExtraHook>& ExtraHooks() const { return extraHooks_; }
+  // More of them (our own AI's, src/ai/scripts.cpp): a script both hook sets touch gets both, these after the ones it
+  // has, as one more hook folder after it.
+  void AddExtraHooks(const std::map<std::string, ExtraHook>& hooks);
+
+  // Scripts from outside the game's file system that only this state sees: our own AI's (data/ai, src/ai/scripts.cpp),
+  // keyed by normalized virtual path. doscript / import and exists() find them where the file system has no file of
+  // that path (they never replace a game file); DiskFindFiles does not list them. They live and go with the state,
+  // so nothing of them stays in a file system the host shares with its other states or its next game.
+  void SetOwnFiles(std::map<std::string, ExtraHook> files) { ownFiles_ = std::move(files); }
+  const ExtraHook* OwnFile(std::string_view vpath) const;
+  size_t OwnFileCount() const { return ownFiles_.size(); }
 
   // doscript semantics (with hooks), run protected; errors are logged. Returns success.
   bool DoScript(const std::string& vpath);
@@ -69,6 +81,7 @@ class ScriptState {
   Vfs* vfs_;
   std::vector<std::string> hookDirs_;
   std::map<std::string, ExtraHook> extraHooks_;
+  std::map<std::string, ExtraHook> ownFiles_;
 };
 
 // Push the error message plus a traceback (used as the pcall error handler).

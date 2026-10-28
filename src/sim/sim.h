@@ -495,6 +495,7 @@ class Sim {
   // The session's scenario info as it was launched (serialized Lua; what the interface's SessionGetScenarioInfo
   // returns). The scripts' own ScenarioInfo grows engine objects during the game and is not for handing out.
   std::string sessionScenario;
+  std::string mapFile;  // the session's map (the replay header's / the launch's map path), as Start loaded it
   bool cheats = false;
 
   // Command stream state (engine-ref command_stream.md 4 and 7; sim/command_stream.cpp plays the messages)
@@ -543,6 +544,7 @@ class Sim {
 
   // Movement (M3): pathfinding, path searches waiting their turn, issued commands.
   Navigation& navigation();
+  bool HasNavigation() const { return nav_ != nullptr; }  // made already (navigation() reads the terrain types from Lua)
   std::deque<Unit*> pathQueue;
   uint64_t walkSeqNext = 0;  // Unit::walkSeq: the order task walks were made in (their listeners' link order)
   std::vector<ResourceDeposit> deposits;
@@ -566,6 +568,9 @@ class Sim {
   // 0 outside that stage (SteeringNavStageArmy)
   bool inSteeringStage = false;
   int navStageArmy = 0;
+  // src/ai/map_analysis.cpp: our own AI's map analysis (its MapState), made only in a session with our AI or for
+  // MOHO64_AI_MAPDUMP; the game itself never reads it
+  std::shared_ptr<void> aiMapState;
   std::shared_ptr<struct PhaseTimer> phaseTimer;  // sim/sim.cpp: MOHO64_PROFILE's phase times (measuring only)
   std::shared_ptr<struct OrderLatency> orderLatency;  // sim/sim.cpp: MOHO64_PROFILE's order latency (ProfileTrackOrder)
   // Counts for the debug and stats lines (MOHO64_DEBUG_COMBAT, MOHO64_STATS); nothing in the simulation reads them

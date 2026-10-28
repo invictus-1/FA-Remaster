@@ -171,7 +171,8 @@ int l_FileCollapsePath(lua_State* L) {
 
 int l_exists(lua_State* L) {
   const char* name = luaL_checkstring(L, 1);
-  lua_pushboolean(L, GetVfs(L)->Exists(name));
+  // (a script of the state's own counts: ScriptState::SetOwnFiles, our own AI's in a session that has it)
+  lua_pushboolean(L, GetVfs(L)->Exists(name) || ScriptState::From(L)->OwnFile(name) != nullptr);
   return 1;
 }
 

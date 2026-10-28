@@ -91,10 +91,32 @@ int ScriptTraceback(lua_State* L) {
 
 void LogScriptError(const std::string& message) { LogWrite(LogLevel::Warning, message); }
 
+void ScriptState::AddExtraHooks(const std::map<std::string, ExtraHook>& hooks) {
+  for (const auto& [path, h] : hooks) {
+    auto it = extraHooks_.find(path);
+    if (it == extraHooks_.end()) {
+      extraHooks_.emplace(path, h);
+      continue;
+    }
+    ExtraHook& e = it->second;
+    if (!e.source.empty() && e.source.back() != '\n') e.source += '\n';
+    e.source += h.source;
+    e.where += " + " + h.where;
+  }
+}
+
+const ScriptState::ExtraHook* ScriptState::OwnFile(std::string_view vpath) const {
+  if (ownFiles_.empty()) return nullptr;
+  auto it = ownFiles_.find(Vfs::Normalize(vpath));
+  return it == ownFiles_.end() ? nullptr : &it->second;
+}
+
 int LoadScriptWithHooks(lua_State* L, const std::string& name) {
   ScriptState* st = ScriptState::From(L);
   Vfs* vfs = st->vfs();
-  if (!vfs->Exists(name) || vfs->IsFolder(name)) {
+  // A script of the state's own (SetOwnFiles) where the file system has none of that path.
+  const ScriptState::ExtraHook* own = vfs->Exists(name) ? nullptr : st->OwnFile(name);
+  if (!own && (!vfs->Exists(name) || vfs->IsFolder(name))) {
     lua_pushfstring(L, "Unable to find file %s", name.c_str());
     return LUA_ERRFILE;
   }
@@ -154,6 +176,10 @@ int LoadScriptWithHooks(lua_State* L, const std::string& name) {
   };
   for (size_t i = 0; i < parts.size(); ++i) {
     if (i == extraAt && extra) join(*extra);
+    if (i == 0 && own) {
+      join(own->source);
+      continue;
+    }
     auto data = vfs->ReadFile(parts[i]);
     if (!data) {
       lua_pushfstring(L, "Unable to read file %s", parts[i].c_str());
@@ -162,7 +188,7 @@ int LoadScriptWithHooks(lua_State* L, const std::string& name) {
     join(*data);
   }
   if (extraAt == parts.size() && extra) join(*extra);
-  std::string chunk = vfs->ChunkName(name);
+  std::string chunk = own ? "@" + own->where : vfs->ChunkName(name);
   return luaL_loadbuffer(L, source.data(), source.size(), chunk.c_str());
 }
 

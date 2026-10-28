@@ -67,7 +67,8 @@ add_library(mohocore STATIC
   src/sim/commands.cpp src/sim/economy.cpp src/sim/build.cpp src/sim/collision.cpp
   src/sim/combat.cpp src/sim/damage.cpp src/sim/projectile.cpp src/sim/anim.cpp src/sim/intel.cpp src/sim/recorder.cpp src/sim/fingerprint.cpp
   src/sim/script_bits.cpp src/sim/command_stream.cpp src/sim/session.cpp src/sim/sim_view.cpp src/sim/command_writer.cpp src/sim/ai_personality.cpp src/sim/ai_platoon.cpp
-  src/sim/ai_build.cpp src/sim/moments.cpp)
+  src/sim/ai_build.cpp src/sim/moments.cpp
+  src/ai/map_analysis.cpp src/ai/scripts.cpp)
 target_include_directories(mohocore PUBLIC src)
 target_link_libraries(mohocore PUBLIC gpglua zlibinflate)
 
