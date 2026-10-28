@@ -39,3 +39,9 @@ keyActions['remaster_follow_cam'] = {
     action = 'remaster_follow_cam',
     category = 'camera',
 }
+-- The radial ping menu (its ring /moho64ui/lua/radialping.lua: Chris, 2026-10-28, pings our own AI understands): held,
+-- the mouse's way lights a ping, letting go sends it to the allies (FAF's ping with our Intent and Target).
+keyActions['remaster_radial_ping'] = {
+    action = 'UI_Lua import("/moho64ui/lua/radialping.lua").Open()',
+    category = 'ui',
+}
