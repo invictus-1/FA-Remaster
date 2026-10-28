@@ -2175,6 +2175,31 @@ DONE (render 2bcddc2 HoldLooks, and the warm frames recorded on the map's loadin
 (dropped, failed, not ready) gives way to the starting looks (LetGoOfGameMap). 4K: first world frame + next
 1615 + 242 ms -> 351 + 138 ms; warm frames during the load at most 8 ms (the film stays smooth).
 
+### 40. The session's start-up effect events lost in PrepareSession: no deposit icons in a menu-launched game (item 8)
+From the interface chat, 2026-10-27. BLOCKING Chris's snapshot item 8 (LIST_2026-10-25: mass / hydrocarbon icons
+missing in strategic zoom and no deposit spots close up, stock Seton's and SETONS_R, every game launched from the
+menu or lobby). Found by helper pings, read in the code, not yet seen live:
+- FAF's simInit.lua BeginSession runs ScenarioUtils.CreateResources(), whose CreateSplat(pos, 0,
+  '/env/common/splats/mass_marker.dds' / 'hydrocarbon_marker.dds', ...) lands in the engine's effect log during
+  Sim::Start, before the first beat. Decals::Deposits() is filled only from those CreateSplat events (effects.cpp:298,
+  decals.cpp:497).
+- A game opened behind the loading screen goes through GameSession::ServeLoad -> WorldPicture::PrepareSession(sim).
+  Since c490688 ("the session's first beat warmed unseen") that runs beatFrames->Beat(sim) (world_picture.cpp ~894);
+  SimFrames::Beat calls moho::EffectEvents(sim, &e.effects) (sim_frames.cpp:265), which empties the engine's list,
+  and beatFrames is dropped. The props' events are handed back (heldProps / HoldPropEvents), the effect events are
+  not. The map's Effect-marker emitters (BeginSessionEffects: CreateEmitterAtBone on marker entities) go the same way.
+- Headless --session runs (no window picture) and a windowed --session that loads before the window (no
+  PrepareSession) keep them, which is why our tests never showed it. Still so in fa-remaster-render 62636fa.
+- Suggested form: in PrepareSession, before beatFrames->Beat(sim), take moho::EffectEvents(sim, &events) into
+  Impl::heldEffects (a copy to beatFrames for its warm beat if wanted); hand them to m.frames with a new
+  SimFrames::HoldEffectEvents wherever HoldPropEvents(&m.heldProps) is called (SwapMap ~571, CancelMap ~521); in
+  SimFrames::Beat put the held events ahead of what EffectEvents returns, before the `seen` loop. The same for
+  TakeHits / TakeImpacts / TakeHealth if those ever carry start-up events.
+Nothing changes on the interface's side: ServeLoad keeps calling PrepareSession as now. Tell me when it is on main and
+I'll check a lobby-launched game's deposit icons in a live window.
+IN HAND (renderer, 2026-10-27): the same diagnosis; his helper's diff holds them in Impl::heldEffects and hands them on
+through SimFrames::HoldEffectEvents (deposit icon pixels 0 -> 165); it merges after his checks.
+
 ## To the visuals track
 
 ### 1. The rebuilt UEF commander for the stock commander too (UEL0001)

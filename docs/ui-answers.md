@@ -3,6 +3,37 @@
 Answers to the other tracks' requests to the interface (CLAUDE.md: "the layer asked answers in a file of its own").
 The requests themselves are in the asking track's file; each answer names it.
 
+## Findings/LIST_2026-10-25 (Chris's snapshot test): the interface's items 14-19 and 8, and item 20's host part (2026-10-27)
+
+Each read from the FA exe, tested, landing together on main.
+
+- **14, enemies' blue construction boxes through the fog:** ours outlined every standing building of every army in
+  build mode. The original's DrawAllUnitSkirts (0x85ad80) walks the session's command table and outlines the skirt of
+  each BuildMobile order (0x8b4140 type 8), and the simulation publishes commands only for the focus army's own units
+  (Unit::UpdateVisibility 0x6abc30, 0x6e8dc0). Now: the focus army's build orders, begun or not; no standing building,
+  no other army's (an observer: every army's). Test army_focus.lua.
+- **18, Shift shows allies' orders:** the order graph held the allies' units too (INFERRED before). Allied units reach
+  the original's interface as recon blips without queues (0x5bee40, 0x5bf810): the focus army's units only now.
+- **19, with cheats, clicking an army's name:** FAF's score panel does ConExecute('SetFocusArmy ' .. index - 1); ours
+  had no such console command. Built as the original's (0x834e50: one word, 0-based or -1, then
+  CWldSession::RequestFocusArmy 0x8965e0 with its checks, shared with the Lua SetFocusArmy). The engine's command
+  stream already takes orders for another army with cheats on, so the switched-to army is commanded too.
+- **15, pings flash full screen:** our controls' OnFrame ran before the script threads; FAF's ping arrow
+  (offscreenmarkerindicator.lua) covers the whole world view until its first OnFrame, so it was drawn once full
+  screen. The original's app frame (CScApp::Main 0x8d1470) runs the threads, then the controls' frame (0x8d1bb1),
+  then the redraw: ours does now. pings.lua checks the arrow.
+- **16 / 17, list hover and scroll bars:** CMauiItemList's colours and mouse-over band (0x799340, 0x799a50: a dark grey
+  band ff202020, text ffa0a0a0, not blue) and CMauiScrollbar's presses and drags (0x7a11c0, 0x7a1410). lists.lua.
+- **8, deposit icons:** not ours: WorldPicture::PrepareSession's warm beat took the start-up CreateSplat events
+  (render REQUESTS 40 in ui/REQUESTS.md); the renderer has the fix in hand.
+- **20, the host's part of the hiccups (engine-answers, 2026-10-27):** a game in a window makes its Sim with the
+  machine's cores (MOHO64_THREADS, when set, decides; headless stays 1; window vs headless fingerprint identical);
+  the recorded game's fingerprint runs on the beats' thread; M28AI in the mods is our variant (mods/m28-variant
+  mounted, the original's folder left out; --m28 original the other way round; an active original M28 is taken as
+  the variant: ui/data/hook/lua/mods.lua); a run's second game writes `<prefix>.2.session.lua`; the snapshot
+  launcher sets MOHO64UI_LONG_FRAMES=33. The loading screen held until about beat 25 (M28's start freeze) is not
+  done: the original ends it when the world is loaded; for Chris to decide with the optimisation run.
+
 ## render/REQUESTS.md 46: Chris's test run of 21 October, the interface's items (2026-10-21)
 
 Built as the original does them (read from the FA exe), tested, landing with ui 72ad121.
