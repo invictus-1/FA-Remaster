@@ -110,8 +110,12 @@ void Lights::Begin(double now) {
   lights_.clear();
 }
 
+// (a light with a place, reach or colour that is not a number is none: one such light, kept by the bounce light's and
+// the air's histories, would turn the picture black for good)
+static bool Finite(Vec3 v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); }
+
 void Lights::Add(Vec3 position, float radius, Vec3 color, const Vec3* origin, float air) {
-  if (radius <= 0) return;
+  if (!(radius > 0) || !std::isfinite(radius) || !Finite(position) || !Finite(color)) return;
   lights_.push_back(Light{position, radius, color, 1, {}, -2, {}});
   lights_.back().air = air;
   if (origin) {
@@ -130,7 +134,7 @@ Vec3 Lights::RampGlow(const std::string& ramp) {
 
 void Lights::AddBeam(Vec3 position, float radius, Vec3 color, Vec3 direction, float coneDegrees, float glow, const Vec3* carrier, const Vec3* origin,
                      uint64_t key) {
-  if (radius <= 0) return;
+  if (!(radius > 0) || !std::isfinite(radius) || !Finite(position) || !Finite(color) || !Finite(direction)) return;
   Light light{position, radius, color, 1, {}, -2, {}};
   light.glow = glow;
   light.key = key;

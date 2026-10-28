@@ -1902,7 +1902,14 @@ int Velocity(lua_State* L) {
   });
 }
 int Accel(lua_State* L) { return OnEnt(L, [&](Ent& e) { e.acceleration = Num(L, 2); }); }
-int Ballistic(lua_State* L) { return OnEnt(L, [&](Ent& e) { e.ballistic = {Num(L, 2), Num(L, 3), Num(L, 4)}; }); }
+// (a bomb of the stand's bombers, which stand still: the game's script reckons its fall from its bomber's speed, 0 here,
+// and gets a fall that is not a number; it falls as the simulation's gravity has it instead)
+int Ballistic(lua_State* L) {
+  return OnEnt(L, [&](Ent& e) {
+    const Vec3 a{Num(L, 2), Num(L, 3), Num(L, 4)};
+    if (std::isfinite(a.x) && std::isfinite(a.y) && std::isfinite(a.z)) e.ballistic = a;
+  });
+}
 int ScaleVelocity(lua_State* L) { return OnEnt(L, [&](Ent& e) { e.growth = {Num(L, 2), Num(L, 3), Num(L, 4)}; }); }
 int Scale(lua_State* L) { return OnEnt(L, [&](Ent& e) { e.size = {Num(L, 2, 1), Num(L, 3, 1), Num(L, 4, 1)}; }); }
 int Align(lua_State* L) { return OnEnt(L, [&](Ent& e) { e.align = lua_toboolean(L, 2) != 0; }); }

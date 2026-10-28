@@ -306,10 +306,14 @@ float4 GatherSpread(float3 ray, float t0, float t1, bool meets, float u) {
       float2 lastUv = c.xy / c.w * float2(0.5, -0.5) + 0.5;
       float lastT = log(max(length(middle - lastEye.xyz), lastRange.x) / lastRange.x) / lastEye.w;
       if (snap) lastT = (floor(lastT * airCells.z) + 0.5) / airCells.z;
-      if (all(lastUv >= 0) && all(lastUv <= 1) && lastT <= 1) now = lerp(now, airSource.SampleLevel(samplerLinearClamp, float3(lastUv, lastT), 0), airAhead.w);
+      if (all(lastUv >= 0) && all(lastUv <= 1) && lastT <= 1) {
+        float4 was = airSource.SampleLevel(samplerLinearClamp, float3(lastUv, lastT), 0);
+        if (all(isfinite(was))) now = lerp(now, was, airAhead.w);
+      }
     }
   }
-  airTarget[id] = now;
+  // (a cell that is not a number is clear air: one would be kept frame after frame, and spread)
+  airTarget[id] = all(isfinite(now)) ? now : 0;
 }
 
 // Along each column from the eye outward: the light each cell throws toward the eye, dimmed by the air

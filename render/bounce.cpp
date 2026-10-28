@@ -100,14 +100,18 @@ static const uint kInside = 6, kTile = 8;
   }
   float outside = backs > 16 ? 0 : 1;  // (more than a quarter of its rays met backs: the probe is inside something)
   bool fresh = identities.Load(int3(tile, 0)) != Identity(ColumnOfTile(int2(tile.x, tile.y % 32)));
-  float keep = fresh ? 0 : blend.x;
   uint2 at = tile * kTile + 1 + local;
+  // (what it held, when not a number, is not kept: else it would be kept for good)
+  fresh = fresh || !all(isfinite(atlas[at]));
+  float keep = fresh ? 0 : blend.x;
 #ifdef SIGHT
   float2 now = weight > 0 ? sum.xy / weight : float2(map.w, map.w * map.w);
+  if (!all(isfinite(now))) now = float2(map.w, map.w * map.w);
   atlas[at] = fresh ? now : lerp(now, atlas[at], keep);  // [views] (fresh: what the atlas held not read at all - a new
   // atlas holds whatever the card's memory held, on Vulkan, and lerp's 0 times a NaN is a NaN)
 #else
   float3 now = weight > 0 ? sum / weight : 0;
+  if (!all(isfinite(now))) now = 0;
   atlas[at] = float4(fresh ? now : lerp(now, atlas[at].rgb, keep), outside);  // [views] (as above)
 #endif
 }

@@ -436,7 +436,10 @@ const DeepTracks::UnitInfo& DeepTracks::Info(const std::string& blueprintPath) {
   auto file = textures_->ReadFile(blueprintPath);
   if (file && ReadBlueprintFile(*file, &bp)) {
     const std::string motion = bp["Physics"]["MotionType"].StringOr(std::string());
-    info.hovers = motion == "RULEUMT_Hover" || bp["Physics"]["Elevation"].NumberOr(0) > 0.05;
+    // (an elevation in its blueprint is a float over the ground only for what has no treads: the Fatboy, amphibious, has
+    // Elevation 1 and its treads on the ground; the frame's own test, over the ground or not, below)
+    info.hovers = motion == "RULEUMT_Hover" ||
+                  (bp["Physics"]["Elevation"].NumberOr(0) > 0.05 && !bp["Display"]["MovementEffects"]["Land"]["Treads"].IsTable());
     info.flies = motion == "RULEUMT_Air";
     // (a walker: footfalls of its own, or a walking animation; every land unit of the game without tread marks
     // or footfalls has one: the bots)
