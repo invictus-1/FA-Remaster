@@ -177,6 +177,15 @@ void TerrainMap::SetHeightAt(int x, int z, float h) {
   ++changes_;
 }
 
+bool TerrainMap::WouldChangeHeights(int x0, int z0, int x1, int z1, float h) const {
+  const float v = std::clamp(h / heightScale_, 0.0f, 65535.0f);  // (as SetHeightAt stores it)
+  const uint16_t raw = static_cast<uint16_t>(static_cast<int>(v));
+  for (int z = std::max(z0, 0); z <= std::min(z1, height_); ++z)
+    for (int x = std::max(x0, 0); x <= std::min(x1, width_); ++x)
+      if (heights_[static_cast<size_t>(z) * (width_ + 1) + x] != raw) return true;
+  return false;
+}
+
 void TerrainMap::NoteHeightChange(int x0, int z0, int x1, int z1) {
   x0 = std::max(x0, 0);
   z0 = std::max(z0, 0);

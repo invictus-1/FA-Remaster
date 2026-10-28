@@ -221,20 +221,30 @@ int l_FlattenMapRect(lua_State* L) {
   int sx = static_cast<int>(luaL_checknumber(L, 3)), sz = static_cast<int>(luaL_checknumber(L, 4));
   float h = static_cast<float>(luaL_checknumber(L, 5));
   prof::SectionTimer sec(prof::kSecFlatHeights);  // (MOHO64_PROFILE_HITCH only: the parts' times, core/profile.h)
-  LandNavBeforeTerrain(sim, x, z, x + sx, z + sz);  // (cluster data the background paid for: from the old heights)
-  for (int j = z; j <= std::min(z + sz, m->height()); ++j)
-    for (int i = x; i <= std::min(x + sx, m->width()); ++i) m->SetHeightAt(i, j, h);
+  // When no vertex takes another height (FAF's skirts flattened again over ground that is flat already: a structure
+  // made again where it stood, an army handed over), what is made from the heights stays as it is: the cluster data
+  // made before the change, the air tiers, the path grids' terrain caps and the data made ahead are left alone (speed
+  // only). The units standing there are still warped or marked, as the original does whatever the heights. Seen:
+  // Chris's game 2, 19665: 5094 of 5803 flattenings in the beat change nothing, 34 of their 45 ms.
+  const bool changed = m->WouldChangeHeights(x, z, x + sx, z + sz, h);
+  if (changed) {
+    LandNavBeforeTerrain(sim, x, z, x + sx, z + sz);  // (cluster data the background paid for: from the old heights)
+    for (int j = z; j <= std::min(z + sz, m->height()); ++j)
+      for (int i = x; i <= std::min(x + sx, m->width()); ++i) m->SetHeightAt(i, j, h);
+  }
   sec.To(prof::kSecFlatDrawn);
   m->NoteHeightChange(x, z, x + sx, z + sz);  // (for the drawn ground: render request 25)
   sec.To(prof::kSecFlatAir);
-  AirTerrainChanged(sim, m, x, z, x + sx, z + sz);
+  if (changed) AirTerrainChanged(sim, m, x, z, x + sx, z + sz);
   sec.To(prof::kSecFlatPaths);
   // (the path grids keep each origin's terrain caps; the original's tests read them from the map as it is, so a
   // flattened rect changes passability at once. Seen: MP3 1985, the skirt of army 2's first land factory, flattened
   // vertex by vertex at 58, made cell (67, 450) too steep for a hover engineer; the original's path to (72, 451)
   // went round it, ours through it.)
-  sim.navigation().TerrainChanged(x, z, x + sx, z + sz);
-  LandNavTerrainChanged(sim, x, z, x + sx, z + sz);  // (cluster data made ahead from the old heights)
+  if (changed) {
+    sim.navigation().TerrainChanged(x, z, x + sx, z + sz);
+    LandNavTerrainChanged(sim, x, z, x + sx, z + sz);  // (cluster data made ahead from the old heights)
+  }
   sec.To(prof::kSecFlatUnits);
   // A unit WITH a motion (u+0x4b0) found by the box below only gets motion+0x90 = 1 (0x74b350..0x74b35a): its next
   // motion tick works out its contacts (MotionTick 0x6b9e21) and CalcMoveLand / CalcMoveHover snap it to the ground

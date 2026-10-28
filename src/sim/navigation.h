@@ -167,6 +167,8 @@ class Navigation {
   // The entity's record goes, its cells stay as they are (a unit that no longer counts as occupying ground).
   void ForgetStructure(uint32_t entity);
   const std::vector<OccupiedRect>& Structures() const { return structures_; }
+  // Whether AddStructure over [x0, x1) x [z0, z1) with these caps would set a cell's layer bit (SetCells' test).
+  bool WouldChangeCells(int x0, int z0, int x1, int z1, uint8_t fpCaps) const;
   // The heightfield vertices [vx0, vx1] x [vz0, vz1] took new heights (FlattenMapRect). The original reads the
   // terrain's caps from the map at every test (CanTraverseCell 0x5aa77d / 0x5aa7e2 call OCCUPY_MobileCheck 0x564ab0
   // with the live STIMap); the grids here keep them, so they take the changed ones again.

@@ -392,6 +392,18 @@ void Navigation::SetCells(int x0, int z0, int x1, int z1, uint8_t occ, bool on) 
     }
 }
 
+bool Navigation::WouldChangeCells(int x0, int z0, int x1, int z1, uint8_t fpCaps) const {
+  const uint8_t occ = OccLayersOf(fpCaps);
+  if (!map_ || x1 <= x0 || z1 <= z0 || !occ) return false;  // (AddStructure's own early return)
+  for (int z = std::max(0, z0); z < std::min(map_->height(), z1); ++z)
+    for (int x = std::max(0, x0); x < std::min(map_->width(), x1); ++x) {
+      const size_t i = static_cast<size_t>(z) * map_->width() + x;
+      if ((occ & kOccLand) && (occ_.empty() || occ_[i] != 1)) return true;
+      if ((occ & kOccWater) && (occWater_.empty() || occWater_[i] != 1)) return true;
+    }
+  return false;
+}
+
 void Navigation::AddStructure(uint32_t entity, int x0, int z0, int x1, int z1, uint8_t fpCaps) {
   const uint8_t occ = OccLayersOf(fpCaps);
   if (!map_ || x1 <= x0 || z1 <= z0 || !occ) return;

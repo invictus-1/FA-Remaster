@@ -44,6 +44,8 @@ class TerrainMap {
   // the ground); read them only between beats.
   const uint16_t* heightData() const { return heights_.data(); }
   float heightScale() const { return heightScale_; }
+  // Whether SetHeightAt(i, j, h) over [x0, x1] x [z0, z1] (clipped as SetHeightAt clips) would change a vertex.
+  bool WouldChangeHeights(int x0, int z0, int x1, int z1, float h) const;
   uint64_t changes() const { return changes_; }
   // Every rectangle of grid vertices whose heights were set since the map was loaded, in order (render request 25:
   // the drawn ground follows FlattenMapRect). Inclusive, clamped to the map; read between beats.

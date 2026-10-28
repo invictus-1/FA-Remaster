@@ -320,7 +320,13 @@ void ExecuteOccupyGround(Sim& sim, Unit* u) {
   if (!u->bpData || !u->bpData->structure || !u->blueprint) return;
   const NamedFootprint& fp = Footprint(*u->blueprint);
   int ox = RoundEven(u->position.x - fp.sizeX * 0.5f), oz = RoundEven(u->position.z - fp.sizeZ * 0.5f);
-  LandNavBeforeOccupancy(sim, ox, oz, ox + fp.sizeX, oz + fp.sizeZ);
+  // The stale clusters' data is made before the grids change (LandNavBeforeOccupancy: from the grid as it still is).
+  // When no cell's layer bit changes, the grid stays as it is and that data comes out the same when it is made later,
+  // so it is left to then (speed only; the dirtying below, the original's accounting, is kept). Seen: a whole army
+  // handed over under ShareUntilDeath (Chris's game 2, 19665): its 189 structures are made again on the cells the
+  // old ones still hold, and making the stale data was 35 of the beat's 500 ms.
+  if (sim.navigation().WouldChangeCells(ox, oz, ox + fp.sizeX, oz + fp.sizeZ, fp.caps))
+    LandNavBeforeOccupancy(sim, ox, oz, ox + fp.sizeX, oz + fp.sizeZ);
   sim.navigation().AddStructure(EntityRef(u), ox, oz, ox + fp.sizeX, oz + fp.sizeZ, fp.caps);
   LandNavDirty(sim, ox, oz, ox + fp.sizeX, oz + fp.sizeZ);
 }
