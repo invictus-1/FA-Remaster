@@ -30,27 +30,48 @@ Sim* S(lua_State* L) { return Sim::From(L); }
 
 struct Grid {
   int cs = 4, W = 0, H = 0;
+  // The counts by column: cell (x, z) at x * H + z. (Speed only: the raster walks a column's z range, so a column
+  // is one run of memory; by rows each step was another cache line. What a cell holds is the same either way.)
   std::vector<int8_t> c;
   bool Visible(Vec3 p) const { return At(Cell(p.x), Cell(p.z)); }
   int Cell(float v) const { return static_cast<int>(std::floor(v * (1.0f / static_cast<float>(cs)))); }  // of x or z
   bool At(int x, int z) const {
     if (x < 0 || z < 0 || x >= W || z >= H) return false;
-    return c[static_cast<size_t>(z) * W + x] != 0;
+    return c[static_cast<size_t>(x) * H + z] != 0;
   }
   // CIntelGrid::Raster 0x507540 (r in cells; one cell short in +x and +z, as the original)
   void Raster(Vec3 p, int r, int delta) {
     int cx = static_cast<int>(std::floor(p.x * (1.0f / static_cast<float>(cs))));
     int cz = static_cast<int>(std::floor(p.z * (1.0f / static_cast<float>(cs))));
     int x0 = std::max(0, std::min(cx - r, W)), x1 = std::max(0, std::min(cx + r, W));
+    const int8_t d = static_cast<int8_t>(delta);
     for (int x = x0; x < x1; ++x) {
       int dx = cx - x;
       int h = static_cast<int>(std::sqrt(static_cast<float>(r * r - dx * dx)));
       int z0 = std::max(0, std::min(cz - h, H)), z1 = std::max(0, std::min(cz + h, H));
-      for (int z = z0; z < z1; ++z) {
-        int8_t& v = c[static_cast<size_t>(z) * W + x];
-        v = static_cast<int8_t>(v + delta);
-      }
+      int8_t* col = c.data() + static_cast<size_t>(x) * H;
+      for (int z = z0; z < z1; ++z) col[z] = static_cast<int8_t>(col[z] + d);
     }
+  }
+};
+
+// A point's cells, worked out once per cell size (Grid::Cell of the same x and z, so the same cells Visible takes):
+// a recon test asks up to 8 grids of each of several armies about one point, and the grids share one or two sizes.
+struct PointCells {
+  Vec3 p;
+  int n = 0, cs[4] = {}, cx[4] = {}, cz[4] = {};
+  explicit PointCells(Vec3 q) : p(q) {}
+  bool Visible(const Grid& g) {
+    for (int i = 0; i < n; ++i)
+      if (cs[i] == g.cs) return g.At(cx[i], cz[i]);
+    const int x = g.Cell(p.x), z = g.Cell(p.z);
+    if (n < 4) {
+      cs[n] = g.cs;
+      cx[n] = x;
+      cz[n] = z;
+      ++n;
+    }
+    return g.At(x, z);
   }
 };
 
@@ -148,10 +169,10 @@ void UpdatePos(IntelState& st, IntelHandle& h, int slot, Vec3 p, uint32_t tick, 
   // (the new place against the handle's, memcmp 0x4f0a50: CIntel::Update 0x76e4e1..0x76e4f1, CIntelPosHandle::Update
   // 0x76efc1..0x76efd2)
   bool moved = !vm::SameBits(p, h.pos);
-  if (!exact) {
+  if (!exact && !(tick - h.lastTick > 5)) {  // (the 6-tick test first: the distance is needed only without it)
     float dx = p.x - h.pos.x, dy = p.y - h.pos.y, dz = p.z - h.pos.z;
     float t = static_cast<float>(h.radius) * 0.333f;
-    if (!(dx * dx + dy * dy + dz * dz >= t * t || tick - h.lastTick > 5)) return;
+    if (!(dx * dx + dy * dy + dz * dz >= t * t)) return;
   }
   h.lastTick = tick;
   if (moved) {
@@ -177,16 +198,20 @@ bool Underwater(const Entity* e) {
   return u->layer == "Seabed" || u->layer == "Sub";
 }
 
-uint8_t NewReconFor(const ArmyIntel& db, const Entity* e, Vec3 p, bool underwater) {
+// (sonar: underwater, or the entity's unit on the Sub or Water layer; the same for every army, so CanDetect works it
+// out once)
+bool SonarCounts(const Entity* e, bool underwater) {
+  if (underwater) return true;
+  if (const Unit* src = LayerUnit(e)) return src->layer == "Sub" || src->layer == "Water";
+  return false;
+}
+uint8_t NewReconFor(const ArmyIntel& db, PointCells& pc, bool underwater, bool sonar) {
   uint8_t f = 0;
   if (!db.fog || !db.g[0]) f = 8;
-  else if (underwater ? (db.g[1] && db.g[1]->Visible(p)) : db.g[0]->Visible(p)) f = 8;
-  bool sonar = underwater;
-  if (!sonar)
-    if (const Unit* src = LayerUnit(e)) sonar = src->layer == "Sub" || src->layer == "Water";
-  if (sonar && db.g[3] && db.g[3]->Visible(p)) f |= 2;
-  if (!underwater && db.g[2] && db.g[2]->Visible(p)) f |= 1;
-  if (db.g[4] && db.g[4]->Visible(p)) f |= 4;
+  else if (underwater ? (db.g[1] && pc.Visible(*db.g[1])) : pc.Visible(*db.g[0])) f = 8;
+  if (sonar && db.g[3] && pc.Visible(*db.g[3])) f |= 2;
+  if (!underwater && db.g[2] && pc.Visible(*db.g[2])) f |= 1;
+  if (db.g[4] && pc.Visible(*db.g[4])) f |= 4;
   return f;
 }
 
@@ -202,18 +227,20 @@ uint8_t CanDetect(Sim& sim, int a, const Entity* e, Vec3 p) {
   if (sim.map() && !sim.IsWithin(p.x, p.z, 0.0f, Sim::UseWholeMap(us))) return 0;
   if (e->army && combat::Relation(e->army, us) == 2) return 0xF;
   bool under = Underwater(e);
+  const bool sonar = SonarCounts(e, under);
+  PointCells pc(p);
   const std::vector<ArmyIntel>& dbs = IS(sim).armies;
   const ArmyIntel& db = dbs[static_cast<size_t>(a)];
-  uint8_t f = NewReconFor(db, e, p, under);
+  uint8_t f = NewReconFor(db, pc, under, sonar);
   for (size_t j = 0; j < armies.size() && j < dbs.size(); ++j)
     if (static_cast<int>(j) != a && combat::Relation(armies[j].get(), us) == 2)
-      f |= NewReconFor(dbs[j], e, p, under);
+      f |= NewReconFor(dbs[j], pc, under, sonar);
   if (f == 0) return 0;
   if (f & 4) return f;
   bool unit = e->kind == Entity::Kind::Unit;
-  if (db.g[5] && db.g[5]->Visible(p)) f &= static_cast<uint8_t>(~1);
-  if (db.g[6] && db.g[6]->Visible(p)) f &= static_cast<uint8_t>(~2);
-  if ((unit && FlagOn(e, 11)) || (db.g[7] && db.g[7]->Visible(p))) f &= static_cast<uint8_t>(~8);
+  if (db.g[5] && pc.Visible(*db.g[5])) f &= static_cast<uint8_t>(~1);
+  if (db.g[6] && pc.Visible(*db.g[6])) f &= static_cast<uint8_t>(~2);
+  if ((unit && FlagOn(e, 11)) || (db.g[7] && pc.Visible(*db.g[7]))) f &= static_cast<uint8_t>(~8);
   if (unit && !(f & 8)) {
     if (FlagOn(e, 12)) f &= static_cast<uint8_t>(~1);
     if (FlagOn(e, 13)) f &= static_cast<uint8_t>(~2);
@@ -737,6 +764,7 @@ void CreateUnitIntel(Sim& sim, lua_State* L, Unit* u) {
     if (!ei) ei = &IntelOf(IS(sim), u);
     IntelHandle& h = ei->h[s];
     h.exists = true;
+    ei->existMask |= 1u << s;
     h.radius = R;
     h.army = ArmyIdx(u->army);
     h.pos = p;
@@ -856,7 +884,10 @@ void AdvanceIntelCoords(Sim& sim) {
       exact = moved;  // script entities move by Warp / attach: exact
     }
     if (!moved && !exact) continue;
-    for (int s = 1; s <= 8; ++s) UpdatePos(st, ei.h[s], s, p, tick, exact);
+    for (uint32_t m = ei.existMask; m; m &= m - 1) {  // (the slots with a handle, in slot order: UpdatePos skips the rest)
+      const int s = __builtin_ctz(m);
+      UpdatePos(st, ei.h[s], s, p, tick, exact);
+    }
   }
 }
 
@@ -944,6 +975,7 @@ int l_InitIntel(lua_State* L) {
     Viz(IS(*S(L)), h, t, -1);
     h = IntelHandle{};  // (the handle ctor 0x76d810: at 0, 0, 0, lastTick 0, disabled)
     h.exists = true;
+    ei.existMask |= 1u << t;
     h.radius = R;
     h.army = ArmyIdx(army);
   } else if (t == 9 || t == 11 || t == 12 || t == 13) {

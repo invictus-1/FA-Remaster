@@ -39,6 +39,7 @@ struct IntelHandle {
 };
 struct EntityIntel {
   IntelHandle h[9];          // slots 1..8
+  uint32_t existMask = 0;    // bit s: h[s].exists (set with it; a handle never stops existing)
   bool has[14] = {}, on[14] = {};  // flags 9..13
   uint32_t jammerBlips = 0, jamMin = 0, jamMax = 0;  // Intel.JammerBlips, Intel.JamRadius {Min, Max}
 };

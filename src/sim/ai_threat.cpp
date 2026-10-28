@@ -80,8 +80,13 @@ struct InfluenceMap {
   int army = -1;                  // +0x00 (0-based index)
   int W = 0, H = 0, cs = 32;      // +0x08, +0x0c, +0x10
   // +0x14: blip id -> cell index (the original's is a map; ours is only looked up, inserted and erased, never
-  // walked, so a hash gives the same answers)
-  std::unordered_map<uint32_t, int> cellOf;
+  // walked, so a hash gives the same answers), and the entry it made there (a std::map node stays where it is
+  // until erased, and every erase of an entry erases its id here too: UpdateBlipPosition skips the cell's lookup)
+  struct Where {
+    int cell = 0;
+    Entry* entry = nullptr;
+  };
+  std::unordered_map<uint32_t, Where> cellOf;
   std::vector<Cell> cells;        // +0x20: cz * W + cx
 };
 
@@ -246,7 +251,7 @@ void DecayInfluence(Cell& c) {
 void RemoveEntry(InfluenceMap& m, uint32_t id) {
   auto it = m.cellOf.find(id);
   if (it == m.cellOf.end()) return;
-  Cell& c = m.cells[static_cast<size_t>(it->second)];
+  Cell& c = m.cells[static_cast<size_t>(it->second.cell)];
   auto e = c.entries.find(id);
   if (e != c.entries.end()) c.entries.erase(e);
   m.cellOf.erase(it);
@@ -270,7 +275,7 @@ void InsertEntry(Sim& sim, InfluenceMap& m, uint32_t id, Vec3 pos, const Bluepri
   e.threat = 1.0f;  // 0xdfec20
   e.decay = decay;
   e.counter = 10;
-  m.cellOf[id] = cell;
+  m.cellOf[id] = InfluenceMap::Where{cell, &e};
 }
 
 // CInfluenceMap::UpdateBlipPosition 0x715f30: a blip the map holds is seen again: full weight for another 10
@@ -278,14 +283,12 @@ void InsertEntry(Sim& sim, InfluenceMap& m, uint32_t id, Vec3 pos, const Bluepri
 void UpdateBlipPosition(Sim& sim, InfluenceMap& m, uint32_t id, Vec3 pos, const BlueprintInfo* bp) {
   auto it = m.cellOf.find(id);
   if (it == m.cellOf.end()) return;
-  const int cell = it->second;
+  const int cell = it->second.cell;
   if (cell == VectorToCoords(m, pos.x, pos.z)) {
-    Cell& c = m.cells[static_cast<size_t>(cell)];
-    auto e = c.entries.find(id);
-    if (e == c.entries.end()) return;
-    e->second.threat = 1.0f;
-    e->second.counter = 10;
-    e->second.pos = pos;
+    Entry& e = *it->second.entry;  // (the cell's entry for the id: its map's find would give this node)
+    e.threat = 1.0f;
+    e.counter = 10;
+    e.pos = pos;
     return;
   }
   RemoveEntry(m, id);
