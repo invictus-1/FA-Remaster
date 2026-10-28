@@ -205,6 +205,28 @@ class FootPlantManipulator : public ScriptObject {
   uint32_t seq = 0;
 };
 
+// CThrustManipulator (CreateThrustController(unit, label, thrustBone) 0x64abc0, constructor 0x64a4a0,
+// SetThrustingParam 0x64ad90, MoveManipulator 0x64a800): tilts an aircraft's engine bone with the flight's control
+// force. FAF's UEF transports and gunships (UEA0107, UEA0104, UEA0203, UEA0305, XEA0306) make one per engine bone in
+// OnStopBeingBuilt, precedence 0. Each beat, in its place among the unit's manipulators: the last control force (the
+// motion's m+0xfc) plus the turn's share (the bone's offset from the unit turned about the up axis by the yaw torque,
+// m+0x10c, less the offset, times turnMult), in the bone's frame, capped per axis, normalised; the bone turns toward the
+// rotation that takes its forward axis there by at most turnSpeed. Ours had no such manipulator (a stub): the
+// engines stood at their rest pose.
+class ThrustManipulator : public ScriptObject {
+ public:
+  Unit* unit = nullptr;
+  int bone = -1;                                 // +0xa4 (its watched bone, +0x60)
+  Vec3 capMin{-100.0f, -100.0f, -100.0f};        // +0xac..+0xb4 (the ctor's -100, [0xe4f9b8])
+  Vec3 capMax{100.0f, 100.0f, 100.0f};           // +0xb8..+0xc0 (100, [0xe4f744])
+  float turnMult = 1.0f, turnSpeed = 0.3f;       // +0xc4, +0xc8 (1, [0xdfec20]; 0.3, [0xe4f9b4])
+  Vec3 fwd;                                      // +0xcc: the bone's local forward axis in the pose it was made in
+  Quat cur;                                      // +0xd8: the turn applied last beat
+  bool enabled = true, alive = true;             // (+0x4c)
+  int precedence = 0;                            // (+0x58)
+  uint32_t seq = 0;
+};
+
 // CRotateManipulator (CreateRotator 0x643d80, MoveManipulator 0x643860): turns one bone about a local axis
 // toward a goal, at a speed, or spinning down; applied to the pose every tick at its place among the unit's
 // manipulators (precedence 0 unless a script sets one: the UEF cruiser's spinning Phalanx barrel has 10, the

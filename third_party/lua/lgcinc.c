@@ -760,11 +760,16 @@ LUA_API int lua_gpg_setgcmode (lua_State *L, int mode) {
   inc = (GCInc *)calloc(1, sizeof(GCInc));
   if (!inc) return 0;
   inc->currentwhite = WHITE0;
-  inc->pause = envint("MOHO64_GC_PAUSE", 200);
+  /* pause 300 / hard 600 (were 200 / 400): Chris's game 2 (27817 ticks, M28 variant, fixes on), both at once on a
+  ** quiet PC (2026-10-28, pure C++ phases equal to 0.01 s), state identical over 29036 beats: collector cycles by
+  ** tick 25200 45 vs 72, mean 0.94 vs 1.34 ms a beat, destroy+sync 38.4 vs 51.4 s (about -0.47 ms a tick), beats over
+  ** 5 / 10 / 20 / 50 ms 716 / 42 / 2 / 0 vs 1357 / 55 / 0 / 0, longest beat 28.6 vs 19.9 ms, no step past `hard' in
+  ** either. The price: peak working set 2290 vs 1954 MB (+340 MB). */
+  inc->pause = envint("MOHO64_GC_PAUSE", 300);
   inc->stepmul = envint("MOHO64_GC_STEPMUL", 1000);  /* (B1 at 9000: 200 left the heap at 699 MB, 1000 at 325 MB) */
   inc->minstep = envint("MOHO64_GC_MINSTEP", 2000);
   inc->maxstep = envint("MOHO64_GC_MAXSTEP", 60000);  /* (B1: a marking unit ~0.13 us, a sweep unit ~0.08 us) */
-  inc->hard = envint("MOHO64_GC_HARD", 400);
+  inc->hard = envint("MOHO64_GC_HARD", 600);  /* (twice the pause, as 400 was to 200) */
   inc->ceiling = (lu_mem)envint("MOHO64_GC_CEILING", 64 << 20);
   inc->verify = envint("MOHO64_GC_VERIFY", 0);
   inc->phases = envint("MOHO64_GC_PHASES", 0);

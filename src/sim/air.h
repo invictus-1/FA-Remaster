@@ -100,7 +100,14 @@ struct AirMotion {
   int combatCounter = 0;     // m+0xa8
   uint32_t idleTick = 0;     // m+0xac
   Vec3 prevVel;              // m+0xb4
-  Vec3 spinTorque;           // m+0x108 (dead aircraft)
+  // m+0xfc..+0x104: ComputeAirControl's last force (0x6bedf4..0x6bee10: gravity's share and the mass in it), which the
+  // thrust controllers read (CThrustManipulator::MoveManipulator 0x64a879).
+  // m+0x108..+0x110: ONE field with two writers, as the exe's: ComputeAirControl's body torque T before the division by
+  // the inertia (0x6bee1e..0x6bee3c), and the dead branch's random spin torque, world (CalcMoveAir 0x6bf39c..0x6bf3b8).
+  // Its readers: CalcMoveBallistic's spin, whenever it is not zero (0x6c03be..0x6c03db, the memcmp 0x4f0a50 against
+  // 0xf3d21c), and the thrust controllers' yaw torque (+0x10c, 0x64a8c2).
+  Vec3 ctrlForce, torque108;
+  bool spinFromDeath = false;  // (MOHO64_DEBUG_BALLISTIC only: the dead branch wrote torque108 last)
   int landRect[4] = {0, 0, 0, 0};  // reserved landing cells (x0, z0, x1, z1)
   float elevationAttr = 0;   // attributes elevation (SetElevation)
   float lastScale = 1;       // 1/scale of the last MoveTo (GetVelocity)
