@@ -3,6 +3,31 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui (by message): Chris's "Move M28's work into load": run the first beats inside the loading screen (a host request)
+
+Helper m28n measured and read it. The freeze of the first seconds is FAF's nav mesh at tick 10 (asked by M28's
+RecordBrainStartPoint) and M28's SetupMap at ticks 16 / 17 / 21. SetupMap reads state made at ticks 1-10 (brain start
+points, the mex points from the forked RecordResourcePoint threads, team data) and writes hundreds of M28 tables that
+other M28 threads read while it runs, so doing it ahead in the variant with the same decisions every beat is not
+practical. The exact way is the host's: run beats 1..K inside the loading screen, unpaced, before the world is shown.
+
+Why the player loses nothing (FAF's own scripts): ScenarioUtilities.CreateInitialArmyGroup (397-401) hides the
+commander (HideBone 0) when PrebuiltUnits is Off; CommanderWarpDelay (423-428) blocks a human's command queue and waits
+3 s before PlayCommanderWarpInEffect; CommandUnit.lua 155-179 keeps the commander unselectable and busy for
+WaitSeconds(2.1). So in a normal skirmish nothing is visible or controllable before tick 30, and the warp-in beam
+(ticks 30 to about 51) stays fully visible.
+
+The ask, smallest form:
+- After BeginSession, still in the loading screen, run beats until tick 29 (the last beat before the warp-in) with no
+  real-time pacing; deliver each beat's Sync to the user layer in order at reveal; normal pacing from beat 30.
+- Only when ScenarioInfo.Options.PrebuiltUnits is 'Off' or absent (with prebuilt units, units are controllable from
+  tick 0).
+- No player commands exist in those beats, so the command stream, the replay and the sim are unchanged beat for beat.
+- It covers the original M28 and every AI too; the load gets longer by M28's ~3 s, about 0.1 s without an AI. The same
+  could be done when a replay starts playing.
+The engine side lands separately: a native for FAF's nav grid leaf search (MIT, Jip; notice beside it), which shortens
+M28's label questions all game.
+
 ## ui request 49: the replay scan's extra mounts and the init folders left out (main fd3d7fe)
 
 `ScanArgs::mounts` (host folder, mount point), mounted after the init file's paths and the maps, in order, and
