@@ -64,3 +64,25 @@ Resource cheats only as a separate, named option. See ai-study-m28.md section 7.
 ## Next
 
 A design talk with Chris, using these goals and ai-study-m28.md section 7.5's open questions, before anything is built.
+
+## Decisions (design talk with Chris, 2026-10-28)
+
+1. **M28 stays beside ours.** Ours becomes the default and replaces FAF's base AI; M28 (our variant) stays in the
+   lobby as an option and is ours' sparring partner in tests.
+2. **Difficulty = skill levels with fair intel on all of them.** Levels change reaction speed, attention, micro and
+   aggression. Resource cheats and map vision are separate, named options.
+3. **First build: the core native, Lua as glue.** Map analysis, the unit / threat index and battle estimates in C++
+   first; strategy and personalities in Lua until they settle, then their hot parts move native.
+4. **Extras, all in the first version:**
+   - **Personalities** (rusher, turtle, air player, naval player, ...) on top of any difficulty.
+   - **Announces its plans, to allies only.** An enemy announcing its moves would spoil the fun.
+   - **Teacher mode** (lobby option): eases off when far ahead, so new players are not crushed.
+   - **Team play with allies is key.**
+5. **Pings understood properly** (Chris's words, summarised):
+   - A ping on nothing, or made by accident, is recognised as such and ignored.
+   - "Assist" at the player's base or near a force with enemies nearby: the AI sees its ally is under attack and
+     sends support.
+   - "Attack" on an enemy base: no suicide rush; the AI looks at what is there, picks a sensible target and diverts
+     a fitting share of its attention and forces to that area.
+   - Wanted if possible: more detailed pings, e.g. "attack the ACU", "attack with an experimental", "assist my force".
+     These need new ping types in the interface (ui chat).
