@@ -462,6 +462,74 @@ float4 DepthPS(VOut i) : SV_Target {
   return float4(0, 0, 0, cover);
 }
 
+// [ogshield] The original look's shields: each faction's bubble as the game's own shaders draw it (its medium detail),
+// from its own textures over the sphere's two sets of coordinates, each scaled and drifting at the game's rates, and the
+// game's sums over them (read from the game and written anew here): the UEF's blue, whose see-through changes in patches
+// by three noises against each other; the Aeon's, the sky mirrored in a rippled surface and laced by two noises; the
+// Cybran's, a dark violet with its noises' bright threads; the Seraphim's, pale blue veins drifting through a rippled
+// surface, clearer toward its top. (A shield as full as it is: the game's tinting of a weakened one is left out.)
+float3 OriginalShieldNormal(float2 uv, VOut i) {  // its normal map's way (green and alpha), on the sphere
+  float3 t = 2 * normalsMap.Sample(samplerAniso, uv).gaa - 1;
+  t.z = sqrt(saturate(1 - t.x * t.x - t.y * t.y));
+  return normalize(t.x * normalize(i.binormal) + t.y * normalize(i.tangent) + t.z * normalize(i.normal));
+}
+float4 OriginalShield(VOut i, int whose) {
+  float s = time;
+  float4 uv = i.uv.xyxy;  // (the game's shields read their first set of coordinates in all four)
+  if (whose == 1) {  // Aeon
+    float3 view = normalize(i.world - cameraPosition);
+    float4 albedo = albedoMap.Sample(samplerAniso, uv.xy);
+    float3 spec = specularMap.Sample(samplerAniso, uv.zw * 12 + float2(0, 0.032) * s).rgb;
+    float3 spec2 = specularMap.Sample(samplerAniso, uv.xy * 8 + float2(0.012, -0.032) * s).rgb;
+    float3 n = OriginalShieldNormal((uv.zw * 3 + float2(0, 0.0012) * s) * 4, i);
+    float phong = saturate(dot(reflect(-view, n), view)) * 0.6;
+    float3 environment = environmentMap.Sample(samplerLinear, reflect(-view, n)).rgb;
+    float3 c = (phong + environment - albedo.ggg) * (spec.rrr * lerp(0.6, 1.3, sin(frac(0.015 * s) * 3.14159))) *
+               (spec2.rrr * lerp(2.0, 2.2, sin(frac(0.0045 * s) * 3.14159)));
+    c = (c * n * 0.65 + c) * environment * albedo.a;
+    return float4(max(c, 0), saturate(0.707 * dot(environment, 0.25) + albedo.b * 0.5));
+  }
+  if (whose == 2) {  // Cybran
+    float4 albedo = albedoMap.Sample(samplerAniso, uv.xy + float2(-0.01, 0) * s);
+    float4 albedo2 = albedoMap.Sample(samplerAniso, uv.zw + float2(-0.002, 0) * s);
+    float3 spec = specularMap.Sample(samplerAniso, uv.xy * 2 + float2(0, 0.0012) * s).rgb;
+    float3 spec2 = specularMap.Sample(samplerAniso, uv.zw + float2(0.001, -0.0015) * s).rgb;
+    float3 a = albedo2.b * spec2.g * 3, b = spec2.g * albedo.a, d = (albedo2.g - spec2.b) * spec.b * albedo.a;
+    float3 c = float3(0.05, 0, 0.3) + d - a * b + (albedo.r + albedo2.r) * 0.1 - (1 - albedo.a);
+    float sum = c.r + c.g + c.b;
+    c = sum < 0.1 ? float3(0.15, 0.15, 0.3) : sum < 0.2 ? spec.bbb : c;
+    c += (albedo.r + albedo2.r) * float3(0, 0, 0.3);
+    return float4(max(c, 0), saturate(0.17 + (albedo.r + albedo2.r) * 0.2));
+  }
+  if (whose == 3) {  // Seraphim
+    float3 view = normalize(i.world - cameraPosition);
+    float2 at = uv.zw * 11 + float2(-0.005, -0.045) * s;
+    float4 pixel = normalsMap.Sample(samplerAniso, at);
+    float3 n = OriginalShieldNormal(at, i);
+    float4 address = normalsMap.Sample(samplerAniso, uv.zw + float2(0.003, -0.0045) * s);
+    float3 spec = specularMap.Sample(samplerAniso, uv.xy * 5 + float2(-0.00153, -0.0159) * s + address.rb * 0.1).rgb;
+    float dp = abs(cos(n.y));
+    float channel = 0.453 - clamp(1 - dp, 0, 0.453);
+    float t = abs(normalize(i.normal).y);
+    float m = t < 0.753 ? 1 : 1 - 0.7 * (t - 0.753) / (1 - 0.753);
+    float alpha = m * (abs(dot(view, n)) * 0.3 + channel) * 1.75;
+    return float4(float3(0.425, 0.76274, 1.0) * dp * dp * spec, saturate(alpha));
+  }
+  // UEF
+  float4 mask = albedoMap.Sample(samplerAniso, uv.xy);
+  float4 albedo = albedoMap.Sample(samplerAniso, uv.zw * 3 + float2(0.0003, 0.005) * s);
+  float3 n = 2 * secondaryMap.Sample(samplerAniso, uv.xy * 32 + float2(-0.001, -0.005) * s).gaa - 1;
+  n.z = sqrt(saturate(1 - n.x * n.x - n.y * n.y));
+  float3 spec = specularMap.Sample(samplerAniso, uv.zw * 6 + float2(-0.0003, -0.0008) * s).rgb;
+  float3 c = dot(albedo.rgr, n) + float3(0, 0, 0.25);
+  float w = sin(frac(0.01 * s) * 3.14159);
+  float alpha;
+  if (spec.g <= albedo.r) alpha = spec.b >= albedo.g ? (c.b >= n.b ? 0.12 : lerp(0.05, 0, w)) : (n.b >= albedo.r ? 0.2 : lerp(0.01, 0.1, w));
+  else alpha = spec.r >= albedo.r ? (spec.b >= albedo.r ? 0.025 : 0.1) : (spec.g >= albedo.g ? 0.02 : lerp(0.37, 0.46, w));
+  c += float3(0, 0, 0.15) + mask.b * 0.95;
+  return float4(max(c, 0), saturate(alpha * mask.a));
+}
+
 float4 Shade(VOut i, bool front) {
   // (a finished unit whose personal shield is up says so with an alpha above 1)
   bool shielded = i.color.a > 1.5;
@@ -617,6 +685,8 @@ float4 Shade(VOut i, bool front) {
     return float4(glow, slab.a * saturate(i.color.a) * 0.28);
   }
   if (kind.y > 2.5) {
+    // [ogshield] the original look: each faction's bubble as the game draws it (OriginalShield)
+    [branch] if (look < 0.5) return OriginalShield(i, int(kind2.x + 0.5));
     // a shield's bubble: a faint shell in its faction's tint, stronger where it is seen edge on,
     // with its texture's pattern drifting over it at two sizes against each other
     float rim = pow(1 - abs(dot(normalize(i.normal), normalize(cameraPosition - i.world))), 2.5);
