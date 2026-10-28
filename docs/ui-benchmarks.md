@@ -41,8 +41,10 @@ morning's until beat 21695 (the fingerprints), then the engine's batches make it
   begins only in a frame and only once the picture has reached the newest beat, so it often begins a frame late.
   Next idea (not done): let a heavy beat begin as soon as the last is through, up to two beats ahead of the picture
   (the renderer keeps six), the lead learnt as now; orders then wait up to a beat longer in a heavy game only.
-- The afternoon's long beats come every 10 ticks (one game second) from about tick 25000, ~200 ms each: the
-  simulation's (its own game by then), for the engine to look at.
+- The afternoon's long beats come every 10 ticks (one game second) from about tick 25000, ~200 ms each: M28's own
+  air logic (ManageAirAAUnits once a second, quadratic in a big late air fight), not a regression: the engine's
+  helper played late.fp back exactly headless, and batches 22, 23 and the old collector settings all play the same
+  game with the same spikes. The fix goes into our M28 variant.
 
 ## 2026-10-28: a live 45-minute game at native 4K, as Chris plays now (the engine's item 20 follow-up)
 
