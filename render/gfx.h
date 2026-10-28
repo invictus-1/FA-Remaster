@@ -456,6 +456,14 @@ class Device {
   // photo of its size; (-1, -1): off and the picture let go of. Between frames. False where the picture cannot be made
   // (then it is off).
   virtual bool SetPhotoWindow(int width, int height) { return width <= 0 || height <= 0; }
+  // [weather] A read-back that does not wait for the card (the minimap's ground drawn anew as the hour and the weather move:
+  // WorldPicture::DrawMinimap). After CaptureLater(true), the next EndFrame with a capture only has the picture copied out on
+  // the card and leaves `capture` empty; TakeCapture then hands it over once the card has finished that frame: 1 taken, 0
+  // not yet, -1 none waiting (none asked for, or another capture has used the read-back since). Where a device cannot
+  // (CapturesLater false), EndFrame reads back at once and waits, as before.
+  virtual bool CapturesLater() const { return false; }
+  virtual void CaptureLater(bool later) { (void)later; }
+  virtual int TakeCapture(std::vector<uint8_t>* capture) { (void)capture; return -1; }
   // [views] Within a frame: the passes into the window from here on draw into these targets instead (an RGBA8 colour
   // target and a D32 depth target of one size; the viewport theirs), until set to none (both empty) again - the window's
   // passes then go to the window. For a picture with several views (WorldPicture::SetViews): each view's frame drawn

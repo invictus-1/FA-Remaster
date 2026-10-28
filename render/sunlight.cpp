@@ -40,11 +40,7 @@ float LowHaze(float over) { return shaftBand.w * exp(-max(over, 0) / max(shaftLo
 // How much of the low haze's sunlight at `away` from the eye is the shafts' pass's (fading out over the last fifth).
 float LowShare(float away) { return shaftLow.z > 0 ? 1 - smoothstep(shaftLow.z * 0.8, shaftLow.z, away) : 0; }
 // The mist's banks at a place (as the light in the air has them, air.cpp's Thickness, and view.h's MistLost).
-float ShaftMistBanks(float2 xz) {
-  float2 q = xz + skyClouds.yz * 0.12;
-  return smoothstep(0.28, 0.8, CloudNoise(float3(q * 0.008, skyClouds.w * 2.5 + 11.0)) * 0.5 + CloudNoise(float3(q.yx * 0.021 + 7.3, skyClouds.w * 4.0 + 3.0)) * 0.3 +
-                                CloudNoise(float3(q * 0.057 + 2.9, skyClouds.w * 6.0 + 5.0)) * 0.2) * 1.5;
-}
+float ShaftMistBanks(float2 xz) { return MistBanks(xz, 0); }  // ([weather] view.h's, at a point)
 )hlsl";
 
 namespace {

@@ -352,13 +352,36 @@ WeatherNow WeatherAt(uint32_t seed, double seconds, Climate climate, float spell
   // ([seasons] a spell of showers: its rain as it comes and goes; any other as it was)
   const WeatherNow a = ka.showers ? Showers(ka.weather, seed, seconds) : ka.weather;
   const WeatherNow b = kb.showers ? Showers(kb.weather, seed, seconds) : kb.weather;
-  float t = std::clamp((static_cast<float>(at - static_cast<double>(index)) - 0.75f) * 4, 0.0f, 1.0f);
-  t = t * t * (3 - 2 * t);
+  // [onset] (Chris's snapshot test, 2026-10-25: "Rain pops in at once ... Wanted: clouds slowly forming and covering the map,
+  // then the rain slowly picking up, as in real life") The last `kTurn` of a spell goes over into the next (it was the last
+  // quarter, everything at once). Where more is to fall, the clouds gather first, over the first three fifths of that
+  // (81 s of a 300 s spell), and the rain or snow begins only once they are well on, from just under half of it, easing in
+  // slowly; where less is to fall, the other way round: the rain eases off first and the clouds break up after. Fog thickens
+  // with the clouds and thins after the rain. A change with as much falling before as after goes over all of it together.
+  constexpr float kTurn = 0.45f;
+  const float into = std::clamp((static_cast<float>(at - static_cast<double>(index)) - (1 - kTurn)) / kTurn, 0.0f, 1.0f);
+  auto over = [into](float from, float to) {  // (eased from `from` to `to` of the way)
+    const float s = std::clamp((into - from) / (to - from), 0.0f, 1.0f);
+    return s * s * (3 - 2 * s);
+  };
+  const float fallsBefore = a.rain + a.snow, fallsAfter = b.rain + b.snow;
+  float tClouds = over(0, 1), tFalls = tClouds, tFog = tClouds;
+  if (fallsAfter > fallsBefore + 1e-4f) {
+    tClouds = over(0, 0.6f);
+    tFog = over(0, 0.8f);
+    const float s = over(0.45f, 1);
+    tFalls = s * s;  // (picking up slowly: a few drops first)
+  } else if (fallsAfter < fallsBefore - 1e-4f) {
+    const float s = over(0, 0.55f);
+    tFalls = 1 - (1 - s) * (1 - s);  // (the last few drops linger)
+    tFog = over(0.2f, 1);
+    tClouds = over(0.4f, 1);
+  }
   WeatherNow w;
-  w.clouds = a.clouds + (b.clouds - a.clouds) * t;
-  w.rain = a.rain + (b.rain - a.rain) * t;
-  w.snow = a.snow + (b.snow - a.snow) * t;
-  w.fog = a.fog + (b.fog - a.fog) * t;
+  w.clouds = a.clouds + (b.clouds - a.clouds) * tClouds;
+  w.rain = a.rain + (b.rain - a.rain) * tFalls;
+  w.snow = a.snow + (b.snow - a.snow) * tFalls;
+  w.fog = a.fog + (b.fog - a.fog) * tFog;
   w.flash = LightningAt(seed, seconds, w.rain);
   return w;
 }

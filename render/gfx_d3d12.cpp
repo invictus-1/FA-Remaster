@@ -386,6 +386,9 @@ class D3D12Device final : public Device {
   Texture WindowPicture() override { return generating_ ? windowPictures_[cur_] : Texture{}; }
   Texture BetweenPicture() override { return generating_ ? betweenPictures_[cur_] : Texture{}; }
   bool SetPhotoWindow(int width, int height) override;
+  bool CapturesLater() const override { return true; }  // [weather]
+  void CaptureLater(bool later) override { captureLater_ = later; }
+  int TakeCapture(std::vector<uint8_t>* capture) override;
   bool SetLatencyLimiter(bool on) override;
   bool LatencyLimiter() const override { return latency_; }
   void WaitForNextFrame() override;
@@ -618,6 +621,13 @@ class D3D12Device final : public Device {
   Com<ID3D12DescriptorHeap> rtvHeap_, dsvHeap_, stagingHeap_, ringHeap_;
   Com<ID3D12Resource> depth_, readback_;
   uint64_t readbackSize_ = 0;
+  // [weather] (CaptureLater) the next capture left on the card; the one copied out there and not yet taken: the frame's
+  // fence, where it lies in the read-back and its size
+  bool captureLater_ = false, laterWaiting_ = false;
+  uint64_t laterFence_ = 0;
+  D3D12_PLACED_SUBRESOURCE_FOOTPRINT laterLayout_ = {};
+  int laterWidth_ = 0, laterHeight_ = 0;
+  void CopyCapture(std::vector<uint8_t>* capture, const D3D12_PLACED_SUBRESOURCE_FOOTPRINT& layout, int width, int height);
   D3D12_CPU_DESCRIPTOR_HANDLE rtvStart_{}, dsvStart_{}, stagingStart_{}, ringCpuStart_{};
   D3D12_GPU_DESCRIPTOR_HANDLE ringGpuStart_{};
   UINT rtvStep_ = 0, dsvStep_ = 0, srvStep_ = 0;
@@ -4011,21 +4021,44 @@ void D3D12Device::EndFrame(std::vector<uint8_t>* capture, bool present) {
     presentWake_.notify_one();
   }
 
+  const bool later = captureLater_;  // [weather]
+  captureLater_ = false;
   if (capture) {
     capture->clear();
+    laterWaiting_ = false;  // ([weather] the read-back is this one's now)
     if (!readback_) return;
+    if (later) {  // [weather] taken by TakeCapture once the card is done with this frame
+      laterWaiting_ = true;
+      laterFence_ = f.fence;
+      laterLayout_ = layout;
+      laterWidth_ = shownWidth;
+      laterHeight_ = shownHeight;
+      return;
+    }
     WaitFence(f.fence);
-    void* mapped = nullptr;
-    D3D12_RANGE range = {0, static_cast<SIZE_T>(readbackSize_)};
-    if (FAILED(readback_->Map(0, &range, &mapped))) return;
-    capture->resize(static_cast<size_t>(shownWidth) * static_cast<size_t>(shownHeight) * 4);
-    for (int y = 0; y < shownHeight; ++y)
-      std::memcpy(capture->data() + static_cast<size_t>(y) * static_cast<size_t>(shownWidth) * 4,
-                  static_cast<const uint8_t*>(mapped) + layout.Offset + static_cast<size_t>(y) * layout.Footprint.RowPitch,
-                  static_cast<size_t>(shownWidth) * 4);
-    D3D12_RANGE none = {0, 0};
-    readback_->Unmap(0, &none);
+    CopyCapture(capture, layout, shownWidth, shownHeight);
   }
+}
+
+void D3D12Device::CopyCapture(std::vector<uint8_t>* capture, const D3D12_PLACED_SUBRESOURCE_FOOTPRINT& layout, int width, int height) {
+  void* mapped = nullptr;
+  D3D12_RANGE range = {0, static_cast<SIZE_T>(readbackSize_)};
+  if (FAILED(readback_->Map(0, &range, &mapped))) return;
+  capture->resize(static_cast<size_t>(width) * static_cast<size_t>(height) * 4);
+  for (int y = 0; y < height; ++y)
+    std::memcpy(capture->data() + static_cast<size_t>(y) * static_cast<size_t>(width) * 4,
+                static_cast<const uint8_t*>(mapped) + layout.Offset + static_cast<size_t>(y) * layout.Footprint.RowPitch,
+                static_cast<size_t>(width) * 4);
+  D3D12_RANGE none = {0, 0};
+  readback_->Unmap(0, &none);
+}
+
+int D3D12Device::TakeCapture(std::vector<uint8_t>* capture) {  // [weather]
+  if (!laterWaiting_ || !readback_) return -1;
+  if (fence_->GetCompletedValue() < laterFence_) return 0;
+  laterWaiting_ = false;
+  CopyCapture(capture, laterLayout_, laterWidth_, laterHeight_);
+  return 1;
 }
 
 void D3D12Device::Mark(const char* name) {

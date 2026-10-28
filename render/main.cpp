@@ -215,7 +215,9 @@
 //           world into the window, then the minimap at size x size, 300 unless given), n frames with the weather as it is,
 //           then n with the weather moved between every two (the minimap's ground drawn anew each time); each frame's time
 //           printed, the minimap after the last written beside the --picture file (_minimaptest.png); `old`: its ground drawn
-//           the way it was before (WorldPicture::minimapByResize), to compare
+//           the way it was before (WorldPicture::minimapByResize), to compare; [weather] `spaced`: in the second n the
+//           weather moved once every 20 frames (one redraw now and then, as in a game); `wait`: the
+//           redrawn ground read back at once, waiting for the card, as before WorldPicture's read-back later
 // --range-fill  [range fill] with --ranges: the red group filled inside its lines (the original's range_Fill)
 // --no-hidden-outlines  no outlines of units hidden behind trees, cliffs and buildings (World::hiddenOutlines,
 //           hidden_outlines.h: on unless this is given, in the modern look); --hidden-outlines: on (as at first)
@@ -574,6 +576,8 @@
 // --clouds <0..1>  with a time of day: how much of the sky clouds cover (0.3 unless given); key C steps through
 // --mist <0..1>  with a time of day: how much mist lies on low ground and over water (unless given: by the
 //           hour and the weather, most at daybreak)
+// --fog-old  [weather] fog thickens the air all over, as before (World::lowFog off; by default fog past a quarter lies as a
+//           low layer on the ground and the water, in the mist's)
 // --wet <0..1>  the ground starts that wet (World::wet; then it follows the weather): puddles at once
 // --weather <clear|rain|storm|snow|fog>  the weather (it turns a time of day on, noon unless given); key R
 //           steps through them. Given as an option, surfaces are wet or snowy from the start.
@@ -913,6 +917,7 @@ struct Options {
   float timeOfDay = -1, dayLength = 0;  // --time-of-day, --day-length
   float clouds = 0.3f;                  // --clouds
   float mist = -1;                      // --mist
+  bool fogOld = false;                  // [weather] --fog-old
   int focus = 0;                        // --focus
   float playable[4] = {0, 0, 0, 0};     // --playable
   bool unexplored = false;              // --unexplored
@@ -943,6 +948,7 @@ struct Options {
   bool minimapResources = true;                  // [minimap deposits] --no-minimap-resources
   int minimapTest = 0, minimapTestSize = 300;    // [spikes] --minimap-test
   bool minimapTestOld = false;
+  bool minimapTestSpaced = false, minimapTestWait = false;  // [weather] (,spaced  ,wait)
   bool rangeFill = false;                       // [range fill] --range-fill
   std::string enhancement;
   float soften = -1;                    // --soften
@@ -1142,6 +1148,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--no-bloom") o->bloom = false;
     else if (a == "--no-frame") o->frame = false;
     else if (a == "--no-beyond-haze") o->beyondHaze = false;
+    else if (a == "--fog-old") o->fogOld = true;  // [weather]
     else if (a == "--beyond-land") o->beyondLand = true;  // (beyondland)
     else if (a == "--noicons") o->icons = false;
     else if (a == "--unexplored") o->unexplored = true;
@@ -1471,6 +1478,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--minimap-test") {  // [spikes] <n>[,<size>]
       if (sscanf(v, "%d,%d", &o->minimapTest, &o->minimapTestSize) < 1 || o->minimapTest <= 0) return false;
       o->minimapTestOld = std::string(v).find(",old") != std::string::npos;
+      o->minimapTestSpaced = std::string(v).find(",spaced") != std::string::npos;  // [weather]
+      o->minimapTestWait = std::string(v).find(",wait") != std::string::npos;
       o->minimapTestSize = std::clamp(o->minimapTestSize, 16, 2048);
     }
     else if (a == "--upgrade-test") {  // [hitches] <beat>,<x>,<z>[,<after>[,<from>,<to>]]
@@ -2147,6 +2156,7 @@ int main(int argc, char** argv) {
   world.wet = opt.wet;
   world.cloudCover = opt.clouds;
   world.mist = opt.mist;
+  world.lowFog = !opt.fogOld;  // [weather]
   world.weatherCuts = opt.weatherCuts;  // (airfix)
   world.borders = opt.border;
   world.unexplored = opt.unexplored;
@@ -3341,6 +3351,7 @@ int main(int argc, char** argv) {
       if (opt.minimapTest > 0) {  // [spikes] --minimap-test: the host's frames, the world then the minimap, the weather still, then moving
         const int size = opt.minimapTestSize;
         picture.minimapByResize = opt.minimapTestOld;
+        picture.minimapWaits = opt.minimapTestWait;  // [weather]
         World* pw = picture.world();
         std::vector<double> still, moved;
         double worstStill = 0, worstMoved = 0;
@@ -3354,9 +3365,12 @@ int main(int argc, char** argv) {
           // (moving: the clouds a quarter more on every other call, so that the weather's number the minimap goes by moves by
           // more than it redraws for between every two; put back after, for the world's next frame)
           const float clouds = pw ? pw->cloudCover : 0;
-          if (moving && pw && (i & 1)) pw->cloudCover = clouds + 0.25f;
+          // ([weather] `spaced`: the weather moved on for good once every 20 calls, as a game's hour and weather move it: one
+          // redraw now and then among frames that draw none)
+          if (moving && pw && opt.minimapTestSpaced && i % 20 == 0) pw->cloudCover = clouds + 0.25f * static_cast<float>((i / 20) % 2 ? 1 : -1);
+          else if (moving && pw && !opt.minimapTestSpaced && (i & 1)) pw->cloudCover = clouds + 0.25f;
           picture.DrawMinimap(size, size, opt.minimapResources);
-          if (pw) pw->cloudCover = clouds;
+          if (pw && !opt.minimapTestSpaced) pw->cloudCover = clouds;
           const auto t2 = std::chrono::steady_clock::now();
           const double whole = std::chrono::duration<double, std::milli>(t2 - t0).count();
           const double mini = std::chrono::duration<double, std::milli>(t2 - t1).count();

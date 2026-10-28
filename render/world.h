@@ -395,6 +395,10 @@ class World {
   // more on wet ground after rain and in fog, little in a dry climate, none while it snows.
   // `mistNow` is what it came to in the last frame.
   float mist = -1, mistNow = 0;
+  // [weather] Fog as a low layer (World::Begin; Chris's snapshot test, 2026-10-25): fog past a quarter lies on the ground and
+  // the water in the mist's layer, deeper than the mist, and only a little of it thickens the air all over. Off (the
+  // viewer's --fog-old): all of it in the air all over, as before.
+  bool lowFog = true;
   // A view for checking art (modern look): what every lit surface shows in place of its lit
   // colour. 0: the picture as it is; 1 colour alone, 2 which way surfaces face, 3 roughness,
   // 4 metal, 5 the creases' shading, 6 the sun's shadow, 7 the small lights alone, 8 the sun's

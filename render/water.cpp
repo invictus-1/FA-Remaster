@@ -906,6 +906,7 @@ gfx::Pipeline Water::ModernPipeline(bool ripples, std::string* error, bool winte
                        (surf && wet ? "#define SURF_WET 1\n" : "") +  // [shore]
                        (ocean ? "#define OCEAN 1\n" : "") +           // [ocean]
                        (ocean && lift ? "#define LIFT 1\n" : "") +    // [lift]
+                       "#define AIR_SMOOTH 1\n" +  // [weather] (view.h, AirAt)
                        "#define SAMPLES " + std::to_string(gSceneSamples) + "\n" + kViewShaderBlock + RayShaders() + kLightingShaderBlock +
                        kGlintShaderBlock + (winter ? kWinterWaterShaderBlock : "") + (surf ? kSurfShaderBlock : "") + (ocean ? kOceanShaderBlock : "") +
                        kModernShader;

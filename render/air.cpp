@@ -52,6 +52,8 @@ float AirPhase(float c, float g) {
 }
 float CellDistance(float t) { return airRange.x * exp(t * airRange.y); }  // (t: 0 .. 1 along the volume's depth)
 float3 CellRay(float2 uv) { return normalize(airAhead.xyz + airRight.xyz * (uv.x * 2 - 1) + airUp.xyz * (1 - uv.y * 2)); }
+// [weather] How wide a cell is `t` world units from the eye (the mist's banks are read for so wide a place: view.h, MistBanks).
+float CellWidth(float t) { return t * 2 * length(airRight.xyz) / max(airCells.x, 1); }
 
 // (airfix) The ground: there is no air under it. A column of cells goes on past where it meets the ground (or the water),
 // and the mist is thickest low down: what the cells there gathered under the ground was laid over the ground itself as
@@ -101,9 +103,7 @@ float Thickness(float3 p, out float dust) {
   dust = airRange.z * thins;
   float t = (airRange.z + weather.z) * thins;
   [branch] if (mist.x > 0) {
-    float2 q = p.xz + skyClouds.yz * 0.12;
-    float banks = smoothstep(0.28, 0.8, CloudNoise(float3(q * 0.008, skyClouds.w * 2.5 + 11.0)) * 0.5 + CloudNoise(float3(q.yx * 0.021 + 7.3, skyClouds.w * 4.0 + 3.0)) * 0.3 +
-                                        CloudNoise(float3(q * 0.057 + 2.9, skyClouds.w * 6.0 + 5.0)) * 0.2) * 1.5;
+    float banks = MistBanks(p.xz, CellWidth(length(p - cameraPosition)));  // ([weather] as wide as a cell there)
     t += mist.x * exp(-max((p.y - mist.y) * mist.z, -1)) * banks;
   }
   return t;
@@ -202,7 +202,7 @@ float4 GatherSpread(float3 ray, float t0, float t1, bool meets, float u) {
   // the hazes: the air's own (dust and the weather's, thinning above the floor), the mist, the band, the low haze; each
   // how thick at its floor (c), how fast it thins (k), and its height over its floor at either end (o0, o1)
   float mistFloor = -1 / max(mist.z, 1e-6);
-  float4 c = float4(airRange.z + weather.z, mist.x > 0 ? mist.x * ShaftMistBanks(p1.xz) : 0,
+  float4 c = float4(airRange.z + weather.z, mist.x > 0 ? mist.x * MistBanks(p1.xz, CellWidth(t1)) : 0,  // ([weather] a cell's width)
                     shaftBand.z * lerp(shaftMore.x, 1, shaftWoods.SampleLevel(samplerLinearClamp, MirrorUv(p1.xz / shaftGround.yz), 0)), shaftBand.w);
   float4 k = float4(lastRange.z, mist.x > 0 ? mist.z : 0, 3 / max(shaftBand.x, 1e-3), 1 / max(shaftLow.x, 1));
   float4 o0 = float4(max(p0.y - lastRange.y, 0), max(p0.y - mist.y, mistFloor), over0, over0);
@@ -371,10 +371,7 @@ float4 GatherSpread(float3 ray, float t0, float t1, bool meets, float u) {
       past = 1;
       len = meets * (1 - 1 / growth) / kAirAhead;
       float3 p = cameraPosition + ray * meets;
-      float2 q = p.xz + skyClouds.yz * 0.12;
-      float mistHere = mist.x > 0 ? mist.x * smoothstep(0.28, 0.8, CloudNoise(float3(q * 0.008, skyClouds.w * 2.5 + 11.0)) * 0.5 +
-                                                              CloudNoise(float3(q.yx * 0.021 + 7.3, skyClouds.w * 4.0 + 3.0)) * 0.3 +
-                                                              CloudNoise(float3(q * 0.057 + 2.9, skyClouds.w * 6.0 + 5.0)) * 0.2) * 1.5 : 0;
+      float mistHere = mist.x > 0 ? mist.x * MistBanks(p.xz, CellWidth(meets)) : 0;  // ([weather] as AirAt reads them)
       float rest = weather.z + airRange.z;
       for (int j = 0; j <= kAirAhead; ++j) {
         float t = max(meets - j * len, lastStart);

@@ -679,6 +679,9 @@ class VulkanDevice final : public Device {
   Texture WindowPicture() override { return generating_ ? windowPictures_[cur_] : Texture{}; }
   Texture BetweenPicture() override { return generating_ ? betweenPictures_[cur_] : Texture{}; }
   bool SetPhotoWindow(int width, int height) override;
+  bool CapturesLater() const override { return true; }  // [weather] (a photo window's frame: the minimap's ground)
+  void CaptureLater(bool later) override { captureLater_ = later; }
+  int TakeCapture(std::vector<uint8_t>* capture) override;
   bool SetLatencyLimiter(bool on) override;
   bool LatencyLimiter() const override { return latency_; }
   void WaitForNextFrame() override;
@@ -695,7 +698,7 @@ class VulkanDevice final : public Device {
   int photoWidth_ = 0, photoHeight_ = 0;
   bool photoOn_ = false;
   bool PhotoNow() { return photoOn_ && Find(photoColor_) && Find(photoDepth_); }
-  void EndFramePhoto(std::vector<uint8_t>* capture);
+  void EndFramePhoto(std::vector<uint8_t>* capture, bool later = false);
   // the latency limiter (gfx.h, SetLatencyLimiter; gfx_latency.h; as Direct3D 12's, gfx_d3d12.cpp, with the driver's
   // present wait in place of the swap chain's frame latency object): the switch (to wantLatency_; the chain stays as
   // it is); the frames' work taken from the slots the card has finished; the wait for a frame to begin (with the
@@ -1071,6 +1074,12 @@ class VulkanDevice final : public Device {
 
   // read-back
   VkBuffer readback_ = VK_NULL_HANDLE;
+  // [weather] (CaptureLater) the next capture of a photo window's frame left on the card; the one copied out there and not
+  // yet taken: its frame's slot and number, its size
+  bool captureLater_ = false, laterWaiting_ = false;
+  int laterSlot_ = 0;
+  uint64_t laterNumber_ = 0;
+  VkDeviceSize laterBytes_ = 0;
   Allocation readbackMemory_;
   VkDeviceSize readbackSize_ = 0;
 };
@@ -2206,7 +2215,7 @@ bool VulkanDevice::SetPhotoWindow(int width, int height) {
 
 // (photomode) A photo frame's end: its picture read back with `capture`; nothing shown, the window's own picture and
 // the chain's image held for the next frame untouched.
-void VulkanDevice::EndFramePhoto(std::vector<uint8_t>* capture) {
+void VulkanDevice::EndFramePhoto(std::vector<uint8_t>* capture, bool later) {
   Frame& f = frames_[cur_];
   VkCommandBuffer cmd = f.cmd;
   if (queries_ && !f.marks.empty()) {  // the frame's end
@@ -2246,13 +2255,29 @@ void VulkanDevice::EndFramePhoto(std::vector<uint8_t>* capture) {
   inFrame_ = false;
   if (capture) {
     capture->clear();
-    if (reading) {
+    if (reading && later) {  // [weather] taken by TakeCapture once the card is done with this frame
+      laterWaiting_ = true;
+      laterSlot_ = cur_;
+      laterNumber_ = frameNumber_;
+      laterBytes_ = bytes;
+    } else if (reading) {
       vkWaitForFences(device_, 1, &f.done, VK_TRUE, UINT64_MAX);
       capture->resize(static_cast<size_t>(bytes));
       std::memcpy(capture->data(), readbackMemory_.mapped, capture->size());
     }
   }
   cur_ = (cur_ + 1) % kFrames;
+}
+
+int VulkanDevice::TakeCapture(std::vector<uint8_t>* capture) {  // [weather]
+  if (!laterWaiting_ || !readback_ || readbackSize_ < laterBytes_) return -1;
+  // (done: its slot drawn into again since - BeginFrame waited for it then - or its fence reached)
+  const bool done = frameNumber_ >= laterNumber_ + kFrames || vkGetFenceStatus(device_, frames_[laterSlot_].done) == VK_SUCCESS;
+  if (!done) return 0;
+  laterWaiting_ = false;
+  capture->resize(static_cast<size_t>(laterBytes_));
+  std::memcpy(capture->data(), readbackMemory_.mapped, capture->size());
+  return 1;
 }
 
 // A frame's end with frame generation on: the picture between made (it may dispatch and draw), both pictures copied
@@ -5319,8 +5344,11 @@ void VulkanDevice::EndFrame(std::vector<uint8_t>* capture, bool present) {
   EndRendering();
   ReleasePassTargets();
   ReleaseGeneral();
+  const bool later = captureLater_;  // [weather]
+  captureLater_ = false;
+  if (capture) laterWaiting_ = false;  // ([weather] the read-back is this one's now)
   if (PhotoNow()) {  // (photomode) a photo's frame: read back, never shown
-    EndFramePhoto(capture);
+    EndFramePhoto(capture, later);
     return;
   }
   if (generating_ && Find(windowPictures_[cur_]) && Find(betweenPictures_[cur_])) {

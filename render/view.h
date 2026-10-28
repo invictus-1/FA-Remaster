@@ -191,6 +191,10 @@ struct ViewConstants {
   // ground's pass reads it (lighting.h, SunShadowSeen; 2: and checks it, SunMask::check); y unused; z the mask's words a row;
   // w its rows. 0: as without it.
   float shadowMask[4];
+  // [weather] The mist's layer, more (World::lowFog): x how evenly its banks lie where the light in the air reads them for
+  // a cell (view.h, MistBanks: 0 as they are, in banks with clear air between; 1 alike everywhere): the low fog's layer
+  // lies more evenly than the mist's banks, or from above it showed as dark holes cut in it. 0: as without it.
+  float mistMore[4];
 };
 
 // The same block, as HLSL source: shaders start with it.
@@ -249,6 +253,7 @@ cbuffer View : register(b0) {
   float4 driftPicture;    // [sunlight] the drifting shadows' picture: x, y its middle; z 1 / its width; w 1 = drawn this frame
   float4 beyondSea;       // (sky) the far sea from above: x 1 = on; y the sea's level; z its haze's 1/e distance; w the haze's thinning height
   float4 shadowMask;      // [shadowmask] the sun's shadow mask on the ground: x 1 = the ground reads it; z its words a row; w its rows
+  float4 mistMore;        // [weather] the mist's layer, more: x how evenly its banks lie where the light in the air reads them
 };
 // (every texture read with Sample takes the temporal upscaler's bias: textures with levels - the art's - are
 // read as finely as the screen's size wants; pictures drawn by the renderer have one level and do not change)
@@ -458,14 +463,34 @@ float3 ThroughAir(float3 color, float distance) {
 // summed along the line of sight (so a valley seen from high above shows as a pool of it, and a
 // hilltop stands clear). It lies in banks that drift.
 float3 MistColor() { return AirColor() * 0.75; }
+// The mist's banks at a place: how thick they are there (0 between them .. 1.5), three sizes of drifting noise (some 125,
+// 48 and 17 world units). [weather] `footprint`: how wide a place it is read for (world units; 0 a point). A size of noise
+// much smaller than the place read is taken at its mean, eased out from a quarter of its size up to three fifths: the
+// light in the air reads them once a cell of its volume (some 24 pixels at 4K, 9 world units from the strategic zoom),
+// and the smallest, read at a single point of each cell and blended between cells, showed as a pattern of blocks (Chris's
+// snapshot test, 2026-10-25: "pixelated clouds" over the sea in the morning's mist). Read for a point: as before.
+float MistBanks(float2 xz, float footprint) {
+  float2 q = xz + skyClouds.yz * 0.12;
+  float n0 = CloudNoise(float3(q * 0.008, skyClouds.w * 2.5 + 11.0));
+  [branch] if (footprint <= 0) {  // (a point: exactly as before)
+    return smoothstep(0.28, 0.8, n0 * 0.5 + CloudNoise(float3(q.yx * 0.021 + 7.3, skyClouds.w * 4.0 + 3.0)) * 0.3 +
+                                 CloudNoise(float3(q * 0.057 + 2.9, skyClouds.w * 6.0 + 5.0)) * 0.2) * 1.5;
+  }
+  float3 keep = 1 - smoothstep(0.25, 0.6, footprint * float3(1.0 / 125, 1.0 / 47.6, 1.0 / 17.5));
+  float n1 = keep.y > 0 ? CloudNoise(float3(q.yx * 0.021 + 7.3, skyClouds.w * 4.0 + 3.0)) : 0.5;
+  float n2 = keep.z > 0 ? CloudNoise(float3(q * 0.057 + 2.9, skyClouds.w * 6.0 + 5.0)) : 0.5;
+  float banks = smoothstep(0.28, 0.8, lerp(0.5, n0, keep.x) * 0.5 + lerp(0.5, n1, keep.y) * 0.3 + lerp(0.5, n2, keep.z) * 0.2) * 1.5;
+  return lerp(banks, 1, mistMore.x);  // (the low fog's: more even)
+}
+// [weather] How wide a cell of the light in the air's volume is, `away` world units from the eye (its `cellsAcross` across
+// the picture): for MistBanks.
+float AirCellWidth(float away, float cellsAcross) { return away * 2 / max(length(viewProj[0].xyz), 1e-6) / max(cellsAcross, 1); }
 float MistLost(float3 world) {
   if (mist.x <= 0) return 0;
   float a = max((cameraPosition.y - mist.y) * mist.z, -1), b = max((world.y - mist.y) * mist.z, -1);
   float d = a - b;
   float mean = abs(d) > 1e-3 ? (exp(-b) - exp(-a)) / d : exp(-a);
-  float2 q = world.xz + skyClouds.yz * 0.12;
-  float banks = smoothstep(0.28, 0.8, CloudNoise(float3(q * 0.008, skyClouds.w * 2.5 + 11.0)) * 0.5 + CloudNoise(float3(q.yx * 0.021 + 7.3, skyClouds.w * 4.0 + 3.0)) * 0.3 +
-                                      CloudNoise(float3(q * 0.057 + 2.9, skyClouds.w * 6.0 + 5.0)) * 0.2) * 1.5;
+  float banks = MistBanks(world.xz, 0);
   return min(1 - exp(-length(world - cameraPosition) * mist.x * mean * banks), mist.w);
 }
 // Light in the air (air.h), when it is on: what the air between the eye and `world` adds to what is
@@ -509,6 +534,24 @@ float4 AirBetween(float4 from, float4 into, float share) {
   [branch] if (lost > 0.2) w = (1 - exp(-lost * share)) / (1 - exp(-lost));
   return lerp(from, into, w);
 }
+// [weather] The volume read across the picture by a cubic B-spline over the four by four columns round the place (in four
+// filtered reads, each weighted between two columns as the spline's weights split), along its depth as before. Read
+// straight between the columns, the light in the air changed its slope at every column, and the mist and fog seen from
+// far up showed the cells as soft blocks (some 24 pixels at 4K; Chris's "pixelated clouds", 2026-10-25). Not for the
+// air's own haze alone (`smooth` off: clear air, as before), where nothing changes fast across the picture; only in the
+// passes that ask for it (AIR_SMOOTH: the ground's and the water's).
+float4 AirVolumeRead(float2 uv, float layer, float2 cells, bool smooth) {
+  [branch] if (!smooth) return airVolume.SampleLevel(samplerLinearClamp, float3(uv, layer), 0);
+  float2 x = uv * cells - 0.5, i = floor(x), f = x - i;
+  float2 f2 = f * f, f3 = f2 * f;
+  float2 w0 = (1 - 3 * f + 3 * f2 - f3) / 6, w1 = (4 - 6 * f2 + 3 * f3) / 6, w2 = (1 + 3 * f + 3 * f2 - 3 * f3) / 6, w3 = f3 / 6;
+  float2 g0 = w0 + w1, g1 = w2 + w3;
+  float2 p0 = (i - 0.5 + w1 / g0) / cells, p1 = (i + 1.5 + w3 / g1) / cells;
+  return g0.y * (g0.x * airVolume.SampleLevel(samplerLinearClamp, float3(p0.x, p0.y, layer), 0) +
+                 g1.x * airVolume.SampleLevel(samplerLinearClamp, float3(p1.x, p0.y, layer), 0)) +
+         g1.y * (g0.x * airVolume.SampleLevel(samplerLinearClamp, float3(p0.x, p1.y, layer), 0) +
+                 g1.x * airVolume.SampleLevel(samplerLinearClamp, float3(p1.x, p1.y, layer), 0));
+}
 float4 AirAt(float3 world) {
   float4 clip = mul(viewProj, float4(world, 1));
   float2 uv = clip.w > 1e-4 ? saturate(clip.xy / clip.w * float2(0.5, -0.5) + 0.5) : float2(0.5, 0.5);
@@ -539,23 +582,26 @@ float4 AirAt(float3 world) {
   // columns meet the ground far apart)
   float byGround = saturate(kAirAhead - ahead) * saturate(ahead + kAirPast) * saturate(2 - (hi - lo) / max(0.125 * away, 1e-3));
   float4 a = 0;
+  // ([weather] the ground's and the water's passes, AIR_SMOOTH, with mist, fog or rain's or snow's murk: AirVolumeRead. Not the
+  // models': the blocks showed on the wide ground and sea, and the trees' many layers made it dear, 3 ms of the card at 4K)
+#ifdef AIR_SMOOTH
+  const bool smooth = mist.x > 0 || weather.z > 1e-4;
+#else
+  const bool smooth = false;
+#endif
   [branch] if (byGround < 1) {
     // (the mist's banks only matter beside the weather's haze: alone, its spread is the same in them as between them)
     float mistHere = mist.x;
-    [branch] if (mistHere > 0 && weather.z > 0) {
-      float2 q = world.xz + skyClouds.yz * 0.12;
-      mistHere *= smoothstep(0.28, 0.8, CloudNoise(float3(q * 0.008, skyClouds.w * 2.5 + 11.0)) * 0.5 + CloudNoise(float3(q.yx * 0.021 + 7.3, skyClouds.w * 4.0 + 3.0)) * 0.3 +
-                                        CloudNoise(float3(q * 0.057 + 2.9, skyClouds.w * 6.0 + 5.0)) * 0.2) * 1.5;
-    }
+    [branch] if (mistHere > 0 && weather.z > 0) mistHere *= MistBanks(world.xz, AirCellWidth(away, cellsX));  // ([weather] as the volume read them)
     int k = min(int(log(max(away, air.y) / air.y) / step), cellsZ - 1);
     float end = air.y * exp((k + 1) * step), start = k > 0 ? end / growth : 0;
-    float4 from = k > 0 ? airVolume.SampleLevel(samplerLinearClamp, float3(uv, (k - 0.5) / layers), 0) : float4(0, 0, 0, 1);
-    float4 into = airVolume.SampleLevel(samplerLinearClamp, float3(uv, (k + 0.5) / layers), 0);
+    float4 from = k > 0 ? AirVolumeRead(uv, (k - 0.5) / layers, float2(cellsX, cellsY), smooth) : float4(0, 0, 0, 1);
+    float4 into = AirVolumeRead(uv, (k + 0.5) / layers, float2(cellsX, cellsY), smooth);
     float ends = mid >= start ? min(end, max(mid, away)) : end;  // (the cell ends at the ground where it meets it)
     a = AirBetween(from, into, AirShareOf(away, start, ends, cameraPosition.y, rayY, mistHere, weather.z + 1.5e-4)) * (1 - byGround);
   }
   [branch] if (byGround > 0)
-    a += airVolume.SampleLevel(samplerLinearClamp, float3(uv, (cellsZ + 1 + kAirPast + clamp(ahead, -kAirPast, kAirAhead) + 0.5) / layers), 0) * byGround;
+    a += AirVolumeRead(uv, (cellsZ + 1 + kAirPast + clamp(ahead, -kAirPast, kAirAhead) + 0.5) / layers, float2(cellsX, cellsY), smooth) * byGround;
   // (never all of a far thing hidden: what is lost is held to the most the air may hide)
   float kept = max(a.a, 1 - air.w);
   a.rgb *= (1 - kept) / max(1 - a.a, 1e-4);

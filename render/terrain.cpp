@@ -1277,6 +1277,7 @@ std::string GroundSource(bool parallax, bool more = false, bool wet = false, boo
          std::string(snow ? kSnowStatics : "") + (wet ? "#define GROUND_WET 1\n" : "") + (more ? "#define GROUND_MORE 1\n" : "") +
          (parallax ? "#define GROUND_PARALLAX 1\n" : "") +
          "#define MODERN_WATER 1\n#define SUN_MASK_BUFFER 1\n" +  // [shadowmask] (lighting.h: the sun's shadow mask, from a buffer)
+         "#define AIR_SMOOTH 1\n" +  // [weather] (view.h, AirAt: the light in the air read smoothly across the picture)
          "#define SURFACE_PUDDLES 1.0\n#define SURFACE_TRACKS 1\n" +
          "#define SURFACE_DEEP_TRACKS 1\nstatic float4 deepTrack = 0;\nstatic float4 deepSlope = 0;\nstatic float deepWater = 0;\n" +
          "static float2 deepGloss = 0;\n" +  // [mud ruts] (the mud's roughness and share, MudInRuts)
