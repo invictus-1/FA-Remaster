@@ -17,7 +17,7 @@
 //
 // The buffer (Build): a row of four numbers per square of the grid (where its list begins, how
 // long it is), the lists, then four rows per light: its place and radius; its colour and a beam's
-// glow; a beam's way and the cosine of its edge (below -1: a light to all sides); its shadow map's
+// glow (a light to all sides: its steady part, [nightlight]); a beam's way and the cosine of its edge (below -1: a light to all sides); its shadow map's
 // number (-1 none; -2 none, and it rides on the model standing at y, z, w), then the lamps' maps'
 // matrices.
 //
@@ -59,15 +59,19 @@ class Lights {
   // `origin` (a unit's lamp): where the model it rides on stands (its origin), which casts no
   // ray-traced shadow from it (World::rayLightShadows; a lamp set into a hull would be shadowed by
   // the hull).
-  void Add(Vec3 position, float radius, Vec3 color, const Vec3* origin = nullptr);
+  // [nightlight] `air`: its steady part, as a share of `color` (1 all of it; a build arc's light its mean over its colour
+  // now, not its quick flicker: BuildEffects::AddLights): what the light in the air (air.h) shows, and what the rays of
+  // the small lights' shadows choose it by (lighting.h, SmallLightShare). Written in the light's second row's w.
+  void Add(Vec3 position, float radius, Vec3 color, const Vec3* origin = nullptr, float air = 1);
   // A beam: light within `coneDegrees` (the whole opening angle) about `direction`, full to seven
   // tenths of the way out from its middle and fading to nothing at its edge, reaching `radius`
   // along the beam; and `glow` of it to all sides within a fifth of the radius, so that the lamp's
   // own surroundings are not left dark.
   // `carrier`: the middle of the bounding sphere of what the lamp rides on, which casts no shadow
   // in its beam (or a lamp set into a hull would be shadowed by the hull); `origin`, as for Add.
+  // [nightlight] `key`: the lamp's own number from frame to frame (0: none), by which it keeps its shadow map (steady).
   void AddBeam(Vec3 position, float radius, Vec3 color, Vec3 direction, float coneDegrees, float glow, const Vec3* carrier = nullptr,
-               const Vec3* origin = nullptr);
+               const Vec3* origin = nullptr, uint64_t key = 0);
   // A light that lives `seconds` from `born` and takes its colour and strength along that time from
   // a ramp texture (the scripts' "light particle": `size` is what the original draws its glow with;
   // the light reaches a few times as far). `from`: what threw it.
@@ -97,6 +101,12 @@ class Lights {
   float strength = 3.0f;      // how bright a flash of full ramp colour is
   float reach = 3.0f;         // a flash's radius, in sizes of its glow
   float night = 1;            // what flashes are multiplied by this frame (the night's dimming of the game's effects)
+  // [nightlight] (World::steadyLamps) A beam that had a shadow map the frame before keeps it while no other is clearly nearer
+  // to what the camera looks at (a quarter nearer), so that two lamps about as near do not take it in turns, the one
+  // without its shadow map shadowed by rays or not at all.
+  bool steady = false;
+  int shadowSwaps = 0;  // (MOHO64_DEBUG_NIGHTLIGHT) beams given a shadow map in the last PlaceShadows that had none the frame before
+  int leftOut = 0;      // lights left out of crowded squares in the last Build (each square's count over kMostInSquare, summed)
   int count = 0;              // lights in the last Build
   // [unitfx] lights merged into others in the last Build, where squares of the grid were too crowded (Build: a hundred
   // shots' glows and hits' flashes where a big unit's salvos land); 0 in a frame with no square over
@@ -114,6 +124,8 @@ class Lights {
     Vec3 carrier;         // a beam: the middle of what it rides on (hasCarrier), which does not shadow it
     bool hasCarrier = false;
     int shadow = -1;      // a beam: which shadow map is its own this frame, or -1
+    uint64_t key = 0;     // [nightlight] a beam's own number (AddBeam), 0 none
+    float air = 1;        // [nightlight] a light to all sides: its steady part (Add)
     Vec3 origin;          // where the model it rides on stands (hasOrigin): no ray-traced shadow from that
     bool hasOrigin = false;
   };
@@ -133,6 +145,7 @@ class Lights {
   View shadowViews_[kLampShadows];
   Mat4 shadowMatrix_[kLampShadows];  // world -> a lamp's map (x, y over w: where in the map; z over w: depth)
   int shadowCount_ = 0;
+  std::vector<uint64_t> shadowKeys_;  // [nightlight] (steady) the beams that had a shadow map the frame before, by key
   std::vector<Light> lights_;
   std::vector<FlashLight> flashes_;
   std::unordered_map<std::string, std::vector<Vec3>> ramps_;

@@ -104,8 +104,14 @@ class PlantTiles {
     int x, z, corners;
     bool model;
     float dNear;
+    float rank = 0;  // [nightlight] (dNear, a tenth nearer where it was among them the frame before)
   };
   std::vector<Found> found_;
+  // [nightlight] the tiles kept and those given rows of flags the frame before (x | z << 16, sorted): where there are more
+  // than kMost, or more with models than kMostModelTiles, the nearest are taken, those of the frame before counted a tenth
+  // nearer, so that a tile at the edge does not switch in and out (its plants popping) as the camera moves a little
+  std::vector<uint32_t> lastTiles_, lastModelTiles_;
+  int debugCalls_ = 0, debugSwitched_ = 0, debugModelWanted_ = 0, debugFound_ = 0;
 };
 
 // The visuals session's 3D plants for the cover (its json's "models": per kind its levels' meshes, SCM v5 in metres, its

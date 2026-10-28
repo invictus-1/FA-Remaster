@@ -5,6 +5,8 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
+#include <iterator>
 
 namespace render {
 
@@ -634,17 +636,39 @@ void PlantTiles::Select(const View& view, float cell, const std::vector<CellSize
   int span = 1;
   while (span < std::max(tilesX, tilesZ)) span *= 2;
   Visit(view, 0, 0, span, tilesX, tilesZ, tileWide, cell, cells, tune, tallest, reach);
-  // (at most so many, the nearest: past them the far cover alone)
+  auto keyOf = [](const Found& f) { return static_cast<uint32_t>(f.x) | static_cast<uint32_t>(f.z) << 16; };
+  auto was = [&](const std::vector<uint32_t>& last, const Found& f) { return std::binary_search(last.begin(), last.end(), keyOf(f)); };
+  // (at most so many, the nearest: past them the far cover alone; [nightlight] those kept the frame before a tenth nearer)
   if (static_cast<int>(found_.size()) > kMost) {
-    std::nth_element(found_.begin(), found_.begin() + kMost, found_.end(), [](const Found& a, const Found& b) { return a.dNear < b.dNear; });
+    for (Found& f : found_) f.rank = f.dNear * (was(lastTiles_, f) ? 0.9f : 1.0f);
+    std::nth_element(found_.begin(), found_.begin() + kMost, found_.end(), [](const Found& a, const Found& b) { return a.rank < b.rank; });
     found_.resize(kMost);
   }
+  lastTiles_.clear();
+  for (const Found& f : found_) lastTiles_.push_back(keyOf(f));
+  std::sort(lastTiles_.begin(), lastTiles_.end());
+  // [nightlight] the tiles with models that get rows of flags: the nearest kMostModelTiles of them (before: the first in
+  // the draws' order below, by corners first, so that with more than that the farther tiles took the rows and the nearer
+  // ones' trees went to cards and back as the camera moved), those with rows the frame before a tenth nearer
+  int wanted = 0;
+  for (const Found& f : found_) wanted += f.model ? 1 : 0;
+  float modelBeyond = 1e30f;  // (a tile with models gets a row while its rank is below this)
+  if (wanted > kMostModelTiles) {
+    std::vector<float> ranks;
+    ranks.reserve(static_cast<size_t>(wanted));
+    for (Found& f : found_)
+      if (f.model) ranks.push_back(f.rank = f.dNear * (was(lastModelTiles_, f) ? 0.9f : 1.0f));
+    std::nth_element(ranks.begin(), ranks.begin() + kMostModelTiles, ranks.end());
+    modelBeyond = ranks[kMostModelTiles];
+  }
+  std::vector<uint32_t> modelNow;
   // the tiles by how many corners their spots need, a draw each; the nearest with models given rows of flags
   std::sort(found_.begin(), found_.end(), [](const Found& a, const Found& b) { return a.corners != b.corners ? a.corners < b.corners : a.dNear < b.dNear; });
   rows.reserve(found_.size() * 4);
   for (const Found& f : found_) {
     float slot = -1;
-    if (f.model && static_cast<int>(modelRows.size() / 4) < kMostModelTiles) {
+    if (f.model && (wanted <= kMostModelTiles || f.rank < modelBeyond) && static_cast<int>(modelRows.size() / 4) < kMostModelTiles) {
+      modelNow.push_back(keyOf(f));
       slot = static_cast<float>(modelRows.size() / 4);
       modelRows.insert(modelRows.end(), {static_cast<float>(f.x * kSide), static_cast<float>(f.z * kSide), 0, f.dNear});
     }
@@ -652,6 +676,23 @@ void PlantTiles::Select(const View& view, float cell, const std::vector<CellSize
     if (batches.empty() || batches.back().corners != f.corners) batches.push_back({f.corners, Count() - 1, 0});
     ++batches.back().count;
   }
+  std::sort(modelNow.begin(), modelNow.end());
+  // (MOHO64_DEBUG_NIGHTLIGHT: every 60 selections, the tiles found and wanting models a selection, and the tiles that went
+  // from models to cards or back)
+  static const bool debug = std::getenv("MOHO64_DEBUG_NIGHTLIGHT") != nullptr;
+  if (debug) {
+    std::vector<uint32_t> changed;
+    std::set_symmetric_difference(modelNow.begin(), modelNow.end(), lastModelTiles_.begin(), lastModelTiles_.end(), std::back_inserter(changed));
+    debugSwitched_ += static_cast<int>(changed.size());
+    debugModelWanted_ += wanted;
+    debugFound_ += static_cast<int>(found_.size());
+    if (++debugCalls_ == 60) {
+      fprintf(stderr, "render: [nightlight] plant tiles, 60 frames: %d found a frame, %d wanting models (rows for %d), %d switched between models and cards\n",
+              debugFound_ / 60, debugModelWanted_ / 60, kMostModelTiles, debugSwitched_);
+      debugCalls_ = debugSwitched_ = debugModelWanted_ = debugFound_ = 0;
+    }
+  }
+  lastModelTiles_.swap(modelNow);
 }
 
 void PlantTiles::Visit(const View& view, int tx, int tz, int span, int tilesX, int tilesZ, float tileWide, float cell,

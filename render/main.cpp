@@ -440,6 +440,7 @@
 //           the view, the sun's shafts and the lamps' beams in it. Tuning: --air-dust <thickness per world unit>,
 //           --air-sun <strength>, --air-lamps <strength>, --air-cells <across>,<deep>
 // --no-lamp-shadows  lamps' beams cast no shadows (they do unless this is given: the eight nearest)
+// --no-steady-lamps  [nightlight] lamps switched on and off at once, as before (World::steadyLamps: they fade; to compare)
 // --lamp-scale <n>  [unit lamps] every remastered unit's lamps n times the strength their list gives (ModelCache::lampScale, 1):
 //           to try a factor before a unit's lights list is changed (docs/render-unit-lights.md)
 // --no-tracers  plain white shell trails are drawn as the game's files give them, not as hot tracers
@@ -694,6 +695,7 @@ struct Options {
   int width = 1600, height = 900;
   bool vsync = true, debug = false, paused = false, shadows = true, icons = true;
   bool lampShadows = true;              // --no-lamp-shadows
+  bool steadyLamps = true;              // --no-steady-lamps ([nightlight])
   float lampScale = 1;                  // --lamp-scale [unit lamps]
   bool tracers = true;                  // --no-tracers
   bool richGround = true;               // --plain-ground
@@ -998,6 +1000,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--props-as-game") o->propsAsGame = true;  // [proplift]
     else if (a == "--noshadows") o->shadows = false;
     else if (a == "--no-lamp-shadows") o->lampShadows = false;
+    else if (a == "--no-steady-lamps") o->steadyLamps = false;  // [nightlight]
     else if (a == "--no-tracers") o->tracers = false;
     else if (a == "--plain-ground") o->richGround = false;
     else if (a == "--map-ends") o->worldBeyond = false;
@@ -1886,6 +1889,7 @@ int main(int argc, char** argv) {
   world.look = opt.look;
   world.shadowsOn = opt.shadows;
   world.lampShadows = opt.lampShadows;
+  world.steadyLamps = opt.steadyLamps;  // [nightlight]
   world.volumetricFog = opt.air;
   world.softShadows = opt.softShadows;
   world.shadowMask = opt.shadowMask > 0;  // [shadowmask]

@@ -270,6 +270,7 @@ class GroundCover {
   // discs' pipeline)
   gfx::Texture farField_;
   float farArea_[4] = {0, 0, 1, 1};
+  int farStep_ = -1;  // [nightlight] the far field's texel, as a step of its ladder (Prepare)
   bool farFieldReady_ = false;
   std::vector<float> farDiscs_;
   gfx::Pipeline farDiscPipeline_;

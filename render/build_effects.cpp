@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstddef>
 #include <cstring>
+#include <unordered_map>
 
 #include "effect_files.h"
 #include "frame.h"
@@ -581,10 +582,40 @@ void BuildEffects::AddLights(Lights* lights, float night) {
     }
     ends.push_back(e);
   }
+  // [nightlight] Many builders on one thing (Chris's snapshot test of 2026-10-25, item 4: a dozen engineers assisting at
+  // night, the commander pure white and a blinding bloom): their spots' light and sparks added up without limit, each
+  // spot lighting the whole of a small unit. The ends on one thing (or, where the thing is not known, within three units
+  // of each other: the squares of three units round its own) share: together as bright as 1 + ln(n) of them, each 1 / n
+  // of that (two 0.85 each, sixteen 0.24), so that a crowd still glows more than one builder, never without bound.
+  std::vector<float> share(ends.size(), 1.0f);
+  {
+    std::unordered_map<const Site*, int> onSite;
+    std::unordered_map<uint64_t, int> inSquare;
+    auto squareOf = [](Vec3 p, int dx, int dz) {
+      return (static_cast<uint64_t>(static_cast<uint32_t>(static_cast<int32_t>(std::floor(p.x / 3.0f)) + dx)) << 32) |
+             static_cast<uint32_t>(static_cast<int32_t>(std::floor(p.z / 3.0f)) + dz);
+    };
+    for (const End& e : ends)
+      if (e.site) ++onSite[e.site];
+      else ++inSquare[squareOf(e.contact, 0, 0)];
+    for (size_t i = 0; i < ends.size(); ++i) {
+      int n = 0;
+      if (ends[i].site) n = onSite[ends[i].site];
+      else
+        for (int dz = -1; dz <= 1; ++dz)
+          for (int dx = -1; dx <= 1; ++dx) {
+            const auto found = inSquare.find(squareOf(ends[i].contact, dx, dz));
+            if (found != inSquare.end()) n += found->second;
+          }
+      if (n > 1) share[i] = (1 + std::log(static_cast<float>(n))) / static_cast<float>(n);
+    }
+  }
   // each faction's light where nothing glows in the beam's blueprint (an Aeon's darkening beams)
   static const Vec3 kFactionLight[4] = {{0.45f, 0.62f, 1.0f}, {0.5f, 0.75f, 1.0f}, {1.0f, 0.28f, 0.12f}, {0.85f, 0.78f, 1.0f}};
   const float t = static_cast<float>(clock_);
-  for (const End& e : ends) {
+  for (size_t endAt = 0; endAt < ends.size(); ++endAt) {
+    const End& e = ends[endAt];
+    const float together = share[endAt];  // [nightlight]
     const int f = std::clamp(e.faction, 0, 3);
     Vec3 hue = kFactionLight[f];
     const float most = std::max({e.glow.x, e.glow.y, e.glow.z});
@@ -597,17 +628,20 @@ void BuildEffects::AddLights(Lights* lights, float night) {
     const float size = e.site ? std::max({e.site->half.x, e.site->half.y, e.site->half.z}) : 1.0f;
     // (a little larger on what is large, but a spot, not a floodlight: by day a factory's beam lit half the grass round it)
     const float radius = std::clamp(2.0f + 0.2f * size, 2.0f, 4.0f);
-    lights->Add(e.contact + back * 0.35f + Vec3{0, 0.1f, 0}, radius, hue * (2.0f * flicker * lightStrength * night));
+    // ([nightlight] the air, air.h, shows the arc's mean, not its quick flicker: in fog the flicker lit the whole air round a
+    // factory, item 7 of Chris's snapshot test; the surfaces keep it)
+    const float steadyInAir = (f == 1 || f == 3 ? 0.85f : 0.72f) / flicker;
+    lights->Add(e.contact + back * 0.35f + Vec3{0, 0.1f, 0}, radius, hue * (2.0f * flicker * lightStrength * night * together), nullptr, steadyInAir);
     // and a faint light half way along a long beam
-    if (e.length > 2.5f) lights->Add(Lerp(e.start, e.contact, 0.5f), 1.6f, hue * (0.22f * flicker * lightStrength * night));
+    if (e.length > 2.5f) lights->Add(Lerp(e.start, e.contact, 0.5f), 1.6f, hue * (0.22f * flicker * lightStrength * night), nullptr, steadyInAir);
     ++lit;
     // its sparks: a steady stream and, for the UEF's and the Cybran's, bursts now and then
     Source& s = sources_[e.key];
     s.seen = clock_;
     static const float kRate[4] = {26, 9, 38, 14};
-    s.carry += static_cast<float>(dt) * kRate[f] * sparkRate;
+    s.carry += static_cast<float>(dt) * kRate[f] * sparkRate * together;  // ([nightlight] a crowd's sparks shared as its light)
     if ((f == 0 || f == 2) && clock_ >= s.burstAt) {
-      if (s.burstAt > 0) s.carry += (6 + 10 * Random()) * sparkRate;
+      if (s.burstAt > 0) s.carry += (6 + 10 * Random()) * sparkRate * together;
       s.burstAt = clock_ + 0.25 + 0.6 * Random();
     }
     while (s.carry >= 1 && spawnCount_ < kMostNew) {

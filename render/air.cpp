@@ -147,8 +147,8 @@ float3 LampsInAir(float3 p, float3 ray, out float3 points) {
         float fade = (1 - far2) * (1 - far2) / (1 + 4 * far2);
         float4 tint = lightData[uint(lightGridSize.z) + light * 4 + 1];
         float4 beam = lightData[uint(lightGridSize.z) + light * 4 + 2];
-        if (beam.w < -1.5) {  // a light to all sides
-          points += tint.rgb * (fade * 3.14159265 * AirPhase(dot(l, ray), airLight.y));
+        if (beam.w < -1.5) {  // a light to all sides ([nightlight] tint.w: how much of it the air shows, lights.h)
+          points += tint.rgb * (tint.w * fade * 3.14159265 * AirPhase(dot(l, ray), airLight.y));
           continue;
         }
         {  // a beam: its cone, its shadow; its glow to all sides near the lamp

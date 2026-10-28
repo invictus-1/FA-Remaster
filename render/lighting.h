@@ -274,8 +274,12 @@ SmallLight SmallLightAt(uint light, float3 world, float3 N) {
   return L;
 }
 // What a light's ray is chosen by: the brightness of what of its light a shadow can take there (none for a lamp
-// with its own shadow map, which keeps it).
-float SmallLightShare(SmallLight L) { return L.more.x > -0.5 ? 0 : L.lit * L.nl * dot(L.tint.rgb, float3(0.3, 0.6, 0.1)); }
+// with its own shadow map, which keeps it). ([nightlight] A light to all sides by its steady part, its second row's w,
+// lights.h: a build arc's by its mean, not its quick flicker, so that the rays' picks round a building site do not change
+// every frame with the arcs and the shadowed light there no longer flickers; the picks' weights stay the same shares.)
+float SmallLightShare(SmallLight L) {
+  return L.more.x > -0.5 ? 0 : L.lit * L.nl * dot(L.tint.rgb, float3(0.3, 0.6, 0.1)) * (L.beam ? 1 : L.tint.w);
+}
 
 // How wide, in pixels at least, the squares of the world are that a place's picks take their offset from
 // (SmallLightsTraced): one place's offset holds for the square round it.

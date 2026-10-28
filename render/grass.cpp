@@ -1802,9 +1802,20 @@ void GroundCover::PrepareFar(const View& view, const Camera& camera, gfx::Textur
       z1 = std::max(z1, tiles_->rows[r + 1] * plantCell + tileWide);
     }
     const float wide = std::max({x1 - x0, z1 - z0, 1.0f});
-    farArea_[0] = 0.5f * (x0 + x1 - wide);
-    farArea_[1] = 0.5f * (z0 + z1 - wide);
-    farArea_[2] = wide / static_cast<float>(kFarField);
+    // [nightlight] its texel from a ladder (a sixteenth of a world unit times powers of the square root of two), kept from
+    // frame to frame while it still covers the tiles and is not more than a step too coarse, and its corner on a multiple
+    // of it: a texel is the same piece of ground from frame to frame. Before, the field was stretched over the tiles'
+    // bounds anew every frame, so that what stands on the ground was laid into texels that slid and changed size as the
+    // camera moved, and the plants at a footprint's soft edge (cleared where it is over their own chance) popped in and out.
+    const float need = wide / static_cast<float>(kFarField - 2);
+    int step = 0;
+    while (0.0625f * std::exp2(0.5f * static_cast<float>(step)) < need && step < 80) ++step;
+    if (farStep_ < step || farStep_ > step + 1) farStep_ = step;
+    const float texel = 0.0625f * std::exp2(0.5f * static_cast<float>(farStep_));
+    const float side = texel * static_cast<float>(kFarField);
+    farArea_[0] = std::floor((0.5f * (x0 + x1) - 0.5f * side) / texel) * texel;
+    farArea_[1] = std::floor((0.5f * (z0 + z1) - 0.5f * side) / texel) * texel;
+    farArea_[2] = texel;
     farArea_[3] = static_cast<float>(kFarField);
   }
 }

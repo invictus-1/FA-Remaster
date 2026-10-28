@@ -56,12 +56,25 @@ int Lights::PlaceShadows(const Camera& camera, const View& view) {
     const Light& l = lights_[n];
     if (l.cosEdge < -1.5f || l.radius < 1.5f || l.color.x + l.color.y + l.color.z < 0.02f) continue;
     // (over the ground: a host's camera target need not lie at the ground's height)
-    const float away = std::hypot(l.position.x - camera.target.x, l.position.z - camera.target.z);
+    float away = std::hypot(l.position.x - camera.target.x, l.position.z - camera.target.z);
     if (away - l.radius > camera.distance * 1.3f) continue;
+    // [nightlight] (steady: one that had a map the frame before counts a quarter nearer)
+    if (steady && l.key && std::find(shadowKeys_.begin(), shadowKeys_.end(), l.key) != shadowKeys_.end()) away *= 0.75f;
     near.push_back({away, n});
   }
   const size_t count = std::min(near.size(), static_cast<size_t>(kLampShadows));
   std::partial_sort(near.begin(), near.begin() + static_cast<std::ptrdiff_t>(count), near.end(), [](const Near& a, const Near& b) { return a.away < b.away; });
+  {  // [nightlight] (the beams that have one now, for the next frame; and how many had none before)
+    shadowSwaps = 0;
+    std::vector<uint64_t> now;
+    for (size_t k = 0; k < count; ++k) {
+      const uint64_t key = lights_[near[k].light].key;
+      if (!key) continue;
+      now.push_back(key);
+      if (std::find(shadowKeys_.begin(), shadowKeys_.end(), key) == shadowKeys_.end()) ++shadowSwaps;
+    }
+    shadowKeys_.swap(now);
+  }
   for (size_t k = 0; k < count; ++k) {
     Light& l = lights_[near[k].light];
     l.shadow = static_cast<int>(k);
@@ -97,9 +110,10 @@ void Lights::Begin(double now) {
   lights_.clear();
 }
 
-void Lights::Add(Vec3 position, float radius, Vec3 color, const Vec3* origin) {
+void Lights::Add(Vec3 position, float radius, Vec3 color, const Vec3* origin, float air) {
   if (radius <= 0) return;
   lights_.push_back(Light{position, radius, color, 1, {}, -2, {}});
+  lights_.back().air = air;
   if (origin) {
     lights_.back().origin = *origin;
     lights_.back().hasOrigin = true;
@@ -114,10 +128,12 @@ Vec3 Lights::RampGlow(const std::string& ramp) {
   return best;
 }
 
-void Lights::AddBeam(Vec3 position, float radius, Vec3 color, Vec3 direction, float coneDegrees, float glow, const Vec3* carrier, const Vec3* origin) {
+void Lights::AddBeam(Vec3 position, float radius, Vec3 color, Vec3 direction, float coneDegrees, float glow, const Vec3* carrier, const Vec3* origin,
+                     uint64_t key) {
   if (radius <= 0) return;
   Light light{position, radius, color, 1, {}, -2, {}};
   light.glow = glow;
+  light.key = key;
   if (carrier) {
     light.carrier = *carrier;
     light.hasCarrier = true;
@@ -278,7 +294,7 @@ void Lights::Build(View* view) {
           uint32_t first = order[i];
           for (size_t k = i; k < j; ++k) first = std::min(first, order[k]);
           Vec3 at{0, 0, 0}, colour{0, 0, 0};
-          float weight = 0, farthest = 0, brightestRider = -1;
+          float weight = 0, farthest = 0, brightestRider = -1, inAir = 0;  // ([nightlight] inAir: their air shares by brightness)
           const Light* rider = nullptr;  // (the brightest that rides on a model)
           for (size_t k = i; k < j; ++k) {
             const Light& l = lights_[order[k]];
@@ -286,6 +302,7 @@ void Lights::Build(View* view) {
             at = at + l.position * w;
             colour = colour + l.color;
             weight += w;
+            inAir += l.air * w;
             farthest = std::max(farthest, l.radius);
             if (l.hasOrigin && w > brightestRider) brightestRider = w, rider = &l;
           }
@@ -303,6 +320,7 @@ void Lights::Build(View* view) {
           kept.radius = farthest + spread / weight;
           kept.hasOrigin = rides;
           kept.origin = riddenOn;
+          kept.air = inAir / weight;
           for (size_t k = i; k < j; ++k)
             if (order[k] != first) gone[order[k]] = 1;
           joined += static_cast<int>(j - i) - 1;
@@ -340,10 +358,12 @@ void Lights::Build(View* view) {
   // (their brightness by how much of it reaches the square's nearest point), so that what is left out is what the
   // square would miss least; before (unitsfx), the nearest to its middle, which left out a bright lamp's light a little
   // farther off and darkened the square
+  leftOut = 0;
   for (int z = 0; z < rows; ++z)
     for (int x = 0; x < cols; ++x) {
       const size_t at = static_cast<size_t>(z) * static_cast<size_t>(cols) + static_cast<size_t>(x);
       if (cellCount_[at] <= static_cast<uint32_t>(kMostInSquare)) continue;
+      leftOut += static_cast<int>(cellCount_[at]) - kMostInSquare;
       const float mx = x0 + (static_cast<float>(x) + 0.5f) * cell, mz = z0 + (static_cast<float>(z) + 0.5f) * cell;
       auto reaches = [&](uint32_t n) {
         const Light& l = lights_[n];
@@ -376,7 +396,7 @@ void Lights::Build(View* view) {
     p[4] = lights_[n].color.x;
     p[5] = lights_[n].color.y;
     p[6] = lights_[n].color.z;
-    p[7] = lights_[n].glow;
+    p[7] = lights_[n].cosEdge < -1.5f ? lights_[n].air : lights_[n].glow;  // ([nightlight] a light to all sides: its share in the air)
     p[8] = lights_[n].direction.x;
     p[9] = lights_[n].direction.y;
     p[10] = lights_[n].direction.z;

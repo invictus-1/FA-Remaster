@@ -140,7 +140,10 @@ class World {
   // host that adds models itself calls it beside `meshes.Add`.
   // `armyColor` (as armies' colours are given, screen values): what a unit's own glow (a light of
   // Kind 'hull') is drawn in; without it, in the list's colour.
-  void AddLamps(const Model* model, Vec3 position, const Quat& orientation, const Pose* pose = nullptr, const Vec3* armyColor = nullptr);
+  // [nightlight] `id`: the unit's (0: none, a missile's engine), by which its lamps fade in and out over a few frames
+  // (steadyLamps); `structure`: a building's lamps go before those of units that move where the ground is crowded.
+  void AddLamps(const Model* model, Vec3 position, const Quat& orientation, const Pose* pose = nullptr, const Vec3* armyColor = nullptr,
+                uint32_t id = 0, bool structure = false);
   // A unit's outline where it is hidden (hiddenOutlines, hidden_outlines.h), right after its `meshes.Add`. AddFrame
   // calls it for the game's units the player may see; a host that adds units itself calls it beside `meshes.Add`.
   // `color`: its strategic icon's; `building`: a structure (it hides the units behind it); `kind`: its strategic
@@ -325,6 +328,12 @@ class World {
   // The lamps' shadows (lights.h): what stands in a headlight's beam shadows the ground and the
   // units behind it. `lampShadowsDrawn`: how many lamps had a shadow map in the last frame.
   bool lampShadows = true;
+  // [nightlight] Lamps that do not pop (Chris's snapshot test of 2026-10-25, items 3 and 7: lights near factories flickering
+  // at night and in fog): a unit's lamps fade in and out over a quarter of a second where they were switched on or off at
+  // once (the crowded squares' rule, the most a unit lights, the reach round what the camera looks at), the crowded
+  // squares' rule no longer by the order the units come in (buildings first, then lamps lit the frame before, then by the
+  // unit's number), and a lamp keeps its shadow map while another is not clearly nearer (Lights::steady). Off: as before.
+  bool steadyLamps = true;
   // The sun's shadow maps' size in texels (2048 at first; 4096 sharper, 1024 and 512 for slower cards).
   int shadowSize = kShadowMapSize;
   // [cardcost] The sun's shadow maps draw only what can cast a shadow onto what the camera sees (shadows.h, Shadows::
@@ -1017,6 +1026,38 @@ class World {
   void AddBrackets(int kind, Vec3 position, const Quat& orientation, const StrategicIcons::Kind& unit, const Model* model);
   int lampUnits_ = 0, lampUnitsBefore_ = 0;  // units whose lamps were lit this frame, and the frame before
   std::unordered_map<uint64_t, uint32_t> lampSquares_;  // lamps lit this frame per small square of ground: beams, others
+  // [nightlight] (steadyLamps) the lamps of this frame as AddLamps placed them, lit by FlushLamps once all are in; each
+  // keyed lamp's level (0 off .. 1 on) as it fades, and the frame's clock it was last moved on at
+  struct PendingLamp {
+    Vec3 at, color, along, middle, origin;  // (color: the lamp's tint times how strongly it is on, before its level)
+    float radius = 0, cone = 0, glow = 0;
+    float shaftThick = 0, shaftWide = 0, shaftReach = 0, shaftAir = 0;
+    float weight = 1;      // its share by the reach round the camera and the most a unit lights (0..1, smooth)
+    uint64_t square = 0;   // the small square of ground it lies in
+    uint64_t key = 0;      // the unit's number and the lamp's place in its list (0: none, no fade)
+    uint32_t unit = 0;     // which call of AddLamps it came from (a unit's own lamps do not cut each other)
+    uint8_t order = 0;     // the crowded squares' order: 2 a building's, 1 a unit's lit the frame before, 0 others
+    bool beam = false;
+  };
+  std::vector<PendingLamp> pendingLamps_;
+  uint32_t pendingUnits_ = 0;
+  struct LampLevel {
+    float level = 0;
+    uint32_t seen = 0;  // (frameStamp_ it was last asked for)
+  };
+  std::unordered_map<uint64_t, LampLevel> lampLevels_;
+  double lampClock_ = -1;
+  uint32_t lampStamp_ = 0;
+  float lampUnitsSmooth_ = 0;  // lampUnitsBefore_ eased over frames (the most a unit lights, without steps)
+  void FlushLamps();
+  // MOHO64_DEBUG_NIGHTLIGHT=1: every 60 frames, the lamps that popped (their light changed by more than a quarter of it
+  // from one frame to the next), the lamps' shadow maps handed to another, the lights left out of crowded squares
+  const bool debugNight_ = std::getenv("MOHO64_DEBUG_NIGHTLIGHT") != nullptr;
+  std::unordered_map<uint64_t, float> nightShown_, nightShownBefore_;
+  int nightFrames_ = 0, nightPops_ = 0, nightSwaps_ = 0, nightLeftOut_ = 0, nightLamps_ = 0, nightDiscs_ = 0;
+  void NightNote(uint64_t key, float shown) {
+    if (debugNight_ && key) nightShown_[key] += shown;
+  }
   // MOHO64_DEBUG_LAMPS=<part of a bone's name> (or 1 for every bone): world.cpp, AddLamps
   const char* debugLamps_ = std::getenv("MOHO64_DEBUG_LAMPS");
   int pauseMark_ = -2;  // the game's pause picture among the symbols (-2: not asked for yet)

@@ -10,6 +10,7 @@
 #include <array>  // [snowhitch]
 #include <cmath>
 #include <cstdio>
+#include <limits>  // [nightlight]
 
 #include "core/vfs.h"
 #include "effect_files.h"
@@ -645,20 +646,33 @@ void World::MarkOutline(const Model* model, Vec3 position, Vec3 color, bool buil
   meshes.MarkLast(model, outlines.Mark(color, building, id, outlines.Strength(radius, away, camera.fovY, icon)));
 }
 
-void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation, const Pose* pose, const Vec3* armyColor) {
+void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation, const Pose* pose, const Vec3* armyColor, uint32_t id,
+                     bool structure) {
   if (lampsOn_ <= 0 || !model || model->lights.empty()) return;
   // (only near what the camera looks at: a lamp lights a few units of ground; cinecam: a cinematic camera sees far
   // over the ground from low down, its lamps are those round its eye)
-  if (camera.cinematic ? Length(position - camera.Eye()) > 300 : Length(position - camera.target) > camera.distance * 2 + 80) return;
+  const float lampReach = camera.cinematic ? 300.0f : camera.distance * 2 + 80;
+  const float lampAway = camera.cinematic ? Length(position - camera.Eye()) : Length(position - camera.target);
+  if (lampAway > lampReach) return;
+  // [nightlight] (steadyLamps: faded out over the last tenth of that reach, not cut at it, so that zooming does not
+  // switch lamps on and off where the view reaches past it)
+  const float byReach = steadyLamps ? std::clamp((lampReach - lampAway) / (0.1f * lampReach), 0.0f, 1.0f) : 1.0f;
   // with many units lit, each lights only the first of its lamps (a list has the lamps that matter
   // most first): about 6,000 lights in all, by the number of units of the frame before
   ++lampUnits_;
   const size_t most = static_cast<size_t>(std::clamp(6000 / std::max(lampUnitsBefore_, 1), 3, 16));
+  // [nightlight] (steadyLamps: by the units of the frames before eased, and the last lamp lit by the share of it left,
+  // so that the lamps a unit lights do not step as units come and go)
+  const float mostLit = std::clamp(6000.0f / std::max(lampUnitsSmooth_, 1.0f), 3.0f, 16.0f);
   size_t lit = 0;
   uint64_t taken[16];
   bool takenBeam[16];
   size_t takenCount = 0;
+  const size_t pendingFrom = pendingLamps_.size();
+  const uint32_t pendingUnit = ++pendingUnits_;
+  bool litBefore = false;  // (steadyLamps: one of its lamps was lit the frame before)
   for (const ModelLight& light : model->lights) {
+    const uint64_t lampKey = id ? (static_cast<uint64_t>(id) << 8 | static_cast<uint64_t>(&light - model->lights.data())) + 1 : 0;
     // (a lamp on a part the script has hidden is not there: a commander's upgrade not bought yet)
     if (light.bone >= 0 && pose) {
       bool hidden = false;
@@ -669,7 +683,9 @@ void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation,
         }
       if (hidden) continue;
     }
-    if (lit++ >= most) break;
+    const size_t index = lit++;
+    if (steadyLamps ? mostLit - static_cast<float>(index) <= 0 : index >= most) break;
+    const float byMost = steadyLamps ? std::min(mostLit - static_cast<float>(index), 1.0f) : 1.0f;
     Vec3 bonePlace{0, 0, 0};
     Quat boneTurn;
     if (light.bone >= 0) {
@@ -695,7 +711,8 @@ void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation,
     const Vec3 at = position + Rotate(orientation, bonePlace + Rotate(boneTurn, light.place * model->scale));
     // where units stand close together not every lamp is lit: a small square of ground takes three
     // beams and two other lamps (more would only pile light on light, and a pixel looks at 48 at most)
-    {
+    // ([nightlight] steadyLamps: decided once every lamp is in, FlushLamps)
+    if (!steadyLamps) {
       const uint64_t square = (static_cast<uint64_t>(static_cast<uint32_t>(static_cast<int32_t>(std::floor(at.x / 2.5f)))) << 32) |
                               static_cast<uint32_t>(static_cast<int32_t>(std::floor(at.z / 2.5f)));
       // (by the units before this one: a unit's own lamps do not cut each other. Beams are counted by
@@ -752,14 +769,42 @@ void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation,
       // (the unit itself does not shadow its lamps' beams: it is named by the middle of the ball its
       // model lies in, as the mesh renderer counts it)
       const Vec3 middle = position + Rotate(orientation, (model->boundsMin + model->boundsMax) * (0.5f * model->scale));
-      lights.AddBeam(at, light.radius * model->scale, tint * on, along, light.cone, light.glow, &middle, &position);
       // the beam in the air: faint in clear night air, plainer in rain, snow and fog
       const float air = 0.03f + 0.16f * fog + 0.08f * rain + 0.09f * snow;
       const float reach = light.radius * model->scale * 0.75f;
       const float wide = std::tan(std::min(light.cone, 120.0f) * 0.5f * 0.45f * 3.14159265f / 180) * reach;  // (its bright middle only)
-      shafts.Add(at, at + along * reach, 0.03f * model->scale, wide, tint * (on * air));
+      if (steadyLamps) {  // [nightlight] (lit by FlushLamps)
+        PendingLamp l;
+        l.at = at, l.color = tint * on, l.along = along, l.middle = middle, l.origin = position;
+        l.radius = light.radius * model->scale, l.cone = light.cone, l.glow = light.glow;
+        l.shaftThick = 0.03f * model->scale, l.shaftWide = wide, l.shaftReach = reach, l.shaftAir = air;
+        l.weight = byReach * byMost, l.key = lampKey, l.unit = pendingUnit, l.beam = true;
+        pendingLamps_.push_back(l);
+      } else {
+        lights.AddBeam(at, light.radius * model->scale, tint * on, along, light.cone, light.glow, &middle, &position, lampKey);
+        shafts.Add(at, at + along * reach, 0.03f * model->scale, wide, tint * (on * air));
+        NightNote(lampKey, 1);
+      }
+    } else if (steadyLamps) {  // [nightlight] (lit by FlushLamps)
+      PendingLamp l;
+      l.at = at, l.color = tint * on, l.origin = position, l.radius = light.radius * model->scale;
+      l.weight = byReach * byMost, l.key = lampKey, l.unit = pendingUnit;
+      pendingLamps_.push_back(l);
     } else {
       lights.Add(at, light.radius * model->scale, tint * on, &position);  // (the unit does not shadow its own lamps: rays)
+      NightNote(lampKey, 1);
+    }
+    if (steadyLamps && lampKey) {
+      const auto level = lampLevels_.find(lampKey);
+      litBefore = litBefore || (level != lampLevels_.end() && level->second.level > 0.5f);
+    }
+  }
+  if (steadyLamps) {  // [nightlight] (the crowded squares' order: a building's lamps first, then those lit before)
+    for (size_t i = pendingFrom; i < pendingLamps_.size(); ++i) {
+      PendingLamp& l = pendingLamps_[i];
+      l.order = structure ? 2 : litBefore ? 1 : 0;
+      l.square = (static_cast<uint64_t>(static_cast<uint32_t>(static_cast<int32_t>(std::floor(l.at.x / 2.5f)))) << 32) |
+                 static_cast<uint32_t>(static_cast<int32_t>(std::floor(l.at.z / 2.5f)));
     }
   }
   for (size_t i = 0; i < takenCount; ++i) {
@@ -767,6 +812,111 @@ void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation,
     bool counted = false;
     for (size_t k = 0; takenBeam[i] && k < i; ++k) counted = counted || (takenBeam[k] && taken[k] == taken[i]);
     if (!counted) lampSquares_[taken[i]] += takenBeam[i] ? 1u : 0x10000u;
+  }
+}
+
+// [nightlight] (steadyLamps) The lamps AddLamps placed this frame, lit once all are in: the crowded squares' rule (as
+// AddLamps has it without steadyLamps) taken in an order that does not hang on the order the units came in - a building's
+// lamps first, then the lamps of units that were lit the frame before, then by the unit's number - and each lamp's level
+// moved toward on or off over a quarter of a second, so that a lamp that rule (an engineer driving past a factory), the
+// reach round the camera or the most a unit lights switches fades instead of popping. A lamp seen for the first time
+// starts as the rule has it (a unit just built lights at once, as before).
+void World::FlushLamps() {
+  if (steadyLamps) {
+    const float step = lampClock_ < 0 ? 1.0f : std::clamp(static_cast<float>(time_ - lampClock_), 0.0f, 0.1f) * 4.0f;
+    lampClock_ = time_;
+    ++lampStamp_;
+    std::vector<uint32_t> order(pendingLamps_.size());
+    for (uint32_t i = 0; i < order.size(); ++i) order[i] = i;
+    std::sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) {
+      const PendingLamp &x = pendingLamps_[a], &y = pendingLamps_[b];
+      if (x.order != y.order) return x.order > y.order;
+      const uint64_t ux = x.key >> 8, uy = y.key >> 8;  // (the unit's number; 0 for none)
+      if (ux != uy) return ux < uy;
+      if (x.unit != y.unit) return x.unit < y.unit;
+      return a < b;
+    });
+    std::vector<uint8_t> allowed(pendingLamps_.size(), 1);
+    for (size_t i = 0; i < order.size();) {
+      // one unit's lamps (they do not cut each other: counted into the squares after all of them)
+      size_t j = i;
+      while (j < order.size() && pendingLamps_[order[j]].unit == pendingLamps_[order[i]].unit) ++j;
+      uint64_t taken[16];
+      bool takenBeam[16];
+      size_t takenCount = 0;
+      for (size_t k = i; k < j; ++k) {
+        const PendingLamp& l = pendingLamps_[order[k]];
+        const auto found = lampSquares_.find(l.square);
+        const uint32_t count = found == lampSquares_.end() ? 0 : found->second;
+        const uint32_t beamUnits = count & 0xffffu, others = count >> 16;
+        if (l.beam) {
+          bool ownHere = false;
+          for (size_t t = 0; t < takenCount; ++t) ownHere = ownHere || (takenBeam[t] && taken[t] == l.square);
+          if (beamUnits >= 4 || (beamUnits >= 1 && ownHere)) {
+            allowed[order[k]] = 0;
+            continue;
+          }
+        } else if (others >= 2) {
+          allowed[order[k]] = 0;
+          continue;
+        }
+        if (takenCount < 16) {
+          taken[takenCount] = l.square;
+          takenBeam[takenCount++] = l.beam;
+        }
+      }
+      for (size_t t = 0; t < takenCount; ++t) {
+        bool counted = false;
+        for (size_t u = 0; takenBeam[t] && u < t; ++u) counted = counted || (takenBeam[u] && taken[u] == taken[t]);
+        if (!counted) lampSquares_[taken[t]] += takenBeam[t] ? 1u : 0x10000u;
+      }
+      i = j;
+    }
+    for (size_t i = 0; i < pendingLamps_.size(); ++i) {
+      const PendingLamp& l = pendingLamps_[i];
+      const float target = allowed[i] ? 1.0f : 0.0f;
+      float level = target;
+      if (l.key) {
+        auto [it, made] = lampLevels_.try_emplace(l.key);
+        LampLevel& kept = it->second;
+        if (made) kept.level = target;
+        else kept.level = kept.level < target ? std::min(kept.level + step, target) : std::max(kept.level - step, target);
+        kept.seen = lampStamp_;
+        level = kept.level;
+      }
+      const float shown = level * l.weight;
+      NightNote(l.key, shown);
+      if (shown <= 0.001f) continue;
+      if (l.beam) {
+        lights.AddBeam(l.at, l.radius, l.color * shown, l.along, l.cone, l.glow, &l.middle, &l.origin, l.key);
+        shafts.Add(l.at, l.at + l.along * l.shaftReach, l.shaftThick, l.shaftWide, l.color * (shown * l.shaftAir));
+      } else {
+        lights.Add(l.at, l.radius, l.color * shown, &l.origin);
+      }
+    }
+    // (what was not asked for this frame nor the one before is let go: its unit gone, or beyond the reach)
+    for (auto it = lampLevels_.begin(); it != lampLevels_.end();) it = lampStamp_ - it->second.seen > 1 ? lampLevels_.erase(it) : std::next(it);
+    pendingLamps_.clear();
+  }
+  // (MOHO64_DEBUG_NIGHTLIGHT)
+  if (debugNight_) {
+    for (const auto& [key, shown] : nightShown_) {
+      const auto before = nightShownBefore_.find(key);
+      if (std::fabs(shown - (before == nightShownBefore_.end() ? 0.0f : before->second)) > 0.25f) ++nightPops_;
+    }
+    for (const auto& [key, shown] : nightShownBefore_)
+      if (shown > 0.25f && !nightShown_.count(key)) ++nightPops_;
+    nightLamps_ += static_cast<int>(nightShown_.size());
+    nightSwaps_ += lights.shadowSwaps;
+    nightLeftOut_ += lights.leftOut;
+    std::swap(nightShown_, nightShownBefore_);
+    nightShown_.clear();
+    if (++nightFrames_ == 60) {
+      fprintf(stderr, "render: [nightlight] 60 frames: %d lamps a frame, %d popped, %d lamp shadow maps handed to another, %d lights a frame left out of crowded squares, %d merged in the last; at most %d things on the ground clearing plants (4096 kept)\n",
+              nightLamps_ / 60, nightPops_, nightSwaps_, nightLeftOut_ / 60, lights.merged, nightDiscs_);
+      nightDiscs_ = 0;
+      nightFrames_ =nightPops_ = nightSwaps_ = nightLeftOut_ = nightLamps_ = 0;
+    }
   }
 }
 
@@ -1138,6 +1288,10 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   }
   lampUnitsBefore_ = lampUnits_;
   lampUnits_ = 0;
+  // [nightlight] (steadyLamps: the units counted eased over some twenty frames; the frame's lamps placed anew)
+  lampUnitsSmooth_ = lampUnitsSmooth_ <= 0 ? static_cast<float>(lampUnitsBefore_) : lampUnitsSmooth_ + (static_cast<float>(lampUnitsBefore_) - lampUnitsSmooth_) * 0.05f;
+  pendingLamps_.clear();
+  pendingUnits_ = 0;
   if (moving_.size() > 60000) moving_.clear();  // (entity ids pile up over a long game)
   lampSquares_.clear();
   // (volume explosions, volume_blasts.h: on in the modern look; while on they hear of every flash a script makes)
@@ -2424,7 +2578,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       // an enemy's in sight - and finished; never a building drawn as it was remembered)
       if (outlinesNow_ && u.Seen() && !asRemembered && fractionComplete >= 1 && !allHidden)
         MarkOutline(model, drawAt, IconColor(u.Army(), color), building, u.id, u.blueprint < iconKinds_.size() ? iconKinds_[u.blueprint] : nullptr);
-      if (u.fractionComplete >= 1 && u.Seen()) AddLamps(model, drawAt, drawTurn, &pose, &color);  // ([lift] riding the waves with it)
+      if (u.fractionComplete >= 1 && u.Seen()) AddLamps(model, drawAt, drawTurn, &pose, &color, u.id, building);  // ([lift] riding the waves with it)
       // (movement dust: what the army sees moving raises dust, spray or contrails)
       if (dustNow_ && u.Seen() && !asRemembered && fractionComplete >= 1) dust.AddUnit(u.id, blueprint, model, position, orientation);
       // ([surf] a ship at speed throws spray off its bow)
@@ -2898,6 +3052,8 @@ void World::Render() {
   }
   tracksCovering_ = 0;
   CpuTimes::Part("lights and lamp shadows placed");
+  FlushLamps();  // [nightlight] (steadyLamps: the frame's lamps lit, once all are in)
+  lights.steady = steadyLamps;
   lampShadowsDrawn = shadowed && lampShadows && look == Look::Modern ? lights.PlaceShadows(placing, view) : 0;
   // the light of flashes and explosions (the remastered look's: particles.h, Flash), fading over its time
   for (Particles::Flash& f : particles.flashes) {
@@ -3052,8 +3208,14 @@ void World::Render() {
     const Vec3 eye = placing.Eye();
     if (grassMade_ && ((placing.cinematic ? eye.y - GroundHeight(eye.x, eye.z) : placing.distance) <= grass.farthest || grass.plantsFar)) {
       std::vector<float> discs;
+      // [nightlight] (steadyLamps: all of them first, then the 4,096 nearest what the camera looks at, nearest first, so that
+      // the near field's own 256 (GroundCover::Prepare) are the nearest too; before, the first 1,024 in the order the models
+      // came in: in a late game some 3,000 stand on the ground, and which of them cleared the plants round them changed as
+      // units came and went, plants near groups of units popping in and out, and units past the first 1,024 standing in
+      // plants)
+      const size_t discsMost = steadyLamps ? std::numeric_limits<size_t>::max() : 3 * 1024;
       meshes.ForEachAdded([&](const Model* model, const float* row0, const float* row1, const float* row2, const float*, bool scenery) {
-        if (scenery || !model || discs.size() >= 3 * 1024) return;
+        if (scenery || !model || discs.size() >= discsMost) return;
         const float x = row0[3], z = row2[3];
         const float scale = std::sqrt(row0[0] * row0[0] + row1[0] * row1[0] + row2[0] * row2[0]);
         if (row1[3] + model->boundsMin.y * scale > GroundHeight(x, z) + 1.5f) return;  // (in the air)
@@ -3061,6 +3223,20 @@ void World::Render() {
                                      std::fabs(model->boundsMax.z)});
         discs.insert(discs.end(), {x, z, half * scale * 0.9f + 0.1f});
       });
+      if (debugNight_) nightDiscs_ = std::max(nightDiscs_, static_cast<int>(discs.size() / 3));  // (MOHO64_DEBUG_NIGHTLIGHT)
+      if (steadyLamps && discs.size() > 3) {  // [nightlight] (the nearest first; ties by place, not by the order they came in)
+        const size_t count = discs.size() / 3, kept = std::min<size_t>(count, 4096);
+        std::vector<std::pair<float, uint32_t>> by(count);
+        for (size_t i = 0; i < count; ++i) {
+          const float dx = discs[i * 3] - placing.target.x, dz = discs[i * 3 + 1] - placing.target.z;
+          by[i] = {dx * dx + dz * dz, static_cast<uint32_t>(i)};
+        }
+        std::partial_sort(by.begin(), by.begin() + static_cast<std::ptrdiff_t>(kept), by.end());
+        std::vector<float> nearest;
+        nearest.reserve(3 * kept);
+        for (size_t k = 0; k < kept; ++k) nearest.insert(nearest.end(), discs.begin() + by[k].second * 3, discs.begin() + by[k].second * 3 + 3);
+        discs.swap(nearest);
+      }
       Stage("ground cover pressed flat");
       // (and where the plants grow, made the first time: it dispatches, so before the scene's pass)
       const bool coverMade = plantsReady_ && !coverA_;  // [cover]
