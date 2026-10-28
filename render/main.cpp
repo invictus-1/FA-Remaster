@@ -195,6 +195,8 @@
 //           collapseHigh, collapseLow, cutHigh, cutLow, farCover, farPlants, farClear, model0, model1, model2, modelBand,
 //           onlyCell; farBlades, farShade)
 // --leaf-light  the sun's light through leaves, grass blades and plants (World::leafLight; modern look)
+// --lamp-colour team|faction  [lampcolour] a unit's own faint glow (its 'hull' lamps) in its army's colour (team, the
+//           default) or its faction's own (faction: UEF blue whatever the army's colour; World::lampsTeamColour)
 // --energy-shields  shields that look like energy (World::energyShields, energy_shields.h; modern look): a bubble bends
 //           what is behind it, rings run across it from each hit, its pattern flares where hit and as it weakens, its
 //           light falls on what is inside it; --energy-shield-health h: how much of its shield a bubble whose unit is
@@ -661,6 +663,7 @@
 #include "effects.h"
 #include "frame.h"
 #include "gfx.h"
+#include "hang_dump.h"  // [hangdump]
 #include "gfx_check.h"
 #include "fsr3_check.h"
 #include "framegen_check.h"
@@ -829,6 +832,7 @@ struct Options {
   float energyShieldHealth = -1;        // --energy-shield-health
   int energyTest = 0;                   // --energy-test
   int energyShell = 1;                  // --energy-shell plain|lit ([litshell])
+  bool lampsTeamColour = true;          // --lamp-colour team|faction ([lampcolour])
   float energyHex = -1;                 // --energy-hex s ([litshell]; -1: its own)
   bool pingTest = false;                // [pings] --ping-test
   bool unitScars = false, unitSnow = false;  // --unit-scars, --unit-snow
@@ -1278,6 +1282,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--energy-test") o->energyTest = std::max(0, atoi(v));
     else if (a == "--energy-shell") o->energyShell = std::string(v) == "plain" ? 0 : 1;
     else if (a == "--energy-hex") o->energyHex = static_cast<float>(atof(v));
+    else if (a == "--lamp-colour") o->lampsTeamColour = std::string(v) != "faction";  // [lampcolour]
     else if (a == "--hot-metal-lights") o->hotLights = std::max(0, atoi(v));
     else if (a == "--hot-metal-smoke") o->hotSmoke = std::max(0.0f, static_cast<float>(atof(v)));
     else if (a == "--wreck-test") {
@@ -1659,6 +1664,7 @@ int MostShotsNear(const Frame& frame, size_t* best) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  render::HangDumpStart();  // [hangdump] (MOHO64_HANG_DUMP=<seconds>)
   Options opt;
   if (!ParseOptions(argc, argv, &opt)) {
     fprintf(stderr, "usage: moho64view [--fa <game folder>] [--data <folder>]... [--map /maps/NAME/NAME.scmap]\n"
@@ -1699,6 +1705,7 @@ int main(int argc, char** argv) {
       const float c[4] = {0.2f + 0.1f * static_cast<float>(i % 3), 0.4f, 0.7f, 1};
       device->BeginFrame(c);
       device->EndFrame(i + 1 == std::max(opt.frames, 3) ? &shot : nullptr);
+      render::HangDumpBeat();  // [hangdump]
     }
     if (!opt.screenshot.empty() && !shot.empty())
       printf("render: --vulkan-clear: %s\n", WritePng(opt.screenshot, shot.data(), device->Width(), device->Height()) ? opt.screenshot.c_str() : "could not be written");
@@ -2051,6 +2058,7 @@ int main(int argc, char** argv) {
   world.plantsReact = opt.plantsReact;                                       // [plants]
   if (opt.plantsRegrow > 0) world.plantLife.regrow = opt.plantsRegrow;      // [plants]
   world.energyShields = opt.energyShields;
+  world.lampsTeamColour = opt.lampsTeamColour;  // [lampcolour]
   if (opt.energyShieldHealth >= 0) world.energy.healthUnknown = opt.energyShieldHealth;
   world.energy.litShell = opt.energyShell != 0;  // [litshell]
   if (opt.energyHex >= 0) world.energy.hexSize = opt.energyHex;
@@ -4107,6 +4115,7 @@ int main(int argc, char** argv) {
     const bool shoot = wantScreenshot || series || (lastFrame && !opt.screenshot.empty());
     if (photoLeft > 0) {  // --photo: its frames, drawn and not shown, the last one read back, made smaller and written
       device->EndFrame(photoLeft == 1 ? &capture : nullptr, false);
+      render::HangDumpBeat();  // [hangdump]
       CpuTimes::parts.clear();
       if (--photoLeft > 0) continue;
       const int drawnWidth = photoWidth * photoBy, n = photoBy * photoBy;
@@ -4132,6 +4141,7 @@ int main(int argc, char** argv) {
       continue;
     }
     device->EndFrame(shoot ? &capture : nullptr);
+    render::HangDumpBeat();  // [hangdump]
     if (opt.timings) {  // (every frame, the first ones too: the slowest, part by part)
       const double whole = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - frameStart).count();
       if (whole > timing.slowest) {
