@@ -19,6 +19,7 @@
 #include <map>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "sim/entity.h"  // Vec3
@@ -124,6 +125,11 @@ struct ScanArgs {
   std::string init;
   std::map<std::string, std::string> folders;
   std::vector<std::string> maps;
+  // What the host mounted beyond the init file: (host folder, mount point) pairs mounted after the init file's paths
+  // and the maps, in order (moho64ui's M28 variant at /mods/m28-variant); and the init file's host folders it left
+  // out (the original M28AI), see MountFromInitFile
+  std::vector<std::pair<std::string, std::string>> mounts;
+  std::vector<std::string> skipMounts;
   std::vector<std::string> modUids;  // the mods, as the host plays the replay with them (moho64 --mods)
   std::string replay;                // the replay file (a host path)
   // The copy's worker pool (ThreadsOverride): 1 leaves the cores to the game being watched.

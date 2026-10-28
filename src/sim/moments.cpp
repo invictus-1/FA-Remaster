@@ -267,9 +267,12 @@ bool ScanReplayMoments(const ScanArgs& args, Moments* out, std::atomic<int>* tic
   Vfs vfs;
   std::vector<std::string> hookDirs;
   vfs.MountMemoryFile(kGamePrefsPath, PreGameDataPrefs(""));
-  if (!MountFromInitFile(args.init, args.folders, vfs, hookDirs)) return fail("the init file " + args.init + " could not be run");
+  if (!MountFromInitFile(args.init, args.folders, vfs, hookDirs, &args.skipMounts))
+    return fail("the init file " + args.init + " could not be run");
   for (const std::string& folder : args.maps)
     if (!vfs.Mount(folder, "/maps")) Logf(LogLevel::Warning, "moments: no map folder %s", folder.c_str());
+  for (const auto& [folder, point] : args.mounts)
+    if (!vfs.Mount(folder, point)) Logf(LogLevel::Warning, "moments: %s could not be mounted at %s", folder.c_str(), point.c_str());
   const auto data = hostfs::ReadFile(args.replay);
   if (!data) return fail("cannot read the replay " + args.replay);
   std::string why;

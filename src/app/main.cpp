@@ -6,7 +6,8 @@
 //          [--sim <replay> | --session <game configuration .lua> [--seed N]] [--ticks N] [--view] [--orders file] [--sim-lua file]
 //          [--twice | --together [--together-lag N] [--together-threads <n|cores>]] [--focus N]
 //   moho64 --init <init.lua> [--mods uids.txt] [--maps folder] --scan-moments <replay> [--scan-out file] [--ticks N]
-//          [--scan-off] [--scan-threads N] [--scan-cancel-at tick]
+//          [--scan-off] [--scan-threads N] [--scan-cancel-at tick] [--scan-mount <folder> <mount point>]...
+//          [--scan-skip <folder>]...
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -107,11 +108,14 @@ struct Options {
   // the fight buckets. --scan-off plays the scan's copy without looking (a check: its MOHO64_FINGERPRINT + ".scan"
   // must be the same as the looking one's), --scan-threads N its worker pool (default 1), --scan-cancel-at T sets
   // the cancel flag once the scan reports tick T (a check of the cancel); --ticks N stops it after N ticks.
+  // --scan-mount / --scan-skip: ScanArgs::mounts / skipMounts, as moho64ui fills them (its M28 variant).
   std::string scanReplay;
   std::string scanOut;
   bool scanOff = false;
   int scanThreads = 1;
   int scanCancelAt = 0;
+  std::vector<std::pair<std::string, std::string>> scanMounts;
+  std::vector<std::string> scanSkips;
 };
 
 // The game's file system as main mounts it (--together mounts a second one for its second copy).
@@ -1321,6 +1325,8 @@ int RunScan(const Options& o, const std::vector<std::string>& uids) {
   args.threads = o.scanThreads;
   args.ticks = o.ticks;
   args.observe = !o.scanOff;
+  args.mounts = o.scanMounts;
+  args.skipMounts = o.scanSkips;
   args.fingerprint = true;
   std::FILE* f = o.scanOut.empty() ? stdout : std::fopen(o.scanOut.c_str(), "wb");
   if (!f) {
@@ -1459,6 +1465,11 @@ int main(int argc, char** argv) {
     else if (a == "--scan-off") o.scanOff = true;
     else if (a == "--scan-threads") o.scanThreads = std::atoi(next().c_str());
     else if (a == "--scan-cancel-at") o.scanCancelAt = std::atoi(next().c_str());
+    else if (a == "--scan-mount") {
+      std::string folder = next();
+      o.scanMounts.emplace_back(folder, next());
+    }
+    else if (a == "--scan-skip") o.scanSkips.push_back(next());
     else if (a == "/map") o.spMap = next();
     else if (a == "/diff") o.spDiff = std::atoi(next().c_str());
     else if (a == "/faction") o.spFaction = std::atoi(next().c_str());

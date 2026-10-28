@@ -6,6 +6,10 @@
 #include <shlobj.h>
 #endif
 
+#include <cctype>
+#include <filesystem>
+#include <system_error>
+
 #include "core/hostfs.h"
 #include "core/log.h"
 #include "core/vfs.h"
@@ -41,10 +45,28 @@ int l_SHGetFolderPath(lua_State* L) {
   return 1;
 }
 
+// A host folder for comparing: made absolute (an init file may list it relative to the working folder), lower
+// case, \ as /, no trailing /
+std::string FolderKey(const std::string& folder) {
+  std::error_code ec;
+  std::filesystem::path abs = std::filesystem::absolute(std::filesystem::path(folder), ec);
+  std::string d = ec ? folder : abs.lexically_normal().string();
+  for (char& c : d) c = c == '\\' ? '/' : static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  while (d.size() > 1 && d.back() == '/') d.pop_back();
+  return d;
+}
+
 }  // namespace
 
 bool MountFromInitFile(const std::string& initFile, const std::map<std::string, std::string>& folders, Vfs& vfs,
-                       std::vector<std::string>& hookDirs) {
+                       std::vector<std::string>& hookDirs, const std::vector<std::string>* skip) {
+  auto skipped = [&](const std::string& d) {
+    if (!skip) return false;
+    const std::string k = FolderKey(d);
+    for (const std::string& s : *skip)
+      if (FolderKey(s) == k) return true;
+    return false;
+  };
   ScriptState init(ScriptState::Kind::Init, &vfs);
   lua_State* L = init.L();
   std::string dir = initFile;
@@ -84,8 +106,10 @@ bool MountFromInitFile(const std::string& initFile, const std::map<std::string, 
       std::string base = clean.substr(0, sl);
       for (const auto& n : hostfs::Glob(clean)) {
         if (n == "." || n == "..") continue;
-        vfs.Mount(base + "/" + n, mp);
+        if (!skipped(base + "/" + n)) vfs.Mount(base + "/" + n, mp);
       }
+    } else if (skipped(mdir)) {
+      Logf(LogLevel::Info, "init file: %s left out", hostfs::DisplayPath(mdir).c_str());
     } else {
       vfs.Mount(mdir, mp);
     }
