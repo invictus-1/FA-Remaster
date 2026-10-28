@@ -29,6 +29,9 @@
 #include "ltm.h"
 #include "lvm.h"
 
+/* moho64: the base library's `next' (lbaselib.c), known by its address in OP_TFORLOOP */
+int luaB_next (lua_State *L);
+
 
 
 /* function to convert a lua_Number to a string */
@@ -877,7 +880,40 @@ StkId luaV_execute (lua_State *L) {
         setobjs2s(cb+1, ra+1);
         setobjs2s(cb+2, ra+2);
         L->top = cb+3;  /* func. + 2 args (state and index) */
-        luaD_call(L, cb, nvar);
+        /* moho64: `for k, v in t' and `in pairs(t)' with the base library's own `next' over a table: the call of
+           next is made here without a C call frame, leaving every stack slot as the call leaves it, so that the
+           collector sees the same stack. The call: luaB_next's lua_next on its 2 arguments steps the key slot cb+2
+           (luaH_next writes the key there and the value in cb+3, or lua_pushnil puts nil there at the end); then
+           luaD_poscall moves the 2 results (or the one nil) to cb.. adjusted to nvar, L->top = cb + nvar; then
+           luaD_call's luaC_checkGC, the same GC check point. Taken only where the call would do nothing else: no
+           call or return hook (a hook must see the call), no C stack overflow error, no CallInfo or stack growth
+           (luaD_precall's tests, as written there: those allocate). A key that is in neither part (luaH_nexttry
+           -1, nothing written) makes the real call, which raises the error it always did. Nothing is allocated,
+           no metamethod runs (next reads raw), the walk count is kept. B1 (a one-hour 16-army game): 290 M calls
+           of next; bench: a step 19-29 -> 10-12 ns. */
+        {
+          int more = -1;
+          if (ttisfunction(cb) && clvalue(cb)->c.isC && clvalue(cb)->c.f == luaB_next && ttistable(cb+1) &&
+              !(L->hookmask & (LUA_MASKCALL | LUA_MASKRET)) && L->nCcalls + 1 < LUA_MAXCCALLS &&
+              L->ci + 1 != L->end_ci &&
+              (char *)L->stack_last - (char *)L->top > LUA_MINSTACK*(int)sizeof(TObject))
+            more = luaH_nexttry(L, hvalue(cb+1), cb+2);
+          if (more >= 0) {
+            StkId res = cb, first = cb+2, top = cb + 3 + more;  /* the results: k, v (cb+2, cb+3) or nil (cb+2) */
+            int wanted = nvar;
+            if (!more) setnilvalue(cb+2);  /* lua_pushnil */
+            while (wanted != 0 && first < top) {  /* luaD_poscall */
+              setobjs2s(res++, first++);
+              wanted--;
+            }
+            while (wanted-- > 0)
+              setnilvalue(res++);
+            L->top = res;
+            luaC_checkGC(L);  /* luaD_call's */
+          }
+          else
+            luaD_call(L, cb, nvar);
+        }
         L->top = L->ci->top;
         ra = XRA(i) + 2;  /* final position of first result */
         cb = ra + nvar;

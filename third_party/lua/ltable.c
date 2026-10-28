@@ -154,7 +154,11 @@ static int arrayindex (const TObject *key) {
 ** elements in the array part, then elements in the hash part. The
 ** beginning and end of a traversal are signalled by -1.
 */
-static int luaH_index (lua_State *L, Table *t, StkId key) {
+/*
+** moho64: luaH_index without the error: -2 for a key that is in neither part (luaH_index raises "invalid key for
+** `next'" then). Shared by luaH_next and luaH_nexttry, so the two cannot drift.
+*/
+static int luaH_indexornot (Table *t, StkId key) {
   int i;
   if (ttisnil(key)) return -1;  /* first iteration */
   i = arrayindex(key);
@@ -164,7 +168,7 @@ static int luaH_index (lua_State *L, Table *t, StkId key) {
   else {
     const TObject *v = luaH_get(t, key);
     if (v == &luaO_nilobject)
-      luaG_runerror(L, "invalid key for `next'");
+      return -2;
     i = cast(int, (cast(const lu_byte *, v) -
                    cast(const lu_byte *, gval(gnode(t, 0)))) / sizeof(Node));
     return i + t->sizearray;  /* hash elements are numbered after array ones */
@@ -172,10 +176,16 @@ static int luaH_index (lua_State *L, Table *t, StkId key) {
 }
 
 
-int luaH_next (lua_State *L, Table *t, StkId key) {
-  int i;
-  if (ttisnil(key)) luaH_notewalk(L, t);  /* (moho64: a debugging count, off by default; lwalklog.c) */
-  i = luaH_index(L, t, key);  /* find original element */
+static int luaH_index (lua_State *L, Table *t, StkId key) {
+  int i = luaH_indexornot(t, key);
+  if (i == -2)
+    luaG_runerror(L, "invalid key for `next'");
+  return i;
+}
+
+
+/* moho64: luaH_next's step from the index i of the key (luaH_index's numbering) */
+static int luaH_nextfrom (Table *t, StkId key, int i) {
   for (i++; i < t->sizearray; i++) {  /* try first array part */
     if (!ttisnil(&t->array[i])) {  /* a non-nil value? */
       setnvalue(key, cast(lua_Number, i+1));
@@ -191,6 +201,28 @@ int luaH_next (lua_State *L, Table *t, StkId key) {
     }
   }
   return 0;  /* no more elements */
+}
+
+
+int luaH_next (lua_State *L, Table *t, StkId key) {
+  int i;
+  if (ttisnil(key)) luaH_notewalk(L, t);  /* (moho64: a debugging count, off by default; lwalklog.c) */
+  i = luaH_index(L, t, key);  /* find original element */
+  return luaH_nextfrom(t, key, i);
+}
+
+
+/*
+** moho64: luaH_next for the VM's generic `for' (lvm.c OP_TFORLOOP), which then calls no function for `next': the
+** same step, the same order, the same walk count; only a key that is in neither part is not raised here but
+** answered -1, so that the caller makes the ordinary call of `next', which raises the error it always did (same
+** message, same frame).
+*/
+int luaH_nexttry (lua_State *L, Table *t, StkId key) {
+  int i = luaH_indexornot(t, key);
+  if (i == -2) return -1;
+  if (ttisnil(key)) luaH_notewalk(L, t);
+  return luaH_nextfrom(t, key, i);
 }
 
 
