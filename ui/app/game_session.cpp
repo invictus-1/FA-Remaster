@@ -2284,6 +2284,9 @@ void GameSession::Advance(double seconds) {
       Logf(LogLevel::Info, "moho64ui: the beats behind the loading screen are through (tick %u)", sim_->tick());
       aheadRanTo_ = sim_->tick();
       aheadTo_ = 0, due_ = 0;
+      // (and the beats' early start learnt afresh: those beats' times, M28's start among them, would have it start
+      // each beat at the most for seconds, the interface waiting on the beats meanwhile; measured on the 4K live game)
+      leadBeats_ = 0, lead_ = 0;
       return;
     }
     due_ = 0.1;  // (exactly one beat below: on the thread it returns once begun)

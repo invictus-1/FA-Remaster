@@ -17,6 +17,46 @@ uel0201 for the player beside the commander, all selected by category, 20 s stea
 and a move order by a right click. `MOHO64UI_BINDING_PROFILE=1` logs the costliest engine functions the scripts
 called (time and calls).
 
+## 2026-10-28: a live 45-minute game at native 4K, as Chris plays now (the engine's item 20 follow-up)
+
+Build: main 9f12685 (engine batch 21: the collector's spikes gone) + the first beats behind the loading screen
+(36d43a0). Scenario: a live game from Chris's snapshot game 2's table (Seton's Clutch Remastered, 10 armies: 8 M28AI
+variant AIx, Chris's army idle, no orders), full screen 3840x2160, D3D12, the simulation on all cores, the record and
+its fingerprint on the beats' thread (`--replay-out`), `MOHO64UI_LONG_FRAMES=33 MOHO64UI_BEAT_LOG=1`, the PC quiet
+(the engine's slot). Script: `_scratch/ui/measure_1028/run_live.sh` + `perf_live.lua`; read with `longframes.py` and
+`phases.py` there. Ran to 45:01 of game time (tick 27012, 4,772 units) in 2728.5 s.
+
+- Frames: 157,223 (57.6 a second on average); frame to frame 13.32 ms in the middle, 39.2 at 95%, 50.6 at 99%, 143.6
+  the longest; 23% over 20 ms. Per frame 17.35 ms: the world's picture 13.69, the host's step 1.14, the interface's
+  drawing 0.78, its scripts 0.40.
+- Long frames (33 ms or more): 14,601. In 14,587 the world's picture is the biggest part; the host 2, the interface's
+  scripts 1, waits 6, input 1. None of 250 ms or more, 36 of 100-250 ms.
+- The beats (27,011 on their thread): the simulation 25.9 ms each (95%: 52.8), with the picture's copy 33.1 (65.2);
+  then here on the window's thread, per beat, 10.1 ms on average (95%: 14.2) in the frames that carried one: its
+  sounds 5.9, the sync 4.1 (the last 9 minutes 11.8, the sounds 6.9). The fingerprint no longer counts here.
+
+| ticks | beats | sim mean | sim 95% | with picture 95% | frames held | beats of 100 ms+ |
+|---|---|---|---|---|---|---|
+| 1-30 (behind the loading screen from 2) | 29 | 85.9 | 591.8 | 592.5 | 0 | 4 |
+| 31-3000 | 2970 | 6.2 | 11.4 | 14.3 | 4 | 0 |
+| 3001-9000 | 6000 | 13.3 | 19.2 | 24.2 | 1 | 0 |
+| 9001-15000 | 6000 | 18.4 | 25.2 | 31.6 | 1 | 0 |
+| 15001-21000 | 6000 | 34.2 | 47.5 | 58.0 | 102 | 0 |
+| 21001-27012 | 6012 | 47.3 | 62.5 | 75.8 | 11,266 | 10 (the longest 216 ms) |
+
+- Frames held by the simulation (the world standing still): 11,374 of 157,223, all but 108 in the last ten minutes,
+  about a third of the frames there. The beats are not over 100 ms there, but a beat's whole chain is: the
+  simulation and the picture's copy (95%: 76 ms) on the beats' thread, its 10-12 ms here, and up to a frame's wait
+  (a beat starts only in a frame), while it may start at most 80 ms early (GameSession::FinishBeat's lead cap).
+- The start: the world loaded in 6.8 s; beats 2-29 behind the loading screen took tick 10 938 ms, 16 257, 17 352,
+  21 592 (about 2.1 s hidden in the load); no frame held after the screen came. Five frames of 33-40 ms right after
+  it waited ~30 ms each on the beat: the beats' early start had learnt from those slow beats (80 ms at once); FIXED
+  after this run (the lead learnt afresh once they are through). One frame at 10.9 s had 93.7 ms of one beat's work
+  here (about tick 48, the commanders' arrival); at 13.1 s FAF's StartupSequence selecting the commander took 20 ms
+  (GetUnitCommandData 15 ms).
+- Ideas (not done): the beat's sounds (6-7 ms late) and its sync work off the window's thread; a lead cap nearer a
+  whole beat. The rest is the world's picture (the renderer) and the late simulation (the engine).
+
 ## 2026-10-25: the last long frames of a launch at 4K (helper "stutters3", on a1060c5)
 
 Scenario: as below (the lead's measuring script, a 3840x2160 window, D3D12, `MOHO64UI_LONG_FRAMES=16`, 9000 frames),
