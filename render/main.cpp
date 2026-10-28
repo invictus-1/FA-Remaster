@@ -222,7 +222,9 @@
 //           printed, the minimap after the last written beside the --picture file (_minimaptest.png); `old`: its ground drawn
 //           the way it was before (WorldPicture::minimapByResize), to compare; [weather] `spaced`: in the second n the
 //           weather moved once every 20 frames (one redraw now and then, as in a game); `wait`: the
-//           redrawn ground read back at once, waiting for the card, as before WorldPicture's read-back later
+//           redrawn ground read back at once, waiting for the card, as before WorldPicture's read-back later; `step=<s>`: how far
+//           the clouds move each time (0.25 unless given: past a tenth it is a weather cut, World::weatherCuts, which restarts the
+//           air's and the clouds' histories at once; a game's weather moves by less, 0.08 is one)
 // --range-fill  [range fill] with --ranges: the red group filled inside its lines (the original's range_Fill)
 // --no-hidden-outlines  no outlines of units hidden behind trees, cliffs and buildings (World::hiddenOutlines,
 //           hidden_outlines.h: on unless this is given, in the modern look); --hidden-outlines: on (as at first)
@@ -958,6 +960,7 @@ struct Options {
   int minimapTest = 0, minimapTestSize = 300;    // [spikes] --minimap-test
   bool minimapTestOld = false;
   bool minimapTestSpaced = false, minimapTestWait = false;  // [weather] (,spaced  ,wait)
+  float minimapTestStep = 0.25f;  // [weather] (,step=<s>: how far the clouds move each time)
   bool rangeFill = false;                       // [range fill] --range-fill
   std::string enhancement;
   float soften = -1;                    // --soften
@@ -1492,6 +1495,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
       o->minimapTestOld = std::string(v).find(",old") != std::string::npos;
       o->minimapTestSpaced = std::string(v).find(",spaced") != std::string::npos;  // [weather]
       o->minimapTestWait = std::string(v).find(",wait") != std::string::npos;
+      if (const char* s = std::strstr(v, ",step=")) o->minimapTestStep = std::clamp(static_cast<float>(atof(s + 6)), 0.0f, 1.0f);
       o->minimapTestSize = std::clamp(o->minimapTestSize, 16, 2048);
     }
     else if (a == "--upgrade-test") {  // [hitches] <beat>,<x>,<z>[,<after>[,<from>,<to>]]
@@ -3384,8 +3388,8 @@ int main(int argc, char** argv) {
           const float clouds = pw ? pw->cloudCover : 0;
           // ([weather] `spaced`: the weather moved on for good once every 20 calls, as a game's hour and weather move it: one
           // redraw now and then among frames that draw none)
-          if (moving && pw && opt.minimapTestSpaced && i % 20 == 0) pw->cloudCover = clouds + 0.25f * static_cast<float>((i / 20) % 2 ? 1 : -1);
-          else if (moving && pw && !opt.minimapTestSpaced && (i & 1)) pw->cloudCover = clouds + 0.25f;
+          if (moving && pw && opt.minimapTestSpaced && i % 20 == 0) pw->cloudCover = clouds + opt.minimapTestStep * static_cast<float>((i / 20) % 2 ? 1 : -1);
+          else if (moving && pw && !opt.minimapTestSpaced && (i & 1)) pw->cloudCover = clouds + opt.minimapTestStep;
           picture.DrawMinimap(size, size, opt.minimapResources);
           if (pw && !opt.minimapTestSpaced) pw->cloudCover = clouds;
           const auto t2 = std::chrono::steady_clock::now();
