@@ -301,6 +301,18 @@ Fingerprint::~Fingerprint() {
   if (peer_) std::fclose(peer_);
 }
 
+const std::vector<const Prop*>& Fingerprint::PropsById(const Sim& sim) const {
+  const std::vector<Prop*>& v = sim.props;
+  bool same = v.size() == propHandles_.size();
+  for (size_t i = 0; same && i < v.size(); ++i) same = v[i]->handle == propHandles_[i];
+  if (!same) {
+    propHandles_.resize(v.size());
+    for (size_t i = 0; i < v.size(); ++i) propHandles_[i] = v[i]->handle;
+    propsById_ = ById(v);
+  }
+  return propsById_;
+}
+
 std::string Fingerprint::Line(const Sim& sim, uint32_t beat) const {
   std::vector<std::pair<std::string, uint64_t>> parts;
   {
@@ -359,12 +371,12 @@ std::string Fingerprint::Line(const Sim& sim, uint32_t beat) const {
   }
   {
     Hash h;
-    for (const Prop* p : ById(sim.props)) HashEntity(h, p);
+    for (const Prop* p : PropsById(sim)) HashEntity(h, p);
     parts.emplace_back("props", h.h);
   }
   {
     std::vector<const Entity*> others;
-    for (const auto& [handle, e] : sim.entities())
+    for (const auto& [handle, e] : sim.otherEntities())
       if (e->kind != Entity::Kind::Unit && e->kind != Entity::Kind::Prop && e->kind != Entity::Kind::Projectile)
         others.push_back(e);
     std::sort(others.begin(), others.end(), [](const Entity* a, const Entity* b) {
@@ -529,7 +541,7 @@ void Fingerprint::WriteDetail(const Sim& sim, uint32_t beat, const std::string& 
                  Fs({p->orientation.x, p->orientation.y, p->orientation.z, p->orientation.w}).c_str(), p->health,
                  p->fractionComplete, p->destroyQueued ? " destroying" : "");
   std::vector<const Entity*> others;
-  for (const auto& [handle, e] : sim.entities())
+  for (const auto& [handle, e] : sim.otherEntities())
     if (e->kind != Entity::Kind::Unit && e->kind != Entity::Kind::Prop && e->kind != Entity::Kind::Projectile)
       others.push_back(e);
   std::sort(others.begin(), others.end(), [](const Entity* a, const Entity* b) {

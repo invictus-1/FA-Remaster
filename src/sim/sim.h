@@ -376,7 +376,8 @@ class Sim {
   // A new entity becomes findable: its handle (EntityRef) and its game id.
   void RegisterEntity(Entity* e) {
     e->handle = nextHandle_++;
-    entities_[e->handle] = e;
+    if (e->kind != Entity::Kind::Unit && e->kind != Entity::Kind::Prop && e->kind != Entity::Kind::Projectile)
+      others_[e->handle] = e;
     if (byHandle_.size() <= e->handle) byHandle_.resize(static_cast<size_t>(e->handle) + 1, nullptr);
     byHandle_[e->handle] = e;
     byId_[e->id] = e;
@@ -401,14 +402,16 @@ class Sim {
   // _c_CreateEntity / _c_CreateShield: bind a script-made table to a new engine entity.
   Entity* AdoptScriptEntity(lua_State* L, int tableIdx, int specIdx, bool shield);
   Platoon* CreatePlatoon(lua_State* L, Army* army, const std::string& name, const std::string& plan);
-  // By handle (EntityRef): byHandle_, which holds what entities_ holds, at the handle's index.
+  // By handle (EntityRef): byHandle_, which holds every registered entity at its handle's index.
   Entity* FindEntity(uint32_t id) const { return id < byHandle_.size() ? byHandle_[id] : nullptr; }
   void QueueDestroy(Entity* e);  // Entity:Destroy(): OnDestroy and removal happen at the end of the tick
   void RequestRefreshUI(Entity* e);  // Entity:RequestRefreshUI / Entity::Kill (entity.h refreshUI; ui REQUESTS 47)
   // For what dies with a command object (a ferry beacon): the original deletes an emptied command only after
   // the beat's destroy queue has run, so the entity is queued then and goes at the end of the beat after.
   void QueueDestroyAfterBeat(Entity* e);
-  const std::map<uint32_t, Entity*>& entities() const { return entities_; }
+  // The entities that are no unit, prop or projectile (shields, beams, blips, the scripts' own), by handle. (An
+  // entity's kind is set before it is registered and never changes.)
+  const std::map<uint32_t, Entity*>& otherEntities() const { return others_; }
   // Live units of all armies, by entity id (kept up to date on creation and destruction).
   const std::vector<Unit*>& units() const { return units_; }
   // How many entities QueueDestroy has queued so far (it only counts up). Destroy is the only way an entity
@@ -593,7 +596,7 @@ class Sim {
   bool hasGauss_ = false;
   uint32_t tick_ = 0;
   std::vector<std::unique_ptr<ScriptObject>> owned_;
-  std::map<uint32_t, Entity*> entities_;  // by handle, in handle order (the fingerprint walks it)
+  std::map<uint32_t, Entity*> others_;  // (otherEntities(): the fingerprint walks it)
   // The same by handle as an array (handles are given out one after another from 1 and never again): FindEntity
   // without the map's search (265 M calls in B1, ~280 ns each in the map). A removed entity's slot is null.
   std::vector<Entity*> byHandle_;

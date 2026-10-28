@@ -50,10 +50,12 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <vector>
 
 namespace moho {
 
 class Sim;
+class Prop;
 
 class Fingerprint {
  public:
@@ -69,6 +71,9 @@ class Fingerprint {
 
  private:
   std::string Line(const Sim& sim, uint32_t beat) const;
+  // The props in id order, sorted again only when the props list no longer holds the same entities in the same order
+  // (handles are never given out twice).
+  const std::vector<const Prop*>& PropsById(const Sim& sim) const;
   void WriteDetail(const Sim& sim, uint32_t beat, const std::string& path, const char* why) const;
   bool PeerLine(uint32_t beat, std::string* line);  // false: the peer ended or went silent
   FILE* out_ = nullptr;
@@ -82,6 +87,8 @@ class Fingerprint {
   std::set<uint32_t> detailBeats_;
   uint32_t beats_ = 0;
   double hashSeconds_ = 0;
+  mutable std::vector<uint32_t> propHandles_;  // (PropsById: the props list's handles when it last sorted)
+  mutable std::vector<const Prop*> propsById_;
 };
 
 }  // namespace moho

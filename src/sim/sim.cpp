@@ -1471,7 +1471,7 @@ void Sim::ProcessDestroyQueue() {
       }
     }
     CallMethod(L, e, "OnDestroy", 0);
-    entities_.erase(e->handle);
+    others_.erase(e->handle);
     if (e->handle < byHandle_.size()) byHandle_[e->handle] = nullptr;
     byId_.erase(e->id);
     if (e->kind != Entity::Kind::Projectile) goneIds_[e->handle] = e->id;
