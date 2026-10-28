@@ -6,6 +6,7 @@
 #include <cstdio>
 
 #include "lighting.h"
+#include "original_shield.h"
 
 namespace render {
 namespace {
@@ -34,11 +35,14 @@ cbuffer Bubble : register(b2) {
   float4 sphere;            // its centre and radius, world units
   float4 tintHealth;        // its faction's tint (as the plain bubble has it); w: how much of the shield is left (0..1)
   float4 info;              // x: its hits; y: 1 = the eye is inside it; z: a number of its own (its stutter); w: [litshell]
-                            // the lit shell: its hex's steps to an icosahedron's edge, or -1 with its texture's pattern;
-                            // 0: the plain shell
+                            // the lit shell: its hex's steps to an icosahedron's edge, or -(1 + whose) from the base game's
+                            // look of whose shield it is (0 UEF, 1 Aeon, 2 Cybran, 3 Seraphim); 0: the plain shell
   float4 hits[8];           // xyz: the way from its centre to where it was struck; w: how many seconds ago
 };
 Texture2D albedoMap : register(t0);  // the dome's texture (its faction's pattern)
+Texture2D normalsMap : register(t3);    // [basepattern] (ShellPS) its other textures, for the base game's look of it
+Texture2D specularMap : register(t4);
+Texture2D secondaryMap : register(t5);
 Texture2D behind : register(t1);     // the picture as it was before the bubbles (InsidePS only)
 #if SAMPLES > 1
 Texture2DMS<float> sceneDepth : register(t2);
@@ -149,6 +153,95 @@ void HexCell(float3 p, float f, out float cell, out float3 middle, out float bor
   cell = dot(floor(middle * 977 + 0.5), float3(1, 57, 3361));  // (the same for a point both faces share)
 }
 
+// [hitpatterns] (Chris, 2026-10-28: as the UEF's hexagons, each faction's shield its own pattern when shot at.) Where a
+// hit's rings pass, light runs along a faction's own lines (faint at rest):
+//  - the Aeon's: flowing curved seams, as light caught in water (the edges of a slowly drifting cellular noise over the
+//    sphere, at two sizes);
+//  - the Cybran's: a circuit board's traces, straight and turning at right angles, with their pads (laid on the six faces
+//    of a cube round the sphere), the current crackling along them;
+//  - the Seraphim's: round each hit, rings broken into arcs and ticks pointing out from it, as an alien glyph that flares.
+// Each 0..1 (how much of a line is there), faded where its lines are finer than a few pixels.
+float3 PatternHash3(float3 p) {
+  p = frac(p * float3(0.1031, 0.1030, 0.0973));
+  p += dot(p, p.yxz + 33.33);
+  return frac((p.xxy + p.yxx) * p.zyx);
+}
+float AeonSeams(float3 q) {  // (the cellular noise's edges at q: 0 on them, more away)
+  float3 c = floor(q), f = q - c;
+  float d1 = 9, d2 = 9;
+  [unroll] for (int k = 0; k < 27; ++k) {
+    float3 o = float3(k % 3, (k / 3) % 3, k / 9) - 1;
+    float3 r = o + PatternHash3(c + o) - f;
+    float d = dot(r, r);
+    if (d < d1) d2 = d1, d1 = d;
+    else if (d < d2) d2 = d;
+  }
+  return sqrt(d2) - sqrt(d1);
+}
+float AeonPattern(float3 n, float radius) {
+  float3 q = n * max(radius / 2.6, 1) + float3(0.07, 0.11, -0.05) * time;
+  float e1 = AeonSeams(q), e2 = AeonSeams(q * 2.13 + 7.1);
+  float a1 = max(fwidth(e1), 1e-4), a2 = max(fwidth(e2), 1e-4);
+  return max((1 - smoothstep(0.04, 0.04 + a1 * 2, e1)) * saturate(1.5 - a1 * 6),
+             0.55 * (1 - smoothstep(0.03, 0.03 + a2 * 2, e2)) * saturate(1.5 - a2 * 6));
+}
+float CybranPattern(float3 n, float radius, out float crackle) {
+  // (the cube's face the place is on, and the place on it)
+  float3 m = abs(n);
+  float2 p = m.x > m.y && m.x > m.z ? n.yz / m.x : m.y > m.z ? n.xz / m.y : n.xy / m.z;
+  float face = m.x > m.y && m.x > m.z ? 1 : m.y > m.z ? 2 : 3;
+  p *= max(radius / 2.2, 1);
+  float2 cell = floor(p), f = p - cell - 0.5;
+  float3 r = PatternHash3(float3(cell, face * 17.3));
+  float w = 0.07, aa = max(fwidth(p.x), 1e-4) * 1.5;
+  float across = abs(f.y), along = abs(f.x);
+  // (a trace straight across the cell, either way, or turning in it; a pad where some end)
+  float trace;
+  if (r.x < 0.34) trace = 1 - smoothstep(w, w + aa, abs(f.y));
+  else if (r.x < 0.68) trace = 1 - smoothstep(w, w + aa, abs(f.x));
+  else trace = max((1 - smoothstep(w, w + aa, abs(f.y))) * step(0, r.y < 0.5 ? f.x : -f.x),
+                   (1 - smoothstep(w, w + aa, abs(f.x))) * step(0, r.z < 0.5 ? f.y : -f.y));
+  float pad = r.y > 0.7 ? 1 - smoothstep(0.16, 0.16 + aa, max(abs(f.x), abs(f.y))) : 0;
+  pad *= smoothstep(0.08 - aa, 0.08, max(abs(f.x), abs(f.y)));  // (a square ring)
+  // (current: a spark running along each trace now and then)
+  crackle = 0.45 + 0.55 * step(0.55, frac(sin(dot(cell, float2(12.9898, 78.233)) + floor(time * 18) * 1.37) * 43758.5453));
+  return max(trace, pad) * saturate(1.5 - aa * 4);
+}
+float SeraphimPattern(float3 n) {
+  float glyph = 0;
+  int count = (int)(info.x + 0.5);
+  float px = max(length(fwidth(n)), 1e-5);  // (radians a pixel; derivatives taken before the loop, whose flow varies)
+  for (int k = 0; k < count; ++k) {
+    float3 d = hits[k].xyz;
+    float age = hits[k].w;
+    float a = acos(clamp(dot(n, d), -1, 1));
+    float life = saturate(1 - age / kLife);
+    float front = age * kSpeed;  // (as far as its rings have run)
+    if (life <= 0 || a > front + 0.1) continue;
+    // (its own frame: the way round the hit)
+    float3 x = normalize(cross(abs(d.y) < 0.9 ? float3(0, 1, 0) : float3(1, 0, 0), d)), y = cross(d, x);
+    float3 aside = n - d * dot(n, d);
+    float turn = atan2(dot(aside, y), dot(aside, x)) / 6.2831853 + 0.5;
+    float ring = a / 0.07;  // (rings 0.07 radians apart)
+    float which = floor(ring), within = abs(frac(ring) - 0.5);
+    float aa = px / 0.07;
+    float lineRing = 1 - smoothstep(0.03, 0.03 + aa * 1.5, within);
+    // (each ring broken into arcs of its own count and offset)
+    float arcs = 3 + fmod(which * 2, 5);
+    float arc = frac(turn * arcs + which * 0.37);
+    lineRing *= step(0.18, arc) * step(arc, 0.82);
+    // (ticks pointing out from the hit between the rings)
+    float tick = frac(turn * 24 + which * 0.5);
+    float lineTick = (1 - smoothstep(0.04, 0.04 + px * 24 / (6.2831853 * max(sin(a), 0.05)) * 1.5, abs(tick - 0.5) * 2 - 0.92)) * step(0.5, frac(ring));
+    lineTick *= step(0.62, frac(sin(which * 7.7 + floor(turn * 24)) * 43758.5453));
+    float g = max(lineRing, lineTick * 0.8) * saturate(1.5 - aa * 4);
+    // (lit where the rings have run, brightest just behind the front, the inner ones fading first)
+    float lit = smoothstep(front + 0.08, front - 0.02, a) * (0.35 + 0.65 * exp(-(front - a) * 4));
+    glyph = max(glyph, g * lit * life * life);
+  }
+  return glyph;
+}
+
 // The shell, taking the world's light: a clear shield of energy, like glass in that it mirrors the sky and the sun and
 // catches the light of what burns and shines near it (shaded where the ground or the clouds shade it, and seen through the
 // air as all else); its hex of thin lines in its faction's tint, which glow on their own (more toward its rim, by night
@@ -163,6 +256,8 @@ float4 LitShell(VOut i, float3 n, float3 v) {
   // its hex: the cell a place is in, and how near its border
   float lines, own = 0;
   float3 cellN = n;
+  float3 base = 0;  // [basepattern] the base game's look of it (its light), and its see-through
+  float baseAlpha = 0;
   [branch] if (info.w > 0.5) {
     float cell, border;
     float3 middle;
@@ -172,14 +267,37 @@ float4 LitShell(VOut i, float3 n, float3 v) {
     cellN = middle;
     own = frac(sin(cell * 12.9898 + info.z) * 43758.5453);
   } else {
-    lines = saturate(albedoMap.Sample(samplerLinear, i.uv * 3 + float2(0.01, 0.03) * time).r *
-                     albedoMap.Sample(samplerLinear, i.uv * 7 - float2(0.02, 0.013) * time).g * 2.5);
+    // [basepattern] (Chris, 2026-10-28: the modern shields an evolution of the base game's, in its colours) the base game's
+    // look of its faction's shield (original_shield.h): its colour, see-through and patterns, as the light it gives; the
+    // computed sky in the Aeon's mirror; its blotches (rain's sparks fall on them). Its surface's ways from the screen's.
+    int whose = int(-info.w - 0.5);
+    float3 dx = ddx(i.world), dy = ddy(i.world);
+    float2 du = ddx(i.uv), dv = ddy(i.uv);
+    float3 px = cross(dy, n), py = cross(n, dx);
+    float3 T = px * du.x + py * dv.x, B = px * du.y + py * dv.y;
+    float3 aside = normalize(cross(abs(n.y) < 0.99 ? float3(0, 1, 0) : float3(1, 0, 0), n));
+    T = dot(T, T) > 1e-12 ? normalize(T) : aside;
+    B = dot(B, B) > 1e-12 ? normalize(B) : cross(n, aside);
+    float4 baseLook = OriginalShieldLook(whose, i.uv, n, T, B, -v, time, health, true, albedoMap, normalsMap, specularMap, secondaryMap,
+                                     environmentSky);
+    base = ToLinear(baseLook.rgb);
+    baseAlpha = baseLook.a;
+    lines = saturate(dot(base, float3(0.2126, 0.7152, 0.0722)) * 2);
+    float3 blotch = floor(n * 14);
+    own = frac(sin(dot(blotch, float3(12.9898, 78.233, 37.719)) + info.z) * 43758.5453);
+    cellN = normalize(blotch + 0.5);
   }
   lines *= shellLook.y;
   // a hit's rings and flare: over whole cells (a cell lights up as a crest crosses it)
   float h, flare;
   float3 lean;
-  Ripples(cellN, h, lean, flare);
+  Ripples(info.w > 0.5 ? cellN : n, h, lean, flare);  // (over whole cells where it has a hex; else smooth)
+  // [hitpatterns] its faction's own lines, lit where the rings pass (the UEF's: its hex, above)
+  float hitLines = 0, crackle = 1, glyph = 0;
+  int faction = info.w > 0.5 ? 0 : int(-info.w - 0.5);
+  [branch] if (faction == 1) hitLines = AeonPattern(n, sphere.w);
+  else if (faction == 2) hitLines = CybranPattern(n, sphere.w, crackle);
+  else if (faction == 3) glyph = SeraphimPattern(n);
   float rim = pow(1 - nDotV, 3);
   float pulse = 0.65 + 0.35 * sin(time * (0.9 + own * 1.7) + own * 6.2831853);
   // (weakening, its hex's: its cells go out one by one, the weaker it is the more (a third left dark at a quarter of its
@@ -192,13 +310,16 @@ float4 LitShell(VOut i, float3 n, float3 v) {
   }
   // (rain and snow on it: a drop that meets it sparks a cell for a moment, on its upper side; flakes faintly)
   float spark = 0;
-  [branch] if (falling.x + falling.y > 0.01 && info.w > 0.5) {
+  [branch] if (falling.x + falling.y > 0.01) {
     float when = frac(time * (1.4 + own * 0.8) + own * 17.3);
     spark = (falling.x + 0.3 * falling.y) * saturate(1 - when / 0.1) * saturate(cellN.y * 2 + 0.3);
   }
   float night = dark * lerp(0.35, 1, dark);
-  float3 glow = tint * (lines * ((0.12 + 0.9 * rim) * pulse * night + h * 2.2 * frameInfo.w + flare * 2.5) * on + lines * weak * weak * weak * 0.7 * on * tint +
+  float hex = info.w > 0.5 ? 1 : 0;  // (its hex's lines glow on their own; the base game's look carries its own light)
+  float3 glow = tint * (lines * ((0.12 + 0.9 * rim) * pulse * night * hex + h * 2.2 * frameInfo.w + flare * 2.5) * on + lines * weak * weak * weak * 0.7 * on * tint * hex +
                         (1 - lines) * ((h * 0.55 * frameInfo.w + flare * 0.9) * on ) * tint + spark * 4 * (tint * 0.6 + 0.4));
+  // [hitpatterns] (light along its own lines where a hit's rings pass and where it struck; faint at rest, toward the rim)
+  glow += tint * (hitLines * ((h * 3.2 * frameInfo.w + flare * 3.5) * crackle * on + 0.05 * rim * night) + glyph * 1.6 * tint) * (tint * 0.5 + 0.5);
   glow *= 1 - 0.5 * nDotV * nDotV;  // (less where seen face on, where the units inside are looked at)
   // the world's light on it
   float shadow = SunShadow(i.world, N) * CloudShadow(i.world);
@@ -215,9 +336,11 @@ float4 LitShell(VOut i, float3 n, float3 v) {
   float3 lit = lines * tint * (sun * nDotL * shadow * 0.06 + SkyAmbient(N) * 0.08);
   // (its faction's colour toward its rim, as the plain bubble's: the shield reads as its side's from afar)
   float edge = pow(1 - nDotV, 2.5);
-  float alpha = saturate(0.012 + fresnel * 0.45 + edge * 0.22 + lines * (0.08 + 0.25 * rim) + (h * 0.12 + flare * 0.15) * on + spark * 0.3) *
+  float pattern = hex > 0 ? lines * (0.08 + 0.25 * rim) : baseAlpha * 0.8 + (hitLines * (h + flare) * 0.3 + glyph * 0.3) * on;
+  float alpha = saturate(0.012 + fresnel * lerp(0.35, 0.45, hex) + edge * lerp(0.12, 0.22, hex) + pattern + (h * 0.12 + flare * 0.15) * on + spark * 0.3) *
                 lerp(0.6, 1, dark);
-  float3 color = sky * fresnel + glint + small + lit + glow + tint * ((0.03 + 0.9 * edge) * night * (0.06 + 0.22 * edge) / 0.28);
+  float3 color = sky * fresnel * lerp(0.5, 1, hex) + glint + small + lit + glow + base * (2.5 * baseAlpha) * night +
+                 tint * ((0.03 + 0.9 * edge) * night * (0.06 + 0.22 * edge) / 0.28);
   // (with its texture's pattern: all of it stutters below two fifths, as the plain bubble's)
   float stutter = info.w > 0.5 ? 0 : saturate((CloudNoise(float3(time * 6, info.z, 0.5)) - 0.55) * 5) * saturate((0.4 - health) * 5);
   color *= 1 - 0.6 * stutter;
@@ -364,7 +487,7 @@ std::string IcosahedronBlock() {
 
 bool EnergyShields::Init() {
   std::string error;
-  const std::string source = "#define SAMPLES " + std::to_string(gSceneSamples) + "\n" + kViewShaderBlock + kLightingShaderBlock + IcosahedronBlock() + kShader;
+  const std::string source = "#define SAMPLES " + std::to_string(gSceneSamples) + "\n" + kViewShaderBlock + kLightingShaderBlock + kOriginalShieldBlock + IcosahedronBlock() + kShader;
   gfx::PipelineDesc pd;
   pd.vertexSource = pd.pixelSource = source;
   pd.attrs = {{"POSITION", 0, gfx::AttrType::Float3, offsetof(ScmVertex, position)},
@@ -518,7 +641,9 @@ void EnergyShields::Draw(const View& view, Post* post) {
     out[22] = std::fmod(std::fabs(b.origin.x * 0.37f + b.origin.z * 0.61f), 97.0f);
     // [litshell] (the UEF's, for now: Chris asked for it; the others keep their own look) its hex's cells hexSize apart: an
     // icosahedron's edge is 1.05 of its sphere's radius
-    out[23] = !litShell || !b.hex ? 0.0f : hexSize > 0 ? std::clamp(std::round(1.0515f * b.radius / hexSize), 2.0f, 200.0f) : -1.0f;
+    out[23] = !litShell ? 0.0f
+              : b.hex && hexSize > 0 ? std::clamp(std::round(1.0515f * b.radius / hexSize), 2.0f, 200.0f)
+                                     : -1.0f - static_cast<float>(std::clamp(b.model->lods[0].faction, 0, 3));  // [basepattern]
     for (int k = 0; k < kMostHits; ++k)
       for (int j = 0; j < 4; ++j) out[24 + k * 4 + j] = k < b.hits ? b.hit[k][j] : 0.0f;
   };
@@ -528,6 +653,9 @@ void EnergyShields::Draw(const View& view, Post* post) {
     bubbleConstants(b, constants);
     device_->SetConstants(2, constants, sizeof constants);
     device_->SetTexture(0, lod.albedo);
+    device_->SetTexture(3, lod.normals);  // [basepattern]
+    device_->SetTexture(4, lod.specular);
+    device_->SetTexture(5, lod.secondary);
     device_->SetVertexBuffer(lod.vertices);
     device_->SetIndexBuffer(lod.indices);
     device_->DrawIndexed(lod.indexCount);

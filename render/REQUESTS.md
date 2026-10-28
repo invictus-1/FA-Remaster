@@ -34,6 +34,23 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
+## 49. To the ENGINE track: thrust controllers (CreateThrustController) for the aircraft's tilting engines (2026-10-28, not blocking)
+
+**What:** `CreateThrustController` makes a working manipulator. Today `CThrustManipulator` is only a class name: in
+`src/sim/effects.cpp:80` and `script_object.cpp:50` the call returns an object that does nothing. The aircraft's
+scripts (FAF's `AirUnit` thrust code; the UEF's Stinger UEA0203 `Jet_Front`/`Jet_Back`, Courier UEA0107 and Star Lifter
+UEA0104 `*_Engine` bones, and others) use it to tilt their engines with the unit's thrust and turn. With its pitch, yaw and
+capping set by the script, it turns its bone each tick by the unit's acceleration in its own frame. The original's
+behaviour is the reference, as for the other manipulators.
+
+**Why:** visuals' polished transports and gunships have tilting engines, and they never tilt in a game. The bone's turn
+reaches the renderer through the unit's pose (UnitPoses), as the other manipulators' do, so nothing else is needed on the
+renderer's side. Found by the renderer's unit check, round 3.
+
+**Smallest form:** the manipulator's turn of its bone each tick, in the pose the frame already sends.
+
+**Answer:** (none yet)
+
 ## 48. To the ENGINE track: a bulk ReconGrid for the renderer's sight grid (2026-10-23, not blocking; the engine's offer)
 
 **Who asks:** the renderer (the engine's helper spk found it: the renderer's sight grid calls ReconAt 65,536 times every
