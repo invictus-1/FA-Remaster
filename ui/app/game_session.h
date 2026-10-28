@@ -325,7 +325,7 @@ class GameSession {
   std::vector<uint32_t> loopEntities_;
   bool seekingAtBeat_ = false;
   // A beat's syncs taken (TakeBeatSync, before the next beat may start) and given to the interface's scripts
-  // (GiveBeatSync, after it has started: MOHO64UI_SYNC_BEFORE=1 gives them before, as until 2026-10-28).
+  // (GiveBeatSync: in FinishBeat, before it; MOHO64UI_SYNC_AFTER=1 after it has started, which made the scripts wait).
   std::vector<std::string> syncsToGive_;
   void TakeBeatSync();
   void GiveBeatSync();

@@ -3,7 +3,15 @@
 Answers to the other tracks' requests to the interface (CLAUDE.md: "the layer asked answers in a file of its own").
 The requests themselves are in the asking track's file; each answer names it.
 
-## engine (by message, docs/ai-design-goals.md 39f16fe): pings our own AI understands, given by a radial menu (2026-10-28, a design, not built yet)
+## render/REQUESTS.md 50: a setting for the units' lamp colour (2026-10-28, main 57b43fc)
+
+Built as asked: "Unit Glow Colour" in the Options dialog's Remastered tab, after Hidden Unit Outlines, in no preset
+(a preference, not a quality step): Team colour (the default) or Faction colour. It runs the console command
+`remaster_lamp_colour team|faction` (1 / 0 too), which sets `LookSettings::lampsTeamColour`; `WorldLooks` gives it to
+`World::lampsTeamColour` every frame, so a change shows at once in a running game. Test: console (the default, faction,
+team again). Not checked by eye in a window: please look once at a night game with it on Faction colour.
+
+## engine (by message, docs/ai-design-goals.md 39f16fe): pings our own AI understands, given by a radial menu (2026-10-28, built: main 57b43fc)
 
 How a ping travels today (FAF, read): the interface's `/lua/ui/game/ping.lua` DoPing sends
 `SimCallback({Func = 'SpawnPing', Args = data})`, data being FAF's SyncPingData: `Owner` (army from 0), `Location`,

@@ -95,6 +95,14 @@ check("true", tostring(moho64ui_Looks().bloom), "true")
 ConExecute("ren_Bloom " .. (bloom and "1" or "0"))
 check("set back, silently", take() .. tostring(moho64ui_Looks().bloom), tostring(bloom))
 
+-- Unit Glow Colour (ours, the renderer's request 50): team by default, faction or team by word or 0 / 1
+check("the units' glow is in the team's colour at first", tostring(moho64ui_Looks().lampsTeamColour), "true")
+ConExecute("remaster_lamp_colour faction")
+check("remaster_lamp_colour faction: the faction's colour", tostring(moho64ui_Looks().lampsTeamColour), "false")
+ConExecute("remaster_lamp_colour 1")
+check("and 1: the team's again", tostring(moho64ui_Looks().lampsTeamColour), "true")
+take()
+
 -- the other kinds: without a value they say it (0x41fa45, 0x7fde36, 0x41fb8a, 0x41e2cc)
 ConExecute("graphics_Fidelity")
 check("an int", take(), "int graphics_Fidelity == " .. moho64ui_Looks().fidelity)

@@ -24,6 +24,7 @@ local own = {
     { key = 'Ctrl-Shift-P', action = 'remaster_palette' },
     { key = 'Ctrl-T', action = 'remaster_timeline' },
     { key = 'Ctrl-Alt-V', action = 'remaster_follow_cam' },
+    { key = 'Y', action = 'remaster_radial_ping' },
 }
 local function copy(t)
     local out = {}

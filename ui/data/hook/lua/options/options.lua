@@ -519,6 +519,21 @@ local looks = {
             },
         },
     },
+    {
+        -- the renderer's World::lampsTeamColour (its request 50; Chris, 2026-10-28): not a quality step, so in no preset
+        title = "Unit Glow Colour",
+        key = 'remaster_lamp_colour',
+        tip = "The faint glow of the units' own lights: in their army's colour, or in their faction's own (UEF blue whatever colour you play). Headlights and the rest keep their colours.",
+        type = 'toggle',
+        default = 1,
+        set = Look("remaster_lamp_colour"),
+        custom = {
+            states = {
+                { text = "Faction colour", key = 0 },
+                { text = "Team colour", key = 1 },
+            },
+        },
+    },
 }
 
 -- Ray Tracing's default (Chris, 2026-10-18: every look on at its highest): On where the card can ray trace; where it
