@@ -3,6 +3,42 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui (+ renderer): Chris's item 20, the hiccups in his snapshot games: what the sim did, and three switches that were off
+
+Helper hic played both of Chris's games back on 2b8886d. Game 2's fingerprint matches all 29035 beats; game 1 was
+rebuilt (its session file had been overwritten, see 4) and matches all 686. The sim never fell behind real time.
+Its hiccups are single long beats that hold the picture: 1049 of 170220 frames in his log; a model of FinishBeat's
+lead gives 8.9 s held in game 2. Most of the low fps and the frame drops are the picture's and the host's, not the
+sim's (end summary: world picture 11.88 ms a frame, host step 2.17; 37% of frames over 20 ms).
+
+For the ui, in order of effect:
+1. CHRIS PLAYED WITH ONE SIM THREAD. ThreadsFromEnvironment() (src/core/workers.cpp:82) gives 1 without
+   MOHO64_THREADS, and neither moho64ui, the snapshot .bat nor his environment sets it. So the path pre-pass on the
+   pool (7c117cc) never ran. Same game at MOHO64_THREADS=cores: fingerprint identical; navigator beats of 50 ms or
+   more 28 -> 3, beats of 100 ms or more 160 -> 75. Please give the game's sim the cores (MOHO64_THREADS=cores, or
+   ThreadsOverride(hardware_concurrency) before the Sim is made). The headless default stays 1 for the helpers'
+   parallel runs.
+2. HIS LOBBY RAN THE ORIGINAL M28AI (uid fnewm028-v326), NOT mods/m28-variant, so batch 13's AI -19% (bd7b3e3) did
+   nothing for him. With the variant on his game: threads phase 18.6 -> 16.0 ms a tick, held 8.9 -> 4.8 s. Please
+   make the variant what the lobby offers as M28 (the original selectable for checks), or say what you need from me.
+3. THE REPLAY FINGERPRINT RUNS ON THE MAIN THREAD: hashing costs 9.8 ms a beat in game 2 (GameSession::FinishBeat
+   -> FingerprintBeat), on for every snapshot game through --replay-out. With the sounds (2.34 ms) and the copies
+   for the interface, the host's work is about 14 ms a beat, landing in one frame of every ~6.5: likely a good part
+   of the p95 42.9 ms frames. Suggestion: hash on the beats' thread right after Tick, or only when asked.
+4. One session file per run: game 1's replay.session.lua was overwritten by game 2's (one prefix.session.lua per
+   run). Please write prefix.2.session.lua for the second game.
+5. game.log had no per-frame lines (MOHO64UI_LONG_FRAMES unset, ui/user/user_state.cpp:105). Please set
+   MOHO64UI_LONG_FRAMES=33 in the snapshot .bat, so frames can be lined up with beats next time.
+6. M28's start freezes the picture about 3 s in every game (OnCreateBrain at tick 10, 1.4-1.5 s; SetupMap at ticks
+   16 / 17 / 21, 0.3-0.8 s). One option is yours: keep the loading screen up until about beat 25. I'm also looking
+   at doing the map setup ahead in the variant.
+
+The engine's part: the Lua collector's big atomic steps (40% of the sim's held time: every ~2000 ticks 240-660 ms)
+are gone with e1's GC stage 3, checked on Chris's game (fingerprint identical; collecting beats of 50 ms or more
+30 -> 0). It lands after its proofs. Still open on my side: an army's death under ShareUntilDeath re-makes 380-500
+units in one beat (320-555 ms, the script object part is new), and a unit kind's first skeleton load (23-42 ms).
+With the variant, stage 3 and cores together, what's left is mostly M28's start. (helper hic)
+
 ## renderer (Chris's item 10, LIST_2026-10-25): the Seraphim T3 battleship sits on the water in the sim
 
 Chris's game 2 was played back on 2b8886d, and its fingerprint matched his .fp. Every xss0302 (14 ships, 3645 samples
