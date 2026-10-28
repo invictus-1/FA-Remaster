@@ -4403,6 +4403,14 @@ int l_AttachBoneTo(lua_State* L) {
   NotifyAttached(*S(L), u);
   SetAttachedState(u);
   if (u->motion.hasGoal) MotionStop(u);
+  // Entity::AttachTo 0x679550 only stores the link (ApplyAttachInfo 0x679680): the unit's transform follows its bone in
+  // the entity stage as a pending one, and its collision primitive stays at the transform the beat began with (for a
+  // unit made in this beat: where its constructor put it) until AdvanceCoords (step 13). Ours puts the unit on the bone
+  // now, so the shape is held at the old place for the rest of the beat. Seen: MP1 10601, army 6's factory makes the
+  // engineer 0x60002d and attaches it in the command stage; army 7's 0x700007's shell lands beside it in the entity
+  // stage (DamageArea r 1.2 at (983.02, 19.22, 528.29)): the original's engineer takes nothing (hp 1.0), ours, its box
+  // already on the bone at (981.50, 18.80, 528.90), took 625 and died.
+  S(L)->HoldShape(u);
   {
     Vec3 bp;
     Quat bq;
@@ -4433,6 +4441,7 @@ int l_AttachTo(lua_State* L) {  // entity:AttachTo(parent, bone)
   NotifyAttached(*S(L), u);
   SetAttachedState(u);
   if (u->motion.hasGoal) MotionStop(u);
+  S(L)->HoldShape(u);  // (see l_AttachBoneTo)
   u->position = EntityBonePosition(parent, u->parentBone);
   S(L)->MarkUnitsMoved();
   return 0;
