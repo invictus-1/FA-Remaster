@@ -65,8 +65,9 @@ cbuffer TerrainConstants : register(b1) {
 #ifdef GROUND_SNOW
   float4 snowInfo;       // [snow ground] x 1 = the snow's materials are drawn; y the fresh one's repeats per world unit; z its relief
                          // (world units); w 1 = the shelter is read
-  float4 snowSlice[3];   // [snow ground] fresh, drift, packed: x its albedo's layer of materialMaps, y its third map's, z its normal's
-                         // of wetNormalMaps (-1: none), w its repeats per world unit
+  float4 snowSlice[4];   // [snow ground] fresh, drift, packed: x its albedo's layer of materialMaps, y its third map's, z its normal's
+                         // of wetNormalMaps (-1: none), w its repeats per world unit; [snowthin] 4th: the thin snow's cover, x its
+                         // layer of wetNormalMaps (-1: none), w its repeats per world unit
   float4 snowWind;       // [snow ground] xy the way the wind blows (unit length); z a view for checking it (MOHO64_DEBUG_SNOW); w unused
   float4 snowTune;       // [snow ground] x how much the shelter cuts the sky's light, y the trees' crowns, z the drifts' relief, w the drifts
 #endif
@@ -530,7 +531,7 @@ void MudLayer(float2 xz, float2 stepX, float2 stepY, float3 base, float m, inout
 // snow, under GROUND_SNOW, lays it with these: snowLie, snowLess, snowEdge, snowSurface, snowMatter, snowNormal, snowPacked,
 // snowPackedNormal, snowSky, snowBareSky, snowWet; GroundSource declares them).
 //
-// What is round the place, before the layers are read (`base`: the ground's own normal): its shelter (how much of the sky it
+// What is round the place, before the layers are read (`base`: the ground's own slope, from its heights): its shelter (how much of the sky it
 // sees, by the heights round it over some 80 world units and the props beside it; the trees' crowns over it; how much deeper
 // or shallower the wind lays the snow there: hollows, the lee of rises, the props' tails and scoops, the trees' wells), and
 // the slope against the wind. From them: how deep the snow lies here (and its relief: the slopes of the wind's drifts and
@@ -539,7 +540,15 @@ void MudLayer(float2 xz, float2 stepX, float2 stepY, float3 base, float m, inout
 // it, more under the crowns; bare ground the less, and only as snow comes, so that nothing jumps as the pipeline takes over.
 static float4 snowShelterHere = float4(0, 1, 0, 0.5);
 static float2 snowTilt = 0;  // (the drifts' slope, per world unit along x and z)
-void SnowAround(float2 uv, float3 base) {
+static float snowSteep = 0;  // [snowfix] how steep the ground is here for the snow (0 up to some 37 degrees, 1 from some 57)
+void SnowAround(float2 uv, float2 xz) {
+  // [snowfix] (the ground's slope as the snow takes it: from its heights a unit and a half to either side, not from the map's
+  // normal map, which can hold fine ripples (SETONS_R's shore banks: diagonal ones about a unit apart) that the wind's lee and
+  // the thinning on steep ground made into stripes of bare ground, the layers' pictures showing through in streaks)
+  const float d = 1.5;
+  float3 base = normalize(float3(HeightBilinear(xz - float2(d, 0)) - HeightBilinear(xz + float2(d, 0)), 2 * d,
+                                 HeightBilinear(xz - float2(0, d)) - HeightBilinear(xz + float2(0, d))));
+  snowSteep = smoothstep(0.8, 0.55, base.y);
   [branch] if (snowInfo.w > 0.5) {
     snowShelterHere = snowShelter.SampleLevel(samplerLinearClamp, uv, 0);
     // (the drifts' slope from the shelter here and a texel on each way; their height up to 0.6 world units either way, as the
@@ -671,6 +680,11 @@ void SnowMakeUp(float2 xz, float2 stepX, float2 stepY, float3 base, float3 N, fl
     // (its edge: the heights' break-up close by, where they are seen; from afar a softer, wider margin, mottled)
     snowEdge = float2(0.5 * (1 - groundHeight) + 0.5 * arh.b, lerp(1, 0.2, far));
     snowMottle = CloudNoise(float3(xz * 0.45, 1.3)) * 0.6 + CloudNoise(float3(xz * 1.3, 4.7)) * 0.4;
+    // [snowthin] the thin snow's cover here (its picture's red), at its own repeat: where the snow lies first as it builds up
+    [branch] if (snowSlice[3].x >= 0) {
+      float s = snowSlice[3].w;
+      snowCover = wetNormalMaps.SampleGrad(samplerAniso, float3(xz * s, snowSlice[3].x), stepX * s, stepY * s).r;
+    }
     // where it is trodden: packed (the deep tracks' troughs; else the snow tracks' picture, as lighting.h reads it)
     float trodden = deepTrack.w > 0.5 ? deepTrack.x : 0;
 #ifdef SURFACE_TRACKS
@@ -875,14 +889,8 @@ float4 Ground(VOut i) {
   [branch] if (more.y > 0.5) wetPatch = CloudNoise(float3(xz * 0.21, 6.3));
 #endif
 #ifdef GROUND_SNOW
-  // [snow ground] what is round the place, by the ground's own slope (read as the relief reads it), before the relief
-  [branch] if (weather.y > 0) {
-    float4 around = normalMap.SampleLevel(samplerLinearClamp, uv, 0);
-    float3 own;
-    own.xz = (around.ag * 2 - 1) * mirrored;
-    own.y = sqrt(saturate(1 - dot(own.xz, own.xz)));
-    SnowAround(uv, own);
-  }
+  // [snow ground] what is round the place, by the ground's own slope ([snowfix] from its heights), before the relief
+  [branch] if (weather.y > 0) SnowAround(uv, xz);
 #endif
 #ifdef GROUND_PARALLAX
   // [parallax] where the layers' pictures (and the deep tracks' field) are read: along the eye's ray into their relief,
@@ -1055,6 +1063,19 @@ float4 Ground(VOut i) {
 #endif
 #ifdef GROUND_SNOW
     [branch] if (weather.y > 0) {  // [snow ground] the snow's make-up here (laid by lighting.h's snow)
+      // [snowfix] a steep face as it goes bare in the snow: the layers' pictures, laid from straight above, are drawn stretched
+      // down a steep face (streaks of grass and bushes on a shore's bank); there the ground shows its colours on the whole
+      // instead, colder and darker as frozen earth and rock, in slow patches, and its own slope without the stretched small
+      // shapes. Only as snow comes (the summer's ground is as it was).
+      [branch] if (snowSteep > 0) {
+        float k = snowSteep * saturate(weather.y * 3);
+        float3 average = LayersAverage(low, high, upper);
+        float3 frozen = lerp(average, dot(average, float3(0.3, 0.59, 0.11)) * float3(0.94, 0.97, 1.02), 0.45);
+        frozen *= 0.7 + 0.3 * CloudNoise(float3(LXZ * 0.6, 3.9)) + 0.15 * (CloudNoise(float3(LXZ * 2.3, 6.1)) - 0.5);
+        albedo.rgb = lerp(albedo.rgb, frozen, k);
+        N = normalize(lerp(N, base, k * 0.8));
+        creases = lerp(creases, 0.85, k);
+      }
       SnowMakeUp(LXZ, stepX, stepY, base, N, low, high);
       [branch] if (snowWind.z > 0.5) {  // (a view for checking it: MOHO64_DEBUG_SNOW = 1 sky, 2 crowns, 3 the wind's laying, 4 drift, 5 depth, 6 edge)
         float v = snowWind.z < 1.5 ? snowSky : snowWind.z < 2.5 ? snowShelterHere.b : snowWind.z < 3.5 ? snowShelterHere.a
@@ -1245,7 +1266,7 @@ struct TerrainConstants {
   float mudInfo[4];  // [mud ruts]
   float parallax[4];  // [parallax] (read only by the ground's parallax pipeline)
   float wetInfo[10][4], wetTile[10][4], more[4];  // [rain ground] [ground mud] (read only by the GROUND_MORE pipeline)
-  float snowInfo[4], snowSlice[3][4], snowWind[4], snowTune[4];  // [snow ground] (read only by the GROUND_SNOW pipeline)
+  float snowInfo[4], snowSlice[4][4], snowWind[4], snowTune[4];  // [snow ground] (read only by the GROUND_SNOW pipeline; [snowthin] a 4th)
 };
 
 // [snow ground] What the ground's snow pipeline tells lighting.h's snow (terrain.cpp's SnowAround and SnowMakeUp work them out):
@@ -1253,6 +1274,7 @@ struct TerrainConstants {
 const char kSnowStatics[] = R"hlsl(#define GROUND_SNOW 1
 static float snowLie = 1, snowLess = 0, snowTrodden = 0, snowSky = 1, snowBareSky = 1, snowWet = 0, snowDrift = 0, snowMottle = 0.5;
 static float2 snowEdge = float2(-1, 0);  // (x: the heights' term, -1 none; y: how much it sharpens the edge)
+static float snowCover = -1;  // [snowthin] the thin snow's cover here (0..1; -1 none: the heights break the edge up)
 static float4 snowSurface = float4(0.50, 0.53, 0.58, 0);  // (linear; w 1 = from the materials)
 static float3 snowMatter = float3(1, 0.7, 0.5);           // (creases, roughness, height)
 static float3 snowNormal = float3(0, 1, 0);
@@ -1798,6 +1820,13 @@ void Terrain::Remaster(const MapData& m, std::vector<std::string>* arh) {
       ++found;
     }
     if (found) printf("render: the snow ground: %d snow materials for the map (%s)\n", found, tier);
+    // [snowthin] "thin": a material, "thin_cover": its cover (one channel, tiling with it): where the snow lies first as it builds
+    // up, over the map's own ground (the material's real size gives the cover's repeat; without it the fresh one's)
+    if (const std::string cover = snow["thin_cover"].StringOr(std::string()); found && !cover.empty()) {
+      thinCoverFile_ = folder + cover;
+      thinMetres_ = static_cast<float>(remap["materials"][snow["thin"].StringOr(std::string())]["real_size_m"].NumberOr(0));
+      printf("render: the snow ground: the thin snow's cover %s\n", cover.c_str());
+    }
   }
   // [snow mask] the map's painted drift mask (read when the snow's shelter is made)
   if (const std::string mask = layers["snow_drift_mask"].StringOr(std::string()); !mask.empty()) snowMaskFile_ = folder + mask;
@@ -2058,6 +2087,9 @@ bool Terrain::Load(const MapData* map, std::string* error) {
     for (auto& files : snowFiles_)
       for (std::string& f : files) f.clear();
     std::fill(snowMetres_, snowMetres_ + 3, 0.0f);
+    thinCoverFile_.clear();  // [snowthin]
+    thinMetres_ = 0;
+    thinSlice_ = -1;
     snowTried_ = snowAny_ = extrasWet_ = extrasSnow_ = false;
     if (shelter_) device_->Destroy(shelter_);
     shelter_ = {};
@@ -2407,6 +2439,12 @@ bool Terrain::ReadExtras(bool wet, bool snow) {
     paths.push_back(snowFiles_[k][2]);
     normals.push_back(snowFiles_[k][1]);
   }
+  // [snowthin] the thin snow's cover with the normals (one channel: TextureCache::Layers puts it in both of theirs)
+  int thinListed = -1;
+  if (snow && snowListed[0] >= 0 && !thinCoverFile_.empty()) {
+    thinListed = static_cast<int>(normals.size());
+    normals.push_back(thinCoverFile_);
+  }
   // (the twins only with the layers' own third maps; the snow also on a map whose layers have none)
   if (normals.empty() || (anyWet && !materials_)) return false;
   std::vector<bool> present, normalPresent;
@@ -2453,6 +2491,9 @@ bool Terrain::ReadExtras(bool wet, bool snow) {
     }
     ++n;
   }
+  thinSlice_ = thinListed >= 0 && normalPresent[static_cast<size_t>(thinListed)] ? thinListed : -1;  // [snowthin]
+  if (thinListed >= 0 && thinSlice_ < 0)
+    fprintf(stderr, "render: the snow ground: the thin snow's cover %s cannot be read, or is not of the normals' size: left out\n", thinCoverFile_.c_str());
   if (materials_) device_->Destroy(materials_);
   if (wetNormals_) device_->Destroy(wetNormals_);
   materials_ = set;
@@ -2763,6 +2804,10 @@ void Terrain::Draw(const View& view, bool shadowPass, bool beyondToo) {
     c.snowInfo[3] = 1;
     for (int k = 0; k < 3; ++k)
       for (int j = 0; j < 4; ++j) c.snowSlice[k][j] = j == 3 ? 1 / SnowSize(k) : materials ? static_cast<float>(snowSlice_[k][j]) : -1.0f;
+    // [snowthin] (the cover's repeat: the thin material's real size by the layers' world units a metre, as SnowSize)
+    c.snowSlice[3][0] = materials && thinSlice_ >= 0 ? static_cast<float>(thinSlice_) : -1.0f;
+    c.snowSlice[3][1] = c.snowSlice[3][2] = -1;
+    c.snowSlice[3][3] = 1 / (SnowSize(0) * (thinMetres_ > 0 && snowMetres_[0] > 0 ? thinMetres_ / snowMetres_[0] : 1.0f));
     const float wind = std::sqrt(snowWind[0] * snowWind[0] + snowWind[1] * snowWind[1]);
     c.snowWind[0] = wind > 0 ? snowWind[0] / wind : 0.0f;
     c.snowWind[1] = wind > 0 ? snowWind[1] / wind : 0.0f;

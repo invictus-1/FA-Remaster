@@ -688,7 +688,11 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
     [branch] if (snowEdge.x >= 0) {
       lying = smoothstep(bar - 0.15, bar + 0.35, takes) * smoothstep(0.25, 0.5, N.y);
       lying = saturate(lying + (snowMottle - 0.5) * 3.2 * lying * (1 - lying));
-      lying = lerp(lying, saturate((snowEdge.x + lying * 1.6 - 1) / 0.6), snowEdge.y);
+      // ([snowthin] with the map's thin snow's cover: as it builds up the snow lies where the cover is over what is still bare
+      // of it (1 - how much lies), in the real scan's patches over the map's own ground, and whole once it all lies; without
+      // it, broken up by the ground's and its own heights)
+      float edged = snowCover >= 0 ? smoothstep(-0.08, 0.08, snowCover - (1 - lying) * 1.1) : saturate((snowEdge.x + lying * 1.6 - 1) / 0.6);
+      lying = lerp(lying, edged, snowEdge.y);
     }
     occlusion = lerp(occlusion, snowMatter.x, lying * snowSurface.w);
 #endif

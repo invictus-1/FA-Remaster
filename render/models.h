@@ -185,6 +185,18 @@ struct Model {
   // were made and judged for. Empty: levels are chosen by their triangle counts (mesh_renderer.h).
   std::vector<float> levelPixels;
   std::vector<ModelLight> lights;  // a remastered unit's lamps (at most 16)
+  // [hdprints] A remastered unit's own ground prints for the deep tracks (its folder's <ID>_prints.bp, Prints { Tread = {
+  // Texture, Width, Length }, Tyre = { Texture, Width, Length }, Foot = { Texture, Size = { x, z } } }; deep_tracks.h): each a
+  // picture of how deep the ground is pressed (one channel, white deepest) and its size in world units (a tread's or tyre's
+  // picture one piece of the track, laid end to end; a foot's the sole). An empty texture: none of that kind.
+  struct Print {
+    std::string texture;     // the picture's path
+    float width = 0, length = 0;  // world units across (the unit's x) and along (its z; the picture's top its front)
+  };
+  struct Prints {
+    Print tread, tyre, foot;
+    bool Any() const { return !tread.texture.empty() || !tyre.texture.empty() || !foot.texture.empty(); }
+  } prints;
   // [plants] One of the game's trees (its blueprint's script class Tree or TreeGroup): the simulation knocks it over, burns
   // and removes it, so plants that react never bend or burn it by the picture alone (World::plantsReact).
   bool simTree = false;

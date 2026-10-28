@@ -2889,17 +2889,24 @@ void World::PressUnit(const FrameUnit& u, const Frame& frame, const std::string&
   // (a walker by the bones that stand for its feet, where its pose has them)
   const std::string path = models.UnitBlueprintPath(blueprint);
   Vec3 feet[8];
+  float turns[8] = {};  // [hdprints] (how far each foot is turned from the unit's way, from its rest: its own sole turned with it)
   int footCount = 0;
   for (uint32_t b : trackField.FootBones(model, path)) {
     // (at rest, unless the pose moves it; the way from this beat's pose to the next's, as the model is drawn)
     Vec3 now = model->bones[b].position * model->scale, next = now;
+    Quat turned = model->bones[b].rotation;
     for (uint32_t i = u.firstBone; i < u.firstBone + u.boneCount && i < frame.bones.size(); ++i)
-      if (frame.bones[i].bone == b) now = next = {frame.bones[i].position[0], frame.bones[i].position[1], frame.bones[i].position[2]};
+      if (frame.bones[i].bone == b) {
+        now = next = {frame.bones[i].position[0], frame.bones[i].position[1], frame.bones[i].position[2]};
+        turned = {frame.bones[i].orientation[0], frame.bones[i].orientation[1], frame.bones[i].orientation[2], frame.bones[i].orientation[3]};
+      }
     for (uint32_t i = u.nextFirstBone; i < u.nextFirstBone + u.nextBoneCount && i < frame.bones.size(); ++i)
       if (frame.bones[i].bone == b) next = {frame.bones[i].position[0], frame.bones[i].position[1], frame.bones[i].position[2]};
+    const Vec3 way = Rotate(Mul(turned, Conjugate(model->bones[b].rotation)), Vec3{0, 0, 1});
+    turns[footCount] = std::fabs(way.x) + std::fabs(way.z) > 1e-3f ? std::atan2(way.x, way.z) : 0.0f;
     feet[footCount++] = position + Rotate(orientation, now + (next - now) * frame.blend);
   }
-  trackField.AddUnit(u.id, path, position, orientation, (model->boundsMax - model->boundsMin) * model->scale, feet, footCount);
+  trackField.AddUnit(u.id, path, position, orientation, (model->boundsMax - model->boundsMin) * model->scale, feet, footCount, model, turns);
 }
 
 // [hitches] (readAhead, world.h) Each frame: the next tiers' models and the pads' materials a step on (at most a texture or

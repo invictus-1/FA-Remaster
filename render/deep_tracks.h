@@ -19,6 +19,11 @@
 // pictures. Units that lay none press their own as they move: two bands under a vehicle; a walker its feet where
 // they are set down (or, where its pose does not show them, prints left and right by turns as it goes); hover
 // units and aircraft press nothing.
+// [hdprints] A remastered unit may bring its own prints (Model::prints, its folder's <ID>_prints.bp): pictures of how deep the
+// ground is pressed (white deepest) and their sizes in world units. Where a script lays a print, it still says where and
+// when, and the unit's own picture takes the game's place (a walker's Foot, else its Tread or Tyre, at its own size); a
+// vehicle that lays none presses its Tread or Tyre in place of the two bands, a piece at a time end to end; a walker its
+// Foot where its feet are set down, turned with the foot.
 // Tracks fade: falling snow fills them (in place of the old picture of trodden snow, tracks.h, while this is
 // on), rain softens them, the wind blows sand smooth, grass rises again; mud and dirt keep them longest. How
 // fast goes by the kind of ground there (Terrain::GroundKinds) and the weather.
@@ -79,8 +84,10 @@ class DeepTracks {
   // where it is, how it is turned and its model's size (world units). It presses its outline where it goes,
   // unless it lays prints of its own; a walker presses its feet where they are set down (`feet`: where the bones
   // FootBones gives are now, world units; none, or none seen setting down: prints left and right by turns).
+  // ([hdprints] `model`: its own prints, Model::prints, where it has them; `footTurns`: how far each foot is turned from
+  // the way the unit faces, radians, as decals' headings; none: not turned)
   void AddUnit(uint32_t id, const std::string& blueprintPath, Vec3 position, const Quat& orientation, Vec3 size,
-               const Vec3* feet = nullptr, int footCount = 0);
+               const Vec3* feet = nullptr, int footCount = 0, const Model* model = nullptr, const float* footTurns = nullptr);
   // A print a script lays under a unit (CreateSplatOnBone): its picture's name, its middle on the ground, its
   // size (world units) and heading (radians, as decals take it). True: it is pressed into the field (the caller
   // lays no picture of it); false: off, or its picture is not there.
@@ -115,6 +122,7 @@ class DeepTracks {
                            // rows of its picture its alpha covers (first, last, as shares of its height)
     gfx::Texture texture;  // shape 0
     bool tread = false;    // shape 0: a piece of a tread's line (cut sharp at its ends, its berm to its sides only)
+    bool hd = false;       // shape 0: [hdprints] a unit's own print (its red how deep, white deepest)
   };
   struct Vertex {
     float x, y;              // in the atlas, -1..1
@@ -157,12 +165,26 @@ class DeepTracks {
     float x, z;
     double clock;
     gfx::Texture texture;
+    int phase = 0;           // [hdprints] a unit's own tread: which part of its picture the last piece was (parts: PressPrint)
   };
   struct Picture {           // a print's picture, and the rows of it its alpha covers (as shares of its height from
     gfx::Texture texture;    // its top: the game's short treads lie at the bottom of a large square)
     float first = 0, last = 1;
+    bool hd = false;         // [hdprints] a unit's own print (all of it the piece; its red how deep)
   };
-  void Footprint(Vec3 at, float heading, float width, float weight);
+  // [hdprints] A unit's own prints, by its blueprint (copied from its model's, Model::prints, the first time it is seen).
+  struct OwnPrint {
+    std::string texture;
+    float width = 0, length = 0;
+  };
+  struct OwnPrints {
+    OwnPrint tread, tyre, foot;
+  };
+  // A walker's footprint (`sole`: [hdprints] its own picture, sizeX x sizeZ; none: a soft disc by its width).
+  void Footprint(Vec3 at, float heading, float width, float weight, const Picture* sole = nullptr, float sizeX = 0, float sizeZ = 0);
+  // A print pressed by its picture (AddPrint's, once the picture is known): `foot` one where it is laid, else a tread's piece
+  // continuing its line.
+  void PressPrint(uint32_t id, Vec3 centre, float sizeX, float sizeZ, float heading, const Picture& pic, bool foot);
 
   void Quads(const Stamp& s);
   void Quad(const Stamp& s, int level);
@@ -170,7 +192,7 @@ class DeepTracks {
   void RegionQuad(int level, float shape);                       // the level's whole region
   void Emit(const Vertex corners[4]);
   const UnitInfo& Info(const std::string& blueprintPath);
-  const Picture& PictureOf(const std::string& name);
+  const Picture& PictureOf(const std::string& name, bool hd = false);
   float RegionX1(int level) const;
 
   gfx::Device* device_;
@@ -196,6 +218,8 @@ class DeepTracks {
   std::unordered_map<uint32_t, double> printers_;  // units that lay prints: when they last did
   std::unordered_map<uint32_t, std::vector<Line>> lines_;
   std::unordered_map<std::string, Picture> pictures_;
+  std::unordered_map<std::string, OwnPrints> ownPrints_;      // [hdprints] by blueprint
+  std::unordered_map<uint32_t, const OwnPrints*> unitPrints_;  // [hdprints] by unit (those that have any)
   const bool debug_ = std::getenv("MOHO64_DEBUG_TRACKS") != nullptr;  // (MOHO64_DEBUG_TRACKS=1: what it drew, once a second)
   int debugStamps_ = 0, debugQuads_ = 0, debugFades_ = 0;
   // (MOHO64_DEBUG_TRACKS=2: also the field itself on the ground: red the trough, green the berm, blue the level read;

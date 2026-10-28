@@ -25,7 +25,7 @@ const char kShader[] = R"hlsl(
 struct VIn {
   float2 position : POSITION;
   float2 across : TEXCOORD0;
-  float4 amounts : TEXCOORD1;  // how much it presses down, pushes up; its texels across (a picture's); unused
+  float4 amounts : TEXCOORD1;  // how much it presses down, pushes up; its texels across (a picture's); 1 a tread's piece, + 2 an HD print
   float4 shape : TEXCOORD2;    // 0 a picture, 1 a disc, 2 two bands; the bands' middles, half widths; the quad's margin
   float4 region : TEXCOORD3;   // the atlas texels it may write: x0, y0, x1, y1
 };
@@ -50,10 +50,12 @@ bool Outside(VOut i) { return any(i.position.xy < i.region.xy) || any(i.position
 Texture2D print : register(t0);
 // A print's alpha at a place of it (nothing outside the picture), at a level of its mips. A tread's piece fades
 // out only to its sides: along its length it goes on into the next piece, laid end to end with it, and a fading
-// there would leave a seam across the track at every join.
-float PrintAlpha(float2 uv, float lod, bool tread) {
+// there would leave a seam across the track at every join. [hdprints] `hd`: a unit's own print (Model::prints): its one
+// channel (red) is how deep it presses, white deepest.
+float PrintAlpha(float2 uv, float lod, bool tread, bool hd) {
   float inside = saturate((tread ? min(uv.x, 1 - uv.x) : min(min(uv.x, uv.y), min(1 - uv.x, 1 - uv.y))) * 40);
-  return inside > 0 ? print.SampleLevel(samplerLinearClamp, uv, lod).a * inside : 0;
+  float4 c = inside > 0 ? print.SampleLevel(samplerLinearClamp, uv, lod) : 0;
+  return (hd ? c.r : c.a) * inside;
 }
 float Band(float alpha) { return smoothstep(0.05, 0.3, alpha); }
 
@@ -70,7 +72,8 @@ float4 PSStamp(VOut i) : SV_Target {
     float fine = log2(max(float(w) / max(i.amounts.z, 1), 1));
     float soft = clamp(fine + 2, fine, max(log2(float(w)) - 3, fine));
     float2 uv = p * 0.5 + 0.5;
-    bool tread = i.amounts.w > 0.5;
+    bool hd = i.amounts.w > 1.5, tread = i.amounts.w - (hd ? 2 : 0) > 0.5;  // [hdprints]
+    if (hd) uv.y = 1 - uv.y;  // ([hdprints] a unit's own picture has its top at the front; the game's at the back)
     float2 band_uv = uv;
     if (tread) {
       // a tread's piece is the strip of its picture the alpha covers (shape.y to shape.z of its height), laid end to
@@ -81,20 +84,21 @@ float4 PSStamp(VOut i) : SV_Target {
       band_uv = float2(uv.x, (i.shape.y + i.shape.z) * 0.5);
       soft = min(soft, max(log2(max((i.shape.z - i.shape.y) * float(h) * 0.5, 1)), fine));
     }
-    float band = Band(PrintAlpha(band_uv, soft, tread));
-    trough = band * lerp(0.45, 1.0, smoothstep(0.15, 0.6, PrintAlpha(uv, fine, tread)));
+    float band = Band(PrintAlpha(band_uv, soft, tread, hd));
+    // ([hdprints] a unit's own print says how deep itself: its picture as it is, at the level its texels in the field read)
+    trough = hd ? saturate(PrintAlpha(uv, fine, tread, true)) : band * lerp(0.45, 1.0, smoothstep(0.15, 0.6, PrintAlpha(uv, fine, tread, false)));
     float near = 0, far = 0;
     if (tread) {
       [unroll] for (int k = -1; k <= 1; k += 2) {
-        near += Band(PrintAlpha(band_uv + float2(k * 0.06, 0), soft, true)) * 4;
-        far += Band(PrintAlpha(band_uv + float2(k * 0.12, 0), soft, true)) * 4;
+        near += Band(PrintAlpha(band_uv + float2(k * 0.06, 0), soft, true, hd)) * 4;
+        far += Band(PrintAlpha(band_uv + float2(k * 0.12, 0), soft, true, hd)) * 4;
       }
     } else {
       [unroll] for (int k = 0; k < 8; ++k) {
         float a = k * 0.7853982;
         float2 d = float2(cos(a), sin(a));
-        near += Band(PrintAlpha(uv + d * 0.06, soft, false));
-        far += Band(PrintAlpha(uv + d * 0.12, soft, false));
+        near += Band(PrintAlpha(uv + d * 0.06, soft, false, hd));
+        far += Band(PrintAlpha(uv + d * 0.12, soft, false, hd));
       }
     }
     ring = saturate(((near * 0.6 + far * 0.4) / 8 - band) * 2.4);
@@ -331,6 +335,7 @@ void DeepTracks::SetMap(float width, float height) {
   printers_.clear();
   lines_.clear();
   walkers_.clear();
+  unitPrints_.clear();  // [hdprints]
   lastPressed_ = -1e30;
 }
 
@@ -369,6 +374,7 @@ void DeepTracks::Begin(Vec3 target, double clock) {
   if (printers_.size() > 40000) printers_.clear();
   if (lines_.size() > 20000) lines_.clear();
   if (walkers_.size() > 40000) walkers_.clear();
+  if (unitPrints_.size() > 40000) unitPrints_.clear();  // [hdprints]
 }
 
 const std::vector<uint32_t>& DeepTracks::FootBones(const Model* model, const std::string& blueprintPath) {
@@ -443,12 +449,13 @@ const DeepTracks::UnitInfo& DeepTracks::Info(const std::string& blueprintPath) {
   return info;
 }
 
-const DeepTracks::Picture& DeepTracks::PictureOf(const std::string& name) {
+const DeepTracks::Picture& DeepTracks::PictureOf(const std::string& name, bool hd) {
   auto found = pictures_.find(name);
   if (found != pictures_.end()) return found->second;
   Picture& p = pictures_[name];
   p.texture = picture ? picture(name) : gfx::Texture{};
-  if (p.texture) {  // (the share of its length the alpha covers: its file read once more)
+  p.hd = hd;  // [hdprints] (a unit's own: all of the picture is the piece)
+  if (p.texture && !hd) {  // (the share of its length the alpha covers: its file read once more)
     std::string path = name;
     AlphaSpan span;
     if (path.empty() || path[0] != '/') {
@@ -469,15 +476,52 @@ const DeepTracks::Picture& DeepTracks::PictureOf(const std::string& name) {
 }
 
 void DeepTracks::AddUnit(uint32_t id, const std::string& blueprintPath, Vec3 position, const Quat& orientation, Vec3 size, const Vec3* feet,
-                         int footCount) {
+                         int footCount, const Model* model, const float* footTurns) {
   if (!on || !atlas_) return;
   const UnitInfo& info = Info(blueprintPath);
   walkers_[id] = info.walks;
+  // [hdprints] its own prints, where its model brings them (by its blueprint, copied once; by the unit, for the prints its
+  // scripts lay: AddPrint)
+  const OwnPrints* own = nullptr;
+  if (model && model->prints.Any()) {
+    auto f = ownPrints_.find(blueprintPath);
+    if (f == ownPrints_.end()) {
+      OwnPrints o;
+      auto copy = [](const Model::Print& from, OwnPrint* to) { to->texture = from.texture, to->width = from.width, to->length = from.length; };
+      copy(model->prints.tread, &o.tread);
+      copy(model->prints.tyre, &o.tyre);
+      copy(model->prints.foot, &o.foot);
+      f = ownPrints_.emplace(blueprintPath, std::move(o)).first;
+      if (debug_)
+        printf("render: deep tracks: %s's own prints: tread %s, tyre %s, foot %s\n", blueprintPath.c_str(), f->second.tread.texture.c_str(),
+               f->second.tyre.texture.c_str(), f->second.foot.texture.c_str());
+    }
+    own = &f->second;
+    unitPrints_[id] = own;
+  }
+  // (its pictures, where it has them and they could be read)
+  const Picture* sole = own && !own->foot.texture.empty() ? &PictureOf(own->foot.texture, true) : nullptr;
+  if (sole && !sole->texture) sole = nullptr;
+  const OwnPrint* band = own ? (!own->tread.texture.empty() ? &own->tread : !own->tyre.texture.empty() ? &own->tyre : nullptr) : nullptr;
+  const Picture* bandPicture = band ? &PictureOf(band->texture, true) : nullptr;
+  if (bandPicture && !bandPicture->texture) bandPicture = nullptr;
   if (debug_ && frame_ % 60 == 0)
     printf("render: deep tracks: unit %u (%s): hovers %d flies %d walks %d, %d feet, at %.2f,%.2f, %.2f over the ground %.2f, prints %d\n", id, blueprintPath.c_str(),
            info.hovers, info.flies, info.walks, footCount, position.x, position.z, position.y, groundHeight ? groundHeight(position.x, position.z) : 0.0f,
            printers_.count(id) ? 1 : 0);
   if (info.hovers || info.flies) return;
+  // [hdprints] a vehicle with its own tread or tyre: that picture a piece at a time, end to end along its way, each frame
+  // (PressPrint's line), in place of the two bands, and of the tread prints its scripts lay (AddPrint: laid where the script
+  // lays them, a fifth of a second apart, the pieces would follow a bend in long chords, and the scripts pause them)
+  if (bandPicture && !info.walks) {
+    if (groundHeight) {
+      const float ground = groundHeight(position.x, position.z);
+      if (ground < waterLevel - 0.05f || position.y - ground > 0.35f) return;
+    }
+    const Vec3 ahead = Rotate(orientation, {0, 0, 1});
+    PressPrint(id, position, band->width, band->length, std::atan2(ahead.x, ahead.z), *bandPicture, false);
+    return;
+  }
   {  // a unit that lays prints: they are its track
     auto p = printers_.find(id);
     if (p != printers_.end() && clock_ - p->second < 3) return;
@@ -514,7 +558,8 @@ void DeepTracks::AddUnit(uint32_t id, const std::string& blueprintPath, Vec3 pos
       } else if (f.falling[k]) {  // (it stopped going down)
         f.falling[k] = false;
         if (!f.pressed[k] && f.height[k] < lowest + lift && moved > 1e-4f && moved < 30) {
-          Footprint(feet[k], heading, width, weight);
+          Footprint(feet[k], heading + (footTurns ? footTurns[k] : 0.0f), width, weight, sole, sole ? own->foot.width : 0,
+                    sole ? own->foot.length : 0);
           f.pressed[k] = true;
           f.pressedAt[k] = f.height[k];
           f.stepped = clock_;
@@ -535,7 +580,8 @@ void DeepTracks::AddUnit(uint32_t id, const std::string& blueprintPath, Vec3 pos
     if (f.walked >= stride) {
       f.walked = std::fmod(f.walked, stride);
       f.side = -f.side;
-      Footprint(position + Rotate(orientation, {f.side * 0.2f * width, 0, 0}), heading, width, weight);
+      Footprint(position + Rotate(orientation, {f.side * 0.2f * width, 0, 0}), heading, width, weight, sole, sole ? own->foot.width : 0,
+                sole ? own->foot.length : 0);
     }
     return;
   }
@@ -577,7 +623,7 @@ void DeepTracks::AddUnit(uint32_t id, const std::string& blueprintPath, Vec3 pos
 }
 
 // A walker's footprint (one it does not lay itself): a sole pressed in, the ground pushed up round it.
-void DeepTracks::Footprint(Vec3 at, float heading, float width, float weight) {
+void DeepTracks::Footprint(Vec3 at, float heading, float width, float weight, const Picture* sole, float sizeX, float sizeZ) {
   Stamp s{};
   s.x = at.x;
   s.z = at.z;
@@ -587,6 +633,13 @@ void DeepTracks::Footprint(Vec3 at, float heading, float width, float weight) {
   s.halfZ = 0.1f * width;
   s.trough = 0.9f * weight;
   s.berm = 0.5f * weight;
+  if (sole && sizeX > 0 && sizeZ > 0) {  // [hdprints] its own sole, at its own size
+    s.shape = 0;
+    s.texture = sole->texture;
+    s.hd = true;
+    s.halfX = 0.5f * sizeX;
+    s.halfZ = 0.5f * sizeZ;
+  }
   stamps_.push_back(s);
   lastPressed_ = clock_;
 }
@@ -594,9 +647,32 @@ void DeepTracks::Footprint(Vec3 at, float heading, float width, float weight) {
 bool DeepTracks::AddPrint(uint32_t id, Vec3 centre, float sizeX, float sizeZ, float heading, const std::string& texture) {
   if (debug_ && printers_.count(id) == 0) printf("render: deep tracks: unit %u lays %s, %.2f x %.2f\n", id, texture.c_str(), sizeX, sizeZ);
   if (!on || !atlas_ || sizeX == 0 || sizeZ == 0) return false;
-  const Picture& pic = PictureOf(texture);
-  if (!pic.texture) return false;
+  // a walker's prints are footprints, each where it is laid; by the name where the unit is not known yet
+  auto walker = walkers_.find(id);
+  const std::string low = walker == walkers_.end() ? Lower(texture) : std::string();
+  const bool foot = walker != walkers_.end() ? walker->second : low.find("print") != std::string::npos || low.find("foot") != std::string::npos;
+  // [hdprints] the unit's own picture in the game's place, at its own size (where the script lays it, turned as it lays it)
+  const Picture* pic = nullptr;
+  auto own = unitPrints_.find(id);
+  if (own != unitPrints_.end()) {
+    const OwnPrint* mine = foot ? &own->second->foot : !own->second->tread.texture.empty() ? &own->second->tread : &own->second->tyre;
+    if (!mine->texture.empty()) {
+      const Picture& p = PictureOf(mine->texture, true);
+      if (p.texture && !foot) {  // (its tread or tyre: pressed along its way by AddUnit while the script lays them)
+        printers_[id] = clock_;
+        return true;
+      }
+      if (p.texture) pic = &p, sizeX = mine->width, sizeZ = mine->length;
+    }
+  }
+  if (!pic) pic = &PictureOf(texture);
+  if (!pic->texture) return false;
   printers_[id] = clock_;
+  PressPrint(id, centre, sizeX, sizeZ, heading, *pic, foot);
+  return true;
+}
+
+void DeepTracks::PressPrint(uint32_t id, Vec3 centre, float sizeX, float sizeZ, float heading, const Picture& pic, bool foot) {
   lastPressed_ = clock_;
   sizeX = std::fabs(sizeX), sizeZ = std::fabs(sizeZ);
   const float weight = std::clamp(std::sqrt(sizeX * sizeZ * (pic.last - pic.first)) / 0.5f, 0.75f, 2.2f);
@@ -610,13 +686,10 @@ bool DeepTracks::AddPrint(uint32_t id, Vec3 centre, float sizeX, float sizeZ, fl
   s.berm = 0.6f * weight;
   s.shape = 0;
   s.texture = pic.texture;
-  // a walker's prints are footprints, each where it is laid; by the name where the unit is not known yet
-  auto walker = walkers_.find(id);
-  const std::string low = walker == walkers_.end() ? Lower(texture) : std::string();
-  const bool foot = walker != walkers_.end() ? walker->second : low.find("print") != std::string::npos || low.find("foot") != std::string::npos;
+  s.hd = pic.hd;  // [hdprints]
   if (foot) {
     stamps_.push_back(s);
-    return true;
+    return;
   }
   // a tread's piece: the line of them it continues (the same picture, the line's end near). A piece is the strip of the
   // picture its alpha covers, where the script lays it; the line is laid a whole piece at a time, end to end from where
@@ -624,11 +697,15 @@ bool DeepTracks::AddPrint(uint32_t id, Vec3 centre, float sizeX, float sizeZ, fl
   // no overlaps, so the cleats' pattern runs on unbroken (pieces laid where the script lays them, every fifth of a
   // second or so, would overlap or leave gaps by the unit's speed); what is left short of a piece waits for the next
   // print.
-  const float piece = std::max(sizeZ * (pic.last - pic.first), 0.02f), off = ((pic.first + pic.last) * 0.5f - 0.5f) * sizeZ;
+  // ([hdprints] a unit's own tread picture is one piece of its track, laid in four parts, each the next quarter of the
+  // picture, so that a bend is followed four times as closely and its pattern still runs on unbroken: its picture's top is
+  // the front, so the part laid in front of the last is the quarter above it)
+  const int parts = pic.hd ? 4 : 1;
+  const float piece = std::max(sizeZ * (pic.last - pic.first) / static_cast<float>(parts), 0.02f), off = ((pic.first + pic.last) * 0.5f - 0.5f) * sizeZ;
   const float fx = std::sin(heading), fz = std::cos(heading);
   s.tread = true;
   s.bandX = pic.first;
-  s.bandHalf = pic.last;
+  s.bandHalf = pic.hd ? 1.0f / static_cast<float>(parts) : pic.last;
   s.halfZ = piece * 0.5f;
   s.x = centre.x + fx * off;  // (the strip's middle)
   s.z = centre.z + fz * off;
@@ -646,9 +723,9 @@ bool DeepTracks::AddPrint(uint32_t id, Vec3 centre, float sizeX, float sizeZ, fl
   }
   if (!line) {
     lines.erase(std::remove_if(lines.begin(), lines.end(), [&](const Line& l) { return clock_ - l.clock >= 2; }), lines.end());
-    if (lines.size() < 8) lines.push_back({frontX, frontZ, clock_, pic.texture});
+    if (lines.size() < 8) lines.push_back({frontX, frontZ, clock_, pic.texture, 0});
     stamps_.push_back(s);
-    return true;
+    return;
   }
   line->clock = clock_;
   float dx = frontX - line->x, dz = frontZ - line->z, far = std::sqrt(dx * dx + dz * dz);
@@ -666,6 +743,11 @@ bool DeepTracks::AddPrint(uint32_t id, Vec3 centre, float sizeX, float sizeZ, fl
     e.x = line->x + ux * piece * 0.5f;
     e.z = line->z + uz * piece * 0.5f;
     e.heading = std::atan2(ux, uz);
+    if (parts > 1) {  // [hdprints] (the next part of the picture)
+      line->phase = (line->phase + parts - 1) % parts;
+      e.bandX = static_cast<float>(line->phase) / static_cast<float>(parts);
+      e.bandHalf = static_cast<float>(line->phase + 1) / static_cast<float>(parts);
+    }
     stamps_.push_back(e);
     line->x += ux * piece;
     line->z += uz * piece;
@@ -673,7 +755,6 @@ bool DeepTracks::AddPrint(uint32_t id, Vec3 centre, float sizeX, float sizeZ, fl
     ++laid;
   }
   if (laid == 40) line->x = frontX, line->z = frontZ;  // (a jump: the line goes on from here)
-  return true;
 }
 
 void DeepTracks::Emit(const Vertex c[4]) {
@@ -734,7 +815,7 @@ void DeepTracks::Quad(const Stamp& s, int level) {
       Vertex v[4];
       for (int k = 0; k < 4; ++k) {
         const float atlasX = x0 + px + ox[k], atlasY = pz + oz[k];
-        v[k] = Vertex{atlasX * sx - 1, 1 - atlasY * sy, cornerX[k], cornerZ[k], trough, berm, across, s.tread ? 1.0f : 0.0f,
+        v[k] = Vertex{atlasX * sx - 1, 1 - atlasY * sy, cornerX[k], cornerZ[k], trough, berm, across, (s.tread ? 1.0f : 0.0f) + (s.hd && shape == 0 ? 2.0f : 0.0f),
                       static_cast<float>(shape), s.bandX, s.bandHalf, margin, x0, 0, x1, y1};
       }
       Emit(v);

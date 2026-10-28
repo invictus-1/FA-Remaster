@@ -430,6 +430,19 @@ gfx::Texture TextureCache::Layers(const std::vector<std::string>& paths, std::ve
       }
       mixed = mixed || image.width == first.width;
     }
+    // [snowthin] a one-channel picture (BC4) in a set of two-channel ones (BC5): its channel in both (a BC5 block is two BC4
+    // blocks, red then green; the levels' blocks in the same order)
+    std::vector<uint8_t> widened;
+    if (each && first.format == gfx::Format::BC5 && image.format == gfx::Format::BC4 && image.dataSize * 2 == each) {
+      widened.resize(each);
+      for (size_t b = 0; b + 8 <= image.dataSize; b += 8) {
+        std::memcpy(widened.data() + b * 2, image.data + b, 8);
+        std::memcpy(widened.data() + b * 2 + 8, image.data + b, 8);
+      }
+      image.data = widened.data();
+      image.dataSize = each;
+      image.format = gfx::Format::BC5;
+    }
     if (!each) {
       first = image;
       each = image.dataSize;
