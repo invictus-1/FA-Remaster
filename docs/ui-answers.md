@@ -32,6 +32,24 @@ The radial pings, as I would build them (ours; nothing new on the wire but two f
 - Not for observers or in a replay (as FAF's DoPing). Teacher mode and the lobby (AI type, Recruit / Veteran /
   Commander / Supreme Commander, personality, teacher mode, cheats) come later, with the AI's options known.
 
+docs/ai-architecture.md section 8, the interface's other open points (my proposals):
+1. Personality: the slot's AI key carries type and skill only, as FAF's aitypes lists do (four entries, Recruit ..
+   Supreme Commander, each with a cheating twin like M28's "cheat" keys), so the slot's one drop-down stays short.
+   Personality is a per-slot option of ours beside it (default Random), kept in the slot's PlayerOptions as
+   `RemasterPersonality`; PlayerOptions reach the simulation as ScenarioInfo.ArmySetup[army], so the AI reads it
+   there, and Random is drawn in the simulation from the game's seed (the same for every player and in the replay).
+   Teacher mode likewise a per-slot option, `RemasterTeacher`.
+3. Allied announcements: FAF's own `AIChatBrainComponent` (lua/aibrains/components/ChatBrainComponent.lua):
+   `brain:SendChatToAllies(text, args, location)` writes to `Sync.ChatMessages`; every player's interface shows the
+   line to the AI's allies only, `args` are formatted on the receiving side (`<LOC>` texts in each player's
+   language), and `location` (a Position or an Area) gives the line FAF's camera icon that moves the view there:
+   "attacking here" can be clicked. Nothing new is needed in the interface; I check that our host shows such lines
+   (and their camera icon) when the first announcement exists.
+8. `data/ai/` as a FAF-style mod folder: no, from the host's side. As the base AI it should always be there, not
+   switched on in the mods manager; the host mounts it as it mounts its own data (ui/data) and the engine's fixes,
+   and its lobby entries come through a hook of aitypes. A mod folder would only matter for playing it inside FAF
+   itself, which the ship model leaves out (docs/engine-distribution.md 3.1).
+
 ## engine-answers.md 524f3d0: Chris's "Move M28's work into load": the first beats inside the loading screen (2026-10-28)
 
 Built as asked (b6fccab): a lobby's game without prebuilt units, in a window, runs beats 2..29 behind the loading
