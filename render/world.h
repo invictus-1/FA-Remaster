@@ -566,6 +566,12 @@ class World {
   // at the edges toward the sun. Off by default.
   bool litSmoke = false;
   float fireLight = 1.0f;
+  // [smoke air light] Lit smoke in fog and at night lit by the air's own light too (particles.h, Particles::airLight;
+  // Chris's snapshot test of 25 October, item 9: an anti-nuke's exhaust smoke rising in fog at night read as a dark line
+  // drawn up off the map): smoke never reads darker than the air it hangs in, unless it is dark smoke. Only with litSmoke
+  // (its pipelines); -1 (the default): with litSmoke, as the game's battle effects turn it on; 0 off; 1 on. By day in
+  // clear air nothing changes.
+  int smokeAirLight = -1;
   // Smoke's shadow (smoke.h): the smoke darkens the sun's light on the ground, the units, the water and in the light
   // in the air under it. Modern look; off by default.
   bool smokeShadows = false;

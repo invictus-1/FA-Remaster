@@ -586,10 +586,14 @@ void World::AddBrackets(int kind, Vec3 position, const Quat& orientation, const 
 // its bottom edge. Sunk until it draws as much as a hull of its beam does (0.35 of the beam to its keel, as a frigate's or a
 // cruiser's: UES0103 0.08 down, UES0201 0.15, UES0302 0.5), never deeper than its hull already reaches (a hull made deep, as
 // a battleship's, keeps nearly its own); never a unit above the water's level (a hover unit) nor one below it.
+// [hull sit] And never more than half its freeboard: the height of its deck at its sides (Model::deckHeight) over the water
+// (Chris's snapshot test of 25 October, item 10: the Seraphim T3 battleship, its deck 0.18 over its origin, was sunk 0.38 -
+// its deck awash; "some ships sit too deep, mostly other factions'": the Seraphim's, the Aeon's and Cybran's low hulls).
 static float HullSink(const Model* model) {
   const float keel = std::max(-model->boundsMin.y * model->scale, 0.0f);
   const float beam = (model->boundsMax.x - model->boundsMin.x) * model->scale;
-  return std::clamp(0.35f * beam - keel, 0.0f, keel);
+  const float freeboard = model->deckHeight < 1e29f ? std::max(model->deckHeight * model->scale, 0.0f) : 1e30f;
+  return std::clamp(0.35f * beam - keel, 0.0f, std::min(keel, 0.5f * freeboard));
 }
 
 void World::ListHull(uint32_t id, const Model* model, Vec3 position, const Quat& orientation, const Ocean::Bob& rode) {
@@ -673,11 +677,15 @@ void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation,
   bool litBefore = false;  // (steadyLamps: one of its lamps was lit the frame before)
   for (const ModelLight& light : model->lights) {
     const uint64_t lampKey = id ? (static_cast<uint64_t>(id) << 8 | static_cast<uint64_t>(&light - model->lights.data())) + 1 : 0;
-    // (a lamp on a part the script has hidden is not there: a commander's upgrade not bought yet)
-    if (light.bone >= 0 && pose) {
+    // (a lamp on a part the script has hidden is not there: a commander's upgrade not bought yet. [lamps hidden] One on
+    // no bone rides on the unit itself, its first bone: gone with it where the script has hidden that - a commander
+    // before it warps in, and the invisible helper FAF's drones carry (ZXA0003, HideBone(0) on the drone's own mesh at
+    // its own scale: the drone's lamps lit a second time, a little above it, Chris's snapshot test of 25 October))
+    if (pose) {
+      const uint32_t on = light.bone >= 0 ? static_cast<uint32_t>(light.bone) : 0;
       bool hidden = false;
       for (size_t i = 0; pose->now && i < pose->nowCount; ++i)
-        if (pose->now[i].bone == static_cast<uint32_t>(light.bone)) {
+        if (pose->now[i].bone == on) {
           hidden = pose->now[i].hidden;
           break;
         }
@@ -3073,6 +3081,7 @@ void World::Render() {
   // exhaust, whose shot throws its own)
   litSmokeNow_ = litSmoke && look == Look::Modern && haveMap_;
   particles.litSmoke = litSmokeNow_;
+  particles.airLight = litSmokeNow_ && smokeAirLight != 0;  // [smoke air light] (-1: with lit smoke)
   particles.heat = heatShimmer && look == Look::Modern && haveMap_ && !sidePicture;
   if (litSmokeNow_ && particles.remastered && fireLight > 0) {
     particles.HotEmitters(placing.target, 48, &hot_);

@@ -114,6 +114,53 @@ uint32_t NextLodSerial() {
 // (debris, debris.h; Model::paintSpots) Where a mesh's paint lies on its texture: 24 of its triangles picked evenly by
 // their area along the file's list (so spread over its parts), each its middle in the texture and how much texture a
 // model unit of its surface takes there. Triangles that are flat in the texture or reach out of it are left out.
+// [hull sit] (Model::deckHeight) The height of a model's top at the rim of its plan, in model units: over a grid of 32 x 32
+// squares across its box seen from above, the highest of its corners, its triangles' middles and its edges' middles in
+// each square, and of the squares it covers the lowest quarter's highest (a ship's deck at its sides, not its towers).
+float DeckHeight(const char* vertices, int64_t vertexCount, const char* indices, int64_t indexCount, int indexBytes, Vec3 lo, Vec3 hi) {
+  constexpr int kGrid = 32;
+  std::vector<float> top(kGrid * kGrid, -1e30f);
+  const float sx = kGrid / std::max(hi.x - lo.x, 1e-6f), sz = kGrid / std::max(hi.z - lo.z, 1e-6f);
+  auto lay = [&](float x, float y, float z) {
+    const int gx = std::clamp(static_cast<int>((x - lo.x) * sx), 0, kGrid - 1), gz = std::clamp(static_cast<int>((z - lo.z) * sz), 0, kGrid - 1);
+    float& t = top[static_cast<size_t>(gz) * kGrid + gx];
+    t = std::max(t, y);
+  };
+  auto at = [&](int64_t i, float p[3]) {
+    int64_t v = 0;
+    if (indexBytes == 4) {
+      uint32_t k;
+      std::memcpy(&k, indices + i * 4, 4);
+      v = k;
+    } else {
+      uint16_t k;
+      std::memcpy(&k, indices + i * 2, 2);
+      v = k;
+    }
+    if (v >= vertexCount) return false;
+    std::memcpy(p, vertices + v * static_cast<int64_t>(sizeof(ScmVertex)), 3 * sizeof(float));
+    return true;
+  };
+  for (int64_t t = 0; t + 2 < indexCount; t += 3) {
+    float a[3], b[3], c[3];
+    if (!at(t, a) || !at(t + 1, b) || !at(t + 2, c)) continue;
+    lay(a[0], a[1], a[2]);
+    lay(b[0], b[1], b[2]);
+    lay(c[0], c[1], c[2]);
+    lay((a[0] + b[0] + c[0]) / 3, (a[1] + b[1] + c[1]) / 3, (a[2] + b[2] + c[2]) / 3);
+    lay((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2);
+    lay((b[0] + c[0]) / 2, (b[1] + c[1]) / 2, (b[2] + c[2]) / 2);
+    lay((a[0] + c[0]) / 2, (a[1] + c[1]) / 2, (a[2] + c[2]) / 2);
+  }
+  std::vector<float> covered;
+  for (float t : top)
+    if (t > -1e29f) covered.push_back(t);
+  if (covered.empty()) return 1e30f;
+  const size_t quarter = covered.size() / 4;
+  std::nth_element(covered.begin(), covered.begin() + static_cast<std::ptrdiff_t>(quarter), covered.end());
+  return covered[quarter];
+}
+
 void MakePaintSpots(const char* vertices, int64_t vertexCount, const char* indices, int64_t indexCount, int indexBytes, std::vector<Vec3>* out) {
   out->clear();
   auto index = [&](int64_t i) -> int64_t {
@@ -171,6 +218,7 @@ struct ScmAhead {
   std::string error;
   ModelLod lod;  // (its counts and its trees' step; no buffers)
   Vec3 boundsMin, boundsMax;
+  float deckHeight = 1e30f;  // [hull sit] (Model::deckHeight)
   std::vector<Model::BoneBox> boneBoxes;
   std::shared_ptr<const HitShape> hitShape;
   std::vector<Vec3> paintSpots;
@@ -184,7 +232,7 @@ namespace {
 bool LoadScm(gfx::Device* device, const std::string& file, const std::vector<ModelBone>& skeleton, ModelLod* lod, Vec3* boundsMin,
              Vec3* boundsMax, std::string* error, std::vector<Model::BoneBox>* boneBoxes = nullptr,
              std::shared_ptr<const HitShape>* hitShape = nullptr, int64_t hitShapeMost = 0, bool trees = false,
-             std::vector<Vec3>* paintSpots = nullptr, ScmAhead* ahead = nullptr) {
+             std::vector<Vec3>* paintSpots = nullptr, ScmAhead* ahead = nullptr, float* deckHeight = nullptr) {
   auto fail = [&](const char* what) {
     *error = what;
     return false;
@@ -253,6 +301,8 @@ bool LoadScm(gfx::Device* device, const std::string& file, const std::vector<Mod
   }
   if (hitShape && indexCount / 3 <= hitShapeMost)  // (battle scars, unit_wear.h: where on the model a hit lies)
     *hitShape = MakeHitShape(vertices, vertexCount, file.data() + indexOffset, indexCount, static_cast<int>(indexBytes), std::max<size_t>(skeleton.size(), 1));
+  if (deckHeight && boundsMin)  // [hull sit] (a ship's deck at its sides: how deep it may sit in the lifted sea, World::RideWaves)
+    *deckHeight = DeckHeight(vertices, vertexCount, file.data() + indexOffset, indexCount, static_cast<int>(indexBytes), *boundsMin, *boundsMax);
   if (paintSpots)  // (debris, debris.h: where its paint lies on its texture)
     MakePaintSpots(vertices, vertexCount, file.data() + indexOffset, indexCount, static_cast<int>(indexBytes), paintSpots);
   gfx::BufferDesc vb;
@@ -1134,7 +1184,7 @@ void ModelCache::MeshesWork(const MeshJob& job) {
     } else {
       scm->ok = LoadScm(device_, *file, bones, &scm->lod, first ? &scm->boundsMin : nullptr, first ? &scm->boundsMax : nullptr, &scm->error,
                         first ? &scm->boneBoxes : nullptr, shape ? &scm->hitShape : nullptr, most, sways, spots ? &scm->paintSpots : nullptr,
-                        scm.get());
+                        scm.get(), first && unit ? &scm->deckHeight : nullptr);
     }
     if (scm->ok && shape && scm->hitShape) shaped = true;
     const bool stop = i == 0 && !scm->ok;  // (Build makes nothing more of a model whose finest level failed)
@@ -1491,6 +1541,7 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
         loaded = lod.vertices && lod.indices;
         if (!loaded) error = "the device refused the mesh";
         if (loaded && first) m->boundsMin = pre->boundsMin, m->boundsMax = pre->boundsMax, m->boneBoxes = std::move(pre->boneBoxes);
+        if (loaded && first) m->deckHeight = pre->deckHeight;  // [hull sit]
         if (loaded && shape) *shape = std::move(pre->hitShape);
         if (loaded && unit && first) m->paintSpots = std::move(pre->paintSpots);
       }
@@ -1502,7 +1553,8 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
       auto mesh = s.mesh == skeletonMesh ? skeletonFile : textures_->ReadFile(s.mesh);
       there = mesh.has_value();
       loaded = mesh && LoadScm(device_, *mesh, m->bones, &lod, first ? &m->boundsMin : nullptr, first ? &m->boundsMax : nullptr, &error,
-                               first ? &m->boneBoxes : nullptr, shape, most, sways, unit && first ? &m->paintSpots : nullptr);
+                               first ? &m->boneBoxes : nullptr, shape, most, sways, unit && first ? &m->paintSpots : nullptr, nullptr,
+                               unit && first ? &m->deckHeight : nullptr);  // ([hull sit] a unit's deck)
     }
     if (!loaded) {
       // a missing coarser level is common: the finer ones then stand in

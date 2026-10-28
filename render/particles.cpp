@@ -44,7 +44,8 @@ cbuffer ParticleSet : register(b1) {
   float4 lit;           // lit smoke (World::litSmoke): x 1 = this set is lit as a volume; y how dense it is to
                         // the light going through it; z how strongly the small lights light it; w (the smoke's
                         // shadow pass) what its optical depth is multiplied by
-  float4 six;           // x 1 = six-way light maps (SixWayTexture), y how bright what they say glows is
+  float4 six;           // x 1 = six-way light maps (SixWayTexture), y how bright what they say glows is,
+                        // z [smoke air light] 1 = lit by the air's own light too (Particles::airLight)
 #endif
 };
 StructuredBuffer<float4> particleRows : register(t0, space1);
@@ -325,6 +326,30 @@ float3 LitSmoke(VOut i, float3 day, float3 own, float4 c) {
   return day * lerp(shade, 1, glows) + own * i.light.rgb * (lit.z * exp(-0.6 * lit.y * c.a));
 }
 
+// [smoke air light] Smoke in thick air or at night lit by the air's own light too (Particles::airLight; the renderer's
+// choice for Chris's snapshot test of 25 October, item 9: an anti-nuke's exhaust smoke rising in fog at night read as a
+// dark line drawn up off the map). By day smoke is lit by the sun and the sky; in fog, and at night, the air round it is
+// lit too and lights it from every side, so smoke never reads darker than the air it hangs in - unless it is dark smoke
+// itself. `c` its colour lit so far (linear; with `premultiplied`, carrying its alpha `alpha`), `own` its colour as the
+// day shows it. The air's light is its own colour as thick air (AirColor), or with the light in the air (air.h) what
+// the air between the eye and the smoke gives per share of light it takes away there; times how light the smoke is as
+// the day shows it (a grey of 0.127 - the game's smoke textures, cloud_smoke_alpha_13 at 100 of 255 - and lighter: as the
+// air; darker smoke darker in proportion); by how thick the air is (the weather's fog) or how far into the night it is.
+float3 SmokeAirLight(VOut i, float3 c, float3 own, float alpha, bool premultiplied) {
+  float fog = saturate(weather.z / 0.0035);  // (World::Begin: 0.0035 a world unit in full fog)
+  float night = skyZenith.w > 0.5 ? 1 - smoothstep(0.1, 0.5, skyGlow.w) : 0;  // (by day, from noon to dusk: none)
+  float strength = max(fog, night);
+  if (strength <= 0) return c;
+  float3 light = AirColor();
+  [branch] if (air.x > 0.5) {
+    float4 a = AirAt(i.world);
+    float taken = 1 - a.a;
+    light = lerp(light, a.rgb / max(taken, 1e-3), saturate(taken * 10));  // (near the eye, too little air to say: its colour)
+  }
+  float3 tone = saturate((premultiplied ? own / max(alpha, 0.05) : own) / 0.127);
+  return max(c, light * tone * (strength * (premultiplied ? alpha : 1)));
+}
+
 // A flipbook baked with light from six directions (particles.h, SixWayTexture): the light its frame gives back
 // toward the eye where it is lit from `l` (toward the light, in the world), from its two textures' frames: `a`
 // (the blueprint's Texture: lit from the right, from the top, from behind; alpha) and `b` (SixWayTexture: from
@@ -421,6 +446,7 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
     }
 #if LIT_SMOKE
     }
+    [branch] if (six.z > 0.5) c.rgb = SmokeAirLight(i, c.rgb, own, c.a, options.z > 2.5);  // [smoke air light]
 #endif
     [branch] if (air.x > 0.5) {  // light in the air (air.h): what comes through of its own, and the air's light before it
       float4 a = AirAt(i.world);
@@ -1237,7 +1263,9 @@ void Particles::DrawSets(const View& view, int pass, gfx::Texture behind, gfx::T
                                  // (lit smoke: lit as a volume; the smoke's shadow: how much it casts)
                                  litSet && litNow ? 1.0f : 0.0f, smokeDensity, smokeSmallLights, shadow ? 1.0f : 0.0f,
                                  // (six-way frames turned upright in the smoke's shadow too, so that it has their shape)
-                                 sixWay || (shadow && bp.sixWay) ? 1.0f : 0.0f, bp.sixWayEmission, 0, 0};
+                                 sixWay || (shadow && bp.sixWay) ? 1.0f : 0.0f, bp.sixWayEmission,
+                                 // ([smoke air light] lit by the air's own light too: lit smoke's sets, with the switch on)
+                                 litSet && litNow && airLight ? 1.0f : 0.0f, 0};
     // (the unlit pipelines read the first 28)
     device_->SetConstants(1, constants, litSet || shadow ? sizeof constants : 28 * sizeof(float));
     device_->SetTexture(0, bp.texture);

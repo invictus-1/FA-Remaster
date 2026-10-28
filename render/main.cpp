@@ -167,6 +167,8 @@
 //           trees, the clouds and the plume itself, by the small lights (lasting fires become flickering lights
 //           too), darker where thick away from the sun; --smoke-density n how dark the light through a puff gets
 //           (2), --fire-light n how bright the fires' light is (1, 0 none)
+// --smoke-air-light on|off  [smoke air light] with --lit-smoke: in fog and at night the smoke is lit by the air's own light
+//           too, never darker than the air it hangs in (World::smokeAirLight; without it: on with --lit-smoke)
 // --smoke-shadows  the smoke's shadow on the ground, the units, the water and in the light in the air
 //           (World::smokeShadows; modern look); --smoke-shadow-strength n (0.75)
 // --heat-shimmer  the air bends what is behind it over fires, exhausts and fresh explosions (World::heatShimmer;
@@ -745,6 +747,7 @@ struct Options {
   float volumeTest = 0, volumeTestSize = 14;  // --volume-test
   int volumeMost = -1, volumeSteps = -1;      // --volume-most, --volume-steps
   float volumeDetail = -1;                    // --volume-detail
+  int smokeAirLight = -1;               // [smoke air light] --smoke-air-light on|off (-1: with lit smoke)
   float smokeDensity = -1, fireLight = -1, smokeShadowStrength = -1, heatBend = -1;  // (their tuning; -1: as at first)
   bool waterDetail = false;             // --water-detail
   bool winterWater = false;             // --winter-water
@@ -1197,6 +1200,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--hide") o->hide = v;
     else if (a == "--plant-density") o->plantDensity = static_cast<float>(atof(v));
     else if (a == "--smoke-density") o->smokeDensity = static_cast<float>(atof(v));
+    else if (a == "--smoke-air-light") o->smokeAirLight = std::string(v) == "off" ? 0 : 1;  // [smoke air light]
     else if (a == "--fire-light") o->fireLight = static_cast<float>(atof(v));
     else if (a == "--smoke-shadow-strength") o->smokeShadowStrength = static_cast<float>(atof(v));
     else if (a == "--heat-bend") o->heatBend = static_cast<float>(atof(v));
@@ -1914,6 +1918,7 @@ int main(int argc, char** argv) {
   if (opt.volumeSteps > 0) world.volumes.steps = opt.volumeSteps;
   if (opt.volumeDetail >= 0) world.volumes.detail = opt.volumeDetail;
   if (opt.smokeDensity >= 0) world.particles.smokeDensity = opt.smokeDensity;
+  world.smokeAirLight = opt.smokeAirLight;  // [smoke air light]
   if (opt.fireLight >= 0) world.fireLight = opt.fireLight;
   if (opt.smokeShadowStrength >= 0) world.smokeMap.strength = opt.smokeShadowStrength;
   if (opt.heatBend >= 0) world.particles.heatBend = opt.heatBend;

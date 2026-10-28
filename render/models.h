@@ -157,6 +157,10 @@ struct Model {
   std::vector<ModelLod> lods;  // finest first
   float scale = 1;             // model units to world units (the blueprint's Display.UniformScale)
   Vec3 boundsMin, boundsMax;   // of the finest level, in model units
+  // [hull sit] A unit's: the height of its top at the rim of its plan, over its origin (model units, finest level): a
+  // ship's deck at its sides, as the original's water sheet left it above the water (models.cpp, DeckHeight). Not known:
+  // 1e30.
+  float deckHeight = 1e30f;
   // The skeleton of the mesh the blueprint names: the one the simulation poses. The vertices of
   // every level follow these bones by index (a level whose file lists its bones in another order,
   // or a remastered mesh tried out in the blueprint's place, is matched to them by name at loading).

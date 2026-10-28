@@ -171,6 +171,10 @@ class Particles {
   // lights light it.
   bool litSmoke = false;
   float smokeDensity = 2.0f, smokeSmallLights = 1.0f;
+  // [smoke air light] With litSmoke: in thick air (fog) and at night the lit smoke is lit by the air's own light too, so
+  // that it never reads darker than the air it hangs in (dark smoke excepted; particles.cpp, SmokeAirLight). Set by the
+  // world each frame (World::smokeAirLight).
+  bool airLight = false;
   // Before Draw, when the smoke's shadow is drawn first: drops what is over and hands the rest to the card (Draw
   // does it itself otherwise). Then the smoke as the sun sees it, into the current pass (the smoke's shadow map's,
   // smoke.h), with the map's view.

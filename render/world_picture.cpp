@@ -302,6 +302,9 @@ struct WorldPicture::Impl {
     int roundFrames = 0;  // (the warm frames of this round: WarmFrame's; at most 8)
   };
   std::vector<moho::PropEvent> heldProps;  // [session] (PrepareSession: the simulation's props' events, for the next beat)
+  // [deposits] (PrepareSession: the effect events its reading of the first beat took - the deposits' marks among them -, for
+  // the next beat, as heldProps)
+  std::vector<FrameEffectEvent> heldEffects;
   std::unique_ptr<SimFrames> sessionArmies;  // [session] (PrepareSession's reading of the game: GameStarted takes it, AdoptArmies)
   std::unique_ptr<Load> load;
   std::vector<std::unique_ptr<Load>> cancelled;  // (CancelMap: being opened still, let go of once open)
@@ -520,6 +523,7 @@ void WorldPicture::CancelMap() {
   Impl::Abandon(*m.load);  // [warmtarget]
   m.sessionArmies.reset();  // [session]
   if (!m.heldProps.empty()) m.frames.HoldPropEvents(&m.heldProps);  // [session] (the world shown's next beat has them)
+  if (!m.heldEffects.empty()) m.frames.HoldEffectEvents(&m.heldEffects);  // [deposits] (and these)
   m.cancelled.push_back(std::move(m.load));  // (let go of by ServiceLoads once its opening is done; another may begin now)
 }
 
@@ -570,6 +574,7 @@ bool WorldPicture::SwapMap() {
   w.lens = m.lens;
   m.ForgetWorld();
   if (!m.heldProps.empty()) m.frames.HoldPropEvents(&m.heldProps);  // [session] (the simulation's first props: the first beat's)
+  if (!m.heldEffects.empty()) m.frames.HoldEffectEvents(&m.heldEffects);  // [deposits] (and its first effects: the deposits' marks)
   m.sessionArmies = std::move(load->beatFrames);  // [session] (the game read already: GameStarted takes it)
   m.LetGo(std::move(old), std::move(oldDevice));
   return true;
@@ -897,6 +902,11 @@ bool WorldPicture::PrepareSession(const moho::Sim& sim) {
     beatFrames->Beat(sim);
     if (!beatFrames->FrameAt(static_cast<double>(beatFrames->FirstTick()), beat.get())) beat.reset();
     beatFrames->TakePropEvents(&beatProps);
+    // [deposits] (the effect events that reading took from the simulation - the engine hands them out once - kept for the
+    // first beat of the world shown: without them a menu-launched game had no resource deposits' marks nor their icons)
+    std::vector<FrameEffectEvent> beatEffects;
+    beatFrames->TakeEffectEvents(&beatEffects);
+    m.heldEffects.insert(m.heldEffects.end(), std::make_move_iterator(beatEffects.begin()), std::make_move_iterator(beatEffects.end()));
   }
   const std::vector<Vec3> beatColors = m.armyColorsOverride.empty() ? beatFrames->ArmyColors() : m.armyColorsOverride;
   m.heldProps.insert(m.heldProps.end(), std::make_move_iterator(events.begin()), std::make_move_iterator(events.end()));

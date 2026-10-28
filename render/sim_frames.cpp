@@ -180,6 +180,12 @@ void SimFrames::HoldPropEvents(std::vector<moho::PropEvent>* events) {
   events->clear();
 }
 
+void SimFrames::HoldEffectEvents(std::vector<FrameEffectEvent>* events) {  // [deposits]
+  std::lock_guard<std::mutex> lock(mutex_);
+  effectEvents_.insert(effectEvents_.begin(), std::make_move_iterator(events->begin()), std::make_move_iterator(events->end()));
+  events->clear();
+}
+
 void SimFrames::SetSightGrid(float mapWidth, float mapHeight, int cells) {
   std::lock_guard<std::mutex> lock(mutex_);
   sightWidth_ = mapWidth;
