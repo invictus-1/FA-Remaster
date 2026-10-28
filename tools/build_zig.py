@@ -6,6 +6,10 @@
     py tools/build_zig.py --jobs 32           (built with -g: tools/recdiff.py names our callers from it;
                                                --no-debug leaves it out; delete build-zig/obj when switching)
     py tools/build_zig.py --target x86_64-windows-gnu   (cross-build from Linux)
+    py tools/build_zig.py --lua-api-check --out build-check   (test build: Lua's api_check as a trap, so the first
+                                               C function pushing past its guaranteed stack (ci->top) stops there;
+                                               --mi-debug: mimalloc's MI_DEBUG=3 / MI_SECURE=4. Use their own --out:
+                                               the incremental check does not see changed flags)
 
 Same sources and flags as CMakeLists.txt (C++20, -ffp-contract=off -fno-fast-math, mimalloc for the Lua heap,
 static link on Windows). Incremental: an object is rebuilt when its source or any header under src/ or
@@ -27,6 +31,8 @@ def main():
     ap.add_argument("--no-debug", action="store_true", help="leave out -g (recdiff/regress then cannot name our callers)")
     ap.add_argument("--target", help="zig target triple (default: this machine; Windows -> x86_64-windows-gnu)")
     ap.add_argument("--out", default=os.path.join(ROOT, "build-zig"))
+    ap.add_argument("--lua-api-check", action="store_true", help="Lua's API checks on, a trap at the first (a C function pushing past its stack; a test build, as ui/build_ui.py)")
+    ap.add_argument("--mi-debug", action="store_true", help="mimalloc's own checks on (MI_DEBUG=3, MI_SECURE=4: freed and overrun blocks caught; a test build)")
     a = ap.parse_args()
     target = a.target or ("x86_64-windows-gnu" if os.name == "nt" else None)
     windows = (target or "").find("windows") >= 0 or (target is None and os.name == "nt")
@@ -45,9 +51,9 @@ def main():
 
     std_c = ["-std=c99", "-w"]
     add(os.path.join(ROOT, "third_party", "mimalloc", "src", "static.c"),
-        std_c + mi_inc + ["-DMI_SECURE=0", "-DMI_STAT=0", "-DMI_DEBUG=0", "-DNDEBUG"], False)
+        std_c + mi_inc + (["-DMI_SECURE=4", "-DMI_STAT=0", "-DMI_DEBUG=3"] if a.mi_debug else ["-DMI_SECURE=0", "-DMI_STAT=0", "-DMI_DEBUG=0", "-DNDEBUG"]), False)
     for f in sorted(glob.glob(os.path.join(ROOT, "third_party", "lua", "*.c"))):
-        add(f, std_c + lua_inc + mi_inc + ["-DMOHO64_MIMALLOC=1"], False)
+        add(f, std_c + lua_inc + mi_inc + ["-DMOHO64_MIMALLOC=1"] + (["-Dapi_check(L,o)=do{if(!(o))__builtin_trap();}while(0)"] if a.lua_api_check else []), False)
     for n in ("adler32", "crc32", "inffast", "inflate", "inftrees", "zutil"):
         add(os.path.join(ROOT, "third_party", "zlib", n + ".c"), std_c + zlib_inc, False)
     cxxflags = ["-std=c++20", "-I", os.path.join(ROOT, "src")] + lua_inc + zlib_inc
