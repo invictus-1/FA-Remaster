@@ -2,6 +2,7 @@
 // a copy as `__blueprints` (keyed by ordinal and by id, as the original), and entity categories
 // (`categories.TECH1`, ...) are sets over the entity blueprints.
 #pragma once
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -88,7 +89,23 @@ class SimBlueprints {
 
   static SimBlueprints* From(lua_State* L);
 
+  // The category class table's address (moho.EntityCategory, the metatable NewCat gives each category it makes; NewCat
+  // keeps it): ToCategory takes a userdata with that metatable without looking the class up again. No script assigns
+  // moho.EntityCategory (FAF, its mods, M28: none); a metatable at another address still goes through the look-up.
+  mutable const void* categoryClass = nullptr;
+  // The entity index Find(name) gives (its entityIndex; -1 for none or a blueprint with none) for a Lua string's text
+  // `s` of `len` bytes: kept by the string's address and checked against its text, so a string made again at another
+  // string's old address cannot be taken for it. Find is a pure function of the name once CopyToSim is done.
+  int EntityIndexOfName(const char* s, size_t len) const;
+
  private:
+  struct NameIndex {
+    const char* s = nullptr;
+    uint32_t len = 0;
+    int index = -1;
+    char text[40];
+  };
+  mutable std::array<NameIndex, 2048> nameIndex_{};
   std::vector<NamedFootprint> footprints_;
   void ReadFootprints(lua_State* rules, int list);
   std::vector<BlueprintInfo> all_;

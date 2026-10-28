@@ -121,10 +121,12 @@ void PushCategoryClass(lua_State* L) {
 }
 
 uint64_t* NewCat(lua_State* L) {
-  const size_t n = static_cast<size_t>(SimBlueprints::From(L)->CategoryWords());
+  SimBlueprints* b = SimBlueprints::From(L);
+  const size_t n = static_cast<size_t>(b->CategoryWords());
   auto* w = static_cast<uint64_t*>(lua_newuserdata(L, sizeof(uint64_t) * n));
   std::memset(w, 0, sizeof(uint64_t) * n);
   PushCategoryClass(L);
+  if (lua_type(L, -1) == LUA_TTABLE) b->categoryClass = lua_topointer(L, -1);
   lua_setmetatable(L, -2);
   return w;
 }
@@ -140,7 +142,8 @@ SimBlueprints* Bps(lua_State* L) { return SimBlueprints::From(L); }
 // The entity index of a unit/entity object, a blueprint table, or a blueprint id.
 int EntityIndexOf(lua_State* L, int idx) {
   SimBlueprints* b = Bps(L);
-  if (lua_isstring(L, idx)) {
+  if (lua_type(L, idx) == LUA_TSTRING) return b->EntityIndexOfName(lua_tostring(L, idx), lua_strlen(L, idx));
+  if (lua_isstring(L, idx)) {  // (a number: lua_tostring makes its text, as before)
     const BlueprintInfo* bp = b->Find(lua_tostring(L, idx));
     return bp ? bp->entityIndex : -1;
   }
@@ -256,10 +259,7 @@ int l_EntityCategoryContains(lua_State* L) {
 // a string only) names a blueprint, else a live entity gives its own (SCR_FromLuaNoError_Entity 0x5e3800, then the
 // entity's blueprint +0x6c); anything else (a nil hole, a destroyed unit, a number, a blueprint table) has none (-1).
 int ListEntryIndex(lua_State* L, int idx) {
-  if (lua_type(L, idx) == LUA_TSTRING) {
-    const BlueprintInfo* bp = Bps(L)->Find(lua_tostring(L, idx));
-    return bp ? bp->entityIndex : -1;
-  }
+  if (lua_type(L, idx) == LUA_TSTRING) return Bps(L)->EntityIndexOfName(lua_tostring(L, idx), lua_strlen(L, idx));
   if (Entity* e = ToObject<Entity>(L, idx)) return e->blueprint ? e->blueprint->entityIndex : -1;
   return -1;
 }
@@ -349,6 +349,13 @@ uint64_t* PushCategory(lua_State* L) { return NewCat(L); }
 const uint64_t* ToCategory(lua_State* L, int idx) {
   if (lua_type(L, idx) != LUA_TUSERDATA) return nullptr;
   if (!lua_getmetatable(L, idx)) return nullptr;
+  // The class NewCat gave (SimBlueprints::categoryClass): taken without the look-up. lua_gpg_checkgc keeps the
+  // collector's check that the look-up's string pushes made, so a collection still falls at the same call.
+  if (const void* cls = SimBlueprints::From(L)->categoryClass; cls && lua_topointer(L, -1) == cls) {
+    lua_pop(L, 1);
+    lua_gpg_checkgc(L);
+    return static_cast<const uint64_t*>(lua_touserdata(L, idx));
+  }
   PushCategoryClass(L);
   bool ok = lua_rawequal(L, -1, -2);
   lua_pop(L, 2);
@@ -385,6 +392,21 @@ const BlueprintInfo* SimBlueprints::Find(const std::string& id) const {
   auto it = byId_.find(Lower(id));
   return it == byId_.end() ? nullptr : &all_[it->second];
 }
+int SimBlueprints::EntityIndexOfName(const char* s, size_t len) const {
+  if (len >= sizeof(NameIndex::text) || std::strlen(s) != len) {  // (a long name, or one with a zero byte: as Find)
+    const BlueprintInfo* bp = Find(s);
+    return bp ? bp->entityIndex : -1;
+  }
+  NameIndex& c = nameIndex_[(reinterpret_cast<uintptr_t>(s) >> 4) % nameIndex_.size()];
+  if (c.s == s && c.len == len && std::memcmp(c.text, s, len) == 0) return c.index;
+  const BlueprintInfo* bp = Find(s);
+  c.s = s;
+  c.len = static_cast<uint32_t>(len);
+  std::memcpy(c.text, s, len);
+  c.index = bp ? bp->entityIndex : -1;
+  return c.index;
+}
+
 const BlueprintInfo* SimBlueprints::Find(const char* id) const {  // (as Find(std::string(id)), one copy)
   std::string s(id);
   for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
