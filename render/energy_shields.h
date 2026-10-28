@@ -39,7 +39,8 @@ class EnergyShields {
   // Forgets the frame before's bubbles, hits and owners.
   void Begin();
   // A shield's bubble: its dome (a model whose first level is a shield's, ModelLod::shield) where the frame has it.
-  void AddBubble(const Model* model, const Mat4& world);
+  // ([litshell] `hex`: a UEF shield's, drawn with a hex of its own)
+  void AddBubble(const Model* model, const Mat4& world, bool hex = false);
   // A hit: a flash made at a bubble's centre `at`, `toward` the way from there to where it struck (unit length),
   // `age` seconds ago.
   void AddHit(Vec3 at, Vec3 toward, float age);
@@ -57,6 +58,10 @@ class EnergyShields {
 
   // How much of each (1: as made): the bending of what is behind, the light on what is inside, the rings.
   float bend = 1, light = 1, rings = 1;
+  // [litshell] (Chris, 2026-10-28) the shell taking the world's light (false: as before); a UEF shield's hex cells' spacing,
+  // world units (0: its texture's pattern); how strong its hex lines are; its glow where it meets the ground
+  bool litShell = true;
+  float hexSize = 1.2f, hexLines = 1, contactGlow = 1;
   // How much of its shield a bubble has left when no unit is found under it (the effects stand: no units in its
   // frame); 0..1.
   float healthUnknown = 1;
@@ -80,6 +85,7 @@ class EnergyShields {
     float health = -1;  // -1: no unit found under it
     float distance = 0;  // from the eye (drawn from the farthest)
     int hits = 0;
+    bool hex = false;  // [litshell]
     float hit[8][4];  // toward, age
   };
   bool Init();

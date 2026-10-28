@@ -5,6 +5,8 @@
 #include <cstddef>
 #include <cstdio>
 
+#include "lighting.h"
+
 namespace render {
 namespace {
 
@@ -24,12 +26,16 @@ cbuffer Shields : register(b1) {
   float4 frameInfo;                // x: bubbles in `lit`; y: how much they bend what is behind; z: how much light they
                                    // throw on what is inside; w: how strong their rings are
   float4 lit[64];                  // the bubbles whose light falls inside them: (centre, radius), (tint, strength)
+  float4 shellLook;                // [litshell] x: -; y: its hex lines' strength; z: its glow where it meets the ground and
+                                   // what stands in it (the bubbles with the lit shell); w: -
 };
 cbuffer Bubble : register(b2) {
   float4 row0, row1, row2;  // the dome's model -> world
   float4 sphere;            // its centre and radius, world units
   float4 tintHealth;        // its faction's tint (as the plain bubble has it); w: how much of the shield is left (0..1)
-  float4 info;              // x: its hits; y: 1 = the eye is inside it; z: a number of its own (its stutter)
+  float4 info;              // x: its hits; y: 1 = the eye is inside it; z: a number of its own (its stutter); w: [litshell]
+                            // the lit shell: its hex's steps to an icosahedron's edge, or -1 with its texture's pattern;
+                            // 0: the plain shell
   float4 hits[8];           // xyz: the way from its centre to where it was struck; w: how many seconds ago
 };
 Texture2D albedoMap : register(t0);  // the dome's texture (its faction's pattern)
@@ -101,6 +107,125 @@ void Ripples(float3 n, out float h, out float3 lean, out float flare) {
   }
 }
 
+// [litshell] (Chris, 2026-10-28: the hex shield should take the world's light, not be the original's look made fancier; a
+// finer hex.) A hex of cells over the whole sphere, as a geodesic dome is made: an icosahedron's twenty faces (kIcoA..C,
+// made with the shader: IcosahedronBlock), each with a triangular lattice of `f` steps to an edge, laid out onto the sphere;
+// the cells round its points are hexagons (twelve pentagons where its corners are), and the points along an edge are
+// both faces' alike, so the hex runs on across it.
+// For a place p on the sphere: its cell (a number of its own), the cell's middle on the sphere, and how far it is from the
+// cell's border (0 on it, 1 at its middle).
+void HexCell(float3 p, float f, out float cell, out float3 middle, out float border) {
+  // (its face: the one whose middle is nearest)
+  int face = 0;
+  float best = -2;
+  [loop] for (int k = 0; k < 20; ++k) {
+    float d = dot(p, normalize(kIcoA[k] + kIcoB[k] + kIcoC[k]));
+    if (d > best) best = d, face = k;
+  }
+  float3 A = kIcoA[face], B = kIcoB[face], C = kIcoC[face];
+  // onto the face's plane, from the centre; there in the face's own steps (u along AB, v along AC), f to an edge
+  float3 nF = normalize(cross(B - A, C - A));
+  float3 q = p * (dot(nF, A) / max(dot(nF, p), 1e-4)) - A;
+  float3 e1 = B - A, e2 = C - A;
+  float a11 = dot(e1, e1), a12 = dot(e1, e2), a22 = dot(e2, e2), b1 = dot(q, e1), b2 = dot(q, e2);
+  float det = a11 * a22 - a12 * a12;
+  float2 uv = float2(a22 * b1 - a12 * b2, a11 * b2 - a12 * b1) / det * f;
+  // the triangular lattice in a plane of its own (a step 1 long): its points' cells are regular hexagons
+  static const float kHalfRoot3 = 0.8660254;
+  float2 at = float2(uv.x + uv.y * 0.5, uv.y * kHalfRoot3);
+  float2 base = floor(uv);
+  float2 nearest = base;
+  float d1 = 1e9;
+  [unroll] for (int s = 0; s < 4; ++s) {
+    float2 g = base + float2(s % 2, s / 2);
+    float2 c = float2(g.x + g.y * 0.5, g.y * kHalfRoot3);
+    float d = dot(at - c, at - c);
+    if (d < d1) d1 = d, nearest = g;
+  }
+  float2 off = at - float2(nearest.x + nearest.y * 0.5, nearest.y * kHalfRoot3);
+  float most = max(abs(off.x), max(abs(dot(off, float2(0.5, kHalfRoot3))), abs(dot(off, float2(-0.5, kHalfRoot3)))));
+  border = saturate((0.5 - most) * 2);
+  middle = normalize(A + (nearest.x * e1 + nearest.y * e2) / f);
+  cell = dot(floor(middle * 977 + 0.5), float3(1, 57, 3361));  // (the same for a point both faces share)
+}
+
+// The shell, taking the world's light: a clear shield of energy, like glass in that it mirrors the sky and the sun and
+// catches the light of what burns and shines near it (shaded where the ground or the clouds shade it, and seen through the
+// air as all else); its hex of thin lines in its faction's tint, which glow on their own (more toward its rim, by night
+// more than by day, each cell's a little in its own time), and its cells filled with light as a hit's rings pass over them.
+float4 LitShell(VOut i, float3 n, float3 v) {
+  float3 N = dot(n, v) >= 0 ? n : -n;  // (the side the eye sees)
+  float nDotV = saturate(dot(N, v));
+  float fresnel = 0.04 + 0.96 * pow(1 - nDotV, 5);
+  float dark = falling.w > 0 ? falling.w : 1;
+  float3 tint = tintHealth.rgb;
+  float health = saturate(tintHealth.w), weak = 1 - health;
+  // its hex: the cell a place is in, and how near its border
+  float lines, own = 0;
+  float3 cellN = n;
+  [branch] if (info.w > 0.5) {
+    float cell, border;
+    float3 middle;
+    HexCell(n, info.w, cell, middle, border);
+    float aa = max(fwidth(border), 1e-4);
+    lines = (1 - smoothstep(0.06, 0.06 + aa * 1.5, border)) * saturate(1.6 - aa * 3);  // (where the cells are a few pixels across, faded)
+    cellN = middle;
+    own = frac(sin(cell * 12.9898 + info.z) * 43758.5453);
+  } else {
+    lines = saturate(albedoMap.Sample(samplerLinear, i.uv * 3 + float2(0.01, 0.03) * time).r *
+                     albedoMap.Sample(samplerLinear, i.uv * 7 - float2(0.02, 0.013) * time).g * 2.5);
+  }
+  lines *= shellLook.y;
+  // a hit's rings and flare: over whole cells (a cell lights up as a crest crosses it)
+  float h, flare;
+  float3 lean;
+  Ripples(cellN, h, lean, flare);
+  float rim = pow(1 - nDotV, 3);
+  float pulse = 0.65 + 0.35 * sin(time * (0.9 + own * 1.7) + own * 6.2831853);
+  // (weakening, its hex's: its cells go out one by one, the weaker it is the more (a third left dark at a quarter of its
+  // shield, half at none), and below half its shield those still lit flicker, each in its own time)
+  float on = 1;
+  [branch] if (info.w > 0.5) {
+    on = 1 - smoothstep(-0.05, 0.05, weak * 0.7 - 0.2 - own);
+    on *= 1 - 0.85 * saturate((CloudNoise(float3(time * 9, own * 31, info.z)) - 0.62) * 4) * smoothstep(0.5, 0.8, weak);
+    lines *= lerp(0.25, 1, on);
+  }
+  // (rain and snow on it: a drop that meets it sparks a cell for a moment, on its upper side; flakes faintly)
+  float spark = 0;
+  [branch] if (falling.x + falling.y > 0.01 && info.w > 0.5) {
+    float when = frac(time * (1.4 + own * 0.8) + own * 17.3);
+    spark = (falling.x + 0.3 * falling.y) * saturate(1 - when / 0.1) * saturate(cellN.y * 2 + 0.3);
+  }
+  float night = dark * lerp(0.35, 1, dark);
+  float3 glow = tint * (lines * ((0.12 + 0.9 * rim) * pulse * night + h * 2.2 * frameInfo.w + flare * 2.5) * on + lines * weak * weak * weak * 0.7 * on * tint +
+                        (1 - lines) * ((h * 0.55 * frameInfo.w + flare * 0.9) * on ) * tint + spark * 4 * (tint * 0.6 + 0.4));
+  glow *= 1 - 0.5 * nDotV * nDotV;  // (less where seen face on, where the units inside are looked at)
+  // the world's light on it
+  float shadow = SunShadow(i.world, N) * CloudShadow(i.world);
+  float3 sun = ToLinear(sunColor) * (lightMultiplier * modern.x);
+  float3 R = reflect(-v, N);
+  // (the computed sky, which follows the hour; the map's own cube is a picture of its day, bright at night too)
+  float3 sky = skyZenith.w > 0.5 ? ComputedSky(R) : ToLinear(environmentSky.SampleLevel(samplerLinear, R, 1).rgb) * modern.y;
+  float3 H = normalize(v + sunDirection);
+  float nDotH = saturate(dot(N, H)), nDotL = saturate(dot(N, sunDirection));
+  float glintF = 0.04 + 0.96 * pow(1 - saturate(dot(v, H)), 5);
+  float3 glint = sun * shadow * nDotL * glintF * (pow(nDotH, 4000) * 90 + pow(nDotH, 160) * 0.08);
+  float3 small = SmallLights(i.world, N, v, tint * (0.02 + 0.2 * lines), float3(0.04, 0.04, 0.04), 0.0016, 0.1, nDotV + 1e-4);
+  // (its lines a little lit, as a thing: the sunlit side brighter than the shaded)
+  float3 lit = lines * tint * (sun * nDotL * shadow * 0.06 + SkyAmbient(N) * 0.08);
+  // (its faction's colour toward its rim, as the plain bubble's: the shield reads as its side's from afar)
+  float edge = pow(1 - nDotV, 2.5);
+  float alpha = saturate(0.012 + fresnel * 0.45 + edge * 0.22 + lines * (0.08 + 0.25 * rim) + (h * 0.12 + flare * 0.15) * on + spark * 0.3) *
+                lerp(0.6, 1, dark);
+  float3 color = sky * fresnel + glint + small + lit + glow + tint * ((0.03 + 0.9 * edge) * night * (0.06 + 0.22 * edge) / 0.28);
+  // (with its texture's pattern: all of it stutters below two fifths, as the plain bubble's)
+  float stutter = info.w > 0.5 ? 0 : saturate((CloudNoise(float3(time * 6, info.z, 0.5)) - 0.55) * 5) * saturate((0.4 - health) * 5);
+  color *= 1 - 0.6 * stutter;
+  // (seen through the air: what of it comes through)
+  float3 through = ThroughAirTo(float3(1, 1, 1), i.world) - ThroughAirTo(float3(0, 0, 0), i.world);
+  return float4(color * through, alpha * dot(through, 1.0 / 3));
+}
+
 // The picture behind the shell nearest the eye, bent, and lit by the bubbles it lies in.
 float4 InsidePS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   float3 n = normalize(i.world - sphere.xyz);
@@ -166,13 +291,22 @@ float4 InsidePS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   float amount = saturate(strength * 0.22 * frameInfo.z);
   float3 hue = light / max(dot(light, luma), 1e-4);
   float night = skyZenith.w > 0.5 ? skyHorizon.w : 0;
-  return float4(lerp(seen, dot(seen, luma) * hue, amount) * (1 + 0.3 * amount) + light * (0.01 * night * frameInfo.z), 1);
+  // [litshell] where the shell meets the ground and what stands in it, a line of its light
+  float3 contact = 0;
+  [branch] if (shellLook.z > 0 && abs(info.w) > 0.5 && depth > 0) {
+    float4 q = mul(fromScreen, float4(uv.x * 2 - 1, 1 - uv.y * 2, depth, 1));
+    float off = abs(length(q.xyz / q.w - sphere.xyz) - sphere.w);
+    float dim = falling.w > 0 ? falling.w : 1;
+    contact = tintHealth.rgb * (exp(-off / (0.15 + 0.008 * sphere.w)) * shellLook.z * 0.5 * dim);
+  }
+  return float4(lerp(seen, dot(seen, luma) * hue, amount) * (1 + 0.3 * amount) + light * (0.01 * night * frameInfo.z) + contact, 1);
 }
 
 // The shell itself, both sides, laid over by its alpha (premultiplied: its rings and flares add their light).
 float4 ShellPS(VOut i) : SV_Target {
   float3 n = normalize(i.world - sphere.xyz);
   float3 v = normalize(cameraPosition - i.world);
+  [branch] if (abs(info.w) > 0.5) return LitShell(i, n, v);  // [litshell]
   float rim = pow(1 - abs(dot(n, v)), 2.5);
   float pattern = saturate(albedoMap.Sample(samplerLinear, i.uv * 3 + float2(0.01, 0.03) * time).r *
                            albedoMap.Sample(samplerLinear, i.uv * 7 - float2(0.02, 0.013) * time).g * 2.5);
@@ -201,9 +335,36 @@ float4 ShellPS(VOut i) : SV_Target {
 
 }  // namespace
 
+// [litshell] An icosahedron's twenty faces (their corners on the unit sphere, each face's turned outward), for the shader.
+std::string IcosahedronBlock() {
+  const float g = 1.6180339887f;
+  std::vector<Vec3> v;
+  for (float a : {-1.0f, 1.0f})
+    for (float b : {-g, g}) v.insert(v.end(), {Vec3{0, a, b}, Vec3{a, b, 0}, Vec3{b, 0, a}});
+  std::string A, B, C;
+  int faces = 0;
+  for (size_t i = 0; i < v.size(); ++i)
+    for (size_t j = i + 1; j < v.size(); ++j)
+      for (size_t k = j + 1; k < v.size(); ++k) {
+        auto edge = [](Vec3 p, Vec3 q) { return std::fabs(Length(p - q) - 2) < 1e-3f; };
+        if (!edge(v[i], v[j]) || !edge(v[j], v[k]) || !edge(v[i], v[k])) continue;
+        Vec3 a = Normalize(v[i]), b = Normalize(v[j]), c = Normalize(v[k]);
+        if (Dot(Cross(b - a, c - a), a + b + c) < 0) std::swap(b, c);
+        auto put = [](std::string* s, Vec3 p) {
+          char text[96];
+          std::snprintf(text, sizeof text, "%sfloat3(%.7f, %.7f, %.7f)", s->empty() ? "" : ", ", p.x, p.y, p.z);
+          *s += text;
+        };
+        put(&A, a), put(&B, b), put(&C, c);
+        ++faces;
+      }
+  if (faces != 20) std::fprintf(stderr, "render: energy shields: the icosahedron has %d faces\n", faces);
+  return "static const float3 kIcoA[20] = {" + A + "};\nstatic const float3 kIcoB[20] = {" + B + "};\nstatic const float3 kIcoC[20] = {" + C + "};\n";
+}
+
 bool EnergyShields::Init() {
   std::string error;
-  const std::string source = "#define SAMPLES " + std::to_string(gSceneSamples) + "\n" + kViewShaderBlock + kShader;
+  const std::string source = "#define SAMPLES " + std::to_string(gSceneSamples) + "\n" + kViewShaderBlock + kLightingShaderBlock + IcosahedronBlock() + kShader;
   gfx::PipelineDesc pd;
   pd.vertexSource = pd.pixelSource = source;
   pd.attrs = {{"POSITION", 0, gfx::AttrType::Float3, offsetof(ScmVertex, position)},
@@ -245,10 +406,11 @@ void EnergyShields::Begin() {
   owners_.clear();
 }
 
-void EnergyShields::AddBubble(const Model* model, const Mat4& world) {
+void EnergyShields::AddBubble(const Model* model, const Mat4& world, bool hex) {
   if (!model || !model->ok || model->lods.empty()) return;
   Bubble b{};
   b.model = model;
+  b.hex = hex;
   b.world = world;
   b.origin = {world.m[0][3], world.m[1][3], world.m[2][3]};
   // its sphere: the middle of the dome's bounds, half its width across (a dome cut off below is as wide)
@@ -320,7 +482,7 @@ void EnergyShields::Draw(const View& view, Post* post) {
 
   // the frame's constants: the way back from the picture into the world, and the bubbles whose light falls inside
   // them (the nearest kMostLit)
-  float frame[16 + 4 + kMostLit * 8] = {};
+  float frame[16 + 4 + kMostLit * 8 + 4] = {};
   const Mat4 back = Inverse(view.constants.viewProj);
   for (int r = 0; r < 4; ++r)
     for (int k = 0; k < 4; ++k) frame[r * 4 + k] = back.m[r][k];
@@ -338,6 +500,8 @@ void EnergyShields::Draw(const View& view, Post* post) {
   frame[17] = std::max(bend, 0.0f);
   frame[18] = std::max(light, 0.0f);
   frame[19] = std::max(rings, 0.0f);
+  float* look = frame + 20 + kMostLit * 8;  // [litshell]
+  look[0] = litShell ? 1.0f : 0.0f, look[1] = std::max(hexLines, 0.0f), look[2] = std::max(contactGlow, 0.0f);
 
   auto bubbleConstants = [&](const Bubble& b, float* out) {
     for (int k = 0; k < 4; ++k) {
@@ -352,7 +516,9 @@ void EnergyShields::Draw(const View& view, Post* post) {
     out[20] = static_cast<float>(b.hits);
     out[21] = Length(eye - b.centre) < b.radius ? 1.0f : 0.0f;
     out[22] = std::fmod(std::fabs(b.origin.x * 0.37f + b.origin.z * 0.61f), 97.0f);
-    out[23] = 0;
+    // [litshell] (the UEF's, for now: Chris asked for it; the others keep their own look) its hex's cells hexSize apart: an
+    // icosahedron's edge is 1.05 of its sphere's radius
+    out[23] = !litShell || !b.hex ? 0.0f : hexSize > 0 ? std::clamp(std::round(1.0515f * b.radius / hexSize), 2.0f, 200.0f) : -1.0f;
     for (int k = 0; k < kMostHits; ++k)
       for (int j = 0; j < 4; ++j) out[24 + k * 4 + j] = k < b.hits ? b.hit[k][j] : 0.0f;
   };
