@@ -200,7 +200,10 @@
 //           light falls on what is inside it; --energy-shield-health h: how much of its shield a bubble whose unit is
 //           not known has left (0..1, 1: the effects stand's), to see it weakened; --energy-test n: without a game, n
 //           shield generators of the four factions in two rows round where the camera starts, overlapping, each hit
-//           every --fx-hit-every seconds (0.8) from above, their shields at different strengths (to look and to time)
+//           every --fx-hit-every seconds (0.8) from above, their shields at different strengths (to look and to time);
+//           [litshell] --energy-shell plain: the shell as before (its look its own; default lit: it takes the world's light,
+//           the sky and sun mirrored, the small lights, the air; the UEF's with a hex of its own); --energy-hex s: that hex's
+//           spacing, world units (1.2; 0: the texture's pattern)
 // --ping-test  [pings] without a game: FAF's four pings (alert, move, attack, nuke) as its SimPing.lua makes them, script
 //           entities with the ping's mesh pulsing in size, in a row round where the camera starts, and a UEF ferry beacon
 //           in front of them (placed.h: both drawn by their meshes' CommandFeedback shaders, as the original does)
@@ -825,6 +828,8 @@ struct Options {
   bool energyShields = false;           // --energy-shields
   float energyShieldHealth = -1;        // --energy-shield-health
   int energyTest = 0;                   // --energy-test
+  int energyShell = 1;                  // --energy-shell plain|lit ([litshell])
+  float energyHex = -1;                 // --energy-hex s ([litshell]; -1: its own)
   bool pingTest = false;                // [pings] --ping-test
   bool unitScars = false, unitSnow = false;  // --unit-scars, --unit-snow
   bool unitDirt = false;                // --unit-dirt [unit dirt]
@@ -1271,6 +1276,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--surf-view") o->surfView = atoi(v);
     else if (a == "--energy-shield-health") o->energyShieldHealth = std::clamp(static_cast<float>(atof(v)), 0.0f, 1.0f);
     else if (a == "--energy-test") o->energyTest = std::max(0, atoi(v));
+    else if (a == "--energy-shell") o->energyShell = std::string(v) == "plain" ? 0 : 1;
+    else if (a == "--energy-hex") o->energyHex = static_cast<float>(atof(v));
     else if (a == "--hot-metal-lights") o->hotLights = std::max(0, atoi(v));
     else if (a == "--hot-metal-smoke") o->hotSmoke = std::max(0.0f, static_cast<float>(atof(v)));
     else if (a == "--wreck-test") {
@@ -2045,6 +2052,8 @@ int main(int argc, char** argv) {
   if (opt.plantsRegrow > 0) world.plantLife.regrow = opt.plantsRegrow;      // [plants]
   world.energyShields = opt.energyShields;
   if (opt.energyShieldHealth >= 0) world.energy.healthUnknown = opt.energyShieldHealth;
+  world.energy.litShell = opt.energyShell != 0;  // [litshell]
+  if (opt.energyHex >= 0) world.energy.hexSize = opt.energyHex;
   world.unitScars = opt.unitScars;
   world.models.lampScale = opt.lampScale;  // [unit lamps] (--lamp-scale)
   world.models.hitShapes = opt.unitScars;  // (units' models keep their triangles for where hits lie: unit_wear.h)

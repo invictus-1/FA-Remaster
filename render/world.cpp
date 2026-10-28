@@ -2846,7 +2846,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     // [energy shields] a bubble of energy (energy_shields.h) in place of the plain one; its flashes give it its hits (below)
     const bool energyHere = energyShields && look == Look::Modern && !f.original && !model->lods.empty();
     if (energyHere && model->lods[0].shield) {
-      energy.AddBubble(model, at);
+      energy.AddBubble(model, at, moho::Vfs::Normalize(mesh).find("/effects/entities/shield01/") != std::string::npos);  // [litshell] (the UEF's)
       continue;
     }
     // (in its own colours where its look has no team colour of its own: the original gives every
