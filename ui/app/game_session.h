@@ -343,6 +343,7 @@ class GameSession {
   uint32_t aheadTo_ = 0;            // (RunAhead: the tick the beats run to behind the loading screen; 0 when none)
   uint32_t aheadRanTo_ = 0;         // (AheadRanTo)
   uint32_t beatFrom_ = 0;      // the tick the running beat started from
+  std::chrono::steady_clock::time_point beatBegunAt_{}, beatFinishedAt_{};  // (MOHO64UI_HELD_LOG)
   double workerSimSeconds_ = 0, workerPictureSeconds_ = 0, workerFingerprintSeconds_ = 0, workerSoundSeconds_ = 0;  // (written there; read here after it)
   // How early (in game seconds) a beat starts on its thread: about as long as the last one took,
   // so the next beat is there when the picture's moment reaches it (the picture never waits).

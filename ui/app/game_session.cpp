@@ -1943,7 +1943,20 @@ void GameSession::PresentToWindow(const SoftwareTarget& target, const IntRect& c
     // (The picture shows moment - 1, between the beats round it: past the newest beat it stands still.)
     if (sim_) {
       const uint32_t newest = BeatRunning() ? beatFrom_ : sim_->tick();
-      if (moment - 1.0 > static_cast<double>(newest) + 1e-6) ++times.heldPictures;
+      if (moment - 1.0 > static_cast<double>(newest) + 1e-6) {
+        ++times.heldPictures;
+        // (MOHO64UI_HELD_LOG=1: each held frame with where the beats stood, to find what holds them; 2026-10-28)
+        static const bool heldLog = std::getenv("MOHO64UI_HELD_LOG") != nullptr;
+        if (heldLog) {
+          const auto now = std::chrono::steady_clock::now();
+          auto ago = [&](std::chrono::steady_clock::time_point t) { return std::chrono::duration<double, std::milli>(now - t).count(); };
+          Logf(LogLevel::Info,
+               "moho64ui: held: moment %.3f (%s) newest %u, beat %s from %u (sim tick %u), due %.3f, lead %.3f, the beat began %.1f ms "
+               "ago, the last finished here %.1f ms ago",
+               moment, pic.momentFixed ? "fixed" : "now", newest, BeatRunning() ? "running" : "idle", beatFrom_, sim_->tick(), due_, lead_,
+               ago(beatBegunAt_), ago(beatFinishedAt_));
+        }
+      }
     }
     times.worldDraw += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     ++times.worldDraws;
@@ -2354,6 +2367,7 @@ void GameSession::StartBeatOnThread() {
   beatFrom_ = sim_->tick();
   if (!worker_) worker_ = std::make_unique<BeatWorker>();
   beatToFinish_ = true;
+  beatBegunAt_ = std::chrono::steady_clock::now();
   // (what the beats' thread needs of this one's for the beat's sounds: see DecideBeatSounds)
   const bool decideSounds = sounds != nullptr;
   if (decideSounds) loopEntities_ = sounds->LoopEntities(), seekingAtBeat_ = seekTo_ != 0;
@@ -2385,6 +2399,7 @@ void GameSession::FingerprintBeat() {  // (after each beat of a recorded live ga
 
 void GameSession::FinishBeat() {
   beatToFinish_ = false;
+  beatFinishedAt_ = std::chrono::steady_clock::now();
   FrameTimes& times = Times();
   times.simBeats += workerSimSeconds_;
   times.pictureBeats += workerPictureSeconds_;
