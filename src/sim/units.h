@@ -5,6 +5,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "sim/combat.h"
@@ -101,6 +102,60 @@ struct ViewReadScope {
 // An EUnitState name (reflection 0x55bba0); Lua calls with any other name raise "Invalid enum value".
 bool IsUnitStateName(const char* name);
 
+// The unit's states (unit+0x4a0's EUnitState bits in the original). The string set is the truth and keeps its order
+// (the fingerprint walks it); beside it a bit per EUnitState name (the reflection's order, as the recorder's
+// kUnitStates) is set and cleared with it, so a test of a known state is one bit, not a walk of a tree of strings
+// (B1 at cores: the string tests were 27 s of the sim thread's 729 s, 11.6 s of it in the path searches' unit test).
+// A name outside the list (none is inserted today) is asked of the set itself.
+inline int UnitStateIndex(std::string_view s) {
+  switch (s.size()) {
+    case 4: if (s == "Busy") return 13; break;
+    case 6: if (s == "Moving") return 2; if (s == "Diving") return 17; if (s == "NoCost") return 41; break;
+    case 8: if (s == "Immobile") return 1; if (s == "Guarding") return 4; if (s == "Building") return 5; if (s == "MovingUp") return 11; if (s == "Attached") return 14; if (s == "Ferrying") return 20; break;
+    case 9: if (s == "Attacking") return 3; if (s == "Upgrading") return 6; if (s == "Repairing") return 16; if (s == "Surfacing") return 18; if (s == "Capturing") return 26; if (s == "Refueling") return 30; if (s == "GuardBusy") return 31; if (s == "Enhancing") return 38; if (s == "NoReclaim") return 40; break;
+    case 10: if (s == "MovingDown") return 10; if (s == "Patrolling") return 12; if (s == "Reclaiming") return 28; if (s == "BeingBuilt") return 39; break;
+    case 11: if (s == "Teleporting") return 19; if (s == "PathFinding") return 23; if (s == "DoNotTarget") return 34; break;
+    case 12: if (s == "WaitForFerry") return 21; if (s == "AssistMoving") return 22; if (s == "UnSelectable") return 33; break;
+    case 13: if (s == "BeingCaptured") return 27; if (s == "BeingUpgraded") return 37; break;
+    case 14: if (s == "BeingReclaimed") return 15; if (s == "HoldingPattern") return 44; break;
+    case 15: if (s == "MakingAttackRun") return 43; break;
+    case 16: if (s == "TransportLoading") return 8; if (s == "SiloBuildingAmmo") return 45; break;
+    case 17: if (s == "ForceSpeedThrough") return 32; if (s == "LandingOnPlatform") return 35; if (s == "BlockCommandQueue") return 42; break;
+    case 18: if (s == "TransportUnloading") return 9; if (s == "AssistingCommander") return 29; break;
+    case 19: if (s == "WaitingForTransport") return 7; if (s == "NeedToTerminateTask") return 25; break;
+    case 20: if (s == "ProblemGettingToGoal") return 24; break;
+    case 21: if (s == "CannotFindPlaceToLand") return 36; break;
+    default: break;
+  }
+  return 0;
+}
+class UnitStateSet {
+ public:
+  using Names = std::set<std::string, std::less<>>;
+  size_t count(std::string_view s) const {
+    const int i = UnitStateIndex(s);
+    return i ? (bits_ >> i) & 1u : names_.count(s);
+  }
+  std::pair<Names::iterator, bool> insert(std::string_view s) {
+    if (const int i = UnitStateIndex(s)) bits_ |= uint64_t{1} << i;
+    return names_.emplace(s);
+  }
+  size_t erase(std::string_view s) {
+    if (const int i = UnitStateIndex(s)) bits_ &= ~(uint64_t{1} << i);
+    auto it = names_.find(s);
+    if (it == names_.end()) return 0;
+    names_.erase(it);
+    return 1;
+  }
+  size_t size() const { return names_.size(); }
+  Names::const_iterator begin() const { return names_.begin(); }
+  Names::const_iterator end() const { return names_.end(); }
+
+ private:
+  Names names_;
+  uint64_t bits_ = 0;
+};
+
 class Unit : public Entity {
  public:
   Unit() { typeBits |= kTypeUnit; }
@@ -111,7 +166,7 @@ class Unit : public Entity {
   // order they run. A fire thread that was suspended goes to the end when it is woken (WakeFireThread).
   std::vector<std::pair<UnitWeapon*, bool>> weaponThreads;
   int weaponThreadPos = -1;  // the thread running now (-1: the stage is not running)
-  std::set<std::string> unitStates;
+  UnitStateSet unitStates;
   float capCost = 1;  // General.CapCost: what the unit counts against its army's unit cap
   std::string armorType;  // Defense.ArmorType (multipliers: Sim armour types; used by damage, M4)
   std::map<std::string, float> armorOverride;  // Unit:AlterArmor(type, mult)
