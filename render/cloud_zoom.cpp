@@ -266,7 +266,19 @@ void CloudZoom::Place(Clouds* clouds, bool on, float mapWidth, float mapHeight) 
 
 void CloudZoom::Lay(const View& view, gfx::Texture clouds, gfx::Texture sceneDepth) {
   if (!clouds || !sceneDepth) return;
-  if (!tried_) {  // (made the first time it is wanted: a small pass)
+  PrepareAhead();
+  if (!pipeline_) return;
+  device_->SetPipeline(pipeline_);
+  device_->SetConstants(0, &view.constants, sizeof view.constants);
+  device_->SetTexture(0, clouds);
+  device_->SetTexture(1, sceneDepth);
+  device_->Draw(3);
+  device_->SetTexture(0, {});
+  device_->SetTexture(1, {});
+}
+
+void CloudZoom::PrepareAhead() {
+  if (!tried_) {  // (made the first time it is wanted, or ahead: a small pass)
     tried_ = true;
     const std::string source = std::string(gSceneSamples > 1 ? "#define MSAA 1\n" : "") + kViewShaderBlock + kShader;
     gfx::PipelineDesc pd;
@@ -283,14 +295,6 @@ void CloudZoom::Lay(const View& view, gfx::Texture clouds, gfx::Texture sceneDep
     pipeline_ = device_->CreatePipeline(pd, &error);
     if (!pipeline_) fprintf(stderr, "render: cloud zoom: %s\n", error.c_str());
   }
-  if (!pipeline_) return;
-  device_->SetPipeline(pipeline_);
-  device_->SetConstants(0, &view.constants, sizeof view.constants);
-  device_->SetTexture(0, clouds);
-  device_->SetTexture(1, sceneDepth);
-  device_->Draw(3);
-  device_->SetTexture(0, {});
-  device_->SetTexture(1, {});
 }
 
 gfx::Pipeline MakeCloudZoomMarch(gfx::Device* device, const std::string& cloudsSource) {

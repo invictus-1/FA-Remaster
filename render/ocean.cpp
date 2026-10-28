@@ -965,6 +965,7 @@ void Ocean::KeepBobWaves() {
     const float h0r = b.a0r * b.amp, h0i = b.a0i * b.amp, h1r = b.a1r * b.ampOpp, h1i = b.a1i * b.ampOpp;
     bobNow_[i] = {b.kx, b.kz, h0r * ce - h0i * se + h1r * ce + h1i * se, h0r * se + h0i * ce + h1i * ce - h1r * se};
   }
+  if (++bobSerial_ == 0) ++bobSerial_;  // [zoomhitch] (the sums kept are of the waves before: 0 is no slot's)
 }
 
 void Ocean::AddHull(float x, float z, float forwardX, float forwardZ, float halfLength, float halfBeam, float speed, const Bob& bob) {
@@ -980,6 +981,19 @@ bool Ocean::BobAt(float x, float z, float size, Bob* out) const {
   const float depth = level_ - map_->Height(std::clamp(x, 0.0f, mapW_), std::clamp(z, 0.0f, mapH_));
   const float share = std::clamp((depth - 0.6f) / 3.0f, 0.0f, 1.0f);
   if (share <= 0) return true;
+  // [zoomhitch] (the sum already worked out at this place and size for the waves as they are now: the same answer)
+  uint32_t key[3];
+  std::memcpy(&key[0], &x, 4);
+  std::memcpy(&key[1], &z, 4);
+  std::memcpy(&key[2], &size, 4);
+  if (bobKept_.empty()) bobKept_.resize(kBobKept);
+  BobKept& kept = bobKept_[(key[0] * 0x9E3779B1u ^ key[1] * 0x85EBCA77u ^ key[2] * 0xC2B2AE3Du) >> 20 & (kBobKept - 1)];
+  if (kept.serial == bobSerial_ && kept.x == key[0] && kept.z == key[1] && kept.size == key[2]) {
+    out->rise = kept.rise;
+    out->slopeX = kept.slopeX;
+    out->slopeZ = kept.slopeZ;
+    return true;
+  }
   // the waves summed there, each the less the shorter it is against the hull (a Gaussian footprint of about a third of it)
   const float sigma2 = (size * 0.3f) * (size * 0.3f);
   float h = 0, sx = 0, sz = 0;
@@ -996,6 +1010,7 @@ bool Ocean::BobAt(float x, float z, float size, Bob* out) const {
   out->rise = h * share;
   out->slopeX = sx * share;
   out->slopeZ = sz * share;
+  kept = {key[0], key[1], key[2], bobSerial_, out->rise, out->slopeX, out->slopeZ};
   return true;
 }
 

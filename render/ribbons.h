@@ -113,6 +113,7 @@ class Ribbons {
     bool stopped = false;
   };
   const Kind* Blueprint(const std::string& path, const std::string& faction = std::string());
+  const Kind* ReadKind(const std::string& path, const std::string& faction);  // (Blueprint's work, the first time it is asked)
   Trail* Find(uint32_t id);
   Batch* BatchFor(const Kind* kind);
   // One camera-facing quad from a to b, `half` wide to either side.
@@ -126,6 +127,11 @@ class Ribbons {
   gfx::Buffer buffer_;
   std::unordered_map<std::string, std::unique_ptr<Kind>> kinds_;
   std::unordered_map<std::string, bool> factionFiles_;  // "<path>|remastered|<faction>" -> has the faction its own file
+  // [zoomhitch] Blueprint's answers by the path as asked and the faction, for each look (the game's files, the remastered):
+  // every beam is asked for each frame (Beam, BeamAlong, Glows), and making the key each time (the path made plain, the
+  // look and faction added) took about a microsecond: some 1 ms a frame with a late game's 1,300 beams. The kinds are never
+  // forgotten, so a pointer kept stays good.
+  std::unordered_map<std::string, std::unordered_map<std::string, const Kind*>> quick_[2];
   Kind plain_;
   struct PendingBeam {
     const Kind* kind;

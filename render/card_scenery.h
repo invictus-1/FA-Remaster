@@ -78,6 +78,10 @@ class CardScenery {
   // written to the card and the three passes dispatched. Between passes (it dispatches). False: nothing picked (the card
   // cannot, or its buffer could not be made): the processor draws it all this frame.
   bool Pick(const std::vector<uint32_t>& listed, const Pass* passes, int count, bool divertStream, uint64_t frame);
+  // [zoomhitch] Pick's three compute pipelines made now (MeshRenderer::CardKeep, on the device's own thread while the
+  // processor picks), not in the first frame the card picks (a zoom out past the switch: 5 ms with the driver's copy
+  // kept, more on a new build).
+  void PrepareAhead() { MakePipelines(); }
 
   // After Pick: the indirect draws of a pass that may have instances, by model, level and near: each one level's list
   // (`record`: the byte offset of its arguments in Buffer(); the vertex shader reads its list's start four words after

@@ -50,6 +50,9 @@ class CloudZoom {
   // Over the scene's colour (a pass of it begun, colour only): the clouds that lie before what was drawn, from the
   // clouds' picture of this frame (Clouds::Picture, when Clouds::Zoomed). `sceneDepth`: the scene's depth.
   void Lay(const View& view, gfx::Texture clouds, gfx::Texture sceneDepth);
+  // [zoomhitch] Lay's pipeline made now (World::PrepareAhead, on the device's own thread), not the first frame the eye
+  // rises into the clouds (some 560-610 away on SETONS_R); once: after that it returns at once.
+  void PrepareAhead();
 
   // The look, changeable between frames (the viewer's --cloud-zoom-look name=value,...: Set).
   float band = 900;          // over how far above the layer's top they thin to the most (world units)

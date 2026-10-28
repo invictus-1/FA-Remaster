@@ -2937,6 +2937,10 @@ void World::PrepareAhead() {
     if (volumetricClouds && volumeExplosions) clouds.PrepareRings();
     if (horizonWeather && terrain.beyondReach > 0) horizon.PrepareAhead();
     if (lightShafts && volumetricFog) sunlight.PrepareAhead();
+    // [zoomhitch] what a zoom out made the first time it reached a height: the clouds laid over the scene (the eye in them)
+    // and the dry ground's matt variants (the mud's: its first patch in view)
+    if (cloudZoom && volumetricClouds) cloudZoomDraw.PrepareAhead();
+    terrain.PrepareMatt();
     device_->EndBackgroundPipelines();
   }
   if (buildNow_) build.PrepareSparks();

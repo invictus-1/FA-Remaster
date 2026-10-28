@@ -155,6 +155,15 @@ bool Ribbons::Glows(const std::string& blueprint, std::string* rampPath, Vec3* c
 }
 
 const Ribbons::Kind* Ribbons::Blueprint(const std::string& path, const std::string& faction) {
+  // [zoomhitch] (asked again with the same path, faction and look: the answer kept, without making its key afresh)
+  std::unordered_map<std::string, const Kind*>& quick = quick_[remastered ? 1 : 0][path];
+  if (auto there = quick.find(faction); there != quick.end()) return there->second;
+  const Kind* found = ReadKind(path, faction);
+  quick.emplace(faction, found);
+  return found;
+}
+
+const Ribbons::Kind* Ribbons::ReadKind(const std::string& path, const std::string& faction) {
   // (a faction's own blueprint where the visuals track has made one, as Particles::Blueprint)
   std::string key = moho::Vfs::Normalize(path) + (remastered ? "|remastered" : "");
   bool own = false;
@@ -258,36 +267,38 @@ uint32_t Ribbons::StartTrail(const std::string& blueprint, Vec3 position, const 
   return trails_.back().id;
 }
 
+// [zoomhitch] The trails are kept in the order of their numbers (each new one is given the next and goes on the end; Update
+// takes the ended ones out keeping the order), so a trail is found by halving: each trail moved or stopped in a frame was
+// looked for from the start of all of them (a late game's effects, Chris's snapshot item 20).
 Ribbons::Trail* Ribbons::Find(uint32_t id) {
-  for (Trail& t : trails_)
-    if (t.id == id) return &t;
-  return nullptr;
+  auto it = std::lower_bound(trails_.begin(), trails_.end(), id, [](const Trail& t, uint32_t want) { return t.id < want; });
+  return it != trails_.end() && it->id == id ? &*it : nullptr;
 }
 
 void Ribbons::MoveTrail(uint32_t trail, Vec3 position) {
-  for (Trail& t : trails_)
-    if (t.id == trail && !t.stopped) {
-      // a new place once the emitter has moved a little (a third of the band's width, at least a
-      // fiftieth of a second apart; the original adds one a tick, which at a high frame rate shows corners)
-      const TrailPoint& last = t.points.back();
-      t.head = position;
-      t.headAt = now_;  // (trails: when it was last moved there, StopTrail)
-      t.travelled = last.travelled + Length(position - last.position);
-      if (Length(position - last.position) > t.kind->halfWidth * 0.6f && now_ - last.born > 0.02) t.points.push_back({position, now_, t.travelled});
-    }
+  if (Trail* found = Find(trail); found && !found->stopped) {
+    Trail& t = *found;
+    // a new place once the emitter has moved a little (a third of the band's width, at least a
+    // fiftieth of a second apart; the original adds one a tick, which at a high frame rate shows corners)
+    const TrailPoint& last = t.points.back();
+    t.head = position;
+    t.headAt = now_;  // (trails: when it was last moved there, StopTrail)
+    t.travelled = last.travelled + Length(position - last.position);
+    if (Length(position - last.position) > t.kind->halfWidth * 0.6f && now_ - last.born > 0.02) t.points.push_back({position, now_, t.travelled});
+  }
 }
 
 void Ribbons::StopTrail(uint32_t trail) {
-  for (Trail& t : trails_)
-    if (t.id == trail && !t.stopped) {
-      // (trails) where the emitter had got to stays as the trail's last place, as laid when it was last moved there: the
-      // original stops a trail at the beat after its thing is gone, its last segment running to where the thing was then
-      // (the engine's reading of CEfxTrailEmitter::ProcessLifetime, 0x6717e0); before, the stretch since the last place
-      // laid (up to a fiftieth of a second of a shot's way) went at once. Every place then lives out the trail's own
-      // TrailLength from when it was laid, as the original's segments do (Update).
-      if (!t.points.empty() && Length(t.head - t.points.back().position) > 1e-4f) t.points.push_back({t.head, t.headAt, t.travelled});
-      t.stopped = true;
-    }
+  if (Trail* found = Find(trail); found && !found->stopped) {
+    Trail& t = *found;
+    // (trails) where the emitter had got to stays as the trail's last place, as laid when it was last moved there: the
+    // original stops a trail at the beat after its thing is gone, its last segment running to where the thing was then
+    // (the engine's reading of CEfxTrailEmitter::ProcessLifetime, 0x6717e0); before, the stretch since the last place
+    // laid (up to a fiftieth of a second of a shot's way) went at once. Every place then lives out the trail's own
+    // TrailLength from when it was laid, as the original's segments do (Update).
+    if (!t.points.empty() && Length(t.head - t.points.back().position) > 1e-4f) t.points.push_back({t.head, t.headAt, t.travelled});
+    t.stopped = true;
+  }
 }
 
 void Ribbons::Update(double now) {

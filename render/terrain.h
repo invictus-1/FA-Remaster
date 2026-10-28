@@ -75,6 +75,16 @@ class Terrain {
   void PrepareWet() {
     if (rainGround && richGround && WetReady() && MorePipeline(1) && mattGrazing) MattVariant(morePipeline_[1]);
   }
+  // [zoomhitch] The dry ground's matt variants (mattGrazing) made now, of the pipelines the dry ground is drawn with (the
+  // ground's own or its parallax, and the mask's mud where it is made), not the first frame each is drawn: the mud's is first
+  // wanted when a patch that may hold mud comes into the view, which zooming out from a base did at some 450-500 away
+  // (64-100 ms with the driver's copy kept, Chris's snapshot item 2). World::PrepareAhead calls it on the device's own thread.
+  void PrepareMatt() {
+    if (!mattGrazing) return;
+    const bool relief = parallax && materials_ && richGround && parallaxPipeline_;
+    if (pipeline_) MattVariant(relief ? parallaxPipeline_ : pipeline_);
+    if (morePipeline_[0]) MattVariant(morePipeline_[0]);
+  }
   // [snowhitch] The lying snow made ready now, before the first flake (World::readAhead, each frame while the game's weather
   // can snow: World::SnowAhead; Chris, 2026-10-21: "the game froze for around 5-10 seconds right before it began to snow",
   // 7.7 s in the viewer): the snow materials read with the wet twins into the one set as the first snow read them (once:

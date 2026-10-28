@@ -530,6 +530,18 @@ class Ocean {
     float kx, kz, hr, hi;  // the wave now: h(k, t)
   };
   std::vector<BobNow> bobNow_;
+  // [zoomhitch] BobAt's sums kept for the waves as they are now (bobSerial_, raised each time bobNow_ is written): a ship's
+  // hull and every effect on its bones ask at the same place and size in a frame (World::RideWaves), and each sum is
+  // kBobWaves waves' sines and cosines (some 13 us; a late game's navy carries thousands of effects). Asked again with the same three
+  // numbers bit for bit, the sum kept is the answer, the same as working it out again. One slot per place (a newcomer takes
+  // it over); BobAt is asked on the frames' thread alone.
+  struct BobKept {
+    uint32_t x = 0, z = 0, size = 0, serial = 0;
+    float rise = 0, slopeX = 0, slopeZ = 0;
+  };
+  static constexpr size_t kBobKept = 4096;
+  mutable std::vector<BobKept> bobKept_;
+  uint32_t bobSerial_ = 0;
   float keptRough_ = -1, keptWind_[2] = {0, 0}, keptHeight_ = -1;
 };
 

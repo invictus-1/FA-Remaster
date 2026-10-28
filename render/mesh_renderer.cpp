@@ -2591,6 +2591,9 @@ void MeshRenderer::CardKeep() {
   if (!device_->IndirectDraws()) return;
   if (!card_) card_ = std::make_unique<CardScenery>(device_);
   CardPipelines();
+  device_->BeginBackgroundPipelines();  // [zoomhitch] (the picking's own, likewise)
+  card_->PrepareAhead();
+  device_->EndBackgroundPipelines();
   CardGive();
 }
 
