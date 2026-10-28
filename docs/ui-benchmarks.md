@@ -22,6 +22,17 @@ V-cache; a moho64 run on the other ran ~40% slower in every phase. None of today
 threads), so a difference between two runs may partly be where they ran. From the next pair on: pinned to logical
 processors 0-15, or the CCD logged.
 
+## 2026-10-28 evening: MOHO64UI_LEAD_BEATS=2 on trial (the same late game, the frozen build d909214)
+
+The 14:01 run again (the same game to the last beat: fingerprints identical over all 27,007 beats), unpinned, the one
+change a lead of up to two beats. Ticks 21001-27000: held frames 7,203 -> 6,612 (-8%, within the swing between
+1000-tick spans: some better, some worse); the simulation, the beat's work on the window's thread (6.8 ms) and the
+long frames (~16 a second, all the world's picture) the same. It does not help: the setting stays off. By the code
+a beat whose whole chain (~77 ms with the fingerprint and the sounds) is well under a lead of ~130 ms should hold no
+frame, so the held frames come from somewhere else: MOHO64UI_HELD_LOG=1 (a line for each held frame with where the
+beats stood) is to find out. Also from the run's summary: the late game at 4K runs ~35 ms a frame in the middle
+(under 30 frames a second), about 3 frames a beat, the world's picture taking most of each.
+
 ## 2026-10-28 afternoon: the late game again, after the host changes (on 1026ec5)
 
 The morning's game again (its table and seed 1392934588, no orders), the same full-screen 4K window and switches,
