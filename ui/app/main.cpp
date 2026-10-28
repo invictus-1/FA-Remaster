@@ -120,6 +120,7 @@ std::string ownFolder;
 bool originalM28 = false;
 std::string ourMods;
 std::string m28Variant;           // the variant's folder when it is used (else empty)
+std::vector<std::string> m28Left;  // the init file's folders of the original left out (for the replay scan)
 constexpr const char* kOriginalM28Uid = "fnewm028-";  // (every version's uid begins so: fnewm028-v326-...)
 // A folder the init file mounts as a mod that is the original M28AI (its mod_info's uid)
 bool IsOriginalM28(const std::string& dir) {
@@ -242,6 +243,7 @@ bool RunInit(const Options& o, Vfs& vfs, std::vector<std::string>& hookDirs, std
       }
     } else if (!m28Variant.empty() && Vfs::Normalize(mp).rfind("/mods/", 0) == 0 && IsOriginalM28(mdir)) {
       Logf(LogLevel::Info, "moho64ui: the original M28AI (%s) is left out: the lobby's M28 is our variant", hostfs::DisplayPath(mdir).c_str());
+      m28Left.push_back(mdir);
     } else {
       vfs.Mount(mdir, mp);
     }
@@ -510,6 +512,8 @@ int main(int argc, char** argv) {
   session.replayMaps = moreMaps;
   session.scanInit = o.init;  // (the replay timeline's scan mounts the game as this program did)
   session.scanFolders = o.folders;
+  if (!m28Variant.empty()) session.scanMounts.push_back({m28Variant, "/mods/m28-variant"});
+  session.scanSkips = m28Left;
   session.scanTicks = scanTicks;
   cfg.launchSession = [&session](lua_State* L, int config, std::string* why) { return session.Launch(L, config, why); };
   cfg.launchSinglePlayer = [&session](lua_State* L, int info, std::string* why) { return session.LaunchSinglePlayer(L, info, why); };

@@ -976,6 +976,8 @@ void GameSession::StartMomentScan(const ReplayHeader& header, const std::string&
   args.init = scanInit;
   args.folders = scanFolders;
   args.maps = replayMaps;
+  args.mounts = scanMounts;
+  args.skipMounts = scanSkips;
   args.modUids = uids;
   args.replay = file;
   args.threads = 1;  // (the cores stay the watched game's)

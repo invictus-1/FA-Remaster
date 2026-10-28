@@ -145,6 +145,10 @@ class GameSession {
   // scan stops (0: at the replay's end; --scan-ticks, for tests).
   std::string scanInit;
   std::map<std::string, std::string> scanFolders;
+  // (what the host mounted after the init file, as (host folder, mount point), and the init file's folders it left
+  // out: the M28 variant in place of the original, main.cpp m28Variant; engine REQUESTS 49)
+  std::vector<std::pair<std::string, std::string>> scanMounts;
+  std::vector<std::string> scanSkips;
   int scanTicks = 0;
 
   // The game's window (the live host's; nullptr without one): the world's picture is made on it
