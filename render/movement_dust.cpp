@@ -280,6 +280,9 @@ VOut VS(uint vertex : SV_VertexID, uint instance : SV_InstanceID) {
   o.world = w;
   float t = saturate(age / trail.y);
   float shows = trail2.x * strength * smoothstep(0.12, 0.6, age) * pow(1 - t, 1.3) * min(1, pow(0.3 / width, 0.6)) * (width / drawn);
+  // (close to the eye it fades away: a few of its own widths off, a contrail is haze one is in, not a band across the
+  // picture; the unit check saw the Hummingbird's and the Stork's as a thick beige band filling a low camera's view)
+  shows *= smoothstep(width * 3, width * 12, far);
   o.info = float4(corner.x, shows * (1 - saturate((far - trail3.z) * trail3.w)), t, f0.z);
   o.sunLit = CloudShadow(P) * SunShadowMaps(P, float3(0, 0, 0));
   return o;
