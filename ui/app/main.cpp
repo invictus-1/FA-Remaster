@@ -718,6 +718,7 @@ int main(int argc, char** argv) {
   // one frame.
   std::unique_ptr<ui::UserState> starting;  // between the two: the game's state, its screen not made yet
   bool startingUp = false;
+  bool aheadDue = false;  // (the beats behind the loading screen still to be begun once the first is through)
   bool startUp = false;  // (the game's state came up so far: its boot, SetupUI, StartGameUI)
   std::function<void()> finishGameInterface;
   // A session's state made and booted (the loading thread's work, or this thread's when it did not do it): its rules,
@@ -791,7 +792,15 @@ int main(int argc, char** argv) {
       return;
     }
     if (startingUp) {  // (the second half once the first beat is through: a frame or two, the loading screen shown)
-      if (!session.BeatRunning()) finishGameInterface();
+      if (session.BeatRunning()) return;
+      if (aheadDue) {  // (then the beats up to the commander's arrival, still behind the loading screen: GameSession::Aheadable)
+        aheadDue = false;
+        session.FinishFirstBeat();
+        session.RunAhead(ui::GameSession::kAheadTicks);
+        return;
+      }
+      if (session.RunningAhead()) return;
+      finishGameInterface();
       return;
     }
     session.ServeLoad();
@@ -865,11 +874,15 @@ int main(int argc, char** argv) {
       for (const std::string& sync : setup) starting->DeliverSync(sync);
     }
     static const bool oneFrame = std::getenv("MOHO64UI_START_ONE_FRAME") != nullptr;
-    if (windowed && !oneFrame) {  // (the game's screen in the next frame: see `starting')
+    // (MOHO64UI_AHEAD=0: no beats behind the loading screen; =1: those beats also without a window, for tests)
+    static const char* aheadMode = std::getenv("MOHO64UI_AHEAD");
+    const bool ahead = session.Aheadable() && (aheadMode ? std::string(aheadMode) != "0" && (windowed || std::string(aheadMode) == "1") : windowed);
+    if ((windowed && !oneFrame) || ahead) {  // (the game's screen in the next frame: see `starting')
       session.StartFirstBeat();
       lap("(start: the setup's sync, the first beat begun)");
       session.HoldBeats(true);
       startingUp = true;
+      aheadDue = ahead;
       return;
     }
     session.RunFirstBeat();
@@ -907,6 +920,9 @@ int main(int argc, char** argv) {
       // operation's opening cinematic comes in beat 1's sync (Sync.NISMode 'on': gamemain.NISMode
       // asks the main world view, which CreateGameInterface makes). The setup's own sync went
       // to the scripts above, before the screen (TakeSetupSync).
+      // (the first beats ran behind the loading screen: the tick the screen comes at, for gamemain's StartupSequence,
+      // ui/data/hook/lua/ui/game/gamemain.lua)
+      if (session.AheadRanTo()) game->RunString("moho64ui_aheadTick = " + std::to_string(session.AheadRanTo()), "=host");
       game->GameLoaded();
       lap("(start: CreateGameInterface)");
       game->DropPrecompiledScripts();

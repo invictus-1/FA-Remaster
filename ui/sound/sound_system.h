@@ -85,6 +85,13 @@ class SoundSystem {
   void SetLoop(uint32_t entity, const std::string& bank, const std::string& cue, const float position[3]);
   void MoveLoop(uint32_t entity, const float position[3]);
   bool HasLoops() const { return !loops_.empty(); }
+  // The entities with a running sound, in order (a copy, for the beats' thread: GameSession::DecideBeatSounds).
+  std::vector<uint32_t> LoopEntities() const {
+    std::vector<uint32_t> ids;
+    ids.reserve(loops_.size());
+    for (const auto& entry : loops_) ids.push_back(entry.first);  // (a std::map: in order already)
+    return ids;
+  }
   void StopWorld();
   int worldPlayed() const { return worldPlayed_; }  // the world's sounds that were heard, loops counted when they start
 
