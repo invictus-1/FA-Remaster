@@ -756,12 +756,13 @@ void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation,
       // (a fifth weaker than at first: Chris, 2026-10-13, "the red glow which is the army color is a bit strong")
       tint = tint * (0.8f / std::max({tint.x, tint.y, tint.z, 0.05f}));
     } else if (light.hull && !lampsTeamColour) {
-      // ([lampcolour] its faction's own: its file's colour, deepened (raised to the 1.6th: less red and green beside its blue)
-      // and twice as strong - blue on the ground's browns shows far less than the army's red does, and as the file has it,
-      // it read lavender-white (the interface's checks in a night game: as strong as the red at 1.5, but pale))
+      // ([lampcolour] its faction's own: its file's colour, deepened (raised to the 2.5th: the UEF's (0.27, 0.61, 1.0) to about
+      // (0.04, 0.29, 1.0), a blue with more green than red, which on reddish-brown soil reads blue, not violet) and 2.4 at its
+      // strongest - blue on the ground's browns shows far less than the army's red does (the interface's checks in a night
+      // game: as the file has it, lavender-white; at the 1.6th, still violet))
       const Vec3 c = light.color;
-      tint = Vec3{std::pow(std::max(c.x, 0.0f), 1.6f), std::pow(std::max(c.y, 0.0f), 1.6f), std::pow(std::max(c.z, 0.0f), 1.6f)};
-      tint = tint * (2.0f / std::max({tint.x, tint.y, tint.z, 0.05f}));
+      tint = Vec3{std::pow(std::max(c.x, 0.0f), 2.5f), std::pow(std::max(c.y, 0.0f), 2.5f), std::pow(std::max(c.z, 0.0f), 2.5f)};
+      tint = tint * (2.4f / std::max({tint.x, tint.y, tint.z, 0.05f}));
     }
     if (light.cone > 0) {
       const Vec3 along = Rotate(orientation, Rotate(boneTurn, light.direction));
