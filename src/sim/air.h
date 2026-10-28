@@ -132,6 +132,9 @@ void AirFormationFollow(Sim& sim, Unit* u);
 // landing move (NewMoveTask with goal layer Land): the spot goes through PrepareMove and the
 // aircraft lands (or hovers at TransportHoverHeight while loading / carrying) there.
 void AirSetGoal(Sim& sim, Unit* u, Vec3 goal, uint32_t tick, int layer = 0, bool landingSpot = true);
+// ... and the goal given in the command stream, between beats: the navigator's SetGoal sets the motion's target at
+// once (SetMotionTarget 0x5a4a90 -> CUnitMotion::SetTarget 0x6b85e0), where ours waits for the motion step.
+void AirTakeGoalNow(Sim& sim, Unit* u);
 // CUnitMotion+0x64: a fixed landing height (+inf: none), e.g. a staging platform's bone.
 // The navigator's SetDestUnit: fly at an entity's exact position (attack runs on a mobile target).
 void AirSetDestEntity(Sim& sim, Unit* u, const Entity* e);

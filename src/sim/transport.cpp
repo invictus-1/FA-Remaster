@@ -3720,6 +3720,12 @@ void RetargetUnloadMoves(Sim& sim, UnitCommand& c) {
     const Entity* target = c.targetId ? sim.FindEntity(c.targetId) : nullptr;
     const Vec3 p = c.hasPos ? c.pos : (target ? target->position : u->position);
     LandingMove(sim, u, p);
+    // (the listener's SetGoal 0x618d74 -> the air navigator's SetGoal 0x5a4c60 -> SetMotionTarget 0x5a4a90 ->
+    // CUnitMotion::SetTarget 0x6b85e0, at once: the new target, MovingUp / MovingDown cleared, so the beat's record
+    // shows the transport not coming down until its next motion step lands it again. Seen: MP1 10588, army 2's
+    // 0x20011a, the original's states lose MovingDown for that one beat; ours, taking the goal up in the motion step,
+    // kept it.)
+    AirTakeGoalNow(sim, u);
   }
 }
 

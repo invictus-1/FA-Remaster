@@ -582,23 +582,39 @@ bool AnyRes(Sim& sim, const int* r) {
       if (R.bits[static_cast<size_t>(z) * R.w + x]) return true;
   return false;
 }
+// A unit holds ONE o-grid rect, unit+0x5a8 (Unit::ogridRect): ReserveOgridRect 0x6ab6f0 frees the one held and takes
+// the new, FreeOgridRect 0x6ab760 frees it, CanReserveOgridRect 0x6ab810 tests a rect with it lifted. The move task's
+// landing spot (CUnitMoveTask ctor 0x61862c, its command listener 0x618dbf) and the flight's own landing spot
+// (0x6bf5e6..0x6bf60a) are both that rect; the flight keeps a copy of what it reserved at motion+0x158 (landRect).
+// Seen: MP1 10588, the player drags the unload point of army 2's transport 0x20011a (SetCommandTarget) a cell west
+// of its landing spot (428.5, 9.0), which its move task holds; the listener's PrepareMove (0x618d20, before the rect
+// is let go at 0x618d83) finds the new cell (427.5, 9.0) free in the original, as its own rect is lifted. Ours lifted
+// only the flight's rect, found the cell held by itself and took (436, 9) of the ring.
+void GroundFreeRectImpl(Sim& sim, Unit* u);
+void GroundReserveRectImpl(Sim& sim, Unit* u, const int r[4]);
+// CUnitMotion::SetTarget 0x6b8883..0x6b88d8: the unit's rect is freed only while it is the one the flight reserved;
+// the copy is cleared either way
 void FreeLandRect(Sim& sim, Unit* u) {
   AirMotion& a = A(u);
-  if (!RectEmpty(a.landRect)) FillRes(sim, a.landRect, 0);
+  if (std::equal(a.landRect, a.landRect + 4, u->ogridRect)) GroundFreeRectImpl(sim, u);
   std::fill(a.landRect, a.landRect + 4, 0);
 }
+// the touchdown 0x6bfb20..0x6bfb40: the copy cleared, the unit's rect freed whatever holds it
+void FreeLandRectOnTouchdown(Sim& sim, Unit* u) {
+  AirMotion& a = A(u);
+  std::fill(a.landRect, a.landRect + 4, 0);
+  GroundFreeRectImpl(sim, u);
+}
 void ReserveLandRect(Sim& sim, Unit* u, const int* r) {
-  FreeLandRect(sim, u);
   AirMotion& a = A(u);
   std::copy(r, r + 4, a.landRect);
-  FillRes(sim, r, 1);
+  GroundReserveRectImpl(sim, u, r);
 }
 bool CanReserve(Sim& sim, Unit* u, const int* r) {
-  AirMotion& a = A(u);
-  bool own = !RectEmpty(a.landRect);
-  if (own) FillRes(sim, a.landRect, 0);
+  bool own = !RectEmpty(u->ogridRect);
+  if (own) FillRes(sim, u->ogridRect, 0);
   bool blocked = AnyRes(sim, r);
-  if (own) FillRes(sim, a.landRect, 1);
+  if (own) FillRes(sim, u->ogridRect, 1);
   return !blocked;
 }
 
@@ -1698,7 +1714,7 @@ void CalcMoveAir(Sim& sim, Unit* u, Transform& T) {
     if (a.combatState == 0) {
       if (landing && (a.elevOffset == 0.0f || a.landHeight != kInf || ShouldHover(u))) {
         if (distH < 0.5f && (a.height - a.elevOffset < 0.1f || LayerBits(u->layer) == a.landLayer)) {
-          FreeLandRect(sim, u);
+          FreeLandRectOnTouchdown(sim, u);
           SetLayerBits(sim, u, a.landLayer);
           SetState(u, "MovingUp", false);
           SetState(u, "MovingDown", false);
@@ -2199,6 +2215,10 @@ void TakePendingGoal(Sim& sim, Unit* u) {
     Formation* f = GetFormation(sim, u);
     a.inFormation = f && FormationIsForm(*f);
   }
+}
+
+void AirTakeGoalNow(Sim& sim, Unit* u) {
+  if (u->motion.air && A(u).pending && u->fractionComplete >= 1.0f) TakePendingGoal(sim, u);
 }
 
 void AirAbort(Sim& sim, Unit* u) {
