@@ -1552,6 +1552,18 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
     if (key == "KILLSELECTEDUNITS") return SelectionOrdersItself(L, false);
     if (key == "DESTROYSELECTEDUNITS") return SelectionOrdersItself(L, true);
   }
+  // SetFocusArmy <zero based army index or -1> (FA exe: the ConCommand 0xf5b0d0, "Pass in army index or -1", registered
+  // at 0xbe43f0; its Execute 0x834e50, READ 2026-10-27): with anything but one word after the name its usage, the name
+  // as given (0x834e9d); without a session the engine's "no session" line (0x834f1b); else atol of the word, 0-based,
+  // to CWldSession::RequestFocusArmy (0x834f04) with its checks (RequestFocusArmyChecked: with cheats on any army).
+  // FAF's score panel sends it for a click on an army's name (score.lua: ConExecute('SetFocusArmy ' .. armyID - 1)),
+  // its Debug Spawn window for a double click on one (createunit.lua).
+  if (Upper(name) == "SETFOCUSARMY") {
+    const std::vector<std::string> words = ConsoleWords(text);
+    if (words.size() != 2) return ConsolePrintf(L, "syntax: %s <zero based army index or -1>", words.empty() ? name.c_str() : words[0].c_str());
+    if (!UserState::From(L)->HasSim()) return ConsoleNoSession(L);
+    return RequestFocusArmyChecked(L, static_cast<int>(std::atol(words[1].c_str())));
+  }
   if (Upper(name) == "CON_ECHO") {  // (FA exe 0x41ee10: the words after it, a space between them)
     const std::vector<std::string> words = Words(rest);
     if (words.empty()) return;

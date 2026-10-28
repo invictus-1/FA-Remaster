@@ -186,14 +186,8 @@ int l_GetFocusArmy(lua_State* L) {
 }
 
 // SetFocusArmy(n) (FA exe 0x842ee0; the replay's army list, NoteGameOver's -1, the score screen):
-// look through army n (1-based) or, with -1, at every army. Checked as the original's
-// (CWldSession::RequestFocusArmy 0x8965e0, ValidateFocusArmyRequest 0x896670): allowed with no
-// command source of one's own (a replay's viewer), with cheats on, for one's own army, or once the
-// game is over; else only where observing is allowed and the player's source belongs to no army at
-// all (FAF's exe makes the original's "no army still in the game" that): never in our games, where
-// it always belongs to the player's army. A request the checks refuse is dropped quietly. The
-// engine applies it at its next Sync (Sim::RequestFocusArmy, engine request 29); this state takes
-// the change from that beat's copy (CopyFromSimulation).
+// look through army n (1-based) or, with -1, at every army: n outside 1 .. armies (and not -1) is its Lua
+// error; then CWldSession::RequestFocusArmy with n - 1 (RequestFocusArmyChecked).
 int l_SetFocusArmy(lua_State* L) {
   if (lua_gettop(L) != 1) return luaL_error(L, "%s\n  expected %d args, but got %d", "SetFocusArmy", 1, lua_gettop(L));
   const int n = static_cast<int>(luaL_checknumber(L, 1));
@@ -203,29 +197,7 @@ int l_SetFocusArmy(lua_State* L) {
   const int armies = static_cast<int>(user->economyCopied ? user->armiesCopy.size() : ArmyViews(*sim).size());
   if (n != -1 && (n < 1 || n > armies))
     return luaL_error(L, "Invalid army index of %d; must be between 1 and %d inclusive.", n, armies);
-  const int wanted = n == -1 ? -1 : n - 1;
-  const bool replay = user->economyCopied ? user->isReplayCopy : sim->isReplay;
-  bool cheats = false;
-  {
-    int top = lua_gettop(L);
-    lua_getglobal(L, "SessionGetScenarioInfo");
-    if (lua_isfunction(L, -1) && lua_pcall(L, 0, 1, 0) == 0 && lua_istable(L, -1)) {
-      lua_pushstring(L, "Options");
-      lua_gettable(L, -2);
-      if (lua_istable(L, -1)) {
-        lua_pushstring(L, "CheatsEnabled");
-        lua_gettable(L, -2);
-        cheats = lua_isstring(L, -1) && std::string(lua_tostring(L, -1)) == "true";
-      }
-    }
-    lua_settop(L, top);
-  }
-  const GamePace* pace = user->config().pace;
-  const bool over = (pace && pace->ended) || sim->endGame;
-  const int own = user->config().ownArmy;
-  const bool allowed = replay || own < 0 || cheats || (wanted != -1 && wanted == own) || over;
-  if (!allowed) return 0;
-  sim->RequestFocusArmy(wanted);
+  RequestFocusArmyChecked(L, n == -1 ? -1 : n - 1);
   return 0;
 }
 
@@ -558,6 +530,48 @@ int l_SessionSendChatMessage(lua_State* L) {
 }
 
 }  // namespace
+
+// CWldSession::RequestFocusArmy (FA exe 0x8965e0) for a 0-based army or -1, from SetFocusArmy (the Lua function's n - 1)
+// and the console's SetFocusArmy (keymap.cpp, 0x834e50): an index outside -1 .. armies - 1 is only logged (0x896633);
+// else ValidateFocusArmyRequest (0x896670) checks it: allowed with no command source of one's own (a replay's viewer),
+// with cheats on, for one's own army, or once the game is over; else only where observing is allowed and the player's
+// source belongs to no army at all (FAF's exe makes the original's "no army still in the game" that): never in our
+// games, where it always belongs to the player's army. A request the checks refuse is dropped quietly. The engine
+// applies it at its next Sync (Sim::RequestFocusArmy, engine request 29; the original's sim driver slot 0x30); this
+// state takes the change from that beat's copy (CopyFromSimulation).
+void RequestFocusArmyChecked(lua_State* L, int wanted) {
+  UserState* user = UserState::From(L);
+  Sim* sim = TheSim(L);
+  if (!sim) return;
+  const int armies = static_cast<int>(user->economyCopied ? user->armiesCopy.size() : ArmyViews(*sim).size());
+  if (wanted < -1 || wanted >= armies) {
+    Logf(LogLevel::Info, "CWldSession::RequestFocusArmy(): invalid army index %d.  Must be between -1 and %d inclusive", wanted,
+         armies - 1);
+    return;
+  }
+  const bool replay = user->economyCopied ? user->isReplayCopy : sim->isReplay;
+  bool cheats = false;
+  {
+    int top = lua_gettop(L);
+    lua_getglobal(L, "SessionGetScenarioInfo");
+    if (lua_isfunction(L, -1) && lua_pcall(L, 0, 1, 0) == 0 && lua_istable(L, -1)) {
+      lua_pushstring(L, "Options");
+      lua_gettable(L, -2);
+      if (lua_istable(L, -1)) {
+        lua_pushstring(L, "CheatsEnabled");
+        lua_gettable(L, -2);
+        cheats = lua_isstring(L, -1) && std::string(lua_tostring(L, -1)) == "true";
+      }
+    }
+    lua_settop(L, top);
+  }
+  const GamePace* pace = user->config().pace;
+  const bool over = (pace && pace->ended) || sim->endGame;
+  const int own = user->config().ownArmy;
+  const bool allowed = replay || own < 0 || cheats || (wanted != -1 && wanted == own) || over;
+  if (!allowed) return;
+  sim->RequestFocusArmy(wanted);
+}
 
 // The chat messages sent since the last frame reach the game's script (see above).
 void DeliverChat(lua_State* L) {

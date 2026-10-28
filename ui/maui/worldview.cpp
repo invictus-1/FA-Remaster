@@ -1037,6 +1037,9 @@ class WorldView : public Control {
   std::vector<OrderEta> orderEtas_;
   // The buildings being placed under the mouse as the scene was last made (for tests: moho64ui_BuildGhosts).
   std::vector<WorldGhost> placingGhosts_;
+  // The build orders' sites outlined in blue while a building is being placed, as the scene was last made (for tests:
+  // moho64ui_BuildGhosts' second answer).
+  std::vector<WorldGhost> skirtSites_;
 
   // The camera's farthest zoom and its field of view go by the shape of the view that shows it.
   void TakeAspect(Camera* c) {
@@ -1156,23 +1159,22 @@ class WorldView : public Control {
     CommandMode(L, &mode, &name);
     UiManager& ui = user->ui();
     const bool building = hasSim && (mode == "build" || mode == "buildanchored") && !name.empty();
-    // While a building is being placed every building that stands shows the outline of the
-    // ground it takes, so that the new one can be set against it: the original's
-    // DrawAllUnitSkirts (0x85ad80: a rectangle of the blueprint's skirt in 0xc00080ff round each
-    // unit; called from the world view's drawing at 0x853e9a in a build mode unless Shift is
-    // held). Which units: buildings, any army's the player sees. INFERRED: the original's test
-    // (0x8b4140 gives 8) is not read; in Chris's picture of it a factory has the outline and the
-    // commander beside it has none. Only those near what the camera looks at (ours, for the cost).
+    // While a building is being placed the site of every building order the interface holds shows the outline of the
+    // ground it takes, so that the new one can be set against it: the original's DrawAllUnitSkirts (0x85ad80: a
+    // rectangle of the blueprint's skirt in 0xc00080ff round each BuildMobile order of the session's command table, the
+    // focus army's; called from the world view's drawing at 0x853e9a in a build mode unless Shift is held; user_units.cpp
+    // BuildOrderSitesForWorld). Standing buildings get none, nor any other army's orders (Chris, 2026-10-25: enemies'
+    // were shown through the fog of war when ours outlined every standing building).
     // With Shift held too: read at 0x853e73 the original skips its call while key 0x132 (Shift)
     // is down, and so did this at first; but Chris, 2026-10-13, queuing buildings with Shift
     // held: "Pressing shift hides the building outlines when I'm trying to queue more buildings
     // it shouldn't do this", and the original does show them to him then. His word on what the
     // original shows goes before my reading of one jump (what the routine called next, 0x854b70,
-    // draws for standing buildings while Shift is down is not read).
+    // draws while Shift is down is not read).
+    skirtSites_.clear();
     if (building) {
-      std::vector<WorldGhost> standing;
-      StructuresForWorld(L, cam.target, std::max(100.0f, cam.distance * 2.0f), &standing);
-      for (const WorldGhost& g : standing) SiteOutline(L, sim(), g, 0xc00080ffu, &scene.lines);
+      BuildOrderSitesForWorld(L, &skirtSites_);
+      for (const WorldGhost& g : skirtSites_) SiteOutline(L, sim(), g, 0xc00080ffu, &scene.lines);
       // and round the buildings ordered and not begun, the guide's green (the original draws
       // its green over the blue for a building that is still someone's order)
       for (const WorldGhost& g : ordered) SiteOutline(L, sim(), g, 0xff10d010u, &scene.lines);
@@ -3052,29 +3054,34 @@ int l_OrderEtasForTests(lua_State* L) {
   return 1;
 }
 // moho64ui_BuildGhosts(): not an engine function of the original. The host's own for tests: the buildings being
-// placed under the mouse as the main view's last picture had them, {{blueprint =, x =, y =, z =, free =}, ...}.
+// placed under the mouse as the main view's last picture had them, {{blueprint =, x =, y =, z =, free =}, ...}; and
+// second the build orders' sites it outlined in blue then (DrawAllUnitSkirts), {{blueprint =, x =, y =, z =}, ...}.
 int l_BuildGhostsForTests(lua_State* L) {
-  lua_newtable(L);
   WorldView* v = MainView(UserState::From(L)->ui().GetFrame(0));
-  if (!v) return 1;
-  int n = 0;
-  for (const WorldGhost& g : v->placingGhosts_) {
+  for (int list = 0; list < 2; ++list) {
     lua_newtable(L);
-    lua_pushstring(L, "blueprint");
-    lua_pushstring(L, g.blueprint.c_str());
-    lua_rawset(L, -3);
-    const char* axes[] = {"x", "y", "z"};
-    for (int i = 0; i < 3; ++i) {
-      lua_pushstring(L, axes[i]);
-      lua_pushnumber(L, g.position[i]);
+    if (!v) continue;
+    int n = 0;
+    for (const WorldGhost& g : list == 0 ? v->placingGhosts_ : v->skirtSites_) {
+      lua_newtable(L);
+      lua_pushstring(L, "blueprint");
+      lua_pushstring(L, g.blueprint.c_str());
       lua_rawset(L, -3);
+      const char* axes[] = {"x", "y", "z"};
+      for (int i = 0; i < 3; ++i) {
+        lua_pushstring(L, axes[i]);
+        lua_pushnumber(L, g.position[i]);
+        lua_rawset(L, -3);
+      }
+      if (list == 0) {
+        lua_pushstring(L, "free");
+        lua_pushboolean(L, g.free);
+        lua_rawset(L, -3);
+      }
+      lua_rawseti(L, -2, ++n);
     }
-    lua_pushstring(L, "free");
-    lua_pushboolean(L, g.free);
-    lua_rawset(L, -3);
-    lua_rawseti(L, -2, ++n);
   }
-  return 1;
+  return 2;
 }
 // moho64ui_MapBorders() -> the list as it stands (for tests)
 int l_MapBorders(lua_State* L) {

@@ -845,10 +845,10 @@ void BuildSpacingOf(lua_State* L, const std::string& blueprint, float* alongX, f
 // touch). `adding`: the new order comes after the selected units' orders (Shift); without it
 // their own queued buildings do not count, since the new order takes their place.
 bool SiteMeetsOrdered(lua_State* L, const std::string& blueprint, const float position[3], bool adding);
-// The buildings the interface knows of (any army's, as far as the player sees them) within
-// `within` map units of a place, each with its blueprint and where it stands: for the outlines
-// the world view draws round them while a building is being placed. At most 600.
-void StructuresForWorld(lua_State* L, const float near[3], float within, std::vector<WorldGhost>* out);
+// The sites of the building orders the interface holds (the focus army's units' BuildMobile orders; every army's
+// without a focus army), each once, with its blueprint and the order's place: for the outlines the world view draws
+// round them while a building is being placed (the original's DrawAllUnitSkirts, user_units.cpp). At most 600.
+void BuildOrderSitesForWorld(lua_State* L, std::vector<WorldGhost>* out);
 std::string TakeOrders(lua_State* L);
 // The console's commands that reach the simulation with the selection (user_units.cpp): DoSimCommand's message (the
 // command line as given), TeleportSelectedUnits, and KillSelectedUnits / DestroySelectedUnits (destroy).
@@ -857,6 +857,9 @@ void TeleportSelectedUnits(lua_State* L);
 void SelectionOrdersItself(lua_State* L, bool destroy);
 // The chat messages the script has sent since the last frame come back to it (session_bindings.cpp).
 void DeliverChat(lua_State* L);
+// CWldSession::RequestFocusArmy with its checks (session_bindings.cpp): a 0-based army, or -1 for none; for the Lua
+// SetFocusArmy and the console's SetFocusArmy.
+void RequestFocusArmyChecked(lua_State* L, int wanted);
 // For other parts of the engine side (user_units.cpp): the entity ids of all units the interface
 // knows, or of the selected ones; and a unit's blueprint, place and army (counted from 1), false
 // when there is no such unit.

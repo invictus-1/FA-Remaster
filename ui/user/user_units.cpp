@@ -16,6 +16,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -3712,19 +3713,40 @@ int l_ClearSessionExtraSelectList(lua_State* L) {
 }
 }  // namespace
 
-void StructuresForWorld(lua_State* L, const float near[3], float within, std::vector<WorldGhost>* out) {
+// The outlines round building sites while a building is being placed: the original's DrawAllUnitSkirts (FA exe
+// 0x85ad80, READ 2026-10-27; the world view's drawing calls it in a build mode, 0x853e9a). It walks the session's
+// command table (session+0x3fc, the CommandManager: its map +0xcb4, nodes from +0xcb8, each node's +0x10 the command)
+// and draws, for each command whose type is 8 (BuildMobile, 0x8b4140), the skirt of the command's blueprint (its
+// +0x20, 0x555040) at its target's place (0x8b4080 -> 0x8bed50) in 0xc00080ff (Moho::DrawUnitSkirt 0x85abd0:
+// RUnitBlueprint::GetSkirtRect round the place). Standing buildings get none: only build orders, begun or not.
+// Which commands the table holds (READ the same day): the simulation publishes a command (CCommandDb::PublishSyncData
+// 0x6e0f50 -> CUnitCommand::RefreshPublishedCommandEvent 0x6e8dc0) only while one of its units is visible to the
+// focus army in the entity sense (the entity's +0x110), and a Unit's is set only for the focus army's own units, or
+// for every unit without a focus army (Unit::UpdateVisibility 0x6abc30); every other army's units reach the interface
+// as recon blips, whose unit data never carries a queue. So: the focus army's build orders (an observer's: every
+// army's), never an ally's or an enemy's. (Ours before drew the outline round every standing building of any army,
+// fog or not: Chris, 2026-10-25, "the outline (blue construction box) of what enemies are building is visible".)
+// The order's units walked here are the interface's units with orders; at most 600 sites (ours, for the cost).
+void BuildOrderSitesForWorld(lua_State* L, std::vector<WorldGhost>* out) {
+  Sim* sim = TheSim(L);
   UserState* user = UserState::From(L);
-  if (!user->units) return;
+  if (!sim || !user->units) return;
   UnitStore& store = static_cast<UnitStore&>(*user->units);
+  const int focus = sim->focusArmy + 1;
+  std::set<uint32_t> seen;
   for (auto& entry : store.units) {
     const UserUnit* u = entry.second.get();
-    if (u->gone || u->view.dead || out->size() >= 600) continue;
-    const float dx = u->view.position[0] - near[0], dz = u->view.position[2] - near[2];
-    if (dx * dx + dz * dz > within * within || !InCategory(L, u, "STRUCTURE")) continue;
-    WorldGhost g;
-    g.blueprint = u->view.blueprint;
-    for (int i = 0; i < 3; ++i) g.position[i] = u->view.position[i];
-    out->push_back(g);
+    if (u->gone || u->view.dead || (focus >= 1 && u->view.army != focus) || u->view.queueLength == 0) continue;
+    UnitStateView s;
+    if (!StateOf(L, u, &s)) continue;
+    for (const CommandView& c : s.queue) {
+      if (static_cast<CommandType>(c.type) != CommandType::BuildMobile || c.blueprint.empty() || !c.hasPosition) continue;
+      if (!seen.insert(c.id).second || out->size() >= 600) continue;
+      WorldGhost g;
+      g.blueprint = c.blueprint;
+      for (int i = 0; i < 3; ++i) g.position[i] = c.position[i];
+      out->push_back(g);
+    }
   }
 }
 
@@ -3830,8 +3852,9 @@ void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<Wor
 // while Shift (key 306) is held (GetCommandGraph(true) 0x895eb0, made by 0x824810, which reads the
 // two tables, LoadGraphParams), and is worked out again when marked (0x828fb0 -> 0x826740, 0x826ba0).
 // It holds the orders of EVERY unit the session knows (its entity table session+0x50, mask 0x100),
-// not only the selection's; no army is tested in the graph's code. For each unit not
-// INSIGNIFICANTUNIT (0x8267ca) its queue is walked (0x826140), and a non-MOBILE FACTORY's second
+// not only the selection's; no army is tested in the graph's code (the session's units with orders
+// are the focus army's: see BuildOrderGraph). For each unit not INSIGNIFICANTUNIT (0x8267ca) its
+// queue is walked (0x826140), and a non-MOBILE FACTORY's second
 // queue too (vtbl+0x20: the factory's rally orders, the queue its products are given):
 // - a unit being upgraded (unit state 0x25, BeingUpgraded) is left out (0x8261a6);
 // - the start node of the queue's first command (one per first command, graph+0xd58) gathers the
@@ -3909,14 +3932,16 @@ void BuildOrderGraph(lua_State* L, Sim& sim, UnitStore& store, OrderGraph& g) {
   g.legs.clear();
   g.queues.clear();
   g.carriers.clear();
-  // Whose orders the interface holds. INFERRED: the player's army's and its allies' (the user side
-  // has a unit's command queue by the beats' sync; for which units it has one is not read; the
-  // original shows no enemy's orders), and every army's for an observer (no focus army).
+  // Whose orders the interface holds (READ 2026-10-27): the focus army's units' alone, every army's for an observer
+  // (no focus army). The session's units with a queue are the simulation's Units whose interface is visible to the
+  // focus army, and Unit::UpdateVisibility (FA exe 0x6abc30) makes that the focus army's own units (every unit when
+  // there is none); an ally's or an enemy's unit reaches the interface as a recon blip (ReconBlip::UpdateVisibility
+  // 0x5bee40), whose unit data (blip+0x298) is refreshed by 0x5bf810 (its place, layer, a few flags), never its queue;
+  // and the commands themselves are published only while one of their units is so visible (0x6e8dc0). (Ours before
+  // held its allies' too: Chris, 2026-10-25, "Pressing shift I can see all the actions of allies vs just my own".)
   const int focus = sim.focusArmy + 1;
   std::map<int, bool> known;
-  for (const ArmyView& a : ArmyViews(sim))
-    known[a.index] = focus < 1 || a.index == focus ||
-                     (focus <= static_cast<int>(a.alliance.size()) && a.alliance[static_cast<size_t>(focus - 1)] == 2);
+  for (const ArmyView& a : ArmyViews(sim)) known[a.index] = focus < 1 || a.index == focus;
   // The queues to walk, by the units' entity ids (INFERRED: the original goes through its session's
   // entity table in its own order), and every command's units.
   struct Walk {
