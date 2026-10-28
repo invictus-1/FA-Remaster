@@ -86,7 +86,8 @@ def main():
         for f in sorted(glob.glob(os.path.join(ROOT, "render", "*.cpp"))):
             if os.path.basename(f) != "main.cpp" and (windows or os.path.basename(f) != "window_win32.cpp"):
                 add(f, ["-std=c++20", "-w", "-I", os.path.join(ROOT, "src")] + lua_inc + zlib_inc, True)
-    for d in ("core", "script", "sim"):
+    # (src/ai: our own AI's native core, the engine's, from its batch 25; none of it before that, so nothing to compile)
+    for d in ("core", "script", "sim", "ai"):
         for f in sorted(glob.glob(os.path.join(ROOT, "src", d, "*.cpp"))):
             add(f, cxxflags, True)
     for f in sorted(glob.glob(os.path.join(UI, "**", "*.cpp"), recursive=True)):
