@@ -466,6 +466,10 @@ struct LookSettings {
   // energyShields): shields that look like energy. Hidden Unit Outlines (WorldPicture::SetHiddenOutlines): units
   // seen behind trees and cliffs, only what the player may see, none in the Original look. All ON by default.
   bool battleEffects = true, energyShields = true, hiddenOutlines = true;
+  // Unit Glow Colour (the renderer's request 50, Chris 2026-10-28; World::lampsTeamColour): a unit's own faint glow in
+  // its army's colour (true, the default: Team colour) or in its faction's own (Faction colour: UEF blue for a red
+  // player's units). Console remaster_lamp_colour team|faction.
+  bool lampsTeamColour = true;
   // Colour Vision (ours, the Interface tab; Chris, 2026-10-23): the armies' colours as the player SEES them replaced by
   // a palette that stays apart for a kind of colour blindness: 0 Off (the original's colours), 1 Deuteranopia,
   // 2 Protanopia, 3 Tritanopia, 4 High Contrast (session_bindings.cpp, ColorVisionColor). Only what is shown changes:
