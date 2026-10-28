@@ -42,6 +42,8 @@ def main():
     ap.add_argument("--target", help="zig target triple (default: this machine; Windows -> x86_64-windows-gnu)")
     ap.add_argument("--out", default=os.path.join(ROOT, "build-ui"))
     ap.add_argument("--define", action="append", default=[], help="a preprocessor name for the interface's own files (test builds)")
+    ap.add_argument("--mi-debug", action="store_true", help="mimalloc's own checks on (MI_DEBUG=3, MI_SECURE=4: freed and overrun blocks caught; a test build)")
+    ap.add_argument("--lua-api-check", action="store_true", help="Lua's API checks on, a trap at the first (a C function pushing past its stack, a test build)")
     ap.add_argument("--sdl", action="store_true", help="the window and sound through SDL3 on Windows too (a test build)")
     ap.add_argument("--sdl-lib", help="the folder of the SDL3 library to link to")
     ap.add_argument("--headless", action="store_true", help="elsewhere than Windows: no SDL (no window, no sound)")
@@ -64,9 +66,9 @@ def main():
 
     std_c = ["-std=c99", "-w"]
     add(os.path.join(ROOT, "third_party", "mimalloc", "src", "static.c"),
-        std_c + mi_inc + ["-DMI_SECURE=0", "-DMI_STAT=0", "-DMI_DEBUG=0", "-DNDEBUG"], False)
+        std_c + mi_inc + (["-DMI_SECURE=4", "-DMI_STAT=0", "-DMI_DEBUG=3"] if a.mi_debug else ["-DMI_SECURE=0", "-DMI_STAT=0", "-DMI_DEBUG=0", "-DNDEBUG"]), False)
     for f in sorted(glob.glob(os.path.join(ROOT, "third_party", "lua", "*.c"))):
-        add(f, std_c + lua_inc + mi_inc + ["-DMOHO64_MIMALLOC=1"], False)
+        add(f, std_c + lua_inc + mi_inc + ["-DMOHO64_MIMALLOC=1"] + (["-Dapi_check(L,o)=do{if(!(o))__builtin_trap();}while(0)"] if a.lua_api_check else []), False)
     for n in ("adler32", "crc32", "inffast", "inflate", "inftrees", "zutil"):
         add(os.path.join(ROOT, "third_party", "zlib", n + ".c"), std_c + zlib_inc, False)
     # The movies' MPEG-1 pictures (ui/draw/movie.cpp): pl_mpeg, MIT, unchanged (ui/third_party/pl_mpeg).

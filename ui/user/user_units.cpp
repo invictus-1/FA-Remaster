@@ -2170,7 +2170,7 @@ const char* CommandName(CommandType type) {
 //   value (0x825524 stores to 0xf57cdc, ui_WaypointLineScale's, as 0x8254b8 does: GPG's slip,
 //   kept; both are 1 in the stock file).
 void ApplyGraphEntry(lua_State* L, int table, int entry, OrderGraph::Record* r, int depth) {
-  if (!lua_istable(L, entry) || depth > 16) return;
+  if (!lua_istable(L, entry) || depth > 16 || !lua_checkstack(L, 4)) return;  // (its room on the stack: prefs.cpp PushCopy)
   lua_getfield(L, entry, "inherit_from");
   if (lua_isstring(L, -1)) {
     lua_gettable(L, table);

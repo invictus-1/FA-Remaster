@@ -209,7 +209,7 @@ void WriteLiteral(lua_State* L, int idx, int depth, std::string* out) {
       return;
     }
     case LUA_TTABLE: {
-      if (depth > 32) break;
+      if (depth > 32 || !lua_checkstack(L, 4)) break;  // (each level its room on the stack: prefs.cpp PushCopy)
       std::vector<double> numbers;
       std::vector<std::string> names;
       lua_pushnil(L);

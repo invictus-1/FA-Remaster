@@ -125,7 +125,7 @@ FrontEndValue ReadFrontEndValue(lua_State* L, int idx, int depth) {
     case LUA_TSTRING: v.type = LUA_TSTRING, v.text = lua_tostring(L, idx); break;
     case LUA_TTABLE:
       v.type = LUA_TTABLE;
-      if (depth > 16) break;
+      if (depth > 16 || !lua_checkstack(L, 4)) break;  // (each level its room on the stack: prefs.cpp PushCopy)
       lua_pushnil(L);
       while (lua_next(L, idx) != 0) {
         FrontEndValue key = ReadFrontEndValue(L, -2, depth + 1), value = ReadFrontEndValue(L, -1, depth + 1);
@@ -143,6 +143,7 @@ void PushFrontEndValue(lua_State* L, const FrontEndValue& v) {
     case LUA_TNUMBER: lua_pushnumber(L, v.number); break;
     case LUA_TSTRING: lua_pushlstring(L, v.text.data(), v.text.size()); break;
     case LUA_TTABLE:
+      lua_checkstack(L, 4);  // (each level its room on the stack: prefs.cpp PushCopy)
       lua_newtable(L);
       for (const auto& [key, value] : v.table) {
         PushFrontEndValue(L, key);

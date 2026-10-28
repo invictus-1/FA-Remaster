@@ -36,9 +36,12 @@ void PushPrefs(lua_State* L) {
 }
 
 // Push a copy of the value at idx: tables are copied through, everything else is pushed as it is.
+// (each level takes four slots of the Lua stack, which a C function has only LUA_MINSTACK = 20 of unasked: a table
+// five deep in the preferences overran a script thread's stack into the next heap block, the main menu's Skirmish
+// crashing later in mimalloc, 2026-10-27; so each level asks for its room)
 void PushCopy(lua_State* L, int idx, int depth = 0) {
   if (idx < 0) idx = lua_gettop(L) + idx + 1;
-  if (!lua_istable(L, idx) || depth > 32) {
+  if (!lua_istable(L, idx) || depth > 32 || !lua_checkstack(L, 6)) {
     lua_pushvalue(L, idx);
     return;
   }
@@ -190,6 +193,7 @@ void WriteValue(lua_State* L, int idx, int indent, std::string& out);
 // The table at idx: array slots first, then the other keys in a fixed order, so the file is stable.
 void WriteFields(lua_State* L, int idx, int indent, bool topLevel, std::string& out) {
   if (idx < 0) idx = lua_gettop(L) + idx + 1;
+  lua_checkstack(L, 4);  // (each level its room on the stack: PushCopy)
   std::string pad(static_cast<size_t>(indent) * 4, ' ');
   int n = topLevel ? 0 : luaL_getn(L, idx);
   for (int i = 1; i <= n; ++i) {
