@@ -123,6 +123,7 @@ class DeepTracks {
     gfx::Texture texture;  // shape 0
     bool tread = false;    // shape 0: a piece of a tread's line (cut sharp at its ends, its berm to its sides only)
     bool hd = false;       // shape 0: [hdprints] a unit's own print (its red how deep, white deepest)
+    float stripX0 = 0, stripX1 = 1;  // shape 0: the columns of its picture it is (a share of its width; [treadlines])
   };
   struct Vertex {
     float x, y;              // in the atlas, -1..1
@@ -131,6 +132,7 @@ class DeepTracks {
     float across, tread;     // shape 0: its texels across in this level (for the picture's levels); 1 = a tread's piece
     float shape, bandX, bandHalf, margin;  // margin: the quad's size over the shape's
     float x0, y0, x1, y1;    // the atlas texels it may write (its level's region)
+    float stripX0, stripX1;  // shape 0: the columns of its picture it is
   };
   struct Level {
     int size = 0;            // texels across (its data, without the copied edges)
@@ -166,11 +168,15 @@ class DeepTracks {
     double clock;
     gfx::Texture texture;
     int phase = 0;           // [hdprints] a unit's own tread: which part of its picture the last piece was (parts: PressPrint)
+    int strip = -1;          // [treadlines] which of its picture's treads it is (-1: all of the picture)
   };
   struct Picture {           // a print's picture, and the rows of it its alpha covers (as shares of its height from
     gfx::Texture texture;    // its top: the game's short treads lie at the bottom of a large square)
     float first = 0, last = 1;
     bool hd = false;         // [hdprints] a unit's own print (all of it the piece; its red how deep)
+    // [treadlines] a unit's own tread or tyre picture's separate treads, side by side (as shares of its width; none when
+    // it is one): each is laid as a line of its own, so that on a bend each follows its own way, the outer one longer
+    std::vector<std::pair<float, float>> strips;
   };
   // [hdprints] A unit's own prints, by its blueprint (copied from its model's, Model::prints, the first time it is seen).
   struct OwnPrint {
@@ -183,8 +189,10 @@ class DeepTracks {
   // A walker's footprint (`sole`: [hdprints] its own picture, sizeX x sizeZ; none: a soft disc by its width).
   void Footprint(Vec3 at, float heading, float width, float weight, const Picture* sole = nullptr, float sizeX = 0, float sizeZ = 0);
   // A print pressed by its picture (AddPrint's, once the picture is known): `foot` one where it is laid, else a tread's piece
-  // continuing its line.
-  void PressPrint(uint32_t id, Vec3 centre, float sizeX, float sizeZ, float heading, const Picture& pic, bool foot);
+  // continuing its line. ([treadlines] `strip`: which of the picture's treads, at `centre`, sizeX wide; `weight`: the
+  // whole picture's, when one of its treads; else its own)
+  void PressPrint(uint32_t id, Vec3 centre, float sizeX, float sizeZ, float heading, const Picture& pic, bool foot, int strip = -1,
+                  float weight = 0);
 
   void Quads(const Stamp& s);
   void Quad(const Stamp& s, int level);

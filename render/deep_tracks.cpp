@@ -28,6 +28,7 @@ struct VIn {
   float4 amounts : TEXCOORD1;  // how much it presses down, pushes up; its texels across (a picture's); 1 a tread's piece, + 2 an HD print
   float4 shape : TEXCOORD2;    // 0 a picture, 1 a disc, 2 two bands; the bands' middles, half widths; the quad's margin
   float4 region : TEXCOORD3;   // the atlas texels it may write: x0, y0, x1, y1
+  float2 strip : TEXCOORD4;    // a picture: the columns of it the stamp is (shares of its width; [treadlines])
 };
 struct VOut {
   float4 position : SV_Position;
@@ -35,6 +36,7 @@ struct VOut {
   nointerpolation float4 amounts : TEXCOORD1;
   nointerpolation float4 shape : TEXCOORD2;
   nointerpolation float4 region : TEXCOORD3;
+  nointerpolation float2 strip : TEXCOORD4;
 };
 VOut VS(VIn i) {
   VOut o;
@@ -43,6 +45,7 @@ VOut VS(VIn i) {
   o.amounts = i.amounts;
   o.shape = i.shape;
   o.region = i.region;
+  o.strip = i.strip;
   return o;
 }
 bool Outside(VOut i) { return any(i.position.xy < i.region.xy) || any(i.position.xy >= i.region.zw); }
@@ -52,9 +55,10 @@ Texture2D print : register(t0);
 // out only to its sides: along its length it goes on into the next piece, laid end to end with it, and a fading
 // there would leave a seam across the track at every join. [hdprints] `hd`: a unit's own print (Model::prints): its one
 // channel (red) is how deep it presses, white deepest.
-float PrintAlpha(float2 uv, float lod, bool tread, bool hd) {
+float PrintAlpha(float2 uv, float lod, bool tread, bool hd, float2 strip) {
   float inside = saturate((tread ? min(uv.x, 1 - uv.x) : min(min(uv.x, uv.y), min(1 - uv.x, 1 - uv.y))) * 40);
-  float4 c = inside > 0 ? print.SampleLevel(samplerLinearClamp, uv, lod) : 0;
+  // ([treadlines] the stamp's own 0..1 across: the columns of the picture it is)
+  float4 c = inside > 0 ? print.SampleLevel(samplerLinearClamp, float2(lerp(strip.x, strip.y, uv.x), uv.y), lod) : 0;
   return (hd ? c.r : c.a) * inside;
 }
 float Band(float alpha) { return smoothstep(0.05, 0.3, alpha); }
@@ -69,7 +73,7 @@ float4 PSStamp(VOut i) : SV_Target {
     // piece cut sharp at its ends, where the pieces before and after it go on)
     uint w, h, levels;
     print.GetDimensions(0, w, h, levels);
-    float fine = log2(max(float(w) / max(i.amounts.z, 1), 1));
+    float fine = log2(max(float(w) * (i.strip.y - i.strip.x) / max(i.amounts.z, 1), 1));  // ([treadlines] its share of the picture)
     float soft = clamp(fine + 2, fine, max(log2(float(w)) - 3, fine));
     float2 uv = p * 0.5 + 0.5;
     bool hd = i.amounts.w > 1.5, tread = i.amounts.w - (hd ? 2 : 0) > 0.5;  // [hdprints]
@@ -84,21 +88,21 @@ float4 PSStamp(VOut i) : SV_Target {
       band_uv = float2(uv.x, (i.shape.y + i.shape.z) * 0.5);
       soft = min(soft, max(log2(max((i.shape.z - i.shape.y) * float(h) * 0.5, 1)), fine));
     }
-    float band = Band(PrintAlpha(band_uv, soft, tread, hd));
+    float band = Band(PrintAlpha(band_uv, soft, tread, hd, i.strip));
     // ([hdprints] a unit's own print says how deep itself: its picture as it is, at the level its texels in the field read)
-    trough = hd ? saturate(PrintAlpha(uv, fine, tread, true)) : band * lerp(0.45, 1.0, smoothstep(0.15, 0.6, PrintAlpha(uv, fine, tread, false)));
+    trough = hd ? saturate(PrintAlpha(uv, fine, tread, true, i.strip)) : band * lerp(0.45, 1.0, smoothstep(0.15, 0.6, PrintAlpha(uv, fine, tread, false, i.strip)));
     float near = 0, far = 0;
     if (tread) {
       [unroll] for (int k = -1; k <= 1; k += 2) {
-        near += Band(PrintAlpha(band_uv + float2(k * 0.06, 0), soft, true, hd)) * 4;
-        far += Band(PrintAlpha(band_uv + float2(k * 0.12, 0), soft, true, hd)) * 4;
+        near += Band(PrintAlpha(band_uv + float2(k * 0.06, 0), soft, true, hd, i.strip)) * 4;
+        far += Band(PrintAlpha(band_uv + float2(k * 0.12, 0), soft, true, hd, i.strip)) * 4;
       }
     } else {
       [unroll] for (int k = 0; k < 8; ++k) {
         float a = k * 0.7853982;
         float2 d = float2(cos(a), sin(a));
-        near += Band(PrintAlpha(uv + d * 0.06, soft, false, hd));
-        far += Band(PrintAlpha(uv + d * 0.12, soft, false, hd));
+        near += Band(PrintAlpha(uv + d * 0.06, soft, false, hd, i.strip));
+        far += Band(PrintAlpha(uv + d * 0.12, soft, false, hd, i.strip));
       }
     }
     ring = saturate(((near * 0.6 + far * 0.4) / 8 - band) * 2.4);
@@ -174,6 +178,58 @@ struct FadeConstants {
 std::string Lower(std::string s) {
   for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
   return s;
+}
+
+// [treadlines] The separate treads of a unit's own print picture (one channel, BC4: how deep, white deepest), side by side:
+// the runs of its columns (of four texels: its blocks) that press (more than a tenth of its deepest); runs closer than
+// a twenty-fifth of its width are one. Each a little wider than its run, into the gap beside it (so that it does not fade
+// at its own edge). None when it is one run, or not BC4.
+std::vector<std::pair<float, float>> TreadStrips(const std::string& file) {
+  std::vector<std::pair<float, float>> strips;
+  if (file.size() < 148 || std::memcmp(file.data(), "DDS ", 4) != 0) return strips;
+  auto word = [&](size_t at) {
+    uint32_t v;
+    std::memcpy(&v, file.data() + at, 4);
+    return v;
+  };
+  const uint32_t height = word(12), width = word(16), fourCC = word(84);
+  const bool dx10 = fourCC == 0x30315844u;  // "DX10"
+  const bool bc4 = dx10 ? (word(128) == 80 || word(128) == 79) : (fourCC == 0x31495441u || fourCC == 0x55344342u);  // ATI1, BC4U
+  const size_t at = dx10 ? 148 : 128;
+  const uint32_t bw = (width + 3) / 4, bh = (height + 3) / 4;
+  if (!bc4 || width < 16 || at + static_cast<size_t>(bw) * bh * 8 > file.size()) return strips;
+  std::vector<int> column(bw, 0);
+  for (uint32_t by = 0; by < bh; ++by)
+    for (uint32_t bx = 0; bx < bw; ++bx) {
+      // (a block: its two ends, the values between them, and a value of those for each of its 16 texels, 3 bits each)
+      const uint8_t* b = reinterpret_cast<const uint8_t*>(file.data()) + at + (static_cast<size_t>(by) * bw + bx) * 8;
+      int value[8] = {b[0], b[1]};
+      const int steps = b[0] > b[1] ? 7 : 5;
+      for (int k = 1; k < steps; ++k) value[k + 1] = ((steps - k) * b[0] + k * b[1]) / steps;
+      if (steps == 5) value[6] = 0, value[7] = 255;
+      uint64_t bits = 0;
+      for (int k = 0; k < 6; ++k) bits |= static_cast<uint64_t>(b[2 + k]) << (8 * k);
+      for (int k = 0; k < 16; ++k) column[bx] = std::max(column[bx], value[(bits >> (3 * k)) & 7]);
+    }
+  const int deepest = *std::max_element(column.begin(), column.end());
+  if (deepest < 16) return strips;
+  const float gap = 1.0f / 25;
+  for (uint32_t x = 0; x < bw; ++x) {
+    if (column[x] * 10 <= deepest) continue;
+    const float a = static_cast<float>(x) / static_cast<float>(bw), b = static_cast<float>(x + 1) / static_cast<float>(bw);
+    if (!strips.empty() && a - strips.back().second < gap) strips.back().second = b;
+    else strips.push_back({a, b});
+  }
+  if (strips.size() < 2) return {};
+  // (widened into the gaps: at most half of each, and a fiftieth of the picture)
+  std::vector<std::pair<float, float>> wide = strips;
+  for (size_t k = 0; k < strips.size(); ++k) {
+    const float before = k == 0 ? strips[k].first : (strips[k].first - strips[k - 1].second) * 0.5f;
+    const float after = k + 1 == strips.size() ? 1 - strips[k].second : (strips[k + 1].first - strips[k].second) * 0.5f;
+    wide[k].first = strips[k].first - std::min(before, 0.02f);
+    wide[k].second = strips[k].second + std::min(after, 0.02f);
+  }
+  return wide;
 }
 
 // The rows of a print's picture its alpha covers: the first and the last row of a small level of its mips where it is
@@ -269,7 +325,8 @@ bool DeepTracks::Init(std::string* error) {
               {"TEXCOORD", 0, gfx::AttrType::Float2, offsetof(Vertex, u)},
               {"TEXCOORD", 1, gfx::AttrType::Float4, offsetof(Vertex, trough)},
               {"TEXCOORD", 2, gfx::AttrType::Float4, offsetof(Vertex, shape)},
-              {"TEXCOORD", 3, gfx::AttrType::Float4, offsetof(Vertex, x0)}};
+              {"TEXCOORD", 3, gfx::AttrType::Float4, offsetof(Vertex, x0)},
+              {"TEXCOORD", 4, gfx::AttrType::Float2, offsetof(Vertex, stripX0)}};
   pd.stride = sizeof(Vertex);
   pd.cull = gfx::Cull::None;
   pd.depthTest = pd.depthWrite = false;
@@ -475,6 +532,15 @@ const DeepTracks::Picture& DeepTracks::PictureOf(const std::string& name, bool h
     p.first = span.first;
     p.last = std::min(span.last, 1.0f);
   }
+  if (p.texture && hd)  // [treadlines]
+    if (auto file = textures_->ReadFile(name)) {
+      p.strips = TreadStrips(*file);
+      if (debug_) {
+        printf("render: deep tracks: %s: %zu bytes, %zu treads:", name.c_str(), file->size(), p.strips.size());
+        for (const auto& s : p.strips) printf(" %.3f-%.3f", s.first, s.second);
+        printf("\n");
+      }
+    }
   return p;
 }
 
@@ -522,7 +588,20 @@ void DeepTracks::AddUnit(uint32_t id, const std::string& blueprintPath, Vec3 pos
       if (ground < waterLevel - 0.05f || position.y - ground > 0.35f) return;
     }
     const Vec3 ahead = Rotate(orientation, {0, 0, 1});
-    PressPrint(id, position, band->width, band->length, std::atan2(ahead.x, ahead.z), *bandPicture, false);
+    const float heading = std::atan2(ahead.x, ahead.z);
+    if (bandPicture->strips.empty()) {
+      PressPrint(id, position, band->width, band->length, heading, *bandPicture, false);
+      return;
+    }
+    // [treadlines] each of its treads a line of its own, at its place across the unit (the picture's x the unit's x,
+    // a stamp's x as the decals': (cos, -sin) of its heading), pressing as deep as the whole picture would
+    const float width = std::fabs(band->width), weight = std::clamp(std::sqrt(width * std::fabs(band->length)) / 0.5f, 0.75f, 2.2f);
+    const Vec3 right{std::cos(heading), 0, -std::sin(heading)};
+    for (size_t k = 0; k < bandPicture->strips.size(); ++k) {
+      const auto [x0, x1] = bandPicture->strips[k];
+      PressPrint(id, position + right * (((x0 + x1) * 0.5f - 0.5f) * width), (x1 - x0) * width, band->length, heading, *bandPicture, false,
+                 static_cast<int>(k), weight);
+    }
     return;
   }
   {  // a unit that lays prints: they are its track
@@ -675,10 +754,11 @@ bool DeepTracks::AddPrint(uint32_t id, Vec3 centre, float sizeX, float sizeZ, fl
   return true;
 }
 
-void DeepTracks::PressPrint(uint32_t id, Vec3 centre, float sizeX, float sizeZ, float heading, const Picture& pic, bool foot) {
+void DeepTracks::PressPrint(uint32_t id, Vec3 centre, float sizeX, float sizeZ, float heading, const Picture& pic, bool foot, int strip,
+                            float weight) {
   lastPressed_ = clock_;
   sizeX = std::fabs(sizeX), sizeZ = std::fabs(sizeZ);
-  const float weight = std::clamp(std::sqrt(sizeX * sizeZ * (pic.last - pic.first)) / 0.5f, 0.75f, 2.2f);
+  if (weight <= 0) weight = std::clamp(std::sqrt(sizeX * sizeZ * (pic.last - pic.first)) / 0.5f, 0.75f, 2.2f);
   Stamp s{};
   s.x = centre.x;
   s.z = centre.z;
@@ -690,6 +770,8 @@ void DeepTracks::PressPrint(uint32_t id, Vec3 centre, float sizeX, float sizeZ, 
   s.shape = 0;
   s.texture = pic.texture;
   s.hd = pic.hd;  // [hdprints]
+  if (strip >= 0 && strip < static_cast<int>(pic.strips.size())) s.stripX0 = pic.strips[strip].first, s.stripX1 = pic.strips[strip].second;
+  else strip = -1;
   if (foot) {
     stamps_.push_back(s);
     return;
@@ -703,7 +785,8 @@ void DeepTracks::PressPrint(uint32_t id, Vec3 centre, float sizeX, float sizeZ, 
   // ([hdprints] a unit's own tread picture is one piece of its track, laid in four parts, each the next quarter of the
   // picture, so that a bend is followed four times as closely and its pattern still runs on unbroken: its picture's top is
   // the front, so the part laid in front of the last is the quarter above it)
-  const int parts = pic.hd ? 4 : 1;
+  // ([treadlines] a long one, as the Fatboy's, in more: parts at most 0.8 long, so that its chords on a bend stay short)
+  const int parts = pic.hd ? std::clamp(static_cast<int>(std::ceil(sizeZ * (pic.last - pic.first) / 0.8f)), 4, 16) : 1;
   const float piece = std::max(sizeZ * (pic.last - pic.first) / static_cast<float>(parts), 0.02f), off = ((pic.first + pic.last) * 0.5f - 0.5f) * sizeZ;
   const float fx = std::sin(heading), fz = std::cos(heading);
   s.tread = true;
@@ -719,14 +802,14 @@ void DeepTracks::PressPrint(uint32_t id, Vec3 centre, float sizeX, float sizeZ, 
   float best = reach * reach;
   for (Line& l : lines) {
     const float dx = frontX - l.x, dz = frontZ - l.z, d2 = dx * dx + dz * dz;
-    if (l.texture.id == pic.texture.id && clock_ - l.clock < 2 && d2 < best) {
+    if (l.texture.id == pic.texture.id && l.strip == strip && clock_ - l.clock < 2 && d2 < best) {
       best = d2;
       line = &l;
     }
   }
   if (!line) {
     lines.erase(std::remove_if(lines.begin(), lines.end(), [&](const Line& l) { return clock_ - l.clock >= 2; }), lines.end());
-    if (lines.size() < 8) lines.push_back({frontX, frontZ, clock_, pic.texture, 0});
+    if (lines.size() < 8) lines.push_back({frontX, frontZ, clock_, pic.texture, 0, strip});
     stamps_.push_back(s);
     return;
   }
@@ -819,7 +902,7 @@ void DeepTracks::Quad(const Stamp& s, int level) {
       for (int k = 0; k < 4; ++k) {
         const float atlasX = x0 + px + ox[k], atlasY = pz + oz[k];
         v[k] = Vertex{atlasX * sx - 1, 1 - atlasY * sy, cornerX[k], cornerZ[k], trough, berm, across, (s.tread ? 1.0f : 0.0f) + (s.hd && shape == 0 ? 2.0f : 0.0f),
-                      static_cast<float>(shape), s.bandX, s.bandHalf, margin, x0, 0, x1, y1};
+                      static_cast<float>(shape), s.bandX, s.bandHalf, margin, x0, 0, x1, y1, s.stripX0, s.stripX1};
       }
       Emit(v);
       ++stamped;
