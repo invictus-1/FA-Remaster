@@ -135,6 +135,30 @@ function RemasterFirstStartCheck()
         nil, nil, true, { escapeButton = 2, enterButton = 1, worldCover = false })
 end
 
+-- FA Remastered: a game whose first beats ran behind the loading screen (the host sets moho64ui_aheadTick, the tick
+-- the game's screen came at: Chris, 2026-10-28, "move M28's work into the load"; ui/app/game_session.h Aheadable).
+-- FAF's StartupSequence (the rumble, a second's look at the start, the camera's one-second glide to the commander,
+-- then tries to select it until game tick 50) was made for a screen at tick 1, its glide over before the commander
+-- warps in at tick 30. Here it starts at once: the rumble and the glide as the screen comes, so the glide ends as the
+-- warp-in begins, and the tries to select the commander go on until 50 ticks after the screen came. Ours; any other
+-- game keeps FAF's own.
+local RemasterGameStartupSequence = StartupSequence
+function StartupSequence(avatars)
+    local from = rawget(_G, 'moho64ui_aheadTick')
+    if not from then return RemasterGameStartupSequence(avatars) end
+    PlaySound(Sound { Bank = "AmbientTest", Cue = "AMB_Planet_Rumble_zoom" })
+    UIZoomTo(avatars, 1)
+    WaitSeconds(1.5)
+    while true do
+        WaitSeconds(0.1)
+        if not gameUIHidden then
+            SelectUnits(avatars)
+            if not table.empty(GetSelectedUnits() or {}) then return end
+        end
+        if GameTick() > from + 50 then return end
+    end
+end
+
 -- FA Remastered: the replay timeline (ours: /moho64ui/lua/timeline.lua), made while a replay plays once the game's
 -- screen is there (also after the timeline's jump back, which makes the interface anew).
 local RemasterGameOnFirstUpdate = OnFirstUpdate

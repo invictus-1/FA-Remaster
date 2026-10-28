@@ -241,6 +241,19 @@ class GameSession {
   // picture has no camera). Off again: the world is shown (as OpenPicture left it).
   void HoldBeats(bool on);
   bool BeatsHeld() const { return holdBeats_; }
+  // Chris's "move M28's work into the load" (2026-10-28, the engine's docs/engine-answers.md): a lobby's game without
+  // prebuilt units (its GameOptions.PrebuiltUnits not "On"; set by Launch, kept by Relaunch) runs its first beats up to
+  // tick kAheadTicks behind the loading screen, one after another as fast as they go, the beats still held for the
+  // real time (RunAhead, then RunningAhead() until it is through); their syncs wait for the game's screen, in order.
+  // FAF's commander is hidden and its queue blocked until tick 30 (ScenarioUtilities CommanderWarpDelay: 3 s), so
+  // nothing the player could see or do is passed over, and the AIs' heavy start (M28's nav mesh at tick 10, SetupMap
+  // at 16 / 17 / 21) falls in the load. No orders are given in those beats: the record, the replay and the
+  // simulation are the same beat for beat. Ours.
+  static constexpr uint32_t kAheadTicks = 29;
+  bool Aheadable() const { return aheadable_; }
+  void RunAhead(uint32_t toTick);
+  bool RunningAhead() const;
+  uint32_t AheadRanTo() const { return aheadRanTo_; }  // (the tick they ended at; 0 when this game had none)
   // The player's orders since the last beat, as the command stream's bytes; asked before each beat.
   std::function<std::string()> takeOrders;
   // Ends the other worlds alive (the menu's background), asked before the scene's samples change
@@ -298,12 +311,16 @@ class GameSession {
   void NoteBeat();  // a beat has run: the picture hears of it, then the sounds and shakes
   void NotePictureBeat();  // the picture's copy of the beat (on the beats' thread, or here)
   void NoteBeatHere();     // the beat's sounds and camera shakes (always here, after the beat)
+  bool RunDueBeats(bool catchingUp);
   void TimedTick();
   class BeatWorker;
   std::unique_ptr<BeatWorker> worker_;
   bool beatToFinish_ = false;  // a beat ran on the worker: its sounds and sync are still to come
   bool firstBeatToFinish_ = false;  // the first beat ran on the worker (StartFirstBeat)
   bool holdBeats_ = false;          // (HoldBeats)
+  bool aheadable_ = false;          // (Aheadable)
+  uint32_t aheadTo_ = 0;            // (RunAhead: the tick the beats run to behind the loading screen; 0 when none)
+  uint32_t aheadRanTo_ = 0;         // (AheadRanTo)
   uint32_t beatFrom_ = 0;      // the tick the running beat started from
   double workerSimSeconds_ = 0, workerPictureSeconds_ = 0, workerFingerprintSeconds_ = 0;  // (written there; read here after it)
   // How early (in game seconds) a beat starts on its thread: about as long as the last one took,

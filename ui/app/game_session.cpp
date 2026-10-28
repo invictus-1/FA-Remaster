@@ -1116,7 +1116,13 @@ bool GameSession::Launch(lua_State* L, int config, std::string* why) {
   skyNow_ = sky;
   seed_ = session.header.seed;
   lua_getfield(L, config, "GameOptions");
-  if (lua_istable(L, -1)) ReadLookOptions(L, lua_gettop(L));
+  aheadable_ = true;  // (see Aheadable)
+  if (lua_istable(L, -1)) {
+    ReadLookOptions(L, lua_gettop(L));
+    lua_getfield(L, -1, "PrebuiltUnits");
+    if (lua_isstring(L, -1) && std::string(lua_tostring(L, -1)) == "On") aheadable_ = false;
+    lua_pop(L, 1);
+  }
   lua_pop(L, 1);
   profile_ = ProfileName(L);
   playData_.clear();
@@ -1145,6 +1151,7 @@ bool GameSession::LaunchSinglePlayer(lua_State* L, int info, std::string* why) {
   lua_pop(L, 1);
   skyNow_ = sky;
   seed_ = session.header.seed;
+  aheadable_ = false;  // (a campaign's operation: its opening plays from beat 1)
   lua_getfield(L, info, "scenarioInfo");
   if (lua_istable(L, -1)) {
     lua_getfield(L, -1, "Options");
@@ -1233,6 +1240,7 @@ bool GameSession::LaunchReplay(lua_State* L, const std::string& file, std::strin
   }
   lua_settop(L, top);
   profile_ = ProfileName(L);
+  aheadable_ = false;
   playData_ = std::move(*data);
   play_.reset();
   PrepareSession(session, uids);
@@ -1328,6 +1336,7 @@ void GameSession::Record(const std::string& bytes) {
 void GameSession::End() {
   if (worker_) worker_->Wait();  // (a beat on its thread ends first; its sounds and sync are dropped)
   beatToFinish_ = false;
+  aheadTo_ = 0, aheadRanTo_ = 0;
   load_ = Load::None;  // (a launch still loading is dropped)
   loadSim_.reset();
   loadSession_.reset();
@@ -2196,23 +2205,8 @@ void GameSession::StatsLines(std::vector<std::string>* lines) const {
 #endif
 }
 
-void GameSession::Advance(double seconds) {
-  if (!sim_ || holdBeats_) return;
-  // (a test run's made-up time of the card, moho64ui_SetFrameCostForTests: every frame of a game counts, also without
-  // a window)
-  if (FrameCost().fakeMs >= 0) FrameCost().Note(FrameCost().fakeMs);
-  if (BeatRunning()) {  // (the beats' thread is busy: the time counts, nothing else is done)
-    AdvanceClock(seconds);
-    return;
-  }
-  if (beatToFinish_) FinishBeat();
-  SeekReached();
-  const bool catchingUp = CatchingUp();
-  if (catchingUp) {  // (--fast-forward, for measurements, or a jump of the replay timeline: up to 50 beats a frame until that beat)
-    due_ = std::min<uint32_t>(std::max(fastForwardTo, seekTo_) - sim_->tick(), 50) * 0.1 + 0.01;
-  } else {
-    AdvanceClock(seconds);  // (after a long stall, catch up by at most a second of beats)
-  }
+// The beats due now (due_), one after another; true when one was begun on its thread (the caller then stops).
+bool GameSession::RunDueBeats(bool catchingUp) {
   // On its own thread one beat runs at a time, and it starts early by about as long as the last
   // took: it is done when the picture's moment reaches it (the moment may then lie a little
   // before the beats run: due_ below 0).
@@ -2235,7 +2229,7 @@ void GameSession::Advance(double seconds) {
           FingerprintBeat();
         } else if (onThread) {
           StartBeatOnThread();
-          return;
+          return true;
         } else {
           TimedTick();
           FingerprintBeat();
@@ -2261,7 +2255,7 @@ void GameSession::Advance(double seconds) {
     } else if (onThread) {
       Record(CommandWriter::AdvanceMessage(1));
       StartBeatOnThread();
-      return;
+      return true;
     } else {
       TimedTick();
       Record(CommandWriter::AdvanceMessage(1));
@@ -2270,6 +2264,52 @@ void GameSession::Advance(double seconds) {
     NoteBeat();
     DeliverBeatSync();
   }
+  return false;
+}
+
+void GameSession::RunAhead(uint32_t toTick) {
+  aheadTo_ = toTick;
+  Logf(LogLevel::Info, "moho64ui: beats %u to %u run behind the loading screen (no prebuilt units: nothing to see or do yet)",
+       sim_ ? sim_->tick() + 1 : 1, toTick);
+}
+
+bool GameSession::RunningAhead() const { return aheadTo_ != 0; }
+
+void GameSession::Advance(double seconds) {
+  if (!sim_) return;
+  if (aheadTo_) {  // (RunAhead: a beat as soon as the last is through, whatever the time; no time counts meanwhile)
+    if (BeatRunning()) return;
+    if (beatToFinish_) FinishBeat();
+    if (sim_->tick() >= aheadTo_) {
+      Logf(LogLevel::Info, "moho64ui: the beats behind the loading screen are through (tick %u)", sim_->tick());
+      aheadRanTo_ = sim_->tick();
+      aheadTo_ = 0, due_ = 0;
+      return;
+    }
+    due_ = 0.1;  // (exactly one beat below: on the thread it returns once begun)
+    const double lead = lead_;
+    lead_ = 0;
+    RunDueBeats(false);
+    lead_ = lead;
+    return;
+  }
+  if (holdBeats_) return;
+  // (a test run's made-up time of the card, moho64ui_SetFrameCostForTests: every frame of a game counts, also without
+  // a window)
+  if (FrameCost().fakeMs >= 0) FrameCost().Note(FrameCost().fakeMs);
+  if (BeatRunning()) {  // (the beats' thread is busy: the time counts, nothing else is done)
+    AdvanceClock(seconds);
+    return;
+  }
+  if (beatToFinish_) FinishBeat();
+  SeekReached();
+  const bool catchingUp = CatchingUp();
+  if (catchingUp) {  // (--fast-forward, for measurements, or a jump of the replay timeline: up to 50 beats a frame until that beat)
+    due_ = std::min<uint32_t>(std::max(fastForwardTo, seekTo_) - sim_->tick(), 50) * 0.1 + 0.01;
+  } else {
+    AdvanceClock(seconds);  // (after a long stall, catch up by at most a second of beats)
+  }
+  if (RunDueBeats(catchingUp)) return;
   SeekReached();
 }
 
