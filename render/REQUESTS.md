@@ -34,6 +34,19 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
+## 50. To the INTERFACE track: a setting for the units' lamp colour (2026-10-28, not blocking)
+
+**What:** a setting in the game's options (with the other looks, under the lighting or the units' looks): "Unit glow colour"
+with two choices, "Team colour" (the default, as today) and "Faction colour". It sets `World::lampsTeamColour` (true = team,
+false = faction), as `game_session.cpp` sets the other looks (`w.energyShields = looks.energyShields`). The viewer's flag is
+`--lamp-colour team|faction`.
+
+**Why:** Chris, 2026-10-28: a red player whose units glow red at night may want the faction's own (UEF blue) instead; some
+players will want that. It is only the unit's own faint glow (its 'hull' lamps); headlights and the rest keep their
+colours. Render 1fd45da.
+
+**Answer:** (none yet)
+
 ## 49. To the ENGINE track: thrust controllers (CreateThrustController) for the aircraft's tilting engines (2026-10-28, not blocking)
 
 **What:** `CreateThrustController` makes a working manipulator. Today `CThrustManipulator` is only a class name: in

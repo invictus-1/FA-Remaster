@@ -751,7 +751,7 @@ void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation,
     // the unit's own glow: in its army's colour (as light, its strongest part 1), so that one sees
     // at night whose it is
     Vec3 tint = light.color;
-    if (light.hull && armyColor) {
+    if (light.hull && armyColor && lampsTeamColour) {  // ([lampcolour] else its faction's own, its file's)
       tint = {std::pow(std::max(armyColor->x, 0.0f), 2.2f), std::pow(std::max(armyColor->y, 0.0f), 2.2f), std::pow(std::max(armyColor->z, 0.0f), 2.2f)};
       // (a fifth weaker than at first: Chris, 2026-10-13, "the red glow which is the army color is a bit strong")
       tint = tint * (0.8f / std::max({tint.x, tint.y, tint.z, 0.05f}));

@@ -24,6 +24,29 @@ const char* FxWeaponRuntime();
 
 namespace {
 
+// [watchdog] A script of the stand's that runs on for half a billion steps without waiting (a loop that waits on what the
+// stand does not wait for, as the engine would, or never ends) is stopped: an error in it, said once with where it was, so
+// that the stand goes on (its thread ends; a unit's making fails) instead of hanging. Counted in millions of steps since the
+// stand's last tick or the last unit it made.
+int gStandSteps = 0;
+void StandWatchdog(lua_State* L, lua_Debug*);
+// __fxWatch(thread): the watchdog in a thread the stand's scripts made
+int Watch(lua_State* L) {
+  if (lua_State* co = lua_tothread(L, 1)) lua_sethook(co, StandWatchdog, LUA_MASKCOUNT, 1000000);
+  return 0;
+}
+void StandWatchdog(lua_State* L, lua_Debug*) {
+  if (++gStandSteps < 500) return;
+  gStandSteps = 0;
+  std::fprintf(stderr, "render: fx stand: a script ran on for half a billion steps without waiting; stopped at:\n");
+  lua_Debug ar;
+  for (int level = 0; level < 12 && lua_getstack(L, level, &ar); ++level) {
+    lua_getinfo(L, "Sln", &ar);
+    std::fprintf(stderr, "  %s:%d %s\n", ar.short_src, ar.currentline, ar.name ? ar.name : "");
+  }
+  luaL_error(L, "fx stand: a script ran on without waiting");
+}
+
 // The entities' world, in the stand's script state, after the stand-ins and import. Threads are
 // coroutines woken by __fxRun once a tick; an entity is an instance of its script's class with the
 // methods below, which hand what they do to the stand (the __fx* functions, fx_entities.cpp).
@@ -90,6 +113,7 @@ local ThreadMeta = {__index = {Destroy = function(self) self.dead = true end}}
 function ForkThread(fn, ...)
   if type(fn) ~= 'function' then return nil end
   local t = setmetatable({co = coroutine.create(fn), args = arg, wake = __fxTick, side = __fxSide or 0}, ThreadMeta)
+  __fxWatch(t.co)  -- (the watchdog's count in it too: a thread does not take it from where it was made)
   table.insert(__fxThreads, t)
   return t
 end
@@ -573,6 +597,8 @@ local AnimMethods = {
 setmetatable(AnimMethods, {__index = function() return quietSelf end})
 local AnimMeta = {__index = AnimMethods}
 function CreateAnimator(e) return setmetatable({__anim = true, __unit = Id(e), __k = __fxAnimator(Id(e))}, AnimMeta) end
+-- (what the stand does not play - its sliders, rotators - is there at once; a wait for it still waits a tick, as the
+-- engine's always do: a script's loop of waits, a factory's sliding arm, would otherwise never let the stand go on)
 function WaitFor(x)
   if type(x) == 'table' and rawget(x, '__anim') then
     while true do
@@ -581,6 +607,7 @@ function WaitFor(x)
       WaitTicks(1)
     end
   end
+  WaitTicks(1)
 end
 
 -- the game's blueprint of a unit, as its blueprint loading makes it (FAF's /lua/system/blueprints.lua
@@ -2683,10 +2710,11 @@ bool FxEntities::Init(moho::Vfs* vfs, uint32_t seed, std::string* error) {
   Echo echo;
   m.state = std::make_unique<moho::ScriptState>(moho::ScriptState::Kind::User, vfs);
   lua_State* L = m.state->L();
+  lua_sethook(L, StandWatchdog, LUA_MASKCOUNT, 1000000);  // [watchdog] (its threads take it with them)
   static const struct {
     const char* name;
     lua_CFunction f;
-  } kFunctions[] = {{"__fxSpawn", SpawnEntity},
+  } kFunctions[] = {{"__fxSpawn", SpawnEntity},             {"__fxWatch", Watch},
                     {"__fxBonePos", BonePos},           {"__fxVelocityOf", VelocityOf},
                     {"__fxSpeed", Speed},         {"__fxVelocity", Velocity},
                     {"__fxAccel", Accel},         {"__fxBallistic", Ballistic},
@@ -2884,6 +2912,7 @@ std::string FxEntities::Order(uint32_t unit, Vec3 target, const std::vector<std:
 
 uint32_t FxEntities::AddUnit(const std::string& id, Vec3 at, const UnitPlace& how, std::string* error) {
   Impl& m = *impl_;
+  gStandSteps = 0;  // [watchdog]
   if (!m.state || !m.units) {
     *error = "the stand's units are not set up";
     return 0;
@@ -3368,6 +3397,7 @@ void FxEntities::Advance(double now) {
     m.FollowParents();
     // (the weapons fire before the threads run, as the engine's armies' stage comes before its threads)
     const std::string n = std::to_string(next);
+    gStandSteps = 0;  // [watchdog]
     m.state->DoString((m.armed ? "__fxTick = " + n + "\n__fxWeaponsTick()\n" : std::string()) + "__fxRun(" + n + ")", "fx stand tick");
   }
   m.Move(now - m.now);

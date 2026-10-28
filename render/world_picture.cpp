@@ -235,6 +235,12 @@ struct WorldPicture::Impl {
   std::vector<WorldPicture::PictureView> views;
   std::vector<std::unique_ptr<ViewSide>> sides;
   std::vector<WorldPicture::ViewKind> sideKinds;
+  // [minimap] The minimap's ground's own of the world's parts that hold pictures at a view's size (views.h, ViewSide),
+  // swapped in around its redraw (World::SwapView): drawn into the world's own, the 300 x 300 redraw made all of them
+  // again at its size and the game's next frame again at the window's (the scene's, the depth's, the finish's at 4K): the
+  // redraw took 9-13 ms of its frame that way, 2.5-4 ms with its own (a late game at 4K, every bundle on). The swap also
+  // swaps the world's camera and view: what is read of the redraw's view is read before the swap back (mapMatrix).
+  std::unique_ptr<ViewSide> mapSide;
   std::unique_ptr<ViewLayer> viewLayer;
   bool viewLayerTried = false, viewLayerOk = false;
   uint64_t viewFrames = 0;
@@ -752,6 +758,7 @@ void WorldPicture::Impl::ForgetWorld() {
   // still there, through its device, and made afresh for the world now shown)
   sides.clear();
   sideKinds.clear();
+  mapSide.reset();  // [minimap]
   frames.~SimFrames();  // (the beats of the game before: none; it holds a lock, so it is made anew in its place)
   new (&frames) SimFrames();
   frames.SetFocusArmy(focusArmy);
@@ -1705,9 +1712,14 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height, bo
     // pass is over: GroundAt, UnitAt and UnitsIn answer by them between two frames)
     const World::Picking mainPicking = w.KeepPicking();
     const float clear[4] = {0.05f, 0.06f, 0.08f, 1};
+    if (!m.mapSide)  // [minimap] (made through the device the world was made with, as a view's: views.h)
+      m.mapSide = std::make_unique<ViewSide>(m.worldDevice ? static_cast<gfx::Device*>(m.worldDevice.get()) : m.device.get());
+    w.SwapView(*m.mapSide);
     m.device->BeginFrame(clear);
     w.Begin(c, width, height, 0, m.lastTick * 0.1);
     w.Render();
+    m.mapMatrix = w.view.constants.viewProj;  // ([minimap] the redraw's own view: the swap below gives the window's back)
+    w.SwapView(*m.mapSide);  // [minimap] (the window's parts back for the game's next frame)
     m.device->EndFrame(&m.capture, !own && !m.HostShows());  // (in the host's window: read back, not shown)
     if (own) m.device->SetPhotoWindow(0, 0);  // [spikes] (the window again for the next frame; the picture kept for the next redraw)
     m.depthIsWindow = false;
@@ -1722,7 +1734,6 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height, bo
     ranges.swap(w.ranges.groups);
     placed.swap(w.placed);
     m.mapCamera = c;
-    m.mapMatrix = w.view.constants.viewProj;
     w.RestorePicking(mainPicking);
     m.mapWidth = width;
     m.mapHeight = height;
