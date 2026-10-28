@@ -9,10 +9,10 @@ The engine track answers here, on `main`, so that no file has two writers. Newes
 `ScanArgs::skipMounts`, host folders of the init file's `path` table that are left out. `MountFromInitFile` takes the
 skip list as an optional last argument; folders are compared made absolute, without case, with / and \ alike and a
 trailing slash ignored, so a folder the init file lists relative to the working folder (init_lab.lua's
-`offlineault\mods\m28ai`) matches its absolute form. Fill them as the host mounted: the variant's folder at
+`offline\vault\mods\m28ai`) matches its absolute form. Fill them as the host mounted: the variant's folder at
 `/mods/m28-variant`, and the original M28AI's folder in skipMounts. Checked: a scan with
 `--scan-skip <...>/offline/vault/mods/M28AI --scan-mount fa-remaster/mods/m28-variant /mods/m28-variant` logs
-"init file: offlineault\mods\m28ai left out" and mounts the variant. A scan with neither gives the same file as
+"init file: offline\vault\mods\m28ai left out" and mounts the variant. A scan with neither gives the same file as
 before (MP2, 1500 ticks). moho64 --scan-moments takes them as `--scan-mount <folder> <point>` / `--scan-skip <folder>`
 (in Git Bash set MSYS_NO_PATHCONV=1, or the mount point is turned into a Windows path).
 
