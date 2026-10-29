@@ -3,11 +3,14 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <string>
 
 #include "core/log.h"
+#include "core/workers.h"
 #include "script/script_state.h"
 #include "sim/ai_threat.h"
 #include "sim/combat.h"
@@ -89,6 +92,15 @@ struct IntelState {
   std::vector<Entity*> sources;   // entities with intel handles
   std::vector<ReconBlip*> blips;  // live blip entities
   std::vector<Unit*> goneUnits;   // destroyed units whose blips armies may still hold
+  // MOHO64_PAR_INTELCOORDS (AdvanceIntelCoords on the worker pool): the circle moves its first step found, one list
+  // per worker slot and target grid, at [worker * armies * 8 + army * 8 + slot - 1]; storage kept from beat to beat.
+  struct RasterOp {
+    Vec3 p;
+    int r;
+    int delta;
+  };
+  std::vector<std::vector<RasterOp>> rasterOps;
+  std::vector<uint32_t> activeGrids;  // (the grids with ops in this beat, by index)
 };
 
 namespace {
@@ -102,24 +114,77 @@ const IntelState& IS(const Sim& sim) {
   return sim.intelState ? *sim.intelState : none;
 }
 
+// The intel stages on the worker pool (multicore step 4), each behind its own switch MOHO64_PAR_<NAME>: unset / 0 /
+// off: the serial code alone (the default); on (or 1): on the pool; verify: on the pool, and the serial result is
+// worked out too and compared, and any difference stops the program. (The names and values as e1's speculation
+// switches, core/speculate.h.) "on:N": on the pool only in beats with at least N items (the stage's own default
+// without ":N"; the serial code below it, which gives the same result: a pool call costs more than a few hundred
+// items' work). verify always takes the pool. Read once per process.
+enum class ParMode { kOff, kOn, kVerify };
+struct IntelPar {
+  ParMode mode = ParMode::kOff;
+  size_t minItems = 0;
+  bool Pool(size_t items) const { return mode == ParMode::kVerify || (mode == ParMode::kOn && items >= minItems); }
+};
+IntelPar IntelParMode(const char* name, size_t defaultMin) {
+  const std::string var = std::string("MOHO64_PAR_") + name;
+  const char* v = std::getenv(var.c_str());
+  IntelPar p;
+  p.minItems = defaultMin;
+  if (!v || !*v || !std::strcmp(v, "0") || !std::strcmp(v, "off")) return p;
+  if (!std::strcmp(v, "verify")) {
+    p.mode = ParMode::kVerify;
+    p.minItems = 0;
+  } else {
+    p.mode = ParMode::kOn;
+    if (!std::strncmp(v, "on:", 3)) p.minItems = static_cast<size_t>(std::strtoull(v + 3, nullptr, 10));
+  }
+  if (p.mode == ParMode::kVerify)
+    Logf(LogLevel::Info, "moho64: %s=verify: on the worker pool, every beat checked against the serial result", var.c_str());
+  else
+    Logf(LogLevel::Info, "moho64: %s=on: on the worker pool in beats with at least %zu items", var.c_str(), p.minItems);
+  return p;
+}
+// The defaults of "on" (items: blips, intel sources). Measured on B1 (2026-10-28): a pool call cost about 0.07-0.1 ms
+// of wall time when it woke all 31 workers; a blip's refresh takes about 50 ns and a source's step about 150 ns on one
+// thread. (B1 has 1,000 sources from beat ~8000 and 2,000 blips from ~16000.)
+constexpr size_t kParBlipsMin = 2048, kParIntelCoordsMin = 1024;
+// I2 takes the pool only for this many raster ops of a beat (verify: always)
+constexpr size_t kParRasterOpsMin = 64;
+[[noreturn]] void IntelParMismatch(const char* name, uint32_t tick, const char* what, size_t item) {
+  std::fprintf(stderr, "moho64: MOHO64_PAR_%s=verify: tick %u: %s %zu differs from the serial result\n", name, tick, what,
+               item);
+  Logf(LogLevel::Error, "moho64: MOHO64_PAR_%s=verify: tick %u: %s %zu differs from the serial result", name, tick,
+       what, item);
+  LogFlush();
+  std::abort();
+}
+
 Grid* GridFor(IntelState& st, int army, int slot) {  // pos handle slots 1..5
   if (army < 0 || army >= static_cast<int>(st.armies.size())) return nullptr;
   return st.armies[static_cast<size_t>(army)].g[slot - 1].get();
 }
 
-void Viz(IntelState& st, IntelHandle& h, int slot, int delta) {
+// The grids a handle's circle paints, each with its radius in that grid's cells: fn(grid, index, r), index =
+// army * 8 + slot - 1 (IntelState::RasterOps). Reads only the handle and the grids' sizes.
+template <class Fn>
+void ForEachTarget(IntelState& st, const IntelHandle& h, int slot, Fn&& fn) {
   if (!h.enabled || h.radius == 0) return;
   if (slot <= 5) {
     Grid* g = GridFor(st, h.army, slot);
     if (!g) return;
-    g->Raster(h.pos, static_cast<int>(h.radius / static_cast<uint32_t>(g->cs)), delta);
+    fn(*g, h.army * 8 + slot - 1, static_cast<int>(h.radius / static_cast<uint32_t>(g->cs)));
   } else {  // counter fields paint into every other army's counter grid
     for (size_t a = 0; a < st.armies.size(); ++a) {
       if (static_cast<int>(a) == h.army) continue;
       Grid* g = st.armies[a].g[slot - 1].get();
-      if (g) g->Raster(h.pos, static_cast<int>(h.radius / static_cast<uint32_t>(g->cs)), delta);
+      if (g) fn(*g, static_cast<int>(a) * 8 + slot - 1, static_cast<int>(h.radius / static_cast<uint32_t>(g->cs)));
     }
   }
+}
+
+void Viz(IntelState& st, IntelHandle& h, int slot, int delta) {
+  ForEachTarget(st, h, slot, [&](Grid& g, int, int r) { g.Raster(h.pos, r, delta); });
 }
 
 // The EIntel kind t's word in Entity::intelAttr, -1 = none: 1..5 (Vision..Omni) -> t - 1, 12 RadarStealth -> 5,
@@ -158,8 +223,11 @@ EntityIntel& IntelOf(IntelState& st, Entity* e) {
 
 Vec3 SourcePos(const Entity* e) { return {e->position.x, e->position.y + 1, e->position.z}; }
 
-// CIntelPosHandle::UpdatePos 0x76f1e0 (exact: CIntel::Update 0x76e4c0)
-void UpdatePos(IntelState& st, IntelHandle& h, int slot, Vec3 p, uint32_t tick, bool exact) {
+// CIntelPosHandle::UpdatePos 0x76f1e0 (exact: CIntel::Update 0x76e4c0). viz(h, slot, delta) takes the circle off
+// (-1, at the old place) and puts it on (+1, at the new): Viz, or AdvanceIntelCoords's parallel step, which only
+// notes the moves.
+template <class VizFn>
+void UpdatePos(IntelHandle& h, int slot, Vec3 p, uint32_t tick, bool exact, VizFn&& viz) {
   if (!h.exists) return;
   if (!h.enabled) {
     h.pos = p;
@@ -176,10 +244,13 @@ void UpdatePos(IntelState& st, IntelHandle& h, int slot, Vec3 p, uint32_t tick, 
   }
   h.lastTick = tick;
   if (moved) {
-    Viz(st, h, slot, -1);
+    viz(h, slot, -1);
     h.pos = p;
-    Viz(st, h, slot, +1);
+    viz(h, slot, +1);
   }
+}
+void UpdatePos(IntelState& st, IntelHandle& h, int slot, Vec3 p, uint32_t tick, bool exact) {
+  UpdatePos(h, slot, p, tick, exact, [&](IntelHandle& hh, int s, int d) { Viz(st, hh, s, d); });
 }
 
 int ArmyIdx(const Army* a) { return a ? a->index - 1 : -1; }
@@ -812,21 +883,64 @@ void ReleaseEntityIntel(Sim& sim, Entity* e) {
   }
 }
 
+namespace {
+// ReconBlip::Refresh 0x5bf810: what a blip takes from its unit. Reads only the blip's source and offset; false when
+// the blip follows nothing now.
+struct BlipFollow {
+  Vec3 prevPos, position;
+  Quat orientation;
+  float health, maxHealth;
+};
+bool BlipFollowOf(const Sim& sim, const ReconBlip* b, BlipFollow* f) {
+  const Unit* u = b->source;
+  if (!u || u->destroyQueued) return false;
+  // (current := the unit's committed transform, pending := its pending one; AdvanceCoords then makes the first the
+  // previous: so prevPos is where the unit stood when this beat began)
+  const Vec3& from = u->lastPosTick == sim.tick() ? u->lastPosition : u->position;
+  f->prevPos = Vec3{from.x + b->offset.x, from.y + b->offset.y, from.z + b->offset.z};
+  f->position = Vec3{u->position.x + b->offset.x, u->position.y + b->offset.y, u->position.z + b->offset.z};
+  f->orientation = u->orientation;
+  f->health = u->health;
+  f->maxHealth = u->maxHealth;
+  return true;
+}
+bool SameFollow(const ReconBlip* b, const BlipFollow& f) {
+  return vm::SameBits(b->prevPos, f.prevPos) && vm::SameBits(b->position, f.position) &&
+         vm::SameBits(b->orientation, f.orientation) && !std::memcmp(&b->health, &f.health, sizeof(float)) &&
+         !std::memcmp(&b->maxHealth, &f.maxHealth, sizeof(float));
+}
+}  // namespace
+
 void ReconBeat(Sim& sim) {
   lua_State* L = sim.L();
   if (IS(sim).armies.size() != sim.armies().size()) InitIntelGrids(sim, L);
   // every blip follows its unit (ReconBlip::Refresh 0x5bf810)
-  for (ReconBlip* b : IS(sim).blips) {
-    Unit* u = b->source;
-    if (!u || u->destroyQueued) continue;
-    // (current := the unit's committed transform, pending := its pending one; AdvanceCoords then makes the first the
-    // previous: so prevPos is where the unit stood when this beat began)
-    const Vec3& from = u->lastPosTick == sim.tick() ? u->lastPosition : u->position;
-    b->prevPos = Vec3{from.x + b->offset.x, from.y + b->offset.y, from.z + b->offset.z};
-    b->position = Vec3{u->position.x + b->offset.x, u->position.y + b->offset.y, u->position.z + b->offset.z};
-    b->orientation = u->orientation;
-    b->health = u->health;
-    b->maxHealth = u->maxHealth;
+  // MOHO64_PAR_BLIPS (multicore step 4, R1): on the worker pool. Exact by construction: each item writes only its own
+  // blip's transform and health, and reads only its source unit's fields and its own offset, which nothing writes
+  // in this loop (a blip is never another blip's source; the list holds each blip once).
+  static const IntelPar parBlips = IntelParMode("BLIPS", kParBlipsMin);
+  std::vector<ReconBlip*>& blips = IS(sim).blips;
+  auto refresh = [&](size_t i0, size_t i1, int) {
+    for (size_t i = i0; i < i1; ++i) {
+      ReconBlip* b = blips[i];
+      BlipFollow f;
+      if (!BlipFollowOf(sim, b, &f)) continue;
+      b->prevPos = f.prevPos;
+      b->position = f.position;
+      b->orientation = f.orientation;
+      b->health = f.health;
+      b->maxHealth = f.maxHealth;
+    }
+  };
+  if (!parBlips.Pool(blips.size())) {
+    refresh(0, blips.size(), 0);
+  } else {
+    sim.workers().ParallelFor("recon blip refresh", blips.size(), 256, refresh);
+    if (parBlips.mode == ParMode::kVerify)
+      for (size_t i = 0; i < blips.size(); ++i) {
+        BlipFollow f;
+        if (BlipFollowOf(sim, blips[i], &f) && !SameFollow(blips[i], f)) IntelParMismatch("BLIPS", sim.tick(), "blip", i);
+      }
   }
   int n = static_cast<int>(sim.armies().size());
   if (n <= 0) return;
@@ -851,44 +965,141 @@ void IntelExactUpdate(Sim& sim, Unit* u) {
   for (int s = 1; s <= 8; ++s) UpdatePos(IS(sim), u->intel->h[s], s, p, sim.tick(), true);
 }
 
+namespace {
+// One source's step of AdvanceIntelCoords; viz as UpdatePos's. Reads the entity's transform and kind, writes only its
+// own handles (and what viz does).
+template <class VizFn>
+void AdvanceSource(Entity* e, uint32_t tick, VizFn&& viz) {
+  if (!e->intel || e->destroyQueued) return;
+  EntityIntel& ei = *e->intel;
+  Vec3 p = SourcePos(e);
+  bool exact = false, moved;
+  if (e->kind == Entity::Kind::Unit) {
+    // (coming to rest: the exact update ran when the horizontal event turned Stopped, IntelExactUpdate)
+    // Sim::AdvanceBeat (0x74a239..0x74a25f) runs Entity::AdvanceCoords 0x678f10 for every entity on the dirty-entity
+    // list sim+0xa5c, and AdvanceCoords runs CIntel::ForceUpdate 0x76e490 for every entity with intel (+0x1d8,
+    // 0x67907e..0x6790cb) whether its transform changed or not. The list keeps its links from beat to beat (a unit is
+    // linked when it is made; probe mp2_8034: no unlink in the oracle's beats; see GridAdvanceCoords), so every unit
+    // has its ForceUpdate -> UpdatePos in every beat: the 6-tick clock (lastTick) runs while the unit stands, is being
+    // built, is attached, immobile or stunned alike (the circle itself only moves when the position differs). Seen:
+    // MP2 7929-7949, army 1's Pillar 0x100123 stunned (position held; the exact update when it came to rest at 7936):
+    // the original's clock ran on through the stun (7936 + 6k: ... 8362, 8368), so the raster at 8368 reached army 0's
+    // mass extractor 0x48 and army 1 made its blip at the recon beat 8369 (probe mp2_8374: FindOrCreateBlip at 8369);
+    // the Pillar took it at 8370 and fired at 8374. Ours stopped the clock during the stun and restarted it at 7949
+    // (8363, 8369): the blip came at 8373 and the Pillar fired later (the draws split at 8374). (Earlier cases that
+    // the same rule covers: MP2 2186, a land scout standing from 2073 whose radar clock ran on; MP3 2365, an
+    // interceptor built in an air factory whose vision clock ran from 2365.)
+    moved = true;
+  } else {
+    IntelHandle* any = nullptr;
+    for (int s = 1; s <= 8; ++s)
+      if (ei.h[s].exists) any = &ei.h[s];
+    moved = any && !vm::SameBits(any->pos, p);
+    exact = moved;  // script entities move by Warp / attach: exact
+  }
+  if (!moved && !exact) return;
+  for (uint32_t m = ei.existMask; m; m &= m - 1) {  // (the slots with a handle, in slot order: UpdatePos skips the rest)
+    const int s = __builtin_ctz(m);
+    UpdatePos(ei.h[s], s, p, tick, exact, viz);
+  }
+}
+
+bool SameHandle(const IntelHandle& x, const IntelHandle& y) {
+  return x.exists == y.exists && x.enabled == y.enabled && x.radius == y.radius && x.army == y.army &&
+         vm::SameBits(x.pos, y.pos) && x.lastTick == y.lastTick;
+}
+
+void AdvanceIntelCoordsSerial(IntelState& st, uint32_t tick) {
+  for (size_t i = 0; i < st.sources.size(); ++i)
+    AdvanceSource(st.sources[i], tick, [&](IntelHandle& h, int s, int d) { Viz(st, h, s, d); });
+}
+
+// MOHO64_PAR_INTELCOORDS (multicore step 4, I1 + I2): the same moves in two steps on the worker pool.
+// I1, by source: each source's step (AdvanceSource, UpdatePos's decision per handle) writes only its own handles and
+// notes each circle move as raster ops (the grid, the place, the radius in its cells, -1 off / +1 on) in its worker
+// slot's list for that grid; a counter field's move is noted for every other army's grid, as Viz paints it.
+// I2, by grid: each grid applies every worker's ops for it, then empties those lists.
+// Exact: CIntelGrid::Raster only adds -1 or +1 to int8 counts (with wrap-around), so a grid's end counts are the
+// same in any order of its ops; each grid has one writer in I2; I1 reads no grid (only the grids' sizes), and nothing
+// else runs in the stage. IntelExactUpdate, InitIntel and the Lua bindings keep the serial path.
+void AdvanceIntelCoordsPar(Sim& sim, IntelState& st, uint32_t tick, bool allOnPool) {
+  WorkerPool& pool = sim.workers();
+  const size_t G = st.armies.size() * 8, W = static_cast<size_t>(pool.Threads());
+  if (st.rasterOps.size() != W * G) st.rasterOps.assign(W * G, {});
+  pool.ParallelFor("intel coords: sources", st.sources.size(), 64, [&](size_t i0, size_t i1, int w) {
+    std::vector<IntelState::RasterOp>* lists = st.rasterOps.data() + static_cast<size_t>(w) * G;
+    for (size_t i = i0; i < i1; ++i)
+      AdvanceSource(st.sources[i], tick, [&](IntelHandle& h, int s, int d) {
+        ForEachTarget(st, h, s, [&](Grid&, int gi, int r) { lists[gi].push_back({h.pos, r, d}); });
+      });
+  });
+  // (only the grids that have ops; on the calling thread when they are few: a pool call costs more)
+  std::vector<uint32_t>& active = st.activeGrids;
+  active.clear();
+  size_t total = 0;
+  for (size_t gi = 0; gi < G; ++gi) {
+    size_t n = 0;
+    for (size_t w = 0; w < W; ++w) n += st.rasterOps[w * G + gi].size();
+    if (n) active.push_back(static_cast<uint32_t>(gi));
+    total += n;
+  }
+  auto apply = [&](size_t a0, size_t a1, int) {
+    for (size_t a = a0; a < a1; ++a) {
+      const size_t gi = active[a];
+      Grid* g = st.armies[gi / 8].g[gi % 8].get();  // (not null: only a grid that exists gets ops)
+      for (size_t w = 0; w < W; ++w) {
+        std::vector<IntelState::RasterOp>& ops = st.rasterOps[w * G + gi];
+        for (const IntelState::RasterOp& op : ops) g->Raster(op.p, op.r, op.delta);
+        ops.clear();
+      }
+    }
+  };
+  if (allOnPool || total >= kParRasterOpsMin) pool.ParallelFor("intel coords: grids", active.size(), 1, apply);
+  else apply(0, active.size(), 0);
+}
+}  // namespace
+
 void AdvanceIntelCoords(Sim& sim) {
   uint32_t tick = sim.tick();
   IntelState& st = IS(sim);
-  for (size_t i = 0; i < st.sources.size(); ++i) {
-    Entity* e = st.sources[i];
-    if (!e->intel || e->destroyQueued) continue;
-    EntityIntel& ei = *e->intel;
-    Vec3 p = SourcePos(e);
-    bool exact = false, moved;
-    if (e->kind == Entity::Kind::Unit) {
-      // (coming to rest: the exact update ran when the horizontal event turned Stopped, IntelExactUpdate)
-      // Sim::AdvanceBeat (0x74a239..0x74a25f) runs Entity::AdvanceCoords 0x678f10 for every entity on the dirty-entity
-      // list sim+0xa5c, and AdvanceCoords runs CIntel::ForceUpdate 0x76e490 for every entity with intel (+0x1d8,
-      // 0x67907e..0x6790cb) whether its transform changed or not. The list keeps its links from beat to beat (a unit is
-      // linked when it is made; probe mp2_8034: no unlink in the oracle's beats; see GridAdvanceCoords), so every unit
-      // has its ForceUpdate -> UpdatePos in every beat: the 6-tick clock (lastTick) runs while the unit stands, is being
-      // built, is attached, immobile or stunned alike (the circle itself only moves when the position differs). Seen:
-      // MP2 7929-7949, army 1's Pillar 0x100123 stunned (position held; the exact update when it came to rest at 7936):
-      // the original's clock ran on through the stun (7936 + 6k: ... 8362, 8368), so the raster at 8368 reached army 0's
-      // mass extractor 0x48 and army 1 made its blip at the recon beat 8369 (probe mp2_8374: FindOrCreateBlip at 8369);
-      // the Pillar took it at 8370 and fired at 8374. Ours stopped the clock during the stun and restarted it at 7949
-      // (8363, 8369): the blip came at 8373 and the Pillar fired later (the draws split at 8374). (Earlier cases that
-      // the same rule covers: MP2 2186, a land scout standing from 2073 whose radar clock ran on; MP3 2365, an
-      // interceptor built in an air factory whose vision clock ran from 2365.)
-      moved = true;
-    } else {
-      IntelHandle* any = nullptr;
-      for (int s = 1; s <= 8; ++s)
-        if (ei.h[s].exists) any = &ei.h[s];
-      moved = any && !vm::SameBits(any->pos, p);
-      exact = moved;  // script entities move by Warp / attach: exact
-    }
-    if (!moved && !exact) continue;
-    for (uint32_t m = ei.existMask; m; m &= m - 1) {  // (the slots with a handle, in slot order: UpdatePos skips the rest)
-      const int s = __builtin_ctz(m);
-      UpdatePos(st, ei.h[s], s, p, tick, exact);
-    }
+  static const IntelPar par = IntelParMode("INTELCOORDS", kParIntelCoordsMin);
+  if (!par.Pool(st.sources.size())) {
+    AdvanceIntelCoordsSerial(st, tick);
+    return;
   }
+  if (par.mode == ParMode::kOn) {
+    AdvanceIntelCoordsPar(sim, st, tick, false);
+    return;
+  }
+  // verify: the serial result from a copy of the grids and handles, then the pool's from the same start
+  const size_t G = st.armies.size() * 8, N = st.sources.size();
+  auto gridAt = [&](size_t gi) { return st.armies[gi / 8].g[gi % 8].get(); };
+  std::vector<std::vector<int8_t>> gridsWas(G), gridsSerial(G);
+  std::vector<std::vector<IntelHandle>> handlesWas(N), handlesSerial(N);
+  for (size_t gi = 0; gi < G; ++gi)
+    if (Grid* g = gridAt(gi)) gridsWas[gi] = g->c;
+  for (size_t i = 0; i < N; ++i)
+    if (const EntityIntel* ei = st.sources[i]->intel.get()) handlesWas[i].assign(ei->h, ei->h + 9);
+  AdvanceIntelCoordsSerial(st, tick);
+  for (size_t gi = 0; gi < G; ++gi)
+    if (Grid* g = gridAt(gi)) {
+      gridsSerial[gi] = g->c;
+      g->c = gridsWas[gi];
+    }
+  for (size_t i = 0; i < N; ++i)
+    if (EntityIntel* ei = st.sources[i]->intel.get()) {
+      handlesSerial[i].assign(ei->h, ei->h + 9);
+      std::copy(handlesWas[i].begin(), handlesWas[i].end(), ei->h);
+    }
+  AdvanceIntelCoordsPar(sim, st, tick, true);
+  for (size_t gi = 0; gi < G; ++gi)
+    if (Grid* g = gridAt(gi))
+      if (g->c != gridsSerial[gi]) IntelParMismatch("INTELCOORDS", tick, "grid (army * 8 + slot - 1)", gi);
+  for (size_t i = 0; i < N; ++i)
+    if (const EntityIntel* ei = st.sources[i]->intel.get())
+      for (int s = 0; s < 9; ++s)
+        if (!SameHandle(ei->h[s], handlesSerial[i][static_cast<size_t>(s)]))
+          IntelParMismatch("INTELCOORDS", tick, "source (handle)", i);
 }
 
 // ---- Lua ----------------------------------------------------------------------------------------
