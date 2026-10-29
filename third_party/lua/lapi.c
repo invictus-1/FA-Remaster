@@ -6,6 +6,8 @@
 
 
 #include <assert.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define lapi_c
@@ -962,7 +964,19 @@ static void f_call (lua_State *L, void *ud) {
    (src/core/profile.cpp); kind 0 = lua_pcall, 1 = lua_resume. NULL (the default): nothing is called. They never
    touch the state. */
 void (*lua_gpg_prof_enter)(lua_State *L, int kind) = NULL;
-void (*lua_gpg_lock_check)(lua_State *L) = NULL;  /* lstate.h lua_lock (src/core/workers.h) */
+/* lstate.h lua_lock: set by src/core/workers.cpp while a parallel task runs on this thread */
+#if defined(_MSC_VER) && !defined(__clang__)
+__declspec(thread) int lua_gpg_in_task = 0;
+#else
+__thread int lua_gpg_in_task = 0;
+#endif
+/* ... and what lua_lock calls when it is set: a parallel task called the Lua API, which the tasks never may */
+void lua_gpg_task_used_lua (lua_State *L) {
+  (void)L;
+  fprintf(stderr, "moho64: a parallel task called the Lua API (src/core/workers.h: tasks never touch a Lua state)\n");
+  fflush(stderr);
+  abort();
+}
 void (*lua_gpg_prof_exit)(lua_State *L) = NULL;
 /* (and a collection's start (0) and end (1): lgc.c luaC_collectgarbage; MOHO64_PROFILE_HITCH only) */
 void (*lua_gpg_prof_gc)(lua_State *L, int end) = NULL;

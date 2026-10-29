@@ -14,53 +14,26 @@
 #include "script/lua.hpp"
 
 extern "C" {
-extern void (*lua_gpg_lock_check)(lua_State* L);  // third_party/lua/lapi.c
+// third_party/lua/lstate.h lua_lock: this thread's "a task runs here" flag (defined in lapi.c), read inline by every
+// Lua API entry (lapi.c's lua_gpg_task_used_lua stops the program when a task broke the rule)
+#if defined(_MSC_VER) && !defined(__clang__)
+extern __declspec(thread) int lua_gpg_in_task;
+#else
+extern __thread int lua_gpg_in_task;
+#endif
 }
 
 namespace moho {
 
 namespace {
-thread_local bool t_inTask = false;  // a ParallelFor task runs on this thread now
-thread_local int t_threads = 0;      // ThreadsOverride (0: none)
+thread_local int t_threads = 0;  // ThreadsOverride (0: none)
 
+// A ParallelFor task runs on this thread (lua_gpg_in_task, lstate.h): every Lua API entry tests it inline.
 struct TaskScope {
-  bool was;
-  TaskScope() : was(t_inTask) { t_inTask = true; }
-  ~TaskScope() { t_inTask = was; }
+  int was;
+  TaskScope() : was(lua_gpg_in_task) { lua_gpg_in_task = 1; }
+  ~TaskScope() { lua_gpg_in_task = was; }
 };
-
-// Any Lua API call (its lua_lock) while a task runs: a task broke the rules (workers.h).
-void LockCheck(lua_State*) {
-  if (!t_inTask) return;
-  std::fprintf(stderr, "moho64: a parallel task called the Lua API (src/core/workers.h: tasks never touch a Lua state)\n");
-  Logf(LogLevel::Error, "moho64: a parallel task called the Lua API (src/core/workers.h: tasks never touch a Lua state)");
-  std::abort();
-}
-
-// lua_gpg_lock_check is ONE pointer for the process, read by every lua_lock of every sim's Lua with a relaxed atomic
-// load (third_party/lua/lstate.h). It is stored once, the first time a pool needs it, by an atomic store of the same
-// kind: a second sim's pool never races a thread that runs Lua meanwhile. It stays installed: the check itself is
-// per thread (t_inTask), so it costs a sim without workers one call per API entry, and only after a pool armed it.
-using LockFn = void (*)(lua_State*);
-LockFn LoadLockCheck() {
-#if defined(__GNUC__) || defined(__clang__)
-  return __atomic_load_n(&lua_gpg_lock_check, __ATOMIC_RELAXED);
-#else
-  LockFn volatile* p = &lua_gpg_lock_check;  // (MSVC: a volatile access of the aligned pointer is atomic)
-  return *p;
-#endif
-}
-void InstallLockCheck() {
-  static std::once_flag once;
-  std::call_once(once, [] {
-#if defined(__GNUC__) || defined(__clang__)
-    __atomic_store_n(&lua_gpg_lock_check, &LockCheck, __ATOMIC_RELAXED);
-#else
-    LockFn volatile* p = &lua_gpg_lock_check;
-    *p = &LockCheck;
-#endif
-  });
-}
 
 uint64_t SplitMix(uint64_t& s) {
   uint64_t z = (s += 0x9e3779b97f4a7c15ull);
@@ -87,7 +60,7 @@ ThreadsOverride::ThreadsOverride(int n) : was_(t_threads) {
 }
 ThreadsOverride::~ThreadsOverride() { t_threads = was_; }
 
-bool InParallelTask() { return t_inTask; }
+bool InParallelTask() { return lua_gpg_in_task != 0; }
 
 int ThreadsFromEnvironment() {
   if (t_threads > 0) return t_threads;
@@ -157,7 +130,6 @@ std::string ParallelStats::Summary(double tickMs) const {
 
 WorkerPool::WorkerPool(int threads, ParCheck check) : threads_(std::max(1, threads)), check_(check) {
   stats_.resize(static_cast<size_t>(threads_));
-  if (threads_ > 1 || check_.mode != ParCheck::kOff) InstallLockCheck();
   if (check_.mode != ParCheck::kOff) return;  // (the order check runs every task on the calling thread)
   seats_.reset(new Seat[static_cast<size_t>(threads_)]);
   workers_.reserve(static_cast<size_t>(threads_ - 1));
@@ -360,10 +332,10 @@ bool WorkerPool::SelfTest() {
   }
   check_ = saved;
   // MOHO64_WORKERS_SELFTEST_LUA=1: a task that calls the Lua API, which must stop the program (when the pool has
-  // workers or the order check is on; see LockCheck)
+  // workers or the order check is on; see lua_gpg_task_used_lua)
   if (std::getenv("MOHO64_WORKERS_SELFTEST_LUA")) {
-    if (!LoadLockCheck()) {
-      Logf(LogLevel::Info, "workers: self-test: the Lua check is not armed (one thread, no order check): nothing to test");
+    if (threads_ <= 1 && check_.mode == ParCheck::kOff) {
+      Logf(LogLevel::Info, "workers: self-test: one thread and no order check: no task runs apart, nothing to test");
       return ok;
     }
     lua_State* L = lua_open();
@@ -382,3 +354,4 @@ bool WorkerPool::SelfTest() {
 }
 
 }  // namespace moho
+

@@ -13,8 +13,9 @@
 // The rules a task keeps (multicore.md 1): it reads only state nothing writes during its stage, writes only its own
 // items and its worker's scratch, allocates nothing on a hot path, and never touches a Lua state. While a task runs,
 // a Lua API call that takes the state's lock (every call that changes a state; Lua 5.0's getters that only read the
-// stack, lua_gettop or lua_type, take none) aborts the program with a message (lua_gpg_lock_check,
-// third_party/lua/lstate.h), whenever the pool has workers or the order check is on. Every task on a worker runs in
+// stack, lua_gettop or lua_type, take none) aborts the program with a message (lua_lock's test of this thread's
+// lua_gpg_in_task, third_party/lua/lstate.h), whether the task runs on a worker or, with the order check, on the
+// calling thread. Every task on a worker runs in
 // the sim's floating-point state (core/fpenv.h); one on the calling thread runs in the caller's, which every sim
 // entry has set already.
 //
