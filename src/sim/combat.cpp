@@ -1329,7 +1329,9 @@ const std::vector<Unit*>& BlipsInRange(Sim& sim, Unit* u, int period) {
   sim.ForUnitsInRect(p.x - R, p.z - R, p.x + R, p.z + R, [&](Unit* t) {
     if (t->dead || t->destroyQueued || !t->army) return;
     if (Relation(u->army, t->army) == 2) return;
-    if (Dist2XZ(p, t->position) > R * R) return;
+    // EntitiesAroundPoint 0x722350 keeps a unit when R^2 > dx^2 + dz^2, dx = its x - the point's (comiss 0x7224b5,
+    // jbe: strict, and a NaN distance is left out); ours kept one at exactly R.
+    if (!(R * R > Dist2XZ(t->position, p))) return;
     if (a < 0 || a >= 16 || !HasBlip(t, a)) return;
     u->blipCache.push_back(t);
   });
