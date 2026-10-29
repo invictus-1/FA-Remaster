@@ -103,3 +103,17 @@ A design talk with Chris, using these goals and ai-study-m28.md section 7.5's op
     matchups he knows.
     Chris's addition: a short readable label per unit for the tuning list, tier + domain letter + value, e.g. "T1G 1.0"
     (G ground, A air, N naval, S structure, X experimental), so a list of ~400 units is quick to scan and correct.
+11. **Threat and build value are two different numbers (Chris, 2026-10-28):**
+    - **Threat** is raw: what the unit can do (damage, health, shields, range, splash, speed), never its cost. It
+      answers "how dangerous is this force".
+    - **Cost per mass** belongs to the build choice only: "what should I build against what the enemy has". Example:
+      against a mass of GCs, Percivals per mass are a good answer for their single-target killing power.
+    - A specialist is not marked down in threat for being a specialist: the Percival's group score suffered from
+      overkill against small (500-health) targets, which said little about a T3 fight. Its threat should come out
+      much higher than the first list's 14.1 (below the Harbinger and the Othuum). In fights the threat is judged
+      against the enemy's real composition; for the printed list, against targets of the unit's own tier.
+12. **A score per target size (Chris, 2026-10-28):** each unit carries a group score against an army of T1, of T2
+    and of T3 units, and a single-target score against a T1, a T2, a T3 and an experimental target. The AI then sees
+    WHY a unit's threat is low or high (a group killer, a single-target killer) and can pick what takes out the
+    enemy's group. These are worked out once when the blueprints load (a small table per unit), so they cost nothing
+    while the game runs.
