@@ -21,6 +21,10 @@ LUALIB_API int luaopen_base (lua_State *L);
 
 #define LUA_TABLIBNAME	"table"
 LUALIB_API int luaopen_table (lua_State *L);
+/* moho64: table.sort's routine with a C comparison (ltablib.c): comp(L, a, b) is a < b for the values at stack
+** indices a and b (negative), leaving the stack as it was */
+typedef int (*lua_SortComp) (lua_State *L, int a, int b);
+LUALIB_API void luaB_sortwith (lua_State *L, lua_SortComp comp);
 
 #define LUA_IOLIBNAME	"io"
 #define LUA_OSLIBNAME	"os"

@@ -181,3 +181,48 @@ do
         LuaUpdateCell(self, cell)
     end
 end
+
+-- FAF's sort of the cells by TotalMass (UpdateCells and FilterInRadius: TableSort(cells, SortLambda), the file's own
+-- locals) with the engine's helper (script/fastlib_reclaim.cpp): table.sort's own routine with SortLambda's comparison in
+-- C, so the same comparisons in the same order and the same order of the cells, ties included. Any other sort goes to
+-- table.sort as before. VerifySort (a test switch, never on in a game that is played): FAF's sort runs on a copy too,
+-- its order is kept, and any difference is logged.
+do
+    local Native = rawget(_G, 'Remastered')
+    local NativeSortByTotalMass = Native and Native.SortCellsByTotalMass
+    local FAFTableSort = TableSort
+    local VerifySort = false
+    local VerifySorts, VerifySortMismatches = 0, 0
+    if NativeSortByTotalMass then
+        TableSort = function(t, comp)
+            if comp ~= SortLambda then
+                return FAFTableSort(t, comp)
+            end
+            if not VerifySort then
+                return NativeSortByTotalMass(t)
+            end
+            local n = table.getn(t)
+            local copy = {}
+            for i = 1, n do
+                copy[i] = t[i]
+            end
+            FAFTableSort(copy, SortLambda)
+            NativeSortByTotalMass(t)
+            VerifySorts = VerifySorts + 1
+            for i = 1, n do
+                if t[i] ~= copy[i] then
+                    VerifySortMismatches = VerifySortMismatches + 1
+                    LOG('GridReclaim VERIFY SORT MISMATCH: ' .. n .. ' cells, first difference at ' .. i .. '; mismatches ' ..
+                        VerifySortMismatches)
+                    break
+                end
+            end
+            for i = 1, n do
+                t[i] = copy[i]
+            end
+            if math.mod(VerifySorts, 500) == 0 then
+                LOG('GridReclaim VERIFY SORT: ' .. VerifySorts .. ' sorts, ' .. VerifySortMismatches .. ' mismatches')
+            end
+        end
+    end
+end

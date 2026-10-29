@@ -1,6 +1,7 @@
-// The reclaim grid's helper in `Remastered` (script/fastlib.h): one cell's update of FAF's AI reclaim grid
+// The reclaim grid's helpers in `Remastered` (script/fastlib.h): one cell's update of FAF's AI reclaim grid
 // (/lua/AI/GridReclaim.lua, AIGridReclaim.UpdateCell) as the engine's script fix data/fixes/hook/lua/AI/GridReclaim.lua
-// (docs/deviations.md 10) does it, in C.
+// (docs/deviations.md 10) does it, in C; and the grid's sort of its cells by TotalMass (FAF's SortLambda, GridReclaim.lua
+// 59-61) with table.sort's own routine and the comparison in C.
 //
 // What it follows: FAF's UpdateCell (GridReclaim.lua 134-155), whose sum loop is by Willem 'Jip' Wijnia under the MIT
 // licence; its notice, as the file carries it:
@@ -135,11 +136,41 @@ int l_ReclaimCellTotals(lua_State* L) {
   return 3;
 }
 
+// FAF's SortLambda(a, b), `return a.TotalMass > b.TotalMass`, as table.sort's comparison for the values at a and b:
+// a.TotalMass, then b.TotalMass, each through lua_gettable (metamethods as the VM's `a.TotalMass`; the key, the string
+// "TotalMass", at stack index 2), then the VM's `>`: OP_LT with the operands swapped (lua_lessthan, numbers, strings and
+// __lt as the VM's). lua_gpg_checkgc: the collector's check that luaD_call makes when the script comparison returns.
+int TotalMassGreater(lua_State* L, int a, int b) {
+  lua_pushvalue(L, 2);
+  lua_gettable(L, a - 1);
+  lua_pushvalue(L, 2);
+  lua_gettable(L, b - 2);
+  const int r = lua_lessthan(L, -1, -2);
+  lua_pop(L, 2);
+  lua_gpg_checkgc(L);
+  return r;
+}
+
+// Remastered.SortCellsByTotalMass(t): table.sort(t, SortLambda) with SortLambda in C: the same routine (ltablib.c
+// luaB_sortwith: the length as table.sort takes it, the same quicksort, the same comparisons in the same order, the
+// same swaps), so the same order, ties included. The key string is the closure's upvalue (made once, when Remastered is
+// made): nothing is made while sorting.
+int l_SortCellsByTotalMass(lua_State* L) {
+  lua_settop(L, 1);
+  lua_pushvalue(L, lua_upvalueindex(1));
+  luaB_sortwith(L, TotalMassGreater);
+  return 0;
+}
+
 }  // namespace
 
 void RegisterRemasteredReclaim(lua_State* L) {
   lua_pushstring(L, "ReclaimCellTotals");
   lua_pushcfunction(L, l_ReclaimCellTotals);
+  lua_rawset(L, -3);
+  lua_pushstring(L, "SortCellsByTotalMass");
+  lua_pushstring(L, "TotalMass");
+  lua_pushcclosure(L, l_SortCellsByTotalMass, 1);
   lua_rawset(L, -3);
 }
 

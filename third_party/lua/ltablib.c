@@ -154,13 +154,15 @@ static int sort_comp (lua_State *L, int a, int b) {
     return lua_lessthan(L, a, b);
 }
 
-static void auxsort (lua_State *L, int l, int u) {
+/* moho64: the comparison is a parameter, so that luaB_sortwith (lualib.h) sorts with this same routine and a C
+** comparison; table.sort passes sort_comp, as before. */
+static void auxsort (lua_State *L, int l, int u, lua_SortComp comp) {
   while (l < u) {  /* for tail recursion */
     int i, j;
     /* sort elements a[l], a[(l+u)/2] and a[u] */
     lua_rawgeti(L, 1, l);
     lua_rawgeti(L, 1, u);
-    if (sort_comp(L, -1, -2))  /* a[u] < a[l]? */
+    if (comp(L, -1, -2))  /* a[u] < a[l]? */
       set2(L, l, u);  /* swap a[l] - a[u] */
     else
       lua_pop(L, 2);
@@ -168,12 +170,12 @@ static void auxsort (lua_State *L, int l, int u) {
     i = (l+u)/2;
     lua_rawgeti(L, 1, i);
     lua_rawgeti(L, 1, l);
-    if (sort_comp(L, -2, -1))  /* a[i]<a[l]? */
+    if (comp(L, -2, -1))  /* a[i]<a[l]? */
       set2(L, i, l);
     else {
       lua_pop(L, 1);  /* remove a[l] */
       lua_rawgeti(L, 1, u);
-      if (sort_comp(L, -1, -2))  /* a[u]<a[i]? */
+      if (comp(L, -1, -2))  /* a[u]<a[i]? */
         set2(L, i, u);
       else
         lua_pop(L, 2);
@@ -187,12 +189,12 @@ static void auxsort (lua_State *L, int l, int u) {
     i = l; j = u-1;
     for (;;) {  /* invariant: a[l..i] <= P <= a[j..u] */
       /* repeat ++i until a[i] >= P */
-      while (lua_rawgeti(L, 1, ++i), sort_comp(L, -1, -2)) {
+      while (lua_rawgeti(L, 1, ++i), comp(L, -1, -2)) {
         if (i>u) luaL_error(L, "invalid order function for sorting");
         lua_pop(L, 1);  /* remove a[i] */
       }
       /* repeat --j until a[j] <= P */
-      while (lua_rawgeti(L, 1, --j), sort_comp(L, -3, -1)) {
+      while (lua_rawgeti(L, 1, --j), comp(L, -3, -1)) {
         if (j<l) luaL_error(L, "invalid order function for sorting");
         lua_pop(L, 1);  /* remove a[j] */
       }
@@ -213,7 +215,7 @@ static void auxsort (lua_State *L, int l, int u) {
     else {
       j=i+1; i=u; u=j-2;
     }
-    auxsort(L, j, i);  /* call recursively the smaller one */
+    auxsort(L, j, i, comp);  /* call recursively the smaller one */
   }  /* repeat the routine for the larger one */
 }
 
@@ -223,8 +225,18 @@ static int luaB_sort (lua_State *L) {
   if (!lua_isnoneornil(L, 2))  /* is there a 2nd argument? */
     luaL_checktype(L, 2, LUA_TFUNCTION);
   lua_settop(L, 2);  /* make sure there is two arguments */
-  auxsort(L, 1, n);
+  auxsort(L, 1, n, sort_comp);
   return 0;
+}
+
+/* moho64: table.sort's own steps (the length as luaB_sort takes it, the stack check, the same quicksort) with the C
+** comparison `comp' in place of the script's function: the array at stack index 1; index 2 is the caller's (comp may
+** keep a value there). */
+LUALIB_API void luaB_sortwith (lua_State *L, lua_SortComp comp) {
+  int n = aux_getn(L, 1);
+  luaL_checkstack(L, 40, "");  /* assume array is smaller than 2^40 */
+  lua_settop(L, 2);
+  auxsort(L, 1, n, comp);
 }
 
 /* }====================================================== */
