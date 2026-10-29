@@ -2,6 +2,9 @@
 // ordered stream of messages (the original's INetConnector / INetConnection: CNetTCPConnector NET_MakeTCPConnector
 // 0x4849a0, CNetUDPConnector NET_MakeUDPConnector 0x48bbe0). Polled by its owner; what happened comes back as events.
 //
+// The UDP connector is the original's (its packets, handshake, acks and resends, read in full:
+// docs/ui-net-udp.md); it has no hello, so a peer's address is its datagrams' source and its uid unknown.
+//
 // The TCP connector (ours in its details, INFERRED from the classes' shape): messages back to back on the stream,
 // and on every new connection both ends first send a hello of the connector's own (message 210: the port it listens
 // on, its uid), so that a peer's listening address and uid are known as the connection is made: the original's
@@ -20,8 +23,10 @@
 
 namespace moho::net {
 
+// Incoming (UDP only): someone at PeerAddress(conn) wants a connection; it waits until the owner calls Accept(conn),
+// or Connect to that address (which takes it), or Close(conn). TCP's are accepted at once (Made, incoming).
 struct ConnEvent {
-  enum Kind { Made, Failed, Lost, Received } kind = Made;
+  enum Kind { Made, Failed, Lost, Received, Incoming } kind = Made;
   int conn = 0;
   bool incoming = false;  // (Made: the other end connected to us)
   Message msg;            // (Received)
@@ -41,12 +46,17 @@ class Connector {
   virtual Address PeerAddress(int conn) const = 0;  // where the other end listens (its IP, its game port)
   virtual int32_t PeerUid(int conn) const = 0;      // the uid its hello gave (-1: none yet)
   virtual double PingMs(int conn) const = 0;
-  virtual double QuietMs(int conn) const = 0;  // since anything was last heard from it
+  virtual double QuietMs(int conn) const = 0;  // since anything was last heard from it (-1: never)
+  virtual void Accept(int /*conn*/) {}         // (an Incoming one)
+  // True when both ends of a pair should Connect (UDP: the two CONNECTs make one link); false when one connects and
+  // the other is connected to (TCP: of a pair, the lower uid connects).
+  virtual bool BothEndsConnect() const { return false; }
 };
 
-// The connector for a protocol name ("TCP"; "UDP" is TCP's for now, until the original's UDP format is built),
-// listening on `port` (0: a port the system chooses). nullptr when the port cannot be opened (the original's
-// InternalCreateLobby then returns nil).
+// The connector for a protocol name ("TCP", or "UDP": the original's packets, connector_udp.cpp), listening on
+// `port` (0: a port the system chooses). nullptr when the port cannot be opened (the original's InternalCreateLobby
+// then returns nil).
 std::unique_ptr<Connector> MakeConnector(const std::string& protocol, uint16_t port);
+std::unique_ptr<Connector> MakeUdpConnector(uint16_t port);
 
 }  // namespace moho::net

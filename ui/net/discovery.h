@@ -5,8 +5,8 @@
 // script's GameConfigRequested table in the engine's byte form). A host not heard from for 5 s is gone. Both are
 // CMessages in a datagram, as everything else.
 //
-// Ours: the browser asks 127.0.0.1 too, so that a game hosted on this machine is found also where a broadcast
-// does not come back to the sender. Protocol numbers: 0 None, 1 TCP, 2 UDP (NET_GetProtocolName 0x47ec90: 2 is
+// Ours: the browser asks 127.0.0.1 instead when the broadcast cannot be sent (no network), so that a game hosted on
+// this machine is still found; never both (the game would be listed twice, 2026-10-29). Protocol numbers: 0 None, 1 TCP, 2 UDP (NET_GetProtocolName 0x47ec90: 2 is
 // "UDP"; 0 / 1 by the names' order, INFERRED).
 #pragma once
 

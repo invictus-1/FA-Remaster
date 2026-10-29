@@ -51,8 +51,9 @@ void DiscoveryBrowser::Poll(std::vector<DiscoveredGame>* found, std::vector<Disc
   if (now - lastAsked_ >= kAskEvery) {  // (BroadcastDiscoveryRequestTick 0x7bfa60)
     lastAsked_ = now;
     const Message ask = MessageWriter().Done(kRequest);
-    SendMessage(sock_, Address{kBroadcastIp, kDiscoveryPort}, ask);
-    SendMessage(sock_, Address{0x7F000001u, kDiscoveryPort}, ask);
+    // (the original broadcasts only; ours asks this PC itself when there is no network to broadcast on. Both at once
+    // would list a game on this PC twice: its answers come from the network's address and from 127.0.0.1)
+    if (!SendMessage(sock_, Address{kBroadcastIp, kDiscoveryPort}, ask)) SendMessage(sock_, Address{0x7F000001u, kDiscoveryPort}, ask);
   }
   char buf[0x10000];
   Address from;

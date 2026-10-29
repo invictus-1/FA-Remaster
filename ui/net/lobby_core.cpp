@@ -57,15 +57,15 @@ void LobbyCore::Join(const Address& host) {
   hostConn_ = connector_->Connect(host);
 }
 
-// ConnectToPeer (0x7c7190): a peer the host told us of (NewPeer), or the script's own call. Of a pair, the one with
-// the lower uid connects, the other waits for it (ours: TCP's one connection per pair; the original's UDP connector
-// makes one link of both ends' CONNECT packets).
+// ConnectToPeer (0x7c7190): a peer the host told us of (NewPeer), or the script's own call. UDP: both ends connect
+// (the original's connector makes one link of both ends' CONNECT packets, and Connect takes one waiting from there);
+// TCP (ours): of a pair, the one with the lower uid connects, the other waits for it.
 void LobbyCore::ConnectToPeer(const Address& at, const std::string& name, int uid) {
   if (uid == uid_ || peers_.count(uid)) return;
   Peer& p = peers_[uid];
   p.name = name, p.uid = uid, p.address = at;
   p.state = State::Connecting;
-  if (uid_ < uid && connector_) {
+  if (connector_ && (uid_ < uid || connector_->BothEndsConnect())) {
     p.conn = connector_->Connect(at);
     outgoingPeers_[p.conn] = uid;
   }
@@ -146,9 +146,28 @@ void LobbyCore::Pump() {
       case ConnEvent::Failed: OnFailed(e.conn); break;
       case ConnEvent::Lost: OnLost(e.conn); break;
       case ConnEvent::Received: OnMessage(e.conn, e.msg); break;
+      case ConnEvent::Incoming: OnIncoming(e.conn); break;
     }
   }
   TellEstablished();
+}
+
+// Someone connecting over UDP (the original's lobby takes them with FindNextAddress 0x48b410 and Accept): at the
+// host, anyone (a joiner; its Join follows); at a joiner, a peer we know at that address. INFERRED: an unknown one is
+// left waiting (our ConnectToPeer takes it once the host's NewPeer names it), not rejected.
+void LobbyCore::OnIncoming(int conn) {
+  if (host_) {
+    connector_->Accept(conn);
+    return;
+  }
+  const Address from = connector_->PeerAddress(conn);
+  for (auto& [u, p] : peers_) {
+    if (p.state == State::Connecting && p.conn == 0 && p.address == from) {
+      p.conn = conn;
+      connector_->Accept(conn);
+      return;
+    }
+  }
 }
 
 void LobbyCore::OnMade(int conn, bool incoming) {
@@ -165,12 +184,14 @@ void LobbyCore::OnMade(int conn, bool incoming) {
     }
     return;
   }
-  // Incoming: a peer we expect (its hello's uid, a NewPeer we had), or, at the host, a joiner (waits for its Join).
+  // Incoming: a peer we expect (its hello's uid, a NewPeer we had; UDP: the one we accepted it for), or, at the
+  // host, a joiner (waits for its Join).
   const int uid = connector_->PeerUid(conn);
   auto p = uid >= 0 ? peers_.find(uid) : peers_.end();
-  if (!host_ && p != peers_.end() && p->second.state == State::Connecting) {
-    p->second.conn = conn;
-    p->second.state = State::Established;
+  Peer* known = p != peers_.end() ? &p->second : PeerByConn(conn);
+  if (!host_ && known && known->state == State::Connecting) {
+    known->conn = conn;
+    known->state = State::Established;
     return;
   }
   if (host_) {

@@ -180,7 +180,8 @@ class TcpConnector final : public Connector {
 }  // namespace
 
 std::unique_ptr<Connector> MakeConnector(const std::string& protocol, uint16_t port) {
-  if (protocol != "TCP" && protocol != "UDP") return nullptr;
+  if (protocol == "UDP") return MakeUdpConnector(port);
+  if (protocol != "TCP") return nullptr;
   auto c = std::make_unique<TcpConnector>();
   if (!c->Open(port)) return nullptr;
   return c;

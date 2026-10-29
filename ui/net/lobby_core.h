@@ -82,6 +82,7 @@ class LobbyCore {
   static const char* StateName(State s);
   Peer* PeerByConn(int conn);
   void Send(Peer& p, const Message& m);
+  void OnIncoming(int conn);
   void OnMade(int conn, bool incoming);
   void OnFailed(int conn);
   void OnLost(int conn);
