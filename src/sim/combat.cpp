@@ -2289,8 +2289,62 @@ void AimReadLastPose(Sim& sim, Unit* u) {
     const Quat curOri = u->poseBaseOri;
     u->poseBasePos = u->prevPoseBasePos;
     u->poseBaseOri = u->prevPoseBaseOri;
-    for (AimController* c : u->aimControllers)
-      if (c->alive && c->muzzleBone >= 0) BoneWorld(u, c->muzzleBone, &c->lastMuzzlePos, &c->lastMuzzleRot);
+    // (BoneWorld's walk down each muzzle's chain, shared: a bone's world transform is made from its parent's with the
+    // steps BoneWorld takes, in its order, so each muzzle gets the same bits; the controllers of a unit share their
+    // turret's chain. A chain deeper than BoneWorld's 64 goes to BoneWorld itself.)
+    const auto& bones = u->skeleton->bones();
+    const float s = u->meshScale * u->scale[0];
+    const bool posed = u->poseQ.size() == bones.size();
+    static thread_local std::vector<Vec3> wp;
+    static thread_local std::vector<Quat> wr;
+    static thread_local std::vector<uint32_t> made;
+    static thread_local uint32_t stamp = 0;
+    if (++stamp == 0) {
+      std::fill(made.begin(), made.end(), 0u);
+      stamp = 1;
+    }
+    if (made.size() < bones.size()) {
+      wp.resize(bones.size());
+      wr.resize(bones.size());
+      made.resize(bones.size(), 0u);
+    }
+    const Quat r0 = u->poseSet ? u->poseBaseOri : u->orientation;
+    const Vec3 p0 = u->poseSet ? u->poseBasePos : u->position;
+    for (AimController* c : u->aimControllers) {
+      if (!c->alive || c->muzzleBone < 0) continue;
+      const int bone = c->muzzleBone;
+      if (bone >= u->skeleton->Count()) {
+        BoneWorld(u, bone, &c->lastMuzzlePos, &c->lastMuzzleRot);
+        continue;
+      }
+      int depth = 0;
+      for (int j = bone; j >= 0 && depth <= 64; j = bones[static_cast<size_t>(j)].parent) ++depth;
+      if (depth > 64) {  // (deeper than BoneWorld walks: it starts 64 bones up)
+        BoneWorld(u, bone, &c->lastMuzzlePos, &c->lastMuzzleRot);
+        continue;
+      }
+      int chain[64];
+      int n = 0;
+      int i = bone;
+      for (; i >= 0; i = bones[static_cast<size_t>(i)].parent) {
+        if (made[static_cast<size_t>(i)] == stamp) break;  // (made from the root, as BoneWorld's walk)
+        chain[n++] = i;
+      }
+      Quat r = i >= 0 ? wr[static_cast<size_t>(i)] : r0;
+      Vec3 p = i >= 0 ? wp[static_cast<size_t>(i)] : p0;
+      for (int k = n - 1; k >= 0; --k) {
+        const size_t bi = static_cast<size_t>(chain[k]);
+        const Bone& b = bones[bi];
+        const Vec3 lp = posed ? u->poseP[bi] : Vec3{b.localPos.x * s, b.localPos.y * s, b.localPos.z * s};
+        p = Add(p, RotateM(r, lp));
+        r = ComposeQ(r, posed ? u->poseQ[bi] : b.localRot);
+        wp[bi] = p;
+        wr[bi] = r;
+        made[bi] = stamp;
+      }
+      c->lastMuzzlePos = p;
+      c->lastMuzzleRot = r;
+    }
     static const long dbgUnit = getenv("MOHO64_DEBUG_WEAPON") ? atol(getenv("MOHO64_DEBUG_WEAPON")) : -1;
     if (dbgUnit >= 0 && static_cast<long>(u->id) == dbgUnit)
       for (AimController* c : u->aimControllers)

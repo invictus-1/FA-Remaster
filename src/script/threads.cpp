@@ -173,7 +173,7 @@ void ThreadScheduler::Fork(lua_State* caller, int fn, int nargs) {
   // another number for its Goal and its next turn came at 4889 instead of 4885.
   WakeSignalled();
   threads_.push_back(t);
-  byCo_[co] = &threads_.back();
+  byCo_[co] = std::prev(threads_.end());
 }
 
 void ThreadScheduler::PushCurrent(lua_State* L) {
@@ -371,11 +371,8 @@ void ThreadScheduler::Signal(const ScriptObject* o) {
   for (Thread* w : hit) {
     luaL_unref(L_, LUA_REGISTRYINDEX, w->waitRef);
     w->waitRef = LUA_NOREF;  // (no longer waiting: WakeSignalled and RunTick leave it where it is now)
-    for (auto it = threads_.begin(); it != threads_.end(); ++it)
-      if (&*it == w) {
-        threads_.splice(threads_.end(), threads_, it);
-        break;
-      }
+    const auto it = byCo_.find(w->co);  // (a listed thread is in byCo_ under its coroutine, which is its own)
+    if (it != byCo_.end()) threads_.splice(threads_.end(), threads_, it->second);
   }
 }
 

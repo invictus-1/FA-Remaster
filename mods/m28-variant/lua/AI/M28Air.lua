@@ -3605,6 +3605,8 @@ function UpdateOrdersForExistingAirAATargets(tInCombatUnits, bReturnTableOfAssig
     M28Profiler.FunctionProfiler(sFunctionRef, M28Profiler.refProfilerEnd)
 end
 
+iVariantVerifyAirAAChecks = 0 --FA Remastered variant: counts of the test switch M28Utilities.bVariantVerifyNative (AssignAirAATargets)
+iVariantVerifyAirAAMismatches = 0
 function AssignAirAATargets(tAvailableAirAA, tEnemyTargets, iTeam, iAirSubteam, tExistingThreatAssignedByUnitRef, bLastEnemiesToTarget, bSendAllAirAA)
     --bLastEnemiesToTarget - if this is true, then will assign more air units than normal to deal with the threat
     local bDebugMessages = false if M28Profiler.bGlobalDebugOverride == true then   bDebugMessages = true end
@@ -3635,11 +3637,83 @@ function AssignAirAATargets(tAvailableAirAA, tEnemyTargets, iTeam, iAirSubteam, 
         end
     end
 
+    --FA Remastered variant: the closest AirAA unit is found from distances worked out once per target (and positions
+    --read once per call), not by a GetPosition and a distance for every available unit in every round: in a big air
+    --fight the rounds over hundreds of units took 200-400 ms once a second (ui game of 2026-10-28, beats 25640-26260).
+    --The same choice: each unit's GetPosition is the one it gives all through this call (orders do not move a unit
+    --until the beat's motion); each round looks at the units in the order the original's `for k, v in tAvailableAirAA`
+    --visits them, which is 1, 2, ... n when the table is a plain array (checked on every call; otherwise the original
+    --loop runs), with the same distance arithmetic, the same strict < (the first of equal distances) and the same
+    --100000 start; the chosen one is removed with the same table.remove, and its distance with it, so the two stay in
+    --step. With M28Utilities.bVariantVerifyNative the original scan runs as well each round and any difference is logged.
+    local tVariantAAPosition = {} --[oAAUnit] = its GetPosition() in this call
+    local function VariantIsPlainArray(t)
+        local iExpected = 0
+        for k, v in t do
+            iExpected = iExpected + 1
+            if not(k == iExpected) then return false end
+        end
+        return true, iExpected
+    end
     function ConsiderAttackingUnit(oEnemyUnit, iThreatToAssign)
         iCurLoopCount = 0
         iCurValueAssigned = (tExistingThreatAssignedByUnitRef[oEnemyUnit.EntityId] or 0)
         if bDebugMessages == true then LOG(sFunctionRef..': Considering enemy unit '..oEnemyUnit.UnitId..M28UnitInfo.GetUnitLifetimeCount(oEnemyUnit)..'; iThreatToAssign='..iThreatToAssign) end
         local tBasePosition = oEnemyUnit:GetPosition()
+        local bVariantArray, iVariantCount
+        if not(bDebugMessages) then bVariantArray, iVariantCount = VariantIsPlainArray(tAvailableAirAA) end
+        if bVariantArray and not(table.getn(tAvailableAirAA) == iVariantCount) then bVariantArray = false end --(table.remove counts by getn: it must be the same n)
+        if bVariantArray then
+            local tVariantDistance --[i] = the distance of tAvailableAirAA[i], made at the first round
+            while iCurValueAssigned < iThreatToAssign do
+                iCurLoopCount = iCurLoopCount + 1
+                if iCurLoopCount > iMaxLoopCount then break end
+                if not(tVariantDistance) then
+                    tVariantDistance = {}
+                    for iAAUnit = 1, iVariantCount do
+                        local oAAUnit = tAvailableAirAA[iAAUnit]
+                        local tAAPosition = tVariantAAPosition[oAAUnit]
+                        if not(tAAPosition) then
+                            tAAPosition = oAAUnit:GetPosition()
+                            tVariantAAPosition[oAAUnit] = tAAPosition
+                        end
+                        tVariantDistance[iAAUnit] = GetRoughDistanceBetweenPositions(tBasePosition, tAAPosition)
+                    end
+                end
+                iClosestUnitDist = 100000
+                for iAAUnit = 1, iVariantCount do
+                    iCurDist = tVariantDistance[iAAUnit]
+                    if iCurDist < iClosestUnitDist then
+                        iClosestUnitDist = iCurDist
+                        oClosestUnit = tAvailableAirAA[iAAUnit]
+                        iClosestAARef = iAAUnit
+                    end
+                end
+                if M28Utilities.bVariantVerifyNative then
+                    local iLuaDist, oLuaUnit, iLuaRef = 100000, oClosestUnit, iClosestAARef
+                    for iAAUnit, oAAUnit in tAvailableAirAA do
+                        local iDist = GetRoughDistanceBetweenPositions(tBasePosition, oAAUnit:GetPosition())
+                        if iDist < iLuaDist then iLuaDist = iDist oLuaUnit = oAAUnit iLuaRef = iAAUnit end
+                    end
+                    iVariantVerifyAirAAChecks = iVariantVerifyAirAAChecks + 1
+                    if not(iLuaDist == iClosestUnitDist and oLuaUnit == oClosestUnit and iLuaRef == iClosestAARef) then
+                        iVariantVerifyAirAAMismatches = iVariantVerifyAirAAMismatches + 1
+                        LOG('VERIFY MISMATCH AirAA closest: lua '..tostring(iLuaRef)..' '..tostring(iLuaDist)..' variant '..tostring(iClosestAARef)..' '..tostring(iClosestUnitDist)..'; mismatches='..iVariantVerifyAirAAMismatches)
+                        iClosestUnitDist, oClosestUnit, iClosestAARef = iLuaDist, oLuaUnit, iLuaRef
+                    end
+                    if math.mod(iVariantVerifyAirAAChecks, 10000) == 0 then LOG('VERIFY AirAA closest checks='..iVariantVerifyAirAAChecks..' mismatches='..iVariantVerifyAirAAMismatches) end
+                end
+                if not(oClosestUnit.Dead) then --redundancy
+                    TargetUnitWithAirAA(oClosestUnit, oEnemyUnit, iClosestUnitDist)
+                end
+                iCurValueAssigned = iCurValueAssigned + M28UnitInfo.GetAirThreatLevel({ oClosestUnit }, false, true, false, true, true, true)
+                table.remove(tAvailableAirAA, iClosestAARef)
+                table.remove(tVariantDistance, iClosestAARef)
+                iVariantCount = table.getn(tAvailableAirAA)
+                if M28Utilities.IsTableEmpty(tAvailableAirAA) then break end
+            end
+            return
+        end
         while iCurValueAssigned < iThreatToAssign do
             iCurLoopCount = iCurLoopCount + 1
             if iCurLoopCount > iMaxLoopCount then break end
