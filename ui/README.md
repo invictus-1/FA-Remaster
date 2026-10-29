@@ -336,6 +336,20 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   look at anything the scripts can see, or to build controls; its output goes to the log).
 - `ui/tests/*.lua` are run that way and check themselves (`TEST ok` / `TEST FAIL` lines); the command
   is at the top of each file.
+- The network lobby (since 2026-10-29, step 1 of the plan in `_scratch/ui/netlobby_survey.md`): `ui/net/` (plain
+  C++ without the interface, so the engine's headless moho64 can build it too) holds the sockets, the original's
+  message unit (`[u8 type][u16 size][payload]`, strings zero-terminated), the connector (TCP now; the scripts' "UDP"
+  uses it too until the original's UDP format is built) and the lobby's network side (`net/lobby_core.h`: the host
+  and the joiners, every pair of players connected directly, the original's messages 100..107: Join, Rejected,
+  Welcome with the host's nonce as the game's seed, NewPeer, DeletePeer, EstablishedPeers, ScriptData). The
+  script's lobby (`ui/user/lobby.cpp`) hosts, joins by address, connects to peers, sends its tables (the engine's
+  byte form of a Lua table, as the original's), ejects, and hears ConnectionToHostEstablished, DataReceived,
+  PeerDisconnected, Ejected, SystemMessage and EstablishedPeers each frame; GetPeer / GetPeers give name, id,
+  status, ping, quiet, established peers; ValidateIPAddress resolves "host:port". Ours: a TCP connection opens
+  with a hello of the connector's own (its listening port and uid; the original's UDP learns them from the
+  datagrams), and of a pair of joiners the lower uid connects. Not yet: the UDP format, LAN games (discovery on
+  UDP 15000), a game between the players (the engine's BeatExchange). Tested by three programs at once over
+  loopback (`ui/tests/net_host.lua`, `net_join1.lua`, `net_join2.lua`; the suite's net_lobby, run last and alone).
 - `--session-out file` writes the game configuration when a game is launched from the lobby, as Lua
   that reads back. `--session file` starts a game from such a file at once, without the lobby;
   `--seed N` fixes its random seed. `--game-lua file` runs a Lua file of yours in the launched

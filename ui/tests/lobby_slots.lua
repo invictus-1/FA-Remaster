@@ -173,7 +173,10 @@ ForkThread(function()
     clickOn(slots[2].name)
     local list = slots[2].name._list
     check("a click on an open slot's name opens its list", slots[2].name._dropdown:IsHidden(), false)
-    check("which offers Close, Occupy and the AIs", list:GetItem(0) .. ", " .. list:GetItem(1) .. ", " .. list:GetItem(3), "Close, Occupy, AI: Normal")
+    check("which offers Close, Occupy and the AIs, ours first", list:GetItem(0) .. ", " .. list:GetItem(1) .. ", " .. list:GetItem(2), "Close, Occupy, Remastered AI: Recruit")
+    local normal = false
+    for i = 0, list:GetItemCount() - 1 do normal = normal or list:GetItem(i) == "AI: Normal" end
+    check("and the game's own AIs after them", normal, true)
     clickOn(slots[2].name)
     check("AI: Normal picked from it", pick(slots[2].name, "AI: Normal"), true)
     local ai = players[2]

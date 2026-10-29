@@ -931,5 +931,6 @@ int GameSpeedOf(lua_State* L);
 void SetGameSpeedTo(lua_State* L, int rate);
 // The lobby object in its local form (lobby.cpp).
 void RegisterLobbyBindings(lua_State* L);
+void PumpLobbies(lua_State* L);  // (each frame: the lobbies' network and their scripts' callbacks; user/lobby.cpp)
 
 }  // namespace moho::ui

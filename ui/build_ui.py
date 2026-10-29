@@ -130,7 +130,7 @@ def main():
         print("build_ui: compiled for " + str(target) + "; not linked (SDL3 is linked on that system itself)")
         return
     link = zig("c++", *tflag, *common, "-o", exe, *[j[1] for j in jobs])
-    link += (["-lshell32", "-lgdi32", "-luser32", "-lwinmm", "-lole32", "-ld3d12", "-ldxgi", "-ld3dcompiler_47"]
+    link += (["-lshell32", "-lgdi32", "-luser32", "-lwinmm", "-lole32", "-ld3d12", "-ldxgi", "-ld3dcompiler_47", "-lws2_32"]
              if windows else ["-lm", "-lpthread", "-ldl"])
     if sdl:
         if a.sdl_lib and windows:  # (mingw's import library, by name: zig does not look for .dll.a)

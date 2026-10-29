@@ -379,6 +379,7 @@ void UserState::Frame(double seconds) {
   AdvanceCameras(state_->L(), static_cast<float>(seconds));
   DeliverChat(state_->L());
   DeliverConsoleLines(state_->L());  // (the console's lines from other threads: user/keymap.cpp)
+  PumpLobbies(state_->L());  // (the lobby's network, before the threads: the original's lobby tasks on the user thread)
   threads_->RunTick(frame_);
   ui_->Update(state_->L(), static_cast<float>(seconds));
   // (the collector's step: every frame, menus and loading screens too, as an incremental state no longer collects by
