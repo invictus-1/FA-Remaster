@@ -69,6 +69,25 @@ Runs every 3-5 seconds of game time per brain (team brains share one result, 2.5
   layer chooses a long plan: turtle and build up, plus one or more of nukes, hit-and-run on shields, a staged breach
   (2.2), or game-ender structures. **OPEN:** how long it waits before such a plan, per personality.
 
+**Built in phase 5, first form** (`data/ai/lua/remastered/ai/strategy.lua`; Chris's decision 15): every minute the
+brain reads the enemy from what its army knows (`Remastered.AIEnemyMix(army, true)`: fair intel and the memory of lost
+contacts, so scouting feeds it) and compares it with itself:
+- **The read:** extractors and their tiers, power, the highest factory tier, the highest unit tier seen, the mobile
+  army's mass with its air and naval shares, and the enemy's defences.
+- **The enemy's style:** navy, air, tech (a tier above ours), rush (a big army early on a smaller economy), eco or
+  turtle (more economy and a smaller army than ours, or many defences), else standard.
+- **Our stance**, a set of changes to the knobs (`personality.lua`, 2.7):
+  - *catch-up* when the enemy is a tier above us: the army holds and attacks only on a clear win, defences count
+    more, the land factories go up a tier at once, and the economy goes full;
+  - *harass* or *out-eco* against a greedy or turtling enemy, whichever the battle estimate at its economy zones
+    favours;
+  - *hold* against a rush; *standard* otherwise.
+- With nothing of the enemy known, the army scouts first (a land scout from the next idle factory) and stays standard.
+- Each stance change logs `aistrat <army> <tick> style <s> stance <st> (was <old>) | <evidence>`, and an unchanged
+  read logs a recheck line every 3 minutes.
+- **Not yet:** each enemy read on its own (all enemies count together today), the aggression level with
+  hysteresis, objectives, domain shifts, and the long plans.
+
 ### 2.2 Operation layer (zones and operations)
 
 Runs every second per brain, staggered so that brains do not all think on the same beat.
@@ -113,8 +132,23 @@ by the battle estimate of that zone (`Remastered.AIZoneEstimate`, 3.2), with our
 - **Every decision prints one line:** `aiop <army> <tick> <what> zone <z> margin <m> ratio <r> | <reason>`. A status
   line comes once a minute. Tests score them with `tools` in the aicore notes (score_duel.py): no retreat at a
   margin of 0.6 or more, and time on the attack while ahead.
-- **Not yet:** gathering at a staging zone before going, combined arms, cracking fortified lines, navy and air
-  operations, and retreat by a safe path to the nearest held zone (today: home).
+- **Phase 5:**
+  - **Armies and expansions, not only bases:** a target's value counts the enemy's field army in the zone (its mass:
+    what a won fight there destroys) beside its economy and structures. The best 6 targets by value and distance are
+    estimated, and the first one whose margin reaches the launch bar is attacked (`aiop ... target: their army in the
+    field / their economy / their structures`).
+  - **Gathering:** the army first meets at a staging zone, the target's neighbour nearest our start with no known enemy
+    in it. It commits together (`aiop ... commit ... gathered (n of m at the staging zone)`) once 70% of it is within 45
+    world units, or after 45 s if the estimate still lets it; else the gather is dropped and logged.
+  - **Reinforcements:** a unit farther from the target than the staging zone goes there first, so new units join the
+    army instead of reaching the fight one by one.
+  - **Guard posts:** idle units hold our outlying economy zones, the farthest from the start first, up to 8 a zone, and
+    keep their post while the zone has our economy.
+  - **The enemy's zones** are kept for the engineers (they take no mass point where the enemy is known) and for the
+    defences (raided expansions, chokes the enemy was seen beyond).
+  - The status line says how many zones the enemy is known in and how many scouts we have.
+- **Not yet:** combined arms, cracking fortified lines, navy and air operations, and retreat by a safe path to the
+  nearest held zone (today: home).
 
 ### 2.3 Group control (micro)
 
@@ -129,7 +163,60 @@ by the battle estimate of that zone (`Remastered.AIZoneEstimate`, 3.2), with our
 
 ### 2.4 Economy and building
 
-**Built in phase 3** (`data/ai/lua/remastered/ai/brain.lua`): a first economy, enough to grow a base and an army.
+**Built in phase 5** (`brain.lua`, `choices.lua`; Chris's decisions 13 and 14). The economy runs at the same time as
+scouting, the army and expansion, not one after the other.
+- **Builders**, when idle or after 20 s of assisting (an assist is looked at again so new work is taken), in order:
+  1. the first land factory (the commander), then its own zone's mass points in the opening;
+  2. power of the builder's tech, built ahead of need (less than 1.2x what is asked plus a margin), but never more
+     than 12 energy per mass of income plus 30 a second, and with at most 1 + one per 40 energy / s of income being
+     built at once (power costs energy to build, and a crowd of builders on it starves everything);
+  3. land factories up to a floor that grows with the minutes from minute 3 (1 + one per 1.5 minutes), more while
+     mass piles up (one per ~6 mass / s, at most 12);
+  4. a defence where the enemy will come, when it is the cheaper answer (below);
+  5. an air factory from minute 3 (scouts, then fighters), more air factories while the enemy's air grows (one more
+     per 1,500 of its known air mass, at most 4), and a radar from minute 5;
+  6. the nearest free mass point to the engineer (the commander keeps to its own zone), away from zones the enemy is
+     known in, and up to 2 more free points of that zone in the same walk;
+  7. reclaim around the builder (props with 5 mass or more within 40 world units, nearest first, up to 6) while mass is
+     not piling up; more factories; mass storage beside the start zone's extractors when mass is full;
+  8. assist an upgrade in progress (extractors first), else the factories in turn.
+- **Engineers:** up to 4 + 2.5 a minute, at most 50.
+- **Counters (decision 13):** a land factory builds the cheapest counter that wins against the enemy's army as the
+  army knows it (`Remastered.AIEnemyMix`). That is the candidate of the factory's tech and below with the most enemy
+  mass killed per own mass lost (`Remastered.AIBuildValue`). The anti-air answer takes a share of the orders as large
+  as the air's share of the enemy's mass. With less than 150 mass of the enemy known, the tech's default mix is
+  built. Logged as `aicounter`, worked out again every 30 s.
+- **Defences (decision 13):** point defence (anti-air against a mostly-air enemy) of the builder's tech is a build
+  candidate beside the units, cheaper per threat but fixed.
+  - It is chosen only where the enemy will come: an expansion of ours that was raided, or a choke beside our economy
+    whose other side the enemy was seen in.
+  - It is chosen only when its build value, marked down for being fixed, beats the best mobile counter's.
+  - Limits: at most 3 per site, a few ordered or under construction at once, and all our defences at most a quarter
+    of our mobile army's mass.
+  - Logged as `aidef`.
+- **Investments (decision 14):** each idle T1 / T2 extractor is an upgrade candidate.
+  - **The weighing:** its payback (cost / extra mass a second, from the blueprints) against the danger to its zone
+    within that time. The danger is the zone estimate with the enemy that can travel there in the payback window, at
+    3 world units a second.
+  - **Safe enough:** the upgrade goes ahead when nothing of the enemy can reach the zone in that time, or when we would
+    hold it (margin 0.5). A big enemy army that cannot reach in time is no reason to wait.
+  - **The planned dip:** the upgrades under way may cost at most half of 120 s of the smoothed mass income plus half
+    of what is stored. A dip of the bar is fine. Empty mass storage for 90 s is a sustained deficit, and new
+    investments wait until it ends.
+  - **Unknown danger:** with no enemy known at all from minute 3, the army scouts first.
+  - Each decision logs `aiinv <army> <tick> invest|hold <from>-><to> zone <z> payback <s>s danger <margin> enemy
+    <mass> | <reason>`.
+- **Tech:** the land factories go up one at a time, with at least 3 of them and mass not short, to T2 from minute 7
+  (20 mass / s) and to T3 from minute 14 (50 mass / s); at once when the strategy layer has us catching up.
+- **Production share:** while mass is short and extractors are upgrading, only the first half of the land factories
+  take new army orders, so the upgrades are not starved (the engine shares a shortage among all who spend).
+- **Scouting:** the air factory keeps 2 air scouts. Idle scouts fly to the zone looked at longest ago, among the zones
+  with mass and the other armies' start zones. A land scout is made when the investments wait for one.
+- **Fighters:** air factories make interceptors while the enemy's known air is at least 300 mass and 30% of its army.
+  Idle fighters guard the economy zone raided last, else the start.
+
+**Built in phase 3** (`data/ai/lua/remastered/ai/brain.lua`), replaced by the above: a first economy, enough to grow
+a base and an army.
 - The think thread wakes every second, offset by army index.
 - **Builders** (the commander and the engineers), when idle:
   1. the first factory (the commander);
@@ -214,6 +301,19 @@ favourite openings. No personality has its own code path.
 **Built (phase 5, first form):** three personalities set when the army attacks and pushes (its overall advantage
 needed): balanced 1.2 / 2.0, rusher 0.9 / 1.6, turtle 1.6 / 3.0. Air and naval players come with air and naval
 operations. The personality is printed at the start (`aiop ... personality`).
+
+**The knobs, in one place (Chris's decision 16; `data/ai/lua/remastered/ai/personality.lua`):**
+- **What they are:** every weight that makes the AI bolder or more careful is a named knob:
+  - attack and push ratios, and the launch and commit margins;
+  - the defend margin;
+  - the investment risk (the safe margin and the share of the income);
+  - the stall tolerance;
+  - the defence mark-down, the defences per site and the defence share.
+- **Who leans them:** the personalities, the strategy layer's stances (2.1) and, later, the difficulty and the
+  player's few sliders (defensive <-> aggressive, maybe eco <-> army).
+- **What they cannot do:** a knob only moves a weight the AI already uses. None overrides its judgement: the battle
+  estimate still decides every fight, and a retreat from a clearly weaker force stays impossible.
+- New ideas join these knobs and the decisions in ai-design-goals.md, so the AI stays one coherent player.
 
 The personality is a per-slot lobby option of ours beside the AI key (the ui's answer): `RemasterPersonality` in the
 slot's PlayerOptions, which reach the sim as `ScenarioInfo.ArmySetup[army]`. Its default is Random, drawn in the
@@ -361,6 +461,11 @@ it.
   - The navy's threat against ground is 5.5 in the pond and in its two land neighbours, zones 4 and 59, which the
     frigate's range covers. It is 0 in zones 5 and 31 and in the open-sea zone 160, even with a 2000-unit horizon.
   - The Tigershark counts against ground because its deck gun can hit land.
+
+**The enemy as known (phase 5),** `Remastered.AIEnemyMix(army [, all])`: the index's enemy units (fair intel and the
+memory of lost contacts, with their weights) summed over the map as `{{id, count, mass}, ...}` in blueprint order.
+Without `all` it lists the mobile army only (land, hover, amphibious and air, no engineers or commanders), in the form
+`AIBuildValue` takes. With `all` it lists every known enemy unit and structure, for the strategy layer's read.
 
 **The estimate of a zone's fight (phase 4),** `Remastered.AIZoneEstimate(army, zone, horizon [, kite])`: from what
 the army knows, own + allied units against the enemy's that can come to the zone within `horizon` world units of
@@ -590,6 +695,7 @@ native core for numbers and spends its own time only on decisions.
   | `AIBattleEstimate(ours, theirs [, startDistance [, kite]])` | `margin, oursLeft, theirsLeft, seconds`; a force is an array of `{blueprintId, count}` (3.3) |
   | `AIZoneEstimate(army, zone, horizon [, kite])` | `margin, oursLeft, theirsLeft, seconds, oursMass, theirsMass`: the fight for the zone from what the army knows (3.2) |
   | `AIBuildValue(blueprintId, enemy)` | `value, killed, lost`: enemy mass killed per own mass lost (3.3) |
+  | `AIEnemyMix(army [, all])` | `{{id, count, mass}, ...}`: the enemy's mobile army as known (the counter-pick's enemy), or with `all` every known enemy unit and structure (phase 5, 3.2) |
   | `AIRandom(army [, n])` | the army's own random stream: a float in [0, 1), or an integer 1..n (phase 3) |
   | `AISetRatingFix(blueprintId, multiplier)`, `AISetBeats(idA, idB, factor)` | Chris's corrections (3.3) |
   | `AISetVision(army, on)` | the "AI vision" cheat option for that army (3.2) |
@@ -692,6 +798,23 @@ both-modes check, multicore.md 1).
       undefended enemy extractors) carry the fighting.
     - Next steps for the score: the economy (build-power jobs, more engineers, reclaim, energy ahead of need) and
       gathering before an attack.
+- **The phase-5 duels (2026-10-29),** same sessions and seeds as phase 4, scored by score_duel.py from `aiduel2`
+  lines (each minute: mass / s, and the army stats' mass killed and lost):
+
+  | Game | Result | Mass / s at 5 / 15 / 30 / 60 min (ours vs theirs) | Mass lost per enemy mass killed | Faults | Ahead (minutes) / attacking then | ms per beat |
+  |---|---|---|---|---|---|---|
+  | recruit (balanced) vs FAF adaptive | no result after 60 min, ahead at the end | 17 vs 23 / 105 vs 158 / 223 vs 232 / 471 vs 260 | 0.94 (98,129 killed, 91,994 lost) | 0 | 9 of 60 / 8 | 13.4 |
+  | veteran (turtle) vs FAF adaptive | lost at minute 24.2 | 17 vs 23 / 35 vs 153 / - | 1.36 | 0 | 1 of 25 / 0 | 5.0 |
+  | recruit / veteran vs M28, veteran vs M28 without cheats | not run this round (the phase stopped at a proven point) | | | | | |
+
+  - **What changed from phase 4:** the 60-minute game against FAF's AI went from 114 vs 286 mass / s (behind) to
+    471 vs 260 (ahead), with more enemy mass killed than lost; at 30 minutes it is within 4% of FAF's.
+  - **Not met yet:** "within 20% at 15 minutes" (105 vs 158 is 66%), and the seed-2002 game is lost: FAF's army takes
+    our outlying extractors between minutes 8 and 16 (FAF holds 60-80 extractors, we hold 20-30).
+  - **The new layers show in the logs:** 132 investments made and 54 held (with payback and danger), 159 counter-picks,
+    38 defences ordered, and stance switches with their evidence (catch-up when FAF reached T2 first).
+  - **The duel sessions have `FogOfWar = none`:** every army sees everything, so scouting cannot show there. The next
+    round should play with fog.
 - **Then Chris plays it** and judges the feel (decision 8), in the one big check after the UEF polish unless he asks
   sooner.
 
@@ -703,7 +826,8 @@ both-modes check, multicore.md 1).
 | 2 (built 2026-10-28) | Unit / threat index per observing army with fair intel and "can it reach"; blueprint ratings with Chris's labels and list (`MOHO64_AI_RATINGS`); the square-law estimate; their Lua calls | Scripted sessions (a navy in a closed pond does not threaten distant land; with fog only blips count, unseen contacts are unknown); the 16 + B1 / b8 identical; our-key sessions identical at 1 / 32 threads, shuffle, reverse |
 | 3 (built 2026-10-28) | The brain in `data/ai/` (2.4 below): own random stream, a think thread per brain, the slot's options, Chris's rating corrections; a first economy from the map analysis (factory, power when short, mass by travel distance, more factories while mass piles up, engineers, a land mix) and base defence; the index's memory and the AI-vision option; ratings reworked by Chris's decisions 10-12 (threat, the seven scores, build value) and the estimate fired per weapon | The 16 + B1 / b8 identical; our-key sessions identical at 1 / 32 threads, shuffle, reverse; on SETONS_R alone after 10 minutes: 21 extractors, 5 factories, 12 engineers, ~100 land units, 43 mass / s. Not yet run against FAF's AI for 60 minutes (phase 4, with the operations) |
 | 4 (first form built 2026-10-29) | Strategic and operation layers: aggression with hysteresis, objectives, gathering, push, retreat by estimate, raids, navy and air domains, combined arms timing. Built: the zone estimate from the index (fair intel, memory, reinforcements on the way, kiting), defend / attack / push / raid with commit rules and logged decisions, tech upgrades. Not yet: gathering, navy and air, combined arms | Ours vs M28 and FAF's AI, several seeds: the fight scores of section 6; "never fled a weaker force" at zero faults. First duels: 0 faults, 3 losses and one 60-minute game without a result (section 6) |
-| 5 | Cracking fortified lines and staged breaches; the small fight simulation; group micro (focus fire, kiting in even fights); difficulty knobs and the four levels | Scripted fortified-line scenarios (a session that starts with T2 PD + artillery lines); level-vs-level matches (each level beats the one below most of the time) |
+| 5 (first form built 2026-10-29) | Economy in parallel with scouting, army and expansion (power ahead but not wasted, factory floor, engineers by distance and away from enemies, reclaim, storage, timed assists); counters by build value; defences as build candidates; investments by payback and danger with a planned dip; the strategy layer's read of the enemy and stances; attacks on armies and expansions with gathering and reinforcements via the staging zone; guard posts; the knobs in one place (decisions 13-16) | The five duels of section 6 (mass / s at 5 / 15 / 30 minutes, mass lost per enemy mass killed); the 16 + B1 / b8 identical; our-key sessions identical at 1 / 32 threads, shuffle, reverse |
+| 5b | Cracking fortified lines and staged breaches; the small fight simulation; group micro (focus fire, kiting in even fights); difficulty knobs and the four levels | Scripted fortified-line scenarios (a session that starts with T2 PD + artillery lines); level-vs-level matches (each level beats the one below most of the time) |
 | 6 | Team play, pings (with the ui's radial menu), allied announcements, personalities, teacher mode; hot Lua parts moved native. First form of personalities (balanced / rusher / turtle) and teacher mode built in phase 4 (2.7, 2.8) | 2v2 / 4v4 with a human-ally stand-in (scripted pings); Chris's playtest |
 
 ## 8. Open points (collected)

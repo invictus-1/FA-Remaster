@@ -3,45 +3,36 @@
 --
 -- Every 5 seconds the brain looks at the whole front from what its army knows (the index: fair intel and the memory of
 -- lost contacts) and decides, by the battle estimate of each fight (Remastered.AIZoneEstimate, ours = 1):
--- - DEFEND an own zone (one with our structures) that enemies are in, when the estimate gives us at least kDefend;
--- - ATTACK the most valuable enemy zone in reach when we are ahead overall (our strength / theirs >= kAttackRatio)
---   and the estimate there gives us kLaunch or more; a PUSH when far ahead (>= kPushRatio) launches at a lower bar;
+-- (The margins and ratios below, K.defend, K.launch and so on, are the knobs of personality.lua: the personality,
+-- the strategy layer's stance and later the player's sliders lean them; the rules stay these.)
+-- - DEFEND an own zone (one with our structures) that enemies are in, when the estimate gives us at least K.defend;
+-- - ATTACK the most valuable enemy zone in reach when we are ahead overall (our strength / theirs >= K.attackRatio)
+--   and the estimate there gives us K.launch or more; a PUSH when far ahead (>= K.pushRatio) launches at K.launchPush.
+--   The value counts the enemy's field army there as well as its economy and structures (phase 5: armies and
+--   expansions, not only bases), so a won fight against an army in the open is picked like a base;
+-- - GATHER first (phase 5): the army meets at a staging zone beside the target (the target's neighbour nearest our
+--   start with no known enemy in it) and commits together once most of it is there (kGatherShare within
+--   kGatherRadius) or kGatherTicks have passed, if the estimate still lets it;
 -- - RAID an enemy zone with economy and no known defenders with a few light units;
--- - stay COMMITTED (decision 5): an attack goes on while its margin stays above kCommit (a push: kCommitPush), so it
+-- - stay COMMITTED (decision 5): an attack goes on while its margin stays above K.commit (a push: K.commitPush), so it
 --   does not turn at the first bad second; it RETREATS only below that, and never from a force the estimate says is
 --   clearly weaker (a margin of kWeaker or more is never a reason to retreat).
 -- Each decision prints one line, "aiop <army> <tick> <what> zone <z> margin <m> ratio <r> | <reason>", so tests can
 -- score how it fights (tools: no "retreat" line with a margin of kWeaker or more).
 
-local kDefend = 0.35       -- defend when the estimate gives us at least this
-local kLaunch = 0.6        -- launch an attack at this margin or more
-local kLaunchPush = 0.5    -- ... a push when far ahead
-local kCommit = 0.4        -- an attack stays committed while its margin is at least this
-local kCommitPush = 0.3    -- ... a push
 local kWeaker = 0.6        -- a margin this high means the enemy there is clearly weaker: never a retreat
 local kHorizon = 400       -- world units of travel that count as "can come to this fight"
+local kCandidates = 6      -- enemy zones looked at by the estimate for a new attack (the best by value and distance)
+local kGatherShare = 0.7   -- the share of the army at the staging zone that lets it commit
+local kGatherRadius = 45   -- world units around the staging zone's centre that count as "there"
+local kGatherTicks = 450   -- a gather commits (or is dropped) after this long at most
+local kGuardGroup = 8      -- idle units hold our outlying economy zones, at most this many per zone
+local kGuardRadius = 40    -- world units around a zone's centre that count as "at its guard post"
 
--- Personalities (docs/ai-architecture.md 2.7, phase 5): how far ahead overall the army must be to attack and to push.
--- 'random' is drawn once from the army's own stream. Teacher mode (2.8): never a push against a human enemy; when far
--- ahead of one, it attacks at most and says so in the log.
-local kPersonalities = {
-    balanced = { attackRatio = 1.2, pushRatio = 2.0 },
-    rusher = { attackRatio = 0.9, pushRatio = 1.6 },
-    turtle = { attackRatio = 1.6, pushRatio = 3.0 },
-}
-local kPersonalityNames = { 'balanced', 'rusher', 'turtle' }
-
-local function Personality(brain, R)
-    if not R.personality then
-        local name = brain.RemasterOptions and brain.RemasterOptions.personality or 'random'
-        if not kPersonalities[name] then
-            name = kPersonalityNames[Remastered.AIRandom(R.army, table.getn(kPersonalityNames))]
-        end
-        R.personality = name
-        LOG(string.format('aiop %d %d personality %s teacher %s', R.army, R.tick, name,
-            tostring(brain.RemasterOptions and brain.RemasterOptions.teacher)))
-    end
-    return kPersonalities[R.personality]
+-- Personalities (docs/ai-architecture.md 2.7) and their knobs: personality.lua. Teacher mode (2.8): never a push
+-- against a human enemy; when far ahead of one, it attacks at most and says so in the log.
+local function Knobs(brain)
+    return import("/lua/remastered/ai/personality.lua").Knobs(brain)
 end
 
 local function HumanEnemy(army)
@@ -84,35 +75,80 @@ end
 local function Front(R)
     local info = Remastered.AIMapInfo()
     local ours, theirs = 0, 0
-    local enemyZones, threatened = {}, {}
+    local enemyZones, threatened, ownEconomy = {}, {}, {}
+    R.enemyAt = {}  -- (the zones the enemy is known in: the engineers keep out of them)
+    R.enemySeen = R.enemySeen or {}  -- zone -> the last tick the enemy was known there (defence sites)
     for z = 1, info.zones do
         local f = Remastered.AIZoneForces(R.army, z)
         ours = ours + f.own.land.ground + f.ally.land.ground
         local e = f.enemy.land.ground + f.enemy.structure.ground
         theirs = theirs + e
+        if z ~= R.startZone and f.own.economyMass > 0 then table.insert(ownEconomy, z) end
         local present = f.enemy.land.count + f.enemy.structure.count
         if present > 0 then
+            R.enemyAt[z] = true
+            R.enemySeen[z] = R.tick
             table.insert(enemyZones, { zone = z, strength = e, economy = f.enemy.economyMass,
-                structures = f.enemy.structure.count })
+                structures = f.enemy.structure.count, army = f.enemy.land.mass })
             if f.own.structure.count > 0 then table.insert(threatened, z) end
         end
     end
-    return ours, theirs, enemyZones, threatened
+    R.enemyKnownZones = table.getn(enemyZones)
+    R.ownEconomy = ownEconomy
+    return ours, theirs, enemyZones, threatened, ownEconomy
 end
 
--- the attack target: by value (economy + structures, worth more near) among zones our land units can walk to
-local function PickTarget(R, enemyZones)
-    local best, bestScore
+-- the attack target (phase 5): the enemy zones our land units can walk to, by value (its economy, its structures and
+-- its field army: what a won fight there destroys), worth more near; the best kCandidates by that are estimated and
+-- the best one whose margin reaches `bar` is the target (zone id on ties). Returns the target and its margin, or
+-- nil, the best candidate's margin and its zone when none reaches the bar.
+local function PickTarget(R, enemyZones, bar)
+    local list = {}
     for _, e in ipairs(enemyZones) do
         local d = Remastered.AIZoneDistance(R.startZone, e.zone, 'land')
         if d >= 0 then
-            local score = (e.economy + 100 * e.structures + 10) / (d + 100)
-            if not bestScore or score > bestScore or (score == bestScore and e.zone < best.zone) then
-                best, bestScore = e, score
+            table.insert(list, { e = e, score = (e.economy + 100 * e.structures + e.army + 10) / (d + 100) })
+        end
+    end
+    table.sort(list, function(a, b)
+        if a.score ~= b.score then return a.score > b.score end
+        return a.e.zone < b.e.zone
+    end)
+    local bestMargin, bestZone
+    for i = 1, math.min(kCandidates, table.getn(list)) do
+        local e = list[i].e
+        local margin = Remastered.AIZoneEstimate(R.army, e.zone, kHorizon)
+        if margin >= bar then return e, margin end
+        if not bestMargin or margin > bestMargin then bestMargin, bestZone = margin, e.zone end
+    end
+    return nil, bestMargin or 0, bestZone or 0
+end
+
+-- the staging zone for a target: its neighbour nearest our start by land with no enemy known in it (id on ties);
+-- our start zone when there is none
+local function StagingZone(R, target)
+    local best, bestD
+    for _, n in ipairs(Remastered.AIZoneNeighbours(target)) do
+        local d = Remastered.AIZoneDistance(R.startZone, n.zone, 'land')
+        if d >= 0 then
+            local f = Remastered.AIZoneForces(R.army, n.zone)
+            if f.enemy.land.count + f.enemy.structure.count <= 0 and
+                (not bestD or d < bestD or (d == bestD and n.zone < best)) then
+                best, bestD = n.zone, d
             end
         end
     end
-    return best
+    return best or R.startZone
+end
+
+local function Near(units, zone, radius)
+    local k = 0
+    for _, u in ipairs(units) do
+        local p = u:GetPosition()
+        local dx, dz = p[1] - zone.x, p[3] - zone.z
+        if dx * dx + dz * dz <= radius * radius then k = k + 1 end
+    end
+    return k
 end
 
 function Think(brain)
@@ -120,16 +156,18 @@ function Think(brain)
     if not R or R.startZone <= 0 then return end
     R.op = R.op or nil
     local units = CombatUnits(brain)
-    local ours, theirs, enemyZones, threatened = Front(R)
+    local ours, theirs, enemyZones, threatened, ownEconomy = Front(R)
     local ratio = ours / math.max(theirs, 1)
-    local P = Personality(brain, R)
+    local K = Knobs(brain)
     if math.mod(R.tick, 600) < 50 then  -- (a status line a minute: tests score "pushes when ahead" from these)
-        Log(R, 'status', R.op and R.op.zone or 0, 0, ratio, R.op and R.op.kind or 'none')
+        local scouts = table.getn(brain:GetListOfUnits(categories.SCOUT * categories.AIR, false))
+        Log(R, 'status', R.op and R.op.zone or 0, 0, ratio, string.format('%s; enemy known in %d zones; %d air scouts',
+            R.op and R.op.kind or 'none', table.getn(enemyZones), scouts))
     end
-    local kAttackRatio, kPushRatio = P.attackRatio, P.pushRatio
+    local kAttackRatio, kPushRatio = K.attackRatio, K.pushRatio
     if brain.RemasterOptions and brain.RemasterOptions.teacher and HumanEnemy(R.army) then
         kPushRatio = 1e9  -- teacher mode: no decisive push against a human
-        if ratio >= P.pushRatio and R.tick - (R.lastTeach or 0) >= 600 then
+        if ratio >= K.pushRatio and R.tick - (R.lastTeach or 0) >= 600 then
             Log(R, 'teacher', 0, 0, ratio, 'far ahead of a human player: easing off (no push)')
             R.lastTeach = R.tick
         end
@@ -145,9 +183,11 @@ function Think(brain)
         return a < b
     end)
     local busy = {}  -- units given to the defence this think, by entity id
+    R.raided = R.raided or {}
     for _, z in ipairs(threatened) do
+        if z ~= R.startZone then R.raided[z] = R.tick end
         local margin, _, _, _, _, theirsMass = Remastered.AIZoneEstimate(R.army, z, kHorizon)
-        if margin >= kDefend then
+        if margin >= K.defend then
             if not (R.defending == z) then
                 Log(R, 'defend', z, margin, ratio, 'enemies in our zone; the estimate lets us hold it')
                 R.defending = z
@@ -186,11 +226,41 @@ function Think(brain)
     end
     units = free
 
+    -- a GATHER in progress: the army goes to the staging zone; once most of it is there (or the time is up) it
+    -- commits if the estimate still lets it, else the gather is dropped
+    if R.op and R.op.kind == 'gather' then
+        local margin = Remastered.AIZoneEstimate(R.army, R.op.zone, kHorizon)
+        local f = Remastered.AIZoneForces(R.army, R.op.zone)
+        local stage = Remastered.AIZone(R.op.stage)
+        local there = Near(units, stage, kGatherRadius)
+        local bar = R.op.push and K.commitPush or K.commit
+        if f.enemy.land.count + f.enemy.structure.count <= 0 then
+            Log(R, 'dropped', R.op.zone, margin, ratio, 'gather: no enemy known at the target any more')
+            R.op = nil
+        elseif (there > 0 and there >= kGatherShare * table.getn(units)) or R.tick - R.op.since >= kGatherTicks then
+            if there > 0 and margin >= bar then
+                R.op = { kind = R.op.push and 'push' or 'attack', zone = R.op.zone, stage = R.op.stage, since = R.tick,
+                    logged = R.tick }
+                Log(R, 'commit', R.op.zone, margin, ratio, string.format('gathered (%d of %d at the staging zone): %s',
+                    there, table.getn(units), R.op.kind .. ' together'))
+                if units[1] then IssueAggressiveMove(units, (ZonePos(R.op.zone))) end
+                return
+            else
+                Log(R, 'dropped', R.op.zone, margin, ratio, there > 0 and
+                    string.format('gather: the estimate fell under %.2f', bar) or 'gather: nobody reached the staging zone')
+                R.op = nil
+            end
+        else
+            if units[1] then IssueMove(units, (ZonePos(R.op.stage))) end
+            return
+        end
+    end
+
     -- an ATTACK or PUSH in progress: stay committed while its margin holds
     if R.op and (R.op.kind == 'attack' or R.op.kind == 'push') then
         local margin = Remastered.AIZoneEstimate(R.army, R.op.zone, kHorizon)
         local f = Remastered.AIZoneForces(R.army, R.op.zone)
-        local commit = R.op.kind == 'push' and kCommitPush or kCommit
+        local commit = R.op.kind == 'push' and K.commitPush or K.commit
         if f.enemy.land.count + f.enemy.structure.count <= 0 then
             Log(R, 'taken', R.op.zone, margin, ratio, 'no enemy known there any more')
             R.op = nil
@@ -209,27 +279,40 @@ function Think(brain)
                 Log(R, 'committed', R.op.zone, margin, ratio, R.op.kind .. ' goes on')
                 R.op.logged = R.tick
             end
-            if units[1] then IssueAggressiveMove(units, (ZonePos(R.op.zone))) end
+            -- reinforcements (phase 5): a unit farther from the target than the staging zone is (plus kGatherRadius)
+            -- goes there first, so new units join the army instead of reaching the fight one by one
+            local tpos, tzone = ZonePos(R.op.zone)
+            local stage = R.op.stage and Remastered.AIZone(R.op.stage)
+            local fight, join = {}, {}
+            for _, u in ipairs(units) do
+                local p = u:GetPosition()
+                local dx, dz = p[1] - tzone.x, p[3] - tzone.z
+                local d = math.sqrt(dx * dx + dz * dz)
+                local sd = stage and math.sqrt((stage.x - tzone.x) * (stage.x - tzone.x) + (stage.z - tzone.z) * (stage.z - tzone.z))
+                if stage and d > sd + kGatherRadius then table.insert(join, u) else table.insert(fight, u) end
+            end
+            if fight[1] then IssueAggressiveMove(fight, tpos) end
+            if join[1] then IssueMove(join, (ZonePos(R.op.stage))) end
             return
         end
     end
 
     -- a new ATTACK / PUSH when ahead, by the estimate at the target
     if not R.op and ratio >= kAttackRatio and units[1] then
-        local target = PickTarget(R, enemyZones)
+        local push = ratio >= kPushRatio
+        local target, margin, bestZone = PickTarget(R, enemyZones, push and K.launchPush or K.launch)
         if target then
-            local margin = Remastered.AIZoneEstimate(R.army, target.zone, kHorizon)
-            local push = ratio >= kPushRatio
-            if margin >= (push and kLaunchPush or kLaunch) then
-                R.op = { kind = push and 'push' or 'attack', zone = target.zone, since = R.tick, logged = R.tick }
-                Log(R, R.op.kind, target.zone, margin, ratio,
-                    push and 'far ahead overall: a decisive push' or 'ahead overall and the estimate favours us')
-                IssueAggressiveMove(units, (ZonePos(target.zone)))
-                return
-            elseif R.tick - (R.lastWait or 0) >= 300 then
-                Log(R, 'wait', target.zone, margin, ratio, 'ahead overall, but not enough there yet: gathering')
-                R.lastWait = R.tick
-            end
+            local what = target.structures > 0 and (target.economy > 0 and 'their economy' or 'their structures') or
+                'their army in the field'
+            local stage = StagingZone(R, target.zone)
+            R.op = { kind = 'gather', push = push, zone = target.zone, stage = stage, since = R.tick }
+            Log(R, push and 'push' or 'attack', target.zone, margin, ratio, string.format('%s; target: %s; gathering at zone %d',
+                push and 'far ahead overall: a decisive push' or 'ahead overall and the estimate favours us', what, stage))
+            IssueMove(units, (ZonePos(stage)))
+            return
+        elseif bestZone and bestZone > 0 and R.tick - (R.lastWait or 0) >= 300 then
+            Log(R, 'wait', bestZone, margin, ratio, 'ahead overall, but no target the estimate favours yet')
+            R.lastWait = R.tick
         end
     end
 
@@ -253,8 +336,49 @@ function Think(brain)
         end
     end
 
-    -- nothing to do: idle units gather at the start
-    local idle = {}
-    for _, u in ipairs(units) do if u:IsIdleState() then table.insert(idle, u) end end
-    if idle[1] then IssueAggressiveMove(idle, { R.startX, GetTerrainHeight(R.startX, R.startZ), R.startZ }) end
+    -- nothing to do (phase 5): idle units hold guard posts at our outlying economy zones (the map we own, not only
+    -- the base), the farthest from the start first (zone id on ties), at most kGuardGroup a zone; a unit keeps its
+    -- post while the zone still has our economy; the rest gather at the start
+    table.sort(ownEconomy, function(a, b)
+        local da = Remastered.AIZoneDistance(R.startZone, a, 'land')
+        local db = Remastered.AIZoneDistance(R.startZone, b, 'land')
+        if da ~= db then return da > db end
+        return a < b
+    end)
+    local posts, count = {}, {}
+    for _, z in ipairs(ownEconomy) do
+        if Remastered.AIZoneDistance(R.startZone, z, 'land') >= 0 then
+            posts[z] = true
+            count[z] = 0
+        end
+    end
+    R.guardOf = R.guardOf or {}
+    for _, u in ipairs(units) do
+        local z = R.guardOf[u:GetEntityId()]
+        if z and posts[z] then count[z] = count[z] + 1 end
+    end
+    local home = {}
+    for _, u in ipairs(units) do
+        if u:IsIdleState() then
+            local id = u:GetEntityId()
+            local z = R.guardOf[id]
+            if not (z and posts[z]) then
+                z = nil
+                for _, c in ipairs(ownEconomy) do
+                    if posts[c] and count[c] < kGuardGroup then z = c break end
+                end
+                R.guardOf[id] = z
+                if z then count[z] = count[z] + 1 end
+            end
+            if z then
+                local pos, zone = ZonePos(z)
+                local p = u:GetPosition()
+                local dx, dz = p[1] - zone.x, p[3] - zone.z
+                if dx * dx + dz * dz > kGuardRadius * kGuardRadius then IssueAggressiveMove({ u }, pos) end
+            else
+                table.insert(home, u)
+            end
+        end
+    end
+    if home[1] then IssueAggressiveMove(home, { R.startX, GetTerrainHeight(R.startX, R.startZ), R.startZ }) end
 end

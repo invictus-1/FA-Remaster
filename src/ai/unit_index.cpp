@@ -1208,6 +1208,43 @@ std::vector<ForceStack> CheckForce(lua_State* L, int i) {
   return out;
 }
 
+// Remastered.AIEnemyMix(army [, all]) -> {{id, count, mass}, ...}: the enemy as the army knows it (phase 5): its
+// index's enemy units (fair intel and the memory of lost contacts, with their weights) summed over the map, by
+// blueprint entity order. Without `all`, the mobile army only, for the counter-pick: land, hover, amphibious and air
+// units, engineers and commanders left out (the form AIBuildValue takes as its enemy). With `all`, every known enemy
+// unit and structure (the strategy layer's read of the enemy's economy and tech).
+int l_AIEnemyMix(lua_State* L) {
+  Sim& sim = *Sim::From(L);
+  ArmyIndex& ix = CheckArmyIndex(L, 1);
+  const bool all = lua_toboolean(L, 2) != 0;
+  RatingsState& rs = Ratings(sim);
+  std::map<int, float> mix;  // entity -> count
+  for (size_t i = kEnemy; i < ix.forces.size(); i += kSides)
+    for (const auto& [entity, count] : ix.forces[i]) {
+      const UnitRating& r = rs.byEntity[entity];
+      if (!all && (r.move == kMoveStatic || r.move == kMoveNaval)) continue;
+      if (!all && (r.kinds & (kKindEngineer | kKindCommander))) continue;
+      mix[entity] += count;
+    }
+  lua_newtable(L);
+  int n = 0;
+  for (const auto& [entity, count] : mix) {
+    const UnitRating& r = rs.byEntity[entity];
+    lua_newtable(L);
+    lua_pushnumber(L, 1);
+    lua_pushstring(L, r.id.c_str());
+    lua_rawset(L, -3);
+    lua_pushnumber(L, 2);
+    lua_pushnumber(L, count);
+    lua_rawset(L, -3);
+    lua_pushstring(L, "mass");
+    lua_pushnumber(L, r.mass * count);
+    lua_rawset(L, -3);
+    lua_rawseti(L, -2, ++n);
+  }
+  return 1;
+}
+
 // Remastered.AIZoneEstimate(army, zone, horizon [, kite]) -> margin, oursLeft, theirsLeft, seconds, oursMass,
 // theirsMass: the battle estimate of a fight for the zone from what the army knows (phase 4): its index's units (fair
 // intel, the memory of lost contacts, unknown contacts left out) that can come to the zone within `horizon` world
@@ -1373,6 +1410,7 @@ void RegisterIndexBindings(lua_State* L) {
               {"AIRandom", l_AIRandom},
               {"AIBuildValue", l_AIBuildValue},
               {"AIZoneEstimate", l_AIZoneEstimate},
+              {"AIEnemyMix", l_AIEnemyMix},
               {"AISetRatingFix", l_AISetRatingFix},
               {"AISetBeats", l_AISetBeats},
               {"AISetVision", l_AISetVision}};
