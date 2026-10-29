@@ -337,6 +337,19 @@ original's launch gives them four fields only), and M28 does `string.sub` on it,
 original does the same, and M28 plays well with the error in place; giving the civilians an empty
 personality would send M28 down a path it has never run. M28 is to be replaced later, so this stays.
 
+### M28: `EntityCategoryFilterDown` on a zone's missing allied-unit list (m28factory.lua:1345)
+
+On B9 (16 armies) `GetBlueprintToBuildForLandFactory` passes `tLZTeamData[subreftoLZOrWZAlliedUnits]` to
+`EntityCategoryFilterDown` for a factory's zone whose team data has no such list yet (M28Team.lua 4203 makes it when
+the team's zone data is recorded), so the argument is nil and the call raises "Pass in invalid table of units to
+EntityCategoryFilterDown!!.", 22 times in B9's 405 beats, never on B1 or b8. The original raises the same:
+EntityCategoryFilterDown 0x759c50 tests the list with LuaObject::IsTable (0x759cfe) and calls LuaState::Error with
+that text (0xe34be0, 0x759d0d); our binding follows it. It is the same in M28 itself and in our variant, on 063f6e8
+and on main, and with `Remastered` hidden: M28's, not ours. The error ends that `DecideAndBuildUnitForFactory` thread
+(forked per factory event), so that factory skips one build decision, and M28 asks again at its next event.
+Chris, 2026-10-29: leave it. We are building our own AI, so M28's own bugs are not fixed; the variant keeps M28's
+decisions exactly.
+
 ### A mod shield without `Display.AnimationActivate` (xsb11022)
 
 Data of a mod, the same in the original. Not ours to change.
