@@ -950,6 +950,14 @@ work is not starved of the processor).
    see-through stage: about +0.07 to +0.16 ms. Vulkan's picture as Direct3D 12's (mean difference 0.48, the same as
    with it off). Viewer tests: `--fx-shield <unit>` (with `--energy-shield-health h` for the stand's bubble, which
    has no unit in its frame), `--energy-test n`. Tuning: `EnergyShields::bend`, `light`, `rings` (1 each).
+   Since 2026-10-28 (Chris: the modern shields an evolution of the base game's, in its colours, each faction its own
+   pattern when shot at): every faction's shell starts from the base game's own look (`original_shield.h`, the game's four
+   shield sums written anew, which the original look draws too) and takes the world's light (the computed sky by Fresnel,
+   the sun's glint where not shaded, the small lights, the air); the UEF's has a geodesic hex of its own (`hexSize`, 1.2;
+   `--energy-hex`). Hits light each faction's own lines (UEF hex cells, Aeon cellular seams, Cybran circuit traces on a
+   cube's faces, Seraphim glyph rings round each hit); a weakened UEF shield's cells go out one by one; rain sparks on it;
+   a line of its light where it meets the ground. Tints the base game's (Aeon 0.55/0.95/0.85, Cybran 0.5/0.3/1.0, Seraphim
+   0.45/0.78/1.0). `--energy-shell plain`: the shell as before; `EnergyShields::litShell`, `hexLines`, `contactGlow`.
    Open: personal shields (their lattice and hits stay as they are); a hit the game's script makes no flash for
    (it skips some when more than ten are live, and spill damage) sends no rings.
 12. **Hot metal**: fresh wrecks and craters glow orange and cool over a minute or two; wrecks smoulder.
