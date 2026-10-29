@@ -889,6 +889,7 @@ void MotionTick(Sim& sim, Projectile* p) {
   float w = WaterLevel(sim);
   if (p->stayUnderwater && p->underwater) p1.y = std::min(p1.y, w - 0.01f);
   p->velocity = v;
+  p->warpedInStep = false;
   CheckCollision(sim, p, p0, p1);
   if (p->destroyQueued) return;
   if (sim.tick() >= p->expireTick && p->hitFraction < 0) {
@@ -938,6 +939,16 @@ void MotionTick(Sim& sim, Projectile* p) {
     p->orientation = NlerpExe(qStart, q, f);
     p->position = p->hitPos;
     if (p->bouncePending) p->hitPos = {};
+  } else if (p->warpedInStep) {
+    // The step's transform is the PENDING one, set before the sweep (0x69c4fd: SetPendingTransform 0x678e90 of p1 and
+    // q, then CheckCollision 0x69d1d0), and with no hit nothing writes it again (0x69c5f7..0x69c606: +0x2a4 < 0 jumps
+    // to the end). A script that warps the shell from inside the sweep (Entity::Warp 0x679210: pending, then
+    // AdvanceCoords twice) so leaves it where it warped it. Seen: MP1 13120, FAF's ShieldCollider under army 6's
+    // crashing scout 0x6000ee meets a bubble shield; shield.lua's OnCollisionCheck calls its OnImpact('Shield'),
+    // which warps it to the plane and hangs the plane on it; the original's collider (and so the plane at 13121)
+    // stands at the warped place, ours put it back on p1. (Its previous transform is the warped one too: velocity 0.)
+    p->warpedInStep = false;
+    p->prevPos = p->position;
   } else {
     p->orientation = q;
     p->position = p1;

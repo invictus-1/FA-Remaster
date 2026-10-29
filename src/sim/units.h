@@ -404,6 +404,7 @@ class Projectile : public Entity {
   Vec3 heldVel;  // its velocity as the beat began (taken before its own step: what another shell leads it by)
   uint32_t steppedTick = 0;  // the beat of its last step (ProjectileStep: once per beat, between the units)
   uint32_t queuedInStepTick = 0;  // the beat its own step queued its Destroy (an impact)
+  bool warpedInStep = false;      // a script warped it inside its own step's sweep (l_Warp; MotionTick keeps that place)
   float velScale = 1;
   float hitFraction = -1;
   bool collideSurface = true, collideEntity = true, trackTarget = false, velocityAlign = true, stayUpright = false,
