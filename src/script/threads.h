@@ -60,7 +60,7 @@ class ThreadScheduler {
     uint32_t waitEpoch = 0;
     bool inWaiters = false;   // listed in waiters_
     int profSource = -1;      // MOHO64_PROFILE: the Lua timer's source for this thread (core/profile.h)
-    std::string profLabel;    // MOHO64_PROFILE_HITCH: its function's file:line, for the beat breakdown
+    const std::string* profLabel = nullptr;  // MOHO64_PROFILE_HITCH: its function's file:line, for the beat breakdown
   };
   lua_State* L_;
   std::list<Thread> threads_;

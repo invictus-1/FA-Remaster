@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cctype>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 
 #include "core/log.h"
 #include "core/profile.h"
@@ -121,22 +123,53 @@ ThreadScheduler* ThreadScheduler::From(lua_State* L) {
   return s;
 }
 
+namespace {
+// MOHO64_PROFILE: a forked function's kind for the Lua timer and its file:line label, worked out once per function
+// (by its chunk name's address and its first line, the name checked against its text: a chunk name made again at an old
+// one's address is not taken for it). It was worked out at every fork (a std::string of the chunk name, lower-cased,
+// searched three times; ~2.5 us a fork, ~7 s of a profiled B1 hour that an unprofiled game does not spend). The labels
+// live for the run (never erased), so a thread keeps a pointer to its own.
+struct ForkKind {
+  std::string source;                  // the chunk name as given (checked against the next fork's)
+  int kind = -1;
+  const std::string* label = nullptr;  // "thread <short_src>:<linedefined>"
+};
+struct ForkKey {
+  const char* source;
+  int line;
+  bool operator==(const ForkKey& o) const { return source == o.source && line == o.line; }
+};
+struct ForkKeyHash {
+  size_t operator()(const ForkKey& k) const {
+    return std::hash<const void*>()(k.source) ^ (static_cast<size_t>(k.line) * 0x9e3779b97f4a7c15ull);
+  }
+};
+std::unordered_map<ForkKey, ForkKind, ForkKeyHash> g_forkKinds;
+std::unordered_set<std::string> g_forkLabels;
+}  // namespace
+
 void ThreadScheduler::Fork(lua_State* caller, int fn, int nargs) {
   int profSource = -1;
-  std::string profLabel;
+  const std::string* profLabel = nullptr;
   if (prof::On()) {  // MOHO64_PROFILE: the thread's kind for the Lua timer, from its function's chunk name
     lua_Debug ar;
     lua_pushvalue(caller, fn);
     if (lua_getinfo(caller, ">S", &ar) && ar.source) {
-      std::string s = ar.source;
-      // (lower case, and '/' for '\\': a chunk read from the host's disk is named by its host path)
-      std::transform(s.begin(), s.end(), s.begin(),
-                     [](unsigned char c) { return c == '\\' ? '/' : static_cast<char>(std::tolower(c)); });
-      auto has = [&](const char* k) { return s.find(k) != std::string::npos; };
-      if (prof::Hitch()) profLabel = std::string("thread ") + ar.short_src + ":" + std::to_string(ar.linedefined);
-      profSource = has("/ai/") || has("aibrain") || has("platoon") ? prof::kThreadAI
-                   : has("unit") || has("weapon") || has("projectile") || has("effect") ? prof::kThreadUnit
-                                                                                         : prof::kThreadOther;
+      ForkKind& k = g_forkKinds[ForkKey{ar.source, ar.linedefined}];
+      if (k.kind < 0 || k.source != ar.source) {
+        k.source = ar.source;
+        std::string s = ar.source;
+        // (lower case, and '/' for '\\': a chunk read from the host's disk is named by its host path)
+        std::transform(s.begin(), s.end(), s.begin(),
+                       [](unsigned char c) { return c == '\\' ? '/' : static_cast<char>(std::tolower(c)); });
+        auto has = [&](const char* key) { return s.find(key) != std::string::npos; };
+        k.kind = has("/ai/") || has("aibrain") || has("platoon") ? prof::kThreadAI
+                 : has("unit") || has("weapon") || has("projectile") || has("effect") ? prof::kThreadUnit
+                                                                                       : prof::kThreadOther;
+        k.label = &*g_forkLabels.insert(std::string("thread ") + ar.short_src + ":" + std::to_string(ar.linedefined)).first;
+      }
+      profSource = k.kind;
+      if (prof::Hitch()) profLabel = k.label;
     }
   }
   lua_State* co = lua_newthread(caller);  // pushed on caller
@@ -156,7 +189,7 @@ void ThreadScheduler::Fork(lua_State* caller, int fn, int nargs) {
   t.ref = ref;
   t.pendingArgs = nargs;
   t.profSource = profSource;
-  t.profLabel = std::move(profLabel);
+  t.profLabel = profLabel;
   // A new thread runs in the next pass over the threads: a thread forked by a running thread runs
   // later in the same pass, after the threads already due (probe v7: forked at 1603 from a thread,
   // first runs at 1603 after its parent yields; the exe's CTaskThread joins the stage's list
@@ -258,7 +291,7 @@ void ThreadScheduler::Step(Thread& t) {
   t.started = true;
   g_threadError.clear();
   if (t.profSource >= 0) prof::NextSource(t.profSource);  // (MOHO64_PROFILE only)
-  if (prof::Hitch()) prof::NextLabel(t.profLabel);
+  if (prof::Hitch() && t.profLabel) prof::NextLabel(*t.profLabel);
   int rc = lua_resume(t.co, nargs);
   current_ = prev;
   if (rc != 0) {

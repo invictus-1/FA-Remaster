@@ -62,7 +62,7 @@ bool Hitch();      // MOHO64_PROFILE and MOHO64_PROFILE_HITCH are set (read once
 double HitchMs();  // its threshold in ms (0 when off)
 double NowMs();    // the clock, in ms
 int Depth();       // outermost Lua calls running now (0, or 1 inside one)
-void NextLabel(std::string label);  // the name the next outermost Lua call is listed by
+void NextLabel(const std::string& label);  // the name the next outermost Lua call is listed by
 void AddCall(std::string label, double ms);  // a nested engine callback's time (a Lua call inside a Lua call)
 
 // The engine's sections a hitch beat lists: the time and count of each (sections may hold others).

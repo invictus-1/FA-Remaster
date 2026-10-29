@@ -289,7 +289,7 @@ double HitchMs() {
 bool Hitch() { return HitchMs() > 0; }
 double NowMs() { return std::chrono::duration<double, std::milli>(Clock::now().time_since_epoch()).count(); }
 int Depth() { return g_depth; }
-void NextLabel(std::string label) { g_nextLabel = std::move(label); }
+void NextLabel(const std::string& label) { g_nextLabel = label; }
 void AddCall(std::string label, double ms) {
   if (ms >= 0.2) g_beatCalls.emplace_back(ms, "  (nested) " + std::move(label));
 }
