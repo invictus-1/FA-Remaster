@@ -2024,6 +2024,16 @@ Vec3 AttachFacing(const TransportObj& O, const Unit* cu) {  // GetAttachFacing (
   return Vec3{f.x * inv, inv * f.y, inv * f.z};
 }
 
+// CUnitRefuel::Execute 0x621490: wherever it puts the aircraft on ForceSpeedThrough (unit state 32: 0x62171a, 0x621a74,
+// 0x621ff3) it then asks its navigator for SetSpeedThroughGoal(true) (unit+0x54c vt+0x18, 0x621735 / 0x621a89 /
+// 0x62200e) before the navigator's SetGoal (vt+8): the drive-through byte is on at once, whatever
+// UpdateSpeedThroughStatus would say (Refueling would make that false). Seen: MP1 14094, army 0's 33 ASFs (uaa0303)
+// told to Dock at a staging platform with no free slot: the original's speed-through is 1 from that beat, ours 0.
+void RefuelForceSpeedThrough(Unit* u) {
+  SetState(u, "ForceSpeedThrough", true);
+  AirSetSpeedThroughGoal(u, true);  // (only aircraft refuel)
+}
+
 // CUnitRefuel at a carrier (carriers.md 5): stored by a CarrierLand child, released when full
 int TickRefuelCarrier(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d, Unit* C) {
   TransportObj& T = *C->transport;
@@ -2045,7 +2055,7 @@ int TickRefuelCarrier(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d, Uni
           return RunChild(sim, u, t, d) ? kTaskRunning : kTaskRunning;
         }
         if (State(u, "Patrolling") || State(u, "Guarding")) return kTaskDone;
-        SetState(u, "ForceSpeedThrough", true);
+        RefuelForceSpeedThrough(u);
         AirSetGoal(sim, u, C->position, sim.tick(), 0);
         t.waitUntil = sim.tick() + 9;
         return kTaskRunning;
@@ -2069,7 +2079,7 @@ int TickRefuelCarrier(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d, Uni
           std::sort(group.begin(), group.end(), [](Unit* a, Unit* b) { return a->id < b->id; });
           for (Unit* X : group)
             if (X && IsAirUnit(sim, X) && !InCat(sim, X, "CARRIER") && State(X, "Refueling")) {
-              SetState(u, "ForceSpeedThrough", true);
+              RefuelForceSpeedThrough(u);
               AirSetGoal(sim, u, C->position, sim.tick(), 0);
               t.waitUntil = sim.tick() + 9;
               return kTaskRunning;
@@ -2112,7 +2122,7 @@ int TickRefuel(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
           continue;
         }
         if (State(u, "Patrolling") || State(u, "Guarding")) return kTaskDone;
-        SetState(u, "ForceSpeedThrough", true);
+        RefuelForceSpeedThrough(u);
         AirSetGoal(sim, u, P->position, sim.tick(), 0);
         t.waitUntil = sim.tick() + 9;
         return kTaskRunning;
@@ -2166,7 +2176,7 @@ int TickRefuel(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
           std::sort(group.begin(), group.end(), [](Unit* a, Unit* b) { return a->id < b->id; });
           for (Unit* X : group)
             if (X && IsAirUnit(sim, X) && !InCat(sim, X, "AIRSTAGINGPLATFORM") && State(X, "Refueling")) {
-              SetState(u, "ForceSpeedThrough", true);
+              RefuelForceSpeedThrough(u);
               AirSetGoal(sim, u, P->position, sim.tick(), 0);
               t.waitUntil = sim.tick() + 9;
               return kTaskRunning;
@@ -3223,6 +3233,7 @@ Unit* TransferUnit(Sim& sim, lua_State* L, Unit* u, Army* army) {
   // Unit::SetPoses 0x6abb90: the new unit shares the old one's two poses
   n->poseQ = u->poseQ;
   n->poseP = u->poseP;
+  ++n->poseVersion;
   n->poseBasePos = u->poseBasePos;
   n->poseBaseOri = u->poseBaseOri;
   n->prevPoseBasePos = u->prevPoseBasePos;
@@ -3562,6 +3573,20 @@ bool TransportTaskAsleepOnMove(const BuildTask* t) {
     t = d.child.get();
   }
   return false;
+}
+
+// CUnitRefuel listens to no navigator: its ctor (0x620f50) registers no listener, and while it waits for a slot or
+// for its group it sets the navigator's goal itself (vt+8 at 0x62174c, 0x621aa3, 0x622028) and sleeps 10
+// beats (answer 0xa). Only its landing and take-off moves (NewMoveTask 0x6190a0 at 0x621c38 / 0x621e5b) are move
+// tasks, whose listener (0x618bb0) re-links the thread at the navigator's end. So an aircraft hovering over a full
+// platform is not re-linked when it reaches the platform's cell each round; its thread stays where it was. Seen:
+// MP1 14319, army 0's ASFs 0x8b (docked on platform 0x106's bone 1 since 14309, its landing move re-linked it) and
+// 0x11e (hovering, on 10-beat waits): the original runs 0x11e first, bone 1 is still 0x8b's, and 0x11e gets bone 5
+// (its goal cell (786, 260)); ours had re-linked 0x11e at each hover arrival, ran it after 0x8b's take-off freed
+// bone 1 and sent it to bone 1 (785, 260).
+bool RefuelGoalWakesNobody(const Unit* u) {
+  const BuildTask* t = u->task;
+  return t && t->tdata && t->tdata->kind == kRefuel && !TransportTaskAsleepOnMove(t);
 }
 
 // TransportReverseLoadUnits at issue time (read 2026-10-17). UNIT_IssueCommand 0x6f12c0 calls 0x6ef660(data, its copy

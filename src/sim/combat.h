@@ -15,6 +15,7 @@
 //   damage (Damage / DamageArea / DamageRing -> target:OnDamage) and kill (Unit:Kill ->
 //   OnKilled); the dying unit is destroyed by its script later.
 #pragma once
+#include "core/speculate.h"
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -130,6 +131,12 @@ class AimController : public ScriptObject {
   // Aim 0x6317b0 measures the target from
   Vec3 lastMuzzlePos;
   Quat lastMuzzleRot;
+  // the same, walked ahead of the unit's turn (MOHO64_PAR_AIM, AimMuzzlesAhead): in beat aheadTick, for muzzleBone
+  // aheadBone
+  Vec3 aheadMuzzlePos;
+  Quat aheadMuzzleRot;
+  int aheadBone = -1;
+  uint32_t aheadTick = 0xffffffffu;
   int precedence = 0;
   uint32_t seq = 0;  // Sim::NextManipSeq
   int EventState() const override { return onTarget ? 1 : 0; }
@@ -295,6 +302,19 @@ void PoseAdvance(Unit* u);
 void UnitAimTick(Sim& sim, Unit* u);       // after the unit's motion
 // The aim controllers' muzzles in last beat's pose, once a beat: before the builder arms' step, else UnitAimTick's.
 void AimReadLastPose(Sim& sim, Unit* u);
+// MOHO64_PAR_AIM (multicore step 3; the modes of core/speculate.h): before the entity pass, every unit's muzzles of
+// this beat walked ahead on the worker pool from last beat's pose, and kept on the unit and its controllers with what
+// they were made from (Unit::aimAhead*, AimController::ahead*); at the unit's turn AimReadLastPose takes them when the
+// base it walks from, the pose's version, the skeleton, the scale and the controllers are the same. (The result lives
+// on the objects, not in a ReadLog: the walk is a fraction of a microsecond, and a record kept apart costs its turn
+// more in cold memory than the walk.) order = the pass's units (Sim::Tick's motionOrder).
+struct AimAhead {
+  AimAhead();
+  SpecMode mode;
+  SpecCounts counts;
+  bool active() const { return mode != SpecMode::kOff; }
+};
+void AimMuzzlesAhead(Sim& sim, const std::vector<Unit*>& order);
 void ProjectilesTick(Sim& sim);
 // One projectile's turn in the entity stage (Projectile::MotionTick 0x69bdd0), once per beat.
 void ProjectileStep(Sim& sim, Projectile* p);

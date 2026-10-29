@@ -85,6 +85,8 @@ bool RefusesLoadOrder(Sim& sim, Unit* u, const Entity* target);
 // A transport task (load, unload, call-transport, ...) whose innermost step is a pushed move task: the unit's command
 // thread sleeps in that move task (TaskThreadAsleepOnMove).
 bool TransportTaskAsleepOnMove(const BuildTask* t);
+// CUnitRefuel 0x621490 on its own navigator goal (no move task of its own): the navigator's arrival wakes nobody.
+bool RefuelGoalWakesNobody(const Unit* u);
 // Children of the guard task: a ctor-B ferry (T guards a factory or a beacon) and a refuel at P.
 BuildTask* MakeGuardFerryTask(Sim& sim, Unit* T, Unit* G);
 BuildTask* MakeRefuelTask(Sim& sim, Unit* u, Unit* P);

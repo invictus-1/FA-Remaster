@@ -262,6 +262,7 @@ void Pose(Animator* a) {
     const Quat fq{q[1], q[2], q[3], q[0]};
     Quat& lq = u->poseQ[static_cast<size_t>(bi)];
     Vec3& lp = u->poseP[static_cast<size_t>(bi)];
+    ++u->poseVersion;  // (written below)
     if (a->overwrite) {  // 0x54bdd0
       lq = fq;
       lp = {p.x * s, p.y * s, p.z * s};

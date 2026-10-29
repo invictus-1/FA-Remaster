@@ -22,6 +22,7 @@
 #include "sim/combat.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -29,6 +30,7 @@
 #include <string>
 
 #include "core/log.h"
+#include "core/speculate.h"
 #include "script/script_state.h"
 #include "sim/air.h"
 #include "sim/blueprints.h"
@@ -623,6 +625,7 @@ void PoseReset(Entity* e) {
   if (!e->skeleton) return;
   const auto& bones = e->skeleton->bones();
   const float s = e->meshScale * e->scale[0];
+  ++e->poseVersion;
   e->poseQ.resize(bones.size());
   e->poseP.resize(bones.size());
   for (size_t i = 0; i < bones.size(); ++i) {
@@ -635,6 +638,7 @@ void PoseRotate(Entity* e, int bone, const Quat& q) {
   if (bone < 0 || static_cast<size_t>(bone) >= e->poseQ.size()) return;
   Quat& l = e->poseQ[static_cast<size_t>(bone)];
   l = ComposeQ(l, q);
+  ++e->poseVersion;
 }
 
 const std::vector<bool>& BpCategoryMask(Sim& sim, const char* name) {
@@ -2282,6 +2286,138 @@ void UnitAimTick(Sim& sim, Unit* u) {
 // beat's: before the builder arms' step, which writes its own bones (a commander's arm and gun both turn the
 // torso; read after the arm's step, the torso was back at rest and the gun aimed from where the muzzle is with
 // the torso unturned: Chris, 2026-10-13, "the acu is not aiming properly and shooting the tanks").
+namespace {
+
+// The muzzle bones of the unit's live aim controllers in last beat's pose, walked down from the base (p0, r0), in
+// the controllers' order (those that are dead or have no muzzle bone are passed over). (BoneWorld's walk down each
+// muzzle's chain, shared: a bone's world transform is made from its parent's with the steps BoneWorld takes, in its
+// order, so each muzzle gets the same bits; the controllers of a unit share their turret's chain.) A muzzle past the
+// skeleton, or on a chain deeper than BoneWorld's 64, is BoneWorld's own answer, which reads the unit's pose base:
+// with boneWorldToo false the walk gives up there instead (false), as a walk made ahead must (core/speculate.h).
+bool MuzzlesFromLastPose(const Unit* u, const Vec3& p0, const Quat& r0, bool boneWorldToo,
+                         std::vector<std::pair<Vec3, Quat>>* out) {
+  out->clear();
+  const auto& bones = u->skeleton->bones();
+  const float s = u->meshScale * u->scale[0];
+  const bool posed = u->poseQ.size() == bones.size();
+  static thread_local std::vector<Vec3> wp;
+  static thread_local std::vector<Quat> wr;
+  static thread_local std::vector<uint32_t> made;
+  static thread_local uint32_t stamp = 0;
+  if (++stamp == 0) {
+    std::fill(made.begin(), made.end(), 0u);
+    stamp = 1;
+  }
+  if (made.size() < bones.size()) {
+    wp.resize(bones.size());
+    wr.resize(bones.size());
+    made.resize(bones.size(), 0u);
+  }
+  for (const AimController* c : u->aimControllers) {
+    if (!c->alive || c->muzzleBone < 0) continue;
+    const int bone = c->muzzleBone;
+    int depth = 0;
+    if (bone < u->skeleton->Count())
+      for (int j = bone; j >= 0 && depth <= 64; j = bones[static_cast<size_t>(j)].parent) ++depth;
+    if (bone >= u->skeleton->Count() || depth > 64) {  // (deeper than BoneWorld walks: it starts 64 bones up)
+      if (!boneWorldToo) return false;
+      Vec3 p;
+      Quat q;
+      BoneWorld(u, bone, &p, &q);
+      out->push_back({p, q});
+      continue;
+    }
+    int chain[64];
+    int n = 0;
+    int i = bone;
+    for (; i >= 0; i = bones[static_cast<size_t>(i)].parent) {
+      if (made[static_cast<size_t>(i)] == stamp) break;  // (made from the root, as BoneWorld's walk)
+      chain[n++] = i;
+    }
+    Quat r = i >= 0 ? wr[static_cast<size_t>(i)] : r0;
+    Vec3 p = i >= 0 ? wp[static_cast<size_t>(i)] : p0;
+    for (int k = n - 1; k >= 0; --k) {
+      const size_t bi = static_cast<size_t>(chain[k]);
+      const Bone& b = bones[bi];
+      const Vec3 lp = posed ? u->poseP[bi] : Vec3{b.localPos.x * s, b.localPos.y * s, b.localPos.z * s};
+      p = Add(p, RotateM(r, lp));
+      r = ComposeQ(r, posed ? u->poseQ[bi] : b.localRot);
+      wp[bi] = p;
+      wr[bi] = r;
+      made[bi] = stamp;
+    }
+    out->push_back({p, r});
+  }
+  return true;
+}
+
+bool MuzzleBits(const Vec3& a, const Vec3& b) { return std::memcmp(&a, &b, sizeof a) == 0; }
+bool MuzzleBits(const Quat& a, const Quat& b) { return std::memcmp(&a, &b, sizeof a) == 0; }
+
+}  // namespace
+
+AimAhead::AimAhead() : mode(SpecModeFromEnvironment("AIM")) {}
+
+void AimMuzzlesAhead(Sim& sim, const std::vector<Unit*>& order) {
+  AimAhead& st = sim.aimAhead();
+  static const bool dbgW = getenv("MOHO64_DEBUG_WEAPON") != nullptr;  // (its lines are written at the unit's turn)
+  if (!st.active() || dbgW) return;
+  const uint32_t round = sim.tick();
+  std::atomic<uint64_t> made{0};
+  sim.workers().ParallelFor("aim muzzles ahead", order.size(), 16, [&](size_t b, size_t e, int) {
+    static thread_local std::vector<std::pair<Vec3, Quat>> m;
+    uint64_t n = 0;
+    for (size_t i = b; i < e; ++i) {
+      Unit* u = order[i];
+      if (u->aimPoseTick == round || !u->skeleton || u->aimControllers.empty()) continue;
+      // (the base the unit's turn will walk from: PoseAdvance keeps this as last beat's, and AimReadLastPose takes it)
+      const Vec3 p0 = u->poseSet ? u->poseBasePos : u->position;
+      const Quat r0 = u->poseSet ? u->poseBaseOri : u->orientation;
+      if (!MuzzlesFromLastPose(u, p0, r0, false, &m)) continue;
+      // (each task writes only its own unit and that unit's controllers, which nothing reads before the unit's turn)
+      size_t k = 0;
+      for (AimController* c : u->aimControllers) {
+        if (!c->alive || c->muzzleBone < 0) continue;
+        c->aheadMuzzlePos = m[k].first;
+        c->aheadMuzzleRot = m[k].second;
+        c->aheadBone = c->muzzleBone;
+        c->aheadTick = round;
+        ++k;
+      }
+      u->aimAheadP0 = p0;
+      u->aimAheadR0 = r0;
+      u->aimAheadPoseVersion = u->poseVersion;
+      u->aimAheadSkeleton = u->skeleton;
+      u->aimAheadScale = u->meshScale * u->scale[0];
+      u->aimAheadList = u->aimControllers.data();
+      u->aimAheadCount = u->aimControllers.size();
+      u->aimAheadTick = round;
+      ++n;
+    }
+    made += n;
+  });
+  st.counts.made += made.load();
+}
+
+namespace {
+// The muzzles walked ahead, if what they were walked from is what the turn has now: the base (p0, r0) to the bit,
+// the pose's version, the skeleton, the scale, and the same controllers, live as they were, on the same bones.
+bool AimAheadHolds(const Unit* u, uint32_t tick, const Vec3& p0, const Quat& r0) {
+  if (u->aimAheadTick != tick) return false;
+  if (!MuzzleBits(u->aimAheadP0, p0) || !MuzzleBits(u->aimAheadR0, r0)) return false;
+  const float s = u->meshScale * u->scale[0];
+  if (u->aimAheadPoseVersion != u->poseVersion || u->aimAheadSkeleton != u->skeleton ||
+      std::memcmp(&u->aimAheadScale, &s, sizeof s) != 0 || u->aimAheadList != u->aimControllers.data() ||
+      u->aimAheadCount != u->aimControllers.size())
+    return false;
+  for (const AimController* c : u->aimControllers) {
+    const bool live = c->alive && c->muzzleBone >= 0;
+    if (live != (c->aheadTick == tick) || (live && c->aheadBone != c->muzzleBone)) return false;
+  }
+  return true;
+}
+}  // namespace
+
 void AimReadLastPose(Sim& sim, Unit* u) {
   if (u->aimPoseTick == sim.tick()) return;
   u->aimPoseTick = sim.tick();
@@ -2291,61 +2427,47 @@ void AimReadLastPose(Sim& sim, Unit* u) {
     const Quat curOri = u->poseBaseOri;
     u->poseBasePos = u->prevPoseBasePos;
     u->poseBaseOri = u->prevPoseBaseOri;
-    // (BoneWorld's walk down each muzzle's chain, shared: a bone's world transform is made from its parent's with the
-    // steps BoneWorld takes, in its order, so each muzzle gets the same bits; the controllers of a unit share their
-    // turret's chain. A chain deeper than BoneWorld's 64 goes to BoneWorld itself.)
-    const auto& bones = u->skeleton->bones();
-    const float s = u->meshScale * u->scale[0];
-    const bool posed = u->poseQ.size() == bones.size();
-    static thread_local std::vector<Vec3> wp;
-    static thread_local std::vector<Quat> wr;
-    static thread_local std::vector<uint32_t> made;
-    static thread_local uint32_t stamp = 0;
-    if (++stamp == 0) {
-      std::fill(made.begin(), made.end(), 0u);
-      stamp = 1;
-    }
-    if (made.size() < bones.size()) {
-      wp.resize(bones.size());
-      wr.resize(bones.size());
-      made.resize(bones.size(), 0u);
-    }
     const Quat r0 = u->poseSet ? u->poseBaseOri : u->orientation;
     const Vec3 p0 = u->poseSet ? u->poseBasePos : u->position;
-    for (AimController* c : u->aimControllers) {
-      if (!c->alive || c->muzzleBone < 0) continue;
-      const int bone = c->muzzleBone;
-      if (bone >= u->skeleton->Count()) {
-        BoneWorld(u, bone, &c->lastMuzzlePos, &c->lastMuzzleRot);
-        continue;
+    // the muzzles: walked ahead (MOHO64_PAR_AIM) from the same base and still good, or walked now
+    AimAhead& st = sim.aimAhead();
+    bool ahead = false;
+    if (st.active()) {
+      if (u->aimAheadTick != sim.tick()) {
+        ++st.counts.none;
+      } else if (!AimAheadHolds(u, sim.tick(), p0, r0)) {
+        ++st.counts.changed;
+      } else if (st.mode == SpecMode::kRedo) {
+        ++st.counts.thrown;
+      } else {
+        ++st.counts.taken;
+        ahead = true;
       }
-      int depth = 0;
-      for (int j = bone; j >= 0 && depth <= 64; j = bones[static_cast<size_t>(j)].parent) ++depth;
-      if (depth > 64) {  // (deeper than BoneWorld walks: it starts 64 bones up)
-        BoneWorld(u, bone, &c->lastMuzzlePos, &c->lastMuzzleRot);
-        continue;
+    }
+    if (!ahead || st.mode == SpecMode::kVerify) {
+      static thread_local std::vector<std::pair<Vec3, Quat>> now;
+      MuzzlesFromLastPose(u, p0, r0, true, &now);
+      size_t k = 0;
+      for (AimController* c : u->aimControllers) {
+        if (!c->alive || c->muzzleBone < 0) continue;
+        if (ahead) {  // (verify: the walk made ahead against this one, bit for bit)
+          ++st.counts.checked;
+          if (!MuzzleBits(c->aheadMuzzlePos, now[k].first) || !MuzzleBits(c->aheadMuzzleRot, now[k].second)) {
+            char b[128];
+            std::snprintf(b, sizeof b, "tick %u unit 0x%x controller %zu: the muzzle walked ahead differs", sim.tick(), u->id, k);
+            SpecMismatch("AIM", k, b);
+          }
+        }
+        c->lastMuzzlePos = now[k].first;
+        c->lastMuzzleRot = now[k].second;
+        ++k;
       }
-      int chain[64];
-      int n = 0;
-      int i = bone;
-      for (; i >= 0; i = bones[static_cast<size_t>(i)].parent) {
-        if (made[static_cast<size_t>(i)] == stamp) break;  // (made from the root, as BoneWorld's walk)
-        chain[n++] = i;
+    } else {
+      for (AimController* c : u->aimControllers) {
+        if (!c->alive || c->muzzleBone < 0) continue;
+        c->lastMuzzlePos = c->aheadMuzzlePos;
+        c->lastMuzzleRot = c->aheadMuzzleRot;
       }
-      Quat r = i >= 0 ? wr[static_cast<size_t>(i)] : r0;
-      Vec3 p = i >= 0 ? wp[static_cast<size_t>(i)] : p0;
-      for (int k = n - 1; k >= 0; --k) {
-        const size_t bi = static_cast<size_t>(chain[k]);
-        const Bone& b = bones[bi];
-        const Vec3 lp = posed ? u->poseP[bi] : Vec3{b.localPos.x * s, b.localPos.y * s, b.localPos.z * s};
-        p = Add(p, RotateM(r, lp));
-        r = ComposeQ(r, posed ? u->poseQ[bi] : b.localRot);
-        wp[bi] = p;
-        wr[bi] = r;
-        made[bi] = stamp;
-      }
-      c->lastMuzzlePos = p;
-      c->lastMuzzleRot = r;
     }
     static const long dbgUnit = getenv("MOHO64_DEBUG_WEAPON") ? atol(getenv("MOHO64_DEBUG_WEAPON")) : -1;
     if (dbgUnit >= 0 && static_cast<long>(u->id) == dbgUnit)
@@ -4264,7 +4386,10 @@ void SliderStep(Unit* u, SlideManipulator* m) {
   }
   // onto the bone's local position, turned by the bone's local rotation as it is now
   const size_t bi = static_cast<size_t>(m->bone);
-  if (bi < u->poseQ.size()) u->poseP[bi] = Add(u->poseP[bi], RotateM(u->poseQ[bi], m->cur));
+  if (bi < u->poseQ.size()) {
+    u->poseP[bi] = Add(u->poseP[bi], RotateM(u->poseQ[bi], m->cur));
+    ++u->poseVersion;
+  }
 }
 
 // ---- builder arms (CBuilderArmManipulator, builder_arm.md) -----------------------------------------

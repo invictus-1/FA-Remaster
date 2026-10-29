@@ -276,6 +276,14 @@ class Unit : public Entity {
   int ogridRect[4] = {0, 0, 0, 0}; // a ground unit's reserved o-grid rect (ReserveOgridRect)
   int parentBone = -1, ownBone = -1;
   float shieldRatio = 0;
+  // AimMuzzlesAhead's walk of this beat (MOHO64_PAR_AIM): its beat and what it walked from
+  uint32_t aimAheadTick = 0xffffffffu, aimAheadPoseVersion = 0;
+  Vec3 aimAheadP0;
+  Quat aimAheadR0;
+  const Skeleton* aimAheadSkeleton = nullptr;
+  float aimAheadScale = 0;  // meshScale x scale[0]
+  AimController* const* aimAheadList = nullptr;
+  size_t aimAheadCount = 0;
   uint32_t aimPoseTick = 0xffffffffu;  // the beat AimReadLastPose last ran in  // as the shield's script last gave Unit:SetShieldRatio (for the views; no simulation use)
   // Combat (sim/combat.cpp)
   const struct CombatBpData* combat = nullptr;

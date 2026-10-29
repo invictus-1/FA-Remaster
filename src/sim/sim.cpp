@@ -877,11 +877,14 @@ Sim::Sim(Vfs* vfs, std::vector<std::string> hookDirs, std::vector<std::string> m
       skeletons_(std::make_unique<SkeletonCache>(vfs)),
       workers_(std::make_unique<WorkerPool>(ThreadsFromEnvironment(), ParCheckFromEnvironment())),
       surfaceSpec_(std::make_unique<Speculation<SurfaceContacts>>("MOTION")),
+      aimAhead_(std::make_unique<AimAhead>()),
       commandIds(std::make_shared<CommandIdPool>()) {
   prof::InstallLuaTimer();  // MOHO64_PROFILE only (core/profile.h): the Lua timer on the sim's thread
   if (surfaceSpec_->active())
     Logf(LogLevel::Info, "moho64: MOHO64_PAR_MOTION=%s: the entity pass's contact searches are made ahead",
          SpecModeName(surfaceSpec_->mode()));
+  if (aimAhead_->active())
+    Logf(LogLevel::Info, "moho64: MOHO64_PAR_AIM=%s: the aim controllers' muzzles are made ahead", SpecModeName(aimAhead_->mode));
   if (workers_->Threads() > 1 || workers_->Check().mode != ParCheck::kOff)
     Logf(LogLevel::Info, "moho64: the sim's worker pool: %d thread(s)%s", workers_->Threads(),
          workers_->Check().mode == ParCheck::kShuffle   ? ", order check: shuffle (tasks on this thread)"
@@ -892,6 +895,11 @@ Sim::Sim(Vfs* vfs, std::vector<std::string> hookDirs, std::vector<std::string> m
 Sim::~Sim() {
   if (surfaceSpec_ && surfaceSpec_->active()) {
     const std::string line = surfaceSpec_->counts().Line("MOTION (surface contacts)");
+    fprintf(stderr, "%s\n", line.c_str());
+    Logf(LogLevel::Info, "%s", line.c_str());
+  }
+  if (aimAhead_ && aimAhead_->active()) {
+    const std::string line = aimAhead_->counts.Line("AIM (muzzles)");
     fprintf(stderr, "%s\n", line.c_str());
     Logf(LogLevel::Info, "%s", line.c_str());
   }
@@ -2316,6 +2324,7 @@ void Sim::Tick() {
   // MOHO64_PAR_MOTION: the units' contact searches of this pass made ahead on the worker pool, each taken at its
   // unit's turn only if nothing it read has changed by then (core/speculate.h)
   SurfaceContactsAhead(*this, motionOrder);
+  AimMuzzlesAhead(*this, motionOrder);  // MOHO64_PAR_AIM: the aim controllers' muzzles, the same way
   // The entity stage runs its tasks in creation order, units and collision beams alike, and a unit's task is its
   // whole beat (Unit::MotionTick 0x6a9010: motion, manipulators, regeneration, its economy). A collision beam is
   // made with its weapon, so it comes after its owner and before every unit made later: such a unit, killed by the

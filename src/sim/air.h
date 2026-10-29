@@ -179,6 +179,9 @@ bool AirNavArrival(Sim& sim, Unit* u);  // true: Execute re-aimed at its destina
 void AirStopHere(Sim& sim, Unit* u);
 // Unit::UpdateSpeedThroughStatus 0x6ac940 for aircraft: call at the exe's event points only (air_nav.md 5).
 void AirSpeedThroughEvent(Sim& sim, Unit* u);
+// CAiNavigatorAir::SetSpeedThroughGoal 0x5a5080: the steering's "last waypoint in the goal" (vt+0x28, 1) and its
+// request (vt+0x20, v): the motion's speed-through byte becomes v.
+void AirSetSpeedThroughGoal(Unit* u, bool v);
 // Unit::PredictAheadBomb: position after t seconds along the current turn.
 Vec3 PredictAhead(Sim& sim, Unit* u, float t, bool other = false);
 // Warp: re-sync the body and the terrain height.

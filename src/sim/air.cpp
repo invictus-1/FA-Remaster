@@ -2069,6 +2069,10 @@ void AirWarp(Sim& sim, Unit* u) {
 }
 
 void AirSpeedThroughEvent(Sim& sim, Unit* u) { UpdateSpeedThrough(sim, u); }
+void AirSetSpeedThroughGoal(Unit* u, bool v) {
+  u->motion.airSpeedThrough = v;
+  if (u->motion.air) A(u).fullSpeed = v;
+}
 
 void AirSetCarrierEvent(Unit* u, int e) {
   if (u->motion.air) A(u).carrierEvent = e;
@@ -2596,7 +2600,8 @@ bool AirNavArrival(Sim& sim, Unit* u) {
       a.steering = false;
       m.hasGoal = false;
       m.arrived = true;
-      sim.ResumeCommandThread(u);  // Succeeded wakes the move task (re-linked at the stage's new end)
+      // Succeeded wakes the move task (re-linked at the stage's new end); a refuel's own goal has no listener
+      if (!RefuelGoalWakesNobody(u)) sim.ResumeCommandThread(u);
       // MOHO64_DEBUG_AIRARRIVE=1: every arrival, with what the unit was doing
       static const bool dbgArrive = getenv("MOHO64_DEBUG_AIRARRIVE") != nullptr;
       if (dbgArrive)

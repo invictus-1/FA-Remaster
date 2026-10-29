@@ -22,6 +22,7 @@ class WorkerPool;
 template <class Out>
 class Speculation;
 struct SurfaceContacts;
+struct AimAhead;
 }
 #include "sim/blueprints.h"
 #include "sim/economy.h"
@@ -431,6 +432,8 @@ class Sim {
   // The entity pass's contact searches made ahead (MOHO64_PAR_MOTION, multicore step 3; sim/steering.h
   // SurfaceContactsAhead, core/speculate.h).
   Speculation<SurfaceContacts>& surfaceSpec() { return *surfaceSpec_; }
+  // ... and the aim controllers' muzzles (MOHO64_PAR_AIM; sim/combat.h AimMuzzlesAhead)
+  AimAhead& aimAhead() { return *aimAhead_; }
   // The command stage (0x958) runs the units' command threads oldest first; a thread suspended on a
   // move and resumed by its navigator is re-linked at the stage's new end (beat_order.md 2.6).
   const std::vector<Unit*>& CommandOrder();
@@ -674,6 +677,7 @@ class Sim {
   std::unique_ptr<SkeletonCache> skeletons_;
   std::unique_ptr<WorkerPool> workers_;  // MOHO64_THREADS (core/workers.h): made once per Sim
   std::unique_ptr<Speculation<SurfaceContacts>> surfaceSpec_;  // MOHO64_PAR_MOTION
+  std::unique_ptr<AimAhead> aimAhead_;                         // MOHO64_PAR_AIM
   bool armorLoaded_ = false;
   std::map<std::string, std::map<std::string, float>> armorTypes_;  // armour type -> damage type -> multiplier
 

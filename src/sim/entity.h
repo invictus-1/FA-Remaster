@@ -108,6 +108,9 @@ class Entity : public ScriptObject {
   // (UpdateBones 0x54b5f0, positions x the mesh scale) and then changed by the unit's manipulators in turn.
   // Empty: the rest pose.
   std::vector<Quat> poseQ;
+  // Counts every write of the pose (poseQ / poseP: PoseReset, PoseRotate, a slider's or an animator's bone, a
+  // transferred unit's copy): a result made ahead from the pose (core/speculate.h) notes it instead of the bones.
+  uint32_t poseVersion = 0;
   std::vector<Vec3> poseP;
   Vec3 attachOffset;          // Entity:SetParentOffset: where it sits relative to the bone it is attached to
   uint32_t attachParent = 0;  // entity attached to (beams to their unit; sim/combat.cpp)
