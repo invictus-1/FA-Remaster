@@ -165,10 +165,14 @@ WorkerPool::WorkerPool(int threads, ParCheck check) : threads_(std::max(1, threa
 }
 
 WorkerPool::~WorkerPool() {
+  // Only the workers that were made are woken and joined: with the order check on (MOHO64_PAR_CHECK) the pool keeps
+  // its slot count but makes no worker and no seat (seats_ is null), and walking 1..threads_ - 1 there locked a seat
+  // that does not exist (a crash at exit with MOHO64_THREADS=32 and shuffle / reverse). Every worker is joined
+  // before the members it uses (seats_, mutex_, done_) go with the pool.
   quit_.store(true, std::memory_order_release);
-  for (int i = 1; i < threads_; ++i) {
-    { std::lock_guard<std::mutex> g(seats_[static_cast<size_t>(i)].m); }
-    seats_[static_cast<size_t>(i)].cv.notify_one();
+  for (size_t i = 1; i <= workers_.size(); ++i) {
+    { std::lock_guard<std::mutex> g(seats_[i].m); }  // (taken and let go: a worker between its test and its wait sees quit_)
+    seats_[i].cv.notify_one();
   }
   for (std::thread& t : workers_) t.join();
 }
