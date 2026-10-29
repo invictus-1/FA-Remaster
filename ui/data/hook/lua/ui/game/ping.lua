@@ -53,3 +53,64 @@ function DisplayPing(data)
     end
     return RemasterDisplayPing(data)
 end
+
+-- FA Remastered: a radial ping's meaning under it, for the allies who see it (ours; the ring /moho64ui/lua/radialping.lua
+-- sends FAF's ping with an Intent): "Attack ACU", "Expand here" and so on, in the look's colour, below the ping's
+-- place in each world view while the ping lasts, fading in its last second. FAF's own pings (no Intent) as before.
+-- RemasterPingLabels: the labels showing, for the tests ({ text, control, ping }).
+RemasterPingLabels = {}
+local function RemasterPingLabel(ping)
+    local radial = import("/moho64ui/lua/radialping.lua")
+    local label, look
+    for _, p in radial.Pings do
+        if p.intent == ping.Intent then label, look = p.label, p.look end
+    end
+    if not label then return end
+    local color = ({ attack = 'ffff7060', move = 'ff70b0ff', alert = 'ffffd860' })[look] or 'ffffffff'
+    local UIUtil = import("/lua/ui/uiutil.lua")
+    local LayoutHelpers = import("/lua/maui/layouthelpers.lua")
+    local lifetime = ping.Lifetime or 6
+    for name, each in import("/lua/ui/game/worldview.lua").GetWorldViews() or {} do
+        local view = each  -- (a local of its own for the label's frame function below: Lua 5.0's loop variable is not)
+        if view and name ~= 'MiniMap' and not IsDestroyed(view) then
+            local text = UIUtil.CreateText(view, label, 14, UIUtil.bodyFont)
+            text:SetColor(color)
+            text:SetDropShadow(true)
+            text:DisableHitTest()
+            local entry = { text = label, control = text, ping = ping }
+            table.insert(RemasterPingLabels, entry)
+            local time = 0
+            local function Place()
+                local at = view:Project(Vector(ping.Location[1], ping.Location[2], ping.Location[3]))
+                text.Left:Set(view.Left() + at.x - text.Width() / 2)
+                text.Top:Set(view.Top() + at.y + LayoutHelpers.ScaleNumber(18))
+            end
+            Place()
+            text:SetNeedsFrameUpdate(true)
+            text.OnFrame = function(self, delta)
+                time = time + delta
+                if time >= lifetime or IsDestroyed(view) then
+                    self:SetNeedsFrameUpdate(false)
+                    for i, e in RemasterPingLabels do
+                        if e == entry then table.remove(RemasterPingLabels, i) break end
+                    end
+                    self:Destroy()
+                    return
+                end
+                if view:IsHidden() then self:Hide() else self:Show() end
+                Place()
+                self:SetAlpha(math.min(1, lifetime - time))
+            end
+        end
+    end
+end
+local RemasterUnlabelled = DisplayPing
+function DisplayPing(data)
+    local result = RemasterUnlabelled(data)
+    for _, ping in data or {} do
+        if type(ping.Intent) == 'string' and not ping.Action and not ping.Renew and type(ping.Location) == 'table' then
+            RemasterPingLabel(ping)
+        end
+    end
+    return result
+end
