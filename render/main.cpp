@@ -591,7 +591,8 @@
 // --find shield|wreck|<unit id>  with a game: once it is where --tick asks, the camera goes to the first shield's bubble,
 //           the first wreck or the first unit of that kind there is (to look at them without knowing where they are)
 // --hide-bone <bone>  placed units are drawn with that bone and all that hangs on it hidden (as a script's
-//           HideBone does; a name or a number, as for --turn)
+//           HideBone does; a name or a number, as for --turn); with --animate also a comma list of names, or of their
+//           beginnings ending in * (shell*), hidden in the animation's pose (a satellite's shells after its first opening)
 // --soften <n>  over how many world units particles fade where they meet something solid (0.6; next to 0: a hard cut)
 // --shielded  placed units are drawn with a personal shield up
 // --built <0..1>  placed units are that far under construction (to look at the factions' build looks)
@@ -3825,6 +3826,22 @@ int main(int argc, char** argv) {
         const float part = where - static_cast<float>(frame);
         std::vector<Vec3> place(bones.size());
         std::vector<Quat> turn(bones.size());
+        // (--hide-bone with --animate: the bones a unit's script hides at that moment, e.g. a satellite's shells after its
+        // first opening: a comma list of names, or of their beginnings ending in *, each with all that hangs on it)
+        std::vector<bool> hidden(bones.size(), false);
+        if (opt.hideTurned && !opt.turn.empty()) {
+          std::vector<std::string> names;
+          for (size_t at = 0; at <= opt.turn.size();) {
+            const size_t comma = std::min(opt.turn.find(',', at), opt.turn.size());
+            names.push_back(opt.turn.substr(at, comma - at));
+            for (char& c : names.back()) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));  // (the model's names are lower case)
+            at = comma + 1;
+          }
+          for (size_t i = 0; i < bones.size(); ++i)
+            for (const std::string& n : names)
+              if (!n.empty() && (n.back() == '*' ? bones[i].name.rfind(n.substr(0, n.size() - 1), 0) == 0 : bones[i].name == n))
+                hidden[i] = true;
+        }
         u.bones.clear();
         bool named = false;
         for (size_t i = 0; i < bones.size(); ++i) {
@@ -3845,7 +3862,8 @@ int main(int argc, char** argv) {
           place[i] = hasUp ? place[static_cast<size_t>(up)] + Rotate(turn[static_cast<size_t>(up)], p) : p;
           turn[i] = hasUp ? Mul(turn[static_cast<size_t>(up)], q) : q;
           const Vec3 w = place[i] * scale;
-          u.bones.push_back({static_cast<uint32_t>(i), {w.x, w.y, w.z}, {turn[i].x, turn[i].y, turn[i].z, turn[i].w}, false});
+          if (hasUp && hidden[static_cast<size_t>(up)]) hidden[i] = true;
+          u.bones.push_back({static_cast<uint32_t>(i), {w.x, w.y, w.z}, {turn[i].x, turn[i].y, turn[i].z, turn[i].w}, hidden[i]});
         }
         if (!named) u.bones.clear();  // (not this unit's animation)
         pose.now = pose.next = u.bones.data();
