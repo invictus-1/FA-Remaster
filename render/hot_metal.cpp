@@ -46,6 +46,10 @@ float3 HotMetalGlow(float age, float seconds, float3 shape, float turn, bool own
     float luma = dot(albedo, float3(0.3, 0.59, 0.11));
     hole = smoothstep(0.86, 0.9, rough) * (1 - smoothstep(0.04, 0.1, metal)) * (1 - smoothstep(0.05, 0.12, luma));
     rim = smoothstep(0.55, 0.75, metal) * (1 - smoothstep(0.48, 0.6, rough));
+    // (a crater's floor not one even heat: embers and cooler patches through it, and not so hot - as one even 1350 K a big
+    // ship's craters read as flat yellow plates, where the original's are small orange spots: the unit check's Summit and
+    // Governor wrecks)
+    hole *= 0.81 * (0.45 + 0.55 * smoothstep(0.3, 0.7, CloudNoise(shape * 22 + 7.7)));  // (at most about 1150 K)
   } else {
     // the game's wreck is the whole model: craters made up in its own space, as the kit lays them (cells a quarter of its
     // height, a crater in half of them, ragged; a hole, a torn rim, a ring the heat spread into), more where the burnt
