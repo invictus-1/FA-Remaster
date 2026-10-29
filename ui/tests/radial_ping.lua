@@ -65,6 +65,11 @@ ForkThread(function()
     for _, p in heard do if p.Intent == 'assist' then back = p end end
     check("the simulation hands it back to the allies with its Intent", back ~= nil, true)
     check("its owner is the player's army", back and back.Owner, GetFocusArmy() - 1)
+    local labelled = false
+    for _, e in Ping.RemasterPingLabels or {} do
+        if e.text == 'Assist' and not IsDestroyed(e.control) then labelled = true end
+    end
+    check("its meaning shows under it: Assist", labelled, true)
 
     -- a right click: nothing sent
     moho64ui_MouseMove(cx, cy)
@@ -105,5 +110,12 @@ ForkThread(function()
     check("with FAF's Attack look", Radial.State.sent and Radial.State.sent.Type, 'Attack')
     LetGo()
     check("and letting go after it sends no second one", Radial.State.open, false)
+    -- the labels go with their pings (FAF's lifetime: 6 s)
+    WaitSeconds(14)
+    local left = 0
+    for _, e in Ping.RemasterPingLabels or {} do
+        if e.text == 'Assist' then left = left + 1 end
+    end
+    check("the Assist label is gone after its ping's lifetime", left, 0)
     LOG("TEST done: " .. failed .. " failed")
 end)
