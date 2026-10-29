@@ -1784,6 +1784,26 @@ bool IssueAttackMoveAt(lua_State* L, float x, float y, float z, bool clear) {
   for (UserUnit* u : Store(L).selection)
     if (!u->gone && !u->view.dead && u->view.army == sim->focusArmy + 1) ids.push_back(u->view.id), units.push_back(u);
   if (ids.empty()) return false;
+  // Structures need a rally command. A Script command in their own queue clears
+  // production, and FAF's AttackMove callback deliberately excludes structures.
+  std::vector<uint32_t> factories;
+  std::vector<UserUnit*> mobile;
+  ids.clear();
+  for (UserUnit* u : units) {
+    if (InCategory(L, u, "FACTORY") && InCategory(L, u, "STRUCTURE"))
+      factories.push_back(u->view.id);
+    else
+      ids.push_back(u->view.id), mobile.push_back(u);
+  }
+  if (!factories.empty()) {
+    StreamIssueData rally;
+    rally.type = static_cast<int>(CommandType::AggressiveMove);
+    rally.target.type = 2;
+    rally.target.pos.x = x, rally.target.pos.y = y, rally.target.pos.z = z;
+    IssueRallyToUnits(L, factories, rally, clear);
+  }
+  units = std::move(mobile);
+  if (ids.empty()) return true;
   const int top = lua_gettop(L);
   lua_newtable(L);
   lua_pushstring(L, "TaskName");
