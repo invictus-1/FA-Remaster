@@ -2628,7 +2628,12 @@ void Sim::Tick() {
   if (map_ && map_->hasWater)
     for (size_t i = 0; i < units_.size(); ++i) {
       Unit* u = units_[i];
-      if (u->destroyQueued || !u->parentId) continue;
+      // The copy is the motion's (state Attached), and a unit still being built has no motion step: MotionTick
+      // 0x6b9d10 asks IsBeingBuilt (vt+0x34, 0x6b9d21..0x6b9d2c) first and returns (0x6ba1ca; only a Sub-layer one
+      // gets its motion state set to 1 there). Seen: MP1 12626, army 4's engineer 0x40012e (xsl0105), killed at 91 %
+      // in its naval factory at 12614, is taken by FAF's sinker (made 0.07 above the water, so in Air) and stays in
+      // Water in the original; ours put it in Air until the sinker went under at 12632.
+      if (u->destroyQueued || !u->parentId || u->beingBuilt) continue;
       const Entity* p = FindEntity(u->parentId);
       if (!p || p->destroyQueued || p->kind != Entity::Kind::Projectile) continue;
       const char* pl = p->position.y > map_->waterElevation ? "Air" : "Water";

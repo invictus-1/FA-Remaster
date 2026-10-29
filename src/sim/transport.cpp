@@ -968,6 +968,11 @@ bool TransportHasCargo(const Unit* u) {
 // unit of a detach (seen in the original's records).
 void AttachParentGone(Sim& sim, Unit* u) {
   u->parentId = 0;
+  // (all of it is the motion's, and a unit still being built has no motion step: MotionTick 0x6b9d10 returns at
+  // 0x6b9d2c / 0x6ba1ca for IsBeingBuilt, vt+0x34. Seen: MP1 12891, 13052, 13082, army 4's engineers 0x40012e,
+  // 0x400043 and 0x40011f, killed while being built and sunk on FAF's sinker: when the shell is gone at the sea floor
+  // the original's stay in Water for their last beat; ours put them in Air.)
+  if (u->beingBuilt) return;
   if (!u->motion.bp || !u->motion.bp->mobile()) return;
   if (CanFly(u)) {
     AirParentGone(sim, u);
