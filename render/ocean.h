@@ -71,6 +71,21 @@ Texture2D oceanSlope[3] : register(t10);  // the slopes along x and z, and their
 Texture2D oceanDisp[3] : register(t13);   // the sideways shift along x, the height, the shift along z; w the slopes' product
 Texture2D oceanFold[3] : register(t16);   // the shift's derivatives: d shift x / dx, d shift z / dz, d shift x / dz
 Texture2D<float2> oceanFoam : register(t19);  // the foam's field ([whitecaps] x how much, y how fresh)
+static const float kOceanSamples = 256;  // [watersq] each square's samples a side (Ocean::kN)
+// [watersq] A square's picture read between its samples by a cubic B-spline in place of a straight line (its slopes then
+// turn smoothly from sample to sample: no edge at a sample), as four bilinear readings at shifted places, each standing
+// for two by two of the sixteen samples the spline weighs (the third-order filtering of Sigg and Hadwiger, GPU Gems 2,
+// chapter 20). Its finest level of detail alone: for a pixel smaller than a sample. `uv` as the bilinear reading takes it.
+float4 OceanSmoothly(Texture2D t, float2 uv) {
+  float2 p = uv * kOceanSamples - 0.5;
+  float2 i = floor(p), f = p - i;
+  float2 f2 = f * f, f3 = f2 * f;
+  float2 w0 = (1 - 3 * f + 3 * f2 - f3) / 6, w1 = (4 - 6 * f2 + 3 * f3) / 6, w2 = (1 + 3 * f + 3 * f2 - 3 * f3) / 6, w3 = f3 / 6;
+  float2 g0 = w0 + w1, g1 = w2 + w3;
+  float2 at0 = (i - 0.5 + w1 / g0) / kOceanSamples, at1 = (i + 1.5 + w3 / g1) / kOceanSamples;
+  return g0.y * (g0.x * t.SampleLevel(samplerLinear, float2(at0.x, at0.y), 0) + g1.x * t.SampleLevel(samplerLinear, float2(at1.x, at0.y), 0)) +
+         g1.y * (g0.x * t.SampleLevel(samplerLinear, float2(at0.x, at1.y), 0) + g1.x * t.SampleLevel(samplerLinear, float2(at1.x, at1.y), 0));
+}
 #if LIFT
 // [lift] The grid (Ocean::DrawGrid): its patches and the levels of detail.
 cbuffer OceanGrid : register(b3) {
@@ -134,10 +149,23 @@ OceanHere OceanAt(float2 xz, float2 dxdx, float2 dxdy, float calm, float tilt) {
     float shown = oceanCascade[c].z * k * lerp(1, gust, c == 2 ? 1.0 : c == 1 ? 0.5 : 0.0);
     float2 uv = xz * oceanCascade[c].x + oceanCascade[c].w;
     float2 gx = dxdx * oceanCascade[c].x, gy = dxdy * oceanCascade[c].x;
+    // [watersq] (how many of the square's samples the pixel takes in, along its longer side)
+    float sampleShare = max(length(gx), length(gy)) * kOceanSamples;
     float4 s = oceanSlope[c].SampleGrad(samplerAniso, uv, gx, gy);
+    // [watersq] closer in than a sample a pixel, the slopes read smoothly (OceanSmoothly): read straight between four
+    // samples they bend at every sample's edge, and the sun's glint, narrow there, picked out those flat pieces of slope
+    // as hard-edged bright squares a sample wide, fixed to the water (the finest square's samples are 0.04 world units:
+    // 8-16 pixels in a close view). From half a sample a pixel over to the reading as before, all of it from one.
+    [branch] if (sampleShare < 1) s = lerp(OceanSmoothly(oceanSlope[c], uv), s, saturate(sampleShare * 2 - 1));
     float4 d = oceanDisp[c].SampleGrad(samplerAniso, uv, gx, gy);
     o.slope += s.xy * (shown * tilt);
-    o.spread += float3(max(s.z - s.x * s.x, 0), max(s.w - s.y * s.y, 0), d.w - s.x * s.y) * (shown * shown * tilt * tilt);
+    // [watersq] (the moments' spread only as far as the pixel takes in a sample or more: closer in, reading between samples
+    // blends their moments, and the blend's spread - a quarter of the square of their slopes' difference half way between
+    // two, none at a sample - is not the waves' but the reading's own; it widened the glint in the same squares. Over a
+    // pixel smaller than a sample the slopes vary by about the pixel's share of a sample's difference: their spread by its
+    // square.)
+    float lean = saturate(sampleShare * sampleShare);
+    o.spread += float3(max(s.z - s.x * s.x, 0), max(s.w - s.y * s.y, 0), d.w - s.x * s.y) * (shown * shown * tilt * tilt * lean);
     o.height += d.y * shown;
     o.shift += d.xz * shown;
     // ([whitecaps] the shift's derivatives: the crests breaking now, where the surface folds at this pixel)
