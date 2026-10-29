@@ -113,6 +113,18 @@ TString *luaS_gpg_find (lua_State *L, const char *str, size_t l) {
 }
 
 
+/* moho64: the hash luaS_newlstr gives the text (its seed and steps); a string key's main position in a table of
+** 2^k nodes is this & (2^k - 1) (ltable.c hashstr) */
+lu_hash luaS_gpg_hash (const char *str, size_t l) {
+  lu_hash h = (lu_hash)l;  /* seed (as luaS_newlstr) */
+  size_t step = (l>>5)+1;
+  size_t l1;
+  for (l1=l; l1>=step; l1-=step)
+    h = h ^ ((h<<5)+(h>>2)+(unsigned char)(str[l1-1]));
+  return h;
+}
+
+
 Udata *luaS_newudata (lua_State *L, size_t s) {
   Udata *u;
   u = cast(Udata *, luaM_malloc(L, sizeudata(s)));

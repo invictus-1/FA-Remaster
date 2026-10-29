@@ -101,6 +101,16 @@ struct IntelState {
   };
   std::vector<std::vector<RasterOp>> rasterOps;
   std::vector<uint32_t> activeGrids;  // (the grids with ops in this beat, by index)
+  // MOHO64_PAR_RECON (ReconTick's CanDetect ahead on the worker pool): the main loop's units in its own order, where
+  // each is looked at, and what CanDetect said there; and the number of Lua calls the recon code has made (IntelEvent),
+  // which says whether anything the answers depend on may have changed since.
+  struct Ahead {
+    Unit* u;
+    Vec3 at;
+    uint8_t f;
+  };
+  std::vector<Ahead> ahead;
+  uint64_t luaCalls = 0;
 };
 
 namespace {
@@ -151,6 +161,8 @@ IntelPar IntelParMode(const char* name, size_t defaultMin) {
 constexpr size_t kParBlipsMin = 2048, kParIntelCoordsMin = 1024;
 // I2 takes the pool only for this many raster ops of a beat (verify: always)
 constexpr size_t kParRasterOpsMin = 64;
+// MOHO64_PAR_RECON's default for "on": the main loop's units (of the other armies, VISIBLETORECON)
+constexpr size_t kParReconMin = 1024;
 [[noreturn]] void IntelParMismatch(const char* name, uint32_t tick, const char* what, size_t item) {
   std::fprintf(stderr, "moho64: MOHO64_PAR_%s=verify: tick %u: %s %zu differs from the serial result\n", name, tick, what,
                item);
@@ -384,6 +396,7 @@ void IntelEvent(Sim& sim, lua_State* L, int a, ReconBlip* b, int bit, bool val) 
   static const char* names[9] = {nullptr, "Radar", "Sonar", nullptr, "Omni", nullptr, nullptr, nullptr, "LOSNow"};
   Army* army = sim.armies()[static_cast<size_t>(a)].get();
   if (!army->brain || !army->brain->HasLuaObject() || !b || !b->HasLuaObject()) return;
+  ++IS(sim).luaCalls;  // (MOHO64_PAR_RECON: answers made ahead hold only while this count stands)
   PushObject(L, b);
   lua_pushstring(L, names[bit]);
   lua_pushboolean(L, val);
@@ -597,22 +610,63 @@ void ReconTick(Sim& sim, lua_State* L, int a) {
   };
   const Army* us = sim.armies()[static_cast<size_t>(a)].get();
   const std::vector<bool>& visibleToRecon = BpCategoryMask(sim, "VISIBLETORECON");  // (BpInCategory, once)
+  auto looked = [&](const Unit* u) {  // (the main loop's test of a unit)
+    if (u->destroyQueued) return false;
+    const BlueprintInfo* ubp = u->blueprint;
+    return ubp && ubp->entityIndex >= 0 && static_cast<size_t>(ubp->entityIndex) < visibleToRecon.size() &&
+           visibleToRecon[static_cast<size_t>(ubp->entityIndex)];
+  };
+  // MOHO64_PAR_RECON (multicore step 4, R2): every unit's CanDetect of the main loop below, made ahead on the worker
+  // pool before the loop (each task writes only its own slot; CanDetect reads the grids, the alliances, the playable
+  // rect, the army's flag, the unit's layer, position and intel flags, and touches no Lua). At the unit's turn the
+  // answer is taken only while the recon code has made no Lua call since (IntelState::luaCalls, bumped by IntelEvent:
+  // OnIntelChange is the only Lua the loop reaches, through UpdateBlip / UpdateFake / DropFake / DeleteEntry); its
+  // other writes (the units' recon bytes, the threat map, the blips list, the destroy queue) are none of CanDetect's
+  // reads nor of the loop's own tests. From the first call on, and from any unit that is not the one expected, the
+  // rest of the loop works its answers out itself, as without the switch. (The gone-units loops above may call Lua:
+  // the answers are made after them.)
+  static const IntelPar parRecon = IntelParMode("RECON", kParReconMin);
+  IntelState& st = IS(sim);
+  std::vector<IntelState::Ahead>& ahead = st.ahead;
+  ahead.clear();
+  bool useAhead = false;
+  const uint64_t luaMark = st.luaCalls;
+  if (parRecon.mode != ParMode::kOff) {
+    for (const auto& army : sim.armies()) {
+      if (army.get() == us) continue;
+      for (Unit* u : army->units)
+        if (looked(u))
+          ahead.push_back({u, sim.coordsPending && u->lastPosTick == sim.tick() ? u->lastPosition : u->position, 0});
+    }
+    if (parRecon.Pool(ahead.size())) {
+      sim.workers().ParallelFor("recon detect ahead", ahead.size(), 64, [&](size_t i0, size_t i1, int) {
+        for (size_t i = i0; i < i1; ++i) ahead[i].f = CanDetect(sim, a, ahead[i].u, ahead[i].at);
+      });
+      useAhead = true;
+    }
+  }
+  size_t next = 0;  // (the loop's next unit in ahead)
   for (const auto& army : sim.armies()) {
     if (army.get() == us) continue;
     std::vector<Unit*> list = army->units;
     for (Unit* u : list) {
-      if (u->destroyQueued) continue;
-      const BlueprintInfo* ubp = u->blueprint;
-      if (!ubp || ubp->entityIndex < 0 || static_cast<size_t>(ubp->entityIndex) >= visibleToRecon.size() ||
-          !visibleToRecon[static_cast<size_t>(ubp->entityIndex)])
-        continue;
+      if (!looked(u)) continue;
       // ReconCanDetect at IUnit::GetPosition (0x5c10cb -> 0x6a49b0, entity+0xac): the transform committed at the end of
       // the last beat. Recon runs before Entity::AdvanceCoords (step 13), so a unit that has had its turn of this
       // beat's motion is looked at where it stood when the beat began. Seen: MP2 2305, army 0's Cybran build drone
       // 0x2a crosses into army 1's radar between 2304 and 2305; the original's army 1 sees it only at 2309, with the
       // engineer beside it, which then holds the lower blip id (0x30000005) that army 1's orders at 2380 name.
       const Vec3& at = sim.coordsPending && u->lastPosTick == sim.tick() ? u->lastPosition : u->position;
-      uint8_t f = CanDetect(sim, a, u, at);
+      uint8_t f;
+      if (useAhead && st.luaCalls == luaMark && next < ahead.size() && ahead[next].u == u &&
+          vm::SameBits(ahead[next].at, at)) {
+        f = ahead[next++].f;
+        if (parRecon.mode == ParMode::kVerify && f != CanDetect(sim, a, u, at))
+          IntelParMismatch("RECON", sim.tick(), "unit (main loop index)", next - 1);
+      } else {
+        useAhead = false;
+        f = CanDetect(sim, a, u, at);
+      }
       bool inUse = (u->recon[a] & kReconInUse) != 0;
       if (f && !inUse) {
         pending.push_back({u, f, false});

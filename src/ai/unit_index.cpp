@@ -1,4 +1,5 @@
-// FA Remastered's own AI, native core, phase 2: unit ratings and the unit / threat index (see unit_index.h).
+// FA Remastered's own AI, native core, phases 2-3: unit ratings, the battle estimate, the build value and the unit /
+// threat index (see unit_index.h).
 //
 // Part of FA Remastered's engine, MIT licence (see LICENSE). Our own design and code (docs/ai-architecture.md 0).
 #include "ai/unit_index.h"
@@ -10,7 +11,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <memory>
+#include <random>
+#include <utility>
 
 #include "ai/map_analysis.h"
 #include "core/log.h"
@@ -26,6 +30,17 @@ int Relation(const Army* a, const Army* b);
 }  // namespace combat
 
 namespace ai {
+
+float GroupHealthOfTier(const std::string& tier) {
+  return tier == "T1" ? 300.0f : tier == "T2" ? 1000.0f : (tier == "T3" || tier == "T4" || tier == "C") ? 3000.0f : 500.0f;
+}
+
+float HitShare(float h, float damage, float radius, bool grouped) {
+  if (!(damage > 0) || !(h > 0)) return 0;
+  const float share = damage >= h ? h / damage : h / (std::ceil(h / damage) * damage);
+  const float hits = grouped && radius > 0 ? std::min(8.0f, 1 + 3.14159265f * radius * radius * kGroupDensity) : 1.0f;
+  return share * hits;
+}
 
 int BandOf(float range) {
   return range < 30 ? kBandShort : range < 60 ? kBandMedium : range < 150 ? kBandLong : kBandStrategic;
@@ -102,6 +117,8 @@ void RateBlueprint(lua_State* L, int bpIdx, uint32_t catKinds, const std::string
   r->health = RawNum(L, defense, "MaxHealth", 0);
   RawField(L, defense, "Shield");
   r->shield = RawNum(L, lua_gettop(L), "ShieldMaxHealth", 0);
+  // a bubble shield (ShieldSize wider than the unit's own personal shield) does not stop fire from inside it
+  r->shieldRadius = RawBool(L, lua_gettop(L), "PersonalShield") ? 0.0f : RawNum(L, lua_gettop(L), "ShieldSize", 0) / 2;
   RawField(L, bpIdx, "Economy");
   r->mass = RawNum(L, lua_gettop(L), "BuildCostMass", 0);
   r->kinds = catKinds;
@@ -169,15 +186,29 @@ void RateBlueprint(lua_State* L, int bpIdx, uint32_t catKinds, const std::string
       RawField(L, w, "RackBones");
       const int racks = RawLen(L, lua_gettop(L));
       lua_pop(L, 1);
+      // (the shots of one firing: the salvo per muzzle times the racks that fire together, or ProjectilesPerOnFire
+      // where that is larger: FAF writes the same burst in either field, or in both with the same number)
       const float salvo = std::max(1.0f, RawNum(L, w, "MuzzleSalvoSize", 1));
       const float together = RawBool(L, w, "RackFireTogether") ? static_cast<float>(std::max(1, racks)) : 1.0f;
       const float perFire = std::max(1.0f, RawNum(L, w, "ProjectilesPerOnFire", 1));
-      dps = damage * dot * salvo * together * perFire * rof;
+      dps = damage * dot * std::max(salvo * together, perFire) * rof;
     }
     const float range = RawNum(L, w, "MaxRadius", 0);
+    const float radius = RawNum(L, w, "DamageRadius", 0);
+    const bool indirectW = rangeCat == "UWRC_IndirectFire" || category == "Artillery" || category == "Missile";
+    if (indirectW) r->indirectDps += dps;
+    UnitRating::Weapon wl;
+    wl.vs = vs;
+    wl.indirect = indirectW;
+    wl.dps = dps;
+    wl.damage = damage;
+    wl.radius = radius;
+    wl.range = range;
+    r->weapons.push_back(wl);
     for (int t = 0; t < kTargets; ++t)
       if (vs & (1u << t)) {
         r->dps[t] += dps;
+        if (indirectW) r->dpsIndirect[t] += dps;
         r->range[t] = std::max(r->range[t], range);
       }
     if (category == "Anti Air" || rangeCat == "UWRC_AntiAir") r->kinds |= kKindAntiAir;
@@ -209,11 +240,75 @@ int TierOfMass(int move, float mass) {
   }
 }
 
+// The derived numbers and tags of a rated unit (UnitRating's comment): group dps and rating against its own tier,
+// threat, perMass, tags. `ref` is the reference's sqrt(dps x health).
+void Characterise(UnitRating& r, float ref) {
+  const float ehp = r.health + r.shield;
+  const float hg = GroupHealthOfTier(r.tier);
+  for (int t = 0; t < kTargets; ++t) {
+    r.dpsGroup[t] = 0;
+    for (const UnitRating::Weapon& w : r.weapons)
+      if (w.vs & (1u << t)) r.dpsGroup[t] += w.dps * HitShare(hg, w.damage, w.radius, true);
+    r.valueGroup[t] = r.dpsGroup[t] > 0 ? std::sqrt(r.dpsGroup[t] * ehp) / ref : 0;
+  }
+  const int t = r.mainTarget;
+  // the seven scores (decision 12) against the main target type
+  static const float kGroupH[3] = {300, 1000, 3000}, kSingleH[4] = {300, 1000, 3000, 50000};
+  auto score = [&](float h, bool grouped) {
+    float d = 0;
+    for (const UnitRating::Weapon& w : r.weapons)
+      if (w.vs & (1u << t)) d += w.dps * HitShare(h, w.damage, w.radius, grouped);
+    return d > 0 ? std::sqrt(d * ehp) / ref : 0.0f;
+  };
+  float best = 0;
+  for (int i = 0; i < 3; ++i) best = std::max(best, r.groupVs[i] = score(kGroupH[i], true));
+  for (int i = 0; i < 4; ++i) best = std::max(best, r.singleVs[i] = score(kSingleH[i], false));
+  const float own = r.valueGroup[t];  // the group score against its own tier
+  const float hi = best, lo = own;
+  const float mr = r.range[t];
+  const float rangeF = std::clamp(std::pow(std::max(mr, 1.0f) / 18.0f, 0.25f), 0.7f, 1.8f);
+  const float speedF = r.move == kMoveStatic ? 0.8f : std::clamp(std::pow(std::max(r.speed, 0.1f) / 3.4f, 0.15f), 0.8f, 1.25f);
+  // versatility: a quarter of what it can do against air (a surface unit) or against the ground (an aircraft whose
+  // main target is air) (Chris: the Ythotha, a more versatile GC, rates above it)
+  const int other = r.move == kMoveAir ? (t == kVsAir ? kVsGround : kVsAir) : kVsAir;
+  r.threat = hi > 0 ? (0.75f * hi + 0.25f * lo) * rangeF * speedF + (other != t ? 0.25f * r.value[other] : 0.0f) : 0;
+  // (single / group of the old list columns: value[t] and valueGroup[t] stay for the per-target-type tables)
+  const float refMass = 56;  // uel0201's
+  r.perMass = r.mass > 0 && r.threat > 0 ? (r.threat / r.mass) * refMass : 0;
+  r.indirect = r.dps[t] > 0 && r.indirectDps >= 0.5f * r.dps[t];
+  r.rangeClass = r.best <= 0 ? "-" : mr < 30 ? "short" : mr < 60 ? "medium" : mr < 150 ? "long" : "strategic";
+  if (r.best <= 0) r.antiTag = "-";
+  else if (r.dpsGroup[t] >= r.dps[t]) r.antiTag = "anti-group";
+  else if (r.dpsGroup[t] <= 0.5f * r.dps[t]) r.antiTag = "anti-single";
+  else r.antiTag = "all-round";
+  std::string roles;
+  auto add = [&](const char* tag) {
+    if (!roles.empty()) roles += ',';
+    roles += tag;
+  };
+  if (r.best > 0 && t == kVsAir) add("AA");
+  else if (r.best > 0 && t == kVsNaval && r.dps[kVsGround] <= 0) add("torpedo");
+  if (r.indirect) add("artillery");
+  if (r.best > 0 && r.move != kMoveStatic && mr >= 60 && !r.indirect) add("standoff");
+  const float ehpPerMass = r.mass > 0 ? ehp / r.mass : 0;  // uel0201: 300 / 56 = 5.4
+  if (r.move != kMoveStatic && r.mass > 0 && ehpPerMass >= 2 * (300.0f / 56)) add("tank");
+  if (r.move != kMoveStatic && r.best > 0 && r.mass > 0 && !(r.kinds & kKindExperimental) &&
+      ehpPerMass <= 0.5f * (300.0f / 56))
+    add("glass");
+  if ((r.move == kMoveLand || r.move == kMoveHover || r.move == kMoveAmphibious) && r.speed >= 4) add("fast");
+  if (r.kinds & kKindEngineer) add("engineer");
+  if (r.kinds & kKindShield) add("shield");
+  r.roles = roles.empty() ? "-" : roles;
+}
+
 struct RatingsState {
   bool made = false;
   std::vector<UnitRating> byEntity;  // by entity index (invalid for non-units)
   float ref = std::sqrt(kRefDps * kRefHealth);
   bool refFromRules = false;
+  // Chris's "A beats B" (Remastered.AISetBeats): A's dps against B in the battle estimate x the factor; by entity
+  // indices (an ordered map: never walked to decide anything, only looked up)
+  std::map<std::pair<int, int>, float> beats;
 };
 
 RatingsState& Ratings(Sim& sim) {
@@ -257,6 +352,11 @@ RatingsState& Ratings(Sim& sim) {
     for (int i : it->second)
       if (i >= 0 && i < n) notPlayable[i] = 1;
   }
+  std::vector<char> builtBy(n, 0);  // in some BUILTBY... category (a factory, an engineer or a gate builds it)
+  for (const auto& [name, members] : bps.Categories())
+    if (name.rfind("BUILTBY", 0) == 0)
+      for (int i : members)
+        if (i >= 0 && i < n) builtBy[i] = 1;
   std::vector<const char*> faction(n, "");
   const struct {
     const char* cat;
@@ -276,12 +376,15 @@ RatingsState& Ratings(Sim& sim) {
     if (!bp || bp->kind != BpKind::Unit) continue;
     UnitRating& r = st.byEntity[i];
     r.id = bp->id;
+    r.entity = i;
     bps.PushTable(L, *bp);
     int t = tier[i];
     RateBlueprint(L, lua_gettop(L), kinds[i], "", &r);
     lua_settop(L, top);
     r.faction = faction[i];
-    if (notPlayable[i] || !*faction[i]) r.stock = false;  // (the stock list: the four factions' playable units)
+    // (the stock list: the four factions' playable units; one nothing builds, other than a commander, or one with no
+    // mass cost is no unit to tune: Fatboy's external factory uel0401ef, the drone uxl0021)
+    if (notPlayable[i] || !*faction[i] || r.mass <= 0 || (!builtBy[i] && t != 5)) r.stock = false;
     // The tier: the categories', unless they give none or one two tiers off the unit's mass band (mobile units only)
     if (t != 5) {
       const int band = TierOfMass(r.move, r.mass);
@@ -307,10 +410,21 @@ RatingsState& Ratings(Sim& sim) {
     r.best = 0;
     for (int t = 0; t < kTargets; ++t) {
       r.value[t] = r.dps[t] > 0 ? std::sqrt(r.dps[t] * ehp) / st.ref : 0;
-      r.best = std::max(r.best, r.value[t]);
+      if (r.value[t] > r.best) {
+        r.best = r.value[t];
+        r.mainTarget = t;
+      }
     }
+    // The main target is the unit's natural one when it has any dps there: ground for land units and structures,
+    // naval for ships (a land unit's torpedo or a ship's shore guns do not make it a naval or a land unit)
+    if ((r.move == kMoveLand || r.move == kMoveHover || r.move == kMoveAmphibious || r.move == kMoveStatic) &&
+        r.dps[kVsGround] > 0)
+      r.mainTarget = kVsGround;
+    else if (r.move == kMoveNaval && r.dps[kVsNaval] > 0)
+      r.mainTarget = kVsNaval;
+    Characterise(r, st.ref);
     char buf[32];
-    std::snprintf(buf, sizeof buf, "%s%c%s %.1f", r.tier.c_str(), r.domain, r.tierGuessed ? "*" : "", r.best);
+    std::snprintf(buf, sizeof buf, "%s%c%s %.1f", r.tier.c_str(), r.domain, r.tierGuessed ? "*" : "", r.threat);
     r.label = buf;
   }
   return st;
@@ -322,6 +436,7 @@ enum Side : int { kOwn = 0, kAlly = 1, kEnemy = 2, kSides = 3 };
 
 struct Cell {  // per zone, side, movement class
   float count = 0, mass = 0, unknown = 0;
+  float remembered = 0;  // enemy units counted from memory (seen before, not held now; see Memo)
   float str[kTargets] = {};
   float band[kBands] = {};  // best rating by the band of the unit's longest range
   float maxRange = 0;
@@ -330,8 +445,24 @@ struct ZoneSideExtra {
   float engineers = 0, commanders = 0, experimentals = 0, factories = 0, shieldHealth = 0, economyMass = 0;
 };
 
+// What an army remembers of an enemy unit it has seen (phase 3, docs/ai-architecture.md 3.2): where and what it last
+// was. A structure is remembered until the army sees the place again without it; a mobile unit for kMemoryMobile beats,
+// fading out. Only what the army saw goes in, so memory is fair intel.
+constexpr uint32_t kMemoryMobile = 600;
+struct Memo {
+  Vec3 pos;
+  int entity = -1;
+  uint32_t tick = 0;
+  bool structure = false;
+  float hf = 1;
+};
+
 struct ArmyIndex {
   int army0 = -1;
+  bool vision = false;  // the "AI vision" cheat option (Remastered.AISetVision): every enemy unit known, as omni
+  std::mt19937 rng;      // its own random stream (Remastered.AIRandom), seeded on first use
+  bool rngSeeded = false;
+  std::map<uint32_t, Memo> memory;  // by entity id (walked in id order)
   uint32_t builtTick = 0xffffffffu;
   int units[kSides] = {}, unknown = 0, outside = 0;
   std::vector<Cell> cells;          // [zone][side][class]
@@ -367,6 +498,31 @@ void BuildIndex(Sim& sim, ArmyIndex& ix) {
     const UnitRating& r = rs.byEntity[u->blueprint->entityIndex];
     return r.valid ? &r : nullptr;
   };
+  // a known unit's (or a remembered one's, with its weight) ratings into its cell
+  auto addKnown = [&](int side, const Vec3& p, const UnitRating* r, float hf, float weight, bool remembered) {
+    const int z = m.ZoneAt(p.x, p.z, -1);
+    if (!z) {
+      ++ix.outside;
+      return;
+    }
+    if (!remembered) ++ix.units[side];
+    Cell& c = ix.At(z - 1, side, r->move);
+    const float k = hf * r->fix * weight;
+    c.count += weight;
+    if (remembered) c.remembered += weight;
+    c.mass += r->mass * weight;
+    for (int t = 0; t < kTargets; ++t) c.str[t] += r->value[t] * k;
+    c.band[BandOf(r->maxRange)] += r->best * k;
+    c.maxRange = std::max(c.maxRange, r->maxRange);
+    ZoneSideExtra& e = ix.Extra(z - 1, side);
+    if (r->kinds & kKindEngineer) e.engineers += weight;
+    if (r->kinds & kKindCommander) e.commanders += weight;
+    if (r->kinds & kKindExperimental) e.experimentals += weight;
+    if (r->kinds & kKindFactory) e.factories += weight;
+    if (r->kinds & kKindShield) e.shieldHealth += r->shield * weight;
+    if (r->kinds & kKindEconomy) e.economyMass += r->mass * weight;
+  };
+  const uint32_t now = sim.tick();
   auto addUnknown = [&](int side, const Vec3& p, int cls) {
     const int z = m.ZoneAt(p.x, p.z, -1);
     if (!z) {
@@ -385,8 +541,14 @@ void BuildIndex(Sim& sim, ArmyIndex& ix) {
     if (side < 0) continue;
     const UnitRating* r = ratingOf(u);
     if (!r) continue;
+    const float hf = u->maxHealth > 0 ? std::sqrt(std::clamp(u->health / u->maxHealth, 0.0f, 1.0f)) : 1.0f;
     if (side == kEnemy) {
       ++enemiesAll;
+      if (ix.vision) {  // the cheat option: every enemy unit known where it is
+        if (u->fractionComplete < 1) continue;
+        addKnown(kEnemy, u->position, r, hf, 1, false);
+        continue;
+      }
       // a jammer's fake blips: unknown contacts until known as fakes (whatever the real unit's own blip says)
       for (const ReconBlip* f : u->fakeBlips)
         if (f && a < 16 && (f->rflags[a] & kReconInUse) && !(f->rflags[a] & 0x20)) addUnknown(kEnemy, f->position, r->move);
@@ -398,50 +560,39 @@ void BuildIndex(Sim& sim, ArmyIndex& ix) {
         continue;
       }
       if (u->fractionComplete < 1) continue;
-      const int z = m.ZoneAt(p.x, p.z, -1);
-      if (!z) {
-        ++ix.outside;
-        continue;
-      }
-      ++ix.units[kEnemy];
-      Cell& c = ix.At(z - 1, kEnemy, r->move);
-      const float hf = u->maxHealth > 0 ? std::sqrt(std::clamp(u->health / u->maxHealth, 0.0f, 1.0f)) : 1.0f;
-      c.count += 1;
-      c.mass += r->mass;
-      for (int t = 0; t < kTargets; ++t) c.str[t] += r->value[t] * hf;
-      c.band[BandOf(r->maxRange)] += r->best * hf;
-      c.maxRange = std::max(c.maxRange, r->maxRange);
-      ZoneSideExtra& e = ix.Extra(z - 1, kEnemy);
-      if (r->kinds & kKindEngineer) e.engineers += 1;
-      if (r->kinds & kKindCommander) e.commanders += 1;
-      if (r->kinds & kKindExperimental) e.experimentals += 1;
-      if (r->kinds & kKindFactory) e.factories += 1;
-      if (r->kinds & kKindShield) e.shieldHealth += r->shield;
-      if (r->kinds & kKindEconomy) e.economyMass += r->mass;
+      addKnown(kEnemy, p, r, hf, 1, false);
+      // what the army has seen goes into its memory (refreshed while it holds the blip)
+      Memo& mo = ix.memory[u->id];
+      mo.pos = p;
+      mo.entity = r->entity;
+      mo.tick = now;
+      mo.structure = r->move == kMoveStatic;
+      mo.hf = hf;
       continue;
     }
     if (u->fractionComplete < 1) continue;
-    const int z = m.ZoneAt(u->position.x, u->position.z, -1);
-    if (!z) {
-      ++ix.outside;
-      continue;
-    }
-    ++ix.units[side];
-    Cell& c = ix.At(z - 1, side, r->move);
-    const float hf = u->maxHealth > 0 ? std::sqrt(std::clamp(u->health / u->maxHealth, 0.0f, 1.0f)) : 1.0f;
-    c.count += 1;
-    c.mass += r->mass;
-    for (int t = 0; t < kTargets; ++t) c.str[t] += r->value[t] * hf;
-    c.band[BandOf(r->maxRange)] += r->best * hf;
-    c.maxRange = std::max(c.maxRange, r->maxRange);
-    ZoneSideExtra& e = ix.Extra(z - 1, side);
-    if (r->kinds & kKindEngineer) e.engineers += 1;
-    if (r->kinds & kKindCommander) e.commanders += 1;
-    if (r->kinds & kKindExperimental) e.experimentals += 1;
-    if (r->kinds & kKindFactory) e.factories += 1;
-    if (r->kinds & kKindShield) e.shieldHealth += r->shield;
-    if (r->kinds & kKindEconomy) e.economyMass += r->mass;
+    addKnown(side, u->position, r, hf, 1, false);
   }
+  // Remembered enemies the army does not hold now: structures until the army sees their place again (vision there),
+  // mobile units fading out over kMemoryMobile beats. In id order; entries refreshed this build are counted above.
+  if (!ix.vision)
+    for (auto it = ix.memory.begin(); it != ix.memory.end();) {
+      Memo& mo = it->second;
+      if (mo.tick == now) {
+        ++it;
+        continue;
+      }
+      const uint32_t age = now - mo.tick;
+      bool forget = !mo.structure && age >= kMemoryMobile;
+      if (!forget && mo.structure && (ReconAtPoint(sim, a, mo.pos, 0) & 8)) forget = true;  // seen again: not there
+      if (forget || mo.entity < 0 || mo.entity >= static_cast<int>(rs.byEntity.size()) || !rs.byEntity[mo.entity].valid) {
+        it = ix.memory.erase(it);
+        continue;
+      }
+      const float weight = mo.structure ? 1.0f : 1.0f - static_cast<float>(age) / kMemoryMobile;
+      addKnown(kEnemy, mo.pos, &rs.byEntity[mo.entity], mo.hf, weight, true);
+      ++it;
+    }
   ix.builtTick = sim.tick();
   if (logBuilds)  // (MOHO64_AI_INDEXLOG: the log only; enemiesAll and the time are not fair or exact, never given to Lua)
     Logf(LogLevel::Info, "moho64 ai: index army %d tick %u: own %d, allied %d, enemy known %d of %d, unknown contacts %d, "
@@ -501,28 +652,47 @@ void IndexBeat(Sim& sim) {
 
 namespace {
 
+// The two reference enemies of the lists' build-value columns (Chris, decision 11): a group of 3 Galactic Colossi and
+// a spam of 60 UEF T1 tanks (empty when the rules lack them)
+struct BuildRefs {
+  std::vector<ForceStack> gc, t1;
+};
+
 // One list: the header, then a row per unit in `v`'s order.
 bool WriteRatingList(const RatingsState& st, const std::string& path, const std::vector<const UnitRating*>& v,
-                     const char* what) {
+                     const char* what, const BuildRefs& refs) {
   FILE* f = std::fopen(path.c_str(), "w");
   if (!f) return false;
+  static const char* kT = "GANS";
   std::fprintf(f, "# FA Remastered AI: unit ratings from the blueprints (src/ai/unit_index.h): %s, %zu units\n", what,
                v.size());
-  std::fprintf(f, "# rating = sqrt(dps x (health + shield)) / the reference's (uel0201: %.1f%s); label = tier + domain + best rating\n",
-               st.ref, st.refFromRules ? "" : ", not in the rules: built-in 24 dps x 300 hp");
-  std::fprintf(f, "# tier T1 T2 T3, T4 experimental, C commander; domain G ground, A air, N naval, S structure, X experimental\n");
-  std::fprintf(f, "# a '*' after the domain: the tier was guessed from the mass (its categories gave none, or one two tiers off;\n");
-  std::fprintf(f, "#   the last column says what they gave)\n");
-  std::fprintf(f, "# fix = Chris's multiplier (1.0 until corrected)\n");
-  std::fprintf(f, "%-11s %-11s %-8s %-30s %7s %7s %6s | %8s %7s %8s | %5s %5s %5s | %5s | %7s %6s %7s %7s | %4s | %s\n",
-               "label", "id", "faction", "name", "mass", "health", "shield", "dpsG", "dpsA", "dpsN", "rngG", "rngA", "rngN",
-               "speed", "vsG", "vsA", "vsN", "vsS", "fix", "tier note");
-  for (const UnitRating* r : v)
-    std::fprintf(f, "%-11s %-11s %-8s %-30.30s %7.0f %7.0f %6.0f | %8.1f %7.1f %8.1f | %5.0f %5.0f %5.0f | %5.1f | %7.2f %6.2f %7.2f %7.2f | 1.0  | %s\n",
-                 r->label.c_str(), r->id.c_str(), r->faction.empty() ? "-" : r->faction.c_str(), r->name.c_str(), r->mass,
-                 r->health, r->shield, r->dps[kVsGround], r->dps[kVsAir], r->dps[kVsNaval], r->range[kVsGround],
-                 r->range[kVsAir], r->range[kVsNaval], r->speed, r->value[kVsGround], r->value[kVsAir],
-                 r->value[kVsNaval], r->value[kVsStructure], r->tierGuessed ? r->tierNote.c_str() : "");
+  std::fprintf(f, "# THREAT (the label's number; never cost): 0.75 x the best of the seven + 0.25 x its own tier's group score, x range and speed\n");
+  std::fprintf(f, "#   factors, + a quarter of its rating against air (versatility); the T1 tank uel0201 = 1.0 (sqrt(dps x health) %.1f%s)\n",
+               st.ref, st.refFromRules ? "" : ", built-in: not in the rules");
+  std::fprintf(f, "# the seven scores (decision 12), sqrt(dps there x (health + shield)) / the T1 tank's, for the main target (tgt: G ground,\n");
+  std::fprintf(f, "#   A air, N naval, S structure): gT1 gT2 gT3 against an army of T1 / T2 / T3 units (300 / 1000 / 3000 health;\n");
+  std::fprintf(f, "#   overkill, whole shots and splash per shot), sT1 sT2 sT3 sX against one unit (300 / 1000 / 3000 / 50000 health)\n");
+  std::fprintf(f, "# BUILD side (what a unit gives for its cost; not threat): perMass = threat per mass, the T1 tank's = 1.0;\n");
+  std::fprintf(f, "#   bv GC / bv T1 = build value: enemy mass killed per own mass lost when as much of the unit as the enemy weighs\n");
+  std::fprintf(f, "#   fights 3 Galactic Colossi / 60 UEF T1 tanks (battle estimate from the longer range; 20 = a clean win)\n");
+  std::fprintf(f, "# label = tier + domain + threat: T1 T2 T3, T4 experimental, C commander; G ground, A air, N naval, S structure,\n");
+  std::fprintf(f, "#   X experimental; a '*': the tier was guessed from the mass (the last column says why)\n");
+  std::fprintf(f, "# range class short < 30, medium < 60, long < 150, strategic; fix = Chris's multiplier (1.0 until corrected)\n");
+  std::fprintf(f, "%-11s %-11s %-8s %-26s %6s %6s %5s | %3s %7s %5s %5s | %5s %5s %5s %5s %5s %5s %5s | %7s | %6s %6s %6s | %-11s %-9s %-22s | %4s | %s\n",
+               "label", "id", "faction", "name", "mass", "health", "shld", "tgt", "dps", "range", "speed", "gT1", "gT2",
+               "gT3", "sT1", "sT2", "sT3", "sX", "THREAT", "perMas", "bv GC", "bv T1", "anti", "range", "roles", "fix",
+               "tier note");
+  for (const UnitRating* r : v) {
+    const int t = r->mainTarget;
+    const float bvGc = refs.gc.empty() ? -1 : BuildValue(*r, refs.gc, st.beats, nullptr, nullptr);
+    const float bvT1 = refs.t1.empty() ? -1 : BuildValue(*r, refs.t1, st.beats, nullptr, nullptr);
+    std::fprintf(f, "%-11s %-11s %-8s %-26.26s %6.0f %6.0f %5.0f | %3c %7.1f %5.0f %5.1f | %5.1f %5.1f %5.1f %5.1f %5.1f %5.1f %5.1f | %7.2f | %6.2f %6.2f %6.2f | %-11s %-9s %-22.22s | %4.2f | %s\n",
+                 r->label.c_str(), r->id.c_str(), r->faction.empty() ? "-" : r->faction.c_str(), r->name.c_str(),
+                 r->mass, r->health, r->shield, kT[t], r->dps[t], r->range[t], r->speed, r->groupVs[0], r->groupVs[1],
+                 r->groupVs[2], r->singleVs[0], r->singleVs[1], r->singleVs[2], r->singleVs[3], r->threat, r->perMass,
+                 bvGc, bvT1, r->antiTag.c_str(), r->rangeClass.c_str(), r->roles.c_str(), r->fix,
+                 r->tierGuessed ? r->tierNote.c_str() : "");
+  }
   return std::fclose(f) == 0;
 }
 
@@ -547,14 +717,14 @@ bool WriteRatings(Sim& sim, const std::string& path) {
   std::stable_sort(all.begin(), all.end(), [](const UnitRating* p, const UnitRating* q) {
     if (DomainOrder(p->domain) != DomainOrder(q->domain)) return DomainOrder(p->domain) < DomainOrder(q->domain);
     if (TierOrder(p->tier) != TierOrder(q->tier)) return TierOrder(p->tier) < TierOrder(q->tier);
-    if (p->best != q->best) return p->best > q->best;
+    if (p->threat != q->threat) return p->threat > q->threat;
     return p->id < q->id;
   });
   std::stable_sort(stock.begin(), stock.end(), [](const UnitRating* p, const UnitRating* q) {
     if (FactionOrder(p->faction) != FactionOrder(q->faction)) return FactionOrder(p->faction) < FactionOrder(q->faction);
     if (TierOrder(p->tier) != TierOrder(q->tier)) return TierOrder(p->tier) < TierOrder(q->tier);
     if (DomainOrder(p->domain) != DomainOrder(q->domain)) return DomainOrder(p->domain) < DomainOrder(q->domain);
-    if (p->best != q->best) return p->best > q->best;
+    if (p->threat != q->threat) return p->threat > q->threat;
     return p->id < q->id;
   });
   const size_t dot = path.find_last_of('.');
@@ -562,8 +732,195 @@ bool WriteRatings(Sim& sim, const std::string& path) {
   const std::string stockPath = dot != std::string::npos && (slash == std::string::npos || dot > slash)
                                     ? path.substr(0, dot) + "_stock" + path.substr(dot)
                                     : path + "_stock";
-  return WriteRatingList(st, path, all, "every unit, mods included") &&
-         WriteRatingList(st, stockPath, stock, "the game's own units (the four factions; no mod), by faction");
+  BuildRefs refs;
+  for (const UnitRating& r : st.byEntity) {
+    if (r.valid && r.id == "ual0401") refs.gc.push_back({&r, 3});
+    if (r.valid && r.id == "uel0201") refs.t1.push_back({&r, 60});
+  }
+  return WriteRatingList(st, path, all, "every unit, mods included", refs) &&
+         WriteRatingList(st, stockPath, stock, "the game's own units (the four factions; no mod), by faction", refs);
+}
+
+// ---- the battle estimate ----
+
+namespace {
+int TargetTypeOf(const UnitRating& r) {
+  return r.move == kMoveAir ? kVsAir : r.move == kMoveNaval ? kVsNaval : r.move == kMoveStatic ? kVsStructure : kVsGround;
+}
+}  // namespace
+
+BattleResult EstimateBattle(const std::vector<ForceStack>& ours, const std::vector<ForceStack>& theirs,
+                            float startDistance, const std::map<std::pair<int, int>, float>& beats) {
+  struct Stack {
+    const UnitRating* r;
+    float hpEach, shEach, hp, sh;  // per unit and pooled; the shield takes hits first (from outside its bubble)
+    int tt;                        // its target type
+    bool mobile;
+  };
+  std::vector<Stack> side[2];
+  float pool0[2] = {0, 0};
+  for (int k = 0; k < 2; ++k)
+    for (const ForceStack& f : k == 0 ? ours : theirs) {
+      if (!f.r || !(f.count > 0)) continue;
+      const float hpEach = std::max(1.0f, f.r->health), shEach = std::max(0.0f, f.r->shield);
+      side[k].push_back({f.r, hpEach, shEach, hpEach * f.count, shEach * f.count, TargetTypeOf(*f.r),
+                         f.r->move != kMoveStatic});
+      pool0[k] += (hpEach + shEach) * f.count;
+    }
+  BattleResult res;
+  if (pool0[0] <= 0 || pool0[1] <= 0) {
+    res.ours = pool0[0] > 0 ? 1 : 0;
+    res.theirs = pool0[1] > 0 ? 1 : 0;
+    res.margin = 0.5f + (res.ours - res.theirs) / 2;
+    return res;
+  }
+  auto alive = [](const Stack& s) { return s.hp > 0; };
+  // a side's reach: its longest weapon range against any target type the other side still has
+  auto reach = [&](int k) {
+    float rr = 0;
+    for (const Stack& s : side[k]) {
+      if (!alive(s)) continue;
+      for (const UnitRating::Weapon& w : s.r->weapons)
+        for (const Stack& e : side[1 - k])
+          if (alive(e) && (w.vs & (1u << e.tt))) rr = std::max(rr, w.range);
+    }
+    return rr;
+  };
+  // a side's engage distance: the range within which three quarters of its dps against what the other side still has
+  // fires (its weapons by range, longest first, until 75% of the dps is in): it closes in until then. A Fatboy's
+  // turrets carry 75% at 100; a Loyalist needs its 20-range cannon, not only its 24-range bolter.
+  auto engage = [&](int k) {
+    std::vector<std::pair<float, float>> wr;  // (range, dps)
+    float total = 0;
+    for (const Stack& s : side[k])
+      if (alive(s))
+        for (const UnitRating::Weapon& w : s.r->weapons)
+          for (const Stack& e : side[1 - k])
+            if (alive(e) && (w.vs & (1u << e.tt))) {
+              wr.push_back({w.range, w.dps * (s.hp / s.hpEach)});
+              total += wr.back().second;
+              break;
+            }
+    std::stable_sort(wr.begin(), wr.end(), [](const auto& x, const auto& y) { return x.first > y.first; });
+    float sum = 0;
+    for (const auto& [range, dps] : wr) {
+      sum += dps;
+      if (sum >= 0.75f * total) return range;
+    }
+    return 0.0f;
+  };
+  auto speedOf = [&](int k) {  // the slowest mobile unit alive; 0: none can move
+    float v = 0;
+    bool any = false;
+    for (const Stack& s : side[k])
+      if (alive(s) && s.mobile && s.r->speed > 0) {
+        v = any ? std::min(v, s.r->speed) : s.r->speed;
+        any = true;
+      }
+    return v;
+  };
+  // One weapon's dps on one enemy unit kind: HitShare on its real health and shield (grouped below 3,000), indirect
+  // fire at half against a mobile target (shells in flight miss what moves: kIndirectVsMobile), x Chris's fix^2 and
+  // his "A beats B" factor
+  constexpr float kIndirectVsMobile = 0.5f;
+  auto dpsOn = [&](const Stack& s, const UnitRating::Weapon& w, const Stack& e) {
+    const float h = e.hpEach + e.shEach;
+    float dps = w.dps * HitShare(h, w.damage, w.radius, h < 3000);
+    if (w.indirect && e.mobile) dps *= kIndirectVsMobile;
+    dps *= s.r->fix * s.r->fix;
+    if (!beats.empty()) {
+      auto it = beats.find({s.r->entity, e.r->entity});
+      if (it != beats.end()) dps *= it->second;
+    }
+    return dps;
+  };
+  float d = startDistance >= 0 ? startDistance : std::max(reach(0), reach(1));
+  const float dt = 0.5f;
+  float t = 0;
+  std::vector<float> dmg[2];
+  for (; t < 180; t += dt) {
+    bool anyAlive[2] = {false, false};
+    for (int k = 0; k < 2; ++k)
+      for (const Stack& s : side[k]) anyAlive[k] = anyAlive[k] || alive(s);
+    if (!anyAlive[0] || !anyAlive[1]) break;
+    for (int k = 0; k < 2; ++k) dmg[k].assign(side[k].size(), 0.0f);
+    bool fired = false;
+    for (int k = 0; k < 2; ++k)
+      for (const Stack& s : side[k]) {
+        if (!alive(s)) continue;
+        const float n = s.hp / s.hpEach;  // units left (continuous)
+        for (const UnitRating::Weapon& w : s.r->weapons) {
+          if (d > w.range) continue;
+          float hittable = 0, room = 0;
+          for (const Stack& e : side[1 - k])
+            if (alive(e) && (w.vs & (1u << e.tt))) {
+              hittable += e.hp + e.sh;
+              // the front: around each target only so many shooters fit within this weapon's range (its ring's area
+              // at the group density); a swarm of short-range units cannot all fire at a few big targets at once
+              room += (e.hp / e.hpEach) * 3.14159265f * (w.range + 2) * (w.range + 2) * kGroupDensity;
+            }
+          if (hittable <= 0) continue;
+          fired = true;
+          const float firing = std::min(n, room);
+          for (size_t j = 0; j < side[1 - k].size(); ++j) {
+            const Stack& e = side[1 - k][j];
+            if (!alive(e) || !(w.vs & (1u << e.tt))) continue;
+            dmg[1 - k][j] += firing * dpsOn(s, w, e) * dt * ((e.hp + e.sh) / hittable);
+          }
+        }
+      }
+    for (int k = 0; k < 2; ++k)
+      for (size_t j = 0; j < side[k].size(); ++j) {
+        Stack& e = side[k][j];
+        float x = dmg[k][j];
+        if (e.sh > 0 && d >= e.r->shieldRadius) {  // (inside a bubble shield the fire reaches the unit itself)
+          const float took = std::min(e.sh, x);
+          e.sh -= took;
+          x -= took;
+        }
+        e.hp -= x;
+      }
+    // a side whose main weapons cannot all fire yet closes in, at its slowest unit's speed, unless its main weapons
+    // already outrange everything the other side has: then it holds and lets the other come (a Fatboy waits for the
+    // Percivals; a Loyalist walks in to its cannon's range even though its bolter outranges a T2 tank)
+    bool moved = false;
+    const float ea = engage(0), eb = engage(1), ra = reach(0), rb = reach(1);
+    for (int k = 0; k < 2; ++k)
+      if (d > (k == 0 ? ea : eb) && !((k == 0 ? ea : eb) >= (k == 0 ? rb : ra))) {
+        const float v = speedOf(k);
+        if (v > 0) {
+          d = std::max(0.0f, d - v * dt);
+          moved = true;
+        }
+      }
+    if (!fired && !moved) break;  // nobody can fire and nobody can close: a standoff without a fight
+  }
+  float left[2] = {0, 0};
+  for (int k = 0; k < 2; ++k)
+    for (const Stack& s : side[k])
+      if (alive(s)) left[k] += s.hp + std::max(0.0f, s.sh);
+  res.ours = left[0] / pool0[0];
+  res.theirs = left[1] / pool0[1];
+  res.margin = 0.5f + (res.ours - res.theirs) / 2;
+  res.seconds = t;
+  return res;
+}
+
+float BuildValue(const UnitRating& r, const std::vector<ForceStack>& enemy,
+                 const std::map<std::pair<int, int>, float>& beats, float* killed, float* lost) {
+  float enemyMass = 0;
+  for (const ForceStack& f : enemy)
+    if (f.r) enemyMass += f.r->mass * f.count;
+  if (!(r.mass > 0) || !(enemyMass > 0)) {
+    if (killed) *killed = 0;
+    if (lost) *lost = 0;
+    return 0;
+  }
+  const BattleResult b = EstimateBattle({{&r, enemyMass / r.mass}}, enemy, -1.0f, beats);
+  const float k = 1 - b.theirs, l = 1 - b.ours;  // shares lost (health stands in for mass)
+  if (killed) *killed = k;
+  if (lost) *lost = l;
+  return (k * enemyMass) / (std::max(l, 0.05f) * enemyMass);
 }
 
 // ---- Remastered.AI* ----
@@ -603,14 +960,41 @@ void PushRating(lua_State* L, const UnitRating& r) {
   SetNum(L, "health", r.health);
   SetNum(L, "shield", r.shield);
   SetNum(L, "speed", r.speed);
-  SetNum(L, "best", r.best);
+  SetNum(L, "best", r.best * r.fix);
   SetNum(L, "maxRange", r.maxRange);
   SetNum(L, "kinds", r.kinds);
-  for (const char* what : {"dps", "range", "rating"}) {
+  for (const char* what : {"dps", "dpsGroup", "range", "rating", "ratingGroup"}) {  // (group: against its own tier)
     lua_pushstring(L, what);
     lua_newtable(L);
-    const float* src = !std::strcmp(what, "dps") ? r.dps : !std::strcmp(what, "range") ? r.range : r.value;
-    for (int t = 0; t < kTargets; ++t) SetNum(L, kTargetNames[t], src[t]);
+    const float* src = !std::strcmp(what, "dps")        ? r.dps
+                       : !std::strcmp(what, "dpsGroup") ? r.dpsGroup
+                       : !std::strcmp(what, "range")    ? r.range
+                       : !std::strcmp(what, "rating")   ? r.value
+                                                        : r.valueGroup;
+    const float k = (src == r.value || src == r.valueGroup) ? r.fix : 1.0f;  // (Chris's correction on the ratings)
+    for (int t = 0; t < kTargets; ++t) SetNum(L, kTargetNames[t], src[t] * k);
+    if (src == r.value) {  // rating.group = {t1, t2, t3}, rating.single = {t1, t2, t3, x} (decision 12; main target)
+      for (int g = 0; g < 2; ++g) {
+        lua_pushstring(L, g == 0 ? "group" : "single");
+        lua_newtable(L);
+        const int n = g == 0 ? 3 : 4;
+        for (int i = 0; i < n; ++i) {
+          lua_pushnumber(L, (g == 0 ? r.groupVs[i] : r.singleVs[i]) * r.fix);
+          lua_rawseti(L, -2, i + 1);
+        }
+        lua_rawset(L, -3);
+      }
+    }
+    lua_rawset(L, -3);
+  }
+  SetNum(L, "threat", r.threat * r.fix);
+  SetNum(L, "perMass", r.perMass * r.fix);
+  SetNum(L, "fix", r.fix);
+  for (const auto& kv : {std::make_pair("mainTarget", std::string(kTargetNames[r.mainTarget])),
+                         std::make_pair("anti", r.antiTag), std::make_pair("rangeClass", r.rangeClass),
+                         std::make_pair("roles", r.roles)}) {
+    lua_pushstring(L, kv.first);
+    lua_pushstring(L, kv.second.c_str());
     lua_rawset(L, -3);
   }
 }
@@ -670,6 +1054,7 @@ int l_AIZoneForces(lua_State* L) {
         sum.count += c.count;
         sum.mass += c.mass;
         sum.unknown += c.unknown;
+        sum.remembered += c.remembered;
         sum.maxRange = std::max(sum.maxRange, c.maxRange);
         for (int t = 0; t < kTargets; ++t) sum.str[t] += c.str[t];
       }
@@ -678,6 +1063,7 @@ int l_AIZoneForces(lua_State* L) {
       SetNum(L, "count", sum.count);
       SetNum(L, "mass", sum.mass);
       SetNum(L, "unknown", sum.unknown);
+      SetNum(L, "remembered", sum.remembered);
       SetNum(L, "maxRange", sum.maxRange);
       for (int t = 0; t < kTargets; ++t) SetNum(L, kTargetNames[t], sum.str[t]);
       lua_rawset(L, -3);
@@ -773,6 +1159,124 @@ int l_AISquareLaw(lua_State* L) {
   return 2;
 }
 
+// A force argument: an array of {blueprintId, count} (an array, so its order is fixed)
+std::vector<ForceStack> CheckForce(lua_State* L, int i) {
+  luaL_checktype(L, i, LUA_TTABLE);
+  Sim& sim = *Sim::From(L);
+  std::vector<ForceStack> out;
+  for (int k = 1;; ++k) {
+    lua_rawgeti(L, i, k);
+    if (lua_isnil(L, -1)) {
+      lua_pop(L, 1);
+      break;
+    }
+    if (!lua_istable(L, -1)) luaL_argerror(L, i, "a force is an array of {blueprintId, count}");
+    lua_rawgeti(L, -1, 1);
+    lua_rawgeti(L, -2, 2);
+    const char* id = lua_tostring(L, -2);
+    const float count = static_cast<float>(lua_tonumber(L, -1));
+    const BlueprintInfo* bp = id ? sim.blueprints().Find(id) : nullptr;
+    const UnitRating* r = bp && bp->kind == BpKind::Unit ? RatingOf(sim, bp->entityIndex) : nullptr;
+    if (!r) luaL_argerror(L, i, "not a unit blueprint id");
+    out.push_back({r, count});
+    lua_pop(L, 3);
+  }
+  return out;
+}
+
+// Remastered.AIBuildValue(blueprintId, enemy) -> value, killed, lost: the counter-pick (BuildValue): enemy mass killed
+// per own mass lost when as much of this unit as the enemy force weighs fights it; enemy = an array of {id, count}
+int l_AIBuildValue(lua_State* L) {
+  Sim& sim = *Sim::From(L);
+  const BlueprintInfo* bp = sim.blueprints().Find(luaL_checkstring(L, 1));
+  const UnitRating* r = bp && bp->kind == BpKind::Unit ? RatingOf(sim, bp->entityIndex) : nullptr;
+  if (!r) luaL_argerror(L, 1, "not a unit blueprint id");
+  const std::vector<ForceStack> enemy = CheckForce(L, 2);
+  float killed = 0, lost = 0;
+  const float v = BuildValue(*r, enemy, Ratings(sim).beats, &killed, &lost);
+  lua_pushnumber(L, v);
+  lua_pushnumber(L, killed);
+  lua_pushnumber(L, lost);
+  return 3;
+}
+
+// Remastered.AIRandom(army [, n]) -> the army's own random stream (phase 3): a float in [0, 1), or with n an integer
+// 1..n. One MT19937 per army that plays our AI, seeded from the session seed and the army index, never the sim's own
+// stream (which the game's scripts and the original's replays draw from): the same draws on every machine.
+int l_AIRandom(lua_State* L) {
+  Sim& sim = *Sim::From(L);
+  const int army = static_cast<int>(luaL_checknumber(L, 1));
+  IndexState* st = IndexOf(sim);
+  ArmyIndex* ix = nullptr;
+  if (st)
+    for (ArmyIndex& x : st->armies)
+      if (x.army0 == army - 1) ix = &x;
+  if (!ix) luaL_argerror(L, 1, "not an army that plays our AI");
+  if (!ix->rngSeeded) {
+    ix->rng.seed(sim.sessionSeed() ^ (0x9E3779B9u * static_cast<uint32_t>(army)));
+    ix->rngSeeded = true;
+  }
+  const uint32_t u = ix->rng();
+  if (lua_isnoneornil(L, 2)) {
+    lua_pushnumber(L, static_cast<lua_Number>(static_cast<double>(u >> 8) * (1.0 / 16777216.0)));  // 24 bits: a float in [0, 1)
+  } else {
+    const uint32_t n = static_cast<uint32_t>(std::max(1.0f, static_cast<float>(luaL_checknumber(L, 2))));
+    lua_pushnumber(L, static_cast<lua_Number>(1 + static_cast<uint32_t>((static_cast<uint64_t>(u) * n) >> 32)));
+  }
+  return 1;
+}
+
+// Remastered.AISetRatingFix(blueprintId, multiplier): Chris's correction of a unit's rating (sets, does not multiply:
+// calling it twice with the same number changes nothing)
+int l_AISetRatingFix(lua_State* L) {
+  Sim& sim = *Sim::From(L);
+  const BlueprintInfo* bp = sim.blueprints().Find(luaL_checkstring(L, 1));
+  const float m = static_cast<float>(luaL_checknumber(L, 2));
+  RatingsState& rs = Ratings(sim);
+  if (!bp || bp->kind != BpKind::Unit || bp->entityIndex < 0 || bp->entityIndex >= static_cast<int>(rs.byEntity.size()) ||
+      !rs.byEntity[bp->entityIndex].valid)
+    luaL_argerror(L, 1, "not a unit blueprint id");
+  if (!(m > 0)) luaL_argerror(L, 2, "a multiplier above 0");
+  rs.byEntity[bp->entityIndex].fix = m;
+  return 0;
+}
+
+// Remastered.AISetBeats(idA, idB, factor): Chris's "A beats B": A's dps against B in the battle estimate x factor
+int l_AISetBeats(lua_State* L) {
+  Sim& sim = *Sim::From(L);
+  const BlueprintInfo* a = sim.blueprints().Find(luaL_checkstring(L, 1));
+  const BlueprintInfo* b = sim.blueprints().Find(luaL_checkstring(L, 2));
+  const float f = static_cast<float>(luaL_checknumber(L, 3));
+  if (!a || a->kind != BpKind::Unit) luaL_argerror(L, 1, "not a unit blueprint id");
+  if (!b || b->kind != BpKind::Unit) luaL_argerror(L, 2, "not a unit blueprint id");
+  if (!(f > 0)) luaL_argerror(L, 3, "a factor above 0");
+  Ratings(sim).beats[{a->entityIndex, b->entityIndex}] = f;
+  return 0;
+}
+
+// Remastered.AISetVision(army, on): the "AI vision" cheat option for an army that plays our AI (its index then knows
+// every enemy unit where it is). Its brain sets it from the lobby option, the same on every machine.
+int l_AISetVision(lua_State* L) {
+  ArmyIndex& ix = CheckArmyIndex(L, 1);
+  ix.vision = lua_toboolean(L, 2) != 0;
+  ix.builtTick = 0xffffffffu;  // (built again at the next query)
+  return 0;
+}
+
+// Remastered.AIBattleEstimate(ours, theirs [, startDistance]) -> margin, oursLeft, theirsLeft, seconds: the battle
+// estimate (unit_index.h EstimateBattle); ours / theirs = arrays of {blueprintId, count}; startDistance < 0 or none:
+// the longer side's range
+int l_AIBattleEstimate(lua_State* L) {
+  const std::vector<ForceStack> a = CheckForce(L, 1), b = CheckForce(L, 2);
+  const float d = lua_isnoneornil(L, 3) ? -1.0f : static_cast<float>(luaL_checknumber(L, 3));
+  const BattleResult r = EstimateBattle(a, b, d, Ratings(*Sim::From(L)).beats);
+  lua_pushnumber(L, r.margin);
+  lua_pushnumber(L, r.ours);
+  lua_pushnumber(L, r.theirs);
+  lua_pushnumber(L, r.seconds);
+  return 4;
+}
+
 }  // namespace
 
 void RegisterIndexBindings(lua_State* L) {
@@ -789,7 +1293,13 @@ void RegisterIndexBindings(lua_State* L) {
               {"AIZoneForces", l_AIZoneForces},
               {"AIZoneThreat", l_AIZoneThreat},
               {"AIIndexInfo", l_AIIndexInfo},
-              {"AISquareLaw", l_AISquareLaw}};
+              {"AISquareLaw", l_AISquareLaw},
+              {"AIBattleEstimate", l_AIBattleEstimate},
+              {"AIRandom", l_AIRandom},
+              {"AIBuildValue", l_AIBuildValue},
+              {"AISetRatingFix", l_AISetRatingFix},
+              {"AISetBeats", l_AISetBeats},
+              {"AISetVision", l_AISetVision}};
   for (const auto& fn : kFns) {
     lua_pushstring(L, fn.name);
     lua_pushcfunction(L, fn.f);

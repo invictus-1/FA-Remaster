@@ -32,13 +32,9 @@ inline int ObjectCount(lua_State* L, int t) {
     return n;
   }
   lua_pop(L, 1);
-  lua_Number best = 0;
-  lua_pushnil(L);
-  while (lua_next(L, t)) {
-    if (lua_type(L, -2) == LUA_TNUMBER && lua_tonumber(L, -2) > best) best = lua_tonumber(L, -2);
-    lua_pop(L, 1);
-  }
-  return static_cast<int>(best);
+  // The largest numeric key holding a value, as a walk with lua_next (pushing each key and value) finds it, read from
+  // the table's parts in place (lua_gpg_maxnumkey: the walk's note included; speed only, bind 2026-10-28).
+  return static_cast<int>(lua_gpg_maxnumkey(L, t));
 }
 
 }  // namespace moho

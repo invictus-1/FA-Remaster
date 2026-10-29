@@ -395,24 +395,30 @@ std::vector<Unit*> LoadedUnits(Sim& sim, const Unit* tu) {
   return out;
 }
 
+bool BoneLocalExe(const Unit* u, int bone, Vec3* Cp, Quat* Cq);  // (below: Unit::GetBoneLocalTransform 0x6aa440)
 // Pickup position of a cargo unit (cell of its footprint): GetPickupUnitPos 0x5e66b0
 bool GetPickupUnitPos(const TransportObj& T, const Unit* cu, int* cx, int* cz) {
   const TransportReservation* r = GetReservedBone(T, cu);
   if (!r) return false;
   Vec3 p = T.pickupPos;
   if (T.attachPointCount != 1) {
+    // 0x5e674b..0x5e67c8: the bone's local transform from vt+0x4c (Unit::GetBoneLocalTransform 0x6aa440: as this
+    // beat's POSE has it, not the skeleton's rest place), turned by the pickup orientation (+0xc0, the look rotation
+    // 0x50b480 of the pickup facing that AddPickupUnits 0x5e6446 stored) through MultQuadVec 0x452d40, times 2
+    // ([0xdfeb0c]) onto the pickup point. Seen: MP1 13184, army 0's 0x3b called to its landed transport: the
+    // original's walk goes to (865,191) (its target (866,191) is no goal cell, so drive-through 1 at 13186, and it
+    // turns for (865,191) at 13226); ours took the rest place of the bone and walked to (866,191).
     Vec3 lp;
     Quat lr;
-    BoneLocal(T.owner, r->transportBone, &lp, &lr);
-    Vec3 off = Rotate(YawQuat(T.pickupFacing.x, T.pickupFacing.z), lp);
-    p = {p.x + 2.0f * off.x, p.y, p.z + 2.0f * off.z};
+    if (!BoneLocalExe(T.owner, r->transportBone, &lp, &lr)) BoneLocal(T.owner, r->transportBone, &lp, &lr);
+    const Vec3 off = RotateM(LookQuat(T.pickupFacing.x, T.pickupFacing.y, T.pickupFacing.z), lp);
+    p = {p.x + off.x * 2.0f, p.y, p.z + off.z * 2.0f};
   }
   const NamedFootprint& fp = Fp(cu);
   *cx = static_cast<int>(std::nearbyint(p.x - fp.sizeX * 0.5f));
   *cz = static_cast<int>(std::nearbyint(p.z - fp.sizeZ * 0.5f));
   return true;
 }
-bool BoneLocalExe(const Unit* u, int bone, Vec3* Cp, Quat* Cq);  // (below: Unit::GetBoneLocalTransform 0x6aa440)
 Vec3 GetAttachBonePosition(const TransportObj& T, const Unit* cu) {
   const TransportReservation* r = GetReservedBone(T, cu);
   if (!r) return {};
@@ -2144,6 +2150,11 @@ int TickRefuel(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
           SetState(u, "Moving", true);
           AirSpeedThroughEvent(sim, u);
           t.state = 4;
+          // (0x621e44..0x621e67: NewMoveTask 0x6190a0 pushes the take-off walk on the thread; the task's answer 10 is
+          // then the wait of no one: when the walk ends the thread runs this task again at once. Seen: MP1 13209-13210,
+          // army 0's ASF 0x10e (uaa0303) leaves an air staging platform; its take-off ends at 13210 and the original's
+          // Dock ends there, Refueling off; ours waited out the 9 beats.)
+          return kTaskRunning;
         }
         t.waitUntil = sim.tick() + 9;
         return kTaskRunning;

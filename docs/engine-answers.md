@@ -3,6 +3,15 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui request 50: zlib's deflate half (2026-10-29)
+
+Done with Chris's OK for the download (2026-10-29 07:44). zlib 1.3.1 from its official release
+(github.com/madler/zlib, zlib-1.3.1.tar.gz, SHA-256 9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23,
+the hash zlib publishes). The 15 files we already had are byte-identical to that release, so the four new ones come
+from the same one: `third_party/zlib/deflate.c`, `deflate.h`, `trees.c`, `trees.h`, unchanged. build_zig.py and
+CMakeLists.txt (library `zlibinflate`, name kept) compile them; README's third-party line says inflate and deflate.
+They land with the batch after batch 33 (that one was already gating). Deflate can go on in the UDP connector.
+
 ## ui (by message): Chris's "Move M28's work into load": run the first beats inside the loading screen (a host request)
 
 Helper m28n measured and read it. The freeze of the first seconds is FAF's nav mesh at tick 10 (asked by M28's

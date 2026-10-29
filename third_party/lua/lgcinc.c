@@ -877,6 +877,13 @@ void luaC_incfull (lua_State *L) {
 
 void luaC_incdue (lua_State *L) { INC(L)->finishnow = 1; }
 
+/* moho64: whether `objects' more new objects leave luaC_newmark's emergency off (it sets the threshold to 0 at the
+** object that reaches the ceiling, or, while loading, twice the estimate): lapi.c lua_gpg_nocollect */
+int luaC_incroom (lua_State *L, lu_mem objects) {
+  GCInc *inc = INC(L);
+  return inc->nobjects + objects < inc->ceiling && !(inc->loading && inc->nobjects + objects >= 2 * inc->estimate);
+}
+
 /* luaC_checkGC fired in an incremental state: the emergency (the object ceiling, luaC_newmark) */
 void luaC_incemergency (lua_State *L) {
   global_State *g = G(L);

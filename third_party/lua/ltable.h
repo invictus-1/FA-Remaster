@@ -21,6 +21,8 @@ const TObject *luaH_getstr (Table *t, TString *key);
 const TObject *luaH_get (Table *t, const TObject *key);
 TObject *luaH_set (lua_State *L, Table *t, const TObject *key);
 Table *luaH_new (lua_State *L, int narray, int lnhash);
+/* moho64: a new table gets at once the array part that storing t[1] .. t[n] in that order would grow (ltable.c) */
+void luaH_gpg_arrayfor (lua_State *L, Table *t, int n);
 void luaH_free (lua_State *L, Table *t);
 int luaH_next (lua_State *L, Table *t, StkId key);
 /* moho64: luaH_next that answers -1 for a key it would raise on (the generic for's own step, lvm.c) */

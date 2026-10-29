@@ -54,7 +54,7 @@ def main():
         std_c + mi_inc + (["-DMI_SECURE=4", "-DMI_STAT=0", "-DMI_DEBUG=3"] if a.mi_debug else ["-DMI_SECURE=0", "-DMI_STAT=0", "-DMI_DEBUG=0", "-DNDEBUG"]), False)
     for f in sorted(glob.glob(os.path.join(ROOT, "third_party", "lua", "*.c"))):
         add(f, std_c + lua_inc + mi_inc + ["-DMOHO64_MIMALLOC=1"] + (["-Dapi_check(L,o)=do{if(!(o))__builtin_trap();}while(0)"] if a.lua_api_check else []), False)
-    for n in ("adler32", "crc32", "inffast", "inflate", "inftrees", "zutil"):
+    for n in ("adler32", "crc32", "deflate", "inffast", "inflate", "inftrees", "trees", "zutil"):
         add(os.path.join(ROOT, "third_party", "zlib", n + ".c"), std_c + zlib_inc, False)
     cxxflags = ["-std=c++20", "-I", os.path.join(ROOT, "src")] + lua_inc + zlib_inc
     for d in ("core", "script", "sim", "ai"):

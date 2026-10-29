@@ -110,6 +110,22 @@ Runs every second per brain, staggered so that brains do not all think on the sa
 
 ### 2.4 Economy and building
 
+**Built in phase 3** (`data/ai/lua/remastered/ai/brain.lua`): a first economy, enough to grow a base and an army.
+- The think thread wakes every second, offset by army index.
+- **Builders** (the commander and the engineers), when idle:
+  1. the first factory (the commander);
+  2. power when energy runs short;
+  3. another land factory while mass piles up (one per ~8 mass / s, at most 6);
+  4. the next free mass point by land travel distance from the start zone (the commander keeps to its own zone's);
+  5. else assist a factory.
+- **Sites:** build sites come from the map analysis' build spots of the start zone and from its mass points, checked
+  with `CanBuildStructureAt`. A site promised to one builder is not given to another for 60 s.
+- **Factories:** engineers up to a cap that grows with the game (3 + one a minute, at most 12), then a land mix drawn
+  from the army's own stream: 60% tanks, 20% artillery, 20% anti-air.
+- **The army:** it gathers at the start, and meets enemies in the start zone and its neighbours (`AIZoneForces`).
+- The rest of this section (build-power jobs, openings per map, upgrades, production from the operations) comes with
+  phases 4-5.
+
 - **Jobs measured in build power**, not in engineer heads: each zone and each operation publishes jobs (mass, power,
   factories, defences, shields, experimentals, reclaim) with the build power they want and a priority. Engineers
   take the highest unmet jobs; unmet demand asks factories for engineers. (The idea is common; our job list and
@@ -291,8 +307,15 @@ mass. Units under construction are left out, and a damaged unit counts with the 
 - Own and allied units are known in full.
 - Seen in a SETONS_R game with fog of war (`explored`), at beat 2990: army 1 knows 8 of the 301 enemy units and has 2
   unknown contacts. The same game without fog knows nearly all of them.
-- Lost contacts are not remembered yet (a later phase; the engine's threat map keeps them).
-- The cheat option "AI vision" will read every unit, as omni would (phase 3, with the lobby option).
+- **Memory (phase 3).** What the army has seen stays in its memory: where and what the unit was when the army last
+  held its blip.
+  - A remembered structure counts until the army sees its place again (vision there) and it is not there.
+  - A remembered mobile unit counts for 60 s (600 beats), fading out.
+  - `AIZoneForces` gives the remembered part apart (`remembered`). Only what the army saw goes in, so memory is fair
+    intel.
+- **The cheat option "AI vision" (phase 3):** `Remastered.AISetVision(army, true)` makes the army's index read every
+  enemy unit where it is, as omni would. The brain sets it from the slot's `RemasterVision` option. It is a separate,
+  named option, never part of a difficulty level.
 
 **"Can it reach"** (`AIZoneThreat`): the enemy strength that can come to a zone within a travel horizon, or shoot into
 it.
@@ -312,61 +335,125 @@ it.
 **Cost:** measured with the proofs (see the aicore notes). Each build is a pass over the units with a zone lookup per
 unit, plus an array clear. The zone x zone sums of `AIZoneThreat` are made per query.
 
-### 3.3 Unit ratings and the battle estimate (ratings and square law: phase 2, built; small fight: phase 5)
+### 3.3 Unit ratings, threat, build value and the battle estimate (phase 2, reworked in phase 3 by Chris's decisions 10-12)
 
-- **Ratings from the blueprints** (Chris's idea, ai-design-goals.md decision 10). Every unit blueprint gets, from its
-  blueprint alone:
-  - **damage per second** against ground, air, naval and structure targets:
-    - each weapon's damage x the shots per firing x the rate of fire;
-    - the shots per firing count salvos, racks fired together, projectiles per firing, damage-over-time pulses and
-      beam pulses;
-    - which targets a weapon hits comes from `FireTargetLayerCapsTable`, narrowed to air by a
-      `TargetRestrictOnlyAllow` of AIR;
-    - left out: death, teleport and defence (anti-missile) weapons, weapons that come only with an upgrade, manual
-      fire (overcharge), and nukes (the unit is marked "strategic" instead);
-  - health plus shield;
-  - the longest range per target type;
-  - speed and mass.
-- **The rating** against a target type is sqrt(dps x (health + shield)), divided by the same for the reference unit:
-  the UEF T1 tank uel0201 (24 dps x 300 hp), which rates 1.0.
-  - This is the per-unit term of the square law. A group's fighting strength is (sum of ratings)^2, so groups compare
-    by their sums, and 20 tanks beat 10 by far more than twice.
-  - Examples: T1 tank `T1G 1.0`, UEF T1 interceptor `T1A 1.4` (air only), UEF T1 frigate `T1N 3.8`, UEF ACU `CG 12.9`,
-    T1 point defence `T1S 7.5`, UEF battleship `T3N 97.8`, Galactic Colossus `T4X 186.3`.
-- **Chris's tuning lists:** `MOHO64_AI_RATINGS=<file>` writes two files.
-  - `<file>`: every unit, mods included (about 1,360 with the lab's mods), by domain, tier and rating.
-  - `<file>` with `_stock` before its extension: the game's own playable units only, about 450, the list Chris tunes
-    first. It has the four factions, no mod, no civilians, campaign operation units, dummies or effects, sorted by
-    faction, tier and domain.
-  - Each row has:
-    - the label (tier + domain letter + best rating: T1 T2 T3, T4 experimental, C commander; G ground, A air, N naval,
-      S structure, X experimental);
-    - id, faction, name, mass, health, shield;
-    - dps and range per target type, speed, and the four ratings;
-    - a `fix` column of 1.0 for his multiplier;
-    - a tier note.
-  - **The tier** comes from the categories TECH1 / TECH2 / TECH3 / EXPERIMENTAL / COMMAND. A mobile unit whose
-    categories give none, or one at least two tiers below what its mass says, takes its mass band's tier instead,
-    never lower than its categories'.
-    - This catches a mod's 3,600-mass "TECH1" bot: BlackOps' UnderTaker, Tha-Yath and Redhawk now read `T4X*`.
-    - The mass bands: ground under 150 / 600 / 3,000, then T4; air under 150 / 500 / 3,000; naval under 600 / 4,000 /
-      15,000.
-    - Such a label gets a `*`, and the tier note says what the categories gave.
-  - **OPEN:** reading his corrected list back (a multiplier per unit, plus "A beats B" overrides) as a file in
-    `data/ai`, in phase 3.
-  - Rows that look rough, the kind the lists are for: the mods' commanders (BlackOps) rate very high from their extra
-    weapons; T1 point defence comes out at 241 dps; beam units such as the Arachne.
-- **The square-law estimate:** `Remastered.AISquareLaw(ours, theirs)` returns two numbers:
-  - the margin ours^2 / (ours^2 + theirs^2), where 0.5 is even;
-  - the share of the winner's strength left at the end.
+Chris's notes are in `SupComLab\AI\rating_notes_from_chris_2026-10-28.md` and his decisions 10-12 in
+[ai-design-goals.md](ai-design-goals.md). In short:
+- **threat** is raw: damage, health, shields, range, splash and speed, never cost. It answers "how dangerous is this".
+- **build value** is the counter-pick: what a unit gives for its mass against what the enemy actually fields.
+- **the seven scores** show what a unit is good against.
 
-  The inputs are summed ratings, for example `AIZoneThreat`'s two answers.
-- **Not yet:** closing time from range and speed, and reinforcements on the way (phase 4, with the operations).
-- **The small fight simulation (phase 5)** for the few fights that matter each second (an objective, a push, a
-  breach stage):
-  - both sides as lists of units with blueprint dps, health, range and speed;
-  - stepped in half-second steps for up to 30 s, with simple target choice, in native code, deterministic;
-  - on the worker pool when there are several, one fight per task, results committed in the fights' order.
+**From the blueprint, once per game** (`src/ai/unit_index.cpp`, `RateBlueprint`): a small fixed table per blueprint,
+nothing per beat.
+- **Each weapon** as the battle estimate fires it: its targets, damage per shot, damage radius, range, and whether it
+  is indirect. Its dps is damage x the shots of one firing x the rate of fire.
+  - The shots of one firing are the salvo times the racks fired together, or `ProjectilesPerOnFire` where that is
+    larger: FAF writes one burst in either field, or in both.
+  - Damage-over-time pulses and beam pulses count, and a beam with no lifetime fires every collision check.
+  - The targets come from `FireTargetLayerCapsTable`, narrowed to air by a `TargetRestrictOnlyAllow` of AIR.
+  - Left out: death, teleport and anti-missile weapons, upgrade-only weapons, overcharge and other manual-fire
+    weapons, and nukes (the unit is marked strategic instead).
+- **Health plus shield**, and whether the shield is a bubble (`ShieldSize`; fire from inside it reaches the unit) or
+  personal.
+- **Range per target type**, speed and mass.
+
+**The share of a shot that counts** (`HitShare`), on targets of health h:
+- A shot that overkills a unit counts h / damage.
+- On a bigger unit, shots are whole: h / (ceil(h / damage) x damage). A 1,450-damage shot on 3,000 health needs 3 hits
+  and counts 0.69.
+- Grouped units also take splash from a damage radius: 1 + pi radius^2 x density of them, density 1 per 12 square
+  units, at most 8.
+
+**The seven scores (decision 12),** for the unit's main target (ground for land units and structures that hit the
+ground, naval for ships that hit ships, else the best). Each is sqrt(dps there x (health + shield)), divided by the T1
+tank uel0201's (24 dps x 300 health = 1.0).
+- `gT1 gT2 gT3`: against an army of T1 / T2 / T3 units, of 300 / 1,000 / 3,000 health, grouped.
+- `sT1 sT2 sT3 sX`: against one T1 / T2 / T3 / experimental unit, of 300 / 1,000 / 3,000 / 50,000 health, alone.
+- They show why a unit's threat is what it is: the Loyalist kills groups, the Percival single big targets.
+- Lua: `rating.group = {t1, t2, t3}` and `rating.single = {t1, t2, t3, x}` in `AIUnitRating`.
+
+**Threat (decision 11), the label's number:**
+- threat = (0.75 x the best of the seven + 0.25 x its group score against its own tier), so a specialist is judged by
+  its best role;
+- x a range factor: (range / 18)^0.25, between 0.7 and 1.8;
+- x a speed factor: (speed / 3.4)^0.15, between 0.8 and 1.25, and 0.8 for a structure;
+- plus a quarter of its rating against air (an aircraft: against the ground), for versatility (the Ythotha above the
+  GC).
+- The T1 tank stays 1.0. Cost never enters.
+- The label is tier + domain letter + threat (`T1G 1.0`, `T3G 19.2`).
+- The tiers: T1 T2 T3, T4 experimental, C commander. The domains: G ground, A air, N naval, S structure,
+  X experimental. A `*` marks a tier guessed from the mass bands.
+
+**Build side, not threat (decision 11):**
+- **perMass:** threat per mass, relative to the T1 tank's (1.0).
+- **Build value**, `BuildValue` / `Remastered.AIBuildValue(id, enemy)`: as much of the unit as the enemy force weighs
+  fights it in the battle estimate. The answer is the enemy mass killed per own mass lost; own losses count at least
+  5%, so 20 is a clean win.
+  - This is the counter-pick against the enemy's actual mix. It goes through the estimate, so the mix's real health,
+    ranges and shields count, more exactly than a weighting of the seven scores would.
+- The lists print two of them per unit: `bv GC` (against 3 Galactic Colossi) and `bv T1` (against 60 UEF T1 tanks).
+
+**The battle estimate** (`EstimateBattle` / `Remastered.AIBattleEstimate(ours, theirs [, startDistance])`):
+- Each force is a list of (unit, count), fought out in half-second steps for up to 180 s.
+- The fight opens at the longer side's range, unless a start distance is given (0: up close).
+- **Firing:** every weapon fires while the gap is within its own range.
+  - Its fire is shared over the enemy units it can hit, by their health.
+  - It uses `HitShare` on the target's real health and shield (grouped below 3,000).
+  - Indirect fire counts at half against mobile targets: shells in flight miss what moves.
+- **The front:** around each target only as many shooters fit as stand in the weapon's range ring at the group
+  density. A swarm of short-range units cannot all fire at a few big targets at once.
+- **Shields:** a shield takes hits first, except a bubble shield once the gap is inside its radius.
+- **Closing in:** a side whose main weapons (75% of its dps, longest range first) cannot all fire yet closes in, under
+  fire, at its slowest unit's speed. It holds instead when those weapons already outrange everything the other side
+  has: a Fatboy waits for the Percivals, while a Loyalist walks in to its cannon's range.
+- **Chris's corrections:** a unit's `fix` scales its dps by fix^2 (its rating by fix), and his "A beats B" factor
+  scales A's dps against B.
+- It returns the margin (0.5 even, 1 a clean win), each side's share of health left, and the time.
+- `Remastered.AISquareLaw(ours, theirs)` stays for summed ratings, such as `AIZoneThreat`'s, where no unit lists are at
+  hand.
+
+**Chris's corrections** (`data/ai/lua/remastered/ai/rating_fixes.lua`): `Fix = { id = multiplier }` and
+`Beats = { { idA, idB, factor } }`. The brain hands them to the engine once per game, before any rating is read
+(`AISetRatingFix`, `AISetBeats`). The lists print the `fix` in use. The file is empty until he tunes the list.
+
+**Chris's tuning lists:** `MOHO64_AI_RATINGS=<file>` writes two files.
+- `<file>`: every unit, mods included.
+- `<file>_stock`: the game's own playable units only, made from a session without mods (mods change stock units). It
+  has the four factions; no mod, civilian, campaign operation unit, dummy, effect, unit without mass cost or unit
+  nothing builds (other than a commander), so Fatboy's external factory and the drone uxl0021 are gone. It is sorted
+  by faction, tier and domain.
+- Each row has:
+  - label, id, faction, name, mass, health, shield;
+  - the main target, dps, range, speed;
+  - the seven scores and THREAT;
+  - perMass, `bv GC`, `bv T1`;
+  - anti tag, range class, roles, `fix` and a tier note.
+
+**Chris's examples, checked** (the game's own units; the margin is ours):
+
+| | Result |
+|---|---|
+| T3 ground threat | Brick 19.3, Percival 19.2, Othuum 19.0, Harbinger 15.5, Loyalist 10.1, Titan 8.8 |
+| Percival's seven | gT1 8.4, gT2 15.2, gT3 15.2, sT1 8.4, sT2 15.2, sT3 15.2, sX 18.2 |
+| 2 Percivals vs 6 / 3 Loyalists | 0.17 / 0.87 |
+| 50 Percivals vs 4 Fatboys: from range / up close | 0.23 / 0.97 |
+| GC vs Fatboy: from range / up close | 0.28 / 0.96 |
+| 10 Percivals vs Fatboy: up close / from range | 0.96 / 0.07 |
+| Ythotha vs GC, up close | 0.54; threat 363 against 223 |
+| 6 Loyalists vs 30 T1 / 12 T2 tanks | 0.92 / 0.77 |
+| Build value against 3 GCs | Titan 6.7, Harbinger 6.5, Loyalist 5.7, Percival 5.7, Brick 5.3, Othuum 5.3, T2 tank 4.5, T1 tank 2.0 |
+| Build value against 60 T1 tanks | Harbinger 2.4, Titan 1.8, Loyalist 1.4, T2 tank 1.4, Brick 0.6, Percival 0.1 |
+
+**What the blueprints say against Chris's view (for his tuning):**
+- The Percival and the Brick come out even in threat: 337 dps x 7,200 health against 295 x 7,500, with similar range
+  and speed. The model does not make the Percival "much higher" without a `fix`.
+- Against 3,000-health T3 units the Percival's 1,450 shots need three hits, so its own-tier group score (15.2) is below
+  its single-target score against an experimental (18.2).
+- Two Percivals beat three Loyalists clearly (0.87), not six (0.17).
+- The Ythotha's splash over T3 groups lifts its threat well above the GC's, more than his "slightly stronger".
+
+**Not yet:** reinforcements on the way and kiting; accuracy beyond the indirect-fire factor; armour types and shield
+regeneration; the estimate run from the index's zone forces (phase 4, with the operations).
 
 ### 3.4 What stays Lua (at first)
 
@@ -445,14 +532,20 @@ native core for numbers and spends its own time only on decisions.
 
   | Call | Returns |
   |---|---|
-  | `AIUnitRating(blueprintId)` | `{id, label, tier, domain, mass, health, shield, speed, best, maxRange, kinds, dps = {ground, air, naval, structure}, range = {...}, rating = {...}}`, or nil |
-  | `AIZoneForces(army, zone)` | `{own = S, ally = S, enemy = S}`. Each S is `{land = D, naval = D, air = D, structure = D, engineers, commanders, experimentals, factories, shieldHealth, economyMass}`, and each D is `{count, mass, unknown, maxRange, ground, air, naval, structure}` |
+  | `AIUnitRating(blueprintId)` | `{id, label, tier, domain, mass, health, shield, speed, best, maxRange, kinds, mainTarget, threat, perMass, fix, anti, rangeClass, roles, dps = {ground, air, naval, structure}, dpsGroup = {...}, range = {...}, rating = {ground, air, naval, structure, group = {t1, t2, t3}, single = {t1, t2, t3, x}}, ratingGroup = {...}}`, or nil (3.3) |
+  | `AIZoneForces(army, zone)` | `{own = S, ally = S, enemy = S}`. Each S is `{land = D, naval = D, air = D, structure = D, engineers, commanders, experimentals, factories, shieldHealth, economyMass}`, and each D is `{count, mass, unknown, remembered, maxRange, ground, air, naval, structure}` |
   | `AIZoneThreat(army, zone, target, horizon [, from])` | `enemy, friendly`: summed ratings against `target` of what can reach the zone (3.2); `from` limits it to one domain |
   | `AIIndexInfo(army)` | `{tick, own, ally, enemy, unknown, outside, period}` |
   | `AISquareLaw(ours, theirs)` | `margin, survivors` (3.3) |
+  | `AIBattleEstimate(ours, theirs [, startDistance])` | `margin, oursLeft, theirsLeft, seconds`; a force is an array of `{blueprintId, count}` (3.3) |
+  | `AIBuildValue(blueprintId, enemy)` | `value, killed, lost`: enemy mass killed per own mass lost (3.3) |
+  | `AIRandom(army [, n])` | the army's own random stream: a float in [0, 1), or an integer 1..n (phase 3) |
+  | `AISetRatingFix(blueprintId, multiplier)`, `AISetBeats(idA, idB, factor)` | Chris's corrections (3.3) |
+  | `AISetVision(army, on)` | the "AI vision" cheat option for that army (3.2) |
 - **Randomness:** the AI never calls the sim's `Random` for its own choices (that stream is shared with the game and
   the original's replays compare its draws). It gets its own MT19937 per brain, seeded from the session seed and the
-  army index (`Remastered.AIRandom(brain)`, phase 3): same draws on every machine, and the game's stream is untouched.
+  army index (`Remastered.AIRandom(army [, n])`, built in phase 3): same draws on every machine, and the game's stream
+  is untouched.
 - **When the brain thinks:** a script thread per brain (`ForkThread` from `OnCreateAI`), waking on fixed ticks
   (layer periods in 2.1-2.3) offset by army index, so the AI's cost is spread over beats.
 
@@ -531,7 +624,7 @@ both-modes check, multicore.md 1).
 |---|---|---|
 | 1 (built 2026-10-28) | Map analysis native (`src/ai/`), its Lua calls, the `MOHO64_AI_MAPDUMP` dump; computed and its calls made only in a session with our AI | The 16 + B1 / b8 identical to main; SETONS_R's dump looked at (zones around the mass, ponds, chokepoints at the passes); 250-300 ms; an AI-key session identical at 1 / 32 threads, shuffle, reverse |
 | 2 (built 2026-10-28) | Unit / threat index per observing army with fair intel and "can it reach"; blueprint ratings with Chris's labels and list (`MOHO64_AI_RATINGS`); the square-law estimate; their Lua calls | Scripted sessions (a navy in a closed pond does not threaten distant land; with fog only blips count, unseen contacts are unknown); the 16 + B1 / b8 identical; our-key sessions identical at 1 / 32 threads, shuffle, reverse |
-| 3 | The brain in `data/ai/` (keys and skeleton are in since phase 1b): OnCreateAI, own random stream, think loops; economy and building (opening from the map, build-power jobs, expansion) and simple defence | Our AI vs FAF's adaptive on SETONS_R: it expands, stays out of stalls, defends; it does not crash for 60 minutes; Lua + native cost per tick |
+| 3 (built 2026-10-28) | The brain in `data/ai/` (2.4 below): own random stream, a think thread per brain, the slot's options, Chris's rating corrections; a first economy from the map analysis (factory, power when short, mass by travel distance, more factories while mass piles up, engineers, a land mix) and base defence; the index's memory and the AI-vision option; ratings reworked by Chris's decisions 10-12 (threat, the seven scores, build value) and the estimate fired per weapon | The 16 + B1 / b8 identical; our-key sessions identical at 1 / 32 threads, shuffle, reverse; on SETONS_R alone after 10 minutes: 21 extractors, 5 factories, 12 engineers, ~100 land units, 43 mass / s. Not yet run against FAF's AI for 60 minutes (phase 4, with the operations) |
 | 4 | Strategic and operation layers: aggression with hysteresis, objectives, gathering, push, retreat by estimate, raids, navy and air domains, combined arms timing | Ours vs M28 and FAF's AI, several seeds: the fight scores of section 6; "never fled a weaker force" at zero faults |
 | 5 | Cracking fortified lines and staged breaches; the small fight simulation; group micro (focus fire, kiting in even fights); difficulty knobs and the four levels | Scripted fortified-line scenarios (a session that starts with T2 PD + artillery lines); level-vs-level matches (each level beats the one below most of the time) |
 | 6 | Team play, pings (with the ui's radial menu), allied announcements, personalities, teacher mode; hot Lua parts moved native | 2v2 / 4v4 with a human-ally stand-in (scripted pings); Chris's playtest |
