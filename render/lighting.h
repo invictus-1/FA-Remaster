@@ -704,6 +704,12 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
       float2 at = saturate(world.xz * tracksArea.xy), half = 0.5 / 2048.0;
       float trodden = (tracksMap.SampleLevel(samplerLinearClamp, at + float2(half.x, half.y), 0).r + tracksMap.SampleLevel(samplerLinearClamp, at + float2(-half.x, half.y), 0).r +
                        tracksMap.SampleLevel(samplerLinearClamp, at + float2(half.x, -half.y), 0).r + tracksMap.SampleLevel(samplerLinearClamp, at - float2(half.x, half.y), 0).r) * 0.25;
+#ifdef SURFACE_DEEP_TRACKS
+      // (with deep tracks on, the trough is theirs - each tread's own print, its cleats packed into the snow: this coarse map
+      // of where units went, half a world unit a texel, only packs the snow a little more round them. Taking it away as
+      // well cleared a wide unit's whole tread band down to the brown ground, a soft band like dust: the Fatboy's check)
+      if (deepTrack.w > 0.5) trodden *= 0.3;
+#endif
       albedo *= 1 - 0.15 * trodden * lying;
       lying *= 1 - 0.78 * trodden;  // (trodden snow, not bare earth: some of it stays)
 #ifdef GROUND_SNOW
