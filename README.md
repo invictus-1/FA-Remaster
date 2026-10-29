@@ -389,7 +389,7 @@ game's files are loaded from the player's own installation at run time.
 Third-party code in this repository, each with its licence beside it:
 - `third_party/lua/`: Lua 5.0 (MIT licence, Copyright (C) 1994-2003 Tecgraf, PUC-Rio), changed to the
   game's dialect.
-- `third_party/zlib/`: zlib's inflate (zlib licence, (C) 1995-2022 Jean-loup Gailly and Mark Adler).
+- `third_party/zlib/`: zlib 1.3.1's inflate and deflate, unchanged (zlib licence, (C) 1995-2024 Jean-loup Gailly and Mark Adler).
 - `third_party/mimalloc/`: mimalloc (MIT, Microsoft Corporation).
 - `render/third_party/fsr1/`: AMD FidelityFX Super Resolution 1 (MIT, Copyright (c) 2021 Advanced
   Micro Devices, Inc.), the upscaler offered as a player's option; `render/fsr1_source.cpp` is made

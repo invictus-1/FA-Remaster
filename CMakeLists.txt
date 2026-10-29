@@ -46,8 +46,8 @@ if(NOT MSVC)
 endif()
 
 add_library(zlibinflate STATIC
-  third_party/zlib/adler32.c third_party/zlib/crc32.c third_party/zlib/inffast.c
-  third_party/zlib/inflate.c third_party/zlib/inftrees.c third_party/zlib/zutil.c)
+  third_party/zlib/adler32.c third_party/zlib/crc32.c third_party/zlib/deflate.c third_party/zlib/inffast.c
+  third_party/zlib/inflate.c third_party/zlib/inftrees.c third_party/zlib/trees.c third_party/zlib/zutil.c)
 target_include_directories(zlibinflate PUBLIC third_party/zlib)
 if(NOT MSVC)
   target_compile_options(zlibinflate PRIVATE -w)
