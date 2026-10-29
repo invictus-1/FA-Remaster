@@ -49,7 +49,8 @@ class TcpSocket {
   bool MakeSocket();
 };
 
-// A UDP socket (the lobby's discovery: the host listens on port 15000, a browser broadcasts to it).
+// A UDP socket (the lobby's discovery: the host listens on port 15000, a browser broadcasts to it; the UDP
+// connector's one socket, connector_udp.cpp).
 class UdpSocket {
  public:
   UdpSocket() = default;
@@ -60,6 +61,7 @@ class UdpSocket {
   bool Bind(uint16_t port, bool broadcast);  // on every interface; 0: a port the system chooses
   bool SendTo(const Address& to, const void* data, size_t size);
   long ReceiveFrom(void* data, size_t size, Address* from);  // bytes (0: none now), -1: broken
+  int Wait(int timeoutMs);  // until a datagram waits (1) or `timeoutMs` passed (0; < 0: no limit); -1 broken
   uint16_t LocalPort() const;
   bool Valid() const { return fd_ != kNone; }
   void Close();

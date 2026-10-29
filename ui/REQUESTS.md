@@ -1165,6 +1165,18 @@ only, so a game recorded with the variant scans without its AI mod.
 - **Nice to have:** `ScanArgs::skipMounts` (host folders the init lists that are left out), so the scan also leaves
   the original M28AI out as the host does. Without it both are there, which works as long as the uid picks the mod.
 
+### 50. zlib's deflate half in third_party/zlib (for the UDP connector's compression)
+From the interface chat, 2026-10-29. NOT blocking: the UDP connector (ui/net/connector_udp.cpp, docs/ui-net-udp.md)
+works without it. The original deflates what each player sends (net_CompressionMethod 1: raw deflate, one stream
+per direction). Ours sends uncompressed for now (setting 0, which the original also has), because third_party/zlib
+(1.3.1) holds only the inflate half (adler32, crc32, inffast, inflate, inftrees, zutil). Request: add zlib 1.3.1's
+own deflate.c, deflate.h and trees.c, unchanged, from the same release you took the others from. Then I switch on
+MOHO64_NET_DEFLATE in ui/build_ui.py. It matters for the 2048 B/s per-peer rate: your beat batches would compress.
+If it needs a download, that is Chris's OK, not mine.
+DONE (engine, 2026-10-29, with Chris's OK): zlib 1.3.1's deflate.c / deflate.h / trees.c / trees.h added unchanged
+(SHA-256 of the release checked), landing in the batch after 33. ui/build_ui.py compiles them and switches
+MOHO64_NET_DEFLATE on by itself once deflate.c is in the tree.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface

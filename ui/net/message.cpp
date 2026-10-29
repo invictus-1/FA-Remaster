@@ -69,6 +69,17 @@ std::string MessageReader::Rest() {
   return s;
 }
 
+std::string MessageReader::Bytes(size_t n) {
+  if (at_ + n > p_.size()) {
+    ok_ = false;
+    at_ = p_.size();
+    return std::string();
+  }
+  std::string s = p_.substr(at_, n);
+  at_ += n;
+  return s;
+}
+
 bool MessageSplitter::Next(Message* out) {
   if (broken_ || buf_.size() - at_ < kMessageHeader) return false;
   const size_t size = static_cast<uint8_t>(buf_[at_ + 1]) | (static_cast<size_t>(static_cast<uint8_t>(buf_[at_ + 2])) << 8);

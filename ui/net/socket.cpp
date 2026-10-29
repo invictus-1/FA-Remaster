@@ -262,6 +262,18 @@ long UdpSocket::ReceiveFrom(void* data, size_t size, Address* from) {
   return WouldBlock() ? 0 : -1;
 }
 
+int UdpSocket::Wait(int timeoutMs) {
+  if (fd_ == kNone) return -1;
+  fd_set r;
+  FD_ZERO(&r);
+  FD_SET(N(fd_), &r);
+  timeval tv{};
+  tv.tv_sec = timeoutMs / 1000;
+  tv.tv_usec = (timeoutMs % 1000) * 1000;
+  const int n = select(static_cast<int>(N(fd_)) + 1, &r, nullptr, nullptr, timeoutMs < 0 ? nullptr : &tv);
+  return n < 0 ? -1 : n > 0 ? 1 : 0;
+}
+
 uint16_t UdpSocket::LocalPort() const {
   if (fd_ == kNone) return 0;
   sockaddr_in sa{};

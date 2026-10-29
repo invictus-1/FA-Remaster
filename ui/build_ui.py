@@ -69,11 +69,14 @@ def main():
         std_c + mi_inc + (["-DMI_SECURE=4", "-DMI_STAT=0", "-DMI_DEBUG=3"] if a.mi_debug else ["-DMI_SECURE=0", "-DMI_STAT=0", "-DMI_DEBUG=0", "-DNDEBUG"]), False)
     for f in sorted(glob.glob(os.path.join(ROOT, "third_party", "lua", "*.c"))):
         add(f, std_c + lua_inc + mi_inc + ["-DMOHO64_MIMALLOC=1"] + (["-Dapi_check(L,o)=do{if(!(o))__builtin_trap();}while(0)"] if a.lua_api_check else []), False)
-    for n in ("adler32", "crc32", "inffast", "inflate", "inftrees", "zutil"):
+    # zlib's deflate half (engine request 50, 2026-10-29) once it is in the tree: the UDP connector then deflates
+    # its sends as the original does (ui/net/connector_udp.cpp, MOHO64_NET_DEFLATE).
+    deflate = os.path.exists(os.path.join(ROOT, "third_party", "zlib", "deflate.c"))
+    for n in ("adler32", "crc32", "inffast", "inflate", "inftrees", "zutil") + (("deflate", "trees") if deflate else ()):
         add(os.path.join(ROOT, "third_party", "zlib", n + ".c"), std_c + zlib_inc, False)
     # The movies' MPEG-1 pictures (ui/draw/movie.cpp): pl_mpeg, MIT, unchanged (ui/third_party/pl_mpeg).
     add(os.path.join(UI, "third_party", "pl_mpeg", "pl_mpeg.c"), std_c, False)
-    cxxflags = ["-std=c++20", "-I", os.path.join(ROOT, "src"), "-I", UI, "-I", ROOT] + lua_inc + zlib_inc
+    cxxflags = ["-std=c++20", "-I", os.path.join(ROOT, "src"), "-I", UI, "-I", ROOT] + lua_inc + zlib_inc + (["-DMOHO64_NET_DEFLATE=1"] if deflate else [])
     cxxflags += ["-D" + d for d in a.define]
     if sdl:
         cxxflags += ["-DMOHO64UI_SDL=1", "-I", os.path.join(UI, "third_party", "SDL3", "include")]
@@ -91,6 +94,8 @@ def main():
         for f in sorted(glob.glob(os.path.join(ROOT, "src", d, "*.cpp"))):
             add(f, cxxflags, True)
     for f in sorted(glob.glob(os.path.join(UI, "**", "*.cpp"), recursive=True)):
+        if os.sep + "tests" + os.sep in f:  # (test programs of their own: ui/net/tests/udp_test.cpp)
+            continue
         add(f, cxxflags, True)
     # The build's commit (written into each game's .seed file, so that a game's record says which build played it:
     # the engine's playback of a game needs the same build): one small file in the output folder, written only
