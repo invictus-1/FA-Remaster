@@ -53,7 +53,8 @@ void BindObject(lua_State* L, int idx, ScriptObject* obj) {
   lua_pop(L, 1);
   void** box = static_cast<void**>(lua_newuserdata(L, sizeof(void*)));
   *box = obj;
-  luaL_getmetatable(L, kBoxMeta);
+  lua_gpg_checkgc(L);  // luaL_getmetatable(L, kBoxMeta): the name's push (its collector check), then the raw get
+  lua_gpg_rawgetstr(L, LUA_REGISTRYINDEX, kBoxMeta);
   lua_setmetatable(L, -2);
   lua_pushcobjectkey(L);
   lua_insert(L, -2);

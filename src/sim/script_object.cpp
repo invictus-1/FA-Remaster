@@ -101,9 +101,11 @@ void PushStub(lua_State* L, const std::string& qualified) {
   lua_pushcclosure(L, l_Stub, 1);
 }
 
+// (lua_pushstring + lua_rawget once: the string push's collector check, then the raw get with the interned key,
+// which always exists here: the same moment, the same answer, no string looked up)
 void PushMoho(lua_State* L) {
-  lua_pushstring(L, "moho");
-  lua_rawget(L, LUA_GLOBALSINDEX);
+  lua_gpg_checkgc(L);
+  lua_gpg_rawgetstr(L, LUA_GLOBALSINDEX, "moho");
 }
 
 }  // namespace
@@ -111,8 +113,8 @@ void PushMoho(lua_State* L) {
 void PushClassTable(lua_State* L, const char* cppClass) {
   const ClassInfo* c = FindClass(cppClass);
   PushMoho(L);
-  lua_pushstring(L, c ? c->lua : cppClass);
-  lua_rawget(L, -2);
+  lua_gpg_checkgc(L);  // (lua_pushstring(name); lua_rawget(L, -2): as PushMoho)
+  lua_gpg_rawgetstr(L, -1, c ? c->lua : cppClass);
   lua_remove(L, -2);
 }
 

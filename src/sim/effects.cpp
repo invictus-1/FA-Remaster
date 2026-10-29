@@ -253,6 +253,14 @@ struct ThingLists {
   std::vector<EngineThing*> manips;                // manipulators with a unit
   std::vector<EngineThing*> freed;                 // unbound this beat: deleted at its end
   uint64_t nextSeq = 0;
+  // FindEffect's answers by the name's text, the last one per slot (l_Factory: the blueprints never change in a
+  // game; the Lua string's address is only the slot, the text is compared)
+  struct BpCacheEntry {
+    const char* p = nullptr;
+    std::string name;
+    const EffectBlueprint* bp = nullptr;
+  };
+  BpCacheEntry bpCache[256];
 };
 ThingLists& Lists(const Sim& sim);
 
@@ -291,7 +299,16 @@ int l_Factory(lua_State* L) {
     const int arg = static_cast<int>(std::strchr(f.args, 's') - f.args) + 1;
     const char* name = lua_type(L, arg) == LUA_TSTRING ? lua_tostring(L, arg) : "";
     const BpKind want = f.fx == FxKind::Emitter ? BpKind::Emitter : f.fx == FxKind::Trail ? BpKind::TrailEmitter : BpKind::Beam;
-    bp = sim->blueprints().FindEffect(name);
+    // (FindEffect builds a lower-case std::string of the name per call: kept per name instead, the same answer)
+    ThingLists::BpCacheEntry& c = tl.bpCache[(reinterpret_cast<uintptr_t>(name) >> 4) & 255];
+    if (c.p == name && c.name == name) {
+      bp = c.bp;
+    } else {
+      bp = sim->blueprints().FindEffect(name);
+      c.p = name;
+      c.name = name;
+      c.bp = bp;
+    }
     if (!bp || bp->kind != want) {
       static const bool dbg = getenv("MOHO64_DEBUG_FXBP") != nullptr;  // where (the Lua stack), each time
       if (dbg) {
