@@ -73,6 +73,14 @@ struct PathTraveler {
   bool accepted = false;
   // set by the queue when the search finished; the navigator consumes it
   bool delivered = false;
+  // HPathTables::PrepareSearches' memory of the traveller: the cluster map FindMap gave for the footprint prepFp
+  // (prepFound), and the box of 32-clusters (prepBox, of the map prepScanned) it last scanned for clusters to make
+  // ahead, at the tables' pick epoch prepEpoch (0: none yet)
+  const void* prepFound = nullptr;
+  NamedFootprint prepFp;
+  const void* prepScanned = nullptr;
+  uint64_t prepEpoch = 0;
+  int prepBox[4] = {0, 0, 0, 0};
 };
 
 class HPathTables {
@@ -255,7 +263,7 @@ class HPathTables {
   // PrepareSearches' list: the cluster and, for a 32-cluster, its dirty or stale 8-clusters, as MakeAhead would make
   // them (not those made ahead already or listed).
   void PickAhead(ClusterMap& m, int L, int cx, int cz);
-  void PrepareTraveler(const PathTraveler& t, ClusterMap* cm, int margin);
+  void PrepareTraveler(PathTraveler& t, ClusterMap* cm, int margin);
   struct AheadItem {
     ClusterMap* m;
     int cx, cz;
@@ -263,6 +271,10 @@ class HPathTables {
   };
   std::vector<AheadItem> pick_[3];  // (PrepareSearches' lists by level, kept between beats for their capacity)
   uint32_t prepBeat_ = 0;           // PrepareSearches' calls (one a beat): the clock of ClusterMap::dirtiedAt
+  // Counts every change that can make a cluster pickable for data made ahead (PickAhead: dirty or stale, neither made
+  // ahead nor picked): a dirtied rect, data made ahead dropped, a new map. A traveller's box scanned since the last
+  // one holds nothing new to pick (PathTraveler::prepEpoch).
+  uint64_t pickEpoch_ = 1;
   bool Ready(ClusterMap& m, int L, int cx, int cz, int* budget, bool make = true);
   void Make(ClusterMap& m, int L, int cx, int cz);
   void MakeStaleOrigins(ClusterMap& m, int ox0, int oz0, int ox1, int oz1);  // (BeforeOccupancyChange)

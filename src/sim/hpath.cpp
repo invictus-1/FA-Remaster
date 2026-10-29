@@ -106,6 +106,7 @@ HPathTables::ClusterMap& HPathTables::Map(const NamedFootprint& fp) {
     m->dirtiedAt[L].assign(n, 0);
   }
   ClusterMap* r = m.get();
+  ++pickEpoch_;  // (a new map: all its clusters dirty)
   mapOrder_.push_back(r);
   maps_[key] = std::move(m);
   return *r;
@@ -114,6 +115,7 @@ HPathTables::ClusterMap& HPathTables::Map(const NamedFootprint& fp) {
 // PathTables::PathTables 0x76b8c0: a ClusterMap for every footprint of the rules' list (index = mIndex),
 // all clusters dirty. (Their occupancy grids are made when first needed.)
 void HPathTables::CreateMaps(const std::vector<NamedFootprint>& named) {
+  ++pickEpoch_;
   for (const NamedFootprint& fp : named) {
     std::string key = fp.name + '/' + std::to_string(fp.sizeX) + 'x' + std::to_string(fp.sizeZ) + '/' +
                       std::to_string(fp.caps) + '/' + std::to_string(fp.flags & 1);
@@ -124,6 +126,7 @@ void HPathTables::CreateMaps(const std::vector<NamedFootprint>& named) {
 }
 
 void HPathTables::DirtyRect(int x0, int z0, int x1, int z1) {
+  ++pickEpoch_;
   for (ClusterMap* m : mapOrder_) {
     m->bgDone = false;  // ClusterMap::DirtyRect 0x8e3620
     int a0 = x0 - 1, b0 = z0 - 1, a1 = x1 + m->sx + 1, b1 = z1 + m->sz + 1;
@@ -285,7 +288,7 @@ void HPathTables::MakeAhead(ClusterMap& m, int L, int cx, int cz) {
 // 7100: with margin 1 the searches found 55% of the clusters they built made ahead, 65% with 2; the rest lay
 // outside the box, and a third of what was made ahead was dirtied again before a search reached it. So cluster data
 // is better made by the search that first needs it, outside the accounting: ahead / TakeAhead are that split.)
-void HPathTables::PrepareTraveler(const PathTraveler& t, ClusterMap* cm, int margin) {
+void HPathTables::PrepareTraveler(PathTraveler& t, ClusterMap* cm, int margin) {
   if (!cm) {
     nav_->Grid(t.fp);  // (the map itself is the first search's to make: its place in mapOrder_; Map() makes it)
     return;
@@ -296,8 +299,17 @@ void HPathTables::PrepareTraveler(const PathTraveler& t, ClusterMap* cm, int mar
   const int z0 = std::min(t.anchor.z, t.goal[1]), z1 = std::max(t.anchor.z, t.goal[3]);
   const int cx0 = std::max(0, (x0 >> 5) - margin), cx1 = std::min(cm->wc[2] - 1, (x1 >> 5) + margin);
   const int cz0 = std::max(0, (z0 >> 5) - margin), cz1 = std::min(cm->hc[2] - 1, (z1 >> 5) + margin);
+  // (the same box of the same map scanned since the last change that can make a cluster pickable: nothing in it is
+  // pickable now that was not picked then, so the scan would pick nothing. B3-16k: 1.15 G PickAhead calls for 110 k
+  // picks, the waiting travellers' boxes scanned again every beat.)
+  if (t.prepEpoch == pickEpoch_ && t.prepScanned == cm && t.prepBox[0] == cx0 && t.prepBox[1] == cz0 &&
+      t.prepBox[2] == cx1 && t.prepBox[3] == cz1)
+    return;
   for (int cz = cz0; cz <= cz1; ++cz)
     for (int cx = cx0; cx <= cx1; ++cx) PickAhead(*cm, 2, cx, cz);
+  t.prepEpoch = pickEpoch_;
+  t.prepScanned = cm;
+  t.prepBox[0] = cx0, t.prepBox[1] = cz0, t.prepBox[2] = cx1, t.prepBox[3] = cz1;
 }
 
 void HPathTables::PickAhead(ClusterMap& m, int L, int cx, int cz) {
@@ -327,8 +339,28 @@ bool HPathTables::PrepareSearches(int margin, bool all, WorkerPool* pool, int co
       note(q.active->cm);
       units = units || q.active->t->mode != 0;
     }
-    for (PathTraveler* t = q.head; t; t = t->qNext) {
-      ClusterMap* cm = FindMap(t->fp);
+    // Only the first `window` waiting travellers of each queue (MOHO64_PATH_AHEAD_QUEUE, default 64): the queue hands
+    // out ~8 searches an army a beat, and B3-16k's queues hold up to 16,000, each walked every beat (3.6 s of 2000
+    // beats at 1 thread) and its box scanned (1.15 G PickAhead calls). The rest are prepared when they come within the
+    // window. What this decides is only what is made before the work loop (grids, the unit grid's rebuild, cluster
+    // data made ahead): a search makes whatever it needs that is not made, from the same state, so no search changes
+    // (the unit grid: no position changes between here and the work loop).
+    static const int window = getenv("MOHO64_PATH_AHEAD_QUEUE") ? std::max(1, std::atoi(getenv("MOHO64_PATH_AHEAD_QUEUE"))) : 64;
+    int place = 0;
+    for (PathTraveler* t = q.head; t && place < window; t = t->qNext, ++place) {
+      // (FindMap's string key and search once per traveller and footprint: the maps are never removed, so a map once
+      // found for a footprint stays the one; B3-16k's 16,000 waiting travellers made it 6.3 s of 2000 beats)
+      const NamedFootprint& f = t->fp;
+      const NamedFootprint& g = t->prepFp;
+      ClusterMap* cm;
+      if (t->prepFound && f.sizeX == g.sizeX && f.sizeZ == g.sizeZ && f.caps == g.caps && (f.flags & 1) == (g.flags & 1) &&
+          f.name == g.name) {
+        cm = static_cast<ClusterMap*>(const_cast<void*>(t->prepFound));
+      } else {
+        cm = FindMap(f);
+        t->prepFound = cm;
+        if (cm) t->prepFp = f;
+      }
       PrepareTraveler(*t, cm, margin);
       note(cm);
       units = units || t->mode != 0;
@@ -384,6 +416,7 @@ bool HPathTables::PrepareSearches(int margin, bool all, WorkerPool* pool, int co
 }
 
 void HPathTables::MakeStaleOrigins(ClusterMap& m, int ox0, int oz0, int ox1, int oz1) {
+  ++pickEpoch_;
   // the 8-clusters whose origins [8 cx, 8 cx + 8] x [8 cz, 8 cz + 8] (Build1's 9x9 bitmap) meet the rect
   const int ix0 = std::max(0, (ox0 >> 3) - 1), ix1 = std::min(m.wc[1] - 1, ox1 >> 3);
   const int iz0 = std::max(0, (oz0 >> 3) - 1), iz1 = std::min(m.hc[1] - 1, oz1 >> 3);
@@ -411,6 +444,7 @@ void HPathTables::BeforeTerrainChange(int vx0, int vz0, int vx1, int vz1) {
 }
 
 void HPathTables::TerrainChanged(int vx0, int vz0, int vx1, int vz1) {
+  ++pickEpoch_;
   for (ClusterMap* m : mapOrder_) {
     // the origins whose footprint covers a changed vertex (PathGrid::TerrainChanged), then every 8-cluster whose
     // 9x9 origins hold one of them, and their 32-clusters
