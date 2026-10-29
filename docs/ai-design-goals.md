@@ -136,3 +136,14 @@ A design talk with Chris, using these goals and ai-study-m28.md section 7.5's op
       first. If it judges the moment safe, or safe enough, it invests.
     - A big enemy army is no reason by itself to hold back the economy. If no one is attacking, there is no reason to
       hold back, so it never sits there without teching up.
+15. **Read the enemy's play style and adapt (Chris, 2026-10-29):**
+    - It works out from what it scouts how each enemy plays: turtling or ecoing, rushing, teching, air or navy heavy.
+      It judges the enemy's economy and tech against its own (extractors and their tiers, power, factories' tier, the
+      units appearing).
+    - **Against a greedy, eco-ing or turtling enemy:** it decides whether to attack and harass to stop them, or, if
+      it judges it can out-eco them and win later, to go full throttle into economy and defence before attacking.
+    - **When it is behind:** example: the first 10 minutes are T1 against T1, then T2 units appear. It scouts. If
+      the enemy's economy looks strong (many T2 extractors, T2 power) while it is still on T1, it builds a defence
+      force first, then goes into full economy to catch up. Or it keeps its existing force in a defensive role to buy
+      time until it can match: a few point defences, a rush to T2, point defences at T2, while it ecos.
+    - The read is re-checked as the game goes on, and every switch is logged with its reason.
