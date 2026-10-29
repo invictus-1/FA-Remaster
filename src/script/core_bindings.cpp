@@ -582,6 +582,43 @@ void PushQuat4(lua_State* L, float x, float y, float z, float w) {
   lua_setmetatable(L, -2);
 }
 
+// Interpolate equivalent quaternion signs along the shorter arc.
+int InterpolateQuat(lua_State* L, bool spherical) {
+  const float t = luaL_checknumber(L, 1);
+  luaL_checktype(L, 2, LUA_TTABLE);
+  luaL_checktype(L, 3, LUA_TTABLE);
+  float a[4], b[4], q[4], dot = 0;
+  for (int i = 0; i < 4; ++i) {
+    a[i] = VecComp(L, 2, i + 1);
+    b[i] = VecComp(L, 3, i + 1);
+    dot += a[i] * b[i];
+  }
+  if (dot < 0) {
+    dot = -dot;
+    for (float& v : b) v = -v;
+  }
+  float left = 1 - t, right = t;
+  if (spherical && dot < 0.9995f) {
+    const float angle = dmath::Atan2(std::sqrt(1 - dot * dot), dot);
+    const float invSin = 1 / dmath::Sin(angle);
+    left = dmath::Sin((1 - t) * angle) * invSin;
+    right = dmath::Sin(t * angle) * invSin;
+  }
+  float length = 0;
+  for (int i = 0; i < 4; ++i) {
+    q[i] = left * a[i] + right * b[i];
+    length += q[i] * q[i];
+  }
+  if (length > 0) {
+    const float invLength = 1 / std::sqrt(length);
+    for (float& v : q) v *= invLength;
+  }
+  PushQuat4(L, q[0], q[1], q[2], q[3]);
+  return 1;
+}
+int l_MinLerp(lua_State* L) { return InterpolateQuat(L, false); }
+int l_MinSlerp(lua_State* L) { return InterpolateQuat(L, true); }
+
 // EulerToQuaternion(roll, pitch, yaw) = qYaw(Y) * qPitch(X) * qRoll(Z); matches the original to
 // the last bit (oracle probe 2026-10-08).
 int l_EulerToQuaternion(lua_State* L) {
@@ -843,6 +880,8 @@ void RegisterCoreBindings(ScriptState& state) {
   Reg(L, "GetVersion", l_GetVersion);
   Reg(L, "MATH_IRound", l_MATH_IRound);
   Reg(L, "MATH_Lerp", l_MATH_Lerp);
+  Reg(L, "MinLerp", l_MinLerp);
+  Reg(L, "MinSlerp", l_MinSlerp);
   Reg(L, "Vector", l_Vector);
   Reg(L, "Vector2", l_Vector2);
   Reg(L, "Rect", l_Rect);

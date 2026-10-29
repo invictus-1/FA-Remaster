@@ -145,7 +145,7 @@ class Sim {
   // into the sim's state, and the host takes it with TakeRules once Start is done (nullptr when not kept or
   // already taken), copies what it needs into its own state and frees it. Nothing of the sim's state is in it.
   bool keepRules = false;
-  std::unique_ptr<ScriptState> TakeRules() { return std::move(rules_); }
+  std::unique_ptr<ScriptState> TakeRules();
   // Start the session described by a replay header (no commands are played yet).
   bool Start(const ReplayHeader& replay);
   // Start the session a lobby launch describes (sim/session.h): the same start, with the launch's focus army.

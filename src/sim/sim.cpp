@@ -892,6 +892,8 @@ Sim::Sim(Vfs* vfs, std::vector<std::string> hookDirs, std::vector<std::string> m
                                                         : "");
 }
 
+std::unique_ptr<ScriptState> Sim::TakeRules() { return std::move(rules_); }
+
 Sim::~Sim() {
   if (surfaceSpec_ && surfaceSpec_->active()) {
     const std::string line = surfaceSpec_->counts().Line("MOTION (surface contacts)");

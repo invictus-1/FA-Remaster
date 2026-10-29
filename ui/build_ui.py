@@ -64,7 +64,7 @@ def main():
         cmd = zig("c++" if cxx else "cc", *tflag, *common, *flags, "-c", src, "-o", obj)
         jobs.append((src, obj, cmd))
 
-    std_c = ["-std=c99", "-w"]
+    std_c = ["-std=c11", "-w"]
     add(os.path.join(ROOT, "third_party", "mimalloc", "src", "static.c"),
         std_c + mi_inc + (["-DMI_SECURE=4", "-DMI_STAT=0", "-DMI_DEBUG=3"] if a.mi_debug else ["-DMI_SECURE=0", "-DMI_STAT=0", "-DMI_DEBUG=0", "-DNDEBUG"]), False)
     for f in sorted(glob.glob(os.path.join(ROOT, "third_party", "lua", "*.c"))):

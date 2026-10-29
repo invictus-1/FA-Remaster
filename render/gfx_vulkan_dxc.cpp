@@ -24,7 +24,6 @@
 #include <thread>
 
 namespace render::gfx {
-namespace {
 
 // --- the part of DXC's interface used (dxcapi.h: IDxcCompiler3, IDxcResult, IDxcBlob) ---
 struct Guid {
@@ -40,11 +39,6 @@ struct DxcUnknown {
   virtual int32_t QueryInterface(const Guid& iid, void** out) = 0;
   virtual uint32_t AddRef() = 0;
   virtual uint32_t Release() = 0;
-#if !defined(_WIN32)
-  // (outside Windows DXC's IUnknown has a virtual destructor: two entries of the table)
-  virtual void DestroyComplete() = 0;
-  virtual void DestroyDeleting() = 0;
-#endif
 };
 struct DxcBlob : DxcUnknown {
   virtual void* GetBufferPointer() = 0;
@@ -69,6 +63,10 @@ struct DxcCompiler3 : DxcUnknown {
   virtual int32_t Disassemble(const DxcSource* object, const Guid& iid, void** result) = 0;
 };
 using CreateInstanceFn = int32_t (*)(const Guid& clsid, const Guid& iid, void** out);
+
+// These interfaces are implemented by the loaded library. Keep external linkage
+// so optimizers cannot assume that their pure virtual methods have no overrides.
+namespace {
 
 template <typename T>
 struct Ref {
