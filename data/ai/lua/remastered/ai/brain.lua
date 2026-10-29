@@ -191,44 +191,66 @@ AIBrain = Class(StandardBrain) {
         for _, e in ipairs(engineers) do
             if e:IsIdleState() then self:BuilderJob(e, factories, false) end
         end
-        -- factories: engineers up to a cap that grows with the game, then the land mix by the army's own stream
+        -- factories: engineers up to a cap that grows with the game, then the land mix of the factory's tech by the
+        -- army's own stream (T1: tank / artillery / AA; T2: tank / AA; T3: assault bot / artillery)
         local minutes = GetGameTick() / 600
         local engineerCap = math.min(12, 3 + math.floor(minutes))
         local wanted = table.getn(engineers)
         for _, f in ipairs(factories) do
             if f:IsIdleState() and EntityCategoryContains(categories.LAND, f) then
+                local tech = EntityCategoryContains(categories.TECH3, f) and 3 or
+                    EntityCategoryContains(categories.TECH2, f) and 2 or 1
                 if wanted < engineerCap then
-                    IssueBuildFactory({ f }, self:Bp('l0105'), 1)
+                    IssueBuildFactory({ f }, self:Bp(tech == 3 and 'l0309' or tech == 2 and 'l0208' or 'l0105'), 1)
                     wanted = wanted + 1
                 else
                     local roll = Remastered.AIRandom(self.Remaster.army)
-                    local what = roll < 0.6 and 'l0201' or roll < 0.8 and 'l0103' or 'l0104'
+                    local what
+                    if tech == 3 then what = roll < 0.75 and 'l0303' or 'l0304'
+                    elseif tech == 2 then what = roll < 0.8 and 'l0202' or 'l0205'
+                    else what = roll < 0.6 and 'l0201' or roll < 0.8 and 'l0103' or 'l0104' end
                     IssueBuildFactory({ f }, self:Bp(what), 1)
+                end
+            end
+        end
+        self:RemasterUpgrades(factories, minutes)
+    end,
+
+    -- Tech (phase 4): one upgrade at a time, when mass is not short: the land factories to T2 from minute 8 and T3
+    -- from minute 16, the extractors to T2 from minute 6 and T3 from minute 14 (each kind oldest first: the engine.s
+    -- id order)
+    RemasterUpgrades = function(self, factories, minutes)
+        for _, u in ipairs(self:GetListOfUnits(categories.STRUCTURE, false)) do
+            if not u.Dead and u:IsUnitState('Upgrading') then return end
+        end
+        local income = self:GetEconomyIncome('MASS') * 10
+        if self:GetEconomyStoredRatio('MASS') < 0.15 then return end
+        for _, f in ipairs(factories) do
+            if f:IsIdleState() and EntityCategoryContains(categories.LAND, f) then
+                if EntityCategoryContains(categories.TECH1, f) and minutes >= 8 and income >= 20 then
+                    IssueUpgrade({ f }, self:Bp('b0201'))
+                    return
+                elseif EntityCategoryContains(categories.TECH2, f) and minutes >= 16 and income >= 45 then
+                    IssueUpgrade({ f }, self:Bp('b0301'))
+                    return
+                end
+            end
+        end
+        for _, m in ipairs(self:GetListOfUnits(categories.MASSEXTRACTION * categories.STRUCTURE, false)) do
+            if Alive(m) and m:IsIdleState() then
+                if EntityCategoryContains(categories.TECH1, m) and minutes >= 6 then
+                    IssueUpgrade({ m }, self:Bp('b1202'))
+                    return
+                elseif EntityCategoryContains(categories.TECH2, m) and minutes >= 14 and income >= 40 then
+                    IssueUpgrade({ m }, self:Bp('b1302'))
+                    return
                 end
             end
         end
     end,
 
-    -- the army (until phase 4's operations): idle combat units gather at the start; enemies in the start zone or next
-    -- to it are met with everything idle there
+    -- the army: the operations (operations.lua, phase 4)
     RemasterArmy = function(self)
-        local R = self.Remaster
-        local idle = {}
-        for _, u in ipairs(self:GetListOfUnits(categories.MOBILE * categories.LAND - categories.ENGINEER - categories.COMMAND, false)) do
-            if Alive(u) and u:IsIdleState() then table.insert(idle, u) end
-        end
-        if not idle[1] or R.startZone <= 0 then return end
-        local target
-        local zones = { R.startZone }
-        for _, n in ipairs(Remastered.AIZone(R.startZone).neighbours) do table.insert(zones, n) end
-        for _, z in ipairs(zones) do
-            local f = Remastered.AIZoneForces(R.army, z)
-            if f.enemy.land.count + f.enemy.structure.count > 0 then
-                local zone = Remastered.AIZone(z)
-                target = Pos(zone.x, zone.z)
-                break
-            end
-        end
-        IssueAggressiveMove(idle, target or Pos(R.startX, R.startZ))
+        import("/lua/remastered/ai/operations.lua").Think(self)
     end,
 }

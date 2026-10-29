@@ -466,6 +466,9 @@ struct ArmyIndex {
   uint32_t builtTick = 0xffffffffu;
   int units[kSides] = {}, unknown = 0, outside = 0;
   std::vector<Cell> cells;          // [zone][side][class]
+  // The units themselves (phase 4), for the battle estimate of a zone (AIZoneEstimate): per zone and side, blueprint
+  // entity index -> effective count (memory weight x health share), in entity order
+  std::vector<std::map<int, float>> forces;  // [zone][side]
   std::vector<ZoneSideExtra> extra;  // [zone][side]
   Cell& At(int zone0, int side, int cls) { return cells[(static_cast<size_t>(zone0) * kSides + side) * kMoveClasses + cls]; }
   ZoneSideExtra& Extra(int zone0, int side) { return extra[static_cast<size_t>(zone0) * kSides + side]; }
@@ -485,6 +488,7 @@ void BuildIndex(Sim& sim, ArmyIndex& ix) {
   RatingsState& rs = Ratings(sim);
   const int nz = static_cast<int>(m.zones.size());
   ix.cells.assign(static_cast<size_t>(nz) * kSides * kMoveClasses, Cell{});
+  ix.forces.assign(static_cast<size_t>(nz) * kSides, std::map<int, float>{});
   ix.extra.assign(static_cast<size_t>(nz) * kSides, ZoneSideExtra{});
   for (int& u : ix.units) u = 0;
   ix.unknown = ix.outside = 0;
@@ -506,6 +510,7 @@ void BuildIndex(Sim& sim, ArmyIndex& ix) {
       return;
     }
     if (!remembered) ++ix.units[side];
+    ix.forces[static_cast<size_t>(z - 1) * kSides + side][r->entity] += weight * hf * hf;  // (hf = sqrt(health share))
     Cell& c = ix.At(z - 1, side, r->move);
     const float k = hf * r->fix * weight;
     c.count += weight;
@@ -750,12 +755,13 @@ int TargetTypeOf(const UnitRating& r) {
 }  // namespace
 
 BattleResult EstimateBattle(const std::vector<ForceStack>& ours, const std::vector<ForceStack>& theirs,
-                            float startDistance, const std::map<std::pair<int, int>, float>& beats) {
+                            float startDistance, const std::map<std::pair<int, int>, float>& beats, bool kite) {
   struct Stack {
     const UnitRating* r;
     float hpEach, shEach, hp, sh;  // per unit and pooled; the shield takes hits first (from outside its bubble)
     int tt;                        // its target type
     bool mobile;
+    float arrive;                  // when it joins (reinforcements)
   };
   std::vector<Stack> side[2];
   float pool0[2] = {0, 0};
@@ -764,7 +770,7 @@ BattleResult EstimateBattle(const std::vector<ForceStack>& ours, const std::vect
       if (!f.r || !(f.count > 0)) continue;
       const float hpEach = std::max(1.0f, f.r->health), shEach = std::max(0.0f, f.r->shield);
       side[k].push_back({f.r, hpEach, shEach, hpEach * f.count, shEach * f.count, TargetTypeOf(*f.r),
-                         f.r->move != kMoveStatic});
+                         f.r->move != kMoveStatic, std::max(0.0f, f.arrive)});
       pool0[k] += (hpEach + shEach) * f.count;
     }
   BattleResult res;
@@ -774,7 +780,8 @@ BattleResult EstimateBattle(const std::vector<ForceStack>& ours, const std::vect
     res.margin = 0.5f + (res.ours - res.theirs) / 2;
     return res;
   }
-  auto alive = [](const Stack& s) { return s.hp > 0; };
+  float t = 0;
+  auto alive = [&](const Stack& s) { return s.hp > 0 && s.arrive <= t; };  // (not yet arrived: not in the fight)
   // a side's reach: its longest weapon range against any target type the other side still has
   auto reach = [&](int k) {
     float rr = 0;
@@ -836,13 +843,15 @@ BattleResult EstimateBattle(const std::vector<ForceStack>& ours, const std::vect
   };
   float d = startDistance >= 0 ? startDistance : std::max(reach(0), reach(1));
   const float dt = 0.5f;
-  float t = 0;
   std::vector<float> dmg[2];
   for (; t < 180; t += dt) {
-    bool anyAlive[2] = {false, false};
+    bool anyAlive[2] = {false, false}, anyLater[2] = {false, false};
     for (int k = 0; k < 2; ++k)
-      for (const Stack& s : side[k]) anyAlive[k] = anyAlive[k] || alive(s);
-    if (!anyAlive[0] || !anyAlive[1]) break;
+      for (const Stack& s : side[k]) {
+        anyAlive[k] = anyAlive[k] || alive(s);
+        anyLater[k] = anyLater[k] || (s.hp > 0 && s.arrive > t);
+      }
+    if ((!anyAlive[0] && !anyLater[0]) || (!anyAlive[1] && !anyLater[1])) break;
     for (int k = 0; k < 2; ++k) dmg[k].assign(side[k].size(), 0.0f);
     bool fired = false;
     for (int k = 0; k < 2; ++k)
@@ -885,20 +894,35 @@ BattleResult EstimateBattle(const std::vector<ForceStack>& ours, const std::vect
     // Percivals; a Loyalist walks in to its cannon's range even though its bolter outranges a T2 tank)
     bool moved = false;
     const float ea = engage(0), eb = engage(1), ra = reach(0), rb = reach(1);
+    float closing = 0;
     for (int k = 0; k < 2; ++k)
       if (d > (k == 0 ? ea : eb) && !((k == 0 ? ea : eb) >= (k == 0 ? rb : ra))) {
         const float v = speedOf(k);
         if (v > 0) {
           d = std::max(0.0f, d - v * dt);
+          closing = std::max(closing, v);
           moved = true;
         }
       }
-    if (!fired && !moved) break;  // nobody can fire and nobody can close: a standoff without a fight
+    // kiting: a side holding because its main weapons outrange the other backs off as the other closes, at its own
+    // speed, not past its engage range
+    if (kite && closing > 0)
+      for (int k = 0; k < 2; ++k) {
+        const float ek = k == 0 ? ea : eb, other = k == 0 ? rb : ra;
+        if (ek >= other && ek > 0) {
+          const float v = speedOf(k);
+          if (v > 0) d = std::min(ek, d + v * dt);
+        }
+      }
+    bool waiting = false;  // reinforcements still on the way: the fight is not over while they come
+    for (int k = 0; k < 2; ++k)
+      for (const Stack& s : side[k]) waiting = waiting || (s.hp > 0 && s.arrive > t);
+    if (!fired && !moved && !waiting) break;  // nobody can fire, close or arrive: a standoff without a fight
   }
   float left[2] = {0, 0};
   for (int k = 0; k < 2; ++k)
     for (const Stack& s : side[k])
-      if (alive(s)) left[k] += s.hp + std::max(0.0f, s.sh);
+      if (s.hp > 0) left[k] += s.hp + std::max(0.0f, s.sh);  // (reinforcements that never came still count)
   res.ours = left[0] / pool0[0];
   res.theirs = left[1] / pool0[1];
   res.margin = 0.5f + (res.ours - res.theirs) / 2;
@@ -1184,6 +1208,57 @@ std::vector<ForceStack> CheckForce(lua_State* L, int i) {
   return out;
 }
 
+// Remastered.AIZoneEstimate(army, zone, horizon [, kite]) -> margin, oursLeft, theirsLeft, seconds, oursMass,
+// theirsMass: the battle estimate of a fight for the zone from what the army knows (phase 4): its index's units (fair
+// intel, the memory of lost contacts, unknown contacts left out) that can come to the zone within `horizon` world
+// units of travel or shoot into it, own + allied against enemy; a unit away from the zone joins after its travel
+// time (its class's travel distance / its speed; aircraft in a straight line), in 10 s buckets. The margin is ours.
+int l_AIZoneEstimate(lua_State* L) {
+  Sim& sim = *Sim::From(L);
+  ArmyIndex& ix = CheckArmyIndex(L, 1);
+  const MapAnalysis& m = MapOf(sim);
+  const int z = CheckZoneArg(L, 2, m);
+  const float horizon = static_cast<float>(luaL_checknumber(L, 3));
+  const bool kite = lua_toboolean(L, 4) != 0;
+  RatingsState& rs = Ratings(sim);
+  const Zone& zt = m.zones[z - 1];
+  const float radius = std::sqrt(static_cast<float>(zt.segments) * MapAnalysis::kSeg * MapAnalysis::kSeg / 3.14159265f);
+  std::map<std::pair<int, int>, float> stacks[2];  // (entity, arrival bucket) -> count; [0] ours, [1] theirs
+  float mass[2] = {0, 0};
+  for (int zs = 1; zs <= static_cast<int>(m.zones.size()); ++zs) {
+    const Zone& from = m.zones[zs - 1];
+    const float dx = from.x - zt.x, dz = from.z - zt.z;
+    const float straight = std::sqrt(dx * dx + dz * dz);
+    for (int side = 0; side < kSides; ++side)
+      for (const auto& [entity, count] : ix.forces[static_cast<size_t>(zs - 1) * kSides + side]) {
+        const UnitRating& r = rs.byEntity[entity];
+        float arrive = -1;
+        if (zs == z || r.maxRange + radius >= straight) arrive = 0;
+        else if (r.move == kMoveAir) arrive = straight <= horizon && r.speed > 0 ? straight / r.speed : -1;
+        else if (r.move != kMoveStatic && r.speed > 0) {
+          const float d = m.Distance(zs, z, r.move);
+          arrive = d >= 0 && d <= horizon ? d / r.speed : -1;
+        }
+        if (arrive < 0) continue;
+        const int bucket = static_cast<int>(arrive / 10);
+        const int k = side == kEnemy ? 1 : 0;
+        stacks[k][{entity, bucket}] += count;
+        mass[k] += r.mass * count;
+      }
+  }
+  std::vector<ForceStack> force[2];
+  for (int k = 0; k < 2; ++k)
+    for (const auto& [key, count] : stacks[k]) force[k].push_back({&rs.byEntity[key.first], count, key.second * 10.0f});
+  const BattleResult r = EstimateBattle(force[0], force[1], -1.0f, rs.beats, kite);
+  lua_pushnumber(L, r.margin);
+  lua_pushnumber(L, r.ours);
+  lua_pushnumber(L, r.theirs);
+  lua_pushnumber(L, r.seconds);
+  lua_pushnumber(L, mass[0]);
+  lua_pushnumber(L, mass[1]);
+  return 6;
+}
+
 // Remastered.AIBuildValue(blueprintId, enemy) -> value, killed, lost: the counter-pick (BuildValue): enemy mass killed
 // per own mass lost when as much of this unit as the enemy force weighs fights it; enemy = an array of {id, count}
 int l_AIBuildValue(lua_State* L) {
@@ -1269,7 +1344,7 @@ int l_AISetVision(lua_State* L) {
 int l_AIBattleEstimate(lua_State* L) {
   const std::vector<ForceStack> a = CheckForce(L, 1), b = CheckForce(L, 2);
   const float d = lua_isnoneornil(L, 3) ? -1.0f : static_cast<float>(luaL_checknumber(L, 3));
-  const BattleResult r = EstimateBattle(a, b, d, Ratings(*Sim::From(L)).beats);
+  const BattleResult r = EstimateBattle(a, b, d, Ratings(*Sim::From(L)).beats, lua_toboolean(L, 4) != 0);
   lua_pushnumber(L, r.margin);
   lua_pushnumber(L, r.ours);
   lua_pushnumber(L, r.theirs);
@@ -1297,6 +1372,7 @@ void RegisterIndexBindings(lua_State* L) {
               {"AIBattleEstimate", l_AIBattleEstimate},
               {"AIRandom", l_AIRandom},
               {"AIBuildValue", l_AIBuildValue},
+              {"AIZoneEstimate", l_AIZoneEstimate},
               {"AISetRatingFix", l_AISetRatingFix},
               {"AISetBeats", l_AISetBeats},
               {"AISetVision", l_AISetVision}};
