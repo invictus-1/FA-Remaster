@@ -264,51 +264,109 @@ picture.
   it can be written next to the user's prefs keyed by a hash of those and read back. Today it is computed every
   game; only worth it if a big map takes more than a fraction of a second.
 
-### 3.2 Unit / threat index (phase 2)
+### 3.2 Unit / threat index (phase 2, built: `src/ai/unit_index.*`)
 
-Kept up to date by the engine at a fixed point of the beat (after recon, before the script threads run: the same
-point every beat, in one order), for **every army that has one of our brains** (the cost is zero in a game
-without our AI).
+**When it runs.** The engine keeps it for **every army that plays our AI**, and only for those; a game without our AI
+never builds it. It is rebuilt every 5 beats (`kIndexPeriod`) in a stage of its own, just before the script threads
+(`Sim::Tick`, before `threads_->RunTick`). There it reads only last beat's committed state: the units, their blips,
+their blueprints' ratings (3.3) and the zones (3.1). A query before the first build builds it at once.
 
-- **What it holds, per observing army (or per team):** for each zone, sums by owner side (ours, allied, enemy),
-  domain (land, naval, air, sub), kind (direct fire, indirect fire, anti-air, anti-sub, shield, structure, economy,
-  engineer, commander, experimental) and range band (short < 30, medium 30-60, long 60-150, strategic > 150 world
-  units); the strongest single unit; counts. Plus per zone "what can hit this zone from outside it" (long-range units
-  and structures whose range covers it).
-- **Per domain "can it reach".** An enemy unit adds to a zone's threat for a domain only if it can reach that zone or
-  shoot into it: a ship counts against land zones only when the land zone is a coast neighbour of its pond within
-  the ship's range; a land unit counts against a water zone only when it is on the shore with range over it; air
-  reaches everything. This is what keeps a stranded navy from scaring the land army.
-- **Fair intel.** The index for army A is built only from what A may know: its own and allied units; enemy units
-  through A's blips (`Unit::recon` flags, intel.cpp). A unit seen in line of sight (now or ever, LOSEver) counts with
-  its blueprint; a radar or sonar blip that was never seen counts as "unknown" with the domain the blip's layer
-  tells and an estimate of its strength from what A has seen of that enemy so far; a blip known to be fake is left
-  out. Positions are the blip's (jammed blips stay where the jammer puts them). Lost contacts fade as the engine's
-  threat map does (study 2.4 by contrast: no exact positions of unseen units). The cheat option "AI vision" makes
-  the index read every unit, as omni would.
-- **Answers to Lua:** `Remastered.AIZoneThreat(brain, zone, domain, kind, band)`, `AIZoneSummary(brain, zone)`
-  (one small table), `AIZonesWhere(brain, query)` (zone lists for "contested land zones", "enemy mass zones we can
-  reach by land" ...), `AIReachable(zoneA, zoneB, domain)`.
-- **Reaction delay** (2.6) is a ring of per-zone summaries, one every N ticks: a slow brain reads an older one. Only
-  the summaries are kept, not the units, so the memory is small.
-- **Cost target:** under 0.3 ms per beat for 8 armies and 3,000 units (per-unit work is a zone lookup in an array and
-  a few adds; recomputed in full every 10 beats, or kept incrementally if the profiler says so).
+**What it holds, per observing army:** per zone, per side (own, allied, enemy, as that army sees them) and per
+movement class (land, naval, hover, amphibious, air, static):
+- the count and the mass of the units;
+- their summed ratings against each target type (ground, air, naval, structure);
+- the ratings by range band (short < 30, medium < 60, long < 150, strategic), and the longest range;
+- the contacts whose type is unknown.
 
-### 3.3 Battle estimate (phase 2 for the formula, phase 5 for the small fight)
+Per zone and side it also keeps the engineers, commanders, experimentals, factories, shield health and economy
+mass. Units under construction are left out, and a damaged unit counts with the square root of its health share.
 
-- **Strength.** Each unit's combat value from its blueprint: damage per second against each domain (from its
-  weapons' damage, rate of fire and number of shots), effective health (health plus shield, times armour), range,
-  speed. A group's strength is square-law style: for ranged units the fighting value of N units grows with about N
-  squared (Lanchester), so 20 tanks beat 10 by far more than twice. Shields and point defence count for their side;
-  units that cannot hit the other side's domain count zero for that fight.
-- **Who is in range.** Range and speed give how long the shorter-ranged side takes to close in, and how much damage
-  it takes on the way; that is folded into the estimate. Reinforcements on the way count with their arrival time.
-- **Answer:** a ratio (our winning margin, 0.5 = even), the expected losses of each side, and the expected time.
-  `Remastered.AIBattleEstimate(brain, ourGroup or zone, theirZone or units)`.
+**Fair intel** (`Unit::recon`, intel.cpp):
+- An enemy unit counts only while the army holds a blip of it, and where the blip is.
+- Its type and rating are known once the army has had it in sight (LOSNow or LOSEver) or omni sees it.
+- A radar or sonar contact never seen counts as an unknown contact of its movement class. A player too sees air, land
+  or naval on the radar icon.
+- A jammer's fake blips count as unknown contacts until the army knows them as fakes (KnownFake). A real blip marked
+  KnownFake is left out.
+- Own and allied units are known in full.
+- Seen in a SETONS_R game with fog of war (`explored`), at beat 2990: army 1 knows 8 of the 301 enemy units and has 2
+  unknown contacts. The same game without fog knows nearly all of them.
+- Lost contacts are not remembered yet (a later phase; the engine's threat map keeps them).
+- The cheat option "AI vision" will read every unit, as omni would (phase 3, with the lobby option).
+
+**"Can it reach"** (`AIZoneThreat`): the enemy strength that can come to a zone within a travel horizon, or shoot into
+it.
+- Mobile units reach by the map analysis' travel distance for their own movement class. A navy in a pond that
+  touches no land zone cannot come to one.
+- Aircraft reach by straight distance.
+- Anything reaches whose longest range covers the zone.
+- Only strength against the asked target type counts, so a submarine adds nothing against ground.
+- The check on SETONS_R: a frigate and a sub (enemy) in the closed pond, zone 113.
+  - The navy's threat against ground is 5.5 in the pond and in its two land neighbours, zones 4 and 59, which the
+    frigate's range covers. It is 0 in zones 5 and 31 and in the open-sea zone 160, even with a 2000-unit horizon.
+  - The Tigershark counts against ground because its deck gun can hit land.
+
+**Reaction delay** (2.6) will be a ring of these summaries, one per build, so that a slow brain reads an older one
+(phase 5, with the difficulty knobs).
+
+**Cost:** measured with the proofs (see the aicore notes). Each build is a pass over the units with a zone lookup per
+unit, plus an array clear. The zone x zone sums of `AIZoneThreat` are made per query.
+
+### 3.3 Unit ratings and the battle estimate (ratings and square law: phase 2, built; small fight: phase 5)
+
+- **Ratings from the blueprints** (Chris's idea, ai-design-goals.md decision 10). Every unit blueprint gets, from its
+  blueprint alone:
+  - **damage per second** against ground, air, naval and structure targets:
+    - each weapon's damage x the shots per firing x the rate of fire;
+    - the shots per firing count salvos, racks fired together, projectiles per firing, damage-over-time pulses and
+      beam pulses;
+    - which targets a weapon hits comes from `FireTargetLayerCapsTable`, narrowed to air by a
+      `TargetRestrictOnlyAllow` of AIR;
+    - left out: death, teleport and defence (anti-missile) weapons, weapons that come only with an upgrade, manual
+      fire (overcharge), and nukes (the unit is marked "strategic" instead);
+  - health plus shield;
+  - the longest range per target type;
+  - speed and mass.
+- **The rating** against a target type is sqrt(dps x (health + shield)), divided by the same for the reference unit:
+  the UEF T1 tank uel0201 (24 dps x 300 hp), which rates 1.0.
+  - This is the per-unit term of the square law. A group's fighting strength is (sum of ratings)^2, so groups compare
+    by their sums, and 20 tanks beat 10 by far more than twice.
+  - Examples: T1 tank `T1G 1.0`, UEF T1 interceptor `T1A 1.4` (air only), UEF T1 frigate `T1N 3.8`, UEF ACU `CG 12.9`,
+    T1 point defence `T1S 7.5`, UEF battleship `T3N 97.8`, Galactic Colossus `T4X 186.3`.
+- **Chris's tuning lists:** `MOHO64_AI_RATINGS=<file>` writes two files.
+  - `<file>`: every unit, mods included (about 1,360 with the lab's mods), by domain, tier and rating.
+  - `<file>` with `_stock` before its extension: the game's own playable units only, about 450, the list Chris tunes
+    first. It has the four factions, no mod, no civilians, campaign operation units, dummies or effects, sorted by
+    faction, tier and domain.
+  - Each row has:
+    - the label (tier + domain letter + best rating: T1 T2 T3, T4 experimental, C commander; G ground, A air, N naval,
+      S structure, X experimental);
+    - id, faction, name, mass, health, shield;
+    - dps and range per target type, speed, and the four ratings;
+    - a `fix` column of 1.0 for his multiplier;
+    - a tier note.
+  - **The tier** comes from the categories TECH1 / TECH2 / TECH3 / EXPERIMENTAL / COMMAND. A mobile unit whose
+    categories give none, or one at least two tiers below what its mass says, takes its mass band's tier instead,
+    never lower than its categories'.
+    - This catches a mod's 3,600-mass "TECH1" bot: BlackOps' UnderTaker, Tha-Yath and Redhawk now read `T4X*`.
+    - The mass bands: ground under 150 / 600 / 3,000, then T4; air under 150 / 500 / 3,000; naval under 600 / 4,000 /
+      15,000.
+    - Such a label gets a `*`, and the tier note says what the categories gave.
+  - **OPEN:** reading his corrected list back (a multiplier per unit, plus "A beats B" overrides) as a file in
+    `data/ai`, in phase 3.
+  - Rows that look rough, the kind the lists are for: the mods' commanders (BlackOps) rate very high from their extra
+    weapons; T1 point defence comes out at 241 dps; beam units such as the Arachne.
+- **The square-law estimate:** `Remastered.AISquareLaw(ours, theirs)` returns two numbers:
+  - the margin ours^2 / (ours^2 + theirs^2), where 0.5 is even;
+  - the share of the winner's strength left at the end.
+
+  The inputs are summed ratings, for example `AIZoneThreat`'s two answers.
+- **Not yet:** closing time from range and speed, and reinforcements on the way (phase 4, with the operations).
 - **The small fight simulation (phase 5)** for the few fights that matter each second (an objective, a push, a
-  breach stage): both sides as lists of units with blueprint DPS, health, range and speed, stepped in half-second
-  steps for up to 30 s with simple target choice, in native code, deterministic. Runs on the worker pool when there
-  are several, one fight per task, results committed in the fights' order.
+  breach stage):
+  - both sides as lists of units with blueprint dps, health, range and speed;
+  - stepped in half-second steps for up to 30 s, with simple target choice, in native code, deterministic;
+  - on the worker pool when there are several, one fight per task, results committed in the fights' order.
 
 ### 3.4 What stays Lua (at first)
 
@@ -382,6 +440,16 @@ native core for numbers and spends its own time only on decisions.
   | `AIBuildSpots(zone, size)` | `{{x, z}, ...}`: centres of terrain spots of at least `size` (2, 4, 8, 16) in the zone |
 
   A bad zone id or domain is a Lua argument error. No call hands out a wall-clock time.
+- **Phase 2 (built, src/ai/unit_index.cpp):** `army` is the 1-based army index of an army that plays our AI. Any other
+  army is an argument error: an AI never asks with another army's eyes.
+
+  | Call | Returns |
+  |---|---|
+  | `AIUnitRating(blueprintId)` | `{id, label, tier, domain, mass, health, shield, speed, best, maxRange, kinds, dps = {ground, air, naval, structure}, range = {...}, rating = {...}}`, or nil |
+  | `AIZoneForces(army, zone)` | `{own = S, ally = S, enemy = S}`. Each S is `{land = D, naval = D, air = D, structure = D, engineers, commanders, experimentals, factories, shieldHealth, economyMass}`, and each D is `{count, mass, unknown, maxRange, ground, air, naval, structure}` |
+  | `AIZoneThreat(army, zone, target, horizon [, from])` | `enemy, friendly`: summed ratings against `target` of what can reach the zone (3.2); `from` limits it to one domain |
+  | `AIIndexInfo(army)` | `{tick, own, ally, enemy, unknown, outside, period}` |
+  | `AISquareLaw(ours, theirs)` | `margin, survivors` (3.3) |
 - **Randomness:** the AI never calls the sim's `Random` for its own choices (that stream is shared with the game and
   the original's replays compare its draws). It gets its own MT19937 per brain, seeded from the session seed and the
   army index (`Remastered.AIRandom(brain)`, phase 3): same draws on every machine, and the game's stream is untouched.
@@ -462,7 +530,7 @@ both-modes check, multicore.md 1).
 | Phase | Delivers | Tested by |
 |---|---|---|
 | 1 (built 2026-10-28) | Map analysis native (`src/ai/`), its Lua calls, the `MOHO64_AI_MAPDUMP` dump; computed and its calls made only in a session with our AI | The 16 + B1 / b8 identical to main; SETONS_R's dump looked at (zones around the mass, ponds, chokepoints at the passes); 250-300 ms; an AI-key session identical at 1 / 32 threads, shuffle, reverse |
-| 2 | Unit / threat index per observing army with fair intel and "can it reach"; the battle-estimate formula; their Lua calls | Unit tests from scripted sessions (a navy in a closed pond does not count for land; a radar blip counts as unknown); index cost per beat on b8-sized games; identical runs at 1 / 32 threads |
+| 2 (built 2026-10-28) | Unit / threat index per observing army with fair intel and "can it reach"; blueprint ratings with Chris's labels and list (`MOHO64_AI_RATINGS`); the square-law estimate; their Lua calls | Scripted sessions (a navy in a closed pond does not threaten distant land; with fog only blips count, unseen contacts are unknown); the 16 + B1 / b8 identical; our-key sessions identical at 1 / 32 threads, shuffle, reverse |
 | 3 | The brain in `data/ai/` (keys and skeleton are in since phase 1b): OnCreateAI, own random stream, think loops; economy and building (opening from the map, build-power jobs, expansion) and simple defence | Our AI vs FAF's adaptive on SETONS_R: it expands, stays out of stalls, defends; it does not crash for 60 minutes; Lua + native cost per tick |
 | 4 | Strategic and operation layers: aggression with hysteresis, objectives, gathering, push, retreat by estimate, raids, navy and air domains, combined arms timing | Ours vs M28 and FAF's AI, several seeds: the fight scores of section 6; "never fled a weaker force" at zero faults |
 | 5 | Cracking fortified lines and staged breaches; the small fight simulation; group micro (focus fire, kiting in even fights); difficulty knobs and the four levels | Scripted fortified-line scenarios (a session that starts with T2 PD + artillery lines); level-vs-level matches (each level beats the one below most of the time) |

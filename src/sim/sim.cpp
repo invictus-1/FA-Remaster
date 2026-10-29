@@ -35,6 +35,7 @@
 #include "core/vfs.h"
 #include "ai/map_analysis.h"
 #include "ai/scripts.h"
+#include "ai/unit_index.h"
 #include "script/fastlib.h"
 #include "script/script_state.h"
 #include "script/threads.h"
@@ -1169,6 +1170,7 @@ bool Sim::Start(const ReplayHeader& replay) {
   if (!CallGlobal("BeginSession", 0)) return false;
   lap("BeginSession");
   ai::AfterSessionStart(*this);  // our own AI's map analysis, in a session with our AI (or MOHO64_AI_MAPDUMP)
+  ai::IndexAfterSessionStart(*this);  // ... its unit ratings and index (or MOHO64_AI_RATINGS)
   SetupSync();  // the original's "beat 0" Sync, before any beat
   return true;
 }
@@ -1268,6 +1270,7 @@ bool Sim::CreateArmies(const ReplayHeader& replay) {
   if (fixes && ai::SessionHasOurAi(*this)) {
     ai::JoinOurAiScripts(*state_);
     ai::RegisterMapBindings(L);
+    ai::RegisterIndexBindings(L);
   }
   // The lobby's unit cap: the CArmyImpl ctor (0x6ff2ed) takes Options.UnitCap only when it is a string
   // (LuaObject::IsString 0x907370: the type itself, not a number), as atol; 500 when it is none or atol gives 0.
@@ -2292,6 +2295,9 @@ void Sim::Tick() {
   phases.Lap(PhaseTimer::kWeapons);
   CommandStage(*this);  // stage 0x958 (arrivals from last beat's motion end their commands here)
   phases.Lap(PhaseTimer::kCommands);
+  // Our own AI's unit / threat index (src/ai/unit_index.h), before the script threads that read it: rebuilt every few
+  // beats for the armies that play it; nothing at all in a session without it. It reads the units and blips only.
+  ai::IndexBeat(*this);
   threads_->RunTick(tick_);  // stage 0x944: Lua threads
   phases.Lap(PhaseTimer::kThreads);
   std::vector<Unit*> motionOrder = MotionOrder();  // (a copy: a unit sent to the pass's end is appended to it)

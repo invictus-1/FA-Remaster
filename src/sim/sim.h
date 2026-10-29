@@ -571,6 +571,9 @@ class Sim {
   // src/ai/map_analysis.cpp: our own AI's map analysis (its MapState), made only in a session with our AI or for
   // MOHO64_AI_MAPDUMP; the game itself never reads it
   std::shared_ptr<void> aiMapState;
+  // src/ai/unit_index.cpp: its unit ratings and its unit / threat index, likewise only with our AI (the ratings also
+  // for MOHO64_AI_RATINGS); the game itself never reads them
+  std::shared_ptr<void> aiRatingsState, aiIndexState;
   std::shared_ptr<struct PhaseTimer> phaseTimer;  // sim/sim.cpp: MOHO64_PROFILE's phase times (measuring only)
   std::shared_ptr<struct OrderLatency> orderLatency;  // sim/sim.cpp: MOHO64_PROFILE's order latency (ProfileTrackOrder)
   // Counts for the debug and stats lines (MOHO64_DEBUG_COMBAT, MOHO64_STATS); nothing in the simulation reads them

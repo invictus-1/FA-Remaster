@@ -57,6 +57,7 @@ app/main.cpp            command line: --init, --rules, --check-lua, --sim <repla
 | `src/sim/anim.cpp` | Animation manipulators (timing from .sca headers) |
 | `src/ai/map_analysis.*` | Our own AI (not the original's): the map analysis (zones, links, travel distances per domain, chokepoints, build spots), Remastered.AI*, MOHO64_AI_MAPDUMP; docs/ai-architecture.md |
 | `src/ai/scripts.*`, `data/ai/` | Our own AI's Lua (keys, brain), given to the sim state only in a session that plays it, nothing mounted |
+| `src/ai/unit_index.*` | Our own AI: unit ratings from the blueprints (MOHO64_AI_RATINGS, Chris's labels), the unit / threat index per army that plays it (fair intel, can it reach), the square law; docs/ai-architecture.md 3.2-3.3 |
 | `src/core/dmath.h` | Deterministic sin/cos/atan2 (same bits on every platform) |
 | `third_party/mimalloc` | Allocator for the Lua heap (MIT) |
 | `third_party/lua` | Lua 5.0 changed to the game's dialect (docs/lua-dialect.md) |
