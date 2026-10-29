@@ -28,6 +28,7 @@ void EntityGrid::Init(int mapW, int mapH) {
   while ((2 << shift_) <= w_) ++shift_;  // (bsr)
   mask_ = static_cast<uint32_t>(w_) * static_cast<uint32_t>(h_) - 1u;
   for (auto& l : lists_) l.assign(static_cast<size_t>(w_) * h_, {});
+  for (uint64_t& v : version_) ++v;
 }
 
 void EntityGrid::Remove(Entity* e) {
@@ -36,6 +37,7 @@ void EntityGrid::Remove(Entity* e) {
     e->gridW = e->gridH = 0;
     return;
   }
+  ++version_[k];
   for (int z = e->gridZ0; z < e->gridZ0 + e->gridH; ++z)
     for (int x = e->gridX0; x < e->gridX0 + e->gridW; ++x) {
       auto& c = lists_[k][Cell(x, z)];
@@ -51,6 +53,7 @@ void EntityGrid::Place(Entity* e, int cx0, int cz0, int w, int h) {
   if (w <= 0 || h <= 0) cx0 = cz0 = w = h = 0;
   if (cx0 == e->gridX0 && cz0 == e->gridZ0 && w == e->gridW && h == e->gridH) return;
   Remove(e);
+  ++version_[k];
   e->gridX0 = static_cast<uint16_t>(cx0);
   e->gridZ0 = static_cast<uint16_t>(cz0);
   e->gridW = static_cast<uint16_t>(w);
@@ -129,6 +132,77 @@ void EntityGrid::GatherBox(float x0, float z0, float x1, float z1, int mask, std
       }
     }
   for (Entity* e : *out) e->gridMark = false;
+}
+
+void EntityGrid::GatherBoxNoMarks(float x0, float z0, float x1, float z1, int mask, std::vector<Entity*>* out) const {
+  out->clear();
+  if (!w_) return;
+  auto span = [](float lo, float hi, int* c0, int* n) {
+    int f = static_cast<int>(std::floor(lo)), c = static_cast<int>(std::ceil(hi));
+    *c0 = std::clamp(f >> 2, 0, 0xffff);
+    *n = std::clamp(((c + 3) >> 2) - *c0, 0, 0xffff - *c0);
+  };
+  int cx0, cz0, w, h;
+  span(x0, x1, &cx0, &w);
+  span(z0, z1, &cz0, &h);
+  int cols = std::min(w, w_ - cx0), rows = std::min(h, h_ - cz0);
+  // the asked lists' entries under the rect (each entity once, where it is first met): a short list is checked by a
+  // look through what was found; a long one through this thread's own table (open addressing on the entity's address,
+  // emptied after the call by the slots it used)
+  size_t total = 0;
+  for (int r = 0; r < rows; ++r)
+    for (int c = 0; c < cols; ++c) {
+      size_t idx = static_cast<size_t>(cz0 + r) * w_ + (cx0 + c);
+      for (int k = 0; k < 2; ++k)
+        if (mask & (1 << k)) total += lists_[k][idx].size();
+      if (mask & 12) total += lists_[2][idx].size();
+    }
+  if (!total) return;
+  static thread_local std::vector<const Entity*> seen;
+  static thread_local std::vector<size_t> used;
+  const bool table = total > 24;
+  size_t m = 0;
+  if (table) {
+    size_t cap = 64;
+    while (cap < 2 * total) cap <<= 1;
+    if (seen.size() < cap) seen.assign(cap, nullptr);
+    m = cap - 1;
+    used.clear();
+  }
+  auto add = [&](Entity* e) {
+    if (!table) {
+      for (Entity* f : *out)
+        if (f == e) return;
+      out->push_back(e);
+      return;
+    }
+    size_t hsh = (reinterpret_cast<uintptr_t>(e) >> 4) * 0x9E3779B97F4A7C15ull;
+    for (size_t i = (hsh >> 20) & m;; i = (i + 1) & m) {
+      if (seen[i] == e) return;
+      if (!seen[i]) {
+        seen[i] = e;
+        used.push_back(i);
+        out->push_back(e);
+        return;
+      }
+    }
+  };
+  for (int r = 0; r < rows; ++r)
+    for (int c = 0; c < cols; ++c) {
+      size_t idx = static_cast<size_t>(cz0 + r) * w_ + (cx0 + c);
+      for (int k = 0; k < 2; ++k) {
+        if (!(mask & (1 << k))) continue;
+        const auto& l = lists_[k][idx];
+        for (auto it = l.rbegin(); it != l.rend(); ++it) add(*it);
+      }
+      if (mask & 12) {
+        const auto& l = lists_[2][idx];
+        for (auto it = l.rbegin(); it != l.rend(); ++it)
+          if (mask & ((*it)->kind == Entity::Kind::Projectile ? 4 : 8)) add(*it);
+      }
+    }
+  if (table)
+    for (size_t i : used) seen[i] = nullptr;
 }
 
 void EntityGrid::GatherUnitsBox(float x0, float z0, float x1, float z1, std::vector<Entity*>* out) const {

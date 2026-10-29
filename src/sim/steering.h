@@ -1,6 +1,9 @@
 // Land steering internals shared by sim/motion.cpp and sim/steering.cpp (engine-ref
 // land_motion_blocking.md, unit_collision.md).
 #pragma once
+#include <cstdint>
+#include <vector>
+
 #include "sim/entity.h"
 
 namespace moho {
@@ -30,6 +33,30 @@ Vec3 RotateQuarterTurnY(const Vec3& v);
 void AddImpulse(Unit* u, const Vec3& imp);
 // CUnitMotion::ProcessSurfaceCollisionFromLastMove 0x6b9020 + Sim::DoCollisionsFor 0x597cd0.
 void ProcessSurfaceCollision(Sim& sim, Unit* u);
+// What ProcessSurfaceCollision's search finds before DoCollisionsFor acts on it: the motion's contact list (EntityRefs)
+// and the hits (a unit's, or a prop's with its normal), both in the grid's order.
+struct SurfaceHit {
+  Unit* u;  // a unit's hit, or null for a prop's
+  float depth;
+  Entity* prop = nullptr;
+  Vec3 n{};  // (props: the contact normal handed to OnCollision)
+};
+struct SurfaceContacts {
+  std::vector<uint32_t> contacts;
+  std::vector<SurfaceHit> hits;
+  // (a search made ahead: the grid query it made and what it found, so that its verifier can tell whether the same
+  // query still finds the same entities)
+  struct Query {
+    Sim* sim = nullptr;
+    float x0 = 0, z0 = 0, x1 = 0, z1 = 0;
+    uint64_t version = 0;  // the grid's unit lists' version when it ran
+    std::vector<Entity*> found;
+  } query;
+};
+// MOHO64_PAR_MOTION (multicore step 3, core/speculate.h): before the entity pass, every unit's search of this beat
+// made ahead on the worker pool from the state as the pass begins; at the unit's turn ProcessSurfaceCollision takes it
+// if nothing it read has changed since. order = the pass's units (Sim::Tick's motionOrder).
+void SurfaceContactsAhead(Sim& sim, const std::vector<Unit*>& order);
 // Unit::IsHigherPriorityThan 0x6a8d80: a has the right of way over b.
 bool UnitPriority(const Unit* a, const Unit* b);
 // The unit filter 0x62eea0: e is no obstacle for self (flags 1: path tests, units that did not move;

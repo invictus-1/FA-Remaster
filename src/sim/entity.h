@@ -127,6 +127,9 @@ class Entity : public ScriptObject {
   // the entity grid (sim/entity_grid.h): its cell span (w or h 0: in no cell), the dedup mark
   uint16_t gridX0 = 0, gridZ0 = 0, gridW = 0, gridH = 0;
   bool gridMark = false;
+  // The stage speculation running now (core/speculate.h) knows the entity as its item specItem of round specRound
+  // (a beat's tick): set by the stage before its tasks run, read at the entity's serial turn.
+  uint32_t specItem = 0, specRound = 0xffffffffu;
   bool gridSeen = false;  // its cells were worked out at least once, for the transform below
   Vec3 gridPos;
   Quat gridOri;

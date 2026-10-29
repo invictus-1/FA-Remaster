@@ -7,9 +7,12 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <string>
 #include <vector>
 
 #include "core/log.h"
+#include "core/speculate.h"
 #include "sim/collision.h"
 #include "sim/entity_grid.h"
 #include "script/script_state.h"
@@ -249,12 +252,7 @@ float ObbSphereDepth(const Obb& A, const Vec3& c, float r) {
   return r - dist;
 }
 
-struct Hit {
-  Unit* u;       // a unit's hit, or null for a prop's
-  float depth;
-  Entity* prop = nullptr;
-  Vec3 n{};      // (props: the contact normal handed to OnCollision)
-};
+using Hit = SurfaceHit;  // (steering.h)
 
 // Sim::DoCollisionsFor 0x597cd0
 void DoCollisionsFor(Sim& sim, Unit* self, const std::vector<Hit>& hits) {
@@ -480,14 +478,75 @@ void OrientedBoxAabb(const Vec3& centre, const Vec3 axes[3], const float half[3]
   BoxAabb(b, mn, mx);
 }
 
-void ProcessSurfaceCollision(Sim& sim, Unit* u) {
+namespace {
+
+// ProcessSurfaceCollision's tests before its search: the unit takes part at all (0x6b904f..)
+bool SurfaceTakesPart(const Unit* u) {
+  const UnitMotion& m = u->motion;
+  if (u->layer == "Air" || u->layer == "Sub") return false;
+  if (u->dead || u->beingBuilt || u->parentId || St(u, "Attached")) return false;
+  if (!m.bp || m.bp->canFly) return false;
+  if (m.pushed) return false;  // a pushed unit never pushes
+  return true;
+}
+
+// every 5th tick (id % 5 == tick % 5) a unit larger than 0.2 also collects props, in the same list as the units
+// (mask 0x300, prop_collision.md 1.3): DoCollisionsFor goes through it in the grid's order, a prop's hit calls
+// prop:OnCollision there, and a mate under the same order ends the list, the props after it included (1.4).
+// (Read, not seen: no gate replay changes with it.)
+bool SurfaceWithProps(Sim& sim, const Unit* u) {
+  const MotionBlueprint& b = *u->motion.bp;
+  return b.sizeX * b.sizeZ > 0.2f && u->id % 5u == sim.tick() % 5u;
+}
+
+// A unit's collision primitive as GetWorldShape reads it (held or not): the derived value a search made ahead notes
+// in its ReadLog (core/speculate.h).
+struct ShapeRead {
+  float c[3], half[3], r, pos[3], ori[4];
+  uint32_t type;
+};
+static_assert(sizeof(ShapeRead) <= ReadLog::kMaxDerived, "ShapeRead");
+void ReadShape(const void* obj, void* out) {
+  const Entity* e = static_cast<const Entity*>(obj);
+  ShapeRead& v = *static_cast<ShapeRead*>(out);
+  v.type = static_cast<uint32_t>(e->shape.type);
+  v.c[0] = e->shape.center.x, v.c[1] = e->shape.center.y, v.c[2] = e->shape.center.z;
+  v.half[0] = e->shape.half.x, v.half[1] = e->shape.half.y, v.half[2] = e->shape.half.z;
+  v.r = e->shape.radius;
+  const Vec3& p = e->shapeHeld ? e->shapePos : e->position;
+  const Quat& q = e->shapeHeld ? e->shapeOri : e->orientation;
+  v.pos[0] = p.x, v.pos[1] = p.y, v.pos[2] = p.z;
+  v.ori[0] = q.x, v.ori[1] = q.y, v.ori[2] = q.z, v.ori[3] = q.w;
+}
+
+// A search made ahead: whether its grid query finds the same entities in the same order now (1) or not (0). While the
+// grid's unit lists are as they were, it does without asking.
+void ReadSameCandidates(const void* obj, void* out) {
+  const SurfaceContacts::Query& q = *static_cast<const SurfaceContacts::Query*>(obj);
+  const EntityGrid& g = q.sim->entityGrid();
+  bool same = g.version(0) == q.version;
+  if (!same) {
+    static thread_local std::vector<Entity*> now;
+    g.GatherBoxNoMarks(q.x0, q.z0, q.x1, q.z1, 1, &now);
+    same = now == q.found;
+  }
+  *static_cast<unsigned char*>(out) = same ? 1 : 0;
+}
+
+// ProcessSurfaceCollision's search: the entities under the unit's box and what its box test finds, into out (the
+// motion's contact list and the hits DoCollisionsFor acts on). It only reads. One code path for the serial turn (log
+// null: the grid's own marking gather) and for the search made ahead (log: every read the result depends on noted;
+// the gather without marks, which gives the same list).
+void SurfaceSearch(Sim& sim, Unit* u, bool withProps, SurfaceContacts* out, ReadLog* log) {
   UnitMotion& m = u->motion;
-  m.contacts.clear();  // (0x6b904f: emptied before any of the early returns)
-  if (u->layer == "Air" || u->layer == "Sub") return;
-  if (u->dead || u->beingBuilt || u->parentId || St(u, "Attached")) return;
-  if (!m.bp || m.bp->canFly) return;
-  if (m.pushed) return;  // a pushed unit never pushes
+  out->contacts.clear();
+  out->hits.clear();
   const MotionBlueprint& b = *m.bp;
+  if (log) {
+    log->Raw(u->position);
+    log->Raw(u->orientation);
+    log->Raw(m.bp);  // (the sizes below are the blueprint's)
+  }
   Obb box;
   box.c = u->position;
   // the box from the unit's transform, 0x672b50: its axes are VAxes3's rows (0x4ec590). Seen: Skirmish 2488, engineer
@@ -497,12 +556,6 @@ void ProcessSurfaceCollision(Sim& sim, Unit* u) {
   // Right / Up / Forward gave that axis twice the denormal and the two always met.
   BoxAxes(u->orientation, box.ax);
   box.h = {b.sizeX * 0.5f, b.sizeY, b.sizeZ * 0.5f};
-  // every 5th tick (id % 5 == tick % 5) a unit larger than 0.2 also collects props, in the same list as the units
-  // (mask 0x300, prop_collision.md 1.3): DoCollisionsFor goes through it in the grid's order, a prop's hit calls
-  // prop:OnCollision there, and a mate under the same order ends the list, the props after it included (1.4).
-  // (Read, not seen: no gate replay changes with it.)
-  const bool withProps = b.sizeX * b.sizeZ > 0.2f && u->id % 5u == sim.tick() % 5u;
-  std::vector<Hit> hits;
   // COGrid::CollectEntitiesInBox 0x721dc0: the units registered in the entity-grid cells under the box, in the
   // grid's order (rows, columns, the most recently registered first: rect_queries.md 2.4). The order decides who
   // is pushed which way when a unit overlaps two neighbours, and where a same-order mate ends the list.
@@ -514,19 +567,35 @@ void ProcessSurfaceCollision(Sim& sim, Unit* u) {
       hz += std::fabs(box.ax[i].z) * hs[i];
     }
   }
-  // (the candidates live in a buffer kept from call to call: they are all read before DoCollisionsFor, the only
-  // step here that can lead to another unit's ProcessSurfaceCollision)
+  // (the candidates live in a buffer kept from call to call, one per thread: they are all read before
+  // DoCollisionsFor, the only step that can lead to another unit's ProcessSurfaceCollision)
   static thread_local std::vector<Entity*> cand;
   cand.clear();
   Vec3 amn, amx;
   if (withProps) {
     BoxAabb(box, &amn, &amx);
-    sim.entityGrid().GatherBox(amn.x, amn.z, amx.x, amx.z, 3, &cand);
+    if (log) sim.entityGrid().GatherBoxNoMarks(amn.x, amn.z, amx.x, amx.z, 3, &cand);
+    else sim.entityGrid().GatherBox(amn.x, amn.z, amx.x, amx.z, 3, &cand);
+  } else if (log) {
+    SurfaceContacts::Query& q = out->query;
+    q.sim = &sim;
+    q.x0 = box.c.x - hx, q.z0 = box.c.z - hz, q.x1 = box.c.x + hx, q.z1 = box.c.z + hz;
+    q.version = sim.entityGrid().version(0);
+    sim.entityGrid().GatherBoxNoMarks(q.x0, q.z0, q.x1, q.z1, 1, &cand);
+    q.found = cand;
+    // (the units' lists change during the pass when a unit is made or a shape set: only a change that this query
+    // would see throws the search away; a search with props is not made ahead)
+    log->Derived(&ReadSameCandidates, &q, 1);
   } else {
     sim.entityGrid().GatherBox(box.c.x - hx, box.c.z - hz, box.c.x + hx, box.c.z + hz, 1, &cand);
   }
   auto visit = [&](Unit* e) {
     if (e == u) return;
+    if (log) {
+      log->Derived(&ReadShape, e, sizeof(ShapeRead));
+      log->Raw(e->dead);
+      log->Raw(e->destroyQueued);
+    }
     WorldShape s;
     if (!GetWorldShape(e, &s)) return;
     float depth = 0;
@@ -553,7 +622,7 @@ void ProcessSurfaceCollision(Sim& sim, Unit* u) {
     }
     // every entity whose primitive meets the box goes into the motion's contact list (0x6b9260: the whole result of
     // CollectEntitiesInBox, touching and edge-to-edge included), the raised-platform search's candidates
-    if (meets) m.contacts.push_back(EntityRef(e));
+    if (meets) out->contacts.push_back(EntityRef(e));
     if (e->dead || e->destroyQueued) return;
     static const long dbgCol = getenv("MOHO64_DEBUG_COL") ? atol(getenv("MOHO64_DEBUG_COL")) : -1;
     if (dbgCol >= 0 && (static_cast<long>(u->id) == dbgCol || static_cast<long>(e->id) == dbgCol))
@@ -562,19 +631,89 @@ void ProcessSurfaceCollision(Sim& sim, Unit* u) {
            "half %.3f %.3f %.3f r %.3f) depth %.5f",
            sim.tick(), u->id, box.c.x, box.c.y, box.c.z, box.ax[2].x, box.ax[2].z, box.h.x, box.h.y, box.h.z, e->id,
            static_cast<int>(s.type), s.c.x, s.c.y, s.c.z, s.ax[2].x, s.ax[2].z, s.half.x, s.half.y, s.half.z, s.r, depth);
-    if (depth > 0) hits.push_back({e, depth});
+    if (depth > 0) out->hits.push_back({e, depth});
   };
   for (Entity* e : cand) {
     if (!e) continue;
     if (e->kind == Entity::Kind::Unit) {
       visit(static_cast<Unit*>(e));
     } else if (withProps) {
+      if (log) log->Derived(&ReadShape, e, sizeof(ShapeRead));  // (a prop: PropHitTest reads its primitive)
       Vec3 n;
       float d = 0;
-      if (PropHitTest(e, box, amn, amx, &n, &d)) hits.push_back({nullptr, d, e, n});
+      if (PropHitTest(e, box, amn, amx, &n, &d)) out->hits.push_back({nullptr, d, e, n});
     }
   }
-  if (!hits.empty()) DoCollisionsFor(sim, u, hits);
+}
+
+// (MOHO64_PAR_MOTION=verify) a search made ahead against the serial one: the same entities in the same order, the
+// same bits; "" when they agree
+std::string SurfaceDiff(const SurfaceContacts& a, const SurfaceContacts& b) {
+  if (a.contacts != b.contacts) return "contact lists differ";
+  if (a.hits.size() != b.hits.size()) return "hit counts differ";
+  for (size_t i = 0; i < a.hits.size(); ++i) {
+    const Hit &x = a.hits[i], &y = b.hits[i];
+    if (x.u != y.u || x.prop != y.prop || std::memcmp(&x.depth, &y.depth, sizeof x.depth) != 0 ||
+        std::memcmp(&x.n, &y.n, sizeof x.n) != 0)
+      return "hit " + std::to_string(i) + " differs";
+  }
+  return {};
+}
+
+}  // namespace
+
+void SurfaceContactsAhead(Sim& sim, const std::vector<Unit*>& order) {
+  Speculation<SurfaceContacts>& spec = sim.surfaceSpec();
+  // (the search's debug lines are written at the unit's own turn: with MOHO64_DEBUG_COL set nothing runs ahead)
+  static const bool dbgCol = getenv("MOHO64_DEBUG_COL") != nullptr;
+  if (!spec.active() || dbgCol) return;
+  const uint32_t round = sim.tick();
+  for (size_t i = 0; i < order.size(); ++i) {
+    order[i]->specItem = static_cast<uint32_t>(i);
+    order[i]->specRound = round;
+  }
+  // (MOHO64_PAR_MOTION_GRAIN: units per task, for measuring; 8 by default)
+  static const size_t grain = getenv("MOHO64_PAR_MOTION_GRAIN") ? std::max(1L, atol(getenv("MOHO64_PAR_MOTION_GRAIN"))) : 8;
+  spec.Run(sim.workers(), "surface contacts ahead", round, order.size(), grain,
+           [&](size_t i, ReadLog& log, SurfaceContacts& out) {
+             Unit* u = order[i];
+             // (only the units MotionTick would hand to ProcessSurfaceCollision as things stand now: moving land, hover
+             // and water units; one pushed or stopped later in the pass is searched at its turn, or not at all)
+             const UnitMotion& m = u->motion;
+             if (!m.bp || !m.bp->mobile() || m.bp->motionType == kMotionAir || m.atRest || m.ballistic) return false;
+             if (!((m.vel.x * m.vel.x + m.vel.y * m.vel.y) + m.vel.z * m.vel.z > 1e-6f || m.surfaceNext)) return false;
+             if (!SurfaceTakesPart(u)) return false;
+             if (SurfaceWithProps(sim, u)) return false;  // (a turn with props is searched at the unit's turn)
+             SurfaceSearch(sim, u, false, &out, &log);
+             return true;
+           });
+}
+
+void ProcessSurfaceCollision(Sim& sim, Unit* u) {
+  UnitMotion& m = u->motion;
+  m.contacts.clear();  // (0x6b904f: emptied before any of the early returns)
+  if (!SurfaceTakesPart(u)) return;
+  const bool withProps = SurfaceWithProps(sim, u);
+  // the search: made ahead (MOHO64_PAR_MOTION) and still good, or made now
+  Speculation<SurfaceContacts>& spec = sim.surfaceSpec();
+  const SurfaceContacts* ahead =
+      spec.active() && u->specRound == sim.tick() && !withProps ? spec.Take(u->specItem) : nullptr;
+  SurfaceContacts now;  // (its own: DoCollisionsFor can call Lua, and Lua another unit's ProcessSurfaceCollision)
+  if (!ahead || spec.mode() == SpecMode::kVerify) {
+    SurfaceSearch(sim, u, withProps, &now, nullptr);
+    if (ahead) {
+      std::string d = SurfaceDiff(*ahead, now);
+      if (!d.empty()) {
+        char b[96];
+        std::snprintf(b, sizeof b, "tick %u unit 0x%x: ", sim.tick(), u->id);
+        d = b + d;
+      }
+      spec.Checked(d.empty(), u->specItem, d);
+    }
+  }
+  const SurfaceContacts& found = ahead ? *ahead : now;
+  m.contacts = found.contacts;
+  if (!found.hits.empty()) DoCollisionsFor(sim, u, found.hits);
 }
 
 namespace {

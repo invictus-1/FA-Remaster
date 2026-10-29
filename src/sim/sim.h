@@ -19,6 +19,9 @@
 
 namespace moho {
 class WorkerPool;
+template <class Out>
+class Speculation;
+struct SurfaceContacts;
 }
 #include "sim/blueprints.h"
 #include "sim/economy.h"
@@ -425,6 +428,9 @@ class Sim {
   void ProfileTrackOrder(const std::vector<uint32_t>& ids, const std::string& what);
   // The worker pool every parallel stage runs through (core/workers.h; MOHO64_THREADS, MOHO64_PAR_CHECK).
   WorkerPool& workers() { return *workers_; }
+  // The entity pass's contact searches made ahead (MOHO64_PAR_MOTION, multicore step 3; sim/steering.h
+  // SurfaceContactsAhead, core/speculate.h).
+  Speculation<SurfaceContacts>& surfaceSpec() { return *surfaceSpec_; }
   // The command stage (0x958) runs the units' command threads oldest first; a thread suspended on a
   // move and resumed by its navigator is re-linked at the stage's new end (beat_order.md 2.6).
   const std::vector<Unit*>& CommandOrder();
@@ -667,6 +673,7 @@ class Sim {
   void AttachSkeleton(lua_State* L, Entity* e);
   std::unique_ptr<SkeletonCache> skeletons_;
   std::unique_ptr<WorkerPool> workers_;  // MOHO64_THREADS (core/workers.h): made once per Sim
+  std::unique_ptr<Speculation<SurfaceContacts>> surfaceSpec_;  // MOHO64_PAR_MOTION
   bool armorLoaded_ = false;
   std::map<std::string, std::map<std::string, float>> armorTypes_;  // armour type -> damage type -> multiplier
 

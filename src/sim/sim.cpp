@@ -3,6 +3,7 @@
 #include "sim/prop_motor.h"
 #include "sim/landnav.h"
 #include "sim/sim.h"
+#include "sim/steering.h"
 #include "sim/enum_arg.h"
 #include "sim/script_bits.h"
 #include "core/dmath.h"
@@ -31,6 +32,7 @@
 #include "core/hostfs.h"
 #include "core/log.h"
 #include "core/profile.h"
+#include "core/speculate.h"
 #include "core/workers.h"
 #include "core/vfs.h"
 #include "ai/map_analysis.h"
@@ -874,8 +876,12 @@ Sim::Sim(Vfs* vfs, std::vector<std::string> hookDirs, std::vector<std::string> m
     : vfs_(vfs), hookDirs_(std::move(hookDirs)), modUids_(std::move(modUids)),
       skeletons_(std::make_unique<SkeletonCache>(vfs)),
       workers_(std::make_unique<WorkerPool>(ThreadsFromEnvironment(), ParCheckFromEnvironment())),
+      surfaceSpec_(std::make_unique<Speculation<SurfaceContacts>>("MOTION")),
       commandIds(std::make_shared<CommandIdPool>()) {
   prof::InstallLuaTimer();  // MOHO64_PROFILE only (core/profile.h): the Lua timer on the sim's thread
+  if (surfaceSpec_->active())
+    Logf(LogLevel::Info, "moho64: MOHO64_PAR_MOTION=%s: the entity pass's contact searches are made ahead",
+         SpecModeName(surfaceSpec_->mode()));
   if (workers_->Threads() > 1 || workers_->Check().mode != ParCheck::kOff)
     Logf(LogLevel::Info, "moho64: the sim's worker pool: %d thread(s)%s", workers_->Threads(),
          workers_->Check().mode == ParCheck::kShuffle   ? ", order check: shuffle (tasks on this thread)"
@@ -884,6 +890,11 @@ Sim::Sim(Vfs* vfs, std::vector<std::string> hookDirs, std::vector<std::string> m
 }
 
 Sim::~Sim() {
+  if (surfaceSpec_ && surfaceSpec_->active()) {
+    const std::string line = surfaceSpec_->counts().Line("MOTION (surface contacts)");
+    fprintf(stderr, "%s\n", line.c_str());
+    Logf(LogLevel::Info, "%s", line.c_str());
+  }
   if (rec_) fclose(rec_);
   owned_.clear();  // unbind every engine object while the Lua state still exists
   ReleaseEffectObjects(*this);
@@ -2302,6 +2313,9 @@ void Sim::Tick() {
   phases.Lap(PhaseTimer::kThreads);
   std::vector<Unit*> motionOrder = MotionOrder();  // (a copy: a unit sent to the pass's end is appended to it)
   coordsPending = true;
+  // MOHO64_PAR_MOTION: the units' contact searches of this pass made ahead on the worker pool, each taken at its
+  // unit's turn only if nothing it read has changed by then (core/speculate.h)
+  SurfaceContactsAhead(*this, motionOrder);
   // The entity stage runs its tasks in creation order, units and collision beams alike, and a unit's task is its
   // whole beat (Unit::MotionTick 0x6a9010: motion, manipulators, regeneration, its economy). A collision beam is
   // made with its weapon, so it comes after its owner and before every unit made later: such a unit, killed by the

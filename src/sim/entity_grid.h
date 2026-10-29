@@ -36,7 +36,15 @@ class EntityGrid {
   // asked. Each entity once, where it is first met. (COGrid's line query 0x4fd200, behind
   // GetEntityCollisionsInLine 0x7229c0: a shell's and a beam's candidates, in the order they are asked.)
   void GatherLine(float fromX, float fromZ, float toX, float toZ, std::vector<Entity*>* out);
+  // GatherBox's result, the same entities in the same order, without the marks it writes (each entity once, where it
+  // is first met, through a table of this thread's own): what a speculative task may ask while others read the grid
+  // (core/speculate.h). Writes nothing of the grid or of an entity.
+  void GatherBoxNoMarks(float x0, float z0, float x1, float z1, int mask, std::vector<Entity*>* out) const;
   bool ready() const { return w_ > 0; }
+  // Counts every change of the cells' lists of kind k (0 units, 1 props, 2 the rest; Place, Remove, Init): a
+  // speculative task notes it as a read, so that a list changed after the task ran (a unit made, a shape set from Lua,
+  // a falling tree in the stage) throws its result away.
+  const uint64_t& version(int k) const { return version_[k]; }
 
  private:
   int w_ = 0, h_ = 0;
@@ -52,6 +60,7 @@ class EntityGrid {
   // per cell; the back is the head. 0: units (0x100), 1: props (0x200), 2: shells (0x400) and shields, beams,
   // script entities (0x800)
   std::vector<std::vector<Entity*>> lists_[3];
+  uint64_t version_[3] = {0, 0, 0};
 };
 
 // Entity::UpdateCollision / UpdateRect: the entity's cell span from its collision primitive (none: no
