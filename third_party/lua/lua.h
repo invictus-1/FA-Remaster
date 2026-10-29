@@ -177,6 +177,16 @@ LUA_API void  lua_gpg_checkgc (lua_State *L);
 /* moho64: t[1], t[2], t[3] = a, b, c (raw), as three lua_pushnumber + lua_rawseti would (the same luaH_setnum, the
 ** table's write barrier). */
 LUA_API void  lua_gpg_setnum3 (lua_State *L, int idx, lua_Number a, lua_Number b, lua_Number c);
+/* moho64 (lapi.c, each with its exact terms there): the largest positive numeric key holding a value (a lua_next walk's
+** answer); what lua_rawgeti(L, idx, n) would push, read in place (type, a string's text, a table's _c_object block);
+** dst[k] = src[ix[k-1]] for k = 1..n into a new table's array part made at once; a new table's array part for n
+** stores made at once; whether no collector check can fire while a binding makes so much; a text's string hash. */
+LUA_API lua_Number lua_gpg_maxnumkey (lua_State *L, int idx);
+LUA_API int   lua_gpg_peeki (lua_State *L, int idx, int n, const char **s, size_t *len, void **box);
+LUA_API void  lua_gpg_copyi (lua_State *L, int dst, int src, const int *ix, int n);
+LUA_API void  lua_gpg_arrayfor (lua_State *L, int idx, int n);
+LUA_API int   lua_gpg_nocollect (lua_State *L, int tables, int slots, int nodes, int strings, size_t chars);
+LUA_API unsigned int lua_gpg_strhash (const char *s, size_t len);
 /* moho64: luaL_getn / luaL_setn on the table itself, with the same steps (lapi.c; -2 / 0: the sizes table is
 ** missing, lauxlib makes it). */
 LUA_API int   lua_gpg_getn (lua_State *L, int idx, int sizesref);

@@ -78,6 +78,8 @@ struct BuildTask : public ScriptObject {
 
 Vec3 SnapStructurePosition(Sim& sim, const BlueprintInfo& bp, Vec3 p);
 bool LocationIsFree(Sim& sim, const BlueprintInfo& bp, float x, float z);
+struct UnitBpData;
+bool LocationIsFree(Sim& sim, const BlueprintInfo& bp, const UnitBpData& d, float x, float z);  // (d: its GetUnitBpData)
 bool CanBuildStructureAt(Sim& sim, const BlueprintInfo& bp, float x, float z);
 // CAiBrain::CanBuildStructureAt 0x57cbb0's skirt test after the location test passed (live, non-mobile units).
 // skip: units to leave out (relation 1/2: those of that relation; none for relation 3).

@@ -87,11 +87,18 @@ T* OptObject(lua_State* L, int idx) {
   if (!t) luaL_error(L, "Incorrect type of game object.  (Did you call with '.' instead of ':'?)");
   return t;
 }
+// The engine object of a `_c_object` field's block as GetObject reads it (lua_touserdata of the field: nullptr when
+// it held no userdata; lua_gpg_peeki gives it for a list's element without pushing it).
+inline ScriptObject* ObjectOfBox(void* box) { return box ? static_cast<ScriptObject*>(*static_cast<void**>(box)) : nullptr; }
+// ToObject's test of the class, on an object at hand.
 template <class T>
-T* ToObject(lua_State* L, int idx) {
-  ScriptObject* o = GetObject(L, idx);
+T* AsObject(ScriptObject* o) {
   if constexpr (ScriptTypeOf<T>::bit != 0) return (o && (o->typeBits & ScriptTypeOf<T>::bit)) ? static_cast<T*>(o) : nullptr;
   else return dynamic_cast<T*>(o);
+}
+template <class T>
+T* ToObject(lua_State* L, int idx) {
+  return AsObject<T>(GetObject(L, idx));
 }
 
 }  // namespace moho

@@ -655,6 +655,117 @@ LUA_API void lua_gpg_setnum3 (lua_State *L, int idx, lua_Number a, lua_Number b,
 }
 
 
+/*
+** moho64: the largest positive number among the keys of the table at idx that hold a value (0: none), as a walk with
+** lua_next finds it (the array part's keys 1 .. sizearray, then each node's; the walk's note made the same:
+** luaH_notewalk once, at its first step), without the walk's pushes and its look-up of each key it steps from.
+** (moho::ObjectCount, src/script/lua.hpp: the original's lua_getn 0x90ad30 takes this when t.n is no number.)
+*/
+LUA_API lua_Number lua_gpg_maxnumkey (lua_State *L, int idx) {
+  Table *h;
+  lua_Number best = 0;
+  int i;
+  lua_lock(L);
+  h = hvalue(luaA_index(L, idx));
+  luaH_notewalk(L, h);
+  for (i = h->sizearray; i > 0; i--)
+    if (!ttisnil(&h->array[i - 1])) {
+      best = cast(lua_Number, i);
+      break;
+    }
+  for (i = sizenode(h) - 1; i >= 0; i--) {
+    Node *n = gnode(h, i);
+    if (!ttisnil(gval(n)) && ttisnumber(gkey(n)) && nvalue(gkey(n)) > best) best = nvalue(gkey(n));
+  }
+  lua_unlock(L);
+  return best;
+}
+
+
+/*
+** moho64: what lua_rawgeti(L, idx, n) would push, read in place: its type (as lua_type gives it); a string's text and
+** length (*s, *len: lua_tostring / lua_strlen); a table's `_c_object' field as lua_rawgetcobject + lua_touserdata
+** read it (*box: a userdata's block, a light userdata's pointer, else NULL). Makes, pushes and checks nothing.
+*/
+LUA_API int lua_gpg_peeki (lua_State *L, int idx, int n, const char **s, size_t *len, void **box) {
+  const TObject *o;
+  int t;
+  lua_lock(L);
+  o = luaH_getnum(hvalue(luaA_index(L, idx)), n);
+  t = ttype(o);
+  if (t == LUA_TSTRING) {
+    *s = svalue(o);
+    *len = tsvalue(o)->tsv.len;
+  }
+  else if (t == LUA_TTABLE) {
+    const TObject *c = luaH_getstr(hvalue(o), G(L)->cobjkey);
+    *box = ttisuserdata(c) ? cast(void *, uvalue(c) + 1) : ttislightuserdata(c) ? pvalue(c) : NULL;
+  }
+  lua_unlock(L);
+  return t;
+}
+
+
+/*
+** moho64: dst[k] = src[ix[k-1]] (raw) for k = 1 .. n, the same stores n pairs lua_rawgeti(L, src, ix) +
+** lua_rawseti(L, dst, k) make (luaH_getnum, luaH_setnum, the table's write barrier: once, a gray table stays gray
+** for the rest), into dst's array part made at once first (luaH_gpg_arrayfor: dst a new table, the values not nil).
+** No collector check falls between those pairs, so the heap is the same after them.
+*/
+LUA_API void lua_gpg_copyi (lua_State *L, int dst, int src, const int *ix, int n) {
+  Table *d, *s;
+  int k;
+  if (n <= 0) return;
+  lua_lock(L);
+  d = hvalue(luaA_index(L, dst));
+  s = hvalue(luaA_index(L, src));
+  luaH_gpg_arrayfor(L, d, n);
+  for (k = 0; k < n; k++) {
+    const TObject *v = luaH_getnum(s, ix[k]);
+    setobj2t(luaH_setnum(L, d, k + 1), v);
+  }
+  luaC_barriert(L, d);
+  lua_unlock(L);
+}
+
+
+/* moho64: luaH_gpg_arrayfor on the table at idx (a new table that n stores t[1] .. t[n] will fill) */
+LUA_API void lua_gpg_arrayfor (lua_State *L, int idx, int n) {
+  lua_lock(L);
+  luaH_gpg_arrayfor(L, hvalue(luaA_index(L, idx)), n);
+  lua_unlock(L);
+}
+
+
+/*
+** moho64: 1 when no luaC_checkGC can collect while a binding makes at most `tables' tables with `slots' array slots
+** and `nodes' hash nodes in all (their growth's reallocations included) and at most `strings' new strings of `chars'
+** bytes in all: the heap stays below the threshold (a classic state; luaS_resize's new bucket array included) and no
+** new object reaches the emergency count (an incremental state: luaC_newmark). Such a binding may then make its
+** tables at their final sizes at once (luaH_new, lua_gpg_arrayfor) instead of growing them: each check in between
+** is one that does nothing either way, the same objects are made in the same order, and the heap holds the same
+** blocks at the end, so the collector's moments stay where they were.
+*/
+LUA_API int lua_gpg_nocollect (lua_State *L, int tables, int slots, int nodes, int strings, size_t chars) {
+  global_State *g = G(L);
+  lu_mem bytes;
+  int r;
+  lua_lock(L);
+  bytes = cast(lu_mem, tables) * sizeof(Table) + 2 * cast(lu_mem, slots) * sizeof(TObject) +
+          2 * cast(lu_mem, nodes) * sizeof(Node) + cast(lu_mem, strings) * sizestring(0) + cast(lu_mem, chars);
+  if (strings > 0) bytes += 3 * cast(lu_mem, g->strt.size) * sizeof(GCObject *);  /* (new array before the old freed) */
+  r = strings < g->strt.size && g->nblocks < g->GCthreshold && bytes < g->GCthreshold - g->nblocks;
+  if (r && g->inc) r = luaC_incroom(L, cast(lu_mem, tables) + cast(lu_mem, strings));
+  lua_unlock(L);
+  return r;
+}
+
+
+LUA_API unsigned int lua_gpg_strhash (const char *s, size_t len) {
+  return cast(unsigned int, luaS_gpg_hash(s, len));
+}
+
+
 LUA_API void lua_rawgeti (lua_State *L, int idx, int n) {
   StkId o;
   lua_lock(L);

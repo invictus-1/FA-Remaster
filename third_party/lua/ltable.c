@@ -397,6 +397,25 @@ Table *luaH_new (lua_State *L, int narray, int lnhash) {
 }
 
 
+/*
+** moho64: t is a new table (no array part, the hash part the empty node, nothing stored in it). It gets now the array
+** part that storing t[1], t[2], ..., t[n] in that order (luaH_setnum: lua_rawseti) grows it to, so that those stores
+** then go straight into it. Grown, each store past the array's end goes to the hash part, finds it full and rehashes
+** (newkey); numuse counts every key so far, all in use, and computesizes takes the smallest power of 2 that holds
+** them: 1, 2, 4, 8, ... slots, the hash part staying the empty node, and the rehash's re-insert of that key
+** (luaH_set) leaves flags 0. The heap holds the same blocks after the stores (nblocks counts the blocks' sizes, not
+** the reallocations between). A table in another state, or an n the array part could not hold, is left as it is
+** (its stores then grow it as before).
+*/
+void luaH_gpg_arrayfor (lua_State *L, Table *t, int n) {
+  int size = 1;
+  if (n <= 0 || toobig(n) || t->sizearray != 0 || t->node != G(L)->dummynode) return;
+  while (size < n) size <<= 1;
+  setarrayvector(L, t, size);
+  t->flags = 0;
+}
+
+
 void luaH_free (lua_State *L, Table *t) {
   if (t->lsizenode)
     luaM_freearray(L, t->node, sizenode(t), Node);

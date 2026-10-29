@@ -97,12 +97,25 @@ class SimBlueprints {
   // `s` of `len` bytes: kept by the string's address and checked against its text, so a string made again at another
   // string's old address cannot be taken for it. Find is a pure function of the name once CopyToSim is done.
   int EntityIndexOfName(const char* s, size_t len) const;
+  // Find(s) for a Lua string's text `s` of `len` bytes, through the same cache (bind 2026-10-28: BlueprintArg).
+  const BlueprintInfo* FindOfName(const char* s, size_t len) const;
+  // EntityCategoryGetUnitList's list for the category bits (CategoryWords() words): the entity indices of the unit
+  // blueprints in it, in entity order. Kept per bit set (the blueprints are fixed once CopyToSim is done; the lists
+  // are made again if the entity count changed), so a call no longer walks every blueprint.
+  struct UnitList {
+    std::vector<int> units;
+    size_t chars = 0;  // the ids' lengths in all
+  };
+  const UnitList& UnitsIn(const uint64_t* bits) const;
 
  private:
+  mutable std::unordered_map<std::string, UnitList> unitLists_;
+  mutable int unitListsFor_ = -1;  // the EntityCount() they were made for
   struct NameIndex {
     const char* s = nullptr;
     uint32_t len = 0;
     int index = -1;
+    const BlueprintInfo* bp = nullptr;
     char text[40];
   };
   mutable std::array<NameIndex, 2048> nameIndex_{};

@@ -258,27 +258,39 @@ int l_EntityCategoryContains(lua_State* L) {
 // An element of EntityCategoryFilterDown / Count's list (0x759d6d / 0x75a06a): a string (LuaObject::IsString 0x907370:
 // a string only) names a blueprint, else a live entity gives its own (SCR_FromLuaNoError_Entity 0x5e3800, then the
 // entity's blueprint +0x6c); anything else (a nil hole, a destroyed unit, a number, a blueprint table) has none (-1).
-int ListEntryIndex(lua_State* L, int idx) {
-  if (lua_type(L, idx) == LUA_TSTRING) return Bps(L)->EntityIndexOfName(lua_tostring(L, idx), lua_strlen(L, idx));
-  if (Entity* e = ToObject<Entity>(L, idx)) return e->blueprint ? e->blueprint->entityIndex : -1;
-  return -1;
+// (t[i], t at idx a table: the element read in place, lua_gpg_peeki: what lua_rawgeti would push, its type, a string's
+// text, a table's _c_object block as ToObject reads it, instead of pushed and popped; speed only, bind 2026-10-28)
+int ListEntryIndexAt(lua_State* L, int t, int i) {
+  const char* s = nullptr;
+  size_t len = 0;
+  void* box = nullptr;
+  switch (lua_gpg_peeki(L, t, i, &s, &len, &box)) {
+    case LUA_TSTRING: return Bps(L)->EntityIndexOfName(s, len);
+    case LUA_TTABLE:
+      if (Entity* e = AsObject<Entity>(ObjectOfBox(box))) return e->blueprint ? e->blueprint->entityIndex : -1;
+      return -1;
+    default: return -1;
+  }
 }
 
 // EntityCategoryFilterDown 0x759c50 (and EntityCategoryCount 0x759f70): no table is an error; i = 1 .. GetCount
 // (ObjectCount; read again each pass, nothing here changes the list), an element without an entity index is skipped
-// and the loop goes on.
+// and the loop goes on. The kept elements go into the new table as lua_rawseti(out, 1), (out, 2), ... stored them,
+// after the loop and into the array part those stores grow, made at once (lua_gpg_copyi): nothing in the loop runs
+// Lua or checks the collector, so the table and the heap come out the same (speed only, bind 2026-10-28).
 int l_EntityCategoryFilterDown(lua_State* L) {
   const uint64_t* c = CheckCat(L, 1);
   if (!lua_istable(L, 2)) luaL_error(L, "Pass in invalid table of units to EntityCategoryFilterDown!!.");
   lua_newtable(L);
-  int out = lua_gettop(L), n = 0;
+  const int out = lua_gettop(L);
   const int count = ObjectCount(L, 2);
+  static thread_local std::vector<int> keep;
+  keep.clear();
   for (int i = 1; i <= count; ++i) {
-    lua_rawgeti(L, 2, i);
-    const int e = ListEntryIndex(L, -1);
-    if (e >= 0 && CategoryHas(c, e)) lua_rawseti(L, out, ++n);
-    else lua_pop(L, 1);
+    const int e = ListEntryIndexAt(L, 2, i);
+    if (e >= 0 && CategoryHas(c, e)) keep.push_back(i);
   }
+  lua_gpg_copyi(L, out, 2, keep.data(), static_cast<int>(keep.size()));
   return 1;
 }
 // EntityCategoryFilterOut is the interface's (0x8ba2a0); the sim has none. Ours: the elements FilterDown would not
@@ -309,26 +321,26 @@ int l_EntityCategoryCount(lua_State* L) {
   int n = 0;
   const int count = ObjectCount(L, 2);
   for (int i = 1; i <= count; ++i) {
-    lua_rawgeti(L, 2, i);
-    const int e = ListEntryIndex(L, -1);
+    const int e = ListEntryIndexAt(L, 2, i);
     if (e >= 0 && CategoryHas(c, e)) ++n;
-    lua_pop(L, 1);
   }
   lua_pushnumber(L, n);
   return 1;
 }
 
+// The ids of the unit blueprints in the category, in entity order. The list is kept per category (UnitsIn); the table
+// gets at once the array part its stores grow when no collector check in between could fire (lua_gpg_nocollect: the
+// ids' strings may be new), else it grows as before (speed only, bind 2026-10-28).
 int l_EntityCategoryGetUnitList(lua_State* L) {
   const uint64_t* c = CheckCat(L, 1);
   SimBlueprints* b = Bps(L);
   lua_newtable(L);
-  int n = 0;
-  for (int e = 0; e < b->EntityCount(); ++e) {
-    const BlueprintInfo* bp = b->ByEntityIndex(e);
-    if (bp->kind == BpKind::Unit && CategoryHas(c, e)) {
-      lua_pushstring(L, bp->id.c_str());
-      lua_rawseti(L, -2, ++n);
-    }
+  const SimBlueprints::UnitList& l = b->UnitsIn(c);
+  const int n = static_cast<int>(l.units.size());
+  if (n > 0 && lua_gpg_nocollect(L, 0, n, 0, n, l.chars)) lua_gpg_arrayfor(L, -1, n);
+  for (int k = 0; k < n; ++k) {
+    lua_pushstring(L, b->ByEntityIndex(l.units[k])->id.c_str());
+    lua_rawseti(L, -2, k + 1);
   }
   return 1;
 }
@@ -393,18 +405,39 @@ const BlueprintInfo* SimBlueprints::Find(const std::string& id) const {
   return it == byId_.end() ? nullptr : &all_[it->second];
 }
 int SimBlueprints::EntityIndexOfName(const char* s, size_t len) const {
-  if (len >= sizeof(NameIndex::text) || std::strlen(s) != len) {  // (a long name, or one with a zero byte: as Find)
-    const BlueprintInfo* bp = Find(s);
-    return bp ? bp->entityIndex : -1;
-  }
+  const BlueprintInfo* bp = FindOfName(s, len);
+  return bp ? bp->entityIndex : -1;
+}
+const BlueprintInfo* SimBlueprints::FindOfName(const char* s, size_t len) const {
+  if (len >= sizeof(NameIndex::text) || std::strlen(s) != len) return Find(s);  // (a long name, or one with a zero byte)
   NameIndex& c = nameIndex_[(reinterpret_cast<uintptr_t>(s) >> 4) % nameIndex_.size()];
-  if (c.s == s && c.len == len && std::memcmp(c.text, s, len) == 0) return c.index;
+  if (c.s == s && c.len == len && std::memcmp(c.text, s, len) == 0) return c.bp;
   const BlueprintInfo* bp = Find(s);
   c.s = s;
   c.len = static_cast<uint32_t>(len);
   std::memcpy(c.text, s, len);
+  c.bp = bp;
   c.index = bp ? bp->entityIndex : -1;
-  return c.index;
+  return bp;
+}
+
+const SimBlueprints::UnitList& SimBlueprints::UnitsIn(const uint64_t* bits) const {
+  static thread_local std::string key;
+  key.assign(reinterpret_cast<const char*>(bits), sizeof(uint64_t) * static_cast<size_t>(words_));
+  if (unitListsFor_ != EntityCount() || unitLists_.size() >= 4096) {
+    unitLists_.clear();
+    unitListsFor_ = EntityCount();
+  }
+  if (auto it = unitLists_.find(key); it != unitLists_.end()) return it->second;
+  UnitList l;
+  for (int e = 0; e < EntityCount(); ++e) {
+    const BlueprintInfo* bp = ByEntityIndex(e);
+    if (bp->kind == BpKind::Unit && CategoryHas(bits, e)) {
+      l.units.push_back(e);
+      l.chars += bp->id.size();
+    }
+  }
+  return unitLists_.emplace(key, std::move(l)).first->second;
 }
 
 const BlueprintInfo* SimBlueprints::Find(const char* id) const {  // (as Find(std::string(id)), one copy)

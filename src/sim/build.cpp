@@ -51,6 +51,7 @@
 #include "sim/landnav.h"
 #include "sim/navigation.h"
 #include "sim/sim.h"
+#include "sim/sim_cache.h"
 #include "sim/terrain.h"
 #include "sim/units.h"
 #include "sim/vecmath.h"
@@ -115,25 +116,84 @@ int DepositType(const std::string& restriction) {
   return 0;
 }
 
+// The deposits by cells of 32 x 32 map units (speed only, bind 2026-10-28; B1: 116 deposits looked at per test). Both
+// tests below ask whether ANY deposit of a type meets a rect, so the answer does not depend on which deposits are
+// looked at or in what order, only that every one that could meet the rect is: a deposit is listed in each cell its
+// rect grown by 1.5 (the larger margin) touches, a test looks in each cell its rect touches (cell numbers clamped to
+// the grid at both ends, so a rect or deposit past the map's edge falls into the edge cells, and two rects that share
+// a point share a cell). Made again whenever the list's length, its last entry or the map's size is not what it was
+// made for (the list only grows: CreateResourceDeposit appends, nothing edits or removes a deposit; the last entry's
+// check catches a list replaced or cut and refilled to the same length). A rect that is no proper range
+// (x0 > x1, NaN) takes the plain walk. (Two ranges [x0, x1] and [lo - 1.5, hi + 1.5] that both tests' conditions
+// let meet share a point, for a deposit given either way round too: so they share a cell.)
+struct DepositCells {
+  size_t count = static_cast<size_t>(-1);
+  ResourceDeposit last;  // sim.deposits.back() when made (count > 0)
+  int mapW = -1, mapH = -1, cw = 0, ch = 0;
+  std::vector<std::vector<int>> cells;  // deposit indices, in list order
+  int CellOf(double v, int n) const { return static_cast<int>(std::clamp(std::floor(v / 32.0), 0.0, static_cast<double>(n - 1))); }
+};
+const DepositCells* DepositIndex(const Sim& sim) {
+  static const SimCache<DepositCells> slot;
+  const TerrainMap* map = sim.map();
+  if (!map || map->width() <= 0 || map->height() <= 0) return nullptr;
+  DepositCells& c = slot.For(sim);
+  auto same = [](const ResourceDeposit& a, const ResourceDeposit& b) {
+    return a.x0 == b.x0 && a.z0 == b.z0 && a.x1 == b.x1 && a.z1 == b.z1 && a.type == b.type;
+  };
+  if (c.count != sim.deposits.size() || (c.count && !same(c.last, sim.deposits.back())) || c.mapW != map->width() ||
+      c.mapH != map->height()) {
+    c.count = sim.deposits.size();
+    if (c.count) c.last = sim.deposits.back();
+    c.mapW = map->width();
+    c.mapH = map->height();
+    c.cw = (c.mapW + 31) / 32;
+    c.ch = (c.mapH + 31) / 32;
+    c.cells.assign(static_cast<size_t>(c.cw) * c.ch, {});
+    for (size_t i = 0; i < sim.deposits.size(); ++i) {
+      const auto& d = sim.deposits[i];
+      // (from the lower to the higher edge: a deposit given with x0 > x1 is still found where the tests find it)
+      const int a0 = c.CellOf(std::min(d.x0, d.x1) - 1.5, c.cw), a1 = c.CellOf(std::max(d.x0, d.x1) + 1.5, c.cw);
+      const int b0 = c.CellOf(std::min(d.z0, d.z1) - 1.5, c.ch), b1 = c.CellOf(std::max(d.z0, d.z1) + 1.5, c.ch);
+      for (int b = b0; b <= b1; ++b)
+        for (int a = a0; a <= a1; ++a) c.cells[static_cast<size_t>(b) * c.cw + a].push_back(static_cast<int>(i));
+    }
+  }
+  return &c;
+}
+// Any deposit d (by index, every one the cells the rect touches list) with test(d)?
+template <class F>
+bool AnyDepositNear(const Sim& sim, double x0, double z0, double x1, double z1, F&& test) {
+  const DepositCells* c = (x0 <= x1 && z0 <= z1) ? DepositIndex(sim) : nullptr;
+  if (!c) {
+    for (const auto& d : sim.deposits)
+      if (test(d)) return true;
+    return false;
+  }
+  const int a0 = c->CellOf(x0, c->cw), a1 = c->CellOf(x1, c->cw), b0 = c->CellOf(z0, c->ch), b1 = c->CellOf(z1, c->ch);
+  for (int b = b0; b <= b1; ++b)
+    for (int a = a0; a <= a1; ++a)
+      for (int i : c->cells[static_cast<size_t>(b) * c->cw + a])
+        if (test(sim.deposits[static_cast<size_t>(i)])) return true;
+  return false;
+}
+
 // CSimResources::AreaHasDeposit 0x546860: a deposit of the type, grown by 0.5 (mass) / 1.5 (hydro) on every
 // side, strictly overlaps the rect.
 bool DepositOverlaps(const Sim& sim, int type, float x0, float z0, float x1, float z1) {
   float g = type == 1 ? 0.5f : 1.5f;
-  for (const auto& d : sim.deposits)
-    if (d.type == type && x0 < static_cast<float>(d.x1) + g && static_cast<float>(d.x0) - g < x1 &&
-        z0 < static_cast<float>(d.z1) + g && static_cast<float>(d.z0) - g < z1)
-      return true;
-  return false;
+  return AnyDepositNear(sim, x0, z0, x1, z1, [&](const ResourceDeposit& d) {
+    return d.type == type && x0 < static_cast<float>(d.x1) + g && static_cast<float>(d.x0) - g < x1 &&
+           z0 < static_cast<float>(d.z1) + g && static_cast<float>(d.z0) - g < z1;
+  });
 }
 
 // CSimResources::DepositIsInArea 0x546650: the rect contains a deposit of the type, or one contains the rect.
 bool DepositInArea(const Sim& sim, int type, int x0, int z0, int x1, int z1) {
-  for (const auto& d : sim.deposits) {
-    if (d.type != type) continue;
-    if ((x0 <= d.x0 && d.x1 <= x1 && z0 <= d.z0 && d.z1 <= z1) || (d.x0 <= x0 && x1 <= d.x1 && d.z0 <= z0 && z1 <= d.z1))
-      return true;
-  }
-  return false;
+  return AnyDepositNear(sim, x0, z0, x1, z1, [&](const ResourceDeposit& d) {
+    return d.type == type && ((x0 <= d.x0 && d.x1 <= x1 && z0 <= d.z0 && d.z1 <= z1) ||
+                              (d.x0 <= x0 && x1 <= d.x1 && d.z0 <= z0 && z1 <= d.z1));
+  });
 }
 
 // OCCUPY_Check for a structure blueprint at (x, z): the layers it could be built on (0 = none).
@@ -157,19 +217,60 @@ int StructureLayers(Sim& sim, const BlueprintInfo& bp, const UnitBpData& d, floa
     lo = std::min(lo, h);
     hi = std::max(hi, h);
   };
+  // The samples' lowest and highest point taken on the stored heights (HeightAt = height * scale; with the scale > 0
+  // the product keeps their order, rounding included, so min / max of the products are the products of min / max):
+  // the same lo / hi, one multiplication each instead of one per vertex (speed only, bind 2026-10-28). The vertices
+  // a sample loop clamps to are the clamped range (a range past the edge gives its edge vertex, as each take does).
+  const uint16_t* hd = map->heightData();
+  const size_t stride = static_cast<size_t>(map->width()) + 1;
+  const bool raw = map->heightScale() > 0.0f;
+  uint16_t rlo = 0xffff, rhi = 0;
+  bool any = false;
+  auto rawRow = [&](int vz, int xa, int xb) {  // take(vx, vz) for vx = xa .. xb
+    if (xa > xb) return;
+    vz = std::clamp(vz, 0, map->height());
+    xa = std::clamp(xa, 0, map->width());
+    xb = std::clamp(xb, 0, map->width());
+    const uint16_t* r = hd + static_cast<size_t>(vz) * stride;
+    for (int vx = xa; vx <= xb; ++vx) {
+      rlo = std::min(rlo, r[vx]);
+      rhi = std::max(rhi, r[vx]);
+    }
+    any = true;
+  };
+  auto rawDone = [&] {
+    if (!any) return;
+    lo = static_cast<float>(rlo) * map->heightScale();
+    hi = static_cast<float>(rhi) * map->heightScale();
+  };
   bool flat;
   if (!d.flattenSkirt) {  // AreaFlatness 0x5651f0
-    for (int vz = z0; vz <= z1; ++vz)
-      for (int vx = x0; vx <= x1; ++vx) take(vx, vz);
+    if (raw) {
+      for (int vz = z0; vz <= z1; ++vz) rawRow(vz, x0, x1);
+      rawDone();
+    } else {
+      for (int vz = z0; vz <= z1; ++vz)
+        for (int vx = x0; vx <= x1; ++vx) take(vx, vz);
+    }
     flat = hi - lo <= d.maxGroundVariation;
   } else {  // EdgeFlatness 0x564f80: the ring just outside, measured from the ceiling of its lowest point
-    for (int vx = x0 - 1; vx <= x1 + 1; ++vx) {
-      take(vx, z0 - 1);
-      take(vx, z1 + 1);
-    }
-    for (int vz = z0; vz <= z1; ++vz) {
-      take(x0 - 1, vz);
-      take(x1 + 1, vz);
+    if (raw) {
+      rawRow(z0 - 1, x0 - 1, x1 + 1);
+      rawRow(z1 + 1, x0 - 1, x1 + 1);
+      for (int vz = z0; vz <= z1; ++vz) {
+        rawRow(vz, x0 - 1, x0 - 1);
+        rawRow(vz, x1 + 1, x1 + 1);
+      }
+      rawDone();
+    } else {
+      for (int vx = x0 - 1; vx <= x1 + 1; ++vx) {
+        take(vx, z0 - 1);
+        take(vx, z1 + 1);
+      }
+      for (int vz = z0; vz <= z1; ++vz) {
+        take(x0 - 1, vz);
+        take(x1 + 1, vz);
+      }
     }
     float c = static_cast<float>(std::ceil(static_cast<double>(lo)));
     flat = std::max(hi - c, c - lo) <= d.maxGroundVariation;
@@ -225,7 +326,8 @@ bool AnyStructureSkirtOverlaps(Sim& sim, lua_State* L, const FRect& R) {
     if (e->motion.bp && e->motion.bp->mobile()) return;
     if (grid && e->gridSeen && !(e->gridX0 < cx0 + cw && cx0 < e->gridX0 + e->gridW && e->gridZ0 < cz0 + ch && cz0 < e->gridZ0 + e->gridH))
       return;
-    const FRect r = SkirtRect(*e->blueprint, GetUnitBpData(L, *e->blueprint), e->position.x, e->position.z);
+    // (e->bpData: GetUnitBpData's entry of e's blueprint, kept at its init, UnitEconomyInit; the look-up without it)
+    const FRect r = SkirtRect(*e->blueprint, e->bpData ? *e->bpData : GetUnitBpData(L, *e->blueprint), e->position.x, e->position.z);
     if (r.x1 > R.x0 && R.x1 > r.x0 && r.z1 > R.z0 && R.z1 > r.z0 && R.x1 > R.x0 && R.z0 < R.z1 && r.x1 > r.x0 && r.z0 < r.z1)
       hit = true;
   });
@@ -237,8 +339,11 @@ bool AnyStructureSkirtOverlaps(Sim& sim, lua_State* L, const FRect& R) {
 // structure's SKIRT may meet the new one's skirt, then the footprint against the occupancy bits. The mobile build
 // task asks this before it creates the unit (0x5f7aec), and CanBuildStructureAt begins with it.
 bool LocationIsFree(Sim& sim, const BlueprintInfo& bp, float x, float z) {
+  return LocationIsFree(sim, bp, GetUnitBpData(sim.L(), bp), x, z);
+}
+// (d: GetUnitBpData(L, bp), read by the caller)
+bool LocationIsFree(Sim& sim, const BlueprintInfo& bp, const UnitBpData& d, float x, float z) {
   lua_State* L = sim.L();
-  const UnitBpData& d = GetUnitBpData(L, bp);
   if (!d.structure) {
     // A mobile blueprint (RUnitBlueprint::IsMobile 0x51e460: MotionType bp+0x290 != None): OCCUPY_Check 0x5652e0
     // takes its mobile path (0x5652f9 -> 0x5652ff..0x565372), OCCUPY_MobileCheck 0x564ab0 at the footprint's origin
@@ -299,8 +404,9 @@ bool LiveStructureSkirtOverlaps(Sim& sim, const BlueprintInfo& bp, float x, floa
 // of the live structures once more (for a structure the same rule, so nothing new for ours). NOT MODELLED: the
 // brain's own pending structure plans (brain+0x98), which the original also keeps the new skirt off.
 bool CanBuildStructureAt(Sim& sim, const BlueprintInfo& bp, float x, float z) {
-  if (!LocationIsFree(sim, bp, x, z)) return false;
-  return GetUnitBpData(sim.L(), bp).structure || !LiveStructureSkirtOverlaps(sim, bp, x, z);
+  const UnitBpData& d = GetUnitBpData(sim.L(), bp);  // (once: LocationIsFree's read, the first)
+  if (!LocationIsFree(sim, bp, d, x, z)) return false;
+  return d.structure || !LiveStructureSkirtOverlaps(sim, bp, x, z);
 }
 
 bool UnitCanBuild(const Unit* u, const BlueprintInfo& bp) {
@@ -4172,6 +4278,8 @@ namespace {
 Unit* U(lua_State* L) { return CheckObject<Unit>(L, 1); }
 
 const BlueprintInfo* BlueprintArg(lua_State* L, int idx) {
+  // a string through the name cache (FindOfName: Find of the same text); a number still as lua_tostring makes it
+  if (lua_type(L, idx) == LUA_TSTRING) return S(L)->blueprints().FindOfName(lua_tostring(L, idx), lua_strlen(L, idx));
   if (lua_isstring(L, idx)) return S(L)->blueprints().Find(lua_tostring(L, idx));
   if (lua_istable(L, idx)) {
     lua_pushstring(L, "BlueprintId");
@@ -4226,6 +4334,8 @@ int l_CreateResourceDeposit(lua_State* L) {
   d.z0 = RoundEven(z - static_cast<float>(size) * 0.5f);
   d.x1 = d.x0 + size;
   d.z1 = d.z0 + size;
+  // (appended only: build.cpp's deposit index, DepositIndex, is made for the list as it grows; a remover or an edit in
+  // place must drop that index, or keep the count / last-entry check it makes again on)
   S(L)->deposits.push_back(d);
   return 0;
 }
@@ -4432,29 +4542,22 @@ int l_AttachBoneTo(lua_State* L) {
   if (u->motion.hasGoal) MotionStop(u);
   // Entity::AttachTo 0x679550 only stores the link (ApplyAttachInfo 0x679680): the unit's transform follows its bone in
   // the entity stage as a pending one, and its collision primitive stays at the transform the beat began with (for a
-  // unit made in this beat: where its constructor put it) until AdvanceCoords (step 13). Ours puts the unit on the bone
-  // now, so the shape is held at the old place for the rest of the beat. Seen: MP1 10601, army 6's factory makes the
+  // unit made in this beat: where its constructor put it) until AdvanceCoords (step 13): the shape is held at the old
+  // place for the rest of the beat. Seen: MP1 10601, army 6's factory makes the
   // engineer 0x60002d and attaches it in the command stage; army 7's 0x700007's shell lands beside it in the entity
   // stage (DamageArea r 1.2 at (983.02, 19.22, 528.29)): the original's engineer takes nothing (hp 1.0), ours, its box
   // already on the bone at (981.50, 18.80, 528.90), took 625 and died.
   S(L)->HoldShape(u);
-  // A unit that has had its turn in this beat (its motion step is done: lastPosTick) keeps the transform that step
-  // gave it: the link alone is stored, and its next step (behind the parent's, Entity::TaskTick 0x679c40) puts it on
-  // the bone. Seen: MP1 13120, army 6's crashing scout 0x6000ee hung on FAF's ShieldCollider in the collider's
-  // OnImpact (the projectile pass, after the plane's step): the original's plane ends the beat where its own crash step
-  // put it (854.3552, 23.7286, 739.1945, still tumbling) and is on the collider from 13121; ours put it on the bone at
-  // once.
-  if (u->lastPosTick != S(L)->tick()) {
-    Vec3 bp;
-    Quat bq;
-    BoneWorld(parent, u->parentBone, &bp, &bq);
-    Vec3 np = bp;
-    Quat nq = bq;
-    // (the unit hangs by its own bone: see the attached branch of Sim::Tick's unit loop)
-    AttachedTransform(u, bp, bq, &np, &nq);  // (any own bone: 0x67a020 normalises also for -2)
-    u->position = np;
-    u->orientation = nq;
-  }
+  // The unit is not moved here at all (Entity::AttachTo 0x679550 stores the link only): its next turn in the entity
+  // stage puts it on the bone (Entity::TaskTick 0x679c40, CalculateAttachedTransform 0x67a020), behind the parent's when
+  // the parent has not had its turn. A unit that has had its turn in this beat so ends it where that turn put it, and
+  // one let go again before its turn (DetachFrom) never stands on the bone. Seen: MP1 13120, army 6's crashing scout
+  // 0x6000ee hung on FAF's ShieldCollider in the collider's OnImpact (the projectile pass, after the plane's step):
+  // the original's plane ends the beat where its own crash step put it (854.3552, 23.7286, 739.1945) and is on the
+  // collider from 13121. MP1 13492, army 2's naval factory 0x20004e makes the engineer 0x20008a and hangs it on its
+  // build bone (FactoryUnit.lua:448, AttachBoneTo(-2, ...)), and is killed in the same beat; its OnKilled ->
+  // KillUnitBeingBuilt lets the engineer go (DetachFrom(true)) before its turn: the original's engineer stands where it
+  // was made (350.0, 17.5, 278.5) with the factory's quaternion; ours stood on the bone, 3.1 away and turned round.
   S(L)->MarkUnitsMoved();
   return 0;
 }
@@ -4474,8 +4577,7 @@ int l_AttachTo(lua_State* L) {  // entity:AttachTo(parent, bone)
   NotifyAttached(*S(L), u);
   SetAttachedState(u);
   if (u->motion.hasGoal) MotionStop(u);
-  S(L)->HoldShape(u);  // (see l_AttachBoneTo)
-  if (u->lastPosTick != S(L)->tick()) u->position = EntityBonePosition(parent, u->parentBone);  // (as there)
+  S(L)->HoldShape(u);  // (see l_AttachBoneTo: the link only, the unit's turn places it)
   S(L)->MarkUnitsMoved();
   return 0;
 }

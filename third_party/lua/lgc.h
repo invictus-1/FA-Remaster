@@ -38,6 +38,7 @@ lu_byte luaC_newmark (lua_State *L, lu_byte classic);
 void luaC_incfree (lua_State *L);
 void luaC_incfull (lua_State *L);
 void luaC_incdue (lua_State *L);
+int luaC_incroom (lua_State *L, lu_mem objects);  /* moho64: `objects' more new objects keep the emergency off */
 void luaC_incleave (lua_State *L);
 void luaC_increvive (lua_State *L, GCObject *o);
 int luaC_incsweepingstrings (lua_State *L);

@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -2423,6 +2424,18 @@ int l_IsMoving(lua_State* L) {
   return 1;
 }
 
+// GetCommandQueue's entry keys commandType, x, y, z: four different main positions among 8 hash nodes (their string
+// hashes, lua_gpg_strhash, & 7). A fact of the four texts.
+bool CommandEntryKeysApart() {
+  static const bool apart = [] {
+    const char* k[4] = {"commandType", "x", "y", "z"};
+    unsigned m = 0;
+    for (const char* s : k) m |= 1u << (lua_gpg_strhash(s, std::strlen(s)) & 7u);
+    return __builtin_popcount(m) == 4;
+  }();
+  return apart;
+}
+
 int l_GetCommandQueue(lua_State* L) {
   // a destroyed unit: the original's own message (probe v9)
   Unit* u = ToObject<Unit>(L, 1);
@@ -2433,6 +2446,21 @@ int l_GetCommandQueue(lua_State* L) {
   Sim* sim = S(L);
   lua_newtable(L);
   int n = 0;
+  // Speed only (bind 2026-10-28): when no collector check in the loop could fire (lua_gpg_nocollect, from the most the
+  // loop can make: a table per command, its nodes, the key and value strings), the list gets its array part and each
+  // entry its 8 hash nodes at once instead of growing them through rehashes. The entry's nodes are those growth gives
+  // when the first four keys (commandType, x, y, z: always there, inserted before the growth's last rehash) have four
+  // different main positions among 8 nodes (CommandEntryKeysApart: their re-insertion order then changes nothing;
+  // the later keys go in the same way both times). The same objects are made in the same order, the heap holds the
+  // same blocks at the end, and the tables the same nodes.
+  const int count = static_cast<int>(u->commands.size());
+  bool sized = false;
+  if (count > 0 && CommandEntryKeysApart()) {
+    size_t chars = 33;  // the six keys
+    for (auto& c : u->commands) chars += 10 + c->blueprintId.size();  // (targetId's digits, blueprintId)
+    sized = lua_gpg_nocollect(L, count, 2 * count, 8 * count, 6 + 2 * count, chars);
+    if (sized) lua_gpg_arrayfor(L, -1, count);
+  }
   // Each entry is the command's own table as FAF's patch fills it (0x129181d, on the command's LuaObject at cmd+0x20):
   // commandType (cmd+0x98); x, y, z ALWAYS, from the command's encoded target (cmd+0xa4..+0xac, which
   // CAiTarget::EncodeToSSTITarget 0x5e27d0 writes at every SetTarget: an entity target encodes as 0, 0, 0, a ground
@@ -2443,7 +2471,8 @@ int l_GetCommandQueue(lua_State* L) {
   // handed the dead entity's unbound table as `target` and IssueAttack raised "Invalid target set"; ours also gave a
   // gone target's id as "0", which FAF's wrapper turns into entity 0, army 0's commander.
   for (auto& c : u->commands) {
-    lua_newtable(L);
+    if (sized) lua_newtablesized(L, 0, 3);
+    else lua_newtable(L);
     lua_pushstring(L, "commandType");
     lua_pushnumber(L, static_cast<int>(c->type));
     lua_rawset(L, -3);
@@ -2465,7 +2494,9 @@ int l_GetCommandQueue(lua_State* L) {
       }
       if (id != 0xf0000000u) {
         lua_pushstring(L, "targetId");
-        lua_pushstring(L, std::to_string(id).c_str());
+        char digits[16];
+        const auto r = std::to_chars(digits, digits + sizeof digits, id);  // (the text std::to_string gives)
+        lua_pushlstring(L, digits, static_cast<size_t>(r.ptr - digits));
         lua_rawset(L, -3);
       }
     }
