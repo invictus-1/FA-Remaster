@@ -2120,9 +2120,16 @@ Entity* Sim::AdoptScriptEntity(lua_State* L, int t, int spec, bool shield) {
     if (!shield && lua_type(L, ownerIdx) == LUA_TNUMBER) {
       e->army = armyAt(static_cast<int>(static_cast<float>(lua_tonumber(L, ownerIdx))));
     } else if (Entity* owner = ToObject<Entity>(L, ownerIdx)) {
+      // (the owner gives the army only: Entity::Entity 0x677f40 gets the army index and no transform, 0x69251b..
+      // 0x69252a, so a script entity starts at the origin, unturned, and a SetCollisionShape in its OnCreate puts its
+      // primitive in the grid there (0x67ad9a..0x67ada5). FAF's DepthCharge (defaultantiprojectile.lua 135-143: the
+      // sphere first, then AttachTo(spec.Owner, -1)) so gets its cells by the shell only at the beat's AdvanceCoords,
+      // the two of one launch in their making order. Seen (probe mp1_13863): MP1 13856, army 6's torpedo 0x10600046
+      // crosses both spheres of army 5's anti-torpedo shells 0x105000ee / 0x105000ef in one cell; the original asks
+      // 0x105000ef's first and 0x105000ee's last, whose SetNewTarget wins, and the torpedo strikes 0x105000ee at 13862
+      // (its impact and Lua Random at 13863). Ours put each sphere in the grid at its shell when made and moved
+      // 0x105000ee's once more at the beat's end, which put it in front: it was asked first, 0x105000ef last.)
       e->army = owner->army;
-      e->position = owner->position;
-      e->orientation = owner->orientation;
     } else if (!shield && lua_isnil(L, ownerIdx) && !lua_isnil(L, armyIdx)) {
       if (lua_type(L, armyIdx) != LUA_TNUMBER) luaL_error(L, "integer expected");
       const int a = static_cast<int>(static_cast<float>(lua_tonumber(L, armyIdx))) - 1;
