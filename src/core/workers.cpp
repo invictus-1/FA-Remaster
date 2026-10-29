@@ -69,6 +69,16 @@ uint64_t SplitMix(uint64_t& s) {
   return z ^ (z >> 31);
 }
 
+inline void CpuRelax() {
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__)
+  __builtin_ia32_pause();
+#elif defined(__aarch64__)
+  asm volatile("yield");
+#else
+  std::this_thread::yield();
+#endif
+}
+
 double Ms() { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 }  // namespace
 
@@ -149,33 +159,43 @@ WorkerPool::WorkerPool(int threads, ParCheck check) : threads_(std::max(1, threa
   stats_.resize(static_cast<size_t>(threads_));
   if (threads_ > 1 || check_.mode != ParCheck::kOff) InstallLockCheck();
   if (check_.mode != ParCheck::kOff) return;  // (the order check runs every task on the calling thread)
+  seats_.reset(new Seat[static_cast<size_t>(threads_)]);
   workers_.reserve(static_cast<size_t>(threads_ - 1));
   for (int i = 1; i < threads_; ++i) workers_.emplace_back([this, i] { WorkerMain(i); });
 }
 
 WorkerPool::~WorkerPool() {
-  {
-    std::lock_guard<std::mutex> g(mutex_);
-    quit_ = true;
+  quit_.store(true, std::memory_order_release);
+  for (int i = 1; i < threads_; ++i) {
+    { std::lock_guard<std::mutex> g(seats_[static_cast<size_t>(i)].m); }
+    seats_[static_cast<size_t>(i)].cv.notify_one();
   }
-  wake_.notify_all();
   for (std::thread& t : workers_) t.join();
 }
 
+// A worker sleeps on its own seat until a job takes it: job_ word = (generation << 16) | helpers, and a job takes the
+// workers 1..helpers (the first ones, so the same few stay warm); the others are not woken. A helper of job g always
+// sees g: g + 1 is published only after every helper of g has finished (running_ == 0).
 void WorkerPool::WorkerMain(int index) {
-  uint64_t seen = 0;
-  bool timed = false;
+  uint64_t seenGen = 0;
+  Seat& seat = seats_[static_cast<size_t>(index)];
   for (;;) {
+    uint64_t w = 0;
     {
-      std::unique_lock<std::mutex> g(mutex_);
-      wake_.wait(g, [&] { return quit_ || generation_ != seen; });
-      if (quit_) return;
-      seen = generation_;
-      timed = timedJob_;
+      std::unique_lock<std::mutex> g(seat.m);
+      seat.cv.wait(g, [&] {
+        w = jobWord_.load(std::memory_order_acquire);
+        return quit_.load(std::memory_order_acquire) || (w >> 16) != seenGen;
+      });
     }
-    RunChunks(index, timed);
-    std::lock_guard<std::mutex> g(mutex_);
-    if (--running_ == 0) done_.notify_one();
+    if (quit_.load(std::memory_order_acquire)) return;
+    seenGen = w >> 16;
+    if (index > static_cast<int>(w & 0xffff)) continue;  // (not one of this job's helpers: a spurious wake)
+    RunChunks(index, timedJob_);
+    if (running_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+      std::lock_guard<std::mutex> g(mutex_);
+      done_.notify_one();
+    }
   }
 }
 
@@ -239,17 +259,28 @@ void WorkerPool::Run(const char* stage, size_t count, size_t grain, Fn fn, void*
     for (WorkerStats& s : stats_) s = WorkerStats{};
   job_ = Job{fn, ctx, count, grain, (count + grain - 1) / grain};
   nextChunk_.store(0, std::memory_order_relaxed);
-  {
-    std::lock_guard<std::mutex> g(mutex_);
-    running_ = threads_ - 1;
-    ++generation_;
-    timedJob_ = timed;
+  // Only as many workers as the job has chunks beyond the calling thread's first are woken, each on its own seat
+  // (waking all of them, on one mutex, cost about 0.1 ms a call with 31 workers: more than a small stage's work).
+  const int helpers = static_cast<int>(std::min<size_t>(static_cast<size_t>(threads_ - 1), job_.chunks - 1));
+  timedJob_ = timed;
+  running_.store(helpers, std::memory_order_relaxed);
+  jobWord_.store((++generation_ << 16) | static_cast<uint64_t>(helpers), std::memory_order_release);
+  for (int i = 1; i <= helpers; ++i) {
+    { std::lock_guard<std::mutex> g(seats_[static_cast<size_t>(i)].m); }
+    seats_[static_cast<size_t>(i)].cv.notify_one();
   }
-  wake_.notify_all();
   RunChunks(0, timed);  // (the calling thread is worker 0)
-  {
-    std::unique_lock<std::mutex> g(mutex_);
-    done_.wait(g, [&] { return running_ == 0; });
+  // The calling thread has nothing else to do: it watches the count for a while (about 0.2 ms), then sleeps.
+  if (running_.load(std::memory_order_acquire) != 0) {
+    const auto until = std::chrono::steady_clock::now() + std::chrono::microseconds(200);
+    for (unsigned k = 1; running_.load(std::memory_order_acquire) != 0; ++k) {
+      CpuRelax();
+      if ((k & 255) == 0 && std::chrono::steady_clock::now() > until) {
+        std::unique_lock<std::mutex> g(mutex_);
+        done_.wait(g, [&] { return running_.load(std::memory_order_acquire) == 0; });
+        break;
+      }
+    }
   }
   if (timed) {
     double busy = 0, longest = 0;

@@ -123,12 +123,18 @@ class WorkerPool {
   int threads_ = 1;
   ParCheck check_;
   std::vector<std::thread> workers_;
-  std::mutex mutex_;
-  std::condition_variable wake_, done_;
-  uint64_t generation_ = 0;  // a new job (under mutex_)
-  int running_ = 0;          // workers still in the job (under mutex_)
-  bool quit_ = false;
-  bool timedJob_ = false;    // the job's tasks are timed (MOHO64_PROFILE; under mutex_)
+  struct alignas(64) Seat {  // a worker's own wake-up
+    std::mutex m;
+    std::condition_variable cv;
+  };
+  std::unique_ptr<Seat[]> seats_;      // [threads_] (0 unused: the calling thread)
+  std::mutex mutex_;                   // (with done_: the calling thread's wait, after its watch)
+  std::condition_variable done_;
+  uint64_t generation_ = 0;            // the calling thread's job count
+  std::atomic<uint64_t> jobWord_{0};   // (generation << 16) | helpers of the job now
+  std::atomic<int> running_{0};        // helpers still in the job
+  std::atomic<bool> quit_{false};
+  bool timedJob_ = false;  // the job's tasks are timed (MOHO64_PROFILE; written before jobWord_, read after it)
   Job job_;
   std::atomic<size_t> nextChunk_{0};
   std::vector<WorkerStats> stats_;
