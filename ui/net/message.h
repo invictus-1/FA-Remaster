@@ -44,6 +44,7 @@ class MessageReader {
   uint32_t U32();
   int32_t I32() { return static_cast<int32_t>(U32()); }
   std::string Str();
+  std::string Bytes(size_t n);  // the next n as they are
   std::string Rest();  // everything not read yet
   bool Ok() const { return ok_; }  // false once a read ran past the end
   bool AtEnd() const { return at_ >= p_.size(); }
