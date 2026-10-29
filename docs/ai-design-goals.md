@@ -126,3 +126,13 @@ A design talk with Chris, using these goals and ai-study-m28.md section 7.5's op
     - So defences are build candidates beside units: cheaper per threat, but fixed. They are worth it only where the
       enemy will come (a choke, an expansion under raids).
     - This is tuned step by step from the duels.
+14. **Min-maxing is not fear of the yellow (Chris, 2026-10-29):**
+    - Running low on mass or energy (the economy bar's yellow) for a short while to build things quickly is fine.
+      What is wrong is staying negative the whole time.
+    - Investments are judged by risk against reward. Example: the risk is a short mass dip for 2 minutes, and the
+      reward is a doubled mass income. Upgrading extractors, more extractors, experimentals and tech are all worth a
+      dip when the payoff is better.
+    - Before the dip, it judges the danger from the map and the enemy units it knows. If it does not know, it scouts
+      first. If it judges the moment safe, or safe enough, it invests.
+    - A big enemy army is no reason by itself to hold back the economy. If no one is attacking, there is no reason to
+      hold back, so it never sits there without teching up.
