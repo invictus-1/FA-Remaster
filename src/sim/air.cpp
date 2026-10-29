@@ -23,6 +23,7 @@
 #include "core/backtrace.h"
 #include "core/log.h"
 #include "sim/collision.h"
+#include "sim/entity_grid.h"
 #include "sim/commands.h"
 #include "sim/economy.h"
 #include "sim/combat.h"
@@ -657,7 +658,13 @@ bool NoBlockingUnits(Sim& sim, Unit* u, float x0, float z0, float x1, float z1) 
       // found. Seen: MP3 7778, army 0's engineer 0x3e looks for a spot beside a wall it is to build; the wall 0x18 at
       // (215.5, 319.5) reaches z 320, the edge of the candidate (215,320): the original takes that cell, ours called
       // it blocked and sent the engineer to (215,317), round the far side of the walls.)
-      if (!GridCellsMeet(Vec3{x0, -1000.0f, z0}, Vec3{x1, 1000.0f, z1}, mn, mx)) return;
+      // The cells are the ones the grid has the unit in (its span as of the last AdvanceCoords, skirt-wide for a unit:
+      // Unit::UpdateCollision), not its collision box's own. Seen (probe mp1_13985): MP1 13983, army 5's three T3
+      // engineers (uel0309) look for spots beside a ueb1301 site; the energy storage 0x5000e5 (ueb1105 at 344.5, 846.5,
+      // box x 344..345, skirt from 343.25) is registered from cell 85 and its box touches the candidate (343,846): the
+      // original refuses that cell and gives 0x50011d (342,846), 0x500097 (341,846) and 0x50010a (346,846); ours, with
+      // the box's cells (from 86), took (343,846) and handed the others the next ones.
+      if (!GridFindsInBox(sim, o, x0, z0, x1, z1)) return;
     } else {
       const MotionBlueprint* ob = o->motion.bp;
       float hx = (ob ? ob->sizeX : 1) * 0.5f, hz = (ob ? ob->sizeZ : 1) * 0.5f;

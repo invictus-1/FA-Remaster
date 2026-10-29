@@ -97,6 +97,25 @@ Runs every second per brain, staggered so that brains do not all think on the sa
   and by a safe path of zones to the nearest held zone, not to the home base. A force that clearly outclasses what
   it meets never retreats from it (goal 5); kiting is for even fights only.
 
+**Built in phase 4, first form** (`data/ai/lua/remastered/ai/operations.lua`): every 5 s the brain looks at the
+whole front from what its army knows (the index: fair intel and the memory of lost contacts). It decides each fight
+by the battle estimate of that zone (`Remastered.AIZoneEstimate`, 3.2), with our margin from 0 to 1:
+- **Defend:** an own zone (one with our structures) that enemies are in, when the estimate gives us 0.35 or more.
+  Below that, the army waits at home ("hold-back").
+- **Attack:** when we are ahead overall (our strength over theirs at or above the personality's attack ratio, 1.2
+  balanced), the most valuable enemy zone our land units can walk to (economy and structures, worth more nearer),
+  when the estimate there gives us 0.6 or more.
+- **Push:** far ahead overall (2.0 balanced), the same at a lower bar, 0.5.
+- **Raid:** up to 6 idle combat units go to an enemy zone with economy and no known defenders (margin 0.8 or more).
+- **Commitment (decision 5):** an attack stays on while its margin is 0.4 or more (a push 0.3), so it does not turn at
+  the first bad second. It retreats only below that. A margin of 0.6 or more is never a reason to retreat: the
+  enemy there is clearly weaker, and a guard in the code stays committed if it ever came to that.
+- **Every decision prints one line:** `aiop <army> <tick> <what> zone <z> margin <m> ratio <r> | <reason>`. A status
+  line comes once a minute. Tests score them with `tools` in the aicore notes (score_duel.py): no retreat at a
+  margin of 0.6 or more, and time on the attack while ahead.
+- **Not yet:** gathering at a staging zone before going, combined arms, cracking fortified lines, navy and air
+  operations, and retreat by a safe path to the nearest held zone (today: home).
+
 ### 2.3 Group control (micro)
 
 - Each operation's forces are one or more groups. A group gets orders when its situation changes, and every few
@@ -120,8 +139,15 @@ Runs every second per brain, staggered so that brains do not all think on the sa
   5. else assist a factory.
 - **Sites:** build sites come from the map analysis' build spots of the start zone and from its mass points, checked
   with `CanBuildStructureAt`. A site promised to one builder is not given to another for 60 s.
-- **Factories:** engineers up to a cap that grows with the game (3 + one a minute, at most 12), then a land mix drawn
-  from the army's own stream: 60% tanks, 20% artillery, 20% anti-air.
+- **Factories:** engineers of the factory's tech up to a cap that grows with the game (3 + one a minute, at most 12),
+  then a land mix of the factory's tech, drawn from the army's own stream:
+  - T1: 60% tanks, 20% artillery, 20% anti-air;
+  - T2: 80% tanks, 20% anti-air;
+  - T3: 75% assault bots, 25% artillery.
+- **Tech (phase 4):** one upgrade at a time, never while mass is short:
+  - land factories to T2 from minute 8 (20 mass / s), to T3 from minute 16 (45 mass / s);
+  - extractors to T2 from minute 6, to T3 from minute 14 (40 mass / s).
+  Each kind goes oldest first.
 - **The army:** it gathers at the start, and meets enemies in the start zone and its neighbours (`AIZoneForces`).
 - The rest of this section (build-power jobs, openings per map, upgrades, production from the operations) comes with
   phases 4-5.
@@ -185,6 +211,10 @@ enders), *air player*, *naval player*, *balanced*, *random* (one of them, drawn 
 personality is a table of weights: production shares per domain, aggression offsets, preferred operation types,
 favourite openings. No personality has its own code path.
 
+**Built (phase 5, first form):** three personalities set when the army attacks and pushes (its overall advantage
+needed): balanced 1.2 / 2.0, rusher 0.9 / 1.6, turtle 1.6 / 3.0. Air and naval players come with air and naval
+operations. The personality is printed at the start (`aiop ... personality`).
+
 The personality is a per-slot lobby option of ours beside the AI key (the ui's answer): `RemasterPersonality` in the
 slot's PlayerOptions, which reach the sim as `ScenarioInfo.ArmySetup[army]`. Its default is Random, drawn in the
 sim from the AI's own stream (4.2), so it is the same on every machine and in the replay.
@@ -196,6 +226,9 @@ When far ahead of a human enemy, the brain caps its aggression level at 2 and it
 announces nothing, and keeps playing well. It never throws a game outright; it eases off so the player can recover
 and learn. **OPEN:** whether it also eases off against a human player in a team game, or only in 1vN games with
 humans on one side.
+
+**Built (phase 5, first form):** with teacher mode on and a human enemy, the brain never makes a decisive push. When
+it is far enough ahead to push, it attacks at most and logs `aiop ... teacher`.
 
 ### 2.9 Announcements, to allies only
 
@@ -329,6 +362,16 @@ it.
     frigate's range covers. It is 0 in zones 5 and 31 and in the open-sea zone 160, even with a 2000-unit horizon.
   - The Tigershark counts against ground because its deck gun can hit land.
 
+**The estimate of a zone's fight (phase 4),** `Remastered.AIZoneEstimate(army, zone, horizon [, kite])`: from what
+the army knows, own + allied units against the enemy's that can come to the zone within `horizon` world units of
+travel or shoot into it, fought out by the battle estimate (3.3).
+- The units come from the index, so fair intel holds: blips only, typed after sight, with the memory of lost
+  contacts. Unknown contacts are left out.
+- A unit away from the zone joins after its travel time (its class's travel distance / its speed; aircraft in a
+  straight line), in 10 s buckets: reinforcements on the way.
+- It returns margin, oursLeft, theirsLeft, seconds, oursMass, theirsMass. The index keeps the units themselves for
+  this, per zone and side, by blueprint, weighted by memory and health.
+
 **Reaction delay** (2.6) will be a ring of these summaries, one per build, so that a slow brain reads an older one
 (phase 5, with the difficulty knobs).
 
@@ -452,8 +495,15 @@ tank uel0201's (24 dps x 300 health = 1.0).
 - Two Percivals beat three Loyalists clearly (0.87), not six (0.17).
 - The Ythotha's splash over T3 groups lifts its threat well above the GC's, more than his "slightly stronger".
 
-**Not yet:** reinforcements on the way and kiting; accuracy beyond the indirect-fire factor; armour types and shield
-regeneration; the estimate run from the index's zone forces (phase 4, with the operations).
+**Reinforcements and kiting (phase 4):**
+- A force stack may arrive later (`ForceStack.arrive`): it neither fires nor is hit before then, and the fight is not
+  over while it is on its way.
+- With `kite` (the 4th argument of `AIBattleEstimate` and `AIZoneEstimate`), a side that holds because its main
+  weapons outrange the other backs off as the other closes, at its own speed, never past its engage range. So a
+  faster side that outranges keeps the gap, as a kiting player does.
+- The estimate run from the index's zone forces is `AIZoneEstimate` (3.2).
+
+**Not yet:** accuracy beyond the indirect-fire factor; armour types and shield regeneration.
 
 ### 3.4 What stays Lua (at first)
 
@@ -537,7 +587,8 @@ native core for numbers and spends its own time only on decisions.
   | `AIZoneThreat(army, zone, target, horizon [, from])` | `enemy, friendly`: summed ratings against `target` of what can reach the zone (3.2); `from` limits it to one domain |
   | `AIIndexInfo(army)` | `{tick, own, ally, enemy, unknown, outside, period}` |
   | `AISquareLaw(ours, theirs)` | `margin, survivors` (3.3) |
-  | `AIBattleEstimate(ours, theirs [, startDistance])` | `margin, oursLeft, theirsLeft, seconds`; a force is an array of `{blueprintId, count}` (3.3) |
+  | `AIBattleEstimate(ours, theirs [, startDistance [, kite]])` | `margin, oursLeft, theirsLeft, seconds`; a force is an array of `{blueprintId, count}` (3.3) |
+  | `AIZoneEstimate(army, zone, horizon [, kite])` | `margin, oursLeft, theirsLeft, seconds, oursMass, theirsMass`: the fight for the zone from what the army knows (3.2) |
   | `AIBuildValue(blueprintId, enemy)` | `value, killed, lost`: enemy mass killed per own mass lost (3.3) |
   | `AIRandom(army [, n])` | the army's own random stream: a float in [0, 1), or an integer 1..n (phase 3) |
   | `AISetRatingFix(blueprintId, multiplier)`, `AISetBeats(idA, idB, factor)` | Chris's corrections (3.3) |
@@ -615,6 +666,32 @@ both-modes check, multicore.md 1).
   - use of combined arms (operations with more than one domain), breaches started and finished;
   - **cost per tick**: the native part and the Lua part (`MOHO64_PROFILE` phases), against M28's in the same game.
 - **Determinism runs** at each phase (5.8).
+- **The first duels (phase 4, 2026-10-29).**
+  - **Setup:** 1v1 on SETONS_R, 60 minutes (36,000 beats), victory by demoralization (a commander's death ends it).
+    Our AI is army 1; `remastered_recruit` plays seed 1001 and `remastered_veteran` plays seed 2002.
+    - The two keys still play the same AI; the difficulty knobs are phase 5. The seeds differ, and so does the
+      personality the AI draws from its own stream.
+    - Against FAF's `adaptive` the session has no mods; against M28 (`m28ai`, no cheats) it has the b8 table's mods.
+  - **How it was run:** with the aicore notes' tools: make_duel.py builds the sessions, duels.sh runs the games, and
+    score_duel.py reads the `aiduel` and `aiop` lines.
+  - **Results:**
+
+    | Game | Result | Our killed / lost | Mass / s (ours / theirs, at the end) | Faults | Ahead (minutes) / attacking then | ms per beat |
+    |---|---|---|---|---|---|---|
+    | recruit vs FAF adaptive | no result after 60 min, behind | 1,350 / 1,419 | 114 / 286 | 0 | 13 of 60 / 0 | 19.8 |
+    | veteran (turtle) vs FAF adaptive | lost at minute 22.6 | 251 / 333 | 1 / 241 | 0 | 1 of 23 / 0 | 5.5 |
+    | recruit vs M28 | lost at minute 15.3 | 19 / 139 | 31 / 245 | 0 | 7 of 16 / 0 | 8.8 |
+    | veteran (turtle) vs M28 | lost at minute 15.4 | 11 / 94 | 55 / 223 | 0 | 7 of 16 / 0 | 8.0 |
+
+    The ms per beat is the whole game's: both AIs and the simulation.
+  - **What it shows:**
+    - The economy is the weak side: the opponents reach 220-290 mass / s while ours stays at 30-110.
+    - "Never fled a weaker force" holds: no retreat at a margin of 0.6 or more.
+    - It never attacks while "ahead": "ahead" counts only the enemy forces the army knows, and the estimate at the
+      enemy's base, with its defences, never reached the 0.6 launch bar. The defence and raids (up to 6 units at
+      undefended enemy extractors) carry the fighting.
+    - Next steps for the score: the economy (build-power jobs, more engineers, reclaim, energy ahead of need) and
+      gathering before an attack.
 - **Then Chris plays it** and judges the feel (decision 8), in the one big check after the UEF polish unless he asks
   sooner.
 
@@ -625,9 +702,9 @@ both-modes check, multicore.md 1).
 | 1 (built 2026-10-28) | Map analysis native (`src/ai/`), its Lua calls, the `MOHO64_AI_MAPDUMP` dump; computed and its calls made only in a session with our AI | The 16 + B1 / b8 identical to main; SETONS_R's dump looked at (zones around the mass, ponds, chokepoints at the passes); 250-300 ms; an AI-key session identical at 1 / 32 threads, shuffle, reverse |
 | 2 (built 2026-10-28) | Unit / threat index per observing army with fair intel and "can it reach"; blueprint ratings with Chris's labels and list (`MOHO64_AI_RATINGS`); the square-law estimate; their Lua calls | Scripted sessions (a navy in a closed pond does not threaten distant land; with fog only blips count, unseen contacts are unknown); the 16 + B1 / b8 identical; our-key sessions identical at 1 / 32 threads, shuffle, reverse |
 | 3 (built 2026-10-28) | The brain in `data/ai/` (2.4 below): own random stream, a think thread per brain, the slot's options, Chris's rating corrections; a first economy from the map analysis (factory, power when short, mass by travel distance, more factories while mass piles up, engineers, a land mix) and base defence; the index's memory and the AI-vision option; ratings reworked by Chris's decisions 10-12 (threat, the seven scores, build value) and the estimate fired per weapon | The 16 + B1 / b8 identical; our-key sessions identical at 1 / 32 threads, shuffle, reverse; on SETONS_R alone after 10 minutes: 21 extractors, 5 factories, 12 engineers, ~100 land units, 43 mass / s. Not yet run against FAF's AI for 60 minutes (phase 4, with the operations) |
-| 4 | Strategic and operation layers: aggression with hysteresis, objectives, gathering, push, retreat by estimate, raids, navy and air domains, combined arms timing | Ours vs M28 and FAF's AI, several seeds: the fight scores of section 6; "never fled a weaker force" at zero faults |
+| 4 (first form built 2026-10-29) | Strategic and operation layers: aggression with hysteresis, objectives, gathering, push, retreat by estimate, raids, navy and air domains, combined arms timing. Built: the zone estimate from the index (fair intel, memory, reinforcements on the way, kiting), defend / attack / push / raid with commit rules and logged decisions, tech upgrades. Not yet: gathering, navy and air, combined arms | Ours vs M28 and FAF's AI, several seeds: the fight scores of section 6; "never fled a weaker force" at zero faults. First duels: 0 faults, 3 losses and one 60-minute game without a result (section 6) |
 | 5 | Cracking fortified lines and staged breaches; the small fight simulation; group micro (focus fire, kiting in even fights); difficulty knobs and the four levels | Scripted fortified-line scenarios (a session that starts with T2 PD + artillery lines); level-vs-level matches (each level beats the one below most of the time) |
-| 6 | Team play, pings (with the ui's radial menu), allied announcements, personalities, teacher mode; hot Lua parts moved native | 2v2 / 4v4 with a human-ally stand-in (scripted pings); Chris's playtest |
+| 6 | Team play, pings (with the ui's radial menu), allied announcements, personalities, teacher mode; hot Lua parts moved native. First form of personalities (balanced / rusher / turtle) and teacher mode built in phase 4 (2.7, 2.8) | 2v2 / 4v4 with a human-ally stand-in (scripted pings); Chris's playtest |
 
 ## 8. Open points (collected)
 

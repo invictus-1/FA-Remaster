@@ -117,3 +117,12 @@ A design talk with Chris, using these goals and ai-study-m28.md section 7.5's op
     WHY a unit's threat is low or high (a group killer, a single-target killer) and can pick what takes out the
     enemy's group. These are worked out once when the blueprints load (a small table per unit), so they cost nothing
     while the game runs.
+13. **Min-max the economy, and counter cheaply (Chris, 2026-10-29, after the first duels):**
+    - The economy is driven hard from the first second, at the same time as scouting, building an army and expanding,
+      never one after the other.
+    - Counters are picked for the least mass that beats what the enemy fields. Example: against a group of Mech
+      Marines, a group of Strikers wins. To save mass, a few T1 point defences and a few T1 artillery can hold a
+      point instead.
+    - So defences are build candidates beside units: cheaper per threat, but fixed. They are worth it only where the
+      enemy will come (a choke, an expansion under raids).
+    - This is tuned step by step from the duels.

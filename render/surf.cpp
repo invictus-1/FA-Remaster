@@ -228,6 +228,9 @@ VOut VS(uint vertex : SV_VertexID, uint instance : SV_InstanceID) {
   float far = length(p - cameraPosition);
   o.shade.x = c.z * smoothstep(0, mist ? 0.3 : 0.05, age) * pow(1 - t, mist ? 1.2 : 1.6) * (1 - saturate((far - fade.x) * fade.y)) *
               saturate(1 - underwater / max(size * 0.5, 0.05));
+  // (close to the eye a puff fades away: a few of its own sizes off it is spray one stands in, not a white disc across the
+  // picture - the unit checks' close views of a slow ship, the SP3-3000, as for the contrails)
+  o.shade.x *= smoothstep(size * 2, size * 8, far);
   o.shade.y = size * 0.6;
   o.shade.z = seed;
   o.kind = kind;
@@ -755,7 +758,7 @@ void Surf::AddShip(uint32_t id, const std::string& blueprint, const Model* model
   if (Length(position - eye_) > farthest) return;
   const float speed = std::hypot(s.velocity.x, s.velocity.z);
   const float share = std::clamp(speed / std::max(kind.maxSpeed, 0.5f), 0.0f, 1.2f);
-  if (share < 0.25f) return;
+  if (share < 0.35f) return;  // (a slow ship, a platform drifting into place, throws none: was 0.25)
   ++ships;
   const Vec3 lo = model->boundsMin * model->scale, hi = model->boundsMax * model->scale;
   const float beam = std::clamp(hi.x - lo.x, 0.4f, 6.0f), half = beam * 0.5f;
@@ -766,7 +769,7 @@ void Surf::AddShip(uint32_t id, const std::string& blueprint, const Model* model
   Vec3 bow = Vec3{position.x, level_ + 0.04f, position.z} + forward * (hi.z * 0.88f);
   bow.y += rise + slopeX * (bow.x - position.x) + slopeZ * (bow.z - position.z);  // [hulls] (on the lifted waves: where they meet the bow)
   const float rough = std::max(rough_, 0.0f);
-  const float fast = Smooth(0.25f, 1.0f, share);
+  const float fast = Smooth(0.35f, 1.0f, share);
   // a sheet of spray off each side of the bow (a pair at a time), more the faster it goes and the rougher the sea
   s.carry += 26 * fast * fast * (0.55f + 0.9f * rough) * std::clamp(half, 0.5f, 1.5f) * sprayStrength * dt;
   int thrown = 0;
