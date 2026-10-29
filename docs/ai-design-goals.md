@@ -147,3 +147,14 @@ A design talk with Chris, using these goals and ai-study-m28.md section 7.5's op
       force first, then goes into full economy to catch up. Or it keeps its existing force in a defensive role to buy
       time until it can match: a few point defences, a rush to T2, point defences at T2, while it ecos.
     - The read is re-checked as the game goes on, and every switch is logged with its reason.
+16. **The whole picture, and few knobs (Chris, 2026-10-29):**
+    - The aim: it plays like a real player, from beginner to pro to beyond a pro. It is fun and challenging, never
+      scared to fight, and always knows what it is doing. Chris "always hated playing against AI" that was scared or
+      lost. Ours is the answer to that.
+    - It stays efficient: the hot parts native, its cost per beat measured in every duel.
+    - **Player knobs, later, kept few:** a small number of sliders the player can drag, such as more defensive / more
+      aggressive (and perhaps eco against army). Each one moves a weight the AI already uses (commit margins,
+      investment risk, defence share). None replaces the AI's own judgement. No wall of 50 options that break the AI
+      or do nothing, as M28 has. The AI does the deciding; the knobs only lean it.
+    - The design keeps absorbing Chris's ideas: each new idea is merged into these decisions (built, changed or
+      removed), so the AI stays one coherent player, not a pile of features.
