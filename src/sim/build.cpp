@@ -616,6 +616,20 @@ void StopMoving(Unit* u) {
   u->unitStates.erase("Moving");
 }
 
+// The o-grid rect a rally-overridden walk reserved (MoveTaskWalk, +0x92) goes with the walk's CUnitMoveTask: its dtor
+// frees it whatever the abort table says and whether the unit lives or not (0x618886..0x618891: task+0x92 set ->
+// FreeOgridRect 0x6ab760). Seen: MP1 12165, army 2's engineer 0x2000bc (url0105) is killed on its patrol's reclaim
+// walk, whose override reserved (212,356) at 12161; the original's kill (queue cleared, tasks destroyed) gives the cell
+// back, so at 12176 the ship 0x2000e5's override PrepareMove from (212,356) takes that very cell and its path runs
+// along z 356 (target (213,356), drive-through 1 at 12178). Ours kept the dead engineer's rect (a mobile unit's
+// OnDestroy frees nothing: unit+0x560 is a structure's, 0x6a5f71), took (214,354) beside it, drove to that goal cell
+// itself with speed-through 0 and turned twice as far.
+void FreeWalkRect(Unit* u) {
+  if (!u->walkPrepared) return;
+  GroundFreeRect(*Sim::From(u->luaState()), u);
+  u->walkPrepared = false;
+}
+
 // A task's move child torn down with the task (CUnitMoveTask's dtor 0x618700): Moving off (0x6187bd), then the
 // navigator's AbortMove (0x618884) unless the queue is being cleared for an order its table 0x618998 keeps
 // (u->clearKeepsMove, set by IssueFromStream). (A move that ends by itself goes through StopMoving: queue+0x1c is 0
@@ -630,6 +644,7 @@ void StopMoving(Unit* u) {
 void EndMoveChild(Unit* u) {
   u->unitStates.erase("Moving");
   if (!u->clearKeepsMove && u->motion.bp && u->motion.bp->mobile()) MotionStop(u);
+  FreeWalkRect(u);
 }
 
 // The end of a task's walk that ended by itself (the navigator's event): the walk is a CUnitMoveTask child
@@ -3714,6 +3729,7 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
     u->unitStates.erase("Reclaiming");
     u->unitStates.erase("Repairing");
     u->workProgress = 0;
+    if (walking) FreeWalkRect(u);  // (the walking child's dtor, 0x618891, has no test of the unit's life)
   }
   if (Alive(u)) {
     u->unitStates.erase("Reclaiming");
