@@ -68,7 +68,9 @@ class ThreadScheduler {
   // thousands of threads). A coroutine is in the list at most once: its entry holds a registry reference to it
   // until the entry is erased, so its lua_State cannot be collected and reused meanwhile. (std::list keeps the
   // nodes in place through splice, so the pointers stay good until the erase.)
-  std::unordered_map<lua_State*, Thread*> byCo_;
+  // (Its node, so that Signal moves a woken thread to the end without walking the list: B1 at cores spent 2.9 s of
+  // its 34 s of manipulators in that walk.)
+  std::unordered_map<lua_State*, std::list<Thread>::iterator> byCo_;
   // the threads that have had a WaitFor event since WakeSignalled last looked (a few at a time, against thousands of
   // threads): WakeSignalled, now called at every Fork, walks the whole list only when one of them is signalled
   std::vector<Thread*> waiters_;
