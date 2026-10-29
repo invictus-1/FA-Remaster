@@ -4438,7 +4438,13 @@ int l_AttachBoneTo(lua_State* L) {
   // stage (DamageArea r 1.2 at (983.02, 19.22, 528.29)): the original's engineer takes nothing (hp 1.0), ours, its box
   // already on the bone at (981.50, 18.80, 528.90), took 625 and died.
   S(L)->HoldShape(u);
-  {
+  // A unit that has had its turn in this beat (its motion step is done: lastPosTick) keeps the transform that step
+  // gave it: the link alone is stored, and its next step (behind the parent's, Entity::TaskTick 0x679c40) puts it on
+  // the bone. Seen: MP1 13120, army 6's crashing scout 0x6000ee hung on FAF's ShieldCollider in the collider's
+  // OnImpact (the projectile pass, after the plane's step): the original's plane ends the beat where its own crash step
+  // put it (854.3552, 23.7286, 739.1945, still tumbling) and is on the collider from 13121; ours put it on the bone at
+  // once.
+  if (u->lastPosTick != S(L)->tick()) {
     Vec3 bp;
     Quat bq;
     BoneWorld(parent, u->parentBone, &bp, &bq);
@@ -4469,7 +4475,7 @@ int l_AttachTo(lua_State* L) {  // entity:AttachTo(parent, bone)
   SetAttachedState(u);
   if (u->motion.hasGoal) MotionStop(u);
   S(L)->HoldShape(u);  // (see l_AttachBoneTo)
-  u->position = EntityBonePosition(parent, u->parentBone);
+  if (u->lastPosTick != S(L)->tick()) u->position = EntityBonePosition(parent, u->parentBone);  // (as there)
   S(L)->MarkUnitsMoved();
   return 0;
 }

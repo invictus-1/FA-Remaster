@@ -475,7 +475,9 @@ setmetatable(moho, {__index = function(t, k) local v = setmetatable({}, engineCl
 
 -- what the game keeps of its armies and units
 local brainMethods = {OnUnitKilled = quietSelf, AddUnitStat = quietSelf, SetUnitStat = quietSelf, TrackJammer = quietSelf,
-                      OnUnitDestroyed = quietSelf, GetArmyIndex = function() return 1 end, GetFactionIndex = function() return 1 end}
+                      OnUnitDestroyed = quietSelf, GetArmyIndex = function() return 1 end, GetFactionIndex = function() return 1 end,
+                      -- (a nuke's launch tells its brain, which tells the others: the stand has none to tell; the unit check's Ace)
+                      NuclearLaunchDetected = quietSelf}
 for k, v in pairs(moho.aibrain_methods) do if brainMethods[k] == nil then brainMethods[k] = v end end
 -- (and any other of the brain's callbacks and bookkeeping, On..., Add..., Remove..., Track..., Register..., does nothing)
 __fxBrain = setmetatable({CheatEnabled = false, BrainType = 'AI', Name = 'ARMY_1', Nickname = 'stand', Army = 1},

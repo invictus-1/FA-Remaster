@@ -510,6 +510,19 @@ int l_Warp(lua_State* L) {  // Warp(entity, location, [orientation])
   }
   e->position = {v[0], v[1], v[2]};
   e->orientation = ori;
+  // Entity::Warp 0x679210: the pending transform (0x678e90), then AdvanceCoords 0x678f10 twice (0x679225 / 0x67922b):
+  // the warp is committed at once, the collision primitive with it. So an entity that has had its step in this beat
+  // (its shape held at the beat's start) is read where it was warped to, by scripts and by what hangs on it. Seen: MP1
+  // 13120, FAF's ShieldCollider under army 6's crashing scout 0x6000ee: its OnImpact warps it to the plane
+  // (Warp(self, Plane:GetPosition(bone), Plane:GetOrientation())) and hangs the plane on its 'anchor' bone; the
+  // original's plane rides at the warped place from 13121 (854.3552, 23.7286, 739.1945, the plane's orientation);
+  // ours read the collider's place and orientation of the beat's start, 2.3 away and upright.
+  if (e->shapeHeld) {
+    e->shapePos = e->position;
+    e->shapeOri = e->orientation;
+  }
+  if (e->kind == Entity::Kind::Projectile && Sim::From(L)->steppingProjectile == e)
+    static_cast<Projectile*>(e)->warpedInStep = true;
   return 0;
 }
 
