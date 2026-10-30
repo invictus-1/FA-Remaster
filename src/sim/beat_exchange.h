@@ -20,7 +20,7 @@ namespace moho {
 
 // One client's messages for one beat, in the order the client wrote them.
 struct ClientBatch {
-  uint8_t client = 0;  // the client's index in the session (the host is 0), the merge order
+  uint8_t client = 0;  // the client's index in the session, the merge order (CLobby::AssignClientIndex 0x7c4e80: human armies' owners in army order, then observers)
   std::string bytes;   // replay-stream messages, no Advance
 };
 

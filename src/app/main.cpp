@@ -6,6 +6,7 @@
 //          [--sim <replay> | --session <game configuration .lua> [--seed N]] [--ticks N] [--view] [--orders file] [--sim-lua file]
 //          [--twice | --together [--together-lag N] [--together-threads <n|cores>]] [--focus N]
 //          [--then-session <game configuration .lua>]
+//          [--net host:<port> | join:<port> [--net-client N] [--net-delay N] [--net-stream-out file]]
 //   moho64 --init <init.lua> [--mods uids.txt] [--maps folder] --scan-moments <replay> [--scan-out file] [--ticks N]
 //          [--scan-off] [--scan-threads N] [--scan-cancel-at tick] [--scan-mount <folder> <mount point>]...
 //          [--scan-skip <folder>]...
@@ -32,12 +33,14 @@
 #include "core/profile.h"
 #include "core/workers.h"
 #include "core/vfs.h"
+#include "net/beat_exchange_net.h"
 #include "script/mount.h"
 #include "script/script_state.h"
 #include "sim/script_object.h"
 #include "sim/command_stream.h"
 #include "sim/command_writer.h"
 #include "sim/fingerprint.h"
+#include "sim/lockstep.h"
 #include "sim/moments.h"
 #include "sim/session.h"
 #include "sim/sim_view.h"
@@ -122,6 +125,179 @@ struct Options {
   int scanCancelAt = 0;
   std::vector<std::pair<std::string, std::string>> scanMounts;
   std::vector<std::string> scanSkips;
+  // --net host:<port> | join:<port>: a test of a network game (sim/lockstep.h) over the interface's transport
+  // (ui/net/beat_exchange_net.h, its TCP connector on 127.0.0.1): two copies of moho64 play one --session (the same
+  // file and --seed), the host as client 0, the other as client 1 (--net-client 1), each speaking for the command
+  // source of its own index. Each copy's --orders are its own: they reach every copy through the lockstep instead of
+  // going straight into its sim, and run --net-delay beats later (default 5: the original's net_Lag, 500 ms, at
+  // normal speed); its "lua" lines still run in its own sim only (they would desync the copies), its "focus" lines
+  // are its own by nature. --net-stream-out <file>: every beat's merged orders and an Advance (what --stream plays
+  // back; the original's multiplayer replays hold the same: each client's part led by its SetCommandSource).
+  // An --orders line "<tick> claim <source> issuegroup ..." / "... issue ..." writes that order as another command
+  // source (a test: the lockstep must drop it). MOHO64_NET_CORRUPT_DIGEST=<beat>: this copy's checksum of that beat
+  // is changed (a test: both copies must report the desync). MOHO64_NET_EJECT=<client>:<beat>: that client is left
+  // out from that beat on (a test: its command sources are terminated).
+  std::string netMode;
+  uint16_t netPort = 0;
+  int netClient = 0;
+  int netDelay = 5;
+  std::string netStreamOut;
+};
+
+// --net: one copy's side of a network game (Options::netMode).
+struct NetGame {
+  std::unique_ptr<net::NetBeatExchange> ex;
+  std::unique_ptr<Lockstep> lockstep;
+  uint8_t local = 0, peer = 1;
+  uint32_t delay = 5;
+  std::FILE* streamOut = nullptr;
+  std::string turn, rogue;  // this turn's orders (and the --orders "claim" test's, written as another source)
+  std::map<uint32_t, std::string> sentFor;  // beat -> this copy's orders sent for it (the input delay's check)
+  uint32_t delayOk = 0, delayWrong = 0, desyncs = 0, corruptAt = 0;
+  uint8_t ejectWho = 0;
+  uint32_t ejectFrom = 0;  // (MOHO64_NET_EJECT; the transport stops sending to a client once it is ejected, so the
+                           // eject is made when that beat comes)
+  double waitSeconds = 0;
+  ~NetGame() {
+    if (streamOut) std::fclose(streamOut);
+  }
+
+  // Connects to the other copy (the host listens, the other connects). Once the connection is made the host sends a
+  // message of this test's own (100) and waits for the other's first beats before sending any of its own, so that no
+  // message of the game is among the events polled here, before the exchange owns the connector.
+  static std::unique_ptr<NetGame> Connect(const Options& o) {
+    auto g = std::make_unique<NetGame>();
+    const bool host = o.netMode == "host";
+    g->local = static_cast<uint8_t>(o.netClient);
+    g->peer = g->local == 0 ? 1 : 0;
+    g->delay = static_cast<uint32_t>(o.netDelay);
+    if (!net::NetStartup()) return nullptr;
+    auto conn = net::MakeConnector("TCP", host ? o.netPort : 0);
+    if (!conn) {
+      Logf(LogLevel::Error, "net: cannot open a TCP port");
+      return nullptr;
+    }
+    net::Connector* raw = conn.get();
+    const net::Address hostAt{0x7f000001u, o.netPort};
+    int id = host ? -1 : raw->Connect(hostAt);
+    bool made = false, go = host;
+    const auto stop = std::chrono::steady_clock::now() + std::chrono::seconds(120);
+    std::vector<net::ConnEvent> ev;
+    while (!(made && go) && std::chrono::steady_clock::now() < stop) {
+      ev.clear();
+      raw->Poll(&ev);
+      for (const auto& e : ev) {
+        if (e.kind == net::ConnEvent::Made) {
+          made = true;
+          id = e.conn;
+        } else if (e.kind == net::ConnEvent::Failed && !host) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(50));
+          id = raw->Connect(hostAt);  // (the host is not listening yet)
+        } else if (e.kind == net::ConnEvent::Received && e.msg.type == 100) {
+          go = true;
+        }
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    if (!made || !go) {
+      Logf(LogLevel::Error, "net: no connection to the other copy (port %u)", o.netPort);
+      return nullptr;
+    }
+    g->ex = std::make_unique<net::NetBeatExchange>(std::move(conn), g->local,
+                                                   std::vector<net::GameClient>{net::GameClient{g->peer, id}});
+    // (client k speaks for command source k: the session's k-th human owner, sim/session.cpp)
+    std::vector<LockstepClient> clients{LockstepClient{0, {0}}, LockstepClient{1, {1}}};
+    g->lockstep = std::make_unique<Lockstep>(g->ex.get(), g->local, clients, g->delay);
+    if (host) {
+      raw->Send(id, net::Message{100, std::string()});
+      while (g->ex->ReceivedBeats(g->peer) == 0 && std::chrono::steady_clock::now() < stop)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    g->lockstep->Start();
+    if (!o.netStreamOut.empty() && !(g->streamOut = std::fopen(o.netStreamOut.c_str(), "wb")))
+      Logf(LogLevel::Error, "net: cannot write %s", o.netStreamOut.c_str());
+    if (const char* c = getenv("MOHO64_NET_CORRUPT_DIGEST")) g->corruptAt = static_cast<uint32_t>(std::atoi(c));
+    // MOHO64_NET_EJECT=<client>:<beat>: that client left out from that beat on (the disconnect dialog's eject; a test
+    // of the lockstep terminating its sources)
+    if (const char* e = getenv("MOHO64_NET_EJECT"); e && std::strchr(e, ':')) {
+      g->ejectWho = static_cast<uint8_t>(std::atoi(e));
+      g->ejectFrom = static_cast<uint32_t>(std::atoi(std::strchr(e, ':') + 1));
+    }
+    Logf(LogLevel::Info, "net: client %d connected to client %d (%s, port %u), input delay %u beats", g->local, g->peer,
+         host ? "host" : "joined", o.netPort, g->delay);
+    return g;
+  }
+
+  // Before a beat: this turn's orders out, then wait for every client's batch of the beat and carry out the merge.
+  bool Turn(Sim& sim, std::map<std::string, int>* unhandled) {
+    const uint32_t beat = lockstep->nextBeat();
+    if (ejectFrom && beat == ejectFrom) {
+      ex->Eject(ejectWho, beat);
+      Logf(LogLevel::Info, "net: client %d is left out from beat %u on (MOHO64_NET_EJECT)", ejectWho, beat);
+    }
+    if (!turn.empty()) sentFor[beat + delay] = turn;
+    if (!turn.empty() || !rogue.empty()) lockstep->Queue(turn + rogue);
+    turn.clear();
+    rogue.clear();
+    std::string merged;
+    const auto t0 = std::chrono::steady_clock::now();
+    while (!lockstep->Ready(&merged)) {
+      if (std::chrono::steady_clock::now() - t0 > std::chrono::seconds(120) || !ex->LostClients().empty()) {
+        Logf(LogLevel::Error, "net: beat %u: the other copy's batch never came%s", beat,
+             ex->LostClients().empty() ? "" : " (its connection is lost)");
+        return false;
+      }
+      std::this_thread::sleep_for(std::chrono::microseconds(200));
+    }
+    waitSeconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    if (auto it = sentFor.find(beat); it != sentFor.end()) {
+      if (merged.find(it->second) != std::string::npos) {
+        ++delayOk;
+      } else {
+        ++delayWrong;
+        Logf(LogLevel::Error, "net: beat %u: the orders queued %u beats before are not in its merge", beat, delay);
+      }
+      sentFor.erase(it);
+    }
+    if (streamOut) {
+      const std::string adv = CommandWriter::AdvanceMessage(1);
+      std::fwrite(merged.data(), 1, merged.size(), streamOut);
+      std::fwrite(adv.data(), 1, adv.size(), streamOut);
+    }
+    if (!merged.empty() && !ApplyCommands(sim, merged, unhandled))
+      Logf(LogLevel::Error, "net: beat %u: a merged message was malformed", beat);
+    return true;
+  }
+
+  // After the beat (paused ones too): the checksum every 50 beats, and the peers' compared.
+  void After(const Sim& sim, uint32_t beat) {
+    std::string digest;
+    if (beat % kLockstepChecksumPeriod == 0) {
+      digest = LockstepDigest(sim, beat);
+      if (beat == corruptAt) {
+        digest[0] = static_cast<char>(digest[0] ^ 0x5a);
+        Logf(LogLevel::Info, "net: beat %u: our digest is changed on purpose (MOHO64_NET_CORRUPT_DIGEST)", beat);
+      }
+    }
+    lockstep->AfterBeat(digest);
+    for (const LockstepDesync& d : lockstep->desyncs()) {
+      ++desyncs;
+      Logf(LogLevel::Warning, "net: desync: beat %u, client %d's checksum differs from ours", d.beat, d.client);
+    }
+    lockstep->desyncs().clear();
+  }
+
+  // The end: what is still queued for the other copy goes out (Send only queues, the connector's Poll writes), and a
+  // summary.
+  void End(uint32_t beats) {
+    for (int i = 0; i < 300; ++i) {
+      ex->ReceivedBeats(peer);
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    Logf(LogLevel::Info, "net: client %d: %u beats, %u messages rejected, input delay checks %u ok %u wrong, %u desync "
+         "report(s), %.2f s waiting for the other copy", local, beats, lockstep->rejected(), delayOk, delayWrong,
+         desyncs, waitSeconds);
+  }
 };
 
 // The game's file system as main mounts it (--together mounts a second one for its second copy).
@@ -569,10 +745,12 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
       if (sp != std::string::npos) orders.insert({static_cast<uint32_t>(std::atoi(line.c_str())), line.substr(sp + 1)});
     }
   }
-  CommandWriter writer(0);
+  CommandWriter writer(o.netMode.empty() ? 0 : o.netClient);
   std::map<std::string, int> ordersUnhandled;
+  std::unique_ptr<NetGame> net;  // (--net: made below, before the first beat)
   std::vector<std::pair<std::vector<uint32_t>, std::string>> tracked;  // (issuegroup under MOHO64_PROFILE)
   auto giveOrders = [&] {
+    CommandWriter& own = writer;
     auto range = orders.equal_range(static_cast<uint32_t>(done + paused));
     for (auto it = range.first; it != range.second; ++it) {
       char what[32] = "", ids[256] = "", tail[32] = "";
@@ -580,6 +758,18 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
       float x = 0, y = 0, z = 0;
       const char* text = it->second.c_str();
       if (std::sscanf(text, "%31s", what) != 1) continue;
+      // "<tick> claim <source> <an issue or issuegroup line>": that order written as another command source (--net)
+      std::unique_ptr<CommandWriter> claimed;
+      std::string claimText;
+      if (!std::strcmp(what, "claim")) {
+        int src = 0, at = 0;
+        if (std::sscanf(text, "%*s %d %n", &src, &at) < 1 || at == 0 || !net) continue;
+        claimed = std::make_unique<CommandWriter>(src);
+        claimText = text + at;
+        text = claimText.c_str();
+        if (std::sscanf(text, "%31s", what) != 1) continue;
+      }
+      CommandWriter& writer = claimed ? *claimed : own;
       if (!std::strcmp(what, "pause")) writer.RequestPause();
       else if (!std::strcmp(what, "resume")) writer.Resume();
       else if (!std::strcmp(what, "endgame")) writer.EndGame();  // one more beat runs, then the game stands
@@ -653,8 +843,10 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
         uint32_t id = writer.IssueCommand(units, d, std::strcmp(tail, "queue") != 0);
         Logf(LogLevel::Info, "orders: tick %u: command %#x type %d for %zu unit(s)", sim.tick(), id, type, units.size());
       }
+      if (claimed) net->rogue += claimed->Take();
     }
-    if (!writer.empty() && !ApplyCommands(sim, writer.Take(), &ordersUnhandled)) Logf(LogLevel::Error, "orders: a message was malformed");
+    if (net) net->turn += writer.Take();  // (--net: to every copy through the lockstep, NetGame::Turn)
+    else if (!writer.empty() && !ApplyCommands(sim, writer.Take(), &ordersUnhandled)) Logf(LogLevel::Error, "orders: a message was malformed");
     for (auto& [ids, w] : tracked) sim.ProfileTrackOrder(ids, w);
     tracked.clear();
   };
@@ -752,6 +944,7 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
     }
   };
   if (ok) viewReads(true);
+  if (ok && !o.netMode.empty() && !(net = NetGame::Connect(o))) ok = false;
   while (ok && !diverged && done < o.ticks) {
     if (playStream && !stream.AtEnd()) {
       if (!stream.ApplyUntilAdvance(sim)) {
@@ -761,12 +954,14 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
       }
     }
     giveOrders();
+    if (net && !net->Turn(sim, &ordersUnhandled)) break;
     if (sim.Paused()) {
       sim.PausedBeat();
       takeSync();
       takeHits();
       ++paused;
       if (fingerprint && !fingerprint->Beat(sim, static_cast<uint32_t>(done + paused))) diverged = true;
+      if (net) net->After(sim, static_cast<uint32_t>(done + paused));
       if (diverged || (sim.frozen && (stream.AtEnd() || !playStream))) break;
       continue;
     }
@@ -779,6 +974,7 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
       diverged = true;
       break;
     }
+    if (net) net->After(sim, static_cast<uint32_t>(done + paused));
     viewReads(false);
     // MOHO64_DEBUG_RECONGRID=<n> (render REQUESTS 38): at beat 1 and every 600th, for every army and each water
     // kind, ReconGrid's n x n grid against n x n ReconAt calls at the same points (the renderer's sight grid's
@@ -1006,6 +1202,7 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
     for (const std::string& line : hitsSeen.samples) Logf(LogLevel::Info, "hits: %s", line.c_str());
   }
   if (fingerprint && !diverged) fingerprint->End(static_cast<uint32_t>(done + paused));
+  if (net) net->End(static_cast<uint32_t>(done + paused));
   if (vr.on)
     Logf(LogLevel::Info, "view reads: %zu beats read; a collection ran in the reads of %zu, the heap changed in %zu (%lld bytes)",
          vr.beats, vr.collected, vr.changed, vr.bytes);
@@ -1502,6 +1699,20 @@ int main(int argc, char** argv) {
       o.scanMounts.emplace_back(folder, next());
     }
     else if (a == "--scan-skip") o.scanSkips.push_back(next());
+    else if (a == "--net") {  // host:<port> | join:<port>
+      const std::string v = next();
+      const size_t colon = v.find(':');
+      o.netMode = v.substr(0, colon);
+      o.netPort = static_cast<uint16_t>(colon == std::string::npos ? 0 : std::atoi(v.c_str() + colon + 1));
+      if ((o.netMode != "host" && o.netMode != "join") || o.netPort == 0) {
+        std::fprintf(stderr, "--net host:<port> | join:<port>\n");
+        return 2;
+      }
+      if (o.netMode == "join" && o.netClient == 0) o.netClient = 1;
+    }
+    else if (a == "--net-client") o.netClient = std::atoi(next().c_str());
+    else if (a == "--net-delay") o.netDelay = std::atoi(next().c_str());
+    else if (a == "--net-stream-out") o.netStreamOut = next();
     else if (a == "/map") o.spMap = next();
     else if (a == "/diff") o.spDiff = std::atoi(next().c_str());
     else if (a == "/faction") o.spFaction = std::atoi(next().c_str());

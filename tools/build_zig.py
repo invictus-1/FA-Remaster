@@ -60,9 +60,13 @@ def main():
     for d in ("core", "script", "sim", "ai"):
         for f in sorted(glob.glob(os.path.join(ROOT, "src", d, "*.cpp"))):
             add(f, cxxflags, True)
-    add(os.path.join(ROOT, "src", "app", "main.cpp"), cxxflags, True)
+    # the interface's network transport (ui/net/: no interface dependencies), for --net's two-copy lockstep tests
+    netflags = cxxflags + ["-I", os.path.join(ROOT, "ui")]
+    for n in ("socket", "message", "connector_tcp", "connector_udp", "beat_exchange_net"):
+        add(os.path.join(ROOT, "ui", "net", n + ".cpp"), netflags, True)
+    add(os.path.join(ROOT, "src", "app", "main.cpp"), netflags, True)
 
-    newest_header = max(os.path.getmtime(h) for pat in ("src/**/*.h", "src/**/*.inc", "third_party/**/*.h")
+    newest_header = max(os.path.getmtime(h) for pat in ("src/**/*.h", "src/**/*.inc", "third_party/**/*.h", "ui/net/*.h")
                         for h in glob.glob(os.path.join(ROOT, pat), recursive=True))
     todo = [j for j in jobs if not os.path.exists(j[1]) or
             os.path.getmtime(j[1]) < max(os.path.getmtime(j[0]), newest_header)]
@@ -79,7 +83,7 @@ def main():
         sys.exit(f"build_zig: {len(failed)} file(s) failed")
     exe = os.path.join(a.out, "moho64.exe" if windows else "moho64")
     link = zig("c++", *tflag, *common, "-o", exe, *[j[1] for j in jobs])
-    link += ["-lshell32", "-static"] if windows else ["-lm", "-lpthread"]
+    link += ["-lshell32", "-lws2_32", "-static"] if windows else ["-lm", "-lpthread"]
     r = subprocess.run(link, capture_output=True, text=True)
     if r.returncode != 0:
         sys.exit("build_zig: link failed\n" + r.stderr)
