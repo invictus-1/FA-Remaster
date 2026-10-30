@@ -539,6 +539,8 @@ function IsEntity(e) return type(e) == 'table' and rawget(e, '__id') ~= nil end
 function IsProp(e) return type(e) == 'table' and rawget(e, '__prop') == true end
 function IsProjectile(e) return IsEntity(e) and not e.IsUnit and not IsProp(e) end
 function GetTerrainHeight(x, z) return __fxTerrain(x, z) end
+-- (a structure with weapons turns toward the map's middle as it is made, StructureUnit.RotateTowardsEnemy: the map's size)
+function GetMapSize() return __fxMapWidth or 1024, __fxMapHeight or 1024 end
 function GetSurfaceHeight(x, z) return __fxSurface(x, z) end
 -- the map's terrain types (the game's /lua/TerrainTypes.lua, by the code of the map's cell; out of
 -- the map or a code it does not list: 'Default'), as the engine gives them
@@ -1023,6 +1025,7 @@ struct Ent {
   bool driveDone = false;
   std::string motion;
   bool onWater = false;  // [navstand] (StandHeight)
+  uint32_t building = 0;  // [machinery] the unit it builds (--fx-build: its work's progress in the frame, as a game's)
   int terrainCode = -1;
   // --fx-fire: a unit made with its weapons poses its bones with its manipulators (else the scripts' manipulators
   // do nothing in the stand, as before)
@@ -2749,10 +2752,18 @@ bool FxEntities::Init(moho::Vfs* vfs, uint32_t seed, std::string* error) {
 
 bool FxEntities::InitUnits(std::function<float(float, float)> terrain, bool water, float waterLevel,
                            std::function<const Model*(const std::string&)> unitModel, std::string* error,
-                           std::function<int(float, float)> terrainType) {
+                           std::function<int(float, float)> terrainType, float mapWidth, float mapHeight) {
   Impl& m = *impl_;
   if (!m.state) return false;
   m.units = true;
+  {  // (GetMapSize's: before, only the weapons' world had it, and a structure made without it took the stub's table for a
+     // number: structureunit.lua(178) in --fx-build)
+    lua_State* L = m.state->L();
+    lua_pushnumber(L, mapWidth > 0 ? mapWidth : 1024);
+    lua_setglobal(L, "__fxMapWidth");
+    lua_pushnumber(L, mapHeight > 0 ? mapHeight : 1024);
+    lua_setglobal(L, "__fxMapHeight");
+  }
   m.terrainCode = std::move(terrainType);
   m.terrain = std::move(terrain);
   m.water = water;
@@ -3024,8 +3035,9 @@ uint32_t FxEntities::AddUnit(const std::string& id, Vec3 at, const UnitPlace& ho
 
 void FxEntities::Build(uint32_t builder, uint32_t unit, const std::string& order, float seconds) {
   Impl& m = *impl_;
-  const Ent* b = m.Find(builder);
+  Ent* b = m.Find(builder);
   if (!m.state || !b || !m.Find(unit)) return;
+  b->building = unit;  // [machinery]
   Echo echo;
   m.spawnOriginal = b->original;
   m.spawnSide = b->side;
@@ -3505,6 +3517,9 @@ void FxEntities::Advance(double now) {
         u.maxHealth = e.maxHealth;
         u.fractionComplete = e.fraction;  // (buildfx: what is under construction, as a game's frame says it)
         u.beingBuilt = e.fraction < 1;
+        if (e.building)  // [machinery] (a builder's work: how far what it builds is, while it is under way)
+          if (const Ent* built = m.Find(e.building))
+            u.workProgress = built->fraction > 0 && built->fraction < 1 ? built->fraction : 0.0f;
         u.firstBone = u.nextFirstBone = static_cast<uint32_t>(m.frame.bones.size());
         u.boneCount = u.nextBoneCount = static_cast<uint32_t>(b.bones.size());
         m.frame.bones.insert(m.frame.bones.end(), b.bones.begin(), b.bones.end());

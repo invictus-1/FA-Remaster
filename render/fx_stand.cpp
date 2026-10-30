@@ -501,7 +501,8 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
     World* w = &world;
     std::string why;
     unitsReady_ = entities_->InitUnits(terrain_ ? terrain_ : ground, water_, waterLevel_,
-                                       [w](const std::string& id) { return w->models.Unit(id); }, &why, terrainType_);
+                                       [w](const std::string& id) { return w->models.Unit(id); }, &why, terrainType_,
+                                       mapWidth_, mapHeight_);
     // (--fx-fire: the weapons' world on it, before the first unit)
     if (unitsReady_ && !setup_.fire.empty()) unitsReady_ = entities_->InitWeapons(&why, mapWidth_, mapHeight_);
     if (!unitsReady_) {
@@ -862,7 +863,13 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
       const Vec3* heat = b.wreck && !b.original ? world.WreckHeat(b.id, model, at) : nullptr;
       // [plants] (plants that react: a fresh wreck's death burnt the ground round it, as a game's wreck does, World::ApplyPropEvent)
       if (b.wreck && !b.original && world.plantsReact) world.plantLife.AddWreck(b.position.x, b.position.z, 0.5f * Length(model->boundsMax - model->boundsMin) * b.scale, now);
+      // [machinery] a factory's parts at work, as a game's (World::AddFrame): its work's progress from the stand's frame
+      float belt = -1;
+      if (model->machinery && !b.wreck && b.built >= 1)
+        for (const FrameUnit& u : entities_->Current().units)
+          if (u.id == b.id) belt = world.machinery.PoseUnit(u, *model, b.position, b.turn, UnitFaction(b.unit), &pose);
       world.meshes.Add(model, at, {0.2f, 0.45f, 1.0f}, b.built, &pose, heat);
+      world.meshes.Belt(belt);
       world.water.ripples.AddHull(b.id, b.position, b.turn, model->boundsMin * b.scale, model->boundsMax * b.scale);  // (ripples where it is in the water)
       world.water.AddAfloat(b.position, b.turn, model->boundsMin * b.scale, model->boundsMax * b.scale);  // [floatfoam] (no foam slab under its floats)
       if (!b.wreck)

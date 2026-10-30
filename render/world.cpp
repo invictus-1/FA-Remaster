@@ -2385,6 +2385,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
   rememberedGone.clear();
   dyingDrawn = 0;
   bool noFocus = false;
+  machinery.Begin(clock_, !extraView && !sidePicture);  // [machinery]
   for (const FrameUnit& u : frame.units) {
     if (u.recon == 0xff) noFocus = true;
     if (u.dead) {
@@ -2563,6 +2564,10 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       pose.next = frame.bones.data() + u.nextFirstBone;
       pose.nextCount = u.nextBoneCount;
       pose.blend = frame.blend;
+      // [machinery] a factory's parts at work (machinery.h): posed after the simulation's bones, as it is seen and finished
+      float belt = -1;
+      if (model->machinery && !asRemembered && u.Seen() && fractionComplete >= 1)
+        belt = machinery.PoseUnit(u, *model, drawAt, drawTurn, UnitFaction(blueprint), &pose);
       // a personal shield: the script has set a shield's mesh on the unit (the name says so; FAF
       // sets other meshes on units too)
       bool shielded = false;
@@ -2605,6 +2610,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       // (and its treads' scroll, where its mesh's treads scroll and its shield's hit does not take the place)
       meshes.Add(model, Mat4::FromTRS(drawAt, drawTurn, model->scale), color, built, asRemembered ? nullptr : &pose, hitAt,
                  model->scrolls && !hitAt ? u.treads : nullptr, u.id + 1);
+      meshes.Belt(belt);  // [machinery]
       // (its battle scars and snow: unit_wear.h; [groundfix] its dirt from the first frame it is drawn: its box from the
       // model drawn, which WatchWear, before the models are made, finds only from the next frame)
       if (const WearLook* w = WearOf(u.id, model)) meshes.Wear(*w);

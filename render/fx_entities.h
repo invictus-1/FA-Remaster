@@ -77,7 +77,7 @@ class FxEntities {
   // `terrainType`: the map's terrain type code at a place (-1: none).
   bool InitUnits(std::function<float(float, float)> terrain, bool water, float waterLevel,
                  std::function<const Model*(const std::string&)> unitModel, std::string* error,
-                 std::function<int(float, float)> terrainType = nullptr);
+                 std::function<int(float, float)> terrainType = nullptr, float mapWidth = 0, float mapHeight = 0);
   // How a unit is made: facing `forward`, in the look and with the Random of its side; an aircraft
   // either flying in level at its speed so that if it dies `fallAfter` seconds from now it comes down
   // at the spot (`flyIn`), or hovering at its elevation over it; begun by `builder` (its fraction
