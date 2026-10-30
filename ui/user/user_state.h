@@ -360,8 +360,6 @@ bool IssueTransportOrderAt(lua_State* L, const std::string& order, uint32_t enti
 // A Script order at a place for the selected units, as the game's own script allows it
 // (VerifyScriptCommand): FAF's attack-move, an ability. True when the click is used up.
 bool IssueScriptAt(lua_State* L, float x, float y, float z, bool clear);
-// FAF's attack-move to a place for the selected units (Alt and a right click on the ground).
-bool IssueAttackMoveAt(lua_State* L, float x, float y, float z, bool clear);
 // Where the main camera listens from, for the world's sounds (worldview.cpp): its eye, the place
 // it looks at, the direction to the screen's right along the ground, and its zoom. False before
 // the camera is placed.
