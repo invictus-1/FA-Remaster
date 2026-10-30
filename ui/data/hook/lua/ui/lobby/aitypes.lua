@@ -3,7 +3,7 @@
 -- Veteran, Commander, Supreme Commander) and each one's cheating twin, by the keys the engine's AI knows
 -- (data/ai/hook/lua/aibrains/index.lua: remastered_<skill> and remastered_<skill>_cheat; the simulation mounts its
 -- folder only in a game where an army plays one of them). First in the list, the game's own and the mods' AIs after
--- them as before. Personality and teacher mode come as per-slot options later (docs/ui-answers.md).
+-- them as before. Personality, aggression, economy and teacher mode are per-slot options (our lobby.lua hook).
 do
     local skills = {
         { key = 'recruit', name = 'Recruit' },
