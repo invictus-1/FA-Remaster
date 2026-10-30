@@ -165,6 +165,22 @@ static const float kGlintFrom = 0.08, kGlintTo = 2.0, kGlintSlopes = 0.006;
 // for the wet beach above the water (WetBeach: as high as the damp band reaches in a storm on an exposed beach)
 static const float kSurfWetRise = 1.5;
 #endif
+#if SURF
+// [shorewall] How much of the sheet's extra height for the surf (kSurfRise, and kSurfWetRise) it takes: all of it but under a
+// camera low over the water (a ship looked at from about its own deck's height), where the raised sheet would
+// lie above the eye: seen from below it was drawn as a wall rising over the beach and the horizon toward the picture's
+// sides (the lifted ocean, whose sheet rises to that height over the shallows alone), or not drawn at all (the flat sheet).
+// The sheet then lies at most three quarters of the way up from the water to the eye (it still covers all the beach lower
+// than that, the run-up's and the wet beach's, and a little room is left for its far side seen edge on); the place each
+// pixel is worked out at is moved down by the same share (PS), so the water stays where it was.
+float SheetRoom() {
+  float extra = kSurfRise;
+#if SURF_WET
+  extra += kSurfWetRise;
+#endif
+  return saturate(((cameraPosition.y - surfaceColor.w) * 0.75 - kRise) / extra);
+}
+#endif
 
 #if LIFT
 // [lift] (ocean.h, World::oceanLift) The water as the camera's grid, lifted by the waves: each vertex of a patch (`corner`
@@ -195,9 +211,10 @@ VOut VS(float2 corner : POSITION, uint instance : SV_InstanceID) {
   // (where it is not lifted the sheet lies as high as the flat one does: the swell's crests, the run-up, the wet beach)
   float rise = kRise;
 #if SURF
-  rise += kSurfRise;
+  float room = SheetRoom();  // [shorewall] (never above the eye)
+  rise += kSurfRise * room;
 #if SURF_WET
-  rise += kSurfWetRise;
+  rise += kSurfWetRise * room;
 #endif
 #endif
   o.world = float3(x0.x + d.x, surfaceColor.w + d.y + rise * (1 - share), x0.y + d.z);
@@ -218,9 +235,10 @@ VOut VS(float2 corner : POSITION) {
   float reach = beyond.z > 0 ? 1 / beyond.z : 0;
 #if SURF
   // [surf] (and as high as the surf's run-up reaches)
-  o.world = float3(lerp(-reach, mapSize.x + reach, corner.x), surfaceColor.w + kRise + kSurfRise, lerp(-reach, mapSize.y + reach, corner.y));
+  float room = SheetRoom();  // [shorewall] (never above the eye)
+  o.world = float3(lerp(-reach, mapSize.x + reach, corner.x), surfaceColor.w + kRise + kSurfRise * room, lerp(-reach, mapSize.y + reach, corner.y));
 #if SURF_WET
-  o.world.y += kSurfWetRise;  // [shore] (with World::waterDetail as high as the beach it wets)
+  o.world.y += kSurfWetRise * room;  // [shore] (with World::waterDetail as high as the beach it wets)
 #endif
 #else
   o.world = float3(lerp(-reach, mapSize.x + reach, corner.x), surfaceColor.w + kRise, lerp(-reach, mapSize.y + reach, corner.y));
@@ -395,6 +413,7 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
 #else
   float unlifted = 1;
 #endif
+  unlifted *= SheetRoom();  // [shorewall] (as high as the vertex shader raised it)
 #if SURF_WET
   // ([shore] with World::waterDetail higher again by kSurfWetRise, for WetBeach)
   i.world += normalize(i.world - cameraPosition) * (kSurfWetRise * unlifted / max(normalize(cameraPosition - i.world).y, 1e-3));
