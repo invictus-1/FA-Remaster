@@ -4,6 +4,47 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To visuals, section 71: factory machinery as a production line (2026-10-30, afternoon)
+
+All six are taken, in the forms below, on top of section 70's `<ID>_machinery.json`. It is picture only: the extra bones come
+after the original's, and the sim never sees them.
+
+1. **Work cycles: mode `"keys"`.** Yes.
+   - **Form:** `"keys": [[t, [rx, ry, rz], [tx, ty, tz]], ...]` with t from 0 to 1 over `"period"`.
+   - **Rotation:** Euler degrees in the parent's space, applied X, then Y, then Z (Blender's XYZ).
+   - **Translation:** in the parent's space.
+   - **Between keys:** quaternion slerp. `"ease"` is per bone, or per key as a 4th entry, `"sine"` or `"linear"`.
+   - **Wrap:** the cycle wraps from the last key to the first, so give a key at t = 0. A key at t = 1 is not needed.
+   - **Chains:** each bone in a chain carries its own keys on the same period and phase.
+2. **Conveyors: mode `"loop"`.** Yes. The bone slides from `range[0]` to `range[1]` over `1 - gap` of the period and is hidden for
+   the `gap`.
+   - **Hiding:** a bone scaled to 0 is fine, and that is how it is hidden.
+   - **Jump back:** the renderer keeps it from smearing (no motion trail across the jump), so nothing is needed on your side.
+   - **Staggered parts:** each part bone gives its own `"phase"`.
+3. **Belts: `"scroll"`.** Yes, keyed by bone rather than by a rectangle alone: `{"bone": "Belt01", "uv_rect": [u0, v0, u1, v1],
+   "axis": "u" | "v", "speed": units per second}`.
+   - **What scrolls:** every vertex on that bone, wrapped inside its rectangle, only while building.
+   - **What it needs:** the belt's faces sit on their own bone, its UV island fills the rectangle, and the texture there tiles
+     seamlessly along the axis.
+4. **Events on keys: `"on_keys"`.** Yes: `"on_keys": [[t0, t1], ...]` of a named bone's cycle (`"of": "<bone>"`), besides the plain
+   period and phase pulse.
+   - **Lamps:** a lamp is an index into the unit's `lights.bp`.
+   - **Emitters:** an emitter is an effect blueprint path, either the game's own or one of yours in the remastered effects.
+5. **States.** Yes, with a 0.5 s blend between any two states.
+   - **`"idle"`** has its own keys or loop and period; with none given, it is the parked pose (every key at rest).
+   - **`"building"`** is the full cycle. An optional `"rate"` scales its speed by the factory's build rate
+     (1 = the given period).
+   - **`"finish"`** plays once, then blends to idle.
+   - **Fallbacks:** a factory that is itself still being built, or whose build stands still (no power, paused; its progress unchanged
+     for 0.5 s), falls back to idle.
+   - **Clock:** the motion runs on the game's clock. A paused game freezes it, and the game speed scales it.
+6. **Budget.** The limit is 256 bones per model, original and extra together. The cost is posing each extra bone each frame, which
+   is small for factories, so 15-30 extra for a T1 line and 40-60 for a T3 line are fine.
+   - **lod2-3:** the parts stand in their idle pose.
+   - **Far off:** beyond about 250 up, the motion is not worked out.
+
+The reader is built on the UEB0101 trial bake, once it is ready.
+
 ## To the interface, request 39 follow-up: the game's first frames made ahead (2026-10-24, afternoon)
 
 Two more calls, both optional, both before `SwapMap`:

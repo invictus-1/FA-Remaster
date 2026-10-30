@@ -126,6 +126,14 @@ SCENES = {
            "flakes at 15 s (frame 900)",
            GROUND + ["--map", "/maps/SETONS_R/SETONS_R.scmap", "--time-of-day", "9", "--day-length", "1200", "--weather", "auto",
                      "--climate", "cold", "--seed", "3977804112", "--weather-spell", "20", "--cam", "600,560,90,50,20"], 1500, 60),
+    # (the sea's own: not in the set run by default, which stays R1-R6; asked for by --scenes W1,W2)
+    "W1": ("the lifted ocean close: a battleship and a frigate on the remastered Seton's sea at noon, 20 up (the ships' "
+           "reflections, the glint near the eye)",
+           GROUND + ["--map", "/maps/SETONS_R/SETONS_R.scmap", "--time-of-day", "12", "--ocean", "--ocean-lift", "--mist", "0",
+                     "--place", "UES0302", "--place", "UES0203", "--at", "440,640", "--cam", "440,640,20,15,270"], 900, 60),
+    "W2": ("the lifted ocean at the game's height: the same ships and sea at noon, 80 up",
+           GROUND + ["--map", "/maps/SETONS_R/SETONS_R.scmap", "--time-of-day", "12", "--ocean", "--ocean-lift", "--mist", "0",
+                     "--place", "UES0302", "--place", "UES0203", "--at", "440,640", "--cam", "440,640,80,55,270"], 900, 60),
 }
 
 # The measures, in the tables' order: (key prefix, heading)
@@ -446,7 +454,7 @@ def collect(folder):
     stats (frame_over33, frame_over50, processor_over33, processor_over50)."""
     runs = []
     for fn in sorted(os.listdir(folder)):
-        m = re.match(r"(R\d+)_(\d+x\d+)(?:_r(\d+))?\.log$", fn)
+        m = re.match(r"([RW]\d+)_(\d+x\d+)(?:_r(\d+))?\.log$", fn)
         if not m:
             continue
         log = read_log(os.path.join(folder, fn))
@@ -696,7 +704,7 @@ def run_sides(sides, scenes, sizes, a):
 
 
 def scenes_sizes(a):
-    scenes = a.scenes.split(",") if a.scenes else list(SCENES)
+    scenes = a.scenes.split(",") if a.scenes else [s for s in SCENES if s.startswith("R")]
     sizes = a.sizes.split(",") if a.sizes else SIZES
     for s in scenes:
         if s not in SCENES:
