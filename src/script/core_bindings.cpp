@@ -608,6 +608,169 @@ int l_OrientFromDir(lua_State* L) {
   return 1;
 }
 
+// --- MinLerp / MinSlerp (FA exe cfuncs 0x50d7b0 / 0x50d9d0, core set 0xf59680: every state) ---
+// Both cfuncs are the same frame around a different blend routine:
+// - lua_gettop must be 3, else LuaState::Error 0x90c1d0 "%s\n  expected %d args, but got %d" (0xe0a220) with the
+//   binding's help: lua_pushvfstring 0x90ce50 + lua_error 0x90d6c0, so no "chunk(line):" in front (luaL_error adds one);
+// - alpha: lua_type(1) must be a number (a string is not taken), else LuaStackObject::TypeError 0x4154b0 "number";
+//   lua_tonumber 0x90c9f0, stored as a float;
+// - every type error here goes through the exe's luaG_typeerror 0x9133a0 on a copied value (not on the stack), whose
+//   message is "%s expected but got %s" (0xd459b0: the op, the type name), from a C function: no position either.
+//   (Our ldebug.c says "attempt to %s a %s value" there, as stock Lua 5.0 does.)
+// - L (arg 2), then R (arg 3), each read whole by SCR_FromLuaCopy<Wm3::Quaternion<float>> 0x4cfbd0 (below);
+// - the blend (L in ecx, R in eax, the result in ebx, alpha on the stack): func_QuatLERP 0x4eba80 / Moho::SLERP
+//   0x4ebc00, pushed by SCR_ToLua<Wm3::Quaternion<float>> 0x4cfb00 = PushQuat4 (t[1..4] = x, y, z, w with the vector
+//   metatable).
+// Quaternions are kept here as the exe keeps Wm3::Quaternion: w, x, y, z. No game Lua calls either (FAF's
+// lua/system/Blueprints.lua only copies both into its safe environment); the land-transport task that also calls
+// 0x4ebc00 (CUnitCallLandTransport::TaskTick 0x600d87) is not built in ours.
+
+// SCR_FromLuaCopy<Wm3::Quaternion<float>> 0x4cfbd0: t[1] -> x (+4), t[2] -> y (+8), t[3] -> z (+0xc), t[4] -> w (+0),
+// in that order, each through LuaObject::operator[](int) 0x9091e0 (no table: luaG_typeerror "index" 0x909224; else
+// the raw luaH_getnum 0x927450, no metamethods) and LuaObject::GetNumber 0x907a30 (anything but a number, a string
+// or nil too: luaG_typeerror "get as number" 0x907a72).
+[[noreturn]] void BlendTypeError(lua_State* L, const char* op, int idx) {  // luaG_typeerror 0x9133a0, 0xd459b0
+  lua_pushfstring(L, "%s expected but got %s", op, lua_typename(L, lua_type(L, idx)));
+  lua_error(L);
+  std::abort();  // (lua_error does not return)
+}
+void QuatArgW(lua_State* L, int idx, float q[4]) {
+  static const int kSlot[4] = {1, 2, 3, 0};  // t[i + 1] -> q[kSlot[i]]
+  for (int i = 0; i < 4; ++i) {
+    if (!lua_istable(L, idx)) BlendTypeError(L, "index", idx);
+    lua_rawgeti(L, idx, i + 1);
+    if (lua_type(L, -1) != LUA_TNUMBER) BlendTypeError(L, "get as number", -1);
+    q[kSlot[i]] = static_cast<float>(lua_tonumber(L, -1));
+    lua_pop(L, 1);
+  }
+}
+
+// func_QuatsNearEqual 0x4eded0: every part (w, x, y, z) within 1e-6 (0xdffbe8) of the other's: fabs (0x40dab0) of the
+// float difference, fcomi then jb, so a NaN difference is "not near".
+bool QuatsNearEqualW(const float a[4], const float b[4]) {
+  for (int i = 0; i < 4; ++i)
+    if (!(std::fabs(a[i] - b[i]) <= 9.99999997e-07f)) return false;
+  return true;
+}
+
+// func_NormalizeQuatInPlace 0x4edaa0: ((w*w + x*x) + y*y) + z*z (SSE), the root by fsqrt 0x452fc0 (x87 at PC_24: a
+// float), above 1e-6 (0xd71bfc) each part times 1 / length (w, x first, then 1 / length times y, z), else all zero
+// (a NaN length too: jbe). (The same routine as vm::NormalizeQuatExe in sim/vecmath.h.)
+void NormalizeQuatW(float q[4]) {
+  const float len = std::sqrt(((q[0] * q[0] + q[1] * q[1]) + q[2] * q[2]) + q[3] * q[3]);
+  if (!(len > 9.99999997e-07f)) {
+    q[0] = q[1] = q[2] = q[3] = 0.0f;
+    return;
+  }
+  const float inv = 1.0f / len;
+  q[0] *= inv;
+  q[1] *= inv;
+  q[2] = inv * q[2];
+  q[3] = inv * q[3];
+}
+
+// The common start of 0x4eba80 (0x4ebab0..0x4ebb5b) and 0x4ebc00 (0x4ebc36..0x4ebd2e): alpha clamped to [0, 1]
+// (comiss 1 > t, else 1, NaN included; then 0 > t gives 0), the dot product ((Lw*Rw + Lx*Rx) + Ly*Ry) + Lz*Rz in
+// floats, and when 0 > dot every part of R AND the dot replaced by -0.0 - x (0xe4f748): the shorter arc. Returns the
+// clamped alpha.
+float BlendStartW(const float l[4], float r[4], float t, float* dot) {
+  if (!(1.0f > t)) t = 1.0f;
+  if (0.0f > t) t = 0.0f;
+  float d = ((l[0] * r[0] + l[1] * r[1]) + l[2] * r[2]) + l[3] * r[3];
+  if (0.0f > d) {
+    for (int i = 0; i < 4; ++i) r[i] = -0.0f - r[i];
+    d = -0.0f - d;
+  }
+  *dot = d;
+  return t;
+}
+
+// The lerp of 0x4eba80 (0x4ebb5e..0x4ebbc0, also 0x4ebc00's fallback 0x4ebe1b..0x4ebe7f): each part
+// L * (1 - t) + t * R (SSE floats), then normalised by 0x4edaa0.
+void LerpNormW(const float l[4], const float r[4], float t, float out[4]) {
+  const float s = 1.0f - t;
+  for (int i = 0; i < 4; ++i) out[i] = l[i] * s + t * r[i];
+  NormalizeQuatW(out);
+}
+
+// func_QuatLERP 0x4eba80 (vm::NlerpExe in sim/vecmath.h is the same routine): L itself when the two are near equal
+// (0x4eded0), else the start above and the normalised lerp.
+void QuatLerpW(const float l[4], const float rIn[4], float t, float out[4]) {
+  if (QuatsNearEqualW(l, rIn)) {
+    for (int i = 0; i < 4; ++i) out[i] = l[i];
+    return;
+  }
+  float r[4] = {rIn[0], rIn[1], rIn[2], rIn[3]};
+  float d;
+  t = BlendStartW(l, r, t, &d);
+  LerpNormW(l, r, t, out);
+}
+
+// Moho::SLERP 0x4ebc00: L itself when near equal (0x4eded0); else the same start as 0x4eba80. Then:
+// - 1 - dot (SSE) above 0.001 (0xdff0ac), else the normalised lerp (0x4ebd47 jbe, a NaN too);
+// - theta = acos(dot) by _CIacos 0xa8dcd0 (dmath::Acos), stored as a float (0x4ebd56 fst). The lerp also when
+//   theta < 0.001 (0x4ebd62, on the wide x87 value), when pi (0xdff088, a float) - theta (float) < 0.001
+//   (0x4ebd7a) or when theta is not finite (_finite 0xa83eee). With the dot made >= 0 and below 0.999 here, theta is
+//   in (0.0447, pi/2], so none of the three is ever taken; they are kept as the exe has them.
+// - else (0x4ebd95..0x4ebdf2, x87 at PC_24: fmul / fdiv / fadd round to float, fsin stays wide):
+//     inv = 1 / fsin(theta)              (fld1, fdivrp: one rounding)
+//     a   = fsin(theta * (1 - t)) * inv  (theta * (1 - t) rounded, the product rounded once)
+//     b   = fsin(theta * t) * inv
+//     out = L * a + R * b                (each product and the sum rounded to float), NOT normalised.
+//   The wide fsin is taken as dmath::SinCos in double, each product with it rounded once to float (as motion.cpp's
+//   dive step): a different float only where the wide and the double sine round apart, about 1 in 2^28 values.
+void QuatSlerpW(const float l[4], const float rIn[4], float t, float out[4]) {
+  if (QuatsNearEqualW(l, rIn)) {
+    for (int i = 0; i < 4; ++i) out[i] = l[i];
+    return;
+  }
+  float r[4] = {rIn[0], rIn[1], rIn[2], rIn[3]};
+  float d;
+  t = BlendStartW(l, r, t, &d);
+  const float oneMinusT = 1.0f - t;
+  if (1.0f - d > 0.00100000005f) {
+    const float theta = dmath::Acos(d);
+    if (!(theta < 0.00100000005f) && !(3.14159274f - theta < 0.00100000005f) && std::isfinite(theta)) {
+      double s, c;
+      dmath::SinCos(static_cast<double>(theta), &s, &c);
+      const float inv = static_cast<float>(1.0 / s);
+      dmath::SinCos(static_cast<double>(theta * oneMinusT), &s, &c);
+      const float a = static_cast<float>(s * static_cast<double>(inv));
+      dmath::SinCos(static_cast<double>(theta * t), &s, &c);
+      const float b = static_cast<float>(s * static_cast<double>(inv));
+      for (int i = 0; i < 4; ++i) out[i] = l[i] * a + r[i] * b;
+      return;
+    }
+  }
+  LerpNormW(l, r, t, out);
+}
+
+template <void (*Blend)(const float*, const float*, float, float*)>
+int MinBlend(lua_State* L, const char* help) {
+  const int n = lua_gettop(L);
+  if (n != 3) {
+    lua_pushfstring(L, "%s\n  expected %d args, but got %d", help, 3, n);
+    lua_error(L);
+  }
+  if (lua_type(L, 1) != LUA_TNUMBER) BlendTypeError(L, "number", 1);
+  const float alpha = static_cast<float>(lua_tonumber(L, 1));
+  float ql[4], qr[4], q[4];
+  QuatArgW(L, 2, ql);
+  QuatArgW(L, 3, qr);
+  Blend(ql, qr, alpha, q);
+  PushQuat4(L, q[1], q[2], q[3], q[0]);
+  return 1;
+}
+
+int l_MinLerp(lua_State* L) {
+  return MinBlend<QuatLerpW>(
+      L, "quaternion MinLerp(float alpha, quaternion L, quaternion R) - returns minimal lerp between L and R");
+}
+int l_MinSlerp(lua_State* L) {
+  return MinBlend<QuatSlerpW>(
+      L, "quaternion MinSlerp(float alpha, quaternion L, quaternion R) - returns minimal slerp between L and R");
+}
+
 int l_SecondsPerTick(lua_State* L) {
   lua_pushnumber(L, 0.1f);
   return 1;
@@ -858,6 +1021,8 @@ void RegisterCoreBindings(ScriptState& state) {
   Reg(L, "SecondsPerTick", l_SecondsPerTick);
   Reg(L, "EulerToQuaternion", l_EulerToQuaternion);
   Reg(L, "OrientFromDir", l_OrientFromDir);
+  Reg(L, "MinLerp", l_MinLerp);
+  Reg(L, "MinSlerp", l_MinSlerp);
   Reg(L, "Trace", l_Noop);
   Reg(L, "BeginLoggingStats", l_Noop);
   Reg(L, "EndLoggingStats", l_Noop);
