@@ -27,8 +27,8 @@ simulation as `ScenarioInfo.ArmySetup[army]` and the replay keeps them:
   turtle`.
 - **For aicore:** the brain reads Personality and Teacher today. Aggression and Economy are numbers for it to read
   (`tonumber(setup.RemasterAggression) or 0`).
-- **The direction I assumed:** + is bolder for Aggression. For Economy, - means army first and + means economy
-  first. If 2.7 says otherwise, tell me and I change the labels only.
+- **Direction, confirmed by the engine (2.7):** Aggression - = defensive, + = aggressive (bolder). Economy - = army
+  first, + = economy first. 0 = no change.
 - **Personalities:** air and naval players come when the brain has them; tell me and I add them to the list.
 
 ## render/REQUESTS.md 50: a setting for the units' lamp colour (2026-10-28, main 57b43fc)
