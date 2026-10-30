@@ -539,6 +539,8 @@ function IsEntity(e) return type(e) == 'table' and rawget(e, '__id') ~= nil end
 function IsProp(e) return type(e) == 'table' and rawget(e, '__prop') == true end
 function IsProjectile(e) return IsEntity(e) and not e.IsUnit and not IsProp(e) end
 function GetTerrainHeight(x, z) return __fxTerrain(x, z) end
+-- (a structure with weapons turns toward the map's middle as it is made, StructureUnit.RotateTowardsEnemy: the map's size)
+function GetMapSize() return __fxMapWidth or 1024, __fxMapHeight or 1024 end
 function GetSurfaceHeight(x, z) return __fxSurface(x, z) end
 -- the map's terrain types (the game's /lua/TerrainTypes.lua, by the code of the map's cell; out of
 -- the map or a code it does not list: 'Default'), as the engine gives them
@@ -2749,10 +2751,18 @@ bool FxEntities::Init(moho::Vfs* vfs, uint32_t seed, std::string* error) {
 
 bool FxEntities::InitUnits(std::function<float(float, float)> terrain, bool water, float waterLevel,
                            std::function<const Model*(const std::string&)> unitModel, std::string* error,
-                           std::function<int(float, float)> terrainType) {
+                           std::function<int(float, float)> terrainType, float mapWidth, float mapHeight) {
   Impl& m = *impl_;
   if (!m.state) return false;
   m.units = true;
+  {  // (GetMapSize's: before, only the weapons' world had it, and a structure made without it took the stub's table for a
+     // number: structureunit.lua(178) in --fx-build)
+    lua_State* L = m.state->L();
+    lua_pushnumber(L, mapWidth > 0 ? mapWidth : 1024);
+    lua_setglobal(L, "__fxMapWidth");
+    lua_pushnumber(L, mapHeight > 0 ? mapHeight : 1024);
+    lua_setglobal(L, "__fxMapHeight");
+  }
   m.terrainCode = std::move(terrainType);
   m.terrain = std::move(terrain);
   m.water = water;

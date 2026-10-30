@@ -76,8 +76,6 @@ U.GetTargetEntity = function() return nil end
 -- (a silo always has a missile ready: the stand does not build them)
 U.GetTacticalSiloAmmoCount = function() return 1 end
 U.GetNukeSiloAmmoCount = function() return 1 end
--- (a structure with weapons turns toward the map's middle as it is made: the map's size)
-function GetMapSize() return __fxMapWidth, __fxMapHeight end
 -- (and the army has all the energy a weapon asks for)
 rawset(__fxBrain, 'GetEconomyStored', function() return 1e9 end)
 rawset(__fxBrain, 'GetEconomyIncome', function() return 1e6 end)

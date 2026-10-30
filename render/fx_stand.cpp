@@ -501,7 +501,8 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
     World* w = &world;
     std::string why;
     unitsReady_ = entities_->InitUnits(terrain_ ? terrain_ : ground, water_, waterLevel_,
-                                       [w](const std::string& id) { return w->models.Unit(id); }, &why, terrainType_);
+                                       [w](const std::string& id) { return w->models.Unit(id); }, &why, terrainType_,
+                                       mapWidth_, mapHeight_);
     // (--fx-fire: the weapons' world on it, before the first unit)
     if (unitsReady_ && !setup_.fire.empty()) unitsReady_ = entities_->InitWeapons(&why, mapWidth_, mapHeight_);
     if (!unitsReady_) {
