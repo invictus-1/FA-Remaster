@@ -2524,6 +2524,14 @@ int main(int argc, char** argv) {
     return map.water.present ? std::max(y, map.water.elevation) : y;
   };
   camera.target.y = groundHeight(camera.target.x, camera.target.z) + targetLift;
+  // [shorewall] A camera on a unit's own height (--fx-view, --follow-unit) kept with its eye half a unit over the water: a
+  // dived sub (2.5 under it) looked at close put the eye under the sea, where no water is drawn (the game's camera, on the
+  // ground or the water's level, never goes there). The point looked at is raised as far as that needs.
+  auto eyeOverWater = [&](Camera* c) {
+    if (!haveMap || !map.water.present) return;
+    const float under = map.water.elevation + 0.5f - c->Eye().y;
+    if (under > 0) c->target.y += under;
+  };
   // --cine-cam, --cine-path: the cinematic camera (cinecam.h) in place of the game's, over the ground in the map and
   // beyond its edge
   const GroundFn cineGround = MirroredGround(groundHeight, haveMap ? static_cast<float>(map.width) : 0.0f, haveMap ? static_cast<float>(map.height) : 0.0f);
@@ -3305,6 +3313,7 @@ int main(int argc, char** argv) {
           camera.distance = opt.fxView[0];
           camera.pitch = opt.fxView[1] * 3.14159265f / 180;
           camera.heading = std::atan2(forward.x, forward.z) + opt.fxView[2] * 3.14159265f / 180;
+          eyeOverWater(&camera);  // [shorewall]
           framedLive = true;
           break;
         }
@@ -3688,6 +3697,7 @@ int main(int argc, char** argv) {
         camera.distance = opt.fxView[0];
         camera.pitch = opt.fxView[1] * 3.14159265f / 180;
         camera.heading = facing + opt.fxView[2] * 3.14159265f / 180;
+        eyeOverWater(&camera);  // [shorewall]
       }
     }
     if (!zoomPath.keys.empty() && haveMap)  // (cloudzoom) --cam-zoom-path: the zoom, lean and field of view at this time
