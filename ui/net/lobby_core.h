@@ -37,6 +37,20 @@ struct LobbyHooks {
   std::function<void(int uid, const std::vector<int>& established)> establishedPeers;
 };
 
+// The launch's hand-over (CLobby::LaunchGame 0x7c38c0: the client manager is made with the lobby's connector,
+// CLIENT_CreateClientManager at 0x7c4a8e, and each peer's connection goes over to it, the lobby's receivers removed
+// from it, RemoveLinkage 0x7c4b5d / 0x7c4b89): the connector, every peer's connection by uid, and the game's own
+// messages (types below 100: the command stream 0..49, the control messages 50..59) a peer sent before this
+// lobby launched (INFERRED: the original's receivers for those are only pushed by CNetClient, so the lobby drops
+// them; we keep them, as a fast peer's first beats may come in the frame before the launch).
+struct GameLink {
+  std::unique_ptr<Connector> connector;
+  int localUid = -1;
+  uint32_t nonce = 0;                // (the session's seed: the host's, or from its Welcome)
+  std::map<int, int> connByUid;      // every peer that has a connection
+  std::vector<ConnEvent> early;
+};
+
 struct PeerInfo {  // (GetPeer / GetPeers: SPeer::ToLua 0x7c2950)
   std::string name;
   int uid = -1;
@@ -68,6 +82,12 @@ class LobbyCore {
   bool HasPeer(int uid) const { return peers_.count(uid) != 0; }
 
   void Pump();  // each frame: the connector's events, the lobby's messages
+
+  // A network lobby: a connector and at least one peer (the original's LaunchGame asks the connector,
+  // lobby+0x78 vtable+8; INFERRED: a host alone on TCP / UDP plays a local game, as with "None").
+  bool Networked() const { return connector_ && !peers_.empty(); }
+  // The launch: the network goes to the game (GameLink); the lobby has none after it.
+  GameLink TakeForGame();
 
  private:
   enum class State { Unknown, Connecting, Connected, Pending, WaitingJoin, Established, Disconnected };
@@ -105,6 +125,7 @@ class LobbyCore {
   std::map<int, int> pending_;           // incoming connections, not joined yet: conn -> 0
   std::map<int, int> outgoingPeers_;     // conn -> the uid it is for (ConnectToPeer)
   std::set<int> lastEstablished_;
+  std::vector<ConnEvent> early_;  // (the game's messages heard before the launch: GameLink)
 };
 
 }  // namespace moho::net

@@ -461,9 +461,43 @@ int l_TeamColorMode(lua_State* L) {
   return 0;
 }
 
-// GetSessionClients(): the one local player. (Field names as the scripts read them.)
+// SessionIsMultiplayer(): a network game (the host's link: UserState::Config::multiplayer).
+int l_SessionIsMultiplayer(lua_State* L) {
+  lua_pushboolean(L, UserState::From(L)->config().multiplayer);
+  return 1;
+}
+
+// GetSessionClients(): the one local player. (Field names as the scripts read them.) A network game: its clients
+// in the session's client order (the host's list: GameSession::NetClients; CWldUiInterface 0x88d540), ejectedBy
+// empty until the eject vote is built.
 int l_GetSessionClients(lua_State* L) {
   UserState* user = UserState::From(L);
+  if (user->config().sessionClients) {
+    const std::vector<SessionClient> clients = user->config().sessionClients();
+    lua_newtable(L);
+    for (size_t i = 0; i < clients.size(); ++i) {
+      const SessionClient& c = clients[i];
+      lua_newtable(L);
+      SetField(L, "name", c.name);
+      SetField(L, "connected", c.connected);
+      SetField(L, "local", c.local);
+      SetField(L, "ping", static_cast<lua_Number>(c.ping));
+      SetField(L, "quiet", static_cast<lua_Number>(c.quiet));
+      SetField(L, "uid", std::to_string(c.uid));
+      lua_pushstring(L, "authorizedCommandSources");
+      lua_newtable(L);
+      for (size_t k = 0; k < c.sources.size(); ++k) {
+        lua_pushnumber(L, static_cast<lua_Number>(c.sources[k] + 1));
+        lua_rawseti(L, -2, static_cast<int>(k + 1));
+      }
+      lua_rawset(L, -3);
+      lua_pushstring(L, "ejectedBy");
+      lua_newtable(L);
+      lua_rawset(L, -3);
+      lua_rawseti(L, -2, static_cast<int>(i + 1));
+    }
+    return 1;
+  }
   std::string name = user->focusNickname;  // (the beat's copy; before the first: asked now)
   if (!user->economyCopied) {
     Sim* sim = TheSim(L);
@@ -813,9 +847,9 @@ void RegisterSessionBindings(lua_State* L) {
   SetGlobal(L, "ValidateUnitsList", l_ValidateUnitsList);
   for (const char* name : {"SessionIsActive", "WorldIsPlaying"}) SetGlobal(L, name, l_True);
   SetGlobal(L, "SessionIsReplay", l_SessionIsReplay);
-  for (const char* name : {"WorldIsLoading", "SessionIsMultiplayer",
-                           "SessionIsBeingRecorded", "SessionIsObservingAllowed"})
+  for (const char* name : {"WorldIsLoading", "SessionIsBeingRecorded", "SessionIsObservingAllowed"})
     SetGlobal(L, name, l_False);
+  SetGlobal(L, "SessionIsMultiplayer", l_SessionIsMultiplayer);
   SetGlobal(L, "IsObserver", l_IsObserver);
   SetGlobal(L, "TeamColorMode", l_TeamColorMode);
   SetGlobal(L, "SetFocusArmy", l_SetFocusArmy);

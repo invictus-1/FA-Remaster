@@ -285,6 +285,8 @@ void UserState::LinkSession(const Config& links) {
   config_.world = links.world;
   config_.pace = links.pace;
   config_.timeline = links.timeline;
+  config_.sessionClients = links.sessionClients;
+  config_.multiplayer = links.multiplayer;
   SetHeadSize(links.width, links.height);
 }
 
@@ -365,6 +367,25 @@ void UserState::Frame(double seconds) {
   frameBegan_ = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
   ++frame_;
   AdvanceTickFraction(seconds);  // (the game's clock first, as the original's SessionFrame)
+  // A network game's disconnect dialog: the original calls uimain.UpdateDisconnectDialog() every playing frame right
+  // after the session's frame (func_DoPlayingAction 0x88c7c0 -> 0x83d420, at 0x88c83e), the script deciding from
+  // GetSessionClients whether a dialog shows. Ours: in a network game only (a local game's one client never needs it).
+  if (config_.sessionClients) {
+    lua_State* L = state_->L();
+    const int top = lua_gettop(L);
+    lua_pushcfunction(L, ScriptTraceback);
+    lua_getglobal(L, "import");
+    lua_pushstring(L, "/lua/ui/uimain.lua");
+    bool ok = lua_pcall(L, 1, 1, top + 1) == 0 && lua_istable(L, -1);
+    if (ok) {
+      lua_pushstring(L, "UpdateDisconnectDialog");
+      lua_gettable(L, -2);
+      ok = lua_isfunction(L, -1) && lua_pcall(L, 0, 0, top + 1) == 0;
+      if (!ok && lua_isstring(L, -1))  // (the original's words, 0x83d4d1)
+        Logf(LogLevel::Warning, "Error running '/lua/ui/uimain.lua:UpdateDisconnectDialog': %s", lua_tostring(L, -1));
+    }
+    lua_settop(L, top);
+  }
   // The original's frame (CScApp::Main 0x8d1470, READ): WLD_Frame (0x8d1af6: the session's frame, its beats and their
   // OnSync), the cameras (RCamManager::Frame 0x8d1b52), the user Lua state's script threads (its CTaskStage, the
   // global 0x10a6340 that the user state's init 0x8c6659 sets, run by 0x409ac0 at 0x8d1b5d), the sounds, then the

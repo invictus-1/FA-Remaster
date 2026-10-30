@@ -350,7 +350,20 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   frame; GetPeer / GetPeers give name, id, status, ping, quiet, established peers; ValidateIPAddress resolves
   "host:port"; the discovery service lists LAN games (UDP 15000, `net/discovery.h`). A game's orders between the
   players: `net/beat_exchange_net.h` (the engine's `src/sim/beat_exchange.h`, the original's stream with an
-  Advance per beat), written and tested, not used by the program yet. Tests: three programs at once over loopback
+  Advance per beat). A network game (since 2026-10-30): LaunchGame in a lobby with peers hands the lobby's
+  connector and connections to the game (`LobbyCore::TakeForGame`); every program starts the same session (the
+  host's nonce as the seed; the clients numbered as the original's LaunchGame does: human armies in army order, then
+  observers, client i speaking for source i), and `app/game_session.cpp` runs each beat through the engine's
+  `Lockstep` (`src/sim/lockstep.h`) over a `NetBeatExchange`: the player's orders go to everyone for a later beat,
+  every client's merged orders are recorded and applied before the beat (so the game's replay plays back like any
+  other), a beat whose orders are not all in waits while the frames go on, and the load ends only when every
+  client's first beat is in. GetSessionClients lists the clients (connected, ping, quiet), SessionIsMultiplayer is
+  true, and uimain.UpdateDisconnectDialog runs each frame, so FAF's disconnect dialog opens for a lost player (its
+  Eject button, the eject vote, the desync dialog, chat and game speed between players are not built yet). The input
+  delay is the original's net_Lag (500 ms) in beats at the game's speed at launch (5 at normal). Tests: two programs over loopback
+  (`ui/tests/net_game_host.lua`, `net_game_join.lua`): a 2-player game with orders from both to beat 300, the two
+  programs' fingerprints equal at every beat, then the joiner quits and the host waits with it reported lost.
+  Tests of the lobby: three programs at once over loopback
   (`ui/tests/net_host.lua`, `net_join1.lua`, `net_join2.lua`, over TCP and, as copies, over UDP), the LAN pair
   (`net_lan_host.lua`, `net_lan_browse.lua`; the suite's net_lobby runs them last), and two programs of their own
   (`ui/net/tests/udp_test.cpp`, `beat_test.cpp`: how to build them is in their headers).

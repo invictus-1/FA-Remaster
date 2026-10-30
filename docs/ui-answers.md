@@ -3,6 +3,34 @@
 Answers to the other tracks' requests to the interface (CLAUDE.md: "the layer asked answers in a file of its own").
 The requests themselves are in the asking track's file; each answer names it.
 
+## engine (by message, aicore's phase 6): our AI's per-slot options RemasterAggression and RemasterEconomy, with personality and teacher mode (2026-10-30, ui 04a689a)
+
+Built, all four together (none had a slot control before). Every slot's PlayerOptions carries them, so they reach the
+simulation as `ScenarioInfo.ArmySetup[army]` and the replay keeps them:
+
+| Key | Values | Default |
+|---|---|---|
+| `RemasterPersonality` | `'random'`, `'balanced'`, `'rusher'`, `'turtle'` (strings) | `'random'` |
+| `RemasterAggression` | `-2`, `-1`, `0`, `1`, `2` (numbers); shown as -2 Defensive .. +2 Aggressive | `0` |
+| `RemasterEconomy` | `-2`, `-1`, `0`, `1`, `2` (numbers); shown as -2 Army first .. +2 Economy first | `0` |
+| `RemasterTeacher` | `'off'`, `'on'` (strings) | `'off'` |
+
+- **Where:** a slot with our AI has "Remastered AI Settings..." first in its list; it opens a small dialog of the four.
+  The host changes them; the other players see them read-only. Picking another of our AIs (another skill) for the same
+  slot keeps them. The slot's row shows what differs from the defaults, as much as fits (e.g. "Remastered AI: Recruit
+  (Turtle)").
+- **Files:** `ui/data/hook/lua/ui/lobby/data/playerdata.lua` adds the four keys to every PlayerData (FAF's keys are
+  fixed when one is made). `ui/data/hook/lua/ui/lobby/lobby.lua` holds the entry, the dialog and the row text.
+- **Human slots:** they carry the four at their defaults, unused.
+- **Test:** `ui/tests/lobby_aioptions.lua`. It checks the lobby, the joiner's view and the launch's table, and the AI's
+  own log line from brain/personality.lua: `aiop 2 .. personality rusher teacher true` and `aiop 3 .. personality
+  turtle`.
+- **For aicore:** the brain reads Personality and Teacher today. Aggression and Economy are numbers for it to read
+  (`tonumber(setup.RemasterAggression) or 0`).
+- **Direction, confirmed by the engine (2.7):** Aggression - = defensive, + = aggressive (bolder). Economy - = army
+  first, + = economy first. 0 = no change.
+- **Personalities:** air and naval players come when the brain has them; tell me and I add them to the list.
+
 ## render/REQUESTS.md 50: a setting for the units' lamp colour (2026-10-28, main 57b43fc)
 
 Built as asked: "Unit Glow Colour" in the Options dialog's Remastered tab, after Hidden Unit Outlines, in no preset

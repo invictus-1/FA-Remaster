@@ -20,8 +20,14 @@
 namespace moho::net {
 
 struct GameClient {
-  uint8_t client = 0;  // its index in the session (the merge order; the host is 0)
-  int conn = 0;        // its connection on the connector
+  uint8_t client = 0;  // its index in the session (the merge order: CLobby::AssignClientIndex 0x7c4e80)
+  int conn = 0;        // its connection on the connector (0: none; the client counts as lost from the start)
+};
+
+// What the disconnect dialog shows of a client (GetSessionClients: connected, ping, quiet).
+struct ClientLink {
+  bool connected = false;
+  double ping = 0, quiet = 0;  // ms (quiet: since anything was last heard from it)
 };
 
 class NetBeatExchange final : public BeatExchange {
@@ -39,6 +45,9 @@ class NetBeatExchange final : public BeatExchange {
   // Clients whose connection is lost (the disconnect dialog shows them while their beats are missing).
   std::vector<uint8_t> LostClients();
   uint32_t ReceivedBeats(uint8_t client);  // the beats of `client` in so far (its Advances)
+  ClientLink Link(uint8_t client);
+  // The game's messages a peer sent before the lobby handed its connector over (net/lobby_core.h GameLink::early).
+  void TakeEarly(std::vector<ConnEvent> early);
 
  private:
   struct Peer {
@@ -50,6 +59,7 @@ class NetBeatExchange final : public BeatExchange {
     bool lost = false;
   };
   void Pump();  // (under mu_) the connector's events into the peers' streams
+  void Handle(ConnEvent& e);  // (under mu_) one of them
   Peer* ByConn(int conn);
 
   std::mutex mu_;

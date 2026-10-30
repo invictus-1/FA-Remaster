@@ -18,6 +18,7 @@ NetBeatExchange::NetBeatExchange(std::unique_ptr<Connector> connector, uint8_t l
   for (const GameClient& g : peers) {
     Peer p;
     p.who = g;
+    p.lost = g.conn <= 0;  // (a client of the session with no connection: the original's SPeer made Disconnected, 0x7c4f09)
     peers_.push_back(std::move(p));
   }
   std::sort(peers_.begin(), peers_.end(), [](const Peer& a, const Peer& b) { return a.who.client < b.who.client; });
@@ -58,35 +59,42 @@ void NetBeatExchange::SendChecksum(const BeatChecksum& mine) {
 void NetBeatExchange::Pump() {
   std::vector<ConnEvent> events;
   connector_->Poll(&events);
-  for (ConnEvent& e : events) {
-    Peer* p = ByConn(e.conn);
-    if (!p) continue;
-    if (e.kind == ConnEvent::Lost || e.kind == ConnEvent::Failed) {
-      p->lost = true;
-      continue;
+  for (ConnEvent& e : events) Handle(e);
+}
+
+void NetBeatExchange::TakeEarly(std::vector<ConnEvent> early) {
+  std::lock_guard<std::mutex> g(mu_);
+  for (ConnEvent& e : early) Handle(e);
+}
+
+void NetBeatExchange::Handle(ConnEvent& e) {
+  Peer* p = ByConn(e.conn);
+  if (!p) return;
+  if (e.kind == ConnEvent::Lost || e.kind == ConnEvent::Failed) {
+    p->lost = true;
+    return;
+  }
+  if (e.kind != ConnEvent::Received) return;
+  const Message& m = e.msg;
+  if (m.type == kAdvance) {  // (UpdateState 0x53c7ec: availableBeat += n, not forwarded)
+    MessageReader r(m.payload);
+    const uint32_t n = r.U32();
+    if (!r.Ok()) return;
+    for (uint32_t i = 0; i < n; ++i) {
+      p->beats[p->available + 1 + i] = i == 0 ? std::move(p->pending) : std::string();
+      p->pending.clear();
     }
-    if (e.kind != ConnEvent::Received) continue;
-    const Message& m = e.msg;
-    if (m.type == kAdvance) {  // (UpdateState 0x53c7ec: availableBeat += n, not forwarded)
-      MessageReader r(m.payload);
-      const uint32_t n = r.U32();
-      if (!r.Ok()) continue;
-      for (uint32_t i = 0; i < n; ++i) {
-        p->beats[p->available + 1 + i] = i == 0 ? std::move(p->pending) : std::string();
-        p->pending.clear();
-      }
-      p->available += n;
-    } else if (m.type == kVerifyChecksum) {
-      MessageReader r(m.payload);
-      BeatChecksum c;
-      const std::string digest = r.Bytes(16);
-      c.beat = static_cast<uint32_t>(r.I32());
-      if (!r.Ok() || digest.size() != 16) continue;
-      std::memcpy(c.digest, digest.data(), 16);
-      checksums_.emplace_back(p->who.client, c);
-    } else {
-      AppendFramed(m, &p->pending);
-    }
+    p->available += n;
+  } else if (m.type == kVerifyChecksum) {
+    MessageReader r(m.payload);
+    BeatChecksum c;
+    const std::string digest = r.Bytes(16);
+    c.beat = static_cast<uint32_t>(r.I32());
+    if (!r.Ok() || digest.size() != 16) return;
+    std::memcpy(c.digest, digest.data(), 16);
+    checksums_.emplace_back(p->who.client, c);
+  } else {
+    AppendFramed(m, &p->pending);
   }
 }
 
@@ -142,6 +150,21 @@ uint32_t NetBeatExchange::ReceivedBeats(uint8_t client) {
   for (const Peer& p : peers_)
     if (p.who.client == client) return p.available;
   return client == local_ ? sentBeats_ : 0;
+}
+
+ClientLink NetBeatExchange::Link(uint8_t client) {
+  std::lock_guard<std::mutex> g(mu_);
+  ClientLink l;
+  if (client == local_) {
+    l.connected = true;
+    return l;
+  }
+  for (const Peer& p : peers_) {
+    if (p.who.client != client) continue;
+    l.connected = !p.lost && p.ejectedFrom == UINT32_MAX;
+    if (p.who.conn > 0) l.ping = connector_->PingMs(p.who.conn), l.quiet = std::max(0.0, connector_->QuietMs(p.who.conn));
+  }
+  return l;
 }
 
 }  // namespace moho::net

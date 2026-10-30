@@ -8,9 +8,9 @@
 // ConnectionFailed, ConnectionToHostEstablished, DataReceived, PeerDisconnected, Ejected,
 // SystemMessage, EstablishedPeers), each frame (PumpLobbies, from UserState::Frame, as the
 // original's lobby tasks run on the user thread: CLobby::PullTask 0x7c5490 / PushTask 0x7c56b0).
-// Starting a game is local only so far: LaunchGame writes the game configuration and starts this
-// machine's session; the game's network between the players is the next step (the engine's
-// BeatExchange).
+// LaunchGame writes the game configuration and starts this machine's session; in a lobby with
+// peers the lobby's connector and connections go to the game (net/lobby_core.h GameLink), whose
+// beats then go through the engine's Lockstep over net/beat_exchange_net.h (app/game_session.h).
 //
 // Read from the original: InternalCreateLobby takes exactly 7 arguments and returns nil when no
 // connection can be made (FA exe 0x7c0d40); a new lobby has the id -1 unless one was given, and
@@ -498,6 +498,21 @@ int l_LaunchGame(lua_State* L) {
   // the original (FA exe 0x7c38c0), the script then hears self:GameLaunched(), on which it closes
   // the lobby and destroys this object, or self:LaunchFailed(reason).
   std::string why;
+  // A lobby with peers: every player's program launches the same game (FAF's lobby.lua: the host broadcasts
+  // {Type = 'Launch', GameInfo = ...} and calls LaunchGame, each joiner calls it with that table), and the lobby's
+  // network goes to the game (0x7c4a8e: the client manager over the lobby's connector).
+  if (lobby->core->Networked()) {
+    const auto& launchNet = UserState::From(L)->config().launchNetworkSession;
+    if (!launchNet) why = "this host cannot start a network game";
+    if (!launchNet || !launchNet(L, 2, lobby->core.get(), &why)) {
+      Logf(LogLevel::Warning, "moho64ui: CLobby:LaunchGame: launch failed: %s", why.c_str());
+      lua_pushstring(L, why.c_str());
+      lobby->Call(L, "LaunchFailed", 1);
+      return 0;
+    }
+    lobby->Call(L, "GameLaunched", 0);
+    return 0;
+  }
   if (launch && !launch(L, 2, &why)) {
     Logf(LogLevel::Warning, "moho64ui: CLobby:LaunchGame: launch failed: %s", why.c_str());
     lua_pushstring(L, why.c_str());
