@@ -7,7 +7,7 @@
 //           wrapping from the last key to the first
 //   loop    a conveyor's part: slid along an axis from range[0] to range[1] over the period less its gap, then hidden for
 //           the gap (the jump back)
-//   scroll  a belt: its texture moves along (not drawn yet)
+//   scroll  a belt: its strip of the texture slides along its axis, wrapped within it (one belt a model)
 // and emitters on a bone that play while a named bone's cycle is within windows of it ("on_keys").
 // Building is the unit's work going on (0 < workProgress < 1, its progress moving within the last half second); the
 // parts blend between their rest and their work over the file's blend (0.5 s), on the game's clock: a paused game stops
@@ -53,6 +53,10 @@ struct MachinerySpec {
   std::vector<Part> parts;  // parents before their children
   size_t simBones = 0;      // Model::bones up to here are the simulation's
   float blend = 0.5f;       // seconds between rest and work
+  // its belt (the first "scroll" part): the bone whose vertices are it, its axis (0: u, 1: v), where its strip begins along
+  // it and how long it is (texture units), how fast it moves (texture units a second); beltBone -1: none
+  int beltBone = -1, beltAxis = 1;
+  float beltFrom = 0, beltLength = 1, beltSpeed = 0;
 };
 
 // Reads a side file against the model's bones (the extras appended). Null, with why, when nothing in it can be used.
@@ -66,8 +70,9 @@ class Machinery {
   void Begin(double clock, bool first);
   // A unit drawn with a model that has machinery, standing at `at`, turned `turn`, of that faction (its emitters'): its
   // parts posed into `pose` (the simulation's bones and then the parts', in lists kept until the frame's last draw); its
-  // emitters started, moved and stopped (the first view only).
-  void PoseUnit(const FrameUnit& unit, const Model& model, Vec3 at, const Quat& turn, const std::string& faction, Pose* pose);
+  // emitters started, moved and stopped (the first view only). Returns how far its belt has moved along its strip
+  // (MeshRenderer::Belt; -1: it has none).
+  float PoseUnit(const FrameUnit& unit, const Model& model, Vec3 at, const Quat& turn, const std::string& faction, Pose* pose);
 
   int posed = 0;  // units posed this frame
 
@@ -77,6 +82,7 @@ class Machinery {
     float progress = -1;      // its workProgress when last seen
     double moved = -1e9;      // when that last changed
     double seen = -1;         // the clock it was last drawn at
+    double belt = 0;          // how far its belt has moved (texture units)
     std::vector<uint32_t> emitters;  // per part's emitter, flattened (0: none playing)
   };
   Particles* particles_;

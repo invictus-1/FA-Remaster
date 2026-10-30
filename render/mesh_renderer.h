@@ -56,6 +56,9 @@ class MeshRenderer {
   // The battle scars and snow of the model added last (unit_wear.h; World::unitScars, unitSnow): its look this frame,
   // its marks laid in the bone buffer after the shells' hits (Prepare). Without it a model wears nothing of its own.
   void Wear(const WearLook& look);
+  // [machinery] The model just added is a factory whose belt has moved `amount` along its strip (Machinery::PoseUnit;
+  // below 0: none). Not with a ghost's tint or treads.
+  void Belt(float amount);
   // Scenery that stands still (trees, rocks), in groups (one square of the map's): the renderer keeps
   // each group from one frame to the next, so a frame only says which groups it lists (ListGroup,
   // after Begin), not where each tree stands and how large it is. A group is filled anew

@@ -11,6 +11,7 @@
 #include <cstring>
 
 #include "blasts.h"
+#include "machinery.h"  // [machinery]
 #include "build_effects.h"
 #include "card_scenery.h"  // [gpuscenery]
 #include "effect_files.h"
@@ -132,6 +133,8 @@ cbuffer MeshKind : register(b3) {
                 // frame's alpha (ModelLod::rgbOnly: the original writes its colour alone); z: what sways, a group of
                 // trees: model units a step of where each tree stands (ModelLod::treeStep; 0: none); w: the scene's
                 // samples a pixel (NearFade)
+  float4 kind12;  // [machinery] a factory's belt (machinery.h): x where its strip of the texture begins along its axis, y how
+                  // long it is, z the bone whose vertices are the belt (-1: none), w its axis (0: u, 1: v)
 #ifdef PLANTS
   float4 kind7, kind8;  // [plants] (plants.h) PlantLife::Constants
 #endif
@@ -173,6 +176,7 @@ struct VOut {
   float3 rest : TEXCOORD4;
   float3 restNormal : TEXCOORD5;
   nointerpolation float4 wear : TEXCOORD6;  // (the instance's: unit_wear.h)
+  nointerpolation float belt : TEXCOORD10;   // [machinery] how far its belt has moved along its strip (-1: not on a belt)
 #ifdef PLANTS
   nointerpolation float4 plants : TEXCOORD7;  // [plants] how it is burnt (PlantsBurnLook: black, brown, lower, embers)
 #endif
@@ -286,7 +290,10 @@ VOut VS(VIn i, uint instance : SV_InstanceID) {
   o.color = n.color;
   o.wear = n.wear;
   o.tint = n.bones.yzw;
+  o.belt = -1;
   [branch] if (n.bones.y < -0.5) {
+    // [machinery] (y -2: a factory whose belt moves, z how far: its vertices on the belt's bone)
+    if (n.bones.y < -1.5 && kind12.z >= 0 && i.bones.x == (uint)(kind12.z + 0.5)) o.belt = n.bones.z;
     // a tank's treads, scrolled as it drives, as the original's ComputeScrolledTexcoord does it: the two
     // strips at the foot of its texture, each by its tread's amount (bones.z, bones.w), across both sets;
     // where the level's mesh says its treads scroll
@@ -970,6 +977,13 @@ float4 Shade(VOut i, bool front) {
 
 // a ghost: its shape in one colour, the light and dark of the model kept
 float4 PS(VOut i, bool front : SV_IsFrontFace) : SV_Target {
+  // [machinery] a belt's strip of the texture slid along its axis, wrapped within it
+  [branch] if (i.belt >= 0) {
+    float along = kind12.w > 0.5 ? i.uv.y : i.uv.x;
+    along = kind12.x + frac((along - kind12.x + i.belt) / kind12.y) * kind12.y;
+    if (kind12.w > 0.5) i.uv.y = along;
+    else i.uv.x = along;
+  }
   float4 c = Shade(i, front);
   c.rgb = BeyondScenery(c.rgb, i.world);  // (the trees and rocks of the world beyond the map's edge)
   // glass: as much of it shows as its albedo's alpha and its glow say (never quite nothing, or a
@@ -1684,6 +1698,14 @@ void MeshRenderer::Wear(const WearLook& look) {
   }
 }
 
+void MeshRenderer::Belt(float amount) {
+  if (amount < 0 || entries_.empty()) return;
+  Entry& e = entries_.back();
+  if (e.instance.bones[1] != 0 || e.instance.bones[2] != 0 || e.instance.bones[3] != 0) return;  // (a ghost's tint, treads)
+  e.instance.bones[1] = -2;  // (the vertex shader: y -2, a belt that moves by z)
+  e.instance.bones[2] = amount;
+}
+
 uint32_t MeshRenderer::AddGroup() {
   groups_.emplace_back();
   return static_cast<uint32_t>(groups_.size() - 1);
@@ -2132,7 +2154,7 @@ void MeshRenderer::RecordRuns(R& to, const RunSetup& s, size_t from, size_t end,
         batch[i] = items_[at + i].entry->instance;
         batch[i].bones[0] = items_[at + i].bones;
       }
-    float kind[44] = {lod->alphaCut, lod->shell ? 12.0f : lod->impact ? 9.0f + static_cast<float>(lod->impact) : lod->unlit ? 6.0f + static_cast<float>(lod->unlit) : lod->nuke ? 4.0f + static_cast<float>(lod->nuke) : lod->fades ? 4.0f : lod->shield ? 3.0f : lod->frame ? 2.0f : lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f,
+    float kind[48] = {lod->alphaCut, lod->shell ? 12.0f : lod->impact ? 9.0f + static_cast<float>(lod->impact) : lod->unlit ? 6.0f + static_cast<float>(lod->unlit) : lod->nuke ? 4.0f + static_cast<float>(lod->nuke) : lod->fades ? 4.0f : lod->shield ? 3.0f : lod->frame ? 2.0f : lod->vertexNormals ? 1.0f : 0.0f, lod->teamMask ? 0.0f : 1.0f, lod->labPbr ? 1.0f : 0.0f,
                             static_cast<float>(lod->faction), lod->leaves ? 1.0f : 0.0f, lod->plainMaterial ? 1.0f : 0.0f, lod->border ? 1.0f : 0.0f,
                             lod->sway, 1 / lod->swayHeight, 0, 1,
                             lod->chrome ? 2.0f : lod->wreck ? 1.0f : 0.0f, lod->shieldTint.x, lod->shieldTint.y, lod->shieldTint.z};
@@ -2156,13 +2178,20 @@ void MeshRenderer::RecordRuns(R& to, const RunSetup& s, size_t from, size_t end,
     kind[21] = lod->rgbOnly ? 1.0f : 0.0f;
     kind[22] = lod->sway > 0 ? lod->treeStep : 0.0f;  // [foliage] (a group's trees, each on its own beat)
     kind[23] = static_cast<float>(gSceneSamples);     // [foliage] (NearFade: leaves fade by their coverage)
-    if (reacts) {  // [plants] (kind7, kind8; the game's trees neither pressed nor burnt by the picture: Model::simTree)
-      std::copy(plantsConstants, plantsConstants + 8, kind + 24);
-      if (items_[at].entry->model->simTree) kind[30] = kind[31] = 0;
-      if (shadowPass) kind[30] = 0;  // (shadows: bent as the plants are, but not burnt: it would cost the sun's maps too much)
+    kind[26] = -1;  // [machinery] (kind12: a factory's belt, MachinerySpec)
+    if (const MachinerySpec* m = items_[at].entry->model->machinery.get(); m && m->beltBone >= 0) {
+      kind[24] = m->beltFrom;
+      kind[25] = m->beltLength;
+      kind[26] = static_cast<float>(m->beltBone);
+      kind[27] = static_cast<float>(m->beltAxis);
     }
-    if (sinks) std::copy(s.snowK, s.snowK + 12, kind + 32);  // [undersnow] (kind9..11; kind7, kind8 nought when nothing reacts)
-    to.SetConstants(3, kind, static_cast<uint32_t>(sizeof(float) * (sinks ? 44 : reacts ? 32 : 24)));
+    if (reacts) {  // [plants] (kind7, kind8; the game's trees neither pressed nor burnt by the picture: Model::simTree)
+      std::copy(plantsConstants, plantsConstants + 8, kind + 28);
+      if (items_[at].entry->model->simTree) kind[34] = kind[35] = 0;
+      if (shadowPass) kind[34] = 0;  // (shadows: bent as the plants are, but not burnt: it would cost the sun's maps too much)
+    }
+    if (sinks) std::copy(s.snowK, s.snowK + 12, kind + 36);  // [undersnow] (kind9..11; kind7, kind8 nought when nothing reacts)
+    to.SetConstants(3, kind, static_cast<uint32_t>(sizeof(float) * (sinks ? 48 : reacts ? 36 : 28)));
     to.SetTexture(0, lod->albedo);
     if (!shadowPass) {
       to.SetTexture(1, lod->normals);

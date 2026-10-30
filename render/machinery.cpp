@@ -90,6 +90,16 @@ std::shared_ptr<const MachinerySpec> ReadMachinery(const std::string& text, cons
       part.gap = std::clamp(static_cast<float>(w["gap"].NumberOr(0)), 0.0f, 0.9f);
     } else if (mode == "scroll") {
       part.mode = MachinerySpec::Part::Scroll;
+      const JsonValue& rect = w["uv_rect"];
+      if (spec->beltBone < 0 && rect.items.size() >= 4) {
+        spec->beltAxis = w["axis"].StringOr("v") == "u" ? 0 : 1;
+        const float from = static_cast<float>(rect.items[spec->beltAxis].NumberOr(0));
+        const float to = static_cast<float>(rect.items[spec->beltAxis + 2].NumberOr(1));
+        spec->beltFrom = std::min(from, to);
+        spec->beltLength = std::max(std::fabs(to - from), 1e-5f);
+        spec->beltSpeed = static_cast<float>(w["speed"].NumberOr(0));
+        spec->beltBone = part.bone;
+      }
     }
     spec->parts.push_back(part);
   }
@@ -138,7 +148,7 @@ void Machinery::Begin(double clock, bool first) {
   posed = 0;
 }
 
-void Machinery::PoseUnit(const FrameUnit& unit, const Model& model, Vec3 at, const Quat& turn, const std::string& faction, Pose* pose) {
+float Machinery::PoseUnit(const FrameUnit& unit, const Model& model, Vec3 at, const Quat& turn, const std::string& faction, Pose* pose) {
   const MachinerySpec& spec = *model.machinery;
   UnitState& s = units_[unit.id];
   // (MOHO64_DEBUG_MACHINERY: every factory with machinery works, building or not: its parts looked at alone)
@@ -151,6 +161,8 @@ void Machinery::PoseUnit(const FrameUnit& unit, const Model& model, Vec3 at, con
     const float dt = s.seen < 0 ? 0.0f : static_cast<float>(std::clamp(clock_ - s.seen, 0.0, 1.0));
     s.work = std::clamp(s.work + (working ? dt : -dt) / spec.blend, 0.0f, 1.0f);
     s.seen = clock_;
+    s.belt = std::fmod(s.belt + spec.beltSpeed * s.work * dt, static_cast<double>(spec.beltLength));  // (its belt slows and stops with it)
+    if (s.belt < 0) s.belt += spec.beltLength;
   }
   const float w = s.work * s.work * (3 - 2 * s.work);  // (eased)
   const float offset = UnitOffset(unit.id);
@@ -252,8 +264,9 @@ void Machinery::PoseUnit(const FrameUnit& unit, const Model& model, Vec3 at, con
   }
   ++posed;
 
+  const float belt = spec.beltBone >= 0 ? static_cast<float>(s.belt) : -1.0f;
   // its emitters (the first view): playing while their part's cycle is within a window, on the part they are on
-  if (!first_ || !particles_) return;
+  if (!first_ || !particles_) return belt;
   size_t n = 0;
   for (const MachinerySpec::Part& part : spec.parts) n += part.emitters.size();
   s.emitters.resize(n, 0);
@@ -274,6 +287,7 @@ void Machinery::PoseUnit(const FrameUnit& unit, const Model& model, Vec3 at, con
       else if (on) particles_->Move(handle, where, facing);
       else if (handle) particles_->Stop(handle), handle = 0;
     }
+  return belt;
 }
 
 }  // namespace render
