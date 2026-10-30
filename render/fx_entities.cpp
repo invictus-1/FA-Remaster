@@ -1025,6 +1025,7 @@ struct Ent {
   bool driveDone = false;
   std::string motion;
   bool onWater = false;  // [navstand] (StandHeight)
+  uint32_t building = 0;  // [machinery] the unit it builds (--fx-build: its work's progress in the frame, as a game's)
   int terrainCode = -1;
   // --fx-fire: a unit made with its weapons poses its bones with its manipulators (else the scripts' manipulators
   // do nothing in the stand, as before)
@@ -3034,8 +3035,9 @@ uint32_t FxEntities::AddUnit(const std::string& id, Vec3 at, const UnitPlace& ho
 
 void FxEntities::Build(uint32_t builder, uint32_t unit, const std::string& order, float seconds) {
   Impl& m = *impl_;
-  const Ent* b = m.Find(builder);
+  Ent* b = m.Find(builder);
   if (!m.state || !b || !m.Find(unit)) return;
+  b->building = unit;  // [machinery]
   Echo echo;
   m.spawnOriginal = b->original;
   m.spawnSide = b->side;
@@ -3515,6 +3517,9 @@ void FxEntities::Advance(double now) {
         u.maxHealth = e.maxHealth;
         u.fractionComplete = e.fraction;  // (buildfx: what is under construction, as a game's frame says it)
         u.beingBuilt = e.fraction < 1;
+        if (e.building)  // [machinery] (a builder's work: how far what it builds is, while it is under way)
+          if (const Ent* built = m.Find(e.building))
+            u.workProgress = built->fraction > 0 && built->fraction < 1 ? built->fraction : 0.0f;
         u.firstBone = u.nextFirstBone = static_cast<uint32_t>(m.frame.bones.size());
         u.boneCount = u.nextBoneCount = static_cast<uint32_t>(b.bones.size());
         m.frame.bones.insert(m.frame.bones.end(), b.bones.begin(), b.bones.end());

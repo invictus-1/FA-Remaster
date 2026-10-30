@@ -20,6 +20,7 @@
 #include "effect_files.h"
 #include "core/vfs.h"
 #include "hitch_log.h"  // [hitches]
+#include "machinery.h"  // [machinery]
 #include "unit_wear.h"
 
 namespace render {
@@ -61,6 +62,25 @@ void ReadScmBones(const std::string& file, std::vector<ModelBone>* bones) {
       b.rotation = rotation;
       b.position = position;
     }
+  }
+}
+
+// [machinery] A remastered factory's parts (machinery.h): its finest level's own bones that the skeleton has not (by name)
+// appended to the skeleton, their parents by name, so that every level's vertices on them keep them (LoadScm matches its
+// file's bones to the skeleton's by name; those it does not find fall to the first). Bones already there are left.
+void AppendOwnBones(const std::string& finest, std::vector<ModelBone>* bones) {
+  std::vector<ModelBone> own;
+  ReadScmBones(finest, &own);
+  auto named = [&](const std::string& name) {
+    for (size_t k = 0; k < bones->size(); ++k)
+      if ((*bones)[k].name == name) return static_cast<int>(k);
+    return -1;
+  };
+  for (const ModelBone& b : own) {
+    if (named(b.name) >= 0 || bones->size() >= 256) continue;
+    ModelBone extra = b;
+    extra.parent = b.parent >= 0 ? named(own[static_cast<size_t>(b.parent)].name) : -1;
+    bones->push_back(extra);
   }
 }
 
@@ -1163,6 +1183,9 @@ void ModelCache::MeshesWork(const MeshJob& job) {
   BuildPlan plan = PlanBuild(job.base, std::move(sources), false, job.stem);
   std::optional<std::string> skeletonFile = plan.skeletonMesh.empty() ? std::nullopt : read(plan.skeletonMesh);
   if (skeletonFile) ReadScmBones(*skeletonFile, &bones);
+  if (plan.previewed && job.stem.empty() && !bones.empty() && !plan.sources.empty() &&  // [machinery]
+      vfs_->Exists(plan.preview + plan.file + "_machinery.json"))
+    if (std::optional<std::string> finest = read(plan.sources[0].mesh)) AppendOwnBones(*finest, &bones);
   const bool unit = job.stem.empty() && (job.what.find('/') == std::string::npos ||
                                          (job.what.size() > 8 && job.what.compare(job.what.size() - 8, 8, "_unit.bp") == 0));
   bool firstSways = false, shaped = false;
@@ -1370,6 +1393,16 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
   const std::string& file = plan.file;  // (the files' own name in the folder: a wreck's is "<id>_wreck")
   const bool previewed = plan.previewed;
   sources = std::move(plan.sources);
+  // [machinery] a remastered factory's parts: their bones after the skeleton's (made ahead too: TakeBones gives them),
+  // and how they move
+  if (previewed && stem.empty() && !m->bones.empty() && !sources.empty() && vfs_->Exists(preview + file + "_machinery.json")) {
+    if (std::optional<std::string> finest = textures_->ReadFile(sources[0].mesh)) AppendOwnBones(*finest, &m->bones);
+    std::string why;
+    if (std::optional<std::string> text = textures_->ReadFile(preview + file + "_machinery.json"))
+      m->machinery = ReadMachinery(*text, m->bones, &why);
+    if (!m->machinery) fprintf(stderr, "render: model %s: its machinery cannot be used: %s\n", what.c_str(), why.c_str());
+    else printf("render: model %s: machinery, %zu parts on bones %zu-%zu\n", what.c_str(), m->machinery->parts.size(), m->machinery->simBones, m->bones.size() - 1);
+  }
   // a remastered unit's lamps: a list beside its meshes (docs/render-unit-lights.md); a wreck has none
   if (!original && stem.empty()) {
     const std::string file = previewed ? preview + own + "_lights.bp" : "/mods/labvisuals/textures/" + base + "/" + base + "_lights.bp";

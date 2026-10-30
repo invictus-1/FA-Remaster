@@ -62,6 +62,7 @@
 #include "order_lines.h"
 #include "models.h"
 #include "particles.h"
+#include "machinery.h"  // [machinery]
 #include "photo_look.h"  // (photolook)
 #include "post.h"
 #include "ray_scene.h"
@@ -425,6 +426,7 @@ class World {
   ModelCache models;
   MeshRenderer meshes;
   Particles particles;
+  Machinery machinery{&particles};  // [machinery] (factories' parts at work: machinery.h)
   Ribbons ribbons;
   Decals decals;
   Lights lights;

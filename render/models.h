@@ -149,6 +149,7 @@ struct ModelLod {
 };
 
 struct HitShape;  // (unit_wear.h)
+struct MachinerySpec;  // ([machinery] machinery.h)
 struct ScmAhead;  // [spikes] (models.cpp: a mesh made ahead)
 
 struct Model {
@@ -165,6 +166,9 @@ struct Model {
   // every level follow these bones by index (a level whose file lists its bones in another order,
   // or a remastered mesh tried out in the blueprint's place, is matched to them by name at loading).
   std::vector<ModelBone> bones;
+  // [machinery] A remastered factory's machinery (machinery.h): its parts' bones are appended to `bones` after the
+  // simulation's (its finest level's own bones past the skeleton, by name), and how they move. Null: none.
+  std::shared_ptr<const MachinerySpec> machinery;
   // The box round each bone's part of the finest level at rest (model units; by the skeleton's numbers; lo above hi:
   // no part): where on the model a hit lies, whichever way its bones are posed (unit_wear.h).
   struct BoneBox {

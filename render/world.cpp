@@ -2385,6 +2385,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
   rememberedGone.clear();
   dyingDrawn = 0;
   bool noFocus = false;
+  machinery.Begin(clock_, !extraView && !sidePicture);  // [machinery]
   for (const FrameUnit& u : frame.units) {
     if (u.recon == 0xff) noFocus = true;
     if (u.dead) {
@@ -2563,6 +2564,9 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       pose.next = frame.bones.data() + u.nextFirstBone;
       pose.nextCount = u.nextBoneCount;
       pose.blend = frame.blend;
+      // [machinery] a factory's parts at work (machinery.h): posed after the simulation's bones, as it is seen and finished
+      if (model->machinery && !asRemembered && u.Seen() && fractionComplete >= 1)
+        machinery.PoseUnit(u, *model, drawAt, drawTurn, UnitFaction(blueprint), &pose);
       // a personal shield: the script has set a shield's mesh on the unit (the name says so; FAF
       // sets other meshes on units too)
       bool shielded = false;
