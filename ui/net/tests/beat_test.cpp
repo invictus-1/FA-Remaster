@@ -1,10 +1,13 @@
 // The game's orders between two players over the UDP connector, without the interface or the simulation: client 0
 // and client 1 each send their beats (the replay stream's messages, then an Advance), every beat is collected whole
 // and sorted by client at both ends, an empty beat arrives empty, the checksums every 50 beats reach the
-// other side, and an ejected client is left out. Build as udp_test.cpp (its header), with beat_test.cpp and
-// ui/net/beat_exchange_net.cpp in place of udp_test.cpp, and -I src for sim/beat_exchange.h.
+// other side; then the control messages: READY, chat both ways and to oneself, the game speed agreed (a tie goes to
+// the lower client), an eject on this program's word (Eject) and by vote (RequestEject: the client left out after its
+// last beat in here, the dialog's ejectedBy). Build as udp_test.cpp (its header), with beat_test.cpp,
+// ui/net/beat_exchange_net.cpp and src/core/log.cpp in place of udp_test.cpp, and -I src for sim/beat_exchange.h.
 #include <chrono>
 #include <cstdio>
+#include <functional>
 #include <string>
 #include <thread>
 
@@ -45,7 +48,7 @@ int main() {
     std::this_thread::sleep_for(std::chrono::milliseconds(2));
   }
   Check("the two are connected", made == 2);
-  NetBeatExchange a(std::move(ca), 0, {GameClient{1, toB}}), b(std::move(cb), 1, {GameClient{0, toA}});
+  NetBeatExchange a(std::move(ca), 0, {GameClient{1, toB}}, true, 0), b(std::move(cb), 1, {GameClient{0, toA}}, true, 0);
 
   constexpr uint32_t kBeats = 200;
   bool whole = true, sorted = true, waited = true;
@@ -99,6 +102,63 @@ int main() {
     std::this_thread::sleep_for(std::chrono::milliseconds(2));
   }
   Check("the 4 checksums reach each side", checksumsAtA == 4 && checksumsAtB == 4);
+
+  // (until `cond`, both sides pumped, at most 5 s)
+  auto until = [&](const std::function<bool()>& cond) {
+    for (int i = 0; i < 2500; ++i) {
+      if (cond()) return true;
+      a.ReceivedBeats(1), b.ReceivedBeats(0);
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    return cond();
+  };
+  // READY
+  a.SendReady();
+  until([&] { return false; });
+  Check("not everyone is ready while one has not said so", !a.EveryoneReady());
+  b.SendReady();
+  Check("then everyone is, at both ends", until([&] { return a.EveryoneReady() && b.EveryoneReady(); }));
+  // chat: to the other, and to oneself (straight back)
+  std::vector<std::pair<uint8_t, std::string>> heardA, heardB;
+  a.SendChat(1, "to b");
+  b.SendChat(0, "to a");
+  a.SendChat(0, "to myself");
+  until([&] {
+    for (auto& c : a.TakeChats()) heardA.push_back(c);
+    for (auto& c : b.TakeChats()) heardB.push_back(c);
+    return heardA.size() >= 2 && heardB.size() >= 1;
+  });
+  auto has = [](const std::vector<std::pair<uint8_t, std::string>>& v, uint8_t from, const char* text) {
+    for (const auto& c : v)
+      if (c.first == from && c.second == text) return true;
+    return false;
+  };
+  Check("chat a -> b arrives, from a", has(heardB, 0, "to b"));
+  Check("chat b -> a arrives, from b", has(heardA, 1, "to a"));
+  Check("chat to oneself comes back", has(heardA, 0, "to myself") && heardA.size() == 2 && heardB.size() == 1);
+  // game speed: one asks, both end on it; two ask at once: the lower client's wins on both
+  a.RequestRate(3);
+  Check("the speed asked for here is taken here at once", a.Rate() == 3);
+  Check("and there", until([&] { return b.Rate() == 3; }));
+  a.RequestRate(5);
+  b.RequestRate(7);
+  Check("two asking at once: both end on the lower client's", until([&] { return a.Rate() == 5 && b.Rate() == 5; }) &&
+                                                                  !until([&] { return a.Rate() != 5 || b.Rate() != 5; }));
+  const auto notesA = a.TakeRateNotes(), notesB = b.TakeRateNotes();
+  Check("the changes are noted for the interface (who, what)", !notesA.empty() && notesA.front() == std::make_pair(uint8_t{0}, 3) &&
+                                                                !notesB.empty() && notesB.back() == std::make_pair(uint8_t{0}, 5));
+  // b votes a out before a's next beat reaches it: b goes on alone from the beat after a's last one in here
+  const uint32_t aLast = b.ReceivedBeats(0);
+  b.RequestEject(0);
+  const ClientLink seen = b.Link(0);
+  Check("the ejected client shows as not connected, ejected by b", !seen.connected && seen.ejectedBy.size() == 1 && seen.ejectedBy[0] == 1);
+  std::vector<ClientBatch> lastAtB;
+  b.SendLocal(kBeats + 1, Orders(1, kBeats + 1));
+  bool bAlone = true;
+  for (uint32_t beat = kBeats + 1; beat <= kBeats + 1 && aLast == kBeats; ++beat)
+    bAlone = until([&] { return b.Collect(beat, &lastAtB); }) && lastAtB.size() == 1 && lastAtB[0].client == 1;
+  Check("a client voted out is left out after its last beat", aLast == kBeats && bAlone);
+  // a leaves b out on its own word (the engine's test)
   a.Eject(1, kBeats + 1);
   std::vector<ClientBatch> alone;
   a.SendLocal(kBeats + 1, Orders(0, kBeats + 1));

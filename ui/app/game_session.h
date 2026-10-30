@@ -36,6 +36,8 @@ class LobbyCore;
 }
 
 namespace moho::ui {
+class NetGameLink;
+struct NetEvents;
 
 namespace sound {
 class SoundSystem;
@@ -59,9 +61,18 @@ class GameSession {
   // (`lobby`'s GameLink, taken only when the session is described). The beats then run in lockstep: every client's
   // orders, merged in client order, before each beat (the engine's sim/lockstep.h over net/beat_exchange_net.h);
   // a beat whose orders are not all in waits, the frame going on without it (a wait of over two seconds is logged).
-  // The load ends only when every client's first beat is in (the loading screen stays until all have loaded).
+  // Each program's load ends by itself; its game's screen is made, and then (NetReady) it tells the others it is
+  // ready (READY, control message 53) and its beats wait until every client is ready or ejected, the provider's
+  // StartWaitingDialog shown meanwhile (the original's DoInitializing 0x88c664, DoPostInitializing 0x88c6d0,
+  // DoWaiting 0x88c750); beat 1 runs after that, not before the screen as in a local game.
   bool LaunchNetwork(lua_State* L, int config, net::LobbyCore* lobby, std::string* why);
   bool networkGame() const { return net_ != nullptr; }
+  // A network game's side for the game's interface state (user/user_state.h NetGameLink: GetSessionClients,
+  // EjectSessionClient, chat, game speed, the waiting and desync dialogs); nullptr in a local game or a replay.
+  NetGameLink* netLink() const;
+  // The game's screen is up (after CreateGameInterface): READY to every client, and the lockstep starts (beats 1 ..
+  // the input delay sent empty). Nothing in a local game.
+  void NetReady();
   // The input delay (beats between writing an order and every client carrying it out): the original's net_Lag of
   // 500 ms (CSimDriver::ThreadRun 0x73c006, the engine's reading) in whole beats at the game's speed at launch,
   // floor(500 / msPerBeat), msPerBeat = 100 / 10^(rate / 10): 5 beats at normal speed, 12 at +4; fixed for the game
@@ -76,8 +87,17 @@ class GameSession {
     std::vector<int> sources;
     bool local = false, connected = true;
     double ping = 0, quiet = 0;
+    std::vector<int> ejectedBy;  // (0-based client indices)
+    int maxSP = 50;
   };
   std::vector<NetClient> NetClients() const;
+  // What netLink() passes on (0-based clients): this player's vote to eject one (EjectSessionClient), a chat message
+  // (SerializeLua bytes) to some, a game speed asked for, the interface's events since the last frame, a test switch.
+  void NetEject(int client);
+  void NetChat(const std::vector<int>& clients, const std::string& message);
+  void NetSpeed(int rate);
+  NetEvents NetTakeEvents();
+  void NetTestSwitch(const std::string& what, uint32_t beat);
   // Start a single-player session (LaunchSinglePlayerSession: an operation of the campaign) from
   // the table FAF's SinglePlayerLaunch.lua makes, at stack index `info` (the engine's
   // SessionFromSinglePlayerInfo). False with the reason.
@@ -458,11 +478,10 @@ class GameSession {
   std::unique_ptr<Net> net_;
   bool lastWasNetwork_ = false;
   bool LaunchWith(lua_State* L, int config, net::LobbyCore* lobby, std::string* why);
+  bool NetEveryoneReady();                  // (false: the beats wait for the others' READY, the waiting dialog shown)
   bool NetBeatOrders(std::string* merged);  // (the next beat's merged orders, or false: wait)
   void NetDigest();                         // (right after that beat, on its thread: the digest of a 50th beat)
-  void NetAfterBeat();                      // (then here: the digest to the lockstep, desyncs logged)
-  void NetLoadWait();                       // (while the load ends: the lockstep started, the first beat's orders)
-  void NetFirstOrders();                    // (the first beat's orders, before it)
+  void NetAfterBeat();                      // (then here: the digest to the lockstep, desyncs to the dialog)
   // The last launch, for Relaunch.
   std::unique_ptr<SessionDescription> last_;
   std::vector<std::string> lastUids_;

@@ -356,13 +356,28 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   observers, client i speaking for source i), and `app/game_session.cpp` runs each beat through the engine's
   `Lockstep` (`src/sim/lockstep.h`) over a `NetBeatExchange`: the player's orders go to everyone for a later beat,
   every client's merged orders are recorded and applied before the beat (so the game's replay plays back like any
-  other), a beat whose orders are not all in waits while the frames go on, and the load ends only when every
-  client's first beat is in. GetSessionClients lists the clients (connected, ping, quiet), SessionIsMultiplayer is
-  true, and uimain.UpdateDisconnectDialog runs each frame, so FAF's disconnect dialog opens for a lost player (its
-  Eject button, the eject vote, the desync dialog, chat and game speed between players are not built yet). The input
-  delay is the original's net_Lag (500 ms) in beats at the game's speed at launch (5 at normal). Tests: two programs over loopback
-  (`ui/tests/net_game_host.lua`, `net_game_join.lua`): a 2-player game with orders from both to beat 300, the two
-  programs' fingerprints equal at every beat, then the joiner quits and the host waits with it reported lost.
+  other), and a beat whose orders are not all in waits while the frames go on. Beside the orders the clients send
+  the original's control messages (`net/beat_exchange_net.h`, read from CClientBase::Process 0x53bf30): ACK (a beat
+  runs only once every client still in the game has acknowledged every client's part of it, as the original's
+  available beat), READY (each program's load ends by itself; once its game screen is up it says READY, and the beats
+  wait, FAF's "Waiting For Other Players..." shown through the provider, until every client is ready or ejected),
+  EJECT (EjectSessionClient, the disconnect dialog's button: this program's vote; the client is left out, its
+  command sources terminated, after the smallest "last beat" any client asked for, once every client still in has
+  asked), CHAT (SessionSendChatMessage to the clients named, heard as gamemain.ReceiveChat(sender, message)) and GAME
+  SPEED (SetGameSpeed where the game's speed is adjustable: every client ends on the newest request,
+  uimain.NoteGameSpeedChanged tells who). GetSessionClients lists the clients (connected = not ejected here, ping,
+  quiet, ejectedBy, FAF's maxSP), SessionIsMultiplayer is true, uimain.UpdateDisconnectDialog runs each frame, and a
+  checksum difference shows uimain.ShowDesyncDialog(beat, names). As in the original (and FAF, Chris 2026-10-30: "Just
+  keep faf behaviour"): a connection that ends ejects its player at once ("X disconnected." on the console, 0x53c2c3),
+  and a player only gone quiet goes through FAF's disconnect dialog and its vote (its Eject button after
+  DisconnectionDelay02, its forced eject later). The input delay is the original's
+  net_Lag (500 ms) in beats at the game's speed at launch (5 at normal). Tests: two programs over loopback
+  (`ui/tests/net_game_host.lua`, `net_game_join.lua`): a 2-player game with orders from both, chat both ways, the
+  speed changed by each, a pause, a desync on purpose, the two programs' fingerprints equal at every beat, then the
+  joiner quits and the host ejects it at once and runs on; variants with the joiner frozen mid-game (quiet: the host
+  ejects it as the dialog's button does and
+  runs on; `net_game_replay.lua` plays the host's replay with the same fingerprints) and frozen before it is ready
+  (the host's waiting ends with the eject).
   Tests of the lobby: three programs at once over loopback
   (`ui/tests/net_host.lua`, `net_join1.lua`, `net_join2.lua`, over TCP and, as copies, over UDP), the LAN pair
   (`net_lan_host.lua`, `net_lan_browse.lua`; the suite's net_lobby runs them last), and two programs of their own

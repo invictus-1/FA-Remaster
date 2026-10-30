@@ -51,9 +51,35 @@ class SoundSystem;
 struct SessionClient {
   std::string name;
   int uid = 0;
-  bool connected = true, local = false;
+  bool connected = true, local = false;  // (connected: not ejected by this program, CClientBase::NoEjectionPending 0x53c960)
   double ping = 0, quiet = 0;
-  std::vector<int> sources;  // 0-based command sources (the scripts get them 1-based)
+  std::vector<int> sources;    // 0-based command sources (the scripts get them 1-based)
+  std::vector<int> ejectedBy;  // 0-based clients that asked to eject it (CollectEjecters 0x53cc60; 1-based to the scripts)
+  int maxSP = 50;              // FAF's exe's field (0x1291178: client+0xd4, message 57)
+};
+
+// What a network game has for its interface since the last frame (NetGameLink::TakeEvents), in the original's order
+// of arrival; each goes to the game's scripts as the original hands it over.
+struct NetEvents {
+  int waiting = 0;  // 1: the provider's StartWaitingDialog (DoPostInitializing 0x88c72d), -1: StopWaitingDialog (0x88c781)
+  std::vector<std::pair<uint32_t, std::vector<std::string>>> desyncs;  // uimain.ShowDesyncDialog(beat, names) (0x895434)
+  std::vector<std::pair<int, int>> speeds;  // uimain.NoteGameSpeedChanged(client + 1, rate) (0x83d670)
+  std::vector<std::pair<std::string, std::string>> chats;  // gamemain.ReceiveChat(name, message) (0x83ebd0); bytes: SerializeLua
+  std::vector<std::string> disconnects;  // "<LOC Engine0002>%s disconnected." to the console (0x88b9d0)
+};
+
+// A network game's side for its interface state (the host's: GameSession over net/beat_exchange_net.h).
+class NetGameLink {
+ public:
+  virtual ~NetGameLink() = default;
+  virtual std::vector<SessionClient> Clients() = 0;  // in the session's client order (GetSessionClients)
+  virtual void Eject(int client) = 0;                 // 0-based, not the local one (EjectSessionClient's checks are its own)
+  virtual void SendChat(const std::vector<int>& clients, const std::string& message) = 0;  // 0-based; SerializeLua bytes
+  virtual void RequestSpeed(int rate) = 0;            // SetGameSpeed
+  virtual NetEvents TakeEvents() = 0;
+  // moho64ui_NetTestForTests: "freeze" (from now on this program sends and hears nothing, as one that stopped
+  // answering), "corrupt" (its checksum of `beat` changed: a desync).
+  virtual void TestSwitch(const std::string& what, uint32_t beat) = 0;
 };
 
 class UserState {
@@ -107,9 +133,9 @@ class UserState {
     // 0x7a66a0: (beat + fraction) * 0.1; paused with the game, at its speed): the camera's game clock
     // (UseGameClock). Unset: there is no game.
     std::function<double()> gameTime;
-    // A network game's clients, in the session's client order, as GetSessionClients lists them (the host's; unset: a
-    // local game, its one player); and whether the game is a network one (SessionIsMultiplayer).
-    std::function<std::vector<SessionClient>()> sessionClients;
+    // A network game's side (the host's; nullptr: a local game, its one player): GetSessionClients, EjectSessionClient,
+    // chat, game speed, the dialogs; and whether the game is a network one (SessionIsMultiplayer).
+    NetGameLink* net = nullptr;
     bool multiplayer = false;
     // The command source the player's orders are written for (the focus army's first source).
     int commandSource = 0;
@@ -878,8 +904,11 @@ std::string TakeOrders(lua_State* L);
 void SendSimCommand(lua_State* L, const std::string& command);
 void TeleportSelectedUnits(lua_State* L);
 void SelectionOrdersItself(lua_State* L, bool destroy);
-// The chat messages the script has sent since the last frame come back to it (session_bindings.cpp).
+// The chat messages the script has sent since the last frame come back to it (session_bindings.cpp); in a network
+// game also what the other players sent, and the rest of the network game's NetEvents.
 void DeliverChat(lua_State* L);
+// A network game's NetEvents since the last frame to its scripts (session_bindings.cpp).
+void DeliverNetEvents(lua_State* L);
 // CWldSession::RequestFocusArmy with its checks (session_bindings.cpp): a 0-based army, or -1 for none; for the Lua
 // SetFocusArmy and the console's SetFocusArmy.
 void RequestFocusArmyChecked(lua_State* L, int wanted);

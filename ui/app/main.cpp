@@ -741,21 +741,11 @@ int main(int argc, char** argv) {
     out->up = up && out->state->Boot();
     out->stateMs = ms(t0, t1), out->rulesMs = ms(t1, t2), out->bootMs = ms(t2, Clock::now());
   };
-  // A network game's links for the game's state: SessionIsMultiplayer, GetSessionClients (and so the disconnect dialog).
+  // A network game's links for the game's state: SessionIsMultiplayer, and its side of the game (GetSessionClients and
+  // so the disconnect dialog, EjectSessionClient, chat, game speed, the waiting and desync dialogs).
   auto linkNetwork = [&session](ui::UserState::Config& gameCfg) {
     gameCfg.multiplayer = session.networkGame();
-    gameCfg.sessionClients = nullptr;
-    if (!session.networkGame()) return;
-    gameCfg.sessionClients = [&session]() {
-      std::vector<ui::SessionClient> out;
-      for (const ui::GameSession::NetClient& c : session.NetClients()) {
-        ui::SessionClient s;
-        s.name = c.name, s.uid = c.uid, s.connected = c.connected, s.local = c.local, s.ping = c.ping, s.quiet = c.quiet;
-        s.sources = c.sources;
-        out.push_back(std::move(s));
-      }
-      return out;
-    };
+    gameCfg.net = session.netLink();
   };
   auto startGameInterface = [&]() {
     if (game) return;
@@ -955,6 +945,9 @@ int main(int argc, char** argv) {
         if (auto code = hostfs::ReadFile(gameLuaFile)) game->RunString(*code, "@" + gameLuaFile);
         else Logf(LogLevel::Error, "cannot read %s", gameLuaFile.c_str());
       }
+      // A network game: READY to the others now that the screen is up (the original's DoInitializing ends so,
+      // 0x88c664); its beats wait for theirs. (After the test's Lua file, so that a test may stop it first.)
+      session.NetReady();
       session.onSync = [&game](const std::string& sync) { game->DeliverSync(sync); };
       session.takeOrders = [&game]() { return ui::TakeOrders(game->L()); };
     }

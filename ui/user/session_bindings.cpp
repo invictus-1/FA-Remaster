@@ -18,11 +18,13 @@
 #include "script/script_handle.h"
 #include "script/script_state.h"
 #include "sim/replay.h"
+#include "sim/session.h"
 #include "sim/sim.h"
 #include "sim/sim_view.h"
 #include "sim/terrain.h"
 #include "maui/world_source.h"
 #include "user/bindings.h"
+#include "user/keymap.h"
 #include "user/user_state.h"
 
 namespace moho::ui {
@@ -468,22 +470,25 @@ int l_SessionIsMultiplayer(lua_State* L) {
 }
 
 // GetSessionClients(): the one local player. (Field names as the scripts read them.) A network game: its clients
-// in the session's client order (the host's list: GameSession::NetClients; CWldUiInterface 0x88d540), ejectedBy
-// empty until the eject vote is built.
+// in the session's client order (CWldUiInterface 0x88d540: for each client of the client manager, name, uid,
+// connected = not ejected by this program (slot 1, 0x53c960), ping and quiet (slots 2 / 3), local, its command
+// sources, ejectedBy = the clients that asked to eject it (slot 11, CollectEjecters 0x53cc60), and FAF's exe's maxSP
+// (0x1291178)).
 int l_GetSessionClients(lua_State* L) {
   UserState* user = UserState::From(L);
-  if (user->config().sessionClients) {
-    const std::vector<SessionClient> clients = user->config().sessionClients();
+  if (NetGameLink* net = user->config().net) {
+    const std::vector<SessionClient> clients = net->Clients();
     lua_newtable(L);
     for (size_t i = 0; i < clients.size(); ++i) {
       const SessionClient& c = clients[i];
       lua_newtable(L);
+      SetField(L, "maxSP", static_cast<lua_Number>(c.maxSP));
       SetField(L, "name", c.name);
+      SetField(L, "uid", std::to_string(c.uid));
       SetField(L, "connected", c.connected);
-      SetField(L, "local", c.local);
       SetField(L, "ping", static_cast<lua_Number>(c.ping));
       SetField(L, "quiet", static_cast<lua_Number>(c.quiet));
-      SetField(L, "uid", std::to_string(c.uid));
+      SetField(L, "local", c.local);
       lua_pushstring(L, "authorizedCommandSources");
       lua_newtable(L);
       for (size_t k = 0; k < c.sources.size(); ++k) {
@@ -493,6 +498,10 @@ int l_GetSessionClients(lua_State* L) {
       lua_rawset(L, -3);
       lua_pushstring(L, "ejectedBy");
       lua_newtable(L);
+      for (size_t k = 0; k < c.ejectedBy.size(); ++k) {
+        lua_pushnumber(L, static_cast<lua_Number>(c.ejectedBy[k] + 1));
+        lua_rawseti(L, -2, static_cast<int>(k + 1));
+      }
       lua_rawset(L, -3);
       lua_rawseti(L, -2, static_cast<int>(i + 1));
     }
@@ -506,6 +515,7 @@ int l_GetSessionClients(lua_State* L) {
   }
   lua_newtable(L);
   lua_newtable(L);
+  SetField(L, "maxSP", static_cast<lua_Number>(50));
   SetField(L, "name", name);
   SetField(L, "connected", true);
   SetField(L, "local", true);
@@ -523,15 +533,77 @@ int l_GetSessionClients(lua_State* L) {
   return 1;
 }
 
+// EjectSessionClient(index) (FA exe 0x88d970): one argument ("%s\n  expected %d args, but got %d"), a session ("No
+// active session."), an integer 1 .. the number of clients ("Invalid client index %d, must be >= 1 and <= %d"), not
+// this program's own client ("Can't eject ourselves!"); then that client's Eject (vtable slot 10, CClientBase::Eject
+// 0x53cb10): this program's vote to eject it (net/beat_exchange_net.h RequestEject). FAF's disconnect dialog calls it
+// (its Eject button, and by itself after a while: /lua/ui/dialogs/disconnect.lua).
+int l_EjectSessionClient(lua_State* L) {
+  if (lua_gettop(L) != 1) return luaL_error(L, "%s\n  expected %d args, but got %d", "EjectSessionClient", 1, lua_gettop(L));
+  UserState* user = UserState::From(L);
+  if (!user->HasSim()) return luaL_error(L, "No active session.");
+  if (lua_type(L, 1) != LUA_TNUMBER) luaL_typerror(L, 1, "integer");
+  const int index = static_cast<int>(lua_tonumber(L, 1));
+  NetGameLink* net = user->config().net;
+  std::vector<SessionClient> clients;
+  if (net) clients = net->Clients();
+  const int count = net ? static_cast<int>(clients.size()) : 1;  // (a local game: its one client, this one)
+  if (index < 1 || index > count) return luaL_error(L, "Invalid client index %d, must be >= 1 and <= %d", index, count);
+  if (!net || clients[static_cast<size_t>(index - 1)].local) return luaL_error(L, "Can't eject ourselves!");
+  net->Eject(index - 1);
+  return 0;
+}
+
 // SessionSendChatMessage([clients,] message): a message to the session's clients, which the
 // game's script uses for chat lines, pings, pause notices, taunts and more; each receiver's
 // script hears it as gamemain.ReceiveChat(sender's name, message), and so does the sender's own
 // when it is among the receivers (so the script expects: a ping shows by its own echo, and
 // "Engine doesn't bounce private messages back to the sender" is the one case it works round).
 // `clients`: a client's number or a list of them, as GetSessionClients lists them; left out,
-// everyone. Here there is one client, the player's own (number 1): the message comes back to
-// it on the next frame. Written from the scripts' use; the original's code is not read.
+// everyone. A local game has one client, the player's own (number 1): the message comes back to
+// it on the next frame (written from the scripts' use, before the original was read). A network game as the
+// original (FA exe 0x88db00): one or two arguments ("%s\n  expected between %d and %d args, but got %d"); `clients`
+// an integer 1 .. the number of clients or a table of them ("Invalid client index.  Must be between 1 and %d
+// inclusive, not %d.", "Invalid value for client-or-clients.  Must be either a single integer or a table of
+// integers."), left out: every client, this one too; the message as bytes (LuaObject::ToByteStream; ours SerializeLua,
+// which writes what it cannot encode as nil where the original says "Can't encode message."), at most 1024 of them
+// ("Message too long."); then each client's CHAT (vtable slot 8, 0x53c9a0: control message 55; this program's own
+// straight back to its interface), heard there as gamemain.ReceiveChat(the sender's name, message).
 int l_SessionSendChatMessage(lua_State* L) {
+  if (NetGameLink* net = UserState::From(L)->config().net) {
+    const int n = lua_gettop(L);
+    if (n < 1 || n > 2)
+      return luaL_error(L, "%s\n  expected between %d and %d args, but got %d", "SessionSendChatMessage", 1, 2, n);
+    const int count = static_cast<int>(net->Clients().size());
+    std::vector<int> to;
+    if (n == 1) {
+      for (int i = 0; i < count; ++i) to.push_back(i);
+    } else if (lua_type(L, 1) == LUA_TNUMBER) {
+      const int i = static_cast<int>(lua_tonumber(L, 1));
+      if (i < 1 || i > count) return luaL_error(L, "Invalid client index.  Must be between 1 and %d inclusive, not %d.", count, i);
+      to.push_back(i - 1);
+    } else if (lua_type(L, 1) == LUA_TTABLE) {
+      std::vector<bool> mask(static_cast<size_t>(count), false);  // (0x88dc5c: a bit per client; one named twice gets one)
+      lua_pushnil(L);
+      while (lua_next(L, 1) != 0) {
+        if (lua_type(L, -1) != LUA_TNUMBER)
+          return luaL_error(L, "Invalid value for client-or-clients.  Must be either a single integer or a table of integers.");
+        const int i = static_cast<int>(lua_tonumber(L, -1));
+        if (i < 1 || i > count) return luaL_error(L, "Invalid client index.  Must be between 1 and %d inclusive, not %d.", count, i);
+        mask[static_cast<size_t>(i - 1)] = true;
+        lua_pop(L, 1);
+      }
+      for (int i = 0; i < count; ++i)
+        if (mask[static_cast<size_t>(i)]) to.push_back(i);
+    } else {
+      return luaL_error(L, "Invalid value for client-or-clients.  Must be either a single integer or a table of integers.");
+    }
+    std::string bytes;
+    SerializeLua(L, n, &bytes);
+    if (bytes.size() > 0x400) return luaL_error(L, "Message too long.");
+    net->SendChat(to, bytes);
+    return 0;
+  }
   if (!UserState::From(L)->HasSim()) return 0;  // (a session's state; the simulation itself is not asked: no wait for a beat)
   const int msg = lua_gettop(L) >= 2 ? 2 : 1;
   if (!lua_istable(L, msg) && !lua_isstring(L, msg)) return 0;
@@ -645,6 +717,78 @@ void DeliverChat(lua_State* L) {
     }
     lua_settop(L, list);
   }
+  lua_settop(L, top);
+}
+
+namespace {
+// import(module)[fn](args at the stack's top, nargs of them), its error logged as the original's
+// "Error running '<module>:<fn>': %s" (0x83d658, 0x83d72a, 0x83ecce); the arguments are taken.
+void CallModule(lua_State* L, const char* module, const char* fn, int nargs) {
+  const int base = lua_gettop(L) - nargs;
+  lua_pushcfunction(L, ScriptTraceback);
+  const int traceback = lua_gettop(L);
+  lua_getglobal(L, "import");
+  lua_pushstring(L, module);
+  if (lua_pcall(L, 1, 1, traceback) == 0 && lua_istable(L, -1)) {
+    lua_pushstring(L, fn);
+    lua_gettable(L, -2);
+    if (lua_isfunction(L, -1)) {
+      for (int i = 1; i <= nargs; ++i) lua_pushvalue(L, base + i);
+      if (lua_pcall(L, nargs, 0, traceback) != 0)
+        Logf(LogLevel::Warning, "Error running '%s:%s': %s", module, fn, lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
+    }
+  }
+  lua_settop(L, base);
+}
+}  // namespace
+
+// A network game's events since the last frame (NetGameLink::TakeEvents), to its scripts as the original hands them
+// over: the provider's waiting dialog (DoPostInitializing 0x88c72d / DoWaiting 0x88c781), the desync dialog
+// (CWldSession::DoBeat 0x895434 -> UI_ShowDesyncDialog 0x83d500: uimain.ShowDesyncDialog(beat, the names of the clients
+// whose checksum differs)), who changed the game's speed (CWldUiInterface 0x88b960 -> 0x83d670:
+// uimain.NoteGameSpeedChanged(client + 1, rate)), the chat (0x88b880 -> 0x83ebd0: gamemain.ReceiveChat(the sender's
+// name, the message)) and a lost connection's console line (0x88b810 -> 0x88b9d0: "<LOC Engine0002>%s disconnected.").
+// The original hands the chat, the speed and the console line to the main thread as it gets them (THREAD_InvokeAsync
+// 0x413b70); here they come before the frame's script threads. INFERRED: that order among them.
+void DeliverNetEvents(lua_State* L) {
+  UserState* user = UserState::From(L);
+  NetGameLink* net = user->config().net;
+  if (!net || !user->HasSim()) return;
+  NetEvents ev = net->TakeEvents();
+  const int top = lua_gettop(L);
+  if (ev.waiting > 0) user->CallProvider("StartWaitingDialog");
+  for (const auto& [beat, names] : ev.desyncs) {
+    lua_pushnumber(L, static_cast<lua_Number>(beat));
+    lua_newtable(L);
+    for (size_t i = 0; i < names.size(); ++i) {
+      lua_pushstring(L, names[i].c_str());
+      lua_rawseti(L, -2, static_cast<int>(i + 1));
+    }
+    CallModule(L, "/lua/ui/uimain.lua", "ShowDesyncDialog", 2);
+  }
+  for (const auto& [client, rate] : ev.speeds) {
+    lua_pushnumber(L, static_cast<lua_Number>(client + 1));
+    lua_pushnumber(L, static_cast<lua_Number>(rate));
+    CallModule(L, "/lua/ui/uimain.lua", "NoteGameSpeedChanged", 2);
+  }
+  for (const auto& [name, message] : ev.chats) {
+    lua_pushstring(L, name.c_str());
+    if (!PushSerializedLua(L, message)) lua_pushnil(L);
+    CallModule(L, "/lua/ui/game/gamemain.lua", "ReceiveChat", 2);
+  }
+  for (const std::string& name : ev.disconnects) {
+    std::string text = "<LOC Engine0002>%s disconnected.";
+    lua_getglobal(L, "LOC");  // (moho::Loc 0x4797b0 in the original)
+    if (lua_isfunction(L, -1)) {
+      lua_pushstring(L, text.c_str());
+      if (lua_pcall(L, 1, 1, 0) == 0 && lua_isstring(L, -1)) text = lua_tostring(L, -1);
+    }
+    lua_settop(L, top);
+    const size_t at = text.find("%s");
+    if (at != std::string::npos) text.replace(at, 2, name);
+    ConsolePrint(L, text);
+  }
+  if (ev.waiting < 0) user->CallProvider("StopWaitingDialog");
   lua_settop(L, top);
 }
 
@@ -764,8 +908,14 @@ int GameSpeedOf(lua_State* L) {
   const GamePace* pace = UserState::From(L)->config().pace;
   return pace ? pace->rate : 0;
 }
+// (A network game: a request to every client, control message 56, SetSimRate 0x53e590 through SetGameSpeed 0x88e42d;
+// the rate changes once the clients agree on it, GameSession takes it from the exchange each frame. INFERRED: the
+// original's check before it, 0x88e3aa (a player who has an army, or a session whose byte +0x486 is off), is left
+// out: every client may ask.)
 void SetGameSpeedTo(lua_State* L, int rate) {
-  GamePace* pace = UserState::From(L)->config().pace;
+  UserState* user = UserState::From(L);
+  if (NetGameLink* net = user->config().net) return net->RequestSpeed(rate);
+  GamePace* pace = user->config().pace;
   if (pace && pace->adjustable) pace->rate = rate;
 }
 
@@ -927,7 +1077,16 @@ void RegisterSessionBindings(lua_State* L) {
   SetGlobal(L, "GetArmiesTable", l_GetArmiesTable);
   SetGlobal(L, "GetEconomyTotals", l_GetEconomyTotals);
   SetGlobal(L, "GetSessionClients", l_GetSessionClients);
+  SetGlobal(L, "EjectSessionClient", l_EjectSessionClient);
   SetGlobal(L, "SessionSendChatMessage", l_SessionSendChatMessage);
+  // moho64ui_NetTestForTests(what [, beat]): a network game's test switch (NetGameLink::TestSwitch: "freeze", or
+  // "corrupt" with the beat whose checksum is changed); nothing in a local game. The host's own function for tests.
+  lua_register(L, "moho64ui_NetTestForTests", [](lua_State* L) -> int {
+    const std::string what = luaL_checkstring(L, 1);
+    const uint32_t beat = lua_isnumber(L, 2) ? static_cast<uint32_t>(lua_tonumber(L, 2)) : 0;
+    if (NetGameLink* net = UserState::From(L)->config().net) net->TestSwitch(what, beat);
+    return 0;
+  });
   SetGlobal(L, "IsAlly", l_IsAlly);
   SetGlobal(L, "IsNeutral", l_IsNeutral);
   SetGlobal(L, "IsEnemy", l_IsEnemy);

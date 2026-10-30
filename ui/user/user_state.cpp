@@ -285,7 +285,7 @@ void UserState::LinkSession(const Config& links) {
   config_.world = links.world;
   config_.pace = links.pace;
   config_.timeline = links.timeline;
-  config_.sessionClients = links.sessionClients;
+  config_.net = links.net;
   config_.multiplayer = links.multiplayer;
   SetHeadSize(links.width, links.height);
 }
@@ -370,8 +370,10 @@ void UserState::Frame(double seconds) {
   // A network game's disconnect dialog: the original calls uimain.UpdateDisconnectDialog() every playing frame right
   // after the session's frame (func_DoPlayingAction 0x88c7c0 -> 0x83d420, at 0x88c83e), the script deciding from
   // GetSessionClients whether a dialog shows. Ours: in a network game only (a local game's one client never needs it).
-  if (config_.sessionClients) {
+  // (The original's waiting state, DoWaiting 0x88c7b8, calls it too: so does this, every frame of a network game.)
+  if (config_.net) {
     lua_State* L = state_->L();
+    DeliverNetEvents(L);  // (the waiting dialog first: DoPostInitializing opens it, DoWaiting then updates this one)
     const int top = lua_gettop(L);
     lua_pushcfunction(L, ScriptTraceback);
     lua_getglobal(L, "import");

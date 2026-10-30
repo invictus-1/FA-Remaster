@@ -2,9 +2,18 @@
 -- net_game in net_lobby_run.sh). In the front end it hosts on TCP port 16121 through FAF's own lobbyComm; once the
 -- joiner is there it launches a game of Seton's Clutch with the host's army (1) and the joiner's (2) as FAF's lobby.lua
 -- does: {Type = 'Launch', GameInfo = ...} to everyone, then its own LaunchGame. In the game both give orders (the
--- commander walks and builds a power generator) and run to beat 300; the joiner then quits, and the host's game must
--- wait (its tick stands) with the joiner reported lost (GetSessionClients). Both record the game (--replay-out): their
--- fingerprints (<prefix>.fp) must be equal at every beat both ran (the runner compares them).
+-- commander walks and builds a power generator); then chat both ways (SessionSendChatMessage), the game's speed
+-- changed by each (both must end on the same), a pause by the host that both see, and a checksum the joiner changes on
+-- purpose at beat 250 (both must show the desync dialog); they run to beat 300; the joiner then quits: its connection
+-- ends, and the host ejects it at once (the original's 202 / 203) and runs on without it. Both record the game
+-- (--replay-out): their fingerprints (<prefix>.fp) must be equal at every beat both ran (the runner compares them).
+-- Variants (a global set in front of this file by the runner, both programs alike):
+--   NET_GAME_AI: an AI army on the host's side too.
+--   NET_GAME_EJECT: after the orders the joiner stops answering (moho64ui_NetTestForTests("freeze")); the host sees it
+--     go quiet, ejects it (EjectSessionClient, as the disconnect dialog's button) and its game runs on without it; the
+--     runner then plays the host's replay (net_game_replay.lua) and compares its fingerprints with the host's.
+--   NET_GAME_LOADING: the joiner stops answering before it is ready (a player lost while loading): the host's beats
+--     wait (the waiting dialog), it ejects the joiner and its game starts without it.
 --   moho64ui --init <init.lua> --prefs <a copy> --stage frontend --no-world --lua ui/tests/net_game_host.lua
 --            --game-lua ui/tests/net_game_host.lua --replay-out <dir>/r --frames 2000000000 --log host.log
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
@@ -22,11 +31,12 @@ local function WaitFor(cond, seconds)  -- (the PC's clock: the other program run
     while not cond() and moho64ui_WallSeconds() < deadline do WaitFrames(1) end
     return cond()
 end
--- (a hang ends the run after three minutes of the PC's clock)
+local EJECT, LOADING = rawget(_G, "NET_GAME_EJECT"), rawget(_G, "NET_GAME_LOADING")
+-- (a hang ends the run after four minutes of the PC's clock)
 ForkThread(function()
-    local stop = moho64ui_WallSeconds() + 180
+    local stop = moho64ui_WallSeconds() + 240
     while moho64ui_WallSeconds() < stop do WaitFrames(1) end
-    LOG("TEST FAIL the run took over three minutes")
+    LOG("TEST FAIL the run took over four minutes")
     LOG("TEST done: hung")
     ExitApplication()
 end)
@@ -40,7 +50,7 @@ if not inGame then
     local config = {
         GameMods = {},
         GameOptions = { ScenarioFile = "/maps/scmp_009/scmp_009_scenario.lua", Victory = "sandbox", CheatsEnabled = "false",
-                        FogOfWar = "explored", GameSpeed = "normal", UnitCap = "1000", Share = "ShareUntilDeath",
+                        FogOfWar = "explored", GameSpeed = "adjustable", UnitCap = "1000", Share = "ShareUntilDeath",
                         CivilianAlliance = "enemy", PrebuiltUnits = "Off", NoRushOption = "Off", Timeouts = "3",
                         TeamSpawn = "fixed", TeamLock = "locked", DisconnectionDelay02 = "90", AIReplacement = "Off" },
         Observers = {},
@@ -81,16 +91,61 @@ if not inGame then
     return
 end
 
--- the game
+-- the game: what the engine hands the scripts is noted (the chat, the speed's changes, the desync dialog)
+local heard, speeds, desyncs, console = {}, {}, {}, {}
+AddConsoleOutputReciever(function(text) table.insert(console, text) end)
+local gamemain = import("/lua/ui/game/gamemain.lua")
+local receiveChat = gamemain.ReceiveChat
+gamemain.ReceiveChat = function(sender, data)
+    if type(data) == "table" and data.NetTest then table.insert(heard, sender .. ": " .. data.NetTest) end
+    return receiveChat(sender, data)
+end
+local uimain = import("/lua/ui/uimain.lua")
+local noteSpeed, showDesync = uimain.NoteGameSpeedChanged, uimain.ShowDesyncDialog
+uimain.NoteGameSpeedChanged = function(client, rate)
+    table.insert(speeds, client .. ":" .. rate)
+    return noteSpeed(client, rate)
+end
+uimain.ShowDesyncDialog = function(beat, strings)
+    table.insert(desyncs, { beat = beat, who = strings[1], n = table.getn(strings) })
+    return showDesync(beat, strings)
+end
+local function Heard(line)
+    for _, l in heard do if l == line then return true end end
+    return false
+end
+local function Noted(list, entry)
+    for _, l in list do if l == entry then return true end end
+    return false
+end
+
 ForkThread(function()
     check("a network game", SessionIsMultiplayer(), true)
     check("the host's army", GetFocusArmy(), 1)
+    check("beat 1 waits for the others' READY (after the game's screen)", GameTick(), 0)
     local clients = GetSessionClients()
     check("two clients", table.getn(clients), 2)
     check("the host is client 1 (the first army's)", clients[1] and clients[1].name, "Host")
     check("and the one here", clients[1] and clients[1]['local'], true)
     check("the joiner client 2", clients[2] and clients[2].name, "Joiner")
     check("speaking for source 2", clients[2] and clients[2].authorizedCommandSources[1], 2)
+    check("nobody ejected", clients[2] and table.getn(clients[2].ejectedBy), 0)
+    check("FAF's maxSP field", clients[2] and clients[2].maxSP, 50)
+    if LOADING then
+        -- the joiner never says READY: no beat runs; it goes quiet; ejected, it counts as ready and the game starts
+        WaitFor(function() return false end, 3)
+        check("the beats wait for the joiner's READY", GameTick(), 0)
+        check("the joiner goes quiet (the disconnect dialog's cue)", WaitFor(function()
+            local cl = GetSessionClients()
+            return cl[2] ~= nil and cl[2].connected and cl[2].quiet > 5000
+        end, 60), true)
+        EjectSessionClient(2)
+        check("ejected: no longer connected here", WaitFor(function() return GetSessionClients()[2].connected == false end, 5), true)
+        check("the game starts without it", WaitFor(function() return GameTick() >= 40 end, 60), true)
+        LOG("TEST done: " .. failed .. " failed")
+        ExitApplication()
+        return
+    end
     check("the commander comes", WaitFor(function() return GameTick() >= 60 end, 60), true)
     local view = import("/lua/ui/game/worldview.lua").viewLeft
     local cdr = GetArmyAvatars()[1]
@@ -125,17 +180,70 @@ ForkThread(function()
         end
         return false
     end, 30), true)
+    if EJECT then
+        -- the joiner stops answering after beat 150: our game waits for it, it goes quiet; we eject it and go on
+        check("the joiner goes quiet (the disconnect dialog's cue)", WaitFor(function()
+            local cl = GetSessionClients()
+            return cl[2] ~= nil and cl[2].connected and cl[2].quiet > 5000
+        end, 60), true)
+        local stood = GameTick()
+        WaitFor(function() return false end, 1)
+        check("meanwhile the game waits (the tick stands)", GameTick(), stood)
+        EjectSessionClient(2)
+        -- (GetSessionClients is FAF's copy, /lua/ui/override/SessionClients.lua, refreshed every 0.1 s)
+        check("ejected: no longer connected here", WaitFor(function() return GetSessionClients()[2].connected == false end, 5), true)
+        local cl = GetSessionClients()
+        check("ejected by the host (client 1)", cl[2] and cl[2].ejectedBy[1], 1)
+        check("ejecting ourselves is refused", pcall(EjectSessionClient, 1), false)
+        check("the game runs on without the joiner", WaitFor(function() return GameTick() >= stood + 60 end, 60), true)
+        LOG("TEST note: the joiner was ejected at tick " .. stood .. "; the host's game ends at tick " .. GameTick())
+        LOG("TEST done: " .. failed .. " failed")
+        ExitApplication()
+        return
+    end
+    -- chat: to the joiner alone (no echo here), to everyone (the echo here too); the joiner's to us
+    WaitFor(function() return GameTick() >= 150 end, 60)
+    SessionSendChatMessage(2, { NetTest = "host to joiner" })
+    SessionSendChatMessage({ NetTest = "host to all" })
+    check("our message to everyone comes back to us, from us", WaitFor(function() return Heard("Host: host to all") end, 10), true)
+    check("the joiner's message to us arrives, from the joiner", WaitFor(function() return Heard("Joiner: joiner to host") end, 30), true)
+    check("our message to the joiner alone does not come back", Heard("Host: host to joiner"), false)
+    check("a client that is not there is refused", pcall(SessionSendChatMessage, 3, { NetTest = "x" }), false)
+    -- the game's speed: ours, then the joiner's answer; both end on the same
+    SetGameSpeed(3)
+    check("the speed we asked for is ours at once", GetGameSpeed(), 3)
+    check("and the change is noted: client 1 to +3", WaitFor(function() return Noted(speeds, "1:3") end, 5), true)
+    check("the joiner then asks for +1: we end on it", WaitFor(function() return GetGameSpeed() == 1 end, 30), true)
+    check("and the change is noted: client 2 to +1", WaitFor(function() return Noted(speeds, "2:1") end, 5), true)
+    -- a pause both see (the stream's own message), then on again
+    SessionRequestPause()
+    check("the pause comes", WaitFor(function() return SessionIsPaused() end, 20), true)
+    local paused = GameTick()
+    WaitFor(function() return false end, 1)
+    check("while paused the tick stands", GameTick(), paused)
+    SessionResume()
+    check("and goes on after the resume", WaitFor(function() return GameTick() > paused + 5 end, 30), true)
+    -- the joiner changed its checksum of beat 250: the desync dialog shows here, naming the joiner
     check("beat 300 comes", WaitFor(function() return GameTick() >= 300 end, 90), true)
-    -- the joiner quits after beat 310: our game must then wait for it, with it lost
-    check("the joiner is reported lost", WaitFor(function()
+    check("the desync dialog is shown", WaitFor(function() return table.getn(desyncs) > 0 end, 10), true)
+    check("naming the joiner", desyncs[1] and desyncs[1].who, "Joiner")
+    check("at the beat compared or after it", desyncs[1] ~= nil and desyncs[1].beat >= 250, true)
+    LOG("TEST note: desync dialog at beat " .. tostring(desyncs[1] and desyncs[1].beat))
+    -- the joiner quits after beat 310: its connection ends, and it is ejected here at once (no dialog), the game runs on
+    check("the joiner, gone, is ejected at once", WaitFor(function()
         local cl = GetSessionClients()
         return cl[2] ~= nil and cl[2].connected == false
     end, 60), true)
-    local stood = GameTick()
-    WaitFor(function() return false end, 4)
-    check("the game waits (the tick stands)", GameTick(), stood)
-    check("near where the joiner left", stood >= 300 and stood <= 330, true)
-    LOG("TEST note: the host's game stands at tick " .. tostring(stood))
+    local left = GameTick()
+    local cl = GetSessionClients()
+    check("ejected by the host (client 1)", cl[2] and cl[2].ejectedBy[1], 1)
+    check("near where the joiner left", left >= 300 and left <= 330, true)
+    check("the console says so", WaitFor(function()
+        for _, l in console do if string.find(l, "Joiner") and string.find(l, "disconnected") then return true end end
+        return false
+    end, 5), true)
+    check("and the game runs on without it", WaitFor(function() return GameTick() >= left + 40 end, 60), true)
+    LOG("TEST note: the joiner left at tick " .. tostring(left) .. "; the host's game ends at tick " .. GameTick())
     LOG("TEST done: " .. failed .. " failed")
     ExitApplication()
 end)

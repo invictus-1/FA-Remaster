@@ -1104,15 +1104,43 @@ struct GameSession::Net {
   std::unique_ptr<Lockstep> lockstep;
   std::vector<NetClient> clients;  // (in client order; their links asked when shown: NetClients)
   uint8_t local = 0;
-  bool started = false;  // (Lockstep::Start done, once the load is through)
-  bool firstIn = false;  // (every client's first beat is in: the load may end)
-  std::string firstMerged;
+  bool readySent = false;      // (NetReady: READY sent, the lockstep started)
+  bool everyoneReady = false;  // (every client READY or ejected: the beats run)
+  bool waitingShown = false;   // (the provider's waiting dialog asked for)
+  NetEvents events;            // (for the interface's next frame: NetGameLink::TakeEvents)
+  std::atomic<uint32_t> corruptAt{0};  // (moho64ui_NetTestForTests("corrupt", beat): our checksum of that beat changed)
+  std::unique_ptr<NetGameLink> link;
   bool waiting = false;
   std::chrono::steady_clock::time_point waitingSince{};
   bool waitTold = false;
   uint32_t beat = 0;      // the beat whose orders were taken last
   bool afterDue = false;  // (that beat has run, or runs on its thread: AfterBeat is due)
   std::string digest;     // its state's digest, every 50th beat (made on the thread that ran it, read after it)
+};
+
+// The interface's side of it (user/user_state.h): what GetSessionClients, EjectSessionClient, SessionSendChatMessage
+// and SetGameSpeed ask of the game, and the events for the next frame.
+class NetLinkOf final : public NetGameLink {
+ public:
+  explicit NetLinkOf(GameSession* session) : session_(session) {}
+  std::vector<SessionClient> Clients() override {
+    std::vector<SessionClient> out;
+    for (const GameSession::NetClient& c : session_->NetClients()) {
+      SessionClient s;
+      s.name = c.name, s.uid = c.uid, s.connected = c.connected, s.local = c.local, s.ping = c.ping, s.quiet = c.quiet;
+      s.sources = c.sources, s.ejectedBy = c.ejectedBy, s.maxSP = c.maxSP;
+      out.push_back(std::move(s));
+    }
+    return out;
+  }
+  void Eject(int client) override { session_->NetEject(client); }
+  void SendChat(const std::vector<int>& clients, const std::string& message) override { session_->NetChat(clients, message); }
+  void RequestSpeed(int rate) override { session_->NetSpeed(rate); }
+  NetEvents TakeEvents() override { return session_->NetTakeEvents(); }
+  void TestSwitch(const std::string& what, uint32_t beat) override { session_->NetTestSwitch(what, beat); }
+
+ private:
+  GameSession* session_;
 };
 
 uint32_t GameSession::InputDelay(int rate) {
@@ -1208,10 +1236,12 @@ bool GameSession::LaunchWith(lua_State* L, int config, net::LobbyCore* lobby, st
         Logf(LogLevel::Warning, "moho64ui: the network game's client %u (%s, uid %d) has no connection", c.client, c.name.c_str(),
              c.uid);
     }
-    net->exchange = std::make_unique<net::NetBeatExchange>(std::move(link.connector), net->local, std::move(peers));
+    net->exchange = std::make_unique<net::NetBeatExchange>(std::move(link.connector), net->local, std::move(peers),
+                                                           session.adjustableSpeed, session.gameSpeed);
     net->exchange->TakeEarly(std::move(link.early));
     const uint32_t delay = InputDelay(session.gameSpeed);
     net->lockstep = std::make_unique<Lockstep>(net->exchange.get(), net->local, std::move(all), delay);
+    net->link = std::make_unique<NetLinkOf>(this);
     Logf(LogLevel::Info, "moho64ui: a network game: %zu clients, this one is client %u (uid %d); input delay %u beats; seed %u",
          net->clients.size(), net->local, lobby->Uid(), delay, session.header.seed);
   }
@@ -1234,6 +1264,9 @@ bool GameSession::LaunchWith(lua_State* L, int config, net::LobbyCore* lobby, st
     lua_pop(L, 1);
   }
   lua_pop(L, 1);
+  // (a network game runs no beats behind the loading screen (those are ours): its beats wait for every client's READY,
+  // which each one sends once its game screen is up)
+  if (lobby) aheadable_ = false;
   profile_ = ProfileName(L);
   playData_.clear();
   play_.reset();
@@ -1609,7 +1642,7 @@ std::string GameSession::LoadingMapFolder() const {
 // skirmish's second frame at 4K). Its rule: a picture handed a session is beaten only once swapped in (a map let go of
 // is never beaten: LetGoOfGameMap).
 void GameSession::ServeLoad() {
-  NetLoadWait();
+  if (net_) net_->exchange->Service();  // (a network game: the others keep hearing from this program while it loads)
 #ifdef MOHO64UI_WORLD_PICTURE
   if (load_ != Load::Running || loadPrepared_ || BeatRunning() || !loadOk_ || !loadSim_) return;
   if (!windowPicture_ || windowPicture_->pending != WindowPicture::Kind::Game) return;
@@ -1630,7 +1663,6 @@ void GameSession::ServeLoad() {
 
 bool GameSession::LoadDone() const {
   if (load_ != Load::Running || BeatRunning()) return false;
-  if (net_ && loadOk_ && !net_->firstIn) return false;  // (a network game: until every client has loaded, NetLoadWait)
 #ifdef MOHO64UI_WORLD_PICTURE
   // (and the game's map opened behind the window's picture: the loading screen shows until both are there)
   if (windowPicture_ && windowPicture_->pending == WindowPicture::Kind::Game && !windowPicture_->picture.MapReady() &&
@@ -2383,6 +2415,10 @@ bool GameSession::RunDueBeats(bool catchingUp) {
     // on without it (the picture keeps drawing, the interface runs).
     std::string orders;
     if (net_) {
+      if (!NetEveryoneReady()) {  // (the time waited does not pile up, as a replay's viewer's hold)
+        due_ = 0;
+        break;
+      }
       if (takeOrders) net_->lockstep->Queue(takeOrders());
       if (!NetBeatOrders(&orders)) {
         due_ += 0.1;
@@ -2394,6 +2430,8 @@ bool GameSession::RunDueBeats(bool catchingUp) {
     }
     Record(orders);
     if (!orders.empty() && !ApplyCommands(*sim_, orders)) Logf(LogLevel::Warning, "moho64ui: an order was not understood by the simulation");
+    // (a network game's beat 1 runs here, not before the game's screen: its fingerprint's beat 0 as RunFirstBeat's)
+    if (net_ && sim_->tick() == 0 && Fingerprinting()) fp_->Beat(*sim_, 0);
     if (sim_->Paused()) {
       // (recorded as every beat: the original's replays hold their paused beats (the engine: AIR 40, LAND 72), and
       // a paused beat changes the simulation's state, so a playback must run it too)
@@ -2451,47 +2489,67 @@ bool GameSession::NetBeatOrders(std::string* merged) {
 // After a network game's beat, on the thread that ran it (the engine's: on the beats' thread right after the beat):
 // its digest for the checksum, every 50th beat only (not free).
 void GameSession::NetDigest() {
-  if (net_ && net_->afterDue && net_->beat % kLockstepChecksumPeriod == 0) net_->digest = LockstepDigest(*sim_, net_->beat);
+  if (!net_ || !net_->afterDue || net_->beat % kLockstepChecksumPeriod != 0) return;
+  net_->digest = LockstepDigest(*sim_, net_->beat);
+  if (net_->beat == net_->corruptAt && !net_->digest.empty()) {  // (the test switch: a desync on purpose)
+    net_->digest[0] = static_cast<char>(net_->digest[0] ^ 0x5a);
+    Logf(LogLevel::Info, "moho64ui: beat %u: our checksum is changed on purpose (moho64ui_NetTestForTests)", net_->beat);
+  }
 }
 
-// Then, here: the lockstep hears of it (sends our checksum, compares the others'); a difference is logged (the
-// desync dialog, uimain.ShowDesyncDialog, is the next step).
+// Then, here: the lockstep hears of it (sends our checksum, compares the others'); a difference goes to the desync
+// dialog: as the original's CWldSession::DoBeat 0x894530 after a beat whose sync names desyncs, one
+// uimain.ShowDesyncDialog(beat, strings) (0x895434) with the beat just run (CWldSession+0x458, 0x895429) and, for
+// each difference, the name of the client whose checksum differs (0x895364: its entry in the session's client list;
+// GPGNET_ReportDesync 0x7b9ac0 beside it is not ours).
 void GameSession::NetAfterBeat() {
   if (!net_ || !net_->afterDue) return;
   net_->afterDue = false;
   net_->lockstep->AfterBeat(net_->digest);
   std::vector<LockstepDesync>& desyncs = net_->lockstep->desyncs();
-  for (const LockstepDesync& d : desyncs)
+  std::vector<std::string> names;
+  for (const LockstepDesync& d : desyncs) {
     Logf(LogLevel::Warning, "moho64ui: the network game is out of step at beat %u: client %u's checksum differs", d.beat, d.client);
+    std::string name;
+    for (const NetClient& c : net_->clients)
+      if (c.client == d.client) name = c.name;
+    names.push_back(name);
+  }
+  if (!names.empty()) net_->events.desyncs.emplace_back(net_->beat, std::move(names));
   desyncs.clear();
 }
 
-// While a network game's load ends (ServeLoad, each frame): once this program's load is through, the lockstep starts
-// (beats 1..delay sent empty) and the first beat's orders are asked for until every client's are in; then the load is
-// done (LoadDone). INFERRED: the original's clients wait for each other's READY (control message 53) before the first
-// beat; here the first beat's batches say the same.
-void GameSession::NetLoadWait() {
-  if (!net_ || net_->firstIn || load_ != Load::Running || BeatRunning() || !loadOk_) return;
-  if (!net_->started) {
-    net_->started = true;
-    net_->lockstep->Start();
-    Logf(LogLevel::Info, "moho64ui: this program has loaded the network game; waiting for the others");
-  }
-  if (NetBeatOrders(&net_->firstMerged)) {
-    net_->firstIn = true;
-    Logf(LogLevel::Info, "moho64ui: every player has loaded: the network game starts");
-  } else if (!window) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  }
+// The game's screen is up (main.cpp, after CreateGameInterface; the original sends READY at the end of DoInitializing,
+// 0x88c664 -> CClientManagerImpl slot 11, 0x53e4b0): READY to every client and the lockstep's start (beats 1 .. the
+// input delay, empty: the original closes them at once after its first sync).
+void GameSession::NetReady() {
+  if (!net_ || net_->readySent) return;
+  net_->readySent = true;
+  net_->lockstep->Start();
+  net_->exchange->SendReady();
+  Logf(LogLevel::Info, "moho64ui: this program's game screen is up: READY sent to the other players");
 }
 
-// The first beat's orders (taken while the load ended), before that beat.
-void GameSession::NetFirstOrders() {
-  if (!net_ || !net_->firstIn) return;
-  Record(net_->firstMerged);
-  if (!net_->firstMerged.empty() && !ApplyCommands(*sim_, net_->firstMerged))
-    Logf(LogLevel::Warning, "moho64ui: an order was not understood by the simulation");
-  net_->firstMerged.clear();
+// Before each beat of a network game: true once every client is ready (READY, or ejected: IsEveryoneReady 0x53e560).
+// Until then no beat runs and the provider's StartWaitingDialog shows (DoPostInitializing 0x88c6d0 asks it when not
+// everyone is ready at once, DoWaiting 0x88c750 its StopWaitingDialog once they are; the disconnect dialog is updated
+// meanwhile, user_state.cpp).
+bool GameSession::NetEveryoneReady() {
+  Net& n = *net_;
+  if (n.everyoneReady) return true;
+  if (!n.readySent) return false;
+  if (n.exchange->EveryoneReady()) {
+    n.everyoneReady = true;
+    if (n.waitingShown) n.events.waiting = -1;
+    Logf(LogLevel::Info, "moho64ui: every player is ready: the network game's beats run");
+    return true;
+  }
+  if (!n.waitingShown) {
+    n.waitingShown = true;
+    n.events.waiting = 1;
+    Logf(LogLevel::Info, "moho64ui: waiting for the other players to be ready");
+  }
+  return false;
 }
 
 std::vector<GameSession::NetClient> GameSession::NetClients() const {
@@ -2500,9 +2558,61 @@ std::vector<GameSession::NetClient> GameSession::NetClients() const {
   out = net_->clients;
   for (NetClient& c : out) {
     const net::ClientLink l = net_->exchange->Link(c.client);
-    c.connected = l.connected, c.ping = l.ping, c.quiet = l.quiet;
+    c.connected = l.connected, c.ping = l.ping, c.quiet = l.quiet, c.maxSP = l.maxSP;
+    c.ejectedBy.assign(l.ejectedBy.begin(), l.ejectedBy.end());
   }
   return out;
+}
+
+NetGameLink* GameSession::netLink() const { return net_ ? net_->link.get() : nullptr; }
+
+void GameSession::NetEject(int client) {
+  if (!net_) return;
+  for (const NetClient& c : net_->clients)
+    if (c.client == client && !c.local) {
+      Logf(LogLevel::Info, "moho64ui: this player votes to eject client %d (%s)", client, c.name.c_str());
+      net_->exchange->RequestEject(static_cast<uint8_t>(client));
+    }
+}
+
+void GameSession::NetChat(const std::vector<int>& clients, const std::string& message) {
+  if (!net_) return;
+  for (int c : clients) net_->exchange->SendChat(static_cast<uint8_t>(c), message);
+}
+
+void GameSession::NetSpeed(int rate) {
+  if (!net_) return;
+  net_->exchange->RequestRate(rate);
+  pace.rate = net_->exchange->Rate();  // (ours is taken here at once, as the original's own broadcast is: GetGameSpeed)
+}
+
+NetEvents GameSession::NetTakeEvents() {
+  NetEvents out;
+  if (!net_) return out;
+  auto nameOf = [&](uint8_t client) {
+    for (const NetClient& c : net_->clients)
+      if (c.client == client) return c.name;
+    return std::string();
+  };
+  out = std::move(net_->events);
+  net_->events = NetEvents{};
+  for (auto& [client, message] : net_->exchange->TakeChats()) out.chats.emplace_back(nameOf(client), std::move(message));
+  for (const auto& [client, rate] : net_->exchange->TakeRateNotes()) out.speeds.emplace_back(client, rate);
+  for (uint8_t client : net_->exchange->TakeDisconnects()) {
+    Logf(LogLevel::Info, "moho64ui: client %u (%s) disconnected: ejected", client, nameOf(client).c_str());
+    out.disconnects.push_back(nameOf(client));
+  }
+  return out;
+}
+
+void GameSession::NetTestSwitch(const std::string& what, uint32_t beat) {
+  if (!net_) return;
+  if (what == "freeze") {
+    Logf(LogLevel::Info, "moho64ui: this program's network game is frozen (moho64ui_NetTestForTests)");
+    net_->exchange->FreezeForTests();
+  } else if (what == "corrupt") {
+    net_->corruptAt = beat;
+  }
 }
 
 void GameSession::RunAhead(uint32_t toTick) {
@@ -2515,6 +2625,7 @@ bool GameSession::RunningAhead() const { return aheadTo_ != 0; }
 
 void GameSession::Advance(double seconds) {
   if (!sim_) return;
+  if (net_) pace.rate = net_->exchange->Rate();  // (a network game's speed: the one its clients agreed on)
   if (aheadTo_) {  // (RunAhead: a beat as soon as the last is through, whatever the time; no time counts meanwhile)
     if (BeatRunning()) return;
     if (beatToFinish_) FinishBeat();
@@ -2846,9 +2957,9 @@ void GameSession::ApplyBeatSounds(const std::vector<SoundAction>& actions) {
 void GameSession::RunFirstBeat() {
   if (worker_) worker_->Wait();
   if (!sim_ || sim_->tick() != 0) return;
+  if (net_) return;  // (a network game's beat 1 waits for every client's READY, after the game's screen: RunDueBeats)
   // (A replay's first beat is its stream's first: what came before the first Advance, then it.)
   if (play_ && !play_->AtEnd()) play_->ApplyUntilAdvance(*sim_);
-  NetFirstOrders();
   if (Fingerprinting()) fp_->Beat(*sim_, 0);  // (beat 0: the state Start left)
   sim_->Tick();
   NetDigest();
@@ -2866,9 +2977,8 @@ void GameSession::RunFirstBeat() {
 void GameSession::StartFirstBeat() {
   if (!beatsOnThread) return RunFirstBeat();
   if (worker_) worker_->Wait();
-  if (!sim_ || sim_->tick() != 0) return;
+  if (!sim_ || sim_->tick() != 0 || net_) return;  // (as RunFirstBeat)
   if (play_ && !play_->AtEnd()) play_->ApplyUntilAdvance(*sim_);  // (as RunFirstBeat)
-  NetFirstOrders();
   if (Fingerprinting()) fp_->Beat(*sim_, 0);
   if (!worker_) worker_ = std::make_unique<BeatWorker>();
   firstBeatToFinish_ = true;
