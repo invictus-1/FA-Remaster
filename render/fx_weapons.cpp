@@ -321,6 +321,11 @@ function __fxWeaponsTick()
     local f = F(w)
     local u = f.unit
     if not f.dead and not __fxDead(Id(u)) and not rawget(u, 'Dead') then
+      -- ([retarget] the engine's target check: a weapon whose script let its target go - FAF's RackSalvoFireReadyState
+      -- resets it when no shot has gone in its reload and 3 s, which a slow turret on a far point (the Mavor) needs
+      -- longer than to aim - finds the stand's point again, as the engine finds the target still there; before, the
+      -- Mavor never fired in the stand)
+      if f.wanted and not f.target and f.enabled then __fxSetTarget(w, f.wanted) end
       if f.clock > 0 then f.clock = f.clock - 1 end
       if f.enabled and not f.bp.ManualFire and f.clock == 0 and f.target and (rawget(u, '__fireState') or 0) ~= 1 and
          __fxCanFire(w) and __fxInReach(w) then
@@ -428,6 +433,7 @@ function __fxOrder(id, x, y, z, labels, manual, stop)
     if stop then
       -- (a manual-fire weapon too: after its shot it holds its target until the unit is given another order, and
       -- one that unpacked to fire packs up again only when it loses it - a scripted gun closes then)
+      f.wanted = nil
       __fxSetTarget(w, nil)
     elseif manualNamed[key] then
       __fxOrderFire(w, t)
@@ -443,6 +449,7 @@ function __fxOrder(id, x, y, z, labels, manual, stop)
     elseif namedCount == 0 and bp.CannotAttackGround then
       line = 'cannot fire at the ground (name it to make it)'
     else
+      f.wanted = Vector(t[1], t[2], t[3])
       __fxSetTarget(w, t)
       line = 'has the point as its target'
       if not f.enabled then line = line .. ', but its script has it switched off' end
