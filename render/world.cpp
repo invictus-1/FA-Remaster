@@ -1559,6 +1559,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     if (!extraView) water.ocean.Begin(time, oceanOn, sidePicture, rough, dust.wind);  // [views] (a view besides the first: the first's sea)
     water.ocean.lift = oceanOn && oceanLift;  // [lift]
     if (!sidePicture) effects.drawnMoves = water.ocean.Riding();  // [whitecaps] (the effects on a riding hull's bones ride with it)
+    effects.snowLying = weatherOn ? snowLying : 0.0f;              // [snowkick]
     if (oceanOn) water.PrepareOcean(waterRipples, winterWater, surf, waterDetail, oceanLift);
   }
   // [stream] streams as water (stream_water.h): their props left out of the models' drawing while the streams' pass draws them
