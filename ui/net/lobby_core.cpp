@@ -341,8 +341,22 @@ void LobbyCore::OnMessage(int conn, const Message& m) {
       return;
     }
     default:
+      if (m.type < 100) early_.push_back(ConnEvent{ConnEvent::Received, conn, false, m});  // (GameLink)
       return;
   }
+}
+
+GameLink LobbyCore::TakeForGame() {
+  Pump();  // (what came in up to now: the lobby's messages handled, the game's kept)
+  GameLink link;
+  link.localUid = uid_;
+  link.nonce = nonce_;
+  for (const auto& [u, p] : peers_)
+    if (p.conn) link.connByUid[u] = p.conn;
+  link.early = std::move(early_);
+  early_.clear();
+  link.connector = std::move(connector_);
+  return link;
 }
 
 void LobbyCore::Remove(int uid, bool tellScript) {

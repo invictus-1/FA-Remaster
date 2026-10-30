@@ -31,6 +31,9 @@ namespace moho {
 struct SessionDescription;
 struct ReplayHeader;
 }
+namespace moho::net {
+class LobbyCore;
+}
 
 namespace moho::ui {
 
@@ -50,6 +53,31 @@ class GameSession {
   // state: the scenario file is run there). False with the reason the original would give the
   // script's LaunchFailed ("NoConfig", "StartSpots"), or a description.
   bool Launch(lua_State* L, int config, std::string* why);
+  // Start a network game (CLobby::LaunchGame 0x7c38c0 in a lobby with peers) from the game configuration at stack
+  // index `config`: every player's program starts the same session (the seed the host's nonce, the armies the same),
+  // its own army the one whose OwnerID is this lobby's uid; the lobby's connector and connections go to the game
+  // (`lobby`'s GameLink, taken only when the session is described). The beats then run in lockstep: every client's
+  // orders, merged in client order, before each beat (the engine's sim/lockstep.h over net/beat_exchange_net.h);
+  // a beat whose orders are not all in waits, the frame going on without it (a wait of over two seconds is logged).
+  // The load ends only when every client's first beat is in (the loading screen stays until all have loaded).
+  bool LaunchNetwork(lua_State* L, int config, net::LobbyCore* lobby, std::string* why);
+  bool networkGame() const { return net_ != nullptr; }
+  // The input delay (beats between writing an order and every client carrying it out): the original's net_Lag of
+  // 500 ms (CSimDriver::ThreadRun 0x73c006, the engine's reading) in whole beats at the game's speed at launch,
+  // floor(500 / msPerBeat), msPerBeat = 100 / 10^(rate / 10): 5 beats at normal speed, 12 at +4; fixed for the game
+  // (the engine's Lockstep v1).
+  static constexpr double kNetLagMs = 500;
+  static uint32_t InputDelay(int rate);
+  // A network game's clients in the session's client order (GetSessionClients); empty in a local game.
+  struct NetClient {
+    std::string name;
+    int uid = -1;
+    uint8_t client = 0;
+    std::vector<int> sources;
+    bool local = false, connected = true;
+    double ping = 0, quiet = 0;
+  };
+  std::vector<NetClient> NetClients() const;
   // Start a single-player session (LaunchSinglePlayerSession: an operation of the campaign) from
   // the table FAF's SinglePlayerLaunch.lua makes, at stack index `info` (the engine's
   // SessionFromSinglePlayerInfo). False with the reason.
@@ -425,6 +453,16 @@ class GameSession {
   bool fpPlayback_ = false;
   bool Fingerprinting() const { return fp_ && sim_ && (!play_ || fpPlayback_); }
   void FingerprintBeat();
+  // A network game (LaunchNetwork; nullptr: a local game or a replay).
+  struct Net;
+  std::unique_ptr<Net> net_;
+  bool lastWasNetwork_ = false;
+  bool LaunchWith(lua_State* L, int config, net::LobbyCore* lobby, std::string* why);
+  bool NetBeatOrders(std::string* merged);  // (the next beat's merged orders, or false: wait)
+  void NetDigest();                         // (right after that beat, on its thread: the digest of a 50th beat)
+  void NetAfterBeat();                      // (then here: the digest to the lockstep, desyncs logged)
+  void NetLoadWait();                       // (while the load ends: the lockstep started, the first beat's orders)
+  void NetFirstOrders();                    // (the first beat's orders, before it)
   // The last launch, for Relaunch.
   std::unique_ptr<SessionDescription> last_;
   std::vector<std::string> lastUids_;

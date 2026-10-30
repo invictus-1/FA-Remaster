@@ -24,6 +24,9 @@ class Vfs;
 class ScriptState;
 class ThreadScheduler;
 }  // namespace moho
+namespace moho::net {
+class LobbyCore;
+}
 
 namespace moho::ui {
 
@@ -43,6 +46,16 @@ namespace sound {
 class SoundSystem;
 }
 
+// One client of a network game (GetSessionClients, CWldUiInterface 0x88d540: name, uid, connected, ping, quiet, local,
+// authorizedCommandSources, ejectedBy).
+struct SessionClient {
+  std::string name;
+  int uid = 0;
+  bool connected = true, local = false;
+  double ping = 0, quiet = 0;
+  std::vector<int> sources;  // 0-based command sources (the scripts get them 1-based)
+};
+
 class UserState {
  public:
   struct Config {
@@ -56,6 +69,10 @@ class UserState {
     // Starts a session from the game configuration table at stack index `config` when the lobby
     // launches a game; false with the reason for the script's LaunchFailed. Unset: nothing starts.
     std::function<bool(lua_State* L, int config, std::string* why)> launchSession;
+    // The same from a network lobby (a connector with peers): the lobby's network goes to the game (CLobby::LaunchGame
+    // 0x7c38c0 makes the client manager over the lobby's connector); `lobby` is the lobby's network side. Unset: such
+    // a launch fails.
+    std::function<bool(lua_State* L, int config, net::LobbyCore* lobby, std::string* why)> launchNetworkSession;
     // Starts a single-player session (LaunchSinglePlayerSession: the campaign's operations) from
     // FAF's single-player table at stack index `info`; false with the reason. Unset: none starts.
     std::function<bool(lua_State* L, int info, std::string* why)> launchSinglePlayer;
@@ -90,6 +107,10 @@ class UserState {
     // 0x7a66a0: (beat + fraction) * 0.1; paused with the game, at its speed): the camera's game clock
     // (UseGameClock). Unset: there is no game.
     std::function<double()> gameTime;
+    // A network game's clients, in the session's client order, as GetSessionClients lists them (the host's; unset: a
+    // local game, its one player); and whether the game is a network one (SessionIsMultiplayer).
+    std::function<std::vector<SessionClient>()> sessionClients;
+    bool multiplayer = false;
     // The command source the player's orders are written for (the focus army's first source).
     int commandSource = 0;
     // The army that source belongs to, 0-based (-1: none, a replay's viewer): SetFocusArmy's checks.

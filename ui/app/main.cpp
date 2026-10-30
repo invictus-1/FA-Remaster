@@ -507,6 +507,9 @@ int main(int argc, char** argv) {
   if (!m28Variant.empty()) session.scanMounts.push_back({m28Variant, "/mods/m28-variant"});
   session.scanTicks = scanTicks;
   cfg.launchSession = [&session](lua_State* L, int config, std::string* why) { return session.Launch(L, config, why); };
+  cfg.launchNetworkSession = [&session](lua_State* L, int config, net::LobbyCore* lobby, std::string* why) {
+    return session.LaunchNetwork(L, config, lobby, why);
+  };
   cfg.launchSinglePlayer = [&session](lua_State* L, int info, std::string* why) { return session.LaunchSinglePlayer(L, info, why); };
   // The player's own files (replays, saved games) live beside the preferences file (special_files.cpp);
   // every game is written there as LastGame.SCFAReplay, and the Replay dialog plays them back.
@@ -738,6 +741,22 @@ int main(int argc, char** argv) {
     out->up = up && out->state->Boot();
     out->stateMs = ms(t0, t1), out->rulesMs = ms(t1, t2), out->bootMs = ms(t2, Clock::now());
   };
+  // A network game's links for the game's state: SessionIsMultiplayer, GetSessionClients (and so the disconnect dialog).
+  auto linkNetwork = [&session](ui::UserState::Config& gameCfg) {
+    gameCfg.multiplayer = session.networkGame();
+    gameCfg.sessionClients = nullptr;
+    if (!session.networkGame()) return;
+    gameCfg.sessionClients = [&session]() {
+      std::vector<ui::SessionClient> out;
+      for (const ui::GameSession::NetClient& c : session.NetClients()) {
+        ui::SessionClient s;
+        s.name = c.name, s.uid = c.uid, s.connected = c.connected, s.local = c.local, s.ping = c.ping, s.quiet = c.quiet;
+        s.sources = c.sources;
+        out.push_back(std::move(s));
+      }
+      return out;
+    };
+  };
   auto startGameInterface = [&]() {
     if (game) return;
     // A launch loads the original's way (its session states, WLD_Frame 0x88cae0): the
@@ -761,7 +780,9 @@ int main(int argc, char** argv) {
         ui::UserState::Config gameCfg = cfg;
         gameCfg.bootScript = "/lua/SessionInit.lua";
         gameCfg.launchSession = nullptr;
+        gameCfg.launchNetworkSession = nullptr;
         gameCfg.launchReplay = nullptr;  // (a replay starts from the front end)
+        linkNetwork(gameCfg);
         session.prepareInterface = [&prepared, &vfs, makeGameState, gameCfg](Sim* sim, const std::vector<std::string>& uids,
                                                                              const std::string& sessionMods) {
           makeGameState(gameCfg, sim, uids, sessionMods, &prepared);
@@ -835,8 +856,10 @@ int main(int argc, char** argv) {
     gameCfg.bootScript = "/lua/SessionInit.lua";
     gameCfg.modUids = session.modUids();
     gameCfg.launchSession = nullptr;
+    gameCfg.launchNetworkSession = nullptr;
     gameCfg.launchReplay = nullptr;  // (a replay starts from the front end)
     gameCfg.liveSim = session.sim();
+    linkNetwork(gameCfg);
     gameCfg.waitForBeat = [&session]() { session.WaitForWorker(); };
     gameCfg.groundHeight = [&session](float x, float z) { return session.TerrainHeight(x, z); };
     gameCfg.beatRunning = [&session]() { return session.BeatRunning(); };
