@@ -86,9 +86,12 @@ local function Front(R)
     R.enemySeen = R.enemySeen or {}  -- zone -> the last tick the enemy was known there (defence sites)
     for z = 1, info.zones do
         local f = Remastered.AIZoneForces(R.army, z)
-        ours = ours + f.own.land.ground + f.ally.land.ground
+        -- (phase 7: the overall ratio counts everything that hits the ground, air and navy too: against M28 its
+        -- gunships and ships were outside the land-only ratio, which said "ahead" while they shelled our base)
+        ours = ours + f.own.land.ground + f.ally.land.ground + f.own.air.ground + f.ally.air.ground +
+            f.own.naval.ground + f.ally.naval.ground
         local e = f.enemy.land.ground + f.enemy.structure.ground
-        theirs = theirs + e
+        theirs = theirs + e + f.enemy.air.ground + f.enemy.naval.ground
         if z ~= R.startZone and f.own.economyMass > 0 then table.insert(ownEconomy, z) end
         local present = f.enemy.land.count + f.enemy.structure.count
         if present > 0 then

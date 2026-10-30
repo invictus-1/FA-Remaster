@@ -47,7 +47,7 @@ end
 -- tier, mobile army mass (engineers and commanders left out) and its air / naval mass, defence mass
 local function Read(list)
     local r = { mex = { 0, 0, 0 }, mexWeight = 0, power = 0, factoryTier = 0, unitTier = 0, mexTier = 0, army = 0,
-        air = 0, naval = 0, defence = 0 }
+        air = 0, naval = 0, defence = 0, tml = 0 }
     for _, e in ipairs(list) do
         local c, bp = Cats(e[1])
         local n = e[2]
@@ -64,6 +64,7 @@ local function Read(list)
             r.factoryTier = math.max(r.factoryTier, t)
         elseif c.DEFENSE and c.STRUCTURE then
             r.defence = r.defence + mass
+            if c.TACTICALMISSILEPLATFORM then r.tml = r.tml + n end  -- (phase 7: the brain answers them with anti-missile)
         elseif c.MOBILE and not c.ENGINEER and not c.COMMAND then
             r.army = r.army + mass
             r.unitTier = math.max(r.unitTier, t)
@@ -164,6 +165,11 @@ function Think(brain)
         table.insert(parts, string.format('%d %s', i, r.style))
     end
     R.focusEnemy = focus
+    local tml = 0
+    for _, i in ipairs(Enemies(R)) do tml = tml + math.floor(R.enemyReads[i].tml + 0.5) end
+    R.enemyTml = tml
+    R.enemyTier = 0
+    for _, i in ipairs(Enemies(R)) do R.enemyTier = math.max(R.enemyTier, R.enemyReads[i].tier) end
     local theirs = focus and R.enemyReads[focus] or Read({})
     local style, stance = 'unknown', 'standard'
     if not known then
@@ -181,10 +187,10 @@ function Think(brain)
     end
     R.techRush = stance == 'catch-up' or nil
     local evidence = string.format('focus %s (enemies: %s); mex ours %d/%d/%d theirs %d/%d/%d; tier ours %d theirs %d;' ..
-        ' power ours %d theirs %d; army mass ours %.0f theirs %.0f; their air %.0f navy %.0f defences %.0f',
+        ' power ours %d theirs %d; army mass ours %.0f theirs %.0f; their air %.0f navy %.0f defences %.0f tml %d',
         tostring(focus or '-'), table.concat(parts, ', '),
         ours.mex[1], ours.mex[2], ours.mex[3], theirs.mex[1], theirs.mex[2], theirs.mex[3], ours.tier, theirs.tier,
-        ours.power, theirs.power, ours.army, theirs.army, theirs.air, theirs.naval, theirs.defence)
+        ours.power, theirs.power, ours.army, theirs.army, theirs.air, theirs.naval, theirs.defence, R.enemyTml)
     if stance ~= (R.stance or 'standard') or style ~= R.style then
         LOG(string.format('aistrat %d %d style %s stance %s (was %s) | %s', R.army, R.tick, style, stance,
             R.stance or 'standard', evidence))

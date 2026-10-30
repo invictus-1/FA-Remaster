@@ -25,6 +25,15 @@ local kReclaimWorkerTicks = 450               -- an engineer sent to a field cou
 local kReclaimNear = 350                      -- world units from the start: the reclaim that adds engineers
 local kReclaimPerEngineer = 400               -- one engineer more per this much reclaim near the start (at most 20)
 local kGroundFade = 0.998                      -- what was seen of the enemy's ground army fades by this a step (10 ticks)
+local kEngineerAvoid = 600                    -- ticks an enemy seen in a zone or beside it keeps engineers out (phase 7)
+local kAcuRetreat = 0.8                       -- the commander's health share under which it falls back (phase 7)
+local kAcuBack = 0.95                         -- ... and the share at which it goes back to work
+local kAcuRepairers = 3                       -- engineers that repair a hurt commander
+local kAcuDanger = 80                         -- world units: enemies this near a hurt commander are what it backs away from
+local kBaseRadius = 150                       -- world units from the start: a builder this near takes base jobs
+local kArmyFrom = 5                           -- the standing army's floor starts at this minute (phase 7: before it the
+                                              -- factories make engineers for the expansion, unless the enemy's army is seen)
+local kWalkSpeed = 1.5                         -- world units a second an engineer's walk to a claimed site counts at
 local kMassNear = 120                         -- world units: a free mass point this near an engineer comes before reclaim
 
 local fixesApplied = false  -- (one game per sim state: the module lives with the state)
@@ -133,7 +142,16 @@ AIBrain = Class(StandardBrain) {
         return t and self.Remaster.tick - t < kClaimTicks
     end,
 
-    Claim = function(self, x, z) self.Remaster.claims[x .. ':' .. z] = self.Remaster.tick end,
+    -- (phase 7: `walker` adds the walk to the site, at kWalkSpeed, to the claim: the duels' engineers walked 100-300
+    -- world units to far extractors, longer than kClaimTicks, and a second engineer was sent to the same point)
+    Claim = function(self, x, z, walker)
+        local extra = 0
+        if walker then
+            local q = walker:GetPosition()
+            extra = math.floor(10 * math.sqrt((x - q[1]) * (x - q[1]) + (z - q[3]) * (z - q[3])) / kWalkSpeed)
+        end
+        self.Remaster.claims[x .. ':' .. z] = self.Remaster.tick + extra
+    end,
 
     -- the next mass point that is free (no extractor, not promised to another builder): without a builder the first
     -- by travel from the start; with one (phase 5) the nearest to it in a straight line, leaving out the zones the
@@ -149,9 +167,8 @@ AIBrain = Class(StandardBrain) {
         end
         local q = u:GetPosition()
         local best, bestD
-        local enemyAt = R.enemyAt or {}
         for _, p in ipairs(R.massPoints) do
-            if not enemyAt[p.zone] or p.zone == R.startZone then
+            if not self:Unsafe(p.zone) then
                 local dx, dz = p.x - q[1], p.z - q[3]
                 local d = dx * dx + dz * dz
                 if (not bestD or d < bestD) and not self:Claimed(p.x, p.z) and self:CanBuildStructureAt(bp, Pos(p.x, p.z)) then
@@ -160,6 +177,32 @@ AIBrain = Class(StandardBrain) {
             end
         end
         return best
+    end,
+
+    -- A zone an engineer should not walk into (phase 7): the enemy is known there now, or was seen there or in a land
+    -- neighbour within kEngineerAvoid (R.enemySeen, kept by the operations). The start zone is never unsafe. The duels'
+    -- kill counts showed why: against FAF's AI 5,700 mass of our engineers died to its T1 tanks by minute 20, walking
+    -- to far mass points and reclaim the enemy had just been seen beside (only the zones it was known in now were
+    -- left out).
+    Unsafe = function(self, z)
+        local R = self.Remaster
+        if z == R.startZone then return false end
+        if R.enemyAt and R.enemyAt[z] then return true end
+        local seen = R.enemySeen or {}
+        if seen[z] and R.tick - seen[z] < kEngineerAvoid then return true end
+        R.landNeighbours = R.landNeighbours or {}
+        local list = R.landNeighbours[z]
+        if not list then
+            list = {}
+            for _, n in ipairs(Remastered.AIZoneNeighbours(z)) do
+                if not n.coast then table.insert(list, n.zone) end
+            end
+            R.landNeighbours[z] = list
+        end
+        for _, n in ipairs(list) do
+            if seen[n] and R.tick - seen[n] < kEngineerAvoid then return true end
+        end
+        return false
     end,
 
     -- a free build spot of at least `size` in the start zone for blueprint suffix `what`
@@ -205,8 +248,40 @@ AIBrain = Class(StandardBrain) {
         return EntityCategoryContains(categories.TECH3, u) and 3 or EntityCategoryContains(categories.TECH2, u) and 2 or 1
     end,
 
+    -- Base jobs (power, factories, radar, storage, anti-missile, assists) go only to builders within kBaseRadius of
+    -- the start, and the commander (phase 7). The duels' engineer queues showed why: at minute 10, 26 of ~45
+    -- engineers were walking more than 100 world units to a single build, most of them from the field back to the
+    -- base, while the extractors waited; FAF's AI had 29 extractors at minute 8 to our 10.
+    AtBase = function(self, u, strict)  -- (strict: the commander too must be within kBaseRadius)
+        if not strict and EntityCategoryContains(categories.COMMAND, u) then return true end
+        local R = self.Remaster
+        local q = u:GetPosition()
+        local dx, dz = q[1] - R.startX, q[3] - R.startZ
+        return dx * dx + dz * dz <= kBaseRadius * kBaseRadius
+    end,
+
+    -- build `what` at the free spot of at least `size` in the start zone nearest (x, z) (spot order on ties)
+    BuildNear = function(self, u, what, size, x, z)
+        local R = self.Remaster
+        if R.startZone <= 0 or not self:AtBase(u) then return false end
+        local bp = self:Bp(what)
+        local best, bestD
+        for _, p in ipairs(Remastered.AIBuildSpots(R.startZone, size)) do
+            local dx, dz = p[1] - x, p[2] - z
+            local dd = dx * dx + dz * dz
+            if (not bestD or dd < bestD) and not self:Claimed(p[1], p[2]) and self:CanBuildStructureAt(bp, Pos(p[1], p[2])) then
+                best, bestD = p, dd
+            end
+        end
+        if not best then return false end
+        self:Claim(best[1], best[2])
+        IssueBuildMobile({ u }, Pos(best[1], best[2]), bp, {})
+        return true
+    end,
+
     -- build `what` (a blueprint suffix) at a free spot of at least `size` in the start zone
     BuildAt = function(self, u, what, size)
+        if not self:AtBase(u) then return false end
         local s = self:BuildSpot(what, size)
         if not s then return false end
         self:Claim(s[1], s[2])
@@ -304,12 +379,11 @@ AIBrain = Class(StandardBrain) {
         end
         R.reclaimers = keep
         local q = u:GetPosition()
-        local enemyAt = R.enemyAt or {}
         local best, bestScore
         for i = 1, g.cols * g.rows do
             local m = g.mass[i]
             local z = g.zone[i]
-            if m >= kReclaimField and z > 0 and not enemyAt[z] and (workers[i] or 0) < 1 + m / kReclaimPerWorker then
+            if m >= kReclaimField and z > 0 and (workers[i] or 0) < 1 + m / kReclaimPerWorker and not self:Unsafe(z) then
                 local cx = (math.mod(i - 1, g.cols) + 0.5) * kReclaimCell
                 local cz = (math.floor((i - 1) / g.cols) + 0.5) * kReclaimCell
                 local dx, dz = cx - q[1], cz - q[3]
@@ -383,6 +457,19 @@ AIBrain = Class(StandardBrain) {
             ctx.landFactories = ctx.landFactories + 1
             return
         end
+        -- tactical missile defence (phase 7): a T2+ engineer builds anti-missile beside the start, one from minute
+        -- 12 once the enemy is known at T2 (launchers sit deep in its base, where fog hides them), and one more per
+        -- launcher known (strategy.lua, R.enemyTml), at most 4, one at a time. The duels' kill counts: M28's
+        -- launchers (xsb2108) destroyed 3,600 mass of our structures by minute 16 and then the commander, unseen; the
+        -- battle estimate does not count missiles, so nothing else answered them.
+        local wantTmd = math.min(4, ((self.Remaster.enemyTier or 0) >= 2 and ctx.minutes >= 12 and 1 or 0) +
+            (self.Remaster.enemyTml or 0))
+        if not isCommander and self:Tech(u) >= 2 and not ctx.tmdGiven and ctx.tmd < wantTmd and
+            self:BuildNear(u, 'b4201', 2, self.Remaster.startX, self.Remaster.startZ) then
+            ctx.tmdGiven = true
+            ctx.tmd = ctx.tmd + 1
+            return
+        end
         -- a defence where the enemy will come, when it is the cheaper answer than units (one builder a think)
         if not isCommander then
             local def = Choices().DefenceJob(self, self:Tech(u), ctx)
@@ -422,7 +509,7 @@ AIBrain = Class(StandardBrain) {
             end
         end
         if p and not (isCommander and p.dist > 0) then
-            self:Claim(p.x, p.z)
+            self:Claim(p.x, p.z, u)
             IssueBuildMobile({ u }, Pos(p.x, p.z), self:Bp('b1103'), {})
             -- an engineer takes up to 2 more free points of the same zone in the same walk (the zone's point order)
             if not isCommander then
@@ -430,7 +517,7 @@ AIBrain = Class(StandardBrain) {
                 for _, q in ipairs(self.Remaster.massPoints) do
                     if more >= 2 then break end
                     if q.zone == p.zone and not self:Claimed(q.x, q.z) and self:CanBuildStructureAt(bp, Pos(q.x, q.z)) then
-                        self:Claim(q.x, q.z)
+                        self:Claim(q.x, q.z, u)
                         IssueBuildMobile({ u }, Pos(q.x, q.z), bp, {})
                         more = more + 1
                     end
@@ -438,12 +525,17 @@ AIBrain = Class(StandardBrain) {
             end
             return
         end
-        if self:GetEconomyStoredRatio('MASS') < 0.5 and (self:ReclaimField(u) or self:Reclaim(u)) then return end
+        -- (phase 7: the commander reclaims only around itself at the base, never in a far field; the duels' commanders
+        -- died 180-270 world units from the start, out reclaiming)
+        if self:GetEconomyStoredRatio('MASS') < 0.5 and
+            ((not isCommander and self:ReclaimField(u)) or (self:AtBase(u, true) and self:Reclaim(u))) then
+            return
+        end
         if ctx.landFactories < wantFactories and storedMass > 0.2 and self:BuildAt(u, 'b0101', 8) then
             ctx.landFactories = ctx.landFactories + 1
             return
         end
-        if storedMass > 0.8 and ctx.minutes >= 6 and ctx.storages < 4 then
+        if storedMass > 0.8 and ctx.minutes >= 6 and ctx.storages < 4 and self:AtBase(u) then
             local s = self:StorageSpot()
             if s then
                 self:Claim(s[1], s[2])
@@ -454,8 +546,22 @@ AIBrain = Class(StandardBrain) {
         end
         -- assist: an upgrade in progress (extractors first), else the factories in turn; looked at again after
         -- kAssistTicks so that an assisting builder takes new work when it comes
+        -- (phase 7: a builder away from the base assists only an upgrade within kBaseRadius of it, else it walks
+        -- back to the base, where the base jobs are)
         local target = ctx.upgrading[1]
-        if not target and factories[1] then
+        if not self:AtBase(u) then
+            target = nil
+            local q = u:GetPosition()
+            for _, m in ipairs(ctx.upgrading) do
+                local mp = m:GetPosition()
+                local dx, dz = mp[1] - q[1], mp[3] - q[3]
+                if dx * dx + dz * dz <= kBaseRadius * kBaseRadius then target = m break end
+            end
+            if not target then
+                IssueMove({ u }, Pos(self.Remaster.startX, self.Remaster.startZ))
+                return
+            end
+        elseif not target and factories[1] then
             ctx.assistNext = math.mod(ctx.assistNext, table.getn(factories)) + 1
             target = factories[ctx.assistNext]
         end
@@ -503,6 +609,7 @@ AIBrain = Class(StandardBrain) {
             if not u.Dead and u:GetFractionComplete() < 1 then ctx.defenceBuilding = ctx.defenceBuilding + 1 end
         end
         ctx.storages = table.getn(self:GetListOfUnits(categories.MASSSTORAGE * categories.STRUCTURE, false))
+        ctx.tmd = table.getn(self:GetListOfUnits(categories.ANTIMISSILE * categories.TECH2 * categories.STRUCTURE, false))
         -- upgrades in progress, extractors first (what idle builders assist)
         for kind, cat in ipairs({ categories.MASSEXTRACTION, categories.FACTORY }) do
             for _, u in ipairs(self:GetListOfUnits(cat * categories.STRUCTURE, false)) do
@@ -536,9 +643,55 @@ AIBrain = Class(StandardBrain) {
         ctx.wantReclaimers = math.min(math.floor(table.getn(engineers) *
             import("/lua/remastered/ai/personality.lua").Knobs(self).reclaimShare),
             math.floor((R.reclaim and R.reclaim.nearMass or 0) / kReclaimPerWorker))
-        if commander and Free(commander) then self:BuilderJob(commander, factories, true, ctx) end
+        -- the commander's safety (phase 7): losing it loses the game. Under kAcuRetreat of its health it drops its
+        -- work and backs away from the nearest enemy within kAcuDanger (to the start when none is that near or the
+        -- start is away from it), and up to kAcuRepairers free engineers repair it; it takes work again at kAcuBack.
+        -- The duels: the commander died at its work, to a frigate off the coast (FAF) and to missiles (M28).
+        local repairers = 0
+        if commander then
+            local hp = commander:GetHealth() / math.max(commander:GetMaxHealth(), 1)
+            -- (while hurt, a further drop of 5% means it is still under fire: it backs away again from where it is)
+            if hp < kAcuRetreat and (not R.acuHurt or hp < (R.acuHp or 1) - 0.05) then
+                R.acuHurt = true
+                R.acuHp = hp
+                local q = commander:GetPosition()
+                local tx, tz = R.startX, R.startZ
+                local near = self:GetUnitsAroundPoint(categories.ALLUNITS - categories.WALL, q, kAcuDanger, 'Enemy') or {}
+                local best, bestD
+                for _, e in ipairs(near) do
+                    if not e.Dead then
+                        local p = e:GetPosition()
+                        local dx, dz = p[1] - q[1], p[3] - q[3]
+                        local dd = dx * dx + dz * dz
+                        local id = tonumber(e:GetEntityId()) or 0
+                        if not bestD or dd < bestD or (dd == bestD and id < best.id) then best, bestD = { p = p, id = id }, dd end
+                    end
+                end
+                if best then  -- (away from the nearest enemy; the start only when none is near: a ship off the
+                    -- start's coast shelled the commander there)
+                    local dx, dz = q[1] - best.p[1], q[3] - best.p[3]
+                    local l = math.max(math.sqrt(dx * dx + dz * dz), 1)
+                    tx, tz = q[1] + dx / l * kAcuDanger, q[3] + dz / l * kAcuDanger
+                end
+                IssueClearCommands({ commander })
+                IssueMove({ commander }, Pos(tx, tz))
+                LOG(string.format('aiacu %d %d falls back at health %.2f to %.0f, %.0f', R.army, R.tick, hp, tx, tz))
+            elseif R.acuHurt and hp >= kAcuBack then
+                R.acuHurt = nil
+                R.acuHp = nil
+                LOG(string.format('aiacu %d %d back to work at health %.2f', R.army, R.tick, hp))
+            end
+        end
+        if commander and not R.acuHurt and Free(commander) then self:BuilderJob(commander, factories, true, ctx) end
         for _, e in ipairs(engineers) do
-            if Free(e) then self:BuilderJob(e, factories, false, ctx) end
+            if Free(e) then
+                if R.acuHurt and repairers < kAcuRepairers then
+                    IssueRepair({ e }, commander)
+                    repairers = repairers + 1
+                else
+                    self:BuilderJob(e, factories, false, ctx)
+                end
+            end
         end
         -- land factories: engineers up to a cap that grows with the game (4 + 2.5 a minute x K.engineerRate, at most
         -- 50), then the cheapest counter that wins against the enemy's known army (choices.lua; the tech's default mix
@@ -547,7 +700,7 @@ AIBrain = Class(StandardBrain) {
         -- extractors are upgrading, only the first half of the land factories (id order) take new army orders, so
         -- that the upgrades are not starved (the engine shares a shortage among all who spend).
         -- Map control (phase 6): while our land army is short of what holds the map (K.armyMatch x the enemy's known
-        -- ground army, at least K.armyPerMinute a minute from minute 2), only every third land factory makes engineers,
+        -- ground army, at least K.armyPerMinute a minute from minute kArmyFrom), only every third land factory makes engineers,
         -- and only up to the floor of 4 + 1 a minute; the others make units. The duels showed why: engineers first up
         -- to the cap left 150 mass of army at minute 8 against 2,800, and the enemy's army took our expansions.
         local short = self:GetEconomyStoredRatio('MASS') < 0.05 and ctx.extractorUpgrades > 0
@@ -561,7 +714,7 @@ AIBrain = Class(StandardBrain) {
         -- minutes, so the army kept does not shrink each time the scouts lose sight of it)
         R.enemyGroundPeak = math.max(enemyGround, (R.enemyGroundPeak or 0) * kGroundFade)
         local armyWanted = math.max(K.armyMatch * R.enemyGroundPeak,
-            ctx.minutes >= 2 and K.armyPerMinute * (ctx.minutes - 2) or 0)
+            ctx.minutes >= kArmyFrom and K.armyPerMinute * (ctx.minutes - kArmyFrom + 1) or 0)
         local armyShort = (R.armyMass or 0) < armyWanted
         if armyShort ~= (R.armyShort or false) and R.tick - (R.armyShortLogged or -10000) >= 600 then
             LOG(string.format('aiarmy %d %d %s army %.0f wanted %.0f (enemy ground %.0f) engineers %d floor %d cap %d',

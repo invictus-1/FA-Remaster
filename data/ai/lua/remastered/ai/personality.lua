@@ -19,7 +19,7 @@
 -- - defenceShare: all our defences may weigh at most this share of our mobile army's mass (plus one T1 PD);
 -- - armyMatch (phase 6): the land army's mass we keep per mass of the enemy's known ground army (map control: below
 --   it, most factories make units, not engineers); armyPerMinute: a standing army's mass per minute of the game, the
---   floor from minute 2 while little of the enemy is known; engineerRate: how fast the engineer cap grows (x the base 2.5 a minute);
+--   floor from minute 5 while little of the enemy is known; engineerRate: how fast the engineer cap grows (x the base 2.5 a minute);
 -- - postShare (phase 6): a guard post at an outlying economy zone wants this much of our mass per mass of the enemy
 --   that can come to it soon; guardShare: all guard posts together take at most this share of the army (the rest
 --   is free for the operations); reclaimShare: the share of the engineers kept reclaiming while there is reclaim.
