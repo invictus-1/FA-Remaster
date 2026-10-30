@@ -4538,7 +4538,10 @@ bool AttachPlainEntity(Sim& sim, Entity* e, Entity* parent, int bone) {
 // ShieldVerticalOffset below its unit)
 int l_SetParentOffset(lua_State* L) {
   Entity* e = CheckObject<Entity>(L, 1);
-  if (!e->attachParent) return luaL_error(L, "Entity:SetParentOffset: entity is not attached to anything");
+  // (the test is the entity's attach parent, +0x18c: a unit hung on a bone by AttachBoneTo / AttachTo has one too,
+  // its parentId here; its offset goes into AttachedTransform, sim/transport.cpp)
+  const bool unitAttached = e->kind == Entity::Kind::Unit && static_cast<Unit*>(e)->parentId;
+  if (!e->attachParent && !unitAttached) return luaL_error(L, "Entity:SetParentOffset: entity is not attached to anything");
   luaL_checktype(L, 2, LUA_TTABLE);
   float v[3];
   for (int i = 0; i < 3; ++i) {
@@ -4572,6 +4575,7 @@ int l_AttachBoneTo(lua_State* L) {
   if (!u || !parent) return 0;
   if (u->parentId != EntityRef(parent)) u->attachSeq = S(L)->NextAttachSeq();  // (the views' child order)
   u->parentId = EntityRef(parent);
+  u->attachOffset = {};  // (a new attach info: no relative offset until SetParentOffset)
   u->ownBone = BoneIndex(L, u, 2);
   u->parentBone = BoneIndex(L, parent, 4);
   NotifyAttached(*S(L), u);
@@ -4605,6 +4609,7 @@ int l_AttachTo(lua_State* L) {  // entity:AttachTo(parent, bone)
   if (!u || !parent) return 0;
   if (u->parentId != EntityRef(parent)) u->attachSeq = S(L)->NextAttachSeq();  // (the views' child order)
   u->parentId = EntityRef(parent);
+  u->attachOffset = {};  // (a new attach info: no relative offset until SetParentOffset)
   // Entity:AttachTo 0x68be10 is AttachBoneTo with the entity's own bone 0 (0x68bf14: push 0), not -1: the unit is
   // placed so that ITS bone 0 lies on the parent's bone. Seen: an aircraft a carrier builds while it sails
   // (AircraftCarrier's BuildingState: unitBuilding:AttachTo(self, bone)) sits 0.47 below and 0.06 ahead of the

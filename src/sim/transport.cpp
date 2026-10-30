@@ -550,6 +550,7 @@ void ClearWaitingFormation(TransportObj& T) {  // vt+0x98: the formation deleted
 void AttachUnit(Sim& sim, Unit* child, Unit* parent, int parentBone, int childBone) {
   if (child->parentId != EntityRef(parent)) child->attachSeq = sim.NextAttachSeq();  // (the views' child order)
   child->parentId = EntityRef(parent);
+  child->attachOffset = {};
   child->parentBone = parentBone;
   child->ownBone = childBone;
   child->attachFull = true;
@@ -1056,8 +1057,26 @@ void SetAttachedUnitLayer(Sim& sim, Unit* u, const std::string& layer) { SetUnit
 
 // Where a unit attached by its own bone stands: the parent bone's world transform (Pp, Pq) x the inverse of the
 // unit's own bone transform. Cp / Cq (optional): that own bone transform, for traces.
-void AttachedTransform(Unit* u, const Vec3& Pp, const Quat& Pq, Vec3* outPos, Quat* outQ, Vec3* outCp, Quat* outCq,
+void AttachedTransform(Unit* u, const Vec3& PpIn, const Quat& PqIn, Vec3* outPos, Quat* outQ, Vec3* outCp, Quat* outCq,
                        const Vec3* inCp, const Quat* inCq) {
+  Vec3 Pp = PpIn;
+  Quat Pq = PqIn;
+  if (u->attachOffset.x != 0 || u->attachOffset.y != 0 || u->attachOffset.z != 0) {
+    // the attach info's relative transform (entity+0x19c: Lua SetParentOffset 0x68c330 makes it the identity
+    // rotation and the offset) composed onto the parent bone's (VTransform::Compose 0x549c20, a = the relative
+    // transform, b = the bone's, in its order of operations): the position is the bone's plus the offset turned by the
+    // bone's rotation. Seen: MP1 15305, army 0's Tempest 0x169 (uas0401) starts a cruiser 0x1ec (uas0202) on its
+    // Attachpoint01 with SetParentOffset({0, 0, 3}) (UAS0401_script.lua BuildingState, a TECH2 unit): the original's
+    // stands 3 further along the bone's z at (992.5636, 576.4779); ours had no offset (991.2584, 579.1791).
+    const float aw = 1.0f, ax = 0.0f, ay = 0.0f, az = 0.0f;
+    const float bw = PqIn.w, bx = PqIn.x, by = PqIn.y, bz = PqIn.z;
+    Pq.w = ((aw * bw - ax * bx) - ay * by) - az * bz;
+    Pq.x = ((az * by + bx * aw) + ax * bw) - bz * ay;
+    Pq.y = ((bz * ax + by * aw) + ay * bw) - az * bx;
+    Pq.z = ((ay * bx + bz * aw) + az * bw) - by * ax;
+    const Vec3 r = RotateM(PqIn, u->attachOffset);  // (MultQuadVec 0x452d40 with the bone's rotation)
+    Pp = {PpIn.x + r.x, PpIn.y + r.y, PpIn.z + r.z};
+  }
   Vec3 Cp;
   Quat Cq;
   BoneLocal(u, u->ownBone, &Cp, &Cq);
@@ -1068,7 +1087,7 @@ void AttachedTransform(Unit* u, const Vec3& Pp, const Quat& Pq, Vec3* outPos, Qu
     BoneLocalExe(u, u->ownBone, &Cp, &Cq);  // (Unit::GetBoneLocalTransform 0x6aa440)
   }
   // Entity::CalculateAttachedTransform 0x67a020: (the parent bone's world transform x the attach offset,
-  // 0x549c20; the offset is the identity here, which leaves the bone's transform as it is) x the inverse of
+  // 0x549c20; without SetParentOffset the offset is the identity, which leaves the bone's transform as it is) x the inverse of
   // the child's own bone transform (0x676850), in the original's order of operations; the position is rotated
   // with the quaternion BEFORE it is normalised (0x4edaa0). The last bits matter: a unit let go in the air
   // starts its fall with the last step it made here.

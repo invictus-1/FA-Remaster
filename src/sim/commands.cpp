@@ -1655,6 +1655,12 @@ bool RemoveCommandFromUnit(Sim& sim, Unit* u, UnitCommand& c) {
   if (i == 0) {  // the executing head: its task is interrupted (destructor abort -> AbortMove)
     const bool stopped = HeadTaskStopsMotion(u);  // a pod's task: its dtor's Stop is the last word
     const bool asleep = ThreadAsleepOnMove(u);    // (asked before the teardown changes the head)
+    // A head not dispatched yet has no task: event 3's interrupt (IAiCommandDispatchImpl::OnEvent 0x599030 ->
+    // 0x408d70) tears nothing down, so nothing aborts the move (as the clear of an undispatched head, IssueFromStream).
+    // Seen: MP1 15137, army 1's player gives five ships a Move with clear (0x01000044) and takes it off their queues
+    // in the same message batch; the Move it replaced kept its move (CUnitMoveTask dtor, a Move for a Move): the
+    // original's ships drive on at full speed, speed-through 1, an empty queue; ours stopped them (braking from 15138).
+    const bool undispatched = u->headState == kNotStarted && !u->task;
     EndMoveTaskRect(u);
     if (u->engageId) ClearEngagement(sim, u);
     if (u->task) {
@@ -1666,8 +1672,8 @@ bool RemoveCommandFromUnit(Sim& sim, Unit* u, UnitCommand& c) {
     u->headState = kNotStarted;
     auto& pq = sim.pathQueue;
     pq.erase(std::remove(pq.begin(), pq.end(), u), pq.end());
-    if (!stopped) MotionStop(u);
-    SetMoving(u, false);
+    if (!stopped && !undispatched) MotionStop(u);
+    if (!undispatched) SetMoving(u, false);
     // CUnitCommandQueue::RemoveCommandFromQueue 0x6edef0, index 0: the queue tells its listeners event 3
     // (0x6edf11..0x6edf1c) before the command goes; IAiCommandDispatchImpl::OnEvent 0x599030 takes events 2 and 3:
     // the thread's frame count to 0 and, when it is suspended (a move task's ctor), re-linked at the stage's end

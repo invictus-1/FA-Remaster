@@ -644,7 +644,14 @@ bool NoBlockingUnits(Sim& sim, Unit* u, float x0, float z0, float x1, float z1) 
       const bool moving = UnitVelocityBitsSet(o);
       if (selfTransport && (moving || loading)) return;
     }
-    if (o->parentId || State(o, "Attached")) return;
+    // (0x7211bf..0x7211cc: unit state Attached (IsUnitState 0xe, vt+0x3c) lets a candidate off, not a parent link: a
+    // unit without a motion hung on something never takes that state (SetAttachedState) and blocks. Seen (probe
+    // mp1_15012): MP1 15010, army 6's 29-unit Guard of its air factory 0x600057; the hover engineer 0x6000f7's spot
+    // search finds (994,568) free in ours, but army 0's dummy zxa0003 0x1cf (attached, no Attached state, Seabed,
+    // at 994.0, 568.39) stands on it: the original's SetGoal gives 0x6000f7 (1000,564) and each guard after it the
+    // next spot down the east column (0x600102 (1000,562), 0x600017 (1000,558) ...); ours (994,568) and the column
+    // one spot early.)
+    if (State(o, "Attached")) return;
     // GatherUnmarkedUnitsInBox 0x721c00: the unit's collision AABB (Entity::UpdateAABox, from its collision
     // shape as it stands, turned and tilted) against the box, inclusive. A tank lying across reaches further in
     // x than its SizeX: the blueprint's sizes around the position are not it.
