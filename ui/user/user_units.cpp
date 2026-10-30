@@ -1551,8 +1551,11 @@ bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float 
   // heads for the same spot.
   StreamIssueData rally = d;
   // (A Patrol of one unit carries no formation, as the original's 0x8209c7 and the replays show.)
-  const bool forms = type == CommandType::Move || (type == CommandType::Patrol && units.size() > 1) ||
-                     (type == CommandType::Attack && entity != 0xffffffffu);
+  // (An AggressiveMove, FAF's attack-move by Alt and a right click, too: the 468 of the three FAF replays in
+  // replays/mp all carry formation 0, the heading and scale 1, one unit alone as well, and none is a
+  // FormAggressiveMove.)
+  const bool forms = type == CommandType::Move || type == CommandType::AggressiveMove ||
+                     (type == CommandType::Patrol && units.size() > 1) || (type == CommandType::Attack && entity != 0xffffffffu);
   // Where the units are, or with Shift (an order queued) where each one's last queued order is (CFormation
   // ChooseFormation 0x8384c0 takes the end of each unit's queue when it has one): the mean is the formation's
   // centre, and the first point of a patrol.
@@ -1768,40 +1771,6 @@ bool IssueScriptAt(lua_State* L, float x, float y, float z, bool clear) {
   SerializeLua(L, result, &d.lua);
   IssueToUnits(L, ids, d, clear);
   ReportCommandIssued(L, "Script", units, x, y, z, clear, std::string(), 0xffffffffu, result);
-  lua_settop(L, top);
-  return true;
-}
-
-// FAF's attack-move by Alt and a right click: the same Script order as its button's, with the
-// Lua value real replays hold for it ({TaskName = "AttackMove", UserValidated = true, Location}).
-// INFERRED: FAF's patched program makes the order itself for this click (no order mode is on, so
-// the verifying script is not the one to ask); which of its code does it is not read.
-bool IssueAttackMoveAt(lua_State* L, float x, float y, float z, bool clear) {
-  Sim* sim = TheSim(L);
-  if (!sim) return false;
-  std::vector<uint32_t> ids;
-  std::vector<UserUnit*> units;
-  for (UserUnit* u : Store(L).selection)
-    if (!u->gone && !u->view.dead && u->view.army == sim->focusArmy + 1) ids.push_back(u->view.id), units.push_back(u);
-  if (ids.empty()) return false;
-  const int top = lua_gettop(L);
-  lua_newtable(L);
-  lua_pushstring(L, "TaskName");
-  lua_pushstring(L, "AttackMove");
-  lua_rawset(L, -3);
-  lua_pushstring(L, "UserValidated");
-  lua_pushboolean(L, 1);
-  lua_rawset(L, -3);
-  lua_pushstring(L, "Location");
-  PushVector(L, x, y, z);
-  lua_rawset(L, -3);
-  StreamIssueData d;
-  d.type = static_cast<int>(CommandType::Script);
-  d.target.type = 2;
-  d.target.pos.x = x, d.target.pos.y = y, d.target.pos.z = z;
-  SerializeLua(L, top + 1, &d.lua);
-  IssueToUnits(L, ids, d, clear);
-  ReportCommandIssued(L, "Script", units, x, y, z, clear, std::string(), 0xffffffffu, top + 1);
   lua_settop(L, top);
   return true;
 }

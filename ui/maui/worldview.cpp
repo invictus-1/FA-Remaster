@@ -2143,8 +2143,14 @@ class WorldView : public Control {
     const bool reclaims = under == 0xffffffffu && !held && !miniMap && CanReclaimAtPlace(L, rightAt_, MapUnitsOf(L, 4));
     // A Move on a waypoint of the selection's moves: they become a patrol instead (0x8207c2; user_units.cpp).
     if (order == "Move" && !reclaims && ConvertMovesToPatrol(L, rightHovered_, rightX_, rightY_)) return true;
-    // (With Alt held, a right click that would be a move is FAF's attack-move.)
-    if (order == "Move" && rightAlt_ && !rightCtrl_ && IssueAttackMoveAt(L, rightAt_[0], rightAt_[1], rightAt_[2], clear)) return true;
+    // With Alt held, a right click that would be a move is FAF's attack-move: an AggressiveMove, as FAF's program sends
+    // it (all 468 of the three FAF replays in replays/mp: IssueCommand for the units with the formation, and for a
+    // factory selected its rally, IssueFactoryCommand, its build queue untouched; with Shift added, without it the
+    // rally orders replaced). Not the attack-move button's Script order (TaskName AttackMove, the sim callback that
+    // skips structures). Reported by rigomate (PR #9): a factory selected got no attack-move rally.
+    if (order == "Move" && rightAlt_ && !rightCtrl_ &&
+        IssueFormationOrder(L, "AggressiveMove", rightAt_[0], rightAt_[1], rightAt_[2], 0xffffffffu, clear, false, false, heading))
+      return true;
     // An Attack (on the unit under the cursor, or with no unit there over an attack's waypoint on the ground there): on
     // a double click the first click's goes, and one on a unit may join the hovered attack (0x81fdad; user_units.cpp).
     if (order == "Attack" && !reclaims &&
