@@ -3725,6 +3725,52 @@ int AttackStep(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
 
 }  // namespace
 
+// CUnitAttackTargetTask's command listener 0x5f4000 (linked by the ctor 0x5f2980 at 0x5f2aee..0x5f2b1e to the
+// broadcaster of the command heading the unit's queue, +0x54), told by CUnitCommand::SetTarget 0x6e8820 (0x6e94a0):
+// - the command's new target has no entity (cmd+0x120) while the task's has one (+0x64): state 5 (0x5f4048), the task
+//   ends at its next tick;
+// - else the task takes the command's target (0x5d5670: cmd+0x11c into +0x60); an entity target goes to the attacker
+//   (UpdateAttacker 0x5f3450) only while the attacker has a desired target (vt+0x24, HasTarget 0x5e2a10); a ground
+//   target clears the attacker's (UpdateAttacker with an empty CAiTarget, 0x5f40b4..0x5f40d7); state 1 (0x5f4105):
+//   the next tick's Update plans for the new target;
+// - the task's thread is woken (0x5f410c..0x5f4140).
+// Seen: MP1 14957 / 14961, army 0's player drags the ground Attack 0x2b of its strategic bomber 0x18f (uaa0304) to
+// (579.67, 335.37) and (578.74, 333.71): the original's air target turns to (580, 335) at 14958 and (579, 334) at
+// 14962; ours kept flying at the first point (581, 333).
+// (The patrol's and the guard's child attack tasks link the same listener to their parent's command; they are not
+// handled here.)
+void AttackTaskCommandEvent(Sim& sim, Unit* u, BuildTask& t, const UnitCommand& c) {
+  {
+    if (!t.adata || t.child) return;
+    AttackData& d = *t.adata;
+    if (d.cmd.lock().get() != &c) return;
+    const AiTarget old = CommandTarget(sim, t);
+    const bool cmdEntity = c.targetId && sim.FindEntity(c.targetId);
+    const bool taskEntity = old.type == 1 && sim.FindEntity(old.entityId);
+    if (!cmdEntity && taskEntity) {
+      t.state = 5;
+    } else {
+      t.goalId = c.targetId;
+      t.targetPoint = c.targetPoint;
+      t.targetViaBlip = c.targetViaBlip;
+      t.targetPastDeath = c.targetPastDeath;
+      t.targetFakeId = c.targetFakeId;
+      t.targetBlipRef = c.targetBlipRef;
+      t.site = c.pos;
+      if (c.targetId)
+        if (Entity* e = sim.FindEntity(c.targetId)) t.site = e->position;
+      const AiTarget now = CommandTarget(sim, t);
+      if (now.type == 1 && sim.FindEntity(now.entityId)) {
+        if (!u->weapons.empty() && HasTarget(sim, u->desiredTarget)) UpdateAttacker(sim, u, t, now);
+      } else {
+        UpdateAttacker(sim, u, t, AiTarget{});
+      }
+      t.state = 1;
+    }
+    t.waitUntil = 0;  // (the thread woken)
+  }
+}
+
 // new CUnitAttackTargetTask(target e) (the guard's and the patrol's child)
 BuildTask* MakeAttackTaskOn(Sim& sim, Unit* u, Entity* e) {
   // both callers (CUnitPatrolTask::TaskTick 0x61c229, CUnitGuardTask::SetEnemy 0x61390f) first build a CAiTarget of

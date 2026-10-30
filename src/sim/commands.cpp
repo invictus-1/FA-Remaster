@@ -777,6 +777,16 @@ void EndPatrol(Sim& sim, Unit* u, BuildTask& t) {
 // (issued with a formation at 4311, only 0x1a left on it) while 0x1a reclaims the tree group 0x2ff00d29 for it: at
 // 5382 the original's reclaim task has no target (+0x44 null, +0x4c set, state 0, not started), ends there and the
 // patrol walks to (737, 270) (SetGoal from NewMoveTask 0x6190cb); ours left formation commands out and reclaimed on.
+void RetargetAttackTasks(Sim& sim, UnitCommand& c) {
+  std::vector<Unit*> holders(c.units.begin(), c.units.end());
+  std::sort(holders.begin(), holders.end(), [](const Unit* a, const Unit* b) { return a->id < b->id; });
+  for (Unit* u : holders) {
+    if (!IsAlive(u) || u->commands.empty() || u->commands.front().get() != &c) continue;
+    if (u->headState != kRunning || !u->task) continue;
+    AttackTaskCommandEvent(sim, u, *u->task, c);
+  }
+}
+
 void RetargetPatrolTasks(Sim& sim, UnitCommand& c) {
   // (whatever the command's type is now: a patrol task under way keeps its listener when the type is changed,
   // HeadTaskType; read, not seen)

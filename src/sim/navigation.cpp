@@ -404,31 +404,38 @@ bool Navigation::WouldChangeCells(int x0, int z0, int x1, int z1, uint8_t fpCaps
   return false;
 }
 
-void Navigation::AddStructure(uint32_t entity, int x0, int z0, int x1, int z1, uint8_t fpCaps) {
+void Navigation::AddStructure(uint32_t entity, int x0, int z0, int x1, int z1, uint8_t fpCaps, bool append) {
   const uint8_t occ = OccLayersOf(fpCaps);
   if (!map_ || x1 <= x0 || z1 <= z0 || !occ) return;
-  ForgetStructure(entity);  // (occupying again: one record per entity)
+  if (!append) ForgetStructure(entity);  // (occupying again: one record per entity)
   structures_.push_back({entity, x0, z0, x1, z1, occ});
   SetCells(x0, z0, x1, z1, occ, true);
 }
 
 void Navigation::RemoveStructure(uint32_t entity, const int* rect) {
-  for (size_t i = 0; i < structures_.size(); ++i) {
-    if (structures_[i].entity != entity) continue;
-    OccupiedRect r = structures_[i];
+  std::vector<OccupiedRect> mine;
+  for (size_t i = 0; i < structures_.size();) {
+    if (structures_[i].entity != entity) {
+      ++i;
+      continue;
+    }
+    mine.push_back(structures_[i]);
     structures_.erase(structures_.begin() + static_cast<long>(i));
-    if (rect) SetCells(rect[0], rect[1], rect[2], rect[3], r.occ, false);
-    else SetCells(r.x0, r.z0, r.x1, r.z1, r.occ, false);
-    return;
+  }
+  if (mine.empty()) return;
+  if (rect) {
+    uint8_t occ = 0;
+    for (const OccupiedRect& r : mine) occ |= r.occ;
+    SetCells(rect[0], rect[1], rect[2], rect[3], occ, false);
+  } else {
+    for (const OccupiedRect& r : mine) SetCells(r.x0, r.z0, r.x1, r.z1, r.occ, false);
   }
 }
 
 void Navigation::ForgetStructure(uint32_t entity) {
-  for (size_t i = 0; i < structures_.size(); ++i)
-    if (structures_[i].entity == entity) {
-      structures_.erase(structures_.begin() + static_cast<long>(i));
-      return;
-    }
+  structures_.erase(std::remove_if(structures_.begin(), structures_.end(),
+                                   [&](const OccupiedRect& r) { return r.entity == entity; }),
+                    structures_.end());
 }
 
 bool Navigation::AnyStructureIn(int x0, int z0, int x1, int z1, uint8_t occ) const {

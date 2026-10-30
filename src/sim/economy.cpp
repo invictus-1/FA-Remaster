@@ -356,6 +356,17 @@ const UnitBpData& GetUnitBpData(lua_State* L, const BlueprintInfo& bp) {
   d.skirtOffsetZ = GetNum(L, ph, "SkirtOffsetZ", 0);
   d.skirtSizeX = GetNum(L, ph, "SkirtSizeX", 0);
   d.skirtSizeZ = GetNum(L, ph, "SkirtSizeZ", 0);
+  PushField(L, ph, "OccupyRects");
+  if (lua_istable(L, -1))
+    for (int i = 1;; ++i) {
+      lua_rawgeti(L, -1, i);
+      if (!lua_isnumber(L, -1)) {
+        lua_pop(L, 1);
+        break;
+      }
+      d.occupyRects.push_back(static_cast<float>(lua_tonumber(L, -1)));
+      lua_pop(L, 1);
+    }
   lua_settop(L, top);
   return (g_viewRead ? viewCache : cache).emplace(&bp, std::move(d)).first->second;
 }

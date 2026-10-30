@@ -162,9 +162,11 @@ class Navigation {
   // 0x721b30 -> FillRect with 0), whoever else still stands on those cells. So releasing one of two overlapping
   // occupiers frees the shared cells. rect: the cells to clear (the releaser's own computation, e.g. a prop's rect
   // at its position then); nullptr: the rect it occupied.
-  void AddStructure(uint32_t entity, int x0, int z0, int x1, int z1, uint8_t fpCaps);
+  // append: the entity holds several rects (a quantum gateway's Physics.OccupyRects): this one is added to its others.
+  void AddStructure(uint32_t entity, int x0, int z0, int x1, int z1, uint8_t fpCaps, bool append = false);
+  // Every record of the entity goes; rect given: those cells are cleared, else each record's own.
   void RemoveStructure(uint32_t entity, const int* rect = nullptr);
-  // The entity's record goes, its cells stay as they are (a unit that no longer counts as occupying ground).
+  // The entity's records go, its cells stay as they are (a unit that no longer counts as occupying ground).
   void ForgetStructure(uint32_t entity);
   const std::vector<OccupiedRect>& Structures() const { return structures_; }
   // Whether AddStructure over [x0, x1) x [z0, z1) with these caps would set a cell's layer bit (SetCells' test).

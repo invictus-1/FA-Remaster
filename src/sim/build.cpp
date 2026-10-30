@@ -425,6 +425,32 @@ bool UnitCanBuild(const Unit* u, const BlueprintInfo& bp) {
 void ExecuteOccupyGround(Sim& sim, Unit* u) {
   if (!u->bpData || !u->bpData->structure || !u->blueprint) return;
   const NamedFootprint& fp = Footprint(*u->blueprint);
+  // A blueprint with Physics.OccupyRects (bp+0x310, read by 0x5267a0 at 0x6a77b7) holds those rects instead of its
+  // footprint (0x6a77e2: a non-empty list; 0x6a77ea: count = floats / 4, none whole: nothing is held): each entry is
+  // (centre x offset a, centre z offset b, half size x c, half size z d) and covers [floor(a + x - c + 0.5),
+  // floor(x + c + a + 0.5)) x [floor(z + b - d + 0.5), floor(z + d + b + 0.5)) (0x6a7819..0x6a7924, x and z the
+  // position, frndint and one down when above: floor), set in the land grid for footprint caps & 7 and in the water
+  // grid for & 8 (FillRect 0x8d8370 at 0x6a7963 / 0x6a798e), then the path maps told of the rect (0x8e3620). The
+  // quantum gateways have two pillars and the passage between them free. Seen: MP1 14747, army 0's gateway 0x119
+  // (uab0304, 832.5 235.5) rolls its SACU 0x12f off to (832.5, 238.5): the original's goal is the cell (832, 238) in
+  // the passage (it drives straight out, the Move ends at z 238.03); ours had the whole 7 x 7 held and took the free
+  // spot (831, 239), turning 45 degrees left.
+  if (!u->bpData->occupyRects.empty()) {
+    const std::vector<float>& R = u->bpData->occupyRects;
+    const size_t n = R.size() / 4;
+    for (size_t k = 0; k < n; ++k) {
+      const float a = R[4 * k], b = R[4 * k + 1], c = R[4 * k + 2], d = R[4 * k + 3];
+      const Vec3& p = u->position;
+      const int x0 = static_cast<int>(std::floor(a + p.x - c + 0.5f));
+      const int x1 = static_cast<int>(std::floor(p.x + c + a + 0.5f));
+      const int z0 = static_cast<int>(std::floor(p.z + b - d + 0.5f));
+      const int z1 = static_cast<int>(std::floor(p.z + d + b + 0.5f));
+      if (sim.navigation().WouldChangeCells(x0, z0, x1, z1, fp.caps)) LandNavBeforeOccupancy(sim, x0, z0, x1, z1);
+      sim.navigation().AddStructure(EntityRef(u), x0, z0, x1, z1, fp.caps, k > 0);
+      LandNavDirty(sim, x0, z0, x1, z1);
+    }
+    return;
+  }
   int ox = RoundEven(u->position.x - fp.sizeX * 0.5f), oz = RoundEven(u->position.z - fp.sizeZ * 0.5f);
   // The stale clusters' data is made before the grids change (LandNavBeforeOccupancy: from the grid as it still is).
   // When no cell's layer bit changes, the grid stays as it is and that data comes out the same when it is made later,
@@ -452,6 +478,17 @@ void ReleaseStructure(Sim& sim, Unit* u) {
   }
   u->occupiesGround = false;  // (ReleaseOccupyGround 0x6a7b81)
   if (!u->bpData || !u->bpData->structure) return;
+  // ReleaseOccupyGround 0x6a7ab0 clears the blueprint FOOTPRINT's rect at the unit's position (0x6a7acb..0x6a7b7b ->
+  // ReleaseOccupy 0x721b30), OccupyRects or not: a gateway frees its passage cells too.
+  if (!u->bpData->occupyRects.empty() && u->blueprint) {
+    const NamedFootprint& fp = Footprint(*u->blueprint);
+    const int ox = RoundEven(u->position.x - fp.sizeX * 0.5f), oz = RoundEven(u->position.z - fp.sizeZ * 0.5f);
+    const int r[4] = {ox, oz, ox + fp.sizeX, oz + fp.sizeZ};
+    LandNavBeforeOccupancy(sim, r[0], r[1], r[2], r[3]);
+    LandNavDirty(sim, r[0], r[1], r[2], r[3]);
+    sim.navigation().RemoveStructure(EntityRef(u), r);
+    return;
+  }
   for (const auto& r : sim.navigation().Structures())
     if (r.entity == EntityRef(u)) {
       LandNavBeforeOccupancy(sim, r.x0, r.z0, r.x1, r.z1);
@@ -4623,7 +4660,10 @@ void Detach(Sim& sim, Unit* u) {
   sim.MarkUnitsMoved();
 }
 int l_DetachFrom(lua_State* L) {
-  if (Unit* u = ToObject<Unit>(L, 1)) Detach(*S(L), u);
+  // (the skip flag, arg 2: without it a unit that cannot fly falls, DetachFromFalls in sim/transport.cpp)
+  if (Unit* u = ToObject<Unit>(L, 1)) {
+    if (lua_toboolean(L, 2) || !DetachFromFalls(*S(L), u)) Detach(*S(L), u);
+  }
   else if (Entity* e = ToObject<Entity>(L, 1)) e->attachParent = 0;
   return 0;
 }
