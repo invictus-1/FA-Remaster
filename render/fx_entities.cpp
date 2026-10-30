@@ -710,8 +710,10 @@ function __fxUnitInfo(id, path)
   local p, a = bp.Physics or {}, bp.Air or {}
   local e = bp.Economy or {}
   local beams = bp.Display and bp.Display.MovementEffects and bp.Display.MovementEffects.BeamExhaust
+  local caps = p.BuildOnLayerCaps
   return tostring(p.MotionType or ''), p.Elevation or 0, p.MaxSpeed or 0, a.MaxAirspeed or 0, p.MaxAcceleration or 0,
-         e.BuildTime or 0, e.BuildRate or 0, beams and true or false
+         e.BuildTime or 0, e.BuildRate or 0, beams and true or false,
+         type(caps) == 'table' and caps.LAYER_Water == true and caps.LAYER_Land ~= true
 end
 -- what the engine calls on a unit as it moves (OnMotionHorzEventChange, OnMotionVertEventChange,
 -- OnLayerChange), and the terrain it moves over changing (OnTerrainTypeChange, with the terrain types)
@@ -1020,6 +1022,7 @@ struct Ent {
   int horz = 3;
   bool driveDone = false;
   std::string motion;
+  bool onWater = false;  // [navstand] (StandHeight)
   int terrainCode = -1;
   // --fx-fire: a unit made with its weapons poses its bones with its manipulators (else the scripts' manipulators
   // do nothing in the stand, as before)
@@ -1239,7 +1242,9 @@ struct FxEntities::Impl {
     *way = Length(w) > 1e-6f ? Normalize(w) : Vec3{0, 0, 1};
   }
   // Where a unit of that way of moving stands at a place, and in which layer.
-  float StandHeight(const std::string& motion, float elevation, float x, float z, std::string* layer) const {
+  // ([navstand] `onWater`: a structure built on water only, BuildOnLayerCaps: it stands on the water's surface, as the game
+  // stands it, not on the sea's bottom under it)
+  float StandHeight(const std::string& motion, float elevation, float x, float z, std::string* layer, bool onWater = false) const {
     const float ground = Ground(x, z);
     const bool wet = water && ground < waterLevel;
     if (motion.find("Air") != std::string::npos) {
@@ -1258,7 +1263,7 @@ struct FxEntities::Impl {
       *layer = wet ? "Seabed" : "Land";
       return ground;
     }
-    if (motion.find("Water") != std::string::npos || motion.find("SurfacingSub") != std::string::npos) {
+    if (motion.find("Water") != std::string::npos || motion.find("SurfacingSub") != std::string::npos || (onWater && wet)) {
       *layer = "Water";
       return wet ? waterLevel : ground;
     }
@@ -2934,17 +2939,18 @@ uint32_t FxEntities::AddUnit(const std::string& id, Vec3 at, const UnitPlace& ho
   lua_getglobal(L, "__fxUnitInfo");
   lua_pushstring(L, unitId.c_str());
   lua_pushstring(L, path.c_str());
-  if (lua_pcall(L, 2, 8, 0) != 0) {
+  if (lua_pcall(L, 2, 9, 0) != 0) {
     *error = std::string("its blueprint cannot be read: ") + (lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
     lua_pop(L, 1);
     return 0;
   }
-  if (lua_isstring(L, -8)) motion = lua_tostring(L, -8);
-  elevation = Num(L, -7);
-  landSpeed = Num(L, -6);
-  airSpeed = Num(L, -5);
-  accel = Num(L, -4);
-  lua_pop(L, 8);
+  if (lua_isstring(L, -9)) motion = lua_tostring(L, -9);
+  elevation = Num(L, -8);
+  landSpeed = Num(L, -7);
+  airSpeed = Num(L, -6);
+  accel = Num(L, -5);
+  const bool onWater = lua_toboolean(L, -1) != 0;  // [navstand]
+  lua_pop(L, 9);
   Vec3 forward = how.forward;
   forward.y = 0;
   forward = Length(forward) > 1e-4f ? Normalize(forward) : Vec3{0, 0, 1};
@@ -2959,7 +2965,7 @@ uint32_t FxEntities::AddUnit(const std::string& id, Vec3 at, const UnitPlace& ho
     place = at - forward * (speed * (how.fallAfter + fall));
   }
   std::string layer;
-  place.y = m.StandHeight(motion, elevation, place.x, place.z, &layer);
+  place.y = m.StandHeight(motion, elevation, place.x, place.z, &layer, onWater);
   const bool wet = m.water && m.Ground(place.x, place.z) < m.waterLevel;
   if (!air && !wet && motion.find("Water") != std::string::npos)
     fprintf(stderr, "render: --fx: %s moves on water and is not on water: it stands on the ground all the same\n", unitId.c_str());
@@ -2975,6 +2981,7 @@ uint32_t FxEntities::AddUnit(const std::string& id, Vec3 at, const UnitPlace& ho
   e.born = m.now;
   e.layer = layer;
   e.motion = motion;
+  e.onWater = onWater;
   e.elevation = elevation;
   e.topSpeed = speed;
   e.accel = accel > 0 ? accel : speed;
@@ -3061,7 +3068,7 @@ void FxEntities::Drive(uint32_t unit, const std::vector<Vec3>& loop, double star
   Vec3 at, way;
   m.OnLoop(*e, 0, &at, &way);
   std::string layer;
-  e->position = {at.x, m.StandHeight(e->motion, e->elevation, at.x, at.z, &layer), at.z};
+  e->position = {at.x, m.StandHeight(e->motion, e->elevation, at.x, at.z, &layer, e->onWater), at.z};
   e->turn = Facing(way);
   e->direction = way;
 }
@@ -3375,7 +3382,7 @@ void FxEntities::Advance(double now) {
         Vec3 at, way;
         m.OnLoop(*e, e->distance, &at, &way);
         std::string layer;
-        e->position = {at.x, m.StandHeight(e->motion, e->elevation, at.x, at.z, &layer), at.z};
+        e->position = {at.x, m.StandHeight(e->motion, e->elevation, at.x, at.z, &layer, e->onWater), at.z};
         e->turn = Facing(way);
         e->direction = way;
         e->velocity = way * e->speed;
