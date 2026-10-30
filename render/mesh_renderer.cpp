@@ -1608,7 +1608,11 @@ void MeshRenderer::BuildRows(Entry* entry, float* rows) {
     }
     const ModelBone& rest = bones[i];
     if ((a && a->hidden) || (!a && b && b->hidden)) {  // hidden: its vertices at no size, where its joint is
-      const float gone[12] = {0, 0, 0, rest.position.x, 0, 0, 0, rest.position.y, 0, 0, 0, rest.position.z};
+      // ([machinery] where it is posed, not where it rests: a conveyor's part hidden for its jump back waits where it comes
+      // back, and the frame it shows again moves its vertices only by its own size there, not from its joint at rest)
+      const FrameBone* h = a ? a : b;
+      const Vec3 at = Vec3{h->position[0], h->position[1], h->position[2]} * toModel;
+      const float gone[12] = {0, 0, 0, at.x, 0, 0, 0, at.y, 0, 0, 0, at.z};
       std::copy(gone, gone + 12, out);
       continue;
     }

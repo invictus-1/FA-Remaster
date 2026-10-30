@@ -213,7 +213,8 @@ float Machinery::PoseUnit(const FrameUnit& unit, const Model& model, Vec3 at, co
       const float u = cycle(part);
       const float run = 1 - part.gap;
       if (u >= run) hidden[i] = w >= 0.5f;
-      const float s = std::min(u / run, 1.0f);
+      // (hidden for the jump back: waiting where it comes back, so that the frame it shows again it does not streak there)
+      const float s = u >= run && hidden[i] ? 0.0f : std::min(u / run, 1.0f);
       move = part.axis * (part.from + (part.to - part.from) * s);
     }
     r = Nlerp(Quat{}, r, w);
