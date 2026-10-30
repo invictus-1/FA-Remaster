@@ -11,7 +11,7 @@ simulation as `ScenarioInfo.ArmySetup[army]` and the replay keeps them:
 | Key | Values | Default |
 |---|---|---|
 | `RemasterPersonality` | `'random'`, `'balanced'`, `'rusher'`, `'turtle'` (strings) | `'random'` |
-| `RemasterAggression` | `-2`, `-1`, `0`, `1`, `2` (numbers); shown as -2 Careful .. +2 Bold | `0` |
+| `RemasterAggression` | `-2`, `-1`, `0`, `1`, `2` (numbers); shown as -2 Defensive .. +2 Aggressive | `0` |
 | `RemasterEconomy` | `-2`, `-1`, `0`, `1`, `2` (numbers); shown as -2 Army first .. +2 Economy first | `0` |
 | `RemasterTeacher` | `'off'`, `'on'` (strings) | `'off'` |
 

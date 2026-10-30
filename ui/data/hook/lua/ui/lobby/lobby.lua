@@ -25,8 +25,8 @@ do
         {
             key = 'RemasterAggression', label = "Aggression",
             values = {
-                { key = -2, text = "-2  Careful" }, { key = -1, text = "-1" }, { key = 0, text = "0  Normal" },
-                { key = 1, text = "+1" }, { key = 2, text = "+2  Bold" },
+                { key = -2, text = "-2  Defensive" }, { key = -1, text = "-1" }, { key = 0, text = "0  Normal" },
+                { key = 1, text = "+1" }, { key = 2, text = "+2  Aggressive" },
             },
         },
         {
