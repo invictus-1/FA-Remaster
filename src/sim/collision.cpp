@@ -152,22 +152,41 @@ bool PointInShape(const WorldShape& s, Vec3 p) {
   return false;
 }
 
+// The primitive's GetBoundingBox (vt slot 0), what Entity::UpdateAABox 0x679180 stores at entity+0x240..+0x254 and the
+// box queries test (GatherUnmarkedUnitsInBox 0x721c00 at 0x721d00..0x721d1e, CollectEntitiesInBox 0x721dc0, touching
+// passes), and what Unit::UpdateCollision 0x6ab520 places in the entity grid (0x6ab608, the skirt-wide box). A sphere
+// 0x4ff9a0: centre -/+ radius. A box 0x4ffc20 -> 0x4fe2d0: its eight corners ((c -/+ a0 h0) -/+ a1 h1) -/+ a2 h2
+// (0x4fff00), their aligned box (0xa3ae40: min and max, centre (max + min) x 0.5, half size (max - min) x 0.5, axes
+// the identity), then centre -/+ half size. Not centre -/+ the axes' parts times the half sizes summed: the same box
+// but for the last bit, and a box edge on a whole cell decides whether a path cell is free. Seen: MP1 14687, army 5's
+// T2 engineer 0x500105 asks the cell (417,892) past 0x500093 at (417.526184, 891.581726): the summed form put its box's
+// z max at 892 exactly (touching the square [892, 893]: blocked), the corners' fit a float step below it; the
+// original's path went (416,892) diagonally, ours along x first.
 void ShapeBounds(const WorldShape& s, Vec3* mn, Vec3* mx) {
-  Vec3 e;
   if (s.type == ShapeType::Sphere) {
-    e = {s.r, s.r, s.r};
-  } else {
-    const float h[3] = {s.half.x, s.half.y, s.half.z};
-    float ex = 0, ey = 0, ez = 0;
-    for (int i = 0; i < 3; ++i) {
-      ex += std::fabs(s.ax[i].x) * h[i];
-      ey += std::fabs(s.ax[i].y) * h[i];
-      ez += std::fabs(s.ax[i].z) * h[i];
-    }
-    e = {ex, ey, ez};
+    const Vec3 e{s.r, s.r, s.r};
+    *mn = Sub(s.c, e);
+    *mx = Add(s.c, e);
+    return;
   }
-  *mn = Sub(s.c, e);
-  *mx = Add(s.c, e);
+  auto times = [](const Vec3& v, float k) { return Vec3{v.x * k, v.y * k, v.z * k}; };
+  auto neg = [](const Vec3& v) { return Vec3{-v.x, -v.y, -v.z}; };
+  const Vec3 A = times(s.ax[0], s.half.x), B = times(s.ax[1], s.half.y), C = times(s.ax[2], s.half.z);
+  Vec3 lo{}, hi{};
+  for (int i = 0; i < 8; ++i) {
+    const Vec3 a = (i & 1) ? A : neg(A), b = (i & 2) ? B : neg(B), c = (i & 4) ? C : neg(C);
+    const Vec3 p = Add(Add(Add(s.c, a), b), c);
+    if (i == 0) {
+      lo = hi = p;
+      continue;
+    }
+    lo = {std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z)};
+    hi = {std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z)};
+  }
+  const Vec3 c{(hi.x + lo.x) * 0.5f, (hi.y + lo.y) * 0.5f, (hi.z + lo.z) * 0.5f};
+  const Vec3 e{(hi.x - lo.x) * 0.5f, (hi.y - lo.y) * 0.5f, (hi.z - lo.z) * 0.5f};
+  *mn = Sub(c, e);
+  *mx = Add(c, e);
 }
 
 bool GridCellsMeet(const Vec3& mnA, const Vec3& mxA, const Vec3& mnB, const Vec3& mxB) {
@@ -312,9 +331,7 @@ int l_RevertCollisionShape(lua_State* L) {
 
 // Entity:GetCollisionExtents() 0x68ca80: one argument (the entity); nil without a collision primitive (+0x178),
 // else a new table {Min = Vector, Max = Vector}, the world box the primitive gives (vt-1, GetBoundingBox: a sphere
-// 0x4ff9a0 centre -+ radius on each axis; a box 0x4ffc20 the box of its eight corners, 0x4fe2d0). Ours takes the
-// box's axes times its half sizes, summed (the same box; the original fits it to the corners with a Wild Magic
-// routine, 0xa3ae40, whose last bits may round differently). The objective arrow sizes itself by it; FAF's
+// 0x4ff9a0 centre -+ radius on each axis; a box 0x4ffc20 the box of its eight corners, 0x4fe2d0: ShapeBounds). The objective arrow sizes itself by it; FAF's
 // Prop:CacheAndRemoveCollisionExtents keeps it to put the shape back later.
 int l_GetCollisionExtents(lua_State* L) {
   if (lua_gettop(L) != 1) luaL_error(L, "%s\n  expected %d args, but got %d", "Entity:GetCollisionExtents()", 1, lua_gettop(L));

@@ -650,20 +650,36 @@ bool TransportAttach(Sim& sim, TransportObj& T, Unit* cu) {
   return true;
 }
 
-bool FootprintFitsHere(Sim& sim, const Unit* cu) {
+bool FootprintFitsAt(Sim& sim, const Unit* cu, const Vec3& at) {
   const NamedFootprint& fp = Fp(cu);
-  int cx = static_cast<int>(std::nearbyint(cu->position.x - fp.sizeX * 0.5f));
-  int cz = static_cast<int>(std::nearbyint(cu->position.z - fp.sizeZ * 0.5f));
+  int cx = static_cast<int>(std::nearbyint(at.x - fp.sizeX * 0.5f));
+  int cz = static_cast<int>(std::nearbyint(at.z - fp.sizeZ * 0.5f));
   if (!sim.navigation().HasMap()) return true;
   int caps = sim.navigation().CellCaps(fp, cx, cz, true);  // (FootprintFits with caps -1, 0x720aa0)
   caps = sim.navigation().FootprintFits(static_cast<uint8_t>(caps), fp, cx, cz);
   return caps != 0;
 }
+bool FootprintFitsHere(Sim& sim, const Unit* cu) { return FootprintFitsAt(sim, cu, cu->position); }
+
+// The unit's COMMITTED position (IUnit::GetPosition 0x6a49b0: unit+0xb4), where the beat began with it until the
+// beat's AdvanceCoords: once its turn has come, lastPosition (sim.cpp's unit pass), whatever its turn or the cargo's
+// catch-up has put in position since.
+Vec3 CommittedUnitPos(const Sim& sim, const Unit* u) {
+  return sim.coordsPending && u->lastPosTick == sim.tick() ? u->lastPosition : u->position;
+}
 
 // TransportDetachUnit 0x5e7170
+// The footprint test (0x5e7224..0x5e7271: the carrier in the Air layer, unit+0x120 == 0x10) takes the cargo's place
+// from vt+0x14 (0x5e7237), its committed position, not where the carrier's bone has taken it in this beat. Seen: MP1
+// 14973, army 6's transport 0x600041 (uaa0104) is shot down over the shore at 1.31 a beat toward -x; FAF's KillCargo
+// lets go of its nine engineers (ual0105): 0x600037, 0x600088, 0x6000a5 and 0x6000ac are on cells 498 / 499 (no
+// layer fits) where the bone has them, on cell 500 (water) where the beat began; the original lets them go (Immobile
+// from OnDetachedFromTransport, going on with the carrier's step), ours refused them there and they came down at once.
+// (0x6000af and 0x6000c1, on cell 499 at the beat's start, stay on in both.)
 bool TransportDetach(Sim& sim, TransportObj& T, Unit* cu) {
-  CatchUpCargo(sim, cu);  // (the footprint test reads where the unit is)
-  if (T.owner->layer == "Air" && !FootprintFitsHere(sim, cu)) return false;
+  const Vec3 at = CommittedUnitPos(sim, cu);
+  CatchUpCargo(sim, cu);  // (the fall starts from where the bone took it)
+  if (T.owner->layer == "Air" && !FootprintFitsAt(sim, cu, at)) return false;
   int bone = cu->parentBone;
   if (Dbg()) Logf(LogLevel::Debug, "moho64: tick %u transport %u detach %u (%s)", sim.tick(), T.owner->id, cu->id, cu->blueprint->id.c_str());
   DetachUnitFrom(sim, cu, false);
@@ -689,7 +705,8 @@ std::vector<Unit*> TransportDetachAll(Sim& sim, TransportObj& T, bool destroySom
       storedUnits.push_back(u);
       continue;
     }
-    if (!destroySome && T.owner->layer == "Air" && !FootprintFitsHere(sim, u)) continue;
+    // (0x5e74c4..0x5e7501: vt+0x14, the committed position, as TransportDetachUnit)
+    if (!destroySome && T.owner->layer == "Air" && !FootprintFitsAt(sim, u, CommittedUnitPos(sim, u))) continue;
     out.push_back(u);
   }
   lua_State* L = sim.L();
@@ -720,6 +737,29 @@ std::vector<Unit*> TransportDetachAll(Sim& sim, TransportObj& T, bool destroySom
 float Elev(const TerrainMap* map, float x, float z) { return map ? map->TerrainHeight(x, z) : 0; }
 
 }  // namespace
+
+// Unit:DetachFrom() without the skip flag (cfunc 0x68c520: arg 2 by lua_toboolean, 0x68c5c2, to the entity's
+// DetachFrom vt+0x60, Unit::DetachFrom 0x6ab480 -> NotifyDetached 0x6b9570 with bl = the flag): a unit that cannot fly
+// (bp+0x368 clear, 0x6b9662) and is not told to skip falls (motion state 2, 0x6b968e) on the Air layer, from the
+// entity's last displacement, as cargo let go by its transport (DetachUnitFrom). The motion's target is set first
+// (0x6b9654): the COMMITTED position (vt+0x14, 0x6b95ff) less the parent's local Z axis. Seen: MP1 14973, army 6's
+// transport 0x600041 (uaa0104) is shot down; FAF's KillCargo kills its engineers and OnAttachedKilled
+// (TransportUnitComponent.lua:52) lets 0x6000af and 0x6000c1 go with DetachFrom(): the original's go on with the
+// transport's step (1.31 a beat toward -x, rising), ours were set on the ground (the snap of a skip-flag detach).
+// false: not this case (a flier, a structure, the flag given, no parent): the caller's plain detach applies.
+bool DetachFromFalls(Sim& sim, Unit* u) {
+  if (!u->parentId || CanFly(u) || !u->motion.bp || !u->motion.bp->mobile()) return false;
+  if (const Entity* P = sim.FindEntity(u->parentId)) {
+    const Quat& q = P->orientation;
+    const float zx = (q.w * q.y + q.z * q.x) * 2.0f;
+    const float zy = (q.z * q.y - q.w * q.x) * 2.0f;
+    const float zz = 1.0f - (q.y * q.y + q.x * q.x) * 2.0f;
+    const Vec3 c = CommittedUnitPos(sim, u);
+    u->motion.motionTarget = Vec3{c.x - zx, c.y - zy, c.z - zz};
+  }
+  DetachUnitFrom(sim, u, false);
+  return true;
+}
 
 bool TransportAssignSlotFor(Sim& sim, Unit* transport, Unit* cargo, int requested) {
   return transport && transport->transport && cargo && cargo->blueprint &&

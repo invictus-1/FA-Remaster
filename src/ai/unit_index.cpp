@@ -452,6 +452,7 @@ constexpr uint32_t kMemoryMobile = 600;
 struct Memo {
   Vec3 pos;
   int entity = -1;
+  int owner = -1;  // the unit's army (0-based), for the read per enemy army (phase 6)
   uint32_t tick = 0;
   bool structure = false;
   float hf = 1;
@@ -470,6 +471,9 @@ struct ArmyIndex {
   // entity index -> effective count (memory weight x health share), in entity order
   std::vector<std::map<int, float>> forces;  // [zone][side]
   std::vector<ZoneSideExtra> extra;  // [zone][side]
+  // The enemy's units per enemy army (phase 6, the strategy layer's read of each enemy on its own, AIEnemyMix's
+  // third argument): [army0] -> blueprint entity index -> effective count, the same units and weights as `forces`
+  std::vector<std::map<int, float>> enemyOf;
   Cell& At(int zone0, int side, int cls) { return cells[(static_cast<size_t>(zone0) * kSides + side) * kMoveClasses + cls]; }
   ZoneSideExtra& Extra(int zone0, int side) { return extra[static_cast<size_t>(zone0) * kSides + side]; }
 };
@@ -490,6 +494,7 @@ void BuildIndex(Sim& sim, ArmyIndex& ix) {
   ix.cells.assign(static_cast<size_t>(nz) * kSides * kMoveClasses, Cell{});
   ix.forces.assign(static_cast<size_t>(nz) * kSides, std::map<int, float>{});
   ix.extra.assign(static_cast<size_t>(nz) * kSides, ZoneSideExtra{});
+  ix.enemyOf.assign(sim.armies().size(), std::map<int, float>{});
   for (int& u : ix.units) u = 0;
   ix.unknown = ix.outside = 0;
   const Army* me = sim.armies()[ix.army0].get();
@@ -503,7 +508,7 @@ void BuildIndex(Sim& sim, ArmyIndex& ix) {
     return r.valid ? &r : nullptr;
   };
   // a known unit's (or a remembered one's, with its weight) ratings into its cell
-  auto addKnown = [&](int side, const Vec3& p, const UnitRating* r, float hf, float weight, bool remembered) {
+  auto addKnown = [&](int side, const Vec3& p, const UnitRating* r, float hf, float weight, bool remembered, int owner) {
     const int z = m.ZoneAt(p.x, p.z, -1);
     if (!z) {
       ++ix.outside;
@@ -511,6 +516,8 @@ void BuildIndex(Sim& sim, ArmyIndex& ix) {
     }
     if (!remembered) ++ix.units[side];
     ix.forces[static_cast<size_t>(z - 1) * kSides + side][r->entity] += weight * hf * hf;  // (hf = sqrt(health share))
+    if (side == kEnemy && owner >= 0 && owner < static_cast<int>(ix.enemyOf.size()))
+      ix.enemyOf[owner][r->entity] += weight * hf * hf;
     Cell& c = ix.At(z - 1, side, r->move);
     const float k = hf * r->fix * weight;
     c.count += weight;
@@ -551,7 +558,7 @@ void BuildIndex(Sim& sim, ArmyIndex& ix) {
       ++enemiesAll;
       if (ix.vision) {  // the cheat option: every enemy unit known where it is
         if (u->fractionComplete < 1) continue;
-        addKnown(kEnemy, u->position, r, hf, 1, false);
+        addKnown(kEnemy, u->position, r, hf, 1, false, u->army->index - 1);
         continue;
       }
       // a jammer's fake blips: unknown contacts until known as fakes (whatever the real unit's own blip says)
@@ -565,18 +572,19 @@ void BuildIndex(Sim& sim, ArmyIndex& ix) {
         continue;
       }
       if (u->fractionComplete < 1) continue;
-      addKnown(kEnemy, p, r, hf, 1, false);
+      addKnown(kEnemy, p, r, hf, 1, false, u->army->index - 1);
       // what the army has seen goes into its memory (refreshed while it holds the blip)
       Memo& mo = ix.memory[u->id];
       mo.pos = p;
       mo.entity = r->entity;
+      mo.owner = u->army->index - 1;
       mo.tick = now;
       mo.structure = r->move == kMoveStatic;
       mo.hf = hf;
       continue;
     }
     if (u->fractionComplete < 1) continue;
-    addKnown(side, u->position, r, hf, 1, false);
+    addKnown(side, u->position, r, hf, 1, false, -1);
   }
   // Remembered enemies the army does not hold now: structures until the army sees their place again (vision there),
   // mobile units fading out over kMemoryMobile beats. In id order; entries refreshed this build are counted above.
@@ -595,7 +603,7 @@ void BuildIndex(Sim& sim, ArmyIndex& ix) {
         continue;
       }
       const float weight = mo.structure ? 1.0f : 1.0f - static_cast<float>(age) / kMemoryMobile;
-      addKnown(kEnemy, mo.pos, &rs.byEntity[mo.entity], mo.hf, weight, true);
+      addKnown(kEnemy, mo.pos, &rs.byEntity[mo.entity], mo.hf, weight, true, mo.owner);
       ++it;
     }
   ix.builtTick = sim.tick();
@@ -1212,20 +1220,29 @@ std::vector<ForceStack> CheckForce(lua_State* L, int i) {
 // index's enemy units (fair intel and the memory of lost contacts, with their weights) summed over the map, by
 // blueprint entity order. Without `all`, the mobile army only, for the counter-pick: land, hover, amphibious and air
 // units, engineers and commanders left out (the form AIBuildValue takes as its enemy). With `all`, every known enemy
-// unit and structure (the strategy layer's read of the enemy's economy and tech).
+// unit and structure (the strategy layer's read of the enemy's economy and tech). With `of` (phase 6), only the units
+// of that enemy army (1-based), so each enemy is read on its own; an army that is no enemy gives an empty list.
 int l_AIEnemyMix(lua_State* L) {
   Sim& sim = *Sim::From(L);
   ArmyIndex& ix = CheckArmyIndex(L, 1);
   const bool all = lua_toboolean(L, 2) != 0;
+  const int of = lua_isnoneornil(L, 3) ? 0 : static_cast<int>(luaL_checknumber(L, 3));
+  if (of != 0 && (of < 1 || of > static_cast<int>(sim.armies().size()))) luaL_argerror(L, 3, "no such army");
   RatingsState& rs = Ratings(sim);
   std::map<int, float> mix;  // entity -> count
-  for (size_t i = kEnemy; i < ix.forces.size(); i += kSides)
-    for (const auto& [entity, count] : ix.forces[i]) {
+  auto add = [&](const std::map<int, float>& m) {
+    for (const auto& [entity, count] : m) {
       const UnitRating& r = rs.byEntity[entity];
       if (!all && (r.move == kMoveStatic || r.move == kMoveNaval)) continue;
       if (!all && (r.kinds & (kKindEngineer | kKindCommander))) continue;
       mix[entity] += count;
     }
+  };
+  if (of != 0) {
+    if (of - 1 < static_cast<int>(ix.enemyOf.size())) add(ix.enemyOf[of - 1]);
+  } else {
+    for (size_t i = kEnemy; i < ix.forces.size(); i += kSides) add(ix.forces[i]);
+  }
   lua_newtable(L);
   int n = 0;
   for (const auto& [entity, count] : mix) {

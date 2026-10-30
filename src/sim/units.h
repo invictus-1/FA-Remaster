@@ -81,6 +81,7 @@ struct UnitBpData {
   std::string buildRestriction;     // Physics.BuildRestriction
   int buildOnLayerCaps = 1;         // Physics.BuildOnLayerCaps (layer bits)
   float skirtOffsetX = 0, skirtOffsetZ = 0, skirtSizeX = 0, skirtSizeZ = 0;
+  std::vector<float> occupyRects;   // Physics.OccupyRects (bp+0x310): centre x, z offsets, half sizes x, z per rect
   bool structure = false;           // no motion type (the build grid applies)
   float maxGroundVariation = 1;
   bool flattenSkirt = false;

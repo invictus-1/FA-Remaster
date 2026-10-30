@@ -124,6 +124,9 @@ bool TransportCallTask(const Unit* u);
 void AttachedUnitsTick(Sim& sim);
 // A script-attached unit whose parent no longer exists: free motion again (a flyer) or a fall, on the Air layer.
 void AttachParentGone(Sim& sim, Unit* u);
+// Unit:DetachFrom() without the skip flag, for a unit that cannot fly: it falls (NotifyDetached's ballistic branch).
+// false: not that case.
+bool DetachFromFalls(Sim& sim, Unit* u);
 // An attached unit takes its parent's layer (with the script's OnLayerChange when it changes).
 void SetAttachedUnitLayer(Sim& sim, Unit* u, const std::string& layer);
 // Entity::CalculateAttachedTransform 0x67a020 for a unit attached by its own bone (Unit::ownBone) to a parent bone

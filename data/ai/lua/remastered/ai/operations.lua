@@ -25,9 +25,15 @@ local kHorizon = 400       -- world units of travel that count as "can come to t
 local kCandidates = 6      -- enemy zones looked at by the estimate for a new attack (the best by value and distance)
 local kGatherShare = 0.7   -- the share of the army at the staging zone that lets it commit
 local kGatherRadius = 45   -- world units around the staging zone's centre that count as "there"
-local kGatherTicks = 450   -- a gather commits (or is dropped) after this long at most
-local kGuardGroup = 8      -- idle units hold our outlying economy zones, at most this many per zone
+local kGatherTicks = 450   -- a gather commits (or is dropped) after this long at most, plus the walk (phase 6)
+local kGatherSpeed = 2.5   -- world units a second: the walk to the staging zone that the gather waits for
+local kGatherLeast = 0.3   -- when the time is up, at least this share of the army must be at the staging zone
+local kGuardGroup = 8      -- a guard post's units when nothing of the enemy can come to it soon
+local kGuardMax = 24       -- a guard post's units at most, however much of the enemy can come
 local kGuardRadius = 40    -- world units around a zone's centre that count as "at its guard post"
+local kPostHorizon = 300   -- world units of travel that count as "can come to this post soon"
+local kLostMemory = 3000   -- ticks a zone where we lost our economy stays a post (to take back and rebuild)
+local kPeakFade = 0.99     -- the enemy's strength seen fades by this a think (5 s): half in about 6 minutes
 
 -- Personalities (docs/ai-architecture.md 2.7) and their knobs: personality.lua. Teacher mode (2.8): never a push
 -- against a human enemy; when far ahead of one, it attacks at most and says so in the log.
@@ -151,12 +157,152 @@ local function Near(units, zone, radius)
     return k
 end
 
+-- GUARD POSTS (phase 5: the map we own, not only the base; phase 6: map control). The duels showed the army away on
+-- attacks while the enemy's army took our outlying extractors one by one (FAF held 60-80, we 20-30). So the posts come
+-- before any operation, with a share of the army:
+-- - a post is an outlying economy zone of ours, or one where we lost our economy within kLostMemory (the guards take
+--   it back, and the engineers, who keep out of zones the enemy is known in, rebuild behind them);
+-- - its size follows the enemy that can come to it soon (the zone estimate within kPostHorizon): units until our mass
+--   there is K.postShare x theirs (at least 2 units), kGuardGroup when nothing can come, at most kGuardMax;
+-- - the posts most in danger are manned first (the enemy mass that can come, then the farthest, then zone id), but
+--   not a post the estimate says we cannot hold (margin under K.defend with all of ours that can come): its guards
+--   would die one post at a time;
+-- - all guards together weigh at most K.guardShare of the army; a post takes the free units nearest to it (entity
+--   order on ties), and a guard keeps its post while the zone is still a post and the post is not over-full.
+-- Returns the units that are not guards (for the operations).
+local function Posts(R, K, units, ownEconomy, ratio, armyMass)
+    R.hadEconomy = R.hadEconomy or {}
+    R.lostAt = R.lostAt or {}
+    local econ = {}
+    for _, z in ipairs(ownEconomy) do
+        econ[z] = true
+        R.hadEconomy[z] = true
+        R.lostAt[z] = nil
+    end
+    local info = Remastered.AIMapInfo()
+    for z = 1, info.zones do
+        if R.hadEconomy[z] and not econ[z] and not R.lostAt[z] then R.lostAt[z] = R.tick end
+    end
+    local postList = {}
+    for z = 1, info.zones do
+        local lost = R.lostAt[z] and R.tick - R.lostAt[z] <= kLostMemory
+        if (econ[z] or lost) and z ~= R.startZone then
+            local d = Remastered.AIZoneDistance(R.startZone, z, 'land')
+            if d >= 0 then
+                local margin, _, _, _, _, theirsMass = Remastered.AIZoneEstimate(R.army, z, kPostHorizon)
+                if theirsMass <= 0 or margin >= K.defend then
+                    table.insert(postList, { zone = z, d = d, threat = theirsMass, lost = lost })
+                end
+            end
+        end
+    end
+    table.sort(postList, function(a, b)
+        if a.threat ~= b.threat then return a.threat > b.threat end
+        if a.d ~= b.d then return a.d > b.d end
+        return a.zone < b.zone
+    end)
+    local posts, mass, count = {}, {}, {}
+    for _, p in ipairs(postList) do
+        posts[p.zone] = p
+        mass[p.zone] = 0
+        count[p.zone] = 0
+    end
+    local function Full(p)
+        if count[p.zone] >= kGuardMax then return true end
+        if p.threat <= 0 then return count[p.zone] >= kGuardGroup end
+        return mass[p.zone] >= K.postShare * p.threat and count[p.zone] >= 2
+    end
+    R.guardOf = R.guardOf or {}
+    local budget = K.guardShare * armyMass
+    local guardMass = 0
+    local guard, rest, fresh = {}, {}, {}
+    -- the guards that keep their post (entity order), while the post is not full and the share allows
+    for _, u in ipairs(units) do
+        local id = u:GetEntityId()
+        local z = R.guardOf[id]
+        if z and posts[z] and not Full(posts[z]) and guardMass + MassOf(R, u) <= budget then
+            count[z] = count[z] + 1
+            mass[z] = mass[z] + MassOf(R, u)
+            guardMass = guardMass + MassOf(R, u)
+            guard[id] = z
+        else
+            R.guardOf[id] = nil
+        end
+    end
+    -- the posts that are not full take the free units nearest to them
+    for _, p in ipairs(postList) do
+        if guardMass >= budget then break end
+        if not Full(p) then
+            local zone = Remastered.AIZone(p.zone)
+            local near = {}
+            for i, u in ipairs(units) do
+                if not guard[u:GetEntityId()] then
+                    local q = u:GetPosition()
+                    local dx, dz = q[1] - zone.x, q[3] - zone.z
+                    table.insert(near, { u = u, d = dx * dx + dz * dz, i = i })
+                end
+            end
+            table.sort(near, function(x, y)
+                if x.d ~= y.d then return x.d < y.d end
+                return x.i < y.i
+            end)
+            for _, n in ipairs(near) do
+                if Full(p) or guardMass + MassOf(R, n.u) > budget then break end
+                local id = n.u:GetEntityId()
+                guard[id] = p.zone
+                R.guardOf[id] = p.zone
+                fresh[id] = true
+                count[p.zone] = count[p.zone] + 1
+                mass[p.zone] = mass[p.zone] + MassOf(R, n.u)
+                guardMass = guardMass + MassOf(R, n.u)
+            end
+        end
+    end
+    if R.tick - (R.postsLogged or -10000) >= 600 and postList[1] then
+        local parts = {}
+        for i = 1, math.min(6, table.getn(postList)) do
+            local q = postList[i]
+            table.insert(parts, string.format('%d%s:%.0f/%.0f', q.zone, q.lost and '(lost)' or '', mass[q.zone], q.threat))
+        end
+        Log(R, 'posts', 0, 0, ratio, string.format('%d posts, guards %.0f of %.0f mass; our mass / enemy that can come: %s',
+            table.getn(postList), guardMass, armyMass, table.concat(parts, ' ')))
+        R.postsLogged = R.tick
+    end
+    -- the guards go to their posts: a new guard at once, an idle one when it is away from its post
+    for _, u in ipairs(units) do
+        local id = u:GetEntityId()
+        local z = guard[id]
+        if z then
+            if fresh[id] or u:IsIdleState() then
+                local zone = Remastered.AIZone(z)
+                local q = u:GetPosition()
+                local dx, dz = q[1] - zone.x, q[3] - zone.z
+                if dx * dx + dz * dz > kGuardRadius * kGuardRadius then
+                    IssueClearCommands({ u })
+                    IssueAggressiveMove({ u }, { zone.x, GetTerrainHeight(zone.x, zone.z), zone.z })
+                end
+            end
+        else
+            table.insert(rest, u)
+        end
+    end
+    return rest
+end
+
 function Think(brain)
     local R = brain.Remaster
     if not R or R.startZone <= 0 then return end
     R.op = R.op or nil
     local units = CombatUnits(brain)
+    local armyMass = 0
+    for _, u in ipairs(units) do armyMass = armyMass + MassOf(R, u) end
+    R.armyMass = armyMass  -- (the economy's map-control floor reads it: brain.lua)
     local ours, theirs, enemyZones, threatened, ownEconomy = Front(R)
+    -- (phase 6, fog of war: what the army saw of the enemy's strength fades slowly, kPeakFade a think, so a few
+    -- minutes without sight of its army are not "far ahead"; the duels with fog launched decisive pushes at a ratio
+    -- of 20-50 into armies they had not seen for a while)
+    R.theirsPeak = math.max(theirs, (R.theirsPeak or 0) * kPeakFade)
+    theirs = R.theirsPeak
     local ratio = ours / math.max(theirs, 1)
     local K = Knobs(brain)
     if math.mod(R.tick, 600) < 50 then  -- (a status line a minute: tests score "pushes when ahead" from these)
@@ -224,7 +370,7 @@ function Think(brain)
     for _, u in ipairs(units) do
         if not busy[u:GetEntityId()] then table.insert(free, u) end
     end
-    units = free
+    units = Posts(R, K, free, ownEconomy, ratio, armyMass)
 
     -- a GATHER in progress: the army goes to the staging zone; once most of it is there (or the time is up) it
     -- commits if the estimate still lets it, else the gather is dropped
@@ -237,8 +383,8 @@ function Think(brain)
         if f.enemy.land.count + f.enemy.structure.count <= 0 then
             Log(R, 'dropped', R.op.zone, margin, ratio, 'gather: no enemy known at the target any more')
             R.op = nil
-        elseif (there > 0 and there >= kGatherShare * table.getn(units)) or R.tick - R.op.since >= kGatherTicks then
-            if there > 0 and margin >= bar then
+        elseif (there > 0 and there >= kGatherShare * table.getn(units)) or R.tick - R.op.since >= (R.op.limit or kGatherTicks) then
+            if there > 0 and there >= kGatherLeast * table.getn(units) and margin >= bar then
                 R.op = { kind = R.op.push and 'push' or 'attack', zone = R.op.zone, stage = R.op.stage, since = R.tick,
                     logged = R.tick }
                 Log(R, 'commit', R.op.zone, margin, ratio, string.format('gathered (%d of %d at the staging zone): %s',
@@ -247,7 +393,9 @@ function Think(brain)
                 return
             else
                 Log(R, 'dropped', R.op.zone, margin, ratio, there > 0 and
-                    string.format('gather: the estimate fell under %.2f', bar) or 'gather: nobody reached the staging zone')
+                    (margin < bar and string.format('gather: the estimate fell under %.2f', bar) or
+                    string.format('gather: only %d of %d reached the staging zone', there, table.getn(units))) or
+                    'gather: nobody reached the staging zone')
                 R.op = nil
             end
         else
@@ -305,7 +453,10 @@ function Think(brain)
             local what = target.structures > 0 and (target.economy > 0 and 'their economy' or 'their structures') or
                 'their army in the field'
             local stage = StagingZone(R, target.zone)
-            R.op = { kind = 'gather', push = push, zone = target.zone, stage = stage, since = R.tick }
+            -- (phase 6: the gather waits for the walk from the start, kGatherSpeed, as well as kGatherTicks)
+            local walk = math.max(0, Remastered.AIZoneDistance(R.startZone, stage, 'land'))
+            R.op = { kind = 'gather', push = push, zone = target.zone, stage = stage, since = R.tick,
+                limit = kGatherTicks + math.floor(10 * walk / kGatherSpeed) }
             Log(R, push and 'push' or 'attack', target.zone, margin, ratio, string.format('%s; target: %s; gathering at zone %d',
                 push and 'far ahead overall: a decisive push' or 'ahead overall and the estimate favours us', what, stage))
             IssueMove(units, (ZonePos(stage)))
@@ -336,49 +487,10 @@ function Think(brain)
         end
     end
 
-    -- nothing to do (phase 5): idle units hold guard posts at our outlying economy zones (the map we own, not only
-    -- the base), the farthest from the start first (zone id on ties), at most kGuardGroup a zone; a unit keeps its
-    -- post while the zone still has our economy; the rest gather at the start
-    table.sort(ownEconomy, function(a, b)
-        local da = Remastered.AIZoneDistance(R.startZone, a, 'land')
-        local db = Remastered.AIZoneDistance(R.startZone, b, 'land')
-        if da ~= db then return da > db end
-        return a < b
-    end)
-    local posts, count = {}, {}
-    for _, z in ipairs(ownEconomy) do
-        if Remastered.AIZoneDistance(R.startZone, z, 'land') >= 0 then
-            posts[z] = true
-            count[z] = 0
-        end
-    end
-    R.guardOf = R.guardOf or {}
-    for _, u in ipairs(units) do
-        local z = R.guardOf[u:GetEntityId()]
-        if z and posts[z] then count[z] = count[z] + 1 end
-    end
+    -- nothing to do: the units that are neither guards nor in an operation gather at the start
     local home = {}
     for _, u in ipairs(units) do
-        if u:IsIdleState() then
-            local id = u:GetEntityId()
-            local z = R.guardOf[id]
-            if not (z and posts[z]) then
-                z = nil
-                for _, c in ipairs(ownEconomy) do
-                    if posts[c] and count[c] < kGuardGroup then z = c break end
-                end
-                R.guardOf[id] = z
-                if z then count[z] = count[z] + 1 end
-            end
-            if z then
-                local pos, zone = ZonePos(z)
-                local p = u:GetPosition()
-                local dx, dz = p[1] - zone.x, p[3] - zone.z
-                if dx * dx + dz * dz > kGuardRadius * kGuardRadius then IssueAggressiveMove({ u }, pos) end
-            else
-                table.insert(home, u)
-            end
-        end
+        if u:IsIdleState() then table.insert(home, u) end
     end
     if home[1] then IssueAggressiveMove(home, { R.startX, GetTerrainHeight(R.startX, R.startZ), R.startZ }) end
 end
