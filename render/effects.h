@@ -74,6 +74,10 @@ class Effects {
   // drawn. None: the game's place.
   std::function<bool(const std::string&, const FrameUnit&, const Model*, Vec3*, Quat*)> drawnAt;
   bool drawnMoves = false;  // [whitecaps] (whether drawnAt is to be asked: the waves lift the sea; set each frame)
+  // [snowkick] How much of the weather's snow lies (World::snowLying in the remastered look with the weather on, else 0; set
+  // each frame): the ground's kick-up and footfall effects the game picks by the map's terrain type (dirt, sand, grass, rock)
+  // are its snow's (the Snowy02 terrain type's) for that share of them, as the snow lies over that ground.
+  float snowLying = 0;
   // (buildfx) The remastered build look (build_effects.h): told of every build beam drawn and of the frame's units under
   // construction, while it is on.
   void SetBuild(BuildEffects* build) { build_ = build; }

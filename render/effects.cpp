@@ -6,6 +6,7 @@
 #include <cctype>
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 
 #include "blasts.h"
 #include "build_effects.h"
@@ -20,6 +21,39 @@ constexpr uint32_t kNone = 0xffffffffu;
 
 Vec3 V(const float p[3]) { return {p[0], p[1], p[2]}; }
 Quat Q(const float q[4]) { return {q[0], q[1], q[2], q[3]}; }
+
+// [snowkick] The snow's twin of a ground effect the game picked by the map's terrain type: an emitter named as the terrain
+// types name theirs (/lua/TerrainTypes.lua: tt_<type>_<kind><nn>_<nn>_emit.bp, kind footfall, groundkickup or hover) of a
+// type that is no snow's or water's -> the Snowy02 type's emitter for that kind, the same one of its list where it has as
+// many. "": none (not such an emitter, or already snow's or water's).
+std::string SnowKick(const std::string& path) {
+  std::string low = path;
+  for (char& c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  const size_t slash = low.find_last_of('/');
+  const size_t at = slash == std::string::npos ? 0 : slash + 1;
+  if (low.compare(at, 3, "tt_") != 0) return std::string();
+  const size_t type = at + 3, kind = low.find('_', type);
+  if (kind == std::string::npos || low.compare(type, 5, "snowy") == 0 || low.compare(type, 5, "water") == 0) return std::string();
+  // (Snowy02's lists, as TerrainTypes.lua gives them: its GroundKickup03 is its 01's)
+  static const struct {
+    const char* kind;
+    const char* emitters[2];
+  } kSnow[] = {{"footfall01", {"footfall01_01", "footfall01_02"}}, {"footfall02", {"footfall02_01", nullptr}},
+               {"groundkickup01", {"groundkickup01_01", nullptr}}, {"groundkickup02", {"groundkickup02_01", "groundkickup02_02"}},
+               {"groundkickup03", {"groundkickup01_01", nullptr}}, {"groundkickup04", {"groundkickup04_01", nullptr}},
+               {"hover01", {"hover01_01", nullptr}}};
+  for (const auto& s : kSnow) {
+    const size_t n = std::strlen(s.kind);
+    // <kind>_<nn>_emit.bp after the type's name
+    if (low.compare(kind + 1, n, s.kind) != 0 || low.size() != kind + 1 + n + 11 || low[kind + 1 + n] != '_' ||
+        low.compare(kind + 1 + n + 3, 8, "_emit.bp") != 0)
+      continue;
+    const int which = (low[kind + n + 2] - '0') * 10 + (low[kind + n + 3] - '0');
+    const char* e = which >= 2 && s.emitters[1] ? s.emitters[1] : s.emitters[0];
+    return path.substr(0, at) + "tt_snowy02_" + e + "_emit.bp";
+  }
+  return std::string();
+}
 
 }  // namespace
 
@@ -335,7 +369,13 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
     e.kind = Kind::Emitter;
     e.attached = f == "CreateAttachedEmitter" || f == "CreateEmitterOnEntity";
     if (VolfxLog* log = VolfxLog::Get()) log->SetOrigin(event, frame);  // (MOHO64_DEBUG_VOLFX: what it is made on)
-    e.handle = particles_->Start(event.blueprint, e.position, e.orientation, 1, at, e.attached, e.faction);
+    // [snowkick] a ground effect of the map's terrain type, its snow's for the share of the snow lying (which ones: by the
+    // effect's number, so that the same ones always are)
+    if (snowLying > 0 && particles_->remastered && (event.id * 2654435761u >> 8) % 1000 < snowLying * 1000) {
+      const std::string snow = SnowKick(event.blueprint);
+      if (!snow.empty()) e.handle = particles_->Start(snow, e.position, e.orientation, 1, at, e.attached, e.faction);
+    }
+    if (!e.handle) e.handle = particles_->Start(event.blueprint, e.position, e.orientation, 1, at, e.attached, e.faction);
     if (VolfxLog* log = VolfxLog::Get()) log->ClearOrigin();
     if (!e.handle) return;
   } else if (f == "CreateTrail") {
