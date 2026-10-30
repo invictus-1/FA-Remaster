@@ -66,14 +66,27 @@ add_library(mohocore STATIC
   src/sim/ai_brain.cpp
   src/sim/commands.cpp src/sim/economy.cpp src/sim/build.cpp src/sim/collision.cpp
   src/sim/combat.cpp src/sim/damage.cpp src/sim/projectile.cpp src/sim/anim.cpp src/sim/intel.cpp src/sim/recorder.cpp src/sim/fingerprint.cpp
-  src/sim/script_bits.cpp src/sim/command_stream.cpp src/sim/session.cpp src/sim/sim_view.cpp src/sim/command_writer.cpp src/sim/ai_personality.cpp src/sim/ai_platoon.cpp
+  src/sim/script_bits.cpp src/sim/command_stream.cpp src/sim/session.cpp src/sim/sim_view.cpp src/sim/command_writer.cpp src/sim/lockstep.cpp src/sim/ai_personality.cpp src/sim/ai_platoon.cpp
   src/sim/ai_build.cpp src/sim/moments.cpp
   src/ai/map_analysis.cpp src/ai/scripts.cpp src/ai/unit_index.cpp)
 target_include_directories(mohocore PUBLIC src)
 target_link_libraries(mohocore PUBLIC gpglua zlibinflate)
 
+# The interface's network transport (ui/net/, no interface dependencies): moho64 --net plays a network game between
+# two copies (sim/lockstep.h) over it.
+add_library(mohonet STATIC
+  ui/net/socket.cpp ui/net/message.cpp ui/net/connector_tcp.cpp ui/net/connector_udp.cpp ui/net/beat_exchange_net.cpp)
+target_include_directories(mohonet PUBLIC ui)
+target_link_libraries(mohonet PUBLIC mohocore)
+if(WIN32)
+  target_link_libraries(mohonet PUBLIC ws2_32)
+else()
+  find_package(Threads REQUIRED)
+  target_link_libraries(mohonet PUBLIC Threads::Threads)
+endif()
+
 add_executable(moho64 src/app/main.cpp)
-target_link_libraries(moho64 PRIVATE mohocore)
+target_link_libraries(moho64 PRIVATE mohocore mohonet)
 if(WIN32)
   target_link_libraries(moho64 PRIVATE shell32)
 endif()

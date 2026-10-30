@@ -68,6 +68,9 @@ class Fingerprint {
   bool Beat(const Sim& sim, uint32_t beat);
   // The run ended after `beats` beats.
   void End(uint32_t beats);
+  // The line Beat writes for the state after beat `beat`, made without a Fingerprint (no MOHO64_FINGERPRINT needed;
+  // the props are sorted afresh, so a call costs a little more than Beat's): sim/lockstep.h LockstepDigest.
+  static std::string StateLine(const Sim& sim, uint32_t beat);
 
  private:
   std::string Line(const Sim& sim, uint32_t beat) const;
