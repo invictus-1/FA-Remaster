@@ -17,6 +17,15 @@ local kPrefix = { 'ue', 'ua', 'ur', 'xs' }  -- blueprint id prefixes by faction 
 local kThink = 10                             -- ticks between economy steps
 local kClaimTicks = 600                       -- a build site promised to a builder stays its own this long
 local kAssistTicks = 200                      -- an assisting builder is looked at again after this long
+local kReclaimCell = 64                       -- world units: the cells of the reclaim map (phase 6)
+local kReclaimMin = 5                         -- a prop counts for reclaim from this much mass (trees, rocks, wrecks)
+local kReclaimField = 100                     -- a cell with this much reclaim is a field worth walking to
+local kReclaimPerWorker = 300                 -- a field takes one engineer per this much mass (plus one)
+local kReclaimWorkerTicks = 450               -- an engineer sent to a field counts there this long
+local kReclaimNear = 350                      -- world units from the start: the reclaim that adds engineers
+local kReclaimPerEngineer = 400               -- one engineer more per this much reclaim near the start (at most 20)
+local kGroundFade = 0.998                      -- what was seen of the enemy's ground army fades by this a step (10 ticks)
+local kMassNear = 120                         -- world units: a free mass point this near an engineer comes before reclaim
 
 local fixesApplied = false  -- (one game per sim state: the module lives with the state)
 
@@ -57,6 +66,9 @@ AIBrain = Class(StandardBrain) {
             personality = setup.RemasterPersonality or 'random',
             teacher = setup.RemasterTeacher == 'on' or setup.RemasterTeacher == true,
             vision = setup.RemasterVision == 'on' or setup.RemasterVision == true,
+            -- the player's sliders (phase 6, personality.lua): -2 .. 2, 0 by default
+            aggression = setup.RemasterAggression,
+            economy = setup.RemasterEconomy,
         }
         LOG('FA Remastered AI: army ' .. tostring(self:GetArmyIndex()) .. ' ' .. tostring(self.Name) .. ' (' ..
             tostring(setup.AIPersonality) .. ')')
@@ -226,6 +238,112 @@ AIBrain = Class(StandardBrain) {
         return true
     end,
 
+    -- The reclaim map (phase 6): the mass lying on the ground (props of kReclaimMin or more) per cell of
+    -- kReclaimCell, one row of cells read each economy step, so the whole map is read every (rows x kThink) ticks
+    -- without one big scan. The duels showed why: M28 made ~130 mass / s from reclaim at minute 10, with ~100
+    -- engineers, while ours picked up only what lay within 40 units of an idle builder. Each cell keeps its zone
+    -- (land) and whether our land units reach it, worked out once.
+    ReclaimScan = function(self)
+        local R = self.Remaster
+        local g = R.reclaim
+        if not g then
+            local w, h = GetMapSize()
+            g = { w = w, h = h, cols = math.ceil(w / kReclaimCell), rows = math.ceil(h / kReclaimCell), row = 0,
+                mass = {}, zone = {}, near = {}, nearMass = 0 }
+            for i = 1, g.cols * g.rows do
+                local cx = (math.mod(i - 1, g.cols) + 0.5) * kReclaimCell
+                local cz = (math.floor((i - 1) / g.cols) + 0.5) * kReclaimCell
+                local z = Remastered.AIZoneAt(cx, cz, 'land')
+                if z > 0 and R.startZone > 0 and Remastered.AIZoneDistance(R.startZone, z, 'land') < 0 then z = 0 end
+                g.zone[i] = z
+                local dx, dz = cx - R.startX, cz - R.startZ
+                g.near[i] = dx * dx + dz * dz <= kReclaimNear * kReclaimNear
+                g.mass[i] = 0
+            end
+            R.reclaim = g
+        end
+        local row = g.row
+        g.row = math.mod(row + 1, g.rows)
+        local z0, z1 = row * kReclaimCell, (row + 1) * kReclaimCell
+        local sums = {}
+        for c = 1, g.cols do sums[c] = 0 end
+        for _, v in ipairs(GetReclaimablesInRect(0, z0, g.w, z1) or {}) do
+            if not v.Dead and v.MaxMassReclaim then
+                local m = v.MaxMassReclaim * (v.ReclaimLeft or 1)
+                if m >= kReclaimMin then
+                    local q = v:GetPosition()
+                    if q[3] >= z0 and q[3] < z1 then  -- (the grid query also returns props of the cells it touches)
+                        local c = math.floor(q[1] / kReclaimCell) + 1
+                        if c >= 1 and c <= g.cols then sums[c] = sums[c] + m end
+                    end
+                end
+            end
+        end
+        local near = 0
+        for c = 1, g.cols do g.mass[row * g.cols + c] = sums[c] end
+        for i = 1, g.cols * g.rows do
+            if g.near[i] and g.zone[i] > 0 then near = near + g.mass[i] end
+        end
+        g.nearMass = near
+    end,
+
+    -- A reclaim field for builder u (phase 6): the cell worth the most (its mass / (distance + 150)) among the cells
+    -- of kReclaimField or more that our land units reach, with no enemy known in their zone (R.enemyAt) and fewer
+    -- engineers sent there than its mass asks (one per kReclaimPerWorker, plus one); cell order on ties. The builder
+    -- gets the cell's props, nearest first, up to 10. False when there is no such field.
+    ReclaimField = function(self, u)
+        local R = self.Remaster
+        local g = R.reclaim
+        if not g then return false end
+        local workers, keep = {}, {}
+        for id, w in pairs(R.reclaimers or {}) do  -- (counts only: the order does not matter)
+            if R.tick - w.tick < kReclaimWorkerTicks then
+                keep[id] = w
+                workers[w.cell] = (workers[w.cell] or 0) + 1
+            end
+        end
+        R.reclaimers = keep
+        local q = u:GetPosition()
+        local enemyAt = R.enemyAt or {}
+        local best, bestScore
+        for i = 1, g.cols * g.rows do
+            local m = g.mass[i]
+            local z = g.zone[i]
+            if m >= kReclaimField and z > 0 and not enemyAt[z] and (workers[i] or 0) < 1 + m / kReclaimPerWorker then
+                local cx = (math.mod(i - 1, g.cols) + 0.5) * kReclaimCell
+                local cz = (math.floor((i - 1) / g.cols) + 0.5) * kReclaimCell
+                local dx, dz = cx - q[1], cz - q[3]
+                local score = m / (math.sqrt(dx * dx + dz * dz) + 150)
+                if not bestScore or score > bestScore then best, bestScore = i, score end
+            end
+        end
+        if not best then return false end
+        local x0 = math.mod(best - 1, g.cols) * kReclaimCell
+        local z0 = math.floor((best - 1) / g.cols) * kReclaimCell
+        local c = {}
+        for _, v in ipairs(GetReclaimablesInRect(x0, z0, x0 + kReclaimCell, z0 + kReclaimCell) or {}) do
+            if not v.Dead and v.MaxMassReclaim and v.MaxMassReclaim * (v.ReclaimLeft or 1) >= kReclaimMin then
+                local p = v:GetPosition()
+                if p[1] >= x0 and p[1] < x0 + kReclaimCell and p[3] >= z0 and p[3] < z0 + kReclaimCell then
+                    local dx, dz = p[1] - q[1], p[3] - q[3]
+                    table.insert(c, { v = v, d = dx * dx + dz * dz, id = tonumber(v:GetEntityId()) or 0 })
+                end
+            end
+        end
+        if not c[1] then
+            g.mass[best] = 0  -- (read again when its row comes round)
+            return false
+        end
+        table.sort(c, function(m, n)
+            if m.d ~= n.d then return m.d < n.d end
+            return m.id < n.id
+        end)
+        for i = 1, math.min(10, table.getn(c)) do IssueReclaim({ u }, c[i].v) end
+        R.reclaimers = R.reclaimers or {}
+        R.reclaimers[u:GetEntityId()] = { cell = best, tick = R.tick }
+        return true
+    end,
+
     -- One builder's next job (phase 5), so that economy, army, scouting and expansion go on at the same time:
     -- 1. the first land factory (the commander), then its own zone's mass points in the opening;
     -- 2. power of the builder's tech when energy is short or not ahead of need (a few builders at a time);
@@ -233,7 +351,8 @@ AIBrain = Class(StandardBrain) {
     -- 4. a point defence where the enemy will come, when it is the cheaper answer (choices.lua);
     -- 5. an air factory (scouts) and a radar;
     -- 6. the nearest free mass point away from known enemies, and up to 2 more in its zone;
-    -- 7. reclaim around it while mass is not piling up; more factories; mass storage when mass is full;
+    -- 7. reclaim while mass is not piling up: the best reclaim field (phase 6), else around it; more factories; mass
+    --    storage when mass is full;
     -- 8. assist an upgrade in progress (extractors first), else a factory, looked at again after kAssistTicks.
     BuilderJob = function(self, u, factories, isCommander, ctx)
         if table.getn(factories) == 0 and isCommander and self:BuildAt(u, 'b0101', 8) then return end
@@ -288,7 +407,20 @@ AIBrain = Class(StandardBrain) {
             ctx.radar = true
             return
         end
+        -- reclaim as a job of its own (phase 6): while fewer engineers reclaim than K.reclaimShare of them (and than
+        -- the fields near the start can feed), the next one goes to a reclaim field instead of a mass point farther
+        -- than kMassNear from it (a near mass point is cheap and lasts: it comes first). The duels with fog showed no
+        -- reclaimer at all for 12 minutes beside 26,000 mass of reclaim near the start: an engineer always found some
+        -- far mass point first.
         p = self:NextMassPoint(not isCommander and u or nil)
+        if not isCommander and ctx.reclaimers < ctx.wantReclaimers and self:GetEconomyStoredRatio('MASS') < 0.8 then
+            local q = u:GetPosition()
+            local far = not p or (p.x - q[1]) * (p.x - q[1]) + (p.z - q[3]) * (p.z - q[3]) > kMassNear * kMassNear
+            if far and self:ReclaimField(u) then
+                ctx.reclaimers = ctx.reclaimers + 1
+                return
+            end
+        end
         if p and not (isCommander and p.dist > 0) then
             self:Claim(p.x, p.z)
             IssueBuildMobile({ u }, Pos(p.x, p.z), self:Bp('b1103'), {})
@@ -306,7 +438,7 @@ AIBrain = Class(StandardBrain) {
             end
             return
         end
-        if self:GetEconomyStoredRatio('MASS') < 0.5 and self:Reclaim(u) then return end
+        if self:GetEconomyStoredRatio('MASS') < 0.5 and (self:ReclaimField(u) or self:Reclaim(u)) then return end
         if ctx.landFactories < wantFactories and storedMass > 0.2 and self:BuildAt(u, 'b0101', 8) then
             ctx.landFactories = ctx.landFactories + 1
             return
@@ -334,6 +466,7 @@ AIBrain = Class(StandardBrain) {
     end,
 
     RemasterEconomy = function(self)
+        self:ReclaimScan()
         local factories, engineers, commander = {}, {}, nil
         local ctx = { minutes = GetGameTick() / 600, landFactories = 0, upgrading = {}, storages = 0, assistNext = 0,
             factoryUpgrades = 0, extractorUpgrades = 0, airFactories = 0 }
@@ -357,6 +490,11 @@ AIBrain = Class(StandardBrain) {
             if not u.Dead then ctx.radar = true end
         end
         ctx.powerBuilding = 0
+        -- the engineers reclaiming now, and how many should (phase 6, K.reclaimShare)
+        ctx.reclaimers = 0
+        for _, w in pairs(R.reclaimers or {}) do  -- (a count: the order does not matter)
+            if R.tick - w.tick < kReclaimWorkerTicks then ctx.reclaimers = ctx.reclaimers + 1 end
+        end
         for _, u in ipairs(self:GetListOfUnits(categories.ENERGYPRODUCTION * categories.STRUCTURE, false)) do
             if not u.Dead and u:GetFractionComplete() < 1 then ctx.powerBuilding = ctx.powerBuilding + 1 end
         end
@@ -395,19 +533,52 @@ AIBrain = Class(StandardBrain) {
             end
             return false
         end
+        ctx.wantReclaimers = math.min(math.floor(table.getn(engineers) *
+            import("/lua/remastered/ai/personality.lua").Knobs(self).reclaimShare),
+            math.floor((R.reclaim and R.reclaim.nearMass or 0) / kReclaimPerWorker))
         if commander and Free(commander) then self:BuilderJob(commander, factories, true, ctx) end
         for _, e in ipairs(engineers) do
             if Free(e) then self:BuilderJob(e, factories, false, ctx) end
         end
-        -- land factories: engineers up to a cap that grows with the game (4 + 2.5 a minute, at most 50), then the
-        -- cheapest counter that wins against the enemy's known army (choices.lua; the tech's default mix while nothing
-        -- is known); a land scout first when the investments wait for one. Air factories: 2 scouts kept up, then
-        -- interceptors while the enemy's air is at least 300 mass and 30% of its army. While mass is short and extractors are upgrading, only the first
-        -- half of the land factories (id order) take new army orders, so that the upgrades are not starved (the
-        -- engine shares a shortage among all who spend).
+        -- land factories: engineers up to a cap that grows with the game (4 + 2.5 a minute x K.engineerRate, at most
+        -- 50), then the cheapest counter that wins against the enemy's known army (choices.lua; the tech's default mix
+        -- while nothing is known); a land scout first when the investments wait for one. Air factories: 2 scouts kept
+        -- up, then interceptors while the enemy's air is at least 300 mass and 30% of its army. While mass is short and
+        -- extractors are upgrading, only the first half of the land factories (id order) take new army orders, so
+        -- that the upgrades are not starved (the engine shares a shortage among all who spend).
+        -- Map control (phase 6): while our land army is short of what holds the map (K.armyMatch x the enemy's known
+        -- ground army, at least K.armyPerMinute a minute from minute 2), only every third land factory makes engineers,
+        -- and only up to the floor of 4 + 1 a minute; the others make units. The duels showed why: engineers first up
+        -- to the cap left 150 mass of army at minute 8 against 2,800, and the enemy's army took our expansions.
         local short = self:GetEconomyStoredRatio('MASS') < 0.05 and ctx.extractorUpgrades > 0
         local landIndex = 0
-        local engineerCap = math.min(50, 4 + math.floor(2.5 * ctx.minutes))
+        local K = import("/lua/remastered/ai/personality.lua").Knobs(self)
+        -- (phase 6: one engineer more per kReclaimPerEngineer of reclaim near the start, at most 20, to pick it up)
+        local reclaimEngineers = math.min(20, math.floor((R.reclaim and R.reclaim.nearMass or 0) / kReclaimPerEngineer))
+        local engineerCap = math.min(50, 4 + math.floor(2.5 * K.engineerRate * ctx.minutes) + reclaimEngineers)
+        local engineerFloor = math.min(engineerCap, 4 + math.floor(ctx.minutes) + math.floor(reclaimEngineers / 2))
+        -- (with fog of war the enemy's army is mostly out of sight: what was seen of it fades slowly, about half in 6
+        -- minutes, so the army kept does not shrink each time the scouts lose sight of it)
+        R.enemyGroundPeak = math.max(enemyGround, (R.enemyGroundPeak or 0) * kGroundFade)
+        local armyWanted = math.max(K.armyMatch * R.enemyGroundPeak,
+            ctx.minutes >= 2 and K.armyPerMinute * (ctx.minutes - 2) or 0)
+        local armyShort = (R.armyMass or 0) < armyWanted
+        if armyShort ~= (R.armyShort or false) and R.tick - (R.armyShortLogged or -10000) >= 600 then
+            LOG(string.format('aiarmy %d %d %s army %.0f wanted %.0f (enemy ground %.0f) engineers %d floor %d cap %d',
+                R.army, R.tick, armyShort and 'short' or 'enough', R.armyMass or 0, armyWanted, R.enemyGroundPeak,
+                table.getn(engineers), engineerFloor, engineerCap))
+            R.armyShortLogged = R.tick
+        end
+        R.armyShort = armyShort
+        if math.mod(R.tick, 600) < kThink then  -- (a line a minute: what the economy's builders do)
+            local reclaimers = 0
+            for _, w in pairs(R.reclaimers or {}) do  -- (a count: the order does not matter)
+                if R.tick - w.tick < kReclaimWorkerTicks then reclaimers = reclaimers + 1 end
+            end
+            LOG(string.format('aieco %d %d engineers %d cap %d floor %d reclaimers %d reclaim near %.0f army %.0f wanted %.0f',
+                R.army, R.tick, table.getn(engineers), engineerCap, engineerFloor, reclaimers,
+                R.reclaim and R.reclaim.nearMass or 0, R.armyMass or 0, armyWanted))
+        end
         local wanted = table.getn(engineers)
         local scouts = table.getn(self:GetListOfUnits(categories.SCOUT * categories.MOBILE, false))
         for _, f in ipairs(factories) do
@@ -415,7 +586,7 @@ AIBrain = Class(StandardBrain) {
             if land then landIndex = landIndex + 1 end
             if f:IsIdleState() and land then
                 local tech = self:Tech(f)
-                if wanted < engineerCap then
+                if wanted < engineerCap and (not armyShort or math.mod(landIndex, 3) == 1 and wanted < engineerFloor) then
                     IssueBuildFactory({ f }, self:Bp(tech == 3 and 'l0309' or tech == 2 and 'l0208' or 'l0105'), 1)
                     wanted = wanted + 1
                 elseif R.scoutFirst and scouts == 0 then
