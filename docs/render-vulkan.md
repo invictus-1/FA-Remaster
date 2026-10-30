@@ -106,7 +106,8 @@ when a frame fills one, the read-back in cached memory (reading 15 MB from uncac
   each covers; NuGet's Microsoft.Direct3D.DXC gives MIT for `d3d12shader.h` and LLVM for all the
   others, so `dxcompiler.dll` reads as LLVM-licensed, and LICENSE-MS most likely as `dxil.dll`'s,
   which is not needed. The Linux and macOS builds are DXC's LLVM-licensed library
-  (`libdxcompiler.so` / `.dylib`). Chris, 2026-10-15: a release may ship `dxcompiler.dll` beside the
+  (`libdxcompiler.so` / `.dylib`), v1.7.2212 or newer: older ones gave IUnknown a virtual destructor
+  outside Windows, so their interface tables do not match the one declared. Chris, 2026-10-15: a release may ship `dxcompiler.dll` beside the
   program (decided on the stricter reading); its licence files go with it.
 - Direct3D 12 compiles with DXC too (DXIL, shader model 6.0) where `dxcompiler.dll` is beside the
   program, and with Direct3D's own compiler (FXC, part of Windows) where it is not, or where DXC fails
