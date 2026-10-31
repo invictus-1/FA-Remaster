@@ -28,6 +28,7 @@ local kDipSeconds = 120        -- the investments under way may cost at most K.i
 -- (the defence mark-down, the defences per site and under construction, the stall tolerance, the investment share
 -- and its safe margin are the knobs of personality.lua)
 local kLandSpeed = 3           -- world units a second: how far the enemy's land army travels in the payback window
+local kInvestEnergy = 0.5      -- stored energy share under which no new extractor upgrade starts (phase 8)
 local kHoldLogTicks = 600      -- a "hold" decision for the same kind of investment is logged at most this often
 
 -- the land candidates by factory tech (blueprint suffixes; the faction prefix is added): direct-fire, artillery,
@@ -276,6 +277,9 @@ function Investments(brain, ctx)
         R.shortSince = nil
     end
     local sustained = R.shortSince and R.tick - R.shortSince >= K.stallTolerance
+    -- (phase 8: an extractor upgrade draws a lot of energy as it builds; while energy is under kInvestEnergy stored, no
+    -- new one starts. The opening set's minutes 5-10 were energy-stalled 20-45% of the time with 7-9 upgrades at once.)
+    local energyLow = brain:GetEconomyStoredRatio('ENERGY') < kInvestEnergy
     -- what the upgrades under way still cost
     local committed = 0
     for _, m in ipairs(ctx.upgrading) do
@@ -304,6 +308,11 @@ function Investments(brain, ctx)
                 local z = Remastered.AIZoneAt(p[1], p[3], 'land')
                 if z <= 0 then z = R.startZone end
                 local what = string.format('%s->%s', from, to)
+                if energyLow then
+                    LogHold(R, 'energy', string.format('aiinv %d %d hold %s zone %d payback %.0fs danger - | energy under %.0f%% stored: the upgrades wait for power',
+                        R.army, R.tick, what, z, payback, 100 * kInvestEnergy))
+                    return
+                end
                 if sustained then
                     LogHold(R, 'stall', string.format('aiinv %d %d hold %s zone %d payback %.0fs danger - | mass short for %.0f s: a sustained deficit, not a planned dip',
                         R.army, R.tick, what, z, payback, (R.tick - R.shortSince) / 10))

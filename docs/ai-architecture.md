@@ -171,6 +171,13 @@ by the battle estimate of that zone (`Remastered.AIZoneEstimate`, 3.2), with our
   - **Gathering waits for the walk:** a gather commits (or is dropped) after 45 s plus the walk from the start to the
     staging zone at 2.5 world units a second, and at the end at least 30% of the army must be there (the duels
     committed with 9 of 75).
+- **Phase 7b, the base first:** an enemy force of 300 mass or more that can come to a base zone (within 150 world units
+  of travel from the start) calls the army off its operation (`aiop ... recall`). For 60 s the base's defence then takes
+  every free unit, and when the estimate says the base cannot be held, every free unit comes home to fight beside its
+  defences and the commander. The no-cheat duel against M28 had been lost with the army away on an attack.
+- **Phase 7b, scouting before a push:** a target our air scouts have not looked at in the last 2 minutes gets up to 2
+  of them first (`aiop ... scout`), and the attack waits 30 s for their look; then the estimate decides again with
+  what they saw. Without air scouts the attack goes as before.
 - **Phase 7, the overall ratio counts every domain that hits the ground:** our and the enemy's strength against ground
   of land units, structures, aircraft and ships (before: land and structures only). Against M28 its gunships and
   ships were outside the ratio, which said "ahead" while they shelled our base.
@@ -233,6 +240,25 @@ scouting, the army and expansion, not one after the other.
     (0.3) of the engineers reclaim (and fewer than the reclaim near the start can feed, one per 300 mass). A near mass
     point comes first: it is cheap and lasts. With nothing else to do (step 7) an engineer also reclaims, around itself
     when no field is left.
+- **Phase 8, the opening (the first 6 minutes) and its energy.** A probe of the economy every 15 s showed where the
+  first minutes went: our energy was empty in 52-58% of the first 5 minutes (FAF 2-12%, M28 none), power was about
+  1.5 minutes behind both opponents', we had 3 extractors at minute 3 (M28 7), and every new engineer took power,
+  factories and the air factory before an extractor. Minutes 5-10 then stalled again with 7-9 extractor upgrades at
+  once. The opening now:
+  - **The commander:** the first land factory, then 2 power generators, then its own zone's extractors.
+  - **Extractors first:** before minute 6 an engineer takes the nearest free mass point within 300 world units (and up
+    to 2 more of its zone) before power and factories, while energy is at least 20% stored. An extractor pays for
+    itself in 18 s.
+  - **A power floor:** 2 generators plus 2.2 a minute (built or being built) before minute 6, the curve both opponents
+    keep, with up to half the builders on it while under the floor or while energy is under 30% stored; after the
+    opening, energy under 30% stored lets up to a third of the builders build power.
+  - **Factories wait for energy:** in the opening a new land or air factory starts only while energy is not short.
+  - **Upgrades wait for energy:** no new extractor upgrade starts under 50% stored energy (`aiinv ... hold ... energy`).
+  - **Base sites spill over:** base structures go to the land zones within 200 world units of travel from the start
+    when the start zone has no site left.
+  - **Tech:** the land factories' T1 -> T2 upgrade is no longer held while the mass bar is empty (the opening spends
+    mass as it comes, and no factory had reached T2, so there was no T2 engineer and no anti-missile); the anti-missile
+    job comes before power for T2 engineers.
 - **Phase 7, expansion speed and the builders' safety.** Two probes in the duels showed where the economy went: the
   engineers' command queues (at minute 10, 26 of about 45 engineers were walking more than 100 world units to a
   single build, many of them from the field back to the base) and the kill counts by killer (5,700 mass of engineers
@@ -249,7 +275,10 @@ scouting, the army and expansion, not one after the other.
     world units (to the start when none is that near); a further 5% drop backs it away again from where it is; up to
     3 free engineers repair it; at 95% it goes back to work. `aiacu` logs each step.
   - **Anti-missile:** from minute 12, once the enemy is known at T2, a T2+ engineer builds one tactical missile
-    defence beside the start, and one more per enemy launcher known, at most 4. The battle estimate does not count
+    defence beside the start, and one more per enemy launcher known, at most 4. (Phase 7b: once we or the enemy are
+    at T2, the T2+ land factories keep 2 engineers of T2 or above whatever the cap; only they build T2 structures.)
+  - **The opening's reclaim (phase 7b):** before minute 8 at least half of the engineers may reclaim (the
+    `reclaimShare` knob after that). The battle estimate does not count
     missiles (they are strategic), and under fog the launchers sit unseen deep in the enemy's base.
 - **Counters (decision 13):** a land factory builds the cheapest counter that wins against the enemy's army as the
   army knows it (`Remastered.AIEnemyMix`). That is the candidate of the factory's tech and below with the most enemy
@@ -963,6 +992,55 @@ both-modes check, multicore.md 1).
     is full. Next step: the T2 factories keep two T2 engineers once the enemy is at T2.
   - **The ms per beat** were measured on logical CPUs 16-31 (other sessions timed on 0-15), not comparable with
     phase 6's.
+- **The phase-7b duels (2026-10-30), with fog of war:** 7a plus the base recall, scouting before a push, the T2
+  engineers and the opening's reclaim share.
+
+  | Game | Phase 7b | Phase 7a | Mass / s at 5 / 15 / 30 / 45 / 60 min (ours vs theirs) | Lost per killed (7a) |
+  |---|---|---|---|---|
+  | recruit vs FAF adaptive | **no result after 60 minutes** | lost at minute 56.3 | 17 vs 17 / 156 vs 164 / 120 vs 335 / 80 vs 330 / 39 vs 317 | 0.95 (1.25) |
+  | veteran (turtle) vs FAF adaptive | lost at minute 23.4 | lost at minute 27.6 | 17 vs 23 / 60 vs 203 | 2.50 (1.13) |
+  | recruit vs M28 | lost at minute 17.5 | lost at minute 19.0 | 17 vs 31 / 74 vs 292 | 28.8 (10.3) |
+  | veteran (turtle) vs M28 | lost at minute 16.2 | lost at minute 18.8 | 17 vs 56 / 71 vs 307 | 7.7 (38.2) |
+  | veteran (rusher) vs M28 without cheats | lost at minute 19.7 | lost at minute 13.9 | 17 vs 31 / 136 vs 243 | 23.5 (10.7) |
+
+  - **About even with 7a** (136.8 minutes together against 135.6): the first 60-minute game against FAF's AI without a
+    loss, and the no-cheat game against M28 6 minutes longer, but three games shorter. Single seeds swing by several
+    minutes, so this is no clear step.
+  - **The anti-missile rule still builds nothing:** the T2 engineers are there at minute 13 (2) and gone by 15; they
+    take power and factory jobs first.
+  - **Where the next step is:** the opening. The mass at minute 5 has been 17 / s in every version since phase 5
+    (FAF 17-23, M28 31-56): power and factories come first for every new engineer, and M28 makes 73 mass / s at minute
+    4 from reclaim with 15 engineers. An opening that put reclaim first (tried, 7i) was worse: fewer extractors and an
+    energy stall. The opening needs its own design (build order by minute, reclaim yield per engineer measured).
+- **The opening set (phase 8, 2026-10-30):** FAF's adaptive AI and M28, fogged, seeds 1001 / 2002 / 3003, 10 minutes
+  each. It is scored by the mass a second averaged over minutes 4-5 and 9-10 (a sample a second), the share of the
+  first 5 and the next 5 minutes with the energy bar empty, and the extractors at minutes 5 and 10 (aicore notes:
+  open_set.sh, ecoav.py). The first 5 minutes are the same on every seed: little of the enemy is met by then.
+
+  | Ours (6 games) | Mass / s, minutes 4-5 | Mass / s, minutes 9-10 | Energy empty, minutes 0-5 / 5-10 | Extractors at 5 / 10 min |
+  |---|---|---|---|---|
+  | Phase 7b | 14.7-15.8 | 48-67 (average 56) | 52-58% / 0-20% | 8 / 23-34 |
+  | Phase 8 | 23.2-25.7 | 99-128 (average 114) | 16-18% / 12-37% | 12-14 / 31-45 |
+  | FAF's AI in the same games | 21-24 | 76-93 | 0-2% / 0% | 10-12 / 32-40 |
+  | M28 in the same games | 36-46 | 137-168 | 0% / 0% | 15 / 47-53 |
+
+  - Against FAF's AI we are now ahead at minute 10 in all three seeds; against M28 we went from about a third of its
+    economy at minute 10 to about three quarters.
+  - The energy is still empty a fifth to a third of minutes 5-10: the next step there.
+- **The phase-8 duels (2026-10-30), with fog of war:**
+
+  | Game | Phase 8 | Phase 7b | Mass / s at 5 / 10 / 15 min (ours vs theirs) | Extractors at 10 min | Lost per killed |
+  |---|---|---|---|---|---|
+  | recruit vs FAF adaptive | no result after 60 minutes | no result after 60 minutes | 25 vs 25 / 137 vs 99 / 133 vs 215 | 41 vs 41 | 1.10 |
+  | veteran (turtle) vs FAF adaptive | lost at minute 15.4 | lost at minute 23.4 | 25 vs 33 / 97 vs 77 / 101 vs 129 | 31 vs 34 | 1.38 |
+  | recruit vs M28 | lost at minute 16.4 | lost at minute 17.5 | 27 vs 116 / 110 vs 173 / 156 vs 266 | 43 vs 53 | 11.4 |
+  | veteran (turtle) vs M28 | lost at minute 20.0 | lost at minute 16.2 | 27 vs 81 / 80 vs 213 / 119 vs 243 | 45 vs 48 | 10.9 |
+  | veteran (rusher) vs M28 without cheats | lost at minute 24.6 | lost at minute 19.7 | 27 vs 81 / 113 vs 192 / 179 vs 275 | 44 vs 47 | 21.3 |
+
+  - **The economy moved clearly** (5-minute mass 25-27 against 17, 10-minute 80-137 against 51-101, extractors at 10
+    minutes 31-45 against 23-34); the results did not yet (survival together 136.4 minutes against 136.8): the bigger
+    economy is not yet turned into a bigger, better-used army. The seed-2002 game against FAF's AI was lost at minute
+    15, ahead in economy at minute 10.
 - **Then Chris plays it** and judges the feel (decision 8), in the one big check after the UEF polish unless he asks
   sooner.
 
@@ -976,6 +1054,8 @@ both-modes check, multicore.md 1).
 | 4 (first form built 2026-10-29) | Strategic and operation layers: aggression with hysteresis, objectives, gathering, push, retreat by estimate, raids, navy and air domains, combined arms timing. Built: the zone estimate from the index (fair intel, memory, reinforcements on the way, kiting), defend / attack / push / raid with commit rules and logged decisions, tech upgrades. Not yet: gathering, navy and air, combined arms | Ours vs M28 and FAF's AI, several seeds: the fight scores of section 6; "never fled a weaker force" at zero faults. First duels: 0 faults, 3 losses and one 60-minute game without a result (section 6) |
 | 5 (first form built 2026-10-29) | Economy in parallel with scouting, army and expansion (power ahead but not wasted, factory floor, engineers by distance and away from enemies, reclaim, storage, timed assists); counters by build value; defences as build candidates; investments by payback and danger with a planned dip; the strategy layer's read of the enemy and stances; attacks on armies and expansions with gathering and reinforcements via the staging zone; guard posts; the knobs in one place (decisions 13-16) | The five duels of section 6 (mass / s at 5 / 15 / 30 minutes, mass lost per enemy mass killed); the 16 + B1 / b8 identical; our-key sessions identical at 1 / 32 threads, shuffle, reverse |
 | 6a (first form built 2026-10-30) | Map control: the army kept against the enemy's known army, guard posts sized by the threat and lost zones taken back, reclaim fields; each enemy read on its own (the focus enemy); the player's two sliders (aggression, economy) with bounds; the duels with fog of war | The duels of section 6 with fog; the 16 + B1 / b8 identical; our-key fogged sessions identical at 1 / 32 threads, shuffle, reverse |
+| 8 (first form built 2026-10-30) | The opening: the commander's power after the factory, extractors first, a power floor, factories and upgrades waiting for energy, base sites beyond the start zone, T2 without the mass-bar gate, anti-missile before power | The opening set (FAF and M28, three seeds each: mass a second at minutes 4-5 and 9-10, energy stalls); the duels of section 6 with fog; our-key fogged sessions identical at 1 / 32 threads, shuffle, reverse |
+| 7b (first form built 2026-10-30) | The base first (recall), scouting before a push, T2 engineers kept, the opening's reclaim share | As 7a; the duels of section 6 with fog (about even with 7a) |
 | 7a (first form built 2026-10-30) | Expansion speed (base jobs at the base, claims that last the walk, the army floor from minute 5), the builders' and the commander's safety, anti-missile, the overall ratio over every domain | The duels of section 6 with fog; our-key fogged sessions identical at 1 / 32 threads, shuffle, reverse; the 16 + B1 / b8 identical |
 | 5b | Cracking fortified lines and staged breaches; the small fight simulation; group micro (focus fire, kiting in even fights); difficulty knobs and the four levels | Scripted fortified-line scenarios (a session that starts with T2 PD + artillery lines); level-vs-level matches (each level beats the one below most of the time) |
 | 6 | Team play, pings (with the ui's radial menu), allied announcements, personalities, teacher mode; hot Lua parts moved native. First form of personalities (balanced / rusher / turtle) and teacher mode built in phase 4 (2.7, 2.8) | 2v2 / 4v4 with a human-ally stand-in (scripted pings); Chris's playtest |

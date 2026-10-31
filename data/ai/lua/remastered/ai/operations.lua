@@ -33,6 +33,11 @@ local kGuardMax = 24       -- a guard post's units at most, however much of the 
 local kGuardRadius = 40    -- world units around a zone's centre that count as "at its guard post"
 local kPostHorizon = 300   -- world units of travel that count as "can come to this post soon"
 local kLostMemory = 3000   -- ticks a zone where we lost our economy stays a post (to take back and rebuild)
+local kBaseZone = 150      -- world units of travel from the start: a zone this near is the base (phase 7b)
+local kRecallMass = 300    -- enemy mass that can come to a base zone that recalls the army from an operation
+local kRecallTicks = 600   -- after a recall, the base's defence takes every free unit this long
+local kScoutFresh = 1200  -- a target looked at by our scouts this recently needs no new look before an attack (7b)
+local kScoutWait = 300    -- after sending scouts to a target, the attack waits this long for their look
 local kPeakFade = 0.99     -- the enemy's strength seen fades by this a think (5 s): half in about 6 minutes
 
 -- Personalities (docs/ai-architecture.md 2.7) and their knobs: personality.lua. Teacher mode (2.8): never a push
@@ -336,6 +341,19 @@ function Think(brain)
     for _, z in ipairs(threatened) do
         if z ~= R.startZone then R.raided[z] = R.tick end
         local margin, _, _, _, _, theirsMass = Remastered.AIZoneEstimate(R.army, z, kHorizon)
+        -- the base first (phase 7b): an enemy force of kRecallMass or more at a base zone recalls the army from its
+        -- operation, and for kRecallTicks the base's defence takes every free unit. The no-cheat duel against M28
+        -- was lost with the army away on an attack while M28's army reached the base and killed the commander.
+        local base = Remastered.AIZoneDistance(R.startZone, z, 'land') <= kBaseZone
+        if base and theirsMass >= kRecallMass then
+            if R.op then
+                Log(R, 'recall', z, margin, ratio, string.format('the base is attacked (%.0f mass can come): the %s at zone %d is called off',
+                    theirsMass, R.op.kind, R.op.zone))
+                R.op = nil
+            end
+            R.recallUntil = R.tick + kRecallTicks
+        end
+        local all = base and R.recallUntil and R.tick < R.recallUntil
         if margin >= K.defend then
             if not (R.defending == z) then
                 Log(R, 'defend', z, margin, ratio, 'enemies in our zone; the estimate lets us hold it')
@@ -354,7 +372,7 @@ function Think(brain)
             end)
             local sent, mass = {}, 0
             for _, n in ipairs(near) do
-                if mass >= 1.5 * theirsMass + 1 then break end
+                if not all and mass >= 1.5 * theirsMass + 1 then break end
                 table.insert(sent, n.u)
                 busy[n.u:GetEntityId()] = true
                 mass = mass + MassOf(R, n.u)
@@ -365,6 +383,18 @@ function Think(brain)
             if not R.lastAvoid or R.lastAvoid ~= z or R.tick - (R.lastAvoidTick or 0) >= 300 then
                 Log(R, 'hold-back', z, margin, ratio, 'enemies in our zone are clearly stronger; the army waits at home')
                 R.lastAvoid, R.lastAvoidTick = z, R.tick
+            end
+            -- (phase 7b: the base itself attacked by more than we would win against: every free unit comes home and
+            -- fights beside the base's defences and the commander, instead of staying on posts and attacks)
+            if all then
+                local home = {}
+                for _, u in ipairs(units) do
+                    if not busy[u:GetEntityId()] then
+                        busy[u:GetEntityId()] = true
+                        table.insert(home, u)
+                    end
+                end
+                if home[1] then IssueAggressiveMove(home, { R.startX, GetTerrainHeight(R.startX, R.startZ), R.startZ }) end
             end
         end
     end
@@ -452,6 +482,29 @@ function Think(brain)
     if not R.op and ratio >= kAttackRatio and units[1] then
         local push = ratio >= kPushRatio
         local target, margin, bestZone = PickTarget(R, enemyZones, push and K.launchPush or K.launch)
+        -- scouting before a push (phase 7b): under fog the estimate at the target is only what the army last saw there.
+        -- A target our air scouts have not looked at within kScoutFresh gets up to 2 of them first, and the attack waits
+        -- kScoutWait for their look; then the estimate decides again with what they saw. Without air scouts it goes.
+        R.lookedAt = R.lookedAt or {}
+        if target then
+            local seen = R.lookedAt[target.zone]
+            if not seen or R.tick - seen > kScoutFresh then
+                local scouts = {}
+                for _, u in ipairs(brain:GetListOfUnits(categories.SCOUT * categories.AIR, false)) do
+                    if table.getn(scouts) < 2 and not u.Dead then table.insert(scouts, u) end
+                end
+                if scouts[1] then
+                    R.lookedAt[target.zone] = R.tick
+                    IssueClearCommands(scouts)
+                    IssueMove(scouts, (ZonePos(target.zone)))
+                    Log(R, 'scout', target.zone, margin, ratio, string.format('a look at the target before the %s (%d air scouts)',
+                        push and 'push' or 'attack', table.getn(scouts)))
+                    target = nil
+                end
+            elseif R.tick - seen < kScoutWait then
+                target = nil  -- (the scouts are on their way: the attack waits for their look)
+            end
+        end
         if target then
             local what = target.structures > 0 and (target.economy > 0 and 'their economy' or 'their structures') or
                 'their army in the field'
