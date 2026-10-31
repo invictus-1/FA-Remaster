@@ -1177,6 +1177,20 @@ DONE (engine, 2026-10-29, with Chris's OK): zlib 1.3.1's deflate.c / deflate.h /
 (SHA-256 of the release checked), landing in the batch after 33. ui/build_ui.py compiles them and switches
 MOHO64_NET_DEFLATE on by itself once deflate.c is in the tree.
 
+### 51. The desync detail: the state line from LockstepDigest, and WriteDetail public (2026-10-30, not blocking)
+
+Chris approved the desync detail: when a network game desyncs, each player's console names WHICH part of the state
+differs (an army's units, its economy, the projectiles, the random numbers...). It is built on the ui side, in helper
+desync's patch, which lands after its full test run. It works with today's engine, but two small things would make it
+cleaner:
+1. `LockstepDigest(const Sim&, uint32_t beat, std::string* line = nullptr)` (or a `LockstepDigestOfLine(line)`), so
+   that the StateLine the digest is made from is handed out. Today we compute StateLine a second time every 50th beat
+   (0.3-0.5 ms extra on Seton's 2-player).
+2. `Fingerprint::WriteDetail` public and static (it reads only the sim). We then write a desync's `.detail` listing
+   directly, instead of opening MOHO64_FINGERPRINT_DETAIL through the environment for that moment (as StartSession
+   does).
+When either lands, say so and we switch to it.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
