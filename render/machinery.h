@@ -8,7 +8,9 @@
 //   loop    a conveyor's part: slid along an axis from range[0] to range[1] over the period less its gap, then hidden for
 //           the gap (the jump back)
 //   scroll  a belt: its strip of the texture slides along its axis, wrapped within it (one belt a model)
-// and emitters on a bone that play while a named bone's cycle is within windows of it ("on_keys").
+// and emitters on a bone that play while a named bone's cycle is within windows of it ("on_keys"). A part's "building"
+// motion plays while the factory builds; its "idle" motion (keys or loop, optional) while it does not - a slow standby, so
+// that a base's factories are not dead still between builds; without one it rests.
 // Building is the unit's work going on (0 < workProgress < 1, its progress moving within the last half second); the
 // parts blend between their rest and their work over the file's blend (0.5 s), on the game's clock: a paused game stops
 // them. The simulation never sees any of it.
@@ -41,13 +43,16 @@ struct MachinerySpec {
     int of = -1;  // the part whose cycle its windows are of (an index into `parts`)
     std::vector<std::pair<float, float>> windows;
   };
-  struct Part {
+  struct Motion {
     enum Mode { Still, Keys, Loop, Scroll } mode = Still;
-    int bone = -1, parent = -1;  // in Model::bones
     float period = 1, phase = 0;
     std::vector<Key> keys;  // (Keys: by t)
     Vec3 axis{0, 0, 1};     // (Loop)
     float from = 0, to = 0, gap = 0;
+  };
+  struct Part {
+    int bone = -1, parent = -1;  // in Model::bones
+    Motion work, idle;           // while it builds, and while it does not (Still: at rest)
     std::vector<Emitter> emitters;
   };
   std::vector<Part> parts;  // parents before their children

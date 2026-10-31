@@ -42,6 +42,67 @@ int BoneNamed(const std::vector<ModelBone>& bones, const std::string& name) {
 
 float Fraction(double x) { return static_cast<float>(x - std::floor(x)); }
 
+// One of a part's motions from the file ("building" or "idle"; none there: Still).
+void ReadMotion(const JsonValue& w, MachinerySpec::Motion* m) {
+  const std::string mode = w["mode"].StringOr("");
+  m->period = std::max(0.05f, static_cast<float>(w["period"].NumberOr(1)));
+  m->phase = static_cast<float>(w["phase"].NumberOr(0));
+  const bool sine = w["ease"].StringOr("sine") != "linear";
+  if (mode == "keys") {
+    m->mode = MachinerySpec::Motion::Keys;
+    for (const JsonValue& k : w["keys"].items) {
+      if (k.items.size() < 3) continue;
+      MachinerySpec::Key key;
+      key.t = Fraction(k.items[0].NumberOr(0));
+      key.turn = Euler(k.items[1]);
+      key.move = Vector(k.items[2]);
+      key.sine = k.items.size() > 3 ? k.items[3].StringOr(sine ? "sine" : "linear") != "linear" : sine;
+      m->keys.push_back(key);
+    }
+    std::sort(m->keys.begin(), m->keys.end(), [](const MachinerySpec::Key& a, const MachinerySpec::Key& b) { return a.t < b.t; });
+    if (m->keys.empty()) m->mode = MachinerySpec::Motion::Still;
+  } else if (mode == "loop") {
+    m->mode = MachinerySpec::Motion::Loop;
+    m->axis = Vector(w["axis"], {0, 0, 1});
+    m->from = static_cast<float>(w["range"].items.size() > 1 ? w["range"].items[0].NumberOr(0) : 0);
+    m->to = static_cast<float>(w["range"].items.size() > 1 ? w["range"].items[1].NumberOr(0) : 0);
+    m->gap = std::clamp(static_cast<float>(w["gap"].NumberOr(0)), 0.0f, 0.9f);
+  } else if (mode == "scroll") {
+    m->mode = MachinerySpec::Motion::Scroll;
+  }
+}
+
+// A motion at the point `u` (0..1) of its cycle: its turn and move, and whether it hides (a loop's jump back: then it
+// waits where it comes back, so that the frame it shows again it does not streak there).
+void Evaluate(const MachinerySpec::Motion& m, float u, Quat* r, Vec3* move, bool* hidden) {
+  *r = Quat{};
+  *move = Vec3{};
+  *hidden = false;
+  if (m.mode == MachinerySpec::Motion::Keys) {
+    const std::vector<MachinerySpec::Key>& k = m.keys;
+    size_t j = k.size() - 1;
+    for (size_t n = 0; n < k.size(); ++n)
+      if (k[n].t <= u) j = n;
+    const MachinerySpec::Key& a = k[j];
+    const MachinerySpec::Key& b = k[(j + 1) % k.size()];
+    float along = 0;
+    if (k.size() > 1) {
+      const float from = a.t > u ? a.t - 1 : a.t;  // (before the first key: from the last, a cycle back)
+      float to = b.t;
+      if (to <= from) to += 1;
+      along = std::clamp((u - from) / std::max(to - from, 1e-4f), 0.0f, 1.0f);
+      if (a.sine) along = 0.5f - 0.5f * std::cos(along * kPi);
+    }
+    *r = Nlerp(a.turn, b.turn, along);
+    *move = Lerp(a.move, b.move, along);
+  } else if (m.mode == MachinerySpec::Motion::Loop) {
+    const float run = 1 - m.gap;
+    *hidden = u >= run;
+    const float s = *hidden ? 0.0f : std::min(u / run, 1.0f);
+    *move = m.axis * (m.from + (m.to - m.from) * s);
+  }
+}
+
 // A unit's own offset into the cycles (factories side by side do not work in step), 0..1.
 float UnitOffset(uint32_t id) { return Fraction(id * 0.6180339887); }
 
@@ -65,31 +126,10 @@ std::shared_ptr<const MachinerySpec> ReadMachinery(const std::string& text, cons
     }
     spec->simBones = std::min(spec->simBones, static_cast<size_t>(part.bone));
     const JsonValue& w = b["building"];
-    const std::string mode = w["mode"].StringOr("");
-    part.period = std::max(0.05f, static_cast<float>(w["period"].NumberOr(1)));
-    part.phase = static_cast<float>(w["phase"].NumberOr(0));
-    const bool sine = w["ease"].StringOr("sine") != "linear";
-    if (mode == "keys") {
-      part.mode = MachinerySpec::Part::Keys;
-      for (const JsonValue& k : w["keys"].items) {
-        if (k.items.size() < 3) continue;
-        MachinerySpec::Key key;
-        key.t = Fraction(k.items[0].NumberOr(0));
-        key.turn = Euler(k.items[1]);
-        key.move = Vector(k.items[2]);
-        key.sine = k.items.size() > 3 ? k.items[3].StringOr(sine ? "sine" : "linear") != "linear" : sine;
-        part.keys.push_back(key);
-      }
-      std::sort(part.keys.begin(), part.keys.end(), [](const MachinerySpec::Key& a, const MachinerySpec::Key& b) { return a.t < b.t; });
-      if (part.keys.empty()) part.mode = MachinerySpec::Part::Still;
-    } else if (mode == "loop") {
-      part.mode = MachinerySpec::Part::Loop;
-      part.axis = Vector(w["axis"], {0, 0, 1});
-      part.from = static_cast<float>(w["range"].items.size() > 1 ? w["range"].items[0].NumberOr(0) : 0);
-      part.to = static_cast<float>(w["range"].items.size() > 1 ? w["range"].items[1].NumberOr(0) : 0);
-      part.gap = std::clamp(static_cast<float>(w["gap"].NumberOr(0)), 0.0f, 0.9f);
-    } else if (mode == "scroll") {
-      part.mode = MachinerySpec::Part::Scroll;
+    ReadMotion(w, &part.work);
+    ReadMotion(b["idle"], &part.idle);
+    if (part.idle.mode == MachinerySpec::Motion::Scroll) part.idle.mode = MachinerySpec::Motion::Still;  // (a belt moves at work only)
+    if (part.work.mode == MachinerySpec::Motion::Scroll) {
       const JsonValue& rect = w["uv_rect"];
       if (spec->beltBone < 0 && rect.items.size() >= 4) {
         spec->beltAxis = w["axis"].StringOr("v") == "u" ? 0 : 1;
@@ -166,7 +206,7 @@ float Machinery::PoseUnit(const FrameUnit& unit, const Model& model, Vec3 at, co
   }
   const float w = s.work * s.work * (3 - 2 * s.work);  // (eased)
   const float offset = UnitOffset(unit.id);
-  auto cycle = [&](const MachinerySpec::Part& p) { return Fraction(clock_ / p.period + p.phase + offset); };
+  auto cycle = [&](const MachinerySpec::Motion& m) { return Fraction(clock_ / m.period + m.phase + offset); };
 
   // the simulation's bones as BuildRows reads them: model units, between the two beats
   const float toModel = 1.0f / model.scale;
@@ -189,36 +229,15 @@ float Machinery::PoseUnit(const FrameUnit& unit, const Model& model, Vec3 at, co
   std::vector<bool> hidden(spec.parts.size(), false);
   for (size_t i = 0; i < spec.parts.size(); ++i) {
     const MachinerySpec::Part& part = spec.parts[i];
-    Quat r;
-    Vec3 move;
-    if (w > 0 && part.mode == MachinerySpec::Part::Keys) {
-      const float u = cycle(part);
-      const std::vector<MachinerySpec::Key>& k = part.keys;
-      size_t j = k.size() - 1;
-      for (size_t n = 0; n < k.size(); ++n)
-        if (k[n].t <= u) j = n;
-      const MachinerySpec::Key& a = k[j];
-      const MachinerySpec::Key& b = k[(j + 1) % k.size()];
-      float along = 0;
-      if (k.size() > 1) {
-        const float from = a.t > u ? a.t - 1 : a.t;  // (before the first key: from the last, a cycle back)
-        float to = b.t;
-        if (to <= from) to += 1;
-        along = std::clamp((u - from) / std::max(to - from, 1e-4f), 0.0f, 1.0f);
-        if (a.sine) along = 0.5f - 0.5f * std::cos(along * kPi);
-      }
-      r = Nlerp(a.turn, b.turn, along);
-      move = Lerp(a.move, b.move, along);
-    } else if (w > 0 && part.mode == MachinerySpec::Part::Loop) {
-      const float u = cycle(part);
-      const float run = 1 - part.gap;
-      if (u >= run) hidden[i] = w >= 0.5f;
-      // (hidden for the jump back: waiting where it comes back, so that the frame it shows again it does not streak there)
-      const float s = u >= run && hidden[i] ? 0.0f : std::min(u / run, 1.0f);
-      move = part.axis * (part.from + (part.to - part.from) * s);
-    }
-    r = Nlerp(Quat{}, r, w);
-    move = move * w;
+    // its idle motion (or rest) and its work, blended by how far the factory is at work
+    Quat r, workR;
+    Vec3 move, workMove;
+    bool idleHidden = false, workHidden = false;
+    if (w < 1) Evaluate(part.idle, cycle(part.idle), &r, &move, &idleHidden);
+    if (w > 0) Evaluate(part.work, cycle(part.work), &workR, &workMove, &workHidden);
+    r = Nlerp(r, workR, w);
+    move = Lerp(move, workMove, w);
+    hidden[i] = w >= 0.5f ? workHidden : idleHidden;
     // the parent as posed now (the simulation's bone, or a part before this one), and this part on it as it stands to it
     // at rest, turned and moved about its head in the parent's axes at rest
     Vec3 pp;
@@ -277,7 +296,7 @@ float Machinery::PoseUnit(const FrameUnit& unit, const Model& model, Vec3 at, co
       uint32_t& handle = s.emitters[e++];
       bool on = w >= 0.5f && !hidden[i];
       if (on) {
-        const float u = cycle(spec.parts[em.of]);
+        const float u = cycle(spec.parts[em.of].work);
         bool in = false;
         for (const auto& win : em.windows) in = in || (u >= win.first && u <= win.second);
         on = in;
