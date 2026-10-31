@@ -52,9 +52,10 @@ using namespace moho;
 namespace {
 
 // MOHO64_LAYOUT_SHIFT=<n> (tools/twocopies.py gives it to one of its two copies; docs/two-copies.md): before anything
-// else, take and keep n rounds of odd-sized blocks of both heaps the engine uses, the C runtime's (malloc and new:
-// the engine's own objects) and the Lua heap's (mimalloc, reached through a Lua state of its own that is never
-// closed, so the sim state's own byte count and collector are not touched). Every later block then lands at another
+// else, take and keep n rounds of odd-sized blocks of the heaps the engine uses: the C runtime's (malloc), new's (the
+// engine's own objects: mimalloc's, src/app/new_delete.cpp, or the C runtime's in a build without it) and the Lua
+// heap's (mimalloc, reached through a Lua state of its own that is never closed, so the sim state's own byte count
+// and collector are not touched). Every later block then lands at another
 // address than in a copy without it, so whatever goes by addresses (Lua's hash of table and userdata keys, a
 // container ordered by pointer) shows as a difference between the two copies even if Windows happened to lay both
 // processes out alike. Nothing the simulation computes may change with it.
@@ -66,6 +67,7 @@ void ShiftLayout(int rounds) {
   for (int r = 0; r < rounds; ++r)
     for (size_t size = 1 + r; size < 4096; size += 1 + size / 8) {
       kept.push_back(std::malloc(size));
+      kept.push_back(::operator new(size));
       lua_newuserdata(L, size);
       lua_rawseti(L, -2, ++k);
     }

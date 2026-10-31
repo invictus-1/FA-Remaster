@@ -65,6 +65,8 @@ def main():
     for n in ("socket", "message", "connector_tcp", "connector_udp", "beat_exchange_net"):
         add(os.path.join(ROOT, "ui", "net", n + ".cpp"), netflags, True)
     add(os.path.join(ROOT, "src", "app", "main.cpp"), netflags, True)
+    # the program's own new and delete on mimalloc (src/app/new_delete.cpp; this program only)
+    add(os.path.join(ROOT, "src", "app", "new_delete.cpp"), cxxflags + mi_inc + ["-DMOHO64_MIMALLOC=1"], True)
 
     newest_header = max(os.path.getmtime(h) for pat in ("src/**/*.h", "src/**/*.inc", "third_party/**/*.h", "ui/net/*.h")
                         for h in glob.glob(os.path.join(ROOT, pat), recursive=True))
