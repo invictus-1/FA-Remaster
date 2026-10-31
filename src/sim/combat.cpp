@@ -1885,12 +1885,10 @@ void FireTick(Sim& sim, UnitWeapon* w) {
 
 }  // namespace
 
-void WeaponsTick(Sim& sim) {
-  // the armies' attacker stages (brain+0xb0): units in creation order inside each army, not in id order (an id
-  // used a second time belongs to a younger unit). A copy: a script fired from here may create units.
-  const std::vector<Unit*> units = sim.ArmyStageOrder();
+void WeaponsStageDebug(Sim& sim) {
   static const bool dbg = getenv("MOHO64_DEBUG_COMBAT") != nullptr;
   if (dbg && sim.tick() % 300 == 0) {
+    const std::vector<Unit*>& units = sim.ArmyStageOrder();
     int withTarget = 0, weapons = 0;
     for (Unit* u : units)
       for (UnitWeapon* w : u->weapons)
@@ -1907,6 +1905,12 @@ void WeaponsTick(Sim& sim) {
          static_cast<unsigned long long>(sim.projectilesMade), sim.projectiles.size(),
          static_cast<unsigned long long>(sim.impactsSeen));
   }
+}
+
+// One army's attacker stage (brain+0xb0): its units in creation order, not in id order (an id used a second time
+// belongs to a younger unit), in that army's turn (landnav.h: LandNavStageBegin). The caller hands a copy: a script
+// fired from here may create units.
+void WeaponsTickUnits(Sim& sim, const std::vector<Unit*>& units) {
   for (size_t i = 0; i < units.size(); ++i) {
     Unit* u = units[i];
     if (u->destroyQueued || u->combatGone) continue;

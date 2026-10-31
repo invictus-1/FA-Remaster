@@ -2335,7 +2335,7 @@ Vec3 PredictAhead(Sim& sim, Unit* u, float t, bool other) {
 // army stage too, after its own Execute (creation order): at 2213 the transport it guards is stopped by FAF's
 // AirTransportUnit.OnMotionHorzEventChange ('Stopped' -> navigator:AbortMove, in the transport's motion), and the
 // original's interceptor still follows its slot in that beat and stops following only at 2214. So it runs in the
-// navigators' stage (LandNavTickAll), after AirNavArrival, not in the motion pass.
+// navigators' stage (LandNavTickUnits), after AirNavArrival, not in the motion pass.
 void AirFormationFollow(Sim& sim, Unit* u) {
   if (!u->motion.air || u->fractionComplete < 1.0f) return;
   AirMotion& a = A(u);

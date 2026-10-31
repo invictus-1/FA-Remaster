@@ -175,7 +175,7 @@ bool GroundCanReserveRect(Sim& sim, Unit* u, const int r[4]);
 bool GroundCellFits(Sim& sim, Unit* u, int cx, int cz);
 // AbortMove: fly on to the point one second ahead and stay there.
 void AirAbort(Sim& sim, Unit* u);
-// CAiNavigatorAir::Execute's arrival test, in the navigators' stage of the beat (sim/landnav.cpp LandNavTickAll).
+// CAiNavigatorAir::Execute's arrival test, in the navigators' stage of the beat (sim/landnav.cpp LandNavTickUnits).
 bool AirNavArrival(Sim& sim, Unit* u);  // true: Execute re-aimed at its destination entity and returned
 // CUnitMotion::Stop 0x6b8460 with no point: the target is where the aircraft is now.
 void AirStopHere(Sim& sim, Unit* u);

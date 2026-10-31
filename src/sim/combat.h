@@ -320,7 +320,8 @@ void ProjectilesTick(Sim& sim);
 void ProjectileStep(Sim& sim, Projectile* p);
 void BeamsTick(Sim& sim);
 void BeamTick(Sim& sim, class CollisionBeam* b);  // one collision beam's beat
-void WeaponsTick(Sim& sim);
+void WeaponsStageDebug(Sim& sim);                                     // (MOHO64_DEBUG_COMBAT's lines)
+void WeaponsTickUnits(Sim& sim, const std::vector<Unit*>& units);  // one army's attacker stage
 // A unit leaves the world.
 void ReleaseUnitCombat(Sim& sim, Unit* u);
 // The unit is deleted (EntityDb::Purge, after the destroy queue): ~Unit deletes its CAniActor (0x6a714c ->

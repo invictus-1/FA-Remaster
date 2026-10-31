@@ -2312,15 +2312,43 @@ void Sim::Tick() {
   ThreatMapBeat(*this);
   threads_->WakeSignalled();  // (a thread whose event a stage signalled goes to the run order's end at that moment)
   phases.Lap(PhaseTimer::kEconomy);
-  LandNavTickAll(*this);
+  LandNavStageBegin(*this);
+  WeaponsStageDebug(*this);
   phases.Lap(PhaseTimer::kNavigators);
   // CArmyImpl::OnTick 0x6ffd70: the brain's stages in this order: navigators (brain+0xa8), steering (brain+0xac,
   // CAiSteeringImpl::OnTick 0x5d32b0), attackers and weapons (brain+0xb0); only then the sim's command stage. So
   // a waypoint the navigator set this beat already has its spline when a command task stops the unit in the same
   // beat, and the stop turns it into a brake spline (the unit slows down along its hull) instead of a coast.
-  SteeringTickAll(*this);  // the steering stage (spline points, predicted collisions)
-  phases.Lap(PhaseTimer::kSteering);
-  WeaponsTick(*this);
+  // The three run ARMY BY ARMY (0x6ffe83..0x6ffe9f, inside one army's OnTick): an army's steering predicts against
+  // the splines of the armies after it as their navigators left them LAST beat. Seen (oracle probe mp1_16748): MP1
+  // 16748, army 1's Aeon engineer 0x100013 gets a new waypoint and predicts a meeting with army 7's Seraphim engineer
+  // 0x7000e3, still on its spline, and brakes hard (Update mode 4, 0.19 then 0.114 a beat); 0x7000e3's navigator
+  // stops it at its pickup cell only afterwards, in army 7's turn. Ours ran every navigator first: 0x7000e3 had no
+  // spline left by then, no meeting, and 0x100013 turned onto its new course.
+  for (uint32_t a = 0;; ++a) {
+    // the army's units in creation order (ArmyStageOrder: by army, then creation), taken afresh for each stage: a
+    // script run by a stage may create units
+    auto armyUnits = [this](uint32_t army) {
+      const std::vector<Unit*>& all = ArmyStageOrder();
+      auto lo = std::lower_bound(all.begin(), all.end(), army, [](const Unit* u, uint32_t v) { return (u->id >> 20) < v; });
+      auto hi = std::upper_bound(lo, all.end(), army, [](uint32_t v, const Unit* u) { return v < (u->id >> 20); });
+      return std::vector<Unit*>(lo, hi);
+    };
+    {
+      const std::vector<Unit*>& all = ArmyStageOrder();
+      auto next = std::lower_bound(all.begin(), all.end(), a, [](const Unit* u, uint32_t v) { return (u->id >> 20) < v; });
+      if (next == all.end()) break;
+      a = (*next)->id >> 20;  // (the next army that has units)
+    }
+    LandNavTickUnits(*this, armyUnits(a));
+    phases.Lap(PhaseTimer::kNavigators);
+    SteeringTickUnits(*this, armyUnits(a));  // the steering stage (spline points, predicted collisions)
+    phases.Lap(PhaseTimer::kSteering);
+    WeaponsTickUnits(*this, armyUnits(a));
+    phases.Lap(PhaseTimer::kWeapons);
+  }
+  LandNavStageEnd(*this);  // the path queues' work and what it delivered
+  phases.Lap(PhaseTimer::kNavigators);
   threads_->WakeSignalled();
   phases.Lap(PhaseTimer::kWeapons);
   CommandStage(*this);  // stage 0x958 (arrivals from last beat's motion end their commands here)

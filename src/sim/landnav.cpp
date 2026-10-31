@@ -135,6 +135,7 @@ void NavRecord(uint8_t kind, uint8_t flags, const float* a, bool result) {
 struct LandNavState {
   std::unique_ptr<HPathTables> tables;
   double exec = 0, work = 0, deliver = 0, bg = 0;  // MOHO64_PROFILE: seconds, printed when the sim goes
+  double stageExec = 0;                            // (this beat's navigator stages so far)
   uint64_t n = 0;
   ~LandNavState() {
     if (getenv("MOHO64_PROFILE")) {
@@ -1420,12 +1421,18 @@ static void LandNavAheadRun(Sim& sim, const std::vector<Unit*>& all) {
            });
 }
 
-void LandNavTickAll(Sim& sim) {
-  static const bool prof = getenv("MOHO64_PROFILE") != nullptr;
-  double t0 = prof ? NowS() : 0;
+void LandNavStageBegin(Sim& sim) {
   LandNavState& ns = LNS(sim);
+  ns.stageExec = 0;
   ++ns.n;
-  const std::vector<Unit*> all = sim.ArmyStageOrder();  // (brain+0xa8: creation order inside each army)
+}
+
+// One army's navigator stage (brain+0xa8: its units in creation order), in that army's turn of the armies' stages.
+// The turns played ahead (MOHO64_PAR_NAV) are made here, for this army's navigators only: the armies before it have
+// had their steering and weapons stages by now, and what those change is then already in place.
+void LandNavTickUnits(Sim& sim, const std::vector<Unit*>& all) {
+  static const bool prof = getenv("MOHO64_PROFILE") != nullptr;
+  const double t0 = prof ? NowS() : 0;
   LandNavAheadRun(sim, all);  // MOHO64_PAR_NAV
   Speculation<NavAhead>& navSpec = sim.navSpec();
   for (size_t i = 0; i < all.size(); ++i) {
@@ -1461,6 +1468,15 @@ void LandNavTickAll(Sim& sim) {
     SteeringNavStageArmy(sim, 0);
     if (n->problem) u->unitStates.Insert(US("ProblemGettingToGoal"));
   }
+  if (prof) LNS(sim).stageExec += NowS() - t0;
+}
+
+// After every army's stages: the path queues' work and what it delivered (see LandNavStageBegin in landnav.h).
+void LandNavStageEnd(Sim& sim) {
+  static const bool prof = getenv("MOHO64_PROFILE") != nullptr;
+  LandNavState& ns = LNS(sim);
+  const double t0 = prof ? NowS() : 0;
+  const std::vector<Unit*> all = sim.ArmyStageOrder();
   HPathTables& T = Tables(sim);
   // Multicore step 2a: what the searches would make lazily, made before the work loop (HPathTables::
   // PrepareSearches; the unit grid for a search that units block: COGrid::UnitIsBlocked reads it). Neutral: the
@@ -1508,7 +1524,7 @@ void LandNavTickAll(Sim& sim) {
   }
   if (prof) {
     double t3 = NowS();
-    ns.exec += t1 - t0 - (ahead ? T.aheadCounts.seconds - prepBefore : 0);  // (the pre-pass apart)
+    ns.exec += ns.stageExec + (t1 - t0) - (ahead ? T.aheadCounts.seconds - prepBefore : 0);  // (the pre-pass apart)
     ns.work += t2 - t1;
     ns.deliver += t3 - t2;
   }
