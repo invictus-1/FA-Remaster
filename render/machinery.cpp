@@ -169,9 +169,10 @@ std::shared_ptr<const MachinerySpec> ReadMachinery(const std::string& text, cons
   return spec;
 }
 
-void Machinery::Begin(double clock, bool first) {
+void Machinery::Begin(double clock, bool first, Vec3 eye) {
   first_ = first;
   if (!first) return;
+  eye_ = eye;
   // (the units not drawn in the frame before are let go, their emitters stopped)
   for (auto it = units_.begin(); it != units_.end();) {
     if (it->second.seen == clock_) {
@@ -190,6 +191,8 @@ void Machinery::Begin(double clock, bool first) {
 
 float Machinery::PoseUnit(const FrameUnit& unit, const Model& model, Vec3 at, const Quat& turn, const std::string& faction, Pose* pose) {
   const MachinerySpec& spec = *model.machinery;
+  // (far off: not worked out; the unit is let go at the next Begin, its emitters stopped, and comes back at rest when near)
+  if (Length(at - eye_) > kFar) return -1;
   UnitState& s = units_[unit.id];
   // (MOHO64_DEBUG_MACHINERY: every factory with machinery works, building or not: its parts looked at alone)
   static const bool always = std::getenv("MOHO64_DEBUG_MACHINERY") != nullptr;

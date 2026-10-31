@@ -2385,7 +2385,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
   rememberedGone.clear();
   dyingDrawn = 0;
   bool noFocus = false;
-  machinery.Begin(clock_, !extraView && !sidePicture);  // [machinery]
+  machinery.Begin(clock_, !extraView && !sidePicture, Placing().Eye());  // [machinery]
   for (const FrameUnit& u : frame.units) {
     if (u.recon == 0xff) noFocus = true;
     if (u.dead) {

@@ -71,8 +71,10 @@ class Machinery {
  public:
   explicit Machinery(Particles* particles) : particles_(particles) {}
   // Once a frame, before the first view lists its units (`first`: the first view; the others keep its lists). The units
-  // not drawn in the frame before are let go (their emitters stopped).
-  void Begin(double clock, bool first);
+  // not drawn in the frame before are let go (their emitters stopped). `eye`: where the camera is; a factory farther from it
+  // than kFar is not worked out (its parts stand at rest and its emitters stop: from there its parts are a few pixels).
+  void Begin(double clock, bool first, Vec3 eye);
+  static constexpr float kFar = 250;
   // A unit drawn with a model that has machinery, standing at `at`, turned `turn`, of that faction (its emitters'): its
   // parts posed into `pose` (the simulation's bones and then the parts', in lists kept until the frame's last draw); its
   // emitters started, moved and stopped (the first view only). Returns how far its belt has moved along its strip
@@ -95,6 +97,7 @@ class Machinery {
   std::deque<std::vector<FrameBone>> lists_;
   double clock_ = 0;
   bool first_ = true;
+  Vec3 eye_;
 };
 
 }  // namespace render
