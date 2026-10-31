@@ -4,7 +4,9 @@
 #include "sim/steering.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -332,6 +334,53 @@ namespace {
 // MOHO64_DEBUG_COL: the unit whose collisions are tested, read by BoxBox. Per thread (multicore step 1), as
 // g_bodyDebug.
 thread_local bool g_satDebug = false;
+// BoxBoxSat's x87 step at precision control 24 (below): v's 53-bit significand rounded to 24 bits, to nearest, ties to
+// even, the exponent kept as it is (no float range: a tiny product stays whole). What frexp, the float conversion of
+// the fraction and ldexp give, without their calls: the bits below the 24 kept ones (29 of them) are rounded away by an
+// add (half of them, less one, plus the last kept bit: ties go to even) that carries into the kept bits and, when they
+// were all ones, into the exponent (the next power of two, as the float conversion of 0.11..1 gives 1.0). Both zeros
+// give +0 (as the frexp version's early return), infinities and NaNs come back as they are; a double subnormal (never
+// made here: the inputs are float products and sums) takes the frexp version. Speed only (B1 2026-10-30: the two
+// library calls were 2.2% of the beat time, B3-16k 3.7%).
+double X24Frexp(double v) {
+  if (v == 0.0) return 0.0;
+  int e;
+  const double m = std::frexp(v, &e);
+  return std::ldexp(static_cast<double>(static_cast<float>(m)), e);
+}
+double X24Bits(double v) {
+  if (v == 0.0) return 0.0;
+  uint64_t b;
+  std::memcpy(&b, &v, sizeof b);
+  const uint64_t ex = b & 0x7FF0000000000000ull;
+  if (ex == 0x7FF0000000000000ull) return v;
+  if (ex == 0) return X24Frexp(v);
+  b = (b + 0x0FFFFFFFull + ((b >> 29) & 1u)) & ~uint64_t{0x1FFFFFFF};
+  std::memcpy(&v, &b, sizeof v);
+  return v;
+}
+// MOHO64_VERIFY_X24=1: every x24 is also made the frexp way and compared bit for bit; the counts go to stderr at exit
+// (and the first mismatches as they come). The bit version's answer is the one used.
+struct X24Verify {
+  const bool on = std::getenv("MOHO64_VERIFY_X24") != nullptr;
+  std::atomic<uint64_t> checked{0}, mismatches{0};
+  ~X24Verify() {
+    if (on)
+      std::fprintf(stderr, "moho64 verify x24: checked %llu, mismatches %llu\n",
+                   static_cast<unsigned long long>(checked.load()), static_cast<unsigned long long>(mismatches.load()));
+  }
+};
+X24Verify g_x24Verify;
+double X24(double v) {
+  const double r = X24Bits(v);
+  if (g_x24Verify.on) [[unlikely]] {
+    g_x24Verify.checked.fetch_add(1, std::memory_order_relaxed);
+    const double f = X24Frexp(v);
+    if (std::memcmp(&f, &r, sizeof r) != 0 && g_x24Verify.mismatches.fetch_add(1, std::memory_order_relaxed) < 20)
+      std::fprintf(stderr, "moho64 verify x24: MISMATCH %a: bits %a, frexp %a\n", v, r, f);
+  }
+  return r;
+}
 // BoxBox 0x474830 (prop_collision.md 3.2): A = prop, B = unit. True with the minimum-overlap face normal (pointing
 // from the unit to the prop) and depth; an edge axis gives a zero normal and depth.
 bool BoxBoxSat(const Obb& A, const Obb& B, Vec3* normal, float* depth) {
@@ -343,12 +392,7 @@ bool BoxBoxSat(const Obb& A, const Obb& B, Vec3* normal, float* depth) {
   // bits, but the x87's exponent range keeps a tiny product whole where a float would round it to a denormal; only
   // the fstp at the end makes a float of it. An axis whose components are denormals (the cross product of two
   // nearly level up axes) is projected that way.
-  auto x24 = [](double v) {
-    if (v == 0.0) return 0.0;
-    int e;
-    const double m = std::frexp(v, &e);
-    return std::ldexp(static_cast<double>(static_cast<float>(m)), e);
-  };
+  auto x24 = [](double v) { return X24(v); };  // (above: the x87's 24 bits)
   auto xdot = [&](const Vec3& v, const Vec3& a) {  // (z + y) + x, each product and sum rounded as the x87 does
     const double z = x24(static_cast<double>(v.z) * a.z), y = x24(static_cast<double>(v.y) * a.y);
     return x24(x24(z + y) + x24(static_cast<double>(v.x) * a.x));
