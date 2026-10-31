@@ -157,7 +157,7 @@ uint32_t UnitToggleCaps(Sim& sim, Unit* u) {
 void UnitToggleScriptBit(Sim& sim, Unit* u, long bit) {
   uint32_t m = 1u << (static_cast<unsigned long>(bit) & 31u);
   if (!(UnitToggleCaps(sim, u) & m)) return;
-  if (u->unitStates.count("Attached") && u->parentId) {  // cargo of a transport cannot toggle
+  if (u->unitStates.Has(US("Attached")) && u->parentId) {  // cargo of a transport cannot toggle
     Entity* p = sim.FindEntity(u->parentId);
     if (p && p->blueprint && BpInCategory(sim, p->blueprint, "TRANSPORTATION")) return;
   }

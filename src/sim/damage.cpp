@@ -378,7 +378,7 @@ void KillUnit(Sim& sim, lua_State* L, Unit* u, Entity* instigator, const std::st
                        !(u->position.x > static_cast<float>(r[2])) && !(u->position.z > static_cast<float>(r[3]))))
       return;
   }
-  u->unitStates.insert("NoCost");
+  u->unitStates.Insert(US("NoCost"));
   static const bool dbg = getenv("MOHO64_DEBUG_COMBAT") != nullptr;
   if (dbg)
     Logf(LogLevel::Debug, "moho64: tick %u kill %08x %s (army %d) by %08x %s (army %d) type '%s'", sim.tick(), u->id,
@@ -413,10 +413,10 @@ void KillUnit(Sim& sim, lua_State* L, Unit* u, Entity* instigator, const std::st
     // (seen: Skirmish 2764, two engineers 0xd / 0x15 killed on a move with another queued, each 1 -> 0)
     LandNavSetSpeedThrough(u, false);
   }
-  u->unitStates.erase("Moving");  // (the move task goes with the queue: a unit killed on its way is not "Moving")
-  u->unitStates.erase("Patrolling");  // (nor "Patrolling": the patrol task goes the same way)
-  u->unitStates.erase("Guarding");    // (nor guarding)
-  u->unitStates.erase("GuardBusy");
+  u->unitStates.Erase(US("Moving"));  // (the move task goes with the queue: a unit killed on its way is not "Moving")
+  u->unitStates.Erase(US("Patrolling"));  // (nor "Patrolling": the patrol task goes the same way)
+  u->unitStates.Erase(US("Guarding"));    // (nor guarding)
+  u->unitStates.Erase(US("GuardBusy"));
   PushObject(L, instigator && instigator->HasLuaObject() ? instigator : nullptr);
   lua_pushstring(L, type.c_str());
   lua_pushnumber(L, ratio);

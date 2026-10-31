@@ -428,7 +428,7 @@ float Materialize(Sim& sim, lua_State* L, Unit* u, float delta) {
   EntityAdjustHealth(L, u, u, u->maxHealth * delta);
   if (u->beingBuilt && u->fractionComplete == 1.0f) {
     u->beingBuilt = false;
-    u->unitStates.erase("BeingBuilt");
+    u->unitStates.Erase(US("BeingBuilt"));
     Entity* builder = u->builderId ? sim.FindEntity(u->builderId) : nullptr;
     PushObject(L, builder && !builder->destroyQueued ? builder : nullptr);
     lua_pushstring(L, u->layer.c_str());

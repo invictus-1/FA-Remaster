@@ -144,7 +144,7 @@ void UnitViews(const Sim& sim, std::vector<UnitView>* out) {
     v.workProgress = u->workProgress;
     v.dead = u->dead;
     v.beingBuilt = u->beingBuilt;
-    v.selectable = u->unitStates.count("UnSelectable") == 0;
+    v.selectable = u->unitStates.Has(US("UnSelectable")) == 0;
     v.paused = u->paused;
     v.refreshUI = u->refreshUISynced;
     v.queueLength = static_cast<int>(u->commands.size());

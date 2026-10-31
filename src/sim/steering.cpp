@@ -33,6 +33,7 @@ namespace moho {
 namespace {
 
 bool St(const Unit* u, const char* s) { return u->unitStates.count(s) != 0; }
+bool St(const Unit* u, int i) { return u->unitStates.Has(i); }  // (i: US("Name"))
 
 bool Naval(const Unit* u) {
   const MotionBlueprint* b = u->motion.bp;
@@ -47,7 +48,7 @@ bool AirCat(const Unit* u) {
   return b->airCat == 1;
 }
 bool Mobile(const Unit* u) { return u->motion.bp && u->motion.bp->mobile(); }
-bool Immobile(const Unit* u) { return u->immobile || St(u, "Immobile"); }
+bool Immobile(const Unit* u) { return u->immobile || St(u, US("Immobile")); }
 // Entity::GetFootprint (DoCollisionsFor 0x59808b.., ResolvePossibleCollision 0x59741c / 0x59742a): the AltFootprint
 // while the unit uses it
 int FpFlags(const Unit* u) { return u->motion.bp ? UnitFootprint(u).flags : 0; }
@@ -154,20 +155,20 @@ const Unit* MoreInLine(const Unit* A, const Unit* B) {
 Vec3 RotateQuarterTurnY(const Vec3& v) { return RotY(kTurnQuarterPi, v); }
 
 bool SameFormationLayer(const Unit* a, const Unit* b) {
-  if (St(a, "Attacking") || St(b, "Attacking")) return false;
+  if (St(a, US("Attacking")) || St(b, US("Attacking"))) return false;
   return a->form && a->form == b->form;
 }
 
 bool UnitPriority(const Unit* A, const Unit* B) {
-  if (Immobile(A) || St(A, "Upgrading")) return true;
-  if (Immobile(B) || St(B, "Upgrading")) return false;
+  if (Immobile(A) || St(A, US("Upgrading"))) return true;
+  if (Immobile(B) || St(B, US("Upgrading"))) return false;
   bool na = Naval(A), nb = Naval(B);
   if (na != nb) return na;
   bool fa = (FpFlags(A) & 1) != 0, fb = (FpFlags(B) & 1) != 0;
   if (fa != fb) return fa;
   if (A->motion.bp->canFly && A->layer != "Air") return true;  // landed air-capable unit
   if (B->motion.bp->canFly && B->layer != "Air") return false;
-  if (St(A, "WaitingForTransport") && !St(B, "WaitingForTransport")) return true;
+  if (St(A, US("WaitingForTransport")) && !St(B, US("WaitingForTransport"))) return true;
   if (A->guardedId && A->guardedId == EntityRef(B)) return false;  // the guarded unit has priority
   if (B->guardedId && B->guardedId == EntityRef(A)) return true;
   bool same = A->form && A->form == B->form;
@@ -175,7 +176,7 @@ bool UnitPriority(const Unit* A, const Unit* B) {
     if (A->formLeader == EntityRef(A)) return true;
     if (A->formLeader == EntityRef(B)) return false;
   }
-  bool am = St(A, "Moving"), bm = St(B, "Moving");
+  bool am = St(A, US("Moving")), bm = St(B, US("Moving"));
   if (am && !bm) return false;  // a standing unit has priority over a mover
   if (!am && bm) return true;
   if (same) {
@@ -193,16 +194,16 @@ bool UnitIgnores(const Unit* self, const Unit* e, int flags) {
   if (!e || e->dead || e->destroyQueued || e == self || !Mobile(e)) return true;
   if (flags == 1 && !vm::SameBits(e->position, e->lastPosition))
     return true;  // it moved this tick (func_IsSourceUnit 0x62eee9..0x62eefd: memcmp 0x4f0a50 of +0xb4 / +0xd0)
-  if (e->parentId || St(e, "Attached")) return true;
+  if (e->parentId || St(e, US("Attached"))) return true;
   if (self->layer != e->layer) return true;
   if (Naval(self) && !Naval(e)) return true;
   if (AirCat(e) && (e->layer == "Air" || e->transport)) return true;
   if ((FpFlags(self) & 1) && FpFlags(e) == 0) return true;
-  if (St(self, "WaitingForTransport") && St(e, "WaitingForTransport") && self->focusId == e->focusId) return true;
-  if (St(self, "Upgrading") && e->creatorId && e->creatorId == EntityRef(self)) return true;
+  if (St(self, US("WaitingForTransport")) && St(e, US("WaitingForTransport")) && self->focusId == e->focusId) return true;
+  if (St(self, US("Upgrading")) && e->creatorId && e->creatorId == EntityRef(self)) return true;
   if (flags == 2) return false;
   if (AirCat(e) && self->army == e->army) return true;
-  if (!St(self, "WaitingForTransport") && St(e, "WaitingForTransport")) return false;
+  if (!St(self, US("WaitingForTransport")) && St(e, US("WaitingForTransport"))) return false;
   return UnitPriority(self, e);
 }
 
@@ -271,7 +272,7 @@ void DoCollisionsFor(Sim& sim, Unit* self, const std::vector<Hit>& hits) {
   // u+0xd0 is the entity's transform before its last AdvanceCoords. A unit in a transport's beam is advanced a
   // second time each beat, by its task (CUnitCallTransport state 3), so there it is where the unit stood when
   // the last beat ended: last beat's beam position plus last beat's coast.
-  if (self->unitStates.count("Teleporting") && self->lastMoveTick == sim.tick() && self->lastPosTick)
+  if (self->unitStates.Has(US("Teleporting")) && self->lastMoveTick == sim.tick() && self->lastPosTick)
     prev = Add(self->prevLastPosition, self->motion.lastMove);
   static const long dbg = getenv("MOHO64_DEBUG_PUSH") ? atol(getenv("MOHO64_DEBUG_PUSH")) : -1;
   static const bool dbgProp = getenv("MOHO64_DEBUG_PROPHIT") != nullptr;
@@ -528,7 +529,7 @@ namespace {
 bool SurfaceTakesPart(const Unit* u) {
   const UnitMotion& m = u->motion;
   if (u->layer == "Air" || u->layer == "Sub") return false;
-  if (u->dead || u->beingBuilt || u->parentId || St(u, "Attached")) return false;
+  if (u->dead || u->beingBuilt || u->parentId || St(u, US("Attached"))) return false;
   if (!m.bp || m.bp->canFly) return false;
   if (m.pushed) return false;  // a pushed unit never pushes
   return true;
@@ -1137,7 +1138,7 @@ void ProcessSplineMovement(Sim& sim, Unit* u) {
   // 0x5d2d24..0x5d2e4b: a unit in the Immobile state, or a stunned one, loses its spline once (Stop, and the
   // byte steering+0xa0 remembers it) and gets no point while that lasts. When it is let go, a unit that is
   // Moving, Patrolling or Attacking gets a fresh batch toward the same target, from where it stands now.
-  const bool held = u->immobile || u->unitStates.count("Immobile") > 0 || u->stunned;
+  const bool held = u->immobile || u->unitStates.Has(US("Immobile")) > 0 || u->stunned;
   if (!m.heldLatch) {
     if (held) {
       m.heldLatch = true;
@@ -1149,8 +1150,8 @@ void ProcessSplineMovement(Sim& sim, Unit* u) {
     }
   } else {
     if (held) return;
-    if (Driving(u) && (u->unitStates.count("Moving") > 0 || u->unitStates.count("Patrolling") > 0 ||
-                       u->unitStates.count("Attacking") > 0)) {
+    if (Driving(u) && (u->unitStates.Has(US("Moving")) > 0 || u->unitStates.Has(US("Patrolling")) > 0 ||
+                       u->unitStates.Has(US("Attacking")) > 0)) {
       UpdatePath(sim, u, m.steerTarget, true, GetVal(m));
       CheckCollisions(sim, u);
     }

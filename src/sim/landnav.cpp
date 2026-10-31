@@ -252,6 +252,8 @@ bool BlocksFor(const Unit* self, const Unit* e, int flags) { return !UnitIgnores
 static bool PathUnitBlockedCore(Unit* u, int x, int z, int flags) {
   if (!u) return false;
   Sim& sim = *Sim::From(u->luaState());
+  // (MOHO64_PAR_PATH: a search played ahead reads the unit grid as it is, and stops where it would make it)
+  if (tl_pathAheadDry && (!sim.entityGrid().ready() || sim.UnitGridDue())) throw PathAheadStop{4};
   int S = std::max(SX(u), SZ(u));
   float x0 = static_cast<float>(x), z0 = static_cast<float>(z), x1 = x0 + S, z1 = z0 + S;
   bool blocked = false;
@@ -270,6 +272,12 @@ static bool PathUnitBlockedCore(Unit* u, int x, int z, int flags) {
     // the same.)
     if (!GridFindsInBox(sim, e, x0, z0, x1, z1)) return;
     if (tl_navDry) NavDryCandidate(e);
+    if (tl_pathAheadDry) {  // (MOHO64_PAR_PATH: the filters' category caches are made lazily: there it stops)
+      for (const Unit* w : {static_cast<const Unit*>(u), static_cast<const Unit*>(e)}) {
+        const MotionBlueprint* b = w->motion.bp;
+        if (b && w->blueprint && (b->naval < 0 || b->airCat < 0)) throw PathAheadStop{5};
+      }
+    }
     // 0x721488: a Land-layer unit counts for an IgnoreStructures footprint only when its own has the flag;
     // Air and Sub layer units never count
     if (e->layer == "Land") {
@@ -594,7 +602,7 @@ void RequestPath(Sim& sim, Unit* u, LandNav& n, int mode) {
     n.path.push_back(PathCell{n.goal[0], n.goal[1]});
     n.state = 6;
   } else {
-    u->unitStates.insert("PathFinding");
+    u->unitStates.Insert(US("PathFinding"));
     QueueSearch(sim, u, n);
     n.state = 3;
   }
@@ -619,8 +627,8 @@ void ResetPathState(Sim& sim, Unit* u, LandNav& n) {
   n.hasTarget = true;
   // 0x5ada19: the unit's PathFinding and ProblemGettingToGoal states go with the path (a search cut short by a
   // new goal does not leave PathFinding standing)
-  u->unitStates.erase("PathFinding");
-  u->unitStates.erase("ProblemGettingToGoal");
+  u->unitStates.Erase(US("PathFinding"));
+  u->unitStates.Erase(US("ProblemGettingToGoal"));
   // 0x5ada33: unit+0x124 := 0 (the navigator's AltFootprint flag; RequestPath sets it again for a FAVORSWATER unit)
   u->altFootprintNav = false;
   // (0x5ad9c0 leaves the splice count +0x5c alone: only ConsumePathPrefix 0x5ad830 and the splice itself write
@@ -655,7 +663,7 @@ void RequestContinuation(Sim& sim, Unit* u, LandNav& n, int mode) {
                                Manhattan(n.path[0], n.cur) < 2))
     Pop(n, 1);
   n.fits = Fits(sim, u, n.cur) && UnitClearTo(sim, u, n, n.cur);
-  if (u->unitStates.count("Attacking")) mode = 3;
+  if (u->unitStates.Has(US("Attacking"))) mode = 3;
   if (mode == 3) n.attackVariant = true;
   n.pf.mode = mode;
   n.pf.anchor = n.cur;
@@ -692,7 +700,7 @@ void OnPath(Sim& sim, Unit* u, LandNav& n) {
          n.pf.accepted ? 1 : 0, s.c_str());
   }
   if (n.state == 3) {
-    u->unitStates.erase("PathFinding");
+    u->unitStates.Erase(US("PathFinding"));
     n.path = std::move(got);
     // The unit state ProblemGettingToGoal (bit 24) is set here, in the beat the search is delivered (0x5af211 for
     // an empty path, 0x5af2bf for a path that ends outside the goal), not by the next beat's Execute; an empty path
@@ -702,14 +710,14 @@ void OnPath(Sim& sim, Unit* u, LandNav& n) {
     if (n.path.empty()) {
       n.state = 1;
       n.problem = true;
-      u->unitStates.insert("ProblemGettingToGoal");
-      if (u->unitStates.count("Patrolling")) u->unitStates.insert("NeedToTerminateTask");
+      u->unitStates.Insert(US("ProblemGettingToGoal"));
+      if (u->unitStates.Has(US("Patrolling"))) u->unitStates.Insert(US("NeedToTerminateTask"));
       return;
     }
     const PathCell& last = n.path.back();
     if (!InGoal(n, last)) {
       n.problem = true;
-      u->unitStates.insert("ProblemGettingToGoal");
+      u->unitStates.Insert(US("ProblemGettingToGoal"));
       // the goal centre is appended when the footprint fits there (OnEvent 0x5aeeb0, pathfinding.md 4.4): the test is
       // Reach(centre, centre) (0x5af2d5..0x5af30b, Reach 0x5af4e0), so a unit on the Water layer takes it without Sub
       // (FitsReach), not the caps -1 test
@@ -1052,7 +1060,7 @@ void UpdateCurrentPosition(Sim& sim, Unit* u, LandNav& n) {
   // whose corner a standing AA unit's box touches by 0.05: the original tests (284, 682), finds it free and asks for
   // a continuation path at once (its target becomes (287, 684) at 1307 and the move ends at 1310); ours tested
   // (285, 683) and waited ten beats.
-  if (!n.path.empty() && n.path.back() == n.target && !u->unitStates.count("WaitingForTransport")) {
+  if (!n.path.empty() && n.path.back() == n.target && !u->unitStates.Has(US("WaitingForTransport"))) {
     const PathCell c = CellOf(u, static_cast<float>(n.target.x), static_cast<float>(n.target.z));
     if (PathUnitBlocked(u, c.x, c.z, 1)) {
       n.wait = 10;
@@ -1110,14 +1118,14 @@ void Execute(Sim& sim, Unit* u, LandNav& n) {
     n.active = false;
     n.hasTarget = false;  // (a navigator that went idle starts its next goal with a target change)
     Tables(sim).Cancel(&n.pf);
-    u->unitStates.erase("PathFinding");
+    u->unitStates.Erase(US("PathFinding"));
     // (0x5a43fb: MakeIdle, vt+0x4c = 0x5a3e00, runs ResetPathState 0x5ad9c0, which clears unit+0x124: a FAVORSWATER
     // unit stands on its Footprint again once its move is over)
     u->altFootprintNav = false;
     // ... and the same ResetPathState takes ProblemGettingToGoal off with the path (0x5ada19). Seen (MP3 1258): army
     // 0's engineer 5, whose reclaim walk failed (the goal could not be reached), loses the state in the beat its walk
     // ends in the original; ours kept it until the reclaim was over.
-    u->unitStates.erase("ProblemGettingToGoal");
+    u->unitStates.Erase(US("ProblemGettingToGoal"));
     n.problem = false;
     n.following = false;  // (and +0x84, +0x92: MakeIdle's ResetPathState)
     n.lastFollow = {};
@@ -1265,7 +1273,7 @@ void LandNavSetGoalRect(Sim& sim, Unit* u, int x0, int z0, int x1, int z1, bool 
     }
   }
   // BeginThinking 0x5adba0: a formation member waits its path delay
-  n.thinkDelay = u->unitStates.count("TransportLoading") ? 1 : FormationPathDelay(sim, u);
+  n.thinkDelay = u->unitStates.Has(US("TransportLoading")) ? 1 : FormationPathDelay(sim, u);
   // 0x5a4147..0x5a4165: after ResetPathState (the target := the cell of the last SetCurrentPosition) and
   // ConfigureGoal, SetGoal sets the status to 1 and calls SetCurrentPosition 0x5ae210 with the unit's position of now,
   // then BeginThinking. So the cell is the unit's own also while the navigator is idle and nothing executes it, and
@@ -1276,7 +1284,7 @@ void LandNavSetGoalRect(Sim& sim, Unit* u, int x0, int z0, int x1, int z1, bool 
   SetCurrentPosition(u, n);
   n.startedThisTick = true;
   n.prevPos = u->position;
-  u->unitStates.erase("ProblemGettingToGoal");
+  u->unitStates.Erase(US("ProblemGettingToGoal"));
   MotionNavBegin(u);
   if (Dbg())
     Logf(LogLevel::Info, "nav: tick %u unit %u goal (%d,%d) from (%.3f,%.3f) asked (%d,%d)..(%d,%d)", sim.tick(), u->id,
@@ -1289,7 +1297,7 @@ void LandNavStop(Sim& sim, Unit* u) {
   ResetPathState(sim, u, *n);
   n->active = false;
   n->hasTarget = false;
-  u->unitStates.erase("PathFinding");
+  u->unitStates.Erase(US("PathFinding"));
 }
 
 void LandNavSetSpeedThrough(Unit* u, bool on) {
@@ -1451,7 +1459,7 @@ void LandNavTickAll(Sim& sim) {
       }
     }
     SteeringNavStageArmy(sim, 0);
-    if (n->problem) u->unitStates.insert("ProblemGettingToGoal");
+    if (n->problem) u->unitStates.Insert(US("ProblemGettingToGoal"));
   }
   HPathTables& T = Tables(sim);
   // Multicore step 2a: what the searches would make lazily, made before the work loop (HPathTables::
@@ -1483,6 +1491,7 @@ void LandNavTickAll(Sim& sim) {
     if (prof) T.aheadCounts.seconds += NowS() - p0;
   }
   double t1 = prof ? NowS() : 0;
+  T.SearchesAhead(sim.workers(), sim.tick());  // MOHO64_PAR_PATH (off by default)
   T.WorkAll(0);
   double t2 = prof ? NowS() : 0;
   // A search that ends the move (state 1, Failed: an empty first path, a continuation blocked after its

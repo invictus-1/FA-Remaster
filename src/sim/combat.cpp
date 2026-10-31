@@ -957,10 +957,10 @@ Vec3 CalcBombDrop(const Unit* u, Vec3 T) {
 bool CanFire(Sim& sim, UnitWeapon* w) {
   Unit* u = w->unit;
   if (u->stunned) return false;
-  if (u->unitStates.count("Busy")) return false;
+  if (u->unitStates.Has(US("Busy"))) return false;
   const CombatBpData& cb = CB(u);
   if (cb.canFly && u->layer != "Air") return false;
-  if (cb.needUnpack && !u->unitStates.count("Immobile")) return false;
+  if (cb.needUnpack && !u->unitStates.Has(US("Immobile"))) return false;
   if (w->bp->aboveWaterFireOnly || w->bp->belowWaterFireOnly) {
     float y = WeaponPos(w).y, wl = WaterLevel(sim);
     if (w->bp->aboveWaterFireOnly && !(y > wl)) return false;
@@ -972,7 +972,7 @@ bool CanFire(Sim& sim, UnitWeapon* w) {
       if (speed < u->motion.speedMult * cb.maxAirspeed * 0.25f) return false;
     }
     if (w->bp->needToComputeBombDrop && HasTarget(sim, w->target)) {
-      if (!u->unitStates.count("MakingAttackRun")) return false;
+      if (!u->unitStates.Has(US("MakingAttackRun"))) return false;
       Vec3 T = TargetPos(sim, w->target, false);
       // a mobile target is led: where it will be in Air.PredictAheadForBombDrop seconds (0x62cd40). (Weapons
       // run before the beat's moves: nothing is held yet, committed and current are the same here.)
@@ -1451,7 +1451,7 @@ bool TargetExempt(Sim& sim, const Unit* u, const Entity* e) {
   if (!e) return false;
   for (const auto& c : u->commands)
     if ((c->type == CommandType::Reclaim || c->type == CommandType::Capture) && c->targetId == EntityRef(e)) return true;
-  if (e->kind != Entity::Kind::Unit || !static_cast<const Unit*>(e)->unitStates.count("BeingCaptured")) return false;
+  if (e->kind != Entity::Kind::Unit || !static_cast<const Unit*>(e)->unitStates.Has(US("BeingCaptured"))) return false;
   const uint32_t ref = EntityRef(e);
   for (Unit* x : sim.units())
     if (x->army == u->army && Alive(x) && x->focusId == ref && BpInCategory(sim, x->blueprint, "ENGINEER")) return true;
@@ -1527,7 +1527,7 @@ Unit* FindBestEnemy(Sim& sim, UnitWeapon* w, const std::vector<Unit*>& list, flo
       } else if (e->layer == "Air" && e->beingBuilt) {
         continue;
       }
-      if (Blacklisted(w, e) || TargetExempt(sim, u, e) || e->unitStates.count("DoNotTarget")) continue;
+      if (Blacklisted(w, e) || TargetExempt(sim, u, e) || e->unitStates.Has(US("DoNotTarget"))) continue;
     }
     if (e->layer != "Air" && !InMap(sim, ep)) continue;
     if (!Targetable(sim, w, e)) continue;
@@ -1601,7 +1601,7 @@ UnitWeapon* TargetWeapon(Sim& sim, Unit* u, const AiTarget& t) {
 // LeashOrInvisible 0x5d8ad0 (the leash part): while Attacking, the unit is more than GuardReturnRadius (3D)
 // from its leash point - the guarded unit's position, else u+0x4e8 - when there is one
 bool LeashOrInvisible(Sim& sim, Unit* u) {
-  if (!u->unitStates.count("Attacking")) return false;
+  if (!u->unitStates.Has(US("Attacking"))) return false;
   Vec3 leash = u->leashPos;
   if (u->guardedId)
     if (Entity* g = sim.FindEntity(u->guardedId)) leash = g->position;
@@ -1669,8 +1669,8 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
   const CombatBpData& cb = CB(u);
   int period = AcquirePeriod(w);
   int ret = period;
-  if (cb.needUnpack && (u->unitStates.count("Moving") || u->unitStates.count("TransportLoading") ||
-                        u->unitStates.count("WaitingForTransport")))
+  if (cb.needUnpack && (u->unitStates.Has(US("Moving")) || u->unitStates.Has(US("TransportLoading")) ||
+                        u->unitStates.Has(US("WaitingForTransport"))))
     return ret;
   if (!SameBits(u->position, u->lastPosition))  // (0x5d8e7f..0x5d8e99, memcmp 0x4f0a50)
     w->blacklist.clear();
@@ -1713,7 +1713,7 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
   // MOHO64_DEBUG_ACQTICK=<tick>: every acquire task that runs in that beat, and how far it gets
   static const long dbgAcqTick = getenv("MOHO64_DEBUG_ACQTICK") ? atol(getenv("MOHO64_DEBUG_ACQTICK")) : -1;
   const bool dbgAcq2 = dbgAcqTick >= 0 && static_cast<long>(sim.tick()) == dbgAcqTick;
-  const bool engaging = u->unitStates.count("Attacking") &&
+  const bool engaging = u->unitStates.Has(US("Attacking")) &&
                         ((b.autoInitiateAttackCommand && !CheckAutoInitiate(sim, w)) || cb.needUnpack || code == 1);
   const bool keeps = !engaging && !b.alwaysRecheckTarget && TargetStatus(sim, w, w->target) == 0 &&
                      CanAttackTarget(sim, w, w->target) && HasTarget(sim, w->target) &&
@@ -1744,7 +1744,7 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
   if (b.targetType == 1) {
     // anti-projectile weapons (TrackToTarget 0x5d8000)
     Projectile* bestP = nullptr;
-    if (CheckSilo(w) && !u->stunned && !u->unitStates.count("Busy")) {
+    if (CheckSilo(w) && !u->stunned && !u->unitStates.Has(US("Busy"))) {
       float reach = WeaponReach(w), bestD = std::numeric_limits<float>::infinity();
       float wl = WaterLevel(sim);
       // The candidates come from the entity grid (EntitiesAroundPoint 0x722350, mask projectiles: the cells of the
@@ -3233,7 +3233,7 @@ void InitAttack(Sim& sim, Unit* u, BuildTask& t, bool coordinated) {
   d->coordinated = coordinated;
   t.adata = d;
   t.state = 0;
-  u->unitStates.insert("Attacking");
+  u->unitStates.Insert(US("Attacking"));
   if (!coordinated) u->navIgnoreFormation = true;
   AiTarget target = CommandTarget(sim, t);
   if (target.type == 1)
@@ -3481,7 +3481,7 @@ void UpdateAttacker(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
 void AbortNavigation(Unit* u) {
   u->navIgnoreFormation = false;
   if (u->motion.bp && u->motion.bp->mobile()) MotionStop(u);
-  u->unitStates.erase("Moving");
+  u->unitStates.Erase(US("Moving"));
 }
 
 // the weapon's state report (attacker-event listener 0x5f3ee0)
@@ -3895,7 +3895,7 @@ int TickFireAt(Sim& sim, Unit* u, BuildTask& t) {
         t.waitUntil = sim.tick() + 9;  // return 10
         return kTaskRunning;
       case 2:
-        if (!u->unitStates.count("Busy")) {
+        if (!u->unitStates.Has(US("Busy"))) {
           if (nuke) sim.CallMethod(sim.L(), u, "OnNukeLaunched", 0);
           SetTarget(sim, w, target);
           FireNow(sim, w);
@@ -3904,11 +3904,11 @@ int TickFireAt(Sim& sim, Unit* u, BuildTask& t) {
         t.waitUntil = sim.tick() + 2;  // return 3
         return kTaskRunning;
       case 3:
-        if (u->unitStates.count("Busy")) t.state = 4;
+        if (u->unitStates.Has(US("Busy"))) t.state = 4;
         t.waitUntil = sim.tick() + 2;
         return kTaskRunning;
       default:
-        if (!u->unitStates.count("Busy")) return kTaskDone;
+        if (!u->unitStates.Has(US("Busy"))) return kTaskDone;
         t.waitUntil = sim.tick() + 2;
         return kTaskRunning;
     }
@@ -3920,7 +3920,7 @@ int TickFireAt(Sim& sim, Unit* u, BuildTask& t) {
 void EndFireAt(Sim& sim, Unit* u, BuildTask& t) {
   (void)sim;
   (void)t;
-  if (!u->dead) u->unitStates.erase("Busy");
+  if (!u->dead) u->unitStates.Erase(US("Busy"));
 }
 
 // An OverCharge order (DispatchTask 0x6096ad): the attack task in overcharge mode, only on an entity that is
@@ -4002,8 +4002,8 @@ int TickAttack(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   float d = DistXZ(u->position, tp);
   Vec3 f = Forward(u->orientation);
   float ahead = (tp.x - u->position.x) * f.x + (tp.z - u->position.z) * f.z;
-  if (ahead > 0 && d < 60) u->unitStates.insert("MakingAttackRun");
-  else u->unitStates.erase("MakingAttackRun");
+  if (ahead > 0 && d < 60) u->unitStates.Insert(US("MakingAttackRun"));
+  else u->unitStates.Erase(US("MakingAttackRun"));
   if (t.state == 5) {  // flying past
     if (d > 25 || !u->motion.hasGoal) t.state = 3;
     return kTaskRunning;
@@ -4029,7 +4029,7 @@ void EndAttack(Sim& sim, Unit* u, BuildTask& t) {
   // "Attacking" goes in the same beat)
   // (MakingAttackRun is not the task's: only the flight code sets it and clears it, in its own pass; a killed
   // aircraft keeps it)
-  u->unitStates.erase("Attacking");
+  u->unitStates.Erase(US("Attacking"));
   // the dtor 0x5f4160: IgnoreFormation(false), attacker.Stop() 0x5d56f0 = SetDesiredTarget(none) whatever the
   // desired target was (every weapon is told SetTarget(none): one that still holds a target, also a long dead
   // one, gets OnLostTarget - a missile launcher packs up), then AbortMove (the caller)
@@ -4052,7 +4052,7 @@ void AttackerStop(Sim& sim, Unit* u) {
 }
 
 void AttackerUnpackStop(Sim& sim, Unit* u) {
-  if (u->unitStates.count("Immobile") && CB(u).needUnpack && !u->weapons.empty()) SetDesiredTarget(sim, u, AiTarget{});
+  if (u->unitStates.Has(US("Immobile")) && CB(u).needUnpack && !u->weapons.empty()) SetDesiredTarget(sim, u, AiTarget{});
 }
 
 void ClearEngagement(Sim& sim, Unit* u) {
@@ -4060,7 +4060,7 @@ void ClearEngagement(Sim& sim, Unit* u) {
   u->engageId = 0;
   if (!u->dead && !u->destroyQueued) {
     SetDesiredTarget(sim, u, AiTarget{});
-    u->unitStates.erase("Attacking");
+    u->unitStates.Erase(US("Attacking"));
   }
 }
 

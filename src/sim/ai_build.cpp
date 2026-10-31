@@ -1065,7 +1065,7 @@ int l_NumCurrentlyBuilding(lua_State* L) {
   int n = 0;
   for (Unit* u : ArmyUnitsIn(b->army, builderCat)) {
     if (Gone(u)) continue;
-    if (!u->unitStates.count("Building") && !u->unitStates.count("Upgrading")) continue;
+    if (!u->unitStates.Has(US("Building")) && !u->unitStates.Has(US("Upgrading"))) continue;
     Entity* f = u->focusId ? sim.FindEntity(u->focusId) : nullptr;
     if (!f || f->kind != Entity::Kind::Unit) continue;
     if (InCat(f->blueprint, buildee)) ++n;
@@ -1082,7 +1082,7 @@ int l_IsAnyEngineerBuilding(lua_State* L) {
   Sim& sim = *S(L);
   const uint64_t* cat = ToCategory(L, 2);
   for (Unit* u : ArmyUnitsInNamed(sim, b->army, "ENGINEER")) {
-    if (Dead(u) || !u->unitStates.count("Building")) continue;
+    if (Dead(u) || !u->unitStates.Has(US("Building"))) continue;
     Entity* f = u->focusId ? sim.FindEntity(u->focusId) : nullptr;
     if (f && f->blueprint && InCat(f->blueprint, cat)) {
       lua_pushboolean(L, 1);

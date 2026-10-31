@@ -119,8 +119,8 @@ Vec3 TargetPos(Sim& sim, const UnitCommand& c, Unit* u = nullptr) {
 }
 
 void SetMoving(Unit* u, bool on) {
-  if (on) u->unitStates.insert("Moving");
-  else u->unitStates.erase("Moving");
+  if (on) u->unitStates.Insert(US("Moving"));
+  else u->unitStates.Erase(US("Moving"));
 }
 
 // A unit drops a command: when no unit holds it any more the command object goes, and with it
@@ -359,7 +359,7 @@ void RunPathSearch(Sim& sim, Unit* u, bool /*continuing*/) {
   // the second unit out of a factory does not head for the cell the first one stands on: it gets the nearest free
   // spot of the ring two footprints out.
   if (c.type == CommandType::Move && c.factoryIssued && u->commands.size() == 1 && u->motion.bp &&
-      !u->unitStates.count("TransportLoading") && !u->unitStates.count("Teleporting") && !u->unitStates.count("Guarding")) {
+      !u->unitStates.Has(US("TransportLoading")) && !u->unitStates.Has(US("Teleporting")) && !u->unitStates.Has(US("Guarding"))) {
     Vec3 p{std::nearbyint(goal.x), goal.y, std::nearbyint(goal.z)};
     if (p.x != 0.0f || p.y != 0.0f || p.z != 0.0f) {
       const float none[4] = {0, 0, 0, 0};
@@ -596,7 +596,7 @@ Entity* PatrolReclaimTarget(Sim& sim, Unit* u, PatrolData& p) {
       if (ally) {
         if (!(energyHigh && massHigh)) continue;
         if (c->health >= c->maxHealth * 0.9f) continue;
-        if (c->unitStates.count("BeingReclaimed")) continue;
+        if (c->unitStates.Has(US("BeingReclaimed"))) continue;
         w = 2.0f;
       } else if (c->army && combat::IsEnemy(u->army, c->army)) {
         if (!BpInCategory(sim, c->blueprint, "RECLAIMABLE")) continue;
@@ -648,7 +648,7 @@ BuildTask* StartPatrolTask(Sim& sim, Unit* u, const UnitCommand& c) {
   t->pdata = std::make_shared<PatrolData>();
   t->pdata->aggressive = c.type == CommandType::AggressiveMove;
   t->pdata->goal = TargetPos(sim, c, u);  // (the dispatcher's GetPosition, into the ctor's +0x5c)
-  u->unitStates.insert("Patrolling");
+  u->unitStates.Insert(US("Patrolling"));
   PatrolSearchBox(sim, u, *t->pdata);
   AirSpeedThroughEvent(sim, u);  // the patrol task ctor
   AttackerUnpackStop(sim, u);    // ctor 0x61b009..0x61b067: standing unpacked with AI.NeedUnpack: SetDesiredTarget(none)
@@ -715,7 +715,7 @@ int TickPatrol(Sim& sim, Unit* u, BuildTask& t) {
     return kTaskRunning;
   }
   // (d) move / arrival
-  if (u->unitStates.count("NeedToTerminateTask")) return kTaskDone;
+  if (u->unitStates.Has(US("NeedToTerminateTask"))) return kTaskDone;
   UnitCommand* c = u->commands.empty() ? nullptr : u->commands.front().get();
   if (p.goalIssued && p.ticks > 3 && AtPatrolGoal(sim, u, p)) {
     // the task's formation (+0x58): DispatchTask gives one only to FormPatrol / FormAggressiveMove (0x60984e ->
@@ -748,8 +748,8 @@ void EndPatrol(Sim& sim, Unit* u, BuildTask& t) {
   u->navIgnoreFormation = false;
   if (!vm::SameBits(u->position, u->lastPosition))  // (0x61b1a7..0x61b1c2, memcmp 0x4f0a50)
     MotionStop(u);  // AbortMove only when it moved this tick
-  u->unitStates.erase("NeedToTerminateTask");
-  u->unitStates.erase("Patrolling");
+  u->unitStates.Erase(US("NeedToTerminateTask"));
+  u->unitStates.Erase(US("Patrolling"));
   u->leashPos = {};
 }
 
@@ -864,7 +864,7 @@ void StartHead(Sim& sim, Unit* u) {
   // lands). Not in the beat of the drop itself: the transport's thread, woken by its arrival, has its turn after
   // the cargo's. What blocks is unit state Attached alone (IAiCommandDispatchImpl::TaskTick 0x598f89, IsUnitState
   // 14), not the attach link: cargo a script took out of that state runs its orders (a DetachFromTransport, say).
-  if (u->unitStates.count("Attached") || u->detachedAt == sim.tick()) {
+  if (u->unitStates.Has(US("Attached")) || u->detachedAt == sim.tick()) {
     u->headState = kNotStarted;
     return;
   }
@@ -882,7 +882,7 @@ void StartHead(Sim& sim, Unit* u) {
   // it in a Lua thread, after the command stage), and on a factory during its roll-off. Seen (MP3, army 2's ACU):
   // a build order given during the warp-in waits until the beat after the clear; ours had started it at once and
   // built two beats early.
-  if (u->unitStates.count("BlockCommandQueue")) {
+  if (u->unitStates.Has(US("BlockCommandQueue"))) {
     u->headState = kNotStarted;
     return;
   }
@@ -2619,9 +2619,9 @@ int l_SetImmobile(lua_State* L) {
   Unit* u = U(L);
   u->immobile = lua_toboolean(L, 2) != 0;
   if (u->immobile) {
-    u->unitStates.insert("Immobile");
+    u->unitStates.Insert(US("Immobile"));
   } else {
-    u->unitStates.erase("Immobile");
+    u->unitStates.Erase(US("Immobile"));
   }
   return 0;
 }

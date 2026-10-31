@@ -276,8 +276,8 @@ bool HandleDivingAndSurfacing(Sim& sim, Unit* u) {
   UnitMotion& m = u->motion;
   const float elev = m.elevationAttr;
   if (elev == 0.0f) return false;
-  const bool up = u->unitStates.count("MovingUp") != 0;
-  if (!up && !u->unitStates.count("MovingDown")) {
+  const bool up = u->unitStates.Has(US("MovingUp")) != 0;
+  if (!up && !u->unitStates.Has(US("MovingDown"))) {
     m.depthStep = 0;
     return false;
   }
@@ -300,7 +300,7 @@ bool HandleDivingAndSurfacing(Sim& sim, Unit* u) {
     m.depth = d;
     if (d == 0.0f) {
       if (m.targetLayer) SetLayer(sim, u, LayerNameOf(m.targetLayer));
-      u->unitStates.erase("MovingUp");
+      u->unitStates.Erase(US("MovingUp"));
       SetVertEvent(sim, u, 0);
     }
   } else {
@@ -309,7 +309,7 @@ bool HandleDivingAndSurfacing(Sim& sim, Unit* u) {
     m.depth = d;
     if (target >= d) {
       if (m.targetLayer) SetLayer(sim, u, LayerNameOf(m.targetLayer));
-      u->unitStates.erase("MovingDown");
+      u->unitStates.Erase(US("MovingDown"));
       SetVertEvent(sim, u, 1);
     }
   }
@@ -332,12 +332,12 @@ void SetNewTargetLayer(Sim& sim, Unit* u, int layer) {
   UnitMotion& m = u->motion;
   if (u->layer == "Sub") {
     if (layer == kLayerWater) {
-      u->unitStates.insert("MovingUp");
+      u->unitStates.Insert(US("MovingUp"));
       SetVertEvent(sim, u, 2);
     }
   } else if (u->layer == "Water") {
     if (layer == kLayerSub) {
-      u->unitStates.insert("MovingDown");
+      u->unitStates.Insert(US("MovingDown"));
       SetVertEvent(sim, u, 3);
     }
   }
@@ -799,7 +799,7 @@ void MotionStop(Unit* u) {
     LandNavSetSpeedThrough(u, false);
     LandNavStop(sim, u);
   }
-  u->unitStates.erase("ProblemGettingToGoal");
+  u->unitStates.Erase(US("ProblemGettingToGoal"));
   // (the motion's drive-through byte is only what SetSpeedThroughGoal(0) above makes of it: it changes when the
   // target point lies in the goal, else it keeps the last waypoint's value until the next waypoint. Seen: a tank
   // stopped on the way to a drive-through waypoint still reports 1 until its next goal.)
@@ -1614,8 +1614,8 @@ bool ArrivalTurn(Sim& sim, Unit* u) {
   Vec3 fv{};
   if (!SlavedFaceVector(sim, u, &fv)) {
     if (LandNavActive(u)) return false;  // the navigator is not idle (0x6c25d4)
-    if (u->form && FormationIsForm(*u->form) && !u->unitStates.count("TransportLoading") &&
-        !u->unitStates.count("Refueling") && !combat::HasTarget(sim, u->desiredTarget))
+    if (u->form && FormationIsForm(*u->form) && !u->unitStates.Has(US("TransportLoading")) &&
+        !u->unitStates.Has(US("Refueling")) && !combat::HasTarget(sim, u->desiredTarget))
       fv = FormationVector(sim, u);
     // (both tests are memcmps with the zero vector, 0x6c25fe and 0x6c2631: a -0.0 part is not zero)
     if (vm::BitsZero(fv)) fv = m.faceDir;  // (0x6c2607: the motion's own facing)
@@ -1780,8 +1780,8 @@ Vec3 RollHack(Unit* u) {
   const float k = b.rollStability;
   B = {B.x - A.x * k, B.y - A.y * k, B.z - A.z * k};
   Vec3 v{0.0f, 0.0f, 0.0f};
-  const bool up = u->unitStates.count("MovingUp") != 0;
-  if (up || u->unitStates.count("MovingDown")) {
+  const bool up = u->unitStates.Has(US("MovingUp")) != 0;
+  if (up || u->unitStates.Has(US("MovingDown"))) {
     const Quat& q = m.committedOri;
     const float f6 = (q.w * 2.0f) * q.y + (q.z * 2.0f) * q.x;           // 0x4ec590: m[6]
     const float f8 = 1.0f - ((q.y * 2.0f) * q.y + (q.x * 2.0f) * q.x);  // m[8]
@@ -1863,7 +1863,7 @@ void HoverMove(Sim& sim, Unit* u) {
   m.wobble = {m.wobble.x * 0.98f + m.wobbleVel.x, m.wobbleVel.y + m.wobble.y * 0.98f,
               m.wobbleVel.z + m.wobble.z * 0.98f};
   // CalcMoveHover 0x6c2e8d..0x6c2ee7: SnapToGround unless Teleporting, or when motion+0x90 asks; m+0x90 cleared
-  if (!u->unitStates.count("Teleporting") || m.needSnap || m.surfaceNext) HoverSnap(sim, u);
+  if (!u->unitStates.Has(US("Teleporting")) || m.needSnap || m.surfaceNext) HoverSnap(sim, u);
   m.needSnap = false;
   static const long dbgHov = getenv("MOHO64_DEBUG_HOVER") ? atol(getenv("MOHO64_DEBUG_HOVER")) : -1;
   if (dbgHov == static_cast<long>(u->id))
@@ -1875,7 +1875,7 @@ void HoverMove(Sim& sim, Unit* u) {
             RaisedPlatform(sim, u) ? 1 : 0, u->orientation.x, u->orientation.y, u->orientation.z, u->orientation.w);
 }
 bool HoverRuns(const Unit* u) {  // CUnitMotion::MotionTick reaches CalcMoveHover (0x6b9f10..0x6b9f87)
-  return !u->beingBuilt && !u->immobile && !u->unitStates.count("Immobile") && !u->stunned;
+  return !u->beingBuilt && !u->immobile && !u->unitStates.Has(US("Immobile")) && !u->stunned;
 }
 
 const char* const kHorzEventNames[] = {"Cruise", "TopSpeed", "Stopping", "Stopped"};
@@ -1964,7 +1964,7 @@ void MotionTick(Sim& sim, Unit* u) {
     // again in the beat after its death; neither reaches MoveTo after death: the original's quaternion stays as it
     // was; ours, normalised every beat, went back and forth between two last bits. (Dead units with no stun do reach
     // MoveTo on their transform, probe cp_deadmotion: MP2 0xd3 flips like ours.)
-    if (u->dead && (u->immobile || u->unitStates.count("Immobile") > 0 || u->stunned)) m.noMoveTo = true;
+    if (u->dead && (u->immobile || u->unitStates.Has(US("Immobile")) > 0 || u->stunned)) m.noMoveTo = true;
     return;
   }
   Vec3 start = u->position;
@@ -1981,7 +1981,7 @@ void MotionTick(Sim& sim, Unit* u) {
     // velocity dies away) but the transform it worked on is thrown away, and CalcMoveLand / Hover / Water with
     // their SnapToGround are not reached. A unit made immobile the moment it is created therefore sits flat, at
     // the height it was created with, until it is let go.
-    const bool held = u->immobile || u->unitStates.count("Immobile") > 0 || u->stunned;
+    const bool held = u->immobile || u->unitStates.Has(US("Immobile")) > 0 || u->stunned;
     // UpdateCurrentLayer 0x6b9f64: before the move, on the committed position, while the last move is non-zero
     // and Unit::UpdateTerrainType right after it (0x6b9f6f, same condition), at the position of the transform
     // MotionTick copied at its start (0x6b9d93..0x6b9de9, [esp+0x2c]), before CalcMoveLand / Hover / Water and so
@@ -2176,11 +2176,11 @@ void MotionTick(Sim& sim, Unit* u) {
       const bool diving = !landCalc && HandleDivingAndSurfacing(sim, u);
       // the platform search: CalcMoveLand 0x6c31a2 when CalcMoveCommon moved the unit and it is not Teleporting, or
       // m+0x90 asks; CalcMoveWater 0x6c34b0 when CalcMoveCommon moved it
-      if (landCalc ? (common && !u->unitStates.count("Teleporting")) || m.surfaceNext : common) FindRaisedPlatform(sim, u);
+      if (landCalc ? (common && !u->unitStates.Has(US("Teleporting"))) || m.surfaceNext : common) FindRaisedPlatform(sim, u);
       // CalcMoveLand 0x6c3180: SnapToGround runs when the unit moved AND is not Teleporting (state 19: a unit
       // in a transport's beam, whose task places it), or when motion+0x90 asks for it: 0x6c31b7 tests m+0x90 on its
       // own, so a unit standing still snaps too (a flattening under it, 0x74b35a), and clears it (0x6c31fa)
-      const bool beamed = u->unitStates.count("Teleporting") > 0 && !m.surfaceNext;
+      const bool beamed = u->unitStates.Has(US("Teleporting")) > 0 && !m.surfaceNext;
       // CalcMoveWater 0x6c3523: a unit that neither moved nor dives is still set on the water while its dive pitch
       // (m+0x68, CalcRollHack) dies away: |pitch|^2 > 1e-6 (so a surfaced submarine keeps a last trace of it)
       const Vec3& C = m.diveTilt;

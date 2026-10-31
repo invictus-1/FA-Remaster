@@ -108,7 +108,7 @@ bool IsUnitStateName(const char* name);
 // kUnitStates) is set and cleared with it, so a test of a known state is one bit, not a walk of a tree of strings
 // (B1 at cores: the string tests were 27 s of the sim thread's 729 s, 11.6 s of it in the path searches' unit test).
 // A name outside the list (none is inserted today) is asked of the set itself.
-inline int UnitStateIndex(std::string_view s) {
+constexpr int UnitStateIndex(std::string_view s) {
   switch (s.size()) {
     case 4: if (s == "Busy") return 13; break;
     case 6: if (s == "Moving") return 2; if (s == "Diving") return 17; if (s == "NoCost") return 41; break;
@@ -130,6 +130,14 @@ inline int UnitStateIndex(std::string_view s) {
   }
   return 0;
 }
+// Each index's name (UnitStateIndex backwards; nullptr: no state has it).
+inline constexpr const char* kUnitStateNameOf[] = {nullptr, "Immobile", "Moving", "Attacking", "Guarding", "Building", "Upgrading", "WaitingForTransport", "TransportLoading", "TransportUnloading", "MovingDown", "MovingUp", "Patrolling", "Busy", "Attached", "BeingReclaimed", "Repairing", "Diving", "Surfacing", "Teleporting", "Ferrying", "WaitForFerry", "AssistMoving", "PathFinding", "ProblemGettingToGoal", "NeedToTerminateTask", "Capturing", "BeingCaptured", "Reclaiming", "AssistingCommander", "Refueling", "GuardBusy", "ForceSpeedThrough", "UnSelectable", "DoNotTarget", "LandingOnPlatform", "CannotFindPlaceToLand", "BeingUpgraded", "Enhancing", "BeingBuilt", "NoReclaim", "NoCost", "BlockCommandQueue", "MakingAttackRun", "HoldingPattern", "SiloBuildingAmmo"};
+// A state the source names, as its index, at compile time: US("Moving"). A name that is no EUnitState does not compile.
+consteval int US(std::string_view s) {
+  const int i = UnitStateIndex(s);
+  if (i == 0) throw "not an EUnitState name";
+  return i;
+}
 class UnitStateSet {
  public:
   using Names = std::set<std::string, std::less<>>;
@@ -147,6 +155,29 @@ class UnitStateSet {
     if (it == names_.end()) return 0;
     names_.erase(it);
     return 1;
+  }
+  // By a known state's index (US("Moving")): the bit alone. For a known name the bit and the set's entry are always set
+  // and cleared together (insert / erase above, Insert / Erase here), so the set is touched only when the bit changes:
+  // the same set, in the same order, as insert / erase by the name give (speed only, 2026-10-30: the string tests
+  // were 2.1% of B1's beat time and 3.8% of B3-16k's).
+  bool Has(int i) const { return (bits_ >> i) & 1u; }
+  void Insert(int i) {
+    if (Has(i)) return;
+    bits_ |= uint64_t{1} << i;
+    names_.emplace(kUnitStateNameOf[i]);
+  }
+  size_t Erase(int i) {
+    if (!Has(i)) return 0;
+    bits_ &= ~(uint64_t{1} << i);
+    names_.erase(names_.find(std::string_view(kUnitStateNameOf[i])));
+    return 1;
+  }
+  // MOHO64_VERIFY_STATES (sim.cpp, each beat's end): the bits are what the set holds, for every known name.
+  bool BitsAgree() const {
+    uint64_t b = 0;
+    for (const std::string& n : names_)
+      if (const int i = UnitStateIndex(n)) b |= uint64_t{1} << i;
+    return b == bits_;
   }
   size_t size() const { return names_.size(); }
   const uint64_t* bitsAddress() const { return &bits_; }  // (a read noted by a speculation: core/speculate.h)

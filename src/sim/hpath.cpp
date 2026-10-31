@@ -7,8 +7,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <chrono>
 #include <limits>
 
+#include "core/log.h"
+#include "core/speculate.h"
 #include "core/workers.h"
 #include "sim/navigation.h"
 #include "sim/units.h"
@@ -16,6 +19,56 @@
 namespace moho {
 
 bool PathUnitBlocked(Unit* u, int x, int z, int flags);  // sim/landnav.cpp (COGrid::UnitIsBlocked)
+
+thread_local bool tl_pathAheadDry = false;
+
+// MOHO64_PAR_PATH's stage (SearchesAhead / WorkAll)
+struct HPathTables::PathSpec {
+  struct Out {
+    Search s;       // the search's state after `steps` work units
+    int steps = 0;  // work units its steps took (one per WorkOnce step: the cluster charges are never made ahead)
+    int r = 0;      // WorkOnce's answer: 0 / 1 / 3 done, 2 cut by the work units (a carried search), 4 stopped
+    int why = 0;    // (r 4: PathAheadStop::why)
+  };
+  struct Item {
+    int army;
+    PathTraveler* t;  // null: the army's carried search
+  };
+  Speculation<Out> spec{"PATH"};
+  std::vector<Item> items;
+  std::map<int, size_t> carried;  // army -> its carried search's item, this round
+  std::map<int, int> want;        // army -> waiting searches to play ahead (from the last beat's)
+  bool ready = false;             // SearchesAhead ran for the coming WorkAll
+  uint32_t round = 0xffffffffu;
+  uint64_t over = 0;              // results taken when the work units left did not cover their steps (redone)
+  // (MOHO64_PROFILE) the serial loop's steps: after a result that stopped, and searches with no result taken
+  uint64_t stopped = 0, serial = 0, whyN[6] = {};
+  double stoppedS = 0, serialS = 0;
+  Search ref;                     // (verify) the serial computation
+};
+
+HPathTables::HPathTables(Navigation* nav, int mapW, int mapH)
+    : nav_(nav), w_(mapW), h_(mapH), spec_(std::make_unique<PathSpec>()) {
+  if (spec_->spec.active())
+    Logf(LogLevel::Info, "moho64: MOHO64_PAR_PATH=%s: the path searches are played ahead",
+         SpecModeName(spec_->spec.mode()));
+}
+
+HPathTables::~HPathTables() {
+  if (spec_ && spec_->spec.active()) {
+    char b[256];
+    std::snprintf(b, sizeof b, "; taken over the work units left %llu; serial: after a stop %llu (%.2f s), no result %llu (%.2f s)",
+                  static_cast<unsigned long long>(spec_->over), static_cast<unsigned long long>(spec_->stopped),
+                  spec_->stoppedS, static_cast<unsigned long long>(spec_->serial), spec_->serialS);
+    if (getenv("MOHO64_PROFILE"))
+      fprintf(stderr, "path ahead stops taken: dirty %llu stale %llu map %llu unitgrid %llu cache %llu\n",
+              (unsigned long long)spec_->whyN[1], (unsigned long long)spec_->whyN[2], (unsigned long long)spec_->whyN[3],
+              (unsigned long long)spec_->whyN[4], (unsigned long long)spec_->whyN[5]);
+    const std::string line = spec_->spec.counts().Line("PATH (path searches)") + b;
+    fprintf(stderr, "%s\n", line.c_str());
+    Logf(LogLevel::Info, "%s", line.c_str());
+  }
+}
 
 namespace {
 
@@ -78,6 +131,13 @@ std::string MapKey(const NamedFootprint& fp) {
 HPathTables::ClusterMap* HPathTables::FindMap(const NamedFootprint& fp) {
   auto it = maps_.find(MapKey(fp));
   return it != maps_.end() ? it->second.get() : nullptr;
+}
+
+// (MOHO64_PAR_PATH) Map's answer when it would make nothing: the map exists with its grid
+HPathTables::ClusterMap* HPathTables::DryMap(const NamedFootprint& fp) {
+  ClusterMap* m = FindMap(fp);
+  if (!m || !m->grid) throw PathAheadStop{3};
+  return m;
 }
 
 HPathTables::ClusterMap& HPathTables::Map(const NamedFootprint& fp) {
@@ -213,6 +273,11 @@ void HPathTables::UpdateBackground(int budget) {
 bool HPathTables::Ready(ClusterMap& m, int L, int cx, int cz, int* budget, bool make) {
   if (cx < 0 || cz < 0 || cx >= m.wc[L] || cz >= m.hc[L]) return true;
   size_t i = static_cast<size_t>(cz) * m.wc[L] + cx;
+  if (tl_pathAheadDry) {  // (MOHO64_PAR_PATH: a clean cluster is read as it is; anything else would be written)
+    if (m.dirty[L][i]) throw PathAheadStop{1};
+    if (make && m.stale[L][i]) throw PathAheadStop{2};
+    return true;
+  }
   if (!m.dirty[L][i]) {
     if (make && m.stale[L][i]) Make(m, L, cx, cz);
     return true;
@@ -821,7 +886,7 @@ void HPathTables::HeapDown(Search& s, int i) {
 // BeginQuery 0x765fe0
 void HPathTables::Begin(Search& s, PathTraveler* t) {
   s.t = t;
-  s.cm = &Map(t->fp);
+  s.cm = tl_pathAheadDry ? DryMap(t->fp) : &Map(t->fp);
   s.nodes.clear();
   s.index.clear();
   s.heap.clear();
@@ -1023,11 +1088,114 @@ void HPathTables::Cancel(PathTraveler* t) {
 }
 
 // PathQueue::Work 0x765ed0 with path_ArmyBudget = 2500, per army (CArmyImpl::OnTick)
+namespace {
+// (MOHO64_PAR_PATH=verify) two searches' states the same, bit for bit where floats are kept
+bool SameBits(float a, float b) { return std::memcmp(&a, &b, sizeof a) == 0; }
+}  // namespace
+
+// One search played as SearchesAhead does, on this thread (the stage's task, and verify's serial computation):
+// from a copy of the carried search `from`, or from t's Begin, with `start` work units.
+void HPathTables::PlayAhead(Search& s, const Search* from, PathTraveler* t, int start, int* steps, int* r, int* why) {
+  const bool was = tl_pathAheadDry;
+  tl_pathAheadDry = true;
+  int budget = start;
+  bool begun = false;
+  try {
+    if (from) s = *from;
+    else Begin(s, t);
+    begun = true;
+    *r = WorkOnce(s, &budget);
+    *steps = start - budget;
+  } catch (const PathAheadStop& e) {
+    if (why) *why = e.why;
+    if (!begun) {
+      *r = 5;  // (no map or grid yet: nothing played)
+      *steps = 0;
+    } else {
+      // (stopped inside a step's Collect, after its `-1` and before it changed the search: the step is undone, so
+      // that the serial loop makes it from the same state)
+      s.expansions -= 1;
+      *steps = start - budget - 1;
+      *r = 4;
+    }
+  }
+  tl_pathAheadDry = was;
+}
+
+bool HPathTables::SameSearch(const Search& a, const Search& b, std::string* why) const {
+  char w[160];
+  auto no = [&](const char* what, long long x, long long y) {
+    std::snprintf(w, sizeof w, "%s %lld vs %lld", what, x, y);
+    *why = w;
+    return false;
+  };
+  if (a.t != b.t || a.cm != b.cm) return no("traveller / map", a.t != b.t, a.cm != b.cm);
+  if (a.expansions != b.expansions) return no("expansions", a.expansions, b.expansions);
+  if (a.cap != b.cap) return no("cap", a.cap, b.cap);
+  if (a.best != b.best) return no("best", a.best, b.best);
+  if (!SameBits(a.bestH, b.bestH)) return no("bestH", 0, 0);
+  if (a.nodes.size() != b.nodes.size()) return no("nodes", a.nodes.size(), b.nodes.size());
+  if (a.heap.size() != b.heap.size()) return no("heap", a.heap.size(), b.heap.size());
+  for (size_t i = 0; i < a.nodes.size(); ++i) {
+    const Node &x = a.nodes[i], &y = b.nodes[i];
+    if (x.c != y.c || !SameBits(x.g, y.g) || !SameBits(x.h, y.h) || x.parent != y.parent || x.heapPos != y.heapPos ||
+        x.state != y.state)
+      return no("node", static_cast<long long>(i), 0);
+    if (a.index.Find(Key(x.c.x, x.c.z)) != b.index.Find(Key(y.c.x, y.c.z))) return no("index", static_cast<long long>(i), 0);
+  }
+  for (size_t i = 0; i < a.heap.size(); ++i)
+    if (!SameBits(a.heap[i].first, b.heap[i].first) || a.heap[i].second != b.heap[i].second)
+      return no("heap entry", static_cast<long long>(i), 0);
+  return true;
+}
+
+void HPathTables::SearchesAhead(WorkerPool& pool, uint32_t round) {
+  PathSpec& P = *spec_;
+  P.ready = false;
+  if (!P.spec.active()) return;
+  P.items.clear();
+  P.carried.clear();
+  for (auto& [a, q] : queues_) {
+    if (q.active) {
+      P.carried[a] = P.items.size();
+      P.items.push_back({a, nullptr});
+    }
+    // (MOHO64_PAR_PATH_MAX: waiting searches played ahead per army, at most; the number is the last beat's begun + 2)
+    static const int most = getenv("MOHO64_PAR_PATH_MAX") ? std::max(1, std::atoi(getenv("MOHO64_PAR_PATH_MAX"))) : 64;
+    auto w = P.want.find(a);
+    const int want = std::min(most, w != P.want.end() ? w->second : 4);
+    int k = 0;
+    for (PathTraveler* t = q.head; t && k < want; t = t->qNext, ++k) {
+      t->aheadRound = round;
+      t->aheadItem = static_cast<uint32_t>(P.items.size());
+      P.items.push_back({a, t});
+    }
+  }
+  if (P.items.empty()) return;
+  P.round = round;
+  P.ready = true;
+  P.spec.Run(pool, "path searches ahead", round, P.items.size(), 1, [&](size_t i, ReadLog&, PathSpec::Out& o) {
+    const PathSpec::Item it = P.items[i];
+    // (a carried search has the 2500 work units of its army's beat; a waiting one has at most those: one that would
+    // need more is cut by them in any beat it begins, and is not kept)
+    PlayAhead(o.s, it.t ? nullptr : queues_.find(it.army)->second.active.get(), it.t, 2500, &o.steps, &o.r, &o.why);
+    return o.r != 5 && !(it.t && o.r == 2);
+  });
+}
+
 void HPathTables::WorkAll(int /*armies*/) {
   inWork_ = true;
+  PathSpec* P = spec_->ready ? spec_.get() : nullptr;  // (MOHO64_PAR_PATH: this beat's searches played ahead)
+  static const bool prof = getenv("MOHO64_PROFILE") != nullptr;
+  spec_->ready = false;
   for (auto& [a, q] : queues_) {
     int budget = 2500;
+    int begun = 0;
+    bool first = true;
     while (budget >= 1) {
+      PathSpec::Out* ahead = nullptr;
+      size_t item = 0;
+      bool carried = false;  // (the result is the carried search's: made with the 2500 work units it has now)
       if (!q.active) {
         if (!q.head) break;
         q.active = q.spare ? std::move(q.spare) : std::make_unique<Search>();
@@ -1035,10 +1203,61 @@ void HPathTables::WorkAll(int /*armies*/) {
         Unlink(q, t);
         t->searching = true;
         t->searchingIn = a;
-        Begin(*q.active, t);
+        ++begun;
+        if (P && t->aheadRound == P->round) {
+          item = t->aheadItem;
+          ahead = const_cast<PathSpec::Out*>(P->spec.Take(item));  // (the slot is this stage's own)
+        }
+        if (!ahead) Begin(*q.active, t);
+      } else if (P && first) {
+        auto c = P->carried.find(a);
+        if (c != P->carried.end()) {
+          item = c->second;
+          ahead = const_cast<PathSpec::Out*>(P->spec.Take(item));
+          carried = true;
+        }
+      }
+      first = false;
+      if (ahead && !carried && budget - ahead->steps < 1) {  // (the serial loop would stop it earlier: made here)
+        ++P->over;
+        Begin(*q.active, ahead->s.t);
+        ahead = nullptr;
       }
       int before = budget;
-      int r = WorkOnce(*q.active, &budget);
+      int r;
+      if (ahead) {
+        if (P->spec.mode() == SpecMode::kVerify) {  // the serial computation from the state now, compared
+          // (a result that stopped is checked as far as it went: the serial computation is given exactly its steps'
+          // work units, and so ends as cut (2) with that step's count undone; it may not stop or end before)
+          int steps = 0, rr = 0;
+          const bool stopped = ahead->r == 4;
+          PlayAhead(P->ref, carried ? q.active.get() : nullptr, ahead->s.t,
+                    stopped ? ahead->steps + 1 : 2500, &steps, &rr);
+          if (stopped && rr == 2) {
+            P->ref.expansions -= 1;
+            steps -= 1;
+            rr = 4;
+          }
+          std::string why;
+          const bool same = rr == ahead->r && steps == ahead->steps && SameSearch(P->ref, ahead->s, &why);
+          char b[96];
+          std::snprintf(b, sizeof b, "army %d r %d/%d steps %d/%d: ", a, ahead->r, rr, ahead->steps, steps);
+          P->spec.Checked(same, item, same ? std::string() : b + why);
+        }
+        std::swap(*q.active, ahead->s);
+        budget -= ahead->steps;
+        r = ahead->r;
+        if (r == 4) {  // (on from where it stopped, serially)
+          const auto w0 = prof ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+          r = WorkOnce(*q.active, &budget);
+          if (prof) ++P->whyN[ahead->why < 6 ? ahead->why : 0];
+          if (prof) ++P->stopped, P->stoppedS += std::chrono::duration<double>(std::chrono::steady_clock::now() - w0).count();
+        }
+      } else {
+        const auto w0 = prof && P ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+        r = WorkOnce(*q.active, &budget);
+        if (prof && P) ++P->serial, P->serialS += std::chrono::duration<double>(std::chrono::steady_clock::now() - w0).count();
+      }
       static const bool dbg = getenv("MOHO64_DEBUG_NAV") != nullptr;
       if (dbg) fprintf(stderr, "hpath: army %d work %d -> %d (r=%d)\n", a, before, budget, r);
       if (r == 2) break;
@@ -1046,6 +1265,7 @@ void HPathTables::WorkAll(int /*armies*/) {
       q.active->t->searching = false;
       q.spare = std::move(q.active);
     }
+    if (spec_->spec.active()) spec_->want[a] = begun + 2;
   }
   inWork_ = false;
 }

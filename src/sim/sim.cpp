@@ -2730,6 +2730,23 @@ void Sim::Tick() {
   singleStep = false;  // step 14 (sim+0x8e4 = 0)
   frozen = endGame;    // Sync copies sim+0x8dc to sim+0x8dd
   phases.Lap(PhaseTimer::kDestroySync);
+  {  // MOHO64_VERIFY_STATES=1: every unit's state bits against its set of names (units.h UnitStateSet::BitsAgree);
+     // a difference stops the program. The count of checks goes to stderr at exit.
+    static const bool verify = getenv("MOHO64_VERIFY_STATES") != nullptr;
+    if (verify) {
+      static struct Count {
+        uint64_t n = 0;
+        ~Count() { std::fprintf(stderr, "moho64 verify states: %llu units checked, all agree\n", static_cast<unsigned long long>(n)); }
+      } count;
+      for (const Unit* u : units()) {
+        ++count.n;
+        if (!u->unitStates.BitsAgree()) {
+          std::fprintf(stderr, "moho64 verify states: tick %u unit 0x%x: the bits differ from the set\n", tick_, u->id);
+          std::abort();
+        }
+      }
+    }
+  }
   phases.EndTick(tick_);
   if (orderLatency) orderLatency->Beat(*this);  // (MOHO64_PROFILE only: made by ProfileTrackOrder)
   phases.Report(tick_);

@@ -419,9 +419,14 @@ float LookAheadForMaxTerrain(const Sim& sim, const TerrainMap* map, const Vec3& 
 
 AirMotion& A(Unit* u) { return *u->motion.air; }
 bool State(const Unit* u, const char* s) { return u->unitStates.count(s) != 0; }
+bool State(const Unit* u, int i) { return u->unitStates.Has(i); }  // (i: US("Name"))
 void SetState(Unit* u, const char* s, bool on) {
   if (on) u->unitStates.insert(s);
   else u->unitStates.erase(s);
+}
+void SetState(Unit* u, int i, bool on) {  // (i: US("Name"))
+  if (on) u->unitStates.Insert(i);
+  else u->unitStates.Erase(i);
 }
 
 void Callback2(Sim& sim, Unit* u, const char* method, const char* a, const char* b) {
@@ -494,7 +499,7 @@ float GetElevationWanted(const AirMotion& a, float unitY) {
 // CUnitMotion::ShouldHoverInsteadOfLand 0x6bc820
 bool ShouldHover(Unit* u) {
   const AirBp& b = *A(u).bp;
-  return b.transportHoverHeight > 0 && (State(u, "TransportLoading") || TransportHasCargo(u));
+  return b.transportHoverHeight > 0 && (State(u, US("TransportLoading")) || TransportHasCargo(u));
 }
 
 bool IsMoveLikeType(CommandType t) {
@@ -520,15 +525,15 @@ void UpdateSpeedThrough(Sim& sim, Unit* u) {
   const UnitCommand* cur = u->commands.empty() ? nullptr : u->commands[0].get();
   const UnitCommand* next = u->commands.size() > 1 ? u->commands[1].get() : nullptr;
   bool v;
-  if (State(u, "Refueling")) v = false;  // (state 30, 0x6ac9c9)
-  else if (State(u, "ForceSpeedThrough") || State(u, "CannotFindPlaceToLand")) v = true;  // (32, 36)
+  if (State(u, US("Refueling"))) v = false;  // (state 30, 0x6ac9c9)
+  else if (State(u, US("ForceSpeedThrough")) || State(u, US("CannotFindPlaceToLand"))) v = true;  // (32, 36)
   // 0x6ac9ff..0x6aca58: the guard rule asks the blueprint's Air.CanFly (ubp+0x368) first, so it is for flyers only.
   // (Seen: Economy 3839, land SACU 0xc guarding with a Reclaim queued behind its Guard: the original's speed-through
   // stays 0, ours turned it on.)
-  else if (u->motion.bp->canFly && State(u, "Guarding") && !State(u, "Ferrying") &&
+  else if (u->motion.bp->canFly && State(u, US("Guarding")) && !State(u, US("Ferrying")) &&
            !InCategory(sim, u, "EXPERIMENTAL"))
     v = true;
-  else if (cur && State(u, "AssistMoving")) v = false;  // (state 22, 0x6aca87)
+  else if (cur && State(u, US("AssistMoving"))) v = false;  // (state 22, 0x6aca87)
   // 0x6aca91..0x6acac2: a formation follower (a leader link, unit+0x584, to another unit) on a move-like head: off
   else if (cur && IsMoveLikeType(cur->type) && u->formLeader && u->formLeader != EntityRef(u)) v = false;
   // 0x6acac4..0x6acaef: a next order, not coordinated (IsCoordinating 0x5f24e0), and both move-like (0x552c10)
@@ -633,7 +638,7 @@ bool IsWithin(Sim& sim, const Unit* u, const Vec3& p, float m) {
 bool NoBlockingUnits(Sim& sim, Unit* u, float x0, float z0, float x1, float z1) {
   bool blocked = false;
   const bool selfTransport = u->transport != nullptr;
-  const bool loading = selfTransport && State(u, "TransportLoading");
+  const bool loading = selfTransport && State(u, US("TransportLoading"));
   sim.ForUnitsInRect(x0 - 8, z0 - 8, x1 + 8, z1 + 8, [&](Unit* o) {
     if (blocked || o == u || o->dead || o->destroyQueued || o->fractionComplete < 1.0f) return;
     if (o->layer == "Air") return;
@@ -651,7 +656,7 @@ bool NoBlockingUnits(Sim& sim, Unit* u, float x0, float z0, float x1, float z1) 
     // at 994.0, 568.39) stands on it: the original's SetGoal gives 0x6000f7 (1000,564) and each guard after it the
     // next spot down the east column (0x600102 (1000,562), 0x600017 (1000,558) ...); ours (994,568) and the column
     // one spot early.)
-    if (State(o, "Attached")) return;
+    if (State(o, US("Attached"))) return;
     // GatherUnmarkedUnitsInBox 0x721c00: the unit's collision AABB (Entity::UpdateAABox, from its collision
     // shape as it stands, turned and tilted) against the box, inclusive. A tank lying across reaches further in
     // x than its SizeX: the blueprint's sizes around the position are not it.
@@ -883,8 +888,8 @@ void SetTarget(Sim& sim, Unit* u, Vec3 p, const Vec3& dir, int layer) {
   a.target = p;
   if (layer != 0) a.landLayer = layer;
   if (u->commands.empty()) a.idleTick = sim.tick();
-  SetState(u, "MovingUp", false);
-  SetState(u, "MovingDown", false);
+  SetState(u, US("MovingUp"), false);
+  SetState(u, US("MovingDown"), false);
   Vec3 d = dir;
   if (!IsZeroBits(d) && NormalizeInPlace(d) != 0.0) {
     a.facing = d;
@@ -935,7 +940,7 @@ void Stop(Sim& sim, Unit* u, const Vec3* pos) {
   // 0x6b846f: only a unit in category AIR (u+0x68b, set from the blueprint in the Unit ctor 0x6a6aae) is told to stay
   // airborne. A flyer without it keeps its landing layer: seen, bench's Cybran build drones (ura0001: POD, no AIR)
   // record landing layer 0 after the IssueClearCommands that follows their CreateUnit(.., 'Air').
-  if (a.bp->airCategory && !State(u, "TransportUnloading") && !State(u, "TransportLoading") && !State(u, "Ferrying"))
+  if (a.bp->airCategory && !State(u, US("TransportUnloading")) && !State(u, US("TransportLoading")) && !State(u, US("Ferrying")))
     a.landLayer = kAir;
   a.target = pos ? *pos : u->position;
   (void)sim;
@@ -984,7 +989,7 @@ void WingedOrientation(Unit* u, const QuatW& tq, const Vec3& desired, const Vec3
   float ms = MaxSpeed(u);
   float speed = (hlen > ms) ? ms : hlen;
   bool close = b.startTurnDistance > speed;
-  bool guard = State(u, "Guarding");
+  bool guard = State(u, US("Guarding"));
   int cs = a.combatState;
   Vec3 dir;
   if (close && !guard && cs == 0) {
@@ -1042,7 +1047,7 @@ void WingedOrientation(Unit* u, const QuatW& tq, const Vec3& desired, const Vec3
     d2 = p * p;
   }
   float bankFrac = 1.0f - ((d2 > 0.0f) ? d2 : 0.0f);
-  float altF = State(u, "MovingDown") ? a.height / b.elevation : 1.0f;
+  float altF = State(u, US("MovingDown")) ? a.height / b.elevation : 1.0f;
   float bankAmt = (((altF * bankFrac) * bf) * bankScale) * sign;
   float k = ((nf.z + nf.x) * 0.0f + nf.y) * bankScale;
   Vec3 proj{aim.x * k, aim.y * k, aim.z * k};
@@ -1114,7 +1119,7 @@ void CirclingOrientation(Sim& sim, Unit* u, Axes& axes, Vec3& dv, const AiTarget
   float cx = a.target.x, cz = a.target.z;
   float R = b.startTurnDistance * a.circleRatio;
   Entity* focus = u->focusId ? sim.FindEntity(u->focusId) : nullptr;
-  if (focus && (State(u, "Building") || State(u, "Repairing"))) {
+  if (focus && (State(u, US("Building")) || State(u, US("Repairing")))) {
     const Vec3& fp = focus->shapeHeld ? focus->shapePos : focus->position;  // as the beat began (see TargetPosNow)
     cx = fp.x;
     cz = fp.z;
@@ -1204,13 +1209,13 @@ Ctrl ComputeAirControl(Sim& sim, Unit* u, const QuatW& tq, const Vec3& desired, 
   int mode;  // 0 winged, 1 circling, 2 hover
   if (b.winged && a.carrierEvent != 2) {
     mode = 0;
-  } else if (State(u, "Guarding") && !(State(u, "Moving") || State(u, "Ferrying") || State(u, "Attacking") ||
-                                      State(u, "Building") || State(u, "Repairing"))) {
+  } else if (State(u, US("Guarding")) && !(State(u, US("Moving")) || State(u, US("Ferrying")) || State(u, US("Attacking")) ||
+                                      State(u, US("Building")) || State(u, US("Repairing")))) {
     mode = 0;
   } else if (b.hoverOverAttack) {
     mode = 2;
   } else if (u->focusId && sim.FindEntity(u->focusId) &&
-             (State(u, "Building") || State(u, "Repairing") || State(u, "Reclaiming") || State(u, "Capturing"))) {
+             (State(u, US("Building")) || State(u, US("Repairing")) || State(u, US("Reclaiming")) || State(u, US("Capturing")))) {
     mode = 1;
   } else if (combat::HasTarget(sim, target)) {
     mode = 1;
@@ -1373,7 +1378,7 @@ void CombatTactics(Sim& sim, Unit* u, const AiTarget& tgt, Vec3& out, const Vec3
     switch (s) {
       case 1:
       case 2: {
-        SetState(u, "MakingAttackRun", true);
+        SetState(u, US("MakingAttackRun"), true);
         if (E && tgt.mobile) {
           float t = 1.0f;
           if (b.predictAheadForBombDrop > 0 && !eAir) t = b.predictAheadForBombDrop;
@@ -1425,7 +1430,7 @@ void CombatTactics(Sim& sim, Unit* u, const AiTarget& tgt, Vec3& out, const Vec3
         SetLength(out, speed);
         break;
       case 6:
-        SetState(u, "MakingAttackRun", true);
+        SetState(u, US("MakingAttackRun"), true);
         a.combatCounter = 0;
         out = {fwd.x * speed, fwd.y * speed, fwd.z * speed};
         out.y = elev(out);
@@ -1623,10 +1628,10 @@ void CalcMoveAir(Sim& sim, Unit* u, Transform& T) {
     if (distH > b.startTurnDistance && a.carrierEvent != 2) {
       facing = d;
       a.elevOffset = GetElevationWanted(a, u->position.y);
-      SetState(u, "MovingUp", false);
-      SetState(u, "MovingDown", false);
-      if (State(u, "CannotFindPlaceToLand")) {
-        SetState(u, "CannotFindPlaceToLand", false);
+      SetState(u, US("MovingUp"), false);
+      SetState(u, US("MovingDown"), false);
+      if (State(u, US("CannotFindPlaceToLand"))) {
+        SetState(u, US("CannotFindPlaceToLand"), false);
         UpdateSpeedThrough(sim, u);
       }
     } else {
@@ -1635,8 +1640,8 @@ void CalcMoveAir(Sim& sim, Unit* u, Transform& T) {
       if (!landing && a.idleTick > 0 && n > 0 &&
           static_cast<int>(sim.tick()) > static_cast<int>(a.idleTick) + n) {
         if (a.landHeight != kInf) {
-          if (State(u, "CannotFindPlaceToLand")) {
-            SetState(u, "CannotFindPlaceToLand", false);
+          if (State(u, US("CannotFindPlaceToLand"))) {
+            SetState(u, US("CannotFindPlaceToLand"), false);
             UpdateSpeedThrough(sim, u);
           }
           landing = true;
@@ -1646,12 +1651,12 @@ void CalcMoveAir(Sim& sim, Unit* u, Transform& T) {
           bool ok = PrepareMove(sim, u, &spot);
           if (!ok) {
             a.idleTick = sim.tick();
-            SetState(u, "CannotFindPlaceToLand", true);
+            SetState(u, US("CannotFindPlaceToLand"), true);
             UpdateSpeedThrough(sim, u);
           } else {
             a.target = spot;  // PrepareMove works on the target itself: a spot from its rings has y = 0
-            if (State(u, "CannotFindPlaceToLand")) {
-              SetState(u, "CannotFindPlaceToLand", false);
+            if (State(u, US("CannotFindPlaceToLand"))) {
+              SetState(u, US("CannotFindPlaceToLand"), false);
               UpdateSpeedThrough(sim, u);
             }
             int S = std::max(b.footprintX, b.footprintZ);
@@ -1682,14 +1687,14 @@ void CalcMoveAir(Sim& sim, Unit* u, Transform& T) {
       }
       // target elevation offset
       if (landing) {
-        SetState(u, "MovingDown", true);
+        SetState(u, US("MovingDown"), true);
         if (a.landHeight != kInf) a.elevOffset = a.landHeight - surface;
         else if (ShouldHover(u) || a.vertEvent == 4) a.elevOffset = b.transportHoverHeight;
         else if (distH < 0.5f || a.vertEvent == 1) a.elevOffset = 0;
         else a.elevOffset = GetElevationWanted(a, u->position.y) * 0.5f;
       } else {
         a.elevOffset = GetElevationWanted(a, u->position.y);
-        SetState(u, "MovingUp", false);
+        SetState(u, US("MovingUp"), false);
       }
     }
 
@@ -1734,8 +1739,8 @@ void CalcMoveAir(Sim& sim, Unit* u, Transform& T) {
         if (distH < 0.5f && (a.height - a.elevOffset < 0.1f || LayerBits(u->layer) == a.landLayer)) {
           FreeLandRectOnTouchdown(sim, u);
           SetLayerBits(sim, u, a.landLayer);
-          SetState(u, "MovingUp", false);
-          SetState(u, "MovingDown", false);
+          SetState(u, US("MovingUp"), false);
+          SetState(u, US("MovingDown"), false);
           if (ShouldHover(u)) {
             SetVertEvent(sim, u, 4);
           } else {
@@ -1748,7 +1753,7 @@ void CalcMoveAir(Sim& sim, Unit* u, Transform& T) {
           }
         }
       } else {
-        if (a.vertEvent == 1 || a.vertEvent == 4) SetState(u, "MovingUp", true);
+        if (a.vertEvent == 1 || a.vertEvent == 4) SetState(u, US("MovingUp"), true);
         float e = a.elevOffset;
         if (0.0f < e && a.height < e * 0.5f) {
           float vs = std::sqrt((body.v.x * body.v.x + body.v.y * body.v.y) + body.v.z * body.v.z);
@@ -1763,7 +1768,7 @@ void CalcMoveAir(Sim& sim, Unit* u, Transform& T) {
     }
 
     // combat tactics and control
-    SetState(u, "MakingAttackRun", false);
+    SetState(u, US("MakingAttackRun"), false);
     AiTarget target = u->desiredTarget;
     bool has = combat::HasTarget(sim, target);
     if (has && b.winged) {
@@ -1796,9 +1801,9 @@ void CalcMoveAir(Sim& sim, Unit* u, Transform& T) {
     ctrl = ComputeAirControl(sim, u, T.q, d, dir, facing, fwdH, target);
 
     // events
-    if (State(u, "MovingDown")) {
+    if (State(u, US("MovingDown"))) {
       SetVertEvent(sim, u, 3);
-    } else if (State(u, "MovingUp")) {
+    } else if (State(u, US("MovingUp"))) {
       SetVertEvent(sim, u, 2);
     } else if (a.vertEvent != 4) {
       SetVertEvent(sim, u, 0);
@@ -2335,7 +2340,7 @@ void AirFormationFollow(Sim& sim, Unit* u) {
   if (!u->motion.air || u->fractionComplete < 1.0f) return;
   AirMotion& a = A(u);
   if (!(a.steering && a.inFormation) || u->navIgnoreFormation || (u->navigator && u->navigator->ignoreFormation) ||
-      State(u, "Ferrying"))
+      State(u, US("Ferrying")))
     return;
   Formation* f = GetFormation(sim, u);
   Entity* le = u->formLeader ? sim.FindEntity(u->formLeader) : nullptr;

@@ -460,14 +460,14 @@ bool CanMoveAt(Sim& sim, Unit* u, int cx, int cz) {
                "attached %d transport %d cells x %d+%d z %d+%d",
                x0, z0, x1, z1, e->id, e->blueprint ? e->blueprint->id.c_str() : "?", e->layer.c_str(), mn.x, mx.x, mn.z, mx.z,
                static_cast<int>(Gone(e)), static_cast<int>(!e->beingBuilt), static_cast<int>(VelocityBitsSet(e)),
-               static_cast<int>(e->unitStates.count("Attached")), static_cast<int>(e->transport != nullptr), e->gridX0,
+               static_cast<int>(e->unitStates.Has(US("Attached"))), static_cast<int>(e->transport != nullptr), e->gridX0,
                e->gridW, e->gridZ0, e->gridH);
       }
     }
     if (blocked || e == u || Gone(e) || e->beingBuilt || e->layer == "Air") return;
     if (u->layer == "Sub" && e->layer != "Sub") return;
     const bool sameForm =
-        e->form && e->form == u->form && !e->unitStates.count("Attacking") && !u->unitStates.count("Attacking");
+        e->form && e->form == u->form && !e->unitStates.Has(US("Attacking")) && !u->unitStates.Has(US("Attacking"));
     if (e->transport && !BpInCategory(sim, e->blueprint, "PODSTAGINGPLATFORM")) {
       // (0x720f70: a unit with a transport object, a carrier too, is in the way whether it moves or not)
       if (sameForm) return;
@@ -480,11 +480,11 @@ bool CanMoveAt(Sim& sim, Unit* u, int cx, int cz) {
       // way and went to (530,169) and (530,168); from 6527 its path ran elsewhere. (Before: the position against the
       // one before the last step, which a -0.0 does not tell.)
       const bool moving = VelocityBitsSet(e);
-      if (selfTransport && (moving || u->unitStates.count("TransportLoading"))) return;
+      if (selfTransport && (moving || u->unitStates.Has(US("TransportLoading")))) return;
       if (moving) return;
       if (sameForm) return;
     }
-    if (e->unitStates.count("Attached")) return;
+    if (e->unitStates.Has(US("Attached"))) return;
     // GatherUnmarkedUnitsInBox 0x721c00: the unit's collision AABB (Entity+0x240, the axis-aligned bounds of its
     // collision shape as it stands: a turned or tilted hull has a wider one) touches the box, touching counts
     WorldShape ws;
@@ -670,7 +670,7 @@ void AtGoalCheck(Formation& F, FormGroup& g) {
   for (auto& [id, n] : g.nodes) {
     Unit* m = UnitOf(sim, n.ref);
     if (!m) continue;
-    if (m->unitStates.count("Refueling")) return;
+    if (m->unitStates.Has(US("Refueling"))) return;
     if (st || (FormationIsForm(F) && IsAirUnit(m))) {
       if (m != GL) continue;
     } else if (NavIgnoring(m)) {
@@ -900,7 +900,7 @@ const std::string& GuardFormationName(Sim& sim, const Unit* g) {
 }  // namespace
 
 Vec3 FormationVector(Sim& sim, Unit* u) {
-  if (u->unitStates.count("TransportLoading") || u->unitStates.count("Refueling") || !u->form) return {};
+  if (u->unitStates.Has(US("TransportLoading")) || u->unitStates.Has(US("Refueling")) || !u->form) return {};
   if (IsAirUnit(u) && u->formLeader) {
     Unit* L = UnitOf(sim, u->formLeader);
     if (L && !IsAirUnit(L)) {
@@ -1092,7 +1092,7 @@ namespace {
 // formation.
 std::shared_ptr<Formation> FormationOf(Sim& sim, Unit* u) {
   if (u->guardedId && !u->isEngineer) {
-    if (u->unitStates.count("GuardBusy")) return nullptr;
+    if (u->unitStates.Has(US("GuardBusy"))) return nullptr;
     Unit* G = UnitOf(sim, u->guardedId);
     return G ? G->guardForm : nullptr;
   }

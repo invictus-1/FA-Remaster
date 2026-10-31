@@ -1404,7 +1404,7 @@ int l_GetFerryBeacons(lua_State* L) {
   Sim& sim = *S(L);
   std::vector<Entity*> beacons;
   for (Unit* u : AllUnits(p)) {
-    if (!u->unitStates.count("Ferrying") || u->commands.empty()) continue;
+    if (!u->unitStates.Has(US("Ferrying")) || u->commands.empty()) continue;
     const UnitCommand& c = *u->commands.front();
     if (!c.beaconRef) continue;
     if (Entity* b = sim.FindEntity(c.beaconRef))
