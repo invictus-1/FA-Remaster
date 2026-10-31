@@ -291,7 +291,8 @@ function Investments(brain, ctx)
     end
     -- the income the budget counts is smoothed (about a minute), so a burst of reclaim does not pass for an economy
     R.massAvg = (R.massAvg or income) + (income - (R.massAvg or income)) * 0.02
-    local budget = R.massAvg * kDipSeconds * K.investShare + 0.5 * stored - committed
+    -- (phase 9: while the army is short of what the economy should keep, the investments get half the share)
+    local budget = R.massAvg * kDipSeconds * K.investShare * (R.armyShort and 0.5 or 1) + 0.5 * stored - committed
     local enemyKnown = (R.enemyKnownZones or 0) > 0
     local danger = {}  -- zone -> margin, theirs mass (one estimate per zone and payback window)
     for _, m in ipairs(brain:GetListOfUnits(categories.MASSEXTRACTION * categories.STRUCTURE, false)) do

@@ -43,7 +43,11 @@ local kOpeningPowerRate = 2.2                 -- ... plus this many a minute (ph
 local kOpeningMexRange = 300                  -- world units: the opening's extractors within this of the engineer come first
 local kCommanderPower = 2                     -- generators the commander builds right after the first factory (phase 8)
 local kBaseZones = 200                        -- world units of travel from the start zone: base structures go there (phase 8)
+local kArmyIncomeRate = 10                    -- the army kept: seconds of mass income per minute after the opening (9)
+local kArmyIncomeMax = 120                    -- ... at most this many seconds of income
+local kMaxFactories = 20                      -- land factories at most (phase 9; 12 before)
 local kOpening = 6                            -- minutes of the opening (phase 8): the energy rules below hold until then
+local kTechEngineersMax = 8                   -- engineers of T2 or above kept at most (phase 9)
 local kMassNear = 120                         -- world units: a free mass point this near an engineer comes before reclaim
 
 local fixesApplied = false  -- (one game per sim state: the module lives with the state)
@@ -249,8 +253,10 @@ AIBrain = Class(StandardBrain) {
         local income = self:GetEconomyIncome('ENERGY')
         local requested = self:GetEconomyRequested('ENERGY')
         local stored = self:GetEconomyStoredRatio('ENERGY')
-        if stored < 0.15 then return true end
+        -- (phase 9: the cap first, and an empty bar counts only while the asks are above what comes in: the bar empties
+        -- for a moment when a big build starts, with income far ahead)
         if income * 10 > 12 * self:GetEconomyIncome('MASS') * 10 + 30 then return false end
+        if stored < 0.15 then return income < requested * 1.2 end
         return income < requested * 1.2 + 1 and stored < 0.95
     end,
 
@@ -543,7 +549,9 @@ AIBrain = Class(StandardBrain) {
         -- land factories (one per ~6 mass / s, at most 12): from minute 3 up to 1 + one per 1.5 minutes whatever is
         -- stored (the army grows with the economy), the rest while mass piles up; before the next far mass point
         local storedMass = self:GetEconomyStoredRatio('MASS')
-        local wantFactories = math.min(12, 1 + math.floor(self:GetEconomyIncome('MASS') * 10 / 6))
+        -- (phase 9: at most kMaxFactories instead of 12: with the phase-8 economy the mass bar filled at minute 9-10
+        -- with 7-8 factories against 120 mass a second)
+        local wantFactories = math.min(kMaxFactories, 1 + math.floor(self:GetEconomyIncome('MASS') * 10 / 6))
         local floorFactories = ctx.minutes >= 3 and math.min(wantFactories, 1 + math.floor(ctx.minutes / 1.5)) or 1
         -- (phase 8: in the opening a new factory waits for a sound energy economy: a factory draws energy as it
         -- builds and as it works, and the second one had started the stall)
@@ -732,7 +740,11 @@ AIBrain = Class(StandardBrain) {
         local share = import("/lua/remastered/ai/personality.lua").Knobs(self).reclaimShare
         if ctx.minutes < kReclaimEarlyUntil then share = math.max(share, kReclaimEarly) end
         -- (phase 8) the opening's energy check and the builders' count
-        ctx.energyShort = self:GetEconomyStoredRatio('ENERGY') < kEnergyShort
+        -- (phase 9: short = under kEnergyShort stored AND asked for more than comes in; a dip with income ahead of
+        -- the asks is not short. The bar's dips alone had built 94 T1 generators by minute 14.5, 2,860 energy a second
+        -- against 1,150 asked)
+        ctx.energyShort = self:GetEconomyStoredRatio('ENERGY') < kEnergyShort and
+            self:GetEconomyIncome('ENERGY') < 1.2 * self:GetEconomyRequested('ENERGY')
         ctx.builders = table.getn(engineers) + (commander and 1 or 0)
         ctx.wantReclaimers = math.min(math.floor(table.getn(engineers) * share + 0.5),
             math.floor((R.reclaim and R.reclaim.nearMass or 0) / kReclaimPerWorker))
@@ -806,8 +818,14 @@ AIBrain = Class(StandardBrain) {
         -- (with fog of war the enemy's army is mostly out of sight: what was seen of it fades slowly, about half in 6
         -- minutes, so the army kept does not shrink each time the scouts lose sight of it)
         R.enemyGroundPeak = math.max(enemyGround, (R.enemyGroundPeak or 0) * kGroundFade)
+        -- (phase 9: and a share of our own income - the army we keep grows with the economy, kArmyIncomeRate seconds of
+        -- the smoothed mass income per minute after the opening, at most kArmyIncomeMax seconds. With fog the enemy's
+        -- known army is a fraction of its real one: at minute 10 our army was 500-1,800 mass against 2,700-6,000, with
+        -- the economy ahead of FAF's and three quarters of M28's.)
+        local incomeSec = math.min(kArmyIncomeMax, kArmyIncomeRate * math.max(0, ctx.minutes - kOpening)) * K.armyMatch / 0.8
         local armyWanted = math.max(K.armyMatch * R.enemyGroundPeak,
-            ctx.minutes >= kArmyFrom and K.armyPerMinute * (ctx.minutes - kArmyFrom + 1) or 0)
+            ctx.minutes >= kArmyFrom and K.armyPerMinute * (ctx.minutes - kArmyFrom + 1) or 0,
+            incomeSec * (R.massAvg or 0))
         local armyShort = (R.armyMass or 0) < armyWanted
         if armyShort ~= (R.armyShort or false) and R.tick - (R.armyShortLogged or -10000) >= 600 then
             LOG(string.format('aiarmy %d %d %s army %.0f wanted %.0f (enemy ground %.0f) engineers %d floor %d cap %d',
@@ -832,7 +850,10 @@ AIBrain = Class(StandardBrain) {
         -- engineer alive from minute 13 to 17 against M28, so the anti-missile rule built nothing.)
         local techEngineers = table.getn(self:GetListOfUnits(categories.ENGINEER * (categories.TECH2 + categories.TECH3) -
             categories.COMMAND, false))
-        local needTech = ((R.enemyTier or 0) >= 2 or ctx.landTier >= 2) and techEngineers < kTechEngineers
+        -- (phase 9: and one more every 3 minutes after minute 8, at most kTechEngineersMax: T2 power gives 8 times a T1
+        -- generator's energy for its build, and only T2 engineers build it)
+        local wantTech = math.min(kTechEngineersMax, kTechEngineers + math.floor(math.max(0, ctx.minutes - 8) / 3))
+        local needTech = ((R.enemyTier or 0) >= 2 or ctx.landTier >= 2) and techEngineers < wantTech
         for _, f in ipairs(factories) do
             local land = EntityCategoryContains(categories.LAND, f)
             if land then landIndex = landIndex + 1 end
@@ -841,7 +862,7 @@ AIBrain = Class(StandardBrain) {
                 if needTech and tech >= 2 then
                     IssueBuildFactory({ f }, self:Bp(tech == 3 and 'l0309' or 'l0208'), 1)
                     techEngineers = techEngineers + 1
-                    needTech = techEngineers < kTechEngineers
+                    needTech = techEngineers < wantTech
                     wanted = wanted + 1
                 elseif wanted < engineerCap and (not armyShort or math.mod(landIndex, 3) == 1 and wanted < engineerFloor) then
                     IssueBuildFactory({ f }, self:Bp(tech == 3 and 'l0309' or tech == 2 and 'l0208' or 'l0105'), 1)

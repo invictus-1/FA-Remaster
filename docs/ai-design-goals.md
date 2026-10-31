@@ -158,3 +158,37 @@ A design talk with Chris, using these goals and ai-study-m28.md section 7.5's op
       or do nothing, as M28 has. The AI does the deciding; the knobs only lean it.
     - The design keeps absorbing Chris's ideas: each new idea is merged into these decisions (built, changed or
       removed), so the AI stays one coherent player, not a pile of features.
+
+## Changes the duels made to these goals (helper aicore, 2026-10-30)
+
+Chris, 2026-10-30: the goals are an idea, not a cage; where the evidence shows a better way, change them and write down
+why. The rules that stay: our own design (no M28 code or logic), exact and replay-safe, no cheating beyond the lobby's
+options, and never fleeing a clearly weaker force unless it can be shown to cost games. Each change below names what
+the duels showed. The duels are 1v1 on SETONS_R against FAF's adaptive AI and M28, with fog of war, several seeds.
+
+17. **Tests play with fog of war (changes decision 8's setup).** The first duels had `FogOfWar = none`, where every army
+    sees everything and scouting cannot matter. With fog the AI's picture of "ahead" broke: after its scouts lost sight
+    of the enemy's army it saw ratios of 20-50 and sent decisive pushes into it. So what the AI has seen of the enemy
+    now fades slowly instead of vanishing, and every duel since phase 6 plays with fog.
+18. **The army is kept by our own economy too, not only by the enemy's army we know (refines 13 and 15).** Under fog the
+    known enemy army is a fraction of the real one; at minute 10 our army was 500-1,800 mass against 2,700-6,000 while
+    our economy was ahead of FAF's. The army kept now also grows with our income after the opening. With it, all six
+    games of the 20-minute set were alive at minute 20 instead of three.
+19. **The opening is its own plan (refines 13 and 14).** "Economy in parallel with everything" left the energy bar
+    empty for half of the first five minutes and the extractors waiting behind power and factories. The opening now
+    puts extractors first, then a power curve, and makes factories and upgrades wait for energy; the mass at minute 10
+    doubled (56 -> 114 a second, above FAF's AI in every seed).
+20. **A fight the real numbers say we are losing ends, whatever the estimate says (refines 5).** Decision 5 and the
+    never-flee rule stay for forces the AI knows are weaker. But under fog the estimate only sees what the army has
+    seen: against M28 an attack stayed on for 3.5 minutes at an estimate of 0.8 while losing 10-20 times what it
+    killed to artillery and missiles it never saw. So every minute of an attack the mass lost is set against the mass
+    killed, and a clearly bad trade ends it (a "withdraw", not a "retreat": the enemy there is not weaker, only
+    unseen). In the duels it fires 0-2 times a game; faults (retreats from a clearly weaker force) stay at zero.
+21. **The commander is kept safe, and does not wander (new).** Games were lost when the commander died far from its
+    base (reclaiming 180-270 units out, or shelled by a frigate at its work). It now keeps to its base for field
+    jobs and backs away when hurt.
+22. **Ships shelling the base get an answer from the sea and the air (Chris's choice, 2026-10-30).** Against M28 one
+    modded ship shelled 13,400 mass of our coastal base in 20 minutes with nothing of ours able to reach it. A first
+    form of the air answer (the best anti-ship aircraft by build value, sent at ships seen off our coast) halved that
+    ship's damage in one game but did not change the 20-minute set: under fog the ships are seen late, and few aircraft
+    reach them. So the navy comes as its own phase, with the air answer as part of it (not yet in the game).

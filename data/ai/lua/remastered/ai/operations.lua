@@ -38,6 +38,10 @@ local kRecallMass = 300    -- enemy mass that can come to a base zone that recal
 local kRecallTicks = 600   -- after a recall, the base's defence takes every free unit this long
 local kScoutFresh = 1200  -- a target looked at by our scouts this recently needs no new look before an attack (7b)
 local kScoutWait = 300    -- after sending scouts to a target, the attack waits this long for their look
+local kTradeWindow = 600   -- ticks over which an attack's real trade is judged (phase 9)
+local kTradeLoss = 2.0     -- an attack that lost this many times the mass it killed over kTradeWindow ...
+local kTradeMin = 600      -- ... and at least this much mass, withdraws: the estimate is missing what fog hides
+local kTradeMemory = 3000  -- ticks a zone we withdrew from is not picked as a target again
 local kPeakFade = 0.99     -- the enemy's strength seen fades by this a think (5 s): half in about 6 minutes
 
 -- Personalities (docs/ai-architecture.md 2.7) and their knobs: personality.lua. Teacher mode (2.8): never a push
@@ -120,7 +124,8 @@ local function PickTarget(R, enemyZones, bar)
     local list = {}
     for _, e in ipairs(enemyZones) do
         local d = Remastered.AIZoneDistance(R.startZone, e.zone, 'land')
-        if d >= 0 then
+        local bad = R.badTarget and R.badTarget[e.zone] and R.tick - R.badTarget[e.zone] < kTradeMemory
+        if d >= 0 and not bad then
             table.insert(list, { e = e, score = (e.economy + 100 * e.structures + e.army + 10) / (d + 100) })
         end
     end
@@ -153,6 +158,15 @@ local function StagingZone(R, target)
         end
     end
     return best or R.startZone
+end
+
+-- our army's mass lost and enemy mass killed so far (the army stats), for the trade check
+local function Trade(brain)
+    local function st(n)
+        local v = brain:GetArmyStat(n, 0)
+        return type(v) == 'table' and v.Value or v or 0
+    end
+    return st('Units_MassValue_Lost'), st('Enemies_MassValue_Destroyed')
 end
 
 local function Near(units, zone, radius)
@@ -420,6 +434,8 @@ function Think(brain)
             if there > 0 and there >= kGatherLeast * table.getn(units) and margin >= bar then
                 R.op = { kind = R.op.push and 'push' or 'attack', zone = R.op.zone, stage = R.op.stage, since = R.tick,
                     logged = R.tick }
+                R.op.lost0, R.op.killed0 = Trade(brain)
+                R.op.tradeTick = R.tick
                 Log(R, 'commit', R.op.zone, margin, ratio, string.format('gathered (%d of %d at the staging zone): %s',
                     there, table.getn(units), R.op.kind .. ' together'))
                 if units[1] then IssueAggressiveMove(units, (ZonePos(R.op.zone))) end
@@ -442,7 +458,29 @@ function Think(brain)
         local margin = Remastered.AIZoneEstimate(R.army, R.op.zone, kHorizon)
         local f = Remastered.AIZoneForces(R.army, R.op.zone)
         local commit = R.op.kind == 'push' and K.commitPush or K.commit
-        if f.enemy.land.count + f.enemy.structure.count <= 0 then
+        -- the trade check (phase 9): over each kTradeWindow of the attack, the mass we lost against the mass we killed
+        -- (all of the army's losses and kills in that time). Against M28 the estimate said 0.8 while the attack lost
+        -- 10-20 times what it killed to artillery and missiles the army never saw; a fight the real numbers say we are
+        -- losing ends whatever the estimate says. It is logged 'withdraw', not 'retreat': the enemy there is not
+        -- weaker, only unseen, so the never-retreat-from-a-weaker-force rule does not apply.
+        local withdraw
+        if R.op.tradeTick and R.tick - R.op.tradeTick >= kTradeWindow then
+            local lost, killed = Trade(brain)
+            local dl, dk = lost - R.op.lost0, killed - R.op.killed0
+            if dl >= kTradeMin and dl >= kTradeLoss * math.max(dk, 1) then
+                withdraw = string.format('the fight trades badly: %.0f mass lost for %.0f killed in %d s (unseen enemies)',
+                    dl, dk, kTradeWindow / 10)
+            end
+            R.op.lost0, R.op.killed0, R.op.tradeTick = lost, killed, R.tick
+        end
+        if withdraw then
+            Log(R, 'withdraw', R.op.zone, margin, ratio, withdraw)
+            R.badTarget = R.badTarget or {}
+            R.badTarget[R.op.zone] = R.tick  -- (not a target again for kTradeMemory: PickTarget)
+            R.op = nil
+            if units[1] then IssueMove(units, { R.startX, GetTerrainHeight(R.startX, R.startZ), R.startZ }) end
+            return
+        elseif f.enemy.land.count + f.enemy.structure.count <= 0 then
             Log(R, 'taken', R.op.zone, margin, ratio, 'no enemy known there any more')
             R.op = nil
         elseif margin < commit then
