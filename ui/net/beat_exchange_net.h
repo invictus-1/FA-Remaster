@@ -90,6 +90,9 @@ class NetBeatExchange final : public BeatExchange {
   // Eject(client, beat) left out keeps its link, so this is empty but for a client with no connection from the start).
   std::vector<uint8_t> LostClients();
   uint32_t ReceivedBeats(uint8_t client);  // the beats of `client` in so far (its Advances)
+  // Every client's part of `beat` is in (or the client is left out), as last taken in: the connector is not polled
+  // (a test's timing log asks it, GameSession::NetBeatOrders, and must not change when things are taken in).
+  bool OrdersIn(uint32_t beat);
   ClientLink Link(uint8_t client);
   // The game's messages a peer sent before the lobby handed its connector over (net/lobby_core.h GameLink::early).
   void TakeEarly(std::vector<ConnEvent> early);

@@ -25,6 +25,7 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <mmsystem.h>
 #include <shlobj.h>
 #endif
 
@@ -1053,13 +1054,32 @@ int main(int argc, char** argv) {
     session.WaitForBeat();  // (a beat still on its thread at the end: done before anything looks at the game again)
     if (done < 0) ok = false;
   } else {
+    // Without a window each frame is 1/60 s of the game, as fast as the frames go. MOHO64UI_REAL_TIME=1 (tests): at
+    // most 60 frames a second of the PC's clock, each the time since the last (at most 0.25 s, as a window's), so the
+    // beats come as in a live window (a network game over a link with latency: TASK_netlat).
+    static const bool realTime = std::getenv("MOHO64UI_REAL_TIME") != nullptr;
+    using Clock = std::chrono::steady_clock;
+    auto last = Clock::now();
+    if (realTime) {
+#ifdef _WIN32
+      timeBeginPeriod(1);  // (sleeps of a millisecond, as the window's)
+#endif
+      Logf(LogLevel::Info, "moho64ui: without a window, at the PC's clock (MOHO64UI_REAL_TIME)");
+    }
     for (; done < o.frames && !ui::ExitRequested(); ++done) {
-      shown->Frame(1.0 / 60.0);
-      session.Advance(1.0 / 60.0);
+      double seconds = 1.0 / 60.0;
+      if (realTime) {
+        const auto now = Clock::now();
+        seconds = (std::min)(0.25, std::chrono::duration<double>(now - last).count());
+        last = now;
+      }
+      shown->Frame(seconds);
+      session.Advance(seconds);
       listen();
-      sounds.Update(1.0f / 60.0f);
+      sounds.Update(static_cast<float>(seconds));
       leaveOrRestart();
       startGameInterface();
+      if (realTime) std::this_thread::sleep_until(last + std::chrono::microseconds(16667));
     }
   }
   if (o.frames) Logf(LogLevel::Info, "moho64ui: ran %d frames", done);

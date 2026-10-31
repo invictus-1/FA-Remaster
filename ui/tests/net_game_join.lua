@@ -4,7 +4,7 @@
 -- of the game's speed with one of its own, sees the host's pause, changes its own checksum of beat 250 on purpose (the
 -- desync dialog on both), runs past beat 300 and quits after beat 310. Variants (net_game_host.lua's header):
 -- NET_GAME_EJECT: it stops answering after beat 150 (moho64ui_NetTestForTests("freeze")); NET_GAME_LOADING: before it
--- is ready. Both then wait a while and quit.
+-- is ready. Both then wait a while and quit. NET_GAME_RUN_TO: it runs on to that beat after its orders and quits.
 --   moho64ui --init <init.lua> --prefs <a copy> --stage frontend --no-world --lua ui/tests/net_game_join.lua
 --            --game-lua ui/tests/net_game_join.lua --replay-out <dir>/r --frames 2000000000 --log join.log
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
@@ -23,8 +23,9 @@ local function WaitFor(cond, seconds)  -- (the PC's clock: the other program run
     return cond()
 end
 local EJECT, LOADING = rawget(_G, "NET_GAME_EJECT"), rawget(_G, "NET_GAME_LOADING")
+local RUN_TO = rawget(_G, "NET_GAME_RUN_TO")
 ForkThread(function()
-    local stop = moho64ui_WallSeconds() + 240
+    local stop = moho64ui_WallSeconds() + 240 + (RUN_TO or 0) / 5
     while moho64ui_WallSeconds() < stop do WaitFrames(1) end
     LOG("TEST FAIL the run took over four minutes")
     LOG("TEST done: hung")
@@ -106,7 +107,7 @@ local function Noted(list, entry)
     for _, l in list do if l == entry then return true end end
     return false
 end
-if not EJECT then moho64ui_NetTestForTests("corrupt", 250) end
+if not EJECT and not RUN_TO then moho64ui_NetTestForTests("corrupt", 250) end
 ForkThread(function()  -- (the host's pause, seen here)
     while not sawPause do
         if SessionIsPaused() then sawPause = true end
@@ -155,6 +156,14 @@ ForkThread(function()
         end
         return false
     end, 30), true)
+    if RUN_TO then
+        check("beat " .. RUN_TO .. " comes", WaitFor(function() return GameTick() >= RUN_TO end, RUN_TO / 10 * 3 + 60), true)
+        LOG("TEST note: the joiner's game ends at tick " .. GameTick() .. "; ping to the other " .. tostring(GetSessionClients()[1].ping) .. " ms")
+        LOG("TEST done: " .. failed .. " failed")
+        WaitFor(function() return false end, 2)
+        ExitApplication()
+        return
+    end
     if EJECT then
         WaitFor(function() return GameTick() >= 150 end, 60)
         LOG("TEST note: the joiner stops answering at tick " .. GameTick())

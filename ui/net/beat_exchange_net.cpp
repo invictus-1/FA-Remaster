@@ -411,6 +411,13 @@ uint32_t NetBeatExchange::ReceivedBeats(uint8_t client) {
   return c ? c->available : 0;
 }
 
+bool NetBeatExchange::OrdersIn(uint32_t beat) {
+  std::lock_guard<std::mutex> g(mu_);
+  for (const Client& c : clients_)
+    if (!c.local && !c.done && !(c.ejected && beat > LastBeatOf(c)) && c.available < beat) return false;
+  return true;
+}
+
 ClientLink NetBeatExchange::Link(uint8_t client) {
   std::lock_guard<std::mutex> g(mu_);
   ClientLink l;

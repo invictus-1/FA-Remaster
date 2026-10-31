@@ -1116,6 +1116,11 @@ struct GameSession::Net {
   uint32_t beat = 0;      // the beat whose orders were taken last
   bool afterDue = false;  // (that beat has run, or runs on its thread: AfterBeat is due)
   std::string digest;     // its state's digest, every 50th beat (made on the thread that ran it, read after it)
+  // MOHO64UI_NET_BEAT_LOG=1 (tests): a line per beat, when it began, how long it waited for its orders and how much
+  // of that with every client's orders in (the wait for the ACKs); see NetBeatOrders
+  std::chrono::steady_clock::time_point askedAt{}, inAt{}, lastBegun{};
+  uint32_t askedFor = 0;
+  bool inSeen = false;
 };
 
 // The interface's side of it (user/user_state.h): what GetSessionClients, EjectSessionClient, SessionSendChatMessage
@@ -2462,8 +2467,11 @@ bool GameSession::RunDueBeats(bool catchingUp) {
 bool GameSession::NetBeatOrders(std::string* merged) {
   Net& n = *net_;
   const uint32_t beat = n.lockstep->nextBeat();
+  static const bool beatLog = std::getenv("MOHO64UI_NET_BEAT_LOG") != nullptr;
+  if (beatLog && n.askedFor != beat) n.askedFor = beat, n.askedAt = std::chrono::steady_clock::now(), n.inSeen = false;
   if (!n.lockstep->Ready(merged)) {
     const auto now = std::chrono::steady_clock::now();
+    if (beatLog && !n.inSeen && n.exchange->OrdersIn(beat)) n.inSeen = true, n.inAt = now;
     if (!n.waiting) n.waiting = true, n.waitingSince = now, n.waitTold = false;
     if (!n.waitTold && now - n.waitingSince > std::chrono::seconds(2)) {
       n.waitTold = true;
@@ -2477,6 +2485,14 @@ bool GameSession::NetBeatOrders(std::string* merged) {
            missing.empty() ? " none" : missing.c_str(), lost.empty() ? " none" : lost.c_str());
     }
     return false;
+  }
+  if (beatLog) {
+    const auto now = std::chrono::steady_clock::now();
+    auto ms = [](std::chrono::steady_clock::duration d) { return std::chrono::duration<double, std::milli>(d).count(); };
+    Logf(LogLevel::Info, "moho64ui: net beat %u: %.1f ms since the last began; waited %.1f ms, %.1f of it with every client's orders in",
+         beat, n.lastBegun.time_since_epoch().count() ? ms(now - n.lastBegun) : 0.0, ms(now - n.askedAt),
+         n.inSeen ? ms(now - n.inAt) : 0.0);
+    n.lastBegun = now;
   }
   if (n.waiting && n.waitTold) Logf(LogLevel::Info, "moho64ui: the network game goes on with beat %u", beat);
   n.waiting = false;

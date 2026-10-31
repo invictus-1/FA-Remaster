@@ -15,6 +15,7 @@
 #include <condition_variable>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <list>
 #include <map>
 #include <mutex>
@@ -23,6 +24,7 @@
 #include <zlib.h>
 
 #include "net/connector.h"
+#include "net/test_delay.h"
 
 namespace moho::net {
 namespace {
@@ -629,54 +631,67 @@ class UdpCore {
     return nullptr;
   }
 
-  // ReceiveData 0x48a280: every datagram waiting.
+  // ReceiveData 0x48a280: every datagram waiting. (MOHO64_NET_DELAY_MS, a test's switch: each held first, then taken
+  // in once its time has come, in the order received; test_delay.h.)
   void ReceiveAll() {
     uint8_t buf[kMaxDatagram];
     for (;;) {
       Address from;
       const long n = sock_.ReceiveFrom(buf, sizeof buf, &from);
-      if (n <= 0) return;
+      if (n <= 0) break;
       if (dropPerMille_ > 0 && n >= static_cast<long>(kHeader)) {
         dropSeed_ = dropSeed_ * 1103515245u + 12345u;
         if ((dropSeed_ >> 16) % 1000 < static_cast<uint32_t>(dropPerMille_)) continue;
       }
-      const int64_t now = clock_.Now();
-      if (buf[0] == kNat) continue;  // (ours has no NAT traversal provider)
-      if (static_cast<size_t>(n) < kHeader) continue;  // ("ignoring short packet"; our wake-ups too)
-      Packet p;
-      p.bytes.assign(buf, buf + n);
-      p.recvAt = now;
-      const Header h = p.h();
-      if (h.type >= 9 || h.length != static_cast<size_t>(n) - kHeader) continue;
-      if (h.type == kConnect) {  // CNetUDPConnector::ProcessConnect 0x48aa40
-        if (p.bytes.size() != kConnectSize || Get32(&buf[15]) != kProtocolVersion) continue;
-        Conn* c = Live(from);
-        if (c && ProcessConnect(*c, p)) continue;
-        if (shuttingDown_) continue;
-        Conn& fresh = Make(from, Pending);
-        fresh.incoming = true;
-        ProcessConnect(fresh, p);
-        Event(fresh, ConnEvent::Incoming);
+      if (delay_.on() && n >= static_cast<long>(kHeader)) {
+        held_.push_back(Held{delay_.ReleaseAt(clock_.Now()), from, std::vector<uint8_t>(buf, buf + n)});
         continue;
       }
+      Take(from, buf, n, clock_.Now());
+    }
+    while (!held_.empty() && held_.front().at <= clock_.Now()) {
+      Held h = std::move(held_.front());
+      held_.pop_front();
+      Take(h.from, h.bytes.data(), static_cast<long>(h.bytes.size()), clock_.Now());
+    }
+  }
+  // One datagram taken in (received at `now`).
+  void Take(const Address& from, const uint8_t* buf, long n, int64_t now) {
+    if (buf[0] == kNat) return;  // (ours has no NAT traversal provider)
+    if (static_cast<size_t>(n) < kHeader) return;  // ("ignoring short packet"; our wake-ups too)
+    Packet p;
+    p.bytes.assign(buf, buf + n);
+    p.recvAt = now;
+    const Header h = p.h();
+    if (h.type >= 9 || h.length != static_cast<size_t>(n) - kHeader) return;
+    if (h.type == kConnect) {  // CNetUDPConnector::ProcessConnect 0x48aa40
+      if (p.bytes.size() != kConnectSize || Get32(&buf[15]) != kProtocolVersion) return;
       Conn* c = Live(from);
-      if (!c) continue;  // ("ignoring packet of type %d from unknown host")
-      switch (h.type) {
-        case kAnswer: ProcessAnswer(*c, p, now); break;
-        case kData:
-          if (ProcessAcks(*c, p, now)) ProcessData(*c, std::move(p), now);
-          break;
-        case kAck:
-          if (ProcessAcks(*c, p, now)) Heard(*c, p.recvAt);
-          break;
-        case kKeepAlive:
-          if (ProcessAcks(*c, p, now)) Heard(*c, p.recvAt), Adopt(*c, p);
-          break;
-        case kGoodbye:
-          if (ProcessAcks(*c, p, now)) Heard(*c, p.recvAt), ProcessGoodbye(*c);
-          break;
-        default: break;  // ("ignoring unimplemented packet of type %d")
-      }
+      if (c && ProcessConnect(*c, p)) return;
+      if (shuttingDown_) return;
+      Conn& fresh = Make(from, Pending);
+      fresh.incoming = true;
+      ProcessConnect(fresh, p);
+      Event(fresh, ConnEvent::Incoming);
+      return;
+    }
+    Conn* c = Live(from);
+    if (!c) return;  // ("ignoring packet of type %d from unknown host")
+    switch (h.type) {
+      case kAnswer: ProcessAnswer(*c, p, now); break;
+      case kData:
+        if (ProcessAcks(*c, p, now)) ProcessData(*c, std::move(p), now);
+        break;
+      case kAck:
+        if (ProcessAcks(*c, p, now)) Heard(*c, p.recvAt);
+        break;
+      case kKeepAlive:
+        if (ProcessAcks(*c, p, now)) Heard(*c, p.recvAt), Adopt(*c, p);
+        break;
+      case kGoodbye:
+        if (ProcessAcks(*c, p, now)) Heard(*c, p.recvAt), ProcessGoodbye(*c);
+        break;
+      default: break;  // ("ignoring unimplemented packet of type %d")
     }
   }
 
@@ -688,7 +703,8 @@ class UdpCore {
         std::lock_guard<std::mutex> g(mu_);
         ReceiveAll();
         const int64_t now = clock_.Now();
-        const int64_t wake = SendPass(now);
+        int64_t wake = SendPass(now);
+        if (!held_.empty() && (wake < 0 || held_.front().at < wake)) wake = held_.front().at;  // (the test's delay)
         if (shuttingDown_ && (conns_.empty() || now - shutdownAt_ > kShutdownLinger)) break;
         if (wake >= 0) waitMs = static_cast<int>(std::clamp<int64_t>((wake - now + 999) / 1000, 0, 60000));
         if (shuttingDown_) waitMs = waitMs < 0 ? 50 : std::min(waitMs, 50);
@@ -723,6 +739,14 @@ class UdpCore {
   int64_t shutdownAt_ = 0;
   int dropPerMille_ = 0;
   uint32_t dropSeed_ = 1;
+  // MOHO64_NET_DELAY_MS / MOHO64_NET_JITTER_MS (a test's switch): datagrams received and not yet taken in, by time
+  struct Held {
+    int64_t at = 0;
+    Address from;
+    std::vector<uint8_t> bytes;
+  };
+  TestDelay delay_{"UDP"};
+  std::deque<Held> held_;
   std::shared_ptr<UdpCore> self_;
 };
 

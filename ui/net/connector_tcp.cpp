@@ -1,8 +1,10 @@
 // The TCP connector (connector.h).
 #include <chrono>
+#include <deque>
 #include <map>
 
 #include "net/connector.h"
+#include "net/test_delay.h"
 
 namespace moho::net {
 namespace {
@@ -88,12 +90,31 @@ class TcpConnector final : public Connector {
         c.out.erase(0, static_cast<size_t>(n));
       }
       char buf[8192];
-      while (!gone) {
+      while (!gone && !c.endHeld) {
         const long n = c.sock->Receive(buf, sizeof buf);
+        if (n < 0 && delay_.on()) {  // (the test's delay: the end too comes after what was read before it)
+          c.held.push_back(Held{delay_.ReleaseAt(NowUs()), std::string(), true});
+          c.endHeld = true;
+          break;
+        }
         if (n < 0) gone = true;
         if (n <= 0) break;
+        if (delay_.on()) {
+          c.held.push_back(Held{delay_.ReleaseAt(NowUs()), std::string(buf, static_cast<size_t>(n)), false});
+          continue;
+        }
         c.heard = Clock::now();
         c.split.Feed(buf, static_cast<size_t>(n));
+      }
+      while (!gone && !c.held.empty() && c.held.front().at <= NowUs()) {  // (MOHO64_NET_DELAY_MS: what is due now)
+        Held h = std::move(c.held.front());
+        c.held.pop_front();
+        if (h.end) {
+          gone = true;
+          break;
+        }
+        c.heard = Clock::now();
+        c.split.Feed(h.bytes.data(), h.bytes.size());
       }
       Message m;
       while (c.split.Next(&m)) {
@@ -155,6 +176,11 @@ class TcpConnector final : public Connector {
   }
 
  private:
+  struct Held {  // (MOHO64_NET_DELAY_MS: bytes read, or the end, and when they are taken in)
+    int64_t at = 0;
+    std::string bytes;
+    bool end = false;
+  };
   struct Conn {
     std::unique_ptr<TcpSocket> sock;
     bool connecting = false, incoming = false, made = false, failed = false, closing = false;
@@ -164,12 +190,19 @@ class TcpConnector final : public Connector {
     MessageSplitter split;
     Clock::time_point heard = Clock::now(), pinged = Clock::now();
     double ping = 0;
+    std::deque<Held> held;  // (MOHO64_NET_DELAY_MS: read, not yet taken in)
+    bool endHeld = false;   // (its end read and held)
   };
   void SayHello(Conn& c) { AppendFramed(MessageWriter().U16(port_).I32(uid_).Done(kHello), &c.out); }
   static uint32_t NowMs() {
     return static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count());
   }
 
+  static int64_t NowUs() {
+    return std::chrono::duration_cast<std::chrono::microseconds>(Clock::now().time_since_epoch()).count();
+  }
+
+  TestDelay delay_{"TCP"};
   TcpSocket listener_;
   uint16_t port_ = 0;
   int32_t uid_ = -1;

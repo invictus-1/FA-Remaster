@@ -14,6 +14,9 @@
 --     runner then plays the host's replay (net_game_replay.lua) and compares its fingerprints with the host's.
 --   NET_GAME_LOADING: the joiner stops answering before it is ready (a player lost while loading): the host's beats
 --     wait (the waiting dialog), it ejects the joiner and its game starts without it.
+--   NET_GAME_RUN_TO = <beat>: after the orders both run on to that beat and end there (no chat, speed, pause or desync):
+--     a long plain game, for the beats' timing over a link with latency (MOHO64UI_REAL_TIME, MOHO64UI_NET_BEAT_LOG,
+--     MOHO64_NET_DELAY_MS: docs/ui-net-game.md, "A link with latency").
 --   moho64ui --init <init.lua> --prefs <a copy> --stage frontend --no-world --lua ui/tests/net_game_host.lua
 --            --game-lua ui/tests/net_game_host.lua --replay-out <dir>/r --frames 2000000000 --log host.log
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
@@ -32,9 +35,10 @@ local function WaitFor(cond, seconds)  -- (the PC's clock: the other program run
     return cond()
 end
 local EJECT, LOADING = rawget(_G, "NET_GAME_EJECT"), rawget(_G, "NET_GAME_LOADING")
+local RUN_TO = rawget(_G, "NET_GAME_RUN_TO")
 -- (a hang ends the run after four minutes of the PC's clock)
 ForkThread(function()
-    local stop = moho64ui_WallSeconds() + 240
+    local stop = moho64ui_WallSeconds() + 240 + (RUN_TO or 0) / 5
     while moho64ui_WallSeconds() < stop do WaitFrames(1) end
     LOG("TEST FAIL the run took over four minutes")
     LOG("TEST done: hung")
@@ -180,6 +184,16 @@ ForkThread(function()
         end
         return false
     end, 30), true)
+    if RUN_TO then
+        -- the game runs on to that beat (both), then ends here
+        check("beat " .. RUN_TO .. " comes", WaitFor(function() return GameTick() >= RUN_TO end, RUN_TO / 10 * 3 + 60), true)
+        check("the joiner is still there", GetSessionClients()[2].connected, true)
+        LOG("TEST note: the host's game ends at tick " .. GameTick() .. "; ping to the other " .. tostring(GetSessionClients()[2].ping) .. " ms")
+        LOG("TEST done: " .. failed .. " failed")
+        WaitFor(function() return false end, 1)
+        ExitApplication()
+        return
+    end
     if EJECT then
         -- the joiner stops answering after beat 150: our game waits for it, it goes quiet; we eject it and go on
         check("the joiner goes quiet (the disconnect dialog's cue)", WaitFor(function()

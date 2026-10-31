@@ -98,3 +98,56 @@ after max(2 (D - 5), 85) s the dialog calls EjectSessionClient for every client 
 an observer (or a defeated player: armiesTable[own index].outOfGame) ejects every quiet client by itself as soon as
 the buttons would be enabled. Only connected clients with quiet > 5000 are ejected that way; a client shown "Not
 Connected" (ejected here) gets no button.
+
+## A link with latency (netlat, 2026-10-30)
+
+Does a game stutter over a link with 100-150 ms of round trip, now that a beat waits for everyone's ACKs? No: up to
+300 ms of round trip not one beat waited for the network. Measured with three test-only switches, all off by default:
+
+- `MOHO64_NET_DELAY_MS=<ms>` (`ui/net/test_delay.h`, both connectors): everything this program receives is held that
+  long before it is taken in (UDP: each datagram, on the connector's thread, which wakes for the held ones; TCP: each
+  read, at the next Poll), so with both programs set the round trip grows by twice that. `MOHO64_NET_JITTER_MS=<ms>`:
+  0..that much more each, from a fixed seed, never out of order.
+- `MOHO64UI_REAL_TIME=1` (main.cpp): a run without a window steps its frames at the PC's clock, at most 60 a second,
+  each the time since the last (at most 0.25 s), exactly as a window's loop hands its frame time to
+  `GameSession::Advance` (run_window.cpp); the beats' clock then runs at real time as in a live game. Without it a run
+  without a window makes each frame 1/60 s of the game however fast the frames go (the engine's 2.4 ms per beat of
+  waiting came from that unthrottled loop).
+- `MOHO64UI_NET_BEAT_LOG=1` (game_session.cpp, NetBeatOrders): a line per beat with the time since the last beat
+  began, the time from its first try to its start, and how much of that with every client's orders already in (that
+  part is the wait for the ACKs).
+
+The runs: `ui/tests/net_game_host.lua` / `net_game_join.lua` with `NET_GAME_RUN_TO = 700` (a plain game to beat 700
+after the orders), over UDP, both programs on CPUs 16-31, beats 20..700 (68 s) of each program. Ping is what
+GetSessionClients shows (the connector's own, with its 25 ms ack delay in it). Gaps over 100 / 120 ms come from the 60
+frames a second (a beat lands on the 5th, 6th or 7th frame), the same at 0 ms; the share swings run to run.
+
+| Delay each way (round trip) | Ping, host / joiner | Gaps > 100 / 120 / 150 ms | Worst gap | Beats that waited > 1 ms | Waited in all (of it for ACKs) |
+|---|---|---|---|---|---|
+| 0 (0) | 30 / 31 | 42 / 12 / 0 % | 142 ms | 4 / 2 | 0.2 s (0) |
+| 50 (100) | 153 / 124 | 45 / 11 / 0 % | 129 ms | 2 / 1 | 0.1 s (0) |
+| 50 again | 152 / 138 | 23 / 21 / 0.1 % | 160 ms (a slow frame: 11 ms of it a wait) | 13 / 1 | 0.2 s (0) |
+| 75 (150) | 170 / 184 | 23 / 22 / 0 % | 128 ms | 3 / 3 | 0.1 s (0) |
+| 75 again | 171 / 171 | 23 / 21 / 0 % | 129 ms | 0 / 0 | 0.1 s (0) |
+| 75 + 0..30 jitter | 206 / 210 | 65 / 0.4 / 0 % | 145 ms | 7 / 2 | 0.2 s (0) |
+| 150 (300) | 326 / 339 | 25 / 20 / 0 % | 127 ms | 1 / 1 | 0.1 s (0) |
+| 250 (500) | 535 / 529 | 50 / 19-26 / 1.6-4.0 % | 190 / 310 ms (the joiner's at beat 25) | 669 / 613 | 31 / 28 s (30 / 27 s) |
+| TCP, 75 (150) | 310 / 250 | 54 / 6 / 0 % | 127 ms | 0 / 1 | 0.1 s (0) |
+
+Why: a client's orders for beat b + 5 go out when it first asks for beat b (Lockstep::Ready), 500 ms before they are
+due, and the beat needs the others' ACK of them: one round trip, plus up to a frame at each end and the connector's
+send and ack delays (the ping above). That fits in 500 ms up to about 470 ms of ping; at 530 ms every beat waits
+20-35 ms for its ACKs (its orders all in), the game's clock runs on and the beats keep their pace a little behind it.
+The fingerprints of host and joiner were equal at every beat of every run.
+
+What the original does (READ, the pinned exe): the beats are ACK-gated too. IsReadyForBeat (0x53c3e0) compares the
+client's ACK of every other client with the beat (0x53c44e..0x53c459); DoBeat moves the available beat (+0x43c) while
+EveryoneResponsiveSince (0x53ef30) holds (0x53eb5c..0x53eb8f); the sim driver's thread (CSimDriver::ThreadRun 0x73bdf0)
+lets the sim run its next beat (+0x20) only once GetAvailableBeat (slot 21, 0x53efd0) reaches it (0x73c11a..0x73c146:
++0x8c 1 -> 2, the event +0x74; Dispatch 0x73c387 then runs it, 0x73d8c0 -> FAF's 0x128fde0, UpdateStates 0x128ff1f).
+Its own beats go out by the clock: the same thread compares now with the time of the last sync the interface took
+(GetSyncData 0x73c5cc..0x73c5e3 sets +0x1c its beat, +0x50 the time) plus (beats sent - that beat) x ms per beat - net_Lag
+(0x73bfbc..0x73c02a; net_Lag's value at 0xf58134, 500, its console variable made at 0xbdb900), and sends the beats now
+due (0x73c03a..0x73c10d, at most min(2000 / ms per beat, 99) beats past the last sync), else sleeps until the next is
+due. So the original too sends a beat's orders net_Lag ahead and runs it only when everyone has ACKed it; INFERRED (not
+measured): it waits likewise once the round trip nears net_Lag. Nothing is changed in the game's code for this.
