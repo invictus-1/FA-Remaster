@@ -2032,6 +2032,17 @@ const AirBp& GetAirBp(lua_State* L, const BlueprintInfo& bp) {
 float AirSpawnHeight(const Sim& sim, const BlueprintInfo& bp, lua_State* L, float x, float z, float y) {
   const AirBp& b = GetAirBp(L, bp);
   if (!b.canFly) return y;
+  return AirLayerSpawnHeight(sim, bp, L, x, z);
+}
+
+// IUnit::CalcSpawnElevation 0x541540 for the Air or Orbit layer (al & 0x30, 0x5415d6): 0x541a30, the map's elevation
+// at the point (0x44fb90) or the water where that is higher, plus the blueprint's Physics.Elevation (edi+0x30); for
+// any unit that starts there, whatever its motion. Seen: MP1 15588, army 6's Tempest 0x600049 makes its external
+// factory 0x6000c7 (uas0401ef, a copy of zxa0002: MotionType None, BuildOnLayerCaps all) with CreateUnitHPR at the
+// ExternalFactoryPoint bone (y 18.8887, over water): the original's stands at 17.5, the water, until its attach;
+// ours kept the bone's y.
+float AirLayerSpawnHeight(const Sim& sim, const BlueprintInfo& bp, lua_State* L, float x, float z) {
+  const AirBp& b = GetAirBp(L, bp);
   const TerrainMap* map = sim.map();
   float h = Elevation(map, x, z);
   if (map && map->hasWater && map->waterElevation > h) h = map->waterElevation;

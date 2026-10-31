@@ -130,6 +130,8 @@ const AirBp& GetAirBp(lua_State* L, const BlueprintInfo& bp);
 void AirInit(Sim& sim, Unit* u);
 // The height a unit spawns at (IUnit::CalcSpawnElevation): surface + elevation for flyers.
 float AirSpawnHeight(const Sim& sim, const BlueprintInfo& bp, lua_State* L, float x, float z, float y);
+// IUnit::CalcSpawnElevation for a unit starting on the Air / Orbit layer: the surface (ground or water) + Physics.Elevation.
+float AirLayerSpawnHeight(const Sim& sim, const BlueprintInfo& bp, lua_State* L, float x, float z);
 // One tick (CUnitMotion::MotionTick, air path, then the navigator's arrival test).
 void AirMotionTick(Sim& sim, Unit* u);
 // The air navigator's formation following (UpdateCurrentTargetFromFormation 0x5a4d80), as its Execute runs it in the

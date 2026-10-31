@@ -878,6 +878,7 @@ Sim::Sim(Vfs* vfs, std::vector<std::string> hookDirs, std::vector<std::string> m
       workers_(std::make_unique<WorkerPool>(ThreadsFromEnvironment(), ParCheckFromEnvironment())),
       surfaceSpec_(std::make_unique<Speculation<SurfaceContacts>>("MOTION")),
       aimAhead_(std::make_unique<AimAhead>()),
+      navSpec_(std::make_unique<Speculation<NavAhead>>("NAV")),
       commandIds(std::make_shared<CommandIdPool>()) {
   prof::InstallLuaTimer();  // MOHO64_PROFILE only (core/profile.h): the Lua timer on the sim's thread
   if (surfaceSpec_->active())
@@ -885,6 +886,9 @@ Sim::Sim(Vfs* vfs, std::vector<std::string> hookDirs, std::vector<std::string> m
          SpecModeName(surfaceSpec_->mode()));
   if (aimAhead_->active())
     Logf(LogLevel::Info, "moho64: MOHO64_PAR_AIM=%s: the aim controllers' muzzles are made ahead", SpecModeName(aimAhead_->mode));
+  if (navSpec_->active())
+    Logf(LogLevel::Info, "moho64: MOHO64_PAR_NAV=%s: the navigators' unit tests are played ahead",
+         SpecModeName(navSpec_->mode()));
   if (workers_->Threads() > 1 || workers_->Check().mode != ParCheck::kOff)
     Logf(LogLevel::Info, "moho64: the sim's worker pool: %d thread(s)%s", workers_->Threads(),
          workers_->Check().mode == ParCheck::kShuffle   ? ", order check: shuffle (tasks on this thread)"
@@ -902,6 +906,11 @@ Sim::~Sim() {
   }
   if (aimAhead_ && aimAhead_->active()) {
     const std::string line = aimAhead_->counts.Line("AIM (muzzles)");
+    fprintf(stderr, "%s\n", line.c_str());
+    Logf(LogLevel::Info, "%s", line.c_str());
+  }
+  if (navSpec_ && navSpec_->active()) {
+    const std::string line = navSpec_->counts().Line("NAV (navigators' unit tests)");
     fprintf(stderr, "%s\n", line.c_str());
     Logf(LogLevel::Info, "%s", line.c_str());
   }

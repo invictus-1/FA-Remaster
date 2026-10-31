@@ -26,6 +26,17 @@ namespace moho {
 class Sim;
 class Unit;
 
+// MOHO64_PAR_NAV (sim/landnav.cpp): a unit test of a navigator's turn played ahead: kind 0 UnitInLine (a = ax, az,
+// bx, bz), 1 PathUnitBlocked (a = x, z), its flags and its answer
+struct NavQuery {
+  uint8_t kind = 0, flags = 0;
+  float a[4] = {0, 0, 0, 0};
+  bool result = false;
+};
+struct NavAhead {
+  std::vector<NavQuery> q;
+};
+
 struct LandNav {
   PathTraveler pf;
   bool active = false;   // a goal is being worked on

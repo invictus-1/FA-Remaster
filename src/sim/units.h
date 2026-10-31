@@ -149,6 +149,7 @@ class UnitStateSet {
     return 1;
   }
   size_t size() const { return names_.size(); }
+  const uint64_t* bitsAddress() const { return &bits_; }  // (a read noted by a speculation: core/speculate.h)
   Names::const_iterator begin() const { return names_.begin(); }
   Names::const_iterator end() const { return names_.end(); }
 
@@ -331,6 +332,8 @@ class Unit : public Entity {
   std::vector<uint32_t> blipCacheFake; // per entry: the jammer's FAKE blip the entry is (its entity handle), else 0
   uint32_t blipCacheTick = 0;
   bool blipCacheValid = false;
+  // MOHO64_PAR_NAV: the navigator's turn played ahead is item navSpecItem of round navSpecRound (sim/landnav.cpp)
+  uint32_t navSpecItem = 0, navSpecRound = 0xffffffffu;
   Vec3 lastPosition;               // position at the start of the tick (blacklist reset)
   Quat lastOrientation;            // orientation at the start of the tick (with lastPosition)
   Quat prevLastOrientation;        // ... and at the start of the tick before (the entity's previous transform)

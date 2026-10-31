@@ -286,6 +286,8 @@ void SteeringCheckCollisions(Sim& sim, Unit* u);
 // navigators and then its steering (brain+0xa8, brain+0xac, beat_order.md): a collision record a navigator's
 // steering Stop writes is looked at in this beat by a unit of this army or a later one, in the next by an earlier.
 void SteeringNavStageArmy(Sim& sim, int army);
+// UnitFootprintGrid's grid is already made for this sim (it would not be made now)
+bool UnitFootprintGridReady(Sim& sim, const Unit* u);
 // Navigator interface (sim/landnav.cpp): a move starts (no waypoint yet: it coasts), the steering
 // gets a waypoint (through: drive through it, else brake to it), the move ended.
 void MotionNavBegin(Unit* u);

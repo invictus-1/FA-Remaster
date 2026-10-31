@@ -23,6 +23,7 @@ template <class Out>
 class Speculation;
 struct SurfaceContacts;
 struct AimAhead;
+struct NavAhead;
 }
 #include "sim/blueprints.h"
 #include "sim/economy.h"
@@ -434,6 +435,8 @@ class Sim {
   Speculation<SurfaceContacts>& surfaceSpec() { return *surfaceSpec_; }
   // ... and the aim controllers' muzzles (MOHO64_PAR_AIM; sim/combat.h AimMuzzlesAhead)
   AimAhead& aimAhead() { return *aimAhead_; }
+  // The navigators' turns played ahead (MOHO64_PAR_NAV; sim/landnav.cpp).
+  Speculation<NavAhead>& navSpec() { return *navSpec_; }
   // The command stage (0x958) runs the units' command threads oldest first; a thread suspended on a
   // move and resumed by its navigator is re-linked at the stage's new end (beat_order.md 2.6).
   const std::vector<Unit*>& CommandOrder();
@@ -472,6 +475,7 @@ class Sim {
         }
   }
   void MarkUnitsMoved() { gridDirty_ = true; }
+  bool UnitGridDue() const { return gridDirty_; }  // (the next ForUnitsInRect / EnsureUnitGrid rebuilds it)
   // The unit grid behind ForUnitsInRect made now if it is due (the searches' pre-pass, sim/hpath.h).
   void EnsureUnitGrid() {
     if (gridDirty_) RebuildUnitGrid();
@@ -678,6 +682,7 @@ class Sim {
   std::unique_ptr<WorkerPool> workers_;  // MOHO64_THREADS (core/workers.h): made once per Sim
   std::unique_ptr<Speculation<SurfaceContacts>> surfaceSpec_;  // MOHO64_PAR_MOTION
   std::unique_ptr<AimAhead> aimAhead_;                         // MOHO64_PAR_AIM
+  std::unique_ptr<Speculation<NavAhead>> navSpec_;  // MOHO64_PAR_NAV
   bool armorLoaded_ = false;
   std::map<std::string, std::map<std::string, float>> armorTypes_;  // armour type -> damage type -> multiplier
 

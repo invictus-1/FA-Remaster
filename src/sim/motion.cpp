@@ -29,6 +29,8 @@
 #include "sim/units.h"
 
 namespace moho {
+
+bool PathUnitBlocked(Unit* u, int x, int z, int flags);  // sim/landnav.cpp (COGrid::UnitIsBlocked 0x721340)
 Quat LookQuat(float dx, float dy, float dz);  // (below; UpdateLayer's blend needs it)
 namespace {
 void SnapToWaterExe(Sim& sim, Unit* u);  // (below; UpdateLayer's blend needs it)
@@ -825,6 +827,12 @@ const PathGrid* AltFootprintGrid(Sim& sim, const MotionBlueprint& b) {
   return b.altGrid;
 }
 
+bool UnitFootprintGridReady(Sim& sim, const Unit* u) {
+  const MotionBlueprint& b = *u->motion.bp;
+  return (u->altFootprintNav || u->altFootprintForced) ? b.altGridOwner == &sim.navigation()
+                                                        : b.gridOwner == &sim.navigation();
+}
+
 const PathGrid* UnitFootprintGrid(Sim& sim, const Unit* u) {
   const MotionBlueprint& b = *u->motion.bp;
   return (u->altFootprintNav || u->altFootprintForced) ? AltFootprintGrid(sim, b) : FootprintGrid(sim, b);
@@ -868,7 +876,7 @@ bool StandableAt(Sim& sim, const Unit* u, float x, float z) {
 
 // The spline's look-ahead point (CAiPathSpline::Generate 0x5b2ff0): the new point plus the step
 // set to the length max(SizeX, SizeZ) + stopping distance (the point itself when it did not move).
-bool LookAheadFits(Sim& sim, const Unit* u, const MotionBlueprint& b, const Vec3& p, float sx, float sz, float stopDist) {
+Vec3 LookAheadPoint(const MotionBlueprint& b, const Vec3& p, float sx, float sz, float stopDist) {
   float l = std::sqrt(sx * sx + sz * sz);
   float x = p.x, z = p.z;
   if (l > 0.0f) {
@@ -876,7 +884,11 @@ bool LookAheadFits(Sim& sim, const Unit* u, const MotionBlueprint& b, const Vec3
     x += sx * k;
     z += sz * k;
   }
-  return StandableAt(sim, u, x, z);
+  return Vec3{x, p.y, z};
+}
+bool LookAheadFits(Sim& sim, const Unit* u, const MotionBlueprint& b, const Vec3& p, float sx, float sz, float stopDist) {
+  const Vec3 la = LookAheadPoint(b, p, sx, sz, stopDist);
+  return StandableAt(sim, u, la.x, la.z);
 }
 
 // CAiSteeringImpl / CAiPathSpline::SteeringParams + the speed a turn allows (FA exe 0x699760):
@@ -1146,7 +1158,21 @@ bool StepRules(Sim& sim, const Unit* u, const MotionBlueprint& b, const StepPara
     case 7:
       if (mode == 0 && ndist < stopDist) g.state = 3;
       if (ndot < 0.865999997f) {
-        if (!LookAheadFits(sim, u, b, g.p, g.vel.x, g.vel.z, stopDist)) g.state = 4;
+        // 0x5b456b..0x5b4654: the look-ahead point must fit (Unit::WontFitAt 0x62aa90, 0x5b460e); and for a unit that
+        // turns wider than it rotates (P.wide, [esp+0x3b]) no unit may stand there either: 0x62aba0 with flags 2, the
+        // footprint's cell at the point (fistp of x, z less half the footprint) through COGrid::UnitIsBlocked 0x721340,
+        // everyone blocking. Either brakes (state 4). Seen (probe mp1_15420): MP1 15419, army 0's Tempest 0x169
+        // (TurnRate 35 < TurnRadius 40) side-steps army 6's frigate 0x6000a5; its new batch's look-ahead from point 1
+        // falls on the frigate 0x600094 (960.6, 577.9): the original brakes from point 2 (0.198 -> 0.144 -> 0.091 ->
+        // 0.041, then backs up); ours, with the terrain test alone, drove on at 0.2.
+        const Vec3 la = LookAheadPoint(b, g.p, g.vel.x, g.vel.z, stopDist);
+        if (!StandableAt(sim, u, la.x, la.z)) {
+          g.state = 4;
+        } else if (P.wide) {
+          int cx, cz;
+          GoalCell(UnitFootprint(u), la.x, la.z, &cx, &cz);
+          if (PathUnitBlocked(const_cast<Unit*>(u), cx, cz, 2)) g.state = 4;
+        }
       }
       break;
     default:

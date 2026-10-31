@@ -19,6 +19,7 @@
 #include <map>
 
 #include "core/log.h"
+#include "core/speculate.h"
 #include "core/workers.h"
 #include "sim/navigation.h"
 #include "sim/sim.h"
@@ -45,6 +46,86 @@ float LookAhead(const Sim& sim) {
 bool Dbg() {
   static const bool on = getenv("MOHO64_DEBUG_NAV") != nullptr;
   return on;
+}
+
+// ---- MOHO64_PAR_NAV: a navigator's turn played ahead (see LandNavAheadRun) ----
+// (the play-ahead stops at the first step that would change shared state or make something lazily)
+struct NavDryStop {};
+struct NavDry {
+  ReadLog* log;
+  std::vector<NavQuery>* q;
+};
+struct NavReplay {
+  const std::vector<NavQuery>* q = nullptr;
+  size_t at = 0;
+  bool on = false, verify = false;
+  std::string diff;
+};
+thread_local NavDry* tl_navDry = nullptr;        // a worker playing a turn ahead
+thread_local NavReplay* tl_navReplay = nullptr;  // the sim's thread at a turn played ahead
+
+// What a unit test reads of a unit that the navigators' stage can change (an Execute or the air navigator before
+// the unit's turn): its states (the bit word of UnitStateSet), footprint flags, life, attachment, layer, formation,
+// guard / focus / creator. (Positions, shapes, the grids and the blueprints do not change in this stage.)
+void NavLogUnit(ReadLog& log, const Unit* e) {
+  log.Raw(*e->unitStates.bitsAddress());
+  log.Raw(e->altFootprintNav);
+  log.Raw(e->altFootprintForced);
+  log.Raw(e->dead);
+  log.Raw(e->destroyQueued);
+  log.Raw(e->immobile);
+  log.Raw(e->parentId);
+  log.Raw(e->transport);
+  log.Raw(e->army);
+  log.Raw(&e->layer, sizeof e->layer);  // (the layer names are short: their characters are in the string itself)
+  log.Raw(e->form);
+  log.Raw(e->formLeader);
+  log.Raw(e->formPathDelay);
+  log.Raw(e->formRank);
+  log.Raw(e->guardedId);
+  log.Raw(e->focusId);
+  log.Raw(e->creatorId);
+}
+// (the filters' category caches are made lazily from the sim's blueprints: a turn played ahead that would make one
+// stops; the serial turn makes it)
+void NavDryCandidate(const Unit* e) {
+  NavLogUnit(*tl_navDry->log, e);
+  const MotionBlueprint* b = e->motion.bp;
+  if (b && e->blueprint && (b->naval < 0 || b->airCat < 0)) throw NavDryStop{};
+}
+// sim.EnsureUnitGrid() in the navigators' tests: a turn played ahead finds it made (LandNavAheadRun) or stops
+void NavEnsureUnitGrid(Sim& sim) {
+  if (tl_navDry) {
+    if (sim.UnitGridDue()) throw NavDryStop{};
+    return;
+  }
+  sim.EnsureUnitGrid();
+}
+// A unit test at a turn played ahead: the recorded answer of the next test, if it is this one; a test asked out of
+// that order ends the recorded answers for this turn. In verify, the answer is made anyway and compared.
+bool NavReplayTake(uint8_t kind, uint8_t flags, const float* a, bool* out) {
+  NavReplay& r = *tl_navReplay;
+  if (!r.on) return false;
+  if (r.at >= r.q->size()) {
+    r.on = false;
+    return false;
+  }
+  const NavQuery& q = (*r.q)[r.at];
+  if (q.kind != kind || q.flags != flags || std::memcmp(q.a, a, sizeof q.a) != 0) {
+    r.on = false;
+    return false;
+  }
+  ++r.at;
+  *out = q.result;
+  return true;
+}
+void NavRecord(uint8_t kind, uint8_t flags, const float* a, bool result) {
+  NavQuery q;
+  q.kind = kind;
+  q.flags = flags;
+  std::memcpy(q.a, a, sizeof q.a);
+  q.result = result;
+  tl_navDry->q->push_back(q);
 }
 
 }  // namespace
@@ -92,7 +173,10 @@ PathCell CellOf(const Unit* u, float x, float z) {
   return {std::isnan(fx) ? 0 : static_cast<int>(std::nearbyint(fx)), std::isnan(fz) ? 0 : static_cast<int>(std::nearbyint(fz))};
 }
 
-const PathGrid* Grid(Sim& sim, const Unit* u) { return UnitFootprintGrid(sim, u); }
+const PathGrid* Grid(Sim& sim, const Unit* u) {
+  if (tl_navDry && !UnitFootprintGridReady(sim, u)) throw NavDryStop{};
+  return UnitFootprintGrid(sim, u);
+}
 
 // FootprintFits(cell, MobileCheck caps): terrain and structures
 bool Fits(Sim& sim, const Unit* u, const PathCell& c) {
@@ -165,7 +249,7 @@ bool BlocksFor(const Unit* self, const Unit* e, int flags) { return !UnitIgnores
 // COGrid::UnitIsBlocked 0x721340: the square [x, x+S] x [z, z+S] (S = the larger footprint byte), y in
 // [-1000, 1000]. Candidates are the units whose collision AABB touches the square (GatherUnmarkedUnitsInBox
 // 0x721c00, inclusive), not the blueprint size around the position: a turned 0.6 box reaches further.
-bool PathUnitBlocked(Unit* u, int x, int z, int flags) {
+static bool PathUnitBlockedCore(Unit* u, int x, int z, int flags) {
   if (!u) return false;
   Sim& sim = *Sim::From(u->luaState());
   int S = std::max(SX(u), SZ(u));
@@ -185,6 +269,7 @@ bool PathUnitBlocked(Unit* u, int x, int z, int flags) {
     // tested. All are reads and a unit blocks only when it passes all of them, so the answer and the blocking unit are
     // the same.)
     if (!GridFindsInBox(sim, e, x0, z0, x1, z1)) return;
+    if (tl_navDry) NavDryCandidate(e);
     // 0x721488: a Land-layer unit counts for an IgnoreStructures footprint only when its own has the flag;
     // Air and Sub layer units never count
     if (e->layer == "Land") {
@@ -217,7 +302,7 @@ bool PathUnitBlocked(Unit* u, int x, int z, int flags) {
     // 160 M squares; 8.8 units per square had their centres within 8 of it, 1.2 are in its cells.) The position grid
     // behind ForUnitsInRect, which this used to make here when it was due, is still made here, at the same moment for
     // its other askers.
-    sim.EnsureUnitGrid();
+    NavEnsureUnitGrid(sim);
     static thread_local std::vector<Entity*> cand;
     sim.entityGrid().GatherUnitsBox(x0, z0, x1, z1, &cand);
     for (Entity* c : cand) {
@@ -235,11 +320,26 @@ bool PathUnitBlocked(Unit* u, int x, int z, int flags) {
   return blocked;
 }
 
+bool PathUnitBlocked(Unit* u, int x, int z, int flags) {
+  const float a[4] = {static_cast<float>(x), static_cast<float>(z), 0.0f, 0.0f};
+  bool r;
+  if (tl_navReplay && NavReplayTake(1, static_cast<uint8_t>(flags), a, &r)) {
+    if (!tl_navReplay->verify) return r;
+    const bool now = PathUnitBlockedCore(u, x, z, flags);
+    if (now != r && tl_navReplay->diff.empty())
+      tl_navReplay->diff = "square (" + std::to_string(x) + "," + std::to_string(z) + ") answered " + std::to_string(r);
+    return now;
+  }
+  r = PathUnitBlockedCore(u, x, z, flags);
+  if (tl_navDry) NavRecord(1, static_cast<uint8_t>(flags), a, r);
+  return r;
+}
+
 namespace {
 
 // 0x7216d0: units in the box along the line from (ax, az) to (bx, bz); air/sub units and formation mates are
 // skipped before the unit filter
-bool UnitInLine(Sim& sim, Unit* u, float ax, float az, float bx, float bz, int flags) {
+bool UnitInLineCore(Sim& sim, Unit* u, float ax, float az, float bx, float bz, int flags) {
   // LineBlocked 0x7216d0 (read 2026-10-11): an oriented box around the line (centre = the midpoint, forward = the
   // line's direction in the plane, half length = half its plane length, half width = the unit's SizeX x 0.5555556,
   // half height 1000), and every unit whose COLLISION PRIMITIVE meets that box (CollectEntitiesInBox 0x721dc0:
@@ -276,6 +376,7 @@ bool UnitInLine(Sim& sim, Unit* u, float ax, float az, float bx, float bz, int f
     // 7 in 8 fail the filters, and their primitive tests were most of the navigator's execute
     // time, 51.6 -> 32.3 s.)
     if (!GridFindsInBox(sim, e, boxMn.x, boxMn.z, boxMx.x, boxMx.z)) return;
+    if (tl_navDry) NavDryCandidate(e);
     if (e->layer == "Air" || e->layer == "Sub" || SameFormationLayer(u, e) ||
         !BlocksFor(u, e, flags))
       return;
@@ -304,7 +405,7 @@ bool UnitInLine(Sim& sim, Unit* u, float ax, float az, float bx, float bz, int f
     // grid's lists of the line box's cells (0x722df0), each once, not the units by their centres around the line.
     // (Counted on B1, 36000 beats: TryAdvance's lines visited 33 units each by centre, 11 are in the box's cells.) The
     // position grid behind ForUnitsInRect, which this used to make here when it was due, is still made here.
-    sim.EnsureUnitGrid();
+    NavEnsureUnitGrid(sim);
     static thread_local std::vector<Entity*> cand;
     sim.entityGrid().GatherUnitsBox(boxMn.x, boxMn.z, boxMx.x, boxMx.z, &cand);
     for (Entity* c : cand) {
@@ -317,6 +418,19 @@ bool UnitInLine(Sim& sim, Unit* u, float ax, float az, float bx, float bz, int f
                        std::max(az, bz) + reach, visit);
   }
   return blocked;
+}
+bool UnitInLine(Sim& sim, Unit* u, float ax, float az, float bx, float bz, int flags) {
+  const float a[4] = {ax, az, bx, bz};
+  bool r;
+  if (tl_navReplay && NavReplayTake(0, static_cast<uint8_t>(flags), a, &r)) {
+    if (!tl_navReplay->verify) return r;
+    const bool now = UnitInLineCore(sim, u, ax, az, bx, bz, flags);
+    if (now != r && tl_navReplay->diff.empty()) tl_navReplay->diff = "a line answered " + std::to_string(r);
+    return now;
+  }
+  r = UnitInLineCore(sim, u, ax, az, bx, bz, flags);
+  if (tl_navDry) NavRecord(0, static_cast<uint8_t>(flags), a, r);
+  return r;
 }
 bool UnitInWay(Sim& sim, Unit* u, const PathCell& a, const PathCell& b, int flags) {
   if (a == b) return PathUnitBlocked(u, a.x, a.z, flags);
@@ -462,6 +576,8 @@ void UpdateWaterFavor(Sim& sim, Unit* u, LandNav& n) {
 
 // RequestPath 0x5adfe0
 void RequestPath(Sim& sim, Unit* u, LandNav& n, int mode) {
+  if (tl_navDry) throw NavDryStop{};
+  if (tl_navReplay) tl_navReplay->on = false;  // (it may change the unit's own state: no recorded answer after it)
   UpdateWaterFavor(sim, u, n);
   if (Dbg() && BpInCategory(sim, u->blueprint, "FAVORSWATER"))
     Logf(LogLevel::Info, "nav: tick %u unit %u water favor: alt footprint %d (forced %d)", sim.tick(), u->id,
@@ -517,6 +633,8 @@ void ResetPathState(Sim& sim, Unit* u, LandNav& n) {
 
 // RequestContinuationPath 0x5aec70
 void RequestContinuation(Sim& sim, Unit* u, LandNav& n, int mode) {
+  if (tl_navDry) throw NavDryStop{};
+  if (tl_navReplay) tl_navReplay->on = false;
   if (Dbg())
     Logf(LogLevel::Info, "nav: tick %u unit %u continuation mode %d cur (%d,%d) path %zu front (%d,%d)", sim.tick(), u->id,
          mode, n.cur.x, n.cur.z, n.path.size(), n.path.empty() ? -1 : n.path[0].x, n.path.empty() ? -1 : n.path[0].z);
@@ -693,7 +811,7 @@ bool TryAdvance(Sim& sim, Unit* u, LandNav& n) {
       ok2 = Manhattan(n.path[i], n.cur) <= 1 ? !UnitInWay(sim, u, n.path[i], n.path[i], n.attackVariant ? 2 : 1)
                                             : UnitClearTo(sim, u, n, n.path[i]);
     else
-      sim.EnsureUnitGrid();
+      NavEnsureUnitGrid(sim);
     if (Dbg())
       Logf(LogLevel::Info, "nav: tick %u unit %u advance? i %d (%d,%d) from (%d,%d) reach %d clear %d fits %d lo %d hi %d",
            sim.tick(), u->id, i, n.path[i].x, n.path[i].z, n.cur.x, n.cur.z, ok1 ? 1 : 0, ok2 ? 1 : 0, n.fits ? 1 : 0, lo, hi);
@@ -1205,12 +1323,103 @@ namespace {
 double NowS() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 }  // namespace
 
+// Whether UpdateCurrentPosition can make a unit test this turn, from its first steps' own tests (a quick look: it only
+// decides which turns are played ahead; a turn left out is made at its time as ever). It answers yes wherever it is
+// not sure.
+static bool NavMayTest(Sim& sim, const Unit* u, const LandNav& n) {
+  const NamedFootprint& f = PathFinderFootprint(u);
+  const PathCell cur{static_cast<int>(std::nearbyint(u->position.x - std::max<int>(1, f.sizeX) * 0.5f)),
+                     static_cast<int>(std::nearbyint(u->position.z - std::max<int>(1, f.sizeZ) * 0.5f))};
+  if (n.path.size() > 1 && Dist(n.path[0], cur) >= Dist(n.path[1], cur)) return true;  // (the pop loop's first test)
+  if (n.state != 5 && n.state != 6) return false;
+  if (!n.path.empty() && cur == n.path.back()) return false;
+  const uint32_t t7 = sim.tick() % 7;
+  if (n.hasTarget && u->id % 7 == t7 && cur != n.target && !n.waiting && !n.adjacent && !n.poke) return true;
+  if (n.waiting) return false;
+  const Vec3& prev = n.startedThisTick ? u->position : n.prevPos;
+  const int stuck = (vm::SameBits(u->position, prev) && !u->immobile) ? n.stuck + 1 : 0;
+  const float d = n.hasTarget ? Dist(cur, n.target) : kInf;
+  if (n.advanceDist < d && !n.poke && stuck < 31) return false;
+  return true;
+}
+
+// Every navigator's own copy of its state for a turn played ahead (all but its traveller, which UpdateCurrentPosition
+// does not read: a path request ends the play-ahead before it).
+static void CopyNavState(LandNav& d, const LandNav& s) {
+  d.active = s.active, d.state = s.state;
+  std::memcpy(d.goal, s.goal, sizeof d.goal);
+  d.path = s.path;
+  d.cur = s.cur, d.target = s.target, d.hasTarget = s.hasTarget, d.advanceDist = s.advanceDist;
+  d.thinkDelay = s.thinkDelay, d.wait = s.wait, d.stuck = s.stuck, d.retries = s.retries, d.replans = s.replans;
+  d.spliced = s.spliced, d.fits = s.fits, d.poke = s.poke, d.attackVariant = s.attackVariant, d.adjacent = s.adjacent;
+  d.hasDeadEnd = s.hasDeadEnd, d.deadEnd = s.deadEnd, d.lastAdvance = s.lastAdvance, d.requestMode = s.requestMode;
+  d.pathLayer = s.pathLayer, d.speedThroughGoal = s.speedThroughGoal, d.thinking = s.thinking, d.problem = s.problem;
+  d.startedThisTick = s.startedThisTick, d.prevPos = s.prevPos;
+  d.inFormation = s.inFormation, d.waiting = s.waiting, d.following = s.following, d.cachedLeader = s.cachedLeader;
+  d.lastFollow = s.lastFollow, d.lastFail = s.lastFail;
+}
+
+// MOHO64_PAR_NAV (multicore, the navigators' phase): before the stage, each land navigator that is not a formation
+// member's and has no wait running plays its UpdateCurrentPosition ahead on the worker pool, on a copy of its state,
+// by the same code; its unit tests' answers are recorded with the reads they depend on that this stage can change
+// (NavLogUnit), and the entity grid's unit lists. At the unit's turn (Execute), if all those still read the same,
+// each test asked with the same arguments in the same order takes its answer (NavReplayTake). The unit grid the tests
+// would make when due is made here first: no position changes in this stage, so it is the one they would make.
+static void LandNavAheadRun(Sim& sim, const std::vector<Unit*>& all) {
+  Speculation<NavAhead>& spec = sim.navSpec();
+  // (the tests' debug lines are written at the unit's own turn: with them on nothing is played ahead)
+  static const bool dbgOn = getenv("MOHO64_DEBUG_FOLLOW") || getenv("MOHO64_DEBUG_CLEAR");
+  if (!spec.active() || Dbg() || dbgOn) return;
+  if (!sim.entityGrid().ready()) return;
+  const uint32_t tick = sim.tick();
+  static thread_local std::vector<Unit*> mine;  // (the sim's own thread: the tasks read it through `items`)
+  std::vector<Unit*>& items = mine;
+  items.clear();
+  for (Unit* u : all) {
+    const LandNav* n = Nav(u);
+    if (!n || !n->active || u->destroyQueued || u->dead || n->inFormation) continue;
+    if (n->thinkDelay > 0 || n->wait > 0) continue;  // (no unit test in that turn)
+    if (!NavMayTest(sim, u, *n)) continue;
+    u->navSpecItem = static_cast<uint32_t>(items.size());
+    u->navSpecRound = tick;
+    items.push_back(u);
+  }
+  if (items.empty()) return;
+  sim.EnsureUnitGrid();
+  // (MOHO64_PAR_NAV_GRAIN: navigators per task; 8 by default: a turn's cost varies a lot, B3-16k's longest task was
+  // 17 ms with 64 and 7 ms with 8, the stage's wall 6.4 -> 2.9 s)
+  static const size_t grain = getenv("MOHO64_PAR_NAV_GRAIN") ? std::max(1L, atol(getenv("MOHO64_PAR_NAV_GRAIN"))) : 8;
+  spec.Run(sim.workers(), "navigators' unit tests ahead", tick, items.size(), grain,
+           [&](size_t i, ReadLog& log, NavAhead& out) {
+             Unit* u = items[i];
+             static thread_local LandNav scratch;
+             CopyNavState(scratch, *Nav(u));
+             if (scratch.startedThisTick) {  // (as the stage does before Execute)
+               scratch.startedThisTick = false;
+               scratch.prevPos = u->position;
+             }
+             out.q.clear();
+             log.Raw(sim.entityGrid().version(0));
+             NavLogUnit(log, u);
+             NavDry d{&log, &out.q};
+             tl_navDry = &d;
+             try {
+               UpdateCurrentPosition(sim, u, scratch);
+             } catch (const NavDryStop&) {
+             }
+             tl_navDry = nullptr;
+             return !out.q.empty();
+           });
+}
+
 void LandNavTickAll(Sim& sim) {
   static const bool prof = getenv("MOHO64_PROFILE") != nullptr;
   double t0 = prof ? NowS() : 0;
   LandNavState& ns = LNS(sim);
   ++ns.n;
   const std::vector<Unit*> all = sim.ArmyStageOrder();  // (brain+0xa8: creation order inside each army)
+  LandNavAheadRun(sim, all);  // MOHO64_PAR_NAV
+  Speculation<NavAhead>& navSpec = sim.navSpec();
   for (size_t i = 0; i < all.size(); ++i) {
     Unit* u = all[i];
     if (u->motion.air && !u->destroyQueued && !u->dead) {  // (the air navigator, same stage: CAiNavigatorAir::Execute)
@@ -1223,7 +1432,24 @@ void LandNavTickAll(Sim& sim) {
       n->prevPos = u->position;
     }
     SteeringNavStageArmy(sim, u->army ? u->army->index : 0);
+    const NavAhead* ahead =
+        navSpec.active() && u->navSpecRound == sim.tick() ? navSpec.Take(u->navSpecItem) : nullptr;
+    NavReplay replay;
+    if (ahead) {
+      replay.q = &ahead->q;
+      replay.on = true;
+      replay.verify = navSpec.mode() == SpecMode::kVerify;
+      tl_navReplay = &replay;
+    }
     Execute(sim, u, *n);
+    if (ahead) {
+      tl_navReplay = nullptr;
+      if (replay.verify) {
+        char b[64];
+        std::snprintf(b, sizeof b, "tick %u unit 0x%x: ", sim.tick(), u->id);
+        navSpec.Checked(replay.diff.empty(), u->navSpecItem, replay.diff.empty() ? std::string() : b + replay.diff);
+      }
+    }
     SteeringNavStageArmy(sim, 0);
     if (n->problem) u->unitStates.insert("ProblemGettingToGoal");
   }

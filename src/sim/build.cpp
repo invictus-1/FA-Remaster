@@ -1122,6 +1122,20 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
       // task's weak link +0x44 set to it by 0x5a6e00). Until then the task's target is the blip (IssueReclaimTask
       // 0x61ef60 with the order's CAiTarget), and its dtor's BeingReclaimed clear (CUnitReclaimTask dtor 0x620280:
       // the target's vt+0x10, no unit for a blip) leaves the unit alone.
+      // The swap is made for ANY blip the task holds (vt+0x1c non-null), whatever the order said: an order on the blip
+      // of a unit already gone (its command holds the blip itself, SetCommandEntityTarget) gets no creator (the blip's
+      // weak link +0x270 is empty), and with no entity left the task ends here (0x61f5c3..0x61f5d1 -> 0x6200d4, -1,
+      // no result written). Seen: MP1 15755, army 0's SACU 0x12f is given a second Reclaim of the blip 0x30400038 of
+      // the wall 0x400038 it reclaimed at 15753: the original drops it at once and reclaims the next wall 0x40004c by
+      // 15756; ours reclaimed the blip as a prop for three beats (0x40004c went at 15759).
+      if (e->kind == Entity::Kind::Blip) {
+        auto* b = static_cast<ReconBlip*>(e);
+        Unit* cr = b->source && !b->source->destroyQueued ? b->source : nullptr;
+        c.goalId = cr ? EntityRef(cr) : 0;
+        if (!cr) return kTaskDone;
+        e = cr;
+        tu = cr;
+      }
       c.targetViaBlip = false;
       // 0x61f5d7..0x61f619: the unit's builder (unit+0x554, CAiBuilderImpl) is told the target's position (vt+0x3c
       // SetAimTarget), whether or not the unit has builder arm controllers; a non-zero aim calls the script's
@@ -4780,6 +4794,26 @@ int l_GetRallyPoint(lua_State* L) {  // 0x6d0650: the target of rally command 0,
   lua_pushnil(L);
   return 1;
 }
+// Unit:CalculateWorldPositionFromRelative(vector) 0x6c74f0: two arguments; the vector (0x4d0080) turned by the unit's
+// orientation (vt+0x18, MultQuadVec 0x452d40) plus its position (vt+0x14), both committed (where the beat began with
+// it until AdvanceCoords), as a new Vector. Seen: MP1 15836, army 6's Tempest 0x600049 finishes the cruiser 0x6000d2;
+// UAS0401's BuildingState.OnStopBuild sends it off with IssueToUnitMoveOffFactory(unit, CalculateWorldPositionFromRelative(
+// {0, 0, -12})): the original's cruiser holds the roll-off Move and the rally (Move x2); ours, with the call a stub that
+// gave nil, only the rally.
+int l_CalculateWorldPositionFromRelative(lua_State* L) {
+  if (lua_gettop(L) != 2)
+    luaL_error(L, "%s\n  expected %d args, but got %d", "Unit:CalculateWorldPositionFromRelative(vector)", 2, lua_gettop(L));
+  Unit* u = U(L);
+  Vec3 v;
+  PosArg(L, 2, &v);
+  const Sim& sim = *S(L);
+  const bool pend = sim.coordsPending && u->lastPosTick == sim.tick();
+  const Vec3 p = pend ? u->lastPosition : u->position;
+  const Quat q = pend ? u->lastOrientation : u->orientation;
+  const Vec3 r = vm::RotateM(q, v);
+  PushVector(L, p.x + r.x, p.y + r.y, p.z + r.z);
+  return 1;
+}
 // unit:GetNumBuildOrders(category): build commands in its queue for blueprints in the category
 int l_GetNumBuildOrders(lua_State* L) {
   Unit* u = U(L);
@@ -4839,6 +4873,7 @@ void RegisterBuildBindings(lua_State* L) {
   SetGlobal(L, "IssueClearFactoryCommands", l_IssueClearFactoryCommands);
   SetGlobal(L, "IssueMoveOffFactory", l_IssueMoveOffFactory);
   SetMethod(L, "Unit", "GetRallyPoint", l_GetRallyPoint);
+  SetMethod(L, "Unit", "CalculateWorldPositionFromRelative", l_CalculateWorldPositionFromRelative);
   SetMethod(L, "Unit", "GetNumBuildOrders", l_GetNumBuildOrders);
   RegisterSiloBindings(L);
   SetMethod(L, "CUnitScriptTask", "GetUnit", l_task_GetUnit);
