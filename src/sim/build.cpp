@@ -1747,7 +1747,15 @@ int TickFactoryBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
       [[fallthrough]];
     }
     case 1: {
-      Unit* target = FindUnit(sim, t.targetId);
+      // CBuildTaskHelper::IsGood 0x5f5630: the helper's weak pointer (+8) set and the unit not dead (vt+0x28); a unit
+      // whose Destroy is only queued is still good and still built (its dead flag comes with the destroy queue's drain).
+      // Seen: MP1 15589, army 0 gives its Tempest 0x169 away (GiveUnitsToPlayer); FAF's TransferUnitsOwnership
+      // Destroys the cruiser 0x1ec its external factory 0x1d0 is building: the original's factory builds on through
+      // the beat (no OnStopBuild: no SetConsumptionActive call for 0x1d0 in probe mp1_15590) and its grant is spent;
+      // ours stopped the build in the command stage and OnStopBuild handed the beat's whole grant (50.625 E, 5.625 M)
+      // back to army 0 (economy 15590).
+      Unit* target = FindUnitAny(sim, t.targetId);
+      if (target && target->dead) target = nullptr;
       if (!target) {  // helper not good: OnStopBuild(false), build again after 10 ticks
         // (0x5fa97e..0x5fa989: OnStopBuild(false), state 0, return 10, and nothing else: the factory stays Building
         // while it waits, unlike the finish block's 0x5fa9da. Seen: MP3 2660, army 0's factory 0x1 whose engineer
