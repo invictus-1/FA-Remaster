@@ -36,7 +36,7 @@ class CommandWriter {
   // (CON_TeleportSelectedUnits 0x833f90) sends one per selected unit of the focus army: the unit's own orientation
   // and the cursor's world point (its height from IUnit::CalcSpawnElevation; a unit's Warp takes its own anyway).
   void WarpEntity(uint32_t entity, float qw, float qx, float qy, float qz, float x, float y, float z);
-  // key / value as the interface sends them: ToggleScriptBit "<n>", SetFireState "<n>", SetAutoMode /
+  // key / value as the interface sends them: ToggleScriptBit "<n>", SetFireState "<name>" (the state's name, as the original interface sends it; the sim also takes a number), SetAutoMode /
   // SetAutoSurfaceMode / SetRepeatQueue / SetPaused "true" | "false", CustomName "<text>".
   void ProcessInfoPair(uint32_t entity, const std::string& key, const std::string& value);
   // The order `data` for `units` (entity ids); clear empties their queues first (no shift key). data.id is
