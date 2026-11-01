@@ -123,6 +123,30 @@ repository and are not released yet. An early look at them is below.
 
 > **EARLY LOOK.** The remastered UEF units in these pictures are an early prototype: they are still being tested and changed, and everything you see may change before it is finished. The original (legacy) units, textures and look still work and can be used as they are - they just don't get the new looks and effects.
 
+![UEF against UEF on the land bridge: shields up, the real ocean all round](docs/images/showcase/17_battle_bridge_ocean.jpg)
+*UEF against UEF on the land bridge: shields up, the real ocean all round*
+
+![The beach in the afternoon](docs/images/showcase/18_battle_beach_day.jpg)
+*The beach in the afternoon*
+
+![Ships at sunset, their wakes on the open water](docs/images/showcase/19_ships_sunset.jpg)
+*Ships at sunset, their wakes on the open water*
+
+![Night: shields over the bridge, gunships overhead](docs/images/showcase/20_shields_night.jpg)
+*Night: shields over the bridge, gunships overhead*
+
+![Titans and Percivals in the thick of it](docs/images/showcase/21_titans_beams.jpg)
+*Titans and Percivals in the thick of it*
+
+![A storm over the battle](docs/images/showcase/22_storm_battle.jpg)
+*A storm over the battle*
+
+![Winter: the snow-covered bridge, ships off the beach](docs/images/showcase/23_snow_battle.jpg)
+*Winter: the snow-covered bridge, ships off the beach*
+
+![Dusk: a Fatboy goes down](docs/images/showcase/24_fatboy_death_dusk.jpg)
+*Dusk: a Fatboy goes down*
+
 ![Seton's Clutch Remastered, late afternoon](docs/images/showcase/01_scenery_dusk_bay.jpg)
 *Seton's Clutch Remastered, late afternoon*
 
@@ -134,42 +158,6 @@ repository and are not released yet. An early look at them is below.
 
 ![Snow](docs/images/showcase/04_scenery_snow_hill.jpg)
 *Snow*
-
-![UEF vs UEF on the land bridge](docs/images/showcase/05_battle_day_overview.jpg)
-*UEF vs UEF on the land bridge*
-
-![The beach, Riptides and Wasps](docs/images/showcase/06_battle_day_close.jpg)
-*The beach, Riptides and Wasps*
-
-![The clash on the bridge](docs/images/showcase/07_close_t900.jpg)
-*The clash on the bridge*
-
-![Titans and Percivals](docs/images/showcase/08_close_t1550.jpg)
-*Titans and Percivals*
-
-![Ships at dusk](docs/images/showcase/09_battle_dusk_water.jpg)
-*Ships at dusk*
-
-![Night: shields over the bridge](docs/images/showcase/10_battle_night_bridge.jpg)
-*Night: shields over the bridge*
-
-![Night fighting](docs/images/showcase/11_close_night_t900.jpg)
-*Night fighting*
-
-![A storm over the battle](docs/images/showcase/12_battle_rain_bridge.jpg)
-*A storm over the battle*
-
-![Fighting in the rain](docs/images/showcase/13_close_rain_t900.jpg)
-*Fighting in the rain*
-
-![Winter: the end of the Fatboys](docs/images/showcase/14_battle_snow_fatboys.jpg)
-*Winter: the end of the Fatboys*
-
-![Titans in the snow](docs/images/showcase/15_close_snow_t1550.jpg)
-*Titans in the snow*
-
-![Dusk: a Fatboy goes down](docs/images/showcase/16_fatboy_death_2.jpg)
-*Dusk: a Fatboy goes down*
 
 ## Simulation (`src/`)
 
