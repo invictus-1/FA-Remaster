@@ -34,6 +34,13 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
+## 51. To the ENGINE track: who fired a shell, in ProjectileView (2026-11-01, not blocking; agreed by the engine for later)
+
+What: `ProjectileView` gains the launching unit's blueprint id (or its entity id), as `BeamView::unit` has it: a shell's
+`Projectile::launcher` when that is a unit, "" otherwise. Why: the renderer draws a shell the way of the unit that fired it
+(byunit, docs/render-answers.md section 73's answer). For now `SimFrames::Beat` reads `Projectile::launcher` itself, read-only,
+from `sim.projectiles`. With the field, the renderer drops that read and includes no sim internals for it.
+
 ## 50. To the INTERFACE track: a setting for the units' lamp colour (2026-10-28, not blocking) - DONE
 
 **What:** a setting in the game's options (with the other looks, under the lighting or the units' looks): "Unit glow colour"

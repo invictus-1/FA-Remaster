@@ -201,6 +201,10 @@ struct Model {
     Print tread, tyre, foot;
     bool Any() const { return !tread.texture.empty() || !tyre.texture.empty() || !foot.texture.empty(); }
   } prints;
+  // [wingtips] A remastered aircraft's own contrails besides its blueprint's (its folder's <ID>_contrails.bp, Contrails { Bones =
+  // { 'Contrail_Left', 'Contrail_Right' } }; lower case): drawn from those bones too (MovementDust::Contrails), the simulation
+  // untouched (the Hummingbird's wingtips; its blueprint names only its Exhaust)
+  std::vector<std::string> contrailBones;
   // [plants] One of the game's trees (its blueprint's script class Tree or TreeGroup): the simulation knocks it over, burns
   // and removes it, so plants that react never bend or burn it by the picture alone (World::plantsReact).
   bool simTree = false;
