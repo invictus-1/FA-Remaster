@@ -4,6 +4,46 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## The machinery file as the renderer reads it today (2026-11-01, the whole format in one place)
+
+`<file>_machinery.json` sits beside a remastered unit's levels (`<ID>_lod0.scm` ...). Read by `render/machinery.cpp`
+(`ReadMachinery`); played by `Machinery::PoseUnit` for a game's units (`World::AddFrame`), the viewer's `--place` units and
+the effects stand. Picture only: the simulation never sees any of it.
+
+**Bones.** The moving parts are bones of lod0 and lod1 after the original's (never re-order or rename the original's). With
+the file present, the finest level's extra bones are appended to the simulation's skeleton by name (`AppendOwnBones`).
+lod2 and lod3 may leave them out: those parts stand at their idle pose. At most 256 bones per model.
+
+**Top level.**
+- `"states": {"blend": 0.5}`: seconds between rest and work.
+- `"bones": [...]`: the parts, parents before children.
+- `"lamps": [{"lamp": <index in lights.bp>, "period", "phase", "low", "ease": "sine" | "beat", "state"}]`: a lamp's strength
+  pulses between `low` and full. `"beat"` is a sharp flash and a slower fade.
+- `"glow": [{"bone", "period", "phase", "low", "ease", "state"}]`: the glow (specular blue) of every vertex on that bone pulses.
+  Give a lamp and its piece the same timing and they beat together.
+- `"state"` (lamps, glow, emitters): `"always"` (lamps' and glows' default), `"idle"` or `"building"` (emitters' default).
+
+**A part** (`"bones"` entry): `"bone"`, `"parent"` (an original bone or an earlier part), and two motions, `"building"`
+(while the factory builds) and `"idle"` (otherwise; a structure never builds, so its idle plays all the time). Each motion:
+- `"mode": "keys"`: `"keys": [[t, [rx, ry, rz], [tx, ty, tz], <scale>?, <ease>?], ...]` over `"period"` s with `"phase"`.
+  t is 0 to 1 and wraps from the last key to the first (give a t = 0 key). Rotation is Euler degrees applied X, then Y,
+  then Z, about the bone's head in its parent's axes at rest. Translation is in units. The optional scale (one number or
+  [sx, sy, sz]) scales the part in its own axes at rest. `"ease"`: `"sine"` (default) or `"linear"`, per motion or per key.
+- `"mode": "loop"`: `"axis"`, `"range": [from, to]`, `"gap"` (0 to 0.9). The part slides along the axis, then hides for the
+  gap and waits at the start, so it doesn't streak on its jump back.
+- `"mode": "scroll"` (building only, one belt per model): `"uv_rect": [u0, v0, u1, v1]`, `"axis": "u" | "v"`, `"speed"` (uv
+  per second). Every vertex on that bone slides its texture along the axis, wrapped within the rect.
+- `"emitters": [{"emitter": <effect blueprint path>, "of": <bone>?, "on_keys": [[t0, t1], ...]?, "state"}]`: plays on this
+  part in its state. Without `on_keys` it plays all through the state; `of` defaults to this part's own cycle.
+
+**Timing.** The parts work while the unit's work goes on (0 < workProgress < 1, its progress moving within the last half
+second). They run on the game's clock, so a paused game stops them, and each unit is offset a little in its cycle.
+Factories farther than 250 from the camera are not worked out (`Machinery::kFar`). `MOHO64_DEBUG_MACHINERY=1` makes every
+machinery factory work.
+
+**Lamps on parts.** A lights.bp entry's `Bone` may name an extra bone (one in the boned lod0): it is found after the
+append and follows the part's pose.
+
 ## To visuals, section 71: factory machinery as a production line (2026-10-30, afternoon)
 
 All six are taken, in the forms below, on top of section 70's `<ID>_machinery.json`. It is picture only: the extra bones come
