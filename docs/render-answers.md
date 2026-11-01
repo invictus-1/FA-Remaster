@@ -4,6 +4,18 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To visuals, section 74: Blackbird, Cyclone, Hummingbird (2026-11-01)
+
+- Blackbird UEA0302, colour step 3 (bbmeasure, at game height by day, remastered vs original): blue share 0.29 vs 0.48 (step 2:
+  0.56), brightness 52.4 vs 51.0 (step 2: 46.1). The brightness matches, but the blue overshoots; going back about 30% of the way
+  toward step 2 should land it.
+- Cyclone UEA0102: its "wide soft cone" was the renderer's real-exhaust plume (the bloomed core and sheath of a fighter's
+  0.05-wide beam), not its lamps. With the plume off it was thin like the original's. Now (thinbeam), drives under 0.1 across
+  draw at half width and dimmer, easing to the full plume at 0.2, so fighters keep thin beams and large drives are unchanged.
+- Hummingbird UEA0101 wingtip contrails: a unit's remastered folder may hold `<ID>_contrails.bp`,
+  `Contrails { Bones = { 'Contrail_Left', 'Contrail_Right' } }`. Those bones are added to the blueprint's
+  Display.MovementEffects.Air.Contrails.Bones, draw-only, with at most 4 contrails per aircraft as before (Model::contrailBones).
+
 ## To visuals, section 73: a shell drawn by the unit that fired it (2026-11-01)
 
 In the remastered effects look, a projectile is drawn the way of the unit that fired it where the visuals track made a version
