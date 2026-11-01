@@ -518,6 +518,17 @@ operations. The personality is printed at the start (`aiop ... personality`).
 - **What they cannot do:** a knob only moves a weight the AI already uses. None overrides its judgement: the battle
   estimate still decides every fight, and a retreat from a clearly weaker force stays impossible.
 - New ideas join these knobs and the decisions in ai-design-goals.md, so the AI stays one coherent player.
+- **The economy's knobs (phases 11-13, gathered 2026-11-01):** `kEconomy` beside `kBase`, read once by brain.lua and
+  choices.lua (`Tuning()`); personalities, stances and sliders do not lean them: `factoryEvery`, `energyPerMass`,
+  `reclaimPush`, `reclaimEngineersMax`, `upgradeEnergy`, `t1FactoriesWithHQ`, `t1FactoryFloat`, `techEngineersHQ`,
+  `investFloat` (what each does and why: 2.4).
+- **Ranges for a tuning harness:** `kRanges` (`Ranges()`) gives every knob of `kBase` and `kEconomy` a sane range, for
+  the automatic harness Chris approved (after multicore's parallel mode) that tries the knobs over seeded games
+  against M28 and FAF's AI; what it keeps is reviewed and its reasons written into ai-design-goals.md. The judge set's
+  tools (the aicore helper's `judge.sh`, `judgesum.py --json`, `techcurve.py --json`; into `tools/` with the
+  harness) print what it reads. Moving the
+  constants changed no game: the same sessions give the same fingerprints (FAF and M28 duels and the FAF veteran to
+  minute 20, the sliders session, 8 armies).
 
 The personality is a per-slot lobby option of ours beside the AI key (the ui's answer): `RemasterPersonality` in the
 slot's PlayerOptions, which reach the sim as `ScenarioInfo.ArmySetup[army]`. Its default is Random, drawn in the

@@ -28,7 +28,9 @@ local kDipSeconds = 120        -- the investments under way may cost at most K.i
 -- (the defence mark-down, the defences per site and under construction, the stall tolerance, the investment share
 -- and its safe margin are the knobs of personality.lua)
 local kLandSpeed = 3           -- world units a second: how far the enemy's land army travels in the payback window
-local kInvestFloat = 0.8       -- mass bar share from which the overflow goes to extractor upgrades first (phase 13)
+-- (personality.lua's kEconomy, with its range)
+local kInvestFloat = import("/lua/remastered/ai/personality.lua").Tuning().investFloat  -- mass bar share from which the
+                               -- overflow goes to extractor upgrades first (phase 13)
 local kInvestEnergy = 0.5      -- stored energy share under which no new extractor upgrade starts (phase 8)
 local kHoldLogTicks = 600      -- a "hold" decision for the same kind of investment is logged at most this often
 
