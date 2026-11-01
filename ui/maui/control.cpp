@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 #include "core/log.h"
 #include "maui/world_source.h"
@@ -140,6 +141,15 @@ void Control::SetAlpha(float a, bool children) {
     for (Control* c : children_) c->SetAlpha(a, true);
 }
 
+unsigned Control::AlphaByte() const {
+  const float scaled = alpha * 255.0f;
+  // (fisttp to 64 bits: out of range or NaN gives the indefinite integer, whose low dword is 0; then the low dword,
+  // compared without sign, is held to 255)
+  uint32_t low = 0;
+  if (scaled == scaled && std::fabs(scaled) < 9.2e18f) low = static_cast<uint32_t>(static_cast<uint64_t>(static_cast<int64_t>(scaled)));
+  return low > 255u ? 255u : low;
+}
+
 Control* CheckParent(lua_State* L) { return CheckControl<Control>(L, 2); }
 
 namespace {
@@ -223,9 +233,29 @@ int l_SetNeedsFrameUpdate(lua_State* L) {
   return 0;
 }
 
+// SetAlpha(alpha, children) (FA exe 0x789790): two or three arguments; a negative alpha is warned of and set to 0, one
+// above 1 warned of and kept (each with the alpha cut to an integer, cvttss2si, and the control's name); then the
+// control's alpha (+0xf0) and the alpha byte of its colour (+0xf7, AlphaByte), and with `children` those of
+// everything below it too (FAF's 0x12915bf: the control, then DepthFirstSuccessor). The control is given back.
 int l_SetAlpha(lua_State* L) {
-  CheckControl(L, 1)->SetAlpha(static_cast<float>(luaL_checknumber(L, 2)), lua_toboolean(L, 3) != 0);
-  return 0;
+  if (lua_gettop(L) < 2 || lua_gettop(L) > 3)
+    return luaL_error(L, "%s\n  expected between %d and %d args, but got %d",
+                      "SetAlpha(float, children) - Set the alpha of a given control, if children is true, also sets childrens alpha", 2, 3,
+                      lua_gettop(L));
+  lua_settop(L, 3);
+  Control* c = CheckControl(L, 1);
+  float a = static_cast<float>(luaL_checknumber(L, 2));  // (the original's Lua numbers are floats)
+  auto whole = [](float f) { return f == f && std::fabs(f) < 2.1e9f ? static_cast<int>(f) : -2147483647 - 1; };  // (cvttss2si)
+  if (a < 0.0f) {
+    Logf(LogLevel::Warning, "Attempting to set a negative alpha value (%d) on control %s, setting to 0", whole(a), c->name.c_str());
+    a = 0.0f;
+  } else if (a > 1.0f) {
+    Logf(LogLevel::Warning, "Attempting to set an alpha value higher than 1.0 (%d) on control %s, are you sure you wan to do that?",
+         whole(a), c->name.c_str());
+  }
+  c->SetAlpha(a, lua_toboolean(L, 3) != 0);
+  lua_settop(L, 1);
+  return 1;
 }
 int l_GetAlpha(lua_State* L) {
   lua_pushnumber(L, CheckControl(L, 1)->alpha);
