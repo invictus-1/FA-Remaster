@@ -285,6 +285,13 @@ class ModelCache {
   // UEF's build cube names /meshes/generic/cube02_albedo.dds), not only under /effects/.
   const Model* Blueprint(const std::string& blueprintPath, bool original = false, const std::string& faction = std::string(),
                          bool effect = false);
+  // [byunit] A shell drawn the way of the unit that fired it (`unit`, its blueprint id), in the remastered look: the visuals
+  // track's projectiles/<ID>/by_unit/<UNIT>/<ID>_lod0.scm and its textures beside it (mounted with the shell's own folder,
+  // MountRemasters), at the shell blueprint's scale. nullptr where it made none for that unit: the shell's usual model then.
+  const Model* ShotByUnit(const std::string& blueprintPath, const std::string& unit);
+  // [byunit] The same folder's version of an emitter or trail a shell makes (`effect`, the path the script names), as a path
+  // to read ("/remastered/projectiles/<id>/by_unit/<unit>/<file>"); "" where there is none.
+  std::string ShotEffectByUnit(const std::string& blueprintPath, const std::string& effect, const std::string& unit);
   // A model from a mesh file and an albedo texture named outright, with a shader's name (what the
   // game's interface script places in the world, placed.h). One level; `uniformScale` is its scale.
   const Model* Mesh(const std::string& meshPath, const std::string& albedoPath, const std::string& shader, float uniformScale = 1);
@@ -416,6 +423,7 @@ class ModelCache {
   bool makingAhead_ = false;
   gfx::Device* device_;
   const moho::Vfs* vfs_;
+  std::unordered_map<std::string, bool> byUnitFiles_;  // [byunit] (ShotEffectByUnit: whether the file is there)
   TextureCache* textures_;
   std::unordered_map<std::string, std::unique_ptr<Model>> models_;
   std::unordered_map<std::string, PersonalShieldLook> personalShields_;  // by unit id

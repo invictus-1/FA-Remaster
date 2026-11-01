@@ -1015,6 +1015,7 @@ struct Ent {
   float fraction = 1;                // a unit's fraction complete (one being built: from 0)
   uint32_t parent = 0;               // it goes with that entity's bone (AttachBoneTo -2, AttachTo)
   int parentBone = -1;
+  uint32_t launcher = 0;             // [byunit] a shell: the blueprint index of the unit that fired it (FrameProjectile::launcher)
   // a unit driven round a loop (the stand's --fx-move: the engine's motion, stood in for): the loop's
   // points and the distance along it at each, its blueprint's speed, acceleration, elevation and way
   // of moving, the horizontal motion state the scripts were told (0 Cruise, 1 TopSpeed, 2 Stopping,
@@ -1866,6 +1867,8 @@ int SpawnEntity(lua_State* L) {
   e.position = parent ? from + (m.units ? offset : Rotate(parent->turn, offset)) : offset;
   e.original = parent ? parent->original : m.spawnOriginal;
   e.side = parent ? parent->side : m.spawnSide;
+  // [byunit] (what a unit made: that unit's; what a shell made: the shell's own)
+  if (parent) e.launcher = parent->unit && !parent->unitId.empty() ? m.BlueprintIndex(parent->unitId) : parent->launcher;
   e.direction = hasDirection && Length(d) > 1e-6f ? Normalize(d) : parent ? parent->direction : Vec3{0, 0, 1};
   e.velocity = e.direction * Num(L, 10);
   e.lifetime = Num(L, 11);
@@ -3567,6 +3570,7 @@ void FxEntities::Advance(double now) {
       p.age = static_cast<float>(m.now - e.born);
       p.original = e.original;
       p.seen = !e.unseen;
+      p.launcher = e.launcher;  // [byunit]
       m.frame.projectiles.push_back(p);
     } else {
       FrameEntity f;

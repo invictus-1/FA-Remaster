@@ -2734,6 +2734,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     // (a shot's model is an effect's: the remastered look takes the visuals track's where there is one)
     if (shotsLook_ != effectsLook) {
       shotModels_.clear();
+      shotsByUnit_.clear();
       shotsLook_ = effectsLook;
     }
     const bool original = effectsLook == EffectsLook::Original || p.original;
@@ -2743,6 +2744,13 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       const bool effect = moho::Vfs::Normalize(blueprint).compare(0, 9, "/effects/") == 0;
       return blueprint.empty() ? nullptr : models.Blueprint(blueprint, original, std::string(), effect);
     });
+    // [byunit] the shell of the unit that fired it, where the visuals track made one (the Pillar's larger Gauss shell)
+    if (!original && p.launcher && p.launcher < frame.blueprints->size() && !blueprint.empty()) {
+      const uint64_t key = (static_cast<uint64_t>(p.blueprint) << 32) | p.launcher;
+      auto own = shotsByUnit_.find(key);
+      if (own == shotsByUnit_.end()) own = shotsByUnit_.emplace(key, models.ShotByUnit(blueprint, (*frame.blueprints)[p.launcher])).first;
+      if (own->second && own->second->ok) model = own->second;
+    }
     // (ripples: its splash where it lands in the water, or goes down through it)
     const float shotSize = model && model->ok ? Length(model->boundsMax - model->boundsMin) * 0.5f * model->scale : 0.0f;
     if (!extraView) water.ripples.AddShot(p.id, position, p.stopped, shotSize);  // [views]
