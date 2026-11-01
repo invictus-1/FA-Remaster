@@ -534,6 +534,21 @@ local looks = {
             },
         },
     },
+    {
+        -- the renderer's HotMetal::softScorch (render 5d77cf6; Chris: the remastered look the default, the old one kept)
+        title = "Scorch Glow",
+        key = 'remaster_scorch',
+        tip = "A fresh scorch where a unit died, while its metal is still hot: Soft, a deep-red bed with bright cracks; Bright, the earlier orange-hot sheet. Needs Battle Effects on.",
+        type = 'toggle',
+        default = 1,
+        set = Look("remaster_scorch"),
+        custom = {
+            states = {
+                { text = "Bright", key = 0 },
+                { text = "Soft", key = 1 },
+            },
+        },
+    },
 }
 
 -- Ray Tracing's default (Chris, 2026-10-18: every look on at its highest): On where the card can ray trace; where it
