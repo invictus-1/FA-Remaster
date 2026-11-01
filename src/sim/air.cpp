@@ -2626,11 +2626,17 @@ bool AirNavArrival(Sim& sim, Unit* u) {
       }
     }
     if (at) {
+      // Succeeded wakes the task that listens to the navigator (re-linked at the stage's new end): a move task, a
+      // patrol's or a task's walking child, as for a land navigator (NavEventWakesCommandThread, asked before the goal
+      // is gone). An attack task has no navigator listener, and a refuel's own goal has none either. Seen (probe
+      // mp1_18516d): MP1 18259 / 18300, army 3's gunship 0x3002ac reaches its attack-run goal on its Attack; ours
+      // re-linked its command thread at the end, so at 18510 its patrol ran after 0x3002c3's and 0x3002e5's and the
+      // three drew each other's target points on 0x600123 (0x3002c3 and 0x3002e5 circled each other's at 18516).
+      const bool wake = NavEventWakesCommandThread(u) && !RefuelGoalWakesNobody(u);
       a.steering = false;
       m.hasGoal = false;
       m.arrived = true;
-      // Succeeded wakes the move task (re-linked at the stage's new end); a refuel's own goal has no listener
-      if (!RefuelGoalWakesNobody(u)) sim.ResumeCommandThread(u);
+      if (wake) sim.ResumeCommandThread(u);
       // MOHO64_DEBUG_AIRARRIVE=1: every arrival, with what the unit was doing
       static const bool dbgArrive = getenv("MOHO64_DEBUG_AIRARRIVE") != nullptr;
       if (dbgArrive)
