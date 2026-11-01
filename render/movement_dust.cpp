@@ -708,8 +708,11 @@ void MovementDust::Contrails(uint32_t id, Unit& u, const Model* model, Vec3 posi
   if (kind.resolvedFor != model) {  // (its engines' bones in this model, found by their names once)
     kind.resolvedFor = model;
     kind.engineBones.clear();
-    for (const std::string& e : kind.engines)
-      for (size_t b = 0; b < model->bones.size(); ++b)
+    std::vector<std::string> names = kind.engines;
+    for (const std::string& e : model->contrailBones)  // [wingtips] (and those its remastered folder adds)
+      if (std::find(names.begin(), names.end(), e) == names.end()) names.push_back(e);
+    for (const std::string& e : names)
+      for (size_t b = 0; b < model->bones.size() && kind.engineBones.size() < 4; ++b)
         if (Lower(model->bones[b].name) == e) {
           kind.engineBones.push_back(static_cast<int>(b));
           break;

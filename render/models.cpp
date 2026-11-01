@@ -1500,6 +1500,17 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
     ownTreadsScroll = t["Scrolling"].kind == BpValue::Bool && t["Scrolling"].boolean;
     ownTreadsHeight = ownTreadsScroll && t["Height"].kind == BpValue::Bool && t["Height"].boolean;
   }
+  // [wingtips] its own contrails besides its blueprint's (its folder's <file>_contrails.bp: Model::contrailBones)
+  if (previewed && stem.empty()) {
+    const std::string contrails = preview + file + "_contrails.bp";
+    auto text = vfs_->Exists(contrails) ? vfs_->ReadFile(contrails) : std::nullopt;
+    BpValue t;
+    if (text && !ReadBlueprintFile(*text, &t)) fprintf(stderr, "render: %s: cannot be read\n", contrails.c_str());
+    for (const BpValue& b : t["Bones"].items) {
+      const std::string bone = Lower(b.StringOr(std::string()));
+      if (!bone.empty()) m->contrailBones.push_back(bone);
+    }
+  }
   // [hdprints] its own ground prints for the deep tracks (its folder's <file>_prints.bp: Model::prints); a picture named
   // without a folder lies in the unit's folder
   if (previewed && stem.empty()) {
