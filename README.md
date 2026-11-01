@@ -147,6 +147,39 @@ repository and are not released yet. An early look at them is below.
 ![Dusk: a Fatboy goes down](docs/images/showcase/24_fatboy_death_dusk.jpg)
 *Dusk: a Fatboy goes down*
 
+![UEF against UEF on the land bridge: shields up, the real ocean all round](docs/images/showcase/17_battle_bridge_ocean.jpg)
+*UEF against UEF on the land bridge: shields up, the real ocean all round*
+
+![The beach in the afternoon](docs/images/showcase/18_battle_beach_day.jpg)
+*The beach in the afternoon*
+
+![Ships at sunset, their wakes on the open water](docs/images/showcase/19_ships_sunset.jpg)
+*Ships at sunset, their wakes on the open water*
+
+![Night: shields over the bridge, gunships overhead](docs/images/showcase/20_shields_night.jpg)
+*Night: shields over the bridge, gunships overhead*
+
+![Titans and Percivals in the thick of it](docs/images/showcase/21_titans_beams.jpg)
+*Titans and Percivals in the thick of it*
+
+![A storm over the battle](docs/images/showcase/22_storm_battle.jpg)
+*A storm over the battle*
+
+![Winter: the snow-covered bridge, ships off the beach](docs/images/showcase/23_snow_battle.jpg)
+*Winter: the snow-covered bridge, ships off the beach*
+
+![Dusk: a Fatboy goes down](docs/images/showcase/24_fatboy_death_dusk.jpg)
+*Dusk: a Fatboy goes down*
+
+![A T2 land factory at work, its machinery building a Pillar](docs/images/showcase/25_factory_building.jpg)
+*A T2 land factory at work, its machinery building a Pillar*
+
+![A Fatboy firing at dusk](docs/images/showcase/26_fatboy_firing_dusk.jpg)
+*A Fatboy firing at dusk*
+
+![A strategic nuke over Seton's Clutch](docs/images/showcase/27_nuke.jpg)
+*A strategic nuke over Seton's Clutch*
+
 ![Seton's Clutch Remastered, late afternoon](docs/images/showcase/01_scenery_dusk_bay.jpg)
 *Seton's Clutch Remastered, late afternoon*
 
