@@ -605,6 +605,10 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
         const Vec3 builderAt = factory ? at : at - away * (setup_.spacing * 0.5f);
         FxEntities::UnitPlace builderHow = how;
         if (!factory) builderHow.forward = away;  // (facing what it builds)
+        // [square] a factory stands square to the map as the game places a structure (its pad laid square under it; Chris,
+        // 2026-11-01: a factory turned against its pad in the showcase), the one it builds facing the same way
+        const Vec3 f = builderHow.forward;
+        if (factory) how.forward = builderHow.forward = std::fabs(f.x) > std::fabs(f.z) ? Vec3{f.x > 0 ? 1.0f : -1.0f, 0, 0} : Vec3{0, 0, f.z > 0 ? 1.0f : -1.0f};
         side.unit = entities_->AddUnit(setup_.build, builderAt, builderHow, &why);
         if (!side.unit) fprintf(stderr, "render: --fx-build: %s\n", why.c_str());
         // (buildfx: --fx-build-count, more engineers round it, each building it too)
