@@ -180,17 +180,20 @@ repository and are not released yet. An early look at them is below.
 ![A strategic nuke over Seton's Clutch](docs/images/showcase/27_nuke.jpg)
 *A strategic nuke over Seton's Clutch*
 
-![Seton's Clutch Remastered, late afternoon](docs/images/showcase/01_scenery_dusk_bay.jpg)
+![Seton's Clutch Remastered, late afternoon](docs/images/showcase/28_scenery_dusk_bay.jpg)
 *Seton's Clutch Remastered, late afternoon*
 
-![The rock hill](docs/images/showcase/02_scenery_day_hill.jpg)
+![The land bridge's coast and the open sea](docs/images/showcase/29_scenery_coast.jpg)
+*The land bridge's coast and the open sea*
+
+![The rock hill](docs/images/showcase/30_scenery_rock_hill.jpg)
 *The rock hill*
 
-![Rain over the meadows](docs/images/showcase/03_scenery_rain_meadow.jpg)
+![Rain over the meadows](docs/images/showcase/31_scenery_rain.jpg)
 *Rain over the meadows*
 
-![Snow](docs/images/showcase/04_scenery_snow_hill.jpg)
-*Snow*
+![Snow on the rock hill](docs/images/showcase/32_scenery_snow.jpg)
+*Snow on the rock hill*
 
 ## Simulation (`src/`)
 
