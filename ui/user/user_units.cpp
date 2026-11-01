@@ -2497,7 +2497,12 @@ int l_SetPaused(lua_State* L) {
   InfoPair(L, 1, "SetPaused", lua_toboolean(L, 2) ? "true" : "false");
   return 0;
 }
+// SetAutoMode(units, on) (FA exe 0x8bade0, READ): exactly two arguments; "SetAutoMode" "true" | "false" for every
+// unit that is not destroyed. FAF's silo build buttons call it on a right click (orders.lua 367). (The error's usage
+// text, the original's string at [0x10c599c], is not read: INFERRED.)
 int l_SetAutoMode(lua_State* L) {
+  if (lua_gettop(L) != 2)
+    return luaL_error(L, "%s\n  expected %d args, but got %d", "SetAutoMode(units, on)", 2, lua_gettop(L));
   InfoPair(L, 1, "SetAutoMode", lua_toboolean(L, 2) ? "true" : "false");
   return 0;
 }
@@ -2645,18 +2650,45 @@ int l_IssueDockCommand(lua_State* L) {
     Writer(L).ProcessInfoPair(selected.front()->view.id, foundAny ? "PlayBusyStagingPlatformsVO" : "PlayNoStagingPlatformsVO", "play");
   return 0;
 }
+// SetFireState(units, newFireState) (FA exe 0x8bba10, READ): exactly two arguments; the state is passed on as the
+// string it is (lua_tostring, 0x8bbb02: a number becomes its digits; neither a string nor a number is a type error),
+// one info pair "SetFireState" per unit that is not destroyed. FAF's fire-state pop-up (orders.lua 825) gives the
+// state's name, 'ReturnFire', 'HoldFire' or 'HoldGround'; the simulation's Unit:SetFireState takes a name or a number.
+// (Before 2026-10-31 ours asked for a number, so a pick in the pop-up was a Lua error and nothing changed.)
+// (The original sends it for every unit of the list and leaves the army to the simulation, Sim::ProcessInfoPair's
+// OkayToMessWith; ours sends it for the player's own units only, as InfoPair does for the other switches.)
 int l_SetFireState(lua_State* L) {
-  InfoPair(L, 1, "SetFireState", std::to_string(static_cast<int>(luaL_checknumber(L, 2))));
+  if (lua_gettop(L) != 2)
+    return luaL_error(L, "%s\n  expected %d args, but got %d", "SetFireState(units, newFireState)", 2, lua_gettop(L));
+  const char* state = lua_tostring(L, 2);
+  if (!state) luaL_typerror(L, 2, "string");
+  InfoPair(L, 1, "SetFireState", state);
   return 0;
 }
-int l_ToggleFireState(lua_State* L) {  // the next of the three states
-  int current = static_cast<int>(luaL_optnumber(L, 2, 0));
-  InfoPair(L, 1, "SetFireState", std::to_string(current < 0 ? 0 : (current + 1) % 3));
+// ToggleFireState(units, currentFireState) (FA exe 0x8bb760, READ): exactly two arguments, the current state a number
+// (lua_type 3, else a type error "integer", 0x8bb7dd); the next one is (current + 1) % 3 as C divides (0x8bb815..
+// 0x8bb822: -1, mixed, gives 0), sent by its name, the EFireState enum's lexical value (RRef::GetLexical 0x8bb8d5;
+// the enum's names, 0x55ba50: Mix -1, ReturnFire 0, HoldFire 1, HoldGround 2, their FIRESTATE_ prefix stripped).
+// FAF's mode key (orders.CycleRetaliateStateUp) gives GetFireState's value.
+int l_ToggleFireState(lua_State* L) {
+  if (lua_gettop(L) != 2)
+    return luaL_error(L, "%s\n  expected %d args, but got %d", "ToggleFireState(units, currentFireState)", 2, lua_gettop(L));
+  if (lua_type(L, 2) != LUA_TNUMBER) luaL_typerror(L, 2, "integer");
+  const int next = (static_cast<int>(lua_tonumber(L, 2)) + 1) % 3;
+  // (a value outside the enum, only from a current state below -2, as its digits: INFERRED, not read)
+  static const char* const kNames[] = {"Mix", "ReturnFire", "HoldFire", "HoldGround"};
+  InfoPair(L, 1, "SetFireState", next >= -1 && next <= 2 ? kNames[next + 1] : std::to_string(next));
   return 0;
 }
-// (FA exe 0x8bbe60: only the units whose toggles have the bit and whose bit is now curState.)
+// ToggleScriptBit(units, bit, curState) (FA exe 0x8bbe60, READ): exactly three arguments, the bit a number (lua_type
+// 3, else a type error "integer"); only the units whose toggles have the bit and whose bit is now curState, each told
+// "ToggleScriptBit" with the bit's number ("%d", 0x8bbf44). FAF's toggle buttons (orders.lua 562..564) and its
+// toggle keys (misckeyactions.toggleScript) call it with GetScriptBit's answer.
 int l_ToggleScriptBit(lua_State* L) {
-  const int bit = static_cast<int>(luaL_checknumber(L, 2));
+  if (lua_gettop(L) != 3)
+    return luaL_error(L, "%s\n  expected %d args, but got %d", "ToggleScriptBit(units, bit, curState)", 3, lua_gettop(L));
+  if (lua_type(L, 2) != LUA_TNUMBER) luaL_typerror(L, 2, "integer");
+  const int bit = static_cast<int>(lua_tonumber(L, 2));
   const bool cur = lua_toboolean(L, 3) != 0;
   std::vector<UserUnit*> list, which;
   ReadUnitList(L, 1, &list);
