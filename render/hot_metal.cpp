@@ -87,7 +87,7 @@ float3 HotMetalGlow(float age, float seconds, float3 shape, float turn, bool own
 // the mark, -1..1 across; `cover`: how much of its picture is there (its alpha); `age`, `seconds` as above; `seed` the
 // mark's own number. Its middle, ragged, is a bed of embers in clumps, the hotter the nearer the middle, so that as it
 // cools the glow draws in to the middle; a few cracks in the ground run through it.
-float3 HotGroundGlow(float2 local, float cover, float age, float seconds, float seed) {
+float3 HotGroundGlow(float2 local, float cover, float age, float seconds, float seed, bool soft) {
   float tau = seconds * 1.55;
   float r = length(local);
   float middle = saturate(1 - r / (0.65 * (0.75 + 0.5 * CloudNoise(float3(local * 2.5, seed)))));
@@ -107,7 +107,8 @@ float3 HotGroundGlow(float2 local, float cover, float age, float seconds, float 
   float crack = (1 - smoothstep(0.015, 0.06, d2 - d1)) * smoothstep(0.45, 0.7, CloudNoise(float3(local * 5, seed + 4.2))) * saturate(middle * 2.5);
   float there = smoothstep(0.05, 0.3, cover);
   float bed = sqrt(saturate(middle * 1.8)) * (0.6 + 0.4 * embers) * there;
-  float kelvin = max(HotMetalKelvin(300 + 1050 * bed, age, tau), HotMetalKelvin(300 + 900 * crack * there, age, tau * 0.8));
+  // ([softscorch] the broad bed no hotter than a deep red, ground being no metal: the light is in the cracks)
+  float kelvin = max(HotMetalKelvin(300 + (soft ? 560 : 1050) * bed, age, tau), HotMetalKelvin(300 + 900 * crack * there, age, tau * 0.8));
   kelvin *= 1 + 0.035 * (CloudNoise(float3(local * 6, time * 0.6 + seed)) - 0.5);
   return HotMetalColour(kelvin);
 }
