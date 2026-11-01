@@ -639,7 +639,13 @@ bool NoBlockingUnits(Sim& sim, Unit* u, float x0, float z0, float x1, float z1) 
   bool blocked = false;
   const bool selfTransport = u->transport != nullptr;
   const bool loading = selfTransport && State(u, US("TransportLoading"));
-  sim.ForUnitsInRect(x0 - 8, z0 - 8, x1 + 8, z1 + 8, [&](Unit* o) {
+  // (the candidates come by their centre here, the original's by their grid cells (GatherUnmarkedUnitsInBox 0x721c00):
+  // the margin has to cover half the longest hull, as in the formation spots' CanMoveAt. Seen (probe mp1_18437b): MP1
+  // 18431, army 1's carrier 0x10019b (uas0303) sails at (77.90, 298.35), its box reaching down to z 289.96; about
+  // 35 of army 1's engineers guarding 0x1001ce re-pick their anchors on the row z 289 every beat: the original refuses
+  // the cells x 72..82 under the carrier and sends 0x100157 to (88,289), 0x100165 to (90,289) and the rest to the
+  // column x 92; ours, looking only 8 around the cell, missed the carrier and kept the row.)
+  sim.ForUnitsInRect(x0 - 32, z0 - 32, x1 + 32, z1 + 32, [&](Unit* o) {
     if (blocked || o == u || o->dead || o->destroyQueued || o->fractionComplete < 1.0f) return;
     if (o->layer == "Air") return;
     if (u->layer == "Sub" && o->layer != "Sub") return;
