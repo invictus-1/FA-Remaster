@@ -46,6 +46,9 @@ class HotMetal {
   float wreckSeconds = 55;
   // How long a scorch or crater a world unit across glows; larger ones longer (to the power 0.8), at most a minute.
   float craterSeconds = 4.5f;
+  // [softscorch] A fresh scorch's or crater's broad middle starts at a deep red, its cracks still bright (Chris, 2026-11-01:
+  // the orange sheet a death laid on the ground at its start was too bright); false: as before, the whole middle orange-hot.
+  bool softScorch = true;
   // At most this many small lights from hot things at once (the hottest near what the camera looks at), and how
   // bright one is at the start (as Lights::Add's colour: 1 lights a surface as the sun does).
   int mostLights = 3;

@@ -180,7 +180,8 @@ float4 PS(VOut i) : SV_Target {
     float2 local = float2(d.x * i.shape.z - d.z * i.shape.w, d.x * i.shape.w + d.z * i.shape.z) / i.shape.xy;
     if (any(abs(local) > 1)) discard;
     float4 c = decalTexture.Sample(samplerAniso, local * 0.5 + 0.5);
-    float3 glow = HotGroundGlow(local, c.a, i.options.x, i.options.y, i.options.w) * (kHotMetalStrength * pow(falling.w > 0 ? falling.w : 1, 0.6));
+    float3 glow = HotGroundGlow(local, c.a, i.options.x, i.options.y, i.options.w, i.options.z > 6.5) *  // ([softscorch] light 7)
+                  (kHotMetalStrength * pow(falling.w > 0 ? falling.w : 1, 0.6));
     if (max(glow.r, glow.g) <= 0) discard;  // (nothing glows there: nothing written)
     return float4(ThroughAirTo(glow, world) - ThroughAirTo(0, world), 1);
   }
@@ -773,7 +774,7 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
         Instance h = n;
         h.alpha = age;
         h.age = seconds;
-        h.light = 6;
+        h.light = heat->softScorch ? 7.0f : 6.0f;  // ([softscorch] the shader: 7 the broad middle a deep red)
         h.glow = static_cast<float>(d.id % 97);
         visible_.push_back({d.texture.id, 0, 0, 5, h});
       }
