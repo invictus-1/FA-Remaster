@@ -287,6 +287,12 @@ scouting, the army and expansion, not one after the other.
   land factories unless mass fills 60% of the bar; up to 10 T2+ engineers are kept with an HQ (one more every 2
   minutes after minute 6). Upgrading many factories at once had lost the M28 games (phases 11-12): an upgrading
   factory makes nothing for 1-2 minutes, in the window M28 pushes.
+- **Phase 13c, piling mass goes into extractor upgrades first.** The extractor upgrades are taken in order of payback,
+  then distance from the start, then entity id (before: the engine's list order, and the first one over the budget
+  stopped them all). With the mass bar at 80% or more (`kInvestFloat`) they get the whole investment share, not half
+  while the army is short, and all that is stored. While an upgrade could start (`R.upgradesOpen`), piling mass does
+  not build land factories: the T1 factories are the sink only when no upgrade can go. Against M28 we had 6-16
+  upgraded extractors at minute 15 and our bar overflowed; with 13c, 24-40 (M28 25-26).
 - **Phase 9, the economy into an army.** The army probe (each army's mass in army, engineers, economy, factories and
   defences every minute) showed our army at minute 10 at 500-1,800 mass against 2,700-6,000, with our economy ahead of
   FAF's and three quarters of M28's: the army kept followed the enemy's known army, and with fog that is a fraction of
@@ -1251,6 +1257,12 @@ both-modes check, multicore.md 1).
     0.81 main, 0.79 13a, 0.76 13b; minute 15 0.50 / 0.50 / 0.43; minute 20 0.18 / 0.28 / 0.21. At minute 15 we have 2-6
     T2 land factories (main 0-1) against M28's 5-10 T2 and 0-2 T3, and 6-16 upgraded extractors against 19-26; by
     minute 20 M28 runs 45-58 upgraded extractors and earns 400-520 mass a second, and our extractors fall to raids.
+  - **Phase 13c (piling mass into extractor upgrades first, on 13b):** M28 29.4 / 24.3 / 26.1 / 24.9 (median 25.5),
+    mass lost per mass killed 9.4; FAF veteran lost at 38.1 and 41.2 (1.75).
+  - **The economy gap closes by half** (our income / M28's, median): minute 10 **1.01** (main 0.81), minute 15
+    **0.83** (0.50), minute 20 **0.54** (0.18). At minute 15 we earn 159-284 mass a second against M28's 257-282.
+    What still opens the gap after minute 15: our extractors fall to raids (24-40 upgraded at minute 15, 10-36 at
+    minute 20) while M28 keeps upgrading (51-56).
   - Tried in the same round and left out: counting factories ordered but not started (only 4-5 land factories at
     minutes 10-12 and 11,000 mass overflowed: many factory orders never become factories, and the T1 factories are
     our only mass sink), spending overflowing mass on extractor upgrades (income up 10-20%, survival the same), T2
@@ -1268,6 +1280,7 @@ both-modes check, multicore.md 1).
 | 4 (first form built 2026-10-29) | Strategic and operation layers: aggression with hysteresis, objectives, gathering, push, retreat by estimate, raids, navy and air domains, combined arms timing. Built: the zone estimate from the index (fair intel, memory, reinforcements on the way, kiting), defend / attack / push / raid with commit rules and logged decisions, tech upgrades. Not yet: gathering, navy and air, combined arms | Ours vs M28 and FAF's AI, several seeds: the fight scores of section 6; "never fled a weaker force" at zero faults. First duels: 0 faults, 3 losses and one 60-minute game without a result (section 6) |
 | 5 (first form built 2026-10-29) | Economy in parallel with scouting, army and expansion (power ahead but not wasted, factory floor, engineers by distance and away from enemies, reclaim, storage, timed assists); counters by build value; defences as build candidates; investments by payback and danger with a planned dip; the strategy layer's read of the enemy and stances; attacks on armies and expansions with gathering and reinforcements via the staging zone; guard posts; the knobs in one place (decisions 13-16) | The five duels of section 6 (mass / s at 5 / 15 / 30 minutes, mass lost per enemy mass killed); the 16 + B1 / b8 identical; our-key sessions identical at 1 / 32 threads, shuffle, reverse |
 | 6a (first form built 2026-10-30) | Map control: the army kept against the enemy's known army, guard posts sized by the threat and lost zones taken back, reclaim fields; each enemy read on its own (the focus enemy); the player's two sliders (aggression, economy) with bounds; the duels with fog of war | The duels of section 6 with fog; the 16 + B1 / b8 identical; our-key fogged sessions identical at 1 / 32 threads, shuffle, reverse |
+| 13c (first form built 2026-11-01) | Piling mass goes into extractor upgrades first (payback, distance, id order; the whole share above 80% of the mass bar), T1 factories only when no upgrade can start | The judge set and the income probe (income ratio at minutes 10 / 15 / 20); our-key fogged sessions identical at 1 / 32 threads, shuffle, reverse |
 | 13b (first form built 2026-11-01) | T2 through new factories: upgrades chosen before the production orders, land factories upgraded only for the next HQ, support factories by T2+ builders, T1 factories held at 6 with an HQ unless mass piles up, more T2 engineers | The judge set and the income probe (income ratio and factory tiers at minutes 10 / 15 / 20); our-key fogged sessions identical at 1 / 32 threads, shuffle, reverse |
 | 13a (first form built 2026-11-01) | The reclaim push: engineers for the reclaim near the start built and reclaiming whatever the army's state (one per 250 mass, at most 40) | The judge set (M28 recruit seeds 1001-4004, FAF veteran 2002 / 3003, medians), the income probe; our-key fogged sessions identical at 1 / 32 threads, shuffle, reverse |
 | 12a (first form built 2026-10-31) | The battle estimate fires on and reads what fights (structures and engineers no longer soak the fire); the old read kept for the defence and the posts (`soak`) | The army set with more seeds (13 games, 20 minutes); the duels of section 6 with fog, won / lost read from the armies' state; our-key fogged sessions identical at 1 / 32 threads, shuffle, reverse; b8 identical |

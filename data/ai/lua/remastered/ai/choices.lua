@@ -28,6 +28,7 @@ local kDipSeconds = 120        -- the investments under way may cost at most K.i
 -- (the defence mark-down, the defences per site and under construction, the stall tolerance, the investment share
 -- and its safe margin are the knobs of personality.lua)
 local kLandSpeed = 3           -- world units a second: how far the enemy's land army travels in the payback window
+local kInvestFloat = 0.8       -- mass bar share from which the overflow goes to extractor upgrades first (phase 13)
 local kInvestEnergy = 0.5      -- stored energy share under which no new extractor upgrade starts (phase 8)
 local kHoldLogTicks = 600      -- a "hold" decision for the same kind of investment is logged at most this often
 
@@ -344,9 +345,18 @@ function Investments(brain, ctx)
     -- the income the budget counts is smoothed (about a minute), so a burst of reclaim does not pass for an economy
     R.massAvg = (R.massAvg or income) + (income - (R.massAvg or income)) * 0.02
     -- (phase 9: while the army is short of what the economy should keep, the investments get half the share)
-    local budget = R.massAvg * kDipSeconds * K.investShare * (R.armyShort and 0.5 or 1) + 0.5 * stored - committed
+    -- (phase 13: unless mass piles up, kInvestFloat of the bar or more: then the whole share and all that is stored -
+    -- the overflow goes to extractor upgrades before T1 factories (brain.lua reads R.upgradesOpen). Against M28 the
+    -- bar sat full at minutes 10-13 and 2,300-3,600 mass overflowed while it ran 9-15 upgrades at once and we 1-5;
+    -- spending the overflow on upgrades raised our income 10-20% in the judge games.)
+    local floating = brain:GetEconomyStoredRatio('MASS') >= kInvestFloat
+    local budget = R.massAvg * kDipSeconds * K.investShare * ((R.armyShort and not floating) and 0.5 or 1) +
+        (floating and 1 or 0.5) * stored - committed
     local enemyKnown = (R.enemyKnownZones or 0) > 0
     local danger = {}  -- zone -> margin, theirs mass (one estimate per zone and payback window)
+    -- (phase 13: the candidates in order of payback, then distance from the start, then entity id - the cheapest and
+    -- safest gain first; before, the engine's list order, and the first one over the budget stopped them all)
+    local list = {}
     for _, m in ipairs(brain:GetListOfUnits(categories.MASSEXTRACTION * categories.STRUCTURE, false)) do
         if m:GetFractionComplete() >= 1 and not m.Dead and m:IsIdleState() and
             not EntityCategoryContains(categories.TECH3, m) then
@@ -356,7 +366,24 @@ function Investments(brain, ctx)
             local _, now = Economy(from)
             gain = gain - now
             if cost > 0 and gain > 0 then
-                local payback = cost / gain
+                local p = m:GetPosition()
+                local dx, dz = p[1] - R.startX, p[3] - R.startZ
+                table.insert(list, { m = m, from = from, to = to, cost = cost, payback = cost / gain,
+                    d = dx * dx + dz * dz, id = tonumber(m:GetEntityId()) or 0 })
+            end
+        end
+    end
+    table.sort(list, function(a, b)
+        if a.payback ~= b.payback then return a.payback < b.payback end
+        if a.d ~= b.d then return a.d < b.d end
+        return a.id < b.id
+    end)
+    R.upgradesOpen = false
+    for _, c in ipairs(list) do
+        local m, from, to, cost = c.m, c.from, c.to, c.cost
+        do
+            do
+                local payback = c.payback
                 local p = m:GetPosition()
                 local z = Remastered.AIZoneAt(p[1], p[3], 'land')
                 if z <= 0 then z = R.startZone end
@@ -390,6 +417,7 @@ function Investments(brain, ctx)
                 end
                 local d = danger[key]
                 if d.theirs <= 0 or d.margin >= K.investSafe then
+                    R.upgradesOpen = true  -- (an upgrade can go here: piling mass waits for it, not for a factory)
                     IssueUpgrade({ m }, to)
                     budget = budget - cost
                     LOG(string.format('aiinv %d %d invest %s zone %d payback %.0fs danger %.2f enemy %.0f | %s',

@@ -188,7 +188,7 @@ AIBrain = Class(StandardBrain) {
             if bp and bp.Economy and (bp.Economy.BuildCostMass or 0) > 0 then return '!' .. id end
         end
         if hq >= 2 and ctx.landFactories >= kT1FactoriesWithHQ and
-            self:GetEconomyStoredRatio('MASS') < kT1FactoryFloat then
+            (self:GetEconomyStoredRatio('MASS') < kT1FactoryFloat or self.Remaster.upgradesOpen) then
             return nil
         end
         return 'b0101'
@@ -669,7 +669,10 @@ AIBrain = Class(StandardBrain) {
         -- builds and as it works, and the second one had started the stall)
         local energyOk = ctx.minutes >= kOpening or not ctx.energyShort
         local landBp = self:LandFactoryBp(u, ctx)
-        if landBp and energyOk and (storedMass > 0.6 and ctx.landFactories < wantFactories or
+        -- (phase 13: piling mass builds a factory only when no extractor upgrade can start, R.upgradesOpen in
+        -- choices.lua: the upgrades are the better sink)
+        local overflow = storedMass > 0.6 and not self.Remaster.upgradesOpen
+        if landBp and energyOk and (overflow and ctx.landFactories < wantFactories or
             ctx.landFactories < floorFactories) and self:BuildAt(u, landBp, 8) then
             ctx.landFactories = ctx.landFactories + 1
             return
@@ -736,7 +739,7 @@ AIBrain = Class(StandardBrain) {
             return
         end
         if landBp and energyOk and ctx.landFactories < wantFactories and storedMass > 0.2 and
-            self:BuildAt(u, landBp, 8) then
+            not self.Remaster.upgradesOpen and self:BuildAt(u, landBp, 8) then
             ctx.landFactories = ctx.landFactories + 1
             return
         end

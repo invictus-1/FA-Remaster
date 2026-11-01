@@ -203,3 +203,9 @@ the duels showed. The duels are 1v1 on SETONS_R against FAF's adaptive AI and M2
     whatever the army's state, one per 250 mass, at most 40. On the judge set the M28 games last a median 28.2
     minutes instead of 22.6 and the FAF veteran games 41.2-41.5 instead of 27.8-42.4. Reclaiming our own base's
     wrecks quickly also takes that mass from the enemy.
+
+24. **Mass that piles up goes into extractor upgrades before factories (refines 14; 2026-11-01).** Decision 14 weighs
+    each upgrade by payback against danger; the duels showed our mass bar full at minutes 10-13 while 1-5 upgrades ran
+    and up to 38 T1 land factories were built as the sink, against M28's 9-15 upgrades at once. Now the overflow is an
+    investment first - cheapest payback, nearest the base - and only when no upgrade can start does it build factories.
+    Our income against M28's rose from half to 0.83 at minute 15 and from 0.18 to 0.54 at minute 20 (judge set).
