@@ -1204,7 +1204,8 @@ void HPathTables::SearchesAhead(WorkerPool& pool, uint32_t round) {
       P.carried[a] = P.items.size();
       P.items.push_back({a, nullptr});
     }
-    // (MOHO64_PAR_PATH_MAX: waiting searches played ahead per army, at most; the number is the last beat's begun + 2)
+    // (MOHO64_PAR_PATH_MAX: waiting searches played ahead per army, at most; the number is the whole queue after a beat
+    // that emptied it, else the last beat's begun + 2: WorkAll's end)
     static const int most = getenv("MOHO64_PAR_PATH_MAX") ? std::max(1, std::atoi(getenv("MOHO64_PAR_PATH_MAX"))) : 64;
     auto w = P.want.find(a);
     const int want = std::min(most, w != P.want.end() ? w->second : 4);
@@ -1314,7 +1315,10 @@ void HPathTables::WorkAll(int /*armies*/) {
       q.active->t->searching = false;
       q.spare = std::move(q.active);
     }
-    if (spec_->spec.active()) spec_->want[a] = begun + 2;
+    // (the next beat's want list: the whole waiting queue after a beat that emptied it, as most armies' beats do - B1S,
+    // 0b94300: 108k of 122k army-beats; 150k searches had been begun beyond begun + 2 there -; after a beat cut by the
+    // work units, begun + 2. Only which searches are played ahead changes.)
+    if (spec_->spec.active()) spec_->want[a] = budget >= 1 ? std::numeric_limits<int>::max() : begun + 2;
   }
   inWork_ = false;
 }
