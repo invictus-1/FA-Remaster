@@ -13,6 +13,7 @@
 #include "core/vfs.h"
 #include "sim/sim.h"
 #include "sim/sim_view.h"
+#include "sim/units.h"  // [byunit] (a shell's launcher)
 #include "sim/terrain.h"
 
 namespace render {
@@ -492,6 +493,11 @@ void SimFrames::Beat(const moho::Sim& sim) {
     return (stance == 2 ? allies : stance == 1 ? neutrals : enemies) == 1;
   };
   beat.projectiles.reserve(e.projectiles.size());
+  // [byunit] who fired the shells new this beat (read once, then kept by the shell's id; the simulation keeps a shell's
+  // launcher allocated until it ends, sim/damage.cpp, and gives a shell a shell threw the first one's launcher)
+  std::unordered_map<uint32_t, const moho::Entity*> firedBy;
+  for (const moho::Projectile* s : sim.projectiles)
+    if (!s->destroyQueued && !shellBy_.count(s->id)) firedBy.emplace(s->id, s->launcher);
   for (const moho::ProjectileView& v : e.projectiles) {
     FrameProjectile p;
     p.id = v.id;
@@ -509,6 +515,14 @@ void SimFrames::Beat(const moho::Sim& sim) {
     const uint32_t first = since != shellSince_.end() ? since->second : sim.tick();
     shellSinceNext_[v.id] = first;
     p.age = static_cast<float>(sim.tick() - first) * 0.1f;
+    {  // [byunit]
+      uint32_t by = 0;
+      if (auto known = shellBy_.find(v.id); known != shellBy_.end()) by = known->second;
+      else if (auto f = firedBy.find(v.id); f != firedBy.end() && f->second && f->second->kind == moho::Entity::Kind::Unit && f->second->blueprint)
+        by = nameOf(f->second->blueprint->id);
+      shellByNext_[v.id] = by;
+      p.launcher = by;
+    }
     // its size: the simulation's own account of it
     p.sized = true;
     p.stopped = v.stopped;
@@ -520,6 +534,8 @@ void SimFrames::Beat(const moho::Sim& sim) {
   }
   shellSince_.swap(shellSinceNext_);  // (only those there this beat are kept)
   shellSinceNext_.clear();
+  shellBy_.swap(shellByNext_);
+  shellByNext_.clear();
   // what scripts made that has a mesh: shields' bubbles and the like
   moho::EntityViews(sim, &e.entities);
   beat.entities.reserve(e.entities.size());

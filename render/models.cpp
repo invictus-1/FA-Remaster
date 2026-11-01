@@ -774,6 +774,50 @@ const Model* ModelCache::ShieldShell(const Model* of, const PersonalShieldLook& 
   return shells_.emplace(of, std::move(m)).first->second.get();
 }
 
+namespace {
+
+// [byunit] "/projectiles/tdfgauss01/tdfgauss01_proj.bp": "tdfgauss01" (as ModelCache::Blueprint names the files beside it)
+std::string ShotBase(const std::string& path) {
+  std::string base = path.substr(path.rfind('/') + 1);
+  const size_t under = base.rfind('_');
+  return under == std::string::npos ? base.substr(0, base.rfind('.')) : base.substr(0, under);
+}
+
+}  // namespace
+
+const Model* ModelCache::ShotByUnit(const std::string& blueprintPath, const std::string& unit) {
+  const std::string path = moho::Vfs::Normalize(blueprintPath);
+  const std::string base = ShotBase(path);
+  const std::string own = base + "/by_unit/" + Lower(unit);
+  if (unit.empty() || !vfs_->Exists("/preview/" + own + "/" + base + "_lod0.scm")) return nullptr;
+  const std::string key = path + "#by_unit#" + Lower(unit);
+  auto it = models_.find(key);
+  if (it != models_.end()) return it->second.get();
+  Model* m = models_.emplace(key, std::make_unique<Model>()).first->second.get();
+  std::vector<LodSource> sources;
+  std::string error;
+  if (!ReadSources(path, &sources, &m->scale, &error, nullptr)) {
+    if (!error.empty()) fprintf(stderr, "render: model %s (%s's): %s\n", path.c_str(), unit.c_str(), error.c_str());
+    return m;
+  }
+  Build(m, path + " (" + unit + ")", own, sources, false, false, std::string(), false, base);
+  if (m->ok) printf("render: %s drawn %s's way (by_unit)\n", base.c_str(), Lower(unit).c_str());
+  return m;
+}
+
+std::string ModelCache::ShotEffectByUnit(const std::string& blueprintPath, const std::string& effect, const std::string& unit) {
+  if (unit.empty() || effect.empty()) return std::string();
+  const std::string path = moho::Vfs::Normalize(blueprintPath), named = moho::Vfs::Normalize(effect);
+  const std::string file = std::string(kRemasteredEffects) + path.substr(0, path.rfind('/') + 1) + "by_unit/" + Lower(unit) +
+                           named.substr(named.rfind('/'));
+  auto there = byUnitFiles_.find(file);
+  if (there == byUnitFiles_.end()) {
+    there = byUnitFiles_.emplace(file, vfs_->Exists(file)).first;
+    if (there->second) printf("render: %s drawn %s's way (by_unit)\n", file.c_str(), Lower(unit).c_str());
+  }
+  return there->second ? file : std::string();
+}
+
 const Model* ModelCache::Blueprint(const std::string& blueprintPath, bool original, const std::string& faction, bool effect) {
   std::string path = moho::Vfs::Normalize(blueprintPath);
   // "/units/uel0201/uel0201_unit.bp": the files beside it are named after the blueprint file
@@ -1241,7 +1285,9 @@ ModelCache::BuildPlan ModelCache::PlanBuild(const std::string& base, std::vector
   BuildPlan p;
   p.skeletonMesh = sources.empty() ? std::string() : sources[0].mesh;
   p.own = base;
-  if (!original && !vfs_->Exists("/preview/" + base + "/" + base + "_lod0.scm") && !p.skeletonMesh.empty()) {
+  // ([byunit] a unit's own version of a shell, base "<id>/by_unit/<unit>", is its folder's or none: ShotByUnit asks only then)
+  if (!original && base.find('/') == std::string::npos && !vfs_->Exists("/preview/" + base + "/" + base + "_lod0.scm") &&
+      !p.skeletonMesh.empty()) {
     std::string mesh = Lower(p.skeletonMesh.substr(p.skeletonMesh.rfind('/') + 1));
     const size_t lod = mesh.rfind("_lod0.scm");
     mesh = lod != std::string::npos ? mesh.substr(0, lod) : mesh.substr(0, mesh.rfind('.'));

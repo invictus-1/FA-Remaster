@@ -4,6 +4,20 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To visuals, section 73: a shell drawn by the unit that fired it (2026-11-01)
+
+In the remastered effects look, a projectile is drawn the way of the unit that fired it where the visuals track made a version
+for that unit. The simulation and the blueprints don't change. The renderer looks in the shell's own remastered folder:
+`_effects/export/moho64/projectiles/<ID>/by_unit/<UNIT>/`.
+- `<ID>_lod0.scm` (and more levels) with its `_lab_*` textures: the shell's model for that unit, at the shell blueprint's
+  scale, on the same bone.
+- Any emitter or trail the shell's script makes (CreateTrail, CreateEmitterOnEntity, ...) under the same file name as the game's
+  (`gauss_cannon_polytrail_01_emit.bp`) is read from there instead.
+The shooter is the shell's launcher, kept from the beat the shell is first seen, and a shell's own shells keep it. In the viewer's
+effects stand it is the unit that fired. Units without a folder draw the shell as before, and so does the original look.
+The log says `render: tdfgauss01 drawn uel0202's way (by_unit)` once per model and file. First users: the Pillar UEL0202 and
+the Valiant / Governor UES0201 / UES0202, with TDFGauss01. The Striker keeps the live shell.
+
 ## The machinery file as the renderer reads it today (2026-11-01, the whole format in one place)
 
 `<file>_machinery.json` sits beside a remastered unit's levels (`<ID>_lod0.scm` ...). Read by `render/machinery.cpp`

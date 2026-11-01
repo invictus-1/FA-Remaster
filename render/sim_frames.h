@@ -132,7 +132,8 @@ class SimFrames {
   FrameCombat combat_;                                 // not yet taken
   bool combatKept_[3] = {false, false, false};         // the simulation's collectHits, collectImpacts, collectHealth
   std::unordered_map<uint32_t, size_t> healthWaiting_;  // an entity's place in combat_.health
-  std::unordered_map<uint32_t, uint32_t> shellSince_, shellSinceNext_;  // projectiles: the beat each was first seen (the simulation's thread only)
+  std::unordered_map<uint32_t, uint32_t> shellSince_, shellSinceNext_;
+  std::unordered_map<uint32_t, uint32_t> shellBy_, shellByNext_;  // [byunit] projectiles: who fired each (FrameProjectile::launcher)  // projectiles: the beat each was first seen (the simulation's thread only)
   std::vector<std::string> namesForFrames_;     // the drawing side's copy of names_ (what Frame::blueprints points at)
   std::atomic<bool> watchBuildable_{false};    // [spikes] (WatchBuildable)
   std::vector<std::string> buildable_;         // [spikes] not yet taken

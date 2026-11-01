@@ -94,6 +94,10 @@ struct FrameProjectile {
   float growth[3] = {0, 0, 0};
   float age = 0;  // seconds since it was first seen (what fades with time goes by it)
   bool original = false;  // drawn in the original effects' look whatever the world's (the effects stand's side by side)
+  // [byunit] the unit that fired it: index into Frame::blueprints of its blueprint id ("uel0202"); 0: not known. A shell a
+  // shell threw keeps the first one's. (Several units fire one projectile blueprint - the Striker's and the Pillar's Gauss
+  // shell - and the remastered look may draw it each unit's own way: ModelCache::ShotByUnit.)
+  uint32_t launcher = 0;
 };
 
 // Something a script made that has a mesh and is neither a unit, a projectile nor a prop: a shield's
