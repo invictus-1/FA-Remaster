@@ -144,7 +144,11 @@ void ProcessArmyEconomy(Sim& sim, Army& army) {
     std::vector<Army*> allies;
     for (auto& other : sim.armies()) {
       Army* o = other.get();
-      if (o == &army || o->outOfGame) continue;
+      // (the allies are CArmyImpl::GetAlliedArmies 0x6fe090, army vt+0xa0 at 0x772058: every army in the alliance set
+      // +0xe8 but itself, an army out of the game (+0x1c0) too. Seen: MP1 18502, after FAF's team recall (18467) army
+      // 0 and army 4 are out of the game, and their allies 2 and 6, full at 100 energy, still share their overflow
+      // with them in the original (army 4's income 465.8 against its own 422); ours had left them out.)
+      if (o == &army) continue;
       if (army.alliance.size() > static_cast<size_t>(o->index - 1) && army.alliance[o->index - 1] == 2) {
         for (int i = 0; i < 2; ++i)
           if (o->econ.stored[i] < static_cast<float>(o->econ.maxStorage[i])) {

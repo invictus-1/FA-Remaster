@@ -23,6 +23,10 @@ local kReclaimField = 100                     -- a cell with this much reclaim i
 local kReclaimPerWorker = 300                 -- a field takes one engineer per this much mass (plus one)
 local kReclaimWorkerTicks = 450               -- an engineer sent to a field counts there this long
 local kReclaimNear = 350                      -- world units from the start: the reclaim that adds engineers
+-- (the economy's knobs of phases 11-13 live in personality.lua's kEconomy, with ranges: read once here)
+local kTuning = import("/lua/remastered/ai/personality.lua").Tuning()
+local kReclaimPush = kTuning.reclaimPush       -- reclaim near the start per engineer built and reclaiming (phase 13)
+local kReclaimEngineersMax = kTuning.reclaimEngineersMax  -- ... at most this many (phase 13; 20 before)
 local kReclaimPerEngineer = 400               -- one engineer more per this much reclaim near the start (at most 20)
 local kGroundFade = 0.998                      -- what was seen of the enemy's ground army fades by this a step (10 ticks)
 local kEngineerAvoid = 600                    -- ticks an enemy seen in a zone or beside it keeps engineers out (phase 7)
@@ -46,11 +50,15 @@ local kBaseZones = 200                        -- world units of travel from the 
 local kArmyIncomeRate = 10                    -- the army kept: seconds of mass income per minute after the opening (9)
 local kArmyIncomeMax = 120                    -- ... at most this many seconds of income
 local kMaxFactories = 20                      -- land factories at most (phase 9; 12 before)
-local kFactoryEvery = 1.5                     -- minutes per extra land factory of the floor after the opening (11)
+local kFactoryEvery = kTuning.factoryEvery    -- minutes per extra land factory of the floor after the opening (11)
 local kOpening = 6                            -- minutes of the opening (phase 8): the energy rules below hold until then
 local kTechEngineersMax = 8                   -- engineers of T2 or above kept at most (phase 9)
+local kUpgradeEnergy = kTuning.upgradeEnergy  -- energy bar share a new land HQ upgrade waits for (phase 13)
+local kT1FactoryFloat = kTuning.t1FactoryFloat  -- ... more T1 factories all the same with this much of the mass bar
+local kT1FactoriesWithHQ = kTuning.t1FactoriesWithHQ  -- T1 land factories T1 builders add once a T2 HQ stands (13)
+local kTechEngineersHQ = kTuning.techEngineersHQ  -- engineers of T2 or above kept at most with a T2 land HQ (13)
 local kUpgradeIncome = 60                     -- mass a second per extra factory upgrade at once (phase 10)
-local kEnergyPerMass = 10                     -- energy income kept ahead per mass income after the opening (11)
+local kEnergyPerMass = kTuning.energyPerMass  -- energy income kept ahead per mass income after the opening (11)
 local kNavalAirShare = 1.5                    -- anti-ship aircraft kept per mass of enemy ships shelling our coast (10)
 local kNavalAirFactory = 1500                 -- one air factory more per this much enemy ship mass there
 local kNavalPendingTicks = 600                -- a naval factory ordered counts as under way this long before it starts
@@ -160,7 +168,33 @@ AIBrain = Class(StandardBrain) {
         R.massPoints = list
     end,
 
-    Bp = function(self, suffix) return self.Remaster.prefix .. suffix end,
+    -- (a suffix starting with '!' is a whole blueprint id: the support factories, whose ids follow no faction prefix)
+    Bp = function(self, suffix)
+        if string.sub(suffix, 1, 1) == '!' then return string.sub(suffix, 2) end
+        return self.Remaster.prefix .. suffix
+    end,
+
+    -- The land factory a builder adds (phase 13): with a T2 or T3 land HQ, a support factory of the builder's tech (at
+    -- most the HQ's) - 580 mass at T2 against 1,410 for an HQ, and a T2 factory from the start, so the army's tier
+    -- rises without stopping factories to upgrade them (upgrading many at once lost the M28 games, phases 11-12). A T1
+    -- builder then adds a T1 factory only while we have fewer than kT1FactoriesWithHQ: M28 kept 7-8 T1 beside 7-8 T2
+    -- where we spammed 29-38 T1 - unless mass piles up (kT1FactoryFloat of the bar): with the T1 builders held at 6
+    -- factories and few T2 engineers, 3,000-7,300 mass overflowed in 3 of 4 judge games. nil: no factory from it.
+    LandFactoryBp = function(self, u, ctx)
+        local hq = ctx.landHQ or 0
+        local tech = math.min(self:Tech(u), hq)
+        if tech >= 2 then
+            local letter = string.sub(self.Remaster.prefix, 2, 2)
+            local id = 'z' .. letter .. (tech >= 3 and 'b9601' or 'b9501')
+            local bp = __blueprints[id]
+            if bp and bp.Economy and (bp.Economy.BuildCostMass or 0) > 0 then return '!' .. id end
+        end
+        if hq >= 2 and ctx.landFactories >= kT1FactoriesWithHQ and
+            (self:GetEconomyStoredRatio('MASS') < kT1FactoryFloat or self.Remaster.upgradesOpen) then
+            return nil
+        end
+        return 'b0101'
+    end,
 
     Claimed = function(self, x, z)
         local t = self.Remaster.claims[x .. ':' .. z]
@@ -636,8 +670,12 @@ AIBrain = Class(StandardBrain) {
         -- (phase 8: in the opening a new factory waits for a sound energy economy: a factory draws energy as it
         -- builds and as it works, and the second one had started the stall)
         local energyOk = ctx.minutes >= kOpening or not ctx.energyShort
-        if energyOk and (storedMass > 0.6 and ctx.landFactories < wantFactories or ctx.landFactories < floorFactories) and
-            self:BuildAt(u, 'b0101', 8) then
+        local landBp = self:LandFactoryBp(u, ctx)
+        -- (phase 13: piling mass builds a factory only when no extractor upgrade can start, R.upgradesOpen in
+        -- choices.lua: the upgrades are the better sink)
+        local overflow = storedMass > 0.6 and not self.Remaster.upgradesOpen
+        if landBp and energyOk and (overflow and ctx.landFactories < wantFactories or
+            ctx.landFactories < floorFactories) and self:BuildAt(u, landBp, 8) then
             ctx.landFactories = ctx.landFactories + 1
             return
         end
@@ -702,7 +740,8 @@ AIBrain = Class(StandardBrain) {
             ((not isCommander and self:ReclaimField(u)) or (self:AtBase(u, true) and self:Reclaim(u))) then
             return
         end
-        if energyOk and ctx.landFactories < wantFactories and storedMass > 0.2 and self:BuildAt(u, 'b0101', 8) then
+        if landBp and energyOk and ctx.landFactories < wantFactories and storedMass > 0.2 and
+            not self.Remaster.upgradesOpen and self:BuildAt(u, landBp, 8) then
             ctx.landFactories = ctx.landFactories + 1
             return
         end
@@ -747,7 +786,7 @@ AIBrain = Class(StandardBrain) {
         local factories, engineers, commander = {}, {}, nil
         local ctx = { minutes = GetGameTick() / 600, landFactories = 0, upgrading = {}, storages = 0, assistNext = 0,
             factoryUpgrades = 0, extractorUpgrades = 0, airFactories = 0, landTier = 0, powerCount = 0,
-            navalFactories = 0 }
+            navalFactories = 0, landHQ = 0 }
         -- the enemy's air (choices.lua): our air factories and fighters answer it
         local enemyAir, enemyGround = Choices().EnemyAir(self)
         ctx.wantAir = math.min(4, 1 + math.floor(enemyAir / 1500))
@@ -774,6 +813,9 @@ AIBrain = Class(StandardBrain) {
                 if EntityCategoryContains(categories.LAND, u) then
                     ctx.landFactories = ctx.landFactories + 1
                     if Alive(u) then ctx.landTier = math.max(ctx.landTier, self:Tech(u)) end
+                    if Alive(u) and not EntityCategoryContains(categories.SUPPORTFACTORY, u) then
+                        ctx.landHQ = math.max(ctx.landHQ, self:Tech(u))
+                    end
                 end
                 if Alive(u) then table.insert(factories, u) end
             end
@@ -840,8 +882,13 @@ AIBrain = Class(StandardBrain) {
         ctx.energyShort = self:GetEconomyStoredRatio('ENERGY') < kEnergyShort and
             self:GetEconomyIncome('ENERGY') < 1.2 * self:GetEconomyRequested('ENERGY')
         ctx.builders = table.getn(engineers) + (commander and 1 or 0)
-        ctx.wantReclaimers = math.min(math.floor(table.getn(engineers) * share + 0.5),
-            math.floor((R.reclaim and R.reclaim.nearMass or 0) / kReclaimPerWorker))
+        -- (phase 13: and at least one per kReclaimPush of the reclaim near the start, at most kReclaimEngineersMax,
+        -- whatever the share: M28 reclaimed 27,000-32,000 mass by minute 15-17 with ~140 engineers - about half its
+        -- income from minute 12 - largely the wrecks of the fights at our base; we reclaimed 2,000-5,000)
+        local nearMass = R.reclaim and R.reclaim.nearMass or 0
+        ctx.wantReclaimers = math.min(math.max(math.floor(table.getn(engineers) * share + 0.5),
+            math.min(kReclaimEngineersMax, math.floor(nearMass / kReclaimPush))),
+            math.floor(nearMass / kReclaimPerWorker))
         -- the commander's safety (phase 7): losing it loses the game. Under kAcuRetreat of its health it drops its
         -- work and backs away from the nearest enemy within kAcuDanger (to the start when none is that near or the
         -- start is away from it), and up to kAcuRepairers free engineers repair it; it takes work again at kAcuBack.
@@ -933,9 +980,12 @@ AIBrain = Class(StandardBrain) {
         local landIndex = 0
         local K = import("/lua/remastered/ai/personality.lua").Knobs(self)
         -- (phase 6: one engineer more per kReclaimPerEngineer of reclaim near the start, at most 20, to pick it up)
-        local reclaimEngineers = math.min(20, math.floor((R.reclaim and R.reclaim.nearMass or 0) / kReclaimPerEngineer))
+        -- (phase 13: one per kReclaimPush, at most kReclaimEngineersMax, all of them in the floor below: the floor's
+        -- half had kept us at 25-37 engineers while 10,000+ mass lay near the start)
+        local reclaimEngineers = math.min(kReclaimEngineersMax,
+            math.floor((R.reclaim and R.reclaim.nearMass or 0) / kReclaimPush))
         local engineerCap = math.min(50, 4 + math.floor(2.5 * K.engineerRate * ctx.minutes) + reclaimEngineers)
-        local engineerFloor = math.min(engineerCap, 4 + math.floor(ctx.minutes) + math.floor(reclaimEngineers / 2))
+        local engineerFloor = math.min(engineerCap, 4 + math.floor(ctx.minutes) + reclaimEngineers)
         -- (with fog of war the enemy's army is mostly out of sight: what was seen of it fades slowly, about half in 6
         -- minutes, so the army kept does not shrink each time the scouts lose sight of it)
         R.enemyGroundPeak = math.max(enemyGround, (R.enemyGroundPeak or 0) * kGroundFade)
@@ -974,11 +1024,23 @@ AIBrain = Class(StandardBrain) {
         -- (phase 9: and one more every 3 minutes after minute 8, at most kTechEngineersMax: T2 power gives 8 times a T1
         -- generator's energy for its build, and only T2 engineers build it)
         local wantTech = math.min(kTechEngineersMax, kTechEngineers + math.floor(math.max(0, ctx.minutes - 8) / 3))
+        -- (phase 13: with a T2 land HQ, one more every 2 minutes after minute 6, at most kTechEngineersHQ: they build the
+        -- support factories)
+        if (ctx.landHQ or 0) >= 2 then
+            wantTech = math.min(kTechEngineersHQ, kTechEngineers + math.floor(math.max(0, ctx.minutes - 6) / 2))
+        end
         local needTech = ((R.enemyTier or 0) >= 2 or ctx.landTier >= 2) and techEngineers < wantTech
+        -- (phase 13: the upgrades are chosen first, among the idle factories, and those take no other order: the
+        -- production below gave every idle factory an order first, so an upgrade found none idle - one game had 38 T1
+        -- land factories and none at T2 at minute 16)
+        ctx.upgradeIssued = {}
+        self:RemasterUpgrades(factories, ctx)
         for _, f in ipairs(factories) do
             local land = EntityCategoryContains(categories.LAND, f)
             if land then landIndex = landIndex + 1 end
-            if f:IsIdleState() and land then
+            if ctx.upgradeIssued[f:GetEntityId()] then
+                -- (upgrading from now on)
+            elseif f:IsIdleState() and land then
                 local tech = self:Tech(f)
                 if needTech and tech >= 2 then
                     IssueBuildFactory({ f }, self:Bp(tech == 3 and 'l0309' or 'l0208'), 1)
@@ -1017,7 +1079,6 @@ AIBrain = Class(StandardBrain) {
                 end
             end
         end
-        self:RemasterUpgrades(factories, ctx)
         self:RemasterScouts()
         self:RemasterFighters()
         self:RemasterNavalStrike()
@@ -1047,6 +1108,7 @@ AIBrain = Class(StandardBrain) {
             for _, f in ipairs(factories) do
                 if f:IsIdleState() and EntityCategoryContains(categories.NAVAL * categories.TECH1, f) then
                     IssueUpgrade({ f }, self:Bp('b0203'))
+                    ctx.upgradeIssued[f:GetEntityId()] = true
                     break
                 end
             end
@@ -1055,21 +1117,31 @@ AIBrain = Class(StandardBrain) {
             for _, f in ipairs(factories) do
                 if f:IsIdleState() and EntityCategoryContains(categories.AIR * categories.TECH1, f) then
                     IssueUpgrade({ f }, self:Bp('b0202'))
+                    ctx.upgradeIssued[f:GetEntityId()] = true
                     break
                 end
             end
         end
-        if ctx.factoryUpgrades >= maxUpgrades or ctx.landFactories < (rush and 2 or 3) then return end
-        local started = ctx.factoryUpgrades
+        -- (phase 13: land factories upgrade only to make the next HQ, one at a time; the tier then grows by support
+        -- factories (LandFactoryBp). A land factory upgrade under way blocks the next; a new one waits for
+        -- kUpgradeEnergy of the energy bar unless on a tech rush. maxUpgrades no longer applies to land factories.)
+        if ctx.landFactories < (rush and 2 or 3) then return end
+        if not rush and self:GetEconomyStoredRatio('ENERGY') < kUpgradeEnergy then return end
+        local hq = ctx.landHQ or 0
+        for _, u in ipairs(ctx.upgrading) do
+            if EntityCategoryContains(categories.LAND * categories.FACTORY, u) then return end
+        end
         for _, f in ipairs(factories) do
-            if started >= maxUpgrades then return end
-            if f:IsIdleState() and EntityCategoryContains(categories.LAND, f) then
-                if EntityCategoryContains(categories.TECH1, f) and (rush or minutes >= 7 and income >= 20) then
+            if f:IsIdleState() and EntityCategoryContains(categories.LAND, f) and
+                not EntityCategoryContains(categories.SUPPORTFACTORY, f) then
+                if hq < 2 and EntityCategoryContains(categories.TECH1, f) and (rush or minutes >= 7 and income >= 20) then
                     IssueUpgrade({ f }, self:Bp('b0201'))
-                    started = started + 1
-                elseif EntityCategoryContains(categories.TECH2, f) and (rush or minutes >= 14 and income >= 50) then
+                    ctx.upgradeIssued[f:GetEntityId()] = true
+                    return
+                elseif hq < 3 and EntityCategoryContains(categories.TECH2, f) and (rush or minutes >= 14 and income >= 50) then
                     IssueUpgrade({ f }, self:Bp('b0301'))
-                    started = started + 1
+                    ctx.upgradeIssued[f:GetEntityId()] = true
+                    return
                 end
             end
         end

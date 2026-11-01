@@ -520,6 +520,10 @@ struct LookSettings {
   // its army's colour (true, the default: Team colour) or in its faction's own (Faction colour: UEF blue for a red
   // player's units). Console remaster_lamp_colour team|faction.
   bool lampsTeamColour = true;
+  // Scorch Glow (the renderer's HotMetal::softScorch, render 5d77cf6; Chris: the remastered look the default, the old one
+  // kept): a death's fresh scorch on the ground with hot metal on: soft (true, the default: a deep-red bed with bright
+  // cracks) or bright (the earlier orange-hot sheet). Console remaster_scorch soft|bright.
+  bool softScorch = true;
   // Colour Vision (ours, the Interface tab; Chris, 2026-10-23): the armies' colours as the player SEES them replaced by
   // a palette that stays apart for a kind of colour blindness: 0 Off (the original's colours), 1 Deuteranopia,
   // 2 Protanopia, 3 Tritanopia, 4 High Contrast (session_bindings.cpp, ColorVisionColor). Only what is shown changes:

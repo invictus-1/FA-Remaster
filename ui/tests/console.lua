@@ -101,6 +101,12 @@ ConExecute("remaster_lamp_colour faction")
 check("remaster_lamp_colour faction: the faction's colour", tostring(moho64ui_Looks().lampsTeamColour), "false")
 ConExecute("remaster_lamp_colour 1")
 check("and 1: the team's again", tostring(moho64ui_Looks().lampsTeamColour), "true")
+-- Scorch Glow (ours, the renderer's HotMetal::softScorch): soft by default, bright or soft by word or 0 / 1
+check("a death's scorch is soft at first", tostring(moho64ui_Looks().softScorch), "true")
+ConExecute("remaster_scorch bright")
+check("remaster_scorch bright: the earlier orange-hot sheet", tostring(moho64ui_Looks().softScorch), "false")
+ConExecute("remaster_scorch 1")
+check("and 1: soft again", tostring(moho64ui_Looks().softScorch), "true")
 take()
 
 -- the other kinds: without a value they say it (0x41fa45, 0x7fde36, 0x41fb8a, 0x41e2cc)

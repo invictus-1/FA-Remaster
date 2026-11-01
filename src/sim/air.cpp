@@ -639,7 +639,13 @@ bool NoBlockingUnits(Sim& sim, Unit* u, float x0, float z0, float x1, float z1) 
   bool blocked = false;
   const bool selfTransport = u->transport != nullptr;
   const bool loading = selfTransport && State(u, US("TransportLoading"));
-  sim.ForUnitsInRect(x0 - 8, z0 - 8, x1 + 8, z1 + 8, [&](Unit* o) {
+  // (the candidates come by their centre here, the original's by their grid cells (GatherUnmarkedUnitsInBox 0x721c00):
+  // the margin has to cover half the longest hull, as in the formation spots' CanMoveAt. Seen (probe mp1_18437b): MP1
+  // 18431, army 1's carrier 0x10019b (uas0303) sails at (77.90, 298.35), its box reaching down to z 289.96; about
+  // 35 of army 1's engineers guarding 0x1001ce re-pick their anchors on the row z 289 every beat: the original refuses
+  // the cells x 72..82 under the carrier and sends 0x100157 to (88,289), 0x100165 to (90,289) and the rest to the
+  // column x 92; ours, looking only 8 around the cell, missed the carrier and kept the row.)
+  sim.ForUnitsInRect(x0 - 32, z0 - 32, x1 + 32, z1 + 32, [&](Unit* o) {
     if (blocked || o == u || o->dead || o->destroyQueued || o->fractionComplete < 1.0f) return;
     if (o->layer == "Air") return;
     if (u->layer == "Sub" && o->layer != "Sub") return;
@@ -2620,11 +2626,17 @@ bool AirNavArrival(Sim& sim, Unit* u) {
       }
     }
     if (at) {
+      // Succeeded wakes the task that listens to the navigator (re-linked at the stage's new end): a move task, a
+      // patrol's or a task's walking child, as for a land navigator (NavEventWakesCommandThread, asked before the goal
+      // is gone). An attack task has no navigator listener, and a refuel's own goal has none either. Seen (probe
+      // mp1_18516d): MP1 18259 / 18300, army 3's gunship 0x3002ac reaches its attack-run goal on its Attack; ours
+      // re-linked its command thread at the end, so at 18510 its patrol ran after 0x3002c3's and 0x3002e5's and the
+      // three drew each other's target points on 0x600123 (0x3002c3 and 0x3002e5 circled each other's at 18516).
+      const bool wake = NavEventWakesCommandThread(u) && !RefuelGoalWakesNobody(u);
       a.steering = false;
       m.hasGoal = false;
       m.arrived = true;
-      // Succeeded wakes the move task (re-linked at the stage's new end); a refuel's own goal has no listener
-      if (!RefuelGoalWakesNobody(u)) sim.ResumeCommandThread(u);
+      if (wake) sim.ResumeCommandThread(u);
       // MOHO64_DEBUG_AIRARRIVE=1: every arrival, with what the unit was doing
       static const bool dbgArrive = getenv("MOHO64_DEBUG_AIRARRIVE") != nullptr;
       if (dbgArrive)

@@ -95,6 +95,7 @@ void WorldLooks(render::World& w, const LookSettings& looks, bool photoLook) {
   w.remasteredBuild = looks.battleEffects;  // (render 6b8109e: the build effects remade; with the remastered effects and the modern look)
   w.energyShields = looks.energyShields;
   w.lampsTeamColour = looks.lampsTeamColour;  // (Unit Glow Colour: team or faction, render 1fd45da)
+  w.heat.softScorch = looks.softScorch;        // (Scorch Glow: soft or bright, render 5d77cf6)
   // (ren_DecalFadeFraction: the decals fade by distance as the original's CWldTerrainDecal::GetLODAlpha 0x89d400,
   // render 33; 0.5 stock, 0.25 once FAF's gamemain.lua has set it)
   w.decalFadeFraction = looks.decalFadeFraction;

@@ -55,8 +55,10 @@ void MouseWheel(lua_State* L, UiManager& ui, UiEvent e);
 // control code (Ctrl+C is 3).
 bool KeyEvent(lua_State* L, UiManager& ui, UiEvent e);
 // One whole key press as a host makes it: key down; when nothing handled it, the character;
-// key up. `charCode` is the character, or the key code of a key without one.
-void KeyPress(lua_State* L, UiManager& ui, int charCode, bool shift, bool ctrl, bool alt);
+// key up. `charCode` is the character, or the key code of a key without one. `windowsKey`, when not -1, is the
+// Windows key code the events carry (a real window's: '[' is 219, VK_OEM_4, which KeycodeMauiToMSW does not give back,
+// as the original's 0x96afc0 does not); else KeycodeMauiToMSW(charCode).
+void KeyPress(lua_State* L, UiManager& ui, int charCode, bool shift, bool ctrl, bool alt, int windowsKey = -1);
 // The event as scripts get it, pushed on the stack (FA exe 0x795bd0).
 void PushEventTable(lua_State* L, Control* c, const UiEvent& e);
 // The host's window came to the front or left it. The original's IsKeyDown (MAUI_KeyIsDown 0x79cb70, READ) says no

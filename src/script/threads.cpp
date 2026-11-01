@@ -274,8 +274,22 @@ bool ThreadScheduler::Kill(lua_State* co) {
 
 bool ThreadScheduler::Resume(lua_State* co) {
   const auto it = byCo_.find(co);
-  if (it == byCo_.end() || !it->second->suspended) return false;
+  if (it == byCo_.end()) return false;
   Thread& t = *it->second;
+  // ResumeThread 0x4cac10 sets the thread's wait count to 0 whatever it waits for (0x4cad17: CTaskThread+0x14),
+  // and only a suspended one (+0x18) is linked back into the stage's list (0x4cad1e..0x4cad45). So a thread sitting
+  // out WaitTicks runs in the next pass over the threads: in this one if the pass has not reached it yet, as a
+  // thread forked now would. Seen: MP1 18466, the third yes of army 5's team recall vote (FAF Recall.lua,
+  // SetRecallVote -> ArmyVoteRecall) resumes the voting thread, which waits out VoteTime; the original recalls the
+  // team's commanders at 18467 (every order of armies 0 and 2 cleared there); ours woke it only when the wait ran out.
+  // (A thread waiting on an event, WaitFor, is left to its event here.)
+  if (!t.suspended) {
+    if (!t.dead && t.waitRef == LUA_NOREF) {
+      const uint32_t due = current_ ? tick_ : tick_ + 1;
+      if (t.wakeTick > due) t.wakeTick = due;
+    }
+    return false;
+  }
   t.suspended = false;
   t.wakeTick = tick_ + 1;
   return true;

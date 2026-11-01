@@ -313,7 +313,7 @@ const std::vector<const char*>& ConsoleNames() {
         "remaster_ground_detail", "remaster_frame_generation", "remaster_water_ripples", "remaster_lens", "remaster_cinecam",
         "remaster_photo", "remaster_battle_effects", "remaster_energy_shields", "remaster_hidden_outlines",
         "remaster_photo_look", "remaster_low_latency", "remaster_photo_mode", "remaster_season", "remaster_color_vision",
-        "remaster_palette", "remaster_timeline", "remaster_follow_cam", "remaster_lamp_colour"};
+        "remaster_palette", "remaster_timeline", "remaster_follow_cam", "remaster_lamp_colour", "remaster_scorch"};
     std::sort(all.begin(), all.end(), ConNameLess);
     return all;
   }();
@@ -385,13 +385,14 @@ int l_FlushEvents(lua_State*) { return 0; }
 int l_LooksForTests(lua_State* L) {
   const LookSettings& looks = Looks();
   lua_newtable(L);
-  const char* names[19] = {"remasteredEffects", "tracers", "richGround", "snowTracks", "vulkan", "originalLook", "temporalUpscale",
+  const char* names[20] = {"remasteredEffects", "tracers", "richGround", "snowTracks", "vulkan", "originalLook", "temporalUpscale",
                            "atmosphere", "softShadows", "rayTracing", "weatherEffects", "groundDetail", "frameGeneration",
-                           "waterRipples", "lens", "battleEffects", "energyShields", "hiddenOutlines", "lampsTeamColour"};
-  const bool values[19] = {looks.remasteredEffects, looks.tracers, looks.richGround, looks.snowTracks, looks.vulkan,
+                           "waterRipples", "lens", "battleEffects", "energyShields", "hiddenOutlines", "lampsTeamColour", "softScorch"};
+  const bool values[20] = {looks.remasteredEffects, looks.tracers, looks.richGround, looks.snowTracks, looks.vulkan,
                            looks.originalLook, looks.temporalUpscale, looks.atmosphere, looks.softShadows, looks.rayTracing,
                            looks.weatherEffects, looks.groundDetail, looks.frameGeneration, looks.waterRipples, looks.lens,
-                           looks.battleEffects, looks.energyShields, looks.hiddenOutlines, looks.lampsTeamColour};
+                           looks.battleEffects, looks.energyShields, looks.hiddenOutlines, looks.lampsTeamColour,
+                           looks.softScorch};
   lua_pushstring(L, "photoLook");
   lua_pushnumber(L, looks.photoLook);
   lua_rawset(L, -3);
@@ -1340,6 +1341,12 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
                  : key == "REMASTER_HIDDEN_OUTLINES"  ? looks.hiddenOutlines
                                                       : looks.weatherEffects;
       if (!value.empty()) on = value[0] == '1' || Upper(value).rfind("ON", 0) == 0 || Upper(value).rfind("TRUE", 0) == 0;
+      return;
+    }
+    if (key == "REMASTER_SCORCH") {  // (Scorch Glow: soft or bright; 1 / 0 too)
+      const std::string v = Upper(value);
+      if (v.rfind("SOFT", 0) == 0 || v == "1") looks.softScorch = true;
+      else if (v.rfind("BRIGHT", 0) == 0 || v == "0") looks.softScorch = false;
       return;
     }
     if (key == "REMASTER_LAMP_COLOUR") {  // (Unit Glow Colour: team or faction; 1 / 0 too)

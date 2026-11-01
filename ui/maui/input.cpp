@@ -139,11 +139,11 @@ bool KeyEvent(lua_State* L, UiManager& ui, UiEvent e) {
   return true;
 }
 
-void KeyPress(lua_State* L, UiManager& ui, int charCode, bool shift, bool ctrl, bool alt) {
+void KeyPress(lua_State* L, UiManager& ui, int charCode, bool shift, bool ctrl, bool alt, int windowsKey) {
   UiEvent e;
   e.shift = shift, e.ctrl = ctrl, e.alt = alt;
   e.keyCode = charCode >= 'a' && charCode <= 'z' ? charCode - 32 : charCode;
-  e.rawKeyCode = KeycodeMauiToMSW(e.keyCode);
+  e.rawKeyCode = windowsKey >= 0 ? windowsKey : KeycodeMauiToMSW(e.keyCode);
   e.type = EventType::KeyDown;
   if (!KeyEvent(L, ui, e)) {
     e.keyCode = ctrl && e.keyCode >= 'A' && e.keyCode <= 'Z' ? e.keyCode - 64 : charCode;
@@ -403,23 +403,27 @@ int l_ControlAt(lua_State* L) {
 // a key code as events carry it (13 Enter, 27 Escape, 8 Backspace, 127 Delete, 314 End, 315 Home,
 // 316 Left, 318 Right, 324 Insert); modifiers is a string naming any of Shift, Ctrl, Alt.
 // moho64ui_Key(code, modifiers, "down" or "up"): only that half, for a key that is held.
+// moho64ui_Key(code, modifiers, half, windowsKey): with the Windows key code a real window's event carries, for a key
+// whose code KeycodeMauiToMSW does not turn back into it (the punctuation keys: "[" with 219, as FAF's "LeftBracket");
+// half "" for a whole press.
 int l_Key(lua_State* L) {
   int code = lua_type(L, 1) == LUA_TSTRING ? static_cast<unsigned char>(lua_tostring(L, 1)[0])
                                            : static_cast<int>(luaL_checknumber(L, 1));
   std::string mods = luaL_optstring(L, 2, "");
   std::string half = luaL_optstring(L, 3, "");
+  const int windowsKey = lua_isnumber(L, 4) ? static_cast<int>(lua_tonumber(L, 4)) : -1;
   if (half == "down" || half == "up") {
     UiEvent e;
     e.shift = mods.find("Shift") != std::string::npos, e.ctrl = mods.find("Ctrl") != std::string::npos,
     e.alt = mods.find("Alt") != std::string::npos;
     e.keyCode = code >= 'a' && code <= 'z' ? code - 32 : code;
-    e.rawKeyCode = KeycodeMauiToMSW(e.keyCode);
+    e.rawKeyCode = windowsKey >= 0 ? windowsKey : KeycodeMauiToMSW(e.keyCode);
     e.type = half == "down" ? EventType::KeyDown : EventType::KeyUp;
     KeyEvent(L, UserState::From(L)->ui(), e);
     return 0;
   }
   KeyPress(L, UserState::From(L)->ui(), code, mods.find("Shift") != std::string::npos,
-           mods.find("Ctrl") != std::string::npos, mods.find("Alt") != std::string::npos);
+           mods.find("Ctrl") != std::string::npos, mods.find("Alt") != std::string::npos, windowsKey);
   return 0;
 }
 

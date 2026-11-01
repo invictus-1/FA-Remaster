@@ -42,6 +42,48 @@ local kBase = {
     reclaimShare = 0.3,
 }
 
+-- The economy's knobs (phases 11-13; not leaned by personalities, stances or sliders): read once by brain.lua and
+-- choices.lua (Tuning()). Each says what the duels showed when it was set (docs/ai-architecture.md 2.4):
+-- - factoryEvery: minutes per extra land factory of the floor after the opening (phase 11);
+-- - energyPerMass: energy income kept ahead per mass income after the opening (phase 11);
+-- - reclaimPush / reclaimEngineersMax: reclaim near the start per engineer built and reclaiming, and at most that
+--   many such engineers (phase 13a);
+-- - upgradeEnergy: the energy bar share a new land HQ upgrade waits for (phase 13b);
+-- - t1FactoriesWithHQ / t1FactoryFloat: land factories T1 builders still add once a T2 HQ stands, and the mass bar
+--   share from which they add more all the same (phase 13b);
+-- - techEngineersHQ: engineers of T2 or above kept at most with a T2 land HQ (phase 13b);
+-- - investFloat: the mass bar share from which piling mass goes to extractor upgrades first (phase 13c).
+local kEconomy = {
+    factoryEvery = 1.5, energyPerMass = 10, reclaimPush = 250, reclaimEngineersMax = 40, upgradeEnergy = 0.5,
+    t1FactoriesWithHQ = 6, t1FactoryFloat = 0.6, techEngineersHQ = 10, investFloat = 0.8,
+}
+
+-- Sane ranges of every knob (kBase and kEconomy), for an automatic tuning harness that tries them over seeded games:
+-- a value outside its range is not one the AI was built for. The margins keep below operations.lua's kWeaker (0.6)
+-- where they are commit bars, as kBounds does.
+local kRanges = {
+    attackRatio = { 0.8, 2.0 }, pushRatio = { 1.2, 3.5 },
+    launch = { 0.45, 0.8 }, launchPush = { 0.4, 0.75 }, commit = { 0.25, 0.55 }, commitPush = { 0.2, 0.5 },
+    defend = { 0.25, 0.5 }, investSafe = { 0.3, 0.9 }, investShare = { 0.2, 0.9 }, stallTolerance = { 300, 1800 },
+    defenceFactor = { 0.3, 1.2 }, defencePerSite = { 1, 6 }, defenceBuilding = { 1, 3 }, defenceShare = { 0.1, 0.6 },
+    armyMatch = { 0.5, 1.5 }, armyPerMinute = { 40, 160 }, engineerRate = { 0.5, 1.5 }, postShare = { 0.6, 2.0 },
+    guardShare = { 0.15, 0.7 }, reclaimShare = { 0.1, 0.6 },
+    factoryEvery = { 0.75, 4 }, energyPerMass = { 6, 14 }, reclaimPush = { 120, 600 }, reclaimEngineersMax = { 10, 60 },
+    upgradeEnergy = { 0.2, 0.8 }, t1FactoriesWithHQ = { 3, 12 }, t1FactoryFloat = { 0.4, 0.95 },
+    techEngineersHQ = { 4, 20 }, investFloat = { 0.5, 0.95 },
+}
+
+-- the economy's knobs (a copy) and the ranges, for brain.lua / choices.lua and the tuning harness
+function Tuning()
+    local c = {}
+    for k, v in pairs(kEconomy) do c[k] = v end  -- (a copy of plain values: order does not matter)
+    return c
+end
+
+function Ranges()
+    return kRanges
+end
+
 -- the personalities: changes to the base
 local kPersonalities = {
     balanced = {},
