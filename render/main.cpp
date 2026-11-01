@@ -345,6 +345,8 @@
 //           grooves d world units deep (ModelCache::treadDepth; modern look; 0.007, 0: flat as painted)
 // --hot-metal  fresh wrecks glow where they broke and on their thin parts and cool over a minute or two, fresh scorches
 //           and craters glow in the middle, cooling wrecks smoulder (World::hotMetal, hot_metal.h; modern look);
+//           --hot-scorch soft | bright: a fresh scorch's broad middle a deep red with bright cracks (soft, the default) or
+//           orange-hot all over as before (bright) ([softscorch] HotMetal::softScorch);
 //           --wreck-test n[,unit]: n wrecks of that unit (uel0201) laid in a square round where the camera starts, as a
 //           game makes them (DefaultWreckage props with the unit's "_mesh_wreck"), each with its death's scorch, as if
 //           they had all died at the start: to see the cooling and time it (with or without --hot-metal);
@@ -862,6 +864,7 @@ struct Options {
   float treadDepth = 0.007f;                   // [treads] --tread-depth
   bool hiddenOutlines = true;           // --no-hidden-outlines, --hidden-outlines
   bool hotMetal = false;                // --hot-metal
+  bool hotScorchOriginal = false;       // [softscorch] --hot-scorch bright
   int wreckTest = 0;                    // --wreck-test
   int hotLights = -1;                   // --hot-metal-lights (-1: as HotMetal has it)
   float hotSmoke = -1;                  // --hot-metal-smoke
@@ -1178,6 +1181,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--shielded") o->shielded = true;
     else if (a == "--bones") o->listBones = true;
     else if (!(v = value())) return false;
+    else if (a == "--hot-scorch") o->hotScorchOriginal = std::string(v) == "bright";  // [softscorch] soft | bright
     else if (a == "--look") {
       if (!strcmp(v, "original")) o->look = Look::Original;
       else if (!strcmp(v, "modern")) o->look = Look::Modern;
@@ -2102,6 +2106,7 @@ int main(int argc, char** argv) {
   }
   world.hiddenOutlines = opt.hiddenOutlines;
   world.hotMetal = opt.hotMetal;
+  world.heat.softScorch = !opt.hotScorchOriginal;  // [softscorch]
   if (opt.hotLights >= 0) world.heat.mostLights = opt.hotLights;
   if (opt.hotSmoke >= 0) {
     world.heat.smokeRate = opt.hotSmoke;

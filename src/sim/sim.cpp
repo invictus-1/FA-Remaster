@@ -2658,6 +2658,19 @@ void Sim::Tick() {
         }
         u->position = np;
         u->orientation = nq;
+        // A unit without a motion (MotionType None: the Unit ctor 0x6a5da8 makes no CUnitMotion, u+0x4b0 stays null)
+        // answers GetVelocity 0x6a9c90 with its entity's displacement, (committed - previous) x the pending
+        // transform's scale (0x678dc0 via 0x6a9cbb); the attach stage writes that pending transform with scale 1.0
+        // (Entity::TaskTick 0x679c9d..0x679ca7). So a dummy hung on a moving unit reports the step it made in the
+        // last AdvanceCoords, and COORDS_CanMoveAt 0x720f70 takes it for a moving unit (0x721231..0x721292: no box
+        // test). Seen (probe mp1_18258c): MP1 18258, army 6's Tempest 0x600119 sails with FAF's external-factory
+        // anchor 0x60011a (ZXA0003, AttachTo an anchor entity on its bone) at (747.30, 787.58); army 5's battlecruiser
+        // 0x5000d1 gets a formation spot in the box around it: the original takes the spot, cell (741, 782); ours
+        // took the anchor for a standing unit and searched the rings out to (736, 777), and two more ships' spots
+        // followed through the reservations.
+        if (!u->motion.bp || !u->motion.bp->mobile())
+          u->motion.lastMove = {(np.x - u->lastPosition.x) * 1.0f, (np.y - u->lastPosition.y) * 1.0f,
+                                (np.z - u->lastPosition.z) * 1.0f};
       }
       u->motion.vel = {};
     } else if (u->parentId) {
