@@ -22,6 +22,7 @@ bool PathUnitBlocked(Unit* u, int x, int z, int flags);  // sim/landnav.cpp (COG
 
 thread_local bool tl_pathAheadDry = false;
 thread_local std::vector<HPathTables::StaleMade>* HPathTables::tl_staleMade = nullptr;
+thread_local std::vector<HPathTables::OwnCluster>* HPathTables::tl_ownClusters = nullptr;
 
 // MOHO64_PAR_PATH's stage (SearchesAhead / WorkAll)
 struct HPathTables::PathSpec {
@@ -31,6 +32,7 @@ struct HPathTables::PathSpec {
     int r = 0;      // WorkOnce's answer: 0 / 1 / 3 done, 2 cut by the work units (a carried search), 4 stopped
     int why = 0;    // (r 4: PathAheadStop::why)
     std::vector<StaleMade> made;  // stale clusters read with their data made ahead: Make at the take
+    std::vector<OwnCluster> own;  // the stale clusters' data the play built itself (installed at the take)
   };
   struct Item {
     int army;
@@ -48,6 +50,8 @@ struct HPathTables::PathSpec {
   double stoppedS = 0, serialS = 0;
   Search ref;                     // (verify) the serial computation
   std::vector<StaleMade> refMade;
+  std::vector<OwnCluster> refOwn;
+  Cluster fresh;                  // (verify) an installed cluster built again at the take
   bool settled = false;           // SettleSearchesAhead ran
 };
 
@@ -296,24 +300,7 @@ bool HPathTables::Ready(ClusterMap& m, int L, int cx, int cz, int* budget, bool 
   size_t i = static_cast<size_t>(cz) * m.wc[L] + cx;
   if (tl_pathAheadDry) {  // (MOHO64_PAR_PATH: a clean cluster is read as it is; anything else would be written)
     if (m.dirty[L][i]) throw PathAheadStop{1};
-    if (make && m.stale[L][i]) {
-      // (a stale cluster whose data was made ahead, and for a 32-cluster its stale 8-clusters' too: read as it is,
-      // Make called at the take; without data made ahead the play stops)
-      if (!m.grid || !m.ahead[L][i] || !tl_staleMade) throw PathAheadStop{2};
-      if (L == 2)
-        for (int j = 0; j < 4; ++j)
-          for (int k = 0; k < 4; ++k) {
-            const int sx = 4 * cx + k, sz = 4 * cz + j;
-            if (sx >= m.wc[1] || sz >= m.hc[1]) continue;
-            const size_t si = static_cast<size_t>(sz) * m.wc[1] + sx;
-            if (m.stale[1][si] && !m.dirty[1][si] && !m.ahead[1][si]) throw PathAheadStop{2};
-          }
-      std::vector<StaleMade>& v = *tl_staleMade;
-      bool have = false;
-      for (const StaleMade& x : v)
-        if (x.m == &m && x.L == L && x.cx == cx && x.cz == cz) have = true;
-      if (!have) v.push_back({&m, L, cx, cz});
-    }
+    if (make && m.stale[L][i] && !DryStale(m, L, cx, cz, i)) throw PathAheadStop{2};
     return true;
   }
   if (!m.dirty[L][i]) {
@@ -336,6 +323,60 @@ bool HPathTables::Ready(ClusterMap& m, int L, int cx, int cz, int* budget, bool 
   m.dirty[L][i] = 0;
   m.stale[L][i] = make ? 0 : 1;
   return true;
+}
+
+// (MOHO64_PAR_PATH) A stale cluster in a search played ahead (Ready's dry branch): its data as Make would make it now,
+// noted for the take (StaleMade: Make is called then). Data made ahead (ClusterMap::ahead) is read as it is; without
+// it the play builds the data itself (Build1Into / Build2Into into its OwnCluster list, a 32-cluster's stale
+// 8-clusters without data made ahead first, as Make makes them first) and reads it from there (ClusterAt); the take
+// installs it as data made ahead before its Make. False: the play stops (no grid, or not a play of the stage).
+// Why the play's build is the build Make makes at the take, or any serial Make in this work loop: a cluster's data is a
+// function of its map's occupancy grid alone (Build1: PathGrid::Passable of the 9 x 9 origins; Build2: its 8-clusters'
+// data, made the same way), and nothing writes a grid between the stage and the work loop's end. The grid writers
+// checked (sim/navigation.cpp): PathGrid::Block (Navigation::SetCells, from AddStructure / RemoveStructure, the
+// structures' placement and removal in the command and entity stages; and the first build in Navigation::Grid of a new
+// grid, which leaves the others alone), PathGrid::TerrainChanged / ApplyTerrainChanges (FlattenMapRect's terrain
+// changes, pending ones taken by LandNavStageEnd before PrepareSearches; the stage and the work loop read no pending
+// one), Navigation::SetBlockingTerrainType (a sim function from Lua). None runs in the work loop: WorkAll runs the
+// searches only (Ready / Make / Build on cluster data, Finish on the travellers). Under MOHO64_PAR_PATH=verify the take
+// builds each installed cluster again and compares.
+bool HPathTables::DryStale(ClusterMap& m, int L, int cx, int cz, size_t i) {
+  if (!m.grid || !tl_staleMade || !tl_ownClusters) return false;
+  std::vector<StaleMade>& v = *tl_staleMade;
+  for (const StaleMade& x : v)
+    if (x.m == &m && x.L == L && x.cx == cx && x.cz == cz) return true;  // (the play made it already: clean now)
+  std::vector<OwnCluster>& own = *tl_ownClusters;
+  if (L == 2)
+    for (int j = 0; j < 4; ++j)
+      for (int k = 0; k < 4; ++k) {
+        const int sx = 4 * cx + k, sz = 4 * cz + j;
+        if (sx >= m.wc[1] || sz >= m.hc[1]) continue;
+        const size_t si = static_cast<size_t>(sz) * m.wc[1] + sx;
+        if (!m.stale[1][si] || m.dirty[1][si] || m.ahead[1][si]) continue;
+        bool made = false;
+        for (const StaleMade& x : v)
+          if (x.m == &m && x.L == 1 && x.cx == sx && x.cz == sz) made = true;
+        if (made) continue;
+        own.push_back({&m, 1, si, {}});
+        Build1Into(m, sx, sz, own.back().C);
+        v.push_back({&m, 1, sx, sz, static_cast<int>(own.size()) - 1, true});
+      }
+  int at = -1;
+  if (!m.ahead[L][i]) {
+    own.push_back({&m, L, i, {}});
+    at = static_cast<int>(own.size()) - 1;
+    if (L == 1) Build1Into(m, cx, cz, own.back().C);
+    else Build2Into(m, cx, cz, own.back().C, &own);
+  }
+  v.push_back({&m, L, cx, cz, at, false});
+  return true;
+}
+
+const HPathTables::Cluster& HPathTables::ClusterAt(const ClusterMap& m, int L, size_t i) const {
+  if (tl_pathAheadDry && tl_ownClusters)
+    for (const OwnCluster& o : *tl_ownClusters)
+      if (o.m == &m && o.L == L && o.i == i) return o.C;
+  return m.lv[L][i];
 }
 
 // The data of a clean cluster the background paid for (Ready above).
@@ -597,6 +638,10 @@ void Prune(std::vector<uint8_t>* nx, std::vector<uint8_t>* nz, std::vector<int8_
 // ClusterBuild level 1 (0x9552d0): nodes per passable side run, edges from the shortest path
 // inside the 9x9 origin bitmap.
 void HPathTables::Build1(ClusterMap& m, int cx, int cz) {
+  Build1Into(m, cx, cz, m.lv[1][static_cast<size_t>(cz) * m.wc[1] + cx]);
+}
+
+void HPathTables::Build1Into(const ClusterMap& m, int cx, int cz, Cluster& C) const {
   const int x0 = cx * 8, z0 = cz * 8;
   bool bm[9][9];
   for (int r = 0; r < 9; ++r)
@@ -659,7 +704,6 @@ void HPathTables::Build1(ClusterMap& m, int cx, int cz) {
       cls[static_cast<size_t>(i) * n + j] = cls[static_cast<size_t>(j) * n + i] = static_cast<int8_t>(c);
     }
   }
-  Cluster& C = m.lv[1][static_cast<size_t>(cz) * m.wc[1] + cx];
   C.nx.resize(n);
   C.nz.resize(n);
   for (int i = 0; i < n; ++i) {
@@ -674,11 +718,19 @@ void HPathTables::Build1(ClusterMap& m, int cx, int cz) {
 // ClusterBuild level 2 (0x9310e0): the sub-clusters' nodes on the 32-cell boundary, edges from a
 // Dijkstra over the sub-cluster graph.
 void HPathTables::Build2(ClusterMap& m, int cx, int cz, int* /*budget*/) {
+  Build2Into(m, cx, cz, m.lv[2][static_cast<size_t>(cz) * m.wc[2] + cx], nullptr);
+}
+
+void HPathTables::Build2Into(const ClusterMap& m, int cx, int cz, Cluster& C, const std::vector<OwnCluster>* own) const {
   std::vector<std::pair<int, int>> nodes;  // local to the 32-cluster
   auto sub = [&](int i, int j) -> const Cluster* {
     int a = 4 * cx + i, b = 4 * cz + j;
     if (a >= m.wc[1] || b >= m.hc[1]) return nullptr;
-    return &m.lv[1][static_cast<size_t>(b) * m.wc[1] + a];
+    const size_t si = static_cast<size_t>(b) * m.wc[1] + a;
+    if (own)
+      for (const OwnCluster& o : *own)
+        if (o.m == &m && o.L == 1 && o.i == si) return &o.C;
+    return &m.lv[1][si];
   };
   for (int j = 0; j < 4; ++j)
     for (int i = 0; i < 4; ++i) {
@@ -794,7 +846,6 @@ void HPathTables::Build2(ClusterMap& m, int cx, int cz, int* /*budget*/) {
       cls[static_cast<size_t>(i) * n + j] = cls[static_cast<size_t>(j) * n + i] = static_cast<int8_t>(c);
     }
   }
-  Cluster& C = m.lv[2][static_cast<size_t>(cz) * m.wc[2] + cx];
   C.nx.resize(n);
   C.nz.resize(n);
   for (int i = 0; i < n; ++i) {
@@ -967,7 +1018,7 @@ bool HPathTables::AddNeighbours(Search& s, const PathCell& c, int L, std::vector
   for (int cx = ix0; cx < ix1; ++cx)
     for (int cz = iz0; cz < iz1; ++cz) {
       if (!Ready(m, L, cx, cz, budget)) return false;
-      const Cluster& C = m.lv[L][static_cast<size_t>(cz) * m.wc[L] + cx];
+      const Cluster& C = ClusterAt(m, L, static_cast<size_t>(cz) * m.wc[L] + cx);
       int lx = c.x - (cx << sh), lz = c.z - (cz << sh);
       int a = -1;
       for (int k = 0; k < C.n; ++k)
@@ -1134,12 +1185,14 @@ bool SameBits(float a, float b) { return std::memcmp(&a, &b, sizeof a) == 0; }
 // One search played as SearchesAhead does, on this thread (the stage's task, and verify's serial computation):
 // from a copy of the carried search `from`, or from t's Begin, with `start` work units.
 void HPathTables::PlayAhead(Search& s, const Search* from, PathTraveler* t, int start, int* steps, int* r, int* why,
-                            std::vector<StaleMade>* made) {
+                            std::vector<StaleMade>* made, std::vector<OwnCluster>* own) {
   const bool was = tl_pathAheadDry, wasReads = tl_specDryReads;
   tl_pathAheadDry = true;
   tl_specDryReads = true;
   tl_staleMade = made;
   if (made) made->clear();
+  tl_ownClusters = own;
+  if (own) own->clear();
   int budget = start;
   bool begun = false;
   try {
@@ -1164,6 +1217,7 @@ void HPathTables::PlayAhead(Search& s, const Search* from, PathTraveler* t, int 
   tl_pathAheadDry = was;
   tl_specDryReads = wasReads;
   tl_staleMade = nullptr;
+  tl_ownClusters = nullptr;
 }
 
 bool HPathTables::SameSearch(const Search& a, const Search& b, std::string* why) const {
@@ -1224,7 +1278,7 @@ void HPathTables::SearchesAhead(WorkerPool& pool, uint32_t round) {
     const PathSpec::Item it = P.items[i];
     // (a carried search has the 2500 work units of its army's beat; a waiting one has at most those: one that would
     // need more is cut by them in any beat it begins, and is not kept)
-    PlayAhead(o.s, it.t ? nullptr : queues_.find(it.army)->second.active.get(), it.t, 2500, &o.steps, &o.r, &o.why, &o.made);
+    PlayAhead(o.s, it.t ? nullptr : queues_.find(it.army)->second.active.get(), it.t, 2500, &o.steps, &o.r, &o.why, &o.made, &o.own);
     return o.r != 5 && !(it.t && o.r == 2);
   });
 }
@@ -1278,7 +1332,7 @@ void HPathTables::WorkAll(int /*armies*/) {
           int steps = 0, rr = 0;
           const bool stopped = ahead->r == 4;
           PlayAhead(P->ref, carried ? q.active.get() : nullptr, ahead->s.t,
-                    stopped ? ahead->steps + 1 : 2500, &steps, &rr, nullptr, &P->refMade);
+                    stopped ? ahead->steps + 1 : 2500, &steps, &rr, nullptr, &P->refMade, &P->refOwn);
           if (stopped && rr == 2) {
             P->ref.expansions -= 1;
             steps -= 1;
@@ -1293,7 +1347,24 @@ void HPathTables::WorkAll(int /*armies*/) {
         std::swap(*q.active, ahead->s);
         for (const StaleMade& x : ahead->made) {  // (as the steps' Ready calls would: same data, flags and counts)
           const size_t i = static_cast<size_t>(x.cz) * x.m->wc[x.L] + x.cx;
-          if (x.m->stale[x.L][i] && !x.m->dirty[x.L][i]) Make(*x.m, x.L, x.cx, x.cz);
+          const bool stale = x.m->stale[x.L][i] && !x.m->dirty[x.L][i];
+          if (x.own >= 0 && stale && !x.m->ahead[x.L][i]) {
+            // (the play built it: installed as data made ahead, so that Make takes it; verify builds it again from the
+            // grid as it is now - the 8-clusters of a 32-cluster are installed before it - and compares)
+            Cluster& got = ahead->own[static_cast<size_t>(x.own)].C;
+            if (P->spec.mode() == SpecMode::kVerify) {
+              if (x.L == 1) Build1Into(*x.m, x.cx, x.cz, P->fresh);
+              else Build2Into(*x.m, x.cx, x.cz, P->fresh, nullptr);
+              const bool same = P->fresh.n == got.n && P->fresh.nx == got.nx && P->fresh.nz == got.nz && P->fresh.cls == got.cls;
+              char b[96];
+              std::snprintf(b, sizeof b, "army %d cluster level %d (%d,%d): the play's build differs from the take's", a,
+                            x.L, x.cx, x.cz);
+              P->spec.Checked(same, item, same ? std::string() : std::string(b));
+            }
+            x.m->lv[x.L][i] = std::move(got);
+            x.m->ahead[x.L][i] = 1;
+          }
+          if (!x.sub && stale) Make(*x.m, x.L, x.cx, x.cz);
         }
         budget -= ahead->steps;
         r = ahead->r;

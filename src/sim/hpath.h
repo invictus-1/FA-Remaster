@@ -301,6 +301,17 @@ class HPathTables {
   void MakeStaleOrigins(ClusterMap& m, int ox0, int oz0, int ox1, int oz1);  // (BeforeOccupancyChange)
   void Build1(ClusterMap& m, int cx, int cz);
   void Build2(ClusterMap& m, int cx, int cz, int* budget);
+  // (the same, into C: Build1 / Build2 are these into the cluster's own data; Build2Into reads the 8-clusters a
+  // MOHO64_PAR_PATH play built itself first, from `own`)
+  struct OwnCluster {
+    const ClusterMap* m;
+    int L;
+    size_t i;
+    Cluster C;
+  };
+  void Build1Into(const ClusterMap& m, int cx, int cz, Cluster& C) const;
+  void Build2Into(const ClusterMap& m, int cx, int cz, Cluster& C, const std::vector<OwnCluster>* own) const;
+  const Cluster& ClusterAt(const ClusterMap& m, int L, size_t i) const;  // (a play's own data first)
   void Begin(Search& s, PathTraveler* t);
   int WorkOnce(Search& s, int* budget);  // 0 exhausted, 1 goal, 2 suspended, 3 capped
   void Finish(Search& s, bool accepted);
@@ -328,10 +339,14 @@ class HPathTables {
   struct StaleMade {
     ClusterMap* m;
     int L, cx, cz;
+    int own = -1;      // its data built by the play (an index into the play's OwnCluster list), or -1: made ahead
+    bool sub = false;  // an 8-cluster built first for a 32-cluster (its Make is the 32-cluster's)
   };
   static thread_local std::vector<StaleMade>* tl_staleMade;
+  static thread_local std::vector<OwnCluster>* tl_ownClusters;
+  bool DryStale(ClusterMap& m, int L, int cx, int cz, size_t i);
   void PlayAhead(Search& s, const Search* from, PathTraveler* t, int start, int* steps, int* r, int* why = nullptr,
-                 std::vector<StaleMade>* made = nullptr);
+                 std::vector<StaleMade>* made = nullptr, std::vector<OwnCluster>* own = nullptr);
   bool SameSearch(const Search& a, const Search& b, std::string* why) const;
 };
 
