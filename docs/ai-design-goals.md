@@ -194,3 +194,12 @@ the duels showed. The duels are 1v1 on SETONS_R against FAF's adaptive AI and M2
     reach them. So the navy came as its own phase (phase 10, 2026-10-31), with the air answer inside it: naval
     factories by our shore while the enemy has ships, ships by build value that defend the coast, attack the nearest
     ships the estimate favours, else hold. Observed M28 games had about half of its army at sea.
+
+23. **Reclaim is income, not a side job (refines 13 and phase 6's map control; 2026-11-01).** The army-first rule
+    (only every third factory makes engineers while the army is short, up to a small floor) held us at 25-37
+    engineers. An income probe showed that M28's lead of twice our income from minute 12 was not its extractors -
+    even with ours at minute 10 - but reclaim: 27,000-32,000 mass by minute 15-17 with about 140 engineers, much of
+    it the wrecks of the fights at our own base. So the reclaim within reach of the start now earns its engineers
+    whatever the army's state, one per 250 mass, at most 40. On the judge set the M28 games last a median 28.2
+    minutes instead of 22.6 and the FAF veteran games 41.2-41.5 instead of 27.8-42.4. Reclaiming our own base's
+    wrecks quickly also takes that mass from the enemy.
