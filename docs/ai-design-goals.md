@@ -209,3 +209,10 @@ the duels showed. The duels are 1v1 on SETONS_R against FAF's adaptive AI and M2
     and up to 38 T1 land factories were built as the sink, against M28's 9-15 upgrades at once. Now the overflow is an
     investment first - cheapest payback, nearest the base - and only when no upgrade can start does it build factories.
     Our income against M28's rose from half to 0.83 at minute 15 and from 0.18 to 0.54 at minute 20 (judge set).
+
+25. **Team play: an ally's attacked zone is ours to defend, and a big army is used (Chris's big test, 2026-11-03).**
+    In his 4v4 the allied AI built a massive army beside an ally under attack by a small one and did nothing; armies
+    of hundreds sat at home. Decision 4's "team play is key" now has its first form: an ally's zone within reach that
+    enemies are in is defended like our own when the estimate lets us. The sitting was mostly a fault (stale orders,
+    staging zones beside the enemy's base or inside our own), not a choice. And an army stops growing at a share of
+    the unit cap (T1 first): hundreds of T1 units were spam that slowed the game, not strength.

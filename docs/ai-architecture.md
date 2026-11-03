@@ -213,6 +213,35 @@ by the battle estimate of that zone (`Remastered.AIZoneEstimate`, 3.2), with our
   - **The enemy's zones** are kept for the engineers (they take no mass point where the enemy is known) and for the
     defences (raided expansions, chokes the enemy was seen beyond).
   - The status line says how many zones the enemy is known in and how many scouts we have.
+- **2026-11-03, armies that sat (Chris's big test: 4v4 on SETONS_R, all seven AIs ours).** His pictures: armies of
+  hundreds piled up at home, no push, a far smaller enemy army not fought, an ally not defended. The game's log: 89
+  gathers dropped ("only 23 of 743 reached the staging zone", "nobody reached"), and the probe of the same game
+  re-played (all eight ours) found every combat unit carrying 9-21 orders on average (up to 160) by minute 10-20.
+  Causes and changes (`operations.lua`):
+  - **Orders replace, once.** Every `Issue*` adds to a unit's queue. The gather gave the whole army a move every
+    think (5 s) and defences, reinforcements and returns home queued behind them. Now an order clears the queue first
+    and is given again only when it changes (a key per order) or the unit stopped away from its point; average queue
+    0.8.
+  - **The staging zone is on our side.** It was the target's neighbour nearest our start (beside the enemy's base,
+    ~800 world units away through the isthmus, reached by plain moves that do not fire back), else our start zone
+    (counted 45 world units around its centre while the army stood spread over the base). Now: the land zone with no
+    enemy known in it, at least 120 world units of travel from the target, on the way from where the army stands
+    (from -> it -> target at most 1.25 x the direct way + 40), the nearest such to the target; none (the army near
+    already): it attacks at once. The walk there is an attack-move.
+  - **"There" grows with the army:** 45 + 3 x sqrt(units) world units; the share is of the units the gather started
+    with (factories add hundreds during the walk); a gather still arriving when its time is up waits on, up to twice.
+  - **Attacks aim at what the army knows in the zone** (`Remastered.AIZoneTargets`, the nearest known enemy to the
+    army), not its centre, where the army had stood while structures stood beyond its reach. The defence aims the same.
+  - **Allies are defended:** a zone with an ally's structures (none of ours) within 500 world units of travel that
+    enemies are in, nearest first, when none of ours needs the defence this think and the estimate there (ours and
+    the allies' that can come) gives the defend margin: the nearest units, 1.5 x the enemy mass that can come
+    (`aiop ... ally`).
+  - **The trade check counts the operation's own units** (those that fought in it), not the whole army's losses:
+    with 800 units the army lost 1,500 mass a minute elsewhere and every push was withdrawn within 1-2 minutes.
+  - **Unit spam:** land combat units past 25% of the unit cap are no longer made by T1 land factories, past 50% by
+    none (`personality.lua` landSoftShare / landHardShare): 500-800 land units an army by minute 25, mostly T1.
+  - A new guard already at its post drops the order it had (it had walked on with it).
+  Judge (duels, see section 6): M28 recruit x8 median 23.5 minutes (90% of medians 19.4-25.1; main 22.0, 17.9-25.5), lost per killed 16.7 (10.7-31.9; main 12.6, 8.5-22.4); FAF veteran 40.7 / 38.0 (main 38.1 / 41.2) - even within the spread: the 1v1 duels did not need this, the 4v4 did. The 4v4 (all eight ours, Chris's session and seed, 25 minutes): gathers dropped 16 -> 0, orders queued per unit 21-42 -> 0.8-0.9, land units at minute 25 3,687 -> 2,271 and the share of them near their start 47% -> 26%, mass lost by all armies 58,000 -> 82,000 (more fighting).
 - **Not yet:** combined arms, cracking fortified lines, navy and air operations, and retreat by a safe path to the
   nearest held zone (today: home).
 
@@ -920,6 +949,7 @@ native core for numbers and spends its own time only on decisions.
   | `AIIndexInfo(army)` | `{tick, own, ally, enemy, unknown, outside, period}` |
   | `AISquareLaw(ours, theirs)` | `margin, survivors` (3.3) |
   | `AIBattleEstimate(ours, theirs [, startDistance [, kite]])` | `margin, oursLeft, theirsLeft, seconds`; a force is an array of `{blueprintId, count}` (3.3) |
+  | `AIZoneTargets(army, zone)` | `{{x, z, mass, structure}, ...}`: the enemy units the army knows in the zone (held blips of seen units, then the memory), in the index's order (2026-11-03: where attacks and defences aim) |
   | `AIZoneEstimate(army, zone, horizon [, kite [, soak]])` | `margin, oursLeft, theirsLeft, seconds, oursMass, theirsMass`: the fight for the zone from what the army knows (3.2); `soak`: the estimate before phase 12 (3.3) |
   | `AIBuildValue(blueprintId, enemy)` | `value, killed, lost`: enemy mass killed per own mass lost (3.3) |
   | `AIEnemyMix(army [, all [, enemy]])` | `{{id, count, mass}, ...}`: the enemy's mobile army as known (the counter-pick's enemy), or with `all` every known enemy unit and structure (phase 5, 3.2); with `enemy` (an army index, phase 6) only that army's units |
@@ -1291,6 +1321,7 @@ both-modes check, multicore.md 1).
 | 4 (first form built 2026-10-29) | Strategic and operation layers: aggression with hysteresis, objectives, gathering, push, retreat by estimate, raids, navy and air domains, combined arms timing. Built: the zone estimate from the index (fair intel, memory, reinforcements on the way, kiting), defend / attack / push / raid with commit rules and logged decisions, tech upgrades. Not yet: gathering, navy and air, combined arms | Ours vs M28 and FAF's AI, several seeds: the fight scores of section 6; "never fled a weaker force" at zero faults. First duels: 0 faults, 3 losses and one 60-minute game without a result (section 6) |
 | 5 (first form built 2026-10-29) | Economy in parallel with scouting, army and expansion (power ahead but not wasted, factory floor, engineers by distance and away from enemies, reclaim, storage, timed assists); counters by build value; defences as build candidates; investments by payback and danger with a planned dip; the strategy layer's read of the enemy and stances; attacks on armies and expansions with gathering and reinforcements via the staging zone; guard posts; the knobs in one place (decisions 13-16) | The five duels of section 6 (mass / s at 5 / 15 / 30 minutes, mass lost per enemy mass killed); the 16 + B1 / b8 identical; our-key sessions identical at 1 / 32 threads, shuffle, reverse |
 | 6a (first form built 2026-10-30) | Map control: the army kept against the enemy's known army, guard posts sized by the threat and lost zones taken back, reclaim fields; each enemy read on its own (the focus enemy); the player's two sliders (aggression, economy) with bounds; the duels with fog of war | The duels of section 6 with fog; the 16 + B1 / b8 identical; our-key fogged sessions identical at 1 / 32 threads, shuffle, reverse |
+| 14a (first form built 2026-11-03) | Armies that sat (Chris's big test): orders replace the queue and are given once; staging zones on our side of the target, on the way, a gather radius that grows with the army, the share of the units it started with; attacks and defences aim at the known enemies (`AIZoneTargets`); allies' zones defended; the trade check on the operation's own units; land units capped by shares of the unit cap | The 4v4 of all our AI on SETONS_R (Chris's game's session, seed 3136757056, the army probe: queues, gathers, pushes); the judge set; our-key sessions (and the 4v4) identical at 1 / 32 threads, shuffle, reverse; the 16 + B1 / b8 identical |
 | 13c (first form built 2026-11-01) | Piling mass goes into extractor upgrades first (payback, distance, id order; the whole share above 80% of the mass bar), T1 factories only when no upgrade can start | The judge set and the income probe (income ratio at minutes 10 / 15 / 20); our-key fogged sessions identical at 1 / 32 threads, shuffle, reverse |
 | 13b (first form built 2026-11-01) | T2 through new factories: upgrades chosen before the production orders, land factories upgraded only for the next HQ, support factories by T2+ builders, T1 factories held at 6 with an HQ unless mass piles up, more T2 engineers | The judge set and the income probe (income ratio and factory tiers at minutes 10 / 15 / 20); our-key fogged sessions identical at 1 / 32 threads, shuffle, reverse |
 | 13a (first form built 2026-11-01) | The reclaim push: engineers for the reclaim near the start built and reclaiming whatever the army's state (one per 250 mass, at most 40) | The judge set (M28 recruit seeds 1001-4004, FAF veteran 2002 / 3003, medians), the income probe; our-key fogged sessions identical at 1 / 32 threads, shuffle, reverse |

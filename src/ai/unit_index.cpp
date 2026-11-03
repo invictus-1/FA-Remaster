@@ -471,6 +471,13 @@ struct ArmyIndex {
   // entity index -> effective count (memory weight x health share), in entity order
   std::vector<std::map<int, float>> forces;  // [zone][side]
   std::vector<ZoneSideExtra> extra;  // [zone][side]
+  // The enemy units the army knows per zone (2026-11-03, where an attack aims: AIZoneTargets), the same units as
+  // `forces` in the same order: x, z, mass x weight, structure
+  struct Point {
+    float x = 0, z = 0, mass = 0;
+    bool structure = false;
+  };
+  std::vector<std::vector<Point>> enemyPts;  // [zone]
   // The enemy's units per enemy army (phase 6, the strategy layer's read of each enemy on its own, AIEnemyMix's
   // third argument): [army0] -> blueprint entity index -> effective count, the same units and weights as `forces`
   std::vector<std::map<int, float>> enemyOf;
@@ -494,6 +501,7 @@ void BuildIndex(Sim& sim, ArmyIndex& ix) {
   ix.cells.assign(static_cast<size_t>(nz) * kSides * kMoveClasses, Cell{});
   ix.forces.assign(static_cast<size_t>(nz) * kSides, std::map<int, float>{});
   ix.extra.assign(static_cast<size_t>(nz) * kSides, ZoneSideExtra{});
+  ix.enemyPts.assign(static_cast<size_t>(nz), std::vector<ArmyIndex::Point>{});
   ix.enemyOf.assign(sim.armies().size(), std::map<int, float>{});
   for (int& u : ix.units) u = 0;
   ix.unknown = ix.outside = 0;
@@ -518,6 +526,7 @@ void BuildIndex(Sim& sim, ArmyIndex& ix) {
     ix.forces[static_cast<size_t>(z - 1) * kSides + side][r->entity] += weight * hf * hf;  // (hf = sqrt(health share))
     if (side == kEnemy && owner >= 0 && owner < static_cast<int>(ix.enemyOf.size()))
       ix.enemyOf[owner][r->entity] += weight * hf * hf;
+    if (side == kEnemy) ix.enemyPts[static_cast<size_t>(z - 1)].push_back({p.x, p.z, r->mass * weight, r->move == kMoveStatic});
     Cell& c = ix.At(z - 1, side, r->move);
     const float k = hf * r->fix * weight;
     c.count += weight;
@@ -1142,6 +1151,30 @@ int l_AIZoneForces(lua_State* L) {
   return 1;
 }
 
+// Remastered.AIZoneTargets(army, zone) -> {{x, z, mass, structure}, ...}: the enemy units the army knows in the zone
+// (as the index counts them: held blips of units it has seen, then its memory; contacts of unknown type left out),
+// in the index's order. Where an attack aims (2026-11-03, Chris's big test: an attack-move to the zone's centre left
+// the army standing there while the enemy's structures stood beyond its weapons' reach).
+int l_AIZoneTargets(lua_State* L) {
+  Sim& sim = *Sim::From(L);
+  ArmyIndex& ix = CheckArmyIndex(L, 1);
+  const MapAnalysis& m = MapOf(sim);
+  const int z0 = CheckZoneArg(L, 2, m) - 1;
+  lua_newtable(L);
+  const auto& pts = ix.enemyPts[static_cast<size_t>(z0)];
+  for (size_t i = 0; i < pts.size(); ++i) {
+    lua_newtable(L);
+    SetNum(L, "x", pts[i].x);
+    SetNum(L, "z", pts[i].z);
+    SetNum(L, "mass", pts[i].mass);
+    lua_pushstring(L, "structure");
+    lua_pushboolean(L, pts[i].structure ? 1 : 0);
+    lua_rawset(L, -3);
+    lua_rawseti(L, -2, static_cast<int>(i + 1));
+  }
+  return 1;
+}
+
 // Remastered.AIZoneThreat(army, zone, target ['ground'|'air'|'naval'|'structure'], horizon [, from]) -> enemy,
 // friendly: the summed ratings against that target type of the enemy's (and of own + allied) units that can come to
 // the zone within `horizon` world units of travel (by their own movement class; aircraft in a straight line) or whose
@@ -1451,6 +1484,7 @@ void RegisterIndexBindings(lua_State* L) {
   } kFns[] = {{"AIUnitRating", l_AIUnitRating},
               {"AIZoneForces", l_AIZoneForces},
               {"AIZoneThreat", l_AIZoneThreat},
+              {"AIZoneTargets", l_AIZoneTargets},
               {"AIIndexInfo", l_AIIndexInfo},
               {"AISquareLaw", l_AISquareLaw},
               {"AIBattleEstimate", l_AIBattleEstimate},

@@ -52,10 +52,14 @@ local kBase = {
 -- - t1FactoriesWithHQ / t1FactoryFloat: land factories T1 builders still add once a T2 HQ stands, and the mass bar
 --   share from which they add more all the same (phase 13b);
 -- - techEngineersHQ: engineers of T2 or above kept at most with a T2 land HQ (phase 13b);
--- - investFloat: the mass bar share from which piling mass goes to extractor upgrades first (phase 13c).
+-- - investFloat: the mass bar share from which piling mass goes to extractor upgrades first (phase 13c);
+-- - landSoftShare / landHardShare (2026-11-03): land combat units, as a share of the unit cap, from which T1 land
+--   factories / all land factories make no more of them. Chris's big test (4v4, all our AI): 500-800 land units an
+--   army by minute 25, most of them T1, piled up at home; the game choppy from minute 30.
 local kEconomy = {
     factoryEvery = 1.5, energyPerMass = 10, reclaimPush = 250, reclaimEngineersMax = 40, upgradeEnergy = 0.5,
     t1FactoriesWithHQ = 6, t1FactoryFloat = 0.6, techEngineersHQ = 10, investFloat = 0.8,
+    landSoftShare = 0.25, landHardShare = 0.5,
 }
 
 -- Sane ranges of every knob (kBase and kEconomy), for an automatic tuning harness that tries them over seeded games:
@@ -70,7 +74,7 @@ local kRanges = {
     guardShare = { 0.15, 0.7 }, reclaimShare = { 0.1, 0.6 },
     factoryEvery = { 0.75, 4 }, energyPerMass = { 6, 14 }, reclaimPush = { 120, 600 }, reclaimEngineersMax = { 10, 60 },
     upgradeEnergy = { 0.2, 0.8 }, t1FactoriesWithHQ = { 3, 12 }, t1FactoryFloat = { 0.4, 0.95 },
-    techEngineersHQ = { 4, 20 }, investFloat = { 0.5, 0.95 },
+    techEngineersHQ = { 4, 20 }, investFloat = { 0.5, 0.95 }, landSoftShare = { 0.1, 0.5 }, landHardShare = { 0.2, 0.8 },
 }
 
 -- the economy's knobs (a copy) and the ranges, for brain.lua / choices.lua and the tuning harness

@@ -47,6 +47,13 @@ local kShellSlack = 60     -- ... and shells a neighbouring zone of ours whose c
 local kDefenceSoak = true  -- (phase 12) the defence's and the posts' estimate counts our structures' health (soak);
                            -- attacks, pushes, raids and their commits read what fights only (unit_index.cpp)
 local kPeakFade = 0.99     -- the enemy's strength seen fades by this a think (5 s): half in about 6 minutes
+-- (2026-11-03, Chris's big test: 4v4 on SETONS_R, all our AI; 89 gathers dropped, "only 23 of 743 reached the staging
+-- zone", the armies piled up and sat; see Order, StagingZone and the gather below)
+local kGatherPerUnit = 3   -- world units of the gather's radius more per square root of the army's units
+local kStageBack = 120     -- world units of land travel the staging zone keeps from the target (our side of it)
+local kStageDetour = 1.25  -- ... on the way: from -> staging zone -> target at most this x the direct way (+ 40)
+local kGatherExtend = 2    -- a gather still arriving may wait up to this x its time limit
+local kAllyReach = 500     -- world units of land travel from our start: an ally's zone this near is defended (2026-11-03)
 
 -- Personalities (docs/ai-architecture.md 2.7) and their knobs: personality.lua. Teacher mode (2.8): never a push
 -- against a human enemy; when far ahead of one, it attacks at most and says so in the log.
@@ -97,6 +104,7 @@ local function Front(R)
     local enemyZones, threatened, ownEconomy = {}, {}, {}
     local ownStruct = {}
     R.enemyAt = {}  -- (the zones the enemy is known in: the engineers keep out of them)
+    R.allyThreat = {}  -- (2026-11-03: zones with an ally's structures and none of ours that enemies are in, zone order)
     R.enemySeen = R.enemySeen or {}  -- zone -> the last tick the enemy was known there (defence sites)
     for z = 1, info.zones do
         local f = Remastered.AIZoneForces(R.army, z)
@@ -113,7 +121,8 @@ local function Front(R)
             R.enemySeen[z] = R.tick
             table.insert(enemyZones, { zone = z, strength = e, economy = f.enemy.economyMass,
                 structures = f.enemy.structure.count, army = f.enemy.land.mass, range = f.enemy.land.maxRange })
-            if f.own.structure.count > 0 then table.insert(threatened, z) end
+            if f.own.structure.count > 0 then table.insert(threatened, z)
+            elseif f.ally.structure.count > 0 then table.insert(R.allyThreat, z) end  -- (2026-11-03: an ally's zone)
         end
         if f.own.structure.count > 0 then ownStruct[z] = true end
     end
@@ -218,21 +227,91 @@ local function PickTarget(R, enemyZones, bar)
     return nil, bestMargin or 0, bestZone or 0
 end
 
--- the staging zone for a target: its neighbour nearest our start by land with no enemy known in it (id on ties);
--- our start zone when there is none
-local function StagingZone(R, target)
+-- the staging zone for a target (2026-11-03): on our side of it, on the way there from the army's zone `from`: the land
+-- zone with no enemy known in it whose land travel to the target is at least kStageBack and that lies on the way
+-- (from -> it -> target at most kStageDetour x the direct way, + 40), the nearest such to the target (id on ties);
+-- nil (no gather: the army goes from where it is) when there is none, or it is the army's own zone.
+-- Before, it was the target's neighbour nearest our start, else our start zone. Chris's big test (4v4 on SETONS_R):
+-- the neighbour lay beside the enemy's base, ~800 world units away through the isthmus, and the army walked there
+-- with plain moves past the enemy without firing (17 of 444 arrived); our start zone was counted 45 world units around
+-- its centre while the army stood spread over the base (13 of 747): every gather was dropped, and the army sat.
+local function StagingZone(R, target, from)
+    local direct = Remastered.AIZoneDistance(from, target, 'land')
+    if direct < 0 or direct <= kStageBack + 60 then return nil end
     local best, bestD
-    for _, n in ipairs(Remastered.AIZoneNeighbours(target)) do
-        local d = Remastered.AIZoneDistance(R.startZone, n.zone, 'land')
-        if d >= 0 then
-            local f = Remastered.AIZoneForces(R.army, n.zone)
-            if f.enemy.land.count + f.enemy.structure.count <= 0 and
-                (not bestD or d < bestD or (d == bestD and n.zone < best)) then
-                best, bestD = n.zone, d
+    for z = 1, Remastered.AIMapInfo().zones do
+        if not R.enemyAt[z] then
+            local dt = Remastered.AIZoneDistance(z, target, 'land')
+            if dt >= kStageBack and (not bestD or dt < bestD) then
+                local ds = Remastered.AIZoneDistance(from, z, 'land')
+                if ds >= 0 and ds + dt <= kStageDetour * direct + 40 then best, bestD = z, dt end
             end
         end
     end
-    return best or R.startZone
+    if best == from then return nil end
+    return best
+end
+
+-- the zone the army stands in: the land zone at the middle of `units` when our land units reach it, else our start
+local function ArmyZone(R, units)
+    local n, sx, sz = 0, 0, 0
+    for _, u in ipairs(units) do
+        local p = u:GetPosition()
+        n, sx, sz = n + 1, sx + p[1], sz + p[3]
+    end
+    if n == 0 then return R.startZone end
+    local z = Remastered.AIZoneAt(sx / n, sz / n, 'land')
+    if z > 0 and Remastered.AIZoneDistance(R.startZone, z, 'land') >= 0 then return z end
+    return R.startZone
+end
+
+-- where an attack aims (2026-11-03): the enemy unit the army knows in the target zone nearest the middle of `units`
+-- (Remastered.AIZoneTargets: fair intel), structures and units alike; the zone's centre when it knows none. An
+-- attack-move to the zone's centre had left the army standing there while structures stood beyond its reach.
+local function AimPoint(R, zone, units)
+    local n, sx, sz = 0, 0, 0
+    for _, u in ipairs(units) do
+        local p = u:GetPosition()
+        n, sx, sz = n + 1, sx + p[1], sz + p[3]
+    end
+    local zz = Remastered.AIZone(zone)
+    if n == 0 then return zz.x, zz.z end
+    sx, sz = sx / n, sz / n
+    local bx, bz, bd = zz.x, zz.z
+    for _, t in ipairs(Remastered.AIZoneTargets(R.army, zone)) do
+        local dx, dz = t.x - sx, t.z - sz
+        local d = dx * dx + dz * dz
+        if not bd or d < bd then bx, bz, bd = t.x, t.z, d end
+    end
+    return bx, bz
+end
+
+-- ORDERS (2026-11-03). An order replaces what the unit was doing (IssueClearCommands first), and is given again only
+-- when it changes (its key) or the unit has stopped farther than `near` from the point. Every Issue* adds to the
+-- unit's queue: the gather gave IssueMove to the whole army every think (5 s), so a 700-unit army carried dozens of
+-- stale moves to a staging zone, and a defence's order waited behind them. R.orderOf: entity id -> key.
+local function Order(R, units, aggressive, pos, key, near)
+    local give = {}
+    local n2 = (near or 0) * (near or 0)
+    for _, u in ipairs(units) do
+        local id = u:GetEntityId()
+        if R.orderOf[id] ~= key then
+            table.insert(give, u)
+        elseif u:IsIdleState() then
+            local p = u:GetPosition()
+            local dx, dz = p[1] - pos[1], p[3] - pos[3]
+            if dx * dx + dz * dz > n2 then table.insert(give, u) end
+        end
+    end
+    if give[1] then
+        for _, u in ipairs(give) do R.orderOf[u:GetEntityId()] = key end
+        IssueClearCommands(give)
+        if aggressive then IssueAggressiveMove(give, pos) else IssueMove(give, pos) end
+    end
+end
+
+local function Pos3(x, z)
+    return { x, GetTerrainHeight(x, z), z }
 end
 
 -- our army's mass lost and enemy mass killed so far (the army stats), for the trade check
@@ -380,7 +459,10 @@ local function Posts(R, K, units, ownEconomy, ratio, armyMass)
                 if dx * dx + dz * dz > kGuardRadius * kGuardRadius then
                     IssueClearCommands({ u })
                     IssueAggressiveMove({ u }, { zone.x, GetTerrainHeight(zone.x, zone.z), zone.z })
+                elseif fresh[id] then
+                    IssueClearCommands({ u })  -- (2026-11-03: a new guard already there drops the order it had)
                 end
+                R.orderOf[id] = 'post'
             end
         else
             table.insert(rest, u)
@@ -388,6 +470,10 @@ local function Posts(R, K, units, ownEconomy, ratio, armyMass)
     end
     return rest
 end
+
+-- (Lua 5.0 allows a function 32 upvalues: Think reaches the helpers of 2026-11-03 through this one table)
+local X = { Order = Order, AimPoint = AimPoint, ArmyZone = ArmyZone, Pos3 = Pos3, gatherPerUnit = kGatherPerUnit,
+    gatherExtend = kGatherExtend, allyReach = kAllyReach }
 
 function Think(brain)
     local R = brain.Remaster
@@ -397,6 +483,17 @@ function Think(brain)
     local armyMass = 0
     for _, u in ipairs(units) do armyMass = armyMass + MassOf(R, u) end
     R.armyMass = armyMass  -- (the economy's map-control floor reads it: brain.lua)
+    R.armyCount = table.getn(units)  -- (2026-11-03: the land factories' soft and hard caps read it: brain.lua)
+    -- (the orders given, ORDERS above: kept for the units alive, so dead ones leave the table)
+    local orderOf = {}
+    for _, u in ipairs(units) do
+        local id = u:GetEntityId()
+        orderOf[id] = R.orderOf and R.orderOf[id]
+    end
+    R.orderOf = orderOf
+    R.opSeq = R.opSeq or 0
+    R.alive = {}  -- (the combat units alive now, by entity id: the trade check's members)
+    for _, u in ipairs(units) do R.alive[u:GetEntityId()] = true end
     local ours, theirs, enemyZones, threatened, ownEconomy = Front(R)
     -- (phase 6, fog of war: what the army saw of the enemy's strength fades slowly, kPeakFade a think, so a few
     -- minutes without sight of its army are not "far ahead"; the duels with fog launched decisive pushes at a ratio
@@ -418,6 +515,7 @@ function Think(brain)
             R.lastTeach = R.tick
         end
     end
+    local startPos = X.Pos3(R.startX, R.startZ)
 
     -- DEFEND: our zones with enemies in them, nearest the start first (zone order on ties). Only as many units as
     -- the fight needs go (the nearest, until 1.5x the enemy mass that can come there); the rest stay free for the
@@ -429,7 +527,32 @@ function Think(brain)
         return a < b
     end)
     local busy = {}  -- units given to the defence this think, by entity id
+    local defendedNow = false
     R.raided = R.raided or {}
+    -- the units nearest a zone's centre, until 1.5x the enemy mass that can come there (all of them when `all`)
+    local function Defenders(z, theirsMass, all)
+        local zone = Remastered.AIZone(z)
+        local near = {}
+        for i, u in ipairs(units) do
+            if not busy[u:GetEntityId()] then
+                local p = u:GetPosition()
+                local dx, dz = p[1] - zone.x, p[3] - zone.z
+                table.insert(near, { u = u, d = dx * dx + dz * dz, i = i })
+            end
+        end
+        table.sort(near, function(x, y)
+            if x.d ~= y.d then return x.d < y.d end
+            return x.i < y.i
+        end)
+        local sent, mass = {}, 0
+        for _, n in ipairs(near) do
+            if not all and mass >= 1.5 * theirsMass + 1 then break end
+            table.insert(sent, n.u)
+            busy[n.u:GetEntityId()] = true
+            mass = mass + MassOf(R, n.u)
+        end
+        return sent
+    end
     for _, z in ipairs(threatened) do
         if z ~= R.startZone then R.raided[z] = R.tick end
         local margin, _, _, _, _, theirsMass = Remastered.AIZoneEstimate(R.army, z, kHorizon, false, kDefenceSoak)
@@ -451,25 +574,13 @@ function Think(brain)
                 Log(R, 'defend', z, margin, ratio, 'enemies in our zone; the estimate lets us hold it')
                 R.defending = z
             end
-            local pos, zone = ZonePos(z)
-            local near = {}
-            for i, u in ipairs(units) do
-                local p = u:GetPosition()
-                local dx, dz = p[1] - zone.x, p[3] - zone.z
-                table.insert(near, { u = u, d = dx * dx + dz * dz, i = i })
+            -- (2026-11-03: at the enemies the army knows there, not the zone's centre; orders replace, ORDERS above)
+            local sent = Defenders(z, theirsMass, all)
+            defendedNow = true
+            if sent[1] then
+                local x, zz = X.AimPoint(R, z, sent)
+                X.Order(R, sent, true, X.Pos3(x, zz), string.format('d%d_%d_%d', z, math.floor(x / 16), math.floor(zz / 16)), 10)
             end
-            table.sort(near, function(x, y)
-                if x.d ~= y.d then return x.d < y.d end
-                return x.i < y.i
-            end)
-            local sent, mass = {}, 0
-            for _, n in ipairs(near) do
-                if not all and mass >= 1.5 * theirsMass + 1 then break end
-                table.insert(sent, n.u)
-                busy[n.u:GetEntityId()] = true
-                mass = mass + MassOf(R, n.u)
-            end
-            if sent[1] then IssueAggressiveMove(sent, pos) end
             break
         else
             if not R.lastAvoid or R.lastAvoid ~= z or R.tick - (R.lastAvoidTick or 0) >= 300 then
@@ -486,11 +597,42 @@ function Think(brain)
                         table.insert(home, u)
                     end
                 end
-                if home[1] then IssueAggressiveMove(home, { R.startX, GetTerrainHeight(R.startX, R.startZ), R.startZ }) end
+                if home[1] then X.Order(R, home, true, startPos, 'home', 40) end
             end
         end
     end
     if not threatened[1] then R.defending = nil end
+    -- ALLIES (2026-11-03, Chris's big test: "the allied AI is building a massive army but doesn't fight the small army
+    -- of red units attacking" its ally): the zone of an ally's within kAllyReach of our start by land that enemies
+    -- are in, nearest first, when none of ours is defended this think and the estimate there (ours and the allies'
+    -- that can come) lets us hold it: the nearest units, 1.5x the enemy mass that can come, as for our own zones.
+    if not defendedNow and not (R.recallUntil and R.tick < R.recallUntil) then
+        local list = {}
+        for _, z in ipairs(R.allyThreat) do
+            local d = Remastered.AIZoneDistance(R.startZone, z, 'land')
+            if d >= 0 and d <= X.allyReach then table.insert(list, { z = z, d = d }) end
+        end
+        table.sort(list, function(a, b)
+            if a.d ~= b.d then return a.d < b.d end
+            return a.z < b.z
+        end)
+        for _, q in ipairs(list) do
+            local margin, _, _, _, _, theirsMass = Remastered.AIZoneEstimate(R.army, q.z, kHorizon, false, kDefenceSoak)
+            if margin >= K.defend and theirsMass > 0 then
+                if R.allyDefending ~= q.z then
+                    Log(R, 'ally', q.z, margin, ratio, string.format('an ally is attacked (%.0f mass can come there): we help', theirsMass))
+                    R.allyDefending = q.z
+                end
+                local sent = Defenders(q.z, theirsMass, false)
+                if sent[1] then
+                    local x, zz = X.AimPoint(R, q.z, sent)
+                    X.Order(R, sent, true, X.Pos3(x, zz), string.format('y%d_%d_%d', q.z, math.floor(x / 16), math.floor(zz / 16)), 10)
+                end
+                break
+            end
+        end
+        if not list[1] then R.allyDefending = nil end
+    end
     local free = {}
     for _, u in ipairs(units) do
         if not busy[u:GetEntityId()] then table.insert(free, u) end
@@ -498,35 +640,44 @@ function Think(brain)
     units = Posts(R, K, free, ownEconomy, ratio, armyMass)
 
     -- a GATHER in progress: the army goes to the staging zone; once most of it is there (or the time is up) it
-    -- commits if the estimate still lets it, else the gather is dropped
+    -- commits if the estimate still lets it, else the gather is dropped. (2026-11-03: "there" is a radius that grows
+    -- with the army - a 700-unit army does not stand within 45 world units - the walk is an attack-move, so it fights
+    -- what it meets on the way, and a gather still arriving when the time is up waits on, up to kGatherExtend x)
     if R.op and R.op.kind == 'gather' then
         local margin = Remastered.AIZoneEstimate(R.army, R.op.zone, kHorizon)
         local f = Remastered.AIZoneForces(R.army, R.op.zone)
         local stage = Remastered.AIZone(R.op.stage)
-        local there = Near(units, stage, kGatherRadius)
+        -- (2026-11-03: the share is of the units the gather started with, R.op.n0: in the 4v4 the factories added
+        -- hundreds while the army walked, and 302 of 800 never reached 70%)
+        local n = math.min(table.getn(units), R.op.n0 or table.getn(units))
+        local radius = kGatherRadius + X.gatherPerUnit * math.sqrt(n)
+        local there = Near(units, stage, radius)
         local bar = R.op.push and K.commitPush or K.commit
+        local age = R.tick - R.op.since
+        local limit = R.op.limit or kGatherTicks
+        local timeUp = age >= limit and not (there > (R.op.there or 0) and age < X.gatherExtend * limit)
+        R.op.there = there
         if f.enemy.land.count + f.enemy.structure.count <= 0 then
             Log(R, 'dropped', R.op.zone, margin, ratio, 'gather: no enemy known at the target any more')
             R.op = nil
-        elseif (there > 0 and there >= kGatherShare * table.getn(units)) or R.tick - R.op.since >= (R.op.limit or kGatherTicks) then
-            if there > 0 and there >= kGatherLeast * table.getn(units) and margin >= bar then
+        elseif (there > 0 and there >= kGatherShare * n) or timeUp then
+            if there > 0 and there >= kGatherLeast * n and margin >= bar then
                 R.op = { kind = R.op.push and 'push' or 'attack', zone = R.op.zone, stage = R.op.stage, since = R.tick,
-                    logged = R.tick }
+                    logged = R.tick, seq = R.op.seq }
                 R.op.lost0, R.op.killed0 = Trade(brain)
                 R.op.tradeTick = R.tick
                 Log(R, 'commit', R.op.zone, margin, ratio, string.format('gathered (%d of %d at the staging zone): %s',
-                    there, table.getn(units), R.op.kind .. ' together'))
-                if units[1] then IssueAggressiveMove(units, (ZonePos(R.op.zone))) end
-                return
+                    there, n, R.op.kind .. ' together'))
+                -- (the attack's orders follow below, this think)
             else
                 Log(R, 'dropped', R.op.zone, margin, ratio, there > 0 and
                     (margin < bar and string.format('gather: the estimate fell under %.2f', bar) or
-                    string.format('gather: only %d of %d reached the staging zone', there, table.getn(units))) or
+                    string.format('gather: only %d of %d reached the staging zone', there, n)) or
                     'gather: nobody reached the staging zone')
                 R.op = nil
             end
         else
-            if units[1] then IssueMove(units, (ZonePos(R.op.stage))) end
+            if units[1] then X.Order(R, units, true, X.Pos3(stage.x, stage.z), 'g' .. R.op.seq, 0.5 * radius) end
             return
         end
     end
@@ -542,9 +693,17 @@ function Think(brain)
         -- losing ends whatever the estimate says. It is logged 'withdraw', not 'retreat': the enemy there is not
         -- weaker, only unseen, so the never-retreat-from-a-weaker-force rule does not apply.
         local withdraw
+        -- (2026-11-03: the mass lost is that of the units that fought in the operation, R.op.members, not the whole
+        -- army's: in the 4v4 with 800 units the army lost 1,500 mass a minute elsewhere - posts, the base, allies'
+        -- fights - and every push was withdrawn after 1-2 minutes whatever it traded)
         if R.op.tradeTick and R.tick - R.op.tradeTick >= kTradeWindow then
             local lost, killed = Trade(brain)
-            local dl, dk = lost - R.op.lost0, killed - R.op.killed0
+            local dk = killed - R.op.killed0
+            local dl, keep = 0, {}
+            for _, m in ipairs(R.op.members or {}) do
+                if R.alive[m.id] then table.insert(keep, m) else dl = dl + m.mass end
+            end
+            R.op.members = keep
             if dl >= kTradeMin and dl >= kTradeLoss * math.max(dk, 1) then
                 withdraw = string.format('the fight trades badly: %.0f mass lost for %.0f killed in %d s (unseen enemies)',
                     dl, dk, kTradeWindow / 10)
@@ -556,7 +715,7 @@ function Think(brain)
             R.badTarget = R.badTarget or {}
             R.badTarget[R.op.zone] = R.tick  -- (not a target again for kTradeMemory: PickTarget)
             R.op = nil
-            if units[1] then IssueMove(units, { R.startX, GetTerrainHeight(R.startX, R.startZ), R.startZ }) end
+            if units[1] then X.Order(R, units, false, startPos, 'back', 40) end
             return
         elseif f.enemy.land.count + f.enemy.structure.count <= 0 then
             Log(R, 'taken', R.op.zone, margin, ratio, 'no enemy known there any more')
@@ -568,7 +727,7 @@ function Think(brain)
             else
                 Log(R, 'retreat', R.op.zone, margin, ratio, string.format('margin under the commit bar %.2f', commit))
                 R.op = nil
-                if units[1] then IssueMove(units, { R.startX, GetTerrainHeight(R.startX, R.startZ), R.startZ }) end
+                if units[1] then X.Order(R, units, false, startPos, 'back', 40) end
                 return
             end
         else
@@ -576,20 +735,34 @@ function Think(brain)
                 Log(R, 'committed', R.op.zone, margin, ratio, R.op.kind .. ' goes on')
                 R.op.logged = R.tick
             end
-            -- reinforcements (phase 5): a unit farther from the target than the staging zone is (plus kGatherRadius)
-            -- goes there first, so new units join the army instead of reaching the fight one by one
-            local tpos, tzone = ZonePos(R.op.zone)
+            -- reinforcements (phase 5): a unit farther from the target than the staging zone is (plus the gather's
+            -- radius) goes there first, so new units join the army instead of reaching the fight one by one
+            local tzone = Remastered.AIZone(R.op.zone)
             local stage = R.op.stage and Remastered.AIZone(R.op.stage)
+            local sd = stage and math.sqrt((stage.x - tzone.x) * (stage.x - tzone.x) + (stage.z - tzone.z) * (stage.z - tzone.z))
+            local radius = kGatherRadius + X.gatherPerUnit * math.sqrt(table.getn(units))
             local fight, join = {}, {}
             for _, u in ipairs(units) do
                 local p = u:GetPosition()
                 local dx, dz = p[1] - tzone.x, p[3] - tzone.z
                 local d = math.sqrt(dx * dx + dz * dz)
-                local sd = stage and math.sqrt((stage.x - tzone.x) * (stage.x - tzone.x) + (stage.z - tzone.z) * (stage.z - tzone.z))
-                if stage and d > sd + kGatherRadius then table.insert(join, u) else table.insert(fight, u) end
+                if stage and d > sd + radius then table.insert(join, u) else table.insert(fight, u) end
             end
-            if fight[1] then IssueAggressiveMove(fight, tpos) end
-            if join[1] then IssueMove(join, (ZonePos(R.op.stage))) end
+            -- (2026-11-03: the fight goes at the enemy the army knows in the zone nearest it, AimPoint, not its centre)
+            R.op.members = R.op.members or {}
+            R.op.memberOf = R.op.memberOf or {}
+            for _, u in ipairs(fight) do
+                local id = u:GetEntityId()
+                if not R.op.memberOf[id] then
+                    R.op.memberOf[id] = true
+                    table.insert(R.op.members, { id = id, mass = MassOf(R, u) })
+                end
+            end
+            if fight[1] then
+                local x, z = X.AimPoint(R, R.op.zone, fight)
+                X.Order(R, fight, true, X.Pos3(x, z), string.format('a%d_%d_%d', R.op.seq, math.floor(x / 16), math.floor(z / 16)), 10)
+            end
+            if join[1] then X.Order(R, join, true, X.Pos3(stage.x, stage.z), 'j' .. R.op.seq, 0.5 * radius) end
             return
         end
     end
@@ -624,14 +797,28 @@ function Think(brain)
         if target then
             local what = target.structures > 0 and (target.economy > 0 and 'their economy' or 'their structures') or
                 'their army in the field'
-            local stage = StagingZone(R, target.zone)
-            -- (phase 6: the gather waits for the walk from the start, kGatherSpeed, as well as kGatherTicks)
-            local walk = math.max(0, Remastered.AIZoneDistance(R.startZone, stage, 'land'))
-            R.op = { kind = 'gather', push = push, zone = target.zone, stage = stage, since = R.tick,
-                limit = kGatherTicks + math.floor(10 * walk / kGatherSpeed) }
-            Log(R, push and 'push' or 'attack', target.zone, margin, ratio, string.format('%s; target: %s; gathering at zone %d',
-                push and 'far ahead overall: a decisive push' or 'ahead overall and the estimate favours us', what, stage))
-            IssueMove(units, (ZonePos(stage)))
+            -- (2026-11-03: the staging zone on our side of the target, on the way from where the army is; none when
+            -- the army is that near already: it goes at once)
+            local from = X.ArmyZone(R, units)
+            local stage = StagingZone(R, target.zone, from)
+            R.opSeq = R.opSeq + 1
+            if stage then
+                -- (phase 6: the gather waits for the walk, kGatherSpeed, as well as kGatherTicks)
+                local walk = math.max(0, Remastered.AIZoneDistance(from, stage, 'land'))
+                R.op = { kind = 'gather', push = push, zone = target.zone, stage = stage, since = R.tick,
+                    limit = kGatherTicks + math.floor(10 * walk / kGatherSpeed), seq = R.opSeq, n0 = table.getn(units) }
+                Log(R, push and 'push' or 'attack', target.zone, margin, ratio, string.format('%s; target: %s; gathering at zone %d (from zone %d)',
+                    push and 'far ahead overall: a decisive push' or 'ahead overall and the estimate favours us', what, stage, from))
+                X.Order(R, units, true, (ZonePos(stage)), 'g' .. R.opSeq, 0)
+            else
+                R.op = { kind = push and 'push' or 'attack', zone = target.zone, since = R.tick, logged = R.tick, seq = R.opSeq }
+                R.op.lost0, R.op.killed0 = Trade(brain)
+                R.op.tradeTick = R.tick
+                Log(R, push and 'push' or 'attack', target.zone, margin, ratio, string.format('%s; target: %s; near: at once (from zone %d)',
+                    push and 'far ahead overall: a decisive push' or 'ahead overall and the estimate favours us', what, from))
+                local x, z = X.AimPoint(R, target.zone, units)
+                X.Order(R, units, true, X.Pos3(x, z), string.format('a%d_%d_%d', R.opSeq, math.floor(x / 16), math.floor(z / 16)), 10)
+            end
             return
         elseif bestZone and bestZone > 0 and R.tick - (R.lastWait or 0) >= 300 then
             Log(R, 'wait', bestZone, margin, ratio, 'ahead overall, but no target the estimate favours yet')
@@ -651,7 +838,8 @@ function Think(brain)
                     end
                     if light[1] then
                         Log(R, 'raid', e.zone, margin, ratio, 'enemy economy without known defenders')
-                        IssueAggressiveMove(light, (ZonePos(e.zone)))
+                        local x, z = X.AimPoint(R, e.zone, light)
+                        X.Order(R, light, true, X.Pos3(x, z), 'r' .. e.zone, 10)
                     end
                     break
                 end
@@ -664,5 +852,5 @@ function Think(brain)
     for _, u in ipairs(units) do
         if u:IsIdleState() then table.insert(home, u) end
     end
-    if home[1] then IssueAggressiveMove(home, { R.startX, GetTerrainHeight(R.startX, R.startZ), R.startZ }) end
+    if home[1] then X.Order(R, home, true, startPos, 'home', 60) end
 end

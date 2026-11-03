@@ -137,6 +137,11 @@ AIBrain = Class(StandardBrain) {
             tick = 0,
         }
         self:RemasterMassPoints()
+        -- (2026-11-03) the land combat units at which T1 land factories / all land factories stop making them: shares
+        -- of the lobby's unit cap (kTuning.landSoftShare / landHardShare; 1000 when the option is missing)
+        local cap = tonumber(ScenarioInfo.Options and ScenarioInfo.Options.UnitCap) or 1000
+        self.Remaster.landSoft = math.floor(kTuning.landSoftShare * cap)
+        self.Remaster.landHard = math.floor(kTuning.landHardShare * cap)
         while not ArmyIsOutOfGame(army) do
             self.Remaster.tick = GetGameTick()
             self:RemasterEconomy()
@@ -1054,7 +1059,9 @@ AIBrain = Class(StandardBrain) {
                     IssueBuildFactory({ f }, self:Bp('l0101'), 1)
                     R.scoutFirst = nil
                     scouts = 1
-                elseif not short or landIndex * 2 <= ctx.landFactories + 1 then
+                elseif (not short or landIndex * 2 <= ctx.landFactories + 1) and
+                    not ((R.armyCount or 0) >= R.landHard or ((R.armyCount or 0) >= R.landSoft and tech == 1)) then
+                    -- (2026-11-03: not past the soft cap with a T1 factory, nor past the hard cap: the unit spam)
                     IssueBuildFactory({ f }, Choices().LandPick(self, tech), 1)
                 end
             elseif f:IsIdleState() and EntityCategoryContains(categories.NAVAL, f) then
