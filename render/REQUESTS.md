@@ -34,6 +34,17 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
+## 52. To the INTERFACE track: frame generation is silently off with anti-aliasing on (2026-11-03, Chris's big test)
+
+**What:** `Looks::SceneSamples()` (ui/user/user_state.h:567) gives 1 only under FSR 3 (`temporalUpscale`). The renderer makes
+frames between only with one sample a pixel (render/world.cpp:1164, `frameGeneration && gSceneSamples == 1`), as FSR 3's
+frame generation needs. So with MSAA on and Frame Generation ticked (without FSR 3), nothing happens. Chris: "tried fsr/frame
+gen doesn't seem to be doing anything". Smallest form: `return temporalUpscale || frameGeneration ? 1 : sceneSamples;` and the
+option's tooltip saying it turns MSAA off (FSR 3 smooths the edges instead). Also worth a line in the options: FSR raises the
+frame rate only where the card is the limit (in the late game the simulation is: there it changes little).
+
+**Answer:** (none yet)
+
 ## 51. To the ENGINE track: who fired a shell, in ProjectileView (2026-11-01, not blocking; agreed by the engine for later)
 
 What: `ProjectileView` gains the launching unit's blueprint id (or its entity id), as `BeamView::unit` has it: a shell's
