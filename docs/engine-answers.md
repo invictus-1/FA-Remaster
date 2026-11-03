@@ -884,7 +884,9 @@ Our simulation keeps `autoSurfaceMode` but does not act on it yet.
   and in TRANSPORTATION (0xe1b654). One level only.
 - The result is a set; then SetSelection is called, and nothing is returned.
 - "Selectable" is UserUnit::IsSelectable 0x8c0500 (with FAF's patch at 0x1291519). A unit is NOT selectable if it is:
-  - attached, mobile (motion type 1..8) and POD;
+  - attached, mobile (motion type 1..8) and NOT a POD (cargo on a transport); an attached POD (a docked drone) IS
+    selectable (0x8c0567 `test al,al`, 0x8c056d `je 0x8c0574` when not in POD; corrected 2026-11-03 by simfix: the
+    first version of this answer had it the other way, so docked drones could not be clicked in Chris's big test);
   - in unit state 33 (UnSelectable);
   - dead;
   - being built and in neither FACTORY nor CQUEMOV;
