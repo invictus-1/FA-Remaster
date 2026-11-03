@@ -13,12 +13,18 @@
 namespace render {
 
 // What the army the picture is for knows of a place of the map (the sight grid, SimFrames::TakeSight).
+// ([fogwar] SimFrames makes it from the vision circles as the original draws its fog: radar, sonar and omni play no
+// part in it, and it sets kSightRadar / kSightSonar no more; SightShade still reads them from a grid that has them)
 enum SightBits : uint8_t {
   kSightRadar = 1,    // radar or omni covers it now
   kSightSonar = 2,    // sonar covers it now (which tells of what is on or in water)
+  // [fogwar] how much of the place a vision circle clears, 0..15 (bits 2..5; kSightShareShift): the fog's soft edge
+  // (SimFrames' grid from the vision circles sets it; 0 with kSightNow set: wholly, as a grid without it says)
+  kSightShare = 0x3c,
   kSightEver = 0x40,  // it has been seen at some time
   kSightNow = 0x80,   // it is seen now
 };
+constexpr int kSightShareShift = 2;  // [fogwar]
 
 struct FrameUnit {
   uint32_t id = 0;         // the game's entity id; bits 20 to 27 are the army index

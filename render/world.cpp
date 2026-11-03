@@ -650,6 +650,23 @@ void World::MarkOutline(const Model* model, Vec3 position, Vec3 color, bool buil
   meshes.MarkLast(model, outlines.Mark(color, building, id, outlines.Strength(radius, away, camera.fovY, icon)));
 }
 
+// [fogwar] A structure: its blueprint's Physics.MotionType is none (RULEUMT_None, or not given); a blueprint that cannot be
+// read goes by the third letter of its id, "ueb0101", the game's own way of naming structures. Asked once per kind.
+bool World::IsStructure(uint32_t blueprint, const std::string& id) {
+  if (blueprint >= structureKind_.size()) structureKind_.resize(static_cast<size_t>(blueprint) + 1, -1);
+  int8_t& kind = structureKind_[blueprint];
+  if (kind < 0) {
+    BpValue bp;
+    if (!id.empty() && dust.readBlueprint && dust.readBlueprint(id, &bp)) {
+      const std::string motion = bp["Physics"]["MotionType"].StringOr(std::string());
+      kind = motion.empty() || motion == "RULEUMT_None" ? 1 : 0;
+    } else {
+      kind = id.size() > 2 && (id[2] == 'b' || id[2] == 'B') ? 1 : 0;
+    }
+  }
+  return kind == 1;
+}
+
 void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation, const Pose* pose, const Vec3* armyColor, uint32_t id,
                      bool structure) {
   if (lampsOn_ <= 0 || !model || model->lights.empty()) return;
@@ -2495,12 +2512,15 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     // its blip when it is on radar, sonar or omni alone, nothing otherwise
     const std::string& blueprint = (*frame.blueprints)[u.blueprint];
     // (what the army has seen before it remembers: a building stays where it stood, drawn as it
-    // was; a unit keeps its own icon when it is a blip. A building: by the third letter of its
-    // id, "ueb0101", the game's own way of naming them - units of mods that name otherwise are
-    // not remembered)
+    // was; a unit keeps its own icon when it is a blip)
+    // [fogwar] Which are remembered, by the recon bits as the original goes (the engine's reading, 2026-11-03): seen at
+    // some time and not now (0x10 without 8); with no radar, sonar or omni bit that can only be a structure (the army's
+    // blips of mobile units are deleted when they leave its intel); with one, a mobile unit shows as its blip and a
+    // structure as remembered, told by its blueprint's MotionType (no longer by the third letter of its id, "ueb0101":
+    // mods' structures named otherwise were not remembered).
     const bool known = u.SeenBefore();
-    const bool building = blueprint.size() > 2 && (blueprint[2] == 'b' || blueprint[2] == 'B');
-    const bool remembered = known && building;
+    const bool building = IsStructure(u.blueprint, blueprint);
+    const bool remembered = known && u.recon != 0xff && ((u.recon & 7) == 0 || building);
     const bool blip = u.Blip() && !remembered;
     Vec3 position{u.position[0], u.position[1], u.position[2]};
     Quat orientation{u.orientation[0], u.orientation[1], u.orientation[2], u.orientation[3]};
@@ -2509,10 +2529,22 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     // another army's building is kept as it is while it is seen (0x10: seen at some time, which
     // the army's own and its allies' never say), and drawn as it was kept while it is not: what
     // has become of it since, the army does not know
+    // [fogwar] a still photo of it (Chris, 2026-11-02: under the fog one sees the structures as last scouted, nothing
+    // more): its pose and hidden bones, its treads' scroll, its health and its wear as they were, and nothing that works -
+    // no machinery, lamps, dust, outline (below, by asRemembered; its effects by Effects::Hidden, its shield's bubble by
+    // the bubble's own sight)
     bool asRemembered = false;
-    if (building && u.recon != 0xff && (u.recon & 0x10)) {
+    const Remembered* photo = nullptr;
+    if (u.recon != 0xff && (u.recon & 0x10) && (u.Seen() ? building : remembered)) {
       if (u.Seen()) {
-        remembered_[u.id] = {u.blueprint, position, color, orientation, fractionComplete, frameStamp_};
+        Remembered& r = remembered_[u.id];
+        r.blueprint = u.blueprint, r.position = position, r.color = color, r.orientation = orientation;
+        r.fractionComplete = fractionComplete, r.stamp = frameStamp_;
+        r.bones.assign(frame.bones.begin() + std::min<size_t>(u.firstBone, frame.bones.size()),
+                       frame.bones.begin() + std::min<size_t>(static_cast<size_t>(u.firstBone) + u.boneCount, frame.bones.size()));
+        r.treads[0] = u.treads[0], r.treads[1] = u.treads[1];
+        r.health = u.health, r.maxHealth = u.maxHealth;
+        r.wearKept = false;
       } else {
         auto kept = remembered_.find(u.id);
         if (kept != remembered_.end()) {
@@ -2521,6 +2553,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
           orientation = kept->second.orientation;
           fractionComplete = kept->second.fractionComplete;
           asRemembered = true;
+          photo = &kept->second;
         }
       }
     }
@@ -2560,22 +2593,33 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     // (not on a unit whose script has hidden all of it: what a building is upgraded to stands in
     // the same place, unseen, until it is done, and the original shows no bar for it)
     bool allHidden = false;
-    for (uint32_t i = u.firstBone; i < u.firstBone + u.boneCount && i < frame.bones.size(); ++i)
-      if (frame.bones[i].bone == 0) {
-        allHidden = frame.bones[i].hidden;
-        break;
-      }
-    if (!blip && !blueprint.empty() && u.Seen() && !allHidden) {
+    if (photo) {  // [fogwar] (as it was)
+      for (const FrameBone& b : photo->bones)
+        if (b.bone == 0) {
+          allHidden = b.hidden;
+          break;
+        }
+    } else {
+      for (uint32_t i = u.firstBone; i < u.firstBone + u.boneCount && i < frame.bones.size(); ++i)
+        if (frame.bones[i].bone == 0) {
+          allHidden = frame.bones[i].hidden;
+          break;
+        }
+    }
+    // [fogwar] (a remembered one: no bars at all - Chris in the original, 2026-11-03: a remembered enemy structure under the
+    // fog shows no life bar, only its name and owner on hover; its work and its shield are not the army's to know either)
+    const float health = photo ? photo->health : u.health, maxHealth = photo ? photo->maxHealth : u.maxHealth;
+    if (!blip && !blueprint.empty() && (u.Seen() || photo) && !allHidden) {
       const StrategicIcons::Kind* kind = icons.ForBlueprint(models.UnitBlueprintPath(blueprint));
       const bool own = focusArmy < 0 || static_cast<int>((u.id >> 20) & 0xff) == focusArmy;
       const float away = Length(position - view.eye);
       const bool isSelected = !selected.empty() && selected.count(u.id) != 0;
       const uint32_t army = (u.id >> 20) & 0xff;
       const bool friendly = own || (army < 64 && ((alliedArmies >> army) & 1) != 0);
-      const bool life = lifeBars && u.maxHealth > 0 && (friendly || lifeBarsOnEnemies) && (isSelected || u.id == hover || away * view.lodScale < kind->fadeIn * 0.9f);  // ([lodscale] as the icons)
+      const bool life = lifeBars && !photo && maxHealth > 0 && (friendly || lifeBarsOnEnemies) && (isSelected || u.id == hover || away * view.lodScale < kind->fadeIn * 0.9f);  // ([lodscale] as the icons)
       // (a firing cycle only on the unit under the mouse or selected: Chris, 2026-10-14, the Summit's
       // reload bar "should only show if I put my cursor over it instead of at all times")
-      const bool work = workBars && own && u.workProgress > 0 && u.workProgress < 1 && (!kind->fireClock || isSelected || u.id == hover);
+      const bool work = workBars && own && !photo && u.workProgress > 0 && u.workProgress < 1 && (!kind->fireClock || isSelected || u.id == hover);
       if (life || work) {
         // (the size, height and place the unit's blueprint gives its life bar, in world units: the bar
         // lies that far from the unit's middle down the screen, along the ground)
@@ -2592,9 +2636,9 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
         const float wide = std::clamp(kind->lifeBarSize / perPixel, 10.0f, 900.0f);
         const float thick = std::clamp(std::floor(kind->lifeBarHeight / perPixel + 0.5f), 3.0f, 14.0f);
         // (the life bar, under it the shield's where the unit has one up, under that its work)
-        const bool shield = life && (u.hasShield || u.shieldRatio > 0);  // (down: an empty bar)
+        const bool shield = life && !photo && (u.hasShield || u.shieldRatio > 0);  // (down: an empty bar)
         const size_t before = icons.BarCount();
-        if (life) icons.AddBar(at, u.health / u.maxHealth, wide, 0, 0, thick);
+        if (life) icons.AddBar(at, health / maxHealth, wide, 0, 0, thick);
         if (shield) icons.AddBar(at, u.shieldRatio, wide, 2, thick, thick);
         if (work) icons.AddBar(at, u.workProgress, wide, 1, (life ? thick : 0) + (shield ? thick : 0), thick);
         // (a unit in the life bars' list: where its name would go)
@@ -2602,8 +2646,8 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
         if (life && icons.BarsAnchor(before, &ax, &ay)) barAnchors.push_back({u.id, ax, ay});
       }
       // ([pausemark] ui request 42, Chris's big test: a switched-off extractor had no mark; the original marks an allied unit
-      // that is paused or has a toggle off)
-      if (workBars && friendly && (u.paused || u.ToggledOff())) {
+      // that is paused or has a toggle off; [fogwar] none on a remembered photo)
+      if (workBars && friendly && !photo && (u.paused || u.ToggledOff())) {
         if (pauseMark_ == -2) pauseMark_ = icons.MarkIcon("pause");
         const float top = model && model->ok ? std::max(model->boundsMax.y * model->scale, 0.3f) + 0.35f : kind->selectionZ * 1.1f + 0.4f;
         icons.AddMark(pauseMark_, position + Vec3{0, top, 0}, 16);
@@ -2642,6 +2686,11 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       pose.next = frame.bones.data() + u.nextFirstBone;
       pose.nextCount = u.nextBoneCount;
       pose.blend = frame.blend;
+      if (photo) {  // [fogwar] (as it stood when last seen: its bones then, not the rest pose)
+        pose.now = pose.next = photo->bones.data();
+        pose.nowCount = pose.nextCount = static_cast<uint32_t>(photo->bones.size());
+        pose.blend = 0;
+      }
       // [machinery] a factory's parts at work (machinery.h): posed after the simulation's bones, as it is seen and finished
       float belt = -1;
       if (model->machinery && !asRemembered && u.Seen() && fractionComplete >= 1)
@@ -2659,7 +2708,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       // (a mod's own look for its personal shield, Display.PersonalShield: only round its hits, and on a
       // capsule round the unit instead of along its outline)
       const PersonalShieldLook* own = nullptr;
-      if ((shielded || u.hasShield) && !blueprint.empty()) {
+      if ((shielded || u.hasShield) && !blueprint.empty() && !asRemembered) {  // ([fogwar] not on a remembered one)
         const PersonalShieldLook& look = models.PersonalShield(blueprint);
         if (look.any) own = &look;
       }
@@ -2686,12 +2735,24 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
         if (!shellHits_.empty()) meshes.AddShell(shell, Mat4::FromTRS(drawAt, drawTurn, model->scale), shellHits_);
       }
       // (and its treads' scroll, where its mesh's treads scroll and its shield's hit does not take the place)
-      meshes.Add(model, Mat4::FromTRS(drawAt, drawTurn, model->scale), color, built, asRemembered ? nullptr : &pose, hitAt,
-                 model->scrolls && !hitAt ? u.treads : nullptr, u.id + 1);
+      // ([fogwar] a remembered one with the pose, the treads' scroll and the wear it had when last seen)
+      meshes.Add(model, Mat4::FromTRS(drawAt, drawTurn, model->scale), color, built, asRemembered && !photo ? nullptr : &pose, hitAt,
+                 model->scrolls && !hitAt ? (photo ? photo->treads : u.treads) : nullptr, u.id + 1);
       meshes.Belt(belt);  // [machinery]
       // (its battle scars and snow: unit_wear.h; [groundfix] its dirt from the first frame it is drawn: its box from the
       // model drawn, which WatchWear, before the models are made, finds only from the next frame)
-      if (const WearLook* w = WearOf(u.id, model)) meshes.Wear(*w);
+      if (photo) {
+        Remembered& r = remembered_[u.id];
+        if (!r.wearKept) {  // (taken at the first frame it is not seen: one frame on from the last it was)
+          const WearLook* w = WearOf(u.id, model);
+          r.hasWear = w != nullptr;
+          if (w) r.wear = *w;
+          r.wearKept = true;
+        }
+        if (r.hasWear) meshes.Wear(r.wear);
+      } else if (const WearLook* w = WearOf(u.id, model)) {
+        meshes.Wear(*w);
+      }
       // (its outline where it is hidden, hidden_outlines.h: only what the player may see of it now - his own, an ally's,
       // an enemy's in sight - and finished; never a building drawn as it was remembered)
       if (outlinesNow_ && u.Seen() && !asRemembered && fractionComplete >= 1 && !allHidden)
@@ -2785,8 +2846,16 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       icons.Add(kind, r.position, iconColor, false, false, true);
       rememberedGone.push_back({kind, r.position, iconColor});
       const Model* model = models.Unit(blueprint);
-      if (model && model->ok && !placedDraw.TakeModel(model, Mat4::FromTRS(r.position, r.orientation, model->scale)))  // [pings]
-        meshes.Add(model, Mat4::FromTRS(r.position, r.orientation, model->scale), r.color, r.fractionComplete);
+      if (model && model->ok && !placedDraw.TakeModel(model, Mat4::FromTRS(r.position, r.orientation, model->scale))) {  // [pings]
+        // ([fogwar] as it was last seen: its pose and its wear then)
+        Pose pose;
+        pose.now = pose.next = r.bones.data();
+        pose.nowCount = pose.nextCount = static_cast<uint32_t>(r.bones.size());
+        pose.blend = 0;
+        meshes.Add(model, Mat4::FromTRS(r.position, r.orientation, model->scale), r.color, r.fractionComplete, &pose, nullptr,
+                   model->scrolls ? r.treads : nullptr, it->first + 1);
+        if (r.wearKept && r.hasWear) meshes.Wear(r.wear);
+      }
     }
     ++it;
   }

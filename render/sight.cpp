@@ -126,7 +126,9 @@ void SightShade::Set(const std::vector<uint8_t>& grid, int cells) {
   cells_ = cells;
   pixels_.resize(static_cast<size_t>(cells) * static_cast<size_t>(cells) * 4);
   for (size_t i = 0; i < static_cast<size_t>(cells) * static_cast<size_t>(cells); ++i) {
-    pixels_[i * 4] = (grid[i] & kSightNow) ? 255 : 0;
+    // ([fogwar] how much of it a vision circle clears, where the grid says: the fog's soft round edge)
+    const int share = (grid[i] & kSightShare) >> kSightShareShift;
+    pixels_[i * 4] = static_cast<uint8_t>(share ? share * 17 : (grid[i] & kSightNow) ? 255 : 0);
     pixels_[i * 4 + 1] = (grid[i] & kSightEver) ? 255 : 0;
     pixels_[i * 4 + 2] = (grid[i] & kSightRadar) ? 255 : 0;
     pixels_[i * 4 + 3] = (grid[i] & kSightSonar) ? 255 : 0;

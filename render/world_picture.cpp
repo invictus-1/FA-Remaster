@@ -1844,7 +1844,7 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height, bo
     for (const FrameUnit& u : m.frame.units) {
       const std::string& blueprint = (*m.frame.blueprints)[u.blueprint];
       if (blueprint.empty()) continue;
-      const bool remembered = u.SeenBefore() && blueprint.size() > 2 && (blueprint[2] == 'b' || blueprint[2] == 'B');
+      const bool remembered = u.SeenBefore() && u.recon != 0xff && ((u.recon & 7) == 0 || w.IsStructure(u.blueprint, blueprint));  // ([fogwar] as World's)
       if (u.dead || (!u.Seen() && !u.Blip() && !remembered) || w.OutsidePlayable(u.position[0], u.position[2])) continue;
       if (u.blueprint >= m.iconKinds.size()) m.iconKinds.resize(m.frame.blueprints->size(), nullptr);
       const StrategicIcons::Kind*& kind = m.iconKinds[u.blueprint];

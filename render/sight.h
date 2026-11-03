@@ -1,6 +1,6 @@
 // The fog of war's look: what the army the picture is for does not see now is darkened. What it
 // sees comes as a square grid over the map (seen now, seen at some time, never; SimFrames makes it
-// from the engine's ReconAt); the picture is multiplied, pixel by pixel, by how much of the place
+// from the vision circles of the army's and its allies' units, [fogwar] as the original does); the picture is multiplied, pixel by pixel, by how much of the place
 // under the pixel is seen, found from the scene's depth. So everything there darkens alike: ground,
 // water, wrecks. A place never seen can be darker still (`neverSeen`).
 #pragma once
@@ -44,6 +44,8 @@ class SightShade {
   float neverSeen = 0.5f;
   // How much an unseen place keeps while radar or omni covers it (on water, sonar too): a little
   // more, so that the cover shows on the ground. `waterLevel`: below it a place is water.
+  // ([fogwar] the original's fog knows nothing of radar or omni, and SimFrames' grid no longer says where they cover:
+  // this is for a grid that does)
   float covered = 0.7f;
   float waterLevel = -1e9f;
 
