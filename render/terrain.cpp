@@ -564,8 +564,12 @@ void SnowAround(float2 uv, float2 xz) {
   float sky = snowShelterHere.g, crowns = snowShelterHere.b, lay = snowShelterHere.a * 2 - 1;
   float slope = length(base.xz);
   float lee = slope > 1e-3 ? dot(base.xz / slope, snowWind.xy) * saturate(slope * 5) : 0;  // (1: facing away from the wind, -1: into it)
-  snowLie = (1 + 0.4 * lay * snowTune.w + 0.15 * lee) * (1 - 0.3 * crowns * snowTune.y);
-  snowLess = 0.08 * crowns * snowTune.y + 0.25 * saturate((0.85 - base.y) * 4) + 0.1 * saturate(-lee) + 0.3 * saturate(-lay) * snowTune.w;
+  // ([snowrock] Chris, 2026-11-01: SETONS_R's rock hill went bare and dark in snow, its flat top too: the shelter takes a hill
+  // that is convex all over for a crest (lay near -1), which both thinned the snow and made it less ready, and with the slope's
+  // share nothing lay on it at all. A scoured crest keeps a thin cover: the scour now thins it by half as much and makes it
+  // less ready by a third as much; the hollows and the lee lay it as deep as before)
+  snowLie = (1 + 0.4 * lay * (lay > 0 ? 1 : 0.5) * snowTune.w + 0.15 * lee) * (1 - 0.3 * crowns * snowTune.y);
+  snowLess = 0.08 * crowns * snowTune.y + 0.25 * saturate((0.85 - base.y) * 4) + 0.1 * saturate(-lee) + 0.1 * saturate(-lay) * snowTune.w;
   snowDrift = smoothstep(0.35, 0.9, weather.y * snowLie) * saturate((lay - 0.2) * 2.5) * snowTune.w;  // (only where the wind lays it deep)
   // (what is taken of the sky counted more than plainly, the snow's light being mostly the sky's, but never more than about
   // two thirds of it: a valley's few percent show, a wood's floor is not black; a scoop's walls hide a little more)

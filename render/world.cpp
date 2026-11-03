@@ -1460,16 +1460,18 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       mistNow = byHour * (climateNow == Climate::Dry ? 0.25f : climateNow == Climate::Autumn ? 1.3f : 1.0f) + 0.5f * (lowFog ? std::min(fog, 0.25f) : fog) + 0.4f * wet * (1 - SetIn(rain));  // ([onset]; [weather] the low fog's below)
       mistNow = std::clamp(mistNow * (1 - 0.5f * rain), 0.0f, 1.0f) * (1 - SetIn(snow));
     }
-    // [weather] the low fog in the mist's layer: up to 1.2 mists more, the layer three times as deep at its thickest (it fills
-    // the hollows and leaves the hilltops), what it may hide of a far thing a little more
-    const float fogLayer = fogLow * 1.2f * (1 - SetIn(snow));
+    // [weather] the low fog in the mist's layer: up to 0.75 mists more, the layer half as deep again at its thickest (it
+    // fills the hollows and leaves the hilltops). ([fog1103] Chris's big test, 2026-11-02: "Fog makes everything hard to see should
+    // be more low to the ground but visible": the game's low camera looked along it through the ground's units; was 1.2
+    // mists, three times as deep, hiding at most 0.8: now lower, thinner, at most 0.45)
+    const float fogLayer = fogLow * 0.75f * (1 - SetIn(snow));
     if (haveMap_ && mistNow + fogLayer > 0) {
       // (seen straight down through all of it at its floor, in the middle of a bank, full mist hides a third)
-      const float depth = mistDepth_ * (1 + 2 * fogLow);
+      const float depth = mistDepth_ * (1 + 0.5f * fogLow);
       c.mist[0] = 0.23f * (mistNow + fogLayer) / depth;
       c.mist[1] = mistFloor_;
       c.mist[2] = 1 / depth;
-      c.mist[3] = 0.6f + 0.2f * fogLow;
+      c.mist[3] = 0.6f - 0.15f * fogLow;  // ([fog1103] the low fog hides less of what is in it, not more)
       c.mistMore[0] = 0.75f * fogLayer / (mistNow + fogLayer);  // (the low fog's share of the layer: its banks more even)
     }
     SetSky(skyLight, &c);

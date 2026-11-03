@@ -61,6 +61,21 @@ lod2 and lod3 may leave them out: those parts stand at their idle pose. At most 
   per second). Every vertex on that bone slides its texture along the axis, wrapped within the rect.
 - `"emitters": [{"emitter": <effect blueprint path>, "of": <bone>?, "on_keys": [[t0, t1], ...]?, "state"}]`: plays on this
   part in its state. Without `on_keys` it plays all through the state; `of` defaults to this part's own cycle.
+- `"aim": {"at": <bone>, "lift": <units>?, "strength": 0..1?, "axis": [x, y, z]?}` (2026-11-03, Chris's big test: "the extra
+  arms just move ... and its pointing down"): while the factory builds, the part turns so that `axis` points at bone `at`
+  raised by `lift` world units. `at` is usually `Attachpoint`, where the unit being built stands. `axis` is the way the part
+  points at rest, in the model's axes: for a forearm, its tip's head minus its own head. The turn comes after the part's own
+  motion, scaled by `strength` (default 1) and by how far the factory is at work, so the arm still moves and comes back to
+  rest. Its children follow it.
+- `"beams": [{"at": <bone>, "lift"?, "offset": [x, y, z]?, "on_keys": [[t0, t1], ...]?, "blueprint"?, "width"?}]`
+  (2026-11-03): a build beam from this part's head (moved by `offset`, in the model's axes at rest: the tool's tip) to `at` +
+  `lift`, while the factory builds and, with `on_keys`, only within those windows of the part's own working cycle. It is the
+  game's build beam (`/effects/emitters/build_beam_01_emit.bp`, or `blueprint`), drawn in the faction's remastered look, with
+  the remastered build look's sparks and light where it lands. Put the beam on the tip part that carries the sparks emitter and
+  give it the same `on_keys`.
+  Tried on a copy of UEB0101 (`_scratch\render\buildarms\`): `aim` on the four elbows (`M_fab_el_*`, `M_wel_el_*`; axis =
+  tip head - elbow head, lift 0.3, strength 0.8) and `beams` on the four tips (their emitters' windows). Before / after:
+  `_scratch\render\buildarms\shots\pair1.png`.
 
 **Timing.** The parts work while the unit's work goes on (0 < workProgress < 1, its progress moving within the last half
 second). They run on the game's clock, so a paused game stops them, and each unit is offset a little in its cycle.
