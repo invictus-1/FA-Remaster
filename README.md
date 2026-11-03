@@ -33,31 +33,31 @@ mainly for me, shared in case it's useful or fun for someone else.
 
 Local play (a skirmish against AI) comes first. Multiplayer comes after it (see below).
 
-## Where it stands (October 2026)
+## Where it stands (November 2026)
 
-All thirteen test replays play out **identically to the original, to their last beat**: every unit
-on every beat, every army's economy, and every random draw in the same order. The last of them, a
-five-minute skirmish against seven M28 AIs with mods, got there on 16 October 2026. Since then the check has
-moved on to three high-level multiplayer games from FAF's replay vault. Two of them are identical to the original
-to their last beat since 19 October 2026, an 18-minute 2v2 on Funeral Plains and a 20-minute 1v1 on Abhor, and
-the 31-minute 4v4 on Seton's Clutch is on its way.
+All sixteen test replays play out **identically to the original, to their last beat**: every unit
+on every beat, every army's economy, and every random draw in the same order. Thirteen of them are
+games made for the tests; the other three are high-level multiplayer games from FAF's replay vault, an
+18-minute 2v2 on Funeral Plains, a 20-minute 1v1 on Abhor and a 31-minute 4v4 on Seton's Clutch with
+eight players, the last of them identical to its final beat since 1 November 2026.
 
 A skirmish can be started from the game's own main menu and lobby. It runs in the new simulation, is
 drawn by the new renderer inside the game's own interface, and can be played: select, order, build,
-with the game's sounds, and replays are recorded and played back. It is not a finished game yet:
-there is no saving and no multiplayer, and the campaign is in work (the Forged Alliance
-operations and the tutorial start from the main menu and reach their first objectives; they are
-not checked against the original yet). The stock AI opponents build and fight
-in a first version that is not yet checked against the original; mod AIs such as M28 play.
+with the game's sounds, and every game is recorded as a replay that plays back. The simulation uses
+several processor cores in big battles, and the lobby offers our own AI (Remastered AI) beside the
+game's AIs and mod AIs such as M28. It is not a finished game yet: there is no saving, and the
+campaign is in work (the Forged Alliance operations and the tutorial start from the main menu and
+reach their first objectives; they are not checked against the original yet). The game's own stock
+AI opponents build and fight in a first version that is not yet checked against the original.
 
 The work runs in three tracks that share this repository, plus one outside it:
 
 | Track | Folder | Program | State |
 |---|---|---|---|
-| Simulation | `src/` | `moho64` | Plays whole AI games headless; 13 of 13 replays identical to the original to the last beat |
-| Renderer | `render/` | `moho64view` | Direct3D 12 and Vulkan; ground, water, units, effects, shadows; day and night, weather, lamps on units |
-| Interface | `ui/` | `moho64ui` | The game's own interface scripts run: menu, lobby, in-game panels, orders, sound, replays; 494 of the original's 531 interface engine functions built |
-| Remastered art | not in this repository | – | Remade unit models and a remade Seton's Clutch, made separately |
+| Simulation | `src/` | `moho64` | Plays whole AI games headless; 16 of 16 replays identical to the original to the last beat; big battles on several cores |
+| Renderer | `render/` | `moho64view` | Direct3D 12 and Vulkan; ground, water and a real ocean, units, effects, shadows; day and night, weather, lamps on units |
+| Interface | `ui/` | `moho64ui` | The game's own interface scripts run: menu, lobby, in-game panels, orders, sound, replays, two-player network games |
+| Remastered art | not in this repository | – | Remade models of every UEF unit and building, remade effects, and a remade Seton's Clutch, made separately |
 
 ## What is new, and how to switch it
 
@@ -89,6 +89,7 @@ ground. Rain and snow are one choice, so they cannot be had together.
 | Shell Tracers | Shells whose trail is a plain white line are drawn as hot tracers: white at the shell, through yellow and orange to dull red | On (default), **Original** |
 | Rich Ground on Remastered Maps | Extra ground detail (creases, roughness, layers that blend by height) on maps made for it | On (default), Off |
 | Tracks in Snow | Units tread prints into lying snow along the game's own track and footprint marks | On (default), Off |
+| Scorch Glow (Remastered tab) | Where a unit dies, its hot scorch: a deep-red bed with bright cracks, or the brighter orange sheet | Soft (default), **Bright** |
 | Upscaling (FSR 1) | AMD FidelityFX Super Resolution 1, for slower graphics cards | Off (default), Ultra Quality, Quality, Balanced, Performance |
 | Frame Rate | Held to the screen, or capped, or free | Vertical Sync (default), Uncapped, 60, 120, 144 |
 | Graphics API | Vulkan needs `dxcompiler.dll` beside the program (see Licences); takes effect from the next map | Direct3D 12 (default), Vulkan |
@@ -113,61 +114,59 @@ its film.
 
 The remastered units try to stay faithful to the original designs. They are also practice at
 modelling for me and Claude, the AI this project is built with, so please don't expect anything
-revolutionary. So far the UEF faction's units and buildings are done, and first, rough versions of
-some commanders. The models, the remade effects and the remade Seton's Clutch are not in this
+revolutionary. So far every UEF unit and building has had its final polish (land, air, navy,
+experimentals, and all factories and structures from tier 1 to tier 3, the factories with working
+build machinery), and there are first, rough versions of some commanders. The models, the remade effects and the remade Seton's Clutch are not in this
 repository and are not released yet. An early look at them is below.
 
 ## A first look
 
 > **EARLY LOOK.** The remastered UEF units in these pictures are an early prototype: they are still being tested and changed, and everything you see may change before it is finished. The original (legacy) units, textures and look still work and can be used as they are - they just don't get the new looks and effects.
 
-![Seton's Clutch Remastered, late afternoon](docs/images/showcase/01_scenery_dusk_bay.jpg)
-*Seton's Clutch Remastered, late afternoon*
+![UEF against UEF on the land bridge: shields up, the real ocean all round](docs/images/showcase/17_battle_bridge_ocean.jpg)
+*UEF against UEF on the land bridge: shields up, the real ocean all round*
 
-![The rock hill](docs/images/showcase/02_scenery_day_hill.jpg)
-*The rock hill*
+![The beach in the afternoon](docs/images/showcase/18_battle_beach_day.jpg)
+*The beach in the afternoon*
 
-![Rain over the meadows](docs/images/showcase/03_scenery_rain_meadow.jpg)
-*Rain over the meadows*
+![Ships at sunset, their wakes on the open water](docs/images/showcase/19_ships_sunset.jpg)
+*Ships at sunset, their wakes on the open water*
 
-![Snow](docs/images/showcase/04_scenery_snow_hill.jpg)
-*Snow*
+![Night: shields over the bridge, gunships overhead](docs/images/showcase/20_shields_night.jpg)
+*Night: shields over the bridge, gunships overhead*
 
-![UEF vs UEF on the land bridge](docs/images/showcase/05_battle_day_overview.jpg)
-*UEF vs UEF on the land bridge*
+![Titans and Percivals in the thick of it](docs/images/showcase/21_titans_beams.jpg)
+*Titans and Percivals in the thick of it*
 
-![The beach, Riptides and Wasps](docs/images/showcase/06_battle_day_close.jpg)
-*The beach, Riptides and Wasps*
-
-![The clash on the bridge](docs/images/showcase/07_close_t900.jpg)
-*The clash on the bridge*
-
-![Titans and Percivals](docs/images/showcase/08_close_t1550.jpg)
-*Titans and Percivals*
-
-![Ships at dusk](docs/images/showcase/09_battle_dusk_water.jpg)
-*Ships at dusk*
-
-![Night: shields over the bridge](docs/images/showcase/10_battle_night_bridge.jpg)
-*Night: shields over the bridge*
-
-![Night fighting](docs/images/showcase/11_close_night_t900.jpg)
-*Night fighting*
-
-![A storm over the battle](docs/images/showcase/12_battle_rain_bridge.jpg)
+![A storm over the battle](docs/images/showcase/22_storm_battle.jpg)
 *A storm over the battle*
 
-![Fighting in the rain](docs/images/showcase/13_close_rain_t900.jpg)
-*Fighting in the rain*
+![Winter: the snow-covered bridge, ships off the beach](docs/images/showcase/23_snow_battle.jpg)
+*Winter: the snow-covered bridge, ships off the beach*
 
-![Winter: the end of the Fatboys](docs/images/showcase/14_battle_snow_fatboys.jpg)
-*Winter: the end of the Fatboys*
-
-![Titans in the snow](docs/images/showcase/15_close_snow_t1550.jpg)
-*Titans in the snow*
-
-![Dusk: a Fatboy goes down](docs/images/showcase/16_fatboy_death_2.jpg)
+![Dusk: a Fatboy goes down](docs/images/showcase/24_fatboy_death_dusk.jpg)
 *Dusk: a Fatboy goes down*
+
+![A T2 land factory at work, its machinery building a Pillar](docs/images/showcase/25_factory_building.jpg)
+*A T2 land factory at work, its machinery building a Pillar*
+
+![A Fatboy firing at dusk](docs/images/showcase/26_fatboy_firing_dusk.jpg)
+*A Fatboy firing at dusk*
+
+![A strategic nuke over Seton's Clutch](docs/images/showcase/27_nuke.jpg)
+*A strategic nuke over Seton's Clutch*
+
+![Seton's Clutch Remastered, late afternoon](docs/images/showcase/28_scenery_dusk_bay.jpg)
+*Seton's Clutch Remastered, late afternoon*
+
+![The land bridge's coast and the open sea](docs/images/showcase/29_scenery_coast.jpg)
+*The land bridge's coast and the open sea*
+
+![The rock hill](docs/images/showcase/30_scenery_rock_hill.jpg)
+*The rock hill*
+
+![Rain over the meadows](docs/images/showcase/31_scenery_rain.jpg)
+*Rain over the meadows*
 
 ## Simulation (`src/`)
 
@@ -207,9 +206,11 @@ rounding where it matters), so results do not depend on the platform's maths lib
 
 Each replay is recorded twice, once played by the original game and once by this engine: every
 unit's position, orientation, health, state and orders on every beat, every army's economy and every
-random draw. A tool names the first beat where the two records differ, and what differs. All thirteen
-replays are compared after every change to the simulation; a change that makes any of them differ is
-not accepted as it is.
+random draw. A tool names the first beat where the two records differ, and what differs. All sixteen
+replays are compared after every change to the simulation, on one core and on all of them, and the
+two runs must agree with each other beat by beat; a change that makes any of them differ is not
+accepted as it is. When a difference cannot be explained from our side, the original game itself is
+watched while it plays the replay, to see what it does at that beat.
 
 | Replay | Beats | Result |
 |---|---|---|
@@ -226,13 +227,40 @@ not accepted as it is.
 | Economy | 6,263 | **identical to the end** |
 | Naval battle | 972 | **identical to the end** |
 | Skirmish against seven M28 AIs | 3,121 | **identical to the end** |
+| Multiplayer 2v2, Funeral Plains (18 minutes) | 10,737 | **identical to the end** |
+| Multiplayer 1v1, Abhor (20 minutes) | 11,804 | **identical to the end** |
+| Multiplayer 4v4, Seton's Clutch (31 minutes) | 18,601 | **identical to the end** |
 
 "Identical" means every unit on every beat, every army's economy, and all random draws in the same
-order. More replays follow, among them real multiplayer games.
+order. About thirty more multiplayer replays follow, from 1v1 to 6v6.
 
 Where the original's own behaviour is broken and fixing it does no harm, the engine may fix it in
 new games, never while a replay plays. Every such case is listed in
 [docs/deviations.md](docs/deviations.md).
+
+### Several cores
+
+The original runs its simulation on one core. Here the parts of a beat that can be worked out ahead
+(path searches, steering, aiming, intel and more) run on all cores while the beat runs, and their
+results are used only where they are exactly what the one-core order would produce; a check mode
+recomputes every one of them and compares. In big battles this is on by default; small games, where it
+would cost more than it saves, keep it off. Every replay must play identically on one core and on all
+of them. Details: [docs/multicore.md](docs/multicore.md).
+
+The bigger step is in work: a **parallel order** for new games, a deterministic order of our own made
+for many cores (the same result on any number of cores and on every machine), while replays of the
+original keep the original's exact order. It will be a lobby option. Design:
+[docs/parallel-mode.md](docs/parallel-mode.md).
+
+### Our own AI
+
+A new AI written for this engine (in Lua, with a few native helpers), offered in the lobby as
+**Remastered AI** at four levels, with a small settings dialog (personality, aggression, economy,
+teacher mode). It reads the map into zones and chokepoints, rates every unit from its blueprint (mods
+included), estimates battles, scouts, expands, reclaims, and plays with fair vision; cheating is only
+a named option. Today it beats the game's own AI and matches M28's economy for the first ten minutes,
+but M28 still beats it. M28's ideas helped shape it; none of M28's code is in it. Design and progress:
+[docs/ai-design-goals.md](docs/ai-design-goals.md), [docs/ai-architecture.md](docs/ai-architecture.md).
 
 ## Renderer (`render/`)
 
@@ -287,7 +315,7 @@ In work: the campaign (operations start from the main menu and reach their first
 - **Movies:** the game's own films (.sfd) play in their screens, with their sound from the game's
   sound banks as the scripts start it.
 
-Not yet: saved games, the console, joining a network game.
+Not yet: saved games.
 
 ## Platforms
 
@@ -311,18 +339,15 @@ machine or a Mac, so read this as "may work, expect problems":
 
 ## Multiplayer
 
-Local play comes first: I play solo, so that is what this project is built for. Today the lobby is
-local: no network game can be hosted or joined, and FA Remastered cannot connect to FAF's servers.
+Local play comes first: I play solo, so that is what this project is built for, and multiplayer has
+the lowest priority. The foundations are in: two or more players can play one game together over a
+LAN or the internet, between copies of FA Remastered. Every player runs the same beats with the same
+orders, with the original's half-second order delay, its rules on who may command which units, and a
+check every 50 beats that the games still agree (when they do not, the program says which part of the
+game differs). FA Remastered cannot connect to FAF's servers or lobbies.
+Details: [docs/ui-net-game.md](docs/ui-net-game.md).
 
-The plan, in order:
-1. Replays of real multiplayer games join the checks, together with a harness that runs two copies of
-   the simulation side by side on one PC, passing orders between them as networked players do, and
-   compares a fingerprint of the whole game state on every beat.
-2. Then the simulation is spread over several cores, guarded by both of those checks.
-3. Then real play over the internet.
-
-The engine is MIT licensed, and anyone who wants to build on it is welcome, for example to integrate
-it with FAF.
+The engine is MIT licensed, and anyone who wants to build on it is welcome to.
 
 ## Build (Windows)
 

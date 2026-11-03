@@ -370,7 +370,12 @@ void Exhausts::Add(uint64_t key, const std::string& blueprint, const std::string
   const Look& look = LookOf(blueprint, faction, remastered);
   const float beam = length > -1e29f ? length : look.length;
   const float target = std::fabs(beam) * look.lengthScale;
-  const float radius = (thickness > -1e29f ? std::fabs(thickness) : look.halfWidth) * look.widthScale;
+  // [thinbeam] a thin drive stays a thin beam (Chris, 2026-11-01, via visuals: the Cyclone's "wide soft cone" against the
+  // original's thin beams; a fighter's beams are 0.05 across): under 0.1 across, the plume at half its width and dimmer (its
+  // core bloomed it wide), easing to the full plume at 0.2 and over (the bombers' and the experimentals' drives as before)
+  const float across = thickness > -1e29f ? std::fabs(thickness) : look.halfWidth;
+  const float thin = std::clamp((across - 0.1f) / 0.1f, 0.0f, 1.0f);
+  const float radius = across * look.widthScale * (0.5f + 0.5f * thin);
   Drive& d = drives_[key];
   const bool fresh = d.seen < 0 || clock_ - d.seen > 0.5;
   if (fresh) {
@@ -385,6 +390,7 @@ void Exhausts::Add(uint64_t key, const std::string& blueprint, const std::string
   }
   d.target = target;
   d.targetRadius = radius;
+  d.dim = 0.5f + 0.5f * thin;
   if (!d.fresh) {
     // eased to what the beam says now: quickly up, slowly down
     const float rate = target > d.drawn ? 1 / 0.15f : 1 / 0.4f;
@@ -461,7 +467,7 @@ void Exhausts::Draw(const View& view, gfx::Texture sceneDepth, float zNear) {
     if (!view.BoxVisible(lo, hi)) continue;
     const Look& look = *d.look;
     const float throttle = std::clamp(L / std::max(d.longest, 1e-4f), 0.0f, 1.0f);
-    const float gain = brightness * look.brightness * (0.5f + 0.65f * throttle);
+    const float gain = brightness * look.brightness * d.dim * (0.5f + 0.65f * throttle);
     const Vec3 sheath = look.sheath * (1.4f * gain);
     const Vec3 core = (look.core.x >= 0 ? look.core : look.sheath * 0.15f + Vec3{1, 1, 1} * 0.85f) * (3.0f * gain);
     // (the fringe: the sheath's colour deeper, its strongest channel stronger still: blue toward violet, orange toward red)

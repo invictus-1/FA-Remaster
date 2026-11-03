@@ -361,7 +361,19 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
   const bool readsBlueprint = f == "CreateAttachedEmitter" || f == "CreateEmitterOnEntity" || f == "CreateEmitterAtBone" ||
                               f == "CreateEmitterAtEntity" || f == "CreateTrail" || f == "CreateBeamEmitter" ||
                               f == "CreateBeamEmitterOnEntity" || f == "CreateBeamEntityToEntity" || f == "AttachBeamEntityToEntity";
-  if (readsBlueprint && (particles_->remastered || ribbons_->remastered)) e.faction = FactionOf(event, frame);
+  if (readsBlueprint && (particles_->remastered || ribbons_->remastered)) {
+    e.faction = FactionOf(event, frame);
+    // [byunit] a shell's trail or emitter as the unit that fired it has it, where the visuals track made one (the Pillar's
+    // wider Gauss trails: ModelCache::ShotEffectByUnit)
+    if (event.entity != kNone && frame.blueprints)
+      if (auto shot = projectileAt_.find(event.entity); shot != projectileAt_.end()) {
+        const FrameProjectile& p = frame.projectiles[shot->second];
+        if (p.launcher && p.launcher < frame.blueprints->size() && p.blueprint < frame.blueprints->size()) {
+          std::string own = models_->ShotEffectByUnit((*frame.blueprints)[p.blueprint], event.blueprint, (*frame.blueprints)[p.launcher]);
+          if (!own.empty()) e.blueprint = std::move(own);
+        }
+      }
+  }
   AttachPoint(frame, e.entity, e.bone, &e.position, &e.orientation);  // (the orientation, when the entity is still there)
   e.position = V(event.position);
   const double at = static_cast<double>(event.tick) * 0.1;
@@ -375,13 +387,13 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
       const std::string snow = SnowKick(event.blueprint);
       if (!snow.empty()) e.handle = particles_->Start(snow, e.position, e.orientation, 1, at, e.attached, e.faction);
     }
-    if (!e.handle) e.handle = particles_->Start(event.blueprint, e.position, e.orientation, 1, at, e.attached, e.faction);
+    if (!e.handle) e.handle = particles_->Start(e.blueprint, e.position, e.orientation, 1, at, e.attached, e.faction);
     if (VolfxLog* log = VolfxLog::Get()) log->ClearOrigin();
     if (!e.handle) return;
   } else if (f == "CreateTrail") {
     e.kind = Kind::Trail;
     e.attached = true;
-    e.handle = ribbons_->StartTrail(event.blueprint, e.position, e.faction);
+    e.handle = ribbons_->StartTrail(e.blueprint, e.position, e.faction);
     if (!e.handle) return;
   } else if (f == "CreateBeamEmitter" || f == "CreateBeamEmitterOnEntity" || f == "CreateBeamEntityToEntity" || f == "AttachBeamEntityToEntity") {
     e.kind = Kind::Beam;

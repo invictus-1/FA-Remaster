@@ -109,6 +109,7 @@ class Exhausts {
     bool fresh = true;  // (added this frame)
     const Look* look = nullptr;
     float target = 0, targetRadius = 0.1f;
+    float dim = 1;  // [thinbeam] (how bright for its size: Add)
     uint32_t seed = 0;
   };
   const Look& LookOf(const std::string& blueprint, const std::string& faction, bool remastered);

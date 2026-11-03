@@ -992,6 +992,7 @@ class World {
   EffectsLook entitiesLook_ = EffectsLook::Remastered;  // (the look entityModels_ were looked up in)
   std::vector<std::pair<Vec3, std::string>> bubbles_;  // this frame's shield bubbles: their centres and factions
   EffectsLook shotsLook_ = EffectsLook::Remastered;  // (the look shotModels_ were looked up in)
+  std::unordered_map<uint64_t, const Model*> shotsByUnit_;  // [byunit] (shell blueprint << 32 | launcher: its own model, or none)
   template <typename LookUp>
   const Model* Known(std::vector<KnownModel>& list, uint32_t index, size_t count, LookUp lookUp) {
     if (index >= list.size()) list.resize(std::max(count, static_cast<size_t>(index) + 1));
