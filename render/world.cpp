@@ -2606,8 +2606,8 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
           break;
         }
     }
-    // [fogwar] (a remembered one: its life bar as it was when last seen, nothing else - its work and its shield are not the
-    // army's to know)
+    // [fogwar] (a remembered one: no bars at all - Chris in the original, 2026-11-03: a remembered enemy structure under the
+    // fog shows no life bar, only its name and owner on hover; its work and its shield are not the army's to know either)
     const float health = photo ? photo->health : u.health, maxHealth = photo ? photo->maxHealth : u.maxHealth;
     if (!blip && !blueprint.empty() && (u.Seen() || photo) && !allHidden) {
       const StrategicIcons::Kind* kind = icons.ForBlueprint(models.UnitBlueprintPath(blueprint));
@@ -2616,7 +2616,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       const bool isSelected = !selected.empty() && selected.count(u.id) != 0;
       const uint32_t army = (u.id >> 20) & 0xff;
       const bool friendly = own || (army < 64 && ((alliedArmies >> army) & 1) != 0);
-      const bool life = lifeBars && maxHealth > 0 && (friendly || lifeBarsOnEnemies) && (isSelected || u.id == hover || away * view.lodScale < kind->fadeIn * 0.9f);  // ([lodscale] as the icons)
+      const bool life = lifeBars && !photo && maxHealth > 0 && (friendly || lifeBarsOnEnemies) && (isSelected || u.id == hover || away * view.lodScale < kind->fadeIn * 0.9f);  // ([lodscale] as the icons)
       // (a firing cycle only on the unit under the mouse or selected: Chris, 2026-10-14, the Summit's
       // reload bar "should only show if I put my cursor over it instead of at all times")
       const bool work = workBars && own && !photo && u.workProgress > 0 && u.workProgress < 1 && (!kind->fireClock || isSelected || u.id == hover);
