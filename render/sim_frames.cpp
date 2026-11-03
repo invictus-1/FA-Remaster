@@ -434,6 +434,7 @@ void SimFrames::Beat(const moho::Sim& sim) {
     u.beingBuilt = v.beingBuilt;
     u.workProgress = v.workProgress;
     u.paused = v.paused;
+    u.toggleCaps = v.toggleCaps, u.scriptBits = v.scriptBits;  // [pausemark]
     u.hasShield = v.hasShield;
     u.shieldRatio = v.shieldRatio;
     std::memcpy(u.scrollPrev, v.scrollPrev, sizeof u.scrollPrev);

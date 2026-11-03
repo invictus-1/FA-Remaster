@@ -45,6 +45,45 @@ float FoamDeviations(float rough) { return 3.4f - 1.8f * rough; }
 constexpr float kFreshLife = 0.45f;
 // [whitecaps] The foam's drift told to the water's shader within this (world units): its pattern drifts with the field.
 constexpr double kDriftRepeat = 4096;
+// [bigtest] How far past what the camera looks at the foam's field is made to reach, times the camera's distance (toward
+// the horizon of a low view the sea beyond is left to the field's fading edge and the sea's mean share of white).
+constexpr float kFoamReach = 2.0f;
+// [bigtest] The glint's least spread of slopes with Ocean::glitter (0.0025 before: about a power of 400's lobe).
+constexpr float kGlitterLeast = 0.008f;
+
+// [bigtest] The side (world units) of a square round what the camera looks at that holds the water the picture shows (where
+// the lines of sight through its four corners meet the water at `level`, each no farther than kFoamReach times the
+// camera's distance), with room for the band over which the field fades at its edges (a twelfth of its side each:
+// the water's shader, OceanAt). 0 when the eye is not over the water.
+float FoamCover(const Camera& camera, const View& view, float level) {
+  Vec3 right, up, back;
+  camera.Axes(&right, &up, &back);
+  const Vec3 eye = camera.Eye();
+  const float height = eye.y - level;
+  if (height <= 0) return 0;
+  const float t = std::tan(camera.fovY * 0.5f), aspect = static_cast<float>(view.width) / static_cast<float>(std::max(view.height, 1));
+  const float reach = kFoamReach * camera.distance;
+  float most = 0;
+  for (int k = 0; k < 4; ++k) {
+    const float sx = (k & 1) ? 1.0f : -1.0f, sy = (k & 2) ? 1.0f : -1.0f;
+    const Vec3 d = right * (t * aspect * sx) + up * (t * sy) - back;
+    // (a line of sight that never comes down to the water, or meets it far off: out to the reach, its way along the ground)
+    float x = d.x, z = d.z;
+    if (d.y < -1e-4f) {
+      const float along = height / -d.y;
+      x = eye.x + d.x * along - camera.target.x;
+      z = eye.z + d.z * along - camera.target.z;
+    }
+    const float away = std::sqrt(x * x + z * z);
+    if (d.y >= -1e-4f || away > reach) {
+      const float s = reach / std::max(away, 1e-6f);
+      x *= s;
+      z *= s;
+    }
+    most = std::max({most, std::fabs(x), std::fabs(z)});
+  }
+  return most * 2 / (1 - 2.0f / 12);
+}
 
 // The JONSWAP wind sea's spectrum over the waves' angular frequency w (alpha 1): a peak at wp, sharpened (gamma 3.3).
 // The same formula is the shader's (kSimShader, Jonswap): keep the two alike.
@@ -555,6 +594,13 @@ void Ocean::Update(const Camera& camera, const View& view, gfx::Texture heights,
   const float want = std::clamp(pixel * 1.5f, 0.04f, 2.0f);
   while (want > cell * 1.3f && cell < 2.0f) cell *= 2;
   while (want < cell * 0.55f && cell > 0.04f) cell *= 0.5f;
+  // [bigtest] (and never so fine that the square leaves water the picture shows without whitecaps: Chris's big test, 2026-11-01,
+  // on his 4K screen, "water wakes during rain are at localized squares vs everywhere" - the square, then 1024 cells of about
+  // a pixel and a half, ended inside his picture and the sea past it lay plain. It holds where the picture's corners meet the
+  // water, out to kFoamReach times the camera's distance, inside the band over which it fades: FoamCover; with kFoamCells
+  // 2048 the cells stay as fine as before but for the widest pictures and the lowest views)
+  const float least = FoamCover(camera, view, level_) / static_cast<float>(kFoamCells);
+  while (cell < least && cell < 2.0f) cell *= 2;  // [bigtest]
   const double dt = lastTime_ >= 0 ? std::clamp(time_ - lastTime_, 0.0, 0.25) : 0.0;
   lastTime_ = time_;
   const float r = rough_;
@@ -621,7 +667,10 @@ void Ocean::Update(const Camera& camera, const View& view, gfx::Texture heights,
   constants_.wind[2] = r;
   constants_.wind[3] = Choppiness(r);
   std::memcpy(constants_.foamArea, foamArea_, sizeof foamArea_);
-  constants_.look[0] = 0.0025f;
+  // (the glint's least spread of slopes: the waves finer than the field and the sun's disc; [bigtest] with the glitter
+  // softened, kGlitterLeast: the capillary ripples a real sea has on every wave spread each glint over more of it, dimmer, so
+  // that the waves the field holds glisten in the sun's path as patches of light, not as single white points)
+  constants_.look[0] = glitter > 0 ? kGlitterLeast : 0.0025f;
   constants_.look[1] = glow;
   constants_.look[2] = foamStrength;
   constants_.look[3] = static_cast<float>(this->view);
@@ -631,6 +680,7 @@ void Ocean::Update(const Camera& camera, const View& view, gfx::Texture heights,
   constants_.look2[3] = lift ? 1.0f : 0.0f;
   constants_.look3[0] = foamThreshold_;
   constants_.look3[1] = glint;
+  constants_.look3[2] = glitter > 0 ? 1.0f : 0.0f;  // [bigtest]
   // [whitecaps] how far the foam has drifted (its pattern drifts with it; within kDriftRepeat, so that it stays exact)
   constants_.look4[0] = static_cast<float>(std::fmod(driftX_, kDriftRepeat));
   constants_.look4[1] = static_cast<float>(std::fmod(driftZ_, kDriftRepeat));

@@ -62,7 +62,7 @@ cbuffer Ocean : register(b2) {
   float4 oceanFoamArea;    // the foam's field: xy its first cell's corner (world x, z); z 1 / its side; w a cell's size
   float4 oceanLook;        // x the glint's least spread of slopes (squared); y the glow through the crests; z the foam's strength; w a view for checking
   float4 oceanLook2;       // x the sea's significant height (world units); y the foam far off (a share); z the slopes' tilt times (from above: twice); w [lift] 1 = the surface lifted
-  float4 oceanLook3;       // x the Jacobian below which the surface foams; y the glint's strength (1)
+  float4 oceanLook3;       // x the Jacobian below which the surface foams; y the glint's strength (1); z [bigtest] 1 the glitter softened (Ocean::glitter)
   float4 oceanLook4;       // [whitecaps] xy how far the foam has drifted (world units, within 4096: its pattern drifts with it); z [hulls] how many hulls
   float4 oceanHulls[72];   // [hulls] what floats in the sea (Ocean::AddHull), three rows each: x, z its middle, its way (x, z); its waterline's
                            // half length and half beam, its speed, -; its waterline's height there, the slopes it rides (dh/dx, dh/dz), -
@@ -443,6 +443,14 @@ class Ocean {
   // How much steeper the slopes are drawn than they are (seen from above twice that again: there the slopes are all that
   // shows of the waves).
   float tilt = 1.5f;
+  // [bigtest] The sun's glitter (Chris's big test, 2026-11-01: "the glitter in water far too much", "like a light show", most of
+  // all from above at some zooms): 1 (the default) the glint worked out from the waves' true slopes, not from the steeper ones
+  // drawn for the eye (`tilt`: from above three times as steep, so that facets turned far off mirrored the sun and the whole
+  // sea glittered as a field of single bright pixels wherever one looked), and widened by how much the surface's slopes
+  // change across a pixel (the fine ripples, the rain's roughening, a wave sample magnified: a narrow lobe on a normal that
+  // turns within a pixel lit it fully or not at all), the light it throws on the whole kept: a soft path of light round the
+  // sun's mirror image, the water elsewhere calm. 0: the glitter as before (viewer --ocean-glitter 0).
+  int glitter = 1;
   // A view for checking (viewer --ocean-view n): the water shows 1 the slopes (red x, green z), 2 the foam field, 3 the
   // slopes' spread, 4 the height (red up, blue down), 5 the Jacobian, 6 [whitecaps] the whitecaps' parts; 0 off.
   int view = 0;
@@ -456,7 +464,7 @@ class Ocean {
 
   static constexpr int kN = 256;  // a square's samples a side
   static constexpr int kCascades = 3;
-  static constexpr int kFoamCells = 1024;
+  static constexpr int kFoamCells = 2048;  // ([bigtest] 1024 before: on a 4K screen its square ended inside the picture)
   static constexpr int kPatchCells = 32;   // [lift] a patch's cells a side
   static constexpr int kMostPatches = 1024;
   static constexpr int kBobWaves = 640;     // [lift] the long waves kept on the processor for BobAt

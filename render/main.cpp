@@ -366,7 +366,8 @@
 //           --screenshot reads is the picture made between (gfx.h, Device::captureBetween), where there is one
 // --water-detail  wet shorelines and stronger caustics (World::waterDetail; modern look); [shore] the sun's glint on the
 //           water softened by how much water a pixel covers (a calm sheen from far up), and with --surf the wet beach
-//           following the surf (wider and darker on exposed beaches, narrow in calm bays, a film after each wave)
+//           following the surf (wider and darker on exposed beaches, narrow in calm bays, a film after each wave);
+//           [bigtest] the bed under the shallows soaked as that wet beach (Water::shoreSoak; --no-shore-soak: as before)
 // --winter-water  winter water (winter_water.h, World::winterWater; modern look, a time of day): while snow lies the
 //           water goes over to a cold palette, slush and thin ice gather at the shores, no snow lies under the water
 //           (with --weather snow, or --snow-lying n to see it at that much snow, a thaw by smaller n)
@@ -399,7 +400,10 @@
 //           Tuning: --ocean-height n (the waves' height times n, 1), --ocean-tilt n (the slopes drawn n times as steep, 1.5;
 //           from above twice that), --ocean-glint n (0.8), --ocean-foam n, --ocean-glow n (1); --ocean-view n: in place of the
 //           water 1 the slopes, 2 the foam's field, 3 the slopes' spread, 4 the height, 5 the Jacobian (red: it foams),
-//           6 [whitecaps] the whitecaps' parts (red the crest breaking now, green the fresh foam, blue the residue)
+//           6 [whitecaps] the whitecaps' parts (red the crest breaking now, green the fresh foam, blue the residue);
+//           --ocean-glitter 0: [bigtest] the sun's glitter as before (Ocean::glitter; 1, the default: from the waves' true
+//           slopes, softened by what a pixel takes in: a soft path of light round the sun's mirror image, not a field of
+//           single bright pixels)
 // --stream-water  [stream] streams as real water (stream_water.h, World::streamWater; modern look): a map's stream props
 //           (the visuals track's ribbons) drawn as water: deep and dark in the middle, the bed showing at the edges, a
 //           soft wet shore, ripples and foam carried downstream (faster where it drops, white round rocks and behind
@@ -781,6 +785,8 @@ struct Options {
   bool oceanLift = false;                                      // [lift] --ocean-lift
   float oceanHeight = 1, oceanGlint = 0.8f, oceanFoam = 1, oceanGlow = 1, oceanTilt = 1.5f;  // --ocean-height, -glint, -foam, -glow, -tilt
   int oceanView = 0;                                           // --ocean-view
+  int oceanGlitter = 1;                                        // [bigtest] --ocean-glitter
+  bool shoreSoak = true;                                       // [bigtest] --no-shore-soak
   std::string surfTest;                 // --surf-test
   float surfTestRadius = 60;            // --surf-test-radius
   int surfView = 0;                     // --surf-view
@@ -1032,6 +1038,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--no-lamp-shadows") o->lampShadows = false;
     else if (a == "--no-steady-lamps") o->steadyLamps = false;  // [nightlight]
     else if (a == "--no-tracers") o->tracers = false;
+    else if (a == "--no-shore-soak") o->shoreSoak = false;  // [bigtest]
     else if (a == "--plain-ground") o->richGround = false;
     else if (a == "--map-ends") o->worldBeyond = false;
     else if (a == "--timings") o->timings = true;
@@ -1284,6 +1291,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--ocean-foam") o->oceanFoam = std::clamp(static_cast<float>(atof(v)), 0.0f, 10.0f);
     else if (a == "--ocean-glow") o->oceanGlow = std::clamp(static_cast<float>(atof(v)), 0.0f, 10.0f);
     else if (a == "--ocean-view") o->oceanView = atoi(v);
+    else if (a == "--ocean-glitter") o->oceanGlitter = atoi(v);  // [bigtest]
     else if (a == "--ocean-tilt") o->oceanTilt = std::clamp(static_cast<float>(atof(v)), 0.0f, 6.0f);
     else if (a == "--surf-strength") o->surfStrength = std::max(0.0f, static_cast<float>(atof(v)));
     else if (a == "--surf-spray") o->surfSpray = std::max(0.0f, static_cast<float>(atof(v)));
@@ -1988,6 +1996,8 @@ int main(int argc, char** argv) {
   world.water.ocean.foamStrength = opt.oceanFoam;
   world.water.ocean.glow = opt.oceanGlow;
   world.water.ocean.view = opt.oceanView;
+  world.water.ocean.glitter = opt.oceanGlitter;  // [bigtest]
+  world.water.shoreSoak = opt.shoreSoak;          // [bigtest]
   world.water.ocean.tilt = opt.oceanTilt;
   if (opt.surfStrength >= 0) world.water.surf.strength = opt.surfStrength;
   if (opt.surfSpray >= 0) world.water.surf.sprayStrength = opt.surfSpray;

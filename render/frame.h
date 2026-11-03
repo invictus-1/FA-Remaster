@@ -40,6 +40,12 @@ struct FrameUnit {
   bool hasShield = false;
   float shieldRatio = 0;
   bool paused = false;
+  // ([pausemark] ui request 42) its toggles: those it has (RULEUTC_ bits, as scripts changed them) and their state (bit n set:
+  // toggle n on; the engine's UnitView::scriptBits). The original marks an allied unit with a toggle switched off as paused.
+  uint32_t toggleCaps = 0, scriptBits = 0;
+  // A toggle of its switched off, as the original's icon pass reads it (0x85be34..0x85befa): the shield (cap 1) with its bit
+  // clear, or production, intel, jamming, stealth, cloak or the generic toggle (caps 4, 8, 0x10, 0x20, 0x40, 0x100) with theirs set.
+  bool ToggledOff() const { return ((toggleCaps & 1) != 0 && (scriptBits & 1) == 0) || (scriptBits & toggleCaps & 0x174) != 0; }
   // Its treads' scroll (the engine's UnitView::scrollPrev / scroll: the two amounts before and after this
   // beat's step, unwrapped; [0] the tread on its +x side, [1] the -x side), and at the moment drawn
   // (BlendUnits: the newer beat's step from scrollPrev to scroll, as the original's renderer blends it).

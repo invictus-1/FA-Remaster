@@ -2529,7 +2529,9 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
         float ax = 0, ay = 0;
         if (life && icons.BarsAnchor(before, &ax, &ay)) barAnchors.push_back({u.id, ax, ay});
       }
-      if (workBars && own && u.paused) {
+      // ([pausemark] ui request 42, Chris's big test: a switched-off extractor had no mark; the original marks an allied unit
+      // that is paused or has a toggle off)
+      if (workBars && friendly && (u.paused || u.ToggledOff())) {
         if (pauseMark_ == -2) pauseMark_ = icons.MarkIcon("pause");
         const float top = model && model->ok ? std::max(model->boundsMax.y * model->scale, 0.3f) + 0.35f : kind->selectionZ * 1.1f + 0.4f;
         icons.AddMark(pauseMark_, position + Vec3{0, top, 0}, 16);

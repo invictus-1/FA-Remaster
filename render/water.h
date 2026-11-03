@@ -38,6 +38,11 @@ class Water {
   // (made by PrepareSurf, from World::Begin each frame the option is on, before the first frame needs them: with the
   // ripples' field or without it, and the winter ones while winter water is on); the spray by `surf` itself.
   Surf surf;
+  // [bigtest] With World::waterDetail: the bed under the shallows drawn soaked as the wet beach just above the water (dark at
+  // the waterline, as before by some 0.8 units of depth: kSoakDepth; Chris's big test, 2026-11-01: past the dark wet band the
+  // shallows came up bright again and the water looked lifted off the beach). False: the bed as before (viewer
+  // --no-shore-soak).
+  bool shoreSoak = true;
   void PrepareSurf(bool ripples, bool winter, bool wet = false);  // ([shore] wet: World::waterDetail's wet beach, SURF_WET)
   // [ocean] The wind sea worked out on the card (ocean.h; World::oceanWaves): the water draws with its ocean pipelines while
   // ocean.Active(), each variant (with the ripples' field or not, winter, the surf, the wet beach) made by PrepareOcean the

@@ -127,7 +127,7 @@ cbuffer WaterConstants : register(b1) {
   float4 cameraRight;     // w: tan(half the field of view)
   float4 cameraUp;        // w: aspect
   float4 cameraBack;      // w: near distance
-  float4 groundInfo;      // [floatfoam] x the ground's height unit (0: the ground's heights not bound, Water::SetGround)
+  float4 groundInfo;      // [floatfoam] x the ground's height unit (0: the ground's heights not bound, Water::SetGround); y [bigtest] 1 the bed soaked (Water::shoreSoak)
 #if RIPPLES || SURF
   float4 rippleArea;      // the ripples' field (ripples.h): x, y its first cell's corner (world x, z); z 1 / its side; w a cell's size
   float4 rippleLook;      // x how much its slopes tilt the surface; y the slope from which its crests foam; z how much of its height the waterline takes
@@ -160,6 +160,11 @@ static const float kRise = 0.07;  // how far the swell carries the water above a
 // of kGlintFrom world units (the game's usual height: as before) to one of kGlintTo (the strategic view), by slopes of
 // that spread (the lobe then about a power of 40: a sheen)
 static const float kGlintFrom = 0.08, kGlintTo = 2.0, kGlintSlopes = 0.006;
+// [bigtest] (Ocean::glitter) the spread of slopes a pixel's footprint adds to the glint, as a share of the slopes' change to
+// the next pixel squared (a half: a footprint some three pixels wide, steady as the waves move), and at most this much
+static const float kGlitterFootprint = 0.5, kGlitterMost = 0.05;
+// [bigtest] (Water::shoreSoak) how deep the water is where the bed under it is no longer drawn soaked (world units)
+static const float kSoakDepth = 0.8;
 #if SURF_WET
 // [shore] (World::waterDetail with the surf: the surf's pipelines built with SURF_WET) how much higher again the sheet lies,
 // for the wet beach above the water (WetBeach: as high as the damp band reaches in a storm on an exposed beach)
@@ -554,6 +559,24 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   N = normalize(N + float3(surf.tilt.x, 0, surf.tilt.y) * lerp(0.4, 1.0, saturate(-toPixel.y * 2.5)));
   [branch] if (surfLook3.x > 0.5 && surfLook3.x < 2.5) return float4(SurfView(still.xz, surf, surfArea, surfLook3.x), 1);  // (Surf::view; [shore] 3: WetBeach)
 #endif
+#if OCEAN
+  // [bigtest] (Ocean::glitter) the slopes the sun's glint is worked out from: the waves' own, not the steeper ones drawn for
+  // the eye (OceanAt was given `tilt`: their mean slope and their spread are taken back to the true ones; the finer ripples,
+  // the rain's and the surf's tilt stay as they are), and how much they change across the pixel (their change to the next
+  // pixel, ddx and ddy, as a spread of slopes over a footprint of about a pixel: Kaplanyan's and Tokuyoshi's way of keeping
+  // a narrow highlight from flashing on single pixels), at most kGlitterMost. Taken here, before any pixel can be left out.
+  float glintTilt = 1;
+  float2 glintBack = 0;
+  float3 glintWide = 0;
+  if (oceanLook3.z > 0.5) {
+    glintTilt = max(oceanLook2.z * lerp(1.0, 2.0, saturate(-toPixel.y * 2.5)), 0.05);
+    glintBack = ocean.slope * (1 - 1 / glintTilt);
+    float2 seen = -N.xz / max(N.y, 0.05) - glintBack;
+    float2 sx = ddx(seen), sy = ddy(seen);
+    glintWide = float3(sx.x * sx.x + sy.x * sy.x, sx.y * sx.y + sy.y * sy.y, sx.x * sx.y + sy.x * sy.y) * kGlitterFootprint;
+    glintWide *= min(1, kGlitterMost / max(max(glintWide.x, glintWide.y), 1e-8));  // (scaled whole: it stays a spread)
+  }
+#endif
 
   // the light on the water
   float shadow = SunShadow(i.world, float3(0, 1, 0)) * CloudShadow(i.world);
@@ -629,6 +652,27 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   float through = min(length(bedBent - i.world), 80);
   float deepBent = max(i.world.y + level - bedBent.y, 0);
   float3 under = behind.SampleLevel(samplerLinearClamp, bent, 0).rgb;
+  // [bigtest] (Water::shoreSoak, with World::waterDetail) the bed under the shallows soaked as the beach the waves wet just
+  // above it (Chris's big test, 2026-11-01: "zooming close to water seems like its floating"): the ground's pass darkens the
+  // wet band over the water's level (terrain.cpp: albedo times 0.6) and, with the surf, WetBeach an exposed beach darker
+  // again (0.48), but under the water the bed kept its dry sand's colour, so that past the dark band the shallows came up
+  // bright again: a sheet lying over the beach, its shadow along its edge. Soaked as much at the waterline, going over to
+  // the bed as before by kSoakDepth of water (the shallows' colours farther out as Chris chose them); only the map's own
+  // ground (what stands in the water off it, a rock or a hull, as it was).
+  [branch] if (shore.x > 0.5 && groundInfo.y > 0.5) {
+#if LIFT
+    float soakGround = OceanGround(bedBent.xz, mapSize.xy);
+#else
+    float soakGround = groundInfo.x > 0 ? GroundTop(bedBent.xz) : bedBent.y;
+#endif
+    float onBed = saturate(1 - (bedBent.y - soakGround - 0.15) / 0.3);
+#if SURF_WET
+    float soaked = lerp(0.6, 0.48, surfField.SampleLevel(samplerLinearClamp, (bedBent.xz - surfArea.xy) * surfArea.zw, 0).a * surfLook3.y);
+#else
+    float soaked = 0.6;
+#endif
+    under *= lerp(1, soaked, onBed * (1 - smoothstep(0, kSoakDepth, deepBent)));
+  }
 
   // the bright net on a shallow bed in sunlight
   float2 q = bedBent.xz;
@@ -923,7 +967,17 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
 #if OCEAN
   // [ocean] the sun's glitter off the waves' facets, by how their slopes spread over what the pixel takes in (ocean.h,
   // OceanGlint: sparkles close up, a soft broad path of light far off), about the surface's own lean
-  color += sunLight * (OceanGlint(-toPixel, sunDirection, -N.xz / max(N.y, 0.05), ocean.spread) * oceanLook3.y * shadow * (1 - foam));
+  // ([bigtest] Ocean::glitter: from the waves' true slopes, widened by their change across the pixel, above)
+  float2 glintSlope = -N.xz / max(N.y, 0.05);
+  float3 glintSpread = ocean.spread;
+  if (oceanLook3.z > 0.5) {
+#if WINTER
+    glintBack *= 1 - ice.calm;  // (on the ice and slush the waves are stilled: nothing to take back)
+#endif
+    glintSlope -= glintBack;
+    glintSpread = ocean.spread / (glintTilt * glintTilt) + glintWide;
+  }
+  color += sunLight * (OceanGlint(-toPixel, sunDirection, glintSlope, glintSpread) * oceanLook3.y * shadow * (1 - foam));
 #else
   [branch] if (shore.x > 0.5 && grain > kGlintFrom) {  // (closer in exactly as before)
     // (the swell's long trains, which a pixel far off still shows, counted among the slopes it takes in there: their even
@@ -1149,6 +1203,7 @@ void Water::DrawWith(const View& view, const Camera* camera, gfx::Texture behind
                             back.x, back.y, back.z, camera->zNear};
     std::memcpy(c.cameraRight, axes, sizeof axes);
     if (ground_) c.groundInfo[0] = groundUnit_;  // [floatfoam]
+    c.groundInfo[1] = shoreSoak ? 1.0f : 0.0f;    // [bigtest]
   }
   // with ripples on the water this frame (ripples.h): the modern water that reads their field
   if (modern && ripples.Active()) PrepareRipples();
