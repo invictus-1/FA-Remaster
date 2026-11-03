@@ -186,6 +186,10 @@ UserState::~UserState() {
 lua_State* UserState::L() const { return state_->L(); }
 
 Sim* UserState::LiveSim(const char* where) {
+  if (pretendBeat_ && !deliveringSync_ && config_.liveSim) {
+    const char* in = CurrentBindingName();
+    pretendWaits.push_back(std::string(*where ? where : "a script's call") + (*in ? " in " : "") + in);
+  }
   if (config_.liveSim && config_.waitForBeat) {
     static const bool count = std::getenv("MOHO64UI_BEAT_LOG") != nullptr;
     if (count) {
@@ -202,6 +206,19 @@ Sim* UserState::LiveSim(const char* where) {
     }
   }
   return config_.liveSim;
+}
+
+void UserState::PretendBeatForTests(bool on) {
+  if (on == pretendBeat_) return;
+  pretendBeat_ = on;
+  if (on) {
+    pretendWaits.clear();
+    realBeatRunning_ = config_.beatRunning;
+    config_.beatRunning = [this]() { return (pretendBeat_ && !deliveringSync_) || (realBeatRunning_ && realBeatRunning_()); };
+  } else {
+    config_.beatRunning = realBeatRunning_;
+    realBeatRunning_ = nullptr;
+  }
 }
 
 UserState* UserState::From(lua_State* L) { return static_cast<UserState*>(lua_getextra(L, 1)); }

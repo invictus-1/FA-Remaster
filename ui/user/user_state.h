@@ -305,8 +305,21 @@ class UserState {
   std::vector<DepositCopy> depositsCopy;
   bool hasWaterCopy = false;
   float waterElevationCopy = 0;
+  // The session's state the scripts ask of it (copied with the others, so that asking never waits for a beat): the
+  // game is over (sim->endGame: SessionIsGameOver), who paused it (sim->pauseOwner, -1 none: SessionIsPaused), and
+  // the command sources' names in order (SessionGetCommandSourceNames, SessionGetLocalCommandSource, the photo mode).
+  bool endGameCopy = false;
+  int pauseOwnerCopy = -1;
+  std::vector<std::string> commandSourcesCopy;
   bool economyCopied = false;  // (these copies are there: one beat's sync came)
   void CopyFromSimulation();
+  // Tests only (moho64ui_PretendBeat, a run with a test script): beatRunning() answers true as if a beat ran on its
+  // own thread, except while a beat's sync is given (DeliverSync: between beats, as live), and every look at the
+  // simulation through LiveSim is counted as a wait it would be (the simulation is idle: nothing waits), with its
+  // place. A headless run's beats never run on their own thread, so this is how a test sees what would wait.
+  void PretendBeatForTests(bool on);
+  bool PretendingBeat() const { return pretendBeat_; }
+  std::vector<std::string> pretendWaits;  // (the places, since the pretence began)
   double now() const { return now_; }      // seconds since the state was created, as of this frame
   // now() and, with Config::liveClock, the real time since this frame began (at most a frame's longest
   // step, 0.25 s: the clock never runs back when the next frame starts).
@@ -326,6 +339,8 @@ class UserState {
   double frameBegan_ = 0;  // (steady clock seconds when this frame began: clockNow)
   uint32_t frame_ = 0;
   std::string uiState_ = "none";
+  bool pretendBeat_ = false, deliveringSync_ = false;  // (PretendBeatForTests)
+  std::function<bool()> realBeatRunning_;
 };
 
 // Preferences: GetPreference / SetPreference / SavePreferences (prefs.cpp).

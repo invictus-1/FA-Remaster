@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -48,9 +49,18 @@ class UserUnit : public ScriptObject {
   // test over thousands of units looks each up once, not each time.
   mutable const BlueprintInfo* bpInfo = nullptr;
   mutable std::string bpInfoFor;
-  // Its state as last asked of the simulation, and at which sync (StateOf; ~0: never).
+  // Its state as last asked of the simulation, and at which sync (StateOf; ~0: never); the last sync at which the
+  // interface asked it (the copies made at each sync keep such a unit's fresh: RefreshUnitCopies).
   mutable UnitStateView stateCopy;
   mutable uint64_t stateSync = ~0ull;
+  mutable uint64_t askedSync = 0;
+  // What the unit itself may not build (the engine's UnitRestrictedBlueprints), at which sync, and when last asked
+  // (RestrictionsOf; the same rules as the state's copy).
+  mutable std::vector<std::string> restrictedCopy;
+  mutable uint64_t restrictedSync = ~0ull;
+  mutable uint64_t restrictedAskedSync = 0;
+  // What the focus army knows of it (the engine's ReconOf bits), as of the last sync (RefreshUnitCopies).
+  uint32_t reconCopy = 0xf;
   // The statistics GetStat last read of the simulation, by name, and at which sync (StatOf): a number, a text,
   // or none (the simulation keeps no such statistic for the unit).
   struct StatCopy {
@@ -243,6 +253,13 @@ struct UnitStore : UserState::Extra {
   // table only grows), and the blueprints' Physics.MotionType as the original numbers it, as looked up.
   std::vector<std::vector<uint64_t>> categorySets;
   std::map<std::string, int> motionTypes;
+  // What the focus army may not build (the engine's RestrictedBlueprints), as of the last sync; whether a blueprint
+  // builds anything (its Economy.BuildableCategory: only such a unit's own restrictions are copied); and where the
+  // round of copies of the units not asked lately goes on at the next sync (an entity id: RefreshUnitCopies).
+  std::vector<std::string> armyRestrictedCopy;
+  bool armyRestrictedCopied = false;
+  std::map<std::string, bool> builders;
+  uint32_t copyRoundFrom = 0;
 };
 
 UnitStore& Store(lua_State* L) {
@@ -252,6 +269,8 @@ UnitStore& Store(lua_State* L) {
 }
 Sim* TheSim(lua_State* L) { return UserState::From(L)->LiveSim(); }
 bool StateOf(lua_State* L, const UserUnit* u, UnitStateView* out);  // further down: a unit's state from the simulation
+const std::vector<std::string>& RestrictionsOf(lua_State* L, const UserUnit* u);  // further down: what it may not build
+bool Builds(lua_State* L, UnitStore& store, const std::string& blueprint);  // further down: whether it builds anything
 
 // The unit behind a script value; nullptr for anything else.
 UserUnit* ToUnit(lua_State* L, int idx) {
@@ -411,6 +430,20 @@ int FocusArmyNow(lua_State* L) {
   if (user->economyCopied) return user->focusArmyCopy;
   Sim* sim = user->HasSim() ? TheSim(L) : nullptr;
   return sim ? sim->focusArmy : -1;
+}
+// The simulation's tick in the same way (as GameTick: the last sync's), 0 without a session.
+uint32_t TickNow(lua_State* L) {
+  UserState* user = UserState::From(L);
+  if (user->economyCopied) return user->tickCopy;
+  Sim* sim = user->HasSim() ? TheSim(L) : nullptr;
+  return sim ? sim->tick() : 0;
+}
+// The armies in the same way (as GetArmiesTable): the beat's copy, else asked now into `asked`.
+const std::vector<ArmyView>& ArmiesNow(lua_State* L, std::vector<ArmyView>* asked) {
+  UserState* user = UserState::From(L);
+  if (user->economyCopied || !user->HasSim()) return user->armiesCopy;
+  *asked = ArmyViews(*TheSim(L));
+  return *asked;
 }
 // Whether the game was started with cheats on (its Options.CheatsEnabled; INFERRED to be the session's byte
 // +0x4d4 the original asks beside UI_SelectAnything).
@@ -652,10 +685,11 @@ void ShowUnit(lua_State* L, const UserUnit* u, float seconds) {
 // False when the expression cannot be read.
 bool SelectUnitsByCategory(lua_State* L, const char* expr, bool add, bool inView, bool nearest, bool idle, bool goTo,
                            bool noEngineers) {
-  Sim* sim = TheSim(L);
+  Sim* const sim = nullptr;  // (BeingUpgraded reads the views only; the focus army is the last sync's)
   std::vector<uint64_t> bits;
   SimBlueprints* bps = SimBlueprints::From(L);
-  if (!sim || !bps || !ParseCategory(L, expr, bits)) return false;
+  if (!UserState::From(L)->HasSim() || !bps || !ParseCategory(L, expr, bits)) return false;
+  const int focusArmy = FocusArmyNow(L);
   UnitStore& store = Store(L);
   std::vector<UserUnit*> asked;
   std::vector<uint32_t> ids;
@@ -676,7 +710,7 @@ bool SelectUnitsByCategory(lua_State* L, const char* expr, bool add, bool inView
   UserUnit* best = nullptr;
   float bestDistance = std::numeric_limits<float>::max();
   for (UserUnit* u : asked) {
-    if (u->gone || u->view.dead || !u->view.selectable || u->view.army != sim->focusArmy + 1) continue;
+    if (u->gone || u->view.dead || !u->view.selectable || u->view.army != focusArmy + 1) continue;
     // (idle, FA exe 0x8664c6: not hanging on a parent, docked, loaded or stored (UserUnit+0x1a2),
     // and nothing in its queue; until 2026-10-16 this read "being built", a wrong reading)
     if (idle && (u->view.attached || u->view.queueLength != 0)) continue;
@@ -754,7 +788,7 @@ int l_UISelectAndZoomTo(lua_State* L) {
 // The focus army's units of a category that fit a test.
 template <class Test>
 void FocusUnits(lua_State* L, const char* category, Test test, std::vector<UserUnit*>* out) {
-  int army = TheSim(L)->focusArmy + 1;
+  int army = FocusArmyNow(L) + 1;
   const SimBlueprints* bps = SimBlueprints::From(L);
   if (!bps) return;
   auto cat = bps->Categories().find(category);  // (once, not for each unit)
@@ -768,7 +802,7 @@ void FocusUnits(lua_State* L, const char* category, Test test, std::vector<UserU
 // (0x8bce0d) for an empty list. (/lua/ui/game/gamemain.lua's OnFirstUpdate tests the result
 // before taking avatars[1]: with an empty table the replay's start stopped there.)
 int l_GetArmyAvatars(lua_State* L) {
-  if (TheSim(L)->focusArmy < 0) return 0;
+  if (FocusArmyNow(L) < 0) return 0;
   std::vector<UserUnit*> list;
   FocusUnits(L, "COMMAND", [](const UserUnit&) { return true; }, &list);
   PushUnitList(L, list, true);
@@ -831,32 +865,57 @@ int l_GetUnitCommandData(lua_State* L) {
     // (its script's AddBuildRestriction: a commander without its upgrades, a factory before its
     // own; the engine's UnitRestrictedBlueprints).
     std::vector<uint64_t> mine(total.size(), 0), part;
-    lua_pushstring(L, "Economy");
-    lua_gettable(L, -2);
-    if (lua_istable(L, -1)) {
-      lua_pushstring(L, "BuildableCategory");
-      lua_gettable(L, -2);
+    auto buildable = [&](int table, std::vector<uint64_t>* out) {  // (Economy.BuildableCategory of the blueprint there)
+      std::fill(out->begin(), out->end(), 0);
+      lua_pushstring(L, "Economy");
+      lua_gettable(L, table);
       if (lua_istable(L, -1)) {
-        int t = lua_gettop(L);
-        for (int i = 1;; ++i) {
-          lua_rawgeti(L, t, i);
-          if (!lua_isstring(L, -1)) {
+        lua_pushstring(L, "BuildableCategory");
+        lua_gettable(L, -2);
+        if (lua_istable(L, -1)) {
+          int t = lua_gettop(L);
+          for (int i = 1;; ++i) {
+            lua_rawgeti(L, t, i);
+            if (!lua_isstring(L, -1)) {
+              lua_pop(L, 1);
+              break;
+            }
+            if (ParseCategory(L, lua_tostring(L, -1), part))
+              for (size_t w = 0; w < out->size() && w < part.size(); ++w) (*out)[w] |= part[w];
             lua_pop(L, 1);
-            break;
           }
-          if (ParseCategory(L, lua_tostring(L, -1), part))
-            for (size_t w = 0; w < mine.size() && w < part.size(); ++w) mine[w] |= part[w];
-          lua_pop(L, 1);
         }
+        lua_pop(L, 1);
       }
       lua_pop(L, 1);
-    }
-    lua_pop(L, 2);
-    if (Sim* sim = TheSim(L)) {
-      for (const std::string& id : UnitRestrictedBlueprints(*sim, u->view.id))
+    };
+    auto restricted = [&](std::vector<uint64_t>* out) {
+      for (const std::string& id : RestrictionsOf(L, u))
         if (ParseCategory(L, id.c_str(), part))
+          for (size_t w = 0; w < out->size() && w < part.size(); ++w) (*out)[w] &= ~part[w];
+    };
+    buildable(lua_gettop(L), &mine);
+    lua_pop(L, 1);
+    restricted(&mine);
+    // The upgrades in its queue (FA exe 0x840130 with 0x8c1220, READ 2026-11-03: 0x8c1220 lists the blueprints of the
+    // unit's Upgrade orders (type 0x1b) in queue order; for each, 0x8403f7 .. 0x8404e0 makes the set again from that
+    // blueprint's BuildableCategory (bp+0x528) times the army's set less the unit's restrictions (0x84040d, 0x840429)
+    // and ASSIGNS it (0x4028e0), then takes the upgrade's own blueprint out of it (BVIntSet::RemoveAllFrom 0x401a90)):
+    // so a T1 factory with its upgrade queued offers the T2 units behind it, the last queued upgrade wins, and the same
+    // upgrade cannot be queued twice. The queue as the interface holds it (StateOf: the sync's copy with the orders
+    // issued since). INFERRED: the set 0x840429 takes off is the unit's restrictions (as for its own set, 0x84035f).
+    UnitStateView st;
+    if (StateOf(L, u, &st))
+      for (const CommandView& c : st.queue) {
+        if (c.type != static_cast<int>(CommandType::Upgrade) || c.blueprint.empty()) continue;
+        PushBlueprint(L, c.blueprint);
+        if (lua_istable(L, -1)) buildable(lua_gettop(L), &mine);
+        else std::fill(mine.begin(), mine.end(), 0);
+        lua_pop(L, 1);
+        restricted(&mine);
+        if (ParseCategory(L, c.blueprint.c_str(), part))
           for (size_t w = 0; w < mine.size() && w < part.size(); ++w) mine[w] &= ~part[w];
-    }
+      }
     // What all of them can build (FA exe 0x840130: each unit's set, the first as it is, every later
     // one intersected with it, BVIntSet::IntersectWith 0x401af0; a unit that builds nothing in the
     // selection leaves nothing to build, as in the original).
@@ -873,10 +932,14 @@ int l_GetUnitCommandData(lua_State* L) {
       lua_pushstring(L, kToggles[i]);
       lua_rawseti(L, 3, ++n);
     }
-  // What the player's army may not build is taken off (the engine's list of restricted blueprints).
-  if (Sim* sim = TheSim(L)) {
+  // What the player's army may not build is taken off (the engine's list of restricted blueprints; the last sync's
+  // copy, RefreshUnitCopies: it changes only in a beat).
+  if (UserState::From(L)->HasSim()) {
     std::vector<uint64_t> part;
-    for (const std::string& id : RestrictedBlueprints(*sim, sim->focusArmy + 1))
+    UnitStore& store = Store(L);
+    std::vector<std::string> asked;
+    if (!store.armyRestrictedCopied) asked = RestrictedBlueprints(*TheSim(L), FocusArmyNow(L) + 1);
+    for (const std::string& id : store.armyRestrictedCopied ? store.armyRestrictedCopy : asked)
       if (ParseCategory(L, id.c_str(), part))
         for (size_t w = 0; w < total.size() && w < part.size(); ++w) total[w] &= ~part[w];
   }
@@ -961,10 +1024,10 @@ int l_GetAttachedUnitsList(lua_State* L) {
 int l_GetAssistingUnitsList(lua_State* L) {
   if (lua_gettop(L) != 1) return luaL_error(L, "%s\n  expected %d args, but got %d", "GetAssistingUnitsList", 1, lua_gettop(L));
   std::vector<UserUnit*> out;
-  Sim* sim = TheSim(L);
-  if (lua_istable(L, 1) && sim && sim->focusArmy >= 0) {
+  const int focus = FocusArmyNow(L);
+  if (lua_istable(L, 1) && focus >= 0) {
     UnitStore& store = Store(L);
-    const int army = sim->focusArmy + 1;
+    const int army = focus + 1;
     const int n = luaL_getn(L, 1);
     for (int i = 1; i <= n; ++i) {
       lua_rawgeti(L, 1, i);
@@ -1410,11 +1473,11 @@ bool UserUnitScriptBits(lua_State* L, uint32_t id, uint32_t* bits) {
 }
 
 void RequestSessionEnd(lua_State* L) {
-  if (TheSim(L)) Writer(L).EndGame();
+  if (UserState::From(L)->HasSim()) Writer(L).EndGame();
 }
 
 void RequestSessionPause(lua_State* L, bool pause) {
-  if (!TheSim(L)) return;
+  if (!UserState::From(L)->HasSim()) return;
   if (pause) Writer(L).RequestPause();
   else Writer(L).Resume();
 }
@@ -1487,8 +1550,10 @@ namespace {
 bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float z, uint32_t entity, bool clear,
                 const std::string& blueprint, bool ctrl = false, bool form = false, float headingGiven = NAN,
                 uint32_t coordWith = 0xffffffffu) {
-  Sim* sim = TheSim(L);
-  if (!sim) return false;
+  // (Nothing of the running simulation: the order is written from the interface's copies into this client's command
+  // stream, as the original's ISSUE_Command; the focus army and the tick are the last sync's.)
+  if (!UserState::From(L)->HasSim()) return false;
+  const int focusArmy = FocusArmyNow(L);
   static const struct {
     const char* name;
     CommandType type;
@@ -1524,7 +1589,7 @@ bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float 
   std::vector<uint32_t> ids;
   std::vector<UserUnit*> units;
   for (UserUnit* u : Store(L).selection)
-    if (!u->gone && !u->view.dead && u->view.army == sim->focusArmy + 1) ids.push_back(u->view.id), units.push_back(u);
+    if (!u->gone && !u->view.dead && u->view.army == focusArmy + 1) ids.push_back(u->view.id), units.push_back(u);
   // A building order goes out with the selection as it stands, an empty one too (READ 2026-10-20): the build
   // dragger's release (FA exe 0x823220) gives each site that passes its test to ISSUE_Command (0x8b05e0 ->
   // 0x8b0180) with the session's selection (+0x4a0), and neither looks at the set's size; the client writes the
@@ -1636,7 +1701,7 @@ bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float 
     UnitStore::SentSite e;
     e.site.blueprint = blueprint;
     e.site.position[0] = x, e.site.position[1] = y, e.site.position[2] = z;
-    e.tick = static_cast<uint32_t>(sim->tick());
+    e.tick = TickNow(L);
     if (clear) Store(L).sent.clear();
     Store(L).sent.push_back(e);
   }
@@ -1696,12 +1761,12 @@ bool IssueFormationOrder(lua_State* L, const std::string& order, float x, float 
 // no formation. (How the original builds the table it hands the script is not read: it gets the
 // same one OnCommandIssued gets.)
 bool IssueScriptAt(lua_State* L, float x, float y, float z, bool clear) {
-  Sim* sim = TheSim(L);
-  if (!sim) return false;
+  if (!UserState::From(L)->HasSim()) return false;
+  const int focusArmy = FocusArmyNow(L);
   std::vector<uint32_t> ids;
   std::vector<UserUnit*> units;
   for (UserUnit* u : Store(L).selection)
-    if (!u->gone && !u->view.dead && u->view.army == sim->focusArmy + 1) ids.push_back(u->view.id), units.push_back(u);
+    if (!u->gone && !u->view.dead && u->view.army == focusArmy + 1) ids.push_back(u->view.id), units.push_back(u);
   if (ids.empty()) return false;
   const int top = lua_gettop(L);
   lua_pushcfunction(L, ScriptTraceback);
@@ -1753,7 +1818,7 @@ bool IssueScriptAt(lua_State* L, float x, float y, float z, bool clear) {
     ReadUnitList(L, lua_gettop(L), &listed);
     ids.clear();
     for (UserUnit* u : listed)
-      if (!u->gone && !u->view.dead && u->view.army == sim->focusArmy + 1) ids.push_back(u->view.id), allowed.push_back(u);
+      if (!u->gone && !u->view.dead && u->view.army == focusArmy + 1) ids.push_back(u->view.id), allowed.push_back(u);
     units = allowed;
   }
   lua_pop(L, 1);
@@ -1778,25 +1843,26 @@ bool IssueScriptAt(lua_State* L, float x, float y, float z, bool clear) {
 // What the player's army knows of a unit now (the engine's ReconOf bits; its own and its allies'
 // units: everything). The picture shows a unit by the same answer: the unit while it is seen, a
 // blip while it is on radar, sonar or omni alone, nothing otherwise.
+// As of the last sync (RefreshUnitCopies: the units' recon changes only in a beat, the focus army only at its sync),
+// as the original's interface reads its recon blips' copies.
 uint32_t ReconBitsOf(lua_State* L, const UserUnit* u) {
-  Sim* sim = TheSim(L);
-  if (!sim || sim->focusArmy < 0) return 0xf;
-  return ReconOf(*sim, sim->focusArmy + 1, u->view.id);
+  (void)L;
+  return u->reconCopy;
 }
 
 int HoverKindOf(lua_State* L, uint32_t entity) {
-  Sim* sim = TheSim(L);
   UserState* user = UserState::From(L);
-  if (!sim || !user->units) return 0;
+  if (!user->HasSim() || !user->units) return 0;
   UnitStore& store = static_cast<UnitStore&>(*user->units);
   auto it = store.units.find(entity);
   if (it == store.units.end() || it->second->gone || it->second->view.dead) return 0;
   UserUnit* u = it->second.get();
   if (std::find(store.selection.begin(), store.selection.end(), u) != store.selection.end()) return 0;
-  int army = sim->focusArmy + 1;
+  int army = FocusArmyNow(L) + 1;
   if (u->view.army == army) return 1;
   int stance = 1;  // neutral unless the armies say otherwise
-  for (const ArmyView& v : ArmyViews(*sim))
+  std::vector<ArmyView> asked;
+  for (const ArmyView& v : ArmiesNow(L, &asked))
     if (v.index == u->view.army && army >= 1 && army <= static_cast<int>(v.alliance.size())) stance = v.alliance[static_cast<size_t>(army - 1)];
   return stance == 2 ? 1 : stance == 0 ? 2 : 3;
 }
@@ -1825,15 +1891,15 @@ uint32_t UnitNearPlace(lua_State* L, float x, float z, float radius) {
 //   the beacon; else TransportReverseLoadUnits aimed at the hovered unit, for the whole selection.
 // The queue is cleared unless Shift is held.
 bool IssueTransportOrderAt(lua_State* L, const std::string& order, uint32_t entity, bool clear) {
-  Sim* sim = TheSim(L);
-  if (!sim) return false;
+  if (!UserState::From(L)->HasSim()) return false;
+  const int focusArmy = FocusArmyNow(L);
   UnitStore& store = Store(L);
   auto it = store.units.find(entity);
   if (it == store.units.end() || it->second->gone) return false;
   UserUnit* hover = it->second.get();
   std::vector<UserUnit*> units;
   for (UserUnit* u : store.selection)
-    if (!u->gone && !u->view.dead && u->view.army == sim->focusArmy + 1) units.push_back(u);
+    if (!u->gone && !u->view.dead && u->view.army == focusArmy + 1) units.push_back(u);
   if (units.empty()) return false;
   StreamIssueData d;
   d.target.type = 1;
@@ -1881,15 +1947,18 @@ bool IssueToSelectionAt(lua_State* L, const std::string& order, uint32_t entity,
 
 namespace {
 // The reclaimable thing at a place, if the selection holds a unit of the player's that can reclaim.
+// (The props are the running simulation's: asked only when the selection can reclaim; the rest from the copies.)
 bool ReclaimTargetAt(lua_State* L, const float at[3], float within, ReclaimableView* prop) {
-  Sim* sim = TheSim(L);
-  if (!sim) return false;
+  if (!UserState::From(L)->HasSim()) return false;
   UnitStore& store = Store(L);
   const uint32_t kReclaim = 0x100000;
+  const int focusArmy = FocusArmyNow(L);
   uint32_t caps = 0;
   for (UserUnit* u : store.selection)
-    if (!u->gone && !u->view.dead && u->view.army == sim->focusArmy + 1) caps |= u->view.commandCaps;
-  return (caps & kReclaim) && ReclaimableAt(*sim, at, within, prop);
+    if (!u->gone && !u->view.dead && u->view.army == focusArmy + 1) caps |= u->view.commandCaps;
+  if (!(caps & kReclaim)) return false;
+  Sim* sim = TheSim(L);
+  return sim && ReclaimableAt(*sim, at, within, prop);
 }
 }  // namespace
 
@@ -1903,8 +1972,7 @@ bool CanReclaimAtPlace(lua_State* L, const float at[3], float within) {
   // the place, the reach, the selection and the beat are the same. ReclaimableAt looks at every
   // prop near the place: about a millisecond in a forest.)
   UnitStore& store = Store(L);
-  Sim* sim = TheSim(L);
-  const uint32_t tick = sim ? sim->tick() : 0;
+  const uint32_t tick = TickNow(L);
   if (store.reclaimTick == tick && store.reclaimFor == store.selection && store.reclaimAt[0] == at[0] &&
       store.reclaimAt[2] == at[2] && store.reclaimWithin == within)
     return store.reclaimAnswer;
@@ -2025,10 +2093,9 @@ bool FindCommandView(lua_State* L, uint32_t id, CommandView* out, std::vector<ui
 }  // namespace
 
 std::string RightClickOrder(lua_State* L, uint32_t under) {
-  Sim* sim = TheSim(L);
-  if (!sim) return std::string();
+  if (!UserState::From(L)->HasSim()) return std::string();
   UnitStore& store = Store(L);
-  int army = sim->focusArmy + 1;
+  int army = FocusArmyNow(L) + 1;
   uint32_t caps = 0;  // (the beat's copies: engine ui 26)
   std::vector<UserUnit*>& own = store.capsOwn;
   own.clear();
@@ -2053,7 +2120,8 @@ std::string RightClickOrder(lua_State* L, uint32_t under) {
     return move;
   }
   int stance = e->view.army == army ? 2 : 0;
-  for (const ArmyView& v : ArmyViews(*sim))
+  std::vector<ArmyView> asked;
+  for (const ArmyView& v : ArmiesNow(L, &asked))
     if (v.index == e->view.army && e->view.army != army && army <= static_cast<int>(v.alliance.size()))
       stance = v.alliance[static_cast<size_t>(army - 1)];
   // (IsEnemy 0x5d5540 and IsAlly 0x5bd630 are both false when either army is missing; one's own army counts as an ally.)
@@ -2266,7 +2334,7 @@ bool CommandByName(std::string name, CommandType* type, const char** plain) {
 
 // The entity ids of the player's own living units in a list.
 void OwnIds(lua_State* L, const std::vector<UserUnit*>& list, std::vector<uint32_t>* ids, std::vector<UserUnit*>* units) {
-  int army = TheSim(L)->focusArmy + 1;
+  int army = FocusArmyNow(L) + 1;
   for (UserUnit* u : list)
     if (!u->gone && !u->view.dead && u->view.army == army) ids->push_back(u->view.id), units->push_back(u);
 }
@@ -2369,7 +2437,7 @@ int l_ExecLuaInSim(lua_State* L) {
   const std::string name = luaL_checkstring(L, 1);
   std::string value;
   if (!lua_isnil(L, 2)) SerializeLua(L, 2, &value);
-  if (TheSim(L)) Writer(L).ExecuteLuaInSim(name, value);
+  if (UserState::From(L)->HasSim()) Writer(L).ExecuteLuaInSim(name, value);
   return 0;
 }
 
@@ -2418,7 +2486,7 @@ float SpawnElevation(lua_State* L, const UserUnit* u, float x, float z) {
 // writes the set they were gathered in (a BVIntSet, BVIntSet::Add 0x88e51a): their count, then the ids rising, each
 // once. Here no session or no live simulation: nothing (the console's caller has printed the "no session" line).
 void SendSimCommand(lua_State* L, const std::string& command) {
-  if (!TheSim(L)) return;
+  if (!UserState::From(L)->HasSim()) return;
   std::vector<uint32_t> ids;
   for (const UserUnit* u : Store(L).selection)
     if (!u->gone) ids.push_back(u->view.id);
@@ -2436,7 +2504,7 @@ void SendSimCommand(lua_State* L, const std::string& command) {
 // simulation carries a warp out only with cheats on (0x748cd0).
 void TeleportSelectedUnits(lua_State* L) {
   if (!UserState::From(L)->gameInterface) return ConsoleNoSession(L);
-  if (!TheSim(L)) return;
+  if (!UserState::From(L)->HasSim()) return;
   float mouse[3] = {0, 0, 0};
   MouseWorldPlace(L, mouse);
   const int army = FocusArmyNow(L);
@@ -2453,7 +2521,7 @@ void TeleportSelectedUnits(lua_State* L) {
 // cheats for a DestroySelf, the command stream's IssueCommand 0x749290).
 void SelectionOrdersItself(lua_State* L, bool destroy) {
   if (!UserState::From(L)->gameInterface) return ConsoleNoSession(L);
-  if (!TheSim(L)) return;
+  if (!UserState::From(L)->HasSim()) return;
   IssuePlain(L, Store(L).selection, destroy ? "DestroySelf" : "KillSelf", 0, true, std::string(), 1);
 }
 
@@ -2477,8 +2545,7 @@ void InfoPair(lua_State* L, int listIdx, const char* key, const std::string& val
 int l_UnitProcessInfo(lua_State* L) {
   UserUnit* u = CheckUnit(L, 1);
   const std::string key = luaL_checkstring(L, 2), value = luaL_checkstring(L, 3);
-  Sim* sim = TheSim(L);
-  if (!sim || u->gone || u->view.dead || u->view.army != sim->focusArmy + 1) return 0;
+  if (!UserState::From(L)->HasSim() || u->gone || u->view.dead || u->view.army != FocusArmyNow(L) + 1) return 0;
   Writer(L).ProcessInfoPair(u->view.id, key, value);
   return 0;
 }
@@ -2491,9 +2558,8 @@ int l_SetPaused(lua_State* L) {
   ReadUnitList(L, 1, &list);
   std::string names;
   for (const UserUnit* u : list) names += (names.empty() ? "" : " ") + u->view.blueprint;
-  Sim* sim = TheSim(L);
   Logf(LogLevel::Info, "moho64ui: SetPaused(%s) at tick %u for %d unit(s): %s", lua_toboolean(L, 2) ? "true" : "false",
-       sim ? static_cast<unsigned>(sim->tick()) : 0u, static_cast<int>(list.size()), names.c_str());
+       static_cast<unsigned>(TickNow(L)), static_cast<int>(list.size()), names.c_str());
   InfoPair(L, 1, "SetPaused", lua_toboolean(L, 2) ? "true" : "false");
   return 0;
 }
@@ -2793,6 +2859,7 @@ void RetypeSentOrders(lua_State* L, UnitStateView* out) {
 bool StateOf(lua_State* L, const UserUnit* u, UnitStateView* out) {
   if (!u || u->gone) return false;
   UserState* user = UserState::From(L);
+  u->askedSync = user->syncCount;  // (RefreshUnitCopies makes its copy again at the next sync)
   const bool beat = user->config().beatRunning && user->config().beatRunning();
   if (u->stateSync != ~0ull && (beat || u->stateSync == user->syncCount)) {
     *out = u->stateCopy;
@@ -2808,6 +2875,23 @@ bool StateOf(lua_State* L, const UserUnit* u, UnitStateView* out) {
   DropRemovedOrders(L, u, out);
   RetypeSentOrders(L, out);
   return true;
+}
+
+// What a unit itself may not build (UnitRestrictedBlueprints), by the same rules as its state's copy (StateOf): the
+// copy of this sync, or while a beat runs on its own thread the last one; else asked now (no beat runs).
+const std::vector<std::string>& RestrictionsOf(lua_State* L, const UserUnit* u) {
+  static const std::vector<std::string> none;
+  if (!u || u->gone) return none;
+  UserState* user = UserState::From(L);
+  u->restrictedAskedSync = user->syncCount;
+  if (!Builds(L, Store(L), u->view.blueprint)) return none;
+  const bool beat = user->config().beatRunning && user->config().beatRunning();
+  if (u->restrictedSync != ~0ull && (beat || u->restrictedSync == user->syncCount)) return u->restrictedCopy;
+  Sim* sim = TheSim(L);
+  if (!sim) return none;
+  u->restrictedCopy = UnitRestrictedBlueprints(*sim, u->view.id);
+  u->restrictedSync = user->syncCount;
+  return u->restrictedCopy;
 }
 
 void PushUnitById(lua_State* L, uint32_t id) {
@@ -3258,10 +3342,10 @@ int l_RenderOverlayEconomy(lua_State* L) {
 // one of the player's units, as the last beat left it.
 int l_DeleteCommand(lua_State* L) {
   const uint32_t id = static_cast<uint32_t>(static_cast<int64_t>(luaL_checknumber(L, 1)));
-  Sim* sim = TheSim(L);
-  if (!sim) return 0;
+  if (!UserState::From(L)->HasSim()) return 0;
+  const int focusArmy = FocusArmyNow(L);
   for (const auto& [unitId, u] : Store(L).units) {
-    if (u->gone || u->view.dead || u->view.army != sim->focusArmy + 1) continue;
+    if (u->gone || u->view.dead || u->view.army != focusArmy + 1) continue;
     UnitStateView st;
     if (!StateOf(L, u.get(), &st)) continue;
     for (const std::vector<CommandView>* queue : {&st.queue, &st.factoryQueue})
@@ -3312,7 +3396,7 @@ void ReportQueueChange(lua_State* L) {
 // modifier %s" (0x866c69), and on. (The original hands that %s the string object itself, copied
 // onto the stack, 0x866c6e, so what it shows there is not the word; here the word.)
 void SelectByCategoryCommand(lua_State* L, const std::string& arguments) {
-  if (!TheSim(L)) return ConsoleNoSession(L);
+  if (!UserState::From(L)->HasSim()) return ConsoleNoSession(L);
   if (arguments.find_first_not_of(" \t") == std::string::npos)
     return ConsolePrint(L,
                         "UI_SelectByCategory [+add] [+nearest] [+idle] [+goto] categoryExpression\n"
@@ -3354,8 +3438,8 @@ void SelectByCategoryCommand(lua_State* L, const std::string& arguments) {
 }
 
 void ExpandCurrentSelection(lua_State* L) {
-  Sim* sim = TheSim(L);
-  if (!sim) return ConsoleNoSession(L);  // (READ 0x866985: the engine's "no session" line)
+  if (!UserState::From(L)->HasSim()) return ConsoleNoSession(L);  // (READ 0x866985: the engine's "no session" line)
+  const int focusArmy = FocusArmyNow(L);
   UnitStore& store = Store(L);
   std::vector<UserUnit*> now = store.selection, asked;
   std::vector<uint32_t> ids;
@@ -3370,11 +3454,11 @@ void ExpandCurrentSelection(lua_State* L) {
       if (PlaceInCameraView(L, u->view.position)) asked.push_back(u.get());
   }
   for (UserUnit* u : asked) {
-    if (u->gone || u->view.dead || !u->view.selectable || u->view.army != sim->focusArmy + 1) continue;
+    if (u->gone || u->view.dead || !u->view.selectable || u->view.army != focusArmy + 1) continue;
     if (InCategory(L, u, "WALL") || std::find(now.begin(), now.end(), u) != now.end()) continue;
     bool kind = false;
     for (UserUnit* s : store.selection) kind = kind || s->view.blueprint == u->view.blueprint;
-    if (kind && !BeingUpgraded(L, sim, u)) now.push_back(u);
+    if (kind && !BeingUpgraded(L, nullptr, u)) now.push_back(u);
   }
   SetSelection(L, now);
 }
@@ -3729,11 +3813,10 @@ int l_ClearSessionExtraSelectList(lua_State* L) {
 // fog or not: Chris, 2026-10-25, "the outline (blue construction box) of what enemies are building is visible".)
 // The order's units walked here are the interface's units with orders; at most 600 sites (ours, for the cost).
 void BuildOrderSitesForWorld(lua_State* L, std::vector<WorldGhost>* out) {
-  Sim* sim = TheSim(L);
   UserState* user = UserState::From(L);
-  if (!sim || !user->units) return;
+  if (!user->HasSim() || !user->units) return;
   UnitStore& store = static_cast<UnitStore&>(*user->units);
-  const int focus = sim->focusArmy + 1;
+  const int focus = FocusArmyNow(L) + 1;
   std::set<uint32_t> seen;
   for (auto& entry : store.units) {
     const UserUnit* u = entry.second.get();
@@ -3758,9 +3841,8 @@ void BuildOrderSitesForWorld(lua_State* L, std::vector<WorldGhost>* out) {
 // red there. INFERRED where the original tests it (its interface, by the build orders it
 // shows); the rectangles are those of the guide (BuildSpacingOf), edges may touch.
 bool SiteMeetsOrdered(lua_State* L, const std::string& blueprint, const float position[3], bool adding) {
-  Sim* sim = TheSim(L);
   UserState* user = UserState::From(L);
-  if (!sim || !user->units) return false;
+  if (!user->HasSim() || !user->units) return false;
   UnitStore& store = static_cast<UnitStore&>(*user->units);
   float w = 1, h = 1;
   BuildSpacingOf(L, blueprint, &w, &h);
@@ -3777,7 +3859,7 @@ bool SiteMeetsOrdered(lua_State* L, const std::string& blueprint, const float po
     }
     if (meets(store.ordered[i])) return true;
   }
-  const uint32_t now = static_cast<uint32_t>(sim->tick());
+  const uint32_t now = TickNow(L);  // (as the sent sites' ticks: IssueOrder)
   store.sent.erase(std::remove_if(store.sent.begin(), store.sent.end(), [&](const UnitStore::SentSite& e) { return now - e.tick > 5; }),
                    store.sent.end());
   for (const UnitStore::SentSite& e : store.sent)
@@ -4590,7 +4672,7 @@ void WorkOutOrderGraph(lua_State* L, bool shown, uint32_t rollover, OrderGraphOu
   // selected, +0x3c highlight): where the text goes.
   // (Now: the simulation's beat, as when the times were worked out; the scene is not made while a
   // beat runs on its own thread.)
-  const int64_t now = TheSim(L)->tick();
+  const int64_t now = TickNow(L);
   for (size_t i = 0; i < g.nodes.size(); ++i) {
     const OrderGraph::Node& n = g.nodes[i];
     if (n.command == 0xffffffffu || n.eta - now < 0) continue;
@@ -5194,8 +5276,7 @@ void StopCursorText(lua_State* L) { CallCursorText(L, "StopCursorText", lua_gett
 
 bool BeginWaypointDrag(lua_State* L, uint32_t command) {
   if (command == 0xffffffffu) return false;
-  Sim* sim = TheSim(L);
-  if (!sim || sim->focusArmy < 0) return false;  // (0x81f899: no focus army, no action 5)
+  if (!UserState::From(L)->HasSim() || FocusArmyNow(L) < 0) return false;  // (0x81f899: no focus army, no action 5)
   OrderGraph& g = Store(L).graph;
   g.drag = OrderGraph::Drag();
   g.drag.command = command;
@@ -5287,10 +5368,9 @@ uint32_t ReleaseWaypointDrag(lua_State* L, const float at[3], const float playab
   // CWldSession's SetTarget (0x8b0ee0): with a focus army the target's place inside the playable rectangle
   // (0x86da60, by whole map units; skipped when the army's byte +0x170 is set, not read what that is); without one
   // no test (the press needed one, 0x81f899); a transport's load only onto a transport.
-  Sim* sim = TheSim(L);
-  if (!sim) return command;
+  if (!UserState::From(L)->HasSim()) return command;
   const int cx = static_cast<int>(sent[0]), cz = static_cast<int>(sent[2]);
-  if (sim->focusArmy >= 0 &&
+  if (FocusArmyNow(L) >= 0 &&
       (cx < static_cast<int>(playable[0]) || cx >= static_cast<int>(playable[2]) || cz < static_cast<int>(playable[1]) || cz >= static_cast<int>(playable[3])))
     return command;
   if (c.type == static_cast<int>(CommandType::TransportLoadUnits) &&
@@ -5328,8 +5408,7 @@ bool RemoveHoveredWaypointOrder(lua_State* L, bool shift, bool ctrl) {
   UnitStore& store = Store(L);
   const uint32_t command = store.graph.hovered;
   if ((command & 0xff000000u) == 0xff000000u || !shift || !ctrl) return false;  // (0x87100a .. 0x871027)
-  Sim* sim = TheSim(L);
-  if (!sim || sim->focusArmy < 0) return false;  // (an observer, 0x896590: the kept order instead)
+  if (!UserState::From(L)->HasSim() || FocusArmyNow(L) < 0) return false;  // (an observer, 0x896590: the kept order instead)
   // (0x871048: the order and its units; not found: nothing, and no other order either)
   CommandView c;
   std::vector<uint32_t> carriers;
@@ -5359,6 +5438,71 @@ bool DraggedBuildingSite(lua_State* L, WorldGhost* site, float from[3]) {
   site->free = d.fit;
   return true;
 }
+
+namespace {
+// Whether a blueprint builds anything (its Economy.BuildableCategory names a set): only such a unit's own restrictions
+// count (GetUnitCommandData takes them off what its blueprint builds), so only such a unit's are copied.
+bool Builds(lua_State* L, UnitStore& store, const std::string& blueprint) {
+  auto known = store.builders.find(blueprint);
+  if (known != store.builders.end()) return known->second;
+  bool builds = false;
+  const int top = lua_gettop(L);
+  PushBlueprint(L, blueprint);
+  if (lua_istable(L, -1)) {
+    lua_pushstring(L, "Economy");
+    lua_gettable(L, -2);
+    if (lua_istable(L, -1)) {
+      lua_pushstring(L, "BuildableCategory");
+      lua_gettable(L, -2);
+      builds = lua_istable(L, -1) && luaL_getn(L, -1) > 0;
+    }
+  }
+  lua_settop(L, top);
+  store.builders[blueprint] = builds;
+  return builds;
+}
+
+// The copies the interface reads while a beat runs on its own thread, made again at each beat's sync (no beat runs
+// then: nothing waits), as the original's interface holds its own copy of every unit's synced data (its UserUnits,
+// brought up to date from the beat's sync by CWldSession::DoBeat 0x894c00) and never asks the running simulation:
+// - every unit's recon bits for the focus army (ReconBitsOf: the hover, the right click, the cursor);
+// - the focus army's restricted blueprints (GetUnitCommandData);
+// - a unit's state (StateOf: the panels, the toggles, the queues an order is noted in) and, for a builder, its own
+//   restrictions (RestrictionsOf): for each unit new since the last sync, each one asked in the last kWarmSyncs syncs
+//   or selected, and a round of the others, kCopyRound a sync, from where the last round stopped. So no unit is
+//   without a copy when a beat runs, and the copies the interface reads are this sync's.
+// Ours (INFERRED: the original copies every unit whole at every beat; at ~0.7 us a unit's state, measured 2026-11-03
+// with 150 units, that is ~3 ms a beat with 4,000): a unit nobody asked lately has a copy from at most
+// (units / kCopyRound) syncs back when it is first asked during a beat, this sync's from the next sync on. Between
+// beats (no beat running) StateOf and RestrictionsOf read the simulation as before when their copy is older.
+const uint64_t kWarmSyncs = 50;
+const size_t kCopyRound = 300;
+void RefreshUnitCopies(lua_State* L, Sim& sim, UnitStore& store) {
+  const uint64_t now = UserState::From(L)->syncCount;
+  const int focus = sim.focusArmy;
+  store.armyRestrictedCopy = RestrictedBlueprints(sim, focus + 1);
+  store.armyRestrictedCopied = true;
+  const std::set<const UserUnit*> selected(store.selection.begin(), store.selection.end());
+  auto copy = [&](UserUnit* u) {
+    if (UnitStateOf(sim, u->view.id, &u->stateCopy)) u->stateSync = now;
+    if (Builds(L, store, u->view.blueprint)) u->restrictedCopy = UnitRestrictedBlueprints(sim, u->view.id), u->restrictedSync = now;
+  };
+  for (auto& [id, u] : store.units) {
+    u->reconCopy = focus < 0 ? 0xf : ReconOf(sim, focus + 1, id);  // (as ReconOf was asked: none for an observer)
+    if (u->stateSync == ~0ull || now - u->askedSync <= kWarmSyncs || now - u->restrictedAskedSync <= kWarmSyncs || selected.count(u.get()))
+      copy(u.get());
+  }
+  size_t round = 0;
+  auto it = store.units.lower_bound(store.copyRoundFrom);
+  for (size_t seen = 0; seen < store.units.size() && round < kCopyRound; ++seen) {
+    if (it == store.units.end()) it = store.units.begin();
+    UserUnit* u = it->second.get();
+    ++it;
+    if (u->stateSync != now) copy(u), ++round;
+  }
+  store.copyRoundFrom = it == store.units.end() ? 0 : it->first;
+}
+}  // namespace
 
 // After a beat: the interface's units follow the simulation's.
 void RefreshUserUnits(lua_State* L) {
@@ -5438,6 +5582,7 @@ void RefreshUserUnits(lua_State* L) {
     }
   }
   ReportQueueChange(L);
+  RefreshUnitCopies(L, *sim, store);
 }
 
 // CWldSession::CheckForNecessaryUIRefresh (FA exe 0x8943e0, READ 2026-10-21), once a beat, after the beat's OnSync()
@@ -5487,6 +5632,24 @@ void RegisterUserUnitBindings(lua_State* L) {
   // moho64ui_SentMessages() -> the command stream's messages handed to the simulation since the last call (in a test
   // run only: UnitStore::sentForTests), each {type = n, payload = its bytes as a string}, oldest first. The host's
   // own function for tests.
+  // moho64ui_PretendBeat(on) (a test run only: TestFileWritesAllowed): from now on the interface behaves as if a beat
+  // ran on its own thread between syncs, and every look at the running simulation is counted (UserState::
+  // PretendBeatForTests); moho64ui_PretendBeat(false) ends it and gives the places counted, a list of strings ("<the
+  // place> in <the engine function>"). The host's own function for tests (ui/tests/nowait.lua).
+  lua_register(L, "moho64ui_PretendBeat", [](lua_State* S) -> int {
+    if (!TestFileWritesAllowed()) return 0;
+    UserState* user = UserState::From(S);
+    const bool on = lua_toboolean(S, 1) != 0;
+    std::vector<std::string> waits = user->pretendWaits;
+    user->PretendBeatForTests(on);
+    if (on) return 0;
+    lua_newtable(S);
+    for (size_t i = 0; i < waits.size(); ++i) {
+      lua_pushstring(S, waits[i].c_str());
+      lua_rawseti(S, -2, static_cast<int>(i + 1));
+    }
+    return 1;
+  });
   lua_register(L, "moho64ui_SentMessages", [](lua_State* S) -> int {
     UnitStore& store = Store(S);
     lua_newtable(S);
