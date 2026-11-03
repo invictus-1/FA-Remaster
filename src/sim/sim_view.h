@@ -95,6 +95,10 @@ struct UnitView {
   // what it can do this beat: RULEUCC_ and RULEUTC_ bits (the blueprint's, as scripts changed them since); the
   // same numbers as UnitStateView's
   uint32_t commandCaps = 0, toggleCaps = 0;
+  // ui request 53: the toggle buttons' state (u+0x498, the same bits as UnitStateView::scriptBits). FAF switches an
+  // extractor off with the production toggle (bit 4), not SetPaused, and the original marks allied units that are
+  // paused OR have a toggle off.
+  uint32_t scriptBits = 0;
   // ui request 28. layer: the original's ELayer bits (1 Land, 2 Seabed, 4 Sub, 8 Water, 16 Air, 32 Orbit; 0 none);
   // attached: it hangs on a parent (docked, loaded, stored: the original's "parent weak ptr != null",
   // SSTIUnitVariableData+0xa); attachedCount: the entities attached to it now (units by AttachTo / AttachBoneTo,

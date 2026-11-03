@@ -151,6 +151,7 @@ void UnitViews(const Sim& sim, std::vector<UnitView>* out) {
     v.headCommand = u->commands.empty() ? -1 : static_cast<int>(u->commands.front()->type);
     v.commandCaps = ViewCommandCaps(u);
     v.toggleCaps = ViewToggleCaps(u);
+    v.scriptBits = u->scriptBits;
     v.mesh = u->mesh;
     for (int k = 0; k < 2; ++k) {
       v.scrollPrev[k] = u->scrollPrev[k];

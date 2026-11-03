@@ -3,6 +3,12 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui request 53: scriptBits in UnitView (2026-11-03) — done
+
+`UnitView::scriptBits` (sim_view.h, beside paused / toggleCaps) is the unit's toggle state, u+0x498, the same bits as
+UnitStateView::scriptBits. FAF switches an extractor off with the production toggle (bit 4), not SetPaused; the
+original marks allied units that are paused or have a toggle off. Read-only; no sim change.
+
 ## ui request 50: zlib's deflate half (2026-10-29)
 
 Done with Chris's OK for the download (2026-10-29 07:44). zlib 1.3.1 from its official release
