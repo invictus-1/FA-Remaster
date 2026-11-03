@@ -5,6 +5,9 @@
     py render/build.py                 -> build-render/moho64view.exe
     py render/build.py --jobs 32
     py render/build.py --no-debug      (leave out -g)
+    py render/build.py --tracy         the profiler build (docs/profiling.md): Tracy's client and the marks
+                                       (src/core/trace.h, render/render_trace.h) in every file; out
+                                       build-render-tracy/ unless --out. Without it no line of Tracy is built.
 
 Compiles every .cpp in render/ and links it with the engine as a library: src/core, src/script and
 src/sim with Lua, mimalloc and zlib, built here with the flags tools/build_zig.py uses (the viewer
@@ -16,6 +19,9 @@ import argparse, concurrent.futures as cf, glob, os, subprocess, sys
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 ZLIB = ["adler32", "crc32", "inffast", "inflate", "inftrees", "zutil"]
 LIBS = ["-ld3d12", "-ldxgi", "-ld3dcompiler_47", "-luser32", "-lgdi32", "-lshell32"]
+# The profiler build's settings (--tracy): tools/build_zig.py's TRACY_DEFINES, for every file (docs/profiling.md 1)
+TRACY_DEFINES = ["-DTRACY_ENABLE", "-DTRACY_ON_DEMAND", "-DTRACY_ONLY_LOCALHOST", "-DTRACY_NO_CRASH_HANDLER"]
+TRACY_LIBS = ["-ldbghelp", "-ladvapi32", "-lsecur32", "-lws2_32"]
 
 
 def zig(*args):
@@ -46,8 +52,12 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
     ap.add_argument("--no-debug", action="store_true")
-    ap.add_argument("--out", default=os.path.join(ROOT, "build-render"))
+    ap.add_argument("--out", help="output folder (default build-render; build-render-tracy with --tracy)")
+    ap.add_argument("--tracy", action="store_true", help="the profiler build (docs/profiling.md)")
     a = ap.parse_args()
+    if not a.out:  # (its own folder: the objects do not track the flags)
+        a.out = os.path.join(ROOT, "build-render-tracy" if a.tracy else "build-render")
+    tracy = TRACY_DEFINES + ["-I", os.path.join(ROOT, "third_party", "tracy")] if a.tracy else []
     target = ["-target", "x86_64-windows-gnu"]
     objdir = os.path.join(a.out, "obj")
     os.makedirs(objdir, exist_ok=True)
@@ -60,7 +70,7 @@ def main():
 
     def add(src, flags, cxx):
         obj = os.path.join(objdir, os.path.relpath(src, ROOT).replace(os.sep, "_").replace("/", "_") + ".o")
-        cmd = zig("c++" if cxx else "cc", *target, *common, *flags, "-MMD", "-MF", obj + ".d", "-c", src, "-o", obj)
+        cmd = zig("c++" if cxx else "cc", *target, *common, *flags, *tracy, "-MMD", "-MF", obj + ".d", "-c", src, "-o", obj)
         jobs.append((src, obj, cmd))
 
     mi_inc = ["-I", os.path.join(ROOT, "third_party", "mimalloc", "include")]
@@ -79,6 +89,8 @@ def main():
             add(f, ["-std=c++20", "-w", "-ffp-contract=off", "-fno-fast-math", *includes], True)
     for f in sorted(glob.glob(os.path.join(ROOT, "render", "*.cpp"))):
         add(f, ["-std=c++20", "-Wall", "-Wextra", *includes], True)
+    if a.tracy:  # Tracy's client, unchanged (third_party/tracy), once
+        add(os.path.join(ROOT, "third_party", "tracy", "TracyClient.cpp"), ["-std=c++20", "-w"], True)
 
     todo = [j for j in jobs if stale(j[0], j[1])]
     print(f"render/build: {len(todo)} of {len(jobs)} objects to compile, {a.jobs} jobs")
@@ -97,7 +109,7 @@ def main():
         sys.exit(f"render/build: {len(failed)} file(s) failed")
     exe = os.path.join(a.out, "moho64view.exe")
     fresh = os.path.join(a.out, "moho64view.new.exe")
-    r = subprocess.run(zig("c++", *target, *common, "-o", fresh, *[j[1] for j in jobs], *LIBS, "-static"),
+    r = subprocess.run(zig("c++", *target, *common, "-o", fresh, *[j[1] for j in jobs], *LIBS, *(TRACY_LIBS if a.tracy else []), "-static"),
                        capture_output=True, text=True)
     if r.returncode != 0:
         sys.exit("render/build: link failed\n" + r.stderr)

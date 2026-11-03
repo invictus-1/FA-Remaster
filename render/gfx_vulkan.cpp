@@ -78,6 +78,7 @@ struct wl_surface;
 #include "gfx_pacing.h"
 #include "gfx_vulkan_dxc.h"
 #include "hitch_log.h"  // [hitches]
+#include "render_trace.h"  // [tracy]
 
 // (Vulkan's structures are begun with their type alone, the rest zero)
 #if defined(__clang__)
@@ -4077,6 +4078,7 @@ void VulkanDevice::BeginFrame(const float clearColor[4]) {
         if (same != lastTimes_.end()) same->second += ms;
         else lastTimes_.emplace_back(f.marks[i], ms);
       }
+      trace::GpuTimes(lastTimes_);  // [tracy]
     }
   }
   f.marks.clear();
