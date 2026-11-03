@@ -11,6 +11,7 @@
 #include <limits>
 
 #include "core/log.h"
+#include "core/trace.h"
 #include "core/speculate.h"
 #include "core/workers.h"
 #include "sim/navigation.h"
@@ -258,6 +259,7 @@ void HPathTables::DirtyRect(int x0, int z0, int x1, int z1) {
 }
 
 void HPathTables::UpdateBackground(int budget) {
+  MOHO_ZONE("path tables: update");
   // PathTables::UpdateBackground 0x76bc10 (Sim::AdvanceBeat, before the armies). Only the "/genpath" command
   // line switch builds everything at once; a normal game builds the clusters here, path_BackgroundBudget
   // (1000) per beat shared by the maps in order, or on demand from a search's budget.
@@ -469,6 +471,7 @@ void HPathTables::PickAhead(ClusterMap& m, int L, int cx, int cz) {
 }
 
 bool HPathTables::PrepareSearches(int margin, bool all, WorkerPool* pool, int cool) {
+  MOHO_ZONE("path searches: prepare");
   ++prepBeat_;
   bool units = false;
   pick_[1].clear();
@@ -1064,6 +1067,7 @@ int HPathTables::Collect(Search& s, const PathCell& c, std::vector<std::pair<Pat
 
 // WorkOnce 0x7685a0 / ExpandNode 0x7661c0
 int HPathTables::WorkOnce(Search& s, int* budget) {
+  MOHO_ZONE("path search");
   std::vector<std::pair<PathCell, float>> nb;
   for (;;) {
     if (s.heap.empty()) return 0;
@@ -1248,6 +1252,7 @@ bool HPathTables::SameSearch(const Search& a, const Search& b, std::string* why)
 }
 
 void HPathTables::SearchesAhead(WorkerPool& pool, uint32_t round) {
+  MOHO_ZONE("path searches ahead");
   PathSpec& P = *spec_;
   P.ready = false;
   if (!P.spec.active()) return;
@@ -1284,6 +1289,7 @@ void HPathTables::SearchesAhead(WorkerPool& pool, uint32_t round) {
 }
 
 void HPathTables::WorkAll(int /*armies*/) {
+  MOHO_ZONE("path queues");
   inWork_ = true;
   PathSpec* P = spec_->ready ? spec_.get() : nullptr;  // (MOHO64_PAR_PATH: this beat's searches played ahead)
   static const bool prof = getenv("MOHO64_PROFILE") != nullptr;
@@ -1395,6 +1401,7 @@ void HPathTables::WorkAll(int /*armies*/) {
 }
 
 bool HPathTables::SearchNow(PathTraveler* t, int budget) {
+  MOHO_ZONE("path search (now)");
   Search s;
   Begin(s, t);
   int r = WorkOnce(s, &budget);

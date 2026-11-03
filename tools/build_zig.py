@@ -10,6 +10,9 @@
                                                C function pushing past its guaranteed stack (ci->top) stops there;
                                                --mi-debug: mimalloc's MI_DEBUG=3 / MI_SECURE=4. Use their own --out:
                                                the incremental check does not see changed flags)
+    py tools/build_zig.py --tracy             the profiler build (docs/profiling.md): Tracy's client
+                                               (third_party/tracy) and the marks of src/core/trace.h compiled in;
+                                               out build-tracy/ unless --out. Without it no line of Tracy is built.
 
 Same sources and flags as CMakeLists.txt (C++20, -ffp-contract=off -fno-fast-math, mimalloc for the Lua heap,
 static link on Windows). Incremental: an object is rebuilt when its source or any header under src/ or
@@ -18,6 +21,11 @@ third_party/ is newer (headers are not tracked per file: touching one header reb
 import argparse, concurrent.futures as cf, glob, os, subprocess, sys
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+# The profiler build's settings (--tracy; docs/profiling.md), the same for every file of the program: Tracy's client
+# compiled in, collecting only while a viewer is connected, listening on this machine only (no firewall prompt, nothing
+# on the network), and leaving crashes to the engine's own handler (core/crash.h). CMakeLists.txt MOHO64_TRACY and
+# ui/build_ui.py use the same list.
+TRACY_DEFINES = ["-DTRACY_ENABLE", "-DTRACY_ON_DEMAND", "-DTRACY_ONLY_LOCALHOST", "-DTRACY_NO_CRASH_HANDLER"]
 
 
 def zig(*args):
@@ -30,10 +38,14 @@ def main():
     ap.add_argument("--debug", action="store_true", help="add -g (the default; kept for old command lines)")
     ap.add_argument("--no-debug", action="store_true", help="leave out -g (recdiff/regress then cannot name our callers)")
     ap.add_argument("--target", help="zig target triple (default: this machine; Windows -> x86_64-windows-gnu)")
-    ap.add_argument("--out", default=os.path.join(ROOT, "build-zig"))
+    ap.add_argument("--out", help="output folder (default build-zig; build-tracy with --tracy)")
     ap.add_argument("--lua-api-check", action="store_true", help="Lua's API checks on, a trap at the first (a C function pushing past its stack; a test build, as ui/build_ui.py)")
     ap.add_argument("--mi-debug", action="store_true", help="mimalloc's own checks on (MI_DEBUG=3, MI_SECURE=4: freed and overrun blocks caught; a test build)")
+    ap.add_argument("--tracy", action="store_true", help="the profiler build: Tracy's client and the marks of src/core/trace.h (docs/profiling.md)")
     a = ap.parse_args()
+    if not a.out:
+        a.out = os.path.join(ROOT, "build-tracy" if a.tracy else "build-zig")
+    tracy = TRACY_DEFINES if a.tracy else []
     target = a.target or ("x86_64-windows-gnu" if os.name == "nt" else None)
     windows = (target or "").find("windows") >= 0 or (target is None and os.name == "nt")
     tflag = ["-target", target] if target else []
@@ -53,10 +65,14 @@ def main():
     add(os.path.join(ROOT, "third_party", "mimalloc", "src", "static.c"),
         std_c + mi_inc + (["-DMI_SECURE=4", "-DMI_STAT=0", "-DMI_DEBUG=3"] if a.mi_debug else ["-DMI_SECURE=0", "-DMI_STAT=0", "-DMI_DEBUG=0", "-DNDEBUG"]), False)
     for f in sorted(glob.glob(os.path.join(ROOT, "third_party", "lua", "*.c"))):
-        add(f, std_c + lua_inc + mi_inc + ["-DMOHO64_MIMALLOC=1"] + (["-Dapi_check(L,o)=do{if(!(o))__builtin_trap();}while(0)"] if a.lua_api_check else []), False)
+        add(f, std_c + lua_inc + mi_inc + tracy + ["-DMOHO64_MIMALLOC=1"] + (["-Dapi_check(L,o)=do{if(!(o))__builtin_trap();}while(0)"] if a.lua_api_check else []), False)
     for n in ("adler32", "crc32", "deflate", "inffast", "inflate", "inftrees", "trees", "zutil"):
         add(os.path.join(ROOT, "third_party", "zlib", n + ".c"), std_c + zlib_inc, False)
-    cxxflags = ["-std=c++20", "-I", os.path.join(ROOT, "src")] + lua_inc + zlib_inc
+    cxxflags = ["-std=c++20", "-I", os.path.join(ROOT, "src")] + lua_inc + zlib_inc + tracy
+    if a.tracy:  # Tracy's client, unchanged (third_party/tracy: the release's public/ folder)
+        cxxflags += ["-I", os.path.join(ROOT, "third_party", "tracy")]
+        add(os.path.join(ROOT, "third_party", "tracy", "TracyClient.cpp"),
+            ["-std=c++20", "-w", "-I", os.path.join(ROOT, "third_party", "tracy")] + tracy, True)
     for d in ("core", "script", "sim", "ai"):
         for f in sorted(glob.glob(os.path.join(ROOT, "src", d, "*.cpp"))):
             add(f, cxxflags, True)
@@ -86,6 +102,8 @@ def main():
     exe = os.path.join(a.out, "moho64.exe" if windows else "moho64")
     link = zig("c++", *tflag, *common, "-o", exe, *[j[1] for j in jobs])
     link += ["-lshell32", "-lws2_32", "-static"] if windows else ["-lm", "-lpthread"]
+    if a.tracy:
+        link += ["-ldbghelp", "-ladvapi32", "-luser32", "-lsecur32"] if windows else ["-ldl"]
     r = subprocess.run(link, capture_output=True, text=True)
     if r.returncode != 0:
         sys.exit("build_zig: link failed\n" + r.stderr)

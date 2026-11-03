@@ -58,6 +58,8 @@ class Entity : public ScriptObject {
   Kind kind = Kind::Entity;
   uint32_t id = 0;      // the game's entity id (GetEntityId; reused after a 99-beat quarantine)
   uint32_t handle = 0;  // the engine's own reference, never reused (EntityRef)
+  // parallel order's keyed draws (Sim::ERand): the beat of this entity's last keyed draw and how many it made in it
+  uint32_t randTick = 0xffffffffu, randN = 0;
   const BlueprintInfo* blueprint = nullptr;
   Army* army = nullptr;
   Vec3 position;

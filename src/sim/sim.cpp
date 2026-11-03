@@ -21,6 +21,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+
+#include "core/keyed_rng.h"
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -33,6 +35,7 @@
 #include "core/log.h"
 #include "core/profile.h"
 #include "core/speculate.h"
+#include "core/trace.h"
 #include "core/workers.h"
 #include "core/vfs.h"
 #include "ai/map_analysis.h"
@@ -991,6 +994,19 @@ float Sim::BpUniform(float base, float range) {
   uint32_t u = NextUInt32();
   return (dmath::MulU32(u, range - lo) * 0x1p-32f + lo) + base;
 }
+uint32_t Sim::ERand(Entity* e, RandPurpose p) {
+  if (order != SimOrder::kParallel) return NextUInt32();
+  if (e->randTick != tick_) {
+    e->randTick = tick_;
+    e->randN = 0;
+  }
+  return KeyedRand32(sessionSeed_, e->handle, tick_, static_cast<uint32_t>(p), e->randN++);
+}
+double Sim::EFRand(Entity* e, RandPurpose p, float lo, float hi) {
+  if (order != SimOrder::kParallel) return FRand(lo, hi);
+  uint32_t u = ERand(e, p);
+  return dmath::MulU32(u, hi - lo) * 0x1p-32f + lo;
+}
 double Sim::Gauss() {
   if (hasGauss_) {
     hasGauss_ = false;
@@ -1026,6 +1042,7 @@ bool Sim::LoadRules() { return LoadRulesState(false); }
 
 bool Sim::LoadRulesState(bool withFixes) {
   SimFpScope fp;  // (core/fpenv.h: the blueprints' scripts compute values the sim keeps)
+  MOHO_ZONE("load: rules and blueprints");
   rules_ = std::make_unique<ScriptState>(ScriptState::Kind::Rules, vfs_);
   rules_->SetHookDirs(hookDirs_);
   if (withFixes) rules_->SetExtraHooks(FixesHooks());
@@ -1095,6 +1112,8 @@ bool Sim::CallGlobal(const char* fn, int nargs) {
 
 bool Sim::Start(const ReplayHeader& replay) {
   SimFpScope fp;  // (core/fpenv.h: the sim runs in one floating-point state, whatever thread a host starts it on)
+  MOHO_ZONE("load: session start");
+  trace::Lap load;  // (the profiler build: the start-up's steps)
   // The sim's focus and the driver's pending one both start as the launch's (Sim::Sim 0x743a63 and the
   // CSimDriver ctor 0x73b7dc both read +0x68 of the launch info they are given): no change at the first Sync.
   requestedFocus_.store(focusArmy);
@@ -1110,6 +1129,7 @@ bool Sim::Start(const ReplayHeader& replay) {
 
   // Map
   {
+    MOHO_ZONE("load: map");
     std::string mapPath = replay.map;
     mapFile = mapPath;
     auto data = vfs_->ReadFile(mapPath);
@@ -1128,6 +1148,7 @@ bool Sim::Start(const ReplayHeader& replay) {
   }
 
   // Sim Lua state
+  MOHO_LAP(load, "load: sim Lua state and bindings");
   state_ = std::make_unique<ScriptState>(ScriptState::Kind::Sim, vfs_);
   lua_State* L = state_->L();
   // The collector (third_party/lua/lgcinc.c, gc_design.md). With the fixes the incremental one: stepped only at the
@@ -1185,7 +1206,9 @@ bool Sim::Start(const ReplayHeader& replay) {
   RegisterCategoryBindings(L, &bps_);
   if (!keepRules) rules_.reset();  // the rules state is done (a host that asked keeps it: TakeRules)
 
+  MOHO_LAP(load, "load: simInit.lua");
   if (!state_->DoScript("/lua/simInit.lua")) return false;
+  MOHO_LAP(load, "load: scenario info");
 
   // ScenarioInfo from the session; ArmySetup from the armies' player options.
   if (!PushSerializedLua(L, replay.scenario) || !lua_istable(L, -1)) {
@@ -1214,15 +1237,20 @@ bool Sim::Start(const ReplayHeader& replay) {
     Logf(LogLevel::Debug, "moho64: %s %.2f s", what, std::chrono::duration<double>(t1 - t0).count());
     t0 = t1;
   };
+  MOHO_LAP(load, "load: SetupSession");
   if (!CallGlobal("SetupSession", 0)) return false;
   lap("SetupSession");
+  MOHO_LAP(load, "load: CreateArmies");
   if (!CreateArmies(replay)) return false;
   lap("CreateArmies");
+  MOHO_LAP(load, "load: map props");
   CreateMapProps();  // Prop::PROP_Create in the original, then the count is logged
   Logf(LogLevel::Warning, " NUM PROPS = %zu", map_->props.size());
   lap("map props");
+  MOHO_LAP(load, "load: BeginSession");
   if (!CallGlobal("BeginSession", 0)) return false;
   lap("BeginSession");
+  MOHO_LAP(load, "load: AI analysis and first sync");
   ai::AfterSessionStart(*this);  // our own AI's map analysis, in a session with our AI (or MOHO64_AI_MAPDUMP)
   ai::IndexAfterSessionStart(*this);  // ... its unit ratings and index (or MOHO64_AI_RATINGS)
   SetupSync();  // the original's "beat 0" Sync, before any beat
@@ -1286,6 +1314,7 @@ bool Sim::Start(const SessionDescription& session) {
       Logf(LogLevel::Warning, "moho64: this game was made with parallel order version %d; this engine plays version %d: it "
                               "may play differently from how it was played", version, kSimOrderVersion);
     order = want ? SimOrder::kParallel : SimOrder::kOriginal;
+    if (egrid_) egrid_->SetCanonical(order == SimOrder::kParallel);  // (before any entity is placed: Start(header))
     orderVersion = want ? kSimOrderVersion : 0;
     Logf(LogLevel::Info, "moho64: the beat's order: %s", want ? "parallel (docs/parallel-mode.md)" : "the original's");
   }
@@ -1541,6 +1570,7 @@ GcTimes g_gcTimes;
 }  // namespace
 
 void Sim::CollectorStep() {
+  MOHO_ZONE("Lua collector: the beat's step");
   static const bool stats = getenv("MOHO64_STATS") != nullptr;
   if (!stats) {
     lua_gpg_gcstep(state_->L(), tick_ % 70 == 0);
@@ -2371,6 +2401,7 @@ void Sim::SetupSync() {
 
 void Sim::PausedBeat() {
   SimFpScope fp;
+  MOHO_ZONE_C("paused beat", 0x4b6ea8);
   // AdvanceBeat steps 15-19 run on paused beats too (beat_order.md 1), then Sim::Sync (EntityDB purge)
   if (rec_) RecorderBeat();
   ProcessDestroyQueue();
@@ -2393,6 +2424,24 @@ void Sim::Tick() {
   // 2026-10-20: a played game run with MXCSR FTZ + DAZ (as a library could leave a thread) differs from beat 6496
   // (a T1 artillery's orientation x and z decaying to 8.3e-40 / -2.9e-39 become 0) and plays differently after.
   SimFpScope fp;
+  // The profiler build (core/trace.h, docs/profiling.md): the beat is a frame "beat" and a zone, and its stages are
+  // zones named as PhaseTimer's phases (each MOHO_LAP opens the phase the next phases.Lap closes). Frames do not
+  // overlap: with two sims in one process (--together) a beat that starts while the other's runs is no frame.
+#if defined(TRACY_ENABLE)
+  static std::atomic<int> beatsRunning{0};
+  struct BeatFrame {
+    bool mine = beatsRunning.fetch_add(1) == 0;
+    BeatFrame() {
+      if (mine) MOHO_FRAME_START(trace::kBeatFrame);
+    }
+    ~BeatFrame() {
+      if (mine) MOHO_FRAME_END(trace::kBeatFrame);
+      beatsRunning.fetch_sub(1);
+    }
+  } beatFrame;
+#endif
+  MOHO_ZONE_C("beat", 0x4b6ea8);
+  trace::Lap lap;
   if (rec_) RecorderBeat();  // labhook's AdvanceBeat entry: the state after the previous tick
   beatStarted_ = true;
   ++tick_;
@@ -2400,9 +2449,11 @@ void Sim::Tick() {
   if (!phaseTimer) {
     phaseTimer = std::make_shared<PhaseTimer>();
     phaseTimer->parallel = workers_->Stats();  // (shared: the timer reports when it goes, after the pool)
+    MOHO_THREAD_NAME("sim");
   }
   PhaseTimer& phases = *phaseTimer;
   phases.Start();
+  MOHO_LAP(lap, "economy");
   {  // debug: MOHO64_DEBUG_RNGSHIFT=<tick>:<n> discards n raw draws at the start of that tick. When the Lua
      // stream's counts match the oracle but its values do not from tick T on, the n that makes the probe's
      // rngl hash at T match is how many engine draws we miss before T.
@@ -2423,6 +2474,7 @@ void Sim::Tick() {
   ThreatMapBeat(*this);
   threads_->WakeSignalled();  // (a thread whose event a stage signalled goes to the run order's end at that moment)
   phases.Lap(PhaseTimer::kEconomy);
+  MOHO_LAP(lap, "navigators+paths");
   LandNavStageBegin(*this);
   WeaponsStageDebug(*this);
   phases.Lap(PhaseTimer::kNavigators);
@@ -2451,24 +2503,32 @@ void Sim::Tick() {
       if (next == all.end()) break;
       a = (*next)->id >> 20;  // (the next army that has units)
     }
+    MOHO_LAP(lap, "navigators+paths");
     LandNavTickUnits(*this, armyUnits(a));
     phases.Lap(PhaseTimer::kNavigators);
+    MOHO_LAP(lap, "steering");
     SteeringTickUnits(*this, armyUnits(a));  // the steering stage (spline points, predicted collisions)
     phases.Lap(PhaseTimer::kSteering);
+    MOHO_LAP(lap, "weapons");
     WeaponsTickUnits(*this, armyUnits(a));
     phases.Lap(PhaseTimer::kWeapons);
   }
+  MOHO_LAP(lap, "navigators+paths");
   LandNavStageEnd(*this);  // the path queues' work and what it delivered
   phases.Lap(PhaseTimer::kNavigators);
+  MOHO_LAP(lap, "weapons");
   threads_->WakeSignalled();
   phases.Lap(PhaseTimer::kWeapons);
+  MOHO_LAP(lap, "commands");
   CommandStage(*this);  // stage 0x958 (arrivals from last beat's motion end their commands here)
   phases.Lap(PhaseTimer::kCommands);
+  MOHO_LAP(lap, "threads");
   // Our own AI's unit / threat index (src/ai/unit_index.h), before the script threads that read it: rebuilt every few
   // beats for the armies that play it; nothing at all in a session without it. It reads the units and blips only.
   ai::IndexBeat(*this);
   threads_->RunTick(tick_);  // stage 0x944: Lua threads
   phases.Lap(PhaseTimer::kThreads);
+  MOHO_LAP(lap, "entitypass");
   std::vector<Unit*> motionOrder = MotionOrder();  // (a copy: a unit sent to the pass's end is appended to it)
   coordsPending = true;
   // MOHO64_PAR_MOTION: the units' contact searches of this pass made ahead on the worker pool, each taken at its
@@ -2802,10 +2862,12 @@ void Sim::Tick() {
   }
   MotorsTick(*this);  // the entity stage: props with a motor (falling trees, sinking)
   phases.Lap(PhaseTimer::kEntityPass);
+  MOHO_LAP(lap, "anim");
   AnimTick(*this);
   threads_->WakeSignalled();
   gridDirty_ = true;
   phases.Lap(PhaseTimer::kAnim);
+  MOHO_LAP(lap, "projectiles");
   // Projectiles move after every task stage (Sim::AdvanceBeat runs the three task stages first), so a shot
   // moves in the beat it was fired, and Lua sees the move next beat.
   ProjectilesTick(*this);
@@ -2831,8 +2893,10 @@ void Sim::Tick() {
       if (u->layer != pl) SetAttachedUnitLayer(*this, u, pl);
     }
   phases.Lap(PhaseTimer::kProjectiles);
+  MOHO_LAP(lap, "recon");
   ReconBeat(*this);  // army (tick % armies) updates its blips
   phases.Lap(PhaseTimer::kRecon);
+  MOHO_LAP(lap, "formations");  // (the effects, then the formation DB: PhaseTimer's "formations")
   EffectsTick(*this);  // step 11: the effect manager (sim+0x8c0 vt+0x34, 0x74a1ab), before the formation DB
   {
     // Step 11 (the formation DB) runs before step 13 (Entity::AdvanceCoords): motion only wrote each entity's
@@ -2854,8 +2918,10 @@ void Sim::Tick() {
     }
   }
   phases.Lap(PhaseTimer::kFormations);
+  MOHO_LAP(lap, "killcleanup");
   KillCleanupTick(*this);
   phases.Lap(PhaseTimer::kKillCleanup);
+  MOHO_LAP(lap, "advancecoords");
   for (Unit* u : units_) u->motion.velCommitted = u->motion.lastMove;  // step 13: previous = committed = pending
   coordsPending = false;
   // (the same for a shell that did not move in this beat, its impact beat for one: its velocity, committed -
@@ -2868,6 +2934,7 @@ void Sim::Tick() {
   MotorsAdvanceCoords(*this);  // and moved props theirs
   AdvanceIntelCoords(*this);  // moved intel sources move their circles
   phases.Lap(PhaseTimer::kAdvanceCoords);
+  MOHO_LAP(lap, "destroy+sync");
   ProcessDestroyQueue();
   EffectsEndOfBeat(*this);  // steps 16-17: the destroyed effects and the expired decals are deleted
   // AdvanceBeat step 19 (0x74a5cc..0x74a5f2), the beat's last work, before Sim::Sync: on every game tick that is a
@@ -2887,6 +2954,17 @@ void Sim::Tick() {
   singleStep = false;  // step 14 (sim+0x8e4 = 0)
   frozen = endGame;    // Sync copies sim+0x8dc to sim+0x8dd
   phases.Lap(PhaseTimer::kDestroySync);
+  lap.End();
+  if (trace::Connected()) {  // the profiler build, while a viewer is connected: the counts over time (reads only)
+    size_t heap = 0, threshold = 0;
+    lua_gpg_gcbytes(state_->L(), &heap, &threshold);
+    MOHO_PLOT_F("Lua heap MB", static_cast<double>(heap) / (1024.0 * 1024.0));
+    MOHO_PLOT("units", units_.size());
+    MOHO_PLOT("projectiles", projectiles.size());
+    MOHO_PLOT("props", props.size());
+    MOHO_PLOT("entities", units_.size() + projectiles.size() + props.size() + shields.size() + beams.size() + scriptEntities.size());
+    MOHO_PLOT("script threads", threads_->Count());
+  }
   {  // MOHO64_VERIFY_LAYER (units.h LayerString): the counts at exit
     static struct LayerVerifyReport {
       ~LayerVerifyReport() {
@@ -3016,7 +3094,10 @@ void Sim::RebuildPropGrid() {
 }
 
 EntityGrid& Sim::entityGrid() {
-  if (!egrid_) egrid_ = std::make_unique<EntityGrid>();
+  if (!egrid_) {
+    egrid_ = std::make_unique<EntityGrid>();
+    egrid_->SetCanonical(order == SimOrder::kParallel);
+  }
   if (!egrid_->ready() && map_) egrid_->Init(map_->width(), map_->height());
   return *egrid_;
 }

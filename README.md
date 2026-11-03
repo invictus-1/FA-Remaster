@@ -357,7 +357,8 @@ The engine is MIT licensed, and anyone who wants to build on it is welcome to.
     py ui/build_ui.py                -> build-ui/moho64ui.exe         the game with its interface
 
 The simulation alone also builds with CMake (`cmake -B build -G Ninja && cmake --build build`) or
-`./build.sh`. For the Vulkan backend, put `dxcompiler.dll` beside the program; see
+`./build.sh`. `py tools/build_zig.py --tracy` (CMake `-DMOHO64_TRACY=ON`) is the profiler build, which
+times every part of a beat in the Tracy viewer: [docs/profiling.md](docs/profiling.md). For the Vulkan backend, put `dxcompiler.dll` beside the program; see
 [docs/render-vulkan.md](docs/render-vulkan.md).
 
 ## Run
@@ -416,6 +417,10 @@ Third-party code in this repository, each with its licence beside it:
   game's dialect.
 - `third_party/zlib/`: zlib 1.3.1's inflate and deflate, unchanged (zlib licence, (C) 1995-2024 Jean-loup Gailly and Mark Adler).
 - `third_party/mimalloc/`: mimalloc (MIT, Microsoft Corporation).
+- `third_party/tracy/`: the client of the Tracy Profiler 0.14.1 (the release's `public/` folder, unchanged;
+  3-clause BSD licence, Copyright (c) 2017-2026 Bartosz Taudul, github.com/wolfpld/tracy). It is built only
+  into the profiler build (`build_zig.py --tracy`, [docs/profiling.md](docs/profiling.md)), never into a
+  release; Tracy's viewer is not in the repository.
 - `render/third_party/fsr1/`: AMD FidelityFX Super Resolution 1 (MIT, Copyright (c) 2021 Advanced
   Micro Devices, Inc.), the upscaler offered as a player's option; `render/fsr1_source.cpp` is made
   from it.
@@ -456,4 +461,4 @@ Supreme Commander and Forged Alliance are trademarks of their owners.
 - The FAF community, for keeping the game alive and its scripts maintained for over a decade.
 - maudlin27, for M28AI, the opponent most of the tests are played against.
 - The authors of Lua, zlib, mimalloc, FidelityFX Super Resolution, the Vulkan headers, the
-  DirectX Shader Compiler, pl_mpeg, SDL and stb.
+  DirectX Shader Compiler, pl_mpeg, SDL, stb and the Tracy Profiler.

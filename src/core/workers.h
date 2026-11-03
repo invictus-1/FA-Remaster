@@ -21,6 +21,9 @@
 //
 // Under MOHO64_PROFILE each call's wall time, its tasks' summed busy time and its longest task go to the pool's
 // ParallelStats, named by the stage: the profiler's parallel view (sim.cpp PhaseTimer prints it).
+//
+// In the profiler build (core/trace.h) every call is a zone "parallel <stage>" on the calling thread, each chunk a
+// zone "<stage>" on the thread that ran it, and the workers are named "worker <n>" in the timeline.
 #pragma once
 
 #include <atomic>
@@ -34,6 +37,8 @@
 #include <thread>
 #include <type_traits>
 #include <vector>
+
+#include "core/trace.h"
 
 namespace moho {
 
@@ -113,6 +118,9 @@ class WorkerPool {
     Fn fn = nullptr;
     void* ctx = nullptr;
     size_t count = 0, grain = 1, chunks = 0;
+#if defined(TRACY_ENABLE)
+    const ___tracy_source_location_data* chunkZone = nullptr;  // (the profiler build: each chunk's zone)
+#endif
   };
   struct alignas(64) WorkerStats {
     double busyMs = 0, longestMs = 0;

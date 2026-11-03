@@ -63,7 +63,21 @@ void EntityGrid::Place(Entity* e, int cx0, int cz0, int w, int h) {
   // flies at x 1033 over the 1024 map; army 0's Coronas' shells cross its sphere and the original's line march finds
   // it, both hit and it dies at 7224. Ours left it out of every cell and the shells flew through it.)
   for (int z = cz0; z < cz0 + h; ++z)
-    for (int x = cx0; x < cx0 + w; ++x) lists_[k][Cell(x, z)].push_back(e);
+    for (int x = cx0; x < cx0 + w; ++x) {
+      std::vector<Entity*>& l = lists_[k][Cell(x, z)];
+      if (!canonical_) {
+        l.push_back(e);
+      } else {  // (parallel order: by creation, the youngest at the head, whenever it was placed)
+        l.insert(std::upper_bound(l.begin(), l.end(), e, [](const Entity* a, const Entity* b) { return a->handle < b->handle; }), e);
+      }
+    }
+}
+
+void EntityGrid::SetCanonical(bool c) {
+  if (c && !canonical_)
+    for (auto& kind : lists_)
+      for (auto& l : kind) std::sort(l.begin(), l.end(), [](const Entity* a, const Entity* b) { return a->handle < b->handle; });
+  canonical_ = c;
 }
 
 void EntityGrid::Gather(float x0, float z0, float x1, float z1, int mask, std::vector<Entity*>* out) {

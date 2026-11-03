@@ -1716,9 +1716,9 @@ bool ClampLength(Vec3& v, float p) {  // 0x5d1e70
   return true;
 }
 // lo + u * (hi - lo) * 2^-32 on the x87 stack (precision control 24: each op rounds to float)
-float WobbleDraw(Sim& sim, float W) {
+float WobbleDraw(Sim& sim, Unit* u, float W) {
   float lo = -0.0f - W;
-  uint32_t r = sim.NextUInt32();
+  uint32_t r = sim.ERand(u, Sim::RandPurpose::kHoverWobble);
   // (0x6c2d0d..0x6c2d13: fild of the draw as a signed int, fadd 2^32 when negative: a draw with its top bit set is
   // rounded to a float before the product, dmath::MulU32. Seen: bench, engineer 0x200002's wobble target at 350,
   // one float step off in x with one rounding; the tilt it gives decided its heading later.)
@@ -1853,8 +1853,8 @@ void HoverMove(Sim& sim, Unit* u) {
   const float lx = ((m.accel.x * 10.0f) * k) * 0.2f, ly = (k * 0.0f) * 0.2f, lz = ((m.accel.z * 10.0f) * k) * 0.2f;
   m.hoverLean = {m.hoverLean.x * 0.8f + lx, m.hoverLean.y * 0.8f + ly, m.hoverLean.z * 0.8f + lz};
   if (sim.tick() % 5 == 0) {  // two draws of the sim stream (sim_random.md)
-    m.wobbleTarget.x = WobbleDraw(sim, b.wobbleFactor);
-    m.wobbleTarget.z = WobbleDraw(sim, b.wobbleFactor);
+    m.wobbleTarget.x = WobbleDraw(sim, u, b.wobbleFactor);
+    m.wobbleTarget.z = WobbleDraw(sim, u, b.wobbleFactor);
   }
   Vec3 d{m.wobbleTarget.x - m.wobble.x, m.wobbleTarget.y - m.wobble.y, m.wobbleTarget.z - m.wobble.z};
   ClampLength(d, b.wobbleSpeed * 0.1f);

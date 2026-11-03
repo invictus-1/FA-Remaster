@@ -218,6 +218,19 @@ static StkId tryfuncTM (lua_State *L, StkId func) {
 }
 
 
+#ifdef TRACY_ENABLE
+/* moho64: the profiler's Lua zones (src/core/trace.cpp, MOHO64_TRACY_LUA; only in a build with the profiler, tools/
+   build_zig.py --tracy): a function entered (its Proto or C function, its source and line, its CallInfo's index), one
+   left (the index of the frame that returns), a tail call's frame moved down one, and frames dropped by an error or
+   a resume's end (every zone of this state above the index). They read the frames only. */
+void (*lua_gpg_trace_call)(lua_State *L, const void *fn, const void *src, int line, int ci) = NULL;
+void (*lua_gpg_trace_ret)(lua_State *L, int ci) = NULL;
+void (*lua_gpg_trace_tail)(lua_State *L, int ci) = NULL;
+void (*lua_gpg_trace_unwind)(lua_State *L, int ci) = NULL;
+#define gpg_ci_index(L) ((int)((L)->ci - (L)->base_ci))
+#endif
+
+
 StkId luaD_precall (lua_State *L, StkId func) {
   LClosure *cl;
   ptrdiff_t funcr = savestack(L, func);
@@ -241,6 +254,9 @@ StkId luaD_precall (lua_State *L, StkId func) {
     while (L->top < ci->top)
       setnilvalue(L->top++);
     L->top = ci->top;
+#ifdef TRACY_ENABLE
+    if (lua_gpg_trace_call) lua_gpg_trace_call(L, p, p->source, p->lineDefined, gpg_ci_index(L));
+#endif
     return NULL;
   }
   else {  /* if is a C function, call it */
@@ -251,6 +267,9 @@ StkId luaD_precall (lua_State *L, StkId func) {
     L->base = L->ci->base = restorestack(L, funcr) + 1;
     ci->top = L->top + LUA_MINSTACK;
     ci->state = CI_C;  /* a C function */
+#ifdef TRACY_ENABLE
+    if (lua_gpg_trace_call) lua_gpg_trace_call(L, (const void *)clvalue(L->base - 1)->c.f, NULL, -1, gpg_ci_index(L));
+#endif
     if (L->hookmask & LUA_MASKCALL)
       luaD_callhook(L, LUA_HOOKCALL, -1);
     lua_unlock(L);
@@ -277,6 +296,9 @@ static StkId callrethooks (lua_State *L, StkId firstResult) {
 
 void luaD_poscall (lua_State *L, int wanted, StkId firstResult) { 
   StkId res;
+#ifdef TRACY_ENABLE
+  if (lua_gpg_trace_ret) lua_gpg_trace_ret(L, gpg_ci_index(L));
+#endif
   if (L->hookmask & LUA_MASKRET)
     firstResult = callrethooks(L, firstResult);
   res = L->base - 1;  /* res == final position of 1st result */
@@ -367,6 +389,9 @@ LUA_API int lua_resume (lua_State *L, int nargs) {
   int status;
   if (lua_gpg_prof_enter) lua_gpg_prof_enter(L, 1);
   status = lua_resume_unprofiled(L, nargs);
+#ifdef TRACY_ENABLE
+  if (lua_gpg_trace_unwind) lua_gpg_trace_unwind(L, 0);  /* (yielded, ended or failed: its zones end here) */
+#endif
   if (lua_gpg_prof_exit) lua_gpg_prof_exit(L);
   return status;
 }
@@ -433,6 +458,9 @@ int luaD_pcall (lua_State *L, Pfunc func, void *u,
     L->base = L->ci->base;
     L->allowhook = old_allowhooks;
     restore_stack_limit(L);
+#ifdef TRACY_ENABLE
+    if (lua_gpg_trace_unwind) lua_gpg_trace_unwind(L, gpg_ci_index(L));
+#endif
   }
   L->errfunc = old_errfunc;
   return status;

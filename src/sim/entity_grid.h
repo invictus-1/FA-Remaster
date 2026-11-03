@@ -41,6 +41,11 @@ class EntityGrid {
   // (core/speculate.h). Writes nothing of the grid or of an entity.
   void GatherBoxNoMarks(float x0, float z0, float x1, float z1, int mask, std::vector<Entity*>* out) const;
   bool ready() const { return w_ > 0; }
+  // Parallel order (docs/parallel-mode.md 3.4): a cell's lists kept in creation order (by Entity::handle) instead of
+  // the original's "the last registered at the head", so that what every query finds, and in what order, does not
+  // depend on the order the entities were placed in. Set by the Sim at the grid's creation and in Start; turning it on
+  // sorts what the lists already hold.
+  void SetCanonical(bool c);
   // Counts every change of the cells' lists of kind k (0 units, 1 props, 2 the rest; Place, Remove, Init): a
   // speculative task notes it as a read, so that a list changed after the task ran (a unit made, a shape set from Lua,
   // a falling tree in the stage) throws its result away.
@@ -61,6 +66,7 @@ class EntityGrid {
   // script entities (0x800)
   std::vector<std::vector<Entity*>> lists_[3];
   uint64_t version_[3] = {0, 0, 0};
+  bool canonical_ = false;
 };
 
 // Entity::UpdateCollision / UpdateRect: the entity's cell span from its collision primitive (none: no

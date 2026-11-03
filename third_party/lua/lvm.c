@@ -469,6 +469,10 @@ static void Bitwise (lua_State *L, StkId ra,
 #define vmbreak	break
 #endif
 
+#ifdef TRACY_ENABLE
+extern void (*lua_gpg_trace_tail)(lua_State *L, int ci);  /* ldo.c (the profiler's Lua zones) */
+#endif
+
 StkId luaV_execute (lua_State *L) {
   LClosure *cl;
   TObject *k;
@@ -822,6 +826,9 @@ StkId luaV_execute (lua_State *L) {
             (L->ci - 1)->u.l.savedpc = L->ci->u.l.savedpc;
             (L->ci - 1)->u.l.tailcalls++;  /* one more call lost */
             (L->ci - 1)->state = CI_SAVEDPC;
+#ifdef TRACY_ENABLE
+            if (lua_gpg_trace_tail) lua_gpg_trace_tail(L, (int)(L->ci - L->base_ci));
+#endif
             L->ci--;  /* remove new frame */
             L->base = L->ci->base;
           }

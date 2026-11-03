@@ -1,7 +1,8 @@
 # Parallel mode: our own deterministic beat order for new games
 
 Status: APPROVED by Chris 2026-10-31 ("everything looks good to me"); draft 3 (e1). Lives in
-`docs/parallel-mode.md`. Nothing here is built yet: building starts after the 4v4 replay is finished.
+`docs/parallel-mode.md`. Built so far (section 8's order): step 1, the mode field (`Sim::order`, `MOHO64_SIM_ORDER`);
+step 2a, the keyed draws (4.1); step 2b, the entity grid's canonical buckets (3.4).
 
 ## For Chris: the short version
 
@@ -166,7 +167,9 @@ when the messages are few (most units have nothing to send in most beats).
   `OnIntelChange` in the commit, in (army, unit serial) order; blip ids follow that order.
 - **Formations:** each formation's update on the pool; the at-goal broadcast in the commit.
 - **AdvanceCoords:** the entity grid's buckets get a CANONICAL order: a bucket's entities sorted by creation serial,
-  not "most recently registered first". Then the grid update is per cell, independent, parallel. Every grid reader
+  not "most recently registered first". (Built, step 2b: `EntityGrid::SetCanonical`, set by the Sim at the grid's
+  creation and in `Start`; `Place` inserts by `Entity::handle`, so a cell's list is in creation order whatever order
+  the entities were placed or moved in; the readers walk it from its end as before, youngest first.) Then the grid update is per cell, independent, parallel. Every grid reader
   (collision candidates, box queries, target scans) sees a schedule-free order. Intel circles: per army in parallel
   (exact already, MOHO64_PAR_INTELCOORDS).
 - **Moved list:** in parallel mode its order no longer matters (the grid no longer depends on it); it becomes a set.
@@ -255,6 +258,44 @@ multiplier case (a hover unit entering water slows to its water speed within one
 
 The test of all of it: the same game at 1, 8, 16, 32 threads and in shuffled / reversed task order gives the same
 fingerprint every beat (section 6). Since that holds for the 1-thread run too, the 1-thread run is the reference.
+
+### 4.1 The engine's draw sites, and which are keyed (step 2a, e1 2026-11-03)
+
+Every engine draw goes through `Sim::NextUInt32` (the MT19937 stream, sim.h) directly or through `U01`, `FRand`,
+`BpUniform`, `Gauss` and `IntRange`. In parallel order the draws of the stages that will run on the pool go through
+`Sim::ERand(entity, purpose)` / `Sim::EFRand(entity, purpose, lo, hi)` instead: a keyed draw (src/core/keyed_rng.h,
+SplitMix64's finaliser over the session's seed, the entity's creation handle `Entity::handle`, the beat, the purpose
+and n, the entity's n-th keyed draw in the beat: `Entity::randTick` / `randN`). In the original's order both are
+`NextUInt32()` / `FRand()` exactly as before (the 16 replays unchanged). The handle, not `entSeq`: every kind of entity
+has one (shells too), it is given in creation order and never reused. The floats are made with the helpers' formulas
+from the keyed bits, so the distributions are the original's.
+
+**Keyed (the entity pass, section 3.3 phase A):**
+
+| # | Site | Draws | Purpose |
+|---|---|---|---|
+| 1 | air.cpp `RandRange` / `CirclingOrientation`: the circling direction, elevation, radius ratio, next change | 1-4 a change | `kAirCircle` |
+| 2 | air.cpp `CombatTactics`: the attack-run state, its duration, the break-off | 1-2 a decision | `kAirTactics` |
+| 3 | air.cpp `CalcMoveAir`: the crash tumble when an aircraft starts falling | 3 | `kAirCrash` |
+| 4 | motion.cpp `WobbleDraw` (hover wobble, every 5th beat) | 2 | `kHoverWobble` |
+| 5 | steering.cpp `DoCollisionsFor`: the exact-overlap push direction | 2 | `kPush`, keyed on the unit whose turn it is (the pair's key comes with the symmetric pushes of step 3.3) |
+| 6 | projectile.cpp `UpdateTracking`: a shell's zig-zag offset | 3 a change | `kZigZag` |
+
+**On the stream in both orders (serial stages: their order is canonical, so the stream's order is too):**
+
+| Site | Stage |
+|---|---|
+| projectile.cpp `CreateProjectile`: bounce limit, rotational velocity, blueprint ranges, firing / muzzle-velocity randomness (`Gauss`) | weapons (serial today), `OnFire` / Lua; keyed by the new shell when firing becomes a commit message (3.1) |
+| combat.cpp target bones (`TargetPointDraw`, `PickAimBone`, above / below water) | weapons (serial today); keyed with the weapons step (3.1) |
+| entities.cpp a built unit's turn `FRand(-pi/6, pi/6)`; `GenerateRandomOrientation` (`Gauss` x 4) | creation (serial) |
+| intel.cpp a jammer's fake blips (`IntRange`, `Gauss` x 2, `U01`) | recon commit (serial) |
+| transport.cpp `TransportDetachAll`'s cargo loss | commands / Lua (serial) |
+| sim.cpp `GenerateArmyStart` | session setup |
+| Lua `Random`, `Projectile:SetVelocityAlign` | Lua (serial) |
+| sim.cpp `MOHO64_DEBUG_RNGSHIFT` | debug |
+
+`Gauss` keeps the second value of each pair for the next call (`hasGauss_`): shared state; no keyed site needs a
+Gauss today. A keyed Gauss, when one is needed, makes both values from one key and keeps no cache.
 
 ## 5. The mode: chosen, carried, recorded
 

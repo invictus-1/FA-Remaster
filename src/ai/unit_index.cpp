@@ -18,6 +18,7 @@
 
 #include "ai/map_analysis.h"
 #include "core/log.h"
+#include "core/trace.h"
 #include "sim/blueprints.h"
 #include "sim/sim.h"
 #include "sim/intel.h"
@@ -649,6 +650,7 @@ bool PlaysOurAi(const Sim& sim, int army0) {
 }
 
 void IndexAfterSessionStart(Sim& sim) {
+  MOHO_ZONE("load: AI unit ratings");
   if (sim.fixes && SessionHasOurAi(sim)) {
     auto st = std::make_shared<IndexState>();
     for (int i = 0; i < static_cast<int>(sim.armies().size()); ++i)
@@ -669,6 +671,7 @@ void IndexAfterSessionStart(Sim& sim) {
 void IndexBeat(Sim& sim) {
   IndexState* st = IndexOf(sim);
   if (!st || sim.tick() % kIndexPeriod != 0) return;
+  MOHO_ZONE("AI unit index");
   for (ArmyIndex& ix : st->armies) BuildIndex(sim, ix);
 }
 

@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "core/log.h"
+#include "core/trace.h"
 #include "script/script_state.h"
 #include "sim/combat.h"
 #include "sim/enum_arg.h"
@@ -886,6 +887,7 @@ void ThreatRemoveEntry(Sim& sim, int a, uint32_t blipId) {
 }
 
 void ThreatMapBeat(Sim& sim) {
+  MOHO_ZONE("AI threat map");
   const uint32_t slot = sim.tick() % 30u;
   std::vector<InfluenceMap>& maps = TS(sim).maps;
   if (slot >= maps.size()) return;

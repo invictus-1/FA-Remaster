@@ -32,6 +32,7 @@
 #include "core/fpenv.h"
 #include "core/log.h"
 #include "core/profile.h"
+#include "core/trace.h"
 #include "core/workers.h"
 #include "core/vfs.h"
 #include "net/beat_exchange_net.h"
@@ -305,6 +306,7 @@ struct NetGame {
 
 // The game's file system as main mounts it (--together mounts a second one for its second copy).
 bool MountGame(const Options& o, Vfs& vfs, std::vector<std::string>* hookDirs) {
+  MOHO_ZONE("load: mount the game's files");
   // The game's preferences file (sim/session.h kGamePrefsPath): this run's own, held in memory and mounted before
   // the init file mounts the original's preferences folder at /preferences, so the rules never read the
   // original's Game.prefs (in the lab: the PreGameData of the last game played in FAF); the folder's other files
@@ -950,6 +952,7 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
   if (ok && !o.netMode.empty() && !(net = NetGame::Connect(o))) ok = false;
   while (ok && !diverged && done < o.ticks) {
     if (playStream && !stream.AtEnd()) {
+      MOHO_ZONE("commands in");
       if (!stream.ApplyUntilAdvance(sim)) {
         Logf(LogLevel::Info, "moho64: the replay's command stream ended after %u beats (tick %u)", stream.beats(),
              sim.tick());
@@ -973,6 +976,7 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
     takeHits();
     ++done;
     if (beatsDone) beatsDone->store(done, std::memory_order_release);
+    MOHO_ZONE_N(afterZone, "host: after the beat");
     if (fingerprint && !fingerprint->Beat(sim, static_cast<uint32_t>(done + paused))) {
       diverged = true;
       break;
@@ -1333,6 +1337,8 @@ int RunTimes(const Options& o, Vfs& vfs, const std::vector<std::string>& hookDir
 }
 
 int RunSim(const Options& o, Vfs& vfs, const std::vector<std::string>& hookDirs, const std::vector<std::string>& uids) {
+  trace::Lap load;
+  MOHO_LAP(load, "load: replay file");
   auto data = hostfs::ReadFile(o.replay);
   if (!data) {
     Logf(LogLevel::Error, "cannot read replay %s", o.replay.c_str());
@@ -1347,6 +1353,7 @@ int RunSim(const Options& o, Vfs& vfs, const std::vector<std::string>& hookDirs,
   SessionDescription session;
   session.header = *header;
   session.replay = true;
+  load.End();
   return RunTimes(o, vfs, hookDirs, uids, session, &*data);
 }
 
@@ -1356,6 +1363,7 @@ int RunSim(const Options& o, Vfs& vfs, const std::vector<std::string>& hookDirs,
 // The session a game configuration file describes, and (without --mods) its GameMods' uids into `uids`.
 bool LoadGameConfig(const Options& o, const std::string& file, Vfs& vfs, const std::vector<std::string>& hookDirs,
                     SessionDescription* out, std::vector<std::string>* uids) {
+  MOHO_ZONE("load: game configuration (session file)");
   SessionDescription& session = *out;
   {
     ScriptState st(ScriptState::Kind::User, &vfs);
@@ -1644,6 +1652,7 @@ int RunScan(const Options& o, const std::vector<std::string>& uids) {
 
 int main(int argc, char** argv) {
   if (const char* shift = getenv("MOHO64_LAYOUT_SHIFT"); shift && std::atoi(shift) > 0) ShiftLayout(std::atoi(shift));
+  MOHO_THREAD_NAME("main");
   Options o;
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];

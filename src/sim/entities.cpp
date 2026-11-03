@@ -17,6 +17,7 @@
 #include "core/dmath.h"
 #include "core/log.h"
 #include "core/profile.h"
+#include "core/trace.h"
 #include "core/vfs.h"
 #include "script/script_state.h"
 #include "sim/transport.h"
@@ -1645,7 +1646,14 @@ bool Sim::CallMethod(lua_State* L, ScriptObject* obj, const char* method, int na
       hitchLabel += " (a weapon of " + w->unit->blueprint->id + ")";
     if (!hitchNested) prof::NextLabel("callback " + hitchLabel);
   }
+#if defined(TRACY_ENABLE)  // the profiler build (core/trace.h): the callback is a zone "callback <method>"
+  const bool traced = trace::Connected();
+  const TracyCZoneCtx zone = ___tracy_emit_zone_begin(traced ? trace::PlaceFor(method, "callback ", 0xe67e22) : nullptr, traced);
+#endif
   bool ok = lua_pcall(L, nargs + 1, 0, base + 1) == 0;
+#if defined(TRACY_ENABLE)
+  ___tracy_emit_zone_end(zone);
+#endif
   if (hitchNested) prof::AddCall(hitchLabel, prof::NowMs() - hitchT0);
   if (!ok) LogScriptError(lua_isstring(L, -1) ? lua_tostring(L, -1) : "(error object is not a string)");
   lua_settop(L, base);

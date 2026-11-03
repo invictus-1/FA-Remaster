@@ -8,6 +8,7 @@
 
 #include "core/log.h"
 #include "core/profile.h"
+#include "core/trace.h"
 #include "script/script_state.h"
 #include "script/script_handle.h"
 
@@ -151,7 +152,10 @@ std::unordered_set<std::string> g_forkLabels;
 void ThreadScheduler::Fork(lua_State* caller, int fn, int nargs) {
   int profSource = -1;
   const std::string* profLabel = nullptr;
-  if (prof::On()) {  // MOHO64_PROFILE: the thread's kind for the Lua timer, from its function's chunk name
+  const void* traceZone = nullptr;
+  // MOHO64_PROFILE: the thread's kind for the Lua timer, from its function's chunk name (and in the profiler build,
+  // core/trace.h, the zone its resumes are timed as: "AI thread <file>:<line>" for AI code, "thread ..." for the rest)
+  if (prof::On() || trace::kBuild) {
     lua_Debug ar;
     lua_pushvalue(caller, fn);
     if (lua_getinfo(caller, ">S", &ar) && ar.source) {
@@ -170,6 +174,10 @@ void ThreadScheduler::Fork(lua_State* caller, int fn, int nargs) {
       }
       profSource = k.kind;
       if (prof::Hitch()) profLabel = k.label;
+#if defined(TRACY_ENABLE)
+      traceZone = trace::PlaceFor(k.label->c_str(), k.kind == prof::kThreadAI ? "AI " : "",
+                                  k.kind == prof::kThreadAI ? 0xc0392bu : k.kind == prof::kThreadUnit ? 0xd4a017u : 0x8e44adu);
+#endif
     }
   }
   lua_State* co = lua_newthread(caller);  // pushed on caller
@@ -190,6 +198,7 @@ void ThreadScheduler::Fork(lua_State* caller, int fn, int nargs) {
   t.pendingArgs = nargs;
   t.profSource = profSource;
   t.profLabel = profLabel;
+  t.traceZone = traceZone;
   // A new thread runs in the next pass over the threads: a thread forked by a running thread runs
   // later in the same pass, after the threads already due (probe v7: forked at 1603 from a thread,
   // first runs at 1603 after its parent yields; the exe's CTaskThread joins the stage's list
@@ -306,7 +315,14 @@ void ThreadScheduler::Step(Thread& t) {
   g_threadError.clear();
   if (t.profSource >= 0) prof::NextSource(t.profSource);  // (MOHO64_PROFILE only)
   if (prof::Hitch() && t.profLabel) prof::NextLabel(*t.profLabel);
+#if defined(TRACY_ENABLE)
+  const TracyCZoneCtx zone = ___tracy_emit_zone_begin(static_cast<const ___tracy_source_location_data*>(t.traceZone),
+                                                      t.traceZone != nullptr);
+#endif
   int rc = lua_resume(t.co, nargs);
+#if defined(TRACY_ENABLE)
+  ___tracy_emit_zone_end(zone);
+#endif
   current_ = prev;
   if (rc != 0) {
     if (g_threadError.empty())  // an error that did not pass luaG_errormsg (memory, ...)

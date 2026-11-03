@@ -1098,8 +1098,8 @@ void HoverOrientation(Unit* u, const Vec3& facing, Axes& axes) {
 }
 
 // RandRange of the circling parameters: lo + r * (hi - lo) * 2^-32 on the x87 (precision control 24)
-float RandRange(Sim& sim, float lo, float hi) {
-  uint32_t r = sim.NextUInt32();
+float RandRange(Sim& sim, Unit* u, float lo, float hi) {
+  uint32_t r = sim.ERand(u, Sim::RandPurpose::kAirCircle);
   return dmath::MulU32(r, hi - lo) * 2.3283064365386963e-10f + lo;
 }
 
@@ -1111,15 +1111,15 @@ void CirclingOrientation(Sim& sim, Unit* u, Axes& axes, Vec3& dv, const AiTarget
   uint32_t tick = sim.tick();
   if (tick > a.combatTimer) {
     if (b.circlingDirChange) {
-      uint32_t r = sim.NextUInt32();
+      uint32_t r = sim.ERand(u, Sim::RandPurpose::kAirCircle);
       a.circleDir = static_cast<int>((static_cast<uint64_t>(r) * 100) >> 32) > 50;
     }
     float e = b.circlingElevationChangeRatio * b.attackElevation;
-    a.circleElev = RandRange(sim, -0.0f - e, e);
-    a.circleRatio = RandRange(sim, b.circlingRadiusChangeMinRatio, b.circlingRadiusChangeMaxRatio);
+    a.circleElev = RandRange(sim, u, -0.0f - e, e);
+    a.circleRatio = RandRange(sim, u, b.circlingRadiusChangeMinRatio, b.circlingRadiusChangeMaxRatio);
     int hiT = EngineFloor((b.circlingFlightChangeFrequency * 2.0f) * 10.0f);
     int loT = EngineFloor(b.circlingFlightChangeFrequency * 10.0f);
-    uint32_t r = sim.NextUInt32();
+    uint32_t r = sim.ERand(u, Sim::RandPurpose::kAirCircle);
     a.combatTimer = static_cast<uint32_t>((static_cast<uint64_t>(r) * static_cast<uint32_t>(hiT - loT)) >> 32) +
                     static_cast<uint32_t>(loT) + tick;  }
   float cx = a.target.x, cz = a.target.z;
@@ -1490,7 +1490,7 @@ void CombatTactics(Sim& sim, Unit* u, const AiTarget& tgt, Vec3& out, const Vec3
     }
     // (0x6bd3c0..0x6bd3fa: summed x, z, then y; `!(0 > dot)`)
     if (s == 2 && !(0.0f > (dir3.x * fwd.x + fwd.z * dir3.z) + fwd.y * dir3.y)) return output();
-    uint32_t r1 = sim.NextUInt32();
+    uint32_t r1 = sim.ERand(u, Sim::RandPurpose::kAirTactics);
     {
       static const bool dbgDraw = getenv("MOHO64_DEBUG_TACDRAW") != nullptr;  // who draws a new attack-run state
       if (dbgDraw)
@@ -1500,7 +1500,7 @@ void CombatTactics(Sim& sim, Unit* u, const AiTarget& tgt, Vec3& out, const Vec3
     s = 3 + static_cast<int>((static_cast<uint64_t>(r1) * 3) >> 32);
     int lo = EngineFloor(b.randomMinChangeCombatStateTime * 10.0f);
     int hi = EngineFloor(b.randomMaxChangeCombatStateTime * 10.0f);
-    uint32_t r2 = sim.NextUInt32();
+    uint32_t r2 = sim.ERand(u, Sim::RandPurpose::kAirTactics);
     a.combatTimer = now + static_cast<uint32_t>(lo) +
                     static_cast<uint32_t>((static_cast<uint64_t>(r2) * static_cast<uint32_t>(hi - lo)) >> 32);
     return output();
@@ -1509,7 +1509,7 @@ void CombatTactics(Sim& sim, Unit* u, const AiTarget& tgt, Vec3& out, const Vec3
   float x = brk / speed * 10.0f;
   int n = EngineCeil(x);
   int m = static_cast<int>(static_cast<float>(n) * b.randomBreakOffDistanceMult);
-  uint32_t r = sim.NextUInt32();
+  uint32_t r = sim.ERand(u, Sim::RandPurpose::kAirTactics);
   a.combatTimer = now + static_cast<uint32_t>(n) +
                   static_cast<uint32_t>((static_cast<uint64_t>(r) * static_cast<uint32_t>(m - n)) >> 32);
   output();
@@ -1624,7 +1624,7 @@ void CalcMoveAir(Sim& sim, Unit* u, Transform& T) {
     float r[3];
     for (int i = 0; i < 3; ++i) {
       float ai = std::max(0.25f, std::min(body.invI[i], 4.0f));
-      uint32_t x = sim.NextUInt32();
+      uint32_t x = sim.ERand(u, Sim::RandPurpose::kAirCrash);
       r[i] = dmath::MulU32(x, ai - (-0.0f - ai)) * 2.3283064365386963e-10f + (-0.0f - ai);  // x87 at PC_24
     }
     a.torque108 = MultQuadVec(body.q, Vec3{r[0] / body.invI[0], r[1] / body.invI[1], r[2] / body.invI[2]});

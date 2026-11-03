@@ -19,6 +19,7 @@
 #include <map>
 
 #include "core/log.h"
+#include "core/trace.h"
 #include "core/speculate.h"
 #include "core/workers.h"
 #include "sim/navigation.h"
@@ -1597,6 +1598,7 @@ void LandNavStageEnd(Sim& sim) {
 // Sim::AdvanceBeat step 3 (0x74a078), before the armies: PathTables::UpdateBackground with
 // path_BackgroundBudget (1000) when path_BackgroundUpdate is on (default).
 void LandNavBackground(Sim& sim) {
+  MOHO_ZONE("path tables: background build");
   static const bool prof = getenv("MOHO64_PROFILE") != nullptr;
   double t0 = prof ? NowS() : 0;
   Tables(sim).UpdateBackground(1000);

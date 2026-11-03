@@ -15,6 +15,7 @@
 #include <utility>
 
 #include "core/log.h"
+#include "core/trace.h"
 #include "sim/blueprints.h"
 #include "sim/navigation.h"
 #include "sim/sim.h"
@@ -738,6 +739,7 @@ const MapAnalysis& MapOf(Sim& sim) {
 }
 
 void AfterSessionStart(Sim& sim) {
+  MOHO_ZONE("load: AI map analysis");
   const char* dump = std::getenv("MOHO64_AI_MAPDUMP");
   const bool ours = sim.fixes && SessionHasOurAi(sim);
   if (!ours && !(dump && *dump)) return;

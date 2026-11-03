@@ -310,6 +310,14 @@ class Sim {
   float BpUniform(float base, float range);  // base + uniform(-range, range), one rounding
   uint32_t IntRange(uint32_t n) { return static_cast<uint32_t>((static_cast<uint64_t>(NextUInt32()) * n) >> 32); }
   double Gauss();  // 0x40eec0: polar method, the second value cached in the stream
+  // The engine's draws in the stages parallel order runs on the worker pool (docs/parallel-mode.md 4.1): in the
+  // original's order each is the stream's next draw, exactly as before; in parallel order a keyed draw
+  // (core/keyed_rng.h) of (the session's seed, the entity's creation handle, the beat, the purpose, the entity's n-th
+  // keyed draw in the beat), whoever draws first. The draws of serial stages (creation, commands, recon, transports,
+  // Lua) stay on the stream in both orders: their order is canonical.
+  enum class RandPurpose : uint32_t { kAirCircle = 1, kAirTactics = 2, kAirCrash = 3, kHoverWobble = 4, kPush = 5, kZigZag = 6 };
+  uint32_t ERand(Entity* e, RandPurpose p);
+  double EFRand(Entity* e, RandPurpose p, float lo, float hi);  // FRand's formula on ERand
   void GenerateArmyStart(Army* a);  // the army ctor's / Lua GenerateArmyStart's two draws
 
   // Entities. Creation runs the scripts the way the original does (see sim/entities.cpp).

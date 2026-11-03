@@ -53,8 +53,27 @@ if(NOT MSVC)
   target_compile_options(zlibinflate PRIVATE -w)
 endif()
 
+# The profiler build (docs/profiling.md): Tracy 0.14.1's client (third_party/tracy, BSD 3-clause, unchanged) and the
+# marks of src/core/trace.h compiled in. OFF by default: without it no line of Tracy is built and every mark is
+# empty. The settings are the same for every file of the program (tools/build_zig.py TRACY_DEFINES).
+option(MOHO64_TRACY "Build with the Tracy profiler's client (docs/profiling.md)" OFF)
+if(MOHO64_TRACY)
+  add_compile_definitions(TRACY_ENABLE TRACY_ON_DEMAND TRACY_ONLY_LOCALHOST TRACY_NO_CRASH_HANDLER)
+  add_library(tracyclient STATIC third_party/tracy/TracyClient.cpp)
+  target_include_directories(tracyclient PUBLIC third_party/tracy)
+  if(NOT MSVC)
+    target_compile_options(tracyclient PRIVATE -w)
+  endif()
+  if(WIN32)
+    target_link_libraries(tracyclient PUBLIC ws2_32 dbghelp advapi32 user32 secur32)
+  else()
+    find_package(Threads REQUIRED)
+    target_link_libraries(tracyclient PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
+  endif()
+endif()
+
 add_library(mohocore STATIC
-  src/core/log.cpp src/core/profile.cpp src/core/workers.cpp src/core/speculate.cpp src/core/crash.cpp src/core/hostfs.cpp src/core/zip.cpp src/core/vfs.cpp
+  src/core/log.cpp src/core/profile.cpp src/core/trace.cpp src/core/workers.cpp src/core/speculate.cpp src/core/crash.cpp src/core/hostfs.cpp src/core/zip.cpp src/core/vfs.cpp
   src/script/script_state.cpp src/script/core_bindings.cpp src/script/fastlib.cpp src/script/fastlib_reclaim.cpp src/script/mods.cpp
   src/script/threads.cpp src/script/script_handle.cpp src/script/mount.cpp src/sim/script_object.cpp src/sim/blueprints.cpp src/sim/replay.cpp
   src/sim/terrain.cpp src/sim/sim.cpp src/sim/entities.cpp src/sim/effects.cpp src/sim/bp_reflect.cpp
@@ -71,6 +90,9 @@ add_library(mohocore STATIC
   src/ai/map_analysis.cpp src/ai/scripts.cpp src/ai/unit_index.cpp)
 target_include_directories(mohocore PUBLIC src)
 target_link_libraries(mohocore PUBLIC gpglua zlibinflate)
+if(MOHO64_TRACY)
+  target_link_libraries(mohocore PUBLIC tracyclient)
+endif()
 
 # The interface's network transport (ui/net/, no interface dependencies): moho64 --net plays a network game between
 # two copies (sim/lockstep.h) over it.

@@ -312,8 +312,8 @@ void DoCollisionsFor(Sim& sim, Unit* self, const std::vector<Hit>& hits) {
     const Vec3& op = o->shapeHeld ? o->shapePos : o->position;
     Vec3 d{prev.x - op.x, 0, prev.z - op.z};
     if (d.x * d.x + d.z * d.z < 1e-6f) {
-      d.x = static_cast<float>(sim.FRand(-1, 1));
-      d.z = static_cast<float>(sim.FRand(-1, 1));
+      d.x = static_cast<float>(sim.EFRand(self, Sim::RandPurpose::kPush, -1, 1));
+      d.z = static_cast<float>(sim.EFRand(self, Sim::RandPurpose::kPush, -1, 1));
     }
     d = Norm(d);
     float mag = std::max(h.depth, 0.5f * std::max(b.sizeX, b.sizeZ)) + vPush;

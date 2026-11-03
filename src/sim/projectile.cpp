@@ -444,9 +444,9 @@ void UpdateTracking(Sim& sim, Projectile* p, Quat& q, Vec3& v) {
   float F = p->ovZigZagFreq >= 0 ? p->ovZigZagFreq : b.zigZagFrequency;
   if (Z > 0 && F > 0) {
     if (sim.tick() >= p->nextZigZag) {
-      float ox = static_cast<float>(sim.FRand(-Z, Z));
-      float oy = static_cast<float>(sim.FRand(-Z, Z));
-      float oz = static_cast<float>(sim.FRand(-Z, Z));
+      float ox = static_cast<float>(sim.EFRand(p, Sim::RandPurpose::kZigZag, -Z, Z));
+      float oy = static_cast<float>(sim.EFRand(p, Sim::RandPurpose::kZigZag, -Z, Z));
+      float oz = static_cast<float>(sim.EFRand(p, Sim::RandPurpose::kZigZag, -Z, Z));
       p->zigOffset = {ox, oy, oz};
       static const bool dbgProj = getenv("MOHO64_DEBUG_PROJ") != nullptr;  // (read once)
       if (dbgProj) {

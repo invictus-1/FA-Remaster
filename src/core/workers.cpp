@@ -153,6 +153,7 @@ WorkerPool::~WorkerPool() {
 // workers 1..helpers (the first ones, so the same few stay warm); the others are not woken. A helper of job g always
 // sees g: g + 1 is published only after every helper of g has finished (running_ == 0).
 void WorkerPool::WorkerMain(int index) {
+  MOHO_THREAD_NAME(("worker " + std::to_string(index)).c_str());  // (the profiler build's timeline)
   uint64_t seenGen = 0;
   Seat& seat = seats_[static_cast<size_t>(index)];
   for (;;) {
@@ -183,6 +184,13 @@ void WorkerPool::RunChunks(int worker, bool timed) {
     const size_t c = nextChunk_.fetch_add(1, std::memory_order_relaxed);
     if (c >= job_.chunks) return;
     const size_t b = c * job_.grain, e = std::min(job_.count, b + job_.grain);
+#if defined(TRACY_ENABLE)
+    const TracyCZoneCtx zone = ___tracy_emit_zone_begin(job_.chunkZone, job_.chunkZone != nullptr);
+    struct End {
+      TracyCZoneCtx z;
+      ~End() { ___tracy_emit_zone_end(z); }
+    } end{zone};
+#endif
     if (!timed) {
       job_.fn(job_.ctx, b, e, worker);
       continue;
@@ -204,12 +212,23 @@ void WorkerPool::RunChecked(const char*, size_t count, Fn fn, void* ctx) {
   }
   SimFpScope fp;
   TaskScope task;
+  MOHO_ZONE("parallel stage (order check)");
   for (size_t k = 0; k < count; ++k) fn(ctx, order_[k], order_[k] + 1, static_cast<int>(k % static_cast<size_t>(threads_)));
 }
 
 void WorkerPool::Run(const char* stage, size_t count, size_t grain, Fn fn, void* ctx) {
   if (count == 0) return;
   if (grain == 0) grain = 1;
+#if defined(TRACY_ENABLE)
+  // (the profiler build: the call's zone, named by its stage; the places are made once per stage name)
+  const bool traced = trace::Connected();
+  const TracyCZoneCtx callZone = ___tracy_emit_zone_begin(traced ? trace::PlaceFor(stage, "parallel ", 0x2e8b57) : nullptr, traced);
+  struct EndCall {
+    TracyCZoneCtx z;
+    ~EndCall() { ___tracy_emit_zone_end(z); }
+  } endCall{callZone};
+  const ___tracy_source_location_data* chunkZone = traced ? trace::PlaceFor(stage, "", 0x66cdaa) : nullptr;
+#endif
   const bool timed = prof::On();  // (the profiler's parallel view: the call's wall time, busy time, longest task)
   const double t0 = timed ? Ms() : 0;
   if (check_.mode != ParCheck::kOff) {
@@ -223,6 +242,13 @@ void WorkerPool::Run(const char* stage, size_t count, size_t grain, Fn fn, void*
   if (threads_ == 1 || count <= grain) {  // (one chunk, or no workers: on the calling thread, as the serial code)
     {
       TaskScope task;
+#if defined(TRACY_ENABLE)
+      const TracyCZoneCtx zone = ___tracy_emit_zone_begin(chunkZone, traced);
+      struct End {
+        TracyCZoneCtx z;
+        ~End() { ___tracy_emit_zone_end(z); }
+      } end{zone};
+#endif
       fn(ctx, 0, count, 0);
     }
     if (timed) {
@@ -234,6 +260,9 @@ void WorkerPool::Run(const char* stage, size_t count, size_t grain, Fn fn, void*
   if (timed)
     for (WorkerStats& s : stats_) s = WorkerStats{};
   job_ = Job{fn, ctx, count, grain, (count + grain - 1) / grain};
+#if defined(TRACY_ENABLE)
+  job_.chunkZone = chunkZone;
+#endif
   nextChunk_.store(0, std::memory_order_relaxed);
   // Only as many workers as the job has chunks beyond the calling thread's first are woken, each on its own seat
   // (waking all of them, on one mutex, cost about 0.1 ms a call with 31 workers: more than a small stage's work).

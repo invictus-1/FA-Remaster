@@ -10,6 +10,7 @@
 #include <string>
 
 #include "core/log.h"
+#include "core/trace.h"
 #include "core/workers.h"
 #include "script/script_state.h"
 #include "sim/ai_threat.h"
@@ -987,6 +988,7 @@ bool SameFollow(const ReconBlip* b, const BlipFollow& f) {
 }  // namespace
 
 void ReconBeat(Sim& sim) {
+  MOHO_ZONE("recon: blips and intel");
   lua_State* L = sim.L();
   if (IS(sim).armies.size() != sim.armies().size()) InitIntelGrids(sim, L);
   // every blip follows its unit (ReconBlip::Refresh 0x5bf810)

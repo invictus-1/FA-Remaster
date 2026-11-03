@@ -61,6 +61,7 @@ class ThreadScheduler {
     bool inWaiters = false;   // listed in waiters_
     int profSource = -1;      // MOHO64_PROFILE: the Lua timer's source for this thread (core/profile.h)
     const std::string* profLabel = nullptr;  // MOHO64_PROFILE_HITCH: its function's file:line, for the beat breakdown
+    const void* traceZone = nullptr;  // the profiler build (core/trace.h): its resumes' zone, named by its function
   };
   lua_State* L_;
   std::list<Thread> threads_;

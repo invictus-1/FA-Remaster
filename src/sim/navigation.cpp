@@ -10,6 +10,7 @@
 
 #include "core/log.h"
 #include "core/profile.h"
+#include "core/trace.h"
 #include "core/workers.h"
 #include "sim/terrain.h"
 
@@ -453,6 +454,8 @@ const PathGrid* Navigation::Grid(const NamedFootprint& fp) {
   const std::string key = GridKey(fp);
   auto it = grids_.find(key);
   if (it != grids_.end()) return it->second.get();
+  MOHO_ZONE("path grid made");
+  MOHO_ZONE_TEXT(key.data(), key.size());
   prof::SectionTimer sec(prof::kSecPathGridMade);  // (MOHO64_PROFILE_HITCH only: which grid, and its time)
   const double hitchT0 = prof::Hitch() ? prof::NowMs() : 0;
   auto g = std::make_unique<PathGrid>(*map_, fp, blocking_.data(), scratch_.get(), pool_);
@@ -502,6 +505,7 @@ bool LineOfSightP(const P& pass, int x0, int z0, int x1, int z1) {
 }  // namespace
 
 bool Navigation::FindPath(const NamedFootprint& fp, const Vec3& from, const Vec3& to, std::vector<Vec3>* out) {
+  MOHO_ZONE("FindPath (grid)");
   out->clear();
   const PathGrid* g = Grid(fp);
   const float hx = fp.sizeX * 0.5f, hz = fp.sizeZ * 0.5f;

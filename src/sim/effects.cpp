@@ -13,6 +13,7 @@
 #include <string>
 
 #include "core/log.h"
+#include "core/trace.h"
 #include "sim/blueprints.h"
 #include "sim/combat.h"
 #include "sim/sim.h"
@@ -734,6 +735,7 @@ void ReleaseEffectObjects(Sim& sim) {
 // every effect as seen: no missed ticks, and CreateIfVisible never ends one. (Nothing the game's scripts do may
 // depend on it, since it differs between the players of one game.)
 void EffectsTick(Sim& sim) {
+  MOHO_ZONE("effects");
   if (!sim.effectsState) return;
   ThingLists& tl = Lists(sim);
   for (size_t i = 0; i < tl.effects.size(); ++i) {
@@ -786,6 +788,7 @@ void EffectsTick(Sim& sim) {
 //   (~Unit 0x6a714c -> ~CAniActor 0x63a930).
 // The deleted objects' Lua tables lose their object (IsDestroyed true) as each is deleted.
 void EffectsEndOfBeat(Sim& sim) {
+  MOHO_ZONE("effects: end of beat");
   if (!sim.effectsState) return;
   ThingLists& tl = Lists(sim);
   for (size_t i = 0; i < tl.ending.size(); ++i) FreeThing(sim, tl, tl.ending[i]);
