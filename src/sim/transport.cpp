@@ -14,6 +14,7 @@
 #include "script/script_state.h"
 #include "sim/air.h"
 #include "sim/build.h"
+#include "sim/collision.h"
 #include "sim/combat.h"
 #include "sim/commands.h"
 #include "sim/entity_grid.h"
@@ -2640,7 +2641,12 @@ bool PodFocused(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d, Unit* own
 bool PodNearby(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
   if (!u->autoMode) return false;
   if (InCat(sim, u, "STATIONASSISTPOD") && ((u->scriptBits >> 4) & 1)) return false;
-  const float R = u->bpData ? u->bpData->maxBuildDistance : 0.0f;
+  // The range is the pod's AI.GuardScanRadius (0x61dab8..0x61dac2: GetBlueprint, then ubp+0x460, the first field of
+  // RUnitBlueprintAI; Economy.MaxBuildDistance is ubp+0x564). A Kennel's drone (XEA3204) sets none, so it has the
+  // RUnitBlueprintAI default 25 (FAF's blueprints-units.lua leaves engineers' unset); the Hives set it equal to their
+  // MaxBuildDistance (15 / 20 / 25). Seen (Chris's big test, 2026-11-01): ours took MaxBuildDistance (default 5),
+  // so a Kennel's drone stayed docked while factories and constructions around the Kennel went on without it.
+  const float R = GuardScanRadiusOf(u);
   const Vec3 p = u->position;
   std::vector<Entity*> cand;  // COGrid::ForAllEntitiesIterator 0x721fb0: the grid cells under the range's box
   sim.entityGrid().GatherBox(p.x - R, p.z - R, p.x + R, p.z + R, 1, &cand);
@@ -2650,6 +2656,21 @@ bool PodNearby(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
     if (!e || e->kind != Entity::Kind::Unit) continue;
     Unit* c = static_cast<Unit*>(e);
     if (c->dead || c == u) continue;
+    {  // the iterator's sphere (U's position, R; 0x61dad7..0x61db12): a unit whose bounds meet the cube of half side
+       // R x 0.707 is taken (R above 3), any other only if its primitive meets the sphere (steering.cpp's visit has
+       // the same query)
+      WorldShape s;
+      if (!GetWorldShape(c, &s)) continue;
+      bool inCube = false;
+      if (R > 3.0f) {
+        const float h = R * 0.707f;
+        Vec3 mn, mx;
+        ShapeBounds(s, &mn, &mx);
+        inCube = !(p.x - h > mx.x || mn.x > p.x + h || p.y - h > mx.y || mn.y > p.y + h || p.z - h > mx.z ||
+                   mn.z > p.z + h);
+      }
+      if (!inCube && !SphereOverlap(s, p, R)) continue;
+    }
     // 0x61dbfc: inside the playable rect with a margin of 1 (the whole map if the pod's army may use it)
     if (!sim.IsWithin(c->position.x, c->position.z, 1.0f, Sim::UseWholeMap(u->army))) continue;
     if (!SameBits(c->position, c->lastPosition)) continue;  // it moved (0x61dc0c..0x61dc20, memcmp 0x4f0a50)
