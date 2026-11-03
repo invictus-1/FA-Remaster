@@ -1,6 +1,8 @@
 #include "sim_frames.h"
 
 #include <algorithm>
+#include <cmath>  // [fogwar]
+#include <cstdio>  // [fogwar]
 #include <cstdlib>
 #include <cstring>
 #include <unordered_map>
@@ -87,6 +89,10 @@ struct SimFrames::Scratch {
   std::unordered_set<std::string> asked, askedFinished, named;
   std::vector<std::string> builders;
   size_t nextBuilder = 0;
+  // [fogwar] (the sight grid, the simulation's thread only) the script entities that cast vision this beat, and how
+  // much of each cell the vision circles clear (0..1)
+  std::vector<moho::VisionCasterView> casters;
+  std::vector<float> share;
 };
 
 SimFrames::SimFrames() : scratch_(std::make_unique<Scratch>()) { names_.push_back(""); }
@@ -368,36 +374,108 @@ void SimFrames::Beat(const moho::Sim& sim) {
     return it->second;
   };
   const int focus = focus_.load();
-  // what the focus army sees over the map, every fifth beat (and once more, empty, when there is no such army any more)
+  // what the focus army sees over the map, every beat (and once more, empty, when there is no such army any more)
   {
     int cells;
     bool wasOn;
+    float mapWidth, mapHeight;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       cells = sightCells_;
       wasOn = sightWasOn_;
+      mapWidth = sightWidth_;
+      mapHeight = sightHeight_;
     }
-    if (focus > 0 && cells > 0 && sightBeat_++ % 5 == 0) {
+    if (focus > 0 && cells > 0 && mapWidth > 0 && mapHeight > 0) {
+      const auto sightStart = std::chrono::steady_clock::now();  // [fogwar] (its cost: MOHO64_DEBUG_SIGHT, the hitch log)
       const size_t count = static_cast<size_t>(cells) * static_cast<size_t>(cells);
       sightWork_.resize(count);
       // (what it has seen at some time is kept here: the engine does not keep it of places. So it
-      // begins when the army becomes the focus army, and a place crossed between two of these
-      // looks, half a second apart, can be missed)
+      // begins when the army becomes the focus army)
       if (sightEver_.size() != count || sightEverOf_ != focus) {
         sightEver_.assign(count, 0);
         sightEverOf_ = focus;
       }
       size_t seenNow = 0;
-      // (every cell's ReconAt at its centre at once, the engine's ReconGrid: the same bits, about a tenth of the time;
-      // asked as of something on the water's surface: sight is the same as on land there, and sonar is told too)
-      moho::ReconGrid(sim, focus, cells, cells, &sightRecon_, 1);
-      if (sightRecon_.size() != count) sightRecon_.assign(count, 0);  // (no map: nothing seen)
+      // [fogwar] The fog of war as the original draws it (the engine's reading of the exe, docs/engine-answers.md, render
+      // 2026-11-03; sim_view.h VisionCasters): NOT from the intel grids but from one vision circle per entity, which the
+      // user side keeps (VisionDB, drawn by vision.fx's CastVision): a unit's at its place with the radius of its Vision
+      // word (UnitView::intel[0] & 0x7fffffff; the enabled bit is not read for a unit, UserUnit::Tick 0x8c0bd8), a dead
+      // one none; every other entity's the same where its enabled bit is set (UserEntity::UpdateEntityData 0x8b9450:
+      // FAF's VizMarkers, a scout's or a unit's death vision); a circle clears the fog only when the focus army's ally
+      // set holds the entity's army (the army itself and its allies). Radar, sonar and omni play no part: ground under
+      // radar or omni alone stays fogged (Chris's big test, 2026-11-01: "omni seems to reveal map").
+      // Each cell keeps how much of it the circles clear, from its centre's distance to each circle's rim, over a soft
+      // band one and a half cells wide (the original's fog has a soft edge; a cell's yes or no drew a staircase on the
+      // ground): seen now where the centre lies inside a circle.
+      std::vector<int> stance;  // (how the focus army stands to each army: 2 ally)
+      {
+        const std::vector<moho::ArmyView> armies = moho::ArmyViews(sim);
+        if (static_cast<size_t>(focus) <= armies.size()) stance = armies[static_cast<size_t>(focus - 1)].alliance;
+      }
+      auto ours = [&](int army) {
+        return army > 0 && (army == focus || (static_cast<size_t>(army - 1) < stance.size() && stance[static_cast<size_t>(army - 1)] == 2));
+      };
+      std::vector<float>& share = e.share;
+      share.assign(count, 0.0f);
+      const float cellW = mapWidth / static_cast<float>(cells), cellH = mapHeight / static_cast<float>(cells);
+      const float band = 1.5f * std::max(cellW, cellH);
+      auto circle = [&](float x, float z, float radius) {
+        if (!(radius > 0)) return;
+        const float reach = radius + band * 0.5f;
+        const int x0 = std::max(0, static_cast<int>(std::floor((x - reach) / cellW)));
+        const int x1 = std::min(cells - 1, static_cast<int>(std::floor((x + reach) / cellW)));
+        const int z0 = std::max(0, static_cast<int>(std::floor((z - reach) / cellH)));
+        const int z1 = std::min(cells - 1, static_cast<int>(std::floor((z + reach) / cellH)));
+        for (int cz = z0; cz <= z1; ++cz) {
+          const float dz = (static_cast<float>(cz) + 0.5f) * cellH - z;
+          float* row = share.data() + static_cast<size_t>(cz) * static_cast<size_t>(cells);
+          for (int cx = x0; cx <= x1; ++cx) {
+            const float dx = (static_cast<float>(cx) + 0.5f) * cellW - x;
+            const float s = std::clamp((radius - std::sqrt(dx * dx + dz * dz)) / band + 0.5f, 0.0f, 1.0f);
+            if (s > row[cx]) row[cx] = s;
+          }
+        }
+      };
+      for (const moho::UnitView& v : e.views)
+        if (!v.dead && ours(v.army)) circle(v.position[0], v.position[2], static_cast<float>(v.intel[0] & 0x7fffffffu));
+      moho::VisionCasters(sim, &e.casters);
+      for (const moho::VisionCasterView& c : e.casters)
+        if (c.enabled && ours(c.army)) circle(c.position[0], c.position[2], c.radius);
+      // (a game without fog of war, the lobby's FogOfWar "none": the simulation's recon says seen now everywhere, and the
+      // original draws no fog. Told by asking it of the map's four corners and its middle: all seen there, where no
+      // circle clears them, is no army's sight)
+      {
+        bool noFog = true;
+        for (int k = 0; k < 5 && noFog; ++k) {
+          const int cx = k == 4 ? cells / 2 : (k & 1) * (cells - 1), cz = k == 4 ? cells / 2 : (k >> 1) * (cells - 1);
+          const float at[3] = {(static_cast<float>(cx) + 0.5f) * cellW, 0, (static_cast<float>(cz) + 0.5f) * cellH};
+          noFog = share[static_cast<size_t>(cz) * static_cast<size_t>(cells) + static_cast<size_t>(cx)] < 0.5f &&
+                  (moho::ReconAt(sim, focus, at) & moho::kReconSeenNow) != 0;
+        }
+        if (noFog) share.assign(count, 1.0f);
+      }
       for (size_t i = 0; i < count; ++i) {
-        const uint32_t recon = sightRecon_[i];
-        const bool now = (recon & moho::kReconSeenNow) != 0;
+        const bool now = share[i] >= 0.5f;
         seenNow += now;
-        sightWork_[i] = static_cast<uint8_t>((now ? kSightNow : 0) | ((recon & (moho::kReconRadar | moho::kReconOmni)) ? kSightRadar : 0) |
-                                             ((recon & moho::kReconSonar) ? kSightSonar : 0));
+        const int part = static_cast<int>(share[i] * 15.0f + 0.5f);
+        sightWork_[i] = static_cast<uint8_t>((now ? kSightNow : 0) | (part << kSightShareShift));
+      }
+      {  // [fogwar] (what the circles cost the simulation's thread: over a millisecond in the hitch log; with
+         // MOHO64_DEBUG_SIGHT=1 the mean and the most of every 600 beats said)
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - sightStart).count();
+        if (HitchLog::on && ms > 1) HitchLog::Add("the fog of war's vision circles", ms);
+        static const bool tell = std::getenv("MOHO64_DEBUG_SIGHT") != nullptr;
+        if (tell) {
+          static double sum = 0, most = 0;
+          static int beats = 0;
+          sum += ms, most = std::max(most, ms);
+          if (++beats == 600) {
+            printf("render: sight: vision circles %.3f ms a beat (most %.3f) over 600 beats, %zu units, %zu vision entities\n", sum / beats, most,
+                   e.views.size(), e.casters.size());
+            sum = most = 0, beats = 0;
+          }
+        }
       }
       // A look in which EVERY place is seen does not count as having seen the map: that is a
       // script's doing, not exploring (the M28 AI gives its commanders sight of the whole map for a

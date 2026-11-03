@@ -78,6 +78,13 @@ bool Effects::Hidden(const Frame& frame, uint32_t entity) const {
   return false;
 }
 
+// [fogwar] Is that entity in the frame's lists (a unit, a shot, a script's entity with a mesh), so that Hidden can say?
+bool Effects::Listed(const Frame& frame, uint32_t entity) const {
+  if (entity == kNone) return false;
+  auto unit = std::lower_bound(frame.units.begin(), frame.units.end(), entity, [](const FrameUnit& u, uint32_t id) { return u.id < id; });
+  return (unit != frame.units.end() && unit->id == entity) || projectileAt_.count(entity) || entityAt_.count(entity);
+}
+
 bool Effects::Explosion(const FrameEffectEvent& event, const Frame& frame) const {
   // (what a reclaim ends with, /lua/EffectUtilitiesGeneric.lua PlayReclaimEndEffects: made on the thing reclaimed, which
   // may be gone from the frame already - a unit reclaimed)
@@ -330,8 +337,13 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
   // (but a resource deposit's mark is part of the map: every army sees every deposit from the first
   // moment, explored or not, as the original shows them)
   const bool deposit = f == "CreateSplat" && Decals::IsDepositMark(event.blueprint);
-  if (!event.seen && !deposit && (f == "CreateEmitterAtBone" || f == "CreateEmitterAtEntity" || f.compare(0, 19, "CreateLightParticle") == 0 ||
-                      f == "CreateDecal" || f == "CreateSplat" || f == "CreateSplatOnBone"))
+  // [fogwar] (an emitter made at a unit's or a shot's bone stays where it was made, but it is that thing's: it is made
+  // whatever the place, and shown or hidden at every frame by what the army sees of the thing now, Update; Chris's big
+  // test, 2026-11-01: glows of Cybran units in the fog of war. By the place, as before, when the thing is in no list)
+  const bool onThing = (f == "CreateEmitterAtBone" || f == "CreateEmitterAtEntity") && Listed(frame, event.entity);
+  if (!event.seen && !deposit && !onThing &&
+      (f == "CreateEmitterAtBone" || f == "CreateEmitterAtEntity" || f.compare(0, 19, "CreateLightParticle") == 0 ||
+       f == "CreateDecal" || f == "CreateSplat" || f == "CreateSplatOnBone"))
     return;
   if (verbose && (f == "CreateLightParticle" || f == "CreateDecal" || f == "CreateSplat" || f == "CreateSplatOnBone")) {
     std::string what = f + " " + event.blueprint + " | " + event.text + " | " + event.text2;
@@ -430,7 +442,7 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
     if (VolfxLog* log = VolfxLog::Get()) log->ClearOrigin();
     // (a blast, blasts.h)
     if (blasts_ && n.size() >= 2 && !Hidden(frame, event.entity) && explosion) blasts_->FromFlash(e.position, n[0], at, event.entity);
-    if (n.size() >= 2 && !event.blueprint.empty())
+    if (n.size() >= 2 && !event.blueprint.empty() && !Hidden(frame, event.entity))  // ([fogwar] as the flash: not on an unseen thing)
       decals_->AddLight("/textures/particles/" + event.blueprint + ".dds", "/textures/particles/" + event.text + ".dds", e.position, n[0], at, n[1] * 0.1f);
     return;
   } else if (f == "CreateDecal" || f == "CreateSplat") {
@@ -535,6 +547,9 @@ void Effects::Update(double tick, const Frame& frame) {
           End(id);
           continue;
         }
+        // [fogwar] (one made at a thing's bone and left there: hidden while the army does not see that thing now, as long
+        // as the thing is in the frame; its particles already out live on)
+        if (!e.attached && e.entity != kNone && Listed(frame, e.entity)) particles_->Hide(e.handle, Hidden(frame, e.entity));
         if (e.attached) {
           particles_->Move(e.handle, e.position, e.orientation);
           particles_->Hide(e.handle, hidden);

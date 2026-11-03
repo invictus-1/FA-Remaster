@@ -898,6 +898,9 @@ class World {
     Vec3 position, color;
   };
   std::vector<RememberedGone> rememberedGone;
+  // [fogwar] Is that unit kind (FrameUnit::blueprint, its id) a structure: its blueprint's Physics.MotionType none (the
+  // id's third letter 'b' where the blueprint cannot be read). What the fog of war remembers as it was last seen.
+  bool IsStructure(uint32_t blueprint, const std::string& id);
   int RememberedCount() const { return static_cast<int>(remembered_.size()); }  // all it keeps, gone or not
   Shafts shafts;          // lamps' beams seen in the air
   Tracks tracks;          // where lying snow is trodden away by units (tracks.on switches it)
@@ -1047,7 +1050,18 @@ class World {
     Quat orientation;
     float fractionComplete;
     uint32_t stamp;      // the AddFrame its unit was last in
+    // [fogwar] the rest of the still photo the original keeps of it (RefreshBlip 0x5c1b90: health, max health, fraction
+    // complete, mesh, pose), taken at the last frame the focus army saw it: its posed and hidden bones (the newer beat's),
+    // its treads' scroll, its health; its scars, dirt and damage as they were (taken at the first frame it was not seen)
+    std::vector<FrameBone> bones;
+    float treads[2] = {0, 0};
+    float health = 0, maxHealth = 0;
+    bool wearKept = false, hasWear = false;
+    WearLook wear;
   };
+  // [fogwar] whether a unit kind is a structure (its blueprint's Physics.MotionType none), by FrameUnit::blueprint:
+  // -1 not asked yet, 0 no, 1 yes
+  std::vector<int8_t> structureKind_;
   std::unordered_map<uint32_t, Remembered> remembered_;
   int rememberedFor_ = -1;  // the focus army remembered_ is of (another army has not seen those buildings)
   uint32_t frameStamp_ = 0;

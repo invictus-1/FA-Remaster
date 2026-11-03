@@ -131,6 +131,7 @@ class Effects {
   // shot where it does not see)? What hangs on such a one is not shown.
   // (by this frame's lists of shots and script entities: Update makes them first)
   bool Hidden(const Frame& frame, uint32_t entity) const;
+  bool Listed(const Frame& frame, uint32_t entity) const;  // [fogwar] is it in those lists at all (else Hidden says no)
   // [scars] Is a flash of light made on that entity an explosion's (a blast, blasts.h)? A shot's (on its projectile, or
   // on one already gone), a dying unit's, an effect entity's (a nuke's, a death's) are; one a script makes on a living
   // unit (a structure begun, a unit being built, a teleport, a tractor claw's grip, a shield's discharge), on a warp-in's or
