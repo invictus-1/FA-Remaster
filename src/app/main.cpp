@@ -22,6 +22,7 @@
 #include <cstring>
 #include <fstream>
 #include <map>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -1087,6 +1088,15 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
         }
         entMax = std::max(entMax, ents.size());
         entShieldMax = std::max(entShieldMax, sh);
+        {  // the vision casters beside the units (the fog's circles): each new one once
+          static std::set<uint32_t> told;
+          std::vector<VisionCasterView> casters;
+          VisionCasters(sim, &casters);
+          for (const VisionCasterView& c : casters)
+            if (told.insert(c.id).second)
+              Logf(LogLevel::Info, "view: tick %u vision caster %#x army %d at %.1f %.1f radius %.0f%s", sim.tick(), c.id,
+                   c.army, c.position[0], c.position[2], c.radius, c.enabled ? "" : " (disabled)");
+        }
         std::vector<UnitView> uv;
         UnitViews(sim, &uv);
         size_t withMesh = 0;

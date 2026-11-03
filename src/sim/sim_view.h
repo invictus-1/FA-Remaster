@@ -504,6 +504,25 @@ void ProjectileViews(const Sim& sim, std::vector<ProjectileView>* out);
 void BeamViews(const Sim& sim, std::vector<BeamView>* out);
 // Script-made entities with a mesh (see EntityView). Take it once per beat, after Tick().
 void EntityViews(const Sim& sim, std::vector<EntityView>* out);
+// The fog of war as the original draws it (big test 2026-11-01, render): not from the intel grids but from the
+// vision circles of entities. The user side keeps one VisionDB circle per entity whose Vision word (EntityAttributes
+// [0], UnitView::intel[0]) has a radius (UserEntity::UpdateEntityData 0x8b9450..0x8b955f, UserUnit::Tick
+// 0x8c0bd8..0x8c0cee: radius = word & 0x7fffffff, 0x5bd530 kind 0; VisionDB::Handle::Update 0x8b83b0 with the
+// entity's x, z and radius), drawn by vision.fx's CastVision stencil volumes. A circle clears the fog only when the
+// focus army's ally set (army+0xe0..+0xec, 0x5bd630) holds the entity's army; for a unit nothing else is asked (a
+// dead one, UserUnit+0x190, drops its circle; the enabled bit is not read), for any other entity also its enabled
+// bit (bit 31, 0x8b8330 kind 0). Radar, sonar and omni play no part. Units: UnitView gives army, position and
+// intel[0]. The rest are script entities without a mesh, which EntityViews leaves out (FAF's VizMarker: the areas
+// ScenarioFramework / scripts make visible, a scout's or a unit's death vision): these, every one whose Vision
+// word has a radius, in creation order. Take it once per beat, after Tick().
+struct VisionCasterView {
+  uint32_t id = 0;
+  int army = 0;                          // 1-based, 0 = none
+  float position[3] = {0, 0, 0};
+  float radius = 0;                      // Vision word & 0x7fffffff
+  bool enabled = false;                  // the word's bit 31 (EnableIntel / DisableIntel 'Vision')
+};
+void VisionCasters(const Sim& sim, std::vector<VisionCasterView>* out);
 // The scenery's changes since the last call (see PropEvent). Take it once per beat, after Tick(), with
 // Sim::collectProps set from before the first beat. (It compares every prop with what was last told: measured
 // 0.066 ms a beat with 6,200 props in a small fight, 0.46 ms with 14,000 props and 200 changes a beat.)

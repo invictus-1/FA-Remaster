@@ -225,6 +225,23 @@ void EntityViews(const Sim& sim, std::vector<EntityView>* out) {
   }
 }
 
+void VisionCasters(const Sim& sim, std::vector<VisionCasterView>* out) {
+  out->clear();
+  for (const Entity* e : sim.scriptEntities) {
+    const uint32_t word = e->intelAttr[0];  // Vision (EntityAttributes +0x128 word 0)
+    if (e->destroyQueued || (word & 0x7fffffffu) == 0) continue;
+    VisionCasterView v;
+    v.id = e->id;
+    v.army = e->army ? e->army->index : 0;
+    v.position[0] = e->position.x;
+    v.position[1] = e->position.y;
+    v.position[2] = e->position.z;
+    v.radius = static_cast<float>(word & 0x7fffffffu);
+    v.enabled = (word & 0x80000000u) != 0;
+    out->push_back(v);
+  }
+}
+
 void PropEvents(Sim& sim, std::vector<PropEvent>* out) {
   out->clear();
   for (const auto& g : sim.propsGone) {
