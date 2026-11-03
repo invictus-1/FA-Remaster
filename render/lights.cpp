@@ -297,7 +297,7 @@ void Lights::Build(View* view) {
         if (j - i > 1) {
           uint32_t first = order[i];
           for (size_t k = i; k < j; ++k) first = std::min(first, order[k]);
-          Vec3 at{0, 0, 0}, colour{0, 0, 0};
+          Vec3 at{0, 0, 0}, colour{0, 0, 0}, flux{0, 0, 0};  // ([mergeflux] flux: each light's colour times its reach squared)
           float weight = 0, farthest = 0, brightestRider = -1, inAir = 0;  // ([nightlight] inAir: their air shares by brightness)
           const Light* rider = nullptr;  // (the brightest that rides on a model)
           for (size_t k = i; k < j; ++k) {
@@ -305,6 +305,7 @@ void Lights::Build(View* view) {
             const float w = 0.3f * l.color.x + 0.6f * l.color.y + 0.1f * l.color.z + 1e-6f;
             at = at + l.position * w;
             colour = colour + l.color;
+            flux = flux + l.color * (l.radius * l.radius);
             weight += w;
             inAir += l.air * w;
             farthest = std::max(farthest, l.radius);
@@ -320,8 +321,15 @@ void Lights::Build(View* view) {
           }
           Light& kept = lights_[first];
           kept.position = at;
-          kept.color = colour;
           kept.radius = farthest + spread / weight;
+          // [mergeflux] (Chris's big test of 2026-11-01: "random bright red flash when upgrading goes away and comes back",
+          // "random orange flashes" on factories, a red pool in the air between four factories) as much light in all as
+          // the lights it stands for, not as bright at its middle as all of them there: the light a light lays on the
+          // ground goes with its colour times its reach squared, so the merged one's colour is theirs so counted over its
+          // own reach squared. Before, all their colours: four factories' glows a reach apart merged into one four times
+          // as bright between them, which came and went as the squares round them went over and under kMostInSquare.
+          // Lights on one place (a salvo's hits) merge almost as before (their reach and spread about the same).
+          kept.color = mergeFlux ? flux * (1 / (kept.radius * kept.radius)) : colour;
           kept.hasOrigin = rides;
           kept.origin = riddenOn;
           kept.air = inAir / weight;

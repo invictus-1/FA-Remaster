@@ -57,11 +57,37 @@ class EnergyShields {
   void Draw(const View& view, Post* post);
 
   // How much of each (1: as made): the bending of what is behind, the light on what is inside, the rings.
-  float bend = 1, light = 1, rings = 1;
+  // ([clearshell] the bending 0.35 since 2026-11-03: at 1 the units under a shield's rim smeared, Chris's big test)
+  float bend = 0.35f, light = 1, rings = 1;
   // [litshell] (Chris, 2026-10-28) the shell taking the world's light (false: as before); a UEF shield's hex cells' spacing,
   // world units (0: its texture's pattern); how strong its hex lines are; its glow where it meets the ground
   bool litShell = true;
-  float hexSize = 1.2f, hexLines = 1, contactGlow = 1;
+  float hexSize = 1.2f, hexLines = 1, contactGlow = 0.4f;  // ([clearshell] contactGlow 1 as of 2026-10-28)
+  // [clearshell] (Chris's big test, 2026-11-01/03: the UEF's dome "hard to see" through, its hex lines too strong, a second
+  // layer inside it, rain on it "a light show", units under its rim smeared.) Each 1 (and rainShimmer 0, steadyUnits and
+  // softHorizon false, the flicker 0.85 and 9 a second) is the look of 2026-10-28 (Classic1028 sets them all back):
+  //  - veil: how much of the hex shell's haze at rest (the sky and small lights it mirrors, its tint toward the rim);
+  //  - restLines: how much of its hex lines at rest (a hit's rings light them as fully as before);
+  //  - farSide: how much of the far side's look at rest, seen through the near side from outside (the hex shell's);
+  //  - restShimmer: the slow shimmer that leans what is behind at rest (its rings still bend it as they pass);
+  //  - weakFlicker, weakFlickerRate: how deep (0..1) and how fast a weak hex shield's cells flicker;
+  //  - rainSparks: rain's sparks filling the hex's cells for a moment; rainShimmer: in their place, a faint slow shimmer
+  //    along its lines (smooth in time, the same at any frame rate);
+  //  - steadyUnits: what stands up off the ground (units, structures, trees) is never bent nor drawn across (SetGround);
+  //  - softHorizon: the horizon in the hex shell's mirror soft (its sharp line read as a second shell inside, warm at dusk);
+  //  - contactGlow (above): 0.4 since 2026-11-03 (1 before): its line where the far side meets the ground showed through.
+  float veil = 0.25f, restLines = 0.45f, farSide = 0.2f, restShimmer = 0, weakFlicker = 0.35f, weakFlickerRate = 3;
+  float rainSparks = 0, rainShimmer = 1;
+  bool steadyUnits = true, softHorizon = true;
+  void Classic1028() {
+    bend = 1, veil = restLines = farSide = restShimmer = contactGlow = 1, weakFlicker = 0.85f, weakFlickerRate = 9;
+    rainSparks = 1, rainShimmer = 0, steadyUnits = softHorizon = false;
+  }
+  // [clearshell] The map's ground (Terrain::HeightTexture, HeightUnit; the map's width and height), for steadyUnits; none: all of
+  // what is behind bends.
+  void SetGround(gfx::Texture heights, float width, float height, float heightUnit) {
+    groundHeights_ = heights, groundWidth_ = width, groundHeight_ = height, groundUnit_ = heightUnit;
+  }
   // How much of its shield a bubble has left when no unit is found under it (the effects stand: no units in its
   // frame); 0..1.
   float healthUnknown = 1;
@@ -96,6 +122,8 @@ class EnergyShields {
   std::vector<Hit> hits_;
   std::vector<Owner> owners_;
   std::vector<Bubble*> order_;
+  gfx::Texture groundHeights_;  // [clearshell] (SetGround)
+  float groundWidth_ = 0, groundHeight_ = 0, groundUnit_ = 0;
 };
 
 // A test scene for the viewer (--energy-test n; for looking and timing without a game): n shield generators of the

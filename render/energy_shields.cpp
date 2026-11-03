@@ -27,8 +27,18 @@ cbuffer Shields : register(b1) {
   float4 frameInfo;                // x: bubbles in `lit`; y: how much they bend what is behind; z: how much light they
                                    // throw on what is inside; w: how strong their rings are
   float4 lit[64];                  // the bubbles whose light falls inside them: (centre, radius), (tint, strength)
-  float4 shellLook;                // [litshell] x: -; y: its hex lines' strength; z: its glow where it meets the ground and
-                                   // what stands in it (the bubbles with the lit shell); w: -
+  float4 shellLook;                // [litshell] x: [clearshell] how much of the hex shell's haze at rest (its mirror, its
+                                   // tint toward the rim); y: its hex lines' strength; z: its glow where it meets the ground and
+                                   // what stands in it (the bubbles with the lit shell); w: [clearshell] how much of its hex
+                                   // lines at rest
+  float4 shellRest;                // [clearshell] x: how much of the far side's look at rest, seen through the near side from
+                                   // outside; y: the slow shimmer of what is behind, at rest; z, w: how deep and how fast a
+                                   // weak hex shield's cells flicker
+  float4 shellMore;                // [clearshell] x: rain's sparks filling the hex's cells (as of 2026-10-28); y: rain's faint
+                                   // shimmer along the lines; z: 1 = what stands up out of the ground (units) is not bent; w: 1 =
+                                   // the horizon in the hex shell's mirror soft
+  float4 shellGround;              // [clearshell] the map's ground (groundHeights): x, y its width and height; z: world units of
+                                   // its heights' largest value (0: not bound); w: how far above it a thing stands up
 };
 cbuffer Bubble : register(b2) {
   float4 row0, row1, row2;  // the dome's model -> world
@@ -44,6 +54,7 @@ Texture2D normalsMap : register(t3);    // [basepattern] (ShellPS) its other tex
 Texture2D specularMap : register(t4);
 Texture2D secondaryMap : register(t5);
 Texture2D behind : register(t1);     // the picture as it was before the bubbles (InsidePS only)
+Texture2D<float> groundHeights : register(t6);  // [clearshell] the map's ground (Terrain::HeightTexture, one a grid point)
 #if SAMPLES > 1
 Texture2DMS<float> sceneDepth : register(t2);
 #define SCENE_DEPTH(at, s) sceneDepth.Load(at, s)
@@ -54,12 +65,14 @@ Texture2D<float> sceneDepth : register(t2);
 
 struct VIn {
   float3 position : POSITION;
+  float3 normal : NORMAL;  // [clearshell]
   float4 uv : TEXCOORD0;
 };
 struct VOut {
   float4 position : SV_Position;
   float3 world : TEXCOORD0;
   float2 uv : TEXCOORD1;
+  float3 normal : TEXCOORD2;  // [clearshell] the dome's own, in the world (its way out or in, as the mesh has it)
 };
 
 VOut VS(VIn i) {
@@ -68,6 +81,7 @@ VOut VS(VIn i) {
   o.world = float3(dot(row0, p), dot(row1, p), dot(row2, p));
   o.position = mul(viewProj, float4(o.world, 1));
   o.uv = i.uv.xy;
+  o.normal = float3(dot(row0.xyz, i.normal), dot(row1.xyz, i.normal), dot(row2.xyz, i.normal));
   return o;
 }
 
@@ -305,19 +319,42 @@ float4 LitShell(VOut i, float3 n, float3 v) {
   float on = 1;
   [branch] if (info.w > 0.5) {
     on = 1 - smoothstep(-0.05, 0.05, weak * 0.7 - 0.2 - own);
-    on *= 1 - 0.85 * saturate((CloudNoise(float3(time * 9, own * 31, info.z)) - 0.62) * 4) * smoothstep(0.5, 0.8, weak);
+    // ([clearshell] how deep and how fast: as of 2026-10-28 0.85 deep, 9 a second, which strobed where the frames come
+    // unevenly; now shallower and slower, shellRest.zw)
+    on *= 1 - shellRest.z * saturate((CloudNoise(float3(time * shellRest.w, own * 31, info.z)) - 0.62) * 4) * smoothstep(0.5, 0.8, weak);
     lines *= lerp(0.25, 1, on);
   }
   // (rain and snow on it: a drop that meets it sparks a cell for a moment, on its upper side; flakes faintly)
-  float spark = 0;
+  // [clearshell] (Chris, 2026-11-03: rain on a shield "very subtle", not a light show; no hexagons lit by it.) The cells'
+  // sparks (as of 2026-10-28) only with shellMore.x; in their place a faint shimmer that runs slowly along the hex's lines
+  // on the upper side, smooth in time (a slow noise, not a flash a few frames long: it reads the same at any frame rate).
+  float spark = 0, drizzle = 0;
   [branch] if (falling.x + falling.y > 0.01) {
+    float wet = (falling.x + 0.3 * falling.y) * saturate(cellN.y * 2 + 0.3);
     float when = frac(time * (1.4 + own * 0.8) + own * 17.3);
-    spark = (falling.x + 0.3 * falling.y) * saturate(1 - when / 0.1) * saturate(cellN.y * 2 + 0.3);
+    spark = wet * saturate(1 - when / 0.1) * shellMore.x;
+    float3 q = n * max(sphere.w * 0.35, 1) + float3(0.0, -1.3, 0.0) * time;  // (running down over it, as water would)
+    drizzle = wet * smoothstep(0.55, 0.8, CloudNoise(q)) * shellMore.y;
   }
   float night = dark * lerp(0.35, 1, dark);
   float hex = info.w > 0.5 ? 1 : 0;  // (its hex's lines glow on their own; the base game's look carries its own light)
-  float3 glow = tint * (lines * ((0.12 + 0.9 * rim) * pulse * night * hex + h * 2.2 * frameInfo.w + flare * 2.5) * on + lines * weak * weak * weak * 0.7 * on * tint * hex +
-                        (1 - lines) * ((h * 0.55 * frameInfo.w + flare * 0.9) * on ) * tint + spark * 4 * (tint * 0.6 + 0.4));
+  // [clearshell] (Chris, 2026-11-03: the UEF's dome "hard to see" through; a second layer inside it.) The hex shell's look at
+  // rest, less of it: its haze (the sky and the small lights it mirrors, its tint toward the rim) by shellLook.x, its lines
+  // by shellLook.w; and of its far side, seen through the near side from outside, only shellRest.x of that (both sides at
+  // full made a second, inner shell of haze and lines where the far side stands above the ground, and its mirror of the
+  // low sky a warm arc at dusk). What a hit does, and a weakening's, stays as it was. (The other factions' looks: as before.)
+  // (which side: by the dome's own normal turned outward, not by the way from its sphere's centre, which is taken from the
+  // dome's bounds and need not be its true one: that drew a seam across the near side; softly over the last bit before
+  // the rim, where both sides meet)
+  float3 m = normalize(i.normal);
+  m = dot(m, n) >= 0 ? m : -m;
+  float far = info.y < 0.5 ? lerp(shellRest.x, 1, smoothstep(-0.12, 0.0, dot(m, v))) : 1;
+  // (the haze less where it is seen face on, where the units inside are looked at, than toward the rim, where it gives the
+  // dome its shape: up to twice as much there)
+  float veil = hex > 0 ? lerp(shellLook.x, min(1, shellLook.x * 2), pow(1 - nDotV, 2.5)) * far : 1, restLines = hex > 0 ? shellLook.w * far : 1;
+  float3 glow = tint * (lines * ((0.12 + 0.9 * rim) * pulse * night * hex * restLines + h * 2.2 * frameInfo.w + flare * 2.5) * on + lines * weak * weak * weak * 0.7 * on * tint * hex +
+                        (1 - lines) * ((h * 0.55 * frameInfo.w + flare * 0.9) * on ) * tint + spark * 4 * (tint * 0.6 + 0.4) +
+                        lines * drizzle * 0.35 * (tint * 0.6 + 0.4));
   // [hitpatterns] (light along its own lines where a hit's rings pass and where it struck; faint at rest, toward the rim)
   glow += tint * (hitLines * ((h * 3.2 * frameInfo.w + flare * 3.5) * crackle * on + 0.05 * rim * night) + glyph * 1.6 * tint) * (tint * 0.5 + 0.5);
   glow *= 1 - 0.5 * nDotV * nDotV;  // (less where seen face on, where the units inside are looked at)
@@ -326,7 +363,17 @@ float4 LitShell(VOut i, float3 n, float3 v) {
   float3 sun = ToLinear(sunColor) * (lightMultiplier * modern.x);
   float3 R = reflect(-v, N);
   // (the computed sky, which follows the hour; the map's own cube is a picture of its day, bright at night too)
-  float3 sky = skyZenith.w > 0.5 ? ComputedSky(R) : ToLinear(environmentSky.SampleLevel(samplerLinear, R, 1).rgb) * modern.y;
+  // ([clearshell] with shellMore.w, the hex shell's: the horizon in its mirror soft. A ball's mirror shows the horizon as a
+  // sharp line round it, the bright low sky above, the dark land below; on a clear shell that line reads as a second shell
+  // inside it, warm when the sun is low (Chris's big test, "during this time of day uef shields seem to show another
+  // layer"). So the sky just above the horizon, darkening slowly below it.)
+  float3 Rs = R;
+  float below = 1;
+  [branch] if (shellMore.w > 0.5 && info.w > 0.5) {
+    Rs = normalize(float3(R.x, max(R.y, 0.06), R.z));
+    below = lerp(0.3, 1, smoothstep(-0.6, 0.3, R.y));
+  }
+  float3 sky = (skyZenith.w > 0.5 ? ComputedSky(Rs) : ToLinear(environmentSky.SampleLevel(samplerLinear, Rs, 1).rgb) * modern.y) * below;
   float3 H = normalize(v + sunDirection);
   float nDotH = saturate(dot(N, H)), nDotL = saturate(dot(N, sunDirection));
   float glintF = 0.04 + 0.96 * pow(1 - saturate(dot(v, H)), 5);
@@ -336,17 +383,28 @@ float4 LitShell(VOut i, float3 n, float3 v) {
   float3 lit = lines * tint * (sun * nDotL * shadow * 0.06 + SkyAmbient(N) * 0.08);
   // (its faction's colour toward its rim, as the plain bubble's: the shield reads as its side's from afar)
   float edge = pow(1 - nDotV, 2.5);
-  float pattern = hex > 0 ? lines * (0.08 + 0.25 * rim) : baseAlpha * 0.8 + (hitLines * (h + flare) * 0.3 + glyph * 0.3) * on;
-  float alpha = saturate(0.012 + fresnel * lerp(0.35, 0.45, hex) + edge * lerp(0.12, 0.22, hex) + pattern + (h * 0.12 + flare * 0.15) * on + spark * 0.3) *
+  float pattern = hex > 0 ? lines * (0.08 + 0.25 * rim) * restLines : baseAlpha * 0.8 + (hitLines * (h + flare) * 0.3 + glyph * 0.3) * on;
+  float alpha = saturate((0.012 + fresnel * lerp(0.35, 0.45, hex) + edge * lerp(0.12, 0.22, hex)) * veil + pattern + (h * 0.12 + flare * 0.15) * on + spark * 0.3 +
+                         lines * drizzle * 0.04) *
                 lerp(0.6, 1, dark);
-  float3 color = sky * fresnel * lerp(0.5, 1, hex) + glint + small + lit + glow + base * (2.5 * baseAlpha) * night +
-                 tint * ((0.03 + 0.9 * edge) * night * (0.06 + 0.22 * edge) / 0.28);
+  float3 color = (sky * fresnel * lerp(0.5, 1, hex) + small + tint * ((0.03 + 0.9 * edge) * night * (0.06 + 0.22 * edge) / 0.28)) * veil + glint * far +
+                 lit * restLines + glow + base * (2.5 * baseAlpha) * night;
   // (with its texture's pattern: all of it stutters below two fifths, as the plain bubble's)
   float stutter = info.w > 0.5 ? 0 : saturate((CloudNoise(float3(time * 6, info.z, 0.5)) - 0.55) * 5) * saturate((0.4 - health) * 5);
   color *= 1 - 0.6 * stutter;
   // (seen through the air: what of it comes through)
   float3 through = ThroughAirTo(float3(1, 1, 1), i.world) - ThroughAirTo(float3(0, 0, 0), i.world);
   return float4(color * through, alpha * dot(through, 1.0 / 3));
+}
+
+// [clearshell] Whether a place stands up off the map's ground (a unit, a structure, a tree): above the highest of the four
+// grid points round it by more than shellGround.w (the ground the terrain draws there is never above them).
+bool StandsUp(float3 p) {
+  float2 xz = clamp(p.xz, 0, shellGround.xy);
+  int2 c = int2(floor(xz)), most = int2(shellGround.xy);
+  float g = max(max(groundHeights.Load(int3(min(c, most), 0)), groundHeights.Load(int3(min(c + int2(1, 0), most), 0))),
+                max(groundHeights.Load(int3(min(c + int2(0, 1), most), 0)), groundHeights.Load(int3(min(c + int2(1, 1), most), 0))));
+  return p.y > g * shellGround.z + shellGround.w;
 }
 
 // The picture behind the shell nearest the eye, bent, and lit by the bubbles it lies in.
@@ -376,14 +434,27 @@ float4 InsidePS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   // what is behind is taken from toward the bubble's middle (it is drawn out toward the rim, as through a lens), and
   // along each ring as it passes; in world units at the shell, as a share of the bubble's size
   float3 across = n - v * dot(n, v);
-  float3 moved = (-across * (0.1 * rim) + shimmer * (0.03 * rim)) * frameInfo.y + lean * (0.05 * frameInfo.w);
+  // ([clearshell] the shimmer at rest by shellRest.y: 1 as of 2026-10-28; it smeared the units under the rim)
+  float3 moved = (-across * (0.1 * rim) + shimmer * (0.03 * rim * shellRest.y)) * frameInfo.y + lean * (0.05 * frameInfo.w);
   float4 to = mul(viewProj, float4(i.world + moved * sphere.w, 1));
   float2 straight = i.position.xy * viewport.zw;
   float2 uv = to.w > 1e-4 ? float2(to.x / to.w * 0.5 + 0.5, 0.5 - to.y / to.w * 0.5) : straight;
   // (never what stands in front of the shell, nor from outside the picture)
   int2 at = min(int2(saturate(uv) * viewport.xy), int2(viewport.xy) - 1);
   float depth = SCENE_DEPTH(at, 0);
-  if (any(uv < 0) || any(uv > 1) || depth > i.position.z) {
+  bool keep = any(uv < 0) || any(uv > 1) || depth > i.position.z;
+  // [clearshell] (Chris, 2026-11-03: units under a shield's edge smeared, "should stay exactly the same".) With shellMore.z,
+  // nothing is taken across an edge of what is behind: where the place it would be taken from lies much farther from the
+  // place straight behind than the bending moves it (one is a unit, the other the ground beyond it), it is taken straight.
+  // The ground bends on as before; a unit stays whole where it stands. What stands: what lies above the map's ground
+  // (StandsUp), there or where it would be taken from.
+  [branch] if (!keep && shellMore.z > 0.5 && shellGround.z > 0) {
+    float d0 = SCENE_DEPTH(pixel, 0);
+    float4 p0 = mul(fromScreen, float4(straight.x * 2 - 1, 1 - straight.y * 2, d0, 1));
+    float4 p1 = mul(fromScreen, float4(uv.x * 2 - 1, 1 - uv.y * 2, depth, 1));
+    keep = d0 <= 0 || depth <= 0 || StandsUp(p0.xyz / p0.w) || StandsUp(p1.xyz / p1.w);
+  }
+  if (keep) {
     uv = straight;
     depth = SCENE_DEPTH(pixel, 0);
   }
@@ -420,7 +491,11 @@ float4 InsidePS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
     float4 q = mul(fromScreen, float4(uv.x * 2 - 1, 1 - uv.y * 2, depth, 1));
     float off = abs(length(q.xyz / q.w - sphere.xyz) - sphere.w);
     float dim = falling.w > 0 ? falling.w : 1;
-    contact = tintHealth.rgb * (exp(-off / (0.15 + 0.008 * sphere.w)) * shellLook.z * 0.5 * dim);
+    // ([clearshell] on its far half, from outside, as much as its far side's look: there it is seen through the near side
+    // and drew a second ring inside the dome)
+    float side = dot(normalize(q.xyz / q.w - sphere.xyz), normalize(cameraPosition - sphere.xyz));
+    float far = info.y < 0.5 ? lerp(shellRest.x, 1, smoothstep(-0.25, 0.25, side)) : 1;
+    contact = tintHealth.rgb * (exp(-off / (0.15 + 0.008 * sphere.w)) * shellLook.z * 0.5 * dim * far);
   }
   return float4(lerp(seen, dot(seen, luma) * hue, amount) * (1 + 0.3 * amount) + light * (0.01 * night * frameInfo.z) + contact, 1);
 }
@@ -491,6 +566,7 @@ bool EnergyShields::Init() {
   gfx::PipelineDesc pd;
   pd.vertexSource = pd.pixelSource = source;
   pd.attrs = {{"POSITION", 0, gfx::AttrType::Float3, offsetof(ScmVertex, position)},
+              {"NORMAL", 0, gfx::AttrType::Float3, offsetof(ScmVertex, normal)},  // [clearshell]
               {"TEXCOORD", 0, gfx::AttrType::Float4, offsetof(ScmVertex, uv0)}};
   pd.stride = sizeof(ScmVertex);
   pd.colorFormat = kSceneFormat;
@@ -605,7 +681,7 @@ void EnergyShields::Draw(const View& view, Post* post) {
 
   // the frame's constants: the way back from the picture into the world, and the bubbles whose light falls inside
   // them (the nearest kMostLit)
-  float frame[16 + 4 + kMostLit * 8 + 4] = {};
+  float frame[16 + 4 + kMostLit * 8 + 4 * 4] = {};
   const Mat4 back = Inverse(view.constants.viewProj);
   for (int r = 0; r < 4; ++r)
     for (int k = 0; k < 4; ++k) frame[r * 4 + k] = back.m[r][k];
@@ -624,7 +700,13 @@ void EnergyShields::Draw(const View& view, Post* post) {
   frame[18] = std::max(light, 0.0f);
   frame[19] = std::max(rings, 0.0f);
   float* look = frame + 20 + kMostLit * 8;  // [litshell]
-  look[0] = litShell ? 1.0f : 0.0f, look[1] = std::max(hexLines, 0.0f), look[2] = std::max(contactGlow, 0.0f);
+  look[0] = std::max(veil, 0.0f), look[1] = std::max(hexLines, 0.0f), look[2] = std::max(contactGlow, 0.0f), look[3] = std::max(restLines, 0.0f);
+  // [clearshell] its far side, the shimmer at rest, a weak hex's flicker; rain on it; units kept still; the map's ground
+  look[4] = std::max(farSide, 0.0f), look[5] = std::max(restShimmer, 0.0f), look[6] = std::clamp(weakFlicker, 0.0f, 1.0f), look[7] = std::max(weakFlickerRate, 0.0f);
+  look[8] = std::max(rainSparks, 0.0f), look[9] = std::max(rainShimmer, 0.0f), look[10] = steadyUnits ? 1.0f : 0.0f;
+  look[11] = softHorizon ? 1.0f : 0.0f;
+  const bool ground = static_cast<bool>(groundHeights_) && groundUnit_ > 0;
+  look[12] = groundWidth_, look[13] = groundHeight_, look[14] = ground ? groundUnit_ : 0.0f, look[15] = 0.15f;
 
   auto bubbleConstants = [&](const Bubble& b, float* out) {
     for (int k = 0; k < 4; ++k) {
@@ -671,9 +753,11 @@ void EnergyShields::Draw(const View& view, Post* post) {
     device_->SetConstants(1, frame, sizeof frame);
     device_->SetTexture(1, post->Behind());
     device_->SetTexture(2, post->Depth());
+    if (ground) device_->SetTexture(6, groundHeights_);  // [clearshell]
     for (const Bubble* b : order_) drawDome(*b);
     device_->SetTexture(1, {});
     device_->SetTexture(2, {});
+    if (ground) device_->SetTexture(6, {});
   }
   // then the shells over it, tested against the scene's depth
   post->ContinueScene();

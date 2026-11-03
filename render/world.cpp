@@ -664,10 +664,17 @@ void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation,
   // with many units lit, each lights only the first of its lamps (a list has the lamps that matter
   // most first): about 6,000 lights in all, by the number of units of the frame before
   ++lampUnits_;
-  const size_t most = static_cast<size_t>(std::clamp(6000 / std::max(lampUnitsBefore_, 1), 3, 16));
+  size_t most = static_cast<size_t>(std::clamp(6000 / std::max(lampUnitsBefore_, 1), 3, 16));
   // [nightlight] (steadyLamps: by the units of the frames before eased, and the last lamp lit by the share of it left,
   // so that the lamps a unit lights do not step as units come and go)
-  const float mostLit = std::clamp(6000.0f / std::max(lampUnitsSmooth_, 1.0f), 3.0f, 16.0f);
+  float mostLit = std::clamp(6000.0f / std::max(lampUnitsSmooth_, 1.0f), 3.0f, 16.0f);
+  // [lampbudget] (lampsNearFirst) a unit near what the camera looks at all of them (16 at most), whatever the zoom
+  if (lampsNearFirst) {
+    const float t = std::clamp((lampAway - lampReach / 6) / (0.4f * lampReach - lampReach / 6), 0.0f, 1.0f);
+    const float nearShare = 1 - t * t * (3 - 2 * t);
+    mostLit += (16 - mostLit) * nearShare;
+    most = std::max(most, static_cast<size_t>(std::lround(mostLit)));
+  }
   size_t lit = 0;
   uint64_t taken[16];
   bool takenBeam[16];
@@ -765,6 +772,18 @@ void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation,
       tint = Vec3{std::pow(std::max(c.x, 0.0f), 2.5f), std::pow(std::max(c.y, 0.0f), 2.5f), std::pow(std::max(c.z, 0.0f), 2.5f)};
       tint = tint * (2.4f / std::max({tint.x, tint.y, tint.z, 0.05f}));
     }
+    float lampRadius = light.radius * model->scale;
+    float lampAir = 1;
+    if (light.hull) {  // [hullglow]
+      on *= hullGlow;
+      lampRadius *= hullReach;
+      lampAir = hullAir;
+      // (hullEvenColours: an army's colour as bright as light whatever its hue - the red the glow was set by, 0.2 of the
+      // sun's light to the eye at the most; a yellow's 0.74 lowered to about 0.33, a green's 0.6 to 0.3, an orange's 0.31
+      // to 0.24: not all the way, a strong red looks brighter than its light says)
+      const float eye = 0.2126f * tint.x + 0.7152f * tint.y + 0.0722f * tint.z;
+      if (hullEvenColours && armyColor && lampsTeamColour && eye > 0.2f) tint = tint * std::pow(0.2f / eye, 0.6f);
+    }
     if (light.cone > 0) {
       const Vec3 along = Rotate(orientation, Rotate(boneTurn, light.direction));
       // (MOHO64_DEBUG_LAMPS=<part of a bone's name>, or 1: the first beams whose lamp rides on such a bone, with what turned them,
@@ -804,11 +823,12 @@ void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation,
       }
     } else if (steadyLamps) {  // [nightlight] (lit by FlushLamps)
       PendingLamp l;
-      l.at = at, l.color = tint * on, l.origin = position, l.radius = light.radius * model->scale;
+      l.at = at, l.color = tint * on, l.origin = position, l.radius = lampRadius;
       l.weight = byReach * byMost, l.key = lampKey, l.unit = pendingUnit;
+      l.hull = light.hull, l.air = lampAir;  // [hullglow]
       pendingLamps_.push_back(l);
     } else {
-      lights.Add(at, light.radius * model->scale, tint * on, &position);  // (the unit does not shadow its own lamps: rays)
+      lights.Add(at, lampRadius, tint * on, &position, lampAir);  // (the unit does not shadow its own lamps: rays)
       NightNote(lampKey, 1);
     }
     if (steadyLamps && lampKey) {
@@ -889,6 +909,8 @@ void World::FlushLamps() {
       }
       i = j;
     }
+    std::vector<float> hullShares;
+    if (hullShare) ShareHullGlows(allowed, &hullShares);  // [hullglow]
     for (size_t i = 0; i < pendingLamps_.size(); ++i) {
       const PendingLamp& l = pendingLamps_[i];
       const float target = allowed[i] ? 1.0f : 0.0f;
@@ -908,7 +930,8 @@ void World::FlushLamps() {
         lights.AddBeam(l.at, l.radius, l.color * shown, l.along, l.cone, l.glow, &l.middle, &l.origin, l.key);
         shafts.Add(l.at, l.at + l.along * l.shaftReach, l.shaftThick, l.shaftWide, l.color * (shown * l.shaftAir));
       } else {
-        lights.Add(l.at, l.radius, l.color * shown, &l.origin);
+        const float shared = hullShares.empty() ? 1.0f : hullShares[i];  // [hullglow]
+        lights.Add(l.at, l.radius, l.color * (shown * shared), &l.origin, l.air);
       }
     }
     // (what was not asked for this frame nor the one before is let go: its unit gone, or beyond the reach)
@@ -934,6 +957,55 @@ void World::FlushLamps() {
       nightDiscs_ = 0;
       nightFrames_ =nightPops_ = nightSwaps_ = nightLeftOut_ = nightLamps_ = 0;
     }
+  }
+}
+
+// [hullglow] (hullShare) Each hull glow's share where glows lie over each other: every glow lit this frame (by the crowded
+// squares' rule, `allowed`, and its weight) laid on a grid of small squares as the shaders fade a light (lighting.h: 1 at
+// its middle, nothing at its reach), and each glow given 1 / n of 1 + ln(n) of itself, n the glows' worth lying where it
+// stands (itself included: alone, n is 1 and it stays as it was). Sixteen glows on one place light it as 3.8 of them, not
+// 16; two a reach apart do not touch each other. Costs a few squares per small unit's glow, a few hundred per building's.
+void World::ShareHullGlows(const std::vector<uint8_t>& allowed, std::vector<float>* shares) {
+  shares->clear();
+  float x0 = 1e30f, z0 = 1e30f, x1 = -1e30f, z1 = -1e30f;
+  size_t hulls = 0;
+  for (size_t i = 0; i < pendingLamps_.size(); ++i) {
+    const PendingLamp& l = pendingLamps_[i];
+    if (!l.hull || !allowed[i] || l.weight <= 0 || !(l.radius > 0)) continue;
+    ++hulls;
+    x0 = std::min(x0, l.at.x - l.radius), x1 = std::max(x1, l.at.x + l.radius);
+    z0 = std::min(z0, l.at.z - l.radius), z1 = std::max(z1, l.at.z + l.radius);
+  }
+  if (hulls < 2) return;
+  // (squares of two world units, larger where the glows spread over more than 512 of them)
+  const float cell = std::max(2.0f, std::max(x1 - x0, z1 - z0) / 512);
+  const int cols = static_cast<int>((x1 - x0) / cell) + 1, rows = static_cast<int>((z1 - z0) / cell) + 1;
+  hullField_.assign(static_cast<size_t>(cols) * static_cast<size_t>(rows), 0.0f);
+  auto fade = [](float far2) { return far2 >= 1 ? 0.0f : (1 - far2) * (1 - far2) / (1 + 4 * far2); };
+  for (size_t i = 0; i < pendingLamps_.size(); ++i) {
+    const PendingLamp& l = pendingLamps_[i];
+    if (!l.hull || !allowed[i] || l.weight <= 0 || !(l.radius > 0)) continue;
+    const int a = std::max(static_cast<int>((l.at.x - l.radius - x0) / cell), 0), b = std::min(static_cast<int>((l.at.x + l.radius - x0) / cell), cols - 1);
+    const int c = std::max(static_cast<int>((l.at.z - l.radius - z0) / cell), 0), d = std::min(static_cast<int>((l.at.z + l.radius - z0) / cell), rows - 1);
+    const float inv = 1 / (l.radius * l.radius);
+    for (int z = c; z <= d; ++z) {
+      const float dz = z0 + (static_cast<float>(z) + 0.5f) * cell - l.at.z;
+      for (int x = a; x <= b; ++x) {
+        const float dx = x0 + (static_cast<float>(x) + 0.5f) * cell - l.at.x;
+        hullField_[static_cast<size_t>(z) * static_cast<size_t>(cols) + static_cast<size_t>(x)] += l.weight * fade((dx * dx + dz * dz) * inv);
+      }
+    }
+  }
+  shares->assign(pendingLamps_.size(), 1.0f);
+  for (size_t i = 0; i < pendingLamps_.size(); ++i) {
+    const PendingLamp& l = pendingLamps_[i];
+    if (!l.hull || !allowed[i] || l.weight <= 0 || !(l.radius > 0)) continue;
+    // (where it stands, less what its own square's middle took of it short of its full 1: alone, n is its own weight)
+    const int x = std::clamp(static_cast<int>((l.at.x - x0) / cell), 0, cols - 1), z = std::clamp(static_cast<int>((l.at.z - z0) / cell), 0, rows - 1);
+    const float dx = x0 + (static_cast<float>(x) + 0.5f) * cell - l.at.x, dz = z0 + (static_cast<float>(z) + 0.5f) * cell - l.at.z;
+    const float n = hullField_[static_cast<size_t>(z) * static_cast<size_t>(cols) + static_cast<size_t>(x)] +
+                    l.weight * (1 - fade((dx * dx + dz * dz) / (l.radius * l.radius)));
+    if (n > 1) (*shares)[i] = (1 + std::log(n)) / n;
   }
 }
 
@@ -3748,6 +3820,8 @@ void World::Render() {
   // what is see-through (shields' bubbles, frames of light): over everything solid and the water
   if (energy.Any()) {  // [energy shields] the bubbles of energy first (energy_shields.h): they bend what is behind them
     Stage("energy shields");
+    energy.SetGround(haveMap_ ? terrain.HeightTexture() : gfx::Texture{}, static_cast<float>(map.width), static_cast<float>(map.height),
+                     terrain.HeightUnit());  // [clearshell] (what stands off it is not bent)
     energy.Draw(view, &post);
     lights.Bind();
   }

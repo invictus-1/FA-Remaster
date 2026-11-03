@@ -371,7 +371,11 @@ void StrategicIcons::Draw() {
     rect(x0, y0, x0 + 2 * half, y0 + high, 0xff000000u);
     // 0xAABBGGRR: green, yellow at middling health, red when low; a unit's work in orange, its shield in pale blue
     const uint32_t color = bar.kind == 1 ? 0xff0098ffu : bar.kind == 2 ? 0xffffc040u : bar.fraction > 0.5f ? 0xff20ff20u : bar.fraction > 0.25f ? 0xff10e8ffu : 0xff2020ffu;
-    if (bar.fraction > 0) rect(x0, y0, x0 + std::max(2 * pixel_, 2 * half * bar.fraction), y0 + high, color);
+    // ([workbar] a unit's work filled as far as it has come, from empty: Chris's big test of 2026-11-01, a mex's upgrade
+    // "starts with too much orange it should be empty then fill" - the least filling of two pixels, a tenth of a small
+    // building's bar on his 4K screen, showed at once. Life and shield keep it: a unit near death still shows its red.)
+    const float filled = bar.kind == 1 ? std::floor(2 * half * bar.fraction + 0.5f) : std::max(2 * pixel_, 2 * half * bar.fraction);
+    if (bar.fraction > 0 && filled > 0) rect(x0, y0, x0 + filled, y0 + high, color);
   }
   device_->SetPipeline(pipeline_);
   device_->SetConstants(0, &view_.constants, sizeof view_.constants);

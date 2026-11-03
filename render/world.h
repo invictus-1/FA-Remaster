@@ -664,6 +664,23 @@ class World {
   // [lampcolour] (Chris, 2026-10-28) a unit's own faint glow (its lamps of kind 'hull') in its army's colour (true, as
   // before), or in its faction's own, the colour its lamps' file gives (UEF blue whatever its army's colour)
   bool lampsTeamColour = true;
+  // [hullglow] (Chris's big test of 2026-11-01: "lights being too bright at night", "a very bright red glow ... stacking on
+  // top of other structures", "unit glow is a bit bright ... for battleship") a unit's own glow (its lamps of kind 'hull')
+  // toned down: `hullGlow` times as strong and `hullReach` times as far as its lamps' file says (0.75 and 0.85, about half
+  // the light in all; 1 and 1 as before), an army's colour as bright to the eye whatever its hue (`hullEvenColours`: a
+  // yellow army's glow was four times a red one's, as light; the brightest hues lowered toward the red's), half of it in
+  // the air (`hullAir`, 1 as
+  // before: the fog round a base glowed in the army's colour) and, with steadyLamps, the glows that lie over each other
+  // sharing (`hullShare`: where n glows add up, each 1 / n of 1 + ln(n) of them, as the build lights share, so that a
+  // crowded base glows more than one building, never without bound). Viewer --hull-glow old: all as before.
+  float hullGlow = 0.75f, hullReach = 0.85f, hullAir = 0.5f;
+  bool hullEvenColours = true, hullShare = true;
+  // [lampbudget] (Chris's big test: "top circle is no light but at zoom a light pops", one lamp lit of a naval factory's
+  // three alike) where many units are lit, the units near what the camera looks at keep all their lamps (the most a unit
+  // lights, 6,000 lamps over the units in reach, given in full within a sixth of the lamps' reach round it, falling to the
+  // even share by two fifths of it), so that the building one looks at does not light more of its lamps as one zooms in.
+  // False: every unit in reach the same share, as before (viewer --lamp-budget even).
+  bool lampsNearFirst = true;
   // Battle scars on units (unit_wear.h): each unit keeps marks of the hits it survived, of the kind of what hit it,
   // in three tiers by all the damage it has taken, mended (not gone) as it is repaired. Modern look; off by default.
   // Snow on units (unit_wear.h): each unit holds its own share of the lying snow, which builds up while it stands
@@ -1054,7 +1071,11 @@ class World {
     uint32_t unit = 0;     // which call of AddLamps it came from (a unit's own lamps do not cut each other)
     uint8_t order = 0;     // the crowded squares' order: 2 a building's, 1 a unit's lit the frame before, 0 others
     bool beam = false;
+    bool hull = false;     // [hullglow] a unit's own glow (shared with those it lies over: hullShare)
+    float air = 1;         // [hullglow] its share in the air (Lights::Add)
   };
+  std::vector<float> hullField_;  // [hullglow] (hullShare) how many hull glows' worth of light lies on each square, FlushLamps
+  void ShareHullGlows(const std::vector<uint8_t>& allowed, std::vector<float>* shares);
   std::vector<PendingLamp> pendingLamps_;
   uint32_t pendingUnits_ = 0;
   struct LampLevel {

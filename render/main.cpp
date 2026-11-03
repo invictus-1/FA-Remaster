@@ -200,6 +200,13 @@
 // --leaf-light  the sun's light through leaves, grass blades and plants (World::leafLight; modern look)
 // --lamp-colour team|faction  [lampcolour] a unit's own faint glow (its 'hull' lamps) in its army's colour (team, the
 //           default) or its faction's own (faction: UEF blue whatever the army's colour; World::lampsTeamColour)
+// --hull-glow old|<strength>  [hullglow] a unit's own glow as before (old: as strong and as far as its lamps' list says, the
+//           army's colour as it is, all of it in the air, glows lying over each other adding up), or that strength (0.75 unless
+//           given; World::hullGlow, hullReach, hullEvenColours, hullAir, hullShare)
+// --lamp-budget even  [lampbudget] every unit in reach lights the same share of its lamps, as before (World::lampsNearFirst:
+//           those near what the camera looks at all of them)
+// --merge-bright  [mergeflux] lights merged in crowded squares as bright as all of them at their middle, as before
+//           (Lights::mergeFlux)
 // --energy-shields  shields that look like energy (World::energyShields, energy_shields.h; modern look): a bubble bends
 //           what is behind it, rings run across it from each hit, its pattern flares where hit and as it weakens, its
 //           light falls on what is inside it; --energy-shield-health h: how much of its shield a bubble whose unit is
@@ -209,6 +216,11 @@
 //           [litshell] --energy-shell plain: the shell as before (its look its own; default lit: it takes the world's light,
 //           the sky and sun mirrored, the small lights, the air; the UEF's with a hex of its own); --energy-hex s: that hex's
 //           spacing, world units (1.2; 0: the texture's pattern)
+//           [clearshell] --energy-look 1028: the look of 2026-10-28 (the UEF's dome hazier, its far side and lines at full,
+//           rain's sparks lighting its cells, the bending at full, units bent too; EnergyShields::Classic1028); default the
+//           clearer look of 2026-11-03 (Chris's big test); --energy-bend b: how much what is behind bends (0.35; 1 as of
+//           2026-10-28; 0 none); --energy-steady on|off: what stands off the ground (units) is never bent (on);
+//           --energy-light l, --energy-veil v, --energy-lines l, --energy-far f: EnergyShields' light, veil, restLines, farSide
 // --ping-test  [pings] without a game: FAF's four pings (alert, move, attack, nuke) as its SimPing.lua makes them, script
 //           entities with the ping's mesh pulsing in size, in a row round where the camera starts, and a UEF ferry beacon
 //           in front of them (placed.h: both drawn by their meshes' CommandFeedback shaders, as the original does)
@@ -848,7 +860,14 @@ struct Options {
   int energyTest = 0;                   // --energy-test
   int energyShell = 1;                  // --energy-shell plain|lit ([litshell])
   bool lampsTeamColour = true;          // --lamp-colour team|faction ([lampcolour])
+  float hullGlow = 0.75f;               // --hull-glow ([hullglow]; < 0: old)
+  bool lampsNearFirst = true;           // --lamp-budget ([lampbudget])
+  bool mergeFlux = true;                // --merge-bright ([mergeflux])
   float energyHex = -1;                 // --energy-hex s ([litshell]; -1: its own)
+  bool energyClassic = false;           // --energy-look 1028 ([clearshell])
+  float energyBend = -1;                // --energy-bend b ([clearshell]; -1: its own)
+  int energySteady = -1;                // --energy-steady on|off ([clearshell]; -1: its own)
+  float energyLight = -1, energyVeil = -1, energyLines = -1, energyFar = -1;  // --energy-light/-veil/-lines/-far ([clearshell])
   bool pingTest = false;                // [pings] --ping-test
   bool unitScars = false, unitSnow = false;  // --unit-scars, --unit-snow
   bool unitDirt = false;                // --unit-dirt [unit dirt]
@@ -1037,6 +1056,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--noshadows") o->shadows = false;
     else if (a == "--no-lamp-shadows") o->lampShadows = false;
     else if (a == "--no-steady-lamps") o->steadyLamps = false;  // [nightlight]
+    else if (a == "--merge-bright") o->mergeFlux = false;        // [mergeflux]
     else if (a == "--no-tracers") o->tracers = false;
     else if (a == "--no-shore-soak") o->shoreSoak = false;  // [bigtest]
     else if (a == "--plain-ground") o->richGround = false;
@@ -1303,7 +1323,16 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--energy-test") o->energyTest = std::max(0, atoi(v));
     else if (a == "--energy-shell") o->energyShell = std::string(v) == "plain" ? 0 : 1;
     else if (a == "--energy-hex") o->energyHex = static_cast<float>(atof(v));
+    else if (a == "--energy-look") o->energyClassic = std::string(v) == "1028";
+    else if (a == "--energy-bend") o->energyBend = std::max(0.0f, static_cast<float>(atof(v)));
+    else if (a == "--energy-steady") o->energySteady = std::string(v) == "off" ? 0 : 1;
+    else if (a == "--energy-light") o->energyLight = std::max(0.0f, static_cast<float>(atof(v)));
+    else if (a == "--energy-veil") o->energyVeil = std::max(0.0f, static_cast<float>(atof(v)));
+    else if (a == "--energy-lines") o->energyLines = std::max(0.0f, static_cast<float>(atof(v)));
+    else if (a == "--energy-far") o->energyFar = std::max(0.0f, static_cast<float>(atof(v)));
     else if (a == "--lamp-colour") o->lampsTeamColour = std::string(v) != "faction";  // [lampcolour]
+    else if (a == "--hull-glow") o->hullGlow = std::string(v) == "old" ? -1.0f : std::max(0.0f, static_cast<float>(atof(v)));  // [hullglow]
+    else if (a == "--lamp-budget") o->lampsNearFirst = std::string(v) != "even";  // [lampbudget]
     else if (a == "--hot-metal-lights") o->hotLights = std::max(0, atoi(v));
     else if (a == "--hot-metal-smoke") o->hotSmoke = std::max(0.0f, static_cast<float>(atof(v)));
     else if (a == "--wreck-test") {
@@ -2096,9 +2125,24 @@ int main(int argc, char** argv) {
   if (opt.plantsRegrow > 0) world.plantLife.regrow = opt.plantsRegrow;      // [plants]
   world.energyShields = opt.energyShields;
   world.lampsTeamColour = opt.lampsTeamColour;  // [lampcolour]
+  if (opt.hullGlow < 0) {  // [hullglow] (old: all as before)
+    world.hullGlow = world.hullReach = world.hullAir = 1;
+    world.hullEvenColours = world.hullShare = false;
+  } else {
+    world.hullGlow = opt.hullGlow;
+  }
+  world.lampsNearFirst = opt.lampsNearFirst;  // [lampbudget]
+  world.lights.mergeFlux = opt.mergeFlux;     // [mergeflux]
   if (opt.energyShieldHealth >= 0) world.energy.healthUnknown = opt.energyShieldHealth;
   world.energy.litShell = opt.energyShell != 0;  // [litshell]
   if (opt.energyHex >= 0) world.energy.hexSize = opt.energyHex;
+  if (opt.energyClassic) world.energy.Classic1028();  // [clearshell]
+  if (opt.energyBend >= 0) world.energy.bend = opt.energyBend;
+  if (opt.energySteady >= 0) world.energy.steadyUnits = opt.energySteady != 0;
+  if (opt.energyLight >= 0) world.energy.light = opt.energyLight;
+  if (opt.energyVeil >= 0) world.energy.veil = opt.energyVeil;
+  if (opt.energyLines >= 0) world.energy.restLines = opt.energyLines;
+  if (opt.energyFar >= 0) world.energy.farSide = opt.energyFar;
   world.unitScars = opt.unitScars;
   world.models.lampScale = opt.lampScale;  // [unit lamps] (--lamp-scale)
   world.models.hitShapes = opt.unitScars;  // (units' models keep their triangles for where hits lie: unit_wear.h)

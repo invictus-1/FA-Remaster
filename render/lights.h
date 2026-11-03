@@ -105,6 +105,9 @@ class Lights {
   // to what the camera looks at (a quarter nearer), so that two lamps about as near do not take it in turns, the one
   // without its shadow map shadowed by rays or not at all.
   bool steady = false;
+  // [mergeflux] lights merged in crowded squares (Build) keep the light of those they stand for in all, not all their
+  // colours at their middle (false: as before, viewer --merge-bright)
+  bool mergeFlux = true;
   int shadowSwaps = 0;  // (MOHO64_DEBUG_NIGHTLIGHT) beams given a shadow map in the last PlaceShadows that had none the frame before
   int leftOut = 0;      // lights left out of crowded squares in the last Build (each square's count over kMostInSquare, summed)
   int count = 0;              // lights in the last Build
