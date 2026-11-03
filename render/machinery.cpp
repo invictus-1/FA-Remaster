@@ -4,8 +4,10 @@
 #include <cmath>
 #include <cstdlib>
 
+#include "build_effects.h"
 #include "json.h"
 #include "particles.h"
+#include "ribbons.h"
 
 namespace render {
 
@@ -168,6 +170,30 @@ std::shared_ptr<const MachinerySpec> ReadMachinery(const std::string& text, cons
         spec->beltBone = part.bone;
       }
     }
+    // [buildarms] its aim at what is built, and its beams
+    auto vec3 = [](const JsonValue& v, Vec3 d) {
+      return v.items.size() >= 3 ? Vec3{static_cast<float>(v.items[0].NumberOr(d.x)), static_cast<float>(v.items[1].NumberOr(d.y)), static_cast<float>(v.items[2].NumberOr(d.z))} : d;
+    };
+    const JsonValue& aim = b["aim"];
+    if (aim.kind != JsonValue::Null) {
+      part.aim.at = BoneNamed(bones, aim["at"].StringOr(""));
+      part.aim.lift = static_cast<float>(aim["lift"].NumberOr(0));
+      part.aim.strength = std::clamp(static_cast<float>(aim["strength"].NumberOr(1)), 0.0f, 1.0f);
+      part.aim.axis = vec3(aim["axis"], Vec3{0, 0, 1});
+      if (Length(part.aim.axis) < 1e-5f) part.aim.axis = Vec3{0, 0, 1};
+      part.aim.axis = Normalize(part.aim.axis);
+    }
+    for (const JsonValue& e : b["beams"].items) {
+      MachinerySpec::Beam beam;
+      beam.blueprint = e["blueprint"].StringOr("");
+      beam.at = BoneNamed(bones, e["at"].StringOr(""));
+      beam.lift = static_cast<float>(e["lift"].NumberOr(0));
+      beam.width = std::max(0.01f, static_cast<float>(e["width"].NumberOr(0.08)));
+      beam.offset = vec3(e["offset"], Vec3{});
+      for (const JsonValue& w2 : e["on_keys"].items)
+        if (w2.items.size() >= 2) beam.windows.push_back({static_cast<float>(w2.items[0].NumberOr(0)), static_cast<float>(w2.items[1].NumberOr(0))});
+      if (beam.at >= 0) part.beams.push_back(beam);
+    }
     spec->parts.push_back(part);
   }
   // a part's parent that is a part itself comes before it (the file's order is taken; told when it is not so)
@@ -320,6 +346,25 @@ float Machinery::PoseUnit(const FrameUnit& unit, const Model& model, Vec3 at, co
     const Vec3 relP = Rotate(back, rest.position + move - restParent.position);
     turned[i] = Mul(pq, relQ);
     placed[i] = pp + Rotate(pq, relP);
+    // [buildarms] turned toward what is built, by its work: its axis onto the way to the target (the shortest turn)
+    if (part.aim.at >= 0 && w > 0) {
+      Vec3 tp;
+      Quat tq;
+      simPose(static_cast<size_t>(part.aim.at), &tp, &tq);
+      const Vec3 to = tp + Vec3{0, part.aim.lift * toModel, 0} - placed[i];
+      const Vec3 now = Rotate(turned[i], Rotate(Conjugate(rest.rotation), part.aim.axis));
+      if (Length(to) > 1e-4f) {
+        const Vec3 a = Normalize(now), d = Normalize(to);
+        const float c = std::clamp(Dot(a, d), -1.0f, 1.0f);
+        Vec3 ax = Cross(a, d);
+        if (Length(ax) > 1e-6f) {
+          const float angle = std::acos(c) * w * part.aim.strength;
+          ax = Normalize(ax);
+          const Quat by{ax.x * std::sin(angle * 0.5f), ax.y * std::sin(angle * 0.5f), ax.z * std::sin(angle * 0.5f), std::cos(angle * 0.5f)};
+          turned[i] = Mul(by, turned[i]);
+        }
+      }
+    }
     if (parent >= 0 && of < spec.parts.size() && hidden[of]) hidden[i] = true;
   }
 
@@ -387,6 +432,38 @@ float Machinery::PoseUnit(const FrameUnit& unit, const Model& model, Vec3 at, co
   ++posed;
 
   const float belt = spec.beltBone >= 0 ? static_cast<float>(s.belt) : -1.0f;
+  // [buildarms] its parts' build beams while it builds (the first view: the ribbons' beams are the frame's, drawn in each)
+  if (first_ && w > 0.5f && ribbons_) {
+    auto world = [&](Vec3 p) { return at + Rotate(turn, p * model.scale); };
+    for (size_t i = 0; i < spec.parts.size(); ++i) {
+      const MachinerySpec::Part& part = spec.parts[i];
+      if (part.beams.empty() || hidden[i]) continue;
+      const float t = cycle(part.work);
+      for (size_t k = 0; k < part.beams.size(); ++k) {
+        const MachinerySpec::Beam& beam = part.beams[k];
+        bool on = beam.windows.empty();
+        for (const auto& win : beam.windows) on = on || (win.first <= win.second ? t >= win.first && t < win.second : t >= win.first || t < win.second);
+        if (!on) continue;
+        Vec3 tp;
+        Quat tq;
+        simPose(static_cast<size_t>(beam.at), &tp, &tq);
+        const Quat rest = model.bones[part.bone].rotation;
+        const Vec3 tip = world(placed[i] + Rotate(turned[i], Rotate(Conjugate(rest), beam.offset * toModel)));
+        const Vec3 end = world(tp + Vec3{0, beam.lift * toModel, 0});
+        // the game's build beam (the faction's look where the remastered effects have one), its light and sparks as the
+        // game's own beams have them (effects.cpp)
+        static const std::string kBuildBeam = "/effects/emitters/build_beam_01_emit.bp";
+        const std::string& bp = beam.blueprint.empty() ? kBuildBeam : beam.blueprint;
+        if (!ribbons_->Beam(bp, tip, end, faction)) ribbons_->PlainBeam(tip, end, Vec3{0.35f, 0.75f, 1.0f}, beam.width);
+        if (build_ && build_->On()) {
+          std::string unusedRamp;
+          Vec3 glow{0, 0, 0};
+          if (!ribbons_->Glows(bp, &unusedRamp, &glow, faction)) glow = Vec3{0, 0, 0};
+          build_->AddBeam(tip, end, faction, glow, (static_cast<uint64_t>(unit.id) << 32) ^ (static_cast<uint64_t>(i + 1) << 8) ^ k ^ (1ull << 62));
+        }
+      }
+    }
+  }
   // its emitters (the first view): playing while their part's cycle is within a window, on the part they are on
   if (!first_ || !particles_) return belt;
   size_t n = 0;

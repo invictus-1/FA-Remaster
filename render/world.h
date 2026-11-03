@@ -426,7 +426,7 @@ class World {
   ModelCache models;
   MeshRenderer meshes;
   Particles particles;
-  Machinery machinery{&particles};  // [machinery] (factories' parts at work: machinery.h)
+  Machinery machinery{&particles, &ribbons, &build};  // [machinery] (factories' parts at work: machinery.h)
   Ribbons ribbons;
   Decals decals;
   Lights lights;

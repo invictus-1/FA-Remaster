@@ -35,6 +35,8 @@
 namespace render {
 
 class Particles;
+class Ribbons;
+class BuildEffects;
 
 struct MachinerySpec {
   struct Key {
@@ -66,10 +68,32 @@ struct MachinerySpec {
     Vec3 axis{0, 0, 1};     // (Loop)
     float from = 0, to = 0, gap = 0;
   };
+  // [buildarms] (Chris's big test, 2026-11-02: "the extra arms just move but don't actually help build like shoot the build
+  // laser thing and its pointing down") A part that turns toward what the factory builds while it builds: its `axis` (the
+  // way it points at rest, in the model's axes) turned onto the way from its head to the target - a bone of the unit (`at`,
+  // its build attach point) lifted `lift` units, where the unit being built stands - by `strength` of its work (1: all of
+  // it), after its own motion. Its children follow it.
+  struct Aim {
+    int at = -1;
+    float lift = 0, strength = 1;
+    Vec3 axis{0, 0, 1};
+  };
+  // [buildarms] a build beam from a part (its head moved `offset`, in the model's axes at rest: the tool's tip) to the target
+  // as the aim's (`at`, `lift`): a build beam (the game's, or `blueprint`, in the faction's look) with its sparks and light,
+  // while the factory builds (within the part's own cycle's windows `on_keys`, else all through it)
+  struct Beam {
+    std::string blueprint;  // ("": the game's build beam, /effects/emitters/build_beam_01_emit.bp)
+    int at = -1;
+    float lift = 0, width = 0.08f;
+    Vec3 offset;
+    std::vector<std::pair<float, float>> windows;
+  };
   struct Part {
     int bone = -1, parent = -1;  // in Model::bones
     Motion work, idle;           // while it builds, and while it does not (Still: at rest)
     std::vector<Emitter> emitters;
+    Aim aim;    // [buildarms] (at -1: none)
+    std::vector<Beam> beams;  // [buildarms]
   };
   std::vector<Part> parts;  // parents before their children
   std::vector<Lamp> lamps;
@@ -94,7 +118,7 @@ std::shared_ptr<const MachinerySpec> ReadMachinery(const std::string& text, cons
 
 class Machinery {
  public:
-  explicit Machinery(Particles* particles) : particles_(particles) {}
+  Machinery(Particles* particles, Ribbons* ribbons = nullptr, BuildEffects* build = nullptr) : particles_(particles), ribbons_(ribbons), build_(build) {}
   // Once a frame, before the first view lists its units (`first`: the first view; the others keep its lists). The units
   // not drawn in the frame before are let go (their emitters stopped). `eye`: where the camera is; a factory farther from it
   // than kFar is not worked out (its parts stand at rest and its emitters stop: from there its parts are a few pixels).
@@ -121,6 +145,8 @@ class Machinery {
     std::vector<float> lamps;        // per lamp of the model's lights: its strength this frame (1: as listed)
   };
   Particles* particles_;
+  Ribbons* ribbons_;      // [buildarms] (the beams' line)
+  BuildEffects* build_;   // [buildarms] (their sparks and light, with the remastered build look)
   std::unordered_map<uint32_t, UnitState> units_;
   std::deque<std::vector<FrameBone>> lists_;
   std::deque<std::vector<float>> scaleLists_, glowLists_;

@@ -14,6 +14,9 @@
 // another driver or card refuses it (the library is then begun empty). Several programs may run at once: each reads the
 // file as it starts and writes it back whole when it has added to it (written under another name first, then renamed,
 // so a half-written file is never read); the last writer's is kept. A file grown past kMostBytes is begun afresh.
+// ([pipefull] ui, Chris's big test 2026-11-03: it was not: Save stopped writing once the library passed the cap, the file
+// froze at 268 MB on Oct 30 and every load since made all newer pipelines again, ~48 s before a game was ready. Now the
+// library is written afresh then with the pipelines this run used, which a next run takes again.)
 // Pictures are not changed by any of it: a pipeline taken from the library is the one the driver made.
 #pragma once
 
@@ -26,6 +29,7 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace render::gfx {
@@ -34,7 +38,10 @@ class D3D12PipelineStore {
  public:
   static constexpr uint64_t kMostBytes = 256ull << 20;
   ~D3D12PipelineStore() {
+    for (auto& u : used_) u.second->Release();
+    for (ID3D12PipelineLibrary* old : old_) old->Release();
     if (library_) library_->Release();
+    if (device1_) device1_->Release();
   }
   // Opens the library kept in `folder` (empty: none is kept), for pipelines made with the root signature whose
   // serialized form is `rootSignature`.
@@ -63,7 +70,7 @@ class D3D12PipelineStore {
       hr = device1->CreatePipelineLibrary(nullptr, 0, __uuidof(ID3D12PipelineLibrary), reinterpret_cast<void**>(&library_));
       if (FAILED(hr)) library_ = nullptr;  // (a driver without libraries: pipelines are made as before)
     }
-    device1->Release();
+    device1_ = device1;  // ([pipefull] kept: a library begun afresh at Save)
   }
 
   // A graphics pipeline: taken from the library, else made (and added to it). The result as CreateGraphicsPipelineState's;
@@ -76,6 +83,7 @@ class D3D12PipelineStore {
       std::lock_guard<std::mutex> lock(mutex_);
       if (SUCCEEDED(library_->LoadGraphicsPipeline(name.c_str(), &d, __uuidof(ID3D12PipelineState), reinterpret_cast<void**>(out)))) {
         *kept = true;
+        Used(name, *out);
         return S_OK;
       }
     }
@@ -94,6 +102,7 @@ class D3D12PipelineStore {
       std::lock_guard<std::mutex> lock(mutex_);
       if (SUCCEEDED(library_->LoadComputePipeline(name.c_str(), &d, __uuidof(ID3D12PipelineState), reinterpret_cast<void**>(out)))) {
         *kept = true;
+        Used(name, *out);
         return S_OK;
       }
     }
@@ -107,8 +116,9 @@ class D3D12PipelineStore {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!library_ || !added_) return;
     added_ = 0;
-    const SIZE_T size = library_->GetSerializedSize();
-    if (!size || size >= kMostBytes) return;
+    SIZE_T size = library_->GetSerializedSize();
+    if (size >= kMostBytes && !Afresh(&size)) return;
+    if (!size) return;
     std::vector<uint8_t> data(size);
     if (FAILED(library_->Serialize(data.data(), size))) return;
     const std::string part = path_ + ".part" + std::to_string(GetCurrentProcessId());
@@ -184,9 +194,37 @@ class D3D12PipelineStore {
   void Store(const std::wstring& name, ID3D12PipelineState* state) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (SUCCEEDED(library_->StorePipeline(name.c_str(), state))) ++added_;  // (a name there already: another's, left)
+    state->AddRef();
+    used_.emplace_back(name, state);
+  }
+  // [pipefull] A pipeline this run took from the library (under the lock).
+  void Used(const std::wstring& name, ID3D12PipelineState* state) {
+    state->AddRef();
+    used_.emplace_back(name, state);
+  }
+  // [pipefull] The library past the cap (Save, under the lock): a new one with only this run's pipelines takes its place (the
+  // old one is kept alive to the end, as what was loaded from it may still be asked for); `size` its size. False: none.
+  bool Afresh(SIZE_T* size) {
+    ID3D12PipelineLibrary* fresh = nullptr;
+    if (!device1_ || FAILED(device1_->CreatePipelineLibrary(nullptr, 0, __uuidof(ID3D12PipelineLibrary), reinterpret_cast<void**>(&fresh))) || !fresh)
+      return false;
+    int kept = 0;
+    for (auto& u : used_)
+      if (SUCCEEDED(fresh->StorePipeline(u.first.c_str(), u.second))) ++kept;  // (a name twice: once)
+    const SIZE_T before = library_->GetSerializedSize();
+    old_.push_back(library_);
+    library_ = fresh;
+    *size = library_->GetSerializedSize();
+    fprintf(stderr, "render: Direct3D 12: the kept pipelines passed %llu MB (%llu MB): begun afresh with this run's %d (%llu MB)\n",
+            static_cast<unsigned long long>(kMostBytes >> 20), static_cast<unsigned long long>(before >> 20), kept,
+            static_cast<unsigned long long>(*size >> 20));
+    return *size > 0 && *size < kMostBytes;
   }
 
   ID3D12PipelineLibrary* library_ = nullptr;
+  ID3D12Device1* device1_ = nullptr;                                         // [pipefull]
+  std::vector<std::pair<std::wstring, ID3D12PipelineState*>> used_;          // [pipefull] this run's pipelines (held)
+  std::vector<ID3D12PipelineLibrary*> old_;                                  // [pipefull] libraries replaced (kept to the end)
   std::vector<uint8_t> blob_;  // (what the library was made from: kept while it lives, as Direct3D asks)
   std::string path_;
   uint64_t root_ = 0;
