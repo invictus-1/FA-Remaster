@@ -2853,8 +2853,9 @@ void AdvanceCamera(lua_State* L, Camera* c, float seconds) {
   // A script's focus onto the ground along the view (ClampFocusPos 0x7a9470: the line through the
   // focus in the view's direction, met with the ground; forward only during a timed command).
   // INFERRED: the terrain's height only (the original takes the water's surface where it is
-  // higher).
-  if (c->focusFromScript && UserState::From(L)->config().groundHeight) {
+  // higher). Not while cam_Free is on (FAF 3840's ClampFocusPos skips it while the flag 0x10a645f is 1, so the free
+  // camera no longer snaps behind the terrain: engine-ref/specs/faf3840.md 7).
+  if (c->focusFromScript && !CameraKeys().camFree && UserState::From(L)->config().groundHeight) {
     const auto& ground = UserState::From(L)->config().groundHeight;
     const float pitch = PitchOf(c), d[3] = {std::sin(c->heading) * std::cos(pitch), -std::sin(pitch), std::cos(c->heading) * std::cos(pitch)};
     auto above = [&](float t) { return c->focus[1] + d[1] * t - ground(c->focus[0] + d[0] * t, c->focus[2] + d[2] * t); };

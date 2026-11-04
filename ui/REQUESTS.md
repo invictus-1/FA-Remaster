@@ -2299,6 +2299,16 @@ report's item 4.
 (3) If a SACU's own brackets still float once (1) is in, it is the brackets' projection for a unit in deep water
 (world.cpp:2467, 3525).
 
+### 44. The minimap's range rings as a switch (FAF 3840's ren_MinimapRanges; 2026-11-04, not blocking)
+From the interface chat. The engine's read of FAF 3840 (engine-ref/specs/faf3840.md, U3): `Cartographic::Render`
+0x7d19ff draws the minimap's range rings only while the console bool `ren_MinimapRanges` is on (0x1290964, default 1:
+on, as before); FAF says turning it off saves many fps with many units. Ask: a World / WorldPicture switch for the
+minimap's range rings (default on), if our minimap draws them; tell me its name and I add the console variable
+ren_MinimapRanges and an Options entry ("Range Rings on the Minimap"). If our minimap draws no range rings, say so and
+I only add the console variable for scripts that set it.
+DONE (renderer, 2026-11-04): our minimap draws no range rings (DrawMinimap sets the rings aside for its pass), so no
+switch; the ui keeps the console variable ren_MinimapRanges for the scripts (it changes nothing).
+
 ## To the visuals track
 
 ### 1. The rebuilt UEF commander for the stock commander too (UEL0001)

@@ -1162,6 +1162,7 @@ ConVarNow ConVarOf(lua_State* L, const std::string& key) {
   else if (key == "UI_ALWAYSRENDERSTRATEGICICONS") set("ui_AlwaysRenderStrategicIcons", 'b', looks.iconsAlways);
   else if (key == "UI_NISRENDERICONS") set("ui_NisRenderIcons", 'b', looks.strategicIcons);
   else if (key == "REN_SELECTBOXES") set("ren_SelectBoxes", 'b', looks.selectionMarks);
+  else if (key == "REN_MINIMAPRANGES") set("ren_MinimapRanges", 'b', looks.minimapRanges);
   else if (key == "REN_OBLIVION") set("ren_Oblivion", 'b', !looks.worldShown);  // (true: no world)
   else if (key == "REN_BLOOM") set("ren_Bloom", 'b', looks.bloom);
   else if (key == "UI_SELECTTOLERANCE") set("ui_SelectTolerance", 'f', looks.selectTolerance);
@@ -1418,6 +1419,7 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
     if (key == "UI_ALWAYSRENDERSTRATEGICICONS") return void(looks.iconsAlways = value.empty() ? !looks.iconsAlways : on);
     if (key == "UI_NISRENDERICONS") return void(looks.strategicIcons = value.empty() ? !looks.strategicIcons : on);
     if (key == "REN_SELECTBOXES") return void(looks.selectionMarks = value.empty() ? !looks.selectionMarks : on);
+    if (key == "REN_MINIMAPRANGES") return void(looks.minimapRanges = value.empty() ? !looks.minimapRanges : on);
     if (key == "REN_OBLIVION") return void(looks.worldShown = value.empty() ? !looks.worldShown : !on);  // (true: no world)
     if (key == "REN_BLOOM") return void(looks.bloom = value.empty() ? !looks.bloom : on);
     if (key == "UI_SELECTTOLERANCE") {

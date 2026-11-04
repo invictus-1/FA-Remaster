@@ -676,6 +676,9 @@ struct LookSettings {
   // SetSelectionMarks, SetWorldShown (renderer request 27).
   bool strategicIcons = true, selectionMarks = true, worldShown = true;
   bool bloom = true;
+  // ren_MinimapRanges (FAF 3840: the minimap's range rings drawn only while on, Cartographic::Render 0x7d19ff): kept
+  // for the scripts that set it; our minimap draws no range rings (the renderer, ui request 44), so it changes nothing.
+  bool minimapRanges = true;
   float bloomIntensity = 1.5f;
   // ui_SelectTolerance (FAF's world view sets it from the options' Selection Threshold, 10 / 10 /
   // 20 for normal play, reclaim mode and replays, and -1000 in its ignore mode, where clicks pick
