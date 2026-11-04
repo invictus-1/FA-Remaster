@@ -321,6 +321,31 @@ says `the rules are loaded again with the engine's script fixes`, about one seco
 - **Why it is safe, what it changes:** only replays of this engine's own 3839 games, and only in a beat where a player
   was terminated (or before the first Advance). Nothing else of the stream is touched.
 
+### 12. Remaster aliases of emitter files (2026-11-04)
+
+- **What it is for:** the remastered renderer gives each use of a shared stock emitter file a look of its own.
+  Chris, 2026-11-04: each use of `/effects/emitters/small_test_fire.bp` (the stock small fireball) gets a fireball
+  of its own. A use is one table of `EffectTemplates.lua` that holds the file: ten distinct tables, found by walking
+  every table reachable from a session's `_G`. Four are literal: `ExplosionSmall`, `ExplosionSmallAir`,
+  `FireCloudMed01`, `FireCloudSml01`. Six are `table.concatenate` copies of those: `ExplosionEffectsSml01`,
+  `ExplosionEffectsMed01` (= `ExplosionEffectsDefault01`), `DefaultHitExplosion01`, `DefaultHitExplosion02`,
+  `DefaultMissileHit01` (= `CMissileHit01`) and `CMissileHit02`.
+- **What we do:** the table of aliases is compiled in, `src/sim/effect_aliases.cpp` (`moho::EffectAliases()`:
+  alias path, stock path). One table serves the engine and the renderer, so they cannot drift. With the fixes:
+  - `data/fixes/hook/lua/effecttemplates.lua` changes the one entry of each of the ten tables in place, at the same
+    index, to its alias, under `/effects/emitters/remaster/`.
+  - `Sim::Start` registers each alias as its stock emitter's blueprint, which is all the sim reads of one: kind and
+    Lifetime (`SimBlueprints::AddEffectAlias`).
+  - After `BeginSession`, `Sim::Start` checks that every remaster path in `EffectTemplates.lua`'s tables is
+    registered, and warns otherwise. The log says `10 remaster aliases of emitter files registered` and
+    `EffectTemplates.lua names 10 remaster aliases, all registered`.
+  - The renderer draws an alias as its stock file unless a remastered look overrides it.
+  - `MOHO64_DEBUG_FXBP` also names each alias the first time an effect is made from it.
+- **Why it is safe, what it changes:** nothing the sim computes. The effect is the one the stock path made: the same
+  calls, the same blueprint values, no draw. No game file goes into the repository: the alias is the stock
+  blueprint's values under another id, made in the engine, so no Lua blueprint fix (and no second rules load) is
+  needed. The original's replays play without the fixes, so with the stock paths.
+
 ## Looked broken, left alone
 
 ### The other weak tables of the sim's scripts (2026-10-21, with 7-10)

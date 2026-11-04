@@ -2,6 +2,7 @@
 // predicted collisions and the reactions to them; and the steering's per-tick spline handling
 // (land_motion_blocking.md 2.4).
 #include "sim/steering.h"
+#include "sim/write_trap.h"
 
 #include <algorithm>
 #include <atomic>
@@ -1276,6 +1277,7 @@ void SteeringTickUnits(Sim& sim, const std::vector<Unit*>& all) {  // (brain+0xa
   for (size_t i = 0; i < all.size(); ++i) {
     Unit* u = all[i];
     if (u->destroyQueued) continue;
+    wtrap::Turn trapTurn(u);  // (MOHO64_PAR_WRITETRAP: the unit's own pages writable for its turn)
     SteeringTick(sim, u);
   }
   sim.inSteeringStage = false;

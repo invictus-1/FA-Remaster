@@ -29,6 +29,7 @@
 #include <iterator>
 #include <optional>
 #include <map>
+#include <set>
 #include <strings.h>
 
 #include "core/backtrace.h"
@@ -48,6 +49,7 @@
 #include "script/script_state.h"
 #include "script/threads.h"
 #include "sim/commands.h"
+#include "sim/effect_aliases.h"
 #include "sim/motion.h"
 #include "sim/navigation.h"
 #include "sim/ai_brain.h"
@@ -948,6 +950,61 @@ std::map<std::string, ScriptState::ExtraHook> FixesHooks() {
 
 void Sim::JoinFixesHooks(ScriptState& st) { st.SetExtraHooks(FixesHooks()); }
 
+namespace {
+// The remaster aliases of emitter files (sim/effect_aliases.h, docs/deviations.md 12), with the fixes only: each
+// alias becomes another id of its stock emitter's blueprint (the same kind and Lifetime; the sim reads nothing else
+// of one), so the scripts' alias paths make the effects the stock paths made.
+void RegisterEffectAliases(SimBlueprints& bps) {
+  size_t n = 0;
+  for (const auto& [alias, stock] : EffectAliases()) {
+    if (bps.AddEffectAlias(alias, stock)) ++n;
+    else Logf(LogLevel::Warning, "moho64: the remaster alias %s has no stock emitter %s", alias.c_str(), stock.c_str());
+  }
+  Logf(LogLevel::Info, "moho64: %zu remaster aliases of emitter files registered", n);
+}
+
+// The scripts' side of the aliases (data/fixes/hook/lua/effecttemplates.lua) names the same paths, which Lua cannot
+// read from the table above: every path under /effects/emitters/remaster/ in EffectTemplates.lua's tables must be a
+// registered effect blueprint, else one warning names those that are not. Reads only (no Lua allocation).
+void CheckEffectAliases(lua_State* L, const SimBlueprints& bps) {
+  const int top = lua_gettop(L);
+  lua_pushstring(L, "__modules");
+  lua_rawget(L, LUA_GLOBALSINDEX);
+  if (lua_istable(L, -1)) {
+    lua_pushstring(L, "/lua/effecttemplates.lua");
+    lua_rawget(L, -2);
+  }
+  std::string missing;
+  std::set<std::string> found;  // (distinct paths: a table can be held under two names)
+  if (lua_istable(L, -1)) {
+    const int mod = lua_gettop(L);
+    lua_pushnil(L);
+    while (lua_next(L, mod)) {
+      if (lua_istable(L, -1)) {
+        const int list = lua_gettop(L);
+        lua_pushnil(L);
+        while (lua_next(L, list)) {
+          if (lua_type(L, -1) == LUA_TSTRING) {
+            const char* s = lua_tostring(L, -1);
+            if (strncasecmp(s, "/effects/emitters/remaster/", 27) == 0) {
+              if (found.insert(s).second && !bps.FindEffect(s)) missing += std::string(missing.empty() ? "" : ", ") + s;
+            }
+          }
+          lua_pop(L, 1);
+        }
+      }
+      lua_pop(L, 1);
+    }
+  }
+  lua_settop(L, top);
+  if (!missing.empty())
+    Logf(LogLevel::Warning, "moho64: EffectTemplates.lua names remaster aliases that are not registered (sim/effect_aliases.cpp): %s",
+         missing.c_str());
+  else if (!found.empty())
+    Logf(LogLevel::Info, "moho64: EffectTemplates.lua names %zu remaster aliases, all registered", found.size());
+}
+}  // namespace
+
 // ---- Sim -----------------------------------------------------------------------------------
 
 Sim::Sim(Vfs* vfs, std::vector<std::string> hookDirs, std::vector<std::string> modUids)
@@ -1355,6 +1412,7 @@ bool Sim::Start(const ReplayHeader& replay) {
   lua_setglobal(L, "__language");
   bps_.fileExists = [vfs = vfs_](const std::string& path) { return vfs->Exists(path); };
   bps_.CopyToSim(rules_->L(), L);
+  if (fixes) RegisterEffectAliases(bps_);
   RegisterCategoryBindings(L, &bps_);
   if (!keepRules) rules_.reset();  // the rules state is done (a host that asked keeps it: TakeRules)
 
@@ -1402,6 +1460,7 @@ bool Sim::Start(const ReplayHeader& replay) {
   MOHO_LAP(load, "load: BeginSession");
   if (!CallGlobal("BeginSession", 0)) return false;
   lap("BeginSession");
+  if (fixes) CheckEffectAliases(L, bps_);
   MOHO_LAP(load, "load: AI analysis and first sync");
   ai::AfterSessionStart(*this);  // our own AI's map analysis, in a session with our AI (or MOHO64_AI_MAPDUMP)
   ai::IndexAfterSessionStart(*this);  // ... its unit ratings and index (or MOHO64_AI_RATINGS)
@@ -2674,7 +2733,35 @@ void Sim::Tick() {
   // 0x7000e3, still on its spline, and brakes hard (Update mode 4, 0.19 then 0.114 a beat); 0x7000e3's navigator
   // stops it at its pickup cell only afterwards, in army 7's turn. Ours ran every navigator first: 0x7000e3 had no
   // spline left by then, no meeting, and 0x100013 turned onto its new course.
-  for (uint32_t a = 0;; ++a) {
+  // Parallel order (docs/parallel-mode.md 3.1, step 5.1): no interleave. Every army's navigators, then every army's
+  // steering, then every army's weapons, each stage over all the units in the armies' order (by army, then creation),
+  // taken afresh for each stage. So no army's steering predicts against another army's splines of last beat: every
+  // navigator of the beat has run before any steering. (Still on the sim's thread; the write trap covers each stage.)
+  if (order == SimOrder::kParallel) {
+    auto stageUnits = [this] { return std::vector<Unit*>(ArmyStageOrder()); };
+    {
+      std::optional<wtrap::Phase> trap;
+      if (wtrap::On()) trap.emplace(tick_, "navigators");
+      MOHO_LAP(lap, "navigators+paths");
+      LandNavTickUnits(*this, stageUnits());
+      phases.Lap(PhaseTimer::kNavigators);
+    }
+    {
+      std::optional<wtrap::Phase> trap;
+      if (wtrap::On()) trap.emplace(tick_, "steering");
+      MOHO_LAP(lap, "steering");
+      SteeringTickUnits(*this, stageUnits());
+      phases.Lap(PhaseTimer::kSteering);
+    }
+    {
+      std::optional<wtrap::Phase> trap;
+      if (wtrap::On()) trap.emplace(tick_, "weapons");
+      MOHO_LAP(lap, "weapons");
+      WeaponsTickUnits(*this, stageUnits());
+      phases.Lap(PhaseTimer::kWeapons);
+    }
+  }
+  for (uint32_t a = 0; order != SimOrder::kParallel; ++a) {
     // the army's units in creation order (ArmyStageOrder: by army, then creation), taken afresh for each stage: a
     // script run by a stage may create units
     auto armyUnits = [this](uint32_t army) {
