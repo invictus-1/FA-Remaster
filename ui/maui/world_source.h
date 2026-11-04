@@ -40,6 +40,9 @@ struct WorldGhost {
   float position[3] = {0, 0, 0};
   float heading = 0;
   bool free = true;
+  // The ghost under the cursor (the building being placed, or a building's order whose waypoint is dragged), not an
+  // ordered site: the renderer draws it brighter (render::WorldPicture::BuildPreview::placing, ui request 41).
+  bool placing = false;
 };
 struct WorldLine {
   float a[3], b[3];

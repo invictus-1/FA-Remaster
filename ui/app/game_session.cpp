@@ -500,6 +500,7 @@ struct GameSession::Picture : WorldSource {
       p.position[0] = g.position[0], p.position[1] = g.position[1], p.position[2] = g.position[2];
       p.heading = g.heading;
       p.free = g.free;
+      p.placing = g.placing;  // (the cursor's ghost, brighter than the ordered sites: ui request 41)
       previews.push_back(p);
     }
     picture.SetBuildPreviews(previews);

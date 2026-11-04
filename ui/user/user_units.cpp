@@ -5581,6 +5581,7 @@ bool DraggedBuildingSite(lua_State* L, WorldGhost* site, float from[3]) {
   site->blueprint = d.blueprint;
   for (int i = 0; i < 3; ++i) site->position[i] = d.at[i], from[i] = d.hasFrom ? d.from[i] : NAN;
   site->free = d.fit;
+  site->placing = true;  // (under the cursor: drawn brighter than the ordered sites)
   return true;
 }
 

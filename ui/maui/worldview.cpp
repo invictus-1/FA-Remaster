@@ -1213,6 +1213,7 @@ class WorldView : public Control {
         }
       }
     }
+    for (WorldGhost& g : scene.ghosts) g.placing = true;  // (all of them under the cursor, before the ordered sites)
     placingGhosts_ = scene.ghosts;  // (the building about to be placed, for the extractor snap)
     // Round each building being placed, the outline of the ground it takes: green where it can
     // stand, red where not (the guide of the original, by Chris's pictures of it).
