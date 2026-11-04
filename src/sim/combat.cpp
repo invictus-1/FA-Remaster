@@ -19,6 +19,7 @@
 // Intel (approximation, TODO(M4d): the original's recon grids): every tick each army's units
 // see enemies within their vision / radar / sonar / omni radii; allies share what they see.
 #include "core/dmath.h"
+#include "core/workers.h"
 #include "sim/combat.h"
 
 #include <algorithm>
@@ -108,7 +109,7 @@ int LayerBit(const std::string& l) {
   }
 }
 int EntityLayerBit(const Entity* e) {
-  if (e->kind == Entity::Kind::Unit) return LayerBit(static_cast<const Unit*>(e)->layer);
+  if (e->kind == Entity::Kind::Unit) return LayerBit(SeenLayer(static_cast<const Unit*>(e)));
   if (e->kind == Entity::Kind::Projectile) return LayerBit(static_cast<const Projectile*>(e)->layer);
   if (e->kind == Entity::Kind::Prop) return 1;
   return 0;
@@ -455,12 +456,12 @@ static Vec3 UnitTargetPoint(const Unit* u, int bone) {
     // is asked of Unit::GetBoneWorldTransform with bone -1, which is the pose's own place and half the unit's
     // SizeY above it (0x6aa637: straight up in the world's axes, the offset composed as the outer transform),
     // without the collision offset the centre below has.
-    const Vec3& bp = u->poseSet ? (u == tl_poseAtBeatStart ? u->prevPoseBasePos : u->poseBasePos) : u->position;
+    const Vec3& bp = u->poseSet ? (u == tl_poseAtBeatStart ? u->prevPoseBasePos : u->poseBasePos) : SeenPos(u);
     return Add(bp, Vec3{0.0f, u->bpSizeY * 0.5f, 0.0f});
   }
   const bool held = u == tl_atBeatStart;
-  const Vec3& p = held ? u->lastPosition : u->position;
-  if (u->blueprint) return Add(p, RotateM(held ? u->lastOrientation : u->orientation, u->bpCenter));  // bone -1 (0x679d19)
+  const Vec3& p = held ? u->lastPosition : SeenPos(u);
+  if (u->blueprint) return Add(p, RotateM(held ? u->lastOrientation : SeenOri(u), u->bpCenter));  // bone -1 (0x679d19)
   return p;
 }
 
@@ -593,8 +594,8 @@ void BoneWorld(const Entity* e, int bone, Vec3* pos, Quat* rot) {
     return;
   }
   if (bone < 0 || !e->skeleton || bone >= e->skeleton->Count()) {
-    *pos = e->position;
-    *rot = e->orientation;
+    *pos = SeenPos(e);  // (another unit in parallel order's phase A: where it stood when the beat began)
+    *rot = SeenOri(e);
     return;
   }
   const auto& bones = e->skeleton->bones();
@@ -621,8 +622,8 @@ void BoneWorld(const Entity* e, int bone, Vec3* pos, Quat* rot) {
   int chain[64];
   int n = 0;
   for (int i = bone; i >= 0 && n < 64; i = bones[static_cast<size_t>(i)].parent) chain[n++] = i;
-  Quat r = e->orientation;
-  Vec3 p = e->position;
+  Quat r = SeenOri(e);
+  Vec3 p = SeenPos(e);
   if (e->kind == Entity::Kind::Unit) {  // the pose's own world transform (Unit::GetBoneWorldTransform 0x6aa5c0)
     const Unit* u = static_cast<const Unit*>(e);
     if (u->poseSet) {
@@ -684,6 +685,13 @@ const std::vector<bool>& BpCategoryMask(Sim& sim, const char* name) {
     if (c != sim.blueprints().Categories().end())
       for (int i : c->second)
         if (i >= 0 && static_cast<size_t>(i) < bits.size()) bits[static_cast<size_t>(i)] = true;
+    // (inside a parallel task, parallel order's phases on the pool: the mask is made for this call only, so that no
+    // task writes the shared map while others read it; the next serial call keeps it. The same bits either way)
+    if (InParallelTask()) {
+      static thread_local std::vector<bool> made;
+      made = std::move(bits);
+      return made;
+    }
     it = cache.emplace(name, std::move(bits)).first;
   }
   return it->second;
@@ -1093,7 +1101,7 @@ bool PickPointBeside(Sim& sim, Entity* e, int* bone, bool above, std::vector<int
   Unit* tu = static_cast<Unit*>(e);
   const CombatBpData& cb = CB(tu);
   const float wl = WaterLevel(sim);
-  if (cb.targetBones.empty() || !e->skeleton) return above ? tu->position.y > wl : wl > tu->position.y;
+  if (cb.targetBones.empty() || !e->skeleton) return above ? SeenPos(tu).y > wl : wl > SeenPos(tu).y;
   for (const std::string& name : cb.targetBones) {
     // (Unit::GetTargetPoint 0x6ab340 for each index: a name the model lacks gives the point half the unit's
     // height above its origin, which for a ship is above the water: it is in the list and can be drawn)
@@ -1103,16 +1111,23 @@ bool PickPointBeside(Sim& sim, Entity* e, int* bone, bool above, std::vector<int
   }
   return !pts->empty();
 }
+// (the draw: the stream's; in parallel order's phase A, where an aircraft's tactics ask whether a weapon may take its
+// target, the keyed draw of the turn's own unit, docs/parallel-mode.md 4.1)
+static inline __attribute__((always_inline)) uint32_t PickIndex(Sim& sim, uint32_t n) {
+  if (tl_phaseATurn)
+    return static_cast<uint32_t>((static_cast<uint64_t>(sim.ERand(const_cast<Unit*>(tl_phaseATurn), Sim::RandPurpose::kTargetPick)) * n) >> 32);
+  return sim.IntRange(n);
+}
 __attribute__((noinline)) bool PickPointAboveWater(Sim& sim, Entity* e, int* bone, bool peek) {
   std::vector<int> pts;
   if (!PickPointBeside(sim, e, bone, true, &pts)) return false;
-  if (!pts.empty() && !peek) *bone = pts[sim.IntRange(static_cast<uint32_t>(pts.size()))];
+  if (!pts.empty() && !peek) *bone = pts[PickIndex(sim, static_cast<uint32_t>(pts.size()))];
   return true;
 }
 __attribute__((noinline)) bool PickPointBelowWater(Sim& sim, Entity* e, int* bone, bool peek) {
   std::vector<int> pts;
   if (!PickPointBeside(sim, e, bone, false, &pts)) return false;
-  if (!pts.empty() && !peek) *bone = pts[sim.IntRange(static_cast<uint32_t>(pts.size()))];
+  if (!pts.empty() && !peek) *bone = pts[PickIndex(sim, static_cast<uint32_t>(pts.size()))];
   return true;
 }
 
@@ -2147,14 +2162,12 @@ Vec3 LeadForwardVelocity(float mv, Vec3 Mpos, Quat Mrot, Vec3 T, Vec3 V) {
 }
 
 // Aim 0x6317b0: the goal direction in the world (NaN: no solution).
-Vec3 Aim(Sim& sim, AimController* c) {
+// What Aim reads of its weapon's target: the point it aims at (NaN: none) and the target's velocity.
+struct AimTargetIn {
+  Vec3 pos, vel;
+};
+AimTargetIn AimTargetRead(Sim& sim, AimController* c) {
   UnitWeapon* w = c->weapon;
-  Unit* u = c->unit;
-  if (c->muzzleBone < 0) return Forward(u->orientation);
-  // the muzzle in last beat's pose (actor+8), moved on by the unit's velocity
-  Vec3 Mpos = c->lastMuzzlePos;
-  Quat Mrot = c->lastMuzzleRot;
-  if (IsMobile(u)) Mpos = Add(Mpos, UnitVelocity(u));  // (vtbl+0x3c)
   Entity* te = TargetEntity(sim, w->target);
   Vec3 tVel = te && !te->dead ? EntityVelocity(te) : Vec3{};
   // The target's velocity is asked of the CAiTarget's entity (0x6319f5..0x631a2b: target+4, vtable +0x3c), and a
@@ -2180,7 +2193,7 @@ Vec3 Aim(Sim& sim, AimController* c) {
   } else {
     tPos = TargetPos(sim, w->target, false);
   }
-  if (IsNaN(tPos)) return NaNVec();
+  if (IsNaN(tPos)) return {tPos, tVel};
   if (te) {
     // FAF patch 0x128b054: a target the entity stage has not ticked yet this beat (entity+0x174 != the sim's
     // tick; for a recon blip (vf+0x1c) the stamp of its source unit, blip+0x270) is taken one tick of its
@@ -2188,6 +2201,22 @@ Vec3 Aim(Sim& sim, AimController* c) {
     const bool ticked = tu ? tu->lastPosTick == sim.tick() : te->lastMoveTick == sim.tick();
     if (!ticked) tPos = Add(tPos, tVel);
   }
+  return {tPos, tVel};
+}
+
+Vec3 Aim(Sim& sim, AimController* c) {
+  UnitWeapon* w = c->weapon;
+  Unit* u = c->unit;
+  if (c->muzzleBone < 0) return Forward(u->orientation);
+  // the muzzle in last beat's pose (actor+8), moved on by the unit's velocity
+  Vec3 Mpos = c->lastMuzzlePos;
+  Quat Mrot = c->lastMuzzleRot;
+  if (IsMobile(u)) Mpos = Add(Mpos, UnitVelocity(u));  // (vtbl+0x3c)
+  // (parallel order: read in phase C1, AimTargetsAhead)
+  const AimTargetIn in = c->targetTick == sim.tick() ? AimTargetIn{c->targetPos, c->targetVel} : AimTargetRead(sim, c);
+  Vec3 tPos = in.pos;
+  const Vec3 tVel = in.vel;
+  if (IsNaN(tPos)) return NaNVec();
   float hDist = DistXZ(tPos, Mpos);
   float mv = w->bp->muzzleVelocity;
   if (hDist < w->bp->muzzleVelocityReduceDistance) mv *= std::sqrt(hDist / w->bp->muzzleVelocityReduceDistance);
@@ -2199,7 +2228,7 @@ Vec3 Aim(Sim& sim, AimController* c) {
            c->label.c_str(), Mpos.x, Mpos.y, Mpos.z, tPos.x, tPos.y, tPos.z, tVel.x, tVel.y, tVel.z, mv,
            static_cast<int>(w->bp->leadTarget && w->target.type == 1), static_cast<int>(phys),
            static_cast<int>(c->usesGravity), static_cast<int>(c->tracksTarget),
-           te ? static_cast<int>(te->lastMoveTick == sim.tick()) : -1);
+           TargetEntity(sim, w->target) ? static_cast<int>(TargetEntity(sim, w->target)->lastMoveTick == sim.tick()) : -1);
   }
   if (w->bp->leadTarget && w->target.type == 1) {
     Vec3 v10 = Mul(tVel, 10);
@@ -2413,6 +2442,22 @@ bool MuzzleBits(const Quat& a, const Quat& b) { return std::memcmp(&a, &b, sizeo
 
 AimAhead::AimAhead() : mode(SpecModeFromEnvironment("AIM")) {}
 
+// Parallel order's phase C1 (docs/parallel-mode.md 3.3, step 4.4), one unit's part: what each of its aim controllers
+// will read of its weapon's target in phase C2 (MoveManipulator -> Aim), read now, while every unit's pose is still
+// last beat's and nothing writes one. Only where MoveManipulator would reach Aim (the same tests, in its order).
+void AimTargetsAhead(Sim& sim, Unit* u) {
+  if (u->beingBuilt || u->dead || u->stunned) return;
+  for (AimController* c : u->aimControllers) {
+    UnitWeapon* w = c->weapon;
+    if (!c->alive || !c->enabled || c->muzzleBone < 0 || !w || !w->HasLuaObject() || w->target.type == 0) continue;
+    if (!HasTarget(sim, w->target)) continue;
+    const AimTargetIn in = AimTargetRead(sim, c);
+    c->targetPos = in.pos;
+    c->targetVel = in.vel;
+    c->targetTick = sim.tick();
+  }
+}
+
 void AimMuzzlesAhead(Sim& sim, const std::vector<Unit*>& order) {
   AimAhead& st = sim.aimAhead();
   static const bool dbgW = getenv("MOHO64_DEBUG_WEAPON") != nullptr;  // (its lines are written at the unit's turn)
@@ -2493,14 +2538,16 @@ void AimReadLastPose(Sim& sim, Unit* u) {
     AimAhead& st = sim.aimAhead();
     bool ahead = false;
     if (st.active()) {
+      // (the counters are the sim's statistics: not counted from a task on the pool, parallel order's phase C)
+      const bool count = !InParallelTask();
       if (u->aimAheadTick != sim.tick()) {
-        ++st.counts.none;
+        if (count) ++st.counts.none;
       } else if (!AimAheadHolds(u, sim.tick(), p0, r0)) {
-        ++st.counts.changed;
+        if (count) ++st.counts.changed;
       } else if (st.mode == SpecMode::kRedo) {
-        ++st.counts.thrown;
+        if (count) ++st.counts.thrown;
       } else {
-        ++st.counts.taken;
+        if (count) ++st.counts.taken;
         ahead = true;
       }
     }

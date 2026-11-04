@@ -18,6 +18,8 @@
 #include <memory>
 
 namespace moho {
+bool InParallelTask();
+void NoteLazyFillInTask(const char* what);
 
 constexpr size_t kSimCacheSlots = 32;  // (16 sites today)
 
@@ -44,7 +46,10 @@ class SimCache {
   template <class S>
   C& For(const S& sim) const {
     std::shared_ptr<void>& p = sim.caches[slot_];
-    if (!p) p = std::make_shared<C>();
+    if (!p) {
+      if (InParallelTask()) NoteLazyFillInTask("SimCache slot");
+      p = std::make_shared<C>();
+    }
     return *static_cast<C*>(p.get());
   }
   // The container if it was made (a read only: for code that may not make it, e.g. a task played ahead).

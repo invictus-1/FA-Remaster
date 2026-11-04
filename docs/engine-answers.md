@@ -3,6 +3,27 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## render 54: the selection square's centre (2026-11-04) — read; the centre is the MESH's box, not the unit's place
+
+Read again in 0x7fc820 (render 23's routine), 0x7fc89c-0x7fccc7:
+
+- **Turned, not inverted, and added.** The offset (blueprint +0x114 / +0x118 / +0x11c = SelectionCenterOffsetX / Y / Z)
+  is multiplied by the rotation matrix of the unit's drawn orientation (0x8b8cf0, the interpolated transform; Wm3's
+  memory order w, x, y, z), row 0 = (1 - 2(y^2 + z^2), 2(xy - wz), 2(xz + wy)) and so on: the plain R(q) v, no inverse,
+  no mirrored axis. The result is ADDED (addss at 0x7fcc76 / 0x7fcc85 / 0x7fcca0). So -0.4 along z is 0.4 toward the
+  unit's back in the original too, as you draw it.
+- **But the point it is added to differs from ours.** The square's centre is
+  - x, z: the centre of the unit's MESH INSTANCE's world bounding box (the oriented box at +0x108 of the object at
+    UserUnit+0x2c, refreshed first by MeshInstance::UpdateInterpolatedFields 0x7dec80; copied by 0x4ffdf0), plus
+    the turned offset's x, z;
+  - y: the drawn position's y + ren_SelectionHeightFudge (0.12) + the turned offset's y.
+  World::AddBrackets starts from the unit's position instead. A mesh whose bounds are not centred on its origin (the
+  UEF commander's run forward of it) has its square moved back by the offset from the box's centre, which lands near
+  the feet; from the origin it lands behind them.
+- **Fix (yours):** take the x, z of the centre from the model's bounds centre, turned and placed like the unit
+  ((boundsMin + boundsMax) / 2 x scale, rotated by the orientation, + position), keep y as now, then add the turned
+  offset. Only when there is no mesh (the box's fallback 0x474600) the unit's position.
+
 ## ui request 53: scriptBits in UnitView (2026-11-03) — done
 
 `UnitView::scriptBits` (sim_view.h, beside paused / toggleCaps) is the unit's toggle state, u+0x498, the same bits as

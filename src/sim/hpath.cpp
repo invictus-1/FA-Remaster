@@ -7,8 +7,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <atomic>
 #include <chrono>
 #include <limits>
+#include <memory>
 
 #include "core/log.h"
 #include "core/trace.h"
@@ -36,6 +38,7 @@ struct HPathTables::PathSpec {
     int why = 0;    // (r 4: PathAheadStop::why)
     std::vector<StaleMade> made;  // stale clusters read with their data made ahead: Make at the take
     std::vector<OwnCluster> own;  // the stale clusters' data the play built itself (installed at the take)
+    int start = 2500;             // the work units it was played with
   };
   struct Item {
     int army;
@@ -43,6 +46,38 @@ struct HPathTables::PathSpec {
   };
   Speculation<Out> spec{"PATH"};
   std::vector<Item> items;
+  // The second plays: by item, what its first play ended with (written by its task). An army's items are
+  // items[b, e) (a group); the task that ends the group's last first play (left: the group's items still playing)
+  // predicts the units the army will have left at each of its searches in WorkAll's order and plays the first search
+  // those units would cut, or the first one not played, again from its Begin with exactly those units; while that
+  // play finishes within them, the next waiting search is played with the units then left, and so on (the chain,
+  // by group, in the same stage).
+  struct Pred {
+    int steps = 0, r = 0;
+    bool made = false;
+  };
+  std::vector<Pred> pred;
+  struct Group {
+    size_t b = 0, e = 0;
+  };
+  std::vector<Group> groups;
+  std::vector<uint32_t> groupOf;  // by item
+  std::unique_ptr<std::atomic<int>[]> left;
+  size_t leftN = 0;
+  struct Link {
+    PathTraveler* t = nullptr;  // the search played
+    bool made = false;          // a result to take (cleared when taken)
+    Out o;                      // (o.start: the units it was played with)
+  };
+  struct Cut {
+    std::vector<Link> chain;    // (its first n are this round's; capacity kept)
+    size_t n = 0, next = 0;     // links played; the next one WorkAll may take
+  };
+  static constexpr size_t kChain = 32;  // links at most (a chain plays on one worker: its time is the stage's tail)
+  std::vector<Cut> cuts;        // by group
+  std::map<int, size_t> cutOf;  // army -> its group, this round
+  // second plays made; taken; made but their units not the ones left; thrown (redo); checked (verify)
+  uint64_t cutMade = 0, cutTaken = 0, cutUnused = 0, cutThrown = 0, cutChecked = 0;
   std::map<int, size_t> carried;  // army -> its carried search's item, this round
   std::map<int, int> want;        // army -> waiting searches to play ahead (from the last beat's)
   bool ready = false;             // SearchesAhead ran for the coming WorkAll
@@ -95,6 +130,15 @@ HPathTables::~HPathTables() {
     const std::string line = spec_->spec.counts().Line("PATH (path searches)") + b;
     fprintf(stderr, "%s\n", line.c_str());
     Logf(LogLevel::Info, "%s", line.c_str());
+    char c[256];
+    std::snprintf(c, sizeof c,
+                  "moho64 speculation PATH (second plays, the searches the units cut): made %llu, taken %llu, made but "
+                  "not the units left %llu, thrown %llu, checked %llu",
+                  static_cast<unsigned long long>(spec_->cutMade), static_cast<unsigned long long>(spec_->cutTaken),
+                  static_cast<unsigned long long>(spec_->cutUnused), static_cast<unsigned long long>(spec_->cutThrown),
+                  static_cast<unsigned long long>(spec_->cutChecked));
+    fprintf(stderr, "%s\n", c);
+    Logf(LogLevel::Info, "%s", c);
   }
 }
 
@@ -1303,13 +1347,90 @@ void HPathTables::SearchesAhead(WorkerPool& pool, uint32_t round) {
   if (P.spec.Below(P.items.size(), round)) return;  // (a small beat: the queues' work searches serially, as with the switch off)
   P.round = round;
   P.ready = true;
+  if (P.pred.size() < P.items.size()) P.pred.resize(P.items.size());
+  // (the groups: each army's items, contiguous as pushed above)
+  P.groups.clear();
+  P.groupOf.resize(P.items.size());
+  P.cutOf.clear();
+  for (size_t k = 0; k < P.items.size();) {
+    size_t e = k;
+    while (e < P.items.size() && P.items[e].army == P.items[k].army) P.groupOf[e++] = static_cast<uint32_t>(P.groups.size());
+    P.cutOf[P.items[k].army] = P.groups.size();
+    P.groups.push_back({k, e});
+    k = e;
+  }
+  if (P.leftN < P.groups.size()) {
+    P.leftN = P.groups.size();
+    P.left = std::make_unique<std::atomic<int>[]>(P.leftN);
+  }
+  for (size_t g = 0; g < P.groups.size(); ++g)
+    P.left[g].store(static_cast<int>(P.groups[g].e - P.groups[g].b), std::memory_order_relaxed);
+  if (P.cuts.size() < P.groups.size()) P.cuts.resize(P.groups.size());
+  for (size_t g = 0; g < P.groups.size(); ++g) P.cuts[g].n = P.cuts[g].next = 0;
+  // The second play of group g: the army's units left predicted in its queue's order, as WorkAll would spend them on
+  // the first plays it takes; the first search they would cut is played again from its Begin with exactly those units.
+  // (Run by the task that ends the group's last first play: every pred of the group is written; it reads what the
+  // first plays read, which nothing writes while the stage runs, and writes only the group's Cut.)
+  auto playCut = [&](size_t g) {
+    const size_t k = P.groups[g].b, e = P.groups[g].e;
+    const int a = P.items[k].army;
+    int units = 2500;
+    bool known = true;
+    PathTraveler* last = nullptr;
+    PathTraveler* cutT = nullptr;
+    for (size_t j = k; j < e && known && !cutT; ++j) {
+      const PathSpec::Pred& pr = P.pred[j];
+      if (!P.items[j].t) {  // (the carried search: it ends the beat if cut; unknown if stopped)
+        if (!pr.made || pr.r == 2 || pr.r == 4) known = false;
+        else units -= pr.steps;
+        continue;
+      }
+      last = P.items[j].t;
+      if (!pr.made) {  // (a waiting search needing more than 2500 units: cut by any units it begins with)
+        if (pr.r == 2) cutT = P.items[j].t;
+        else known = false;
+      } else if (pr.r == 4) {
+        known = false;
+      } else if (units - pr.steps >= 1) {
+        units -= pr.steps;
+      } else {
+        cutT = P.items[j].t;
+      }
+    }
+    if (known && !cutT && units >= 1) {  // (every played one finished within the units: the next waiting one)
+      auto qi = queues_.find(a);
+      cutT = last ? last->qNext : (qi != queues_.end() ? qi->second.head : nullptr);
+    }
+    if (!known || !cutT || units < 1) return;
+    PathSpec::Cut& c = P.cuts[g];
+    while (cutT && units >= 1 && c.n < PathSpec::kChain) {
+      if (c.chain.size() <= c.n) c.chain.emplace_back();
+      PathSpec::Link& L = c.chain[c.n++];
+      PlayAhead(L.o.s, nullptr, cutT, units, &L.o.steps, &L.o.r, &L.o.why, &L.o.made, &L.o.own);
+      L.o.start = units;
+      L.t = cutT;
+      L.made = L.o.r != 5;
+      // (cut by the units, stopped, or not played: the army's beat, or what is known of it, ends there)
+      if (!L.made || L.o.r == 2 || L.o.r == 4) break;
+      units -= L.o.steps;  // (finished with units left: the loop goes on to the next waiting search)
+      cutT = cutT->qNext;
+    }
+  };
   P.spec.Run(pool, "path searches ahead", round, P.items.size(), 1, [&](size_t i, ReadLog&, PathSpec::Out& o) {
     const PathSpec::Item it = P.items[i];
     // (a carried search has the 2500 work units of its army's beat; a waiting one has at most those: one that would
     // need more is cut by them in any beat it begins, and is not kept)
     PlayAhead(o.s, it.t ? nullptr : queues_.find(it.army)->second.active.get(), it.t, 2500, &o.steps, &o.r, &o.why, &o.made, &o.own);
-    return o.r != 5 && !(it.t && o.r == 2);
+    o.start = 2500;
+    const bool made = o.r != 5 && !(it.t && o.r == 2);
+    P.pred[i] = {o.steps, o.r, made};
+    const uint32_t g = P.groupOf[i];
+    if (P.left[g].fetch_sub(1, std::memory_order_acq_rel) == 1) playCut(g);  // (the group's last first play ended)
+    return made;
   });
+  for (size_t g = 0; g < P.groups.size(); ++g)
+    for (size_t j = 0; j < P.cuts[g].n; ++j)
+      if (P.cuts[g].chain[j].made) ++P.cutMade;
 }
 
 void HPathTables::WorkAll(int /*armies*/) {
@@ -1325,6 +1446,8 @@ void HPathTables::WorkAll(int /*armies*/) {
     while (budget >= 1) {
       PathSpec::Out* ahead = nullptr;
       size_t item = 0;
+      PathTraveler* begunT = nullptr;  // (a waiting search begun now)
+      bool second = false;             // (the result is a second play's: P->cut)
       bool carried = false;  // (the result is the carried search's: made with the 2500 work units it has now)
       if (!q.active) {
         if (!q.head) break;
@@ -1338,7 +1461,7 @@ void HPathTables::WorkAll(int /*armies*/) {
           item = t->aheadItem;
           ahead = const_cast<PathSpec::Out*>(P->spec.Take(item));  // (the slot is this stage's own)
         }
-        if (!ahead) Begin(*q.active, t);
+        begunT = t;
       } else if (P && first) {
         auto c = P->carried.find(a);
         if (c != P->carried.end()) {
@@ -1350,9 +1473,28 @@ void HPathTables::WorkAll(int /*armies*/) {
       first = false;
       if (ahead && !carried && budget - ahead->steps < 1) {  // (the serial loop would stop it earlier: made here)
         ++P->over;
-        Begin(*q.active, ahead->s.t);
         ahead = nullptr;
       }
+      if (begunT && !ahead && P) {  // the second play, when its units are the ones left (ends cut as the loop would)
+        auto c = P->cutOf.find(a);
+        PathSpec::Cut* kc = c != P->cutOf.end() ? &P->cuts[c->second] : nullptr;
+        PathSpec::Link* k = kc && kc->next < kc->n ? &kc->chain[kc->next] : nullptr;
+        if (k && k->t == begunT) ++kc->next;
+        if (k && k->made && k->t == begunT) {
+          k->made = false;
+          if (P->spec.mode() == SpecMode::kRedo) {
+            ++P->cutThrown;
+          } else if (k->o.r == 2 ? budget == k->o.start : budget - k->o.steps >= 1) {
+            ahead = &k->o;
+            item = c->second;
+            second = true;
+            ++P->cutTaken;
+          } else {
+            ++P->cutUnused;
+          }
+        }
+      }
+      if (begunT && !ahead) Begin(*q.active, begunT);
       int before = budget;
       int r;
       if (ahead) {
@@ -1362,7 +1504,7 @@ void HPathTables::WorkAll(int /*armies*/) {
           int steps = 0, rr = 0;
           const bool stopped = ahead->r == 4;
           PlayAhead(P->ref, carried ? q.active.get() : nullptr, ahead->s.t,
-                    stopped ? ahead->steps + 1 : 2500, &steps, &rr, nullptr, &P->refMade, &P->refOwn);
+                    stopped ? ahead->steps + 1 : ahead->start, &steps, &rr, nullptr, &P->refMade, &P->refOwn);
           if (stopped && rr == 2) {
             P->ref.expansions -= 1;
             steps -= 1;
@@ -1372,7 +1514,8 @@ void HPathTables::WorkAll(int /*armies*/) {
           const bool same = rr == ahead->r && steps == ahead->steps && SameSearch(P->ref, ahead->s, &why);
           char b[96];
           std::snprintf(b, sizeof b, "army %d r %d/%d steps %d/%d: ", a, ahead->r, rr, ahead->steps, steps);
-          P->spec.Checked(same, item, same ? std::string() : b + why);
+          if (!second) P->spec.Checked(same, item, same ? std::string() : b + why);
+          else if (++P->cutChecked, !same) SpecMismatch("PATH (second plays)", item, b + why);
         }
         std::swap(*q.active, ahead->s);
         for (const StaleMade& x : ahead->made) {  // (as the steps' Ready calls would: same data, flags and counts)
@@ -1389,7 +1532,8 @@ void HPathTables::WorkAll(int /*armies*/) {
               char b[96];
               std::snprintf(b, sizeof b, "army %d cluster level %d (%d,%d): the play's build differs from the take's", a,
                             x.L, x.cx, x.cz);
-              P->spec.Checked(same, item, same ? std::string() : std::string(b));
+              if (!second) P->spec.Checked(same, item, same ? std::string() : std::string(b));
+              else if (++P->cutChecked, !same) SpecMismatch("PATH (second plays)", item, std::string(b));
             }
             x.m->lv[x.L][i] = std::move(got);
             x.m->ahead[x.L][i] = 1;

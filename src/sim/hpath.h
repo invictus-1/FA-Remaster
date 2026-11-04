@@ -116,6 +116,11 @@ class HPathTables {
   // stale cluster, a map or grid not made yet, a due unit grid), that step left undone. WorkAll takes a search's
   // result when its army's work units left cover the steps: the serial loop would have made the same steps from the
   // same state, as nothing in the loop changes a clean cluster, a unit or a grid. A stopped one goes on serially.
+  // The second plays: in the same stage, each army's first search that its work units left would cut, or its first
+  // waiting search not played (predicted from its first plays, in WorkAll's order), is played again from its Begin
+  // with exactly those units, and while such a play finishes within them the next waiting search is played with the
+  // units then left (a chain); WorkAll takes each when the units left are those (cut), or cover its steps (done or
+  // stopped), as for a first play.
   void SearchesAhead(WorkerPool& pool, uint32_t round);
   // MOHO64_PAR_PATH's default, settled once per sim at the stage's first beat (the sim's ParDefault: a game with the
   // engine's fixes and more than one thread); a value given in the environment wins. Its minimum: searches played

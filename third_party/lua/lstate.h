@@ -37,6 +37,7 @@ extern __declspec(thread) int lua_gpg_in_task;
 extern __thread int lua_gpg_in_task;
 #endif
 void lua_gpg_task_used_lua (lua_State *L);
+extern void (*lua_gpg_task_used_hook)(lua_State *L);
 #ifndef lua_lock
 #define lua_lock(L)	do { if (lua_gpg_in_task) lua_gpg_task_used_lua(L); } while (0)
 #endif

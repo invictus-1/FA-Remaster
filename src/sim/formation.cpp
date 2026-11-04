@@ -394,7 +394,8 @@ Unit* GroupLeader(Formation& F, FormGroup& g) {
   for (auto& [id, n] : g.nodes)
     if (!best || n.order > best->order) best = &n;
   if (!best) return nullptr;
-  g.leaderCache = best->ref;
+  // (parallel order's phase A: the turns of the group's units may ask at once; the answer is the same uncached)
+  if (!tl_phaseATurn) g.leaderCache = best->ref;
   return UnitOf(sim, best->ref);
 }
 

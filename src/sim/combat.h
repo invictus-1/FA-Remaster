@@ -137,6 +137,11 @@ class AimController : public ScriptObject {
   Quat aheadMuzzleRot;
   int aheadBone = -1;
   uint32_t aheadTick = 0xffffffffu;
+  // parallel order (docs/parallel-mode.md 3.3, step 4.4): what Aim reads of the weapon's target, read in phase C1 of
+  // beat targetTick before any unit's pose of the beat is made (AimTargetsAhead), so no aim reads another unit's pose
+  // while that unit's own turn of phase C may be rebuilding it
+  Vec3 targetPos, targetVel;
+  uint32_t targetTick = 0xffffffffu;
   int precedence = 0;
   uint32_t seq = 0;  // Sim::NextManipSeq
   int EventState() const override { return onTarget ? 1 : 0; }
@@ -318,6 +323,9 @@ struct AimAhead {
   bool active() const { return mode != SpecMode::kOff; }
 };
 void AimMuzzlesAhead(Sim& sim, const std::vector<Unit*>& order);
+// Parallel order's phase C1 (step 4.4): what the unit's aim controllers will read of their targets in phase C2, read
+// before any pose of the beat is made (AimController::targetPos / targetVel / targetTick).
+void AimTargetsAhead(Sim& sim, Unit* u);
 void ProjectilesTick(Sim& sim);
 // One projectile's turn in the entity stage (Projectile::MotionTick 0x69bdd0), once per beat.
 void ProjectileStep(Sim& sim, Projectile* p);

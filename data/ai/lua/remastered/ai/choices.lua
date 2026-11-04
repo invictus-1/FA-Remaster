@@ -33,6 +33,16 @@ local kInvestFloat = import("/lua/remastered/ai/personality.lua").Tuning().inves
                                -- overflow goes to extractor upgrades first (phase 13)
 local kInvestEnergy = 0.5      -- stored energy share under which no new extractor upgrade starts (phase 8)
 local kHoldLogTicks = 600      -- a "hold" decision for the same kind of investment is logged at most this often
+-- (2026-11-04, item 1: the mass sinks) the planned dip: with no extractor upgrade under way, one whose payback is at most
+-- this many seconds goes ahead past the budget and past an empty bar (decision 14: "the risk is a short mass dip, the
+-- reward a doubled mass income"). In the 4v4 of all our AI five of the eight armies sat on 10-13 T2 extractors from
+-- minute 15 to 35 at 60-80 mass a second: a T3 upgrade (4,600 mass, payback 383 s) was over the budget (half of 120 s
+-- of income, halved again while the army is short: 1,000-2,700) in 79 decisions and blocked by the empty bar - all
+-- the mass spent on units, the bar at 0-4%, counted as a "sustained deficit" - in 120 more. Only from minute
+-- kDipFrom (the opening's mass is the opening's: a first try upgraded a T1 extractor at minute 2) and for an upgrade
+-- that costs at most kDipSeconds of the income now (a dip, not a stall).
+local kDipPayback = 600
+local kDipFrom = 8
 
 -- the land candidates by factory tech (blueprint suffixes; the faction prefix is added): direct-fire, artillery,
 -- anti-air, assault bots; a higher-tech factory can build the lower tiers' too. Missing ids are left out.
@@ -408,6 +418,7 @@ function Investments(brain, ctx)
         return a.id < b.id
     end)
     R.upgradesOpen = false
+    R.dipGiven = nil
     for _, c in ipairs(list) do
         local m, from, to, cost = c.m, c.from, c.to, c.cost
         do
@@ -417,17 +428,20 @@ function Investments(brain, ctx)
                 local z = Remastered.AIZoneAt(p[1], p[3], 'land')
                 if z <= 0 then z = R.startZone end
                 local what = string.format('%s->%s', from, to)
+                -- (item 1: the planned dip, kDipPayback: the first upgrade when none is under way)
+                local dip = committed <= 0 and payback <= kDipPayback and not R.dipGiven and ctx.minutes >= kDipFrom and
+                    cost <= kDipSeconds * income
                 if energyLow then
                     LogHold(R, 'energy', string.format('aiinv %d %d hold %s zone %d payback %.0fs danger - | energy under %.0f%% stored: the upgrades wait for power',
                         R.army, R.tick, what, z, payback, 100 * kInvestEnergy))
                     return
                 end
-                if sustained then
+                if sustained and not dip then
                     LogHold(R, 'stall', string.format('aiinv %d %d hold %s zone %d payback %.0fs danger - | mass short for %.0f s: a sustained deficit, not a planned dip',
                         R.army, R.tick, what, z, payback, (R.tick - R.shortSince) / 10))
                     return
                 end
-                if cost > budget then
+                if cost > budget and not dip then
                     LogHold(R, 'budget', string.format('aiinv %d %d hold %s zone %d payback %.0fs danger - | costs %.0f, more than half of %ds of income can cover now (%.0f left)',
                         R.army, R.tick, what, z, payback, cost, kDipSeconds, budget))
                     return
@@ -448,11 +462,14 @@ function Investments(brain, ctx)
                 if d.theirs <= 0 or d.margin >= K.investSafe then
                     R.upgradesOpen = true  -- (an upgrade can go here: piling mass waits for it, not for a factory)
                     IssueUpgrade({ m }, to)
+                    local over = cost > budget or sustained
+                    if dip then R.dipGiven = true end
                     budget = budget - cost
                     LOG(string.format('aiinv %d %d invest %s zone %d payback %.0fs danger %.2f enemy %.0f | %s',
-                        R.army, R.tick, what, z, payback, d.margin, d.theirs, d.theirs <= 0 and
+                        R.army, R.tick, what, z, payback, d.margin, d.theirs, (d.theirs <= 0 and
                         'nothing of the enemy can reach it within the payback time' or
-                        'we hold the zone against what can reach it within the payback time'))
+                        'we hold the zone against what can reach it within the payback time') ..
+                        (over and ' (the planned dip: past the budget, nothing else upgrading)' or '')))
                 else
                     LogHold(R, 'danger' .. z, string.format('aiinv %d %d hold %s zone %d payback %.0fs danger %.2f enemy %.0f | the enemy that can reach it within the payback time would win there',
                         R.army, R.tick, what, z, payback, d.margin, d.theirs))

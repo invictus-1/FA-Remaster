@@ -319,7 +319,8 @@ class Sim {
   // (core/keyed_rng.h) of (the session's seed, the entity's creation handle, the beat, the purpose, the entity's n-th
   // keyed draw in the beat), whoever draws first. The draws of serial stages (creation, commands, recon, transports,
   // Lua) stay on the stream in both orders: their order is canonical.
-  enum class RandPurpose : uint32_t { kAirCircle = 1, kAirTactics = 2, kAirCrash = 3, kHoverWobble = 4, kPush = 5, kZigZag = 6 };
+  enum class RandPurpose : uint32_t { kAirCircle = 1, kAirTactics = 2, kAirCrash = 3, kHoverWobble = 4, kPush = 5, kZigZag = 6,
+                                    kTargetPick = 7 };
   uint32_t ERand(Entity* e, RandPurpose p);
   double EFRand(Entity* e, RandPurpose p, float lo, float hi);  // FRand's formula on ERand
   void GenerateArmyStart(Army* a);  // the army ctor's / Lua GenerateArmyStart's two draws
@@ -511,7 +512,7 @@ class Sim {
       for (int cx = cx0; cx <= cx1; ++cx)
         for (const UnitGridEntry& e : grid_[static_cast<size_t>(cz) * gridW_ + cx]) {
           Unit* u = e.u;
-          const Vec3& p = u->position;
+          const Vec3& p = SeenPos(u);  // (another unit in parallel order's phase A: its beat-start place)
           if (p.x >= x0 && p.x <= x1 && p.z >= z0 && p.z <= z1) f(u);
         }
   }
@@ -545,7 +546,7 @@ class Sim {
           }
           ++i;
           Unit* u = e.u;
-          const Vec3& p = u->position;
+          const Vec3& p = SeenPos(u);  // (another unit in parallel order's phase A: its beat-start place)
           if (p.x >= x0 && p.x <= x1 && p.z >= z0 && p.z <= z1) f(u);
         }
       }
@@ -602,11 +603,24 @@ class Sim {
   };
   std::vector<DeferredCall> deferred_;
   bool deferring_ = false;
+  // parallel order's phase D (step 4.5): the units whose economy step added to their army this beat (Unit::econAdd),
+  // and the sum of those additions into the armies, unit by unit in creation order (rule 7: a fixed order of float sums)
+  std::vector<Unit*> econAdders_;
+  void SumUnitEconomy();
   uint32_t deferKey_ = 0, deferSeq_ = 0;
   void DeferTurn(uint32_t key) {
     deferKey_ = key;
     deferSeq_ = 0;
   }
+  // (step 4.6) a phase's turns on the worker pool: each worker's deferred calls go to a list of its own, with the key
+  // of the turn it runs (DeferSink, set per thread by the driver); after the phase the lists are merged into deferred_
+  // and the commit sorts them by key as before, so the order is the turns' and not the workers'.
+  struct DeferSink {
+    std::vector<DeferredCall> calls;
+    uint32_t key = 0, seq = 0;
+  };
+  std::vector<DeferSink> deferSinks_;
+  void MergeDeferSinks();
   void RunDeferredScriptCalls();
   // script calls still made at once inside a deferring phase (by method; logged at the end): what step 4.6 must
   // still defer before the phases go to the worker pool

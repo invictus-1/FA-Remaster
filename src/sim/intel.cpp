@@ -1037,6 +1037,10 @@ void ReconBeat(Sim& sim) {
 // named another unit).
 void IntelExactUpdate(Sim& sim, Unit* u) {
   if (!u || !u->intel) return;
+  // (parallel order's phases: the army's intel grids are shared, and their counts were changed by several workers at
+  // once (B1 at 16 threads: a radar's coverage one count off now and then). So the update runs in the phase's commit,
+  // in the turns' order, from the same place: the beat-start one, lastPosition, which the turn has taken)
+  if (sim.DeferringScripts()) return sim.DeferAction([&sim, u] { IntelExactUpdate(sim, u); });
   const Vec3& c = sim.coordsPending && u->lastPosTick == sim.tick() ? u->lastPosition : u->position;
   const Vec3 p{c.x, c.y + 1, c.z};
   for (int s = 1; s <= 8; ++s) UpdatePos(IS(sim), u->intel->h[s], s, p, sim.tick(), true);

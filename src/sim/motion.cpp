@@ -1,6 +1,7 @@
 // Unit motion (see motion.h for what the original does and how it was checked).
 #include "core/backtrace.h"
 #include "core/dmath.h"
+#include "core/workers.h"
 #include "sim/motion.h"
 #include "sim/formation.h"
 #include "sim/intel.h"
@@ -499,7 +500,8 @@ void FindRaisedPlatform(Sim& sim, Unit* u) {
     if (!e || e->kind != Entity::Kind::Unit) continue;
     const Unit* p = static_cast<const Unit*>(e);
     if (p->dead || !p->motion.bp || p->motion.bp->raisedPlatforms.size() < 12) continue;
-    const float dx = u->position.x - p->position.x, dy = u->position.y - p->position.y, dz = u->position.z - p->position.z;
+    const Vec3& pp = SeenPos(p);  // (parallel order's phase A: where the platform stood when the beat began)
+    const float dx = u->position.x - pp.x, dy = u->position.y - pp.y, dz = u->position.z - pp.z;
     const float d = (dx * dx + dz * dz) + dy * dy;
     if (bestD > d) {
       bestD = d;
@@ -520,7 +522,7 @@ const Unit* RaisedPlatform(const Sim& sim, const Unit* u) {
 float PlatformHeight(const Unit* P, float x, float z) {
   if (P->dead) return 0;
   const auto& q = P->motion.bp->raisedPlatforms;
-  float px = P->position.x, pz = P->position.z;
+  float px = SeenPos(P).x, pz = SeenPos(P).z;  // (parallel order's phase A: its beat-start place)
   for (size_t i = 0; i + 12 <= q.size(); i += 12) {
     float x0 = q[i] + px, z0 = pz + q[i + 1], x1 = q[i + 3] + px, z1 = q[i + 7] + pz, x3 = q[i + 9] + px,
           z3 = q[i + 10] + pz;
@@ -815,6 +817,7 @@ void MotionStop(Unit* u) {
 const PathGrid* FootprintGrid(Sim& sim, const MotionBlueprint& b) {
   Navigation* nav = &sim.navigation();
   if (b.gridOwner != nav) {
+    if (InParallelTask()) NoteLazyFillInTask("FootprintGrid");
     b.grid = nav->Grid(b.footprint);
     b.gridOwner = nav;
   }
@@ -824,6 +827,7 @@ const PathGrid* FootprintGrid(Sim& sim, const MotionBlueprint& b) {
 const PathGrid* AltFootprintGrid(Sim& sim, const MotionBlueprint& b) {
   Navigation* nav = &sim.navigation();
   if (b.altGridOwner != nav) {
+    if (InParallelTask()) NoteLazyFillInTask("AltFootprintGrid");
     b.altGrid = nav->Grid(b.altFootprint);
     b.altGridOwner = nav;
   }
@@ -2244,7 +2248,7 @@ const Vec3& UnitVelocity(const Unit* u) {
 }
 
 bool UnitVelocityBitsSet(const Unit* u) {
-  const Vec3& v = UnitVelocity(u);
+  const Vec3& v = SeenVelocity(u);  // (another unit's in parallel order's phase A: its snapshot)
   uint32_t b[3];
   std::memcpy(&b[0], &v.x, 4);
   std::memcpy(&b[1], &v.y, 4);
