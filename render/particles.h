@@ -74,6 +74,14 @@ struct EmitterBlueprint {
   std::string sixWayPath;
   gfx::Texture sixWay;
   float sixWayEmission = 1;
+  // [motionblend] (the visuals track's simulated flipbooks, 2026-11-04) MotionTexture: each frame's motion to the next, in the
+  // same grid as Texture: red the frame's x (right), green its y (down), 0.5 none, as the frame's own uv times MotionStrength
+  // (the largest offset, as a share of a frame); blue and alpha not read. With it a blended frame is read moved back along
+  // its motion by how far the blend has gone, and the next one forward by what is left of it, so that the frames between
+  // flow instead of crossfading.
+  std::string motionPath;
+  gfx::Texture motion;
+  float motionStrength = 0;
   float refractionScale = 1;
   bool collideGround = false, keepAtLowQuality = false;
   float lightRadius = 0, lightSeconds = 0, lightStrength = 1;
