@@ -56,6 +56,23 @@ ForkThread(function()
         else
             LOG("TEST note: Ultra Shields is not in the mods folders here: the fix's other half unchecked")
         end
+        -- Chris's local reworks (the lab's local_mod_fixes, MOHO64UI_LOCAL_MOD_FIXES): each where it is on disk, on with its mod
+        for _, r in {{'6aa65d2a-5926-11dc-8314-0800200c9a08', '1f77a98d-bfde-4247-bfcb-75f9ee358e59', 'antares-rework'},
+                     {'9a9C61C0-1787-10DF-A0AD-BATTLEPACK005', '5e94b4c6-a027-4d20-a3c2-22fbc69ecc41', 'wyvern-rework'},
+                     {'62e2j64a-TOMA-3652-01370-146as555a8u3', '12a15f7a-5394-4561-b5ad-bc203e89894d', 'totalmayhem-rework'}} do
+            local modUid, reworkUid, folder = r[1], r[2], r[3]
+            if not all[reworkUid] then
+                LOG("TEST note: " .. folder .. " is not on disk here")
+            else
+                check(folder .. " at /mods/" .. folder, string.lower(all[reworkUid].location or ""), "/mods/" .. folder)
+                if all[modUid] then
+                    SetPreference("active_mods", {[modUid] = true})
+                    check("with its mod active, " .. folder .. " is too", Mods.GetSelectedMods()[reworkUid], true)
+                else
+                    LOG("TEST note: the mod of " .. folder .. " is not in the mods folders here")
+                end
+            end
+        end
         SetPreference("active_mods", {["fnewm028-v326-55b4-92b6-64398e7ge43f"] = true, ["some-other-mod"] = true})
         selected = Mods.GetSelectedMods()
         local sim = Mods.GetGameMods(Mods.GetSelectedSimMods())
