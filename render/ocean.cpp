@@ -125,7 +125,8 @@ cbuffer OceanSim : register(b1) {
   float4 foamMake; // x the Jacobian it foams below; y how fast; z the water's level; w the ground's height unit
   float4 lengths;  // x, y, z 1 / each square's length; w the map's width
   float4 mapInfo;  // x, y the map's width and height
-  float4 foamMore; // [whitecaps] xy the field's shift since the last frame in whole cells (foamOld.w 0); z the share of the fresh foam kept this frame
+  float4 foamMore; // [whitecaps] xy the field's shift since the last frame in whole cells (foamOld.w 0); z the share of the fresh foam kept this frame;
+                   // w [foamseed] the foam laid in cells the old field does not cover (the sea's mean share, as beyond the field)
 };
 static const float kPi = 3.14159265;
 SamplerState samplerLinearClamp : register(s1);  // (the fixed samplers, gfx.h)
@@ -381,13 +382,21 @@ float GroundAt(float2 xz) {
 [numthreads(8, 8, 1)] void Foam(uint3 id : SV_DispatchThreadID) {
   if (any(id.xy >= uint(foamNew.w))) return;
   float2 world = foamNew.xy + (float2(id.xy) + 0.5) * foamNew.z;
-  float2 old = 0;
+  float depth = foamMake.z - GroundAt(world);
+  // ([foamseed] a cell the old field does not cover - the field's first frame, the cells a coarser field adds round the old
+  // one's square, those a move uncovers - starts with the sea's mean share of white, as the sea beyond the field shows,
+  // not none: none left the old square's foam standing in a plain sea for seconds, the field filling round it. Chris,
+  // 2026-11-04: "at first load up close it was a very big cube then it fit properly to the area")
+  float2 old = float2(foamMore.w * saturate((depth - 0.3) / 1.5), 0);
   if (foamOld.w < 0.5) {  // (the same cells: the one it drifted from, whole)
     int2 c = int2(id.xy) + int2(foamMore.xy);
     if (all(c >= 0) && all(c < int(foamNew.w))) old = foamIn.Load(int3(c, 0));
   } else if (foamOld.w < 1.5) {  // (another cell size: read between the old field's cells, once)
+    // ([foamseed] a coarser field reaches past the old one's square: the ring round it takes the old field's own foam, laid
+    // again from its other side (its pattern repeated, as mature as the middle), not the thin seed above. Measured on the
+    // storm zoomed out from close: the middle stayed four times as white as the ring beside it at the same distance)
     float2 at = (world - foamMove.xy - foamOld.xy) * foamOld.z;
-    if (all(at >= 0) && all(at <= 1)) old = foamIn.SampleLevel(samplerLinearClamp, at, 0);
+    old = foamIn.SampleLevel(samplerLinearClamp, frac(at), 0);
   }
   // (each square read at the level its texels are about a cell: finer folds than a cell are averaged in)
   float3 f = 0;
@@ -396,7 +405,6 @@ float GroundAt(float2 xz) {
   f += fold1.SampleLevel(samplerLinear, world * lengths.y + 0.5 / 256, l1).xyz;
   f += fold2.SampleLevel(samplerLinear, world * lengths.z + 0.5 / 256, l2).xyz;
   float J = (1 + f.x) * (1 + f.y) - f.z * f.z;
-  float depth = foamMake.z - GroundAt(world);
   float make = saturate((foamMake.x - J) * foamMake.y) * saturate((depth - 0.3) / 1.5);
   // (a crest breaking for a third of a second lays a full cover, and keeps it fresh while it breaks)
   foamOut[id.xy] = float2(min(old.x * foamMove.z + make * foamMove.w * 3, 1.2), min(old.y * foamMore.z + make * foamMove.w * 6, 1));
@@ -619,7 +627,8 @@ void Ocean::Update(const Camera& camera, const View& view, gfx::Texture heights,
   const float foamNew[4] = {x0, z0, cell, static_cast<float>(kFoamCells)};
   const float foamOld[4] = {foamArea_[0], foamArea_[1], foamArea_[2], foamFresh_ ? 2.0f : sameCells ? 0.0f : 1.0f};
   const float foamMove[4] = {wind_[0] * drift, wind_[1] * drift, static_cast<float>(std::exp(-dt / life)), static_cast<float>(dt)};
-  const float foamMore[4] = {static_cast<float>(ox - foamX_), static_cast<float>(oz - foamZ_), static_cast<float>(std::exp(-dt / kFreshLife)), 0};
+  const float foamMore[4] = {static_cast<float>(ox - foamX_), static_cast<float>(oz - foamZ_), static_cast<float>(std::exp(-dt / kFreshLife)),
+                              0.04f * r * r};  // [foamseed] (look2[1])
   // (the Jacobian's spread: about the choppiness times the root of the slopes' mean square, of the waves the field's cells
   // hold, longer than about two cells)
   const double kCut = kPi / (2 * cell);

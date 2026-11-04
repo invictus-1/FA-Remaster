@@ -34,6 +34,23 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
+## 54. To the ENGINE track: which way the original turns SelectionCenterOffset (2026-11-04, Chris; not blocking) - DONE
+
+**What:** Chris (a picture of a selected UEF commander, 2026-11-04): "I noticed the yellow squre under the acu isn't
+centered". The square sits behind the commander's feet, by its blueprint's SelectionCenterOffsetZ = -0.4 (and X 0.1), added
+as render 23 reads it: the offset turned by the unit's orientation (World::AddBrackets: Rotate(orientation, offset), the
+unit's +Z its forward). The remastered mesh has the original's bounds (z -4.9 .. 13.5 model units, the guns forward), so the
+mesh is not the cause. Please check in 0x7fc820 the sign and the frame: is the offset added or subtracted, and turned by
+the orientation as is or by its inverse (or with z mirrored, as the meshes' own frame may be)? If the original also draws it
+0.4 behind, the renderer keeps it (faithful) and Chris gets that answer; if not, the renderer follows the reading.
+
+**Why:** the bracket should sit where the original's does.
+
+**Answer:** the engine, 2026-11-04 (docs/engine-answers.md, "render 54"): turned by the orientation as is and added, as the
+renderer did, but to the middle of the mesh instance's world box (x, z), not the unit's place; y the drawn place's + 0.12 +
+offset y. Done in World::AddBrackets ([bracket54]): the UEF commander's box middle lies 0.45 forward of its origin, so with
+its offset the square now sits within 0.05 of its feet (it sat 0.4 behind).
+
 ## 53. To the VISUALS track: simulated detail for the sea's foam and wakes (2026-11-04, Chris; not blocking)
 
 **What:** Chris (2026-11-04, a picture of the storm's whitecaps): "Ask visual if we could make the wakes on top of the ocean
