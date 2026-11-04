@@ -55,11 +55,13 @@ local kBase = {
 -- - investFloat: the mass bar share from which piling mass goes to extractor upgrades first (phase 13c);
 -- - landSoftShare / landHardShare (2026-11-03): land combat units, as a share of the unit cap, from which T1 land
 --   factories / all land factories make no more of them. Chris's big test (4v4, all our AI): 500-800 land units an
---   army by minute 25, most of them T1, piled up at home; the game choppy from minute 30.
+--   army by minute 25, most of them T1, piled up at home; the game choppy from minute 30. (0.25 / 0.5 at first left
+--   300-450 an army; 0.15 / 0.35 still 300+ for some; 0.12 / 0.25 since, with piling mass going into experimentals:
+--   brain.lua ExperimentalJob.)
 local kEconomy = {
     factoryEvery = 1.5, energyPerMass = 10, reclaimPush = 250, reclaimEngineersMax = 40, upgradeEnergy = 0.5,
     t1FactoriesWithHQ = 6, t1FactoryFloat = 0.6, techEngineersHQ = 10, investFloat = 0.8,
-    landSoftShare = 0.25, landHardShare = 0.5,
+    landSoftShare = 0.12, landHardShare = 0.25,
 }
 
 -- Sane ranges of every knob (kBase and kEconomy), for an automatic tuning harness that tries them over seeded games:

@@ -1,7 +1,7 @@
 // moho64 -- milestone 1 host: mount the game data the way the original does, then run the
 // rules state (blueprint loading) or compile-check every script.
 //
-//   moho64 --init <init.lua> [--drive c=/host/dir] [--folder NAME=path] [--mods uids.txt] [--our-mods folder]
+//   moho64 --init <init.lua> [--drive c=/host/dir] [--folder NAME=path] [--mods uids.txt] [--our-mods folder[;folder]]...
 //          [--log out.log] [--check-lua] [--rules] [--quiet]
 //          [--sim <replay> | --session <game configuration .lua> [--seed N]] [--ticks N] [--view] [--orders file] [--sim-lua file]
 //          [--twice | --together [--together-lag N] [--together-threads <n|cores>]] [--focus N]
@@ -131,8 +131,10 @@ struct Options {
   std::vector<std::pair<std::string, std::string>> scanMounts;
   std::vector<std::string> scanSkips;
   // --our-mods <folder>: where the engine's own mods are (the repository's mods/, e.g. m28-variant), as moho64ui's
-  // option of that name; without it, beside the program or one folder up (MountSessionMods)
-  std::string ourMods;
+  // option of that name; without it, beside the program or one folder up (MountSessionMods). Repeatable, and each
+  // may be a ';' list: a game can name mods from several such folders (the repository's mods/ and the lab's local
+  // mod fixes, local_mod_fixes/, which never go into a repository), looked through in the order given.
+  std::vector<std::string> ourMods;
   // --net host:<port> | join:<port>: a test of a network game (sim/lockstep.h) over the interface's transport
   // (ui/net/beat_exchange_net.h, its TCP connector on 127.0.0.1): two copies of moho64 play one --session (the same
   // file and --seed), the host as client 0, the other as client 1 (--net-client 1), each speaking for the command
@@ -1496,7 +1498,7 @@ int RunSim(const Options& o, Vfs& vfs, const std::vector<std::string>& hookDirs,
 // session starts. A location the file system already holds is left as it is (the vault's mods, the original's).
 void MountSessionMods(const Options& o, Vfs& vfs, const std::vector<std::string>& locations) {
   std::vector<std::string> roots;
-  if (!o.ourMods.empty()) roots.push_back(o.ourMods);
+  for (const std::string& r : o.ourMods) roots.push_back(r);
   std::string dir = hostfs::ProgramFolder();
   if (dir.empty()) dir = ".";
   roots.push_back(dir + "/mods");
@@ -1885,7 +1887,15 @@ int main(int argc, char** argv) {
       o.scanMounts.emplace_back(folder, next());
     }
     else if (a == "--scan-skip") o.scanSkips.push_back(next());
-    else if (a == "--our-mods") o.ourMods = next();
+    else if (a == "--our-mods") {
+      const std::string v = next();
+      for (size_t at = 0; at <= v.size();) {
+        size_t semi = v.find(';', at);
+        if (semi == std::string::npos) semi = v.size();
+        if (semi > at) o.ourMods.push_back(v.substr(at, semi - at));
+        at = semi + 1;
+      }
+    }
     else if (a == "--net") {  // host:<port> | join:<port>
       const std::string v = next();
       const size_t colon = v.find(':');

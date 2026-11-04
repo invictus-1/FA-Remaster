@@ -244,9 +244,12 @@ end
 -- part of the enemy's army, times K.defenceFactor, beats
 -- the best mobile counter's; at most K.defenceBuilding ordered or under construction at once, and all our defences
 -- at most K.defenceShare of our mobile army's mass.
-function DefenceJob(brain, tech, ctx)
+-- (2026-11-03, perf: everything up to the sites is the same for every builder of a tech in one economy step - the
+-- units' lists, the mix, the build values - so it is worked out once a step per tech (ctx.defPlan); each builder then
+-- only looks at the sites, whose spots and claims change as builders take jobs. DefenceJob was the economy's
+-- second cost in the 4v4: every builder's call summed the mass of every unit of the army.)
+local function DefencePlan(brain, tech, ctx)
     local R = brain.Remaster
-    if ctx.defenceGiven then return end
     local K = Knobs(brain)
     -- defences ordered but not started yet count too (a builder may still be walking there): kept kPendingTicks
     local pending = {}
@@ -293,7 +296,23 @@ function DefenceJob(brain, tech, ctx)
             table.insert(sites, { zone = mine, x = ch.x, z = ch.z, why = 'choke the enemy comes through' })
         end
     end
-    for _, s in ipairs(sites) do
+    return { K = K, pending = pending, bp = bp, cat = cat, sites = sites, pdValue = pdValue, mobileValue = mobileValue,
+        vsAir = vsAir, c = c }
+end
+
+function DefenceJob(brain, tech, ctx)
+    local R = brain.Remaster
+    if ctx.defenceGiven then return end
+    ctx.defPlan = ctx.defPlan or {}
+    local plan = ctx.defPlan[tech]
+    if plan == nil then
+        plan = DefencePlan(brain, tech, ctx) or false
+        ctx.defPlan[tech] = plan
+    end
+    if not plan then return end
+    local K, pending, bp, cat, pdValue, mobileValue, vsAir, c = plan.K, plan.pending, plan.bp, plan.cat, plan.pdValue,
+        plan.mobileValue, plan.vsAir, plan.c
+    for _, s in ipairs(plan.sites) do
         local near = DefencesNear(brain, s.x, s.z, cat)
         for _, d in ipairs(pending) do
             if math.abs(d.x - s.x) <= 20 and math.abs(d.z - s.z) <= 20 then near = near + 1 end
