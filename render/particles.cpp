@@ -39,7 +39,8 @@ cbuffer ParticleSet : register(b1) {
   float4 grid;          // x: 1 = frames run across the whole grid, y: 1 = and start again after the last,
                         // z: frames in the grid, w: 1 = each frame blends into the next
   float4 extra;         // x: 1 = lit through a normal map, y: how far it bends what is behind (x the
-                        // original's), z: 1 = it stops on the ground (the row's last number: its height)
+                        // original's), z: 1 = it stops on the ground (the row's last number: its height),
+                        // w: [motionblend] MotionStrength (0: no motion texture; frames crossfade)
 #if LIT_SMOKE
   float4 lit;           // lit smoke (World::litSmoke): x 1 = this set is lit as a volume; y how dense it is to
                         // the light going through it; z how strongly the small lights light it; w (the smoke's
@@ -56,6 +57,7 @@ Texture2D particleNormals : register(t4);  // (lit particles only)
 #if LIT_SMOKE
 Texture2D sixWayTexture : register(t5);  // (six-way light maps' second texture: left, bottom, front; emission)
 #endif
+Texture2D particleMotion : register(t6);  // [motionblend] each frame's motion to the next (MotionTexture)
 #ifdef MSAA
 Texture2DMS<float> sceneDepth : register(t3);
 #else
@@ -264,6 +266,20 @@ float Meets(VOut i, out uint coverage) {
   return coverage == 0 ? 0 : saturate(nearest / max(meeting.x, 1e-3));
 }
 
+// [motionblend] Where a blended frame and the next are read, moved along the frames' motion (MotionTexture): this frame's
+// back by how far the blend has gone, the next one's forward by what is left (the motion of each read at its own place).
+// The frames' places in i are moved, so that every reading of them (the colour, the six-way maps, the lit smoke's alpha
+// steps) flows alike.
+void MotionWarp(inout VOut i) {
+  [branch] if (extra.w > 0 && i.next.z > 0) {
+    const float2 frame = options.y > 0.5 ? sheet.xy : float2(1, 1);
+    const float2 here = (particleMotion.SampleLevel(samplerLinear, i.uv, 0).rg * 2 - 1) * extra.w * frame;
+    const float2 there = (particleMotion.SampleLevel(samplerLinear, i.next.xy, 0).rg * 2 - 1) * extra.w * frame;
+    i.uv -= here * i.next.z;
+    i.next.xy += there * (1 - i.next.z);
+  }
+}
+
 // The particle's texture: its frame, blended into the next one where frames blend.
 float4 Frame(VOut i) {
   float4 c = particleTexture.Sample(samplerLinear, i.uv);
@@ -393,6 +409,7 @@ float3 SixWay(VOut i, bool modern) {
 // The smoke's shadow pass (smoke.h): what of the sun's light the particle takes away here, as optical depth, with
 // its height along the light and the height squared, to be added up.
 float4 ShadowPS(VOut i) : SV_Target {
+  MotionWarp(i);  // [motionblend]
   float4 c = Frame(i) * rampTexture.Sample(samplerLinearClamp, i.rampUv);
   float a = options.z > 0.5 && options.z < 1.5 ? dot(saturate(c.rgb), 1.0 / 3) : saturate(c.a);  // (darkening: what it takes)
   float tau = -log(1 - min(a, 0.95)) * lit.w;
@@ -403,6 +420,7 @@ float4 ShadowPS(VOut i) : SV_Target {
 #endif
 
 float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
+  MotionWarp(i);  // [motionblend]
   float meets = Meets(i, coverage);
   if (meets <= 0) discard;
   if (options.z > 3.5) {
@@ -744,6 +762,8 @@ const EmitterBlueprint* Particles::Blueprint(const std::string& path, const std:
   bp->normalPath = v["NormalTexture"].StringOr(std::string());
   bp->sixWayPath = v["SixWayTexture"].StringOr(std::string());
   bp->sixWayEmission = Number(v["SixWayEmission"], 1);
+  bp->motionPath = v["MotionTexture"].StringOr(std::string());  // [motionblend]
+  bp->motionStrength = std::max(0.0f, Number(v["MotionStrength"], 0.1f));
   bp->refractionScale = Number(v["RefractionScale"], 1);
   bp->collideGround = Flag(v["CollideGround"], false);
   bp->keepAtLowQuality = Flag(v["KeepAtLowQuality"], false);
@@ -778,6 +798,7 @@ const EmitterBlueprint* Particles::Blueprint(const std::string& path, const std:
   bp->ramp = bp->rampPath.empty() ? textures_->White() : textures_->Get(EffectFile(*vfs_, bp->rampPath, remastered), textures_->White());
   bp->normals = bp->normalPath.empty() ? textures_->FlatNormal() : textures_->Get(EffectFile(*vfs_, bp->normalPath, remastered), textures_->FlatNormal());
   if (!bp->sixWayPath.empty()) bp->sixWay = textures_->Get(EffectFile(*vfs_, bp->sixWayPath, remastered), textures_->White());
+  if (!bp->motionPath.empty()) bp->motion = textures_->Get(EffectFile(*vfs_, bp->motionPath, remastered), gfx::Texture{});  // [motionblend]
   for (const EmitterCurve* c : {&bp->size, &bp->startSize, &bp->endSize})
     for (const Vec3& key : c->keys) bp->largestSize = std::max(bp->largestSize, key.y + std::fabs(key.z) * 0.5f);
   bp->ok = true;
@@ -1259,7 +1280,8 @@ void Particles::DrawSets(const View& view, int pass, gfx::Texture behind, gfx::T
                                  soften, 0, 0, 0,
                                  bp.gridAnimate ? 1.0f : 0.0f, bp.gridLoop ? 1.0f : 0.0f,
                                  static_cast<float>(bp.frameCount * bp.stripCount), bp.frameBlend ? 1.0f : 0.0f,
-                                 bp.normalPath.empty() ? 0.0f : 1.0f, bp.refractionScale, bp.collideGround ? 1.0f : 0.0f, 0,
+                                 bp.normalPath.empty() ? 0.0f : 1.0f, bp.refractionScale, bp.collideGround ? 1.0f : 0.0f,
+                                 bp.motion && bp.frameBlend ? bp.motionStrength : 0.0f,  // [motionblend]
                                  // (lit smoke: lit as a volume; the smoke's shadow: how much it casts)
                                  litSet && litNow ? 1.0f : 0.0f, smokeDensity, smokeSmallLights, shadow ? 1.0f : 0.0f,
                                  // (six-way frames turned upright in the smoke's shadow too, so that it has their shape)
@@ -1272,6 +1294,7 @@ void Particles::DrawSets(const View& view, int pass, gfx::Texture behind, gfx::T
     device_->SetTexture(1, bp.ramp);
     device_->SetTexture(4, bp.normals);
     if (sixWay) device_->SetTexture(5, bp.sixWay);
+    device_->SetTexture(6, bp.motion ? bp.motion : textures_->Black());  // [motionblend]
     device_->Draw(6, 0, static_cast<uint32_t>(spans[i].second));
   }
 }

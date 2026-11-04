@@ -130,6 +130,26 @@ Unity's blog names a Blender add-on of its own that renders the six maps and the
 (`unity_6way.py`); it was not looked at (its licence unknown, and it would be a download: Chris's call). The six lights
 and the packing are a few lines of Blender's own Python, which the visuals session can write herself.
 
+## Motion-vector blending between flipbook frames ([motionblend], 2026-11-04)
+
+For simulated flipbooks (the visuals session's Mantaflow bakes) a third texture of the same grid makes the frames between
+two flow instead of crossfading, so 48-64 frames read as smoothly as several times as many:
+
+```
+MotionTexture = '/textures/particles/<name>_motion.dds',   -- RG8: each frame's motion to the next frame
+MotionStrength = 0.1,                                        -- the largest offset, as a share of a frame (default 0.1)
+TextureFrameBlend = true,                                    -- (or TextureGridAnimate: frames must blend)
+```
+
+- **Encoding**: red = the frame's x motion (+ right), green = its y motion (+ down), in the frame's own uv; 0.5 = none;
+  value v means (v * 2 - 1) x MotionStrength of a frame. Blue is not read; alpha may hold coverage (not read). Linear,
+  not sRGB (texconv `-f R8G8B8A8_UNORM`, or BC5 for RG alone).
+- **Direction**: from frame n to frame n + 1 (a feature at p in frame n is at p + motion in frame n + 1).
+- **How it is read**: a blended pixel reads frame n moved back along frame n's motion by how far the blend has gone, and
+  frame n + 1 moved forward along its own motion by what is left (particles.cpp `MotionWarp`); every reading of the
+  frames takes the moved places (the colour, both six-way textures, the lit smoke's alpha steps, the smoke's shadow).
+- Without a MotionTexture, or with frames that do not blend, nothing changes.
+
 ## Costs and checks
 
 Costs at 2560 x 1440 without vsync (`--timings`, 480 frames, the remastered Seton's at 16:00, an RTX 4090 shared with the
