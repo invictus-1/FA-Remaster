@@ -46,12 +46,20 @@ bool PlantSpotAt(int2 cellId, out PlantSpot s) {
   uint h = PlantHash(uint(cellId.x) * 83492791u ^ PlantHash(uint(cellId.y) * 2971215073u));
   float2 xz = cellAt + float2(PlantRand(h), PlantRand(PlantHash(h + 1))) * area.z;
   if (any(xz < 0) || any(xz > mapInfo.xy)) return false;
-  [branch] if (info.y > 0.5 && padCover.SampleLevel(samplerLinearClamp, PlantFieldUv(xz), 0) * PlantFieldWeight(xz) > PlantRand(PlantHash(h + 12))) return false;
-  // (beyond it, the far field: none where a pad lies or something stands, as near)
+  // (beyond it, the far field: none where a pad lies or something stands, as near). [foliage] The two added and set
+  // against the one chance of the spot (before: each against a chance of its own), so that a spot at a pad's rim where
+  // the square's edge passes over it as the camera zooms is kept or left out as it was, not left out by the one and then
+  // kept by the other (lodMore.y: 1 = so, with GroundCover::padGrid; 0 each against its own, as before)
+  float clearedBy = 0, clearedFar = 0;
+  [branch] if (info.y > 0.5) clearedBy = padCover.SampleLevel(samplerLinearClamp, (xz - padArea.xy) / (padArea.z * padArea.w), 0) * PlantFieldWeight(xz);
   [branch] if (farField.w > 0.5) {
     float2 fuv = (xz - farField.xy) * farField.z;
-    if (all(fuv >= 0) && all(fuv <= 1) && farCleared.SampleLevel(samplerLinearClamp, fuv, 0) * (1 - PlantFieldWeight(xz)) > PlantRand(PlantHash(h + 16)))
-      return false;
+    if (all(fuv >= 0) && all(fuv <= 1)) clearedFar = farCleared.SampleLevel(samplerLinearClamp, fuv, 0) * (1 - PlantFieldWeight(xz));
+  }
+  if (lodMore.y > 0.5) {
+    if (clearedBy + clearedFar > PlantRand(PlantHash(h + 12))) return false;
+  } else if (clearedBy > PlantRand(PlantHash(h + 12)) || clearedFar > PlantRand(PlantHash(h + 16))) {
+    return false;
   }
   float bare = 0;
   [branch] if (shown.y > 0.5) {
@@ -128,6 +136,71 @@ int PlantModelLevel(PlantSpot s, float px, uint hc) {
   int last = int(kind.x) - 1;
   return level <= last ? level : kind.y > 0.5 ? -1 : last;
 }
+// [foliage] The same, and near a change of level the plant drawn at both, each on its own pixels (PlantDither), so that it
+// dissolves from the one into the other as its size on screen goes through the change: from lodMore.x under it (in the
+// natural log of its pixels) all at the coarser, to as far over it all at the finer (PlantLodTune::modelFade; 0: switched
+// at once, as PlantModelLevel). `first`: the level the models draw it at (-1: its card, nothing for the models); `second`:
+// the coarser it dissolves into (-1 its card, -2 none: all of it at `first`); `share`: the share of its pixels at `first`
+// (those whose PlantDither is below it; the rest at `second`).
+struct PlantPick {
+  int first, second;
+  float share;
+};
+PlantPick PlantModelPick(PlantSpot s, float px, uint hc) {
+  PlantPick k;
+  k.first = PlantModelLevel(s, px, hc);
+  k.second = -2;
+  k.share = 1;
+  float4 m = CellModel(s.cell);
+  if (lodMore.x <= 0 || m.x < 0 || lodInfo[2].y < 0.5 || (s.group <= 1 && s.cell < 16)) return k;
+  float4 kind = modelKinds[uint(m.x)];
+  float p = px * (1 + lodInfo[2].z * (PlantRand(PlantHash(hc + 21)) - 0.5));
+  int last = int(kind.x) - 1;
+  // (the change it is nearest, if within reach of one: between the sizes' index i and i + 1, as PlantModelLevel numbers
+  // them before it maps those past its last level to its card or its last; lodMore.z: which changes dissolve, bits.) Into
+  // its card all of it over the change, from where the model was drawn before down to twice lodMore.x over it: the card
+  // drawn a little sooner where it is cheap, the model no lower than before (a model under the change for every fern of
+  // the view near that size cost a tenth more of the cover's pass, 2026-11-03)
+  float bounds[3] = {m.y, m.z, m.w};
+  [unroll] for (int i = 0; i < 3; ++i) {
+    int finer = i <= last ? i : kind.y > 0.5 ? -1 : last;
+    int coarser = i + 1 <= last ? i + 1 : kind.y > 0.5 ? -1 : last;
+    float t = log(max(p, 1e-4) / max(bounds[i], 1e-4)) / lodMore.x - (coarser == -1 ? 1 : 0);
+    if (abs(t) < 1 && ((uint(lodMore.z) >> i) & 1u) != 0) {
+      if (finer != coarser) {
+        k.first = finer;
+        k.second = coarser;
+        k.share = 0.5 + 0.5 * t;
+      }
+      return k;
+    }
+  }
+  return k;
+}
+// [foliage] where a pixel lies in a plant's dissolve (0 .. 1): the same for its two levels, so that each pixel shows one
+float PlantDither(float2 pixel) { return frac(52.9829189 * frac(dot(floor(pixel), float2(0.06711056, 0.00583715)))); }
+// [foliage] With several samples a pixel (PLANT_SAMPLES): the samples of the pixel a plant dissolving takes, each sample
+// at its own place in the dissolve (its pixel's PlantDither, then a step of 1 / samples on), the others left to its other
+// level: the pixel's colour then a mix of the two by their shares, not the one or the other (written as the pixel's
+// coverage, SV_Coverage; `range` its share: from x up to below y). All of them where it is not dissolving. (Only with
+// PLANT_DISSOLVE, PlantLodTune::modelFade over 0: a pixel shader that writes its coverage changes how the card's alpha to
+// coverage picks its samples at the leaves' edges, so without the dissolve it is left as it was.)
+#if defined(PLANT_DISSOLVE) && PLANT_SAMPLES > 1
+#define PLANT_COVERAGE 1
+#define PLANT_COVERAGE_OUT , out uint coverage : SV_Coverage
+uint PlantDissolveMask(float2 pixel, float2 range) {
+  if (range.x <= 0 && range.y >= 1) return 0xffffffffu;
+  float d = PlantDither(pixel);
+  uint mask = 0;
+  [unroll] for (uint k = 0; k < uint(PLANT_SAMPLES); ++k) {
+    float t = frac(d + (float(k) + 0.5) / float(PLANT_SAMPLES));
+    if (t >= range.x && t < range.y) mask |= 1u << k;
+  }
+  return mask;
+}
+#else
+#define PLANT_COVERAGE_OUT
+#endif
 )hlsl";
 
 // The models' placing (GroundCover::PrepareFar): a thread a spot of the tiles that have a row of flags (their first cells
@@ -156,7 +229,9 @@ cbuffer ModelPlace : register(b2) {
     uint kind = uint(CellModel(s.cell).x);
     for (uint plant = 0; plant < s.count && plant < 6u; ++plant) {
       uint hc = PlantHash(s.h * 31 + plant * 977 + 7);
-      int level = PlantModelLevel(s, px, hc);
+      // [foliage] its level, and near a change of level the one it dissolves into (PlantModelPick)
+      PlantPick pick = PlantModelPick(s, px, hc);
+      int level = pick.first;
       if (level < 0) continue;
       float scale = PlantLodScale(s, px, plant);
       if (scale <= 0.01) continue;
@@ -171,11 +246,26 @@ cbuffer ModelPlace : register(b2) {
       float height = lerp(size.y, size.z, PlantRand(PlantHash(hc + 2))) * more.w * scale * s.grown * (1 - 0.5 * s.bare);
       uint bucket = kind * 4 + uint(level), at;
       InterlockedAdd(placeCounters[int2(bucket, 0)], 1u, at);
+      // [foliage] dissolving into a coarser level: that one too, on the other pixels (the second texel's w: the share of
+      // the pixels each is drawn on, PlantDither below w, or with 2 added at or over w - 2). Where one of the two has no
+      // room, the other is put nowhere (height 0) and the plant left to its card, whole.
+      bool fits = at < uint(room[bucket / 4][bucket % 4]);
+      uint bucket2 = 0, at2 = 0;
+      if (pick.second >= 0) {
+        bucket2 = kind * 4 + uint(pick.second);
+        InterlockedAdd(placeCounters[int2(bucket2, 0)], 1u, at2);
+        fits = fits && at2 < uint(room[bucket2 / 4][bucket2 % 4]);
+        if (at2 < uint(room[bucket2 / 4][bucket2 % 4])) {
+          int2 texel2 = int2((at2 % 2048u) * 2, bucket2 * 4 + at2 / 2048u);
+          placeInstances[texel2] = float4(foot.x, ground, foot.y, fits ? height : 0);
+          placeInstances[texel2 + int2(1, 0)] = float4(asfloat(hc), float(s.cell), float(plant), 2 + pick.share);
+        }
+      }
       if (at >= uint(room[bucket / 4][bucket % 4])) continue;
       int2 texel = int2((at % 2048u) * 2, bucket * 4 + at / 2048u);
-      placeInstances[texel] = float4(foot.x, ground, foot.y, height);
-      placeInstances[texel + int2(1, 0)] = float4(asfloat(hc), float(s.cell), float(plant), 0);
-      bits |= 1u << plant;
+      placeInstances[texel] = float4(foot.x, ground, foot.y, fits ? height : 0);
+      placeInstances[texel + int2(1, 0)] = float4(asfloat(hc), float(s.cell), float(plant), pick.share);
+      if (fits) bits |= 1u << plant;
     }
   }
   placeFlags[int2(within, slot)] = bits;
@@ -214,6 +304,7 @@ struct MOut {
   float4 info : TEXCOORD5;  // x: how high up the plant (0 its foot, 1 its top); y: the snow's top here (world y); z: its
                             // snow dusting; w: 1 = drawn
   nointerpolation float3 tint : TEXCOORD6;  // its colour times this (its card's: the ground's brightness, tones)
+  nointerpolation float2 dissolve : TEXCOORD8;  // [foliage] the pixels it is drawn on: PlantDither from x up to below y
 #ifdef PLANTS
   nointerpolation float4 burnt : TEXCOORD7;
 #endif
@@ -228,6 +319,7 @@ float3 ModelTurn(float3 v, float c, float s) { return float3(v.x * c - v.z * s, 
 MOut MVS(MIn v) {
   MOut o = (MOut)0;
   o.position = float4(0, 0, -1, 1);
+  o.dissolve = float2(0, 1);
 #ifdef MOTION
   o.here = o.then = float4(0, 0, 0, 1);
 #endif
@@ -238,6 +330,7 @@ MOut MVS(MIn v) {
   float2 foot = r0.xz;
   float ground = r0.y, height = r0.w;
   uint hc = asuint(r1.x), cell = uint(r1.y);
+  o.dissolve = r1.w >= 2 ? float2(r1.w - 2, 1) : float2(0, r1.w);  // [foliage] (PlantModelPick's share: kPlantModelPlace)
   float4 more = CellMore(cell);
   float meshHeight = max(lodInfo[3].y, 1e-3);
   height *= 1 - 0.9 * trampled.SampleLevel(samplerLinearClamp, PlantFieldUv(foot), 0) * PlantFieldWeight(foot);
@@ -353,11 +446,18 @@ float2 MotionMPS(MOut i) : SV_Target {
   clip(i.info.w - 0.5);
   clip(ModelCoverage(i.uv) - 0.5);
   clip(i.world.y - i.info.y);
+  {  // [foliage] (dissolving between two levels: its own pixels)
+    float d = PlantDither(i.position.xy);
+    if (d < i.dissolve.x || d >= i.dissolve.y) discard;
+  }
   return CoverMoved(i.here, i.then);
 }
 #endif
 
-float4 MPS(MOut i) : SV_Target {
+float4 MPS(MOut i PLANT_COVERAGE_OUT) : SV_Target {
+#if PLANT_COVERAGE
+  coverage = 0xffffffffu;  // [foliage]
+#endif
 #if RAYS
   rayLightsAtMost = 1;
 #endif
@@ -402,6 +502,15 @@ float4 MPS(MOut i) : SV_Target {
     base = lerp(base, SNOW_COLOUR, dust);
     through *= 1 - dust;
   }
+  // [foliage] dissolving between two levels, or into its card: its own samples, or pixels, of the plant (PlantModelPick;
+  // cut last, after what reads its neighbours' texture coordinates)
+#if PLANT_COVERAGE
+  coverage = PlantDissolveMask(i.position.xy, i.dissolve);
+  if (coverage == 0) discard;
+#else
+  float d = PlantDither(i.position.xy);
+  if (d < i.dissolve.x || d >= i.dissolve.y) discard;
+#endif
   return float4(ModernLight(base, spec.r, spec.g, occlusion, through, N, i.world, shadow), cover);
 }
 )hlsl";
@@ -726,7 +835,8 @@ void PlantTiles::Visit(const View& view, int tx, int tz, int span, int tilesX, i
     if (c.frame <= 0) continue;
     const float px = c.frame * focal / dNear;
     if (px <= tune.cutLow * cutScale) continue;
-    if (c.model && px * (1 + 0.5f * tune.modelBand) >= c.modelDownTo) model = true;
+    // ([foliage] down to where its last level has dissolved into its card: modelFade under it)
+    if (c.model && px * (1 + 0.5f * tune.modelBand) * std::exp(std::max(tune.modelFade, 0.0f)) >= c.modelDownTo) model = true;
     if (c.cardless) continue;  // (never a card: no corners for it)
     most = std::max(most, px > tune.collapseLow ? c.clumpMost : 1);
   }

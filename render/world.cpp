@@ -3512,7 +3512,7 @@ void World::Render() {
       const bool square = !grass.plantsFar || grass.FieldsReady();
       if (decals.remasteredTarmacs && square) {
         decals.TarmacPads(clock_, &padsNear_);
-        grass.cleared = decals.tarmacs.ClearCover(view, grass.Area(), padsNear_);
+        grass.cleared = decals.tarmacs.ClearCover(view, grass.PadArea(), padsNear_);  // ([foliage] on its own grid)
       }
       if (blastsNow_ && blasts.Waves() && square && grass.PrepareBlasts()) grassBlasts_ = blasts.PrepareField(grass.Area());  // (the blasts' waves over it)
       if (grass.plantsFar) {  // [plantlod] the plants' tiles over the view, what clears them beyond the square, the models' placing

@@ -200,7 +200,11 @@
 //           out and rounded (World::plantsRound); --plant-models: the visuals session's 3D plants where the cover has them,
 //           with --plants-far (World::plantModels); --plant-lod name=value,...: their sizes on screen (PlantLodTune:
 //           collapseHigh, collapseLow, cutHigh, cutLow, farCover, farPlants, farClear, model0, model1, model2, modelBand,
-//           onlyCell; farBlades, farShade)
+//           modelFade, modelFadeAt, onlyCell; farBlades, farShade, padGrid, bladesGrowIn). [foliage] modelFade=0: a 3D plant
+//           switched from one level to the next, or to its card, at once (as before the big test of 2026-11-01), not
+//           dissolved; padGrid=0: the pads' clearing of the cover drawn over the grass's square as it grows and shrinks
+//           with the zoom (as before), not on a grid of its own (GroundCover::PadArea); bladesGrowIn=0: the blades'
+//           tufts toward the square's edge at their full height wherever the thinning lets them be (as before)
 // --leaf-light  the sun's light through leaves, grass blades and plants (World::leafLight; modern look)
 // --lamp-colour team|faction  [lampcolour] a unit's own faint glow (its 'hull' lamps) in its army's colour (team, the
 //           default) or its faction's own (faction: UEF blue whatever the army's colour; World::lampsTeamColour)
@@ -2084,10 +2088,14 @@ int main(int argc, char** argv) {
         else if (name == "model1") t.modelPixels[1] = value;
         else if (name == "model2") t.modelPixels[2] = value;
         else if (name == "modelBand") t.modelBand = value;
+        else if (name == "modelFade") t.modelFade = value;  // [foliage]
+        else if (name == "modelFadeAt") t.modelFadeAt = static_cast<int>(value);  // [foliage]
         else if (name == "onlyCell") t.onlyCell = static_cast<int>(value);
         else if (name == "farClear") t.farClear = value;
         else if (name == "farBlades") world.grass.farBlades = value;
         else if (name == "farShade") world.grass.farShade = value;
+        else if (name == "padGrid") world.grass.padGrid = value > 0.5f;  // [foliage]
+        else if (name == "bladesGrowIn") world.grass.bladesGrowIn = value > 0.5f;  // [foliage]
         else fprintf(stderr, "render: --plant-lod: no such number %s\n", name.c_str());
       }
       at = end + 1;

@@ -348,6 +348,7 @@ class WorldPicture {
     float position[3] = {0, 0, 0};
     float heading = 0;      // radians about the upright axis
     bool free = true;
+    bool placing = false;   // [ghost] the one under the cursor being placed (drawn brighter than the sites ordered)
   };
   void SetBuildPreviews(const std::vector<BuildPreview>& previews);
   // Pictures laid on the ground (the game's UserDecal: the ring of a weapon's splash while the player
