@@ -168,6 +168,9 @@ repository and are not released yet. An early look at them is below.
 ![Rain over the meadows](docs/images/showcase/31_scenery_rain.jpg)
 *Rain over the meadows*
 
+![Snow on the rock hill](docs/images/showcase/32_scenery_snow.jpg)
+*Snow on the rock hill*
+
 ## Simulation (`src/`)
 
 What is built, each part rebuilt from how the original behaves:
