@@ -399,9 +399,12 @@ float Thickness(const float pair[2], float coeff, float zoomShare, float playabl
 void Passes(lua_State* L, RangeStore& store, const RangeView& view, std::vector<Pass>* out) {
   UserState* user = UserState::From(L);
   if (!store.ranges || store.filters.empty()) return;
-  Sim* sim = user->LiveSim("range rings");
-  if (!sim) return;
-  const int own = sim->focusArmy >= 0 ? sim->focusArmy + 1 : -1;
+  if (!user->HasSim()) return;
+  // (the focus army and the armies from the beat's copies once there are some: CopyFromSimulation)
+  std::vector<ArmyView> asked;
+  const std::vector<ArmyView>& armies = user->economyCopied ? user->armiesCopy : (asked = ArmyViews(*user->LiveSim("range rings")));
+  const int focus = user->economyCopied ? user->focusArmyCopy : user->LiveSim("range rings")->focusArmy;
+  const int own = focus >= 0 ? focus + 1 : -1;
   WorldSource* world = user->config().world;
   // Where a unit is drawn this frame (the picture's), else where the last beat left it.
   auto placeOf = [&](uint32_t id, const UnitView& u, float at[3]) {
@@ -509,7 +512,7 @@ void Passes(lua_State* L, RangeStore& store, const RangeView& view, std::vector<
     f.inner[0] = 0.1f, f.inner[1] = 1, f.outer[0] = 1, f.outer[1] = 2;
     return f;
   }();
-  for (const ArmyView& a : ArmyViews(*sim)) {
+  for (const ArmyView& a : armies) {
     if (a.index != own || a.noRushTicks <= 0) continue;
     Pass p{"norush", &noRushName, &noRush, noRush.normal, {}};
     p.rings.push_back({{a.start[0] + a.noRushOffset[0], 0, a.noRushOffset[1] + a.start[1]}, 0, a.noRushRadius, 0xffffffffu});
