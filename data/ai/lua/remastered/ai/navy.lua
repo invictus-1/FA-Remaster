@@ -25,6 +25,16 @@ local kSiteStep = 8           -- world units between the points tried for a nava
 local kSiteRange = 160        -- world units from the start: the naval factory sites looked at
 local kShore = 24             -- world units: land this near a site is its shore
 local kBaseTravel = 200       -- the shore's land zone within this travel of the start zone
+-- (2026-11-03, Chris's big test on SETONS_R: "the players at the water should be building navy and expanding into the
+-- water but they aren't" - the navy came only once enemy ships were seen) A NAVAL MAP for this army: our home water's
+-- pond has water within kNavalReach of an enemy's start. Then, from kNavalFrom minutes, 1 naval factory (2 from
+-- kNavalSecond), ships kept up to a floor growing kNavalGrow mass a minute after kNavalFrom (at most kNavalMax) whether
+-- or not enemy ships are known, and ships with no ship fight to take go for the enemy's coast (sea control).
+local kNavalReach = 250
+local kNavalFrom = 5
+local kNavalSecond = 12
+local kNavalGrow = 150
+local kNavalMax = 4000
 
 -- the naval candidates by naval factory tech (blueprint suffixes): frigate, submarine; destroyer, cruiser; battleship
 local kShips = { { 's0103', 's0203' }, { 's0201', 's0202' }, { 's0302' } }
@@ -89,13 +99,46 @@ local function OwnShips(brain)
     return list, mass
 end
 
+-- (2026-11-03) a naval map for this army (kNavalReach above), worked out once our coast is known: the start
+-- positions are what every player knows from the lobby
+function NavalMap(brain)
+    local R = brain.Remaster
+    if R.navalMap ~= nil then return R.navalMap end
+    local home = HomeWater(brain)
+    if not home then return false end
+    local pond = Remastered.AIZone(home).area
+    local info = Remastered.AIMapInfo()
+    local found = false
+    for i, b in ipairs(ArmyBrains) do
+        if not found and IsEnemy(R.army, i) and not ArmyIsCivilian(i) then
+            local ex, ez = b:GetArmyStartPos()
+            for z = 1, info.zones do
+                local zone = Remastered.AIZone(z)
+                if zone.domain == 'naval' and zone.area == pond then
+                    local dx, dz = zone.x - ex, zone.z - ez
+                    if dx * dx + dz * dz <= kNavalReach * kNavalReach then
+                        found = true
+                        break
+                    end
+                end
+            end
+        end
+    end
+    R.navalMap = found
+    LOG(string.format('ainavy %d %d naval map: %s (home water %d, pond %d)', R.army, R.tick,
+        found and 'our water reaches an enemy start' or 'no enemy start on our water', home, pond))
+    return found
+end
+
 -- how many naval factories we want now
 function WantFactories(brain)
     local R = brain.Remaster
     if not HomeWater(brain) then return 0 end
     local peak = R.enemyNavalPeak or 0
-    if peak < 200 and (R.coastMass or 0) <= 0 then return 0 end
-    return math.min(kMaxFactories, 1 + math.floor(peak / kFactoryMass))
+    local minutes = GetGameTick() / 600
+    local map = NavalMap(brain) and minutes >= kNavalFrom and (minutes >= kNavalSecond and 2 or 1) or 0
+    if peak < 200 and (R.coastMass or 0) <= 0 then return map end
+    return math.max(map, math.min(kMaxFactories, 1 + math.floor(peak / kFactoryMass)))
 end
 
 -- a naval factory site: water within kSiteRange of the start where the factory can stand and whose shore (land within
@@ -147,6 +190,9 @@ function FactoryPick(brain, tech)
     local ships, enemyMass = EnemyShips(R)
     local _, ownMass = OwnShips(brain)
     local want = math.max(kNavyMatch * (R.enemyNavalPeak or enemyMass), (R.enemyNavalPeak or 0) > 0 and kNavyFloor or 0)
+    if NavalMap(brain) then  -- (2026-11-03: sea control on a naval map, whether or not enemy ships are known)
+        want = math.max(want, math.min(kNavalMax, kNavyFloor + kNavalGrow * math.max(0, GetGameTick() / 600 - kNavalFrom)))
+    end
     if ownMass >= want then return nil end
     local best, bestV
     if ships[1] then
@@ -172,6 +218,30 @@ function FactoryPick(brain, tech)
     return best
 end
 
+-- (2026-11-03) ship orders replace the queue and are given again only when they change or a ship stopped away from
+-- the point: the ships got IssueAggressiveMove appended every think (the land army's stale-order pile, operations.lua)
+local function ShipOrder(R, ships, pos, key)
+    R.shipOrder = R.shipOrder or {}
+    local keep, give = {}, {}
+    for _, u in ipairs(ships) do
+        local id = u:GetEntityId()
+        keep[id] = R.shipOrder[id]
+        if keep[id] ~= key then
+            table.insert(give, u)
+        elseif u:IsIdleState() then
+            local p = u:GetPosition()
+            local dx, dz = p[1] - pos[1], p[3] - pos[3]
+            if dx * dx + dz * dz > 30 * 30 then table.insert(give, u) end
+        end
+    end
+    for _, u in ipairs(give) do keep[u:GetEntityId()] = key end
+    R.shipOrder = keep
+    if give[1] then
+        IssueClearCommands(give)
+        IssueAggressiveMove(give, pos)
+    end
+end
+
 local function Log(R, what, zone, margin, reason)
     if R.navyState == what .. zone then return end
     R.navyState = what .. zone
@@ -193,7 +263,7 @@ function Think(brain)
         if margin >= K.defend then
             Log(R, 'defend', t.zone, margin, 'enemy ships shell our coast; the estimate lets us take them')
             local zone = Remastered.AIZone(t.zone)
-            IssueAggressiveMove(ships, Pos(zone.x, zone.z))
+            ShipOrder(R, ships, Pos(zone.x, zone.z), 'd' .. t.zone)
             return
         end
     end
@@ -212,19 +282,41 @@ function Think(brain)
         if margin >= K.launch then
             Log(R, 'attack', best, margin, 'enemy ships within reach by sea; the estimate favours us')
             local zone = Remastered.AIZone(best)
-            IssueAggressiveMove(ships, Pos(zone.x, zone.z))
+            ShipOrder(R, ships, Pos(zone.x, zone.z), 'a' .. best)
             return
         end
     end
+    -- 2b. (2026-11-03) sea control on a naval map: the water zone of our pond beside an enemy coastal zone with
+    -- structures, nearest our home water by sea, when the estimate there favours us; the ships shell what they reach
+    if NavalMap(brain) then
+        local pond = Remastered.AIZone(home).area
+        local tgt, tgtD
+        for z = 1, info.zones do
+            local zone = Remastered.AIZone(z)
+            if zone.domain == 'naval' and zone.area == pond then
+                local d = Remastered.AIZoneDistance(home, z, 'naval')
+                if d >= 0 and (not tgtD or d < tgtD) then
+                    for _, nb in ipairs(Remastered.AIZoneNeighbours(z)) do
+                        if nb.coast and Remastered.AIZoneForces(R.army, nb.zone).enemy.structure.count > 0 then
+                            tgt, tgtD = z, d
+                            break
+                        end
+                    end
+                end
+            end
+        end
+        if tgt then
+            local margin = Remastered.AIZoneEstimate(R.army, tgt, kHorizon)
+            if margin >= K.launch then
+                Log(R, 'coast', tgt, margin, 'sea control: an enemy coast within reach by sea; the estimate favours us')
+                local zone = Remastered.AIZone(tgt)
+                ShipOrder(R, ships, Pos(zone.x, zone.z), 'c' .. tgt)
+                return
+            end
+        end
+    end
     -- 3. hold the home water (all of them when the state changes, else the idle ones)
-    local changed = R.navyState ~= 'hold' .. home
     Log(R, 'hold', home, 0, 'no fight at sea the estimate favours: the ships hold our coast')
-    local idle = {}
-    for _, u in ipairs(ships) do
-        if changed or u:IsIdleState() then table.insert(idle, u) end
-    end
-    if idle[1] then
-        local zone = Remastered.AIZone(home)
-        IssueAggressiveMove(idle, Pos(zone.x, zone.z))
-    end
+    local zone = Remastered.AIZone(home)
+    ShipOrder(R, ships, Pos(zone.x, zone.z), 'h' .. home)
 end

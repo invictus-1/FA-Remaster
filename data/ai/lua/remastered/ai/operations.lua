@@ -106,25 +106,28 @@ local function Front(R)
     R.enemyAt = {}  -- (the zones the enemy is known in: the engineers keep out of them)
     R.allyThreat = {}  -- (2026-11-03: zones with an ally's structures and none of ours that enemies are in, zone order)
     R.enemySeen = R.enemySeen or {}  -- zone -> the last tick the enemy was known there (defence sites)
+    local naval = 0  -- (the enemy's ships known anywhere, below; summed in this loop since 2026-11-03, perf)
+    -- (2026-11-03, perf: the numbers of every zone in one call, Remastered.AIZoneSummary - the same as AIZoneForces')
+    local S = Remastered.AIZoneSummary(R.army)
     for z = 1, info.zones do
-        local f = Remastered.AIZoneForces(R.army, z)
+        naval = naval + S.enemyNavalMass[z]
         -- (phase 7: the overall ratio counts everything that hits the ground, air and navy too: against M28 its
         -- gunships and ships were outside the land-only ratio, which said "ahead" while they shelled our base)
-        ours = ours + f.own.land.ground + f.ally.land.ground + f.own.air.ground + f.ally.air.ground +
-            f.own.naval.ground + f.ally.naval.ground
-        local e = f.enemy.land.ground + f.enemy.structure.ground
-        theirs = theirs + e + f.enemy.air.ground + f.enemy.naval.ground
-        if z ~= R.startZone and f.own.economyMass > 0 then table.insert(ownEconomy, z) end
-        local present = f.enemy.land.count + f.enemy.structure.count
+        ours = ours + S.ownLandGround[z] + S.allyLandGround[z] + S.ownAirGround[z] + S.allyAirGround[z] +
+            S.ownNavalGround[z] + S.allyNavalGround[z]
+        local e = S.enemyLandGround[z] + S.enemyStructureGround[z]
+        theirs = theirs + e + S.enemyAirGround[z] + S.enemyNavalGround[z]
+        if z ~= R.startZone and S.ownEconomyMass[z] > 0 then table.insert(ownEconomy, z) end
+        local present = S.enemyLandCount[z] + S.enemyStructureCount[z]
         if present > 0 then
             R.enemyAt[z] = true
             R.enemySeen[z] = R.tick
-            table.insert(enemyZones, { zone = z, strength = e, economy = f.enemy.economyMass,
-                structures = f.enemy.structure.count, army = f.enemy.land.mass, range = f.enemy.land.maxRange })
-            if f.own.structure.count > 0 then table.insert(threatened, z)
-            elseif f.ally.structure.count > 0 then table.insert(R.allyThreat, z) end  -- (2026-11-03: an ally's zone)
+            table.insert(enemyZones, { zone = z, strength = e, economy = S.enemyEconomyMass[z],
+                structures = S.enemyStructureCount[z], army = S.enemyLandMass[z], range = S.enemyLandMaxRange[z] })
+            if S.ownStructureCount[z] > 0 then table.insert(threatened, z)
+            elseif S.allyStructureCount[z] > 0 then table.insert(R.allyThreat, z) end  -- (2026-11-03: an ally's zone)
         end
-        if f.own.structure.count > 0 then ownStruct[z] = true end
+        if S.ownStructureCount[z] > 0 then ownStruct[z] = true end
     end
     -- the shelled zones (phase 10): an enemy land force with a long reach (kShellRange or more) in a zone beside ours
     -- whose structures it can reach is treated as in our zone, so the defence goes for it. Artillery and missile
@@ -180,10 +183,9 @@ local function Front(R)
     R.coastWater = coastList
     R.coastThreat = {}
     for _, w in ipairs(coastList) do
-        local f = Remastered.AIZoneForces(R.army, w)
-        if f.enemy.naval.ground > 0 then
-            table.insert(R.coastThreat, { zone = w, mass = f.enemy.naval.mass, ground = f.enemy.naval.ground })
-            coastMass = coastMass + f.enemy.naval.mass
+        if S.enemyNavalGround[w] > 0 then
+            table.insert(R.coastThreat, { zone = w, mass = S.enemyNavalMass[w], ground = S.enemyNavalGround[w] })
+            coastMass = coastMass + S.enemyNavalMass[w]
         end
     end
     table.sort(R.coastThreat, function(a, b)
@@ -192,8 +194,6 @@ local function Front(R)
     end)
     R.coastMass = coastMass
     -- (phase 10, the navy) the enemy's ships known anywhere, what we saw of them fading by kPeakFade a think
-    local naval = 0
-    for z = 1, info.zones do naval = naval + Remastered.AIZoneForces(R.army, z).enemy.naval.mass end
     R.enemyNavalPeak = math.max(naval, (R.enemyNavalPeak or 0) * kPeakFade)
     R.enemyKnownZones = table.getn(enemyZones)
     R.ownEconomy = ownEconomy
@@ -409,22 +409,37 @@ local function Posts(R, K, units, ownEconomy, ratio, armyMass)
         end
     end
     -- the posts that are not full take the free units nearest to them
+    -- (2026-11-03, perf: a post takes at most kGuardMax - its count, so only that many nearest are kept, in (distance,
+    -- list order) order as the full sort gave them - the full sort of every free unit for every post, with a Lua
+    -- comparator, was the AI's heaviest single cost in Chris's 4v4: 752,000 comparisons in 48 beats. The positions
+    -- and ids are read once.)
+    local px, pz, pid = {}, {}, {}
+    for i, u in ipairs(units) do
+        local q = u:GetPosition()
+        px[i], pz[i], pid[i] = q[1], q[3], u:GetEntityId()
+    end
     for _, p in ipairs(postList) do
         if guardMass >= budget then break end
         if not Full(p) then
             local zone = Remastered.AIZone(p.zone)
-            local near = {}
+            local want = kGuardMax - count[p.zone]
+            local near, k = {}, 0
             for i, u in ipairs(units) do
-                if not guard[u:GetEntityId()] then
-                    local q = u:GetPosition()
-                    local dx, dz = q[1] - zone.x, q[3] - zone.z
-                    table.insert(near, { u = u, d = dx * dx + dz * dz, i = i })
+                if not guard[pid[i]] then
+                    local dx, dz = px[i] - zone.x, pz[i] - zone.z
+                    local d = dx * dx + dz * dz
+                    -- (kept sorted by d, then i; i only grows, so an equal d goes after the ones kept)
+                    if k < want or d < near[k].d then
+                        local j = k < want and k + 1 or k
+                        while j > 1 and near[j - 1].d > d do
+                            near[j] = near[j - 1]
+                            j = j - 1
+                        end
+                        near[j] = { u = u, d = d, i = i }
+                        if k < want then k = k + 1 end
+                    end
                 end
             end
-            table.sort(near, function(x, y)
-                if x.d ~= y.d then return x.d < y.d end
-                return x.i < y.i
-            end)
             for _, n in ipairs(near) do
                 if Full(p) or guardMass + MassOf(R, n.u) > budget then break end
                 local id = n.u:GetEntityId()
@@ -502,7 +517,8 @@ function Think(brain)
     theirs = R.theirsPeak
     local ratio = ours / math.max(theirs, 1)
     local K = Knobs(brain)
-    if math.mod(R.tick, 600) < 50 then  -- (a status line a minute: tests score "pushes when ahead" from these)
+    if math.mod(R.tick, 600) < 50 then  -- (a status line a minute: tests score "pushes when ahead" from these; the
+        -- operations think on ticks 10-19 of each 50 since 2026-11-03, still once in the minute's first 50)
         local scouts = table.getn(brain:GetListOfUnits(categories.SCOUT * categories.AIR, false))
         Log(R, 'status', R.op and R.op.zone or 0, 0, ratio, string.format('%s; enemy known in %d zones; %d air scouts',
             R.op and R.op.kind or 'none', table.getn(enemyZones), scouts))
@@ -532,24 +548,23 @@ function Think(brain)
     -- the units nearest a zone's centre, until 1.5x the enemy mass that can come there (all of them when `all`)
     local function Defenders(z, theirsMass, all)
         local zone = Remastered.AIZone(z)
-        local near = {}
-        for i, u in ipairs(units) do
+        -- (2026-11-03, perf: sorted natively, Remastered.AISortIndex - distance, then list order as before)
+        local near, keys = {}, {}
+        for _, u in ipairs(units) do
             if not busy[u:GetEntityId()] then
                 local p = u:GetPosition()
                 local dx, dz = p[1] - zone.x, p[3] - zone.z
-                table.insert(near, { u = u, d = dx * dx + dz * dz, i = i })
+                table.insert(near, u)
+                table.insert(keys, dx * dx + dz * dz)
             end
         end
-        table.sort(near, function(x, y)
-            if x.d ~= y.d then return x.d < y.d end
-            return x.i < y.i
-        end)
         local sent, mass = {}, 0
-        for _, n in ipairs(near) do
+        for _, k in ipairs(Remastered.AISortIndex(keys)) do
             if not all and mass >= 1.5 * theirsMass + 1 then break end
-            table.insert(sent, n.u)
-            busy[n.u:GetEntityId()] = true
-            mass = mass + MassOf(R, n.u)
+            local u = near[k]
+            table.insert(sent, u)
+            busy[u:GetEntityId()] = true
+            mass = mass + MassOf(R, u)
         end
         return sent
     end

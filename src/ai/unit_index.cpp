@@ -5,6 +5,7 @@
 #include "ai/unit_index.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cctype>
 #include <cmath>
@@ -479,6 +480,22 @@ struct ArmyIndex {
     bool structure = false;
   };
   std::vector<std::vector<Point>> enemyPts;  // [zone]
+  // AIZoneEstimate's results since this build (2026-11-03, perf: our AI asked the same zone's estimate several times a
+  // think - posts, targets, defence, the navy, the commander - at 40-55 ms a heavy beat). The estimate reads only this
+  // index and the ratings, so a result holds until the next build (cleared there) or a rating correction (cleared in
+  // AISetRatingFix / AISetBeats): the same numbers, computed once. Key: zone, horizon, kite, soak.
+  struct EstKey {
+    int zone = 0;
+    float horizon = 0;
+    bool kite = false, soak = false;
+    bool operator<(const EstKey& o) const {
+      if (zone != o.zone) return zone < o.zone;
+      if (horizon != o.horizon) return horizon < o.horizon;
+      if (kite != o.kite) return kite < o.kite;
+      return soak < o.soak;
+    }
+  };
+  std::map<EstKey, std::array<float, 6>> estCache;
   // The enemy's units per enemy army (phase 6, the strategy layer's read of each enemy on its own, AIEnemyMix's
   // third argument): [army0] -> blueprint entity index -> effective count, the same units and weights as `forces`
   std::vector<std::map<int, float>> enemyOf;
@@ -503,6 +520,7 @@ void BuildIndex(Sim& sim, ArmyIndex& ix) {
   ix.forces.assign(static_cast<size_t>(nz) * kSides, std::map<int, float>{});
   ix.extra.assign(static_cast<size_t>(nz) * kSides, ZoneSideExtra{});
   ix.enemyPts.assign(static_cast<size_t>(nz), std::vector<ArmyIndex::Point>{});
+  ix.estCache.clear();
   ix.enemyOf.assign(sim.armies().size(), std::map<int, float>{});
   for (int& u : ix.units) u = 0;
   ix.unknown = ix.outside = 0;
@@ -1178,6 +1196,98 @@ int l_AIZoneTargets(lua_State* L) {
   return 1;
 }
 
+// Remastered.AIZoneSummary(army) -> {name = {v per zone, ...}, ...}: the numbers of AIZoneForces that the operations'
+// front reads, for every zone at once, as arrays by zone id (2026-11-03, perf: AIZoneForces made ~17 Lua tables a
+// zone, and the front asked it for every zone each think - 12% of our AI's Lua time in Chris's 4v4). The same sums in
+// the same order as AIZoneForces (land = land + hover + amphibious), so the same numbers. Names: <side><Domain><What>,
+// side own / ally / enemy, domain Land / Air / Naval / Structure, what Ground (rating against ground), Count, Mass,
+// MaxRange; and ownEconomyMass, enemyEconomyMass.
+int l_AIZoneSummary(lua_State* L) {
+  Sim& sim = *Sim::From(L);
+  ArmyIndex& ix = CheckArmyIndex(L, 1);
+  const MapAnalysis& m = MapOf(sim);
+  const int nz = static_cast<int>(m.zones.size());
+  struct Field {
+    const char* name;
+    int side;
+    int classes[3];
+    int n;
+    int what;  // 0 ground, 1 count, 2 mass, 3 maxRange, 4 economyMass
+  };
+  static const Field kFields[] = {
+      {"ownLandGround", kOwn, {kMoveLand, kMoveHover, kMoveAmphibious}, 3, 0},
+      {"allyLandGround", kAlly, {kMoveLand, kMoveHover, kMoveAmphibious}, 3, 0},
+      {"ownAirGround", kOwn, {kMoveAir}, 1, 0},
+      {"allyAirGround", kAlly, {kMoveAir}, 1, 0},
+      {"ownNavalGround", kOwn, {kMoveNaval}, 1, 0},
+      {"allyNavalGround", kAlly, {kMoveNaval}, 1, 0},
+      {"enemyLandGround", kEnemy, {kMoveLand, kMoveHover, kMoveAmphibious}, 3, 0},
+      {"enemyStructureGround", kEnemy, {kMoveStatic}, 1, 0},
+      {"enemyAirGround", kEnemy, {kMoveAir}, 1, 0},
+      {"enemyNavalGround", kEnemy, {kMoveNaval}, 1, 0},
+      {"enemyNavalMass", kEnemy, {kMoveNaval}, 1, 2},
+      {"enemyLandCount", kEnemy, {kMoveLand, kMoveHover, kMoveAmphibious}, 3, 1},
+      {"enemyStructureCount", kEnemy, {kMoveStatic}, 1, 1},
+      {"enemyLandMass", kEnemy, {kMoveLand, kMoveHover, kMoveAmphibious}, 3, 2},
+      {"enemyLandMaxRange", kEnemy, {kMoveLand, kMoveHover, kMoveAmphibious}, 3, 3},
+      {"ownStructureCount", kOwn, {kMoveStatic}, 1, 1},
+      {"allyStructureCount", kAlly, {kMoveStatic}, 1, 1},
+      {"ownEconomyMass", kOwn, {kMoveLand}, 0, 4},
+      {"enemyEconomyMass", kEnemy, {kMoveLand}, 0, 4},
+  };
+  lua_newtable(L);
+  for (const Field& f : kFields) {
+    lua_pushstring(L, f.name);
+    lua_newtable(L);
+    for (int z0 = 0; z0 < nz; ++z0) {
+      float v = 0;
+      if (f.what == 4) {
+        v = ix.Extra(z0, f.side).economyMass;
+      } else {
+        Cell sum;  // (as AIZoneForces sums a domain)
+        for (int k = 0; k < f.n; ++k) {
+          const Cell& c = ix.At(z0, f.side, f.classes[k]);
+          sum.count += c.count;
+          sum.mass += c.mass;
+          sum.maxRange = std::max(sum.maxRange, c.maxRange);
+          sum.str[kVsGround] += c.str[kVsGround];
+        }
+        v = f.what == 0 ? sum.str[kVsGround] : f.what == 1 ? sum.count : f.what == 2 ? sum.mass : sum.maxRange;
+      }
+      lua_pushnumber(L, v);
+      lua_rawseti(L, -2, z0 + 1);
+    }
+    lua_rawset(L, -3);
+  }
+  return 1;
+}
+
+// Remastered.AISortIndex(keys) -> {i, ...}: the indices 1..n of the array `keys` (numbers) in ascending order of
+// key, index order on ties - what table.sort with the comparator "key, then index" gives, without a Lua call per
+// comparison (2026-11-03, perf: the sorts of hundreds of units by distance in our AI's think). Reads and returns
+// numbers only; nothing of the simulation.
+int l_AISortIndex(lua_State* L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  const int n = luaL_getn(L, 1);
+  std::vector<std::pair<lua_Number, int>> v;
+  v.reserve(static_cast<size_t>(n));
+  for (int i = 1; i <= n; ++i) {
+    lua_rawgeti(L, 1, i);
+    v.push_back({lua_tonumber(L, -1), i});
+    lua_pop(L, 1);
+  }
+  std::sort(v.begin(), v.end(), [](const auto& a, const auto& b) {
+    if (a.first != b.first) return a.first < b.first;
+    return a.second < b.second;
+  });
+  lua_newtable(L);
+  for (int i = 0; i < n; ++i) {
+    lua_pushnumber(L, v[static_cast<size_t>(i)].second);
+    lua_rawseti(L, -2, i + 1);
+  }
+  return 1;
+}
+
 // Remastered.AIZoneThreat(army, zone, target ['ground'|'air'|'naval'|'structure'], horizon [, from]) -> enemy,
 // friendly: the summed ratings against that target type of the enemy's (and of own + allied) units that can come to
 // the zone within `horizon` world units of travel (by their own movement class; aircraft in a straight line) or whose
@@ -1340,6 +1450,12 @@ int l_AIZoneEstimate(lua_State* L) {
   const int z = CheckZoneArg(L, 2, m);
   const float horizon = static_cast<float>(luaL_checknumber(L, 3));
   const bool kite = lua_toboolean(L, 4) != 0;
+  const bool soak = lua_toboolean(L, 5) != 0;
+  const ArmyIndex::EstKey key{z, horizon, kite, soak};
+  if (auto it = ix.estCache.find(key); it != ix.estCache.end()) {
+    for (float v : it->second) lua_pushnumber(L, v);
+    return 6;
+  }
   RatingsState& rs = Ratings(sim);
   const Zone& zt = m.zones[z - 1];
   const float radius = std::sqrt(static_cast<float>(zt.segments) * MapAnalysis::kSeg * MapAnalysis::kSeg / 3.14159265f);
@@ -1369,13 +1485,10 @@ int l_AIZoneEstimate(lua_State* L) {
   std::vector<ForceStack> force[2];
   for (int k = 0; k < 2; ++k)
     for (const auto& [key, count] : stacks[k]) force[k].push_back({&rs.byEntity[key.first], count, key.second * 10.0f});
-  const BattleResult r = EstimateBattle(force[0], force[1], -1.0f, rs.beats, kite, lua_toboolean(L, 5) != 0);
-  lua_pushnumber(L, r.margin);
-  lua_pushnumber(L, r.ours);
-  lua_pushnumber(L, r.theirs);
-  lua_pushnumber(L, r.seconds);
-  lua_pushnumber(L, mass[0]);
-  lua_pushnumber(L, mass[1]);
+  const BattleResult r = EstimateBattle(force[0], force[1], -1.0f, rs.beats, kite, soak);
+  const std::array<float, 6> out{r.margin, r.ours, r.theirs, r.seconds, mass[0], mass[1]};
+  ix.estCache[key] = out;
+  for (float v : out) lua_pushnumber(L, v);
   return 6;
 }
 
@@ -1433,6 +1546,8 @@ int l_AISetRatingFix(lua_State* L) {
     luaL_argerror(L, 1, "not a unit blueprint id");
   if (!(m > 0)) luaL_argerror(L, 2, "a multiplier above 0");
   rs.byEntity[bp->entityIndex].fix = m;
+  if (IndexState* st = IndexOf(sim))
+    for (ArmyIndex& x : st->armies) x.estCache.clear();  // (the estimates read the ratings)
   return 0;
 }
 
@@ -1446,6 +1561,8 @@ int l_AISetBeats(lua_State* L) {
   if (!b || b->kind != BpKind::Unit) luaL_argerror(L, 2, "not a unit blueprint id");
   if (!(f > 0)) luaL_argerror(L, 3, "a factor above 0");
   Ratings(sim).beats[{a->entityIndex, b->entityIndex}] = f;
+  if (IndexState* st = IndexOf(sim))
+    for (ArmyIndex& x : st->armies) x.estCache.clear();  // (the estimates read the corrections)
   return 0;
 }
 
@@ -1488,6 +1605,8 @@ void RegisterIndexBindings(lua_State* L) {
               {"AIZoneForces", l_AIZoneForces},
               {"AIZoneThreat", l_AIZoneThreat},
               {"AIZoneTargets", l_AIZoneTargets},
+              {"AISortIndex", l_AISortIndex},
+              {"AIZoneSummary", l_AIZoneSummary},
               {"AIIndexInfo", l_AIIndexInfo},
               {"AISquareLaw", l_AISquareLaw},
               {"AIBattleEstimate", l_AIBattleEstimate},

@@ -190,8 +190,16 @@ function NavalAirPick(brain, tech)
     if c and R.tick - c.tick < kCounterTicks then return c.id end
     local ships = NavalMix(R)
     local best, bestV
+    -- (2026-11-03, Chris's big test: against his battleships the air factories made T1 bombers. Against ships above T1
+    -- a T1 bomber is no answer: none is picked, the T1 air factory stays free and goes to T2 (brain.lua
+    -- RemasterUpgrades) for torpedo bombers)
+    local low = 1
+    for _, sh in ipairs(ships) do
+        local r = Remastered.AIUnitRating(sh[1])
+        if r and r.tier ~= 'T1' then low = 2 end
+    end
     if ships[1] then
-        for t = tech, 1, -1 do
+        for t = tech, low, -1 do
             for _, sfx in ipairs(kNavalAir[t] or {}) do
                 local id = brain:Bp(sfx)
                 if Valid(id) then

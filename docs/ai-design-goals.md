@@ -216,3 +216,13 @@ the duels showed. The duels are 1v1 on SETONS_R against FAF's adaptive AI and M2
     enemies are in is defended like our own when the estimate lets us. The sitting was mostly a fault (stale orders,
     staging zones beside the enemy's base or inside our own), not a choice. And an army stops growing at a share of
     the unit cap (T1 first): hundreds of T1 units were spam that slowed the game, not strength.
+
+26. **The opening keeps the commander's power before its extractors; the base is built compact (Chris's big test,
+    2026-11-03).** Chris's wish: "its first job should be to build a factory, then extractors, then expand like a
+    player", and "use adjacency, build at the starting point". Tried as asked - factory, then the start zone's four
+    extractors, then the commander's two generators - the energy stalled: in the 4v4 of all our AI on SETONS_R (his
+    game's session and seed) the eight armies made 23 mass a second together at minute 2 instead of 62, and 188 at
+    minute 6 instead of 447 (with power first: 58-62 and 226-447, as before). So the order stays factory, two
+    generators, then the four extractors right after; the rest of his wish holds: the base sites go nearest the start and the generators ring our first factory (adjacency), and
+    only a few base structures are started at once. At minute 6 the structures stand 24-32 world units from the start
+    on average (30-54 before), with the same income.

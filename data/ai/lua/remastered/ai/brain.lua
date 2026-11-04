@@ -34,6 +34,12 @@ local kAcuRetreat = 0.8                       -- the commander's health share un
 local kAcuBack = 0.95                         -- ... and the share at which it goes back to work
 local kAcuRepairers = 3                       -- engineers that repair a hurt commander
 local kAcuDanger = 80                         -- world units: enemies this near a hurt commander are what it backs away from
+-- (2026-11-03, RemasterCommander) fight: known enemy land units this near it (least: at least this much mass of them,
+-- not a lone scout) are fought when the estimate there is at least start (keep: it fights on while at least this) and
+-- its health at least kAcuRetreat to start (hard: under this it falls back whatever the estimate); away: world units
+-- from the start beyond which it does not fight (it defends its base, it does not hunt); naval: enemy ships' rating
+-- against ground that reaches its zone sends it inland; horizon: the estimate's travel horizon
+local kAcu = { fight = 30, least = 40, start = 0.6, keep = 0.45, hard = 0.7, away = 80, naval = 4, horizon = 150 }
 local kBaseRadius = 150                       -- world units from the start: a builder this near takes base jobs
 local kArmyFrom = 5                           -- the standing army's floor starts at this minute (phase 7: before it the
                                               -- factories make engineers for the expansion, unless the enemy's army is seen)
@@ -77,6 +83,9 @@ local function ApplyRatingFixes()
     for _, id in ipairs(ids) do Remastered.AISetRatingFix(id, fixes.Fix[id]) end
     for _, b in ipairs(fixes.Beats or {}) do Remastered.AISetBeats(b[1], b[2], b[3]) end
 end
+
+-- (2026-11-03, perf) what all our AI's armies share in this Lua state: the reclaim map's mass per cell (ReclaimScan)
+local kShared = {}
 
 local function Alive(u)
     return u and not u.Dead and u:GetFractionComplete() >= 1
@@ -145,7 +154,11 @@ AIBrain = Class(StandardBrain) {
         while not ArmyIsOutOfGame(army) do
             self.Remaster.tick = GetGameTick()
             self:RemasterEconomy()
-            if math.mod(self.Remaster.tick, 50) < kThink then self:RemasterArmy() end
+            -- (2026-11-03, perf: the army's think - strategy, operations, navy - ran on one beat every 50 ticks beside
+            -- the economy step, 40-55 ms in Chris's 4v4 at minutes 35-50; now one part on each of the army's next three
+            -- economy steps, 10 ticks apart)
+            local step = math.floor(math.mod(self.Remaster.tick, 50) / kThink)
+            if step < 3 then self:RemasterArmy(step) end
             WaitTicks(kThink)
         end
     end,
@@ -299,12 +312,35 @@ AIBrain = Class(StandardBrain) {
         end
         R.sites = live
         local hx, hz = self:HalfSkirt(bp, size)
-        for _, z in ipairs(R.baseZones) do
-            for _, p in ipairs(Remastered.AIBuildSpots(z, size)) do
-                if not self:Claimed(p[1], p[2]) and not self:SiteTaken(p[1], p[2], hx, hz) and
-                    self:CanBuildStructureAt(bp, Pos(p[1], p[2])) then
-                    return p
+        -- (2026-11-03, Chris's big test: "builds too spread out, it should be using adjacency and building at the
+        -- starting point". The spots were taken in each zone's grid order - the zone's first row first - so the
+        -- factory and the generators could stand 30-50 world units from the start's extractors, in rows. Now the
+        -- spots of all base zones go nearest first from an anchor: the start for everything, and for power our first
+        -- factory, so generators ring it (adjacency: a factory beside power pays less energy). The sorted list is
+        -- kept per size and anchor: the spots are terrain only.)
+        local ax, az = R.startX, R.startZ
+        if (what == 'b1101' or what == 'b1201' or what == 'b1301') and R.factoryAt then ax, az = R.factoryAt[1], R.factoryAt[2] end
+        R.spotCache = R.spotCache or {}
+        local key = size .. ':' .. math.floor(ax) .. ':' .. math.floor(az)
+        local list = R.spotCache[key]
+        if not list then
+            list = {}
+            for _, z in ipairs(R.baseZones) do
+                for _, q in ipairs(Remastered.AIBuildSpots(z, size)) do
+                    local dx, dz = q[1] - ax, q[2] - az
+                    table.insert(list, { q[1], q[2], d = dx * dx + dz * dz, i = table.getn(list) + 1 })
                 end
+            end
+            table.sort(list, function(m, n)
+                if m.d ~= n.d then return m.d < n.d end
+                return m.i < n.i
+            end)
+            R.spotCache[key] = list
+        end
+        for _, q in ipairs(list) do
+            if not self:Claimed(q[1], q[2]) and not self:SiteTaken(q[1], q[2], hx, hz) and
+                self:CanBuildStructureAt(bp, Pos(q[1], q[2])) then
+                return { q[1], q[2] }
             end
         end
     end,
@@ -401,6 +437,14 @@ AIBrain = Class(StandardBrain) {
     -- build `what` (a blueprint suffix) at a free spot of at least `size` in the start zone
     BuildAt = function(self, u, what, size)
         if not self:AtBase(u) then return false end
+        -- (2026-11-03, Chris's big test: "sometimes builds too many things at once, causing issues with the eco": a
+        -- new base structure other than power waits while R.unfinished of them are being built, at most 2 + one per
+        -- 20 mass a second of income, unless mass piles up (30% of the bar); power has its own limits below)
+        local R = self.Remaster
+        local power = what == 'b1101' or what == 'b1201' or what == 'b1301'
+        if not power and (R.unfinished or 0) >= (R.unfinishedMax or 1e9) and self:GetEconomyStoredRatio('MASS') < 0.3 then
+            return false
+        end
         local s = self:BuildSpot(what, size)
         if not s then return false end
         self:Claim(s[1], s[2], u)
@@ -409,6 +453,7 @@ AIBrain = Class(StandardBrain) {
         table.insert(self.Remaster.sites,
             { x = s[1], z = s[2], hx = hx, hz = hz, tick = self.Remaster.claims[s[1] .. ':' .. s[2]] })
         IssueBuildMobile({ u }, Pos(s[1], s[2]), self:Bp(what), {})
+        R.unfinished = (R.unfinished or 0) + 1
         return true
     end,
 
@@ -441,13 +486,27 @@ AIBrain = Class(StandardBrain) {
     -- without one big scan. The duels showed why: M28 made ~130 mass / s from reclaim at minute 10, with ~100
     -- engineers, while ours picked up only what lay within 40 units of an idle builder. Each cell keeps its zone
     -- (land) and whether our land units reach it, worked out once.
+    -- (2026-11-03, perf: the props are the same for every army, so the mass per cell and the row being read are
+    -- shared by all our armies (kShared.reclaim), and a row is read only when none was read in the last kThink ticks:
+    -- with 8 of our armies every one had read its own row each step, 8 rows every 10 ticks - in Chris's 4v4 the
+    -- largest single cost of our AI, 40% of its Lua time in the first 6 minutes. Each army still sees the whole map
+    -- refreshed every rows x kThink ticks, as before; an army alone makes the same reads in the same order. (A duel
+    -- still differs from the old form from minute 7, cause not found - most likely the Lua heap's allocations and a
+    -- script's table order with them; deterministic on every thread count, but not the old game.)
     ReclaimScan = function(self)
         local R = self.Remaster
         local g = R.reclaim
         if not g then
             local w, h = GetMapSize()
-            g = { w = w, h = h, cols = math.ceil(w / kReclaimCell), rows = math.ceil(h / kReclaimCell), row = 0,
-                mass = {}, zone = {}, near = {}, nearMass = 0 }
+            local S = kShared.reclaim
+            if not S then
+                S = { row = 0, mass = {}, lastTick = -1e9 }
+                for i = 1, math.ceil(w / kReclaimCell) * math.ceil(h / kReclaimCell) do S.mass[i] = 0 end
+                kShared.reclaim = S
+            end
+            R.reclaimShared = S
+            g = { w = w, h = h, cols = math.ceil(w / kReclaimCell), rows = math.ceil(h / kReclaimCell),
+                mass = S.mass, zone = {}, near = {}, nearMass = 0 }
             for i = 1, g.cols * g.rows do
                 local cx = (math.mod(i - 1, g.cols) + 0.5) * kReclaimCell
                 local cz = (math.floor((i - 1) / g.cols) + 0.5) * kReclaimCell
@@ -456,12 +515,21 @@ AIBrain = Class(StandardBrain) {
                 g.zone[i] = z
                 local dx, dz = cx - R.startX, cz - R.startZ
                 g.near[i] = dx * dx + dz * dz <= kReclaimNear * kReclaimNear
-                g.mass[i] = 0
             end
             R.reclaim = g
         end
-        local row = g.row
-        g.row = math.mod(row + 1, g.rows)
+        local S = R.reclaimShared
+        if R.tick - S.lastTick < kThink then
+            local near = 0
+            for i = 1, g.cols * g.rows do
+                if g.near[i] and g.zone[i] > 0 then near = near + g.mass[i] end
+            end
+            g.nearMass = near
+            return
+        end
+        S.lastTick = R.tick
+        local row = S.row
+        S.row = math.mod(row + 1, g.rows)
         local z0, z1 = row * kReclaimCell, (row + 1) * kReclaimCell
         local sums = {}
         for c = 1, g.cols do sums[c] = 0 end
@@ -556,7 +624,10 @@ AIBrain = Class(StandardBrain) {
         -- the opening: the commander takes its own zone's mass before anything but the first factory, unless energy
         -- runs out
         -- (phase 8: right after the factory the commander builds kCommanderPower generators, so the factory's engineers
-        -- and the first extractors run on power from the start: the opening probe's energy ran empty at 1:45)
+        -- and the first extractors run on power from the start: the opening probe's energy ran empty at 1:45. Tried
+        -- 2026-11-03 for Chris's "factory, then extractors": the start zone's extractors before this power left the
+        -- 8 armies of the 4v4 with 23 mass a second at minute 2 instead of 62, and 188 at minute 6 instead of 447 -
+        -- the energy stalled; the commander's 4 extractors still come right after its 2 generators)
         if isCommander and ctx.minutes < kOpening and ctx.powerCount < kCommanderPower and
             self:BuildAt(u, 'b1101', 4) then
             ctx.powerCount = ctx.powerCount + 1
@@ -786,6 +857,189 @@ AIBrain = Class(StandardBrain) {
         end
     end,
 
+    -- The commander (phase 7; 2026-11-03, Chris's big test: "our ACU too focused on repairing instead of trying to
+    -- fight back", and "sends the commander out despite ~10 battleships in range"). Each economy step, in this order:
+    -- - SHIPS: enemy ships whose reach covers the commander's zone (Remastered.AIZoneThreat against ground from the
+    --   navy, fair intel) of kAcu.naval or more: it goes to the base zone the ships reach least (inland first, nearest
+    --   on ties) and takes work only there; a commander cannot answer a battle line from the shore;
+    -- - FIGHT BACK: enemy land units the army knows within kAcu.fight of it (kAcu.least mass or more), and the estimate
+    --   of the fight at its zone (soak, as the defence: ours and our allies' that can come within kAcu.horizon) at
+    --   kAcu.start or more with its health at kAcuRetreat or more: it drops its work and stands, its guns on them
+    --   (FAF's auto-overcharge on), repaired by engineers when hurt; it fights on while the estimate stays at kAcu.keep, its health at kAcu.hard
+    --   and it within kAcu.away of the start, and never with an enemy commander known in its zone or beside it.
+    --   (The first form fought from the defend margin 0.35 and down to a quarter of its health against a "clearly
+    --   weaker" force: the judge set lost its commander in 9 of 10 duels, M28's at minutes 13-19 instead of 14-31,
+    --   FAF's veteran at 20.7 instead of 40.7; a second, from 0.6 and down to 60%, still lost it chasing two units
+    --   out of the base - 0.58 to dead in 25 s; a third, within 80 of the start, still at minutes 15.7 / 18.2.) Losing the commander loses the game, so here safety outweighs
+    --   "never flee a weaker force", which stays the army's rule;
+    -- - FALL BACK (phase 7): hurt under kAcuRetreat and losing (or under kAcu.hard, or hit by what it cannot see): it
+    --   drops its work and backs away as before, repaired by up to kAcuRepairers engineers, until kAcuBack.
+    -- Returns true while the commander is busy (no job this step). Logs 'aiacu <army> <tick> <what>' on each change.
+    RemasterCommander = function(self, commander, ctx)
+        local R = self.Remaster
+        if not R.acuOc and commander.SetAutoOvercharge then
+            commander:SetAutoOvercharge(true)  -- (FAF's own auto mode: it overcharges what it fights when energy allows)
+            R.acuOc = true
+        end
+        local hp = commander:GetHealth() / math.max(commander:GetMaxHealth(), 1)
+        local q = commander:GetPosition()
+        local cz = Remastered.AIZoneAt(q[1], q[3], 'land')
+        local function Mode(m, text)
+            if R.acuMode ~= m then
+                LOG(string.format('aiacu %d %d %s at health %.2f: %s', R.army, R.tick, m, hp, text))
+                R.acuMode = m
+                R.acuOrdered = nil
+            end
+        end
+        -- ships
+        local naval = cz > 0 and Remastered.AIZoneThreat(R.army, cz, 'ground', 0, 'naval') or 0
+        R.acuSafeZones = nil
+        if naval >= kAcu.naval and R.baseZones then
+            local best, bestT, bestInland
+            for _, z in ipairs(R.baseZones) do
+                local t = Remastered.AIZoneThreat(R.army, z, 'ground', 0, 'naval')
+                local inland = true
+                for _, nb in ipairs(Remastered.AIZoneNeighbours(z)) do
+                    if nb.coast then inland = false end
+                end
+                if not bestT or t < bestT or (t == bestT and inland and not bestInland) then
+                    best, bestT, bestInland = z, t, inland
+                end
+            end
+            if best and best ~= cz and bestT < naval then
+                Mode('naval', string.format('enemy ships reach its zone (%.1f against ground): inland to zone %d (%.1f)',
+                    naval, best, bestT))
+                if not R.acuOrdered then
+                    local zz = Remastered.AIZone(best)
+                    IssueClearCommands({ commander })
+                    IssueMove({ commander }, Pos(zz.x, zz.z))
+                    R.acuOrdered = R.tick
+                end
+                R.acuHurt = hp < kAcuRetreat or nil
+                return true
+            end
+        end
+        -- the enemy land units the army knows within kAcu.fight: in its zone and the land zones beside it
+        local fx, fz, fn, fm = 0, 0, 0, 0
+        local foeAcu = false
+        if cz > 0 then
+            local zones = { cz }
+            for _, nb in ipairs(Remastered.AIZoneNeighbours(cz)) do
+                if not nb.coast then table.insert(zones, nb.zone) end
+            end
+            for _, z in ipairs(zones) do
+                if Remastered.AIZoneForces(R.army, z).enemy.commanders > 0 then foeAcu = true end
+                for _, t in ipairs(Remastered.AIZoneTargets(R.army, z)) do
+                    if not t.structure then
+                        local dx, dz = t.x - q[1], t.z - q[3]
+                        if dx * dx + dz * dz <= kAcu.fight * kAcu.fight then
+                            fx, fz, fn, fm = fx + t.x, fz + t.z, fn + 1, fm + t.mass
+                        end
+                    end
+                end
+            end
+        end
+        if fm < kAcu.least then fn = 0 end  -- (a lone scout is not worth leaving the work for)
+        local margin = fn > 0 and Remastered.AIZoneEstimate(R.army, cz, kAcu.horizon, false, true) or 0
+        local sx, sz = q[1] - R.startX, q[3] - R.startZ
+        local home = sx * sx + sz * sz <= kAcu.away * kAcu.away
+        local fighting = R.acuMode == 'fight'
+        if fn > 0 and home and not foeAcu and hp >= kAcu.hard and
+            ((fighting and margin >= kAcu.keep) or (margin >= kAcu.start and hp >= kAcuRetreat)) then
+            Mode('fight', string.format('%d enemy units within %d, the estimate there %.2f: it fights', fn, kAcu.fight, margin))
+            -- (it drops its work and stands: its guns take what is in reach, it does not walk at them - the forms that
+            -- attack-moved at them lost the commander out of the base in the judge set)
+            if not R.acuOrdered then
+                IssueClearCommands({ commander })
+                R.acuOrdered = R.tick
+            end
+            R.acuHurt = hp < kAcuRetreat or nil  -- (the engineers repair it while it fights)
+            return true
+        end
+        -- fall back (phase 7)
+        if hp < kAcuRetreat and (R.acuMode ~= 'back' or hp < (R.acuHp or 1) - 0.05) then
+            R.acuHurt = true
+            R.acuHp = hp
+            Mode('back', fn == 0 and 'hit by what it does not see' or hp < kAcu.hard and
+                string.format('too hurt to fight on (estimate %.2f)', margin) or
+                string.format('losing (estimate %.2f)', margin))
+            local tx, tz = R.startX, R.startZ
+            -- (phase 10: with ships shelling our coast, the fallback point is the base zone farthest from them,
+            -- not the start: the start is on the coast on SETONS_R, and FAF's ships killed the commander there)
+            local ct = R.coastThreat and R.coastThreat[1]
+            -- (a base zone with no water beside it when there is one: a farthest zone on another shore lost the
+            -- commander to a submarine's deck gun)
+            if ct and R.baseZones then
+                local cz0 = Remastered.AIZone(ct.zone)
+                local bestD, bestInland
+                for _, z in ipairs(R.baseZones) do
+                    local inland = true
+                    for _, nb in ipairs(Remastered.AIZoneNeighbours(z)) do
+                        if nb.coast then inland = false end
+                    end
+                    local zz = Remastered.AIZone(z)
+                    local dx, dz = zz.x - cz0.x, zz.z - cz0.z
+                    local d = dx * dx + dz * dz
+                    if (inland and not bestInland) or (inland == (bestInland or false) and (not bestD or d > bestD)) then
+                        tx, tz, bestD, bestInland = zz.x, zz.z, d, inland
+                    end
+                end
+            end
+            -- (phase 10: away from the middle of the enemies it knows near it, and only onto land our engineers reach;
+            -- the start when that point is not such land or none is near. The duel against FAF seed 1001 lost its
+            -- commander backing away from a land unit into the guns of ships off the coast.)
+            if fn > 0 and not ct then
+                local cx, cz2 = fx / fn, fz / fn
+                local dx, dz = q[1] - cx, q[3] - cz2
+                local l = math.max(math.sqrt(dx * dx + dz * dz), 1)
+                local ax, az = q[1] + dx / l * kAcuDanger, q[3] + dz / l * kAcuDanger
+                local lz = Remastered.AIZoneAt(ax, az, 'land')
+                if lz > 0 and Remastered.AIZoneDistance(R.startZone, lz, 'land') >= 0 then
+                    local sx, sz = R.startX - cx, R.startZ - cz2
+                    -- (the start when it is farther from the enemies than that point)
+                    if sx * sx + sz * sz < (ax - cx) * (ax - cx) + (az - cz2) * (az - cz2) then tx, tz = ax, az end
+                end
+            end
+            IssueClearCommands({ commander })
+            IssueMove({ commander }, Pos(tx, tz))
+            LOG(string.format('aiacu %d %d falls back at health %.2f to %.0f, %.0f', R.army, R.tick, hp, tx, tz))
+            return true
+        elseif R.acuHurt and hp >= kAcuBack then
+            R.acuHurt = nil
+            R.acuHp = nil
+            Mode('work', 'back to work')
+            return false
+        elseif R.acuHurt then
+            return true
+        end
+        if R.acuMode == 'fight' or R.acuMode == 'naval' then
+            Mode('work', 'nothing near to fight, and out of the ships\' reach')
+            IssueClearCommands({ commander })
+        end
+        R.acuMode = 'work'
+        return false
+    end,
+
+    -- (2026-11-03) the commander's new job, when enemy ships reach its place (its first order's point; an order on an
+    -- entity has none and is kept): dropped, and it reclaims around itself instead. Chris's big test: the commander
+    -- walked out into the reach of ~10 battleships.
+    CommanderJobSafe = function(self, commander)
+        local R = self.Remaster
+        local e = (commander:GetCommandQueue() or {})[1]
+        if not e or not e.x or (e.x == 0 and e.z == 0) then return end
+        local z = Remastered.AIZoneAt(e.x, e.z, 'land')
+        if z <= 0 then return end
+        local t = Remastered.AIZoneThreat(R.army, z, 'ground', 0, 'naval')
+        if t >= kAcu.naval then
+            IssueClearCommands({ commander })
+            if R.tick - (R.acuRefused or -1000) >= 300 then
+                LOG(string.format('aiacu %d %d job refused: enemy ships reach zone %d (%.1f against ground)', R.army, R.tick, z, t))
+                R.acuRefused = R.tick
+            end
+            self:Reclaim(commander)
+        end
+    end,
+
     RemasterEconomy = function(self)
         self:ReclaimScan()
         local factories, engineers, commander = {}, {}, nil
@@ -813,6 +1067,7 @@ AIBrain = Class(StandardBrain) {
                 if EntityCategoryContains(categories.AIR, u) then
                     ctx.airFactory = true
                     ctx.airFactories = ctx.airFactories + 1
+                    if Alive(u) and self:Tech(u) >= 2 then ctx.airT2 = true end  -- (2026-11-03: one T2+ air factory is enough)
                 end
                 if EntityCategoryContains(categories.NAVAL, u) then ctx.navalFactories = ctx.navalFactories + 1 end
                 if EntityCategoryContains(categories.LAND, u) then
@@ -884,6 +1139,18 @@ AIBrain = Class(StandardBrain) {
         -- (phase 9: short = under kEnergyShort stored AND asked for more than comes in; a dip with income ahead of
         -- the asks is not short. The bar's dips alone had built 94 T1 generators by minute 14.5, 2,860 energy a second
         -- against 1,150 asked)
+        -- (2026-11-03, item b) our first factory (entity order) anchors the power; the base structures being built
+        -- (extractors and power aside) against 2 + one per 20 mass a second of income (BuildAt)
+        R.factoryAt = nil
+        if factories[1] then
+            local fp = factories[1]:GetPosition()
+            R.factoryAt = { fp[1], fp[3] }
+        end
+        R.unfinished = 0
+        for _, u in ipairs(self:GetListOfUnits(categories.STRUCTURE - categories.MASSEXTRACTION - categories.ENERGYPRODUCTION, false)) do
+            if not u.Dead and u:GetFractionComplete() < 1 then R.unfinished = R.unfinished + 1 end
+        end
+        R.unfinishedMax = 2 + math.floor(self:GetEconomyIncome('MASS') * 10 / 20)
         ctx.energyShort = self:GetEconomyStoredRatio('ENERGY') < kEnergyShort and
             self:GetEconomyIncome('ENERGY') < 1.2 * self:GetEconomyRequested('ENERGY')
         ctx.builders = table.getn(engineers) + (commander and 1 or 0)
@@ -899,68 +1166,13 @@ AIBrain = Class(StandardBrain) {
         -- start is away from it), and up to kAcuRepairers free engineers repair it; it takes work again at kAcuBack.
         -- The duels: the commander died at its work, to a frigate off the coast (FAF) and to missiles (M28).
         local repairers = 0
-        if commander then
-            local hp = commander:GetHealth() / math.max(commander:GetMaxHealth(), 1)
-            -- (while hurt, a further drop of 5% means it is still under fire: it backs away again from where it is)
-            if hp < kAcuRetreat and (not R.acuHurt or hp < (R.acuHp or 1) - 0.05) then
-                R.acuHurt = true
-                R.acuHp = hp
-                local q = commander:GetPosition()
-                local tx, tz = R.startX, R.startZ
-                -- (phase 10: with ships shelling our coast, the fallback point is the base zone farthest from them,
-                -- not the start: the start is on the coast on SETONS_R, and FAF's ships killed the commander there)
-                local ct = R.coastThreat and R.coastThreat[1]
-                -- (a base zone with no water beside it when there is one: a farthest zone on another shore lost the
-                -- commander to a submarine's deck gun)
-                if ct and R.baseZones then
-                    local cz0 = Remastered.AIZone(ct.zone)
-                    local bestD, bestInland
-                    for _, z in ipairs(R.baseZones) do
-                        local inland = true
-                        for _, nb in ipairs(Remastered.AIZoneNeighbours(z)) do
-                            if nb.coast then inland = false end
-                        end
-                        local zz = Remastered.AIZone(z)
-                        local dx, dz = zz.x - cz0.x, zz.z - cz0.z
-                        local d = dx * dx + dz * dz
-                        if (inland and not bestInland) or (inland == (bestInland or false) and (not bestD or d > bestD)) then
-                            tx, tz, bestD, bestInland = zz.x, zz.z, d, inland
-                        end
-                    end
-                end
-                -- (phase 10: away from the middle of every enemy within kAcuDanger, not only the nearest, and only onto land
-                -- our engineers reach; the start when that point is not such land or no enemy is near. The duel against
-                -- FAF seed 1001 lost its commander backing away from a land unit into the guns of ships off the coast.)
-                local near = self:GetUnitsAroundPoint(categories.ALLUNITS - categories.WALL, q, kAcuDanger, 'Enemy') or {}
-                local cx, cz, n = 0, 0, 0
-                for _, e in ipairs(near) do
-                    if not e.Dead then
-                        local p = e:GetPosition()
-                        cx, cz, n = cx + p[1], cz + p[3], n + 1
-                    end
-                end
-                if n > 0 and not ct then
-                    cx, cz = cx / n, cz / n
-                    local dx, dz = q[1] - cx, q[3] - cz
-                    local l = math.max(math.sqrt(dx * dx + dz * dz), 1)
-                    local ax, az = q[1] + dx / l * kAcuDanger, q[3] + dz / l * kAcuDanger
-                    local lz = Remastered.AIZoneAt(ax, az, 'land')
-                    if lz > 0 and Remastered.AIZoneDistance(R.startZone, lz, 'land') >= 0 then
-                        local sx, sz = R.startX - cx, R.startZ - cz
-                        -- (the start when it is farther from the enemies than that point)
-                        if sx * sx + sz * sz < (ax - cx) * (ax - cx) + (az - cz) * (az - cz) then tx, tz = ax, az end
-                    end
-                end
-                IssueClearCommands({ commander })
-                IssueMove({ commander }, Pos(tx, tz))
-                LOG(string.format('aiacu %d %d falls back at health %.2f to %.0f, %.0f', R.army, R.tick, hp, tx, tz))
-            elseif R.acuHurt and hp >= kAcuBack then
-                R.acuHurt = nil
-                R.acuHp = nil
-                LOG(string.format('aiacu %d %d back to work at health %.2f', R.army, R.tick, hp))
-            end
+        -- the commander (2026-11-03: RemasterCommander - ships, fight back, fall back) and its work: a job whose
+        -- place enemy ships reach is not taken (CommanderJobSafe)
+        local acuBusy = commander and self:RemasterCommander(commander, ctx)
+        if commander and not acuBusy and Free(commander) then
+            self:BuilderJob(commander, factories, true, ctx)
+            self:CommanderJobSafe(commander)
         end
-        if commander and not R.acuHurt and Free(commander) then self:BuilderJob(commander, factories, true, ctx) end
         for _, e in ipairs(engineers) do
             if Free(e) then
                 if R.acuHurt and repairers < kAcuRepairers then
@@ -1120,13 +1332,25 @@ AIBrain = Class(StandardBrain) {
                 end
             end
         end
-        if (self.Remaster.coastMass or 0) > 0 and ctx.landTier >= 2 and not ctx.airUpgrading then
+        -- (2026-11-03: also when the enemy's known ships reach 1,000 mass whatever our land's tier, and a busy T1 air
+        -- factory too when none is idle - its queue is dropped: an air factory always building scouts, fighters or
+        -- bombers was never idle, so it never went to T2, and the answer to Chris's battleships stayed T1 bombers)
+        local seaThreat = (self.Remaster.enemyNavalPeak or 0) >= 1000
+        if ((self.Remaster.coastMass or 0) > 0 and ctx.landTier >= 2 or seaThreat and not ctx.airT2) and
+            not ctx.airUpgrading then
+            local pick
             for _, f in ipairs(factories) do
-                if f:IsIdleState() and EntityCategoryContains(categories.AIR * categories.TECH1, f) then
-                    IssueUpgrade({ f }, self:Bp('b0202'))
-                    ctx.upgradeIssued[f:GetEntityId()] = true
-                    break
+                if not pick and EntityCategoryContains(categories.AIR * categories.TECH1, f) and f:IsIdleState() then pick = f end
+            end
+            for _, f in ipairs(factories) do
+                if not pick and EntityCategoryContains(categories.AIR * categories.TECH1, f) then
+                    pick = f
+                    IssueClearCommands({ f })
                 end
+            end
+            if pick then
+                IssueUpgrade({ pick }, self:Bp('b0202'))
+                ctx.upgradeIssued[pick:GetEntityId()] = true
             end
         end
         -- (phase 13: land factories upgrade only to make the next HQ, one at a time; the tier then grows by support
@@ -1232,9 +1456,9 @@ AIBrain = Class(StandardBrain) {
     end,
 
     -- the army: the strategy layer's read of the enemy (strategy.lua, phase 5), then the operations (operations.lua)
-    RemasterArmy = function(self)
-        import("/lua/remastered/ai/strategy.lua").Think(self)
-        import("/lua/remastered/ai/operations.lua").Think(self)
-        Navy().Think(self)
+    RemasterArmy = function(self, step)
+        if step == 0 then import("/lua/remastered/ai/strategy.lua").Think(self)
+        elseif step == 1 then import("/lua/remastered/ai/operations.lua").Think(self)
+        else Navy().Think(self) end
     end,
 }
