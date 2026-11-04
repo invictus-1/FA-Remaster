@@ -569,7 +569,7 @@ void SnowAround(float2 uv, float2 xz) {
   // share nothing lay on it at all. A scoured crest keeps a thin cover: the scour now thins it by half as much and makes it
   // less ready by a third as much; the hollows and the lee lay it as deep as before)
   snowLie = (1 + 0.4 * lay * (lay > 0 ? 1 : 0.5) * snowTune.w + 0.15 * lee) * (1 - 0.3 * crowns * snowTune.y);
-  snowLess = 0.08 * crowns * snowTune.y + 0.25 * saturate((0.85 - base.y) * 4) + 0.1 * saturate(-lee) + 0.1 * saturate(-lay) * snowTune.w;
+  snowLess = 0.08 * crowns * snowTune.y + 0.1 * saturate((0.85 - base.y) * 4) + 0.1 * saturate(-lee) + 0.1 * saturate(-lay) * snowTune.w;
   snowDrift = smoothstep(0.35, 0.9, weather.y * snowLie) * saturate((lay - 0.2) * 2.5) * snowTune.w;  // (only where the wind lays it deep)
   // (what is taken of the sky counted more than plainly, the snow's light being mostly the sky's, but never more than about
   // two thirds of it: a valley's few percent show, a wood's floor is not black; a scoop's walls hide a little more)
@@ -1070,14 +1070,16 @@ float4 Ground(VOut i) {
       // [snowfix] a steep face as it goes bare in the snow: the layers' pictures, laid from straight above, are drawn stretched
       // down a steep face (streaks of grass and bushes on a shore's bank); there the ground shows its colours on the whole
       // instead, colder and darker as frozen earth and rock, in slow patches, and its own slope without the stretched small
-      // shapes. Only as snow comes (the summer's ground is as it was).
+      // shapes. Only as snow comes (the summer's ground is as it was). ([snowface] Chris, 2026-11-01: SETONS_R's rock hill's
+      // steep face went dark with long vertical smears in the snow: this recolour, at full, put a smoothed average over a rock
+      // face whose own picture was not stretched, and flattened its cracks so that no snow caught in them. Now a third of it,
+      // the face's own shapes kept: the rock shows, a little colder, and its ledges hold snow as with the snow ground off.)
       [branch] if (snowSteep > 0) {
-        float k = snowSteep * saturate(weather.y * 3);
+        float k = snowSteep * saturate(weather.y * 3) * 0.35;
         float3 average = LayersAverage(low, high, upper);
         float3 frozen = lerp(average, dot(average, float3(0.3, 0.59, 0.11)) * float3(0.94, 0.97, 1.02), 0.45);
         frozen *= 0.7 + 0.3 * CloudNoise(float3(LXZ * 0.6, 3.9)) + 0.15 * (CloudNoise(float3(LXZ * 2.3, 6.1)) - 0.5);
         albedo.rgb = lerp(albedo.rgb, frozen, k);
-        N = normalize(lerp(N, base, k * 0.8));
         creases = lerp(creases, 0.85, k);
       }
       SnowMakeUp(LXZ, stepX, stepY, base, N, low, high);
