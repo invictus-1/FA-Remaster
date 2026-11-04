@@ -511,14 +511,35 @@ a base and an army.
   put the reclaim map's reads first (29% of our AI's Lua time: each of the 8 armies read its own row of props every
   step), the front's zone forces next (12%: ~17 Lua tables a zone, every zone, each think), then posts, the
   defence's sort and the economy's jobs. Changes: the reclaim map's mass per cell and its row are shared by our armies
-  and a row is read at most once every 10 ticks (each army still sees the map refreshed as often as before); the
+  and an army reads the next row only when no army has read one since its own last step (each army still sees the
+  map refreshed at least as often as before; an army alone reads exactly as before); the
   front reads every zone's numbers in one call (`AIZoneSummary`, the same sums); the defence sorts natively
   (`AISortIndex`); a post keeps only the units it can take (the nearest kGuardMax - its count, as the full sort
   ordered them); the zone estimates are kept per index build; and the army's think runs as three parts (strategy,
   operations, navy) on three of its economy steps instead of all on one beat. The 4v4 of all our AI (Chris's session, the profile's hitch report, beats of 30 ms or more at minutes 25-35): our AI's Lua a beat, mean 6.1 -> 4.1 ms, p95 19.2 -> 10.5, p99 27.3 -> 20.5, max 101 -> 54, beats where it took over 20 ms 230 -> 59; summed over the first 35 minutes (sampled) its Lua time fell by about 40% (89 -> 53 s), the reclaim reads from 28.3 to 3.6 s, the operations' think from 27.5 to 13.1 s.
   The parts that keep the game as it was (the summary, the native sort, the posts' selection, the estimate's cache)
   left the 4v4 identical over 15,000 beats; the shared reclaim map and the split think change the game (deterministic
-  on every thread count). Judge: M28 recruit x8 median 25.7 minutes (90% of medians 22.0-27.6; before 24.4, 21.6-26.6), lost per killed 11.3 (13.1); FAF veteran 40.5 / 38.2 (41.4 / 23.3) - even within the spread.
+  on every thread count). The first form of the shared map skipped a read when one was made in the last 10 ticks; an
+  economy step is 9 ticks (WaitTicks(10) resumes after 9), so an army alone read every other step and a duel changed
+  from beat 4268 (found 2026-11-03 by two copies with different Lua folders: an engineer sent to another reclaim
+  field). Fixed as above: the duel with the shared map alone is identical to the old over 9,000 beats, and copies with
+  different heap layouts (MOHO64_LAYOUT_SHIFT) play the same duel and the same 4v4. Judge: M28 recruit x8 median 25.7 minutes (90% of medians 22.0-27.6; before 24.4, 21.6-26.6), lost per killed 11.3 (13.1); FAF veteran 40.5 / 38.2 (41.4 / 23.3) - even within the spread.
+
+- **2026-11-03, fewer units, an experimental when mass piles up (the coordinator's next item after Chris's big
+  test):** with the caps at 25% / 50% of the unit cap the 4v4's armies still kept 300-450 land units each, and no army
+  ever built an experimental. Now T1 land factories stop at 12% of the unit cap and all land factories at 25%
+  (`landSoftShare` / `landHardShare`), and a T3 engineer at the base starts a land experimental (the faction's
+  l0401 / l0402 with the best build value against the enemy's known army) from minute 14, with 50 mass a second or
+  more and the mass bar at 30% or more, one ordered per 90 seconds of walk, at most one more every 6 minutes; the
+  base's builders assist it first (`aiexp ...`). The first form also started one whenever the land army was at its
+  cap, with the bar empty: one order every step, eight engineers sent to eight sites in 2 minutes. The 4v4 (Chris's session, minute 30): land units of all eight armies 1,967 -> 1,392 (108-258 an army); two experimentals ordered in 35 minutes - the bar seldom reaches 30%, the mass goes into T2 / T3 units and upgrades. Judge: M28 recruit x8 median 24.0 minutes (90% of medians 21.1-26.4; before 25.1, 21.5-27.7), lost per killed 10.0 (12.7); FAF veteran 24.2 / 44.4 (24.2 / 42.9) - even within the spread.
+
+- **2026-11-03, the economy's think costs (the next of perf's list: NextMassPoint, DefenceJob, Unsafe, Reclaim):**
+  the same results, cheaper - a mass point no nearer than the best so far is not tested further; the scan without a
+  builder runs for the commander only, and once a step for the builders, and when it finds no free point none is
+  free for the rest of the step (claims only grow inside a step); the claims' keys of the mass points are made once;
+  a builder's reclaim keeps only the 6 nearest props, as the full sort ordered them; the defence's plan (the units'
+  lists, the mix, the build values) is worked out once a step per tech, only the sites per builder. The 4v4 plays identically over 21,000 beats with and without it; the economy step's Lua over those 35 minutes 35.6 -> 31.2 s (NextMassPoint 9.1 -> 6.2, the claim lookups 1.8 -> 0, DefenceJob 3.7 -> 2.7; Unsafe 2.6 -> 2.2 and Reclaim 3.2 -> 3.1 stay: the engine's prop lists and the zones' memory), all our AI's Lua 55.2 -> 50.7 s.
 
 ### 2.5 Team play and pings
 
@@ -1374,6 +1395,8 @@ both-modes check, multicore.md 1).
 | 4 (first form built 2026-10-29) | Strategic and operation layers: aggression with hysteresis, objectives, gathering, push, retreat by estimate, raids, navy and air domains, combined arms timing. Built: the zone estimate from the index (fair intel, memory, reinforcements on the way, kiting), defend / attack / push / raid with commit rules and logged decisions, tech upgrades. Not yet: gathering, navy and air, combined arms | Ours vs M28 and FAF's AI, several seeds: the fight scores of section 6; "never fled a weaker force" at zero faults. First duels: 0 faults, 3 losses and one 60-minute game without a result (section 6) |
 | 5 (first form built 2026-10-29) | Economy in parallel with scouting, army and expansion (power ahead but not wasted, factory floor, engineers by distance and away from enemies, reclaim, storage, timed assists); counters by build value; defences as build candidates; investments by payback and danger with a planned dip; the strategy layer's read of the enemy and stances; attacks on armies and expansions with gathering and reinforcements via the staging zone; guard posts; the knobs in one place (decisions 13-16) | The five duels of section 6 (mass / s at 5 / 15 / 30 minutes, mass lost per enemy mass killed); the 16 + B1 / b8 identical; our-key sessions identical at 1 / 32 threads, shuffle, reverse |
 | 6a (first form built 2026-10-30) | Map control: the army kept against the enemy's known army, guard posts sized by the threat and lost zones taken back, reclaim fields; each enemy read on its own (the focus enemy); the player's two sliders (aggression, economy) with bounds; the duels with fog of war | The duels of section 6 with fog; the 16 + B1 / b8 identical; our-key fogged sessions identical at 1 / 32 threads, shuffle, reverse |
+| 14h (first form built 2026-11-03) | The economy's think: the same jobs from fewer scans (mass points, reclaim, the defence's plan) | The 4v4 identical over 21,000 beats with and without it; the Lua function profile; our-key sessions identical at 1 / 32 threads, shuffle, reverse |
+| 14g (first form built 2026-11-03) | Fewer units: T1 land factories stop at 12% of the unit cap, all at 25%; a land experimental by a T3 engineer when mass piles up | The 4v4 of all our AI (land units an army, experimentals); the judge set; our-key sessions identical at 1 / 32 threads, shuffle, reverse |
 | 14e (first form built 2026-11-03) | The think's cost: a shared reclaim map, the front's numbers in one call, a native sort, the posts' nearest-only selection, the estimate kept per index build, the army's think spread over three steps | Lua function profile of the 4v4 (our AI's share, by function); the parts meant to keep the game left the 4v4 identical over 15,000 beats; our-key sessions identical at 1 / 32 threads, shuffle, reverse; the judge set |
 | 14d (first form built 2026-11-03) | Navy on naval maps (factories and a ship floor by the minute, sea control at the enemy's coast); torpedo bombers instead of T1 bombers against T2+ ships, the air factory to T2 when ships are seen | The 4v4 (ainavy / ainaval lines); the judge set; our-key sessions identical at 1 / 32 threads, shuffle, reverse |
 | 14c (first form built 2026-11-03) | The commander stands and fights what reaches it at its base when the estimate lets it (auto-overcharge), never walks at the enemy, keeps out of enemy ships' reach | The 4v4 (aiacu lines); the judge set; our-key sessions identical at 1 / 32 threads, shuffle, reverse |

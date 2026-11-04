@@ -33,6 +33,10 @@ local kEngineerAvoid = 600                    -- ticks an enemy seen in a zone o
 local kAcuRetreat = 0.8                       -- the commander's health share under which it falls back (phase 7)
 local kAcuBack = 0.95                         -- ... and the share at which it goes back to work
 local kAcuRepairers = 3                       -- engineers that repair a hurt commander
+-- (2026-11-03, ExperimentalJob) from: minutes; every: minutes between more; income: mass a second at least; stored:
+-- the mass bar share that counts as piling up; land: the land experimentals by blueprint suffix (the faction's prefix)
+-- pending: ticks an order counts as under way before its experimental starts (the engineer's walk)
+local kExp = { from = 14, every = 6, income = 50, stored = 0.3, pending = 900, land = { 'l0401', 'l0402' } }
 local kAcuDanger = 80                         -- world units: enemies this near a hurt commander are what it backs away from
 -- (2026-11-03, RemasterCommander) fight: known enemy land units this near it (least: at least this much mass of them,
 -- not a lone scout) are fought when the estimate there is at least start (keep: it fights on while at least this) and
@@ -183,6 +187,7 @@ AIBrain = Class(StandardBrain) {
             if a.zone ~= b.zone then return a.zone < b.zone end
             return a.i < b.i
         end)
+        for _, p in ipairs(list) do p.key = p.x .. ':' .. p.z end  -- (the claims' key, Claimed)
         R.massPoints = list
     end,
 
@@ -233,24 +238,39 @@ AIBrain = Class(StandardBrain) {
     -- the next mass point that is free (no extractor, not promised to another builder): without a builder the first
     -- by travel from the start; with one (phase 5) the nearest to it in a straight line, leaving out the zones the
     -- enemy is known in (R.enemyAt, kept by the operations), list order on ties
+    -- (2026-11-03, perf: once a scan without a builder finds no free point, none is free for the rest of the step -
+    -- claims only grow within it and no extractor starts inside a Lua step - so R.noFreeMass answers at once; the claim
+    -- keys are the points' own, p.key, made once. The game's builders had scanned all ~100 points twice each, every
+    -- step, once the map was taken.)
     NextMassPoint = function(self, u)
         local bp = self:Bp('b1103')
         local R = self.Remaster
+        if R.noFreeMass == R.tick then return end
+        local claims = R.claims
         if not u then
             for _, p in ipairs(R.massPoints) do
-                if not self:Claimed(p.x, p.z) and self:CanBuildStructureAt(bp, Pos(p.x, p.z)) then return p end
+                local t = claims[p.key]
+                if not (t and R.tick - t < kClaimTicks) and self:CanBuildStructureAt(bp, Pos(p.x, p.z)) then return p end
             end
+            R.noFreeMass = R.tick
             return
+        end
+        -- (once a step, the scan without a builder first: when no point is free at all, none is for this builder)
+        if R.massChecked ~= R.tick then
+            R.massChecked = R.tick
+            if not self:NextMassPoint() then return end
         end
         local q = u:GetPosition()
         local best, bestD
+        -- (2026-11-03, perf: the distance first - a point no nearer than the best so far needs no other test - then
+        -- the zone's safety, the claim and the engine's test; the same point comes out)
         for _, p in ipairs(R.massPoints) do
-            if not self:Unsafe(p.zone) then
-                local dx, dz = p.x - q[1], p.z - q[3]
-                local d = dx * dx + dz * dz
-                if (not bestD or d < bestD) and not self:Claimed(p.x, p.z) and self:CanBuildStructureAt(bp, Pos(p.x, p.z)) then
-                    best, bestD = p, d
-                end
+            local dx, dz = p.x - q[1], p.z - q[3]
+            local d = dx * dx + dz * dz
+            local t = (not bestD or d < bestD) and claims[p.key]
+            if (not bestD or d < bestD) and not self:Unsafe(p.zone) and not (t and R.tick - t < kClaimTicks) and
+                self:CanBuildStructureAt(bp, Pos(p.x, p.z)) then
+                best, bestD = p, d
             end
         end
         return best
@@ -464,20 +484,28 @@ AIBrain = Class(StandardBrain) {
         local x, z = p[1], p[3]
         local list = GetReclaimablesInRect(x - 40, z - 40, x + 40, z + 40)
         if not list then return false end
-        local c = {}
+        -- (2026-11-03, perf: only the 6 nearest are kept, in (distance, id) order as the full sort gave them - a base's
+        -- trees and wrecks are hundreds within 40)
+        local c, k = {}, 0
         for _, v in ipairs(list) do
             if not v.Dead and v.MaxMassReclaim and v.MaxMassReclaim * (v.ReclaimLeft or 1) >= 5 then
                 local q = v:GetPosition()
                 local dx, dz = q[1] - x, q[3] - z
-                table.insert(c, { v = v, d = dx * dx + dz * dz, id = tonumber(v:GetEntityId()) or 0 })
+                local e = { v = v, d = dx * dx + dz * dz, id = tonumber(v:GetEntityId()) or 0 }
+                local last = c[k]
+                if k < 6 or e.d < last.d or (e.d == last.d and e.id < last.id) then
+                    local j = k < 6 and k + 1 or k
+                    while j > 1 and (c[j - 1].d > e.d or (c[j - 1].d == e.d and c[j - 1].id > e.id)) do
+                        c[j] = c[j - 1]
+                        j = j - 1
+                    end
+                    c[j] = e
+                    if k < 6 then k = k + 1 end
+                end
             end
         end
         if not c[1] then return false end
-        table.sort(c, function(m, n)
-            if m.d ~= n.d then return m.d < n.d end
-            return m.id < n.id
-        end)
-        for i = 1, math.min(6, table.getn(c)) do IssueReclaim({ u }, c[i].v) end
+        for i = 1, k do IssueReclaim({ u }, c[i].v) end
         return true
     end,
 
@@ -487,12 +515,12 @@ AIBrain = Class(StandardBrain) {
     -- engineers, while ours picked up only what lay within 40 units of an idle builder. Each cell keeps its zone
     -- (land) and whether our land units reach it, worked out once.
     -- (2026-11-03, perf: the props are the same for every army, so the mass per cell and the row being read are
-    -- shared by all our armies (kShared.reclaim), and a row is read only when none was read in the last kThink ticks:
-    -- with 8 of our armies every one had read its own row each step, 8 rows every 10 ticks - in Chris's 4v4 the
+    -- shared by all our armies (kShared.reclaim), and an army reads the next row only when no army has read one
+    -- since its own last step: with 8 of our armies every one had read its own row each step - in Chris's 4v4 the
     -- largest single cost of our AI, 40% of its Lua time in the first 6 minutes. Each army still sees the whole map
-    -- refreshed every rows x kThink ticks, as before; an army alone makes the same reads in the same order. (A duel
-    -- still differs from the old form from minute 7, cause not found - most likely the Lua heap's allocations and a
-    -- script's table order with them; deterministic on every thread count, but not the old game.)
+    -- refreshed at least as often as before; an army alone reads exactly as before. (The first form skipped a read
+    -- when one was made in the last kThink ticks: the step is 9 ticks apart, not 10 - WaitTicks(10) resumes after
+    -- 9 - so an army alone read every other step, and a duel changed from minute 7; found 2026-11-03.)
     ReclaimScan = function(self)
         local R = self.Remaster
         local g = R.reclaim
@@ -519,7 +547,9 @@ AIBrain = Class(StandardBrain) {
             R.reclaim = g
         end
         local S = R.reclaimShared
-        if R.tick - S.lastTick < kThink then
+        local prev = R.reclaimStep
+        R.reclaimStep = R.tick
+        if prev and S.lastTick > prev then
             local near = 0
             for i = 1, g.cols * g.rows do
                 if g.near[i] and g.zone[i] > 0 then near = near + g.mass[i] end
@@ -634,7 +664,7 @@ AIBrain = Class(StandardBrain) {
             ctx.powerBuilding = ctx.powerBuilding + 1
             return
         end
-        local p = self:NextMassPoint()
+        local p = isCommander and self:NextMassPoint() or nil  -- (2026-11-03, perf: only the commander uses it here)
         if isCommander and ctx.minutes < 4 and p and p.dist <= 0 and self:GetEconomyStoredRatio('ENERGY') >= 0.3 then
             self:Claim(p.x, p.z)
             IssueBuildMobile({ u }, Pos(p.x, p.z), self:Bp('b1103'), {})
@@ -764,6 +794,8 @@ AIBrain = Class(StandardBrain) {
                 return
             end
         end
+        -- (2026-11-03, the unit counts) an experimental, by a T3 engineer at the base (ExperimentalJob)
+        if not isCommander and self:Tech(u) >= 3 and self:ExperimentalJob(u, ctx) then return end
         -- scouting: an air factory from minute 3 (its scouts), a radar from minute 5
         if not ctx.airFactory and ctx.minutes >= 3 and energyOk and self:BuildAt(u, 'b0102', 8) then
             ctx.airFactory = true
@@ -834,7 +866,7 @@ AIBrain = Class(StandardBrain) {
         -- kAssistTicks so that an assisting builder takes new work when it comes
         -- (phase 7: a builder away from the base assists only an upgrade within kBaseRadius of it, else it walks
         -- back to the base, where the base jobs are)
-        local target = ctx.upgrading[1]
+        local target = ctx.expBuilding or ctx.upgrading[1]  -- (2026-11-03: an experimental under construction first)
         if not self:AtBase(u) then
             target = nil
             local q = u:GetPosition()
@@ -1020,6 +1052,39 @@ AIBrain = Class(StandardBrain) {
         return false
     end,
 
+    -- An experimental (2026-11-03, the unit counts: Chris's 4v4 had 300-450 land units an army even with the caps,
+    -- and no experimental ever). A T3 engineer at the base starts one when none is under construction or ordered in
+    -- the last kExp.pending ticks (the walk), from minute kExp.from, with kExp.income mass a second or more and mass
+    -- piling up (kExp.stored of the bar), at most one per kExp.every minutes after kExp.from (the first at once): the
+    -- land experimental of our faction with the best build value against the enemy's known army (blueprint id on
+    -- ties). (The first form also started one whenever the land army was at its soft cap: with the bar empty there was
+    -- no mass for it, and an order every step sent a new engineer to a new site, the 4v4's army 5 eight in 2 minutes.)
+    -- The base's builders assist it first (the assists above). Logs 'aiexp <army> <tick> <id> value <v>'.
+    ExperimentalJob = function(self, u, ctx)
+        local R = self.Remaster
+        if ctx.expBuilding or ctx.expGiven or ctx.minutes < kExp.from or not self:AtBase(u) then return false end
+        if R.expOrdered and R.tick - R.expOrdered < kExp.pending then return false end
+        if ctx.experimentals >= 1 + math.floor((ctx.minutes - kExp.from) / kExp.every) then return false end
+        if self:GetEconomyIncome('MASS') * 10 < kExp.income then return false end
+        if self:GetEconomyStoredRatio('MASS') < kExp.stored then return false end
+        local enemy = Remastered.AIEnemyMix(R.army)
+        local best, bestV
+        for _, sfx in ipairs(kExp.land) do
+            local id = self:Bp(sfx)
+            local bp = __blueprints[id]
+            if bp and bp.Economy and (bp.Economy.BuildCostMass or 0) > 0 then
+                local v = enemy[1] and Remastered.AIBuildValue(id, enemy) or 1
+                if not bestV or v > bestV or (v == bestV and id < best) then best, bestV = id, v end
+            end
+        end
+        if not best or not self:BuildAt(u, '!' .. best, 16) then return false end
+        ctx.expGiven = true
+        R.expOrdered = R.tick
+        LOG(string.format('aiexp %d %d %s value %.2f (income %.0f, mass bar %.2f, land units %d)', R.army, R.tick, best,
+            bestV or 0, self:GetEconomyIncome('MASS') * 10, self:GetEconomyStoredRatio('MASS'), R.armyCount or 0))
+        return true
+    end,
+
     -- (2026-11-03) the commander's new job, when enemy ships reach its place (its first order's point; an order on an
     -- entity has none and is kept): dropped, and it reclaims around itself instead. Chris's big test: the commander
     -- walked out into the reach of ~10 battleships.
@@ -1099,6 +1164,17 @@ AIBrain = Class(StandardBrain) {
         end
         ctx.storages = table.getn(self:GetListOfUnits(categories.MASSSTORAGE * categories.STRUCTURE, false))
         ctx.tmd = table.getn(self:GetListOfUnits(categories.ANTIMISSILE * categories.TECH2 * categories.STRUCTURE, false))
+        -- (2026-11-03) our experimentals, and the one under construction (ExperimentalJob, assists)
+        ctx.experimentals = 0
+        for _, u in ipairs(self:GetListOfUnits(categories.EXPERIMENTAL, false)) do
+            if not u.Dead then
+                if u:GetFractionComplete() < 1 then
+                    if not ctx.expBuilding then ctx.expBuilding = u end
+                else
+                    ctx.experimentals = ctx.experimentals + 1
+                end
+            end
+        end
         -- upgrades in progress, extractors first (what idle builders assist)
         for kind, cat in ipairs({ categories.MASSEXTRACTION, categories.FACTORY }) do
             for _, u in ipairs(self:GetListOfUnits(cat * categories.STRUCTURE, false)) do
