@@ -257,6 +257,21 @@ void CallUnitBinding(Sim& sim, Unit* u, const char* method, int nargs) {
 
 }  // namespace
 
+// (an entity id is ((family << 8) | army) << 20 | serial, Sim's id pools: the army part is 0xff for none)
+void CommandStream::CountIds(const Sim& sim, const std::vector<uint32_t>& ids) {
+  for (uint32_t id : ids) {
+    const size_t army = (id >> 20) & 0xff;
+    if (army == 0xff) continue;
+    if (idCounts_.size() <= army) idCounts_.resize(army + 1);
+    IdCount& n = idCounts_[army];
+    ++n.asked;
+    const Entity* e = sim.FindEntityById(id);
+    if (!e) ++n.missing;
+    else if (const Army* a = e->army; a && (a->outOfGame || !(sim.commandSource != 0xff && HasSource(a, sim.commandSource))))
+      ++n.refused;
+  }
+}
+
 bool CommandStream::ApplyUntilAdvance(Sim& sim) {
   SimFpScope fp;  // (the orders run sim code: core/fpenv.h)
   while (p_ + 3 <= d_.size()) {
@@ -476,6 +491,7 @@ void CommandStream::Apply(Sim& sim, int type, const std::string& payload) {
         break;
       }
       if (!ValidateNewCommandId(sim, data.id, "IssueCommand")) break;
+      CountIds(sim, ids);
       std::vector<Unit*> units = CommandableUnits(sim, ids, nullptr);
       if (data.type == static_cast<int>(CommandType::DestroySelf) && !sim.CheatsEnabled()) break;  // 0x74941c
       IssueFromStream(sim, units, data, clear != 0);
@@ -491,6 +507,7 @@ void CommandStream::Apply(Sim& sim, int type, const std::string& payload) {
         break;
       }
       if (!ValidateNewCommandId(sim, data.id, "IssueFactoryCommand")) break;
+      CountIds(sim, ids);
       bool abortAll = false;
       std::vector<Unit*> units = CommandableUnits(sim, ids, &abortAll);
       if (abortAll) break;

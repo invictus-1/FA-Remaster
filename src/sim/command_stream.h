@@ -22,12 +22,20 @@ class CommandStream {
   uint32_t messages() const { return messages_; }
   bool hadError() const { return error_; }
   const std::map<std::string, int>& unhandled() const { return unhandled_; }
+  // The unit ids the IssueCommand / IssueFactoryCommand messages named (those whose command id was accepted), by the
+  // id's army part (0-based; the list grows as ids come): all, those not in the world, those the issuing source may
+  // not command (sim/army_stats.h "cmd": a sign of a replay that does not fit). Counted by reading only.
+  struct IdCount {
+    uint32_t asked = 0, missing = 0, refused = 0;
+  };
+  const std::vector<IdCount>& idCounts() const { return idCounts_; }
 
   uint32_t dropped() const { return dropped_; }   // messages the replay client did not pass on (ReplayClientPasses)
 
  private:
   void Apply(Sim& sim, int type, const std::string& payload);
   bool ReplayClientPasses(Sim& sim, int type, const std::string& payload);
+  void CountIds(const Sim& sim, const std::vector<uint32_t>& ids);
   const std::string& d_;
   size_t p_;
   uint32_t beats_ = 0;
@@ -42,6 +50,7 @@ class CommandStream {
   std::vector<bool> clientGone_;  // per header source: terminated
   bool error_ = false;
   std::map<std::string, int> unhandled_;  // message kinds we read but do not carry out (logged at the end)
+  std::vector<IdCount> idCounts_;
 };
 
 }  // namespace moho

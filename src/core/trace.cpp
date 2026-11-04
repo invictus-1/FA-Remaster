@@ -1,7 +1,83 @@
 // The profiler's marks (core/trace.h, docs/profiling.md): the zones made at run time (a pool stage's, a script
 // thread's, an engine callback's), the Lua collector's zone and, with MOHO64_TRACY_LUA, a zone per Lua function call.
-// Only in a build with the profiler (TRACY_ENABLE); without it this file is empty.
+// Only in a build with the profiler (TRACY_ENABLE), except the overlay's layer times, which are in every build.
 #include "core/trace.h"
+
+#include <chrono>
+#include <cstring>
+#include <mutex>
+
+namespace moho::trace {
+
+std::atomic<bool> g_layersOn{false};
+
+namespace {
+
+// A layer slot: its name and layer are written once, before the count is raised past it (release), so a reader that
+// saw the count (acquire) sees them; its counters are relaxed atomics, zeroed by TakeLayers.
+struct LayerSlotData {
+  const char* name = nullptr;
+  Layer layer = Layer::Sim;
+  std::atomic<uint64_t> ns{0}, maxNs{0};
+  std::atomic<uint32_t> count{0};
+};
+LayerSlotData g_layer[kLayerSlots];
+std::atomic<int> g_layerCount{0};
+std::mutex g_layerMutex;
+
+int FindLayer(int n, const char* name) {
+  for (int i = 0; i < n; ++i)
+    if (g_layer[i].name == name) return i;
+  for (int i = 0; i < n; ++i)
+    if (std::strcmp(g_layer[i].name, name) == 0) return i;
+  return -1;
+}
+
+}  // namespace
+
+void SetLayers(bool on) { g_layersOn.store(on, std::memory_order_relaxed); }
+
+int LayerSlot(Layer layer, const char* name) {
+  if (!name) return -1;
+  if (int i = FindLayer(g_layerCount.load(std::memory_order_acquire), name); i >= 0) return i;
+  std::lock_guard<std::mutex> g(g_layerMutex);
+  const int n = g_layerCount.load(std::memory_order_relaxed);
+  if (int i = FindLayer(n, name); i >= 0) return i;
+  if (n >= kLayerSlots) return -1;
+  g_layer[n].name = name;
+  g_layer[n].layer = layer;
+  g_layerCount.store(n + 1, std::memory_order_release);
+  return n;
+}
+
+uint64_t LayerNow() {
+  return static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
+void LayerAdd(int slot, uint64_t ns) {
+  if (slot < 0 || slot >= kLayerSlots) return;
+  LayerSlotData& d = g_layer[slot];
+  d.ns.fetch_add(ns, std::memory_order_relaxed);
+  d.count.fetch_add(1, std::memory_order_relaxed);
+  uint64_t m = d.maxNs.load(std::memory_order_relaxed);
+  while (ns > m && !d.maxNs.compare_exchange_weak(m, ns, std::memory_order_relaxed)) {
+  }
+}
+
+void TakeLayers(std::vector<LayerTime>& out) {
+  out.clear();
+  const int n = g_layerCount.load(std::memory_order_acquire);
+  for (int i = 0; i < n; ++i) {
+    LayerSlotData& d = g_layer[i];
+    const uint64_t ns = d.ns.exchange(0, std::memory_order_relaxed);
+    const uint64_t mx = d.maxNs.exchange(0, std::memory_order_relaxed);
+    const uint32_t c = d.count.exchange(0, std::memory_order_relaxed);
+    out.push_back(LayerTime{d.layer, d.name, ns / 1e6, mx / 1e6, c});
+  }
+}
+
+}  // namespace moho::trace
 
 #if defined(TRACY_ENABLE)
 

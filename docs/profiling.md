@@ -220,7 +220,7 @@ defaultcomponents.lua:498, resumed 1.59 million times, 4.2 s), weapons 11.2 s, a
 steering 7.3 s, destroy+sync 4.9 s, the Lua collector 3.5 s (617 runs, longest 72 ms), recon 2.9 s,
 callback OnMotionHorzEventChange 2.6 s (219,307 calls). The longest beat: 343 ms.
 
-## 7. The overlay (planned; the interface's work)
+## 7. The overlay (the engine's part built 2026-11-04; the panel is the interface's work)
 
 A key in the game (for example Ctrl+F3, with an Options entry) shows a small panel with milliseconds per layer: the
 sim's beat and its largest stages, the Lua share, the renderer's CPU frame and GPU frame, the interface's frame, and
@@ -239,3 +239,19 @@ during a load its steps. The plan:
    GPU zones send to Tracy).
 4. **Tracy stays the deep view:** the overlay says which layer is slow; the profiler build and the viewer say which
    item in it.
+
+**The API as built** (`src/core/trace.h` / `trace.cpp`, every build):
+- `MOHO_LAYER_ZONE(Layer, "name")`: a `MOHO_ZONE` plus the overlay's sum (Layer: `Sim`, `Render`, `Gpu`, `Ui`, `Load`,
+  written without `trace::Layer::`); `MOHO_LAYER_SCOPE(Layer, "name")` the sum alone (beside a `MOHO_ZONE_C`).
+  `trace::Lap lap(trace::Layer::X)` makes every `MOHO_LAP` stage a layer time too (default `Sim`).
+- `trace::SetLayers(bool)`: off (the default), a layer zone costs one relaxed atomic load; on, two clock reads and
+  three relaxed atomic adds per zone (about 50 ns).
+- `trace::TakeLayers(std::vector<LayerTime>& out)`: every name seen so far (in first-use order; at most 96) with
+  `layer`, `name`, `ms` (summed since the previous call; a name zoned on several threads at once sums them), `maxMs`
+  (its longest single zone) and `count`, then zeroed. Any thread may call it; the interface calls it once a frame.
+  The sim's names are timed per beat (10 a second), so a frame without a beat shows them with count 0.
+- `trace::LayerSlot(layer, name)` + `trace::LayerAdd(slot, ns)`: a time measured elsewhere (the renderer's GPU frame).
+- The sim marks today: "beat" and its stages (economy, navigators+paths, steering, weapons, commands, threads,
+  entitypass, anim, projectiles, recon, formations, killcleanup, advancecoords, destroy+sync), "Lua collector: the
+  beat's step", and the load steps ("load: ..."). Headless: `MOHO64_LAYERS=1` logs the whole run's table at the end.
+- Proof: MP2 3000 beats with the overlay off and on, identical fingerprints; the profiler build the same hashes.

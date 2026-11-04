@@ -39,6 +39,7 @@
 #include "script/mount.h"
 #include "script/script_state.h"
 #include "sim/script_object.h"
+#include "sim/army_stats.h"
 #include "sim/command_stream.h"
 #include "sim/command_writer.h"
 #include "sim/fingerprint.h"
@@ -904,6 +905,9 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
   // the state Start left. With a peer, the first beat the two differ at ends the run.
   std::unique_ptr<Fingerprint> fingerprint = ok ? Fingerprint::FromEnvironment(outSuffix) : nullptr;
   bool diverged = fingerprint && !fingerprint->Beat(sim, 0);
+  // MOHO64_ARMY_STATS=<file>: the armies' economy, buildings and army value every MOHO64_ARMY_STATS_EVERY ticks, and
+  // their first moments (sim/army_stats.h; tools/procurve.py). Reads only: the game is the same with it as without.
+  std::unique_ptr<ArmyStatsLog> armyStats = ok ? ArmyStatsLog::FromEnvironment(sim, outSuffix) : nullptr;
   // MOHO64_VIEW_READS=1 (a check): after every beat the reads of the simulation an interface makes between beats,
   // for every unit at once: UnitStateOf for each, ReclaimableAt at the first units, BuildSiteOf of one more unit
   // blueprint a beat, and once, before the first beat, BlueprintDisplays (the panels, the cursor and the building
@@ -1063,13 +1067,22 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
     }
   };
   if (ok && !o.netMode.empty() && !(net = NetGame::Connect(o))) ok = false;
+  bool streamEnded = false;  // (logged once; MOHO64_PAST_END plays on after it)
+  auto endOfStream = [&] {
+    if (!streamEnded)
+      Logf(LogLevel::Info, "moho64: the replay's command stream ended after %u beats (tick %u)", stream.beats(), sim.tick());
+    streamEnded = true;
+    return !getenv("MOHO64_PAST_END");
+  };
   while (ok && !diverged && done < o.ticks) {
-    if (playStream && !stream.AtEnd()) {
-      MOHO_ZONE("commands in");
-      if (!stream.ApplyUntilAdvance(sim)) {
-        Logf(LogLevel::Info, "moho64: the replay's command stream ended after %u beats (tick %u)", stream.beats(),
-             sim.tick());
-        if (!getenv("MOHO64_PAST_END")) break;
+    if (playStream) {
+      // A stream whose last message is an Advance is at its end after that beat: no further beat comes from it, as
+      // with a stream that ends between beats (seen 2026-11-04: two 6v6 replays ran on to tick 97k / 176k).
+      if (stream.AtEnd()) {
+        if (endOfStream()) break;
+      } else {
+        MOHO_ZONE("commands in");
+        if (!stream.ApplyUntilAdvance(sim) && endOfStream()) break;
       }
     }
     giveOrders();
@@ -1095,6 +1108,7 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
       break;
     }
     if (net) net->After(sim, static_cast<uint32_t>(done + paused));
+    if (armyStats) armyStats->Beat(sim, playStream ? &stream : nullptr);
     viewReads(false);
     checkSnapshots();
     // MOHO64_DEBUG_RECONGRID=<n> (render REQUESTS 38): at beat 1 and every 600th, for every army and each water
@@ -1332,6 +1346,7 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
     for (const std::string& line : hitsSeen.samples) Logf(LogLevel::Info, "hits: %s", line.c_str());
   }
   if (fingerprint && !diverged) fingerprint->End(static_cast<uint32_t>(done + paused));
+  if (armyStats) armyStats->End(sim, playStream ? &stream : nullptr, static_cast<uint32_t>(done + paused));
   if (net) net->End(static_cast<uint32_t>(done + paused));
   if (snapMode > 0) {
     const SyncSnapshots::Costs c = sim.snapshots().costs();
@@ -1361,6 +1376,14 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
   if (stream.dropped())  // (the replay's client, by the game version's rules: sim/command_stream.cpp)
     Logf(LogLevel::Info, "moho64: command stream: %u messages not passed on by the replay's client (game version %d)",
          stream.dropped(), sim.gameVersion);
+  if (trace::LayersOn()) {  // MOHO64_LAYERS: the overlay's layer times over the whole run (docs/profiling.md 7)
+    std::vector<trace::LayerTime> layers;
+    trace::TakeLayers(layers);
+    for (const trace::LayerTime& t : layers)
+      if (t.count)
+        Logf(LogLevel::Info, "moho64: layer %d %-40s %10.1f ms in %7u (mean %.3f, longest %.2f)", static_cast<int>(t.layer),
+             t.name, t.ms, t.count, t.ms / t.count, t.maxMs);
+  }
 #ifdef MOHO64_CALLGRIND
   CALLGRIND_STOP_INSTRUMENTATION;
 #endif
@@ -1469,7 +1492,8 @@ int RunTimes(const Options& o, Vfs& vfs, const std::vector<std::string>& hookDir
 }
 
 int RunSim(const Options& o, Vfs& vfs, const std::vector<std::string>& hookDirs, const std::vector<std::string>& uids) {
-  trace::Lap load;
+  if (getenv("MOHO64_LAYERS")) trace::SetLayers(true);  // (the overlay's layer times, logged at the end)
+  trace::Lap load(trace::Layer::Load);
   MOHO_LAP(load, "load: replay file");
   auto data = hostfs::ReadFile(o.replay);
   if (!data) {

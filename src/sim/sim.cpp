@@ -1248,7 +1248,7 @@ bool Sim::CallGlobal(const char* fn, int nargs) {
 bool Sim::Start(const ReplayHeader& replay) {
   SimFpScope fp;  // (core/fpenv.h: the sim runs in one floating-point state, whatever thread a host starts it on)
   MOHO_ZONE("load: session start");
-  trace::Lap load;  // (the profiler build: the start-up's steps)
+  trace::Lap load(trace::Layer::Load);  // (the start-up's steps: the profiler's zones and the overlay's load times)
   // The sim's focus and the driver's pending one both start as the launch's (Sim::Sim 0x743a63 and the
   // CSimDriver ctor 0x73b7dc both read +0x68 of the launch info they are given): no change at the first Sync.
   requestedFocus_.store(focusArmy);
@@ -1734,7 +1734,7 @@ GcTimes g_gcTimes;
 }  // namespace
 
 void Sim::CollectorStep() {
-  MOHO_ZONE("Lua collector: the beat's step");
+  MOHO_LAYER_ZONE(Sim, "Lua collector: the beat's step");
   static const bool stats = getenv("MOHO64_STATS") != nullptr;
   if (!stats) {
     lua_gpg_gcstep(state_->L(), tick_ % 70 == 0);
@@ -2615,6 +2615,7 @@ void Sim::Tick() {
   } beatFrame;
 #endif
   MOHO_ZONE_C("beat", 0x4b6ea8);
+  MOHO_LAYER_SCOPE(Sim, "beat");  // (the overlay's beat: docs/profiling.md 7)
   trace::Lap lap;
   // The thread that runs the beats on the big-cache processors (core/placement.h; MOHO64_PLACE): once per thread, the
   // first beat it runs (the headless host's main thread, moho64ui's beats' thread). Only placement: no state changes.
