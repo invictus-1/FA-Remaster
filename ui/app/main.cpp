@@ -37,6 +37,7 @@
 #include "core/hostfs.h"
 #include "core/log.h"
 #include "core/placement.h"
+#include "core/trace.h"
 #include "core/vfs.h"
 #include "maui/control.h"
 #include "maui/texture_info.h"
@@ -1110,6 +1111,8 @@ int main(int argc, char** argv) {
                            // (MOHO64UI_LONG_FRAMES: the host step's parts, for the log of a long frame)
                            ui::LongFrameLog& longFrames = ui::LongFrames();
                            auto timed = [&](const char* what, auto&& f) {
+                             MOHO_ZONE("ui: host step");  // (its name as the zone's text)
+                             MOHO_ZONE_TEXT(what, std::strlen(what));
                              if (longFrames.thresholdMs <= 0) return f();
                              const auto t0 = std::chrono::steady_clock::now();
                              f();
