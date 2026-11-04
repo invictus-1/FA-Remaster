@@ -1888,6 +1888,10 @@ bool WorldPicture::UnitTransform(uint32_t id, double tick, float position[3], fl
   return impl_->frames.UnitAt(std::clamp(tick - 1, first, last), id, position, orientation);
 }
 uint32_t WorldPicture::UnitAt(float x, float y) const { return impl_->world ? impl_->world->UnitAt(x, y) : 0xffffffffu; }
+void WorldPicture::UnitsAt(float x, float y, float tolerance, std::vector<uint32_t>* out) const {  // [pick]
+  out->clear();
+  if (impl_->world) impl_->world->UnitsAt(x, y, tolerance, out);
+}
 void WorldPicture::UnitsIn(float x0, float y0, float x1, float y1, std::vector<uint32_t>* out) const {
   out->clear();
   if (impl_->world) impl_->world->UnitsIn(x0, y0, x1, y1, out);

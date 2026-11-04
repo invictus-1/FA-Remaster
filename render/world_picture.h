@@ -524,6 +524,11 @@ class WorldPicture {
   uint32_t UnitAt(float x, float y) const;
   // The units whose middle lies in a rectangle of the picture.
   void UnitsIn(float x0, float y0, float x1, float y1, std::vector<uint32_t>* out) const;
+  // [pick] (ui request 43) Every unit under a point of the picture as the original's pick finds them: its selection box (the
+  // model's box, the top share its blueprint's SelectionMeshUseTopAmount picks, scaled by SelectionMeshScaleX / Z) shown within
+  // `tolerance` pixels (ui_SelectTolerance), or far off its icon's middle within that and 10 pixels; nearest the point on the
+  // picture first. Units whose whole mesh is hidden are left out. (UnitAt is its first within 10 pixels.)
+  void UnitsAt(float x, float y, float tolerance, std::vector<uint32_t>* out) const;
 
   // The height of what one stands on at a place of the map (ground or water surface).
   float GroundHeight(float x, float z) const;

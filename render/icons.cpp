@@ -135,11 +135,30 @@ int StrategicIcons::Load(const std::string& name, const std::string& path, int s
   return index;
 }
 
-int StrategicIcons::BlipIcon(const std::string& name) {
+int StrategicIcons::BlipIcon(const std::string& name, const std::string& motion) {
+  // [pick] (ui request 43) the original's blips: one of strategicIcons.lua's four GenericIcons, by what the unit is (its
+  // blueprint's Physics.MotionType; CWldSession::RenderStrategicIcons 0x85b6e0, EGenericIconType): no tech level shown.
+  // Without a motion type, by its own icon's name; and where the game's files have none of the four, as before (the
+  // icon's own shape's generic)
+  std::string plain;
+  if (motion == "RULEUMT_Air") plain = "icon_fighter_generic";
+  else if (motion == "RULEUMT_Water" || motion == "RULEUMT_SurfacingSub") plain = "icon_ship_generic";
+  else if (motion.empty() || motion == "RULEUMT_None") {
+    const bool mobile = name.find("land") != std::string::npos || name.find("ship") != std::string::npos || name.find("sub") != std::string::npos ||
+                        name.find("fighter") != std::string::npos || name.find("bomber") != std::string::npos || name.find("gunship") != std::string::npos ||
+                        name.find("commander") != std::string::npos || name.find("experimental") != std::string::npos;
+    if (!motion.empty() || !mobile) plain = "icon_structure_generic";
+    else if (name.find("ship") != std::string::npos || name.find("sub") != std::string::npos) plain = "icon_ship_generic";
+    else if (name.find("fighter") != std::string::npos || name.find("bomber") != std::string::npos || name.find("gunship") != std::string::npos) plain = "icon_fighter_generic";
+    else plain = "icon_land_generic";
+  } else {
+    plain = "icon_land_generic";  // (land, amphibious, hover)
+  }
+  if (vfs_->Exists(kIconFolder + plain + "_rest.dds")) return Icon(plain);
   const size_t under = name.rfind('_');
   if (under == std::string::npos) return -1;
-  const std::string plain = name.substr(0, under) + "_generic";
-  return vfs_->Exists(kIconFolder + plain + "_rest.dds") ? Icon(plain) : -1;
+  const std::string own = name.substr(0, under) + "_generic";
+  return vfs_->Exists(kIconFolder + own + "_rest.dds") ? Icon(own) : -1;
 }
 
 const StrategicIcons::Kind* StrategicIcons::ForBlueprint(const std::string& blueprintPath) {
@@ -161,7 +180,7 @@ const StrategicIcons::Kind* StrategicIcons::ForBlueprint(const std::string& blue
     if (!name.empty()) {
       kind->icon = Icon(name);
       if (vfs_->Exists(kIconFolder + name + "_selected.dds")) kind->iconSelected = Icon(name + "_selected", "");
-      kind->iconBlip = BlipIcon(name);
+      kind->iconBlip = BlipIcon(name, readable ? bp["Physics"]["MotionType"].StringOr(std::string()) : std::string());
     }
     kind->priority = std::clamp(s.priority, 0, 255);
     if (s.fadeIn > 0) kind->fadeIn = s.fadeIn;
@@ -184,7 +203,7 @@ const StrategicIcons::Kind* StrategicIcons::ForBlueprint(const std::string& blue
   if (!name.empty()) {
     kind->icon = Icon(name);
     if (vfs_->Exists(kIconFolder + name + "_selected.dds")) kind->iconSelected = Icon(name + "_selected", "");
-    kind->iconBlip = BlipIcon(name);
+    kind->iconBlip = BlipIcon(name, bp["Physics"]["MotionType"].StringOr("RULEUMT_None"));
   }
   kind->selectionX = static_cast<float>(bp["SelectionSizeX"].NumberOr(0.5));
   kind->selectionZ = static_cast<float>(bp["SelectionSizeZ"].NumberOr(0.5));

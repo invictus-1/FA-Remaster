@@ -2689,6 +2689,8 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     }
     float radius = 0.5f;
     Vec3 centre = position + Vec3{0, 0.4f, 0};
+    bool pickBox = false;  // [pick]
+    Vec3 pickLo, pickHi;
     if (blip) {
       // (its blip alone, which can be pointed at)
     } else if (PlacedMeshes::Feedback(model)) {
@@ -2881,11 +2883,24 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       if (riding && sunk > 0 && u.Seen() && fractionComplete >= 1) ListHull(u.id, model, position, orientation, rode);
       centre = position + Rotate(orientation, (model->boundsMin + model->boundsMax) * (0.5f * model->scale));
       radius = Length(model->boundsMax - model->boundsMin) * 0.5f * model->scale;
+      // [pick] its selection box (the original's: the top share of the mesh's box its blueprint picks, scaled; a naval factory's
+      // model reaches deep under the water and picks its top 0.15)
+      const Selection& sel = SelectionOf(u.blueprint, blueprint);
+      Vec3 lo = model->boundsMin * model->scale, hi = model->boundsMax * model->scale;
+      if (sel.top < 1) lo.y = hi.y - (hi.y - lo.y) * sel.top;
+      const float midX = (lo.x + hi.x) * 0.5f, midZ = (lo.z + hi.z) * 0.5f;
+      lo.x = midX + (lo.x - midX) * sel.scaleX, hi.x = midX + (hi.x - midX) * sel.scaleX;
+      lo.z = midZ + (lo.z - midZ) * sel.scaleZ, hi.z = midZ + (hi.z - midZ) * sel.scaleZ;
+      pickBox = true, pickLo = lo, pickHi = hi;
     } else {  // not known what it is, or its files cannot be read: a box in the army's colour
       auto byte = [](float v) { return static_cast<uint32_t>(Clamp(v, 0, 1) * 255.0f); };
       draw.Box(centre, {0.4f, 0.4f, 0.4f}, 0xff000000u | byte(color.z) << 16 | byte(color.y) << 8 | byte(color.x));
     }
-    pickables_.push_back({u.id, centre, radius});
+    if (!allHidden) {  // ([pick] a unit whose whole mesh its script hid cannot be pointed at)
+      Pickable p{u.id, centre, radius};
+      p.boxed = pickBox, p.at = position, p.lo = pickLo, p.hi = pickHi, p.turn = orientation;
+      pickables_.push_back(p);
+    }
   }
   // remembered buildings that are gone (destroyed where the army did not see it): each stays, as
   // it was last seen, until the army sees the place again and finds it gone
@@ -4248,14 +4263,74 @@ bool World::GroundAt(float x, float y, Vec3* hit) const {
   return HitPlaneY(ray, camera.target.y, hit);
 }
 
+const World::Selection& World::SelectionOf(uint32_t blueprint, const std::string& id) {
+  if (blueprint >= selections_.size()) selections_.resize(static_cast<size_t>(blueprint) + 1);
+  Selection& s = selections_[blueprint];
+  if (!s.known) {
+    s.known = true;
+    BpValue bp;
+    if (!id.empty() && dust.readBlueprint && dust.readBlueprint(id, &bp)) {
+      const float top = static_cast<float>(bp["SelectionMeshUseTopAmount"].NumberOr(1));
+      s.top = top > 0 && top < 1 ? top : 1.0f;
+      s.scaleX = std::max(0.05f, static_cast<float>(bp["SelectionMeshScaleX"].NumberOr(1)));
+      s.scaleZ = std::max(0.05f, static_cast<float>(bp["SelectionMeshScaleZ"].NumberOr(1)));
+    }
+  }
+  return s;
+}
+
+void World::UnitsAt(float x, float y, float tolerance, std::vector<uint32_t>* out) const {
+  out->clear();
+  if (screenHeight_ <= 0) return;
+  std::vector<std::pair<float, uint32_t>> hits;
+  for (const Pickable& p : pickables_) {
+    bool hit = false;
+    float sx, sy;
+    const bool shown = Project(p.at, &sx, &sy);
+    if (p.boxed) {  // its selection box's corners on the screen: their bounds within the tolerance of the point
+      float x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f;
+      int seen = 0;
+      for (int k = 0; k < 8; ++k) {
+        const Vec3 c{(k & 1) ? p.hi.x : p.lo.x, (k & 2) ? p.hi.y : p.lo.y, (k & 4) ? p.hi.z : p.lo.z};
+        float cx, cy;
+        if (!Project(p.at + Rotate(p.turn, c), &cx, &cy)) continue;
+        ++seen;
+        x0 = std::min(x0, cx), y0 = std::min(y0, cy), x1 = std::max(x1, cx), y1 = std::max(y1, cy);
+      }
+      hit = seen == 8 && x >= x0 - tolerance && x <= x1 + tolerance && y >= y0 - tolerance && y <= y1 + tolerance;
+    }
+    // far off, a unit is its strategic icon: its middle within about ten pixels (and the tolerance)
+    float mx, my;
+    if (!hit && Project(p.centre, &mx, &my)) {
+      const float reach = 10 + tolerance;
+      hit = (mx - x) * (mx - x) + (my - y) * (my - y) <= reach * reach;
+      if (!shown) sx = mx, sy = my;
+    }
+    if (!hit) continue;
+    if (!shown && !Project(p.centre, &sx, &sy)) continue;
+    hits.push_back({(sx - x) * (sx - x) + (sy - y) * (sy - y), p.id});
+  }
+  std::sort(hits.begin(), hits.end());
+  for (const auto& h : hits)
+    if (std::find(out->begin(), out->end(), h.second) == out->end()) out->push_back(h.second);
+}
+
 uint32_t World::UnitAt(float x, float y) const {
   if (screenHeight_ <= 0) return 0xffffffffu;
+  // [pick] (ui request 43) the original's way: the selection boxes, the nearest to the point on the screen; the sphere test
+  // below only where no unit's box is near (a unit without a box: one whose files cannot be read)
+  {
+    std::vector<uint32_t> hits;
+    UnitsAt(x, y, 10, &hits);
+    if (!hits.empty()) return hits.front();
+  }
   const Ray ray = camera.PixelRay(x, y, static_cast<float>(screenWidth_), static_cast<float>(screenHeight_));
   // a far-away unit is its strategic icon: it can be hit within about ten pixels of its middle
   const float worldPerPixel = 2 * std::tan(camera.fovY * 0.5f) / static_cast<float>(screenHeight_);
   uint32_t best = 0xffffffffu;
   float bestAlong = 1e30f;
   for (const Pickable& p : pickables_) {
+    if (p.boxed) continue;  // ([pick] those with a box are UnitsAt's alone)
     const Vec3 to = p.centre - ray.origin;
     const float along = Dot(to, ray.direction);
     if (along <= 0) continue;
