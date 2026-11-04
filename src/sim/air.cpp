@@ -430,6 +430,7 @@ void SetState(Unit* u, int i, bool on) {  // (i: US("Name"))
 }
 
 void Callback2(Sim& sim, Unit* u, const char* method, const char* a, const char* b) {
+  if (sim.DeferringScripts()) return sim.DeferScriptCall(u, method, {Sim::ScriptArg::Str(a), Sim::ScriptArg::Str(b)});
   lua_State* L = sim.L();
   lua_pushstring(L, a);
   lua_pushstring(L, b);
@@ -1917,11 +1918,14 @@ void CalcMoveBallistic(Sim& sim, Unit* u, Transform& T, float* scale) {
   if (LayerBits(u->layer) != oldLayer) {
     if (u->dead) {
       lua_State* L = sim.L();
-      lua_pushstring(L, u->layer == "Land" ? "Terrain" : "Water");
+      if (!sim.DeferringScripts()) lua_pushstring(L, u->layer == "Land" ? "Terrain" : "Water");
       if (sim.collectImpacts)  // (a host's list, render REQUESTS 36; reads only: where it lands, the fall's speed)
         RecordImpact(sim, 2, u, u->layer == "Land" ? "Terrain" : "Water", nullptr, P1,
                              Vec3{v2.x * 10.0f, v2.y * 10.0f, v2.z * 10.0f});
-      sim.CallMethod(L, u, "OnImpact", 1);
+      if (sim.DeferringScripts())
+        sim.DeferScriptCall(u, "OnImpact", {Sim::ScriptArg::Str(u->layer == "Land" ? "Terrain" : "Water")});
+      else
+        sim.CallMethod(L, u, "OnImpact", 1);
       SetMotionState(sim, u, 3);
     } else {
       SetMotionState(sim, u, 0);
@@ -2476,7 +2480,10 @@ void ClearRepairRequest(Unit* u) {
   m.repairRequest.reset();
   m.refuelFlag = false;
 }
-void FuelCallback(Sim& sim, Unit* u, const char* name) { sim.CallMethod(sim.L(), u, name, 0); }
+void FuelCallback(Sim& sim, Unit* u, const char* name) {
+  if (sim.DeferringScripts()) return sim.DeferScriptCall(u, name, {});
+  sim.CallMethod(sim.L(), u, name, 0);
+}
 }  // namespace
 
 Unit* StagingPlatformOf(Sim& sim, const Unit* u) {

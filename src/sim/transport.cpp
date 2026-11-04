@@ -226,6 +226,7 @@ std::string BoneName(const Unit* u, int bone) {
 }
 
 void Callback(Sim& sim, Unit* u, const char* method) {
+  if (sim.DeferringScripts()) return sim.DeferScriptCall(u, method, {});
   lua_State* L = sim.L();
   sim.CallMethod(L, u, method, 0);
 }
@@ -233,6 +234,8 @@ void SetUnitLayer(Sim& sim, Unit* u, const std::string& layer) {
   if (u->layer == layer) return;
   std::string old = u->layer;
   u->layer = layer;
+  if (sim.DeferringScripts())
+    return sim.DeferScriptCall(u, "OnLayerChange", {Sim::ScriptArg::Str(layer.c_str()), Sim::ScriptArg::Str(old.c_str())});
   lua_State* L = sim.L();
   lua_pushstring(L, layer.c_str());
   lua_pushstring(L, old.c_str());
@@ -848,19 +851,35 @@ bool LandBallisticTick(Sim& sim, Unit* u) {
     SetUnitLayer(sim, u, layer);
     m.ballistic = false;
     lua_State* L = sim.L();
+    bool killLater = false;  // (parallel order: the landing's kill and its OnImpact go to the phase's commit)
     if (!u->dead) {
       // the landing kills a unit that does not fit there, that came down outside the playable rect (the map's
       // rect itself, STIMap+0x8..0x14, whatever the army: 0x6c0a7e..0x6c0ad7) or that lies tilted
       Vec3 up = Rotate(u->orientation, Vec3{0, 1, 0});
       bool ok = FootprintFitsHere(sim, u) && sim.IsWithin(u->position.x, u->position.z, 0.0f, false) && up.y >= 0.667f;
-      if (!ok) KillUnit(sim, L, u, nullptr, "", 0.0f);
+      if (!ok && sim.DeferringScripts()) {
+        killLater = true;
+        const char* where = layer == "Land" ? "Terrain" : "Water";
+        sim.DeferAction([&sim, u, where] {
+          KillUnit(sim, sim.L(), u, nullptr, "", 0.0f);
+          if (u->dead && u->HasLuaObject()) {
+            lua_pushstring(sim.L(), where);
+            sim.CallMethod(sim.L(), u, "OnImpact", 1);
+          }
+        });
+      } else if (!ok) {
+        KillUnit(sim, L, u, nullptr, "", 0.0f);
+      }
     }
-    if (u->dead) {
-      lua_pushstring(L, layer == "Land" ? "Terrain" : "Water");
+    if (u->dead || killLater) {
+      if (!sim.DeferringScripts()) lua_pushstring(L, layer == "Land" ? "Terrain" : "Water");
       if (sim.collectImpacts)  // (a host's list, render REQUESTS 36; reads only: where it lands, the fall's speed)
         RecordImpact(sim, 2, u, layer == "Land" ? "Terrain" : "Water", nullptr, P1,
                      Vec3{v2.x * 10.0f, v2.y * 10.0f, v2.z * 10.0f});
-      sim.CallMethod(L, u, "OnImpact", 1);
+      if (!sim.DeferringScripts())
+        sim.CallMethod(L, u, "OnImpact", 1);
+      else if (!killLater)  // (a kill made later calls it after the kill)
+        sim.DeferScriptCall(u, "OnImpact", {Sim::ScriptArg::Str(layer == "Land" ? "Terrain" : "Water")});
       // ... and the motion goes to state 3 (CalcMoveBallistic 0x6c0b89..0x6c0be8: IsDead, vt+0x28, then OnImpact,
       // then motion+0x78 = 3; alive: 0, 0x6c0bf9): MotionTick moves it no more (UnitMotion::atRest)
       m.atRest = true;

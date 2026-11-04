@@ -19,32 +19,7 @@ namespace moho {
 // STIMap::OCCUPY_MobileCheck 0x564ab0 for the footprint with its origin cell at (x, z): the layers the terrain
 // allows there (structures not counted). PathGrid keeps it for every cell.
 static uint8_t MobileCheckCaps(const TerrainMap& map, const NamedFootprint& fp, const bool* blocking, int x, int z) {
-  const int w = map.width(), h = map.height();
-  const int sx = std::max<int>(1, fp.sizeX), sz = std::max<int>(1, fp.sizeZ);
-  if (x < 0 || z < 0 || x + sx > w - 1 || z + sz > h - 1) return 0;
-  const float water = map.hasWater ? map.waterElevation : -10000.0f;
-  float lo = 1e30f, hi = -1e30f;
-  for (int cz = z; cz <= z + sz; ++cz)
-    for (int cx = x; cx <= x + sx; ++cx) {
-      float v = map.HeightAt(cx, cz);
-      lo = std::min(lo, v);
-      hi = std::max(hi, v);
-      if (blocking && blocking[map.TerrainType(cx, cz)]) return 0;
-    }
-  uint8_t caps = fp.caps;
-  if (water - hi < fp.minWaterDepth) caps &= 0xf1;  // too shallow somewhere: no seabed/sub/water
-  if (water - lo > fp.maxWaterDepth) caps &= 0xfc;  // too deep somewhere: no land/seabed
-  if ((caps & 3) && fp.maxSlope != 0.0f) {
-    float step = 0;
-    for (int cz = z; cz <= z + sz; ++cz)
-      for (int cx = x; cx < x + sx; ++cx)
-        step = std::max(step, std::fabs(map.HeightAt(cx + 1, cz) - map.HeightAt(cx, cz)));
-    for (int cx = x; cx <= x + sx; ++cx)
-      for (int cz = z; cz < z + sz; ++cz)
-        step = std::max(step, std::fabs(map.HeightAt(cx, cz + 1) - map.HeightAt(cx, cz)));
-    if (fp.maxSlope < step) caps &= 0xfc;
-  }
-  return caps;
+  return MobileCheckCapsOf(map, fp, blocking, x, z);  // (navigation.h: also read by the placement snapshots)
 }
 
 // MobileCheckCapsRect's buffers, kept between calls: a run of small rects (the deferred terrain changes) allocates
@@ -377,6 +352,7 @@ void PathGrid::Block(int x0, int z0, int x1, int z1, int delta, uint8_t occ) {
 void Navigation::SetCells(int x0, int z0, int x1, int z1, uint8_t occ, bool on) {
   if (occ_.empty()) occ_.assign(static_cast<size_t>(map_->width()) * map_->height(), 0);
   if (occWater_.empty()) occWater_.assign(static_cast<size_t>(map_->width()) * map_->height(), 0);
+  if (occBandStamp_.empty()) occBandStamp_.assign(static_cast<size_t>(map_->height() + kOccBandRows - 1) / kOccBandRows + 1, 0);
   const uint8_t v = on ? 1 : 0;
   const int d = on ? +1 : -1;
   for (int z = std::max(0, z0); z < std::min(map_->height(), z1); ++z)
@@ -384,10 +360,12 @@ void Navigation::SetCells(int x0, int z0, int x1, int z1, uint8_t occ, bool on) 
       const size_t i = static_cast<size_t>(z) * map_->width() + x;
       if ((occ & kOccLand) && occ_[i] != v) {
         occ_[i] = v;
+        occBandStamp_[static_cast<size_t>(z / kOccBandRows)] = ++occStamp_;
         for (auto& [k, g] : grids_) g->Block(x, z, x + 1, z + 1, d, kOccLand);
       }
       if ((occ & kOccWater) && occWater_[i] != v) {
         occWater_[i] = v;
+        occBandStamp_[static_cast<size_t>(z / kOccBandRows)] = ++occStamp_;
         for (auto& [k, g] : grids_) g->Block(x, z, x + 1, z + 1, d, kOccWater);
       }
     }
@@ -437,6 +415,11 @@ void Navigation::ForgetStructure(uint32_t entity) {
   structures_.erase(std::remove_if(structures_.begin(), structures_.end(),
                                    [&](const OccupiedRect& r) { return r.entity == entity; }),
                     structures_.end());
+}
+
+const uint8_t* Navigation::OccRow(int z, bool water) const {
+  const std::vector<uint8_t>& g = water ? occWater_ : occ_;
+  return g.empty() || !map_ ? nullptr : g.data() + static_cast<size_t>(z) * map_->width();
 }
 
 bool Navigation::AnyStructureIn(int x0, int z0, int x1, int z1, uint8_t occ) const {

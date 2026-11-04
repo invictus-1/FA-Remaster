@@ -521,6 +521,7 @@ int l_Warp(lua_State* L) {  // Warp(entity, location, [orientation])
   }
   e->position = {v[0], v[1], v[2]};
   e->orientation = ori;
+  Sim::From(L)->NotePropTouched(e);  // (the sync point's reclaim copy)
   // Entity::Warp 0x679210: the pending transform (0x678e90), then AdvanceCoords 0x678f10 twice (0x679225 / 0x67922b):
   // the warp is committed at once, the collision primitive with it. So an entity that has had its step in this beat
   // (its shape held at the beat's start) is read where it was warped to, by scripts and by what hangs on it. Seen: MP1

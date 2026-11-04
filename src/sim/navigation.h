@@ -11,7 +11,9 @@
 // sim/landnav.cpp). FindPath below (a plain A* with line-of-sight smoothing) only answers
 // CanPathTo (TODO: the original's direct probe, pathfinding.md section 6).
 #pragma once
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -40,6 +42,38 @@ inline uint8_t OccLayersOf(uint8_t footprintCaps) {
 inline uint8_t FitsCaps(uint8_t caps, bool ignoreStructures, bool landHeld, bool waterHeld) {
   if (!ignoreStructures && (caps & 3) && landHeld) caps &= static_cast<uint8_t>(~3);
   if ((caps & 8) && waterHeld) caps &= static_cast<uint8_t>(~8);
+  return caps;
+}
+// STIMap::OCCUPY_MobileCheck 0x564ab0 for the footprint with its origin cell at (x, z): the layers the terrain
+// allows there (structures not counted). M: the TerrainMap, or a copy of what this reads of it (sim/sim_snapshot.cpp:
+// width(), height(), HeightAt, TerrainType, hasWater, waterElevation).
+template <class M>
+uint8_t MobileCheckCapsOf(const M& map, const NamedFootprint& fp, const bool* blocking, int x, int z) {
+  const int w = map.width(), h = map.height();
+  const int sx = std::max<int>(1, fp.sizeX), sz = std::max<int>(1, fp.sizeZ);
+  if (x < 0 || z < 0 || x + sx > w - 1 || z + sz > h - 1) return 0;
+  const float water = map.hasWater ? map.waterElevation : -10000.0f;
+  float lo = 1e30f, hi = -1e30f;
+  for (int cz = z; cz <= z + sz; ++cz)
+    for (int cx = x; cx <= x + sx; ++cx) {
+      float v = map.HeightAt(cx, cz);
+      lo = std::min(lo, v);
+      hi = std::max(hi, v);
+      if (blocking && blocking[map.TerrainType(cx, cz)]) return 0;
+    }
+  uint8_t caps = fp.caps;
+  if (water - hi < fp.minWaterDepth) caps &= 0xf1;  // too shallow somewhere: no seabed/sub/water
+  if (water - lo > fp.maxWaterDepth) caps &= 0xfc;  // too deep somewhere: no land/seabed
+  if ((caps & 3) && fp.maxSlope != 0.0f) {
+    float step = 0;
+    for (int cz = z; cz <= z + sz; ++cz)
+      for (int cx = x; cx < x + sx; ++cx)
+        step = std::max(step, std::fabs(map.HeightAt(cx + 1, cz) - map.HeightAt(cx, cz)));
+    for (int cx = x; cx <= x + sx; ++cx)
+      for (int cz = z; cz < z + sz; ++cz)
+        step = std::max(step, std::fabs(map.HeightAt(cx, cz + 1) - map.HeightAt(cx, cz)));
+    if (fp.maxSlope < step) caps &= 0xfc;
+  }
   return caps;
 }
 
@@ -184,6 +218,15 @@ class Navigation {
   }
   // Work of the last search (cells walked or expanded) and totals for the profiler.
   uint64_t lastWork = 0, searches = 0, expanded = 0;
+  // For copies made between beats (sim/sim_snapshot.cpp; read them only then): the occupancy grids' rows (null
+  // before the first structure: no cell is held), the blocking terrain types, and per band of kOccBandRows rows a
+  // stamp that changes whenever SetCells changes a bit in the band (bookkeeping only, nothing reads it in a beat).
+  static constexpr int kOccBandRows = 32;
+  const uint8_t* OccRow(int z, bool water) const;
+  uint64_t OccBandStamp(int band) const {
+    return static_cast<size_t>(band) < occBandStamp_.size() ? occBandStamp_[static_cast<size_t>(band)] : 0;
+  }
+  const std::array<bool, 256>& BlockingTypes() const { return blocking_; }
 
  private:
   const TerrainMap* map_;
@@ -195,6 +238,8 @@ class Navigation {
   std::vector<OccupiedRect> structures_;
   std::vector<uint8_t> occ_;       // land grid: the occupancy bit of each map cell
   std::vector<uint8_t> occWater_;  // water grid
+  std::vector<uint64_t> occBandStamp_;  // (OccBandStamp)
+  uint64_t occStamp_ = 0;
   // Set (on) or clear the bits of [x0, x1) x [z0, z1) in the grids `occ`; each origin's count of held cells in its
   // footprint (PathGrid::blocked_) follows every bit that changes.
   void SetCells(int x0, int z0, int x1, int z1, uint8_t occ, bool on);

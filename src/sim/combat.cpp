@@ -2092,12 +2092,20 @@ bool Track(Sim& sim, AimController* c, Vec3 goal, bool raw) {
   if (c->weapon && c->weapon->HasLuaObject()) {
     if ((bits & 2) && !c->tracking) {
       c->tracking = true;
-      lua_pushstring(sim.L(), c->label.c_str());
-      sim.CallMethod(sim.L(), c->weapon, "OnStartTracking", 1);
+      if (sim.DeferringScripts()) {
+        sim.DeferScriptCall(c->weapon, "OnStartTracking", {Sim::ScriptArg::Str(c->label.c_str())});
+      } else {
+        lua_pushstring(sim.L(), c->label.c_str());
+        sim.CallMethod(sim.L(), c->weapon, "OnStartTracking", 1);
+      }
     } else if (!(bits & 2) && c->tracking) {
       c->tracking = false;
-      lua_pushstring(sim.L(), c->label.c_str());
-      sim.CallMethod(sim.L(), c->weapon, "OnStopTracking", 1);
+      if (sim.DeferringScripts()) {
+        sim.DeferScriptCall(c->weapon, "OnStopTracking", {Sim::ScriptArg::Str(c->label.c_str())});
+      } else {
+        lua_pushstring(sim.L(), c->label.c_str());
+        sim.CallMethod(sim.L(), c->weapon, "OnStopTracking", 1);
+      }
     }
   }
   return !(bits & 1);
@@ -2813,7 +2821,11 @@ void UnitAimTickManipulators(Sim& sim, Unit* u, bool anims) {
         PoseRotate(u, a->yawBone, AxisAngle({0, 1, 0}, a->heading));
         PoseRotate(u, a->pitchBone, AxisAngle({1, 0, 0}, -a->pitch));
       }
-      if (call && a->alive) sim.CallMethod(sim.L(), u, call == 1 ? "OnStartBuilderTracking" : "OnStopBuilderTracking", 0);
+      if (call && a->alive) {
+        const char* m = call == 1 ? "OnStartBuilderTracking" : "OnStopBuilderTracking";
+        if (sim.DeferringScripts()) sim.DeferScriptCall(u, m, {});
+        else sim.CallMethod(sim.L(), u, m, 0);
+      }
       continue;
     }
     if (e.kind == 5) {
@@ -2889,6 +2901,11 @@ void CollidersTick(Sim& sim, Unit* u) {
         event = "OnAnimCollision";
       }
       if (!u->HasLuaObject()) continue;
+      if (sim.DeferringScripts()) {  // (deferred: the test of the controller after the call waits for the next beat)
+        sim.DeferScriptCall(u, event, {Sim::ScriptArg::Str(u->skeleton->bones()[static_cast<size_t>(bone)].name.c_str()),
+                                       Sim::ScriptArg::Num(arg.x), Sim::ScriptArg::Num(arg.y), Sim::ScriptArg::Num(arg.z)});
+        continue;
+      }
       lua_State* L = sim.L();
       lua_pushstring(L, u->skeleton->bones()[static_cast<size_t>(bone)].name.c_str());
       lua_pushnumber(L, arg.x);

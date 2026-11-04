@@ -294,6 +294,11 @@ void DoCollisionsFor(Sim& sim, Unit* self, const std::vector<Hit>& hits) {
     if (h.depth < 0.001f) continue;
     if (h.prop) {  // 0x597d8b: a prop (Entity vt slot 5) gets RunScript_OnCollision 0x598660, then is no unit
       if (!h.prop->HasLuaObject() || !self->HasLuaObject()) continue;
+      if (sim.DeferringScripts()) {
+        sim.DeferScriptCall(h.prop, "OnCollision", {Sim::ScriptArg::Obj(self), Sim::ScriptArg::Num(h.n.x), Sim::ScriptArg::Num(h.n.y),
+                                                    Sim::ScriptArg::Num(h.n.z), Sim::ScriptArg::Num(h.depth)});
+        continue;
+      }
       PushObject(L, self);
       lua_pushnumber(L, h.n.x);
       lua_pushnumber(L, h.n.y);
@@ -330,11 +335,21 @@ void DoCollisionsFor(Sim& sim, Unit* self, const std::vector<Hit>& hits) {
     // survived the coast's cancellation (0.8 v less the brake leaves 1/25 of v at 10055), so the side-step that
     // 0x100132's collision record made at 10056 aimed a hair off; at 10086 its spline passed the side-step point
     // dead astern and turned the other way round (the original to +x, ours to -x).
-    if (fOther > 0.1f && flagOk(self, o) && !Immobile(self))
-      AddImpulse(self, Vec3{d.x * mag * fOther, d.y * mag * fOther, d.z * mag * fOther});
-    if (fSelf > 0.1f && flagOk(o, self) && !Immobile(o))
+    // Parallel order (docs/parallel-mode.md 3.3, step 4.2): both impulses of a pair go to the phase's commit (B), in
+    // key order, so no unit's turn writes another and the two units of a pair are pushed alike, whichever had its turn
+    // first; the motion they give starts with the next beat's step for both.
+    const bool later = sim.DeferringScripts();
+    if (fOther > 0.1f && flagOk(self, o) && !Immobile(self)) {
+      const Vec3 imp{d.x * mag * fOther, d.y * mag * fOther, d.z * mag * fOther};
+      if (later) sim.DeferAction([self, imp] { AddImpulse(self, imp); });
+      else AddImpulse(self, imp);
+    }
+    if (fSelf > 0.1f && flagOk(o, self) && !Immobile(o)) {
       // (-0.0 - d: 0x598171 loads -0.0 from 0xe4f748, so a +0 part of d gives -0 here)
-      AddImpulse(o, Vec3{(-0.0f - d.x) * mag * fSelf, (-0.0f - d.y) * mag * fSelf, (-0.0f - d.z) * mag * fSelf});
+      const Vec3 imp{(-0.0f - d.x) * mag * fSelf, (-0.0f - d.y) * mag * fSelf, (-0.0f - d.z) * mag * fSelf};
+      if (later) sim.DeferAction([o, imp] { AddImpulse(o, imp); });
+      else AddImpulse(o, imp);
+    }
   }
 }
 
@@ -626,9 +641,12 @@ void SurfaceSearch(Sim& sim, Unit* u, bool withProps, SurfaceContacts* out, Read
   static thread_local std::vector<Entity*> cand;
   cand.clear();
   Vec3 amn, amx;
+  // (parallel order's phases, step 4.3: the mark-free gather, the same list in the same order, so the search writes
+  // nothing of the entities it finds: GatherBox marks each one)
+  const bool noMarks = log || sim.DeferringScripts();
   if (withProps) {
     BoxAabb(box, &amn, &amx);
-    if (log) sim.entityGrid().GatherBoxNoMarks(amn.x, amn.z, amx.x, amx.z, 3, &cand);
+    if (noMarks) sim.entityGrid().GatherBoxNoMarks(amn.x, amn.z, amx.x, amx.z, 3, &cand);
     else sim.entityGrid().GatherBox(amn.x, amn.z, amx.x, amx.z, 3, &cand);
   } else if (log) {
     SurfaceContacts::Query& q = out->query;
@@ -640,6 +658,8 @@ void SurfaceSearch(Sim& sim, Unit* u, bool withProps, SurfaceContacts* out, Read
     // (the units' lists change during the pass when a unit is made or a shape set: only a change that this query
     // would see throws the search away; a search with props is not made ahead)
     log->Derived(&ReadSameCandidates, &q, 1);
+  } else if (noMarks) {
+    sim.entityGrid().GatherBoxNoMarks(box.c.x - hx, box.c.z - hz, box.c.x + hx, box.c.z + hz, 1, &cand);
   } else {
     sim.entityGrid().GatherBox(box.c.x - hx, box.c.z - hz, box.c.x + hx, box.c.z + hz, 1, &cand);
   }

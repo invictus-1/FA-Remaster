@@ -281,6 +281,8 @@ void MotorsAdvanceCoords(Sim& sim) {
   ms.moved.clear();
 }
 
+void MotorsNoteMoved(Sim& sim, Entity* e) { MS(sim).moved.push_back(e); }
+
 void MotorsForget(Sim& sim) { sim.motorState.reset(); }
 
 void RegisterMotorBindings(lua_State* L) {

@@ -34,6 +34,7 @@
 #include "sim/luautil.h"
 #include "sim/motion.h"
 #include "sim/navigation.h"
+#include "sim/prop_motor.h"
 #include "sim/sim.h"
 #include "sim/air.h"
 #include "sim/ai_platoon.h"
@@ -644,9 +645,21 @@ int l_GetHeading(lua_State* L) {
 int l_SetPosition(lua_State* L) {  // SetPosition(vector, immediate): a warp
   Entity* e = E(L);
   e->position = CheckVec(L, 2);
+  S(L)->NotePropTouched(e);  // (the sync point's reclaim copy, sim/sim_snapshot.h)
   if (e->kind == Entity::Kind::Unit) {
     static_cast<Unit*>(e)->motion.needSnap = true;
     S(L)->MarkUnitsMoved();
+  } else if (e->kind == Entity::Kind::Prop) {
+    // cfunc_EntitySetPositionL 0x68fa90 (READ 2026-11-03): Entity::SetPendingTransform 0x678e90 (0x68fbce), then with
+    // `immediate` (argument 3, LuaStackObject::GetBoolean 0x68fbe6) Entity::AdvanceCoords 0x678f10 twice at once
+    // (0x68fbf0, 0x68fbf6). AdvanceCoords calls the entity's vt+0x84 when its shape moved (0x67907c); for a prop that is
+    // Entity::UpdateCollision 0x6791d0 (Prop's vtable 0xe2f3bc + 0x84): the primitive takes the new transform and the
+    // entity its new cells in the o-grid's hash (0x4fd4f0). Without `immediate` the beat's AdvanceCoords step does it
+    // (beat_order.md 13). Ours kept a prop a script moved in its old cells (GetReclaimablesInRect, the reclaim
+    // searches). NOT MODELLED here (as before, for every entity that is not a unit): the place itself takes effect at
+    // once, where the original's GetPosition answers the old one until AdvanceCoords.
+    if (lua_toboolean(L, 3)) GridUpdate(*S(L), e, false);
+    else MotorsNoteMoved(*S(L), e);
   }
   return 0;
 }
@@ -778,6 +791,7 @@ int l_SetScale(lua_State* L) {
   e->scale[0] = s;
   e->scale[1] = static_cast<float>(luaL_optnumber(L, 3, s));
   e->scale[2] = static_cast<float>(luaL_optnumber(L, 4, s));
+  S(L)->NotePropTouched(e);  // (the sync point's reclaim copy)
   // (0x690fa9: the three numbers go straight into the entity's scale, the size it is drawn at)
   if (e->kind == Entity::Kind::Projectile)
     static_cast<Projectile*>(e)->drawSize = {e->scale[0], e->scale[1], e->scale[2]};
@@ -1264,7 +1278,9 @@ void EntityAdjustHealth(lua_State* L, Entity* e, Entity* /*instigator*/, float a
   if (e->kind == Entity::Kind::Unit)
     if (Sim* sim = S(L)) sim->MarkDirty(static_cast<Unit*>(e));
   if (Sim* sim = S(L); sim && sim->collectHealth) RecordHealth(*sim, e, before, e->maxHealth);  // (a host's list; reads only)
-  if (qNew != qOld && e->HasLuaObject()) {
+  if (qNew != qOld && e->HasLuaObject() && S(L) && S(L)->DeferringScripts()) {
+    S(L)->DeferScriptCall(e, "OnHealthChanged", {Sim::ScriptArg::Num(qNew), Sim::ScriptArg::Num(qOld)});
+  } else if (qNew != qOld && e->HasLuaObject()) {
     lua_pushnumber(L, qNew);
     lua_pushnumber(L, qOld);
     S(L)->CallMethod(L, e, "OnHealthChanged", 2);
@@ -1597,6 +1613,13 @@ void Sim::PushScriptClass(lua_State* L, const BlueprintInfo& bp, const char* def
 }
 
 bool Sim::CallMethod(lua_State* L, ScriptObject* obj, const char* method, int nargs) {
+  if (deferring_ && immediateInPhase_[method]++ == 0) {  // (parallel order: a call no site defers yet; its first caller)
+    void* fr[12];
+    const int n = CaptureFrames(fr, 12);
+    std::string where;
+    for (int i = 1; i < n; ++i) where += " +0x" + [&] { char b[24]; snprintf(b, sizeof b, "%llx", static_cast<unsigned long long>(ImageOffset(fr[i]))); return std::string(b); }();
+    Logf(LogLevel::Info, "moho64: parallel order: %s called at once inside the entity pass's phases, first at beat %u from%s", method, tick_, where.c_str());
+  }
   lua_checkstack(L, 10);
   int base = lua_gettop(L) - nargs;
   PushObject(L, obj);
@@ -2058,6 +2081,7 @@ Prop* Sim::CreateProp(lua_State* L, const BlueprintInfo& bp, Vec3 pos, Quat q, V
   RevertCollisionShape(L, p);
   props.push_back(p);
   propGridDirty_ = true;
+  NotePropTouched(p);  // (the sync point's reclaim copy)
   bps_.PushTable(L, bp);
   int bpIdx = lua_gettop(L);
   PushPath(L, bpIdx, "Defense", "MaxHealth");

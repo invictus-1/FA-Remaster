@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <map>
 #include <unordered_map>
 #include <set>
@@ -47,6 +48,7 @@ class Prop;
 class EntityGrid;
 class Platoon;
 class Navigation;
+class SyncSnapshots;
 struct UnitCommand;
 struct CommandIdPool;
 struct SessionDescription;
@@ -358,6 +360,23 @@ class Sim {
   // PropEvents (sim/sim_view.h): while set, every prop that goes is noted (its id, its place in the map file)
   bool collectProps = false;
   std::vector<std::pair<uint32_t, int>> propsGone;
+  // The sync point's copies for an interface (sim/sim_snapshot.h): while set, the end of Start, of every Tick and of
+  // every PausedBeat (after the Sync) brings snapshots() up to date, on the thread that runs the beat. snapshots()
+  // is made with the Sim and never moves: a host may keep its address and read it from any thread at any time. The
+  // copies only read the simulation (no script call, no Lua object made, no random draw): the game plays the same
+  // with them on or off. snapPropsGone: the props destroyed since the last copy whose reclaim entry it holds.
+  bool keepSnapshots = false;
+  SyncSnapshots& snapshots() { return *snapshots_; }
+  const SyncSnapshots& snapshots() const { return *snapshots_; }
+  std::vector<std::pair<uint32_t, int>> snapPropsGone;  // (id, its cell in the copy)
+  // The props whose place, size or state changed since the last copy (their handles): made, moved, rescaled, warped,
+  // attached, destroy-queued. Every place that changes one of those of a prop tells it here (only while
+  // keepSnapshots); the copy also looks at a window of the others every beat (sim/sim_snapshot.cpp).
+  std::vector<uint32_t> snapPropsTouched;
+  std::vector<uint32_t> snapUnitsMade;  // the units made since the last copy (their handles; AddUnitToLists)
+  void NotePropTouched(const Entity* e) {
+    if (keepSnapshots && e && e->kind == Entity::Kind::Prop) snapPropsTouched.push_back(e->handle);
+  }
   // The weapons' target category sets (TargetRestrictDisallow / TargetRestrictOnlyAllow as parsed), each distinct
   // non-empty set once, in the order first seen: UnitWeapon::disallowSet / onlyAllowSet index it, and so do the
   // views (WeaponView in sim/sim_view.h, ui request 37). It only grows; an index keeps its set. The simulation
@@ -543,6 +562,7 @@ class Sim {
   }
   // The entity grid behind GetUnitsInRect / GetReclaimablesInRect (sim/entity_grid.h).
   EntityGrid& entityGrid();
+  const EntityGrid* EntityGridIfMade() const { return egrid_.get(); }  // (the snapshots: never makes it)
   bool anyAttached = false;  // some unit rides a transport (sim/transport.cpp)
   // FAF's exe global 0x1292b54 (SetNavigatorPersonalPosMaxDistance): the land path navigator's look-ahead limit in
   // cells (TryAdvanceTargetPoint 0x5af8d5); 50 until a script sets it (FAF's simInit: 9999). One per sim here.
@@ -551,6 +571,46 @@ class Sim {
   // Call obj:method(args...) for the nargs values on L's stack; logs script errors.
   // (Every function taking a lua_State works on the caller's state: it may be a thread.)
   bool CallMethod(lua_State* L, ScriptObject* obj, const char* method, int nargs);
+  // Parallel order's deferred script calls (docs/parallel-mode.md 3.3 / 3.6, step 4.1). While the entity pass runs
+  // its phases A (motion), C (pose and aim) and D (economy), the engine's callbacks of those phases (group A of 3.6:
+  // motion events, layer and terrain changes, fuel, a prop's OnCollision, a crash's OnImpact, tracking, footfalls,
+  // the economy's events) are not called at once: DeferScriptCall keeps the object, the method (a string that lives
+  // as long as the program) and the arguments, and the phase's commit runs them in the order of their keys (the turn's
+  // place in the pass, then the call's place in the turn). In the original's order nothing is ever deferred: each site
+  // calls as before. Outside those phases (shells, commands, Lua) every call is immediate too.
+  struct ScriptArg {
+    enum Kind : uint8_t { kString, kNumber, kObject, kTerrainType } kind = kNumber;
+    double number = 0;  // (kNumber: a float or int as the site pushed it; kTerrainType: the terrain type's code)
+    ScriptObject* object = nullptr;
+    std::string string;
+    static ScriptArg Str(const char* s) { ScriptArg a; a.kind = kString; a.string = s; return a; }
+    static ScriptArg Num(double v) { ScriptArg a; a.kind = kNumber; a.number = v; return a; }
+    static ScriptArg Obj(ScriptObject* o) { ScriptArg a; a.kind = kObject; a.object = o; return a; }
+    static ScriptArg Terrain(int code) { ScriptArg a; a.kind = kTerrainType; a.number = code; return a; }
+  };
+  bool DeferringScripts() const { return deferring_; }
+  void DeferScriptCall(ScriptObject* obj, const char* method, std::vector<ScriptArg> args);
+  // ... and an engine action that runs scripts (a kill), in the same order
+  void DeferAction(std::function<void()> action);
+  // (DeferScriptCall: the calls of the phase running now, in the order made; the turn's key is deferKey_)
+  struct DeferredCall {
+    uint64_t key = 0;  // (the turn's place in the pass << 32) | the call's place in the turn
+    ScriptObject* object = nullptr;
+    const char* method = nullptr;
+    std::vector<ScriptArg> args;
+    std::function<void()> action;  // (DeferAction: run instead of a script call)
+  };
+  std::vector<DeferredCall> deferred_;
+  bool deferring_ = false;
+  uint32_t deferKey_ = 0, deferSeq_ = 0;
+  void DeferTurn(uint32_t key) {
+    deferKey_ = key;
+    deferSeq_ = 0;
+  }
+  void RunDeferredScriptCalls();
+  // script calls still made at once inside a deferring phase (by method; logged at the end): what step 4.6 must
+  // still defer before the phases go to the worker pool
+  std::map<std::string, uint64_t> immediateInPhase_;
   // The army the session looks through (sim+0xa88): 0-based, -1 = none (an observer, a replay). Hosts read it;
   // they change it with RequestFocusArmy (applied at the next Sync), never by writing it.
   int focusArmy = -1;
@@ -628,6 +688,7 @@ class Sim {
   // Movement (M3): pathfinding, path searches waiting their turn, issued commands.
   Navigation& navigation();
   bool HasNavigation() const { return nav_ != nullptr; }  // made already (navigation() reads the terrain types from Lua)
+  const Navigation* NavigationIfMade() const { return nav_.get(); }  // (the snapshots: never makes it)
   std::deque<Unit*> pathQueue;
   uint64_t walkSeqNext = 0;  // Unit::walkSeq: the order task walks were made in (their listeners' link order)
   std::vector<ResourceDeposit> deposits;
@@ -679,6 +740,7 @@ class Sim {
   std::unique_ptr<TerrainMap> map_;
   std::unique_ptr<Navigation> nav_;
   std::unique_ptr<EntityGrid> egrid_;
+  std::unique_ptr<SyncSnapshots> snapshots_;  // (snapshots(); made in the ctor)
   SimBlueprints bps_;
   std::vector<std::unique_ptr<Army>> armies_;
   std::mt19937 rng_;

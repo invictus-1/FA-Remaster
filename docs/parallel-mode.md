@@ -3,7 +3,8 @@
 Status: APPROVED by Chris 2026-10-31 ("everything looks good to me"); draft 3 (e1). Lives in
 `docs/parallel-mode.md`. Built so far (section 8's order): step 1, the mode field (`Sim::order`, `MOHO64_SIM_ORDER`);
 step 2a, the keyed draws (4.1); step 2b, the entity grid's canonical buckets (3.4); step 3, the write trap (6.1);
-step 4.0, Aim and a homing shell read their target's beat-start transform without writing it (6.1).
+step 4.0, Aim and a homing shell read their target's beat-start transform without writing it (6.1); step 4.1, the
+entity pass in phases with deferred callbacks, still on one thread (3.3); step 4.2, pushes in the commit (3.3); step 4.3, the contact search's mark-free gather.
 
 ## For Chris: the short version
 
@@ -135,6 +136,30 @@ when the messages are few (most units have nothing to send in most beats).
 - This is the stage that keeps AI-heavy games serial. Parallel mode does not change it; the AI's own work does.
 
 ### 3.3 The entity pass (stage 0x930): the biggest block
+
+**Built so far (step 4.1, e1 2026-11-03), on the sim's thread:** a unit's turn is three parts, one code path for both
+orders: `turnMotion` (scroller, attach, held shape, stun, fuel, info cache, motion), `turnPose` (manipulators, builder
+arms, aim) and `turnEconomy` (economy, pod assist, factory queue). The original's order runs them one unit after
+another, as before. Parallel order runs: the beams and every shell made before the pass first, in creation order
+(their hits immediate); then phase A = `turnMotion` for every unit, C = `turnPose`, D = `turnEconomy`, each over the
+pass's order, each followed by its commit (B). In A, C and D the engine's callbacks are deferred
+(`Sim::DeferScriptCall`, typed arguments: strings, numbers, objects, terrain types; `Sim::DeferAction` for a landing's
+kill and its `OnImpact`) and run in the commit by key (the turn's place, then the call's place in the turn). Deferred:
+`OnMotionHorzEventChange`, `OnMotionVertEventChange`, `OnMotionStateChange`, `OnLayerChange` (motion, air, a landing),
+`OnTerrainTypeChange`, a prop's `OnCollision`, a crash's / landing's `OnImpact`, `OnRunOutOfFuel` / `OnGotFuel` /
+`OnStartRefueling`, `OnStartTracking` / `OnStopTracking`, `OnStartBuilderTracking` / `OnStopBuilderTracking`,
+`OnAnimCollision` / `OnAnimTerrainCollision` (the controller's own stop test after the call waits a beat),
+`OnConsumptionActive` / `InActive`, `OnDecayed`, `OnHealthChanged` (regeneration). A call still made at once inside
+A, C or D is counted and logged with its first caller ("called at once inside the entity pass's phases"): none in b8
+6000 and B3-16k 2000 beats; in B1 12000 only a silo's `OnSiloBuildStart` / `OnSiloBuildEnd` / `OnNukeArmed` (phase D,
+a few each; step 4.5 defers them). Step 4.6 puts A and C on the pool.
+
+**Pushes (step 4.2):** `DoCollisionsFor` still finds a unit's contacts and works out both impulses of each pair at the
+unit's turn in phase A (from its own position before its move and the other's committed one), but in parallel order
+both go to the commit (`Sim::DeferAction`), applied in key order after every unit's motion. So no turn writes another
+unit, and a pair is pushed alike whichever unit's turn came first; the push moves both from the next beat's step on
+(in the original's order, a unit later in the pass than its pusher moves with the push in the same beat). The
+exact-overlap direction is keyed on the unit whose turn found the pair (`kPush`).
 - **Phase A, motion (pool).** Every unit, shell and beam steps from the snapshot: spline point, ground snap, coast,
   layer test, fuel, info cache, the aim controllers and pose (they read targets' committed state), the unit's own
   economy demand. Writes: its own pending transform and motion state. Contacts (`ProcessSurfaceCollision`'s search)
@@ -359,7 +384,7 @@ other entities in these places, by count:
 | What | Where | b8 / B1 / B3 writes | In step 4 |
 |---|---|---|---|
 | The unit's economy into its army's pools | `UnitEconomyTick` (economy.cpp 504), `ArmyEconomy::ChangeStorage` | 2.8 M / 0.57 M / 31 M | phase D: per-unit results, summed into the army in creation order |
-| `gridMark` of every entity a gather finds | `EntityGrid::GatherBox` / `GatherLine` / `Gather` (contacts, shells' line march, `DamageArea`) | 1.6 M / 0.13 M / 3.9 M | the mark-free gathers (`GatherBoxNoMarks`, same order) on the pool |
+| `gridMark` of every entity a gather finds | `EntityGrid::GatherBox` / `GatherLine` / `Gather` (contacts, shells' line march, `DamageArea`) | 1.6 M / 0.13 M / 3.9 M | contacts: done (step 4.3: `SurfaceSearch` takes `GatherBoxNoMarks`, the same list in the same order, inside parallel order's phases); shells and `DamageArea` run serially before / after the phases |
 | Aim's target read at its beat-start transform by putting it into the target and back | combat.cpp `Aim` | 62 k / 8 k / 483 k | done (step 4.0): read through a per-thread override (`tl_atBeatStart`), nothing written; the same for a shell homing on a later unit's last pose (`TargetPosLastPose`) |
 | Pushes into the other unit | `DoCollisionsFor` -> `AddImpulse` | 19 k / 0.8 k / 40 | phase A: symmetric pushes, each unit applies the ones it receives |
 | A shell's hit: damage, kills and what the scripts do with them (`AdjustHealth`, `Kill`, `IssueClearCommands`, `MotionStop`, stun, regen, max health, script bits, army kill counts) | `OnImpact` / `DamageArea` / `OnKilled` (Lua) | 1-2 k / 0.6 k / 30 k | phase B (key order) |

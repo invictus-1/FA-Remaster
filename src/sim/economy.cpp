@@ -227,7 +227,8 @@ void ApplyConsumption(Unit* u, bool active) {
   u->consumptionShown[1] = req[1];
   if (active != was) {
     lua_State* L = u->luaState();
-    if (L) S(L)->CallMethod(L, u, active ? "OnConsumptionActive" : "OnConsumptionInActive", 0);
+    if (L && S(L)->DeferringScripts()) S(L)->DeferScriptCall(u, active ? "OnConsumptionActive" : "OnConsumptionInActive", {});
+    else if (L) S(L)->CallMethod(L, u, active ? "OnConsumptionActive" : "OnConsumptionInActive", 0);
   }
 }
 
@@ -467,7 +468,10 @@ void UnitEconomyTick(Sim& sim, Unit* u) {
     float m = std::max(std::max(d.buildCostEnergy, d.buildCostMass), d.buildTime);
     if (m > 0.0f) {
       Materialize(sim, L, u, -0.1f / m);
-      if (u->health <= 0.0f) sim.CallMethod(L, u, "OnDecayed", 0);
+      if (u->health <= 0.0f) {
+        if (sim.DeferringScripts()) sim.DeferScriptCall(u, "OnDecayed", {});
+        else sim.CallMethod(L, u, "OnDecayed", 0);
+      }
     }
   }
   // (a unit whose Destroy is queued still does its resource step: it is only gone after the beat's destroy queue.
