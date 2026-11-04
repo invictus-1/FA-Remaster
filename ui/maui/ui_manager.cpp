@@ -581,6 +581,19 @@ int l_PixelAt(lua_State* L) {
   return 1;
 }
 
+// moho64ui_InterfacePng(file): not an engine function of the original. The host's own function for tests, as
+// moho64ui_PixelAt draws: the first head's controls drawn now over black (no world, no mouse pointer), saved as a PNG
+// picture at the host path `file`; true when written.
+int l_InterfacePng(lua_State* L) {
+  UiManager& ui = UserState::From(L)->ui();
+  const std::string file = luaL_checkstring(L, 1);
+  SoftwareTarget target(ui.width(), ui.height());
+  target.Clear(0xff000000u);
+  ui.Render(L, target, 0);
+  lua_pushboolean(L, target.SavePng(file));
+  return 1;
+}
+
 }  // namespace
 
 void RegisterFrameBindings(lua_State* L) {
@@ -612,6 +625,7 @@ void RegisterFrameBindings(lua_State* L) {
 
   lua_register(L, "moho64ui_Describe", l_Describe);
   lua_register(L, "moho64ui_PixelAt", l_PixelAt);
+  lua_register(L, "moho64ui_InterfacePng", l_InterfacePng);
 }
 
 }  // namespace moho::ui

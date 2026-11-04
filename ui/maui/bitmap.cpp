@@ -23,7 +23,8 @@ class Bitmap : public Control {
   }
 
   // Draw (FA exe 0x780850): the current texture stretched over the control's rectangle (or tiled
-  // at its own size), its border ring left out, multiplied by the control's alpha.
+  // at its own size), its border ring left out, multiplied by the control's colour (+0xf4): white with
+  // the alpha byte SetAlpha made, alpha * 255 cut toward zero (AlphaByte), not the alpha rounded.
   // A rectangle whose Top lies below its Bottom (or Left right of Right) is drawn too: the original
   // hands DRAW_ClippedQuad (0x454e20) the control's own rectangle as the clip as well (0x780a0d), so
   // its first test always passes and the quad goes to CD3DPrimBatcher::DrawQuad (0x4389a0) with the
@@ -42,8 +43,11 @@ class Bitmap : public Control {
     const bool turnedX = dst.x0 > dst.x1, turnedY = dst.y0 > dst.y1;
     if (turnedX) std::swap(dst.x0, dst.x1);
     if (turnedY) std::swap(dst.y0, dst.y1);
+    const float drawAlpha = static_cast<float>(AlphaByte()) / 255.0f;
+    // (A solid colour is a texture of that colour (CD3DSolidBatchTexture) under the same white: its alpha times the
+    // byte's. INFERRED: the product rounded, as our software way rounds it.)
     if (solid) {
-      target.FillRect(dst, WithAlpha(ParseColor(color), alpha));
+      target.FillRect(dst, WithAlpha(ParseColor(color), drawAlpha));
       return;
     }
     if (textures.empty() || pattern.empty()) return;
@@ -54,7 +58,7 @@ class Bitmap : public Control {
     float b = static_cast<float>(border);
     float iw = static_cast<float>(img.width) - 2 * b, ih = static_cast<float>(img.height) - 2 * b;
     Rect src{b + u0 * iw, b + v0 * ih, b + u1 * iw, b + v1 * ih};
-    uint32_t tint = WithAlpha(0xffffffffu, alpha);
+    const uint32_t tint = 0x00ffffffu | AlphaByte() << 24;
     // (Not read: how the original's DRAW_TiledQuad, 0x455150, lays the tiles of a turned quad. Here
     // they are laid unmirrored from its top left.)
     if (tiled) {
@@ -64,7 +68,7 @@ class Bitmap : public Control {
     // (Over the whole window as the first thing drawn, FAF's "IN TRANSIT" cover fading at a game's start: drawn by
     // the graphics card where the renderer's picture shows the window, its fade without a new upload; ours, ui
     // REQUESTS 38.)
-    if (!turnedX && !turnedY && OfferToCard(L, target, dst, img, src, alpha)) return;
+    if (!turnedX && !turnedY && OfferToCard(L, target, dst, img, src, drawAlpha)) return;
     if (turnedX) std::swap(src.x0, src.x1);
     if (turnedY) std::swap(src.y0, src.y1);
     target.DrawImage(img, src, dst, tint);
