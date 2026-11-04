@@ -718,7 +718,10 @@ bool SelectUnitsByCategory(lua_State* L, const char* expr, bool add, bool inView
   UserUnit* best = nullptr;
   float bestDistance = std::numeric_limits<float>::max();
   for (UserUnit* u : asked) {
-    if (u->gone || u->view.dead || !u->view.selectable || u->view.army != focusArmy + 1) continue;
+    // (selectable as the mouse's units are, UserUnit::IsSelectable 0x8c0500: the unit's vtable slot 0x30, called at
+    // 0x86647e, then the army at 0x86649e; so FAF's guard dummy ZXA0003 on a drone, not SELECTABLE, is never taken by
+    // ALLUNITS. Not built: the debug switch ui_SelAnyUnit 0x10a645e, which with the session's cheats takes any unit.)
+    if (!IsSelectable(L, u) || u->view.army != focusArmy + 1) continue;
     // (idle, FA exe 0x8664c6: not hanging on a parent, docked, loaded or stored (UserUnit+0x1a2),
     // and nothing in its queue; until 2026-10-16 this read "being built", a wrong reading)
     if (idle && (u->view.attached || u->view.queueLength != 0)) continue;

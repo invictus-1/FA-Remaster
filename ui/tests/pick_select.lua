@@ -117,5 +117,13 @@ ForkThread(function()
     click(view, pod:GetPosition())
     check("a click on the drone in flight selects it (docked: " .. tostring(docked(cdr, pod)) .. ")", selectedId(), "uea0001")
     SelectUnits(nil)
+    -- all units by category: the drone's guard dummy ZXA0003 (not SELECTABLE) is never among them (0x86647e)
+    UISelectionByCategory("ALLUNITS", false, false, false, false)
+    local dummies = 0
+    for _, u in GetSelectedUnits() or {} do
+        if string.lower(u:GetBlueprint().BlueprintId) == "zxa0003" then dummies = dummies + 1 end
+    end
+    check("selecting all units takes no guard dummy", dummies, 0)
+    SelectUnits(nil)
     LOG("TEST done: " .. failed .. " failed")
 end)
