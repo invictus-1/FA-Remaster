@@ -75,6 +75,7 @@ class Water {
  private:
   gfx::Device* device_;
   TextureCache* textures_;
+  bool patchesTried_ = false;  // [foampatch] (the foam patches looked for, once)
   const MapData* map_ = nullptr;
   void DrawWith(const View& view, const Camera* camera, gfx::Texture behind, gfx::Texture sceneDepth);
   gfx::Pipeline ModernPipeline(bool ripples, std::string* error, bool winter = false, bool surf = false, bool wet = false, bool ocean = false,

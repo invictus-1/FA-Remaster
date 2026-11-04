@@ -128,6 +128,8 @@ struct WorldPicture::Impl {
     // [ocean] the real ocean: its waves, whitecaps and glitter, the sea lifted by them and what floats riding it (Chris, 23-24
     // October: yes; with the weather effects, as the surf and the wakes)
     if (b.weatherEffects >= 0) w.oceanWaves = w.oceanLift = b.weatherEffects > 0;
+    // [foampatch] the visuals track's foam patches in its whitecaps (Chris, 2026-11-04: yes; with the ocean)
+    if (b.weatherEffects >= 0) w.water.ocean.foamPatches = b.weatherEffects > 0 ? 1.0f : 0.0f;
     if (b.frameGeneration >= 0) w.frameGeneration = b.frameGeneration > 0;
     if (b.hiddenOutlines >= 0) w.hiddenOutlines = b.hiddenOutlines > 0;
   }
