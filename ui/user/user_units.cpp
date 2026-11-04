@@ -1973,8 +1973,7 @@ bool ReclaimTargetAt(lua_State* L, const float at[3], float within, ReclaimableV
   for (UserUnit* u : store.selection)
     if (!u->gone && !u->view.dead && u->view.army == focusArmy + 1) caps |= u->view.commandCaps;
   if (!(caps & kReclaim)) return false;
-  Sim* sim = TheSim(L);
-  return sim && ReclaimableAt(*sim, at, within, prop);
+  return UserState::From(L)->Reclaimable(at, within, prop);  // (the sync point's copy: no wait for a beat)
 }
 }  // namespace
 
@@ -5124,14 +5123,11 @@ void MoveDraggedNode(lua_State* L, const float at[3], bool last) {
     // A building's order dragged on from the move before: can it stand there (USERUNIT_CanBeBuiltAt 0x8c1880 at
     // 0x829c95; here the simulation's own test, BuildSiteOf, on the site snapped there). A failed test counts
     // unless the console's SkipUIChecks has turned the session's checks off (+0x4d5, 1 from the start: 0x8934f1,
-    // toggled by 0x897580); that switch is not built: the checks are always on. (The test asks the simulation: not
-    // while a beat runs on its own thread, the answer from the move before then; always for the release.)
-    UserState* user = UserState::From(L);
-    const bool beat = user->config().beatRunning && user->config().beatRunning();
-    Sim* sim = !beat || last ? TheSim(L) : nullptr;
+    // toggled by 0x897580); that switch is not built: the checks are always on. (The test runs on the simulation's
+    // copy made at the sync point, UserState::BuildSite: at every move, also while a beat runs on its own thread.)
     bool free = true;
     float site[3];
-    if (sim && BuildSiteOf(*sim, d.blueprint, at, site, &free)) d.fit = free;
+    if (UserState::From(L)->BuildSite(d.blueprint, at, site, &free)) d.fit = free;
   }
   d.moved = !last;
   // The node itself, now (0x829c05): the legs to and from it follow the mouse.
@@ -5499,10 +5495,9 @@ uint32_t ReleaseWaypointDrag(lua_State* L, const float at[3], const float playab
   } else if (c.type == static_cast<int>(CommandType::BuildMobile) && !c.blueprint.empty()) {
     // A building: its site snapped for its blueprint (0x829f50 / 0x829f5e; INFERRED the simulation's own
     // snapping, BuildSiteOf, is the same).
-    Sim* sim = TheSim(L);
     bool free = true;
     float site[3];
-    if (!sim || !BuildSiteOf(*sim, c.blueprint, sent, site, &free)) return command;
+    if (!UserState::From(L)->BuildSite(c.blueprint, sent, site, &free)) return command;
     for (int i = 0; i < 3; ++i) sent[i] = site[i];
     t.type = 2;
     t.pos = {site[0], site[1], site[2]};

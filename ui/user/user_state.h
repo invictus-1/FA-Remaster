@@ -20,6 +20,7 @@
 
 namespace moho {
 class Sim;
+struct ReclaimableView;
 class Vfs;
 class ScriptState;
 class ThreadScheduler;
@@ -281,6 +282,11 @@ class UserState {
   // from this state goes through here. `where`: for the count of waits (MOHO64UI_BEAT_LOG).
   Sim* LiveSim(const char* where = "");
   bool HasSim() const { return config_.liveSim != nullptr; }
+  // A building's site under the cursor and whether it may stand there, and the reclaimable prop at a place: from the
+  // simulation's copies made at each sync point (the engine's SyncSnapshots, sim/sim_snapshot.h: the same code, exact),
+  // so no wait for a running beat; through LiveSim only until the first copy exists. False: no such blueprint / none.
+  bool BuildSite(const std::string& blueprint, const float at[3], float site[3], bool* canBuild);
+  bool Reclaimable(const float at[3], float within, ReclaimableView* out);
   // What the scripts ask of the simulation every frame, copied when a beat's sync comes (the
   // simulation is idle then), so that asking never waits for a beat: the focus army's economy
   // (EconomyTotals of sim/sim_view.h, its twelve numbers in order). session_bindings.cpp.

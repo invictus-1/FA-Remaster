@@ -1750,6 +1750,7 @@ void GameSession::BeginLoad() {
 #ifdef MOHO64UI_WORLD_PICTURE
     sim->collectEffects = wantPicture;  // explosions, shots, smoke: the picture's, asked for before the first beat
     sim->collectProps = wantPicture;    // wreckage, and trees reclaimed, burnt or knocked over (the picture takes the list)
+    sim->keepSnapshots = true;          // building sites and reclaimables copied at each sync point (UserState::BuildSite)
     // hits, impacts and health changes, for the looks that answer them (marks on units, water ripples, blast waves;
     // about 1% of a beat's time; the renderer's request of 2026-10-18: render/world_picture.h)
     sim->collectHits = sim->collectImpacts = sim->collectHealth = wantPicture;

@@ -49,6 +49,8 @@ do
         -- is on exactly when its mod is, and on disk; the game's mods list then records it, so a replay has it.
         local fixes = {
             ['E08710C8-B785-11E4-9CA4-35FF1C5D46B0'] = '0c5a9aee-2f06-451c-ab53-5b2e2e906a3e',  -- Ultra Shields: ultra-shields-fix
+            ['6aa65d2a-5926-11dc-8314-0800200c9a08'] = '1f77a98d-bfde-4247-bfcb-75f9ee358e59',  -- Antares Unit Pack: antares-rework (local)
+            ['9a9C61C0-1787-10DF-A0AD-BATTLEPACK005'] = '5e94b4c6-a027-4d20-a3c2-22fbc69ecc41',  -- Wyvern Battle Pack: wyvern-rework (local)
         }
         if type(selected) == 'table' then
             local onDisk = {}

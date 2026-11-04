@@ -19,6 +19,9 @@
 #include "script/threads.h"
 #include "user/bindings.h"
 #include "user/replay_timeline.h"
+#include "sim/sim.h"
+#include "sim/sim_snapshot.h"
+#include "sim/sim_view.h"
 
 extern "C" {
 extern void (*lua_gpg_prof_gc)(lua_State* L, int end);  // (third_party/lua/lgc.c: around a collection's mark and sweep)
@@ -259,6 +262,26 @@ void UserState::PretendBeatForTests(bool on) {
     config_.beatRunning = realBeatRunning_;
     realBeatRunning_ = nullptr;
   }
+}
+
+bool UserState::BuildSite(const std::string& blueprint, const float at[3], float site[3], bool* canBuild) {
+  if (!config_.liveSim) return false;
+  if (auto snap = config_.liveSim->snapshots().Placement()) {
+    PlacementQuery q;
+    q.blueprint = blueprint;
+    for (int i = 0; i < 3; ++i) q.position[i] = at[i];
+    // (q.army stays 0: the test does not read it, and the live sim is not looked at here)
+    return moho::BuildSiteOf(*snap, q, site, canBuild);
+  }
+  Sim* sim = LiveSim("a building's site (before the first copy)");
+  return sim && moho::BuildSiteOf(*sim, blueprint, at, site, canBuild);
+}
+
+bool UserState::Reclaimable(const float at[3], float within, ReclaimableView* out) {
+  if (!config_.liveSim) return false;
+  if (auto snap = config_.liveSim->snapshots().Reclaim()) return moho::ReclaimableAt(*snap, at, within, out);
+  Sim* sim = LiveSim("the reclaimable prop (before the first copy)");
+  return sim && moho::ReclaimableAt(*sim, at, within, out);
 }
 
 UserState* UserState::From(lua_State* L) { return static_cast<UserState*>(lua_getextra(L, 1)); }
