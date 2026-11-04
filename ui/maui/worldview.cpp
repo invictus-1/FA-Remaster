@@ -1093,14 +1093,9 @@ class WorldView : public Control {
     const std::vector<WorldViewSpec> specs = GatherViews(L, &views);
     const bool viewsChanged = source->SetViews(specs, user->ui().width(), user->ui().height());
     const int drawW = specs.empty() ? w : std::max(1, user->ui().width()), drawH = specs.empty() ? h : std::max(1, user->ui().height());
-    // The simulation itself only for building sites (outlines, the ghost under the mouse): it waits
-    // for a beat running on its thread, so only then (UserState::LiveSim).
+    // Building sites (outlines, the ghost under the mouse) from the simulation's copies made at the sync point and the
+    // interface's own heights (UserState::BuildSite, config().groundHeight): no wait for a beat running on its thread.
     const bool hasSim = user->HasSim();
-    Sim* simNow = nullptr;
-    auto sim = [&]() -> Sim& {
-      if (!simNow) simNow = user->LiveSim("the picture's scene: building sites");
-      return *simNow;
-    };
     bool same = pixels_ && !viewsChanged && pictureFrame_ == user->frame() && w == pictureW_ && h == pictureH_ &&
                 cam.distance == pictureCamera_.distance && cam.heading == pictureCamera_.heading && cam.pitch == pictureCamera_.pitch &&
                 cam.target[0] == pictureCamera_.target[0] && cam.target[2] == pictureCamera_.target[2];
@@ -1137,7 +1132,7 @@ class WorldView : public Control {
     SelectionForWorld(L, &scene.selection, &ordered, shiftHeld, &queued);
     lap("(the picture's scene: the selection)");
     if (hasSim && !queued.empty()) {
-      for (const WorldGhost& site : queued) SiteOutline(L, sim(), site, 0xff10d010u, &scene.lines);
+      for (const WorldGhost& site : queued) SiteOutline(L, site, 0xff10d010u, &scene.lines);
     }
     scene.borders = user->mapBorders;
     scene.lifeBars = LifeBarsShown(L);
@@ -1184,10 +1179,10 @@ class WorldView : public Control {
     skirtSites_.clear();
     if (building) {
       BuildOrderSitesForWorld(L, &skirtSites_);
-      for (const WorldGhost& g : skirtSites_) SiteOutline(L, sim(), g, 0xc00080ffu, &scene.lines);
+      for (const WorldGhost& g : skirtSites_) SiteOutline(L, g, 0xc00080ffu, &scene.lines);
       // and round the buildings ordered and not begun, the guide's green (the original draws
       // its green over the blue for a building that is still someone's order)
-      for (const WorldGhost& g : ordered) SiteOutline(L, sim(), g, 0xff10d010u, &scene.lines);
+      for (const WorldGhost& g : ordered) SiteOutline(L, g, 0xff10d010u, &scene.lines);
     }
     // ([views] the ground under the mouse in whichever of the picture's world views it is)
     WorldView* pointed = PointedView(L, views, false);
@@ -1203,10 +1198,10 @@ class WorldView : public Control {
       if (groundUnderMouse(at)) {
         SnapToDeposit(L, at);  // (an extractor's place jumps onto the deposit near the mouse, as the cursor's does)
         if (buildDrag_ && name == buildName_) {  // the left button is held: the row so far
-          BuildRow(L, sim(), name, buildFrom_, at, &scene.ghosts, buildShift_);
+          BuildRow(L, name, buildFrom_, at, &scene.ghosts, buildShift_);
         } else if (ActiveBuildTemplate(L)) {  // a template: all its buildings round the mouse
-          BuildRow(L, sim(), name, at, at, &scene.ghosts, KeyIsDown(L, kKeyShift));
-        } else if (BuildSiteOf(sim(), name, at, ghost.position, &ghost.free)) {
+          BuildRow(L, name, at, at, &scene.ghosts, KeyIsDown(L, kKeyShift));
+        } else if (UserState::From(L)->BuildSite(name, at, ghost.position, &ghost.free)) {
           if (ghost.free && SiteMeetsOrdered(L, name, ghost.position, KeyIsDown(L, kKeyShift))) ghost.free = false;
           ghost.blueprint = name;
           scene.ghosts.push_back(ghost);
@@ -1217,7 +1212,7 @@ class WorldView : public Control {
     placingGhosts_ = scene.ghosts;  // (the building about to be placed, for the extractor snap)
     // Round each building being placed, the outline of the ground it takes: green where it can
     // stand, red where not (the guide of the original, by Chris's pictures of it).
-    for (const WorldGhost& g : scene.ghosts) SiteOutline(L, sim(), g, g.free ? 0xff10d010u : 0xffe02020u, &scene.lines);
+    for (const WorldGhost& g : scene.ghosts) SiteOutline(L, g, g.free ? 0xff10d010u : 0xffe02020u, &scene.lines);
     // A building's waypoint being dragged: the graph draws a queued building's ghost at its node (0x828dd0), so while
     // the node is dragged (its byte +0x1c) the ghost stands where the mouse has it (the ground there, not snapped)
     // with the outline of its skirt, d800d800 where it can stand and d8d80000 where not (the node's byte +0x1e),
@@ -1230,7 +1225,7 @@ class WorldView : public Control {
       scene.ghosts.push_back(g);
     }
     if (dragging) {
-      if (hasSim) SiteOutline(L, sim(), dragged, dragged.free ? 0xd800d800u : 0xd8d80000u, &scene.lines);
+      if (hasSim) SiteOutline(L, dragged, dragged.free ? 0xd800d800u : 0xd8d80000u, &scene.lines);
       scene.ghosts.push_back(dragged);
     }
     // The range rings (range_rings.cpp): of the building about to be placed (at the place under the
@@ -2094,7 +2089,9 @@ class WorldView : public Control {
   // The outline of the ground a building takes at a site, as lines on the ground: a rectangle of
   // the building's room (BuildSpacingOf: in a row the outlines touch, as in the original), each
   // side in pieces of at most one map unit so that it follows the ground.
-  void SiteOutline(lua_State* L, Sim& sim, const WorldGhost& site, uint32_t color, std::vector<WorldLine>* lines) {
+  void SiteOutline(lua_State* L, const WorldGhost& site, uint32_t color, std::vector<WorldLine>* lines) {
+    // (the ground under the outline from the interface's own copy of the heights, made between beats: no wait)
+    const auto& height = UserState::From(L)->config().groundHeight;
     float sizeX = 1, sizeZ = 1;
     BuildSpacingOf(L, site.blueprint, &sizeX, &sizeZ);
     const float x0 = site.position[0] - sizeX / 2, z0 = site.position[2] - sizeZ / 2;
@@ -2105,8 +2102,8 @@ class WorldView : public Control {
         WorldLine line;
         line.a[0] = ax + (bx - ax) * t0, line.a[2] = az + (bz - az) * t0;
         line.b[0] = ax + (bx - ax) * t1, line.b[2] = az + (bz - az) * t1;
-        line.a[1] = sim.map() ? sim.map()->TerrainHeight(line.a[0], line.a[2]) : site.position[1];
-        line.b[1] = sim.map() ? sim.map()->TerrainHeight(line.b[0], line.b[2]) : site.position[1];
+        line.a[1] = height ? height(line.a[0], line.a[2]) : site.position[1];
+        line.b[1] = height ? height(line.b[0], line.b[2]) : site.position[1];
         line.color = color;
         line.width = 4;  // (bold, as the original draws its guide: about four pixels in Chris's pictures of it)
         lines->push_back(line);
@@ -2187,12 +2184,12 @@ class WorldView : public Control {
   // routine at 0x50b0f0 that makes the point is not read; with the middle, a template made
   // from buildings that stand comes back on their own grid). Each site is still put through
   // the simulation's test, which says whether the building can stand there.
-  void TemplateSites(lua_State* L, Sim& sim, const BuildTemplate& t, const float at[3], std::vector<WorldGhost>* out, bool adding) {
+  void TemplateSites(lua_State* L, const BuildTemplate& t, const float at[3], std::vector<WorldGhost>* out, bool adding) {
     const float baseX = std::floor(at[0]) + 0.5f, baseZ = std::floor(at[2]) + 0.5f;
     for (const BuildTemplate::Building& b : t.buildings) {
       const float want[3] = {baseX + b.x, at[1], baseZ + b.z};
       WorldGhost ghost;
-      if (!BuildSiteOf(sim, b.blueprint, want, ghost.position, &ghost.free)) continue;
+      if (!UserState::From(L)->BuildSite(b.blueprint, want, ghost.position, &ghost.free)) continue;
       bool twice = false;  // (two wholes of a row may meet: the later building gives way)
       for (const WorldGhost& g : *out) {
         float w = 1, h = 1, gw = 1, gh = 1;
@@ -2207,7 +2204,7 @@ class WorldView : public Control {
       out->push_back(ghost);
     }
   }
-  void BuildRow(lua_State* L, Sim& sim, const std::string& name, const float from[3], const float to[3], std::vector<WorldGhost>* row,
+  void BuildRow(lua_State* L, const std::string& name, const float from[3], const float to[3], std::vector<WorldGhost>* row,
                 bool adding) {
     const float dx = to[0] - from[0], dz = to[2] - from[2];
     if (const BuildTemplate* t = ActiveBuildTemplate(L)) {
@@ -2219,7 +2216,7 @@ class WorldView : public Control {
       for (int k = 0; k <= count; ++k) {
         const float s = steps > 0 ? static_cast<float>(k) / steps : 0.0f;
         const float at[3] = {from[0] + dx * s, from[1], from[2] + dz * s};
-        TemplateSites(L, sim, *t, at, row, adding);
+        TemplateSites(L, *t, at, row, adding);
       }
       return;
     }
@@ -2231,7 +2228,7 @@ class WorldView : public Control {
       const float t = steps > 0 ? static_cast<float>(k) / steps : 0.0f;
       const float at[3] = {from[0] + dx * t, from[1], from[2] + dz * t};
       WorldGhost ghost;
-      if (!BuildSiteOf(sim, name, at, ghost.position, &ghost.free)) return;
+      if (!UserState::From(L)->BuildSite(name, at, ghost.position, &ghost.free)) return;
       if (!row->empty() && row->back().position[0] == ghost.position[0] && row->back().position[2] == ghost.position[2]) continue;
       // (not over a building that is ordered and not begun either: see SiteMeetsOrdered)
       if (ghost.free && SiteMeetsOrdered(L, name, ghost.position, adding)) ghost.free = false;
@@ -2273,12 +2270,11 @@ class WorldView : public Control {
     }
     if (buildDrag_) {
       buildDrag_ = false;
-      Sim* sim = UserState::From(L)->LiveSim("a building placed");
-      if (!sim) return;
+      if (!UserState::From(L)->HasSim()) return;  // (the sites from the sync point's copy: no wait for a beat)
       float to[3];
       CursorPlace(L, e.x, e.y, to);
       std::vector<WorldGhost> row;
-      BuildRow(L, *sim, buildName_, buildFrom_, to, &row, buildShift_);
+      BuildRow(L, buildName_, buildFrom_, to, &row, buildShift_);
       bool clear = !buildShift_;
       for (const WorldGhost& g : row) {
         if (!g.free) continue;
@@ -2488,13 +2484,12 @@ class WorldView : public Control {
     CommandMode(L, &mode, &name);
     if (mode == "build" || mode == "buildanchored") {
       // (The order goes out when the button is let go: until then the mouse may draw a row.)
-      Sim* sim = UserState::From(L)->LiveSim("a building's press");
       bool free = true;
-      if (!sim) return true;
+      if (!UserState::From(L)->HasSim()) return true;  // (the site from the sync point's copy: no wait for a beat)
       SnapToDeposit(L, world);  // (the cursor's place: on the deposit near the mouse for an extractor)
       if (ActiveBuildTemplate(L)) {  // (a template goes by the cell under the mouse: TemplateSites)
         for (int i = 0; i < 3; ++i) buildFrom_[i] = world[i];
-      } else if (!BuildSiteOf(*sim, name, world, buildFrom_, &free)) {
+      } else if (!UserState::From(L)->BuildSite(name, world, buildFrom_, &free)) {
         return true;
       }
       buildDrag_ = true, buildName_ = name, buildShift_ = e.shift;

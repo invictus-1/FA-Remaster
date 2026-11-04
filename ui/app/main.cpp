@@ -368,9 +368,21 @@ int main(int argc, char** argv) {
   // Our fixes of other mods (fa-remaster/mods/<name>, each holding none of the mod's files: Chris's, e.g. Ultra
   // Shields' ESD Pulse): always mounted at /mods/<name>, so a game played with one and its replay find it; the
   // lobby's mods list adds a fix when its mod is on (ui/data/hook/lua/mods.lua, the same list by uid).
+  // Chris's own reworks of mod units hold files made from the mods, so they never go in the repository: they are looked
+  // for in the lab's local_mod_fixes too (MOHO64UI_LOCAL_MOD_FIXES names another place); where that folder or a fix is
+  // missing (another PC, a public build) the fix is simply not there. A name in the list below is mounted once the
+  // engine says that fix is final (its row in mods.lua's table goes in with it).
+  std::vector<std::string> fixCandidates = modCandidates;
+  {
+    if (const char* local = std::getenv("MOHO64UI_LOCAL_MOD_FIXES")) fixCandidates.push_back(local);
+    std::string dir = hostfs::ProgramFolder();
+    if (dir.empty()) dir = ".";
+    fixCandidates.push_back(dir + "/../../local_mod_fixes");  // (fa-remaster-ui/build-ui -> the lab)
+    fixCandidates.push_back(dir + "/../local_mod_fixes");
+  }
   std::vector<std::pair<std::string, std::string>> modFixes;  // (folder, mount point)
-  for (const char* name : {"ultra-shields-fix"}) {
-    for (const std::string& c : modCandidates) {
+  for (const char* name : {"ultra-shields-fix", "antares-rework", "wyvern-rework"}) {
+    for (const std::string& c : fixCandidates) {
       if (!hostfs::IsFile(c + "/" + name + "/mod_info.lua")) continue;
       modFixes.push_back({c + "/" + name, std::string("/mods/") + name});
       break;
