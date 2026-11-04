@@ -687,3 +687,20 @@ for _, item in options.video.items do
         }
     end
 end
+
+-- The simulation's order for a new game that has no lobby (a campaign operation; the lobby's own option
+-- "Simulation Order" decides for a skirmish or a network game): Chris, 2026-10-31, multicore option 2, our own order for
+-- new games by default. Read at the launch (ui/app/game_session.cpp LaunchSinglePlayer). Replays play in their own.
+table.insert(options.gameplay.items, {
+    title = "Simulation Order for New Games",
+    key = 'remaster_sim_order',
+    tip = "How a new campaign operation works out each moment. Remastered: FA Remastered's own order, made to use many processor cores. Original: the original game's order. Both are exact; a skirmish takes the lobby's own choice, a replay the order it was recorded in.",
+    type = 'toggle',
+    default = 'parallel',
+    custom = {
+        states = {
+            { text = "Remastered", key = 'parallel' },
+            { text = "Original", key = 'original' },
+        },
+    },
+})

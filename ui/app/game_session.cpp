@@ -1218,6 +1218,25 @@ bool GameSession::LaunchWith(lua_State* L, int config, net::LobbyCore* lobby, st
     params.localOwner = lobby->Uid();
     params.network = true;
   }
+  // The simulation's order (Chris, 2026-10-31, multicore option 2: our parallel-friendly order for new games, the
+  // original's kept for the original's replays): the lobby's option RemasterSimOrder ("parallel" / "original"); with
+  // "parallel" its version beside it, as src/sim/replay.h ScenarioSimOrder reads them. Every client of a network game
+  // adds it alike from the same options, and the record keeps both, so its replay plays in the order it was made in.
+  lua_getfield(L, config, "GameOptions");
+  if (lua_istable(L, -1)) {
+    lua_getfield(L, -1, "RemasterSimOrder");
+    const bool parallel = lua_isstring(L, -1) && std::string(lua_tostring(L, -1)) == "parallel";
+    lua_pop(L, 1);
+    lua_getfield(L, -1, "RemasterSimOrderVersion");
+    const bool hasVersion = !lua_isnil(L, -1);
+    lua_pop(L, 1);
+    if (parallel && !hasVersion) {
+      lua_pushstring(L, "RemasterSimOrderVersion");
+      lua_pushnumber(L, 1);
+      lua_rawset(L, -3);
+    }
+  }
+  lua_pop(L, 1);
   if (!SessionFromGameConfig(L, config, params, &session, why)) return false;
 
   // The session's clients (CLobby::LaunchGame 0x7c38c0): the human armies in army order, then the observers, each
@@ -1338,6 +1357,41 @@ bool GameSession::LaunchSinglePlayer(lua_State* L, int info, std::string* why) {
   SinglePlayerParams params;
   params.seed = seedGiven ? seed : static_cast<uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count());
   params.cheats = DebugFacilities(L);
+  // The simulation's order of a new operation (no lobby to choose it: Options > Gameplay's "Simulation Order for New
+  // Games", our own order unless chosen; the engine, 2026-11-03), and its version, as LaunchWith gives a lobby's game.
+  lua_getfield(L, info, "scenarioInfo");
+  if (lua_istable(L, -1)) {
+    lua_getfield(L, -1, "Options");
+    if (!lua_istable(L, -1)) {
+      lua_pop(L, 1);
+      lua_newtable(L);
+      lua_pushstring(L, "Options");
+      lua_pushvalue(L, -2);
+      lua_rawset(L, -4);
+    }
+    lua_getfield(L, -1, "RemasterSimOrder");
+    const bool given = lua_isstring(L, -1);
+    lua_pop(L, 1);
+    if (!given) {
+      std::string order = "parallel";
+      lua_getglobal(L, "GetOptions");
+      if (lua_isfunction(L, -1)) {
+        lua_pushstring(L, "remaster_sim_order");
+        if (lua_pcall(L, 1, 1, 0) == 0 && lua_isstring(L, -1)) order = lua_tostring(L, -1);
+      }
+      lua_pop(L, 1);
+      lua_pushstring(L, "RemasterSimOrder");
+      lua_pushstring(L, order == "original" ? "original" : "parallel");
+      lua_rawset(L, -3);
+      if (order != "original") {
+        lua_pushstring(L, "RemasterSimOrderVersion");
+        lua_pushnumber(L, 1);
+        lua_rawset(L, -3);
+      }
+    }
+    lua_pop(L, 1);
+  }
+  lua_pop(L, 1);
   if (!SessionFromSinglePlayerInfo(L, info, params, &session, why)) return false;
   lua_getfield(L, info, "scenarioMods");
   const std::vector<std::string> uids = ModUids(L, lua_gettop(L));
