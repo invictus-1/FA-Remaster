@@ -7,6 +7,7 @@
 #include <string>
 #include <thread>
 
+#include "core/trace.h"
 #include "app/window.h"
 #include "core/log.h"
 #include "maui/control.h"
@@ -219,6 +220,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     double wait = 0, input = 0, scripts = 0, drawing = 0, host = 0, showing = 0, world = 0, recording = 0;
   } parts;
   double worldBefore = Times().worldDraw, beatGcBefore = BeatThreadGcMs();
+  MOHO_THREAD_NAME("ui");
   auto msSince = [](Clock::time_point a) { return std::chrono::duration<double, std::milli>(Clock::now() - a).count(); };
   while ((maxFrames == 0 || frames < maxFrames) && !ExitRequested()) {
     const auto loopTop = Clock::now();
@@ -228,10 +230,18 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     // after the beat, with all the time that passed.
     const bool busy = hooks.busy && hooks.busy();
     // (Low Latency: the wait for the frame's time comes before the input is read, so that what is read is fresh.)
-    if (hooks.waitForFrame) hooks.waitForFrame();
+    {
+      MOHO_ZONE("ui: wait for the frame's time");
+      if (hooks.waitForFrame) hooks.waitForFrame();
+    }
     parts.wait = msSince(loopTop);
     const auto pumpAt = Clock::now();
-    if (!busy && !window.Pump()) break;
+    bool pumped = true;
+    {
+      MOHO_ZONE("ui: input");
+      pumped = busy || window.Pump();
+    }
+    if (!pumped) break;
     auto now = Clock::now();
     parts.input = std::chrono::duration<double, std::milli>(now - pumpAt).count();
     const bool direct = hooks.direct && hooks.direct() && hooks.present;
@@ -241,6 +251,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
         last = now;
         if (hooks.clock) hooks.clock(dt > 0.25 ? 0.25 : dt);  // (the picture's moment moves on)
         const auto tp = Clock::now();
+        MOHO_ZONE("ui: present (a beat running: the world only)");
         hooks.present(*target, IntRect{});
         const double shown = std::chrono::duration<double>(Clock::now() - tp).count();
         presentSeconds += shown, drawSeconds += shown;
@@ -286,7 +297,10 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
       }
       current().ui().edgeScroll = window.fullScreen;  // the screen's edge moves the view (where the mouse stops at it)
       window.LockMouse(LockCursor().on);       // the player's "Lock Fullscreen Cursor To Window"
-      current().Frame(uiDt > 0.25 ? 0.25 : uiDt);  // a long stall (the window being dragged) is not replayed as one huge step
+      {
+        MOHO_ZONE("ui: the interface's step (scripts, the beat's sync)");
+        current().Frame(uiDt > 0.25 ? 0.25 : uiDt);  // a long stall (the window being dragged) is not replayed as one huge step
+      }
       frameSeconds += std::chrono::duration<double>(Clock::now() - now).count();
       auto t0 = Clock::now();
       // (Shown by the renderer: the interface over a transparent background, which the colour
@@ -294,6 +308,8 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
       const uint32_t clearColor = direct ? 0x00000000u : 0xff000000u;
       UserState& user = current();
       IntRect changed;
+      {
+      MOHO_ZONE("ui: drawing the interface");
       if (incremental) {
         recorder.Begin(target->Width(), target->Height());
         user.ui().Render(user.L(), recorder, 0);
@@ -323,17 +339,24 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
         user.ui().Render(user.L(), *target, 0);
         changed = IntRect{0, 0, target->Width(), target->Height()};
       }
+      }
       const auto te = Clock::now();
       target->ResetTouched();
-      if (eachFrame) eachFrame(dt > 0.25 ? 0.25 : dt, *target);
-      if (Overlay().on) stats.Draw(*target, hooks, current().L());  // (eachFrame may have replaced the state shown)
+      {
+        MOHO_ZONE("ui: the host's frame (the game's picture, beats, sounds)");
+        if (eachFrame) eachFrame(dt > 0.25 ? 0.25 : dt, *target);
+        if (Overlay().on) stats.Draw(*target, hooks, current().L());  // (eachFrame may have replaced the state shown)
+      }
       changed = changed.Union(target->Touched());
       hostDrawn = target->Touched();  // (painted over by the interface again next frame)
       hostSeconds += std::chrono::duration<double>(Clock::now() - te).count();
       renderSeconds += std::chrono::duration<double>(Clock::now() - t0).count();
       const auto tp = Clock::now();
-      if (direct) hooks.present(*target, changed);  // (the world under it and the screen's wait are the renderer's)
-      else window.Present(*target);
+      {
+        MOHO_ZONE("ui: present (the world, the screen's wait)");
+        if (direct) hooks.present(*target, changed);  // (the world under it and the screen's wait are the renderer's)
+        else window.Present(*target);
+      }
       presentSeconds += std::chrono::duration<double>(Clock::now() - tp).count();
       updatePointer(current());
       window.HoldPointer(current().ui().holdPointer);  // while the camera is dragged or turned
@@ -343,6 +366,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
       parts.scripts = ms(now, t0), parts.drawing = ms(t0, te), parts.host = ms(te, tp), parts.showing = ms(tp, Clock::now());
       ++frames;
     }
+    MOHO_FRAME_MARK;  // (one shown frame)
     if (hooks.catchingUp && hooks.catchingUp()) steadyFrames = 0;
     else ++steadyFrames;
     if (&current() != countedState) countedState = &current(), steadyFrames = 0;  // (a new state shown: its warm-up again)

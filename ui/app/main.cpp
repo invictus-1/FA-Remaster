@@ -36,6 +36,8 @@
 #include "core/crash.h"
 #include "core/hostfs.h"
 #include "core/log.h"
+#include "core/placement.h"
+#include "core/trace.h"
 #include "core/vfs.h"
 #include "maui/control.h"
 #include "maui/texture_info.h"
@@ -1093,11 +1095,24 @@ int main(int argc, char** argv) {
     }
     hooks.catchingUp = [&]() { return session.CatchingUp(); };
     hooks.statsLines = [&](std::vector<std::string>* lines) { session.StatsLines(lines); };
+#ifdef _WIN32
+    // On trial (the engine, 2026-11-04): the window's frame thread on the big-cache processors, as the sim's beat
+    // thread is (core/placement.h). Off unless MOHO64UI_PIN_FRAME=1, until the frame times on Chris's game decide.
+    if (const char* pin = std::getenv("MOHO64UI_PIN_FRAME"); pin && std::strcmp(pin, "1") == 0) {
+      const uint64_t mask = place::BigCacheMask();
+      if (mask && SetThreadAffinityMask(GetCurrentThread(), static_cast<DWORD_PTR>(mask)))
+        Logf(LogLevel::Info, "moho64ui: the frame thread on the big-cache processors (%d of them)", place::BigCacheCount());
+      else
+        Logf(LogLevel::Info, "moho64ui: MOHO64UI_PIN_FRAME: no big-cache processors here; the frame thread stays where it is");
+    }
+#endif
     done = ui::RunWindow([&]() -> ui::UserState& { return *shown; }, width, height, o.frames,
                          [&](double seconds, ui::SoftwareTarget& target) {
                            // (MOHO64UI_LONG_FRAMES: the host step's parts, for the log of a long frame)
                            ui::LongFrameLog& longFrames = ui::LongFrames();
                            auto timed = [&](const char* what, auto&& f) {
+                             MOHO_ZONE("ui: host step");  // (its name as the zone's text)
+                             MOHO_ZONE_TEXT(what, std::strlen(what));
                              if (longFrames.thresholdMs <= 0) return f();
                              const auto t0 = std::chrono::steady_clock::now();
                              f();

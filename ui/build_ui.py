@@ -40,7 +40,8 @@ def main():
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
     ap.add_argument("--no-debug", action="store_true", help="leave out -g")
     ap.add_argument("--target", help="zig target triple (default: this machine; Windows -> x86_64-windows-gnu)")
-    ap.add_argument("--out", default=os.path.join(ROOT, "build-ui"))
+    ap.add_argument("--out", help="output folder (default build-ui; build-ui-tracy with --tracy)")
+    ap.add_argument("--tracy", action="store_true", help="the profiler build (docs/profiling.md 1): Tracy's client and the marks")
     ap.add_argument("--define", action="append", default=[], help="a preprocessor name for the interface's own files (test builds)")
     ap.add_argument("--mi-debug", action="store_true", help="mimalloc's own checks on (MI_DEBUG=3, MI_SECURE=4: freed and overrun blocks caught; a test build)")
     ap.add_argument("--lua-api-check", action="store_true", help="Lua's API checks on, a trap at the first (a C function pushing past its stack, a test build)")
@@ -48,12 +49,19 @@ def main():
     ap.add_argument("--sdl-lib", help="the folder of the SDL3 library to link to")
     ap.add_argument("--headless", action="store_true", help="elsewhere than Windows: no SDL (no window, no sound)")
     a = ap.parse_args()
+    if not a.out:  # (the profiler build in its own folder: the objects do not track flags)
+        a.out = os.path.join(ROOT, "build-ui-tracy" if a.tracy else "build-ui")
     target = a.target or ("x86_64-windows-gnu" if os.name == "nt" else None)
     windows = (target or "").find("windows") >= 0 or (target is None and os.name == "nt")
     tflag = ["-target", target] if target else []
     sdl = (a.sdl or not windows) and not a.headless
     os.makedirs(os.path.join(a.out, "obj"), exist_ok=True)
     common = ["-O2", "-ffp-contract=off", "-fno-fast-math"] + ([] if a.no_debug else ["-g"])
+    # The profiler build (--tracy): tools/build_zig.py's TRACY_DEFINES on EVERY file (C and C++, Lua's VM and the
+    # shared src/ files included: the settings change Tracy's types' layout), Tracy's headers, its client once below.
+    if a.tracy:
+        common += ["-DTRACY_ENABLE", "-DTRACY_ON_DEMAND", "-DTRACY_ONLY_LOCALHOST", "-DTRACY_NO_CRASH_HANDLER",
+                   "-I", os.path.join(ROOT, "third_party", "tracy")]
     lua_inc = ["-I", os.path.join(ROOT, "third_party", "lua")]
     zlib_inc = ["-I", os.path.join(ROOT, "third_party", "zlib")]
     mi_inc = ["-I", os.path.join(ROOT, "third_party", "mimalloc", "include")]
@@ -93,6 +101,8 @@ def main():
     for d in ("core", "script", "sim", "ai"):
         for f in sorted(glob.glob(os.path.join(ROOT, "src", d, "*.cpp"))):
             add(f, cxxflags, True)
+    if a.tracy:  # Tracy's client, unchanged (third_party/tracy), once
+        add(os.path.join(ROOT, "third_party", "tracy", "TracyClient.cpp"), ["-std=c++20", "-w"], True)
     for f in sorted(glob.glob(os.path.join(UI, "**", "*.cpp"), recursive=True)):
         if os.sep + "tests" + os.sep in f:  # (test programs of their own: ui/net/tests/udp_test.cpp)
             continue
@@ -135,6 +145,8 @@ def main():
         print("build_ui: compiled for " + str(target) + "; not linked (SDL3 is linked on that system itself)")
         return
     link = zig("c++", *tflag, *common, "-o", exe, *[j[1] for j in jobs])
+    if a.tracy:
+        link += ["-ldbghelp", "-ladvapi32", "-lsecur32", "-lws2_32"] if windows else ["-ldl", "-lpthread"]
     link += (["-lshell32", "-lgdi32", "-luser32", "-lwinmm", "-lole32", "-ld3d12", "-ldxgi", "-ld3dcompiler_47", "-lws2_32"]
              if windows else ["-lm", "-lpthread", "-ldl"])
     if sdl:

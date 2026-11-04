@@ -5,6 +5,23 @@ commit, hardware, scenario, numbers). Newest first.
 
 **Hardware (all rows):** AMD Ryzen 9 9950X3D, NVIDIA RTX 4090, the screen at 240 Hz, vertical sync on.
 
+## 2026-11-04 morning: the window's frame thread pinned to the big-cache half? No (main 751e6f3 + the switch)
+In the engine's quiet window (its helpers' timing held, renderer and visuals light). Chris's big-test game (his 95-minute
+8-AI game on SETONS_R of 2026-11-01, `_scratch/ui/measure_1104/bigtest_game_20261101.SCFAReplay`) played back in a 4K
+window, every look at its default, `--fast-forward 18000`, then measured to beat 24000 (game minutes 30-40, ~10 min of
+the PC's clock each); script `_scratch/ui/measure_1104/pin_run.sh`. The sim's beat thread pinned itself to the
+big-cache processors in both runs (the engine's MOHO64_PLACE=sim default).
+
+| frame thread | frame to frame, middle | 95% | 99% | longest | over 20 ms | world standing still |
+|---|---|---|---|---|---|---|
+| where Windows puts it | 11.20 ms (89 fps) | 12.93 | 13.62 | 131.1 | 16 of 53,334 | 0 |
+| pinned to logical 0-15 (MOHO64UI_PIN_FRAME=1) | 16.40 ms (61 fps) | 19.25 | 21.09 | 122.2 | 786 of 40,599 | 0 |
+
+Pinned, the frame thread shares the big-cache half with the beat thread and loses 46% (one round each, off first). So
+the switch stays OFF by default and is kept for later trials (e.g. once the renderer's threads move). Also seen: this
+late game now plays at 89 fps with no frame showing the world standing still (before the no-wait and fingerprint
+changes Chris saw it choppy from 30 min; his own play has hovers and clicks a replay does not).
+
 **Scenario L (late eight-army game):** the renderer's set-up `_scratch/render/config_m28_setons_r.lua` (one player
 and seven M28 AIx armies on the rebuilt Seton's Clutch), `--seed 7 --fast-forward 6000` (ten game-minutes in), a
 1600x900 window, the player's commander selected (the game's start selects it), the camera where the game puts it.
