@@ -13,6 +13,11 @@ track answers under the request.
   `bool MountFromInitFile(const std::string& initFile, const std::map<std::string, std::string>& folders, Vfs&, std::vector<std::string>& hookDirs)`,
   that both hosts call.
 
+  **Status:** done by the engine track (`docs/engine-answers.md`, "ui 1 and ui 2"), and in use since 2026-11-01:
+  `ui/app/main.cpp` mounts through `MountFromInitFile` (`script/mount.h`) and its own copy is gone. The mounted
+  files are the same as before, path by path and source by source (`ui/tests/mount_list.lua`, front end and game).
+  What the function does not hand out, the init file's `protocols` table, is request 52 below.
+
 ### 2. The engine-object handle without the simulation
 - **What:** `ScriptObject`, `BindObject`, `GetObject` (the `_c_object` handle) are in
   `src/sim/script_object.*`, together with the simulation's class tables and stubs.
@@ -1191,6 +1196,33 @@ cleaner:
    does).
 When either lands, say so and we switch to it.
 
+### 52. MountFromInitFile: the init file's `protocols` table too (2026-11-01, not blocking)
+From the interface chat. Request 1 is in use: moho64ui mounts through `MountFromInitFile` (`script/mount.h`).
+- **What:** the init file's `protocols` table (the schemes `OpenURL` may open: http, https, mailto, ... in FAF's
+  init files). The original reads it in the same run of the init file as `path` and `hook`
+  (`StartupHelpers::DISK_SetupDataAndSearchPaths` 0x459de0: "path" at 0x45a0e7, "hook" at 0x45a3a8, "protocols" at
+  0x45a45f; each value of the table, through a LuaTableIterator, put in a set at 0x10a7bf0 by 0x45b670).
+- **Why:** the init state goes when `MountFromInitFile` returns, so the interface reads the table by running the init
+  file a second time, quietly, over an empty file system (`ui/app/main.cpp`, `InitProtocols`): FAF's init file then
+  lists the map and mod folders twice (60-90 ms more at the start; your debug notes on the shader cache's blocked
+  removes come twice), and only one run is the original's way.
+- **Smallest form:** one more optional parameter, `std::vector<std::string>* protocols = nullptr` (after `skip`):
+  when set, the `protocols` table's strings are appended, read after `hook`. Your host may pass nothing. When it
+  lands I drop `InitProtocols` and pass `&cfg.protocols`.
+- **Also seen (no change asked):** away from Windows `SystemFolder` (script/mount.cpp) answers
+  `C:/Users/Player/<name>/`; moho64ui now hands the five folders its own way (the home folder's Documents, XDG data,
+  Application Support) as `folders`, so its mounting is unchanged there. moho64 on Linux and Mac might want the same
+  answers (ui/app/main.cpp `SystemFolder`).
+
+### 53. A unit's script bits in UnitView, for the original's pause mark on switched-off units (2026-11-03, not blocking)
+From the interface chat. Chris's big test: a switched-off mass extractor has no pause mark. FAF's on/off is the
+production toggle (script bit 4), not SetPaused, so UnitView.paused stays false. The original's icon pass
+(0x85be34..0x85befa) marks an allied unit that is paused OR has a toggle switched off (UserUnit::HasScriptBit 0x85b0b0
+on the synced bits +0x3a8). Ask: `uint32_t scriptBits` in UnitView (src/sim/sim_view.h:97), filled in sim_view.cpp
+148..153 beside paused / toggleCaps (as UnitStateView's). The renderer then draws the mark (ui request 42 to it).
+DONE (engine, 2026-11-03, dbb3a0b): UnitView::scriptBits (u+0x498, the same bits as UnitStateView's). Renderer 42 next.
+Detail: _scratch\ui\bigtest_misc_report.md section 2.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
@@ -2225,6 +2257,47 @@ Nothing changes on the interface's side: ServeLoad keeps calling PrepareSession 
 I'll check a lobby-launched game's deposit icons in a live window.
 IN HAND (renderer, 2026-10-27): the same diagnosis; his helper's diff holds them in Impl::heldEffects and hands them on
 through SimFrames::HoldEffectEvents (deposit icon pixels 0 -> 165); it merges after his checks.
+
+### 41. Build ghosts from Chris's big test: a queued structure as a see-through ghost, and the placement guide
+From the interface chat, 2026-11-03. Not blocking. Chris's big test (2026-11-01), pictures in `SupComLab\Big test
+results\`: "Applies to any structure but when queued it shouldn't show the finished strucutre only a green outline like
+a ghost of it.png" (a queued land factory drawn as a solid, fully detailed green model) and "Green building outline
+when trying to play structure doesn't show so its hard to line up..png" (the guide round the footprint while placing:
+on his extractor it shows as a thin green square; he finds it missing or too faint to line up by, maybe hidden by the
+remastered ground and its cover). Both come to you as WorldPicture::BuildPreview (SetBuildPreviews, game_session.cpp
+SetScene): the ghost under the cursor while placing and every ordered site alike (blueprint, position, heading,
+`free`). Asks: (1) the ghost drawn as the original's ghost (see-through green, the model's shape readable but clearly
+not a built structure), for the ordered sites at least; (2) the footprint guide bold and on top of the ground cover,
+green / red by `free`, for every structure as the original draws it. If you want to tell the cursor's ghost from the
+ordered ones, add a field to BuildPreview and tell me: I fill it (user_units.cpp DraggedBuildingSite vs the order
+sites).
+
+### 42. The pause mark on switched-off units too, as the original (2026-11-03, not blocking; needs engine 53)
+From the interface chat. Chris's big test: no pause mark on a switched-off mass extractor (FAF's production toggle,
+script bit 4, not SetPaused). The original (icon pass 0x85be34..0x85befa) marks a unit of an allied army when it is
+paused OR a toggle it has is switched off: cap 0x1 shield with bit 0 CLEAR; caps 0x4 / 0x8 / 0x10 / 0x20 / 0x40 /
+0x100 with their bit (2, 3, 4, 5, 6, 8) SET. Ask, once engine request 53 puts scriptBits in UnitView: render/frame.h:42
+FrameUnit + scriptBits and toggleCaps, copied in sim_frames.cpp:436; world.cpp:2532 the mark when `workBars &&
+friendly && (u.paused || ToggledOff(u))`, ToggledOff = (caps & 0x1 && !(bits & 0x1)) || (bits & caps & 0x174), and
+`friendly` (own or allied, world.cpp:2502) in place of `own`. Detail: _scratch\ui\bigtest_misc_report.md section 2.
+
+### 43. The click's pick, and the radar blips' icons, as the original (2026-11-03, not blocking)
+From the interface chat, Chris's big test (pictures "Part I circled was the cursor but somehow I was selecting the
+factory from that far.png", "Sacu select floating above him ...png", "omni seems to reveal map ... Some units have blank
+icons.png"). Detail: _scratch\ui\bigtest_selection_report.md items 1, 2 and 4.
+(1) World::UnitAt (world.cpp:4003) tests a sphere round the whole model and takes the unit nearest the CAMERA; a naval
+factory's model reaches deep under the water, so it was picked from far away, and a SACU's hovering drone took his
+clicks. The original (UpdateSelection 0x86f520, 0x86fb3f) tests the mesh's box (its bottom part by SelectionYOffset /
+UseTopAmount, scaled by SelectionMeshScaleX / Z) against the mouse +- ui_SelectTolerance square and takes the unit whose
+place is nearest the MOUSE. Ours now rejects a pick whose blueprint collision box is not near the mouse (INFERRED
+stand-in). Ask: either that mesh-box test in UnitAt (and all-hidden units left out, world.cpp:2488), or a
+`UnitsAt(x, y, tolerance)` giving every unit hit, so the ui chooses by the original's rules.
+(2) Blips: StrategicIcons::BlipIcon (icons.cpp:138) makes `<icon>_generic`; the original draws blips with the four
+GenericIcons of /lua/ui/game/strategicIcons.lua (struct_IconAux::GetGenericIcons 0x85e7f0, used in
+CWldSession::RenderStrategicIcons 0x85b6e0). Under omni the real icon may show (INFERRED). Worth a look with the
+report's item 4.
+(3) If a SACU's own brackets still float once (1) is in, it is the brackets' projection for a unit in deep water
+(world.cpp:2467, 3525).
 
 ## To the visuals track
 

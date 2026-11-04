@@ -280,15 +280,27 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   2; drawn at the larger of it and the renderer's scale for the screen's height) and "Always Show
   Strategic Icons" (at every distance, close up too) go to the renderer's StrategicIcons.
   The display mode, "Primary Adapter" (`SC_PrimaryAdapter`, FA exe 0x8d34d0; `DisplayMode`): the
-  list is made at the start as the original's (0x8d21e0): "Windowed" and the screen's own mode
-  ("3840x2160(240)": a full screen is always the screen's size without a frame; fewer pixels come
-  from Upscaling), or only "Command Line Override" when the command line chose the mode
-  (`--fullscreen`, or `--size` with `--window`: all of the lab's launchers). Without those, the
-  player's option decides at the start (a profile that never chose: full screen), and a choice
-  applied in the menu switches at once: a window comes back at its last size (kept in the
-  preferences as `Windows.Main.Previous.width` / `height`, the original's keys; 1024x768 at first).
-  The lobby's "Windowed mode" checkbox works through the same command. "Secondary Adapter" lists
-  only "Disabled".
+  list is made at the start as the original's (0x8d21e0): "Windowed" and each screen's own mode,
+  the main screen's first ("3840x2160(240)": a full screen is always the screen's size without a
+  frame; fewer pixels come from Upscaling; with several screens the text names the screen,
+  "3840x2160(160), screen 2"), or only "Command Line Override" when the command line chose the mode
+  (`--fullscreen`, or `--size` with `--window`: all of the lab's launchers). The original's list is
+  its adapter 0's modes only; here every screen of the PC is an adapter (the main one adapter 0,
+  the others by their display's number), and a mode's key "width,height,rate" is the option's own
+  adapter (the original's keys, so its preferences mean the same), "width,height,rate,N" adapter N.
+  Without those switches, the player's option decides at the start (a profile that never chose:
+  full screen on the main screen) and the window opens on the screen chosen; a choice applied in the
+  menu switches at once, from one screen to another too: a window comes back at its last size and
+  place (kept in the preferences as `Windows.Main.Previous.width` / `height`, the original's keys;
+  1024x768 at first). The lobby's "Windowed mode" checkbox works through the same command.
+  "Secondary Adapter" (`SC_SecondaryAdapter <windowed>`, 0x8d37c0, which FAF's options.lua sends
+  whenever the primary's choice changes; the list as the original's 0x8d26d0) lists only "Disabled":
+  the original's second head (a second full-screen window with FAF's multihead.lua second world
+  view, camera "CameraHead2") is not built, as it needs a second picture of the renderer's; with
+  `MOHO64UI_SECOND_HEAD=1` (tests) it lists the other screens, and a choice kept in the profile is
+  only logged at the start. Tests: `ui/tests/screens.lua` (the lists, no window;
+  `MOHO64UI_SCREENS=2560x1440@240,1920x1080@60` makes up screens) and `ui/tests/screens_window.lua`
+  (a live window moved from screen to screen, then started on the one kept).
   Map Edge (`RemasterMapEdge`): "No Machinery" (the land and sea go on past the map's edge,
   greyed out where units cannot go, no haze; the default, Chris's choice of 2026-10-14) or
   "Machinery" (the original's frame of machinery round the map). `--map-edge frame|beyond` is

@@ -27,20 +27,35 @@ class Window {  // (the host's one window)
   };
 
   ~Window();
+  // A screen of the PC: its place on the desktop, its size in pixels, its pictures a second, and
+  // whether it is the main one (the system's primary display).
+  struct Screen {
+    int x = 0, y = 0, width = 0, height = 0;
+    int rate = 60;
+    bool main = false;
+  };
+  // Every screen of the PC, the main one first, then the others in the system's own order of its
+  // displays (Windows: \\.\DISPLAY1, 2, ...); empty when there is no window system.
+  static std::vector<Screen> Screens();
   // Open a window whose inside is width x height pixels. False when there is no window system.
-  // `fullScreen`: without a frame, over the whole main screen (give that screen's size, see
-  // ScreenSize), and the mouse is kept inside while the window is the one in front.
-  // `show` false: the window stays hidden until Show (while a long load runs on it).
-  bool Create(int width, int height, const char* title, Callbacks callbacks, bool fullScreen = false, bool show = true);
+  // `fullScreen`: without a frame, over the whole of a screen (give that screen's size: `on`, or
+  // the main screen without it, see ScreenSize), and the mouse is kept inside while the window is
+  // the one in front. `show` false: the window stays hidden until Show (while a long load runs on
+  // it).
+  bool Create(int width, int height, const char* title, Callbacks callbacks, bool fullScreen = false, bool show = true,
+              const Screen* on = nullptr);
   void Show();
   // The main screen's size in pixels; false when there is no window system.
   static bool ScreenSize(int* width, int* height);
-  // Change the mode while open: `full` fills the screen the window is on, without a frame;
-  // otherwise a framed window whose inside is width x height, back where it last was as a window
-  // (centred on the screen the first time). The new size reaches the `resized` callback.
-  void SetMode(bool full, int width, int height);
+  // Change the mode while open: `full` fills a screen without a frame: `on`, or without it the
+  // screen the window is on (a full screen already there stays as it is); otherwise a framed window
+  // whose inside is width x height, back where it last was as a window (centred on the screen it is
+  // on the first time). The new size reaches the `resized` callback.
+  void SetMode(bool full, int width, int height, const Screen* on = nullptr);
   // The inside's size now.
   void ClientSize(int* width, int* height) const;
+  // The window's middle on the desktop (in the units of Screen's places): which screen it is on.
+  void Middle(int* x, int* y) const;
   // How many times a second the main screen shows a new picture (its refresh rate); 60 when it
   // cannot be told.
   static int RefreshRate();

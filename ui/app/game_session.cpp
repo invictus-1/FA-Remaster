@@ -657,6 +657,17 @@ void GiveLayer(render::WorldPicture& picture, const SoftwareTarget& target, cons
   if (part.empty()) part = IntRect{};
   picture.SetInterfaceLayer(target.pixels().data(), w, h, w, part.x0, part.y0, part.x1 - part.x0, part.y1 - part.y0);
 }
+// The lighting bundles as a picture starts (world_picture.h: off, the world's own switches as at first; the hidden
+// outlines on). While the picture holds looks (HoldLooks) they are only kept for the map opening behind.
+void StartBundles(render::WorldPicture& p) {
+  p.SetAtmosphere(false);
+  p.SetSoftShadows(false);
+  p.SetRayTracing(false);
+  p.SetWeatherEffects(false);
+  p.SetGroundDetail(false);
+  p.SetFrameGeneration(false);
+  p.SetHiddenOutlines(true);
+}
 // What a game or the menus before left set on the window's picture that is the picture's own, not its world's (the
 // world's own lists begin empty with each swap: render-answers.md, request 37), put back as a picture starts:
 // the army it is for, what that army knows, the colours, the day, the lens, the cinematics' switches. `looks`: the
@@ -684,13 +695,7 @@ void StartAfresh(render::WorldPicture& p, bool looks) {
   p.SetEffectsQuality(1);
   p.SetUpscale(1);
   p.SetTemporalUpscale(false);
-  p.SetAtmosphere(false);
-  p.SetSoftShadows(false);
-  p.SetRayTracing(false);
-  p.SetWeatherEffects(false);
-  p.SetGroundDetail(false);
-  p.SetFrameGeneration(false);
-  p.SetHiddenOutlines(true);
+  StartBundles(p);
   p.SetMinimapMeshes(false);
 }
 // A game's map opening behind let go of (dropped, failed, not ready): the looks held for it give way to the ones a
@@ -721,6 +726,10 @@ struct GameSession::WindowPicture {
   Kind pending = Kind::None;
   std::string pendingMap;
   std::chrono::steady_clock::time_point begun{};
+  int pendingFrames = 0;  // (the frames drawn while it opened: ServeWindowMap's line, for what the time went on)
+  // The menus' map begun behind a game's world that is over (ServeWindowMap: the score screen), its lighting bundles
+  // held for it (HoldLooks) and the picture's other settings still the game's until it is swapped in.
+  bool menuBehindGame = false;
   std::string failedGameMap;  // (a game's map the picture could not open: not tried again for that launch)
   bool vsync = true;
   int drawnW = 0, drawnH = 0;  // (the window's size as last drawn: the start camera's aspect, ServeLoad)
@@ -1037,6 +1046,10 @@ GameSession::~GameSession() {
 WorldSource* GameSession::world() const { return picture_.get(); }
 
 bool GameSession::BeatRunning() const { return worker_ && worker_->Running(); }
+bool GameSession::GameOver() const { return sim_ && !play_ && !BeatRunning() && (pace.ended || sim_->endGame); }
+int GameSession::SyncsOwed() const {
+  return (BeatRunning() || beatToFinish_ ? 1 : 0) + static_cast<int>(syncsToGive_.size());
+}
 
 // The moment the picture shows: the simulation's tick and the part of the next beat that has passed
 // (while a beat runs on its thread: the tick it will reach).
@@ -1585,9 +1598,21 @@ bool GameSession::Relaunch(std::string* why) {
   return true;
 }
 
+namespace {
+std::string Numbered(const std::string& prefix, int k) { return k <= 1 ? prefix : prefix + "." + std::to_string(k); }
+}  // namespace
+
+int GameSession::RecordIndex() const {
+  for (int k = lastIndex_ + 1;; ++k) {
+    const std::string base = Numbered(replayOut, k);
+    if (!hostfs::IsFile(base + ".stream") && !hostfs::IsFile(base + ".seed")) return k;
+  }
+}
+
 std::string GameSession::TableFile() const {
-  if (!numberTables || recorded_ == 0) return replayTable;
-  return replayOut + "." + std::to_string(recorded_ + 1) + ".session.lua";
+  if (!numberTables) return replayTable;
+  const int k = RecordIndex();
+  return k <= 1 ? replayTable : Numbered(replayOut, k) + ".session.lua";
 }
 
 // The simulation's print lines of a beat, to the game's console (the original: Sim::Printf 0x7462a0 keeps them,
@@ -1603,11 +1628,14 @@ void GameSession::PrepareSession(const SessionDescription& session, const std::v
   const ReplayHeader& h = session.header;
   Logf(LogLevel::Info, "moho64ui: session %s: %zu armies, %zu command sources, focus army %d, seed %u, %zu mods",
        h.map.c_str(), h.armies.size(), h.sources.size(), session.focusArmy + 1, h.seed, uids.size());
+  launchAt_ = std::chrono::steady_clock::now();
   loadSession_ = std::make_unique<SessionDescription>(session);
   {
     ThreadsOverride threads(simThreads);  // (the pool is made with the Sim)
     loadSim_ = std::make_unique<Sim>(vfs_, hookDirs_, uids);
   }
+  Logf(LogLevel::Info, "moho64ui: the session's simulation made (its worker pool with it) in %.2f s",
+       std::chrono::duration<double>(std::chrono::steady_clock::now() - launchAt_).count());
   loadSim_->sessionMods = h.mods;
   loadUids_ = uids;
   loadOk_ = false;
@@ -1624,6 +1652,16 @@ void GameSession::BeginLoad() {
   if (load_ != Load::Due) return;
   load_ = Load::Running;
   g_crashTick = 0;  // (a crash while it loads names no beat of the game before)
+  loadBegan_ = std::chrono::steady_clock::now();
+  loadThreadDone_ = loadHandedAt_ = loadMapReadyAt_ = -1;
+  loadStateSeconds_ = 0;
+  loadNextNote_ = 10;
+  Logf(LogLevel::Info, "moho64ui: the load begun, %.2f s after the launch call", std::chrono::duration<double>(loadBegan_ - launchAt_).count());
+  {
+    LongFrameLog& lf = LongFrames();  // (MOHO64UI_LONG_FRAMES: what the renderer makes off the frames' thread meanwhile)
+    lf.asides.clear(), lf.longestAsides.clear();
+    lf.loading = lf.thresholdMs > 0;
+  }
   if (!worker_) worker_ = std::make_unique<BeatWorker>();
   worker_->Start([this] {
     auto secs = [](auto a, auto b) { return std::chrono::duration<double>(b - a).count(); };
@@ -1656,7 +1694,11 @@ void GameSession::BeginLoad() {
     // Then the interface's own state for the session, here too (the original's "Map loader" task, after its rules:
     // the session's user Lua state made, 0x885ec9, its functions registered, 0x885f37..0x885f8a, the rules exported
     // into it, 0x885ff2, and /lua/SessionInit.lua run in it, 0x88603e); the main thread only takes it (FinishLoad).
+    const auto t2 = std::chrono::steady_clock::now();
     if (prepareInterface) prepareInterface(sim, loadUids_, loadSession_->header.mods);
+    const auto t3 = std::chrono::steady_clock::now();
+    loadStateSeconds_ = secs(t2, t3);
+    loadThreadDone_ = secs(loadBegan_, t3);  // (read on the main thread once the worker is through: its release)
   });
   // Meanwhile the game's map opens behind the window's picture (render request 37), the loading screen drawn over
   // what it shows; FinishLoad swaps it in.
@@ -1678,6 +1720,7 @@ std::string GameSession::LoadingMapFolder() const {
 // is never beaten: LetGoOfGameMap).
 void GameSession::ServeLoad() {
   if (net_) net_->exchange->Service();  // (a network game: the others keep hearing from this program while it loads)
+  NoteLoadProgress();
 #ifdef MOHO64UI_WORLD_PICTURE
   if (load_ != Load::Running || loadPrepared_ || BeatRunning() || !loadOk_ || !loadSim_) return;
   if (!windowPicture_ || windowPicture_->pending != WindowPicture::Kind::Game) return;
@@ -1691,9 +1734,36 @@ void GameSession::ServeLoad() {
     const WorldCamera start = StartWorldCamera(mw, mh, loadSim_->playableRect, aspect, map->SurfaceHeight(mw * 0.5f, mh * 0.5f));
     windowPicture_->picture.SetLoadCamera(Picture::ToRender(start));
   }
-  if (windowPicture_->picture.PrepareSession(*loadSim_))
-    Logf(LogLevel::Info, "moho64ui: the game's map opening behind makes the simulation's models ahead");
+  if (windowPicture_->picture.PrepareSession(*loadSim_)) {
+    loadHandedAt_ = std::chrono::duration<double>(std::chrono::steady_clock::now() - loadBegan_).count();
+    Logf(LogLevel::Info, "moho64ui: the game's map opening behind makes the simulation's models ahead (%.2f s into the load)", loadHandedAt_);
+  }
 #endif
+}
+
+// (the load's parts as this thread's frames see them: the loading thread through, the map opening behind ready; while it
+// loads, a line every 10 s naming what it still waits for)
+void GameSession::NoteLoadProgress() {
+  if (load_ != Load::Running) return;
+  const double now = std::chrono::duration<double>(std::chrono::steady_clock::now() - loadBegan_).count();
+  const bool threadDone = !BeatRunning();
+  bool behind = false, ready = false;
+#ifdef MOHO64UI_WORLD_PICTURE
+  behind = windowPicture_ && windowPicture_->pending == WindowPicture::Kind::Game;
+  ready = behind && (windowPicture_->picture.MapReady() || windowPicture_->picture.MapFailed());
+  if (ready && loadMapReadyAt_ < 0) loadMapReadyAt_ = now;
+#endif
+  if (now < loadNextNote_) return;
+  loadNextNote_ += 10;
+  std::string thread = threadDone ? "through" : "at work";
+  if (threadDone && loadThreadDone_ >= 0) {
+    char at[48];
+    std::snprintf(at, sizeof at, " (at %.2f s)", loadThreadDone_);
+    thread += at;
+  }
+  std::string map = !behind ? "none opening behind" : ready ? "ready" : loadHandedAt_ >= 0 ? "not ready (given the session)" : "not ready";
+  Logf(LogLevel::Info, "moho64ui: loading for %.0f s: the loading thread (rules, the simulation's start, the game's state) %s; the map behind: %s",
+       now, thread.c_str(), map.c_str());
 }
 
 bool GameSession::LoadDone() const {
@@ -1716,6 +1786,11 @@ bool GameSession::FinishLoad(std::string* why) {
   }
   WaitForWorker();
   load_ = Load::None;
+  if (LongFrames().loading) {
+    LongFrames().loading = false;
+    if (!LongFrames().asides.empty())
+      Logf(LogLevel::Info, "moho64ui: made off the frames' thread while it loaded: %s", LongFrames().AsideSummary().c_str());
+  }
   const std::unique_ptr<SessionDescription> described = std::move(loadSession_);
   if (!loadOk_) {
     *why = loadWhy_;
@@ -1727,6 +1802,18 @@ bool GameSession::FinishLoad(std::string* why) {
   const SessionDescription& session = *described;
   const ReplayHeader& h = session.header;
   Logf(LogLevel::Info, "moho64ui: session started: rules %.2f s, simulation start-up %.2f s", loadRulesSeconds_, loadStartSeconds_);
+  {
+    // (where the load's time went, seconds from its start: what the loading thread did, and what came after it)
+    const double end = std::chrono::duration<double>(std::chrono::steady_clock::now() - loadBegan_).count();
+    char map[160] = "no map opening behind";
+    if (loadMapReadyAt_ >= 0)
+      std::snprintf(map, sizeof map, "the session given to the map opening behind at %.2f s, that map ready at %.2f s (%.2f s after the loading thread)",
+                    loadHandedAt_, loadMapReadyAt_, loadMapReadyAt_ - loadThreadDone_);
+    Logf(LogLevel::Info,
+         "moho64ui: the load's parts: the loading thread through at %.2f s (rules %.2f, the simulation's start %.2f, the game's state %.2f); %s; "
+         "finished at %.2f s",
+         loadThreadDone_, loadRulesSeconds_, loadStartSeconds_, loadStateSeconds_, map, end);
+  }
   sim_ = std::move(loadSim_);
   const std::vector<std::string> uids = std::move(loadUids_);
   heightsChanges_ = ~0ull;
@@ -1753,7 +1840,8 @@ bool GameSession::FinishLoad(std::string* why) {
   if (stream_) std::fclose(stream_), stream_ = nullptr;
   recordBase_.clear();
   if (!replayOut.empty()) {  // the game's record: see the header
-    const std::string base = replayOut + (recorded_ ? "." + std::to_string(recorded_ + 1) : "");
+    const int index = RecordIndex();
+    const std::string base = Numbered(replayOut, index);
     const std::string table = TableFile();
     // (a restart: no lobby wrote this game's table; it is the game before's)
     if (tableAgain_ && table != lastTable_ && !lastTable_.empty()) {
@@ -1764,6 +1852,7 @@ bool GameSession::FinishLoad(std::string* why) {
     lastTable_ = table;
     tableAgain_ = false;
     ++recorded_;
+    lastIndex_ = index;
     recordBase_ = base;
     stream_ = std::fopen((base + ".stream").c_str(), "wb");
     if (!stream_) Logf(LogLevel::Warning, "moho64ui: cannot write %s.stream", base.c_str());
@@ -1776,8 +1865,13 @@ bool GameSession::FinishLoad(std::string* why) {
       std::fclose(f);
     }
     // (the engine's class opens its file from MOHO64_FINGERPRINT: set to this game's for that moment, the
-    // variable's own value put back after)
+    // variable's own value put back after). Only when recordFingerprint: a played game's record is its stream, seed
+    // and table, and its fingerprint is rebuilt exactly by playing it back headless (the engine, 2026-11-03: in Chris's
+    // big test it cost 21 ms a beat on the beat's thread, 50-60 ms late in the game).
     if (fp_) fp_->End(fpBeats_), fp_.reset();
+    if (!recordFingerprint) {
+      fpBeats_ = 0;
+    } else {
     const char* before = std::getenv("MOHO64_FINGERPRINT");
     const std::string kept = before ? before : "";
     const std::string mine = base + ".fp";
@@ -1792,6 +1886,7 @@ bool GameSession::FinishLoad(std::string* why) {
     else unsetenv("MOHO64_FINGERPRINT");
 #endif
     fpBeats_ = 0;
+    }
   }
   // A replay played back with MOHO64_FINGERPRINT set: its fingerprint there too, line for line as the recorded game's
   // .fp (a measurement with the hashing's cost in it, and a check of the playback against the game; ours)
@@ -2000,6 +2095,7 @@ void GameSession::BeginWindowMap(bool game, const std::string& map) {
   if (wp.pending == Kind::Game) LetGoOfGameMap(wp.picture);
   else if (wp.pending != Kind::None) wp.picture.CancelMap();
   wp.pending = Kind::None;
+  wp.menuBehindGame = false;
   render::WorldPicture& p = wp.picture;
   // What the map's opening takes from the picture (as Open did): the texture detail, the season, ray tracing's shaders.
   std::function<void(render::World&)> before;
@@ -2020,6 +2116,16 @@ void GameSession::BeginWindowMap(bool game, const std::string& map) {
       WorldLooks(w, looks, true);
       SkyOnWorld(w, sky.edge, sky.startHour, sky.weather);
     };
+  } else if (wp.shows == Kind::Game) {
+    // (behind a game's world that is over, ServeWindowMap: the menus' lighting bundles held for the map, so that it
+    // opens and is warmed with them, the game's world left as it is; the picture's other settings stay the game's while
+    // its world shows and are put back as a picture starts at the swap, StartAfresh there. The season and the Texture
+    // Detail are only kept for the map's opening.)
+    p.HoldLooks(true);
+    StartBundles(p);
+    p.SetSeason(render::Season::Summer);
+    p.SetTextureDetail(Looks().textureDetail);
+    wp.menuBehindGame = true;
   } else {
     // (the menus' background as it always was: the picture's looks as a picture starts, the summer, the player's
     // Texture Detail as the background's own picture had it: Backdrop::Run)
@@ -2033,6 +2139,7 @@ void GameSession::BeginWindowMap(bool game, const std::string& map) {
   if (begun && game && skyNow_.startHour >= 0)
     p.SetLoadDayAndWeather(skyNow_.startHour, skyNow_.dayLengthSeconds, WeatherByItself(skyNow_.weather));
   if (!begun && game) StartAfresh(p, true), p.HoldLooks(false);  // (the held looks give way: LetGoOfGameMap)
+  if (!begun && wp.menuBehindGame) GameLooksBack(wp);
   if (!begun) {
     Logf(LogLevel::Warning, "moho64ui: the window's picture cannot open %s behind", map.c_str());
     if (!game) failedMenuMap_ = map;
@@ -2040,6 +2147,7 @@ void GameSession::BeginWindowMap(bool game, const std::string& map) {
   }
   wp.pending = kind, wp.pendingMap = map;
   wp.begun = std::chrono::steady_clock::now();
+  wp.pendingFrames = 0;
   Logf(LogLevel::Info, "moho64ui: the window's picture opens %s behind (%s)", map.c_str(), game ? "the game's map" : "the menus' background");
 #else
   (void)game, (void)map;
@@ -2066,30 +2174,57 @@ void GameSession::ServeWindowMap() {
     const std::string& want = menuBackdrop->map();
     const WindowPicture& wp = *windowPicture_;
     if (!(wp.shows == Kind::Menu && wp.shownMap == want) && !(wp.pending == Kind::Menu && wp.pendingMap == want)) BeginWindowMap(false, want);
+  } else if (picture_ && load_ == Load::None && menuBackdrop && menuBackdrop->BegunDirect() && menuBackdrop->map() != failedMenuMap_ &&
+             windowPicture_ && windowPicture_->shows == Kind::Game && windowPicture_->pending == Kind::None && GameOver()) {
+    // The game is over (the victory or defeat, then the score screen: FAF's score.lua covers the window in black): the
+    // menus' map is begun behind the game's world now, so that it is ready when the score screen's Continue leaves
+    // the game. Begun only after the game had left, it kept the menu over black for its opening (Chris's big test
+    // 2026-11-01: 2.9 s after Continue, the window's picture made anew too as his FSR had changed the scene's
+    // samples; that remake now waits for the next game's map, behind its loading screen: EnsureWindowPicture keeps
+    // the picture while a game's world shows). (The background itself is stopped while a game runs, main.cpp; the next
+    // front end's begins it again and finds its map opening.) INFERRED, not the original's way: its front end's
+    // background is a film.
+    BeginWindowMap(false, menuBackdrop->map());
   }
   if (!windowPicture_) return;  // (made anew and failed)
   WindowPicture& wp = *windowPicture_;
   if (wp.pending == Kind::None) return;
+  ++wp.pendingFrames;
   std::string error;
   if (wp.picture.MapFailed(&error)) {
     Logf(LogLevel::Warning, "moho64ui: %s cannot be shown (%s)", wp.pendingMap.c_str(), error.c_str());
     (wp.pending == Kind::Menu ? failedMenuMap_ : wp.failedGameMap) = wp.pendingMap;
     if (wp.pending == Kind::Game) LetGoOfGameMap(wp.picture);
     else wp.picture.CancelMap();
+    if (wp.pending == Kind::Menu && wp.menuBehindGame) GameLooksBack(wp);
     wp.pending = Kind::None;
     return;
   }
-  if (wp.pending != Kind::Menu || !wp.picture.MapReady() || !wp.picture.SwapMap()) return;
+  // (one begun behind a game's world: swapped in once that world is let go of, End; the picture's own settings put
+  // back as a picture starts first, as BeginWindowMap does for the menus' map otherwise: the game's frames may have
+  // given their own meanwhile, and SwapMap keeps the picture's settings and lays the bundles on as they are)
+  if (wp.pending != Kind::Menu || !wp.picture.MapReady() || (wp.menuBehindGame && wp.shows == Kind::Game)) return;
+  if (wp.menuBehindGame) StartAfresh(wp.picture, true);
+  if (!wp.picture.SwapMap()) return;
   wp.shows = Kind::Menu, wp.shownMap = wp.pendingMap;
   wp.pending = Kind::None;
+  wp.menuBehindGame = false;
   Backdrop::Dress(wp.picture);
   wp.fading = true, wp.fadeFrom = std::chrono::steady_clock::now();
   const render::WorldPicture::LoadNumbers n = wp.picture.LastLoadNumbers();
   Logf(LogLevel::Info,
-       "moho64ui: the menu's background: %s, in the window's picture, ready after %.1f s (open %.1f s; the frames' share %.0f ms, at most %.1f ms in "
-       "one; %d warm frames, the longest %.0f ms)",
-       wp.shownMap.c_str(), std::chrono::duration<double>(std::chrono::steady_clock::now() - wp.begun).count(), n.openSeconds, n.serviceMs,
-       n.longestServiceMs, n.warmFrames, n.warmLongestMs);
+       "moho64ui: the menu's background: %s, in the window's picture, ready after %.1f s (open %.1f s, ready %.1f s; %d frames meanwhile; "
+       "the frames' share %.0f ms in %ld asks, at most %.1f ms in one; %d warm frames, the longest %.0f ms)",
+       wp.shownMap.c_str(), std::chrono::duration<double>(std::chrono::steady_clock::now() - wp.begun).count(), n.openSeconds, n.readySeconds,
+       wp.pendingFrames, n.serviceMs, n.asks, n.longestServiceMs, n.warmFrames, n.warmLongestMs);
+}
+
+// The menus' map begun behind a game's world not to be had after all (it failed): the game's looks laid on its world
+// again as they were before (they were held, StartBundles), the hold let go.
+void GameSession::GameLooksBack(WindowPicture& wp) {
+  wp.menuBehindGame = false;
+  PictureLooks(wp.picture, Looks());
+  wp.picture.HoldLooks(false);
 }
 
 // The picture over the window the card draws this frame (WindowPicture::Over): the interface's when its drawing gave

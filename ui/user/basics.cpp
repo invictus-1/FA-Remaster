@@ -12,7 +12,9 @@
 #include <vector>
 
 #include "core/log.h"
+#include "core/vfs.h"
 #include "maui/control.h"
+#include "script/script_state.h"
 #include "sim/sim.h"
 #include "user/bindings.h"
 #include "user/user_state.h"
@@ -323,6 +325,35 @@ int l_OpenedURL(lua_State* L) {
   return 1;
 }
 
+// moho64ui_ListFiles(file) -> the number of files: what the init file and this program mounted, written to a host
+// file in a test run (TestFileWritesAllowed; elsewhere nothing is written and nil comes back): the hook folders and
+// the protocols the init file named, in order, then every file of the file system, sorted, with the host file it is
+// read from (its chunk name: an archive's member as "<archive>\<path in it>"; a file held in memory by its own path)
+// and its size. Ours, for checking: two runs' lists compared show whether a change moved anything in the mounting
+// (ui/tests/mount_list.lua).
+int l_ListFiles(lua_State* L) {
+  const std::string out = luaL_checkstring(L, 1);
+  if (!TestFileWritesAllowed()) {
+    Logf(LogLevel::Warning, "moho64ui_ListFiles: a file is written only in a run with --lua or --game-lua");
+    return 0;
+  }
+  std::FILE* f = std::fopen(out.c_str(), "wb");
+  if (!f) return luaL_error(L, "moho64ui_ListFiles: cannot write %s", out.c_str());
+  const Vfs* vfs = ScriptState::From(L)->vfs();
+  const UserState::Config& config = UserState::From(L)->config();
+  for (const std::string& h : config.hookDirs) std::fprintf(f, "hook\t%s\n", h.c_str());
+  for (const std::string& p : config.protocols) std::fprintf(f, "protocol\t%s\n", p.c_str());
+  const std::vector<std::string> files = vfs->FindFiles("/", "*");
+  for (const std::string& v : files) {
+    const auto info = vfs->GetFileInfo(v);
+    std::fprintf(f, "%s\t%s\t%llu\n", v.c_str(), vfs->ChunkName(v).c_str() + 1,
+                 static_cast<unsigned long long>(info ? info->size : 0));
+  }
+  std::fclose(f);
+  lua_pushnumber(L, static_cast<lua_Number>(files.size()));
+  return 1;
+}
+
 // GetArmyScore(army) (FA exe 0x843ed0): the original's is empty: one argument, never read; no session
 // is an error ("No session started."); else nothing comes back (nil).
 int l_GetArmyScore(lua_State* L) {
@@ -378,6 +409,7 @@ void RegisterBasicBindings(lua_State* L) {
   SetGlobal(L, "SessionCanRestart", l_SessionCanRestart);
   lua_register(L, "moho64ui_OpenURLDryRun", l_OpenURLDryRun);
   lua_register(L, "moho64ui_OpenedURL", l_OpenedURL);
+  lua_register(L, "moho64ui_ListFiles", l_ListFiles);
   SetGlobal(L, "GameTick", l_GameTick);
   SetGlobal(L, "HasCommandLineArg", l_HasCommandLineArg);
   SetGlobal(L, "GetCommandLineArg", l_GetCommandLineArg);

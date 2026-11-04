@@ -43,10 +43,12 @@
 #include "render/remasters.h"
 #include "render/view.h"
 #endif
+#include "script/mount.h"
 #include "script/script_state.h"
 #include "sim/session.h"
 #include "sound/sound_system.h"
 #include "user/bindings.h"
+#include "user/keymap.h"
 #include "user/user_state.h"
 
 using namespace moho;
@@ -132,8 +134,8 @@ uint32_t fastForward = 0;         // --fast-forward N: a game runs ahead to beat
 std::string replayOut;            // --replay-out <prefix>: each game's orders, beat by beat (GameSession::replayOut)
 std::string sessionFile;          // --session-out file: where a launched game's configuration is written
 
-// The init file and its mounting are the same as in the engine's host (src/app/main.cpp), which
-// keeps them to itself for now: see ui/REQUESTS.md.
+// The system's folders as this program answers SHGetFolderPath(name): the init file's (through the engine's
+// MountFromInitFile, given them as its answers: AnswerSystemFolders) and the preferences' places (BelowFolder).
 std::string SystemFolder(const std::string& name) {
 #ifdef _WIN32
   static const std::map<std::string, int> ids = {
@@ -197,65 +199,44 @@ std::string OriginalPrefsFile() {
 // the original's file is never touched. The player's replays and saved games go beside it.
 std::string DefaultPrefsFile() { return BelowFolder("LOCAL_APPDATA", "FA Remastered/Game.prefs"); }
 
-// Run the init file in its own state and mount what it lists in `path`.
-bool RunInit(const Options& o, Vfs& vfs, std::vector<std::string>& hookDirs, std::vector<std::string>& protocols) {
-  ScriptState init(ScriptState::Kind::Init, &vfs);
+// The folders the init file may ask SHGetFolderPath for (the five names script/mount.cpp knows), each answered
+// once here: the --folder answer, else SystemFolder's. They go to the engine's MountFromInitFile as its answers: on
+// Windows its own are the same (SHGetFolderPathW), and on Linux and Mac it has none of its own ("C:/Users/Player/
+// <name>/", script/mount.cpp), so the init file finds there the folders BelowFolder names.
+void AnswerSystemFolders(Options& o) {
+  for (const char* name : {"LOCAL_APPDATA", "APPDATA", "PERSONAL", "COMMON_APPDATA", "COMMON_DOCUMENTS"})
+    o.folders.emplace(name, SystemFolder(name));  // (a --folder answer stays)
+}
+
+// The init file's `protocols` table: the schemes OpenURL may open (http, https, mailto, ... in FAF's). READ (FA exe):
+// the original takes it from the same run of the init file as `path` and `hook`
+// (StartupHelpers::DISK_SetupDataAndSearchPaths 0x459de0: the file run at 0x45a05e, "path" read at 0x45a0e7, "hook"
+// at 0x45a3a8, "protocols" at 0x45a45f, each of its values added to a set at 0x10a7bf0 by 0x45b670). The engine's
+// MountFromInitFile (script/mount.h), which mounts for us, does not hand that table out (ui/REQUESTS.md, engine 52):
+// until it does, the file runs once more here, in a state of its own over an empty file system, so nothing is
+// mounted, with its LOG / WARN / SPEW / print lines kept out of the log (the first run wrote them; the engine's own
+// debug notes on the file writes it blocks, FAF's shader cache clean-up, come twice). About 60-90 ms (2026-11-01,
+// the lab's init file; the mounting itself 5.5-7 s).
+std::vector<std::string> InitProtocols(const std::string& initFile) {
+  std::vector<std::string> protocols;
+  Vfs nothing;
+  ScriptState init(ScriptState::Kind::Init, &nothing);
+  init.onPrint = [](const std::vector<std::string>&) { return true; };
   lua_State* L = init.L();
-  std::string dir = o.init;
+  for (const char* quiet : {"LOG", "WARN", "SPEW", "_ALERT"}) {
+    lua_pushcfunction(L, [](lua_State*) -> int { return 0; });
+    lua_setglobal(L, quiet);
+  }
+  std::string dir = initFile;
   size_t s = dir.find_last_of("/\\");
   dir = s == std::string::npos ? "." : dir.substr(0, s);
   lua_pushstring(L, dir.c_str());
   lua_setglobal(L, "InitFileDir");
   lua_pushcfunction(L, l_SHGetFolderPath);
   lua_setglobal(L, "SHGetFolderPath");
-  auto src = hostfs::ReadFile(o.init);
-  if (!src) {
-    Logf(LogLevel::Error, "cannot read init file %s", o.init.c_str());
-    return false;
-  }
-  if (!init.DoString(*src, "@" + hostfs::DisplayPath(o.init))) return false;
-
-  lua_getglobal(L, "path");
-  if (!lua_istable(L, -1)) {
-    Logf(LogLevel::Error, "init file did not define `path'");
-    return false;
-  }
-  for (int i = 1;; ++i) {
-    lua_rawgeti(L, -1, i);
-    if (lua_isnil(L, -1)) {
-      lua_pop(L, 1);
-      break;
-    }
-    lua_getfield(L, -1, "dir");
-    lua_getfield(L, -2, "mountpoint");
-    std::string mdir = lua_isstring(L, -2) ? lua_tostring(L, -2) : "";
-    std::string mp = lua_isstring(L, -1) ? lua_tostring(L, -1) : "/";
-    lua_pop(L, 3);
-    if (mdir.find('*') != std::string::npos) {  // "gamedata\*.scd": mount every match
-      std::string base = mdir.substr(0, mdir.find_last_of("/\\"));
-      for (const auto& n : hostfs::Glob(mdir)) {
-        if (n == "." || n == "..") continue;
-        vfs.Mount(base + "/" + n, mp);
-      }
-    } else {
-      vfs.Mount(mdir, mp);
-    }
-  }
-  lua_pop(L, 1);
-  lua_getglobal(L, "hook");
-  if (lua_istable(L, -1)) {
-    for (int i = 1;; ++i) {
-      lua_rawgeti(L, -1, i);
-      if (!lua_isstring(L, -1)) {
-        lua_pop(L, 1);
-        break;
-      }
-      hookDirs.push_back(lua_tostring(L, -1));
-      lua_pop(L, 1);
-    }
-  }
-  lua_pop(L, 1);
-  lua_getglobal(L, "protocols");  // (the schemes OpenURL may open: http, https, mailto, ... in FAF's)
+  auto src = hostfs::ReadFile(initFile);
+  if (!src || !init.DoString(*src, "@" + hostfs::DisplayPath(initFile))) return protocols;
+  lua_getglobal(L, "protocols");
   if (lua_istable(L, -1)) {
     for (int i = 1;; ++i) {
       lua_rawgeti(L, -1, i);
@@ -268,7 +249,7 @@ bool RunInit(const Options& o, Vfs& vfs, std::vector<std::string>& hookDirs, std
     }
   }
   lua_pop(L, 1);
-  return true;
+  return protocols;
 }
 
 }  // namespace
@@ -358,6 +339,7 @@ int main(int argc, char** argv) {
     return 2;
   }
   if (fullScreen && !ui::Window::ScreenSize(&width, &height)) fullScreen = false;  // the head is the screen
+  AnswerSystemFolders(o);
   Vfs vfs;
   ui::UserState::Config cfg;
   cfg.width = width;
@@ -380,7 +362,10 @@ int main(int argc, char** argv) {
     for (const std::string& c : candidates)
       if (m28Variant.empty() && hostfs::IsFile(c + "/m28-variant/mod_info.lua")) m28Variant = c + "/m28-variant";
   }
-  if (!RunInit(o, vfs, cfg.hookDirs, cfg.protocols)) return 1;
+  // The init file's `path` mounted and its `hook` taken by the engine's function, as its host does (script/mount.h;
+  // ui/REQUESTS.md, engine 1); its `protocols` read by ours (InitProtocols).
+  if (!MountFromInitFile(o.init, o.folders, vfs, cfg.hookDirs)) return 1;
+  cfg.protocols = InitProtocols(o.init);
   if (!m28Variant.empty()) {
     if (vfs.Mount(m28Variant, "/mods/m28-variant"))
       Logf(LogLevel::Info, "moho64ui: M28AI is our variant: %s", hostfs::DisplayPath(m28Variant).c_str());
@@ -501,6 +486,7 @@ int main(int argc, char** argv) {
   if (windowed && !std::getenv("MOHO64_THREADS")) session.simThreads = static_cast<int>(std::thread::hardware_concurrency());  // (0 if unknown: as unset)
   session.sky = sky;
   session.replayOut = replayOut;
+  session.recordFingerprint = !windowed || std::getenv("MOHO64UI_RECORD_FINGERPRINT") != nullptr;
   session.replayTable = !sessionIn.empty() ? sessionIn : sessionFile;  // (a lobby game's table is written there)
   session.numberTables = tableBesideRecord && sessionIn.empty();  // (the second game's beside its own record)
   if (session.numberTables) cfg.sessionFileNow = [&session] { return session.TableFile(); };
@@ -572,43 +558,99 @@ int main(int argc, char** argv) {
   }
   bool ok = front->Boot();
   // The display mode (the Options menu's "Primary Adapter", DisplayMode). The original fills the
-  // menu's list at the start (StartupHelpers::SetupPrimaryAdapterSettings, FA exe 0x8d21e0):
-  // "Windowed" and the screen's modes, or only "Command Line Override" when its command line chose
-  // the mode. Here --fullscreen, or --size with --window, chose it; otherwise the player's option
-  // does, as the original's device takes it at the start (CScApp::CreateDevice 0x8d0370). A full
-  // screen is the screen's own size, so the list has that one mode (the original's text,
-  // "2560x1440(240)"). The second screen's list: "Disabled" only.
-  ui::Display().overridden = windowed && modeGiven;
+  // menu's lists at the start (StartupHelpers::SetupPrimaryAdapterSettings, FA exe 0x8d21e0, and
+  // SetupSecondaryAdapterSettings 0x8d26d0, after the device is made, 0x8d0e81): "Windowed" and the
+  // screens' modes, or only "Command Line Override" when its command line chose the mode. Here
+  // --fullscreen, or --size with --window, chose it; otherwise the player's option does, as the
+  // original's device takes it at the start (CScApp::CreateDevice 0x8d0370). A full screen is a
+  // screen's own size, so each screen has that one mode (the original's text, "2560x1440(240)"),
+  // and the window opens on the screen chosen (the original's device took adapter 0 only).
+  // MOHO64UI_SCREENS=2560x1440@240,1920x1080@60 (tests without a window): those screens, side by
+  // side, in place of the PC's; MOHO64UI_SECOND_HEAD=1: the Secondary Adapter lists the screens.
+  ui::DisplayMode& display = ui::Display();
+  display.overridden = windowed && modeGiven;
+  display.secondHeadShown = std::getenv("MOHO64UI_SECOND_HEAD") != nullptr && std::string(std::getenv("MOHO64UI_SECOND_HEAD")) == "1";
+  display.screens.clear();
+  if (const char* fake = std::getenv("MOHO64UI_SCREENS")) {
+    int x = 0;
+    for (std::string rest = fake; !rest.empty();) {
+      const size_t comma = rest.find(',');
+      const std::string one = rest.substr(0, comma);
+      rest = comma == std::string::npos ? std::string() : rest.substr(comma + 1);
+      ui::DisplayScreen s;
+      if (std::sscanf(one.c_str(), "%dx%d@%d", &s.width, &s.height, &s.rate) < 2 || s.width < 1 || s.height < 1) continue;
+      s.x = x, x += s.width;
+      display.screens.push_back(s);
+    }
+  } else {
+    for (const ui::Window::Screen& w : ui::Window::Screens()) {
+      ui::DisplayScreen s;
+      s.x = w.x, s.y = w.y, s.width = w.width, s.height = w.height, s.rate = w.rate;
+      display.screens.push_back(s);
+    }
+  }
+  if (display.screens.empty()) {  // (no window system to ask: the main screen as ScreenSize has it, else 1920x1080)
+    ui::DisplayScreen s;
+    s.width = 1920, s.height = 1080;
+    ui::Window::ScreenSize(&s.width, &s.height);
+    s.rate = ui::Window::RefreshRate();
+    display.screens.push_back(s);
+  }
+  for (size_t i = 0; i < display.screens.size(); ++i) {
+    const ui::DisplayScreen& s = display.screens[i];
+    Logf(LogLevel::Info, "moho64ui: screen %d: %dx%d at %d,%d, %d pictures a second%s", static_cast<int>(i + 1), s.width, s.height, s.x,
+         s.y, s.rate, i == 0 ? " (the main one)" : "");
+  }
   if (ok) {
-    int screenW = 1920, screenH = 1080;
-    ui::Window::ScreenSize(&screenW, &screenH);
-    const int rate = ui::Window::RefreshRate();
-    const std::string native = std::to_string(screenW) + "," + std::to_string(screenH) + "," + std::to_string(rate);
-    const std::string nativeText = std::to_string(screenW) + "x" + std::to_string(screenH) + "(" + std::to_string(rate) + ")";
-    std::string lists = "local logic = import('/lua/options/optionslogic.lua') ";
-    lists += ui::Display().overridden
-                 ? "logic.SetCustomData('primary_adapter', {states = {{text = '<LOC _Command_Line_Override>', key = 'overridden'}}}, 'overridden') "
-                 : "logic.SetCustomData('primary_adapter', {states = {{text = '<LOC OPTIONS_0070>Windowed', key = 'windowed'}, {text = '" +
-                       nativeText + "', key = '" + native + "'}}}, '" + native + "') ";
-    lists += "logic.SetCustomData('secondary_adapter', {states = {{text = '<LOC _Disabled>', key = 'disabled'}}}, 'disabled')";
-    if (!front->RunString(lists, "=(display modes at start-up)")) Logf(LogLevel::Warning, "moho64ui: the display modes could not be listed");
+    const ui::DisplayScreen& mainScreen = display.screens[0];
+    const std::string native = std::to_string(mainScreen.width) + "," + std::to_string(mainScreen.height) + "," + std::to_string(mainScreen.rate);
+    // The player's choices as kept (none: the main screen's mode, the list's default; and "disabled")
+    std::string primary = native, secondary = "disabled";
+    if (front->RunString("local o = import('/lua/user/prefs.lua').GetFromCurrentProfile('options') or {} "
+                         "moho64ui_start_adapters = {tostring(o.primary_adapter or ''), tostring(o.secondary_adapter or '')}",
+                         "=(display mode at start-up)")) {
+      lua_State* L = front->L();
+      lua_getglobal(L, "moho64ui_start_adapters");
+      if (lua_istable(L, -1)) {
+        lua_rawgeti(L, -1, 1);
+        if (lua_isstring(L, -1) && *lua_tostring(L, -1)) primary = lua_tostring(L, -1);
+        lua_pop(L, 1);
+        lua_rawgeti(L, -1, 2);
+        if (lua_isstring(L, -1) && *lua_tostring(L, -1)) secondary = lua_tostring(L, -1);
+        lua_pop(L, 1);
+      }
+      lua_pop(L, 1);
+      lua_pushnil(L);
+      lua_setglobal(L, "moho64ui_start_adapters");
+    }
+    const bool primaryWindowed = display.overridden ? !fullScreen : primary == "windowed";
+    ui::SetupPrimaryAdapterSettings(front->L());
+    ui::SetupSecondaryAdapterSettings(front->L(), primaryWindowed);
     // A live window the command line left free: the player's choice (a profile that never chose
-    // has the screen's own mode, the list's default: a full screen).
+    // has the main screen's own mode, the list's default: a full screen there).
     if (windowed && !modeGiven) {
-      front->RunString("local o = import('/lua/user/prefs.lua').GetFromCurrentProfile('options') or {} "
-                       "ConExecute('SC_PrimaryAdapter ' .. tostring(o.primary_adapter or '" + native + "'))",
-                       "=(display mode at start-up)");
-      ui::DisplayMode& display = ui::Display();
+      ui::ExecuteConsoleCommand(front->L(), "SC_PrimaryAdapter " + primary);
       fullScreen = display.request != ui::DisplayMode::kWindowed;
+      const ui::DisplayScreen& on = display.screens[static_cast<size_t>(fullScreen ? display.screen : 0)];
       if (fullScreen) {
-        width = screenW, height = screenH;
+        width = on.width, height = on.height;
       } else {
-        width = (std::min)(display.windowedWidth, screenW), height = (std::min)(display.windowedHeight, screenH);
+        width = (std::min)(display.windowedWidth, on.width), height = (std::min)(display.windowedHeight, on.height);
       }
       display.request = ui::DisplayMode::kNone;
       front->SetHeadSize(width, height);
       cfg.width = width, cfg.height = height;
-      Logf(LogLevel::Info, "moho64ui: display mode at the start (the player's option): %s %dx%d", fullScreen ? "full screen" : "a window of", width, height);
+      Logf(LogLevel::Info, "moho64ui: display mode at the start (the player's option): %s %dx%d%s", fullScreen ? "full screen" : "a window of",
+           width, height, fullScreen ? (" on screen " + std::to_string(display.screen + 1)).c_str() : "");
+    }
+    // The Secondary Adapter: the original opens a second head on that screen, both heads in full screen
+    // (CScApp::CreateDevice 0x8d0712: secondary_adapter not "disabled" and primary_adapter not "windowed"; the
+    // second head's mode from secondary_adapter, 0x8d08b3). Not shown here yet (DisplayMode::secondScreen).
+    const int second = ui::ScreenOfModeKey(secondary, 1);
+    display.secondScreen = -1;
+    if (second >= 0 && !primaryWindowed && second < static_cast<int>(display.screens.size()) && second != display.screen) {
+      display.secondScreen = second;
+      Logf(LogLevel::Info, "moho64ui: the Secondary Adapter names screen %d: a second head is not shown yet (one root frame)", second + 1);
     }
   }
   // The player's options take effect at the start, as in the original (its app start-up runs
@@ -856,6 +898,7 @@ int main(int argc, char** argv) {
     gameCfg.waitForBeat = [&session]() { session.WaitForWorker(); };
     gameCfg.groundHeight = [&session](float x, float z) { return session.TerrainHeight(x, z); };
     gameCfg.beatRunning = [&session]() { return session.BeatRunning(); };
+    gameCfg.syncsOwed = [&session]() { return session.SyncsOwed(); };
     gameCfg.gameTime = [&session]() { return session.PictureTick() * 0.1; };
     gameCfg.commandSource = session.commandSource();
     gameCfg.ownArmy = session.OwnArmy();

@@ -166,9 +166,16 @@ class GameSession {
   std::vector<std::string> replayMaps;
   // The lobby's table beside the record (`<prefix>.session.lua`, no --session-out): the second game of the run gets its
   // own, `<prefix>.2.session.lua` as its record (a restart's is copied from the game before). TableFile(): the file the
-  // next game's table goes to.
+  // next game's table goes to. A record never writes over another (Chris's big test, 2026-11-01: he stopped testing
+  // for fear of losing his recorded game): each game takes the first number whose files are not there yet, also
+  // across runs (`<prefix>`, then `<prefix>.2`, `<prefix>.3` ...), and its table the same number.
   bool numberTables = false;
+  // The record's fingerprint beside it (`<prefix>.fp`, every beat hashed on the beat's thread): for the tests that
+  // compare two programs beat by beat. Off in a live window unless MOHO64UI_RECORD_FINGERPRINT=1 (main.cpp): a
+  // headless playback of the record rebuilds it line for line.
+  bool recordFingerprint = true;
   std::string TableFile() const;
+  int RecordIndex() const;  // the next game's number (1: `<prefix>` itself)
 
   // The game's own replays, the original's way: every game played is written as it runs to
   // `<userDir>/replays/<profile>/LastGame.SCFAReplay` (the session's header, then the command
@@ -334,6 +341,10 @@ class GameSession {
   // (1 when unset: the headless tests' way, many at once). A game in a window takes the machine's cores (main.cpp).
   int simThreads = 0;
   bool BeatRunning() const;
+  // The beats begun whose syncs the interface's scripts have not had yet: one on its thread, or through there but not
+  // finished (FinishBeat: also after a script waited for it, WaitForWorker), and the syncs taken but not given. An
+  // order written now goes with the beat after them (the interface's copy of the queues: ui::NoteIssued).
+  int SyncsOwed() const;
   // While a beat runs there: the time that passes (the picture's moment moves on; no beat starts).
   void AdvanceClock(double seconds);
   // A beat still on its thread: wait for it and finish it (its sounds, its sync).
@@ -451,6 +462,10 @@ class GameSession {
   void BeginWindowMap(bool game, const std::string& map);  // (the game's map or the menus' background's, behind)
   void ServeWindowMap();
   void GiveBackdrop(WindowPicture& wp);
+  void GameLooksBack(WindowPicture& wp);  // (the menus' map begun behind a game's world, not had: ServeWindowMap)
+  // A game played (not a replay) is over (SessionEndGame, or the simulation's EndGame: the victory, the defeat), no
+  // beat running.
+  bool GameOver() const;
   struct CardSink;
   std::unique_ptr<CardSink> card_;
   struct Picture;
@@ -467,6 +482,7 @@ class GameSession {
   double due_ = 0;  // seconds of beats not run yet
   std::FILE* stream_ = nullptr;  // the game's record (replayOut), open while a game runs
   int recorded_ = 0;             // games recorded in this run
+  int lastIndex_ = 0;            // the number the last of them took (RecordIndex)
   std::string recordBase_;       // the running game's record without its extensions (<replayOut>[.n]; empty: none)
   std::string lastTable_;        // the table file of the game recorded last
   bool tableAgain_ = false;      // the game starting is a restart (Relaunch): its table is the last one
@@ -527,6 +543,12 @@ class GameSession {
   bool loadPrepared_ = false;  // (the loaded simulation handed to the map opening behind: ServeLoad)
   std::string loadWhy_;
   double loadRulesSeconds_ = 0, loadStartSeconds_ = 0;
+  // The load's parts, for its log (Chris's big test, 2026-11-01: 51 s of load, ~2 s of it in the lines then): seconds
+  // from BeginLoad; -1 not yet. loadThreadDone_ and loadStateSeconds_ are the loading thread's, read once it is through.
+  std::chrono::steady_clock::time_point launchAt_{}, loadBegan_{};
+  double loadThreadDone_ = -1, loadStateSeconds_ = 0;
+  double loadHandedAt_ = -1, loadMapReadyAt_ = -1, loadNextNote_ = 10;
+  void NoteLoadProgress();  // (ServeLoad's, each frame: when each part was seen through; a line every 10 s)
   void PrepareSession(const SessionDescription& session, const std::vector<std::string>& uids);
 };
 

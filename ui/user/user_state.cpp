@@ -112,6 +112,46 @@ LongFrameLog& LongFrames() {
   }();
   return log;
 }
+
+void LongFrameLog::NoteAside(const std::string& what, double ms) {
+  static const char* const kKinds[] = {"compute pipeline made ahead", "pipeline made ahead", "compute pipeline", "pipeline",
+                                       "model made ahead", "model", "texture"};
+  std::string kind;
+  for (const char* k : kKinds)
+    if (what.compare(0, std::strlen(k), k) == 0) {
+      kind = k;
+      break;
+    }
+  if (kind.empty()) kind = what.substr(0, what.find(' '));
+  Aside* a = nullptr;
+  for (Aside& x : asides)
+    if (x.kind == kind) a = &x;
+  if (!a) asides.push_back(Aside{kind}), a = &asides.back();
+  ++a->count;
+  a->ms += ms;
+  if (const size_t d = what.find("(the driver "); d != std::string::npos) a->driverMs += std::atof(what.c_str() + d + 12);
+  if (what.find(", kept)") != std::string::npos) ++a->kept;
+  longestAsides.emplace_back(what, ms);
+  std::stable_sort(longestAsides.begin(), longestAsides.end(), [](const auto& x, const auto& y) { return x.second > y.second; });
+  if (longestAsides.size() > 8) longestAsides.pop_back();
+}
+
+std::string LongFrameLog::AsideSummary() const {
+  std::string s;
+  char buf[160];
+  for (const Aside& a : asides) {
+    std::snprintf(buf, sizeof buf, "%s%s: %d, %.2f s", s.empty() ? "" : "; ", a.kind.c_str(), a.count, a.ms / 1000.0);
+    s += buf;
+    if (a.driverMs > 0 || a.kept > 0) std::snprintf(buf, sizeof buf, " (the driver %.2f s, %d kept)", a.driverMs / 1000.0, a.kept), s += buf;
+  }
+  if (!longestAsides.empty()) s += "; the longest:";
+  for (const auto& [what, ms] : longestAsides) {
+    std::snprintf(buf, sizeof buf, " %.0f ms ", ms);
+    s += buf + what + ",";
+  }
+  if (!s.empty() && s.back() == ',') s.pop_back();
+  return s;
+}
 double BeatThreadGcMs() { return static_cast<double>(g_beatThreadGcUs.load()) / 1000.0; }
 bool OnMainThread() { return std::this_thread::get_id() == g_mainThread.load(); }
 
@@ -279,6 +319,7 @@ void UserState::LinkSession(const Config& links) {
   config_.waitForBeat = links.waitForBeat;
   config_.groundHeight = links.groundHeight;
   config_.beatRunning = links.beatRunning;
+  config_.syncsOwed = links.syncsOwed;
   config_.gameTime = links.gameTime;
   config_.commandSource = links.commandSource;
   config_.ownArmy = links.ownArmy;

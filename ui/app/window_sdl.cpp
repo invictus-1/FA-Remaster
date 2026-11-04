@@ -172,6 +172,13 @@ void ShowPointer(const Window& w) {
   }
 }
 
+// The display a screen of Window::Screens is (by a point just inside its top left: its place is in the desktop's
+// units, its size in pixels, which differ on a Mac's sharp screens); 0 when none is.
+SDL_DisplayID DisplayOf(const Window::Screen& s) {
+  const SDL_Point p{s.x + 1, s.y + 1};
+  return SDL_GetDisplayForPoint(&p);
+}
+
 }  // namespace
 
 Window::~Window() {
@@ -184,7 +191,7 @@ Window::~Window() {
   if (sdl_) SDL_DestroyWindow(Sdl(sdl_));
 }
 
-bool Window::Create(int width, int height, const char* title, Callbacks cb, bool full, bool show) {
+bool Window::Create(int width, int height, const char* title, Callbacks cb, bool full, bool show, const Screen* on) {
   callbacks = std::move(cb);
   fullScreen = full;
   if (!VideoUp()) return false;
@@ -192,7 +199,10 @@ bool Window::Create(int width, int height, const char* title, Callbacks cb, bool
 #ifndef _WIN32
   flags |= SDL_WINDOW_VULKAN;  // (the renderer's picture draws into it: Vulkan, through MoltenVK on a Mac)
 #endif
-  if (full) flags |= SDL_WINDOW_FULLSCREEN;  // (the screen's own mode: a window without a frame over it)
+  // (the screen's own mode: a window without a frame over it; on another screen than the main one, made there
+  // first and then put in full screen, SDL taking the screen the window is on)
+  const SDL_DisplayID display = full && on ? DisplayOf(*on) : 0;
+  if (full && !display) flags |= SDL_WINDOW_FULLSCREEN;
   if (!show) flags |= SDL_WINDOW_HIDDEN;
   SDL_Window* w = SDL_CreateWindow(title, width, height, flags);
   if (!w) {
@@ -200,6 +210,11 @@ bool Window::Create(int width, int height, const char* title, Callbacks cb, bool
     return false;
   }
   sdl_ = w;
+  if (display) {
+    SDL_SetWindowPosition(w, SDL_WINDOWPOS_CENTERED_DISPLAY(display), SDL_WINDOWPOS_CENTERED_DISPLAY(display));
+    SDL_SetWindowFullscreenMode(w, nullptr);
+    SDL_SetWindowFullscreen(w, true);
+  }
 #ifdef _WIN32
   // (The Windows test build: the renderer takes the HWND, as from the Win32 window.)
   hwnd_ = SDL_GetPointerProperty(SDL_GetWindowProperties(w), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
@@ -241,6 +256,29 @@ bool Window::ScreenSize(int* width, int* height) {
   return *width > 0 && *height > 0;
 }
 
+std::vector<Window::Screen> Window::Screens() {
+  std::vector<Screen> out;
+  if (!VideoUp()) return out;
+  const SDL_DisplayID primary = SDL_GetPrimaryDisplay();
+  int count = 0;
+  SDL_DisplayID* displays = SDL_GetDisplays(&count);
+  for (int i = 0; displays && i < count; ++i) {
+    SDL_Rect r{};
+    const SDL_DisplayMode* mode = SDL_GetDesktopDisplayMode(displays[i]);
+    if (!mode || !SDL_GetDisplayBounds(displays[i], &r)) continue;
+    Screen s;
+    s.x = r.x, s.y = r.y;
+    s.width = mode->w, s.height = mode->h;  // (in pixels, as ScreenSize; the place in the desktop's own units)
+    if (mode->refresh_rate > 1.0f) s.rate = static_cast<int>(std::lround(mode->refresh_rate));
+    s.main = displays[i] == primary;
+    out.push_back(s);
+  }
+  SDL_free(displays);
+  // (the main screen first, the others in SDL's order)
+  std::stable_partition(out.begin(), out.end(), [](const Screen& s) { return s.main; });
+  return out;
+}
+
 int Window::RefreshRate() {
   if (!VideoUp()) return 60;
   const SDL_DisplayMode* mode = SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay());
@@ -260,13 +298,20 @@ size_t Window::ProcessMemory() {
 #endif
 }
 
-void Window::SetMode(bool full, int width, int height) {
+void Window::SetMode(bool full, int width, int height, const Screen* on) {
   if (!sdl_) return;
   SDL_Window* w = Sdl(sdl_);
-  if (full == fullScreen && full) return;
+  const SDL_DisplayID display = on ? DisplayOf(*on) : 0;
+  if (full == fullScreen && full && (!display || display == SDL_GetDisplayForWindow(w))) return;
   if (full) {
-    SDL_GetWindowPosition(w, &windowedX_, &windowedY_);
-    windowedKnown_ = true;
+    if (!fullScreen) {
+      SDL_GetWindowPosition(w, &windowedX_, &windowedY_);
+      windowedKnown_ = true;
+    }
+    if (display && display != SDL_GetDisplayForWindow(w)) {  // (to another screen: out of full screen, moved, back)
+      if (fullScreen) SDL_SetWindowFullscreen(w, false);
+      SDL_SetWindowPosition(w, SDL_WINDOWPOS_CENTERED_DISPLAY(display), SDL_WINDOWPOS_CENTERED_DISPLAY(display));
+    }
     fullScreen = true;
     SDL_SetWindowFullscreenMode(w, nullptr);  // (the desktop's mode: nothing switches)
     SDL_SetWindowFullscreen(w, true);
@@ -284,6 +329,12 @@ void Window::SetMode(bool full, int width, int height) {
 void Window::ClientSize(int* width, int* height) const {
   *width = *height = 0;
   if (sdl_) SDL_GetWindowSizeInPixels(Sdl(sdl_), width, height);
+}
+
+void Window::Middle(int* x, int* y) const {
+  int left = 0, top = 0, w = 0, h = 0;
+  if (sdl_) SDL_GetWindowPosition(Sdl(sdl_), &left, &top), SDL_GetWindowSize(Sdl(sdl_), &w, &h);
+  *x = left + w / 2, *y = top + h / 2;
 }
 
 void Window::LockMouse(bool lock) {

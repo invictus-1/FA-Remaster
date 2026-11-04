@@ -95,6 +95,30 @@ class PerfStats {
   double simMs_ = 0, pictureMs_ = 0, soundMs_ = 0, memoryMB_ = 0;
 };
 
+// The screen of DisplayMode's list numbered `index` (0: the main one), as the window takes it; false when there is
+// no such screen.
+bool ScreenOf(int index, Window::Screen* out) {
+  const DisplayMode& display = Display();
+  if (index < 0 || index >= static_cast<int>(display.screens.size())) return false;
+  const DisplayScreen& s = display.screens[static_cast<size_t>(index)];
+  out->x = s.x, out->y = s.y, out->width = s.width, out->height = s.height, out->rate = s.rate, out->main = index == 0;
+  return true;
+}
+
+// DisplayMode::windowScreen from the window's place now (logged when it changes).
+void NoteWindowScreen(const Window& window) {
+  DisplayMode& display = Display();
+  int x = 0, y = 0;
+  window.Middle(&x, &y);
+  int on = -1;
+  for (size_t i = 0; i < display.screens.size() && on < 0; ++i) {
+    const DisplayScreen& s = display.screens[i];
+    if (x >= s.x && x < s.x + s.width && y >= s.y && y < s.y + s.height) on = static_cast<int>(i);
+  }
+  if (on != display.windowScreen) Logf(LogLevel::Info, "moho64ui: window: on screen %d", on + 1);
+  display.windowScreen = on;
+}
+
 }  // namespace
 
 // Open a window on the interface and run until it is closed, or for maxFrames frames when that
@@ -120,7 +144,10 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
   };
   // (With hooks the window first stays hidden: the world's picture may be opened on it at once,
   // which takes seconds, and a window shown but not answering would be marked so by the system.)
-  if (!window.Create(width, height, "FA Remastered - interface", cb, fullScreen, !hooks.opened)) {
+  // A full screen opens on the screen the player's Primary Adapter chose (DisplayMode::screen).
+  Window::Screen startScreen;
+  const bool onScreen = fullScreen && ScreenOf(Display().screen, &startScreen);
+  if (!window.Create(width, height, "FA Remastered - interface", cb, fullScreen, !hooks.opened, onScreen ? &startScreen : nullptr)) {
     Logf(LogLevel::Error, "moho64ui: cannot open a window");
     return -1;
   }
@@ -128,6 +155,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     hooks.opened(window.Handle());
     window.Show();
   }
+  NoteWindowScreen(window);
   // The mouse pointer: the texture the scripts last set, as the system's own pointer.
   std::string pointerTexture, pointersShown;
   int pointerX = 0, pointerY = 0;
@@ -156,7 +184,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
   using Clock = std::chrono::steady_clock;
   auto last = Clock::now(), start = last;
   const auto runStart = last;  // (the long-frame log's times: from the window's first frame)
-  const int refresh = Window::RefreshRate();
+  const int refresh = onScreen ? startScreen.rate : Window::RefreshRate();  // (the screen the window opens on)
   Logf(LogLevel::Info, "moho64ui: window: the screen shows %d pictures a second", refresh);
   double drawSeconds = 0, presentSeconds = 0, frameSeconds = 0, renderSeconds = 0, hostSeconds = 0;
   FrameTimes timesBefore = Times();
@@ -234,7 +262,12 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
       if (display.request != DisplayMode::kNone) {
         const bool toFull = display.request == DisplayMode::kFullScreen;
         display.request = DisplayMode::kNone;
-        if (toFull && !window.fullScreen) {
+        Window::Screen screen;
+        const bool chosen = toFull && ScreenOf(display.screen, &screen);
+        if (toFull && window.fullScreen && chosen) {  // (a full screen already: moved when another screen is chosen)
+          Logf(LogLevel::Info, "moho64ui: display mode: full screen on screen %d", display.screen + 1);
+          window.SetMode(true, 0, 0, &screen);
+        } else if (toFull && !window.fullScreen) {
           int w = 0, h = 0;
           window.ClientSize(&w, &h);
           if (w > 0 && h > 0) {
@@ -243,12 +276,13 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
                                      ") SetPreference('Windows.Main.Previous.height', " + std::to_string(h) + ") SavePreferences()";
             user.RunString(keep, "=(the window's size)");
           }
-          Logf(LogLevel::Info, "moho64ui: display mode: full screen");
-          window.SetMode(true, 0, 0);
+          Logf(LogLevel::Info, "moho64ui: display mode: full screen on screen %d", display.screen + 1);
+          window.SetMode(true, 0, 0, chosen ? &screen : nullptr);
         } else if (!toFull && window.fullScreen) {  // (a window already: it stays as it is)
           Logf(LogLevel::Info, "moho64ui: display mode: a window of %dx%d", display.windowedWidth, display.windowedHeight);
           window.SetMode(false, display.windowedWidth, display.windowedHeight);
         }
+        NoteWindowScreen(window);
       }
       current().ui().edgeScroll = window.fullScreen;  // the screen's edge moves the view (where the mouse stops at it)
       window.LockMouse(LockCursor().on);       // the player's "Lock Fullscreen Cursor To Window"
@@ -333,6 +367,9 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
 #ifdef MOHO64UI_WORLD_PICTURE
         // (the renderer's notes since the last frame: on this thread and outermost only, as its parts are inside them)
         std::vector<render::HitchLog::Note> renderNotes = render::HitchLog::Take();
+        if (longFrames.loading)  // (and while a launch loads, what was made off this thread: the load's own line, at its end)
+          for (const render::HitchLog::Note& n : renderNotes)
+            if (n.elsewhere && n.depth == 0) longFrames.NoteAside(n.what, n.ms);
         if (ms > longFrames.thresholdMs) {
           static std::set<std::string> renderNames;  // (kept for the log: names that stay)
           for (const render::HitchLog::Note& n : renderNotes)
