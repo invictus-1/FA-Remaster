@@ -169,6 +169,7 @@ void SetLayer(Sim& sim, Unit* u, const char* layer) {
   if (u->layer == layer) return;
   std::string old = u->layer;
   u->layer = layer;
+  if (sim.DeferringScripts()) return sim.DeferScriptCall(u, "OnLayerChange", {Sim::ScriptArg::Str(layer), Sim::ScriptArg::Str(old.c_str())});
   lua_State* L = sim.L();
   lua_pushstring(L, layer);
   lua_pushstring(L, old.c_str());
@@ -262,6 +263,8 @@ void SetVertEvent(Sim& sim, Unit* u, int e) {
   if (m.vertEvent == e) return;
   int old = m.vertEvent;
   m.vertEvent = e;
+  if (sim.DeferringScripts())
+    return sim.DeferScriptCall(u, "OnMotionVertEventChange", {Sim::ScriptArg::Str(kVertEventNames[e]), Sim::ScriptArg::Str(kVertEventNames[old])});
   lua_State* L = sim.L();
   lua_pushstring(L, kVertEventNames[e]);
   lua_pushstring(L, kVertEventNames[old]);
@@ -1886,10 +1889,14 @@ void SetHorzEvent(Sim& sim, Unit* u, int e) {
   if (m.horzEvent == e) return;
   const int old = m.horzEvent;
   m.horzEvent = e;
-  lua_State* L = sim.L();
-  lua_pushstring(L, kHorzEventNames[e]);
-  lua_pushstring(L, kHorzEventNames[old]);
-  sim.CallMethod(L, u, "OnMotionHorzEventChange", 2);
+  if (sim.DeferringScripts()) {
+    sim.DeferScriptCall(u, "OnMotionHorzEventChange", {Sim::ScriptArg::Str(kHorzEventNames[e]), Sim::ScriptArg::Str(kHorzEventNames[old])});
+  } else {
+    lua_State* L = sim.L();
+    lua_pushstring(L, kHorzEventNames[e]);
+    lua_pushstring(L, kHorzEventNames[old]);
+    sim.CallMethod(L, u, "OnMotionHorzEventChange", 2);
+  }
   if (m.horzEvent == 3) IntelExactUpdate(sim, u);  // 0x6b8f5a..0x6b8f65: Entity::UpdateIntel
 }
 

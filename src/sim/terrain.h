@@ -1,6 +1,7 @@
 // The map (.scmap): heightfield, terrain types, water levels and the map's props. Only what the
 // simulation needs is kept; textures, decals and lighting are for the renderer.
 #pragma once
+#include <cmath>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -13,6 +14,21 @@ namespace moho {
 // sample * scale = height): the one bilinear rule, used by TerrainMap::TerrainHeight and by copies of the
 // heightfield the interface keeps between beats (ui request 25).
 float TerrainHeightOf(const uint16_t* raw, int w, int h, float scale, float x, float z);
+// The same rule over any sample source: at(ix, iz) = the clamped sample (ix, iz) times the scale (TerrainMap::HeightAt).
+// (The placement snapshots keep the heightfield in bands of rows: sim/sim_snapshot.cpp.)
+template <class At>
+float TerrainHeightBilinear(const At& at, float x, float z) {
+  float fx = std::floor(x), fz = std::floor(z);
+  int ix = static_cast<int>(fx), iz = static_cast<int>(fz);
+  float tx = x - fx, tz = z - fz;
+  // STIMap::GetElevation 0x44fb90: lerp along z first, then x; the x87 part runs with precision control
+  // 24 bits on the sim thread, so every step rounds like a float op
+  float A = at(ix, iz), B = at(ix, iz + 1);
+  float C = at(ix + 1, iz), D = at(ix + 1, iz + 1);
+  float a = A + (B - A) * tz;
+  float b = C + (D - C) * tz;
+  return a + (b - a) * tx;
+}
 
 class TerrainMap {
  public:
@@ -43,6 +59,7 @@ class TerrainMap {
   // its scale, and a count of height writes so far (it changes when SetHeightAt runs, e.g. a building flattens
   // the ground); read them only between beats.
   const uint16_t* heightData() const { return heights_.data(); }
+  const uint16_t* heightRow(int vz) const { return heights_.data() + static_cast<size_t>(vz) * (width_ + 1); }  // (vz in 0..height)
   float heightScale() const { return heightScale_; }
   // Whether SetHeightAt(i, j, h) over [x0, x1] x [z0, z1] (clipped as SetHeightAt clips) would change a vertex.
   bool WouldChangeHeights(int x0, int z0, int x1, int z1, float h) const;

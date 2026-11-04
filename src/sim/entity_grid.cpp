@@ -295,6 +295,9 @@ void EntityGrid::GatherLine(float fromX, float fromZ, float toX, float toZ, std:
 
 void GridUpdate(Sim& sim, Entity* e, bool widened) {
   if (e->kind == Entity::Kind::Blip) return;
+  // (a prop moved: the views' prop grid, Sim::ForPropsInRect, takes its new place when next read; only the views read
+  // that grid. Without this a prop a script moved, or a falling tree, was looked up in its first cell)
+  if (e->kind == Entity::Kind::Prop) sim.MarkPropsMoved(), sim.NotePropTouched(e);
   EntityGrid& g = sim.entityGrid();
   if (!g.ready()) return;
   e->gridSeen = true;

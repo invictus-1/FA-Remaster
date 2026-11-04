@@ -378,6 +378,7 @@ void CommandStream::Apply(Sim& sim, int type, const std::string& payload) {
       }
       e->position = p;
       e->orientation = Quat{qx, qy, qz, qw};
+      sim.NotePropTouched(e);  // (the sync point's reclaim copy)
       break;
     }
     case 11: {  // ProcessInfoPair 0x748d50

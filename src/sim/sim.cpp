@@ -56,6 +56,7 @@
 #include "sim/ai_threat.h"
 #include "sim/ai_build.h"
 #include "sim/session.h"
+#include "sim/sim_snapshot.h"
 #include "sim/sim_cache.h"
 #include "sim/terrain.h"
 #include "sim/units.h"
@@ -792,6 +793,8 @@ void UpdateTerrainType(Sim& sim, Unit* u, float x, float z) {
   if (dbg == -2 || (dbg >= 0 && dbg == static_cast<long>(u->id)))
     Logf(LogLevel::Info, "ttype %u unit %u (%s) at %.4f %.4f cell %d %d: %d -> %d", sim.tick(), u->id,
          u->blueprint ? u->blueprint->id.c_str() : "?", x, z, cx, cz, old, code);
+  if (sim.DeferringScripts())
+    return sim.DeferScriptCall(u, "OnTerrainTypeChange", {Sim::ScriptArg::Terrain(code), Sim::ScriptArg::Terrain(old)});
   lua_State* L = sim.L();
   PushTerrainTypes(L);
   lua_rawgeti(L, -1, code);
@@ -917,6 +920,7 @@ Sim::Sim(Vfs* vfs, std::vector<std::string> hookDirs, std::vector<std::string> m
       aimAhead_(std::make_unique<AimAhead>()),
       navSpec_(std::make_unique<Speculation<NavAhead>>("NAV")),
       commandIds(std::make_shared<CommandIdPool>()) {
+  snapshots_ = std::make_unique<SyncSnapshots>();  // (sim/sim_snapshot.h)
   prof::InstallLuaTimer();  // MOHO64_PROFILE only (core/profile.h): the Lua timer on the sim's thread
   // (MOHO64_PAR_MOTION / AIM / NAV: read here as given; Start(SessionDescription) settles their default, ParDefault)
   if (workers_->Threads() > 1 || workers_->Check().mode != ParCheck::kOff)
@@ -945,6 +949,9 @@ Sim::~Sim() {
     Logf(LogLevel::Info, "%s", line.c_str());
   }
   wtrap::Report();  // (MOHO64_PAR_WRITETRAP's lines)
+  for (const auto& [m, n] : immediateInPhase_)
+    Logf(LogLevel::Info, "moho64: parallel order: %s called at once inside the entity pass's phases x%llu (not deferred)",
+         m.c_str(), static_cast<unsigned long long>(n));
   if (rec_) fclose(rec_);
   owned_.clear();  // unbind every engine object while the Lua state still exists
   ReleaseEffectObjects(*this);
@@ -998,6 +1005,52 @@ float Sim::BpUniform(float base, float range) {
   uint32_t u = NextUInt32();
   return (dmath::MulU32(u, range - lo) * 0x1p-32f + lo) + base;
 }
+void Sim::DeferScriptCall(ScriptObject* obj, const char* method, std::vector<ScriptArg> args) {
+  DeferredCall c;
+  c.key = (static_cast<uint64_t>(deferKey_) << 32) | deferSeq_++;
+  c.object = obj;
+  c.method = method;
+  c.args = std::move(args);
+  deferred_.push_back(std::move(c));
+}
+
+void Sim::DeferAction(std::function<void()> action) {
+  DeferredCall c;
+  c.key = (static_cast<uint64_t>(deferKey_) << 32) | deferSeq_++;
+  c.action = std::move(action);
+  deferred_.push_back(std::move(c));
+}
+
+void Sim::RunDeferredScriptCalls() {
+  if (deferred_.empty()) return;
+  std::vector<DeferredCall> calls;
+  calls.swap(deferred_);
+  std::stable_sort(calls.begin(), calls.end(), [](const DeferredCall& a, const DeferredCall& b) { return a.key < b.key; });
+  lua_State* L = this->L();
+  for (DeferredCall& c : calls) {
+    if (c.action) {
+      c.action();
+      continue;
+    }
+    if (!c.object || !c.object->HasLuaObject()) continue;
+    int n = 0;
+    for (const ScriptArg& a : c.args) {
+      switch (a.kind) {
+        case ScriptArg::kString: lua_pushstring(L, a.string.c_str()); break;
+        case ScriptArg::kNumber: lua_pushnumber(L, static_cast<lua_Number>(a.number)); break;
+        case ScriptArg::kObject: PushObject(L, a.object); break;
+        case ScriptArg::kTerrainType:  // (as OnTerrainTypeChange's site pushes it: the entry of TerrainTypes)
+          PushTerrainTypes(L);
+          lua_rawgeti(L, -1, static_cast<int>(a.number));
+          lua_remove(L, -2);
+          break;
+      }
+      ++n;
+    }
+    CallMethod(L, c.object, c.method, n);
+  }
+}
+
 uint32_t Sim::ERand(Entity* e, RandPurpose p) {
   if (order != SimOrder::kParallel) return NextUInt32();
   if (e->randTick != tick_) {
@@ -1163,6 +1216,22 @@ bool Sim::Start(const ReplayHeader& replay) {
     bool incremental = fixes;
     if (const char* m = getenv("MOHO64_GC")) incremental = !std::strcmp(m, "incremental");
     lua_gpg_setgcmode(L, incremental ? 1 : 0);
+    // The atomic step's weak tables on the pool (lgcinc.c lua_gpg_setparfor): the mode check reads only, and each
+    // table's clearing writes only its own slots and the strings it keeps (marked black with atomic byte operations),
+    // so the result is the one of the single thread at any thread count. Chris's big-test game at 40-48 min: ~106,000
+    // weak tables (FAF's trash bags, ~15 a unit), their clearing 9-20 ms and the mode check 3-5 ms of an atomic step of
+    // 28-32 ms (1 thread, MOHO64_GC_PHASES). From MOHO64_GC_PARMIN weak tables (default 4096); MOHO64_GC_PAR=0: never.
+    static const bool gcPar = !getenv("MOHO64_GC_PAR") || std::strcmp(getenv("MOHO64_GC_PAR"), "0") != 0;
+    if (incremental && gcPar && workers_->Threads() > 1) {
+      const char* m = getenv("MOHO64_GC_PARMIN");
+      const size_t parMin = m && *m ? static_cast<size_t>(std::strtoull(m, nullptr, 10)) : 4096;
+      lua_gpg_setparfor(
+          L,
+          [](void* host, const char* stage, size_t n, size_t grain, lua_GpgTask task, void* ctx) {
+            static_cast<WorkerPool*>(host)->ParallelFor(stage, n, grain, [task, ctx](size_t b, size_t e, int) { task(ctx, b, e); });
+          },
+          workers_.get(), parMin);
+    }
   }
   state_->SetHookDirs(hookDirs_);
   if (fixes) state_->SetExtraHooks(FixesHooks());
@@ -1600,6 +1669,7 @@ void Sim::SignalEvent(const ScriptObject* o) {
 void Sim::QueueDestroy(Entity* e) {
   if (e->destroyQueued) return;
   e->destroyQueued = true;
+  NotePropTouched(e);  // (the sync point's reclaim copy)
   ++destroysQueued_;
   destroyQueue_.push_back(e);
 }
@@ -1652,6 +1722,7 @@ void Sim::ProcessDestroyQueue() {
     } else if (e->kind == Entity::Kind::Prop) {
       if (static_cast<Prop*>(e)->occupies) PropOccupancy(*this, static_cast<Prop*>(e), e->position, false);  // ~Prop 0x6fa05a
       if (collectProps) propsGone.emplace_back(e->id, static_cast<Prop*>(e)->mapIndex);
+      if (static_cast<Prop*>(e)->snapIn) snapPropsGone.emplace_back(e->id, static_cast<Prop*>(e)->snapCell);
       props.erase(std::remove(props.begin(), props.end(), static_cast<Prop*>(e)), props.end());
       propGridDirty_ = true;
     }
@@ -1851,6 +1922,7 @@ void Sim::ResumeCommandThread(Unit* u) {
 }
 void Sim::AddUnitToLists(Unit* u) {
   ++unitsCreated;
+  if (keepSnapshots) snapUnitsMade.push_back(u->handle);  // (the sync point's placement copy, sim/sim_snapshot.h)
   gridDirty_ = true;
   u->cmdSeq = ++cmdSeqNext_;
   cmdOrderDirty_ = true;
@@ -2401,6 +2473,7 @@ void Sim::SetupSync() {
   UpdateIdPools();
   SyncStep(true);  // kept whatever collectSync says (sim.h, TakeSync)
   frozen = endGame;
+  if (keepSnapshots) snapshots_->Update(*this);  // (sim/sim_snapshot.h: the sync point's copies, reads only)
 }
 
 void Sim::PausedBeat() {
@@ -2421,6 +2494,7 @@ void Sim::PausedBeat() {
   UpdateIdPools();
   SyncStep(collectSync);
   frozen = endGame;  // Sync copies sim+0x8dc to sim+0x8dd
+  if (keepSnapshots) snapshots_->Update(*this);  // (sim/sim_snapshot.h: the sync point's copies, reads only)
 }
 
 void Sim::Tick() {
@@ -2578,18 +2652,14 @@ void Sim::Tick() {
       ProjectileStep(*this, projectiles[entityProjAt++]);
   };
   static const size_t prefetchAhead = getenv("MOHO64_PREFETCH") ? static_cast<size_t>(std::max(0, atoi(getenv("MOHO64_PREFETCH")))) : 2;
-  // MOHO64_PAR_WRITETRAP (sim/write_trap.h): every unit and shell read-only for the pass but in its own turn
-  std::optional<wtrap::Phase> trapPhase;
-  if (wtrap::On()) trapPhase.emplace(tick_, "entity pass");
-  for (size_t i = 0; i < motionOrder.size(); ++i) {
+  // A unit's turn (Unit::MotionTick 0x6a9010) in three parts, one code path for both orders: its motion
+  // (turnMotion: the scroller, the attach, the held shape, fuel, the info cache, the motion itself), its pose and aim
+  // (turnPose) and its own economy (turnEconomy). The original's order runs the three one unit after another; parallel
+  // order runs each part for every unit in turn (phases A, C and D of docs/parallel-mode.md 3.3) with the callbacks
+  // each part raises run after it (phase B: Sim::DeferScriptCall).
+  enum : int { kTurnReordered, kTurnCargo, kTurnMoved };
+  auto turnMotion = [&](size_t i, Quat* prevOriOut) -> int {
     Unit* u = motionOrder[i];
-    if (prefetchAhead) {  // (MOHO64_PREFETCH: hints only)
-      if (i + prefetchAhead < motionOrder.size()) PrefetchUnitObject(motionOrder[i + prefetchAhead]);
-      if (i + 1 < motionOrder.size()) PrefetchUnitArrays(motionOrder[i + 1]);
-    }
-    beamsBefore(u->handle);
-    projectilesBefore(u->orderHandle ? u->orderHandle : u->handle);
-    wtrap::Turn trapTurn(u);  // (MOHO64_PAR_WRITETRAP: the unit's own pages writable for its turn)
     // Entity::TaskTick 0x679c40, step 1 (0x679c51): the texture scroller, before the attached test below, so a
     // unit sent to the pass's end takes that step twice in that beat. It reads the committed transform and the
     // one before it: here the unit's transform before this turn's motion and lastPosition / lastOrientation, which
@@ -2621,7 +2691,7 @@ void Sim::Tick() {
           u->orderHandle = nextHandle_;
           motionOrderDirty_ = true;
           motionOrder.push_back(u);
-          continue;
+          return kTurnReordered;
         }
       }
     }
@@ -2663,8 +2733,7 @@ void Sim::Tick() {
     }
     if (u->parentId && u->attachFull) {  // transport cargo: after every unit moved
       if (!u->beingBuilt) FuelTick(*this, u);  // CUnitMotion::ProcessFuelLevels (attached units too)
-      UnitEconomyTick(*this, u);
-      continue;
+      return kTurnCargo;  // (its economy: turnEconomy's cargo case)
     }
     if (!u->guarders.empty() && !u->guardForm) UpdateGuardFormation(*this, u);  // MotionTick order
     UpdateInfoCache(*this, u);  // formation fields and the speed cap
@@ -2676,6 +2745,7 @@ void Sim::Tick() {
     // next; ours took 5.25 at once.
     if (!u->beingBuilt) FuelTick(*this, u);
     const Quat prevOri = u->orientation;
+    *prevOriOut = prevOri;  // (the builder arms of the pose part read it)
     // A parent that no longer exists holds nothing (AttachParentGone): the unit goes back to its own motion on the
     // Air layer, although it still shows state Attached. Seen: a dead aircraft sinking on FAF's sinker projectile;
     // when the projectile is gone at the sea floor the wreck is in the Air layer for a beat, and the beat after
@@ -2804,6 +2874,9 @@ void Sim::Tick() {
     if (u->position.x != u->lastPosition.x || u->position.y != u->lastPosition.y ||
         u->position.z != u->lastPosition.z)
       u->lastMoveTick = tick_;
+    return kTurnMoved;
+  };
+  auto turnPose = [&](Unit* u, const Quat& prevOri) {
     // CAniActor::UpdateManipulators 0x63aa80, after CUnitMotion::MotionTick (0x6a908c before 0x6a90d5): the pose
     // is built on the pending transform this motion just wrote; the aim bone is read from last beat's pose
     PoseAdvance(u);
@@ -2812,6 +2885,12 @@ void Sim::Tick() {
       BuilderArmsTick(*this, u, u->lastPosition, prevOri);
     }
     UnitAimTick(*this, u);
+  };
+  auto turnEconomy = [&](Unit* u, int how) {
+    if (how == kTurnCargo) {  // transport cargo: its economy, nothing of the pose
+      UnitEconomyTick(*this, u);
+      return;
+    }
     // the unit's own beat: economy events, regeneration or decay, consumption and production (health regen /
     // decay and HandleResourceManagement 0x6aaac0, after the manipulators)
     UnitEconomyTick(*this, u);
@@ -2822,11 +2901,70 @@ void Sim::Tick() {
     // original's command database makes an AssistCommander for it in that beat (probe mp3_cmdid, caller 0x6a92b5);
     // ours did not, and every engine command id after it was one higher.
     if (u->isPod && u->commands.empty() && !u->dead) IssuePodAssist(*this, u);
-    if (u->destroyQueued) continue;
+    if (u->destroyQueued) return;
     if (u->isFactoryBuilder) ValidateFactoryCommandQueue(*this, u);  // end of Unit::MotionTick
+  };
+  auto prefetchFor = [&](size_t i) {
+    if (prefetchAhead) {  // (MOHO64_PREFETCH: hints only)
+      if (i + prefetchAhead < motionOrder.size()) PrefetchUnitObject(motionOrder[i + prefetchAhead]);
+      if (i + 1 < motionOrder.size()) PrefetchUnitArrays(motionOrder[i + 1]);
+    }
+  };
+  // MOHO64_PAR_WRITETRAP (sim/write_trap.h): every unit and shell read-only for the pass but in its own turn
+  std::optional<wtrap::Phase> trapPhase;
+  if (order != SimOrder::kParallel) {
+    if (wtrap::On()) trapPhase.emplace(tick_, "entity pass");
+    for (size_t i = 0; i < motionOrder.size(); ++i) {
+      Unit* u = motionOrder[i];
+      prefetchFor(i);
+      beamsBefore(u->handle);
+      projectilesBefore(u->orderHandle ? u->orderHandle : u->handle);
+      wtrap::Turn trapTurn(u);  // (MOHO64_PAR_WRITETRAP: the unit's own pages writable for its turn)
+      Quat prevOri;
+      const int how = turnMotion(i, &prevOri);
+      if (how == kTurnReordered) continue;
+      if (how == kTurnMoved) turnPose(u, prevOri);
+      turnEconomy(u, how);
+    }
+    beamsBefore(0xffffffffu);  // the beams younger than every unit
+    trapPhase.reset();
+  } else {
+    // Parallel order (docs/parallel-mode.md 3.3, step 4.1): first the beams and the shells made before the pass, in
+    // creation order (their hits and the scripts they run are immediate, as in a serial stage); then the units' phases
+    // A (motion), C (pose and aim) and D (economy), each over every unit in the pass's order, each followed by its
+    // commit (B): the script calls the phase deferred, in the order of their keys (the turn, then the call in it).
+    beamsBefore(0xffffffffu);
+    projectilesBefore(0xffffffffu);
+    std::vector<Quat> prevOris;
+    std::vector<uint8_t> hows;
+    prevOris.reserve(motionOrder.size());
+    hows.reserve(motionOrder.size());
+    auto runPhase = [&](const char* name, auto&& item) {
+      if (wtrap::On()) trapPhase.emplace(tick_, name);
+      deferring_ = true;
+      for (size_t i = 0; i < motionOrder.size(); ++i) {
+        wtrap::Turn trapTurn(motionOrder[i]);
+        DeferTurn(static_cast<uint32_t>(i));
+        item(i);
+      }
+      deferring_ = false;
+      trapPhase.reset();
+      RunDeferredScriptCalls();
+    };
+    runPhase("entity pass A", [&](size_t i) {  // (motionOrder grows when a unit goes to the pass's end)
+      prefetchFor(i);
+      Quat prevOri;
+      const int how = turnMotion(i, &prevOri);
+      prevOris.push_back(prevOri);
+      hows.push_back(static_cast<uint8_t>(how));
+    });
+    runPhase("entity pass C", [&](size_t i) {
+      if (hows[i] == kTurnMoved) turnPose(motionOrder[i], prevOris[i]);
+    });
+    runPhase("entity pass D", [&](size_t i) {
+      if (hows[i] != kTurnReordered) turnEconomy(motionOrder[i], hows[i]);
+    });
   }
-  beamsBefore(0xffffffffu);  // the beams younger than every unit
-  trapPhase.reset();
   threads_->WakeSignalled();
   // transport cargo follows its attach bone (Entity::TaskTick: after the parents moved)
   cargoFollowTick = tick_;
@@ -2854,6 +2992,7 @@ void Sim::Tick() {
       if (!p || p->destroyQueued) continue;
       HoldShape(e);
       BoneWorld(p, e->attachBone, &e->position, &e->orientation);
+      NotePropTouched(e);  // (the sync point's reclaim copy: a prop that hangs on something moves with it)
       if (p->kind == Entity::Kind::Projectile) {
         // On a shell (FAF's torpedo decoy and missile flare ride on one): the shell's transform as the beat began
         // (what is committed; its step of this beat is not), and bone -1 is its centre, half its SizeY above its
@@ -2980,6 +3119,10 @@ void Sim::Tick() {
   SyncStep(collectSync);
   singleStep = false;  // step 14 (sim+0x8e4 = 0)
   frozen = endGame;    // Sync copies sim+0x8dc to sim+0x8dd
+  if (keepSnapshots) {  // (sim/sim_snapshot.h: the sync point's copies, reads only)
+    MOHO_ZONE("sync snapshots");
+    snapshots_->Update(*this);
+  }
   phases.Lap(PhaseTimer::kDestroySync);
   lap.End();
   if (trace::Connected()) {  // the profiler build, while a viewer is connected: the counts over time (reads only)

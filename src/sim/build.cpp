@@ -50,6 +50,7 @@
 #include "sim/motion.h"
 #include "sim/landnav.h"
 #include "sim/navigation.h"
+#include "sim/placement_test.h"
 #include "sim/sim.h"
 #include "sim/sim_cache.h"
 #include "sim/terrain.h"
@@ -80,40 +81,12 @@ Unit* FindUnitAny(Sim& sim, uint32_t id) {
   return e && e->kind == Entity::Kind::Unit ? static_cast<Unit*>(e) : nullptr;
 }
 
-const NamedFootprint& Footprint(const BlueprintInfo& bp) {
-  static const NamedFootprint one{"", 1, 1, 1, 0, 0, 0, 0};
-  return bp.hasFootprint ? bp.footprint : one;
-}
+const NamedFootprint& Footprint(const BlueprintInfo& bp) { return placement::FootprintOf(bp); }
 
-struct FRect {
-  float x0, z0, x1, z1;
-};
+using FRect = placement::Rect;  // (sim/placement_test.h: the placement test's own, shared with the snapshots)
 
 FRect SkirtRect(const BlueprintInfo& bp, const UnitBpData& d, float x, float z) {
-  const NamedFootprint& fp = Footprint(bp);
-  int ox = RoundEven(x - fp.sizeX * 0.5f), oz = RoundEven(z - fp.sizeZ * 0.5f);
-  FRect r;
-  if (d.skirtSizeX == 0.0f) {
-    r.x0 = static_cast<float>(ox);
-    r.x1 = static_cast<float>(ox + fp.sizeX);
-  } else {
-    r.x0 = d.skirtOffsetX + static_cast<float>(ox);
-    r.x1 = r.x0 + d.skirtSizeX;
-  }
-  if (d.skirtSizeZ == 0.0f) {
-    r.z0 = static_cast<float>(oz);
-    r.z1 = static_cast<float>(oz + fp.sizeZ);
-  } else {
-    r.z0 = d.skirtOffsetZ + static_cast<float>(oz);
-    r.z1 = r.z0 + d.skirtSizeZ;
-  }
-  return r;
-}
-
-int DepositType(const std::string& restriction) {
-  if (restriction == "RULEUBR_OnMassDeposit") return 1;
-  if (restriction == "RULEUBR_OnHydrocarbonDeposit") return 2;
-  return 0;
+  return placement::SkirtRectOf(Footprint(bp), d, x, z);
 }
 
 // The deposits by cells of 32 x 32 map units (speed only, bind 2026-10-28; B1: 116 deposits looked at per test). Both
@@ -178,208 +151,27 @@ bool AnyDepositNear(const Sim& sim, double x0, double z0, double x1, double z1, 
   return false;
 }
 
-// CSimResources::AreaHasDeposit 0x546860: a deposit of the type, grown by 0.5 (mass) / 1.5 (hydro) on every
-// side, strictly overlaps the rect.
-bool DepositOverlaps(const Sim& sim, int type, float x0, float z0, float x1, float z1) {
-  float g = type == 1 ? 0.5f : 1.5f;
-  return AnyDepositNear(sim, x0, z0, x1, z1, [&](const ResourceDeposit& d) {
-    return d.type == type && x0 < static_cast<float>(d.x1) + g && static_cast<float>(d.x0) - g < x1 &&
-           z0 < static_cast<float>(d.z1) + g && static_cast<float>(d.z0) - g < z1;
-  });
-}
-
-// CSimResources::DepositIsInArea 0x546650: the rect contains a deposit of the type, or one contains the rect.
-bool DepositInArea(const Sim& sim, int type, int x0, int z0, int x1, int z1) {
-  return AnyDepositNear(sim, x0, z0, x1, z1, [&](const ResourceDeposit& d) {
-    return d.type == type && ((x0 <= d.x0 && d.x1 <= x1 && z0 <= d.z0 && d.z1 <= z1) ||
-                              (d.x0 <= x0 && x1 <= d.x1 && d.z0 <= z0 && z1 <= d.z1));
-  });
-}
-
-// OCCUPY_Check for a structure blueprint at (x, z): the layers it could be built on (0 = none).
-int StructureLayers(Sim& sim, const BlueprintInfo& bp, const UnitBpData& d, float x, float z) {
-  const TerrainMap* map = sim.map();
-  if (!map) return 0;
-  FRect sk = SkirtRect(bp, d, x, z);
-  // OCCUPY_Check 0x5652e0 (engine-ref structure_placement.md): the skirt within the vertex bounds
-  if (std::floor(sk.x0) < 0 || std::floor(sk.z0) < 0 || std::ceil(sk.x1) > map->width() ||
-      std::ceil(sk.z1) > map->height())
-    return 0;
-  // the flatness samples: the skirt truncated to vertices
-  int x0 = static_cast<int>(sk.x0), z0 = static_cast<int>(sk.z0);
-  int x1 = static_cast<int>(sk.x1), z1 = static_cast<int>(sk.z1);
-  int caps = d.buildOnLayerCaps;  // Physics.BuildOnLayerCaps (bp+0x2f4)
-  float lo = std::numeric_limits<float>::max(), hi = -std::numeric_limits<float>::max();
-  auto take = [&](int vx, int vz) {
-    vx = std::clamp(vx, 0, map->width());
-    vz = std::clamp(vz, 0, map->height());
-    float h = map->HeightAt(vx, vz);
-    lo = std::min(lo, h);
-    hi = std::max(hi, h);
-  };
-  // The samples' lowest and highest point taken on the stored heights (HeightAt = height * scale; with the scale > 0
-  // the product keeps their order, rounding included, so min / max of the products are the products of min / max):
-  // the same lo / hi, one multiplication each instead of one per vertex (speed only, bind 2026-10-28). The vertices
-  // a sample loop clamps to are the clamped range (a range past the edge gives its edge vertex, as each take does).
-  const uint16_t* hd = map->heightData();
-  const size_t stride = static_cast<size_t>(map->width()) + 1;
-  const bool raw = map->heightScale() > 0.0f;
-  uint16_t rlo = 0xffff, rhi = 0;
-  bool any = false;
-  auto rawRow = [&](int vz, int xa, int xb) {  // take(vx, vz) for vx = xa .. xb
-    if (xa > xb) return;
-    vz = std::clamp(vz, 0, map->height());
-    xa = std::clamp(xa, 0, map->width());
-    xb = std::clamp(xb, 0, map->width());
-    const uint16_t* r = hd + static_cast<size_t>(vz) * stride;
-    for (int vx = xa; vx <= xb; ++vx) {
-      rlo = std::min(rlo, r[vx]);
-      rhi = std::max(rhi, r[vx]);
-    }
-    any = true;
-  };
-  auto rawDone = [&] {
-    if (!any) return;
-    lo = static_cast<float>(rlo) * map->heightScale();
-    hi = static_cast<float>(rhi) * map->heightScale();
-  };
-  bool flat;
-  if (!d.flattenSkirt) {  // AreaFlatness 0x5651f0
-    if (raw) {
-      for (int vz = z0; vz <= z1; ++vz) rawRow(vz, x0, x1);
-      rawDone();
-    } else {
-      for (int vz = z0; vz <= z1; ++vz)
-        for (int vx = x0; vx <= x1; ++vx) take(vx, vz);
-    }
-    flat = hi - lo <= d.maxGroundVariation;
-  } else {  // EdgeFlatness 0x564f80: the ring just outside, measured from the ceiling of its lowest point
-    if (raw) {
-      rawRow(z0 - 1, x0 - 1, x1 + 1);
-      rawRow(z1 + 1, x0 - 1, x1 + 1);
-      for (int vz = z0; vz <= z1; ++vz) {
-        rawRow(vz, x0 - 1, x0 - 1);
-        rawRow(vz, x1 + 1, x1 + 1);
-      }
-      rawDone();
-    } else {
-      for (int vx = x0 - 1; vx <= x1 + 1; ++vx) {
-        take(vx, z0 - 1);
-        take(vx, z1 + 1);
-      }
-      for (int vz = z0; vz <= z1; ++vz) {
-        take(x0 - 1, vz);
-        take(x1 + 1, vz);
-      }
-    }
-    float c = static_cast<float>(std::ceil(static_cast<double>(lo)));
-    flat = std::max(hi - c, c - lo) <= d.maxGroundVariation;
-  }
-  if (!flat) caps &= ~3;
-  float water = map->hasWater ? map->waterElevation : -10000.0f;
-  if (water > lo) caps &= ~1;
-  if (hi > water - Footprint(bp).minWaterDepth) caps &= ~0xe;
-  if (!caps) return 0;
-  // deposits (no terrain-type test on this path): extractors need theirs; nothing else may come near one
-  const NamedFootprint& fp = Footprint(bp);
-  int ox = RoundEven(x - fp.sizeX * 0.5f), oz = RoundEven(z - fp.sizeZ * 0.5f);
-  int dep = DepositType(d.buildRestriction);
-  if (dep) {
-    if (!DepositInArea(sim, dep, ox, oz, ox + fp.sizeX, oz + fp.sizeZ)) return 0;
-  } else if (d.buildRestriction.empty() || d.buildRestriction == "RULEUBR_None") {
-    if (DepositOverlaps(sim, 1, sk.x0, sk.z0, sk.x1, sk.z1) || DepositOverlaps(sim, 2, sk.x0, sk.z0, sk.x1, sk.z1))
-      return 0;
-  }
-  return caps;
-}
-
-}  // namespace
-
-// ---- placement --------------------------------------------------------------------------------
-
-Vec3 SnapStructurePosition(Sim& sim, const BlueprintInfo& bp, Vec3 p) {
-  const NamedFootprint& fp = Footprint(bp);
-  int ox = RoundEven(p.x - fp.sizeX * 0.5f), oz = RoundEven(p.z - fp.sizeZ * 0.5f);
-  Vec3 r{ox + fp.sizeX * 0.5f, p.y, oz + fp.sizeZ * 0.5f};
-  // COORDS_ToWorldPos 0x50b0f0 (the mobile build task's ctor snaps its site with it, 0x5f6749, with the blueprint's
-  // Footprint.OccupancyCaps bp+0xda): the height of the ground (0x44fb90), or of the water above it, but not when
-  // the footprint may occupy the Seabed (caps bit 2, 0x50b151): then the sea bottom. Seen: MP2 1321, army 1's UEF
-  // mass extractor under water at (245.5, 20.5): the original's stands on the bottom (y 50.7656, unturned); ours
-  // was made at the surface (56.0), and FAF's StructureUnit OnCreate then turned it to the "slope" below it.
-  if (sim.map()) r.y = (fp.caps & 2) ? sim.map()->TerrainHeight(r.x, r.z) : sim.map()->SurfaceHeight(r.x, r.z);
-  return r;
-}
-
-namespace {
 // 0x720770: does the skirt rect R meet (strictly) the skirt rect of a unit that is not mobile? The candidates are
 // the units the collision grid holds in R's cells (0x4fcb40: the rect truncated, 4 x 4 cells, at least one cell
 // each way); a dead one that is still there counts.
 bool AnyStructureSkirtOverlaps(Sim& sim, lua_State* L, const FRect& R) {
-  auto lo = [](float v) { return std::clamp(static_cast<int>(v) >> 2, 0, 0xffff); };
-  auto len = [](float v, int c0) { return std::max(1, std::min(((static_cast<int>(v) + 3) >> 2) - c0, 0xffff - c0)); };
-  const int cx0 = lo(R.x0), cz0 = lo(R.z0);
-  const int cw = len(R.x1, cx0), ch = len(R.z1, cz0);
+  const placement::GridCells gc = placement::GridCellsOf(R);
   const bool grid = sim.entityGrid().ready();
   bool hit = false;
   sim.ForUnitsInRect(R.x0 - 32, R.z0 - 32, R.x1 + 32, R.z1 + 32, [&](Unit* e) {
     if (hit || !e->blueprint) return;
     if (e->motion.bp && e->motion.bp->mobile()) return;
-    if (grid && e->gridSeen && !(e->gridX0 < cx0 + cw && cx0 < e->gridX0 + e->gridW && e->gridZ0 < cz0 + ch && cz0 < e->gridZ0 + e->gridH))
-      return;
+    if (grid && e->gridSeen && !placement::GridCellsShared(gc, e->gridX0, e->gridZ0, e->gridW, e->gridH)) return;
     // (e->bpData: GetUnitBpData's entry of e's blueprint, kept at its init, UnitEconomyInit; the look-up without it)
     const FRect r = SkirtRect(*e->blueprint, e->bpData ? *e->bpData : GetUnitBpData(L, *e->blueprint), e->position.x, e->position.z);
-    if (r.x1 > R.x0 && R.x1 > r.x0 && r.z1 > R.z0 && R.z1 > r.z0 && R.x1 > R.x0 && R.z0 < R.z1 && r.x1 > r.x0 && r.z0 < r.z1)
-      hit = true;
+    if (placement::SkirtsMeet(r, R)) hit = true;
   });
   return hit;
 }
-}  // namespace
 
-// FootprintFitsStructure 0x720d90 (structure_placement.md 4): the ground (OCCUPY_Check), then no standing
-// structure's SKIRT may meet the new one's skirt, then the footprint against the occupancy bits. The mobile build
-// task asks this before it creates the unit (0x5f7aec), and CanBuildStructureAt begins with it.
-bool LocationIsFree(Sim& sim, const BlueprintInfo& bp, float x, float z) {
-  return LocationIsFree(sim, bp, GetUnitBpData(sim.L(), bp), x, z);
-}
-// (d: GetUnitBpData(L, bp), read by the caller)
-bool LocationIsFree(Sim& sim, const BlueprintInfo& bp, const UnitBpData& d, float x, float z) {
+// (the scan of LiveStructureSkirtOverlaps below for the new skirt R)
+bool LiveSkirtScan(Sim& sim, const FRect& R, const std::function<bool(const Unit*)>& skip) {
   lua_State* L = sim.L();
-  if (!d.structure) {
-    // A mobile blueprint (RUnitBlueprint::IsMobile 0x51e460: MotionType bp+0x290 != None): OCCUPY_Check 0x5652e0
-    // takes its mobile path (0x5652f9 -> 0x5652ff..0x565372), OCCUPY_MobileCheck 0x564ab0 at the footprint's origin
-    // cell (fistp(z - SizeZ/2), fistp(x - SizeX/2), kept as int16), and FootprintFitsStructure 0x720d90 then only
-    // clears Land+Seabed / Water where a structure holds the land / water grid over the footprint (0x720e58..
-    // 0x720eba; GetRectOr 0x8d8460). No BuildOnLayerCaps, flatness, deposit or skirt test on this path. Our
-    // occupancy grid does not tell land structures from water ones: a structure there clears both (as SquadFitsAt).
-    // Seen (Skirmish): M28AI asks brain:CanBuildStructureAt('mis0401', ...) (a Mitsurugi naval experimental it takes
-    // as its size-11 "building") on land; the original answers false, ours took the structure path and said true,
-    // so M28's buildable-location lists differed from 2.2 s on.
-    const NamedFootprint& fp = Footprint(bp);
-    const int oz = static_cast<int16_t>(RoundEven(z - fp.sizeZ * 0.5f));
-    const int ox = static_cast<int16_t>(RoundEven(x - fp.sizeX * 0.5f));
-    unsigned caps = sim.navigation().MobileCaps(fp, ox, oz);
-    caps = sim.navigation().FootprintFits(static_cast<uint8_t>(caps), fp, ox, oz);
-    return caps != 0;
-  }
-  if (!StructureLayers(sim, bp, d, x, z)) return false;
-  const NamedFootprint& fp = Footprint(bp);
-  int ox = RoundEven(x - fp.sizeX * 0.5f), oz = RoundEven(z - fp.sizeZ * 0.5f);
-  if (AnyStructureSkirtOverlaps(sim, L, SkirtRect(bp, d, x, z))) return false;
-  return !sim.navigation().AnyStructureIn(ox, oz, ox + fp.sizeX, oz + fp.sizeZ);
-}
-
-// CAiBrain::CanBuildStructureAt 0x57cbb0 after FootprintFitsStructure passed (0x57cda3..0x57cf9f): the candidates
-// are the units GatherUnmarkedUnitsInBox 0x721c00 finds in the new skirt's box (from the position as given; y
-// -1000..1000): those whose collision AABB (entity+0x240..+0x254) touches it, in grid cells it shares. Of them, the
-// ones alive (vt+0x28, +0x2c) and not mobile (vt+0x30) whose skirt (0x6a7600) strictly overlaps the new skirt
-// (0x416c90) forbid the spot. So a structure whose skirt reaches the new skirt but whose collision box does not is
-// not found. For a structure FootprintFitsStructure tested the skirts already (0x720770); for a mobile blueprint
-// this is the only skirt test. Seen (Skirmish, 5.3 s): xrl0403 next to a factory just started at (351.5, 681.5)
-// stays buildable at (343.99, 685.99) in the original (their skirts overlap, the factory's box is 0.5 away).
-bool LiveStructureSkirtOverlaps(Sim& sim, const BlueprintInfo& bp, float x, float z,
-                                const std::function<bool(const Unit*)>& skip) {
-  lua_State* L = sim.L();
-  const FRect R = SkirtRect(bp, GetUnitBpData(L, bp), x, z);
   const Vec3 bmn{R.x0, -1000.0f, R.z0}, bmx{R.x1, 1000.0f, R.z1};
   bool hit = false;
   sim.ForUnitsInRect(R.x0 - 32, R.z0 - 32, R.x1 + 32, R.z1 + 32, [&](Unit* e) {
@@ -394,10 +186,75 @@ bool LiveStructureSkirtOverlaps(Sim& sim, const BlueprintInfo& bp, float x, floa
     if (skip && skip(e)) return;  // (relation != 3: the units of the given relation, 0x57cef3..0x57cf1d)
     if (e->motion.bp && e->motion.bp->mobile()) return;
     const FRect r = SkirtRect(*e->blueprint, GetUnitBpData(L, *e->blueprint), e->position.x, e->position.z);
-    if (r.x1 > R.x0 && R.x1 > r.x0 && r.z1 > R.z0 && R.z1 > r.z0 && R.x1 > R.x0 && R.z0 < R.z1 && r.x1 > r.x0 && r.z0 < r.z1)
-      hit = true;
+    if (placement::SkirtsMeet(r, R)) hit = true;
   });
   return hit;
+}
+
+// The placement test's reads of the running simulation (sim/placement_test.h; the snapshots' own world:
+// sim/sim_snapshot.cpp).
+struct SimPlaceWorld {
+  Sim& sim;
+  const TerrainMap* map() const { return sim.map(); }
+  template <class F>
+  bool AnyDepositNear(double x0, double z0, double x1, double z1, F&& test) const {
+    return moho::AnyDepositNear(sim, x0, z0, x1, z1, test);
+  }
+  uint8_t MobileCaps(const NamedFootprint& fp, int x, int z) const { return sim.navigation().MobileCaps(fp, x, z); }
+  uint8_t FootprintFits(uint8_t caps, const NamedFootprint& fp, int x, int z) const {
+    return sim.navigation().FootprintFits(caps, fp, x, z);
+  }
+  bool AnyStructureIn(int x0, int z0, int x1, int z1) const { return sim.navigation().AnyStructureIn(x0, z0, x1, z1); }
+  bool AnyStructureSkirtOverlaps(const FRect& R) const { return moho::AnyStructureSkirtOverlaps(sim, sim.L(), R); }
+  bool LiveStructureSkirtOverlaps(const FRect& R) const { return LiveSkirtScan(sim, R, nullptr); }
+};
+
+}  // namespace
+
+// ---- placement --------------------------------------------------------------------------------
+
+Vec3 SnapStructurePosition(Sim& sim, const BlueprintInfo& bp, Vec3 p) {
+  // COORDS_ToWorldPos 0x50b0f0 (the mobile build task's ctor snaps its site with it, 0x5f6749, with the blueprint's
+  // Footprint.OccupancyCaps bp+0xda): the height of the ground (0x44fb90), or of the water above it, but not when
+  // the footprint may occupy the Seabed (caps bit 2, 0x50b151): then the sea bottom. Seen: MP2 1321, army 1's UEF
+  // mass extractor under water at (245.5, 20.5): the original's stands on the bottom (y 50.7656, unturned); ours
+  // was made at the surface (56.0), and FAF's StructureUnit OnCreate then turned it to the "slope" below it.
+  return placement::SnapStructurePosition(SimPlaceWorld{sim}, Footprint(bp), p);
+}
+
+// FootprintFitsStructure 0x720d90 (structure_placement.md 4): the ground (OCCUPY_Check), then no standing
+// structure's SKIRT may meet the new one's skirt, then the footprint against the occupancy bits. The mobile build
+// task asks this before it creates the unit (0x5f7aec), and CanBuildStructureAt begins with it.
+bool LocationIsFree(Sim& sim, const BlueprintInfo& bp, float x, float z) {
+  return LocationIsFree(sim, bp, GetUnitBpData(sim.L(), bp), x, z);
+}
+// (d: GetUnitBpData(L, bp), read by the caller)
+bool LocationIsFree(Sim& sim, const BlueprintInfo& bp, const UnitBpData& d, float x, float z) {
+  // A mobile blueprint (RUnitBlueprint::IsMobile 0x51e460: MotionType bp+0x290 != None): OCCUPY_Check 0x5652e0
+  // takes its mobile path (0x5652f9 -> 0x5652ff..0x565372), OCCUPY_MobileCheck 0x564ab0 at the footprint's origin
+  // cell (fistp(z - SizeZ/2), fistp(x - SizeX/2), kept as int16), and FootprintFitsStructure 0x720d90 then only
+  // clears Land+Seabed / Water where a structure holds the land / water grid over the footprint (0x720e58..
+  // 0x720eba; GetRectOr 0x8d8460). No BuildOnLayerCaps, flatness, deposit or skirt test on this path. Our
+  // occupancy grid does not tell land structures from water ones: a structure there clears both (as SquadFitsAt).
+  // Seen (Skirmish): M28AI asks brain:CanBuildStructureAt('mis0401', ...) (a Mitsurugi naval experimental it takes
+  // as its size-11 "building") on land; the original answers false, ours took the structure path and said true,
+  // so M28's buildable-location lists differed from 2.2 s on.
+  // (sim/placement_test.h, read from the running simulation)
+  SimPlaceWorld w{sim};
+  return placement::LocationIsFree(w, Footprint(bp), d, x, z);
+}
+
+// CAiBrain::CanBuildStructureAt 0x57cbb0 after FootprintFitsStructure passed (0x57cda3..0x57cf9f): the candidates
+// are the units GatherUnmarkedUnitsInBox 0x721c00 finds in the new skirt's box (from the position as given; y
+// -1000..1000): those whose collision AABB (entity+0x240..+0x254) touches it, in grid cells it shares. Of them, the
+// ones alive (vt+0x28, +0x2c) and not mobile (vt+0x30) whose skirt (0x6a7600) strictly overlaps the new skirt
+// (0x416c90) forbid the spot. So a structure whose skirt reaches the new skirt but whose collision box does not is
+// not found. For a structure FootprintFitsStructure tested the skirts already (0x720770); for a mobile blueprint
+// this is the only skirt test. Seen (Skirmish, 5.3 s): xrl0403 next to a factory just started at (351.5, 681.5)
+// stays buildable at (343.99, 685.99) in the original (their skirts overlap, the factory's box is 0.5 away).
+bool LiveStructureSkirtOverlaps(Sim& sim, const BlueprintInfo& bp, float x, float z,
+                                const std::function<bool(const Unit*)>& skip) {
+  return LiveSkirtScan(sim, SkirtRect(bp, GetUnitBpData(sim.L(), bp), x, z), skip);
 }
 
 // CAiBrain::CanBuildStructureAt 0x57cbb0 with relation 3: FootprintFitsStructure, then the skirt against the skirts
@@ -405,8 +262,8 @@ bool LiveStructureSkirtOverlaps(Sim& sim, const BlueprintInfo& bp, float x, floa
 // brain's own pending structure plans (brain+0x98), which the original also keeps the new skirt off.
 bool CanBuildStructureAt(Sim& sim, const BlueprintInfo& bp, float x, float z) {
   const UnitBpData& d = GetUnitBpData(sim.L(), bp);  // (once: LocationIsFree's read, the first)
-  if (!LocationIsFree(sim, bp, d, x, z)) return false;
-  return d.structure || !LiveStructureSkirtOverlaps(sim, bp, x, z);
+  SimPlaceWorld w{sim};
+  return placement::CanBuildStructureAt(w, Footprint(bp), d, x, z);  // (sim/placement_test.h)
 }
 
 bool UnitCanBuild(const Unit* u, const BlueprintInfo& bp) {
@@ -4570,6 +4427,7 @@ bool AttachPlainEntity(Sim& sim, Entity* e, Entity* parent, int bone) {
   e->attachOffset = {};
   e->position = {};
   e->orientation = Quat{};
+  sim.NotePropTouched(e);  // (the sync point's reclaim copy)
   sim.attachedEntities.push_back(EntityRef(e));
   return true;
 }

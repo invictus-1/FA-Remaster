@@ -202,16 +202,7 @@ float TerrainHeightOf(const uint16_t* raw, int w, int h, float scale, float x, f
     iz = std::clamp(iz, 0, h);
     return raw[static_cast<size_t>(iz) * (w + 1) + ix] * scale;
   };
-  float fx = std::floor(x), fz = std::floor(z);
-  int ix = static_cast<int>(fx), iz = static_cast<int>(fz);
-  float tx = x - fx, tz = z - fz;
-  // STIMap::GetElevation 0x44fb90: lerp along z first, then x; the x87 part runs with precision control
-  // 24 bits on the sim thread, so every step rounds like a float op
-  float A = at(ix, iz), B = at(ix, iz + 1);
-  float C = at(ix + 1, iz), D = at(ix + 1, iz + 1);
-  float a = A + (B - A) * tz;
-  float b = C + (D - C) * tz;
-  return a + (b - a) * tx;
+  return TerrainHeightBilinear(at, x, z);
 }
 
 float TerrainMap::TerrainHeight(float x, float z) const {

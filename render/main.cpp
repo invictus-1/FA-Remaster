@@ -128,7 +128,8 @@
 //           lays them out (<folder>\<ID>\export\moho64): each is used in place of that unit's own model, in
 //           games too; may be given several times
 // --preview <unit id>=<folder>  a remastered model's meshes and LabPBR textures, in place of that unit's
-// --place <unit id>  stand that unit at the camera's starting point (to look at a model without a recording)
+// --place <unit id>  stand that unit at the camera's starting point (to look at a model without a recording); a remastered one
+//           with the game's own model beside it, unless --place-alone
 // --look    modern (the default: physically based lighting) or original (the game's own formulas)
 // --inspect <what>  a view for checking art (modern look): every lit surface shows one of its own numbers in
 //           place of its lit colour: albedo, normals, roughness, metal, occlusion, shadow, lights (the small
@@ -1029,6 +1030,7 @@ struct Options {
   std::string init, sim, session, modUids, simLog;  // the simulation run in the viewer (--init, --sim or --session, ...)
   unsigned seed = 0;
   std::vector<std::string> data, mods, maps, previews, remasters, place, crowd;
+  bool placeAlone = false;  // --place-alone
   std::string turn;    // --turn: the bone placed units turn
   std::vector<std::string> emit;  // --emit: emitters played over and over
   float emitScale = 1;
@@ -1079,6 +1081,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--paused") o->paused = true;
     else if (a == "--props-as-game") o->propsAsGame = true;  // [proplift]
     else if (a == "--noshadows") o->shadows = false;
+    else if (a == "--place-alone") o->placeAlone = true;  // (close-ups of a remastered unit alone)
     else if (a == "--no-lamp-shadows") o->lampShadows = false;
     else if (a == "--no-steady-lamps") o->steadyLamps = false;  // [nightlight]
     else if (a == "--merge-bright") o->mergeFlux = false;        // [mergeflux]
@@ -2599,7 +2602,7 @@ int main(int argc, char** argv) {
       const float width = (model->boundsMax.x - model->boundsMin.x) * model->scale;
       stand(model, at, id);
       // a remastered unit gets the game's own model beside it, in the same light, to compare
-      const Model* original = models.Remastered(id) ? models.Unit(id, true) : nullptr;
+      const Model* original = models.Remastered(id) && !opt.placeAlone ? models.Unit(id, true) : nullptr;  // (--place-alone: none)
       if (original && original->ok) {
         const float originalWidth = (original->boundsMax.x - original->boundsMin.x) * original->scale;
         at.x += (width + originalWidth) * 0.5f + std::max(width, originalWidth) * 0.25f;
@@ -2633,7 +2636,8 @@ int main(int argc, char** argv) {
       }
       camera.target = (lo + hi) * 0.5f;
       targetLift = (hi.y - lo.y) * 0.5f;  // look at the units' middle, not at their feet
-      camera.distance = Length(hi - lo) * 0.5f / std::tan(camera.fovY * 0.5f) * 0.95f;
+      // (--place-alone, the close-ups: a little room round it, so a tall one is not cut at the foot in a wide picture)
+      camera.distance = Length(hi - lo) * 0.5f / std::tan(camera.fovY * 0.5f) * (opt.placeAlone ? 1.1f : 0.95f);
       camera.heading = opt.heading * kPi / 180;
       camera.pitch = opt.pitch * kPi / 180;
     }

@@ -46,6 +46,7 @@
 #include "sim/moments.h"
 #include "sim/session.h"
 #include "sim/sim_view.h"
+#include "sim/sim_snapshot.h"
 #include "sim/sim.h"
 #include "sim/terrain.h"
 
@@ -635,6 +636,15 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
   if (!sim.LoadRules()) return 1;
   auto t1 = std::chrono::steady_clock::now();
   sim.collectPrints = o.view;  // the scripts' print lines, as a console host takes them (before Start: its lines too)
+  // MOHO64_SNAPSHOTS=1 (a check, sim/sim_snapshot.h): the sync point's copies an interface reads (placement test,
+  // reclaim cursor) made at the end of Start and of every beat, as the interface host has them; the log gets what
+  // they cost. The game must play the same with them as without (they only read the simulation): compare
+  // MOHO64_RECORD / MOHO64_FINGERPRINT of a run with and one without. =2 also asks after every beat
+  // MOHO64_SNAPSHOT_TESTS=<n> (default 200) placement tests and as many reclaim lookups of both the copies and the
+  // live calls (BuildSiteOf, ReclaimableAt of sim/sim_view.h) at the same places and logs every answer that differs
+  // (the live calls read the simulation's Lua: judge the game by a =1 run, not a =2 one).
+  const int snapMode = getenv("MOHO64_SNAPSHOTS") ? std::atoi(getenv("MOHO64_SNAPSHOTS")) : 0;
+  sim.keepSnapshots = snapMode > 0;
   bool ok = sim.Start(session);
   auto t2 = std::chrono::steady_clock::now();
   Logf(LogLevel::Info, "moho64: sim start-up %s", ok ? "ok" : "FAILED");
@@ -952,6 +962,104 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
     }
   };
   if (ok) viewReads(true);
+  struct SnapCheck {
+    size_t places = 0, placeDiffs = 0, placeYes = 0, reclaims = 0, reclaimDiffs = 0, reclaimFound = 0;
+    double liveMs = 0, snapMs = 0;
+    std::vector<const BlueprintInfo*> unitBps;
+    std::mt19937 rng{20261103u};  // (the check's own: the game's stream is not touched)
+  } sc;
+  const int snapTests = getenv("MOHO64_SNAPSHOT_TESTS") ? std::atoi(getenv("MOHO64_SNAPSHOT_TESTS")) : 200;
+  if (ok && snapMode >= 2)
+    for (int i = 0; i < sim.blueprints().EntityCount(); ++i) {
+      const BlueprintInfo* bp = sim.blueprints().ByEntityIndex(i);
+      if (bp && bp->kind == BpKind::Unit && sim.blueprints().Find(bp->id) == bp) sc.unitBps.push_back(bp);
+    }
+  auto checkSnapshots = [&] {
+    if (snapMode > 0 && sim.tick() % 3000 == 0) {  // (the cost as the game grows)
+      static SyncSnapshots::Costs was;
+      const SyncSnapshots::Costs c = sim.snapshots().costs();
+      const uint64_t n = c.updates - was.updates;
+      if (n)
+        Logf(LogLevel::Info, "snapshots: tick %u: %.4f ms a beat since the last line (units %.4f, reclaim %.4f), the last %.4f; "
+             "%zu structures, %zu reclaimable props, %zu units",
+             sim.tick(), (c.totalMs - was.totalMs) / n, (c.unitsMsTotal - was.unitsMsTotal) / n, (c.reclaimMsTotal - was.reclaimMsTotal) / n,
+             c.lastMs, c.structures, c.reclaimables, sim.units().size());
+      was = c;
+    }
+    if (snapMode < 2 || sc.unitBps.empty() || !sim.map()) return;
+    auto P = sim.snapshots().Placement();
+    auto R = sim.snapshots().Reclaim();
+    if (!P || !R) return;
+    auto u01 = [&] { return static_cast<float>(sc.rng() & 0xffffff) / 16777216.0f; };
+    const float W = static_cast<float>(sim.map()->width()), H = static_cast<float>(sim.map()->height());
+    using Clock = std::chrono::steady_clock;
+    for (int i = 0; i < snapTests; ++i) {
+      const BlueprintInfo* bp = sc.unitBps[sc.rng() % sc.unitBps.size()];
+      float x = 0, z = 0;
+      const unsigned kind = sc.rng() % 4;
+      if (kind == 1 && !sim.deposits.empty()) {
+        const ResourceDeposit& d = sim.deposits[sc.rng() % sim.deposits.size()];
+        x = (d.x0 + d.x1) * 0.5f + (u01() - 0.5f) * 8, z = (d.z0 + d.z1) * 0.5f + (u01() - 0.5f) * 8;
+      } else if (kind >= 2 && !sim.units().empty()) {
+        const Unit* u = sim.units()[sc.rng() % sim.units().size()];
+        x = u->position.x + (u01() - 0.5f) * 28, z = u->position.z + (u01() - 0.5f) * 28;
+      } else {
+        x = u01() * (W + 40) - 20, z = u01() * (H + 40) - 20;
+      }
+      if (sc.rng() % 4 == 0) x = std::floor(x) + 0.5f, z = std::floor(z) + 0.5f;  // (the cursor on a cell's centre)
+      const float at[3] = {x, 0, z};
+      float s1[3] = {0, 0, 0}, s2[3] = {0, 0, 0};
+      bool c1 = false, c2 = false;
+      const auto t0 = Clock::now();
+      const bool r1 = BuildSiteOf(sim, bp->id, at, s1, &c1);
+      const auto t1 = Clock::now();
+      PlacementQuery q;
+      q.blueprint = bp->id;
+      q.position[0] = x, q.position[2] = z;
+      const bool r2 = BuildSiteOf(*P, q, s2, &c2);
+      const auto t2 = Clock::now();
+      sc.liveMs += std::chrono::duration<double, std::milli>(t1 - t0).count();
+      sc.snapMs += std::chrono::duration<double, std::milli>(t2 - t1).count();
+      ++sc.places;
+      sc.placeYes += c1;
+      if (r1 != r2 || c1 != c2 || std::memcmp(s1, s2, sizeof s1) != 0) {
+        if (sc.placeDiffs++ < 40)
+          Logf(LogLevel::Info, "snapshots: tick %u: %s at %.3f %.3f: live %d %d (%.4f %.4f %.4f), copy %d %d (%.4f %.4f %.4f)",
+               sim.tick(), bp->id.c_str(), x, z, r1, c1, s1[0], s1[1], s1[2], r2, c2, s2[0], s2[1], s2[2]);
+      }
+    }
+    for (int i = 0; i < snapTests; ++i) {
+      float x = 0, z = 0;
+      if (sc.rng() % 4 != 0 && !sim.props.empty()) {
+        const Prop* p = sim.props[sc.rng() % sim.props.size()];
+        x = p->position.x + (u01() - 0.5f) * 12, z = p->position.z + (u01() - 0.5f) * 12;
+      } else {
+        x = u01() * W, z = u01() * H;
+      }
+      static const float kWithin[4] = {0.0f, 0.5f, 2.0f, 5.0f};
+      const float within = kWithin[sc.rng() % 4];
+      const float at[3] = {x, 0, z};
+      ReclaimableView a, b;
+      const auto t0 = Clock::now();
+      const bool r1 = ReclaimableAt(sim, at, within, &a);
+      const auto t1 = Clock::now();
+      const bool r2 = ReclaimableAt(*R, at, within, &b);
+      const auto t2 = Clock::now();
+      sc.liveMs += std::chrono::duration<double, std::milli>(t1 - t0).count();
+      sc.snapMs += std::chrono::duration<double, std::milli>(t2 - t1).count();
+      ++sc.reclaims;
+      sc.reclaimFound += r1;
+      const bool same = r1 == r2 && (!r1 || (a.id == b.id && a.blueprint == b.blueprint &&
+                                              std::memcmp(a.position, b.position, sizeof a.position) == 0 &&
+                                              a.sizeX == b.sizeX && a.sizeZ == b.sizeZ));
+      if (!same && sc.reclaimDiffs++ < 40)
+        Logf(LogLevel::Info,
+             "snapshots: tick %u: reclaim at %.3f %.3f within %.1f: live %d %#x %s (%.4f %.4f) %.3f x %.3f, copy %d %#x %s "
+             "(%.4f %.4f) %.3f x %.3f",
+             sim.tick(), x, z, within, r1, a.id, a.blueprint.c_str(), a.position[0], a.position[2], a.sizeX, a.sizeZ, r2,
+             b.id, b.blueprint.c_str(), b.position[0], b.position[2], b.sizeX, b.sizeZ);
+    }
+  };
   if (ok && !o.netMode.empty() && !(net = NetGame::Connect(o))) ok = false;
   while (ok && !diverged && done < o.ticks) {
     if (playStream && !stream.AtEnd()) {
@@ -986,6 +1094,7 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
     }
     if (net) net->After(sim, static_cast<uint32_t>(done + paused));
     viewReads(false);
+    checkSnapshots();
     // MOHO64_DEBUG_RECONGRID=<n> (render REQUESTS 38): at beat 1 and every 600th, for every army and each water
     // kind, ReconGrid's n x n grid against n x n ReconAt calls at the same points (the renderer's sight grid's
     // floats): the cells that differ, and the time of both
@@ -1222,6 +1331,21 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
   }
   if (fingerprint && !diverged) fingerprint->End(static_cast<uint32_t>(done + paused));
   if (net) net->End(static_cast<uint32_t>(done + paused));
+  if (snapMode > 0) {
+    const SyncSnapshots::Costs c = sim.snapshots().costs();
+    Logf(LogLevel::Info, "snapshots: %llu updates; the first %.2f ms, then %.4f ms a beat on average, the longest %.3f ms; "
+         "the last: %zu structures, %zu reclaimable props, %.2f MB placement, %.2f MB reclaim",
+         static_cast<unsigned long long>(c.updates), c.firstMs, c.updates > 1 ? (c.totalMs - c.firstMs) / (c.updates - 1) : 0.0,
+         c.maxMs, c.structures, c.reclaimables, c.placementBytes / 1048576.0, c.reclaimBytes / 1048576.0);
+    Logf(LogLevel::Info, "snapshots: of all their time (%.1f ms): the units %.1f ms, the reclaim copy %.1f ms", c.totalMs,
+         c.unitsMsTotal, c.reclaimMsTotal);
+    Logf(LogLevel::Info, "snapshots: of the reclaim copy: the walk over the props %.1f ms", c.scanMsTotal);
+    Logf(LogLevel::Info, "snapshots: %zu prop changes not noted (MOHO64_SNAPSHOT_CHECK)", c.propsMissed);
+    if (snapMode >= 2)
+      Logf(LogLevel::Info, "snapshots: %zu placement tests (%zu can build), %zu differ; %zu reclaim lookups (%zu found), %zu "
+           "differ; the live calls %.3f ms, the copies' %.3f ms in all", sc.places, sc.placeYes, sc.placeDiffs, sc.reclaims,
+           sc.reclaimFound, sc.reclaimDiffs, sc.liveMs, sc.snapMs);
+  }
   if (vr.on)
     Logf(LogLevel::Info, "view reads: %zu beats read; a collection ran in the reads of %zu, the heap changed in %zu (%lld bytes)",
          vr.beats, vr.collected, vr.changed, vr.bytes);

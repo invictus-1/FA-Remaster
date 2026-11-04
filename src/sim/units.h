@@ -436,6 +436,12 @@ class Prop : public Entity {
   uint8_t occSizeX = 0, occSizeZ = 0, occCaps = 0;
   // Its blueprint's Economy.ReclaimMassMax / ReclaimEnergyMax (bp+0x1a4 / +0x1a8), as Prop::Prop reads them.
   float bpReclaimMass = 0, bpReclaimEnergy = 0;
+  // For the sync point's reclaim copy (sim/sim_snapshot.cpp, Sim::keepSnapshots; written only there, between beats):
+  // its place in the props' order, and what the copy holds of it (snapIn: it has an entry, in cell snapCell).
+  bool snapSeen = false, snapIn = false;
+  uint32_t snapSeq = 0;
+  int snapCell = -1;
+  float snapAt[5] = {0, 0, 0, 0, 0};  // x, y, z, box x, box z
 };
 
 class ShieldEntity : public Entity {
