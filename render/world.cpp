@@ -2503,6 +2503,16 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
   rememberedGone.clear();
   dyingDrawn = 0;
   bool noFocus = false;
+  // [stealthlook] the player's side (own or allied, every army without a focus) and the radar stealth fields it gives off
+  auto ourSide = [&](const FrameUnit& u) {
+    const uint32_t army = u.Army();
+    return focusArmy < 0 || static_cast<int>(army) == focusArmy || (army < 64 && ((alliedArmies >> army) & 1) != 0);
+  };
+  stealthFields_.clear();
+  cloakedNow_ = 0;
+  if (stealthLook)
+    for (const FrameUnit& u : frame.units)
+      if (!u.dead && u.stealthField > 0 && ourSide(u)) stealthFields_.push_back({u.position[0], u.position[2], u.stealthField});
   for (const FrameUnit& u : frame.units) {
     if (u.recon == 0xff) noFocus = true;
     if (u.dead) {
@@ -2758,14 +2768,41 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
         }
         if (!shellHits_.empty()) meshes.AddShell(shell, Mat4::FromTRS(drawAt, drawTurn, model->scale), shellHits_);
       }
+      // [stealthlook] cloaked: the script set its cloak mesh (FAF's '<mesh>_cloak'): its body a see-through shimmer in its
+      // faction's shield colour (the original's ShieldCybran for the UEF and Cybran, ShieldAeon for the Aeon and Seraphim)
+      bool cloaked = false;
+      if (cloakLook && u.mesh && u.mesh < frame.blueprints->size() && fractionComplete >= 1 && !asRemembered) {
+        std::string set = (*frame.blueprints)[u.mesh];
+        for (char& c : set) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        cloaked = set.size() > 6 && set.compare(set.size() - 6, 6, "_cloak") == 0;
+      }
+      const std::string side = cloaked || stealthLook ? UnitFaction(blueprint) : std::string();
+      if (cloaked) {
+        ++cloakedNow_;
+        const Vec3 tint = side == "aeon" || side == "seraphim" ? Vec3{0.75f, 1.0f, 0.7f} : Vec3{0.6f, 0.82f, 1.0f};
+        meshes.Add(model, Mat4::FromTRS(drawAt, drawTurn, model->scale), color, 1.25f, &pose, &tint, nullptr, u.id + 1);
+        meshes.SeeThroughGhost();
+      } else {
       // (and its treads' scroll, where its mesh's treads scroll and its shield's hit does not take the place)
       // ([fogwar] a remembered one with the pose, the treads' scroll and the wear it had when last seen)
       meshes.Add(model, Mat4::FromTRS(drawAt, drawTurn, model->scale), color, built, asRemembered && !photo ? nullptr : &pose, hitAt,
                  model->scrolls && !hitAt ? (photo ? photo->treads : u.treads) : nullptr, u.id + 1);
       meshes.Belt(belt);  // [machinery]
+      }
+      // [stealthlook] hidden from radar (its stealth on, or within an allied stealth field), the player's side alone: a faint
+      // shimmering veil a little out from its body
+      bool veiled = stealthLook && !cloaked && !asRemembered && fractionComplete >= 1 && u.Seen() && ourSide(u) && (u.intelOn & 1) != 0;
+      if (stealthLook && !veiled && !cloaked && !asRemembered && fractionComplete >= 1 && u.Seen() && ourSide(u))
+        for (const StealthField& f : stealthFields_)
+          if ((u.position[0] - f.x) * (u.position[0] - f.x) + (u.position[2] - f.z) * (u.position[2] - f.z) < f.radius * f.radius) {
+            veiled = true;
+            break;
+          }
       // (its battle scars and snow: unit_wear.h; [groundfix] its dirt from the first frame it is drawn: its box from the
       // model drawn, which WatchWear, before the models are made, finds only from the next frame)
-      if (photo) {
+      if (cloaked) {
+        // ([stealthlook] the last model added is its shimmer: no wear on it)
+      } else if (photo) {
         Remembered& r = remembered_[u.id];
         if (!r.wearKept) {  // (taken at the first frame it is not seen: one frame on from the last it was)
           const WearLook* w = WearOf(u.id, model);
@@ -2777,11 +2814,16 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       } else if (const WearLook* w = WearOf(u.id, model)) {
         meshes.Wear(*w);
       }
+      if (veiled) {  // ([stealthlook] its veil, after its wear: Wear takes the model added last)
+        const Vec3 tint{0.35f, 0.62f, 0.78f};
+        meshes.Add(model, Mat4::FromTRS(drawAt, drawTurn, model->scale * 1.035f), color, 1.375f, &pose, &tint, nullptr, u.id + 1);
+        meshes.SeeThroughGhost();
+      }
       // (its outline where it is hidden, hidden_outlines.h: only what the player may see of it now - his own, an ally's,
       // an enemy's in sight - and finished; never a building drawn as it was remembered)
       if (outlinesNow_ && u.Seen() && !asRemembered && fractionComplete >= 1 && !allHidden)
         MarkOutline(model, drawAt, IconColor(u.Army(), color), building, u.id, u.blueprint < iconKinds_.size() ? iconKinds_[u.blueprint] : nullptr);
-      if (u.fractionComplete >= 1 && u.Seen()) AddLamps(model, drawAt, drawTurn, &pose, &color, u.id, building);  // ([lift] riding the waves with it)
+      if (u.fractionComplete >= 1 && u.Seen() && !cloaked) AddLamps(model, drawAt, drawTurn, &pose, &color, u.id, building);  // ([stealthlook] a cloaked one: none)  // ([lift] riding the waves with it)
       // (movement dust: what the army sees moving raises dust, spray or contrails)
       if (dustNow_ && u.Seen() && !asRemembered && fractionComplete >= 1) dust.AddUnit(u.id, blueprint, model, position, orientation);
       // ([surf] a ship at speed throws spray off its bow)
@@ -3947,7 +3989,14 @@ void World::Render() {
     lights.Bind();
   }
   Stage("see-through (shields)");
+  // [stealthlook] a cloaked unit's body bends the scene as it stands now
+  if (cloakedNow_ && post.CopyBehind()) {
+    post.ContinueScene();
+    lights.Bind();
+    meshes.cloakBehind = post.Behind();
+  }
   meshes.Draw(view, environment_, false, true);
+  meshes.cloakBehind = {};
   if (!placed.empty() || placedDraw.AnyTaken())  // [pings] (and the CommandFeedback models taken: placed.h)
     placedDraw.Draw(view, placed, lights.night, PlacedMeshes::DepthPull(camera.zNear, placing.distance));
   Stage("wakes, beams, trails");
