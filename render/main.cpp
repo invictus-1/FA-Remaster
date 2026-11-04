@@ -3711,6 +3711,15 @@ int main(int argc, char** argv) {
         printf("render: --picture: unit %x at %.1f %.1f %.1f -> pixel %.0f %.0f; the ground there %.1f %.1f %.1f%s; the unit there %x%s\n", u.id,
                u.position[0], u.position[1], u.position[2], x, y, ground.x, ground.y, ground.z, hit ? "" : " (none)", under,
                under == u.id ? " (itself)" : "");
+        {  // [pick] UnitsAt there, and 150 pixels beside it (the original finds nothing there unless another unit stands there)
+          std::vector<uint32_t> at, beside;
+          picture.UnitsAt(x, y, 10, &at);
+          picture.UnitsAt(x + 150, y, 10, &beside);
+          const bool listed = std::find(at.begin(), at.end(), u.id) != at.end();
+          const bool besideToo = std::find(beside.begin(), beside.end(), u.id) != beside.end();
+          printf("render: --picture: unit %x: UnitsAt its pixel %zu units%s; 150 px beside %zu units%s\n", u.id, at.size(),
+                 listed ? " (it among them)" : " (NOT among them)", beside.size(), besideToo ? " (it among them: its box reaches that far)" : "");
+        }
         if (shown == 0) {  // (and where the picture would draw it at this moment, for a camera that follows it)
           float p[3], q[4];
           if (picture.UnitTransform(u.id, playTick + 1, p, q))

@@ -55,8 +55,9 @@ class StrategicIcons {
   // The kind a unit blueprint file describes ("/units/uel0201/uel0201_unit.bp"); read once.
   // Never null.
   const Kind* ForBlueprint(const std::string& blueprintPath);
-  // The symbol of that name without its detail, or -1 when the game's files have none.
-  int BlipIcon(const std::string& name);
+  // [pick] A radar blip's symbol, as the original's: one of strategicIcons.lua's four GenericIcons by the unit's
+  // Physics.MotionType ("": by its icon's name), else that name's own generic; -1 when the game's files have none.
+  int BlipIcon(const std::string& name, const std::string& motion);
   // Says what the kind of that blueprint file shows, in place of reading the file (the values the
   // simulation has). `icon` empty: none; `fadeIn`, `selectionX`, `selectionZ` 0: not said.
   void Define(const std::string& blueprintPath, const std::string& icon, int priority, float fadeIn, float selectionX, float selectionZ,

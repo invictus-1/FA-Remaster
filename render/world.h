@@ -265,11 +265,17 @@ class World {
   }
   // The place on the ground (or the water's surface) under a point of the screen.
   bool GroundAt(float x, float y, Vec3* hit) const;
-  // The unit under a point of the screen (the nearest one whose body or strategic icon is there);
-  // 0xffffffff: none.
+  // The unit under a point of the screen: UnitsAt's first within 10 pixels ([pick] the original's way, by the unit's box and
+  // nearest the point on the screen); 0xffffffff: none.
   uint32_t UnitAt(float x, float y) const;
   // The units whose middle lies in a rectangle of the screen.
   void UnitsIn(float x0, float y0, float x1, float y1, std::vector<uint32_t>* out) const;
+  // [pick] (ui request 43) Every unit under a point of the screen as the original's pick finds them (CWldSession::UpdateSelection
+  // 0x86f520): its selection box (the model's box, the top share its blueprint picks, scaled by its blueprint) shown within
+  // `tolerance` pixels of the point (the original's ui_SelectTolerance; FAF 10), or, far off, its icon's middle within that
+  // and 10 pixels; the nearest to the point on the screen first (by where the unit stands), each once. Units whose whole
+  // mesh is hidden are not found. The interface chooses among them by its own rules (carriers, parents, armies).
+  void UnitsAt(float x, float y, float tolerance, std::vector<uint32_t>* out) const;
 
   // --- what the player's interface shows in the world; each stays as set until it is changed ---
   // The units shown as selected (entity ids): a ring on the ground under each, and its strategic
@@ -967,11 +973,24 @@ class World {
     bool wreck = false, hot = false;
     bool unitWreck = false;  // [groundfix] a unit's wreck (the game's DefaultWreckage): it presses the plants under it
   };
-  struct Pickable {  // a unit of the frame, for UnitAt and UnitsIn
+  struct Pickable {  // a unit of the frame, for UnitAt, UnitsAt and UnitsIn
     uint32_t id;
     Vec3 centre;
     float radius;
+    // [pick] (ui request 43) its selection box, as the original's pick tests it: the model's box (world units, the unit's own
+    // axes) cut to its top share and scaled by its blueprint's Selection* (SelectionOf), at `at` turned by `turn`
+    bool boxed = false;
+    Vec3 at, lo, hi;
+    Quat turn;
   };
+  // [pick] a unit kind's selection numbers (its blueprint's): the share of its model's height from the top that is picked
+  // (SelectionMeshUseTopAmount; 1: all of it) and the box's scale along x and z (SelectionMeshScaleX / Z)
+  struct Selection {
+    bool known = false;
+    float top = 1, scaleX = 1, scaleZ = 1;
+  };
+  std::vector<Selection> selections_;
+  const Selection& SelectionOf(uint32_t blueprint, const std::string& id);
   gfx::Device* device_;
   const moho::Vfs* vfs_;
   int screenWidth_ = 1, screenHeight_ = 1;  // the picture's size on the screen (the scene's is the view's)
