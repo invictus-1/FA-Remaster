@@ -90,6 +90,10 @@ class NetGameLink {
 class UserState {
  public:
   struct Config {
+    // The game version this state's GetVersion() names ("1.5.<it>", ScriptState::gameVersion): a game's interface the
+    // session's own (Sim::gameVersion: a replay the one it was recorded with); 0, the front end's: the version new
+    // games are made with (NewGameVersion, 3840 since 2026-11-04; Chris: the menus show it too).
+    int gameVersion = 0;
     std::vector<std::string> hookDirs;  // the init file's `hook` table
     std::vector<std::string> protocols;  // the init file's `protocols` table (the schemes OpenURL may open)
     std::vector<std::string> modUids;   // active mods (their /hook folders apply to this state too)

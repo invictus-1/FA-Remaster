@@ -20,6 +20,7 @@
 #include "user/bindings.h"
 #include "user/replay_timeline.h"
 #include "sim/sim.h"
+#include "sim/replay.h"
 #include "sim/sim_snapshot.h"
 #include "sim/sim_view.h"
 
@@ -167,6 +168,7 @@ UserState::UserState(Vfs* vfs, Config config) : config_(std::move(config)) {
     g_liveStates.push_back(this);
   }
   state_ = std::make_unique<ScriptState>(ScriptState::Kind::User, vfs);
+  state_->gameVersion = config_.gameVersion > 0 ? config_.gameVersion : NewGameVersion();
   state_->SetHookDirs(config_.hookDirs);
   lua_State* L = state_->L();
   // The engine's incremental collector (third_party/lua/lgcinc.c), stepped once a frame (Frame): Lua 5.0's own

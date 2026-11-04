@@ -69,6 +69,7 @@ ForkThread(function()
         local u = GetUnitById(tostring(1048576 + i))  -- (the second army's ids)
         if u and u:GetBlueprint().BlueprintId == "uel0201" then enemy = u end
     end
+    check("the game's interface names the session's version (a new game: 3840)", GetVersion(), "1.5.3840")
     check("the factory, the tank, the radar and the enemy's tank are made",
         tostring(factory ~= nil) .. " " .. tostring(tank ~= nil) .. " " .. tostring(radar ~= nil) .. " " .. tostring(enemy ~= nil),
         "true true true true")
