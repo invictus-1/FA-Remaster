@@ -290,6 +290,14 @@ class WorldSource {
   virtual bool Project(const float world[3], float* x, float* y) = 0;
   virtual bool GroundAt(float x, float y, float world[3]) = 0;
   virtual uint32_t UnitAt(float x, float y) = 0;
+  // Every unit whose selection box shows within `tolerance` pixels of the point, nearest the mouse first (the
+  // renderer's WorldPicture::UnitsAt, render request 43: the original's UpdateSelection test 0x86fb3f). A source
+  // without it gives UnitAt's answer alone.
+  virtual void UnitsAt(float x, float y, float tolerance, std::vector<uint32_t>* out) {
+    (void)tolerance;
+    const uint32_t id = UnitAt(x, y);
+    if (id != 0xffffffffu) out->push_back(id);
+  }
   virtual void UnitsIn(float x0, float y0, float x1, float y1, std::vector<uint32_t>* out) = 0;
   // The life bars of the frame about to be shown (after Draw): for each unit with bars, the middle
   // of its bars and their lower edge, in the picture's pixels (where the original puts a unit's

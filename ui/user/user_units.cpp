@@ -3772,10 +3772,11 @@ bool BoxNearPoint(lua_State* L, const UserUnit* u, float sx, float sy, float tol
 // The unit the mouse points at, as the original chooses it (CWldSession::UpdateSelection 0x86f520, read
 // 2026-11-03): of the units in the volume under the mouse's square (ui_SelectTolerance pixels each way) that may be
 // pointed at (MayBePointedAt) and whose box meets that volume, the one whose place shows NEAREST THE MOUSE on the
-// screen (0x86fc99: the squared distance of its projected position; a unit before anything else). The picture's
-// own answer (`picked`: the nearest to the camera of the spheres about the models, render World::UnitAt) is one
-// candidate, kept only when its box comes near the point; `nearby` are the units whose middle the picture finds
-// within the square (taken as met: INFERRED). Before this the picture's answer was taken as it came: a naval
+// screen (0x86fc99: the squared distance of its projected position; a unit before anything else). On the main view
+// `nearby` is the renderer's WorldPicture::UnitsAt (render request 43, 2026-11-04: the meshes' selection boxes against
+// the mouse's square, as 0x86fb3f) and `picked` none; on another view of the split screen `picked` is the picture's
+// own answer, kept only when our box (the blueprint's, INFERRED) comes near the point, and `nearby` the units whose
+// middle the picture finds within the square (taken as met: INFERRED). Before 2026-11-03 the picture's answer was taken as it came: a naval
 // factory's sphere (its model goes deep under the water) took clicks far beside it, and the guard dummy on each
 // drone (bigger than the drone, unselectable) took the clicks on drones, so that no drone could be clicked and a
 // support commander's drone took the brackets meant for him. Then HoverOf as before. 0xffffffff: none.

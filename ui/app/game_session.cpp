@@ -481,6 +481,7 @@ struct GameSession::Picture : WorldSource {
     return true;
   }
   uint32_t UnitAt(float x, float y) override { return picture.UnitAt(x, y); }
+  void UnitsAt(float x, float y, float tolerance, std::vector<uint32_t>* out) override { picture.UnitsAt(x, y, tolerance, out); }
   void UnitsIn(float x0, float y0, float x1, float y1, std::vector<uint32_t>* out) override {
     picture.UnitsIn(x0, y0, x1, y1, out);
   }

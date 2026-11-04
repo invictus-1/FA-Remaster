@@ -962,10 +962,17 @@ class WorldView : public Control {
   // UpdateSelection 0x86f520). Not yet given to HoverOf.
   uint32_t SrcPointedAt(lua_State* L, WorldSource* s, float x, float y) const {
     const float tolerance = std::max(Looks().selectTolerance, 0.0f);
+    const auto project = [this, s](const float p[3], float* px, float* py) { return SrcProject(s, p, px, py); };
+    if (ViewNumber() == 0) {
+      // (the main view: the renderer's boxes, render request 43; the original's rules on its list, nearest the mouse)
+      std::vector<uint32_t> hits;
+      s->UnitsAt(x, y, tolerance, &hits);
+      return PointedUnit(L, 0xffffffffu, hits, x, y, tolerance, project);
+    }
+    // (another view of the split screen: the picture's pick and the units near it, our box test on them)
     std::vector<uint32_t> nearby;
     SrcUnitsIn(s, x - tolerance, y - tolerance, x + tolerance, y + tolerance, &nearby);
-    return PointedUnit(L, SrcUnitAt(s, x, y), nearby, x, y, tolerance,
-                       [this, s](const float p[3], float* px, float* py) { return SrcProject(s, p, px, py); });
+    return PointedUnit(L, SrcUnitAt(s, x, y), nearby, x, y, tolerance, project);
   }
   // The views of the picture (on the main view, this one): this one first, then every other world view of the first
   // head that shows (not a minimap, not hidden: the split screen's right one) in the order of the control tree, each a
