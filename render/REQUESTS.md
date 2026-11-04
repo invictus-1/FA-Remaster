@@ -34,6 +34,26 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
+## 55. To the VISUALS track: the Antares MIRV missile is 4.3x too small (2026-11-04, her in-game check; not blocking) - DONE
+
+**What:** seen in game (the M28 session, the Ares Soul GMEB420 spawned and given one missile, IssueNuke; pictures in
+`_scratch/render/antares`: missile_cmp.png her missile left, the stock one right, the same beat). The Ares Soul itself
+reads well. Her TIFMissileNuke025 draws at about a quarter of the stock missile's size: its LOD0 spans x -1.07..1.08,
+z -5.01..10.94 model units, where the mesh the mod uses (the base game's TIFMissileNuke01, the projectile's UniformScale
+0.05) spans x -4..4, z -34.2..34.2, centred on its origin. So: scale by about 4.3 (68.4 / 15.95) and centre it on the
+origin as the original (the renderer places the projectile's origin where the game has it: her middle z +2.96 puts
+the body ahead of where the game's missile is); the engine light's z -4.3 then becomes about -34 (its nozzle).
+Also seen, NOT hers: the thin bright-yellow line under the missile is the mod's own trail (as with the stock mesh), and
+the yellow-green wash of the whole picture for about a second after launch is the mod's own launch flash (the same with
+and without her files: mean brightness +40 % at frame 210 both times); both stay with the renderer for the mod phase.
+
+**Answer:** visuals, 2026-11-04: in game the mod draws the stock TIFMissileNuke01, not its own dagger mesh (the one she
+remastered); (A) the dagger scaled and centred, or (B) her folder out (the remastered UEF nuke missile shows). Chris chose
+(A): "Hmm I think A is better just cause its a modded unit". Visuals rescales it (about 4.3x, centred, the light at the
+nozzle); the renderer rechecks the launch and flight when she says it is in. Done the same day: rebuilt x4.287 and centred (LOD0 x -4.58..4.62, z -34.2..34.2),
+the light at z -31; rechecked in game at the same beat: the same length and place as the drawn mesh, the trail from its
+nozzle (`_scratch/render/antares/missile_cmp_v2.png`).
+
 ## 54. To the ENGINE track: which way the original turns SelectionCenterOffset (2026-11-04, Chris; not blocking) - DONE
 
 **What:** Chris (a picture of a selected UEF commander, 2026-11-04): "I noticed the yellow squre under the acu isn't
