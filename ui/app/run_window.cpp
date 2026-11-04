@@ -1,4 +1,5 @@
 // The host's live mode: the interface in a window, in real time, with the mouse and the keyboard.
+#include <map>
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
@@ -69,6 +70,41 @@ class PerfStats {
     std::snprintf(buf, sizeof buf, "memory %.0f MB   Lua: interface %.1f MB, simulation %.1f MB", memoryMB_,
                   interfaceL ? lua_getgccount(interfaceL) / 1024.0 : 0.0, Times().simLuaKB / 1024.0);
     lines.push_back(buf);
+    // Every layer's time (core/trace.h layer zones: the simulation, the renderer, the card, the interface, the
+    // loading; docs/profiling.md 7), over the last whole second: a heading per layer, its five largest names under it.
+    layerBuf_.clear();
+    trace::TakeLayers(layerBuf_);
+    for (const trace::LayerTime& t : layerBuf_) {
+      if (!t.count) continue;
+      LayerSum& a = layerSum_[t.name];
+      a.layer = t.layer, a.ms += t.ms, a.maxMs = std::max(a.maxMs, t.maxMs), a.count += t.count;
+    }
+    if (now - layerSecond_ >= std::chrono::seconds(1)) {
+      layerLines_.clear();
+      static const char* const kNames[] = {"simulation", "renderer", "card", "interface", "loading"};
+      for (int l = 0; l < 5; ++l) {
+        std::vector<std::pair<const char*, LayerSum>> mine;
+        for (const auto& [name, sum] : layerSum_)
+          if (static_cast<int>(sum.layer) == l) mine.push_back({name, sum});
+        if (mine.empty()) continue;
+        std::sort(mine.begin(), mine.end(), [](const auto& a, const auto& b) { return a.second.ms > b.second.ms; });
+        // (no sum per layer: its zones nest, a beat holds its stages)
+        std::snprintf(buf, sizeof buf, "%s (the last second; each, worst, how many):", kNames[l]);
+        layerLines_.push_back(buf);
+        for (size_t i = 0; i < mine.size() && i < 5; ++i) {
+          const LayerSum& a = mine[i].second;
+          std::snprintf(buf, sizeof buf, "    %s  %.2f ms each, worst %.2f  (%u)", mine[i].first, a.count ? a.ms / a.count : 0.0,
+                        a.maxMs, a.count);
+          layerLines_.push_back(buf);
+        }
+      }
+      layerSum_.clear();
+      layerSecond_ = now;
+      static const bool logLines = std::getenv("MOHO64UI_OVERLAY_LOG") != nullptr;  // (the lines in the log too: runs without a screen)
+      if (logLines)
+        for (const std::string& l : layerLines_) Logf(LogLevel::Info, "moho64ui: overlay: %s", l.c_str());
+    }
+    lines.insert(lines.end(), layerLines_.begin(), layerLines_.end());
     if (hooks.statsLines) hooks.statsLines(&lines);
     // A dark box at the left under the game's top panels, white text with a shadow.
     const char* font = "Arial";
@@ -94,6 +130,15 @@ class PerfStats {
   FrameTimes before_;
   int beats_ = 0;
   double simMs_ = 0, pictureMs_ = 0, soundMs_ = 0, memoryMB_ = 0;
+  struct LayerSum {
+    trace::Layer layer = trace::Layer::Ui;
+    double ms = 0, maxMs = 0;
+    uint32_t count = 0;
+  };
+  std::vector<trace::LayerTime> layerBuf_;
+  std::map<const char*, LayerSum> layerSum_;  // (by the name's pointer: one slot per name, core/trace.h)
+  std::vector<std::string> layerLines_;
+  Clock::time_point layerSecond_{};
 };
 
 // The screen of DisplayMode's list numbered `index` (0: the main one), as the window takes it; false when there is
@@ -208,6 +253,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
   auto lastShown = Clock::now();
   auto uiLast = last;  // the interface's last step (frames shown during a beat leave it out)
   PerfStats stats;     // (shown when the console's remaster_stats is on)
+  bool layersShown = false;  // (the layer zones' sums kept while the overlay shows: trace::SetLayers)
   // MOHO64UI_LONG_FRAMES (user_state.h): this frame's parts, for the log of a long one.
   LongFrameLog& longFrames = LongFrames();
   longFrames.notes.clear();  // (what ran before the window: not a frame's)
@@ -231,14 +277,14 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     const bool busy = hooks.busy && hooks.busy();
     // (Low Latency: the wait for the frame's time comes before the input is read, so that what is read is fresh.)
     {
-      MOHO_ZONE("ui: wait for the frame's time");
+      MOHO_LAYER_ZONE(Ui, "ui: wait for the frame's time");
       if (hooks.waitForFrame) hooks.waitForFrame();
     }
     parts.wait = msSince(loopTop);
     const auto pumpAt = Clock::now();
     bool pumped = true;
     {
-      MOHO_ZONE("ui: input");
+      MOHO_LAYER_ZONE(Ui, "ui: input");
       pumped = busy || window.Pump();
     }
     if (!pumped) break;
@@ -251,7 +297,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
         last = now;
         if (hooks.clock) hooks.clock(dt > 0.25 ? 0.25 : dt);  // (the picture's moment moves on)
         const auto tp = Clock::now();
-        MOHO_ZONE("ui: present (a beat running: the world only)");
+        MOHO_LAYER_ZONE(Ui, "ui: present (a beat running: the world only)");
         hooks.present(*target, IntRect{});
         const double shown = std::chrono::duration<double>(Clock::now() - tp).count();
         presentSeconds += shown, drawSeconds += shown;
@@ -298,7 +344,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
       current().ui().edgeScroll = window.fullScreen;  // the screen's edge moves the view (where the mouse stops at it)
       window.LockMouse(LockCursor().on);       // the player's "Lock Fullscreen Cursor To Window"
       {
-        MOHO_ZONE("ui: the interface's step (scripts, the beat's sync)");
+        MOHO_LAYER_ZONE(Ui, "ui: the interface's step (scripts, the beat's sync)");
         current().Frame(uiDt > 0.25 ? 0.25 : uiDt);  // a long stall (the window being dragged) is not replayed as one huge step
       }
       frameSeconds += std::chrono::duration<double>(Clock::now() - now).count();
@@ -309,7 +355,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
       UserState& user = current();
       IntRect changed;
       {
-      MOHO_ZONE("ui: drawing the interface");
+      MOHO_LAYER_ZONE(Ui, "ui: drawing the interface");
       if (incremental) {
         recorder.Begin(target->Width(), target->Height());
         user.ui().Render(user.L(), recorder, 0);
@@ -343,8 +389,9 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
       const auto te = Clock::now();
       target->ResetTouched();
       {
-        MOHO_ZONE("ui: the host's frame (the game's picture, beats, sounds)");
+        MOHO_LAYER_ZONE(Ui, "ui: the host's frame (the game's picture, beats, sounds)");
         if (eachFrame) eachFrame(dt > 0.25 ? 0.25 : dt, *target);
+        if (Overlay().on != layersShown) layersShown = Overlay().on, trace::SetLayers(layersShown);  // (the overlay's layer times)
         if (Overlay().on) stats.Draw(*target, hooks, current().L());  // (eachFrame may have replaced the state shown)
       }
       changed = changed.Union(target->Touched());
@@ -353,7 +400,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
       renderSeconds += std::chrono::duration<double>(Clock::now() - t0).count();
       const auto tp = Clock::now();
       {
-        MOHO_ZONE("ui: present (the world, the screen's wait)");
+        MOHO_LAYER_ZONE(Ui, "ui: present (the world, the screen's wait)");
         if (direct) hooks.present(*target, changed);  // (the world under it and the screen's wait are the renderer's)
         else window.Present(*target);
       }
