@@ -478,6 +478,7 @@ struct ArmyIndex {
   struct Point {
     float x = 0, z = 0, mass = 0;
     bool structure = false;
+    bool unknown = false;  // (2026-11-04) a contact of unknown type (radar, sonar, a jammer's blip): where, not what
   };
   std::vector<std::vector<Point>> enemyPts;  // [zone]
   // AIZoneEstimate's results since this build (2026-11-03, perf: our AI asked the same zone's estimate several times a
@@ -545,7 +546,7 @@ void BuildIndex(Sim& sim, ArmyIndex& ix) {
     ix.forces[static_cast<size_t>(z - 1) * kSides + side][r->entity] += weight * hf * hf;  // (hf = sqrt(health share))
     if (side == kEnemy && owner >= 0 && owner < static_cast<int>(ix.enemyOf.size()))
       ix.enemyOf[owner][r->entity] += weight * hf * hf;
-    if (side == kEnemy) ix.enemyPts[static_cast<size_t>(z - 1)].push_back({p.x, p.z, r->mass * weight, r->move == kMoveStatic});
+    if (side == kEnemy) ix.enemyPts[static_cast<size_t>(z - 1)].push_back({p.x, p.z, r->mass * weight, r->move == kMoveStatic, false});
     Cell& c = ix.At(z - 1, side, r->move);
     const float k = hf * r->fix * weight;
     c.count += weight;
@@ -573,6 +574,9 @@ void BuildIndex(Sim& sim, ArmyIndex& ix) {
     c.count += 1;
     c.unknown += 1;
     ++ix.unknown;
+    // (2026-11-04, fog: where the contact is, for AIZoneTargets - the defence went to the zone's centre with one unit
+    // while artillery seen only on radar shelled our extractors 30 world units out)
+    if (side == kEnemy) ix.enemyPts[static_cast<size_t>(z - 1)].push_back({p.x, p.z, 0, false, true});
   };
   for (Unit* u : sim.units()) {  // (id order)
     if (u->dead || !u->army) continue;
@@ -1172,8 +1176,9 @@ int l_AIZoneForces(lua_State* L) {
   return 1;
 }
 
-// Remastered.AIZoneTargets(army, zone) -> {{x, z, mass, structure}, ...}: the enemy units the army knows in the zone
-// (as the index counts them: held blips of units it has seen, then its memory; contacts of unknown type left out),
+// Remastered.AIZoneTargets(army, zone) -> {{x, z, mass, structure [, unknown]}, ...}: the enemy units the army knows in
+// the zone (as the index counts them: held blips of units it has seen, then its memory; since 2026-11-04 the contacts of
+// unknown type too, with mass 0 and unknown = true, in the order the index met them),
 // in the index's order. Where an attack aims (2026-11-03, Chris's big test: an attack-move to the zone's centre left
 // the army standing there while the enemy's structures stood beyond its weapons' reach).
 int l_AIZoneTargets(lua_State* L) {
@@ -1191,6 +1196,11 @@ int l_AIZoneTargets(lua_State* L) {
     lua_pushstring(L, "structure");
     lua_pushboolean(L, pts[i].structure ? 1 : 0);
     lua_rawset(L, -3);
+    if (pts[i].unknown) {
+      lua_pushstring(L, "unknown");
+      lua_pushboolean(L, 1);
+      lua_rawset(L, -3);
+    }
     lua_rawseti(L, -2, static_cast<int>(i + 1));
   }
   return 1;

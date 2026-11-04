@@ -238,6 +238,38 @@ void DropStorage(Unit* u) {
   u->storageOn = false;
 }
 
+// Parallel order's phase D (step 4.5): the unit's addition to its army's income / storage kept on the unit, summed
+// into the army after the phase in creation order (Sim::SumUnitEconomy); else straight into the army, as before.
+void NoteEconAdd(Sim& sim, Unit* u) {
+  if (u->econAddTick == sim.tick()) return;
+  u->econAddTick = sim.tick();
+  u->econAdd[0] = u->econAdd[1] = 0;
+  u->econStorageAdd[0] = u->econStorageAdd[1] = 0;
+  sim.econAdders_.push_back(u);
+}
+void ArmyStorage(Sim& sim, Unit* u, int sign, const float amount[2]) {
+  if (!u->army) return;
+  if (!sim.DeferringScripts()) return u->army->econ.ChangeStorage(sign, amount);
+  NoteEconAdd(sim, u);
+  for (int i = 0; i < 2; ++i) u->econStorageAdd[i] += static_cast<int64_t>(sign) * static_cast<int64_t>(amount[i]);
+}
+
+// An economy event's script callback (callback(unit, progress)), as EconomyEventTick makes it.
+void EconomyEventCallback(Sim& sim, EconomyEvent* ev, Unit* u, float progress) {
+  lua_State* L = sim.L();
+  if (ev->callbackRef == LUA_NOREF) return;
+  int top = lua_gettop(L);
+  lua_rawgeti(L, LUA_REGISTRYINDEX, ev->callbackRef);
+  if (lua_isfunction(L, -1)) {
+    lua_pushcfunction(L, ScriptTraceback);
+    lua_insert(L, -2);
+    PushObject(L, u);
+    lua_pushnumber(L, progress);
+    if (lua_pcall(L, 2, 0, top + 1) != 0) LogScriptError(lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
+  }
+  lua_settop(L, top);
+}
+
 // CEconomyEvent tick (0x775270): the whole per-tick amount or nothing.
 void EconomyEventTick(Sim& sim, lua_State* L, EconomyEvent* ev) {
   Unit* u = ev->unit;
@@ -253,7 +285,10 @@ void EconomyEventTick(Sim& sim, lua_State* L, EconomyEvent* ev) {
   u->consumedTick[0] += got[0];
   u->consumedTick[1] += got[1];
   --ev->ticksLeft;
-  if (ev->callbackRef != LUA_NOREF) {
+  if (ev->callbackRef != LUA_NOREF && sim.DeferringScripts()) {  // (parallel order's phase D: in the commit, step 4.5)
+    const float progress = 1.0f - static_cast<float>(ev->ticksLeft) / static_cast<float>(ev->ticksTotal);
+    sim.DeferAction([&sim, ev, u, progress] { EconomyEventCallback(sim, ev, u, progress); });
+  } else if (ev->callbackRef != LUA_NOREF) {
     int top = lua_gettop(L);
     lua_rawgeti(L, LUA_REGISTRYINDEX, ev->callbackRef);
     if (lua_isfunction(L, -1)) {
@@ -458,7 +493,10 @@ float Materialize(Sim& sim, lua_State* L, Unit* u, float delta) {
 
 void UnitEconomyTick(Sim& sim, Unit* u) {
   lua_State* L = sim.L();
-  SiloTick(sim, u);
+  // (parallel order's phase D: the silo's step reads its build costs from the scripts and calls them, so it runs in
+  // the phase's commit, in the turns' order, step 4.5; its requests are granted at the next share-out either way)
+  if (sim.DeferringScripts() && (u->silo || u->autoMode)) sim.DeferAction([&sim, u] { SiloTick(sim, u); });
+  else SiloTick(sim, u);
   for (size_t i = 0; i < u->econEvents.size(); ++i) EconomyEventTick(sim, L, u->econEvents[i]);
   // regeneration, or decay of an abandoned construction
   if (!u->beingBuilt) {
@@ -490,20 +528,27 @@ void UnitEconomyTick(Sim& sim, Unit* u) {
     u->consumedTick[1] += took[1];
   }
   if (u->beingBuilt || u->dead || !u->productionActive) {
-    DropStorage(u);
+    if (u->storageOn) {
+      ArmyStorage(sim, u, -1, u->storageCounted);
+      u->storageOn = false;
+    }
     return;
   }
   const float* st = u->bpData->storage;
   if (st[0] != 0.0f || st[1] != 0.0f) {
     if (!u->storageOn && u->army) {
-      u->army->econ.ChangeStorage(+1, st);
+      ArmyStorage(sim, u, +1, st);
       u->storageCounted[0] = st[0];
       u->storageCounted[1] = st[1];
       u->storageOn = true;
     }
   }
   float add[2] = {u->production[kEnergy] * prodMult * 0.1f, u->production[kMass] * prodMult * 0.1f};
-  if (u->army) {
+  if (u->army && sim.DeferringScripts()) {  // (parallel order: summed after the phase, Sim::SumUnitEconomy)
+    NoteEconAdd(sim, u);
+    u->econAdd[0] += add[0];
+    u->econAdd[1] += add[1];
+  } else if (u->army) {
     for (int i = 0; i < 2; ++i) {
       u->army->econ.income[i] += add[i];
       u->army->econ.incomeTrend[i] += add[i];

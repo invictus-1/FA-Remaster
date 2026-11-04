@@ -34,16 +34,23 @@ local kAcuRetreat = 0.8                       -- the commander's health share un
 local kAcuBack = 0.95                         -- ... and the share at which it goes back to work
 local kAcuRepairers = 3                       -- engineers that repair a hurt commander
 -- (2026-11-03, ExperimentalJob) from: minutes; every: minutes between more; income: mass a second at least; stored:
--- the mass bar share that counts as piling up; land: the land experimentals by blueprint suffix (the faction's prefix)
--- pending: ticks an order counts as under way before its experimental starts (the engineer's walk)
-local kExp = { from = 14, every = 6, income = 50, stored = 0.3, pending = 900, land = { 'l0401', 'l0402' } }
+-- the mass bar share that counts as piling up; pending: ticks an order counts as under way before its experimental
+-- starts (the engineer's walk)
+-- (2026-11-04, item 1 of the coordinator's round: the mass sinks) value: an experimental is built instead of units
+-- when its build value is at least this share of the best T3 unit's (else only from piling mass or at the hard cap);
+-- horizon: the base's estimate (world units of travel) that must let us hold it while one is built; seconds: it costs
+-- at most this many seconds of the income now
+local kExp = { from = 14, every = 6, income = 50, stored = 0.3, pending = 900, value = 0.5, horizon = 400, seconds = 300 }
 local kAcuDanger = 80                         -- world units: enemies this near a hurt commander are what it backs away from
 -- (2026-11-03, RemasterCommander) fight: known enemy land units this near it (least: at least this much mass of them,
 -- not a lone scout) are fought when the estimate there is at least start (keep: it fights on while at least this) and
 -- its health at least kAcuRetreat to start (hard: under this it falls back whatever the estimate); away: world units
 -- from the start beyond which it does not fight (it defends its base, it does not hunt); naval: enemy ships' rating
 -- against ground that reaches its zone sends it inland; horizon: the estimate's travel horizon
-local kAcu = { fight = 30, least = 40, start = 0.6, keep = 0.45, hard = 0.7, away = 80, naval = 4, horizon = 150 }
+local kAcu = { fight = 30, least = 40, start = 0.6, keep = 0.45, hard = 0.7, away = 80, naval = 4, horizon = 150,
+    home = 60, homeFrom = 10 }
+-- (2026-11-04, item 3) home: world units from the start the commander's jobs keep within from minute homeFrom (see
+-- CommanderJobSafe)
 local kBaseRadius = 150                       -- world units from the start: a builder this near takes base jobs
 local kArmyFrom = 5                           -- the standing army's floor starts at this minute (phase 7: before it the
                                               -- factories make engineers for the expansion, unless the enemy's army is seen)
@@ -73,6 +80,10 @@ local kNavalAirShare = 1.5                    -- anti-ship aircraft kept per mas
 local kNavalAirFactory = 1500                 -- one air factory more per this much enemy ship mass there
 local kNavalPendingTicks = 600                -- a naval factory ordered counts as under way this long before it starts
 local kMassNear = 120                         -- world units: a free mass point this near an engineer comes before reclaim
+-- (2026-11-04, item 1: the mass sinks) the T1 land factories' upgrade to support factories once an HQ stands: from:
+-- minutes; income: mass a second per extra upgrade at once (1 + ...); share: at most this share of the land factories
+-- upgrading at once; stored: the mass bar share from which they go while the army is short
+local kSupport = { from = 10, income = 80, share = 0.25, stored = 0.5 }
 
 local fixesApplied = false  -- (one game per sim state: the module lives with the state)
 
@@ -845,7 +856,7 @@ AIBrain = Class(StandardBrain) {
         -- (phase 7: the commander reclaims only around itself at the base, never in a far field; the duels' commanders
         -- died 180-270 world units from the start, out reclaiming)
         if self:GetEconomyStoredRatio('MASS') < 0.5 and
-            ((not isCommander and self:ReclaimField(u)) or (self:AtBase(u, true) and self:Reclaim(u))) then
+            ((not isCommander and self:ReclaimField(u)) or (self:AtBase(u, true) and self:AcuHome(u) and self:Reclaim(u))) then
             return
         end
         if landBp and energyOk and ctx.landFactories < wantFactories and storedMass > 0.2 and
@@ -882,6 +893,18 @@ AIBrain = Class(StandardBrain) {
         elseif not target and factories[1] then
             ctx.assistNext = math.mod(ctx.assistNext, table.getn(factories)) + 1
             target = factories[ctx.assistNext]
+        end
+        -- (2026-11-04, item 3: the commander assists nothing past kAcu.home from the start from minute kAcu.homeFrom -
+        -- an upgrading extractor could stand 300 out - but the factories in turn, CommanderJobSafe's rule)
+        if target and isCommander then
+            local tp = target:GetPosition()
+            if not self:AcuHome(u, tp[1], tp[3]) then
+                target = nil
+                for _, f in ipairs(factories) do
+                    local fp = f:GetPosition()
+                    if not target and self:AcuHome(u, fp[1], fp[3]) then target = f end
+                end
+            end
         end
         if target then
             IssueGuard({ u }, target)
@@ -962,7 +985,7 @@ AIBrain = Class(StandardBrain) {
             for _, z in ipairs(zones) do
                 if Remastered.AIZoneForces(R.army, z).enemy.commanders > 0 then foeAcu = true end
                 for _, t in ipairs(Remastered.AIZoneTargets(R.army, z)) do
-                    if not t.structure then
+                    if not t.structure and not t.unknown then  -- (2026-11-04: contacts of unknown type are not fought)
                         local dx, dz = t.x - q[1], t.z - q[3]
                         if dx * dx + dz * dz <= kAcu.fight * kAcu.fight then
                             fx, fz, fn, fm = fx + t.x, fz + t.z, fn + 1, fm + t.mass
@@ -1060,38 +1083,138 @@ AIBrain = Class(StandardBrain) {
     -- ties). (The first form also started one whenever the land army was at its soft cap: with the bar empty there was
     -- no mass for it, and an order every step sent a new engineer to a new site, the 4v4's army 5 eight in 2 minutes.)
     -- The base's builders assist it first (the assists above). Logs 'aiexp <army> <tick> <id> value <v>'.
+    -- (2026-11-04, item 1: the mass sinks) In the 4v4 of all our AI (Chris's session, 35 minutes) the mass bar sat at
+    -- 0-4% in every army from minute 6 on: there is no piling mass to wait for, the income goes into units, and two
+    -- experimentals were ordered in 35 minutes. An experimental is army too: it is bought instead of units when it is
+    -- the better buy and the economy carries it (decision 14, risk against reward), beside the piling mass of before:
+    -- - CARRIED: it costs at most kExp.seconds of the mass income now (a first form waited for the army to be past
+    --   what the economy keeps - the army kept grows with the income, so it never was in the 4v4);
+    -- - SAFE: the base is not under attack (no recall running) and the estimate at the start zone, with all the enemy
+    --   that can come within kExp.horizon, lets us hold it (K.investSafe) or nothing of the enemy can come;
+    -- - WORTH IT: the experimental's build value against the enemy's known army is at least kExp.value of the best T3
+    --   unit's (Choices().Counter): with piling mass (kExp.stored) or the land army at its hard cap, the units are no
+    --   alternative and the best experimental goes whatever its value.
+    -- The candidates are every mobile land experimental this engineer can build (Unit:CanBuild), mods' too, by build
+    -- value (blueprint id on ties). While it is under construction the T1 land factories make no new army units (their
+    -- T1 spam had taken the income), so the mass reaches it (RemasterEconomy).
+    -- Each decision logs 'aiexp <army> <tick> <id> value <v> ...' or, at most once a minute, 'aiexp ... hold | why'.
+    ExperimentalCandidates = function(self, u)
+        local R = self.Remaster
+        R.expCandidates = R.expCandidates or {}
+        local key = u:GetUnitId()
+        if not R.expCandidates[key] then
+            local ids = {}
+            for id, bp in pairs(__blueprints) do  -- (collected, then sorted: the order of pairs does not matter)
+                if type(id) == 'string' and bp.BlueprintId == id and bp.Categories and bp.Economy and
+                    (bp.Economy.BuildCostMass or 0) > 0 then
+                    local c = {}
+                    for _, k in ipairs(bp.Categories) do c[k] = true end
+                    if c.EXPERIMENTAL and c.MOBILE and c.LAND and not c.AIR and u:CanBuild(id) then table.insert(ids, id) end
+                end
+            end
+            table.sort(ids)
+            R.expCandidates[key] = ids
+        end
+        return R.expCandidates[key]
+    end,
+
     ExperimentalJob = function(self, u, ctx)
         local R = self.Remaster
         if ctx.expBuilding or ctx.expGiven or ctx.minutes < kExp.from or not self:AtBase(u) then return false end
         if R.expOrdered and R.tick - R.expOrdered < kExp.pending then return false end
         if ctx.experimentals >= 1 + math.floor((ctx.minutes - kExp.from) / kExp.every) then return false end
-        if self:GetEconomyIncome('MASS') * 10 < kExp.income then return false end
-        if self:GetEconomyStoredRatio('MASS') < kExp.stored then return false end
-        local enemy = Remastered.AIEnemyMix(R.army)
-        local best, bestV
-        for _, sfx in ipairs(kExp.land) do
-            local id = self:Bp(sfx)
-            local bp = __blueprints[id]
-            if bp and bp.Economy and (bp.Economy.BuildCostMass or 0) > 0 then
-                local v = enemy[1] and Remastered.AIBuildValue(id, enemy) or 1
-                if not bestV or v > bestV or (v == bestV and id < best) then best, bestV = id, v end
+        local income = self:GetEconomyIncome('MASS') * 10
+        if income < kExp.income then return false end
+        local function Hold(why)
+            if R.tick - (R.expHoldLogged or -10000) >= 600 then
+                LOG(string.format('aiexp %d %d hold | %s (income %.0f, mass bar %.2f, land units %d)', R.army, R.tick, why,
+                    income, self:GetEconomyStoredRatio('MASS'), R.armyCount or 0))
+                R.expHoldLogged = R.tick
+            end
+            return false
+        end
+        local piling = self:GetEconomyStoredRatio('MASS') >= kExp.stored
+        local capped = (R.armyCount or 0) >= (R.landHard or 1e9)
+        if not piling and not capped then
+            if R.recallUntil and R.tick < R.recallUntil then return Hold('the base is under attack') end
+            local K = import("/lua/remastered/ai/personality.lua").Knobs(self)
+            local margin, _, _, _, _, theirs = Remastered.AIZoneEstimate(R.army, R.startZone, kExp.horizon, false, true)
+            if theirs > 0 and margin < K.investSafe then
+                return Hold(string.format('the base would not hold against what can come (%.2f, %.0f mass)', margin, theirs))
             end
         end
-        if not best or not self:BuildAt(u, '!' .. best, 16) then return false end
+        local enemy = Remastered.AIEnemyMix(R.army)
+        local best, bestV
+        for _, id in ipairs(self:ExperimentalCandidates(u)) do
+            local v = enemy[1] and Remastered.AIBuildValue(id, enemy) or 1
+            if not bestV or v > bestV then best, bestV = id, v end
+        end
+        if not best then return false end
+        local cost = __blueprints[best].Economy.BuildCostMass
+        if not piling and not capped and cost > kExp.seconds * income then
+            return Hold(string.format('%s costs %.0f, more than %d s of the income', best, cost, kExp.seconds))
+        end
+        local unitV = enemy[1] and (Choices().Counter(self, 3).groundValue or 0) or 0
+        if not piling and not capped and bestV < kExp.value * unitV then
+            return Hold(string.format('%s value %.2f, under %.1f x the best T3 unit\'s %.2f', best, bestV, kExp.value, unitV))
+        end
+        if not self:BuildAt(u, '!' .. best, 16) then return false end
         ctx.expGiven = true
         R.expOrdered = R.tick
-        LOG(string.format('aiexp %d %d %s value %.2f (income %.0f, mass bar %.2f, land units %d)', R.army, R.tick, best,
-            bestV or 0, self:GetEconomyIncome('MASS') * 10, self:GetEconomyStoredRatio('MASS'), R.armyCount or 0))
+        LOG(string.format('aiexp %d %d %s value %.2f against T3 units %.2f (%s; income %.0f, mass bar %.2f, land units %d)',
+            R.army, R.tick, best, bestV or 0, unitV, piling and 'mass piles up' or capped and 'the land army at its cap' or
+            'the better buy, carried by the income', income, self:GetEconomyStoredRatio('MASS'), R.armyCount or 0))
         return true
     end,
 
     -- (2026-11-03) the commander's new job, when enemy ships reach its place (its first order's point; an order on an
     -- entity has none and is kept): dropped, and it reclaims around itself instead. Chris's big test: the commander
     -- walked out into the reach of ~10 battleships.
+    -- (2026-11-04, item 3) false for the commander past kAcu.home from the start from minute kAcu.homeFrom; true else
+    AcuHome = function(self, u, x, z)
+        if not EntityCategoryContains(categories.COMMAND, u) or GetGameTick() < kAcu.homeFrom * 600 then return true end
+        local R = self.Remaster
+        if not x then
+            local q = u:GetPosition()
+            x, z = q[1], q[3]
+        end
+        local dx, dz = x - R.startX, z - R.startZ
+        return dx * dx + dz * dz <= kAcu.home * kAcu.home
+    end,
+
+    -- (2026-11-04, item 3: where we lose against M28.) Every judge game lost is lost when our commander dies
+    -- (demoralization), and the kill probe of the judge set (base, 8 M28 games) found it killed 85-165 world units from
+    -- the start in 9 of 12 deaths - by M28's T2 gunships (5), its T2 bots (4) - out at a base job or its reclaim (base
+    -- jobs went to it anywhere within 150-200 of the start), falling back hurt across that distance under fire. From
+    -- minute kAcu.homeFrom a new job whose place is farther than kAcu.home from the start is not taken: the commander
+    -- assists the nearest factory within that radius instead (looked at again after kAssistTicks), else it walks home.
     CommanderJobSafe = function(self, commander)
         local R = self.Remaster
         local e = (commander:GetCommandQueue() or {})[1]
         if not e or not e.x or (e.x == 0 and e.z == 0) then return end
+        if not self:AcuHome(commander, e.x, e.z) then
+            IssueClearCommands({ commander })
+            if R.tick - (R.acuFarLogged or -1000) >= 300 then
+                LOG(string.format('aiacu %d %d job refused: its place is %.0f from the start (home %d)', R.army, R.tick,
+                    math.sqrt((e.x - R.startX) * (e.x - R.startX) + (e.z - R.startZ) * (e.z - R.startZ)), kAcu.home))
+                R.acuFarLogged = R.tick
+            end
+            local best, bd
+            for _, f in ipairs(self:GetListOfUnits(categories.FACTORY * categories.STRUCTURE, false)) do
+                if Alive(f) then
+                    local q = f:GetPosition()
+                    local d = (q[1] - R.startX) * (q[1] - R.startX) + (q[3] - R.startZ) * (q[3] - R.startZ)
+                    if d <= kAcu.home * kAcu.home and (not bd or d < bd) then best, bd = f, d end
+                end
+            end
+            if best then
+                IssueGuard({ commander }, best)
+                R.assist[commander:GetEntityId()] = R.tick
+            else
+                IssueMove({ commander }, Pos(R.startX, R.startZ))
+            end
+            return
+        end
         local z = Remastered.AIZoneAt(e.x, e.z, 'land')
         if z <= 0 then return end
         local t = Remastered.AIZoneThreat(R.army, z, 'ground', 0, 'naval')
@@ -1348,7 +1471,10 @@ AIBrain = Class(StandardBrain) {
                     R.scoutFirst = nil
                     scouts = 1
                 elseif (not short or landIndex * 2 <= ctx.landFactories + 1) and
-                    not ((R.armyCount or 0) >= R.landHard or ((R.armyCount or 0) >= R.landSoft and tech == 1)) then
+                    not ((R.armyCount or 0) >= R.landHard or ((R.armyCount or 0) >= R.landSoft and tech == 1)) and
+                    not (tech == 1 and ctx.expBuilding) then
+                    -- (2026-11-04, item 1: while an experimental is under construction the T1 factories make no new
+                    -- units, so the income reaches the experimental: ExperimentalJob)
                     -- (2026-11-03: not past the soft cap with a T1 factory, nor past the hard cap: the unit spam)
                     IssueBuildFactory({ f }, Choices().LandPick(self, tech), 1)
                 end
@@ -1432,11 +1558,14 @@ AIBrain = Class(StandardBrain) {
         -- (phase 13: land factories upgrade only to make the next HQ, one at a time; the tier then grows by support
         -- factories (LandFactoryBp). A land factory upgrade under way blocks the next; a new one waits for
         -- kUpgradeEnergy of the energy bar unless on a tech rush. maxUpgrades no longer applies to land factories.)
+        self:RemasterSupportUpgrades(factories, ctx, income)
         if ctx.landFactories < (rush and 2 or 3) then return end
         if not rush and self:GetEconomyStoredRatio('ENERGY') < kUpgradeEnergy then return end
         local hq = ctx.landHQ or 0
         for _, u in ipairs(ctx.upgrading) do
-            if EntityCategoryContains(categories.LAND * categories.FACTORY, u) then return end
+            -- (2026-11-04: a support factory's upgrade does not hold the next HQ's)
+            if EntityCategoryContains(categories.LAND * categories.FACTORY, u) and
+                not (self.Remaster.supportUp and self.Remaster.supportUp[u:GetEntityId()]) then return end
         end
         for _, f in ipairs(factories) do
             if f:IsIdleState() and EntityCategoryContains(categories.LAND, f) and
@@ -1449,6 +1578,59 @@ AIBrain = Class(StandardBrain) {
                     IssueUpgrade({ f }, self:Bp('b0301'))
                     ctx.upgradeIssued[f:GetEntityId()] = true
                     return
+                end
+            end
+        end
+    end,
+
+    -- Support factory upgrades (2026-11-04, item 1: the mass sinks). With a T2 land HQ, an idle T1 land factory goes to
+    -- the faction's T2 support factory (zXb9501: 340 mass more, a minute at the factory's own build rate), and with a
+    -- T3 HQ an idle T2 support factory to the T3 one (zXb9601). Chris's 4v4 of all our AI: army 7 had 17-18 T1 land
+    -- factories beside its T3 HQ from minute 20 to 35 and no support factory - its land army stayed T1 while the
+    -- others' was T2-T3; the M28 duels had 16-17 T1 factories and one T3 HQ at minute 20. The support factories
+    -- otherwise came only from the few T2+ engineers (LandFactoryBp). At most 1 + one per kSupport.income mass a second
+    -- of income at once, and kSupport.share of the land factories, from minute kSupport.from, with the energy for it
+    -- (kUpgradeEnergy), and while the army is short only with mass piling up (kSupport.stored): an upgrading factory
+    -- makes nothing for its minute. Logs 'aiup <army> <tick> <from> -> <to> (<n> at once)'.
+    RemasterSupportUpgrades = function(self, factories, ctx, income)
+        local R = self.Remaster
+        local hq = ctx.landHQ or 0
+        if hq < 2 or ctx.minutes < kSupport.from then return end
+        if R.armyShort and self:GetEconomyStoredRatio('MASS') < kSupport.stored then return end
+        if self:GetEconomyStoredRatio('ENERGY') < kUpgradeEnergy then return end
+        local letter = string.sub(R.prefix, 2, 2)
+        local t2, t3 = 'z' .. letter .. 'b9501', 'z' .. letter .. 'b9601'
+        local t1 = self:Bp('b0101')
+        local function Valid(id)
+            local bp = __blueprints[id]
+            return bp and bp.Economy and (bp.Economy.BuildCostMass or 0) > 0
+        end
+        -- the support upgrades under way (an order counts from the step it was given)
+        local upgrading = {}
+        for _, u in ipairs(ctx.upgrading) do upgrading[u:GetEntityId()] = true end
+        local keep, running = {}, 0
+        for _, f in ipairs(factories) do
+            local id = f:GetEntityId()
+            local t = R.supportUp and R.supportUp[id]
+            if t and (upgrading[id] or R.tick - t < 3 * kThink) then
+                keep[id] = t
+                running = running + 1
+            end
+        end
+        R.supportUp = keep
+        local most = math.min(1 + math.floor(income / kSupport.income), math.floor(kSupport.share * ctx.landFactories))
+        for _, f in ipairs(factories) do
+            if running >= most then return end
+            local id = f:GetEntityId()
+            if f:IsIdleState() and not ctx.upgradeIssued[id] then
+                local fid = f:GetUnitId()
+                local to = (fid == t1 and Valid(t2) and t2) or (fid == t2 and hq >= 3 and Valid(t3) and t3) or nil
+                if to then
+                    IssueUpgrade({ f }, to)
+                    ctx.upgradeIssued[id] = true
+                    R.supportUp[id] = R.tick
+                    running = running + 1
+                    LOG(string.format('aiup %d %d %s -> %s (%d at once, income %.0f)', R.army, R.tick, fid, to, running, income))
                 end
             end
         end

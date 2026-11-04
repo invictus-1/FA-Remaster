@@ -226,3 +226,27 @@ the duels showed. The duels are 1v1 on SETONS_R against FAF's adaptive AI and M2
     generators, then the four extractors right after; the rest of his wish holds: the base sites go nearest the start and the generators ring our first factory (adjacency), and
     only a few base structures are started at once. At minute 6 the structures stand 24-32 world units from the start
     on average (30-54 before), with the same income.
+
+27. **An empty mass bar is not a deficit; the dip is planned (refines 14; the coordinator's round of 2026-11-04).** In
+    the 4v4 of all our AI (Chris's session) the mass bar sat at 0-4% from minute 6 because every bit of income was
+    spent, and decision 14's "sustained deficit" rule read that as a stall: five of the eight armies stayed on T2
+    extractors from minute 15 to 35, the T3 upgrade held 200 times. Now one extractor upgrade at a time may go past the
+    budget and the empty bar when it pays back within 10 minutes and costs at most 2 minutes of income ("the risk is a
+    short mass dip, the reward a doubled mass income"), from minute 8. At minute 25 the eight armies made 1,317 mass a
+    second instead of 726, with 48 T3 extractors instead of 11.
+28. **An experimental is bought like any unit, by build value (refines 13 and Chris's big test).** It was built only
+    from piling mass, which an economy that spends everything never has. Now it is bought instead of units when its
+    build value against the enemy's known army is at least half the best T3 unit's and the income carries it (5
+    minutes of it), the base is safe, and the T1 factories pause while it is built; with piling mass or the army at its
+    cap, the best experimental goes whatever its value. Mod experimentals count. The T1 factories beside a T2 / T3 HQ
+    upgrade to support factories (one army kept 18 T1 factories beside its T3 HQ for 15 minutes).
+29. **What the radar shows is a place to look, not nothing (refines 17).** Under fog a contact of unknown type (a radar
+    blip of a unit never seen) counted in its zone with no mass and no place, so the defence sent one unit to the
+    zone's centre while M28's artillery shot our extractors from beyond their sight (the kill probe: 62% of our lost
+    mass in the first 15 minutes killed by units we did not see). Such contacts now have their place (the defence and
+    attacks aim at them when nothing else is known there) and count at the mean mass of the enemy's known land units.
+30. **The commander stays home from the mid-game (refines 21).** Every duel against M28 ends when our commander dies;
+    it died far from its base at a job or an assist, 85-165 world units out, to gunships and T2 bots. From minute 10
+    its work keeps within 60 world units of the start. The duels lasted about as long: it now dies inside its base
+    to gunships, or at its refuge from ships off the coast (the base zone they reach least, up to 200 out) - that
+    refuge is the next thing to fix; anti-air at the base alone did not change the gunships' toll.

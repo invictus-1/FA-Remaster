@@ -92,6 +92,44 @@ void PrefetchUnitArrays(const Unit* u) {
   }
   if (u->motion.bp) __builtin_prefetch(u->motion.bp, 0, 3);
 }
+// Parallel order's beat-start snapshot (docs/parallel-mode.md 3.3, step 4.4), before phase A: what one unit's turn
+// reads of ANOTHER unit, taken for every unit before any turn, so the reader sees the same whichever turn came first.
+// Each unit's collision shape is held where the beat began (Sim::HoldShape; a turn's own hold is then a no-op), which is
+// also the transform the others read (SeenPos); its layer, states, velocity, formation and an aircraft's body are copied
+// (Unit::snap*). And the guard formation a guarded unit makes in its turn (UpdateGuardFormation: the formation's
+// script, Lua) is made here, in the pass's order, from the same beat-start places its turn would have read.
+// MOHO64_PAR_ENTITY_PHASES=A1,C1,C2 (debug, a bisection of the pool's phases): only the named ones on the pool
+bool PhaseOnPool(const char* name) {
+  static const char* v = getenv("MOHO64_PAR_ENTITY_PHASES");
+  return !v || strstr(v, name) != nullptr;
+}
+
+void BeatStartSnapshot(Sim& sim, const std::vector<Unit*>& order) {
+  AirTiersReady(sim);  // (shared caches a turn would make at its first read: made here, step 4.6)
+  for (Unit* u : order) {
+    if (u->motion.bp) {
+      FootprintGrid(sim, *u->motion.bp);
+      if (!u->motion.bp->altFootprint.name.empty()) AltFootprintGrid(sim, *u->motion.bp);
+    }
+    sim.HoldShape(u);
+    u->snapLayer = u->layer;
+    u->snapStates = u->unitStates.Bits();
+    u->snapVelocity = UnitVelocity(u);
+    u->snapMotionVel = u->motion.vel;
+    u->snapForm = u->form;
+    if (u->motion.air) {
+      const QuatW& q = u->motion.air->body.q;
+      u->snapBodyQ[0] = q.w;
+      u->snapBodyQ[1] = q.x;
+      u->snapBodyQ[2] = q.y;
+      u->snapBodyQ[3] = q.z;
+      u->snapBodyL = u->motion.air->body.L;
+    }
+  }
+  for (Unit* u : order)
+    if (!u->parentId && !u->guarders.empty() && !u->guardForm) UpdateGuardFormation(sim, u);
+  sim.EnsureUnitGrid();
+}
 }  // namespace
 
 namespace {
@@ -1005,8 +1043,27 @@ float Sim::BpUniform(float base, float range) {
   uint32_t u = NextUInt32();
   return (dmath::MulU32(u, range - lo) * 0x1p-32f + lo) + base;
 }
+namespace {
+thread_local Sim::DeferSink* tl_deferSink = nullptr;  // (the worker's own list while a phase's turn runs on the pool)
+}
+
+void Sim::MergeDeferSinks() {
+  for (DeferSink& s : deferSinks_) {
+    for (DeferredCall& c : s.calls) deferred_.push_back(std::move(c));
+    s.calls.clear();
+  }
+}
+
 void Sim::DeferScriptCall(ScriptObject* obj, const char* method, std::vector<ScriptArg> args) {
   DeferredCall c;
+  if (DeferSink* s = tl_deferSink) {
+    c.key = (static_cast<uint64_t>(s->key) << 32) | s->seq++;
+    c.object = obj;
+    c.method = method;
+    c.args = std::move(args);
+    s->calls.push_back(std::move(c));
+    return;
+  }
   c.key = (static_cast<uint64_t>(deferKey_) << 32) | deferSeq_++;
   c.object = obj;
   c.method = method;
@@ -1016,9 +1073,30 @@ void Sim::DeferScriptCall(ScriptObject* obj, const char* method, std::vector<Scr
 
 void Sim::DeferAction(std::function<void()> action) {
   DeferredCall c;
+  if (DeferSink* s = tl_deferSink) {
+    c.key = (static_cast<uint64_t>(s->key) << 32) | s->seq++;
+    c.action = std::move(action);
+    s->calls.push_back(std::move(c));
+    return;
+  }
   c.key = (static_cast<uint64_t>(deferKey_) << 32) | deferSeq_++;
   c.action = std::move(action);
   deferred_.push_back(std::move(c));
+}
+
+void Sim::SumUnitEconomy() {
+  if (econAdders_.empty()) return;
+  std::sort(econAdders_.begin(), econAdders_.end(), [](const Unit* a, const Unit* b) { return a->entSeq < b->entSeq; });
+  for (Unit* u : econAdders_) {
+    if (!u->army || u->econAddTick != tick_) continue;
+    ArmyEconomy& e = u->army->econ;
+    for (int i = 0; i < 2; ++i) {
+      e.income[i] += u->econAdd[i];
+      e.incomeTrend[i] += u->econAdd[i];
+      e.maxStorage[i] += u->econStorageAdd[i];
+    }
+  }
+  econAdders_.clear();
 }
 
 void Sim::RunDeferredScriptCalls() {
@@ -1663,6 +1741,11 @@ void Sim::CollectorStep() {
 }
 
 void Sim::SignalEvent(const ScriptObject* o) {
+  // (parallel order's phases: the threads that wait on it are woken in the phase's commit, in key order; the run
+  // list they go to is the Lua threads' own, docs/parallel-mode.md 3.6)
+  if (deferring_) return DeferAction([this, o] {
+    if (threads_) threads_->Signal(o);
+  });
   if (threads_) threads_->Signal(o);
 }
 
@@ -2622,8 +2705,15 @@ void Sim::Tick() {
   coordsPending = true;
   // MOHO64_PAR_MOTION: the units' contact searches of this pass made ahead on the worker pool, each taken at its
   // unit's turn only if nothing it read has changed by then (core/speculate.h)
-  SurfaceContactsAhead(*this, motionOrder);
-  AimMuzzlesAhead(*this, motionOrder);  // MOHO64_PAR_AIM: the aim controllers' muzzles, the same way
+  // (parallel order with its phases on the pool, step 4.6: the phases are the work made ahead, and the speculation's
+  // bookkeeping at the turns is one thread's: none of it)
+  static const bool parEntityAhead = !(getenv("MOHO64_PAR_ENTITY") && !strcmp(getenv("MOHO64_PAR_ENTITY"), "0"));
+  const bool phasesOnPool = order == SimOrder::kParallel &&
+                            (workers().Check().mode != ParCheck::kOff || (parEntityAhead && workers().Threads() > 1 && !wtrap::On()));
+  if (!phasesOnPool) {
+    SurfaceContactsAhead(*this, motionOrder);
+    AimMuzzlesAhead(*this, motionOrder);  // MOHO64_PAR_AIM: the aim controllers' muzzles, the same way
+  }
   // The entity stage runs its tasks in creation order, units and collision beams alike, and a unit's task is its
   // whole beat (Unit::MotionTick 0x6a9010: motion, manipulators, regeneration, its economy). A collision beam is
   // made with its weapon, so it comes after its owner and before every unit made later: such a unit, killed by the
@@ -2929,41 +3019,108 @@ void Sim::Tick() {
     beamsBefore(0xffffffffu);  // the beams younger than every unit
     trapPhase.reset();
   } else {
-    // Parallel order (docs/parallel-mode.md 3.3, step 4.1): first the beams and the shells made before the pass, in
-    // creation order (their hits and the scripts they run are immediate, as in a serial stage); then the units' phases
-    // A (motion), C (pose and aim) and D (economy), each over every unit in the pass's order, each followed by its
-    // commit (B): the script calls the phase deferred, in the order of their keys (the turn, then the call in it).
+    // Parallel order (docs/parallel-mode.md 3.3, steps 4.1 and 4.4): first the beams and the shells made before the
+    // pass, in creation order (their hits and the scripts they run are immediate, as in a serial stage); then the
+    // snapshot of what one unit's turn reads of another (BeatStartSnapshot); then the units' phases A1 (the motion of
+    // every unit that hangs on nothing), A2 (the attached units, after their parents: they take the parent's NEW
+    // transform), C (pose and aim) and D (economy), each followed by its commit (B): the script calls the phase
+    // deferred, in the order of their keys (the turn's place in the pass, then the call in it). A1 and C read other
+    // units only through the snapshot and what no turn of theirs changes (the write trap's reads mode lists the
+    // rest: MOHO64_PAR_WRITETRAP=reads), so their turns may run in any order: with the pool's order check on
+    // (MOHO64_PAR_CHECK=shuffle / reverse) they run through it, shuffled or reversed.
     beamsBefore(0xffffffffu);
     projectilesBefore(0xffffffffu);
-    std::vector<Quat> prevOris;
-    std::vector<uint8_t> hows;
-    prevOris.reserve(motionOrder.size());
-    hows.reserve(motionOrder.size());
-    auto runPhase = [&](const char* name, auto&& item) {
+    BeatStartSnapshot(*this, motionOrder);
+    std::vector<Quat> prevOris(motionOrder.size());
+    std::vector<uint8_t> hows(motionOrder.size(), static_cast<uint8_t>(kTurnReordered));
+    std::vector<uint32_t> a1, a2;  // (indices into motionOrder)
+    for (size_t i = 0; i < motionOrder.size(); ++i) (motionOrder[i]->parentId ? a2 : a1).push_back(static_cast<uint32_t>(i));
+    const bool checked = workers().Check().mode != ParCheck::kOff;
+    // (step 4.6: A1, C1 and C on the worker pool with more than one thread; MOHO64_PAR_ENTITY=0 keeps them on the sim's
+    // thread, for a comparison. The write trap's bookkeeping is one turn at a time: with it on they stay there too.)
+    static const bool parEntity = !(getenv("MOHO64_PAR_ENTITY") && !strcmp(getenv("MOHO64_PAR_ENTITY"), "0"));
+    const bool onPool = checked || (parEntity && workers().Threads() > 1 && !wtrap::On());
+    if (onPool && deferSinks_.size() < static_cast<size_t>(workers().Threads())) deferSinks_.resize(workers().Threads());
+    auto runPhase = [&](const char* name, const std::vector<uint32_t>& items, bool pool, auto&& item) {
       if (wtrap::On()) trapPhase.emplace(tick_, name);
       deferring_ = true;
-      for (size_t i = 0; i < motionOrder.size(); ++i) {
-        wtrap::Turn trapTurn(motionOrder[i]);
-        DeferTurn(static_cast<uint32_t>(i));
-        item(i);
+      if (pool && onPool) {
+        // (the path grids' pending terrain changes, a factory's flattened skirt, are taken by a grid's first reader:
+        // in phase A a unit's StandableAt, on any worker, several at once. So they are taken here first, as the
+        // navigators' stage does: step 4.6, B1's 16-thread race)
+        navigation().ApplyTerrainChanges();
+        // chunks of turns per task; each worker's deferred calls in its own list with the turn's key (DeferSink)
+        const size_t grain = checked ? 1 : 16;
+        workers().ParallelFor(name, items.size(), grain, [&](size_t b, size_t e, int w) {
+          DeferSink& sink = deferSinks_[static_cast<size_t>(w)];
+          tl_deferSink = &sink;
+          for (size_t k = b; k < e; ++k) {
+            const uint32_t i = items[k];
+            if (!checked && k + 1 < e) PrefetchUnitObject(motionOrder[items[k + 1]]);
+            wtrap::Turn trapTurn(motionOrder[i]);
+            sink.key = i;
+            sink.seq = 0;
+            item(i);
+          }
+          tl_deferSink = nullptr;
+        });
+        MergeDeferSinks();
+      } else {
+        for (size_t k = 0; k < items.size(); ++k) {
+          const uint32_t i = items[k];
+          wtrap::Turn trapTurn(motionOrder[i]);
+          DeferTurn(i);
+          item(i);
+        }
       }
       deferring_ = false;
       trapPhase.reset();
       RunDeferredScriptCalls();
     };
-    runPhase("entity pass A", [&](size_t i) {  // (motionOrder grows when a unit goes to the pass's end)
-      prefetchFor(i);
-      Quat prevOri;
-      const int how = turnMotion(i, &prevOri);
-      prevOris.push_back(prevOri);
-      hows.push_back(static_cast<uint8_t>(how));
+    runPhase("entity pass A", a1, PhaseOnPool("A1"), [&](size_t i) {
+      if (!onPool) prefetchFor(i);
+      tl_phaseATurn = motionOrder[i];
+      hows[i] = static_cast<uint8_t>(turnMotion(i, &prevOris[i]));
+      tl_phaseATurn = nullptr;
     });
-    runPhase("entity pass C", [&](size_t i) {
+    // A2: one after another in the pass's order; a unit whose parent is itself attached and comes later goes to the
+    // pass's end (as in the original's order: turnMotion's reorder), so a chain steps parent first
+    if (!a2.empty()) {
+      if (wtrap::On()) trapPhase.emplace(tick_, "entity pass A2");
+      deferring_ = true;
+      for (size_t k = 0; k < a2.size(); ++k) {
+        const uint32_t i = a2[k];
+        wtrap::Turn trapTurn(motionOrder[i]);
+        DeferTurn(i);
+        Quat prevOri;
+        const int how = turnMotion(i, &prevOri);
+        if (motionOrder.size() > prevOris.size()) {  // (sent to the pass's end: its turn again there)
+          prevOris.resize(motionOrder.size());
+          hows.resize(motionOrder.size(), static_cast<uint8_t>(kTurnReordered));
+          a2.push_back(static_cast<uint32_t>(motionOrder.size() - 1));
+        }
+        prevOris[i] = prevOri;
+        hows[i] = static_cast<uint8_t>(how);
+      }
+      deferring_ = false;
+      trapPhase.reset();
+      RunDeferredScriptCalls();
+    }
+    std::vector<uint32_t> all(motionOrder.size());
+    for (size_t i = 0; i < all.size(); ++i) all[i] = static_cast<uint32_t>(i);
+    // C1: what the aims of C2 read of their targets, read while every pose is still last beat's (AimTargetsAhead);
+    // C2: each unit's pose and aim (turnPose), which then reads no other unit's pose
+    runPhase("entity pass C1", all, PhaseOnPool("C1"), [&](size_t i) {
+      if (hows[i] == kTurnMoved && !motionOrder[i]->aimControllers.empty()) AimTargetsAhead(*this, motionOrder[i]);
+    });
+    runPhase("entity pass C", all, PhaseOnPool("C2"), [&](size_t i) {
       if (hows[i] == kTurnMoved) turnPose(motionOrder[i], prevOris[i]);
     });
-    runPhase("entity pass D", [&](size_t i) {
+    runPhase("entity pass D", all, false, [&](size_t i) {
       if (hows[i] != kTurnReordered) turnEconomy(motionOrder[i], hows[i]);
     });
+    // (the units' additions to their armies, unit by unit in creation order, after the phase's commit: step 4.5)
+    SumUnitEconomy();
   }
   threads_->WakeSignalled();
   // transport cargo follows its attach bone (Entity::TaskTick: after the parents moved)

@@ -7,6 +7,7 @@
 #include <cstring>
 #include <map>
 #include <new>
+#include <string>
 #include <vector>
 
 #include "core/backtrace.h"
@@ -45,6 +46,16 @@ namespace wtrap {
 
 namespace {
 
+// MOHO64_PAR_WRITETRAP=reads: other entities not even readable during a turn, so every READ of another unit, shell
+// or army is listed too (step 4.4's audit: what a turn reads that a parallel phase must read from a snapshot)
+bool ReadsMode() {
+  static const bool r = [] {
+    const char* v = getenv("MOHO64_PAR_WRITETRAP");
+    return v && !strcmp(v, "reads");
+  }();
+  return r;
+}
+
 bool ReadOn() {
   const char* v = getenv("MOHO64_PAR_WRITETRAP");
   if (!v || !*v || !strcmp(v, "0") || !strcmp(v, "off")) return false;
@@ -72,12 +83,14 @@ constexpr size_t kPage = 4096;
 struct Region {
   size_t size = 0;
   Kind kind = Kind::kUnit;
-  bool ro = false;  // read-only now
+  bool ro = false;  // read-only (reads mode: no access) now
+  uint32_t id = 0;  // the entity's id / the army's index, taken when a phase began (readable then)
 };
 
 // One line of the report: a code address that wrote into another entity
 struct Site {
   uintptr_t rip = 0;  // image offset of the writing instruction
+  uint8_t write = 1;  // 1 a write, 0 a read (reads mode)
   uint8_t writtenKind = 0, turnKind = 0;  // 1 unit, 2 shell, 3 army; turn: 0 none, 1 unit, 2 shell, 3 other entity
   const char* phase = nullptr;
   uint64_t count = 0;
@@ -85,7 +98,32 @@ struct Site {
   uint32_t turnId = 0, writtenId = 0, offset = 0;
   int nframes = 0;
   uintptr_t frames[14] = {};
+  uint8_t* words = nullptr;  // (reads mode) the object's 4-byte words this site read, a bit each
 };
+
+// Reads mode: which of an object's words the turns of a phase changed in their own entity (each turn's bytes before
+// and after it, compared), per phase and kind. A read of another entity in that phase is a HAZARD when it reads such
+// a word: what it sees then depends on whether that entity's turn came first. A read of a word no turn of the phase
+// changes reads what the phase began with (the object itself is the snapshot).
+constexpr size_t kWordBits = 4096;  // objects up to 16 KB
+struct Written {
+  const char* phase = nullptr;
+  uint8_t kind = 0;
+  uint8_t words[kWordBits / 8] = {};
+};
+constexpr int kWrittenSets = 64;
+Written g_written[kWrittenSets];
+Written* WrittenFor(const char* phase, uint8_t kind) {
+  for (Written& w : g_written) {
+    if (w.phase == phase && w.kind == kind) return &w;
+    if (!w.phase) {
+      w.phase = phase;
+      w.kind = kind;
+      return &w;
+    }
+  }
+  return nullptr;
+}
 
 struct Pending {  // the pages a thread made writable for the instruction it single-steps
   DWORD tid = 0;
@@ -99,6 +137,7 @@ constexpr int kSites = 8192;
 Site g_sites[kSites];
 int g_siteCount = 0;
 uint64_t g_faults = 0, g_lost = 0, g_turns = 0, g_phases = 0;
+int g_hazardSites = 0;
 Pending g_pending[64];
 int g_phaseDepth = 0;
 uint32_t g_tick = 0;
@@ -109,7 +148,7 @@ PVOID g_handler = nullptr;
 void SetRo(uintptr_t base, Region& r, bool ro) {
   if (r.ro == ro) return;
   DWORD old = 0;
-  VirtualProtect(reinterpret_cast<void*>(base), r.size, ro ? PAGE_READONLY : PAGE_READWRITE, &old);
+  VirtualProtect(reinterpret_cast<void*>(base), r.size, ro ? (ReadsMode() ? PAGE_NOACCESS : PAGE_READONLY) : PAGE_READWRITE, &old);
   r.ro = ro;
 }
 
@@ -175,19 +214,21 @@ int Frames(const CONTEXT* c, uintptr_t* out, int max) {
   return n;
 }
 
-void Note(const EXCEPTION_POINTERS* x, uintptr_t addr, uintptr_t base, const Region& r) {
+void Note(const EXCEPTION_POINTERS* x, uintptr_t addr, uintptr_t base, const Region& r, uint8_t write) {
   ++g_faults;
   const Entity* written = EntityAt(base, r.kind);
   if (written && written == g_turn) return;  // (its own: a page left read-only for a moment by another thread's step)
-  const uint32_t writtenId = written ? written->id : static_cast<uint32_t>(reinterpret_cast<const Army*>(base)->index);
+  const uint32_t writtenId = r.id;
   const uintptr_t rip = ImageOffset(reinterpret_cast<const void*>(x->ContextRecord->Rip));
   const uint8_t wk = static_cast<uint8_t>(r.kind), tk = TurnKind(g_turn);
-  uint64_t h = (rip * 0x9e3779b97f4a7c15ull) ^ (static_cast<uint64_t>(wk) << 8) ^ tk ^ reinterpret_cast<uintptr_t>(g_phase);
+  uint64_t h = (rip * 0x9e3779b97f4a7c15ull) ^ (static_cast<uint64_t>(wk) << 8) ^ tk ^ reinterpret_cast<uintptr_t>(g_phase) ^
+               (static_cast<uint64_t>(write) << 12);
   for (int probe = 0; probe < kSites; ++probe) {
     Site& s = g_sites[(h + probe) & (kSites - 1)];
-    if (s.count && (s.rip != rip || s.writtenKind != wk || s.turnKind != tk || s.phase != g_phase)) continue;
+    if (s.count && (s.rip != rip || s.writtenKind != wk || s.turnKind != tk || s.phase != g_phase || s.write != write)) continue;
     if (!s.count) {
       s.rip = rip;
+      s.write = write;
       s.writtenKind = wk;
       s.turnKind = tk;
       s.phase = g_phase;
@@ -196,7 +237,12 @@ void Note(const EXCEPTION_POINTERS* x, uintptr_t addr, uintptr_t base, const Reg
       s.writtenId = writtenId;
       s.offset = static_cast<uint32_t>(addr - base);
       s.nframes = Frames(x->ContextRecord, s.frames, 14);
+      if (!write) s.words = static_cast<uint8_t*>(calloc(kWordBits / 8, 1));
       ++g_siteCount;
+    }
+    if (s.words && addr - base < kWordBits * 4) {
+      const size_t w = (addr - base) / 4;
+      s.words[w / 8] |= static_cast<uint8_t>(1u << (w % 8));
     }
     ++s.count;
     s.lastTick = g_tick;
@@ -207,7 +253,8 @@ void Note(const EXCEPTION_POINTERS* x, uintptr_t addr, uintptr_t base, const Reg
 
 LONG CALLBACK Handler(EXCEPTION_POINTERS* x) {
   const EXCEPTION_RECORD* r = x->ExceptionRecord;
-  if (r->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && r->NumberParameters >= 2 && r->ExceptionInformation[0] == 1) {
+  if (r->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && r->NumberParameters >= 2 &&
+      (r->ExceptionInformation[0] == 1 || (r->ExceptionInformation[0] == 0 && ReadsMode()))) {
     const uintptr_t a = static_cast<uintptr_t>(r->ExceptionInformation[1]);
     AcquireSRWLockExclusive(&g_lock);
     auto it = g_regions ? FindRegion(a) : std::map<uintptr_t, Region>::iterator{};
@@ -220,7 +267,7 @@ LONG CALLBACK Handler(EXCEPTION_POINTERS* x) {
       ReleaseSRWLockExclusive(&g_lock);
       return EXCEPTION_CONTINUE_SEARCH;
     }
-    Note(x, a, it->first, it->second);
+    Note(x, a, it->first, it->second, static_cast<uint8_t>(r->ExceptionInformation[0]));
     void* page = reinterpret_cast<void*>(a & ~(kPage - 1));
     DWORD old = 0;
     VirtualProtect(page, kPage, PAGE_READWRITE, &old);
@@ -241,7 +288,7 @@ LONG CALLBACK Handler(EXCEPTION_POINTERS* x) {
       auto it = FindRegion(pg);
       if (it != g_regions->end() && it->second.ro) {  // (still a read-only region: back to read-only)
         DWORD old = 0;
-        VirtualProtect(p->pages[i], kPage, PAGE_READONLY, &old);
+        VirtualProtect(p->pages[i], kPage, ReadsMode() ? PAGE_NOACCESS : PAGE_READONLY, &old);
       }
     }
     p->n = 0;
@@ -291,7 +338,13 @@ Phase::Phase(uint32_t tick, const char* name) {
     g_tick = tick;
     g_phase = name;
     g_turn = nullptr;
-    for (auto& [base, r] : *g_regions) SetRo(base, r, true);
+    for (auto& [base, r] : *g_regions) {
+      if (!r.ro) {  // (its id while it can still be read)
+        const Entity* e = EntityAt(base, r.kind);
+        r.id = e ? e->id : static_cast<uint32_t>(reinterpret_cast<const Army*>(base)->index);
+      }
+      SetRo(base, r, true);
+    }
   }
   ReleaseSRWLockExclusive(&g_lock);
 }
@@ -319,7 +372,14 @@ Turn::Turn(Entity* e) {
     if (it != g_regions->end()) SetRo(it->first, it->second, true);
   }
   auto it = FindRegion(reinterpret_cast<uintptr_t>(e));
-  if (it != g_regions->end()) SetRo(it->first, it->second, false);
+  if (it != g_regions->end()) {
+    SetRo(it->first, it->second, false);
+    if (ReadsMode()) {  // (the turn's own bytes before it: ~Turn notes the words it changed)
+      before_ = malloc(it->second.size);
+      size_ = it->second.size;
+      if (before_) memcpy(before_, reinterpret_cast<const void*>(it->first), size_);
+    }
+  }
   g_turn = e;
   ReleaseSRWLockExclusive(&g_lock);
 }
@@ -329,6 +389,15 @@ Turn::~Turn() {
   AcquireSRWLockExclusive(&g_lock);
   if (g_phase) {
     auto it = FindRegion(reinterpret_cast<uintptr_t>(self_));
+    if (before_ && it != g_regions->end() && it->second.size == size_) {
+      if (Written* w = WrittenFor(g_phase, TurnKind(self_))) {
+        const uint32_t* a = static_cast<const uint32_t*>(before_);
+        const uint32_t* b = reinterpret_cast<const uint32_t*>(it->first);
+        const size_t n = std::min(size_ / 4, kWordBits);
+        for (size_t i = 0; i < n; ++i)
+          if (a[i] != b[i]) w->words[i / 8] |= static_cast<uint8_t>(1u << (i % 8));
+      }
+    }
     if (it != g_regions->end()) SetRo(it->first, it->second, true);
     if (prev_) {
       auto jt = FindRegion(reinterpret_cast<uintptr_t>(prev_));
@@ -337,6 +406,7 @@ Turn::~Turn() {
   }
   g_turn = prev_;
   ReleaseSRWLockExclusive(&g_lock);
+  free(before_);
 }
 
 void NoteLua(const char* method, const void* obj) {
@@ -373,12 +443,44 @@ void Report() {
   Logf(LogLevel::Info, "%s", line);
   for (const Site* x : s) {
     int o = snprintf(line, sizeof line,
-                     "writetrap: site +0x%llx %s: %s writes %s x%llu (beats %u..%u; first: %s %u wrote %s %u at +0x%x) frames",
+                     "writetrap: site +0x%llx %s: %s %s %s x%llu (beats %u..%u; first: %s %u touched %s %u at +0x%x) frames",
                      static_cast<unsigned long long>(x->rip), x->phase ? x->phase : "?", kKind[x->turnKind],
+                     x->write ? "writes" : "reads",
                      kWritten[x->writtenKind], static_cast<unsigned long long>(x->count), x->firstTick, x->lastTick,
                      kKind[x->turnKind], x->turnId, kWritten[x->writtenKind], x->writtenId, x->offset);
     for (int i = 0; i < x->nframes && o < static_cast<int>(sizeof line) - 24; ++i)
       o += snprintf(line + o, sizeof line - o, " +0x%llx", static_cast<unsigned long long>(x->frames[i]));
+    fprintf(stderr, "%s\n", line);
+    Logf(LogLevel::Info, "%s", line);
+    if (x->words) {  // (reads mode) the words it read: a hazard where the phase's own turns change them
+      const Written* w = nullptr;
+      for (const Written& v : g_written)
+        if (v.phase == x->phase && v.kind == x->writtenKind) w = &v;
+      std::string hz, ok;
+      char b[32];
+      for (size_t i = 0; i < kWordBits; ++i) {
+        if (!(x->words[i / 8] & (1u << (i % 8)))) continue;
+        snprintf(b, sizeof b, " +0x%zx", i * 4);
+        ((w && (w->words[i / 8] & (1u << (i % 8)))) ? hz : ok) += b;
+      }
+      if (!hz.empty()) ++g_hazardSites;
+      snprintf(line, sizeof line, "writetrap: read +0x%llx %s: %s%s; stable:%s", static_cast<unsigned long long>(x->rip),
+               x->phase ? x->phase : "?", hz.empty() ? "no hazard" : "HAZARD (words the phase's turns change):",
+               hz.c_str(), ok.c_str());
+      fprintf(stderr, "%s\n", line);
+      Logf(LogLevel::Info, "%s", line);
+    }
+  }
+  if (ReadsMode()) {
+    for (const Written& v : g_written) {
+      if (!v.phase) continue;
+      int o = snprintf(line, sizeof line, "writetrap: own writes %s %s:", v.phase, kWritten[v.kind < 4 ? v.kind : 0]);
+      for (size_t i = 0; i < kWordBits && o < static_cast<int>(sizeof line) - 16; ++i)
+        if (v.words[i / 8] & (1u << (i % 8))) o += snprintf(line + o, sizeof line - o, " +0x%zx", i * 4);
+      fprintf(stderr, "%s\n", line);
+      Logf(LogLevel::Info, "%s", line);
+    }
+    snprintf(line, sizeof line, "writetrap: reads of words their phase's turns change (hazards): %d sites", g_hazardSites);
     fprintf(stderr, "%s\n", line);
     Logf(LogLevel::Info, "%s", line);
   }

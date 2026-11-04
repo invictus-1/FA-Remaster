@@ -55,6 +55,8 @@ class Turn {
   Entity* prev_ = nullptr;
   Entity* self_ = nullptr;
   bool active_ = false;
+  void* before_ = nullptr;  // (reads mode) its own bytes when the turn began
+  size_t size_ = 0;
 };
 
 // An engine call of a script method (Sim::CallMethod) while a phase runs: counted by method, on the turn's own

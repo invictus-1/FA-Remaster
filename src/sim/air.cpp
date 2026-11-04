@@ -3,6 +3,7 @@
 // trajectory is a feedback loop: a last-bit difference grows. Function names and addresses refer
 // to the FA exe; the specs in engine-ref/specs/air_*.md give the details.
 #include "core/dmath.h"
+#include "core/workers.h"
 #include "sim/air.h"
 #include "sim/formation.h"
 #include "sim/intel.h"
@@ -12,6 +13,7 @@
 #include "sim/transport.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -366,6 +368,7 @@ const Tiers& GetTiers(const Sim& sim, const TerrainMap* map) {
   auto& c = TierCache(sim);
   auto it = c.find(map);
   if (it != c.end()) return it->second;
+  if (InParallelTask()) NoteLazyFillInTask("GetTiers");
   Tiers& t = c[map];
   t.map = map;
   int w = map->width(), h = map->height();
@@ -419,7 +422,7 @@ float LookAheadForMaxTerrain(const Sim& sim, const TerrainMap* map, const Vec3& 
 
 AirMotion& A(Unit* u) { return *u->motion.air; }
 bool State(const Unit* u, const char* s) { return u->unitStates.count(s) != 0; }
-bool State(const Unit* u, int i) { return u->unitStates.Has(i); }  // (i: US("Name"))
+bool State(const Unit* u, int i) { return SeenState(u, i); }  // (i: US("Name"); another unit in parallel phase A: its snapshot)
 void SetState(Unit* u, const char* s, bool on) {
   if (on) u->unitStates.insert(s);
   else u->unitStates.erase(s);
@@ -648,8 +651,8 @@ bool NoBlockingUnits(Sim& sim, Unit* u, float x0, float z0, float x1, float z1) 
   // column x 92; ours, looking only 8 around the cell, missed the carrier and kept the row.)
   sim.ForUnitsInRect(x0 - 32, z0 - 32, x1 + 32, z1 + 32, [&](Unit* o) {
     if (blocked || o == u || o->dead || o->destroyQueued || o->fractionComplete < 1.0f) return;
-    if (o->layer == "Air") return;
-    if (u->layer == "Sub" && o->layer != "Sub") return;
+    if (SeenLayer(o) == "Air") return;
+    if (u->layer == "Sub" && SeenLayer(o) != "Sub") return;
     if (!o->transport || InCategory(sim, o, "PODSTAGINGPLATFORM")) {
       // (0x721231..0x72124f: GetVelocity, vt+0x3c, against zero by a memcmp of 12 bytes: UnitVelocityBitsSet; the
       // test the formation spots use too, as the same function with strict 0)
@@ -866,14 +869,23 @@ bool GroundPrepareMoveImpl(Sim& sim, Unit* u, Vec3* pos, const float excl[4], in
     if (tested > 899) return false;
   }
 }
+// (parallel order's phases, docs/parallel-mode.md 3.3: the reservation cells are shared, so a turn's change of them is
+// made in the phase's commit, in the turns' order; the unit's own copy of its rect changes at once)
+void FillResOrDefer(Sim& sim, const int* r, uint8_t v) {
+  if (!sim.DeferringScripts()) return FillRes(sim, r, v);
+  const std::array<int, 4> q{r[0], r[1], r[2], r[3]};
+  sim.DeferAction([&sim, q, v] { FillRes(sim, q.data(), v); });
+}
+
 void GroundFreeRectImpl(Sim& sim, Unit* u) {
-  if (!RectEmpty(u->ogridRect)) FillRes(sim, u->ogridRect, 0);
+  if (!RectEmpty(u->ogridRect)) FillResOrDefer(sim, u->ogridRect, 0);
   std::fill(u->ogridRect, u->ogridRect + 4, 0);
 }
+
 void GroundReserveRectImpl(Sim& sim, Unit* u, const int r[4]) {
   GroundFreeRectImpl(sim, u);
   std::copy(r, r + 4, u->ogridRect);
-  FillRes(sim, r, 1);
+  FillResOrDefer(sim, r, 1);
 }
 
 // CUnitMotion::SetTarget 0x6b85e0 (layer 0 keeps the landing layer)
@@ -1144,7 +1156,7 @@ void CirclingOrientation(Sim& sim, Unit* u, Axes& axes, Vec3& dv, const AiTarget
       float range = w->ovMaxRadius >= 0 ? w->ovMaxRadius : w->bp->maxRadius;
       R = range * a.circleRatio;
       Entity* te = combat::TargetEntity(sim, target);
-      if (te && te->kind == Entity::Kind::Unit && static_cast<Unit*>(te)->layer == "Air")
+      if (te && te->kind == Entity::Kind::Unit && SeenLayer(static_cast<Unit*>(te)) == "Air")
         R = b.circlingRadiusVsAirMult * R;
     }
   }
@@ -1330,7 +1342,7 @@ float DesiredTargetElevation(Sim& sim, Unit* u, const AiTarget& tgt, const Vec3&
   int ix = static_cast<int>(std::nearbyint(P.x)), iz = static_cast<int>(std::nearbyint(P.z));
   float h = SampleAt(sim.map(), ix, iz, b.flyInWater);
   Entity* E = combat::TargetEntity(sim, tgt);
-  if (E && E->kind == Entity::Kind::Unit && static_cast<Unit*>(E)->layer == "Air") {
+  if (E && E->kind == Entity::Kind::Unit && SeenLayer(static_cast<Unit*>(E)) == "Air") {
     Unit* tu = static_cast<Unit*>(E);
     // 0x6bcc99..0x6bccf2: the flying height of the target's blueprint (bp+0x2dc) above the ground there is asked of
     // the entity the CAiTarget itself holds (+0x4, Entity vt+0x10 = IsUnit). Held through a recon blip, that entity
@@ -1378,7 +1390,7 @@ void CombatTactics(Sim& sim, Unit* u, const AiTarget& tgt, Vec3& out, const Vec3
   float brk = u->motion.breakOffDistanceMult * b.breakOffDistance;
   int s = a.combatState;
   Entity* E = combat::TargetEntity(sim, tgt);
-  bool eAir = E && E->kind == Entity::Kind::Unit && static_cast<Unit*>(E)->layer == "Air";
+  bool eAir = E && E->kind == Entity::Kind::Unit && SeenLayer(static_cast<Unit*>(E)) == "Air";
   auto output = [&]() {
     a.combatState = s;
     auto elev = [&](const Vec3& v) { return DesiredTargetElevation(sim, u, tgt, v); };
@@ -1584,6 +1596,33 @@ void BodyAngular(PhysBody& b, const Vec3& T, float dt) {
 }
 
 // CUnitMotion::CalcMoveAir 0x6bee50
+// An idle aircraft's landing spot (CalcMoveAir's auto-landing): a free spot round its target (PrepareMove), reserved;
+// true when it lands there.
+bool AutoLandSearch(Sim& sim, Unit* u) {
+  AirMotion& a = A(u);
+  const AirBp& b = *a.bp;
+  const TerrainMap* map = sim.map();
+  Vec3 spot = a.target;
+  bool ok = PrepareMove(sim, u, &spot);
+  if (!ok) {
+    a.idleTick = sim.tick();
+    SetState(u, US("CannotFindPlaceToLand"), true);
+    UpdateSpeedThrough(sim, u);
+    return false;
+  }
+  a.target = spot;  // PrepareMove works on the target itself: a spot from its rings has y = 0
+  if (State(u, US("CannotFindPlaceToLand"))) {
+    SetState(u, US("CannotFindPlaceToLand"), false);
+    UpdateSpeedThrough(sim, u);
+  }
+  int x0 = static_cast<int>(std::nearbyint(a.target.x - b.footprintX * 0.5f));
+  int z0 = static_cast<int>(std::nearbyint(a.target.z - b.footprintZ * 0.5f));
+  int r[4] = {x0, z0, x0 + b.footprintX, z0 + b.footprintZ};
+  ReserveLandRect(sim, u, r);
+  a.landLayer = Elevation(map, a.target.x, a.target.z) > WaterOrNone(map) ? kLand : kWater;
+  return true;
+}
+
 void CalcMoveAir(Sim& sim, Unit* u, Transform& T) {
   AirMotion& a = A(u);
   static const long dbgBody = getenv("MOHO64_DEBUG_BODY") ? atol(getenv("MOHO64_DEBUG_BODY")) : -1;
@@ -1653,28 +1692,14 @@ void CalcMoveAir(Sim& sim, Unit* u, Transform& T) {
           }
           landing = true;
           a.landLayer = kLand;
+        } else if (sim.DeferringScripts()) {
+          // (parallel order's phase A: the spot search reads the other units and the reservation cells, and reserves
+          // its spot: it runs in the phase's commit, in the turns' order, and the landing starts with the next beat)
+          sim.DeferAction([&sim, u] {
+            if (!u->dead && u->motion.air && (A(u).landLayer == 0 || A(u).landLayer == kAir)) AutoLandSearch(sim, u);
+          });
         } else {
-          Vec3 spot = a.target;
-          bool ok = PrepareMove(sim, u, &spot);
-          if (!ok) {
-            a.idleTick = sim.tick();
-            SetState(u, US("CannotFindPlaceToLand"), true);
-            UpdateSpeedThrough(sim, u);
-          } else {
-            a.target = spot;  // PrepareMove works on the target itself: a spot from its rings has y = 0
-            if (State(u, US("CannotFindPlaceToLand"))) {
-              SetState(u, US("CannotFindPlaceToLand"), false);
-              UpdateSpeedThrough(sim, u);
-            }
-            int S = std::max(b.footprintX, b.footprintZ);
-            int x0 = static_cast<int>(std::nearbyint(a.target.x - b.footprintX * 0.5f));
-            int z0 = static_cast<int>(std::nearbyint(a.target.z - b.footprintZ * 0.5f));
-            (void)S;
-            int r[4] = {x0, z0, x0 + b.footprintX, z0 + b.footprintZ};
-            ReserveLandRect(sim, u, r);
-            landing = true;
-            a.landLayer = Elevation(map, a.target.x, a.target.z) > WaterOrNone(map) ? kLand : kWater;
-          }
+          landing = AutoLandSearch(sim, u);
         }
       }
       // desired facing: the formation vector first
@@ -2304,7 +2329,11 @@ Vec3 PredictAhead(Sim& sim, Unit* u, float t, bool other) {
   if (!u->motion.air && !(u->motion.bp && u->motion.bp->mobile())) return p;
   Vec3 w{};
   if (u->motion.air) {
-    const PhysBody& pb = A(u).body;
+    PhysBody pb = A(u).body;
+    if (other && SeesSnapshot(u)) {  // (parallel order's phase A: the other's body as the beat began)
+      pb.q = QuatW{u->snapBodyQ[0], u->snapBodyQ[1], u->snapBodyQ[2], u->snapBodyQ[3]};
+      pb.L = u->snapBodyL;
+    }
     // world angular velocity 0x697e70: R * (invI (.) R^T L), through the axes of the orientation (VAxes3), each
     // sum in the original's order: the prediction below turns ten times by it, and a last bit here is a last
     // bit in an attacker's desired velocity
@@ -2320,7 +2349,7 @@ Vec3 PredictAhead(Sim& sim, Unit* u, float t, bool other) {
   // Unit::GetVelocity 0x6a9c90: the last beat's displacement only while the unit is in the Air layer; in any
   // other layer it is the motion's own velocity vector (motion+0x38), which the flight code does not use: a
   // transport coming down on its landing spot (layer Land) is "not moving" for this
-  Vec3 v = u->layer == "Air" ? (other ? u->motion.velCommitted : u->motion.lastMove) : u->motion.vel;
+  Vec3 v = SeenLayer(u) == "Air" ? (other ? u->motion.velCommitted : u->motion.lastMove) : SeenMotionVel(u);
   float ang = w.y * 0.1f;
   float s = dmath::Sin(ang * 0.5f), c = dmath::Cos(ang * 0.5f);
   QuatW q{c, 0.0f * s, 1.0f * s, 0.0f * s};  // 0x570750: the axis (0, 1, 0) times the sine
@@ -2524,7 +2553,14 @@ void FuelTick(Sim& sim, Unit* u) {
           m.refuelFlag = true;
           m.repairReq[kEnergy] = pb.energy;
           m.repairReq[kMass] = pb.mass;
-          m.repairRequest = u->army->econ.NewRequest();
+          // (parallel order's phase A: the request joins its army's list in the phase's commit, in the turns' order;
+          // the share-out that grants it comes next beat either way)
+          if (sim.DeferringScripts()) {
+            m.repairRequest = std::make_shared<EconRequest>();
+            sim.DeferAction([a = u->army, r = m.repairRequest] { a->econ.requests.push_back(r); });
+          } else {
+            m.repairRequest = u->army->econ.NewRequest();
+          }
           m.repairRequest->requested[kEnergy] = pb.energy;
           m.repairRequest->requested[kMass] = pb.mass;
         } else if (m.repairRequest->granted[kEnergy] >= m.repairReq[kEnergy] &&
@@ -2694,5 +2730,10 @@ void RegisterAirBindings(lua_State* L) {
 }
 
 void AirForget(Sim& sim) { sim.airState.reset(); }
+
+// (air.h) the height tiers made before a parallel stage reads them
+void AirTiersReady(const Sim& sim) {
+  if (const TerrainMap* map = sim.map()) GetTiers(sim, map);
+}
 
 }  // namespace moho

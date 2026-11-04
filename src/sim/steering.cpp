@@ -33,7 +33,7 @@ namespace moho {
 namespace {
 
 bool St(const Unit* u, const char* s) { return u->unitStates.count(s) != 0; }
-bool St(const Unit* u, int i) { return u->unitStates.Has(i); }  // (i: US("Name"))
+bool St(const Unit* u, int i) { return SeenState(u, i); }  // (i: US("Name"); another unit in parallel phase A: its snapshot)
 
 bool Naval(const Unit* u) {
   const MotionBlueprint* b = u->motion.bp;
@@ -165,7 +165,7 @@ Vec3 RotateQuarterTurnY(const Vec3& v) { return RotY(kTurnQuarterPi, v); }
 
 bool SameFormationLayer(const Unit* a, const Unit* b) {
   if (St(a, US("Attacking")) || St(b, US("Attacking"))) return false;
-  return a->form && a->form == b->form;
+  return a->form && SeenForm(a) == SeenForm(b);
 }
 
 bool UnitPriority(const Unit* A, const Unit* B) {
@@ -201,12 +201,13 @@ bool UnitPriority(const Unit* A, const Unit* B) {
 
 bool UnitIgnores(const Unit* self, const Unit* e, int flags) {
   if (!e || e->dead || e->destroyQueued || e == self || !Mobile(e)) return true;
-  if (flags == 1 && !vm::SameBits(e->position, e->lastPosition))
+  // (parallel order's phase A: no other unit has moved yet as its snapshot shows it)
+  if (flags == 1 && !SeesSnapshot(e) && !vm::SameBits(e->position, e->lastPosition))
     return true;  // it moved this tick (func_IsSourceUnit 0x62eee9..0x62eefd: memcmp 0x4f0a50 of +0xb4 / +0xd0)
   if (e->parentId || St(e, US("Attached"))) return true;
-  if (self->layer != e->layer) return true;
+  if (self->layer != SeenLayer(e)) return true;
   if (Naval(self) && !Naval(e)) return true;
-  if (AirCat(e) && (e->layer == "Air" || e->transport)) return true;
+  if (AirCat(e) && (SeenLayer(e) == "Air" || e->transport)) return true;
   if ((FpFlags(self) & 1) && FpFlags(e) == 0) return true;
   if (St(self, US("WaitingForTransport")) && St(e, US("WaitingForTransport")) && self->focusId == e->focusId) return true;
   if (St(self, US("Upgrading")) && e->creatorId && e->creatorId == EntityRef(self)) return true;

@@ -278,12 +278,37 @@ local function AimPoint(R, zone, units)
     if n == 0 then return zz.x, zz.z end
     sx, sz = sx / n, sz / n
     local bx, bz, bd = zz.x, zz.z
+    local ux, uz, ud
     for _, t in ipairs(Remastered.AIZoneTargets(R.army, zone)) do
         local dx, dz = t.x - sx, t.z - sz
         local d = dx * dx + dz * dz
-        if not bd or d < bd then bx, bz, bd = t.x, t.z, d end
+        if t.unknown then
+            if not ud or d < ud then ux, uz, ud = t.x, t.z, d end
+        elseif not bd or d < bd then bx, bz, bd = t.x, t.z, d end
     end
+    -- (2026-11-04, fog: with no unit of known type there, the nearest contact of unknown type - a radar blip - so the
+    -- army walks up to it and sees what it is; before, the zone's centre)
+    if not bd and ud then return ux, uz end
     return bx, bz
+end
+
+-- (2026-11-04, fog) the mass an enemy contact of unknown type is counted at: the mean of the enemy's known mobile land
+-- units (AIEnemyMix), at least kUnknownLeast. The index counts such contacts in a zone but gives them no mass, so a
+-- zone with only radar blips in it was "defended" by one unit (1.5 x 0 mass + 1): the kill probe of the judge set
+-- (M28 seeds 1001-4004, the first 15 minutes) found 62% of our lost mass killed by units we did not see, 45% by M28's
+-- T1 artillery (range 30, beyond our extractors' vision of 20), and our T2 extractors the main victims.
+local kUnknownLeast = 50
+local function UnknownMass(R)
+    local n, m = 0, 0
+    for _, e in ipairs(Remastered.AIEnemyMix(R.army)) do
+        local bp = __blueprints[e[1]]
+        local land = false
+        if bp and bp.Categories then
+            for _, c in ipairs(bp.Categories) do if c == 'LAND' then land = true end end
+        end
+        if land then n, m = n + e[2], m + e.mass end
+    end
+    return math.max(kUnknownLeast, n > 0 and m / n or 0)
 end
 
 -- ORDERS (2026-11-03). An order replaces what the unit was doing (IssueClearCommands first), and is given again only
@@ -488,7 +513,7 @@ end
 
 -- (Lua 5.0 allows a function 32 upvalues: Think reaches the helpers of 2026-11-03 through this one table)
 local X = { Order = Order, AimPoint = AimPoint, ArmyZone = ArmyZone, Pos3 = Pos3, gatherPerUnit = kGatherPerUnit,
-    gatherExtend = kGatherExtend, allyReach = kAllyReach }
+    gatherExtend = kGatherExtend, allyReach = kAllyReach, UnknownMass = UnknownMass }
 
 function Think(brain)
     local R = brain.Remaster
@@ -568,9 +593,13 @@ function Think(brain)
         end
         return sent
     end
+    local unknownMass = threatened[1] and X.UnknownMass(R) or 0
     for _, z in ipairs(threatened) do
         if z ~= R.startZone then R.raided[z] = R.tick end
         local margin, _, _, _, _, theirsMass = Remastered.AIZoneEstimate(R.army, z, kHorizon, false, kDefenceSoak)
+        -- (2026-11-04, fog: the contacts of unknown type there count at unknownMass each, UnknownMass above)
+        local unknown = Remastered.AIZoneForces(R.army, z).enemy.land.unknown
+        theirsMass = theirsMass + unknown * unknownMass
         -- the base first (phase 7b): an enemy force of kRecallMass or more at a base zone recalls the army from its
         -- operation, and for kRecallTicks the base's defence takes every free unit. The no-cheat duel against M28
         -- was lost with the army away on an attack while M28's army reached the base and killed the commander.

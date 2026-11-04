@@ -988,8 +988,15 @@ __declspec(thread) int lua_gpg_in_task = 0;
 #else
 __thread int lua_gpg_in_task = 0;
 #endif
-/* ... and what lua_lock calls when it is set: a parallel task called the Lua API, which the tasks never may */
+/* ... and what lua_lock calls when it is set: a parallel task called the Lua API, which the tasks never may. With
+   lua_gpg_task_used_hook set (MOHO64_PAR_LUACHECK=log, src/core/workers.cpp) the host is told and the call goes on:
+   the order check's audit, on the calling thread only */
+void (*lua_gpg_task_used_hook)(lua_State *L) = NULL;
 void lua_gpg_task_used_lua (lua_State *L) {
+  if (lua_gpg_task_used_hook) {
+    lua_gpg_task_used_hook(L);
+    return;
+  }
   (void)L;
   fprintf(stderr, "moho64: a parallel task called the Lua API (src/core/workers.h: tasks never touch a Lua state)\n");
   fflush(stderr);

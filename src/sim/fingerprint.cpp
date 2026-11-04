@@ -537,6 +537,25 @@ void Fingerprint::WriteDetail(const Sim& sim, uint32_t beat, const std::string& 
                  u->parentId, u->transportedBy, u->dead ? " dead" : "", u->destroyQueued ? " destroying" : "",
                  u->beingBuilt ? " beingbuilt" : "", u->commands.size(), cmds.c_str(), u->factoryCommands.size(),
                  rally.c_str(), weapons.c_str());
+    // (the rest of what HashUnit hashes, so that a beat that differs in one of them shows it)
+    std::string wx;
+    for (const UnitWeapon* w : u->weapons) {
+      char b[96];
+      std::snprintf(b, sizeof b, " [%d on %d reach %d miss %d susp %d]", w->index, w->onTarget ? 1 : 0, w->canReach ? 1 : 0,
+                    w->missCount, w->fireSuspended ? 1 : 0);
+      wx += b;
+    }
+    std::string rc;
+    for (uint8_t r : u->recon) rc += std::to_string(r) + ",";
+    std::fprintf(f,
+                 "unitx %#x busy %d paused %d auto %d repeat %d fire %d stun %d bits %u maxspeed %.9g silo %d %d fuel %.9g "
+                 "shield %.9g used %.9g cons %.9g %.9g prod %.9g %.9g made %.9g %.9g took %.9g %.9g rate %.9g slot %s rank %.9g "
+                 "recon %s weapons%s\n",
+                 u->id, u->busy ? 1 : 0, u->paused ? 1 : 0, u->autoMode ? 1 : 0, u->repeatQueue ? 1 : 0, u->fireState,
+                 u->stunned, u->scriptBits, u->motion.maxSpeedU594, u->siloAmmo[0], u->siloAmmo[1], u->fuelRatio,
+                 u->shieldRatio, u->resourceConsumed, u->consumption[0], u->consumption[1], u->production[0],
+                 u->production[1], u->producedTick[0], u->producedTick[1], u->consumedTick[0], u->consumedTick[1],
+                 u->buildRate, Fs({u->formSlot.x, u->formSlot.y, u->formSlot.z}).c_str(), u->formRank, rc.c_str(), wx.c_str());
   }
   for (const Projectile* p : ById(sim.projectiles))
     std::fprintf(f, "proj %#x %s a%d p %s q %s v %s target %s damage %.9g expire %u %s\n", p->id, BpId(p),

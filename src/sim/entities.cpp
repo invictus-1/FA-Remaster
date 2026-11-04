@@ -1275,9 +1275,17 @@ void EntityAdjustHealth(lua_State* L, Entity* e, Entity* /*instigator*/, float a
   const float before = e->health;
   e->health = h;
   // (Entity::SetHealth 0x679a3c..0x679a6b: the entity goes to the newest end of the dirty list, linked or not)
+  // (parallel order's phases: in the phase's commit, in the turns' order, so the dirty order is the same whichever turn
+  // ran first)
   if (e->kind == Entity::Kind::Unit)
-    if (Sim* sim = S(L)) sim->MarkDirty(static_cast<Unit*>(e));
-  if (Sim* sim = S(L); sim && sim->collectHealth) RecordHealth(*sim, e, before, e->maxHealth);  // (a host's list; reads only)
+    if (Sim* sim = S(L)) {
+      if (sim->DeferringScripts()) sim->DeferAction([sim, u = static_cast<Unit*>(e)] { sim->MarkDirty(u); });
+      else sim->MarkDirty(static_cast<Unit*>(e));
+    }
+  if (Sim* sim = S(L); sim && sim->collectHealth) {  // (a host's list; reads only. Parallel order's phases: in the commit)
+    if (sim->DeferringScripts()) sim->DeferAction([sim, e, before, mx = e->maxHealth] { RecordHealth(*sim, e, before, mx); });
+    else RecordHealth(*sim, e, before, e->maxHealth);
+  }
   if (qNew != qOld && e->HasLuaObject() && S(L) && S(L)->DeferringScripts()) {
     S(L)->DeferScriptCall(e, "OnHealthChanged", {Sim::ScriptArg::Num(qNew), Sim::ScriptArg::Num(qOld)});
   } else if (qNew != qOld && e->HasLuaObject()) {

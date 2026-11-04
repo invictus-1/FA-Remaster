@@ -242,6 +242,35 @@ by the battle estimate of that zone (`Remastered.AIZoneEstimate`, 3.2), with our
     none (`personality.lua` landSoftShare / landHardShare): 500-800 land units an army by minute 25, mostly T1.
   - A new guard already at its post drops the order it had (it had walked on with it).
   Judge (duels, see section 6): M28 recruit x8 median 23.5 minutes (90% of medians 19.4-25.1; main 22.0, 17.9-25.5), lost per killed 16.7 (10.7-31.9; main 12.6, 8.5-22.4); FAF veteran 40.7 / 38.0 (main 38.1 / 41.2) - even within the spread: the 1v1 duels did not need this, the 4v4 did. The 4v4 (all eight ours, Chris's session and seed, 25 minutes): gathers dropped 16 -> 0, orders queued per unit 21-42 -> 0.8-0.9, land units at minute 25 3,687 -> 2,271 and the share of them near their start 47% -> 26%, mass lost by all armies 58,000 -> 82,000 (more fighting).
+- **2026-11-04, fog: contacts of unknown type (the coordinator's round, item 2: "fix what fog breaks").** The duels
+  already played with fog (see section 6, phase 5's note). A kill probe of the judge set (every death of both armies:
+  victim, killer, distance, the killer's shields, whether we saw it; M28 seeds 1001-4004) found 62% of our lost mass
+  in the first 15 minutes killed by units we did not see, 45% by M28's T1 artillery (range 30, our extractors see
+  20), and extractors 48% of our losses. The index counts a contact of unknown type (a radar blip of a unit never
+  seen) in its zone but gives it no mass and no place: a zone with only blips in it was "threatened", the estimate
+  there saw nothing, and the defence sent one unit (1.5 x 0 mass + 1) to the zone's centre. Now `AIZoneTargets`
+  returns the contacts too (mass 0, `unknown = true`), an attack or defence with no unit of known type in its zone
+  aims at the nearest contact (so the army walks up to it and sees what it is), and the defence counts each contact
+  at the mean mass of the enemy's known mobile land units (at least 50). The commander's fight-back ignores them.
+  Judge: M28 recruit x8 median 22.9 minutes (90% of medians 19.8-25.5; before 25.2, 23.3-28.6), lost per killed 11.3 (8.6-13.7; before 14.1, 8.0-20.2); FAF veteran 36.4 / 38.8 (35.5 / 22.8) - even within the spread.
+- **2026-11-04, where we lose against M28 (the coordinator's round, item 3).** The kill probe of the judge set: every
+  judge game is lost when our commander dies (demoralization), so the minutes measure its survival, and in 9 of 12
+  deaths (base, items 1-2) it died 85-165 world units from the start - out at a base job, an assist (an upgrading
+  extractor could stand 300 out) or its reclaim - to M28's T2 gunships and T2 bots, falling back hurt across that
+  distance under fire. From minute 10 its jobs, assists and reclaim keep within 60 world units of the start
+  (`brain.lua` AcuHome / CommanderJobSafe: a job farther out is refused and it assists the nearest factory within
+  that radius, `aiacu ... job refused: its place is ...`). Its deaths now come 28-92 from the start, inside the base,
+  most to the gunships. Judge: M28 recruit x8 median 23.8 minutes (90% of medians 21.5-25.2; before 22.9, 19.8-25.5), lost per killed 13.7 (9.0-15.8; before 11.3, 8.6-13.7); FAF veteran 36.4 / 38.8 (the same) - even.
+  Tried and dropped: every threatened zone defended in turn instead of the first only, and a zone whose extractor or
+  factory lost health with no enemy known there defended as if four unknown contacts were there (aimed past the hurt
+  structure, an air scout sent to look): the games lasted longer (M28 median 26.0, 23.6-27.3) but traded far worse
+  (lost per killed 19.4, 15.7-27.6, against 11.3): the defenders went out piecemeal, zone by zone, into M28's
+  artillery and army, and as many extractors died. Also tried and dropped: anti-air beside the start against the
+  enemy's known gunships and bombers (one per 400 mass of them, at most 6): 162 ordered in the 8 M28 games, the mass
+  lost to M28's T2 gunships the same (79,300 against 79,400), M28 median 24.0 (22.6-25.1). Still open: in 13 of the 16
+  commander deaths of these two judges the commander had last been sent "inland" from ships off the coast
+  (RemasterCommander's naval refuge: the base zone the ships reach least, up to 200 world units of travel out), and
+  four of the eight deaths with the anti-air came at 165 from the start, at that refuge.
 - **Not yet:** combined arms, cracking fortified lines, navy and air operations, and retreat by a safe path to the
   nearest held zone (today: home).
 
@@ -540,6 +569,33 @@ a base and an army.
   free for the rest of the step (claims only grow inside a step); the claims' keys of the mass points are made once;
   a builder's reclaim keeps only the 6 nearest props, as the full sort ordered them; the defence's plan (the units'
   lists, the mix, the build values) is worked out once a step per tech, only the sites per builder. The 4v4 plays identically over 21,000 beats with and without it; the economy step's Lua over those 35 minutes 35.6 -> 31.2 s (NextMassPoint 9.1 -> 6.2, the claim lookups 1.8 -> 0, DefenceJob 3.7 -> 2.7; Unsafe 2.6 -> 2.2 and Reclaim 3.2 -> 3.1 stay: the engine's prop lists and the zones' memory), all our AI's Lua 55.2 -> 50.7 s.
+
+- **2026-11-04, the mass sinks (the coordinator's round after the big test, item 1: "experimentals are rare; spend
+  the surplus well"):** a probe of the 4v4 of all our AI (Chris's session, every army every 30 s: income, the bar,
+  extractors / power / land factories by tier, experimentals) found no surplus to wait for: the mass bar at 0-4% in
+  every army from minute 6, the income all in units. Five of the eight armies sat on 10-13 T2 extractors from minute 15
+  to 35 at 60-80 mass a second: the T3 upgrade (4,600 mass, payback 383 s) was over the investment budget in 79
+  decisions and held as a "sustained deficit" - the empty bar of an economy that spends everything - in 120 more; and
+  one army kept 17-18 T1 land factories beside its T3 HQ for 15 minutes. Changes (decision 14, risk against reward):
+  - **The planned dip** (`choices.lua` Investments): with no extractor upgrade under way, the best one (payback first)
+    goes ahead past the budget and past the empty bar when it pays back within 600 s, costs at most 120 s of the
+    income now, from minute 8 (a first try upgraded a T1 extractor at minute 2), and its zone is safe as before
+    (`aiinv ... (the planned dip: ...)`).
+  - **An experimental is army too** (`brain.lua` ExperimentalJob): bought instead of units when it costs at most 300 s
+    of the income now, the base is not under attack and its estimate (400 world units of travel, soak) holds, and its
+    build value against the enemy's known army is at least half the best T3 unit's; with piling mass (30% of the bar)
+    or the land army at its hard cap, the best one whatever its value. The candidates are every mobile land
+    experimental the engineer can build (`Unit:CanBuild`, mods' too). While one is under construction the T1 land
+    factories make no new units, so the income reaches it. (A first form waited for the army to be past what the
+    economy keeps; that army grows with the income, so it never was.) `aiexp ... hold | why` once a minute.
+  - **Support factories by upgrade** (`brain.lua` RemasterSupportUpgrades): with a T2 land HQ an idle T1 land factory
+    upgrades to the faction's T2 support factory (340 mass more), with a T3 HQ an idle T2 support factory to the T3 one;
+    at most 1 + one per 80 mass a second of income at once and a quarter of the land factories, from minute 10, with
+    half the energy bar, and while the army is short only with half the mass bar (`aiup ...`). A support upgrade does
+    not hold the next HQ's.
+  The 4v4 (Chris's session and seed, minute 25, all eight armies): income 726 -> 1,317 mass a second; extractors
+  T1/T2/T3 3/81/11 -> 0/47/48; land factories T1/T2/T3 66/44/14 -> 46/87/18; experimentals ordered 2 -> 4 in 35
+  minutes. Judge: M28 recruit x8 median 25.2 minutes (90% of medians 23.3-28.6; before 24.0, 21.1-26.4), lost per killed 14.1 (8.0-20.2; before 10.0, 7.8-16.9); FAF veteran 35.5 / 22.8 (24.2 / 44.4) - even within the spread.
 
 ### 2.5 Team play and pings
 
@@ -1021,7 +1077,7 @@ native core for numbers and spends its own time only on decisions.
   | `AIIndexInfo(army)` | `{tick, own, ally, enemy, unknown, outside, period}` |
   | `AISquareLaw(ours, theirs)` | `margin, survivors` (3.3) |
   | `AIBattleEstimate(ours, theirs [, startDistance [, kite]])` | `margin, oursLeft, theirsLeft, seconds`; a force is an array of `{blueprintId, count}` (3.3) |
-  | `AIZoneTargets(army, zone)` | `{{x, z, mass, structure}, ...}`: the enemy units the army knows in the zone (held blips of seen units, then the memory), in the index's order (2026-11-03: where attacks and defences aim) |
+  | `AIZoneTargets(army, zone)` | `{{x, z, mass, structure [, unknown]}, ...}`: the enemy units the army knows in the zone (held blips of seen units, then the memory), in the index's order (2026-11-03: where attacks and defences aim); since 2026-11-04 the contacts of unknown type too (radar, sonar, a jammer's blips), with mass 0 and `unknown = true` |
   | `AIZoneSummary(army)` | `{name = {value per zone}, ...}`: the numbers of `AIZoneForces` the front reads, for every zone in one call (`ownLandGround`, `enemyLandCount`, `enemyNavalMass`, ...; 2026-11-03) |
   | `AISortIndex(keys)` | the indices 1..n of an array of numbers in ascending order, index order on ties: a sort without a Lua comparator (2026-11-03) |
   | `AIZoneEstimate(army, zone, horizon [, kite [, soak]])` | `margin, oursLeft, theirsLeft, seconds, oursMass, theirsMass`: the fight for the zone from what the army knows (3.2); `soak`: the estimate before phase 12 (3.3); kept per index build (2026-11-03) |
@@ -1145,7 +1201,9 @@ both-modes check, multicore.md 1).
   - **The new layers show in the logs:** 132 investments made and 54 held (with payback and danger), 159 counter-picks,
     38 defences ordered, and stance switches with their evidence (catch-up when FAF reached T2 first).
   - **The duel sessions have `FogOfWar = none`:** every army sees everything, so scouting cannot show there. The next
-    round should play with fog.
+    round should play with fog. (Done from phase 6: every duel and the judge set since play with `FogOfWar =
+    explored` - the sessions' GameOptions, read by the intel grids from `ScenarioInfo.Options` - checked 2026-11-04:
+    the index knows no enemy zone for the first 4 minutes of a judge game.)
 - **The phase-5 duels against M28 (run 2026-10-30, the same code as phase 5, no fog):** all three lost early. M28 had
   56 mass / s at minute 5 against our 17, and about 250 at minute 10 with about 100 engineers, most of it from
   reclaim. Our army was 80-580 mass against its 1,000-5,500 at minutes 7-10.
@@ -1395,6 +1453,9 @@ both-modes check, multicore.md 1).
 | 4 (first form built 2026-10-29) | Strategic and operation layers: aggression with hysteresis, objectives, gathering, push, retreat by estimate, raids, navy and air domains, combined arms timing. Built: the zone estimate from the index (fair intel, memory, reinforcements on the way, kiting), defend / attack / push / raid with commit rules and logged decisions, tech upgrades. Not yet: gathering, navy and air, combined arms | Ours vs M28 and FAF's AI, several seeds: the fight scores of section 6; "never fled a weaker force" at zero faults. First duels: 0 faults, 3 losses and one 60-minute game without a result (section 6) |
 | 5 (first form built 2026-10-29) | Economy in parallel with scouting, army and expansion (power ahead but not wasted, factory floor, engineers by distance and away from enemies, reclaim, storage, timed assists); counters by build value; defences as build candidates; investments by payback and danger with a planned dip; the strategy layer's read of the enemy and stances; attacks on armies and expansions with gathering and reinforcements via the staging zone; guard posts; the knobs in one place (decisions 13-16) | The five duels of section 6 (mass / s at 5 / 15 / 30 minutes, mass lost per enemy mass killed); the 16 + B1 / b8 identical; our-key sessions identical at 1 / 32 threads, shuffle, reverse |
 | 6a (first form built 2026-10-30) | Map control: the army kept against the enemy's known army, guard posts sized by the threat and lost zones taken back, reclaim fields; each enemy read on its own (the focus enemy); the player's two sliders (aggression, economy) with bounds; the duels with fog of war | The duels of section 6 with fog; the 16 + B1 / b8 identical; our-key fogged sessions identical at 1 / 32 threads, shuffle, reverse |
+| 15c (first form built 2026-11-04) | The commander keeps its jobs, assists and reclaim within 60 world units of the start from minute 10 | The kill probe of the judge set (where and by what the commander died); the judge set; our-key sessions identical at 1 / 32 threads, shuffle, reverse (to minute 25) |
+| 15b (first form built 2026-11-04) | Fog: contacts of unknown type have a place (`AIZoneTargets`), the defence aims at them and counts them at the enemy's mean land unit mass | The kill probe of the judge set (killers seen or not, on radar); the judge set; our-key sessions identical at 1 / 32 threads, shuffle, reverse; the 16 + B1 / b8 identical |
+| 15a (first form built 2026-11-04) | The mass sinks: the planned dip (one extractor upgrade past the budget and the empty bar, payback <= 600 s), an experimental bought instead of units by build value when the income carries it, T1 factories paused while it builds, support factories by upgrade | The 4v4 of all our AI (the sink probe: income, extractor and factory tiers, experimentals); the judge set; our-key sessions identical at 1 / 32 threads, shuffle, reverse |
 | 14h (first form built 2026-11-03) | The economy's think: the same jobs from fewer scans (mass points, reclaim, the defence's plan) | The 4v4 identical over 21,000 beats with and without it; the Lua function profile; our-key sessions identical at 1 / 32 threads, shuffle, reverse |
 | 14g (first form built 2026-11-03) | Fewer units: T1 land factories stop at 12% of the unit cap, all at 25%; a land experimental by a T3 engineer when mass piles up | The 4v4 of all our AI (land units an army, experimentals); the judge set; our-key sessions identical at 1 / 32 threads, shuffle, reverse |
 | 14e (first form built 2026-11-03) | The think's cost: a shared reclaim map, the front's numbers in one call, a native sort, the posts' nearest-only selection, the estimate kept per index build, the army's think spread over three steps | Lua function profile of the 4v4 (our AI's share, by function); the parts meant to keep the game left the 4v4 identical over 15,000 beats; our-key sessions identical at 1 / 32 threads, shuffle, reverse; the judge set |

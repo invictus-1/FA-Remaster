@@ -65,6 +65,10 @@ ParCheck ParCheckFromEnvironment();  // MOHO64_PAR_CHECK
 // A ParallelFor task runs on this thread now (on a worker, or on the calling thread inside ParallelFor): work that could
 // split itself over the pool (a path grid's build) does not start another stage from inside one.
 bool InParallelTask();
+// A lazily made shared cache filled inside a parallel task: said once per site (stderr), as a bug. The stages that run
+// on the pool make such caches before (parallel mode step 4.6's race hunt: a cache filled by its first reader is the
+// write neither the order check nor the write trap sees).
+void NoteLazyFillInTask(const char* what);
 
 // The profiler's parallel view (MOHO64_PROFILE; docs/multicore.md 2), one per pool and so one per Sim (multicore
 // step 1: no process-wide state). Per stage: its calls, its wall time, its tasks' summed busy time, the speed-up

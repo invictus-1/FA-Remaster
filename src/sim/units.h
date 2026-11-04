@@ -184,6 +184,7 @@ class UnitStateSet {
     return b == bits_;
   }
   size_t size() const { return names_.size(); }
+  uint64_t Bits() const { return bits_; }  // (the known states' bits: parallel order's snapshot)
   const uint64_t* bitsAddress() const { return &bits_; }  // (a read noted by a speculation: core/speculate.h)
   Names::const_iterator begin() const { return names_.begin(); }
   Names::const_iterator end() const { return names_.end(); }
@@ -417,7 +418,40 @@ class Unit : public Entity {
   bool everMobileChecked = false;
   uint32_t engageId = 0;           // aggressive move / patrol: the enemy it stopped for
   int engageCheck = 0;
+  // Parallel order's beat-start snapshot (docs/parallel-mode.md 3.3, step 4.4): what a turn of phase A reads of
+  // ANOTHER unit and that unit's own turn changes, taken for every unit by the snapshot pass before phase A
+  // (BeatStartSnapshot, sim.cpp) and read through the Seen* readers below. (Its transform is its held shape.)
+  LayerString snapLayer;
+  uint64_t snapStates = 0;       // unitStates' bits
+  Vec3 snapVelocity;             // UnitVelocity
+  Vec3 snapMotionVel;            // motion.vel
+  const struct Formation* snapForm = nullptr;
+  float snapBodyQ[4] = {1, 0, 0, 0};  // an aircraft's body: its orientation (w, x, y, z) and angular momentum
+  Vec3 snapBodyL;
+  // Parallel order's phase D (docs/parallel-mode.md 3.3, step 4.5): what the unit's own economy step of beat
+  // econAddTick adds to its army (income, and the storage its blueprint gives or takes back), kept here and added to
+  // the army after the phase, unit by unit in creation order (Sim::SumUnitEconomy)
+  float econAdd[2] = {0, 0};
+  int64_t econStorageAdd[2] = {0, 0};
+  uint32_t econAddTick = 0xffffffffu;
 };
+
+// The unit whose turn of parallel order's phase A runs on this thread (set by the entity pass's driver around each
+// turn; null otherwise, and always in the original's order). While it is set, what the turn reads of ANY OTHER unit
+// through these readers is that unit's beat-start snapshot, so a turn sees the same whichever turns came before it
+// (docs/parallel-mode.md rule 1); the turn's own unit, and every read outside phase A, is read as it stands.
+inline thread_local const Unit* tl_phaseATurn = nullptr;
+inline bool SeesSnapshot(const Entity* e) {
+  return tl_phaseATurn && e != tl_phaseATurn && e->kind == Entity::Kind::Unit;
+}
+inline const LayerString& SeenLayer(const Unit* u) { return SeesSnapshot(u) ? u->snapLayer : u->layer; }
+inline bool SeenState(const Unit* u, int i) { return SeesSnapshot(u) ? (u->snapStates >> i) & 1u : u->unitStates.Has(i); }
+// (an entity's transform: a unit's held shape is where the beat began, the snapshot pass holds every unit's)
+inline const Vec3& SeenPos(const Entity* e) { return SeesSnapshot(e) && e->shapeHeld ? e->shapePos : e->position; }
+inline const Quat& SeenOri(const Entity* e) { return SeesSnapshot(e) && e->shapeHeld ? e->shapeOri : e->orientation; }
+inline const Vec3& SeenVelocity(const Unit* u) { return SeesSnapshot(u) ? u->snapVelocity : UnitVelocity(u); }
+inline const Vec3& SeenMotionVel(const Unit* u) { return SeesSnapshot(u) ? u->snapMotionVel : u->motion.vel; }
+inline const struct Formation* SeenForm(const Unit* u) { return SeesSnapshot(u) ? u->snapForm : u->form; }
 
 class Prop : public Entity {
  public:

@@ -4,7 +4,9 @@ Status: APPROVED by Chris 2026-10-31 ("everything looks good to me"); draft 3 (e
 `docs/parallel-mode.md`. Built so far (section 8's order): step 1, the mode field (`Sim::order`, `MOHO64_SIM_ORDER`);
 step 2a, the keyed draws (4.1); step 2b, the entity grid's canonical buckets (3.4); step 3, the write trap (6.1);
 step 4.0, Aim and a homing shell read their target's beat-start transform without writing it (6.1); step 4.1, the
-entity pass in phases with deferred callbacks, still on one thread (3.3); step 4.2, pushes in the commit (3.3); step 4.3, the contact search's mark-free gather.
+entity pass in phases with deferred callbacks, still on one thread (3.3); step 4.2, pushes in the commit (3.3); step 4.3, the contact search's mark-free gather;
+step 4.4, the beat-start snapshot, sub-phases A2 and C1, and the order check of the phases (3.3, 6.1); step 4.5, phase D's
+additions to the armies kept on the units and summed in creation order, the silo step in the commit (3.3); step 4.6, phases A1, C1 and C on the worker pool (3.3).
 
 ## For Chris: the short version
 
@@ -152,7 +154,7 @@ kill and its `OnImpact`) and run in the commit by key (the turn's place, then th
 `OnConsumptionActive` / `InActive`, `OnDecayed`, `OnHealthChanged` (regeneration). A call still made at once inside
 A, C or D is counted and logged with its first caller ("called at once inside the entity pass's phases"): none in b8
 6000 and B3-16k 2000 beats; in B1 12000 only a silo's `OnSiloBuildStart` / `OnSiloBuildEnd` / `OnNukeArmed` (phase D,
-a few each; step 4.5 defers them). Step 4.6 puts A and C on the pool.
+a few each; step 4.5 defers them: none since). Step 4.6 puts A and C on the pool.
 
 **Pushes (step 4.2):** `DoCollisionsFor` still finds a unit's contacts and works out both impulses of each pair at the
 unit's turn in phase A (from its own position before its move and the other's committed one), but in parallel order
@@ -160,6 +162,106 @@ both go to the commit (`Sim::DeferAction`), applied in key order after every uni
 unit, and a pair is pushed alike whichever unit's turn came first; the push moves both from the next beat's step on
 (in the original's order, a unit later in the pass than its pusher moves with the push in the same beat). The
 exact-overlap direction is keyed on the unit whose turn found the pair (`kPush`).
+
+**Snapshot reads (step 4.4, e1c 2026-11-03).** Before phase A a snapshot pass (`BeatStartSnapshot`, sim.cpp) holds every
+unit's collision shape where the beat began (`Sim::HoldShape`: what the contact search and every other reader of
+another unit's transform take, `SeenPos` / `SeenOri`) and copies what a turn of A reads of ANOTHER unit and that unit's
+own turn changes: its layer, its unit states' bits, its velocity (`UnitVelocity`) and motion velocity, its formation
+pointer, an aircraft's body (orientation, angular momentum) (`Unit::snap*`). While a turn of A runs, the thread-local
+`tl_phaseATurn` names its unit, and the readers `SeenLayer`, `SeenState`, `SeenPos`, `SeenOri`, `SeenVelocity`,
+`SeenMotionVel`, `SeenForm` (units.h) give any other unit's snapshot; the turn's own unit, and every read outside phase A
+or in the original's order, is read as it stands (they are the old reads exactly there). Switched to them: the
+contacts' `UnitIgnores` / `SameFormationLayer` and the steering's state tests, the raised platforms
+(`FindRaisedPlatform`, `PlatformHeight`), an aircraft's landing search (`NoBlockingUnits`, `ForUnitsInRect`'s place
+test, `UnitVelocityBitsSet`), its tactics (`PredictAhead` of the target, the target's layer in `CombatTactics`,
+`DesiredTargetElevation`, the circling radius, `Targetable` / `EntityLayerBit`), and a target point's transform
+(`BoneWorld`, `UnitTargetPoint`). The same pass makes the guard formations a guarded unit would make in its turn
+(`UpdateGuardFormation`: the formation script runs Lua, which no turn of A may), from the same beat-start places, and
+the unit grid if it is due. A formation group's leader is not cached by a turn of A (`GroupLeader`: the same answer).
+A target point an aircraft's tactics draw in A (`PickPointAboveWater` / `BelowWater`) is the turn's keyed draw
+(`kTargetPick`). What a turn of A or C did to shared lists goes to the commit: a refuelling aircraft's repair request
+joins its army's list there (`FuelTick`), the dirty order's stamp of a health change (`MarkDirty`), a host's health and
+impact lists, a manipulator's signal to the Lua threads waiting on it (`Sim::SignalEvent`), and a change of the
+o-grid's reservation cells (`GroundReserveRectImpl` / `GroundFreeRectImpl`: an aircraft's landing rect taken or let go);
+an idle aircraft's auto-landing spot search, which reads those cells and the other units and reserves its spot
+(`AutoLandSearch`), runs in the commit too, and its landing starts with the next beat. (B1's first order-check
+difference, beat 7750: two aircraft of army 1 landing side by side, each turn seeing the other's spot reserved or not.)
+
+**A2: attached units (step 4.4).** Phase A runs over the units that hang on nothing (A1); the units with a parent
+(factory products on the build bone, transport cargo, wrecks on a sinker shell, a drone's guard dummy) step after it,
+one after another in the pass's order (A2), and take the parent's NEW transform (`BoneWorld` of the parent: the only
+reads of a turn's own writes, by design); a unit whose parent is itself attached and comes later goes to the pass's end
+as in the original's order.
+
+**C1: targets read before any pose (step 4.4).** A unit's turn of C rebuilds its pose (`PoseAdvance`, its
+manipulators), and its aim controllers read their target's pose (`Aim` -> `TargetPos` -> `BoneWorld`): whether that
+target's turn came first would decide which pose they see. So a sub-phase C1 first reads, for every aim controller that
+C will aim (the same tests as `MoveManipulator`), the target's point and velocity (`AimTargetsAhead` ->
+`AimTargetRead`: the target as last beat's pose left it, the same for every aimer), kept on the controller
+(`AimController::targetPos` / `targetVel` / `targetTick`); `Aim` in C takes them. No pose is written in C1.
+
+**Phase D's economy (step 4.5, e1c 2026-11-03).** A unit's economy step no longer adds to its army during the phase:
+its income (production x the grant's rate x 0.1) and the storage its blueprint gives or takes back are kept on the
+unit (`Unit::econAdd` / `econStorageAdd`, `NoteEconAdd`), and after the phase's commit `Sim::SumUnitEconomy` adds them
+to the armies unit by unit in creation order (`entSeq`; rule 7: the float sums in a fixed order, whatever order the
+turns ran in). The silo's step (`SiloTick`: it asks the scripts for its build rate and costs and calls
+`OnSiloBuildStart` / `OnSiloBuildEnd` / `OnNukeArmed`) and an economy event's script callback run in the phase's commit,
+in the turns' order; their requests are granted at the next share-out either way. With it phase D writes no army (the
+write trap) and calls no script at once.
+
+**On the pool (step 4.6, e1c 2026-11-03).** With more than one sim thread (`MOHO64_THREADS`), parallel order runs A1,
+C1 and C through `WorkerPool::ParallelFor`, 16 turns a chunk; D, A2 and the commits stay on the sim's thread. A turn's
+deferred calls go to its worker's own list (`Sim::DeferSink`, the thread's `tl_deferSink` with the turn's key and its
+call count), and after the phase the lists are merged and the commit sorts them by key as before: the order is the
+turns', not the workers'. (The order check runs the same path, one item at a time, its worker index cycling, so it tests
+the merge too.) The work the original's order plays ahead on the pool for its serial pass (`SurfaceContactsAhead`,
+`AimMuzzlesAhead`) is not made then: the phases are that work; the aim speculation's counters are not counted from a
+task. `MOHO64_PAR_ENTITY=0` keeps the phases on the sim's thread (a comparison; the game is the same);
+`MOHO64_PAR_ENTITY_PHASES=A1,C1,C2` puts only the named ones on the pool (a bisection aid). With the write trap on
+they stay there as well (its bookkeeping is one turn at a time). Before each phase on the pool the path grids' pending
+terrain changes are taken (`Navigation::ApplyTerrainChanges`): a grid takes them at its first read (`PathGrid::Passable`
+/ `Caps`), and in phase A that read is a unit's `StandableAt` on any worker, several at once. (B1 at 16 threads
+differed from 1 thread now and then, beats 2852-3422, a Cybran engineer's step after a factory's skirt was flattened;
+the order check and the write trap could not see it: the write is a lazy cache of a shared grid filled by whichever
+reader comes first, the same result in any order on one thread. `PathGrid::ApplyTerrainChanges` now says so, once,
+when it runs inside a parallel task.)
+
+**Shared writes reachable from A and C, and what became of each (the audit of step 4.6).** The write trap sees units',
+shells' and armies' own bytes, and the order check runs one turn at a time, so a write to a SHARED structure that gives
+the same result in any order (a counter, a cache filled by its first reader) is seen by neither; it only loses data
+under real concurrency. Every such write found from phases A1, C1 and C:
+
+| Shared state | Written by | Done |
+|---|---|---|
+| An army's intel grid counts | `IntelExactUpdate` (a unit's horizontal event turning Stopped) | in the commit, by key (4.6) |
+| The o-grid reservation cells | `GroundReserveRectImpl` / `GroundFreeRectImpl`, `CanReserve`'s lift of the own rect | the cell writes in the commit; the auto-landing search, the only reader in A, in the commit too (4.4) |
+| A path grid's terrain caps | `PathGrid::Passable` / `Caps` applying pending terrain changes at their first read | `Navigation::ApplyTerrainChanges` before each phase on the pool (4.6) |
+| A blueprint's footprint grid pointers | `FootprintGrid` / `AltFootprintGrid` (and `Navigation::Grid`) at the first read | made in the snapshot pass (4.6) |
+| The category masks | `BpCategoryMask` at a name's first use | inside a task the mask is made for that call only (4.6) |
+| The air height tiers | `GetTiers` at the first look ahead | made in the snapshot pass (`AirTiersReady`, 4.6) |
+| A per-sim cache's slot | `SimCache::For` at a site's first call | none found inside a task (the detector below) |
+| The dirty order's stamp | `MarkDirty` (a health change) | in the commit (4.4) |
+| An army's request list | `FuelTick`'s repair request (`NewRequest`) | in the commit (4.4) |
+| The held shapes' list | `HoldShape` | the snapshot pass (4.4) |
+| The Lua threads' run list | a manipulator's signal (`SignalEvent`) | in the commit (4.4) |
+| The deferred calls' list | `DeferScriptCall` / `DeferAction` | a list per worker, merged by key (4.6) |
+| The entity grid's marks | the contact search's gather | mark-free gather (4.3) |
+| A formation group's leader cache | `GroupLeader` | not written in A (4.4); not reached from C |
+| The aim speculation's counters | `AimReadLastPose` | not counted from a task (4.6) |
+| A host's impact and health lists | `RecordImpact`, `RecordHealth` | in the commit (4.4) |
+| Phase D's army sums | the units' economy | per unit, summed in creation order (4.5); D stays on the sim's thread |
+
+`NoteLazyFillInTask` (core/workers.h) says once on stderr when one of the lazily made caches above (SimCache slot,
+`Navigation::Grid`, `FootprintGrid`, `BpCategoryMask`, `GetTiers`, a path grid's pending changes) is filled inside a
+parallel task: none in B1 12000 and b8 6000 at 16 threads since. A new counter or cache reachable from a phase belongs in
+this table.
+
+**The order check of the phases (step 4.4).** With the pool's order check on (`MOHO64_PAR_CHECK=shuffle[:seed]` /
+`reverse`), A1, C1 and C run through `WorkerPool::ParallelFor`: their turns in a shuffled or reversed order, on the
+sim's thread, and with no Lua allowed (a Lua call inside a task stops the program; `MOHO64_PAR_LUACHECK=log` logs each
+caller chain once and goes on, for an audit). A turn whose result depended on which turns ran before it would show in
+the fingerprints. b8 6000 beats (shuffle, shuffle:7, reverse), B3-16k 2000 (shuffle) and B1 12000 (shuffle): identical to
+the 1-thread run every beat, no Lua call in a task.
 - **Phase A, motion (pool).** Every unit, shell and beam steps from the snapshot: spline point, ground snap, coast,
   layer test, fuel, info cache, the aim controllers and pose (they read targets' committed state), the unit's own
   economy demand. Writes: its own pending transform and motion state. Contacts (`ProcessSurfaceCollision`'s search)
@@ -383,12 +485,26 @@ other entities in these places, by count:
 
 | What | Where | b8 / B1 / B3 writes | In step 4 |
 |---|---|---|---|
-| The unit's economy into its army's pools | `UnitEconomyTick` (economy.cpp 504), `ArmyEconomy::ChangeStorage` | 2.8 M / 0.57 M / 31 M | phase D: per-unit results, summed into the army in creation order |
+| The unit's economy into its army's pools | `UnitEconomyTick` (economy.cpp 504), `ArmyEconomy::ChangeStorage` | 2.8 M / 0.57 M / 31 M | done (step 4.5): per-unit results, summed into the army in creation order after phase D (`Sim::SumUnitEconomy`) |
 | `gridMark` of every entity a gather finds | `EntityGrid::GatherBox` / `GatherLine` / `Gather` (contacts, shells' line march, `DamageArea`) | 1.6 M / 0.13 M / 3.9 M | contacts: done (step 4.3: `SurfaceSearch` takes `GatherBoxNoMarks`, the same list in the same order, inside parallel order's phases); shells and `DamageArea` run serially before / after the phases |
 | Aim's target read at its beat-start transform by putting it into the target and back | combat.cpp `Aim` | 62 k / 8 k / 483 k | done (step 4.0): read through a per-thread override (`tl_atBeatStart`), nothing written; the same for a shell homing on a later unit's last pose (`TargetPosLastPose`) |
 | Pushes into the other unit | `DoCollisionsFor` -> `AddImpulse` | 19 k / 0.8 k / 40 | phase A: symmetric pushes, each unit applies the ones it receives |
 | A shell's hit: damage, kills and what the scripts do with them (`AdjustHealth`, `Kill`, `IssueClearCommands`, `MotionStop`, stun, regen, max health, script bits, army kill counts) | `OnImpact` / `DamageArea` / `OnKilled` (Lua) | 1-2 k / 0.6 k / 30 k | phase B (key order) |
 | A unit's Lua writing another unit (`IssueClearCommands` from a callback, `AdjustHealth`, `QueueDestroy`) | luaD_precall | a few | phase B |
+
+**The reads mode (step 4.4, `MOHO64_PAR_WRITETRAP=reads`).** Other units, shells and armies not even readable during
+a turn: every read of another entity is listed too. Each turn's own entity is compared before and after it (its bytes, by
+4-byte word), so the report knows, per phase, which words the phase's turns change in their own entity; a read of
+another entity is a HAZARD when it reads such a word (what it sees then depends on whether that entity's turn came
+first) and stable otherwise (the object itself is the snapshot: no turn of the phase changes it). The report's lines
+`writetrap: read +0x.. <phase>: HAZARD ...: <offsets>; stable: <offsets>`, `writetrap: own writes <phase>: <offsets>`,
+and the total `writetrap: reads of words their phase's turns change (hazards): N sites` (the field names: e1c's
+fieldmap.py over a clang `-fdump-record-layouts` dump of units.h). The first audit (b8 3000 beats, step 4.3 + the
+A1 / A2 split): 56 hazard sites (A: the platform, contact, landing, tactics and formation reads above; C: aims reading
+their targets' poses). After step 4.4: none in A, C1 and C (b8 3000, B1 6000, B3-16k 1000 beats); A2's reads of its
+parents' new transforms remain, by design. Like the write trap it sees the objects' own bytes only: what they own on
+the heap (an aircraft's body, a pose's bones, a formation's groups) was read in the code, and the order check above
+covers what reaches the fingerprints.
 
 Script methods the engine calls inside the pass (b8 / B3): `OnMotionHorzEventChange` 57 k / 218 k, `OnTerrainTypeChange`
 21 k / 72 k, `OnCollision` (props, on the prop) 22 k / 18 k, `OnCreate` (of entities the scripts make in the pass) 48 k /

@@ -793,6 +793,10 @@ std::string WeaponBlueprintId(const UnitWeapon* w) {
 }
 
 void RecordImpact(Sim& sim, int kind, const Entity* source, const char* type, const Entity* met, Vec3 at, Vec3 velocity) {
+  if (sim.DeferringScripts()) {  // (parallel order's phases: the host's list is written in the phase's commit, in key order)
+    sim.DeferAction([&sim, kind, source, type, met, at, velocity] { RecordImpact(sim, kind, source, type, met, at, velocity); });
+    return;
+  }
   ImpactEvent ev;
   ev.kind = static_cast<ImpactEvent::Kind>(kind);
   ev.type = type;

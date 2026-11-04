@@ -9,7 +9,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
+#include <string>
 
+#include "core/backtrace.h"
 #include "core/fpenv.h"
 #include "core/log.h"
 #include "core/profile.h"
@@ -23,6 +26,7 @@ extern __declspec(thread) int lua_gpg_in_task;
 #else
 extern __thread int lua_gpg_in_task;
 #endif
+extern void (*lua_gpg_task_used_hook)(lua_State* L);  // (MOHO64_PAR_LUACHECK=log)
 }
 
 namespace moho {
@@ -64,6 +68,16 @@ ThreadsOverride::~ThreadsOverride() { t_threads = was_; }
 
 bool InParallelTask() { return lua_gpg_in_task != 0; }
 
+void NoteLazyFillInTask(const char* what) {
+  static std::mutex m;
+  static std::vector<const char*> said;
+  std::lock_guard<std::mutex> lock(m);
+  for (const char* s : said)
+    if (s == what) return;
+  said.push_back(what);
+  std::fprintf(stderr, "moho64: a shared cache was filled inside a parallel task: %s\n", what);
+}
+
 int ThreadsFromEnvironment() {
   if (t_threads > 0) return t_threads;
   const char* v = std::getenv("MOHO64_THREADS");
@@ -73,10 +87,37 @@ int ThreadsFromEnvironment() {
   return std::clamp(n, 1, 256);
 }
 
+namespace {
+// MOHO64_PAR_LUACHECK=log (with MOHO64_PAR_CHECK): a task's Lua call is logged, once per chain of callers (image
+// offsets, innermost first, for llvm-symbolizer), and goes on, instead of stopping the program at the first: the audit
+// of what a stage still runs in Lua before it may go to the pool. Only the order check runs tasks on the calling
+// thread, so the call itself is safe there.
+void LogTaskLua(lua_State*) {
+  static std::mutex m;
+  static std::vector<uint64_t> seen;
+  void* fr[24];
+  const int n = CaptureFrames(fr, 24);
+  uint64_t h = 1469598103934665603ull;
+  for (int i = 2; i < n && i < 12; ++i) h = (h ^ ImageOffset(fr[i])) * 1099511628211ull;
+  std::lock_guard<std::mutex> lock(m);
+  if (std::find(seen.begin(), seen.end(), h) != seen.end()) return;
+  seen.push_back(h);
+  std::string line = "moho64: a parallel task called the Lua API at";
+  char b[32];
+  for (int i = 2; i < n && i < 22; ++i) {
+    std::snprintf(b, sizeof b, " +0x%llx", static_cast<unsigned long long>(ImageOffset(fr[i])));
+    line += b;
+  }
+  std::fprintf(stderr, "%s\n", line.c_str());
+}
+}  // namespace
+
 ParCheck ParCheckFromEnvironment() {
   ParCheck c;
   const char* v = std::getenv("MOHO64_PAR_CHECK");
   if (!v || !*v) return c;
+  if (const char* l = std::getenv("MOHO64_PAR_LUACHECK"); l && std::strcmp(l, "log") == 0)
+    lua_gpg_task_used_hook = LogTaskLua;
   if (std::strncmp(v, "shuffle", 7) == 0) {
     c.mode = ParCheck::kShuffle;
     if (v[7] == ':') c.seed = std::strtoull(v + 8, nullptr, 0);

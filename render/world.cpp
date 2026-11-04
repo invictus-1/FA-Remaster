@@ -566,7 +566,17 @@ void World::LoadBrackets() {
 // each of its corners sits, centred, a square piece of side 2 f M, M the larger half side and f the
 // blueprint's SelectionThickness (else 0.2); f is raised so that a piece's half side is never under
 // 3 pixels (ren_SelectBracketMinPixelSize; the engine's reading says pixels, its unit not read).
+// [bracket54] The centre is the middle of the mesh's bounds as placed (x, z; the engine's "render 54": the original adds the
+// offset to its mesh instance's world box's centre), not the unit's origin: the UEF commander's mesh lies forward of its
+// origin, and its SelectionCenterOffsetZ -0.4 brings the box's middle back over its feet (Chris, 2026-11-04: "the yellow
+// squre under the acu isn't centered"). The unit's place without a mesh.
 void World::AddBrackets(int kind, Vec3 position, const Quat& orientation, const StrategicIcons::Kind& unit, const Model* model) {
+  if (model && model->ok) {
+    const Vec3 middle = Rotate(orientation, {(model->boundsMin.x + model->boundsMax.x) * 0.5f * model->scale, 0,
+                                             (model->boundsMin.z + model->boundsMax.z) * 0.5f * model->scale});
+    position.x += middle.x;
+    position.z += middle.z;
+  }
   float hx = unit.selectionX * 0.75f, hz = unit.selectionZ * 0.75f;
   if (!unit.selectionGiven && model && model->ok) {
     hx = (model->boundsMax.x - model->boundsMin.x) * 0.5f * model->scale * 1.85f;

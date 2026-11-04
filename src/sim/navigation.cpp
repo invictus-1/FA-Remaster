@@ -2,6 +2,7 @@
 #include "sim/navigation.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -248,6 +249,13 @@ void PathGrid::TerrainChanged(int vx0, int vz0, int vx1, int vz1) {
 
 void PathGrid::ApplyTerrainChanges() const {
   if (!pendingAny_) return;
+  // (a grid read first inside a parallel task would take its pending changes there, on several threads at once: the
+  // stages that read grids on the pool take them first, Navigation::ApplyTerrainChanges. Said once, as a bug)
+  if (InParallelTask()) {
+    static std::atomic<bool> said{false};
+    if (!said.exchange(true))
+      std::fprintf(stderr, "moho64: a path grid's terrain changes were taken inside a parallel task (not before its stage)\n");
+  }
   GridScratch local;  // (only when the grid was made without Navigation's buffers)
   GridScratch& s = scratch_ ? *scratch_ : local;
   for (const Rect& r : pending_) {
@@ -437,6 +445,7 @@ const PathGrid* Navigation::Grid(const NamedFootprint& fp) {
   const std::string key = GridKey(fp);
   auto it = grids_.find(key);
   if (it != grids_.end()) return it->second.get();
+  if (InParallelTask()) NoteLazyFillInTask("Navigation::Grid");
   MOHO_ZONE("path grid made");
   MOHO_ZONE_TEXT(key.data(), key.size());
   prof::SectionTimer sec(prof::kSecPathGridMade);  // (MOHO64_PROFILE_HITCH only: which grid, and its time)
