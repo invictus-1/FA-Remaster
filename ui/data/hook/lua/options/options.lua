@@ -551,6 +551,162 @@ local looks = {
             },
         },
     },
+    -- The renderer's looks from Chris's big test (2026-11-01; render/world.h): each on by default, the earlier look kept
+    -- as Off (Chris: new looks are player options); corrections of the remastered look, not quality steps, so in no
+    -- preset level. (ui/user/user_state.h LookSettings has which field of the world each sets.)
+    {
+        -- the renderer's Ocean::glitter
+        title = "Ocean Glitter",
+        key = 'remaster_ocean_glitter',
+        tip = "The sun's glitter on the sea as a soft path of light round the sun's reflection, the water elsewhere calm. Off: the earlier glitter, the whole sea sparkling with single bright pixels.",
+        type = 'toggle',
+        default = 1,
+        set = Look("remaster_ocean_glitter"),
+        custom = {
+            states = {
+                { text = "<LOC _Off>", key = 0 },
+                { text = "<LOC _On>", key = 1 },
+            },
+        },
+    },
+    {
+        -- the renderer's Water::shoreSoak
+        title = "Shore Soak",
+        key = 'remaster_shore_soak',
+        tip = "The ground under the shallow water drawn soaked and dark like the wet beach above it, so the water meets the shore. Off: the earlier look, the shallows bright past the wet band.",
+        type = 'toggle',
+        default = 1,
+        set = Look("remaster_shore_soak"),
+        custom = {
+            states = {
+                { text = "<LOC _Off>", key = 0 },
+                { text = "<LOC _On>", key = 1 },
+            },
+        },
+    },
+    {
+        -- the renderer's EnergyShields::bend and steadyUnits (with Energy Shields on)
+        title = "Shield Bending",
+        key = 'remaster_shield_bend',
+        tip = "How much an energy shield bends what is behind it, as through glass. Subtle: a little, and units and buildings under it stay sharp. Full: everything behind it bent, the earlier look. Off: nothing bent. Needs Energy Shields on.",
+        type = 'toggle',
+        default = 1,
+        set = Look("remaster_shield_bend"),
+        custom = {
+            states = {
+                { text = "<LOC _Off>", key = 0 },
+                { text = "Subtle", key = 1 },
+                { text = "Full", key = 2 },
+            },
+        },
+    },
+    {
+        -- the renderer's World::hullGlow (and hullReach, hullAir, hullEvenColours, hullShare from it: LookSettings)
+        title = "Unit Glow at Night",
+        key = 'remaster_unit_glow',
+        tip = "How strongly the units' own lights glow at night. 100: the earlier glow, at full strength and reach, each army's colour as bright as its lamps say and crowded bases adding up.",
+        type = 'slider',
+        default = 75,
+        set = function(key, value, startup)
+            ConExecute("remaster_unit_glow " .. tostring(value / 100))
+        end,
+        custom = {
+            min = 0,
+            max = 100,
+            inc = 5,
+        },
+    },
+    {
+        -- the renderer's Post::sharpen
+        title = "Sharpen",
+        key = 'remaster_sharpen',
+        tip = "Sharpens the picture's fine detail, the units' textures most, without halos. 0: no sharpening, the earlier picture. Not with an upscaler, which sharpens by itself.",
+        type = 'slider',
+        default = 50,
+        set = function(key, value, startup)
+            ConExecute("remaster_sharpen " .. tostring(value / 100))
+        end,
+        custom = {
+            min = 0,
+            max = 100,
+            inc = 5,
+        },
+    },
+    {
+        -- the renderer's World::remasteredGate (with the modern look and the remastered effects)
+        title = "Remastered Gateway",
+        key = 'remaster_gateway',
+        tip = "The quantum gateway's field remade. Off: the original's texture. Needs the Remastered look and Remastered Effects.",
+        type = 'toggle',
+        default = 1,
+        set = Look("remaster_gateway"),
+        custom = {
+            states = {
+                { text = "<LOC _Off>", key = 0 },
+                { text = "<LOC _On>", key = 1 },
+            },
+        },
+    },
+    {
+        -- the renderer's World::ghostLook (ui request 41)
+        title = "Ghost Look",
+        key = 'remaster_ghost_look',
+        tip = "A structure queued or being placed shows as a see-through ghost with a brighter outline, as in the original game. Off: the earlier look, a solid model in one colour.",
+        type = 'toggle',
+        default = 1,
+        set = Look("remaster_ghost_look"),
+        custom = {
+            states = {
+                { text = "<LOC _Off>", key = 0 },
+                { text = "<LOC _On>", key = 1 },
+            },
+        },
+    },
+    {
+        -- the renderer's World::guidePull
+        title = "Guide over Grass",
+        key = 'remaster_guide',
+        tip = "A building's green outline and the placement guide drawn over the grass with a dark edge, easy to line up. Off: the earlier look, partly hidden in tall grass.",
+        type = 'toggle',
+        default = 1,
+        set = Look("remaster_guide"),
+        custom = {
+            states = {
+                { text = "<LOC _Off>", key = 0 },
+                { text = "<LOC _On>", key = 1 },
+            },
+        },
+    },
+    {
+        -- the renderer's World::cloakLook
+        title = "Cloak Look",
+        key = 'remaster_cloak_look',
+        tip = "A cloaked unit drawn as in the original game: a see-through shimmer in its faction's shield colour, its lights off. Off: drawn as an ordinary unit.",
+        type = 'toggle',
+        default = 1,
+        set = Look("remaster_cloak_look"),
+        custom = {
+            states = {
+                { text = "<LOC _Off>", key = 0 },
+                { text = "<LOC _On>", key = 1 },
+            },
+        },
+    },
+    {
+        -- the renderer's World::stealthLook (ours: the original shows nothing for radar stealth)
+        title = "Stealth Veil",
+        key = 'remaster_stealth_veil',
+        tip = "Your own and allied units hidden from radar (their stealth on, or in a stealth field) wear a faint shimmering veil, so you see which are hidden. Off: as in the original game, no sign.",
+        type = 'toggle',
+        default = 1,
+        set = Look("remaster_stealth_veil"),
+        custom = {
+            states = {
+                { text = "<LOC _Off>", key = 0 },
+                { text = "<LOC _On>", key = 1 },
+            },
+        },
+    },
 }
 
 -- Ray Tracing's default (Chris, 2026-10-18: every look on at its highest): On where the card can ray trace; where it
@@ -687,3 +843,20 @@ for _, item in options.video.items do
         }
     end
 end
+
+-- The simulation's order for a new game that has no lobby (a campaign operation; the lobby's own option
+-- "Simulation Order" decides for a skirmish or a network game): Chris, 2026-10-31, multicore option 2, our own order for
+-- new games by default. Read at the launch (ui/app/game_session.cpp LaunchSinglePlayer). Replays play in their own.
+table.insert(options.gameplay.items, {
+    title = "Simulation Order for New Games",
+    key = 'remaster_sim_order',
+    tip = "How a new campaign operation works out each moment. Remastered: FA Remastered's own order, made to use many processor cores. Original: the original game's order. Both are exact; a skirmish takes the lobby's own choice, a replay the order it was recorded in.",
+    type = 'toggle',
+    default = 'parallel',
+    custom = {
+        states = {
+            { text = "Remastered", key = 'parallel' },
+            { text = "Original", key = 'original' },
+        },
+    },
+})

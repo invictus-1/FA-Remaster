@@ -142,18 +142,28 @@ int l_SessionResume(lua_State* L) {
 // (the players who can give orders), by their number from 1. SessionGetLocalCommandSource()
 // (0x897c70): the number of the one this player speaks for, 0 when he can give no orders. The
 // game's script names who paused by them.
+// (Both from the beat's copies once there are some: CopyFromSimulation.)
+std::vector<std::string> CommandSourceNames(lua_State* L) {
+  UserState* user = UserState::From(L);
+  if (user->economyCopied) return user->commandSourcesCopy;
+  std::vector<std::string> names;
+  for (const auto& source : TheSim(L)->cmdSources) names.push_back(source.name);
+  return names;
+}
 int l_SessionGetCommandSourceNames(lua_State* L) {
   lua_newtable(L);
   int n = 0;
-  for (const auto& source : TheSim(L)->cmdSources) {
-    lua_pushstring(L, source.name.c_str());
+  for (const std::string& name : CommandSourceNames(L)) {
+    lua_pushstring(L, name.c_str());
     lua_rawseti(L, -2, ++n);
   }
   return 1;
 }
 int l_SessionGetLocalCommandSource(lua_State* L) {
-  int source = UserState::From(L)->config().commandSource;
-  bool ours = TheSim(L)->focusArmy >= 0 && source >= 0 && source < static_cast<int>(TheSim(L)->cmdSources.size());
+  UserState* user = UserState::From(L);
+  int source = user->config().commandSource;
+  const int focus = user->economyCopied ? user->focusArmyCopy : TheSim(L)->focusArmy;
+  bool ours = focus >= 0 && source >= 0 && source < static_cast<int>(CommandSourceNames(L).size());
   lua_pushnumber(L, ours ? source + 1 : 0);
   return 1;
 }
@@ -166,9 +176,11 @@ int l_SessionEndGame(lua_State* L) {
   RequestSessionEnd(L);
   return 0;
 }
+// (The simulation's flag from the beat's copy once there is one: the score screen's thread asks it every frame.)
 int l_SessionIsGameOver(lua_State* L) {
-  const GamePace* pace = UserState::From(L)->config().pace;
-  lua_pushboolean(L, (pace && pace->ended) || TheSim(L)->endGame);
+  UserState* user = UserState::From(L);
+  const GamePace* pace = user->config().pace;
+  lua_pushboolean(L, (pace && pace->ended) || (user->economyCopied ? user->endGameCopy : TheSim(L)->endGame));
   return 1;
 }
 int l_GetSimTicksPerSecond(lua_State* L) {
@@ -182,8 +194,12 @@ int l_SessionIsReplay(lua_State* L) {
   return 1;
 }
 int l_SessionIsPaused(lua_State* L) {
-  // (in a replay also while its viewer holds it: ReplayHeld)
-  lua_pushboolean(L, TheSim(L)->pauseOwner != -1 || (TheSim(L)->isReplay && ReplayHeld()));
+  // (in a replay also while its viewer holds it: ReplayHeld; the simulation's pause from the beat's copy once there is
+  // one: a pause or a resume is carried out in the beat it goes with, before that beat's sync)
+  UserState* user = UserState::From(L);
+  const bool paused = user->economyCopied ? user->pauseOwnerCopy != -1 : TheSim(L)->pauseOwner != -1;
+  const bool replay = user->economyCopied ? user->isReplayCopy : TheSim(L)->isReplay;
+  lua_pushboolean(L, paused || (replay && ReplayHeld()));
   return 1;
 }
 // GetFocusArmy(): the army the player looks through, counted from 1; -1 for an observer.
@@ -201,9 +217,8 @@ int l_SetFocusArmy(lua_State* L) {
   if (lua_gettop(L) != 1) return luaL_error(L, "%s\n  expected %d args, but got %d", "SetFocusArmy", 1, lua_gettop(L));
   const int n = static_cast<int>(luaL_checknumber(L, 1));
   UserState* user = UserState::From(L);
-  Sim* sim = TheSim(L);
-  if (!sim) return luaL_error(L, "No session started.");
-  const int armies = static_cast<int>(user->economyCopied ? user->armiesCopy.size() : ArmyViews(*sim).size());
+  if (!user->HasSim()) return luaL_error(L, "No session started.");
+  const int armies = static_cast<int>(user->economyCopied ? user->armiesCopy.size() : ArmyViews(*TheSim(L)).size());
   if (n != -1 && (n < 1 || n > armies))
     return luaL_error(L, "Invalid army index of %d; must be between 1 and %d inclusive.", n, armies);
   RequestFocusArmyChecked(L, n == -1 ? -1 : n - 1);
@@ -420,10 +435,13 @@ int l_ValidateUnitsList(lua_State* L) {
 
 // IsAlly(army1, army2), IsEnemy, IsNeutral: how the first army stands towards the second
 // (armies counted from 1). An army stands as an ally towards itself.
+// (The armies from the beat's copy once there is one, as GetArmiesTable: alliances change only in a beat.)
 int Stance(lua_State* L) {
   int a = static_cast<int>(luaL_checknumber(L, 1)), b = static_cast<int>(luaL_checknumber(L, 2));
   if (a == b) return 2;
-  for (const ArmyView& v : ArmyViews(*TheSim(L)))
+  UserState* user = UserState::From(L);
+  std::vector<ArmyView> asked;
+  for (const ArmyView& v : user->economyCopied ? user->armiesCopy : (asked = ArmyViews(*TheSim(L))))
     if (v.index == a && b >= 1 && b <= static_cast<int>(v.alliance.size())) return v.alliance[static_cast<size_t>(b - 1)];
   return 0;
 }
@@ -652,10 +670,12 @@ int l_SessionSendChatMessage(lua_State* L) {
 // source belongs to no army at all (FAF's exe makes the original's "no army still in the game" that): never in our
 // games, where it always belongs to the player's army. A request the checks refuse is dropped quietly. The engine
 // applies it at its next Sync (Sim::RequestFocusArmy, engine request 29; the original's sim driver slot 0x30); this
-// state takes the change from that beat's copy (CopyFromSimulation).
+// state takes the change from that beat's copy (CopyFromSimulation). The request is the simulation's queued atomic
+// slot, taken at its next Sync (the engine, 2026-11-03), so it is written without waiting for a running beat (no
+// LiveSim); the checks read the sync's copies (before the first sync, when no beat has run yet, the simulation).
 void RequestFocusArmyChecked(lua_State* L, int wanted) {
   UserState* user = UserState::From(L);
-  Sim* sim = TheSim(L);
+  Sim* sim = user->config().liveSim;
   if (!sim) return;
   const int armies = static_cast<int>(user->economyCopied ? user->armiesCopy.size() : ArmyViews(*sim).size());
   if (wanted < -1 || wanted >= armies) {
@@ -680,7 +700,7 @@ void RequestFocusArmyChecked(lua_State* L, int wanted) {
     lua_settop(L, top);
   }
   const GamePace* pace = user->config().pace;
-  const bool over = (pace && pace->ended) || sim->endGame;
+  const bool over = (pace && pace->ended) || user->endGameCopy;
   const int own = user->config().ownArmy;
   const bool allowed = replay || own < 0 || cheats || (wanted != -1 && wanted == own) || over;
   if (!allowed) return;
@@ -848,6 +868,10 @@ void UserState::CopyFromSimulation() {
   tickFraction = std::clamp(tickFraction - static_cast<double>(ticks), 0.0, 1.0);
   tickCopy = sim->tick();
   isReplayCopy = sim->isReplay;
+  endGameCopy = sim->endGame;
+  pauseOwnerCopy = sim->pauseOwner;
+  commandSourcesCopy.clear();
+  for (const auto& source : sim->cmdSources) commandSourcesCopy.push_back(source.name);
   armiesCopy = ArmyViews(*sim);
   // (the deposits: the map's script makes them at the start, CreateResourceDeposit; a script may add more)
   if (depositsCopy.size() != sim->deposits.size()) {
@@ -874,6 +898,11 @@ void UserState::AdvanceTickFraction(double seconds) {
 
 void UserState::DeliverSync(const std::string& blob) {
   lua_State* L = state_->L();
+  struct Delivering {  // (between beats: PretendBeatForTests)
+    bool& on;
+    explicit Delivering(bool& b) : on(b) { on = true; }
+    ~Delivering() { on = false; }
+  } delivering(deliveringSync_);
   ++syncCount;
   RefreshUserUnits(L);
   CopyFromSimulation();
@@ -910,7 +939,9 @@ void UserState::DeliverSync(const std::string& blob) {
 
 std::string ArmyColorOf(lua_State* L, int army) {
   std::string color, icon;
-  for (const ArmyView& a : ArmyViews(*TheSim(L)))
+  UserState* user = UserState::From(L);
+  std::vector<ArmyView> asked;
+  for (const ArmyView& a : user->economyCopied ? user->armiesCopy : (asked = ArmyViews(*TheSim(L))))
     if (a.index == army) ArmyColors(L, a, &color, &icon);
   return color.empty() ? "ff808080" : color;
 }

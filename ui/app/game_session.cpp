@@ -96,6 +96,24 @@ void WorldLooks(render::World& w, const LookSettings& looks, bool photoLook) {
   w.energyShields = looks.energyShields;
   w.lampsTeamColour = looks.lampsTeamColour;  // (Unit Glow Colour: team or faction, render 1fd45da)
   w.heat.softScorch = looks.softScorch;        // (Scorch Glow: soft or bright, render 5d77cf6)
+  // (the renderer's looks from Chris's big test, each with the earlier look as Off: LookSettings)
+  w.water.ocean.glitter = looks.oceanGlitter ? 1 : 0;  // (Ocean Glitter)
+  w.water.shoreSoak = looks.shoreSoak;                // (Shore Soak)
+  // (Shield Bending: Off nothing bent; Subtle a little, units under the shield never; Full everything behind, as 10-28)
+  w.energy.bend = looks.shieldBend <= 0 ? 0.0f : looks.shieldBend == 1 ? 0.35f : 1.0f;
+  w.energy.steadyUnits = looks.shieldBend <= 1;
+  // (Unit Glow at Night: at 1 the glow as before the big test, all of it)
+  const float glow = std::max(0.0f, std::min(1.0f, looks.unitGlow));
+  w.hullGlow = glow;
+  w.hullReach = 0.4f + 0.6f * glow;
+  w.hullAir = glow >= 1.0f ? 1.0f : 0.5f;
+  w.hullEvenColours = w.hullShare = glow < 1.0f;
+  w.post.sharpen = std::max(0.0f, std::min(1.0f, looks.sharpen));  // (Sharpen)
+  w.remasteredGate = looks.remasteredGate;                         // (Remastered Gateway)
+  w.ghostLook = looks.ghostLook ? 1 : 0;                           // (Ghost Look: see-through, or solid as before)
+  w.guidePull = looks.guideOverGrass ? 1.2f : 0.0f;                // (Guide over Grass)
+  w.cloakLook = looks.cloakLook;                                   // (Cloak Look)
+  w.stealthLook = looks.stealthLook;                               // (Stealth Veil)
   // (ren_DecalFadeFraction: the decals fade by distance as the original's CWldTerrainDecal::GetLODAlpha 0x89d400,
   // render 33; 0.5 stock, 0.25 once FAF's gamemain.lua has set it)
   w.decalFadeFraction = looks.decalFadeFraction;
@@ -482,6 +500,7 @@ struct GameSession::Picture : WorldSource {
       p.position[0] = g.position[0], p.position[1] = g.position[1], p.position[2] = g.position[2];
       p.heading = g.heading;
       p.free = g.free;
+      p.placing = g.placing;  // (the cursor's ghost, brighter than the ordered sites: ui request 41)
       previews.push_back(p);
     }
     picture.SetBuildPreviews(previews);
@@ -1218,6 +1237,25 @@ bool GameSession::LaunchWith(lua_State* L, int config, net::LobbyCore* lobby, st
     params.localOwner = lobby->Uid();
     params.network = true;
   }
+  // The simulation's order (Chris, 2026-10-31, multicore option 2: our parallel-friendly order for new games, the
+  // original's kept for the original's replays): the lobby's option RemasterSimOrder ("parallel" / "original"); with
+  // "parallel" its version beside it, as src/sim/replay.h ScenarioSimOrder reads them. Every client of a network game
+  // adds it alike from the same options, and the record keeps both, so its replay plays in the order it was made in.
+  lua_getfield(L, config, "GameOptions");
+  if (lua_istable(L, -1)) {
+    lua_getfield(L, -1, "RemasterSimOrder");
+    const bool parallel = lua_isstring(L, -1) && std::string(lua_tostring(L, -1)) == "parallel";
+    lua_pop(L, 1);
+    lua_getfield(L, -1, "RemasterSimOrderVersion");
+    const bool hasVersion = !lua_isnil(L, -1);
+    lua_pop(L, 1);
+    if (parallel && !hasVersion) {
+      lua_pushstring(L, "RemasterSimOrderVersion");
+      lua_pushnumber(L, 1);
+      lua_rawset(L, -3);
+    }
+  }
+  lua_pop(L, 1);
   if (!SessionFromGameConfig(L, config, params, &session, why)) return false;
 
   // The session's clients (CLobby::LaunchGame 0x7c38c0): the human armies in army order, then the observers, each
@@ -1338,6 +1376,41 @@ bool GameSession::LaunchSinglePlayer(lua_State* L, int info, std::string* why) {
   SinglePlayerParams params;
   params.seed = seedGiven ? seed : static_cast<uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count());
   params.cheats = DebugFacilities(L);
+  // The simulation's order of a new operation (no lobby to choose it: Options > Gameplay's "Simulation Order for New
+  // Games", our own order unless chosen; the engine, 2026-11-03), and its version, as LaunchWith gives a lobby's game.
+  lua_getfield(L, info, "scenarioInfo");
+  if (lua_istable(L, -1)) {
+    lua_getfield(L, -1, "Options");
+    if (!lua_istable(L, -1)) {
+      lua_pop(L, 1);
+      lua_newtable(L);
+      lua_pushstring(L, "Options");
+      lua_pushvalue(L, -2);
+      lua_rawset(L, -4);
+    }
+    lua_getfield(L, -1, "RemasterSimOrder");
+    const bool given = lua_isstring(L, -1);
+    lua_pop(L, 1);
+    if (!given) {
+      std::string order = "parallel";
+      lua_getglobal(L, "GetOptions");
+      if (lua_isfunction(L, -1)) {
+        lua_pushstring(L, "remaster_sim_order");
+        if (lua_pcall(L, 1, 1, 0) == 0 && lua_isstring(L, -1)) order = lua_tostring(L, -1);
+      }
+      lua_pop(L, 1);
+      lua_pushstring(L, "RemasterSimOrder");
+      lua_pushstring(L, order == "original" ? "original" : "parallel");
+      lua_rawset(L, -3);
+      if (order != "original") {
+        lua_pushstring(L, "RemasterSimOrderVersion");
+        lua_pushnumber(L, 1);
+        lua_rawset(L, -3);
+      }
+    }
+    lua_pop(L, 1);
+  }
+  lua_pop(L, 1);
   if (!SessionFromSinglePlayerInfo(L, info, params, &session, why)) return false;
   lua_getfield(L, info, "scenarioMods");
   const std::vector<std::string> uids = ModUids(L, lua_gettop(L));

@@ -313,7 +313,9 @@ const std::vector<const char*>& ConsoleNames() {
         "remaster_ground_detail", "remaster_frame_generation", "remaster_water_ripples", "remaster_lens", "remaster_cinecam",
         "remaster_photo", "remaster_battle_effects", "remaster_energy_shields", "remaster_hidden_outlines",
         "remaster_photo_look", "remaster_low_latency", "remaster_photo_mode", "remaster_season", "remaster_color_vision",
-        "remaster_palette", "remaster_timeline", "remaster_follow_cam", "remaster_lamp_colour", "remaster_scorch"};
+        "remaster_palette", "remaster_timeline", "remaster_follow_cam", "remaster_lamp_colour", "remaster_scorch",
+        "remaster_ocean_glitter", "remaster_shore_soak", "remaster_shield_bend", "remaster_unit_glow", "remaster_sharpen",
+        "remaster_gateway", "remaster_ghost_look", "remaster_guide", "remaster_cloak_look", "remaster_stealth_veil"};
     std::sort(all.begin(), all.end(), ConNameLess);
     return all;
   }();
@@ -385,14 +387,25 @@ int l_FlushEvents(lua_State*) { return 0; }
 int l_LooksForTests(lua_State* L) {
   const LookSettings& looks = Looks();
   lua_newtable(L);
-  const char* names[20] = {"remasteredEffects", "tracers", "richGround", "snowTracks", "vulkan", "originalLook", "temporalUpscale",
+  const char* names[27] = {"remasteredEffects", "tracers", "richGround", "snowTracks", "vulkan", "originalLook", "temporalUpscale",
                            "atmosphere", "softShadows", "rayTracing", "weatherEffects", "groundDetail", "frameGeneration",
-                           "waterRipples", "lens", "battleEffects", "energyShields", "hiddenOutlines", "lampsTeamColour", "softScorch"};
-  const bool values[20] = {looks.remasteredEffects, looks.tracers, looks.richGround, looks.snowTracks, looks.vulkan,
+                           "waterRipples", "lens", "battleEffects", "energyShields", "hiddenOutlines", "lampsTeamColour", "softScorch",
+                           "oceanGlitter", "shoreSoak", "remasteredGate", "ghostLook", "guideOverGrass", "cloakLook", "stealthLook"};
+  const bool values[27] = {looks.remasteredEffects, looks.tracers, looks.richGround, looks.snowTracks, looks.vulkan,
                            looks.originalLook, looks.temporalUpscale, looks.atmosphere, looks.softShadows, looks.rayTracing,
                            looks.weatherEffects, looks.groundDetail, looks.frameGeneration, looks.waterRipples, looks.lens,
                            looks.battleEffects, looks.energyShields, looks.hiddenOutlines, looks.lampsTeamColour,
-                           looks.softScorch};
+                           looks.softScorch, looks.oceanGlitter, looks.shoreSoak, looks.remasteredGate, looks.ghostLook,
+                           looks.guideOverGrass, looks.cloakLook, looks.stealthLook};
+  lua_pushstring(L, "shieldBend");
+  lua_pushnumber(L, looks.shieldBend);
+  lua_rawset(L, -3);
+  lua_pushstring(L, "unitGlow");
+  lua_pushnumber(L, looks.unitGlow);
+  lua_rawset(L, -3);
+  lua_pushstring(L, "sharpen");
+  lua_pushnumber(L, looks.sharpen);
+  lua_rawset(L, -3);
   lua_pushstring(L, "photoLook");
   lua_pushnumber(L, looks.photoLook);
   lua_rawset(L, -3);
@@ -1434,7 +1447,10 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
     if (key == "REMASTER_ATMOSPHERE" || key == "REMASTER_SOFT_SHADOWS" || key == "REMASTER_RAY_TRACING" ||
         key == "REMASTER_WEATHER_EFFECTS" || key == "REMASTER_GROUND_DETAIL" ||
         key == "REMASTER_FRAME_GENERATION" || key == "REMASTER_WATER_RIPPLES" || key == "REMASTER_LENS" ||
-        key == "REMASTER_BATTLE_EFFECTS" || key == "REMASTER_ENERGY_SHIELDS" || key == "REMASTER_HIDDEN_OUTLINES") {  // (the renderer's switches: 0 off, 1 on)
+        key == "REMASTER_BATTLE_EFFECTS" || key == "REMASTER_ENERGY_SHIELDS" || key == "REMASTER_HIDDEN_OUTLINES" ||
+        key == "REMASTER_OCEAN_GLITTER" || key == "REMASTER_SHORE_SOAK" || key == "REMASTER_GATEWAY" ||
+        key == "REMASTER_GHOST_LOOK" || key == "REMASTER_GUIDE" || key == "REMASTER_CLOAK_LOOK" ||
+        key == "REMASTER_STEALTH_VEIL") {  // (the renderer's switches: 0 off, 1 on)
       bool& on = key == "REMASTER_ATMOSPHERE"         ? looks.atmosphere
                  : key == "REMASTER_SOFT_SHADOWS"     ? looks.softShadows
                  : key == "REMASTER_RAY_TRACING"      ? looks.rayTracing
@@ -1445,8 +1461,28 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
                  : key == "REMASTER_BATTLE_EFFECTS"   ? looks.battleEffects
                  : key == "REMASTER_ENERGY_SHIELDS"   ? looks.energyShields
                  : key == "REMASTER_HIDDEN_OUTLINES"  ? looks.hiddenOutlines
+                 : key == "REMASTER_OCEAN_GLITTER"    ? looks.oceanGlitter
+                 : key == "REMASTER_SHORE_SOAK"       ? looks.shoreSoak
+                 : key == "REMASTER_GATEWAY"          ? looks.remasteredGate
+                 : key == "REMASTER_GHOST_LOOK"       ? looks.ghostLook
+                 : key == "REMASTER_GUIDE"            ? looks.guideOverGrass
+                 : key == "REMASTER_CLOAK_LOOK"       ? looks.cloakLook
+                 : key == "REMASTER_STEALTH_VEIL"     ? looks.stealthLook
                                                       : looks.weatherEffects;
       if (!value.empty()) on = value[0] == '1' || Upper(value).rfind("ON", 0) == 0 || Upper(value).rfind("TRUE", 0) == 0;
+      return;
+    }
+    if (key == "REMASTER_SHIELD_BEND") {  // (Shield Bending: off, subtle or full; 0 / 1 / 2 too)
+      const std::string v = Upper(value);
+      if (v.rfind("OFF", 0) == 0 || v == "0") looks.shieldBend = 0;
+      else if (v.rfind("SUBTLE", 0) == 0 || v == "1") looks.shieldBend = 1;
+      else if (v.rfind("FULL", 0) == 0 || v == "2") looks.shieldBend = 2;
+      return;
+    }
+    if (key == "REMASTER_UNIT_GLOW" || key == "REMASTER_SHARPEN") {  // (Unit Glow at Night, Sharpen: 0..1)
+      if (!value.empty())
+        (key == "REMASTER_UNIT_GLOW" ? looks.unitGlow : looks.sharpen) =
+            std::max(0.0f, std::min(1.0f, static_cast<float>(std::atof(value.c_str()))));
       return;
     }
     if (key == "REMASTER_SCORCH") {  // (Scorch Glow: soft or bright; 1 / 0 too)

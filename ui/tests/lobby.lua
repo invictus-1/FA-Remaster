@@ -98,6 +98,57 @@ for _, key in {'remaster_atmosphere', 'remaster_soft_shadows', 'remaster_weather
     check("the Video tab has " .. key .. ", on unless chosen", video[key] and video[key].default, 1)
 end
 check("Frame Generation off unless chosen", video.remaster_frame_generation.default, 0)
+-- The renderer's looks from Chris's big test (2026-11-01): each on unless chosen, the earlier look kept as Off, in no
+-- preset level; at the start the program has their defaults (the test's preferences choose none of them)
+for _, key in {'remaster_ocean_glitter', 'remaster_shore_soak', 'remaster_gateway', 'remaster_ghost_look', 'remaster_guide',
+               'remaster_cloak_look', 'remaster_stealth_veil'} do
+    check("the Video tab has " .. key .. ", on unless chosen", video[key] and video[key].set ~= nil and video[key].default, 1)
+end
+check("Shield Bending: Subtle unless chosen, of Off, Subtle and Full", video.remaster_shield_bend and
+    video.remaster_shield_bend.default .. " " .. table.getn(video.remaster_shield_bend.custom.states), "1 3")
+check("Unit Glow at Night: a slider, 75 of 100 unless chosen", video.remaster_unit_glow and
+    video.remaster_unit_glow.type .. " " .. video.remaster_unit_glow.default .. " " .. video.remaster_unit_glow.custom.max, "slider 75 100")
+check("Sharpen: a slider, 50 of 100 unless chosen", video.remaster_sharpen and
+    video.remaster_sharpen.type .. " " .. video.remaster_sharpen.default .. " " .. video.remaster_sharpen.custom.max, "slider 50 100")
+do
+    local l = moho64ui_Looks()
+    check("the program starts with them on", tostring(l.oceanGlitter) .. " " .. tostring(l.shoreSoak) .. " " .. tostring(l.remasteredGate) ..
+        " " .. tostring(l.ghostLook) .. " " .. tostring(l.guideOverGrass) .. " " .. tostring(l.cloakLook) .. " " .. tostring(l.stealthLook),
+        "true true true true true true true")
+    check("Shield Bending Subtle, the units' glow 0.75, sharpening 0.5", l.shieldBend .. " " .. l.unitGlow .. " " .. l.sharpen, "1 0.75 0.5")
+end
+video.remaster_ocean_glitter.set('remaster_ocean_glitter', 0, false)
+video.remaster_ghost_look.set('remaster_ghost_look', 0, false)
+video.remaster_stealth_veil.set('remaster_stealth_veil', 0, false)
+check("Ocean Glitter, Ghost Look and Stealth Veil switched off in the menu are off", tostring(moho64ui_Looks().oceanGlitter) .. " " ..
+    tostring(moho64ui_Looks().ghostLook) .. " " .. tostring(moho64ui_Looks().stealthLook), "false false false")
+video.remaster_ocean_glitter.set('remaster_ocean_glitter', 1, false)
+video.remaster_ghost_look.set('remaster_ghost_look', 1, false)
+video.remaster_stealth_veil.set('remaster_stealth_veil', 1, false)
+video.remaster_shield_bend.set('remaster_shield_bend', 2, false)
+check("Full Shield Bending chosen in the menu reaches the program", moho64ui_Looks().shieldBend, 2)
+video.remaster_shield_bend.set('remaster_shield_bend', 0, false)
+check("and Off", moho64ui_Looks().shieldBend, 0)
+video.remaster_shield_bend.set('remaster_shield_bend', 1, false)
+video.remaster_unit_glow.set('remaster_unit_glow', 100, false)
+video.remaster_sharpen.set('remaster_sharpen', 0, false)
+check("the sliders at 100 and 0: the earlier glow, no sharpening", moho64ui_Looks().unitGlow .. " " .. moho64ui_Looks().sharpen, "1 0")
+video.remaster_unit_glow.set('remaster_unit_glow', 75, false)
+video.remaster_sharpen.set('remaster_sharpen', 50, false)
+ConExecute("remaster_shield_bend full")
+check("the console's remaster_shield_bend takes the words", moho64ui_Looks().shieldBend, 2)
+ConExecute("remaster_shield_bend subtle")
+do
+    local O = import('/lua/options/options.lua')
+    local inAny = false
+    for level = 0, 4 do
+        for _, key in {'remaster_ocean_glitter', 'remaster_shore_soak', 'remaster_shield_bend', 'remaster_unit_glow', 'remaster_sharpen',
+                       'remaster_gateway', 'remaster_ghost_look', 'remaster_guide', 'remaster_cloak_look', 'remaster_stealth_veil'} do
+            inAny = inAny or O.RemasterPresetValues(level)[key] ~= nil
+        end
+    end
+    check("they are in no preset level", inAny, false)
+end
 check("the Photographic Look: Off unless chosen, and its five choices", video.remaster_photo_look and
     video.remaster_photo_look.default .. " " .. table.getn(video.remaster_photo_look.custom.states), "0 5")
 video.remaster_photo_look.set('remaster_photo_look', 4, false)

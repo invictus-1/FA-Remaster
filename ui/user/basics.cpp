@@ -367,9 +367,9 @@ int l_GetArmyScore(lua_State* L) {
 int l_SessionCanRestart(lua_State* L) {
   if (lua_gettop(L) != 0)
     return luaL_error(L, "%s\n  expected %d args, but got %d", "Return true iff the active session can be restarted.", 0, lua_gettop(L));
-  Sim* sim = UserState::From(L)->LiveSim("SessionCanRestart");
-  if (!sim) return luaL_error(L, "no active session.");
-  lua_pushboolean(L, !sim->isReplay);
+  UserState* user = UserState::From(L);
+  if (!user->HasSim()) return luaL_error(L, "no active session.");
+  lua_pushboolean(L, !(user->economyCopied ? user->isReplayCopy : user->LiveSim("SessionCanRestart")->isReplay));  // (the beat's copy)
   return 1;
 }
 
