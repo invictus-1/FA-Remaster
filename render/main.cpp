@@ -717,6 +717,7 @@
 #include "world.h"
 #include "world_picture.h"
 #include "load_test.h"  // [bgload]
+#include "core/trace.h"  // [tracy]
 
 using namespace render;
 
@@ -1727,6 +1728,7 @@ int MostShotsNear(const Frame& frame, size_t* best) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  MOHO_THREAD_NAME("render");  // [tracy] (the viewer's main thread; docs/profiling.md 2.6)
   render::HangDumpStart();  // [hangdump] (MOHO64_HANG_DUMP=<seconds>)
   Options opt;
   if (!ParseOptions(argc, argv, &opt)) {
@@ -4262,6 +4264,7 @@ int main(int argc, char** argv) {
     }
     device->EndFrame(shoot ? &capture : nullptr);
     render::HangDumpBeat();  // [hangdump]
+    MOHO_FRAME_MARK;  // [tracy] (the viewer's displayed frame)
     if (opt.timings) {  // (every frame, the first ones too: the slowest, part by part)
       const double whole = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - frameStart).count();
       if (whole > timing.slowest) {

@@ -37,7 +37,8 @@ Tracy's types, so a file built without them would break the program. **The rende
 (`render/build.py`, `ui/build_ui.py`) get the switch the same way: a `--tracy` option that adds `TRACY_DEFINES` to every
 file they compile (the shared `src/` files included), adds `-I third_party/tracy`, compiles `TracyClient.cpp` once,
 links the four libraries, and writes to its own folder (the objects do not track flags). Each chat adds it to its own
-build script.
+build script. Done: the renderer (`render/build.py --tracy`, c7bd8f7: every CpuTimes stage a zone "render: <stage>",
+GPU stages as plots "render gpu: <stage>", out build-render-tracy/; it also needs ws2_32). Open: the interface.
 
 Without the switch the program is today's: every macro is empty, the Lua VM's hooks are not compiled, and the 16
 replays, B1 and b8 give main's fingerprints (section 6).

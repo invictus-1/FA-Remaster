@@ -1,13 +1,15 @@
 // The processor's time in named parts of a frame, for the viewer's --timings: a part runs from
 // CpuTimes::Part(name) to the next Part call (or Part(nullptr)), and each part's time is added up
 // over the frame. The viewer takes the list once a frame. Off (the default): nothing is measured.
-// The main thread's alone.
+// The main thread's alone. ([tracy] In the profiler build every part is also a zone "render: <part>", render_trace.h.)
 #pragma once
 
 #include <chrono>
 #include <cstring>
 #include <utility>
 #include <vector>
+
+#include "render_trace.h"
 
 namespace render {
 
@@ -20,6 +22,7 @@ struct CpuTimes {
 
   static const char* Current() { return current_; }  // (to go back to it after parts of one's own)
   static void Part(const char* name) {
+    trace::Stage(name);  // [tracy] (each part a zone in the profiler, on any thread, --timings or not)
     if (!on || elsewhere) return;
     const auto now = std::chrono::steady_clock::now();
     if (current_) Add(current_, std::chrono::duration<double, std::milli>(now - since_).count());

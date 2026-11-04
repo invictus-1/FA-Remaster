@@ -43,6 +43,7 @@
 #include "gfx_latency.h"
 #include "gfx_pacing.h"
 #include "hitch_log.h"  // [hitches]
+#include "render_trace.h"  // [tracy]
 
 namespace render::gfx {
 
@@ -3092,6 +3093,7 @@ void D3D12Device::BeginFrame(const float clearColor[4]) {
       }
       D3D12_RANGE none = {0, 0};
       timeReadback_->Unmap(0, &none);
+      trace::GpuTimes(lastTimes_);  // [tracy]
     }
   }
   f.marks.clear();
