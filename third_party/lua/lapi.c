@@ -21,6 +21,7 @@
 #include "lgc.h"
 #include "lmem.h"
 #include "lobject.h"
+#include "lopcodes.h"
 #include "lstate.h"
 #include "lstring.h"
 #include "ltable.h"
@@ -527,6 +528,23 @@ LUA_API void lua_pushcobjectkey (lua_State *L) {
   setsvalue2s(L->top, G(L)->cobjkey);
   api_incr_top(L);
   lua_unlock(L);
+}
+
+/*
+** moho64: 1 when the running C function was called by a Lua function's OP_CALL that asks for no results (a call
+** made as a statement, its value dropped: luaD_poscall then keeps none of what it returns). While a C function runs,
+** its Lua caller's pc sits in luaV_execute's `pc', which ci->u.l.pc points to (CI_HASFRAME), one past the CALL that
+** fetched it (vmfetch). A tail call, a C caller (pcall, a binding that calls back) or a call through a hook: 0.
+** Only reads.
+*/
+LUA_API int lua_gpg_resultsdropped (lua_State *L) {
+  CallInfo *ci;
+  Instruction i;
+  if (L->ci == L->base_ci) return 0;
+  ci = L->ci - 1;
+  if ((ci->state & CI_C) || !(ci->state & CI_HASFRAME)) return 0;
+  i = *(*ci->u.l.pc - 1);
+  return GET_OPCODE(i) == OP_CALL && GETARG_C(i) == 1;
 }
 
 /*
@@ -1084,6 +1102,12 @@ LUA_API int lua_getgcthreshold (lua_State *L) {
 ** made. Only read (the two-copies fingerprint, src/sim/fingerprint.h). */
 LUA_API unsigned int lua_getnextserial (lua_State *L) {
   return G(L)->nextserial;
+}
+
+/* moho64: the next n serials taken without objects: a host that leaves out objects it made before (an effect nothing
+** can reach, src/sim/effects.cpp) keeps every later object's serial, and with it every table's key order, as it was. */
+LUA_API void lua_gpg_skipserials (lua_State *L, unsigned int n) {
+  G(L)->nextserial += n;
 }
 
 /* moho64: the heap and the collector's threshold in bytes (lua_getgccount / lua_getgcthreshold give KB). Only

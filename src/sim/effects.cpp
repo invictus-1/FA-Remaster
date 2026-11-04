@@ -355,10 +355,20 @@ int l_Factory(lua_State* L) {
       tl.manips.push_back(t.get());
     }
   }
-  CreateObject(L, t.get(), f.cls);
+  // An effect or decal whose caller drops it (a call made as a statement, e.g. FAF's tread marks, CreateSplatOnBone
+  // ~1,700 times a beat in Chris's 7,000-unit game, and many movement emitters) gets no Lua side: nothing can ever
+  // reach it from a script, and what the engine does with it (its lifetime, its entity's end, a decal's expiry, the
+  // host's events) needs none. Saved: the object's table, its box, its registry reference and their collection. Only
+  // with the incremental collector (a played game: the fixes on): its moments count objects, and a replay of the
+  // original's keeps the classic collector and Lua objects made exactly as before. MOHO64_FX_LUA=1: every one made.
+  static const bool always = getenv("MOHO64_FX_LUA") && getenv("MOHO64_FX_LUA")[0] == '1';
+  // (lua_gpg_setgcmode(L, 0) only asks: 1 while the classic collector runs)
+  const bool dropped = !always && (f.fx != FxKind::None || f.duration) && lua_gpg_resultsdropped(L) && !lua_gpg_setgcmode(L, 0);
+  if (!dropped) CreateObject(L, t.get(), f.cls);
+  else lua_gpg_skipserials(L, 2);  // (CreateObject's table and box: every later object keeps its serial)
   tl.things.push_back(std::move(t));
   tl.things.back()->self = std::prev(tl.things.end());
-  return 1;
+  return dropped ? 0 : 1;
 }
 int l_LightParticle(lua_State* L) {
   if (Collecting(L)) RecordCreate(L, lua_toboolean(L, lua_upvalueindex(1)) ? kLightParticleIntel : kLightParticle);

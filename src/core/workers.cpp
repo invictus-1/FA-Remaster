@@ -1,6 +1,8 @@
 // The sim's worker pool: see workers.h.
 #include "core/workers.h"
 
+#include "core/placement.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -128,7 +130,9 @@ std::string ParallelStats::Summary(double tickMs) const {
   return r + b;
 }
 
-WorkerPool::WorkerPool(int threads, ParCheck check) : threads_(std::max(1, threads)), check_(check) {
+// (core/placement.h: in MOHO64_PLACE=all the pool takes at most the big-cache processors' count, and each worker pins
+// itself there; the results do not depend on the pool's size, docs/multicore.md 1)
+WorkerPool::WorkerPool(int threads, ParCheck check) : threads_(std::max(1, place::PoolThreads(threads))), check_(check) {
   stats_.resize(static_cast<size_t>(threads_));
   if (check_.mode != ParCheck::kOff) return;  // (the order check runs every task on the calling thread)
   seats_.reset(new Seat[static_cast<size_t>(threads_)]);
@@ -154,6 +158,7 @@ WorkerPool::~WorkerPool() {
 // sees g: g + 1 is published only after every helper of g has finished (running_ == 0).
 void WorkerPool::WorkerMain(int index) {
   MOHO_THREAD_NAME(("worker " + std::to_string(index)).c_str());  // (the profiler build's timeline)
+  place::PinWorkerThread();
   uint64_t seenGen = 0;
   Seat& seat = seats_[static_cast<size_t>(index)];
   for (;;) {

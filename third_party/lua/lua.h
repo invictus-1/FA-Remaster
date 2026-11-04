@@ -171,6 +171,8 @@ LUA_API void  lua_gettable (lua_State *L, int idx);
 LUA_API void  lua_rawget (lua_State *L, int idx);
 LUA_API void  lua_rawgeti (lua_State *L, int idx, int n);
 LUA_API void  lua_gpg_rawgetstr (lua_State *L, int idx, const char *k);  /* moho64: makes and collects nothing */
+/* moho64: 1 when the running C function's Lua caller drops its results (a call made as a statement; lapi.c) */
+LUA_API int   lua_gpg_resultsdropped (lua_State *L);
 /* moho64: the collector's check that lua_pushstring makes (luaC_checkGC), alone: for a binding that no longer pushes
 ** a string but must keep the collector's moments where they were. */
 LUA_API void  lua_gpg_checkgc (lua_State *L);
@@ -240,6 +242,7 @@ LUA_API int  lua_resume (lua_State *L, int narg);
 LUA_API int   lua_getgcthreshold (lua_State *L);
 LUA_API int   lua_getgccount (lua_State *L);
 LUA_API unsigned int lua_getnextserial (lua_State *L);  /* moho64: objects with a serial made so far */
+LUA_API void  lua_gpg_skipserials (lua_State *L, unsigned int n);  /* moho64: n serials taken without objects */
 LUA_API void  lua_gpg_gcbytes (lua_State *L, size_t *inuse, size_t *threshold);  /* moho64: only reads */
 /* moho64 (lgcinc.c): the state's collector, chosen once right after lua_open: 0 classic (the default), 1 incremental.
 ** Returns 1 if the state now runs that collector. lua_gpg_gcstep: the collector's work at the end of a beat (the

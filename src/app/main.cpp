@@ -1,7 +1,7 @@
 // moho64 -- milestone 1 host: mount the game data the way the original does, then run the
 // rules state (blueprint loading) or compile-check every script.
 //
-//   moho64 --init <init.lua> [--drive c=/host/dir] [--folder NAME=path] [--mods uids.txt]
+//   moho64 --init <init.lua> [--drive c=/host/dir] [--folder NAME=path] [--mods uids.txt] [--our-mods folder]
 //          [--log out.log] [--check-lua] [--rules] [--quiet]
 //          [--sim <replay> | --session <game configuration .lua> [--seed N]] [--ticks N] [--view] [--orders file] [--sim-lua file]
 //          [--twice | --together [--together-lag N] [--together-threads <n|cores>]] [--focus N]
@@ -129,6 +129,9 @@ struct Options {
   int scanCancelAt = 0;
   std::vector<std::pair<std::string, std::string>> scanMounts;
   std::vector<std::string> scanSkips;
+  // --our-mods <folder>: where the engine's own mods are (the repository's mods/, e.g. m28-variant), as moho64ui's
+  // option of that name; without it, beside the program or one folder up (MountSessionMods)
+  std::string ourMods;
   // --net host:<port> | join:<port>: a test of a network game (sim/lockstep.h) over the interface's transport
   // (ui/net/beat_exchange_net.h, its TCP connector on 127.0.0.1): two copies of moho64 play one --session (the same
   // file and --seed), the host as client 0, the other as client 1 (--net-client 1), each speaking for the command
@@ -1360,6 +1363,40 @@ int RunSim(const Options& o, Vfs& vfs, const std::vector<std::string>& hookDirs,
 // --session <file>: the game configuration a lobby hands over at Launch (`GameConfig = { ... }`), started the
 // way CLobby::LaunchGame starts it (sim/session.h). The mods are the configuration's GameMods unless --mods
 // names a list.
+// The session's own mods that the init file's folders do not hold: a GameMods entry names its folder in the game's
+// file system (`location`, e.g. "/mods/m28-variant"), and the sim takes the mod's hooks from there. moho64ui mounts
+// the engine's own mods (the repository's mods/, today m28-variant) before a game starts, so a game played there names
+// a location no init file mounts, and its playback here ran without that mod (its hooks missing: Chris's big-test game
+// of 2026-11-01, the M28 variant). Each such location whose last part is a folder of the engine's own mods (--our-mods,
+// else beside the program or one folder up, as moho64ui looks) with a mod_info.lua is mounted there, before the
+// session starts. A location the file system already holds is left as it is (the vault's mods, the original's).
+void MountSessionMods(const Options& o, Vfs& vfs, const std::vector<std::string>& locations) {
+  std::vector<std::string> roots;
+  if (!o.ourMods.empty()) roots.push_back(o.ourMods);
+  std::string dir = hostfs::ProgramFolder();
+  if (dir.empty()) dir = ".";
+  roots.push_back(dir + "/mods");
+  roots.push_back(dir + "/../mods");
+  for (const std::string& loc : locations) {
+    if (loc.empty() || vfs.Exists(loc + "/mod_info.lua")) continue;
+    const size_t slash = loc.find_last_of('/');
+    const std::string name = slash == std::string::npos ? loc : loc.substr(slash + 1);
+    if (name.empty() || name == "." || name == "..") continue;
+    bool mounted = false;
+    for (const std::string& root : roots) {
+      const std::string folder = root + "/" + name;
+      if (!hostfs::IsFile(folder + "/mod_info.lua")) continue;
+      mounted = vfs.Mount(folder, loc);
+      Logf(mounted ? LogLevel::Info : LogLevel::Warning, "moho64: the session's mod %s %s %s", loc.c_str(),
+           mounted ? "mounted from" : "could not be mounted from", hostfs::DisplayPath(folder).c_str());
+      break;
+    }
+    if (!mounted)
+      Logf(LogLevel::Warning, "moho64: the session's mod %s is in no mounted folder and not among the engine's own mods: it "
+                              "plays without it (--our-mods <folder> names where they are)", loc.c_str());
+  }
+}
+
 // The session a game configuration file describes, and (without --mods) its GameMods' uids into `uids`.
 bool LoadGameConfig(const Options& o, const std::string& file, Vfs& vfs, const std::vector<std::string>& hookDirs,
                     SessionDescription* out, std::vector<std::string>* uids) {
@@ -1381,20 +1418,24 @@ bool LoadGameConfig(const Options& o, const std::string& file, Vfs& vfs, const s
       Logf(LogLevel::Error, "moho64: launch failed: %s", err.c_str());
       return false;
     }
-    if (o.modsFile.empty()) {
-      uids->clear();
-      lua_getfield(L, -1, "GameMods");
-      for (int i = 1; lua_istable(L, -1); ++i) {
-        lua_rawgeti(L, -1, i);
-        if (!lua_istable(L, -1)) {
-          lua_pop(L, 1);
-          break;
-        }
-        lua_getfield(L, -1, "uid");
-        if (lua_isstring(L, -1)) uids->push_back(lua_tostring(L, -1));
-        lua_pop(L, 2);
+    if (o.modsFile.empty()) uids->clear();
+    std::vector<std::string> locations;
+    lua_getfield(L, -1, "GameMods");
+    for (int i = 1; lua_istable(L, -1); ++i) {
+      lua_rawgeti(L, -1, i);
+      if (!lua_istable(L, -1)) {
+        lua_pop(L, 1);
+        break;
       }
+      lua_getfield(L, -1, "uid");
+      if (o.modsFile.empty() && lua_isstring(L, -1)) uids->push_back(lua_tostring(L, -1));
+      lua_pop(L, 1);
+      lua_getfield(L, -1, "location");
+      if (lua_isstring(L, -1)) locations.push_back(lua_tostring(L, -1));
+      lua_pop(L, 2);
     }
+    lua_pop(L, 1);
+    MountSessionMods(o, vfs, locations);
   }
   const ReplayHeader& h = session.header;
   Logf(LogLevel::Info, "moho64: session %s: %zu armies, %zu command sources, focus army %d, seed %u, cheats %s",
@@ -1720,6 +1761,7 @@ int main(int argc, char** argv) {
       o.scanMounts.emplace_back(folder, next());
     }
     else if (a == "--scan-skip") o.scanSkips.push_back(next());
+    else if (a == "--our-mods") o.ourMods = next();
     else if (a == "--net") {  // host:<port> | join:<port>
       const std::string v = next();
       const size_t colon = v.find(':');

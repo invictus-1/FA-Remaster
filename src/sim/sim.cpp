@@ -35,6 +35,7 @@
 #include "core/crash.h"
 #include "core/hostfs.h"
 #include "core/log.h"
+#include "core/placement.h"
 #include "core/profile.h"
 #include "core/speculate.h"
 #include "core/trace.h"
@@ -2445,6 +2446,17 @@ void Sim::Tick() {
 #endif
   MOHO_ZONE_C("beat", 0x4b6ea8);
   trace::Lap lap;
+  // The thread that runs the beats on the big-cache processors (core/placement.h; MOHO64_PLACE): once per thread, the
+  // first beat it runs (the headless host's main thread, moho64ui's beats' thread). Only placement: no state changes.
+  {
+    thread_local bool placed = false;
+    if (!placed) {
+      placed = true;
+      const bool pinned = place::PinSimThread();
+      static std::atomic<bool> told{false};
+      if (!told.exchange(true)) Logf(LogLevel::Info, "moho64: %s%s", place::Describe().c_str(), pinned ? "" : " (the sim's thread not pinned)");
+    }
+  }
   if (rec_) RecorderBeat();  // labhook's AdvanceBeat entry: the state after the previous tick
   beatStarted_ = true;
   ++tick_;
