@@ -57,6 +57,9 @@ world's picture (renderer) and the stock AI opponents (engine; the mod AI M28 al
 - Exit (`ExitApplication`), opening links (`OpenURL`).
 - Tooltips that go away, bitmap animations (the moving glows of the menu), hit testing by a bitmap's
   alpha, render passes, the game's cursor pictures, textures in formats other than .dds.
+  (2026-11-01, `ui/tests/menu_glows.lua`: the menu's glows move as the original's engine moves them, frame by
+  frame: the bracket's slide with its energy glows, the buttons' glow fading in and out, the menu hidden and shown,
+  a resize; SetAlpha's limits and the alpha byte it draws with, read from the exe, fixed.)
 - Preferences: where our file lives by default, and taking over the player's existing profile once.
 
 ## Stage 2: a skirmish can be set up completely

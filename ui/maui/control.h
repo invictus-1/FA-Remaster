@@ -73,6 +73,10 @@ class Control : public ScriptObject {
   virtual bool HitTest(float x, float y) const;
   void SetParent(Control* parent);
   void SetAlpha(float alpha, bool children);
+  // The alpha a control's picture is drawn with: the high byte of its colour (+0xf4), which SetAlpha sets beside the
+  // alpha itself (+0xf0) to alpha * 255 cut toward zero, at most 255 (FAF's SetAlpha, 0x1291575 / 0x12915bf ->
+  // 0x1291556: mulss by 255, fisttp, cmova 255 on the low dword), as 0..255.
+  unsigned AlphaByte() const;
 
   // What a scrollbar asks of the control it scrolls (FA exe: the control's virtual slots 18-22).
   // A control hands these to its script (IsScrollable, GetScrollValues, ScrollLines, ScrollPages,
