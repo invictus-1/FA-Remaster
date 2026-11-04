@@ -89,6 +89,14 @@ typedef struct GCInc {
   lu_mem lastregray, maxregray, lastrebacks, maxrebacks;  /* the atomic step's grayagain part: units, tables */
   int phases;             /* MOHO64_GC_PHASES: time and slots of each part of the atomic step, on stderr (statistics) */
   lu_mem visits;          /* table and stack slots looked at (statistics, MOHO64_GC_PHASES) */
+  /* the host's worker pool for the atomic step's weak tables (lua_gpg_setparfor; NULL: all on this thread) */
+  lua_GpgParFor parfor;
+  void *parhost;
+  size_t parmin;          /* the weak tables in a cycle from which the pool is used */
+  global_State *g;        /* (for the pool's tasks) */
+  lu_byte *wres;          /* per weak table: the mode the pool's check read, and whether its metatable's "no __mode"
+                          ** cache bit is to be set (as long as weakv) */
+  size_t capres;
 } GCInc;
 
 #define G_(L)		G(L)
@@ -293,27 +301,72 @@ static void removekey (Node *n) {
   if (iscollectable(gkey(n))) setttype(gkey(n), LUA_TNONE);  /* dead key */
 }
 
-static void clearweak (GCInc *inc) {
-  size_t k;
-  for (k = 0; k < inc->nweak; k++) {
-    Table *h = gcotoh(inc->weakv[k]);
-    int i;
-    if (!(h->marked & (KEYWEAK | VALUEWEAK))) continue;  /* (no longer weak: traversed again at the atomic step) */
-    if (h->marked & VALUEWEAK) {
-      i = h->sizearray;
-      while (i--) {
-        TObject *o = &h->array[i];
-        if (!valmarked(o)) setnilvalue(o);
-      }
-    }
-    i = sizenode(h);
+/* valmarked for the pool's tasks: the same answer and the same marks. A string may be held by weak tables of two
+** tasks: its colour is read and turned black with atomic byte operations, so that both find it black after (marks are
+** only ever added here, so the result does not depend on which task comes first). */
+#if defined(__GNUC__) || defined(__clang__)
+#define MARKED_LOAD(s)	__atomic_load_n(&(s)->gch.marked, __ATOMIC_RELAXED)
+#define MARK_BLACK(s)	(__atomic_fetch_and(&(s)->gch.marked, cast(lu_byte, ~WHITES), __ATOMIC_RELAXED), \
+			 __atomic_fetch_or(&(s)->gch.marked, cast(lu_byte, BLACK), __ATOMIC_RELAXED))
+#define PREFETCH(p)	__builtin_prefetch(p)
+#else
+#define MARKED_LOAD(s)	((s)->gch.marked)
+#define MARK_BLACK(s)	(white2gray(s), gray2black(s))
+#define PREFETCH(p)	((void)0)
+#endif
+static int valmarked_task (const TObject *o) {
+  if (ttisstring(o)) {
+    GCObject *s = gcvalue(o);
+    if (MARKED_LOAD(s) & WHITES) MARK_BLACK(s);
+    return 1;  /* (black now: a string is never cleared) */
+  }
+  return !iscollectable(o) || !iswhite(gcvalue(o));
+}
+
+/* one weak table's clearing: its own slots, and the strings it keeps marked (nothing else is written) */
+static void clearone (Table *h, int (*marked) (const TObject *)) {
+  int i;
+  if (!(h->marked & (KEYWEAK | VALUEWEAK))) return;  /* (no longer weak: traversed again at the atomic step) */
+  if (h->marked & VALUEWEAK) {
+    i = h->sizearray;
     while (i--) {
-      Node *n = gnode(h, i);
-      if (ttisnil(gval(n))) continue;
-      if (((h->marked & KEYWEAK) && !valmarked(gkey(n))) || ((h->marked & VALUEWEAK) && !valmarked(gval(n))))
-        removekey(n);
+      TObject *o = &h->array[i];
+      if (!marked(o)) setnilvalue(o);
     }
   }
+  i = sizenode(h);
+  while (i--) {
+    Node *n = gnode(h, i);
+    if (ttisnil(gval(n))) continue;
+    if (((h->marked & KEYWEAK) && !marked(gkey(n))) || ((h->marked & VALUEWEAK) && !marked(gval(n))))
+      removekey(n);
+  }
+}
+
+/* The pool's task over weak tables [lo, hi). The cost is the memory (each table's header and slots, then the objects
+** its live slots hold, ~30 ns a slot in Chris's game): the next tables' headers and slot arrays are fetched ahead. */
+#define AHEAD 8
+static void cleartask (void *ctx, size_t lo, size_t hi) {
+  GCInc *inc = (GCInc *)ctx;
+  size_t k;
+  for (k = lo; k < hi && k < lo + 2 * AHEAD; k++) PREFETCH(inc->weakv[k]);
+  for (k = lo; k < hi; k++) {
+    if (k + 2 * AHEAD < hi) PREFETCH(inc->weakv[k + 2 * AHEAD]);
+    if (k + AHEAD < hi) {
+      Table *a = gcotoh(inc->weakv[k + AHEAD]);
+      PREFETCH(a->node);
+      PREFETCH(a->array);
+    }
+    clearone(gcotoh(inc->weakv[k]), valmarked_task);
+  }
+}
+
+static void clearweak (GCInc *inc) {
+  size_t k;
+  if (inc->parfor && inc->nweak >= inc->parmin)
+    inc->parfor(inc->parhost, "lua: weak tables cleared", inc->nweak, 256, cleartask, inc);
+  else
+    for (k = 0; k < inc->nweak; k++) clearone(gcotoh(inc->weakv[k]), valmarked);
   inc->nweak = 0;
 }
 
@@ -570,6 +623,30 @@ static void ph_mark (GCInc *inc, Phases *p, lu_mem units, lu_mem n) {
 ** pre-pass); the weak tables whose mode changed are traversed again; then lgc.c's clearing of the weak tables (udata
 ** with a __gc: none in the sim's scripts, reported by the sweep); then the white flips and the sweep begins.
 ** B1 (Seton's, M28 armies; 2.6 M objects, 56 k weak tables): ~7 k units, ~10 ms, of it the clearing ~6 ms. */
+/* The pool's task: weak tables [lo, hi)'s modes as weakmode reads them, without gfasttm's write of the metatable's
+** "no __mode" cache bit (WRES_NOMODE asks the caller to set it, as weakmode would have). */
+#define WRES_NOMODE	(1<<0)
+static void modetask (void *ctx, size_t lo, size_t hi) {
+  GCInc *inc = (GCInc *)ctx;
+  global_State *g = inc->g;
+  size_t k;
+  for (k = lo; k < hi; k++) {
+    Table *mt;
+    lu_byte r = 0;
+    if (k + AHEAD < hi) PREFETCH(inc->weakv[k + AHEAD]);
+    mt = gcotoh(inc->weakv[k])->metatable;
+    if (!(mt->flags & (1u<<TM_MODE))) {
+      const TObject *mode = luaH_getstr(mt, g->tmname[TM_MODE]);
+      if (ttisnil(mode)) r = WRES_NOMODE;
+      else if (ttisstring(mode)) {
+        if (strchr(svalue(mode), 'k') != NULL) r |= KEYWEAK;
+        if (strchr(svalue(mode), 'v') != NULL) r |= VALUEWEAK;
+      }
+    }
+    inc->wres[k] = r;
+  }
+}
+
 static lu_mem atomic (lua_State *L, global_State *g) {
   GCInc *inc = g->inc;
   lu_mem u = 0, pu;
@@ -603,10 +680,35 @@ static lu_mem atomic (lua_State *L, global_State *g) {
   }
   {  /* weak tables: those written since their traversal were traversed again with the gray tables above; one
      ** whose mode changed since (a new metatable, or a __mode written) is traversed again now, its mode read again */
-    size_t k;
+    size_t k = 0;
     Table *lastmt = NULL;
     int lastm = -1;
-    for (k = 0; k < inc->nweak; k++) {
+    /* With the pool: every listed table's mode read first, on the pool (reading only), then here, in the array's
+    ** order, the cache bits set and the changed tables traversed again, as the loop below does; the loop then goes on
+    ** from the first table those traversals listed (nearly always none). The same tables are traversed again in the
+    ** same order, and the same cache bits set. */
+    if (inc->parfor && inc->nweak >= inc->parmin) {
+      size_t n0 = inc->nweak;
+      if (inc->capres < n0) {
+        lu_byte *r = (lu_byte *)realloc(inc->wres, inc->capweak);  /* (outside Lua's byte count, as weakv) */
+        if (r == NULL) { fprintf(stderr, "moho64 gc: out of memory for the weak tables\n"); abort(); }
+        inc->wres = r;
+        inc->capres = inc->capweak;
+      }
+      inc->g = g;
+      inc->parfor(inc->parhost, "lua: weak tables' modes", n0, 512, modetask, inc);
+      for (k = 0; k < n0; k++) {
+        Table *h = gcotoh(inc->weakv[k]);
+        if (inc->wres[k] & WRES_NOMODE) h->metatable->flags |= cast(lu_byte, 1u<<TM_MODE);
+        if ((inc->wres[k] & (KEYWEAK | VALUEWEAK)) != (h->marked & (KEYWEAK | VALUEWEAK))) {
+          black2gray(valtogco(h));
+          h->gclist = inc->gray;
+          inc->gray = valtogco(h);
+          u += propagateall(L, g, 1);
+        }
+      }
+    }
+    for (; k < inc->nweak; k++) {
       Table *h = gcotoh(inc->weakv[k]);
       int m;
       if (h->metatable == lastmt && lastm >= 0) m = lastm;  /* (most share a few metatables, unchanged meanwhile) */
@@ -748,6 +850,14 @@ extern void (*lua_gpg_prof_gc)(lua_State *L, int end);  /* lapi.c (MOHO64_PROFIL
 static int envint (const char *name, int def) {
   const char *s = getenv(name);
   return s && *s ? atoi(s) : def;
+}
+
+LUA_API void lua_gpg_setparfor (lua_State *L, lua_GpgParFor f, void *host, size_t minweak) {
+  GCInc *inc = G(L)->inc;
+  if (!inc) return;  /* (the classic collector: never) */
+  inc->parfor = f;
+  inc->parhost = host;
+  inc->parmin = minweak;
 }
 
 LUA_API int lua_gpg_setgcmode (lua_State *L, int mode) {
@@ -906,12 +1016,13 @@ void luaC_incleave (lua_State *L) {
     for (o = g->strt.hash[i]; o; o = o->gch.next) o->gch.marked = cast(lu_byte, (o->gch.marked & FIXED) ? CLASSICFIX : 0);
   g->mainthread->marked = 0;
   free(g->inc->weakv);
+  free(g->inc->wres);
   free(g->inc);
   g->inc = NULL;
 }
 
 void luaC_incfree (lua_State *L) {
-  if (G(L)->inc) { free(G(L)->inc->weakv); free(G(L)->inc); }
+  if (G(L)->inc) { free(G(L)->inc->weakv); free(G(L)->inc->wres); free(G(L)->inc); }
   G(L)->inc = NULL;
 }
 

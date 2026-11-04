@@ -1163,6 +1163,22 @@ bool Sim::Start(const ReplayHeader& replay) {
     bool incremental = fixes;
     if (const char* m = getenv("MOHO64_GC")) incremental = !std::strcmp(m, "incremental");
     lua_gpg_setgcmode(L, incremental ? 1 : 0);
+    // The atomic step's weak tables on the pool (lgcinc.c lua_gpg_setparfor): the mode check reads only, and each
+    // table's clearing writes only its own slots and the strings it keeps (marked black with atomic byte operations),
+    // so the result is the one of the single thread at any thread count. Chris's big-test game at 40-48 min: ~106,000
+    // weak tables (FAF's trash bags, ~15 a unit), their clearing 9-20 ms and the mode check 3-5 ms of an atomic step of
+    // 28-32 ms (1 thread, MOHO64_GC_PHASES). From MOHO64_GC_PARMIN weak tables (default 4096); MOHO64_GC_PAR=0: never.
+    static const bool gcPar = !getenv("MOHO64_GC_PAR") || std::strcmp(getenv("MOHO64_GC_PAR"), "0") != 0;
+    if (incremental && gcPar && workers_->Threads() > 1) {
+      const char* m = getenv("MOHO64_GC_PARMIN");
+      const size_t parMin = m && *m ? static_cast<size_t>(std::strtoull(m, nullptr, 10)) : 4096;
+      lua_gpg_setparfor(
+          L,
+          [](void* host, const char* stage, size_t n, size_t grain, lua_GpgTask task, void* ctx) {
+            static_cast<WorkerPool*>(host)->ParallelFor(stage, n, grain, [task, ctx](size_t b, size_t e, int) { task(ctx, b, e); });
+          },
+          workers_.get(), parMin);
+    }
   }
   state_->SetHookDirs(hookDirs_);
   if (fixes) state_->SetExtraHooks(FixesHooks());

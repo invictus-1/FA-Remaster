@@ -249,6 +249,14 @@ LUA_API void  lua_gpg_gcbytes (lua_State *L, size_t *inuse, size_t *threshold); 
 ** original's AdvanceBeat step 19): a classic state collects fully when `point' is set (the game tick is a multiple of
 ** 70); an incremental state takes its step, and its atomic step only when `point' is set. */
 LUA_API int   lua_gpg_setgcmode (lua_State *L, int mode);
+/* moho64 (lgcinc.c): the host's worker pool for the incremental collector's atomic step. The weak tables' mode check and
+** clearing run as f(host, stage, n, grain, task, ctx), which must call task(ctx, lo, hi) over [0, n) in pieces, on any
+** threads, and return when all are done; the tasks read and write only the collector's objects (no API call). Used
+** when a cycle has `minweak' weak tables or more; f NULL: everything on the calling thread. No effect on a classic
+** state. The result is the same either way (each table is cleared alone; a string kept is marked with atomic ops). */
+typedef void (*lua_GpgTask) (void *ctx, size_t lo, size_t hi);
+typedef void (*lua_GpgParFor) (void *host, const char *stage, size_t n, size_t grain, lua_GpgTask task, void *ctx);
+LUA_API void  lua_gpg_setparfor (lua_State *L, lua_GpgParFor f, void *host, size_t minweak);
 LUA_API void  lua_gpg_gcstep (lua_State *L, int point);
 /* moho64: the incremental collector's counts (all 0 in a classic state). Units: objects traversed or swept. */
 typedef struct lua_GCStats {
