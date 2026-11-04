@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "json.h"
 #include "lighting.h"
 #include "ocean.h"
 #include "ray_scene.h"
@@ -1232,6 +1233,24 @@ void Water::DrawWith(const View& view, const Camera* camera, gfx::Texture behind
   device_->SetConstants(0, &view.constants, sizeof view.constants);
   device_->SetConstants(1, &c, static_cast<uint32_t>(surfing ? sizeof c : rippling ? offsetof(WaterConstants, surfArea) : offsetof(WaterConstants, rippleArea)));
   if (oceanic) {
+    if (ocean.foamPatches > 0 && !patchesTried_) {  // [foampatch] the visuals track's foam patches, the first time they are wanted
+      patchesTried_ = true;
+      std::vector<std::string> paths;
+      for (int k = 0; k < 8; ++k) paths.push_back("/remastered/env/remaster/sea_foam/foam_patch_" + std::to_string(k) + ".dds");
+      std::vector<bool> present;
+      ocean.patches = textures_->Layers(paths, &present);
+      // (each patch's main way: foam_patches.json, main_direction_deg, in its picture's own frame)
+      JsonValue root;
+      std::string why;
+      if (auto json = textures_->ReadFile("/remastered/env/remaster/sea_foam/foam_patches.json"); json && ReadJson(*json, &root, &why)) {
+        const std::vector<JsonValue>& list = root["patches"].items;
+        for (size_t k = 0; k < 8 && k < list.size(); ++k)
+          ocean.patchTurn[k] = static_cast<float>(list[k]["main_direction_deg"].NumberOr(0)) * 3.14159265f / 180;
+      }
+      int found = 0;
+      for (bool b : present) found += b;
+      printf("render: the sea's foam patches: %d of 8%s\n", found, ocean.patches ? "" : " (none: the whitecaps' own pattern)");
+    }
     device_->SetConstants(2, ocean.ShaderConstants(), ocean.ShaderConstantsSize());
     ocean.Bind();
   }

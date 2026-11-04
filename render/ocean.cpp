@@ -694,7 +694,8 @@ void Ocean::Update(const Camera& camera, const View& view, gfx::Texture heights,
   constants_.look4[0] = static_cast<float>(std::fmod(driftX_, kDriftRepeat));
   constants_.look4[1] = static_cast<float>(std::fmod(driftZ_, kDriftRepeat));
   constants_.look4[2] = 0;
-  constants_.look4[3] = 0;
+  constants_.look4[3] = patches ? foamPatches : 0.0f;  // [foampatch]
+  for (int k = 0; k < 8; ++k) constants_.patchTurn[k / 4][k % 4] = patchTurn[k];
   // [hulls] the hulls nearest the eye (AddHull), for where the waves meet them
   hullCount_ = 0;
   if (lift && !hulls_.empty()) {
@@ -1081,10 +1082,12 @@ void Ocean::Bind() {
     device_->SetTexture(kOceanFirstSlot + 6 + c, field_[c][2]);
   }
   device_->SetTexture(kOceanFirstSlot + 9, foamMap_[foamCur_]);
+  if (patches) device_->SetTexture(kOceanPatchSlot, patches);  // [foampatch]
 }
 
 void Ocean::Unbind() {
   for (int s = 0; s < 10; ++s) device_->SetTexture(kOceanFirstSlot + s, {});
+  device_->SetTexture(kOceanPatchSlot, {});  // [foampatch]
 }
 
 }  // namespace render

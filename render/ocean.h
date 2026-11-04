@@ -53,6 +53,7 @@ struct MapData;
 
 // The water's pass binds its own textures t0..t9 (water.cpp, surf.h); the ocean's take t10..t19 (not a shared slot).
 inline constexpr int kOceanFirstSlot = 10;
+inline constexpr int kOceanPatchSlot = 38;  // [foampatch] the foam patches (a slot no other pass uses)
 
 // HLSL: the water's modern shader takes it when built with OCEAN (after the view's and the lighting's blocks).
 inline const char kOceanShaderBlock[] = R"hlsl(
@@ -66,11 +67,13 @@ cbuffer Ocean : register(b2) {
   float4 oceanLook4;       // [whitecaps] xy how far the foam has drifted (world units, within 4096: its pattern drifts with it); z [hulls] how many hulls
   float4 oceanHulls[72];   // [hulls] what floats in the sea (Ocean::AddHull), three rows each: x, z its middle, its way (x, z); its waterline's
                            // half length and half beam, its speed, -; its waterline's height there, the slopes it rides (dh/dx, dh/dz), -
+  float4 oceanPatchTurn[2];  // [foampatch] each foam patch's main way in its picture (radians; patches 0-3, 4-7)
 };
 Texture2D oceanSlope[3] : register(t10);  // the slopes along x and z, and their squares (mip levels: their means)
 Texture2D oceanDisp[3] : register(t13);   // the sideways shift along x, the height, the shift along z; w the slopes' product
 Texture2D oceanFold[3] : register(t16);   // the shift's derivatives: d shift x / dx, d shift z / dz, d shift x / dz
 Texture2D<float2> oceanFoam : register(t19);  // the foam's field ([whitecaps] x how much, y how fresh)
+Texture2DArray<float2> oceanPatches : register(t38);  // [foampatch] the visuals track's foam patches (r how much, g how thick)
 static const float kOceanSamples = 256;  // [watersq] each square's samples a side (Ocean::kN)
 // [watersq] A square's picture read between its samples by a cubic B-spline in place of a straight line (its slopes then
 // turn smoothly from sample to sample: no edge at a sample), as four bilinear readings at shifted places, each standing
@@ -273,6 +276,47 @@ struct OceanCaps {
   float young;    // how fresh the foam is (0 old .. 1 breaking now)
   float thick;    // how far inside its patch the pixel lies (0 at its torn edge .. 1 its thick middle)
 };
+// [foampatch] (Chris, 2026-11-04: "make the wakes on top of the ocean more realistic and random with the use of manta like a
+// overlay"; the visuals track's request 53: eight tileable patches from Blender's ocean foam and around it, by freshness:
+// 0 a fresh crest's, 1 a crest spreading, 2 a fresh patch, 3 one breaking up, 4 and 5 streaks, 6 and 7 lace) How much foam
+// the patches give at a place (0..1), for foam of this freshness: laid in cells of kPatchTile world units, each cell's patch
+// turned and moved at random (the streaks laid along the wind, the rest turned anyhow), the four cells about the place
+// blended so that no cell's edge shows; between the two patches whose freshness brackets the foam's.
+static const float kPatchTile = 32;
+static const float kPatchFresh[5] = {0.12, 0.28, 0.45, 0.65, 0.9};  // lace, streaks, breaking, a patch, a crest
+float OceanPatchHash(float2 c, float k) { return frac(sin(dot(c, float2(12.9898, 78.233)) + k * 4.13) * 43758.5453); }
+int OceanPatchLayer(int band, float h) {
+  return band == 0 ? (h < 0.5 ? 6 : 7) : band == 1 ? (h < 0.5 ? 4 : 5) : band == 2 ? 3 : band == 3 ? 2 : (h < 0.5 ? 0 : 1);
+}
+float OceanPatchAt(float2 q, float2 gx, float2 gy, float2 cell, int band, float wind) {
+  float h = OceanPatchHash(cell, band), h2 = OceanPatchHash(cell, band + 7.0);
+  int layer = OceanPatchLayer(band, h);
+  float4 turns = layer < 4 ? oceanPatchTurn[0] : oceanPatchTurn[1];
+  float own = turns[layer & 3];
+  float a = band == 1 ? wind - own + (h2 - 0.5) * 0.5 : h2 * 6.2831853;  // (streaks downwind, give or take 15 degrees)
+  float s, c;
+  sincos(a, s, c);
+  float2x2 turn = float2x2(c, s, -s, c);
+  float2 uv = mul(turn, q) + float2(h, h2) * 7.31;
+  return oceanPatches.SampleGrad(samplerAniso, float3(uv, layer), mul(turn, gx), mul(turn, gy)).r;
+}
+float OceanPatches(float2 p, float2 dxdx, float2 dxdy, float fresh) {
+  float2 q = p / kPatchTile, gx = dxdx / kPatchTile, gy = dxdy / kPatchTile;
+  float s = 0;
+  [unroll] for (int k = 0; k < 4; ++k) s += saturate((fresh - kPatchFresh[k]) / (kPatchFresh[k + 1] - kPatchFresh[k]));
+  int b0 = min(int(s), 3);
+  float wb = s - b0;
+  float wind = atan2(oceanWind.y, oceanWind.x);
+  float2 at = q - 0.5, base = floor(at), f = at - base;
+  f = f * f * (3 - 2 * f);
+  float sum = 0;
+  [unroll] for (int k = 0; k < 4; ++k) {
+    float2 o = float2(k & 1, k >> 1), cell = base + o;
+    float w = (o.x > 0 ? f.x : 1 - f.x) * (o.y > 0 ? f.y : 1 - f.y);
+    sum += w * lerp(OceanPatchAt(q, gx, gy, cell, b0, wind), OceanPatchAt(q, gx, gy, cell, b0 + 1, wind), wb);
+  }
+  return sum;
+}
 OceanCaps OceanWhitecapsParts(OceanHere o, float2 xz, float2 dxdx, float2 dxdy, float lace) {
   OceanCaps caps;
   float2 way = oceanWind.xy;
@@ -291,9 +335,21 @@ OceanCaps OceanWhitecapsParts(OceanHere o, float2 xz, float2 dxdx, float2 dxdy, 
   float pattern = (dot(ridge, weight) * 0.7 + lace * 0.3 - 0.66) * 2.4 + 0.5;
   // (how much the pattern would vary that does not show at this pixel: the cut softened by it)
   float hidden = 0.2 * sqrt(dot(weight * weight, 1 - shown * shown) / 0.357);
-  float soft = max(max(fwidth(pattern) * 0.8, hidden * 2), 0.012);
   float strength = oceanLook.z;
   float cover = o.foam * strength, fresh = saturate(o.fresh * strength);
+  // [foampatch] the patches' foam in the pattern's place where they show (oceanLook4.w their share, Ocean::foamPatches): a
+  // patch's white is over every cut, its clear water under the cut but of the thickest foam; gone where a patch's picture
+  // would be under some 16 pixels across (its detail averaged away, the pattern's own fading as before)
+  [branch] if (oceanLook4.w > 0 && cover > 0.001) {
+    float detail = saturate(7 - log2(max(grain / kPatchTile * 1024, 1e-6)));
+    float share = oceanLook4.w * detail;
+    [branch] if (share > 0) {
+      float A = OceanPatches(p, dxdx, dxdy, max(fresh, 0.12 * saturate(cover * 4)));
+      pattern = lerp(pattern, 0.35 + 0.9 * A, share);
+      hidden *= 1 - share;
+    }
+  }
+  float soft = max(max(fwidth(pattern) * 0.8, hidden * 2), 0.012);
   // (the share of white about the foam's own share there: the cut at that share of the pattern's spread; none where there
   // is no foam)
   // (the residue never all white: holes in it even where it lies thick, lace as it thins; the fresh foam nearly whole)
@@ -451,6 +507,12 @@ class Ocean {
   // turns within a pixel lit it fully or not at all), the light it throws on the whole kept: a soft path of light round the
   // sun's mirror image, the water elsewhere calm. 0: the glitter as before (viewer --ocean-glitter 0).
   int glitter = 1;
+  // [foampatch] The visuals track's foam patches in the whitecaps' pattern (0: none, the procedural pattern alone, as before; 1:
+  // theirs wherever their detail shows): viewer --foam-patches [share]. Laid by Water (patches, patchTurn: each patch's main
+  // way in its picture, radians, from foam_patches.json) when it finds them (/remastered/env/remaster/sea_foam).
+  float foamPatches = 0;
+  gfx::Texture patches;
+  float patchTurn[8] = {};
   // A view for checking (viewer --ocean-view n): the water shows 1 the slopes (red x, green z), 2 the foam field, 3 the
   // slopes' spread, 4 the height (red up, blue down), 5 the Jacobian, 6 [whitecaps] the whitecaps' parts; 0 off.
   int view = 0;
@@ -479,6 +541,7 @@ class Ocean {
     float look3[4];
     float look4[4];  // [whitecaps]
     float hulls[kHulls * 3][4];  // [hulls] (AddHull's, the nearest)
+    float patchTurn[2][4];       // [foampatch]
   };
   // [hulls] the hulls listed this frame (AddHull), and how many the shader was told of
   struct Hull {
