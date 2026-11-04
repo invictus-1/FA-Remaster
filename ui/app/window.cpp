@@ -246,6 +246,42 @@ size_t Window::ProcessMemory() {
   return get && get(GetCurrentProcess(), &c, sizeof c) ? static_cast<size_t>(c.workingSetSize) : 0;
 }
 
+namespace {
+// (EnumDisplayMonitors' callback: each screen with its display's number, \\.\DISPLAY<n>, for the order.)
+BOOL CALLBACK AddScreen(HMONITOR monitor, HDC, LPRECT, LPARAM list) {
+  MONITORINFOEXW info{};
+  info.cbSize = sizeof info;
+  if (!GetMonitorInfoW(monitor, &info)) return TRUE;
+  Window::Screen s;
+  s.x = info.rcMonitor.left, s.y = info.rcMonitor.top;
+  s.width = info.rcMonitor.right - info.rcMonitor.left, s.height = info.rcMonitor.bottom - info.rcMonitor.top;
+  s.main = (info.dwFlags & MONITORINFOF_PRIMARY) != 0;
+  DEVMODEW mode{};
+  mode.dmSize = sizeof mode;
+  if (EnumDisplaySettingsW(info.szDevice, ENUM_CURRENT_SETTINGS, &mode) && mode.dmDisplayFrequency > 1)
+    s.rate = static_cast<int>(mode.dmDisplayFrequency);
+  int number = 0;
+  for (const wchar_t* c = info.szDevice; *c; ++c)
+    if (*c >= L'0' && *c <= L'9') number = number * 10 + (*c - L'0');
+  reinterpret_cast<std::vector<std::pair<int, Window::Screen>>*>(list)->push_back({number, s});
+  return TRUE;
+}
+}  // namespace
+
+// INFERRED: the order of the original's adapters (Direct3D 9's: adapter 0 the primary display, then the others),
+// here the main screen first and the others by their display's number.
+std::vector<Window::Screen> Window::Screens() {
+  SetProcessDPIAware();  // (in the same pixels as the window's)
+  std::vector<std::pair<int, Screen>> found;
+  EnumDisplayMonitors(nullptr, nullptr, AddScreen, reinterpret_cast<LPARAM>(&found));
+  std::stable_sort(found.begin(), found.end(), [](const std::pair<int, Screen>& a, const std::pair<int, Screen>& b) {
+    return a.second.main != b.second.main ? a.second.main : a.first < b.first;
+  });
+  std::vector<Screen> out;
+  for (const auto& f : found) out.push_back(f.second);
+  return out;
+}
+
 int Window::RefreshRate() {
   DEVMODEW mode{};
   mode.dmSize = sizeof mode;
@@ -253,20 +289,20 @@ int Window::RefreshRate() {
   return 60;
 }
 
-void Window::SetMode(bool full, int width, int height) {
+void Window::SetMode(bool full, int width, int height, const Screen* on) {
   if (!hwnd_) return;
   HWND hwnd = static_cast<HWND>(hwnd_);
-  if (full == fullScreen && full) return;
   MONITORINFO screen{};
   screen.cbSize = sizeof screen;
   GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY), &screen);
   if (full) {
+    const RECT r = on ? RECT{on->x, on->y, on->x + on->width, on->y + on->height} : screen.rcMonitor;
     RECT now;
     GetWindowRect(hwnd, &now);
-    windowedX_ = now.left, windowedY_ = now.top, windowedKnown_ = true;
+    if (fullScreen && now.left == r.left && now.top == r.top && now.right == r.right && now.bottom == r.bottom) return;
+    if (!fullScreen) windowedX_ = now.left, windowedY_ = now.top, windowedKnown_ = true;
     fullScreen = true;
     SetWindowLongPtrW(hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
-    const RECT& r = screen.rcMonitor;
     SetWindowPos(hwnd, HWND_TOP, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
     KeepMouseInside(lockMouse && GetForegroundWindow() == hwnd);
     return;
@@ -291,6 +327,12 @@ void Window::ClientSize(int* width, int* height) const {
   *width = rc.right - rc.left, *height = rc.bottom - rc.top;
 }
 
+void Window::Middle(int* x, int* y) const {
+  RECT rc{};
+  if (hwnd_) GetWindowRect(static_cast<HWND>(hwnd_), &rc);
+  *x = (rc.left + rc.right) / 2, *y = (rc.top + rc.bottom) / 2;
+}
+
 void Window::LockMouse(bool lock) {
   if (lock == lockMouse) return;
   lockMouse = lock;
@@ -311,7 +353,7 @@ void Window::KeepMouseInside(bool keep) {
   ClipCursor(&clip);
 }
 
-bool Window::Create(int width, int height, const char* title, Callbacks cb, bool full, bool show) {
+bool Window::Create(int width, int height, const char* title, Callbacks cb, bool full, bool show, const Screen* on) {
   callbacks = std::move(cb);
   fullScreen = full;
   SetProcessDPIAware();  // one interface pixel is one screen pixel
@@ -329,7 +371,8 @@ bool Window::Create(int width, int height, const char* title, Callbacks cb, bool
   AdjustWindowRect(&rc, style, FALSE);
   wchar_t wtitle[256];
   MultiByteToWideChar(CP_UTF8, 0, title, -1, wtitle, 256);
-  HWND hwnd = CreateWindowExW(0, wc.lpszClassName, wtitle, style, full ? 0 : CW_USEDEFAULT, full ? 0 : CW_USEDEFAULT,
+  const int fullX = on ? on->x : 0, fullY = on ? on->y : 0;  // (the main screen's top left is the desktop's 0, 0)
+  HWND hwnd = CreateWindowExW(0, wc.lpszClassName, wtitle, style, full ? fullX : CW_USEDEFAULT, full ? fullY : CW_USEDEFAULT,
                               rc.right - rc.left, rc.bottom - rc.top, nullptr, nullptr, inst, nullptr);
   if (!hwnd) return false;
   hwnd_ = hwnd;
@@ -378,14 +421,16 @@ void Window::Present(const SoftwareTarget& target) {
 
 namespace moho::ui {
 Window::~Window() {}
-bool Window::Create(int, int, const char*, Callbacks, bool, bool) { return false; }
+bool Window::Create(int, int, const char*, Callbacks, bool, bool, const Screen*) { return false; }
 void Window::Show() {}
 bool Window::ScreenSize(int*, int*) { return false; }
+std::vector<Window::Screen> Window::Screens() { return {}; }
 int Window::RefreshRate() { return 60; }
 void Window::KeepMouseInside(bool) {}
 void Window::LockMouse(bool lock) { lockMouse = lock; }
-void Window::SetMode(bool full, int, int) { fullScreen = full; }
+void Window::SetMode(bool full, int, int, const Screen*) { fullScreen = full; }
 void Window::ClientSize(int* width, int* height) const { *width = *height = 0; }
+void Window::Middle(int* x, int* y) const { *x = *y = 0; }
 bool Window::Pump() { return false; }
 void Window::Present(const SoftwareTarget&) {}
 bool Window::SetPointer(const uint32_t*, int, int, int, int) { return false; }

@@ -447,10 +447,14 @@ int l_LooksForTests(lua_State* L) {
     lua_pushboolean(L, switchValues[i]);
     lua_rawset(L, -3);
   }
-  const DisplayMode& display = Display();  // displayRequest: 0 none, 1 windowed, 2 full screen
-  const char* modes[3] = {"displayRequest", "windowedWidth", "windowedHeight"};
-  const int modeValues[3] = {static_cast<int>(display.request), display.windowedWidth, display.windowedHeight};
-  for (int i = 0; i < 3; ++i) {
+  // displayRequest: 0 none, 1 windowed, 2 full screen; displayScreen: the screen a full screen is asked on (0: the
+  // main one); screens: how many; secondScreen: the Secondary Adapter's at the start (-1: none); windowScreen: the
+  // screen the live window is on (-1: none)
+  const DisplayMode& display = Display();
+  const char* modes[7] = {"displayRequest", "windowedWidth", "windowedHeight", "displayScreen", "screens", "secondScreen", "windowScreen"};
+  const int modeValues[7] = {static_cast<int>(display.request), display.windowedWidth, display.windowedHeight,
+                             display.screen, static_cast<int>(display.screens.size()), display.secondScreen, display.windowScreen};
+  for (int i = 0; i < 7; ++i) {
     lua_pushstring(L, modes[i]);
     lua_pushnumber(L, modeValues[i]);
     lua_rawset(L, -3);
@@ -698,7 +702,109 @@ int PreferenceNumber(lua_State* L, const char* key, int fallback) {
   lua_settop(L, top);
   return number;
 }
+
+// import('/lua/options/optionslogic.lua').SetCustomData(option, {states = {{text = .., key = ..}, ...}}, default):
+// the engine giving an option of the Options menu its list, as StartupHelpers::OPTIONS_SetCustomData (FA exe
+// 0x8c6dc0) does for the original's Setup*Settings.
+void SetOptionStates(lua_State* L, const char* option, const std::vector<std::pair<std::string, std::string>>& states,
+                     const std::string& fallback) {
+  int top = lua_gettop(L);
+  lua_pushcfunction(L, ScriptTraceback);
+  lua_getglobal(L, "import");
+  lua_pushstring(L, "/lua/options/optionslogic.lua");
+  if (lua_pcall(L, 1, 1, top + 1) == 0 && lua_istable(L, -1)) {
+    lua_pushstring(L, "SetCustomData");
+    lua_gettable(L, -2);
+    lua_pushstring(L, option);
+    lua_newtable(L);
+    lua_pushstring(L, "states");
+    lua_newtable(L);
+    for (size_t i = 0; i < states.size(); ++i) {
+      lua_newtable(L);
+      lua_pushstring(L, "text");
+      lua_pushstring(L, states[i].first.c_str());
+      lua_rawset(L, -3);
+      lua_pushstring(L, "key");
+      lua_pushstring(L, states[i].second.c_str());
+      lua_rawset(L, -3);
+      lua_rawseti(L, -2, static_cast<int>(i + 1));
+    }
+    lua_rawset(L, -3);
+    lua_pushstring(L, fallback.c_str());
+    if (lua_isfunction(L, -4) && lua_pcall(L, 3, 0, top + 1) != 0)
+      LogScriptError(lua_isstring(L, -1) ? lua_tostring(L, -1) : "(error object is not a string)");
+  }
+  lua_settop(L, top);
+}
+
+// A screen's entry in the lists: its key for an option whose own adapter is `ownAdapter` (DisplayMode), and its
+// text, the original's "2560x1440(240)" (0x8cd4f0); where the PC has more than one screen, with its number (1: the
+// main screen), ours, as the original's lists never held two adapters' modes.
+std::pair<std::string, std::string> ScreenState(const DisplayMode& display, int screen, int ownAdapter) {
+  const DisplayScreen& s = display.screens[static_cast<size_t>(screen)];
+  std::string key = std::to_string(s.width) + "," + std::to_string(s.height) + "," + std::to_string(s.rate);
+  if (screen != ownAdapter) key += "," + std::to_string(screen);
+  std::string text = std::to_string(s.width) + "x" + std::to_string(s.height) + "(" + std::to_string(s.rate) + ")";
+  if (display.screens.size() > 1) text += screen == 0 ? ", main screen" : ", screen " + std::to_string(screen + 1);
+  return {text, key};
+}
 }  // namespace
+
+int ScreenOfModeKey(const std::string& key, int ownAdapter) {
+  int numbers[4] = {0, 0, 0, ownAdapter};
+  int count = 0;
+  size_t at = 0;
+  while (count < 4) {
+    size_t end = key.find(',', at);
+    const std::string part = key.substr(at, end == std::string::npos ? std::string::npos : end - at);
+    const size_t a = part.find_first_not_of(" \t"), b = part.find_last_not_of(" \t");
+    if (a == std::string::npos) return -1;
+    for (size_t i = a; i <= b; ++i)
+      if (!std::isdigit(static_cast<unsigned char>(part[i]))) return -1;
+    numbers[count++] = std::atoi(part.c_str() + a);
+    if (end == std::string::npos) break;
+    at = end + 1;
+    if (count == 4) return -1;  // (more than four numbers)
+  }
+  return count >= 3 ? numbers[3] : -1;
+}
+
+// READ (FA exe 0x8d21e0): when the command line did not choose the mode (byte 0xf57884), the list is "Windowed"
+// and then each mode of adapter 0 at least 1024x768 (0xf57878, 0xf5787c), each once (a set of the modes seen,
+// 0x8d5020), its default "1024,768,60" (0x8d2497); else "Command Line Override" alone, its default "overridden".
+// Ours: each screen's own size its one mode (a full screen here never switches the screen's mode), every screen of
+// the PC listed (the window opens on the one chosen; the original's device took adapter 0 only), the main
+// screen's mode the default (a profile that never chose fills the main screen).
+void SetupPrimaryAdapterSettings(lua_State* L) {
+  const DisplayMode& display = Display();
+  std::vector<std::pair<std::string, std::string>> states;
+  if (display.overridden || display.screens.empty()) {
+    states.push_back({"<LOC _Command_Line_Override>", "overridden"});
+    SetOptionStates(L, "primary_adapter", states, "overridden");
+    return;
+  }
+  states.push_back({"<LOC OPTIONS_0070>Windowed", "windowed"});
+  for (size_t i = 0; i < display.screens.size(); ++i) states.push_back(ScreenState(display, static_cast<int>(i), 0));
+  SetOptionStates(L, "primary_adapter", states, states[1].second);
+}
+
+// READ (FA exe 0x8d26d0): "Command Line Override" alone (default "overridden") when the command line chose the
+// mode; else "Disabled", and when the primary is not a window (the argument, 0x8d27b7) each mode of adapter 1 at
+// least 1024x768, each once; its default "disabled" (0x8d29ec). Ours: every screen but the main one, and only
+// where a second head can be shown (DisplayMode::secondHeadShown).
+void SetupSecondaryAdapterSettings(lua_State* L, bool windowed) {
+  const DisplayMode& display = Display();
+  std::vector<std::pair<std::string, std::string>> states;
+  if (display.overridden || display.screens.empty()) {
+    states.push_back({"<LOC _Command_Line_Override>", "overridden"});
+    SetOptionStates(L, "secondary_adapter", states, "overridden");
+    return;
+  }
+  states.push_back({"<LOC _Disabled>", "disabled"});
+  if (!windowed && display.secondHeadShown)
+    for (size_t i = 1; i < display.screens.size(); ++i) states.push_back(ScreenState(display, static_cast<int>(i), 1));
+  SetOptionStates(L, "secondary_adapter", states, "disabled");
+}
 
 // --- the console's output ---
 //
@@ -1467,11 +1573,22 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
         display.windowedHeight = std::max(240, PreferenceNumber(L, "Windows.Main.Previous.height", display.windowedHeight));
         display.request = DisplayMode::kWindowed;
       } else {
+        // a screen's mode: a full screen on that screen (DisplayMode; adapter 0 when the key has no fourth number,
+        // the original's keys); one no longer there (its key kept from a PC with more screens): the main one
+        const int screen = ScreenOfModeKey(mode, 0);
+        display.screen = screen > 0 && screen < static_cast<int>(display.screens.size()) ? screen : 0;
         display.request = DisplayMode::kFullScreen;
       }
       return;
     }
-    if (key == "SC_SECONDARYADAPTER") return;  // (a second screen for a second head: none here)
+    // SC_SecondaryAdapter <true|false> (FA exe 0x8d37c0): with exactly one word, the Secondary Adapter's list
+    // made anew, a window's (only "Disabled") when the word is "true"; FAF's options.lua sends whether its
+    // Primary Adapter's choice is "windowed".
+    if (key == "SC_SECONDARYADAPTER") {
+      const std::string word = value.substr(0, value.find_last_not_of(" \t") + 1);
+      if (!word.empty() && word.find_first_of(" \t") == std::string::npos) SetupSecondaryAdapterSettings(L, word == "true");
+      return;
+    }
   }
   if (KeptConVar* kept = KeptConVarOf(Upper(name))) return SetKeptConVar(kept, rest);
   if (Upper(name) == "UI_SELECTBYCATEGORY") {

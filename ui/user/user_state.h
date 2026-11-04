@@ -133,6 +133,9 @@ class UserState {
     // Whether a beat runs on its own thread now (the host's; unset: never). What asks the
     // simulation every frame for something that can be a beat old answers from before it then.
     std::function<bool()> beatRunning;
+    // How many beats' syncs are still to come before the one an order written now goes with (the host's
+    // GameSession::SyncsOwed; unset: none).
+    std::function<int()> syncsOwed;
     // The game's time with the frame's share of a beat, in seconds (the original's GameTimeSource,
     // 0x7a66a0: (beat + fraction) * 0.1; paused with the game, at its speed): the camera's game clock
     // (UseGameClock). Unset: there is no game.
@@ -462,13 +465,46 @@ CursorLock& LockCursor();
 // --size chose the mode at the start, and the menu then offers only "Command Line Override", as
 // the original does with its command-line switches (StartupHelpers::SetupPrimaryAdapterSettings,
 // FA exe 0x8d21e0).
+// The screens: the original's lists are its graphics adapters' modes, the Primary Adapter's those
+// of adapter 0 (0x8d22f7: the device's vt+0x14, GetModesForAdapter 0x8f0170, asked for adapter 0)
+// and the Secondary Adapter's those of adapter 1 (0x8d2807, adapter 1). Here every screen of the PC
+// is an adapter (`screens`, the main screen first: adapter 0), each with its own size as its one
+// mode, so both lists can name any screen: a key "width,height,rate" is the option's own adapter
+// (0 for the primary, 1 for the secondary: the original's keys, as its preferences keep them) and
+// "width,height,rate,N" adapter N. `screen`: the screen a full-screen request is for.
+struct DisplayScreen {
+  int x = 0, y = 0, width = 0, height = 0;  // its place on the desktop and its size, in pixels
+  int rate = 60;                            // its pictures a second
+};
 struct DisplayMode {
   enum Request { kNone, kWindowed, kFullScreen };
   Request request = kNone;
   int windowedWidth = 1024, windowedHeight = 768;
   bool overridden = false;
+  std::vector<DisplayScreen> screens;
+  int screen = 0;
+  // The Secondary Adapter's screen the program started with (-1: disabled, or a window: the original opens a
+  // second head only in full screen, CScApp::CreateDevice 0x8d0712..0x8d08fe). Not shown yet: the second head's
+  // world view needs a second picture of the renderer's (ui/README.md, the display mode).
+  int secondScreen = -1;
+  // Whether the Secondary Adapter's list offers the other screens: only where a second head can be shown (off:
+  // "Disabled" alone, as on a PC with one screen). MOHO64UI_SECOND_HEAD=1 turns it on, for tests.
+  bool secondHeadShown = false;
+  // The screen the live window is on (its middle), as last looked at (after it opened and after each change of
+  // mode); -1 without a window.
+  int windowScreen = -1;
 };
 DisplayMode& Display();
+// A screen mode's key ("width,height,rate" or "width,height,rate,N", see DisplayMode): the screen it names (its
+// adapter), `ownAdapter` when the key has no fourth number; -1 when it is no such key (windowed, disabled,
+// overridden).
+int ScreenOfModeKey(const std::string& key, int ownAdapter);
+// The Options menu's lists of screens, set through /lua/options/optionslogic.lua's SetCustomData, as the
+// original's StartupHelpers::SetupPrimaryAdapterSettings (0x8d21e0) and SetupSecondaryAdapterSettings (0x8d26d0)
+// set them: at the start, and the secondary's each time the console's SC_SecondaryAdapter <windowed> asks (FA exe
+// 0x8d37c0; FAF's options.lua sends it whenever the primary's choice changes). Each gives its default.
+void SetupPrimaryAdapterSettings(lua_State* L);
+void SetupSecondaryAdapterSettings(lua_State* L, bool windowed);
 // The program's own looks, each a player's choice in the game's Options menu (Video tab; Chris,
 // 2026-10-15: "The new looks will go into options menu for each player"). The options send them
 // as console commands (remaster_effects, remaster_effects_quality, remaster_tracers,
@@ -564,7 +600,9 @@ struct LookSettings {
   // player's or not; with ui_DebugAltClick, Alt and a click on another army's unit looks through that army.
   bool selectAnything = false, debugAltClick = false;
   // The samples a pixel the scene is drawn with: the player's Anti-Aliasing, or 1 under FSR 3.
-  int SceneSamples() const { return temporalUpscale ? 1 : sceneSamples; }
+  // (frame generation too: the renderer makes frames between only at one sample, world.cpp; with MSAA on it did
+  // nothing, Chris's big test 2026-11-01, render request 52)
+  int SceneSamples() const { return temporalUpscale || frameGeneration ? 1 : sceneSamples; }
   float meshDetail = 1.0f;
   // ren_MipSkipLevels 0..2 (the game's Texture Detail: High 0, Medium 1, Low 2): the largest sizes
   // of each big texture left out, from the next picture made (WorldPicture::SetTextureDetail).
@@ -705,6 +743,20 @@ struct LongFrameLog {
   void Note(const char* what, double ms) {
     if (thresholdMs > 0 && ms >= 0.5 && std::this_thread::get_id() == thread) notes.emplace_back(what, ms);
   }
+  // While a launch loads (GameSession: BeginLoad to FinishLoad): what the renderer noted off the frames' thread
+  // (render/hitch_log.h: its pipelines made in the background, the map opening behind's models and textures), which a
+  // frame's line leaves out; summed by kind, the longest kept, for one line at the load's end (Chris's big test,
+  // 2026-11-01: 51 s of load, ~2 s of it in the log). The window's thread alone.
+  bool loading = false;
+  struct Aside {
+    std::string kind;
+    int count = 0, kept = 0;
+    double ms = 0, driverMs = 0;
+  };
+  std::vector<Aside> asides;
+  std::vector<std::pair<std::string, double>> longestAsides;  // (the 8 longest, what and ms)
+  void NoteAside(const std::string& what, double ms);
+  std::string AsideSummary() const;
 };
 LongFrameLog& LongFrames();
 // Whether this is the program's main thread (the one the first user state was made on: the front end's); a session's
@@ -791,6 +843,13 @@ void ClickSelect(lua_State* L, uint32_t unit, bool shift, bool ctrl, bool alt = 
 void BoxSelect(lua_State* L, const std::vector<uint32_t>& ids, bool shift);
 bool DoubleClickSelect(lua_State* L, uint32_t unit, const std::vector<uint32_t>& inView);
 uint32_t HoverOf(lua_State* L, uint32_t picked);
+// The unit the mouse points at as the original chooses it (UpdateSelection 0x86f520): of the picture's own pick
+// (`picked`) and the units whose middle lies within `tolerance` pixels of the point (`nearby`), those that may be
+// pointed at, the one whose place shows nearest the point. `project`: a place of the world to the view's pixels
+// (false behind the camera). 0xffffffff: none. (Give the answer to HoverOf for the parent's rule.)
+using PointProjector = std::function<bool(const float world[3], float* x, float* y)>;
+uint32_t PointedUnit(lua_State* L, uint32_t picked, const std::vector<uint32_t>& nearby, float sx, float sy, float tolerance,
+                     const PointProjector& project);
 // The console commands the game's key map binds its selection keys to (user_units.cpp):
 // UI_SelectByCategory [+add] [+nearest] [+idle] [+inview] [+goto] [+excludeengineers] <category
 // words> (FA exe 0x866a30) and UI_ExpandCurrentSelection (0x866970: the player's units in view

@@ -957,6 +957,16 @@ class WorldView : public Control {
     if (v > 0) s->ViewUnitsIn(v, x0, y0, x1, y1, out);
     else s->UnitsIn(x0, y0, x1, y1, out);
   }
+  // The unit the mouse points at, at a point of this view's pixels: the picture's pick and the units whose middle
+  // lies within ui_SelectTolerance pixels of it, chosen among by the original's rules (PointedUnit, user_units.cpp:
+  // UpdateSelection 0x86f520). Not yet given to HoverOf.
+  uint32_t SrcPointedAt(lua_State* L, WorldSource* s, float x, float y) const {
+    const float tolerance = std::max(Looks().selectTolerance, 0.0f);
+    std::vector<uint32_t> nearby;
+    SrcUnitsIn(s, x - tolerance, y - tolerance, x + tolerance, y + tolerance, &nearby);
+    return PointedUnit(L, SrcUnitAt(s, x, y), nearby, x, y, tolerance,
+                       [this, s](const float p[3], float* px, float* py) { return SrcProject(s, p, px, py); });
+  }
   // The views of the picture (on the main view, this one): this one first, then every other world view of the first
   // head that shows (not a minimap, not hidden: the split screen's right one) in the order of the control tree, each a
   // Split view at its own rectangle with its own camera; then the follow camera's picture while it is on and its frame
@@ -1142,7 +1152,7 @@ class WorldView : public Control {
     if (hovered && hovered->highlight && pixels_ && Looks().selectTolerance >= 0) {
       Rect hr;
       hovered->GetRect(&hr.x0, &hr.y0, &hr.x1, &hr.y1);
-      uint32_t under = hovered->SrcUnitAt(source, mouse.mouseX - hr.x0, mouse.mouseY - hr.y0);
+      uint32_t under = hovered->SrcPointedAt(L, source, mouse.mouseX - hr.x0, mouse.mouseY - hr.y0);
       int kind = under != 0xffffffffu ? HoverKindOf(L, under) : 0;
       if (kind) scene.hover = under, scene.hoverKind = kind;
       rollover = HoverOf(L, under);
@@ -2329,7 +2339,7 @@ class WorldView : public Control {
     }
     Rect r;
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
-    return HoverOf(L, SrcUnitAt(UserState::From(L)->config().world, sx - r.x0, sy - r.y0));
+    return HoverOf(L, SrcPointedAt(L, UserState::From(L)->config().world, sx - r.x0, sy - r.y0));
   }
 
   // So many pixels of the view, in map units at the place the camera looks at.

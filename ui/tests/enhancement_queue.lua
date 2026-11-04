@@ -97,5 +97,21 @@ ForkThread(function()
     -- CheckForNecessaryUIRefresh; ui/tests/refresh_ui.lua checks that call itself)
     check("FAF's queue: the right drone, T2, T3", queued(), "RightPod,AdvancedEngineering,T3Engineering")
     check("the queue row shows them", row(), "RightPod,AdvancedEngineering,T3Engineering")
+    -- the drone may be selected, docked on the commander or not (UserUnit::IsSelectable 0x8c0500: only a unit that hangs
+    -- on something, moves and is NOT a POD is not; Chris's big test of 2026-11-01, "Select drone command doesn't work")
+    WaitSeconds(2)
+    local pods = GetAssistingUnitsList({cdr})
+    local onCdr = 0
+    for _, u in GetAttachedUnitsList({cdr}) do
+        if u:GetBlueprint().BlueprintId == "uea0001" then onCdr = onCdr + 1 end
+    end
+    LOG("TEST note: drones " .. table.getn(pods) .. ", docked on the commander " .. onCdr)
+    check("GetAssistingUnitsList gives the left drone", pods[1] and pods[1]:GetBlueprint().BlueprintId, "uea0001")
+    if pods[1] then
+        SelectUnits({pods[1]})
+        local sel = GetSelectedUnits()
+        check("SelectUnits on the drone (FAF's drone button) selects it", sel and table.getn(sel) == 1 and sel[1] == pods[1], true)
+        SelectUnits({cdr})
+    end
     LOG("TEST done: " .. failed .. " failed")
 end)

@@ -229,6 +229,7 @@ local looks = {
         -- the next map loaded as that setting.)
         title = "Temporal Upscaling (FSR 3)",
         key = 'remaster_temporal_upscale',
+        tip = "Draws the world smaller and sharpens it up to the screen with AMD FSR 3, in place of anti-aliasing. Raises the frame rate only where the graphics card is what holds it back; in a big late game the processor usually is.",
         type = 'toggle',
         default = 0,
         set = Look("remaster_temporal_upscale"),
@@ -342,10 +343,11 @@ local looks = {
     },
     {
         -- the renderer's request 34 (Chris's list of 2026-10-17, item 7): AMD's FSR 3 frame generation; like
-        -- Temporal Upscaling it needs one sample a pixel, so with the Anti-Aliasing on it does nothing
+        -- Temporal Upscaling it needs one sample a pixel, so on it turns the Anti-Aliasing off (render request 52:
+        -- before, with the Anti-Aliasing on it silently did nothing)
         title = "Frame Generation",
         key = 'remaster_frame_generation',
-        tip = "Shows a frame made between each two drawn ones: twice the frames, a little more delay. Best when the game already runs at 60 or more. Needs anti-aliasing off (or Temporal Upscaling on).",
+        tip = "Shows a frame made between each two drawn ones: twice the frames, a little more delay. Best when the game already runs at 60 or more. Turns anti-aliasing off while on (from the next map).",
         type = 'toggle',
         default = 0,
         set = Look("remaster_frame_generation"),

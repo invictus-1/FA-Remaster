@@ -153,8 +153,9 @@ connection (GPGNet), observers, disconnect and desync dialogs.
 - **Inferred behaviour to confirm**, marked in the source: the order of mouse exit and enter; dragger cancel rules; mouse button key codes;
   re-parenting; keyboard focus callbacks.
 - **Tests.** Each built piece gets checks in `ui/tests` (111 today), run on every change.
-- **Housekeeping with the engine's answers:** use the shared mounting function and the engine-object
-  handle that moved into `src/script`.
+- **Housekeeping with the engine's answers:** the shared mounting function is in use (2026-11-01; the
+  init file's `protocols` still read by a second run of ours until engine request 52); next, the
+  engine-object handle that moved into `src/script`.
 
 ## From the other tracks
 

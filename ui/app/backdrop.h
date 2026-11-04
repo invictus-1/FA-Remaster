@@ -52,6 +52,9 @@ class Backdrop : public BackdropSource {
   const std::string& map() const { return map_; }
   // Shown by the window's picture: begun so and not stopped.
   bool Direct() const { return direct_ && begun_ && running_; }
+  // Begun so, stopped since or not (a game stops it: GameSession::ServeWindowMap begins the menus' map behind a game's
+  // world that is over, before the next front end's background is begun).
+  bool BegunDirect() const { return direct_ && begun_; }
   // BackdropSource's.
   const uint32_t* Latest(int width, int height) override;
   bool DrawsToWindow() const override { return Direct(); }

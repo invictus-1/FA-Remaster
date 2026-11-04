@@ -88,7 +88,9 @@ check("the Video tab has Temporal Upscaling (FSR 3), off unless chosen", video.r
 video.remaster_temporal_upscale.set('remaster_temporal_upscale', 1, false)
 check("on: FSR 3, and the anti-aliasing gives way (one sample a pixel)", tostring(moho64ui_Looks().temporalUpscale) .. " " .. moho64ui_Looks().samplesDrawn, "true 1")
 video.remaster_temporal_upscale.set('remaster_temporal_upscale', 0, false)
-check("off again: the anti-aliasing's samples", moho64ui_Looks().samplesDrawn, moho64ui_Looks().sceneSamples)
+-- (Frame Generation on keeps one sample too: render request 52, 2026-11-03; the test's preferences may have it on)
+check("off again: the anti-aliasing's samples (one while Frame Generation is on)", moho64ui_Looks().samplesDrawn,
+      moho64ui_Looks().frameGeneration and 1 or moho64ui_Looks().sceneSamples)
 -- Every remastered look ON unless chosen (Chris, 2026-10-18); Frame Generation off (a speed trade-off)
 for _, key in {'remaster_atmosphere', 'remaster_soft_shadows', 'remaster_weather_effects', 'remaster_ground_detail',
                'remaster_water_ripples', 'remaster_lens', 'remaster_battle_effects', 'remaster_energy_shields',
@@ -240,14 +242,15 @@ check("front-end data comes back as a copy", fed and (fed.opID .. " " .. fed.cam
 SetFrontEndData('moho64ui_test', nil)
 check("and nil takes it away", GetFrontEndData('moho64ui_test'), nil)
 
--- The display mode: "Windowed" and the screen's own mode, listed at the start (no window here, so
--- the command line has not chosen); the choice is a request the window's loop takes
+-- The display mode: "Windowed" and each screen's own mode, the main screen's first, listed at the
+-- start (no window here, so the command line has not chosen); the choice is a request the window's
+-- loop takes (the screens themselves: ui/tests/screens.lua)
 local adapter = video.primary_adapter and video.primary_adapter.custom and video.primary_adapter.custom.states or {}
-check("the display modes are Windowed and the screen's own", table.getn(adapter) == 2 and adapter[1].key == 'windowed'
+check("the display modes are Windowed and one per screen", table.getn(adapter) == 1 + moho64ui_Looks().screens and adapter[1].key == 'windowed'
     and string.find(adapter[2].key or '', '^%d+,%d+,%d+$') ~= nil, true)
-check("and a profile that never chose takes the screen's own", video.primary_adapter.default, adapter[2] and adapter[2].key)
+check("and a profile that never chose takes the main screen's own", video.primary_adapter.default, adapter[2] and adapter[2].key)
 local second = video.secondary_adapter and video.secondary_adapter.custom and video.secondary_adapter.custom.states or {}
-check("no second screen to choose", table.getn(second) == 1 and second[1].key == 'disabled', true)
+check("no second screen to choose (no second head yet)", table.getn(second) == 1 and second[1].key == 'disabled', true)
 ConExecute("SC_PrimaryAdapter windowed")
 check("Windowed asks the window to leave a full screen", moho64ui_Looks().displayRequest, 1)
 check("at the size it had as a window (1024x768 when none is kept)", moho64ui_Looks().windowedWidth .. "x" .. moho64ui_Looks().windowedHeight, "1024x768")

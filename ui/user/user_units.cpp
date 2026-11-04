@@ -220,7 +220,8 @@ struct UnitStore : UserState::Extra {
   // 0x8b7350: every change of a beat up to the synced one). So the order shows at once, before the game's script
   // hears of it (OnCommandIssued, 0x8b0599): FAF's enhancement queue (enhancementqueue.lua) counts on it.
   // `firstSync`: the user state's sync count from which the simulation's queues include the order (the next beat's,
-  // or the one after it while a beat runs on its thread: what is written then goes with the beat after it).
+  // or the one after it while a beat begun on its thread still owes its sync: what is written then goes with the
+  // beat after it; GameSession::SyncsOwed).
   struct QueueChange {
     uint32_t unit = 0xffffffffu;
     bool factory = false;  // the factory's rally queue (IssueFactoryCommand), else the unit's own
@@ -389,15 +390,22 @@ int l_GetSelectedUnits(lua_State* L) {
 // could build: the build menu came up empty and stayed so until it was selected again.
 //
 // Whether a unit may be selected (UserUnit::IsSelectable, FA exe 0x8c0500 with FAF's patch at
-// 0x1291519; read by the engine track, docs/engine-answers.md "ui 36"): not if it is dead, in the
-// state UnSelectable, not in SELECTABLE, being built and neither a FACTORY nor a CQUEMOV, or a POD
-// that moves and hangs on something (a docked drone). Used by the scripts' SelectUnits and
-// AddSelectUnits, and through CanSelectUnit by the mouse.
+// 0x1291519; read by the engine track, docs/engine-answers.md "ui 36", and again 2026-11-03): not if it
+// is dead, in the state UnSelectable, not in SELECTABLE, being built and neither a FACTORY nor a
+// CQUEMOV, or a unit that moves and hangs on something and is NOT a POD (cargo on a transport). A
+// docked drone (a POD on its commander or station) may be selected. The disassembly: hanging on
+// something (UserUnit+0x1a2, SSTIUnitVariableData+0xa, 0x8c0522) and moving (+0x148 vt+0x30
+// IsMobile, 0x8c053b) set the flag (0x8c0569); in "POD" (0x8c0562) clears it again (0x8c056f), not
+// in it keeps it (0x8c056d); a set flag is false (0x8c059c). (Until 2026-11-03 ours had the POD test
+// the other way round: no docked drone of a commander, support commander or Kennel could be
+// selected, not by the drone buttons either, and cargo could; Chris's big test of 2026-11-01.) The
+// original asks only +0x1a2, the unit's parent pointer: UnitView::attached. Used by the scripts'
+// SelectUnits and AddSelectUnits, and through CanSelectUnit by the mouse.
 bool Moves(lua_State* L, const UserUnit* u);  // (below: its blueprint's motion type one of the eight of moving)
 bool IsSelectable(lua_State* L, const UserUnit* u) {
   if (u->gone || u->view.dead || !u->view.selectable || !InCategory(L, u, "SELECTABLE")) return false;
   if (u->view.beingBuilt && !InCategory(L, u, "FACTORY") && !InCategory(L, u, "CQUEMOV")) return false;
-  if ((u->view.attached || u->view.parent != 0xffffffffu) && InCategory(L, u, "POD") && Moves(L, u)) return false;
+  if (u->view.attached && Moves(L, u) && !InCategory(L, u, "POD")) return false;
   return true;
 }
 // What the mouse may select (CWldSession::CanSelectUnit 0x865830, read 2026-10-16; notes in the ui
@@ -1290,7 +1298,14 @@ void NoteIssued(lua_State* L, const std::vector<uint32_t>& ids, const StreamIssu
       for (int i = 0; i < 3; ++i) order.position[i] = it->second->view.position[i];
     }
   }
-  const uint64_t firstSync = user->syncCount + (user->config().beatRunning && user->config().beatRunning() ? 2 : 1);
+  // The original stamps the change with the beat its message goes with (the sim driver's answer at 0x8b040c, kept
+  // at esp+0x24 and handed to 0x8b6e60 / 0x8b6de0): exact. Here the syncs still owed by beats already begun come
+  // first (SyncsOwed). It was "a beat running now: 2, else 1" until 2026-11-03, which came short whenever the beat
+  // had finished on its thread but its sync was not given yet, as after every wait for it (this order's own OwnIds
+  // waits: LiveSim): the change went with the beat before the order's, whose queue lacks it, so a factory's new
+  // entry showed, went for a beat and came back (Chris's big test 2026-11-01, item 7: the queue's icon flickered).
+  const int owed = user->config().syncsOwed ? user->config().syncsOwed() : 0;
+  const uint64_t firstSync = user->syncCount + static_cast<uint64_t>(owed) + 1;
   for (uint32_t unit : ids) {
     auto it = store.units.find(unit);
     if (it == store.units.end() || it->second->gone) continue;
@@ -3569,6 +3584,100 @@ uint32_t HoverOf(lua_State* L, uint32_t picked) {
   return picked;
 }
 
+namespace {
+// A number of the unit's blueprint (a top-level field), or `fallback`.
+float BlueprintNumber(lua_State* L, const std::string& blueprint, const char* field, float fallback) {
+  float value = fallback;
+  PushBlueprint(L, blueprint);
+  if (lua_istable(L, -1)) {
+    lua_pushstring(L, field);
+    lua_rawget(L, -2);
+    if (lua_isnumber(L, -1)) value = static_cast<float>(lua_tonumber(L, -1));
+    lua_pop(L, 1);
+  }
+  lua_pop(L, 1);
+  return value;
+}
+// Whether the original would take this unit as one the mouse may point at (UpdateSelection 0x86f520, its test of
+// each entity in the volume under the mouse, 0x86f7f3 .. 0x86fa7f): not one that is not SELECTABLE nor a
+// FERRYBEACON and is UNTARGETABLE (a drone's guard dummy, ZXA0003, hangs on every FAF drone with the drone's own
+// mesh: it must never take the drone's place); not one hanging on a CARRIER; not another army's unit that hangs on
+// something (for an observer: any); not a dead one (0x86f7f3: byte +0x71, the copy at +0x50 of
+// SSTIEntityVariableData+0x21, UnitView::dead). (Not built: the unit's flag +0x3e0 & 0x20 (0x86fa19), a word of
+// the beat's sync for each unit (its entry +0x230, given to UserUnit::UpdateUnitData 0x8c0750 at 0x894b32) whose
+// meaning is not read yet: its bits 8 and 0x10 hide a mobile unit / a structure (UpdateVisibility 0x8c09b0), and
+// RenderStrategicIcons draws no icon for 0x20 either (0x85bb15); and the test that another army's unit is on the
+// playable map, which the picture makes already.)
+bool MayBePointedAt(lua_State* L, const UserUnit* u) {
+  if (!u || u->gone || u->view.dead) return false;
+  if (!InCategory(L, u, "SELECTABLE") && !InCategory(L, u, "FERRYBEACON") && InCategory(L, u, "UNTARGETABLE")) return false;
+  if (u->view.parent != 0xffffffffu)
+    if (UserUnit* parent = LiveUnit(L, u->view.parent); parent && InCategory(L, parent, "CARRIER")) return false;
+  const int focus = FocusArmyNow(L);
+  if ((focus < 0 || u->view.army != focus + 1) && u->view.attached) return false;
+  return true;
+}
+// Whether the unit's box, as the screen shows it, comes within `tolerance` pixels of the point. The original tests
+// the mesh's own box (its bottom part by SelectionYOffset or SelectionMeshUseTopAmount, scaled by
+// SelectionMeshScaleX / Z; or the mesh's oriented boxes below the blueprint's UseOOBTestZoom) against the volume
+// of the mouse's square, ui_SelectTolerance pixels each way (0x86f693, 0xf57a90). Here, without the mesh, the
+// blueprint's collision box (SizeX / Y / Z about CollisionOffsetX / Y / Z), a quarter larger each way, its
+// corners' bounds on the screen (INFERRED stand-in for the mesh's box). True when it cannot be told (no size, a
+// corner behind the camera).
+bool BoxNearPoint(lua_State* L, const UserUnit* u, float sx, float sy, float tolerance, const PointProjector& project) {
+  const std::string& bp = u->view.blueprint;
+  const float hx = BlueprintNumber(L, bp, "SizeX", 0) * 0.5f * 1.25f, hz = BlueprintNumber(L, bp, "SizeZ", 0) * 0.5f * 1.25f;
+  const float sy3 = BlueprintNumber(L, bp, "SizeY", 0) * 1.25f;
+  if (hx <= 0 && hz <= 0) return true;
+  const float ox = BlueprintNumber(L, bp, "CollisionOffsetX", 0), oz = BlueprintNumber(L, bp, "CollisionOffsetZ", 0);
+  const float oy = BlueprintNumber(L, bp, "CollisionOffsetY", 0);
+  const float* q = u->view.orientation;  // x, y, z, w
+  auto rotate = [q](const float v[3], float out[3]) {  // v' = v + 2w (q x v) + 2 q x (q x v)
+    const float cx = q[1] * v[2] - q[2] * v[1], cy = q[2] * v[0] - q[0] * v[2], cz = q[0] * v[1] - q[1] * v[0];
+    const float dx = q[1] * cz - q[2] * cy, dy = q[2] * cx - q[0] * cz, dz = q[0] * cy - q[1] * cx;
+    out[0] = v[0] + 2 * (q[3] * cx + dx), out[1] = v[1] + 2 * (q[3] * cy + dy), out[2] = v[2] + 2 * (q[3] * cz + dz);
+  };
+  float x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f;
+  for (int c = 0; c < 8; ++c) {
+    const float local[3] = {ox + ((c & 1) ? hx : -hx), oy + ((c & 2) ? sy3 : 0.0f), oz + ((c & 4) ? hz : -hz)};
+    float turned[3], at[3], px, py;
+    rotate(local, turned);
+    for (int i = 0; i < 3; ++i) at[i] = u->view.position[i] + turned[i];
+    if (!project(at, &px, &py)) return true;
+    x0 = std::min(x0, px), y0 = std::min(y0, py), x1 = std::max(x1, px), y1 = std::max(y1, py);
+  }
+  return sx >= x0 - tolerance && sx <= x1 + tolerance && sy >= y0 - tolerance && sy <= y1 + tolerance;
+}
+}  // namespace
+
+// The unit the mouse points at, as the original chooses it (CWldSession::UpdateSelection 0x86f520, read
+// 2026-11-03): of the units in the volume under the mouse's square (ui_SelectTolerance pixels each way) that may be
+// pointed at (MayBePointedAt) and whose box meets that volume, the one whose place shows NEAREST THE MOUSE on the
+// screen (0x86fc99: the squared distance of its projected position; a unit before anything else). The picture's
+// own answer (`picked`: the nearest to the camera of the spheres about the models, render World::UnitAt) is one
+// candidate, kept only when its box comes near the point; `nearby` are the units whose middle the picture finds
+// within the square (taken as met: INFERRED). Before this the picture's answer was taken as it came: a naval
+// factory's sphere (its model goes deep under the water) took clicks far beside it, and the guard dummy on each
+// drone (bigger than the drone, unselectable) took the clicks on drones, so that no drone could be clicked and a
+// support commander's drone took the brackets meant for him. Then HoverOf as before. 0xffffffff: none.
+uint32_t PointedUnit(lua_State* L, uint32_t picked, const std::vector<uint32_t>& nearby, float sx, float sy, float tolerance,
+                     const PointProjector& project) {
+  uint32_t best = 0xffffffffu;
+  float bestDistance = std::numeric_limits<float>::max();
+  auto consider = [&](uint32_t id, bool boxTest) {
+    UserUnit* u = id == 0xffffffffu ? nullptr : LiveUnit(L, id);
+    if (!MayBePointedAt(L, u)) return;
+    if (boxTest && !BoxNearPoint(L, u, sx, sy, tolerance, project)) return;
+    float px, py;
+    if (!project(u->view.position, &px, &py)) return;
+    const float d = (px - sx) * (px - sx) + (py - sy) * (py - sy);
+    if (d < bestDistance) best = id, bestDistance = d;
+  };
+  for (uint32_t id : nearby) consider(id, false);
+  if (std::find(nearby.begin(), nearby.end(), picked) == nearby.end()) consider(picked, true);
+  return best;
+}
+
 void BuildSpacingOf(lua_State* L, const std::string& blueprint, float* alongX, float* alongZ) {
   float size[2] = {1, 1};
   PushBlueprint(L, blueprint);
@@ -5373,6 +5482,7 @@ void RefreshUserUnits(lua_State* L) {
   // selection holds the units themselves.)
   std::vector<std::unique_ptr<UserUnit>> retired;
   std::vector<UserUnit*> newCreator;  // (units whose creator changed: UserUnit::AddToSelectionSet below)
+  std::vector<UserUnit*> nowAttached;  // (units that hang on something since this beat: they leave the selection, below)
   for (const UnitView& v : views) {
     auto& slot = store.units[v.id];
     if (slot && slot->view.blueprint != v.blueprint) {  // the id went to another unit
@@ -5386,6 +5496,7 @@ void RefreshUserUnits(lua_State* L) {
       MakeTable(L, slot.get());
     } else {
       oldCreator = slot->view.creator;
+      if (!slot->view.attached && v.attached) nowAttached.push_back(slot.get());
     }
     slot->view = v;
     slot->gone = false;
@@ -5427,6 +5538,15 @@ void RefreshUserUnits(lua_State* L) {
   // its place in the selection, until the player sees the place, 0x8b9694 .. 0x8b96a7; ours drops it at once.)
   store.selection.erase(std::remove_if(store.selection.begin(), store.selection.end(), [](const UserUnit* u) { return u->gone; }),
                         store.selection.end());
+  // A unit that hangs on something since this beat (loaded, docked: a drone back on its commander or station) leaves the
+  // selection (UserUnit::UpdateUnitData 0x8c0750: SSTIUnitVariableData+0xa, UserUnit+0x1a2, off before and on now ->
+  // DeselectFromSessionSelection 0x8c06a0, which calls CWldSession::SetSelection without it). The original does it
+  // there and then; here it leaves as a gone unit does, and the script hears of the smaller selection with
+  // CheckForNecessaryUIRefresh after OnSync (INFERRED to come to the same for the panels).
+  for (UserUnit* u : nowAttached) {
+    auto at = std::find(store.selection.begin(), store.selection.end(), u);
+    if (at != store.selection.end()) store.selection.erase(at);
+  }
   for (auto& old : retired) old->UnbindLua();
   retired.clear();
   for (auto it = store.units.begin(); it != store.units.end();) {
