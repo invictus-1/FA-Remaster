@@ -473,11 +473,23 @@ void Air::Build(View* view, const Camera& camera, gfx::Texture sunShadows, gfx::
   // this frame's place inside each cell's depth: the golden ratio's steps, which spread evenly over frames
   k.up[3] = std::fmod(static_cast<float>(frame_) * 0.6180339887f, 1.0f);
   k.ahead[3] = haveLast_ ? std::clamp(keep, 0.0f, 0.98f) : 0.0f;
+  // [glitches] (letGo) less of last frame kept while the camera moves, and two places a cell then
+  bool moving = false;
+  if (haveLast_ && letGo > 0) {
+    const Vec3 eyeNow = camera.Eye();
+    const float away = std::max(Length(eyeNow - camera.target), 1.0f);
+    const float turned = Length(lastAhead_) > 0.5f ? std::acos(std::clamp(Dot(a, lastAhead_), -1.0f, 1.0f)) : 0.0f;
+    const float moved = Length(eyeNow - lastEye_) / away + turned;
+    const float share = std::clamp(1 - moved * letGo, std::clamp(keepMoving, 0.0f, 1.0f), 1.0f);
+    moving = share < 0.75f;
+    k.ahead[3] *= share;
+  }
+  lastAhead_ = a;
   // (airfix) from a fresh start (a weather cut, Restart; the first frame): four places a cell, evenly spread, and the frames
   // after keep the mean of all since then until that is as much as `keep` keeps (else the first frame's one place, at the
   // same share of every cell's depth, lingered off the mean for a quarter of a second)
   if (haveLast_) k.ahead[3] = std::min(k.ahead[3], counted_ / (counted_ + 1));
-  k.cells[3] = haveLast_ ? 1.0f : 4.0f;
+  k.cells[3] = haveLast_ ? (moving ? 2.0f : 1.0f) : 4.0f;
   k.cells[0] = static_cast<float>(width_);
   k.cells[1] = static_cast<float>(height_);
   k.cells[2] = static_cast<float>(depth_);

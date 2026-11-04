@@ -136,7 +136,8 @@ cbuffer MeshKind : register(b3) {
   float4 kind12;  // [machinery] a factory's belt (machinery.h): x where its strip of the texture begins along its axis, y how
                   // long it is, z the bone whose vertices are the belt (-1: none), w its axis (0: u, 1: v)
   float4 kind13;  // [machinery] x: the model's bones, when after their rows come how strongly each glows (one float each,
-                  // four a row); 0: none
+                  // four a row); 0: none. [glitches] y: 1 = a building's see-through ghost (SeeThroughGhost); z: 1 = the
+                  // remastered quantum gate's field (remasteredGate)
 #ifdef PLANTS
   float4 kind7, kind8;  // [plants] (plants.h) PlantLife::Constants
 #endif
@@ -478,6 +479,17 @@ float4 DepthPS(VOut i) : SV_Target {
   return float4(0, 0, 0, cover);
 }
 
+// [glitches] (the remastered quantum gate's field, Shade) a number 0..1 from a place, and smooth noise from it
+float GateHash(float2 p) {
+  p = frac(p * float2(0.1031, 0.1030));
+  p += dot(p, p.yx + 33.33);
+  return frac((p.x + p.y) * p.x);
+}
+float GateNoise(float2 p) {
+  float2 i = floor(p), f = frac(p);
+  float2 u = f * f * (3 - 2 * f);
+  return lerp(lerp(GateHash(i), GateHash(i + float2(1, 0)), u.x), lerp(GateHash(i + float2(0, 1)), GateHash(i + float2(1, 1)), u.x), u.y);
+}
 float4 Shade(VOut i, bool front) {
   // (a finished unit whose personal shield is up says so with an alpha above 1)
   bool shielded = i.color.a > 1.5;
@@ -562,6 +574,38 @@ float4 Shade(VOut i, bool front) {
       float3 second = normalsMap.Sample(samplerAniso, i.uv.xy + float2(-0.05, -0.025) * time).rgb;
       c = (first.rgb + second) * first.a;
       alpha = 0.2;
+    } else if (kind.y > 7.5 && kind13.z > 0.5) {
+      // [glitches] the remastered quantum gate's field (MeshRenderer::remasteredGate; Chris's big test: "Portal effect is too
+      // lowres"): the original's look - streams of small blue and cyan blocks running across the field, pale violet bands
+      // drifting through them, a cloudy shimmer over all - made at any size from where on the field a pixel is (the field's
+      // own place, at rest), not from its 256-pixel texture stretched over the gate: each block's edges a pixel sharp at any
+      // distance, many lanes at their own speeds, the blocks lighting up and going out, the bands and the shimmer slow.
+      // (along the streams, across them: the field's own place in its thickness's units, i.shape, so the blocks are as many
+      // on the field whatever size the gate draws it at; the game's ForceField01 is some 9 of them across, 5.5 deep)
+      float2 q = float2(i.shape.x, i.shape.z);
+      float2 fw = max(fwidth(q), 1e-5);
+      const float laneH = 0.07, cellL = 0.3;
+      float lane = floor(q.y / laneH);
+      float lh = GateHash(float2(lane, 7.1));
+      float along = q.x + time * lerp(0.3, 0.9, lh);
+      float cell = floor(along / cellL);
+      float2 inCell = float2(frac(along / cellL) * cellL, frac(q.y / laneH) * laneH);
+      float ch = GateHash(float2(cell, lane));
+      float on = step(0.66, GateHash(float2(cell, lane + floor(time * lerp(1.5, 4.0, ch)) * 31.0)));  // (blocks blink at their own beats)
+      // the block: a little rectangle inside its cell, its edges anti-aliased by the pixel's size on the field
+      float2 halfSize = float2(cellL * lerp(0.22, 0.4, ch), laneH * 0.3);
+      float2 d = abs(inCell - float2(cellL, laneH) * 0.5) - halfSize;
+      float block = saturate(0.5 - max(d.x / fw.x, d.y / fw.y)) * on;
+      // (fades out where the lanes come to a pixel and a half and less: no shimmering far off)
+      block *= saturate(1.5 - 1.5 * max(fw.x / cellL, fw.y / laneH));
+      float3 blockColour = lerp(float3(0.15, 0.3, 1.0), float3(0.35, 0.85, 1.0), GateHash(float2(cell * 3.7, lane))) * lerp(0.6, 1.4, ch);
+      // the drifting violet-white bands (the original texture's streaks) and the slow shimmer of cloud over all
+      float band = smoothstep(0.55, 0.85, GateNoise(float2(q.y * 3.0, q.x * 0.25 - time * 0.1)));
+      band *= 0.55 + 0.45 * GateNoise(float2(q.x * 3.0 - time * 0.6, q.y * 14.0));  // (streaked along the streams)
+      float cloud = GateNoise(q * 1.6 + float2(time * 0.08, -time * 0.05)) * 0.6 + GateNoise(q * 4.3 - float2(time * 0.21, 0)) * 0.4;
+      // (as dark and as see-through as the original's on the whole: its texture is a deep blue, a third bright at most)
+      c = blockColour * block * 0.75 + float3(0.55, 0.5, 1.0) * band * 0.8 + float3(0.05, 0.08, 0.3) * cloud;
+      alpha = saturate(0.2 + 0.3 * cloud + 0.5 * block + 0.5 * band) * 0.7;
     } else if (kind.y > 7.5) {
       // a quantum gate's field: its texture sliding upward, a four times finer second one sliding
       // across taken away from it; seen through, as much as the texture's alpha says at rest
@@ -986,6 +1030,18 @@ float4 Shade(VOut i, bool front) {
 
 // a ghost: its shape in one colour, the light and dark of the model kept
 float4 PS(VOut i, bool front : SV_IsFrontFace) : SV_Target {
+  [branch] if (kind13.y > 0.5 && i.color.a < 1.5 && dot(i.tint, float3(1, 1, 1)) > 0) {
+    // [glitches] a building's see-through ghost (SeeThroughGhost), as the original's UnitPlace: its tint lit by the sun
+    // on its shape, mostly see-through (the original's 0.2), so the ground and what stands there show through it and it
+    // never reads as built; here also a little brighter and less see-through where it is seen edge on (its outline), and
+    // without the model's textures (no lights, panels or team colour: nothing of a finished building)
+    float3 n = normalize(i.normal);
+    float facing = abs(dot(n, normalize(cameraPosition - i.world)));
+    float edge = pow(1 - facing, 4);
+    float sunOn = 0.12 + 0.88 * saturate(dot(n, sunDirection));
+    float3 tint = look > 0.5 ? ToLinear(i.tint) : i.tint;
+    return float4(tint * (sunOn * 0.9 + edge * 0.9), saturate(0.22 + 0.5 * edge));
+  }
   // [machinery] a belt's strip of the texture slid along its axis, wrapped within it
   [branch] if (i.belt >= 0) {
     float along = kind12.w > 0.5 ? i.uv.y : i.uv.x;
@@ -1322,6 +1378,11 @@ bool MeshRenderer::Init(std::string* error) {
   glassRgb_ = device_->CreatePipeline(pd, error);
   if (!glassRgb_) return false;
   buildVariants_.push_back({glassRgb_, pd, {}});
+  pd.name = "models, a building's see-through ghost";  // [glitches] (SeeThroughGhost: its front faces over its laid depth)
+  pd.cull = gfx::Cull::Back;
+  ghost_ = device_->CreatePipeline(pd, error);
+  if (!ghost_) return false;
+  pd.cull = gfx::Cull::None;
   pd.alphaWrite = true;
   pd.cull = gfx::Cull::Back;
   pd.depthWrite = true;
@@ -1736,6 +1797,14 @@ void MeshRenderer::Belt(float amount) {
   e.instance.bones[2] = amount;
 }
 
+void MeshRenderer::SeeThroughGhost() {
+  if (entries_.empty()) return;
+  Entry& e = entries_.back();
+  // (only the see-through pass takes it: none of the solid passes', the shadows' among them)
+  e.flags = static_cast<uint8_t>((e.flags & ~kHasSolid) | kHasGlass | kGhost);
+  culls_.back().flags = e.flags;
+}
+
 uint32_t MeshRenderer::AddGroup() {
   groups_.emplace_back();
   return static_cast<uint32_t>(groups_.size() - 1);
@@ -1886,7 +1955,8 @@ void MeshRenderer::Consider(const Cull& c, Entry& e, const View& view, bool shad
         ++level;
     }
     const ModelLod* lod = &lods[level];
-    if (lod->hidden || lod->glass != glass) return;
+    // ([glitches] a see-through ghost: its solid levels, in the see-through pass)
+    if (lod->hidden || ((c.flags & kGhost) ? lod->glass : lod->glass != glass)) return;
     if (lod->stream && divertStream) return;  // [stream] (the streams' own pass draws it: stream_water.h)
     // the far-away cards of trees are flat pictures: they cast no shadow
     if (shadowPass && lod->blend) return;
@@ -2036,17 +2106,25 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
   s.snowing = snowing;
   std::copy(snowK, snowK + 12, s.snowK);
   s.cardPass = cardNow_ && !glass ? CardPassOf(view) : -1;  // [gpuscenery]
+  if (glass)  // [glitches] (a level that is not glass in the see-through pass: a see-through ghost's)
+    for (const Item& item : items_)
+      if (!item.lod->glass) {
+        s.ghosts = true;
+        break;
+      }
   bool anyCard = false;
   // [mcrec] the pass's draws, in their order: each mesh's instances in draws of up to kMaxInstances, the depth round's first
   // (in the depth round only what is large on screen, where leaves and parts lie over each other; for what is small,
   // drawing it twice costs more than the shading it saves)
   runs_.clear();
-  for (int round = s.prepass ? 0 : 1; round < 2; ++round) {
+  // ([glitches] in the see-through pass, a depth round for the see-through ghosts alone: only the nearest of a ghost's surfaces
+  // shows, not every part of it inside it over each other)
+  for (int round = s.prepass || s.ghosts ? 0 : 1; round < 2; ++round) {
     const bool depthOnly = round == 0;
     for (size_t at = 0; at < items_.size();) {
       const ModelLod* lod = items_[at].lod;
       const bool near = items_[at].near;
-      if (depthOnly && !(Plain(lod) && near)) {  // (not in the depth round)
+      if (depthOnly && !(glass ? !lod->glass : Plain(lod) && near)) {  // (not in the depth round)
         while (at < items_.size() && items_[at].lod == lod && items_[at].near == near) ++at;
         continue;
       }
@@ -2143,7 +2221,7 @@ void MeshRenderer::RecordRuns(R& to, const RunSetup& s, size_t from, size_t end,
     const bool laid = s.prepass && !depthOnly && early;  // (its depth laid in the round before)
     const int wanted = depthOnly ? (lod->leaves ? 7 : 6)
                        : laid ? (lod->leaves ? 9 : 8)
-                       : shadowPass ? 0 : glass ? (lod->impact == 1 || lod->shell ? 5 : lod->nuke == 1 ? (lod->rgbOnly ? 11 : 4) : lod->rgbOnly ? 10 : 3)
+                       : shadowPass ? 0 : glass ? (!lod->glass ? 12 : lod->impact == 1 || lod->shell ? 5 : lod->nuke == 1 ? (lod->rgbOnly ? 11 : 4) : lod->rgbOnly ? 10 : 3)
                        : lod->blend ? 2 : lod->leaves ? 1 : 0;
     const bool bends = blasts && lod->sway > 0;  // (what sways, while blasts' waves are under way: the shaders with them)
     const bool reacts = plants && (lod->sway > 0 || (lod->wreck && lod->leaves));  // [plants] (and the game's burnt trees)
@@ -2151,7 +2229,7 @@ void MeshRenderer::RecordRuns(R& to, const RunSetup& s, size_t from, size_t end,
     const bool sinks = snowing && Sinks(lod, items_[at].entry->model);  // [undersnow] (a low plant under lying snow)
     const int variant = (sinks ? 400 : charred ? 300 : reacts ? 200 : bends ? 100 : 0) + (card ? 1000 : 0);
     if (wanted + variant != drawing) {
-      gfx::Pipeline p = wanted == 11 ? domeRgb_ : wanted == 10 ? glassRgb_ : wanted == 9 ? laidLeaves_ : wanted == 8 ? laid_ : wanted == 7 ? prepassLeaves_ :
+      gfx::Pipeline p = wanted == 12 ? ghost_ : wanted == 11 ? domeRgb_ : wanted == 10 ? glassRgb_ : wanted == 9 ? laidLeaves_ : wanted == 8 ? laid_ : wanted == 7 ? prepassLeaves_ :
                         wanted == 6 ? prepass_ : wanted == 5 ? adding_ : wanted == 4 ? dome_ : wanted == 3 ? glass_ : wanted == 2 ? blended_ :
                         wanted == 1 ? leaves_ : shadowPass ? shadow_ : pipeline_;
       if (sinks) {  // [undersnow]
@@ -2213,6 +2291,8 @@ void MeshRenderer::RecordRuns(R& to, const RunSetup& s, size_t from, size_t end,
       const Model* of = items_[at].entry->model;
       kind[28] = of->machinery && of->machinery->glows ? static_cast<float>(of->bones.size()) : 0.0f;
     }
+    kind[29] = glass && !lod->glass ? 1.0f : 0.0f;  // [glitches] (kind13.y: a see-through ghost, SeeThroughGhost)
+    kind[30] = lod->unlit == 2 && remasteredGate ? 1.0f : 0.0f;  // [glitches] (kind13.z: the remastered quantum gate's field)
     if (const MachinerySpec* m = items_[at].entry->model->machinery.get(); m && m->beltBone >= 0) {
       kind[24] = m->beltFrom;
       kind[25] = m->beltLength;

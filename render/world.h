@@ -283,6 +283,17 @@ class World {
     Vec3 tint{0.3f, 1.0f, 0.4f};
   };
   std::vector<Ghost> ghosts;
+  // [glitches] How a ghost is drawn (Chris's big test, ui's request 41: "when queued it shouldn't show the finished structure
+  // only a green outline like a ghost of it"): 1 see-through, as the original's UnitPlace (MeshRenderer::SeeThroughGhost:
+  // its tint lit by its shape, the ground showing through, its outline brighter); 0 the solid model in one colour, its
+  // textures' light and dark kept, as before. A player's option.
+  int ghostLook = 1;
+  // [glitches] The interface's wide lines (`width` over 1.25 pixels: a building's site outline, the guide while it is placed)
+  // drawn this many world units nearer the eye, where they show on the screen the same, so that they lie over the ground
+  // cover rather than under its plants ("Green building outline when trying to place structure doesn't show so its hard to
+  // line up"), with a dark edge a pixel wide either side so that their green reads on green ground. 0: as before (in the
+  // ground cover, no edge).
+  float guidePull = 1.2f;
   // Lines between places of the world and rings lying on the ground (order lines, ranges).
   // Colours are 0xAARRGGBB.
   struct Line {
@@ -746,6 +757,15 @@ class World {
   // look); off by default.
   bool remasteredBuild = false;
   BuildEffects build;
+  // [glitches] The UEF's glow slab laid over a structure as its build begins (the game's UEFBuildEffect02, an AlphaFade
+  // slab a twentieth wider than the structure; its script leaves it to its blueprint's six-second lifetime, in no effects
+  // bag) fades out over this many seconds once no unit under construction stands under it: a structure finished (or given
+  // up) within those six seconds no longer keeps a blue square over it (Chris's big test, "When building is finished too
+  // quickly a blue square is left for a few seconds"). 0: it lasts its lifetime, as the original's does.
+  float finishedSlabFade = 0.4f;
+  // [glitches] The quantum gate's field remastered (MeshRenderer::remasteredGate), with the modern look and the remastered effects
+  // (EffectsLook::Remastered); false, or the original look or effects: the original's texture, as before. A player's option.
+  bool remasteredGate = true;
   // (unitsfx) Real exhausts (exhausts.h; Chris's playthrough of 20 October, item 8): engines' beams drawn as soft plumes
   // of a white-hot core, a sheath of their colour and a deeper fringe, with shock diamonds on large drives at full burn,
   // a light on the hull and the ground, heat haze behind, the throttle followed smoothly. Modern look; off by default
@@ -1063,6 +1083,15 @@ class World {
   // -1 not asked yet, 0 no, 1 yes
   std::vector<int8_t> structureKind_;
   std::unordered_map<uint32_t, Remembered> remembered_;
+  // [glitches] (finishedSlabFade) the build glow slabs with no unit under construction under them: since when (clock_), and
+  // the frame they were last listed (frameStamp_; gone ones dropped)
+  struct LeftSlab {
+    double since;
+    uint32_t stamp;
+  };
+  std::unordered_map<uint32_t, LeftSlab> leftSlabs_;
+  std::vector<std::pair<Vec3, float>> buildingNow_;  // (this frame's units under construction: place, and how far round, for those)
+  uint32_t buildingNowStamp_ = 0;
   int rememberedFor_ = -1;  // the focus army remembered_ is of (another army has not seen those buildings)
   uint32_t frameStamp_ = 0;
   // The game's bracket pictures, each cut into its four corners: [0] a selected unit's, [1..3] the

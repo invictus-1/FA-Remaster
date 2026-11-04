@@ -42,6 +42,10 @@
 // --lod-scale <s>  [lodscale] the camera's LOD scale (Camera::lodScale, the original's cam_SetLOD): 0.7 FAF's Level of
 //           Detail "Extreme", finer levels from 1 / 0.7 farther (without it: 1)
 // --lights <n>  n small coloured lights circling the spot placed units stand at (to see and to measure them)
+// --ghost <blueprint>,<x>,<z>,<size x>,<size z>[,blocked]  [glitches] a building's ghost there (World::ghosts) with the outline of
+//           its site round it, 4 pixels wide, as the interface sets them while it is placed (green; red when `blocked`); may
+//           be given again for more. --ghost-look <0|1>: World::ghostLook (1 see-through, 0 the solid one as before);
+//           --guide-pull <units>: World::guidePull (0: the outline in the ground cover, as before)
 // --window-cycle  with --map and --screenshot <name>.png: one window shown by a menu's picture (the interface
 //           alone), then a game's (the map), then a menu's again, each closed before the next opens on it, as
 //           the interface does; what each showed is written as <name>_menu1.png, _game.png, _menu2.png
@@ -470,7 +474,12 @@
 //           every pixel, as before
 // --air     light in the air (air.h, World::volumetricFog; modern look): the air's own light in a volume over
 //           the view, the sun's shafts and the lamps' beams in it. Tuning: --air-dust <thickness per world unit>,
-//           --air-sun <strength>, --air-lamps <strength>, --air-cells <across>,<deep>
+//           --air-sun <strength>, --air-lamps <strength>, --air-cells <across>,<deep>; [glitches] --air-keep <share>: Air::keep
+//           (0.9); --air-let-go <n>: Air::letGo (25; 0: as much kept in motion as standing, as before)
+// --slab-fade <s>  [glitches] the UEF's build glow slab over a finished structure gone within s seconds (World::finishedSlabFade,
+//           0.4); 0: it lasts its six-second lifetime, as the original's
+// --sharpen <0..1>  [glitches] the last pass sharpens the picture (Post::sharpen; 0 none, as before; 0.5 suggested)
+// --gate-look <0|1>  [glitches] the quantum gate's field remastered (1, World::remasteredGate) or the original's texture (0)
 // --no-lamp-shadows  lamps' beams cast no shadows (they do unless this is given: the eight nearest)
 // --no-steady-lamps  [nightlight] lamps switched on and off at once, as before (World::steadyLamps: they fade; to compare)
 // --lamp-scale <n>  [unit lamps] every remastered unit's lamps n times the strength their list gives (ModelCache::lampScale, 1):
@@ -924,6 +933,11 @@ struct Options {
   float pan[2] = {0, 0};                // --pan
   float airDust = -1, airSun = -1, airLamps = -1;  // --air-dust, --air-sun, --air-lamps (negative: the default)
   int airAcross = 0, airDeep = 0;       // --air-cells
+  float airKeep = -1;                   // [glitches] --air-keep
+  float airLetGo = -1;                  // [glitches] --air-let-go
+  float slabFade = -1;                  // [glitches] --slab-fade
+  float sharpen = -1;                   // [glitches] --sharpen
+  int gateLook = -1;                    // [glitches] --gate-look
   bool pictureWindow = false;           // --picture-window
   bool photoTest = false;               // (photomode) --photo-test
   std::string photoCases;               // (photofix) --photo-cases
@@ -1013,6 +1027,9 @@ struct Options {
   std::vector<std::string> emit;  // --emit: emitters played over and over
   float emitScale = 1;
   std::vector<std::string> beam, trail;  // --beam, --trail: shown for a look at them
+  std::vector<std::string> ghosts;       // [glitches] --ghost
+  int ghostLook = -1;                    // [glitches] --ghost-look
+  float guidePull = -1;                  // [glitches] --guide-pull
   std::string hide;    // --hide: kinds of effect left out
   std::string picture; // --picture
   std::string views;    // [views] --views
@@ -1254,6 +1271,9 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     }
     else if (a == "--emit") o->emit.push_back(v);
     else if (a == "--beam") o->beam.push_back(v);
+    else if (a == "--ghost") o->ghosts.push_back(v);  // [glitches]
+    else if (a == "--ghost-look") o->ghostLook = atoi(v);  // [glitches]
+    else if (a == "--guide-pull") o->guidePull = static_cast<float>(atof(v));  // [glitches]
     else if (a == "--hide") o->hide = v;
     else if (a == "--plant-density") o->plantDensity = static_cast<float>(atof(v));
     else if (a == "--smoke-density") o->smokeDensity = static_cast<float>(atof(v));
@@ -1418,6 +1438,11 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--air-cells") {
       if (sscanf(v, "%d,%d", &o->airAcross, &o->airDeep) != 2) return false;
     }
+    else if (a == "--air-let-go") o->airLetGo = static_cast<float>(atof(v));  // [glitches]
+    else if (a == "--air-keep") o->airKeep = static_cast<float>(atof(v));  // [glitches]
+    else if (a == "--slab-fade") o->slabFade = static_cast<float>(atof(v));  // [glitches]
+    else if (a == "--sharpen") o->sharpen = static_cast<float>(atof(v));  // [glitches]
+    else if (a == "--gate-look") o->gateLook = atoi(v);  // [glitches]
     else if (a == "--lights") o->testLights = atoi(v);
     else if (a == "--map-decals") o->mapDecals = v;
     else if (a == "--decal-filter") o->decalFilter = v;
@@ -2217,6 +2242,13 @@ int main(int argc, char** argv) {
   if (opt.airSun >= 0) world.air.sunInAir = opt.airSun;
   if (opt.airLamps >= 0) world.air.lampsInAir = opt.airLamps;
   if (opt.airAcross > 0) world.air.across = opt.airAcross;
+  if (opt.airLetGo >= 0) world.air.letGo = opt.airLetGo;  // [glitches]
+  if (opt.airKeep >= 0) world.air.keep = opt.airKeep;  // [glitches]
+  if (opt.slabFade >= 0) world.finishedSlabFade = opt.slabFade;  // [glitches]
+  if (opt.sharpen >= 0) world.post.sharpen = opt.sharpen;  // [glitches]
+  if (opt.gateLook >= 0) world.remasteredGate = opt.gateLook != 0;  // [glitches]
+  if (opt.ghostLook >= 0) world.ghostLook = opt.ghostLook;  // [glitches]
+  if (opt.guidePull >= 0) world.guidePull = opt.guidePull;  // [glitches]
   if (opt.airDeep > 0) world.air.deep = opt.airDeep;
   world.ribbons.tracers = opt.tracers;
   world.terrain.richGround = opt.richGround;
@@ -3873,6 +3905,36 @@ int main(int argc, char** argv) {
         const Vec3 at = base + Vec3{std::cos(angle) * radius, 0, std::sin(angle) * radius};
         if (!trailHandles[i]) trailHandles[i] = ribbons.StartTrail(effectPath(opt.trail[i]), at);
         ribbons.MoveTrail(trailHandles[i], at);
+      }
+    }
+    if (!opt.ghosts.empty() && world.ghosts.empty()) {  // [glitches] --ghost: as the interface sets a ghost and its outline
+      for (const std::string& g : opt.ghosts) {
+        char id[64] = {};
+        float x = 0, z = 0, sx = 1, sz = 1;
+        char blocked[16] = {};
+        if (sscanf(g.c_str(), "%63[^,],%f,%f,%f,%f,%15s", id, &x, &z, &sx, &sz, blocked) < 5) continue;
+        const bool free = std::string(blocked) != "blocked";
+        World::Ghost ghost;
+        ghost.blueprint = id;
+        ghost.position = {x, groundHeight(x, z), z};
+        ghost.tint = free ? Vec3{0.3f, 1.0f, 0.4f} : Vec3{1.0f, 0.25f, 0.2f};
+        world.ghosts.push_back(ghost);
+        const float x0 = x - sx / 2, z0 = z - sz / 2;
+        const float cx[5] = {x0, x0 + sx, x0 + sx, x0, x0}, cz[5] = {z0, z0, z0 + sz, z0 + sz, z0};
+        for (int side = 0; side < 4; ++side) {  // (a piece a world unit long, on the ground, as the interface's)
+          const int pieces = std::max(1, static_cast<int>(std::ceil(std::max(std::fabs(cx[side + 1] - cx[side]), std::fabs(cz[side + 1] - cz[side])))));
+          for (int k = 0; k < pieces; ++k) {
+            const float t0 = static_cast<float>(k) / static_cast<float>(pieces), t1 = static_cast<float>(k + 1) / static_cast<float>(pieces);
+            World::Line line;
+            line.a = {cx[side] + (cx[side + 1] - cx[side]) * t0, 0, cz[side] + (cz[side + 1] - cz[side]) * t0};
+            line.b = {cx[side] + (cx[side + 1] - cx[side]) * t1, 0, cz[side] + (cz[side + 1] - cz[side]) * t1};
+            line.a.y = groundHeight(line.a.x, line.a.z);
+            line.b.y = groundHeight(line.b.x, line.b.z);
+            line.color = free ? 0xff10d010u : 0xffe02020u;
+            line.width = 4;
+            world.lines.push_back(line);
+          }
+        }
       }
     }
     for (int i = 0; i < opt.testLights; ++i) {  // --lights: in rings around the spot, each its own colour

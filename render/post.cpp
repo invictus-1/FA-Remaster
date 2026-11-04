@@ -30,18 +30,39 @@ VOut VS(uint id : SV_VertexID) {
 // (the picture as it is, for the water to see through with one sample a pixel)
 float4 Copy(VOut i) : SV_Target { return scene.Load(int3(i.position.xy, 0)); }
 
-float4 PS(VOut i) : SV_Target {
-  float3 c = scene.SampleLevel(samplerPointClamp, i.uv, 0).rgb;
+float3 Finished(float2 uv) {
+  float3 c = scene.SampleLevel(samplerPointClamp, uv, 0).rgb;
   if (look > 0.5) {
-    c += glowPicture.SampleLevel(samplerLinearClamp, i.uv, 0).rgb;
+    c += glowPicture.SampleLevel(samplerLinearClamp, uv, 0).rgb;
     c *= modern.z;
     c = saturate((c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14));
     c = pow(c, 1.0 / 2.2);
   } else {
     // (the original's bloom, where it is on: added, the colours clamped as its 8-bit picture clamps them)
-    c = saturate(c) + glowPicture.SampleLevel(samplerLinearClamp, i.uv, 0).rgb;
+    c = saturate(c) + glowPicture.SampleLevel(samplerLinearClamp, uv, 0).rgb;
   }
-  return float4(saturate(c), 1);
+  return saturate(c);
+}
+
+float4 PS(VOut i) : SV_Target { return float4(Finished(i.uv), 1); }
+
+// [glitches] The same, sharpened (Post::sharpen; Chris's big test: "a lack of sharpness in some textures across the board ...
+// extra sharpness so its more high res in looking is important"): each pixel pushed away from the mean of its four
+// neighbours, as the screen shows them, by `sharpen.x`, less where they already span much of what the screen can show
+// (the strong edges, which would ring, and what is near black or white), and never past the darkest and brightest of the
+// five (no halo, no new jagged edge).
+cbuffer Sharpen : register(b1) { float4 sharpen; };
+float4 SharpPS(VOut i) : SV_Target {
+  uint w, h;
+  scene.GetDimensions(w, h);
+  float2 px = 1.0 / float2(w, h);
+  float3 c = Finished(i.uv);
+  float3 n = Finished(i.uv - float2(0, px.y)), s = Finished(i.uv + float2(0, px.y));
+  float3 e = Finished(i.uv + float2(px.x, 0)), wv = Finished(i.uv - float2(px.x, 0));
+  float3 lo = min(c, min(min(n, s), min(e, wv))), hi = max(c, max(max(n, s), max(e, wv)));
+  float3 room = sqrt(saturate(min(lo, 1 - hi) / max(hi, 1e-4)));
+  float3 r = c + sharpen.x * room * (c - 0.25 * (n + s + e + wv)) * 2;
+  return float4(clamp(r, lo, hi), 1);
 }
 )hlsl";
 
@@ -167,6 +188,11 @@ bool Post::Init(std::string* error) {
   pd.depthTest = pd.depthWrite = false;
   pipeline_ = device_->CreatePipeline(pd, error);
   if (!pipeline_) return false;
+  pd.name = "present, sharpened";  // [glitches] (sharpen)
+  pd.pixelEntry = "SharpPS";
+  sharpened_ = device_->CreatePipeline(pd, error);
+  if (!sharpened_) return false;
+  pd.pixelEntry = "PS";
   pd.name = "present, before FSR";
   pd.depthTarget = false;
   toTarget_ = device_->CreatePipeline(pd, error);
@@ -493,8 +519,14 @@ void Post::Present(const View& view, Upscaler* upscaler, int screenWidth, int sc
   if (photo) {  // (photolook)
     photo->Finish(view, scaled && ldr_, picture, glowing ? glowSteps_[0] : blooming ? bloom_[0] : black_);
   } else {
-    device_->SetPipeline(scaled && ldr_ ? toTarget_ : pipeline_);
+    // ([glitches] sharpened at the screen's size only: not before an upscaler, which sharpens after itself)
+    const bool sharp = sharpen > 0 && !(scaled && ldr_) && !upscaled && sharpened_;
+    device_->SetPipeline(scaled && ldr_ ? toTarget_ : sharp ? sharpened_ : pipeline_);
     device_->SetConstants(0, &view.constants, sizeof view.constants);
+    if (sharp) {
+      const float k[4] = {std::min(sharpen, 1.0f), 0, 0, 0};
+      device_->SetConstants(1, k, sizeof k);
+    }
     device_->SetTexture(0, picture);
     device_->SetTexture(1, glowing ? glowSteps_[0] : blooming ? bloom_[0] : black_);
     device_->Draw(3);
