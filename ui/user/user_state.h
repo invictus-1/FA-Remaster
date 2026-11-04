@@ -575,6 +575,35 @@ struct LookSettings {
   // kept): a death's fresh scorch on the ground with hot metal on: soft (true, the default: a deep-red bed with bright
   // cracks) or bright (the earlier orange-hot sheet). Console remaster_scorch soft|bright.
   bool softScorch = true;
+  // The renderer's looks from Chris's big test of 2026-11-01 (render/world.h), each a player's option with the earlier
+  // look kept as Off (Chris: new looks are player options, the original's way kept); all ON by default, in no preset
+  // level (corrections of the remastered look, not quality steps). On the world each frame (WorldLooks):
+  //  - oceanGlitter (water.ocean.glitter): the sun's glitter off the sea worked out from the waves' true slopes, a soft
+  //    path of light; off: the field of single bright pixels as before. Console remaster_ocean_glitter 0|1.
+  //  - shoreSoak (water.shoreSoak): the bed under the shallows drawn soaked as the wet beach; off: as before.
+  //    Console remaster_shore_soak 0|1.
+  //  - shieldBend (energy.bend, energy.steadyUnits): how much an energy shield bends what is behind it; 0 Off (bend 0),
+  //    1 Subtle (0.35, units and structures standing under it never bent: the default), 2 Full (1, everything behind
+  //    bent: the look of 2026-10-28). Only with Energy Shields on (energyShields). Console remaster_shield_bend
+  //    off|subtle|full or 0..2.
+  //  - unitGlow (hullGlow 0..1, default 0.75): how strong a unit's own glow (its 'hull' lamps) is at night; from it
+  //    hullReach = 0.4 + 0.6 * unitGlow (0.85 at the default), half of it in the air below 1 (hullAir); at exactly 1 the
+  //    glow as before the big test (hullAir 1, hullEvenColours and hullShare off). Console remaster_unit_glow 0..1.
+  //  - sharpen (post.sharpen 0..1, default 0.5): the last pass's sharpening; 0 none, as before. Console
+  //    remaster_sharpen 0..1.
+  //  - remasteredGate (World::remasteredGate): the quantum gateway's field remade (with the modern look and the
+  //    remastered effects); off: the original's texture. Console remaster_gateway 0|1.
+  //  - ghostLook (World::ghostLook 1 / 0): a queued structure's ghost see-through as the original's UnitPlace; off: the
+  //    solid model in one colour, as before. Console remaster_ghost_look 0|1.
+  //  - guideOverGrass (World::guidePull 1.2 / 0): a building site's outline and the placement guide drawn over the
+  //    grass with a dark edge; off: in the ground cover, as before. Console remaster_guide 0|1.
+  //  - cloakLook (World::cloakLook): a cloaked unit as the original draws it, a shimmer in its faction's shield colour;
+  //    off: as an ordinary unit. stealthLook (World::stealthLook, ours): the player's own and allied units hidden from
+  //    radar in a faint veil; off: as ever. Consoles remaster_cloak_look 0|1, remaster_stealth_veil 0|1.
+  bool oceanGlitter = true, shoreSoak = true, remasteredGate = true, ghostLook = true, guideOverGrass = true;
+  bool cloakLook = true, stealthLook = true;
+  int shieldBend = 1;
+  float unitGlow = 0.75f, sharpen = 0.5f;
   // Colour Vision (ours, the Interface tab; Chris, 2026-10-23): the armies' colours as the player SEES them replaced by
   // a palette that stays apart for a kind of colour blindness: 0 Off (the original's colours), 1 Deuteranopia,
   // 2 Protanopia, 3 Tritanopia, 4 High Contrast (session_bindings.cpp, ColorVisionColor). Only what is shown changes:

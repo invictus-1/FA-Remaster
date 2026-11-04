@@ -96,6 +96,24 @@ void WorldLooks(render::World& w, const LookSettings& looks, bool photoLook) {
   w.energyShields = looks.energyShields;
   w.lampsTeamColour = looks.lampsTeamColour;  // (Unit Glow Colour: team or faction, render 1fd45da)
   w.heat.softScorch = looks.softScorch;        // (Scorch Glow: soft or bright, render 5d77cf6)
+  // (the renderer's looks from Chris's big test, each with the earlier look as Off: LookSettings)
+  w.water.ocean.glitter = looks.oceanGlitter ? 1 : 0;  // (Ocean Glitter)
+  w.water.shoreSoak = looks.shoreSoak;                // (Shore Soak)
+  // (Shield Bending: Off nothing bent; Subtle a little, units under the shield never; Full everything behind, as 10-28)
+  w.energy.bend = looks.shieldBend <= 0 ? 0.0f : looks.shieldBend == 1 ? 0.35f : 1.0f;
+  w.energy.steadyUnits = looks.shieldBend <= 1;
+  // (Unit Glow at Night: at 1 the glow as before the big test, all of it)
+  const float glow = std::max(0.0f, std::min(1.0f, looks.unitGlow));
+  w.hullGlow = glow;
+  w.hullReach = 0.4f + 0.6f * glow;
+  w.hullAir = glow >= 1.0f ? 1.0f : 0.5f;
+  w.hullEvenColours = w.hullShare = glow < 1.0f;
+  w.post.sharpen = std::max(0.0f, std::min(1.0f, looks.sharpen));  // (Sharpen)
+  w.remasteredGate = looks.remasteredGate;                         // (Remastered Gateway)
+  w.ghostLook = looks.ghostLook ? 1 : 0;                           // (Ghost Look: see-through, or solid as before)
+  w.guidePull = looks.guideOverGrass ? 1.2f : 0.0f;                // (Guide over Grass)
+  w.cloakLook = looks.cloakLook;                                   // (Cloak Look)
+  w.stealthLook = looks.stealthLook;                               // (Stealth Veil)
   // (ren_DecalFadeFraction: the decals fade by distance as the original's CWldTerrainDecal::GetLODAlpha 0x89d400,
   // render 33; 0.5 stock, 0.25 once FAF's gamemain.lua has set it)
   w.decalFadeFraction = looks.decalFadeFraction;

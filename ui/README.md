@@ -245,6 +245,13 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   and health changes for the picture: `Sim::collectHits` and its two kin, with the picture only). Cinematic Lens
   Blur (`remaster_lens`, World::lens, off by default): a real lens's depth of field, only while the replay's
   cinematic camera shows, its blur going as the picture eases back.
+  The renderer's looks from Chris's big test (2026-11-01), each on by default with the earlier look as Off, in no
+  preset level, set on the world each frame (`WorldLooks`; `LookSettings` names the fields): Ocean Glitter
+  (`remaster_ocean_glitter`), Shore Soak (`remaster_shore_soak`), Shield Bending (`remaster_shield_bend`: Off,
+  Subtle by default, Full = the look of 2026-10-28), Unit Glow at Night (`remaster_unit_glow`, a slider 0..100,
+  75 by default; 100 = the glow before the big test), Sharpen (`remaster_sharpen`, a slider, 50), Remastered
+  Gateway (`remaster_gateway`), Ghost Look (`remaster_ghost_look`), Guide over Grass (`remaster_guide`), Cloak
+  Look (`remaster_cloak_look`) and Stealth Veil (`remaster_stealth_veil`).
   The Remastered Preset (`remaster_preset`; Chris, 2026-10-17) sets the new looks together, as the game's
   Fidelity Presets set its own: Off (the original game's look whole), Low, Medium, High, Ultra (Ray Tracing
   where the card can), Custom (by default: each as it is). Each look can still be changed after. The levels
