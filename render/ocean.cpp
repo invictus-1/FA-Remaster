@@ -690,6 +690,7 @@ void Ocean::Update(const Camera& camera, const View& view, gfx::Texture heights,
   constants_.look3[0] = foamThreshold_;
   constants_.look3[1] = glint;
   constants_.look3[2] = glitter > 0 ? 1.0f : 0.0f;  // [bigtest]
+  constants_.look3[3] = patches && crest ? 1.0f : 0.0f;  // [foamloop]
   // [whitecaps] how far the foam has drifted (its pattern drifts with it; within kDriftRepeat, so that it stays exact)
   constants_.look4[0] = static_cast<float>(std::fmod(driftX_, kDriftRepeat));
   constants_.look4[1] = static_cast<float>(std::fmod(driftZ_, kDriftRepeat));
@@ -1083,11 +1084,15 @@ void Ocean::Bind() {
   }
   device_->SetTexture(kOceanFirstSlot + 9, foamMap_[foamCur_]);
   if (patches) device_->SetTexture(kOceanPatchSlot, patches);  // [foampatch]
+  if (wake) device_->SetTexture(kOceanWakeSlot, wake);  // [foamwake]
+  if (crest) device_->SetTexture(kOceanCrestSlot, crest);  // [foamloop]
 }
 
 void Ocean::Unbind() {
   for (int s = 0; s < 10; ++s) device_->SetTexture(kOceanFirstSlot + s, {});
   device_->SetTexture(kOceanPatchSlot, {});  // [foampatch]
+  device_->SetTexture(kOceanWakeSlot, {});  // [foamwake]
+  device_->SetTexture(kOceanCrestSlot, {});  // [foamloop]
 }
 
 }  // namespace render

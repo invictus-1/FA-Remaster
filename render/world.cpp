@@ -4027,6 +4027,8 @@ void World::Render() {
   Stage("wakes, beams, trails");
   // beams and trails, then particles: over everything solid and the water, by the scene's depth
   wakes.ride = water.ocean.Lifted() ? &water.ocean : nullptr;  // [lift] (the wakes ride the lifted waves)
+  wakes.churn = water.ocean.churn;  // [foamloop] (with the foam patches)
+  wakes.churnShare = water.ocean.patches ? water.ocean.foamPatches : 0.0f;
   wakes.Draw(view);
   ribbons.pixelScale = photoPixel;  // (photofix: a photo's frame as the window shows it)
   if (hide.find("bands") == std::string::npos) ribbons.Draw(view);
