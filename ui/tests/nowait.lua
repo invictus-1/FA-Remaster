@@ -55,6 +55,8 @@ ForkThread(function()
     spawn("uel0201", at(-10, 25))         -- a tank
     spawn("ueb3101", at(-25, 0))          -- a radar (toggle bit 3: its intel)
     spawn("uel0201", at(-20, 40), 2)      -- an enemy tank (army 2), out of the commander's reach
+    spawn("ueb0101", at(70, -70), 2)      -- an enemy factory far off, seen by
+    spawn("uel0105", at(62, -70))         -- an engineer of ours (unarmed), which then dies: the factory is remembered
     WaitSeconds(3)
     local factories = made("ueb0101", "STRUCTURE")
     local function dist(u) local q = u:GetPosition() return (q[1] - p[1]) ^ 2 + (q[3] - p[3]) ^ 2 end
@@ -74,6 +76,16 @@ ForkThread(function()
         LOG("TEST done: " .. failed .. " failed")
         return
     end
+    local enemyFactory
+    for i = 0, 3000 do
+        local u = GetUnitById(tostring(1048576 + i))
+        if u and u:GetBlueprint().BlueprintId == "ueb0101" then enemyFactory = u end
+    end
+    local scout = made("uel0105", "LAND")[1]
+    if scout then IssueUnitCommand({scout}, "KillSelf") end
+    WaitSeconds(3)
+    check("the enemy's factory is there, the engineer that saw it gone",
+        tostring(enemyFactory ~= nil) .. " " .. tostring(scout ~= nil and scout:IsDead()), "true true")
     cam:SnapTo(at(0, 20), nil, 120)
     WaitSeconds(0.5)
     local function hover(u)
@@ -100,6 +112,24 @@ ForkThread(function()
     LOG("TEST note the enemy's tank shows as " .. tostring(info and info.blueprintId))
     check("its army", info and info.armyIndex, 1)
     check("the hover on the enemy's tank waits for nothing", waits(), "")
+    -- a remembered enemy structure under the fog (FA exe 0x8421f0 for the army's blip of it): its blueprint and its
+    -- owner, nothing live (no health, no work, no unit to hand over)
+    if enemyFactory then
+        cam:SnapTo(at(70, -60), nil, 120)
+        WaitSeconds(0.5)
+        hover(enemyFactory)
+        info = GetRolloverInfo()
+        check("the hover on the remembered factory: its blueprint", info and info.blueprintId, "ueb0101")
+        check("its owner", info and info.armyIndex, 1)
+        check("no health", info and info.health, nil)
+        check("no maxHealth", info and info.maxHealth, nil)
+        check("no unit handed over", info and info.userUnit, nil)
+        check("no entity id", info and info.entityId, nil)
+        check("its work progress 0", info and info.workProgress, 0)
+        check("the hover on the remembered factory waits for nothing", waits(), "")
+        cam:SnapTo(at(0, 20), nil, 120)
+        WaitSeconds(0.5)
+    end
     moho64ui_MouseMove(10, 10)
     WaitSeconds(0.2)
 

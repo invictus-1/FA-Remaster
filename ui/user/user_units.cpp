@@ -3147,10 +3147,44 @@ int RolloverInfoNow(lua_State* L) {
   UserUnit* u = it->second.get();
   uint32_t recon = ReconBitsOf(L, u);
   if (recon == 0) return 0;
+  if (!(recon & kReconSeenNow) && (recon & kReconSeenEver)) {
+    // A unit seen once and not now (a remembered enemy structure under the fog; READ 2026-11-03, the unit table
+    // 0x8421f0): what the original hovers then is the army's recon blip of it, which knows its blueprint (the table's
+    // recon byte +0x3e0 has 0x10, 0x84221a: blueprintId) but is not seen now (no 0x8 at 0x842258: no health nor
+    // maxHealth), and whose entity id is a blip's (+0x44 & 0xf0000000 == 0x30000000, 0x842287): every number is 0
+    // (0x842556 .. 0x842631: kills, the economy, the silos, fuelRatio, shieldRatio, workProgress), and neither
+    // userUnit nor entityId is set; armyIndex, teamColor and a custom name follow as for a unit. Nothing live: the
+    // game's panel shows its name, its owner and its type line (Chris's reference picture). INFERRED: the blip's focus
+    // (+0x218 / +0x210 at 0x8429eb, 0x842a44) is none, so no `focus` / `focusUpgrade`.
+    lua_newtable(L);
+    auto num = [&](const char* key, lua_Number v) {
+      lua_pushstring(L, key);
+      lua_pushnumber(L, v);
+      lua_rawset(L, -3);
+    };
+    lua_pushstring(L, "blueprintId");
+    lua_pushstring(L, u->view.blueprint.c_str());
+    lua_rawset(L, -3);
+    for (const char* key : {"kills", "energyConsumed", "massConsumed", "energyRequested", "massRequested", "energyProduced",
+                            "massProduced", "tacticalSiloBuildCount", "tacticalSiloStorageCount", "tacticalSiloMaxStorageCount",
+                            "nukeSiloBuildCount", "nukeSiloStorageCount", "nukeSiloMaxStorageCount", "fuelRatio", "shieldRatio",
+                            "workProgress"})
+      num(key, 0);
+    num("armyIndex", u->view.army - 1);
+    lua_pushstring(L, "teamColor");
+    lua_pushstring(L, ArmyColorOf(L, u->view.army).c_str());
+    lua_rawset(L, -3);
+    if (!u->customName.empty()) {
+      lua_pushstring(L, "customName");
+      lua_pushstring(L, u->customName.c_str());
+      lua_rawset(L, -3);
+    }
+    return 1;
+  }
   if (!(recon & kReconSeenNow)) {
-    // A blip (radar or sonar alone): the player is told whose it is, not what it is. (The
+    // A blip never seen (radar or sonar alone): the player is told whose it is, not what it is. (The
     // original's table for an entity without a blueprint, 0x8426f0: blueprintId "unknown",
-    // teamColor, armyIndex. That a blip is such an entity there is inferred.)
+    // teamColor, armyIndex; reached when the recon byte +0x3e0 has no 0x10, 0x842221.)
     lua_newtable(L);
     lua_pushstring(L, "blueprintId");
     lua_pushstring(L, "unknown");
