@@ -22,6 +22,8 @@ namespace moho {
 bool PathUnitBlocked(Unit* u, int x, int z, int flags);  // sim/landnav.cpp (COGrid::UnitIsBlocked)
 
 thread_local bool tl_pathAheadDry = false;
+// The WorkOnce call running on this thread (CanTraverse's unit-test answers are kept for one call: see there)
+static thread_local uint64_t tl_workOnceCall = 0;
 thread_local std::vector<HPathTables::StaleMade>* HPathTables::tl_staleMade = nullptr;
 thread_local std::vector<HPathTables::OwnCluster>* HPathTables::tl_ownClusters = nullptr;
 
@@ -908,7 +910,28 @@ bool HPathTables::CanTraverse(const Search& s, const PathCell& n) const {
     // (0x5aa7ba..0x5aa7fc: OCCUPY_MobileCheck's caps without Sub for a unit on the Water layer, as Reach takes them)
     if (!g || !g->Passable(n.x, n.z, t.dropSub ? kLayerSub : 0)) return false;
   }
-  if (t.mode != 0 && PathUnitBlocked(t.unit, n.x, n.z, t.mode == 3 ? 2 : 1)) return false;
+  if (t.mode != 0) {
+    // The unit test's answer is kept for the rest of this WorkOnce call: a cell is a neighbour of up to 8 expanded
+    // cells and is asked from each (counted on 6d2126d: B3-16k 13.3 M asks, 78% of them a square the same call had
+    // asked; B1S 84%). Within one call the answer cannot change: nothing in the queues' work moves a unit or changes
+    // what the test reads of one (states, layer, formation, guards, footprint), its first ask made the unit grid if it
+    // was due, and a lazy category cache it fills holds the value it computes; the search's unit, footprint and flags
+    // are the call's own. (The original asks again each time and gets the same answer. A dry play's ask that throws
+    // PathAheadStop keeps nothing.)
+    static thread_local CellIndex memo;
+    static thread_local uint64_t memoCall = ~0ull;
+    if (memoCall != tl_workOnceCall) {
+      memo.clear();
+      memoCall = tl_workOnceCall;
+    }
+    const uint32_t key = Key(n.x, n.z);
+    int v = memo.Find(key);
+    if (v < 0) {
+      v = PathUnitBlocked(t.unit, n.x, n.z, t.mode == 3 ? 2 : 1) ? 1 : 0;
+      memo.Set(key, v);
+    }
+    if (v) return false;
+  }
   return true;
 }
 
@@ -1068,6 +1091,7 @@ int HPathTables::Collect(Search& s, const PathCell& c, std::vector<std::pair<Pat
 // WorkOnce 0x7685a0 / ExpandNode 0x7661c0
 int HPathTables::WorkOnce(Search& s, int* budget) {
   MOHO_ZONE("path search");
+  ++tl_workOnceCall;  // (CanTraverse's kept answers: this call's own)
   std::vector<std::pair<PathCell, float>> nb;
   for (;;) {
     if (s.heap.empty()) return 0;
