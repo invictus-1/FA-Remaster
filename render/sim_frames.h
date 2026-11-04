@@ -119,8 +119,14 @@ class SimFrames {
   std::atomic<int> focus_{0};
   float sightWidth_ = 0, sightHeight_ = 0;  // (set before the game runs)
   int sightCells_ = 0;
-  std::vector<uint8_t> sight_, sightWork_;
-  std::vector<uint8_t> sightEver_;  // what the focus army has seen at some time (the simulation's thread only)
+  std::vector<uint8_t> sight_;  // (the empty grid when there is no focus army any more)
+  // [sightoff] the newest beat's vision circles (x, z, radius each) for TakeSight to lay, and how
+  std::vector<float> sightCircles_;
+  bool sightNoFog_ = false, sightJobNew_ = false;
+  int sightFocus_ = 0;
+  // (TakeSight's thread alone: the grid as it is laid, and what the focus army has seen at some time)
+  std::vector<float> sightJob_, sightShare_;
+  std::vector<uint8_t> sightWork_, sightEver_;
   int sightEverOf_ = 0;
   bool sightNew_ = false, sightWasOn_ = false;
   uint32_t sightBeat_ = 0;
