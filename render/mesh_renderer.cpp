@@ -155,6 +155,9 @@ Texture2D seraphimFalloff : register(t6);
 // personal shields' lattice (the visuals track's, tiling: R the lattice, G drifting patches, B a value per
 // cell), a layer per faction: 0 UEF, 1 Aeon, 2 Cybran, 3 Seraphim
 Texture2DArray shieldPatterns : register(t7);
+// [stealthlook] the scene as it stood before the see-through pass (World: while a cloaked unit is drawn; else black): a cloaked
+// unit's body bends it
+Texture2D cloakBehind : register(t25);
 
 struct VIn {
   float3 position : POSITION;
@@ -1040,6 +1043,35 @@ float4 PS(VOut i, bool front : SV_IsFrontFace) : SV_Target {
     float edge = pow(1 - facing, 4);
     float sunOn = 0.12 + 0.88 * saturate(dot(n, sunDirection));
     float3 tint = look > 0.5 ? ToLinear(i.tint) : i.tint;
+    // [stealthlook] (World::cloakLook, stealthLook; Add's `built` says which: 1.25 cloaked, 1.375 a stealth veil) a cloaked
+    // unit's body as the original's cloak shader shows it, all but its outline see-through, a slow shimmer running up it; a
+    // stealthed unit's veil fainter still, its outline alone, the same shimmer. The shimmer is the world's (slow bands up the
+    // body, bent by a second slow wave), so it does not swim with the camera, and steady at any frame rate.
+    [branch] if (i.color.a > 1.1) {
+      float rim = pow(1 - facing, 2.5);
+      float wave = sin(i.world.y * 7 - time * 2.2 + sin(i.world.x * 1.7 + i.world.z * 1.3 + time * 0.7) * 2.5) * 0.5 + 0.5;
+      float shimmer = smoothstep(0.55, 1, wave);
+      [branch] if (i.color.a < 1.3) {
+        // the cloaked body: what stands behind it, bent as through clear glass the shape of the unit (more toward its outline,
+        // where the light crosses more of it), its colours split a little at the edge, rippled by the shimmer's slow waves;
+        // a faint cool cast and a thin rim of its faction's shield colour, brighter where the sun is behind it. The ripple's
+        // waves are the world's, so the unit reads as a moving lens, not a pattern laid on the screen.
+        float2 uv = i.position.xy * viewport.zw;
+        float4 here = mul(viewProj, float4(i.world, 1)), out_ = mul(viewProj, float4(i.world + n * 0.7, 1));
+        float2 bend = (out_.xy / out_.w - here.xy / here.w) * float2(0.5, -0.5);
+        bend *= 0.18 + 0.82 * pow(1 - facing, 1.5);
+        float ripple = sin(i.world.y * 11 - time * 2.6 + sin(i.world.x * 2.3 - i.world.z * 1.9 + time * 0.9) * 2) * 0.0025 * (0.4 + 0.6 * shimmer);
+        float2 at = uv + bend + float2(ripple, -ripple * 0.6);
+        float split = 0.06 + 0.14 * rim;
+        float3 seen = float3(cloakBehind.SampleLevel(samplerLinearClamp, at + bend * split, 0).r,
+                             cloakBehind.SampleLevel(samplerLinearClamp, at, 0).g,
+                             cloakBehind.SampleLevel(samplerLinearClamp, at - bend * split, 0).b);
+        float back = pow(saturate(dot(-normalize(cameraPosition - i.world), sunDirection)), 4);
+        float3 colour = seen * lerp(float3(1, 1, 1), float3(0.93, 0.97, 1.03), 0.6) + tint * (0.55 * rim * (0.6 + 0.4 * shimmer) + 0.25 * back * rim);
+        return float4(colour, saturate(0.82 + 0.18 * rim));
+      }
+      return float4(tint * (0.4 + 0.9 * rim + 0.4 * shimmer), saturate(0.25 * rim * (0.6 + 0.4 * shimmer) + 0.04 * shimmer));
+    }
     return float4(tint * (sunOn * 0.9 + edge * 0.9), saturate(0.22 + 0.5 * edge));
   }
   // [machinery] a belt's strip of the texture slid along its axis, wrapped within it
@@ -2093,6 +2125,7 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
     // [grime] the units' shared grime layers (unit_grime.h), made the first time a unit wears grime
     if (grimeWanted_ && !grimeLayers_) grimeLayers_ = MakeGrimeLayers(device_, textures_);
     if (grimeLayers_) device_->SetTexture(24, grimeLayers_);
+    device_->SetTexture(25, glass && cloakBehind ? cloakBehind : textures_->Black());  // [stealthlook]
   }
 
   // (the scene's solid models: their depth first, then in full; a level of a look of its own - see-

@@ -513,6 +513,8 @@ void SimFrames::Beat(const moho::Sim& sim) {
     u.workProgress = v.workProgress;
     u.paused = v.paused;
     u.toggleCaps = v.toggleCaps, u.scriptBits = v.scriptBits;  // [pausemark]
+    u.intelOn = static_cast<uint8_t>((v.intel[5] >> 31) | ((v.intel[6] >> 31) << 1) | ((v.intel[7] >> 31) << 2));  // [stealthlook]
+    u.stealthField = (v.intel[5] >> 31) ? static_cast<float>(v.intel[5] & 0x7fffffffu) : 0.0f;
     u.hasShield = v.hasShield;
     u.shieldRatio = v.shieldRatio;
     std::memcpy(u.scrollPrev, v.scrollPrev, sizeof u.scrollPrev);

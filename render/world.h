@@ -288,6 +288,18 @@ class World {
   // its tint lit by its shape, the ground showing through, its outline brighter); 0 the solid model in one colour, its
   // textures' light and dark kept, as before. A player's option.
   int ghostLook = 1;
+  // [stealthlook] (Chris's big test: "Stealth on and off works though we have no effect for when a unit is stealthed ... in game
+  // cybran has all units look a specific way") cloakLook: a cloaked unit (its script set FAF's cloak mesh, '<mesh>_cloak', the
+  // shield shader of its faction: Blueprints.lua ExtractCloakMeshBlueprint) drawn as the original draws it, its body a
+  // see-through shimmer in its faction's shield colour, no lamps; false: as an ordinary unit, as before. stealthLook (ours: the
+  // original shows nothing for radar stealth): the player's own and allied units hidden from radar (their stealth on, or in an
+  // allied stealth field) drawn as ever, in a faint shimmering veil, so the player sees which are. Players' options.
+  bool cloakLook = true, stealthLook = true;
+  struct StealthField {  // [stealthlook] (a radar stealth field of the player's side, this frame)
+    float x, z, radius;
+  };
+  std::vector<StealthField> stealthFields_;
+  int cloakedNow_ = 0;  // [stealthlook] cloaked units listed this frame
   // [glitches] The interface's wide lines (`width` over 1.25 pixels: a building's site outline, the guide while it is placed)
   // drawn this many world units nearer the eye, where they show on the screen the same, so that they lie over the ground
   // cover rather than under its plants ("Green building outline when trying to place structure doesn't show so its hard to

@@ -46,6 +46,8 @@
 //           its site round it, 4 pixels wide, as the interface sets them while it is placed (green; red when `blocked`); may
 //           be given again for more. --ghost-look <0|1>: World::ghostLook (1 see-through, 0 the solid one as before);
 //           --guide-pull <units>: World::guidePull (0: the outline in the ground cover, as before)
+// --cloak-look <0|1>, --stealth-look <0|1>  [stealthlook] World::cloakLook, stealthLook (0: units cloaked or hidden from radar
+//           drawn as any other, as before)
 // --window-cycle  with --map and --screenshot <name>.png: one window shown by a menu's picture (the interface
 //           alone), then a game's (the map), then a menu's again, each closed before the next opens on it, as
 //           the interface does; what each showed is written as <name>_menu1.png, _game.png, _menu2.png
@@ -1033,6 +1035,7 @@ struct Options {
   std::vector<std::string> beam, trail;  // --beam, --trail: shown for a look at them
   std::vector<std::string> ghosts;       // [glitches] --ghost
   int ghostLook = -1;                    // [glitches] --ghost-look
+  int cloakLook = -1, stealthLook = -1;  // [stealthlook] --cloak-look, --stealth-look
   float guidePull = -1;                  // [glitches] --guide-pull
   std::string hide;    // --hide: kinds of effect left out
   std::string picture; // --picture
@@ -1277,6 +1280,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--beam") o->beam.push_back(v);
     else if (a == "--ghost") o->ghosts.push_back(v);  // [glitches]
     else if (a == "--ghost-look") o->ghostLook = atoi(v);  // [glitches]
+    else if (a == "--cloak-look") o->cloakLook = atoi(v);  // [stealthlook]
+    else if (a == "--stealth-look") o->stealthLook = atoi(v);  // [stealthlook]
     else if (a == "--guide-pull") o->guidePull = static_cast<float>(atof(v));  // [glitches]
     else if (a == "--hide") o->hide = v;
     else if (a == "--plant-density") o->plantDensity = static_cast<float>(atof(v));
@@ -2256,6 +2261,8 @@ int main(int argc, char** argv) {
   if (opt.sharpen >= 0) world.post.sharpen = opt.sharpen;  // [glitches]
   if (opt.gateLook >= 0) world.remasteredGate = opt.gateLook != 0;  // [glitches]
   if (opt.ghostLook >= 0) world.ghostLook = opt.ghostLook;  // [glitches]
+  if (opt.cloakLook >= 0) world.cloakLook = opt.cloakLook != 0;  // [stealthlook]
+  if (opt.stealthLook >= 0) world.stealthLook = opt.stealthLook != 0;
   if (opt.guidePull >= 0) world.guidePull = opt.guidePull;  // [glitches]
   if (opt.airDeep > 0) world.air.deep = opt.airDeep;
   world.ribbons.tracers = opt.tracers;

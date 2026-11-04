@@ -73,6 +73,9 @@ class MeshRenderer {
   // ground and what stands behind showing through. It casts no shadow, and is left out of what the rest of the frame takes
   // from the list (ForEachAdded: the ground cover's discs, the rays' scene): it is not there.
   void SeeThroughGhost();
+  // [stealthlook] The scene as it stood before the see-through pass, which a cloaked unit's body (a ghost added with `built`
+  // 1.25: World::cloakLook) bends; the world sets it before that pass while such a unit is listed, and clears it after.
+  gfx::Texture cloakBehind;
   // Scenery that stands still (trees, rocks), in groups (one square of the map's): the renderer keeps
   // each group from one frame to the next, so a frame only says which groups it lists (ListGroup,
   // after Begin), not where each tree stands and how large it is. A group is filled anew
