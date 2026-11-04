@@ -53,7 +53,9 @@ struct MapData;
 
 // The water's pass binds its own textures t0..t9 (water.cpp, surf.h); the ocean's take t10..t19 (not a shared slot).
 inline constexpr int kOceanFirstSlot = 10;
-inline constexpr int kOceanPatchSlot = 38;  // [foampatch] the foam patches (a slot no other pass uses)
+inline constexpr int kOceanPatchSlot = 41;  // [foampatch] the foam patches (41-43: the ground's mud in its own pass, free in the water's; 37-39 are the ray scene's)
+inline constexpr int kOceanWakeSlot = 42;   // [foamwake] the wake sheet (likewise)
+inline constexpr int kOceanCrestSlot = 43;  // [foamloop] the crest loop (likewise)
 
 // HLSL: the water's modern shader takes it when built with OCEAN (after the view's and the lighting's blocks).
 inline const char kOceanShaderBlock[] = R"hlsl(
@@ -73,7 +75,9 @@ Texture2D oceanSlope[3] : register(t10);  // the slopes along x and z, and their
 Texture2D oceanDisp[3] : register(t13);   // the sideways shift along x, the height, the shift along z; w the slopes' product
 Texture2D oceanFold[3] : register(t16);   // the shift's derivatives: d shift x / dx, d shift z / dz, d shift x / dz
 Texture2D<float2> oceanFoam : register(t19);  // the foam's field ([whitecaps] x how much, y how fresh)
-Texture2DArray<float2> oceanPatches : register(t38);  // [foampatch] the visuals track's foam patches (r how much, g how thick)
+Texture2DArray<float2> oceanPatches : register(t41);  // [foampatch] the visuals track's foam patches (r how much, g how thick)
+Texture2D<float2> oceanWake : register(t42);  // [foamwake] the visuals track's wake sheet (r how much, g how thick)
+Texture2D<float2> oceanCrest : register(t43);  // [foamloop] the visuals track's crest loop (8 x 8 frames: a crest breaking)
 static const float kOceanSamples = 256;  // [watersq] each square's samples a side (Ocean::kN)
 // [watersq] A square's picture read between its samples by a cubic B-spline in place of a straight line (its slopes then
 // turn smoothly from sample to sample: no edge at a sample), as four bilinear readings at shifted places, each standing
@@ -229,6 +233,31 @@ OceanHullNear OceanHullAt(float2 xz) {
   return o;
 }
 
+// [foamwake] (Chris, 2026-11-04, request 53 part 3) A hull's own wake near it, from the visuals track's wake sheet: the bow
+// wave, the foam along the hull and the first beams of churn behind the stern, laid in the hull's own frame (it turns with
+// the ship, as a bow wave does; farther behind, the remade wake laid along the ship's path takes over, wakes.cpp). The
+// sheet: 1024 x 2048, the bow at the top, the axis down its middle, 128 pixels a beam; the bow at row 70 and the stern at
+// row 710 (five beams), its hull part stretched to the hull's own length (the wedge's angle kept: its width is by the
+// beam). Stronger the faster the hull goes, none at rest; gone by two beams behind the stern. The most of the hulls'.
+float OceanHullWake(float2 xz, float grain) {
+  float most = 0;
+  int count = int(oceanLook4.z);
+  for (int h = 0; h < count; ++h) {
+    float4 a = oceanHulls[h * 3], b = oceanHulls[h * 3 + 1];
+    float run = saturate(b.z / 4);
+    if (run <= 0.02) continue;
+    float2 d = xz - a.xy;
+    float u = dot(d, a.zw), v = dot(d, float2(-a.w, a.z));
+    float px = 64 / max(b.y, 0.05);  // (the sheet's pixels a world unit: 128 a beam)
+    float row = u > b.x ? 70 - (u - b.x) * px : u > -b.x ? lerp(710, 70, (u + b.x) / (2 * b.x)) : 710 + (-b.x - u) * px;
+    float col = 512 + v * px;
+    if (row < 0 || row > 966 || col < 0 || col > 1024) continue;
+    float f = oceanWake.SampleLevel(samplerLinearClamp, float2(col / 1024, row / 2048), log2(max(grain * px, 1))).r;
+    most = max(most, f * run * (1 - smoothstep(838, 966, row)));
+  }
+  return most;
+}
+
 // The sun's glitter off the sea: the share of the sun's light (times its colour) mirrored toward the eye by the facets of a
 // sea whose slopes are spread as a Gaussian about `slope` with variance `spread` (OceanAt's, plus the least spread, which
 // stands for the waves finer than the field and the sun's own disc). V: toward the eye; L: toward the sun. (A microfacet
@@ -294,6 +323,20 @@ float OceanPatchAt(float2 q, float2 gx, float2 gy, float2 cell, int band, float 
   float4 turns = layer < 4 ? oceanPatchTurn[0] : oceanPatchTurn[1];
   float own = turns[layer & 3];
   float a = band == 1 ? wind - own + (h2 - 0.5) * 0.5 : h2 * 6.2831853;  // (streaks downwind, give or take 15 degrees)
+  // [foamloop] the freshest band from the crest loop where it is (oceanLook3.w): its crest running up its frame laid
+  // downwind (give or take 20 degrees), each cell at its own moment of the loop, 24 frames a second
+  [branch] if (band == 4 && oceanLook3.w > 0.5) {
+    float s, c;
+    sincos(wind + 1.5707963 + (h2 - 0.5) * 0.7, s, c);
+    float2x2 turn = float2x2(c, s, -s, c);
+    float2 uv = frac(mul(turn, q) + float2(h, h2) * 7.31);
+    float t = time * 24 + h * 64;
+    float n0 = fmod(floor(t), 64), n1 = fmod(n0 + 1, 64);
+    float2 g0 = mul(turn, gx) / 8, g1 = mul(turn, gy) / 8;
+    float f0 = oceanCrest.SampleGrad(samplerAniso, (uv + float2(fmod(n0, 8), floor(n0 / 8))) / 8, g0, g1).r;
+    float f1 = oceanCrest.SampleGrad(samplerAniso, (uv + float2(fmod(n1, 8), floor(n1 / 8))) / 8, g0, g1).r;
+    return lerp(f0, f1, frac(t));
+  }
   float s, c;
   sincos(a, s, c);
   float2x2 turn = float2x2(c, s, -s, c);
@@ -512,6 +555,8 @@ class Ocean {
   // way in its picture, radians, from foam_patches.json) when it finds them (/remastered/env/remaster/sea_foam).
   float foamPatches = 0;
   gfx::Texture patches;
+  gfx::Texture wake;  // [foamwake] the wake sheet (with the patches: OceanHullWake)
+  gfx::Texture crest, churn;  // [foamloop] the crest loop (the patches' freshest band) and the wake's churn loop (Wakes::churn)
   float patchTurn[8] = {};
   // A view for checking (viewer --ocean-view n): the water shows 1 the slopes (red x, green z), 2 the foam field, 3 the
   // slopes' spread, 4 the height (red up, blue down), 5 the Jacobian, 6 [whitecaps] the whitecaps' parts; 0 off.

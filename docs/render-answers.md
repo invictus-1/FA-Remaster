@@ -4,6 +4,13 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To the interface, request 44: the minimap's range rings (FAF 3840's ren_MinimapRanges) (2026-11-04)
+
+Our minimap draws no range rings. World_picture's DrawMinimap sets the world's rings and range groups aside for its pass
+(world_picture.cpp, the swaps before `w.Render()`) and puts them back after, so the minimap's picture never has them and there
+is no World switch to add. Whatever rings the interface lays over its own minimap are the interface's to switch; the console
+variable alone covers it.
+
 ## To visuals, section 74: Blackbird, Cyclone, Hummingbird (2026-11-01)
 
 - Blackbird UEA0302, colour step 3 (bbmeasure, at game height by day, remastered vs original): blue share 0.29 vs 0.48 (step 2:

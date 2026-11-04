@@ -71,6 +71,7 @@ float4 PS(VOut i) : SV_Target {
 // begins and ends, so that the foam keeps its place on the water - and the half width carried to the pixel, so that
 // the arms' width and the streaks' size are in world units whatever the ship's size.
 const char kRemadeShader[] = R"hlsl(
+Texture2D<float2> wakeChurn : register(t6);  // [foamloop] the churn loop (Wakes::churn)
 struct Wake {
   float4 from;      // xyz: where this piece begins; w: half the width there
   float4 to;        // xyz: where it ends; w: half the width there
@@ -87,6 +88,7 @@ struct VOut {
   float3 world : TEXCOORD0;
   centroid float4 at : TEXCOORD1;  // x: -1..1 across; y: 0 at the stern .. 1 at the end; z: its strength; w: its half width here
   centroid float gone : TEXCOORD2;  // how far the ship had gone when it was here (world units: a place on the water)
+  nointerpolation float churnOn : TEXCOORD3;  // [foamloop] the churn loop's share (Wakes::churnShare)
   // (centroid: with several samples a pixel, read inside the piece's own triangle, never beyond its ends: read beyond
   // the wake's first end it said "before the wake begins" and left a dark crack across it where two pieces meet)
 };
@@ -109,6 +111,7 @@ VOut VS(uint id : SV_VertexID) {
 #endif
   o.position = mul(viewProj, float4(o.world, 1));
   o.at = float4(uv.x, lerp(w.range.x, w.range.y, uv.y), w.sideFrom.w, halfW);
+  o.churnOn = w.sideTo.w;  // [foamloop]
   o.gone = lerp(w.range.z, w.range.w, uv.y);
   return o;
 }
@@ -143,7 +146,19 @@ float4 PS(VOut i) : SV_Target {
   broken = broken * broken * 1.4;
   float left = saturate(1 - along);
   left = left * sqrt(left) * saturate(along * 30);  // (never the root of less than nothing)
-  float foam = saturate(arms * 0.45 * (0.3 + 0.8 * broken) + churn * 0.5 * broken) * left * i.at.z * 0.7;
+  float churned = churn * 0.5 * broken;
+  // [foamloop] the visuals track's churn loop (8 x 8 frames flowing away from the stern, 24 a second) in the churned water,
+  // a frame the wake's width across and as long, laid on the water by how far the ship had gone
+  [branch] if (i.churnOn > 0) {
+    float2 cuv = float2(i.at.x * 0.5 + 0.5, -i.gone / (2 * halfW));
+    float t = time * 24;
+    float n0 = fmod(floor(t), 64), n1 = fmod(n0 + 1, 64);
+    float2 c = frac(cuv), g0 = ddx(cuv) / 8, g1 = ddy(cuv) / 8;
+    float f = lerp(wakeChurn.SampleGrad(samplerLinear, (c + float2(fmod(n0, 8), floor(n0 / 8))) / 8, g0, g1).r,
+                   wakeChurn.SampleGrad(samplerLinear, (c + float2(fmod(n1, 8), floor(n1 / 8))) / 8, g0, g1).r, frac(t));
+    churned = lerp(churned, churn * 1.1 * f, i.churnOn);
+  }
+  float foam = saturate(arms * 0.45 * (0.3 + 0.8 * broken) + churned) * left * i.at.z * 0.7;
   if (foam <= 0.003) discard;
   // lit like the water's foam: by the sky and the falling light (as the wake before)
   float3 sunLight = pow(max(sunColor, 0), 2.2) * (lightMultiplier * modern.x);
@@ -307,6 +322,9 @@ void Wakes::Draw(const View& view) {
   }
   device_->SetPipeline(riding ? riding : remade ? remadePipeline_ : pipeline_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
+  const bool churning = remade && churn && churnShare > 0;  // [foamloop]
+  for (Wake& w : wakes_) w.sideTo[3] = churning ? churnShare : 0.0f;
+  if (churning) device_->SetTexture(6, churn);
   if (riding) {
     device_->SetConstants(3, ride->RideConstants(), ride->RideConstantsSize());
     ride->BindRide();
@@ -317,6 +335,7 @@ void Wakes::Draw(const View& view) {
     device_->Draw(static_cast<uint32_t>(n * (riding ? 24 : 6)));
   }
   if (riding) ride->UnbindRide();
+  if (churning) device_->SetTexture(6, {});
 }
 
 }  // namespace render

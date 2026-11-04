@@ -833,6 +833,16 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
     color = lerp(color, washLight * 0.9, wash * 0.95);
     foam = max(foam, wash);
   }
+  // [foamwake] the hulls' own wakes near them, from the visuals track's sheet (with the foam patches), torn a little by the lace
+  [branch] if (oceanLook4.w > 0 && oceanLook4.z > 0) {
+    float wake = OceanHullWake(xz, grain) * oceanLook4.w * lerp(0.75, 1, lace);
+    [branch] if (wake > 0.002) {
+      float3 face = normalize(float3(-ocean.slope.x, 1, -ocean.slope.y));
+      float3 wakeLight = skyLight + sunLight * (saturate(dot(face, sunDirection)) * shadow) + lamps;
+      color = lerp(color, wakeLight * 0.9, saturate(wake) * 0.95);
+      foam = max(foam, saturate(wake));
+    }
+  }
 #endif
   color += lamps * 0.35;
   color += light * (rings * 0.04);
@@ -1247,6 +1257,9 @@ void Water::DrawWith(const View& view, const Camera* camera, gfx::Texture behind
         for (size_t k = 0; k < 8 && k < list.size(); ++k)
           ocean.patchTurn[k] = static_cast<float>(list[k]["main_direction_deg"].NumberOr(0)) * 3.14159265f / 180;
       }
+      ocean.wake = textures_->Get("/remastered/env/remaster/sea_foam/foam_wake.dds", textures_->Black());  // [foamwake]
+      ocean.crest = textures_->Get("/remastered/env/remaster/sea_foam/foam_crest.dds", gfx::Texture{});  // [foamloop]
+      ocean.churn = textures_->Get("/remastered/env/remaster/sea_foam/foam_wake_churn.dds", gfx::Texture{});
       int found = 0;
       for (bool b : present) found += b;
       printf("render: the sea's foam patches: %d of 8%s\n", found, ocean.patches ? "" : " (none: the whitecaps' own pattern)");

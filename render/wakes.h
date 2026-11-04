@@ -51,6 +51,9 @@ class Wakes {
   int Count() const { return static_cast<int>(wakes_.size()); }
   // [lift] The ocean whose lifted waves the wakes ride (ocean.h; World sets it each frame; none: they lie flat, as before).
   const class Ocean* ride = nullptr;
+  // [foamloop] the visuals track's churn loop in the remade wake's churned water, and its share (0: the wake's own streaks)
+  gfx::Texture churn;
+  float churnShare = 0;
 
  private:
   struct Wake {
