@@ -53,6 +53,8 @@ struct SessionDescription;
 
 class Army {
  public:
+  static void* operator new(size_t n);  // (MOHO64_PAR_WRITETRAP, sim/write_trap.h: pages of its own while on)
+  static void operator delete(void* p);
   int index = 0;  // 1-based, as Lua sees it
   std::string name;      // "ARMY_1"
   std::string nickname;  // player name

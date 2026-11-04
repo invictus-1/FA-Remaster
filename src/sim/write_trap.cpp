@@ -1,0 +1,412 @@
+// The write trap (MOHO64_PAR_WRITETRAP); see write_trap.h.
+#include "sim/write_trap.h"
+
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <map>
+#include <new>
+#include <vector>
+
+#include "core/backtrace.h"
+#include "core/log.h"
+#include "sim/sim.h"
+#include "sim/units.h"
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
+namespace moho {
+
+void* Unit::operator new(size_t n) { return wtrap::On() ? wtrap::Alloc(n, wtrap::Kind::kUnit) : ::operator new(n); }
+void Unit::operator delete(void* p) {
+  if (wtrap::On()) wtrap::Free(p);
+  else ::operator delete(p);
+}
+void* Projectile::operator new(size_t n) {
+  return wtrap::On() ? wtrap::Alloc(n, wtrap::Kind::kProjectile) : ::operator new(n);
+}
+void Projectile::operator delete(void* p) {
+  if (wtrap::On()) wtrap::Free(p);
+  else ::operator delete(p);
+}
+void* Army::operator new(size_t n) { return wtrap::On() ? wtrap::Alloc(n, wtrap::Kind::kArmy) : ::operator new(n); }
+void Army::operator delete(void* p) {
+  if (wtrap::On()) wtrap::Free(p);
+  else ::operator delete(p);
+}
+
+namespace wtrap {
+
+namespace {
+
+bool ReadOn() {
+  const char* v = getenv("MOHO64_PAR_WRITETRAP");
+  if (!v || !*v || !strcmp(v, "0") || !strcmp(v, "off")) return false;
+#if defined(_WIN32)
+  return true;
+#else
+  fprintf(stderr, "moho64: MOHO64_PAR_WRITETRAP works on Windows only: off\n");
+  return false;
+#endif
+}
+
+}  // namespace
+
+bool On() {
+  static const bool on = ReadOn();
+  return on;
+}
+
+#if defined(_WIN32)
+
+namespace {
+
+constexpr size_t kPage = 4096;
+
+struct Region {
+  size_t size = 0;
+  Kind kind = Kind::kUnit;
+  bool ro = false;  // read-only now
+};
+
+// One line of the report: a code address that wrote into another entity
+struct Site {
+  uintptr_t rip = 0;  // image offset of the writing instruction
+  uint8_t writtenKind = 0, turnKind = 0;  // 1 unit, 2 shell, 3 army; turn: 0 none, 1 unit, 2 shell, 3 other entity
+  const char* phase = nullptr;
+  uint64_t count = 0;
+  uint32_t firstTick = 0, lastTick = 0;
+  uint32_t turnId = 0, writtenId = 0, offset = 0;
+  int nframes = 0;
+  uintptr_t frames[14] = {};
+};
+
+struct Pending {  // the pages a thread made writable for the instruction it single-steps
+  DWORD tid = 0;
+  int n = 0;
+  void* pages[8] = {};
+};
+
+SRWLOCK g_lock = SRWLOCK_INIT;
+std::map<uintptr_t, Region>* g_regions = nullptr;  // base -> region (made at the first Alloc, never freed)
+constexpr int kSites = 8192;
+Site g_sites[kSites];
+int g_siteCount = 0;
+uint64_t g_faults = 0, g_lost = 0, g_turns = 0, g_phases = 0;
+Pending g_pending[64];
+int g_phaseDepth = 0;
+uint32_t g_tick = 0;
+const char* g_phase = nullptr;
+Entity* g_turn = nullptr;
+PVOID g_handler = nullptr;
+
+void SetRo(uintptr_t base, Region& r, bool ro) {
+  if (r.ro == ro) return;
+  DWORD old = 0;
+  VirtualProtect(reinterpret_cast<void*>(base), r.size, ro ? PAGE_READONLY : PAGE_READWRITE, &old);
+  r.ro = ro;
+}
+
+// (under g_lock, g_regions made)
+std::map<uintptr_t, Region>::iterator FindRegion(uintptr_t a) {
+  auto it = g_regions->upper_bound(a);
+  if (it == g_regions->begin()) return g_regions->end();
+  --it;
+  return a < it->first + it->second.size ? it : g_regions->end();
+}
+
+Entity* EntityAt(uintptr_t base, Kind k) {
+  return k == Kind::kUnit         ? static_cast<Entity*>(reinterpret_cast<Unit*>(base))
+         : k == Kind::kProjectile ? static_cast<Entity*>(reinterpret_cast<Projectile*>(base))
+                                  : nullptr;
+}
+
+struct LuaCount {
+  const char* method = nullptr;
+  const char* phase = nullptr;
+  bool own = false;
+  uint64_t count = 0;
+};
+constexpr int kLua = 512;
+LuaCount g_lua[kLua];
+
+uint8_t TurnKind(const Entity* e) {
+  if (!e) return 0;
+  if (e->kind == Entity::Kind::Unit) return 1;
+  if (e->kind == Entity::Kind::Projectile) return 2;
+  return 3;
+}
+
+Pending* PendingFor(DWORD tid, bool make) {
+  for (Pending& p : g_pending)
+    if (p.tid == tid) return &p;
+  if (!make) return nullptr;
+  for (Pending& p : g_pending)
+    if (!p.tid) {
+      p.tid = tid;
+      return &p;
+    }
+  return nullptr;
+}
+
+// the faulting thread's frames from its context (RtlVirtualUnwind), as image offsets
+int Frames(const CONTEXT* c, uintptr_t* out, int max) {
+  CONTEXT ctx = *c;
+  int n = 0;
+  while (n < max && ctx.Rip) {
+    out[n++] = ImageOffset(reinterpret_cast<const void*>(ctx.Rip));
+    DWORD64 imageBase = 0;
+    PRUNTIME_FUNCTION fn = RtlLookupFunctionEntry(ctx.Rip, &imageBase, nullptr);
+    if (!fn) {  // a leaf function: the return address is at the stack's top
+      ctx.Rip = *reinterpret_cast<DWORD64*>(ctx.Rsp);
+      ctx.Rsp += 8;
+      continue;
+    }
+    PVOID handlerData = nullptr;
+    DWORD64 establisher = 0;
+    RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, ctx.Rip, fn, &ctx, &handlerData, &establisher, nullptr);
+  }
+  return n;
+}
+
+void Note(const EXCEPTION_POINTERS* x, uintptr_t addr, uintptr_t base, const Region& r) {
+  ++g_faults;
+  const Entity* written = EntityAt(base, r.kind);
+  if (written && written == g_turn) return;  // (its own: a page left read-only for a moment by another thread's step)
+  const uint32_t writtenId = written ? written->id : static_cast<uint32_t>(reinterpret_cast<const Army*>(base)->index);
+  const uintptr_t rip = ImageOffset(reinterpret_cast<const void*>(x->ContextRecord->Rip));
+  const uint8_t wk = static_cast<uint8_t>(r.kind), tk = TurnKind(g_turn);
+  uint64_t h = (rip * 0x9e3779b97f4a7c15ull) ^ (static_cast<uint64_t>(wk) << 8) ^ tk ^ reinterpret_cast<uintptr_t>(g_phase);
+  for (int probe = 0; probe < kSites; ++probe) {
+    Site& s = g_sites[(h + probe) & (kSites - 1)];
+    if (s.count && (s.rip != rip || s.writtenKind != wk || s.turnKind != tk || s.phase != g_phase)) continue;
+    if (!s.count) {
+      s.rip = rip;
+      s.writtenKind = wk;
+      s.turnKind = tk;
+      s.phase = g_phase;
+      s.firstTick = g_tick;
+      s.turnId = g_turn ? g_turn->id : 0;
+      s.writtenId = writtenId;
+      s.offset = static_cast<uint32_t>(addr - base);
+      s.nframes = Frames(x->ContextRecord, s.frames, 14);
+      ++g_siteCount;
+    }
+    ++s.count;
+    s.lastTick = g_tick;
+    return;
+  }
+  ++g_lost;
+}
+
+LONG CALLBACK Handler(EXCEPTION_POINTERS* x) {
+  const EXCEPTION_RECORD* r = x->ExceptionRecord;
+  if (r->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && r->NumberParameters >= 2 && r->ExceptionInformation[0] == 1) {
+    const uintptr_t a = static_cast<uintptr_t>(r->ExceptionInformation[1]);
+    AcquireSRWLockExclusive(&g_lock);
+    auto it = g_regions ? FindRegion(a) : std::map<uintptr_t, Region>::iterator{};
+    if (!g_regions || it == g_regions->end() || !it->second.ro) {
+      ReleaseSRWLockExclusive(&g_lock);
+      return EXCEPTION_CONTINUE_SEARCH;  // (not ours: a real crash)
+    }
+    Pending* p = PendingFor(GetCurrentThreadId(), true);
+    if (!p || p->n >= 8) {
+      ReleaseSRWLockExclusive(&g_lock);
+      return EXCEPTION_CONTINUE_SEARCH;
+    }
+    Note(x, a, it->first, it->second);
+    void* page = reinterpret_cast<void*>(a & ~(kPage - 1));
+    DWORD old = 0;
+    VirtualProtect(page, kPage, PAGE_READWRITE, &old);
+    p->pages[p->n++] = page;
+    ReleaseSRWLockExclusive(&g_lock);
+    x->ContextRecord->EFlags |= 0x100;  // the trap flag: one instruction, then EXCEPTION_SINGLE_STEP below
+    return EXCEPTION_CONTINUE_EXECUTION;
+  }
+  if (r->ExceptionCode == EXCEPTION_SINGLE_STEP) {
+    AcquireSRWLockExclusive(&g_lock);
+    Pending* p = PendingFor(GetCurrentThreadId(), false);
+    if (!p || !p->n) {
+      ReleaseSRWLockExclusive(&g_lock);
+      return EXCEPTION_CONTINUE_SEARCH;
+    }
+    for (int i = 0; i < p->n; ++i) {
+      const uintptr_t pg = reinterpret_cast<uintptr_t>(p->pages[i]);
+      auto it = FindRegion(pg);
+      if (it != g_regions->end() && it->second.ro) {  // (still a read-only region: back to read-only)
+        DWORD old = 0;
+        VirtualProtect(p->pages[i], kPage, PAGE_READONLY, &old);
+      }
+    }
+    p->n = 0;
+    p->tid = 0;
+    ReleaseSRWLockExclusive(&g_lock);
+    x->ContextRecord->EFlags &= ~0x100u;
+    return EXCEPTION_CONTINUE_EXECUTION;
+  }
+  return EXCEPTION_CONTINUE_SEARCH;
+}
+
+}  // namespace
+
+void* Alloc(size_t n, Kind k) {
+  const size_t size = (std::max<size_t>(n, 1) + kPage - 1) & ~(kPage - 1);
+  void* p = VirtualAlloc(nullptr, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+  if (!p) throw std::bad_alloc();
+  AcquireSRWLockExclusive(&g_lock);
+  if (!g_regions) {
+    g_regions = new std::map<uintptr_t, Region>();
+    g_handler = AddVectoredExceptionHandler(1, Handler);
+    Logf(LogLevel::Info, "moho64: MOHO64_PAR_WRITETRAP: units and shells in pages of their own; writes into another "
+                         "entity during the entity pass are trapped and listed at the end");
+  }
+  Region& r = (*g_regions)[reinterpret_cast<uintptr_t>(p)];
+  r.size = size;
+  r.kind = k;
+  r.ro = false;
+  ReleaseSRWLockExclusive(&g_lock);
+  return p;
+}
+
+void Free(void* p) {
+  if (!p) return;
+  AcquireSRWLockExclusive(&g_lock);
+  if (g_regions) g_regions->erase(reinterpret_cast<uintptr_t>(p));
+  ReleaseSRWLockExclusive(&g_lock);
+  VirtualFree(p, 0, MEM_RELEASE);
+}
+
+Phase::Phase(uint32_t tick, const char* name) {
+  if (!On()) return;
+  AcquireSRWLockExclusive(&g_lock);
+  if (g_phaseDepth++ == 0 && g_regions) {
+    active_ = true;
+    ++g_phases;
+    g_tick = tick;
+    g_phase = name;
+    g_turn = nullptr;
+    for (auto& [base, r] : *g_regions) SetRo(base, r, true);
+  }
+  ReleaseSRWLockExclusive(&g_lock);
+}
+
+Phase::~Phase() {
+  if (!On()) return;
+  AcquireSRWLockExclusive(&g_lock);
+  if (--g_phaseDepth == 0 && active_ && g_regions) {
+    for (auto& [base, r] : *g_regions) SetRo(base, r, false);
+    g_phase = nullptr;
+    g_turn = nullptr;
+  }
+  ReleaseSRWLockExclusive(&g_lock);
+}
+
+Turn::Turn(Entity* e) {
+  if (!On() || !g_phase) return;
+  AcquireSRWLockExclusive(&g_lock);
+  active_ = true;
+  ++g_turns;
+  prev_ = g_turn;
+  self_ = e;
+  if (prev_) {
+    auto it = FindRegion(reinterpret_cast<uintptr_t>(prev_));
+    if (it != g_regions->end()) SetRo(it->first, it->second, true);
+  }
+  auto it = FindRegion(reinterpret_cast<uintptr_t>(e));
+  if (it != g_regions->end()) SetRo(it->first, it->second, false);
+  g_turn = e;
+  ReleaseSRWLockExclusive(&g_lock);
+}
+
+Turn::~Turn() {
+  if (!active_) return;
+  AcquireSRWLockExclusive(&g_lock);
+  if (g_phase) {
+    auto it = FindRegion(reinterpret_cast<uintptr_t>(self_));
+    if (it != g_regions->end()) SetRo(it->first, it->second, true);
+    if (prev_) {
+      auto jt = FindRegion(reinterpret_cast<uintptr_t>(prev_));
+      if (jt != g_regions->end()) SetRo(jt->first, jt->second, false);
+    }
+  }
+  g_turn = prev_;
+  ReleaseSRWLockExclusive(&g_lock);
+}
+
+void NoteLua(const char* method, const void* obj) {
+  if (!On() || !g_phase) return;
+  AcquireSRWLockExclusive(&g_lock);
+  const bool own = g_turn && obj == static_cast<const ScriptObject*>(g_turn);
+  for (LuaCount& l : g_lua) {
+    if (l.count && (l.phase != g_phase || l.own != own || strcmp(l.method, method))) continue;
+    if (!l.count) {
+      l.method = method;
+      l.phase = g_phase;
+      l.own = own;
+    }
+    ++l.count;
+    break;
+  }
+  ReleaseSRWLockExclusive(&g_lock);
+}
+
+void Report() {
+  if (!On() || !g_regions) return;
+  AcquireSRWLockExclusive(&g_lock);
+  std::vector<const Site*> s;
+  for (const Site& x : g_sites)
+    if (x.count) s.push_back(&x);
+  std::sort(s.begin(), s.end(), [](const Site* a, const Site* b) { return a->count != b->count ? a->count > b->count : a->rip < b->rip; });
+  static const char* const kKind[] = {"none", "unit", "shell", "entity"};
+  static const char* const kWritten[] = {"?", "unit", "shell", "army"};
+  char line[1024];
+  snprintf(line, sizeof line, "writetrap: %llu phases, %llu turns, %llu trapped writes, %d sites%s",
+           static_cast<unsigned long long>(g_phases), static_cast<unsigned long long>(g_turns),
+           static_cast<unsigned long long>(g_faults), g_siteCount, g_lost ? " (table full: some lost)" : "");
+  fprintf(stderr, "%s\n", line);
+  Logf(LogLevel::Info, "%s", line);
+  for (const Site* x : s) {
+    int o = snprintf(line, sizeof line,
+                     "writetrap: site +0x%llx %s: %s writes %s x%llu (beats %u..%u; first: %s %u wrote %s %u at +0x%x) frames",
+                     static_cast<unsigned long long>(x->rip), x->phase ? x->phase : "?", kKind[x->turnKind],
+                     kWritten[x->writtenKind], static_cast<unsigned long long>(x->count), x->firstTick, x->lastTick,
+                     kKind[x->turnKind], x->turnId, kWritten[x->writtenKind], x->writtenId, x->offset);
+    for (int i = 0; i < x->nframes && o < static_cast<int>(sizeof line) - 24; ++i)
+      o += snprintf(line + o, sizeof line - o, " +0x%llx", static_cast<unsigned long long>(x->frames[i]));
+    fprintf(stderr, "%s\n", line);
+    Logf(LogLevel::Info, "%s", line);
+  }
+  std::vector<const LuaCount*> l;
+  for (const LuaCount& x : g_lua)
+    if (x.count) l.push_back(&x);
+  std::sort(l.begin(), l.end(), [](const LuaCount* a, const LuaCount* b) { return a->count > b->count; });
+  for (const LuaCount* x : l) {
+    snprintf(line, sizeof line, "writetrap: lua %s: %s on %s x%llu", x->phase, x->method,
+             x->own ? "the turn's own entity" : "another object", static_cast<unsigned long long>(x->count));
+    fprintf(stderr, "%s\n", line);
+    Logf(LogLevel::Info, "%s", line);
+  }
+  ReleaseSRWLockExclusive(&g_lock);
+}
+
+#else  // not Windows: the switch is off (On() said so)
+
+void* Alloc(size_t n, Kind) { return ::operator new(n); }
+void Free(void* p) { ::operator delete(p); }
+Phase::Phase(uint32_t, const char*) {}
+Phase::~Phase() {}
+Turn::Turn(Entity*) {}
+Turn::~Turn() {}
+void NoteLua(const char*, const void*) {}
+void Report() {}
+
+#endif
+
+}  // namespace wtrap
+}  // namespace moho

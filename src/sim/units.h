@@ -230,6 +230,9 @@ bool operator!=(const char (&lit)[N], const LayerString& a) { return !a.Is(lit);
 class Unit : public Entity {
  public:
   Unit() { typeBits |= kTypeUnit; }
+  // MOHO64_PAR_WRITETRAP (sim/write_trap.h): in pages of its own while the switch is on; else the program's new
+  static void* operator new(size_t n);
+  static void operator delete(void* p);
   const UnitBpData* bpData = nullptr;
   LayerString layer = "None";
   std::vector<UnitWeapon*> weapons;
@@ -470,6 +473,8 @@ class CollisionBeam : public Entity {
 class Projectile : public Entity {
  public:
   Projectile() { typeBits |= kTypeProjectile; }
+  static void* operator new(size_t n);  // (as Unit's: MOHO64_PAR_WRITETRAP)
+  static void operator delete(void* p);
   Entity* launcher = nullptr;
   Vec3 velocity;  // units per second
   LayerString layer = "None";

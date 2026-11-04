@@ -27,6 +27,7 @@
 
 #include "core/log.h"
 #include "script/script_state.h"
+#include "sim/write_trap.h"
 #include "sim/air.h"
 #include "sim/blueprints.h"
 #include "sim/collision.h"
@@ -51,6 +52,7 @@ bool TerrainSegmentHit(const TerrainMap* map, Vec3 p0, Vec3 p1, float* dist, Vec
 bool HasTarget(Sim& sim, const AiTarget& t);
 Vec3 TargetPos(Sim& sim, const AiTarget& t, bool centre);
 Vec3 TargetPosBeatStart(Sim& sim, const AiTarget& t);
+Vec3 TargetPosLastPose(Sim& sim, const AiTarget& t, const Unit* u);
 Entity* TargetEntity(Sim& sim, const AiTarget& t);
 Vec3 BlipPointUnitGone(Sim& sim, const Entity* b);
 
@@ -384,15 +386,8 @@ void UpdateTracking(Sim& sim, Projectile* p, Quat& q, Vec3& v) {
       if (Entity* e = TargetEntity(sim, p->target); e && e->kind == Entity::Kind::Unit) {
         Unit* u = static_cast<Unit*>(e);
         const uint32_t turn = u->orderHandle ? u->orderHandle : u->handle;  // its place in the run list
-        if (turn > p->handle && u->poseSet && u->lastPosTick == sim.tick()) {
-          const Vec3 curPos = u->poseBasePos;
-          const Quat curOri = u->poseBaseOri;
-          u->poseBasePos = u->prevPoseBasePos;
-          u->poseBaseOri = u->prevPoseBaseOri;
-          t = TargetPos(sim, p->target, false);
-          u->poseBasePos = curPos;
-          u->poseBaseOri = curOri;
-        }
+        if (turn > p->handle && u->poseSet && u->lastPosTick == sim.tick())
+          t = TargetPosLastPose(sim, p->target, u);  // (reads u's last pose base without writing u)
       }
     if (!IsNaN(t)) p->lastTargetPos = t;
   }
@@ -975,6 +970,7 @@ void ProjectilesTick(Sim& sim) {
 
 void ProjectileStep(Sim& sim, Projectile* p) {
   if (!p->HasLuaObject() || p->steppedTick == sim.tick()) return;
+  wtrap::Turn trapTurn(p);  // (MOHO64_PAR_WRITETRAP: the shell's own pages writable for its step)
   p->steppedTick = sim.tick();
   PurgeShooters(sim, p);
   sim.HoldShape(p);

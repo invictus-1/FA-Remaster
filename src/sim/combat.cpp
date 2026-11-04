@@ -430,6 +430,17 @@ bool EntityLost(Sim& sim, const AiTarget& t) {
 
 }  // namespace combat
 
+// Aim's target read where it stood when the beat began (see Aim): its bone -1 point from lastPosition /
+// lastOrientation instead of its transform. Per thread, set only around Aim's one TargetPos call, so the aiming unit
+// reads the target's beat-start transform without writing the target (parallel mode's rule 2; before, Aim put the
+// target's last transform into it and back: the write trap's first find, e1 2026-11-03).
+// The same for a shell's homing (projectile.cpp): a target unit whose turn comes after the shell's is read with last
+// beat's pose base (prevPoseBasePos / prevPoseBaseOri), as before by putting it into the unit and back.
+namespace {
+thread_local const Unit* tl_atBeatStart = nullptr;
+thread_local const Unit* tl_poseAtBeatStart = nullptr;
+}
+
 // The point a weapon aims at on a unit (Unit::GetTargetPoint): its aim bone, else the centre of
 // its collision primitive.
 static Vec3 UnitTargetPoint(const Unit* u, int bone) {
@@ -444,11 +455,13 @@ static Vec3 UnitTargetPoint(const Unit* u, int bone) {
     // is asked of Unit::GetBoneWorldTransform with bone -1, which is the pose's own place and half the unit's
     // SizeY above it (0x6aa637: straight up in the world's axes, the offset composed as the outer transform),
     // without the collision offset the centre below has.
-    const Vec3& bp = u->poseSet ? u->poseBasePos : u->position;
+    const Vec3& bp = u->poseSet ? (u == tl_poseAtBeatStart ? u->prevPoseBasePos : u->poseBasePos) : u->position;
     return Add(bp, Vec3{0.0f, u->bpSizeY * 0.5f, 0.0f});
   }
-  if (u->blueprint) return Add(u->position, RotateM(u->orientation, u->bpCenter));  // bone -1 (0x679d19)
-  return u->position;
+  const bool held = u == tl_atBeatStart;
+  const Vec3& p = held ? u->lastPosition : u->position;
+  if (u->blueprint) return Add(p, RotateM(held ? u->lastOrientation : u->orientation, u->bpCenter));  // bone -1 (0x679d19)
+  return p;
 }
 
 namespace combat {
@@ -532,6 +545,15 @@ Vec3 TargetPos(Sim& sim, const AiTarget& t, bool centre) {
   return NaNVec();
 }
 
+// TargetPos with the unit u's pose base as it was last beat (its prevPoseBase*), for a shell whose target unit
+// steps after it (projectile.cpp); u itself is not written.
+Vec3 TargetPosLastPose(Sim& sim, const AiTarget& t, const Unit* u) {
+  tl_poseAtBeatStart = u;
+  const Vec3 r = TargetPos(sim, t, false);
+  tl_poseAtBeatStart = nullptr;
+  return r;
+}
+
 // The same point for code that runs inside the motion pass (flight, a projectile's steering). An entity's new
 // transform is committed at the beat's end, so a target WITHOUT an aim bone - the centre of its collision
 // primitive, from the entity's own transform - still stands and lies as the beat began, also when the target
@@ -604,8 +626,9 @@ void BoneWorld(const Entity* e, int bone, Vec3* pos, Quat* rot) {
   if (e->kind == Entity::Kind::Unit) {  // the pose's own world transform (Unit::GetBoneWorldTransform 0x6aa5c0)
     const Unit* u = static_cast<const Unit*>(e);
     if (u->poseSet) {
-      r = u->poseBaseOri;
-      p = u->poseBasePos;
+      const bool last = u == tl_poseAtBeatStart;  // (TargetPosLastPose)
+      r = last ? u->prevPoseBaseOri : u->poseBaseOri;
+      p = last ? u->prevPoseBasePos : u->poseBasePos;
     }
   }
   const bool posed = e->poseQ.size() == bones.size();
@@ -2143,13 +2166,9 @@ Vec3 Aim(Sim& sim, AimController* c) {
   Vec3 tPos;
   Unit* tu = te && te->kind == Entity::Kind::Unit ? static_cast<Unit*>(te) : nullptr;
   if (tu && w->target.aimBone == -1 && tu->lastPosTick == sim.tick()) {
-    const Vec3 curPos = tu->position;
-    const Quat curOri = tu->orientation;
-    tu->position = tu->lastPosition;
-    tu->orientation = tu->lastOrientation;
+    tl_atBeatStart = tu;  // (bone -1 is the only point TargetPos reads from the unit's transform here)
     tPos = TargetPos(sim, w->target, false);
-    tu->position = curPos;
-    tu->orientation = curOri;
+    tl_atBeatStart = nullptr;
   } else {
     tPos = TargetPos(sim, w->target, false);
   }

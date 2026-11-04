@@ -23,9 +23,11 @@
 #include <cstring>
 
 #include "core/keyed_rng.h"
+#include "sim/write_trap.h"
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <optional>
 #include <map>
 #include <strings.h>
 
@@ -941,6 +943,7 @@ Sim::~Sim() {
     fprintf(stderr, "%s\n", line.c_str());
     Logf(LogLevel::Info, "%s", line.c_str());
   }
+  wtrap::Report();  // (MOHO64_PAR_WRITETRAP's lines)
   if (rec_) fclose(rec_);
   owned_.clear();  // unbind every engine object while the Lua state still exists
   ReleaseEffectObjects(*this);
@@ -2545,8 +2548,11 @@ void Sim::Tick() {
   const std::vector<CollisionBeam*> entityBeams = beams;
   size_t entityBeamAt = 0;
   auto beamsBefore = [&](uint32_t handle) {
-    while (entityBeamAt < entityBeams.size() && entityBeams[entityBeamAt]->handle < handle)
-      BeamTick(*this, entityBeams[entityBeamAt++]);
+    while (entityBeamAt < entityBeams.size() && entityBeams[entityBeamAt]->handle < handle) {
+      CollisionBeam* b = entityBeams[entityBeamAt++];
+      wtrap::Turn turn(b);  // (MOHO64_PAR_WRITETRAP)
+      BeamTick(*this, b);
+    }
   };
   // The projectiles take their turn in the same pass, by creation handle (beat_order.md 2.3 (f): Projectile::
   // MotionTick 0x69bdd0 is an entity task of stage sim+0x930 like a unit's): a shell made before a unit steps before
@@ -2560,6 +2566,9 @@ void Sim::Tick() {
       ProjectileStep(*this, projectiles[entityProjAt++]);
   };
   static const size_t prefetchAhead = getenv("MOHO64_PREFETCH") ? static_cast<size_t>(std::max(0, atoi(getenv("MOHO64_PREFETCH")))) : 2;
+  // MOHO64_PAR_WRITETRAP (sim/write_trap.h): every unit and shell read-only for the pass but in its own turn
+  std::optional<wtrap::Phase> trapPhase;
+  if (wtrap::On()) trapPhase.emplace(tick_, "entity pass");
   for (size_t i = 0; i < motionOrder.size(); ++i) {
     Unit* u = motionOrder[i];
     if (prefetchAhead) {  // (MOHO64_PREFETCH: hints only)
@@ -2568,6 +2577,7 @@ void Sim::Tick() {
     }
     beamsBefore(u->handle);
     projectilesBefore(u->orderHandle ? u->orderHandle : u->handle);
+    wtrap::Turn trapTurn(u);  // (MOHO64_PAR_WRITETRAP: the unit's own pages writable for its turn)
     // Entity::TaskTick 0x679c40, step 1 (0x679c51): the texture scroller, before the attached test below, so a
     // unit sent to the pass's end takes that step twice in that beat. It reads the committed transform and the
     // one before it: here the unit's transform before this turn's motion and lastPosition / lastOrientation, which
@@ -2804,6 +2814,7 @@ void Sim::Tick() {
     if (u->isFactoryBuilder) ValidateFactoryCommandQueue(*this, u);  // end of Unit::MotionTick
   }
   beamsBefore(0xffffffffu);  // the beams younger than every unit
+  trapPhase.reset();
   threads_->WakeSignalled();
   // transport cargo follows its attach bone (Entity::TaskTick: after the parents moved)
   cargoFollowTick = tick_;
@@ -2870,7 +2881,11 @@ void Sim::Tick() {
   MOHO_LAP(lap, "projectiles");
   // Projectiles move after every task stage (Sim::AdvanceBeat runs the three task stages first), so a shot
   // moves in the beat it was fired, and Lua sees the move next beat.
-  ProjectilesTick(*this);
+  {
+    std::optional<wtrap::Phase> trapShells;  // (MOHO64_PAR_WRITETRAP: the shells' steps after the pass)
+    if (wtrap::On()) trapShells.emplace(tick_, "shells");
+    ProjectilesTick(*this);
+  }
   // A unit that hangs on a shell (a wreck on FAF's sinker) takes the shell's layer (0x6ba1ad), and it does so
   // after the shell's step of this beat: a unit attached to a parent that has not had its turn takes its own turn
   // behind the parent's (Entity::TaskTick 0x679c40), and a layer is no committed value. The layer is read from

@@ -2,7 +2,8 @@
 
 Status: APPROVED by Chris 2026-10-31 ("everything looks good to me"); draft 3 (e1). Lives in
 `docs/parallel-mode.md`. Built so far (section 8's order): step 1, the mode field (`Sim::order`, `MOHO64_SIM_ORDER`);
-step 2a, the keyed draws (4.1); step 2b, the entity grid's canonical buckets (3.4).
+step 2a, the keyed draws (4.1); step 2b, the entity grid's canonical buckets (3.4); step 3, the write trap (6.1);
+step 4.0, Aim and a homing shell read their target's beat-start transform without writing it (6.1).
 
 ## For Chris: the short version
 
@@ -338,6 +339,38 @@ Parallel mode has no oracle: the original never played it. Its proofs are of det
    outcomes (battle winners, units lost, economy curves, travel times) must agree within the spread between seeds of
    the original order itself. A difference outside that spread is a rule change, not a tie-break: investigated.
 5. **Replays of parallel games:** a recorded parallel game replays to the same fingerprints at any thread count.
+
+### 6.1 The write trap (built, step 3: `MOHO64_PAR_WRITETRAP=1`, src/sim/write_trap.h)
+
+A debug switch that changes nothing of the game (b8 6000 beats with and without it: the same fingerprint every beat)
+and lists every write one entity's turn makes into ANOTHER unit, shell or army. With the switch on, units, shells and
+armies are made in pages of their own (their class `operator new`); during the entity pass and the shells' steps after
+it every one of them is read-only except the entity whose turn it is. A write elsewhere faults; a vectored exception
+handler notes the code address, its callers, which turn wrote what at which offset, lets that one instruction through
+(trap flag) and makes the page read-only again. The Sim's teardown logs one `writetrap: site` line per code address
+(image offsets; `trapsym.py` in e1's folder symbolizes them) and one `writetrap: lua` line per script method the engine
+called during the phase, on the turn's own entity or another object. It sees the objects' own bytes, not what they own
+on the heap (a vector's elements) nor the Sim's shared lists (held shapes, the moved list, the destroy queue, the Lua
+state): those come from reading the code. Windows only. Cost: b8 about 2x, B3-16k about 6x (35 M trapped writes).
+
+**First audit (e1, 2026-11-03; parallel order, b8 6000, B1 4000, B3-16k 2000 beats).** The entity pass's turns write
+other entities in these places, by count:
+
+| What | Where | b8 / B1 / B3 writes | In step 4 |
+|---|---|---|---|
+| The unit's economy into its army's pools | `UnitEconomyTick` (economy.cpp 504), `ArmyEconomy::ChangeStorage` | 2.8 M / 0.57 M / 31 M | phase D: per-unit results, summed into the army in creation order |
+| `gridMark` of every entity a gather finds | `EntityGrid::GatherBox` / `GatherLine` / `Gather` (contacts, shells' line march, `DamageArea`) | 1.6 M / 0.13 M / 3.9 M | the mark-free gathers (`GatherBoxNoMarks`, same order) on the pool |
+| Aim's target read at its beat-start transform by putting it into the target and back | combat.cpp `Aim` | 62 k / 8 k / 483 k | done (step 4.0): read through a per-thread override (`tl_atBeatStart`), nothing written; the same for a shell homing on a later unit's last pose (`TargetPosLastPose`) |
+| Pushes into the other unit | `DoCollisionsFor` -> `AddImpulse` | 19 k / 0.8 k / 40 | phase A: symmetric pushes, each unit applies the ones it receives |
+| A shell's hit: damage, kills and what the scripts do with them (`AdjustHealth`, `Kill`, `IssueClearCommands`, `MotionStop`, stun, regen, max health, script bits, army kill counts) | `OnImpact` / `DamageArea` / `OnKilled` (Lua) | 1-2 k / 0.6 k / 30 k | phase B (key order) |
+| A unit's Lua writing another unit (`IssueClearCommands` from a callback, `AdjustHealth`, `QueueDestroy`) | luaD_precall | a few | phase B |
+
+Script methods the engine calls inside the pass (b8 / B3): `OnMotionHorzEventChange` 57 k / 218 k, `OnTerrainTypeChange`
+21 k / 72 k, `OnCollision` (props, on the prop) 22 k / 18 k, `OnCreate` (of entities the scripts make in the pass) 48 k /
+11 k, `OnStartBuilderTracking` / `OnStopBuilderTracking` 8 k each / none, `OnStartTracking` / `OnStopTracking` 0.9 k /
+7.6 k (on the weapon), `OnAnimCollision` 4 k / 0.3 k, `OnImpact` 2.8 k / 27 k (shells), `OnDamage` 0.6 k / 25 k,
+`OnLayerChange` 0.5 k / 1, `OnMotionVertEventChange` 0.5 k / 0, `OnKilled`, `OnHealthChanged`, `OnDecayed`, fuel, a few
+`OnLostTarget`, `OnEnterWater`. Every one is in section 3.6's table (groups A and B): nothing new to classify.
 
 ## 7. Risks
 

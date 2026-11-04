@@ -20,6 +20,7 @@
 #include "core/trace.h"
 #include "core/vfs.h"
 #include "script/script_state.h"
+#include "sim/write_trap.h"
 #include "sim/transport.h"
 #include "sim/blueprints.h"
 #include "sim/build.h"
@@ -1606,6 +1607,7 @@ bool Sim::CallMethod(lua_State* L, ScriptObject* obj, const char* method, int na
     lua_settop(L, base);
     return true;
   }
+  if (wtrap::On()) wtrap::NoteLua(method, obj);  // (MOHO64_PAR_WRITETRAP's Lua count)
   // MOHO64_DEBUG_CALL=<method name>: every engine call of that script method, with the calling C++ frames
   static const char* dbgCall = getenv("MOHO64_DEBUG_CALL");
   if (dbgCall && strcmp(dbgCall, method) == 0) {

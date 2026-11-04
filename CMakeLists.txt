@@ -80,6 +80,7 @@ add_library(mohocore STATIC
   src/sim/bp_derived.cpp src/sim/skeleton.cpp src/sim/motion.cpp src/sim/air.cpp src/sim/transport.cpp src/sim/navigation.cpp src/sim/hpath.cpp src/sim/landnav.cpp src/sim/formation.cpp
   src/sim/steering.cpp
   src/sim/entity_grid.cpp
+  src/sim/write_trap.cpp
   src/sim/prop_motor.cpp
   src/sim/ai_threat.cpp
   src/sim/ai_brain.cpp
