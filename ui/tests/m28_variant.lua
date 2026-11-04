@@ -44,6 +44,20 @@ ForkThread(function()
         check("an active original M28 is taken as the variant", selected[variantUid], true)
         check("and the original is not active", selected["fnewm028-v326-55b4-92b6-64398e7ge43f"], nil)
         check("the preference is turned too", GetPreference("active_mods")[variantUid], true)
+        -- our fix of Ultra Shields (mods/ultra-shields-fix, Chris's): on exactly when Ultra Shields is
+        local usUid, fixUid = 'E08710C8-B785-11E4-9CA4-35FF1C5D46B0', '0c5a9aee-2f06-451c-ab53-5b2e2e906a3e'
+        local all = Mods.AllMods()
+        check("our Ultra Shields fix is on disk at /mods/ultra-shields-fix", all[fixUid] and string.lower(all[fixUid].location or ""), "/mods/ultra-shields-fix")
+        SetPreference("active_mods", {[fixUid] = true})
+        check("the fix alone is not active", Mods.GetSelectedMods()[fixUid], nil)
+        if all[usUid] then
+            SetPreference("active_mods", {[usUid] = true})
+            check("with Ultra Shields active, the fix is too", Mods.GetSelectedMods()[fixUid], true)
+        else
+            LOG("TEST note: Ultra Shields is not in the mods folders here: the fix's other half unchecked")
+        end
+        SetPreference("active_mods", {["fnewm028-v326-55b4-92b6-64398e7ge43f"] = true, ["some-other-mod"] = true})
+        selected = Mods.GetSelectedMods()
         local sim = Mods.GetGameMods(Mods.GetSelectedSimMods())
         local found = false
         for _, mod in sim do

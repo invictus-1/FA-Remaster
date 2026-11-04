@@ -352,20 +352,38 @@ int main(int argc, char** argv) {
   // each launch (PreGameDataText). The engine's shared piece (sim/session.h kGamePrefsPath; ui REQUESTS 40).
   if (!vfs.MountMemoryFile(kGamePrefsPath, "PreGameData = {\n}\n"))
     Logf(LogLevel::Warning, "moho64ui: the game's own %s could not be mounted", kGamePrefsPath);
-  if (!originalM28) {  // (see m28Variant)
-    std::vector<std::string> candidates;
-    if (!ourMods.empty()) candidates.push_back(ourMods);
+  // Our mods' folders: --our-mods, else beside the program or in its source tree.
+  std::vector<std::string> modCandidates;
+  if (!ourMods.empty()) modCandidates.push_back(ourMods);
+  {
     std::string dir = hostfs::ProgramFolder();
     if (dir.empty()) dir = ".";
-    candidates.push_back(dir + "/mods");
-    candidates.push_back(dir + "/../mods");
-    for (const std::string& c : candidates)
+    modCandidates.push_back(dir + "/mods");
+    modCandidates.push_back(dir + "/../mods");
+  }
+  if (!originalM28) {  // (see m28Variant)
+    for (const std::string& c : modCandidates)
       if (m28Variant.empty() && hostfs::IsFile(c + "/m28-variant/mod_info.lua")) m28Variant = c + "/m28-variant";
+  }
+  // Our fixes of other mods (fa-remaster/mods/<name>, each holding none of the mod's files: Chris's, e.g. Ultra
+  // Shields' ESD Pulse): always mounted at /mods/<name>, so a game played with one and its replay find it; the
+  // lobby's mods list adds a fix when its mod is on (ui/data/hook/lua/mods.lua, the same list by uid).
+  std::vector<std::pair<std::string, std::string>> modFixes;  // (folder, mount point)
+  for (const char* name : {"ultra-shields-fix"}) {
+    for (const std::string& c : modCandidates) {
+      if (!hostfs::IsFile(c + "/" + name + "/mod_info.lua")) continue;
+      modFixes.push_back({c + "/" + name, std::string("/mods/") + name});
+      break;
+    }
   }
   // The init file's `path` mounted and its `hook` taken by the engine's function, as its host does (script/mount.h;
   // ui/REQUESTS.md, engine 1); its `protocols` read by ours (InitProtocols).
   if (!MountFromInitFile(o.init, o.folders, vfs, cfg.hookDirs)) return 1;
   cfg.protocols = InitProtocols(o.init);
+  for (const auto& [folder, at] : modFixes) {
+    if (vfs.Mount(folder, at)) Logf(LogLevel::Info, "moho64ui: our mod fix %s from %s", at.c_str(), hostfs::DisplayPath(folder).c_str());
+    else Logf(LogLevel::Warning, "moho64ui: %s could not be mounted", folder.c_str());
+  }
   if (!m28Variant.empty()) {
     if (vfs.Mount(m28Variant, "/mods/m28-variant"))
       Logf(LogLevel::Info, "moho64ui: M28AI is our variant: %s", hostfs::DisplayPath(m28Variant).c_str());
@@ -494,6 +512,7 @@ int main(int argc, char** argv) {
   session.scanInit = o.init;  // (the replay timeline's scan mounts the game as this program did)
   session.scanFolders = o.folders;
   if (!m28Variant.empty()) session.scanMounts.push_back({m28Variant, "/mods/m28-variant"});
+  for (const auto& [folder, at] : modFixes) session.scanMounts.push_back({folder, at});
   session.scanTicks = scanTicks;
   cfg.launchSession = [&session](lua_State* L, int config, std::string* why) { return session.Launch(L, config, why); };
   cfg.launchNetworkSession = [&session](lua_State* L, int config, net::LobbyCore* lobby, std::string* why) {

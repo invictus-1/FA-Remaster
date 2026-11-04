@@ -44,6 +44,23 @@ do
                 SetPreference('active_mods', active)
             end
         end
-        return GameGetSelectedMods()
+        local selected = GameGetSelectedMods()
+        -- Our fixes of other mods (fa-remaster/mods/<name>, mounted at /mods/<name> by the program; Chris's): a fix
+        -- is on exactly when its mod is, and on disk; the game's mods list then records it, so a replay has it.
+        local fixes = {
+            ['E08710C8-B785-11E4-9CA4-35FF1C5D46B0'] = '0c5a9aee-2f06-451c-ab53-5b2e2e906a3e',  -- Ultra Shields: ultra-shields-fix
+        }
+        if type(selected) == 'table' then
+            local onDisk = {}
+            for _, mod in AllMods() do onDisk[mod.uid] = true end
+            for modUid, fixUid in fixes do
+                if selected[modUid] and onDisk[fixUid] then
+                    selected[fixUid] = true
+                else
+                    selected[fixUid] = nil
+                end
+            end
+        end
+        return selected
     end
 end
