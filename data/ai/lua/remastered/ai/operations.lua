@@ -54,6 +54,10 @@ local kStageBack = 120     -- world units of land travel the staging zone keeps 
 local kStageDetour = 1.25  -- ... on the way: from -> staging zone -> target at most this x the direct way (+ 40)
 local kGatherExtend = 2    -- a gather still arriving may wait up to this x its time limit
 local kAllyReach = 500     -- world units of land travel from our start: an ally's zone this near is defended (2026-11-03)
+-- (2026-11-04, the estimate's calibration) attacks, pushes, gathers and raids read the zone estimate with the enemy
+-- standing its ground (AIZoneEstimate's 6th argument): on the fight bench a defender that holds fares worse than one
+-- that comes on, and the meeting fight's estimate read our attacks 0.17-0.22 too low. The defence and the posts keep
+-- the meeting fight (the enemy comes to us).
 
 -- Personalities (docs/ai-architecture.md 2.7) and their knobs: personality.lua. Teacher mode (2.8): never a push
 -- against a human enemy; when far ahead of one, it attacks at most and says so in the log.
@@ -220,7 +224,7 @@ local function PickTarget(R, enemyZones, bar)
     local bestMargin, bestZone
     for i = 1, math.min(kCandidates, table.getn(list)) do
         local e = list[i].e
-        local margin = Remastered.AIZoneEstimate(R.army, e.zone, kHorizon)
+        local margin = Remastered.AIZoneEstimate(R.army, e.zone, kHorizon, false, false, true)
         if margin >= bar then return e, margin end
         if not bestMargin or margin > bestMargin then bestMargin, bestZone = margin, e.zone end
     end
@@ -688,7 +692,7 @@ function Think(brain)
     -- with the army - a 700-unit army does not stand within 45 world units - the walk is an attack-move, so it fights
     -- what it meets on the way, and a gather still arriving when the time is up waits on, up to kGatherExtend x)
     if R.op and R.op.kind == 'gather' then
-        local margin = Remastered.AIZoneEstimate(R.army, R.op.zone, kHorizon)
+        local margin = Remastered.AIZoneEstimate(R.army, R.op.zone, kHorizon, false, false, true)
         local f = Remastered.AIZoneForces(R.army, R.op.zone)
         local stage = Remastered.AIZone(R.op.stage)
         -- (2026-11-03: the share is of the units the gather started with, R.op.n0: in the 4v4 the factories added
@@ -728,7 +732,7 @@ function Think(brain)
 
     -- an ATTACK or PUSH in progress: stay committed while its margin holds
     if R.op and (R.op.kind == 'attack' or R.op.kind == 'push') then
-        local margin = Remastered.AIZoneEstimate(R.army, R.op.zone, kHorizon)
+        local margin = Remastered.AIZoneEstimate(R.army, R.op.zone, kHorizon, false, false, true)
         local f = Remastered.AIZoneForces(R.army, R.op.zone)
         local commit = R.op.kind == 'push' and K.commitPush or K.commit
         -- the trade check (phase 9): over each kTradeWindow of the attack, the mass we lost against the mass we killed
@@ -874,7 +878,7 @@ function Think(brain)
     if not R.op and units[1] then
         for _, e in ipairs(enemyZones) do
             if e.economy > 0 and e.strength <= 0 and Remastered.AIZoneDistance(R.startZone, e.zone, 'land') >= 0 then
-                local margin = Remastered.AIZoneEstimate(R.army, e.zone, kHorizon)
+                local margin = Remastered.AIZoneEstimate(R.army, e.zone, kHorizon, false, false, true)
                 if margin >= 0.8 then
                     local light = {}
                     for _, u in ipairs(units) do
