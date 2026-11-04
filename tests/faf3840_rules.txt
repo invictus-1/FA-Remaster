@@ -1,0 +1,30 @@
+# The rules FAF 3840 changed (engine-ref/specs/faf3840.md), each in a small scene, played once by 3839's rules and once
+# by 3840's (Sim::gameVersion; MOHO64_GAME_VERSION picks it). An --orders file for moho64:
+#   set MOHO64_GAME_VERSION=3839 (then 3840)
+#   moho64 --init offline\bin\init_lab.lua --session _scratch\ui\session_ai.lua --seed 7 --ticks 400
+#          --orders fa-remaster\tests\faf3840_rules.txt --log out.log
+# and the log's "faf3840:" lines compared:
+# A. A shield whose owner is repaired while its shield is off (a T2 shield generator, its shield turned off with DisableShield, both
+#    damaged; an engineer repairs it, the army's mass full): 3839 repairs the shield as well ("A shield" rises), 3840
+#    leaves it ("A shield" stays) and repairs the unit's health only.
+# (Two T3 power generators keep the shields' energy up.)
+# B. A shield repaired by a stalling engineer (another generator, its shield damaged and the unit a little; at tick 120 the army's
+#    stored mass is taken once and A's engineer stopped, its income then less than the repair asks, so the engineer's request is granted only a part): 3839 adds RegenRate x 0.1 x BuildRate /
+#    RegenAssistMult a beat whatever the grant ("B shield +x" constant); 3840 that times the grant ("consumed").
+# C. An aircraft whose health is above its maximum, refuelling at an air staging platform (flown up at 30, damaged a
+#    little and docked at the platform at 60 (a Dock order, type 39, as the interface sends it: the
+#    platform is entity 5, the aircraft 6); once it is attached, SetMaxHealth below its health): 3839 never takes off ("C attached true" to the end), 3840 takes off at once.
+# D. A shell off the map, falling, with SetCollideSurface(false) (Seton's water would stop it first): 3839 flies
+#    on (no impact in its 40 logged beats), 3840 impacts ("D impact Air": the type a shell is made with) in the first beat
+#    that starts below 0.
+5 lua local T = {} ScenarioInfo.F3840 = T T.a = CreateUnitHPR('ueb4202', 'ARMY_1', 640, 0, 300, 0, 0, 0) T.ea = CreateUnitHPR('uel0105', 'ARMY_1', 640, 0, 310, 0, 0, 0) T.b = CreateUnitHPR('ueb4202', 'ARMY_1', 600, 0, 300, 0, 0, 0) T.eb = CreateUnitHPR('uel0105', 'ARMY_1', 600, 0, 310, 0, 0, 0) T.p = CreateUnitHPR('ueb5202', 'ARMY_1', 660, 0, 340, 0, 0, 0) T.c = CreateUnitHPR('uea0102', 'ARMY_1', 660, 0, 360, 0, 0, 0) T.d = CreateUnitHPR('uel0105', 'ARMY_1', 3, 0, 500, 0, 0, 0) LOG('faf3840: game version ', tostring(GetVersion()), ' platform ', T.p:GetEntityId(), ' aircraft ', T.c:GetEntityId())
+6 lua local T = ScenarioInfo.F3840 T.a:GetAIBrain():GiveResource('MASS', 5000) T.a:GetAIBrain():GiveResource('ENERGY', 50000) T.pw = CreateUnitHPR('ueb1301', 'ARMY_1', 700, 0, 260, 0, 0, 0) T.pw2 = CreateUnitHPR('ueb1301', 'ARMY_1', 720, 0, 260, 0, 0, 0)
+30 lua local T = ScenarioInfo.F3840 IssueMove({T.c}, {660, 0, 420})
+40 lua local T = ScenarioInfo.F3840 T.a:DisableShield() local s = T.a.MyShield LOG('faf3840: A shield entity ', tostring(s ~= nil), ' on ', tostring(T.a:ShieldIsOn()))
+41 lua local T = ScenarioInfo.F3840 local s = T.a.MyShield if s then s:SetHealth(s, s:GetMaxHealth() * 0.5) end T.a:SetHealth(T.a, T.a:GetMaxHealth() * 0.5) local sb = T.b.MyShield if sb then sb:SetHealth(sb, sb:GetMaxHealth() * 0.3) end T.b:SetHealth(T.b, T.b:GetMaxHealth() * 0.9) IssueRepair({T.ea}, T.a)
+42 lua local T = ScenarioInfo.F3840 ForkThread(function() local la, lb for i = 1, 350 do local s = T.a.MyShield local sb = T.b.MyShield local h = s and s:GetHealth() or -1 local hb = sb and sb:GetHealth() or -1 LOG(string.format('faf3840: tick %d A shield %.4f unit %.2f on %s | B shield %.4f +%.4f consumed %.4f on %s | C health %.1f max %.1f attached %s', GetGameTick(), h, T.a:GetHealth(), tostring(T.a:ShieldIsOn()), hb, lb and hb - lb or 0, T.eb:GetResourceConsumed(), tostring(T.b:ShieldIsOn()), T.c:GetHealth(), T.c:GetMaxHealth(), tostring(T.c:IsUnitState('Attached')))) la = h lb = hb WaitTicks(1) end end)
+60 issue 39 6 @5
+60 lua local T = ScenarioInfo.F3840 T.c:SetHealth(T.c, T.c:GetMaxHealth() * 0.9) ForkThread(function() local done = false for i = 1, 340 do local a = T.c:IsUnitState('Attached') if a and not done then done = true T.c:SetMaxHealth(T.c:GetHealth() * 0.5) LOG(string.format('faf3840: tick %d C attached: max health now %.1f, health %.1f', GetGameTick(), T.c:GetMaxHealth(), T.c:GetHealth())) end if not done and math.mod(i, 10) == 0 then local c = T.c:GetCommandQueue() LOG(string.format('faf3840: tick %d C waiting: refueling %s queue %d layer %s', GetGameTick(), tostring(T.c:IsUnitState('Refueling')), table.getn(c or {}), T.c:GetCurrentLayer())) end if done then LOG(string.format('faf3840: tick %d C attached %s refueling %s health %.1f max %.1f', GetGameTick(), tostring(a), tostring(T.c:IsUnitState('Refueling')), T.c:GetHealth(), T.c:GetMaxHealth())) end if done and not a then break end WaitTicks(1) end end)
+100 lua local T = ScenarioInfo.F3840 local p = T.d:CreateProjectile('/projectiles/TDFGauss01/TDFGauss01_proj.bp', 0, 1, 0, -1, 0, 0) p:SetVelocity(-20, 2, 0) p:SetCollideSurface(false) p:SetLifetime(20) p.OnImpact = function(self, kind, other) local r = self:GetPosition() LOG(string.format('faf3840: tick %d D impact %s at %.2f %.2f %.2f', GetGameTick(), tostring(kind), r[1], r[2], r[3])) self:Destroy() end ForkThread(function() for i = 1, 40 do if p:BeenDestroyed() then break end local r = p:GetPosition() LOG(string.format('faf3840: tick %d D shell at %.2f %.2f %.2f', GetGameTick(), r[1], r[2], r[3])) WaitTicks(1) end end)
+118 lua local T = ScenarioInfo.F3840 IssueClearCommands({T.ea})
+120 lua local T = ScenarioInfo.F3840 IssueRepair({T.eb}, T.b) local br = T.b:GetAIBrain() br:TakeResource('MASS', br:GetEconomyStored('MASS'))

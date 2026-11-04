@@ -378,6 +378,8 @@ const UnitBpData& GetUnitBpData(lua_State* L, const BlueprintInfo& bp) {
   PushField(L, t, "Defense");
   d.regenRate = GetNum(L, lua_gettop(L), "RegenRate", 0);
   d.maxHealth = GetNum(L, lua_gettop(L), "MaxHealth", 1);
+  PushField(L, lua_gettop(L), "Shield");
+  d.regenAssistMult = GetNum(L, lua_gettop(L), "RegenAssistMult", 1);
   lua_settop(L, t);
   PushField(L, t, "Physics");
   int ph = lua_gettop(L);
@@ -391,6 +393,8 @@ const UnitBpData& GetUnitBpData(lua_State* L, const BlueprintInfo& bp) {
   d.structure = !lua_isstring(L, -1) || std::string(lua_tostring(L, -1)) == "RULEUMT_None";
   lua_pop(L, 1);
   d.maxGroundVariation = GetNum(L, ph, "MaxGroundVariation", 1);
+  d.bpFuelUseTime = GetNum(L, ph, "FuelUseTime", 0);
+  d.bpFuelRechargeRate = GetNum(L, ph, "FuelRechargeRate", 0);
   d.flattenSkirt = GetBool(L, ph, "FlattenSkirt");
   d.skirtOffsetX = GetNum(L, ph, "SkirtOffsetX", 0);
   d.skirtOffsetZ = GetNum(L, ph, "SkirtOffsetZ", 0);

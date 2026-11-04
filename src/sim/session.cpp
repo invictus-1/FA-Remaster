@@ -177,7 +177,7 @@ bool SessionFromGameConfig(lua_State* L, int config, const LaunchParams& params,
   if (!lua_istable(L, config)) return fail("the game configuration is not a table");
   *out = SessionDescription{};
   ReplayHeader& h = out->header;
-  h.version = "Supreme Commander v1.50.3839";
+  h.version = GameVersionLine(NewGameVersion());  // (replay.h: the switch for new games)
   h.replayVersion = "Replay v1.9";
   h.seed = params.seed;
 
@@ -389,7 +389,7 @@ bool SessionFromSinglePlayerInfo(lua_State* L, int info, const SinglePlayerParam
   if (!lua_istable(L, info)) return fail("the session info is not a table");
   *out = SessionDescription{};
   ReplayHeader& h = out->header;
-  h.version = "Supreme Commander v1.50.3839";
+  h.version = GameVersionLine(NewGameVersion());  // (replay.h: the switch for new games)
   h.replayVersion = "Replay v1.9";
   // WLD_SetupSessionInfo 0x88cbc0: a new LaunchInfoNew; its focus army (+0x68) 0 (0x88cc2e) and its cheats (+0x88)
   // the debug preference (0x88cc36).

@@ -1285,6 +1285,7 @@ bool Sim::Start(const ReplayHeader& replay) {
   // Sim Lua state
   MOHO_LAP(load, "load: sim Lua state and bindings");
   state_ = std::make_unique<ScriptState>(ScriptState::Kind::Sim, vfs_);
+  state_->gameVersion = gameVersion;  // (GetVersion: the session's, Start(SessionDescription))
   lua_State* L = state_->L();
   // The collector (third_party/lua/lgcinc.c, gc_design.md). With the fixes the incremental one: stepped only at the
   // beat's end, by object counts, so its moments are the same on every machine and a collection never stops a beat
@@ -1468,6 +1469,18 @@ bool Sim::Start(const SessionDescription& session) {
     if (egrid_) egrid_->SetCanonical(order == SimOrder::kParallel);  // (before any entity is placed: Start(header))
     orderVersion = want ? kSimOrderVersion : 0;
     Logf(LogLevel::Info, "moho64: the beat's order: %s", want ? "parallel (docs/parallel-mode.md)" : "the original's");
+  }
+  // The game version's rules (replay.h; engine-ref/specs/faf3840.md): the header's, as the original's replay player
+  // accepts only its own (VCR_SetupReplaySession 0x876665 compares the file's version with the exe's)
+  {
+    const int asked = HeaderGameVersion(session.header.version);
+    int v = asked >= kGameVersion3840 ? kGameVersion3840 : kGameVersion3839;
+    if (const char* o = getenv("MOHO64_GAME_VERSION"); o && *o) v = std::atoi(o) >= kGameVersion3840 ? kGameVersion3840 : kGameVersion3839;
+    else if (asked != kGameVersion3839 && asked != kGameVersion3840)
+      Logf(LogLevel::Warning, "moho64: the game version %d (\"%s\") is not one this engine knows: it plays by %d's rules",
+           asked, session.header.version.c_str(), v);
+    gameVersion = v;
+    Logf(LogLevel::Info, "moho64: the game version's rules: %d", gameVersion);
   }
   // The multicore switches' default, now that the fixes are known (ParDefault); one given in the environment stays as
   // it was read. (The intel stages' switches are settled at their first use in a beat, per sim: sim/intel.cpp.)

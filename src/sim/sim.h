@@ -645,6 +645,12 @@ class Sim {
   int orderVersion = 0;
   static constexpr int kSimOrderVersion = 1;
   bool ParallelOrder() const { return order == SimOrder::kParallel; }
+  // The FAF game version whose rules the session plays by (replay.h kGameVersion3839 / 3840; engine-ref/specs/
+  // faf3840.md), decided by Start(SessionDescription) from the header's version line: a replay plays by its own
+  // version's rules, a new game by the one its header was made with (replay.h kNewGameVersion). A version this
+  // engine does not know plays by the nearest one it knows. MOHO64_GAME_VERSION=3839 | 3840 overrides it.
+  int gameVersion = 3839;
+  bool Rules3840() const { return gameVersion >= 3840; }
   // The session's mod list as the lobby sent it (a replay's serialized mods): becomes
   // __active_mods in the rules and sim states. Empty: built from the mod uids instead.
   std::string sessionMods;

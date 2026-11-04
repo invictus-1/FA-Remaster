@@ -418,6 +418,8 @@ void SetScriptFieldNumber(lua_State* L, ScriptObject* o, const char* key, float 
 namespace {
 
 void SetFocus(Sim& sim, lua_State* L, Unit* builder, Unit* target, BuildTask& t);
+bool ScriptBool(Sim& sim, Unit* u, const char* method);
+bool Cat(Sim& sim, const Unit* u, const char* c);
 
 // OnStopBuild(success): the builder's OnStopBuild(target, order) (and on failure OnFailedToBuild /
 // the target's OnFailedToBeBuilt first); the builder loses its focus.
@@ -510,13 +512,69 @@ bool UpdateWorkProgress(Sim& sim, lua_State* L, Unit* builder, BuildTask& t) {
   float delta = 0;
   if (rate != 0.0f && td.buildTime > 0.0f && builder->buildRate > 0.0f)
     delta = 1.0f / (td.buildTime / builder->buildRate) * rate * 0.1f;
+  // the target's shield and fuel (0x5f5f5e..0x5f6179), only when the builder's request was granted something
+  // (0x5f5f14: else straight to Materialize(0)). damaged: the target's health below its maximum (0x5f5f7b).
+  Entity* shield = nullptr;  // (Unit::GetFocusEntity 0x585b10: the unit's shield points the focus at itself)
+  if (rate != 0.0f) {
+    const bool damaged = target->maxHealth > target->health;
+    bool repairShield = false;
+    if (Cat(sim, target, "SHIELD") && (shield = target->focusId ? sim.FindEntity(target->focusId) : nullptr)) {
+      // which shields are repaired (0x5f5fef). 3839: any, as long as the unit is damaged or its shield is on; an
+      // undamaged unit with its shield off is done at once (0x5f600f -> 0x5f5c4d: true, no Materialize). FAF 3840
+      // (changelog: disabled shields are no longer repaired when their owner is): only one that is on; an undamaged
+      // unit with it off is done at once, a damaged one has its health repaired and nothing else.
+      // (the script is asked only where the original asks it: 3839 only for an undamaged unit, 3840 first)
+      if (sim.Rules3840()) {
+        repairShield = ScriptBool(sim, target, "ShieldIsOn");
+        if (!repairShield && !damaged) return true;
+      } else {
+        if (!damaged && !ScriptBool(sim, target, "ShieldIsOn")) return true;
+        repairShield = true;
+      }
+    }
+    if (repairShield && shield->maxHealth > shield->health) {
+      // RegenRate (the shield's own Lua field, 0x5fca70) x 0.1 x the builder's BuildRate / the target's
+      // RegenAssistMult, which a damaged unit doubles while halving its health share (0x5f6091..0x5f60a7); nothing
+      // for a RegenAssistMult of 0 (0x5f608b). FAF 3840 (hook 0x5f60ad -> .exxt+0x4b5c; changelog: shield repair
+      // respects resource stalls) also times it by what the builder's request was granted (builder+0x53c), as the
+      // health share is.
+      const float regen = ScriptFieldNumber(L, shield, "RegenRate") * 0.1f;
+      float k = td.regenAssistMult;
+      if (k != 0.0f) {
+        if (damaged) {
+          delta = delta * 0.5f;
+          k = k * 2.0f;
+        }
+        float amount = regen * builder->buildRate;
+        if (sim.Rules3840()) amount = amount * rate;
+        EntityAdjustHealth(L, shield, nullptr, amount / k);  // (vt+0x78, instigator none)
+      }
+    }
+    // fuel (0x5f60d4..0x5f6171): a blueprint with a FuelUseTime refuels by FuelRechargeRate / FuelUseTime x 0.1 a
+    // beat, capped at full; a damaged unit gets half of that and half of its health share
+    if (td.bpFuelUseTime > 0.0f && 1.0f > target->fuelRatio) {
+      float add = td.bpFuelRechargeRate / td.bpFuelUseTime * 0.1f;
+      if (damaged) {
+        delta = delta * 0.5f;
+        add = add * 0.5f;
+      }
+      add = add + target->fuelRatio;
+      target->fuelRatio = add > 1.0f ? 1.0f : add;
+    }
+  }
   const bool wasAlive = Alive(target);
   Materialize(sim, L, target, delta);
   if (wasAlive && !Alive(target)) return true;
   if (t.order == "Repair" && !target->beingBuilt) {
     float f = target->maxHealth > 0 ? target->health / target->maxHealth : 1.0f;
     builder->workProgress = f;
-    return f == 1.0f;
+    if (f != 1.0f) return false;
+    // whole: done once its fuel is full too (a blueprint with a FuelUseTime, 0x5f623f), else once its shield is
+    // (SHIELD with a focus entity, 0x5f627b..0x5f631b)
+    if (td.bpFuelUseTime > 0.0f) return target->fuelRatio == 1.0f;
+    if (Cat(sim, target, "SHIELD"))
+      if (Entity* s = target->focusId ? sim.FindEntity(target->focusId) : nullptr) return s->health == s->maxHealth;
+    return true;
   }
   float f = target->fractionComplete, old = t.lastFraction;
   for (float q : {0.25f, 0.5f, 0.75f})

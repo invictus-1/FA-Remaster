@@ -25,6 +25,9 @@ bool DecodeColor(const char* text, uint32_t* argb);
 class ScriptState {
  public:
   int vectorMetaRef = -2;  // LUA_NOREF until first use (core_bindings.cpp)
+  // The FAF game version GetVersion() names (core_bindings.cpp): the sim state's is its session's (Sim::gameVersion,
+  // set by Sim::Start); every other state's the build the lab was read from.
+  int gameVersion = 3839;
   enum class Kind { Init, Rules, Sim, User };
 
   ScriptState(Kind kind, Vfs* vfs);

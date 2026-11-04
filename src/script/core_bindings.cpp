@@ -421,8 +421,13 @@ int l_STR_GetTokens(lua_State* L) {
   return 1;
 }
 
+// GetVersion() -> "1.5.<game version>": Moho::GetEngineVersion 0x4d3d30, "%1.1f.%i" of 1.5 (0xe4f820) and the build
+// (0xeff in FAF 3839, 0xf00 in 3840: 0x4d3d3f). (Was "1.5.3599", the stock game's.)
 int l_GetVersion(lua_State* L) {
-  lua_pushstring(L, "1.5.3599");
+  const ScriptState* st = ScriptState::From(L);
+  char buf[32];
+  snprintf(buf, sizeof buf, "1.5.%d", st ? st->gameVersion : 3839);
+  lua_pushstring(L, buf);
   return 1;
 }
 

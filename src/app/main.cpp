@@ -1358,6 +1358,9 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
          stream.beats(), paused, stream.hadError() ? ", with errors" : "");
   for (auto& [what, n] : stream.unhandled())
     Logf(LogLevel::Warning, "moho64: command stream: %s not carried out (x%d)", what.c_str(), n);
+  if (stream.dropped())  // (the replay's client, by the game version's rules: sim/command_stream.cpp)
+    Logf(LogLevel::Info, "moho64: command stream: %u messages not passed on by the replay's client (game version %d)",
+         stream.dropped(), sim.gameVersion);
 #ifdef MOHO64_CALLGRIND
   CALLGRIND_STOP_INSTRUMENTATION;
 #endif

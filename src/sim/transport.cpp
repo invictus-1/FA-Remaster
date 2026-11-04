@@ -2122,6 +2122,15 @@ void RefuelForceSpeedThrough(Unit* u) {
   AirSetSpeedThroughGoal(u, true);  // (only aircraft refuel)
 }
 
+// The refuel task's "full" (CUnitRefuel::Execute: at a carrier 0x6217e9, at a platform 0x621de2): fuel above 0.99 and
+// the health at its maximum. 3839 asks for health == maximum (lahf / jp: not equal waits), so an aircraft whose
+// health is above its maximum (SetMaxHealth below it; FAF's Restoration Field) never leaves; FAF 3840 asks for health
+// not below it (jb, 0x6217f8 / 0x621df1; changelog: aircraft never undocking when stored health is above max).
+bool RefuelDone(const Sim& sim, const Unit* u) {
+  if (!(u->fuelRatio > 0.99f)) return false;
+  return sim.Rules3840() ? u->health >= u->maxHealth : u->health == u->maxHealth;
+}
+
 // CUnitRefuel at a carrier (carriers.md 5): stored by a CarrierLand child, released when full
 int TickRefuelCarrier(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d, Unit* C) {
   TransportObj& T = *C->transport;
@@ -2149,7 +2158,7 @@ int TickRefuelCarrier(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d, Uni
         return kTaskRunning;
       case 1:
         if (!State(u, US("Attached"))) return kTaskDone;
-        if (u->fuelRatio > 0.99f && u->health == u->maxHealth) {
+        if (RefuelDone(sim, u)) {
           Vec3 pos;
           Quat q;
           RemoveFromStorage(sim, T, u, &pos, &q);
@@ -2241,7 +2250,7 @@ int TickRefuel(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
         return kTaskRunning;
       }
       case 3:  // docked: wait for full fuel and health
-        if (u->fuelRatio > 0.99f && u->health == u->maxHealth) {
+        if (RefuelDone(sim, u)) {
           TransportDetach(sim, O, u);
           AirSetGoal(sim, u, u->position, sim.tick(), 0x10);
           d.childMove = true;  // the move task sets Moving

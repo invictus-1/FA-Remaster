@@ -51,4 +51,22 @@ bool ScenarioMarksFixes(const std::string& scenario);
 // or anything else (every recording of the original, every FAF replay). *version: the version, 0 when missing.
 int ScenarioSimOrder(const std::string& scenario, int* version);
 
+// The FAF game version a session plays by (engine-ref/specs/faf3840.md): the number at the end of the header's
+// version line, "Supreme Commander v1.50.3839" -> 3839 (VCR_CreateReplay 0x876190 writes the exe's own, 0x87612c;
+// FAF 3840's exe is the same build with 0xf00 there). This engine knows the rules of two: 3839 (everything was read
+// from it) and 3840 (a hotfix of the exe only: repairs of shields, aircraft leaving a platform, shells under the map,
+// the replay client's command sources). Sim::gameVersion keeps the one a session plays by.
+constexpr int kGameVersion3839 = 3839, kGameVersion3840 = 3840;
+// The version a NEW game is made with, written into its header (SessionFromGameConfig / SessionFromSinglePlayerInfo)
+// so that its replay plays by the same rules. The single switch for new games: 3840 (Chris, 2026-11-04: its changes
+// are all repairs). MOHO64_GAME_VERSION=3839 | 3840 overrides it (and, in Sim::Start, the version of any session, a
+// replay's too: for tests).
+constexpr int kNewGameVersion = kGameVersion3840;
+// The number at the end of a header's version line; 0 when it has none.
+int HeaderGameVersion(const std::string& versionLine);
+// The version line of a header made by this engine for a game of `version`.
+std::string GameVersionLine(int version);
+// kNewGameVersion, or MOHO64_GAME_VERSION when it names a version.
+int NewGameVersion();
+
 }  // namespace moho

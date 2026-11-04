@@ -1,5 +1,6 @@
 #include "sim/replay.h"
 
+#include <cstdlib>
 #include <cstring>
 
 namespace moho {
@@ -134,6 +135,25 @@ int ScenarioSimOrder(const std::string& scenario, int* version) {
   }
   lua_close(L);
   return order;
+}
+
+int HeaderGameVersion(const std::string& versionLine) {
+  size_t e = versionLine.size();
+  while (e > 0 && (versionLine[e - 1] == ' ' || versionLine[e - 1] == '\r' || versionLine[e - 1] == '\n')) --e;
+  size_t b = e;
+  while (b > 0 && versionLine[b - 1] >= '0' && versionLine[b - 1] <= '9') --b;
+  if (b == e || e - b > 6) return 0;
+  return std::atoi(versionLine.substr(b, e - b).c_str());
+}
+
+std::string GameVersionLine(int version) { return "Supreme Commander v1.50." + std::to_string(version); }
+
+int NewGameVersion() {
+  if (const char* v = getenv("MOHO64_GAME_VERSION"); v && *v) {
+    const int n = std::atoi(v);
+    if (n == kGameVersion3839 || n == kGameVersion3840) return n;
+  }
+  return kNewGameVersion;
 }
 
 std::optional<ReplayHeader> ReadReplayHeader(const std::string& data, std::string* error) {

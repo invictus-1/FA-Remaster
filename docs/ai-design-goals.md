@@ -250,3 +250,28 @@ the duels showed. The duels are 1v1 on SETONS_R against FAF's adaptive AI and M2
     its work keeps within 60 world units of the start. The duels lasted about as long: it now dies inside its base
     to gunships, or at its refuge from ships off the coast (the base zone they reach least, up to 200 out) - that
     refuge is the next thing to fix; anti-air at the base alone did not change the gunships' toll.
+31. **Build orders, then expansion and adapting (Chris, 2026-11-04).** Every player and M28 play a build order, so
+    the first 2-3 minutes are mostly the same for everyone; the difference is how a player adapts after that. The
+    extra engineers' job is mass expansion from the start. With allies present, the AI does not build in its allies'
+    bases; with no ally near, it expands and explores as much as it can while it fights, into every part of the map and
+    every domain (land, navy, air). The opening becomes a book (the pros' first minutes per faction and map size, from
+    high-level FAF replays; M28's and Seton's replays' first orders until then), and the expansion engineers claim the
+    nearest free mass points outside allied start areas in waves along safe paths, with the army's front covering
+    the expansion zone.
+32. **What does not decide the duels against M28 (aicore3's rounds 2-4, 2026-11-04).** Each was probed, changed and
+    judged (8 M28 recruit duels, 2 FAF veteran), and none moved the result beyond the spread, so the cause lies
+    elsewhere:
+    - **the commander's refuge from ships:** moving it inside the base and out of the known ships' reach only moved
+      its death from 28-165 world units from the start to 0-47 - the base itself falls at minutes 19-28;
+    - **seeing the artillery:** radar over the economy zones and a scout to hits by the unseen; half the artillery
+      that killed our mass was already known on radar, and acting on "outranged and shelled" found almost no fight
+      we could take (the hold-backs' margins were 0-0.1, the overall ratio about 0.13);
+    - **the engineer count:** engineers by income (62 at minute 15) or free of the army's floor (104) did not raise
+      the extractors held: 35-36 at minute 15 and 17-20 at minute 20 in every form, against M28's 62.
+    The mass point probe (98 points our land units reach on SETONS_R) shows the race even until minute 10 (we led 29
+    to 19 at minute 6 and 46 to 36 at minute 9; 44 to 48 at minute 10 over the judge set), then M28 takes the last
+    free points and our extractors fall to its raids. A fight bench (scripted army against army at equal mass, both
+    sides human, no AI) found our counter-picks winning against M28-like mixes holding their ground: our T2 missile
+    launchers lost 0.0-0.6 of what they killed against T2 bots, T1/T2 artillery and mobile shields, the AI's T2 mix
+    0.2-0.6, T1 tanks 0.8-1.6. So what loses the duels is how and where the army fights, not what it builds.
+

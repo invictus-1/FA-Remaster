@@ -277,6 +277,9 @@ bool CommandStream::ApplyUntilAdvance(Sim& sim) {
       if (payload.size() >= 4) memcpy(&n, payload.data(), 4);
       beats_ += n;
       if (n != 1) Logf(LogLevel::Warning, "command stream: Advance(%u) (only 1 is played as one beat)", n);
+      // the next UpdateState (the next beat's messages) starts passing on as long as the client has a source
+      // (0x53c584..0x53c598)
+      forward_ = clientSource_ != 0xff;
       return true;
     }
     if (type > 23) {
@@ -284,9 +287,53 @@ bool CommandStream::ApplyUntilAdvance(Sim& sim) {
       error_ = true;
       continue;
     }
+    if (sim.isReplay && !ReplayClientPasses(sim, type, payload)) continue;
     Apply(sim, type, payload);
   }
   return false;
+}
+
+// CClientBase::UpdateState 0x53c550 for the replay's one client (a live game's own orders, ApplyCommands, come from
+// this engine's clients: sim/lockstep.cpp). A SetCommandSource of a source the client may name becomes its source and
+// is passed on (0x53c705..0x53c714); one of any other source (one that was terminated, or 0xff) is not, and leaves the
+// client without a source (0x53c733..0x53c7d0). Every other message is passed on only while the beat's pass-on flag
+// is set (0x53c756); a CommandSourceTerminated, passed on, then takes the source out of the client's set and clears
+// the flag (0x53c787..0x53c7d0). The flag is set at the beat's start when the client has a source, and:
+// - 3839: only there. A SetCommandSource that gives a client without one a source does not set it, so the rest of
+//   that beat is dropped: in every replay what comes before the first Advance (its VerifyChecksum, Resume, the
+//   commander's CustomName), and after a player's CommandSourceTerminated everything the other players ordered in
+//   that beat (FAF 3840's changelog: replay desyncs after a player died). The original's replay player did that, so
+//   a recording of the original is played with it.
+// - 3840: also by every such SetCommandSource (0x53c71e: esp+0x16 = 1, then the loop's end 0x53c7d7).
+// With Sim::fixes (a game this engine played: its live orders never went through such a merge) 3839 is played as
+// 3840 (docs/deviations.md 11).
+bool CommandStream::ReplayClientPasses(Sim& sim, int type, const std::string& payload) {
+  if (clientGone_.size() != sim.cmdSources.size()) clientGone_.assign(sim.cmdSources.size(), false);
+  if (type == 1) {
+    const int s = payload.empty() ? 0xff : static_cast<uint8_t>(payload[0]);
+    if (s < static_cast<int>(clientGone_.size()) && !clientGone_[s]) {
+      clientSource_ = s;
+      if (sim.Rules3840() || sim.fixes) forward_ = true;
+      return true;
+    }
+    Logf(LogLevel::Warning, "command stream: the replay's client claims command source %d, but is not authorized for "
+         "it (tick %u): its orders are dropped until it names one it may", s, sim.tick());
+    clientSource_ = 0xff;
+    forward_ = false;
+    return false;
+  }
+  if (!forward_) {
+    ++dropped_;
+    Logf(LogLevel::Debug, "command stream: %s not passed on by the replay's client (tick %u, source %d)",
+         type < 24 ? kMsgNames[type] : "?", sim.tick(), clientSource_);
+    return false;
+  }
+  if (type == 2) {
+    if (clientSource_ < static_cast<int>(clientGone_.size())) clientGone_[clientSource_] = true;
+    clientSource_ = 0xff;
+    forward_ = false;
+  }
+  return true;
 }
 
 void CommandStream::Apply(Sim& sim, int type, const std::string& payload) {

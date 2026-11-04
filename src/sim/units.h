@@ -78,6 +78,10 @@ struct UnitBpData {
   float maxBuildDistance = 0;
   float sacrificeMult[2] = {0, 0};  // Economy.SacrificeEnergyMult (bp+0x560), SacrificeMassMult (bp+0x55c)
   float regenRate = 0, maxHealth = 1;
+  // what a builder's repair reads of the target's blueprint itself (UpdateWorkProgress 0x5f5c26, not the unit's
+  // own copies, which scripts may change): Physics.FuelUseTime (bp+0x304), FuelRechargeRate (bp+0x308) and
+  // Defense.Shield.RegenAssistMult (bp+0x45c; the engine's default 1)
+  float bpFuelUseTime = 0, bpFuelRechargeRate = 0, regenAssistMult = 1;
   bool initialAutoMode = false;  // AI.InitialAutoMode (bp+0x48d)
   float sizeX = 1, sizeY = 1, sizeZ = 1, collisionOffsetY = 0;
   float collisionOffsetX = 0, collisionOffsetZ = 0;

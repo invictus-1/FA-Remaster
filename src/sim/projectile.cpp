@@ -828,7 +828,11 @@ void MotionTick(Sim& sim, Projectile* p) {
   // 0x69be40: the drawn size grows by the scale velocity, in drawn-size units per second ([0xe4f714] = 0.1)
   p->drawSize = {p->drawSize.x + p->scaleVel.x * 0.1f, p->drawSize.y + p->scaleVel.y * 0.1f,
                  p->drawSize.z + p->scaleVel.z * 0.1f};
-  if (p->hitFraction >= 0) {
+  // FAF 3840 (hook 0x69bdda -> .exxt+0x4b3c, before the hit test; changelog: particles landing outside of the map
+  // impact at height 0): a shell whose place (the committed transform's y, entity+0xb0) is below 0 impacts as one
+  // with a hit does, with whatever hit it holds (none: the type it was made with, "Air", and no entity). Only off the
+  // map can it get there (the terrain sweep stops it on the map); in 3839 it falls on until its lifetime ends.
+  if (p->hitFraction >= 0 || (sim.Rules3840() && p->position.y < 0.0f)) {
     // no movement this tick, so the entity is not on the moved list and its previous coords stay those of
     // the hit tick's AdvanceCoords: OnImpact's GetVelocity is the last step to the hit point (projectile.md 3.1,
     // 3.5 GetVelocity). (Was prevPos = position: speed 0, and the Salvation's fragment math divided by it.)

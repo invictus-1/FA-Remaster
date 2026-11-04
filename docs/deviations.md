@@ -307,6 +307,20 @@ says `the rules are loaded again with the engine's script fixes`, about one seco
   - The hook loads ("Hooked /lua/ai/gridreclaim.lua") with no new error. The session logs FAF's own
     `gridpresence.lua(168)` error twice, with and without the fixes alike.
 
+### 11. The replay client's dropped orders (2026-11-04)
+
+- **What is broken:** in FAF 3839 the replay's one client (`CClientBase::UpdateState` 0x53c550) passes a beat's
+  messages on only while a flag is set, and only the beat's start sets it; a `SetCommandSource` that gives the
+  client a source again does not. So a replay loses whatever comes before its first Advance, and after a player's
+  `CommandSourceTerminated` everything the other players ordered in that beat (FAF 3840 repaired it: "replay
+  desyncs after a player died"). A live game never lost those orders: each player's client is merged on its own.
+- **What we do:** the replay of a game the original played (no fixes) is played with the drop, by its version's
+  rules (`CommandStream::ReplayClientPasses`, engine-ref/specs/faf3840.md 2.1). The replay of a game this engine
+  played (its mark turns the fixes on) is played as 3840 plays it, whatever its version: its live orders never went
+  through such a merge, so dropping them would make its replay differ from the game.
+- **Why it is safe, what it changes:** only replays of this engine's own 3839 games, and only in a beat where a player
+  was terminated (or before the first Advance). Nothing else of the stream is touched.
+
 ## Looked broken, left alone
 
 ### The other weak tables of the sim's scripts (2026-10-21, with 7-10)
