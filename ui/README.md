@@ -98,8 +98,17 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   (the engine's rule); what is asked every frame answers from copies taken between beats instead
   (the ground's heights, the economy, focus army, tick, armies, a unit's state until the next
   sync, the hover info, the cursor's order, the picture's scene), so in busy games almost nothing
-  waits (`MOHO64UI_BEAT_LOG=1` names each wait and the engine function it came from). Orders,
-  sounds and sync come after the beat. Since 2026-10-28 (the late game's held frames at 4K, `docs/ui-benchmarks.md`)
+  waits (`MOHO64UI_BEAT_LOG=1` names each wait and the engine function it came from). Since 2026-11-03 (Chris's
+  95-minute game: GetRolloverInfo, GetUnitCommandData, IssueBlueprintCommand, ToggleScriptBit, IsAlly,
+  SessionIsGameOver ... each held a frame for a whole late beat) the copies are made at each sync for what those ask:
+  every unit's recon bits, the focus army's and the builders' restricted blueprints, the game-over and pause flags,
+  the command sources, and a unit's state for every new unit, every unit asked lately, the selection and a round of
+  300 others (`RefreshUnitCopies`); orders, toggles, callbacks and queue edits read only those copies before their
+  messages go into this client's command stream. Still waiting (for the engine): a building's placement test (`BuildSiteOf`)
+  and the reclaim cursor's props (`ReclaimableAt`); the focus-army request is the simulation's queued slot, written
+  without waiting (`SetFocusArmy`, the debug Alt-click). Test: `ui/tests/nowait.lua`
+  (`moho64ui_PretendBeat(on)`: a headless run behaves as if a beat ran between syncs and counts every look at the
+  simulation; `moho64ui_PretendBeat(false)` gives the places). Orders, sounds and sync come after the beat. Since 2026-10-28 (the late game's held frames at 4K, `docs/ui-benchmarks.md`)
   the beat's sounds are decided on the beats' thread too (what to play, which running sounds start, stop or follow
   their units: read from the simulation; the window's thread only plays them), its sync still goes to the scripts
   before the next beat begins (given while it ran, the scripts' handlers waited on it: 3.7 -> 66.9 ms a beat late;
@@ -236,6 +245,13 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   and health changes for the picture: `Sim::collectHits` and its two kin, with the picture only). Cinematic Lens
   Blur (`remaster_lens`, World::lens, off by default): a real lens's depth of field, only while the replay's
   cinematic camera shows, its blur going as the picture eases back.
+  The renderer's looks from Chris's big test (2026-11-01), each on by default with the earlier look as Off, in no
+  preset level, set on the world each frame (`WorldLooks`; `LookSettings` names the fields): Ocean Glitter
+  (`remaster_ocean_glitter`), Shore Soak (`remaster_shore_soak`), Shield Bending (`remaster_shield_bend`: Off,
+  Subtle by default, Full = the look of 2026-10-28), Unit Glow at Night (`remaster_unit_glow`, a slider 0..100,
+  75 by default; 100 = the glow before the big test), Sharpen (`remaster_sharpen`, a slider, 50), Remastered
+  Gateway (`remaster_gateway`), Ghost Look (`remaster_ghost_look`), Guide over Grass (`remaster_guide`), Cloak
+  Look (`remaster_cloak_look`) and Stealth Veil (`remaster_stealth_veil`).
   The Remastered Preset (`remaster_preset`; Chris, 2026-10-17) sets the new looks together, as the game's
   Fidelity Presets set its own: Off (the original game's look whole), Low, Medium, High, Ultra (Ray Tracing
   where the card can), Custom (by default: each as it is). Each look can still be changed after. The levels

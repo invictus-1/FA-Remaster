@@ -62,3 +62,17 @@ table.insert(globalOpts, 4, {
         { text = "Machinery", help = "The frame of machinery round the map, as in the original game", key = 'frame' },
     },
 })
+
+-- The simulation's order (Chris, 2026-10-31, multicore option 2): new games in our own order, made to run on many
+-- cores and as exact as the original's; the original's order for its own replays (they play in the order they were
+-- recorded in, whatever this says). The program adds the order's version at the launch (ui/app/game_session.cpp).
+table.insert(globalOpts, {
+    default = 1,
+    label = "Simulation Order",
+    help = "How the game works out each moment. Both give the same game on every player's machine",
+    key = 'RemasterSimOrder',
+    values = {
+        { text = "Remastered", help = "FA Remastered's own order, made to use many processor cores (new games)", key = 'parallel' },
+        { text = "Original", help = "The original game's order, one core at a time", key = 'original' },
+    },
+})

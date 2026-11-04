@@ -23,6 +23,9 @@ if not rawget(_G, "SessionIsActive") or not SessionIsActive() then
     if not ok then LOG("TEST note: " .. tostring(err)) end
     check("LaunchSinglePlayerSession starts it", ok, true)
     check("the scenario's Options name its file", info.scenarioInfo.Options.ScenarioFile, file)
+    -- a new operation is a new game: our own order unless Options > Gameplay chose the original's (LaunchSinglePlayer)
+    check("a new operation is made in our own order", info.scenarioInfo.Options.RemasterSimOrder, "parallel")
+    check("with the order's version", info.scenarioInfo.Options.RemasterSimOrderVersion, 1)
     local again, why = pcall(LaunchSinglePlayerSession, info)
     check("a second launch while it runs is an error", again, false)
     LOG("TEST note: " .. tostring(why))
@@ -57,6 +60,8 @@ else
         local scenario = SessionGetScenarioInfo()
         check("a campaign's scenario", scenario.type, "campaign")
         check("its difficulty", scenario.Options.Difficulty, 2)
+        check("its order, as the launch gave it", tostring(scenario.Options.RemasterSimOrder) .. " " ..
+            tostring(scenario.Options.RemasterSimOrderVersion), "parallel 1")
         check("the campaign's own information comes along", scenario.campaignInfo and scenario.campaignInfo.opKey, "X1CA_001")
         WaitSeconds(6)
         LOG("TEST note: the playable area " .. tostring(scenario.PlayableAreaWidth) .. " x " .. tostring(scenario.PlayableAreaHeight)

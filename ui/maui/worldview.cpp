@@ -1213,6 +1213,7 @@ class WorldView : public Control {
         }
       }
     }
+    for (WorldGhost& g : scene.ghosts) g.placing = true;  // (all of them under the cursor, before the ordered sites)
     placingGhosts_ = scene.ghosts;  // (the building about to be placed, for the extractor snap)
     // Round each building being placed, the outline of the ground it takes: green where it can
     // stand, red where not (the guide of the original, by Chris's pictures of it).
@@ -1759,8 +1760,9 @@ class WorldView : public Control {
         // Would either click there give an Attack (0x87071e, 0x87073b: their actions' +4 is RULEUCC_Attack)? The left
         // in the mode "order" with Attack its order (with a focus army, 0x81f899); the right with no command mode
         // (else its action is the mode's end, 0x81ed4e), by what is under the cursor.
-        Sim* sim = UserState::From(L)->LiveSim("the waypoint's tip");
-        const bool left = order && name == "RULEUCC_Attack" && sim && sim->focusArmy >= 0;
+        UserState* user = UserState::From(L);  // (the focus army from the beat's copy once there is one)
+        const bool left = order && name == "RULEUCC_Attack" && user->HasSim() &&
+                          (user->economyCopied ? user->focusArmyCopy : user->LiveSim("the waypoint's tip")->focusArmy) >= 0;
         const bool right = mode.empty() && RightClickOrder(L, UnitUnder(L, e.x, e.y, false)) == "RULEUCC_Attack";
         if (left || right) {
           StartCursorText(L, e.x, e.y,
@@ -3344,8 +3346,9 @@ std::string FileNameOf(const std::string& path) {
 // none, an observer has one of his own).
 bool PausesForPhotoMode(lua_State* L) {
   if (SessionReplay(L)) return true;
-  Sim* sim = UserState::From(L)->LiveSim("the photo mode: who plays");
-  return sim && sim->cmdSources.size() <= 1;
+  UserState* user = UserState::From(L);  // (the command sources from the beat's copy once there is one)
+  if (!user->HasSim()) return false;
+  return (user->economyCopied ? user->commandSourcesCopy.size() : user->LiveSim("the photo mode: who plays")->cmdSources.size()) <= 1;
 }
 void OpenPhotoMode(lua_State* L) {
   UserState* user = UserState::From(L);
