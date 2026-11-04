@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>  // [snowhitch]
+#include <cctype>  // [glitches]
 #include <cmath>
 #include <cstdio>
 #include <limits>  // [nightlight]
@@ -20,6 +21,22 @@
 #include "volfx_log.h"  // (MOHO64_DEBUG_VOLFX)
 
 namespace render {
+
+namespace {
+// [glitches] (World::finishedSlabFade) The UEF's build glow slab: "/effects/Entities/UEFBuildEffect/UEFBuildEffect02_proj.bp"
+// in any case (the effects' blueprints are paths as the scripts wrote them).
+bool BuildGlowSlab(const std::string& blueprint) {
+  static const char kName[] = "uefbuildeffect02_proj";
+  const size_t n = sizeof kName - 1;
+  if (blueprint.size() < n) return false;
+  for (size_t at = 0; at + n <= blueprint.size(); ++at) {
+    size_t k = 0;
+    while (k < n && std::tolower(static_cast<unsigned char>(blueprint[at + k])) == kName[k]) ++k;
+    if (k == n) return true;
+  }
+  return false;
+}
+}  // namespace
 
 World::World(gfx::Device* device, const moho::Vfs* vfs)
     : textures(device, vfs),
@@ -1724,6 +1741,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   // the models are drawn by their build look's shaders (made the first frame it is on); a frame for something else
   // leaves the sparks under way as they are
   buildNow_ = remasteredBuild && look == Look::Modern && effectsLook == EffectsLook::Remastered && !sidePicture;
+  meshes.remasteredGate = remasteredGate && look == Look::Modern && effectsLook == EffectsLook::Remastered;  // [glitches]
   build.Begin(clock, buildNow_, sidePicture);
   meshes.remasteredBuild = buildNow_ && meshes.PrepareBuild();
   // (unitsfx) the real exhausts (exhausts.h): the effects hand this frame's engines' beams to them while they are on
@@ -1884,6 +1902,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     if (!model->ok) continue;
     const Quat turn{0, std::sin(g.heading * 0.5f), 0, std::cos(g.heading * 0.5f)};
     meshes.Add(model, Mat4::FromTRS(g.position, turn, model->scale), {0.6f, 0.6f, 0.6f}, 1, nullptr, &g.tint);
+    if (ghostLook == 1) meshes.SeeThroughGhost();  // [glitches]
   }
   // what the script places that is an ordinary model (the others are drawn after the water, placed.h)
   for (const PlacedMesh& p : placed) {
@@ -1910,7 +1929,12 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   auto swapped = [](uint32_t c) { return (c & 0xff00ff00u) | ((c >> 16) & 0xff) | ((c & 0xff) << 16); };
   const Vec3 lift{0, 0.15f, 0};
   for (const Line& l : lines) {
-    if (l.width > 1.25f) draw.WideLine(l.a + lift, l.b + lift, swapped(l.color), l.width);
+    if (l.width > 1.25f && guidePull > 0) {  // [glitches] over the ground cover, with a dark edge
+      const uint32_t c = swapped(l.color);  // (the edge: its own colour at a fifth, so a red guide's edge is a dark red)
+      const uint32_t dark = 0xff000000u | ((((c >> 16) & 0xffu) / 5) << 16) | ((((c >> 8) & 0xffu) / 5) << 8) | ((c & 0xffu) / 5);
+      draw.WideLine(l.a + lift, l.b + lift, dark, l.width + 2, guidePull * 0.97f);
+      draw.WideLine(l.a + lift, l.b + lift, swapped(l.color), l.width, guidePull);
+    } else if (l.width > 1.25f) draw.WideLine(l.a + lift, l.b + lift, swapped(l.color), l.width);
     else draw.Line(l.a + lift, l.b + lift, swapped(l.color));
   }
   for (const Ring& r : rings) {
@@ -2919,6 +2943,32 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       // 0.145 a second, the original's numbers) says how much of it is left
       float left = 1;
       if (!model->lods.empty() && model->lods[0].fades) left = Clamp(1 - (p.age - 2.0f) * 0.145f, 0, 1);
+      // [glitches] (finishedSlabFade) the UEF's build glow slab over a structure no longer under construction: gone within
+      // finishedSlabFade seconds of it, not left for the rest of its six-second lifetime
+      if (left > 0 && finishedSlabFade > 0 && !model->lods.empty() && model->lods[0].fades && BuildGlowSlab(blueprint)) {
+        if (buildingNowStamp_ != frameStamp_) {  // (the frame's units under construction, once a frame and only when asked)
+          buildingNowStamp_ = frameStamp_;
+          buildingNow_.clear();
+          for (const FrameUnit& u : frame.units)
+            if (u.fractionComplete < 1) buildingNow_.push_back({{u.position[0], u.position[1], u.position[2]}, 0.0f});
+        }
+        // (the slab lies centred on its structure, as wide as the structure's mesh and a twentieth more: a unit under
+        // construction whose place is within it is the one it is laid over; a slice the build cube left higher up, too)
+        const float hx = 0.5f * std::max(p.sized ? p.size[0] : 1.0f, 1.0f) + 0.5f, hz = 0.5f * std::max(p.sized ? p.size[2] : 1.0f, 1.0f) + 0.5f;
+        bool under = false;
+        for (const auto& b : buildingNow_)
+          if (std::fabs(b.first.x - position.x) <= hx && std::fabs(b.first.z - position.z) <= hz) {
+            under = true;
+            break;
+          }
+        if (under) {
+          leftSlabs_.erase(p.id);
+        } else {
+          LeftSlab& slab = leftSlabs_.try_emplace(p.id, LeftSlab{clock_, frameStamp_}).first->second;
+          slab.stamp = frameStamp_;
+          left *= Clamp(1 - static_cast<float>(clock_ - slab.since) / finishedSlabFade, 0, 1);
+        }
+      }
       // (a nuke's ball of fire is drawn by its age)
       const bool fire = !model->lods.empty() && model->lods[0].nuke;
       if (left > 0) meshes.Add(model, at, fire ? Vec3{p.age, 0, 0} : Vec3{1, 1, 1}, left);
@@ -2929,6 +2979,8 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       ribbons.PlainBeam(position - velocity * 0.06f, position, {1.0f, 0.95f, 0.78f}, 0.12f);
     }
   }
+  // [glitches] (finishedSlabFade) the slabs no longer listed forgotten
+  for (auto it = leftSlabs_.begin(); it != leftSlabs_.end();) it = it->second.stamp != frameStamp_ ? leftSlabs_.erase(it) : std::next(it);
   {  // ripples from the blasts new this frame over the water (a ship's death, debris falling in); where the simulation's
      // impacts make the shells' splashes (below), shell-sized blasts are theirs already and left out
     std::vector<Blasts::Blast> fresh;

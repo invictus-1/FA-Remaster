@@ -20,7 +20,9 @@ class DebugDraw {
   void Line(Vec3 a, Vec3 b, uint32_t color);
   // A line of a width in pixels on the screen, the same from near and from far (a flat ribbon
   // turned to the eye; made at Flush, when the view is known).
-  void WideLine(Vec3 a, Vec3 b, uint32_t color, float pixels);
+  // [glitches] `pull`: its ends moved this many world units toward the eye (where they show on the screen is the same), so that
+  // what lies on the ground (a building's guide) shows over the ground cover round it.
+  void WideLine(Vec3 a, Vec3 b, uint32_t color, float pixels, float pull = 0);
   void Box(Vec3 center, Vec3 halfSize, uint32_t color);
   void Flush(const View& view);
 
@@ -35,6 +37,7 @@ class DebugDraw {
     Vec3 a, b;
     uint32_t color;
     float pixels;
+    float pull;  // [glitches]
   };
   gfx::Pipeline solid_, lines_, wide_;
   gfx::Buffer solidBuffer_, lineBuffer_, wideBuffer_;

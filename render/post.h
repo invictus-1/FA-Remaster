@@ -75,6 +75,12 @@ class Post {
   // The modern look's glow round what is brighter than the screen can show (lamps, flashes, the
   // sun on water): how much of it is added; 0: none.
   float glow = 0.5f;
+  // [glitches] Sharpening in the last pass (Chris's big test: the units' textures "can be sharper"): each pixel pushed away from
+  // its four neighbours by this much (0..1), less at strong edges and near black and white, never past the five's darkest and
+  // brightest (no halos). At the screen's size only: not with an upscaler (FSR 1, FSR 3 sharpen after themselves), nor with
+  // the photographic look's own last pass. 0: none, as before. A player's option; on at 0.5 by default (the lead, 2026-11-03:
+  // Chris asked for "that extra high res look"; +11..13 % local contrast on the polished units, 0.04 ms at 1440p).
+  float sharpen = 0.5f;
   // The original look's bloom, as the original makes it (render 28): on (the game's ren_bloom), its blur's
   // scale (ren_BloomBlurKernelScale), the glow copy's scale (ren_BloomGlowCopyScale) and what it adds
   // (the map's lighting Bloom), and how many times it blurs along and across (ren_BloomBlurCount).
@@ -116,6 +122,7 @@ class Post {
  private:
   gfx::Device* device_;
   gfx::Pipeline pipeline_, toTarget_;  // the last pass into the window, or (before FSR) into ldr_
+  gfx::Pipeline sharpened_;            // [glitches] (the last pass into the window, sharpened: sharpen)
   gfx::Pipeline copy_;  // the picture copied into behind_ (one sample a pixel)
   gfx::Pipeline copyFinished_;  // (KeepFinished: the window's picture copied, RGBA8)
   gfx::Texture finished_;
