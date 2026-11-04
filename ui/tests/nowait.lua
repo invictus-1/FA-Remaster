@@ -69,6 +69,7 @@ ForkThread(function()
         local u = GetUnitById(tostring(1048576 + i))  -- (the second army's ids)
         if u and u:GetBlueprint().BlueprintId == "uel0201" then enemy = u end
     end
+    check("the game's interface names the session's version (a new game: 3840)", GetVersion(), "1.5.3840")
     check("the factory, the tank, the radar and the enemy's tank are made",
         tostring(factory ~= nil) .. " " .. tostring(tank ~= nil) .. " " .. tostring(radar ~= nil) .. " " .. tostring(enemy ~= nil),
         "true true true true")
@@ -174,6 +175,15 @@ ForkThread(function()
     -- read the sync's copies)
     SetFocusArmy(army)
     check("SetFocusArmy waits for nothing", waits(), "")
+    -- and it is taken (Chris's big test: "the commander switch does nothing"): with cheats on any army, the score
+    -- panel's way; the interface follows at the next sync (Sync.FocusArmyChanged), then back to our own
+    local other = army == 1 and 2 or 1
+    SetFocusArmy(other)
+    WaitSeconds(1)
+    check("the focus army switched to another army", GetFocusArmy(), other)
+    SetFocusArmy(army)
+    WaitSeconds(1)
+    check("and back to ours", GetFocusArmy(), army)
     -- the factory upgrade queue (FA exe 0x840130 / 0x8c1220): a T1 land factory with a T1 tank queued, then its
     -- upgrade; the build list then offers the T2 factory's units, and not the upgrade again
     SelectUnits({upgrading})

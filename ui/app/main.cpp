@@ -48,6 +48,7 @@
 #include "script/mount.h"
 #include "script/script_state.h"
 #include "sim/session.h"
+#include "sim/sim.h"
 #include "sound/sound_system.h"
 #include "user/bindings.h"
 #include "user/keymap.h"
@@ -811,6 +812,7 @@ int main(int argc, char** argv) {
     const auto t0 = Clock::now();
     gameCfg.modUids = uids;
     gameCfg.liveSim = sim;  // (its bindings are those of a session's state; the rest of the session's links come at the hand-over)
+    gameCfg.gameVersion = sim ? sim->gameVersion : 0;  // (GetVersion: the session's own, a replay's as recorded)
     out->state = std::make_unique<ui::UserState>(&vfs, gameCfg);
     const auto t1 = Clock::now();
     bool up = session.LoadInterfaceRules(out->state->L(), sim, uids, sessionMods);
