@@ -71,7 +71,7 @@ void DebugDraw::Line(Vec3 a, Vec3 b, uint32_t color) {
   lineVertices_.push_back({b, {}, color});
 }
 
-void DebugDraw::WideLine(Vec3 a, Vec3 b, uint32_t color, float pixels) { wide_lines_.push_back({a, b, color, pixels}); }
+void DebugDraw::WideLine(Vec3 a, Vec3 b, uint32_t color, float pixels, float pull) { wide_lines_.push_back({a, b, color, pixels, pull}); }
 
 // Faces wound counter-clockwise seen from outside (in the right-handed world).
 void DebugDraw::Box(Vec3 center, Vec3 half, uint32_t color) {
@@ -102,7 +102,12 @@ void DebugDraw::Flush(const View& view) {
   if (!wide_lines_.empty()) {
     // each a ribbon across the line of sight, as wide at either end as its pixels are there
     const float perPixel = 2 * std::tan(view.fovY * 0.5f) / static_cast<float>(std::max(view.height, 1));
-    for (const Wide& w : wide_lines_) {
+    for (Wide w : wide_lines_) {
+      if (w.pull > 0) {  // [glitches] (toward the eye along the line of sight: the same place on the screen)
+        const float da = Length(view.eye - w.a), db = Length(view.eye - w.b);
+        if (da > w.pull * 2) w.a = w.a + (view.eye - w.a) * (w.pull / da);
+        if (db > w.pull * 2) w.b = w.b + (view.eye - w.b) * (w.pull / db);
+      }
       const Vec3 along = w.b - w.a;
       Vec3 side = Cross(along, (w.a + w.b) * 0.5f - view.eye);
       const float length = Length(side);

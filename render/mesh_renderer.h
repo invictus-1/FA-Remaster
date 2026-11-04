@@ -67,6 +67,12 @@ class MeshRenderer {
   // [machinery] The model just added is a factory whose belt has moved `amount` along its strip (Machinery::PoseUnit;
   // below 0: none). Not with a ghost's tint or treads.
   void Belt(float amount);
+  // [glitches] The model just added (with a ghost's `tint`) is a building's ghost drawn see-through, as the original's
+  // UnitPlace (World::ghostLook): only in the see-through pass (Draw's `glass`), every level of it that is not glass itself,
+  // its nearest surface alone (its depth laid first), in its tint, lit by its shape and brighter along its outline, the
+  // ground and what stands behind showing through. It casts no shadow, and is left out of what the rest of the frame takes
+  // from the list (ForEachAdded: the ground cover's discs, the rays' scene): it is not there.
+  void SeeThroughGhost();
   // Scenery that stands still (trees, rocks), in groups (one square of the map's): the renderer keeps
   // each group from one frame to the next, so a frame only says which groups it lists (ListGroup,
   // after Begin), not where each tree stands and how large it is. A group is filled anew
@@ -110,6 +116,11 @@ class MeshRenderer {
   // (range rings) can be laid over the trees and under the units, as the original has it.
   void Draw(const View& view, gfx::Texture environment, bool shadowPass = false, bool glass = false, int part = 0);
   bool addingScenery = false;
+  // [glitches] The UEF quantum gate's field ("UEFQuantumGate", the game's ForceField01) in a remastered look of its own (Chris's big
+  // test: "Portal effect is too lowres"): the original's streams of small blue blocks, its violet bands and its shimmer made
+  // procedurally at any size, sharp at any zoom, in place of its 256-pixel texture stretched over the gate. False: the
+  // original's textures, as before. The world sets it (World::remasteredGate) each frame.
+  bool remasteredGate = false;
   // Motion (motion.h). With `motion` on, every model added with a key keeps its place and bones from one
   // frame to the next, and DrawMotion (after the scene's passes) draws those the scene drew where they are,
   // writing where they were the frame before: last frame's place minus this frame's in the picture's 0..1,
@@ -235,7 +246,8 @@ class MeshRenderer {
     for (uint32_t g : groupsListed_)
       if (g < groups_.size())
         for (const Entry& e : groups_[g].entries) f(e.model, e.instance.row0, e.instance.row1, e.instance.row2, e.instance.color, true);
-    for (const Entry& e : entries_) f(e.model, e.instance.row0, e.instance.row1, e.instance.row2, e.instance.color, e.scenery);
+    for (const Entry& e : entries_)
+      if (!(e.flags & kGhost)) f(e.model, e.instance.row0, e.instance.row1, e.instance.row2, e.instance.color, e.scenery);  // ([glitches])
   }
   // [mcrec] The same list in pieces, for going through it on several threads: AddedPieces() of them in the list's order
   // (each listed group, then the frame's own list in stretches of kPieceModels); ForEachAddedIn(k, f) goes through the k-th.
@@ -251,6 +263,7 @@ class MeshRenderer {
     const size_t from = (piece - groupsListed_.size()) * kPieceModels, to = std::min(from + kPieceModels, entries_.size());
     for (size_t i = from; i < to; ++i) {
       const Entry& e = entries_[i];
+      if (e.flags & kGhost) continue;  // [glitches] (a see-through ghost is not there)
       f(e.model, e.instance.row0, e.instance.row1, e.instance.row2, e.instance.color, e.scenery);
     }
   }
@@ -266,7 +279,7 @@ class MeshRenderer {
   };
   // What a pass tests first, for every model of the list, kept apart from the rest so that going
   // through tens of thousands of them reads little memory.
-  enum : uint8_t { kScenery = 1, kPosed = 2, kHasGlass = 4, kHasSolid = 8 };
+  enum : uint8_t { kScenery = 1, kPosed = 2, kHasGlass = 4, kHasSolid = 8, kGhost = 16 };  // ([glitches] kGhost: SeeThroughGhost)
   struct Cull {
     Vec3 centre;
     float radius;
@@ -307,6 +320,7 @@ class MeshRenderer {
   TextureCache* textures_;
   gfx::Pipeline pipeline_, blended_, leaves_, shadow_, glass_, dome_, adding_;
   gfx::Pipeline glassRgb_, domeRgb_;  // the same two writing the colour alone (ModelLod::rgbOnly)
+  gfx::Pipeline ghost_;               // [glitches] a building's see-through ghost (SeeThroughGhost): blended, its back faces left out
   gfx::Pipeline prepass_, prepassLeaves_;  // (depthPrepass: depth alone, the scene's samples)
   gfx::Pipeline laid_, laidLeaves_;        // (depthPrepass: then the full shading, writing no depth)
   // two of the game's lookup textures for the original look (where the game's files have them):
@@ -369,6 +383,7 @@ class MeshRenderer {
   static constexpr double kStretchWeight = 3000;  // (a stretch's least work: about 40 draws)
   struct RunSetup {
     bool shadowPass = false, glass = false, prepass = false, blasts = false, plants = false, snowing = false;
+    bool ghosts = false;  // [glitches] (the see-through pass has see-through ghosts: their depth laid first)
     float snowK[12] = {};
     int cardPass = -1;  // [gpuscenery] (the card's pass the card runs are of)
   };

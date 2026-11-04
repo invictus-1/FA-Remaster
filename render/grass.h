@@ -57,6 +57,19 @@ class GroundCover {
   // host after Prepare; none: nothing cleared. A blade's tuft and a plant's spot there are left out by it (the worn rim
   // thinned).
   gfx::Texture cleared;
+  // [foliage] The square `cleared` is drawn over (as Area(): its first x, z; a texel's size; texels a side): with padGrid on
+  // a grid of its own that stays where it is from frame to frame (its texel from a ladder, kept while it serves, its corner
+  // on a multiple of it), round Prepare's square; else Prepare's square itself, as before. Chris's big test (2026-11-01:
+  // "these foliage flicker in and out during zoom", by the structures): Prepare's square grows and shrinks with the zoom,
+  // so the pads' worn rims were drawn into texels that changed size and slid each frame, and a plant or tuft of blades at a
+  // rim (left out where the coverage there is over its own chance) went in and out as the camera zoomed. With it, too, a
+  // plant's spot is set against one chance for the pads near (cleared) and far (FarField) together, not one each.
+  const float* PadArea() const { return padGrid ? padArea_ : area_; }
+  bool padGrid = true;
+  // [foliage] The blades' tufts toward the square's edge, thinned out there, each grown in from nothing over a little way
+  // in from where the thinning first lets it be; false: each at its full height where it is let be, as before (the edge
+  // moves with the camera and with the zoom, and they popped in and out under it).
+  bool bladesGrowIn = true;
   // [cover] Where the ground is bare over the whole map (bareMap's picture, CoverBare::Picture: R8, 1 bare): a stream's
   // water and its wet bank, the trails and bare patches through the meadow. Set by the host before Draw; none: nothing
   // kept bare. A blade's tuft and a plant's spot there are left out by it, and lower where it thins out.
@@ -244,6 +257,8 @@ class GroundCover {
   gfx::Pipeline pipeline_, trample_;
   gfx::Texture trampled_;  // (how flat the grass is pressed over its square: 1 flat)
   float area_[4] = {};     // (Prepare's square: its first cell's x, z; a cell's size; cells a side)
+  float padArea_[4] = {};  // [foliage] (PadArea's grid: its first x, z; a texel's size; texels a side; its texel's step)
+  int padStep_ = -1;
   bool prepared_ = false;
   // [cover] (how much of the cover is there this frame, Prepare's: by the camera's distance and since it came in; how far
   // it has come in, 0..1; the view's time of the last frame it was prepared)

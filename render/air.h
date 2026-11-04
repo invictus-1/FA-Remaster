@@ -61,6 +61,14 @@ class Air {
   float lampGlowInAir = 0.25f;  // of a beam's glow to all sides near its lamp (lights.h), what the air shows (all of it made halos)
   float sunForward = 0.6f, lampForward = 0.35f;      // how much of it goes on forward (0: alike to all sides)
   float keep = 0.9f;                   // how much of last frame's a cell keeps
+  // [glitches] ... less while the camera moves (Chris's big test, "arcing when zooming in and out"): last frame's cells, read
+  // where each cell's middle was then, are not quite what the cell holds now in motion (the cell where a column meets the
+  // ground lies elsewhere along it, the mist in it is spread otherwise), and kept at 0.9 a frame their error was carried
+  // along with the motion: light streaks and blocks smeared down the view as it tilted and widened in a zoom, gone when it
+  // stopped. Kept as `keep` times 1 - `letGo` x how far the camera moved this frame (the eye's move over its distance from
+  // what it looks at, and the turn of its axis in radians), at least `keepMoving` of it; a frame that keeps less takes two
+  // places a cell (less flicker). 0: as much kept in motion as standing, as before. Standing still: as before.
+  float letGo = 25, keepMoving = 0.4f;
   // [sunlight] The light shafts (sunlight.h, World::lightShafts), set by the world before Build: the low band's haze and
   // the haze under the clouds thicken the air, and the band's sunlight near the eye is left to the shafts' pass; `heights`
   // the ground's (Terrain::HeightTexture), `woods` where the woods are (Sunlight::Woods). Off (or none): the gather as
@@ -79,6 +87,7 @@ class Air {
     std::swap(depth_, o.depth_), std::swap(now_, o.now_), std::swap(frame_, o.frame_), std::swap(built_, o.built_);
     std::swap(haveLast_, o.haveLast_), std::swap(counted_, o.counted_), std::swap(lastViewProj_, o.lastViewProj_);
     std::swap(lastEye_, o.lastEye_), std::swap(lastNearest_, o.lastNearest_), std::swap(lastFarthest_, o.lastFarthest_);
+    std::swap(lastAhead_, o.lastAhead_);  // [glitches]
   }
  private:
   bool Size(int width, int height);
@@ -96,6 +105,7 @@ class Air {
   float counted_ = 0;  // (airfix) the places each cell has gathered since a fresh start (a weather cut)
   Mat4 lastViewProj_;
   Vec3 lastEye_;
+  Vec3 lastAhead_{0, 0, 0};  // [glitches] (last frame's forward: letGo)
   float lastNearest_ = 0, lastFarthest_ = 0;
 };
 

@@ -1395,6 +1395,7 @@ void WorldPicture::SetBuildPreviews(const std::vector<BuildPreview>& previews) {
     g.position = {p.position[0], p.position[1], p.position[2]};
     g.heading = p.heading;
     g.tint = p.free ? Vec3{0.3f, 1.0f, 0.4f} : Vec3{1.0f, 0.25f, 0.2f};
+    if (p.placing) g.tint = g.tint * 1.4f;  // [ghost] (ui request 41: the cursor's ghost brighter than the ordered sites)
     ghosts.push_back(std::move(g));
   }
 }
