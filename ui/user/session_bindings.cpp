@@ -670,10 +670,12 @@ int l_SessionSendChatMessage(lua_State* L) {
 // source belongs to no army at all (FAF's exe makes the original's "no army still in the game" that): never in our
 // games, where it always belongs to the player's army. A request the checks refuse is dropped quietly. The engine
 // applies it at its next Sync (Sim::RequestFocusArmy, engine request 29; the original's sim driver slot 0x30); this
-// state takes the change from that beat's copy (CopyFromSimulation).
+// state takes the change from that beat's copy (CopyFromSimulation). The request is the simulation's queued atomic
+// slot, taken at its next Sync (the engine, 2026-11-03), so it is written without waiting for a running beat (no
+// LiveSim); the checks read the sync's copies (before the first sync, when no beat has run yet, the simulation).
 void RequestFocusArmyChecked(lua_State* L, int wanted) {
   UserState* user = UserState::From(L);
-  Sim* sim = TheSim(L);
+  Sim* sim = user->config().liveSim;
   if (!sim) return;
   const int armies = static_cast<int>(user->economyCopied ? user->armiesCopy.size() : ArmyViews(*sim).size());
   if (wanted < -1 || wanted >= armies) {
@@ -698,7 +700,7 @@ void RequestFocusArmyChecked(lua_State* L, int wanted) {
     lua_settop(L, top);
   }
   const GamePace* pace = user->config().pace;
-  const bool over = (pace && pace->ended) || sim->endGame;
+  const bool over = (pace && pace->ended) || user->endGameCopy;
   const int own = user->config().ownArmy;
   const bool allowed = replay || own < 0 || cheats || (wanted != -1 && wanted == own) || over;
   if (!allowed) return;

@@ -104,8 +104,9 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   every unit's recon bits, the focus army's and the builders' restricted blueprints, the game-over and pause flags,
   the command sources, and a unit's state for every new unit, every unit asked lately, the selection and a round of
   300 others (`RefreshUnitCopies`); orders, toggles, callbacks and queue edits read only those copies before their
-  messages go into this client's command stream. Still waiting: a building's placement test (`BuildSiteOf`), the
-  reclaim cursor's props (`ReclaimableAt`) and the focus-army request (for the engine). Test: `ui/tests/nowait.lua`
+  messages go into this client's command stream. Still waiting (for the engine): a building's placement test (`BuildSiteOf`)
+  and the reclaim cursor's props (`ReclaimableAt`); the focus-army request is the simulation's queued slot, written
+  without waiting (`SetFocusArmy`, the debug Alt-click). Test: `ui/tests/nowait.lua`
   (`moho64ui_PretendBeat(on)`: a headless run behaves as if a beat ran between syncs and counts every look at the
   simulation; `moho64ui_PretendBeat(false)` gives the places). Orders, sounds and sync come after the beat. Since 2026-10-28 (the late game's held frames at 4K, `docs/ui-benchmarks.md`)
   the beat's sounds are decided on the beats' thread too (what to play, which running sounds start, stop or follow

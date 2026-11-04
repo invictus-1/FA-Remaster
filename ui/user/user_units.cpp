@@ -3593,7 +3593,8 @@ void ClickSelect(lua_State* L, uint32_t unit, bool shift, bool ctrl, bool alt) {
   UserUnit* u = unit == 0xffffffffu ? nullptr : LiveUnit(L, unit);
   // (ui_DebugAltClick and Alt on another army's unit: the player looks through that army, ReleaseDrag's first step)
   if (alt && u && Looks().debugAltClick && u->view.army != focus + 1) {
-    if (Sim* sim = TheSim(L)) sim->RequestFocusArmy(u->view.army - 1);
+    // (the simulation's queued request, taken at its next Sync: written without waiting for a running beat)
+    if (Sim* sim = UserState::From(L)->config().liveSim) sim->RequestFocusArmy(u->view.army - 1);
     return;
   }
   if (!u || !CanSelectUnit(L, u)) {

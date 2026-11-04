@@ -170,6 +170,10 @@ ForkThread(function()
     GetIdleFactories()
     spawn("uel0105", at(-5, 5))
     check("the armies, the session's state, the idle lists and SimCallback wait for nothing", waits(), "")
+    -- the focus army's request (SetFocusArmy: the simulation's queued request, taken at its next sync; the checks
+    -- read the sync's copies)
+    SetFocusArmy(army)
+    check("SetFocusArmy waits for nothing", waits(), "")
     -- the factory upgrade queue (FA exe 0x840130 / 0x8c1220): a T1 land factory with a T1 tank queued, then its
     -- upgrade; the build list then offers the T2 factory's units, and not the upgrade again
     SelectUnits({upgrading})
