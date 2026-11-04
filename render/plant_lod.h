@@ -49,6 +49,15 @@ struct PlantLodTune {
   // own sizes within `modelBand` of them: no ring where they change)
   float modelPixels[3] = {220, 80, 30};
   float modelBand = 0.3f;
+  // [foliage] how far round each of those changes (and the last level's to its card) a plant is drawn at both, each on its
+  // own pixels, so that it dissolves from the one into the other as the camera zooms (the natural log of its pixels: 0.12
+  // is from 12 % under the change to 12 % over it; into its card from the change to 25 % over it, the model drawn no
+  // farther than before). Chris's big test (2026-11-01, "these foliage flicker in and out
+  // during zoom"): a fern went from its dark 3D model to its lighter card, or from one level to the next, in one frame.
+  // 0: switched at once, as before.
+  float modelFade = 0.12f;
+  // [foliage] which of the changes dissolve (bits: 1 level 0 to 1, 2 level 1 to 2, 4 level 2 to 3 or to its card)
+  int modelFadeAt = 7;
   // for pictures: a quarter of the spots, wherever the table lets anything grow, this cell (its index in the cover; a
   // model with no card: 16 and on, in the order of the cover's models); -1: as the table says
   int onlyCell = -1;

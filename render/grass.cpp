@@ -98,9 +98,11 @@ cbuffer Grass : register(b1) {
                    // w: world units of the heights' largest value
   float4 mapInfo;  // xy: the map's width and height; z: world units a pixel covers at distance 1; w: the water's level
   float4 table;    // x: 1 where the map's cover table says how many blades grow (densityA's red), else by how grassy;
-                   // [tarmac] y: 1 = none where a remastered pad lies (padCover)
+                   // [tarmac] y: 1 = none where a remastered pad lies (padCover); [foliage] z: 1 = a tuft toward the
+                   // square's edge grows in where the thinning lets it be (GroundCover::bladesGrowIn)
   float4 shown;    // [cover] x: how much of the cover is there (GroundCover::Prepare: the camera's distance, since it came
                    // in); y: 1 = the bare ground's picture is read (bareGround)
+  float4 padArea;  // [foliage] what padCover is drawn over (GroundCover::PadArea: its first x, z; a texel's size; texels a side)
 #ifdef PLANTS
   float4 plantsK[2];  // [plants] (plants.h) PlantLife::Constants
 #endif
@@ -192,9 +194,10 @@ VOut VS(uint id : SV_VertexID) {
   // [cover] in tufts and gaps, not evenly strewn: the tufts gathered where a noise of the place (patches a unit or two
   // across) is high, fewer between them, as many over all
   float gathered = 0.3 + 1.4 * smoothstep(0.25, 0.75, CloudNoise(float3(xz * 0.7, 1.7)));
-  if (GrassRand(GrassHash(h + 2)) > grassy * thin * gathered) return o;
+  const float chance = GrassRand(GrassHash(h + 2));
+  if (chance > grassy * thin * gathered) return o;
   // [tarmac] none where a remastered pad lies, by its coverage (its worn rim thinned)
-  [branch] if (table.y > 0.5 && padCover.SampleLevel(samplerLinearClamp, (xz - area.xy) / (area.z * area.w), 0) > GrassRand(GrassHash(h + 12))) return o;
+  [branch] if (table.y > 0.5 && padCover.SampleLevel(samplerLinearClamp, (xz - padArea.xy) / (padArea.z * padArea.w), 0) > GrassRand(GrassHash(h + 12))) return o;
   // [cover] none where the ground is bare (a stream, a trail), by how bare; lower where it thins out
   float bare = 0;
   [branch] if (shown.y > 0.5) {
@@ -206,6 +209,12 @@ VOut VS(uint id : SV_VertexID) {
   if (grown <= 0) return o;
   // (its height: its own, and [cover] taller and shorter grass in patches some units across)
   float height = blades.x * (0.7 + 0.3 * GrassRand(GrassHash(hb + 3))) * (0.55 + 0.45 * CloudNoise(float3(xz * 0.23, 4.1))) * saturate(thin * 2.5);
+  // [foliage] toward the square's edge, a tuft comes in short where the thinning first lets it be, growing over the next
+  // tenth of the way in (the thinning's own measure, before its saturate), not at once at its full height: the square
+  // grows and shrinks with the zoom and moves with the camera, and its edge passing over the tufts popped them in and out
+  // (Chris's big test, 2026-11-01). Within some 55 % of the way out from the middle all of them as before. (table.z: 1 =
+  // so; 0 at once, as before: GroundCover::bladesGrowIn)
+  [branch] if (table.z > 0.5) height *= saturate(((1 - length(xz - (area.xy + half)) / half) * 3 - chance / max(grassy * gathered, 1e-4)) / 0.3);
   height *= grown * (1 - 0.5 * bare);
   height *= 1 - 0.9 * trampled.SampleLevel(samplerLinearClamp, (xz - area.xy) / (area.z * area.w), 0);  // (pressed flat)
   float turn = GrassRand(GrassHash(hb + 4)) * 6.2832;
@@ -367,6 +376,7 @@ float4 PS(VOut i) : SV_Target {
 struct GrassConstants {
   float area[4], blades[4], mapInfo[4], table[4];
   float shown[4];       // [cover]
+  float padArea[4];     // [foliage] (GroundCover::PadArea)
   float plantsK[2][4];  // [plants] (read by the shaders with them only)
 };
 // [leftover] (kCoverShared's CoverSnow, at register b3; CoverMotion at b2)
@@ -395,6 +405,7 @@ cbuffer Plants : register(b1) {
   float4 groups[6]; // per group: where its cells start in `order`, how many
   float4 tones[16]; // per cell: rgb its mean colour (linear); w [coverdark] above 0: how far it takes the ground's colour,
                     // [cover] below 0: how far its brightness goes toward the ground's (0: the art's own)
+  float4 padArea;   // [foliage] what padCover is drawn over (GroundCover::PadArea)
 #ifdef PLANTS
   float4 plantsK[2];  // [plants] (plants.h) PlantLife::Constants
 #endif
@@ -411,6 +422,8 @@ cbuffer Plants : register(b1) {
   float4 modelTint[8];    // [plantlod] per kind: rgb its colour times this (its leaves' mean brought to its card's); w its
                           // card's width times this (the model's width over the card's frame)
   float4 farField;        // [plantlod] the far field (farCleared): its first x, z; 1 / its width; 1 = made this frame
+  float4 lodMore;         // [foliage] x: how far round a 3D plant's change of level it dissolves (PlantLodTune::modelFade);
+                          // y: 1 = a spot cleared by the pads near and far against one chance (GroundCover::padGrid)
 #endif
 };
 Texture2D<float> heightMap : register(t0);
@@ -487,6 +500,10 @@ struct VOut {
 #ifdef PLANT_ROUND
   float3 mass : TEXCOORD11;   // [plantlod] a card's: the plant's normal as a mass, out from a point under its middle
 #endif
+#ifdef PLANT_LOD
+  nointerpolation float2 dissolve : TEXCOORD12;  // [foliage] a card's pixels: PlantDither from x up to below y (its 3D
+                                                 // model dissolving into it has the others, PlantModelPick)
+#endif
 };
 
 static const float2 kCard[6] = {float2(0, 1), float2(1, 1), float2(0, 0), float2(0, 0), float2(1, 1), float2(1, 0)};
@@ -498,6 +515,9 @@ static const float kTuftWide[3] = {1, 0.6, 0};
 VOut VS(uint id : SV_VertexID) {
   VOut o = (VOut)0;
   o.position = float4(0, 0, -1, 1);  // (no plant: behind the eye)
+#ifdef PLANT_LOD
+  o.dissolve = float2(0, 1);  // [foliage]
+#endif
 #ifdef MOTION
   o.here = o.then = float4(0, 0, 0, 1);
 #endif
@@ -530,7 +550,7 @@ VOut VS(uint id : SV_VertexID) {
   float2 xz = cellAt + float2(PlantRand(h), PlantRand(PlantHash(h + 1))) * area.z;
   if (any(xz < 0) || any(xz > mapInfo.xy)) return o;
   // [tarmac] none where a remastered pad lies, by its coverage
-  [branch] if (info.y > 0.5 && padCover.SampleLevel(samplerLinearClamp, (xz - area.xy) / (area.z * area.w), 0) > PlantRand(PlantHash(h + 12))) return o;
+  [branch] if (info.y > 0.5 && padCover.SampleLevel(samplerLinearClamp, (xz - padArea.xy) / (padArea.z * padArea.w), 0) > PlantRand(PlantHash(h + 12))) return o;
   // [cover] none where the ground is bare (a stream, a trail), by how bare; lower where it thins out
   float bare = 0;
   [branch] if (shown.y > 0.5) {
@@ -567,8 +587,15 @@ VOut VS(uint id : SV_VertexID) {
   // this plant of the spot: its own foot near the spot's, its own height and turn
   uint hc = PlantHash(h * 31 + plant * 977 + 7);
 #ifdef PLANT_LOD
-  // [plantlod] drawn by the models' pass where it had room for it (its flags; else the card)
-  [branch] if (tile.z >= 0 && PlantModelLevel(s, px, hc) >= 0 && ((modelFlags.Load(int3(within, int(tile.z), 0)) >> plant) & 1u) != 0) return o;
+  // [plantlod] drawn by the models' pass where it had room for it (its flags; else the card). [foliage] Where its last level
+  // dissolves into its card, the card on the pixels the model leaves (PlantModelPick)
+  [branch] if (tile.z >= 0 && ((modelFlags.Load(int3(within, int(tile.z), 0)) >> plant) & 1u) != 0) {
+    PlantPick pick = PlantModelPick(s, px, hc);
+    if (pick.first >= 0) {
+      if (pick.second != -1) return o;
+      o.dissolve = float2(pick.share, 1);
+    }
+  }
 #endif
   float2 foot = xz;
   if (plant > 0) {
@@ -856,12 +883,24 @@ float2 MotionPS(VOut i) : SV_Target {
     [branch] if (near < 1.2) {
       if (smoothstep(0.4, 1.2, near) <= frac(52.9829189 * frac(dot(i.position.xy, float2(0.06711056, 0.00583715))))) discard;
     }
+#ifdef PLANT_LOD
+    {  // [foliage] (its model dissolving into it: the card's own pixels)
+      float d = PlantDither(i.position.xy);
+      if (d < i.dissolve.x || d >= i.dissolve.y) discard;
+    }
+#endif
   }
   return CoverMoved(i.here, i.then);
 }
 #endif
 
-float4 PS(VOut i) : SV_Target {
+#ifndef PLANT_LOD
+#define PLANT_COVERAGE_OUT
+#endif
+float4 PS(VOut i PLANT_COVERAGE_OUT) : SV_Target {
+#if PLANT_COVERAGE
+  coverage = 0xffffffffu;  // [foliage] (PlantDissolveMask)
+#endif
 #if RAYS
   rayLightsAtMost = 1;  // (one ray for the small lights' shadows; lighting.h, SmallLightsTraced)
 #endif
@@ -926,6 +965,18 @@ float4 PS(VOut i) : SV_Target {
     albedo = lerp(albedo, SNOW_COLOUR, dust);
     through *= 1 - dust;
   }
+#ifdef PLANT_LOD
+  {  // [foliage] its 3D model dissolving into it: the card on the samples, or pixels, the model leaves (cut last, after what
+     // reads its neighbours' texture coordinates)
+#if PLANT_COVERAGE
+    coverage = PlantDissolveMask(i.position.xy, i.dissolve);
+    if (coverage == 0) discard;
+#else
+    float d = PlantDither(i.position.xy);
+    if (d < i.dissolve.x || d >= i.dissolve.y) discard;
+#endif
+  }
+#endif
   return float4(ModernLight(albedo, 0, 0.85, occlusion, through, n, i.world, i.shade.x), fade);
 }
 )hlsl";
@@ -981,6 +1032,7 @@ struct PlantConstants {
   float order[4][4];
   float groups[6][4];
   float tones[16][4];   // [coverdark]
+  float padArea[4];     // [foliage] (GroundCover::PadArea)
   float plantsK[2][4];  // [plants] (read by the shaders with them only)
   // [plantlod] (read by the shaders with plantsFar only: PLANT_LOD) lod[0]: x a spot's corners in this draw, y its first
   // tile, z pixels a world unit at a distance of one, w unused; lod[1]: the clump's collapse (pixels: all of it above x,
@@ -994,6 +1046,7 @@ struct PlantConstants {
   float extraTones[8][4];   // [plantlod] the same: as tones
   float modelTint[8][4];    // [plantlod] per kind: its colour times this; w its card's width times this
   float farField[4];        // [plantlod] the far field over the tiles (GroundCover::FarArea)
+  float lodMore[4];         // [foliage] x: PlantLodTune::modelFade; y: 1 = GroundCover::padGrid
 };
 
 GroundCover::~GroundCover() {
@@ -1014,7 +1067,8 @@ GroundCover::~GroundCover() {
 
 // [plantlod] What the plants' shaders are made with for the switches (none: as without them).
 std::string GroundCover::PlantDefines() const {
-  return std::string((plantVariant_ & 1) ? "#define PLANT_LOD 1\n" : "") + ((plantVariant_ & 2) ? "#define PLANT_ROUND 1\n" : "");
+  return std::string((plantVariant_ & 1) ? "#define PLANT_LOD 1\n" : "") + ((plantVariant_ & 2) ? "#define PLANT_ROUND 1\n" : "") +
+         ((plantVariant_ & 4) ? "#define PLANT_DISSOLVE 1\n" : "");  // [foliage] (PlantLodTune::modelFade over 0)
 }
 
 // The plants' shaders' text (for the switches, plantVariant_): plantSource_, blastPlantSource_ and the reacting ones'.
@@ -1035,7 +1089,7 @@ void GroundCover::BuildPlantSources() {
 // [plantlod] The plants' pipelines made again when plantsFar or plantsRound changed (those of the blasts' waves and of
 // plants that react only where they were made already; the motion's and the models' when next wanted).
 void GroundCover::MakePlantVariant() {
-  const int want = (plantsFar ? 1 : 0) | (plantsRound ? 2 : 0);
+  const int want = (plantsFar ? 1 : 0) | (plantsRound ? 2 : 0) | (plantsFar && plantLod.modelFade > 0 ? 4 : 0);  // ([foliage] 4)
   if (want == plantVariant_ || !pipeline_) return;
   plantVariant_ = want;
   for (gfx::Pipeline* p : {&plantPipeline_, &blastPlantPipeline_, &reactingPipelines_[1], &reactingPipelines_[3]})
@@ -1093,7 +1147,7 @@ bool GroundCover::Init(std::string* error) {
   // [foliage] (the plants' cards fade right at the eye by their coverage among a pixel's samples: PLANT_SAMPLES, alpha
   // to coverage; elsewhere their alpha is 1, every sample, as before)
   // ([plantlod] the plants' text for the switches as they are now: BuildPlantSources; without them as before)
-  plantVariant_ = (plantsFar ? 1 : 0) | (plantsRound ? 2 : 0);
+  plantVariant_ = (plantsFar ? 1 : 0) | (plantsRound ? 2 : 0) | (plantsFar && plantLod.modelFade > 0 ? 4 : 0);  // ([foliage] 4)
   BuildPlantSources();
   const std::string plants = plantSource_;
   pd.name = "ground cover: plants";
@@ -1202,6 +1256,21 @@ void GroundCover::Prepare(const View& view, const Camera& camera, const std::vec
   area_[1] = std::floor((middleZ - reach) / cell) * cell;
   area_[2] = cell;
   area_[3] = static_cast<float>(side);
+  {  // [foliage] the pads' grid (PadArea): round the square, its texel from a ladder (a sixteenth of a world unit times
+     // powers of the square root of two, as the far field's), kept while it covers the square and is not more than a step
+     // too coarse, its corner on a multiple of it: a texel is the same piece of ground from frame to frame
+    constexpr int kPadTexels = 256;  // (Tarmacs' cover picture: kCoverSize)
+    const float need = cell * static_cast<float>(side) / static_cast<float>(kPadTexels - 8);  // (a few texels to spare)
+    int step = 0;
+    while (0.0625f * std::exp2(0.5f * static_cast<float>(step)) < need && step < 80) ++step;
+    if (padStep_ < step || padStep_ > step + 1) padStep_ = step;
+    const float texel = 0.0625f * std::exp2(0.5f * static_cast<float>(padStep_));
+    const float wide = texel * static_cast<float>(kPadTexels);
+    padArea_[0] = std::floor((middleX - 0.5f * wide) / texel) * texel;
+    padArea_[1] = std::floor((middleZ - 0.5f * wide) / texel) * texel;
+    padArea_[2] = texel;
+    padArea_[3] = static_cast<float>(kPadTexels);
+  }
   auto k = std::make_unique<TrampleConstants>();
   std::copy(area_, area_ + 4, k->area);
   const float wide = cell * static_cast<float>(side);
@@ -1313,6 +1382,7 @@ int GroundCover::FillPlantConstants(PlantConstants* p, float mapWidth, float map
   p->mapInfo[3] = waterLevel;
   p->info[0] = plantDensity * plantCell * plantCell;
   p->info[1] = cleared ? 1.0f : 0.0f;  // [tarmac]
+  std::copy(PadArea(), PadArea() + 4, p->padArea);  // [foliage]
   p->info[2] = plants_.patchScale;
   p->info[3] = plants_.patchCover;
   p->shown[0] = plantsFar ? cameInShown_ : shown_;  // [cover] ([plantlod] with plantsFar not by the camera's distance)
@@ -1352,6 +1422,9 @@ int GroundCover::FillPlantConstants(PlantConstants* p, float mapWidth, float map
     const bool models = ModelsOn();
     p->lod[2][1] = models ? 1.0f : 0.0f;
     p->lod[2][2] = plantLod.modelBand;
+    p->lodMore[0] = std::max(plantLod.modelFade, 0.0f);  // [foliage]
+    p->lodMore[2] = static_cast<float>(plantLod.modelFadeAt & 7);  // [foliage]
+    p->lodMore[1] = padGrid ? 1.0f : 0.0f;                 // [foliage] (PlantSpotAt: the pads near and far against one chance)
     for (int i = 0; i < 16; ++i) p->cellModels[i][0] = -1;
     int extra = 0;
     if (models)
@@ -1472,6 +1545,8 @@ void GroundCover::Draw(const View& view, const Camera& camera, gfx::Texture heig
   const bool table = densityA && densityB;
   k.table[0] = table ? 1.0f : 0.0f;
   k.table[1] = cleared ? 1.0f : 0.0f;  // [tarmac]
+  std::copy(PadArea(), PadArea() + 4, k.padArea);  // [foliage]
+  k.table[2] = bladesGrowIn ? 1.0f : 0.0f;          // [foliage]
   device_->SetTexture(11, cleared ? cleared : trampled_);  // [tarmac] (read only with table.y)
   k.shown[0] = shown_;              // [cover]
   k.shown[1] = bare ? 1.0f : 0.0f;  // [cover]
@@ -1919,8 +1994,10 @@ void GroundCover::PlaceFar(const View& view, const Camera& camera, gfx::Texture 
       const int clump = m.card >= 0 ? std::clamp(static_cast<int>(plants_.cells[m.card][2][2]), 1, 6) : m.clump[1];
       for (size_t r = 0; r + 3 < tiles_->modelRows.size(); r += 4) {
         const float dNear = tiles_->modelRows[r + 3];
-        const float pxNear = frame * tiles_->focal / dNear * (1 + 0.5f * plantLod.modelBand);
-        const float pxFar = frame * tiles_->focal / (dNear + diagonal) * (1 - 0.5f * plantLod.modelBand);
+        // ([foliage] and as far round each change as a plant dissolves from one level into the next: PlantLodTune::modelFade)
+        const float fade = std::exp(std::max(plantLod.modelFade, 0.0f));
+        const float pxNear = frame * tiles_->focal / dNear * (1 + 0.5f * plantLod.modelBand) * fade;
+        const float pxFar = frame * tiles_->focal / (dNear + diagonal) * (1 - 0.5f * plantLod.modelBand) / fade;
         const int from = levelAt(pxNear), to = levelAt(pxFar);
         if (from < 0) continue;
         for (int l = from; l <= (to < 0 ? last : to); ++l) want[kind * PlantModels::kLevels + static_cast<size_t>(l)] += 256.0 * chance * clump;
