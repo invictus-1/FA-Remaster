@@ -915,13 +915,14 @@ tank uel0201's (24 dps x 300 health = 1.0).
     ranges and shields count, more exactly than a weighting of the seven scores would.
 - The lists print two of them per unit: `bv GC` (against 3 Galactic Colossi) and `bv T1` (against 60 UEF T1 tanks).
 
-**The battle estimate** (`EstimateBattle` / `Remastered.AIBattleEstimate(ours, theirs [, startDistance])`):
+**The battle estimate** (`EstimateBattle` / `Remastered.AIBattleEstimate(ours, theirs [, startDistance [, kite [, hold]]])`):
 - Each force is a list of (unit, count), fought out in half-second steps for up to 180 s.
 - The fight opens at the longer side's range, unless a start distance is given (0: up close).
 - **Firing:** every weapon fires while the gap is within its own range.
   - Its fire is shared over the enemy units it can hit, by their health.
   - It uses `HitShare` on the target's real health and shield (grouped below 3,000).
-  - Indirect fire counts at half against mobile targets: shells in flight miss what moves.
+  - Indirect fire counts at half against a mobile target that moved in the last half second: shells in flight miss
+    what walks, and hit what stands (since 2026-11-04; before, against every mobile target).
 - **The front:** around each target only as many shooters fit as stand in the weapon's range ring at the group
   density. A swarm of short-range units cannot all fire at a few big targets at once.
 - **Shields:** a shield takes hits first, except a bubble shield once the gap is inside its radius.
@@ -935,7 +936,16 @@ tank uel0201's (24 dps x 300 health = 1.0).
     defence of our zones and the guard posts read it (operations.lua `kDefenceSoak`): with the fighters-only read
     there the veteran duel against FAF was lost at minute 23.5-37.4 instead of 47.5 (defend bar 0.35 or 0.25). Attacks, pushes, raids, their commits, the navy and the defence picks
     read what fights.
-- **Closing in:** a side whose main weapons (75% of its dps, longest range first) cannot all fire yet closes in, under
+- **Each stack its own place (2026-11-04):** every stack stands on the line between the sides at its own distance from
+  them; a weapon fires on the enemy stacks within its range of it; a mobile stack that can hurt the other side walks
+  in at its own speed until its main weapon (the most dps against what is left) reaches the nearest enemy stack it
+  can hit, and stands from the start when that weapon outranges all that can hit it and they come (with `kite` it
+  backs off as they come); a stack that cannot hurt the other side stays. With `hold` the other side's stacks stand and
+  fire (an attack on a defender). This replaces the closing below, kept here for the record.
+- **Fragmenting shells (2026-11-04):** a projectile that splits on impact (`Physics.Fragments`, each fragment carrying
+  the whole damage) gives its weapon that many times the damage, down the chain (Seraphim's and the UEF's T1
+  artillery 5, the Aeon's T1 6, its Quantic clusters 8 x 3).
+- **Closing in (until 2026-11-04):** a side whose main weapons (75% of its dps, longest range first) cannot all fire yet closes in, under
   fire, at its slowest unit's speed. It holds instead when those weapons already outrange everything the other side
   has: a Fatboy waits for the Percivals, while a Loyalist walks in to its cannon's range.
 - **Chris's corrections:** a unit's `fix` scales its dps by fix^2 (its rating by fix), and his "A beats B" factor
@@ -943,6 +953,29 @@ tank uel0201's (24 dps x 300 health = 1.0).
 - It returns the margin (0.5 even, 1 a clean win), each side's share of health left, and the time.
 - `Remastered.AISquareLaw(ours, theirs)` stays for summed ratings, such as `AIZoneThreat`'s, where no unit lists are at
   hand.
+
+**The calibration against the fight bench (2026-11-04).** The fight bench (`aicore3` tools: `sessions/bench.lua` with
+both armies human and no AI, `tools/mkbench.py` / `runbench.sh` / `benchsum.py`; about 30 s a fight) spawns two forces of
+equal mass on the flat land between SETONS_R's first two starts, about 130 world units apart, and lets them fight by
+attack-moves (both sides: a meeting fight) or with the second side standing its ground; the real margin is
+0.5 + (our mass share left - theirs) / 2 at the end. The matrix: 6 of our mixes (the AI's T2 mix, T1, T2 missile
+launchers, T2 tanks, T2 tanks + launchers, Titans) x 4 M28-like mixes (T2 bots + T1 artillery + mobile shields; T2
+launchers + bots + shields; bots; T1 artillery) x 2k / 5k / 15k x meeting / holding, and 24 meeting fights on rough
+ground: 168 fights. The pairs (ours, theirs) were split, every third held out of the tuning. Each change models a
+mechanism, no fitted constant:
+
+| Form (FAF 3840 rules, main efd39b0) | Meeting: tuned / held out, mean abs error (worst) | Holding: tuned / held out | Rough ground |
+|---|---|---|---|
+| Before (one gap, the side closing at its slowest unit's speed) | 0.29 / 0.33 (+0.79, Titans vs T1 artillery) | 0.37 / 0.34 | 0.27 |
+| + each stack its own place, indirect fire missing only what moves | (896a5fc's rules: 0.28 / 0.29) | (0.26 / 0.29) | - |
+| + fragmenting shells | 0.21 / 0.15 (-0.50, T1 vs T2 bots + artillery + shields at 2k) | 0.29 / 0.21 (biased -0.2) | 0.27 |
+| + the defender standing its ground (`hold`) for attacks | 0.21 / 0.15 | 0.08 / 0.08 (-0.36) | 0.27 |
+
+The operations read `hold` for attacks, pushes, gathers and raids, the meeting fight for the defence and the posts.
+Not yet modelled: terrain (the rough-ground fights stay at 0.27). Judge (main efd39b0, against items 1+2+3b there: M28
+recruit x8 median 22.3 minutes, 90% of medians 21.0-26.6, lost per killed 9.0, 6.5-15.8; FAF veteran 36.1 / 36.2):
+M28 24.0 (20.5-28.3), lost per killed 5.7 (4.4-8.7); FAF veteran 45.1 / 41.0. The scoreboard at minute 20: our
+extractors 24 (18 before) against M28's 62, our income 223 mass a second (158).
 
 **Chris's corrections** (`data/ai/lua/remastered/ai/rating_fixes.lua`): `Fix = { id = multiplier }` and
 `Beats = { { idA, idB, factor } }`. The brain hands them to the engine once per game, before any rating is read
@@ -1076,11 +1109,11 @@ native core for numbers and spends its own time only on decisions.
   | `AIZoneThreat(army, zone, target, horizon [, from])` | `enemy, friendly`: summed ratings against `target` of what can reach the zone (3.2); `from` limits it to one domain |
   | `AIIndexInfo(army)` | `{tick, own, ally, enemy, unknown, outside, period}` |
   | `AISquareLaw(ours, theirs)` | `margin, survivors` (3.3) |
-  | `AIBattleEstimate(ours, theirs [, startDistance [, kite]])` | `margin, oursLeft, theirsLeft, seconds`; a force is an array of `{blueprintId, count}` (3.3) |
+  | `AIBattleEstimate(ours, theirs [, startDistance [, kite [, hold]]])` | `margin, oursLeft, theirsLeft, seconds`; a force is an array of `{blueprintId, count}` (3.3); `hold` (2026-11-04): theirs stand their ground |
   | `AIZoneTargets(army, zone)` | `{{x, z, mass, structure [, unknown]}, ...}`: the enemy units the army knows in the zone (held blips of seen units, then the memory), in the index's order (2026-11-03: where attacks and defences aim); since 2026-11-04 the contacts of unknown type too (radar, sonar, a jammer's blips), with mass 0 and `unknown = true` |
   | `AIZoneSummary(army)` | `{name = {value per zone}, ...}`: the numbers of `AIZoneForces` the front reads, for every zone in one call (`ownLandGround`, `enemyLandCount`, `enemyNavalMass`, ...; 2026-11-03) |
   | `AISortIndex(keys)` | the indices 1..n of an array of numbers in ascending order, index order on ties: a sort without a Lua comparator (2026-11-03) |
-  | `AIZoneEstimate(army, zone, horizon [, kite [, soak]])` | `margin, oursLeft, theirsLeft, seconds, oursMass, theirsMass`: the fight for the zone from what the army knows (3.2); `soak`: the estimate before phase 12 (3.3); kept per index build (2026-11-03) |
+  | `AIZoneEstimate(army, zone, horizon [, kite [, soak [, hold]]])` | `margin, oursLeft, theirsLeft, seconds, oursMass, theirsMass`: the fight for the zone from what the army knows (3.2); `soak`: the estimate before phase 12 (3.3); kept per index build (2026-11-03) |
   | `AIBuildValue(blueprintId, enemy)` | `value, killed, lost`: enemy mass killed per own mass lost (3.3) |
   | `AIEnemyMix(army [, all [, enemy]])` | `{{id, count, mass}, ...}`: the enemy's mobile army as known (the counter-pick's enemy), or with `all` every known enemy unit and structure (phase 5, 3.2); with `enemy` (an army index, phase 6) only that army's units |
   | `AIRandom(army [, n])` | the army's own random stream: a float in [0, 1), or an integer 1..n (phase 3) |
@@ -1453,6 +1486,7 @@ both-modes check, multicore.md 1).
 | 4 (first form built 2026-10-29) | Strategic and operation layers: aggression with hysteresis, objectives, gathering, push, retreat by estimate, raids, navy and air domains, combined arms timing. Built: the zone estimate from the index (fair intel, memory, reinforcements on the way, kiting), defend / attack / push / raid with commit rules and logged decisions, tech upgrades. Not yet: gathering, navy and air, combined arms | Ours vs M28 and FAF's AI, several seeds: the fight scores of section 6; "never fled a weaker force" at zero faults. First duels: 0 faults, 3 losses and one 60-minute game without a result (section 6) |
 | 5 (first form built 2026-10-29) | Economy in parallel with scouting, army and expansion (power ahead but not wasted, factory floor, engineers by distance and away from enemies, reclaim, storage, timed assists); counters by build value; defences as build candidates; investments by payback and danger with a planned dip; the strategy layer's read of the enemy and stances; attacks on armies and expansions with gathering and reinforcements via the staging zone; guard posts; the knobs in one place (decisions 13-16) | The five duels of section 6 (mass / s at 5 / 15 / 30 minutes, mass lost per enemy mass killed); the 16 + B1 / b8 identical; our-key sessions identical at 1 / 32 threads, shuffle, reverse |
 | 6a (first form built 2026-10-30) | Map control: the army kept against the enemy's known army, guard posts sized by the threat and lost zones taken back, reclaim fields; each enemy read on its own (the focus enemy); the player's two sliders (aggression, economy) with bounds; the duels with fog of war | The duels of section 6 with fog; the 16 + B1 / b8 identical; our-key fogged sessions identical at 1 / 32 threads, shuffle, reverse |
+| 16a (first form built 2026-11-04) | The battle estimate calibrated against the fight bench: each stack its own place, indirect fire missing only what moves, fragmenting shells, the defender standing its ground for attacks | The fight bench's matrix (168 fights, held-out pairs); the judge set; our-key sessions identical at 1 / 32 threads, shuffle, reverse (6,000 and 15,000 beats); the 16 + B1 / b8 identical |
 | 15c (first form built 2026-11-04) | The commander keeps its jobs, assists and reclaim within 60 world units of the start from minute 10 | The kill probe of the judge set (where and by what the commander died); the judge set; our-key sessions identical at 1 / 32 threads, shuffle, reverse (to minute 25) |
 | 15b (first form built 2026-11-04) | Fog: contacts of unknown type have a place (`AIZoneTargets`), the defence aims at them and counts them at the enemy's mean land unit mass | The kill probe of the judge set (killers seen or not, on radar); the judge set; our-key sessions identical at 1 / 32 threads, shuffle, reverse; the 16 + B1 / b8 identical |
 | 15a (first form built 2026-11-04) | The mass sinks: the planned dip (one extractor upgrade past the budget and the empty bar, payback <= 600 s), an experimental bought instead of units by build value when the income carries it, T1 factories paused while it builds, support factories by upgrade | The 4v4 of all our AI (the sink probe: income, extractor and factory tiers, experimentals); the judge set; our-key sessions identical at 1 / 32 threads, shuffle, reverse |

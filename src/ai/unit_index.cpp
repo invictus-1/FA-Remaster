@@ -92,6 +92,32 @@ int RawLen(lua_State* L, int t) {  // entries 1..n before the first nil
   }
 }
 
+// (2026-11-04, the calibration against the fight bench) The shells that split before they land: a projectile with
+// Physics.Fragments makes that many child projectiles (FragmentId) on impact, each carrying the whole damage data
+// (SIFThunthoArtilleryShell01_script.lua: "proj.DamageData = self.DamageData"; the Aeon and UEF fragmentation shells
+// alike), and a fragment may split again (the Aeon's Quantic clusters). The weapon's Damage is one fragment's: its dps
+// is that times the fragments down the chain. Seraphim's T1 artillery (Zthuee, 5 fragments) had been rated at a fifth
+// of its fire: on the fight bench 93 of them beat 10 Titans (margin 0.14-0.18) that the estimate gave 0.91.
+float FragmentFactor(lua_State* L, const std::string& projectileId) {
+  const SimBlueprints* bps = SimBlueprints::From(L);
+  if (!bps || projectileId.empty()) return 1;
+  float f = 1;
+  std::string id = projectileId;
+  for (int depth = 0; depth < 3 && !id.empty(); ++depth) {
+    const BlueprintInfo* bp = bps->Find(id);
+    if (!bp) break;
+    const int top = lua_gettop(L);
+    bps->PushTable(L, *bp);
+    RawField(L, lua_gettop(L), "Physics");
+    const float n = RawNum(L, lua_gettop(L), "Fragments", 0);
+    id = RawStr(L, lua_gettop(L), "FragmentId");
+    lua_settop(L, top);
+    if (!(n > 1)) break;
+    f *= n;
+  }
+  return f;
+}
+
 // One unit blueprint's rating from its table (at absolute index bpIdx).
 void RateBlueprint(lua_State* L, int bpIdx, uint32_t catKinds, const std::string& tier, UnitRating* r) {
   const int top = lua_gettop(L);
@@ -195,6 +221,7 @@ void RateBlueprint(lua_State* L, int bpIdx, uint32_t catKinds, const std::string
       const float perFire = std::max(1.0f, RawNum(L, w, "ProjectilesPerOnFire", 1));
       dps = damage * dot * std::max(salvo * together, perFire) * rof;
     }
+    dps *= FragmentFactor(L, RawStr(L, w, "ProjectileId"));  // (2026-11-04: shells that split, FragmentFactor)
     const float range = RawNum(L, w, "MaxRadius", 0);
     const float radius = RawNum(L, w, "DamageRadius", 0);
     const bool indirectW = rangeCat == "UWRC_IndirectFire" || category == "Artillery" || category == "Missile";
@@ -488,12 +515,13 @@ struct ArmyIndex {
   struct EstKey {
     int zone = 0;
     float horizon = 0;
-    bool kite = false, soak = false;
+    bool kite = false, soak = false, hold = false;
     bool operator<(const EstKey& o) const {
       if (zone != o.zone) return zone < o.zone;
       if (horizon != o.horizon) return horizon < o.horizon;
       if (kite != o.kite) return kite < o.kite;
-      return soak < o.soak;
+      if (soak != o.soak) return soak < o.soak;
+      return hold < o.hold;
     }
   };
   std::map<EstKey, std::array<float, 6>> estCache;
@@ -798,7 +826,7 @@ int TargetTypeOf(const UnitRating& r) {
 
 BattleResult EstimateBattle(const std::vector<ForceStack>& ours, const std::vector<ForceStack>& theirs,
                             float startDistance, const std::map<std::pair<int, int>, float>& beats, bool kite,
-                            bool soak) {
+                            bool soak, bool theirsHold) {
   struct Stack {
     const UnitRating* r;
     float hpEach, shEach, hp, sh;  // per unit and pooled; the shield takes hits first (from outside its bubble)
@@ -907,9 +935,33 @@ BattleResult EstimateBattle(const std::vector<ForceStack>& ours, const std::vect
     }
     return dps;
   };
-  float d = startDistance >= 0 ? startDistance : std::max(reach(0), reach(1));
+  // (2026-11-04, the calibration against the fight bench) EACH STACK ITS OWN PLACE. The fight bench (scripted army
+  // against army at equal mass on SETONS_R, both sides human, no AI) set against this estimate: a mean error of 0.30 in
+  // the margin, its sign flipping with the composition - T2 tanks against T1 artillery 0.85 here, 0.13 on the bench;
+  // our T2 missile launchers' mix against T2 bots 0.16 here, 0.54-0.90 there. The cause: both sides stood at one
+  // distance, a side closed at its slowest unit's speed until 75% of its dps could fire, and every weapon fired once
+  // that one gap was inside its range. On the bench the short-range units run ahead into the enemy's fire while the
+  // artillery and launchers stay at their own range. So each stack now has its own place on the line between the
+  // sides (pos: how far it has come from its side's start, the sides `d0` apart), and:
+  // - a weapon fires on the enemy stacks whose gap to it (d0 - its pos - theirs) is within its range;
+  // - a mobile stack walks toward the enemy at its own speed until the nearest enemy stack it can hit is within its
+  //   main weapon's range (the one with the most dps against what is left), then stands; it stands from the start
+  //   when that range already outranges every enemy stack that can hit it and the enemy is coming (it lets them come);
+  //   with `kite` such a stack backs off as they come, at its own speed;
+  // - a stack that cannot hurt the other side (anti-air against land, engineers, structures) stays where it is;
+  // - indirect fire counts at kIndirectVsMobile only against a stack that moved in the last step: shells in flight
+  //   miss what walks, and hit what stands (the bench's artillery against standing armies).
+  // The rest (what fights first, the front's room, shields, reinforcements, Chris's corrections) is as before.
+  const float d0 = startDistance >= 0 ? startDistance : std::max(reach(0), reach(1));
+  std::vector<float> pos[2];
+  std::vector<char> moved[2];
+  for (int k = 0; k < 2; ++k) {
+    pos[k].assign(side[k].size(), 0.0f);
+    moved[k].assign(side[k].size(), 0);
+  }
+  auto gap = [&](int k, size_t i, size_t j) { return std::max(0.0f, d0 - pos[k][i] - pos[1 - k][j]); };
   const float dt = 0.5f;
-  std::vector<float> dmg[2];
+  std::vector<float> dmg[2], dmgIn[2];
   for (; t < 180; t += dt) {
     bool anyAlive[2] = {false, false}, anyLater[2] = {false, false};
     for (int k = 0; k < 2; ++k)
@@ -919,33 +971,44 @@ BattleResult EstimateBattle(const std::vector<ForceStack>& ours, const std::vect
         anyLater[k] = anyLater[k] || (s.hp > 0 && s.arrive > t);
       }
     if ((!anyAlive[0] && !anyLater[0]) || (!anyAlive[1] && !anyLater[1])) break;
-    for (int k = 0; k < 2; ++k) dmg[k].assign(side[k].size(), 0.0f);
+    for (int k = 0; k < 2; ++k) {
+      dmg[k].assign(side[k].size(), 0.0f);
+      dmgIn[k].assign(side[k].size(), 0.0f);
+    }
     bool fired = false;
     for (int k = 0; k < 2; ++k)
-      for (const Stack& s : side[k]) {
+      for (size_t i = 0; i < side[k].size(); ++i) {
+        const Stack& s = side[k][i];
         if (!alive(s)) continue;
         const float n = s.hp / s.hpEach;  // units left (continuous)
         for (const UnitRating::Weapon& w : s.r->weapons) {
-          if (d > w.range) continue;
-          // (phase 12: what fights first; the rest when nothing that fights is left to this weapon)
+          // (phase 12: what fights first; the rest when nothing that fights is left in this weapon's reach)
           bool onlyFighters = false;
-          for (const Stack& e : side[1 - k])
-            onlyFighters = onlyFighters || (alive(e) && e.fights && (w.vs & (1u << e.tt)));
+          for (size_t j = 0; j < side[1 - k].size(); ++j) {
+            const Stack& e = side[1 - k][j];
+            onlyFighters = onlyFighters || (alive(e) && e.fights && (w.vs & (1u << e.tt)) && gap(k, i, j) <= w.range);
+          }
           float hittable = 0, room = 0;
-          for (const Stack& e : side[1 - k])
-            if (alive(e) && (w.vs & (1u << e.tt)) && (e.fights || !onlyFighters)) {
+          for (size_t j = 0; j < side[1 - k].size(); ++j) {
+            const Stack& e = side[1 - k][j];
+            if (alive(e) && (w.vs & (1u << e.tt)) && gap(k, i, j) <= w.range && (e.fights || !onlyFighters)) {
               hittable += e.hp + e.sh;
               // the front: around each target only so many shooters fit within this weapon's range (its ring's area
               // at the group density); a swarm of short-range units cannot all fire at a few big targets at once
               room += (e.hp / e.hpEach) * 3.14159265f * (w.range + 2) * (w.range + 2) * kGroupDensity;
             }
+          }
           if (hittable <= 0) continue;
           fired = true;
           const float firing = std::min(n, room);
           for (size_t j = 0; j < side[1 - k].size(); ++j) {
             const Stack& e = side[1 - k][j];
-            if (!alive(e) || !(w.vs & (1u << e.tt)) || (onlyFighters && !e.fights)) continue;
-            dmg[1 - k][j] += firing * dpsOn(s, w, e) * dt * ((e.hp + e.sh) / hittable);
+            if (!alive(e) || !(w.vs & (1u << e.tt)) || gap(k, i, j) > w.range || (onlyFighters && !e.fights)) continue;
+            float x = firing * dpsOn(s, w, e) * dt * ((e.hp + e.sh) / hittable);
+            if (w.indirect && e.mobile && !moved[1 - k][j]) x /= kIndirectVsMobile;  // (it stands: no miss)
+            // (inside a bubble shield the fire reaches the unit itself)
+            if (gap(k, i, j) < e.r->shieldRadius) dmgIn[1 - k][j] += x;
+            else dmg[1 - k][j] += x;
           }
         }
       }
@@ -953,42 +1016,63 @@ BattleResult EstimateBattle(const std::vector<ForceStack>& ours, const std::vect
       for (size_t j = 0; j < side[k].size(); ++j) {
         Stack& e = side[k][j];
         float x = dmg[k][j];
-        if (e.sh > 0 && d >= e.r->shieldRadius) {  // (inside a bubble shield the fire reaches the unit itself)
+        if (e.sh > 0) {
           const float took = std::min(e.sh, x);
           e.sh -= took;
           x -= took;
         }
-        e.hp -= x;
+        e.hp -= x + dmgIn[k][j];
       }
-    // a side whose main weapons cannot all fire yet closes in, at its slowest unit's speed, unless its main weapons
-    // already outrange everything the other side has: then it holds and lets the other come (a Fatboy waits for the
-    // Percivals; a Loyalist walks in to its cannon's range even though its bolter outranges a T2 tank)
-    bool moved = false;
-    const float ea = engage(0), eb = engage(1), ra = reach(0), rb = reach(1);
-    float closing = 0;
+    // the walk: each mobile stack that can hurt the other side closes until its main weapon reaches the nearest enemy
+    // stack it can hit; it stands from the start when it outranges all that can hit it and they come (kite: backs off)
+    bool anyMoved = false;
+    bool coming[2] = {false, false};
     for (int k = 0; k < 2; ++k)
-      if (d > (k == 0 ? ea : eb) && !((k == 0 ? ea : eb) >= (k == 0 ? rb : ra))) {
-        const float v = speedOf(k);
-        if (v > 0) {
-          d = std::max(0.0f, d - v * dt);
-          closing = std::max(closing, v);
-          moved = true;
+      for (size_t i = 0; i < side[k].size(); ++i) coming[k] = coming[k] || (moved[k][i] && alive(side[k][i]));
+    std::vector<char> now[2];
+    for (int k = 0; k < 2; ++k) now[k].assign(side[k].size(), 0);
+    for (int k = 0; k < 2; ++k)
+      for (size_t i = 0; i < side[k].size(); ++i) {
+        const Stack& s = side[k][i];
+        if (!alive(s) || !s.mobile || !(s.r->speed > 0)) continue;
+        // (`theirsHold`, an attack on a defender: the other side's stacks stand and fire, and what stands takes the
+        // indirect fire whole - the bench's held fights, where the estimate had read 0.17-0.22 too low)
+        if (k == 1 && theirsHold) continue;
+        float best = -1, bestDps = 0, nearest = -1, theirReach = 0;
+        for (const UnitRating::Weapon& w : s.r->weapons)
+          for (size_t j = 0; j < side[1 - k].size(); ++j) {
+            const Stack& e = side[1 - k][j];
+            if (!alive(e) || !(w.vs & (1u << e.tt))) continue;
+            if (w.dps > bestDps) bestDps = w.dps, best = w.range;
+            const float g = gap(k, i, j);
+            if (nearest < 0 || g < nearest) nearest = g;
+          }
+        if (best < 0) continue;  // it cannot hurt what is left: it stays
+        for (size_t j = 0; j < side[1 - k].size(); ++j) {
+          const Stack& e = side[1 - k][j];
+          if (!alive(e)) continue;
+          for (const UnitRating::Weapon& w : e.r->weapons)
+            if (w.vs & (1u << s.tt)) theirReach = std::max(theirReach, w.range);
         }
-      }
-    // kiting: a side holding because its main weapons outrange the other backs off as the other closes, at its own
-    // speed, not past its engage range
-    if (kite && closing > 0)
-      for (int k = 0; k < 2; ++k) {
-        const float ek = k == 0 ? ea : eb, other = k == 0 ? rb : ra;
-        if (ek >= other && ek > 0) {
-          const float v = speedOf(k);
-          if (v > 0) d = std::min(ek, d + v * dt);
+        if (nearest <= best) {
+          // in reach: it stands; kiting, an outranging stack backs off while something that can hit it closes in
+          if (kite && best > theirReach && nearest < best && coming[1 - k]) {
+            pos[k][i] -= s.r->speed * dt;
+            now[k][i] = 1;
+            anyMoved = true;
+          }
+          continue;
         }
+        if (best > theirReach && theirReach > 0 && coming[1 - k] && t > 0) continue;  // it lets them come
+        pos[k][i] += std::min(s.r->speed * dt, nearest - best);
+        now[k][i] = 1;
+        anyMoved = true;
       }
+    for (int k = 0; k < 2; ++k) moved[k] = now[k];
     bool waiting = false;  // reinforcements still on the way: the fight is not over while they come
     for (int k = 0; k < 2; ++k)
       for (const Stack& s : side[k]) waiting = waiting || (s.hp > 0 && s.arrive > t);
-    if (!fired && !moved && !waiting) break;  // nobody can fire, close or arrive: a standoff without a fight
+    if (!fired && !anyMoved && !waiting) break;  // nobody can fire, close or arrive: a standoff without a fight
   }
   float left[2] = {0, 0};
   for (int k = 0; k < 2; ++k)
@@ -1448,7 +1532,7 @@ int l_AIEnemyMix(lua_State* L) {
   return 1;
 }
 
-// Remastered.AIZoneEstimate(army, zone, horizon [, kite [, soak]]) -> margin, oursLeft, theirsLeft, seconds, oursMass,
+// Remastered.AIZoneEstimate(army, zone, horizon [, kite [, soak [, hold]]]) -> margin, oursLeft, theirsLeft, seconds, oursMass,
 // theirsMass: the battle estimate of a fight for the zone from what the army knows (phase 4): its index's units (fair
 // intel, the memory of lost contacts, unknown contacts left out) that can come to the zone within `horizon` world
 // units of travel or shoot into it, own + allied against enemy; a unit away from the zone joins after its travel
@@ -1461,7 +1545,8 @@ int l_AIZoneEstimate(lua_State* L) {
   const float horizon = static_cast<float>(luaL_checknumber(L, 3));
   const bool kite = lua_toboolean(L, 4) != 0;
   const bool soak = lua_toboolean(L, 5) != 0;
-  const ArmyIndex::EstKey key{z, horizon, kite, soak};
+  const bool hold = lua_toboolean(L, 6) != 0;  // (2026-11-04) the enemy stands its ground: our attack on it
+  const ArmyIndex::EstKey key{z, horizon, kite, soak, hold};
   if (auto it = ix.estCache.find(key); it != ix.estCache.end()) {
     for (float v : it->second) lua_pushnumber(L, v);
     return 6;
@@ -1495,7 +1580,7 @@ int l_AIZoneEstimate(lua_State* L) {
   std::vector<ForceStack> force[2];
   for (int k = 0; k < 2; ++k)
     for (const auto& [key, count] : stacks[k]) force[k].push_back({&rs.byEntity[key.first], count, key.second * 10.0f});
-  const BattleResult r = EstimateBattle(force[0], force[1], -1.0f, rs.beats, kite, soak);
+  const BattleResult r = EstimateBattle(force[0], force[1], -1.0f, rs.beats, kite, soak, hold);
   const std::array<float, 6> out{r.margin, r.ours, r.theirs, r.seconds, mass[0], mass[1]};
   ix.estCache[key] = out;
   for (float v : out) lua_pushnumber(L, v);
@@ -1585,13 +1670,14 @@ int l_AISetVision(lua_State* L) {
   return 0;
 }
 
-// Remastered.AIBattleEstimate(ours, theirs [, startDistance]) -> margin, oursLeft, theirsLeft, seconds: the battle
-// estimate (unit_index.h EstimateBattle); ours / theirs = arrays of {blueprintId, count}; startDistance < 0 or none:
-// the longer side's range
+// Remastered.AIBattleEstimate(ours, theirs [, startDistance [, kite [, hold]]]) -> margin, oursLeft, theirsLeft,
+// seconds: the battle estimate (unit_index.h EstimateBattle); ours / theirs = arrays of {blueprintId, count};
+// startDistance < 0 or none: the longer side's range; hold (2026-11-04): theirs stand their ground
 int l_AIBattleEstimate(lua_State* L) {
   const std::vector<ForceStack> a = CheckForce(L, 1), b = CheckForce(L, 2);
   const float d = lua_isnoneornil(L, 3) ? -1.0f : static_cast<float>(luaL_checknumber(L, 3));
-  const BattleResult r = EstimateBattle(a, b, d, Ratings(*Sim::From(L)).beats, lua_toboolean(L, 4) != 0);
+  const BattleResult r = EstimateBattle(a, b, d, Ratings(*Sim::From(L)).beats, lua_toboolean(L, 4) != 0, false,
+                                        lua_toboolean(L, 5) != 0);  // (5th: theirs hold, 2026-11-04)
   lua_pushnumber(L, r.margin);
   lua_pushnumber(L, r.ours);
   lua_pushnumber(L, r.theirs);

@@ -274,4 +274,14 @@ the duels showed. The duels are 1v1 on SETONS_R against FAF's adaptive AI and M2
     sides human, no AI) found our counter-picks winning against M28-like mixes holding their ground: our T2 missile
     launchers lost 0.0-0.6 of what they killed against T2 bots, T1/T2 artillery and mobile shields, the AI's T2 mix
     0.2-0.6, T1 tanks 0.8-1.6. So what loses the duels is how and where the army fights, not what it builds.
+33. **The battle estimate is measured against real fights (refines 10-12; 2026-11-04).** Every defend, attack, hold-back,
+    post and investment decision reads the battle estimate, and a fight bench (two forces of equal mass, both scripted,
+    no AI) found it wrong by 0.3 in the margin on average, its sign flipping with the composition: T2 tanks against T1
+    artillery 0.85 against a real 0.13, the AI's own missile-launcher mix against T2 bots 0.16 against 0.54-0.90. So
+    the AI held back from fights it would win and walked into fights it would lose. The estimate now models what the
+    bench showed - each stack fights from its own place (the short-range units run ahead, the launchers stay back),
+    shells miss what walks and hit what stands, shells that split count their fragments, a defender stands its ground -
+    and the bench's matrix (with pairs held out) is its test: the mean error fell to 0.15 in meeting fights and 0.08
+    against a defender. Against M28 the duels lasted about as long and traded better (lost per killed 9.0 -> 5.7), the
+    FAF veteran games 5-9 minutes longer.
 
