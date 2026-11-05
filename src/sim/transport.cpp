@@ -972,15 +972,18 @@ namespace {
 // prefix, so "RULEUCC_Move" in any case, a number, or names or-ed with '|'; a name the parse does not take raises
 // "Invalid enum value" (ours gave 0 for it)
 uint32_t CommandCapBit(lua_State* L, const char* s) { return static_cast<uint32_t>(EnumValue(L, kEnumCommandCaps, s)); }
-// Unit:AddCommandCap(cap) 0x6c85e0: caps |= bit, sync flag (u+0xa2). RemoveCommandCap is its mirror.
+// Unit:AddCommandCap(cap) 0x6c85e0: caps |= bit, sync flag (u+0xa2, 0x6c86dc: the refresh-UI flag,
+// Sim::RequestRefreshUI; ui REQUESTS 54). RemoveCommandCap is its mirror (0x6c8880).
 int l_AddCommandCap(lua_State* L) {
   Unit* u = CheckObject<Unit>(L, 1);
   u->commandCaps = LiveCommandCaps(L, u) | CommandCapBit(L, luaL_checkstring(L, 2));
+  Sim::From(L)->RequestRefreshUI(u);
   return 0;
 }
 int l_RemoveCommandCap(lua_State* L) {
   Unit* u = CheckObject<Unit>(L, 1);
   u->commandCaps = LiveCommandCaps(L, u) & ~CommandCapBit(L, luaL_checkstring(L, 2));
+  Sim::From(L)->RequestRefreshUI(u);
   return 0;
 }
 // RestoreCommandCaps: back to the blueprint's (not read: taken from its name and FAF's use). TestCommandCaps(cap)

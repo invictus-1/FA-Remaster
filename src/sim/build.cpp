@@ -2376,6 +2376,9 @@ BuildTask* FactoryWork(Sim& sim, Unit* U, GuardData& g, Unit* G) {
       G->commands.erase(G->commands.begin() + i);
       G->commands.push_back(c);
     } else {
+      // (RemoveCommandFromQueue 0x6edef0 from 0x612aba: G's refresh-UI flag when it is G's head, 0x6edefe; ui
+      // REQUESTS 54)
+      if (i == 0) sim.RequestRefreshUI(G);
       G->commands.erase(G->commands.begin() + i);
       ReleaseCommand(G, *c);
     }
@@ -3291,6 +3294,8 @@ int TickGuard(Sim& sim, lua_State* L, Unit* U, BuildTask& t) {
       } else {
         auto it = std::find(U->commands.begin(), U->commands.end(), c);
         if (it != U->commands.end()) {
+          // (RemoveCommandFromQueue from 0x6142ad: the refresh-UI flag when it was U's head, 0x6edefe; REQUESTS 54)
+          if (it == U->commands.begin()) sim.RequestRefreshUI(U);
           U->commands.erase(it);
           ReleaseCommand(U, *c);
         }

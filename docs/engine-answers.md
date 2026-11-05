@@ -3,6 +3,51 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+## ui request 54: the refresh flag at the original's command-queue points (2026-11-04) — done
+
+The unit's refresh flag (unit+0xa2 = entity+0x9a, ours `Entity::refreshUI`, which reaches you as
+`UnitView::refreshUI` on the next beat's sync, as for request 47) is now set by `Sim::RequestRefreshUI` at the
+original's points. All of them were read in the original:
+
+- **An Upgrade the queue takes** (ProcessUnitCommand 0x6f010c): once the blueprint tests have passed (SeedUnit, or
+  UpgradesTo / UpgradesFrom), the flag is set even if the order is then refused as a repeat. In ours this is
+  `RefusesUpgradeAgain` (commands.cpp), on both paths, the stream (`IssueFromStream`) and Lua `IssueUpgrade`.
+- **The head order leaving the queue, when NeedsUIRefresh (0x6ee260) says so.** NeedsUIRefresh reads the head's type
+  in the byte table at 0x6ee2ac and answers yes for BuildSiloTactical, BuildSiloNuke, BuildFactory, Reclaim, Repair,
+  Capture, the four transport loads and unloads, Upgrade and Dock. The points where the original sets the flag, and
+  where ours now does:
+  - RemoveFirstCommandFromQueue 0x6ede8e (a finished order): `PopHead`;
+  - RemoveCommandFromQueue 0x6edefe (index 0 only): `RemoveCommandFromUnit`, which carries the stream's
+    RemoveCommandFromQueue and the DecreaseCommandCount that removes an order (0x6ee364, a count set to 0 at index 0),
+    and the guard task's two removals (build.cpp: an order taken from the assisted factory's head at 0x612aba, and the
+    guard's own finished order at 0x6142ad);
+  - ClearCommandQueue 0x6ee2da: `ForgetUnitCommands` (a clearing order, a kill, a destroy);
+  - not MoveFirstCommandToBackOfQueue 0x6edfc0 (a repeating factory's order going to the back), as in the original.
+- **Unit:AddCommandCap / RemoveCommandCap** (0x6c86dc / 0x6c8880). FAF's FactoryUnit.OnStartBuild removes
+  RULEUCC_Guard when an HQ upgrade begins, so the panel is rebuilt at that moment.
+- **The Stop dispatch** (0x60a4b9).
+
+The flag changes nothing in the sim; only the views read it. Proof: 15 of the 16 replays (MP1 left out for the
+memory rule), plus b8 and B1, played with this patch and with clean main c1122bb. Every sim part of the fingerprints
+is identical. Only the `lua=` heap counter differs, by a byte or two: in LAND, MP2, Naval and B1. That counter also
+differs between two runs of the SAME exe (LAND, wtref against wtref: 65 lines), so it is noise between runs, not the
+patch. b8 (6,000 beats with fixes on) is byte-identical. A scratch build that logs every unit whose synced flag is
+on was run on Chris's game 3 (army 8). It shows the flag on the beat after each event:
+- each Upgrade queued: 1084, 1100, 1168, 1256, 1532, 1565, 2092, 2142, 3402, 3416;
+- each Stop: 1115, 1138, 1215, 3373, 3393;
+- the factory's finished builds (1383, 1423, 1463, ...) and the started upgrades (cap changes: 1151, 2905).
+
+What it means for you: the next beat after an upgrade is queued, your CheckForNecessaryUIRefresh sees the flag and
+rebuilds the build menu, so the HQ button goes away (GetUnitCommandData already leaves out queued upgrades). It also
+explains part of item 6 in Chris's game 3. The air factory 0x700001 was not stuck. Chris queued Upgrade ueb0202 at
+1099 and Stopped it at 1114 (0%). At 2091 he queued it behind a uea0101 build, then removed it (2125). At 2141 he
+queued it again, behind three T1 builds; it began at 2600, as the queue order says (the original's order too). At
+3392 he Stopped the factory again, which ended the upgrade at 52%, and queued the chain [0202, 0302] at 3401. That
+upgrade began from 0 and finished at about 4800. The land factory went the same way: Stops at 1137 and 1214 ended
+queued upgrades, and at 3372 a Stop on the new T2 factory 0x70000e cleared its seven queued T2 / T3 units. A panel
+that never showed the upgrade as queued (before this fix) would explain why he kept pressing Stop and queuing again
+(inferred).
+
 ## render 54: the selection square's centre (2026-11-04) — read; the centre is the MESH's box, not the unit's place
 
 Read again in 0x7fc820 (render 23's routine), 0x7fc89c-0x7fccc7:

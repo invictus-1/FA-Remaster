@@ -156,8 +156,33 @@ void EndMoveTaskRect(Unit* u) {
   GroundFreeRect(*Sim::From(u->luaState()), u);
 }
 
+// ui REQUESTS 54: the unit's refresh-UI flag (Sim::RequestRefreshUI, entity+0x9a = unit+0xa2) when the HEAD order
+// leaving its queue is one the interface's panels show. CUnitCommandQueue::NeedsUIRefresh 0x6ee260 reads the head's
+// type (cmd+0x98) through the byte table at 0x6ee2ac (types 5 .. 0x27): BuildSiloTactical, BuildSiloNuke,
+// BuildFactory, Reclaim, Repair, Capture, the four transport loads / unloads, Upgrade and Dock. The queue sets the
+// flag with it when the head goes: RemoveFirstCommandFromQueue 0x6ede8e (the dispatcher's finished order),
+// RemoveCommandFromQueue 0x6edefe (index 0), ClearCommandQueue 0x6ee2da, a count set to 0 at index 0 (0x6ee364).
+// Not at MoveFirstCommandToBackOfQueue 0x6edfc0 (a repeating queue's order). The next beat's sync then makes the
+// interface rebuild the unit's panels (seen 2026-11-04, Chris's second test: an upgrade queued in a factory left its
+// build menu as it was, the T2 HQ button live).
+void NoteHeadLeaving(Sim& sim, Unit* u) {
+  if (u->commands.empty() || !u->commands.front()) return;
+  const int t = static_cast<int>(u->commands.front()->type);
+  const bool shown = (t >= 5 && t <= 7) || (t >= 19 && t <= 25) || t == 27 || t == 39;
+  if (shown) sim.RequestRefreshUI(u);
+}
+
+void PopHeadQuiet(Unit* u);
+
 // Remove the head command of u (it is done for this unit).
 void PopHead(Unit* u) {
+  NoteHeadLeaving(*Sim::From(u->luaState()), u);  // (RemoveFirstCommandFromQueue 0x6ede8e)
+  PopHeadQuiet(u);
+}
+
+// PopHead without the refresh flag: a repeating queue's order going to its back (MoveFirstCommandToBackOfQueue
+// 0x6edfc0 sets none).
+void PopHeadQuiet(Unit* u) {
   EndMoveTaskRect(u);
   if (u->engageId) ClearEngagement(*Sim::From(u->luaState()), u);
   if (u->task) {
@@ -189,7 +214,7 @@ bool OrderTakenWithoutTask(Unit* u) {
   if (u->repeatQueue && head->type == CommandType::BuildFactory) {
     head->count = head->maxCount;
     if (u->commands.size() > 1) {
-      PopHead(u);
+      PopHeadQuiet(u);
       u->commands.push_back(head);
       head->units.insert(u);
     }
@@ -247,7 +272,15 @@ bool UpgradeOrderFits(Sim& sim, const Unit* u, const UnitCommand& c) {
 // 0xaa549e), whether the new one clears the queue or not (the clear comes after, 0x6f1405). Seen: MP3 7769, army 1's
 // T1 extractor 0x10006f, upgrading since 5984, gets the same Upgrade from the command stream again (clear 0): the
 // original's queue stays at one order; ours queued the second and showed two.
-bool RefusesUpgradeAgain(Sim& sim, const Unit* u, const std::string& bpId) {
+bool RefusesUpgradeAgain(Sim& sim, Unit* u, const std::string& bpId) {
+  // ui REQUESTS 54: the refresh-UI flag first (0x6f010c, byte unit+0xa2 = 1), once the blueprint tests have passed
+  // (0x6f00b5..0x6f0102 for a SeedUnit, else from 0x6f014d), whether the order is then refused as a repeat or not.
+  // (The tests here are DispatchTask's, UpgradeOrderFits; the issue's own also takes UpgradesFromBase: not read.)
+  {
+    UnitCommand probe;
+    probe.blueprintId = bpId;
+    if (UpgradeOrderFits(sim, u, probe)) sim.RequestRefreshUI(u);
+  }
   if (u->commands.empty()) return false;
   const UnitCommand& last = *u->commands.back();
   if (last.type != CommandType::Upgrade) return false;
@@ -906,6 +939,7 @@ void StartHead(Sim& sim, Unit* u) {
       // the original's weapons look again and auto-attack it (an Attack order at 7328); ours kept the targets and
       // never ordered the attack.
       AttackerStop(sim, u);
+      sim.RequestRefreshUI(u);  // (0x60a4b9: byte unit+0xa2 = 1; ui REQUESTS 54)
       PopHead(u);
       if (!fromStream) MotionStop(u);
       SetMoving(u, false);
@@ -1178,6 +1212,7 @@ bool NavEventWakesCommandThread(const Unit* u) {
 }
 
 void ForgetUnitCommands(Unit* u) {
+  NoteHeadLeaving(*Sim::From(u->luaState()), u);  // (ClearCommandQueue 0x6ee2da; ui REQUESTS 54)
   EndMoveTaskRect(u);
   if (u->engageId) ClearEngagement(*Sim::From(u->luaState()), u);
   if (u->task) {
@@ -1653,6 +1688,7 @@ bool RemoveCommandFromUnit(Sim& sim, Unit* u, UnitCommand& c) {
   if (i == q.size()) return false;
   std::shared_ptr<UnitCommand> keep = q[i];
   if (i == 0) {  // the executing head: its task is interrupted (destructor abort -> AbortMove)
+    NoteHeadLeaving(sim, u);  // (RemoveCommandFromQueue 0x6edefe, index 0; ui REQUESTS 54)
     const bool stopped = HeadTaskStopsMotion(u);  // a pod's task: its dtor's Stop is the last word
     const bool asleep = ThreadAsleepOnMove(u);    // (asked before the teardown changes the head)
     // A head not dispatched yet has no task: event 3's interrupt (IAiCommandDispatchImpl::OnEvent 0x599030 ->
