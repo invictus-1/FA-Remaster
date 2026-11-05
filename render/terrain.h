@@ -120,6 +120,9 @@ class Terrain {
   // (each 0..2, 1 as tuned: how much the shelter cuts the sky's light, how much the trees' crowns take of the snow and its
   // light, how high the wind's drifts stand, how deep they lie and how much of them is drifted; the viewer's --snow-ground-tune)
   float snowTune[4] = {1, 1, 1, 1};
+  // [snowhold] How much more snow the steep, windward and scoured ground holds than this ground's own snow lays there (0: as
+  // before; 1: as the plain snow, nothing thinned; Chris, 2026-11-04: "maybe halfway"): viewer --snow-hold.
+  float snowHold = 0.25f;  // (measured on SETONS_R's west hill: its face 52 % bare at 0, 17 % at 0.5 and in the plain snow; 32 % at 0.25, halfway)
   // [snow mask] How much the map's painted drift mask (remap.json's "snow_drift_mask", the visuals session's: 0.5 as
   // elsewhere, above deeper, below scoured) moves the snow's laying in its shelter, added to the wind's and the props' own
   // (1 as made; 0 none; the viewer's --snow-mask-strength). Taken when the shelter is made.

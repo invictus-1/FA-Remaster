@@ -856,6 +856,7 @@ struct Options {
   int oceanGlitter = 1;                                        // [bigtest] --ocean-glitter
   float oceanRelief = 0.5f;                                    // [relief] --ocean-relief
   float foamPatches = 0;                                       // [foampatch] --foam-patches
+  float snowHold = 0.25f;                                      // [snowhold] --snow-hold
   bool shoreSoak = true;                                       // [bigtest] --no-shore-soak
   bool soakOld = false;                                        // [soakfix] --soak-old
   std::string surfTest;                 // --surf-test
@@ -1401,6 +1402,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--ocean-view") o->oceanView = atoi(v);
     else if (a == "--ocean-glitter") o->oceanGlitter = atoi(v);  // [bigtest]
     else if (a == "--ocean-relief") o->oceanRelief = std::clamp(static_cast<float>(atof(v)), 0.0f, 1.0f);  // [relief]
+    else if (a == "--snow-hold") o->snowHold = std::clamp(static_cast<float>(atof(v)), 0.0f, 1.0f);  // [snowhold]
     else if (a == "--foam-patches") o->foamPatches = std::clamp(static_cast<float>(atof(v)), 0.0f, 1.0f);  // [foampatch]
     else if (a == "--ocean-tilt") o->oceanTilt = std::clamp(static_cast<float>(atof(v)), 0.0f, 6.0f);
     else if (a == "--surf-strength") o->surfStrength = std::max(0.0f, static_cast<float>(atof(v)));
@@ -2133,6 +2135,7 @@ int main(int argc, char** argv) {
   world.water.ocean.glitter = opt.oceanGlitter;  // [bigtest]
   world.water.ocean.relief = opt.oceanRelief;    // [relief]
   world.water.ocean.foamPatches = opt.foamPatches;  // [foampatch]
+  world.terrain.snowHold = opt.snowHold;  // [snowhold]
   world.water.shoreSoak = opt.shoreSoak;          // [bigtest]
   world.water.soakFixed = !opt.soakOld;           // [soakfix]
   world.water.ocean.tilt = opt.oceanTilt;
