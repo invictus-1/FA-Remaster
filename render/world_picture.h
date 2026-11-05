@@ -309,6 +309,9 @@ class WorldPicture {
   // anti-aliasing off (gSceneSamples 1 before Open), as SetTemporalUpscale; with it on, or where the device
   // cannot, nothing changes. Set before or after Open (from the next frame). Off as at first. A player's option.
   void SetFrameGeneration(bool on);
+  // [fgquery] whether frame generation makes a picture between the last frame drawn and the next (on and not refused:
+  // "FSR 3 frame generation cannot be used" leaves it false), for the interface's counter of frames shown
+  bool FrameGenerationOn() const;
   // Units seen behind trees, cliffs and buildings (World::hiddenOutlines, hidden_outlines.h): where a unit the player
   // may see - his own, an ally's, an enemy's in sight, never one in the fog of war - is hidden behind leaves, props, a
   // hill or a building, a faint thin outline in its strategic icon's colour shows where it is; it gives way to the

@@ -1475,6 +1475,8 @@ void WorldPicture::SetFrameGeneration(bool on) {
   impl_->ApplyBundles();
 }
 
+bool WorldPicture::FrameGenerationOn() const { return impl_->world && impl_->world->FrameGenerationNow(); }  // [fgquery]
+
 void WorldPicture::SetHiddenOutlines(bool on) {
   impl_->hiddenOutlines = on;
   impl_->ApplyBundles();
