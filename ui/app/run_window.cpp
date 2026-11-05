@@ -58,8 +58,15 @@ class PerfStats {
     mean = sorted.empty() ? 0 : mean / sorted.size();
     char buf[256];
     std::vector<std::string> lines;
-    std::snprintf(buf, sizeof buf, "frame %.2f ms (%.0f a second)   95%% %.2f   99%% %.2f   longest %.2f", at(0.5), mean > 0 ? 1000.0 / mean : 0.0,
-                  at(0.95), at(0.99), sorted.empty() ? 0.0f : sorted.back());
+    // (the frames counted here are the ones drawn; with frame generation the screen shows about twice as many, one made
+    // between each two: both said, Chris's third test 2026-11-05, "frame generation costs ~10 fps" was this count)
+    const double drawn = mean > 0 ? 1000.0 / mean : 0.0;
+    if (hooks.frameGenerationOn && hooks.frameGenerationOn())
+      std::snprintf(buf, sizeof buf, "frame %.2f ms (%.0f drawn, ~%.0f shown a second)   95%% %.2f   99%% %.2f   longest %.2f", at(0.5),
+                    drawn, 2 * drawn, at(0.95), at(0.99), sorted.empty() ? 0.0f : sorted.back());
+    else
+      std::snprintf(buf, sizeof buf, "frame %.2f ms (%.0f a second)   95%% %.2f   99%% %.2f   longest %.2f", at(0.5), drawn,
+                    at(0.95), at(0.99), sorted.empty() ? 0.0f : sorted.back());
     lines.push_back(buf);
     std::snprintf(buf, sizeof buf, "interface: scripts %.2f   drawing %.2f   the host %.2f   showing %.2f ms", script_, draw_, host_, show_);
     lines.push_back(buf);

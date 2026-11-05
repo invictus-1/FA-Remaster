@@ -2154,6 +2154,14 @@ void GameSession::WaitForNextFrame() {
 #endif
 }
 
+bool GameSession::FrameGenerationOn() const {
+#ifdef MOHO64UI_WORLD_PICTURE
+  return windowPicture_ && windowPicture_->picture.FrameGenerationOn();
+#else
+  return false;
+#endif
+}
+
 // The window's picture, made when there is none yet; with `remake` (a map is begun) made anew too when the player's
 // Graphics API or anti-aliasing has changed and no game's world shows in it (those are taken when the device and a
 // world's pipelines are made: gSceneSamples must not change while a world lives, render/world.h; as before, a change

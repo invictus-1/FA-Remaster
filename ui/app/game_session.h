@@ -242,6 +242,7 @@ class GameSession {
   // Once a frame, before its input is read: the renderer's wait for the frame's time with Low Latency on
   // (WorldPicture::WaitForNextFrame on the picture about to be shown; FramePacing::lowLatency).
   void WaitForNextFrame();
+  bool FrameGenerationOn() const;  // (the window's picture: render::WorldPicture::FrameGenerationOn)
   // For checking: the next shown frame is read back and saved as a PNG.
   void CaptureWindow(const std::string& path);
 

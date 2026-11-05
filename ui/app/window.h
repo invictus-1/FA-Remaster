@@ -145,6 +145,9 @@ struct WindowHooks {
   std::function<void(double seconds)> clock;
   // More lines for the performance statistics (the world's picture's own numbers); unset: none.
   std::function<void(std::vector<std::string>* lines)> statsLines;
+  // Whether the renderer's frame generation makes a picture between each two drawn this frame (the statistics then
+  // count the shown ones too); unset: never.
+  std::function<bool()> frameGenerationOn;
 };
 int RunWindow(const std::function<UserState&()>& current, int width, int height, int maxFrames,
               const std::function<void(double seconds, SoftwareTarget& target)>& eachFrame, bool fullScreen = false,
