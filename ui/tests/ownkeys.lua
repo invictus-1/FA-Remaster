@@ -37,6 +37,11 @@ local function reload()
     IN_AddKeyMapTable(KeyMapper.GetKeyMappings())
 end
 
+-- (the run's preferences are a copy of Chris's, which carry his own key map since 2026-11-05: this test starts from
+-- a profile that saved none, so the copy's is taken away first)
+Prefs.SetToCurrentProfile("UserKeyMap", nil)
+Prefs.SetToCurrentProfile("UserKeyMapName", nil)
+reload()
 check("nothing saved at first", Prefs.GetFromCurrentProfile("UserKeyMap"), nil)
 
 -- the presets: each own action at its key where the preset leaves it free; a key the preset (or its debug map) has,
