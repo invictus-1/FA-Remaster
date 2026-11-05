@@ -332,6 +332,11 @@
 //           (1; 0 none); MOHO64_DEBUG_SNOW=1..6 shows the sky it gets, the crowns, the wind's laying, drifts, depth, edge;
 //           --snow-mask-strength n  [snow mask] the map's painted drift mask (remap.json's "snow_drift_mask") n times as
 //           strong in the snow's laying (1 as made, 0 without it)
+// --snow-shade 0|1  [snowshade] the shade on lying snow under an overcast (World::snowShade; on unless 0; modern look with the
+//           weather): a weak sun through the clouds (its shadows soft on the snow, the sky's light on open level snow cut by as
+//           much as it brings there), the sky brighter toward the sun's side, the shade a little bluer, the snow's creases and
+//           the ground's hollows and folds under it shading more; 0: the snow lit as before. --snow-shade-tune
+//           through[,side[,blue[,sky[,hollows[,reach[,cut]]]]]]: World::snowShadeTune (0.32, 0.15, 0.7, 0.2, 0.3, 6, 0.65)
 // --plants-under-snow  [undersnow] the map's low plants under lying snow (World::plantsUnderSnow, under_snow.h; modern look
 //           with the weather: --weather snow, --snow-lying n): its ferns, bushes, weeds and tufts placed as props stand in the
 //           same snow as the ground cover (with --snow-ground its shelter: deeper in hollows and the wind's lee, thinner under
@@ -857,6 +862,8 @@ struct Options {
   float oceanRelief = 0.5f;                                    // [relief] --ocean-relief
   float foamPatches = 0;                                       // [foampatch] --foam-patches
   float snowHold = 0.25f;                                      // [snowhold] --snow-hold
+  int snowShade = 1;                                           // [snowshade] --snow-shade
+  float snowShadeTune[7] = {-1, -1, -1, -1, -1, -1, -1};       // [snowshade] --snow-shade-tune (below 0: World's own)
   bool shoreSoak = true;                                       // [bigtest] --no-shore-soak
   bool soakOld = false;                                        // [soakfix] --soak-old
   std::string surfTest;                 // --surf-test
@@ -1403,6 +1410,11 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--ocean-glitter") o->oceanGlitter = atoi(v);  // [bigtest]
     else if (a == "--ocean-relief") o->oceanRelief = std::clamp(static_cast<float>(atof(v)), 0.0f, 1.0f);  // [relief]
     else if (a == "--snow-hold") o->snowHold = std::clamp(static_cast<float>(atof(v)), 0.0f, 1.0f);  // [snowhold]
+    else if (a == "--snow-shade") o->snowShade = atoi(v);  // [snowshade]
+    else if (a == "--snow-shade-tune") {  // [snowshade]
+      float* t = o->snowShadeTune;
+      if (sscanf(v, "%f,%f,%f,%f,%f,%f,%f", &t[0], &t[1], &t[2], &t[3], &t[4], &t[5], &t[6]) < 1) return false;
+    }
     else if (a == "--foam-patches") o->foamPatches = std::clamp(static_cast<float>(atof(v)), 0.0f, 1.0f);  // [foampatch]
     else if (a == "--ocean-tilt") o->oceanTilt = std::clamp(static_cast<float>(atof(v)), 0.0f, 6.0f);
     else if (a == "--surf-strength") o->surfStrength = std::max(0.0f, static_cast<float>(atof(v)));
@@ -2136,6 +2148,9 @@ int main(int argc, char** argv) {
   world.water.ocean.relief = opt.oceanRelief;    // [relief]
   world.water.ocean.foamPatches = opt.foamPatches;  // [foampatch]
   world.terrain.snowHold = opt.snowHold;  // [snowhold]
+  world.snowShade = opt.snowShade != 0;  // [snowshade]
+  for (int k = 0; k < 7; ++k)
+    if (opt.snowShadeTune[k] >= 0) world.snowShadeTune[k] = opt.snowShadeTune[k];
   world.water.shoreSoak = opt.shoreSoak;          // [bigtest]
   world.water.soakFixed = !opt.soakOld;           // [soakfix]
   world.water.ocean.tilt = opt.oceanTilt;

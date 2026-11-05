@@ -198,6 +198,16 @@ struct ViewConstants {
   // MistPatches): in a thick fog all of it, the morning's mist too; z where the patches' field begins to hold it (0: no
   // patches, as before); w unused.
   float mistMore[4];
+  // [snowshade] The shade on lying snow under an overcast (World::snowShade; lighting.h's ModernLight, terrain.cpp's
+  // SnowAround): x how much of it there is (0: none, every surface exactly as without it; 1 under a full overcast, by how
+  // overcast the sky is), each surface taking it by how much snow lies on it; y the least share of the sun's light that
+  // reaches snow through the clouds (the clouds' own shadow takes no more than the rest of it); z how much brighter the sky's
+  // light is on a face turned toward the sun's side than on level snow (and darker on one turned away); w how far the sky's
+  // light in the shade leans blue. snowShadeMore: x how much deeper the snow's cut of the sky's light is (the shelter's and the
+  // hollows'), y how much a hollow of the ground shades the snow in it, z over how many world units round a place the ground's
+  // heights are read for that, w the share of the weak sun's light on open level snow the sky's light there is cut by.
+  float snowShade[4];
+  float snowShadeMore[4];
 };
 
 // The same block, as HLSL source: shaders start with it.
@@ -258,6 +268,10 @@ cbuffer View : register(b0) {
   float4 shadowMask;      // [shadowmask] the sun's shadow mask on the ground: x 1 = the ground reads it; z its words a row; w its rows
   float4 mistMore;        // [weather] the mist's layer, more: x how evenly its banks lie where the light in the air reads them;
                           // [mistpatch] y how much of it lies in patches; z the patches' field's edge (0: none)
+  float4 snowShade;       // [snowshade] the shade on lying snow: x how much (0: none); y the sun's least share through the clouds;
+                          // z the sky's lean toward the sun's side; w the shade's blue
+  float4 snowShadeMore;   // [snowshade] x the snow's cut of the sky deeper; y the hollows' shade; z the reach they are read over;
+                          // w the share of the weak sun's light the sky's light is cut by
 };
 // (every texture read with Sample takes the temporal upscaler's bias: textures with levels - the art's - are
 // read as finely as the screen's size wants; pictures drawn by the renderer have one level and do not change)

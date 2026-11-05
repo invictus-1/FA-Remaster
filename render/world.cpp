@@ -1351,6 +1351,8 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     to[2] = v.z;
   };
   c.inspect[0] = static_cast<float>(inspect);
+  std::fill(std::begin(c.snowShade), std::end(c.snowShade), 0.0f);  // [snowshade] (set with the weather, below)
+  std::fill(std::begin(c.snowShadeMore), std::end(c.snowShadeMore), 0.0f);
   // wet shorelines and caustics
   if (waterDetail && look == Look::Modern && haveMap_ && map.water.present) {
     c.shore[0] = water.shoreSoak && water.soakFixed ? 2.0f : 1.0f;  // [soakfix] (2: the wet band and the soak by the map's own heights)
@@ -1631,6 +1633,23 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       c.skyExtra[2] = bolt.z;
     }
     lightDirection = skyLight.direction;
+    // [snowshade] (World::snowShade) the shade on lying snow: as much of it as the sky is overcast (none under a half-clouded
+    // sky, all of it from some nine tenths: a snowfall's), by day only (the sun's weak light through the clouds is the sun's,
+    // not the moon's), and only while snow lies (lighting.h then takes it on each surface as snow lies there)
+    if (snowShade && haveMap_ && snowLying > 0 && !skyLight.moon) {
+      const float overcast = std::clamp((cover - 0.5f) / 0.35f, 0.0f, 1.0f);
+      const float shade = overcast * overcast * (3 - 2 * overcast) * std::clamp(skyLight.daylight * 4, 0.0f, 1.0f);
+      if (shade > 0) {
+        c.snowShade[0] = shade;
+        c.snowShade[1] = std::clamp(snowShadeTune[0], 0.0f, 1.0f);
+        c.snowShade[2] = std::clamp(snowShadeTune[1], 0.0f, 1.0f);
+        c.snowShade[3] = std::clamp(snowShadeTune[2], 0.0f, 1.0f);
+        c.snowShadeMore[0] = std::clamp(snowShadeTune[3], 0.0f, 2.0f);
+        c.snowShadeMore[1] = std::clamp(snowShadeTune[4], 0.0f, 1.0f);
+        c.snowShadeMore[2] = std::clamp(snowShadeTune[5], 1.0f, 30.0f);
+        c.snowShadeMore[3] = std::clamp(snowShadeTune[6], 0.0f, 1.0f);
+      }
+    }
     // winter water (winter_water.h): the water goes over to its winter look with the lying snow, half of the way while
     // a third of a covering lies and all of it by two thirds; back again as it thaws
     if (winterWater && haveMap_ && map.water.present && snowLying > 0) {
