@@ -346,6 +346,28 @@ says `the rules are loaded again with the engine's script fixes`, about one seco
   blueprint's values under another id, made in the engine, so no Lua blueprint fix (and no second rules load) is
   needed. The original's replays play without the fixes, so with the stock paths.
 
+### 13. A UEF builder's lost beam end (2026-11-04)
+
+- **What is broken:** a UEF builder keeps one beam-end projectile for all its builds (`builder.UEFBuildProjectile`,
+  and `UEFBuildProjectile2` for the commanders' slice beams; FAF's `lua/EffectUtilitiesUEF.lua`), only warped and
+  given a new velocity at each build. When a build ends, the thread that steers it is killed and it keeps its last
+  velocity, drifting through the ground (it collides with nothing) while the builder is idle. FAF 3840 makes a
+  shell below height 0 impact (engine-ref/specs/faf3840.md S3: the exe tests only the height, not the map's
+  edge), and its `DummyProjectile.OnImpact` destroys it; the builder's cached handle then names a destroyed object,
+  every later build raises "Game object has been destroyed" (`ProjectileSetVelocity`, lines 60 / 115 / 302) and
+  shows no beams. Under 3839's rules it drifts on unseen. (Chris's second test, a 3840 game: about 1,700 such errors
+  from 5:56 on, UEF commander, SACU and engineers without beams.)
+- **What we do:** `data/fixes/hook/lua/EffectUtilitiesUEF.lua` wraps `CreateDefaultBuildBeams`,
+  `CreateUEFBuildSliceBeams` and `CreateUEFCommanderBuildSliceBeams`: a cached beam end that is destroyed, or has
+  drifted below height 1 (it would cross 0 in the tick the function waits first), is let go and forgotten, so the
+  function makes a new one, as for a builder's first build.
+- **Why it is safe, what it changes:** only a builder whose beam end is gone or under the ground; the engine's 3840
+  rule stays as the exe has it.
+- **Tested:** Chris's second-test game 3 played again headless from its session, seed and stream to beat 4,800:
+  without the hook 9 "Game object has been destroyed" errors (effectutilitiesuef.lua 60) from 5:56 on, with it none
+  and no other script error ("Hooked /lua/effectutilitiesuef.lua"). FAF 3840's off-map shell still impacts below 0
+  (tests/faf3840_rules.txt scene D, beat 138).
+
 ## Looked broken, left alone
 
 ### The other weak tables of the sim's scripts (2026-10-21, with 7-10)
