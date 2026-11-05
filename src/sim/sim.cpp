@@ -1104,6 +1104,34 @@ namespace {
 thread_local Sim::DeferSink* tl_deferSink = nullptr;  // (the worker's own list while a phase's turn runs on the pool)
 }
 
+void Sim::RunTurns(const char* stage, size_t n, const std::function<void(size_t)>& turn) {
+  static const bool parStages = !(getenv("MOHO64_PAR_STAGES") && !strcmp(getenv("MOHO64_PAR_STAGES"), "0"));
+  const bool checked = workers().Check().mode != ParCheck::kOff;
+  const bool onPool = checked || (parStages && workers().Threads() > 1 && !wtrap::On());
+  deferring_ = true;
+  if (onPool) {
+    if (deferSinks_.size() < static_cast<size_t>(workers().Threads())) deferSinks_.resize(workers().Threads());
+    navigation().ApplyTerrainChanges();
+    workers().ParallelFor(stage, n, checked ? 1 : 16, [&](size_t b, size_t e, int w) {
+      DeferSink& sink = deferSinks_[static_cast<size_t>(w)];
+      tl_deferSink = &sink;
+      for (size_t k = b; k < e; ++k) {
+        sink.key = static_cast<uint32_t>(k);
+        sink.seq = 0;
+        turn(k);
+      }
+      tl_deferSink = nullptr;
+    });
+    MergeDeferSinks();
+  } else {
+    for (size_t k = 0; k < n; ++k) {
+      DeferTurn(static_cast<uint32_t>(k));
+      turn(k);
+    }
+  }
+  deferring_ = false;
+}
+
 void Sim::MergeDeferSinks() {
   for (DeferSink& s : deferSinks_) {
     for (DeferredCall& c : s.calls) deferred_.push_back(std::move(c));
@@ -2751,10 +2779,8 @@ void Sim::Tick() {
       phases.Lap(PhaseTimer::kNavigators);
     }
     {
-      std::optional<wtrap::Phase> trap;
-      if (wtrap::On()) trap.emplace(tick_, "steering");
       MOHO_LAP(lap, "steering");
-      SteeringTickUnits(*this, stageUnits());
+      SteeringTickUnits(*this, stageUnits());  // (its write trap phase: the turns, SteeringTickUnits)
       phases.Lap(PhaseTimer::kSteering);
     }
     {

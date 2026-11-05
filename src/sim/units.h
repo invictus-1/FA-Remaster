@@ -438,6 +438,15 @@ class Unit : public Entity {
   float econAdd[2] = {0, 0};
   int64_t econStorageAdd[2] = {0, 0};
   uint32_t econAddTick = 0xffffffffu;
+  // Parallel order's steering snapshot (docs/parallel-mode.md 3.1, step 5.2): this unit's spline as the steering stage
+  // began, what another unit's prediction reads (SeenSpline below). The points are copied only when the batch changed
+  // since the last snapshot (UnitMotion::splineVersion) and the unit has a spline, into the same buffer when no
+  // message of the last stage still holds it (step 5.2b: no allocation in the common case).
+  std::shared_ptr<std::vector<UnitMotion::SplinePoint>> snapSpline;
+  uint32_t snapSplineVersion = 0xffffffffu;
+  size_t snapSplineIdx = 0;
+  bool snapHasSpline = false;
+  int snapSplineMode = 0;
 };
 
 // The unit whose turn of parallel order's phase A runs on this thread (set by the entity pass's driver around each
@@ -456,6 +465,21 @@ inline const Quat& SeenOri(const Entity* e) { return SeesSnapshot(e) && e->shape
 inline const Vec3& SeenVelocity(const Unit* u) { return SeesSnapshot(u) ? u->snapVelocity : UnitVelocity(u); }
 inline const Vec3& SeenMotionVel(const Unit* u) { return SeesSnapshot(u) ? u->snapMotionVel : u->motion.vel; }
 inline const struct Formation* SeenForm(const Unit* u) { return SeesSnapshot(u) ? u->snapForm : u->form; }
+
+// The unit whose turn of parallel order's steering stage runs on this thread (step 5.2; null otherwise): another unit's
+// spline is then read from its stage-start snapshot.
+inline thread_local const Unit* tl_steerTurn = nullptr;
+struct SplineView {
+  const std::vector<UnitMotion::SplinePoint>* pts = nullptr;
+  size_t idx = 0;
+  bool has = false;
+  int mode = 0;
+};
+inline SplineView SeenSpline(const Unit* u) {
+  if (tl_steerTurn && u != tl_steerTurn && u->snapSpline)
+    return {u->snapSpline.get(), u->snapSplineIdx, u->snapHasSpline, u->snapSplineMode};
+  return {&u->motion.spline, u->motion.splineIdx, u->motion.hasSpline, u->motion.splineMode};
+}
 
 class Prop : public Entity {
  public:

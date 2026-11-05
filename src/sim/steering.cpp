@@ -5,6 +5,7 @@
 #include "sim/write_trap.h"
 
 #include <algorithm>
+#include <optional>
 #include <atomic>
 #include <cmath>
 #include <cstdint>
@@ -853,10 +854,9 @@ bool Approaching(const Unit* A, const Unit* B, const Vec3& pA, const Vec3& vA, c
 }
 
 // Predict 0x597800: X has the right of way, Y yields; the record goes to Y.
-void Predict(Sim& sim, Unit* X, Unit* Y) {
-  UnitMotion& mx = X->motion;
+void PredictWith(Sim& sim, Unit* X, Unit* Y, const SplineView& sx, const SplineView& sy) {
   UnitMotion& my = Y->motion;
-  const bool splA = mx.hasSpline, splB = my.hasSpline;
+  const bool splA = sx.has, splB = sy.has;
   if (!splA && !splB) return;
   Vec3 pX = X->position, prevX = pX, pY = Y->position, prevY = pY, vX{}, vY{};
   const uint32_t now = sim.tick();
@@ -870,16 +870,16 @@ void Predict(Sim& sim, Unit* X, Unit* Y) {
   for (size_t k = 0;; k += 3) {
     if (my.colType == 1 && my.colTick < now + k) return;
     if (splB) {
-      size_t i = my.splineIdx + k;
-      if (i >= my.spline.size()) return;
-      pY = my.spline[i].pos;
+      size_t i = sy.idx + k;
+      if (i >= sy.pts->size()) return;
+      pY = (*sy.pts)[i].pos;
       vY = k == 0 ? UnitVelocity(Y) : Sub(pY, prevY);
       prevY = pY;
     }
     if (splA) {
-      size_t j = mx.splineIdx + k;
-      if (j >= mx.spline.size()) return;
-      pX = mx.spline[j].pos;
+      size_t j = sx.idx + k;
+      if (j >= sx.pts->size()) return;
+      pX = (*sx.pts)[j].pos;
       vX = k == 0 ? UnitVelocity(X) : Sub(pX, prevX);
       prevX = pX;
     }
@@ -898,8 +898,8 @@ void Predict(Sim& sim, Unit* X, Unit* Y) {
         static const long dbg = getenv("MOHO64_DEBUG_COL") ? atol(getenv("MOHO64_DEBUG_COL")) : -1;
         if (dbg >= 0 && (static_cast<long>(X->id) == dbg || static_cast<long>(Y->id) == dbg))
           Logf(LogLevel::Info, "col %u predict Y %u (point %zu of %zu, made %llu) X %u (point %zu of %zu, made %llu) at +%zu", now,
-               Y->id, my.splineIdx, my.spline.size(), static_cast<unsigned long long>(Y->entSeq), X->id, mx.splineIdx,
-               mx.spline.size(), static_cast<unsigned long long>(X->entSeq), k);
+               Y->id, sy.idx, sy.pts->size(), static_cast<unsigned long long>(Y->entSeq), X->id, sx.idx,
+               sx.pts->size(), static_cast<unsigned long long>(X->entSeq), k);
         return;
       }
       // (0x597c7e: a meeting that is not nearer than the one already on record is passed over and the walk
@@ -907,6 +907,9 @@ void Predict(Sim& sim, Unit* X, Unit* Y) {
     }
   }
 }
+
+// (another unit's spline as this turn reads it: parallel order's steering stage, its snapshot)
+void Predict(Sim& sim, Unit* X, Unit* Y) { PredictWith(sim, X, Y, SeenSpline(X), SeenSpline(Y)); }
 
 }  // namespace
 
@@ -960,13 +963,16 @@ void CheckCollisions(Sim& sim, Unit* u) {
     // its way first (a record for 3505), whose resolve and re-prediction lead to the hard brake for engineer 0x5d at
     // 3509; ours never looked at the interceptor and drove on.
     if (!e->motion.bp || !e->motion.bp->mobile()) return;
-    bool sp = e->motion.hasSpline;
-    if (sp && e->motion.splineMode == 2) return;  // side-stepping: not seen
+    const SplineView ev = SeenSpline(e);
+    bool sp = ev.has;
+    if (sp && ev.mode == 2) return;  // side-stepping: not seen
     if (e->army == u->army && !UnitPriority(e, u)) first.push_back(e);  // u has the right of way
     else if (sp || e->motion.bp->canFly) second.push_back(e);
   };
   if (sim.entityGrid().ready()) {
-    sim.entityGrid().GatherBox(u->position.x - R, u->position.z - R, u->position.x + R, u->position.z + R, 1, &gridUnits);
+    // (parallel order's steering stage, step 5.2: the mark-free gather, the same list in the same order)
+    if (tl_steerTurn) sim.entityGrid().GatherBoxNoMarks(u->position.x - R, u->position.z - R, u->position.x + R, u->position.z + R, 1, &gridUnits);
+    else sim.entityGrid().GatherBox(u->position.x - R, u->position.z - R, u->position.x + R, u->position.z + R, 1, &gridUnits);
     for (Entity* e : gridUnits)
       if (e->kind == Entity::Kind::Unit) visit(static_cast<Unit*>(e));
   } else {
@@ -974,6 +980,24 @@ void CheckCollisions(Sim& sim, Unit* u) {
     sim.ForUnitsInRect(u->position.x - q, u->position.z - q, u->position.x + q, u->position.z + q, visit);
   }
   for (Unit* e : second) Predict(sim, e, u);  // u yields
+  if (tl_steerTurn && sim.DeferringScripts()) {
+    // (parallel order's steering stage, step 5.2: e's record is e's, so the prediction that writes it is made in the
+    // stage's commit, in the turns' order, from u's spline as it is now and e's as the stage began)
+    if (first.empty()) return;
+    auto own = std::make_shared<const std::vector<UnitMotion::SplinePoint>>(m.spline);
+    const SplineView mine{own.get(), m.splineIdx, m.hasSpline, m.splineMode};
+    for (Unit* e : first) {
+      const SplineView ev = SeenSpline(e);
+      auto evPts = e->snapSpline;
+      sim.DeferAction([&sim, u, e, own, mine, ev, evPts] {
+        const bool was = sim.inSteeringStage;
+        sim.inSteeringStage = true;  // (the record's late-tick rule: made inside the stage)
+        PredictWith(sim, u, e, mine, evPts ? ev : SeenSpline(e));
+        sim.inSteeringStage = was;
+      });
+    }
+    return;
+  }
   for (Unit* e : first) Predict(sim, u, e);   // e yields
 }
 
@@ -1027,12 +1051,17 @@ int Resolve(Sim& sim, Unit* Y) {
   // it lifts off; the record is cleared either way. Seen: MP2 3525, army 0's interceptor 0x3 standing landed in
   // the land scout 0x67's way goes up (MovingUp) and lands again at the same spot when its auto-land time is out.
   if (X->motion.bp->canFly) {
-    if (!X->transport && Approaching(Y, X, pY, vY, pX, vX)) AirSetTargetNow(sim, X, X->position, 0x10);
+    if (!X->transport && Approaching(Y, X, pY, vY, pX, vX)) {
+      if (tl_steerTurn && sim.DeferringScripts())  // (parallel order: X is X's; in the stage's commit, step 5.2)
+        sim.DeferAction([&sim, X] { AirSetTargetNow(sim, X, X->position, 0x10); });
+      else
+        AirSetTargetNow(sim, X, X->position, 0x10);
+    }
     return clear();
   }
   if (my.hasSpline && my.splineIdx < my.spline.size()) pY = my.spline[my.splineIdx].pos;
-  const UnitMotion& mx = X->motion;
-  if (mx.hasSpline && mx.splineIdx < mx.spline.size()) pX = mx.spline[mx.splineIdx].pos;
+  const SplineView xv = SeenSpline(X);  // (parallel order: X's spline as the stage began)
+  if (xv.has && xv.idx < xv.pts->size()) pX = (*xv.pts)[xv.idx].pos;
   if (Len(vX) <= 0) return clear();
   {
     static const long dbgR = getenv("MOHO64_DEBUG_COL") ? atol(getenv("MOHO64_DEBUG_COL")) : -1;
@@ -1042,8 +1071,8 @@ int Resolve(Sim& sim, Unit* Y) {
       Logf(LogLevel::Info,
            "col %u resolve? Y %u X %u pY %.4f %.4f %.4f (idx %zu of %zu) pX %.4f %.4f %.4f (idx %zu of %zu) vY %.5f %.5f %.5f vX %.5f %.5f "
            "%.5f will %d dv2 %.6f dot %.5f",
-           sim.tick(), Y->id, X->id, pY.x, pY.y, pY.z, my.splineIdx, my.spline.size(), pX.x, pX.y, pX.z, mx.splineIdx,
-           mx.spline.size(), vY.x, vY.y, vY.z, vX.x, vX.y, vX.z, WillCollide(Y, X, vY, pY, pX, vX, sf) ? 1 : 0, Dot(dv, dv),
+           sim.tick(), Y->id, X->id, pY.x, pY.y, pY.z, my.splineIdx, my.spline.size(), pX.x, pX.y, pX.z, xv.idx,
+           xv.pts->size(), vY.x, vY.y, vY.z, vX.x, vX.y, vX.z, WillCollide(Y, X, vY, pY, pX, vX, sf) ? 1 : 0, Dot(dv, dv),
            Dot(Sub(X->position, Y->position), dv));
     }
   }
@@ -1066,7 +1095,10 @@ int Resolve(Sim& sim, Unit* Y) {
   }
   if (HasSteering(X) && !sfl) {
     bool ok = Naval(X) ? Naval(Y) : (!(FpFlags(X) & 1) || (FpFlags(Y) & 1));
-    if (ok) SetCol(X, 5, X->position);  // X brakes hard
+    if (ok && tl_steerTurn && sim.DeferringScripts())  // (parallel order: X's record, in the stage's commit, step 5.2)
+      sim.DeferAction([X] { SetCol(X, 5, X->position); });
+    else if (ok)
+      SetCol(X, 5, X->position);  // X brakes hard
   }
   bool facing = 0.0f > (dYX.y * fwdY.y + dYX.z * fwdY.z) + dYX.x * fwdY.x;  // Y points toward X
   Vec3 B, s;
@@ -1274,6 +1306,41 @@ void SteeringNavStageArmy(Sim& sim, int army) { sim.navStageArmy = army; }
 
 void SteeringTickUnits(Sim& sim, const std::vector<Unit*>& all) {  // (brain+0xac: creation order inside the army)
   sim.inSteeringStage = true;
+  if (sim.order == SimOrder::kParallel) {
+    // Parallel order (docs/parallel-mode.md 3.1, step 5.2): every unit's spline as the stage begins (its snapshot:
+    // what another unit's prediction reads), then the turns, which write no other unit (their writes into another
+    // are messages), then the stage's commit, in the turns' order.
+    for (Unit* u : all) {
+      UnitMotion& m = u->motion;
+      // (step 5.2b: a unit without a spline needs no points; a changed batch is copied into the buffer kept from the
+      // last beat when nothing else holds it, so most beats allocate nothing)
+      if (m.hasSpline && (u->snapSplineVersion != m.splineVersion || !u->snapSpline)) {
+        if (u->snapSpline && u->snapSpline.use_count() == 1) *u->snapSpline = m.spline;
+        else u->snapSpline = std::make_shared<std::vector<UnitMotion::SplinePoint>>(m.spline);
+        u->snapSplineVersion = m.splineVersion;
+      } else if (!u->snapSpline) {
+        u->snapSpline = std::make_shared<std::vector<UnitMotion::SplinePoint>>();
+        u->snapSplineVersion = 0xffffffffu;
+      }
+      u->snapSplineIdx = m.splineIdx;
+      u->snapHasSpline = m.hasSpline;
+      u->snapSplineMode = m.splineMode;
+    }
+    std::optional<wtrap::Phase> trap;  // (MOHO64_PAR_WRITETRAP: the turns; the snapshot before and the commit after are serial)
+    if (wtrap::On()) trap.emplace(sim.tick(), "steering");
+    sim.RunTurns("steering", all.size(), [&](size_t i) {
+      Unit* u = all[i];
+      if (u->destroyQueued) return;
+      wtrap::Turn trapTurn(u);
+      tl_steerTurn = u;
+      SteeringTick(sim, u);
+      tl_steerTurn = nullptr;
+    });
+    trap.reset();
+    sim.RunDeferredScriptCalls();
+    sim.inSteeringStage = false;
+    return;
+  }
   for (size_t i = 0; i < all.size(); ++i) {
     Unit* u = all[i];
     if (u->destroyQueued) continue;

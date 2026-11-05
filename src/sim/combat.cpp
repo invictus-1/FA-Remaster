@@ -3134,6 +3134,7 @@ void KillCleanupTick(Sim& sim) {
     AirNavigatorGone(u);  // (an aircraft's navigator: its status, for the escorts that follow it)
     EndNavigatorObject(u);  // (the navigator's Lua side goes with it)
     m.spline.clear();
+    ++m.splineVersion;
     m.splineIdx = 0;
     m.hasSpline = false;
     m.pointNow = false;

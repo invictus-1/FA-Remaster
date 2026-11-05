@@ -621,6 +621,11 @@ class Sim {
   };
   std::vector<DeferSink> deferSinks_;
   void MergeDeferSinks();
+  // A stage's turns in parallel order (step 5.2): turn(i) for i in [0, n), with deferring on and the turn's key i; on
+  // the worker pool when it has more than one thread (or its order check is on) and the write trap is off, each
+  // worker's deferred calls in its own list, merged after; else one after another. The caller runs the commit
+  // (RunDeferredScriptCalls). The path grids' pending terrain changes are taken first (a grid's first reader would).
+  void RunTurns(const char* stage, size_t n, const std::function<void(size_t)>& turn);
   void RunDeferredScriptCalls();
   // script calls still made at once inside a deferring phase (by method; logged at the end): what step 4.6 must
   // still defer before the phases go to the worker pool
