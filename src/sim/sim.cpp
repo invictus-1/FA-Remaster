@@ -1493,8 +1493,12 @@ bool Sim::ParDefault() const { return fixes && workers_->Threads() > 1; }
 
 namespace {
 // The multicore stages' minimum items (Sim::Start; MOHO64_PAR_<NAME>=on:N overrides): units in the entity pass a beat
-// for MOTION and AIM; for NAV, navigators that test in one army's navigator stage (the stages run army by army)
-constexpr size_t kParMotionMin = 1024, kParAimMin = 1024, kParNavMin = 110;
+// for MOTION and AIM; for NAV, navigators that test in one army's navigator stage (the stages run army by army).
+// NAV's was 110, measured on two-army B3-16k; with many armies each stage holds fewer. Measured in one run by beat
+// parity (7 threads; the navigators' execute, the minimum against 110): Chris's 10-army game of 2026-11-01 at 35-50 min
+// (7 AIs, 6,400-7,350 units) 24: -28%, 48: -15%; B1S (4 AIs, 36000 beats) 8: +27%, 24: +20%, 48: +1% (noise). 48
+// takes most of the many-army gain without slowing the 4-army game.
+constexpr size_t kParMotionMin = 1024, kParAimMin = 1024, kParNavMin = 48;
 }  // namespace
 
 bool Sim::Start(const SessionDescription& session) {
