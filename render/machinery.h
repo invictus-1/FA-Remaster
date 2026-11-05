@@ -78,7 +78,8 @@ struct MachinerySpec {
     float lift = 0, strength = 1;
     Vec3 axis{0, 0, 1};
   };
-  // [buildarms] a build beam from a part (its head moved `offset`, in the model's axes at rest: the tool's tip) to the target
+  // [buildarms] a build beam from a part (its head moved `offset`, in the model's axes at rest and in WORLD units (not the
+  // model's: times UniformScale), the tool's tip) to the target
   // as the aim's (`at`, `lift`): a build beam (the game's, or `blueprint`, in the faction's look) with its sparks and light,
   // while the factory builds (within the part's own cycle's windows `on_keys`, else all through it)
   struct Beam {

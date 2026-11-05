@@ -441,6 +441,27 @@ class World {
   // 2026-11-03.
   bool mistPatches = true;
   float mistClear = 0.5f;
+  // [snowshade] (Chris, 2026-11-04: "in snowy conditions I feel like the snow lacks shadows", and "everything else is good its
+  // just shadows on the snow a bit") Under a snowfall's overcast the clouds' shadow takes four fifths of the sun wherever a
+  // heap of them lies (sunlight.h), so that the light on snow there was nearly all the sky's even grey light, and the white
+  // snow's bounce lifted what shade there was: slopes toward and away from the sun alike, the trees' and the rocks' shadows
+  // all but gone. With this (the modern look, a time of day, by day; as much as the sky is overcast, from half covered to
+  // some nine tenths, and on each surface as much as snow lies on it):
+  //  - a weak sun through the clouds: at least `snowShadeTune[0]` of its light reaches the snow (where the clouds' shadow
+  //    took more), shadowed by what stands toward it, and the sky's light there cut by `[6]` of what that brings to open
+  //    level snow (1: open level snow in the sun as bright as before, only the shade deeper; less: the sun's share partly
+  //    added, so that a face turned away from the sun does not go as much darker);
+  //  - the sky's light brighter on what faces the sun's side and darker on what faces away (`[1]`: a vertical face's share);
+  //  - the sky's light in the shade bluer (`[2]`: 1 some 9 % less red and 19 % more blue, the same brightness);
+  //  - the snow's cut of the sky's light deeper (`[3]`: its power 1 + that), the shelter's (valleys, beside what stands round
+  //    it) with the hollows and folds of the ground under it (`[4]`: up to six tenths of that taken in a fold whose sides
+  //    rise a fifth of `[5]` world units over it; read on rings of `[5]` and two and a half times that).
+  // Measured on SETONS_R's west hill under a snowfall from Chris's camera (_scratch/render/snowshade/REPORT.md): the snow's
+  // luminance spread (RMS contrast) half as much again, the new shade some 4 % bluer, the face (turned from the sun) 14 %
+  // darker, open level snow as bright as it was; under the woods' overcast the trees' shadows show softly. Off (the viewer's
+  // --snow-shade 0): the snow lit as before, every picture the same.
+  bool snowShade = true;
+  float snowShadeTune[7] = {0.32f, 0.15f, 0.7f, 0.2f, 0.3f, 6.0f, 0.65f};
   // A view for checking art (modern look): what every lit surface shows in place of its lit
   // colour. 0: the picture as it is; 1 colour alone, 2 which way surfaces face, 3 roughness,
   // 4 metal, 5 the creases' shading, 6 the sun's shadow, 7 the small lights alone, 8 the sun's

@@ -632,7 +632,9 @@ float3 LeafLight(float3 albedo, float through, float3 world, float shadow, float
 // The modern light on a surface. `albedo` is linear; `occlusion` dims the sky's light (1: open).
 // Returns linear colour, unbounded.
 float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusion, float3 emission, float3 N, float3 world, float shadow) {
-  shadow *= CloudShadow(world);  // (a computed sky's clouds)
+  float sunMapShadow = shadow, cloudHere = CloudShadow(world);  // [snowshade] (each kept: the weak sun through the clouds, below)
+  shadow *= cloudHere;  // (a computed sky's clouds)
+  float snowShadeHere = 0;  // [snowshade] how much of the shade on lying snow this surface takes (view.h's snowShade, as snow lies)
 #ifdef GROUND_MATT
   // [leftover] (the ground's shaders: Terrain::mattGrazing) how much of the sun's highlight the ground loses here: how low the
   // sun stands over the ground's own slope (groundGraze, the ground's shader's), where it is dry (groundDry: the ground's own
@@ -758,11 +760,17 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
     float slush = snowWet * lying;
     albedo = lerp(albedo, dot(albedo, float3(0.3, 0.6, 0.1)) * float3(0.93, 0.98, 1.06), 0.35 * slush) * (1 - 0.22 * slush);
     roughness = lerp(roughness, 0.28, slush);
-    occlusion *= lerp(snowBareSky, snowSky, lying);
+    float snowCut = lerp(snowBareSky, snowSky, lying);
+    // [snowshade] (World::snowShade) under an overcast the cut deeper on lying snow (the valleys', the hollows' and folds'
+    // that terrain.cpp's SnowAround adds, beside what stands round the place), as much as snow lies here: the sky's light is
+    // most of the light there is under the clouds, and an even sky on white snow shows little of the ground's shape
+    [branch] if (snowShade.x > 0) snowCut = pow(saturate(snowCut), 1 + snowShadeMore.x * snowShade.x * lying);
+    occlusion *= snowCut;
 #endif
 #ifdef GROUND_MATT
     matt *= (1 - saturate(SURFACE_WET * 2)) * (1 - puddle) * (1 - lying);  // [leftover] (wet ground, still water and snow keep their gloss)
 #endif
+    snowShadeHere = snowShade.x * lying;  // [snowshade] (World::snowShade: under an overcast, as much as snow lies here; below)
   }
   [branch] if (inspect.x > 0.5) {
     // a view for checking art: one of the surface's own numbers as a picture, as the screen would
@@ -809,6 +817,14 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
   float3 small = SmallLights(world, N, V, diffuseColor, f0, a2, k, nDotV);
   if (inspect.x > 6.5 && inspect.x < 7.5) return small;
   float3 sunRadiance = ToLinear(sunColor) * (lightMultiplier * modern.x);
+  // [snowshade] a weak sun through the overcast on lying snow: at least snowShade.y of its light comes through where the
+  // clouds' shadow took more (as much of that as snow lies here), still shadowed by what stands toward the sun, so that the
+  // trees' and the rocks' shadows show softly on the snow and a slope toward the sun is lit more than one turned away
+  float snowSunMore = 0;
+  [branch] if (snowShadeHere > 0) {
+    snowSunMore = max(snowShade.y - cloudHere, 0) * snowShadeHere;
+    shadow = sunMapShadow * (cloudHere + snowSunMore);
+  }
   // (the sun's highlight is held back by the same share as the mirrored sky, below: at full strength
   // dark paint of middling roughness shows more sheen than colour)
   float3 color = (diffuseColor / 3.14159265 + D * Vis * F * modern.w) * sunRadiance * (nDotL * shadow) * 3.14159265;
@@ -845,6 +861,30 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
     float inside;
     float3 gathered = BounceAt(world, N, inside);
     skyDiffuse = lerp(skyDiffuse, gathered / max(modern.y, 1e-4), inside);
+  }
+  // [snowshade] the sky's light on lying snow under the overcast: cut by snowShadeMore.w of what the weak sun above now brings
+  // to open level snow (at 1 that is as bright as before, and only what the sun does not reach loses light: the shade; less,
+  // and the sun's share is partly added, so that a face turned away from the sun does not go as much darker), brighter
+  // on what faces the sun's side of the sky and darker on what faces away (the clouds are brighter toward the sun), and a
+  // little bluer (the shade's light is the sky's alone, and the sun's warmer light is missing from it)
+  [branch] if (snowShadeHere > 0) {
+    const float3 grey = float3(0.3, 0.6, 0.1);
+    // (the sky's light on level snow here as it is lit: with bounce light the probes' from straight up; never less than
+    // three tenths of it kept, so that what the sun does not reach keeps some light)
+    float3 levelSky = SkyAmbient(float3(0, 1, 0));
+    [branch] if (bounce.x > 0.5) {
+      float levelInside;
+      float3 levelGathered = BounceAt(world, float3(0, 1, 0), levelInside);
+      levelSky = lerp(levelSky, levelGathered / max(modern.y, 1e-4), levelInside);
+    }
+    // (as this place's creases and shelter let it in: where they take some of the sky's light, as much of what is left is
+    // cut, so that a sunlit place is as bright as it was whatever its creases)
+    float level = dot((levelSky + fill) * modern.y, grey) * occlusion;
+    float keep = max(1 - snowShadeMore.w * dot(sunRadiance, grey) * saturate(L.y) * snowSunMore / max(level, 1e-4), 0.3);
+    float2 side = L.xz / max(length(L.xz), 1e-3);
+    float lean = max(1 + snowShade.z * snowShadeHere * dot(N.xz, side), 0);
+    float3 blue = lerp(float3(1, 1, 1), float3(0.91, 1.0, 1.19), snowShade.w * snowShadeHere);
+    skyDiffuse = (skyDiffuse + fill) * (blue * (keep * lean)) - fill;
   }
   if (inspect.x > 9.5 && inspect.x < 10.5) return (skyDiffuse + fill) * modern.y;  // (the view of it: on a white surface)
   // (the mirrored sky is held back: the game's sky pictures have no values beyond white and no

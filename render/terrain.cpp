@@ -581,6 +581,21 @@ void SnowAround(float2 uv, float2 xz) {
   float open = 1 - 0.65 * (1 - exp(-4 * snowTune.x * saturate(1 - sky)));
   snowSky = open * (1 - 0.2 * crowns * snowTune.y) * (1 - 0.1 * saturate(-lay) * snowTune.w);
   snowBareSky = lerp(1, snowSky, 0.6 * saturate(weather.y * 4));
+  // [snowshade] (World::snowShade, under an overcast) the hollows and folds of the ground shade the snow in them: how far the
+  // ground round the place (eight heights on a ring of snowShadeMore.z world units, and eight on one of two and a half times
+  // that) lies above it, against the ring's size: nothing on an even slope or a crest, the sky cut by up to six tenths of
+  // snowShadeMore.y in a fold whose sides stand a fifth of the ring's reach over it (the shelter's 80 units are too coarse for
+  // the folds the game's camera sees, and the picture's own occlusion too fine). The snow's alone: bare ground as before.
+  [branch] if (snowShade.x > 0 && snowShadeMore.y > 0) {
+    float here = HeightBilinear(xz), r = snowShadeMore.z, near = 0, far = 0;
+    [unroll] for (int k = 0; k < 8; ++k) {
+      float2 way = float2(cos(k * 0.785398), sin(k * 0.785398));
+      near += HeightBilinear(xz + way * r);
+      far += HeightBilinear(xz + way * (r * 2.5));
+    }
+    float hollow = 0.6 * saturate((near / 8 - here) / r * 2.5) + 0.4 * saturate((far / 8 - here) / (r * 2.5) * 2.5);
+    snowSky *= 1 - snowShade.x * saturate(snowShadeMore.y) * 0.6 * hollow;
+  }
 }
 // How much snow lies here at a guess, from the ground's own slope (as lighting.h lays it, without the layers' small shapes):
 // where the relief close by is the snow's (GroundParallax).
