@@ -585,7 +585,7 @@ class Ocean {
   // streaks (StormStreak), the far sea's mean share of white two and a half times, and in the water's shader the foam
   // thicker (its strength 1.6 times), its streaks 2.5 times as long along the wind and dimmed less far off. 0: as
   // before (viewer --storm-foam 0); more than 1 more of all of it (up to 3).
-  float stormFoam = 0.25f;  // (measured 2026-11-04, a storm at game height: 1 turned the sea 95 % grey-white; 0.25 about 6 % white, 30 % lace: "a bit too tame" -> a bit more)
+  float stormFoam = 0.15f;  // (2026-11-04: 0.25, about 6 % white and 30 % lace; Chris's third test, 2026-11-05: "the white a bit much: tone down by about 20-30%" -> 0.15, about 24 % lace)
   // [livewash] (Chris's second test, 2026-11-04: the white round a ship "needs to be a lot more I guess realistic right now
   // its like a barrier around the ship vs water") The hulls' wash (water.cpp, LiveWash) measured from the hull as the eye
   // sees it (what stands up out of the sea near the place, looked for along the way into the hull), not from the hulls'
