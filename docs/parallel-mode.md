@@ -6,7 +6,8 @@ step 2a, the keyed draws (4.1); step 2b, the entity grid's canonical buckets (3.
 step 4.0, Aim and a homing shell read their target's beat-start transform without writing it (6.1); step 4.1, the
 entity pass in phases with deferred callbacks, still on one thread (3.3); step 4.2, pushes in the commit (3.3); step 4.3, the contact search's mark-free gather;
 step 4.4, the beat-start snapshot, sub-phases A2 and C1, and the order check of the phases (3.3, 6.1); step 4.5, phase D's
-additions to the armies kept on the units and summed in creation order, the silo step in the commit (3.3); step 4.6, phases A1, C1 and C on the worker pool (3.3).
+additions to the armies kept on the units and summed in creation order, the silo step in the commit (3.3); step 4.6, phases A1, C1 and C on the worker pool (3.3). Section 8 item 4 (the armies' stages) is steps 5.x: step 5.1, the
+three stages without the army-by-army interleave, on one thread, the write trap over them (3.1).
 
 ## For Chris: the short version
 
@@ -129,6 +130,45 @@ when the messages are few (most units have nothing to send in most beats).
   weapon's own state. Firing creates shells: a message "create projectile" with the shot's parameters; shells are
   created in the commit in key order (ids, creation serials and the projectile ctor's draws then follow the key). Lua
   `OnFire` / `OnGotTarget` / `OnLostTarget` run in the commit in key order.
+
+**Design (section 8 item 4, steps 5.x; e1c 2026-11-04).** The three stages become, like the entity pass, a read phase
+per stage over every army's units at once and a commit. Each step is one patch with the proof set of section 6 (the 16
+and b8 / B3 / B1 unchanged in the original's order; parallel order the same at 1 / 8 / 32 threads, shuffled, reversed,
+two processes; the write trap; the lazy-fill detector) and B3-16k timed at 1 / 8 / 16 threads.
+
+- **5.1 No interleave (built).** Parallel order runs every army's navigators, then every army's steering, then every
+  army's weapons, each stage over `ArmyStageOrder` taken afresh (sim.cpp); still on the sim's thread. A unit's turn in
+  each stage is a write-trap `Turn`, each stage a trap `Phase` ("navigators", "steering", "weapons").
+  The audit (b8 2000 beats, parallel order), what one unit's turn writes into another unit:
+  | Stage | Write | Count | Becomes |
+  |---|---|---|---|
+  | steering | `gridMark` of every unit the collision search gathers (`CheckCollisions` -> `GatherBox`) | 33 k | the mark-free gather (5.2) |
+  | steering | the yielding unit's collision record (`Predict(u, e)`: `colType` / `colUnit` / `colPos` / `colTick`) | 1.4 k | 5.2 |
+  | steering | `SetCol` on the other unit (`ResolvePossibleCollision`) | 48 | 5.2 |
+  | navigators | `gridMark` (`MotionNavDone` -> `GatherBox`), the other's collision record (`Predict`) | 0.9 k | 5.3 |
+  | weapons | `gridMark` (target scans), the target's shooter set (`SetTarget` -> `AddShooter`), the target's combat cache (`CB`) | 0.2 k | 5.4 |
+  Script calls of the weapons stage: `OnFire`, `OnGotTarget`, `OnLostTarget` (on the weapon); the projectiles a shot
+  makes (`FireTick` -> the shot's script) are not seen by the trap (new entities) and are the stage's main shared write.
+- **5.2 Steering (symmetric prediction).** A unit's turn (`SteeringTick`: `ProcessSplineMovement`, a new segment's
+  `UpdatePath` and `CheckCollisions`) reads other units' splines (`spline`, `splineIdx`, `hasSpline`: heap and own
+  bytes that THEIR turns advance) and writes the yielding unit's record. Plan: a snapshot of what a prediction reads of
+  another unit (its spline's points from this beat's index on, its velocity, as the stage began: a per-unit copy of
+  the few points a prediction looks at, `k` up to the spline's end in steps of 3); `Predict(e, u)` (u's own record)
+  from the snapshot in u's turn; `Predict(u, e)` (e's record) as a message, applied in the commit in key order with the
+  same rule ("keep the nearest"), so e's record is the same whichever turn came first. A unit's own second
+  `ProcessSplineMovement` of the turn reads only its own record. The mark-free gather in `CheckCollisions`. Then the
+  stage on the pool.
+- **5.3 Navigators.** `Execute` per unit: path requests (shared queues, per army: messages in key order), the
+  navigators' unit tests (gridb's NAV-ahead machinery, batch 78: coordinated through the lead), `MotionNavDone`'s
+  `Predict` and gather as in 5.2. The air navigator (`AirNavArrival`, `AirFormationFollow`) reads the formation (stable
+  in the stage). Then the stage on the pool.
+- **5.4 Weapons.** `AcquireTick` (the target scan, `FindBestEnemy`, the reach tests) from the snapshot on the pool,
+  its result the weapon's own state; `SetTarget`'s writes into the target (shooter set) and the script calls
+  (`OnGotTarget`, `OnLostTarget`) as messages in key order. `FireTick` stays in the commit (it runs the shot's scripts
+  and makes projectiles: ids and creation serials in key order). The lazily made combat cache of the target (`CB`) made
+  before the stage.
+- **5.5 (item 5)** Recon and AdvanceCoords in parallel order: mostly the exact switches that exist (MOHO64_PAR_RECON,
+  _BLIPS, _INTELCOORDS); the moved list becomes a set (the grid is canonical, 2b).
 
 ### 3.2 Commands (stage 0x958) and Lua threads (0x944)
 - **Serial**, as today: tasks call Lua at every turn, place structures, claim targets; a task's outcome is the next

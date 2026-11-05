@@ -10,7 +10,10 @@
 #include <cstring>
 #include <list>
 #include <map>
+#include <mutex>
+#include <set>
 #include <string>
+#include <strings.h>
 
 #include "core/log.h"
 #include "core/trace.h"
@@ -323,6 +326,19 @@ int l_Factory(lua_State* L) {
                                                     : "Failed to create emitter as you passed in an invalid blueprint name %s.",
            name);
       return 0;
+    }
+    // MOHO64_DEBUG_FXBP also names each remaster alias (sim/effect_aliases.h) the first time an effect is made from it
+    static const bool dbgAlias = getenv("MOHO64_DEBUG_FXBP") != nullptr;
+    if (dbgAlias && strncasecmp(name, "/effects/emitters/remaster/", 27) == 0) {
+      static std::mutex m;
+      static std::set<std::string> seen;
+      std::lock_guard<std::mutex> lock(m);
+      if (seen.insert(name).second) {
+        luaL_where(L, 1);
+        Logf(LogLevel::Info, "fxbp: tick %u %s: made from the remaster alias %s (%s)", sim->tick(), f.name, name,
+             lua_tostring(L, -1));
+        lua_pop(L, 1);
+      }
     }
   }
   auto t = std::make_unique<EngineThing>(f.cls);

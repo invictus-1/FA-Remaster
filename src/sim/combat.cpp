@@ -21,6 +21,7 @@
 #include "core/dmath.h"
 #include "core/workers.h"
 #include "sim/combat.h"
+#include "sim/write_trap.h"
 
 #include <algorithm>
 #include <atomic>
@@ -1976,6 +1977,7 @@ void WeaponsTickUnits(Sim& sim, const std::vector<Unit*>& units) {
   for (size_t i = 0; i < units.size(); ++i) {
     Unit* u = units[i];
     if (u->destroyQueued || u->combatGone) continue;
+    wtrap::Turn trapTurn(u);  // (MOHO64_PAR_WRITETRAP: the unit's own pages writable for its turn)
     // the attacker's stage (attacker+0x44): the unit's fire and acquire threads in their run order. A fire thread
     // woken while the stage runs is at the end of the list by then and so runs in this pass.
     for (u->weaponThreadPos = 0; u->weaponThreadPos < static_cast<int>(u->weaponThreads.size()); ++u->weaponThreadPos) {

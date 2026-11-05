@@ -452,6 +452,14 @@ const EffectBlueprint* SimBlueprints::FindEffect(const std::string& id) const {
   return it == effects_.end() ? nullptr : &it->second;
 }
 
+bool SimBlueprints::AddEffectAlias(const std::string& alias, const std::string& stock) {
+  const EffectBlueprint* bp = FindEffect(stock);
+  if (!bp) return false;
+  const EffectBlueprint copy = *bp;  // (the map may rehash on the insert)
+  effects_[Lower(alias)] = copy;
+  return true;
+}
+
 // SpecFootprints { {Name=, SizeX=, SizeZ=, Caps=, MinWaterDepth=, MaxWaterDepth=, MaxSlope=, Flags=}, ... }:
 // kept in order; a repeated name is ignored with a warning (as the original).
 void SimBlueprints::ReadFootprints(lua_State* L, int list) {

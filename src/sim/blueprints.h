@@ -70,6 +70,9 @@ class SimBlueprints {
   const BlueprintInfo* Find(const char* id) const;
   // An effect blueprint by its id (lower case, as Find), or nullptr.
   const EffectBlueprint* FindEffect(const std::string& id) const;
+  // A remaster alias (sim/effect_aliases.h): `alias` becomes another id of the stock effect blueprint `stock` (its
+  // kind and Lifetime). False when `stock` is no effect blueprint (nothing registered).
+  bool AddEffectAlias(const std::string& alias, const std::string& stock);
   const BlueprintInfo* ByEntityIndex(int i) const { return entities_[i]; }
   int EntityCount() const { return static_cast<int>(entities_.size()); }
   // 64-bit words in a category set over these blueprints (set by CopyToSim; multicore step 1: it was process-wide)

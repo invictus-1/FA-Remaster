@@ -1,6 +1,7 @@
 // The land navigator (see landnav.h). Function names and addresses refer to the FA exe;
 // engine-ref/specs/pathfinding.md and land_motion_blocking.md give the details.
 #include "sim/landnav.h"
+#include "sim/write_trap.h"
 #include "sim/collision.h"
 #include "sim/entity_grid.h"
 #include "sim/steering.h"
@@ -1500,6 +1501,7 @@ void LandNavTickUnits(Sim& sim, const std::vector<Unit*>& all) {
   Speculation<NavAhead>& navSpec = sim.navSpec();
   for (size_t i = 0; i < all.size(); ++i) {
     Unit* u = all[i];
+    wtrap::Turn trapTurn(u);  // (MOHO64_PAR_WRITETRAP: the unit's own pages writable for its turn)
     if (u->motion.air && !u->destroyQueued && !u->dead) {  // (the air navigator, same stage: CAiNavigatorAir::Execute)
       if (!AirNavArrival(sim, u) && !u->parentId) AirFormationFollow(sim, u);
     }
