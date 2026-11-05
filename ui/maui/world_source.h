@@ -44,6 +44,11 @@ struct WorldGhost {
   // ordered site: the renderer draws it brighter (render::WorldPicture::BuildPreview::placing, ui request 41).
   bool placing = false;
 };
+// A standing building's site and its unit (StandingSitesForWorld, ui/user/user_state.h).
+struct StandingSite {
+  WorldGhost site;
+  uint32_t unit = 0;
+};
 struct WorldLine {
   float a[3], b[3];
   uint32_t color;   // 0xAARRGGBB

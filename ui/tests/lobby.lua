@@ -142,14 +142,20 @@ check("the console's remaster_shield_bend takes the words", moho64ui_Looks().shi
 ConExecute("remaster_shield_bend subtle")
 do
     local O = import('/lua/options/options.lua')
-    local inAny = false
-    for level = 0, 4 do
-        for _, key in {'remaster_ocean_glitter', 'remaster_shore_soak', 'remaster_shield_bend', 'remaster_unit_glow', 'remaster_sharpen',
-                       'remaster_gateway', 'remaster_ghost_look', 'remaster_guide', 'remaster_cloak_look', 'remaster_stealth_veil'} do
-            inAny = inAny or O.RemasterPresetValues(level)[key] ~= nil
-        end
+    -- in every preset level by the renderer's costs (options.lua remasterPresets, 2026-11-04): High and Ultra their
+    -- defaults, Medium without Sharpen, Low without Shore Soak too, Off the earlier looks (Ghost and Cloak the original's)
+    local keys = {'remaster_ocean_glitter', 'remaster_shore_soak', 'remaster_shield_bend', 'remaster_unit_glow', 'remaster_sharpen',
+                  'remaster_gateway', 'remaster_ghost_look', 'remaster_guide', 'remaster_cloak_look', 'remaster_stealth_veil'}
+    local function line(level)
+        local values, out = O.RemasterPresetValues(level), {}
+        for _, key in keys do table.insert(out, tostring(values[key])) end
+        return table.concat(out, " ")
     end
-    check("they are in no preset level", inAny, false)
+    check("Ultra has them at their defaults", line(4), "1 1 1 75 50 1 1 1 1 1")
+    check("High the same", line(3), line(4))
+    check("Medium without Sharpen", line(2), "1 1 1 75 0 1 1 1 1 1")
+    check("Low without Shore Soak too", line(1), "1 0 1 75 0 1 1 1 1 1")
+    check("Off: the earlier looks, Ghost and Cloak the original's", line(0), "0 0 2 100 0 0 1 0 1 0")
 end
 check("the Photographic Look: Off unless chosen, and its five choices", video.remaster_photo_look and
     video.remaster_photo_look.default .. " " .. table.getn(video.remaster_photo_look.custom.states), "0 5")
@@ -253,7 +259,10 @@ video.remaster_graphics_api.set('remaster_graphics_api', 'd3d12', false)
 check("and back", moho64ui_Looks().vulkan, false)
 -- The frame rate: vertical sync unless chosen (Chris's choice), uncapped, or a cap
 check("the Video tab has Frame Rate, vertical sync unless chosen", video.remaster_frame_rate and video.remaster_frame_rate.default, 'vsync')
-check("the window keeps to the screen's rate at the start", moho64ui_Looks().verticalSync, true)
+do  -- (as the profile has it: the suite's copy is Chris's, who may have chosen another)
+    local chosen = (import('/lua/user/prefs.lua').GetFromCurrentProfile('options') or {}).remaster_frame_rate or 'vsync'
+    check("the window keeps to the screen's rate at the start, unless the profile chose otherwise", moho64ui_Looks().verticalSync, chosen == 'vsync')
+end
 video.remaster_frame_rate.set('remaster_frame_rate', 60, false)
 check("a cap of 60 makes frames of 1000/60 ms", math.abs(moho64ui_Looks().frameMs - 1000 / 60) < 0.01 and not moho64ui_Looks().verticalSync, true)
 video.remaster_frame_rate.set('remaster_frame_rate', 'uncapped', false)

@@ -2370,6 +2370,24 @@ bool IssuePlain(lua_State* L, const std::vector<UserUnit*>& list, const std::str
   std::vector<uint32_t> ids;
   std::vector<UserUnit*> units;
   OwnIds(L, list, &ids, &units);
+  // Ours (an improvement on the original and FAF, Chris's second test 2026-11-04: two T2 HQ upgrades queued in one
+  // factory): an upgrade behind the queue goes only to the units whose queue holds no upgrade to that blueprint yet.
+  // FAF's IssueUpgradeOrders (construction.lua) issues the whole chain from the unit's own blueprint (T3 HQ: the T2
+  // step too), and the simulation refuses a repeat only when the queue's last order is that upgrade (0x6f0126, ours
+  // RefusesUpgradeAgain), so a T3 click behind a T2 upgrade and some units queued the T2 step twice; the second never
+  // runs (an upgrade to the blueprint the unit already is), but it shows in the queue.
+  if (type == CommandType::Upgrade && !clear && !blueprint.empty()) {
+    for (size_t i = ids.size(); i-- > 0;) {
+      UnitStateView s;
+      if (!StateOf(L, units[i], &s)) continue;
+      for (const CommandView& c : s.queue)
+        if (static_cast<CommandType>(c.type) == CommandType::Upgrade && c.blueprint == blueprint) {
+          ids.erase(ids.begin() + static_cast<std::ptrdiff_t>(i));
+          units.erase(units.begin() + static_cast<std::ptrdiff_t>(i));
+          break;
+        }
+    }
+  }
   if (ids.empty()) return false;
   StreamIssueData d;
   d.type = static_cast<int>(type);
@@ -3980,6 +3998,54 @@ void BuildOrderSitesForWorld(lua_State* L, std::vector<WorldGhost>* out) {
       out->push_back(g);
     }
   }
+}
+
+// The standing buildings outlined while a building is being placed: the original's build preview pass (FA exe 0x854b70,
+// READ 2026-11-04) walks the camera's units in the view (CameraImpl vt+0xa4, 0x7a7910), which CacheCameraFrustumUnits
+// (0x7a75a0) fills with the focus army's only (the entity's army +0x120 against session+0x488: none without a focus
+// army), and leaves out the dead (IUnit +0x28), the destroy-queued (+0x2c, not in our UnitView) and every unit that
+// moves (RUnitBlueprint::IsMobile 0x51e460: its MotionType, bp+0x290, not None); one being built is kept.
+void StandingSitesForWorld(lua_State* L, const std::vector<uint32_t>& ids, std::vector<StandingSite>* out) {
+  UserState* user = UserState::From(L);
+  if (!user->HasSim() || !user->units) return;
+  UnitStore& store = static_cast<UnitStore&>(*user->units);
+  const int focus = FocusArmyNow(L) + 1;
+  if (focus < 1) return;
+  for (uint32_t id : ids) {
+    auto it = store.units.find(id);
+    if (it == store.units.end()) continue;
+    const UserUnit* u = it->second.get();
+    if (u->gone || u->view.dead || u->view.army != focus || MotionTypeOf(L, u->view.blueprint) != 0) continue;
+    StandingSite s;
+    s.site.blueprint = u->view.blueprint;
+    for (int i = 0; i < 3; ++i) s.site.position[i] = u->view.position[i];
+    s.unit = id;
+    out->push_back(s);
+  }
+}
+
+// UserUnit::DoOnDetectAdjacencyBonusFor (FA exe 0x83eec0, READ): import("/lua/ui/game/gamemain.lua")
+// .OnDetectAdjacencyBonus(the unit's object, the blueprint's table), its answer as a boolean; an error is logged as the
+// original logs it, and answers no.
+bool AdjacencyBonus(lua_State* L, uint32_t unit, const std::string& blueprint) {
+  const int top = lua_gettop(L);
+  bool yes = false;
+  lua_pushcfunction(L, ScriptTraceback);
+  lua_getglobal(L, "import");
+  lua_pushstring(L, "/lua/ui/game/gamemain.lua");
+  if (lua_pcall(L, 1, 1, top + 1) == 0 && lua_istable(L, -1)) {
+    lua_pushstring(L, "OnDetectAdjacencyBonus");
+    lua_gettable(L, -2);
+    if (lua_isfunction(L, -1)) {
+      PushUnitById(L, unit);
+      PushBlueprint(L, blueprint);
+      if (lua_pcall(L, 2, 1, top + 1) == 0) yes = lua_toboolean(L, -1) != 0;
+      else Logf(LogLevel::Warning, "Error running '/lua/ui/game/gamemain.lua:OnDetectAdjacencyBonus': %s",
+                lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
+    }
+  }
+  lua_settop(L, top);
+  return yes;
 }
 
 // A building's site against the buildings ordered and not begun. The simulation refuses a site
@@ -5737,8 +5803,9 @@ void RefreshUserUnits(lua_State* L) {
       ++it;
     }
   }
-  ReportQueueChange(L);
+  // (the copies first: the shown factory's queue is then this sync's, not one sync back while a beat runs)
   RefreshUnitCopies(L, *sim, store);
+  ReportQueueChange(L);
 }
 
 // CWldSession::CheckForNecessaryUIRefresh (FA exe 0x8943e0, READ 2026-10-21), once a beat, after the beat's OnSync()

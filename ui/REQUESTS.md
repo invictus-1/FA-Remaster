@@ -1223,6 +1223,28 @@ on the synced bits +0x3a8). Ask: `uint32_t scriptBits` in UnitView (src/sim/sim_
 DONE (engine, 2026-11-03, dbb3a0b): UnitView::scriptBits (u+0x498, the same bits as UnitStateView's). Renderer 42 next.
 Detail: _scratch\ui\bigtest_misc_report.md section 2.
 
+### 54. RequestRefreshUI when an Upgrade is queued and when such an order leaves the head (2026-11-04, not blocking)
+From the interface chat, Chris's second test (picture "Two t2 factory hq queued instead of just one"; ui notes
+_scratch/ui/SECOND_TEST_UI_2026-11-04.md). The original sets the unit's refresh flag (unit+0xa2 = entity+0x9a, the
+one Entity:RequestRefreshUI sets, 0x68bbec) when ProcessUnitCommand accepts an Upgrade (0x6f010c, READ), and
+CUnitCommandQueue::NeedsUIRefresh (0x6ee260: its table holds Upgrade 0x1b and BuildFactory 7) sets it when the head
+order leaves the queue (RemoveFirstCommandFromQueue 0x6ede8e, RemoveCommandFromQueue 0x6edefe, ClearCommandQueue
+0x6ee2da / 0x6ee364). The next beat's CheckForNecessaryUIRefresh then calls gamemain's OnSelectionChanged, which
+rebuilds the build menu (GetUnitCommandData already leaves out queued upgrades: user_units.cpp 911-929). Ours calls
+RequestRefreshUI only in damage.cpp 392/453 and entities.cpp 806 (helper's grep), nowhere in commands.cpp, so a
+factory's build menu stays as it was until it is selected again: the T2 HQ button stays live after the upgrade is
+queued, the way Chris got the second one (with FAF's IssueUpgradeOrders chain: your stream reading). May also be
+why the units queued behind the upgrade showed late (item 6: the panel is rebuilt by the same refresh, INFERRED).
+Asked: the flag at those places (commands.cpp near the accepted Upgrade, ~1856, and the head removals). Gate as
+yours (the flag is read by the interface between beats).
+ADDED 2026-11-04 (second helper, item 6, READ): Unit:AddCommandCap (0x6c86dc) and Unit:RemoveCommandCap (0x6c8880) set
+the same [unit+0xa2] = 1; FAF's FactoryUnit.OnStartBuild calls RemoveCommandCap('RULEUCC_Guard') when an HQ upgrade
+begins (factoryunit.lua 115-121), so in the original the panel is rebuilt then. Ours (src/sim/transport.cpp 976-985
+l_AddCommandCap / l_RemoveCommandCap) change commandCaps only. His stream: air factory 0x700001 had Upgrade ueb0202 at
+beat 1099 and was still T1 at 3401 with only T1 units queued in between; he clicked the upgrade again at 2091, 2141,
+3401: the panel kept offering the T1 choices, so "T2 units shown late" is most likely this stale panel. Asked too:
+RequestRefreshUI in those two (and at the Stop dispatch, commands.cpp ~895, where our comment notes the original's).
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface

@@ -234,6 +234,23 @@ ForkThread(function()
     check("the second factory builds the tank first", ufocus and ufocus:GetBlueprint().BlueprintId, "uel0201")
     local _, _, later = GetUnitCommandData({upgrading})
     check("from the simulation's queue too: T2 tanks", EntityCategoryContains(later, "uel0202"), true)
+    -- Chris's second test (2026-11-04): a T3 HQ click behind the T2 upgrade and some units issues FAF's chain (the T2
+    -- step again, then the T3); the T2 step already queued is not sent twice (user_units.cpp IssuePlain), the T3 is
+    SelectUnits({upgrading})
+    WaitSeconds(0.2)
+    IssueBlueprintCommand("UNITCOMMAND_BuildFactory", "uel0201", 1, false)
+    IssueBlueprintCommand("UNITCOMMAND_Upgrade", "ueb0201", 1, false)
+    IssueBlueprintCommand("UNITCOMMAND_Upgrade", "ueb0301", 1, false)
+    WaitSeconds(1)
+    local shown, t2, t3 = {}, 0, 0
+    for _, e in SetCurrentFactoryForQueueDisplay(upgrading) or {} do
+        table.insert(shown, tostring(e.id) .. " x" .. tostring(e.count))
+        if e.id == "ueb0201" then t2 = t2 + (e.count or 1) end
+        if e.id == "ueb0301" then t3 = t3 + (e.count or 1) end
+    end
+    ClearCurrentFactoryForQueueDisplay()
+    LOG("TEST note the factory's queue as shown: " .. table.concat(shown, ", "))
+    check("the T2 step shown once, the T3 step behind it", t2 .. " " .. t3, "1 1")
     SelectUnits(nil)
     LOG("TEST done: " .. failed .. " failed")
 end)

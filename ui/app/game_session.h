@@ -205,6 +205,9 @@ class GameSession {
   // (what the host mounted after the init file, as (host folder, mount point), and the init file's folders it left
   // out: the M28 variant beside the original, main.cpp m28Variant; none left out today; engine REQUESTS 49)
   std::vector<std::pair<std::string, std::string>> scanMounts;
+  // --remasters-mods <folder> (visuals/work_mods): the mods' remastered units, each mod's folder mounted for a game
+  // that has that mod on (its MODS.json: mods.<key>.mod_uid; MountModRemasters).
+  std::string remastersModsRoot;
   std::vector<std::string> scanSkips;
   int scanTicks = 0;
 
@@ -447,6 +450,8 @@ class GameSession {
   std::string captureTo_;  // (the next shown frame is saved here: CaptureWindow)
   void ViewerControls(const std::string& orders);  // the player's pause / resume while a replay plays
   Vfs* vfs_;
+  std::set<std::string> modRemastersMounted_;  // (MODS.json keys mounted so far: the file system has no unmount)
+  void MountModRemasters(const std::vector<std::string>& uids);
   std::vector<std::string> hookDirs_;
   std::unique_ptr<Sim> sim_;
   std::vector<std::string> modUids_;
