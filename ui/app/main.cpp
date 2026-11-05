@@ -117,6 +117,9 @@ ui::GameSession::Sky sky;
 // FAF's (Chris, 2026-10-21: "only appear when its connected to faf"). --own <folder>: this program's own files
 // (ui/data); without it they are looked for beside the program.
 std::vector<std::string> moreMaps, remastersFolders, fafRemastersFolders;
+// --remasters-mods <folder> (visuals/work_mods): the mods' remastered units, each mod's folder mounted only for a game
+// with that mod on (its MODS.json: GameSession::MountModRemasters).
+std::string remastersModsRoot;
 std::string ownFolder;
 // M28AI in the lobby: our variant (the repository's mods/m28-variant, maudlin27's AI made faster, the same decisions:
 // its README) in place of the original v326 (the engine, Chris's item 20: his lobby ran the original, so the AI's
@@ -306,6 +309,7 @@ int main(int argc, char** argv) {
     else if (a == "--maps") moreMaps.push_back(next());
     else if (a == "--remasters") remastersFolders.push_back(next());
     else if (a == "--remasters-faf") fafRemastersFolders.push_back(next());
+    else if (a == "--remasters-mods") remastersModsRoot = next();
     else if (a == "--own") ownFolder = next();
     else if (a == "--our-mods") ourMods = next();
     else if (a == "--m28") originalM28 = next() == "original";
@@ -527,6 +531,7 @@ int main(int argc, char** argv) {
   session.scanInit = o.init;  // (the replay timeline's scan mounts the game as this program did)
   session.scanFolders = o.folders;
   if (!m28Variant.empty()) session.scanMounts.push_back({m28Variant, "/mods/m28-variant"});
+  session.remastersModsRoot = remastersModsRoot;
   for (const auto& [folder, at] : modFixes) session.scanMounts.push_back({folder, at});
   session.scanTicks = scanTicks;
   cfg.launchSession = [&session](lua_State* L, int config, std::string* why) { return session.Launch(L, config, why); };

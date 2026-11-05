@@ -42,6 +42,8 @@
 #include "sim/terrain.h"
 
 #ifdef MOHO64UI_WORLD_PICTURE
+#include "render/json.h"
+#include "render/remasters.h"
 #include "render/view.h"
 #include "render/world.h"
 #include "render/world_picture.h"
@@ -1698,7 +1700,44 @@ static void PostPrints(Sim& sim) {
 
 // The launch call's part (the original's WLD_SetupSessionInfo + WLD_BeginSession, 0x88cbc0 /
 // 0x88d060): the session is described and its simulation made, nothing loaded yet.
+// The remastered units of the mods this game has on (--remasters-mods, visuals/work_mods: its MODS.json names each
+// mod's folder and mod_uid; visuals, 2026-11-04; Chris's item 22 of 2026-10-20: no mod unit's look unless its mod is
+// on), mounted as the game begins, in the game's own order of its mods: of two mods that define one unit the later
+// wins, as the later's blueprint does (INFERRED: the order the session lists them; Antares and Wyvern both define
+// WES0401). A folder once mounted stays for the later games of the run (the file system has no unmount): only such an
+// overlap could then show the earlier game's look. A unit's folder with a HOLD is skipped (MountRemasters).
+void GameSession::MountModRemasters(const std::vector<std::string>& uids) {
+#ifdef MOHO64UI_WORLD_PICTURE
+  if (remastersModsRoot.empty() || uids.empty()) return;
+  const std::string file = remastersModsRoot + "/MODS.json";
+  const std::optional<std::string> text = hostfs::ReadFile(file);
+  render::JsonValue json;
+  std::string error;
+  if (!text || !render::ReadJson(*text, &json, &error)) {
+    Logf(LogLevel::Warning, "moho64ui: --remasters-mods: %s cannot be read%s%s", hostfs::DisplayPath(file).c_str(),
+         error.empty() ? "" : ": ", error.c_str());
+    return;
+  }
+  auto lower = [](std::string s) {
+    for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+  };
+  for (const std::string& uid : uids) {
+    for (const auto& [key, mod] : json["mods"].members) {
+      const std::string modUid = mod["mod_uid"].StringOr("");
+      if (modUid.empty() || lower(modUid) != lower(uid) || !modRemastersMounted_.insert(key).second) continue;
+      const std::string folder = remastersModsRoot + "/" + key;
+      Logf(LogLevel::Info, "moho64ui: remastered units of the mod %s: %d from %s", key.c_str(), render::MountRemasters(vfs_, folder),
+           hostfs::DisplayPath(folder).c_str());
+    }
+  }
+#else
+  (void)uids;
+#endif
+}
+
 void GameSession::PrepareSession(const SessionDescription& session, const std::vector<std::string>& uids) {
+  MountModRemasters(uids);  // (before the picture opens behind the loading screen: its units' looks are read then)
   const ReplayHeader& h = session.header;
   Logf(LogLevel::Info, "moho64ui: session %s: %zu armies, %zu command sources, focus army %d, seed %u, %zu mods",
        h.map.c_str(), h.armies.size(), h.sources.size(), session.focusArmy + 1, h.seed, uids.size());

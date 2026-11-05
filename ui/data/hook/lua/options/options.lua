@@ -19,33 +19,54 @@ end
 -- renderer's advice, 2026-10-18); the Cinematic Lens Blur is a replay camera's, in no level.
 -- Hidden Unit Outlines from Low on (readability), Battle Effects and Energy Shields from Medium on (each well under
 -- half a millisecond, the renderer's measure). Chris, 2026-10-18: a player starts with every look on at its
--- highest, Ultra ("if they can't handle it they lower it").
+-- highest, Ultra ("if they can't handle it they lower it"). The ten looks of Chris's big test (Ocean Glitter on
+-- down; each about a millisecond or less at 4K, the renderer's measure of 2026-11-04, Sharpen ~0.9 and Unit Glow
+-- ~1.0 the most): High and Ultra as their defaults; Medium without Sharpen; Low without Shore Soak too (~0.6);
+-- Unit Glow 75 on every level (below 100 it adds hullEvenColours + hullShare, ~1 ms but within the noise: kept for
+-- the look, the renderer's advice); the ones that help the player read the battle (Ghost Look, Guide over Grass,
+-- Cloak Look, Stealth Veil, costing only when on screen) from Low on, as Hidden Unit Outlines; Off has each as the
+-- original game shows it, or our earlier look where the original has none.
 local remasterPresets = {
     [0] = { remaster_look = 'original', remaster_effects = 0, remaster_effects_quality = 1, remaster_tracers = 0,
             remaster_rich_ground = 0, remaster_snow_tracks = 0, remaster_soft_shadows = 0,
             remaster_ground_detail = 0, remaster_atmosphere = 0, remaster_weather_effects = 0,
             remaster_water_ripples = 0, remaster_ray_tracing = 0, remaster_hidden_outlines = 0,
-            remaster_battle_effects = 0, remaster_energy_shields = 0 },
+            remaster_battle_effects = 0, remaster_energy_shields = 0,
+            remaster_ocean_glitter = 0, remaster_shore_soak = 0, remaster_shield_bend = 2, remaster_unit_glow = 100,
+            remaster_sharpen = 0, remaster_gateway = 0, remaster_ghost_look = 1, remaster_guide = 0,
+            remaster_cloak_look = 1, remaster_stealth_veil = 0 },
     [1] = { remaster_look = 'remastered', remaster_effects = 1, remaster_effects_quality = 0.5,
             remaster_tracers = 1, remaster_rich_ground = 1, remaster_snow_tracks = 1, remaster_soft_shadows = 0,
             remaster_ground_detail = 0, remaster_atmosphere = 0, remaster_weather_effects = 0,
             remaster_water_ripples = 0, remaster_ray_tracing = 0, remaster_hidden_outlines = 1,
-            remaster_battle_effects = 0, remaster_energy_shields = 0 },
+            remaster_battle_effects = 0, remaster_energy_shields = 0,
+            remaster_ocean_glitter = 1, remaster_shore_soak = 0, remaster_shield_bend = 1, remaster_unit_glow = 75,
+            remaster_sharpen = 0, remaster_gateway = 1, remaster_ghost_look = 1, remaster_guide = 1,
+            remaster_cloak_look = 1, remaster_stealth_veil = 1 },
     [2] = { remaster_look = 'remastered', remaster_effects = 1, remaster_effects_quality = 0.75,
             remaster_tracers = 1, remaster_rich_ground = 1, remaster_snow_tracks = 1, remaster_soft_shadows = 1,
             remaster_ground_detail = 1, remaster_atmosphere = 0, remaster_weather_effects = 0,
             remaster_water_ripples = 0, remaster_ray_tracing = 0, remaster_hidden_outlines = 1,
-            remaster_battle_effects = 1, remaster_energy_shields = 1 },
+            remaster_battle_effects = 1, remaster_energy_shields = 1,
+            remaster_ocean_glitter = 1, remaster_shore_soak = 1, remaster_shield_bend = 1, remaster_unit_glow = 75,
+            remaster_sharpen = 0, remaster_gateway = 1, remaster_ghost_look = 1, remaster_guide = 1,
+            remaster_cloak_look = 1, remaster_stealth_veil = 1 },
     [3] = { remaster_look = 'remastered', remaster_effects = 1, remaster_effects_quality = 1,
             remaster_tracers = 1, remaster_rich_ground = 1, remaster_snow_tracks = 1, remaster_soft_shadows = 1,
             remaster_ground_detail = 1, remaster_atmosphere = 1, remaster_weather_effects = 1,
             remaster_water_ripples = 1, remaster_ray_tracing = 0, remaster_hidden_outlines = 1,
-            remaster_battle_effects = 1, remaster_energy_shields = 1 },
+            remaster_battle_effects = 1, remaster_energy_shields = 1,
+            remaster_ocean_glitter = 1, remaster_shore_soak = 1, remaster_shield_bend = 1, remaster_unit_glow = 75,
+            remaster_sharpen = 50, remaster_gateway = 1, remaster_ghost_look = 1, remaster_guide = 1,
+            remaster_cloak_look = 1, remaster_stealth_veil = 1 },
     [4] = { remaster_look = 'remastered', remaster_effects = 1, remaster_effects_quality = 1,
             remaster_tracers = 1, remaster_rich_ground = 1, remaster_snow_tracks = 1, remaster_soft_shadows = 1,
             remaster_ground_detail = 1, remaster_atmosphere = 1, remaster_weather_effects = 1,
             remaster_water_ripples = 1, remaster_ray_tracing = 1, remaster_hidden_outlines = 1,
-            remaster_battle_effects = 1, remaster_energy_shields = 1 },
+            remaster_battle_effects = 1, remaster_energy_shields = 1,
+            remaster_ocean_glitter = 1, remaster_shore_soak = 1, remaster_shield_bend = 1, remaster_unit_glow = 75,
+            remaster_sharpen = 50, remaster_gateway = 1, remaster_ghost_look = 1, remaster_guide = 1,
+            remaster_cloak_look = 1, remaster_stealth_veil = 1 },
 }
 function RemasterPresetValues(level)  -- (also for the tests)
     local values = remasterPresets[level]
@@ -552,8 +573,8 @@ local looks = {
         },
     },
     -- The renderer's looks from Chris's big test (2026-11-01; render/world.h): each on by default, the earlier look kept
-    -- as Off (Chris: new looks are player options); corrections of the remastered look, not quality steps, so in no
-    -- preset level. (ui/user/user_state.h LookSettings has which field of the world each sets.)
+    -- as Off (Chris: new looks are player options); in the preset levels by their costs (remasterPresets above).
+    -- (ui/user/user_state.h LookSettings has which field of the world each sets.)
     {
         -- the renderer's Ocean::glitter
         title = "Ocean Glitter",

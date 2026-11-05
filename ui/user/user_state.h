@@ -1023,6 +1023,14 @@ bool SiteMeetsOrdered(lua_State* L, const std::string& blueprint, const float po
 // without a focus army), each once, with its blueprint and the order's place: for the outlines the world view draws
 // round them while a building is being placed (the original's DrawAllUnitSkirts, user_units.cpp). At most 600.
 void BuildOrderSitesForWorld(lua_State* L, std::vector<WorldGhost>* out);
+// The focus army's standing buildings among `ids` (the units in the world views), each as a site (its blueprint and
+// place) with its unit's id: for the outlines the world view draws round them while a building is being placed (the
+// original's build preview pass 0x854b70, user_units.cpp). None without a focus army.
+struct StandingSite;
+void StandingSitesForWorld(lua_State* L, const std::vector<uint32_t>& ids, std::vector<StandingSite>* out);
+// gamemain.lua's OnDetectAdjacencyBonus(unit, blueprint): whether the unit beside a building of that kind gives it a
+// bonus (the original's 0x83eec0, asked of each standing building whose skirt touches a building being placed).
+bool AdjacencyBonus(lua_State* L, uint32_t unit, const std::string& blueprint);
 std::string TakeOrders(lua_State* L);
 // The console's commands that reach the simulation with the selection (user_units.cpp): DoSimCommand's message (the
 // command line as given), TeleportSelectedUnits, and KillSelectedUnits / DestroySelectedUnits (destroy).

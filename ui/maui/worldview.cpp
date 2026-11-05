@@ -1217,9 +1217,44 @@ class WorldView : public Control {
     }
     for (WorldGhost& g : scene.ghosts) g.placing = true;  // (all of them under the cursor, before the ordered sites)
     placingGhosts_ = scene.ghosts;  // (the building about to be placed, for the extractor snap)
+    // Round each of the player's standing buildings in the views while a building is being placed, the outline of its
+    // skirt, with the adjacency hint: the original's build preview pass (0x854b70, called from the world view's
+    // drawing at 0x853ea5 while a preview is there, Shift held or not; READ 2026-11-04; which units:
+    // StandingSitesForWorld). Each in d800d800 (DrawUnitSkirt 0x85abd0); in ff00ff00 where its skirt touches that of a
+    // ghost that can stand and is not lit yet (the ghost's colour still d800d800, 0x854da0; SkirtsTouch) and gamemain's
+    // OnDetectAdjacencyBonus(the unit, the ghost's blueprint) says yes (0x83eec0): that ghost is then drawn ff00ff00
+    // too (0x854e5b, 0x854ee0). Left out: a cut by a camera plane at 0x854d7c ([view+0xfc]+0x70; INFERRED a distance).
+    // Chris, 2026-11-04: "No green building outline for existing buildings like og game".
+    std::vector<char> adjacent(scene.ghosts.size(), 0);
+    if (building) {
+      std::vector<uint32_t> inView, more;
+      source->UnitsIn(0, 0, static_cast<float>(w), static_cast<float>(h), &inView);
+      for (size_t i = 1; i < views.size() && i < specs.size(); ++i) {
+        views[i]->SrcUnitsIn(source, 0, 0, static_cast<float>(specs[i].width), static_cast<float>(specs[i].height), &more);
+        for (uint32_t id : more)
+          if (std::find(inView.begin(), inView.end(), id) == inView.end()) inView.push_back(id);
+      }
+      std::vector<StandingSite> standing;
+      StandingSitesForWorld(L, inView, &standing);
+      for (const StandingSite& s : standing) {
+        uint32_t color = 0xd800d800u;
+        for (size_t i = 0; i < scene.ghosts.size(); ++i) {
+          if (!scene.ghosts[i].free || adjacent[i] || !SkirtsTouch(L, s.site, scene.ghosts[i])) continue;
+          if (AdjacencyBonus(L, s.unit, scene.ghosts[i].blueprint)) {
+            color = 0xff00ff00u, adjacent[i] = 1;
+            break;
+          }
+        }
+        SiteOutline(L, s.site, color, &scene.lines);
+      }
+    }
     // Round each building being placed, the outline of the ground it takes: green where it can
-    // stand, red where not (the guide of the original, by Chris's pictures of it).
-    for (const WorldGhost& g : scene.ghosts) SiteOutline(L, g, g.free ? 0xff10d010u : 0xffe02020u, &scene.lines);
+    // stand, red where not (the guide of the original, by Chris's pictures of it), bright green beside a building it
+    // gains from (above).
+    for (size_t i = 0; i < scene.ghosts.size(); ++i) {
+      const WorldGhost& g = scene.ghosts[i];
+      SiteOutline(L, g, adjacent[i] ? 0xff00ff00u : g.free ? 0xff10d010u : 0xffe02020u, &scene.lines);
+    }
     // A building's waypoint being dragged: the graph draws a queued building's ghost at its node (0x828dd0), so while
     // the node is dragged (its byte +0x1c) the ghost stands where the mouse has it (the ground there, not snapped)
     // with the outline of its skirt, d800d800 where it can stand and d8d80000 where not (the node's byte +0x1e),
@@ -2120,6 +2155,25 @@ class WorldView : public Control {
     side(x0 + sizeX, z0, x0 + sizeX, z0 + sizeZ);
     side(x0 + sizeX, z0 + sizeZ, x0, z0 + sizeZ);
     side(x0, z0 + sizeZ, x0, z0);
+  }
+  // Whether the skirts of a standing building and a ghost touch: the original's 0x854a30 (READ 2026-11-04), on the
+  // rectangles {x0, z0, x1, z1} (ours the guide's, BuildSpacingOf round the place; the original's GetSkirtRect may sit
+  // off the centre for a mod's building, REQUESTS 17). The unit's left side within 1 of the ghost's right, or its
+  // right within 1 of the ghost's left: they touch when the one's z span holds the other's; else its near side
+  // within 1 of the ghost's far one, or its far within 1 of the ghost's near: when the one's x span holds the other's.
+  static bool SkirtsTouch(lua_State* L, const WorldGhost& unit, const WorldGhost& ghost) {
+    auto rectOf = [L](const WorldGhost& g, float r[4]) {
+      float sx = 1, sz = 1;
+      BuildSpacingOf(L, g.blueprint, &sx, &sz);
+      r[0] = g.position[0] - sx / 2, r[1] = g.position[2] - sz / 2, r[2] = r[0] + sx, r[3] = r[1] + sz;
+    };
+    float u[4], g[4];
+    rectOf(unit, u);
+    rectOf(ghost, g);
+    auto holds = [](float a0, float a1, float b0, float b1) { return (a0 >= b0 && b1 >= a1) || (b0 >= a0 && a1 >= b1); };
+    if (std::fabs(u[0] - g[2]) < 1 || std::fabs(u[2] - g[0]) < 1) return holds(u[1], u[3], g[1], g[3]);
+    if (std::fabs(u[1] - g[3]) < 1 || std::fabs(u[3] - g[1]) < 1) return holds(u[0], u[2], g[0], g[2]);
+    return false;
   }
   // Building in a row: a left press in a build mode marks the first site; let go on the spot, the
   // building is ordered there; let go elsewhere, one is ordered on every free site of the row
