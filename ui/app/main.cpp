@@ -471,6 +471,9 @@ int main(int argc, char** argv) {
   }
   cfg.gameArgs = o.gameArgs;
   cfg.prefsFile = o.prefsFile;
+  // (the original's key bindings on the player's ask, moho64ui_OriginalKeyBindings: from --import-prefs when it names
+  // a file, the tests' made-up one, else the original's own)
+  cfg.originalPrefsFile = !o.importPrefs.empty() && o.importPrefs != "none" ? o.importPrefs : OriginalPrefsFile();
   // Our preferences file: the one --prefs names; without it a live window has one of its own
   // (DefaultPrefsFile), and a run without a window (tests, probes) keeps them in memory only.
   // When ours does not exist yet, the original game's profiles are taken over once (after the

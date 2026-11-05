@@ -99,6 +99,7 @@ class UserState {
     std::vector<std::string> modUids;   // active mods (their /hook folders apply to this state too)
     std::vector<std::string> gameArgs;  // the game's own command line, as GetCommandLineArg sees it
     std::string prefsFile;              // our preferences file (main.cpp: --prefs or the default); empty = memory only
+    std::string originalPrefsFile;      // the original game's own (FAF's) preferences file, only ever read (main.cpp)
     std::string sessionFile;            // where a launched game's configuration is written; empty = to the log
     std::function<std::string()> sessionFileNow;  // the same for the game launched now, when set (one file per game)
     // Starts a session from the game configuration table at stack index `config` when the lobby

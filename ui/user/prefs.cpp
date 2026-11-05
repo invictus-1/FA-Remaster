@@ -472,7 +472,75 @@ void LoadPrefs(lua_State* L, const std::string& file) {
   lua_settop(L, top);
 }
 
+// moho64ui_OriginalKeyBindings() (ours; Chris's third test, 2026-11-05: "import my FAF hotkeys"): the key bindings of
+// the original game's current profile, from its own preferences file (FAF's; only read, as ImportPreferences reads it),
+// as {Name, UserKeyMap, UserDebugKeyMap, UserKeyMapName, UserKeyActions} (each that the profile has); nil and why when
+// there is no such file or profile. The key binding dialog's import button (our hook of keybindings.lua) offers them.
+int l_OriginalKeyBindings(lua_State* L) {
+  const std::string& file = UserState::From(L)->config().originalPrefsFile;
+  std::string why;
+  auto src = file.empty() ? std::nullopt : hostfs::ReadFile(file);
+  if (!src) {
+    lua_pushnil(L);
+    lua_pushstring(L, file.empty() ? "no original preferences file is known" : "the original's preferences file cannot be read");
+    return 2;
+  }
+  const int top = lua_gettop(L);
+  if (!RunPrefsChunk(L, *src, "@" + hostfs::DisplayPath(file), &why)) {
+    lua_settop(L, top);
+    lua_pushnil(L);
+    lua_pushstring(L, why.c_str());
+    return 2;
+  }
+  const int env = lua_gettop(L);
+  lua_pushstring(L, "profile");
+  lua_rawget(L, env);
+  const int profile = lua_gettop(L);
+  int current = 0;
+  if (lua_istable(L, profile)) {
+    lua_pushstring(L, "current");
+    lua_rawget(L, profile);
+    current = lua_isnumber(L, -1) ? static_cast<int>(lua_tonumber(L, -1)) : 0;
+    lua_pop(L, 1);
+    lua_pushstring(L, "profiles");
+    lua_rawget(L, profile);
+  } else {
+    lua_pushnil(L);
+  }
+  if (!lua_istable(L, -1) || current < 1) {
+    lua_settop(L, top);
+    lua_pushnil(L);
+    lua_pushstring(L, "the original's preferences have no current profile");
+    return 2;
+  }
+  lua_rawgeti(L, -1, current);
+  const int one = lua_gettop(L);
+  if (!lua_istable(L, one)) {
+    lua_settop(L, top);
+    lua_pushnil(L);
+    lua_pushstring(L, "the original's current profile is missing");
+    return 2;
+  }
+  lua_newtable(L);
+  const int out = lua_gettop(L);
+  for (const ProfileField& f : kProfileFields) {
+    if (std::string(f.key) == "options") continue;
+    lua_pushstring(L, f.key);
+    lua_rawget(L, one);
+    if (lua_type(L, -1) == f.type) {
+      lua_pushstring(L, f.key);
+      PushCopy(L, -2);
+      lua_rawset(L, out);
+    }
+    lua_pop(L, 1);
+  }
+  lua_replace(L, top + 1);
+  lua_settop(L, top + 1);
+  return 1;
+}
+
 void RegisterPrefsBindings(lua_State* L) {
+  SetGlobal(L, "moho64ui_OriginalKeyBindings", l_OriginalKeyBindings);
   SetGlobal(L, "GetPreference", l_GetPreference);
   SetGlobal(L, "SetPreference", l_SetPreference);
   SetGlobal(L, "GetOptions", l_GetOptions);

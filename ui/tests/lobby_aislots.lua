@@ -1,10 +1,10 @@
--- Our AI's settings across many slots, as Chris set them in his second test (2026-11-04: "full eco + turtle" on three
--- armies and "full aggro, +2 aggression and eco" on another; the launch kept two of four): the Remastered AIx in four
--- slots, each set through its own dialog in turn; a slot's colour changed; another of our AIs picked over one; each
--- slot keeps its own and no other's (ui/data/hook/lua/ui/lobby/lobby.lua). The launch's table is the runner's
+-- Our AI's settings in every slot (Chris's second test, 2026-11-04: of four slots set, the launch kept two; third test,
+-- 2026-11-05: a test of each slot's actual choices): the Remastered AIx in all seven AI slots, each set differently
+-- through its own dialog in turn; a slot's colour changed; another of our AIs picked over one; each slot keeps its
+-- own and no other's (ui/data/hook/lua/ui/lobby/lobby.lua). The launch's table is the runner's
 -- (--replay-out: replay.session.lua's ArmySetup).
 --   moho64ui --init <init.lua> --prefs <a copy> --stage setup --size 1920x1080 --replay-out <dir>/r
---            --lua ui/tests/lobby_aislots.lua --game-lua ui/tests/lobby_aislots.lua --frames 1500 --no-world --log out.log
+--            --lua ui/tests/lobby_aislots.lua --game-lua ui/tests/lobby_aislots.lua --frames 4000 --no-world --log out.log
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
 local failed = 0
 local function check(what, got, want)
@@ -93,34 +93,42 @@ ForkThread(function()
     if changelog.IsOpen() then changelog.CloseChangelogDialog() WaitFrames(3) end
     local players, slots = gameInfo.PlayerOptions, GUI.slots
 
-    -- first the plain AI in slots 2-5 (as his game before), then the AIx picked over each
-    for s = 2, 5 do
+    -- Every AI slot set differently, each through its own dialog (Chris, 2026-11-05: "a specific test of each slot's
+    -- actual choices"): the plain AI first in slots 2-8 (as his game before), then the AIx picked over each, then the
+    -- seven settings; after each slot's, every slot is checked (its own, or still the defaults). The runner checks the
+    -- launch's table and each army's AI line (aiop <army> ... personality, teacher, aggression, economy).
+    local plan = {
+        [2] = {"Rusher", "+2  Aggressive", "-1", "Off", "rusher 2 -1 off"},
+        [3] = {"Turtle", "-2  Defensive", "+2  Economy first", "Off", "turtle -2 2 off"},
+        [4] = {"Balanced", "+1", "0  Normal", "On", "balanced 1 0 on"},
+        [5] = {"Turtle", "0  Normal", "+2  Economy first", "Off", "turtle 0 2 off"},
+        [6] = {"Rusher", "0  Normal", "-2  Army first", "Off", "rusher 0 -2 off"},
+        [7] = {"Turtle", "+1", "+1", "On", "turtle 1 1 on"},
+        [8] = {"Balanced", "-2  Defensive", "+2  Economy first", "Off", "balanced -2 2 off"},
+    }
+    for s = 2, 8 do
         check("Remastered AI: Supreme Commander into slot " .. s, pick(slots[s].name, "Remastered AI: Supreme Commander"), true)
     end
-    for s = 2, 5 do
+    for s = 2, 8 do
         check("then the AIx over it in slot " .. s, pick(slots[s].name, "Remastered AIx: Supreme Commander"), true)
         check("slot " .. s .. " has it", players[s] and players[s].AIPersonality, "remastered_supreme_cheat")
     end
-    -- each slot through its own dialog: 2, 3, 4 "full eco + turtle", 5 "full aggro, +2 aggression and eco"
-    local want = { [2] = "turtle 0 2 off", [3] = "turtle 0 2 off", [4] = "turtle 0 2 off", [5] = "rusher 2 2 off" }
-    for s = 2, 5 do
+    for s = 2, 8 do
         check("slot " .. s .. ": Remastered AI Settings... picked", pick(slots[s].name, "Remastered AI Settings..."), true)
         WaitFrames(3)
         local dialog = GUI.remasterAISettings
         check("slot " .. s .. ": its dialog opens", dialog ~= nil and not IsDestroyed(dialog), true)
         if dialog then
-            if s == 5 then
-                pick(dialog.combos.RemasterPersonality, "Rusher")
-                pick(dialog.combos.RemasterAggression, "+2  Aggressive")
-            else
-                pick(dialog.combos.RemasterPersonality, "Turtle")
-            end
-            pick(dialog.combos.RemasterEconomy, "+2  Economy first")
+            local w = plan[s]
+            pick(dialog.combos.RemasterPersonality, w[1])
+            pick(dialog.combos.RemasterAggression, w[2])
+            pick(dialog.combos.RemasterEconomy, w[3])
+            pick(dialog.combos.RemasterTeacher, w[4])
             clickOn(dialog.closeButton)
             WaitFrames(3)
         end
-        for t = 2, 5 do
-            check("after slot " .. s .. ": slot " .. t, settings(players[t]), t <= s and want[t] or "random 0 0 off")
+        for t = 2, 8 do
+            check("after slot " .. s .. ": slot " .. t, settings(players[t]), t <= s and plan[t][5] or "random 0 0 off")
         end
     end
     -- a colour changed (the host's: its selector), then another of our AIs over slot 4
@@ -136,8 +144,8 @@ ForkThread(function()
         check("slot 3's colour changed", players[3].PlayerColor, free)
     end
     check("Remastered AIx: Commander over slot 4", pick(slots[4].name, "Remastered AIx: Commander"), true)
-    for t = 2, 5 do
-        check("at the end: slot " .. t, settings(players[t]), want[t])
+    for t = 2, 8 do
+        check("at the end: slot " .. t, settings(players[t]), plan[t][5])
     end
 
     SetFrontEndData('lobby_aislots_test', {failed = failed})
