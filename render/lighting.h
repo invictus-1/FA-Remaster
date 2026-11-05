@@ -634,6 +634,7 @@ float3 LeafLight(float3 albedo, float through, float3 world, float shadow, float
 float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusion, float3 emission, float3 N, float3 world, float shadow) {
   float sunMapShadow = shadow, cloudHere = CloudShadow(world);  // [snowshade] (each kept: the weak sun through the clouds, below)
   shadow *= cloudHere;  // (a computed sky's clouds)
+  float snowLyingHere = 0;  // [snowlamps] how much snow lies here (for the small lights on it, below)
   float snowShadeHere = 0;  // [snowshade] how much of the shade on lying snow this surface takes (view.h's snowShade, as snow lies)
 #ifdef GROUND_MATT
   // [leftover] (the ground's shaders: Terrain::mattGrazing) how much of the sun's highlight the ground loses here: how low the
@@ -770,6 +771,7 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
 #ifdef GROUND_MATT
     matt *= (1 - saturate(SURFACE_WET * 2)) * (1 - puddle) * (1 - lying);  // [leftover] (wet ground, still water and snow keep their gloss)
 #endif
+    snowLyingHere = lying;  // [snowlamps]
     snowShadeHere = snowShade.x * lying;  // [snowshade] (World::snowShade: under an overcast, as much as snow lies here; below)
   }
   [branch] if (inspect.x > 0.5) {
@@ -815,6 +817,10 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
   [branch] if (matt > 0) F *= 1 - 0.9 * matt;
 #endif
   float3 small = SmallLights(world, N, V, diffuseColor, f0, a2, k, nDotV);
+  // [snowlamps] (Chris's third test, 2026-11-05: "unit flashlights at night too bright with snow on") lying snow gives back
+  // nearly all the light a lamp throws on it, five times what grass and earth do, so the units' and buildings' lamps blazed
+  // on it as white pools: on snow they light it at half (the modern look; the earlier look keeps its lamps whole)
+  small *= 1 - 0.5 * snowLyingHere * look;
   if (inspect.x > 6.5 && inspect.x < 7.5) return small;
   float3 sunRadiance = ToLinear(sunColor) * (lightMultiplier * modern.x);
   // [snowshade] a weak sun through the overcast on lying snow: at least snowShade.y of its light comes through where the
