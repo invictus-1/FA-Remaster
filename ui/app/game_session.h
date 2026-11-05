@@ -448,7 +448,8 @@ class GameSession {
   void OpenPicture();
   bool pictureDue_ = false;
   std::string captureTo_;  // (the next shown frame is saved here: CaptureWindow)
-  void ViewerControls(const std::string& orders);  // the player's pause / resume while a replay plays
+  void ViewerControls(const std::string& orders);  // the player's pause / resume / end while a replay plays
+  bool replayEndAsked_ = false;  // (the viewer's End Replay: the replay's game ends in its next beat)
   Vfs* vfs_;
   std::set<std::string> modRemastersMounted_;  // (MODS.json keys mounted so far: the file system has no unmount)
   void MountModRemasters(const std::vector<std::string>& uids);

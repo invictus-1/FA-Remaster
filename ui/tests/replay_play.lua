@@ -68,5 +68,18 @@ ForkThread(function()
         waited = waited + 0.1
     end
     check("SetFocusArmy(-1): every army again", GetFocusArmy(), -1)
+    -- End Replay (the Esc menu's: tabs.lua EndGame, as its Yes): the replay's game ends, the score the simulation
+    -- sends at its end arrives, and the score screen comes up (Chris's third test, 2026-11-05: it never did)
+    import('/lua/ui/game/tabs.lua').EndGame()
+    local hotstats = import('/lua/ui/dialogs/hotstats.lua')
+    waited = 0
+    while not (hotstats.scoreData and hotstats.scoreData.current) and waited < 10 do
+        WaitSeconds(0.2)
+        waited = waited + 0.2
+    end
+    check("End Replay: the simulation's score arrives", hotstats.scoreData and hotstats.scoreData.current ~= nil, true)
+    check("the game is over", SessionIsGameOver(), true)
+    WaitSeconds(2)
+    check("the score screen is up", import('/lua/ui/dialogs/score.lua').scoreScreenActive, true)
     LOG("TEST done: " .. failed .. " failed")
 end)

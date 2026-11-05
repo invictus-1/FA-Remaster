@@ -2698,8 +2698,11 @@ bool GameSession::RunDueBeats(bool catchingUp) {
       // (every beat its stream's orders first, as the engine's own player of the original's replays: so the recorded
       // game's pause and its resume are both applied; a paused beat while the recorded game is paused)
       BeatOrdersTaken();  // (the beat's time for maxSP from here: its orders, then its tick)
-      if (!play_->AtEnd() && play_->ApplyUntilAdvance(*sim_)) {
-        if (sim_->Paused()) {
+      const bool ending = replayEndAsked_ && !sim_->endGame;  // (the viewer's End Replay: one last beat, see above)
+      if (ending) sim_->endGame = true;
+      replayEndAsked_ = false;
+      if (ending || (!play_->AtEnd() && play_->ApplyUntilAdvance(*sim_))) {
+        if (sim_->Paused() && !ending) {
           sim_->PausedBeat();
           FingerprintBeat();
         } else if (onThread) {
@@ -3492,6 +3495,13 @@ void GameSession::ViewerControls(const std::string& orders) {
     if (length < 3) break;
     if (type == 4) ReplayHeld() = true;  // (the viewer's hold, the host's own: not the recorded game's pause)
     else if (type == 5) ReplayHeld() = false;
+    // The viewer's EndGame (SessionEndGame: FAF's End Replay, then the score screen, which waits for the score the
+    // simulation's game-over listeners send, Sync.ScoreAccum): the replay's game ends as a game does on the stream's
+    // EndGame (command_stream.cpp case 23): one more beat runs, in which FAF's GameOverListenerThread sees IsGameOver()
+    // and the score goes out, then the game stands. Before, the order was dropped here and the score screen waited
+    // for ever (Chris's third test, 2026-11-05: "click end replay doesn't work, I'm stuck in game"). INFERRED: the
+    // original's replay viewer ends the same way (its EndGame is the session's, not the recorded stream's).
+    else if (type == 23) replayEndAsked_ = true, ReplayHeld() = false;
     p += length;
   }
 }
