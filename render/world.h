@@ -799,6 +799,9 @@ class World {
   // where it is. Modern look; ON by default (Chris via the interface session, 2026-10-17: readability); the
   // original look has none, as the original game had none.
   bool hiddenOutlines = true;
+  // [fgquery] (the interface's ask, 2026-11-05: its frame counter counts the real frames only) whether frame generation
+  // makes a picture between this frame and the next: on, its passes made and not refused, and asked of the device
+  bool FrameGenerationNow() const { return framegenAsked_; }
   HiddenOutlines outlines;
   // Hot metal (hot_metal.h; renderer item 12): fresh wrecks glow where they broke and on their thin parts and cool over
   // a minute or two, fresh scorches and craters glow in the middle, cooling wrecks smoulder; a faint light from the
