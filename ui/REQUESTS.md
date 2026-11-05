@@ -1224,6 +1224,8 @@ DONE (engine, 2026-11-03, dbb3a0b): UnitView::scriptBits (u+0x498, the same bits
 Detail: _scratch\ui\bigtest_misc_report.md section 2.
 
 ### 54. RequestRefreshUI when an Upgrade is queued and when such an order leaves the head (2026-11-04, not blocking)
+DONE (engine batch 84, main ccf0504, 2026-11-04; docs/engine-answers.md "ui request 54"): the flag at every point
+listed, plus the head types NeedsUIRefresh names (silo builds, Reclaim, Repair, Capture, the transport orders, Dock).
 From the interface chat, Chris's second test (picture "Two t2 factory hq queued instead of just one"; ui notes
 _scratch/ui/SECOND_TEST_UI_2026-11-04.md). The original sets the unit's refresh flag (unit+0xa2 = entity+0x9a, the
 one Entity:RequestRefreshUI sets, 0x68bbec) when ProcessUnitCommand accepts an Upgrade (0x6f010c, READ), and

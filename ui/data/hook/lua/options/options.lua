@@ -24,7 +24,8 @@ end
 -- ~1.0 the most): High and Ultra as their defaults; Medium without Sharpen; Low without Shore Soak too (~0.6);
 -- Unit Glow 75 on every level (below 100 it adds hullEvenColours + hullShare, ~1 ms but within the noise: kept for
 -- the look, the renderer's advice); the ones that help the player read the battle (Ghost Look, Guide over Grass,
--- Cloak Look, Stealth Veil, costing only when on screen) from Low on, as Hidden Unit Outlines; Off has each as the
+-- Cloak Look, Stealth Veil, costing only when on screen: Cloak ~0.4 ms, Veil ~0.2 at most, the other two nothing
+-- measurable, his remeasure of the same evening) from Low on, as Hidden Unit Outlines; Off has each as the
 -- original game shows it, or our earlier look where the original has none.
 local remasterPresets = {
     [0] = { remaster_look = 'original', remaster_effects = 0, remaster_effects_quality = 1, remaster_tracers = 0,

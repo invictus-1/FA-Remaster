@@ -154,5 +154,24 @@ ForkThread(function()
     check("old and new without it, nothing added or removed (the original's weak set drops it first)", describe(c),
         cid .. " -> " .. cid .. " +- --")
     check("the selection is the commander", ids(GetSelectedUnits()), cid)
+
+    -- 5. A factory's upgrade taken into its queue asks for its panels again (ProcessUnitCommand 0x6f010c; engine
+    -- batch 84, ui request 54: Chris's second test, the T2 HQ button still offered after its upgrade was queued)
+    SimCallback({Func = "CheatSpawnUnit", Args = {army = GetFocusArmy(), pos = {p[1] - 20.5, p[2], p[3] + 0.5}, bpId = "ueb0101", count = 1, yaw = 0}})
+    WaitSeconds(1.5)
+    local factory = made("ueb0101", "FACTORY")[1]
+    check("a land factory is made", factory ~= nil, true)
+    if factory then
+        local fid = factory:GetEntityId()
+        SelectUnits({factory})
+        WaitSeconds(0.5)
+        calls = {}
+        IssueBlueprintCommand("UNITCOMMAND_Upgrade", "ueb0201", 1, false)
+        WaitSeconds(1.5)
+        check("the script hears of the selection when the upgrade is taken", table.getn(calls) >= 1, true)
+        check("with the factory as old and new", describe(calls[1]), fid .. " -> " .. fid .. " +- --")
+        local _, _, buildable = GetUnitCommandData({factory})
+        check("and its build list no longer offers the upgrade", EntityCategoryContains(buildable, "ueb0201"), false)
+    end
     LOG("TEST done: " .. failed .. " failed")
 end)
