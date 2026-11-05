@@ -2173,33 +2173,66 @@ void GroundCover::DrawFarCover(const View& view, const Camera& camera, gfx::Text
   for (int t : {1, 2, 4, 5, 12, 21}) device_->SetTexture(t, {});
 }
 
+// [leftover] The motion's pipeline `k` (grass.h, motionPipelines_: the blades or the plants, with the blasts' waves, with
+// plants that react), made the first time it is wanted: by DrawMotion, or ahead of it by PrepareVariants ([prebuild]).
+gfx::Pipeline GroundCover::MotionPipeline(int k) {
+  if (k < 0 || k >= 8 || !pipeline_) return {};
+  if (!motionTried_[k]) {
+    motionTried_[k] = true;
+    const bool ofPlants = (k & 1) != 0, withBlasts = (k & 2) != 0, reacts = (k & 4) != 0;
+    const std::string& scene = ofPlants ? (reacts ? reactingSources_[withBlasts ? 3 : 1] : withBlasts ? blastPlantSource_ : plantSource_)
+                                        : (reacts ? reactingSources_[withBlasts ? 2 : 0] : withBlasts ? blastSource_ : bladeSource_);
+    const std::string source = "#define MOTION 1\n" + scene;
+    gfx::PipelineDesc pd;
+    pd.name = ofPlants ? "ground cover: plants, motion" : "ground cover: grass, motion";
+    pd.vertexSource = pd.pixelSource = source;
+    pd.pixelEntry = "MotionPS";
+    pd.cull = gfx::Cull::None;
+    pd.colorFormat = gfx::Format::RG16F;
+    pd.depthWrite = false;
+    pd.depthBias = 16;  // (as the models' motion: the same placement compiled in another shader may land a hair farther)
+    std::string error;
+    motionPipelines_[k] = device_->CreatePipeline(pd, &error);
+    if (!motionPipelines_[k]) fprintf(stderr, "render: the ground cover's motion cannot be drawn (%s)\n", error.c_str());
+  }
+  return motionPipelines_[k];
+}
+
+// [prebuild] (grass.h) The variants the options on now may draw with, made before the first frame that draws with each
+// (Chris's second test, 2026-11-04: "light stuttering early on"; its hitch log: the plants' motion 187 ms, the grass's
+// 113 ms, the 3D plants' motion 105 ms the first time the camera came close, the 3D plants with the blasts' waves 336 ms
+// at the first blast near them): with `blasts` both the calm and the blasts' waves' kinds (the waves come and go with each
+// blast), with `motion` the motion's too (a game's load draws its warm frames as photos, which draw no motion: none of
+// these was made there). The same pipelines Draw, DrawFarPlants and DrawMotion make at their first use, by the same code,
+// so the picture is the same; only when they are made moves.
+void GroundCover::PrepareVariants(bool reacting, bool blasts, bool motion) {
+  if (!pipeline_ || (!blasts && !motion)) return;
+  MakePlantVariant();  // (the plants' text for the switches as they are now, as Prepare makes it each frame)
+  bool models = false;
+  if (plantsFar && plantModels) {
+    LoadPlantModels();
+    models = ModelsOn();
+  }
+  for (int b = 0; b <= (blasts ? 1 : 0); ++b) {
+    const int variant = (reacting ? 2 : 0) + b;  // (as Draw's for DrawFarPlants)
+    if (models) {
+      ModelPipeline(variant);
+      if (motion) ModelPipeline(variant + 4);
+    }
+    if (motion) {
+      const int kind = (b ? 2 : 0) + (reacting ? 4 : 0);  // (as DrawMotion's: the blades', then the plants')
+      MotionPipeline(kind);
+      MotionPipeline(kind + 1);
+    }
+  }
+}
+
 // [leftover] The motion of what Draw drew this frame (grass.h): the same squares of blades and plants, by the scene's own
 // shaders with MOTION (kCoverShared's CoverMotion at b2), into the motion over the scene's depth.
 void GroundCover::DrawMotion(const View& view, gfx::Texture motion, gfx::Texture depth, const Mat4& now, const Mat4& before, float timeBefore) {
   if (!motion || !depth || !drawn_.blades || drawnConstants_[0].empty() || away_ > motionFarthest) return;
-  auto pipelineFor = [&](int k) -> gfx::Pipeline {
-    if (!motionTried_[k]) {
-      motionTried_[k] = true;
-      const bool ofPlants = (k & 1) != 0, withBlasts = (k & 2) != 0, reacts = (k & 4) != 0;
-      const std::string& scene = ofPlants ? (reacts ? reactingSources_[withBlasts ? 3 : 1] : withBlasts ? blastPlantSource_ : plantSource_)
-                                          : (reacts ? reactingSources_[withBlasts ? 2 : 0] : withBlasts ? blastSource_ : bladeSource_);
-      const std::string source = "#define MOTION 1\n" + scene;
-      gfx::PipelineDesc pd;
-      pd.name = ofPlants ? "ground cover: plants, motion" : "ground cover: grass, motion";
-      pd.vertexSource = pd.pixelSource = source;
-      pd.pixelEntry = "MotionPS";
-      pd.cull = gfx::Cull::None;
-      pd.colorFormat = gfx::Format::RG16F;
-      pd.depthWrite = false;
-      pd.depthBias = 16;  // (as the models' motion: the same placement compiled in another shader may land a hair farther)
-      std::string error;
-      motionPipelines_[k] = device_->CreatePipeline(pd, &error);
-      if (!motionPipelines_[k]) fprintf(stderr, "render: the ground cover's motion cannot be drawn (%s)\n", error.c_str());
-    }
-    return motionPipelines_[k];
-  };
   const int kind = (drawn_.blasts ? 2 : 0) + (drawn_.reacting ? 4 : 0);
-  const gfx::Pipeline blades = pipelineFor(kind), plantCards = drawn_.plants ? pipelineFor(kind + 1) : gfx::Pipeline{};
+  const gfx::Pipeline blades = MotionPipeline(kind), plantCards = drawn_.plants ? MotionPipeline(kind + 1) : gfx::Pipeline{};
   if (!blades && !plantCards) return;
   gfx::PassDesc pass;
   pass.color = motion;

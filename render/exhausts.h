@@ -89,6 +89,10 @@ class Exhausts {
   // bends `behind` (the picture as it is, one sample a pixel) into the scene's colour.
   bool PrepareHaze(const View& view);
   void DrawHaze(const View& view, gfx::Texture behind, gfx::Texture sceneDepth, float zNear);
+  // [prebuild] The plumes' and the haze's pipelines made now, before the first drive is drawn (World::PrepareAhead, while
+  // the look is on: Chris's second test had them 96 + 33 ms at the first aircraft's). What Draw made at its first use;
+  // once made, a check alone.
+  void Prepare() { Ready(); }
 
   // Tuning (viewer --exhaust-tune): all plumes' brightness, their lights', the haze's, times their own.
   float brightness = 1, lightStrength = 1, hazeStrength = 1;

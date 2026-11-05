@@ -1045,10 +1045,21 @@ float4 Ground(VOut i) {
       float uneven = (CloudNoise(float3(i.world.xz * 0.7, 2.5)) - 0.5) * shore.z * 0.8;
       float over = i.world.y - shore.y;
       float wet = saturate(1 - (over + uneven) / shore.z) * saturate(over * 20 + 1);  // (not under the water: its own colours)
+      float wetGloss = wet;
+      // [soakfix] (Water::soakFixed: shore.x 2) by the map's own heights at their finest, not by the ground as drawn at its
+      // level of detail (its points slide onto a coarser grid as the camera moves off, by tenths of a unit: on a flat beach
+      // the band's edge slid along the whole shore at every move of the camera); and on under the water as the bed's soak,
+      // going over to the dry bed by 0.8 of depth (water.cpp, kSoakDepth: the water's pass soaked it before, by the ground as
+      // drawn). Its gloss above the water alone (under it the water's surface mirrors).
+      [branch] if (shore.x > 1.5) {
+        over = HeightBilinear(i.world.xz) - shore.y;
+        wet = saturate(1 - (over + uneven) / shore.z) * (1 - smoothstep(0, 0.8, -over));
+        wetGloss = wet * saturate(over * 20 + 1);
+      }
       albedo.rgb *= lerp(1, 0.6, wet);
-      roughness = lerp(roughness, 0.22, wet * 0.85);
+      roughness = lerp(roughness, 0.22, wetGloss * 0.85);
 #ifdef GROUND_MATT
-      groundDry = 1 - wet;  // [leftover] (mattGrazing: the wet band keeps its gloss)
+      groundDry = 1 - wetGloss;  // [leftover] (mattGrazing: the wet band keeps its gloss)
 #endif
     }
 #endif

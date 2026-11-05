@@ -7,6 +7,7 @@
 // everything, pixel for pixel, their grey parts in the army's colour. All symbols a game uses are
 // kept in one texture, so a whole army's are one draw call.
 #pragma once
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -30,7 +31,7 @@ class StrategicIcons {
   // What a kind of unit shows.
   struct Kind {
     int icon = -1;       // which symbol (-1: none: the blueprint names none, or its file is missing)
-    float fadeIn = 130;  // the distance from the camera at which the symbol is fully there
+    float fadeIn = 130;  // the zoom from which the symbol shows ([iconzoom] Measure: the view's depth of the ground under it)
     int priority = 128;  // 0 lies on top, 255 at the bottom
     int iconSelected = -1;  // the symbol of a selected unit (<name>_selected.dds; -1: the plain one)
     int iconBlip = -1;      // the symbol without its detail ("icon_land2_generic" for "icon_land2_directfire"):
@@ -72,6 +73,16 @@ class StrategicIcons {
   // `blip`: the unit is known by radar alone: its symbol at any distance, without its detail unless
   // `known` (the army has seen it before and knows what it is).
   void Add(const Kind* kind, Vec3 position, Vec3 color, bool selected = false, bool blip = false, bool known = false);
+  // [iconzoom] (Chris's second test, 2026-11-04: "drones seem to be faded their icons at certain viewing distance then pop
+  // to full color at others") Where a unit at that place stands against its kind's fadeIn, as the original measures it
+  // (CWldSession::RenderStrategicIcons 0x85c6a1..0x85c6e0): the depth along the camera's view of the ground (or the water)
+  // under it, times the camera's LOD scale - not its distance from the eye, which grew toward the picture's edges and
+  // shrank by an aircraft's height, so that one zoom showed some symbols of a kind and not others, a drone circling its
+  // builder going in and out of its fade as it flew. The ground's height from `groundHeight` (none: the place itself).
+  float Measure(Vec3 position) const;
+  // How far a unit of that kind at that place has come in (0..1), by Measure and fadeShare: what Add draws it with (its
+  // outline gives way to it by the same).
+  float ComeIn(const Kind* kind, Vec3 position) const;
   // A life bar at a place in the world, as the original draws it: black, `widthPixels` wide and
   // `thick` high, `fraction` (0..1) of it filled, green down to red by how full; `drop` screen
   // pixels below the place (under the unit). Drawn with the symbols.
@@ -112,8 +123,14 @@ class StrategicIcons {
   // distance, close up over the models too (no coming in by the blueprint's IconFadeInZoom).
   float playerScale = 1;
   bool always = false;
-  // A symbol comes in over this share of its distance, ending at the distance (0.1: from 90% of it).
-  float fadeShare = 0.1f;
+  // A symbol comes in over this share of its zoom, ending at the zoom (0.1: from 90% of it). [iconzoom] 0: at once, as
+  // the original (RenderStrategicIcons compares the zoom with IconFadeInZoom and draws the symbol whole or not at all);
+  // was 0.1, which left a kind whose zoom differs from its neighbours' (the UEF drones' 175 against most units' 130)
+  // half see-through while the camera rested in that band. Viewer: --icon-fade <share>.
+  float fadeShare = 0;
+  // [iconzoom] The ground's height at a place (x, z; the water's level where it is higher), for Measure; none: the place's
+  // own height is taken (the viewer without a map).
+  std::function<float(float, float)> groundHeight;
   int drawn = 0;  // symbols in the last Draw
   bool showSymbols = true;  // false: Draw leaves the symbols out (the life bars are still drawn)
 

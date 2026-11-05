@@ -129,6 +129,7 @@ class Sunlight {
   Camera placing_;                 // the camera the frame is placed for (Begin)
   gfx::Pipeline driftPipe_;
   gfx::Texture drift_;             // the drifting cloud shadows' picture (R16F, Drift)
+  float driftHalf_ = 0;            // [driftsnap] its half width now, a rung of Drift's ladder (0: none yet)
   gfx::Pipeline march_, smooth_, lay_, clouds_pipe_;
   gfx::Texture rough_, smoothed_;  // the band's light at half the size: as marched, and averaged with its neighbours
   gfx::Texture woods_;             // how much of a place is woods (0..1), over the map

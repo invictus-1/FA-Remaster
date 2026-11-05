@@ -194,6 +194,9 @@ struct ViewConstants {
   // [weather] The mist's layer, more (World::lowFog): x how evenly its banks lie where the light in the air reads them for
   // a cell (view.h, MistBanks: 0 as they are, in banks with clear air between; 1 alike everywhere): the low fog's layer
   // lies more evenly than the mist's banks, or from above it showed as dark holes cut in it. 0: as without it.
+  // [mistpatch] (World::mistPatches) y how much of the layer lies only in wide patches with clear air between them (view.h,
+  // MistPatches): in a thick fog all of it, the morning's mist too; z where the patches' field begins to hold it (0: no
+  // patches, as before); w unused.
   float mistMore[4];
 };
 
@@ -253,7 +256,8 @@ cbuffer View : register(b0) {
   float4 driftPicture;    // [sunlight] the drifting shadows' picture: x, y its middle; z 1 / its width; w 1 = drawn this frame
   float4 beyondSea;       // (sky) the far sea from above: x 1 = on; y the sea's level; z its haze's 1/e distance; w the haze's thinning height
   float4 shadowMask;      // [shadowmask] the sun's shadow mask on the ground: x 1 = the ground reads it; z its words a row; w its rows
-  float4 mistMore;        // [weather] the mist's layer, more: x how evenly its banks lie where the light in the air reads them
+  float4 mistMore;        // [weather] the mist's layer, more: x how evenly its banks lie where the light in the air reads them;
+                          // [mistpatch] y how much of it lies in patches; z the patches' field's edge (0: none)
 };
 // (every texture read with Sample takes the temporal upscaler's bias: textures with levels - the art's - are
 // read as finely as the screen's size wants; pictures drawn by the renderer have one level and do not change)
@@ -469,18 +473,32 @@ float3 MistColor() { return AirColor() * 0.75; }
 // light in the air reads them once a cell of its volume (some 24 pixels at 4K, 9 world units from the strategic zoom),
 // and the smallest, read at a single point of each cell and blended between cells, showed as a pattern of blocks (Chris's
 // snapshot test, 2026-10-25: "pixelated clouds" over the sea in the morning's mist). Read for a point: as before.
+// [mistpatch] (World::mistPatches; Chris's second test, 2026-11-04: "Fog has gotten better but its still too grey it should be
+// more like a mist like not every single inch of the map needs it") Where the low fog lies: wide patches (two sizes of slow
+// noise, some 250 and 110 world units, drifting a twentieth as fast as the clouds), clear air between them: 1 inside a
+// patch, 0 between, soft over some tens of units at its edge. Its field's edge at mistMore.z: at 0.5 some two fifths of the
+// ground lie in a patch and half of it wholly clear (counted on the noise). Before, the low fog's banks were evened to at
+// least 0.64 of the layer everywhere (mistMore.x): no place on the map was clear of it. Wide against a cell of the light in
+// the air's volume (some 24 world units at most), so read at a point.
+float MistPatches(float2 xz) {
+  float2 q = xz + skyClouds.yz * 0.05;
+  float n = CloudNoise(float3(q * 0.004 + 31.7, skyClouds.w * 0.8 + 21.0)) * 0.7 + CloudNoise(float3(q.yx * 0.009 + 13.1, skyClouds.w * 1.3 + 4.0)) * 0.3;
+  return smoothstep(mistMore.z - 0.07, mistMore.z + 0.07, n);
+}
 float MistBanks(float2 xz, float footprint) {
+  // [mistpatch] (that share of the layer in its patches alone, the rest as it was; none: 1)
+  float patches = mistMore.z > 0 ? lerp(1, MistPatches(xz), mistMore.y) : 1;
   float2 q = xz + skyClouds.yz * 0.12;
   float n0 = CloudNoise(float3(q * 0.008, skyClouds.w * 2.5 + 11.0));
   [branch] if (footprint <= 0) {  // (a point: exactly as before)
     return smoothstep(0.28, 0.8, n0 * 0.5 + CloudNoise(float3(q.yx * 0.021 + 7.3, skyClouds.w * 4.0 + 3.0)) * 0.3 +
-                                 CloudNoise(float3(q * 0.057 + 2.9, skyClouds.w * 6.0 + 5.0)) * 0.2) * 1.5;
+                                 CloudNoise(float3(q * 0.057 + 2.9, skyClouds.w * 6.0 + 5.0)) * 0.2) * 1.5 * patches;
   }
   float3 keep = 1 - smoothstep(0.25, 0.6, footprint * float3(1.0 / 125, 1.0 / 47.6, 1.0 / 17.5));
   float n1 = keep.y > 0 ? CloudNoise(float3(q.yx * 0.021 + 7.3, skyClouds.w * 4.0 + 3.0)) : 0.5;
   float n2 = keep.z > 0 ? CloudNoise(float3(q * 0.057 + 2.9, skyClouds.w * 6.0 + 5.0)) : 0.5;
   float banks = smoothstep(0.28, 0.8, lerp(0.5, n0, keep.x) * 0.5 + lerp(0.5, n1, keep.y) * 0.3 + lerp(0.5, n2, keep.z) * 0.2) * 1.5;
-  return lerp(banks, 1, mistMore.x);  // (the low fog's: more even)
+  return lerp(banks, 1, mistMore.x) * patches;  // (the low fog's: more even; [mistpatch] and in its patches)
 }
 // [weather] How wide a cell of the light in the air's volume is, `away` world units from the eye (its `cellsAcross` across
 // the picture): for MistBanks.

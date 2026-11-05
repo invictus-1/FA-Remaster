@@ -712,6 +712,12 @@ const EmitterBlueprint* Particles::Blueprint(const std::string& path, const std:
   // (each look its own: the remastered one may take a remastered texture for the game's blueprint;
   // and in it a faction its own blueprint where the visuals track has made one - where it has not, the
   // faction plays the same blueprint as no faction)
+  // ([alias] a remaster alias the visuals track has made nothing for, or in the original look: the stock emitter it stands for)
+  if (const char* stock = EffectAlias(moho::Vfs::Normalize(path))) {
+    const bool made = remastered && ((!faction.empty() && vfs_->Exists(FactionEffectFile(path, faction))) ||
+                                     vfs_->Exists(std::string(kRemasteredEffects) + moho::Vfs::Normalize(path)));
+    if (!made) return Blueprint(stock, faction);
+  }
   std::string key = moho::Vfs::Normalize(path) + (remastered ? "|remastered" : "");
   bool own = false;
   if (remastered && !faction.empty()) {
@@ -731,6 +737,7 @@ const EmitterBlueprint* Particles::Blueprint(const std::string& path, const std:
     auto has = [&](const char* word) { return name.find(word) != std::string::npos; };
     bp->fire = (has("fire") || has("flame") || has("burn") || has("ember") || has("napalm")) && !has("build") &&
                !has("teleport") && !has("afterburn") && !has("exhaust") && !has("engine") && !has("thrust");
+    bp->status = name.rfind("/effects/emitters/light_", 0) == 0;  // [statuslights] (the game's signal lamps)
   }
   const std::string file = own ? FactionEffectFile(path, faction) : moho::Vfs::Normalize(EffectFile(*vfs_, path, remastered));
   auto text = vfs_->ReadFile(file);
@@ -1275,7 +1282,8 @@ void Particles::DrawSets(const View& view, int pass, gfx::Texture behind, gfx::T
     const float shape = bp.alignRotation ? 2.0f : bp.alignToBone ? (bp.flat ? 1.0f : 3.0f) : bp.flat ? 1.0f : 0.0f;
     const float constants[36] = {right.x, right.y, right.z, now,
                                  up.x, up.y, up.z, shape,
-                                 static_cast<float>(spans[i].first), bp.frameCount > 1 || bp.stripCount > 1 ? 1.0f : 0.0f, static_cast<float>(kind), glow,
+                                 static_cast<float>(spans[i].first), bp.frameCount > 1 || bp.stripCount > 1 ? 1.0f : 0.0f, static_cast<float>(kind),
+                                 bp.status ? glow * std::max(statusLights, 0.0f) : glow,  // [statuslights]
                                  1 / static_cast<float>(bp.frameCount), 1 / static_cast<float>(bp.stripCount), bp.resistance ? 1.0f : 0.0f, zNear,
                                  soften, 0, 0, 0,
                                  bp.gridAnimate ? 1.0f : 0.0f, bp.gridLoop ? 1.0f : 0.0f,

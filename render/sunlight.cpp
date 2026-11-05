@@ -506,9 +506,26 @@ bool Sunlight::Drift(View* view, gfx::Texture cloudsOwn) {
   const float under = c.cloudShadow[0] > 0 ? c.cloudShadow[0] : 150.0f;
   const float sy = std::max(c.sunDirection[1], 0.2f);
   const Vec3 at = placing_.cinematic ? placing_.Eye() : placing_.target;
-  const float half = placing_.cinematic ? 3000.0f : std::min(placing_.distance * 2.5f + 400, 12000.0f);
-  c.driftPicture[0] = at.x + c.sunDirection[0] * (under - at.y) / sy;
-  c.driftPicture[1] = at.z + c.sunDirection[2] * (under - at.y) / sy;
+  const float want = placing_.cinematic ? 3000.0f : std::min(placing_.distance * 2.5f + 400, 12000.0f);
+  // [driftsnap] (Chris's second test, 2026-11-04: "flicker when zooming in and out", at every zoom, under clouds) Its
+  // size on a ladder of rungs a quarter apart (400 x 1.25^k, the last 12000), the smallest that holds what is wanted, kept
+  // until what is wanted outgrows it or would fit two rungs lower (a camera going to and fro does not swap rungs each
+  // frame); and its middle on whole texels of that size.
+  // Sized by the camera's distance and laid round its target afresh each frame, every texel moved and grew a little
+  // while the camera zoomed, so the heaps' sharp edges and their finest ragged parts (some 20 units, a texel being 1.5 to
+  // 23) were read between other texels each frame and crawled; now they stand still between rungs, and a rung's change
+  // is one step in sharpness (as the clouds' own pictures move by whole texels, clouds.cpp).
+  constexpr float kRung = 1.25f, kLowest = 400, kHighest = 12000;
+  auto rung = [&](float w) {
+    float h = kLowest;
+    while (h < w && h < kHighest) h = std::min(h * kRung, kHighest);
+    return h;
+  };
+  if (driftHalf_ < want || driftHalf_ > rung(want) * kRung * 1.1f) driftHalf_ = rung(want);
+  const float half = driftHalf_;
+  const float texel = 2 * half / static_cast<float>(kDriftTexels);
+  c.driftPicture[0] = std::round((at.x + c.sunDirection[0] * (under - at.y) / sy) / texel) * texel;
+  c.driftPicture[1] = std::round((at.z + c.sunDirection[2] * (under - at.y) / sy) / texel) * texel;
   c.driftPicture[2] = 1 / (2 * half);
   c.driftPicture[3] = 0;
   gfx::PassDesc pass;

@@ -288,14 +288,33 @@ const Kind kKinds[] = {
     {{0.75f, 0.45f, 0, 0.05f, 0}, 0, 0, 0, 14, true},  // [seasons] showers (autumn's)
 };
 
-const Kind& SpellKind(uint32_t seed, int64_t spell, Climate climate) {
-  if (spell <= 0) return kKinds[1];
-  float left = Draw01(seed, static_cast<uint32_t>(spell), 17) * 100;
+int ClimateShare(const Kind& k, Climate climate) {
+  return climate == Climate::Cold ? k.cold : climate == Climate::Dry ? k.dry : climate == Climate::Autumn ? k.autumn : k.temperate;
+}
+bool IsFog(const Kind& k) { return &k == &kKinds[6]; }
+// A spell's kind as the draw gives it, by the climate's shares (`noFog`: among all but fog, by their shares, a draw of its own).
+const Kind& DrawnKind(uint32_t seed, int64_t spell, Climate climate, bool noFog) {
+  int total = 0;
+  for (const Kind& k : kKinds)
+    if (!(noFog && IsFog(k))) total += ClimateShare(k, climate);
+  if (total <= 0) return kKinds[1];
+  float left = Draw01(seed, static_cast<uint32_t>(spell), noFog ? 18 : 17) * (noFog ? static_cast<float>(total) : 100.0f);
   for (const Kind& k : kKinds) {
-    left -= static_cast<float>(climate == Climate::Cold ? k.cold : climate == Climate::Dry ? k.dry : climate == Climate::Autumn ? k.autumn : k.temperate);
+    if (noFog && IsFog(k)) continue;
+    left -= static_cast<float>(ClimateShare(k, climate));
     if (left < 0) return k;
   }
   return kKinds[1];
+}
+// [nofogtwice] (Chris, 2026-11-04, his second test: four of the game's first six spells drew fog, about 13 minutes of it;
+// asked whether fog should never follow fog: "Yes, avoid repeats") A spell after one the draw made foggy is drawn again
+// among the other kinds. Still the seed's alone: every replay of a game has the same weather, though not the weather
+// earlier builds showed for it.
+const Kind& SpellKind(uint32_t seed, int64_t spell, Climate climate) {
+  if (spell <= 0) return kKinds[1];
+  const Kind& k = DrawnKind(seed, spell, climate, false);
+  if (IsFog(k) && spell > 1 && IsFog(DrawnKind(seed, spell - 1, climate, false))) return DrawnKind(seed, spell, climate, true);
+  return k;
 }
 
 // [seasons] Showers: how much of a shower falls at `seconds`, 0..1. Time in stretches of 50 seconds, about two in five

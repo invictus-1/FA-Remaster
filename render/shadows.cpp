@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "terrain.h"  // [shadowtri] (Terrain::LowestIn)
+
 namespace render {
 
 Shadows::Shadows(gfx::Device* device) : device_(device) { SetSize(kShadowMapSize); }
@@ -91,7 +93,15 @@ void Shadows::Place(const Camera& camera, Vec3 sunDirection, View* view) {
   const Vec3 up = Cross(L, right);
   // [cardcost] (fitCasters) where what the camera sees lies, seen from the sun, before the cascades take the view's place
   float seen[4] = {0, 0, 0, 0};
-  fitted_ = fitCasters && SeenFromSun(*view, fitFloor, right, up, seen);
+  // [shadowtri] (fitLocalFloor) the floor: the lowest ground under where the view's corners reach at the map's floor (its
+  // box in the world's x and z: the same corners, seen from above), less the slack; never lower than the map's floor
+  float lowest = fitFloor;
+  if (fitCasters && fitLocalFloor && ground) {
+    float xz[4];
+    if (SeenFromSun(*view, fitFloor, Vec3{1, 0, 0}, Vec3{0, 0, 1}, xz))
+      lowest = std::max(fitFloor, ground->LowestIn(xz[0], xz[1], xz[2], xz[3]) - fitFloorSlack);
+  }
+  fitted_ = fitCasters && SeenFromSun(*view, lowest, right, up, seen);
   if (fitted_) {
     seen[0] -= fitMargin, seen[1] -= fitMargin;
     seen[2] += fitMargin, seen[3] += fitMargin;
@@ -108,6 +118,12 @@ void Shadows::Place(const Camera& camera, Vec3 sunDirection, View* view) {
     const Vec3 forward{-std::sin(camera.heading), 0, -std::cos(camera.heading)};
     const float tilt = std::cos(camera.pitch);  // 0 looking straight down: the view is centred on the target
     float radius = std::max(8.0f, camera.distance * 0.55f);
+    if (zoomSteps) {  // [shadowstep] (shadows.h) from the ladder: the least step that covers it, kept while it is that or one more
+      int step = 0;
+      while (8.0f * std::exp2(0.125f * static_cast<float>(step)) < radius && step < 200) ++step;
+      if (zoomStep_ < step || zoomStep_ > step + 1) zoomStep_ = step;
+      radius = 8.0f * std::exp2(0.125f * static_cast<float>(zoomStep_));
+    }
     for (int i = 0; i < count_; ++i, radius *= 3.2f) {
       radii[i] = radius;
       centres[i] = camera.target + forward * (radius * 0.45f * tilt);
@@ -132,12 +148,15 @@ void Shadows::Place(const Camera& camera, Vec3 sunDirection, View* view) {
     // it still serves: the same size, the sun within keepSunDegrees of where it was, its own place and the nearer one's
     // moved by at most their slack (a share of their radius), and what the camera sees within what it was drawn for
     const float slack = keeping_ ? keepSlack * radius : 0.0f;
+    // [shadowtri] (fitTexels) and round what is seen, this cascade's own texels for the filters that read round a place
+    const float filters = fitted_ ? fitTexels * texel : 0.0f;
     draws_[i] = true;
     Kept& k = kept_[i];
     if (keeping_ && i > 0 && k.valid && (i - 1) % keepEvery != turn && k.count == count_ && k.size == size_ && k.radius == radius &&
         Dot(k.sun, L) >= keepCos && std::fabs(x - k.x) <= slack && std::fabs(y - k.y) <= slack && k.nearerHalf == nearerHalf &&
         std::fabs(nearerX - k.nearerX) <= nearerSlack && std::fabs(nearerY - k.nearerY) <= nearerSlack &&
-        (!k.fitted || (fitted_ && seen[0] >= k.seen[0] && seen[1] >= k.seen[1] && seen[2] <= k.seen[2] && seen[3] <= k.seen[3]))) {
+        (!k.fitted || (fitted_ && seen[0] - filters >= k.seen[0] && seen[1] - filters >= k.seen[1] && seen[2] + filters <= k.seen[2] &&
+                        seen[3] + filters <= k.seen[3]))) {
       cascadeViews_[i] = k.view;
       view->constants.shadowMatrix[i] = k.matrix;
       view->constants.cascadeTexel[i] = texel;
@@ -149,8 +168,9 @@ void Shadows::Place(const Camera& camera, Vec3 sunDirection, View* view) {
       continue;
     }
     k.valid = false;  // (drawn anew: what its map held is gone)
-    // (kept cascades: what it is drawn for this much wider, so that it serves while the camera moves a little)
-    const float box[4] = {seen[0] - slack, seen[1] - slack, seen[2] + slack, seen[3] + slack};
+    // (kept cascades: what it is drawn for this much wider, so that it serves while the camera moves a little; [shadowtri]
+    // and by its texels for the filters)
+    const float box[4] = {seen[0] - slack - filters, seen[1] - slack - filters, seen[2] + slack + filters, seen[3] + slack + filters};
 
     // far enough toward the sun that nothing casting into the square is cut off
     const float reach = radius + 400;

@@ -226,6 +226,9 @@ class MeshRenderer {
     bool materials = false;            // the ground lays the map's snow materials (Terrain::SnowMaterialsLaid: a mottled margin)
   } underSnow;
   bool PrepareUnderSnow();  // false: they cannot be made (then the plants keep their look)
+  // [prebuild] The motion of what sways (swayMotion): its pipeline made now, before the first frame that draws the scene's
+  // motion (World::PrepareAhead; once made, a check alone). The same pipeline DrawSwayMotion made at its first use.
+  void PrepareSwayMotion();
   // (buildfx) The remastered build look (build_effects.h, World::remasteredBuild), set by the world each frame: what is
   // under construction takes its faction's remastered build shimmer, the models being drawn by the variants of their
   // shaders built with it (made by PrepareBuild the first time the world wants them; without it the shaders as they were).

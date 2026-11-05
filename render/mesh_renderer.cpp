@@ -1698,17 +1698,24 @@ void MeshRenderer::BuildRows(Entry* entry, float* rows) {
   const Pose& pose = entry->pose;
   float* out = rows + static_cast<size_t>(entry->rows) * 4;
   const float toModel = 1.0f / entry->model->scale;  // poses are in world units
+  // [upgradeflicker] (Chris's second test, 2026-11-04: "texture flicker on top of t1 factory upgrading to t2") the parts the
+  // remaster adds to the simulation's skeleton (a factory's machinery: bones from MachinerySpec::simBones on) hide with the
+  // bone they ride on. The simulation knows nothing of them, so its list of hidden bones never names them: the building a
+  // factory is upgraded to stands in the factory's place with all its own bones hidden (StructureUnit.StartUpgradeEffects:
+  // HideBone(0, true)) until it is done, and yet its arms, clamps, welders, belt and plates stood there at rest - the same
+  // parts, head for head, as the factory it grows out of has (UEB0101's 23 are all in UEB0201's 37), face on face with
+  // them, two textures fighting for the same pixels while the old one's parts swing through them. A UEF building under
+  // construction (all hidden until its build cube has passed, StartBeingBuiltEffects) floated them the same way.
+  const size_t ownFrom = entry->model->machinery ? std::min(entry->model->machinery->simBones, bones.size()) : bones.size();
+  thread_local std::vector<unsigned char> hiddenHere;  // (per bone: hidden, its vertices at no size at hiddenAt)
+  thread_local std::vector<Vec3> hiddenAt;
+  if (ownFrom < bones.size()) hiddenHere.assign(bones.size(), 0), hiddenAt.resize(bones.size());
   size_t ia = 0, ib = 0;
   for (size_t i = 0; i < bones.size(); ++i, out += 12) {
     while (ia < pose.nowCount && pose.now[ia].bone < i) ++ia;
     while (ib < pose.nextCount && pose.next[ib].bone < i) ++ib;
     const FrameBone* a = ia < pose.nowCount && pose.now[ia].bone == i ? &pose.now[ia] : nullptr;
     const FrameBone* b = ib < pose.nextCount && pose.next[ib].bone == i ? &pose.next[ib] : nullptr;
-    if (!a && !b) {  // at rest: nothing to do to its vertices
-      const float identity[12] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
-      std::copy(identity, identity + 12, out);
-      continue;
-    }
     const ModelBone& rest = bones[i];
     if ((a && a->hidden) || (!a && b && b->hidden)) {  // hidden: its vertices at no size, where its joint is
       // ([machinery] where it is posed, not where it rests: a conveyor's part hidden for its jump back waits where it comes
@@ -1717,6 +1724,20 @@ void MeshRenderer::BuildRows(Entry* entry, float* rows) {
       const Vec3 at = Vec3{h->position[0], h->position[1], h->position[2]} * toModel;
       const float gone[12] = {0, 0, 0, at.x, 0, 0, 0, at.y, 0, 0, 0, at.z};
       std::copy(gone, gone + 12, out);
+      if (ownFrom < bones.size()) hiddenHere[i] = 1, hiddenAt[i] = at;  // ([upgradeflicker] for the parts on it)
+      continue;
+    }
+    // [upgradeflicker] (a part of the remaster's own on a hidden bone: hidden with it, where that bone went)
+    if (i >= ownFrom && rest.parent >= 0 && static_cast<size_t>(rest.parent) < i && hiddenHere[static_cast<size_t>(rest.parent)]) {
+      const Vec3 at = hiddenAt[static_cast<size_t>(rest.parent)];
+      const float gone[12] = {0, 0, 0, at.x, 0, 0, 0, at.y, 0, 0, 0, at.z};
+      std::copy(gone, gone + 12, out);
+      hiddenHere[i] = 1, hiddenAt[i] = at;
+      continue;
+    }
+    if (!a && !b) {  // at rest: nothing to do to its vertices
+      const float identity[12] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+      std::copy(identity, identity + 12, out);
       continue;
     }
     auto place = [&](const FrameBone* f) { return f ? Vec3{f->position[0], f->position[1], f->position[2]} * toModel : rest.position; };
@@ -2513,9 +2534,12 @@ void MeshRenderer::DrawMotion(const View& view, const Mat4& now, const Mat4& bef
   }
 }
 
-// [leftover] What sways, its motion (swayMotion; kSwayMotionShader): into DrawMotion's pass, by level.
-void MeshRenderer::DrawSwayMotion(const View& view, const Mat4& now, const Mat4& before, float timeBefore) {
-  if (!swayMotionTried_) {  // (made the first time: with the blasts' waves and plants that react in it, each off by its constants)
+// [leftover] What sways, its motion's pipeline (kSwayMotionShader), made the first time it is wanted: by DrawSwayMotion, or
+// ahead of it ([prebuild] PrepareSwayMotion: World::PrepareAhead; the hitch log of Chris's second test had it 76 ms in the
+// game's first frame, as a game's load draws no motion). With the blasts' waves and plants that react in it, each off by
+// its constants. (Once made, CardPipelines asks for its variant for the card's lists too, as before.)
+void MeshRenderer::PrepareSwayMotion() {
+  if (!swayMotionTried_) {
     swayMotionTried_ = true;
     const std::string source = std::string("#define PLANTS_PRESS t8\n#define PLANTS_BURN t9\n") + kViewShaderBlock + kBlastShaderBlock + kPlantsShaderBlock +
                                kSwayMotionShader;
@@ -2536,6 +2560,11 @@ void MeshRenderer::DrawSwayMotion(const View& view, const Mat4& now, const Mat4&
     swayMotionPipeline_ = device_->CreatePipeline(md, &error);
     if (!swayMotionPipeline_) fprintf(stderr, "render: the motion of what sways cannot be drawn (%s)\n", error.c_str());
   }
+}
+
+// [leftover] What sways, its motion (swayMotion; kSwayMotionShader): into DrawMotion's pass, by level.
+void MeshRenderer::DrawSwayMotion(const View& view, const Mat4& now, const Mat4& before, float timeBefore) {
+  PrepareSwayMotion();  // (made the first time, where PrepareAhead has not made it)
   if (!swayMotionPipeline_) return;
   // by level, so that each level's instances go together
   std::stable_sort(swayItems_.begin(), swayItems_.end(), [](const MotionItem& a, const MotionItem& b) { return a.lod < b.lod; });

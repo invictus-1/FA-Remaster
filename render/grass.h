@@ -208,6 +208,12 @@ class GroundCover {
   // [plantlod] ([hitches] World::readAhead) The 3D plants' pipelines (drawing and placing; `reacting`: also those with
   // plants that react) made now, before the first plant comes near enough for one: no hitch then.
   void PrepareAhead(bool reacting);
+  // [prebuild] ([hitches] World::readAhead) The variants first wanted in the middle of a game made now (World::PrepareAhead,
+  // on the device's own thread; in a game's load, its warm frames): with `blasts` (World::blastWaves) the grass's, the
+  // plants' and the 3D plants' with the blasts' waves; with `motion` (the scene's motion drawn: the temporal upscaler, frame
+  // generation, World::plantMotion) the motion's of the blades, the plants and the 3D plants, calm and (with `blasts`)
+  // with the waves; `reacting` as PrepareAhead's. The same pipelines their first use made; once made, a check alone.
+  void PrepareVariants(bool reacting, bool blasts, bool motion);
   bool FieldsReady() const { return prepared_; }  // [plantlod] (Area() is this frame's)
   // [plantlod] the far cover's: how much of fully grassy ground the meadow's blades cover seen from above, and how much
   // darker a plant is than its art among its own leaves
@@ -245,6 +251,7 @@ class GroundCover {
   std::string bladeSource_, plantSource_;
   gfx::Pipeline motionPipelines_[8];
   bool motionTried_[8] = {};
+  gfx::Pipeline MotionPipeline(int k);  // [prebuild] (made the first time asked for: DrawMotion, PrepareVariants)
   struct Drawn {
     bool blades = false, plants = false, reacting = false, blasts = false;
     bool far = false;  // [plantlod] (the plants by the tiles: DrawFarPlants)

@@ -39,6 +39,8 @@ cbuffer Shields : register(b1) {
                                    // the horizon in the hex shell's mirror soft
   float4 shellGround;              // [clearshell] the map's ground (groundHeights): x, y its width and height; z: world units of
                                    // its heights' largest value (0: not bound); w: how far above it a thing stands up
+  float4 shellGlint;               // [shellglint] x: how strong the sun's mirror image on the lit shell; y: 1 = also while the
+                                   // sun is low (as before)
 };
 cbuffer Bubble : register(b2) {
   float4 row0, row1, row2;  // the dome's model -> world
@@ -256,6 +258,38 @@ float SeraphimPattern(float3 n) {
   return glyph;
 }
 
+// [rainhits] (EnergyShields::rainFromHits, shellGlint.z; Chris's second test, 2026-11-04: the rain's shimmer on a shield
+// "very good, exactly what I want", but he wished it came from where the rain hits, not all over) Where drops meet the
+// shell's upper side, a faint ring running out from each: the ground under it in cells about a twelfth of the dome's radius
+// across (0.6 to 2.5 world units: rain falls straight down, so they are laid over x and z), each cell with a drop of its
+// own every 0.9 to 1.6 seconds, more of them the harder it rains, falling at a place of its own each time; its ring runs out
+// to some 0.7 of a cell over 0.75 seconds, a small bright spot where it met the shell for the first quarter second.
+// Smooth in time (rises and fades over tenths of a second: the same at any frame rate). `shimmer` (the old shimmer's slow
+// noise, 0..1) varies how bright each is. 0..1 and a little more.
+float RainHits(float3 p, float radius, float rain, float shimmer) {
+  float g = clamp(radius * 0.08, 0.6, 2.5);
+  float2 base = floor(p.xz / g);
+  float most = 0;
+  [unroll] for (int k = 0; k < 9; ++k) {
+    float2 cell = base + float2(k % 3 - 1, k / 3 - 1);
+    float h = frac(sin(dot(cell, float2(12.9898, 78.233))) * 43758.5453);
+    float every = 0.9 + 0.7 * h;  // (seconds between its drops)
+    float t = time / every + h * 7.1;
+    float slot = floor(t), age = frac(t) * every;  // (which drop, and seconds since it met the shell)
+    float h2 = frac(sin(dot(cell, float2(39.346, 11.135)) + slot * 1.731) * 43758.5453);
+    float h3 = frac(sin(dot(cell, float2(73.156, 52.235)) + slot * 2.417) * 43758.5453);
+    float h4 = frac(sin(dot(cell, float2(26.651, 91.913)) + slot * 0.913) * 43758.5453);
+    if (h4 > 0.3 + 0.6 * rain) continue;  // (not every cell every time: fewer in light rain)
+    float2 from = (cell + 0.2 + 0.6 * float2(h2, h3)) * g;
+    float d = length(p.xz - from);
+    float front = (d - age * g * 0.9) / (0.1 * g);
+    float ring = exp(-front * front) * smoothstep(0.0, 0.08, age) * (1 - smoothstep(0.2, 0.75, age));
+    float spot = exp(-(d * d) / (0.0144 * g * g)) * (1 - smoothstep(0.0, 0.3, age));
+    most = max(most, max(ring, spot));
+  }
+  return most * lerp(0.6, 1.3, shimmer);
+}
+
 // The shell, taking the world's light: a clear shield of energy, like glass in that it mirrors the sky and the sun and
 // catches the light of what burns and shines near it (shaded where the ground or the clouds shade it, and seen through the
 // air as all else); its hex of thin lines in its faction's tint, which glow on their own (more toward its rim, by night
@@ -335,6 +369,10 @@ float4 LitShell(VOut i, float3 n, float3 v) {
     spark = wet * saturate(1 - when / 0.1) * shellMore.x;
     float3 q = n * max(sphere.w * 0.35, 1) + float3(0.0, -1.3, 0.0) * time;  // (running down over it, as water would)
     drizzle = wet * smoothstep(0.55, 0.8, CloudNoise(q)) * shellMore.y;
+    // [rainhits] (shellGlint.z: EnergyShields::rainFromHits) the rain's from where its drops meet the shell, rings running out
+    // from each (RainHits); snow's (no rain) as before
+    [branch] if (shellGlint.z > 0.5 && falling.x > 0.01)
+      drizzle = lerp(drizzle, wet * RainHits(i.world, sphere.w, falling.x, CloudNoise(q)) * shellMore.y, saturate(falling.x * 3));
   }
   float night = dark * lerp(0.35, 1, dark);
   float hex = info.w > 0.5 ? 1 : 0;  // (its hex's lines glow on their own; the base game's look carries its own light)
@@ -377,7 +415,9 @@ float4 LitShell(VOut i, float3 n, float3 v) {
   float3 H = normalize(v + sunDirection);
   float nDotH = saturate(dot(N, H)), nDotL = saturate(dot(N, sunDirection));
   float glintF = 0.04 + 0.96 * pow(1 - saturate(dot(v, H)), 5);
-  float3 glint = sun * shadow * nDotL * glintF * (pow(nDotH, 4000) * 90 + pow(nDotH, 160) * 0.08);
+  // ([shellglint] less of it, and none while the sun is low: its warm disc read as a lamp hanging over each dome)
+  float glintOn = shellGlint.x * (shellGlint.y > 0.5 ? 1 : smoothstep(0.3, 0.55, sunDirection.y));
+  float3 glint = sun * shadow * nDotL * glintF * (pow(nDotH, 4000) * 90 + pow(nDotH, 160) * 0.08) * glintOn;
   float3 small = SmallLights(i.world, N, v, tint * (0.02 + 0.2 * lines), float3(0.04, 0.04, 0.04), 0.0016, 0.1, nDotV + 1e-4);
   // (its lines a little lit, as a thing: the sunlit side brighter than the shaded)
   float3 lit = lines * tint * (sun * nDotL * shadow * 0.06 + SkyAmbient(N) * 0.08);
@@ -681,7 +721,7 @@ void EnergyShields::Draw(const View& view, Post* post) {
 
   // the frame's constants: the way back from the picture into the world, and the bubbles whose light falls inside
   // them (the nearest kMostLit)
-  float frame[16 + 4 + kMostLit * 8 + 4 * 4] = {};
+  float frame[16 + 4 + kMostLit * 8 + 5 * 4] = {};  // ([shellglint] its row after the ground's)
   const Mat4 back = Inverse(view.constants.viewProj);
   for (int r = 0; r < 4; ++r)
     for (int k = 0; k < 4; ++k) frame[r * 4 + k] = back.m[r][k];
@@ -707,6 +747,8 @@ void EnergyShields::Draw(const View& view, Post* post) {
   look[11] = softHorizon ? 1.0f : 0.0f;
   const bool ground = static_cast<bool>(groundHeights_) && groundUnit_ > 0;
   look[12] = groundWidth_, look[13] = groundHeight_, look[14] = ground ? groundUnit_ : 0.0f, look[15] = 0.15f;
+  look[16] = std::max(sunGlint, 0.0f), look[17] = lowSunGlint ? 1.0f : 0.0f;  // [shellglint]
+  look[18] = rainFromHits ? 1.0f : 0.0f;  // [rainhits] (shellGlint.z)
 
   auto bubbleConstants = [&](const Bubble& b, float* out) {
     for (int k = 0; k < 4; ++k) {

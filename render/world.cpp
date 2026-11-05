@@ -169,6 +169,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     }
     // the map's render-only props, where it has them (scmap.h, LoadDecor): after its own, so the simulation's prop numbers
     // still name the same ones
+    decorFrom_ = map.props.size();  // [underfoot] (those after the .scmap's own are the render-only ones)
     if (mapPath.size() > 6 && mapPath.compare(mapPath.size() - 6, 6, ".scmap") == 0) {
       const std::string decorPath = mapPath.substr(0, mapPath.size() - 6) + "_decor.bin";
       if (auto decor = vfs_->ReadFile(decorPath)) {
@@ -235,6 +236,11 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     if (map.water.present) decals.SetWater(terrain.WaterMap(), terrain.WaterRamp(), static_cast<float>(map.width), static_cast<float>(map.height));
     decals.waterLevel = map.water.present ? map.water.elevation : -1e9f;
     decals.groundHeight = [this](float x, float z) { return map.Height(Clamp(x, 0, static_cast<float>(map.width)), Clamp(z, 0, static_cast<float>(map.height))); };
+    // [iconzoom] (the symbols come in by the zoom of the ground or the water under a unit, as the original's)
+    icons.groundHeight = [this](float x, float z) {
+      const float h = map.Height(Clamp(x, 0, static_cast<float>(map.width)), Clamp(z, 0, static_cast<float>(map.height)));
+      return map.water.present ? std::max(h, map.water.elevation) : h;
+    };
     // (the blasts and the debris: on the ground and the water of this map)
     blasts.Clear();
     debris.Clear();
@@ -334,6 +340,8 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     propCellsX_ = std::max(1, static_cast<int>(std::ceil(static_cast<float>(map.width) / kPropCell)));
     propCellsZ_ = std::max(1, static_cast<int>(std::ceil(static_cast<float>(map.height) / kPropCell)));
     propCells_.assign(static_cast<size_t>(propCellsX_) * static_cast<size_t>(propCellsZ_), {});
+    clearings_.clear();  // [underfoot] (nothing taken from the new map's squares yet)
+    decorUnder_.clear();
     for (size_t i = 0; i < props_.size(); ++i) ListProp(&props_[i], static_cast<uint32_t>(i), false);
     textures.DropFetched();
     step("props listed by squares");
@@ -668,11 +676,7 @@ void World::MarkOutline(const Model* model, Vec3 position, Vec3 color, bool buil
   // (giving way to its strategic icon as that comes in, by the icons' own rule, StrategicIcons::Add)
   const float away = Length(position - view.eye);
   float icon = 0;
-  if (iconsOn && kind && kind->icon >= 0) {
-    const float from = kind->fadeIn * (1 - icons.fadeShare);
-    const float measure = away * view.lodScale;  // [lodscale] (as StrategicIcons::Add measures it)
-    icon = kind->fadeIn > from ? Clamp((measure - from) / (kind->fadeIn - from), 0, 1) : (measure >= from ? 1.0f : 0.0f);
-  }
+  if (iconsOn && kind && kind->icon >= 0) icon = icons.ComeIn(kind, position);  // ([iconzoom] as StrategicIcons::Add)
   const float radius = Length(model->boundsMax - model->boundsMin) * 0.5f * model->scale;
   meshes.MarkLast(model, outlines.Mark(color, building, id, outlines.Strength(radius, away, camera.fovY, icon)));
 }
@@ -726,6 +730,8 @@ void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation,
   const size_t pendingFrom = pendingLamps_.size();
   const uint32_t pendingUnit = ++pendingUnits_;
   bool litBefore = false;  // (steadyLamps: one of its lamps was lit the frame before)
+  // [buildingglow] a structure's glow and lamps by their own rule, while the glow is toned down (hullShare)
+  const bool buildingRule = structure && hullBuildings && hullShare;
   for (const ModelLight& light : model->lights) {
     const uint64_t lampKey = id ? (static_cast<uint64_t>(id) << 8 | static_cast<uint64_t>(&light - model->lights.data())) + 1 : 0;
     // (a lamp on a part the script has hidden is not there: a commander's upgrade not bought yet. [lamps hidden] One on
@@ -819,14 +825,18 @@ void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation,
     float lampRadius = light.radius * model->scale;
     float lampAir = 1;
     if (light.hull) {  // [hullglow]
-      on *= hullGlow;
+      // ([buildingglow] a structure's: stronger, up to what hullGlow 1 gives, and no farther than hullBuildingMost)
+      on *= buildingRule ? std::min(hullGlow * hullBuildingGlow, std::max(hullGlow, 1.0f)) : hullGlow;
       lampRadius *= hullReach;
+      if (buildingRule && hullBuildingMost > 0) lampRadius = std::min(lampRadius, hullBuildingMost);
       lampAir = hullAir;
       // (hullEvenColours: an army's colour as bright as light whatever its hue - the red the glow was set by, 0.2 of the
       // sun's light to the eye at the most; a yellow's 0.74 lowered to about 0.33, a green's 0.6 to 0.3, an orange's 0.31
       // to 0.24: not all the way, a strong red looks brighter than its light says)
       const float eye = 0.2126f * tint.x + 0.7152f * tint.y + 0.0722f * tint.z;
       if (hullEvenColours && armyColor && lampsTeamColour && eye > 0.2f) tint = tint * std::pow(0.2f / eye, 0.6f);
+    } else if (buildingRule) {
+      on *= hullBuildingLamps;  // [buildingglow] (its beacons, strips and windows: lights on it)
     }
     if (light.cone > 0) {
       const Vec3 along = Rotate(orientation, Rotate(boneTurn, light.direction));
@@ -870,6 +880,7 @@ void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation,
       l.at = at, l.color = tint * on, l.origin = position, l.radius = lampRadius;
       l.weight = byReach * byMost, l.key = lampKey, l.unit = pendingUnit;
       l.hull = light.hull, l.air = lampAir;  // [hullglow]
+      l.building = buildingRule;             // [buildingglow]
       pendingLamps_.push_back(l);
     } else {
       lights.Add(at, lampRadius, tint * on, &position, lampAir);  // (the unit does not shadow its own lamps: rays)
@@ -1009,6 +1020,8 @@ void World::FlushLamps() {
 // its middle, nothing at its reach), and each glow given 1 / n of 1 + ln(n) of itself, n the glows' worth lying where it
 // stands (itself included: alone, n is 1 and it stays as it was). Sixteen glows on one place light it as 3.8 of them, not
 // 16; two a reach apart do not touch each other. Costs a few squares per small unit's glow, a few hundred per building's.
+// [buildingglow] A structure's glow under the structures' rule (PendingLamp::building) counts only the structures' glows
+// lying where it stands (a second grid of theirs alone) and takes its share to the power hullBuildingShare.
 void World::ShareHullGlows(const std::vector<uint8_t>& allowed, std::vector<float>* shares) {
   shares->clear();
   float x0 = 1e30f, z0 = 1e30f, x1 = -1e30f, z1 = -1e30f;
@@ -1025,6 +1038,7 @@ void World::ShareHullGlows(const std::vector<uint8_t>& allowed, std::vector<floa
   const float cell = std::max(2.0f, std::max(x1 - x0, z1 - z0) / 512);
   const int cols = static_cast<int>((x1 - x0) / cell) + 1, rows = static_cast<int>((z1 - z0) / cell) + 1;
   hullField_.assign(static_cast<size_t>(cols) * static_cast<size_t>(rows), 0.0f);
+  hullBuildingField_.assign(hullField_.size(), 0.0f);  // [buildingglow]
   auto fade = [](float far2) { return far2 >= 1 ? 0.0f : (1 - far2) * (1 - far2) / (1 + 4 * far2); };
   for (size_t i = 0; i < pendingLamps_.size(); ++i) {
     const PendingLamp& l = pendingLamps_[i];
@@ -1036,7 +1050,10 @@ void World::ShareHullGlows(const std::vector<uint8_t>& allowed, std::vector<floa
       const float dz = z0 + (static_cast<float>(z) + 0.5f) * cell - l.at.z;
       for (int x = a; x <= b; ++x) {
         const float dx = x0 + (static_cast<float>(x) + 0.5f) * cell - l.at.x;
-        hullField_[static_cast<size_t>(z) * static_cast<size_t>(cols) + static_cast<size_t>(x)] += l.weight * fade((dx * dx + dz * dz) * inv);
+        const size_t at = static_cast<size_t>(z) * static_cast<size_t>(cols) + static_cast<size_t>(x);
+        const float here = l.weight * fade((dx * dx + dz * dz) * inv);
+        hullField_[at] += here;
+        if (l.building) hullBuildingField_[at] += here;  // [buildingglow]
       }
     }
   }
@@ -1047,9 +1064,11 @@ void World::ShareHullGlows(const std::vector<uint8_t>& allowed, std::vector<floa
     // (where it stands, less what its own square's middle took of it short of its full 1: alone, n is its own weight)
     const int x = std::clamp(static_cast<int>((l.at.x - x0) / cell), 0, cols - 1), z = std::clamp(static_cast<int>((l.at.z - z0) / cell), 0, rows - 1);
     const float dx = x0 + (static_cast<float>(x) + 0.5f) * cell - l.at.x, dz = z0 + (static_cast<float>(z) + 0.5f) * cell - l.at.z;
-    const float n = hullField_[static_cast<size_t>(z) * static_cast<size_t>(cols) + static_cast<size_t>(x)] +
+    const std::vector<float>& field = l.building ? hullBuildingField_ : hullField_;  // [buildingglow]
+    const float n = field[static_cast<size_t>(z) * static_cast<size_t>(cols) + static_cast<size_t>(x)] +
                     l.weight * (1 - fade((dx * dx + dz * dz) / (l.radius * l.radius)));
     if (n > 1) (*shares)[i] = (1 + std::log(n)) / n;
+    if (l.building && n > 1) (*shares)[i] = std::pow((*shares)[i], std::clamp(hullBuildingShare, 0.0f, 1.0f));  // [buildingglow]
   }
 }
 
@@ -1334,7 +1353,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   c.inspect[0] = static_cast<float>(inspect);
   // wet shorelines and caustics
   if (waterDetail && look == Look::Modern && haveMap_ && map.water.present) {
-    c.shore[0] = 1;
+    c.shore[0] = water.shoreSoak && water.soakFixed ? 2.0f : 1.0f;  // [soakfix] (2: the wet band and the soak by the map's own heights)
     c.shore[1] = map.water.elevation;
     c.shore[2] = 0.8f;
     c.shore[3] = 2.4f;
@@ -1553,8 +1572,15 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     // snow's murk brings (a storm's, a snowfall's, an overcast day's: those as they were) goes mostly into a layer that hugs
     // the ground and the water, the mist's (below: deeper than the mist, thickest over the water and in the hollows, thin
     // over the hills), and only a little of it into the air all over: from far up the map shows through it.
-    const float fogAll = lowFog ? std::min(fog, 0.25f) + 0.15f * std::max(fog - 0.25f, 0.0f) : fog;
     const float fogLow = lowFog ? std::max(fog - 0.25f, 0.0f) / 0.75f : 0.0f;
+    // [mistpatch] (World::mistPatches) a thick fog leaves only a little in the air all over (at full fog a tenth, not 0.36:
+    // from the game's camera the ground next to it showed through a third to two fifths of grey, Chris's second test,
+    // 2026-11-04, measured on his pictures); what there is of it lies in the layer's patches. A storm's and an overcast day's
+    // murk (fog up to a quarter) as before.
+    const bool patches = lowFog && mistPatches;
+    const float fogAll = !lowFog ? fog
+                         : patches ? std::min(fog, 0.25f) * (1 - 0.6f * fogLow)
+                                   : std::min(fog, 0.25f) + 0.15f * std::max(fog - 0.25f, 0.0f);
     c.weather[2] = 0.0035f * fogAll + 0.0007f * rain + 0.0010f * snow;
     c.weather[3] = 0.55f + 0.3f * fogAll;
     distantLand.thickAir = c.weather[2];  // (beyondland: the weather's own, before a cinematic camera's least)
@@ -1589,6 +1615,10 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       c.mist[2] = 1 / depth;
       c.mist[3] = 0.6f - 0.15f * fogLow;  // ([fog1103] the low fog hides less of what is in it, not more)
       c.mistMore[0] = 0.75f * fogLayer / (mistNow + fogLayer);  // (the low fog's share of the layer: its banks more even)
+      if (patches) {  // [mistpatch] (as thick as the fog is, the layer in its patches alone, a morning's mist with it: view.h, MistPatches)
+        c.mistMore[1] = fogLow;
+        c.mistMore[2] = std::clamp(mistClear, 0.05f, 0.95f);
+      }
     }
     SetSky(skyLight, &c);
     if (skyTables && look == Look::Modern) {  // the sky from tables: what reads the computed sky reads its view (view.h, ComputedSky)
@@ -1613,7 +1643,10 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   }
   {  // [sunlight] drifting cloud shadows and the light shafts' low band (sunlight.h), by the sky and the weather just reckoned
     const bool day = timeOfDay >= 0 && look == Look::Modern && haveMap_;
-    sunlight.Begin(&view, day && driftingShadows, day && lightShafts && volumetricFog && !sidePicture, placing, mistNow, wet, fog,
+    // ([mistpatch] in a thick fog the low band's haze and the haze under the clouds thicken by a quarter of it, World::mistPatches:
+    // the fog lies in the mist's layer's patches; over all the ground they were the most of the grey close to the camera)
+    sunlight.Begin(&view, day && driftingShadows, day && lightShafts && volumetricFog && !sidePicture, placing, mistNow, wet,
+                   lowFog && mistPatches ? 0.25f * fog : fog,
                    static_cast<float>(map.width), static_cast<float>(map.height), terrain.HeightUnit(),
                    map.water.present ? map.water.elevation : -1e9f);
   }
@@ -1694,10 +1727,13 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   CpuTimes::Part("sun shadows placed");
   if (haveMap_ && shadowsOn) {
     if (shadows.Size() != shadowSize) shadows.SetSize(shadowSize);
+    shadows.ground = &terrain;  // [shadowtri] (the fit's floor: the lowest ground under what may be seen, Terrain::LowestIn)
     shadows.fitCasters = shadowFit;  // [cardcost] (nothing the camera sees lies much below the ground's lowest point)
     shadows.fitFloor = terrain.Lowest() - 32;
     // [cardcost] (the far cascades kept only in the game's own frames: a frame for something else draws into the same maps)
     shadows.keepEvery = shadowKeep >= 2 && !sidePicture && !extraView && !photo && !photoTiled ? shadowKeep : 0;
+    // [shadowstep] (the cascades' sizes on their ladder, kept from frame to frame: only in the game's own frames, as above)
+    shadows.zoomSteps = shadowZoomSteps && !sidePicture && !extraView && !photo && !photoTiled;
     shadows.Place(placing, lightDirection, &view);
   }
   CpuTimes::Part("tracks, icons, deposits begun");
@@ -2006,6 +2042,90 @@ void World::UnlistProp(PlacedProp* prop, uint32_t key, bool made) {
       break;
     }
   prop->cell = -1;
+}
+
+// [underfoot] Chris's second test (2026-11-04, his picture "foliage shouldn't be glitching into a structure. If a structure is
+// built the foliage below should be removed"): a bush's leaves stood out of a building's walls. They were the map's
+// render-only props (its decor: the plants, small rocks and branches kept out of the .scmap so that the simulation never
+// makes them, scmap.h LoadDecor; on SETONS_R 43,326 of its 55,172), which nothing ever took away: the simulation does not
+// know them, and the ground cover's pressing (grass.cpp, kTrample) is for the grass's cards and 3D plants alone. A
+// structure (IsStructure: its blueprint's MotionType none) that stands or is being built now takes those whose place lies
+// within its model's box on the ground, turned as it stands and kUnderfootMargin wider all round, out of their squares'
+// lists the first frame it is listed (as one gone is taken out, ApplyPropEvent: its square's group filled anew), and
+// gives them back once it is no longer in the frame (ReleaseClearings), unless another structure still stands over them:
+// each prop counts the structures over it (a mass extractor upgraded: the new one is built over the old, which goes when
+// it is done). Only once a structure: a structure does not move. The simulation's own props (its trees, rocks, the
+// .scmap's plants) are the simulation's to take away; and a stream's water is drawn by its own pass, whatever stands on it.
+namespace {
+constexpr float kUnderfootMargin = 0.25f;  // world units round a structure's box: a bush rooted at its very edge goes too
+}  // namespace
+
+void World::ClearUnderStructure(uint32_t id, const Model* model, Vec3 position, const Quat& orientation) {
+  if (!clearUnderStructures || decorFrom_ >= props_.size() || propCells_.empty() || !model || !model->ok) return;
+  auto [entry, fresh] = clearings_.try_emplace(id);
+  entry->second.stamp = frameStamp_;
+  if (!fresh) return;
+  // its box on the ground: its bounds' middle, its two ways along the ground and half its size along each, in the world
+  const float scale = model->scale;
+  const Vec3 lo = model->boundsMin * scale, hi = model->boundsMax * scale;
+  const Vec3 middle = position + Rotate(orientation, Vec3{0.5f * (lo.x + hi.x), 0, 0.5f * (lo.z + hi.z)});
+  const Vec3 across = Rotate(orientation, Vec3{1, 0, 0}), along = Rotate(orientation, Vec3{0, 0, 1});
+  const float acrossFlat = std::sqrt(across.x * across.x + across.z * across.z), alongFlat = std::sqrt(along.x * along.x + along.z * along.z);
+  if (acrossFlat < 1e-4f || alongFlat < 1e-4f) return;  // (on its side: nothing to stand over)
+  const float ax = across.x / acrossFlat, az = across.z / acrossFlat, fx = along.x / alongFlat, fz = along.z / alongFlat;
+  const float halfAcross = 0.5f * (hi.x - lo.x) * acrossFlat + kUnderfootMargin, halfAlong = 0.5f * (hi.z - lo.z) * alongFlat + kUnderfootMargin;
+  // (the squares its box reaches, by its corners' extent on the map)
+  const float reachX = std::fabs(ax) * halfAcross + std::fabs(fx) * halfAlong, reachZ = std::fabs(az) * halfAcross + std::fabs(fz) * halfAlong;
+  const int cx0 = std::clamp(static_cast<int>((middle.x - reachX) / kPropCell), 0, propCellsX_ - 1);
+  const int cz0 = std::clamp(static_cast<int>((middle.z - reachZ) / kPropCell), 0, propCellsZ_ - 1);
+  const int cx1 = std::clamp(static_cast<int>((middle.x + reachX) / kPropCell), 0, propCellsX_ - 1);
+  const int cz1 = std::clamp(static_cast<int>((middle.z + reachZ) / kPropCell), 0, propCellsZ_ - 1);
+  std::vector<uint32_t>& taken = entry->second.props;
+  for (int cz = cz0; cz <= cz1; ++cz)
+    for (int cx = cx0; cx <= cx1; ++cx) {
+      const PropCell& cell = propCells_[static_cast<size_t>(cz) * static_cast<size_t>(propCellsX_) + static_cast<size_t>(cx)];
+      // (those still standing, and those another structure has taken already: this one stands over them too)
+      for (const std::vector<uint32_t>* list : {&cell.ofMap, &cell.underfoot})
+        for (uint32_t i : *list) {
+          if (i < decorFrom_ || i >= props_.size()) continue;
+          const PlacedProp& p = props_[i];
+          if (!p.model || p.model->lods.empty() || p.model->lods[0].stream) continue;
+          const float dx = p.world.m[0][3] - middle.x, dz = p.world.m[2][3] - middle.z;
+          if (std::fabs(dx * ax + dz * az) <= halfAcross && std::fabs(dx * fx + dz * fz) <= halfAlong) taken.push_back(i);
+        }
+    }
+  for (uint32_t i : taken) {
+    if (decorUnder_[i]++ > 0) continue;  // (out already, under another)
+    const int c = props_[i].cell;
+    UnlistProp(&props_[i], i, false);
+    if (c >= 0) propCells_[static_cast<size_t>(c)].underfoot.push_back(i);
+  }
+}
+
+void World::ReleaseClearings() {
+  for (auto it = clearings_.begin(); it != clearings_.end();) {
+    if (it->second.stamp == frameStamp_) {
+      ++it;
+      continue;
+    }
+    for (uint32_t i : it->second.props) {
+      auto under = decorUnder_.find(i);
+      if (under == decorUnder_.end() || --under->second > 0) continue;
+      decorUnder_.erase(under);
+      const int c = PropCellAt(props_[i].world);
+      if (c >= 0) {
+        std::vector<uint32_t>& list = propCells_[static_cast<size_t>(c)].underfoot;
+        for (size_t k = 0; k < list.size(); ++k)
+          if (list[k] == i) {
+            list[k] = list.back();
+            list.pop_back();
+            break;
+          }
+      }
+      ListProp(&props_[i], i, false);
+    }
+    it = clearings_.erase(it);
+  }
 }
 
 void World::ChangeGround(const std::vector<FrameGroundChange>& changes) {
@@ -2527,6 +2647,10 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     if (u.recon == 0xff) noFocus = true;
     if (u.dead) {
       if (u.Seen()) remembered_.erase(u.id);  // (the army saw it go)
+      if (!clearings_.empty()) {  // [underfoot] (a structure dying still stands over what it took until its death is over)
+        auto clearing = clearings_.find(u.id);
+        if (clearing != clearings_.end()) clearing->second.stamp = frameStamp_;
+      }
       // A unit that is dying is there until its death is over: a plane falling out of the sky, a ship
       // going down, a walker toppling. Drawn as the simulation moves and poses it, without anything
       // that belongs to a live unit (symbol, bars, lamps, wake; it cannot be pointed at).
@@ -2628,6 +2752,8 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
                              ? nullptr
                              : Known(unitModels_, u.blueprint, frame.blueprints->size(), [&] { return models.Unit(blueprint); });
     if (freshModel && debrisWarm_ && model) debris.Warm(model);  // [groundfix] (a kind first drawn: where its paint glows, read ahead)
+    // [underfoot] a structure standing or being built (seen, or as last seen): the map's decor under it taken away
+    if (building && model) ClearUnderStructure(u.id, model, position, orientation);
     // Its bars, as the original draws them (Chris's pictures of it, 2026-10-13): the life bar under
     // the unit, about as wide as the unit, black with a filling that is green, yellow at middling
     // health and red when low, on every unit near enough to be a model (and on a selected or
@@ -2660,7 +2786,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       const bool isSelected = !selected.empty() && selected.count(u.id) != 0;
       const uint32_t army = (u.id >> 20) & 0xff;
       const bool friendly = own || (army < 64 && ((alliedArmies >> army) & 1) != 0);
-      const bool life = lifeBars && !photo && maxHealth > 0 && (friendly || lifeBarsOnEnemies) && (isSelected || u.id == hover || away * view.lodScale < kind->fadeIn * 0.9f);  // ([lodscale] as the icons)
+      const bool life = lifeBars && !photo && maxHealth > 0 && (friendly || lifeBarsOnEnemies) && (isSelected || u.id == hover || icons.Measure(position) < kind->fadeIn * 0.9f);  // ([iconzoom] as the icons)
       // (a firing cycle only on the unit under the mouse or selected: Chris, 2026-10-14, the Summit's
       // reload bar "should only show if I put my cursor over it instead of at all times")
       const bool work = workBars && own && !photo && u.workProgress > 0 && u.workProgress < 1 && (!kind->fireClock || isSelected || u.id == hover);
@@ -2828,7 +2954,14 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       }
       if (veiled) {  // ([stealthlook] its veil, after its wear: Wear takes the model added last)
         const Vec3 tint{0.35f, 0.62f, 0.78f};
-        meshes.Add(model, Mat4::FromTRS(drawAt, drawTurn, model->scale * 1.035f), color, 1.375f, &pose, &tint, nullptr, u.id + 1);
+        // ([veilshake] no key of its own: Chris's second test, 2026-11-04, "stealth overlay shakes units and structures up and
+        // down very fast". The veil is the unit's own model again, so with the unit's key it took the unit's place in the
+        // motion's memory (MeshRenderer::Prepare keeps one place per key, the last model added under it: the veil, 1.035 the
+        // size). The frame after, the unit's body was "last seen" 3.5 % larger about its feet, its top 3.5 % of its height
+        // higher, and every pixel of it carried that motion: the upscaler's history pulled from above it and the generated
+        // frames drew it halfway, a shake up and down at the screen's rate. The veil is see-through and draws no motion of
+        // its own (DrawMotion takes the solid models alone), so it needs no key.)
+        meshes.Add(model, Mat4::FromTRS(drawAt, drawTurn, model->scale * 1.035f), color, 1.375f, &pose, &tint, nullptr, 0);
         meshes.SeeThroughGhost();
       }
       // (its outline where it is hidden, hidden_outlines.h: only what the player may see of it now - his own, an ally's,
@@ -2947,9 +3080,11 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
                    model->scrolls ? r.treads : nullptr, it->first + 1);
         if (r.wearKept && r.hasWear) meshes.Wear(r.wear);
       }
+      if (model && model->ok) ClearUnderStructure(it->first, model, r.position, r.orientation);  // [underfoot] (as it was last seen)
     }
     ++it;
   }
+  ReleaseClearings();  // [underfoot] (the structures not listed this frame: what they stood over stands again)
   CpuTimes::Part("projectiles, entities, beams listed");
   // ripples: what met the water, as the simulation says it (REQUESTS 36; below, after the shots). A shell's splash
   // is as large as its model, found among this frame's shots (-1: not drawn)
@@ -3217,6 +3352,26 @@ void World::PrepareAhead() {
     }
   }
   if (decals.remasteredTarmacs) decals.tarmacs.Ahead();
+  // [prebuild] the temporal upscaler's (FSR 3) and frame generation's compute pipelines, where they are on (as World::Begin
+  // asks for them): a game's load draws its warm frames as photos (World::photo), for which Begin makes neither, so that
+  // the game's first frames made them on the frames' thread (Chris's second test, 2026-11-04: 1.53 s and 1.03 s, the
+  // driver's first time). Made here on the device's own thread, Begin then finds them made (fsr3State_, framegenState_)
+  // and only switches them on; the same Init, so the same pipelines. (Begin's own Init stays for where this has not run:
+  // --no-read-ahead, a side picture.) One that the device's thread cannot make draws nothing, as every pipeline asked for
+  // in the background; its messages say so.
+  if (gSceneSamples == 1 && motionView <= 0 && ((temporalUpscale && fsr3State_ == 0) || (frameGeneration && framegenState_ == 0))) {
+    device_->BeginBackgroundPipelines();
+    std::string error;
+    if (temporalUpscale && fsr3State_ == 0) {
+      fsr3State_ = fsr3.Init(&error) ? 1 : -1;
+      if (fsr3State_ < 0) fprintf(stderr, "render: FSR 3 cannot be used (%s); FSR 1 stays\n", error.c_str());
+    }
+    if (frameGeneration && framegenState_ == 0) {
+      framegenState_ = framegen.Init(&error) ? 1 : -1;
+      if (framegenState_ < 0) fprintf(stderr, "render: FSR 3 frame generation cannot be used (%s)\n", error.c_str());
+    }
+    device_->EndBackgroundPipelines();
+  }
   if (look != Look::Modern) return;
   // [session] what the sky and the weather make the first frame they are on (a game's sky comes with its time of day, which
   // the map's warm frames may not have had): the clouds' shaders with a nuke's ring, the weather on the horizon, the light
@@ -3236,6 +3391,23 @@ void World::PrepareAhead() {
   if (groundCover && (ao.strength > 0 || contactShadows)) ao.PrepareCover();
   if (halfOcclusion && (ao.strength > 0 || contactShadows)) ao.PrepareHalf();  // [step2b]
   if (groundCover && grassMade_ && plantsFar) grass.PrepareAhead(plantsReact);  // [plantlod] (the 3D plants' and the far cover's)
+  // [prebuild] (Chris's second test, 2026-11-04: "light stuttering early on") what its hitch log had the game's first
+  // minutes make the first frame each was wanted: the scene's motion of the ground cover and of what sways (a game's load
+  // draws its warm frames as photos, which draw no motion), the ground cover with the blasts' waves, the drives' plumes,
+  // the ships' wakes and the wash on their hulls (none of which a load's warm frames have). Each made here the first frame
+  // its look is on, on the device's own thread (in a game's load: its warm frames, so the map waits for them as for the
+  // rest, WorldPicture::MapReady), by the very code its first use ran, so the picture is the same; after that, checks.
+  {
+    const bool moving = (motionOn || motionView > 0 || temporalUpscale || frameGeneration) && gSceneSamples == 1;  // (as Begin's `moving`)
+    const bool lifted = oceanWaves && oceanLift && map.water.present;  // (the ocean lifting the sea: World::Begin's)
+    device_->BeginBackgroundPipelines();
+    if (moving && plantMotion && motionView != 4) meshes.PrepareSwayMotion();
+    if (groundCover && grassMade_) grass.PrepareVariants(plantsReact, blastWaves, moving && plantMotion && motionView != 4);
+    if (exhaustsNow_) exhausts.Prepare();
+    if (map.water.present) wakes.Prepare(lifted);
+    if (lifted) hullWash.Prepare();
+    device_->EndBackgroundPipelines();
+  }
   if (surf && map.water.present) water.surf.PrepareSpray();
   if (litRain) falling.PrepareLit();
   if (rainSplashes) falling.PrepareSplashes();
