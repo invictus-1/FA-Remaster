@@ -385,6 +385,10 @@ class World {
   // a unit moving far off casts where it stood a frame or so before. 0 (or 1): every cascade every frame. Viewer
   // --shadow-keep <n>.
   int shadowKeep = 0;
+  // [shadowstep] The sun's shadow cascades' sizes from a ladder as the camera zooms, each kept while it still serves
+  // (shadows.h, Shadows::zoomSteps): the shadows stand still while zooming, but for a step now and then. On by default;
+  // viewer --shadow-zoom-smooth: off (as wide as the zoom asks every frame, as before).
+  bool shadowZoomSteps = true;
   // The icons on mass and hydrocarbon deposits from far up, where the marks on the ground are no
   // longer drawn (the original's "resource icons", its pictures). `depositIconFrom`: at how many
   // times a mark's own cutoff distance its icon is fully there (it comes in from 0.8 of that).
@@ -429,6 +433,14 @@ class World {
   // the water in the mist's layer, deeper than the mist, and only a little of it thickens the air all over. Off (the
   // viewer's --fog-old): all of it in the air all over, as before.
   bool lowFog = true;
+  // [mistpatch] With the low fog (Chris's second test, 2026-11-04: "Fog has gotten better but its still too grey it should be
+  // more like a mist like not every single inch of the map needs it"): in a fog the mist's layer (the fog's and a morning's
+  // mist with it, as much as the fog is thick) lies in wide patches with clear air between them (view.h, MistPatches; `mistClear`: where their field begins to hold it, 0.5: some
+  // two fifths of the ground in a patch, more: fewer and smaller), and of the quarter of it the air all over took and of
+  // what the light shafts' hazes took, a thick fog leaves only a little. Off (the viewer's --fog-even): the fog of
+  // 2026-11-03.
+  bool mistPatches = true;
+  float mistClear = 0.5f;
   // A view for checking art (modern look): what every lit surface shows in place of its lit
   // colour. 0: the picture as it is; 1 colour alone, 2 which way surfaces face, 3 roughness,
   // 4 metal, 5 the creases' shading, 6 the sun's shadow, 7 the small lights alone, 8 the sun's
@@ -570,6 +582,11 @@ class World {
   // session's 3D plants where the cover has them, by size on screen down to their card (plantModels, with plantsFar).
   // Off by default (proposed for the game's Ground Detail).
   bool plantsFar = false, plantsRound = false, plantModels = false;
+  // [underfoot] The map's render-only props (its decor: plants, small rocks, branches; scmap.h, LoadDecor) taken away where
+  // a structure stands or is being built, and back once it is gone (ClearUnderStructure). Chris's second test (2026-11-04):
+  // "foliage shouldn't be glitching into a structure. If a structure is built the foliage below should be removed". On by
+  // default; viewer --keep-decor-under-structures: off (they stand on inside the buildings, as before).
+  bool clearUnderStructures = true;
   // Battle scars (decals.h, Decals::battleScars): the scorches and craters of the fighting stay on the ground,
   // weathering, up to a most for cost. Off by default (the game's own times).
   bool battleScars = false;
@@ -704,6 +721,19 @@ class World {
   // crowded base glows more than one building, never without bound). Viewer --hull-glow old: all as before.
   float hullGlow = 0.75f, hullReach = 0.85f, hullAir = 0.5f;
   bool hullEvenColours = true, hullShare = true;
+  // [buildingglow] (Chris's second test of 2026-11-04: the glow at night "too dull now on structures, factories mainly", "a
+  // glow vs actual lights on them", small units fine; "the naval factory's glow a bit too strong") with the glow toned down
+  // (hullShare on), a structure's own glow and lamps apart from the units': its glow `hullBuildingGlow` times hullGlow
+  // (1.33: at the slider's 0.75 as strong as before the big test, never stronger than hullGlow 1 makes it), reaching at
+  // most `hullBuildingMost` world units (20: a naval factory's lamps' file gives 43, twice a land factory's, its pool over
+  // the whole bay; every other structure's is within it), shared only with the other structures' glows lying over it (the
+  // units round a factory, and the one just built in it, no longer dim it) and less (`hullBuildingShare`: each share taken
+  // to that power, 0.5: four glows over each other 0.77 of each, not 0.6); and its other lamps (beacons, strips, windows)
+  // `hullBuildingLamps` times as strong (1.3), so that they read as lights on it, not a glow round it. With hullShare off
+  // (the "Unit Glow at Night" slider at its top, viewer --hull-glow old) or `hullBuildings` false (viewer --building-glow
+  // old) a structure's as a unit's, as before.
+  bool hullBuildings = true;
+  float hullBuildingGlow = 1.33f, hullBuildingMost = 20, hullBuildingShare = 0.5f, hullBuildingLamps = 1.3f;
   // [lampbudget] (Chris's big test: "top circle is no light but at zoom a light pops", one lamp lit of a naval factory's
   // three alike) where many units are lit, the units near what the camera looks at keep all their lamps (the most a unit
   // lights, 6,000 lamps over the units in reach, given in full within a sixth of the lamps' reach round it, falling to the
@@ -1012,6 +1042,7 @@ class World {
     // whether the group must be filled anew (a prop of it has changed)
     uint32_t group = 0xffffffffu;
     bool changed = true;
+    std::vector<uint32_t> underfoot;  // [underfoot] its decor taken out of ofMap while a structure stands over it
   };
   static constexpr float kPropCell = 32;
   std::vector<PropCell> propCells_;
@@ -1020,6 +1051,21 @@ class World {
   int PropCellAt(const Mat4& world) const;
   void ListProp(PlacedProp* prop, uint32_t key, bool made);
   void UnlistProp(PlacedProp* prop, uint32_t key, bool made);
+  // [underfoot] (clearUnderStructures) Where the map's render-only props begin in props_ (the .scmap's own before them:
+  // the simulation's, which it takes away itself); each structure that has cleared some (by its entity id: the frame it
+  // was last listed, frameStamp_, and the props it took); and how many structures stand over each prop taken (by its index:
+  // it stands again when none does). ClearUnderStructure takes them as a structure is first listed (AddFrame: a unit of the
+  // frame, or one remembered under the fog of war); ReleaseClearings, after them, gives back those of the structures not
+  // listed this frame (a dying one counts until its death is over). Drawn without them from the next Begin on.
+  size_t decorFrom_ = 0;
+  struct Clearing {
+    uint32_t stamp = 0;
+    std::vector<uint32_t> props;
+  };
+  std::unordered_map<uint32_t, Clearing> clearings_;
+  std::unordered_map<uint32_t, int> decorUnder_;
+  void ClearUnderStructure(uint32_t id, const Model* model, Vec3 position, const Quat& orientation);
+  void ReleaseClearings();
   std::deque<FramePropEvent> propEvents_;  // told, and not yet due
   // [scars] the props whose changes were applied in the last seconds (entity id -> when), and whether an entity is a prop
   // (standing, made in the game, or changed or gone just now or about to be: Effects::isProp)
@@ -1147,8 +1193,10 @@ class World {
     bool beam = false;
     bool hull = false;     // [hullglow] a unit's own glow (shared with those it lies over: hullShare)
     float air = 1;         // [hullglow] its share in the air (Lights::Add)
+    bool building = false; // [buildingglow] a structure's glow, by the structures' rule (shared with theirs alone)
   };
   std::vector<float> hullField_;  // [hullglow] (hullShare) how many hull glows' worth of light lies on each square, FlushLamps
+  std::vector<float> hullBuildingField_;  // [buildingglow] the same, of the structures' glows alone
   void ShareHullGlows(const std::vector<uint8_t>& allowed, std::vector<float>* shares);
   std::vector<PendingLamp> pendingLamps_;
   uint32_t pendingUnits_ = 0;

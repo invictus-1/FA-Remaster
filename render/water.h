@@ -43,6 +43,14 @@ class Water {
   // shallows came up bright again and the water looked lifted off the beach). False: the bed as before (viewer
   // --no-shore-soak).
   bool shoreSoak = true;
+  // [soakfix] (Chris's second test, 2026-11-04: the soak "better, still weird at times", as he turns the camera "it looks like
+  // it all shifts at once") With it: the soak and the ground's wet band by the map's own heights (its ground at its finest,
+  // between the grid points), not by the ground as drawn. That is drawn at a level of detail by the camera's distance
+  // (terrain.h, CDLOD), its points sliding onto a coarser grid as the camera moves off, by tenths of a unit: on a flat beach
+  // where the soak and the band ended slid along the whole shore at every move of the camera. The ground's pass then soaks
+  // the bed under the shallows itself (to its wet band's 0.6, gone by kSoakDepth of depth), the water's only darker again on
+  // an exposed beach. The view's shore.x is 2. False: as before (viewer --soak-old).
+  bool soakFixed = true;
   void PrepareSurf(bool ripples, bool winter, bool wet = false);  // ([shore] wet: World::waterDetail's wet beach, SURF_WET)
   // [ocean] The wind sea worked out on the card (ocean.h; World::oceanWaves): the water draws with its ocean pipelines while
   // ocean.Active(), each variant (with the ripples' field or not, winter, the surf, the wet beach) made by PrepareOcean the

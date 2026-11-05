@@ -98,6 +98,10 @@ struct EmitterBlueprint {
   // Whether its file's name says it is a fire (flames, embers, something burning: a wreck's, a damaged unit's, a
   // napalm's), not a warm glow of something else (build sparks, a warp-in, an engine): Particles::Hot::fire.
   bool fire = false;
+  // [statuslights] Whether it is one of the game's small signal lamps (/effects/emitters/light_*: a structure's
+  // BlinkingLightsFx, red while its army's mass or energy store runs low, green, yellow; the beacons' blinkers):
+  // Particles::statusLights.
+  bool status = false;
   int sortOrder = 0;
   float lodCutoff = 0;      // an emitter that hangs on something throws nothing out farther from the camera (0: no limit)
   float longestLife = 1;    // the longest a particle of it can live, in ticks
@@ -236,6 +240,12 @@ class Particles {
   // The modern look: how much brighter than its texture a particle that adds its light is (it is
   // light, and the picture's last pass brings it back into what a screen shows).
   float glow = 2.5f;
+  // [statuslights] (Chris's second test of 2026-11-04: "random red / orange flashes at factories ... when units are being
+  // built", the red stars over a naval factory) the game's signal lamps (EmitterBlueprint::status: the factories' red
+  // blinker while their army's mass or energy store runs low, which a busy base at 35 minutes does again and again, the
+  // yellow and green ones) times this of `glow`: 0.4, as bright as the original draws them, not a 2.5-fold star that
+  // blooms (1: as before, viewer --status-lights old). Their colours and beat are the game's: they tell the player of a stall.
+  float statusLights = 0.4f;
   int liveParticles = 0;  // after the last Draw
   int liveEmitters = 0;   // after the last Update
   int quietEmitters = 0;  // of those: out of sight or too far away in the last Update

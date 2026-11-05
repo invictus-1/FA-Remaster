@@ -276,9 +276,10 @@ void Wakes::AddPathRemade(const Vec3* places, int count, float skip, Vec3 back, 
   }
 }
 
-void Wakes::Draw(const View& view) {
-  if (wakes_.empty()) return;
-  if (remade_ && !remadePipeline_ && !remadeTried_) {  // [wakes] (made the first time it is wanted: nothing changes for a game without it)
+// [wakes] The remade wake's pipeline, made the first time it is wanted (Draw, or ahead of it: [prebuild] Prepare); nothing
+// changes for a game without it.
+void Wakes::MakeRemade() {
+  if (remade_ && !remadePipeline_ && !remadeTried_) {
     remadeTried_ = true;
     std::string error;
     const std::string source = std::string(kViewShaderBlock) + kRemadeShader;  // (kept while the pipeline is made: the desc holds views)
@@ -297,29 +298,44 @@ void Wakes::Draw(const View& view) {
       remade_ = false;
     }
   }
+}
+
+// [lift] The variant that rides the waves lifting the surface (ocean.h; `k` 1 the remade wake's, 0 the wake before), made
+// the first time it is wanted (Draw, or ahead of it: [prebuild] Prepare).
+gfx::Pipeline Wakes::MakeRiding(int k) {
+  if (!rideTried_[k]) {
+    rideTried_[k] = true;
+    const bool remade = k == 1;
+    std::string error;
+    const std::string source = std::string("#define RIDE 1\n") + kViewShaderBlock + kOceanRideShaderBlock + (remade ? kRemadeShader : kShader);
+    gfx::PipelineDesc pd;
+    pd.name = remade ? "wakes remade, riding the waves" : "wakes, riding the waves";
+    pd.vertexSource = pd.pixelSource = source;
+    pd.cull = gfx::Cull::None;
+    pd.depthWrite = false;
+    pd.blend = gfx::Blend::Alpha;
+    pd.colorFormat = kSceneFormat;
+    pd.samples = gSceneSamples;
+    pd.alphaWrite = false;
+    ridePipeline_[k] = device_->CreatePipeline(pd, &error);
+    if (!ridePipeline_[k]) fprintf(stderr, "render: the wakes cannot ride the waves: %s\n", error.c_str());
+  }
+  return ridePipeline_[k];
+}
+
+// [prebuild] (wakes.h) What Draw would make the first frame a ship's wake is drawn with this frame's look (Begin's).
+void Wakes::Prepare(bool lifted) {
+  MakeRemade();
+  if (lifted) MakeRiding(remade_ && remadePipeline_ ? 1 : 0);
+}
+
+void Wakes::Draw(const View& view) {
+  if (wakes_.empty()) return;
+  MakeRemade();
   // [lift] on waves that lift the surface (ocean.h): the variant that rides them (made the first time it is wanted)
   const bool remade = remade_ && remadePipeline_;
   gfx::Pipeline riding;
-  if (ride && ride->Lifted()) {
-    const int k = remade ? 1 : 0;
-    if (!rideTried_[k]) {
-      rideTried_[k] = true;
-      std::string error;
-      const std::string source = std::string("#define RIDE 1\n") + kViewShaderBlock + kOceanRideShaderBlock + (remade ? kRemadeShader : kShader);
-      gfx::PipelineDesc pd;
-      pd.name = remade ? "wakes remade, riding the waves" : "wakes, riding the waves";
-      pd.vertexSource = pd.pixelSource = source;
-      pd.cull = gfx::Cull::None;
-      pd.depthWrite = false;
-      pd.blend = gfx::Blend::Alpha;
-      pd.colorFormat = kSceneFormat;
-      pd.samples = gSceneSamples;
-      pd.alphaWrite = false;
-      ridePipeline_[k] = device_->CreatePipeline(pd, &error);
-      if (!ridePipeline_[k]) fprintf(stderr, "render: the wakes cannot ride the waves: %s\n", error.c_str());
-    }
-    riding = ridePipeline_[k];
-  }
+  if (ride && ride->Lifted()) riding = MakeRiding(remade ? 1 : 0);
   device_->SetPipeline(riding ? riding : remade ? remadePipeline_ : pipeline_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
   const bool churning = remade && churn && churnShare > 0;  // [foamloop]

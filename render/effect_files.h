@@ -11,6 +11,8 @@
 
 #include <string>
 
+#include "sim/effect_aliases.h"  // [alias]
+
 #include "core/vfs.h"
 
 namespace render {
@@ -23,6 +25,18 @@ inline std::string EffectFile(const moho::Vfs& vfs, const std::string& path, boo
   if (!remastered || path.empty()) return path;
   std::string ours = std::string(kRemasteredEffects) + moho::Vfs::Normalize(path);
   return vfs.Exists(ours) ? ours : path;
+}
+
+// [alias] Remaster aliases (the engine's request, 2026-11-04): paths no game file has, which the engine's fixes hook gives to
+// ONE use each of a stock emitter (moho::EffectAliases, src/sim/effect_aliases.h: the one list the simulation reads too),
+// so that the remastered look can replace that use alone (the visuals track's UEF fires: ExplosionSmall's land deaths,
+// ExplosionSmallAir, FireCloudMed01, ... each its own; Chris: "a quick new death explosion for the ones that have
+// duplicates so it fits the unit"). Read as any path - the faction's own file, then the remastered one - and where the
+// visuals track has made neither, as the stock emitter it stands for (Particles::Blueprint).
+inline const char* EffectAlias(const std::string& normalized) {
+  for (const auto& [alias, stock] : moho::EffectAliases())
+    if (normalized == alias) return stock.c_str();
+  return nullptr;
 }
 
 // Where the visuals track keeps a faction's own version of a file the game shares: in the faction's

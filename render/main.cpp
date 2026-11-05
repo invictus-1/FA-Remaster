@@ -121,6 +121,8 @@
 //           simulation's state before that beat (its other verbs are not read: a benchmark's set-up, as the engine's
 //           B3 makes its two armies and orders them at each other, docs/benchmarks.md)
 // --noicons, --icon-scale <n>  strategic icons: off, or n screen pixels for each of a symbol's (key I switches them)
+// --icon-fade <share>  [iconzoom] a symbol comes in over that share of its blueprint's IconFadeInZoom (StrategicIcons::
+//           fadeShare): 0 at once, as the original (the default), 0.1 as before 2026-11-04
 // --ao      ambient occlusion in the modern look: 0 off to 1 full (key O switches it)
 // --msaa    anti-aliasing: samples per pixel of the scene, 1 (off), 2, 4 (the default) or 8
 // --detail  the models' quality setting: 1 full, 0.5 for a slower card, a huge value forces the finest level
@@ -208,12 +210,22 @@
 //           dissolved; padGrid=0: the pads' clearing of the cover drawn over the grass's square as it grows and shrinks
 //           with the zoom (as before), not on a grid of its own (GroundCover::PadArea); bladesGrowIn=0: the blades'
 //           tufts toward the square's edge at their full height wherever the thinning lets them be (as before)
+// --keep-decor-under-structures  [underfoot] the map's render-only plants, rocks and branches stand on where a structure
+//           stands or is being built (as before; World::clearUnderStructures off): without it they are taken away under it
+//           and stand again once it is gone
 // --leaf-light  the sun's light through leaves, grass blades and plants (World::leafLight; modern look)
 // --lamp-colour team|faction  [lampcolour] a unit's own faint glow (its 'hull' lamps) in its army's colour (team, the
 //           default) or its faction's own (faction: UEF blue whatever the army's colour; World::lampsTeamColour)
 // --hull-glow old|<strength>  [hullglow] a unit's own glow as before (old: as strong and as far as its lamps' list says, the
 //           army's colour as it is, all of it in the air, glows lying over each other adding up), or that strength (0.75 unless
 //           given; World::hullGlow, hullReach, hullEvenColours, hullAir, hullShare)
+// --building-glow old|<strength>  [buildingglow] a structure's glow and lamps as a unit's, as before (old), or its glow that
+//           many times hullGlow (1.33 unless given: as strong as before the big test; at most 20 world units far, shared only
+//           with other structures' glows and less, its other lamps 1.3 times as strong; World::hullBuildings,
+//           hullBuildingGlow, hullBuildingMost, hullBuildingShare, hullBuildingLamps)
+// --status-lights old|<share>  [statuslights] the game's signal lamps (a factory's red blinker while its army's store runs
+//           low, its green and yellow) as bright as before (old: 2.5 times their texture, as every particle that adds its
+//           light), or that share of it (0.4 unless given: as the original draws them; Particles::statusLights)
 // --lamp-budget even  [lampbudget] every unit in reach lights the same share of its lamps, as before (World::lampsNearFirst:
 //           those near what the camera looks at all of them)
 // --merge-bright  [mergeflux] lights merged in crowded squares as bright as all of them at their middle, as before
@@ -232,6 +244,11 @@
 //           clearer look of 2026-11-03 (Chris's big test); --energy-bend b: how much what is behind bends (0.35; 1 as of
 //           2026-10-28; 0 none); --energy-steady on|off: what stands off the ground (units) is never bent (on);
 //           --energy-light l, --energy-veil v, --energy-lines l, --energy-far f: EnergyShields' light, veil, restLines, farSide
+//           [shellglint] --energy-glint old|<strength>: the sun's mirror image on the lit shell as before (old: at full, and
+//           while the sun is low), or that strength (0.35 unless given), gone while the sun is low (EnergyShields::sunGlint,
+//           lowSunGlint)
+//           [rainhits] --energy-rain all: rain's faint shimmer all over a shield's upper side, as on 2026-11-03 (default: from
+//           where its drops meet the shell, a ring running out from each; EnergyShields::rainFromHits)
 // --ping-test  [pings] without a game: FAF's four pings (alert, move, attack, nuke) as its SimPing.lua makes them, script
 //           entities with the ping's mesh pulsing in size, in a row round where the camera starts, and a UEF ferry beacon
 //           in front of them (placed.h: both drawn by their meshes' CommandFeedback shaders, as the original does)
@@ -390,7 +407,9 @@
 // --water-detail  wet shorelines and stronger caustics (World::waterDetail; modern look); [shore] the sun's glint on the
 //           water softened by how much water a pixel covers (a calm sheen from far up), and with --surf the wet beach
 //           following the surf (wider and darker on exposed beaches, narrow in calm bays, a film after each wave);
-//           [bigtest] the bed under the shallows soaked as that wet beach (Water::shoreSoak; --no-shore-soak: as before)
+//           [bigtest] the bed under the shallows soaked as that wet beach (Water::shoreSoak; --no-shore-soak: as before);
+//           [soakfix] the band and the soak by the map's own heights, not by the ground as drawn at its level of detail
+//           (Water::soakFixed; --soak-old: by the drawn ground, as before)
 // --winter-water  winter water (winter_water.h, World::winterWater; modern look, a time of day): while snow lies the
 //           water goes over to a cold palette, slush and thin ice gather at the shores, no snow lies under the water
 //           (with --weather snow, or --snow-lying n to see it at that much snow, a thaw by smaller n)
@@ -403,6 +422,11 @@
 // --wakes-remade  [wakes] the ships' wakes remade (wakes.h, World::wakesRemade; modern look): arms that are lines of foam,
 //           streaks that keep their place on the water at the screen's resolution, a wake that runs out softly, for a ship
 //           of any size and speed (without it the wake as before)
+// --hull-wash old  [livewash] the white water where the lifted sea meets a ship's hull as before (Ocean::liveWash off: laid
+//           from the hull's box's waterline, all white inside it); by default (with --ocean-lift) measured from the hull as
+//           seen, a thin line at rest, wider at the bow under way, torn by noise streaming aft, swelling as waves run up it
+// --storm-foam n  [stormfoam] how much more a storm's sea foams (Ocean::stormFoam, 1; 0: as before; up to 3): more crests,
+//           wider and longer-lived patches, longer streaks downwind; none on a sea calmer than 0.6 (rain's and calmer)
 // --surf  surf and sea spray (surf.h, World::surf; modern look): waves run in to the map's shores, break into white water
 //           that runs up the beaches and drains back, burst on the rocks and throw spray up them; ships at speed throw
 //           spray off their bows; by the weather's wind (calm on a still day, most in a storm: --weather storm).
@@ -426,7 +450,8 @@
 //           6 [whitecaps] the whitecaps' parts (red the crest breaking now, green the fresh foam, blue the residue);
 //           --ocean-glitter 0: [bigtest] the sun's glitter as before (Ocean::glitter; 1, the default: from the waves' true
 //           slopes, softened by what a pixel takes in: a soft path of light round the sun's mirror image, not a field of
-//           single bright pixels)
+//           single bright pixels); --ocean-relief n: [relief] how much the waves' faces toward the sun (by night the moon)
+//           are lit more and those away from it less, in the water's own colour (Ocean::relief, 0.5; 0: as before)
 // --stream-water  [stream] streams as real water (stream_water.h, World::streamWater; modern look): a map's stream props
 //           (the visuals track's ribbons) drawn as water: deep and dark in the middle, the bed showing at the edges, a
 //           soft wet shore, ripples and foam carried downstream (faster where it drops, white round rocks and behind
@@ -509,10 +534,15 @@
 // --no-shader-cache  every shader compiled anew, none kept (DeviceDesc::shaderCache "-"), to measure compiling
 // --shader-cache <dir>  the compiled shaders kept in that folder (an empty one: to measure a first start)
 // --no-prepass  the large models' depth is not laid first (MeshRenderer::depthPrepass, on by default), to measure it
+// --shadow-fit-margin <units>, --no-shadow-fit-floor  [shadowtri] the sun's shadow maps fitted to what the camera sees with
+//           this margin all round (shadows.h's Shadows::fitMargin; 16 by default, 64 as before), and down to the map's lowest
+//           point (as before) instead of the lowest ground under the view (Shadows::fitLocalFloor, the default)
 // --no-shadow-fit, --shadow-fit  [cardcost] the sun's shadow maps draw every caster in each cascade's square (as before),
 //           or only what can cast a shadow onto what the camera sees (World::shadowFit, the default; the same picture)
 // --shadow-keep <n>  [cardcost] the sun's far shadow cascades drawn anew every n-th frame, in turn, kept in between while
 //           they serve (World::shadowKeep, shadows.h's Shadows::keepEvery); 0 or 1: every frame (the default)
+// --shadow-zoom-smooth  [shadowstep] the sun's shadow cascades as wide as the zoom asks every frame (as before), not on a
+//           ladder of sizes kept while they serve (World::shadowZoomSteps, shadows.h's Shadows::zoomSteps; the default)
 // --no-ray-refit, --ray-refit  [cardcost] the ray tracing scene built anew every frame (as before), or refitted where only
 //           where things stand changed (World::rayRefit, the default; ray_scene.h's RayScene::refit; the same picture)
 // --record-threads <n>  [mcrec] the units' and scenery's draws of a pass recorded on at most n threads at once
@@ -622,6 +652,10 @@
 //           hour and the weather, most at daybreak)
 // --fog-old  [weather] fog thickens the air all over, as before (World::lowFog off; by default fog past a quarter lies as a
 //           low layer on the ground and the water, in the mist's)
+// --fog-even  [mistpatch] the low fog's layer over all the map, and a thick fog's haze all over, as on 2026-11-03
+//           (World::mistPatches off; by default it lies in wide patches with clear air between them); --fog-clear n: where
+//           the patches' field begins to hold it (World::mistClear, 0.5: some two fifths of the ground in a patch; more:
+//           fewer and smaller patches)
 // --wet <0..1>  the ground starts that wet (World::wet; then it follows the weather): puddles at once
 // --weather <clear|rain|storm|snow|fog>  the weather (it turns a time of day on, noon unless given); key R
 //           steps through them. Given as an option, surfaces are wet or snowy from the start.
@@ -761,10 +795,13 @@ struct Options {
   FxStandSetup fx;                      // --fx, --fx-shot and their places
   bool fxAt = false, fxFrom = false, fxTo = false, fxRepeat = false;
   bool remasteredEffects = true;        // --effects-look original|remastered
+  float shadowFitMargin = -1;           // [shadowtri] --shadow-fit-margin (-1: Shadows' own)
+  bool shadowFitFloor = true;           // [shadowtri] --no-shadow-fit-floor
   bool prepass = true;                  // --no-prepass
   int shadowFit = -1;                   // [cardcost] --shadow-fit 1, --no-shadow-fit 0 (-1: World's own)
   int rayRefit = -1;                    // [cardcost] --ray-refit 1, --no-ray-refit 0 (-1: World's own)
   int shadowKeep = -1;                  // [cardcost] --shadow-keep (-1: World's own)
+  bool shadowZoomSmooth = false;        // [shadowstep] --shadow-zoom-smooth
   int recordThreads = 0;                // --record-threads [mcrec]
   int jobsAwake = -1;                   // --jobs-awake [mcrec] (-1: Jobs' own)
   int cardScenery = -1;                 // --card-scenery 2, --no-card-scenery 0 [gpuscenery] [step2b] (-1: World's own)
@@ -806,6 +843,8 @@ struct Options {
   bool waterRipples = false;            // --water-ripples
   bool wakesRemade = false;             // --wakes-remade [wakes]
   bool fixedStep = false;               // --fixed-step [wakes]
+  bool hullWashOld = false;             // [livewash] --hull-wash old
+  float stormFoam = 1;                  // [stormfoam] --storm-foam
   float rippleTest = 0, rippleTestRadius = 0.5f, rippleTestStrength = 1;  // --ripple-test
   float rippleSpeed = -1, rippleHalfLife = -1, rippleView = 0;  // --ripple-speed, --ripple-half-life, --ripple-view
   bool surf = false;                    // --surf
@@ -815,8 +854,10 @@ struct Options {
   float oceanHeight = 1, oceanGlint = 0.8f, oceanFoam = 1, oceanGlow = 1, oceanTilt = 1.5f;  // --ocean-height, -glint, -foam, -glow, -tilt
   int oceanView = 0;                                           // --ocean-view
   int oceanGlitter = 1;                                        // [bigtest] --ocean-glitter
+  float oceanRelief = 0.5f;                                    // [relief] --ocean-relief
   float foamPatches = 0;                                       // [foampatch] --foam-patches
   bool shoreSoak = true;                                       // [bigtest] --no-shore-soak
+  bool soakOld = false;                                        // [soakfix] --soak-old
   std::string surfTest;                 // --surf-test
   float surfTestRadius = 60;            // --surf-test-radius
   int surfView = 0;                     // --surf-view
@@ -879,13 +920,17 @@ struct Options {
   int energyShell = 1;                  // --energy-shell plain|lit ([litshell])
   bool lampsTeamColour = true;          // --lamp-colour team|faction ([lampcolour])
   float hullGlow = 0.75f;               // --hull-glow ([hullglow]; < 0: old)
+  float buildingGlow = -1;              // --building-glow ([buildingglow]; -1: its own, -2: old)
+  float statusLights = -1;              // --status-lights ([statuslights]; -1: its own; old: 1)
   bool lampsNearFirst = true;           // --lamp-budget ([lampbudget])
   bool mergeFlux = true;                // --merge-bright ([mergeflux])
   float energyHex = -1;                 // --energy-hex s ([litshell]; -1: its own)
   bool energyClassic = false;           // --energy-look 1028 ([clearshell])
+  bool energyRainAll = false;           // --energy-rain all ([rainhits])
   float energyBend = -1;                // --energy-bend b ([clearshell]; -1: its own)
   int energySteady = -1;                // --energy-steady on|off ([clearshell]; -1: its own)
   float energyLight = -1, energyVeil = -1, energyLines = -1, energyFar = -1;  // --energy-light/-veil/-lines/-far ([clearshell])
+  float energyGlint = -1;               // --energy-glint ([shellglint]; -1: its own, -2: old)
   bool pingTest = false;                // [pings] --ping-test
   bool unitScars = false, unitSnow = false;  // --unit-scars, --unit-snow
   bool unitDirt = false;                // --unit-dirt [unit dirt]
@@ -928,6 +973,7 @@ struct Options {
   bool groundUltra = false;             // --ground-ultra
   std::string coverMask;               // [cover] --cover-mask
   bool plantsFar = false, plantsRound = false, plantModels = false;  // [plantlod] --plants-far, --plants-round, --plant-models
+  bool keepDecorUnderStructures = false;  // [underfoot] --keep-decor-under-structures
   std::string plantLod;                // [plantlod] --plant-lod
   float sunSize = -1;                   // (its size, when given)
   bool clouds3d = false;                // --clouds-3d
@@ -975,6 +1021,7 @@ struct Options {
   std::string beyondLandLook;           // --beyond-land-look (beyondland)
   std::string inspect;                  // --inspect
   float iconScale = 0;  // screen pixels for each pixel of a strategic icon; 0: by the picture's height
+  float iconFade = -1;  // [iconzoom] --icon-fade (-1: StrategicIcons' own)
   Look look = Look::Modern;
   int frames = 0;
   float lodPixels = 0;
@@ -985,6 +1032,8 @@ struct Options {
   float clouds = 0.3f;                  // --clouds
   float mist = -1;                      // --mist
   bool fogOld = false;                  // [weather] --fog-old
+  bool fogEven = false;                 // [mistpatch] --fog-even
+  float fogClear = -1;                  // [mistpatch] --fog-clear
   int focus = 0;                        // --focus
   float playable[4] = {0, 0, 0, 0};     // --playable
   bool unexplored = false;              // --unexplored
@@ -1088,6 +1137,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--merge-bright") o->mergeFlux = false;        // [mergeflux]
     else if (a == "--no-tracers") o->tracers = false;
     else if (a == "--no-shore-soak") o->shoreSoak = false;  // [bigtest]
+    else if (a == "--soak-old") o->soakOld = true;  // [soakfix]
     else if (a == "--plain-ground") o->richGround = false;
     else if (a == "--map-ends") o->worldBeyond = false;
     else if (a == "--timings") o->timings = true;
@@ -1142,6 +1192,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--plants-far") o->plantsFar = true;      // [plantlod]
     else if (a == "--plants-round") o->plantsRound = true;  // [plantlod]
     else if (a == "--plant-models") o->plantModels = true;  // [plantlod]
+    else if (a == "--keep-decor-under-structures") o->keepDecorUnderStructures = true;  // [underfoot]
     else if (a == "--no-plant-motion") o->plantMotion = false;  // [leftover]
     else if (a == "--ground-matt") o->groundMatt = true;        // [leftover]
     else if (a == "--wildlife") o->wildlife = true;
@@ -1213,10 +1264,12 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--load-session-prepare") o->loadSessionPrepare = true;  // [session]
     else if (a == "--load-day-after") o->loadDayAfter = true;  // [session]
     else if (a == "--load-day") o->loadDay = true;  // [session]
+    else if (a == "--no-shadow-fit-floor") o->shadowFitFloor = false;  // [shadowtri]
     else if (a == "--prepass") o->prepass = true;
     else if (a == "--no-prepass") o->prepass = false;
     else if (a == "--shadow-fit") o->shadowFit = 1;  // [cardcost]
     else if (a == "--no-shadow-fit") o->shadowFit = 0;
+    else if (a == "--shadow-zoom-smooth") o->shadowZoomSmooth = true;  // [shadowstep]
     else if (a == "--ray-refit") o->rayRefit = 1;
     else if (a == "--no-ray-refit") o->rayRefit = 0;
     else if (a == "--card-scenery") o->cardScenery = 2;  // [gpuscenery]
@@ -1226,6 +1279,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--no-frame") o->frame = false;
     else if (a == "--no-beyond-haze") o->beyondHaze = false;
     else if (a == "--fog-old") o->fogOld = true;  // [weather]
+    else if (a == "--fog-even") o->fogEven = true;  // [mistpatch]
     else if (a == "--beyond-land") o->beyondLand = true;  // (beyondland)
     else if (a == "--noicons") o->icons = false;
     else if (a == "--unexplored") o->unexplored = true;
@@ -1346,6 +1400,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--ocean-glow") o->oceanGlow = std::clamp(static_cast<float>(atof(v)), 0.0f, 10.0f);
     else if (a == "--ocean-view") o->oceanView = atoi(v);
     else if (a == "--ocean-glitter") o->oceanGlitter = atoi(v);  // [bigtest]
+    else if (a == "--ocean-relief") o->oceanRelief = std::clamp(static_cast<float>(atof(v)), 0.0f, 1.0f);  // [relief]
     else if (a == "--foam-patches") o->foamPatches = std::clamp(static_cast<float>(atof(v)), 0.0f, 1.0f);  // [foampatch]
     else if (a == "--ocean-tilt") o->oceanTilt = std::clamp(static_cast<float>(atof(v)), 0.0f, 6.0f);
     else if (a == "--surf-strength") o->surfStrength = std::max(0.0f, static_cast<float>(atof(v)));
@@ -1354,17 +1409,23 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--surf-test") o->surfTest = v;
     else if (a == "--surf-test-radius") o->surfTestRadius = std::max(5.0f, static_cast<float>(atof(v)));
     else if (a == "--surf-view") o->surfView = atoi(v);
+    else if (a == "--hull-wash") o->hullWashOld = std::string(v) == "old";  // [livewash]
+    else if (a == "--storm-foam") o->stormFoam = std::clamp(static_cast<float>(atof(v)), 0.0f, 3.0f);  // [stormfoam]
     else if (a == "--energy-shield-health") o->energyShieldHealth = std::clamp(static_cast<float>(atof(v)), 0.0f, 1.0f);
     else if (a == "--energy-test") o->energyTest = std::max(0, atoi(v));
     else if (a == "--energy-shell") o->energyShell = std::string(v) == "plain" ? 0 : 1;
     else if (a == "--energy-hex") o->energyHex = static_cast<float>(atof(v));
     else if (a == "--energy-look") o->energyClassic = std::string(v) == "1028";
+    else if (a == "--energy-rain") o->energyRainAll = std::string(v) == "all";  // [rainhits]
     else if (a == "--energy-bend") o->energyBend = std::max(0.0f, static_cast<float>(atof(v)));
     else if (a == "--energy-steady") o->energySteady = std::string(v) == "off" ? 0 : 1;
     else if (a == "--energy-light") o->energyLight = std::max(0.0f, static_cast<float>(atof(v)));
     else if (a == "--energy-veil") o->energyVeil = std::max(0.0f, static_cast<float>(atof(v)));
     else if (a == "--energy-lines") o->energyLines = std::max(0.0f, static_cast<float>(atof(v)));
     else if (a == "--energy-far") o->energyFar = std::max(0.0f, static_cast<float>(atof(v)));
+    else if (a == "--energy-glint") o->energyGlint = std::string(v) == "old" ? -2.0f : std::max(0.0f, static_cast<float>(atof(v)));  // [shellglint]
+    else if (a == "--building-glow") o->buildingGlow = std::string(v) == "old" ? -2.0f : std::max(0.0f, static_cast<float>(atof(v)));  // [buildingglow]
+    else if (a == "--status-lights") o->statusLights = std::string(v) == "old" ? 1.0f : std::max(0.0f, static_cast<float>(atof(v)));  // [statuslights]
     else if (a == "--lamp-colour") o->lampsTeamColour = std::string(v) != "faction";  // [lampcolour]
     else if (a == "--hull-glow") o->hullGlow = std::string(v) == "old" ? -1.0f : std::max(0.0f, static_cast<float>(atof(v)));  // [hullglow]
     else if (a == "--lamp-budget") o->lampsNearFirst = std::string(v) != "even";  // [lampbudget]
@@ -1470,16 +1531,19 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--msaa") o->msaa = atoi(v);
     else if (a == "--ao") o->ao = static_cast<float>(atof(v));
     else if (a == "--icon-scale") o->iconScale = static_cast<float>(atof(v));
+    else if (a == "--icon-fade") o->iconFade = static_cast<float>(atof(v));  // [iconzoom]
     else if (a == "--sun") o->sun = static_cast<float>(atof(v));
     else if (a == "--sky") o->sky = static_cast<float>(atof(v));
     else if (a == "--exposure") o->exposure = static_cast<float>(atof(v));
     else if (a == "--time-of-day") o->timeOfDay = static_cast<float>(atof(v));
+    else if (a == "--fog-clear") o->fogClear = static_cast<float>(atof(v));  // [mistpatch]
     else if (a == "--day-length") o->dayLength = static_cast<float>(atof(v));
     else if (a == "--clouds") o->clouds = static_cast<float>(atof(v));
     else if (a == "--effects-look") o->remasteredEffects = std::string(v) != "original";
     else if (a == "--fx") o->fx.fx = v;
     else if (a == "--effects-quality") o->effectsQuality = static_cast<float>(atof(v));
     else if (a == "--shadow-size") o->shadowSize = atoi(v);
+    else if (a == "--shadow-fit-margin") o->shadowFitMargin = std::max(0.0f, static_cast<float>(atof(v)));  // [shadowtri]
     else if (a == "--shadow-mask-smooth") o->shadowMaskSmooth = static_cast<float>(atof(v));  // [shadowmask]
     else if (a == "--shadow-keep") o->shadowKeep = std::max(0, atoi(v));  // [cardcost]
     else if (a == "--record-threads") o->recordThreads = std::max(atoi(v), 0);  // [mcrec]
@@ -2067,17 +2131,22 @@ int main(int argc, char** argv) {
   world.water.ocean.glow = opt.oceanGlow;
   world.water.ocean.view = opt.oceanView;
   world.water.ocean.glitter = opt.oceanGlitter;  // [bigtest]
+  world.water.ocean.relief = opt.oceanRelief;    // [relief]
   world.water.ocean.foamPatches = opt.foamPatches;  // [foampatch]
   world.water.shoreSoak = opt.shoreSoak;          // [bigtest]
+  world.water.soakFixed = !opt.soakOld;           // [soakfix]
   world.water.ocean.tilt = opt.oceanTilt;
   if (opt.surfStrength >= 0) world.water.surf.strength = opt.surfStrength;
   if (opt.surfSpray >= 0) world.water.surf.sprayStrength = opt.surfSpray;
   if (opt.surfBreak > 0) world.water.surf.breakDepth = opt.surfBreak;
   world.water.surf.view = opt.surfView;
+  world.water.ocean.liveWash = !opt.hullWashOld;  // [livewash]
+  world.water.ocean.stormFoam = opt.stormFoam;    // [stormfoam]
   world.groundCover = opt.groundCover;
   world.plantsFar = opt.plantsFar;  // [plantlod]
   world.plantsRound = opt.plantsRound;
   world.plantModels = opt.plantModels;
+  if (opt.keepDecorUnderStructures) world.clearUnderStructures = false;  // [underfoot]
   if (!opt.plantLod.empty()) {  // [plantlod] --plant-lod name=value,...
     PlantLodTune& t = world.grass.plantLod;
     size_t at = 0;
@@ -2177,18 +2246,24 @@ int main(int argc, char** argv) {
   } else {
     world.hullGlow = opt.hullGlow;
   }
+  if (opt.buildingGlow == -2) world.hullBuildings = false;                  // [buildingglow] (old: as a unit's)
+  else if (opt.buildingGlow >= 0) world.hullBuildingGlow = opt.buildingGlow;
+  if (opt.statusLights >= 0) world.particles.statusLights = opt.statusLights;  // [statuslights]
   world.lampsNearFirst = opt.lampsNearFirst;  // [lampbudget]
   world.lights.mergeFlux = opt.mergeFlux;     // [mergeflux]
   if (opt.energyShieldHealth >= 0) world.energy.healthUnknown = opt.energyShieldHealth;
   world.energy.litShell = opt.energyShell != 0;  // [litshell]
   if (opt.energyHex >= 0) world.energy.hexSize = opt.energyHex;
   if (opt.energyClassic) world.energy.Classic1028();  // [clearshell]
+  if (opt.energyRainAll) world.energy.rainFromHits = false;  // [rainhits]
   if (opt.energyBend >= 0) world.energy.bend = opt.energyBend;
   if (opt.energySteady >= 0) world.energy.steadyUnits = opt.energySteady != 0;
   if (opt.energyLight >= 0) world.energy.light = opt.energyLight;
   if (opt.energyVeil >= 0) world.energy.veil = opt.energyVeil;
   if (opt.energyLines >= 0) world.energy.restLines = opt.energyLines;
   if (opt.energyFar >= 0) world.energy.farSide = opt.energyFar;
+  if (opt.energyGlint == -2) world.energy.sunGlint = 1, world.energy.lowSunGlint = true;  // [shellglint] (old)
+  else if (opt.energyGlint >= 0) world.energy.sunGlint = opt.energyGlint;
   world.unitScars = opt.unitScars;
   world.models.lampScale = opt.lampScale;  // [unit lamps] (--lamp-scale)
   world.models.hitShapes = opt.unitScars;  // (units' models keep their triangles for where hits lie: unit_wear.h)
@@ -2281,9 +2356,12 @@ int main(int argc, char** argv) {
   world.temporalMipBias = opt.fsr3Bias;
   world.shadowSize = opt.shadowSize;
   world.meshes.depthPrepass = opt.prepass;
+  if (opt.shadowFitMargin >= 0) world.shadows.fitMargin = opt.shadowFitMargin;  // [shadowtri]
+  world.shadows.fitLocalFloor = opt.shadowFitFloor;
   if (opt.shadowFit >= 0) world.shadowFit = opt.shadowFit > 0;  // [cardcost]
   if (opt.rayRefit >= 0) world.rayRefit = opt.rayRefit > 0;
   if (opt.shadowKeep >= 0) world.shadowKeep = opt.shadowKeep;
+  if (opt.shadowZoomSmooth) world.shadowZoomSteps = false;  // [shadowstep]
   world.meshes.recordThreads = opt.recordThreads;  // [mcrec]
   if (opt.cardScenery >= 0) world.cardScenery = opt.cardScenery;  // [gpuscenery] [step2b] (World passes it on each frame)
   if (opt.jobsAwake >= 0) Jobs::awakeMicroseconds = opt.jobsAwake;
@@ -2311,6 +2389,8 @@ int main(int argc, char** argv) {
   world.cloudCover = opt.clouds;
   world.mist = opt.mist;
   world.lowFog = !opt.fogOld;  // [weather]
+  world.mistPatches = !opt.fogEven;  // [mistpatch]
+  if (opt.fogClear >= 0) world.mistClear = opt.fogClear;
   world.weatherCuts = opt.weatherCuts;  // (airfix)
   world.borders = opt.border;
   world.unexplored = opt.unexplored;
@@ -2429,6 +2509,7 @@ int main(int argc, char** argv) {
   world.hide = opt.hide;
   world.meshes.detail = opt.detail;
   world.icons.scale = opt.iconScale;
+  if (opt.iconFade >= 0) world.icons.fadeShare = std::min(opt.iconFade, 0.9f);  // [iconzoom] --icon-fade
   world.ao.strength = opt.ao;
   if (opt.cineHaze >= 0) world.cinematicHaze = opt.cineHaze;  // --cine-haze
   if (opt.dof > 0) {  // --dof: the lens's depth of field

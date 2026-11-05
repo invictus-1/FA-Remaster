@@ -79,9 +79,23 @@ class EnergyShields {
   float veil = 0.25f, restLines = 0.45f, farSide = 0.2f, restShimmer = 0, weakFlicker = 0.35f, weakFlickerRate = 3;
   float rainSparks = 0, rainShimmer = 1;
   bool steadyUnits = true, softHorizon = true;
+  // [shellglint] (Chris's second test of 2026-11-04: "a random orange glow on shields", read as floating lights, at 37:44 as
+  // the sun went down) the sun's mirror image on the hex shell (LitShell's glint): `sunGlint` times as strong as glass gives
+  // it (0.35: with the haze round it at a quarter since 2026-11-03 it was the brightest thing on the dome, a blooming disc),
+  // and with `lowSunGlint` false gone while the sun is low (fading out from 33 degrees up to 17; held at 11 for the light,
+  // SkyAt), where its warm light on every dome, the same spot of each, reads as a lamp hanging there, not as glass. 1 and
+  // true: as before (Classic1028; viewer --energy-glint old).
+  float sunGlint = 0.35f;
+  bool lowSunGlint = false;
+  // [rainhits] (Chris's second test of 2026-11-04: the rain's shimmer "very good, exactly what I want", but from where the
+  // rain hits, not all over) rainShimmer's faint light along the lines from where the drops meet the shell's upper side:
+  // a ring running out from each, more of them the harder it rains (energy_shields.cpp, RainHits). False: the shimmer all
+  // over the upper side, as on 2026-11-03 (viewer --energy-rain all). (With rainShimmer 0, as Classic1028, neither.)
+  bool rainFromHits = true;
   void Classic1028() {
     bend = 1, veil = restLines = farSide = restShimmer = contactGlow = 1, weakFlicker = 0.85f, weakFlickerRate = 9;
     rainSparks = 1, rainShimmer = 0, steadyUnits = softHorizon = false;
+    sunGlint = 1, lowSunGlint = true;  // [shellglint]
   }
   // [clearshell] The map's ground (Terrain::HeightTexture, HeightUnit; the map's width and height), for steadyUnits; none: all of
   // what is behind bends.

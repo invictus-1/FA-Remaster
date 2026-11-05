@@ -48,6 +48,11 @@ class Wakes {
                      float odometer);
   // Into the scene's pass, after the water.
   void Draw(const View& view);
+  // [prebuild] The pipelines this frame's look draws the wakes with made now, before the first ship's wake (World::
+  // PrepareAhead, after Begin; Chris's second test had them 131 + 88 ms at the first ship's): the remade wake's where it is
+  // on, and with `lifted` (the ocean lifts the sea: World::oceanLift) the variant that rides the waves. What Draw made at
+  // its first use; once made, a check alone.
+  void Prepare(bool lifted);
   int Count() const { return static_cast<int>(wakes_.size()); }
   // [lift] The ocean whose lifted waves the wakes ride (ocean.h; World sets it each frame; none: they lie flat, as before).
   const class Ocean* ride = nullptr;
@@ -66,6 +71,8 @@ class Wakes {
   bool remadeTried_ = false;      // [wakes] (its pipeline asked for once)
   gfx::Pipeline ridePipeline_[2];          // [lift] (riding the waves: the wake before, the remade one)
   bool rideTried_[2] = {false, false};
+  void MakeRemade();               // [prebuild] (remadePipeline_, asked for once: Draw, Prepare)
+  gfx::Pipeline MakeRiding(int k);  // [prebuild] (ridePipeline_[k], asked for once: Draw, Prepare)
   std::vector<Wake> wakes_;
 };
 

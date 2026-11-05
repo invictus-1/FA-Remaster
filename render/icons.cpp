@@ -315,14 +315,10 @@ void StrategicIcons::AddUnder(int icon, Vec3 position, float alpha) {
 void StrategicIcons::Add(const Kind* kind, Vec3 position, Vec3 color, bool selected, bool blip, bool known) {
   if (kind->icon < 0) return;
   const int icon = blip && !known && kind->iconBlip >= 0 ? kind->iconBlip : selected && kind->iconSelected >= 0 ? kind->iconSelected : kind->icon;
-  // how far it has come in: nothing below (1 - fadeShare) of its distance, all of it from the distance on ([lodscale]
-  // the distance times the camera's LOD scale, as the original's RenderStrategicIcons 0x85ba52 reads the scaled row)
-  const float distance = Length(position - view_.eye) * view_.lodScale;
-  const float from = kind->fadeIn * (1 - fadeShare);
-  float alpha = kind->fadeIn > from ? (distance - from) / (kind->fadeIn - from) : (distance >= from ? 1.0f : 0.0f);
+  // how far it has come in ([iconzoom] ComeIn: by the zoom, as the original measures it)
+  float alpha = ComeIn(kind, position);
   if (blip || always) alpha = 1;  // (a blip is all there is to see of the unit; or the player wants them at every distance)
   if (alpha <= 0) return;
-  alpha = std::min(alpha, 1.0f);
   const Mat4& m = view_.constants.viewProj;
   const float w = m.m[3][0] * position.x + m.m[3][1] * position.y + m.m[3][2] * position.z + m.m[3][3];
   if (w <= 1e-4f) return;  // behind the camera
@@ -334,6 +330,26 @@ void StrategicIcons::Add(const Kind* kind, Vec3 position, Vec3 color, bool selec
   if (x + halfW < 0 || y + halfH < 0 || x - halfW > static_cast<float>(view_.width) || y - halfH > static_cast<float>(view_.height)) return;
   auto byte = [](float v) { return static_cast<uint32_t>(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
   listed_.push_back({x, y, icon, byte(alpha) << 24 | byte(color.z) << 16 | byte(color.y) << 8 | byte(color.x), kind->priority});
+}
+
+// [iconzoom] The original (CWldSession::RenderStrategicIcons): the unit's x and z, the map's elevation there
+// (STIMap::GetElevation 0x44fb90; the water's where that is higher), plus two small heights read from the unit (+0xb0 of
+// one of its objects and +0x2dc of another: not identified, taken as 0 here), dotted with the camera's scaled view row
+// (+0x294..+0x2a0, the one 0x85ba52 reads too) and compared with the mesh blueprint's IconFadeInZoom (+0x70): below it,
+// no symbol. Here the view's depth is the projection's w row (Mat4::Perspective: the distance along the view), scaled
+// as the original's row by the camera's LOD scale ([lodscale]).
+float StrategicIcons::Measure(Vec3 position) const {
+  if (groundHeight) position.y = groundHeight(position.x, position.z);
+  const Mat4& m = view_.constants.viewProj;
+  return (m.m[3][0] * position.x + m.m[3][1] * position.y + m.m[3][2] * position.z + m.m[3][3]) * view_.lodScale;
+}
+
+float StrategicIcons::ComeIn(const Kind* kind, Vec3 position) const {
+  // nothing below (1 - fadeShare) of its zoom, all of it from the zoom on (fadeShare 0: all or nothing at the zoom)
+  const float zoom = Measure(position);
+  const float from = kind->fadeIn * (1 - fadeShare);
+  const float alpha = kind->fadeIn > from ? (zoom - from) / (kind->fadeIn - from) : (zoom >= kind->fadeIn ? 1.0f : 0.0f);
+  return std::clamp(alpha, 0.0f, 1.0f);
 }
 
 void StrategicIcons::Draw() {

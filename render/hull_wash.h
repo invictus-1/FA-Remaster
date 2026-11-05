@@ -30,6 +30,10 @@ class HullWash {
   void Draw(const View& view, const Camera& camera, gfx::Texture sceneDepth, Ocean& ocean, gfx::Texture heights, float heightUnit, float mapWidth,
             float mapHeight, float level);
   int Drawn() const { return drawn_; }  // (hulls drawn the last frame)
+  // [prebuild] Its pipeline (and its cube) made now, before the first ship rides the lifted sea (World::PrepareAhead, while
+  // the ocean lifts it: Chris's second test had it 195 ms at the first ship's). What Draw made at its first use; once
+  // made, a check alone.
+  void Prepare() { Ready(); }
 
  private:
   bool Ready();

@@ -342,6 +342,24 @@ float ThroughSurface(float3 bed, float level) {
 }
 #endif
 
+// [soakfix] (Water::soakFixed: the view's shore.x 2) The map's own ground at a place, between its grid points (the ground's
+// pass's HeightBilinear, its finest, the map mirrored beyond its edge), from the heights at t20 (the lifted water's
+// oceanHeights, else waterGround): where the ground lies whatever level of detail it is drawn at. With them bound alone
+// (groundInfo.x; else 0).
+#if LIFT
+#define SOAK_HEIGHTS oceanHeights
+#else
+#define SOAK_HEIGHTS waterGround
+#endif
+float GroundUnder(float2 xz) {
+  float2 p = MirrorUv(xz * mapSize.zw) * mapSize.xy;
+  float2 f = floor(p), t = p - f;
+  int2 c = int2(f), most = int2(mapSize.xy);
+  float a = SOAK_HEIGHTS.Load(int3(min(c, most), 0)), b = SOAK_HEIGHTS.Load(int3(min(c + int2(1, 0), most), 0));
+  float d = SOAK_HEIGHTS.Load(int3(min(c + int2(0, 1), most), 0)), e = SOAK_HEIGHTS.Load(int3(min(c + int2(1, 1), most), 0));
+  return lerp(lerp(a, b, t.x), lerp(d, e, t.x), t.y) * groundInfo.x;
+}
+
 #if SURF_WET
 // [shore] (World::waterDetail with the surf: SURF_WET) The beach just above the water as the surf wets it (surf.h, SurfWetAt), at the
 // pixel's ground `bed`: the ground as the ground's pass drew it (`behind`, its own wet band by height narrowed meanwhile to
@@ -365,8 +383,11 @@ float4 WetBeach(float2 pixel, float3 bed, float grain, inout uint coverage) {
   if (surfLook3.x > 2.5) return float4(film, wet * 0.5, 0, 1);
   if (coverage == 0 || wet < 0.004) discard;
   // what the ground's pass laid there already (its band by height: terrain.cpp's formula, the view's shore)
-  float over = bed.y - shore.y;
-  float groundWet = saturate(1 - (over + (CloudNoise(float3(bed.xz * 0.7, 2.5)) - 0.5) * shore.z * 0.8) / max(shore.z, 1e-3)) * saturate(over * 20 + 1);
+  // ([soakfix] with shore.x 2 by the map's own heights, and on under the water: as the ground's pass has it now)
+  const bool fixedBand = shore.x > 1.5 && groundInfo.x > 0;
+  float over = (fixedBand ? GroundUnder(bed.xz) : bed.y) - shore.y;
+  float groundWet = saturate(1 - (over + (CloudNoise(float3(bed.xz * 0.7, 2.5)) - 0.5) * shore.z * 0.8) / max(shore.z, 1e-3)) *
+                    (fixedBand ? 1 - smoothstep(0, kSoakDepth, -over) : saturate(over * 20 + 1));
   // soaked sand: its albedo as the ground's band has it (0.6) in a calm bay, darker on an exposed beach, a little more under
   // the film; the darker of the two
   float had = lerp(1, 0.6, groundWet);
@@ -394,6 +415,84 @@ float4 WetBeach(float2 pixel, float3 bed, float grain, inout uint coverage) {
   float spec = min(D * F * saturate(dot(n, sunDirection)) / (4 * max(dot(n, -toPixel), 0.05)), 20);
   c += ThroughAirTo(ToLinear(sunColor) * (lightMultiplier * modern.x) * (spec * 0.7 * film * (1 - groundWet) * shadow), bed) - air;
   return float4(c, 1);
+}
+#endif
+
+#if LIFT
+// [livewash] (Ocean::liveWash, oceanMore.y; Chris's second test, 2026-11-04: the white round a ship "like a barrier around
+// the ship vs water") The hulls' wash measured from the hull as the eye sees it. The hulls' list gives each a box's
+// waterline, an ellipse toward its bow and a fuller one toward its stern; round a sharp bow, a rounded or narrow stern, or
+// a hull narrower than its box (guns and sponsons over the side), that line lies well off the hull, and the wash laid
+// all white inside it (its distance 0 there) showed as a solid pad of the box's shape hugging the ship.
+// Whether a riding hull stands up out of the sea at `place` (a hand's breadth over the water there), as the eye sees it:
+// what the scene shows at its pixel stands above the water there (the hull's side or deck over it; at open water the sea's
+// own bed shows, below it) and not far above it (not a unit flying over the sea). Off the screen or the sky: no.
+float HullStandsAt(float3 place) {
+  float4 clip = mul(viewProj, float4(place, 1));
+  if (clip.w <= 1e-4) return 0;
+  float2 at = (clip.xy / clip.w * float2(0.5, -0.5) + 0.5) * viewport.xy;
+  if (any(at < 0) || any(at >= viewport.xy)) return 0;
+  float d = SCENE_DEPTH(int2(at), 0);
+  if (d <= 0) return 0;
+  float rise = WorldAt(at, d).y - place.y;
+  return rise > -0.03 && rise < 4 ? 1 : 0;
+}
+// How far from `world` (a place on the lifted water) the hull stands, as seen: looked for along `inward` (x, z, length 1)
+// in six steps out to `reach` world units, then halved twice between the last open step and the first on the hull. Very
+// large where none stands within reach.
+float HullDistance(float3 world, float2 inward, float reach) {
+  float stride = reach / 6, open = 0;
+  [loop] for (int k = 1; k <= 6; ++k) {
+    float s = stride * k;
+    [branch] if (HullStandsAt(world + float3(inward.x * s, 0.03, inward.y * s)) > 0.5) {
+      float lo = open, hi = s;
+      [unroll] for (int j = 0; j < 2; ++j) {
+        float mid = (lo + hi) * 0.5;
+        if (HullStandsAt(world + float3(inward.x * mid, 0.03, inward.y * mid)) > 0.5) hi = mid;
+        else lo = mid;
+      }
+      return (lo + hi) * 0.5;
+    }
+    open = s;
+  }
+  return 1e3;
+}
+// The live wash at a place on the water near a hull (OceanHullAt's `hull`; `world` the lifted surface there; the pixel's
+// `grain` and the water's `lace`; how rough the sea is, how fast the hull runs (0..1), its bow and stern shares and its side
+// toward the wind's sea, as the old wash has them): how white (0..1).
+// - a thin line where the sea meets the hull at rest (a few hundredths of a unit), next to none along the sides of a ship
+//   lying still in a calm sea but where a wave runs up its side;
+// - wider and whiter at the bow under way (its bow wave, to some 0.3 units at full speed) and along the sides at speed;
+// - swelling and whitening as the water stands higher against the hull just now (the short waves running along it: the
+//   lifted surface over the waterline the hull rides at, as a share of half the sea's height, at least 0.05 units: the
+//   old wash took a fifth of it, at least 0.02, so that on a calm sea any ripple stood it at full), and pulsing with a
+//   wave running aft along the hull;
+// - torn by two sizes of noise laid along the hull (bow forward) and out from it, streaming aft with the hull's speed
+//   (a little faster: the water it pushes aside) and outward from the hull as it spreads, never still.
+float LiveWash(OceanHullNear hull, float3 world, float grain, float lace, float rough, float run, float bow, float stern, float windward) {
+  float hs = oceanLook2.x;
+  float slap = saturate((world.y - hull.waterline) / max(hs * 0.5, 0.05));
+  float width = 0.02 + 0.05 * rough + 0.05 * run + 0.22 * bow * run + 0.10 * slap * (0.4 + rough);
+  // (the hull as seen: looked for along the way into the box's line, out to past where that line lies plus a share of the
+  // beam, for a sharp bow or a narrow stern well inside it)
+  float reach = max(hull.away, 0) + 0.45 * hull.beam + width + 0.1;
+  float gap = HullDistance(world, -hull.outward, reach);
+  if (gap > 100) return 0;
+  float d = gap / width;
+  [branch] if (d >= 1) return 0;
+  // (a wave running aft along the hull, faster under way, its crests where the water stands higher)
+  float pulse = 0.5 + 0.5 * sin(hull.alongUnits * 2.6 + time * (2.0 + 2.5 * run) + lace * 2.5);
+  float a = hull.alongUnits + time * (hull.speed * 1.2 + 0.25);  // (streaming aft along the hull)
+  float o = gap - time * (0.12 + 0.2 * run);                      // (and out from it)
+  float coarse = CloudNoise(float3(a * 3.1, o * 9.0, time * 0.8 + 1.7));
+  float fine = CloudNoise(float3(a * 8.3 + 4.1, o * 21.0, time * 1.6 + 5.3));
+  coarse = lerp(0.5, coarse, saturate(1.5 - grain * 6));
+  fine = lerp(0.5, fine, saturate(1.5 - grain * 16));
+  float tear = coarse * 0.55 + fine * 0.25 + lace * 0.2;
+  float body = 1 - smoothstep(0.1, 1, d);
+  float torn = smoothstep(0.5, 0.66, tear + 0.22 * (1 - d) * (0.5 + 0.5 * pulse) - 0.1 + 0.15 * slap);
+  float amount = saturate(0.05 + 0.45 * rough * windward + 0.9 * bow * run + 0.35 * run + 0.6 * slap * (0.6 + 0.4 * pulse)) * (1 - 0.8 * stern);
+  return body * torn * amount;
 }
 #endif
 
@@ -589,6 +688,20 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   // game's height, looking down into the water, this is most of what shows of them)
   light *= 1 + clamp(dot(rippleTilt, normalize(sunDirection.xz + 1e-5)) * saturate(sunDirection.y * 4) * shadow, -0.45, 0.45);
 #endif
+  // [relief] (Ocean::relief: oceanLook5.x) the water's own colour lit by the waves' faces: those toward the sun (by night the
+  // moon) take more of its light and those away from it less (the cosine on the face, `relief` of the way from the level
+  // water's), the sky's light a little more on the side it comes from; on the whole as before. From above nothing else showed
+  // the waves when the sun was low or behind a cloud: the sky's mirror image is a fiftieth of what is seen there, and a low
+  // sun's glint cannot reach an eye looking down (Chris's second test, 2026-11-04: "Can't even tell its water").
+  float3 bodyLight = light;
+#if OCEAN
+  [branch] if (oceanLook5.x > 0) {
+    float3 face = normalize(float3(-ocean.slope.x, 1, -ocean.slope.y));
+    float sunFace = lerp(saturate(sunDirection.y), saturate(dot(face, sunDirection)), oceanLook5.x);
+    float skyFace = oceanLook5.x * 0.5 * clamp(dot(face.xz, normalize(sunDirection.xz + 1e-5)), -0.5, 0.5);
+    bodyLight += skyLight * skyFace + sunLight * ((sunFace - saturate(sunDirection.y)) * 0.6 * shadow);
+  }
+#endif
   // lamps and flashes near the water: their light on its body and foam, and their glint on its waves
 #if RAYS
   rayLightsAtMost = 2;  // (two rays for the small lights' shadows on the water; lighting.h, SmallLightsTraced)
@@ -667,12 +780,24 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
     float soakGround = groundInfo.x > 0 ? GroundTop(bedBent.xz) : bedBent.y;
 #endif
     float onBed = saturate(1 - (bedBent.y - soakGround - 0.15) / 0.3);
+    float soakDeep = deepBent;
 #if SURF_WET
     float soaked = lerp(0.6, 0.48, surfField.SampleLevel(samplerLinearClamp, (bedBent.xz - surfArea.xy) * surfArea.zw, 0).a * surfLook3.y);
 #else
     float soaked = 0.6;
 #endif
-    under *= lerp(1, soaked, onBed * (1 - smoothstep(0, kSoakDepth, deepBent)));
+    // [soakfix] (Water::soakFixed: shore.x 2) its depth from the map's own ground under the place the eye sees there, not
+    // from the ground as drawn (its level of detail by the camera's distance moved it by tenths of a unit, and with it where
+    // the soak ended, along the whole shore at once as the camera moved); what stands off that ground by more than the drawn
+    // ground can lie off it (half a unit) left as it is. The ground's pass has soaked the bed to its wet band's 0.6 already
+    // (terrain.cpp): here only an exposed beach's darker soak over that.
+    [branch] if (shore.x > 1.5) {
+      soakGround = groundInfo.x > 0 ? GroundUnder(bedBent.xz) : bedBent.y;
+      soakDeep = max(i.world.y + level - soakGround, 0);
+      onBed = saturate(1 - (bedBent.y - soakGround - 0.5) / 0.4);
+      soaked /= 0.6;
+    }
+    under *= lerp(1, soaked, onBed * (1 - smoothstep(0, kSoakDepth, soakDeep)));
   }
 
   // the bright net on a shallow bed in sunlight
@@ -716,7 +841,7 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
     own = lerp(own, lerp(float3(0.027, 0.672, 0.604), float3(0.001, 0.019, 0.058), 0.97), standing);
   }
 #endif
-  float3 color = lerp(under * kept, own * (light + lamps) * 0.6, hidden);
+  float3 color = lerp(under * kept, own * (bodyLight + lamps) * 0.6, hidden);  // ([relief] bodyLight)
 
   // foam: at the shore and round what stands in the water. Thick at the waterline and thinning to
   // lace over the first half unit of depth; fronts of it run in toward the land, broken by the
@@ -828,6 +953,8 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
     float windward = saturate(-dot(hull.outward, oceanWind.xy) * 1.5 + 0.2);
     float stern = saturate(-hull.along * 2.5 - 1.5);
     float wash = body * torn * saturate(0.2 + 0.6 * rough * windward + 0.8 * bow * run + 0.5 * excess) * (1 - 0.7 * stern);
+    // [livewash] (Ocean::liveWash) measured from the hull as seen, thin, torn and moving (LiveWash, above)
+    [branch] if (oceanMore.y > 0.5) wash = LiveWash(hull, i.world, grain, lace, rough, run, bow, stern, windward);
     float3 face = normalize(float3(-ocean.slope.x, 1, -ocean.slope.y));
     float3 washLight = skyLight + sunLight * (saturate(dot(face, sunDirection)) * shadow) + lamps;
     color = lerp(color, washLight * 0.9, wash * 0.95);
@@ -1099,9 +1226,11 @@ gfx::Pipeline Water::OceanPipeline(int key) {
 void Water::PrepareOcean(bool ripples, bool winter, bool surf, bool wet, bool lift) {
   if (!map_ || !map_->water.present || !modern_) return;
   // (the variants the options on now may want: with the ripples' field or without it, in winter or not, with the surf;
-  // [lift] lifted, or flat while the lift is off)
+  // [lift] lifted, or flat while the lift is off; [prebuild] with the lift on, the flat ones too: Draw takes them the frames
+  // the lifted grid has no patch (Ocean::Lifted false: none of its patches placed), and Chris's second test froze 3.1 s an hour in, the
+  // first such frame, for one of them (the driver 1.8 s of it))
   for (int k = 0; k < 32; ++k) {
-    if (((k & 1) != 0 && !ripples) || ((k & 2) != 0 && !winter) || ((k & 4) != 0 && !surf) || ((k & 8) != 0 && !(surf && wet)) || ((k & 16) != 0) != lift) continue;
+    if (((k & 1) != 0 && !ripples) || ((k & 2) != 0 && !winter) || ((k & 4) != 0 && !surf) || ((k & 8) != 0 && !(surf && wet)) || ((k & 16) != 0 && !lift)) continue;
     OceanPipeline(k);
   }
 }

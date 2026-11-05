@@ -7,6 +7,8 @@
 // near ground gets small quads, far ground large ones, and within each level the vertices slide
 // toward the next coarser grid as distance grows, so levels meet without cracks or popping.
 #pragma once
+#include <algorithm>  // [shadowtri] (LowestIn)
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -183,6 +185,37 @@ class Terrain {
     float lowest = levels_.back().lo[0];
     for (float lo : levels_.back().lo) lowest = lo < lowest ? lo : lowest;
     return lowest;
+  }
+  // [shadowtri] The ground's lowest point under a box of the world (x0..x1, z0..z1; world height): the lowest of the nodes
+  // it touches, at the finest level where it touches at most 16 each way (a few hundred nodes looked at, at most; a node
+  // holds the points on its edges, so the box's own are in). The ground beyond the map's edge is the map mirrored, one copy
+  // each way as drawn (InWorld): a box reaching into a copy takes the part of the map that copy's piece mirrors (the map
+  // from its edge in as far as the box reaches out, a little more than is needed). A box reaching past those copies, an
+  // empty one, or no map: the map's lowest (Lowest), as before. Shadows::fitLocalFloor's floor.
+  float LowestIn(float x0, float z0, float x1, float z1) const {
+    if (levels_.empty() || !map_ || !(x0 <= x1 && z0 <= z1)) return Lowest();
+    const float w = static_cast<float>(map_->width), h = static_cast<float>(map_->height);
+    if (!(x0 >= -w && z0 >= -h && x1 <= 2 * w && z1 <= 2 * h)) return Lowest();
+    // (folded onto the map: a..b of a side `size` long, to the part of 0..size it and its mirror images cover)
+    auto fold = [](float a, float b, float size, float* lo, float* hi) {
+      *lo = std::max(a, 0.0f);
+      *hi = std::min(b, size);
+      if (a < 0) *lo = 0, *hi = std::max(*hi, std::min(-a, size));
+      if (b > size) *hi = size, *lo = std::min(*lo, std::max(2 * size - b, 0.0f));
+    };
+    float fx0, fx1, fz0, fz1;
+    fold(x0, x1, w, &fx0, &fx1);
+    fold(z0, z1, h, &fz0, &fz1);
+    size_t k = 0;
+    while (k + 1 < levels_.size() && std::max(fx1 - fx0, fz1 - fz0) > 16.0f * static_cast<float>(levels_[k].nodeCells)) ++k;
+    const Level& L = levels_[k];
+    const float cells = static_cast<float>(L.nodeCells);
+    const int nx0 = std::min(static_cast<int>(fx0 / cells), L.nx - 1), nx1 = std::min(static_cast<int>(fx1 / cells), L.nx - 1);
+    const int nz0 = std::min(static_cast<int>(fz0 / cells), L.nz - 1), nz1 = std::min(static_cast<int>(fz1 / cells), L.nz - 1);
+    float lowest = std::numeric_limits<float>::max();
+    for (int nz = nz0; nz <= nz1; ++nz)
+      for (int nx = nx0; nx <= nx1; ++nx) lowest = std::min(lowest, L.lo[static_cast<size_t>(nz) * static_cast<size_t>(L.nx) + static_cast<size_t>(nx)]);
+    return lowest < std::numeric_limits<float>::max() ? lowest : Lowest();
   }
   // Numbers from the last Draw.
   int drawnPatches = 0;

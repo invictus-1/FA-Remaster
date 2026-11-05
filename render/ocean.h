@@ -66,10 +66,13 @@ cbuffer Ocean : register(b2) {
   float4 oceanLook;        // x the glint's least spread of slopes (squared); y the glow through the crests; z the foam's strength; w a view for checking
   float4 oceanLook2;       // x the sea's significant height (world units); y the foam far off (a share); z the slopes' tilt times (from above: twice); w [lift] 1 = the surface lifted
   float4 oceanLook3;       // x the Jacobian below which the surface foams; y the glint's strength (1); z [bigtest] 1 the glitter softened (Ocean::glitter)
+  float4 oceanMore;        // x [stormfoam] how much more a storm foams (0 .. 1 and more: Ocean::stormFoam, by how rough the sea is; 0 as before);
+                           // y [livewash] 1 = the hulls' wash torn and moving, measured from the hull as seen (Ocean::liveWash)
   float4 oceanLook4;       // [whitecaps] xy how far the foam has drifted (world units, within 4096: its pattern drifts with it); z [hulls] how many hulls
   float4 oceanHulls[72];   // [hulls] what floats in the sea (Ocean::AddHull), three rows each: x, z its middle, its way (x, z); its waterline's
                            // half length and half beam, its speed, -; its waterline's height there, the slopes it rides (dh/dx, dh/dz), -
   float4 oceanPatchTurn[2];  // [foampatch] each foam patch's main way in its picture (radians; patches 0-3, 4-7)
+  float4 oceanLook5;         // [relief] x how much the waves' faces lit by the sun show in the water's own colour (Ocean::relief)
 };
 Texture2D oceanSlope[3] : register(t10);  // the slopes along x and z, and their squares (mip levels: their means)
 Texture2D oceanDisp[3] : register(t13);   // the sideways shift along x, the height, the shift along z; w the slopes' product
@@ -198,11 +201,13 @@ OceanHere OceanAt(float2 xz, float2 dxdx, float2 dxdy, float calm, float tilt) {
 struct OceanHullNear {
   float away, along, speed, waterline, beam;
   float2 outward;
+  float alongUnits;  // [livewash] where along it in world units from its middle (its bow's way +; not clamped)
 };
 OceanHullNear OceanHullAt(float2 xz) {
   OceanHullNear o;
   o.away = 1e6;
   o.along = 0;
+  o.alongUnits = 0;
   o.speed = 0;
   o.waterline = 0;
   o.beam = 1;
@@ -223,6 +228,7 @@ OceanHullNear OceanHullAt(float2 xz) {
       float4 c = oceanHulls[h * 3 + 2];
       o.away = away;
       o.along = clamp(u / b.x, -1, 1);
+      o.alongUnits = u;  // [livewash]
       o.speed = b.z;
       o.waterline = c.x + dot(c.yz, d);
       o.beam = b.y;
@@ -371,14 +377,16 @@ OceanCaps OceanWhitecapsParts(OceanHere o, float2 xz, float2 dxdx, float2 dxdy, 
   float3 shown = saturate(1.5 - grain * size * 2);
   float3 ridge = 0.73;  // (the ridges' mean)
   [unroll] for (int k = 0; k < 3; ++k) {  // (no branch: the cut's softness reads the pattern's change across pixels)
-    float n = CloudNoise(float3(q.x * size[k], q.y * size[k] * 0.2, 2.3 + 3.1 * k));
+    // ([stormfoam] a storm's streaks drawn out longer along the wind: to 2.5 times at oceanMore.x 1)
+    float n = CloudNoise(float3(q.x * size[k], q.y * size[k] * 0.2 / (1 + 1.5 * oceanMore.x), 2.3 + 3.1 * k));
     ridge[k] = lerp(0.73, 1 - abs(2 * n - 1), shown[k]);
   }
   // (spread to a mean of a half and a deviation of 0.2: the sum's own are about 0.66 and 0.083, from a model of the noise)
   float pattern = (dot(ridge, weight) * 0.7 + lace * 0.3 - 0.66) * 2.4 + 0.5;
   // (how much the pattern would vary that does not show at this pixel: the cut softened by it)
   float hidden = 0.2 * sqrt(dot(weight * weight, 1 - shown * shown) / 0.357);
-  float strength = oceanLook.z;
+  // ([stormfoam] a storm's foam the thicker: its patches wider and more of them whole, oceanMore.x)
+  float strength = oceanLook.z * (1 + 0.6 * oceanMore.x);
   float cover = o.foam * strength, fresh = saturate(o.fresh * strength);
   // [foampatch] the patches' foam in the pattern's place where they show (oceanLook4.w their share, Ocean::foamPatches): a
   // patch's white is over every cut, its clear water under the cut but of the thickest foam; gone where a patch's picture
@@ -415,7 +423,8 @@ float2 OceanWhitecaps(OceanHere o, float2 xz, float2 dxdx, float2 dxdy, float la
   // from a pixel of some 0.06 world units on, to half by 0.26)
   float far = saturate((max(length(dxdx), length(dxdy)) - 0.06) / 0.2);
   float body = lerp(0.6, 1, c.thick);
-  float white = max(max(c.crest, c.laid * body), c.residue * body * lerp(0.8, 1, c.young)) * lerp(1, 0.5, far);
+  // ([stormfoam] a storm's dimmed less far off: from high up its sea reads white-streaked, not plain)
+  float white = max(max(c.crest, c.laid * body), c.residue * body * lerp(0.8, 1, c.young)) * lerp(1, lerp(0.5, 0.7, saturate(oceanMore.x)), far);
   float bright = lerp(0.5, 0.95, c.young) * lerp(0.8, 1.05, max(c.thick, c.crest));
   return float2(white, bright * lerp(1, 0.75, far));
 }
@@ -550,6 +559,13 @@ class Ocean {
   // turns within a pixel lit it fully or not at all), the light it throws on the whole kept: a soft path of light round the
   // sun's mirror image, the water elsewhere calm. 0: the glitter as before (viewer --ocean-glitter 0).
   int glitter = 1;
+  // [relief] (Chris's second test, 2026-11-04: "Can't even tell its water gotta fix it its extremely dull now", "water lost its
+  // luster") The water's own colour lit by the waves' faces: those turned toward the sun (by night the moon) take more of its
+  // light and those turned away less, as the ground's slopes do, and of the sky's light a little more on the side the light
+  // comes from; `relief` of it (0..1; on the whole as bright as before). From above the waves showed by nothing but their
+  // foam when the sun was low or behind a cloud: the sky's mirror image is a fiftieth of what is seen there, and a low sun's
+  // glint cannot reach an eye looking down. 0: as before (viewer --ocean-relief 0).
+  float relief = 0.5f;
   // [foampatch] The visuals track's foam patches in the whitecaps' pattern (0: none, the procedural pattern alone, as before; 1:
   // theirs wherever their detail shows): viewer --foam-patches [share]. Laid by Water (patches, patchTurn: each patch's main
   // way in its picture, radians, from foam_patches.json) when it finds them (/remastered/env/remaster/sea_foam).
@@ -561,6 +577,22 @@ class Ocean {
   // A view for checking (viewer --ocean-view n): the water shows 1 the slopes (red x, green z), 2 the foam field, 3 the
   // slopes' spread, 4 the height (red up, blue down), 5 the Jacobian, 6 [whitecaps] the whitecaps' parts; 0 off.
   int view = 0;
+  // [stormfoam] (Chris's second test, 2026-11-04: "storm foam looks normal but it is a bit too tame"; his picture's sea
+  // about 0.05% white, a real storm's some 5-10%) How much more a storm's sea foams: by how rough it is (none up to 0.6, a
+  // rain's 0.58 and every calmer sea as before; all of it at 1, a storm's), more crests break (the fold's threshold
+  // 0.45 deviations lower: some one place in eight against one in eighteen), they lay their foam faster and it stays
+  // fresh longer (0.72 s against 0.45), the residue lasts longer (9.5 s against 5.5) and is drawn out downwind into
+  // streaks (StormStreak), the far sea's mean share of white two and a half times, and in the water's shader the foam
+  // thicker (its strength 1.6 times), its streaks 2.5 times as long along the wind and dimmed less far off. 0: as
+  // before (viewer --storm-foam 0); more than 1 more of all of it (up to 3).
+  float stormFoam = 0.25f;  // (measured 2026-11-04, a storm at game height: 1 turned the sea 95 % grey-white; 0.25 about 6 % white, 30 % lace: "a bit too tame" -> a bit more)
+  // [livewash] (Chris's second test, 2026-11-04: the white round a ship "needs to be a lot more I guess realistic right now
+  // its like a barrier around the ship vs water") The hulls' wash (water.cpp, LiveWash) measured from the hull as the eye
+  // sees it (what stands up out of the sea near the place, looked for along the way into the hull), not from the hulls'
+  // boxes' waterline (an ellipse at the bow, a fuller one at the stern, all white inside: round a sharp bow or a rounded
+  // stern a pad of white the box's shape); a thin line at rest, wider at the bow under way, torn by noise streaming aft
+  // along the hull and outward from it, swelling as the waves run up the hull. False: as before (viewer --hull-wash old).
+  bool liveWash = true;
 
   // The sea as it is now, for the log: how rough (eased), its significant wave height, the peak's length, the foam field's
   // cell.
@@ -584,9 +616,11 @@ class Ocean {
     float look[4];
     float look2[4];
     float look3[4];
+    float more[4];   // [stormfoam] [livewash] (oceanMore)
     float look4[4];  // [whitecaps]
     float hulls[kHulls * 3][4];  // [hulls] (AddHull's, the nearest)
     float patchTurn[2][4];       // [foampatch]
+    float look5[4];              // [relief]
   };
   // [hulls] the hulls listed this frame (AddHull), and how many the shader was told of
   struct Hull {
