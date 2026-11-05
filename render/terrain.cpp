@@ -68,7 +68,7 @@ cbuffer TerrainConstants : register(b1) {
   float4 snowSlice[4];   // [snow ground] fresh, drift, packed: x its albedo's layer of materialMaps, y its third map's, z its normal's
                          // of wetNormalMaps (-1: none), w its repeats per world unit; [snowthin] 4th: the thin snow's cover, x its
                          // layer of wetNormalMaps (-1: none), w its repeats per world unit
-  float4 snowWind;       // [snow ground] xy the way the wind blows (unit length); z a view for checking it (MOHO64_DEBUG_SNOW); w unused
+  float4 snowWind;       // [snow ground] xy the way the wind blows (unit length); z a view for checking it (MOHO64_DEBUG_SNOW); w [snowhold] how much more the steep and the exposed hold (Terrain::snowHold)
   float4 snowTune;       // [snow ground] x how much the shelter cuts the sky's light, y the trees' crowns, z the drifts' relief, w the drifts
 #endif
 };
@@ -570,6 +570,11 @@ void SnowAround(float2 uv, float2 xz) {
   // less ready by a third as much; the hollows and the lee lay it as deep as before)
   snowLie = (1 + 0.4 * lay * (lay > 0 ? 1 : 0.5) * snowTune.w + 0.15 * lee) * (1 - 0.3 * crowns * snowTune.y);
   snowLess = 0.08 * crowns * snowTune.y + 0.1 * saturate((0.85 - base.y) * 4) + 0.1 * saturate(-lee) + 0.1 * saturate(-lay) * snowTune.w;
+  // [snowhold] (Chris, 2026-11-04, the west hill in snow: "have it hold a bit more snow not as much as left but maybe
+  // halfway" - left the plain snow, right this ground's) the thinning on steep, windward and scoured ground cut by the hold's
+  // share, and the snow's shallower lie there taken that share of the way back up (the hollows and the lee as deep as before)
+  snowLess *= 1 - snowWind.w;
+  snowLie = lerp(snowLie, max(snowLie, 1.0), snowWind.w);
   snowDrift = smoothstep(0.35, 0.9, weather.y * snowLie) * saturate((lay - 0.2) * 2.5) * snowTune.w;  // (only where the wind lays it deep)
   // (what is taken of the sky counted more than plainly, the snow's light being mostly the sky's, but never more than about
   // two thirds of it: a valley's few percent show, a wood's floor is not black; a scoop's walls hide a little more)
@@ -2833,6 +2838,7 @@ void Terrain::Draw(const View& view, bool shadowPass, bool beyondToo) {
       return v ? std::atoi(v) : 0;
     }();
     c.snowWind[2] = static_cast<float>(debug);
+    c.snowWind[3] = std::clamp(snowHold, 0.0f, 1.0f);  // [snowhold]
     std::copy(snowTune, snowTune + 4, c.snowTune);
   }
 
