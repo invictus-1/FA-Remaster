@@ -7,7 +7,8 @@ step 4.0, Aim and a homing shell read their target's beat-start transform withou
 entity pass in phases with deferred callbacks, still on one thread (3.3); step 4.2, pushes in the commit (3.3); step 4.3, the contact search's mark-free gather;
 step 4.4, the beat-start snapshot, sub-phases A2 and C1, and the order check of the phases (3.3, 6.1); step 4.5, phase D's
 additions to the armies kept on the units and summed in creation order, the silo step in the commit (3.3); step 4.6, phases A1, C1 and C on the worker pool (3.3). Section 8 item 4 (the armies' stages) is steps 5.x: step 5.1, the
-three stages without the army-by-army interleave, on one thread, the write trap over them (3.1).
+three stages without the army-by-army interleave, on one thread, the write trap over them (3.1); step 5.2, the steering
+stage from a spline snapshot, its cross-unit writes as messages, on the pool (3.1).
 
 ## For Chris: the short version
 
@@ -149,15 +150,17 @@ two processes; the write trap; the lazy-fill detector) and B3-16k timed at 1 / 8
   | weapons | `gridMark` (target scans), the target's shooter set (`SetTarget` -> `AddShooter`), the target's combat cache (`CB`) | 0.2 k | 5.4 |
   Script calls of the weapons stage: `OnFire`, `OnGotTarget`, `OnLostTarget` (on the weapon); the projectiles a shot
   makes (`FireTick` -> the shot's script) are not seen by the trap (new entities) and are the stage's main shared write.
-- **5.2 Steering (symmetric prediction).** A unit's turn (`SteeringTick`: `ProcessSplineMovement`, a new segment's
-  `UpdatePath` and `CheckCollisions`) reads other units' splines (`spline`, `splineIdx`, `hasSpline`: heap and own
-  bytes that THEIR turns advance) and writes the yielding unit's record. Plan: a snapshot of what a prediction reads of
-  another unit (its spline's points from this beat's index on, its velocity, as the stage began: a per-unit copy of
-  the few points a prediction looks at, `k` up to the spline's end in steps of 3); `Predict(e, u)` (u's own record)
-  from the snapshot in u's turn; `Predict(u, e)` (e's record) as a message, applied in the commit in key order with the
-  same rule ("keep the nearest"), so e's record is the same whichever turn came first. A unit's own second
-  `ProcessSplineMovement` of the turn reads only its own record. The mark-free gather in `CheckCollisions`. Then the
-  stage on the pool.
+- **5.2 Steering (built).** As the stage begins every unit's spline is snapshotted (`Unit::snapSpline`, shared points
+  copied only when the batch changed since the last beat (`UnitMotion::splineVersion`) and the unit has one, into the
+  buffer kept from the last beat when no message still holds it (step 5.2b: no allocation in the common case); its index,
+  whether it has one, its mode). Parallel order only: the original's order takes no snapshot. While a turn runs (`tl_steerTurn`), what it reads of ANOTHER unit's spline comes from that snapshot
+  (`SeenSpline`: `Predict`, `Resolve`, the search's side-step test); the turn's own unit is read as it stands. The
+  prediction that writes the yielding unit's record (`Predict(u, e)`) is a message: in the stage's commit, in the turns'
+  order, from u's spline as the turn left it (a copy) and e's snapshot, with the same keep-the-nearest rule; `Resolve`'s
+  hard brake of the other unit (`SetCol(X, 5)`) and an aircraft's stop (`AirSetTargetNow`) likewise. The search gathers
+  without marks. The turns run through `Sim::RunTurns` (the worker pool with more than one thread, each worker's
+  deferred calls in its own list merged by key; `MOHO64_PAR_STAGES=0` keeps them on the sim's thread), the commit after.
+  The write trap covers the turns only (the snapshot and the commit are serial): no write into another unit.
 - **5.3 Navigators.** `Execute` per unit: path requests (shared queues, per army: messages in key order), the
   navigators' unit tests (gridb's NAV-ahead machinery, batch 78: coordinated through the lead), `MotionNavDone`'s
   `Predict` and gather as in 5.2. The air navigator (`AirNavArrival`, `AirFormationFollow`) reads the formation (stable

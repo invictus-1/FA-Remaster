@@ -141,6 +141,7 @@ struct UnitMotion {
     int state = 7;
   };
   std::vector<SplinePoint> spline;
+  uint32_t splineVersion = 0;  // (changed with every new batch or clear: parallel order's steering snapshot)
   size_t splineIdx = 0;    // the next point to hand out (spline+0x240)
   bool hasSpline = false;
   int splineMode = 0;      // Generate/Update mode of the batch (spline+0x248): 0 stop, 1 through, 2 side-step, 4 brake

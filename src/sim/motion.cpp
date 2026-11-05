@@ -685,6 +685,7 @@ void SteeringStop(UnitMotion& m) {
   m.pointNow = false;
   if (!m.hasSpline) return;
   m.spline.clear();
+  ++m.splineVersion;
   m.splineIdx = 0;
   m.hasSpline = false;
   m.colType = 0;
@@ -1233,6 +1234,7 @@ void Generate(Sim& sim, Unit* u, const Vec3& tgt, int mode, bool fresh) {
   const bool cont = !fresh && m.hasSpline;
   const UnitMotion::SplinePoint last = m.genLast;
   m.spline.clear();
+  ++m.splineVersion;
   m.splineIdx = 0;
   m.hasSpline = true;
   m.splineMode = mode;
@@ -1355,6 +1357,7 @@ void BrakeSpline(Sim& sim, Unit* u, int mode) {
   UnitMotion& m = u->motion;
   StepParams P = Params(m);
   m.spline.clear();
+  ++m.splineVersion;
   m.splineIdx = 0;
   m.hasSpline = true;
   m.splineMode = mode;
