@@ -597,6 +597,17 @@ a base and an army.
   T1/T2/T3 3/81/11 -> 0/47/48; land factories T1/T2/T3 66/44/14 -> 46/87/18; experimentals ordered 2 -> 4 in 35
   minutes. Judge: M28 recruit x8 median 25.2 minutes (90% of medians 23.3-28.6; before 24.0, 21.1-26.4), lost per killed 14.1 (8.0-20.2; before 10.0, 7.8-16.9); FAF veteran 35.5 / 22.8 (24.2 / 44.4) - even within the spread.
 
+- **2026-11-04, every unit of the army has a job (Chris's second test: "anything I spawn should be treated as their
+  own unit").** The AI reads its whole unit list every economy step (`GetListOfUnits`), so whatever the army owns -
+  built, spawned by a cheat or `CreateUnit`, given by an ally, captured - is in it, and land units, ships, engineers,
+  sub-commanders and factories were used whatever their origin. The bombers and gunships had a job only against ships
+  shelling our coast: without ships they stood at the base, and the ones that also carry anti-air (gunships, the CZAR)
+  were taken for fighters. Now idle ground-attack aircraft with no ships to strike go where the land army fights (the
+  zone it defends, else its attack's or push's target), else they guard the start (`aiair ...`); the fighters are the
+  anti-air aircraft without a ground-attack, bomber or anti-ship role. The fight bench (our AI with 6,000 mass of
+  missile launchers and spawned gunships at its extractors against 5,000 of T2 bots and T1 artillery): 4,332 mass
+  of ours left before, 4,985 now. (M28 records every unit on its creation and capture and hands them out by zone.)
+
 ### 2.5 Team play and pings
 
 - **One team picture.** Allied brains of ours share the index's view of the team (the army's own plus its allies'

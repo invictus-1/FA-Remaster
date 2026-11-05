@@ -1689,6 +1689,24 @@ AIBrain = Class(StandardBrain) {
                     R.army, R.tick, t.zone, table.getn(idle), t.mass))
                 R.navalLogged = R.tick
             end
+            return
+        end
+        -- (2026-11-04, Chris's second test: "anything I spawn should be treated as their own unit". Every unit of the
+        -- army is in these lists each step - GetListOfUnits sweeps whatever the army owns, built, spawned by a cheat or
+        -- CreateUnit, given by an ally or captured - but the bombers and gunships had a job only against ships: without
+        -- ships they stood at the base, or patrolled as fighters. Now, with no ships to strike, the idle ones go where the
+        -- land army fights: the zone it defends, else the target of its attack or push, else they guard the start.)
+        local z = R.defending or (R.op and (R.op.kind == 'attack' or R.op.kind == 'push') and R.op.zone)
+        local x, zz = R.startX, R.startZ
+        if z then
+            local zone = Remastered.AIZone(z)
+            x, zz = zone.x, zone.z
+        end
+        IssueAggressiveMove(idle, Pos(x, zz))
+        if z and R.tick - (R.airWingLogged or -10000) >= 600 then
+            LOG(string.format('aiair %d %d %d ground-attack aircraft join the land army at zone %d', R.army, R.tick,
+                table.getn(idle), z))
+            R.airWingLogged = R.tick
         end
     end,
 
@@ -1696,7 +1714,9 @@ AIBrain = Class(StandardBrain) {
     RemasterFighters = function(self)
         local R = self.Remaster
         local idle = {}
-        for _, u in ipairs(self:GetListOfUnits(categories.AIR * categories.MOBILE * categories.ANTIAIR - categories.SCOUT, false)) do
+        -- (2026-11-04: not the gunships and bombers that also carry anti-air - a CZAR, a gunship: RemasterNavalStrike)
+        for _, u in ipairs(self:GetListOfUnits(categories.AIR * categories.MOBILE * categories.ANTIAIR - categories.SCOUT -
+            categories.BOMBER - categories.GROUNDATTACK - categories.ANTINAVY, false)) do
             if Alive(u) and u:IsIdleState() then table.insert(idle, u) end
         end
         if not idle[1] then return end
