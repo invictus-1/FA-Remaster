@@ -1979,11 +1979,25 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       meshes.Add(model, Mat4::FromTRS(middle, Quat{}, static_cast<float>(map.width) * model->scale), {1, 1, 1});
     }
   // the interface's ghosts, lines and rings
+  // ([ghostfaint] the same building queued by several builders comes as one ghost a builder: drawn once. Two see-through
+  // ghosts on one place were blended in an order that changed from frame to frame - Chris, 2026-11-06: the green outline
+  // "flickers" while one unit of a group still has it in its queue)
+  std::vector<const Ghost*> shown;
   for (const Ghost& g : ghosts) {
+    bool twin = false;
+    for (const Ghost* o : shown)
+      twin = twin || (o->blueprint == g.blueprint && std::fabs(o->position.x - g.position.x) < 0.05f &&
+                      std::fabs(o->position.z - g.position.z) < 0.05f && std::fabs(o->heading - g.heading) < 0.01f);
+    if (!twin) shown.push_back(&g);
+  }
+  for (const Ghost* gp : shown) {
+    const Ghost& g = *gp;
     const Model* model = models.Unit(g.blueprint);
     if (!model->ok) continue;
     const Quat turn{0, std::sin(g.heading * 0.5f), 0, std::cos(g.heading * 0.5f)};
-    meshes.Add(model, Mat4::FromTRS(g.position, turn, model->scale), {0.6f, 0.6f, 0.6f}, 1, nullptr, &g.tint);
+    // ([ghostfaint] a ghost over its finished building - a builder still has it queued, as the original shows it - drawn a
+    // hair larger, so that its surfaces never lie at the building's own depth and flicker against it)
+    meshes.Add(model, Mat4::FromTRS(g.position, turn, model->scale * 1.01f), {0.6f, 0.6f, 0.6f}, 1, nullptr, &g.tint);
     if (ghostLook == 1) meshes.SeeThroughGhost();  // [glitches]
   }
   // what the script places that is an ordinary model (the others are drawn after the water, placed.h)
