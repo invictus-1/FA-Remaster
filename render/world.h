@@ -1088,6 +1088,7 @@ class World {
   };
   std::unordered_map<uint32_t, Clearing> clearings_;
   std::unordered_map<uint32_t, int> decorUnder_;
+  void ForgetUnderfoot(uint32_t i);  // [simunder]
   void ClearUnderStructure(uint32_t id, const Model* model, Vec3 position, const Quat& orientation);
   void ReleaseClearings();
   std::deque<FramePropEvent> propEvents_;  // told, and not yet due
