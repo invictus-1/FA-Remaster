@@ -1,7 +1,7 @@
 -- The simulation's order (Chris, 2026-10-31, multicore option 2: new games in FA Remastered's own parallel-friendly
 -- order, the original's kept for its replays; src/sim/replay.h ScenarioSimOrder): a game launched from the skirmish
 -- lobby with its options at their defaults carries Options.RemasterSimOrder = "parallel" and
--- Options.RemasterSimOrderVersion = 1 (the lobby's option, the version added at the launch: GameSession::LaunchWith);
+-- Options.RemasterSimOrderVersion = this engine's (moho64ui_SimOrderVersion(); the lobby's option, the version added at the launch: GameSession::LaunchWith);
 -- a game started from a session table without the option (as every game before it) carries neither; and each
 -- replay plays in the order its header's scenario names. One file for four runs on the same preferences (the suite's
 -- "simorder" job; it also reads the simulation's own line "the beat's order: ..." in each run's log):
@@ -33,7 +33,7 @@ if rawget(_G, "SessionIsActive") and SessionIsActive() then
             check("the game is a replay", SessionIsReplay(), true)
             if want == "parallel" then
                 check("the parallel game's replay: its header's order", options.RemasterSimOrder, "parallel")
-                check("and its version", options.RemasterSimOrderVersion, 1)
+                check("and its version", options.RemasterSimOrderVersion, moho64ui_SimOrderVersion())
             else
                 check("the original order's replay: no order in its header", options.RemasterSimOrder, nil)
                 check("and no version", options.RemasterSimOrderVersion, nil)
@@ -49,7 +49,7 @@ if rawget(_G, "SessionIsActive") and SessionIsActive() then
             -- 1.: the lobby's game, its options at their defaults
             failed = fromLobby.failed or 0
             check("the lobby's game: our own order", options.RemasterSimOrder, "parallel")
-            check("with its version, added at the launch", options.RemasterSimOrderVersion, 1)
+            check("with its version, added at the launch", options.RemasterSimOrderVersion, moho64ui_SimOrderVersion())
             name = PARALLEL
         else
             -- 2.: a session table without the option: the original's order, no version

@@ -410,6 +410,12 @@ void RegisterBasicBindings(lua_State* L) {
   lua_register(L, "moho64ui_OpenURLDryRun", l_OpenURLDryRun);
   lua_register(L, "moho64ui_OpenedURL", l_OpenedURL);
   lua_register(L, "moho64ui_ListFiles", l_ListFiles);
+  // moho64ui_SimOrderVersion() -> this engine's parallel order's version (moho::Sim::kSimOrderVersion), the one a new
+  // game in our own order is made with and records (Options.RemasterSimOrderVersion); for the tests
+  lua_register(L, "moho64ui_SimOrderVersion", [](lua_State* S) -> int {
+    lua_pushnumber(S, moho::Sim::kSimOrderVersion);
+    return 1;
+  });
   SetGlobal(L, "GameTick", l_GameTick);
   SetGlobal(L, "HasCommandLineArg", l_HasCommandLineArg);
   SetGlobal(L, "GetCommandLineArg", l_GetCommandLineArg);

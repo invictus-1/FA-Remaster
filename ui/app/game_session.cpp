@@ -1255,7 +1255,7 @@ bool GameSession::LaunchWith(lua_State* L, int config, net::LobbyCore* lobby, st
     lua_pop(L, 1);
     if (parallel && !hasVersion) {
       lua_pushstring(L, "RemasterSimOrderVersion");
-      lua_pushnumber(L, 1);
+      lua_pushnumber(L, moho::Sim::kSimOrderVersion);  // (this engine's parallel order version)
       lua_rawset(L, -3);
     }
   }
@@ -1408,7 +1408,7 @@ bool GameSession::LaunchSinglePlayer(lua_State* L, int info, std::string* why) {
       lua_rawset(L, -3);
       if (order != "original") {
         lua_pushstring(L, "RemasterSimOrderVersion");
-        lua_pushnumber(L, 1);
+        lua_pushnumber(L, moho::Sim::kSimOrderVersion);  // (this engine's parallel order version)
         lua_rawset(L, -3);
       }
     }
