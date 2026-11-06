@@ -716,7 +716,8 @@ void Ocean::Update(const Camera& camera, const View& view, gfx::Texture heights,
   constants_.look3[3] = patches && crest ? 1.0f : 0.0f;  // [foamloop]
   constants_.more[0] = storm;                     // [stormfoam]
   constants_.more[1] = liveWash ? 1.0f : 0.0f;    // [livewash]
-  constants_.more[2] = constants_.more[3] = 0;
+  constants_.more[2] = std::max(nearSparkle, 0.0f);  // [sparkle]
+  constants_.more[3] = 0;
   // [whitecaps] how far the foam has drifted (its pattern drifts with it; within kDriftRepeat, so that it stays exact)
   constants_.look4[0] = static_cast<float>(std::fmod(driftX_, kDriftRepeat));
   constants_.look4[1] = static_cast<float>(std::fmod(driftZ_, kDriftRepeat));
