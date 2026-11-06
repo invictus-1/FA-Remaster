@@ -874,7 +874,12 @@ void Ocean::Select(float x, float z, int level, const View& view, Vec3 eye, floa
   const float size = kLeaf * static_cast<float>(1 << level);
   // (only over the water: the map and as far beyond it as the world beyond reaches)
   if (x > mapW_ + reach || z > mapH_ + reach || x + size < -reach || z + size < -reach) return;
-  if (!view.BoxVisible({x, level_ - kLiftReach, z}, {x + size, level_ + kLiftReach, z + size})) return;
+  // [cullpad] (Chris's third test, 2026-11-05: a square of the sea missing by the shore, the seabed dark through it, as the
+  // camera swung low in look mode) a patch's box as high and as wide as its lifted surface can reach: the waves rise and
+  // shift sideways (the choppy sea's shift) by up to about twice the significant height, which the half unit given before
+  // left out, so that a patch beside the view's edge whose waves showed in it was dropped
+  const float pad = kLiftReach + 2 * hs_ * heightScale;
+  if (!view.BoxVisible({x - pad, level_ - pad, z - pad}, {x + size + pad, level_ + pad, z + size + pad})) return;
   const float away = Walk::Away(x, z, size, eye, level_);
   auto add = [&](float ax, float az, float s, int l) {
     nodes_.push_back({ax, az, s, static_cast<float>(l), Walk::Away(ax, az, s, eye, level_)});
@@ -887,7 +892,7 @@ void Ocean::Select(float x, float z, int level, const View& view, Vec3 eye, floa
   for (int c = 0; c < 4; ++c) {
     const float cx = x + ((c & 1) ? half : 0), cz = z + ((c & 2) ? half : 0);
     if (cx > mapW_ + reach || cz > mapH_ + reach || cx + half < -reach || cz + half < -reach) continue;
-    if (!view.BoxVisible({cx, level_ - kLiftReach, cz}, {cx + half, level_ + kLiftReach, cz + half})) continue;
+    if (!view.BoxVisible({cx - pad, level_ - pad, cz - pad}, {cx + half + pad, level_ + pad, cz + half + pad})) continue;
     if (Walk::Away(cx, cz, half, eye, level_) <= ranges_[level - 1]) Select(cx, cz, level - 1, view, eye, reach);
     else add(cx, cz, half, level - 1);  // (beyond the finer range: its vertices slide fully onto this level's grid)
   }
