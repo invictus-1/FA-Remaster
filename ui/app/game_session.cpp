@@ -101,6 +101,7 @@ void WorldLooks(render::World& w, const LookSettings& looks, bool photoLook) {
   // (the renderer's looks from Chris's big test, each with the earlier look as Off: LookSettings)
   w.water.ocean.glitter = looks.oceanGlitter ? 1 : 0;  // (Ocean Glitter)
   w.water.ocean.nearSparkle = looks.seaSparkle ? 1.0f : 0.0f;  // (Sea Sparkle, render 03fc92c)
+  w.unitDetail = looks.unitDetail ? 1.0f : 0.0f;  // (Close-up Detail, render 5ee436a)
   w.water.shoreSoak = looks.shoreSoak;                // (Shore Soak)
   // (Shield Bending: Off nothing bent; Subtle a little, units under the shield never; Full everything behind, as 10-28)
   w.energy.bend = looks.shieldBend <= 0 ? 0.0f : looks.shieldBend == 1 ? 0.35f : 1.0f;
