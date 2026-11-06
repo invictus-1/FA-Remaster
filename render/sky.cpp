@@ -829,11 +829,13 @@ void SetSky(const SkyLight& s, ViewConstants* c) {
   set(c->skyGlow, s.glow, s.daylight);
   set(c->skyBody, s.body, s.moon ? 1.0f : 0.0f);
   set(c->skyMoon, s.moonPlace, 0);
-  // the clouds drift with the wind and change slowly (by the view's clock)
+  // the clouds drift with the wind and change slowly (by the view's clock). [cloudpace] (Chris, 2026-11-06: "Clouds move too
+  // fast ... bolting across the screen") a quarter of the speed before: some 1.4 world units a second (a world unit is
+  // about 20 m on Seton's: a strong wind aloft, still seen to move), their shapes changing at half the rate
   c->skyClouds[0] = s.cover;
-  c->skyClouds[1] = 5.0f * c->time;
-  c->skyClouds[2] = 2.2f * c->time;
-  c->skyClouds[3] = 0.012f * c->time;
+  c->skyClouds[1] = 1.25f * c->time;
+  c->skyClouds[2] = 0.55f * c->time;
+  c->skyClouds[3] = 0.006f * c->time;
 }
 
 bool Sky::Init(std::string* error) {
