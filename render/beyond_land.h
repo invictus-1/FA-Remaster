@@ -36,10 +36,12 @@ class BeyondLand {
  public:
   // The look, changeable between frames (the viewer's --beyond-land-look name=value,...: Set). The land's own numbers
   // (from `begin` on) take hold when it is made again (Forget).
-  float band = 10;           // the soft edge: over how many world units past the edge the ground dims and greys
-  float edgeShadow = 0.45f;  // how dark the soft shadow right along the edge is (0 none .. 1 black) ...
+  // [softedge] (Chris, 2026-11-06, his clip at full map zoom at night: lines at the map's edges that shift as he zooms) the
+  // edge as good as unseen: a wide band, a faint shadow, little grey (10, 0.45, 0.35 before; --beyond-land-look for those)
+  float band = 60;           // the soft edge: over how many world units past the edge the ground dims and greys
+  float edgeShadow = 0.1f;   // how dark the soft shadow right along the edge is (0 none .. 1 black) ...
   float edgeWidth = 2.5f;    // ... and over how many pixels it fades (to a third), at any zoom
-  float edgeGrey = 0.35f;    // how much of its colour the ground past the edge loses
+  float edgeGrey = 0.12f;    // how much of its colour the ground past the edge loses
   float haze = 2400;         // over how many world units from the eye the land far off is lost in the haze by 1/e ...
   float hazeHeight = 700;    // ... near the sea; the haze thins with the height, to 1/e over this many world units
   float begin = 0.15f;       // where the land may begin: this many map sizes beyond the map's mirrored continuation
