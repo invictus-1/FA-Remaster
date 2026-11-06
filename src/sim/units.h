@@ -469,6 +469,9 @@ inline const struct Formation* SeenForm(const Unit* u) { return SeesSnapshot(u) 
 // The unit whose turn of parallel order's steering stage runs on this thread (step 5.2; null otherwise): another unit's
 // spline is then read from its stage-start snapshot.
 inline thread_local const Unit* tl_steerTurn = nullptr;
+// The unit whose turn of a parallel order stage draws its engine random numbers keyed (phase A, the weapons' acquire:
+// steps 4.4 and 5.4; null otherwise): the draw is that unit's keyed draw, the same whichever turn came first.
+inline thread_local const Unit* tl_drawTurn = nullptr;
 struct SplineView {
   const std::vector<UnitMotion::SplinePoint>* pts = nullptr;
   size_t idx = 0;

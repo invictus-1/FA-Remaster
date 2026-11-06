@@ -24,6 +24,7 @@
 #include "sim/write_trap.h"
 
 #include <algorithm>
+#include <optional>
 #include <atomic>
 #include <cmath>
 #include <cstring>
@@ -1054,6 +1055,9 @@ int TargetPointDraw(Sim& sim, Entity* e) {
   if (!e || e->kind != Entity::Kind::Unit) return -1;
   const CombatBpData& cb = CB(static_cast<Unit*>(e));
   if (cb.targetBones.empty()) return -1;
+  if (tl_drawTurn)  // (parallel order's acquire on the pool: the turn's keyed draw, step 5.4)
+    return static_cast<int>((static_cast<uint64_t>(sim.ERand(const_cast<Unit*>(tl_drawTurn), Sim::RandPurpose::kTargetPick)) *
+                             cb.targetBones.size()) >> 32);
   return static_cast<int>(sim.IntRange(static_cast<uint32_t>(cb.targetBones.size())));
 }
 
@@ -1080,7 +1084,9 @@ int TargetBoneOf(const Entity* e, const std::string& name) {
 namespace {
 
 void WeaponCall(Sim& sim, UnitWeapon* w, const char* method) {
-  if (w->HasLuaObject()) sim.CallMethod(sim.L(), w, method, 0);
+  if (!w->HasLuaObject()) return;
+  if (sim.DeferringScripts()) return sim.DeferScriptCall(w, method, {});  // (parallel order's stages: in the commit)
+  sim.CallMethod(sim.L(), w, method, 0);
 }
 
 int PickAimBone(Sim& sim, Entity* e) {
@@ -1088,7 +1094,10 @@ int PickAimBone(Sim& sim, Entity* e) {
   Unit* tu = static_cast<Unit*>(e);
   const CombatBpData& cb = CB(tu);
   if (cb.targetBones.empty()) return -1;
-  size_t i = sim.IntRange(static_cast<uint32_t>(cb.targetBones.size()));
+  // (parallel order's acquire on the pool: the turn's keyed draw, step 5.4)
+  size_t i = tl_drawTurn ? (static_cast<uint64_t>(sim.ERand(const_cast<Unit*>(tl_drawTurn), Sim::RandPurpose::kTargetPick)) *
+                            cb.targetBones.size()) >> 32
+                         : sim.IntRange(static_cast<uint32_t>(cb.targetBones.size()));
   return TargetBoneOf(e, cb.targetBones[i]);
 }
 
@@ -1115,8 +1124,8 @@ bool PickPointBeside(Sim& sim, Entity* e, int* bone, bool above, std::vector<int
 // (the draw: the stream's; in parallel order's phase A, where an aircraft's tactics ask whether a weapon may take its
 // target, the keyed draw of the turn's own unit, docs/parallel-mode.md 4.1)
 static inline __attribute__((always_inline)) uint32_t PickIndex(Sim& sim, uint32_t n) {
-  if (tl_phaseATurn)
-    return static_cast<uint32_t>((static_cast<uint64_t>(sim.ERand(const_cast<Unit*>(tl_phaseATurn), Sim::RandPurpose::kTargetPick)) * n) >> 32);
+  const Unit* t = tl_phaseATurn ? tl_phaseATurn : tl_drawTurn;  // (the weapons' acquire too: step 5.4)
+  if (t) return static_cast<uint32_t>((static_cast<uint64_t>(sim.ERand(const_cast<Unit*>(t), Sim::RandPurpose::kTargetPick)) * n) >> 32);
   return sim.IntRange(n);
 }
 __attribute__((noinline)) bool PickPointAboveWater(Sim& sim, Entity* e, int* bone, bool peek) {
@@ -1292,7 +1301,11 @@ static void SetTarget(Sim& sim, UnitWeapon* w, const AiTarget& nt) {
   // holds that target), unless the old target is dead or going
   if (Entity* old = TargetEntity(sim, w->target); old && !old->dead && !old->destroyQueued && w->unit) {
     const uint32_t ref = EntityRef(w->unit);
-    old->shooters.erase(std::remove(old->shooters.begin(), old->shooters.end(), ref), old->shooters.end());
+    // (parallel order's acquire on the pool: the target's set is the target's, changed in the commit, step 5.4)
+    if (tl_drawTurn && sim.DeferringScripts())
+      sim.DeferAction([old, ref] { old->shooters.erase(std::remove(old->shooters.begin(), old->shooters.end(), ref), old->shooters.end()); });
+    else
+      old->shooters.erase(std::remove(old->shooters.begin(), old->shooters.end(), ref), old->shooters.end());
   }
   w->target = nt;
   Entity* e = TargetEntity(sim, w->target);
@@ -1314,7 +1327,11 @@ static void SetTarget(Sim& sim, UnitWeapon* w, const AiTarget& nt) {
   // 0x6d6131: the weapon's UNIT joins the target's shooters (once), unless the target is dead or going
   if (e && !e->dead && !e->destroyQueued && w->unit) {
     const uint32_t ref = EntityRef(w->unit);
-    if (std::find(e->shooters.begin(), e->shooters.end(), ref) == e->shooters.end()) e->shooters.push_back(ref);
+    auto add = [e, ref] {
+      if (std::find(e->shooters.begin(), e->shooters.end(), ref) == e->shooters.end()) e->shooters.push_back(ref);
+    };
+    if (tl_drawTurn && sim.DeferringScripts()) sim.DeferAction(add);  // (step 5.4, as above)
+    else add();
   }
   if (!had && has) WeaponCall(sim, w, "OnGotTarget");
   WakeFireThread(w);
@@ -1413,7 +1430,9 @@ const std::vector<Unit*>& BlipsInRange(Sim& sim, Unit* u, int period) {
   // listed it after the others.
   if (!u->blipCache.empty() && sim.entityGrid().ready()) {
     std::vector<Entity*> grid;
-    sim.entityGrid().GatherBox(p.x - R, p.z - R, p.x + R, p.z + R, 1, &grid);
+    // (parallel order's acquire on the pool: the mark-free gather, the same list in the same order, step 5.4)
+    if (tl_drawTurn) sim.entityGrid().GatherBoxNoMarks(p.x - R, p.z - R, p.x + R, p.z + R, 1, &grid);
+    else sim.entityGrid().GatherBox(p.x - R, p.z - R, p.x + R, p.z + R, 1, &grid);
     std::vector<Unit*> ordered;
     ordered.reserve(u->blipCache.size());
     for (Entity* e : grid) {
@@ -1688,6 +1707,10 @@ void ReportState(Unit* u, int code) {
     // (5220); at 5233 its new formation Attack runs after the other ten members' in the original (their slots are
     // reserved first: its place (498.98, 200.55), its square (482,184)..(515,217)); ours kept its old place in the
     // run list, so its slot was the free raw place and its square left its cell out.
+    // (parallel order's acquire on the pool: the run list is the sim's, so in the commit, step 5.4)
+    if (tl_drawTurn) {
+      if (Sim* sim = Sim::From(u->luaState()); sim && sim->DeferringScripts()) return sim->DeferAction([u] { RelinkSuspendedAttackThread(u); });
+    }
     RelinkSuspendedAttackThread(u);
   }
 }
@@ -1885,7 +1908,12 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
       nt.fakeId = bestFake;
     }
     SetTarget(sim, w, nt);
-    if (autoAttack) IssueAutoAttack(sim, u, best, bestBlip, nt.pastDeath, bestFake);
+    if (autoAttack && tl_drawTurn && sim.DeferringScripts()) {  // (an order: the command ids are the sim's, step 5.4)
+      const bool past = nt.pastDeath;
+      sim.DeferAction([&sim, u, best, bestBlip, past, bestFake] { IssueAutoAttack(sim, u, best, bestBlip, past, bestFake); });
+    } else if (autoAttack) {
+      IssueAutoAttack(sim, u, best, bestBlip, nt.pastDeath, bestFake);
+    }
   } else if (dHas && CanAttackTarget(sim, w, d)) {
     SetTarget(sim, w, d);
   } else if (d.type == 1 && d.viaBlip && TargetEntity(sim, d) && TargetEntity(sim, d)->dead &&
@@ -1973,7 +2001,57 @@ void WeaponsStageDebug(Sim& sim) {
 // One army's attacker stage (brain+0xb0): its units in creation order, not in id order (an id used a second time
 // belongs to a younger unit), in that army's turn (landnav.h: LandNavStageBegin). The caller hands a copy: a script
 // fired from here may create units.
+// Parallel order (docs/parallel-mode.md 3.1, step 5.4): W1, the acquire threads of every unit's weapons that the pool
+// may run (not a missile defence's: its search reads a shell's blueprint in Lua), each turn writing its own weapons and
+// unit only, its writes into others and its script calls messages, its draws keyed (tl_drawTurn); the commit, in the
+// turns' order; then W2, every unit's threads one after another as before, the acquire threads W1 ran left out.
+static bool AcquireOnPool(const UnitWeapon* w) { return w->bp && w->bp->targetType != 1; }
+static void WeaponsTickParallel(Sim& sim, const std::vector<Unit*>& units) {
+  for (Unit* u : units) (void)CB(u);  // (a unit's combat data, made at its first read: before the pool reads it)
+  sim.EnsureUnitGrid();
+  {
+    std::optional<wtrap::Phase> trap;  // (MOHO64_PAR_WRITETRAP: the turns)
+    if (wtrap::On()) trap.emplace(sim.tick(), "weapons acquire");
+    sim.RunTurns("weapons acquire", units.size(), [&](size_t i) {
+      Unit* u = units[i];
+      if (u->destroyQueued || u->combatGone) return;
+      wtrap::Turn trapTurn(u);
+      tl_drawTurn = u;
+      // (a copy: a new target wakes the weapon's fire thread, which moves it to the list's end, WakeFireThread)
+      static thread_local std::vector<std::pair<UnitWeapon*, bool>> threads;
+      threads = u->weaponThreads;
+      for (const auto& [w, acquire] : threads) {
+        if (!acquire || !w->bp || !w->HasLuaObject() || !AcquireOnPool(w)) continue;
+        if (w->bp->manualFire || sim.tick() < w->nextAcquire) continue;
+        int r = AcquireTick(sim, w);
+        w->nextAcquire = sim.tick() + static_cast<uint32_t>(std::max(1, r));
+        if (u->destroyQueued || u->combatGone) break;
+      }
+      tl_drawTurn = nullptr;
+    });
+  }
+  sim.RunDeferredScriptCalls();
+  for (size_t i = 0; i < units.size(); ++i) {
+    Unit* u = units[i];
+    if (u->destroyQueued || u->combatGone) continue;
+    wtrap::Turn trapTurn(u);
+    for (u->weaponThreadPos = 0; u->weaponThreadPos < static_cast<int>(u->weaponThreads.size()); ++u->weaponThreadPos) {
+      const auto [w, acquire] = u->weaponThreads[static_cast<size_t>(u->weaponThreadPos)];
+      if (!w->bp || !w->HasLuaObject()) continue;
+      if (!acquire) {
+        if (!w->fireSuspended) FireTick(sim, w);
+      } else if (!AcquireOnPool(w) && !w->bp->manualFire && sim.tick() >= w->nextAcquire) {
+        int r = AcquireTick(sim, w);
+        w->nextAcquire = sim.tick() + static_cast<uint32_t>(std::max(1, r));
+      }
+      if (u->destroyQueued || u->combatGone) break;
+    }
+    u->weaponThreadPos = -1;
+  }
+}
+
 void WeaponsTickUnits(Sim& sim, const std::vector<Unit*>& units) {
+  if (sim.order == SimOrder::kParallel) return WeaponsTickParallel(sim, units);
   for (size_t i = 0; i < units.size(); ++i) {
     Unit* u = units[i];
     if (u->destroyQueued || u->combatGone) continue;

@@ -165,11 +165,21 @@ two processes; the write trap; the lazy-fill detector) and B3-16k timed at 1 / 8
   navigators' unit tests (gridb's NAV-ahead machinery, batch 78: coordinated through the lead), `MotionNavDone`'s
   `Predict` and gather as in 5.2. The air navigator (`AirNavArrival`, `AirFormationFollow`) reads the formation (stable
   in the stage). Then the stage on the pool.
-- **5.4 Weapons.** `AcquireTick` (the target scan, `FindBestEnemy`, the reach tests) from the snapshot on the pool,
-  its result the weapon's own state; `SetTarget`'s writes into the target (shooter set) and the script calls
-  (`OnGotTarget`, `OnLostTarget`) as messages in key order. `FireTick` stays in the commit (it runs the shot's scripts
-  and makes projectiles: ids and creation serials in key order). The lazily made combat cache of the target (`CB`) made
-  before the stage.
+- **5.4 Weapons (built).** Two parts. W1: every weapon's ACQUIRE thread (`AcquireTick`: the reach
+  scan, `BlipsInRange`, `FindBestEnemy`, the target tests) through `Sim::RunTurns` (the pool), a turn per unit, which
+  writes its own weapons and unit only: the target's shooter set (`SetTarget` -> remove / add), `OnLostTarget` /
+  `OnGotTarget` (`WeaponCall`, deferred in any deferring stage), the attack task's relink on a new report
+  (`RelinkSuspendedAttackThread`: the command threads' run list) and an auto-attack order (`IssueAutoAttack`: command
+  ids) are messages in the turns' order; its draws (the target point, the aim bone, a water-side pick) are the unit's
+  keyed draws (`tl_drawTurn`, `kTargetPick`); the blip list's grid gather has no marks; a unit's combat data (`CB`, made
+  at its first read) and the unit grid are made before. Then the commit. W2: every unit's threads one after another as
+  before, the FIRE threads (they run the shot's scripts and make projectiles: serial, ids in order) and the acquire
+  threads W1 left out (a missile defence's: its search reads a shell's blueprint in Lua). What changes for players: in
+  a beat every weapon looks for its target before any weapon fires (in the original's order a unit's threads run in
+  their run order, a fire thread before or after its acquire thread). Audit (parallel order): the order check with
+  MOHO64_PAR_LUACHECK=log (b8 3000, B1 8000, B3-16k 1000 beats) finds no Lua call and no lazily made cache in an acquire
+  turn; the write trap (b8 3000) no write into another unit in the "weapons acquire" phase (before: the gather marks,
+  the target's shooter set, `CB`), the reads mode no hazard.
 - **5.5 (item 5)** Recon and AdvanceCoords in parallel order: mostly the exact switches that exist (MOHO64_PAR_RECON,
   _BLIPS, _INTELCOORDS); the moved list becomes a set (the grid is canonical, 2b).
 

@@ -2784,10 +2784,8 @@ void Sim::Tick() {
       phases.Lap(PhaseTimer::kSteering);
     }
     {
-      std::optional<wtrap::Phase> trap;
-      if (wtrap::On()) trap.emplace(tick_, "weapons");
       MOHO_LAP(lap, "weapons");
-      WeaponsTickUnits(*this, stageUnits());
+      WeaponsTickUnits(*this, stageUnits());  // (its write trap phase: the acquire turns, combat.cpp)
       phases.Lap(PhaseTimer::kWeapons);
     }
   }
