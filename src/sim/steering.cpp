@@ -893,8 +893,9 @@ void PredictWith(Sim& sim, Unit* X, Unit* Y, const SplineView& sx, const SplineV
         // (written in the navigator stage: the original's steering of Y's army runs after it in this beat unless
         // Y's army comes before the navigator's)
         const int ya = Y->army ? Y->army->index : 0;
-        my.colLateTick =
-            sim.inSteeringStage || (sim.navStageArmy > 0 && ya >= sim.navStageArmy) ? 0xffffffffu : now;
+        // (parallel order's navigators' stage, step 5.3: every army's steering comes after it)
+        my.colLateTick = sim.inSteeringStage || tl_navTurn || (sim.navStageArmy > 0 && ya >= sim.navStageArmy)
+                             ? 0xffffffffu : now;
         static const long dbg = getenv("MOHO64_DEBUG_COL") ? atol(getenv("MOHO64_DEBUG_COL")) : -1;
         if (dbg >= 0 && (static_cast<long>(X->id) == dbg || static_cast<long>(Y->id) == dbg))
           Logf(LogLevel::Info, "col %u predict Y %u (point %zu of %zu, made %llu) X %u (point %zu of %zu, made %llu) at +%zu", now,
@@ -1304,28 +1305,34 @@ void SteeringCheckCollisions(Sim& sim, Unit* u) {
 
 void SteeringNavStageArmy(Sim& sim, int army) { sim.navStageArmy = army; }
 
+// Parallel order's spline snapshot (step 5.2; the navigators' stage takes it too, step 5.3): every unit's spline as
+// the stage begins, what another unit's prediction reads (SeenSpline).
+void SteeringSnapshot(const std::vector<Unit*>& all) {
+  for (Unit* u : all) {
+    UnitMotion& m = u->motion;
+    // (step 5.2b: a unit without a spline needs no points; a changed batch is copied into the buffer kept from the
+    // last beat when nothing else holds it, so most beats allocate nothing)
+    if (m.hasSpline && (u->snapSplineVersion != m.splineVersion || !u->snapSpline)) {
+      if (u->snapSpline && u->snapSpline.use_count() == 1) *u->snapSpline = m.spline;
+      else u->snapSpline = std::make_shared<std::vector<UnitMotion::SplinePoint>>(m.spline);
+      u->snapSplineVersion = m.splineVersion;
+    } else if (!u->snapSpline) {
+      u->snapSpline = std::make_shared<std::vector<UnitMotion::SplinePoint>>();
+      u->snapSplineVersion = 0xffffffffu;
+    }
+    u->snapSplineIdx = m.splineIdx;
+    u->snapHasSpline = m.hasSpline;
+    u->snapSplineMode = m.splineMode;
+  }
+}
+
 void SteeringTickUnits(Sim& sim, const std::vector<Unit*>& all) {  // (brain+0xac: creation order inside the army)
   sim.inSteeringStage = true;
   if (sim.order == SimOrder::kParallel) {
     // Parallel order (docs/parallel-mode.md 3.1, step 5.2): every unit's spline as the stage begins (its snapshot:
     // what another unit's prediction reads), then the turns, which write no other unit (their writes into another
     // are messages), then the stage's commit, in the turns' order.
-    for (Unit* u : all) {
-      UnitMotion& m = u->motion;
-      // (step 5.2b: a unit without a spline needs no points; a changed batch is copied into the buffer kept from the
-      // last beat when nothing else holds it, so most beats allocate nothing)
-      if (m.hasSpline && (u->snapSplineVersion != m.splineVersion || !u->snapSpline)) {
-        if (u->snapSpline && u->snapSpline.use_count() == 1) *u->snapSpline = m.spline;
-        else u->snapSpline = std::make_shared<std::vector<UnitMotion::SplinePoint>>(m.spline);
-        u->snapSplineVersion = m.splineVersion;
-      } else if (!u->snapSpline) {
-        u->snapSpline = std::make_shared<std::vector<UnitMotion::SplinePoint>>();
-        u->snapSplineVersion = 0xffffffffu;
-      }
-      u->snapSplineIdx = m.splineIdx;
-      u->snapHasSpline = m.hasSpline;
-      u->snapSplineMode = m.splineMode;
-    }
+    SteeringSnapshot(all);
     std::optional<wtrap::Phase> trap;  // (MOHO64_PAR_WRITETRAP: the turns; the snapshot before and the commit after are serial)
     if (wtrap::On()) trap.emplace(sim.tick(), "steering");
     sim.RunTurns("steering", all.size(), [&](size_t i) {

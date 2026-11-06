@@ -447,6 +447,13 @@ class Unit : public Entity {
   size_t snapSplineIdx = 0;
   bool snapHasSpline = false;
   int snapSplineMode = 0;
+  // Parallel order's navigators' snapshot (docs/parallel-mode.md 3.1, step 5.3), taken with snapLayer / snapStates /
+  // snapForm and the spline above as the stage begins (LandNavTickUnits): what another unit's navigator turn reads of
+  // this unit and this unit's own turn changes: its footprint choice (UnitFootprint: altFootprintNav, which a reset or
+  // a FAVORSWATER request changes) and its navigator's status (a formation follower holds while its leader thinks).
+  bool snapAltFp = false;     // altFootprintNav || altFootprintForced
+  int snapNavStatus = 0;      // LandNavStatus
+  bool snapAirSteering = false;  // an aircraft's AirMotion::steering
 };
 
 // The unit whose turn of parallel order's phase A runs on this thread (set by the entity pass's driver around each
@@ -457,14 +464,21 @@ inline thread_local const Unit* tl_phaseATurn = nullptr;
 inline bool SeesSnapshot(const Entity* e) {
   return tl_phaseATurn && e != tl_phaseATurn && e->kind == Entity::Kind::Unit;
 }
-inline const LayerString& SeenLayer(const Unit* u) { return SeesSnapshot(u) ? u->snapLayer : u->layer; }
-inline bool SeenState(const Unit* u, int i) { return SeesSnapshot(u) ? (u->snapStates >> i) & 1u : u->unitStates.Has(i); }
+// The unit whose turn of parallel order's navigators' stage runs on this thread (step 5.3; null otherwise): what the
+// turn reads of ANOTHER unit's layer, states, formation, footprint choice and navigator status comes from the stage's
+// snapshot (LandNavTickUnits). (Not its position: nothing moves in that stage, and the moved-this-beat test of
+// UnitIgnores reads the live transform as in the original's order.)
+inline thread_local const Unit* tl_navTurn = nullptr;
+inline bool SeesNavSnapshot(const Entity* e) { return tl_navTurn && e != tl_navTurn && e->kind == Entity::Kind::Unit; }
+inline bool SeesStateSnapshot(const Entity* e) { return SeesSnapshot(e) || SeesNavSnapshot(e); }
+inline const LayerString& SeenLayer(const Unit* u) { return SeesStateSnapshot(u) ? u->snapLayer : u->layer; }
+inline bool SeenState(const Unit* u, int i) { return SeesStateSnapshot(u) ? (u->snapStates >> i) & 1u : u->unitStates.Has(i); }
 // (an entity's transform: a unit's held shape is where the beat began, the snapshot pass holds every unit's)
 inline const Vec3& SeenPos(const Entity* e) { return SeesSnapshot(e) && e->shapeHeld ? e->shapePos : e->position; }
 inline const Quat& SeenOri(const Entity* e) { return SeesSnapshot(e) && e->shapeHeld ? e->shapeOri : e->orientation; }
 inline const Vec3& SeenVelocity(const Unit* u) { return SeesSnapshot(u) ? u->snapVelocity : UnitVelocity(u); }
 inline const Vec3& SeenMotionVel(const Unit* u) { return SeesSnapshot(u) ? u->snapMotionVel : u->motion.vel; }
-inline const struct Formation* SeenForm(const Unit* u) { return SeesSnapshot(u) ? u->snapForm : u->form; }
+inline const struct Formation* SeenForm(const Unit* u) { return SeesStateSnapshot(u) ? u->snapForm : u->form; }
 
 // The unit whose turn of parallel order's steering stage runs on this thread (step 5.2; null otherwise): another unit's
 // spline is then read from its stage-start snapshot.

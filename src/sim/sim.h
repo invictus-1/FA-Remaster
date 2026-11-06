@@ -351,6 +351,7 @@ class Sim {
   // creation order: for EntityViews (sim/sim_view.h)
   std::vector<Entity*> scriptEntities;
   std::vector<Entity*> gridScratch;  // (entity_grid.cpp's list for the beat's AdvanceCoords, kept to save allocations)
+  std::vector<std::pair<Entity*, bool>> gridMoved;  // (the same, parallel order: the moved entities and whether widened)
   // A manipulator's place among those of equal precedence (0x63ace0 puts it behind them): stamped when it is
   // made, when its precedence is set, and when an animator is given an animation (it re-adds its bones).
   uint32_t manipSeq = 0;
@@ -645,10 +646,15 @@ class Sim {
   // simOrder, else the scenario's Options.RemasterSimOrder (missing: the original's); MOHO64_SIM_ORDER=original |
   // parallel overrides it. Parallel order needs the fixes (a session asking for it without them does not start).
   // orderVersion: the parallel order's version the game was made with (Options.RemasterSimOrderVersion; 0 for the
-  // original's order); kSimOrderVersion is this engine's. (Step 1 of the plan: nothing reads the order yet.)
+  // original's order); kSimOrderVersion is this engine's. Raise it whenever a change makes a parallel-order game
+  // play differently (docs/parallel-mode.md 7, risk 4); the original's order never reads it.
+  //   1: the first parallel order (docs/parallel-mode.md 8, steps 1-3 and 4.4-4.6: canonical grid buckets, keyed
+  //      draws, the entity pass's phases, economy and snapshots on the pool).
+  //   2: steps 5.1-5.5 (armies' stages without the interleave; steering, navigators and weapons' acquire as turns
+  //      on the pool with their effects committed in turn order; grid spans): a version-1 game plays differently.
   SimOrder order = SimOrder::kOriginal;
   int orderVersion = 0;
-  static constexpr int kSimOrderVersion = 1;
+  static constexpr int kSimOrderVersion = 2;
   bool ParallelOrder() const { return order == SimOrder::kParallel; }
   // The FAF game version whose rules the session plays by (replay.h kGameVersion3839 / 3840; engine-ref/specs/
   // faf3840.md), decided by Start(SessionDescription) from the header's version line: a replay plays by its own

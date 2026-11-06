@@ -2772,10 +2772,8 @@ void Sim::Tick() {
   if (order == SimOrder::kParallel) {
     auto stageUnits = [this] { return std::vector<Unit*>(ArmyStageOrder()); };
     {
-      std::optional<wtrap::Phase> trap;
-      if (wtrap::On()) trap.emplace(tick_, "navigators");
       MOHO_LAP(lap, "navigators+paths");
-      LandNavTickUnits(*this, stageUnits());
+      LandNavTickUnits(*this, stageUnits());  // (its write trap phase: the turns, LandNavTickParallel)
       phases.Lap(PhaseTimer::kNavigators);
     }
     {

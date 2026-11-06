@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstring>
 
+#include "core/workers.h"
 #include "sim/collision.h"
 #include "sim/sim.h"
 #include "sim/terrain.h"
@@ -293,21 +294,18 @@ void EntityGrid::GatherLine(float fromX, float fromZ, float toX, float toZ, std:
   for (Entity* e : *out) e->gridMark = false;
 }
 
-void GridUpdate(Sim& sim, Entity* e, bool widened) {
-  if (e->kind == Entity::Kind::Blip) return;
-  // (a prop moved: the views' prop grid, Sim::ForPropsInRect, takes its new place when next read; only the views read
-  // that grid. Without this a prop a script moved, or a falling tree, was looked up in its first cell)
-  if (e->kind == Entity::Kind::Prop) sim.MarkPropsMoved(), sim.NotePropTouched(e);
-  EntityGrid& g = sim.entityGrid();
-  if (!g.ready()) return;
+namespace {
+// GridUpdate's span: the cells of e's collision shape (skirt-wide for a unit's box when widened); the entity's own
+// gridSeen / gridPos / gridOri are written, nothing else (step 5.5: on the worker pool in parallel order)
+struct GridSpan {
+  int x0 = 0, z0 = 0, w = 0, h = 0;
+};
+GridSpan SpanOf(Entity* e, bool widened) {
   e->gridSeen = true;
   e->gridPos = e->position;
   e->gridOri = e->orientation;
   WorldShape ws;
-  if (!GetWorldShape(e, &ws)) {
-    g.Place(e, 0, 0, 0, 0);
-    return;
-  }
+  if (!GetWorldShape(e, &ws)) return {};
   if (widened && ws.type == ShapeType::Box && e->kind == Entity::Kind::Unit) {
     const UnitBpData* d = static_cast<Unit*>(e)->bpData;
     if (d) {
@@ -322,10 +320,22 @@ void GridUpdate(Sim& sim, Entity* e, bool widened) {
     *c0 = std::clamp(f >> 2, 0, 0xffff);
     *n = std::clamp(((c + 3) >> 2) - *c0, 0, 0xffff - *c0);
   };
-  int cx0, cz0, w, h;
-  span(mn.x, mx.x, &cx0, &w);
-  span(mn.z, mx.z, &cz0, &h);
-  g.Place(e, cx0, cz0, w, h);
+  GridSpan s;
+  span(mn.x, mx.x, &s.x0, &s.w);
+  span(mn.z, mx.z, &s.z0, &s.h);
+  return s;
+}
+}  // namespace
+
+void GridUpdate(Sim& sim, Entity* e, bool widened) {
+  if (e->kind == Entity::Kind::Blip) return;
+  // (a prop moved: the views' prop grid, Sim::ForPropsInRect, takes its new place when next read; only the views read
+  // that grid. Without this a prop a script moved, or a falling tree, was looked up in its first cell)
+  if (e->kind == Entity::Kind::Prop) sim.MarkPropsMoved(), sim.NotePropTouched(e);
+  EntityGrid& g = sim.entityGrid();
+  if (!g.ready()) return;
+  const GridSpan s = SpanOf(e, widened);
+  g.Place(e, s.x0, s.z0, s.w, s.h);
 }
 
 void GridRemove(Sim& sim, Entity* e) { sim.entityGrid().Remove(e); }
@@ -359,12 +369,22 @@ void GridAdvanceCoords(Sim& sim) {
   // 0x10005a heads the cell, land scout 0x10006f's CheckCollisions of 8033 asks it before 0x100127, puts a record at +0
   // on it and brakes hard at 8034 (case 4). Ours went by the motion stage's order (0x10005a first) and drove on.
   // (Before: MP2 7087, the order by id had 0x10010d before 0x100008 in cell (30,36).)
+  // Parallel order (docs/parallel-mode.md 3.4, step 5.5): the cells' lists are canonical (step 2b: by creation,
+  // whatever order the entities are placed in), so the moved entities' new spans are made on the worker pool (each
+  // writes only its own gridSeen / gridPos / gridOri) and then placed one after another; the same lists and the same
+  // version counts as one by one. (Below kParCoordsMin entities, or on one thread, one by one as before.)
+  constexpr size_t kParCoordsMin = 512;
+  const bool pool = sim.order == SimOrder::kParallel && sim.entityGrid().ready() &&
+                    (sim.workers().Threads() > 1 || sim.workers().Check().mode != ParCheck::kOff);
+  std::vector<std::pair<Entity*, bool>>& moved = sim.gridMoved;
+  moved.clear();
   for (Unit* u : sim.DirtyOrder()) {
     if (u->destroyQueued) continue;
     if (u->gridSeen && std::memcmp(&u->gridPos, &u->position, sizeof(Vec3)) == 0 &&
         std::memcmp(&u->gridOri, &u->orientation, sizeof(Quat)) == 0)
       continue;
-    GridUpdate(sim, u, true);
+    if (pool) moved.emplace_back(u, true);
+    else GridUpdate(sim, u, true);
   }
   // The third list: shells, shields, script entities. Their turns set their transforms in the order they were
   // made (one entity stage), and that is the order UpdateCollision goes through them here; one whose cells change
@@ -379,7 +399,25 @@ void GridAdvanceCoords(Sim& sim) {
     if (!s->destroyQueued && s->kind == Entity::Kind::Entity && (s->shape.type != ShapeType::None || s->gridW))
       o.push_back(s);
   std::sort(o.begin(), o.end(), [](const Entity* a, const Entity* b) { return a->handle < b->handle; });
-  for (Entity* e : o) GridUpdate(sim, e, false);
+  if (!pool) {
+    for (Entity* e : o) GridUpdate(sim, e, false);
+    return;
+  }
+  for (Entity* e : o) moved.emplace_back(e, false);
+  // (the sim's thread's list; a worker reaches it through this reference: a thread_local named in the task would be
+  // the worker's own)
+  static thread_local std::vector<GridSpan> spanList;
+  std::vector<GridSpan>& spans = spanList;
+  spans.resize(moved.size());
+  if (moved.size() >= kParCoordsMin || sim.workers().Check().mode != ParCheck::kOff) {
+    sim.workers().ParallelFor("advancecoords: grid spans", moved.size(), 64, [&](size_t b, size_t e, int) {
+      for (size_t k = b; k < e; ++k) spans[k] = SpanOf(moved[k].first, moved[k].second);
+    });
+  } else {
+    for (size_t k = 0; k < moved.size(); ++k) spans[k] = SpanOf(moved[k].first, moved[k].second);
+  }
+  EntityGrid& g = sim.entityGrid();
+  for (size_t k = 0; k < moved.size(); ++k) g.Place(moved[k].first, spans[k].x0, spans[k].z0, spans[k].w, spans[k].h);
 }
 
 }  // namespace moho

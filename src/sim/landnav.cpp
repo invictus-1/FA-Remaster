@@ -18,6 +18,7 @@
 #include <cstring>
 #include <limits>
 #include <map>
+#include <optional>
 
 #include "core/log.h"
 #include "core/trace.h"
@@ -515,6 +516,20 @@ HPathTables& Tables(Sim& sim) {
   return *m;
 }
 
+// (parallel order's navigators' stage, step 5.3: the path queues are the sim's, so a turn's queueing and cancelling
+// are made in the stage's commit, in the turns' order; the traveler's own fields are set at once, as before. No turn
+// reads the queues' flags of its traveler: only the path stage after the armies' stages does.)
+void PathQueue(Sim& sim, PathTraveler* t) {
+  HPathTables& T = Tables(sim);
+  if (tl_navTurn && sim.DeferringScripts()) return sim.DeferAction([&T, t] { T.Queue(t); });
+  T.Queue(t);
+}
+void PathCancel(Sim& sim, PathTraveler* t) {
+  HPathTables& T = Tables(sim);
+  if (tl_navTurn && sim.DeferringScripts()) return sim.DeferAction([&T, t] { T.Cancel(t); });
+  T.Cancel(t);
+}
+
 Vec3 WorldOf(Sim& sim, const Unit* u, const PathCell& c) {
   float x = c.x + SX(u) * 0.5f, z = c.z + SZ(u) * 0.5f;
   const TerrainMap* map = sim.map();
@@ -565,7 +580,7 @@ void QueueSearch(Sim& sim, Unit* u, LandNav& n) {
   } else {
     t.boxes.clear();
   }
-  Tables(sim).Queue(&t);
+  PathQueue(sim, &t);
 }
 
 // CAiPathFinder::SetGoal 0x5aa120: is some cell on the goal ring free?
@@ -660,7 +675,7 @@ void RequestPath(Sim& sim, Unit* u, LandNav& n, int mode) {
 }
 
 void ResetPathState(Sim& sim, Unit* u, LandNav& n) {
-  Tables(sim).Cancel(&n.pf);
+  PathCancel(sim, &n.pf);
   // (0x5ad9c0 leaves the path vector, +0x14..+0x20, as it is: the cells of the last path stay until a search result
   // replaces them, and RequestPath's waiting-follower branch 0x5ae06e..0x5ae08b appends its goal corner behind them
   // (0x5afec0 is push_back). Seen in the oracle (probe mp2_2056): MP2 army 0's Mantis 0x1a, in a guard formation,
@@ -940,7 +955,8 @@ int FollowSlot(Sim& sim, Unit* u, LandNav& n) {
   }
   Entity* le = sim.FindEntity(L);
   Unit* lu = le && le->kind == Entity::Kind::Unit ? static_cast<Unit*>(le) : nullptr;
-  if (lu && LandNavStatus(lu) == 1) {  // the leader is still computing its path: hold
+  // (the leader's status: in parallel order's navigators' stage as that stage began, step 5.3)
+  if (lu && (SeesNavSnapshot(lu) ? lu->snapNavStatus : LandNavStatus(lu)) == 1) {  // the leader is still computing its path: hold
     if (!n.hasTarget || n.target != n.cur) {
       n.target = n.cur;
       n.hasTarget = true;
@@ -1166,7 +1182,7 @@ void Execute(Sim& sim, Unit* u, LandNav& n) {
     if (Dbg()) Logf(LogLevel::Info, "nav: tick %u unit %u %s", sim.tick(), u->id, ok ? "succeeded" : "failed");
     n.active = false;
     n.hasTarget = false;  // (a navigator that went idle starts its next goal with a target change)
-    Tables(sim).Cancel(&n.pf);
+    PathCancel(sim, &n.pf);
     u->unitStates.Erase(US("PathFinding"));
     // (0x5a43fb: MakeIdle, vt+0x4c = 0x5a3e00, runs ResetPathState 0x5ad9c0, which clears unit+0x124: a FAVORSWATER
     // unit stands on its Footprint again once its move is over)
@@ -1494,9 +1510,65 @@ void LandNavStageBegin(Sim& sim) {
 // One army's navigator stage (brain+0xa8: its units in creation order), in that army's turn of the armies' stages.
 // The turns played ahead (MOHO64_PAR_NAV) are made here, for this army's navigators only: the armies before it have
 // had their steering and weapons stages by now, and what those change is then already in place.
+// Parallel order's navigators' stage (docs/parallel-mode.md 3.1, step 5.3): every army's navigators at once. The
+// snapshot first: what a turn reads of another unit and that unit's own turn changes (its layer, states, formation,
+// footprint choice, navigator status, spline: Unit::snap*), and what a turn would make at its first read (the
+// footprint grids, the path tables, the unit grid). Then the turns through Sim::RunTurns (the worker pool), each
+// writing its own unit and navigator only: its path queueing and cancelling (PathQueue / PathCancel), a woken command
+// thread (MotionNavDone, AirNavArrival) and the predictions a finished move makes for the units around it
+// (SteeringCheckCollisions, as in the steering stage: tl_steerTurn) are messages; then the commit, in the turns' order.
+// No turn played ahead (MOHO64_PAR_NAV): the turns themselves run on the pool.
+static void LandNavTickParallel(Sim& sim, const std::vector<Unit*>& all) {
+  (void)Tables(sim);
+  AirTiersReady(sim);
+  for (Unit* u : all) {
+    if (u->motion.bp) {
+      FootprintGrid(sim, *u->motion.bp);
+      if (!u->motion.bp->altFootprint.name.empty()) AltFootprintGrid(sim, *u->motion.bp);
+    }
+    u->snapLayer = u->layer;
+    u->snapStates = u->unitStates.Bits();
+    u->snapForm = u->form;
+    u->snapAltFp = u->altFootprintNav || u->altFootprintForced;
+    u->snapNavStatus = LandNavStatus(u);
+    u->snapAirSteering = u->motion.air && u->motion.air->steering;
+  }
+  SteeringSnapshot(all);
+  sim.EnsureUnitGrid();
+  std::optional<wtrap::Phase> trap;  // (MOHO64_PAR_WRITETRAP: the turns; the snapshot before and the commit after are serial)
+  if (wtrap::On()) trap.emplace(sim.tick(), "navigators");
+  sim.RunTurns("navigators", all.size(), [&](size_t i) {
+    Unit* u = all[i];
+    wtrap::Turn trapTurn(u);
+    tl_navTurn = u;
+    tl_steerTurn = u;
+    if (u->motion.air && !u->destroyQueued && !u->dead) {  // (the air navigator, same stage: CAiNavigatorAir::Execute)
+      if (!AirNavArrival(sim, u) && !u->parentId) AirFormationFollow(sim, u);
+    }
+    LandNav* n = Nav(u);
+    if (n && n->active && !u->destroyQueued && !u->dead) {
+      if (n->startedThisTick) {  // (navigators run at the beat start, before the command stage)
+        n->startedThisTick = false;
+        n->prevPos = u->position;
+      }
+      Execute(sim, u, *n);
+      if (n->problem) u->unitStates.Insert(US("ProblemGettingToGoal"));
+    }
+    tl_navTurn = nullptr;
+    tl_steerTurn = nullptr;
+  });
+  trap.reset();
+  sim.RunDeferredScriptCalls();
+}
+
 void LandNavTickUnits(Sim& sim, const std::vector<Unit*>& all) {
   static const bool prof = getenv("MOHO64_PROFILE") != nullptr;
   const double t0 = prof ? NowS() : 0;
+  if (sim.order == SimOrder::kParallel) {
+    LandNavTickParallel(sim, all);
+    if (prof) LNS(sim).stageExec += NowS() - t0;
+    return;
+  }
   LandNavAheadRun(sim, all);  // MOHO64_PAR_NAV
   Speculation<NavAhead>& navSpec = sim.navSpec();
   for (size_t i = 0; i < all.size(); ++i) {
