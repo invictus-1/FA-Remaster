@@ -103,7 +103,7 @@ check("Frame Generation off unless chosen", video.remaster_frame_generation.defa
 -- The renderer's looks from Chris's big test (2026-11-01): each on unless chosen, the earlier look kept as Off, in no
 -- preset level; at the start the program has their defaults (the test's preferences choose none of them)
 for _, key in {'remaster_ocean_glitter', 'remaster_shore_soak', 'remaster_gateway', 'remaster_ghost_look', 'remaster_guide',
-               'remaster_cloak_look', 'remaster_stealth_veil'} do
+               'remaster_cloak_look', 'remaster_stealth_veil', 'remaster_sea_sparkle'} do
     check("the Video tab has " .. key .. ", on unless chosen", video[key] and video[key].set ~= nil and video[key].default, 1)
 end
 check("Shield Bending: Subtle unless chosen, of Off, Subtle and Full", video.remaster_shield_bend and
@@ -115,8 +115,8 @@ check("Sharpen: a slider, 50 of 100 unless chosen", video.remaster_sharpen and
 do
     local l = moho64ui_Looks()
     check("the program starts with them on", tostring(l.oceanGlitter) .. " " .. tostring(l.shoreSoak) .. " " .. tostring(l.remasteredGate) ..
-        " " .. tostring(l.ghostLook) .. " " .. tostring(l.guideOverGrass) .. " " .. tostring(l.cloakLook) .. " " .. tostring(l.stealthLook),
-        "true true true true true true true")
+        " " .. tostring(l.ghostLook) .. " " .. tostring(l.guideOverGrass) .. " " .. tostring(l.cloakLook) .. " " .. tostring(l.stealthLook) .. " " .. tostring(l.seaSparkle),
+        "true true true true true true true true")
     check("Shield Bending Subtle, the units' glow 0.75, sharpening 0.5", l.shieldBend .. " " .. l.unitGlow .. " " .. l.sharpen, "1 0.75 0.5")
 end
 video.remaster_ocean_glitter.set('remaster_ocean_glitter', 0, false)
@@ -145,17 +145,18 @@ do
     -- in every preset level by the renderer's costs (options.lua remasterPresets, 2026-11-04): High and Ultra their
     -- defaults, Medium without Sharpen, Low without Shore Soak too, Off the earlier looks (Ghost and Cloak the original's)
     local keys = {'remaster_ocean_glitter', 'remaster_shore_soak', 'remaster_shield_bend', 'remaster_unit_glow', 'remaster_sharpen',
-                  'remaster_gateway', 'remaster_ghost_look', 'remaster_guide', 'remaster_cloak_look', 'remaster_stealth_veil'}
+                  'remaster_gateway', 'remaster_ghost_look', 'remaster_guide', 'remaster_cloak_look', 'remaster_stealth_veil',
+                  'remaster_sea_sparkle'}
     local function line(level)
         local values, out = O.RemasterPresetValues(level), {}
         for _, key in keys do table.insert(out, tostring(values[key])) end
         return table.concat(out, " ")
     end
-    check("Ultra has them at their defaults", line(4), "1 1 1 75 50 1 1 1 1 1")
+    check("Ultra has them at their defaults", line(4), "1 1 1 75 50 1 1 1 1 1 1")
     check("High the same", line(3), line(4))
-    check("Medium without Sharpen", line(2), "1 1 1 75 0 1 1 1 1 1")
-    check("Low without Shore Soak too", line(1), "1 0 1 75 0 1 1 1 1 1")
-    check("Off: the earlier looks, Ghost and Cloak the original's", line(0), "0 0 2 100 0 0 1 0 1 0")
+    check("Medium without Sharpen", line(2), "1 1 1 75 0 1 1 1 1 1 1")
+    check("Low without Shore Soak too", line(1), "1 0 1 75 0 1 1 1 1 1 1")
+    check("Off: the earlier looks, Ghost and Cloak the original's", line(0), "0 0 2 100 0 0 1 0 1 0 0")
 end
 check("the Photographic Look: Off unless chosen, and its five choices", video.remaster_photo_look and
     video.remaster_photo_look.default .. " " .. table.getn(video.remaster_photo_look.custom.states), "0 5")
