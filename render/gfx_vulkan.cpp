@@ -1028,11 +1028,11 @@ class VulkanDevice final : public Device {
   // MakeCompute there with `background` (their shaders from the cache alone, compiled into it first with a compiler of that
   // thread's own); the pipeline layouts are shared under layoutsMutex_
   bool backgroundAsked_ = false;
-  std::thread backgroundThread_;
+  std::vector<std::thread> backgroundThreads_;  // [bgpool] (several: as the Direct3D 12 device's)
   std::mutex backgroundMutex_, layoutsMutex_;
   std::condition_variable backgroundWake_, backgroundDone_;
   std::deque<std::shared_ptr<BackgroundPipeline>> backgroundQueue_;
-  int backgroundMaking_ = 0;  // [bgload] (the one being made now: 1)
+  int backgroundMaking_ = 0;  // [bgload] (those being made now)
   bool backgroundStop_ = false;
   std::shared_ptr<BackgroundPipeline> AskBackground(std::shared_ptr<PendingPipeline> what);
   void BackgroundWork();
@@ -1195,7 +1195,8 @@ VulkanDevice::~VulkanDevice() {
     backgroundStop_ = true;
   }
   backgroundWake_.notify_all();
-  if (backgroundThread_.joinable()) backgroundThread_.join();
+  for (std::thread& t : backgroundThreads_)
+    if (t.joinable()) t.join();
   if (!device_) {
     if (surface_) vkDestroySurfaceKHR(instance_, surface_, nullptr);
     if (instance_) vkDestroyInstance(instance_, nullptr);
@@ -3867,13 +3868,16 @@ std::shared_ptr<BackgroundPipeline> VulkanDevice::AskBackground(std::shared_ptr<
   {
     std::lock_guard<std::mutex> lock(backgroundMutex_);
     backgroundQueue_.push_back(job);
-    if (!backgroundThread_.joinable()) backgroundThread_ = std::thread([this] { BackgroundWork(); });
+    if (backgroundThreads_.empty()) {  // [bgpool] (half the processor's threads, 2 to 8; the pipeline cache is the driver's to lock)
+      const unsigned n = std::clamp(std::thread::hardware_concurrency() / 2, 2u, 8u);
+      for (unsigned t = 0; t < n; ++t) backgroundThreads_.emplace_back([this] { BackgroundWork(); });
+    }
   }
   backgroundWake_.notify_all();
   return job;
 }
 
-// [snowhitch] The device's own thread: the pipelines asked for, made one after another in the order asked (the pipeline cache
+// [snowhitch] The device's own threads ([bgpool] several): the pipelines asked for, each taken in the order asked by the next thread free (the pipeline cache
 // is the driver's, which keeps it safe from several threads; the layouts are shared under their own lock).
 void VulkanDevice::BackgroundWork() {
   for (;;) {
@@ -3885,7 +3889,7 @@ void VulkanDevice::BackgroundWork() {
       job = backgroundQueue_.front();
       backgroundQueue_.pop_front();
       job->stage = BackgroundPipeline::Making;
-      backgroundMaking_ = 1;  // [bgload]
+      ++backgroundMaking_;  // [bgload]
     }
     const PendingPipeline& what = *job->what;
     HitchLog::Scope made(what.compute ? "compute pipeline made ahead" : "pipeline made ahead", what.name);  // [hitches] (elsewhere)
@@ -3895,7 +3899,7 @@ void VulkanDevice::BackgroundWork() {
     made.End();
     {
       std::lock_guard<std::mutex> lock(backgroundMutex_);
-      backgroundMaking_ = 0;  // [bgload]
+      --backgroundMaking_;  // [bgload]
       job->made = rec;
       job->why = why;
       job->stage = ok ? BackgroundPipeline::Made : BackgroundPipeline::NotMade;

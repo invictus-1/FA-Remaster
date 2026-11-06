@@ -573,11 +573,13 @@ class D3D12Device final : public Device {
   // [snowhitch] pipelines made on a thread of the device's own (BeginBackgroundPipelines): asked for, made there in turn,
   // taken into their slot the first time one is set (TakeBackground: waited for, or made then if its turn has not come)
   bool backgroundAsked_ = false;
-  std::thread backgroundThread_;
+  // [bgpool] several threads (Chris's third test, 2026-11-05: the first start after a new build took two minutes: 221
+  // pipelines made one after another, 108.7 s, the water's about 5 s each; the second start 0.17 s from the caches)
+  std::vector<std::thread> backgroundThreads_;
   std::mutex backgroundMutex_;
   std::condition_variable backgroundWake_, backgroundDone_;
   std::deque<std::shared_ptr<BackgroundPipeline>> backgroundQueue_;
-  int backgroundMaking_ = 0;  // [bgload] (the one being made now: 1)
+  int backgroundMaking_ = 0;  // [bgload] (those being made now)
   bool backgroundStop_ = false;
   std::shared_ptr<BackgroundPipeline> AskBackground(std::shared_ptr<PendingPipeline> what);
   void BackgroundWork();
@@ -874,7 +876,8 @@ D3D12Device::~D3D12Device() {
     backgroundStop_ = true;
   }
   backgroundWake_.notify_all();
-  if (backgroundThread_.joinable()) backgroundThread_.join();
+  for (std::thread& t : backgroundThreads_)
+    if (t.joinable()) t.join();
   {  // [spikes] (the upload buffers' releaser: what it holds let go of first)
     std::lock_guard<std::mutex> lock(releaseMutex_);
     releaseStop_ = true;
@@ -2908,15 +2911,18 @@ std::shared_ptr<BackgroundPipeline> D3D12Device::AskBackground(std::shared_ptr<P
   {
     std::lock_guard<std::mutex> lock(backgroundMutex_);
     backgroundQueue_.push_back(job);
-    if (!backgroundThread_.joinable()) backgroundThread_ = std::thread([this] { BackgroundWork(); });
+    if (backgroundThreads_.empty()) {  // [bgpool] (half the processor's threads, 2 to 8: the frames and the loading go on beside)
+      const unsigned n = std::clamp(std::thread::hardware_concurrency() / 2, 2u, 8u);
+      for (unsigned t = 0; t < n; ++t) backgroundThreads_.emplace_back([this] { BackgroundWork(); });
+    }
   }
   backgroundWake_.notify_all();
   return job;
 }
 
-// [snowhitch] The device's own thread: the pipelines asked for, made one after another in the order asked (the shader cache
-// and the kept pipelines are shared with the frames' thread under their own locks; Direct3D 12's device may be called from
-// any thread).
+// [snowhitch] The device's own threads ([bgpool] several): the pipelines asked for, each taken in the order asked by the next
+// thread free (the shader cache is written a file at a time under a name of the thread's own, the kept pipelines under their
+// lock; Direct3D 12's device may be called from any thread).
 void D3D12Device::BackgroundWork() {
   for (;;) {
     std::shared_ptr<BackgroundPipeline> job;
@@ -2927,7 +2933,7 @@ void D3D12Device::BackgroundWork() {
       job = backgroundQueue_.front();
       backgroundQueue_.pop_front();
       job->stage = BackgroundPipeline::Making;
-      backgroundMaking_ = 1;  // [bgload]
+      ++backgroundMaking_;  // [bgload]
     }
     const PendingPipeline& what = *job->what;
     HitchLog::Scope made(what.compute ? "compute pipeline made ahead" : "pipeline made ahead", what.name);  // [hitches] (elsewhere)
@@ -2940,7 +2946,7 @@ void D3D12Device::BackgroundWork() {
     made.End();
     {
       std::lock_guard<std::mutex> lock(backgroundMutex_);
-      backgroundMaking_ = 0;  // [bgload]
+      --backgroundMaking_;  // [bgload]
       job->made = std::move(rec);
       job->why = why;
       job->stage = ok ? BackgroundPipeline::Made : BackgroundPipeline::NotMade;
