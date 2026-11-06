@@ -48,6 +48,11 @@ float3 DropLight(float3 p, float3 toEye, out float3 small) {
           float reaches = inside;
           [branch] if (map > -0.5 && inside > 0) reaches *= LampShadow(p, l, uint(map));
           fade = (1 - far2) * (1 - far2) / (1 + 1.5 * far2) * reaches + fade * colour.w * saturate(1 - far2 * 25);
+        } else {
+          // [rainglow] a light shining all round (a structure's hull glow, a beacon, a status lamp) lights the drops a
+          // third as much: over a base at night their sum drew every drop as a bright white or orange streak (Chris's third
+          // test, 2026-11-05: "rain reflecting light looks a tad odd over bases now"); the lamps' beams as before
+          fade *= 0.35;
         }
         small += colour.rgb * (fade * DropPhase(-l, toEye));
       }
