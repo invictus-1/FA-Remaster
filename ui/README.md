@@ -56,7 +56,7 @@ py ui/build_ui.py            -> build-ui/moho64ui(.exe)   (needs only: py -m pip
 moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferences file>]
          [--import-prefs <the original's preferences file> | none]
          [--stage userinit|setup|frontend] [--size 1920x1080] [--window] [--frames N] [--dump-ui]
-         [--screenshot file.png] [--lua <file>] [--list-bindings] [--log out.log] [--quiet]
+         [--screenshot file.png] [--lua <file> [--lua-again]] [--list-bindings] [--log out.log] [--quiet]
          [--session-out <file>] [--session <file>] [--seed N] [--game-lua <file>] [--no-world]
          [--replay-out <prefix>]
          [--no-sound] [--fullscreen] [--backdrop | --no-backdrop]
@@ -361,7 +361,9 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
 - `--dump-ui` logs the control tree at the end: one line per control with its class, name,
   rectangle, depth, state and texture or text. Without a window this is how to see a screen.
 - `--lua <file>` runs a Lua file of yours in the user state after the stages, before the frames (to
-  look at anything the scripts can see, or to build controls; its output goes to the log).
+  look at anything the scripts can see, or to build controls; its output goes to the log). With
+  `--lua-again` it runs again in each front end that comes back after a game is left (a test of a second visit
+  to the lobby, `ui/tests/lobby_secondvisit.lua`; the visit is told by GetFrontEndData).
 - `ui/tests/*.lua` are run that way and check themselves (`TEST ok` / `TEST FAIL` lines); the command
   is at the top of each file.
 - The network lobby (since 2026-10-29, the plan in `_scratch/ui/netlobby_survey.md`): `ui/net/` (plain C++

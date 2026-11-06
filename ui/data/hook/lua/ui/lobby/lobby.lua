@@ -78,13 +78,29 @@ do
         return table.concat(parts, short and " " or ", ")
     end
 
-    -- another of our AIs picked for a slot that has one keeps the slot's settings
+    -- the four in one line for the log: "rusher 2 -1 off"
+    local function SettingsLine(playerInfo)
+        local parts = {}
+        for _, choice in kChoices do table.insert(parts, tostring(playerInfo[choice.key])) end
+        return table.concat(parts, " ")
+    end
+
+    -- another of our AIs picked for a slot that has one keeps the slot's settings. Each of our AIs added, and each
+    -- setting changed in the dialog, is a line in the log ("FA Remastered lobby: ..."): the order of a player's steps
+    -- for a later look (Chris's second test, 2026-11-04: of four slots set, two reached the launch, not reproduced by
+    -- ui/tests/lobby_aislots.lua nor lobby_secondvisit.lua)
     local RemasterGameGetAIPlayerData = GetAIPlayerData
     function GetAIPlayerData(name, AIPersonality, slot)
         local data = RemasterGameGetAIPlayerData(name, AIPersonality, slot)
         local old = GetGameSettings().PlayerOptions[slot]
-        if IsOurs(AIPersonality) and OursIn(old) then
-            for _, choice in kChoices do data[choice.key] = old[choice.key] end
+        if IsOurs(AIPersonality) then
+            local kept = OursIn(old)
+            if kept then
+                for _, choice in kChoices do data[choice.key] = old[choice.key] end
+            end
+            local had = not old and "nobody" or old.Human and "a player" or tostring(old.AIPersonality)
+            LOG("FA Remastered lobby: slot " .. tostring(slot) .. ": " .. AIPersonality .. ", " .. SettingsLine(data) ..
+                (kept and " (kept from the slot's " .. had .. ")" or " (the defaults: the slot had " .. had .. ")"))
         end
         return data
     end
@@ -135,7 +151,11 @@ do
             local key, values = choice.key, choice.values
             combo.OnClick = function(self, index, text)
                 local playerInfo = GetGameSettings().PlayerOptions[slot]
-                if OursIn(playerInfo) and values[index] then SetPlayerOption(slot, key, values[index].key) end
+                if OursIn(playerInfo) and values[index] then
+                    SetPlayerOption(slot, key, values[index].key)
+                    LOG("FA Remastered lobby: slot " .. slot .. ": " .. key .. " " .. tostring(values[index].key) ..
+                        ", now " .. SettingsLine(GetGameSettings().PlayerOptions[slot]))
+                end
             end
             if not editable then combo:Disable() end
             dialog.combos[choice.key] = combo

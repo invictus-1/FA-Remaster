@@ -7,7 +7,7 @@
 //   moho64ui --init <init.lua> [--mods uids.txt] [--prefs <file>] [--import-prefs <file>|none]
 //            [--stage userinit|setup|frontend]
 //            [--size 1920x1080] [--window] [--frames N] [--dump-ui] [--screenshot file.png]
-//            [--lua <file>] [--list-bindings] [--log out.log] [--quiet] [-- <the game's own arguments>]
+//            [--lua <file> [--lua-again]] [--list-bindings] [--log out.log] [--quiet] [-- <the game's own arguments>]
 #include <cctype>
 #include <chrono>
 #include <cstdio>
@@ -73,6 +73,10 @@ struct Options {
   std::string importPrefs;
   std::string stage = "frontend";
   std::string luaFile;  // --lua file: a host Lua file run in the user state at the end (debugging)
+  // --lua-again: the --lua file runs again in every front end made anew (after a game is left, or a launch that did not
+  // load), its main menu up: a test of a second visit to the lobby (ui/tests/lobby_secondvisit.lua). Off by default:
+  // the tests that leave a game for the menu (menu_backdrop.lua) would launch again.
+  bool luaAgain = false;
   std::map<std::string, std::string> folders;  // SHGetFolderPath answers
   std::vector<std::string> gameArgs;
   int frames = 0;
@@ -285,6 +289,7 @@ int main(int argc, char** argv) {
     else if (a == "--stage") o.stage = next();
     else if (a == "--frames") o.frames = std::atoi(next().c_str());
     else if (a == "--lua") o.luaFile = next();
+    else if (a == "--lua-again") o.luaAgain = true;
     else if (a == "--list-bindings") o.listBindings = true;
     else if (a == "--quiet") o.quiet = true;
     else if (a == "--dump-ui") dumpUi = true;
@@ -342,7 +347,7 @@ int main(int argc, char** argv) {
                  "usage: moho64ui --init <init.lua> [--mods uids.txt] [--prefs file] [--import-prefs file|none]\n"
                  "                [--stage userinit|setup|frontend]\n"
                  "                [--size 1920x1080] [--window] [--frames N] [--dump-ui] [--screenshot file.png]\n"
-                 "                [--lua file] [--list-bindings] [--log out.log] [--quiet] [--no-sound] [--fullscreen] [-- game arguments]\n");
+                 "                [--lua file [--lua-again]] [--list-bindings] [--log out.log] [--quiet] [--no-sound] [--fullscreen] [-- game arguments]\n");
     return 2;
   }
   if (fullScreen && !ui::Window::ScreenSize(&width, &height)) fullScreen = false;  // the head is the screen
@@ -777,6 +782,11 @@ int main(int argc, char** argv) {
     if (fresh->Boot() && fresh->StartMainScript() && fresh->StartFrontEnd()) {
       front = std::move(fresh);
       shown = front.get();
+      if (o.luaAgain && !o.luaFile.empty()) {  // (--lua-again: the test's file in this front end too)
+        Logf(LogLevel::Info, "moho64ui: --lua-again: %s runs in the new front end", o.luaFile.c_str());
+        if (auto code = hostfs::ReadFile(o.luaFile)) front->RunString(*code, "@" + o.luaFile);
+        else Logf(LogLevel::Error, "cannot read %s", o.luaFile.c_str());
+      }
     } else {
       Logf(LogLevel::Error, "moho64ui: the front end did not come up again");
     }
