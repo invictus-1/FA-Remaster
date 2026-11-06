@@ -92,6 +92,11 @@ ForkThread(function()
     local GUI = upvalue(lobby.SetRuleTitleText, 'GUI')
     local gameInfo = upvalue(lobby.GetGameSettings, 'gameInfo')
     check("the lobby is up", type(GUI) == 'table' and type(gameInfo) == 'table' and GUI.slots ~= nil, true)
+    -- our AIs' tooltips in the slot's list (ui/data/hook/lua/ui/help/tooltips.lua; "No Description" before)
+    local tips = import('/lua/ui/help/tooltips.lua').Tooltips
+    local function tip(key) return tips[key] and tips[key].title or 'none' end
+    check("every one of our AIs has its tooltip", tip('aitype_remastered_recruit') .. " / " .. tip('aitype_remastered_supreme_cheat'),
+        "Remastered AI: Recruit / Remastered AIx: Supreme Commander")
     local changelog = import('/lua/ui/lobby/changelog/changelogdialog.lua')
     if changelog.IsOpen() then changelog.CloseChangelogDialog() WaitFrames(3) end
     local players, slots = gameInfo.PlayerOptions, GUI.slots
