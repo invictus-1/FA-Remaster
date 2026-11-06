@@ -1106,6 +1106,7 @@ int main(int argc, char** argv) {
     hooks.catchingUp = [&]() { return session.CatchingUp(); };
     hooks.statsLines = [&](std::vector<std::string>* lines) { session.StatsLines(lines); };
     hooks.frameGenerationOn = [&]() { return session.FrameGenerationOn(); };
+    hooks.loading = [&]() { return session.Loading(); };
 #ifdef _WIN32
     // On trial (the engine, 2026-11-04): the window's frame thread on the big-cache processors, as the sim's beat
     // thread is (core/placement.h). Off unless MOHO64UI_PIN_FRAME=1, until the frame times on Chris's game decide.
