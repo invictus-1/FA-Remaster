@@ -143,10 +143,6 @@ struct WindowHooks {
   // time that passed goes to `clock` (the picture's moment moves on; eachFrame gets only the rest).
   std::function<bool()> busy;
   std::function<void(double seconds)> clock;
-  // True while a game loads (GameSession::Loading): the loading screen is paced to the screen's rate even when the
-  // renderer shows it, so that its frames leave the processors to the load (the renderer, 2026-11-06: ~5,000 frames a
-  // second during a cold first load, while the pipelines were made); unset: never.
-  std::function<bool()> loading;
   // More lines for the performance statistics (the world's picture's own numbers); unset: none.
   std::function<void(std::vector<std::string>* lines)> statsLines;
   // Whether the renderer's frame generation makes a picture between each two drawn this frame (the statistics then

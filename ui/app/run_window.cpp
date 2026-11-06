@@ -484,23 +484,8 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     // 2 to 16). The window's picture is copied without waiting for the screen, so "vertical
     // sync" here is the screen's rate as a pace, not a true wait for it.
     const FramePacing& pacing = Pacing();
-    // (Shown by the renderer with vertical sync, its present waits for the screen: no wait here; but while a game loads,
-    // the screen's rate, at the most, whatever the options say: the load needs the processors more than the loading
-    // screen needs frames.)
-    const bool loadingNow = hooks.loading && hooks.loading();
-    double period = pacing.verticalSync ? (direct ? 0.0 : 1.0 / std::max(24, refresh)) : pacing.frameMs / 1000.0;
-    if (loadingNow) period = std::max(period, 1.0 / std::max(24, refresh));
-    // (the loading screen's frames, said once a load ends: how many the load shared its processors with)
-    static long long loadFrames = 0;
-    static Clock::time_point loadFrom{};
-    if (loadingNow) {
-      if (loadFrames++ == 0) loadFrom = now;
-    } else if (loadFrames > 0) {
-      const double s = std::chrono::duration<double>(now - loadFrom).count();
-      Logf(LogLevel::Info, "moho64ui: window: the loading screen drew %lld frames in %.1f s (%.0f a second)", loadFrames, s,
-           s > 0 ? loadFrames / s : 0.0);
-      loadFrames = 0;
-    }
+    // (Shown by the renderer with vertical sync, its present waits for the screen: no wait here.)
+    const double period = pacing.verticalSync ? (direct ? 0.0 : 1.0 / std::max(24, refresh)) : pacing.frameMs / 1000.0;
     std::this_thread::sleep_until(now + std::chrono::microseconds(static_cast<long long>(period * 1e6)));
   }
   double total = std::chrono::duration<double>(Clock::now() - start).count();
