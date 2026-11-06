@@ -3291,6 +3291,19 @@ int TickGuard(Sim& sim, lua_State* L, Unit* U, BuildTask& t) {
     if (g.result == 1) {
       if (c->count > 1) {
         --c->count;
+      } else if (U->repeatQueue && c->type == CommandType::BuildFactory) {
+        // 0x614224..0x61429c (read): with U's repeat switch on (unit+0x2a2) a spent BuildFactory order (type 7) gets
+        // its count back (+0xe4 = +0xe0, dirty +0x141) and goes to the back of U's queue
+        // (CUnitCommandQueue::MoveCommandToBackOfQueue 0x6ee220); only otherwise is it removed (0x6edf80). Seen
+        // (oracle recording of pro replay 4v4_setons_2, 3839): army 6's factory 0x600001, assisting with its repeat
+        // queue on, keeps twelve orders at 2803 and starts the next one (CFactoryBuildTask's UpdateTarget draw opens
+        // the beat's draws); ours removed the order and had eleven.
+        c->count = c->maxCount;
+        auto it = std::find(U->commands.begin(), U->commands.end(), c);
+        if (it != U->commands.end()) {
+          U->commands.erase(it);
+          U->commands.push_back(c);
+        }
       } else {
         auto it = std::find(U->commands.begin(), U->commands.end(), c);
         if (it != U->commands.end()) {

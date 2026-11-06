@@ -352,6 +352,10 @@ struct PatrolBox {
 // box, within GuardScanRadius.
 Unit* PatrolFindTarget(Sim& sim, Unit* u, const PatrolBox& box);
 BuildTask* MakeAttackTaskOn(Sim& sim, Unit* u, Entity* e);
+// What the attack task's attacker-event listener (0x5f3ee0) wrote through the task's +0x28 into its parent's result
+// word (the dispatcher's +0x2c for a head attack and for a patrol's child): 1 (event 8), 2 (events 2, 3, 4, 5, 7 by
+// the unit's mobility), 0 when no event wrote (the CCommandTask ctor 0x5f095f cleared it).
+int AttackTaskResult(const BuildTask& t);
 // The task of a Nuke or Tactical order: CUnitFireAtTask (ctor 0x60b260, TaskTick 0x60b380), the launch of a
 // counted missile from a ManualFire weapon at the order's target.
 BuildTask* StartFireAtTask(Sim& sim, Unit* u, const UnitCommand& c);

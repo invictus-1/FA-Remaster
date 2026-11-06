@@ -3968,6 +3968,8 @@ void AttackTaskCommandEvent(Sim& sim, Unit* u, BuildTask& t, const UnitCommand& 
   }
 }
 
+int AttackTaskResult(const BuildTask& t) { return t.adata ? t.adata->result : 0; }
+
 // new CUnitAttackTargetTask(target e) (the guard's and the patrol's child)
 BuildTask* MakeAttackTaskOn(Sim& sim, Unit* u, Entity* e) {
   // both callers (CUnitPatrolTask::TaskTick 0x61c229, CUnitGuardTask::SetEnemy 0x61390f) first build a CAiTarget of

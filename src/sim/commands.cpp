@@ -273,6 +273,23 @@ bool UpgradeOrderFits(Sim& sim, const Unit* u, const UnitCommand& c) {
 // T1 extractor 0x10006f, upgrading since 5984, gets the same Upgrade from the command stream again (clear 0): the
 // original's queue stays at one order; ours queued the second and showed two.
 bool RefusesUpgradeAgain(Sim& sim, Unit* u, const std::string& bpId) {
+  // The blueprint tests at the case's start (read): no blueprint for the order refuses (0x6f00af); an order
+  // blueprint with a General.SeedUnit (size bp+0x1ec) is taken only by a unit of that blueprint (stricmp with the
+  // unit's id bp+8, 0x6f00f8 -> 0x6f0102); without one, a unit whose own General.UpgradesTo is empty (size at
+  // ubp+0x184+0x14, 0x6f015b) refuses. (The UpgradesFromBase / UpgradesTo / UpgradesFrom compares after that,
+  // 0x6f017d..0x6f027d, are not modelled here.) Seen (oracle recording of FAF 3840 pro replay 6v6_1 dualgap): at 1321
+  // army 4's player gives an Upgrade to xsb1202 to eight units, its commander 0x400000 (guarding) among them: the
+  // original's commander keeps its one Guard order, ours queued the Upgrade behind it.
+  if (u->blueprint) {
+    const BlueprintInfo* to = sim.blueprints().Find(bpId);
+    if (!to) return true;
+    const std::string seed = GeneralString(sim, *to, "SeedUnit");
+    if (!seed.empty()) {
+      if (!SameIdNoCase(seed, u->blueprint->id)) return true;
+    } else if (GeneralString(sim, *u->blueprint, "UpgradesTo").empty()) {
+      return true;
+    }
+  }
   // ui REQUESTS 54: the refresh-UI flag first (0x6f010c, byte unit+0xa2 = 1), once the blueprint tests have passed
   // (0x6f00b5..0x6f0102 for a SeedUnit, else from 0x6f014d), whether the order is then refused as a repeat or not.
   // (The tests here are DispatchTask's, UpgradeOrderFits; the issue's own also takes UpgradesFromBase: not read.)
@@ -700,9 +717,21 @@ int TickPatrol(Sim& sim, Unit* u, BuildTask& t) {
     int r = TickBuildTask(sim, u, ch);
     if (r == kTaskRunning) return kTaskRunning;
     // the child's result into the dispatcher's +0x2c (its +0x28 points there: the patrol makes its children with the
-    // dispatcher, patrol+0x50, as parent, 0x61c232 / 0x61c2b6 / 0x61c306); the attack child writes none
+    // dispatcher, patrol+0x50, as parent, 0x61c232 / 0x61c2b6 / 0x61c306)
     if (chType == CommandType::Repair) u->dispatchResult = r == kTaskDone ? 1 : 2;
     else if (chType == CommandType::Reclaim) u->dispatchResult = sim.FindEntity(chGoal) ? 2 : 1;
+    // The attack child writes it too: its attacker-event listener (Listener_AiAttackerEvent_CUnitAttackTargetTask::
+    // Receive 0x5f3ee0, read) stores 2 through the task's +0x28 for the events that end it as failed (0x5f3f47,
+    // 0x5f3f69, 0x5f3f82: event 5; 2 / 4 / 7 standing; 3 mobile) and 1 for event 8 (0x5f3f96); an attack that ends
+    // otherwise (its target gone: state 3 / 5, 0x5f3f12) leaves the 0 of its ctor (0x5f095f). The word stays until
+    // the patrol's leg ends, and with 2 the dispatcher puts the point at the back and starts the next leg in the
+    // same beat (IAiCommandDispatchImpl::TaskTick 0x598ebb -> 0x598ee0 -> 0x598f6d). Seen (oracle recording of FAF
+    // 3840 pro replay 1v1_2 coldfire_crossing): army 0's unit 0x1a on a three-point patrol, its attack child ending
+    // at 5168 on the weapon's report 5; at its leg's end (5396) the original keeps Patrolling and turns to the next
+    // point a beat earlier than ours, which had a beat with neither Patrolling nor the drive-through byte.
+    else if (ch.adata) {
+      if (const int ar = AttackTaskResult(ch)) u->dispatchResult = ar;
+    }
     p.child = nullptr;
   } else if (sim.tick() < t.waitUntil) {
     return kTaskRunning;
@@ -1348,13 +1377,16 @@ void CommandStep(Sim& sim, Unit* u) {
         if (!u->dead && !u->commands.empty()) u->headState = kNotStarted;
         break;
       } else if (!u->commands.empty() && u->commands.front()->type == CommandType::Attack &&
-                 !u->commands.front()->targetId && !u->commands.front()->targetFakeId) {
+                 !u->commands.front()->targetId && !u->commands.front()->targetFakeId &&
+                 !(task->adata && AttackTaskResult(*task) == 2)) {
         // IAiCommandDispatchImpl::TaskTick 0x598f47 / 0x598fdc..0x599023 (read): an Attack order (type 10, not
         // FormAttack) whose CAiTarget (cmd+0x11c) is a ground position (type 2) is not simply removed when its task
         // ends: with a second order in the queue (0x6edc20) the unit leaves the order's formation (FormRemoveUnit
         // 0x6e8d70) and the order goes to the BACK of the queue (MoveFirstCommandToBackOfQueue 0x6edfc0); alone it is
-        // removed (0x6ede70). Either way the dispatcher answers 1: the next order starts a beat later. (The attack
-        // task never writes the dispatcher's result word +0x2c, so the "failed" branch 0x598ebb is not taken.)
+        // removed (0x6ede70). Either way the dispatcher answers 1: the next order starts a beat later. (Unless the
+        // attack task's listener wrote 2 into the dispatcher's result word +0x2c, AttackTaskResult: then the "failed"
+        // branch 0x598ebb removes it (0x598ecc -> 0x598f67) and the next order is dispatched in the same pass. The
+        // no-weapon end below writes nothing.)
         // Seen: MP1 beat 3917, army 1's DistributeOrders gives six interceptors (uaa0102, anti-air only) an Attack on
         // the ground point (426.16, 147.69), then an Attack on the blip of army 2's 0x200037 (probe mp1_3917b: the
         // same six IssueAttack calls as ours). The ground attack ends in its first tick (no weapon for it, 0x5f3611);
@@ -1893,6 +1925,16 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
     if (reverseLoad && RefusesReverseLoad(sim, u, units, reverseTarget)) continue;  // (its case, 0x6f0f53)
     if (d.type == static_cast<int>(CommandType::TransportLoadUnits) && RefusesLoadOrder(sim, u, targetEntity))
       continue;  // (its case, 0x6f0bf3)
+    // The unload case of the type switch (TransportUnloadUnits 24 / TransportUnloadSpecificUnits 25: index 12,
+    // 0x6f1189, read): a unit on the Seabed layer (unit+0x120 == 2) refuses; one with a transport object (unit+0x55c)
+    // or carried by a transport (GetTransportedBy 0x5e3c30, unit+0x4c0) takes it; any other unit refuses (0x6f11b6),
+    // its queue untouched by the clear. Seen (oracle recording of FAF 3840 pro replay 4v4_setons_1): at 2825 army 2's
+    // player gives TransportUnloadUnits (clear) to the transport 0x20002d and the air scout 0x200039; the original's
+    // scout flies on with its Move, ours took the order (queue cleared, the order dropped the next beat).
+    if ((d.type == static_cast<int>(CommandType::TransportUnloadUnits) ||
+         d.type == static_cast<int>(CommandType::TransportUnloadSpecificUnits)) &&
+        (u->layer == "Seabed" || (!u->transport && !u->transportedBy)))
+      continue;
     if (!clear && u->commands.size() > 500) continue;
     int at = -1;  // insert-before: the queued command with that stream id
     if (d.insertBefore != -1) {
