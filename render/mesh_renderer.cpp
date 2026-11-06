@@ -493,6 +493,17 @@ float GateNoise(float2 p) {
   float2 u = f * f * (3 - 2 * f);
   return lerp(lerp(GateHash(i), GateHash(i + float2(1, 0)), u.x), lerp(GateHash(i + float2(0, 1)), GateHash(i + float2(1, 1)), u.x), u.y);
 }
+// [detail] a smooth value noise of a texture's own place (World::unitDetail)
+float DetailHash(float2 q) {
+  q = frac(q * float2(0.1031, 0.1030));
+  q += dot(q, q.yx + 33.33);
+  return frac((q.x + q.y) * q.x);
+}
+float DetailNoise(float2 q) {
+  float2 c = floor(q), f = frac(q);
+  f = f * f * (3 - 2 * f);
+  return lerp(lerp(DetailHash(c), DetailHash(c + float2(1, 0)), f.x), lerp(DetailHash(c + float2(0, 1)), DetailHash(c + 1), f.x), f.y);
+}
 float4 Shade(VOut i, bool front) {
   // (a finished unit whose personal shield is up says so with an alpha above 1)
   bool shielded = i.color.a > 1.5;
@@ -734,6 +745,30 @@ float4 Shade(VOut i, bool front) {
     secondary = secondaryMap.Sample(samplerAniso, i.uv.xy);  // [grime] (all of it: a unit's masks, unit_grime.h)
   }
   spec.b *= i.glow;  // [machinery] (a lit piece pulsing with its lamp)
+  // [detail] (World::unitDetail, the view's mistMore.w) a remastered unit's surface where its textures are magnified: a grain
+  // finer than a texel (hashed noise of three octaves laid in the texture's own space, so it rides the mesh), fading in from
+  // a pixel a texel to three, in the paint's light and dark (a few per cent) and in its relief (its slope into the normal)
+  [branch] if (mistMore.w > 0 && kind.w > 0.5) {
+    float2 size;
+    albedoMap.GetDimensions(size.x, size.y);
+    float2 t = i.uv.xy * size;
+    float texel = max(length(ddx(t)), length(ddy(t)));  // (texels a pixel)
+    float near = smoothstep(0.9, 0.35, texel) * mistMore.w;
+    [branch] if (near > 0.01) {
+      float2 p = t * 2.3;
+      float g = 0, gx = 0, gy = 0, w = 0.55;
+      [unroll] for (int o = 0; o < 3; ++o) {
+        float a = DetailNoise(p), b = DetailNoise(p + float2(0.37, 0)), c = DetailNoise(p + float2(0, 0.37));
+        g += (a - 0.5) * w;
+        gx += (b - a) * w;
+        gy += (c - a) * w;
+        p = p * 2.03 + 17.1;
+        w *= 0.5;
+      }
+      albedo.rgb *= 1 + g * 0.09 * near;
+      nxy += float2(gx, gy) * 0.55 * near;
+    }
+  }
   float occlusion = secondary.r;
   if (kind2.z > 0.5) spec = float4(0, 0.85, 0, kind2.y > 0.5 ? 0.35 : 0);  // rough, no metal; leaves let some light through
   // holes: cut where the alpha is not above the mark; leaves get a soft edge a pixel wide instead,
