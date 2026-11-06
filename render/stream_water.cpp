@@ -49,6 +49,7 @@ struct VIn {
   float4 more : TEXCOORD3;    // [stream mouth] from its run's start, to its run's end; how far run on toward the sea (0..1); how steep its
                               // stretch is (the drop per unit over three units either side), -1 on a plume
   float4 lip : TEXCOORD4;     // [shore] x how near a mouth's lip (1 at the water's end and past it, 0 from kLipReach upstream)
+                              // [streamuv1] y the bed's depth share here (1), z white water added here (0): the ribbon's uv1
 };
 struct VOut {
   float4 position : SV_Position;
@@ -267,7 +268,7 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   // the bed's shape across: none at the banks, deepest in the middle; pools and shallows along it
   float x = saturate(abs(across) / halfW);
   float pools = 0.7 + 0.6 * CloudNoise(float3(downstream * 0.11, 3.7, 1.3));
-  float bedDepth = streamLook.x * halfW * (1 - x * x) * pools * saturate(inside / 0.03);
+  float bedDepth = streamLook.x * halfW * (1 - x * x) * pools * saturate(inside / 0.03) * i.lip.y;  // ([streamuv1] painted)
   bedDepth *= (1 - 0.85 * i.more.z) * (0.3 + 0.7 * head);  // [stream mouth] (run on over the beach toward the sea, or near its spring: thin)
   // its speed: faster where it drops
   float speed = streamLook.z * min(0.14 + 1.5 * sqrt(slope), 2.4);
@@ -370,6 +371,7 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   float eases = saturate((i.more.w - slope) * 1.5);
   // (never all of it: white water is white in tufts and streaks, the water showing between)
   float much = min(0.05 + rough * 0.45 + steep * 0.4 + spill * 0.7 + eases * 0.35 + wake * 0.3 + meet * 0.35 + surf * 0.7 + lip * lip * 0.45, 0.65);
+  much = min(much + i.lip.z * 0.5, 0.65 + 0.2 * i.lip.z);  // [streamuv1] (a painted riffle, ford or fall: whiter, up to 0.85)
   // (the lace lies about a half, a tenth either side: `much` 0.7 covers about half of it, 0.05 leaves specks)
   float cut = 0.75 - much * 0.35;
   float foam = smoothstep(cut - 0.05, cut + 0.05, lace) * (0.45 + 0.55 * much);
@@ -953,6 +955,9 @@ const StreamWater::Ribbon* StreamWater::RibbonOf(const Model* model) {
   }
 
   std::vector<Vertex> out(in.size());
+  bool painted = false;  // [streamuv1] (its uv1 is neither all nought nor a copy of its uv0)
+  for (const ScmVertex& s : in)
+    painted = painted || ((s.uv1[0] != 0 || s.uv1[1] != 0) && (s.uv1[0] != s.uv0[0] || s.uv1[1] != s.uv0[1]));
   for (size_t k = 0; k < in.size(); ++k) {
     const size_t s = sectionOf[k];
     const Section& at = sections[s];
@@ -970,6 +975,10 @@ const StreamWater::Ribbon* StreamWater::RibbonOf(const Model* model) {
     v.along[1] = 0;
     v.along[2] = along.z;
     v.shape[0] = in[k].uv0[0];
+    // [streamuv1] (visuals section 90/91) the ribbon's second uv set, where its maker painted one: x the bed's depth share
+    // (0..1), y white water added (0..1); a ribbon whose uv1 is all nought or a copy of its uv0 has none (depth 1, none added)
+    v.lip[1] = painted ? std::clamp(in[k].uv1[0], 0.0f, 1.0f) : 1.0f;
+    v.lip[2] = painted ? std::clamp(in[k].uv1[1], 0.0f, 1.0f) : 0.0f;
     v.shape[1] = static_cast<float>(sign * at.v * unitsPerV);
     v.shape[2] = at.halfW;
     v.shape[3] = drop[s];

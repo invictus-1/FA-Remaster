@@ -294,6 +294,11 @@ class World {
   // its tint lit by its shape, the ground showing through, its outline brighter); 0 the solid model in one colour, its
   // textures' light and dark kept, as before. A player's option.
   int ghostLook = 1;
+  // [detail] (Chris, 2026-11-06: close up, a factory's side "feels too low res"; with the visuals track's 4K re-bakes) A
+  // remastered unit's surface gains a fine grain of its own where its textures are magnified (a texel over more than about
+  // two pixels: only at the nearest zoom), in the paint's light and dark and in its relief, fading in with the magnification,
+  // none at play zoom. 0: none (as before); 1 the default; the viewer's --unit-detail.
+  float unitDetail = 1.0f;
   // [stealthlook] (Chris's big test: "Stealth on and off works though we have no effect for when a unit is stealthed ... in game
   // cybran has all units look a specific way") cloakLook: a cloaked unit (its script set FAF's cloak mesh, '<mesh>_cloak', the
   // shield shader of its faction: Blueprints.lua ExtractCloakMeshBlueprint) drawn as the original draws it, its body a
@@ -1088,6 +1093,18 @@ class World {
   };
   std::unordered_map<uint32_t, Clearing> clearings_;
   std::unordered_map<uint32_t, int> decorUnder_;
+  // [mapfx] A map's own looping effects (its <map>_fx.json beside the .scmap: [{"emitter": blueprint, "at": [x, y, z] (y over
+  // the ground), "turn": degrees about the upright, "scale": s}, ...]; the visuals track's plunge-pool foam on SETONS_R),
+  // played forever where they stand, started again whenever they are not running (a game begun over clears the particles)
+  struct MapEffect {
+    std::string emitter;
+    Vec3 at;
+    Quat turn;
+    float scale = 1;
+    uint32_t handle = 0;
+  };
+  std::vector<MapEffect> mapEffects_;
+  void KeepMapEffects();
   void ForgetUnderfoot(uint32_t i);  // [simunder]
   void ClearUnderStructure(uint32_t id, const Model* model, Vec3 position, const Quat& orientation);
   void ReleaseClearings();
