@@ -52,6 +52,7 @@ do
             ['6aa65d2a-5926-11dc-8314-0800200c9a08'] = '1f77a98d-bfde-4247-bfcb-75f9ee358e59',  -- Antares Unit Pack: antares-rework (local)
             ['9a9C61C0-1787-10DF-A0AD-BATTLEPACK005'] = '5e94b4c6-a027-4d20-a3c2-22fbc69ecc41',  -- Wyvern Battle Pack: wyvern-rework (local)
             ['62e2j64a-TOMA-3652-01370-146as555a8u3'] = '12a15f7a-5394-4561-b5ad-bc203e89894d',  -- Total Mayhem: totalmayhem-rework (local)
+            ['3ce6feab-04dc-48a9-b945-a31d64c67dd2'] = 'f859cbab-dc93-47d9-b9e9-4c0829015a16',  -- Experimental SACUs: experimental-sacus-fix (local; UEL8301 out of the build menus, Chris 2026-11-05)
         }
         if type(selected) == 'table' then
             local onDisk = {}

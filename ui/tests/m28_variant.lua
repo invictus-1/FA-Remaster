@@ -59,7 +59,8 @@ ForkThread(function()
         -- Chris's local reworks (the lab's local_mod_fixes, MOHO64UI_LOCAL_MOD_FIXES): each where it is on disk, on with its mod
         for _, r in {{'6aa65d2a-5926-11dc-8314-0800200c9a08', '1f77a98d-bfde-4247-bfcb-75f9ee358e59', 'antares-rework'},
                      {'9a9C61C0-1787-10DF-A0AD-BATTLEPACK005', '5e94b4c6-a027-4d20-a3c2-22fbc69ecc41', 'wyvern-rework'},
-                     {'62e2j64a-TOMA-3652-01370-146as555a8u3', '12a15f7a-5394-4561-b5ad-bc203e89894d', 'totalmayhem-rework'}} do
+                     {'62e2j64a-TOMA-3652-01370-146as555a8u3', '12a15f7a-5394-4561-b5ad-bc203e89894d', 'totalmayhem-rework'},
+                     {'3ce6feab-04dc-48a9-b945-a31d64c67dd2', 'f859cbab-dc93-47d9-b9e9-4c0829015a16', 'experimental-sacus-fix'}} do
             local modUid, reworkUid, folder = r[1], r[2], r[3]
             if not all[reworkUid] then
                 LOG("TEST note: " .. folder .. " is not on disk here")
