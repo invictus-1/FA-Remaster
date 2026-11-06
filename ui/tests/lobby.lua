@@ -100,6 +100,12 @@ for _, key in {'remaster_atmosphere', 'remaster_soft_shadows', 'remaster_weather
     check("the Video tab has " .. key .. ", on unless chosen", video[key] and video[key].default, 1)
 end
 check("Frame Generation off unless chosen", video.remaster_frame_generation.default, 0)
+do  -- (Chris, 2026-11-06: it adds input delay; no preset level, Ultra included, turns it on, and its tip says so)
+    local O, on = import('/lua/options/options.lua'), false
+    for level = 0, 4 do on = on or (O.RemasterPresetValues(level).remaster_frame_generation or 0) ~= 0 end
+    check("no preset level turns Frame Generation on", on, false)
+    check("its tip says it adds input delay", string.find(video.remaster_frame_generation.tip, "ADDS INPUT DELAY", 1, true) ~= nil, true)
+end
 -- The renderer's looks from Chris's big test (2026-11-01): each on unless chosen, the earlier look kept as Off, in no
 -- preset level; at the start the program has their defaults (the test's preferences choose none of them)
 for _, key in {'remaster_ocean_glitter', 'remaster_shore_soak', 'remaster_gateway', 'remaster_ghost_look', 'remaster_guide',

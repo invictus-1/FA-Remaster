@@ -369,7 +369,7 @@ local looks = {
         -- before, with the Anti-Aliasing on it silently did nothing)
         title = "Frame Generation",
         key = 'remaster_frame_generation',
-        tip = "Shows a frame made between each two drawn ones: twice the frames, a little more delay. Best when the game already runs at 60 or more. Turns anti-aliasing off while on (from the next map).",
+        tip = "Shows a frame made between each two drawn ones: twice the frames shown, but it ADDS INPUT DELAY (about 12 ms more) and costs time on every real frame (about 3 ms). The upscaler (FSR) is the smoother choice. Off unless chosen; no preset turns it on. Turns anti-aliasing off while on (from the next map).",
         type = 'toggle',
         default = 0,
         set = Look("remaster_frame_generation"),
