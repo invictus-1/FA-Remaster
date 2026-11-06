@@ -2073,14 +2073,19 @@ void World::UnlistProp(PlacedProp* prop, uint32_t key, bool made) {
 // lists the first frame it is listed (as one gone is taken out, ApplyPropEvent: its square's group filled anew), and
 // gives them back once it is no longer in the frame (ReleaseClearings), unless another structure still stands over them:
 // each prop counts the structures over it (a mass extractor upgraded: the new one is built over the old, which goes when
-// it is done). Only once a structure: a structure does not move. The simulation's own props (its trees, rocks, the
-// .scmap's plants) are the simulation's to take away; and a stream's water is drawn by its own pass, whatever stands on it.
+// it is done). Only once a structure: a structure does not move. A stream's water is drawn by its own pass, whatever stands
+// on it. [simunder] (Chris's third test, 2026-11-05: plants still poked into structures) A prop is taken when its leaves
+// reach into the box, not only when its root stands in it (kLeafReach: a bush rooted beside a mass extractor in his big test's
+// game spread its leaves over it); and the simulation's own props (the .scmap's trees and bushes, reclaimable or not) are
+// taken out of the picture the same way, the simulation keeping them. A change the game makes to one taken (felled, burnt,
+// reclaimed: ApplyPropEvent) hands it back first (ForgetUnderfoot), and the game's word stands.
 namespace {
 constexpr float kUnderfootMargin = 0.25f;  // world units round a structure's box: a bush rooted at its very edge goes too
+constexpr float kLeafShare = 0.6f, kLeafReachMost = 2.0f;  // [simunder] a prop's leaves reach this share of its width, at most this far
 }  // namespace
 
 void World::ClearUnderStructure(uint32_t id, const Model* model, Vec3 position, const Quat& orientation) {
-  if (!clearUnderStructures || decorFrom_ >= props_.size() || propCells_.empty() || !model || !model->ok) return;
+  if (!clearUnderStructures || props_.empty() || propCells_.empty() || !model || !model->ok) return;  // ([simunder] the .scmap's props too)
   auto [entry, fresh] = clearings_.try_emplace(id);
   entry->second.stamp = frameStamp_;
   if (!fresh) return;
@@ -2094,7 +2099,8 @@ void World::ClearUnderStructure(uint32_t id, const Model* model, Vec3 position, 
   const float ax = across.x / acrossFlat, az = across.z / acrossFlat, fx = along.x / alongFlat, fz = along.z / alongFlat;
   const float halfAcross = 0.5f * (hi.x - lo.x) * acrossFlat + kUnderfootMargin, halfAlong = 0.5f * (hi.z - lo.z) * alongFlat + kUnderfootMargin;
   // (the squares its box reaches, by its corners' extent on the map)
-  const float reachX = std::fabs(ax) * halfAcross + std::fabs(fx) * halfAlong, reachZ = std::fabs(az) * halfAcross + std::fabs(fz) * halfAlong;
+  const float reachX = std::fabs(ax) * halfAcross + std::fabs(fx) * halfAlong + kLeafReachMost,
+              reachZ = std::fabs(az) * halfAcross + std::fabs(fz) * halfAlong + kLeafReachMost;  // ([simunder] and leaves reaching in)
   const int cx0 = std::clamp(static_cast<int>((middle.x - reachX) / kPropCell), 0, propCellsX_ - 1);
   const int cz0 = std::clamp(static_cast<int>((middle.z - reachZ) / kPropCell), 0, propCellsZ_ - 1);
   const int cx1 = std::clamp(static_cast<int>((middle.x + reachX) / kPropCell), 0, propCellsX_ - 1);
@@ -2106,11 +2112,17 @@ void World::ClearUnderStructure(uint32_t id, const Model* model, Vec3 position, 
       // (those still standing, and those another structure has taken already: this one stands over them too)
       for (const std::vector<uint32_t>* list : {&cell.ofMap, &cell.underfoot})
         for (uint32_t i : *list) {
-          if (i < decorFrom_ || i >= props_.size()) continue;
+          if (i >= props_.size()) continue;
           const PlacedProp& p = props_[i];
           if (!p.model || p.model->lods.empty() || p.model->lods[0].stream) continue;
           const float dx = p.world.m[0][3] - middle.x, dz = p.world.m[2][3] - middle.z;
-          if (std::fabs(dx * ax + dz * az) <= halfAcross && std::fabs(dx * fx + dz * fz) <= halfAlong) taken.push_back(i);
+          // ([simunder] how far its leaves reach round its root: a share of its own half width on the ground)
+          const Vec3 b0 = p.model->boundsMin, b1 = p.model->boundsMax;
+          const float sx = std::sqrt(p.world.m[0][0] * p.world.m[0][0] + p.world.m[1][0] * p.world.m[1][0] + p.world.m[2][0] * p.world.m[2][0]);
+          const float sz = std::sqrt(p.world.m[0][2] * p.world.m[0][2] + p.world.m[1][2] * p.world.m[1][2] + p.world.m[2][2] * p.world.m[2][2]);
+          const float half = std::max(std::max(std::fabs(b0.x), std::fabs(b1.x)) * sx, std::max(std::fabs(b0.z), std::fabs(b1.z)) * sz);
+          const float leaf = std::min(half * kLeafShare, kLeafReachMost);
+          if (std::fabs(dx * ax + dz * az) <= halfAcross + leaf && std::fabs(dx * fx + dz * fz) <= halfAlong + leaf) taken.push_back(i);
         }
     }
   for (uint32_t i : taken) {
@@ -2119,6 +2131,23 @@ void World::ClearUnderStructure(uint32_t id, const Model* model, Vec3 position, 
     UnlistProp(&props_[i], i, false);
     if (c >= 0) propCells_[static_cast<size_t>(c)].underfoot.push_back(i);
   }
+}
+
+// [simunder] A map's prop taken away under a structure, handed back (the game changes it): out of the count and of its
+// square's list of those taken; the structures' own lists still name it, which ReleaseClearings then passes over.
+void World::ForgetUnderfoot(uint32_t i) {
+  auto under = decorUnder_.find(i);
+  if (under == decorUnder_.end()) return;
+  decorUnder_.erase(under);
+  const int c = PropCellAt(props_[i].world);
+  if (c < 0) return;
+  std::vector<uint32_t>& list = propCells_[static_cast<size_t>(c)].underfoot;
+  for (size_t k = 0; k < list.size(); ++k)
+    if (list[k] == i) {
+      list[k] = list.back();
+      list.pop_back();
+      break;
+    }
 }
 
 void World::ReleaseClearings() {
@@ -2141,7 +2170,7 @@ void World::ReleaseClearings() {
             break;
           }
       }
-      ListProp(&props_[i], i, false);
+      if (props_[i].model) ListProp(&props_[i], i, false);  // ([simunder] not one the game has taken away since)
     }
     it = clearings_.erase(it);
   }
@@ -2266,6 +2295,7 @@ void World::ApplyPropEvent(const FramePropEvent& e) {
     }
   }
   if (ofMap && static_cast<size_t>(e.mapIndex) >= props_.size()) return;
+  if (ofMap) ForgetUnderfoot(static_cast<uint32_t>(e.mapIndex));  // [simunder] (the game's change first: it is its prop)
   // (out of its square's list first; it is listed again where it is now)
   if (ofMap) {
     UnlistProp(&props_[static_cast<size_t>(e.mapIndex)], static_cast<uint32_t>(e.mapIndex), false);
