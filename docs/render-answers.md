@@ -4,6 +4,40 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To visuals, section 90: the SETONS_R water pass - what the stream and sea can draw (2026-11-06)
+
+Today's stream pass (render/stream_water.h has the details) draws any prop whose level has ShaderName "StreamWater" (the water
+ribbon) or "StreamFoam" (the white water ribbon). It reads the ribbon itself, so most of what you list needs no new inputs.
+
+a) The stream water.
+- Flow: two layers of your ripple normals (the ribbon level's normal map), carried along the ribbon's v, half a period
+  apart. The speed follows the ribbon's own slope, taken from the mesh's heights, so it is faster where it drops. There is
+  no flow map: the flow runs along v, so lay v downstream.
+- Depth: a bed shaped across the ribbon (u 0 at one bank, 1 at the other): none at the banks, deepest in the middle, as deep
+  as the width allows. A wider ribbon is a deeper stream, so variable width gives shallows by itself. The bed (the ground's
+  picture behind it) shows through by the depth, red, then green fading first.
+- Foam: a lace carried downstream, more where it drops; rings and downstream streaks round anything standing in it (rocks,
+  units: from the scene's depth, so a rock prop placed in the water makes riffle foam by itself); white all along a steep
+  stretch (a cascade reads as one fall from afar); the StreamFoam ribbon for heavy white water.
+- What I would add for you (small, on my side): the ribbon's SECOND UV set (uv1, already in the .scm vertex) read per
+  vertex as uv1.x = depth (0..1 of the width's own; default 1) and uv1.y = extra foam / riffle (0..1; default 0). That's
+  a painted riffle line or a shallow ford without new textures. Say if you want it, and I'll build it before your export.
+b) The waterfall.
+- A fall is already drawn: a stream ribbon laid down the face (v downward) is a cascade, white all along, its outlet
+  spilling from the stone with the rock wet and streaked round it. A StreamFoam ribbon over it adds the heavy white water.
+  Two scrolling speeds come with it (the two ripple layers and the foam's own speed), so no separate fall-ribbon shader is
+  needed.
+- The pool: lay it as a short wide stream ribbon. It gets depth, bed and foam rings, with no disc or flow map.
+- A looping flipbook card at the plunge pool: not today. A map can't place a looping effect yet. I can add a small map
+  effects file, <map>_fx.json beside the .scmap: [{"emitter": "<emitter blueprint path>", "at": [x, y, z], "turn": deg,
+  "scale": s}], each played forever as a looping emitter. Your flipbook goes in an ordinary emitter blueprint
+  (TextureGridAnimate / TextureGridLoop, frame blending: already read). BC7 + BC5 motion: tell me the motion's layout and
+  I'll read it the way the fireball pipeline does.
+c) The mouth. A stream ending just above the sea is already carried on down the ground and spreads a fan of foam over the
+sea's surface (StreamWater::Add's mouth). There's no sediment colour yet. I can tint the same fan (a brown-green that fades
+with it), so no mask is needed. If you'd rather paint it, a texture beside the map (<map>_seamask.dds over the map's extent:
+R foam, G sediment) works too.
+
 ## To the interface, request 44: the minimap's range rings (FAF 3840's ren_MinimapRanges) (2026-11-04)
 
 Our minimap draws no range rings. World_picture's DrawMinimap sets the world's rings and range groups aside for its pass
