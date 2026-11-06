@@ -108,8 +108,10 @@ class PerfStats {
       layerSum_.clear();
       layerSecond_ = now;
       static const bool logLines = std::getenv("MOHO64UI_OVERLAY_LOG") != nullptr;  // (the lines in the log too: runs without a screen)
-      if (logLines)
+      if (logLines) {
+        Logf(LogLevel::Info, "moho64ui: overlay: %s", lines.front().c_str());  // (the frame line: drawn / shown frames)
         for (const std::string& l : layerLines_) Logf(LogLevel::Info, "moho64ui: overlay: %s", l.c_str());
+      }
     }
     lines.insert(lines.end(), layerLines_.begin(), layerLines_.end());
     if (hooks.statsLines) hooks.statsLines(&lines);
