@@ -5,6 +5,45 @@ commit, hardware, scenario, numbers). Newest first.
 
 **Hardware (all rows):** AMD Ryzen 9 9950X3D, NVIDIA RTX 4090, the screen at 240 Hz, vertical sync on.
 
+## 2026-11-06: the replay timeline's jump back, held (helper "rewind", on c3747d1 + its patch)
+Chris's third test: "skipping BACK reloads the whole replay". There is no snapshot of the simulation yet (the engine,
+2026-11-06), so a jump back still starts the replay over and runs ahead to the beat; what changed is what the player
+sees (GameSession::Rewind): the picture at the click held, dimmed, with "Rewinding to m:ss ... n%" over it, no
+loading screen and no front end made anew, nothing of the world or the interface drawn while the replay runs ahead,
+and the new interface first drawn at the beat. `MOHO64UI_REWIND_RELOAD=1` keeps the old way, so both were measured
+with one build, one after the other. A 1920x1080 window, every look at its default, the process pinned to logical
+CPUs 16-31 (the half without the big cache: the beats there run ~40% slower than on 0-15), MOHO64_PLACE=off;
+script `run_measure.sh` (the replay started from the front end, a jump forward to the "from" beat, then the jump back
+by moho64ui_ReplaySeek; times from the call to the beat reached). The PC was shared with the other chats' work: the
+same jump forward varied by up to 20% from run to run, so the pairs matter more than single numbers.
+
+| replay, jump | the way | click to the beat | the session's end | the load through | the run ahead |
+|---|---|---|---|---|---|
+| 4v4 mp1 (8 armies, 31:00), 20:02 -> 10:00 | old (restart shown) | 60.0 s | 0.30 s | 6.64 s | 5999 beats, 53.3 s |
+| 4v4 mp1, 20:02 -> 10:00 | held | 51.9 s | 0.27 s | 4.99 s | 5999 beats, 46.8 s |
+| the same, an earlier pair (250 ms chunks; the held run's jump forward 20% slower: the PC) | old / held | 55.4 / 65.3 s | 0.24 / 0.25 s | 3.97 / 5.67 s | 51.3 / 59.6 s |
+| 4v4 mp1, 20:02 -> 1:00 | old | 9.84 s | 0.58 s | 7.50 s | 599 beats, 2.26 s |
+| 4v4 mp1, 20:02 -> 1:00 | held | 7.08 s | 0.26 s | 5.15 s | 599 beats, 1.85 s |
+| 1v1 mp2 (19:40), 5:02 -> 2:00, three pairs | old | 4.76 / 3.98 / 3.44 s | 0.25 / 0.14 / 0.13 s | 3.30 / 2.72 / 2.35 s | 1.40 / 1.21 / 1.04 s |
+| 1v1 mp2, 5:02 -> 2:00, three pairs | held | 4.03 / 4.10 / 3.24 s | 0.07 / 0.09 / 0.08 s | 2.70 / 2.77 / 2.34 s | 1.26 / 1.26 / 0.85 s |
+
+So the time is about what it was: the run ahead is nearly all of a long jump (the simulation's beats, ~8 ms each late
+in the 4v4 on these CPUs, and every beat's sync to the new interface's scripts, 1.5-2.5 ms), and drawing was only ~5% of
+it before (the last 4v4 pair: the frames' showing 3.2 s the old way, 2.0 s held, of ~50 s; the run ahead against the
+same run's jump forward 0.32 old, 0.30 held). What the held way saves is small: the front end made anew (0.1-0.3 s) and the loading screen. Where the
+rest goes in a load: the loading thread (rules, the simulation's start, the game's state) ~2 s, and the renderer
+making the session's models for the map opening behind 2-3 s after it (on the 4v4), the same map it had open a moment
+before (the renderer's R1 below). A jump forward is as before (only the held jump back takes the new path).
+- Exactness: the fingerprint (MOHO64_FINGERPRINT, every beat) after a held jump back equals a straight playback's at
+  every beat: the 1v1 played at its own pace to 2:00 vs. forward to 4:00, back to 1:00 held, then forward to 2:00
+  (1201 lines identical in every part, headless and in a window); the 4v4 forward to 5:00 vs. forward to 6:40, back to
+  3:20 held (and the old way), then forward to 5:00 (3001 lines with every hashed part identical; the "lua" part, the
+  sim's Lua heap in KB, which the fingerprint keeps out of its total, differs by 1 KB on 6 beats between the process's
+  first session and any started over, the old way's as the held one's).
+- What is left for speed: the renderer's R1 (the same map kept for the new session: its models and pipelines are
+  already made; 2-3 s of each 4v4 jump), R2 (no world prepared while hidden: the held frames' showing, 15-30 ms each),
+  and the engine's snapshot of the simulation (a jump back without the run ahead).
+
 ## 2026-11-04 morning: the window's frame thread pinned to the big-cache half? No (main 751e6f3 + the switch)
 In the engine's quiet window (its helpers' timing held, renderer and visuals light). Chris's big-test game (his 95-minute
 8-AI game on SETONS_R of 2026-11-01, `_scratch/ui/measure_1104/bigtest_game_20261101.SCFAReplay`) played back in a 4K

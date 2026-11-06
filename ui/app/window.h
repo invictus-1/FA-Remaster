@@ -139,6 +139,11 @@ struct WindowHooks {
   std::function<void()> waitForFrame;
   // True while the host runs ahead (--fast-forward): the frame times count only after it.
   std::function<bool()> catchingUp;
+  // True while the window holds its picture (the replay timeline's jump back, GameSession::Rewind): the state shown is
+  // neither stepped nor drawn and gets no input (a resize waits for the next state shown, which it then reaches); the
+  // interface's layer is cleared once and only what eachFrame draws goes into it (the host's note), the renderer showing
+  // the picture held under it (`present`); without `direct`, the last frame shown stays, dimmed, under the note.
+  std::function<bool()> held;
   // True while the game's beat runs on its own thread: the frame only shows the picture, and the
   // time that passed goes to `clock` (the picture's moment moves on; eachFrame gets only the rest).
   std::function<bool()> busy;

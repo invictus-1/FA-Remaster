@@ -187,15 +187,26 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
   auto target = std::make_unique<SoftwareTarget>(width, height);
   Window window;
   Window::Callbacks cb;
-  cb.mouseMove = [&](const UiEvent& e) { MouseMove(current().L(), current().ui(), e); };
-  cb.mouseButton = [&](const UiEvent& e, bool pressed, bool dbl) { MouseButton(current().L(), current().ui(), e, pressed, dbl); };
-  cb.mouseWheel = [&](const UiEvent& e) { MouseWheel(current().L(), current().ui(), e); };
-  cb.key = [&](const UiEvent& e) { return KeyEvent(current().L(), current().ui(), e); };
-  cb.focus = [&](bool inFront) { WindowFocus(current().L(), current().ui(), inFront); };
+  // (hooks.held: the window holds its picture; the state shown gets no input, and a resize only makes the target anew)
+  bool holding = false, resizeOwed = false;
+  cb.mouseMove = [&](const UiEvent& e) {
+    if (!holding) MouseMove(current().L(), current().ui(), e);
+  };
+  cb.mouseButton = [&](const UiEvent& e, bool pressed, bool dbl) {
+    if (!holding) MouseButton(current().L(), current().ui(), e, pressed, dbl);
+  };
+  cb.mouseWheel = [&](const UiEvent& e) {
+    if (!holding) MouseWheel(current().L(), current().ui(), e);
+  };
+  cb.key = [&](const UiEvent& e) { return !holding && KeyEvent(current().L(), current().ui(), e); };
+  cb.focus = [&](bool inFront) {
+    if (!holding) WindowFocus(current().L(), current().ui(), inFront);
+  };
   cb.resized = [&](int w, int h) {
     if (w == target->Width() && h == target->Height()) return;
     target = std::make_unique<SoftwareTarget>(w, h);
-    current().ui().Resize(w, h);
+    if (holding) resizeOwed = true;
+    else current().ui().Resize(w, h);
   };
   // (With hooks the window first stays hidden: the world's picture may be opened on it at once,
   // which takes seconds, and a window shown but not answering would be marked so by the system.)
@@ -263,6 +274,28 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
   auto uiLast = last;  // the interface's last step (frames shown during a beat leave it out)
   PerfStats stats;     // (shown when the console's remaster_stats is on)
   bool layersShown = false;  // (the layer zones' sums kept while the overlay shows: trace::SetLayers)
+  // hooks.held: the picture held. Shown by the renderer (`direct`): the interface's layer cleared, the picture under it
+  // is the renderer's; else the last frame shown, dimmed, kept here and put back each frame under the host's drawing.
+  bool heldShown = false;
+  std::vector<uint32_t> heldCopy;
+  int heldW = 0, heldH = 0;
+  auto enterHeld = [&](bool direct) {
+    holding = true, heldShown = true;
+    heldW = target->Width(), heldH = target->Height();
+    heldCopy.clear();
+    if (direct) {
+      target->Clear(0x00000000u);
+    } else {
+      const std::vector<uint32_t>& px = target->pixels();
+      heldCopy.resize(px.size());
+      for (size_t i = 0; i < px.size(); ++i) {  // (to some 55%)
+        const uint32_t p = px[i];
+        heldCopy[i] = 0xff000000u | ((((p >> 16) & 0xff) * 141) >> 8) << 16 | ((((p >> 8) & 0xff) * 141) >> 8) << 8 | (((p & 0xff) * 141) >> 8);
+      }
+    }
+    hostDrawn = IntRect{};
+    painter.Invalidate();  // (the interface is painted whole again when the hold is over)
+  };
   // MOHO64UI_LONG_FRAMES (user_state.h): this frame's parts, for the log of a long one.
   LongFrameLog& longFrames = LongFrames();
   longFrames.notes.clear();  // (what ran before the window: not a frame's)
@@ -316,7 +349,48 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
         continue;
       }
+    } else if (hooks.held && hooks.held()) {
+      // The picture held: only the host's step (eachFrame: its note, the session's load and beats) and the showing.
+      const double dt = std::chrono::duration<double>(now - last).count();
+      last = now;
+      const auto te = Clock::now();
+      IntRect changed = hostDrawn;  // (the host's drawing of the last frame, taken away)
+      if (!heldShown || heldW != target->Width() || heldH != target->Height()) {
+        enterHeld(direct);
+        changed = IntRect{0, 0, target->Width(), target->Height()};
+      } else if (direct) {
+        if (!hostDrawn.empty()) target->ClearRect(hostDrawn, 0x00000000u);
+      } else if (!heldCopy.empty()) {
+        target->DrawPixels(heldCopy.data(), heldW, heldH, 0, 0);
+        changed = IntRect{0, 0, target->Width(), target->Height()};
+      }
+      target->ResetTouched();
+      {
+        MOHO_LAYER_ZONE(Ui, "ui: the host's frame (the game's picture, beats, sounds)");
+        if (eachFrame) eachFrame(dt > 0.25 ? 0.25 : dt, *target);
+      }
+      changed = changed.Union(target->Touched());
+      hostDrawn = target->Touched();
+      hostSeconds += std::chrono::duration<double>(Clock::now() - te).count();
+      const auto tp = Clock::now();
+      {
+        MOHO_LAYER_ZONE(Ui, "ui: present (the picture held)");
+        if (direct) hooks.present(*target, changed);
+        else window.Present(*target);
+      }
+      presentSeconds += std::chrono::duration<double>(Clock::now() - tp).count();
+      auto ms = [](Clock::time_point a, Clock::time_point b) { return std::chrono::duration<double>(b - a).count() * 1000.0; };
+      parts.host = ms(te, tp), parts.showing = ms(tp, Clock::now());
+      ++frames;
     } else {
+      if (heldShown) {  // (the hold is over: the state shown now gets what it missed, and is painted whole)
+        heldShown = holding = false;
+        std::vector<uint32_t>().swap(heldCopy);
+        hostDrawn = IntRect{0, 0, target->Width(), target->Height()};
+        if (resizeOwed && (current().ui().width() != target->Width() || current().ui().height() != target->Height()))
+          current().ui().Resize(target->Width(), target->Height());
+        resizeOwed = false;
+      }
       double dt = std::chrono::duration<double>(now - last).count();  // (since the last frame shown)
       last = now;
       double uiDt = std::chrono::duration<double>(now - uiLast).count();  // (since the interface's last step)
@@ -405,6 +479,10 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
       }
       changed = changed.Union(target->Touched());
       hostDrawn = target->Touched();  // (painted over by the interface again next frame)
+      if (!heldShown && hooks.held && hooks.held()) {  // (the hold begun in this frame's host step: its drawing not shown)
+        enterHeld(direct);
+        changed = IntRect{0, 0, target->Width(), target->Height()};
+      }
       hostSeconds += std::chrono::duration<double>(Clock::now() - te).count();
       renderSeconds += std::chrono::duration<double>(Clock::now() - t0).count();
       const auto tp = Clock::now();

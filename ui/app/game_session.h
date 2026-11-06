@@ -6,6 +6,7 @@
 // world: the host only reports that the simulation runs.
 #pragma once
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -13,6 +14,7 @@
 #include <map>
 #include <set>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -110,6 +112,38 @@ class GameSession {
   // End it and start the same game again, as it was launched (a new random seed unless one was
   // given). False with the reason when there was no launch or the start fails.
   bool Relaunch(std::string* why);
+  // The replay timeline's jump back (Chris's third test, 2026-11-05: "skipping BACK reloads the whole replay"). There
+  // is no snapshot of the simulation to go back to (the engine, 2026-11-06), so the replay still starts over and runs
+  // ahead to the beat, which lands it on exactly the state a straight playback has there; but the player no longer
+  // watches a restart: the window holds the last picture it showed, dimmed, with the host's note over it (DrawHeld),
+  // through the session's end, the load (no loading screen, no front end made anew; the interface's state made on the
+  // loading thread as before) and the run ahead (in a window as many beats a frame as fit in kHeldChunkMs: nothing of
+  // the world or of the interface drawn, no input; the new interface's scripts get their frames and every beat's sync
+  // as before), and the new interface is first drawn at the beat. Ours. MOHO64UI_REWIND_RELOAD=1: the jump back as
+  // before (the restart the player sees: the loading screen, then the beats run ahead with the world drawn).
+  // JumpBackDue: the request the timeline made (RequestSessionRestart) is such a jump. FreezePicture: the next frame
+  // shown is read back as the picture held (at once without the window's picture; PictureFrozen once it is there).
+  // Rewind: the session ends and the replay starts over, held (Rewinding until the beat is reached).
+  bool JumpBackDue() const;
+  void FreezePicture();
+  bool PictureFrozen() const;
+  bool Rewind(std::string* why);
+  bool Rewinding() const { return rewinding_; }
+  // The beat is reached (SeekReached): the frame it was reached in still shows the picture held; the host ends the
+  // hold before its next frame (EndRewind), the new interface's opening run first (main.cpp finishRewind).
+  bool RewindArrived() const { return rewinding_ && rewindArrived_; }
+  void EndRewind();
+  // A jump back under way, either way (from the timeline's Seek until its beat is reached), and how far its run ahead
+  // has got (0..100; -1 while the replay starts over and loads).
+  bool JumpingBack() const { return back_.to != 0; }
+  int JumpBackPercent() const;
+  // The host's note over the held picture ("Rewinding to 12:40 ... 42%"), drawn into the interface's layer.
+  void DrawHeld(DrawTarget& target) const;
+  // (the run ahead's beats a frame in a held window: as many as fit in this many ms of the PC's clock)
+  static constexpr int kHeldChunkMs = 500;
+  // A loading screen was put up (the front end's StartLoadingScreen): counted for the timeline when a jump is under
+  // way (ReplayTimelineSource::State::backLoadingScreens; the tests see that a jump back shows none).
+  void NoteLoadingScreen();
 
   // The world's picture (the renderer's, render/world_picture.h), opened when a game is launched
   // unless wantPicture is off; nullptr when there is none (it did not open, or this build has no
@@ -195,8 +229,8 @@ class GameSession {
   // otherwise. The replay's length is its stream's Advances, counted when it opens; the moments are looked for on a
   // thread of their own from then on (StartMomentScan: the engine's ScanReplayMoments, sim/moments.h), kept
   // across a jump back and stopped when the replay closes. A jump forward runs the beats ahead as fast as they go
-  // (fastForwardTo, the world's sounds and shakes left out meanwhile); a jump back starts the replay over (a
-  // restart, RestartSession's way: the interface is made anew) and then runs ahead.
+  // (fastForwardTo, the world's sounds and shakes left out meanwhile); a jump back starts the replay over (the
+  // interface made anew) and then runs ahead, the window holding its last picture meanwhile (Rewind).
   ReplayTimelineSource* timeline();
   // How the host mounted the game, for the scan's own copy (--init, --folder; the maps are replayMaps), and where the
   // scan stops (0: at the replay's end; --scan-ticks, for tests).
@@ -441,6 +475,31 @@ class GameSession {
   uint32_t seekTo_ = 0;  // a jump of the timeline under way: the beat it goes to (0: none)
   bool seekBack_ = false;  // (that jump goes back: it waits for the replay to start over, Relaunch)
   bool relaunching_ = false;  // (End called by Relaunch: the replay goes on, its moments' scan with it)
+  // A jump back the held way (Rewind) under way, until its beat is reached (SeekReached); its picture held (frozen_:
+  // the window's last frame read back, 0xAARRGGBB, frozenW_ x frozenH_; freezeAsked_: the next frame shown is read
+  // back), and its clock: when it was asked, and when its parts were through (seconds from then; -1 not yet).
+  bool rewinding_ = false;
+  bool rewindArrived_ = false;
+  bool freezeAsked_ = false, frozenTaken_ = false;
+  int freezeWaits_ = 0;  // (frames shown without a world drawn since the freeze was asked: after 3 it is held black)
+  std::vector<uint32_t> frozen_;
+  int frozenW_ = 0, frozenH_ = 0;
+  std::vector<uint8_t> captureRgba_;  // (what the renderer reads a shown frame back into: CaptureWindow's, the freeze's)
+  struct BackClock {
+    std::chrono::steady_clock::time_point asked{};
+    uint32_t from = 0, to = 0;
+    double ended = -1, loaded = -1, aheadFrom = -1;
+    uint32_t aheadTick = 0;
+  } back_;
+  double BackSeconds() const;
+  // (tests: ReplayTimelineSource::Watch, the state's line after these ticks; taken after the beat, on whichever
+  // thread ran it, so the lines are guarded)
+  std::atomic<bool> watching_{false};
+  mutable std::mutex watchMutex_;
+  std::set<uint32_t> watchTicks_;
+  std::map<uint32_t, std::string> watched_;
+  void WatchBeat();
+  void TakeFrozen(const std::vector<uint8_t>& rgba, int w, int h);
   void StartMomentScan(const ReplayHeader& header, const std::string& file, const std::vector<std::string>& uids);
   void StopMomentScan();
   void SeekReached();  // after beats: a jump that got there (or to the replay's end) is over

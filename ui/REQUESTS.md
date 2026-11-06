@@ -2333,6 +2333,19 @@ I only add the console variable for scripts that set it.
 DONE (renderer, 2026-11-04): our minimap draws no range rings (DrawMinimap sets the rings aside for its pass), so no
 switch; the ui keeps the console variable ren_MinimapRanges for the scripts (it changes nothing).
 
+### 45. A replay's jump back without reopening the map (R1) and held frames without PrepareWorld (R2) (2026-11-06, not blocking)
+From the interface chat. The replay timeline's jump back now holds the last picture, dimmed, with a "Rewinding ... n%"
+note, while the replay starts over and runs ahead with nothing drawn (no loading screen; ui 2026-11-06,
+docs/ui-benchmarks.md). Measured on the 4v4: of a jump's load, about 2 s are the loading thread and 2-3 s the renderer
+reopening the SAME map and making the session's models again; the run ahead is the rest (the engine's sim snapshots
+later). Two asks, both for later, neither blocking:
+- **R1:** a way to start a new session on the map already open: the World reset to the map's start (props as the map
+  has them; no units, wrecks, scars, tracks, decals or effects; the beat's state cleared) while the ground, textures,
+  pipelines and the models already made stay. A jump back would then skip the map's reopening (2-3 s on a 4v4 jump).
+  Tell me its name (a call on WorldPicture / the session's world, or a flag on BeginMap) and I use it in Rewind.
+- **R2 (small):** `DrawToWindow` with `SetWorldShown(false)` skips `PrepareWorld`: the held frames still spend
+  15-30 ms each on it, for a world not shown.
+
 ## To the visuals track
 
 ### 1. The rebuilt UEF commander for the stock commander too (UEL0001)

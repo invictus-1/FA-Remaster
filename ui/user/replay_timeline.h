@@ -5,6 +5,7 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -24,6 +25,9 @@ class ReplayTimelineSource {
     size_t moments = 0;      // moments found so far
     size_t buckets = 0;      // fighting buckets (5 s each) found so far
     bool kept = false;       // what a jump back keeps across the restart is there (TakeKept)
+    uint32_t jumpsBack = 0;            // jumps back made to their beat since the replay began
+    uint32_t backLoadingScreens = 0;   // loading screens put up during them (none the held way: GameSession::Rewind)
+    double lastBackSeconds = 0;        // the last one's time from the jump asked to its beat reached (the PC's clock)
   };
   struct Moment {
     int tick = 0;
@@ -48,10 +52,16 @@ class ReplayTimelineSource {
   // with the reason when there is nothing to jump to.
   virtual bool Seek(uint32_t tick, const std::string& keep, std::string* why) = 0;
   virtual std::string TakeKept() = 0;
+  // For tests (a jump back lands exactly where a straight playback is): the simulation's state line (the engine's
+  // Fingerprint::StateLine, its "lua" part left out) after each of these ticks, taken as the beats run from now on,
+  // kept across jumps back; Watch anew forgets the lines taken.
+  virtual void Watch(const std::vector<uint32_t>& ticks) = 0;
+  virtual std::map<uint32_t, std::string> Watched() const = 0;
 };
 
-// moho64ui_ReplayTimeline, moho64ui_ReplayMoments, moho64ui_ReplayFight, moho64ui_ReplaySeek, moho64ui_ReplayTakeKept
-// (replay_timeline.cpp): nil where the state has no replay timeline (UserState::Config::timeline).
+// moho64ui_ReplayTimeline, moho64ui_ReplayMoments, moho64ui_ReplayFight, moho64ui_ReplaySeek, moho64ui_ReplayTakeKept,
+// moho64ui_ReplayWatchForTests, moho64ui_ReplayWatchedForTests (replay_timeline.cpp): nil where the state has no
+// replay timeline (UserState::Config::timeline).
 void RegisterTimelineBindings(lua_State* L);
 // The console's remaster_timeline [on|off] (the key "Replay timeline", Ctrl-T at first): the bar shown or hidden
 // while a replay plays.

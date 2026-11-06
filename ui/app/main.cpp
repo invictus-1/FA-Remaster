@@ -98,9 +98,12 @@ bool directWindow = true;
 // --window-capture <prefix>: what the window shows, read back by the renderer (checking):
 // <prefix>_game.png 300 frames into a game, <prefix>_menu.png 300 frames after it is left,
 // <prefix>_loading.png 90 frames into a launch's loading screen, <prefix>_front.png 300 frames
-// into the first front end (MOHO64UI_CAPTURE_FRAME: the game's and the first front end's frame).
+// into the first front end (MOHO64UI_CAPTURE_FRAME: the game's and the first front end's frame); and the replay
+// timeline's first jump back: <prefix>_jump_start.png 30 frames into it, _jump_half.png once half of its run ahead is
+// through, _jump_there.png 30 frames after its beat.
 std::string windowCapture;
-int capturedFrames = 0, menuFrames = 0, loadingFrames = 0, frontFrames = 0;
+int capturedFrames = 0, menuFrames = 0, loadingFrames = 0, frontFrames = 0, jumpFrames = 0, jumpedFrames = 0;
+bool jumpHalf = false;
 bool gameSeen = false;
 bool fullScreen = false;          // --fullscreen: the live window fills the main screen, without a frame
 bool modeGiven = false;           // --fullscreen or --size: the command line chose the display mode (DisplayMode)
@@ -855,12 +858,22 @@ int main(int argc, char** argv) {
     // once, and the loading screen has exactly one frame (its scripts run once) before the game.
     if (session.LoadDue()) {
       if (backdrop) backdrop->Stop();  // (nothing else draws a world while one loads)
-      cfg.width = shown->ui().width(), cfg.height = shown->ui().height();
-      ui::SavePreferencesOf(front->L());  // (DoPreload writes the preferences first: the game's state reads them)
+      // (A jump back held, GameSession::Rewind: the same replay again behind the picture held. The front end is the
+      // one from before the game, neither stepped nor drawn: no loading screen in it, and its preferences, older than
+      // the game's, are not written (the game's were, by rewind); the size is the game's (rewind's cfg); the
+      // PreGameData file stays the replay's own.)
+      const bool held = session.Rewinding();
+      if (!held) {
+        cfg.width = shown->ui().width(), cfg.height = shown->ui().height();
+        ui::SavePreferencesOf(front->L());  // (DoPreload writes the preferences first: the game's state reads them)
+      }
       texturePrefetch.Join();  // (long done: nothing else reads the file system's list while it changes)
       paintingsAhead.Join();
-      vfs.SetMemoryFile(kGamePrefsPath, ui::PreGameDataText(front->L(), session.LoadingMapFolder()));  // (the rules read it)
-      if (!front->StartLoadingScreen()) Logf(LogLevel::Warning, "moho64ui: the loading screen did not come up");
+      if (!held) {
+        vfs.SetMemoryFile(kGamePrefsPath, ui::PreGameDataText(front->L(), session.LoadingMapFolder()));  // (the rules read it)
+        if (!front->StartLoadingScreen()) Logf(LogLevel::Warning, "moho64ui: the loading screen did not come up");
+        session.NoteLoadingScreen();
+      }
       // The game's state is made on the loading thread once the simulation has started (its configuration as this
       // thread's now: a copy, nothing of this thread's is touched there). MOHO64UI_STATE_HERE=1: on this thread at the
       // end of the load, as before.
@@ -939,8 +952,9 @@ int main(int argc, char** argv) {
     session.WaitForWorker();  // (no Lua state is made while a beat runs: the engine's rule)
     if (backdrop) backdrop->Stop();  // the game has its own picture of the world
     lap("(start: the beat waited for, the menu's background stopped)");
-    // (A new state is made for the size the head has NOW: the window may have been resized.)
-    cfg.width = shown->ui().width(), cfg.height = shown->ui().height();
+    // (A new state is made for the size the head has NOW: the window may have been resized. Held, a jump back: the
+    // game's size as it was left; a resize meanwhile reaches the new state when it is first shown, run_window.cpp.)
+    if (!session.Rewinding()) cfg.width = shown->ui().width(), cfg.height = shown->ui().height();
     ui::UserState::Config gameCfg = cfg;
     gameCfg.bootScript = "/lua/SessionInit.lua";
     gameCfg.modUids = session.modUids();
@@ -1019,7 +1033,7 @@ int main(int argc, char** argv) {
     // that it stays up until then (through SetupUI, StartGameUI and the setup's beat of the game's own state, and the
     // frames between the two halves); the original runs those in one DoInitializing step, so its one frame shows no
     // difference.
-    front->EndLoadingScreen();
+    if (!session.Rewinding()) front->EndLoadingScreen();  // (a jump back held put up none)
     lap("(start: the loading screen gone)");
     game = std::move(starting);
     const bool up = startUp;
@@ -1056,10 +1070,62 @@ int main(int argc, char** argv) {
   // here, between two frames. Leaving: the game's interface and the session go, and a new front
   // end comes up with its main menu, as after the program's start. Starting over: the same
   // launch again; its interface comes up as it did the first time.
+  //
+  // The replay timeline's jump back (GameSession::Rewind; MOHO64UI_REWIND_RELOAD=1: as a restart, below): the frame it
+  // is asked in is read back as the picture the window holds; in the next the game's interface goes (its preferences
+  // written) and the replay starts over behind that picture, no front end made anew (the one from before the game is
+  // only the state shown until the new interface is there, never stepped or drawn: RunWindow's `held`).
+  bool rewindDue = false;  // (asked; waits for the picture to be read back)
+  // The new interface's time behind the picture held (its frames' seconds). Its opening is FAF's: StopLoadingDialog
+  // lays the "IN TRANSIT" cover over the screen, fading it from 1.5 s to 3.5 s of its frames' time, then slides the
+  // panels in (InitialAnimations: 3 x 0.15 s; gamemain.lua). At the beat, what is left of those 4 s is run at once
+  // behind the picture, in frames of 0.25 s with no beat between them, so that the player comes back to the game as
+  // it was, not to a cover fading out (a jump whose run ahead is shorter than that). Ours; INFERRED from those scripts.
+  double heldUiSeconds = 0;
+  constexpr double kHeldOpeningSeconds = 5.0;
+  auto finishRewind = [&]() {
+    const double had = heldUiSeconds;
+    int frames = 0;
+    if (game)
+      while (heldUiSeconds < kHeldOpeningSeconds) game->Frame(0.25), heldUiSeconds += 0.25, ++frames;
+    Logf(LogLevel::Info, "moho64ui: the jump back: the picture held goes (the new interface had %.2f s of frames behind it, %d more of 0.25 s now)",
+         had, frames);
+    heldUiSeconds = 0;
+    session.EndRewind();
+  };
+  auto rewind = [&]() {
+    session.WaitForWorker();
+    cfg.width = shown->ui().width(), cfg.height = shown->ui().height();  // (the head's size now: the new state's)
+    if (game) ui::SavePreferencesOf(game->L());
+    shown = front.get();
+    game.reset();
+    sounds.StopAll();
+    std::string why;
+    if (session.Rewind(&why)) return;
+    Logf(LogLevel::Error, "moho64ui: the replay could not be started over: %s", why.c_str());
+    session.End();
+    Logf(LogLevel::Info, "moho64ui: the game is left: back to the front end");
+    freshFrontEnd();
+  };
   auto leaveOrRestart = [&]() {
     if (session.Loading() || startingUp) return;  // (asked while a launch loads: kept until its game runs)
+    if (rewindDue) {
+      if (!session.running()) {
+        rewindDue = false;
+      } else if (session.PictureFrozen()) {
+        rewindDue = false;
+        rewind();
+      }
+      return;
+    }
     int request = ui::TakeSessionRequest();
     if (!request || !session.running()) return;
+    if (request == 2 && session.JumpBackDue()) {
+      session.FreezePicture();
+      if (session.PictureFrozen()) rewind();
+      else rewindDue = true;
+      return;
+    }
     session.WaitForWorker();  // (the game's state goes and a new one may come: not while a beat runs)
     cfg.width = shown->ui().width(), cfg.height = shown->ui().height();  // (the head's size now)
     if (game) ui::SavePreferencesOf(game->L());  // (what the game changed: the next front end reads the file)
@@ -1115,6 +1181,11 @@ int main(int argc, char** argv) {
       hooks.clock = [&](double seconds) { session.AdvanceClock(seconds); };
     }
     hooks.catchingUp = [&]() { return session.CatchingUp(); };
+    // (the hold ends at the top of the frame after the one its beat was reached in: that frame still showed the picture)
+    hooks.held = [&]() {
+      if (session.RewindArrived()) finishRewind();
+      return session.Rewinding();
+    };
     hooks.statsLines = [&](std::vector<std::string>* lines) { session.StatsLines(lines); };
     hooks.frameGenerationOn = [&]() { return session.FrameGenerationOn(); };
 #ifdef _WIN32
@@ -1147,7 +1218,14 @@ int main(int argc, char** argv) {
                              listen();
                              sounds.Update(static_cast<float>(seconds));
                            });
-                           if (!game && !session.Loading() && !startingUp) session.WaitForWorker(), session.DrawStatus(target);  // the host's notice, until the game's interface is there
+                           if (session.Rewinding()) {
+                             // A jump back held: the new interface's scripts get their frames as before (not drawn, no
+                             // input) once it is there, and the host's note goes over the picture held.
+                             if (game) timed("(host: the game's interface stepped, held)", [&] { game->Frame(seconds), heldUiSeconds += seconds; });
+                             session.DrawHeld(target);
+                           } else if (!game && !session.Loading() && !startingUp) {
+                             session.WaitForWorker(), session.DrawStatus(target);  // the host's notice, until the game's interface is there
+                           }
                            timed("(host: leave or restart)", [&] { leaveOrRestart(); });
                            timed("(host: the loading screen or the game's interface started)", [&] { startGameInterface(); });
                            if (!windowCapture.empty() && session.DrawsToWindow()) {
@@ -1156,8 +1234,17 @@ int main(int argc, char** argv) {
                              static const int captureAt = std::getenv("MOHO64UI_CAPTURE_FRAME") ? std::atoi(std::getenv("MOHO64UI_CAPTURE_FRAME")) : 300;
                              if (!game && !gameSeen && !session.Loading() && ++frontFrames == captureAt) session.CaptureWindow(windowCapture + "_front.png");
                              if (game && ++capturedFrames == captureAt) session.CaptureWindow(windowCapture + "_game.png"), gameSeen = true;
-                             if (!game && gameSeen && ++menuFrames == 300) session.CaptureWindow(windowCapture + "_menu.png");
+                             if (!game && gameSeen && !session.Rewinding() && ++menuFrames == 300) session.CaptureWindow(windowCapture + "_menu.png");
                              if (!game && session.Loading() && ++loadingFrames == 90) session.CaptureWindow(windowCapture + "_loading.png");
+                             // (a jump back of the replay timeline, either way: its 30th frame, its first past half of
+                             // the run ahead, and the 30th after its beat)
+                             if (session.JumpingBack()) {
+                               if (++jumpFrames == 30) session.CaptureWindow(windowCapture + "_jump_start.png");
+                               if (!jumpHalf && session.JumpBackPercent() >= 50) session.CaptureWindow(windowCapture + "_jump_half.png"), jumpHalf = true;
+                               jumpedFrames = 1;
+                             } else if (jumpedFrames > 0 && ++jumpedFrames == 31) {
+                               session.CaptureWindow(windowCapture + "_jump_there.png");
+                             }
                            }
                            // LAST: a beat it starts on its own thread runs beside nothing more of
                            // this frame that touches the simulation (only the picture is shown).
@@ -1186,7 +1273,9 @@ int main(int argc, char** argv) {
         seconds = (std::min)(0.25, std::chrono::duration<double>(now - last).count());
         last = now;
       }
-      shown->Frame(seconds);
+      if (session.RewindArrived()) finishRewind();
+      if (session.Rewinding() && game) heldUiSeconds += seconds;
+      if (!(session.Rewinding() && !game)) shown->Frame(seconds);  // (a jump back held: not the front end from before)
       session.Advance(seconds);
       listen();
       sounds.Update(static_cast<float>(seconds));
@@ -1196,7 +1285,9 @@ int main(int argc, char** argv) {
     }
   }
   if (o.frames) Logf(LogLevel::Info, "moho64ui: ran %d frames", done);
-  ui::SavePreferencesOf(shown->L());  // (the program closes: CScApp::Destroy writes the preferences)
+  // (the program closes: CScApp::Destroy writes the preferences; in a jump back held before the new interface is there,
+  // the game's were written when it went, and the front end shown holds older ones)
+  if (!(session.Rewinding() && !game)) ui::SavePreferencesOf(shown->L());
   for (const auto& line : session.Status()) Logf(LogLevel::Info, "moho64ui: session: %s", line.c_str());
   if (dumpUi) shown->ui().Dump();
   if (!screenshot.empty()) {  // draw the head once and save the picture

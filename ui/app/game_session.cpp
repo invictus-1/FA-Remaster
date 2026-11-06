@@ -760,13 +760,15 @@ struct GameSession::WindowPicture {
   int layerW = 0, layerH = 0;  // the interface layer's size as last given (0: none yet)
   // The picture over the window drawn by the card (SetBackdrop): none, the interface's (CardSink: the loading
   // screen's film, the "IN TRANSIT" cover), or black fading out over the menus' map just swapped in (it comes in
-  // from black, as the read-back way's background does, rather than at once after the seconds of black).
-  enum class Over { None, Card, Fade };
+  // from black, as the read-back way's background does, rather than at once after the seconds of black), or the
+  // picture held through a jump back of the replay timeline (Frozen: GameSession::Rewind, dimmed by its tint).
+  enum class Over { None, Card, Fade, Frozen };
   Over over = Over::None;
   float overAlpha = 1;
   std::chrono::steady_clock::time_point fadeFrom{};
   bool fading = false;
   uint32_t black = 0xff000000u;
+  bool heldWorld = false;  // (the world hidden while a jump back held the picture: shown again after, as the game has it)
 };
 #else
 struct GameSession::WindowPicture {};
@@ -892,6 +894,8 @@ struct GameSession::Timeline : ReplayTimelineSource {
   mutable std::vector<std::vector<moho::FightBucket>> buckets;
   mutable bool finalCopy = false;
   int limit = 0;  // (the scan's ScanArgs::ticks: 0 the whole replay)
+  uint32_t jumpsBack = 0, backLoadingScreens = 0;  // (State's: kept across the jumps back, as the timeline is)
+  double lastBackSeconds = 0;
 
   ~Timeline() { Stop(); }
   void Stop() {
@@ -938,6 +942,9 @@ struct GameSession::Timeline : ReplayTimelineSource {
     s.moments = moments.size();
     s.buckets = DoneBuckets();
     s.kept = !kept.empty();
+    s.jumpsBack = jumpsBack;
+    s.backLoadingScreens = backLoadingScreens;
+    s.lastBackSeconds = lastBackSeconds;
     return s;
   }
   void MomentsFrom(size_t first, std::vector<ReplayTimelineSource::Moment>* out) const override {
@@ -984,19 +991,34 @@ struct GameSession::Timeline : ReplayTimelineSource {
     if (tick == now) return true;
     if (tick > now) {  // forward: the beats run ahead (Advance, CatchingUp)
       g.seekTo_ = tick;
+      if (g.back_.to) g.back_.to = tick;  // (asked while a jump back runs ahead: that jump goes on to this beat)
       Logf(LogLevel::Info, "moho64ui: the replay timeline: forward from beat %u to beat %u", now, tick);
       return true;
     }
-    // back: the replay starts over (the host's restart between two frames, RestartSession's: Relaunch) and runs
-    // ahead to the beat
+    // back: the replay starts over (the host's restart between two frames: Rewind, held; or RestartSession's Relaunch,
+    // MOHO64UI_REWIND_RELOAD) and runs ahead to the beat
     g.seekTo_ = tick;
     g.seekBack_ = true;  // (not reached by this run of the replay: the next one runs ahead to it)
+    g.back_ = BackClock{};
+    g.back_.asked = std::chrono::steady_clock::now();
+    g.back_.from = now, g.back_.to = tick;
     kept = keep;
     RequestSessionRestart();
     Logf(LogLevel::Info, "moho64ui: the replay timeline: back from beat %u to beat %u (the replay starts over)", now, tick);
     return true;
   }
   std::string TakeKept() override { return std::move(kept); }
+  void Watch(const std::vector<uint32_t>& ticks) override {
+    GameSession& g = *session;
+    std::lock_guard<std::mutex> lock(g.watchMutex_);
+    g.watchTicks_ = std::set<uint32_t>(ticks.begin(), ticks.end());
+    g.watched_.clear();
+    g.watching_ = !g.watchTicks_.empty();
+  }
+  std::map<uint32_t, std::string> Watched() const override {
+    std::lock_guard<std::mutex> lock(session->watchMutex_);
+    return session->watched_;
+  }
 };
 
 ReplayTimelineSource* GameSession::timeline() { return play_ && timeline_ ? timeline_.get() : nullptr; }
@@ -1057,7 +1079,123 @@ void GameSession::SeekReached() {
   if (!seekTo_ || seekBack_ || !sim_ || BeatRunning()) return;
   if (sim_->tick() < seekTo_ && !(play_ && play_->AtEnd())) return;
   Logf(LogLevel::Info, "moho64ui: the replay timeline: at beat %u", sim_->tick());
+  const bool wasBack = back_.to == seekTo_ && back_.to != 0;
   seekTo_ = 0;
+  if (wasBack) {  // (a jump back, either way: its time and its parts, for the timeline and the log)
+    const double total = BackSeconds();
+    if (timeline_) ++timeline_->jumpsBack, timeline_->lastBackSeconds = total;
+    const uint32_t ran = back_.aheadTick ? sim_->tick() - back_.aheadTick : 0;
+    const double ahead = back_.aheadFrom >= 0 ? total - back_.aheadFrom : 0;
+    Logf(LogLevel::Info,
+         "moho64ui: the jump back from beat %u to beat %u (%s): at its beat %.2f s after it was asked (the session's end %.2f s, the load "
+         "through at %.2f s, the run ahead from %.2f s: %u beats in %.2f s, %.0f a second)",
+         back_.from, back_.to, rewinding_ ? "held" : "the replay's restart shown", total, back_.ended, back_.loaded, back_.aheadFrom, ran,
+         ahead, ahead > 0 ? ran / ahead : 0.0);
+    back_.to = 0;
+  }
+  if (rewinding_) rewindArrived_ = true;  // (the hold ends in the host's next frame: RewindArrived, EndRewind)
+}
+
+// --- the jump back, held (game_session.h Rewind) ---
+
+double GameSession::BackSeconds() const { return std::chrono::duration<double>(std::chrono::steady_clock::now() - back_.asked).count(); }
+
+bool GameSession::JumpBackDue() const {
+  static const bool reload = [] {
+    const char* v = std::getenv("MOHO64UI_REWIND_RELOAD");
+    return v && *v && std::string(v) != "0";
+  }();
+  return !reload && seekBack_ && play_ && sim_ && lastWasReplay_;
+}
+
+void GameSession::FreezePicture() {
+  frozenTaken_ = false;
+  freezeWaits_ = 0;
+  if (rewinding_) {  // (a jump back asked while one is held: the picture held stays; the new interface was never shown)
+    freezeAsked_ = false;
+    frozenTaken_ = true;
+    return;
+  }
+#ifdef MOHO64UI_WORLD_PICTURE
+  if (window && windowPicture_) {
+    freezeAsked_ = true;
+    return;
+  }
+#endif
+  frozen_.clear(), frozenW_ = frozenH_ = 0;
+  frozenTaken_ = true;  // (no picture in a window to hold: the jump goes on at once)
+}
+
+bool GameSession::PictureFrozen() const {
+#ifdef MOHO64UI_WORLD_PICTURE
+  if (freezeAsked_ && !(window && windowPicture_)) return true;  // (the picture went meanwhile)
+#endif
+  return frozenTaken_;
+}
+
+// (the window's frame read back as RGBA, kept as the interface's pixels are: opaque, so already premultiplied)
+void GameSession::TakeFrozen(const std::vector<uint8_t>& rgba, int w, int h) {
+  freezeAsked_ = false;
+  frozenTaken_ = true;
+  frozen_.clear(), frozenW_ = frozenH_ = 0;
+  if (rgba.size() != static_cast<size_t>(w) * static_cast<size_t>(h) * 4) {
+    Logf(LogLevel::Warning, "moho64ui: the jump back: the window's picture was not read back (it is held black)");
+    return;
+  }
+  frozen_.resize(static_cast<size_t>(w) * static_cast<size_t>(h));
+  for (size_t i = 0; i < frozen_.size(); ++i)
+    frozen_[i] = 0xff000000u | static_cast<uint32_t>(rgba[i * 4]) << 16 | static_cast<uint32_t>(rgba[i * 4 + 1]) << 8 | rgba[i * 4 + 2];
+  frozenW_ = w, frozenH_ = h;
+}
+
+bool GameSession::Rewind(std::string* why) {
+  rewinding_ = true;
+  rewindArrived_ = false;
+  if (!Relaunch(why)) {
+    EndRewind();
+    return false;
+  }
+  Logf(LogLevel::Info, "moho64ui: the jump back: the replay starts over behind the picture held (%.2f s after the jump was asked)", back_.ended);
+  return true;
+}
+
+// The beat is reached (or the replay closes): the picture held goes (PresentToWindow: the world shown again, the
+// interface over it), and the interface is stepped and drawn as ever from then on.
+void GameSession::EndRewind() {
+  rewinding_ = rewindArrived_ = false;
+  freezeAsked_ = frozenTaken_ = false;
+  std::vector<uint32_t>().swap(frozen_);
+  frozenW_ = frozenH_ = 0;
+}
+
+void GameSession::NoteLoadingScreen() {
+  if (seekTo_ && timeline_) ++timeline_->backLoadingScreens;
+}
+
+int GameSession::JumpBackPercent() const {
+  const uint32_t to = seekTo_ ? seekTo_ : back_.to;
+  if (!back_.to || !sim_ || loadSession_ || seekBack_ || to == 0) return -1;  // (the replay still to start over, or loading)
+  return static_cast<int>(std::min<uint32_t>(100, static_cast<uint32_t>(100.0 * sim_->tick() / to)));
+}
+
+// The host's note over the held picture: where the jump goes, and how far the run ahead has got.
+void GameSession::DrawHeld(DrawTarget& target) const {
+  if (!rewinding_) return;
+  const uint32_t to = seekTo_ ? seekTo_ : back_.to;
+  char text[96];
+  const int percent = JumpBackPercent();
+  if (percent >= 0)
+    std::snprintf(text, sizeof text, "Rewinding to %u:%02u ...  %d%%", to / 600, (to / 10) % 60, percent);
+  else
+    std::snprintf(text, sizeof text, "Rewinding to %u:%02u ...", to / 600, (to / 10) % 60);
+  const int size = 20;
+  const FontMetrics m = GetFontMetrics("Arial", size);
+  const float w = StringAdvance("Arial", size, text);
+  // (in the middle of the window, a little below the centre: the game's own pause and wait notes stand above it)
+  const float W = static_cast<float>(target.Width()), H = static_cast<float>(target.Height());
+  const float x = std::floor((W - w) * 0.5f), y = std::floor(H * 0.58f);
+  target.FillRect(Rect{x - 18, y - 12, x + w + 18, y + m.height + 12}, 0xc0101820u);
+  DrawString(target, "Arial", size, text, x, y + m.ascent, 0xffe0e8f0u);
 }
 
 GameSession::GameSession(Vfs* vfs, std::vector<std::string> hookDirs) : vfs_(vfs), hookDirs_(std::move(hookDirs)) {}
@@ -1519,6 +1657,7 @@ bool GameSession::LaunchReplay(lua_State* L, const std::string& file, std::strin
   ReplayHeld() = false;  // (a new replay plays: no hold of a replay watched before)
   seekTo_ = 0;
   seekBack_ = false;
+  back_ = BackClock{};
   StartMomentScan(*h, file, uids);
   last_ = std::make_unique<SessionDescription>(session);
   lastUids_ = uids;
@@ -1620,6 +1759,8 @@ void GameSession::End() {
     StopMomentScan();
     seekTo_ = 0;
     seekBack_ = false;
+    back_ = BackClock{};
+    EndRewind();
   }
   if (sounds) sounds->StopWorld();
   onSync = nullptr;
@@ -1666,6 +1807,7 @@ bool GameSession::Relaunch(std::string* why) {
     PrepareSession(again, lastUids_);
     play_ = std::make_unique<CommandStream>(playData_, again.header.streamOffset);
     seekBack_ = false;
+    if (back_.to) back_.ended = BackSeconds();  // (a jump back's clock, either way: SeekReached's line)
     if (seekTo_) Logf(LogLevel::Info, "moho64ui: the replay starts over and runs ahead to beat %u", seekTo_);
     return true;
   }
@@ -2041,6 +2183,7 @@ bool GameSession::FinishLoad(std::string* why) {
   if (play_)
     Logf(LogLevel::Info, "moho64ui: the replay is played %s",
          sim_->fixes ? "with the engine's script fixes, as it was played" : "without the engine's script fixes");
+  if (back_.to) back_.loaded = BackSeconds();  // (a jump back's clock: SeekReached's line)
   return true;
 }
 
@@ -2391,18 +2534,40 @@ void GameSession::PresentToWindow(const SoftwareTarget& target, const IntRect& c
   if (vsync != wp.vsync) wp.picture.SetVsync(vsync), wp.vsync = vsync;
   const bool lowLatency = Pacing().lowLatency;
   if (lowLatency != wp.lowLatency) wp.picture.SetLowLatency(lowLatency), wp.lowLatency = lowLatency;
-  GiveBackdrop(wp);
-  std::vector<uint8_t> rgba;
-  if (!captureTo_.empty()) wp.picture.CaptureNextWindowFrame(&rgba);
+  if (!rewinding_) GiveBackdrop(wp);
+  // (a frame read back: CaptureWindow's, or the picture a jump back holds, FreezePicture; into a member, as the
+  // renderer fills it in the next DrawToWindow, whichever frame that is)
+  const bool capturing = !captureTo_.empty() || freezeAsked_;
+  if (capturing) captureRgba_.clear(), wp.picture.CaptureNextWindowFrame(&captureRgba_);
+  bool drawn = false;
   const auto t0 = std::chrono::steady_clock::now();
   FrameTimes& times = Times();
-  if (picture_ && picture_->direct && !holdBeats_) {  // a game: its world from the world view's camera
+  if (rewinding_) {
+    // A jump back held (Rewind): the picture read back at the click, over the whole window and dimmed, the host's note
+    // over it (the interface's layer, nothing else in it); no world drawn (the game's that is over, or the new one
+    // as the replay runs ahead behind it). (The renderer still prepares its world each frame, render request R2.)
+    using Over = WindowPicture::Over;
+    if (wp.over != Over::Frozen) {
+      if (!frozen_.empty()) wp.picture.SetBackdrop(frozen_.data(), frozenW_, frozenH_, frozenW_, render::WorldPicture::BackdropFit::Stretch, true);
+      else wp.picture.SetBackdrop(&wp.black, 1, 1, 1, render::WorldPicture::BackdropFit::Stretch, true);
+      wp.picture.SetBackdropLook(1, 0x8c8c8c);  // (dimmed to some 55%)
+      wp.over = Over::Frozen, wp.overAlpha = 1;
+    }
+    if (wp.picture.ViewCount() > 1) wp.picture.SetViews({});
+    wp.picture.SetWorldShown(false);
+    wp.heldWorld = true;
+    wp.picture.DrawToWindow(render::Camera{}, w, h, 0);
+    wp.drawnW = w, wp.drawnH = h;
+    drawn = true;
+  } else if (picture_ && picture_->direct && !holdBeats_) {  // a game: its world from the world view's camera
     Picture& pic = *picture_;
     const double moment = pic.momentFixed ? pic.moment : PictureTick();  // (the one the anchors were of)
     pic.momentFixed = false;
+    if (wp.heldWorld) wp.picture.SetWorldShown(Looks().worldShown), wp.heldWorld = false;  // (the game's ren_Oblivion)
     if (pic.cameraW > 0) {
       wp.picture.DrawToWindow(pic.camera, w, h, moment);
       wp.drawnW = w, wp.drawnH = h;
+      drawn = true;
       // (the first-start graphics check's measurement: the card's time of the newest frame it has finished)
       if (FrameCost().fakeMs < 0) FrameCost().Note(wp.picture.LastStats().gpuMs);
     }
@@ -2435,14 +2600,18 @@ void GameSession::PresentToWindow(const SoftwareTarget& target, const IntRect& c
     if (wp.picture.ViewCount() > 1) wp.picture.SetViews({});
     const bool world = wp.shows == Kind::Menu && menuBackdrop && menuBackdrop->TakeView(wp.picture, w, h, &camera, &tick);
     if (wp.shows != Kind::None) wp.picture.SetWorldShown(world);
+    wp.heldWorld = false;
     wp.picture.DrawToWindow(camera, w, h, tick);
     wp.drawnW = w, wp.drawnH = h;
+    drawn = true;
     if (world) {
       times.worldDraw += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
       ++times.worldDraws;
     }
   }
-  if (!captureTo_.empty()) SaveWindowCapture(rgba, w, h, captureTo_), captureTo_.clear();
+  if (freezeAsked_ && drawn) TakeFrozen(captureRgba_, w, h);
+  else if (freezeAsked_ && ++freezeWaits_ >= 3) TakeFrozen({}, w, h);  // (no frame of the world drawn: held black)
+  if (!captureTo_.empty()) SaveWindowCapture(captureRgba_, w, h, captureTo_), captureTo_.clear();
 #else
   (void)target;
   (void)changed;
@@ -3376,6 +3545,22 @@ void GameSession::Advance(double seconds) {
   if (beatToFinish_) FinishBeat();
   SeekReached();
   const bool catchingUp = CatchingUp();
+  if (catchingUp && back_.to && back_.aheadFrom < 0) back_.aheadFrom = BackSeconds(), back_.aheadTick = sim_->tick();
+  if (catchingUp && rewinding_ && window) {
+    // A jump back held in a window (Rewind): nothing is drawn meanwhile, so each frame runs as many beats as fit in
+    // kHeldChunkMs (in steps of up to 10, each beat's sync given to the interface's scripts as it comes), the window
+    // still answering the system and the note's progress moving on between them. (Without a window, 50 a frame as
+    // below: the tests' frames stay as they were.)
+    const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(kHeldChunkMs);
+    for (;;) {
+      due_ = std::min<uint32_t>(std::max(fastForwardTo, seekTo_) - sim_->tick(), 10) * 0.1 + 0.01;
+      RunDueBeats(true);
+      GiveBeatSync();
+      if (!CatchingUp() || (play_ && play_->AtEnd()) || std::chrono::steady_clock::now() >= until) break;
+    }
+    SeekReached();
+    return;
+  }
   if (catchingUp) {  // (--fast-forward, for measurements, or a jump of the replay timeline: up to 50 beats a frame until that beat)
     due_ = std::min<uint32_t>(std::max(fastForwardTo, seekTo_) - sim_->tick(), 50) * 0.1 + 0.01;
   } else {
@@ -3449,6 +3634,26 @@ void GameSession::StartBeatOnThread() {
 // After a beat on the thread: its times, its sounds and shakes, and its sync for the interface.
 void GameSession::FingerprintBeat() {  // (after each beat of a recorded live game: its line in <replayOut>.fp)
   if (Fingerprinting()) fp_->Beat(*sim_, ++fpBeats_);
+  if (watching_) WatchBeat();
+}
+
+// (tests: the state's line after a tick watched, Timeline::Watch; the "lua" part, the sim's Lua heap, left out: it is
+// kept out of the fingerprint's total too)
+void GameSession::WatchBeat() {
+  const uint32_t tick = sim_->tick();
+  {
+    std::lock_guard<std::mutex> lock(watchMutex_);
+    if (!watchTicks_.count(tick)) return;
+  }
+  std::string line = Fingerprint::StateLine(*sim_, tick);
+  const size_t lua = line.find(" lua=");
+  if (lua != std::string::npos) {
+    const size_t end = line.find(' ', lua + 1);
+    line.erase(lua, end == std::string::npos ? std::string::npos : end - lua);
+  }
+  while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) line.pop_back();
+  std::lock_guard<std::mutex> lock(watchMutex_);
+  watched_[tick] = std::move(line);
 }
 
 void GameSession::FinishBeat() {

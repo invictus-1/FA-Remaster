@@ -37,10 +37,11 @@ size_t FirstIndex(lua_State* L, int idx) {  // (the scripts count from 1)
   return first < 1.0 ? 0 : static_cast<size_t>(first) - 1;
 }
 
-// moho64ui_ReplayTimeline() -> {ticks, tick, seeking, seekTo, scanning, scanned, moments, buckets, kept} while a
-// replay plays (ticks: its length in beats; seekTo: the beat a jump goes to; scanned: how far the moments' scan has
-// got; moments and buckets: how many there are so far; kept: a jump back's kept table waits, moho64ui_ReplayTakeKept);
-// nil otherwise.
+// moho64ui_ReplayTimeline() -> {ticks, tick, seeking, seekTo, scanning, scanned, moments, buckets, kept, jumpsBack,
+// backLoadingScreens, lastBackSeconds} while a replay plays (ticks: its length in beats; seekTo: the beat a jump goes
+// to; scanned: how far the moments' scan has got; moments and buckets: how many there are so far; kept: a jump back's
+// kept table waits, moho64ui_ReplayTakeKept; jumpsBack: the jumps back that reached their beat, backLoadingScreens the
+// loading screens shown during them, lastBackSeconds the last one's time on the PC's clock); nil otherwise.
 int l_ReplayTimeline(lua_State* L) {
   ReplayTimelineSource* source = Source(L);
   if (!source) return 0;
@@ -55,6 +56,9 @@ int l_ReplayTimeline(lua_State* L) {
   SetNumber(L, "moments", static_cast<double>(s.moments));
   SetNumber(L, "buckets", static_cast<double>(s.buckets));
   SetBool(L, "kept", s.kept);
+  SetNumber(L, "jumpsBack", s.jumpsBack);
+  SetNumber(L, "backLoadingScreens", s.backLoadingScreens);
+  SetNumber(L, "lastBackSeconds", s.lastBackSeconds);
   return 1;
 }
 
@@ -143,6 +147,37 @@ int l_ReplayTakeKept(lua_State* L) {
   return 1;
 }
 
+// moho64ui_ReplayWatchForTests({tick, ...}): the simulation's state line after each of those ticks is taken as the
+// beats run (ReplayTimelineSource::Watch); moho64ui_ReplayWatchedForTests() -> {[tick] = line} of those taken so far.
+// For tests only (ui/tests/rewind.lua).
+int l_ReplayWatchForTests(lua_State* L) {
+  ReplayTimelineSource* source = Source(L);
+  if (!source) return 0;
+  std::vector<uint32_t> ticks;
+  if (lua_istable(L, 1))
+    for (int i = 1;; ++i) {
+      lua_rawgeti(L, 1, i);
+      const bool number = lua_isnumber(L, -1) != 0;
+      if (number && lua_tonumber(L, -1) >= 0) ticks.push_back(static_cast<uint32_t>(lua_tonumber(L, -1)));
+      lua_pop(L, 1);
+      if (!number) break;
+    }
+  source->Watch(ticks);
+  return 0;
+}
+
+int l_ReplayWatchedForTests(lua_State* L) {
+  ReplayTimelineSource* source = Source(L);
+  if (!source) return 0;
+  lua_newtable(L);
+  for (const auto& [tick, line] : source->Watched()) {
+    lua_pushnumber(L, tick);
+    lua_pushstring(L, line.c_str());
+    lua_rawset(L, -3);
+  }
+  return 1;
+}
+
 }  // namespace
 
 void RegisterTimelineBindings(lua_State* L) {
@@ -151,6 +186,8 @@ void RegisterTimelineBindings(lua_State* L) {
   lua_register(L, "moho64ui_ReplayFight", l_ReplayFight);
   lua_register(L, "moho64ui_ReplaySeek", l_ReplaySeek);
   lua_register(L, "moho64ui_ReplayTakeKept", l_ReplayTakeKept);
+  lua_register(L, "moho64ui_ReplayWatchForTests", l_ReplayWatchForTests);
+  lua_register(L, "moho64ui_ReplayWatchedForTests", l_ReplayWatchedForTests);
 }
 
 // remaster_timeline [on|off]: the bar's Toggle (no word) or Show / Hide (/moho64ui/lua/timeline.lua). Only while a
