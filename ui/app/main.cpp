@@ -388,7 +388,8 @@ int main(int argc, char** argv) {
     fixCandidates.push_back(dir + "/../local_mod_fixes");
   }
   std::vector<std::pair<std::string, std::string>> modFixes;  // (folder, mount point)
-  for (const char* name : {"ultra-shields-fix", "antares-rework", "wyvern-rework", "totalmayhem-rework", "experimental-sacus-fix"}) {
+  for (const char* name : {"ultra-shields-fix", "antares-rework", "wyvern-rework", "totalmayhem-rework", "experimental-sacus-fix",
+                           "schlachtfeld-fix"}) {
     for (const std::string& c : fixCandidates) {
       if (!hostfs::IsFile(c + "/" + name + "/mod_info.lua")) continue;
       modFixes.push_back({c + "/" + name, std::string("/mods/") + name});

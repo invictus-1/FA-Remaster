@@ -53,6 +53,7 @@ do
             ['9a9C61C0-1787-10DF-A0AD-BATTLEPACK005'] = '5e94b4c6-a027-4d20-a3c2-22fbc69ecc41',  -- Wyvern Battle Pack: wyvern-rework (local)
             ['62e2j64a-TOMA-3652-01370-146as555a8u3'] = '12a15f7a-5394-4561-b5ad-bc203e89894d',  -- Total Mayhem: totalmayhem-rework (local)
             ['3ce6feab-04dc-48a9-b945-a31d64c67dd2'] = 'f859cbab-dc93-47d9-b9e9-4c0829015a16',  -- Experimental SACUs: experimental-sacus-fix (local; UEL8301 out of the build menus, Chris 2026-11-05)
+            ['51705a9a-a569-424a-80af-254222051555v22'] = 'ad20310d-5523-431b-8531-cd09e950a857',  -- Savers Schlachtfeld: schlachtfeld-fix (local; BlackOps' T2/T3 hydrocarbon plants out of the build menus where Savers' X2000/X3000 line is stronger)
         }
         if type(selected) == 'table' then
             local onDisk = {}
