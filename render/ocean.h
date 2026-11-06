@@ -67,7 +67,8 @@ cbuffer Ocean : register(b2) {
   float4 oceanLook2;       // x the sea's significant height (world units); y the foam far off (a share); z the slopes' tilt times (from above: twice); w [lift] 1 = the surface lifted
   float4 oceanLook3;       // x the Jacobian below which the surface foams; y the glint's strength (1); z [bigtest] 1 the glitter softened (Ocean::glitter)
   float4 oceanMore;        // x [stormfoam] how much more a storm foams (0 .. 1 and more: Ocean::stormFoam, by how rough the sea is; 0 as before);
-                           // y [livewash] 1 = the hulls' wash torn and moving, measured from the hull as seen (Ocean::liveWash)
+                           // y [livewash] 1 = the hulls' wash torn and moving, measured from the hull as seen (Ocean::liveWash);
+                           // z [sparkle] how much the steep wave faces looked down on catch the sky (Ocean::nearSparkle)
   float4 oceanLook4;       // [whitecaps] xy how far the foam has drifted (world units, within 4096: its pattern drifts with it); z [hulls] how many hulls
   float4 oceanHulls[72];   // [hulls] what floats in the sea (Ocean::AddHull), three rows each: x, z its middle, its way (x, z); its waterline's
                            // half length and half beam, its speed, -; its waterline's height there, the slopes it rides (dh/dx, dh/dz), -
@@ -548,6 +549,11 @@ class Ocean {
   // Tuning (viewer --ocean-*): the waves' height times (1), how rough the sea is whatever the weather (-1: by it), the
   // glint's (0.8: the glitter a little under a sea's own, nearer today's water), the foam's and the glow's strength (1).
   float heightScale = 1, roughness = -1, glint = 0.8f, foamStrength = 1, glow = 1;
+  // [sparkle] (Chris's third test, 2026-11-05: the white flecks on the sea showed far off, never where the camera looked;
+  // they are the sky mirrored on the wave faces, strong at a low angle and weak looking down. Of three trials, 2026-11-06,
+  // he chose this one at 1.0) The steepest wave faces looked down on catch the sky as at a lower angle: a scattering of
+  // small glints where the camera looks. 0: as before (viewer --ocean-sparkle 0).
+  float nearSparkle = 1.0f;
   // How much steeper the slopes are drawn than they are (seen from above twice that again: there the slopes are all that
   // shows of the waves).
   float tilt = 1.5f;

@@ -450,7 +450,8 @@
 //           waves that lift the surface (World::oceanLift: the water drawn as a grid following the camera, lifted by the
 //           same waves; none over the shallows; ships and hover units ride them in the picture alone; the wakes too).
 //           Tuning: --ocean-height n (the waves' height times n, 1), --ocean-tilt n (the slopes drawn n times as steep, 1.5;
-//           from above twice that), --ocean-glint n (0.8), --ocean-foam n, --ocean-glow n (1); --ocean-view n: in place of the
+//           from above twice that), --ocean-glint n (0.8), --ocean-foam n, --ocean-glow n (1), --ocean-sparkle n ([sparkle]
+//           the steep wave faces looked down on catching the sky, 1; 0 as before); --ocean-view n: in place of the
 //           water 1 the slopes, 2 the foam's field, 3 the slopes' spread, 4 the height, 5 the Jacobian (red: it foams),
 //           6 [whitecaps] the whitecaps' parts (red the crest breaking now, green the fresh foam, blue the residue);
 //           --ocean-glitter 0: [bigtest] the sun's glitter as before (Ocean::glitter; 1, the default: from the waves' true
@@ -857,6 +858,7 @@ struct Options {
   bool oceanWaves = false;                                     // [ocean] --ocean
   bool oceanLift = false;                                      // [lift] --ocean-lift
   float oceanHeight = 1, oceanGlint = 0.8f, oceanFoam = 1, oceanGlow = 1, oceanTilt = 1.5f;  // --ocean-height, -glint, -foam, -glow, -tilt
+  float oceanSparkle = 1;  // [sparkle] --ocean-sparkle
   int oceanView = 0;                                           // --ocean-view
   int oceanGlitter = 1;                                        // [bigtest] --ocean-glitter
   float oceanRelief = 0.5f;                                    // [relief] --ocean-relief
@@ -1404,6 +1406,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--surf-rough") o->surfRough = std::clamp(static_cast<float>(atof(v)), 0.0f, 1.0f);
     else if (a == "--ocean-height") o->oceanHeight = std::clamp(static_cast<float>(atof(v)), 0.0f, 4.0f);
     else if (a == "--ocean-glint") o->oceanGlint = std::clamp(static_cast<float>(atof(v)), 0.0f, 10.0f);
+    else if (a == "--ocean-sparkle") o->oceanSparkle = std::clamp(static_cast<float>(atof(v)), 0.0f, 4.0f);  // [sparkle]
     else if (a == "--ocean-foam") o->oceanFoam = std::clamp(static_cast<float>(atof(v)), 0.0f, 10.0f);
     else if (a == "--ocean-glow") o->oceanGlow = std::clamp(static_cast<float>(atof(v)), 0.0f, 10.0f);
     else if (a == "--ocean-view") o->oceanView = atoi(v);
@@ -2141,6 +2144,7 @@ int main(int argc, char** argv) {
   world.oceanLift = opt.oceanLift;    // [lift]
   world.water.ocean.heightScale = opt.oceanHeight;
   world.water.ocean.glint = opt.oceanGlint;
+  world.water.ocean.nearSparkle = opt.oceanSparkle;  // [sparkle]
   world.water.ocean.foamStrength = opt.oceanFoam;
   world.water.ocean.glow = opt.oceanGlow;
   world.water.ocean.view = opt.oceanView;

@@ -1092,6 +1092,13 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   }
   float facing = saturate(dot(-toPixel, N));
   float fresnel = 0.02 + 0.98 * pow(1 - facing, 5);
+#if OCEAN
+  [branch] if (oceanMore.z > 0) {  // [sparkle] the steepest faces looked down on catch the sky (Ocean::nearSparkle)
+    float steep = saturate((1 - N.y) * 8);
+    float down = saturate(-toPixel.y * 1.6 - 0.4);
+    fresnel = max(fresnel, oceanMore.z * down * steep * steep * steep);
+  }
+#endif
 #if WINTER
   // (winter water: snow on the ice and slush mirror nothing; bare ice as the water)
   foam = 1 - (1 - foam) * (1 - ice.cover * ice.matte);
