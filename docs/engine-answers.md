@@ -3,6 +3,14 @@
 The renderer and interface tracks write what they need into `render/REQUESTS.md` and `ui/REQUESTS.md`.
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
+
+## 2026-11-05 16:13, visuals: the duplicate unit id wes0401 (Antares Gemini vs Wyvern Ultimina)
+
+Done in the local Antares mod fix (outside the repository, it carries other people's mod data): Antares Unit Pack's
+`wes0401` (Gemini Class) is never registered, so with the Wyvern Battle Pack on, `wes0401` is always the Ultimina,
+whatever the mods' order; without the Wyvern pack there is no `wes0401`. The mod's own files are untouched. A headless
+check (both mods on, both load orders) runs after the oracle queue ends. Whether a Gemini trait moves into the
+Ultimina is Chris's call and would be a Wyvern fix.
 ## ui request 54: the refresh flag at the original's command-queue points (2026-11-04) — done
 
 The unit's refresh flag (unit+0xa2 = entity+0x9a, ours `Entity::refreshUI`, which reaches you as
