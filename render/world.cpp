@@ -167,6 +167,31 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
       *error = "map " + mapPath + ": " + why;
       return false;
     }
+    // [mapfx] the map's own looping effects, where it has them (World::MapEffect)
+    mapEffects_.clear();
+    if (mapPath.size() > 6 && mapPath.compare(mapPath.size() - 6, 6, ".scmap") == 0) {
+      const std::string fxPath = mapPath.substr(0, mapPath.size() - 6) + "_fx.json";
+      if (auto text = vfs_->ReadFile(fxPath)) {
+        JsonValue list;
+        std::string why;
+        if (!ReadJson(*text, &list, &why)) {
+          fprintf(stderr, "render: %s: %s (not played)\n", fxPath.c_str(), why.c_str());
+        } else {
+          for (const JsonValue& e : list.items) {
+            MapEffect fx;
+            fx.emitter = e["emitter"].StringOr("");
+            const JsonValue& at = e["at"];
+            if (fx.emitter.empty() || at.items.size() < 3) continue;
+            fx.at = {static_cast<float>(at.items[0].NumberOr(0)), static_cast<float>(at.items[1].NumberOr(0)), static_cast<float>(at.items[2].NumberOr(0))};
+            const float turn = static_cast<float>(e["turn"].NumberOr(0)) * 3.14159265f / 180;
+            fx.turn = {0, std::sin(turn * 0.5f), 0, std::cos(turn * 0.5f)};
+            fx.scale = static_cast<float>(e["scale"].NumberOr(1));
+            mapEffects_.push_back(fx);
+          }
+          printf("render: %zu looping effects of the map from %s\n", mapEffects_.size(), fxPath.c_str());
+        }
+      }
+    }
     // the map's render-only props, where it has them (scmap.h, LoadDecor): after its own, so the simulation's prop numbers
     // still name the same ones
     decorFrom_ = map.props.size();  // [underfoot] (those after the .scmap's own are the render-only ones)
@@ -1639,6 +1664,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
         c.mistMore[2] = std::clamp(mistClear, 0.05f, 0.95f);
       }
     }
+    c.mistMore[3] = look == Look::Modern ? std::clamp(unitDetail, 0.0f, 2.0f) : 0.0f;  // [detail]
     SetSky(skyLight, &c);
     if (skyTables && look == Look::Modern) {  // the sky from tables: what reads the computed sky reads its view (view.h, ComputedSky)
       c.skyTable[0] = 1;
@@ -2179,6 +2205,18 @@ void World::ForgetUnderfoot(uint32_t i) {
       list.pop_back();
       break;
     }
+}
+
+// [mapfx] The map's looping effects started where they are not running (the first frame, and after the particles were
+// cleared), at their height over the ground there, each looping for good (its LIFETIME -1).
+void World::KeepMapEffects() {
+  if (mapEffects_.empty() || !haveMap_) return;
+  for (MapEffect& fx : mapEffects_) {
+    if (fx.handle && particles.Running(fx.handle)) continue;
+    const Vec3 at{fx.at.x, map.Height(fx.at.x, fx.at.z) + fx.at.y, fx.at.z};
+    fx.handle = particles.Start(fx.emitter, at, fx.turn, fx.scale, clock_);
+    if (fx.handle) particles.SetParam(fx.handle, "LIFETIME", -1);
+  }
 }
 
 void World::ReleaseClearings() {
@@ -3891,6 +3929,7 @@ void World::Render() {
     }, plantsReady_ ? coverA_ : gfx::Texture{});
   }
   CpuTimes::Part("particles and bands moved");
+  KeepMapEffects();  // [mapfx]
   particles.Update(clock_, &view);
   ribbons.Update(clock_);
 

@@ -161,10 +161,25 @@ two processes; the write trap; the lazy-fill detector) and B3-16k timed at 1 / 8
   without marks. The turns run through `Sim::RunTurns` (the worker pool with more than one thread, each worker's
   deferred calls in its own list merged by key; `MOHO64_PAR_STAGES=0` keeps them on the sim's thread), the commit after.
   The write trap covers the turns only (the snapshot and the commit are serial): no write into another unit.
-- **5.3 Navigators.** `Execute` per unit: path requests (shared queues, per army: messages in key order), the
-  navigators' unit tests (gridb's NAV-ahead machinery, batch 78: coordinated through the lead), `MotionNavDone`'s
-  `Predict` and gather as in 5.2. The air navigator (`AirNavArrival`, `AirFormationFollow`) reads the formation (stable
-  in the stage). Then the stage on the pool.
+- **5.3 Navigators (built).** `LandNavTickParallel` (landnav.cpp). As the stage begins, a snapshot of what a turn
+  reads of ANOTHER unit and that unit's own turn changes: its layer, states and formation (`snapLayer` / `snapStates` /
+  `snapForm`, as phase A's), its footprint choice (`snapAltFp`: a reset or a FAVORSWATER request changes
+  `altFootprintNav`, which the unit tests' `UnitFootprint` reads), its navigator's status (`snapNavStatus`,
+  `snapAirSteering`: a formation follower holds while its leader thinks, `FollowSlot` / `AirFormationFollow`) and its
+  spline (`SteeringSnapshot`, 5.2's); and what a turn would make at its first read (the footprint grids, the path tables,
+  the air tiers, the unit grid). While a turn runs (`tl_navTurn`, units.h: `SeesNavSnapshot`; `SeenLayer` /
+  `SeenState` / `SeenForm` / `UnitFootprint` read the snapshot of another unit; not its position: nothing moves in this
+  stage, and `UnitIgnores`' moved-this-beat test reads the live transform as in the original's order), the turn writes
+  its own unit and navigator only: its path queueing and cancelling (`PathQueue` / `PathCancel`: the per-army queues are
+  the sim's), a woken command thread (`MotionNavDone`, `AirNavArrival`: the run list) and the predictions a finished
+  move makes for the units around it (`MotionNavDone` -> `SteeringCheckCollisions` with `tl_steerTurn`, as in 5.2:
+  mark-free gather, `Predict(u, e)` a message) are messages in the commit, in the turns' order. A collision record a
+  navigator turn puts on its own unit is "late" for every army (`colLateTick`): every army's steering runs after the
+  stage. No turn is played ahead in parallel order (MOHO64_PAR_NAV's speculation): the turns themselves run on the pool
+  (`Sim::RunTurns`), the commit after. Audit (b8 3000 beats, parallel order): the write trap finds no write into another
+  unit in the stage (before: 1.7 k, `MotionNavDone`'s gather marks and predictions), the reads mode no hazard (one site
+  reads `motion.ballistic`, in the same 4-byte word as `motion.arrived`, which the turns change: the trap's word, not the
+  field), the order check with MOHO64_PAR_LUACHECK=log no Lua call and no lazily made cache inside a turn.
 - **5.4 Weapons (built).** Two parts. W1: every weapon's ACQUIRE thread (`AcquireTick`: the reach
   scan, `BlipsInRange`, `FindBestEnemy`, the target tests) through `Sim::RunTurns` (the pool), a turn per unit, which
   writes its own weapons and unit only: the target's shooter set (`SetTarget` -> remove / add), `OnLostTarget` /
@@ -180,8 +195,13 @@ two processes; the write trap; the lazy-fill detector) and B3-16k timed at 1 / 8
   MOHO64_PAR_LUACHECK=log (b8 3000, B1 8000, B3-16k 1000 beats) finds no Lua call and no lazily made cache in an acquire
   turn; the write trap (b8 3000) no write into another unit in the "weapons acquire" phase (before: the gather marks,
   the target's shooter set, `CB`), the reads mode no hazard.
-- **5.5 (item 5)** Recon and AdvanceCoords in parallel order: mostly the exact switches that exist (MOHO64_PAR_RECON,
-  _BLIPS, _INTELCOORDS); the moved list becomes a set (the grid is canonical, 2b).
+- **5.5 (item 5) Recon and AdvanceCoords (built).** Recon, the blips and the intel circles are on the worker pool
+  already, exactly (MOHO64_PAR_RECON, _BLIPS, _INTELCOORDS: on by default in a game with the fixes and more than one
+  thread, in either order). The entity grid's re-registration (`GridAdvanceCoords`): in parallel order the cells' lists
+  are canonical (2b), so the order the moved entities are placed in no longer matters; their new spans (`SpanOf`: the
+  collision shape's cells, each entity writing only its own `gridSeen` / `gridPos` / `gridOri`) are made on the pool
+  (from 512 entities a beat) and placed one after another, the same lists and version counts as one by one. So this
+  step changes no game: parallel order's fingerprints are those of 5.3 at every thread count.
 
 ### 3.2 Commands (stage 0x958) and Lua threads (0x944)
 - **Serial**, as today: tasks call Lua at every turn, place structures, claim targets; a task's outcome is the next
@@ -604,7 +624,10 @@ Script methods the engine calls inside the pass (b8 / B3): `OnMotionHorzEventCha
 ## 9. Decisions (the lead, 2026-10-31)
 
 - Parallel order requires the fixes (section 5): yes.
-- `RemasterSimOrderVersion` (7.4): yes, from the first parallel commit.
+- `RemasterSimOrderVersion` (7.4): yes, from the first parallel commit. Version 2 (2026-11-06, with steps 5.3 + 5.5):
+  steps 5.1-5.5 changed how a parallel-order game plays (armies' stages without the interleave; steering, navigators
+  and weapons' acquire as turns on the pool; grid spans); a version-1 game starts with a warning and may play
+  differently. ui's launch writes the version number itself (game_session.cpp): it must follow.
 - Expectations: 3-6x for unit-heavy games; AI-heavy games also need the AI's Lua work to move (native helpers, our
   own AI); noted for Chris.
 - Callbacks: the audit is section 3.6 (deferred in key order, with phase C after phase B; group B in serial commits).

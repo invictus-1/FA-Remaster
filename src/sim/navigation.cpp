@@ -331,6 +331,16 @@ static uint8_t SingleCellCaps(const TerrainMap& map, const NamedFootprint& fp, c
   return caps;
 }
 
+uint8_t Navigation::OccupyFilterCaps(const NamedFootprint& fp, int x, int z) const {
+  if (!map_) return 0;
+  const uint8_t caps = SingleCellCaps(*map_, fp, blocking_.data(), x, z);
+  if (!caps) return 0;  // (off the map too: 0x564df0's range test)
+  const size_t i = static_cast<size_t>(z) * map_->width() + x;
+  const bool land = !occ_.empty() && occ_[i] != 0;
+  const bool water = !occWater_.empty() && occWater_[i] != 0;
+  return FitsCaps(caps, (fp.flags & 1) != 0, land, water);
+}
+
 uint8_t Navigation::CellCaps(const NamedFootprint& fp, int x, int z, bool callerCapsAll) {
   if (!map_) return 0;
   if (callerCapsAll && std::max(fp.sizeX, fp.sizeZ) == 1) return SingleCellCaps(*map_, fp, blocking_.data(), x, z);

@@ -692,9 +692,32 @@ void HPathTables::Build1(ClusterMap& m, int cx, int cz) {
 
 void HPathTables::Build1Into(const ClusterMap& m, int cx, int cz, Cluster& C) const {
   const int x0 = cx * 8, z0 = cz * 8;
+  // The occupancy bitmap (GetOccupyData 0x76b770, read): every CELL of the (SizeX + 8) x (SizeZ + 8) block from the
+  // cluster's origin is asked OCCUPY_Filter(cell, fp, -1) 0x720920 (0x76b809); a cell whose caps come back 0 clears
+  // the origins i - SizeX + 1 .. i of its row (0x76b812..0x76b823: ((1 << SizeX) - 1) << i >> (SizeX - 1)), and
+  // each of the 9 rows is then ANDed with the next SizeZ - 1 rows (0x76b858..0x76b883). The terrain test is the one
+  // cell's (0x564df0: its own terrain type), not OCCUPY_MobileCheck's over the footprint's vertices (the types of
+  // the cells one past the footprint too), and a footprint fits when each of its cells allows some layer. Seen
+  // (oracle probe v3840_nav_1v1_1, FAF 3840 pro replay 1v1_1): engineer 0x5's path at 886 runs (116,416) (116,424)
+  // (117,424) ...; (116,424) is a node of cluster (14,53) in the original, its cell of terrain type 0 beside the
+  // blocking type 9 at (116,425). Ours took the cell's MobileCheck caps (type 9 among its vertices: 0), had no node
+  // there, went (120,424) (120,428), and its first waypoint was the goal itself (drive-through 0 for the original's 1).
   bool bm[9][9];
-  for (int r = 0; r < 9; ++r)
-    for (int i = 0; i < 9; ++i) bm[r][i] = m.grid && m.grid->Passable(x0 + i, z0 + r);
+  {
+    const int fsx = std::max<int>(1, m.fp.sizeX), fsz = std::max<int>(1, m.fp.sizeZ);
+    uint32_t rows[9 + 255];
+    for (int r = 0; r < 8 + fsz; ++r) {
+      uint32_t mask = 0x1ff;
+      for (int i = 0; i < 8 + fsx; ++i)
+        if (!nav_ || nav_->OccupyFilterCaps(m.fp, x0 + i, z0 + r) == 0)
+          mask &= ~static_cast<uint32_t>((((uint64_t{1} << fsx) - 1u) << i) >> (fsx - 1));  // (32-bit in the exe; the same for SizeX <= 24)
+      rows[r] = mask;
+    }
+    for (int r = 0; r < 9; ++r) {
+      for (int k = 1; k < fsz; ++k) rows[r] &= rows[r + k];
+      for (int i = 0; i < 9; ++i) bm[r][i] = (rows[r] >> i) & 1u;
+    }
+  }
   std::vector<std::pair<int, int>> nodes;  // (x, z) local
   const int sides[4][4] = {{0, 0, 1, 0}, {0, 8, 1, 0}, {0, 0, 0, 1}, {8, 0, 0, 1}};
   for (const auto& sd : sides) {

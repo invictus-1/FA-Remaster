@@ -2385,7 +2385,9 @@ void AirFormationFollow(Sim& sim, Unit* u) {
   Entity* le = u->formLeader ? sim.FindEntity(u->formLeader) : nullptr;
   Unit* L = le && le->kind == Entity::Kind::Unit ? static_cast<Unit*>(le) : nullptr;
   if (f && L && L != u) {
-    bool good = L->motion.air ? A(L).steering : LandNavStatus(L) == 2;
+    // (another unit in parallel order's navigators' stage: its status as the stage began, step 5.3)
+    bool good = SeesNavSnapshot(L) ? (L->motion.air ? L->snapAirSteering : L->snapNavStatus == 2)
+                                   : (L->motion.air ? A(L).steering : LandNavStatus(L) == 2);
     if (good) {
       a.curTarget = u->formSlot;
       SetTarget(sim, u, u->formSlot, Vec3{}, 0);
@@ -2679,7 +2681,10 @@ bool AirNavArrival(Sim& sim, Unit* u) {
       a.steering = false;
       m.hasGoal = false;
       m.arrived = true;
-      if (wake) sim.ResumeCommandThread(u);
+      if (wake) {  // (parallel order's navigators' stage: in the stage's commit, step 5.3)
+        if (tl_navTurn && sim.DeferringScripts()) sim.DeferAction([&sim, u] { sim.ResumeCommandThread(u); });
+        else sim.ResumeCommandThread(u);
+      }
       // MOHO64_DEBUG_AIRARRIVE=1: every arrival, with what the unit was doing
       static const bool dbgArrive = getenv("MOHO64_DEBUG_AIRARRIVE") != nullptr;
       if (dbgArrive)

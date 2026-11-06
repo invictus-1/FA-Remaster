@@ -298,6 +298,8 @@ void MotionNavDone(Unit* u, bool succeeded);
 // spline batches, push ends, predicted collisions and their reactions (engine-ref unit_collision.md).
 // One army's steering stage, its units in creation order, in that army's turn (landnav.h: LandNavStageBegin).
 void SteeringTickUnits(Sim& sim, const std::vector<Unit*>& units);
+// parallel order: every unit's spline as a stage begins (Unit::snapSpline*, read through SeenSpline)
+void SteeringSnapshot(const std::vector<Unit*>& units);
 // Place a unit on the ground/water at its current position (SnapToGround / SnapToWater).
 void SnapUnit(const Sim& sim, Unit* u);
 // The raised platform the unit stands on (motion+0x114), and that platform's height at (x, z) above its own

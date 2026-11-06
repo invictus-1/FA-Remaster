@@ -3348,6 +3348,14 @@ int TickGuard(Sim& sim, lua_State* L, Unit* U, BuildTask& t) {
   }
   // (d)
   Unit* src = g.factoryGuard ? CommandSourceUnit(sim, U) : G;
+  // 0x614414..0x61445f (read): for a factory guarding (+0x75) the source found is stored INTO the task's guarded
+  // link +0x7c (0x57d4f0 on edi = &+0x7c, set at 0x6142d8), not only used for this turn; so at the guard's next
+  // turn step (b) finds +0x7c != U+0x4e0 whenever the source is another unit than G, re-targets the Guard order at
+  // U+0x4e0 (SetCommandTarget 0x6ee470 from 0x614369: one target-point draw for G with target bones) and takes G
+  // back. Seen (oracle probes v3840_s2_2803 / v3840_s2_guard2, pro replay Seton's 2, 3839): army 6's factory
+  // 0x600001 assists 0x60000a with orders of its own; its guard task's +0x7c is 0x60000a at 2656 and 0x600001 (the
+  // source: U itself) at its next turn, 2803, where step (b) makes the draw that opens the beat. Ours kept G.
+  if (g.factoryGuard) g.G = src ? EntityRef(src) : 0;
   if (g.hasUnit && G) g.pos = G->position;
   const float r = GuardScanRadiusOf(U);
   BuildTask* child = nullptr;

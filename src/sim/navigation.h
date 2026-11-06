@@ -186,6 +186,11 @@ class Navigation {
   // OCCUPY_MobileCheck 0x564ab0. (A footprint without a named one, a structure's own or an air landing's S x S,
   // cost a whole grid at its first such read: 141-1240 ms, mp2 2026-10-21.)
   uint8_t CellCaps(const NamedFootprint& fp, int x, int z, bool callerCapsAll = false);
+  // STIMap::OCCUPY_Filter 0x720920 with caps -1 at the one cell (x, z) (read): the terrain caps of that cell alone
+  // (OccupancyCapsOfFootprintAt 0x564df0: the cell's own terrain type, its four vertices), less Land / Seabed where
+  // the land grid holds a structure (unless the footprint has IgnoreStructures) and Water where the water grid does.
+  // The path clusters' occupancy (GetOccupyData 0x76b770) asks it for every cell of a cluster's block.
+  uint8_t OccupyFilterCaps(const NamedFootprint& fp, int x, int z) const;
   // Waypoints from `from` to `to` (world positions; the footprint's centre). The last waypoint is
   // `to`, or the nearest reachable cell to it. Returns false when no path exists at all.
   bool FindPath(const NamedFootprint& fp, const Vec3& from, const Vec3& to, std::vector<Vec3>* out);

@@ -196,7 +196,8 @@ struct ViewConstants {
   // lies more evenly than the mist's banks, or from above it showed as dark holes cut in it. 0: as without it.
   // [mistpatch] (World::mistPatches) y how much of the layer lies only in wide patches with clear air between them (view.h,
   // MistPatches): in a thick fog all of it, the morning's mist too; z where the patches' field begins to hold it (0: no
-  // patches, as before); w unused.
+  // patches, as before); w [detail] how strongly a remastered unit's surface gains a fine grain where its textures are
+  // magnified (World::unitDetail; 0: none, as before).
   float mistMore[4];
   // [snowshade] The shade on lying snow under an overcast (World::snowShade; lighting.h's ModernLight, terrain.cpp's
   // SnowAround): x how much of it there is (0: none, every surface exactly as without it; 1 under a full overcast, by how

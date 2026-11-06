@@ -477,6 +477,8 @@ void GoalCell(const NamedFootprint& f, float x, float z, int* cx, int* cz) {
 
 const NamedFootprint& UnitFootprint(const Unit* u) {
   const MotionBlueprint& b = *u->motion.bp;
+  // (another unit in parallel order's navigators' stage: its choice as the stage began, step 5.3)
+  if (SeesNavSnapshot(u)) return u->snapAltFp ? b.altFootprint : b.footprint;
   return (u->altFootprintNav || u->altFootprintForced) ? b.altFootprint : b.footprint;
 }
 
@@ -771,7 +773,12 @@ void MotionNavDone(Unit* u, bool succeeded) {
   if (unused) SteeringCheckCollisions(*Sim::From(u->luaState()), u);
   if (succeeded) m.arrived = true;
   else m.failed = true;
-  if (wake) Sim::From(u->luaState())->ResumeCommandThread(u);  // the navigator's event wakes the move task
+  if (wake) {  // the navigator's event wakes the move task
+    Sim& sim = *Sim::From(u->luaState());
+    // (parallel order's navigators' stage: the run list is the sim's, so in the stage's commit, step 5.3)
+    if (tl_navTurn && sim.DeferringScripts()) sim.DeferAction([&sim, u] { sim.ResumeCommandThread(u); });
+    else sim.ResumeCommandThread(u);
+  }
 }
 
 // AbortMove 0x5a3750 (land: SetSpeedThroughGoal(0) + MakeIdle -> SetWaypoints(0, 0): a brake spline).

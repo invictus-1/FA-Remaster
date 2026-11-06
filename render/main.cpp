@@ -859,6 +859,7 @@ struct Options {
   bool oceanLift = false;                                      // [lift] --ocean-lift
   float oceanHeight = 1, oceanGlint = 0.8f, oceanFoam = 1, oceanGlow = 1, oceanTilt = 1.5f;  // --ocean-height, -glint, -foam, -glow, -tilt
   float oceanSparkle = 1;  // [sparkle] --ocean-sparkle
+  float unitDetail = 1;    // [detail] --unit-detail
   int oceanView = 0;                                           // --ocean-view
   int oceanGlitter = 1;                                        // [bigtest] --ocean-glitter
   float oceanRelief = 0.5f;                                    // [relief] --ocean-relief
@@ -1407,6 +1408,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--ocean-height") o->oceanHeight = std::clamp(static_cast<float>(atof(v)), 0.0f, 4.0f);
     else if (a == "--ocean-glint") o->oceanGlint = std::clamp(static_cast<float>(atof(v)), 0.0f, 10.0f);
     else if (a == "--ocean-sparkle") o->oceanSparkle = std::clamp(static_cast<float>(atof(v)), 0.0f, 4.0f);  // [sparkle]
+    else if (a == "--unit-detail") o->unitDetail = std::clamp(static_cast<float>(atof(v)), 0.0f, 2.0f);  // [detail]
     else if (a == "--ocean-foam") o->oceanFoam = std::clamp(static_cast<float>(atof(v)), 0.0f, 10.0f);
     else if (a == "--ocean-glow") o->oceanGlow = std::clamp(static_cast<float>(atof(v)), 0.0f, 10.0f);
     else if (a == "--ocean-view") o->oceanView = atoi(v);
@@ -2145,6 +2147,7 @@ int main(int argc, char** argv) {
   world.water.ocean.heightScale = opt.oceanHeight;
   world.water.ocean.glint = opt.oceanGlint;
   world.water.ocean.nearSparkle = opt.oceanSparkle;  // [sparkle]
+  world.unitDetail = opt.unitDetail;  // [detail] (--unit-detail n: a remastered unit's close-up grain, World::unitDetail; 0 none)
   world.water.ocean.foamStrength = opt.oceanFoam;
   world.water.ocean.glow = opt.oceanGlow;
   world.water.ocean.view = opt.oceanView;
