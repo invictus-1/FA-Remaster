@@ -1228,6 +1228,7 @@ class World {
   struct LampLevel {
     float level = 0;
     uint32_t seen = 0;  // (frameStamp_ it was last asked for)
+    float share = -1;   // [glowsteady] its hull glow's share where glows overlap, eased (ShareHullGlows; -1: not yet)
   };
   std::unordered_map<uint64_t, LampLevel> lampLevels_;
   double lampClock_ = -1;

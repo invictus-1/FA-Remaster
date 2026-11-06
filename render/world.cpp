@@ -985,7 +985,18 @@ void World::FlushLamps() {
         lights.AddBeam(l.at, l.radius, l.color * shown, l.along, l.cone, l.glow, &l.middle, &l.origin, l.key);
         shafts.Add(l.at, l.at + l.along * l.shaftReach, l.shaftThick, l.shaftWide, l.color * (shown * l.shaftAir));
       } else {
-        const float shared = hullShares.empty() ? 1.0f : hullShares[i];  // [hullglow]
+        float shared = hullShares.empty() ? 1.0f : hullShares[i];  // [hullglow]
+        // [glowsteady] (Chris's third test, 2026-11-05: "the orange light on the ground" by every factory "flickers around a lot
+        // ... like 10 factories all flashing at once", "a pulsating mist"; Unit Glow at Night off stopped it) the share eased as
+        // the lamp's level is, over a quarter of a second, not set afresh each frame
+        if (l.key) {
+          auto kept = lampLevels_.find(l.key);
+          if (kept != lampLevels_.end()) {
+            float& s = kept->second.share;
+            s = s < 0 ? shared : s < shared ? std::min(s + step, shared) : std::max(s - step, shared);
+            shared = s;
+          }
+        }
         lights.Add(l.at, l.radius, l.color * (shown * shared), &l.origin, l.air);
       }
     }
@@ -1035,7 +1046,13 @@ void World::ShareHullGlows(const std::vector<uint8_t>& allowed, std::vector<floa
   }
   if (hulls < 2) return;
   // (squares of two world units, larger where the glows spread over more than 512 of them)
-  const float cell = std::max(2.0f, std::max(x1 - x0, z1 - z0) / 512);
+  // ([glowsteady] fixed to the world: a power of two times two units, its corners on multiples of it. Laid from the glows' own
+  // extent, the squares slid with every unit that moved at the edge and changed size with the extent, and each glow's share,
+  // read at its square, jumped from frame to frame: the glows pulsed)
+  float cell = 2;
+  while (cell < std::max(x1 - x0, z1 - z0) / 512) cell *= 2;
+  x0 = std::floor(x0 / cell) * cell;
+  z0 = std::floor(z0 / cell) * cell;
   const int cols = static_cast<int>((x1 - x0) / cell) + 1, rows = static_cast<int>((z1 - z0) / cell) + 1;
   hullField_.assign(static_cast<size_t>(cols) * static_cast<size_t>(rows), 0.0f);
   hullBuildingField_.assign(hullField_.size(), 0.0f);  // [buildingglow]
