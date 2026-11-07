@@ -560,6 +560,7 @@ void Debris::Watch(const Frame& frame, double clock, const std::function<const M
                    const std::function<Vec3(uint32_t)>& color, const Blasts* flashes) {
   if (!frame.blueprints) return;
   ++stamp_;
+  killsClock_ = clock;  // [debrisstyle]
   for (const FrameUnit& u : frame.units) {
     if (!u.dead) {
       dying_.erase(u.id);  // (an id the game gave again)
@@ -601,7 +602,7 @@ void Debris::Watch(const Frame& frame, double clock, const std::function<const M
     if (!d.thrown && now) {
       d.thrown = true;
       // [bakeddebris] (a unit on the ground with a baked set of its own: its real parts instead, in the style its death calls for)
-      d.baked = !d.air && baked.Play(d.unit, d.model, at, d.turn, d.color, clock, DebrisStyleFor(d));
+      d.baked = !d.air && baked.Play(d.unit, d.model, at, d.turn, d.color, clock, DebrisStyleFor(u.id, d));
       if (!d.baked) Throw(d.unit, d.model, at, d.turn, d.color, d.air ? d.velocity : Vec3{}, u.id);
     }
   }
@@ -614,7 +615,9 @@ void Debris::Watch(const Frame& frame, double clock, const std::function<const M
     // gone before its chunks were thrown (an aircraft that met the ground between two frames): where it was last
     if (!d.thrown && clock - d.seen < 2 && d.at.y - Ground(d.at.x, d.at.z) < 4) {
       d.thrown = true;
-      Throw(d.unit, d.model, {d.at.x, Ground(d.at.x, d.at.z) + 0.2f, d.at.z}, d.turn, d.color, d.velocity, it->first);
+      // [debrispile] (a unit on the ground with a baked set: its set, as above; its wreck waits for it, BakedDebris::coming)
+      d.baked = !d.air && baked.Play(d.unit, d.model, d.at, d.turn, d.color, clock, DebrisStyleFor(it->first, d));
+      if (!d.baked) Throw(d.unit, d.model, {d.at.x, Ground(d.at.x, d.at.z) + 0.2f, d.at.z}, d.turn, d.color, d.velocity, it->first);
     }
     // (kept a while: a frame may leave a unit out for a moment)
     if (clock - d.seen > 5 || clock < d.seen - 1) it = dying_.erase(it);
@@ -623,8 +626,38 @@ void Debris::Watch(const Frame& frame, double clock, const std::function<const M
 }
 
 // [bakeddebris] (debris.h) The one place a death's style is chosen: the engine's killing hit (its damage type and overkill) is
-// to be read here; until then every death breaks.
-std::string Debris::DebrisStyleFor(const Dying&) { return "break"; }
+// to be read here; until then every death breaks ([debrispile] or dies in the style the viewer asks for: debrisStyle).
+void Debris::Killed(uint32_t unit, const FrameHit& hit) {  // [debrisstyle]
+  KillBlow& k = kills_[unit];
+  k.beam = hit.beam;
+  k.damageType = hit.damageType;
+  k.projectile = hit.projectile;
+  k.weapon = hit.weapon;
+  k.overkill = hit.overkill;
+  k.told = killsClock_;
+  if (kills_.size() > 4096)  // (told and never died where it was seen: let go of the oldest)
+    for (auto it = kills_.begin(); it != kills_.end();) it = killsClock_ - it->second.told > 60 ? kills_.erase(it) : std::next(it);
+}
+
+std::string Debris::DebrisStyleFor(uint32_t unit, const Dying&) const {
+  if (!debrisStyle.empty()) return debrisStyle;  // (--debris-style: one style for every death)
+  auto it = kills_.find(unit);
+  if (it == kills_.end()) return "break";
+  const KillBlow& k = it->second;
+  auto lower = [](std::string s) {
+    for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+  };
+  const std::string type = lower(k.damageType), shell = lower(k.projectile), weapon = lower(k.weapon);
+  auto has = [](const std::string& s, const char* part) { return s.find(part) != std::string::npos; };
+  // (a nuke, or more than half again the unit's whole health past what killed it: nothing much is left)
+  if (has(type, "nuke") || k.overkill >= 1.5f) return "vaporise";
+  // (heat: a beam, fire, and the shells of lasers, plasma and the like)
+  if (k.beam || type == "fire" || has(shell, "laser") || has(shell, "plasma") || has(shell, "phason") || has(shell, "flame") ||
+      has(shell, "beam") || has(weapon, "laser") || has(weapon, "flame"))
+    return "melt";
+  return "break";
+}
 
 void Debris::BeginShells() {
   ++shellStamp_;
@@ -842,6 +875,19 @@ void Debris::Update(double clock, Vec3 eye, MeshRenderer* meshes, Blasts* splash
   // [bakeddebris] the baked deaths, on the same ground and clock
   baked.groundHeight = groundHeight;
   baked.hot = hot;
+  baked.smoke = smoke;  // [debrispile] (a vaporised unit's thrown chunks trail the same smoke)
+  baked.trail = kTrail;
+  // [debrispile] (a wreck waits for its death while a unit of its kind dying near it is still to be thrown)
+  baked.coming = [this](const std::string& unitId, Vec3 at) {
+    for (const auto& [id, d] : dying_) {
+      if (d.thrown || d.air || d.unit.size() != unitId.size() || std::hypot(d.at.x - at.x, d.at.z - at.z) > d.radius * 1.5f + 2.0f) continue;
+      bool same = true;
+      for (size_t i = 0; i < unitId.size() && same; ++i)
+        same = std::tolower(static_cast<unsigned char>(d.unit[i])) == std::tolower(static_cast<unsigned char>(unitId[i]));
+      if (same) return true;
+    }
+    return false;
+  };
   baked.Update(clock, eye, meshes);
   if (!meshes) return;
   // drawn as scenery (pressing no grass flat), those near enough to be more than a dot

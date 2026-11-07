@@ -402,6 +402,8 @@ void SimFrames::Beat(const moho::Sim& sim) {
       std::memcpy(h.position, v.position, sizeof h.position);
       h.radius = v.radius;
       std::memcpy(h.direction, v.direction, sizeof h.direction);
+      h.killing = v.killing;  // [debrisstyle]
+      h.overkill = v.overkill;
       h.seen = seenAt(v.position);
       combat.hits.push_back(std::move(h));
     }

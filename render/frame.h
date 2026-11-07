@@ -205,6 +205,10 @@ struct FrameHit {
   float position[3] = {0, 0, 0};     // the damage's origin (a blast's centre when radius > 0)
   float radius = 0;                  // 0: a single hit; an area's radius
   float direction[3] = {0, 0, 0};    // unit length (0 0 0: none)
+  // [debrisstyle] the killing blow: the beat's last hit on a unit the simulation then killed, and its overkill ratio (the
+  // damage past what the unit had left over its most health, as the game's OnKilled has it)
+  bool killing = false;
+  float overkill = 0;
   bool seen = true;
 };
 struct FrameImpact {
