@@ -1337,6 +1337,33 @@ void WorldPicture::PrepareWorld(const Camera& camera, int width, int height, dou
   }
   m.lastTick = shown;
 
+  // [heldworld] (the interface's request 45 R2: a replay's jump back holds its last picture while the world is not shown)
+  // With the world not shown nothing is made ready to draw: the frame begins black, and of what the game said only what
+  // lasts is kept (the scenery knocked down, the ground laid flat); its effects and hits of the moment are let go, and the
+  // units are where the game has them at the first frame shown again.
+  if (!m.worldShown) {
+    const float black[4] = {0, 0, 0, 1};
+    const auto t1 = std::chrono::steady_clock::now();
+    m.device->BeginFrame(black);
+    m.stats.waitMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t1).count();
+    m.viewsNow = false;
+    m.playingNow = playing;
+    if (playing) {
+      m.frames.TakeEffectEvents(&m.events);
+      m.events.clear();
+      std::vector<FramePropEvent> changed;
+      m.frames.TakePropEvents(&changed);
+      if (!changed.empty()) m.world->AddPropEvents(changed);
+      std::vector<FrameGroundChange> ground;
+      m.frames.TakeGroundChanges(&ground);
+      if (!ground.empty()) m.world->ChangeGround(ground);
+      FrameCombat combat;
+      m.frames.TakeCombat(&combat);
+    }
+    m.stats.prepareMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count() - m.stats.waitMs;
+    return;
+  }
+
   const float clear[4] = {0.05f, 0.06f, 0.08f, 1}, black[4] = {0, 0, 0, 1};
   const auto t1 = std::chrono::steady_clock::now();
   m.device->BeginFrame(m.worldShown ? clear : black);
