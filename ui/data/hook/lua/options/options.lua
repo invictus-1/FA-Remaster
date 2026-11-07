@@ -41,7 +41,7 @@ local remasterPresets = {
             remaster_ground_detail = 0, remaster_atmosphere = 0, remaster_weather_effects = 0,
             remaster_water_ripples = 0, remaster_ray_tracing = 0, remaster_hidden_outlines = 1,
             remaster_battle_effects = 0, remaster_energy_shields = 0,
-            remaster_ocean_glitter = 1, remaster_sea_sparkle = 1, remaster_unit_detail = 1, remaster_shore_soak = 0, remaster_shield_bend = 1, remaster_unit_glow = 75,
+            remaster_ocean_glitter = 1, remaster_sea_sparkle = 0, remaster_unit_detail = 1, remaster_shore_soak = 0, remaster_shield_bend = 1, remaster_unit_glow = 75,
             remaster_sharpen = 0, remaster_gateway = 1, remaster_ghost_look = 1, remaster_guide = 1,
             remaster_cloak_look = 1, remaster_stealth_veil = 1 },
     [2] = { remaster_look = 'remastered', remaster_effects = 1, remaster_effects_quality = 0.75,
@@ -49,7 +49,7 @@ local remasterPresets = {
             remaster_ground_detail = 1, remaster_atmosphere = 0, remaster_weather_effects = 0,
             remaster_water_ripples = 0, remaster_ray_tracing = 0, remaster_hidden_outlines = 1,
             remaster_battle_effects = 1, remaster_energy_shields = 1,
-            remaster_ocean_glitter = 1, remaster_sea_sparkle = 1, remaster_unit_detail = 1, remaster_shore_soak = 1, remaster_shield_bend = 1, remaster_unit_glow = 75,
+            remaster_ocean_glitter = 1, remaster_sea_sparkle = 0, remaster_unit_detail = 1, remaster_shore_soak = 1, remaster_shield_bend = 1, remaster_unit_glow = 75,
             remaster_sharpen = 0, remaster_gateway = 1, remaster_ghost_look = 1, remaster_guide = 1,
             remaster_cloak_look = 1, remaster_stealth_veil = 1 },
     [3] = { remaster_look = 'remastered', remaster_effects = 1, remaster_effects_quality = 1,
@@ -57,7 +57,7 @@ local remasterPresets = {
             remaster_ground_detail = 1, remaster_atmosphere = 1, remaster_weather_effects = 1,
             remaster_water_ripples = 1, remaster_ray_tracing = 0, remaster_hidden_outlines = 1,
             remaster_battle_effects = 1, remaster_energy_shields = 1,
-            remaster_ocean_glitter = 1, remaster_sea_sparkle = 1, remaster_unit_detail = 1, remaster_shore_soak = 1, remaster_shield_bend = 1, remaster_unit_glow = 75,
+            remaster_ocean_glitter = 1, remaster_sea_sparkle = 0, remaster_unit_detail = 1, remaster_shore_soak = 1, remaster_shield_bend = 1, remaster_unit_glow = 75,
             remaster_sharpen = 50, remaster_gateway = 1, remaster_ghost_look = 1, remaster_guide = 1,
             remaster_cloak_look = 1, remaster_stealth_veil = 1 },
     [4] = { remaster_look = 'remastered', remaster_effects = 1, remaster_effects_quality = 1,
@@ -65,7 +65,7 @@ local remasterPresets = {
             remaster_ground_detail = 1, remaster_atmosphere = 1, remaster_weather_effects = 1,
             remaster_water_ripples = 1, remaster_ray_tracing = 1, remaster_hidden_outlines = 1,
             remaster_battle_effects = 1, remaster_energy_shields = 1,
-            remaster_ocean_glitter = 1, remaster_sea_sparkle = 1, remaster_unit_detail = 1, remaster_shore_soak = 1, remaster_shield_bend = 1, remaster_unit_glow = 75,
+            remaster_ocean_glitter = 1, remaster_sea_sparkle = 0, remaster_unit_detail = 1, remaster_shore_soak = 1, remaster_shield_bend = 1, remaster_unit_glow = 75,
             remaster_sharpen = 50, remaster_gateway = 1, remaster_ghost_look = 1, remaster_guide = 1,
             remaster_cloak_look = 1, remaster_stealth_veil = 1 },
 }
@@ -595,9 +595,9 @@ local looks = {
         -- the renderer's Ocean::nearSparkle (render 03fc92c; Chris's pick)
         title = "Sea Sparkle",
         key = 'remaster_sea_sparkle',
-        tip = "Small glints on the steepest wave faces you look down on, where they catch the sky, also where the camera looks. Off: as before, the near sea without them.",
+        tip = "Small glints on the steepest wave faces you look down on, where they catch the sky, also where the camera looks. Off unless chosen: the sea looks calmer without them.",
         type = 'toggle',
-        default = 1,
+        default = 0,
         set = Look("remaster_sea_sparkle"),
         custom = {
             states = {
