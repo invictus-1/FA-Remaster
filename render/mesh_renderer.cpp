@@ -1122,7 +1122,15 @@ float4 Shade(VOut i, bool front) {
       [branch] if (mask > 0.02) {
         // (hotter and cooler stretches along a rim, so that a torn edge never reads as a strip of light)
         float stretch = smoothstep(0.25, 0.7, CloudNoise(i.rest * 14 + 5.1));
-        float kelvin = HotMetalKelvin(300 + 1000 * sqrt(mask) * (0.6 + 0.4 * stretch), -i.tint.y, -i.tint.z * 1.55 * 0.5);
+        // [debrisheat] (a piece hot all over - VAPORISE's fragments, MELT's slumped parts, a wide cut face - is not one even
+        // glow, which read as orange plastic with leopard spots in the stand: its broad faces crust over within seconds, as
+        // thin plate does, and the heat stays in its edges, where the surface turns, and in a net of thin cracks)
+        float turn = length(fwidth(vertexNormal)) / max(length(fwidth(i.shape)), 1e-5);
+        float edge = smoothstep(10, 22, turn);
+        float vein = smoothstep(0.86, 0.97, 1 - abs(2 * CloudNoise(i.rest * 9 + 1.3) - 1)) * (0.5 + 0.5 * stretch);
+        float face = (1 - max(edge, vein)) * mask * mask;
+        float tau = -i.tint.z * 1.55 * 0.5;
+        float kelvin = HotMetalKelvin(300 + 1000 * sqrt(mask) * (0.6 + 0.4 * stretch), -i.tint.y, lerp(tau, tau * 0.1, face));
         kelvin *= 1 + 0.05 * (CloudNoise(i.rest * 9 + float3(0, time * 0.5, time * 0.3)) - 0.5);  // (embers breathe, never a lamp)
         emission += HotMetalColour(kelvin) * (kHotMetalStrength * pow(falling.w > 0 ? falling.w : 1, 0.6));
       }
