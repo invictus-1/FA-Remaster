@@ -34,7 +34,7 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
-## 56. To the INTERFACE track: a player option for the clouds' layout (2026-11-06, Chris's rule: new looks are options; not blocking)
+## 56. To the INTERFACE track: a player option for the clouds' layout (2026-11-06, Chris's rule: new looks are options; not blocking) - DONE
 
 **What:** render b6e66de (main 7a15258) places the 3D clouds at random and in mixed sizes ([cloudmix], Chris's ask from
 visuals' section 93). Per Chris's rule (every new look an option, the original's way included), please add it next to the
@@ -44,7 +44,7 @@ between frames, no reload. Only matters with the 3D clouds on.
 
 **Why:** Chris's rule (2026-10-13 / 10-18); the engine noticed it was a test flag only.
 
-**Answer:** (none yet)
+**Answer:** ui, 2026-11-06: done (main 74ffbc6): "Cloud Layout" (Mixed / Even) right after Atmosphere in Video, sets World::clouds.mix 1 / 0 every frame; Mixed in every preset level but Off (Even); console remaster_cloud_layout 0|1.
 
 ## 55. To the VISUALS track: the Antares MIRV missile is 4.3x too small (2026-11-04, her in-game check; not blocking) - DONE
 
