@@ -504,6 +504,67 @@ float DetailNoise(float2 q) {
   f = f * f * (3 - 2 * f);
   return lerp(lerp(DetailHash(c), DetailHash(c + float2(1, 0)), f.x), lerp(DetailHash(c + float2(0, 1)), DetailHash(c + 1), f.x), f.y);
 }
+// [rockhits] A rock under fire (rock_hits.h, World::rockHits), its scars from the instance's tint (RockHits::Tint), in its
+// own frame (`shape`: its place on the model in heights of the model, 0 at its foot; `restNormal`, `side`: the way out
+// to the side it was struck on). `soot` darkens it in patches, more on the struck side and on top, in streaks running out
+// from there (the streaks' noise taken across that way alone), at the most to about half its own colour, whose grain
+// always shows through; `dust` lays a fresh coat of pale rock dust over it, more on what faces up; `crack` lets a few
+// fine fractures spread from the struck side over more of it as the hits add up, thinner toward their ends: a sparse
+// share of the edges between the cells of a jittered grid (cells some 0.2 of a world unit, by the world's place: a rock
+// stands still), its place wandering a little so that no edge runs straight for long. RockCrackEdge: how far a place is
+// from the nearest such edge, and a number of that edge's own (0..1, the same along all of it).
+float2 RockCrackEdge(float3 p) {
+  float3 cell = floor(p), c1 = cell, c2 = cell;
+  float near1 = 9, near2 = 9;
+  [loop] for (int z = -1; z <= 1; ++z)
+    for (int y = -1; y <= 1; ++y)
+      for (int x = -1; x <= 1; ++x) {
+        float3 c = cell + float3(x, y, z);
+        float d = length(c + float3(CloudHash(c), CloudHash(c + 17.3), CloudHash(c + 41.9)) * 0.8 + 0.1 - p);
+        if (d < near1) {
+          near2 = near1;
+          c2 = c1;
+          near1 = d;
+          c1 = c;
+        } else if (d < near2) {
+          near2 = d;
+          c2 = c;
+        }
+      }
+  return float2(near2 - near1, CloudHash(c1 + c2 + 0.37 * c1 * c2));  // (the same whichever of the two cells is nearer)
+}
+void RockScarSurface(float soot, float crack, float dust, float3 side, float3 shape, float3 restNormal, float3 world, float3 vertexNormal,
+                     inout float3 base, inout float metallic, inout float roughness) {
+  float3 p = world * 2.0;
+  float3 q = shape - float3(0, 0.5, 0);  // (from its middle)
+  float toward = dot(normalize(q + 1e-4), side);  // (1 at the place it was struck, -1 on its far side)
+  float facing = dot(restNormal, side);
+  float up = saturate(vertexNormal.y * 0.5 + 0.5);
+  float weight = saturate(0.2 + 0.6 * toward + 0.4 * facing);
+  float blotch = CloudNoise(p * 0.45 + 3.1) * 0.65 + CloudNoise(p * 1.6 + 8.7) * 0.35;
+  float3 across = q - side * dot(q, side);
+  float streak = CloudNoise(across * 9 + 2.3) * 0.7 + CloudNoise(across * 23 + 7.1) * 0.3;
+  float pattern = blotch * 0.5 + streak * 0.5;
+  float s = saturate((soot * (0.35 + 0.65 * weight) * (0.8 + 0.3 * up) * 1.4 - (1 - pattern) * 0.7) * 1.3);
+  base = lerp(base, base * 0.47, s);  // (never darker than about half its own colour: its grain shows through)
+  roughness = lerp(roughness, 0.92, s * 0.7);
+  metallic *= 1 - s;
+  // (the dust: a thin coat; the soot shows through it, the cracks are not filled by it)
+  float coat = saturate(dust * (0.35 + 0.65 * up) * (0.55 + 0.45 * blotch));
+  base = lerp(base, float3(0.22, 0.21, 0.19), coat * 0.3);
+  roughness = lerp(roughness, 1, coat * 0.6);
+  float reach = crack * 1.2;  // (how far round from the struck place they have spread: 1 a quarter turn)
+  [branch] if (crack > 0.02 && toward > 1 - reach) {
+    float along = saturate((toward - (1 - reach)) / max(reach, 0.05));  // (0 at their ends, 1 where it was struck)
+    float3 c = p * 2.5 + (float3(CloudNoise(p * 1.3), CloudNoise(p * 1.3 + 5.2), CloudNoise(p * 1.3 + 9.4)) - 0.5) * 1.4;
+    float2 edge = RockCrackEdge(c);
+    float width = (0.035 + 0.03 * crack) * (0.25 + 0.75 * along);
+    float kept = step(edge.y, 0.25 + 0.2 * crack);  // (a few of the edges: fractures, not a net)
+    float cracked = (1 - smoothstep(width * 0.4, width, edge.x)) * kept * smoothstep(0, 0.15, along);
+    base *= 1 - 0.85 * cracked;
+    roughness = lerp(roughness, 1, cracked);
+  }
+}
 float4 Shade(VOut i, bool front) {
   // (a finished unit whose personal shield is up says so with an alpha above 1)
   bool shielded = i.color.a > 1.5;
@@ -1010,6 +1071,16 @@ float4 Shade(VOut i, bool front) {
       float turn = length(fwidth(vertexNormal)) / max(length(fwidth(i.shape)), 1e-5);
       emission += HotMetalGlow(-i.tint.y, -i.tint.z, i.shape, turn, kind.w > 0.5, albedo.rgb, spec.r, spec.g, soot) *
                   (kHotMetalStrength * pow(falling.w > 0 ? falling.w : 1, 0.6));
+    }
+    // [rockhits] a rock under fire (World::rockHits): its soot, cracks, fresh dust and the side it was struck on ride in the
+    // ghost's tint, marked by its first number between -0.35 and -0.45 (RockHits::Tint: y and z each two bytes)
+    [branch] if (i.color.a < 1.5 && i.tint.z < 0 && i.tint.x < -0.3 && i.tint.x > -0.48) {
+      float marks = round(-i.tint.y / 0.49 * 65535), way = round(-i.tint.z * 65536) - 1;
+      float sootByte = floor(marks / 256 + 0.001), turnByte = floor(way / 256 + 0.001);
+      float around = turnByte * (6.2831853 / 256), rise = (way - turnByte * 256) / 255 * 2 - 1;
+      float3 side = float3(cos(around), 0, sin(around)) * sqrt(saturate(1 - rise * rise)) + float3(0, rise, 0);
+      RockScarSurface(sootByte / 255, (marks - sootByte * 256) / 255, (-i.tint.x - 0.35) / 0.1, side, i.shape, normalize(i.restNormal), i.world,
+                      vertexNormal, base, metallic, roughness);
     }
     float3 lit = ModernLight(base, metallic, roughness, occlusion, emission, N, i.world, shadow);
     if (kind2.y > 0.5 && leaves.x < 0.5) {  // leaves: some of the light that falls on the far side comes through

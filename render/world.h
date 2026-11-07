@@ -68,6 +68,7 @@
 #include "ray_scene.h"
 #include "bounce.h"
 #include "ribbons.h"
+#include "rock_hits.h"  // [rockhits]
 #include "scmap.h"
 #include "seasons.h"  // [seasons]
 #include "snow_ground.h"  // [snowhitch] (SnowProp)
@@ -674,6 +675,15 @@ class World {
   bool blastWaves = false, blastDust = false, blastDebris = false;
   Blasts blasts;  // the blasts of the last half minute (blasts.Recent(): for the water's ripples), their waves and dust
   Debris debris;  // the chunks and the rubble
+  // [rockhits] Rocks that answer fire (rock_hits.h; Chris, 2026-11-07): a shot or blast that lands on or beside one of the
+  // map's rocks chips it (small pieces of its stone fly off, some stay lying at its foot for minutes) and throws a puff of
+  // rock dust; each rock keeps how much it was hit, its soot darkening it in patches, cracks opening over it, a fresh
+  // coat of dust fading; the soot eases back a little over minutes. To be seen only: the props stay where the game has
+  // them. Modern look; off by default (proposed for the "Battle Effects" bundle). RockHit: a hit told by the host itself
+  // (the effects stand's shots; a game's come from its frames: AddFrame).
+  bool rockHits = false;
+  RockHits rocks;
+  void RockHit(Vec3 at, float size, Vec3 way = {});
   // Deep tracks (deep_tracks.h, `trackField`): where units drive and walk, the ground is pressed by the kind it is:
   // troughs and berms in snow, dark wet ruts in mud, compacted dirt, soft sand with ridged edges, grass laid flat and
   // worn to the earth; fading with the weather and the ground. The game's tread marks and footprints are pressed in
@@ -1140,6 +1150,15 @@ class World {
   Vec3 heatTint_;
   void HoldHot(uint32_t id, PlacedProp* prop);
   void UpdateHotProps();
+  // [rockhits] (rockHits on now: the modern look, a map, no picture for something else; the map's rocks found the first time it
+  // is, MakeRocks; the hits acted on at this moment of the game's, at and size: a shot's impact and the blast the game makes
+  // of it are told apart, at the same place and moment, and act once; the shots seen stopped, when the game's impacts are not
+  // kept)
+  bool rocksNow_ = false;
+  std::vector<Vec4> rockHitsNow_;
+  double rockHitsClock_ = -1;
+  std::vector<uint32_t> rockShotsStopped_, rockShotsBefore_;
+  void MakeRocks();
   static void Sphere(const Model* model, const Mat4& world, Vec3* centre, float* radius);
   bool UnderWater(Vec3 centre, float radius) const;
   // the last hits on each unit's personal shield (at most eight, the newest last): where, on the model at

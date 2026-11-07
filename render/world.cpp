@@ -269,6 +269,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     // (the blasts and the debris: on the ground and the water of this map)
     blasts.Clear();
     debris.Clear();
+    rocks.Begin(0);  // [rockhits] (this map's rocks found the first time they are wanted: MakeRocks)
     blasts.waterLevel = debris.waterLevel = decals.waterLevel;
     blasts.groundHeight = debris.groundHeight = decals.groundHeight;
     debris.mapWidth = static_cast<float>(map.width);
@@ -520,6 +521,10 @@ void World::RestartGame() {
   propBeats_.clear();
   hotProps_.clear();
   hotOn_ = hotBefore_ = false;
+  rocks.Forget();  // [rockhits] (the rocks unscarred, each back in its group: the squares are filled anew above)
+  rockHitsNow_.clear();
+  rockShotsStopped_.clear();
+  rockShotsBefore_.clear();
   // the game's hits not yet shown, and what was kept of its units by their numbers
   combatPending_ = FrameCombat{};
   combat_ = FrameCombat{};
@@ -2066,6 +2071,16 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   }
   if (plantsReact && look == Look::Modern && !sidePicture) SmoothProps(clock);  // [plants] (a felled tree falling: between beats)
   if (hotOn_ || hotBefore_) UpdateHotProps();  // (hot metal: the wrecks that have cooled go back into their groups)
+  // [rockhits] rocks that answer fire: their scars eased on (once a frame); switched off, the scarred rocks go back into their
+  // groups as they were
+  if (!rockHits && !rocks.HeldList().empty()) {
+    for (uint32_t i : rocks.HeldList())
+      if (i < props_.size() && props_[i].cell >= 0) propCells_[static_cast<size_t>(props_[i].cell)].changed = true;
+    rocks.Forget();
+  }
+  if (!sidePicture) rocksNow_ = rockHits && look == Look::Modern && haveMap_;  // (a picture for something else between: the game's frame's kept)
+  if (rocksNow_ && !rocks.Made()) MakeRocks();
+  if (rocksNow_ && !extraView) rocks.Update(clock_);
   // (only the squares near what the camera sees: a square counts when it, widened by the largest
   // prop's reach and by room for a shadow thrown into the picture from outside it, is in view)
   propCellsSeen = propsAdded = 0;
@@ -2087,7 +2102,8 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
         }
         if (cell.changed) {
           meshes.ClearGroup(cell.group);
-          for (uint32_t i : cell.ofMap) meshes.AddToGroup(cell.group, props_[i].model, props_[i].world);
+          for (uint32_t i : cell.ofMap)
+            if (!rocks.Held(i)) meshes.AddToGroup(cell.group, props_[i].model, props_[i].world);  // ([rockhits] a scarred rock on its own, below)
           for (uint32_t id : cell.made) {
             auto made = madeProps_.find(id);
             // (a hot wreck is held out while it glows: added on its own with its heat, below)
@@ -2111,6 +2127,13 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     heatTint_ = HotMetal::Tint(age, seconds);
     meshes.Add(p.model, p.world, {1, 1, 1}, 1, nullptr, &heatTint_);
     if (!sidePicture && !extraView) heat.Glowing(id, centre, radius, age, seconds, true);
+  }
+  // [rockhits] the scarred rocks held out of their groups, each with its scars (rock_hits.h, RockHits::Tint; the original
+  // look's shading passes them over); those taken away since (reclaimed, or under a structure) not
+  for (uint32_t i : rocks.HeldList()) {
+    if (i >= props_.size() || !props_[i].model || props_[i].cell < 0) continue;
+    const Vec3 scars = rocks.Tint(i);
+    meshes.Add(props_[i].model, props_[i].world, {1, 1, 1}, 1, nullptr, &scars);
   }
   // the world beyond the map's edge has the map's trees and rocks too: each stands again in the
   // mirrored copies of the map the ground out there is made of, turned as its mirror image is
@@ -2717,6 +2740,42 @@ void World::WatchWear(const Frame& frame) {
     }
 }
 
+// [rockhits] The map's rocks (rock_hits.h: by their blueprints' names), found the first time rockHits is on for a map.
+void World::MakeRocks() {
+  rocks.Begin(props_.size());
+  for (size_t i = 0; i < props_.size() && i < map.props.size(); ++i)
+    if (props_[i].model && RockHits::IsRock(map.props[i].blueprint, props_[i].model)) rocks.Add(static_cast<uint32_t>(i), props_[i].model, props_[i].world);
+  rocks.Finish(static_cast<float>(map.width), static_cast<float>(map.height));
+  printf("render: rock hits: %zu of the map's %zu props are rocks\n", rocks.Count(), props_.size());
+}
+
+// [rockhits] A hit that may have struck rocks (world.h): the rocks it touches scarred (RockHits::Hit), each thrown chips of its
+// own stone and a puff of rock dust, as the budgets allow; a rock scarred for the first time taken out of its group.
+void World::RockHit(Vec3 at, float size, Vec3 way) {
+  if (!rocksNow_ || !rocks.Made()) return;
+  // (told twice at one moment of the game's - a shot's impact and the blast the game makes of it - it acts once, by the larger)
+  if (clock_ != rockHitsClock_) {
+    rockHitsClock_ = clock_;
+    rockHitsNow_.clear();
+  }
+  for (const Vec4& h : rockHitsNow_)
+    if (h.w >= size && Length(Vec3{h.x, h.y, h.z} - at) < 1.0f) return;
+  rockHitsNow_.push_back({at.x, at.y, at.z, size});
+  std::vector<RockHits::Touched> touched;
+  if (!rocks.Hit(at, size, clock_, &touched, way)) return;
+  const float s = std::clamp(size, 0.15f, 3.0f);
+  for (const RockHits::Touched& t : touched) {
+    if (t.prop >= props_.size() || !props_[t.prop].model || props_[t.prop].cell < 0) continue;  // (gone, or under a structure)
+    if (t.fresh) propCells_[static_cast<size_t>(props_[t.prop].cell)].changed = true;  // (its group filled anew without it)
+    // chips: more and larger for a larger hit, small, none larger than a sixth of a small rock
+    const int chips = rocks.TakeChips(std::min(static_cast<int>(std::lround((2 + 4 * std::sqrt(s)) * t.strength)), 12), clock_);
+    if (chips > 0) debris.Chip(t.model, t.at, t.out, chips, std::min(0.04f + 0.04f * std::sqrt(s), t.across * 0.15f), t.strength);
+    // a puff of rock dust where it was struck
+    if (rocks.TakeDust(clock_))
+      particles.Start(size < 0.8f ? rocks.dustSmall : rocks.dustLarge, t.at, Quat{}, std::clamp(0.6f + 0.5f * s, 0.6f, 2.2f) * (0.6f + 0.4f * t.strength));
+  }
+}
+
 // Hot metal (hot_metal.h): a fresh wreck is held out of its square's group of still scenery while it glows (the group's
 // instances are kept from frame to frame; a hot wreck's heat changes every frame), and added on its own with its heat
 // (Begin); once it has cooled, or hot metal is switched off, it goes back into the group.
@@ -2822,6 +2881,12 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
   for (const FrameHit& h : combat_.hits)
     if (h.radius > 0 && !h.shield && h.seen && !push(h.damageType))
       blasts.FromImpact({h.position[0], h.position[1], h.position[2]}, h.radius, h.amount, h.tick * 0.1);
+  // [rockhits] where shots and beams met something that is not water, the air or a shield (a rock among it, or the ground
+  // beside one), as the game says it: a shell's or a beam's direct hit (a blast's area comes with the blasts, below)
+  if (rocksNow_ && combat_.impactsKept)
+    for (const FrameImpact& m : combat_.impacts)
+      if (m.seen && m.kind != FrameImpact::Crash && m.type != "Water" && m.type != "Underwater" && m.type != "Air" && m.type != "Shield")
+        RockHit({m.position[0], m.position[1], m.position[2]}, m.kind == FrameImpact::Beam ? 0.15f : 0.25f, {m.direction[0], m.direction[1], m.direction[2]});
   WatchDeaths(frame, armyColors);  // (the debris of what has died: blastDebris)
   if (volumesOn_ && combat_.hitsKept)  // (volume explosions: harm to an area is a blast that large; a push is none)
     for (const FrameHit& h : combat_.hits)
@@ -3408,6 +3473,11 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     // (ripples: its splash where it lands in the water, or goes down through it)
     const float shotSize = model && model->ok ? Length(model->boundsMax - model->boundsMin) * 0.5f * model->scale : 0.0f;
     if (!extraView) water.ripples.AddShot(p.id, position, p.stopped, shotSize);  // [views]
+    // [rockhits] (a shot that hit something this beat, where the game keeps no impacts: once, the first frame it is seen so)
+    if (rocksNow_ && p.stopped && !combat_.impactsKept && !extraView) {
+      rockShotsStopped_.push_back(p.id);
+      if (std::find(rockShotsBefore_.begin(), rockShotsBefore_.end(), p.id) == rockShotsBefore_.end()) RockHit(position, 0.25f, Length(Vec3{p.velocity[0], p.velocity[1], p.velocity[2]}) > 0.01f ? Normalize(Vec3{p.velocity[0], p.velocity[1], p.velocity[2]}) : Vec3{});
+    }
     if (!waterShots.empty())
       if (auto it = waterShots.find(p.id); it != waterShots.end()) it->second = shotSize;
     if (debrisShells && !p.original && model && model->ok &&
@@ -3464,12 +3534,19 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       ribbons.PlainBeam(position - velocity * 0.06f, position, {1.0f, 0.95f, 0.78f}, 0.12f);
     }
   }
+  if (rocksNow_ && !extraView) {  // [rockhits] (the shots seen stopped this frame, for the next)
+    rockShotsBefore_.swap(rockShotsStopped_);
+    rockShotsStopped_.clear();
+  }
   // [glitches] (finishedSlabFade) the slabs no longer listed forgotten
   for (auto it = leftSlabs_.begin(); it != leftSlabs_.end();) it = it->second.stamp != frameStamp_ ? leftSlabs_.erase(it) : std::next(it);
   {  // ripples from the blasts new this frame over the water (a ship's death, debris falling in); where the simulation's
      // impacts make the shells' splashes (below), shell-sized blasts are theirs already and left out
     std::vector<Blasts::Blast> fresh;
     blasts.TakeNew(&fresh);
+    if (rocksNow_)  // [rockhits] (and the rocks the blasts on land reach: scorched, chipped; a scorch laid without heat, a warp-in's, none)
+      for (const Blasts::Blast& b : fresh)
+        if (!b.splash && !b.water && b.hot) RockHit(b.at, b.size);
     if (water.ripples.On())
       for (const Blasts::Blast& b : fresh) {
         if (b.splash) water.AddRipple(b.at.x, b.at.z, std::clamp(b.size, 0.2f, 0.8f), 0.5f);
@@ -3940,7 +4017,7 @@ void World::Render() {
     CpuTimes::Part("surf's spray listed");
     water.surf.Prepare(view);
   }
-  if (blastDebris && look == Look::Modern && haveMap_ && !sidePicture) {
+  if ((blastDebris || rocksNow_) && look == Look::Modern && haveMap_ && !sidePicture) {  // ([rockhits] the rocks' chips are the debris's)
     CpuTimes::Part("debris moved");
     debris.rubbleLasts = battleScars ? 0.0f : 120.0f;  // (kept as the scorches are)
     debris.hot = hotOn_;            // (fresh pieces' torn faces glow with hot metal on)

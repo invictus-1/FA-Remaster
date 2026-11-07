@@ -368,7 +368,8 @@ int PickDebrisShape(char kind, float random, float random2) {
   static const Group kBuilding[] = {{13, 3, 0.45f}, {7, 3, 0.2f}, {0, 5, 0.25f}, {5, 2, 0.1f}};
   static const Group kAircraft[] = {{0, 5, 0.5f}, {10, 3, 0.3f}, {5, 2, 0.15f}, {9, 1, 0.05f}};
   static const Group kVehicle[] = {{0, 5, 0.45f}, {5, 2, 0.15f}, {7, 3, 0.2f}, {10, 3, 0.2f}};
-  const Group* groups = kind == 'b' ? kBuilding : kind == 'a' ? kAircraft : kVehicle;
+  static const Group kRock[] = {{13, 3, 1.0f}, {13, 3, 0.0f}, {13, 3, 0.0f}, {13, 3, 0.0f}};  // [rockhits] (a rock's chips: lumps alone)
+  const Group* groups = kind == 'b' ? kBuilding : kind == 'a' ? kAircraft : kind == 'r' ? kRock : kVehicle;
   float reached = 0;
   for (int g = 0; g < 4; ++g) {
     reached += groups[g].share;

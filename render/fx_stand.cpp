@@ -756,6 +756,7 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
         for (uint32_t e : side.emitters) world.particles.Stop(e);
         side.emitters.clear();
         for (const std::string& e : impact_) side.emitters.push_back(world.particles.Start(EmitterPath(e), to, turn, 1, -1, false, shotFaction_));
+        world.RockHit(to, 0.25f, (to - from) * (1 / length));  // [rockhits] (a shell's direct hit: a rock it lands on, or beside, chips; World::rockHits)
         if (entities_) {  // what its impact makes (a nuke's explosion)
           std::string why;
           if (!entities_->Spawn(entity_, to, sides_.size() == 2 ? !side.remastered : !lookRemastered, &why, static_cast<int>(k)))
@@ -772,6 +773,7 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
     if (setup_.blast > 0 && !side.blasted && now - started_ >= setup_.killAt) {
       side.blasted = true;
       world.blasts.Add(place(setup_.at, side), setup_.blast, now);
+      world.RockHit(place(setup_.at, side), setup_.blast);  // [rockhits] (the rocks it reaches; World::rockHits)
     }
   }
   // the unit's death, `killAt` into the play (the same moment on both sides)
