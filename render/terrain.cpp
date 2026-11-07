@@ -223,15 +223,17 @@ void MudInRuts(float2 xz, float2 stepX, float2 stepY, float3 base, float kind, f
   float3 M = float3(dot(detail, axisX), dot(detail, base), dot(detail, axisZ));
   N = normalize(lerp(N, normalize(M - float3(tilt.x, 0, tilt.y)), share));
 }
-// Deep tracks (deep_tracks.h): a level of the field read at a place (r how much is pressed down, g pushed up),
-// one bilinear reading; a wrapping level by the place's texel within its width (its copied edges make the
-// reading across the wrap right), the map's level clamped.
-float2 TrackTap(int level, float2 xz) {
+// Deep tracks (deep_tracks.h): a level of the field read at a place (r how much is pressed down, g pushed up; [dents] b
+// the shell holes' height, world units), one bilinear reading; a wrapping level by the place's texel within its width
+// (its copied edges make the reading across the wrap right), the map's level clamped.
+float3 TrackTap(int level, float2 xz) {
   float4 L = tracksLevel[level], A = tracksAtlas[level];
   float2 s = xz * L.z;
   float2 c = A.z > 0.5 ? s - L.w * floor(s / L.w) : clamp(s, 0.5, L.w - 0.5);
-  return tracksMap.SampleLevel(samplerLinearClamp, (A.xy + c) * tracksInfo.xy, 0).rg;
+  return tracksMap.SampleLevel(samplerLinearClamp, (A.xy + c) * tracksInfo.xy, 0).rgb;
 }
+// [dents] (what the holes leave for the light: how much of the sun their own walls hide here, Ground)
+static float deepShade = 1;
 // How far inside a level's window a place is, in its texels (negative: outside).
 float TrackInside(int level, float2 xz) {
   float4 L = tracksLevel[level];
@@ -245,13 +247,51 @@ float2 TrackShape(float2 pressed) {
   return float2(t, (1 - exp(-1.5 * pressed.y)) * (1 - t));
 }
 // A level's trough and berm round a place, and how they slope (per world unit: x, z of the trough's; of the
-// berm's), from the readings a texel to either side.
-void TrackLevel(int level, float2 xz, out float2 shape, out float4 slope) {
+// berm's), from the readings a texel to either side. [dents] `dent`: the holes' height there, and its slope along x, z.
+void TrackLevel(int level, float2 xz, out float2 shape, out float4 slope, out float3 dent) {
   float e = tracksAtlas[level].w;
-  float2 a = TrackShape(TrackTap(level, xz + float2(e, 0))), b = TrackShape(TrackTap(level, xz - float2(e, 0)));
-  float2 c = TrackShape(TrackTap(level, xz + float2(0, e))), d = TrackShape(TrackTap(level, xz - float2(0, e)));
+  float3 ra = TrackTap(level, xz + float2(e, 0)), rb = TrackTap(level, xz - float2(e, 0));
+  float3 rc = TrackTap(level, xz + float2(0, e)), rd = TrackTap(level, xz - float2(0, e));
+  float2 a = TrackShape(ra.xy), b = TrackShape(rb.xy), c = TrackShape(rc.xy), d = TrackShape(rd.xy);
   shape = (a + b + c + d) * 0.25;
   slope = float4(a.x - b.x, c.x - d.x, a.y - b.y, c.y - d.y) / (2 * e);
+  dent = float3((ra.z + rb.z + rc.z + rd.z) * 0.25, float2(ra.z - rb.z, rc.z - rd.z) / (2 * e));
+}
+// [dents] How much of the shell holes' depth the ground holds, by its kinds (each a share, as DeepTracksOn blends them): a
+// snow layer all of it, mud nearly, sand 0.7, dirt 0.6, grass 0.55, rock none (dirt counts as mud as the ground gets wet).
+float DentSoftOf(float4 kA, float4 kB) {
+  float wet = saturate(weather.x);
+  float snow = kA.x, mud = kA.y + kB.x * wet * 0.8, sand = kA.z, grass = kA.w, dirt = kB.x * (1 - wet * 0.8), hard = kB.y;
+  return (snow + mud * 0.95 + sand * 0.7 + dirt * 0.6 + grass * 0.55) / max(snow + mud + sand + grass + dirt + hard, 1e-3);
+}
+// [dents] The holes seen at a slant: the place the eye's ray meets them at (their relief by `soft`, DentSoftOf), for the
+// layers' pictures and the field to be read there, so that a hole's near wall hides part of its bottom and its far wall
+// shows whole, as a hole's do (without it, from the side the sun lights it from, a hole reads as a mound). Down the ray
+// from a little over the lips to deeper than the deepest hole in twelve steps, then the crossing between the last two;
+// as much as their relief shows (as DeepTracksOn). Nowhere near a hole: one reading of the field.
+float2 DentParallax(float3 world, float2 stepX, float2 stepY, float soft) {
+  float2 xz = world.xz;
+  float pixel = max(length(stepX), length(stepY));
+  float e0 = tracksAtlas[0].w, e1 = tracksAtlas[1].w;
+  float w0 = saturate((TrackInside(0, xz) - 8) / 96) * saturate((2.5 * e0 - pixel) / (1.5 * e0));
+  float in1 = TrackInside(1, xz);
+  float seen = w0 + (1 - w0) * saturate((in1 - 8) / 96) * saturate((10 * e1 - pixel) / (5 * e1));
+  [branch] if (seen <= 0 || soft <= 0.01) return xz;
+  int lv = w0 > 0.5 ? 0 : 1;
+  float k = soft * seen;
+  [branch] if (abs(TrackTap(lv, xz).z) * k < 0.003) return xz;
+  float3 V = normalize(world - cameraPosition);
+  float2 along = V.xz / max(-V.y, 0.3);  // (its way over the ground per unit it goes down)
+  float top = 0.3 * k, bottom = -1.0 * k;
+  float lastY = top, lastGap = top - TrackTap(lv, xz - along * top).z * k, y = top, gap = lastGap;
+  [loop] for (int s = 1; s <= 12 && gap > 0; ++s) {
+    lastY = y, lastGap = gap;
+    y = lerp(top, bottom, s / 12.0);
+    gap = y - TrackTap(lv, xz - along * y).z * k;
+  }
+  if (gap > 0) return xz - along * y;
+  float hit = lerp(lastY, y, lastGap / max(lastGap - gap, 1e-6));
+  return xz - along * hit;
 }
 // The layers' average colour here (each layer's smallest level, blended as the layers are; the upper layer as it is
 // here): what the ground pressed smooth comes to, its small shapes pressed out of it.
@@ -288,24 +328,34 @@ void DeepTracksOn(float2 xz, float2 stepX, float2 stepY, float4 low, float4 high
   float in0 = TrackInside(0, xz), in1 = TrackInside(1, xz);
   float w0 = saturate((in0 - 8) / 96) * saturate((2.5 * tracksAtlas[0].w - pixel) / (1.5 * tracksAtlas[0].w));
   float w1 = saturate((in1 - 8) / 96) * saturate((2.5 * tracksAtlas[1].w - pixel) / (1.5 * tracksAtlas[1].w));
-  float2 c0 = 0, c1 = 0;
+  // [dents] the holes' relief shows farther out than the ruts' (they are wider than a texel of level 1 by far): full until a
+  // pixel spans five of its texels, gone at ten
+  float wd1 = saturate((in1 - 8) / 96) * saturate((10 * tracksAtlas[1].w - pixel) / (5 * tracksAtlas[1].w));
+  float3 c0 = 0, c1 = 0;
   [branch] if (w0 > 0) c0 = TrackTap(0, xz);
-  [branch] if (w0 < 1 && w1 > 0) c1 = TrackTap(1, xz);
-  float2 c2 = TrackTap(2, xz);
+  [branch] if (w0 < 1 && max(w1, wd1) > 0) c1 = TrackTap(1, xz);
+  float3 c2 = TrackTap(2, xz);
   [branch] if (tracksInfo.w > 0.5 && tracksInfo.w < 1.5) {  // (a view for checking them: MOHO64_DEBUG_TRACKS=2)
     albedo = float3(saturate(lerp(c1.x, c0.x, w0)), saturate(lerp(c1.y, c0.y, w0)), w0 > 0 ? 0.6 : w1 > 0 ? 0.3 : 0) + float3(c2.x, 0, 0);
+    albedo += float3(1, 0, 1) * saturate(-lerp(c1.z, c0.z, w0) * 4);  // ([dents] the holes magenta)
     return;
   }
-  if (max(max(c0.x + c0.y, c1.x + c1.y), c2.x) < 0.004) return;  // (nothing pressed here: most of the ground)
+  float2 c1t = w1 > 0 ? c1.xy : 0;  // (the ruts' as before: level 1's read only where their relief shows)
+  if (max(max(max(c0.x + c0.y, c1t.x + c1t.y), c2.x), max(max(abs(c0.z), abs(c1.z)), abs(c2.z))) < 0.004) return;  // (nothing pressed here: most of the ground)
   float2 shape = 0, s1 = 0;
   float4 slope = 0, g1 = 0;
-  [branch] if (w0 > 0) TrackLevel(0, xz, shape, slope);
-  [branch] if (w0 < 1 && w1 > 0) TrackLevel(1, xz, s1, g1);
+  float3 d0 = 0, d1 = 0;
+  [branch] if (w0 > 0) TrackLevel(0, xz, shape, slope, d0);
+  [branch] if (w0 < 1 && max(w1, wd1) > 0) TrackLevel(1, xz, s1, g1, d1);
+  if (w1 <= 0) {
+    s1 = 0;
+    g1 = 0;
+  }
   shape = lerp(s1, shape, w0);
   slope = lerp(g1, slope, w0);
   float raw = lerp(c1.x, c0.x, w0);              // (how often it has been pressed: heavy traffic)
   float relief = w0 + (1 - w0) * w1;             // (how much of the relief shows)
-  float far = TrackShape(c2).x * 0.6;            // (the map's level: the way trodden, without relief)
+  float far = TrackShape(c2.xy).x * 0.6;         // (the map's level: the way trodden, without relief)
   float t = lerp(far, shape.x, relief), q = shape.y * relief;
   // the kind of ground
   float4 kA = kindA[0], kB = kindB[0];
@@ -324,13 +374,42 @@ void DeepTracksOn(float2 xz, float2 stepX, float2 stepY, float4 low, float4 high
   // per kind: how deep a full trough is (world units: somewhat deeper than true to the units' size, so that it reads
   // from the game's height), how high its berm against that, how much of the ground's own small shapes and colour
   // the pressing smooths out, the colour down in it and on the berm, and how much its walls hide of the sky
-  float depth = snow * 0.07 + mud * 0.05 + sand * 0.04 + grass * 0.03 + dirt * 0.03 + hard * 0.003;
+  // ([dents] snow and mud deeper than they were, 0.07 and 0.05: the soft layer holds a track sunk well into it)
+  float depth = snow * 0.09 + mud * 0.065 + sand * 0.04 + grass * 0.03 + dirt * 0.03 + hard * 0.003;
   float berm = snow * 0.7 + mud * 0.6 + sand * 0.9 + grass * 0.25 + dirt * 0.45;
   float smooth = snow * 0.6 + mud * 0.8 + sand * 0.7 + grass * 0.35 + dirt * 0.75 + hard * 0.1;
   float3 down = snow * float3(0.86, 0.89, 0.95) + mud * float3(0.5, 0.47, 0.44) + sand * float3(0.86, 0.84, 0.8) + grass * float3(0.68, 0.64, 0.46) +
                 dirt * float3(0.7, 0.67, 0.64) + hard * 0.93;
   float3 up = snow * 1.05 + mud * float3(0.86, 0.84, 0.82) + sand * 1.1 + grass * float3(0.92, 0.9, 0.82) + dirt * 1.08 + hard * 1.0;
   float shade = snow * 0.5 + mud * 0.45 + sand * 0.4 + grass * 0.35 + dirt * 0.35;
+  // [dents] the shell holes: their height here and its slope, by the finest level that holds the place (from afar the map's
+  // level's height alone, without relief). Soft ground holds them as the field has them (a snow layer, mud), firmer
+  // ground less (sand, dirt, grass), rock not at all. Down in a hole its walls hide part of the sky, and with the sun low
+  // part of the sun (the wall toward the sun shades the bottom, the far wall is lit); the earth torn open in it is darker
+  // (through a snow layer, the ground under it); wet mud's water gathers at its bottom; the earth thrown out over its lip
+  // darkens the ground round it a little. (Where there is no hole, all below is as it was.)
+  float seen = w0 + (1 - w0) * wd1;              // (how much of their relief shows)
+  float3 dent = lerp(d1, d0, w0);
+  float soft = snow + mud * 0.95 + sand * 0.7 + dirt * 0.6 + grass * 0.55;
+  float holeRaw = lerp(c2.z, dent.x, seen);       // (world units, below the ground negative: as the field has it)
+  float hole = holeRaw * soft;
+  float2 gd = dent.yz * (seen * soft);
+  float pit = smoothstep(0, 0.25, -hole), heap = saturate(hole / 0.05);
+  [branch] if (holeRaw < -0.01 && seen > 0 && sunDirection.y > 0) {
+    float rise = dot(sunDirection, base);
+    [branch] if (rise > 0.02) {
+      // (up the sun's ray from the bottom over the ground's own slope, five steps to a little over the hole's depth; a
+      // snowy day's holes as deep as the snow's, lighting.h)
+      float lit = max(soft, saturate(weather.y * 2)), here = holeRaw * lit, most = 0;
+      float2 toSun = (sunDirection.xz - base.xz * rise) / max(rise, 0.15);
+      int lv = w0 > 0.5 ? 0 : 1;
+      [loop] for (int j = 1; j <= 5; ++j) {
+        float climb = -here * 1.4 * j / 5;
+        most = max(most, TrackTap(lv, xz + toSun * climb).z * lit - (here + climb));
+      }
+      deepShade = lerp(1, saturate(1 - most / (0.2 * -here + 0.01)), seen);
+    }
+  }
   // pressed smooth: its colour and small shapes toward the average and the ground's own slope
   float flat = smooth * saturate(t * 1.4) * relief;
 #ifdef GROUND_MORE
@@ -341,10 +420,13 @@ void DeepTracksOn(float2 xz, float2 stepX, float2 stepY, float4 low, float4 high
   N = normalize(lerp(N, base, flat * 0.9));
   creases = lerp(creases, 1, flat * 0.8);
   // the trough and berm's relief, the colours down in it and up on the berm
-  float2 g = depth * (-slope.xy + berm * slope.zw) * relief;
+  float2 g = depth * (-slope.xy + berm * slope.zw) * relief + gd;  // ([dents] and the holes')
   N = normalize(N - float3(g.x, 0, g.y));
   float3 dark = lerp(1, down, t) * lerp(1, up, q);
   albedo *= dark;
+  // [dents] (the earth torn open, and thrown out)
+  float3 churn = snow * float3(0.5, 0.47, 0.45) + mud * 0.7 + sand * 0.82 + grass * float3(0.58, 0.5, 0.4) + dirt * 0.68 + hard;
+  albedo *= lerp(1, churn, pit) * lerp(1, churn * 0.35 + 0.65, heap);
   float3 darkened = albedo;  // [mud ruts] (for MudInRuts)
   // grass worn through to the earth where many have passed
   float worn = smoothstep(1.5, 5.0, raw) * relief * grass;
@@ -356,15 +438,20 @@ void DeepTracksOn(float2 xz, float2 stepX, float2 stepY, float4 low, float4 high
   roughness = lerp(roughness, 0.6, t * grass * (1 - worn));
   roughness = lerp(roughness, lerp(0.5, 0.25, wet), t * mud);
   deepWater = smoothstep(0.4, 0.8, t) * saturate(mud * 1.5) * saturate(wet * 1.5 - 0.2);
-  float open = 1 - shade * t * relief;
+  deepWater = max(deepWater, smoothstep(0.1, 0.22, -hole) * saturate(mud * 1.5) * saturate(wet * 1.5 - 0.2));  // [dents]
+  float open = (1 - shade * t * relief) * (1 - 0.45 * pit);  // ([dents] a hole's walls)
   creases *= open;
   // [mud ruts] where the ground is mud by its kind, the map's own mud in place of the pressed ground's smooth average
-  // (MudInRuts: last, so that without it the sums above are as they were)
+  // (MudInRuts: last, so that without it the sums above are as they were) ([dents] in the holes too)
   [branch] if (mudInfo.x > 0.5 && kA.y > 0.01)
-    MudInRuts(xz, stepX, stepY, base, saturate(kA.y), t, q, wet, g, dark, darkened, worn, open, albedo, N, roughness, creases);
+    MudInRuts(xz, stepX, stepY, base, saturate(kA.y), max(t, pit), q, wet, g, dark, darkened, worn, open, albedo, N, roughness, creases);
   deepTrack = float4(t, q, relief, 1);
   deepSlope = slope * relief;
-  if (tracksInfo.w > 1.5) albedo = float3(t, q, relief * 0.5);  // (MOHO64_DEBUG_TRACKS=3)
+  // [dents] for the lying snow (lighting.h): the holes' slope as the snow holds them, how much is a hole, how much of the
+  // earth thrown out darkens it
+  float pitRaw = smoothstep(0, 0.3, -holeRaw), heapRaw = saturate(holeRaw / 0.05);
+  deepDent = float4(dent.yz * seen, pitRaw, 0.7 * pitRaw + 0.35 * heapRaw);
+  if (tracksInfo.w > 1.5) albedo = float3(t + pitRaw, q + heapRaw, relief * 0.5);  // (MOHO64_DEBUG_TRACKS=3; [dents] the holes red, their lips green)
 }
 #endif
 
@@ -916,23 +1003,39 @@ float4 Ground(VOut i) {
   // [snow ground] what is round the place, by the ground's own slope ([snowfix] from its heights), before the relief
   [branch] if (weather.y > 0) SnowAround(uv, xz);
 #endif
+  // [dents] where the eye's ray meets the shell holes (DentParallax): the layers' pictures and the deep tracks' field read
+  // there (by the kinds of ground as the masks lay them, the mask's mud as mud; as deep as the snow's on a snowy day)
+  float2 dentXZ = xz;
+#ifdef SURFACE_DEEP_TRACKS
+  [branch] if (look > 0.5 && tracksInfo.z > 0.5) {
+    float4 kA = kindA[0], kB = kindB[0];
+    #define KIND(n, w) { kA = lerp(kA, kindA[n], w); kB = lerp(kB, kindB[n], w); }
+    KIND(1, low.x) KIND(2, low.y) KIND(3, low.z) KIND(4, low.w) KIND(5, high.x) KIND(6, high.y) KIND(7, high.z) KIND(8, high.w)
+    #undef KIND
+#ifdef GROUND_MORE
+    kA = lerp(kA, float4(0, 1, 0, 0), saturate(mudWeight));
+    kB = lerp(kB, 0, saturate(mudWeight));
+#endif
+    dentXZ = DentParallax(i.world, stepX, stepY, max(DentSoftOf(kA, kB), saturate(weather.y * 2)));
+  }
+#endif
 #ifdef GROUND_PARALLAX
   // [parallax] where the layers' pictures (and the deep tracks' field) are read: along the eye's ray into their relief,
-  // close by (GroundParallax); with the same steps, so that their sharpness is the surface's
-  float2 lxz = xz;
+  // close by (GroundParallax); with the same steps, so that their sharpness is the surface's ([dents] and the holes')
+  float2 lxz = dentXZ;
   float sunSeen = 1;
   [branch] if (look > 0.5 && parallax.x > 0.5 && distance(i.world, cameraPosition) < parallax.y + 1 / parallax.z) {
     float4 under = normalMap.SampleLevel(samplerLinearClamp, uv, 0);
     float3 surface;
     surface.xz = (under.ag * 2 - 1) * mirrored;
     surface.y = sqrt(saturate(1 - dot(surface.xz, surface.xz)));
-    lxz = GroundParallax(i.world, surface, low, high, stepX, stepY, sunSeen);
+    lxz = GroundParallax(i.world, surface, low, high, stepX, stepY, sunSeen) + (dentXZ - xz);
   }
   #define LXZ lxz
   #define TRACKS_XZ lxz
 #else
-  #define LXZ xz
-  #define TRACKS_XZ i.world.xz
+  #define LXZ dentXZ
+  #define TRACKS_XZ dentXZ
 #endif
 #ifdef GROUND_WET
   // [rain ground] a layer's own pictures or its wet twin's, by how much of it has gone over here (wetT, RICH: MORE_RICH);
@@ -1088,6 +1191,7 @@ float4 Ground(VOut i) {
       float3 pressed = albedo.rgb;
       DeepTracksOn(TRACKS_XZ, stepX, stepY, low, high, upper, base, pressed, N, roughness, creases);
       albedo.rgb = pressed;
+      shadow *= deepShade;  // [dents] (a hole's own wall hiding the sun from its bottom)
     }
 #endif
 #ifdef GROUND_MORE
@@ -1340,6 +1444,7 @@ std::string GroundSource(bool parallax, bool more = false, bool wet = false, boo
          "#define SURFACE_PUDDLES 1.0\n#define SURFACE_TRACKS 1\n" +
          "#define SURFACE_DEEP_TRACKS 1\nstatic float4 deepTrack = 0;\nstatic float4 deepSlope = 0;\nstatic float deepWater = 0;\n" +
          "static float2 deepGloss = 0;\n" +  // [mud ruts] (the mud's roughness and share, MudInRuts)
+         "static float4 deepDent = 0;\n" +   // [dents] (the shell holes', DeepTracksOn)
          kViewShaderBlock + RayShaders() + kLightingShaderBlock + kShader;
 }
 

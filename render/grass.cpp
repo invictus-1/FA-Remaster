@@ -1007,8 +1007,10 @@ Texture2D tracksField : register(t0);  // (deep tracks)
       float2 s = p * L.z, inside = s - L.xy;
       if (any(inside < 2) || any(inside > L.w - 2)) continue;
       float2 c = s - L.w * floor(s / L.w);
-      float pressed = tracksField.SampleLevel(samplerLinearClamp, (A.xy + c) * tracksInfo.xy, 0).r;
+      float3 field = tracksField.SampleLevel(samplerLinearClamp, (A.xy + c) * tracksInfo.xy, 0).rgb;
+      float pressed = field.r;
       flat = max(flat, smoothstep(0.15, 0.7, 1 - exp(-1.5 * pressed)) * 0.9);
+      flat = max(flat, smoothstep(0.03, 0.12, -field.b) * 0.95);  // [dents] (blown flat in a shell's hole)
       break;
     }
   }

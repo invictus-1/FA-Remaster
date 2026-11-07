@@ -736,7 +736,11 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
       lying = saturate(lying * (1 - deepTrack.x * (0.9 - 0.6 * thick)) + deepTrack.y * thick * 0.8);
       packed = deepTrack.x * thick * 0.85;
       occlusion *= 1 - 0.45 * deepTrack.x * deepTrack.z * lying;
-      trackTilt = (-deepSlope.xy + 0.8 * deepSlope.zw) * (0.1 * lying * deepTrack.z);
+      trackTilt = (-deepSlope.xy + 0.8 * deepSlope.zw) * (0.13 * lying * deepTrack.z);  // ([dents] the snow holds them deeper: 0.1 before)
+      // [dents] a shell's hole (deepDent: its slope as the snow holds it, how much is a hole, how much earth was thrown
+      // over the snow): much of the snow blown out of its bowl, its relief the snow's own
+      lying = saturate(lying * (1 - 0.85 * deepDent.z));
+      trackTilt += deepDent.xy * lying;
     }
 #endif
     N = normalize(lerp(N, SNOW_UP, SNOW_FLAT(lying, fallen)));
@@ -751,6 +755,7 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
 #endif
     if (any(trackTilt != 0)) N = normalize(N - float3(trackTilt.x, 0, trackTilt.y));
     if (packed > 0) albedo = lerp(albedo, SNOW_PACKED, packed * lying);
+    if (deepDent.w > 0) albedo = lerp(albedo, albedo * float3(0.42, 0.36, 0.3), deepDent.w * lying);  // [dents] (the earth a hole threw over the snow)
 #endif
     metallic *= 1 - lying;
     roughness = lerp(roughness, SNOW_ROUGH, lying);

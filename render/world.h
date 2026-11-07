@@ -230,6 +230,12 @@ class World {
   // Deep tracks (deepTracks): a frame's units press the ground as AddFrame has them do, for a host that draws them
   // itself (the effects test stand).
   void PressGround(const Frame& frame);
+  // [dents] A shell's hole where a shot struck the ground (deep tracks: the picture only; the ground's heights the game
+  // and the picking go by stay as they are): `at` where, `size` how large across, as the scorch the game lays for it
+  // (Blasts::FromImpact's: a small gun's 0.2, an artillery shell's 1 to 3). None in the air or on or under the water.
+  // AddFrame makes them from the simulation's impacts on the terrain (else from the blasts on the ground); the effects
+  // stand from its shot's (--fx-dent).
+  void DentGround(Vec3 at, float size);
   // How the simulation changed the ground's heights (SimFrames::TakeGroundChanges): drawn so at once.
   // Within a frame (the ground's height texture is written).
   void ChangeGround(const std::vector<FrameGroundChange>& changes);
@@ -677,7 +683,8 @@ class World {
   // Deep tracks (deep_tracks.h, `trackField`): where units drive and walk, the ground is pressed by the kind it is:
   // troughs and berms in snow, dark wet ruts in mud, compacted dirt, soft sand with ridged edges, grass laid flat and
   // worn to the earth; fading with the weather and the ground. The game's tread marks and footprints are pressed in
-  // by their own shapes instead of laid as pictures. Modern look; off by default.
+  // by their own shapes instead of laid as pictures. [dents] Shots that strike the ground leave shell holes in it
+  // (DentGround), deepest in snow and mud. Modern look; off by default.
   bool deepTracks = false;
   // [parallax] The ground's relief close by (terrain.h, Terrain::parallax; Chris, 2026-10-19): on a remastered map, the
   // ground's stones, pebbles and clods stand up out of it and its hollows sink as the eye passes, from the height its
@@ -1309,6 +1316,10 @@ class World {
   bool volumesOn_ = false, volumesDrawn_ = false;  // (volume explosions: on this frame; volumes drawn this frame)
   std::vector<Particles::Hot> hot_;  // (lit smoke: the lasting fires, this frame)
   bool deepTried_ = false, deepNow_ = false;  // (deep tracks: their field tried; on this frame)
+  // [dents] How large a weapon's shot's hole is (DentGround's size), by its id as the simulation names it ("uel0103-1-MainGun"):
+  // from its blueprint's DamageRadius and Damage, read once
+  std::unordered_map<std::string, float> dentSizes_;
+  float ShotDentSize(const std::string& weapon);
   bool buildNow_ = false;  // (buildfx: the remastered build look this frame)
   bool exhaustsNow_ = false;  // (unitsfx: the real exhausts this frame)
   void PressUnit(const FrameUnit& u, const Frame& frame, const std::string& blueprint, const Model* model, Vec3 position, const Quat& orientation);
