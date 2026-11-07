@@ -176,6 +176,20 @@ std::unique_ptr<BakedDebris::Style> BakedDebris::ReadStyle(const Model& chunks, 
     if (t.keys.empty()) continue;
     const std::vector<Vec3>& points = chunkPoints[t.bone];
     for (const Vec3& p : points) t.reach = std::max(t.reach, Length(p));
+    // ([debrisairsea] its longest way: the point farthest from its middle, then the one farthest from that; its thickness:
+    // how far its points lie off that line)
+    if (!points.empty()) {
+      Vec3 a = points[0], b = points[0];
+      for (const Vec3& p : points)
+        if (Length(p) > Length(a)) a = p;
+      for (const Vec3& p : points)
+        if (Length(p - a) > Length(b - a)) b = p;
+      if (Length(b - a) > 1e-4f) t.along = (b - a) * (1 / Length(b - a));
+      for (const Vec3& p : points) {
+        const Vec3 off = p - t.along * Dot(p, t.along);
+        t.thin = std::max(t.thin, Length(off));
+      }
+    }
     // (where its lowest corner is, turned so: the bake's ground is y 0)
     const Quat rest = chunks.bones[t.bone].rotation;
     auto bottom = [&](Vec3 at, const Quat& q) {
@@ -508,6 +522,7 @@ void BakedDebris::Update(double clock, Vec3 eye, MeshRenderer* meshes) {
         // [debrisairsea] on water (its place the surface): its keys until it meets the water, then a splash, and it sinks,
         // drifting on a little as it slows, tilting, down to the bed, where it lies (and later sinks into it)
         const size_t cut = std::min<size_t>(t.touches, n - 1);
+        float lying = 0;  // (how far it has turned level: it rests on its thickness then)
         if (frame > static_cast<float>(cut)) {
           const float tau = (frame - static_cast<float>(cut)) / s.fps;
           const float* k = &t.keys[cut * 7];
@@ -515,11 +530,24 @@ void BakedDebris::Update(double clock, Vec3 eye, MeshRenderer* meshes) {
           Vec3 drift = (Vec3{k[0], 0, k[2] * d.stretch} - Vec3{j[0], 0, j[2] * d.stretch}) * (s.fps * d.scale);
           p = Vec3{k[0], k[1], k[2] * d.stretch} * d.scale + drift * ((1 - std::exp(-tau * 1.5f)) / 1.5f);
           p.y -= s.sink * std::max(tau - 0.3f, 0.0f);
+          // (turning as it goes down until its longest way lies level - a crane's arm along the bed, not standing out of the
+          // water - with a little rock of its own about that)
+          const Quat at{k[3], k[4], k[5], k[6]};
+          const Quat rest = s.model && t.bone < s.model->bones.size() ? s.model->bones[t.bone].rotation : Quat{};
+          const Vec3 way = Rotate(Mul(at, Conjugate(rest)), t.along);
+          const Vec3 level = std::hypot(way.x, way.z) > 1e-3f ? Vec3{way.x, 0, way.z} * (1 / std::hypot(way.x, way.z)) : Vec3{1, 0, 0};
+          const Vec3 axis = Cross(way, level);
+          const float turnBy = std::acos(std::clamp(Dot(way, level), -1.0f, 1.0f)) * std::clamp(tau / 2.5f, 0.0f, 1.0f);
+          Quat r{};
+          if (Length(axis) > 1e-4f) {
+            const Vec3 u = axis * (std::sin(turnBy * 0.5f) / Length(axis));
+            r = Quat{u.x, u.y, u.z, std::cos(turnBy * 0.5f)};
+          }
           const float h = std::fmod(static_cast<float>(c) * 0.6180339f + static_cast<float>(d.id) * 0.137f, 1.0f);
-          const float tilt = std::min(tau * 0.25f, 1.1f) * (h > 0.5f ? 1.0f : -1.0f) * 0.5f;
-          const float around = h * 12.566371f;
-          const Quat r{std::cos(around) * std::sin(tilt), 0, std::sin(around) * std::sin(tilt), std::cos(tilt)};
-          q = Normalized(Mul(r, Quat{k[3], k[4], k[5], k[6]}));
+          const float rock = std::sin(tau * 0.9f + h * 6.283f) * 0.12f * std::max(0.0f, 1 - tau / 8);
+          const Quat wobble{level.x * std::sin(rock * 0.5f), 0, level.z * std::sin(rock * 0.5f), std::cos(rock * 0.5f)};
+          q = Normalized(Mul(wobble, Mul(r, at)));
+          lying = std::clamp(tau / 2.5f, 0.0f, 1.0f);
         }
         if (frame >= static_cast<float>(cut) && c < d.splashed.size() && !d.splashed[c]) {
           d.splashed[c] = 1;
@@ -527,7 +555,8 @@ void BakedDebris::Update(double clock, Vec3 eye, MeshRenderer* meshes) {
           if (splash && !d.unseen && age < settled) splash(Vec3{d.at.x + flat.x, d.at.y, d.at.z + flat.z}, std::max(t.reach * d.scale * 2, 0.2f));
         }
         const Vec3 flat = Rotate(d.heading, Vec3{p.x, 0, p.z});
-        const float floor = ground(d.at.x + flat.x, d.at.z + flat.z) - d.at.y + t.reach * d.scale * 0.35f;
+        const float rests = (t.thin > 0 ? t.thin + (t.reach * 0.35f - t.thin) * (1 - lying) : t.reach * 0.35f) * d.scale;
+        const float floor = ground(d.at.x + flat.x, d.at.z + flat.z) - d.at.y + rests;
         lift = (p.y < floor ? floor - p.y : 0.0f) - own * t.reach * d.scale * 1.2f;
       }
       const Vec3 placed{p.x, p.y + lift, p.z};
