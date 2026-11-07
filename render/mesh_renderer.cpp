@@ -137,7 +137,8 @@ cbuffer MeshKind : register(b3) {
                   // long it is, z the bone whose vertices are the belt (-1: none), w its axis (0: u, 1: v)
   float4 kind13;  // [machinery] x: the model's bones, when after their rows come how strongly each glows (one float each,
                   // four a row); 0: none. [glitches] y: 1 = a building's see-through ghost (SeeThroughGhost); z: 1 = the
-                  // remastered quantum gate's field (remasteredGate)
+                  // remastered quantum gate's field (remasteredGate); [bakeddebris] w: 1 = a baked death's chunks
+                  // (ModelLod::heatMask: the heat mask in the second texture coordinates' u, the normal map on the first)
 #ifdef PLANTS
   float4 kind7, kind8;  // [plants] (plants.h) PlantLife::Constants
 #endif
@@ -312,6 +313,13 @@ VOut VS(VIn i, uint instance : SV_InstanceID) {
     float scroll = kind6.x < 0.5 ? 0 : i.uv.y > 0.95 ? n.bones.z : i.uv.y > 0.90 ? n.bones.w : 0;
     o.uv.xz += scroll;
     o.tint = 0;  // (no ghost's tint)
+  }
+  // [bakeddebris] a baked death's chunks (baked_debris.h): their normal map lies on the first texture coordinates as their other
+  // textures do; the second's u is their heat mask, handed on in the tint's x as -1 - mask (no other tint lies there), the heat's
+  // age and how long it glows staying in its y and z (BakedDebris: as a wreck's, HotMetal::Tint)
+  [branch] if (kind13.w > 0.5) {
+    o.uv.zw = i.uv.xy;
+    o.tint.x = -1 - i.uv.z;
   }
 #ifdef UNDER_SNOW
   // [undersnow] a low plant under lying snow (under_snow.h): sunk into it (the ground hides what goes under), pressed and
@@ -1071,6 +1079,19 @@ float4 Shade(VOut i, bool front) {
       float turn = length(fwidth(vertexNormal)) / max(length(fwidth(i.shape)), 1e-5);
       emission += HotMetalGlow(-i.tint.y, -i.tint.z, i.shape, turn, kind.w > 0.5, albedo.rgb, spec.r, spec.g, soot) *
                   (kHotMetalStrength * pow(falling.w > 0 ? falling.w : 1, 0.6));
+    }
+    // [bakeddebris] a baked death's chunks: hot where their heat mask says (cut faces, torn rims: 1 white-orange, a third a dull
+    // red, little nothing), cooling as a wreck's torn rims do (HotMetalGlow's rim, half its time); the mask in the tint's x (-1 -
+    // mask, VS), its age and how long it glows in y and z
+    [branch] if (kind13.w > 0.5 && i.tint.z < 0) {
+      float mask = saturate(-1 - i.tint.x);
+      [branch] if (mask > 0.02) {
+        // (hotter and cooler stretches along a rim, so that a torn edge never reads as a strip of light)
+        float stretch = smoothstep(0.25, 0.7, CloudNoise(i.rest * 14 + 5.1));
+        float kelvin = HotMetalKelvin(300 + 1000 * sqrt(mask) * (0.6 + 0.4 * stretch), -i.tint.y, -i.tint.z * 1.55 * 0.5);
+        kelvin *= 1 + 0.05 * (CloudNoise(i.rest * 9 + float3(0, time * 0.5, time * 0.3)) - 0.5);  // (embers breathe, never a lamp)
+        emission += HotMetalColour(kelvin) * (kHotMetalStrength * pow(falling.w > 0 ? falling.w : 1, 0.6));
+      }
     }
     // [rockhits] a rock under fire (World::rockHits): its soot, cracks, fresh dust and the side it was struck on ride in the
     // ghost's tint, marked by its first number between -0.35 and -0.45 (RockHits::Tint: y and z each two bytes)
@@ -1958,6 +1979,14 @@ void MeshRenderer::Belt(float amount) {
   e.instance.bones[2] = amount;
 }
 
+void MeshRenderer::Reach(Vec3 centre, float radius) {  // [bakeddebris]
+  if (entries_.empty()) return;
+  entries_.back().centre = centre;
+  entries_.back().radius = radius;
+  culls_.back().centre = centre;
+  culls_.back().radius = radius;
+}
+
 void MeshRenderer::SeeThroughGhost() {
   if (entries_.empty()) return;
   Entry& e = entries_.back();
@@ -2455,6 +2484,7 @@ void MeshRenderer::RecordRuns(R& to, const RunSetup& s, size_t from, size_t end,
     }
     kind[29] = glass && !lod->glass ? 1.0f : 0.0f;  // [glitches] (kind13.y: a see-through ghost, SeeThroughGhost)
     kind[30] = lod->unlit == 2 && remasteredGate ? 1.0f : 0.0f;  // [glitches] (kind13.z: the remastered quantum gate's field)
+    kind[31] = lod->heatMask ? 1.0f : 0.0f;  // [bakeddebris] (kind13.w: a baked death's chunks)
     if (const MachinerySpec* m = items_[at].entry->model->machinery.get(); m && m->beltBone >= 0) {
       kind[24] = m->beltFrom;
       kind[25] = m->beltLength;

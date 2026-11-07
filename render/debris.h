@@ -50,6 +50,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "baked_debris.h"
 #include "debris_shapes.h"
 #include "frame.h"
 #include "gfx.h"
@@ -88,6 +89,10 @@ class Debris {
     Quat turn;
     float scale = 1, size = 0.1f;
   };
+  // [bakeddebris] A unit with a baked set of its own (baked_debris.h: its real parts, thrown as the visuals track's bake threw
+  // them) dies by that set instead of the chunks thrown here (while it has room for one more in flight), and the game's
+  // debris shells thrown near it are not drawn either (they would double it). Moved and drawn with the debris (Update).
+  BakedDebris baked;
   // A unit's own fragments in place of the library's (unset, or none for a unit: the library's). `unitId`: its
   // blueprint id; `unit`: its model as drawn.
   std::function<std::vector<Piece>(const std::string& unitId, const Model* unit)> fragments;
@@ -178,11 +183,15 @@ class Debris {
     double seen = 0, died = 0;  // when it was seen last; first seen dead
     uint32_t stamp = 0;
     bool thrown = false, air = false;
+    bool baked = false;            // [bakeddebris] (its baked set plays: the game's shells near it not drawn)
     std::string unit;              // its blueprint id
     const Model* model = nullptr;  // as drawn
     Vec3 color;                    // its army's
     float radius = 1;              // half its size across (world units)
   };
+  // [bakeddebris] Which style of its baked set a death plays ("break", "melt", "vaporise": by the killing weapon's kind and how
+  // far it overkilled, once the engine's killing hit is read here); "break" for every death until then.
+  static std::string DebrisStyleFor(const Dying& d);
   // one of the game's debris shells
   struct GameShell {
     Chunk piece;         // what is drawn (where the game has it)
